@@ -498,7 +498,7 @@ export function MainLayout() {
   const contentFeatureKey = companionChatTarget(location.pathname, location.search)
     ? 'cc-agent'
     : location.pathname.split('/')[1] || 'root';
-  const isSettingsRoute = location.pathname === '/settings';
+  const isSettingsRoute = location.pathname === '/settings' || location.pathname === '/cloud-settings';
 
   // 任务浏览栈与它的快捷键监听挂在常驻壳层:设置页会整个卸载左上按钮簇
   // (下面的 `!isSettingsRoute && <ChromeActions>`)，快捷键不能跟着一起消失——
@@ -725,7 +725,7 @@ export function MainLayout() {
   useEffect(() => {
     const unsubscribe = window.electronAPI.ghosts?.onScheduleDraft?.((payload) => {
       if (!payload || typeof payload !== 'object') return;
-      const { requestId, ghostId, ghostName, name, prompt, intervalMs, primaryHostKey } = payload;
+      const { requestId, ghostId, ghostName, name, prompt, intervalMs, primaryHostKey, preRunPlugin } = payload;
       if (
         typeof requestId !== 'string' ||
         !requestId ||
@@ -749,6 +749,7 @@ export function MainLayout() {
           ghostName,
           name,
           prompt,
+          ...(preRunPlugin ? { preRunPlugin } : {}),
           ...(typeof intervalMs === 'number' && Number.isFinite(intervalMs) && intervalMs > 0
             ? { intervalMs }
             : {}),
@@ -1217,7 +1218,10 @@ export function MainLayout() {
     if (isSecondaryWindow()) return;
     return window.electronAPI.rightSidebarWindow.onCommand((command) => {
       if (command.type !== 'open-plugin-view' && command.sessionId !== rightSidebarSessionIdRef.current) return;
-      void executeSidebarCommand(command).catch((err) => {
+      void executeSidebarCommand(command, {
+        sessionId: rightSidebarSessionIdRef.current,
+        deviceLinkDeviceId: rightSidebarWorkdirInfoRef.current.deviceLinkDeviceId,
+      }).catch((err) => {
         applicationMenuLog.warn('execute attached sidebar command failed', err);
       });
     });
@@ -1641,7 +1645,7 @@ export function MainLayout() {
         }
         case 'toggleReviewTab': {
           const sessionId = rightSidebarSessionIdRef.current;
-          if (!sessionId) return false;
+          if (!sessionId || rightSidebarWorkdirInfoRef.current.deviceLinkDeviceId === undefined) return false;
           void (async () => {
             const routed = await routeSidebarCommand({ type: 'toggle-review-tab', sessionId });
             if (routed !== 'attached') return;
@@ -1863,7 +1867,8 @@ export function MainLayout() {
                 data-panel-drag-root="chat-main"
                 className={cn(
                   'relative flex flex-1 flex-col overflow-hidden bg-content-area',
-                  isSettingsRoute ? 'min-w-0' : 'min-w-[400px]',
+                  // 宽窗保持 400px 聊天最小宽以挤压侧栏，窄窗(<400px 或多面板)由 LayoutRoot 的 --layout-chat-min 按余量让步，避免挤没兄弟或裁切。
+                  isSettingsRoute ? 'min-w-0' : 'min-w-[var(--layout-chat-min,min(400px,100%))]',
                   // RSB Maximize(Phase 6):主区彻底 display:none,把整个非左栏空间让给 RSB。
                   isRightSidebarMaximized && 'hidden',
                 )}

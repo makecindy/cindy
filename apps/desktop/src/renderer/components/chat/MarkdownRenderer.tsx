@@ -25,7 +25,7 @@ import { useImageLoadFailure } from './useImageLoadFailure';
 import { ChatLoadingImage } from './ChatLoadingImage';
 import { FileTypeIcon } from '@/components/ui/file-type-icon';
 import { CHAT_CODE_CLASS, CHAT_CODE_SURFACE_CLASS, CHAT_ICON_BUTTON_CLASS } from './chatChrome';
-import { createElement, memo, useId, useCallback, useEffect, useRef, useState, useMemo, isValidElement, type HTMLAttributes, type ReactNode } from 'react';
+import { createElement, memo, useId, useCallback, useEffect, useLayoutEffect, useRef, useState, useMemo, isValidElement, type HTMLAttributes, type ReactNode } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkCjkFriendly from 'remark-cjk-friendly';
@@ -42,9 +42,12 @@ import remarkLocalPathLinks, { BARE_PATH_ATTR } from './remarkLocalPathLinks';
 import remarkHtmlImages from './remarkHtmlImages';
 import remarkBareSpaceLocalImages from './remarkBareSpaceLocalImages';
 import remarkPreserveRawLocalDestinations, {
+  RAW_IMAGE_TARGET_PROP,
   RAW_LOCAL_IMAGE_SRC_PROP,
   RAW_LOCAL_LINK_HREF_PROP,
 } from './remarkPreserveRawLocalDestinations';
+import { replySectionId, type GalleryOccurrence } from './ImageGalleryContext';
+import { markdownImageOccurrence } from './markdownImageTargets';
 import remarkSessionLinks from './remarkSessionLinks';
 import { rehypeMathBlockMarker } from './rehypeMathBlockMarker';
 import { FENCED_CODE_PROP, rehypeFencedCodeMarker } from './rehypeFencedCodeMarker';
@@ -54,11 +57,9 @@ import {
 } from './rehypeStreamWordFade';
 import { repairStreamingMarkdown } from './repairStreamingMarkdown';
 import { StreamingMarkdownChunk } from './StreamingMarkdownChunk';
-import {
-  getStreamingMarkdownThrottleInterval,
-  splitStreamingMarkdownChunks,
-  STREAMING_MARKDOWN_THROTTLE_BASE_MS,
-} from './streamingMarkdownChunks';
+import { splitStreamingMarkdownChunks } from './streamingMarkdownChunks';
+import { assignStreamingHeadingIds, rehypeMarkHeadingSlugText } from './streamingHeadingIds';
+import { useStreamingReveal } from './streamingReveal';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { isHomePath, resolveRemoteHomePath, useRemoteHomePath } from '@/hooks/useRemoteHomePath';
 import { useStreamFadeEnabled } from '@/hooks/useStreamFadePreference';
@@ -136,6 +137,8 @@ import { ChatVideoView } from './ChatVideoView';
 import { isManagedMarkdownVideoUrl, markdownMediaFilename } from './markdownMedia';
 import { MarkdownDiffBlock } from './MarkdownDiffBlock';
 import { MarkdownMermaidBlock } from './MarkdownMermaidBlock';
+import { MarkdownCarouselBlock } from './MarkdownCarouselBlock';
+import { isCarouselFenceLanguage } from '@cindy/maker-shared/markdown-carousel';
 import { TextLightbox } from './lazyPreviewLightboxes';
 import { ModelLightbox } from './ModelLightbox';
 import { useFileChipContextMenu } from './useFileChipContextMenu';
@@ -145,6 +148,8 @@ import {
   activateMessageUrl,
 } from './messageLinkActions';
 import { useOpenWithMenu } from './useOpenWithMenu';
+import { parsePrLinkUrl } from '@/features/cc-agent/PrSummaryPopoverContent';
+import { PrLinkHoverPopover, type PrLinkHoverTriggerProps } from './PrLinkHoverPopover';
 import { activateInlineLinkFromKeyboard, isSeparateLinkActivation } from './linkInteraction';
 import { useLinkContextMenu } from './useLinkContextMenu';
 
@@ -194,6 +199,18 @@ function isMermaidCodeChild(child: ReactNode): boolean {
   return /\b(language-)?mermaid\b/.test(className);
 }
 
+function isCarouselCodeChild(child: ReactNode): boolean {
+  if (!isValidElement(child)) return false;
+  const className = (child.props as { className?: string })?.className ?? '';
+  for (const token of className.split(/\s+/)) {
+    if (token.startsWith('language-') && isCarouselFenceLanguage(token.slice('language-'.length))) {
+      return true;
+    }
+    if (isCarouselFenceLanguage(token)) return true;
+  }
+  return false;
+}
+
 // Module-level constants — defined once, never recreated across renders.
 // Passing inline arrays ([remarkGfm], [rehypeHighlight]) would create a new
 // array reference on every render, causing react-markdown to re-parse the
@@ -212,11 +229,12 @@ function isMermaidCodeChild(child: ReactNode): boolean {
 // 跳过 link 内 text,不会把 `session/<uuid>` 误当相对路径)。两个数组都是模块级
 // 常量,引用稳定,不破坏 react-markdown 的 re-parse 优化。
 // remarkMath: `$...$` / `$$...$$` → inlineMath / math 节点(micromark 语法扩展,
-// parse 阶段生效,与其它 transformer 的相对顺序无关)。`\(...\)` / `\[...\]` 定界
-// 符在 parse 前由 normalizeMathDelimiters 归一化成 dollar 形式(desktop / mobile
-// 共用实现,见 @cindy/maker-shared 的 mathMarkdown.ts)。remarkStrictInlineMath
-// 紧随其后,把松散配对的 inlineMath(货币文本、跨 code span)降级回原文,
-// 规则与 mobile parser 对齐。
+// parse 阶段生效)。`\(...\)` / `\[...\]` 定界符在 parse 前由 normalizeMathDelimiters
+// 归一化成 dollar 形式(desktop / mobile 共用实现,见 @cindy/maker-shared 的
+// mathMarkdown.ts)。remarkStrictInlineMath 紧随 remarkMath 注册,在 micromark
+// 词法层替换松散的 inline `mathText` tokenizer(规则与 mobile parser 对齐),
+// 让货币文本/跨反引号/跨行的 `$` 在分词阶段直接回退成普通字符,不吞掉两个 `$`
+// 之间的行内代码、链接或加粗。
 // remarkGfm singleTilde:false — 删除线只认标准 GFM 的 `~~text~~`,单个 `~` 保持
 // 字面量。默认 singleTilde:true 会把「4~6……4~6」这类区间写法中间整段划成删除线,
 // mobile 自研 parser(messageMarkdown.ts)本就只匹配 `~~`,此处对齐。
@@ -276,6 +294,11 @@ const REHYPE_PLUGINS: PluggableList = [
   rehypeHighlightShared,
   rehypeFencedCodeMarker,
 ];
+// 流式分片各自解析，rehype-slug 的去重计数跨不了分片：同一位置改为只记录标题文本，
+// 提交后由 assignStreamingHeadingIds 按文档顺序统一分配 id（见 streamingHeadingIds.ts）。
+const STREAMING_REHYPE_PLUGINS: PluggableList = REHYPE_PLUGINS.map((plugin) =>
+  plugin === rehypeSlug ? rehypeMarkHeadingSlugText : plugin,
+);
 
 /** MarkdownRenderer 与所有“实际是否渲染”判定共用的输入归一化。 */
 export function normalizeMarkdownRendererContent(
@@ -376,6 +399,13 @@ const allowlistedImageUrlTransform: UrlTransform = (url, key) => {
 
 interface MarkdownRendererProps {
   renderRichAnswers?: boolean;
+  /**
+   * The reply's client id. With it, an image shown more than once in the reply
+   * opens the task image gallery at the copy that was clicked (replySectionId).
+   */
+  galleryMessageKey?: string;
+  /** Internal: replySectionId of the part / component node this renderer shows. */
+  gallerySection?: string;
   /** F1: session cwd used to resolve relative paths in markdown links.
    *  Stable per-session — only changes on session switch (parent remount). */
   workingDir: string;
@@ -423,6 +453,20 @@ interface MarkdownRendererProps {
    * 方案 A 的安全前提)。
    */
   emitSourceLines?: boolean;
+  /**
+   * Explicit remote-media origin for document previews (e.g. TextLightbox) that
+   * render files from a remote device/SSH session without acting as a chat reply.
+   */
+  remoteMediaOrigin?: RemoteMediaOrigin;
+  /**
+   * Enable gallery navigation (`←`/`→`) when clicking embedded images inside a
+   * standalone Markdown document preview wrapped with ImageGalleryContext.
+   */
+  enableDocumentGallery?: boolean;
+  /** Internal recursion guard: carousel slides render nested carousels as plain code. */
+  insideCarousel?: boolean;
+  /** Notifies host cards when an in-app image, text or 3D preview lightbox opens or closes. */
+  onPreviewOpenChange?: (open: boolean) => void;
 }
 
 function parseSessionCardHref(href: string): {
@@ -451,90 +495,6 @@ function parseSessionCardHref(href: string): {
   } catch {
     return null;
   }
-}
-
-/**
- * Throttle a rapidly-changing string to at most one render per adaptive
- * interval. Caps react-markdown re-parse + rehype-highlight CPU
- * during SDK streaming, where text deltas can land 30-60 times/s even
- * after the main-process IPC batcher.
- *
- * - `enabled=false`  → returns `value` directly each call (no setState
- *   loop, no timer overhead, identical behavior to passing through).
- * - `enabled=true`   → rate-limits via setTimeout; the trailing edge is
- *   guaranteed (no-token-lost). Switching back to false flushes the
- *   latest value synchronously.
- */
-function useStreamingThrottle(value: string, enabled: boolean): string {
-  const intervalMs = enabled
-    ? getStreamingMarkdownThrottleInterval(value)
-    : STREAMING_MARKDOWN_THROTTLE_BASE_MS;
-  const [throttled, setThrottled] = useState(value);
-  const throttledRef = useRef(value);
-  const latestRef = useRef(value);
-  const lastEmitRef = useRef(0);
-  const timerRef = useRef<number | null>(null);
-
-  const emit = useCallback((nextValue: string, now: number) => {
-    lastEmitRef.current = now;
-    if (throttledRef.current === nextValue) return;
-    throttledRef.current = nextValue;
-    setThrottled(nextValue);
-  }, []);
-
-  useEffect(() => {
-    latestRef.current = value;
-
-    if (!enabled) {
-      if (timerRef.current != null) {
-        window.clearTimeout(timerRef.current);
-        timerRef.current = null;
-      }
-      // Stream just ended — flush whatever the most recent value is so
-      // the final frame is never the last throttled snapshot.
-      if (throttledRef.current !== value) {
-        throttledRef.current = value;
-        setThrottled(value);
-      }
-      // A new stream should get a leading frame even if it starts shortly
-      // after the previous one ended.
-      lastEmitRef.current = 0;
-      return;
-    }
-
-    const now = performance.now();
-    const elapsed = now - lastEmitRef.current;
-    if (elapsed >= intervalMs) {
-      if (timerRef.current != null) {
-        window.clearTimeout(timerRef.current);
-        timerRef.current = null;
-      }
-      emit(value, now);
-      return;
-    }
-
-    // Re-arm on every update so an interval bucket change cannot leave a
-    // timer using the previous (shorter) delay. The latest ref keeps the
-    // trailing edge lossless even when several batches arrive in between.
-    if (timerRef.current != null) window.clearTimeout(timerRef.current);
-    timerRef.current = window.setTimeout(
-      () => {
-        timerRef.current = null;
-        emit(latestRef.current, performance.now());
-      },
-      Math.max(0, intervalMs - elapsed),
-    );
-  }, [emit, value, enabled, intervalMs]);
-
-  useEffect(() => {
-    return () => {
-      if (timerRef.current != null) window.clearTimeout(timerRef.current);
-    };
-  }, []);
-
-  // useEffect 在 paint 后才执行。流式结束时本次 render 直接返回最新原文，
-  // effect 只负责同步内部 state，供未来可能的新流式周期使用。
-  return enabled ? throttled : value;
 }
 
 /**
@@ -644,7 +604,7 @@ const baseComponents: Components = {
   table({ children, ...props }) {
     return (
       <CopyAsImageBlock
-        className="my-3"
+        className="my-3 w-[var(--cindy-markdown-table-width,100%)] max-w-full"
         contentClassName="overflow-x-auto"
         extractPlainText={tableToTsv}
       >
@@ -683,6 +643,9 @@ const baseComponents: Components = {
           // overflow-x-auto 横滚 + .is-scrolling 自动隐藏滚动条,
           // 视觉上像被右边截断。anywhere 让浏览器在任意位置可断行。
           'break-words [overflow-wrap:anywhere]',
+          // In narrow task panes, keep column labels readable and let the
+          // existing table scrollport contain columns that no longer fit.
+          '[.chat-rail-compact_&]:whitespace-nowrap',
         )}
         {...props}
       >
@@ -910,6 +873,33 @@ function markdownMediaOrigin(
   return src && isFileUrlHostHref(src, workingDir) ? undefined : origin;
 }
 
+export interface MarkdownImageAddressOptions {
+  workingDir: string;
+  allowPrivilegedLinks: boolean;
+  remoteMediaOrigin: RemoteMediaOrigin | undefined;
+  /** A task message whose local ownership is not confirmed yet. */
+  ownershipPending: boolean;
+}
+
+/**
+ * Loadable address of an embedded image once its workspace path is settled.
+ * The reply renderer and the task image gallery share this derivation so a
+ * clicked reply image is found among the gallery entries.
+ */
+export function markdownImageAddress(
+  localSrc: string | undefined,
+  options: MarkdownImageAddressOptions,
+): { normalized: string | undefined; mediaOrigin: RemoteMediaOrigin | undefined } {
+  const mediaOrigin = markdownMediaOrigin(localSrc, options.remoteMediaOrigin, options.workingDir);
+  const normalized = normalizeMarkdownImageSrc(
+    localSrc,
+    options.workingDir,
+    options.allowPrivilegedLinks,
+    mediaOrigin ?? (options.ownershipPending ? null : undefined),
+  );
+  return { normalized, mediaOrigin };
+}
+
 /**
  * LightboxImage — module-level component for react-markdown img renderer.
  * Tracks per-image load errors; broken images get no zoom-in cursor or click.
@@ -920,6 +910,8 @@ function LightboxImage({
   onZoom,
   streaming = false,
   allowLocalFileOpen = false,
+  documentPreview = false,
+  insideCarousel = false,
   ...props
 }: {
   src?: string;
@@ -927,6 +919,8 @@ function LightboxImage({
   onZoom: (src: string) => void;
   streaming?: boolean;
   allowLocalFileOpen?: boolean;
+  documentPreview?: boolean;
+  insideCarousel?: boolean;
   [key: string]: unknown;
 }) {
   const { t } = useTranslation();
@@ -984,7 +978,7 @@ function LightboxImage({
         aria-label={zoomLabel}
         title={t('chat.media.clickToZoom')}
         disabled={!src}
-        style={{ cursor: src ? 'pointer' : undefined, marginTop: 18, marginBottom: 18, padding: 0, border: 0, background: 'transparent', lineHeight: 0 }}
+        style={{ cursor: src ? 'pointer' : undefined, marginTop: insideCarousel ? 0 : 18, marginBottom: insideCarousel ? 0 : 18, padding: 0, border: 0, background: 'transparent', lineHeight: 0 }}
         onClick={() => {
           if (src) onZoom(src);
         }}
@@ -998,7 +992,11 @@ function LightboxImage({
         <ChatLoadingImage
           src={src}
           alt={alt ?? ''}
-          style={{ maxWidth: 'min(100%, 50vw, 480px)', maxHeight: 'min(40vh, 420px)', height: 'auto' }}
+          style={{
+            maxWidth: documentPreview ? '100%' : 'min(100%, 50vw, 480px)',
+            maxHeight: documentPreview ? '65vh' : 'min(40vh, 420px)',
+            height: 'auto',
+          }}
           onError={onError}
           {...props}
         />
@@ -1756,25 +1754,58 @@ function MarkdownTargetLink({
     return <span>{children}</span>;
   }
 
-  // Explicit local candidates retain the same open/copy-link menu as links.
-  return (
-    <>
+  // 注意：此处位于多个条件早返回之后，禁止放 Hook；parsePrLinkUrl 为轻纯函数。
+  const prLink =
+    allowPrivilegedLinks && target.kind === 'external' ? parsePrLinkUrl(target.href) : null;
+  const effectiveSessionId = sessionId ?? fileCtx.sessionId;
+  const renderAnchor = (prHoverProps?: PrLinkHoverTriggerProps) => (
     <a
       href={target.href}
       className={MARKDOWN_LINK_CLASS}
       onKeyDown={activateInlineLinkFromKeyboard}
-      onClick={activate}
+      onClick={(event) => {
+        prHoverProps?.onDismiss();
+        void activate(event);
+      }}
       onAuxClick={(event) => {
-        if (event.button === 1) void activate(event);
+        if (event.button === 1) {
+          prHoverProps?.onDismiss();
+          void activate(event);
+        }
       }}
       onContextMenu={(e) => {
+        prHoverProps?.onDismiss();
         if (target.kind === 'external') openWith.onContextMenu(e, target.href);
         else inlineMenu.onContextMenu(e);
       }}
       {...anchorProps}
+      onPointerEnter={(event) => {
+        (anchorProps.onPointerEnter as ((e: React.PointerEvent<HTMLAnchorElement>) => void) | undefined)?.(event);
+        prHoverProps?.onPointerEnter(event);
+      }}
+      onPointerLeave={(event) => {
+        (anchorProps.onPointerLeave as ((e: React.PointerEvent<HTMLAnchorElement>) => void) | undefined)?.(event);
+        prHoverProps?.onPointerLeave(event);
+      }}
+      onPointerDown={(event) => {
+        (anchorProps.onPointerDown as ((e: React.PointerEvent<HTMLAnchorElement>) => void) | undefined)?.(event);
+        prHoverProps?.onPointerDown(event);
+      }}
     >
       {children}
     </a>
+  );
+
+  // Explicit local candidates retain the same open/copy-link menu as links.
+  return (
+    <>
+    {prLink ? (
+      <PrLinkHoverPopover prRef={prLink} sessionId={effectiveSessionId}>
+        {(prHoverProps) => renderAnchor(prHoverProps)}
+      </PrLinkHoverPopover>
+    ) : (
+      renderAnchor()
+    )}
     {openWith.menu}
     {inlineMenu.menu}
     </>
@@ -1860,12 +1891,17 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
   allowPrivilegedLinks = true,
   resolveImageSrc,
   emitSourceLines = false,
+  remoteMediaOrigin: remoteMediaOriginProp,
+  enableDocumentGallery = false,
+  insideCarousel = false,
+  gallerySection,
+  onPreviewOpenChange,
 }: MarkdownRendererProps) {
   const embeddedMediaStreaming = mediaStreaming ?? isStreaming;
-  // Cap markdown re-parse + syntax highlight cost during streaming.
-  // Static callers (TextLightbox) leave isStreaming undefined → false,
-  // so the throttle is fully bypassed — same behavior as before.
-  const throttledContent = useStreamingThrottle(content, isStreaming);
+  // 流式节奏由外层 MarkdownRenderer 的 useStreamingReveal 统一负责（匀速放出 +
+  // 按渲染耗时退避，DESIGN.md §14.4 Stream pacing）。这里不再叠加固定节流：
+  // 叠加会把逐帧放出重新压回 ~10Hz 的成块跳变。
+  const throttledContent = content;
   // 流式逐词淡入（DESIGN.md §14.4）：消息级 state 跨 parse / remount 保留，
   // 各稳定 Markdown 分片只维护自己的内容匹配状态，但共享同一条连续时间线。
   // isStreaming 翻 false 时整段回落到普通 Markdown，终版没有流式 span 包装。
@@ -1905,23 +1941,49 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
         : [{ start: 0, content: renderedContent }],
     [emitSourceLines, isStreaming, renderedContent],
   );
-  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+  const [lightbox, setLightbox] = useState<{
+    src: string;
+    galleryTarget?: string;
+    galleryOccurrence?: GalleryOccurrence;
+  } | null>(null);
+  // Links and chips open a single image; only embedded reply images carry a gallery target.
+  const setLightboxSrc = useCallback((src: string | null) => setLightbox(src ? { src } : null), []);
+  // Which repeat of an image was clicked, in the reply section the gallery lists it
+  // under. Read at click time: positions refer to the rendered text.
+  const occurrenceSourceRef = useRef({
+    section: gallerySection,
+    rendered: repairedContent,
+    preserveLineCount: emitSourceLines,
+  });
+  occurrenceSourceRef.current = {
+    section: gallerySection,
+    rendered: repairedContent,
+    preserveLineCount: emitSourceLines,
+  };
+  const clickedOccurrence = useCallback((target: string, offset: number | undefined) => {
+    const { section, rendered, preserveLineCount } = occurrenceSourceRef.current;
+    if (offset === undefined || section === undefined) return undefined;
+    const index = markdownImageOccurrence(rendered, target, offset, preserveLineCount);
+    return index === undefined ? undefined : { section, index };
+  }, []);
   // 远程入方向:远程会话里 markdown 的图片/音频 URL 指向远端机器,按来源改写到
   // cindy-remote-media://(device 经 OSS 中转、ssh 经 file-service 落盘缓存)。本地
   // 会话 → undefined,改写为 no-op。origin 从 ChatSessionFileContext 取(provider
   // 在 MessageStream 顶层统一订阅 remoteProjectsStore,origin-injection race 在那里
   // 处理;context 更新穿透 MessageItem/AssistantMessage 的 memo,deviceId 一就位本
-  // 气泡即重渲)。门控 currentSessionId:TextLightbox 等挂在聊天树内、但渲染的是
-  // "文件内容"而非会话消息的调用方不传 currentSessionId,此时不做远程改写,与引入
-  // context 前行为一致。ssh 的 workdir 取 context 的 workingDir(与 props 的
+  // 气泡即重渲)。门控 currentSessionId:TextLightbox 等渲染"文件内容"的调用方不传
+  // currentSessionId(避免触发聊天专属的 workspace BFS 与深链),如需远程媒体改写则显式
+  // 传入 remoteMediaOrigin prop。ssh 的 workdir 取 context 的 workingDir(与 props 的
   // workingDir 同源,聊天调用方都由 session 传入)。
   const sessionFileCtx = useChatSessionFile();
   const remoteMediaOrigin = useMemo(
     () =>
-      currentSessionId
-        ? toRemoteMediaOrigin(sessionFileCtx.origin, sessionFileCtx.workingDir)
-        : undefined,
-    [currentSessionId, sessionFileCtx],
+      remoteMediaOriginProp !== undefined
+        ? remoteMediaOriginProp
+        : currentSessionId
+          ? toRemoteMediaOrigin(sessionFileCtx.origin, sessionFileCtx.workingDir)
+          : undefined,
+    [remoteMediaOriginProp, currentSessionId, sessionFileCtx],
   );
   // 本机会话消息里的相对媒体路径，直接拼接找不到时按任务目录搜索（见 useWorkspaceMediaPath）。
   // 不传 currentSessionId 的调用方渲染的是文件内容而非会话消息，保持原拼接行为。
@@ -1935,6 +1997,12 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
   } | null>(null);
   // model-local chip/link click → in-app 3D preview (ModelLightbox, local mode).
   const [modelLightboxPath, setModelLightboxPath] = useState<string | null>(null);
+  const previewOpen = Boolean(lightbox || textLightboxFile || modelLightboxPath);
+  useEffect(() => {
+    if (!onPreviewOpenChange) return;
+    onPreviewOpenChange(previewOpen);
+    return () => onPreviewOpenChange(false);
+  }, [previewOpen, onPreviewOpenChange]);
   // workingDir and localFileRefs are stable within a session lifecycle — they
   // only change on session switch or when the message list gains a new user
   // attachment. So in steady-state streaming, the components object is still
@@ -1946,27 +2014,105 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
       // renderer 整体替换成带 data-source-line 注入的版本。chat 调用方不传 prop
       // → 默认 false → 整段是 falsy 短路, components 对象与之前完全一致。
       ...(emitSourceLines ? makeSourceLineWrappers() : {}),
+      pre: ({ children, node, ...props }) => {
+        const lineAttr = emitSourceLines ? lineAttrFor(node) : {};
+        const firstChild = Array.isArray(children) ? children[0] : children;
+        if (!insideCarousel && isCarouselCodeChild(firstChild)) {
+          const codeChildren = (firstChild as { props: { children?: ReactNode } }).props.children;
+          const raw = nodeToText(codeChildren);
+          const carouselOffset = node?.position?.start.offset ?? 0;
+          const fallback = (
+            <CodeBlockPre {...props} {...lineAttr}>
+              {children}
+            </CodeBlockPre>
+          );
+          return (
+            <MarkdownCarouselBlock
+              raw={raw}
+              sourceLine={lineAttr['data-source-line']}
+              fallback={fallback}
+              renderSlide={(slideMarkdown, slideIndex) => (
+                <MarkdownRendererBase
+                  workingDir={workingDir}
+                  content={slideMarkdown}
+                  isStreaming={false}
+                  mediaStreaming={embeddedMediaStreaming}
+                  localFileRefs={localFileRefs}
+                  currentSessionId={currentSessionId}
+                  currentSessionTitle={currentSessionTitle}
+                  allowPrivilegedLinks={allowPrivilegedLinks}
+                  resolveImageSrc={resolveImageSrc}
+                  remoteMediaOrigin={remoteMediaOriginProp}
+                  enableDocumentGallery={enableDocumentGallery}
+                  gallerySection={
+                    gallerySection !== undefined
+                      ? `${gallerySection}\u0000carousel:${carouselOffset}:${slideIndex}`
+                      : undefined
+                  }
+                  insideCarousel
+                  onPreviewOpenChange={onPreviewOpenChange}
+                />
+              )}
+            />
+          );
+        }
+        const basePre = baseComponents.pre;
+        return basePre
+          ? (basePre as unknown as (p: Record<string, unknown>) => ReactNode)({
+              node,
+              children,
+              ...props,
+              ...lineAttr,
+            })
+          : (
+              <CodeBlockPre {...props} {...lineAttr}>
+                {children}
+              </CodeBlockPre>
+            );
+      },
       img: ({ src, alt, node, ...props }) => {
         const rawLocalSrc = node?.properties?.[RAW_LOCAL_IMAGE_SRC_PROP];
+        const rawTarget = node?.properties?.[RAW_IMAGE_TARGET_PROP];
         const imageProps = { ...props };
         delete (imageProps as Record<string, unknown>)[RAW_LOCAL_IMAGE_SRC_PROP];
+        delete (imageProps as Record<string, unknown>)[RAW_IMAGE_TARGET_PROP];
+        // Task reply images and document previews (enableDocumentGallery) browse
+        // their surface's image gallery, identified by the destination as written
+        // (`src` arrives re-encoded for URLs). Other callers keep single-image zoom.
+        const galleryTarget =
+          (currentSessionId || enableDocumentGallery) && typeof rawTarget === 'string' && rawTarget
+            ? rawTarget
+            : undefined;
+        const sourceOffset = node?.position?.start.offset;
         if (resolveImageSrc) {
           const resolved = typeof src === 'string' && src ? resolveImageSrc(src) : null;
           return resolved ? (
-            <LightboxImage streaming={false} src={resolved} alt={alt} onZoom={setLightboxSrc} {...imageProps} />
+            <LightboxImage
+              streaming={false}
+              src={resolved}
+              alt={alt}
+              onZoom={setLightboxSrc}
+              documentPreview={enableDocumentGallery}
+              insideCarousel={insideCarousel}
+              {...imageProps}
+            />
           ) : null;
         }
+        const writtenSrc = typeof rawLocalSrc === 'string' ? rawLocalSrc : src;
         return (
           <WorkspaceMediaSrc
-            src={typeof rawLocalSrc === 'string' ? rawLocalSrc : src}
+            src={writtenSrc}
             workingDir={workingDir}
             enabled={resolveMediaInWorkspace}
             streaming={embeddedMediaStreaming}
           >
             {(localSrc) => {
-              const mediaOrigin = markdownMediaOrigin(localSrc, remoteMediaOrigin, workingDir);
-              const normalized = normalizeMarkdownImageSrc(localSrc, workingDir, allowPrivilegedLinks,
-                mediaOrigin ?? (currentSessionId && sessionFileCtx.localConfirmed !== true ? null : undefined));
+              const { normalized, mediaOrigin } = markdownImageAddress(localSrc, {
+                workingDir,
+                allowPrivilegedLinks,
+                remoteMediaOrigin,
+                ownershipPending: Boolean(currentSessionId) && sessionFileCtx.localConfirmed !== true,
+              });
               if (isManagedMarkdownVideoUrl(normalized)) {
                 // 远程会话里视频 URL 同样指向远端机器，先按来源改写到 cindy-remote-media://
                 // 再交给 ChatVideoView(与下面的图片分支同一条改写路径)。
@@ -1984,7 +2130,14 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
                   streaming={isStreaming}
                   src={normalized ? rewriteToRemoteMediaOrigin(normalized, mediaOrigin) : normalized}
                   alt={alt}
-                  onZoom={setLightboxSrc}
+                  onZoom={(clicked) =>
+                    setLightbox({
+                      src: clicked,
+                      galleryTarget,
+                      galleryOccurrence: galleryTarget ? clickedOccurrence(galleryTarget, sourceOffset) : undefined,
+                    })}
+                  documentPreview={enableDocumentGallery}
+                  insideCarousel={insideCarousel}
                   {...imageProps}
                   allowLocalFileOpen={resolveMediaInWorkspace && !mediaOrigin}
                 />
@@ -2128,16 +2281,30 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
       allowPrivilegedLinks,
       resolveImageSrc,
       remoteMediaOrigin,
+      remoteMediaOriginProp,
       resolveMediaInWorkspace,
       embeddedMediaStreaming,
+      enableDocumentGallery,
+      gallerySection,
+      insideCarousel,
+      onPreviewOpenChange,
+      clickedOccurrence,
+      setLightboxSrc,
+      sessionFileCtx.localConfirmed,
     ],
   );
+  const markdownRootRef = useRef<HTMLDivElement>(null);
+  // 没有依赖数组：任何一次提交都可能新增或替换标题元素（尾块重解析），每次按文档
+  // 顺序重排 id。只查询带 data-slug-text 的标题，开销与标题数成正比。
+  useLayoutEffect(() => {
+    if (isStreaming && markdownRootRef.current) assignStreamingHeadingIds(markdownRootRef.current);
+  });
   const urlTransform = resolveImageSrc
     ? allowlistedImageUrlTransform
     : allowPrivilegedLinks ? trustedUrlTransform : previewSafeUrlTransform;
 
   return (
-    <div className="msg-markdown select-text">
+    <div ref={markdownRootRef} className="msg-markdown select-text">
       {isStreaming ? (
         streamingChunks.map((chunk) => (
           <StreamingMarkdownChunk
@@ -2147,7 +2314,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
             remarkPlugins={
               allowPrivilegedLinks ? REMARK_PLUGINS_PRIVILEGED : REMARK_PLUGINS
             }
-            rehypePlugins={REHYPE_PLUGINS}
+            rehypePlugins={STREAMING_REHYPE_PLUGINS}
             components={components}
             urlTransform={urlTransform}
             wordFadeState={wordFadeState}
@@ -2166,8 +2333,14 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
           {renderedContent}
         </ReactMarkdown>
       )}
-      {lightboxSrc && (
-        <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
+      {lightbox && (
+        <ImageLightbox
+          src={lightbox.src}
+          galleryTarget={lightbox.galleryTarget}
+          galleryOccurrence={lightbox.galleryOccurrence}
+          enableGallery={lightbox.galleryTarget !== undefined}
+          onClose={() => setLightbox(null)}
+        />
       )}
       {/* ADR-4: triggerRef intentionally omitted — markdown links rendered by
           react-markdown have no stable button ref; TextLightbox falls back
@@ -2192,12 +2365,26 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
 });
 
 /** Assistant-only envelope decoding, before Markdown chunking or repairs. */
-export const MarkdownRenderer = memo(function MarkdownRenderer(props: MarkdownRendererProps) {
+export const MarkdownRenderer = memo(function MarkdownRenderer(incoming: MarkdownRendererProps) {
   const instanceKey = useId();
   const sessionFileCtx = useChatSessionFile();
-  const source = useStreamingThrottle(props.content, props.isStreaming ?? false);
-  const renderMedia = (node: RichNode) => {
-    if (node.kind === 'image') return <MarkdownRendererBase {...props} content={richMarkdown(node) ?? ''} isStreaming={false} mediaStreaming={props.isStreaming ?? false} />;
+  const streaming = incoming.isStreaming ?? false;
+  // 匀速放出与淡入共用同一开关：关闭回复动效或系统减弱动态效果时只保留
+  // 按渲染耗时退避的发布节奏，不缓冲、不延迟。
+  const reducedMotion = useReducedMotion();
+  const streamFadeEnabled = useStreamFadeEnabled();
+  const reveal = useStreamingReveal(incoming.content, streaming, !reducedMotion && streamFadeEnabled);
+  const source = reveal.text;
+  // 流式结束后的 ≤150ms 收尾期间继续按流式渲染（淡入、分片），放完再切终版，
+  // 剩余积压不会在最后一帧整段跳出。
+  const props = useMemo(
+    () => (reveal.draining ? { ...incoming, isStreaming: true } : incoming),
+    [incoming, reveal.draining],
+  );
+  const section = (partKey: number, nodeId?: string) =>
+    props.galleryMessageKey === undefined ? undefined : replySectionId(props.galleryMessageKey, partKey, nodeId);
+  const renderMediaFor = (partKey: number) => (node: RichNode) => {
+    if (node.kind === 'image') return <MarkdownRendererBase {...props} content={richMarkdown(node) ?? ''} isStreaming={false} mediaStreaming={props.isStreaming ?? false} gallerySection={section(partKey, node.id)} />;
     const raw = richMediaSource(node);
     if (!raw) return null;
     if (node.kind === 'video' && youtubeVideo(raw)) return <VideoSitePreview src={raw} title={richString(node, 'alt', 'YouTube')} />;
@@ -2223,10 +2410,11 @@ export const MarkdownRenderer = memo(function MarkdownRenderer(props: MarkdownRe
     );
   };
   const parts = useMemo(() => props.renderRichAnswers ? splitRichAnswer(source) : [], [source, props.renderRichAnswers]);
-  if (!parts.some(part => part.kind === 'rich')) return <MarkdownRendererBase {...props} />;
+  // A reply without component blocks is one plain part starting at offset 0.
+  if (!parts.some(part => part.kind === 'rich')) return <MarkdownRendererBase {...props} content={source} gallerySection={section(0)} />;
   return <div className="rich-answer-body">{parts.map(part => part.kind === 'rich'
-    ? <RichAnswer renderMedia={renderMedia} key={part.key} source={part.source} complete={part.complete || !props.isStreaming}
+    ? <RichAnswer renderMedia={renderMediaFor(part.key)} key={part.key} source={part.source} complete={part.complete || !props.isStreaming}
         stateKey={`${props.streamFadeKey ?? instanceKey}:${part.key}`}
-        renderMarkdown={(content, id) => <MarkdownRendererBase {...props} content={content} streamFadeKey={`${props.streamFadeKey}:${part.key}:${id}`} />} />
-    : <MarkdownRendererBase {...props} key={part.key} content={part.source} isStreaming={!part.complete && props.isStreaming} mediaStreaming={props.isStreaming ?? false} streamFadeKey={`${props.streamFadeKey}:${part.key}`} />)}</div>;
+        renderMarkdown={(content, id) => <MarkdownRendererBase {...props} content={content} streamFadeKey={`${props.streamFadeKey}:${part.key}:${id}`} gallerySection={section(part.key, id)} />} />
+    : <MarkdownRendererBase {...props} key={part.key} content={part.source} isStreaming={!part.complete && props.isStreaming} mediaStreaming={props.isStreaming ?? false} streamFadeKey={`${props.streamFadeKey}:${part.key}`} gallerySection={section(part.key)} />)}</div>;
 });

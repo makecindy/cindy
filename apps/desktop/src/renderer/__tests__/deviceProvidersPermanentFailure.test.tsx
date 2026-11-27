@@ -6,7 +6,7 @@ import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProviderShareReceived } from '@cindy/device-link';
-import { PROVIDER_METADATA_TRUST_MS } from '../../../../../packages/device-link/src/metadataContinuity';
+import { PROVIDER_METADATA_TRUST_MS, REMOTE_CATALOG_FRESH_MS } from '../../../../../packages/device-link/src/metadataContinuity';
 import type { ProviderView } from '@cindy/model-providers';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { refreshProviderShareFavoriteMembership, refreshProviderShareReceived, resetProviderShareStoreForTests, useProviderShareReceived } from '@/features/provider-share/providerShareStore';
@@ -20,7 +20,12 @@ import {
   useAgentCapabilities,
 } from '@/hooks/useAgentCapabilities';
 import { CONTROLLED_MODEL_CATALOG_CHANNEL, CONTROLLED_MODEL_CATALOG_CHANGED, modelCatalogKey } from '../../shared/controlledModelCatalog';
-import { useControlledModelLocations } from '@/hooks/useControlledModelLocations';
+import {
+  invalidateDetachedControlledModelLocations,
+  registerControlledCatalogPushWatcher,
+  resetControlledModelLocationsForTests,
+  useControlledModelLocations,
+} from '@/hooks/useControlledModelLocations';
 import { useRemotePluginEngines } from '@/hooks/usePluginEngines';
 import type { ProviderShareReceivedSnapshot, ProviderShareRegionBudget } from '../../shared/providerShare';
 
@@ -122,12 +127,14 @@ async function cleanupMounted(): Promise<void> {
 
 beforeEach(() => {
   providers.evictAllDeviceProviders();
+  resetControlledModelLocationsForTests();
   resetProviderShareStoreForTests();
   setDataOwnerGeneration('owner', 1);
 });
 afterEach(async () => {
   await cleanupMounted();
   providers.evictAllDeviceProviders();
+  resetControlledModelLocationsForTests();
   resetProviderShareStoreForTests();
 });
 
@@ -1192,6 +1199,294 @@ describe('provider share catalog identity changes', () => {
     expect(current?.locations).toHaveLength(2);
     expect(reads.get('share:b')).toBe(1);
     expect(current?.b.providers).toHaveLength(1);
+
+    // Main-process routed denial push (deviceId = modelCatalogKey('share:b', 'host'))
+    // retires only that routed alias without touching the host's locations list.
+    await act(async () => {
+      remotePush?.({ deviceId: modelCatalogKey('share:b', 'host')!, channel: 'maker:provider:changed',
+        payload: { providerContinuity: { stale: true, remainingMs: 0 } } });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(current?.locations).toHaveLength(2);
+    expect(reads.get('share:b')).toBe(1);
+    expect(current?.b.providers).toEqual([]);
+  });
+
+  // Regression: useControlledModelLocations must cache locations per (owner, device),
+  // avoid wiping healthy routed share catalogs on window focus / remount / unrelated
+  // device presence flaps, and still evict any source removed from the host list.
+  it('caches controlled locations across remounts, revalidates non-destructively on focus, and isolates owners', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+    try {
+      let hostLocations = [
+        { agentDeviceId: 'share:a', name: 'Share A' },
+        { agentDeviceId: 'share:b', name: 'Share B' },
+      ];
+      let onPresence: ((presence: { deviceId: string; online: boolean; remoteControlEnabled: boolean }) => void) | undefined;
+      const invoke = vi.fn(async (_device: string, channel: string, args: unknown[]) => {
+        if (channel !== CONTROLLED_MODEL_CATALOG_CHANNEL) throw new Error('unexpected channel');
+        const request = args[0] as { op?: string; agentDeviceId?: string; channel?: string } | undefined;
+        if (request?.op === 'locations') return { status: 'complete', locations: hostLocations };
+        if (request?.op === 'read') {
+          if (request.channel === 'maker:provider:list') {
+            return { providers: [provider(request.agentDeviceId!)] };
+          }
+          return capabilities;
+        }
+        throw new Error('unexpected request');
+      });
+      Object.defineProperty(window, 'electronAPI', {
+        configurable: true,
+        value: {
+          deviceLink: {
+            invoke,
+            onPresenceChanged: (callback: typeof onPresence) => {
+              onPresence = callback;
+              return () => undefined;
+            },
+            onStatusChanged: () => () => undefined,
+            onRemotePush: () => () => undefined,
+            onPeerLinkReset: () => () => undefined,
+            onControlTargetChanged: () => () => undefined,
+          },
+        },
+      });
+      const routeA = modelCatalogKey('share:a', 'host')!;
+      const routeB = modelCatalogKey('share:b', 'host')!;
+      const locationReads = () => invoke.mock.calls.filter(([, , args]) =>
+        (args[0] as { op?: string })?.op === 'locations').length;
+
+      const first = await renderHookFixture(() => useControlledModelLocations('host', 'self'));
+      await flushMounted();
+      expect(first.result.current?.map(item => item.agentDeviceId)).toEqual(['share:a', 'share:b']);
+      expect(locationReads()).toBe(1);
+
+      await Promise.all([
+        providers.prefetchDeviceProviders(routeA),
+        providers.prefetchDeviceProviders(routeB),
+        prefetchDeviceCapabilities(routeA),
+        prefetchDeviceCapabilities(routeB),
+      ]);
+      expect(providers.getCachedDeviceProviders(routeA)).not.toBeNull();
+      expect(providers.getCachedDeviceProviders(routeB)).not.toBeNull();
+
+      // Unmount and remount: cached locations appear immediately on first render without wiping routes.
+      await first.unmount();
+      let initialOnRemount: ReturnType<typeof useControlledModelLocations> | undefined;
+      function RemountProbe() {
+        const value = useControlledModelLocations('host', 'self');
+        if (initialOnRemount === undefined) initialOnRemount = value;
+        return null;
+      }
+      const remounted = await renderElement(createElement(RemountProbe));
+      expect(initialOnRemount?.map(item => item.agentDeviceId)).toEqual(['share:a', 'share:b']);
+      await flushMounted();
+      expect(locationReads()).toBe(2); // Quiet background revalidation after detached period.
+      expect(providers.getCachedDeviceProviders(routeA)).not.toBeNull();
+      expect(providers.getCachedDeviceProviders(routeB)).not.toBeNull();
+      expect(getCachedCapabilities('claude-code', routeB)).not.toBeNull();
+
+      // Window focus inside the fresh window does not trigger an extra locations read or evict routes.
+      await act(async () => { window.dispatchEvent(new Event('focus')); });
+      await flushMounted();
+      expect(locationReads()).toBe(2);
+      expect(providers.getCachedDeviceProviders(routeB)).not.toBeNull();
+
+      // Unrelated neighbor device presence going offline must not evict host's shared models.
+      await act(async () => {
+        onPresence?.({ deviceId: 'unrelated-phone', online: false, remoteControlEnabled: false });
+      });
+      await flushMounted();
+      expect(locationReads()).toBe(2);
+      expect(providers.getCachedDeviceProviders(routeB)).not.toBeNull();
+
+      // Focus after the fresh window revalidates quietly: removed share:a is evicted, share:b stays cached.
+      hostLocations = [{ agentDeviceId: 'share:b', name: 'Share B' }];
+      await vi.advanceTimersByTimeAsync(REMOTE_CATALOG_FRESH_MS);
+      await act(async () => { window.dispatchEvent(new Event('focus')); });
+      await flushMounted();
+      expect(locationReads()).toBe(3);
+      expect(providers.getCachedDeviceProviders(routeA)).toBeNull();
+      expect(getCachedCapabilities('claude-code', routeA)).toBeNull();
+      expect(providers.getCachedDeviceProviders(routeB)).not.toBeNull();
+      expect(getCachedCapabilities('claude-code', routeB)).not.toBeNull();
+
+      // Switching account owner isolates the cache completely (no leakage of previous owner's locations).
+      await unmountElement(remounted);
+      setDataOwnerGeneration('other-owner', 2);
+      hostLocations = [];
+      let nextOwnerInitial: ReturnType<typeof useControlledModelLocations> | undefined;
+      function NextOwnerProbe() {
+        const value = useControlledModelLocations('host', 'self');
+        if (nextOwnerInitial === undefined) nextOwnerInitial = value;
+        return null;
+      }
+      await renderElement(createElement(NextOwnerProbe));
+      expect(nextOwnerInitial).toEqual([]);
+      await flushMounted();
+    } finally {
+      await act(async () => { evictAllRemoteCapabilities(); });
+      vi.useRealTimers();
+    }
+  });
+
+  // Regression (Greptile P1 #1): a retained host refresh (e.g. PROVIDER_GROUP_IPC.CHANGED
+  // triggering refreshRemoteCatalogSnapshot('host')) bumps routedGen and must keep mounted
+  // locations populated and recovered instead of returning [] silently.
+  it('keeps mounted controlled locations populated and synced after a retained host catalog refresh', async () => {
+    const invoke = vi.fn(async (_device: string, channel: string, args: unknown[]) => {
+      if (channel === CONTROLLED_MODEL_CATALOG_CHANNEL && (args[0] as { op?: string })?.op === 'locations') {
+        return { status: 'complete', locations: [{ agentDeviceId: 'share:a', name: 'Share A' }] };
+      }
+      if (channel === 'maker:provider:list') return { providers: [provider('host-provider')] };
+      return capabilities;
+    });
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        deviceLink: {
+          invoke,
+          onPresenceChanged: () => () => undefined,
+          onStatusChanged: () => () => undefined,
+          onRemotePush: () => () => undefined,
+          onPeerLinkReset: () => () => undefined,
+          onControlTargetChanged: () => () => undefined,
+        },
+      },
+    });
+    let latest: ReturnType<typeof useControlledModelLocations> | undefined;
+    function Probe({ tick }: { tick: number }) {
+      void tick;
+      latest = useControlledModelLocations('host', 'self');
+      return null;
+    }
+    const mounted = await renderElement(createElement(Probe, { tick: 0 }));
+    await flushMounted();
+    expect(latest?.map(item => item.agentDeviceId)).toEqual(['share:a']);
+
+    await act(async () => { await refreshRemoteCatalogSnapshot('host'); });
+    await flushMounted();
+    expect(latest?.map(item => item.agentDeviceId)).toEqual(['share:a']);
+
+    // Re-rendering the hook after routedGen advanced must keep returning the live locations.
+    await act(async () => { mounted.root.render(createElement(Probe, { tick: 1 })); });
+    await flushMounted();
+    expect(latest?.map(item => item.agentDeviceId)).toEqual(['share:a']);
+  });
+
+  // Regression (Greptile P1 #2): unmounting the last subscriber while the initial locations
+  // read is still in flight and remounting promptly must queue a replacement read.
+  it('recovers the initial locations read when remounted while the first request is still in flight', async () => {
+    let resolveFirst!: (value: unknown) => void;
+    let calls = 0;
+    const invoke = vi.fn((_device: string, channel: string, args: unknown[]) => {
+      if (channel !== CONTROLLED_MODEL_CATALOG_CHANNEL || (args[0] as { op?: string })?.op !== 'locations') {
+        throw new Error('unexpected request');
+      }
+      calls += 1;
+      if (calls === 1) return new Promise((resolve) => { resolveFirst = resolve; });
+      return Promise.resolve({ status: 'complete', locations: [{ agentDeviceId: 'share:a', name: 'Share A' }] });
+    });
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        deviceLink: {
+          invoke,
+          onPresenceChanged: () => () => undefined,
+          onStatusChanged: () => () => undefined,
+          onRemotePush: () => () => undefined,
+          onPeerLinkReset: () => () => undefined,
+          onControlTargetChanged: () => () => undefined,
+        },
+      },
+    });
+    const first = await renderHookFixture(() => useControlledModelLocations('host', 'self'));
+    expect(calls).toBe(1);
+    await first.unmount();
+
+    const second = await renderHookFixture(() => useControlledModelLocations('host', 'self'));
+    await act(async () => {
+      resolveFirst({ status: 'complete', locations: [{ agentDeviceId: 'share:stale', name: 'Stale' }] });
+      await Promise.resolve();
+    });
+    await flushMounted();
+
+    expect(calls).toBe(2);
+    expect(second.result.current?.map(item => item.agentDeviceId)).toEqual(['share:a']);
+  });
+
+  // Regression (Greptile P1 #3): model changes on a still-present share while detached
+  // must not stay stale on return — both with a global push watcher and standalone.
+  it('refreshes stale routed share models after detach both with and without a global push watcher', async () => {
+    let version = 'v1';
+    const invoke = vi.fn(async (_device: string, channel: string, args: unknown[]) => {
+      if (channel !== CONTROLLED_MODEL_CATALOG_CHANNEL) throw new Error('unexpected channel');
+      const request = args[0] as { op?: string; channel?: string } | undefined;
+      if (request?.op === 'locations') {
+        return { status: 'complete', locations: [{ agentDeviceId: 'share:a', name: 'Share A' }] };
+      }
+      if (request?.op === 'read') {
+        return request.channel === 'maker:provider:list' ? { providers: [provider(version)] } : capabilities;
+      }
+      throw new Error('unexpected request');
+    });
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        deviceLink: {
+          invoke,
+          onPresenceChanged: () => () => undefined,
+          onStatusChanged: () => () => undefined,
+          onRemotePush: () => () => undefined,
+          onPeerLinkReset: () => () => undefined,
+          onControlTargetChanged: () => () => undefined,
+        },
+      },
+    });
+    const routeA = modelCatalogKey('share:a', 'host')!;
+    const readCount = () => invoke.mock.calls.filter(([, , args]) =>
+      (args[0] as { op?: string; channel?: string })?.op === 'read'
+      && (args[0] as { channel?: string })?.channel === 'maker:provider:list').length;
+
+    // 1) Standalone (no global push watcher): returning refreshes cached routes in background.
+    const first = await renderHookFixture(() => useControlledModelLocations('host', 'self'));
+    await flushMounted();
+    await providers.prefetchDeviceProviders(routeA);
+    expect(providers.getCachedDeviceProviders(routeA)?.providers[0]?.id).toBe('v1');
+    await first.unmount();
+
+    version = 'v2';
+    const second = await renderHookFixture(() => useControlledModelLocations('host', 'self'));
+    await flushMounted();
+    expect(providers.getCachedDeviceProviders(routeA)?.providers[0]?.id).toBe('v2');
+    await second.unmount();
+
+    // 2) With global push watcher: unchanged detach keeps route warm (0 extra provider reads),
+    //    while a detached CONTROLLED_MODEL_CATALOG_CHANGED push evicts the stale cache immediately.
+    const offWatcher = registerControlledCatalogPushWatcher();
+    try {
+      const readsBeforeUnchanged = readCount();
+      const third = await renderHookFixture(() => useControlledModelLocations('host', 'self'));
+      await flushMounted();
+      expect(readCount()).toBe(readsBeforeUnchanged);
+      expect(providers.getCachedDeviceProviders(routeA)?.providers[0]?.id).toBe('v2');
+      await third.unmount();
+
+      version = 'v3';
+      invalidateDetachedControlledModelLocations('host');
+      expect(providers.getCachedDeviceProviders(routeA)).toBeNull();
+      expect(readCount()).toBe(readsBeforeUnchanged); // No background read while detached.
+
+      const fourth = await renderHookFixture(() => useControlledModelLocations('host', 'self'));
+      await flushMounted();
+      await providers.prefetchDeviceProviders(routeA);
+      expect(providers.getCachedDeviceProviders(routeA)?.providers[0]?.id).toBe('v3');
+      await fourth.unmount();
+    } finally {
+      offWatcher();
+      await act(async () => { evictAllRemoteCapabilities(); });
+    }
   });
 
   it('ignores a late initial share list from the previous owner', async () => {

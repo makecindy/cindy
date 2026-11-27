@@ -1,3 +1,4 @@
+import { qualifiedCardPrKey } from '@cindy/maker-shared';
 import { DownloadImageMenuItem } from '@/components/chat/DownloadImageMenuItem';
 import { GhostCardSessionLink } from './GhostCardSessionLink';
 import { ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
@@ -435,7 +436,7 @@ function GhostCardCanvas({
       el.style.setProperty('display', 'inline-flex', 'important');
     });
     if (!prSlotKey) return;
-    setTaskAutoArchive(fillGhostCardPrStatus(doc, (key) => prStatusesRef.current.get(`github:github.com/${key}`) ?? prStatusesRef.current.get(key), t, taskArchiveEligible));
+    setTaskAutoArchive(fillGhostCardPrStatus(doc, (key) => prStatusesRef.current.get(qualifiedCardPrKey(key)!) ?? prStatusesRef.current.get(key), t, taskArchiveEligible));
     fillGhostCardTaskAutoArchiveHint(doc, taskArchiveEligible ? autoArchiveStateRef.current : 'inactive', {
       pending: t('chat.ghostCall.taskAutoArchivePending'),
       cancel: t('chat.ghostCall.taskAutoArchiveCancel'),
@@ -749,16 +750,30 @@ function GhostCardCanvas({
             el.style.opacity = '';
             el.style.pointerEvents = '';
           };
-          void formDelivery.current.then(async ok => {
-            if (!ok || (sessionId && await pendingGhostCardFormDelivery(sessionId) === false)) return { ok: false };
+          const deliveryKey = `${callId}:${editorId}`;
+          const delivery = formDelivery.current;
+          void delivery.then(async ok => {
+            if (!mailSubmit && !ok) return { ok: false };
+            if (sessionId && await pendingGhostCardFormDelivery(sessionId, mailSubmit ? deliveryKey : undefined) === false) return { ok: false };
             // A second view may have delivered edits since this iframe bound its listener.
             const entry = getGhostCardSnapshot().byCallId.get(callId);
             const latest = entry?.status === 'ready' ? readGhostCardForm(entry.html) : null;
             const values = latest && entry?.status === 'ready' && readGhostCardFormChange(entry.html) === formState.current.key
               ? mergeGhostCardFormValues(formState.current.values, formState.current.base, Object.fromEntries(latest.map(f => [f.name, f.value])))
               : formState.current.values;
-            return dispatchGhostCardAction(callId, actionId, { formValues: values });
-          }).then(result => { if (mailSubmit || !result.ok) unlock(); }).catch(unlock);
+            const result = await dispatchGhostCardAction(callId, actionId, { formValues: values });
+            if (mailSubmit && result.ok && !ok && formDelivery.current === delivery) {
+              formDelivery.current = Promise.resolve(true);
+              if (sessionId) releaseGhostCardFormDelivery(sessionId, deliveryKey);
+            }
+            return result;
+          }).then(result => {
+            if (mailSubmit && !result.ok) toast.error(t('chat.ghostCall.formSyncFailed'));
+            if (mailSubmit || !result.ok) unlock();
+          }).catch(() => {
+            if (mailSubmit) toast.error(t('chat.ghostCall.formSyncFailed'));
+            unlock();
+          });
           return;
         }
         // data-ghost-model-select 类动作:在按钮下方弹模型下拉框,选中后才派发。
@@ -965,8 +980,8 @@ function GhostCardCanvas({
   };
 
   /** 输入面板发送:非空文字 → 锁源按钮 + 派发带 prompt 的 card-action。 */
-  const submitPrompt = (): void => {
-    const text = promptText.trim();
+  const submitPrompt = (overrideText?: string): void => {
+    const text = (overrideText ?? promptText).trim();
     if (!text || !promptAsk) return;
     const el = promptSourceElRef.current;
     if (el) lockActionEl(el);
@@ -1336,7 +1351,8 @@ export function GhostToolCard({
         >
           {toolName ? (
             <div
-              className="mb-1 inline-block rounded px-1.5 py-px font-mono text-10"
+              // design: intrinsic-geometry — 行内代码，与 Markdown 行内代码同为 6px（DESIGN.md §5 内容排版）
+              className="mb-1 inline-block rounded-[6px] px-1.5 py-px font-mono text-10"
               style={{ backgroundColor: 'var(--surface-chip)', color: 'var(--text-secondary)' }}
             >
               {toolName}

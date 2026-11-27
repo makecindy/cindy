@@ -21,6 +21,7 @@ const h = vi.hoisted(() => {
     deps: undefined as SetupMigrationServiceDeps | undefined,
     normalize: undefined as ((raw: unknown) => PersistedSetupMigrationState) | undefined,
     disk: '',
+    instance: null as object | null,
   };
 });
 
@@ -60,6 +61,7 @@ vi.mock('../transfer.js', () => ({ createSetupTransferSource: () => h.blocked, r
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: h.blocked, getActiveAppSession: h.blocked, isAppSessionBoundaryPending: h.blocked, ownerScopedUserDataPath: h.blocked }));
 vi.mock('../../cindy-brain/index.js', () => ({ createWindowGhostInstallConsentPrompt: h.blocked, getGhostManager: h.blocked, getGhostSetupAssessment: h.blocked, readGhostUserSecretsForSetup: h.blocked, hasGhostUserSecretsForSetup: h.blocked, setGhostEnabledForUser: h.blocked, storeGhostUserSecretsForSetup: h.blocked }));
 vi.mock('../../device-link/index.js', () => ({ remoteBackgroundInvoke: h.blocked }));
+vi.mock('../../instance-runtime/config.js', () => ({ getInstanceConfig: () => h.instance }));
 vi.mock('../../device-link/ipc.js', () => ({ defaultDeps: h.blocked, handleListDevices: h.blocked }));
 vi.mock('../../device-link/settings-store.desktop.js', () => ({ readDeviceLinkSettings: h.blocked }));
 vi.mock('../../im/ownerScopedStorage.js', () => ({ ownerScopedImSecrets: h.blocked }));
@@ -153,6 +155,17 @@ describe('real setup-migration registration callbacks', () => {
     expect(restored.done).not.toBe(true);
     expect(h.oldBearer).not.toHaveBeenCalled();
     expect(h.blocked).not.toHaveBeenCalled();
+  });
+
+  it('does not suggest a migration on a managed cloud instance', async () => {
+    h.instance = {};
+    try {
+      // Decided before reading plugins, providers or MCP servers.
+      await expect(deps().looksNew()).resolves.toBe(false);
+      expect(h.blocked).not.toHaveBeenCalled();
+    } finally {
+      h.instance = null;
+    }
   });
 
   it('keeps old/manual done on disk even when no new-copy flag is available', async () => {

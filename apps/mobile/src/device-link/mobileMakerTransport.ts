@@ -490,7 +490,7 @@ export interface MobileMakerTransport {
   /** 在被控端生成当前任务完成后的输入框推荐提示词。 */
   predictNextPrompt(request: {
     sessionId: string;
-    agentKind: MobileAgentKind;
+    agentKind: MobileAgentKind | "acp";
     turnGen: number;
     completionRevision: number;
     cacheOnly?: boolean;
@@ -516,17 +516,28 @@ export interface MobileMakerTransport {
   refreshPluginEngines(): Promise<void>;
   /**
    * 被控电脑的模型组配置(model-groups.md §6.3)。旧电脑没有该 channel 时返回 null(不显示模型组)。
+   * 新电脑传 `{ includeSourceRoutes: true }` 以同时取回供应商合并路由与展开路由；旧电脑忽略该参数。
    * 内容按不可信数据交给调用方解析。
    */
   listModelGroups(): Promise<unknown | null>;
   /** 请被控电脑按它的模式选来源；返回那台的选路结果(按不可信数据解析)。 */
-  resolveModelGroup(request: { selection: { type: 'route'; id: string }; context?: { hasImages?: boolean }; location?: { agentDeviceId: string | null } }): Promise<unknown>;
+  resolveModelGroup(request: {
+    selection: { type: 'route'; id: string };
+    context?: { hasImages?: boolean; effort?: string; fastMode?: boolean | 'ultrafast' };
+    location?: { agentDeviceId: string | null; sshHostId?: string };
+  }): Promise<unknown>;
   commitModelGroupDecision(decisionId: string): Promise<void>;
   bindModelGroupSession(request: {
     sessionId: string;
     selection: { type: 'route'; id: string };
     route: { agentKind: 'cc' | 'codex' | 'pi'; providerId: string; model: string; agentDeviceId?: string };
   }): Promise<void>;
+  /** 解除该任务的智能路由持续托管绑定(保留当前模型)；旧电脑没有该 channel 时返回 { unbound: false }。 */
+  unbindModelGroupSession(sessionId: string): Promise<{ unbound: boolean }>;
+  /** 读取该任务的智能路由绑定投影；旧电脑没有该 channel 时返回 null。 */
+  getModelGroupSessionBinding(sessionId: string): Promise<unknown | null>;
+  /** 任务出错时向被控电脑询问同一路由内的下一个可用来源；旧电脑返回 null。 */
+  getModelGroupSwitchOffer(sessionId: string): Promise<unknown | null>;
   /** 请被控电脑在任务里写模型组那一行说明(远程不能裸写消息)。 */
   writeModelGroupRouteNote(request: { sessionId: string; note: Record<string, unknown> }): Promise<void>;
   getSessionTree(sessionId: string): Promise<unknown | null>;
@@ -551,7 +562,7 @@ export interface MobileMakerTransport {
    * CHANNEL_NOT_ALLOWED，调用方忽略即可。
    */
   prewarmSession(sessionId: string, createOpts: unknown): Promise<unknown>;
-  createSideChat(sessionId: string): Promise<RemoteSession>;
+  createSideChat(sessionId: string, childId?: string): Promise<RemoteSession>;
   listSideChats(sessionId: string): Promise<Array<{ id: string }>>;
   searchConversations(
     request: ConversationSearchRequest,
@@ -750,7 +761,7 @@ export interface MobileMakerTransport {
    */
   learnStart(req: MobileLearnStartRequest): Promise<{ runId: string }>;
   listAgentSkills(
-    agentKind: MobileAgentKind,
+    agentKind: MobileAgentKind | "acp",
     opts: { workingDir?: string; forceReload?: boolean; sessionId?: string },
   ): Promise<MobileAgentSkillListResult>;
   scanAtResources(
@@ -1005,7 +1016,8 @@ export interface MobileMakerTransport {
 
 /** `maker:session:enable-orca` 的 options(与桌面 preload maker.enableOrca 同形状)。 */
 export interface MobileOrcaEnableOptions {
-  workerAgent: OrcaWorkerAgentKind;
+  modelGroup?: string;
+  workerAgent: OrcaWorkerAgentKind | "acp";
   role?: string;
   label?: string;
   model?: string;
@@ -1029,10 +1041,11 @@ export interface MobileOrcaEnableResult {
 
 /** `maker:worker:create` 的 body(与桌面 useOrcaWorkerSelection 提交同形状)。 */
 export interface MobileOrcaCreateWorkerInput {
+  modelGroup?: string;
   leadSessionId: string;
   role: string;
   label: string;
-  agent: OrcaWorkerAgentKind;
+  agent: OrcaWorkerAgentKind | "acp";
   model?: string;
   effort?: string;
   fast?: boolean | 'ultrafast';
@@ -1275,7 +1288,7 @@ export function createMobileMakerTransport({
           throw error;
         }),
     listModelGroups: () =>
-      call<unknown>("model-groups:get", [])
+      call<unknown>("model-groups:get", [{ includeSourceRoutes: true }])
         .catch((error: unknown) => {
           if (isPluginCatalogUnsupportedError(error)) return null;
           throw error;
@@ -1283,6 +1296,24 @@ export function createMobileMakerTransport({
     resolveModelGroup: (request) => call<unknown>("model-groups:resolve", [request]),
     commitModelGroupDecision: async (decisionId) => { await call("model-groups:commit", [decisionId]); },
     bindModelGroupSession: async (request) => { await call("model-groups:bind-session", [request]); },
+    unbindModelGroupSession: (sessionId) =>
+      call<{ unbound: boolean }>("model-groups:unbind-session", [{ sessionId }])
+        .catch((error: unknown) => {
+          if (isPluginCatalogUnsupportedError(error)) return { unbound: false };
+          throw error;
+        }),
+    getModelGroupSessionBinding: (sessionId) =>
+      call<unknown | null>("model-groups:get-session-binding", [{ sessionId }])
+        .catch((error: unknown) => {
+          if (isPluginCatalogUnsupportedError(error)) return null;
+          throw error;
+        }),
+    getModelGroupSwitchOffer: (sessionId) =>
+      call<unknown | null>("model-groups:switch-offer", [{ sessionId }])
+        .catch((error: unknown) => {
+          if (isPluginCatalogUnsupportedError(error)) return null;
+          throw error;
+        }),
     writeModelGroupRouteNote: async (request) => { await call("model-groups:route-note", [request]); },
     getPluginEngineUsage: async (key, sessionId) => {
       if (isSharedTaskPeer(deviceId) || !isCurrent()) return null;
@@ -1302,7 +1333,7 @@ export function createMobileMakerTransport({
     getSession: (sessionId) => call("local-db:sessions:get", [sessionId]),
     prewarmSession: (sessionId, createOpts) =>
       call("maker:session:prewarm", [sessionId, createOpts]),
-    createSideChat: (sessionId) => call("maker:side-chat:v1", [sessionId]),
+    createSideChat: (sessionId, childId) => call("maker:side-chat:v1", childId ? [{ parentSessionId: sessionId, childId }] : [sessionId]),
     listSideChats: (sessionId) => call("maker:side-chat:list:v1", [sessionId]),
     searchConversations: (request) =>
       call("local-db:conversations:search", [request]),

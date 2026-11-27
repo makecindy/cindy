@@ -273,10 +273,10 @@ it('archives with one tap from inbox Done, while ordinary archive still reminds 
 
 // 2026-11-18 user decision: with an active automation bound, inbox Done only marks the round
 // read (the task returns to Working); archiving would recycle the worktree every round.
-it('only marks the task read from inbox Done while an active automation is bound', async () => {
-  const original = { ...task, status: 'active' } as RemoteSession;
+it.each(['pinned', 'automation'])('only marks the %s task read from inbox Done', async reason => {
+  const original = { ...task, status: 'active', pinnedAt: reason === 'pinned' ? '2026-11-25T00:00:00Z' : null } as RemoteSession;
   remoteSessionStore.upsertDeviceSession('old-shard', 'Host', original);
-  mount(undefined, (session) => session.id === 'task');
+  mount(undefined, (session) => reason === 'automation' && session.id === 'task');
   await act(async () => actions.sessionSwipeControls.onComplete?.(original));
   expect(mocks.invoke).not.toHaveBeenCalledWith('host', 'local-db:sessions:patch-meta', expect.anything(), expect.anything());
   expect(mocks.invoke).toHaveBeenCalledWith('host', 'notification:clear-session-attention',

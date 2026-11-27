@@ -1,8 +1,16 @@
 import type { RateLimitSnapshot } from '../usageBroadcaster.js';
+import {
+  ADAPTIVE_QUOTA_TIERS,
+  MANUAL_QUOTA_REFRESH_COOLDOWN_MS,
+  epochSecondsToMs,
+  nextExponentialBackoffMs,
+  shouldAllowManualQuotaRefresh,
+  shouldRefreshAdaptiveQuota,
+  type AdaptiveQuotaRefreshTiming,
+} from './adaptiveQuotaRefresh.js';
 
 interface CodexWebUsageRefreshDeps {
-  readAccessToken(): Promise<string | null>;
-  readAccountId(): Promise<string | null>;
+  readCredentials(): Promise<{ accessToken: string; accountId: string | null } | null>;
   fetchWebUsageSnapshot(args: {
     accessToken: string;
     accountId: string | null;
@@ -17,16 +25,60 @@ interface CodexWebUsageRefreshDeps {
 
 interface CodexWebUsageRefreshOptions {
   throttleMs?: number;
+  idleThrottleMs?: number;
+  resetMinIntervalMs?: number;
+  failureBackoffInitialMs?: number;
+  failureBackoffMaxMs?: number;
 }
 
 interface RefreshInFlight {
   promise: Promise<void>;
 }
 
-const DEFAULT_THROTTLE_MS = 10_000;
+interface RefreshState {
+  lastRefreshAt: number;
+  lastAttemptAt: number;
+  activitySeq: number;
+  refreshedActivitySeq: number;
+  backoffMs: number;
+  backoffUntil: number;
+  lastKnownResetsAtMs: number[];
+}
+
+const MAX_TRACKED_KEYS = 32;
 
 function refreshKey(accessToken: string, accountId: string | null): string {
   return `${accountId ?? ''}\0${accessToken}`;
+}
+
+function codexResetTimesMs(snapshot: RateLimitSnapshot | null | undefined): number[] {
+  if (!snapshot) return [];
+  const out: number[] = [];
+  const primary = epochSecondsToMs(snapshot.primary?.resetsAt);
+  const secondary = epochSecondsToMs(snapshot.secondary?.resetsAt);
+  if (primary !== null) out.push(primary);
+  if (secondary !== null) out.push(secondary);
+  return out;
+}
+
+function resolveTiming(options: CodexWebUsageRefreshOptions): AdaptiveQuotaRefreshTiming {
+  const tier = ADAPTIVE_QUOTA_TIERS.subscriptionWeb;
+  if (options.throttleMs !== undefined) {
+    return {
+      activeThrottleMs: options.throttleMs,
+      idleThrottleMs: options.idleThrottleMs ?? options.throttleMs,
+      resetMinIntervalMs: options.resetMinIntervalMs ?? options.throttleMs,
+      failureBackoffInitialMs: options.failureBackoffInitialMs ?? tier.failureBackoffInitialMs,
+      failureBackoffMaxMs: options.failureBackoffMaxMs ?? tier.failureBackoffMaxMs,
+    };
+  }
+  return {
+    activeThrottleMs: tier.activeThrottleMs,
+    idleThrottleMs: options.idleThrottleMs ?? tier.idleThrottleMs,
+    resetMinIntervalMs: options.resetMinIntervalMs ?? tier.resetMinIntervalMs,
+    failureBackoffInitialMs: options.failureBackoffInitialMs ?? tier.failureBackoffInitialMs,
+    failureBackoffMaxMs: options.failureBackoffMaxMs ?? tier.failureBackoffMaxMs,
+  };
 }
 
 /**
@@ -34,20 +86,45 @@ function refreshKey(accessToken: string, accountId: string | null): string {
  *
  * IPC reads should preserve the immediate warm-start path from SQLite and let
  * the slower ChatGPT web usage fetch update the shared snapshot in the
- * background. Refreshes are coalesced to avoid piling up WHAM requests during
- * dense turn completion bursts.
+ * background. Refreshes are coalesced and adaptively throttled (active vs idle
+ * + reset-boundary recheck + failure backoff) to avoid unnecessary WHAM traffic.
  */
 export function createCodexAccountUsageSnapshotReader(
   deps: CodexWebUsageRefreshDeps,
   options: CodexWebUsageRefreshOptions = {},
-): (options?: { fresh?: boolean }) => Promise<RateLimitSnapshot | null> {
-  const throttleMs = options.throttleMs ?? DEFAULT_THROTTLE_MS;
+): (options?: { fresh?: boolean; activity?: boolean; manual?: boolean }) => Promise<RateLimitSnapshot | null> {
+  const timing = resolveTiming(options);
+  const manualCooldownMs = Math.min(MANUAL_QUOTA_REFRESH_COOLDOWN_MS, timing.activeThrottleMs);
   const refreshInFlightByKey = new Map<string, RefreshInFlight>();
-  const lastRefreshAtByKey = new Map<string, number>();
+  const stateByKey = new Map<string, RefreshState>();
   let lastUnknownAccountSnapshotAccessToken: string | null = null;
 
+  function getOrCreateState(key: string): RefreshState {
+    const existing = stateByKey.get(key);
+    if (existing) {
+      stateByKey.delete(key);
+      stateByKey.set(key, existing);
+      return existing;
+    }
+    const created: RefreshState = {
+      lastRefreshAt: 0,
+      lastAttemptAt: 0,
+      activitySeq: 0,
+      refreshedActivitySeq: 0,
+      backoffMs: 0,
+      backoffUntil: 0,
+      lastKnownResetsAtMs: [],
+    };
+    stateByKey.set(key, created);
+    if (stateByKey.size > MAX_TRACKED_KEYS) {
+      const oldest = stateByKey.keys().next().value;
+      if (oldest !== undefined) stateByKey.delete(oldest);
+    }
+    return created;
+  }
+
   async function clearCachedSnapshot(): Promise<void> {
-    lastRefreshAtByKey.clear();
+    stateByKey.clear();
     refreshInFlightByKey.clear();
     lastUnknownAccountSnapshotAccessToken = null;
     try {
@@ -57,30 +134,53 @@ export function createCodexAccountUsageSnapshotReader(
     }
   }
 
-  async function isRefreshStillCurrent(accessToken: string, accountId: string | null): Promise<boolean> {
+  async function isRefreshStillCurrent(accessToken: string, accountId: string | null, clearDisconnected = false): Promise<boolean> {
     try {
-      const currentAccessToken = await deps.readAccessToken();
-      if (currentAccessToken !== accessToken) return false;
-      const currentAccountId = await deps.readAccountId();
-      return currentAccountId === accountId;
+      const current = await deps.readCredentials();
+      if (current === null && clearDisconnected) await clearCachedSnapshot();
+      return current?.accessToken === accessToken && current.accountId === accountId;
     } catch (err) {
       deps.onRefreshError(err);
       return false;
     }
   }
 
-  function triggerRefresh(accessToken: string, accountId: string | null, force = false): Promise<void> {
+  function triggerRefresh(
+    accessToken: string,
+    accountId: string | null,
+    opts: { force?: boolean; manual?: boolean; activity?: boolean; cachedSnapshot?: RateLimitSnapshot | null } = {},
+  ): Promise<void> {
     const key = refreshKey(accessToken, accountId);
+    const state = getOrCreateState(key);
+    if (opts.activity) {
+      state.activitySeq += 1;
+    }
     const existing = refreshInFlightByKey.get(key);
     if (existing) return existing.promise;
 
     const now = deps.now();
-    const lastRefreshAt = lastRefreshAtByKey.get(key) ?? 0;
-    if (!force && lastRefreshAt > 0 && now - lastRefreshAt < throttleMs) {
+    const cachedResets = codexResetTimesMs(opts.cachedSnapshot);
+    const resetsAtMs = cachedResets.length > 0 ? cachedResets : state.lastKnownResetsAtMs;
+    const allowed = opts.force
+      ? true
+      : opts.manual
+        ? shouldAllowManualQuotaRefresh({ now, lastAttemptAt: state.lastAttemptAt, cooldownMs: manualCooldownMs })
+        : shouldRefreshAdaptiveQuota({
+            now,
+            lastRefreshAt: state.lastRefreshAt,
+            hasActivitySinceRefresh: state.activitySeq > state.refreshedActivitySeq,
+            resetsAtMs,
+            backoffUntil: state.backoffUntil,
+            timing,
+          });
+    if (!allowed) {
       return Promise.resolve();
     }
 
-    lastRefreshAtByKey.set(key, now);
+    const attemptSeq = state.activitySeq;
+    const prevLastRefreshAt = state.lastRefreshAt;
+    state.lastRefreshAt = now;
+    state.lastAttemptAt = now;
     const refreshInFlight: RefreshInFlight = { promise: Promise.resolve() };
     refreshInFlightByKey.set(key, refreshInFlight);
     refreshInFlight.promise = (async () => {
@@ -92,10 +192,18 @@ export function createCodexAccountUsageSnapshotReader(
         if (webSnapshot) {
           if (!await isRefreshStillCurrent(accessToken, accountId)) return;
           await deps.recordSnapshot(webSnapshot);
+          state.backoffMs = 0;
+          state.backoffUntil = 0;
+          state.refreshedActivitySeq = Math.max(state.refreshedActivitySeq, attemptSeq);
+          state.lastKnownResetsAtMs = codexResetTimesMs(webSnapshot);
           lastUnknownAccountSnapshotAccessToken =
             accountId === null && (webSnapshot.accountId ?? null) === null
               ? accessToken
               : null;
+        } else {
+          state.backoffMs = 0;
+          state.backoffUntil = 0;
+          state.refreshedActivitySeq = Math.max(state.refreshedActivitySeq, attemptSeq);
         }
       } catch (err) {
         if (deps.isUnauthorizedError?.(err)) {
@@ -104,6 +212,9 @@ export function createCodexAccountUsageSnapshotReader(
           }
           return;
         }
+        state.backoffMs = nextExponentialBackoffMs(state.backoffMs, timing);
+        state.backoffUntil = deps.now() + state.backoffMs;
+        if (state.backoffMs > 0) state.lastRefreshAt = prevLastRefreshAt;
         deps.onRefreshError(err);
       } finally {
         if (refreshInFlightByKey.get(key) === refreshInFlight) {
@@ -116,32 +227,29 @@ export function createCodexAccountUsageSnapshotReader(
   }
 
   return async (readOptions) => {
-    let accessToken: string | null;
+    let credentials;
     try {
-      accessToken = await deps.readAccessToken();
+      credentials = await deps.readCredentials();
     } catch (err) {
       deps.onRefreshError(err);
-      return await deps.readCachedSnapshot();
+      // A temporary read failure keeps the warm cache, subject to the current owner guard.
+      return deps.readCachedSnapshot();
     }
-    if (!accessToken) {
+    if (!credentials) {
       await clearCachedSnapshot();
       return null;
     }
-
-    let accountId: string | null = null;
-    try {
-      accountId = await deps.readAccountId();
-    } catch (err) {
-      deps.onRefreshError(err);
-    }
-
+    const { accessToken, accountId } = credentials;
     const cachedSnapshot = await deps.readCachedSnapshot();
+    if (!await isRefreshStillCurrent(accessToken, accountId, true)) return null;
     const cachedAccountId = cachedSnapshot?.accountId ?? null;
     if (cachedSnapshot && (cachedAccountId !== accountId
       || (accountId === null && lastUnknownAccountSnapshotAccessToken !== accessToken))) {
       await clearCachedSnapshot();
       if (!readOptions?.fresh) {
-        void triggerRefresh(accessToken, accountId);
+        if (await isRefreshStillCurrent(accessToken, accountId)) {
+          void triggerRefresh(accessToken, accountId, { activity: readOptions?.activity, manual: readOptions?.manual });
+        }
         return null;
       }
     }
@@ -150,10 +258,18 @@ export function createCodexAccountUsageSnapshotReader(
       // then fetch again without the UI read throttle; credential checks still guard publication.
       await refreshInFlightByKey.get(refreshKey(accessToken, accountId))?.promise;
       if (!await isRefreshStillCurrent(accessToken, accountId)) return null;
-      await triggerRefresh(accessToken, accountId, true);
+      await triggerRefresh(accessToken, accountId, {
+        force: true,
+        activity: readOptions?.activity,
+        cachedSnapshot,
+      });
       return await isRefreshStillCurrent(accessToken, accountId) ? deps.readCachedSnapshot() : null;
     }
-    void triggerRefresh(accessToken, accountId);
+    void triggerRefresh(accessToken, accountId, {
+      activity: readOptions?.activity,
+      manual: readOptions?.manual,
+      cachedSnapshot,
+    });
     return cachedSnapshot;
   };
 }

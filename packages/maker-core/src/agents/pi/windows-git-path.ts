@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
+import { isCanonicalBase64 } from '@cindy/maker-shared';
 
 import {
   buildWindowsNetworkDriveProbeScript,
@@ -56,11 +57,7 @@ export function decodeWindowsRegistryBase64Lines(output: string): string[] {
   const values: string[] = [];
   for (const rawLine of output.split(/\r?\n/)) {
     const line = rawLine.trim();
-    if (
-      line.length === 0
-      || line.length % 4 !== 0
-      || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(line)
-    ) {
+    if (line.length === 0 || !isCanonicalBase64(line)) {
       continue;
     }
     const bytes = Buffer.from(line, 'base64');
@@ -111,10 +108,7 @@ export function decodeWindowsPathKindLines(output: string): Map<string, WindowsP
     const match = rawLine.trim().match(/^([FD])\t(.+)$/);
     if (!match) continue;
     const encoded = match[2];
-    if (
-      encoded.length % 4 !== 0
-      || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)
-    ) {
+    if (!isCanonicalBase64(encoded)) {
       continue;
     }
     const bytes = Buffer.from(encoded, 'base64');

@@ -30,7 +30,11 @@ import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
 import { useAgentCapabilities, type AgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
+import { previewModelGroup, useModelGroups } from '@/features/model-groups/modelGroupsClient';
+import { resolveDeviceModelGroup, useDeviceModelGroups } from '@/features/model-groups/remoteModelGroups';
+import { MODEL_GROUPS_DEFAULTS, type ModelGroupSelection } from '../../../shared/modelGroups';
 import { useModelRouteDevices } from '@/hooks/useModelRouteDevices';
+import { useSettingsTarget } from './settingsTarget';
 import { agentDeviceModelMemoryAccessors } from '@/state/agentDeviceModelMemory';
 import { PermissionSelector } from '@/components/new-chat/PermissionSelector';
 import type { MakerVendor } from '@/lib/ccAgent.types';
@@ -81,8 +85,9 @@ export interface HookWorkspacePrefsState {
   /** 目录显式来源优先，否则继承当前引擎的 IM 默认来源。 */
   providerSourceFor: (alias: string) => string | null;
   agentDeviceFor: (alias: string) => string | null;
+  modelGroupFor?: (alias: string) => string | null;
   /** 写/清该目录的模型来源偏好(providerId = null 清除)。 */
-  applyProviderSource: (alias: string, providerId: string | null, agentDeviceId?: string | null) => Promise<boolean>;
+  applyProviderSource: (alias: string, providerId: string | null, agentDeviceId?: string | null, modelGroup?: string | null) => Promise<boolean>;
   /** 是否可编辑(本机快照已读到)。 */
   editable: boolean;
   /** 写入在途的目录别名(该卡片下拉禁用)。 */
@@ -101,6 +106,7 @@ export interface HookWorkspacePrefsState {
     patch: HookPrefsPatch,
     alsoProviderSource?: string | null,
     agentDeviceId?: string | null,
+    modelGroup?: string | null,
   ) => Promise<boolean>;
 }
 
@@ -116,6 +122,7 @@ const SHARED_SOURCE_CHANNEL = 'shared';
  */
 export function useHookWorkspacePrefs(): HookWorkspacePrefsState {
   const { t } = useTranslation();
+  const { api } = useSettingsTarget();
   const [prefs, setPrefs] = useState<HookWorkspacePrefs[] | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [pendingWs, setPendingWs] = useState<string | null>(null);
@@ -130,29 +137,29 @@ export function useHookWorkspacePrefs(): HookWorkspacePrefsState {
   /** 没单独配置过的字段按「IM 新任务默认」(global 那份)解析, 与派发侧同源。 */
   const fetchImDefaults = useCallback(async (): Promise<void> => {
     try {
-      const state: ImDefaultSettingsState = await window.electronAPI.maker.imDefaultSettingsGet(undefined);
+      const state: ImDefaultSettingsState = await api.imDefaultSettingsGet(undefined);
       setImDefaults({ agentKind: state.agentKind, agents: state.agents });
     } catch {
       /* 读不到就保持上一份(解析退回内置默认), 不影响其它字段 */
     }
-  }, []);
+  }, [api]);
 
   const fetchPrefs = useCallback(async () => {
     const revision = ++fetchRevisionRef.current;
     try {
-      const res = await window.electronAPI.hookControl.getSharedProjectPrefs();
+      const res = await api.hookControl.getSharedProjectPrefs();
       if (revision !== fetchRevisionRef.current) return;
       setPrefs(res.prefs.prefs);
       setLoadError(false);
     } catch {
       if (revision === fetchRevisionRef.current) setLoadError(true);
     }
-  }, []);
+  }, [api]);
 
   useEffect(() => {
     let active = true;
     // IM 里 /model 卡的改动 / 其它窗口的写入: 全量快照 latest-wins。
-    const offPrefs = window.electronAPI.hookControl.onSharedProjectPrefsChanged((view) => {
+    const offPrefs = api.hookControl.onSharedProjectPrefsChanged((view) => {
       fetchRevisionRef.current += 1;
       setPrefs(view.prefs);
       setLoadError(false);
@@ -160,7 +167,7 @@ export function useHookWorkspacePrefs(): HookWorkspacePrefsState {
     void fetchPrefs();
     void fetchImDefaults();
     const initialSourcesRevision = providerSourceRevisionRef.current;
-    void window.electronAPI.hookControl
+    void api.hookControl
       .getWorkspaceProviderSources()
       .then((res) => {
         if (active && providerSourceRevisionRef.current === initialSourcesRevision) {
@@ -168,7 +175,7 @@ export function useHookWorkspacePrefs(): HookWorkspacePrefsState {
         }
       })
       .catch(() => {});
-    const offProviderSources = window.electronAPI.hookControl.onWorkspaceProviderSourcesChanged(
+    const offProviderSources = api.hookControl.onWorkspaceProviderSourcesChanged(
       (entries) => {
         providerSourceRevisionRef.current += 1;
         setProviderSources(entries);
@@ -181,7 +188,7 @@ export function useHookWorkspacePrefs(): HookWorkspacePrefsState {
       offPrefs();
       offProviderSources();
     };
-  }, [fetchPrefs, fetchImDefaults]);
+  }, [api, fetchPrefs, fetchImDefaults]);
 
   const prefsFor = useCallback(
     (alias: string): HookWorkspacePrefs =>
@@ -203,13 +210,25 @@ export function useHookWorkspacePrefs(): HookWorkspacePrefsState {
     providerRouteFor(alias)?.providerId ?? null, [providerRouteFor]);
   const agentDeviceFor = useCallback((alias: string): string | null =>
     providerRouteFor(alias)?.agentDeviceId ?? null, [providerRouteFor]);
+  const modelGroupFor = useCallback((alias: string): string | null => {
+    const entry = providerSources.find(
+      (e) => e.channel === SHARED_SOURCE_CHANNEL && e.workspace === alias,
+    );
+    return entry?.modelGroup ?? null;
+  }, [providerSources]);
 
   const applyProviderSource = useCallback(
-    (alias: string, providerId: string | null, agentDeviceId?: string | null) => {
+    (alias: string, providerId: string | null, agentDeviceId?: string | null, modelGroup?: string | null) => {
       const revision = ++providerSourceRevisionRef.current;
-      return window.electronAPI.hookControl
-        .setWorkspaceProviderSource({ channel: SHARED_SOURCE_CHANNEL, teamId: null, workspace: alias, providerId,
-          ...(agentDeviceId !== undefined ? { agentDeviceId } : {}) })
+      return api.hookControl
+        .setWorkspaceProviderSource({
+          channel: SHARED_SOURCE_CHANNEL,
+          teamId: null,
+          workspace: alias,
+          providerId,
+          ...(agentDeviceId !== undefined ? { agentDeviceId } : {}),
+          ...(modelGroup !== undefined ? { modelGroup } : {}),
+        })
         .then((res) => {
           if (revision === providerSourceRevisionRef.current) setProviderSources(res.entries);
           return true;
@@ -221,23 +240,29 @@ export function useHookWorkspacePrefs(): HookWorkspacePrefsState {
           return false;
         });
     },
-    [t],
+    [api, t],
   );
 
   const applyPatch = useCallback(
     // alsoProviderSource(可选): 偏好写成功后再落来源 —— 两个持久面串联而非并行, 偏好写失败时
     // 来源不动, 状态与操作前一致。
-    (workspace: string, patch: HookPrefsPatch, alsoProviderSource?: string | null, agentDeviceId?: string | null) => {
+    (
+      workspace: string,
+      patch: HookPrefsPatch,
+      alsoProviderSource?: string | null,
+      agentDeviceId?: string | null,
+      modelGroup?: string | null,
+    ) => {
       // 推送、重试或更新的一次写入必须压过这次的回执, 否则迟到的回执会把界面滚回旧快照。
       const revision = ++fetchRevisionRef.current;
       const mutationRevision = ++mutationRevisionRef.current;
       setPendingWs(workspace);
-      return window.electronAPI.hookControl
+      return api.hookControl
         .setSharedProjectPrefs(workspace, patch)
         .then(async (res) => {
           // 来源落地在快照守卫之前: 写入已成功这件事不因「更新的快照先到」而失效。
           if (alsoProviderSource !== undefined) {
-            if (!await applyProviderSource(workspace, alsoProviderSource, agentDeviceId)) return false;
+            if (!await applyProviderSource(workspace, alsoProviderSource, agentDeviceId, modelGroup)) return false;
           }
           if (revision !== fetchRevisionRef.current) return true;
           fetchRevisionRef.current += 1;
@@ -255,13 +280,14 @@ export function useHookWorkspacePrefs(): HookWorkspacePrefsState {
           if (mutationRevision === mutationRevisionRef.current) setPendingWs(null);
         });
     },
-    [fetchPrefs, t, applyProviderSource],
+    [api, fetchPrefs, t, applyProviderSource],
   );
 
   return {
     prefsFor,
     providerSourceFor,
     agentDeviceFor,
+    modelGroupFor,
     applyProviderSource,
     editable: prefs !== null && !loadError,
     pendingWs,
@@ -309,11 +335,18 @@ export function WorkspacePrefsEditor({
   maxVisibleModelRows?: number;
 }) {
   const { t } = useTranslation();
+  // Another computer's settings list that computer's models; shared agents are its own choice.
+  const { deviceId: targetDeviceId } = useSettingsTarget();
   const agentDeviceId = state.agentDeviceFor(alias);
-  const routeDevices = useModelRouteDevices({ controlledDeviceId: null, leadAgentDeviceId: agentDeviceId });
-  const claudeCaps = useAgentCapabilities('claude-code', agentDeviceId ?? undefined);
-  const codexCaps = useAgentCapabilities('codex', agentDeviceId ?? undefined);
-  const piCaps = useAgentCapabilities('pi', agentDeviceId ?? undefined);
+  const catalogDeviceId = targetDeviceId ?? agentDeviceId;
+  // Route locations are this computer's choice; another computer's settings list its models.
+  const routeDevices = useModelRouteDevices({
+    controlledDeviceId: null,
+    leadAgentDeviceId: targetDeviceId ? null : agentDeviceId,
+  });
+  const claudeCaps = useAgentCapabilities('claude-code', catalogDeviceId ?? undefined);
+  const codexCaps = useAgentCapabilities('codex', catalogDeviceId ?? undefined);
+  const piCaps = useAgentCapabilities('pi', catalogDeviceId ?? undefined);
   const capsByAgent = useMemo(
     () =>
       ({
@@ -335,15 +368,42 @@ export function WorkspacePrefsEditor({
   const disabled = !state.editable || state.pendingWs === alias;
   const vendorKey = toVendorKey(eff.agentKind.id);
 
-  const pickerAgents = useModelPickerAgents(vendorKey === 'cc' ? 'claude-code' : vendorKey === 'pi' ? 'pi' : 'codex', agentDeviceId);
+  const pickerAgents = useModelPickerAgents(vendorKey === 'cc' ? 'claude-code' : vendorKey === 'pi' ? 'pi' : 'codex', catalogDeviceId);
+  const localGroups = useModelGroups(!targetDeviceId);
+  const remoteGroups = useDeviceModelGroups(targetDeviceId ?? null, !!targetDeviceId);
+  const groupsConfig = targetDeviceId ? remoteGroups.config ?? MODEL_GROUPS_DEFAULTS : localGroups.config;
+  const groupsAvailable = !targetDeviceId || !!remoteGroups.config;
+  const activeModelGroupId = state.modelGroupFor?.(alias) ?? null;
+  const lastUnifiedSelectionRef = useRef<{ providerId: string; agentDeviceId: string | null } | null>(null);
+
+  const selectWorkspaceModelGroup = async (selection: ModelGroupSelection) => {
+    const group = groupsConfig.routes.find((r) => r.id === selection.id);
+    const preview = targetDeviceId
+      ? await resolveDeviceModelGroup(targetDeviceId, selection, undefined, undefined, undefined)
+      : await previewModelGroup(selection);
+    if (preview?.outcome !== 'routed') {
+      toast.warning(t('modelGroups.picker.chooseUnavailable', { name: group?.name ?? '' }));
+      return;
+    }
+    const agentKind = preview.route.agentKind === 'cc' ? 'claude-code' : preview.route.agentKind;
+    await state.applyPatch(
+      alias,
+      { agentKind, model: preview.route.model, effort: preview.route.effort ?? null },
+      preview.route.providerId,
+      preview.route.agentDeviceId ?? null,
+      selection.id,
+    );
+  };
 
   /** 落一个模型选择(分段行与 flat 行共用): 随手写入 (agent, model) 配对并校准 effort。 */
   const applyModel = (next: string) => {
     if (next === prefs.model || eff.agentKind.id === null) return;
-    return state.applyPatch(
-      alias,
-      patchForModelChange(eff.agentKind.id, next, prefs, toPrefsCaps(effAgentCaps)),
-    );
+    const patch = patchForModelChange(eff.agentKind.id, next, prefs, toPrefsCaps(effAgentCaps));
+    if (activeModelGroupId) {
+      const currentProvider = state.providerSourceFor(alias);
+      return state.applyPatch(alias, patch, currentProvider ?? undefined, agentDeviceId, null);
+    }
+    return state.applyPatch(alias, patch);
   };
 
   return (
@@ -358,26 +418,49 @@ export function WorkspacePrefsEditor({
           路由 —— 「选 A 落 B」的根因(选了来源没地方存)已消除。 */}
       <PrefsField label={t('settings.tina.prefs.modelLabel')} className="flex-1 basis-[200px]">
         <ModelSelector
-          remoteAgent={routeDevices.devices && { devices: routeDevices.devices, selectedDeviceId: agentDeviceId }}
-          // 字段上的模型名 / 来源图标按已存路由所在的目录解析(另一台电脑或分享的供应商)。
-          deviceId={agentDeviceId ?? undefined}
-          agentDevice={
-            agentDeviceId
-              ? {
-                  deviceId: agentDeviceId,
-                  name:
-                    routeDevices.devices?.find((device) => device.deviceId === agentDeviceId)?.name ?? null,
-                }
-              : null
-          }
+          {...(targetDeviceId
+            ? // The other computer's own catalog; choosing an execution location stays there.
+              { deviceId: targetDeviceId, remoteAgent: undefined }
+            : {
+                remoteAgent: routeDevices.devices && {
+                  devices: routeDevices.devices,
+                  selectedDeviceId: agentDeviceId,
+                },
+                // 字段上的模型名 / 来源图标按已存路由所在的目录解析(另一台电脑或分享的供应商)。
+                deviceId: agentDeviceId ?? undefined,
+                agentDevice: agentDeviceId
+                  ? {
+                      deviceId: agentDeviceId,
+                      name:
+                        routeDevices.devices?.find((device) => device.deviceId === agentDeviceId)?.name ?? null,
+                    }
+                  : null,
+              })}
           fastModeConfigurable={false}
           unifiedAgents={pickerAgents}
-          onUnifiedSelect={({ engine, modelId, providerId, effort, agentDevice }) => state.applyPatch(
-            alias,
-            { agentKind: engine === 'cc' ? 'claude-code' : engine, model: modelId, effort: effort || null },
-            providerId,
-            agentDevice?.deviceId ?? null,
-          )}
+          {...(groupsAvailable ? {
+            modelGroups: {
+              config: groupsConfig,
+              active: activeModelGroupId && groupsConfig.routes.some((r) => r.id === activeModelGroupId)
+                ? { type: 'route' as const, id: activeModelGroupId }
+                : null,
+              onSelect: (selection: ModelGroupSelection) => { void selectWorkspaceModelGroup(selection); },
+              onAttach: (selection: ModelGroupSelection) => {
+                const last = lastUnifiedSelectionRef.current;
+                lastUnifiedSelectionRef.current = null;
+                if (last) void state.applyProviderSource(alias, last.providerId, last.agentDeviceId, selection.id);
+              },
+              ...(targetDeviceId ? {} : { onManage: () => { window.location.hash = '#/settings?tab=model-groups'; } }),
+            },
+          } : {})}
+          onUnifiedSelect={({ engine, modelId, providerId, effort, agentDevice }) => {
+            lastUnifiedSelectionRef.current = { providerId, agentDeviceId: agentDevice?.deviceId ?? null };
+            const patch = { agentKind: engine === 'cc' ? 'claude-code' : engine, model: modelId, effort: effort || null };
+            const targetDevice = agentDevice?.deviceId ?? null;
+            return activeModelGroupId
+              ? state.applyPatch(alias, patch, providerId, targetDevice, null)
+              : state.applyPatch(alias, patch, providerId, targetDevice);
+          }}
           modelId={eff.model.id ?? ''}
           effort={eff.effort.id ?? ''}
           vendorKey={vendorKey}
@@ -400,7 +483,7 @@ export function WorkspacePrefsEditor({
           // (PrefsSelect 的 modelLabel 回落裸 id)行为一致; 派发侧另有回落并记日志。
           unknownModelLabel={(id) => id}
           // 非选中行 hover 配置(推理强度/Fast)与 composer 共用同一份模型级全局预设。
-          modelMemory={agentDeviceId ? agentDeviceModelMemoryAccessors(agentDeviceId) : {
+          modelMemory={catalogDeviceId ? agentDeviceModelMemoryAccessors(catalogDeviceId) : {
             getEffort: getProviderModelEffort,
             setEffort: setProviderModelEffort,
             setChoice: setProviderModelChoice,

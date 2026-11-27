@@ -84,17 +84,20 @@ describe('navigation projection', () => {
     },
   );
 
+  // Unit / PR #12625 review：HistoryView 流式时会把未变的历史行换成浅拷贝；预览来源要按字段比较，
+  // 按消息对象身份比较会让每个 token 都重建导航条。
   it('keeps array identity when the visible excerpt is unchanged, including after a sealed answer', () => {
-    for (const sealed of [false, true]) {
+    for (const sealed of [false, true]) for (const copyHistory of [false, true]) {
       const project = createMessageNavigationProjection();
       const rows = [
         ...prefix,
-        user('u2'),
+        user('u2', { sourceDevice: { deviceId: 'phone', platform: 'mobile' } }),
         ...(sealed ? [answer('seal', { turnCompleted: true })] : []),
         answer('live', { content: 'x'.repeat(220), isStreaming: true }),
       ];
       const first = project(rows, true);
-      const next = [...rows.slice(0, -1), { ...rows.at(-1)!, content: 'x'.repeat(240) }];
+      const history = rows.slice(0, -1).map((row) => (copyHistory ? { ...row } : row));
+      const next = [...history, { ...rows.at(-1)!, content: 'x'.repeat(240) }];
       expect(project(next, true)).toBe(first);
       expect(project(next, true)).toEqual(deriveNavRailEntries(next));
     }

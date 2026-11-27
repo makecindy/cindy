@@ -1,4 +1,4 @@
-import { isCompanionChatTarget } from '../bots/companionChatTarget';
+import { companionWindowBootRoute } from '../bots/companionChatTarget';
 /**
  * SecondaryWindowBootGate — 「在新窗口打开」副窗的启动路由网关。
  * ---------------------------------------------------------------------------
@@ -20,19 +20,27 @@ import { isCompanionChatTarget } from '../bots/companionChatTarget';
  * 渲染中性占位(content-area 底色),不出现空白帧。bootSession 缺失时回落 /cc-agent。
  */
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { getBootDeviceId, getBootSessionId, getBootMessageClientId } from '@/lib/secondaryWindow';
-import { getSessionFor } from '@/lib/makerTransport';
+import { confirmSessionOrigin } from '@/features/device-link/confirmSessionOrigin';
 import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
-import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import {
+  makeNewTaskSecondaryWindowRouteState,
+  NEW_TASK_SECONDARY_WINDOW_TARGET,
+  parseNewTaskSecondaryWindowTarget,
+} from './lib/newTaskSecondaryWindow';
+import { SessionEntryError, sessionEntryFailure } from './SessionEntryError';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('SecondaryWindowBootGate');
 
 export function SecondaryWindowBootGate() {
   const navigate = useNavigate();
+  const [failure, setFailure] = useState<ReturnType<typeof sessionEntryFailure> | null>(null);
+  const [retry, setRetry] = useState(0);
   useEffect(() => {
     const bootSessionId = getBootSessionId();
     if (!bootSessionId) {
@@ -40,29 +48,34 @@ export function SecondaryWindowBootGate() {
       navigate('/cc-agent', { replace: true });
       return;
     }
+    const newTaskDraftHint = parseNewTaskSecondaryWindowTarget(bootSessionId);
+    if (newTaskDraftHint) {
+      navigate(NEW_TASK_SECONDARY_WINDOW_TARGET, {
+        replace: true,
+        state: makeNewTaskSecondaryWindowRouteState(getBootDeviceId(), newTaskDraftHint),
+      });
+      return;
+    }
 
+    setFailure(null);
     let cancelled = false;
+    const owner = getDataOwnerGeneration();
+    const active = () => !cancelled && isDataOwnerGenerationCurrent(owner);
     const bootDeviceId = getBootDeviceId();
     const messageClientId = getBootMessageClientId();
+    const companionRoute = companionWindowBootRoute(bootSessionId);
     void (async () => {
-      if (isCompanionChatTarget(bootSessionId)) return bootSessionId;
+      if (companionRoute) return companionRoute;
       if (!bootDeviceId) return resolveSessionRoute(bootSessionId);
 
-      // The remote session is not in the local DB. Pin its origin before any
-      // metadata read so getSessionFor tunnels to the owning device even when
-      // the secondary window's remote mirror has not hydrated yet.
-      remoteProjectsStore.pinSessionOrigin(bootDeviceId, bootSessionId);
-      const mirroredSession = remoteProjectsStore
-        .getVisibleMergedRemoteSessions()
-        .find((session) => session.id === bootSessionId);
-      const remoteSession = mirroredSession ?? (await getSessionFor(bootSessionId));
-      return resolveSessionRoute(bootSessionId, remoteSession);
+      const remoteSession = await confirmSessionOrigin(bootSessionId, bootDeviceId, active);
+      return resolveSessionRoute(bootSessionId, remoteSession, { remote: true });
     })()
       .then((target) => {
-        if (cancelled) return;
+        if (!active()) return;
         navigate(target, {
           replace: true,
-          ...(messageClientId
+          ...(!companionRoute && messageClientId
             ? {
                 state: {
                   searchJump: {
@@ -78,17 +91,21 @@ export function SecondaryWindowBootGate() {
         });
       })
       .catch((err) => {
-        log.warn('failed to resolve boot session route, falling back to /cc-agent', {
+        log.warn('failed to resolve boot session route', {
           bootSessionId,
           error: err instanceof Error ? err.message : String(err),
         });
-        if (!cancelled) navigate('/cc-agent', { replace: true });
+        if (!active()) return;
+        if (bootDeviceId) setFailure(sessionEntryFailure(err));
+        else navigate('/cc-agent', { replace: true });
       });
 
     return () => {
       cancelled = true;
     };
-  }, [navigate]);
+  }, [navigate, retry]);
+
+  if (failure) return <SessionEntryError reason={failure} onRetry={() => setRetry(value => value + 1)} />;
 
   // 中性占位:解析完成前不渲染任何 session 视图,只铺 content-area 底色撑满,
   // 避免空白帧 / 单栏闪现(规则 12)。

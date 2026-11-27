@@ -1,15 +1,26 @@
 /**
  * 本机窗口的组命令入口；同账号远程管理由专用命令转交组所在电脑。
  */
+import { DEFAULT_ROUTE_STRATEGY, knownRouteStrategy } from '../../shared/routeStrategy.js';
 import { ipcMain } from 'electron';
-import { supportsSubscriptionFastPolicy } from '@cindy/model-providers';
+import { supportsSubscriptionFastPolicy, type ProviderView } from '@cindy/model-providers';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
+import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
+import { refreshSubscriptionPool } from '../subscription-accounts/runtime.js';
+import { openAiAccountGroupKind, type OpenAiGroupAccount, type OpenAiGroupAccountDetail, type OpenAiGroupApiAgent, type OpenAiGroupProbeResult } from '../../shared/openAiAccountGroup.js';
 
 import { activeOwnerScopeKey } from '../appSessionState.js';
 
 import {
   PROVIDER_GROUP_IPC,
+  PROVIDER_GROUP_DEFAULT_LIMIT,
+  PROVIDER_GROUP_DEFAULT_WEIGHT,
+  PROVIDER_GROUP_MAX_WEIGHT,
+  PROVIDER_GROUP_MAX_LIMIT,
+  PROVIDER_GROUP_STORAGE_MEMBER_CAP,
   isProviderGroupProviderId,
+  publicProviderGroupConfig,
+  withLocalProviderGroupAccounts,
   normalizeProviderGroupConfig,
   parseProviderGroupDisplayRead,
   parseProviderGroupRemoteView,
@@ -49,10 +60,20 @@ import { recoverProviderGroupViewShares } from './remoteClient.js';
 import { captureProviderManagementScope } from './managementScope.js';
 import { groupFastPolicyPending, syncGroupFastPolicy } from './fastPolicyRuntime.js';
 import { notifyProviderShareCatalogChanged } from '../device-link/dispatch.desktop.js';
+import { openAiGroupAccountResult, selectOpenAiGroupProbe, setOpenAiGroupAccountChangedListener, testOpenAiGroupApiAccount } from './localOpenAiAccounts.js';
+import { mergeOpenAiPoolConnections, migrateLegacyOpenAiPool } from '../subscription-accounts/openAiPoolMerge.js';
+import { apiKeyMemberForConnection, apiKeyPoolMembers, migratedLocalAccountGroup } from '../subscription-accounts/apiKeyMembers.js';
 
 const log = createLogger('provider-group');
+const accountMergesInFlight = new Set<string>();
 
 export interface ProviderGroupCommandDeps {
+  listLocalAccounts?(): Promise<ProviderView[]>;
+  probeAccount?(id: string, agent?: OpenAiGroupApiAgent): Promise<OpenAiGroupProbeResult>;
+  refreshAccountQuota?: typeof refreshSubscriptionPool;
+  accountResult?(provider: ProviderView): Pick<OpenAiGroupAccount, 'checks'>;
+  mergeLocalAccounts?: typeof mergeOpenAiPoolConnections;
+  migrateLocalAccounts?: typeof migrateLegacyOpenAiPool;
   syncFastPolicy?(providerId: string): Promise<void>;
   fastPolicyPending?(providerId: string): boolean;
   router: ProviderGroupRouter;
@@ -152,7 +173,48 @@ export function parseProviderGroupCommand(raw: unknown): ProviderGroupCommand {
     case 'get':
     case 'candidates':
     case 'delete':
+    case 'account-list':
+    case 'account-detail':
       return { action: value.action, providerId };
+    case 'account-merge':
+      if (!isProviderGroupProviderId(value.targetProviderId)) throwIpcError('INVALID_PARAMS', 'targetProviderId required');
+      return { action: value.action, providerId, targetProviderId: value.targetProviderId };
+    case 'account-remove':
+    case 'account-quota':
+      if (!isProviderGroupProviderId(value.accountId)) throwIpcError('INVALID_PARAMS', 'accountId required');
+      return { action: value.action, providerId, accountId: value.accountId };
+    case 'account-test':
+      if (!isProviderGroupProviderId(value.accountId) || (value.agent !== undefined && value.agent !== 'codex' && value.agent !== 'pi')) {
+        throwIpcError('INVALID_PARAMS', 'Invalid account test');
+      }
+      return { action: value.action, providerId, accountId: value.accountId, ...(value.agent ? { agent: value.agent } : {}) };
+    case 'account-allocation': {
+      const expectedConfig = normalizeProviderGroupConfig(value.expectedConfig, providerId);
+      const edit = value.edit as Record<string, unknown> | undefined;
+      if (!expectedConfig?.localAccountIds?.length || !edit || typeof edit !== 'object' || Array.isArray(edit)) {
+        throwIpcError('INVALID_PARAMS', 'Mixed group allocation snapshot required');
+      }
+      if (Object.keys(edit).length === 1 && Object.hasOwn(edit, 'strategy')) {
+        // 与智能路由同一套选法；旧版发来的四种旧名字换成对应的新选法，认不出的按无效处理。
+        const strategy = knownRouteStrategy(edit.strategy);
+        if (strategy) return { action: value.action, providerId, expectedConfig, edit: { strategy } };
+      }
+      if (Object.keys(edit).length === 2 && isProviderGroupProviderId(edit.accountId)) {
+        const { accountId, weight, limit, paused } = edit;
+        if (typeof weight === 'number' && Number.isInteger(weight) && weight >= 1 && weight <= PROVIDER_GROUP_MAX_WEIGHT) {
+          return { action: value.action, providerId, expectedConfig, edit: { accountId, weight } };
+        }
+        if (limit === null || (typeof limit === 'number' && Number.isInteger(limit) && limit >= 1 && limit <= PROVIDER_GROUP_MAX_LIMIT)) {
+          return { action: value.action, providerId, expectedConfig, edit: { accountId, limit } };
+        }
+        if (typeof paused === 'boolean') return { action: value.action, providerId, expectedConfig, edit: { accountId, paused } };
+      }
+      if (Object.keys(edit).length === 1 && Array.isArray(edit.order) && edit.order.length <= PROVIDER_GROUP_STORAGE_MEMBER_CAP
+        && edit.order.every(isProviderGroupProviderId) && new Set(edit.order).size === edit.order.length) {
+        return { action: value.action, providerId, expectedConfig, edit: { order: edit.order } };
+      }
+      return throwIpcError('INVALID_PARAMS', 'Invalid mixed group allocation edit');
+    }
     case 'remote-view': {
       if (typeof value.deviceId !== 'string' || !REMOTE_DEVICE_ID_PATTERN.test(value.deviceId)) {
         throwIpcError('INVALID_PARAMS', 'deviceId required');
@@ -230,6 +292,66 @@ export async function executeProviderGroupCommand(deps: ProviderGroupCommandDeps
   return result;
 }
 
+async function readAccountDirectory(deps: ProviderGroupCommandDeps) {
+  const views = [...new Map((await deps.listLocalAccounts?.() ?? []).map(view => [view.id, view])).values()];
+  return { views, groups: deps.listGroups() };
+}
+
+function accountDirectory(deps: ProviderGroupCommandDeps, groupId: string,
+  { views, groups }: Awaited<ReturnType<typeof readAccountDirectory>>): OpenAiGroupAccount[] {
+  const group = views.find(view => view.id === groupId && !view.subscriptionPoolAlias);
+  const groupKind = group && openAiAccountGroupKind(group);
+  if (!groupKind) return [];
+  const config = Object.hasOwn(groups, groupId) ? groups[groupId] : null;
+  const canonical = deps.mergeLocalAccounts ? apiKeyPoolMembers(groupId) : [];
+  const included = new Set([groupId, ...config?.localAccountIds ?? [], ...canonical.map(member => member.connectionId)]);
+  const list = views.flatMap((view): OpenAiGroupAccount[] => {
+    const kind = openAiAccountGroupKind(view);
+    if (!kind || view.subscriptionPoolAlias) return [];
+    const connected = view.connected && !view.suspended && !view.removed
+      && (kind === 'subscription' || selectOpenAiGroupProbe(view) !== undefined);
+    if (!connected && !included.has(view.id)) return [];
+    const canonicalGroup = deps.mergeLocalAccounts ? apiKeyMemberForConnection(view.id)?.providerId : undefined;
+    const otherGroup = Object.entries(groups).find(([id, candidate]) => id !== groupId
+      && candidate.localAccountIds?.length && (id === view.id || candidate.localAccountIds.includes(view.id)));
+    const other = canonicalGroup && canonicalGroup !== view.id && canonicalGroup !== groupId ? canonicalGroup : otherGroup?.[0];
+    return [{ id: view.id, name: view.name, kind, included: included.has(view.id), connected,
+      ...(other ? { groupName: views.find(candidate => candidate.id === other)?.name ?? other } : {}),
+      ...(connected && !included.has(view.id) && kind !== groupKind
+        && (!deps.mergeLocalAccounts || (groupId !== 'openai' && (!canonicalGroup || canonicalGroup === view.id)))
+        && !groups[view.id]?.localAccountIds?.includes(groupId) ? { mergeTarget: true as const } : {}),
+      ...(kind === 'apiKey' ? deps.accountResult?.(view) : {}) }];
+  });
+  for (const id of config?.localAccountIds ?? []) {
+    if (!list.some(account => account.id === id)) list.push({ id, name: id, kind: 'apiKey', included: true, connected: false });
+  }
+  return list;
+}
+
+async function accountDetail(deps: ProviderGroupCommandDeps, providerId: string): Promise<OpenAiGroupAccountDetail> {
+  const directory = await readAccountDirectory(deps);
+  const { groups, views } = directory;
+  if (deps.migrateLocalAccounts) {
+    const legacy = Object.entries(groups).filter(([id, config]) => config.localAccountIds?.length
+      && !migratedLocalAccountGroup(id) && (id === providerId || config.localAccountIds.includes(providerId)));
+    for (const [id, config] of legacy) await deps.migrateLocalAccounts(id, config);
+  }
+  const accounts = accountDirectory(deps, providerId, directory);
+  if (accounts.length === 0) return { accounts };
+  const own = groups[providerId];
+  if (own?.localAccountIds?.length && (!deps.migrateLocalAccounts || !migratedLocalAccountGroup(providerId))) {
+    return { accounts, group: { providerId, config: own, members: accounts.filter(account => account.included) } };
+  }
+  const targets = views.filter(view => !view.subscriptionPoolAlias && openAiAccountGroupKind(view)
+    && groups[view.id]?.localAccountIds?.includes(providerId));
+  if (targets.length !== 1) return { accounts, ...(targets.length > 1 ? {
+    targets: targets.map(({ id, name }) => ({ id, name })),
+  } : {}) };
+  const id = targets[0]!.id;
+  return { accounts, group: { providerId: id, config: groups[id]!,
+    members: accountDirectory(deps, id, directory).filter(account => account.included) } };
+}
+
 async function runProviderGroupCommand(
   deps: ProviderGroupCommandDeps,
   command: ProviderGroupLocalCommand,
@@ -246,6 +368,123 @@ async function runProviderGroupCommand(
   }
   const { providerId } = command;
   switch (command.action) {
+    case 'account-list':
+      return accountDirectory(deps, providerId, await readAccountDirectory(deps));
+    case 'account-detail':
+      return accountDetail(deps, providerId);
+    case 'account-quota': {
+      const accounts = accountDirectory(deps, providerId, await readAccountDirectory(deps));
+      assertCurrent();
+      const account = accounts.find(item => item.id === command.accountId);
+      if (!account?.included || account.kind !== 'subscription' || !deps.refreshAccountQuota) {
+        throwIpcError('PRECONDITION_FAILED', 'Subscription account unavailable');
+      }
+      const view = await deps.refreshAccountQuota(account.id, true);
+      return view.accounts.map(({ id, identity, usage }) => ({ id, identity, usage }));
+    }
+    case 'account-merge': {
+      const { targetProviderId } = command;
+      const accounts = accountDirectory(deps, targetProviderId, await readAccountDirectory(deps));
+      assertCurrent();
+      const target = accounts.find(account => account.id === targetProviderId);
+      const source = accounts.find(account => account.id === providerId);
+      const prior = deps.readGroup(targetProviderId);
+      if (providerId === 'openai' || !target?.connected || !source?.connected || source.included || source.kind === target.kind
+        || deps.readGroup(providerId)?.localAccountIds?.includes(targetProviderId)) {
+        throwIpcError('PRECONDITION_FAILED', 'Providers cannot be merged');
+      }
+      const memberCount = prior ? prior.members.length + (prior.localAccountIds?.length ?? 0)
+        + Number(!prior.members.some(member => member.kind === 'local')) : 1;
+      if (memberCount >= PROVIDER_GROUP_STORAGE_MEMBER_CAP) {
+        throwIpcError('PRECONDITION_FAILED', 'Account group is full');
+      }
+      if (!deps.probeAccount) throwIpcError('PRECONDITION_FAILED', 'Account unavailable for testing');
+      const pair = JSON.stringify([deps.ownerKey(), ...[providerId, targetProviderId].sort()]);
+      if (accountMergesInFlight.has(pair)) throwIpcError('PRECONDITION_FAILED', 'Provider merge already in progress');
+      accountMergesInFlight.add(pair);
+      try {
+        const test = await deps.probeAccount(source.kind === 'apiKey' ? providerId : targetProviderId);
+        assertCurrent();
+        if (!test.ok) return test;
+        if (deps.mergeLocalAccounts) {
+          await deps.mergeLocalAccounts(providerId, targetProviderId, assertCurrent);
+          assertCurrent();
+          deps.changed(targetProviderId);
+          return test;
+        }
+        const existing = prior ?? { strategy: DEFAULT_ROUTE_STRATEGY, autoSwitch: true, members: [{
+          key: 'local', kind: 'local', agentDeviceId: null, providerId: targetProviderId,
+          limit: PROVIDER_GROUP_DEFAULT_LIMIT, weight: PROVIDER_GROUP_DEFAULT_WEIGHT, paused: false,
+        }] };
+        await deps.writeGroup(targetProviderId, { ...existing, localAccountIds: [...prior?.localAccountIds ?? [], providerId] }, prior);
+        assertCurrent();
+        deps.changed(targetProviderId);
+        return test;
+      } finally {
+        accountMergesInFlight.delete(pair);
+      }
+    }
+    case 'account-allocation': {
+      const { edit, expectedConfig } = command;
+      const accountIds = expectedConfig.localAccountIds;
+      if (!accountIds?.length) throwIpcError('PRECONDITION_FAILED', 'Mixed account group unavailable');
+      const ids = new Set([providerId, ...accountIds]);
+      const settings = expectedConfig.localAccountSettings;
+      let next: ProviderGroupConfig;
+      if ('strategy' in edit) {
+        next = { ...expectedConfig, strategy: edit.strategy };
+      } else if ('accountId' in edit) {
+        if (!ids.has(edit.accountId)) throwIpcError('PRECONDITION_FAILED', 'Account is not in this group');
+        const id = edit.accountId;
+        const memberSettings = 'weight' in edit ? { weights: { ...settings?.weights, [id]: edit.weight } }
+          : 'limit' in edit ? { limits: { ...settings?.limits, [id]: edit.limit } }
+            : { paused: edit.paused ? [...new Set([...settings?.paused ?? [], id])]
+                : settings?.paused?.filter(accountId => accountId !== id) };
+        next = { ...expectedConfig, localAccountSettings: { ...settings, ...memberSettings } };
+      } else {
+        if (edit.order.length !== ids.size || new Set(edit.order).size !== ids.size || edit.order.some(id => !ids.has(id))) {
+          throwIpcError('PRECONDITION_FAILED', 'Order must match the current group accounts');
+        }
+        next = { ...expectedConfig, localAccountSettings: { ...settings, order: edit.order } };
+      }
+      const written = await deps.writeGroup(providerId, next, expectedConfig);
+      assertCurrent();
+      if (!written) throwIpcError('PROVIDER_GROUP_CHANGED', 'The provider group changed while it was being edited');
+      deps.changed(providerId);
+      return written;
+    }
+    case 'account-test':
+    case 'account-remove': {
+      const id = command.accountId;
+      const member = command.action === 'account-test' && deps.mergeLocalAccounts ? apiKeyMemberForConnection(id) : undefined;
+      if (member?.providerId === providerId && deps.probeAccount) {
+        const result = await deps.probeAccount(id, command.action === 'account-test' ? command.agent : undefined);
+        assertCurrent();
+        return result;
+      }
+      const accounts = accountDirectory(deps, providerId, await readAccountDirectory(deps));
+      assertCurrent();
+      const account = accounts.find(item => item.id === id);
+      if (!account) throwIpcError('PRECONDITION_FAILED', 'Account unavailable');
+      const prior = deps.readGroup(providerId);
+      if (command.action === 'account-remove') {
+        if (!prior?.localAccountIds?.includes(id)) throwIpcError('PRECONDITION_FAILED', 'Account not in group');
+        const next = await deps.writeGroup(providerId, {
+          ...prior, localAccountIds: prior.localAccountIds.filter(value => value !== id),
+        }, prior);
+        assertCurrent();
+        await deps.pruneBindings(providerId, next ? new Set(withLocalProviderGroupAccounts(next, providerId).members.map(member => member.key)) : null);
+        deps.changed(providerId);
+        return { ok: true };
+      }
+      if (!account.connected || !account.included || account.kind !== 'apiKey') {
+        throwIpcError('PRECONDITION_FAILED', 'Account unavailable for this action');
+      }
+      if (!deps.probeAccount) throwIpcError('PRECONDITION_FAILED', 'Account unavailable for testing');
+      const test = await deps.probeAccount(id, command.agent);
+      assertCurrent();
+      return test;
+    }
     case 'get': {
       const view = await deps.router.view(providerId, { includeGuestSupport: true });
       assertCurrent();
@@ -276,7 +515,18 @@ async function runProviderGroupCommand(
       return deps.router.view(providerId, { includeGuestSupport: true });
     case 'save':
     case 'save-if-current': {
-      const next = normalizeProviderGroupConfig(command.config, providerId);
+      const currentConfig = deps.readGroup(providerId);
+      const localAccountIds = currentConfig?.localAccountIds;
+      const localAccountSettings = currentConfig?.localAccountSettings;
+      const rawConfig = { ...command.config, localAccountIds, localAccountSettings };
+      if (localAccountIds?.length && !rawConfig.members?.length) {
+        rawConfig.members = currentConfig!.members.filter(member => member.key === 'local');
+      }
+      const next = normalizeProviderGroupConfig(rawConfig, providerId);
+      const expected = command.action === 'save-if-current' && command.expectedConfig && currentConfig
+        ? { ...publicProviderGroupConfig(command.expectedConfig),
+          ...(localAccountIds ? { localAccountIds } : {}), ...(localAccountSettings ? { localAccountSettings } : {}) }
+        : undefined;
       if (next) {
         // 新加入的电脑必须是这台电脑已经能用的同一个供应商(§3)，不能凭渲染端点名加入。
         const stored = new Map(deps.readGroup(providerId)?.members.map((m) => [m.key, m]) ?? []);
@@ -313,14 +563,15 @@ async function runProviderGroupCommand(
       }
       assertCurrent();
       const written = command.action === 'save-if-current'
-        ? await deps.writeGroup(providerId, next, command.expectedConfig)
-        : await deps.writeGroup(providerId, next);
+        ? await deps.writeGroup(providerId, next, expected ?? command.expectedConfig)
+        : await (localAccountIds?.length ? deps.writeGroup(providerId, next, currentConfig)
+          : deps.writeGroup(providerId, next));
       assertCurrent();
       try {
         await deps.syncFastPolicy?.(providerId);
       } finally {
         assertCurrent();
-        await deps.pruneBindings(providerId, written ? new Set(written.members.map((m) => m.key)) : null);
+        await deps.pruneBindings(providerId, written ? new Set(withLocalProviderGroupAccounts(written, providerId).members.map((m) => m.key)) : null);
         assertCurrent();
         deps.changed(providerId);
       }
@@ -346,6 +597,12 @@ export function createProviderGroupCommandDeps(
 ): ProviderGroupCommandDeps {
   const reshare = options.reshare;
   return {
+    listLocalAccounts: () => getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false }),
+    probeAccount: (id, agent) => testOpenAiGroupApiAccount(id, undefined, agent),
+    refreshAccountQuota: refreshSubscriptionPool,
+    accountResult: openAiGroupAccountResult,
+    mergeLocalAccounts: mergeOpenAiPoolConnections,
+    migrateLocalAccounts: migrateLegacyOpenAiPool,
     syncFastPolicy: syncGroupFastPolicy,
     fastPolicyPending: groupFastPolicyPending,
     router: getProviderGroupRouter(),
@@ -385,6 +642,7 @@ export function createProviderGroupCommandDeps(
 
 export function registerProviderGroupIpc(options: { reshare?: ProviderGroupIpcReshare } = {}): void {
   const deps = createProviderGroupCommandDeps(options);
+  setOpenAiGroupAccountChangedListener(providerId => broadcast(PROVIDER_GROUP_IPC.CHANGED, { providerId }));
 
   ipcMain.handle(PROVIDER_GROUP_IPC.COMMAND, async (event, raw: unknown) => {
     if (getDeviceLinkInvokeContext()) throwIpcError('PERMISSION_DENIED', 'Provider groups are local only');

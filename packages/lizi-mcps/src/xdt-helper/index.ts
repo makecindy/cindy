@@ -37,6 +37,8 @@ export {
 export {
   registerArchiveSessionsTool,
   registerUnarchiveSessionsTool,
+  registerPinSessionsTools,
+  type PinSessionsDeps,
   registerSnoozeSessionsTool,
   type ArchiveSessionsDeps,
   type SnoozeSessionsDeps,
@@ -189,6 +191,7 @@ export {
   TASK_DIGEST_MAX_BYTES,
   TASK_DIGEST_TEXT_MAX,
   type GetTaskDigestToolDeps,
+  type TaskDigestCurrentRoute,
   type TaskDigestPhase,
   type TaskDigestRoute,
   type TaskDigestWire,

@@ -144,6 +144,34 @@ afterEach(async () => {
 });
 
 describe('agent-proxy tunnel keeper', () => {
+  // Unit / #8403. The existing port and network failure tests expect retries.
+  // A dedicated connection that lacks a trusted fingerprint must settle its
+  // callers immediately and wait for a new ensure request before redialing.
+  it('rejects trust failures promptly and retries only on a new ensure', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness();
+    const trustError = Object.assign(new Error('[SSH_HOST_UNVERIFIED]'), {
+      code: 'SSH_HOST_UNVERIFIED',
+    });
+    h.setupConn = (conn) => {
+      vi.spyOn(conn, 'connect').mockRejectedValueOnce(trustError);
+    };
+    const rejected = vi.fn();
+    const first = ensureTunnelUp(h.mainHost as any).catch(rejected);
+    const second = ensureTunnelUp(h.mainHost as any).catch(rejected);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getTunnelKeeperState('test-host')).toMatchObject({
+      phase: 'error',
+      lastError: trustError.message,
+    });
+    expect(rejected.mock.calls).toEqual([[trustError], [trustError]]);
+    await Promise.all([first, second]);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(h.conns[0]!.connect).toHaveBeenCalledTimes(1);
+    await expect(ensureTunnelUp(h.mainHost as any)).resolves.toEqual({ remotePort: 45000 });
+    expect(getTunnelKeeperState('test-host')).toMatchObject({ phase: 'active' });
+  });
+
   it('connects the dedicated conn, arms the fixed port and reports active', async () => {
     const h = makeHarness();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

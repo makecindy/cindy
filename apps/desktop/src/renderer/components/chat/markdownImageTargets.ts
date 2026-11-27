@@ -1,16 +1,27 @@
-import type { Image, Root } from 'mdast';
+import type { Code, Image, ImageReference, Root } from 'mdast';
 import remarkParse from 'remark-parse';
 import { unified } from 'unified';
 import { visit } from 'unist-util-visit';
+import { isCarouselFenceLanguage, splitCarouselSlides } from '@cindy/maker-shared/markdown-carousel';
 import {
   normalizeMarkdownRendererContent,
   REMARK_PLUGINS_PRIVILEGED,
 } from './MarkdownRenderer';
 import { isManagedMarkdownVideoUrl } from './markdownMedia';
+import { RAW_IMAGE_TARGET_PROP } from './remarkPreserveRawLocalDestinations';
 
-const markdownImageParser = unified()
-  .use(remarkParse)
-  .use(REMARK_PLUGINS_PRIVILEGED);
+// Built on first use: MarkdownRenderer imports this module too (gallery
+// occurrences), so its plugin list may not be initialised at module load.
+let parser: ReturnType<typeof createParser> | undefined;
+function createParser() {
+  return unified().use(remarkParse).use(REMARK_PLUGINS_PRIVILEGED);
+}
+function parseRendered(markdown: string, preserveLineCount = false): Root {
+  const markdownImageParser = (parser ??= createParser());
+  const normalized = normalizeMarkdownRendererContent(markdown, preserveLineCount);
+  // Pass the source as the file, as react-markdown does: source-span plugins read it.
+  return markdownImageParser.runSync(markdownImageParser.parse(normalized), normalized) as Root;
+}
 
 /**
  * Per-session cache for image targets extracted from completed assistant
@@ -26,23 +37,135 @@ export interface MarkdownImageTargetCacheEntry {
 export type MarkdownImageTargetCache = Map<string, MarkdownImageTargetCacheEntry>;
 
 /** 与 MarkdownRenderer 同源解析，只返回实际会进入 img renderer 的图片地址。 */
-export function extractRenderedMarkdownImageTargets(markdown: string): string[] {
+export function extractRenderedMarkdownImageTargets(markdown: string, insideCarousel = false): string[] {
   if (!markdown.includes('![') && !/<img/i.test(markdown)) return [];
 
-  const normalized = normalizeMarkdownRendererContent(markdown);
-  // Pass the source as the file, as react-markdown does: source-span plugins read it.
-  const tree = markdownImageParser.runSync(markdownImageParser.parse(normalized), normalized) as Root;
+  const tree = parseRendered(markdown);
   const urls: string[] = [];
   const seen = new Set<string>();
-  visit(tree, 'image', (node: Image) => {
+  const addUrl = (url: string) => {
+    if (!url || isManagedMarkdownVideoUrl(url) || seen.has(url)) return;
+    seen.add(url);
+    urls.push(url);
+  };
+  visit(tree, ['image', 'code'], (node) => {
+    if (node.type === 'code') {
+      const code = node as Code;
+      if (insideCarousel || !isCarouselFenceLanguage(code.lang)) return;
+      for (const slide of splitCarouselSlides(code.value)) {
+        for (const nestedUrl of extractRenderedMarkdownImageTargets(slide, true)) {
+          addUrl(nestedUrl);
+        }
+      }
+      return;
+    }
+    const image = node as Image;
     // Markdown image syntax can carry generated videos. Those targets are
     // rendered by ChatVideoView and must not be counted as images for inline
     // image fallback / delivery decisions.
-    if (!node.url || isManagedMarkdownVideoUrl(node.url) || seen.has(node.url)) return;
-    seen.add(node.url);
-    urls.push(node.url);
+    addUrl(image.url);
   });
   return urls;
+}
+
+export interface MarkdownGalleryImage {
+  /** Destination the img renderer receives under RAW_IMAGE_TARGET_PROP. */
+  target: string;
+  /** Source offset of the image in the rendered (normalised) text, when known. */
+  offset: number | undefined;
+  /** Carousel slide section suffix when extracted from a ````carousel fence. */
+  sectionSuffix?: string;
+}
+
+export interface ExtractMarkdownGalleryOptions {
+  preserveLineCount?: boolean;
+  insideCarousel?: boolean;
+}
+
+/**
+ * Every image the renderer shows, in document order and with repeats (reference
+ * images resolve through their definition). Videos are excluded.
+ */
+export function extractMarkdownGalleryImages(
+  markdown: string,
+  options: ExtractMarkdownGalleryOptions = {},
+): MarkdownGalleryImage[] {
+  if (!markdown.includes('![') && !/<img/i.test(markdown)) return [];
+
+  const { preserveLineCount = false, insideCarousel = false } = options;
+  const images: MarkdownGalleryImage[] = [];
+  visit(parseRendered(markdown, preserveLineCount), ['image', 'imageReference', 'code'], (node) => {
+    if (node.type === 'code') {
+      const code = node as Code;
+      if (insideCarousel || !isCarouselFenceLanguage(code.lang)) return;
+      const carouselOffset = code.position?.start.offset ?? 0;
+      const slides = splitCarouselSlides(code.value);
+      slides.forEach((slide, slideIndex) => {
+        const suffix = `\u0000carousel:${carouselOffset}:${slideIndex}`;
+        const nested = extractMarkdownGalleryImages(slide, {
+          preserveLineCount: false,
+          insideCarousel: true,
+        });
+        for (const item of nested) {
+          images.push({
+            target: item.target,
+            offset: item.offset,
+            sectionSuffix: suffix,
+          });
+        }
+      });
+      return;
+    }
+    const image = node as Image | ImageReference;
+    const target = image.data?.hProperties?.[RAW_IMAGE_TARGET_PROP];
+    if (typeof target === 'string' && target && !isManagedMarkdownVideoUrl(target)) {
+      images.push({ target, offset: image.position?.start.offset });
+    }
+  });
+  return images;
+}
+
+export interface MarkdownGalleryOccurrenceRef {
+  target: string;
+  section: string;
+  occurrence: number;
+}
+
+/**
+ * Assign per-section occurrence indices matching `MarkdownRenderer`'s
+ * `gallerySection` (including carousel slide suffixes). Shared by chat
+ * `replyGalleryImages` and `TextLightbox` document galleries so repeated
+ * images across carousel slides or after carousels match the clicked slide.
+ */
+export function assignMarkdownGalleryOccurrences(
+  entries: readonly MarkdownGalleryImage[],
+  baseSection: string,
+): MarkdownGalleryOccurrenceRef[] {
+  const seen = new Map<string, number>();
+  return entries.map(({ target, sectionSuffix }) => {
+    const section = sectionSuffix ? `${baseSection}${sectionSuffix}` : baseSection;
+    const key = `${section}\u0000${target}`;
+    const occurrence = seen.get(key) ?? 0;
+    seen.set(key, occurrence + 1);
+    return { target, section, occurrence };
+  });
+}
+
+/**
+ * Which repeat of `target` in `markdown` the rendered image at `offset` is (0 for
+ * the first). Undefined when the image cannot be located.
+ */
+export function markdownImageOccurrence(
+  markdown: string,
+  target: string,
+  offset: number,
+  preserveLineCount = false,
+): number | undefined {
+  const repeats = extractMarkdownGalleryImages(markdown, { preserveLineCount }).filter(
+    (image) => image.sectionSuffix === undefined && image.target === target,
+  );
+  const occurrence = repeats.findIndex((image) => image.offset === offset);
+  return occurrence >= 0 ? occurrence : undefined;
 }
 
 /**

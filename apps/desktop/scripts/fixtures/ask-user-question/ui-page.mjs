@@ -36,6 +36,8 @@ export default {
     'voice-multi': { about: 'Spoken multi-selection awaits confirmation in the existing card', viewport: { width: 800, height: 700 }, data: { question: '你希望保留哪些方案？', voice: true, multi: true } },
     'voice-narrow': { about: 'Voice confirmation and toolbar at 320 px', viewport: { width: 320, height: 800 }, data: { question: '你希望保留哪些方案？', voice: true, multi: true } },
     'voice-speaker-filtered': { about: 'Call bar explains that the voiceprint filter ignored someone else', data: { question: '你希望采用哪种方案？', voice: true, speakerFiltered: true } },
+    'option-preview': { about: 'Option preview renders readable markdown outside the option button', viewport: { width: 760, height: 760 }, data: { question: '发出预览这条现状说明，要发吗？', preview: true } },
+    'option-preview-narrow': { about: 'Option preview remains readable and scrollable at 320 px', viewport: { width: 320, height: 640 }, data: { question: '发出预览这条现状说明，要发吗？', preview: true } },
   },
   async ready(page) {
     await page.locator('main').waitFor();
@@ -151,6 +153,15 @@ export default {
       radius: parseFloat(getComputedStyle(node).borderTopLeftRadius),
       width: node.getBoundingClientRect().width, height: node.getBoundingClientRect().height,
     }));
+    if (ui.case.startsWith('option-preview')) {
+      const previewBox = page.getByTestId('ask-user-option-preview-1');
+      await previewBox.waitFor();
+      assert.ok((await previewBox.textContent()).includes('镜像与自动更新'), 'Option preview markdown renders visibly');
+      await previewBox.click();
+      assert.equal(await page.getByTestId('mcp-form-receipt').count(), 0, 'Clicking inside option preview must not submit the option');
+      assert.equal(await page.getByTestId('ask-user-option-preview-2').count(), 0, 'Options without preview do not render a preview frame');
+      return;
+    }
     if (ui.case.startsWith('voice-')) {
       assert.equal(await page.locator('.companion-voice-toolbar').count(), 1);
       assert.equal(await page.getByText(await ui.t('voiceInputOverlay.speakerFiltered')).count(),
@@ -179,8 +190,8 @@ export default {
     }
     await page.getByRole('button', { name: await ui.t('chat.askUserQuestion.customAnswer') }).click();
     const expandedFrame = await readVoiceFrame();
-    assert.equal(expandedFrame.width, 32);
-    assert.equal(expandedFrame.height, 32);
-    assert.ok(expandedFrame.radius >= 16, 'Expanded microphone action frame follows the same pill tier');
+    assert.equal(expandedFrame.width, 30);
+    assert.equal(expandedFrame.height, 30);
+    assert.ok(expandedFrame.radius >= 15, 'Expanded microphone action frame follows the unified 30px pill spec');
   },
 };

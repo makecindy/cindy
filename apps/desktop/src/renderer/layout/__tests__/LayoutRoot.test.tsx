@@ -10,7 +10,7 @@ import {
 } from '../../panels/BuiltinPanelBridge';
 import { __resetBuiltinPanelsForTest } from '../../panels/builtinPanels';
 import { __resetPanelRegistryForTest, registerPanelKind } from '../../panels/registry';
-import { LayoutRoot, normalizeSubMinFractions } from '../LayoutRoot';
+import { effectiveChatMinPx, LayoutRoot, normalizeSubMinFractions } from '../LayoutRoot';
 import { usePanelMaximize } from '../panelMaximize';
 import { TodoListCard } from '../../components/chat/TodoListCard';
 import { usePaneAtWindowTop, usePaneFill, usePaneAtWindowLeft } from '../panePlacement';
@@ -690,4 +690,78 @@ it('expands the saved standalone window when the initial session restores an ope
     .mockReturnValue({ width: 800 } as DOMRect);
   await act(async () => { rendered.rerender(view(true)); });
   expect(expand).toHaveBeenCalledExactlyOnceWith(802);
+});
+
+// 回归 PR #13160 P1：360px 窄副窗下展开右栏或存在根级页签组/插件列时，若聊天区仍强占
+// min(400px, 100%) 且嵌套非 chat 列保持 flex-none，右栏会被挤成 0 宽、根级多面板会顶出
+// overflow-hidden 裁切右缘。经 LayoutRoot 真实渲染验证 --layout-chat-min 与 shrink 协同。
+describe('LayoutRoot · 窄副窗多面板下限让步', () => {
+  it('effectiveChatMinPx 在宽窗保持 400px，窄窗按兄弟下限之和让步且不小于 0', () => {
+    expect(effectiveChatMinPx(800, 121)).toBe(400);
+    expect(effectiveChatMinPx(521, 121)).toBe(400);
+    expect(effectiveChatMinPx(360, 0)).toBe(360);
+    expect(effectiveChatMinPx(360, 121)).toBe(239);
+    expect(effectiveChatMinPx(360, 242)).toBe(118);
+    expect(effectiveChatMinPx(180, 242)).toBe(0);
+  });
+
+  it('按展开中的非 chat 根级兄弟为 --layout-chat-min 预留地板，嵌套非 chat 列可收缩', () => {
+    registerPanelKind({
+      kind: 'ghost:narrow-grid',
+      Component: () => <div data-testid="narrow-grid" />,
+      collapseMemory: 'global',
+    });
+    currentLayout = {
+      ...createDefaultLayout(),
+      content: {
+        type: 'split',
+        id: 'root',
+        direction: 'row',
+        children: [
+          {
+            fraction: 0.3,
+            node: {
+              type: 'split',
+              id: 'grid-narrow',
+              direction: 'column',
+              children: [
+                { fraction: 1, node: { type: 'pane', id: 'ng', panelKind: 'ghost:narrow-grid' } },
+              ],
+            },
+          },
+          { fraction: 0.4, node: { type: 'pane', id: 'chat', panelKind: 'chat-main', minWidth: 400 } },
+          { fraction: 0.3, node: { type: 'pane', id: 'right', panelKind: 'right-tabs' } },
+        ],
+      },
+    };
+
+    const view = (collapsed: boolean) => (
+      <BuiltinPanelBridgeProvider value={bridge}>
+        <LayoutRoot rightTabsCollapsed={collapsed} />
+      </BuiltinPanelBridgeProvider>
+    );
+    const rendered = render(view(false));
+    const root = screen.getByTestId('layout-root-content');
+    // grid-narrow(120+1) + right-tabs(120+1) = 242px → 360px 窄窗下聊天区让步到 118px，三栏均不被裁
+    expect(root.style.getPropertyValue('--layout-chat-min')).toBe(
+      'min(400px, max(0px, calc(100cqw - 242px)))',
+    );
+    const grid = document.querySelector<HTMLElement>('[data-layout-root-child-id="grid-narrow"]');
+    expect(grid?.className).toContain('shrink');
+    expect(grid?.className).not.toContain('flex-none');
+
+    // 收起右栏后，只剩 grid-narrow(121px) 占地板
+    rendered.rerender(view(true));
+    expect(root.style.getPropertyValue('--layout-chat-min')).toBe(
+      'min(400px, max(0px, calc(100cqw - 121px)))',
+    );
+
+    // 接管态（设置页）隐藏所有非 chat 面板，聊天区独享 100cqw
+    rendered.rerender(
+      <BuiltinPanelBridgeProvider value={bridge}>
+        <LayoutRoot suppressNonChatPanels />
+      </BuiltinPanelBridgeProvider>,
+    );
+    expect(root.style.getPropertyValue('--layout-chat-min')).toBe('min(400px, 100cqw)');
+  });
 });

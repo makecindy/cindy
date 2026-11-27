@@ -25,9 +25,13 @@ Cindy 允许 Agent 通过统一会话控制面查询和临时调整当前任务�
 - `set_session_runtime`：`session_id` 可省略；原子提交来源、模型、推理强度与 Fast 的任意子集。
 - 当前或目标任务忙碌时不修改进行中的 turn，返回 `deferred`，在下一个 turn 边界生效。
 - 省略 `harness` 时，Agent 的修改不写回任务 baseline。语义失败是否提高推理强度或换更强模型，由 Agent 或 Skill 明确请求。
-- 显式提供 `harness`（`claude-code` / `codex` / `pi`）时必须同时指定 `model`，表示完整的任务执行选择；
+- 显式提供 `harness`（内置 `claude-code` / `codex` / `pi`）时必须同时指定 `model`，表示完整的任务执行选择；
   即使选回当前 Harness，也复用模型选择器的完整选择语义。目标模型、来源、推理强度和 Fast 在登记前一起校验，
   省略来源时按目标 Harness 的模型解析默认来源，不沿用旧 Harness 的来源。
+- **插件执行引擎（`acp`）边界**：任务新建（`send_to_session`）与绑定自动化临时切换支持 `acp` + `providerId`（`acp-plugin:...`），
+  并在绑定自动化切回原引擎时连带恢复 `permissionMode` 与 `agentDeviceId`；`set_worker_runtime` 对插件引擎 Worker 返回
+  `UNSUPPORTED_CAPABILITY`；任何尚未支持插件引擎的运行时控制入口必须显式拒绝，不得静默回落成内置引擎。全场景边界见
+  [插件引擎与插件模型](plugin-engines-and-models.md)。
 - 完整选择返回 `deferred` / `effective_boundary: next_send`，清除此前临时调整；`get_session_runtime.pending`
   显示目标 Harness，`effective` 仍表示当前运行组合。空闲和忙碌任务均在下一条消息发送时消费意图，
   复用现有历史交接与原生绑定切换事务，更新该任务 baseline，但不修改全局默认设置。
@@ -36,6 +40,10 @@ Cindy 允许 Agent 通过统一会话控制面查询和临时调整当前任务�
   重新读取 generation 并再次提交完整 `harness` + `model`；普通临时调整不会覆盖待切换选择。
 
 ## 自动降级
+
+本节只管没经过模型组的普通任务。经模型组（模式）选了来源的任务、定时任务与伙伴按
+[模型组 §4](model-groups.md#4-用不了时接替2026-11-24-用户裁决) 自动接替，由各个模式自己的「出问题时自动换来源」开关
+（默认开）管，不看本节的开关（2026-11-24 用户裁决）。
 
 设置中的“任务模型自动降级”默认关闭。开启后只复用宿主现有的安全自动续跑入口，
 即已被白名单识别为连接、超时、过载或容量问题的失败；认证失败、权限拒绝、用户取消、

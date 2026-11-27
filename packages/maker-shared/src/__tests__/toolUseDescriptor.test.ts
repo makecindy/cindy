@@ -3,6 +3,7 @@ import { parseMessageToolUse } from '../messageNormalize.js';
 import {
   createdPathsFromDescriptor,
   describeToolUse,
+  formatCollabToolResultText,
   humanizeToolToken,
   parseToolName,
   sourcePathCandidatesFromDescriptor,
@@ -441,8 +442,86 @@ describe('describeToolUse — mcp / dynamic / collab', () => {
       kind: 'collab',
       toolName: 'collab:wait',
       tool: 'wait',
+      action: 'wait',
       toolLabel: 'wait',
     });
+  });
+
+  it('classifies collab control actions, strips /root paths, rejects raw UUIDs, and falls back to legacy receiver counts', () => {
+    expect(
+      describeToolUse('collab:wait', {
+        senderThreadId: '019d8f44-1111-7222-8333-444444444444',
+        receiverThreadIds: [],
+        targets: ['/root/scout', '019d8f44-2222-7222-8333-444444444444', '/root/nested/reviewer'],
+        targetCount: 2,
+      }),
+    ).toEqual({
+      kind: 'collab',
+      toolName: 'collab:wait',
+      tool: 'wait',
+      action: 'wait',
+      toolLabel: 'wait',
+      targets: ['scout', 'reviewer'],
+      targetCount: 2,
+    });
+
+    // Legacy persisted payload without targets only has receiverThreadIds: expose count, never UUIDs.
+    const legacy = describeToolUse('collab:wait', {
+      senderThreadId: '019d8f44-1111-7222-8333-444444444444',
+      receiverThreadIds: [
+        '019d8f44-2222-7222-8333-444444444444',
+        '019d8f44-3333-7222-8333-444444444444',
+      ],
+    });
+    expect(legacy).toEqual({
+      kind: 'collab',
+      toolName: 'collab:wait',
+      tool: 'wait',
+      action: 'wait',
+      toolLabel: 'wait',
+      targetCount: 2,
+    });
+
+    expect(
+      describeToolUse('collab:sendInput', {
+        targets: ['scout'],
+        prompt: 'Check the failing test',
+      }),
+    ).toMatchObject({
+      kind: 'collab',
+      action: 'sendInput',
+      toolLabel: 'send input',
+      targets: ['scout'],
+      targetCount: 1,
+      prompt: 'Check the failing test',
+    });
+
+    expect(describeToolUse('collab:resumeAgent', { targets: ['scout'] })).toMatchObject({
+      kind: 'collab',
+      action: 'resume',
+      toolLabel: 'resume agent',
+      targets: ['scout'],
+    });
+
+    expect(describeToolUse('collab:closeAgent', { targets: ['scout'] })).toMatchObject({
+      kind: 'collab',
+      action: 'close',
+      toolLabel: 'close agent',
+      targets: ['scout'],
+    });
+  });
+
+  it('strips internal thread IDs and localizes states in formatCollabToolResultText', () => {
+    const labels = { completed: '已完成', failed: '失败', running: '运行中', stopped: '已停止' };
+    const translate = (state: keyof typeof labels) => labels[state];
+    expect(
+      formatCollabToolResultText(
+        '019d8f44-1111-7222-8333-444444444444: completed\nscout: running\n0123456789abcdef01234567: failed: timeout',
+        translate,
+      ),
+    ).toBe('已完成\nscout: 运行中\n失败: timeout');
+    expect(formatCollabToolResultText('completed', translate)).toBe('已完成');
+    expect(formatCollabToolResultText('019d8f44-1111-7222-8333-444444444444', translate)).toBeNull();
   });
 });
 

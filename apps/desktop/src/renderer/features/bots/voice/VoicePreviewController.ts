@@ -1,6 +1,6 @@
 import type {
   VoiceConversationApi,
-  VoiceConversationSelection,
+  VoicePreviewSelection,
 } from '@/../shared/voiceConversation';
 import { extractIpcError } from '@/utils/ipcError';
 import type { SpeechPlayer } from './PcmSpeechPlayer';
@@ -47,7 +47,7 @@ export class VoicePreviewController {
     return this.stopping;
   }
 
-  async start(selection: VoiceConversationSelection, text: string): Promise<void> {
+  async start(selection: VoicePreviewSelection, text: string): Promise<void> {
     const stopped = this.stop();
     const generation = this.generation;
     const id = crypto.randomUUID();

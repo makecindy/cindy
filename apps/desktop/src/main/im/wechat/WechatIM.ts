@@ -37,6 +37,7 @@ import type { ImSessionRepo } from '../shared/sessionRepo';
 import type { ImOrchestratorConfig } from '../shared/types';
 import type { ImFinalOutput } from '@cindy/im';
 import type { ImTurnRunner } from '../shared/turnRunner';
+import { PluginEngineUnsupportedError } from '../../maker-host/engineKind';
 import {
   createWechatTurnPermissionPolicy,
   WECHAT_INTERACTION_CONFIRM_TIMEOUT_MS,
@@ -361,7 +362,8 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     // Registered in Desktop Main with a trusted-renderer sender check.
   }
 
-  async authorize(): Promise<{ started: true }> {
+  async authorize(signal?: AbortSignal): Promise<{ started: true }> {
+    signal?.throwIfAborted();
     if (this.#deps.isCompatibilityDisabled() && !this.#compatibilityDisabled) {
       await this.setCompatibilityDisabled(true);
     }
@@ -381,6 +383,9 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     this.cancelAuthorization();
     const abort = new AbortController();
     this.#authorizationAbort = abort;
+    const cancelOwn = () => { if (this.#authorizationAbort === abort) this.cancelAuthorization(); };
+    signal?.addEventListener('abort', cancelOwn, { once: true });
+    if (signal?.aborted) { cancelOwn(); signal.throwIfAborted(); }
     this.#setState({ ...this.#state, phase: 'authorizing', errorCode: undefined });
     const transport = this.#deps.createTransport({
       credentials: null,
@@ -436,6 +441,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
           });
         }
       } finally {
+        signal?.removeEventListener('abort', cancelOwn);
         if (this.#authorizationAbort === abort) this.#authorizationAbort = null;
       }
     })();
@@ -704,6 +710,13 @@ export class WechatIM extends BaseIM implements RichChannelIM {
       );
       return { ok: true, messageId: clientId };
     } catch (error) {
+      const safe = asWechatIlinkError(error);
+      if (safe.code === 'SEND_REJECTED') {
+        return {
+          ok: false,
+          reason: safe.ret === undefined ? 'SEND_REJECTED' : `SEND_REJECTED:${safe.ret}`,
+        };
+      }
       const code =
         error instanceof Error && 'code' in error
           ? String((error as NodeJS.ErrnoException).code)
@@ -1247,8 +1260,12 @@ export class WechatIM extends BaseIM implements RichChannelIM {
         }),
       });
     } catch (error) {
-      await stopTyping();
-      throw error;
+      if (error instanceof PluginEngineUnsupportedError) {
+        dispatch = { kind: 'rejected' as const, reason: error.code };
+      } else {
+        await stopTyping();
+        throw error;
+      }
     }
 
     if (dispatch.kind !== 'accepted') {
@@ -1258,7 +1275,8 @@ export class WechatIM extends BaseIM implements RichChannelIM {
         await this.#requireStore().releaseDispatch(task.bindingEpoch, task.id);
         await delay(IDLE_PUMP_DELAY_MS);
       } else {
-        await this.#commitPreDispatchFailure(task, dispatch.reason);
+        // 伙伴不可用时 runner 已拼好「伙伴现在接不了消息：原因」, 优先发它而不是通用的「请稍后重试」。
+        await this.#commitPreDispatchFailure(task, dispatch.reason, dispatch.notice);
       }
       return;
     }
@@ -1446,6 +1464,11 @@ export class WechatIM extends BaseIM implements RichChannelIM {
             await this.#commitSimpleReply(task, imText('imBot.text.wechat.reply.companionDmNew'));
             return;
           }
+          // 伙伴解析不出: 不新建微信自己的任务(另一个身份), 回「伙伴暂时不可用」。
+          if (typeof result === 'object') {
+            await this.#commitSimpleReply(task, result.unavailable);
+            return;
+          }
         }
         const accepted = await this.#requireStore().markAccepted(task.bindingEpoch, task.id);
         if (!accepted) throw new Error('WECHAT_ACCEPT_CAS_REJECTED');
@@ -1504,10 +1527,13 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     if (!target) {
       reply = ui.agent.apiKeyMissing;
     } else {
+      const { row } = target;
       const context = permissionModeCommandContext(
-        target.row.id,
-        target.row.permissionMode,
-        runtime.runner.getPermissionModes(target.row.agentKind),
+        row.id,
+        row.permissionMode,
+        await runtime.runner.getPermissionModes(row.agentKind, {
+          sessionId: row.id, providerId: row.providerId, agentDeviceId: row.agentDeviceId,
+        }),
       );
       const [, rawMode, rawConfirmation] = command.split(/\s+/);
       if (!rawMode) {
@@ -1518,7 +1544,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
           reply = renderTextPermissionModePicker(ui, context);
         } else {
           const result = await runtime.runner.changePermissionMode({
-            sessionId: target.row.id,
+            sessionId: row.id,
             mode: mode.id,
             modes: context.modes,
             confirmedFullAccess: ['confirm', '确认'].includes(rawConfirmation?.toLowerCase()),
@@ -1554,9 +1580,9 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     }
   }
 
-  async #commitPreDispatchFailure(task: WechatTask, reason: string): Promise<void> {
+  async #commitPreDispatchFailure(task: WechatTask, reason: string, notice?: string): Promise<void> {
     const companion = this.#turnRuntime?.runner.companionBotIdFor?.(this.#epoch?.credentials.ilinkBotId ?? '');
-    const text = wechatPreDispatchFailureText(reason, Boolean(companion));
+    const text = notice ?? wechatPreDispatchFailureText(reason, Boolean(companion));
     const chunks = chunkWechatText(text);
     await this.#requireStore().commitPreDispatchFailure({
       bindingEpoch: task.bindingEpoch,
@@ -1953,7 +1979,7 @@ function parseTaskPayload(raw: string): WechatTaskPayload {
 
 function prepareWechatTaskTurn(payload: WechatTaskPayload) {
   const replyPrefix = payload.replyContext
-    ? buildImReplyContextBlock({ author: '引用消息', text: payload.replyContext })
+    ? buildImReplyContextBlock({ author: '引用消息', text: payload.replyContext }, payload.text)
     : '';
   return {
     text: payload.text,
@@ -2315,14 +2341,14 @@ export const __testing = {
 function delay(ms: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return Promise.resolve();
   return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener(
-      'abort',
-      () => {
-        clearTimeout(timer);
-        resolve();
-      },
-      { once: true },
-    );
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    function onAbort() {
+      clearTimeout(timer);
+      resolve();
+    }
+    signal?.addEventListener('abort', onAbort, { once: true });
   });
 }

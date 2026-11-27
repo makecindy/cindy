@@ -14,19 +14,6 @@ vi.mock('@/lib/toast', () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
 
-vi.mock('@/hooks/useAutoUpdateSettings', () => ({
-  useAutoUpdateSettings: () => ({
-    state: {
-      autoRelaunchOnIdle: true,
-      isCustomized: false,
-      defaultAutoRelaunchOnIdle: true,
-      loading: false,
-    },
-    setAutoRelaunchOnIdle: vi.fn(),
-    reset: vi.fn(),
-  }),
-}));
-
 vi.mock('@/hooks/useExperimentalFeatures', () => ({
   EXPERIMENTAL_FEATURES: [],
   useExperimentalFlag: () => ({ enabled: false, setEnabled: vi.fn() }),
@@ -58,21 +45,39 @@ describe('Linux update settings', () => {
     };
   });
 
-  it('explains in-app .deb updates instead of showing the idle-install switch', () => {
+  // The row follows main's `unattendedInstallSupported` through the real
+  // settings hook: a system .deb needs a password and gets the explanation,
+  // Cindy's user-directory install gets the same switch as macOS.
+  // In-memory electronAPI fake; tier: unit.
+  function withAutoUpdateSettings(platform: string, unattendedInstallSupported?: boolean) {
+    (window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      platform,
+      getAutoUpdateSettings: vi.fn(async () => ({
+        autoRelaunchOnIdle: false,
+        isCustomized: false,
+        defaultAutoRelaunchOnIdle: false,
+        ...(unattendedInstallSupported === undefined ? {} : { unattendedInstallSupported }),
+      })),
+    };
+  }
+
+  it('explains system .deb updates instead of showing the idle-install switch', async () => {
+    withAutoUpdateSettings('linux', false);
     render(<AutoUpdateToggleRow />);
 
+    expect(await screen.findByText('settings.about.linuxUpdateDescription')).toBeTruthy();
     expect(screen.getByText('settings.about.autoUpdateLabel')).toBeTruthy();
-    expect(screen.getByText('settings.about.linuxUpdateDescription')).toBeTruthy();
     expect(screen.queryByRole('switch')).toBeNull();
   });
 
-  it('keeps the idle-install switch on macOS', () => {
-    (window as unknown as { electronAPI: { platform: string } }).electronAPI = {
-      platform: 'darwin',
-    };
+  it.each([
+    { platform: 'linux', unattended: true },
+    { platform: 'darwin', unattended: undefined },
+  ])('shows the idle-install switch on $platform when main allows it', async ({ platform, unattended }) => {
+    withAutoUpdateSettings(platform, unattended);
     render(<AutoUpdateToggleRow />);
 
-    expect(screen.getByRole('switch', { name: 'settings.about.autoUpdateLabel' })).toBeTruthy();
+    expect(await screen.findByRole('switch', { name: 'settings.about.autoUpdateLabel' })).toBeTruthy();
     expect(screen.queryByText('settings.about.linuxUpdateDescription')).toBeNull();
   });
 

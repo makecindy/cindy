@@ -192,22 +192,28 @@ export function SessionShareImportWizard({
       try {
         // 导入语义 = 用本地草稿默认值新建会话(只有 agent 跟随分享包):把 New Maker
         // 草稿里该 vendor 的偏好随 commit 传给 main,替代分享包 snapshot 的会话配置
-        // (导出方的模型/供应商在导入端不一定存在)。
+        // (导出方的模型/供应商在导入端不一定存在)。插件引擎(acp)保留包内 providerId/
+        // model/effort,不套用内置引擎草稿。
+        const isAcp = preview?.agentKind === 'acp';
         const vendor = preview?.agentKind === 'codex' || preview?.agentKind === 'pi'
           ? preview.agentKind
           : 'cc';
-        const prefs = getDraft().lastByVendor[vendor];
+        const prefs = isAcp ? null : getDraft().lastByVendor[vendor];
         const res = await window.electronAPI.localDb.sessionShare.commit({
           draftId,
           ...(preview?.workspaceKind === 'project' ? { workingDir } : {}),
-          draftPrefs: {
-            model: prefs.model,
-            effort: prefs.effort,
-            permissionMode: prefs.permissionMode,
-            planMode: prefs.planMode,
-            fastMode: getFastModeForModel(prefs.model),
-            providerId: prefs.providerId ?? null,
-          },
+          ...(prefs
+            ? {
+                draftPrefs: {
+                  model: prefs.model,
+                  effort: prefs.effort,
+                  permissionMode: prefs.permissionMode,
+                  planMode: prefs.planMode,
+                  fastMode: getFastModeForModel(prefs.model),
+                  providerId: prefs.providerId ?? null,
+                },
+              }
+            : {}),
           ...(preview?.workspaceKind === 'project' && useWorktree ? { useWorktree: true } : {}),
           ...(overwrite ? { overwrite: true } : {}),
         });
@@ -276,6 +282,7 @@ export function SessionShareImportWizard({
               </AlertDialog.Description>
               <div className="relative">
                 <input
+                  data-settings-search-action="Enters the password that unlocks an imported task package"
                   type={showPass ? 'text' : 'password'}
                   value={password}
                   onChange={(e) => {
@@ -288,7 +295,7 @@ export function SessionShareImportWizard({
                   placeholder={t('sessionShare.import.passwordPlaceholder')}
                   autoFocus
                   disabled={unlocking}
-                  className="h-8 w-full rounded-md border bg-transparent px-2 pr-8 text-sm outline-none"
+                  className="h-8 w-full rounded-full border bg-transparent px-2 pr-8 text-sm outline-none"
                   style={{
                     borderColor: passwordError ? 'var(--error-border)' : 'var(--border-default)',
                     color: 'var(--confirm-title)',
@@ -324,7 +331,9 @@ export function SessionShareImportWizard({
                       ? 'Claude Code'
                       : preview.agentKind === 'pi'
                         ? 'Pi'
-                        : 'Codex',
+                        : preview.agentKind === 'acp'
+                          ? t('newChat.pluginEngines.genericName')
+                          : 'Codex',
                     count: preview.messageCount,
                     exportedAt: new Date(preview.exportedAt).toLocaleString(appI18n.language),
                   })}
@@ -341,7 +350,7 @@ export function SessionShareImportWizard({
 
               {/* 风险提示:分享包来自他人,历史内容可能影响 AI 后续行为,续聊时
                   agent 具备本机文件读写与命令执行能力——确认导入前必须让用户知情。 */}
-              <div className="flex items-start gap-2 rounded-md bg-[var(--warning-bg-soft)] px-3 py-2">
+              <div className="flex items-start gap-2 rounded-lg bg-[var(--warning-bg-soft)] px-3 py-2">
                 <ShieldAlert
                   size={14}
                   className="mt-0.5 shrink-0 text-[var(--confirm-desc)]"
@@ -363,7 +372,7 @@ export function SessionShareImportWizard({
                   <div className="flex items-center gap-2">
                     <div
                       title={workingDir || undefined}
-                      className="h-8 min-w-0 flex-1 truncate rounded-md border px-2 text-sm leading-8"
+                      className="h-8 min-w-0 flex-1 truncate rounded-full border px-2 text-sm leading-8"
                       style={{
                         borderColor: 'var(--border-default)',
                         color: workingDir ? 'var(--confirm-title)' : 'var(--text-tertiary)',

@@ -24,11 +24,11 @@ import {
 } from '../../shared/modelGroups.js';
 import { GHOST_REMOTE_AGENT_MODELS } from '../cindy-brain/ghostAgentModels.js';
 import { isGhostCardModelRouteAvailable, isPluginModelPickerRouteAvailable } from '../cindy-brain/ghostModelPicker.js';
+import { applyRouteWeightStep, type RouteWeightStep } from '../provider-group/scheduler.js';
 import {
-  applyModelGroupWeightStep,
   pickModelGroupCandidate,
   type ModelGroupCandidateFacts,
-  type ModelGroupWeightStep,
+  type ModelGroupInnerQuota,
 } from './pick.js';
 import { modelGroupRouteFor } from './routeFor.js';
 
@@ -52,7 +52,12 @@ export interface ModelGroupResolverDeps {
    * 各订阅来源当前的额度窗口，键是 modelGroupQuotaKey：本机的按供应商连接 ID，别的电脑上的再加那台的设备 id。
    * 本机连接的额度不会拿去给别的电脑上同 ID 的连接用。
    */
-  quotaWindows(): Promise<ReadonlyMap<string, readonly (ModelGroupTraceQuota & { scopedTo?: string | null })[]>>;
+  quotaWindows(options?: { cached?: boolean }): Promise<ReadonlyMap<string, readonly (ModelGroupTraceQuota & { scopedTo?: string | null })[]>>;
+  /**
+   * 本机来源背后是电脑组或几个账号时，内层按它自己的选法下一个会接任务的那一个的额度事实(pick.ts 的
+   * ModelGroupInnerQuota)；不是这种来源、读不到时为 null。别的电脑与分享来的来源不问(只用对方开放的额度)。
+   */
+  innerQuota?(source: { providerId: string; model: string; agentKind: ModelGroupCandidate['agentKind'] }): Promise<ModelGroupInnerQuota | null>;
   /**
    * 其他电脑与分享来的位置里此刻能选的那些(插件卡片的远程模型用的同一份名单)。只在路线里有不在本机的来源时读；
    * 没提供时这些来源一律不可用。
@@ -69,6 +74,16 @@ export interface ModelGroupResolverDeps {
   scope(): string;
   recordDecision?(selection: ModelGroupResolveRequest['selection'], result: ModelGroupResolveResult): void;
   now(): number;
+  /**
+   * SSH 远程主机候选过滤：当请求带 sshHostId 时调用，返回该候选是否可在目标 SSH 主机上运行
+   * (剔除订阅直连、本机桥接 Codex、非 SSH 原生 Codex 等不兼容源)。
+   */
+  sshFilter?(sshHostId: string, candidate: ModelGroupCandidate, view: ProviderView | undefined): Promise<boolean> | boolean;
+  /**
+   * 目标 SSH 主机原生 Codex 供应商目录(与 listSshCodexProviders 同源)：用于在 SSH 任务里判断
+   * Codex 候选可用性与能力，不依赖本机 openai 登录或本机 codex 安装。
+   */
+  sshCodexViews?(sshHostId: string): Promise<ProviderView[] | null>;
   /**
    * 「最省钱」用的报价目录，与模型选择器显示价格同一来源：Cindy AI(xd)取网关报价，其余取参考价
    * (注册表、连接自带价、用户自定价)。只在路线选法是 cheapest 时读取；没提供时一律按没有标价。
@@ -155,12 +170,12 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
   };
   const pending = new Map<string, {
     scope: string; at: number; selection: ModelGroupResolveRequest['selection']; result: ModelGroupResolveResult; routeId?: string;
-    weightStep?: { step: ModelGroupWeightStep; signature: string };
+    weightStep?: { step: RouteWeightStep; signature: string };
   }>();
 
   function prepare(
     request: ModelGroupResolveRequest, scope: string, result: ModelGroupResolveResult, routeId?: string,
-    weightStep?: { step: ModelGroupWeightStep; signature: string },
+    weightStep?: { step: RouteWeightStep; signature: string },
   ): ModelGroupResolveResult {
     if (request.dryRun || scope !== deps.scope()) return result;
     // 未采用的结果不写盘；限制暂存数量和生命周期，避免取消操作不断积累。
@@ -188,7 +203,7 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
       const routeNow = item.weightStep && deps.config().routes.find((route) => route.id === item.routeId);
       if (item.weightStep && routeNow && weightSignature(routeNow) === item.weightStep.signature) {
         const { signature, step } = item.weightStep;
-        weightCounters.set(key, { signature, counters: applyModelGroupWeightStep(countersFor(key, signature), step) });
+        weightCounters.set(key, { signature, counters: applyRouteWeightStep(countersFor(key, signature), step) });
       }
     }
     return true;
@@ -226,25 +241,52 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     };
   }
 
-  async function inspect(route: ModelGroupRoute, views: ProviderView[]): Promise<ModelGroupCandidateFacts[]> {
+  async function inspect(
+    route: ModelGroupRoute,
+    views: ProviderView[],
+    context?: ModelGroupResolveRequest['context'],
+    cachedQuota = false,
+    sshHostId?: string,
+  ): Promise<ModelGroupCandidateFacts[]> {
     const agents = deps.agents();
-    // 远程读取与读额度同时进行，整体仍在额度等待的时限内。
+    // 供应商路由展开出来的路由在选择器里是普通模型行：思考深度与 Fast 用用户在那里选的；路由自己设了思考深度时以它为准。
+    const wantedEffort = route.effort ?? (route.parent ? context?.effort : undefined);
+    const wantedFast = route.parent ? context?.fastMode : undefined;
+    // 远程读取、SSH Codex 目录读取与读额度同时进行，整体仍在额度等待的时限内。
     const remote = remoteReads(route);
-    const quota = await deps.quotaWindows().catch(() => new Map<string, never[]>());
+    const hasSshCodex = Boolean(
+      sshHostId && deps.sshCodexViews && route.candidates.some(
+        (candidate) => !candidate.off && !candidate.agentDeviceId && candidate.agentKind === 'codex' && candidate.providerId === 'openai',
+      ),
+    );
+    const sshCodexPromise = hasSshCodex
+      ? within(Promise.resolve().then(() => deps.sshCodexViews!(sshHostId!)), deps.remoteWaitMs ?? MODEL_GROUP_REMOTE_WAIT_MS).catch(() => null)
+      : Promise.resolve(null);
+    // cachedQuota(只为显示)：用手头的读数，不等一份新的。
+    const quota = await deps.quotaWindows(cachedQuota ? { cached: true } : undefined).catch(() => new Map<string, never[]>());
     const pricing = route.strategy === 'cheapest' && deps.pricing ? await deps.pricing().catch(() => null) : null;
+    const sshCodex = await sshCodexPromise;
     const installed = new Map<string, boolean>();
     for (const candidate of route.candidates) {
       const agent = agentOf(candidate.agentKind);
-      if (!candidate.agentDeviceId && !installed.has(agent)) installed.set(agent, await deps.harnessInstalled(agent));
+      const useSshCodex = Boolean(
+        sshHostId && !candidate.agentDeviceId && candidate.agentKind === 'codex' && candidate.providerId === 'openai' && deps.sshCodexViews,
+      );
+      if (!candidate.agentDeviceId && !useSshCodex && !installed.has(agent)) installed.set(agent, await deps.harnessInstalled(agent));
     }
     const locations = remote ? await remote.locations : null;
     return Promise.all(route.candidates.map(async (candidate) => {
       const agent = agentOf(candidate.agentKind);
       const { agentDeviceId } = candidate;
       const remoteViews = agentDeviceId ? (await remote?.views.get(agentDeviceId)) ?? null : null;
+      const useSshCodex = Boolean(
+        sshHostId && !agentDeviceId && candidate.agentKind === 'codex' && candidate.providerId === 'openai' && deps.sshCodexViews,
+      );
       const catalog: Catalog = agentDeviceId
         ? { views: remoteViews ?? [], agents: GHOST_REMOTE_AGENT_MODELS }
-        : { views, agents };
+        : useSshCodex
+          ? { views: sshCodex ?? [], agents: ['codex'] }
+          : { views, agents };
       const view = catalog.views.find((item) => item.id === candidate.providerId);
       const model = view?.models[agent]?.find((item) => item.id === candidate.model);
       const modelName = model?.name ?? candidate.model;
@@ -253,7 +295,13 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
         ?.filter((window) => !window.scopedTo || scopedWindowApplies(window.scopedTo, candidate.model, modelName))
         .map(({ usedPercent, resetAtMs, windowMs }) => ({ usedPercent, resetAtMs, windowMs }));
       const exact = { agentKind: candidate.agentKind, providerId: candidate.providerId, model: candidate.model, effort: '', fastMode: false as const };
-      const available = agentDeviceId
+      const inner = !agentDeviceId && !sshHostId && deps.innerQuota
+        ? await deps.innerQuota({ providerId: candidate.providerId, model: candidate.model, agentKind: candidate.agentKind }).catch(() => null)
+        : null;
+      const sshAllowed = !sshHostId
+        ? true
+        : !agentDeviceId && (!deps.sshFilter || await Promise.resolve(deps.sshFilter(sshHostId, candidate, view)).catch(() => false));
+      const available = sshAllowed && (agentDeviceId
         // 与插件卡片里的远程模型同一判断：位置此刻能选，模型也在那里允许远程调用的目录里。
         ? !!locations && !!remoteViews && await isGhostCardModelRouteAvailable({ ...exact, agentDeviceId }, {
             localViews: async () => views,
@@ -261,20 +309,29 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
             locations: async () => locations,
             remoteViews: async () => remoteViews,
           }) && (await remote?.harness.get(remoteHarnessKey(agentDeviceId, agent))) !== false
-        : installed.get(agent) === true && isPluginModelPickerRouteAvailable(exact, views, agents);
+        : useSshCodex
+          // SSH 原生 Codex 以远端 SSH 主机目录与远端就绪态为准，不要求本机登录 openai 或安装本机 codex。
+          ? !!sshCodex && isPluginModelPickerRouteAvailable(exact, sshCodex, ['codex'])
+          : installed.get(agent) === true && isPluginModelPickerRouteAvailable(exact, views, agents));
       return {
         available,
-        ...(available && route.effort && isPluginModelPickerRouteAvailable(
-          { ...exact, effort: route.effort }, catalog.views, catalog.agents,
-        ) ? { effort: route.effort } : {}),
+        ...(available && wantedEffort && isPluginModelPickerRouteAvailable(
+          { ...exact, effort: wantedEffort }, catalog.views, catalog.agents,
+        ) ? { effort: wantedEffort } : {}),
+        ...(available && wantedFast && isPluginModelPickerRouteAvailable(
+          { ...exact, fastMode: wantedFast }, catalog.views, catalog.agents,
+        ) ? { fastMode: wantedFast } : {}),
         modelName,
         sourceName: view?.name ?? candidate.providerId,
         windows: windows && windows.length > 0 ? windows : null,
+        ...(inner ? { inner } : {}),
         ...(route.strategy === 'cheapest'
           ? { price: agentDeviceId ? remoteListedPrice(view, model) : listedPrice(view, agent, model, pricing) }
           : {}),
         // 与设置里「能看图」开关同一判断：用户改过就按用户的，否则按目录声明，再按模型名推断。
         acceptsImage: !!model && modelImageInputDefault({ ...model, imageInputDefault: undefined }, model.id) === true,
+        contextWindow: typeof model?.contextWindow === 'number' && Number.isFinite(model.contextWindow) ? model.contextWindow : null,
+        providerType: view?.subscriptionPool ?? view?.id ?? null,
       };
     }));
   }
@@ -282,11 +339,13 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
   async function resolve(request: ModelGroupResolveRequest): Promise<ModelGroupResolveResult> {
     const scope = deps.scope();
     const now = deps.now();
+    // 先读目录再读配置：自动路由是按目录生成的，配置要与这次用的目录是同一时刻的。
+    const allViews = await deps.views();
     const target = modelGroupRouteFor(deps.config(), request.selection, now);
     if (target.outcome === 'missing') return prepare(request, scope, { outcome: 'missing', groupName: target.groupName, trace: [] });
     const { groupName, via } = target;
-    // 限定运行位置时(进行中的任务)，别的位置上的来源按停用处理：不选它们，也不为它们去读别处的目录。
-    const location = request.location;
+    // 限定运行位置或 SSH 模式(不能跨 agentDeviceId)时，别的位置上的来源按停用处理：不选它们，也不为它们去读别处的目录。
+    const location = request.sshHostId ? { agentDeviceId: null } : request.location;
     const route = location
       ? {
           ...target.route,
@@ -296,11 +355,10 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
         }
       : target.route;
     const needsImage = request.context?.hasImages === true && !!route.exceptions?.some((item) => item.when.type === 'image');
-    const allViews = await deps.views();
     // 为另一台电脑跑 Agent 时只认允许被远程调用的连接：别的连接在这次选路里按没有连接处理。
     const remoteInvocable = (view: ProviderView) => (deps.remoteInvocable ? deps.remoteInvocable(view.id) : view.remoteInvocationEnabled === true);
     const views = request.remoteInvocableOnly ? allViews.filter(remoteInvocable) : allViews;
-    const facts = await inspect(route, views);
+    const facts = await inspect(route, views, request.context, request.cachedQuota === true, request.sshHostId);
     const picked = pickModelGroupCandidate(route, facts, {
       now, lastPickedKey: lastPicked.get(`${scope}\u0000${route.id}`) ?? null, needsImage,
       weightCounters: countersFor(`${scope}\u0000${route.id}`, weightSignature(target.route)),
@@ -315,13 +373,14 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     const entry = picked.trace[picked.index];
     const chosen = { agentKind: candidate.agentKind, providerId: candidate.providerId, model: candidate.model };
     // 推理强度按选中来源所在位置的目录看支不支持。
-    const effort = facts[picked.index].effort;
+    const { effort, fastMode } = facts[picked.index];
     return prepare(request, scope, {
       outcome: 'routed', groupName,
       route: {
         ...chosen,
         ...(candidate.agentDeviceId ? { agentDeviceId: candidate.agentDeviceId } : {}),
         ...(effort ? { effort } : {}),
+        ...(fastMode ? { fastMode } : {}),
       },
       modelName: entry.modelName, sourceName: entry.sourceName,
       why: entry.why, quota: entry.quota, trace: picked.trace,
@@ -330,9 +389,19 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
   }
 
   /** 一条路线每个候选此刻的事实(与新任务解析同一判断)；不推进「轮流」的位置与「按权重」的计数。 */
-  async function candidateFacts(route: ModelGroupRoute): Promise<ModelGroupCandidateFacts[]> {
-    return inspect(route, await deps.views());
+  async function candidateFacts(
+    route: ModelGroupRoute,
+    context?: ModelGroupResolveRequest['context'],
+    options?: { sshHostId?: string; cachedQuota?: boolean },
+  ): Promise<ModelGroupCandidateFacts[]> {
+    return inspect(route, await deps.views(), context, options?.cachedQuota === true, options?.sshHostId);
   }
 
-  return { resolve, commit, candidateFacts };
+  function dispose(): void {
+    pending.clear();
+    lastPicked.clear();
+    weightCounters.clear();
+  }
+
+  return { resolve, commit, candidateFacts, dispose };
 }

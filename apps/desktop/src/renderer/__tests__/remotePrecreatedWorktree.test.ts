@@ -10,6 +10,7 @@ import {
   listPendingRemotePrecreatedWorktrees,
   parseRemoteDiscardPrecreatedAck,
   parseRemoteWorktreeCreateResult,
+  precreateRemoteDraftWorktree,
   recoverPendingRemotePrecreatedWorktrees,
   registerPendingRemotePrecreatedWorktree,
 } from '../features/cc-agent/remotePrecreatedWorktree';
@@ -172,6 +173,38 @@ describe('createRemoteSessionWithPrecreatedWorktree', () => {
         ledgerRecords = ledgerRecords.filter((item) => !targetMatches(item, target));
         return { persisted: true };
       },
+    });
+  });
+
+  // Shared by the built-in and plugin-engine remote new-task flows (2026-11-25). Unit, in-memory ledger.
+  // Minimal failing inputs: an empty source branch sent as '' (or a guessed 'main') instead of the current
+  // checkout; a reservation written after worktree:create; an explicit refusal leaving a stale obligation.
+  describe('precreateRemoteDraftWorktree', () => {
+    const precreate = (invoke: ReturnType<typeof vi.fn>, sourceBranch = '') => precreateRemoteDraftWorktree({
+      deviceId: DEVICE_ID, sessionId: SESSION_ID, dataOwnerId: 'owner-1', baseRepo: '/repo', name: '',
+      sourceBranch, resolveName: async () => 'quiet-otter', makeRecoveryKey: () => RECOVERY_KEY,
+      invoke, isCurrent: () => true, progress: { start: vi.fn(), named: vi.fn(), end: vi.fn() },
+    });
+
+    it('records the obligation first and checks out the current checkout when no source was chosen', async () => {
+      const invoke = vi.fn(async (_channel: string, [request]: unknown[]) => {
+        expect(ledgerRecords).toEqual([expect.objectContaining({ sessionId: SESSION_ID, phase: 'reserved' })]);
+        return { ok: true, meta: { ...(request as object), path: WORKTREE_PATH, branch: 'cindy/quiet-otter',
+          createdAt: '2026-11-25T00:00:00.000Z' } };
+      });
+      await expect(precreate(invoke)).resolves.toMatchObject({ ok: true, path: WORKTREE_PATH, recoveryKey: RECOVERY_KEY });
+      expect(invoke).toHaveBeenCalledExactlyOnceWith('worktree:create', [{
+        sessionId: SESSION_ID, baseRepo: '/repo', name: 'quiet-otter', sourceBranch: 'HEAD', recoveryKey: RECOVERY_KEY,
+      }]);
+      expect(ledgerRecords).toEqual([expect.objectContaining({ path: WORKTREE_PATH, phase: 'precreated' })]);
+    });
+
+    it('drops the obligation and reports the error when the computer refuses the checkout', async () => {
+      const invoke = vi.fn(async () => ({ ok: false, error: { kind: 'not-a-git-repo', message: 'not a repo' } }));
+      await expect(precreate(invoke, 'feature/x')).resolves.toEqual({
+        ok: false, error: { kind: 'not-a-git-repo', message: 'not a repo' },
+      });
+      expect(ledgerRecords).toEqual([]);
     });
   });
 

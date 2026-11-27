@@ -99,9 +99,6 @@ function VideoLightboxContent({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const { menuPos, setMenuPos, portalContainer, restoreVideoFocus } = useVideoContextMenu(videoRef, src);
   const lastMenuCloseAt = useRef(0);
-  // Effect 重放时要补回被摘掉的源,而重放的 effect 不该跟着 src 重新订阅。
-  const srcRef = useRef(src);
-  srcRef.current = src;
 
   const handleClose = useCallback(() => {
     if (isClosingRef.current) return;
@@ -113,25 +110,18 @@ function VideoLightboxContent({
     setTimeout(() => onClose(time), 200);
   }, [onClose]);
 
-  // 全局媒体互斥:lightbox autoPlay 起播时 bus 会自动 pause 其它正在
-  // 播放的 audio/video;反过来,其它媒体起播时也会 pause 这里的视频。
-  // 合集预览关闭或切换时会直接卸载本组件而不经过 handleClose,卸载时
-  // 同样要释放源,否则脱离 DOM 的媒体会在后台继续发声。
   useEffect(() => {
     const el = videoRef.current;
-    if (!el) return;
-    // Effect replay (StrictMode in dev, Vite Fast Refresh in the app) runs the
-    // cleanup above on this same DOM node: the release detaches the source, and
-    // React does not write the unchanged JSX `src` back, so the still-open
-    // preview would sit there empty. Restore it during setup, as WallpaperVideo
-    // does for its playback loop.
-    if (el.getAttribute('src') === null) el.setAttribute('src', srcRef.current);
+    if (!el || isClosingRef.current) return;
+    // Chromium can autoplay a detached element. Attach the source only after
+    // React commits the preview, so a discarded render cannot start playback.
     const unregister = registerMedia(el);
+    el.setAttribute('src', src);
     return () => {
       unregister();
       releaseMediaElement(el);
     };
-  }, []);
+  }, [kind, src]);
 
   useEffect(() => {
     const raf = requestAnimationFrame(() => {
@@ -268,7 +258,6 @@ function VideoLightboxContent({
         {/* biome-ignore lint/a11y/useMediaCaption: user-provided local videos do not include caption tracks. */}
       <Media
           ref={videoRef}
-        src={src}
         controls
         autoPlay
         loop={kind !== 'audio'}
