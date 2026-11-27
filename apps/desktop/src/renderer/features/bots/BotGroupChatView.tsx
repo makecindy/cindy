@@ -972,7 +972,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     // The header shows the group size or live activity. The settings drawer lists members.
     const summary = direct ? names : t('bots.groupChat.memberCount', { count: members.length });
     return (
-      <div ref={threadHeaderRef} data-testid="bot-group-content-header" className="flex h-full w-full min-w-0 items-center gap-2 pr-2">
+      <div ref={threadHeaderRef} data-testid="bot-group-content-header" className="[container-type:inline-size] flex h-full w-full min-w-0 items-center gap-2 pr-2">
         <button
           type="button"
           onClick={direct ? undefined : openSettings}
@@ -981,7 +981,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
           className="flex min-w-0 items-center gap-2 rounded-xl px-2 py-1 text-left hover:bg-[var(--surface-hover)]"
           style={WINDOW_NO_DRAG_STYLE}
         >
-          <BotGroupAvatarStack members={shown} />
+          <BotGroupAvatarStack members={shown} className="[@container(max-width:239px)]:hidden" />
           <span className="flex min-w-0 flex-col">
             <span className="flex min-w-0 items-center gap-1.5">
               <span className="min-w-0 truncate text-13 font-medium leading-5 text-[var(--text-primary)]">{headerGroup.name}</span>

@@ -272,7 +272,7 @@ import {
 } from './deferredUiAssignment';
 import { CrossAgentConvertDialog } from '@/components/ui/cross-agent-convert-dialog';
 import type { MakerVendor } from '@/lib/ccAgent.types';
-import { ChevronDown, MessageSquare, MonitorSmartphone, Waypoints } from 'lucide-react';
+import { ChevronDown, MessageSquare, MonitorSmartphone, Sparkles } from 'lucide-react';
 import { VendorIcon } from '@/components/sidebar/VendorIcon';
 import { HomeSuggestionList } from './HomeSuggestionList';
 import { type HomeSuggestionId, homeSuggestionPromptKey } from './homeSuggestions';
@@ -318,8 +318,10 @@ import { classifyUnclassifiedDroppedItems, getDroppedFileItems } from '@/lib/fil
 import { createLogger } from '@/lib/logger';
 import { getRemoteWorkingDirErrorMessage } from './remoteWorkingDirErrors';
 import {
+  classifyRemoteWorktreeDiscardFailure,
   createRemoteSessionWithPrecreatedWorktree,
   forgetPendingRemotePrecreatedWorktree,
+  getRemoteWorktreeCleanupPendingMessage,
   isRemotePrecreatedWorktreeCleanupPendingError,
   isRemotePrecreatedWorktreeOwnerChangedError,
   parseRemoteWorktreeCreateResult,
@@ -5356,6 +5358,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               const ownerAtSend = engineDataOwnerAtSend.dataOwnerId;
               const precreated = await precreateRemoteDraftWorktree({
                 deviceId: remoteDeviceId,
+                deviceName: remoteDeviceName,
                 sessionId: presetSessionId,
                 dataOwnerId: ownerAtSend,
                 baseRepo,
@@ -5380,6 +5383,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               ? {
                   sessionId: await createRemoteSessionWithPrecreatedWorktree({
                     deviceId: remoteDeviceId,
+                    deviceName: remoteDeviceName,
                     sessionId: presetSessionId,
                     path: precreatedWorktree.path,
                     recoveryKey: precreatedWorktree.recoveryKey,
@@ -5609,11 +5613,18 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           if (isRemotePrecreatedWorktreeOwnerChangedError(err)) return;
           failedPreview?.();
           log.error('[draft send] plugin engine', err);
-          toast.error(
-            isRemotePrecreatedWorktreeCleanupPendingError(err)
-              ? t('ccAgent.draft.remoteWorktreeCleanupPending')
-              : (getRemoteWorkingDirErrorMessage(err, t) ?? t('ccAgent.draft.createSessionFailed')),
-          );
+          if (isRemotePrecreatedWorktreeCleanupPendingError(err)) {
+            toast.error(getRemoteWorktreeCleanupPendingMessage(err, t), {
+              action: {
+                label: t('ccAgent.draft.remoteWorktreeCleanupOpenSettings'),
+                onClick: () => navigate('/settings?tab=storage'),
+              },
+            });
+          } else {
+            toast.error(
+              getRemoteWorkingDirErrorMessage(err, t) ?? t('ccAgent.draft.createSessionFailed'),
+            );
+          }
         } finally {
           if (baseRepo) setWtCreatingInfo(null);
           markSendInFlight(false);
@@ -6149,6 +6160,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             ) {
               const precreated = await precreateRemoteDraftWorktree({
                 deviceId,
+                deviceName,
                 sessionId: presetSessionId,
                 dataOwnerId: ownerAtSend,
                 baseRepo: wt.baseRepo,
@@ -6187,7 +6199,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             const created = precreatedWorktree
               ? {
                   sessionId: await createRemoteSessionWithPrecreatedWorktree({
-                    deviceId, sessionId: presetSessionId, path: precreatedWorktree.path,
+                    deviceId, deviceName, sessionId: presetSessionId, path: precreatedWorktree.path,
                     recoveryKey: precreatedWorktree.recoveryKey,
                     ...(ownerAtSend ? { dataOwnerId: ownerAtSend } : {}),
                     createdAt: precreatedWorktree.createdAt, createArgs, invoke: invokeRemote, isCurrent: isCurrentDataOwner,
@@ -6996,13 +7008,20 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           if (isRemotePrecreatedWorktreeOwnerChangedError(err)) return;
           failedPreview?.();
           log.error('[draft send]', err);
-          toast.error(
-            isRemotePrecreatedWorktreeCleanupPendingError(err)
-              ? t('ccAgent.draft.remoteWorktreeCleanupPending')
-              : extractIpcError(err)?.code === 'REMOTE_CODEX_SOURCE_UNSUPPORTED'
+          if (isRemotePrecreatedWorktreeCleanupPendingError(err)) {
+            toast.error(getRemoteWorktreeCleanupPendingMessage(err, t), {
+              action: {
+                label: t('ccAgent.draft.remoteWorktreeCleanupOpenSettings'),
+                onClick: () => navigate('/settings?tab=storage'),
+              },
+            });
+          } else {
+            toast.error(
+              extractIpcError(err)?.code === 'REMOTE_CODEX_SOURCE_UNSUPPORTED'
                 ? t('settings.remote.startSession.unsupportedCodexSource')
-              : (getRemoteWorkingDirErrorMessage(err, t) ?? t('ccAgent.draft.createSessionFailed')),
-          );
+                : (getRemoteWorkingDirErrorMessage(err, t) ?? t('ccAgent.draft.createSessionFailed')),
+            );
+          }
         } finally {
           setWtCreatingInfo(null);
           markSendInFlight(false);
@@ -7317,7 +7336,10 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             && selectedWorktree.supportsRecoveryKeyDiscard === true
           ) {
             if (!ownerAtGoal) {
-              throw new RemotePrecreatedWorktreeCleanupPendingError();
+              throw new RemotePrecreatedWorktreeCleanupPendingError({
+                failureKind: 'storage',
+                deviceId,
+              });
             }
             const recovery = await recoverPendingRemotePrecreatedWorktrees({
               deviceId,
@@ -7326,7 +7348,11 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               isCurrent: isCurrentDataOwner,
             });
             if (!recovery.storageReadable || recovery.retained > 0) {
-              throw new RemotePrecreatedWorktreeCleanupPendingError();
+              throw new RemotePrecreatedWorktreeCleanupPendingError({
+                failureKind: recovery.storageReadable ? recovery.failureKind : 'storage',
+                preserveReason: recovery.preserveReason,
+                deviceId,
+              });
             }
             let name = selectedWorktree.name.trim();
             if (!name) name = `auto-${Date.now().toString(36).slice(-6)}`;
@@ -7335,6 +7361,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             const createdAt = Date.now();
             const reservation = {
               deviceId,
+              ...(deviceName ? { deviceName } : {}),
               sessionId: presetSessionId,
               dataOwnerId: ownerAtGoal,
               recoveryKey,
@@ -7347,7 +7374,10 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             );
             if (!reservationRecorded) {
               await forgetPendingRemotePrecreatedWorktree(reservation, isCurrentDataOwner);
-              throw new RemotePrecreatedWorktreeCleanupPendingError();
+              throw new RemotePrecreatedWorktreeCleanupPendingError({
+                failureKind: 'storage',
+                deviceId,
+              });
             }
             const startedAt = Date.now();
             setWtCreatingInfo({ branch: getWorktreeModelNamingEnabled() ? '' : getBranchName(name), startedAt });
@@ -7374,10 +7404,36 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                 if (isRemotePrecreatedWorktreeCleanupPendingError(error)) throw error;
                 // No response means the host may already have created it.
                 // Retain the reservation and force reconciliation before retry.
-                throw new RemotePrecreatedWorktreeCleanupPendingError({ cause: error });
+                const classified = classifyRemoteWorktreeDiscardFailure(error);
+                await registerPendingRemotePrecreatedWorktree(
+                  {
+                    ...reservation,
+                    lastFailureKind: classified.kind,
+                    ...(classified.preserveReason ? { lastFailureReason: classified.preserveReason } : {}),
+                    lastFailureAt: Date.now(),
+                  },
+                  isCurrentDataOwner,
+                );
+                throw new RemotePrecreatedWorktreeCleanupPendingError({
+                  cause: error,
+                  failureKind: classified.kind,
+                  preserveReason: classified.preserveReason,
+                  deviceId,
+                });
               }
               if (!resp) {
-                throw new RemotePrecreatedWorktreeCleanupPendingError();
+                await registerPendingRemotePrecreatedWorktree(
+                  {
+                    ...reservation,
+                    lastFailureKind: 'unknown',
+                    lastFailureAt: Date.now(),
+                  },
+                  isCurrentDataOwner,
+                );
+                throw new RemotePrecreatedWorktreeCleanupPendingError({
+                  failureKind: 'unknown',
+                  deviceId,
+                });
               }
               if (!resp.ok) {
                 await forgetPendingRemotePrecreatedWorktree(reservation, isCurrentDataOwner);
@@ -7428,6 +7484,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             presetSessionId && precreatedWorktree
               ? createRemoteSessionWithPrecreatedWorktree({
                   deviceId,
+                  deviceName,
                   sessionId: presetSessionId,
                   path: precreatedWorktree.path,
                   recoveryKey: precreatedWorktree.recoveryKey,
@@ -7792,7 +7849,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           throw new Error(t('ccAgent.draft.localWorktreeCleanupPending'));
         }
         if (isRemotePrecreatedWorktreeCleanupPendingError(error)) {
-          throw new Error(t('ccAgent.draft.remoteWorktreeCleanupPending'));
+          throw new Error(getRemoteWorktreeCleanupPendingMessage(error, t));
         }
         if (isRemotePrecreatedWorktreeOwnerChangedError(error)) {
           throw new Error(t('ccAgent.draft.createSessionFailed'));
@@ -8566,7 +8623,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                   <div className="mt-3 flex max-w-full items-center gap-2 self-center rounded-full border border-[var(--border-default)] bg-[var(--surface-chip)] px-3 py-1 text-12 text-[var(--text-secondary)]">
                     {/* 与侧栏同一标识:Agent 图标 + 右上信号波纹。 */}
                     {activeSourceRouteName ? (
-                      <Waypoints size={14} aria-hidden className="shrink-0 text-[var(--folder-item-icon)]" />
+                      <Sparkles size={14} aria-hidden className="shrink-0 text-[var(--folder-item-icon)]" />
                     ) : (
                       <VendorIcon
                         vendor={persistedAgentKind}

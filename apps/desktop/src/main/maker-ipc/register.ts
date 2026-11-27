@@ -4039,6 +4039,7 @@ const botCompactRuntimeRefreshCoordinator = createBotCompactRuntimeRefreshCoordi
 });
 
 function attemptBotCompactRuntimeRefresh(session: WiredSession, trigger: string): void {
+  agentInputCoordinatorHolder?.onBotRouteIdleBoundary(session.id);
   if (!botCompactRuntimeRefreshCoordinator.hasPending(session.id)) return;
   void botCompactRuntimeRefreshCoordinator.attempt(session).then((outcome) => {
     if (outcome === 'refreshed') {
@@ -24449,6 +24450,30 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
     log.info('maker-memory:reset');
     return maker.makerMemory.resetAll();
+  });
+
+  ipcMain.handle(MAKER_INVOKE.MEMORY_TIDY_STATUS, async (event) => {
+    assertTrustedAppRendererEvent(event);
+    const { getGlobalMemoryTidyCoordinator } = await import('./globalMemoryTidyRuntime.js');
+    return getGlobalMemoryTidyCoordinator().getStatus();
+  });
+
+  ipcMain.handle(MAKER_INVOKE.MEMORY_TIDY_SET_CADENCE, async (event, cadence: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const [{ isMemoryTidyCadence }, { getGlobalMemoryTidyCoordinator }] = await Promise.all([
+      import('./globalMemoryTidy.js'),
+      import('./globalMemoryTidyRuntime.js'),
+    ]);
+    if (cadence !== null && !isMemoryTidyCadence(cadence)) {
+      throwIpcError('INVALID_ARGUMENT', 'invalid memory tidy cadence');
+    }
+    return getGlobalMemoryTidyCoordinator().setCadence(cadence);
+  });
+
+  ipcMain.handle(MAKER_INVOKE.MEMORY_TIDY_RUN, async (event) => {
+    assertTrustedAppRendererEvent(event);
+    const { getGlobalMemoryTidyCoordinator } = await import('./globalMemoryTidyRuntime.js');
+    return getGlobalMemoryTidyCoordinator().run({ manual: true });
   });
 
   // 占位：MetaAgent 入口

@@ -6812,7 +6812,7 @@ interface ElectronAPI {
     listActive: () => Promise<
       Array<{
         sessionId: string;
-        agentKind: 'claude-code' | 'codex' | 'pi';
+        agentKind: 'claude-code' | 'codex' | 'pi' | 'acp';
         workDir: string;
         capabilities: unknown;
         isTurnRunning: boolean;
@@ -7135,6 +7135,33 @@ interface ElectronAPI {
       defaults: { maker: boolean; claudeCode: boolean; codex: boolean; pi: boolean };
       /** true = Codex 正忙, 存活会话的软重启在任务结束后自动补做 (设置已生效) */
       codexRestartDeferred: boolean;
+    }>;
+    memoryTidyStatus: () => Promise<{
+      cadence: 'weekly' | 'biweekly' | 'monthly' | 'off';
+      isCustomCadence: boolean;
+      running: boolean;
+      lastRunAt: number | null;
+      lastOutcome: 'idle' | 'updated' | 'skipped' | 'error' | null;
+      lastSummary: string;
+      lastTouchedBots: string[];
+      nextEligibleAt: number | null;
+    }>;
+    memoryTidySetCadence: (
+      cadence: 'weekly' | 'biweekly' | 'monthly' | 'off' | null,
+    ) => Promise<{
+      cadence: 'weekly' | 'biweekly' | 'monthly' | 'off';
+      isCustomCadence: boolean;
+      running: boolean;
+      lastRunAt: number | null;
+      lastOutcome: 'idle' | 'updated' | 'skipped' | 'error' | null;
+      lastSummary: string;
+      lastTouchedBots: string[];
+      nextEligibleAt: number | null;
+    }>;
+    memoryTidyRun: () => Promise<{
+      outcome: 'idle' | 'updated' | 'skipped' | 'error';
+      summary: string;
+      touchedBots: string[];
     }>;
 
     /** IM 新会话默认 agent/model/effort/provider。传 channel 时按渠道独立读写。 */

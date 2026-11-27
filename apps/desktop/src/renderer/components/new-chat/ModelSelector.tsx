@@ -46,8 +46,8 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Sparkles,
   Unplug,
-  Waypoints,
   WifiOff,
   Zap,
   Lock,
@@ -559,7 +559,7 @@ function DefaultProviderMark({
   }
   // 智能路由(合并了整个供应商、或自己排的那几条)没有品牌标时画路由图形，不画名字的第一个字(「智」)。
   if (isSourceRouteProviderId(providerId)) {
-    return <Waypoints size={markSize} strokeWidth={2.2} aria-hidden className={common} />;
+    return <Sparkles size={markSize} strokeWidth={2.2} aria-hidden className={common} />;
   }
   if (!name) return null;
   // 未知自定义供应商:首字母描边方盒(border 跟随 currentColor = colorClass 设定的文字色)。

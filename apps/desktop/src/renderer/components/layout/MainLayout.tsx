@@ -1867,7 +1867,8 @@ export function MainLayout() {
                 data-panel-drag-root="chat-main"
                 className={cn(
                   'relative flex flex-1 flex-col overflow-hidden bg-content-area',
-                  isSettingsRoute ? 'min-w-0' : 'min-w-[400px]',
+                  // 宽窗保持 400px 聊天最小宽以挤压侧栏，窄窗(<400px 或多面板)由 LayoutRoot 的 --layout-chat-min 按余量让步，避免挤没兄弟或裁切。
+                  isSettingsRoute ? 'min-w-0' : 'min-w-[var(--layout-chat-min,min(400px,100%))]',
                   // RSB Maximize(Phase 6):主区彻底 display:none,把整个非左栏空间让给 RSB。
                   isRightSidebarMaximized && 'hidden',
                 )}
