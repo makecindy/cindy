@@ -54,6 +54,7 @@ const h = vi.hoisted(() => ({
   speakerDisclosure: false,
   scrollToEnd: vi.fn(),
   markRead: vi.fn(),
+  localReadAt: vi.fn(async (): Promise<number | null> => null),
   push: vi.fn(), replace: vi.fn(), back: vi.fn(), scrollTo: vi.fn(),
   navigation: { index: 0, routes: [{ params: {} }] } as any,
   hardwareBack: null as null | (() => boolean),
@@ -200,7 +201,7 @@ vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({
 vi.mock('@/utils/backGuard', () => ({ goBackGuarded: h.leave }));
 vi.mock('@/utils/useTaskListBack', () => ({ useTaskListBack: () => h.leave }));
 vi.mock('@/platform/chrome/AnchoredPullDownMenu', () => ({ AnchoredPullDownMenu: ({ children }: any) => children }));
-vi.mock('@/device-link/remoteResourceCache', () => ({ markRemoteResourceRead: h.markRead }));
+vi.mock('@/device-link/remoteResourceCache', () => ({ markRemoteResourceRead: h.markRead, readRemoteResourceReadAt: h.localReadAt }));
 vi.mock('@/device-link/remoteResourceAvailability', () => ({ readRemoteCollectionCache: () => [] }));
 vi.mock('@/platform/chrome', async () => ({ showConfirm: h.confirm, ...(await import('@/platform/chrome/NativeSwitch')) }));
 vi.mock('@/platform/chrome/NativeSwitch', () => ({ NativeSwitch: ({ testID, value, disabled, onValueChange }: any) =>
@@ -503,6 +504,7 @@ beforeEach(() => {
     removePendingUpload: vi.fn(), release: vi.fn(), wait: vi.fn(async () => ({ failedCount: 0 })),
   };
   h.confirm.mockResolvedValue(true);
+  h.localReadAt.mockResolvedValue(null);
   node = document.createElement('div');
   root = createRoot(node);
 });
@@ -1773,6 +1775,25 @@ describe('group composer', () => {
     await click('botGroup.mention.abu');
     await click('botGroup.composer.send');
     expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: ['abu'] } }));
+  });
+
+  it('keeps @everyone available to a regular member in a direct server conversation', async () => {
+    h.chat.server = true;
+    h.translate = key => key === 'groupChat.mention.all' ? '所有人' : key;
+    const data = group({ openPlan: null, serverBacked: true, conversationKind: 'direct',
+      supportsMemberMentionAll: true, allowMemberMentionAll: false });
+    data.members = [
+      { ...data.members[0]!, actorKind: 'human', role: 'member', isSelf: true },
+      { ...data.members[1]!, actorKind: 'human', role: 'member', isSelf: false },
+    ];
+    await render(data, 'ready', undefined, '');
+    await type('@');
+    expect(byId('botGroup.mention.all')).not.toBeNull();
+    await type('@所有人 hello');
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({
+      mentions: { all: true, botIds: [] },
+    }));
   });
 
   it.each([false, true])('offers and resolves the current human only in groups (direct: %s)', async direct => {
@@ -3367,6 +3388,17 @@ describe('mobile group threads', () => {
     expect(h.push).toHaveBeenCalledOnce(); expect(byId('botGroup.cancelReply')).not.toBeNull();
   });
 
+  it('places the NEW label before a single rule at the first unread thread reply', async () => {
+    h.chat.server = true;
+    h.chat.threadMeta = { shares: {}, readSeq: '2' };
+    const replies = ['Earlier reply', 'Unread reply'].map((content, i) =>
+      message('reply-' + i, i + 2, { content, threadRootId: rootId, isSelf: false }));
+    await render(threadGroup({ messages: [rootMessage(), ...replies] }), 'ready', rootId, '');
+    const divider = byId('botGroup.newMessagesDivider');
+    expect(divider?.children).toHaveLength(2);
+    expect(divider?.children[0]?.textContent).toBe('groupChat.newMessagesBoundary');
+  });
+
   it.each(['ios', 'android'])('exposes follow/unfollow in the %s header independently of sending', async platform => {
     h.platform.OS = platform;
     h.chat.server = true; h.chat.followThread = vi.fn(async () => true);
@@ -3827,6 +3859,103 @@ it.each([undefined, 'topic-a'])('keeps group stopping when only topic work exist
     expect(h.chat.act).toHaveBeenLastCalledWith('stop');
     expect(byId('botGroup.work.stopMenu.action.all')).toBeNull();
   }
+});
+
+describe('main group timeline unread divider', () => {
+  it('shows the unread divider before the first unread main message on server groups and suppresses it for live arrivals after an already-read entry', async () => {
+    const messages = [
+      message('m1', 1, { serverSequence: '1', authorBotId: 'mimi', authorName: '咪咪', content: 'Already read', createdAt: 1_000 }),
+      message('m2', 2, { serverSequence: '2', authorBotId: 'mimi', authorName: '咪咪', content: 'First unread', createdAt: 2_000 }),
+    ];
+    h.chat.server = true;
+    h.chat.verified = true;
+    h.chat.threadMeta = { shares: {}, readSeq: '1' };
+    await render(group({ serverBacked: true, messages }), 'ready', undefined, '');
+    const divider = byId('botGroup.newMessagesDivider');
+    expect(divider).not.toBeNull();
+    expect(divider?.textContent).toBe('groupChat.newMessagesBoundary');
+    expect(divider?.children).toHaveLength(3);
+    expect(divider?.children[1]?.textContent).toBe('groupChat.newMessagesBoundary');
+
+    // Staying on the same screen after server read catches up keeps the divider fixed for this visit.
+    h.chat.threadMeta = { shares: {}, readSeq: '2' };
+    await render(group({ serverBacked: true, messages }), 'ready', undefined, '');
+    expect(byId('botGroup.newMessagesDivider')).not.toBeNull();
+
+    // Opening another already-read group does not show the divider even when a live message arrives.
+    h.chat.threadMeta = { shares: {}, readSeq: '2' };
+    await render(group({ id: 'g2', serverBacked: true, messages }), 'ready', undefined, '', 'g2');
+    expect(byId('botGroup.newMessagesDivider')).toBeNull();
+    await render(group({
+      id: 'g2',
+      serverBacked: true,
+      messages: [...messages, message('m3', 3, { serverSequence: '3', authorBotId: 'mimi', authorName: '咪咪', content: 'Live reply', createdAt: 3_000 })],
+    }), 'ready', undefined, '', 'g2');
+    expect(byId('botGroup.newMessagesDivider')).toBeNull();
+  });
+
+  it('does not mark messages already read on another device as NEW when reopening from cache', async () => {
+    const data = group({ serverBacked: true, messages: [
+      message('m1', 1, { serverSequence: '1', content: 'Earlier' }),
+      message('m2', 2, { serverSequence: '2', content: 'Read elsewhere' }),
+    ] });
+    h.chat.server = true;
+    h.chat.verified = false;
+    h.chat.threadMeta = { shares: {}, readSeq: '1' };
+    await render(data, 'ready', undefined, '');
+    h.chat.verified = true;
+    h.chat.threadMeta = { shares: {}, readSeq: '2' };
+    await render(data, 'ready', undefined, '');
+    expect(byId('botGroup.newMessagesDivider')).toBeNull();
+  });
+
+  it('reveals an unread message in older history even when the entry page contains only my messages', async () => {
+    h.chat.server = true;
+    h.chat.verified = true;
+    h.chat.threadMeta = { shares: {}, readSeq: '1' };
+    const mine = message('mine', 3, { authorKind: 'user', isSelf: true });
+    await render(group({ serverBacked: true, hasMoreBefore: true, messages: [mine] }), 'ready', undefined, '');
+    expect(byId('botGroup.newMessagesDivider')).toBeNull();
+    h.chat.threadMeta = { shares: {}, readSeq: '3' };
+    await render(group({ serverBacked: true, messages: [
+      message('read', 1, { content: 'Already read' }), message('unread', 2, { content: 'Earlier unread' }), mine,
+    ] }), 'ready', undefined, '');
+    expect(byId('botGroup.newMessagesDivider')).not.toBeNull();
+  });
+
+  it('waits for the saved host read position before acknowledging a cold-opened group', async () => {
+    let restore!: (at: number) => void;
+    h.localReadAt.mockImplementationOnce(() => new Promise(resolve => { restore = resolve; }));
+    const messages = [message('read', 1, { createdAt: 1000 }), message('unread', 2, { createdAt: 2000 })];
+    await render(group({ messages }));
+    await act(async () => {
+      h.scroll.onLayout({ nativeEvent: { layout: { height: 700 } } });
+      h.scroll.onContentSizeChange(400, 300);
+    });
+    expect(h.markRead).not.toHaveBeenCalled();
+    await act(async () => restore(1000));
+    expect(byId('botGroup.newMessagesDivider')).not.toBeNull();
+    await act(async () => h.scroll.onContentSizeChange(400, 300));
+    expect(h.markRead).toHaveBeenCalledWith('owner', 'mac', 'g1', 2000);
+  });
+
+  it('uses local cached readAt for host-backed groups and hides the divider when the first message is unread', async () => {
+    h.localReadAt.mockResolvedValue(1_000);
+    await render(group({
+      messages: [
+        message('m1', 1, { authorKind: 'user', content: 'Mine', createdAt: 1_000 }),
+        message('m2', 2, { authorBotId: 'mimi', authorName: '咪咪', content: 'Unread', createdAt: 2_000 }),
+      ],
+    }), 'ready', undefined, 'mac', 'g-local');
+    expect(byId('botGroup.newMessagesDivider')).not.toBeNull();
+
+    h.localReadAt.mockResolvedValue(0);
+    await render(group({
+      id: 'g-first-unread',
+      messages: [message('m1', 1, { authorBotId: 'mimi', authorName: '咪咪', content: 'Only unread', createdAt: 2_000 })],
+    }), 'ready', undefined, 'mac', 'g-first-unread');
+    expect(byId('botGroup.newMessagesDivider')).toBeNull();
+  });
 });
 
 // Unit: in-group thread index sheet must show quiet header entry + actionable dot,

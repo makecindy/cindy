@@ -159,6 +159,23 @@
     "status": {
       "running": "Running",
       "done": "Completed"
+    },
+    "collab": {
+      "wait": "Wait for Subagent",
+      "waitCount_one": "Wait for {{count}} Subagent",
+      "waitCount_other": "Wait for {{count}} Subagents",
+      "sendInput": "Send instructions to Subagent",
+      "sendInputCount_one": "Send instructions to {{count}} Subagent",
+      "sendInputCount_other": "Send instructions to {{count}} Subagents",
+      "resume": "Resume Subagent",
+      "resumeCount_one": "Resume {{count}} Subagent",
+      "resumeCount_other": "Resume {{count}} Subagents",
+      "close": "Close Subagent",
+      "closeCount_one": "Close {{count}} Subagent",
+      "closeCount_other": "Close {{count}} Subagents",
+      "spawn": "Start Subagent",
+      "spawnCount_one": "Start {{count}} Subagent",
+      "spawnCount_other": "Start {{count}} Subagents"
     }
   },
   "agentActions": {

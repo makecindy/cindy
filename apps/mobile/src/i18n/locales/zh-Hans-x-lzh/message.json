@@ -185,7 +185,8 @@
     "groupSent": "遣自群议",
     "sourceGroupId": "群议 ID：{{id}}",
     "selectText": "选文字",
-    "you": "君"
+    "you": "君",
+    "recentActivity": "近事"
   },
   "actions": {
     "attachmentsPrefix": "附卷：{{names}}",

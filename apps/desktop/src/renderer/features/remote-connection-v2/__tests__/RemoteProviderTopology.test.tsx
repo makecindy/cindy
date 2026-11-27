@@ -11,6 +11,7 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', async (importOriginal) => {
@@ -46,11 +47,18 @@ vi.mock('react-i18next', async (importOriginal) => {
 
 import type { ProviderShareReceived } from '@cindy/device-link';
 import type { Session } from '@/lib/ccAgent.types';
+import { resetSessionBackgroundActivityStoreForTests } from '@/lib/sessionBackgroundActivityStore';
+import { sessionsStore } from '@/lib/sessionsStore';
+import { __resetAgentIslandActivityForTests } from '@/state/agentIslandActivity';
+import type { AgentIslandSessionActivity } from '../../../../shared/agentIsland';
 import { buildProviderTopology } from '../providerTopologyModel';
-import { RemoteProviderTopology } from '../RemoteProviderTopology';
+import { RemoteProviderTopology, RemoteProviderTopologyPanel } from '../RemoteProviderTopology';
 
 afterEach(() => {
   cleanup();
+  resetSessionBackgroundActivityStoreForTests();
+  __resetAgentIslandActivityForTests();
+  sessionsStore.reset();
 });
 
 function makeSession(partial: Partial<Session> & { id: string }): Session {
@@ -285,5 +293,141 @@ describe('RemoteProviderTopology', () => {
       fireEvent.click(relayOption);
     });
     expect(onPathPreferenceChange).toHaveBeenCalledWith('dev-mac', 'relay');
+  });
+
+  // 测试价值：
+  // - 生产入口与可观察结果：RemoteProviderTopologyPanel 挂载后展示正在使用远端插件引擎的任务与机器卡片；
+  // - Bug 依据：侧栏显示转圈（插件引擎回合后后台活动或 Agent Island 实时运行态）而 makerChatStore.getRunningSnapshot()
+  //   无条目时，面板此前漏掉这两类信号，误显示「当前无运行中的远程供应商任务」；
+  // - 覆盖缺口：此前仅测纯展示组件 RemoteProviderTopology，未覆盖 RemoteProviderTopologyPanel 的运行态汇总；
+  // - 最小失败输入：2 条指向远端 Mac Studio 的 acp 任务，1 条仅在 background activity 集合、1 条仅在 Agent Island 活动快照。
+  it('shows remote plugin-engine tasks active via background activity or Agent Island even when makerChatStore snapshot is empty', async () => {
+    let pushBgActivity: ((payload: { sessionId: string; active: boolean }) => void) | null = null;
+    let pushIslandActivity: ((list: AgentIslandSessionActivity[]) => void) | null = null;
+
+    const acpSessionBg = makeSession({
+      id: 'acp-bg-1',
+      title: '远端插件引擎后台活动任务',
+      agentKind: 'acp' as Session['agentKind'],
+      providerId: 'acp-plugin:sample-acp:engine',
+      agentDeviceId: 'dev-remote-mac',
+      model: 'gemini-4-neon',
+    });
+    const acpSessionIsland = makeSession({
+      id: 'acp-island-2',
+      title: '远端插件引擎实时运行任务',
+      agentKind: 'acp' as Session['agentKind'],
+      providerId: 'acp-plugin:sample-acp:engine',
+      agentDeviceId: 'dev-remote-mac',
+      model: 'gemini-4-neon',
+    });
+
+    const prevElectronApi = (window as unknown as { electronAPI?: unknown }).electronAPI;
+    (window as unknown as { electronAPI: unknown }).electronAPI = {
+      localDb: {
+        sessions: {
+          list: vi.fn().mockResolvedValue([acpSessionBg, acpSessionIsland]),
+        },
+      },
+      maker: {
+        onSessionBackgroundActivityChanged: vi.fn((cb: (payload: { sessionId: string; active: boolean }) => void) => {
+          pushBgActivity = cb;
+          return () => {};
+        }),
+        listSessionBackgroundActivity: vi.fn().mockResolvedValue({ sessionIds: ['acp-bg-1'] }),
+        onSessionBackgroundWorkChanged: vi.fn(() => () => {}),
+        listSessionBackgroundWork: vi.fn().mockResolvedValue({ sessionIds: [] }),
+      },
+      agentIsland: {
+        onSessionActivity: vi.fn((cb: (list: AgentIslandSessionActivity[]) => void) => {
+          pushIslandActivity = cb;
+          return () => {};
+        }),
+      },
+    };
+
+    try {
+      const devices: DeviceLinkDeviceView[] = [
+        {
+          deviceId: 'dev-self',
+          name: 'Windows PC',
+          platform: 'win32',
+          appVersion: '1.0.0',
+          lastSeenAt: null,
+          online: true,
+          busy: false,
+          remoteControlEnabled: true,
+          controlEnabled: true,
+          isSelf: true,
+        },
+        {
+          deviceId: 'dev-remote-mac',
+          name: 'Mac Studio',
+          platform: 'darwin',
+          appVersion: '1.0.0',
+          lastSeenAt: null,
+          online: true,
+          busy: true,
+          remoteControlEnabled: true,
+          controlEnabled: true,
+          isSelf: false,
+        },
+      ];
+      const peerLinks: DeviceLinkPeerLinksSnapshot = {
+        links: [
+          { deviceId: 'dev-remote-mac', encrypted: true, open: true, path: 'direct', rttMs: 5, sentAgoMs: 100, receivedAgoMs: 100 },
+        ],
+        agentNetRoutes: [
+          { deviceId: 'dev-remote-mac', path: 'direct', rttMs: 5, directRttMs: 5, relayRttMs: 20, pathPreference: 'auto' },
+        ],
+        providerShareRoutes: [],
+        relayRttMs: 20,
+        relayProtocol: 'agent-net',
+        relayTransport: 'udp',
+      };
+
+      render(
+        <MemoryRouter>
+          <RemoteProviderTopologyPanel
+            devices={devices}
+            peerLinks={peerLinks}
+            primaryRelayName="Cindy 中转"
+            primarySelfHosted={false}
+            unresponsiveIds={new Set()}
+            tabControl={null}
+            statusRight={null}
+          />
+        </MemoryRouter>,
+      );
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+        pushBgActivity?.({ sessionId: 'acp-bg-1', active: true });
+        pushIslandActivity?.([
+          {
+            sessionId: 'acp-island-2',
+            phase: 'running',
+            currentTurnActive: true,
+            compactDetail: 'Working',
+            startedAtMs: Date.now() - 1000,
+            lastActivityAtMs: Date.now(),
+            currentActionSummary: 'Working',
+            attention: false,
+            workflow: null,
+            turnGeneration: 1,
+            gracefulStopState: 'none',
+            source: 'live',
+          },
+        ]);
+      });
+
+      expect(screen.getByText('远端插件引擎后台活动任务')).not.toBeNull();
+      expect(screen.getByText('远端插件引擎实时运行任务')).not.toBeNull();
+      expect(screen.getByText('Mac Studio')).not.toBeNull();
+      expect(screen.queryByText(/当前没有运行中的远程供应商任务/)).toBeNull();
+    } finally {
+      (window as unknown as { electronAPI?: unknown }).electronAPI = prevElectronApi;
+    }
   });
 });
