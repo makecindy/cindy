@@ -315,9 +315,11 @@ if (command === '--help' || command === '-h') {
     const result = await requestHostRemote(resolveHostDataDir(), action, process.argv[4]);
     console.log(JSON.stringify(result, null, 2));
     // 「重新加入」 reports its outcome in the result (device-link.ts `rejoin`): say why it did not work, and fail the command.
-    const rejoin = action === 'rejoin' ? (result as { rejoin?: { result?: unknown; hint?: unknown } }).rejoin : undefined;
+    // `agent-net-on` rejoins first when this Host was removed: the same hint, but the switch is on either way.
+    const rejoin = action === 'rejoin' || action === 'agent-net-on'
+      ? (result as { rejoin?: { result?: unknown; hint?: unknown } }).rejoin : undefined;
     if (rejoin && typeof rejoin.hint === 'string') (rejoin.result === 'rejoined' ? console.log : console.error)(rejoin.hint);
-    if (rejoin && rejoin.result !== 'rejoined') process.exitCode = 1;
+    if (action === 'rejoin' && rejoin && rejoin.result !== 'rejoined') process.exitCode = 1;
   } catch (error) {
     console.error(`cindy-host remote failed: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 1;

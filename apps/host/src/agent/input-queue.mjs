@@ -582,11 +582,15 @@ export function createInputQueue(deps) {
         const admission = stateFor(id).admission;
         return command(id, async state => {
           if (coordinator.hasKnownClientId(id, item?.clientId)) {
+            handoff?.onQueueAcceptanceStarted?.();
             await flushed(id);
             return api.projection(id);
           }
           const known = await deps.getPersistedClientIds?.(id, [item?.clientId]);
-          if (known?.has(item?.clientId)) return api.projection(id);
+          if (known?.has(item?.clientId)) {
+            handoff?.onQueueAcceptanceStarted?.();
+            return api.projection(id);
+          }
           refuseWhileHeld();
           const stored = handoff ? await deps.readSession(id, { forHandoff: true }) : await deps.readSession(id);
           if (handoff && !stored) {
@@ -607,6 +611,8 @@ export function createInputQueue(deps) {
           try {
             state.lastUserActionAt = Date.now();
             coordinator.setExecutionPaused(id, true);
+            // The coordinator may mutate the queue before reporting a failure.
+            handoff?.onQueueAcceptanceStarted?.();
             coordinator.enqueue(id, prepared.item);
             accepted = true;
             if (prepared.ownerId) attachmentOwnership.activateCurrentOwner(id, item.clientId, prepared.ownerId);
