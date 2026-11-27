@@ -179,6 +179,10 @@ export function PluginManagementConfirmation(
         foregroundStyle(colors.textPrimary),
         // Wraps rather than truncates.
         fixedSize({ horizontal: false, vertical: true }),
+        // Its own identity per layout key, as every measured view (iOS reshoot 60a054a9a5): opened in portrait and turned
+        // to landscape, the heading kept its height, so SwiftUI did not report it again under the new key; the sizes
+        // never all arrived, and the sheet stayed regular from the estimate. Shown in one place at a time.
+        forRequest("plugins.management.highRiskTitle"),
         onGeometryChange(measure("heading")),
       ]}
     >

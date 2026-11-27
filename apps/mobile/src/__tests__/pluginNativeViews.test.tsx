@@ -368,16 +368,40 @@ const layoutKeyOf = (requestId: string) => `${requestId}|${bridge.width}x${bridg
  * content root at `contentTop` (the same by default; below it with a top inset, as in landscape). `innerContent` is the
  * content root's own height (the inner VStack; `content` by default), which can be shorter than the scrolling Form.
  */
+/** Every view identity (`id` modifier) on the iOS sheet now: the list's, and those in its content and footer. */
+function sheetViewIds(): Set<string> {
+  const sheet = bridge.props.get("plugins.managementConfirmation");
+  const ids = new Set<string>();
+  const add = (modifiers: unknown) => { for (const m of Array.isArray(modifiers) ? modifiers : []) if (m && typeof m === "object" && "id" in m) ids.add(String((m as any).id)); };
+  const walk = (node: any) => {
+    if (Array.isArray(node)) { node.forEach(walk); return; }
+    if (!node || typeof node !== "object" || !node.props) return;
+    add(node.props.modifiers);
+    walk(node.props.children);
+  };
+  add(sheet.nativeContentModifiers);
+  walk(sheet.children);
+  walk(sheet.footer);
+  return ids;
+}
+/**
+ * `renewedSince` (iOS): as on a device after a layout change, only views with a new identity (an `id` not in that set),
+ * or inside one, report again; a view that kept its identity and its size reports nothing.
+ */
 function layOutSheet(heights: { identity: number; visible: number; content: number; other?: number; listTop?: number; contentTop?: number;
-  innerContent?: number }) {
+  innerContent?: number }, renewedSince?: Set<string>) {
   const sheet = bridge.props.get("plugins.managementConfirmation");
   const other = heights.other ?? 20;
   const listTop = heights.listTop ?? 100, contentTop = heights.contentTop ?? listTop;
   const calls: Array<() => void> = [];
-  const walk = (node: any, root = false) => {
-    if (Array.isArray(node)) { node.forEach((child) => walk(child)); return; }
+  const renews = (modifiers: unknown) => !renewedSince
+    || (Array.isArray(modifiers) && modifiers.some((m) => m && typeof m === "object" && "id" in m && !renewedSince.has(String((m as any).id))));
+  const walk = (node: any, root = false, renewed = !renewedSince) => {
+    if (Array.isArray(node)) { node.forEach((child) => walk(child, false, renewed)); return; }
     if (!node || typeof node !== "object" || !node.props) return;
     const p = node.props;
+    renewed = renewed || renews(p.modifiers);
+    if (!renewed) { walk(p.children, false, false); return; }
     const height = p.testID === "plugins.management.identity" ? heights.identity
       : p.testID === "plugins.management.list" ? heights.visible : root ? heights.innerContent ?? heights.content : other;
     const y = root ? contentTop : 0;
@@ -387,16 +411,17 @@ function layOutSheet(heights: { identity: number; visible: number; content: numb
     for (const modifier of Array.isArray(p.modifiers) ? p.modifiers : [])
       if (modifier?.onGeometryChange && !(root && heights.content <= 0 && heights.innerContent === undefined))
         calls.push(() => modifier.onGeometryChange({ x: 0, y, width: 390, height }));
-    walk(p.children);
+    walk(p.children, false, renewed);
   };
   if (sheet.nativeContentModifiers) {
     // iOS: the list's own frame, its content root, then the footer.
-    for (const modifier of sheet.nativeContentModifiers) {
+    const listRenewed = renews(sheet.nativeContentModifiers);
+    for (const modifier of listRenewed ? sheet.nativeContentModifiers : []) {
       if (modifier?.onGeometryChange) calls.push(() => modifier.onGeometryChange({ x: 0, y: listTop, width: 390, height: heights.visible }));
       if (modifier?.scrollGeometry && heights.content > 0)
         calls.push(() => modifier.scrollGeometry({ contentOffsetY: 0, containerHeight: heights.visible, contentHeight: heights.content }));
     }
-    walk(sheet.children, true);
+    walk(sheet.children, true, listRenewed);
     walk(sheet.footer);
   } else walk(sheet.children);
   for (const call of calls) act(call);
@@ -2085,6 +2110,29 @@ describe("pinned high-risk permission", () => {
       layOutSheet({ identity: 195, visible: 230, content: formContent, innerContent: 220, listTop: 100, contentTop: 120 });
       expect(pressAllow(p)).toBe(answers);
       if (!answers) expect(container.querySelector('[data-testid="plugins.management.review"]'), "review first").not.toBeNull();
+    });
+  /* 测试价值（iOS 复拍 60a054a9a5：官方来源竖屏打开、转横屏停稳后仍是常规档，来源行整行落在渐隐里）
+   * - 生产入口与可观察结果：iOS 真实确认面板组件；转屏后的主按钮与按下「允许」是否写出。
+   * - 依据：转屏换了布局键，旧尺寸作废；只有换了身份的视图会在新键下重新回报。固定摘要的标题没有按键换身份、高度又没变，
+   *   新键下不再回报，尺寸永远到不齐，面板停在估算出的常规档。
+   * - 最小失败输入：竖屏常规档全部到齐后转到 667×375，按复拍的数（视区 132.5、列表顶 52、身份块下缘 186.5、渐隐起点 160.5、
+   *   内容 1894.5）只让换了身份的视图回报；60a054a9a5 上仍是常规档。对照：转横屏后放得下时仍是常规档并作答。tier: unit。
+   */
+  it.each([[126.5, "review"], [40, "allow"]] as const)(
+    "iOS: opened in portrait, turned to landscape (identity block %s high): every renewed view reports again; the main button is %s", (identity, button) => {
+      bridge.fontScale = 1;
+      const p = props(allFive);
+      const { container, rerender } = mount(PluginManagementConfirmation, p);
+      layOutSheet({ identity: 120, visible: 404.5, content: 1894.5 });
+      const shown = (id: string) => container.querySelector(`[data-testid="${id}"]`) !== null;
+      expect(shown("plugins.management.allow"), "portrait: regular").toBe(true);
+      const before = sheetViewIds();
+      bridge.width = 667; bridge.height = 375;
+      rerender({ ...p });
+      layOutSheet({ identity, visible: 132.5, content: 1894.5, listTop: 52 }, before);
+      expect({ review: shown("plugins.management.review"), allow: shown("plugins.management.allow") })
+        .toEqual({ review: button === "review", allow: button === "allow" });
+      if (button === "allow") expect(pressAllow(p)).toBe(true);
     });
   it("iOS: scrolling the list (its content moving up) is not taken for the block having been shown: the decision stays as first laid out", () => {
     bridge.fontScale = 1;
