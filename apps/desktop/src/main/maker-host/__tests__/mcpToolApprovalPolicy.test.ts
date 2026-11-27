@@ -3,6 +3,7 @@ import { ORCA_TASK_ACTION_TOOLS } from '../../maker-ipc/taskActionAuthorization.
 
 import {
   getDesktopClaudeReadOnlyAllowedTools,
+  getDesktopMcpToolApprovalEvidence,
   getDesktopMcpToolApprovalPolicy,
   setGhostToolApprovalResolver,
 } from '../mcp-tool-approval-policy.js';
@@ -10,6 +11,64 @@ import {
 afterEach(() => setGhostToolApprovalResolver(null));
 
 describe('desktop Claude read-only allowlist', () => {
+  // unit: the real approval policy must not reuse a read grant for a later external Discord write.
+  it('keeps Discord discovery quiet and multiplexed operations on per-call approval', () => {
+    for (const toolName of ['status', 'list_tools']) expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_discord', toolName })).toBe('auto-approve');
+    for (const toolName of ['call_tool', undefined]) expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_discord', toolName, toolParams: { name: 'send_message', args: { text: 'external' } } })).toBe('prompt-each-time');
+  });
+  // PR #11126 security: clone/private credentials and directory expansion used to
+  // inherit trusted-server silence. Unit public policy; existing write cases did
+  // not cover project profiles, nested/stringified arguments or missing outer names.
+  it('reviews project access for every tool envelope while leaving metadata and reads alone', () => {
+    for (const [name, input] of [
+      ['create_project', { repository_url: 'https://gitlab.com/team/private', device: 'computer' }],
+      ['create_project', { working_dir: '/existing' }],
+      ['create_project', { name: 'Blank' }],
+      [
+        'update_project_info',
+        {
+          project_key: 'local:/repo',
+          field: 'profile',
+          value: { directories: [{ path: '/private', access: 'write' }] },
+        },
+      ],
+      [
+        'update_project_info',
+        { project_key: 'local:/repo', field: 'profile', value: { directories: [] } },
+      ],
+    ] as const) {
+      expect(
+        getDesktopMcpToolApprovalPolicy({
+          serverName: 'cindy_helper',
+          toolName: name,
+          toolParams: input,
+        }),
+      ).toBe('prompt-each-time');
+      for (const args of [input, JSON.stringify(input)])
+        for (const toolName of ['call_tool', undefined])
+          expect(
+            getDesktopMcpToolApprovalPolicy({
+              serverName: 'cindy_helper',
+              toolName,
+              toolParams: { name, args },
+            }),
+          ).toBe('prompt-each-time');
+    }
+    for (const [name, args] of [
+      ['get_project_info', { project_key: 'local:/repo' }],
+      [
+        'update_project_info',
+        { project_key: 'local:/repo', field: 'profile', value: { name: 'Updated', icon: null } },
+      ],
+    ] as const)
+      expect(
+        getDesktopMcpToolApprovalPolicy({
+          serverName: 'cindy_helper',
+          toolName: 'call_tool',
+          toolParams: { name, args },
+        }),
+      ).toBe('auto-approve');
+  });
   // §21 unit: the shared files dispatcher contains both reads and destructive
   // operations. Trusted helper approval must never turn a write into a read.
   it('keeps file writes and deletions in per-call approval for direct and progressive calls', () => {
@@ -446,6 +505,24 @@ describe('desktop MCP approval policy', () => {
     ).toBe('prompt');
   });
 
+  // Unit: a named plugin tool must resolve its installed tool policy without
+  // treating plugin argument fields as the generic ghost_call envelope.
+  it('uses the installed target for a startup alias and treats unidentified calls conservatively', () => {
+    const alias = 'ghost_start_library_find_529157ba331ac99bbeaa';
+    const target = { ghostId: 'library', namespace: 'local', tool: 'find' };
+    setGhostToolApprovalResolver(null, name => name === alias ? { ...target, declared: 'each-call' } : null);
+    const toolParams = { args: { query: 'atlas' } };
+    const context = { serverName: 'cindy', toolName: alias, toolParams };
+    expect(getDesktopMcpToolApprovalPolicy(context)).toBe('prompt-each-time');
+    expect(getDesktopMcpToolApprovalEvidence(context)).toEqual({
+      ghost_id: 'library', namespace: 'local', tool: 'find', args: { query: 'atlas' },
+    });
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy', toolParams })).toBe('prompt-each-time');
+    setGhostToolApprovalResolver(null, name => name === alias ? { ...target, declared: 'auto' } : null);
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy', toolName: alias, toolParams })).toBe('auto-approve');
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy', toolName: alias, toolParams: { query: 'atlas' } })).toBe('prompt-each-time');
+  });
+
   it('auto-approves the browser call_tool entry that Claude used to prompt for every time', () => {
     // 回归锚点: cindy_browser 的真实动作全部走 call_tool。Claude 侧过去只静态放行
     // list_tools, 于是每次 navigate / snapshot / click 都弹一次窗。
@@ -533,6 +610,17 @@ describe('helper task workspace and SkillHub publication authorization', () => {
     expect(policy('call_tool', { name: 'get_teammate_home', args: { teammate_id: 'mia' } })).not.toBe('prompt-each-time');
   });
 
+  // #10568: scheduling/cancelling relocation changes durable filesystem intent;
+  // preview/status remain reads through direct and progressive tool entry points.
+  it('reviews workspace move requests and cancellations through the task permission mode', () => {
+    for (const action of ['request', 'cancel', 'preview', 'status']) {
+      const args = { action, teammate_id: 'buddy', ...(action === 'request' || action === 'preview' ? { target_directory: '/data/buddy' } : {}) };
+      const expected = ['request', 'cancel'].includes(action) ? 'prompt-each-time' : 'auto-approve';
+      expect(policy('teammate_workspace_migration', args)).toBe(expected);
+      expect(policy('call_tool', { name: 'teammate_workspace_migration', args })).toBe(expected);
+    }
+  });
+
   it('does not infer a safe helper action from missing or malformed evidence', () => {
     for (const params of [undefined, null, [], 'invalid JSON', {}, { name: '' }, { name: 42 }]) {
       expect(policy('call_tool', params)).toBe('prompt-each-time');
@@ -544,7 +632,6 @@ describe('helper task workspace and SkillHub publication authorization', () => {
     expect(policy('list_tools')).toBe('auto-approve');
     for (const name of [
       'list_projects',
-      'create_project',
       'rename_project',
       'remove_project',
       'search_skills',
@@ -676,7 +763,7 @@ describe('teammate pre-run command approval', () => {
 });
 
 describe('cross-device actions use the task permission mode', () => {
-  it.each(['archive_sessions', 'unarchive_sessions'])('reviews remote %s in direct and progressive calls', (name) => {
+  it.each(['archive_sessions', 'unarchive_sessions', 'pin_sessions', 'unpin_sessions'])('reviews remote %s in direct and progressive calls', (name) => {
     for (const session_ids of [['studio::s1'], ['s1', 'studio::s2']]) {
       const args = { session_ids };
       for (const context of [
@@ -737,6 +824,8 @@ describe('cross-device actions use the task permission mode', () => {
         toolParams: { name: 'send_to_session', args: { target_session_id: target, message: 'hi' } },
       });
     expect(helper('mbp::sess-9')).toBe('prompt-each-time');
+      // Shared links use the same task permission flow, never trusted-server silence.
+      expect(helper('cindy://session/shared?device=scoped')).toBe('prompt-each-time');
     expect(helper('mbp::sess-9', undefined)).toBe('prompt-each-time');
     expect(helper('sess-9')).toBe('prompt-each-time');
     expect(helper('local::sess-9')).toBe('prompt-each-time');

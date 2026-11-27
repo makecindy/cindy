@@ -14,6 +14,7 @@ export default {
     'src/renderer/hooks/useCodexAuth': 'export const useCodexAuth = () => (!window.providerSourcesFixture.snapshot.providers[0].connected ? { state: { kind: "unauthenticated" }, recoveryCheck: "idle" } : { state: { kind: "authenticated", identity: "chris@example.com", authSource: "oauth" }, recoveryCheck: "idle" }); export const isChatGptConnectionConnected = () => window.providerSourcesFixture.snapshot.providers[0].connected;',
   },
   cases: {
+    'empty-pool': { about: 'Sign in from the built-in OpenAI detail with no saved account' },
     'recovery-leave': { about: 'Leave provider detail during pending login, return and retry' },
     'recovery-success': { about: 'Use production login controls through simulated host success; no real credentials' },
     'recovery-failure': { about: 'Use production login controls through simulated host failure; no real credentials' },
@@ -21,15 +22,25 @@ export default {
     'recovery-pinned': { about: 'Use production login controls through simulated host pinned; no real credentials' },
 
     default: { about: 'This computer is signed in; Automatic keeps tasks here' },
-    borrowing: { about: 'This computer is not signed in; new tasks run on MBP-M5 and the page reads as usable' },
+    borrowing: { about: 'This computer is not signed in; the local sign-in stays visible and nothing moves to MBP-M5 on its own' },
     pinned: { about: 'Signed in here, but the user chose to run this provider on MBP-M5' },
-    'never-signed-in': { about: 'Anthropic was never signed in here; it is still listed and runs on MBP-M5' },
+    'never-signed-in': { about: 'Anthropic was never signed in here; it is still listed, stays on this computer, and MBP-M5 is offered as a choice' },
     'single-computer': { about: 'No other computer offers the provider: the row is hidden' },
+    'local-management': { about: 'Five saved local accounts retain management and inline recovery while using remote models' },
   },
   async ready(page) {
     await page.getByRole('heading').first().waitFor();
   },
   async check(page, ui) {
+    if (ui.case === 'empty-pool') {
+      const actions = page.getByTestId('provider-detail-actions');
+      await actions.getByRole('button', { name: await ui.t('subscriptionAccounts.login'), exact: true }).click();
+      const connected = actions.getByRole('button', { name: await ui.t('settings.providers.button.disconnect'), exact: true });
+      await connected.or(page.getByText(await ui.t('subscriptionAccounts.failed'), { exact: true })).first().waitFor();
+      await ui.capture('after-sign-in');
+      assert.ok(await connected.isVisible(), 'Signing in to an empty pool should connect the new account');
+      return;
+    }
     const row = page.getByTestId('provider-run-location');
     if (ui.case === 'recovery-pinned') {
       await row.waitFor();
@@ -54,16 +65,18 @@ export default {
         window.dispatchEvent(new Event('repro-provider-change'));
         window.__uiPage.emit('subscriptionAccountsChanged', { providerId: 'openai' });
       });
-      assert.match(await row.textContent() ?? '', /MBP-M5/);
+      // 2026-11-18: a disconnect never moves new tasks to another computer on its own.
+      assert.doesNotMatch(await row.textContent() ?? '', /MBP-M5/);
       assert.equal(await page.getByTestId('provider-detail-actions').getByRole('button').count(), 1);
       // The simulated host retains the same saved account throughout recovery.
       const saved = await page.evaluate(() => window.electronAPI.subscriptionAccounts.command({ action: 'read', providerId: 'openai' }));
       assert.deepEqual(saved.accounts.map(a => a.id), ['default']);
-      await ui.capture('02-local-disconnected-remote-available');
+      await ui.capture('02-local-disconnected-stays-here');
       await row.getByRole('combobox').click();
       const local = page.getByRole('option', { name: new RegExp(await ui.t('settings.providers.detail.runLocation.optionLocal')) });
-      assert.equal(await local.getAttribute('aria-disabled'), 'true');
-      await ui.capture('03-local-disabled');
+      // Choosing this computer means "do not use another computer", so it stays selectable.
+      assert.notEqual(await local.getAttribute('aria-disabled'), 'true');
+      await ui.capture('03-local-selectable');
       await page.keyboard.press('Escape');
       const actions = page.getByTestId('provider-detail-actions');
       await actions.getByRole('button', { name: await ui.t('subscriptionAccounts.login'), exact: true }).waitFor();
@@ -112,8 +125,12 @@ export default {
       // Review #9740: a built-in provider only another computer offers must not vanish from the list.
       await page.getByRole('button', { name: /^Anthropic/ }).first().click();
       await row.waitFor();
-      assert.match(await row.textContent() ?? '', /MBP-M5/);
+      // Still listed, but new tasks stay here until the user chooses MBP-M5 (2026-11-18).
+      assert.doesNotMatch(await row.textContent() ?? '', /MBP-M5/);
+      await row.getByRole('combobox').click();
+      await page.getByRole('option', { name: 'MBP-M5' }).waitFor();
       await ui.capture('row');
+      await page.keyboard.press('Escape');
       return;
     }
     if (ui.case === 'single-computer') {
@@ -123,6 +140,23 @@ export default {
     await row.waitFor();
     await row.scrollIntoViewIfNeeded();
     await ui.capture('row');
+    if (ui.case === 'local-management') {
+      const accounts = page.getByTestId('subscription-accounts');
+      await accounts.getByText('account1@example.com', { exact: true }).waitFor();
+      await accounts.getByText(await ui.t('settings.providers.detail.runLocation.optionLocal'), { exact: true }).waitFor();
+      assert.equal(await accounts.getByTestId('subscription-account').count(), 5);
+      await accounts.getByRole('button', { name: await ui.t('subscriptionAccounts.add'), exact: true }).waitFor();
+      await accounts.getByTestId('subscription-account').first().getByRole('button', {
+        name: await ui.t('subscriptionAccounts.loginAccountAria', { name: 'account1@example.com' }), exact: true,
+      }).waitFor();
+      await accounts.getByTestId('subscription-account').nth(1).getByRole('button', { name: await ui.t('commonUi.retry'), exact: true }).click();
+      const commands = await page.evaluate(() => window.providerSourcesFixture.subscriptionControl.commands);
+      assert.ok(commands.length > 1);
+      assert.ok(commands.every(command => command.action === 'read'));
+      assert.match(await row.textContent() ?? '', /MBP-M5/);
+      await ui.capture('local-account-management');
+      return;
+    }
     if (ui.case === 'borrowing') {
       await page.getByTestId('provider-detail-actions').getByRole('button', { name: await ui.t('settings.providers.openai.connect'), exact: true }).waitFor();
       await ui.capture('local-login-visible');

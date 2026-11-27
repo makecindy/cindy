@@ -1,5 +1,5 @@
 import { createLogger } from '../logger.js';
-import type { Session } from '@cindy/maker-core';
+import type { AgentEvent, Session } from '@cindy/maker-core';
 import {
   mergeBotLearningReceipts,
   readBotLearningReceipts,
@@ -64,4 +64,14 @@ export function observeBotLearningTurn(session: Session, generation?: number) {
     learningTurnIdentity(session, generation),
     learningReceiptPublisher(session.id),
   );
+}
+
+/** Feed only the local foreground incarnation; child/background events cannot claim saves. */
+export function observeBotLearningEvent(session: Session, event: AgentEvent) {
+  if (session.remoteHostId || event.turnScope === 'background' || event.agentMeta?.parentUuid
+    || (event.type !== 'tool_use' && event.type !== 'tool_result_full')
+    || (event.sessionInstanceId !== undefined && event.sessionInstanceId !== session.instanceId)
+    || (event.sessionTurnGeneration !== undefined && event.sessionTurnGeneration !== session.getTurnGeneration())) return;
+  if (event.type === 'tool_use') observeBotLearningTurn(session, event.sessionTurnGeneration);
+  botLearningTracker.noteToolEvent(session.id, learningTurnIdentity(session, event.sessionTurnGeneration), event);
 }

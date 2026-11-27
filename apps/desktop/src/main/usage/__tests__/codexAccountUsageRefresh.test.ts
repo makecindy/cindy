@@ -24,7 +24,7 @@ describe('createCodexAccountUsageSnapshotReader', () => {
     const fresh = { ...cached, secondary: { usedPercent: 0 } };
     const fetchWebUsageSnapshot = vi.fn().mockReturnValueOnce(oldRequest.promise).mockResolvedValue(fresh);
     const reader = createCodexAccountUsageSnapshotReader({
-      readAccessToken: async () => 'token', readAccountId: async () => 'account-id',
+      readCredentials: async () => ({ accessToken: 'token', accountId: 'account-id' }),
       fetchWebUsageSnapshot, recordSnapshot: async value => { cached = value as typeof cached; },
       clearSnapshot: async () => {}, readCachedSnapshot: async () => cached,
       now: () => 10_000, onRefreshError: vi.fn(),
@@ -42,8 +42,7 @@ describe('createCodexAccountUsageSnapshotReader', () => {
     const fetchDeferred = deferred<RateLimitSnapshot | null>();
     const recordSnapshot = vi.fn().mockResolvedValue(undefined);
     const reader = createCodexAccountUsageSnapshotReader({
-      readAccessToken: vi.fn().mockResolvedValue('token'),
-      readAccountId: vi.fn().mockResolvedValue('account-id'),
+      readCredentials: async () => ({ accessToken: 'token', accountId: 'account-id' }),
       fetchWebUsageSnapshot: vi.fn().mockReturnValue(fetchDeferred.promise),
       recordSnapshot,
       clearSnapshot: vi.fn().mockResolvedValue(undefined),
@@ -67,8 +66,7 @@ describe('createCodexAccountUsageSnapshotReader', () => {
     const fetchWebUsageSnapshot = vi.fn().mockReturnValueOnce(fetchDeferred.promise);
     const reader = createCodexAccountUsageSnapshotReader(
       {
-        readAccessToken: vi.fn().mockResolvedValue('token'),
-        readAccountId: vi.fn().mockResolvedValue('account-id'),
+        readCredentials: async () => ({ accessToken: 'token', accountId: 'account-id' }),
         fetchWebUsageSnapshot,
         recordSnapshot: vi.fn().mockResolvedValue(undefined),
         clearSnapshot: vi.fn().mockResolvedValue(undefined),
@@ -100,8 +98,7 @@ describe('createCodexAccountUsageSnapshotReader', () => {
     const onRefreshError = vi.fn();
     const cached = makeSnapshot('cached');
     const reader = createCodexAccountUsageSnapshotReader({
-      readAccessToken: vi.fn().mockResolvedValue('token'),
-      readAccountId: vi.fn().mockResolvedValue('account-id'),
+      readCredentials: async () => ({ accessToken: 'token', accountId: 'account-id' }),
       fetchWebUsageSnapshot: vi.fn().mockRejectedValue(new Error('offline')),
       recordSnapshot: vi.fn().mockResolvedValue(undefined),
       clearSnapshot: vi.fn().mockResolvedValue(undefined),
@@ -119,13 +116,12 @@ describe('createCodexAccountUsageSnapshotReader', () => {
     const fetchWebUsageSnapshot = vi.fn().mockResolvedValue(makeSnapshot('openai-web'));
     const recordSnapshot = vi.fn().mockResolvedValue(undefined);
     const clearSnapshot = vi.fn().mockResolvedValue(undefined);
-    const readAccessToken = vi.fn()
+    const readCredentials = vi.fn()
       .mockResolvedValueOnce(null)
-      .mockResolvedValue('token');
+      .mockResolvedValue({ accessToken: 'token', accountId: 'account-id' });
     const reader = createCodexAccountUsageSnapshotReader(
       {
-        readAccessToken,
-        readAccountId: vi.fn().mockResolvedValue('account-id'),
+        readCredentials,
         fetchWebUsageSnapshot,
         recordSnapshot,
         clearSnapshot,
@@ -137,7 +133,7 @@ describe('createCodexAccountUsageSnapshotReader', () => {
     );
 
     await reader();
-    await vi.waitFor(() => expect(readAccessToken).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(readCredentials).toHaveBeenCalledTimes(1));
     expect(clearSnapshot).toHaveBeenCalledTimes(1);
     expect(fetchWebUsageSnapshot).not.toHaveBeenCalled();
 
@@ -151,14 +147,13 @@ describe('createCodexAccountUsageSnapshotReader', () => {
     let now = 10_000;
     const fetchWebUsageSnapshot = vi.fn().mockResolvedValue(makeSnapshot('openai-web'));
     const recordSnapshot = vi.fn().mockResolvedValue(undefined);
-    const readAccessToken = vi.fn()
+    const readCredentials = vi.fn()
       .mockRejectedValueOnce(new Error('keychain unavailable'))
-      .mockResolvedValue('token');
+      .mockResolvedValue({ accessToken: 'token', accountId: 'account-id' });
     const onRefreshError = vi.fn();
     const reader = createCodexAccountUsageSnapshotReader(
       {
-        readAccessToken,
-        readAccountId: vi.fn().mockResolvedValue('account-id'),
+        readCredentials,
         fetchWebUsageSnapshot,
         recordSnapshot,
         clearSnapshot: vi.fn().mockResolvedValue(undefined),
@@ -169,7 +164,7 @@ describe('createCodexAccountUsageSnapshotReader', () => {
       { throttleMs: 10_000 },
     );
 
-    await reader();
+    await expect(reader()).resolves.toEqual(makeSnapshot('cached'));
     await vi.waitFor(() => expect(onRefreshError).toHaveBeenCalledWith(expect.any(Error)));
     expect(fetchWebUsageSnapshot).not.toHaveBeenCalled();
 
@@ -186,8 +181,7 @@ describe('createCodexAccountUsageSnapshotReader', () => {
     const clearSnapshot = vi.fn(async () => { cached = null; });
     const reader = createCodexAccountUsageSnapshotReader(
       {
-        readAccessToken: vi.fn().mockResolvedValue('token'),
-        readAccountId: vi.fn().mockResolvedValue('new-account'),
+        readCredentials: async () => ({ accessToken: 'token', accountId: 'new-account' }),
         fetchWebUsageSnapshot,
         recordSnapshot: vi.fn(async (value: RateLimitSnapshot) => { cached = value; }),
         clearSnapshot,
@@ -208,8 +202,7 @@ describe('createCodexAccountUsageSnapshotReader', () => {
     const clearSnapshot = vi.fn().mockResolvedValue(undefined);
     const reader = createCodexAccountUsageSnapshotReader(
       {
-        readAccessToken: vi.fn().mockResolvedValue('token'),
-        readAccountId: vi.fn().mockResolvedValue(null),
+        readCredentials: async () => ({ accessToken: 'token', accountId: null }),
         fetchWebUsageSnapshot,
         recordSnapshot: vi.fn().mockResolvedValue(undefined),
         clearSnapshot,
@@ -240,8 +233,7 @@ describe('createCodexAccountUsageSnapshotReader', () => {
     });
     const reader = createCodexAccountUsageSnapshotReader(
       {
-        readAccessToken: vi.fn().mockResolvedValue('token-b'),
-        readAccountId: vi.fn().mockResolvedValue(null),
+        readCredentials: async () => ({ accessToken: 'token-b', accountId: null }),
         fetchWebUsageSnapshot,
         recordSnapshot,
         clearSnapshot,
@@ -276,8 +268,7 @@ describe('createCodexAccountUsageSnapshotReader', () => {
     });
     const reader = createCodexAccountUsageSnapshotReader(
       {
-        readAccessToken: vi.fn().mockImplementation(async () => accessToken),
-        readAccountId: vi.fn().mockImplementation(async () => accountId),
+        readCredentials: async () => ({ accessToken, accountId }),
         fetchWebUsageSnapshot,
         recordSnapshot,
         clearSnapshot,
@@ -320,8 +311,7 @@ describe('createCodexAccountUsageSnapshotReader', () => {
     const clearSnapshot = vi.fn().mockResolvedValue(undefined);
     const onRefreshError = vi.fn();
     const reader = createCodexAccountUsageSnapshotReader({
-      readAccessToken: vi.fn().mockResolvedValue('token'),
-      readAccountId: vi.fn().mockResolvedValue('account-id'),
+      readCredentials: async () => ({ accessToken: 'token', accountId: 'account-id' }),
       fetchWebUsageSnapshot: vi.fn().mockRejectedValue(unauthorized),
       recordSnapshot: vi.fn().mockResolvedValue(undefined),
       clearSnapshot,
@@ -334,5 +324,176 @@ describe('createCodexAccountUsageSnapshotReader', () => {
     await expect(reader()).resolves.toEqual(makeSnapshot('cached'));
     await vi.waitFor(() => expect(clearSnapshot).toHaveBeenCalledTimes(1));
     expect(onRefreshError).not.toHaveBeenCalled();
+  });
+
+  // Adaptive throttling: idle polls stay on 30m cadence, turn activity switches to 5m,
+  // crossing resetsAt triggers a single re-check after 5m, and failures back off exponentially.
+  it('throttles idle polls for 30m, shortens to 5m after turn activity, and rechecks once across reset boundary', async () => {
+    let now = 1_000_000;
+    const resetSec = Math.floor((now + 10 * 60_000) / 1000);
+    let cached: RateLimitSnapshot = {
+      ...makeSnapshot('cached'),
+      primary: { usedPercent: 50, resetsAt: resetSec },
+    };
+    const fetchWebUsageSnapshot = vi.fn(async () => ({
+      ...makeSnapshot('openai-web'),
+      primary: { usedPercent: 50, resetsAt: resetSec },
+    }));
+    const reader = createCodexAccountUsageSnapshotReader({
+      readCredentials: async () => ({ accessToken: 'token', accountId: 'account-id' }),
+      fetchWebUsageSnapshot,
+      recordSnapshot: async (snap) => { cached = snap; },
+      clearSnapshot: async () => {},
+      readCachedSnapshot: async () => cached,
+      now: () => now,
+      onRefreshError: vi.fn(),
+    });
+
+    // Cold read fetches immediately.
+    await reader();
+    await vi.waitFor(() => expect(fetchWebUsageSnapshot).toHaveBeenCalledTimes(1));
+
+    // Passive poll at +8m stays throttled (idle TTL = 30m, reset at +10m not yet crossed).
+    now += 8 * 60_000;
+    await reader();
+    expect(fetchWebUsageSnapshot).toHaveBeenCalledTimes(1);
+
+    // Crossing resetsAt (+10m, age >= 5m) triggers one re-check even while idle.
+    now += 2 * 60_000;
+    await reader();
+    await vi.waitFor(() => expect(fetchWebUsageSnapshot).toHaveBeenCalledTimes(2));
+
+    // Stale reset timestamp after refresh does not cause a loop.
+    now += 6 * 60_000;
+    await reader();
+    expect(fetchWebUsageSnapshot).toHaveBeenCalledTimes(2);
+
+    // Real turn activity switches to the 5m active cadence (age is already 6m >= 5m).
+    await reader({ activity: true });
+    await vi.waitFor(() => expect(fetchWebUsageSnapshot).toHaveBeenCalledTimes(3));
+
+    // Another turn within 5m is throttled, then triggers at +5m.
+    now += 4 * 60_000;
+    await reader({ activity: true });
+    expect(fetchWebUsageSnapshot).toHaveBeenCalledTimes(3);
+    now += 60_000;
+    await reader();
+    await vi.waitFor(() => expect(fetchWebUsageSnapshot).toHaveBeenCalledTimes(4));
+
+    // Without further turns, idle polls wait the full 30m.
+    now += 29 * 60_000;
+    await reader();
+    expect(fetchWebUsageSnapshot).toHaveBeenCalledTimes(4);
+    now += 60_000;
+    await reader();
+    await vi.waitFor(() => expect(fetchWebUsageSnapshot).toHaveBeenCalledTimes(5));
+  });
+
+  it('backs off exponentially on transient failures while fresh reads still bypass backoff', async () => {
+    let now = 1_000_000;
+    let cached = makeSnapshot('cached');
+    const onRefreshError = vi.fn();
+    const fetchWebUsageSnapshot = vi.fn()
+      .mockRejectedValueOnce(new Error('503'))
+      .mockRejectedValueOnce(new Error('503'))
+      .mockResolvedValue(makeSnapshot('recovered'));
+    const reader = createCodexAccountUsageSnapshotReader({
+      readCredentials: async () => ({ accessToken: 'token', accountId: 'account-id' }),
+      fetchWebUsageSnapshot,
+      recordSnapshot: async (snap) => { cached = snap; },
+      clearSnapshot: async () => {},
+      readCachedSnapshot: async () => cached,
+      now: () => now,
+      onRefreshError,
+    });
+
+    await reader({ activity: true });
+    await vi.waitFor(() => expect(onRefreshError).toHaveBeenCalledTimes(1));
+
+    // Inside 5m backoff: even active read is suppressed.
+    now += 4 * 60_000;
+    await reader({ activity: true });
+    expect(fetchWebUsageSnapshot).toHaveBeenCalledTimes(1);
+
+    // At 5m: retries once, fails -> doubles backoff to 10m.
+    now += 60_000;
+    await reader({ activity: true });
+    await vi.waitFor(() => expect(onRefreshError).toHaveBeenCalledTimes(2));
+
+    now += 9 * 60_000;
+    await reader({ activity: true });
+    expect(fetchWebUsageSnapshot).toHaveBeenCalledTimes(2);
+
+    // Fresh recovery read bypasses backoff immediately and resets it on success.
+    await expect(reader({ fresh: true })).resolves.toEqual(makeSnapshot('recovered'));
+    expect(fetchWebUsageSnapshot).toHaveBeenCalledTimes(3);
+  });
+
+  it('recovers when the wall clock jumps backwards past the last refresh timestamp', async () => {
+    let now = 10_000_000;
+    const fetchWebUsageSnapshot = vi.fn().mockResolvedValue(makeSnapshot('openai-web'));
+    const reader = createCodexAccountUsageSnapshotReader({
+      readCredentials: async () => ({ accessToken: 'token', accountId: 'account-id' }),
+      fetchWebUsageSnapshot,
+      recordSnapshot: async () => {},
+      clearSnapshot: async () => {},
+      readCachedSnapshot: async () => makeSnapshot('cached'),
+      now: () => now,
+      onRefreshError: vi.fn(),
+    });
+
+    await reader();
+    await vi.waitFor(() => expect(fetchWebUsageSnapshot).toHaveBeenCalledTimes(1));
+
+    // Minor backward jitter (<60s) stays throttled; major jump (>60s) allows a fresh read.
+    now -= 30_000;
+    await reader();
+    expect(fetchWebUsageSnapshot).toHaveBeenCalledTimes(1);
+
+    now -= 120_000;
+    await reader();
+    await vi.waitFor(() => expect(fetchWebUsageSnapshot).toHaveBeenCalledTimes(2));
+  });
+
+  it('allows manual refresh after 15s cooldown and retries once a post-success failure backoff expires', async () => {
+    let now = 1_000_000;
+    let cached = makeSnapshot('cached');
+    const onRefreshError = vi.fn();
+    const fetchWebUsageSnapshot = vi.fn()
+      .mockResolvedValueOnce(makeSnapshot('initial'))
+      .mockRejectedValueOnce(new Error('503'))
+      .mockResolvedValueOnce(makeSnapshot('recovered'));
+    const reader = createCodexAccountUsageSnapshotReader({
+      readCredentials: async () => ({ accessToken: 'token', accountId: 'account-id' }),
+      fetchWebUsageSnapshot,
+      recordSnapshot: async (snap) => { cached = snap; },
+      clearSnapshot: async () => {},
+      readCachedSnapshot: async () => cached,
+      now: () => now,
+      onRefreshError,
+    });
+
+    await reader();
+    await vi.waitFor(() => expect(fetchWebUsageSnapshot).toHaveBeenCalledTimes(1));
+
+    // Manual refresh within 15s is suppressed; at +60s it runs even inside the 30m idle window.
+    now += 10_000;
+    await reader({ manual: true });
+    expect(fetchWebUsageSnapshot).toHaveBeenCalledTimes(1);
+
+    now += 50_000;
+    await reader({ manual: true });
+    await vi.waitFor(() => expect(onRefreshError).toHaveBeenCalledTimes(1));
+
+    // After the 5m failure backoff expires (still well inside 30m idle TTL from t=0), passive read retries.
+    now += 4 * 60_000;
+    await reader();
+    expect(fetchWebUsageSnapshot).toHaveBeenCalledTimes(2);
+    now += 60_000;
+    await reader();
+    await vi.waitFor(() => {
+      expect(fetchWebUsageSnapshot).toHaveBeenCalledTimes(3);
+      expect(cached).toEqual(makeSnapshot('recovered'));
+    });
   });
 });

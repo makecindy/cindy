@@ -224,8 +224,9 @@ no new transport, persistence, credential transfer or send path is introduced.
 The Mobile editor follows `supersededBy` through the same task-scoped resource reads only
 while installation, account and draft identity still match; its actions and invalidations
 use the resolved card ID. Ordinary chat rows continue hiding superseded cards.
-Remote Desktop retains the read-only message and original mailbox link because its
-existing card editor dispatches local actions only. Native reader calls are finalized
+Remote Desktop opens the same editor: it rebuilds remote mail cards from the `mail`
+projection and routes their actions through `plugin-results` (see
+[plugin-card-desktop-remote](plugin-card-desktop-remote.md)). Native reader calls are finalized
 even after owner/installation invalidation. Owner scope still guards result delivery;
 an invalid installation cannot acquire editor bindings or extend the call-bound Host capability window.
 Old hosts do not inject `openDraft` and remain read-only; old providers ignore it, and old clients ignore
@@ -244,6 +245,15 @@ an ineffective retry; restored tabs never launch an external page automatically.
 Desktop native mail cards also open this tab through `open-mail-card` with
 `sessionId` and `callId`. The tab stores only the card ID and uses the existing
 card editor/actions; session-scoped lookup and supersession select the current
-view. This is a local desktop trial, not a new plugin or device-link capability.
+view. A remote task's tab reads that card through its computer's existing card resource;
+this is not a new plugin or device-link capability.
 Older URL-based reader tabs remain valid. Draft edits, deletion and delayed send
 still use the same host-owned mail workflow as the chat card.
+
+Adapters can supply `readReplyQuote({record, readBack})` to recover the exact parent
+in the selected account, returning `{quote, quoteHtml}` or `null` for an empty
+source. A provider may set `replyQuoteExpected: true` on the creation receipt for a
+requested quote, never simply on reopening a reply. The optional `addQuoteLabel`
+publishes a submit action on editable cards; it uses the same form, account, draft
+and save checks as other edits. A plain read or a click on that action cannot send
+mail. Older adapters and stored cards keep the existing form and send path.

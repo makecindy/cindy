@@ -72,6 +72,27 @@ export const imBotSettings = defineSettings({
     sectionKey: 'settings.imBot.groups.cindy',
     aliases: ['Feishu', 'Lark', '工作电脑'],
   },
+  cindyDiscord: {
+    // 官方 Discord 机器人(与「个人」栏的 Discord bot 无关); 卡片在端点下发前不渲染,
+    // 搜索落到「官方」分组兜底。
+    id: 'imBot.cindy.discord',
+    isVisible: (identity) => identity.mode === 'cloud' && showCindyGroup(identity),
+    fallbackTargetId: 'im-bot-group-cindy',
+    tab: 'im-bot',
+    targetId: 'cindy-im-discord',
+    titleKey: 'settings.tina.prefs.providerDiscord',
+    sectionKey: 'settings.imBot.groups.cindy',
+    descriptionKey: 'settings.remoteControl.hook.discord.description',
+    // 关联码只在关联中显示, 搜「关联码」也能找到这张卡。
+    keywordKeys: [
+      'settings.remoteControl.hook.discord.bindCode.label',
+      'settings.remoteControl.hook.discord.bindCode.hint',
+      'settings.remoteControl.hook.discord.disabledHint',
+      'settings.remoteControl.hook.discord.openApp',
+      'settings.remoteControl.hook.discord.addToGroup',
+    ],
+    aliases: ['Discord', 'Discord bot', 'official Discord bot'],
+  },
   cindyX: {
     id: 'imBot.cindy.x',
     isVisible: (identity) => identity.mode === 'cloud' && showCindyGroup(identity),
@@ -114,6 +135,27 @@ export const imBotSettings = defineSettings({
     titleKey: 'settings.feishuBot.services.lark',
     sectionKey: 'settings.imBot.groups.personal',
     aliases: ['Lark bot'],
+  },
+  feishuGroups: {
+    id: 'imBot.feishu.groups',
+    tab: 'im-bot',
+    targetId: 'personal-im-feishu-groups',
+    fallbackTargetId: 'personal-im-feishu',
+    titleKey: 'settings.feishuBot.groups.title',
+    descriptionKey: 'settings.feishuBot.groups.description',
+    sectionKey: 'settings.imBot.groups.personal',
+    keywordKeys: [
+      'settings.feishuBot.groups.searchLabel',
+      'settings.feishuBot.groups.project.label',
+      'settings.feishuBot.groups.project.hint',
+      'settings.feishuBot.groups.model.label',
+      'settings.feishuBot.groups.permission.label',
+      'settings.feishuBot.groups.widerConfirm.title',
+      'settings.feishuBot.groups.widerConfirm.description',
+      'settings.feishuBot.groups.fullAccessConfirm.title',
+      'settings.feishuBot.groups.fullAccessConfirm.description',
+    ],
+    aliases: ['Feishu group settings', 'Lark group settings', '飞书群聊'],
   },
   dingtalk: {
     id: 'imBot.dingtalk',
@@ -160,6 +202,18 @@ export const imBotSettings = defineSettings({
     titleKey: 'settings.telegramBot.title',
     sectionKey: 'settings.imBot.groups.personal',
     aliases: ['Telegram', 'Telegram bot'],
+  },
+  // 「插件」分栏只在装了 IM 入口插件时出现；没有时落到本页顶部。
+  plugins: {
+    id: 'imBot.plugins',
+    tab: 'im-bot',
+    targetId: 'im-bot-group-plugins',
+    fallbackTargetId: 'settings-panel-im-bot',
+    titleKey: 'settings.imBot.groups.plugins',
+    sectionKey: 'settings.sections.imBot',
+    descriptionKey: 'settings.imBot.tips.plugins',
+    keywordKeys: ['settings.imBot.plugins.rowHint', 'settings.imBot.plugins.open'],
+    aliases: ['IM plugin', 'plugin'],
   },
 });
 

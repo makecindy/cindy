@@ -15,7 +15,7 @@ Each **session** is a persistent chat thread run by an agent engine (Claude Code
 **During a turn:**
 
 - While the agent is replying, the composer shows a separate **Stop** button (labeled **Stop generating**) — click it to interrupt the current turn.
-- You can keep typing: the send button becomes **Queue message**, and follow-ups are **queued** and sent one after another when each turn finishes. With the default Enter-to-send setting, press ⌘↵ / Ctrl+Enter instead to **steer** — deliver the message into the running turn without interrupting it.
+- You can keep typing: the send button becomes **Queue message**, and follow-ups are **queued** and sent one after another when each turn finishes. With the default Enter-to-send setting, press ⌘↵ / Ctrl+Enter instead to **steer** — deliver the message into the running turn without interrupting it. Rest the pointer on the send button (or right-click it) to see both ways: click **Queue** or **Steer** to send this one message that way, or use the swap icon on the left to make the other way the default. The default can also be changed in Settings; with Steer as the default, ⌘↵ / Ctrl+Enter queues instead.
 - Queued messages appear above the composer, where you can **Steer**, **Edit**, **Delete**, or drag to reorder them. If you stop the turn, the queue pauses until you click **Continue sending**.
 
 **Context:**

@@ -40,20 +40,23 @@ export async function resolve(specifier, context, nextResolve) {
 }
 
 export async function load(url, context, nextLoad) {
-  if (!url.startsWith('cindy-raw:')) {
-    if (url.includes('/apps/desktop/') && /\.tsx?(?:\?|$)/.test(url)) {
-      const filename = fileURLToPath(url);
-      const source = await readFile(filename, 'utf8');
-      const result = await transform(source, { loader: filename.endsWith('.tsx') ? 'tsx' : 'ts', format: 'esm', target: 'node22', sourcefile: filename, sourcemap: 'inline' });
-      return { format: 'module', shortCircuit: true, source: result.code };
-    }
-    return nextLoad(url, context);
+  const resolvedRaw = url.startsWith('cindy-raw:');
+  const file = resolvedRaw ? new URL(url.slice('cindy-raw:'.length)) : new URL(url);
+  // tsx's synchronous resolve hook can remove the query before calling our resolve
+  // and restore it on the final file URL. At load time the original intent is visible.
+  if (file.protocol === 'file:' && (resolvedRaw || file.searchParams.has('raw') || file.pathname.endsWith('.md'))) {
+    const text = await readFile(file, 'utf8');
+    return { format: 'module', shortCircuit: true, source: `export default ${JSON.stringify(text)};` };
   }
-  const filesystemPath = fileURLToPath(url.slice('cindy-raw:'.length));
-  const text = await readFile(filesystemPath, 'utf8');
-  return {
-    format: 'module',
-    shortCircuit: true,
-    source: `export default ${JSON.stringify(text)};`,
-  };
+  if (url.includes('/apps/desktop/') && /\.tsx?(?:\?|$)/.test(url)) {
+    const filename = fileURLToPath(url);
+    const source = await readFile(filename, 'utf8');
+    const result = await transform(source, { loader: filename.endsWith('.tsx') ? 'tsx' : 'ts', format: 'esm', target: 'node22', sourcefile: filename, sourcemap: 'inline',
+      // The desktop modules' build region (shared/brandRegion.ts). A release bakes its --region here
+      // (scripts/build.mjs); from source it follows CINDY_HOST_REGION, global when unset, for development
+      // only, the same value profile-path.mjs resolveHostRegion answers.
+      define: { 'import.meta.env.VITE_CINDY_AUTH_REGION': 'process.env.CINDY_HOST_REGION' } });
+    return { format: 'module', shortCircuit: true, source: result.code };
+  }
+  return nextLoad(url, context);
 }

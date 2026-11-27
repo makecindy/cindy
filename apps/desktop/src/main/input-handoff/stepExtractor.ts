@@ -7,7 +7,7 @@ import {
   type InputHandoffDeviceCode,
   type InputHandoffSource,
 } from '@cindy/device-link';
-import type { ControlBinding, NativeAxNode, NativeAxSnapshot, ScreenControl } from './types.js';
+import type { ControlBinding, HandoffFieldPlan, NativeAxNode, NativeAxSnapshot, ScreenControl } from './types.js';
 import { classifyOrigin, isBrowserBundle } from './originPolicy.js';
 import { findDeviceCode } from './deviceCode.js';
 
@@ -46,6 +46,22 @@ export interface ExtractedStep {
    * the window itself; mistaking another form for this only sends them there.
    */
   signIn?: boolean;
+  /** Keys (`hiddenFieldKeys`) of shrunken fields this step took in; passed back to keep them once focus moves. */
+  hiddenFields?: string[];
+  /** How many shrunken fields this step took in, remembered by key or not (an ambiguous key is not remembered). */
+  hiddenTaken?: number;
+  /**
+   * Shrunken fields the page lays out, taken in or not, each as its page id and fingerprint (`[domId, fp]`): a code
+   * field whose keys stopped matching may be among them.
+   */
+  hiddenCandidates?: string[];
+}
+
+/** Keep verified page metadata even when its controls cannot form a complete step. */
+export class IncompleteFormError extends Error {
+  constructor(readonly page: Pick<ExtractedStep, 'source' | 'url' | 'signIn'>) {
+    super('Incomplete form');
+  }
 }
 
 const SKIPPED_SUBROLES = new Set([
@@ -81,6 +97,43 @@ function visible(node: NativeAxNode, windowFrame: number[]): boolean {
   const [wx, wy, ww, wh] = windowFrame;
   return x + w > wx && y + h > wy && x < wx + ww && y < wy + wh;
 }
+
+/** Chrome clips offscreen AX bounds at the viewport edge, while retaining the field's identity. */
+function laidOutInPage(node: NativeAxNode, page: NativeAxNode, takenHidden: (node: NativeAxNode) => boolean): boolean {
+  if (visible(node, [])) return true;
+  if (!node.frame || !page.frame) return false;
+  if (takenHidden(node)) return true;
+  const [x, y, w, h] = node.frame;
+  const [px, py, pw, ph] = page.frame;
+  const edge = (value: number, start: number, size: number) => Math.abs(value - start) < 2 || Math.abs(value - start - size) < 2;
+  return (w >= 2 && h >= 0 && h < 2 && (edge(y, py, ph) || edge(y + h, py, ph))) ||
+    (h >= 2 && w >= 0 && w < 2 && (edge(x, px, pw) || edge(x + w, px, pw)));
+}
+
+/**
+ * Split code boxes ("请输入短信验证码" with six drawn digits) type into one real input the page
+ * shrinks to a pixel and focuses. Only a focused one is found: unfocused hidden fields are often
+ * traps for bots, never the owner's to fill (2026-11-25, a payment SMS code read as nothing to fill).
+ * Once found, re-reading the same step keeps it by place and fingerprint, since typing into an
+ * earlier field moves the focus away from it.
+ */
+function hiddenFieldInPage(node: NativeAxNode, page: NativeAxNode): boolean {
+  if (!TEXT_ROLES.has(node.role) || node.frame?.length !== 4 || page.frame?.length !== 4) return false;
+  const [x, y, w, h] = node.frame;
+  const [px, py, pw, ph] = page.frame;
+  return w >= 0 && h >= 0 && x >= px && y >= py && x <= px + pw && y <= py + ph;
+}
+
+/**
+ * A hidden field found focused earlier in this step: its page id (if any) with its fingerprint, within the document
+ * that holds it (named by its address). It survives text the page inserts after an earlier field is typed, which
+ * shifts tree positions; an id is unique only in its own document, so a frame's field of the same id is another field.
+ * The tree position is left out: another field (of another frame, say) may take that place.
+ * A key counts only while exactly one hidden field reads with it, and is remembered only then: two frames at one
+ * address, two fields without ids, or two ids read alike (they are read cut off) cannot tell whose the field was.
+ */
+export const hiddenFieldKeys = (field: { fp: string; domId?: string }, document: string): string[] =>
+  [JSON.stringify(['hidden', document, field.domId ?? null, field.fp])];
 
 const isWithin = (ref: string, scope: string) => ref === scope || ref.startsWith(`${scope}.`);
 const parentRef = (ref: string) => ref.slice(0, Math.max(0, ref.lastIndexOf('.')));
@@ -163,7 +216,8 @@ function signatureOf(source: InputHandoffSource, controls: ScreenControl[]): str
   ]);
 }
 
-export function extractStep(snapshot: NativeAxSnapshot): ExtractedStep {
+/** `confirmedHidden`: hidden fields this step already found focused (`hiddenFieldKeys`), kept when focus moved. */
+export function extractStep(snapshot: NativeAxSnapshot, confirmedHidden?: ReadonlySet<string>): ExtractedStep {
   const windowFrame = snapshot.window.frame ?? [];
   const browser = isBrowserBundle(snapshot.bundleId);
   const nodes = snapshot.nodes.filter((node) => visible(node, windowFrame));
@@ -175,7 +229,40 @@ export function extractStep(snapshot: NativeAxSnapshot): ExtractedStep {
     .sort((a, b) => area(b) - area(a))[0];
   // Without a page, a browser window shows only its toolbar: its address bar is never the owner's to fill.
   const pageMissing = browser && !topWeb;
-  const scoped = topWeb ? nodes.filter((node) => isWithin(node.ref, topWeb.ref)) : pageMissing ? [] : nodes;
+  // A page's accessibility tree includes laid-out fields below the viewport.
+  // Scrolling must not turn one form into unrelated partial steps. Zero-size
+  // nodes are excluded unless their bounds were clipped at the viewport edge.
+  // The document a node belongs to: its nearest web area (the page itself or a frame inside it), by its address;
+  // inserting text above a frame shifts the frame's tree position, not its address.
+  // Two frames may load the same address, each its own document with its own ids; their keys read alike, so neither
+  // is kept (see `hiddenFieldKeys`).
+  const documentNames = new Map<NativeAxNode, string>();
+  for (const node of snapshot.nodes) {
+    if (node.role !== 'AXWebArea') continue;
+    // A frame that only rewrites its fragment (`#sent`) is still the same document.
+    const address = node.url?.split('#')[0];
+    documentNames.set(node, address === undefined ? `ref:${node.ref}` : address);
+  }
+  const documents = [...documentNames.keys()].sort((a, b) => b.ref.length - a.ref.length);
+  const documentOf = (node: NativeAxNode) => {
+    const area = documents.find((candidate) => isWithin(node.ref, candidate.ref));
+    return area ? documentNames.get(area)! : '';
+  };
+  const keysOf = (node: NativeAxNode) => hiddenFieldKeys(node, documentOf(node));
+  // Every hidden field the page lays out, focused or not, and how many read with each key.
+  const hiddenCandidates = topWeb
+    ? snapshot.nodes.filter((node) => isWithin(node.ref, topWeb.ref) && !visible(node, []) && hiddenFieldInPage(node, topWeb))
+    : [];
+  const readers = new Map<string, number>();
+  for (const node of hiddenCandidates) for (const key of keysOf(node)) readers.set(key, (readers.get(key) ?? 0) + 1);
+  // Taken in by the hidden-field rule itself: focused now, or found focused earlier in this step and alone in its key.
+  const takenHidden = (node: NativeAxNode) => !!topWeb && hiddenFieldInPage(node, topWeb) &&
+    (!!node.focused || keysOf(node).some((key) => readers.get(key) === 1 && confirmedHidden?.has(key)));
+  const scoped = topWeb ? snapshot.nodes.filter((node) => isWithin(node.ref, topWeb.ref) && laidOutInPage(node, topWeb, takenHidden)) : pageMissing ? [] : nodes;
+  // Only fields the hidden-field rule took in are remembered, never zero-size fields kept for the viewport edge.
+  const hiddenNodes = scoped.filter((node) => !visible(node, []) && takenHidden(node));
+  // Remembered only when unambiguous now: a key two fields read with names neither once the focus moves.
+  const hiddenFields = hiddenNodes.flatMap(keysOf).filter((key) => readers.get(key) === 1);
 
   // Modal sheets take over the window.
   const sheet = scoped.find((node) => node.role === 'AXSheet');
@@ -184,11 +271,22 @@ export function extractStep(snapshot: NativeAxSnapshot): ExtractedStep {
   const origin = topWeb?.url && (browser || /^https?:/i.test(topWeb.url))
     ? classifyOrigin(topWeb.url, browser)
     : undefined;
+  // Included fields can be offscreen; keep their closest ancestor's verified
+  // origin even while they are plain inputs that a field plan may later mask.
+  const nestedAreas = topWeb ? snapshot.nodes.filter((node) =>
+    node.role === 'AXWebArea' && node !== topWeb && isWithin(node.ref, topWeb.ref)) : [];
 
   const textNodes: Array<{ node: NativeAxNode; index: number }> = [];
   inScope.forEach((node, index) => {
     if (node.role === 'AXStaticText') textNodes.push({ node, index });
   });
+  const domIds = new Map<string, number>();
+  const fingerprints = new Map<string, number>();
+  for (const node of inScope) {
+    if (!TEXT_ROLES.has(node.role) || (node.subrole && SKIPPED_SUBROLES.has(node.subrole))) continue;
+    if (node.domId) domIds.set(node.domId, (domIds.get(node.domId) ?? 0) + 1);
+    fingerprints.set(node.fp, (fingerprints.get(node.fp) ?? 0) + 1);
+  }
 
   const controls: ScreenControl[] = [];
   const bindings = new Map<string, ControlBinding>();
@@ -236,7 +334,15 @@ export function extractStep(snapshot: NativeAxSnapshot): ExtractedStep {
       };
       controls.push(control);
       lastTextControl = control;
-      bindings.set(controlId, { kind: 'text', ref: node.ref, fp: node.fp, secure: !!node.secure });
+      // Static validation text can shift AX indices without changing a field.
+      // Only depend on position when neither DOM id nor fingerprint is unique.
+      const stable = (node.domId && domIds.get(node.domId) === 1) || fingerprints.get(node.fp) === 1;
+      const frameArea = nestedAreas.filter((area) => isWithin(node.ref, area.ref))
+        .sort((a, b) => b.ref.length - a.ref.length)[0];
+      const frameOrigin = frameArea?.url ? classifyOrigin(frameArea.url, browser).origin : undefined;
+      // Read back by position in `keptHidden` (session.ts), which leaves the name out.
+      const identity = JSON.stringify([node.domId, node.fp, label, stable ? null : node.ref, frameOrigin]);
+      bindings.set(controlId, { kind: 'text', ref: node.ref, fp: node.fp, identity, secure: !!node.secure, ...(frameOrigin ? { frameOrigin } : {}) });
       refs.set(controlId, node.ref);
       return;
     }
@@ -351,25 +457,15 @@ export function extractStep(snapshot: NativeAxSnapshot): ExtractedStep {
   );
   if (primary >= 0) (controls[primary] as Extract<ScreenControl, { kind: 'button' }>).primary = true;
 
-  const capped = capControls(controls, bindings);
   const source: InputHandoffSource = {
     app: clip(snapshot.app) || snapshot.bundleId || 'App',
     ...(snapshot.window.title ? { window: clip(snapshot.window.title) } : {}),
     ...(origin?.origin ? { origin: origin.origin } : {}),
     ...(origin?.warning ? { warning: origin.warning } : {}),
   };
-  if (!source.warning && topWeb && hasSecure) {
-    // A password field inside a nested page from another origin.
-    const secureNode = inScope.find((node) => node.secure);
-    const frameArea = secureNode && webAreas
-      .filter((area) => area !== topWeb && isWithin(secureNode.ref, area.ref))
-      .sort((a, b) => b.ref.length - a.ref.length)[0];
-    const nested = frameArea?.url ? classifyOrigin(frameArea.url, browser) : undefined;
-    if (nested?.origin && origin?.origin && nested.origin !== origin.origin) source.warning = 'embedded-frame';
-  }
+  warnForEmbeddedPasswords(source, controls, bindings);
   const texts = inScope.map((node) => textOf(node)).filter((text): text is string => !!text);
-  const deviceCode = findDeviceCode(inScope, capped.some((control) => control.kind === 'text'));
-  const fieldTypes = capped.flatMap((control) => (control.kind === 'text' ? [control.contentType] : []));
+  const fieldTypes = controls.flatMap((control) => (control.kind === 'text' ? [control.contentType] : []));
   const labels = inScope.filter((node) => !TEXT_ROLES.has(node.role)).map((node) => textOf(node)).filter((text): text is string => !!text);
   let addressSaysLogin = false;
   try {
@@ -381,6 +477,17 @@ export function extractStep(snapshot: NativeAxSnapshot): ExtractedStep {
     (!browser || /^https?:/i.test(topWeb?.url ?? '')) &&
     (fieldTypes.some((type) => SIGN_IN_SECRETS.has(type)) ||
       (looksLikeLogin && fieldTypes.some((type) => SIGN_IN_ACCOUNTS.has(type))));
+  // Never expose a partial form, but retain its verified source for picture
+  // input and page-read protection. A truncated tree may hide the password.
+  if (snapshot.truncated || fieldTypes.length > INPUT_HANDOFF_MAX_CONTROLS) {
+    throw new IncompleteFormError({
+      source,
+      ...(topWeb?.url ? { url: topWeb.url } : {}),
+      signIn: signIn || (!!snapshot.truncated && /^https?:/i.test(topWeb?.url ?? '')),
+    });
+  }
+  const capped = capControls(controls, bindings);
+  const deviceCode = findDeviceCode(inScope, capped.some((control) => control.kind === 'text'));
   return {
     controls: capped,
     shown: deviceCode ? [] : ownerControls(capped),
@@ -393,6 +500,9 @@ export function extractStep(snapshot: NativeAxSnapshot): ExtractedStep {
     ...(deviceCode ? { deviceCode } : {}),
     ...(pageMissing ? { pageMissing } : {}),
     ...(signIn ? { signIn } : {}),
+    ...(hiddenFields.length ? { hiddenFields } : {}),
+    ...(hiddenNodes.length ? { hiddenTaken: hiddenNodes.length } : {}),
+    ...(hiddenCandidates.length ? { hiddenCandidates: hiddenCandidates.map((node) => JSON.stringify([node.domId ?? null, node.fp])) } : {}),
   };
 }
 
@@ -430,8 +540,9 @@ function capControls(
 ): ScreenControl[] {
   if (controls.length <= INPUT_HANDOFF_MAX_CONTROLS) return controls;
   const rank = (control: ScreenControl) =>
-    control.kind === 'text' || control.kind === 'choice' ? 0
-      : control.kind === 'button' && control.primary ? 0
+    control.kind === 'text' ? 0
+      : control.kind === 'button' && control.primary ? 1
+        : control.kind === 'choice' ? 1
         : control.kind === 'note' && control.tone !== 'info' ? 1
           : control.kind === 'toggle' ? 1
             : control.kind === 'button' && !control.link ? 2
@@ -445,4 +556,56 @@ function capControls(
   );
   for (const control of controls) if (!keep.has(control.id)) bindings.delete(control.id);
   return controls.filter((control) => keep.has(control.id));
+}
+
+function warnForEmbeddedPasswords(source: InputHandoffSource, controls: ScreenControl[], bindings: Map<string, ControlBinding>): void {
+  if (source.warning || !source.origin) return;
+  if (controls.some(control => {
+    if (control.kind !== 'text' || control.contentType !== 'password') return false;
+    const binding = bindings.get(control.id);
+    return binding?.kind === 'text' && !!binding.frameOrigin && binding.frameOrigin !== source.origin;
+  })) source.warning = 'embedded-frame';
+}
+
+/** Validate the entire plan before replacing any field. Ambiguous labels never guess a target. */
+export function applyFieldPlan(step: ExtractedStep, plan: HandoffFieldPlan[]): boolean {
+  const fields = step.shown.filter((c): c is Extract<InputHandoffControl, { kind: 'text' }> => c.kind === 'text');
+  const used = new Set<string>();
+  const replacements: Array<{ control: typeof fields[number]; binding: ControlBinding }> = [];
+  for (const field of plan) {
+    const matches = field.targets.map((target) => fields.filter((c) => c.label === target.label));
+    if (!matches.length || matches.some((items) => items.length !== 1)) return false;
+    const originals = matches.map((items) => items[0]);
+    const bindings = originals.map((c) => step.bindings.get(c.id));
+    if (bindings.some((b) => b?.kind !== 'text')) return false;
+    const textBindings = bindings as Array<ControlBinding & { kind: 'text' }>;
+    for (const original of originals) {
+      if (used.has(original.id)) return false;
+      used.add(original.id);
+    }
+    const split = originals.length > 1;
+    // Splitting is meaningful only for codes; passwords must stay intact.
+    if (split && (field.contentType !== 'one-time-code' || textBindings.some((b) => b.secure) ||
+      field.targets.some((t) => !Number.isSafeInteger(t.length) || t.length! < 1 || t.length! > 64))) return false;
+    const secure = textBindings.some((b) => b.secure) || field.contentType === 'password';
+    const control = { ...originals[0], label: clip(field.label), contentType: secure ? 'password' as const : field.contentType };
+    // One field can be partially filled; don't imply the whole code is present.
+    if (!originals.every((c) => c.filled)) delete control.filled;
+    replacements.push({ control, binding: {
+      ...textBindings[0], secure, nativeSecure: textBindings[0].secure,
+      ...(split ? { segments: textBindings.map((b, i) => ({ ...b, length: field.targets[i].length! })) } : {}),
+    } });
+  }
+  if (used.size !== fields.length || !fields.length) return false;
+  const first = step.controls.findIndex((c) => used.has(c.id));
+  step.controls = step.controls.filter((c) => !used.has(c.id));
+  step.controls.splice(first, 0, ...replacements.map((r) => r.control));
+  for (const id of used) step.bindings.delete(id);
+  for (const { control, binding } of replacements) step.bindings.set(control.id, binding);
+  step.hasSecure ||= replacements.some((r) => r.control.contentType === 'password');
+  if (step.hasSecure || replacements.some((r) => r.control.contentType === 'one-time-code')) step.signIn = true;
+  step.shown = ownerControls(step.controls);
+  warnForEmbeddedPasswords(step.source, step.controls, step.bindings);
+  step.signature = signatureOf(step.source, step.controls);
+  return true;
 }

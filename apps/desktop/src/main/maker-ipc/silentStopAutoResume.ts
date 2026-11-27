@@ -7,8 +7,8 @@
  *    RESUME_BUDGET 次自动续跑额度;自动补发的「继续」**不充值** —— 这是防死循环的
  *    硬保证:上游连环出 bug 时,每条人话最多买 RESUME_BUDGET 个自动 turn,连续第
  *    RESUME_BUDGET+1 次中断转为 exhausted(UI 显式提示,停下等人)。
- *  - 会话累计自动续跑 >= SESSION_BREAKER_LIMIT 次 → 本会话内熔断(app 重启前不再
- *    自动续跑),防上游高频抽风期的成本泄漏。
+ *  - 会话累计自动续跑 >= SESSION_BREAKER_LIMIT 次 → 熔断至正常回复完成，
+ *    防上游高频抽风期的成本泄漏。
  *  - 同一次 turn 结束只决策一次:发出 resume 后置 pendingResume,直到下一个 turn
  *    真正开始才清 —— 重复投递的 done 事件不会连发两条「继续」。另有 MIN_INTERVAL
  *    短窗兜底极端时序(正常模型 turn 远长于该窗口,不会挡住合法的连续续跑)。
@@ -27,10 +27,12 @@ export const SILENT_STOP_SESSION_BREAKER_LIMIT = 6;
 export const SILENT_STOP_RESUME_MIN_INTERVAL_MS = 5_000;
 /** 自动补发的续跑消息正文(固定常量;作为普通 user 消息 append,不扰动缓存前缀)。 */
 export const SILENT_STOP_RESUME_PROMPT = '继续';
+/** silent-stop done 之后等多久再问守卫要决策(让本次 turn-end 的落库/收口先走完，也给用户恰好发消息留出让位窗口)。 */
+export const SILENT_STOP_DECISION_DELAY_MS = 1_500;
 
 export type SilentStopDecision =
   | { action: 'resume' }
-  | { action: 'exhausted' }
+  | { action: 'exhausted'; cause: 'budget' | 'rate-limit' | 'session-breaker' }
   | { action: 'skip'; why: 'disabled' | 'superseded' | 'pending' };
 
 interface GuardLogger {
@@ -114,6 +116,20 @@ export class SilentStopAutoResumeGuard {
     s.lastUserSendAt = this.now();
   }
 
+  /** 熔断横幅是否已提示过(供调用方决定是否再弹)。 */
+  isBreakerWarned(sessionId: string): boolean {
+    return this.sessions.get(sessionId)?.breakerWarned === true;
+  }
+
+  /** 仅在正常完成且有可见回复时重置会话熔断，不改变单次输入额度。 */
+  noteProgress(sessionId: string): void {
+    const s = this.sessions.get(sessionId);
+    if (!s) return;
+    if (s.resumeCount === 0 && !s.breakerWarned) return;
+    s.resumeCount = 0;
+    s.breakerWarned = false;
+  }
+
   /**
    * 对一次 silent-stop turn 结束做决策。`doneAt` 是该 done 事件的观察时刻,用于
    * 陈旧判定(其后用户已发消息 / 新 turn 已开始 → superseded)。
@@ -149,21 +165,21 @@ export class SilentStopAutoResumeGuard {
           resumeCount: s.resumeCount,
         });
       }
-      return { action: 'exhausted' };
+      return { action: 'exhausted', cause: 'session-breaker' };
     }
     if (s.lastResumeAt > 0 && now - s.lastResumeAt < SILENT_STOP_RESUME_MIN_INTERVAL_MS) {
       this.deps.log.warn('silent-stop resume burst-guarded (too soon after previous resume)', {
         sessionId,
         sinceLastResumeMs: now - s.lastResumeAt,
       });
-      return { action: 'exhausted' };
+      return { action: 'exhausted', cause: 'rate-limit' };
     }
     if (s.budgetLeft <= 0) {
       this.deps.log.debug('silent-stop resume budget exhausted — waiting for user', {
         sessionId,
         resumeCount: s.resumeCount,
       });
-      return { action: 'exhausted' };
+      return { action: 'exhausted', cause: 'budget' };
     }
     s.budgetLeft -= 1;
     s.resumeCount += 1;

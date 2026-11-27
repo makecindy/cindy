@@ -736,6 +736,23 @@ function buildDesktopCommonEntries(apacheText, sharpPackageNames) {
   const entries = [
     ...buildSpeakerModelEntries(apacheText),
     onnxRuntimeEntry("bundled with sherpa-onnx-node 1.13.8"),
+    bundledComponent({
+      name: "JetBrains Mono fonts",
+      version: "bundled",
+      license: "OFL-1.1",
+      url: "https://github.com/JetBrains/JetBrainsMono",
+      licenseText: readBundledLicense(
+        "apps/desktop/resources/system-skills/cindy-plugin-creator/references/examples/interactive-pages/host-ui/assets/JetBrainsMono-OFL.txt",
+      ),
+    }),
+    // This repository-owned core and its wasm wrapper have no third-party crates.
+    bundledComponent({
+      name: "Cindy agent-net WebAssembly core",
+      version: `sha256:${JSON.parse(readBundledLicense("packages/agent-net-core/prebuilt/manifest.json")).binaryDigest}`,
+      license: "Apache-2.0",
+      url: "https://github.com/makecindy/cindy/tree/main/packages/agent-net-core",
+      licenseText: readBundledLicense("LICENSE"),
+    }),
   ];
 
   // ripgrep — 随包分发的搜索二进制
@@ -1543,6 +1560,9 @@ function assertTrackedBinariesRegistered() {
   const registeredFiles = new Set([
     "apps/desktop/resources/cindy-updater-runtime/vcruntime140.dll",
     "apps/desktop/resources/cindy-updater-runtime/vcruntime140_1.dll",
+    // Disclosed by buildDesktopCommonEntries; keep these registrations exact.
+    "apps/desktop/resources/system-skills/cindy-plugin-creator/references/examples/interactive-pages/host-ui/assets/JetBrainsMono-Regular.ttf",
+    "packages/agent-net-core/prebuilt/core.wasm",
   ]);
   const files = execFileSync("git", ["ls-files", "-z"], {
     cwd: REPO_ROOT,

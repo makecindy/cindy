@@ -648,4 +648,62 @@ describe('resolveDeviceLinkSubmission', () => {
     // 且两者都已被校准(不是「一致地都错」)。
     expect(fromSend.providerId).toBe('stale-source');
   });
+
+  // 生产入口与可观察结果：resolveDeviceLinkSubmission + buildProvisionalRemoteSession；在 A 电脑切到 B 电脑新建
+  // 插件引擎任务时，生成发往 B 电脑 maker:create-session 的 acp 参数与乐观临时任务行。
+  // 规则依据：acp-plugin-bridge 远程控制建任务协议(agentKind='acp', providerId='acp-plugin:...', fastMode=false，
+  // 不带内置 extraDirs / planMode / agentDeviceId)。
+  // 覆盖缺口：此前 Desktop 的 resolveDeviceLinkSubmission 只允许内置 cc/codex/pi，切到 B 电脑工作时无法创建插件引擎会话。
+  // 最小失败输入与 tier：unit；传 pluginEngine(含空模型回落 'default')时混入内置 provider 校准、漏掉 'acp' 或临时行丢失 'acp'。
+  it('被控电脑插件引擎新建任务：走唯一入口组装 acp 参数，且乐观临时行保持 agentKind=acp', () => {
+    const args = resolveDeviceLinkSubmission({
+      agentKind: 'cc',
+      id: 'remote-acp-1',
+      workingDir: '/peer/proj',
+      extraDirs: ['/local/ignored'],
+      writableDirs: ['/local/writable-ignored'],
+      agentDeviceId: 'device-c',
+      candidate: {
+        model: 'claude-sonnet-4-6',
+        effort: 'medium',
+        permissionMode: 'plan',
+        fastMode: true,
+        planModeEnabled: true,
+        providerId: 'anthropic',
+      },
+      deviceProviders: [deviceProvider('anthropic', true, ['claude-sonnet-4-6'])],
+      capabilityAgentKind: AGENT,
+      pluginEngine: {
+        providerId: 'acp-plugin:agy-plugin:agy',
+        model: '',
+        effort: 'high',
+        permissionMode: 'bypassPermissions',
+      },
+    });
+    expect(args).toEqual({
+      agentKind: 'acp',
+      id: 'remote-acp-1',
+      workingDir: '/peer/proj',
+      workspaceKind: 'project',
+      model: 'default',
+      effort: 'high',
+      permissionMode: 'bypassPermissions',
+      fastMode: false,
+      providerId: 'acp-plugin:agy-plugin:agy',
+    });
+    const provisional = buildProvisionalRemoteSession({
+      sessionId: 'remote-acp-1',
+      workDir: '/peer/proj',
+      args,
+      nowIso: '2026-11-21T05:00:00.000Z',
+    });
+    expect(provisional.agentKind).toBe('acp');
+    expect(provisional.providerId).toBe('acp-plugin:agy-plugin:agy');
+    expect(provisional.model).toBe('default');
+    expect(provisional.effort).toBe('high');
+    expect(provisional.permissionMode).toBe('bypassPermissions');
+    expect(provisional.fastMode).toBe(false);
+    expect(provisional.planModeEnabled).toBe(false);
+    expect('agentDeviceId' in provisional).toBe(false);
+  });
 });

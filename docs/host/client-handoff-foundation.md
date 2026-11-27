@@ -40,6 +40,21 @@ Electron 内执行任务，使用原桌面装配；不自动启动 Host、不迁
 首次迁移、profile 写入权切换、旧客户端恢复和个人版升级命令不属于本次地基。
 真实账号、真实模型服务、正式安装包、Windows、手机及整机迁移未实测时不能宣称通过。
 
+## 迁移前的插件批准预检
+
+正式接管已有 profile 之前，先退出使用它的桌面和 Host，运行
+`cindy-host migration-preflight <profile-绝对路径>`。命令只读地清点 profile 下未归属的
+`brain`、`cindy-brain` 和每个 owner 下这两种目录中的旧布局安装。
+只在命令退出码为 0 且 JSON 的 `allowed: true`、`count: 0` 时进入下一步；清点失败或非零时停止。
+如果缺批准记录，用 Cindy Desktop v0.1.48 或更新的版本以内嵌模式打开同一个 profile，
+等桌面完成已有的一次性补写，退出桌面再跑预检。跨账号 profile 须让相应账号完成补写。
+仍非零时保持阻断；缺失记录本身不能作为恢复批准的授权。此命令不触发交接或写入批准，
+整机迁移仍须满足发布开关和原验收条件。
+
+Host 启动会在当前稳定账号的插件对账中记录缺批准的旧布局安装数量及安装标识，
+可用 `cindy-host status` 或 `cindy-host status --json` 查看。`unchecked`（JSON `null`）表示
+当前运行时尚无结果。状态是当前运行账号的诊断，迁移放行以离线整份 profile 的预检为准。
+
 ## 尚未接通的客户端界面通道
 
 本层的平台 RPC 是后台调用原生能力的入口，不等于已接通所有 Renderer IPC。

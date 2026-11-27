@@ -20,6 +20,9 @@ import {
   setRemoteSessionBootstrapRetryImpl,
   subscribeRemoteSessionRemoval,
 } from '@/features/device-link/remoteProjectsStore';
+import { commitRemoteSessionHandoff, previewRemoteCreation } from '@/features/cc-agent/remoteSessionHandoff';
+import * as remoteRefresh from '@/features/device-link/refreshRemoteSessions';
+import { clearSessionStarting } from '@/lib/sessionStartingStore';
 import type { Session } from '@/lib/ccAgent.types';
 
 /** 造一个最小可用 Session(store 只存/透传,不校验字段)。 */
@@ -54,6 +57,35 @@ function mk(id: string, partial: Partial<Session> = {}): Session {
 }
 
 describe('remoteProjectsStore', () => {
+  // Unit: a delayed create can overlap both a stale listing and its first real row.
+  it('keeps a single visible task across snapshots without putting the pending task in the host mirror', () => {
+    const id = 'creating';
+    const createdAt = '2026-11-18T00:00:00.000Z';
+    const message = { clientId: 'first', role: 'user' as const, content: 'First message', createdAt };
+    const creation = {
+      deviceId: 'host', deviceName: 'Host', remoteSessionId: id, nowIso: createdAt, logTag: 'test',
+      createArgs: { id, agentKind: 'codex', workspaceKind: 'project', model: 'fixture',
+        effort: 'medium', permissionMode: 'default', fastMode: false, workingDir: '/repo' },
+    } as const;
+    const refresh = vi.spyOn(remoteRefresh, 'refreshRemoteDeviceSessions').mockResolvedValue('ok');
+    try {
+      previewRemoteCreation(creation, message.content, message);
+      remoteProjectsStore.setDeviceSessions('host', 'Host', []);
+      expect(remoteProjectsStore.getDeviceSessions('host')).toEqual([]);
+      expect(remoteProjectsStore.getVisibleMergedRemoteSessions())
+        .toMatchObject([{ id, title: message.content, userSendAt: createdAt, projectDir: '/repo' }]);
+      remoteProjectsStore.setDeviceSessions('host', 'Host', [mk(id, { title: 'Host title' })]);
+      commitRemoteSessionHandoff({ ...creation, workDir: '/repo' });
+      expect(refresh).not.toHaveBeenCalled();
+      expect(remoteProjectsStore.getCreationPreview(id)?.message.clientId).toBe(message.clientId);
+      remoteProjectsStore.clearCreationPreview(id);
+      expect(remoteProjectsStore.getVisibleMergedRemoteSessions().map(s => [s.id, s.title])).toEqual([[id, 'Host title']]);
+    } finally {
+      refresh.mockRestore();
+      clearSessionStarting(id);
+    }
+  });
+
   // Unit, #7469: a two-row snapshot changing one task must not invalidate the
   // other sidebar row's memo. Existing tests cover whole-snapshot no-ops, not
   // per-row UI identity or its separation from in-flight detail-read fences.
@@ -82,6 +114,38 @@ describe('remoteProjectsStore', () => {
     remoteProjectsStore.applyPatch('host', 'same', { lastActivityAt: '2026-01-02T00:00:00.000Z' });
     expect(freshRead()).toBe(true);
     expect(freshRead.mergeActivity(mk('same')).lastActivityAt).toBe('2026-01-02T00:00:00.000Z');
+  });
+
+  // Unit, #10710: replace one row to separate the visible and authoritative
+  // references of an unchanged row. A subsequent patch can reuse that projection
+  // without serializing it again, including when a hidden row shifts its index.
+  it('reuses a previously compared visible row without encoding it on the next patch', () => {
+    const hidden = mk('hidden', { source: 'cindy-make' });
+    remoteProjectsStore.setDeviceSessions('host', 'Host', [hidden, mk('stable'), mk('changing')]);
+    const stableVisible = remoteProjectsStore.getVisibleMergedRemoteSessions().find(row => row.id === 'stable');
+    remoteProjectsStore.setDeviceSessions('host', 'Host', [
+      hidden, mk('stable'), mk('changing', { title: 'From snapshot' }),
+    ]);
+    const stableMirror = remoteProjectsStore.getDeviceSessions('host').find(row => row.id === 'stable');
+    expect(stableVisible).toBeDefined();
+    expect(stableMirror).toBeDefined();
+    expect(stableMirror).not.toBe(stableVisible);
+
+    const stringify = vi.spyOn(JSON, 'stringify');
+    let encodedStableRow: boolean;
+    try {
+      remoteProjectsStore.applyPatch('host', 'changing', { extraDirs: ['/from-patch'] });
+      encodedStableRow = stringify.mock.calls.some(([value]) => value === stableVisible || value === stableMirror);
+    } finally {
+      stringify.mockRestore();
+    }
+
+    const visible = remoteProjectsStore.getVisibleMergedRemoteSessions();
+    expect(visible.find(row => row.id === 'stable')).toBe(stableVisible);
+    expect(visible.find(row => row.id === 'changing')).toMatchObject({
+      title: 'From snapshot', extraDirs: ['/from-patch'],
+    });
+    expect(encodedStableRow).toBe(false);
   });
 
   // Unit, #7469: structural sharing must compare nested payloads too, and must
@@ -187,6 +251,22 @@ describe('remoteProjectsStore', () => {
     remoteProjectsStore.applyTagCatalog('dev-A', []);
     expect(remoteProjectsStore.isLatestSnapshotEpoch('dev-A', epoch, 'archived')).toBe(false);
     expect(reseed.mock.calls).toEqual([['dev-A', 'active'], ['dev-A', 'archived']]);
+  });
+
+  // Unit: the controller may never have opened the hidden follow-up. Its
+  // first-worker patch must make the existing task visible on the right device.
+  it('loads a newly linked side chat missing from the controller task list', () => {
+    remoteProjectsStore.setDeviceSessions('dev-A', 'A', [mk('parent')]);
+    remoteProjectsStore.setDeviceSessions('dev-B', 'B', [mk('unrelated')]);
+    const reseed = vi.fn((deviceId: string) => {
+      remoteProjectsStore.setDeviceSessions(deviceId, 'A', [mk('parent'), mk('child', { source: 'desktop', parentSessionId: 'parent' })]);
+    });
+    setRemoteReseedImpl(reseed);
+    remoteProjectsStore.applyPatch('dev-A', 'child', { source: 'desktop', sideChatPromoted: true });
+    expect(reseed).toHaveBeenCalledExactlyOnceWith('dev-A', 'active');
+    expect(remoteProjectsStore.getVisibleMergedRemoteSessions()).toContainEqual(expect.objectContaining({
+      id: 'child', parentSessionId: 'parent', deviceLinkDeviceId: 'dev-A',
+    }));
   });
 
   it('requeues both loaded buckets after invalidating a refresh that may contain new tasks', () => {
@@ -1309,5 +1389,27 @@ describe('remoteProjectsStore pending status (remote archive / unarchive)', () =
     remoteProjectsStore.clear();
     remoteProjectsStore.setDeviceSessions('dev-A', 'A', [mk('b')]);
     expect(projected('b')?.status).toBe('active');
+  });
+
+  it('computes latest visible session activity per device and ignores deleted sessions', () => {
+    remoteProjectsStore.setDeviceSessions('dev-A', 'A', [
+      { ...mk('a1'), userSendAt: null, updatedAt: '2026-11-25T10:00:00.000Z' },
+      { ...mk('a2'), updatedAt: '2026-11-26T08:00:00.000Z', userSendAt: '2026-11-26T09:30:00.000Z' },
+      { ...mk('a3'), userSendAt: '2026-11-26T12:00:00.000Z', updatedAt: '2026-11-26T12:00:00.000Z' },
+    ]);
+    remoteProjectsStore.applyPatch('dev-A', 'a3', { status: 'deleted' });
+    remoteProjectsStore.setDeviceSessions('dev-B', 'B', [
+      { ...mk('b1'), userSendAt: null, updatedAt: '2026-11-24T05:00:00.000Z' },
+    ]);
+
+    expect(remoteProjectsStore.getDeviceLatestActivityAt()).toEqual({
+      'dev-A': Date.parse('2026-11-26T09:30:00.000Z'),
+      'dev-B': Date.parse('2026-11-24T05:00:00.000Z'),
+    });
+
+    remoteProjectsStore.removeDevice('dev-A');
+    expect(remoteProjectsStore.getDeviceLatestActivityAt()).toEqual({
+      'dev-B': Date.parse('2026-11-24T05:00:00.000Z'),
+    });
   });
 });

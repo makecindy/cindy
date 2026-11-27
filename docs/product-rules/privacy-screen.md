@@ -1,5 +1,17 @@
 # 隐私屏：用遮罩代替锁屏，让 AI 在你不在时继续用电脑
 
+> **读取时机**：新增或修改隐私屏（离开时遮住屏幕、远程控制时的遮罩、远程结束后的保护）、物理输入转锁屏、锁屏失败处理、
+> 屏幕常亮策略，或「离开电脑时」设置与遥控端「安全」面板里的相关开关之前
+> **适用路径**：`apps/desktop/src/main/remote-desktop/**/{privacy,awayGuard,controlledOverlay,displayDemand,linuxPrivacy,linuxSessionLock,linuxLock,windowsLockScreenSetup}*`、
+> `apps/desktop/native/remote-desktop/hyprland-privacy/**`、
+> `apps/desktop/native/remote-desktop/windows-input/src/privacy.rs`、
+> `apps/desktop/native/remote-desktop/macos-input.swift`、
+> `apps/desktop/src/main/device-link/**/{power-blocker,powerBlocker}*`、
+> `apps/desktop/src/main/remote-desktop-viewer/**/safety*`、`apps/desktop/src/shared/awayGuard.ts`、
+> `apps/desktop/src/renderer/components/settings/AwayFromComputerSection*`、
+> `apps/desktop/src/renderer/hooks/use{AwayGuard,KeepAwake}Setting.ts`、
+> `apps/mobile/src/remote-desktop/{RemoteDesktopSecuritySettings,useRemoteDesktopSafety}*`
+
 2026-11-14，用户裁决：把「离开时继续工作」的黑色遮罩和远程桌面的「电脑防窥」合并成同一个东西，
 统一叫**隐私屏**。画面、有人碰电脑时的处理、锁不上时的处理、对屏幕的保护和设置位置，都按本文
 统一。原 PR #9899（远程结束后保留遮罩）已关闭，其原生能力和锁屏修复并入本文的实现。
@@ -110,6 +122,10 @@ AI 在后面照常工作。**
 - 升级兼容：旧的「离开时继续工作」开启状态和离开时长原样沿用为新设置，用户不需要重新设置。
 - 仅本机生效，不随账号同步，不进入跨电脑的设置迁移默认项（与原「离开时继续工作」一致）。
 
+在本机启用或预览时，设置页区分输入程序报告的缺少权限、权限检查未完成和遮罩建立失败。「立即试一下」等所有显示器被遮住且物理输入拦截就绪后才返回成功。后台自动遮屏失败沿用系统熄屏、锁屏策略；同一次故障只发一次本机桌面通知（按用户通知偏好），点通知回到这台电脑的隐私屏设置。恢复后再次失败可再次提醒。
+
+macOS 27.3 起，辅助功能的系统链接打开 **System & App Protection Override**。引导应指明正在运行的应用副本。用户可在 ⓘ 查看范围，或用 ＋ 从实际路径添加。系统提供「选择 App」时可限定控制范围。整机控制涵盖所有应用和数据，逐项确认由本人完成。返回 Cindy 后重新检测实际输入程序的权限。旧系统仍指向「辅助功能」。[Apple 的授权说明](https://support.apple.com/en-us/149699)
+
 ### 遥控端：远程桌面窗口 → 安全
 
 手机和电脑上的遥控窗口一致，按“这台遥控设备 × 那台被控电脑”分别记住。
@@ -165,7 +181,7 @@ AI 在后面照常工作。**
 | | macOS | Windows | Hyprland |
 | --- | --- | --- | --- |
 | 版本范围 | 14+ | 10 build 19041+ | 0.56.2，插件 ABI 匹配 |
-| 遮罩 | Electron 面板窗口，99% 不透明，从采集中排除 | Electron 窗口，内容保护排除采集 | 合成器插件在采集之后绘制，只出现在物理屏幕上 |
+| 遮罩 | Electron 面板窗口，99% 不透明，从采集中排除 | Electron 窗口，显示后逐窗设置并核验 Windows 的 `WDA_EXCLUDEFROMCAPTURE` | 合成器插件在采集之后绘制，只出现在物理屏幕上 |
 | 物理输入拦截与锁屏 | 输入 helper 的事件拦截；系统立即锁屏，快捷键兜底 | 输入 helper 的输入钩子；系统锁屏并以当前会话状态确认，锁屏超时保留钩子 | 插件区分物理与虚拟输入；Omarchy 锁屏 IPC 加合成器 `secure` 确认 |
 | 离开检测 | 系统空闲时长，扣除 AI 自己的输入 | 同左 | 插件记录的最后一次物理输入（`idle`），Wayland 下 Electron 的空闲时长不可靠 |
 | 「跟随系统」 | 熄屏时间与屏保时间中较早者 | 电源计划的关屏时间（按交流／电池） | 读不到系统时间，按 10 分钟 |

@@ -1,6 +1,8 @@
 import { ErrorNotice } from '@/components/ui/error-notice';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useModelGroups } from '@/features/model-groups/modelGroupsClient';
+import type { ModelGroupSelection } from '../../../../shared/modelGroups';
 import * as Dialog from '@radix-ui/react-dialog';
 import { CalendarClock, FolderOpen, Info, Maximize2, Minimize2, Play, Sparkles, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -13,6 +15,8 @@ import {
   type ScheduleWebhookPresetId,
 } from '@cindy/maker-scheduler/webhook-formats';
 import { PreRunPluginFields } from './PreRunPluginFields';
+import { PROJECT_AUTOMATION_REL_SEGMENTS } from '../../../../shared/projectAutomationPaths';
+import { teammateFolderOfProjectPath } from '@cindy/maker-shared/teammate-project';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import * as sessionService from '@/lib/sessionService';
@@ -42,6 +46,12 @@ import { applyTemplateParams } from '@cindy/maker-scheduler/template-engine';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ScriptCapabilityMultiSelect } from './ScriptCapabilityMultiSelect';
 import { WebhookSourceFields } from './WebhookSourceFields';
+import { GithubItemFields } from './GithubItemFields';
+import { GitlabItemFields } from './GitlabItemFields';
+import { GitlabPluginProjectFields } from './GitlabPluginProjectFields';
+import { githubItemUrl, gitlabItemUrl, isGitlabPluginId } from '@cindy/maker-scheduler/github-item';
+import { isGithubPrTriggerUrl } from '@cindy/maker-scheduler/pr-trigger';
+import { usePluginEventSources } from './PluginEventSourceFields';
 import { WebhookAccountManager } from './WebhookAccountManager';
 
 import {
@@ -63,9 +73,21 @@ import {
   resolveScheduleGenerationProviderId,
   resolveScheduleModelEfforts,
   usesBoundSessionGenerationModel,
+  parseGithubRepositories,
 } from '../lib/scheduleFormLogic';
 import type { RunMode, ScheduleFormState } from '../hooks/useScheduleForm';
 import { BoundSessionCard } from './BoundSessionCard';
+import { requestPluginEnginesRefresh, useDevicesPluginEngines, usePluginEngines } from '@/hooks/usePluginEngines';
+import { useModelRouteDevices } from '@/hooks/useModelRouteDevices';
+import { deviceDisplayName } from '@/lib/deviceName';
+import {
+  remotePluginEngineChoices,
+  resolveActivePluginEngine,
+  type PluginEngineChoice,
+  type PluginEngineSelection,
+  type PluginEngineSource,
+} from '@/lib/pluginEngineSelection';
+import { isPluginEngineKind } from '../../../../shared/pluginEngines';
 import { TemplateGallery } from './TemplateGallery';
 import { TemplateParamForm } from './TemplateParamForm';
 import {
@@ -166,7 +188,12 @@ export function ScheduleFormDialog({
     );
     return () => { current = false; };
   }, []);
-  const { form, setField, selectModelConfiguration, setDestination, setRunMode, selectBoundSession, applyTemplateAgentFields, reset, toInput, validate } = formApi;
+  // 插件事件只在本机交接，不需要账号；未登录时「事件」优先提供插件事件，否则提供指定 PR。
+  const pluginEventCandidates = usePluginEventSources();
+  const pluginEventsAvailable = (pluginEventCandidates?.length ?? 0) > 0;
+  // The official GitLab plugin can be GitLab's connection: it polls with its own account, no Webhook address needed.
+  const gitlabPluginCandidate = pluginEventCandidates?.find((candidate) => isGitlabPluginId(candidate.plugin)) ?? null;
+  const { form, setField, selectModelConfiguration, selectPluginEngine, selectModelGroup, setDestination, setRunMode, selectBoundSession, applyTemplateAgentFields, reset, toInput, validate } = formApi;
   // "运行会话"三态(fresh / persistent / bound)与心跳形态派生值。
   // hasRealBinding = targetSessionId 为真实会话 id(B 已绑 / C 已选 / MCP 手绑),
   // 此时目录 / worktree / fastMode 由绑定会话决定,表单隐藏对应字段。
@@ -303,6 +330,99 @@ export function ScheduleFormDialog({
   const isTemplateMode = mode === 'gallery' || !!selectedTemplate;
   // script/agent 双执行模式的唯一判别常量——所有条件渲染共用,避免散拷漂移
   const isScriptMode = (form.executionMode ?? 'agent') === 'script';
+  // 插件引擎(docs/plans/acp-plugin-bridge.md)支持本机与同账号其他电脑开放的插件引擎，可用于每次新建任务
+  // 与绑定普通桌面任务临时切换；持续会话(scheduler 任务)、脚本、伙伴例行任务与项目自动化不提供。
+  const pluginEnginesAllowed = (runMode === 'fresh' || runMode === 'bound') && !isScriptMode && !isProjectAutomationMode && initial?.source !== 'bot';
+  const pluginEngineList = usePluginEngines(pluginEnginesAllowed || !!form.pluginEngine);
+  const pluginEngineChoice = pluginEnginesAllowed ? form.pluginEngine ?? null : null;
+  const pluginRouteDevices = useModelRouteDevices({
+    controlledDeviceId: null,
+    leadAgentDeviceId: pluginEngineChoice?.deviceId ?? selectedAgentDeviceId,
+  });
+  const remotePluginSources = useMemo<readonly PluginEngineSource[]>(
+    () => (!pluginEnginesAllowed || form.primaryHostKey
+      ? []
+      : (pluginRouteDevices.devices ?? []).map(({ deviceId, name }) => ({ deviceId, name }))),
+    [pluginEnginesAllowed, form.primaryHostKey, pluginRouteDevices.devices],
+  );
+  const remotePluginDeviceIds = useMemo(
+    () => remotePluginSources.map((device) => device.deviceId),
+    [remotePluginSources],
+  );
+  const { catalogues: remotePluginCatalogues, read: readRemotePluginCatalogues } = useDevicesPluginEngines(remotePluginDeviceIds);
+  const activeRemotePluginDeviceId = pluginEngineChoice?.deviceId ?? null;
+  const activeRemotePluginDeviceListed = !!activeRemotePluginDeviceId
+    && remotePluginDeviceIds.includes(activeRemotePluginDeviceId);
+  useEffect(() => {
+    if (open && activeRemotePluginDeviceListed && activeRemotePluginDeviceId) {
+      readRemotePluginCatalogues(activeRemotePluginDeviceId);
+    }
+  }, [open, activeRemotePluginDeviceListed, activeRemotePluginDeviceId, readRemotePluginCatalogues]);
+  const pluginEngineChoices = useMemo<readonly PluginEngineChoice[]>(() => {
+    const remote = remotePluginEngineChoices(remotePluginSources, remotePluginCatalogues, deviceDisplayName, pluginEngineList);
+    return remote.length ? [...pluginEngineList, ...remote] : pluginEngineList;
+  }, [pluginEngineList, remotePluginSources, remotePluginCatalogues]);
+  const hasLocalPluginEnginesRef = useRef(false);
+  hasLocalPluginEnginesRef.current = pluginEngineList.length > 0;
+  const readPluginEngineCatalogues = useCallback(() => {
+    if (hasLocalPluginEnginesRef.current) requestPluginEnginesRefresh();
+    readRemotePluginCatalogues();
+  }, [readRemotePluginCatalogues]);
+  // 远程电脑列表尚未读回(null)时不误报不可用，保存时由主进程实时准入裁决。
+  const remotePluginCatalogueUnknown = !!activeRemotePluginDeviceId
+    && (remotePluginCatalogues.get(activeRemotePluginDeviceId) ?? null) === null;
+  const pluginEngineUnavailable = !!pluginEngineChoice
+    && !remotePluginCatalogueUnknown
+    && !resolveActivePluginEngine(pluginEngineChoices, pluginEngineChoice);
+  const schedulePluginEngines = useMemo(
+    () => pluginEnginesAllowed && (pluginEngineChoices.length > 0 || remotePluginDeviceIds.length > 0 || !!pluginEngineChoice)
+      ? {
+          engines: pluginEngineChoices,
+          active: pluginEngineChoice,
+          readCatalogue: readPluginEngineCatalogues,
+          onSelect: (selection: PluginEngineSelection) => {
+            const sameChoice = selection.providerId === pluginEngineChoice?.providerId
+              && (selection.deviceId ?? null) === (pluginEngineChoice?.deviceId ?? null);
+            const effort = selection.effort ?? (sameChoice ? pluginEngineChoice?.effort : undefined);
+            selectPluginEngine({
+              providerId: selection.providerId,
+              modelId: selection.modelId,
+              ...(selection.deviceId ? { deviceId: selection.deviceId } : {}),
+              ...(effort ? { effort } : {}),
+            });
+          },
+        }
+      : undefined,
+    [
+      pluginEnginesAllowed,
+      pluginEngineChoices,
+      remotePluginDeviceIds.length,
+      pluginEngineChoice,
+      readPluginEngineCatalogues,
+      selectPluginEngine,
+    ],
+  );
+  // 模型组(model-groups.md §6.3)：新建任务时按模式选来源。脚本不跑 Agent，不提供；记住的模式后来被删掉时按没选处理。
+  const modelGroupsAllowed = !isScriptMode;
+  const navigateToModelGroups = useNavigate();
+  const { config: modelGroupsConfig } = useModelGroups(modelGroupsAllowed);
+  const scheduleModelGroupId = form.modelGroup;
+  const scheduleModelGroups = useMemo(
+    () => modelGroupsAllowed
+      ? {
+          config: modelGroupsConfig,
+          active: scheduleModelGroupId && modelGroupsConfig.routes.some((route) => route.id === scheduleModelGroupId)
+            ? { type: 'route' as const, id: scheduleModelGroupId }
+            : null,
+          onSelect: (selection: ModelGroupSelection) => selectModelGroup(selection.id),
+          // 合并整个供应商的路由像一个供应商列出来：选其中的模型后补记这条路由，每次运行由它决定用哪个成员。
+          // 表单是函数式更新，与紧挨着的选模型在同一次点击里合并。
+          onAttach: (selection: ModelGroupSelection) => selectModelGroup(selection.id),
+          onManage: () => navigateToModelGroups('/settings?tab=model-groups'),
+        }
+      : undefined,
+    [modelGroupsAllowed, modelGroupsConfig, scheduleModelGroupId, selectModelGroup, navigateToModelGroups],
+  );
   // 项目自动化的配置文件不保存插件前置检查(插件装在各自的电脑上),只提供脚本。
   const usePluginSource = form.preRunSource === 'plugin' && !isProjectAutomationMode;
   const setPreRunPluginId = useCallback((pluginId: string) => setField('preRunPluginId', pluginId), [setField]);
@@ -310,9 +430,52 @@ export function ScheduleFormDialog({
     ? t('scheduler.editor.promptDialog.save')
     : t('scheduler.editor.promptDialog.create');
   // UI 三选一；manual 仅表示不启用定时，已有组合配置在未切换触发方式时原样保留。
-  const triggerMode = form.webhookEnabled ? 'webhook' : form.manual ? 'manually' : 'automatic';
-  const webhookSettingsVisible = !isProjectAutomationMode && webhookReceiverReady && form.webhookEnabled;
+  // A single PR is one of the event sources (2026-11-24); its storage stays the separate prTrigger field.
+  const triggerMode = form.prEnabled || form.webhookEnabled ? 'webhook' : form.manual ? 'manually' : 'automatic';
+  const eventMode = triggerMode === 'webhook';
+  // 指定对象：GitHub PR / Issue 与 GitLab MR / Issue。PR、MR 存为 prTrigger（按链接区分平台）；GitHub Issue
+  // 存为带编号的 GitHub App 来源，GitLab Issue 存为带项目与编号的 GitLab 地址；*-item 表示尚未识别。
+  const prIsGitlab = !!form.prEnabled && !!form.prUrl && !isGithubPrTriggerUrl(form.prUrl);
+  const githubItemScope = (!!form.prEnabled && !prIsGitlab) || form.webhookPreset === 'github-item'
+    || (form.webhookPreset === 'github-app' && form.githubItemNumber !== undefined);
+  const gitlabItemScope = prIsGitlab || form.webhookPreset === 'gitlab-item' || form.webhookPreset === 'gitlab-mr-poll'
+    || ((form.webhookPreset === 'gitlab' || form.webhookPreset === 'gitlab-token' || form.webhookPreset === 'gitlab-plugin')
+      && form.gitlabItemNumber !== undefined);
+  const gitlabMrItem = prIsGitlab || form.gitlabItemKind === 'mr';
+  const chooseWebhookPreset = (value: string) => {
+    setField('webhookPreset', value);
+    if (value === 'gitlab-plugin' && gitlabPluginCandidate && form.gitlabPluginId !== gitlabPluginCandidate.plugin) {
+      setField('gitlabPluginId', gitlabPluginCandidate.plugin);
+    }
+  };
+  const itemScope = githubItemScope || gitlabItemScope;
+  const githubItemDefaultRepository = form.githubItemRepository
+    || (() => { const repositories = parseGithubRepositories(form.webhookRepositories); return repositories.length === 1 ? repositories[0] : undefined; })();
+  const leaveItemScope = () => {
+    if (form.prEnabled) setField('prEnabled', false);
+    setField('webhookEnabled', true);
+    setField('githubItemNumber', undefined);
+    setField('gitlabItemNumber', undefined);
+    setField('gitlabItemKind', undefined);
+  };
+  const enterGithubItemPending = () => {
+    leaveItemScope();
+    setField('webhookPreset', 'github-item');
+  };
+  const enterGitlabItemPending = () => {
+    leaveItemScope();
+    setField('webhookPreset', 'gitlab-item');
+  };
+  // Address-based senders still need an account; a saved one stays hidden (and preserved) while signed out.
+  const webhookSettingsVisible = !isProjectAutomationMode && form.webhookEnabled
+    && (webhookReceiverReady || form.webhookPreset === 'plugin' || form.webhookPreset === 'gitlab-plugin' || form.webhookPreset === 'gitlab-mr-poll');
 
+  const maybeTeammateSchedule = isProjectAutomationMode && !!initial?.projectConfigId
+    && !!teammateFolderOfProjectPath(projectWorkingDir);
+  const [ownTeammateProject, setOwnTeammateProject] = useState<string | null>(null);
+  const isTeammateSchedule = maybeTeammateSchedule && ownTeammateProject === projectWorkingDir;
+  const [teammateModelReady, setTeammateModelReady] = useState(false);
+  const [teammateModelReadError, setTeammateModelReadError] = useState(false);
   const initialId = initial?.id;
   useEffect(() => {
     if (!open) return;
@@ -345,6 +508,35 @@ export function ScheduleFormDialog({
     initialWorkingDir,
     setField,
   ]);
+
+  const teammateModelReadFailedText = t('scheduler.editor.reviewModelReadFailed');
+  // Read the durable opt-in, never infer it from an empty model or a matching snapshot.
+  useEffect(() => {
+    if (!open || !maybeTeammateSchedule || !projectWorkingDir) return;
+    let current = true;
+    setOwnTeammateProject(null);
+    setTeammateModelReady(false);
+    setTeammateModelReadError(false);
+    void window.electronAPI.localDb.bots.ownsProject(projectWorkingDir).then(async ownsProject => {
+      if (!current) return;
+      if (!ownsProject) { setTeammateModelReady(true); return; }
+      const result = await window.electronAPI.fileBrowser.readFile({
+        workdir: projectWorkingDir, relPath: PROJECT_AUTOMATION_REL_SEGMENTS.join('/'),
+      });
+      if (!result.ok || result.data.truncated) throw new Error('unreadable config');
+      const file = JSON.parse(result.data.content);
+      const config = file.version === 1 && Array.isArray(file.schedules)
+        ? file.schedules.find((item: { id?: string }) => item.id === initial?.projectConfigId) : null;
+      if (!config) throw new Error('missing automation');
+      if (!current) return;
+      setOwnTeammateProject(projectWorkingDir);
+      setField('followTeammateModel', config.followTeammateModel === true && !config.model?.trim());
+      setTeammateModelReady(true);
+    }).catch(() => {
+      if (current) setTeammateModelReadError(true);
+    });
+    return () => { current = false; };
+  }, [open, maybeTeammateSchedule, projectWorkingDir, initial, initialId, initial?.projectConfigId, setField]);
 
   /** 前置检查「AI 生成」:描述 → utility model 生成脚本落盘 → 命令回填输入框。 */
   const runHookGenerate = useCallback(async () => {
@@ -621,7 +813,9 @@ export function ScheduleFormDialog({
     caps.capabilities, claudeDefaultCaps.capabilities, codexDefaultCaps.capabilities, piDefaultCaps.capabilities,
     form.agentKind, form.model, form.providerId, form.effort, setField]);
 
-  const modelUnavailable = !isScriptMode && modelCatalogReady && (
+  // 选着插件引擎时内置模型字段只是切回内置时的初值，不参与可用性判断(插件引擎另判，见下)。
+  // 选着还在的模式时同理：新建任务由模式选来源，存下的具体模型只在模式被删后才用。
+  const modelUnavailable = !isScriptMode && !pluginEngineChoice && !scheduleModelGroups?.active && modelCatalogReady && (
     (!!form.model.trim() && (
       (agentsLoaded && !availableVendors.has(form.agentKind === 'claude-code' ? 'cc' : form.agentKind))
       || (!legacyRemoteCatalog && !effectiveSourceIdForModel(providers, form.providerId || null, form.model, form.agentKind))
@@ -669,7 +863,7 @@ export function ScheduleFormDialog({
     && (!modelCatalogReady || defaultCapabilitiesLoading || (!agentsLoaded && agentsLoading));
 
   const handleSubmit = async () => {
-    if (awaitingNewModelCatalog) return;
+    if (awaitingNewModelCatalog || (maybeTeammateSchedule && !teammateModelReady)) return;
     setSubmitError(null);
     const err = validate();
     if (err) {
@@ -688,6 +882,11 @@ export function ScheduleFormDialog({
     }
     if (modelUnavailable) {
       toast.warning(t('scheduler.editor.validation.modelUnavailable', { model: form.model }));
+      return;
+    }
+    // 选的插件引擎已停用、卸载或报告不可用：不保存，也不悄悄换成内置模型。
+    if (pluginEngineUnavailable) {
+      toast.warning(t('scheduler.editor.validation.pluginEngineUnavailable'));
       return;
     }
     if (isProjectAutomationMode && projectWorkingDir) {
@@ -762,7 +961,7 @@ export function ScheduleFormDialog({
     <Dialog.Root open={open} onOpenChange={(v) => !submitting && onOpenChange(v)}>
       <Dialog.Portal>
         <Dialog.Overlay
-          className={cn('modal-scrim fixed inset-0 z-[10000]')}
+          className={cn('modal-scrim fixed inset-0 z-modal')}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         />
         <Dialog.Content
@@ -778,7 +977,7 @@ export function ScheduleFormDialog({
             }
           }}
           className={cn(
-            'modal-panel fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
+            'modal-panel fixed left-1/2 top-1/2 z-modal -translate-x-1/2 -translate-y-1/2',
             'flex h-[640px] max-h-[88vh] w-[760px] max-w-[calc(100vw-32px)] flex-col overflow-hidden',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
@@ -786,7 +985,7 @@ export function ScheduleFormDialog({
           {/* 展开编辑时这些内容被盖在下面:inert 让 Tab 与读屏都停在展开层里。 */}
           <header
             inert={promptExpanded || undefined}
-            className="flex min-h-[72px] shrink-0 items-center gap-4 pt-[18px] pr-4 pb-[14px] pl-6"
+            className="flex min-h-[72px] shrink-0 items-center gap-4 pt-4 pr-4 pb-3.5 pl-6"
           >
             <div className="flex min-w-0 flex-1 flex-col gap-1">
               <Dialog.Title className="text-24 font-medium leading-[1.33] text-[var(--msg-assistant-text)]">
@@ -845,7 +1044,7 @@ export function ScheduleFormDialog({
           {!isEdit && !isProjectAutomationMode && mode === 'gallery' ? (
             <div
               inert={promptExpanded || undefined}
-              className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable] px-6 pt-[18px] pb-[22px]"
+              className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable] px-6 pt-[18px] pb-5"
             >
               <TemplateGallery onSelect={applyTemplateToForm} selectedId={selectedTemplate?.id} />
             </div>
@@ -861,6 +1060,7 @@ export function ScheduleFormDialog({
                     })}
                   />
                 )}
+                {maybeTeammateSchedule && teammateModelReadError && <ErrorNotice message={teammateModelReadFailedText} />}
                 {submitError && (
                   <ErrorNotice
                     message={t(`chat.remoteError.${parseAgentErrorCode(submitError)?.code}`)}
@@ -974,6 +1174,16 @@ export function ScheduleFormDialog({
                                 )}
                                 <div className="min-w-0 flex-1" />
                                 <ModelEffortChip
+                                  disabled={maybeTeammateSchedule && !teammateModelReady}
+                                  followModel={isTeammateSchedule ? {
+                                    active: form.followTeammateModel === true && !form.model.trim(),
+                                    label: t('scheduler.chips.model.followTeammate'),
+                                    onFollow: () => {
+                                      selectModelConfiguration(null);
+                                      setField('followTeammateModel', true);
+                                    },
+                                  } : undefined}
+                                  hostOnly={!!form.primaryHostKey}
                                   onSelect={({
                                     engine,
                                     modelId,
@@ -996,19 +1206,23 @@ export function ScheduleFormDialog({
                                       null,
                                       boundSessionReference?.agentKind === 'cc'
                                         ? 'claude-code'
-                                        : boundSessionReference?.agentKind,
+                                        : isPluginEngineKind(boundSessionReference?.agentKind)
+                                          ? undefined
+                                          : boundSessionReference?.agentKind,
                                     )
                                   }
                                   agentKind={form.agentKind}
                                   agentDeviceId={selectedAgentDeviceId ?? undefined}
                                   modelValue={form.model}
-                                  onChangeModel={(v) => setField('model', v)}
+                                  onChangeModel={(v) => { setField('model', v); setField('followTeammateModel', false); setField('modelGroup', undefined); }}
                                   effortValue={form.effort}
                                   onChangeEffort={(v) => setField('effort', v)}
                                   followSession={isBound}
                                   providerId={form.providerId}
-                                  onChangeProviderId={(v) => setField('providerId', v)}
+                                  onChangeProviderId={(v) => { setField('providerId', v); setField('modelGroup', undefined); }}
                                   onNavigateToProviders={() => navigate('/settings?tab=providers')}
+                                  {...(schedulePluginEngines ? { pluginEngines: schedulePluginEngines } : {})}
+                                  {...(scheduleModelGroups ? { modelGroups: scheduleModelGroups } : {})}
                                   fastMode={form.fastMode}
                                   onChangeFast={(v) => {
                                     setField('fastMode', v);
@@ -1020,7 +1234,7 @@ export function ScheduleFormDialog({
                               </div>
                             </div>
                           </div>
-                          {isBound && form.model.trim() !== '' && (
+                          {isBound && (form.model.trim() !== '' || !!pluginEngineChoice) && (
                             <p className="px-1 text-11 leading-[1.4] text-[var(--cmd-palette-item-meta)]">
                               {t('scheduler.editor.runSession.switchModelHint')}
                             </p>
@@ -1169,16 +1383,25 @@ export function ScheduleFormDialog({
                           onValueChange={(mode) => {
                             if (mode === triggerMode) return;
                             preserveTriggerScrollPosition();
-                            setField('webhookEnabled', mode === 'webhook');
+                            if (mode === 'webhook' && !webhookReceiverReady && !pluginEventsAvailable) {
+                              // Without an account or event plugins, a specific GitHub PR is the source this computer can use.
+                              enterGithubItemPending();
+                            } else {
+                              if (form.prEnabled) setField('prEnabled', false);
+                              setField('webhookEnabled', mode === 'webhook');
+                              // Without an account, address-based senders cannot receive here.
+                              if (mode === 'webhook' && !webhookReceiverReady && form.webhookPreset !== 'plugin') {
+                                setField('webhookPreset', 'plugin');
+                              }
+                            }
                             setField('manual', mode !== 'automatic');
                             setField('recurring', mode !== 'manually');
                           }}
                           options={[
                             { value: 'automatic', label: t('scheduler.editor.trigger.timed') },
                             { value: 'manually', label: t('scheduler.editor.fields.manually') },
-                            ...(!isProjectAutomationMode && (webhookReceiverReady || form.webhookEnabled)
-                              ? [{ value: 'webhook', label: t('scheduler.cell.tagWebhook'), disabled: !webhookReceiverReady }]
-                              : []),
+                            // A single PR needs no account, so the event trigger is always available.
+                            ...(!isProjectAutomationMode || eventMode ? [{ value: 'webhook', label: t('scheduler.editor.trigger.event') }] : []),
                           ]}
                         />
                         {/* 自动模式:cron chip + 一次(recurring 反向)。手动模式:两者全部隐藏——cron 占位值仍在 form 里,提交合法。 */}
@@ -1231,7 +1454,7 @@ export function ScheduleFormDialog({
                               align="end"
                               sideOffset={8}
                               collisionPadding={16}
-                              className="z-[10010] w-[320px] max-w-[calc(100vw-32px)]"
+                              className="w-[320px] max-w-[calc(100vw-32px)]"
                             >
                               <FormField
                                 label={t('scheduler.deadline.label')}
@@ -1266,10 +1489,58 @@ export function ScheduleFormDialog({
                         )}
                       </div>
                       {/* 项目配置不保存接收地址；未登录时保留已配置的触发方式。 */}
-                      {webhookSettingsVisible && form.webhookPreset !== 'github-app' && <WebhookAccountManager allowOpenSchedule={false} />}
-                      {webhookSettingsVisible && (
+                      {webhookSettingsVisible && webhookReceiverReady && form.webhookPreset !== 'github-app' && form.webhookPreset !== 'plugin'
+                        && form.webhookPreset !== 'gitlab-plugin' && form.webhookPreset !== 'gitlab-mr-poll'
+                        && (!itemScope || (gitlabItemScope && !gitlabMrItem && form.gitlabItemNumber !== undefined))
+                        && <WebhookAccountManager allowOpenSchedule={false} />}
+                      {eventMode && (webhookSettingsVisible || itemScope) && (
                           <WebhookSourceFields
-                            preset={form.webhookPreset ?? DEFAULT_SCHEDULE_WEBHOOK_PRESET}
+                            preset={githubItemScope ? (form.githubItemNumber !== undefined ? 'github-app' : 'github-item')
+                              : gitlabItemScope ? (prIsGitlab || form.webhookPreset === 'gitlab-mr-poll' ? 'gitlab-mr-poll'
+                                : form.gitlabItemNumber !== undefined ? form.webhookPreset ?? 'gitlab' : 'gitlab-item')
+                              : form.webhookPreset ?? DEFAULT_SCHEDULE_WEBHOOK_PRESET}
+                            itemScope={itemScope}
+                            gitlabMrItem={gitlabMrItem}
+                            itemNeedsConnection={gitlabItemScope && (prIsGitlab || form.webhookPreset === 'gitlab-mr-poll' || form.gitlabItemNumber !== undefined)}
+                            onConnectionChange={(value) => {
+                              if (gitlabItemScope && gitlabMrItem) {
+                                if (value === 'gitlab-mr-poll') {
+                                  if (form.gitlabItemHost && form.gitlabItemProject && form.gitlabItemNumber !== undefined) {
+                                    setField('prEnabled', true);
+                                    setField('webhookEnabled', false);
+                                    setField('prUrl', gitlabItemUrl({
+                                      host: form.gitlabItemHost,
+                                      project: form.gitlabItemProject,
+                                      number: form.gitlabItemNumber,
+                                      kind: 'mr',
+                                    }));
+                                    setField('webhookPreset', 'gitlab-mr-poll');
+                                    if (form.manual) {
+                                      setField('manual', false);
+                                      setField('recurring', true);
+                                      setField('cronExpr', '*/10 * * * *');
+                                      setField('intervalMs', undefined);
+                                    }
+                                  } else {
+                                    setField('prEnabled', false);
+                                    setField('webhookEnabled', true);
+                                    setField('gitlabItemNumber', undefined);
+                                    setField('webhookPreset', 'gitlab-mr-poll');
+                                  }
+                                } else {
+                                  if (form.prEnabled) setField('prEnabled', false);
+                                  setField('webhookEnabled', true);
+                                  chooseWebhookPreset(value);
+                                }
+                                return;
+                              }
+                              // A GitLab issue keeps its project and number while switching how it is received.
+                              if (gitlabItemScope && form.gitlabItemNumber !== undefined) chooseWebhookPreset(value);
+                              else {
+                                leaveItemScope();
+                                chooseWebhookPreset(value);
+                              }
+                            }}
                             signed={form.webhookSigned !== false}
                             formatText={form.webhookFormat ?? ''}
                             events={form.webhookEvents ?? ''}
@@ -1277,6 +1548,16 @@ export function ScheduleFormDialog({
                             onRepositoriesChange={(value) => setField('webhookRepositories', value)}
                             onEventsChange={(value) => setField('webhookEvents', value)}
                             onPresetChange={(value) => {
+                              // A specific item is resolved by its item fields; every other sender is a webhookTrigger.
+                              if (value === 'github-item') {
+                                if (!githubItemScope) enterGithubItemPending();
+                                return;
+                              }
+                              if (value === 'gitlab-item') {
+                                if (!gitlabItemScope) enterGitlabItemPending();
+                                return;
+                              }
+                              leaveItemScope();
                               // 切到自定义时，用当前预设的格式作为起点，避免从空白开始写。
                               if (value === 'custom' && !form.webhookFormat?.trim()) {
                                 const current = form.webhookPreset ?? DEFAULT_SCHEDULE_WEBHOOK_PRESET;
@@ -1287,11 +1568,136 @@ export function ScheduleFormDialog({
                                 );
                                 setField('webhookFormat', JSON.stringify(format, null, 2));
                               }
-                              setField('webhookPreset', value);
+                              chooseWebhookPreset(value);
                             }}
                             onSignedChange={(value) => setField('webhookSigned', value)}
                             onFormatChange={(value) => setField('webhookFormat', value)}
+                            pluginSources={form.webhookPluginSources ?? []}
+                            pluginCandidates={pluginEventCandidates}
+                            onPluginSourcesChange={(value) => setField('webhookPluginSources', value)}
+                            addressSourcesAvailable={webhookReceiverReady}
+                            gitlabPluginAvailable={!!gitlabPluginCandidate}
+                            gitlabPluginFields={
+                              <GitlabPluginProjectFields
+                                project={form.gitlabPluginProject ?? ''}
+                                events={form.gitlabPluginEvents ?? []}
+                                candidate={gitlabPluginCandidate}
+                                onProjectChange={(value) => setField('gitlabPluginProject', value)}
+                                onEventsChange={(value) => setField('gitlabPluginEvents', value)}
+                              />
+                            }
+                            itemFields={gitlabItemScope ? (
+                              <GitlabItemFields
+                                text={form.gitlabItem ?? ''}
+                                known={form.gitlabItemProject ? { host: form.gitlabItemHost, project: form.gitlabItemProject } : undefined}
+                                prChange={form.prChange ?? 'any'}
+                                issueChange={form.gitlabIssueChange}
+                                addressAvailable={webhookReceiverReady || !!gitlabPluginCandidate}
+                                viaPlugin={!prIsGitlab && form.webhookPreset === 'gitlab-plugin'}
+                                mrCanOmitHost={!!gitlabPluginCandidate && !prIsGitlab && form.webhookPreset !== 'gitlab-mr-poll'}
+                                pluginIssueChange={form.gitlabPluginIssueChange}
+                                onPluginIssueChange={(value) => setField('gitlabPluginIssueChange', value)}
+                                applied={prIsGitlab || form.gitlabItemNumber !== undefined}
+                                onTextChange={(value) => setField('gitlabItem', value)}
+                                onResolved={(item) => {
+                                  setField('gitlabItemProject', item.project);
+                                  setField('gitlabItemHost', item.host);
+                                  setField('gitlabItemKind', item.kind);
+                                  if (item.kind === 'mr') {
+                                    // MRs prefer the GitLab plugin when installed; saved prTriggers and explicit poll selection stay on state reads.
+                                    const usePlugin = !!gitlabPluginCandidate && !prIsGitlab && form.webhookPreset !== 'gitlab-mr-poll';
+                                    if (usePlugin) {
+                                      if (form.prEnabled) setField('prEnabled', false);
+                                      setField('webhookEnabled', true);
+                                      chooseWebhookPreset('gitlab-plugin');
+                                      setField('gitlabItemNumber', item.number);
+                                      return;
+                                    }
+                                    if (item.host) {
+                                      setField('prEnabled', true);
+                                      setField('webhookEnabled', false);
+                                      setField('prUrl', gitlabItemUrl({ ...item, host: item.host }));
+                                      setField('gitlabItemNumber', item.number);
+                                      setField('webhookPreset', 'gitlab-mr-poll');
+                                      // GitLab has no push: state changes are found by the timed check, so turn it on.
+                                      if (form.manual) {
+                                        setField('manual', false);
+                                        setField('recurring', true);
+                                        setField('cronExpr', '*/10 * * * *');
+                                        setField('intervalMs', undefined);
+                                      }
+                                    }
+                                    return;
+                                  }
+                                  if (form.prEnabled) setField('prEnabled', false);
+                                  setField('webhookEnabled', true);
+                                  // Issues prefer the GitLab plugin (no Webhook setup) when it is installed.
+                                  const keep = form.webhookPreset === 'gitlab' || form.webhookPreset === 'gitlab-token'
+                                    || form.webhookPreset === 'gitlab-plugin' ? form.webhookPreset : null;
+                                  chooseWebhookPreset(keep ?? (gitlabPluginCandidate ? 'gitlab-plugin' : 'gitlab'));
+                                  setField('gitlabItemNumber', item.number);
+                                  if (!form.gitlabIssueChange) setField('gitlabIssueChange', 'any');
+                                  if (!form.gitlabPluginIssueChange) setField('gitlabPluginIssueChange', 'any');
+                                }}
+                                onUnresolved={() => {
+                                  if (gitlabMrItem && form.webhookPreset === 'gitlab-mr-poll') {
+                                    if (form.prEnabled) setField('prEnabled', false);
+                                    setField('webhookEnabled', true);
+                                    setField('gitlabItemNumber', undefined);
+                                    return;
+                                  }
+                                  enterGitlabItemPending();
+                                }}
+                                onPrChange={(value) => setField('prChange', value)}
+                                onIssueChange={(value) => setField('gitlabIssueChange', value)}
+                              />
+                            ) : (
+                              <GithubItemFields
+                                text={form.githubItem ?? ''}
+                                defaultRepository={githubItemDefaultRepository}
+                                kind={form.prEnabled ? 'pr' : form.githubItemNumber !== undefined ? 'issue' : undefined}
+                                prChange={form.prChange ?? 'any'}
+                                issueChange={form.issueChange}
+                                appEventsAvailable={webhookReceiverReady}
+                                timedCheck={!form.manual}
+                                onTextChange={(value) => setField('githubItem', value)}
+                                onResolved={(item, kind) => {
+                                  setField('githubItemRepository', item.repository);
+                                  if (kind === 'pr') {
+                                    setField('prEnabled', true);
+                                    setField('webhookEnabled', false);
+                                    setField('prUrl', githubItemUrl(item, 'pr'));
+                                    setField('githubItemNumber', undefined);
+                                    setField('webhookPreset', 'github-item');
+                                    return;
+                                  }
+                                  if (form.prEnabled) setField('prEnabled', false);
+                                  setField('webhookEnabled', true);
+                                  setField('webhookPreset', 'github-app');
+                                  setField('githubItemNumber', item.number);
+                                  if (!form.issueChange) setField('issueChange', 'any');
+                                }}
+                                onUnresolved={enterGithubItemPending}
+                                onPrChange={(value) => setField('prChange', value)}
+                                onIssueChange={(value) => setField('issueChange', value)}
+                              />
+                            )}
                           />
+                      )}
+                      {/* 2026-11-24：所有事件来源都可以同时定时检查，用来兜底离线或漏掉的事件。 */}
+                      {eventMode && (
+                        <div className="flex flex-wrap items-center gap-2.5">
+                          <label className="flex min-h-[34px] items-center gap-2 text-13 text-[var(--text-primary)]">
+                            <Checkbox checked={!form.manual} onChange={event => {
+                              const enabled = event.currentTarget.checked;
+                              setField('manual', !enabled);
+                              if (enabled) setField('recurring', true);
+                            }} />
+                            {t('scheduler.prTrigger.timed')}
+                          </label>
+                          {!form.manual && <ScheduleChip cronExpr={form.cronExpr} intervalMs={form.intervalMs}
+                            onChangeSchedule={value => { setField('cronExpr', value.cronExpr); setField('intervalMs', value.intervalMs); }} />}
+                        </div>
                       )}
                       {!isScriptMode && (
                         <div className="flex flex-wrap items-start gap-2.5">
@@ -1328,7 +1734,7 @@ export function ScheduleFormDialog({
                                   : 'scheduler.editor.preRunHook.tooltip',
                               )}
                               side="top"
-                              contentClassName="z-[10020]"
+                              contentClassName="z-modal-popover-nested"
                             >
                               <span
                                 tabIndex={0}
@@ -1713,7 +2119,7 @@ export function ScheduleFormDialog({
                     : t('scheduler.editor.promptDialog.createAria')
                 }
                 onClick={() => void handleSubmit()}
-                disabled={submitting || awaitingNewModelCatalog}
+                disabled={submitting || awaitingNewModelCatalog || (maybeTeammateSchedule && !teammateModelReady)}
                 className="min-w-[68px] shrink-0"
               >
                 {submitLabel}
@@ -1724,9 +2130,9 @@ export function ScheduleFormDialog({
             <div
               role="group"
               aria-label={t('scheduler.editor.fields.prompt')}
-              className="absolute inset-0 z-10 flex flex-col bg-[var(--confirm-bg)]"
+              className="absolute inset-0 z-raised flex flex-col bg-[var(--confirm-bg)]"
             >
-              <header className="flex min-h-[72px] shrink-0 items-center gap-4 px-6 pt-[18px] pb-[14px]">
+              <header className="flex min-h-[72px] shrink-0 items-center gap-4 px-6 pt-4 pb-3.5">
                 <p className="min-w-0 flex-1 text-24 font-medium leading-[1.33] text-[var(--msg-assistant-text)]">
                   {t('scheduler.editor.fields.prompt')}
                 </p>

@@ -322,7 +322,7 @@ function execFileOnce(
       // git-remote-http/credential helper 后代一起;Windows 的 detached 语义是
       // 脱离控制台,树杀走 taskkill /T,不需要也不该开。
       detached: process.platform !== 'win32',
-      // Windows 下 git 走 cmd shell, 不需要 shell:true(也安全, 用 args 数组传参不走 shell 解析)
+      windowsHide: true,
     };
     const rejectWithGitError = (error: GitExecError) =>
       settle(() => {

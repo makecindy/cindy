@@ -109,7 +109,7 @@
     "runtimeFailureReason": {
       "unclaimed_timeout": {
         "summary": "{{name}}逾候未始處理，此請已終。",
-        "advice": "請同僚之主人察其機上 Cindy 是否運行、網路是否連線。",
+        "advice": "請同伴之主人察其機上 Cindy 是否運行、網路是否連線。",
         "details": "待 Cindy 與網路復常，請重遣訊。"
       }
     },
@@ -127,7 +127,7 @@
       "IMAGE_INPUT_UNSUPPORTED": {
         "summary": "{{name}}不能作覆：今之模型不支援圖。",
         "advice": "請易以支援圖之模型。",
-        "details": "請易以支援圖之模型，或於「設定 → 個性化 → 視覺橋」啟用並設定視覺模型後再遣。"
+        "details": "請易以支援圖之模型。"
       },
       "MODEL_UNAVAILABLE": {
         "summary": "{{name}}不能作覆：今無可用之模型。",
@@ -175,7 +175,9 @@
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具呼叫未執行：群內授權已失效或不允許此操作。請由夥伴主人在目前群組重新發起。",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "暫時無法核驗 {{name}} 的群聊授權，這次工具呼叫未執行。請在連線恢復後重試。",
       "ATTACHMENTS_UNAVAILABLE": "部分附件未交給 {{name}}（下載失敗或數量限制）。請重新傳送這次需要的附件。",
-      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，連君之 Cindy，而後 Cindy 可代君行事（君之電腦今無在線之 Cindy）。"
+      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，連君之 Cindy，而後 Cindy 可代君行事（君之電腦今無在線之 Cindy）。",
+      "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}，請擇本群執行之機，既擇即續此事。",
+      "GROUP_ASSISTANT_DEVICE_OFFLINE": "{{name}} 於本群所擇之機已離線。"
     }
   },
   "plan": {
@@ -280,7 +282,7 @@
     "organizerSaveFailed": "主事未能更換，請再試",
     "projectDir": "案之卷匣",
     "projectDirNone": "未擇",
-    "projectDirNote": "分職行事之時，同伴於此作業。不擇亦可，將用此群議自有之卷匣；若擇 git 案，每次分職新開一 worktree 與分支，不動君手中之程式碼。",
+    "projectDirNote": "可擇本機既有之專案。未擇，則先取倉庫所繫，次取行事同伴之專案。Git 分工另闢 worktree。",
     "add": "增同伴",
     "projectDirOnComputer": "於機上擇之或更換",
     "memberActions": "{{name}} 之所為",
@@ -300,7 +302,7 @@
     },
     "allowMemberInvites": "許諸成員邀友",
     "allowMemberInvitesHint": "啟之，已入群者皆可邀友。唯群主與管理員可改。",
-    "allowMentionAllBots": "許 @諸同僚",
+    "allowMentionAllBots": "許 @諸同伴",
     "allowMentionAllBotsHint": "唯群主可改。同伴或皆作覆，大群慎啟之。此開關不涉 AI 代答。",
     "notifications": {
       "title": "訊息告知",
@@ -338,8 +340,8 @@
     "lifecycleUnavailable": "今之伺服器或機尚不支援此舉。",
     "groupDissolved": "群議已散，仍可觀有權存取之舊訊。",
     "lastOwner": "請先讓渡群主或解散群議，然後退出。",
-    "allBotsMentionDisabled": "群主未啟 @諸同僚。",
-    "turnAlreadyStarted": "此同僚已啟，不可略過",
+    "allBotsMentionDisabled": "群主未啟 @諸同伴。",
+    "turnAlreadyStarted": "此同伴已啟，不可略過",
     "stopOwnershipUnknown": "部分工作未能停止：無從確認由誰發起",
     "nothingToStop": "目前無可停止之工作"
   },
@@ -503,6 +505,8 @@
     }
   },
   "groupSettings": {
+    "assistantComputer": "執行之機",
+    "chooseComputer": "擇機",
     "tabSettings": "群之規制",
     "youAreOwner": "君乃群主",
     "youAreAdmin": "君乃群執事",
@@ -544,10 +548,12 @@
     "accessChat": "唯群內交流",
     "accessTools": "可用工具與資料",
     "replies": "同伴如何接話",
+    "assistant": "群中 Cindy",
+    "assistantHint": "誰 @ 之，即於其人之電腦行事。",
     "replyModeMentionedNote": "無人被 @ 時，同伴不接話。",
     "work": "分職",
     "organizerHint": "排定誰為何步；預設為首位同伴。",
-    "ownFolder": "群自有之卷匣",
+    "ownFolder": "自動擇取",
     "archive": "封存此群",
     "unarchive": "解封存",
     "archiveHint": "封存將對眾成員停用此群，止新訊與同伴行事。舊錄保留，日後可經搜尋尋得此群、觀其舊錄並解封存。",
@@ -646,5 +652,6 @@
     },
     "externalFormatError": "請自原訊重新開啟完整連結。"
   },
-  "waitingForOwner": "待主人允"
+  "waitingForOwner": "待主人允",
+  "externalBadge": "外部"
 }

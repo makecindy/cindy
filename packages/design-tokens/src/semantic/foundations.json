@@ -157,6 +157,10 @@
         "$type": "duration",
         "$value": "{reference.foundations.motion-spinner-cycle}"
       },
+      "motion-stream-word": {
+        "$type": "duration",
+        "$value": "{reference.foundations.motion-stream-word}"
+      },
       "motion-sidebar-title-marquee-per-viewport": {
         "$type": "duration",
         "$value": "{reference.foundations.motion-sidebar-title-marquee-per-viewport}"
@@ -364,6 +368,78 @@
       "font-weight-semibold": {
         "$type": "fontWeight",
         "$value": "{reference.foundations.font-weight-semibold}"
+      },
+      "z-below": {
+        "$type": "number",
+        "$value": "{reference.foundations.z-below}"
+      },
+      "z-raised": {
+        "$type": "number",
+        "$value": "{reference.foundations.z-raised}"
+      },
+      "z-page-float": {
+        "$type": "number",
+        "$value": "{reference.foundations.z-page-float}"
+      },
+      "z-page-overlay": {
+        "$type": "number",
+        "$value": "{reference.foundations.z-page-overlay}"
+      },
+      "z-page-top": {
+        "$type": "number",
+        "$value": "{reference.foundations.z-page-top}"
+      },
+      "z-float": {
+        "$type": "number",
+        "$value": "{reference.foundations.z-float}"
+      },
+      "z-float-top": {
+        "$type": "number",
+        "$value": "{reference.foundations.z-float-top}"
+      },
+      "z-fullscreen": {
+        "$type": "number",
+        "$value": "{reference.foundations.z-fullscreen}"
+      },
+      "z-modal": {
+        "$type": "number",
+        "$value": "{reference.foundations.z-modal}"
+      },
+      "z-modal-raised": {
+        "$type": "number",
+        "$value": "{reference.foundations.z-modal-raised}"
+      },
+      "z-modal-nested": {
+        "$type": "number",
+        "$value": "{reference.foundations.z-modal-nested}"
+      },
+      "z-dropdown": {
+        "$type": "number",
+        "$value": "{reference.foundations.z-dropdown}"
+      },
+      "z-tooltip": {
+        "$type": "number",
+        "$value": "{reference.foundations.z-tooltip}"
+      },
+      "z-modal-popover-nested": {
+        "$type": "number",
+        "$value": "{reference.foundations.z-modal-popover-nested}"
+      },
+      "z-modal-blocking": {
+        "$type": "number",
+        "$value": "{reference.foundations.z-modal-blocking}"
+      },
+      "z-toast": {
+        "$type": "number",
+        "$value": "{reference.foundations.z-toast}"
+      },
+      "z-toast-top": {
+        "$type": "number",
+        "$value": "{reference.foundations.z-toast-top}"
+      },
+      "z-blocking-gate": {
+        "$type": "number",
+        "$value": "{reference.foundations.z-blocking-gate}"
       }
     }
   }

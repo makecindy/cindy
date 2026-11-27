@@ -81,3 +81,9 @@ export function deviceLinkProjectKey(deviceId: string, workingDir: string): stri
   const wd = normalized ?? workingDir;
   return `device:${encodeURIComponent(deviceId)}:${wd}`;
 }
+
+/** A link to this device's own project resolves to the local sidebar row. */
+export function projectKeyForDeepLink(target: string, localDeviceId: string | null): string | null {
+  const prefix = localDeviceId ? `device:${encodeURIComponent(localDeviceId)}:` : null;
+  return normalizeProjectKey(prefix && target.startsWith(prefix) ? target.slice(prefix.length) : target);
+}

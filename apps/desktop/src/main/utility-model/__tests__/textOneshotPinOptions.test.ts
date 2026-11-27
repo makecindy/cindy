@@ -80,6 +80,7 @@ describe('encodeCatalogPin / decodeCatalogPin', () => {
       'cat:xd::m',
       'cat:xd:codex:',
       'cat:xd:unknown-agent:m',
+      'remote-cat:other:cat:xd:codex:m',
     ]) {
       expect(decodeCatalogPin(bad), bad).toBeNull();
     }

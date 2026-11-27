@@ -15,6 +15,7 @@ import composer from './composer.json';
 import deviceLink from './deviceLink.json';
 import devices from './devices.json';
 import files from './files.json';
+import giftCard from './giftCard.json';
 import groupChat from './groupChat.json';
 import home from './home.json';
 import interaction from './interaction.json';
@@ -40,6 +41,7 @@ export default {
   deviceLink,
   devices,
   files,
+  giftCard,
   groupChat,
   home,
   interaction,

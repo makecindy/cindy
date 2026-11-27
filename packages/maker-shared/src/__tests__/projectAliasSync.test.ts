@@ -84,6 +84,16 @@ describe('project alias identity and snapshot parsing', () => {
     });
   });
 
+  it('keeps the host-assigned creation location through snapshot parsing', () => {
+    expect(parseHostProjectAliasesSnapshot({
+      platform: 'win32', aliases: [], settingsVersion: 7,
+      creationRoot: 'C:/Projects', createdProjectKey: 'local:C:/Projects/demo-2',
+    })).toMatchObject({ creationRoot: 'C:/Projects', createdProjectKey: 'local:C:/Projects/demo-2' });
+    expect(parseHostProjectAliasesSnapshot({
+      platform: 'darwin', aliases: [], createdProjectKey: 'device:other:/repo',
+    })).not.toHaveProperty('createdProjectKey');
+  });
+
   it.each([null, [], {}, { aliases: [], platform: 1 }, { aliases: [], platform: 'darwin', ownerStamp: {} }])('does not turn a malformed response into an authoritative deletion', (raw) => {
     expect(parseHostProjectAliasesSnapshot(raw)).toBeNull();
   });

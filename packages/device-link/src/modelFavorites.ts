@@ -10,6 +10,12 @@ export interface RemoteModelFavorite {
   effort?: string;
   fast?: true | "ultrafast";
 }
+/**
+ * 插件引擎收藏在收藏通道上的 agent 占位值：旧客户端的 parseModelFavorites 只接受
+ * cc / codex / pi，整表校验不通过会整份丢弃。插件引擎靠 acp-plugin: 来源键识别，
+ * 新客户端解析时忽略 agent，旧客户端把它当成不认识的供应商静默隐藏、不会错派到内置引擎。
+ */
+export const PLUGIN_ENGINE_FAVORITE_WIRE_AGENT = "cc" as const;
 export type ModelFavoriteMutation =
   | { kind: "add"; item: Omit<RemoteModelFavorite, "uid"> }
   | {
@@ -91,6 +97,13 @@ export function parseProviderShareFavoriteSource(value: string): {
   } catch {
     return null;
   }
+}
+/**
+ * 收藏来源键是否指向本机之外（同账号另一台电脑或分享来的供应商）。按前缀判定：
+ * 即使键内容损坏解析不出来，也不能被当成本机供应商。
+ */
+export function isNonLocalModelFavoriteSource(providerId: string): boolean {
+  return providerId.startsWith(AGENT_DEVICE_FAVORITE_PREFIX) || providerId.startsWith(PROVIDER_SHARE_FAVORITE_PREFIX);
 }
 /** 收藏通道能往返的分享来源键。更长的键 Desktop 本机仍可存，但手机会整表读失败，所以不提供星标。 */
 export function providerShareFavoriteWireKey(source: ProviderShareFavoriteSource): string | null {

@@ -11,6 +11,11 @@ import {
 } from '../filePreview.js';
 
 describe('file preview shared model', () => {
+  // #9479, unit: shared remote attachment routing must admit Solidity source.
+  it('recognizes Solidity source without admitting an unknown extension', () => {
+    expect(remoteFilePreviewKind('Contract.SOL')).toBe('text');
+    expect(remoteFilePreviewKind('Contract.sol.zip')).toBe('binary');
+  });
   // #10143, unit: newly recognized text must survive remote preview/attachment classification.
   it.each(['Directory.Build.props', 'App.CSPROJ.USER', '.globalconfig', 'Page.razor', 'Page.axaml',
     'Module.vb', 'script.csx', 'query.gql', 'api.http', 'schema.thrift', 'schema.avsc'])(

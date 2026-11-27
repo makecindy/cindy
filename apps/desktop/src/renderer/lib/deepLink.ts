@@ -12,6 +12,7 @@
 import {
   DEEP_LINK_URL_PREFIX,
   DEEP_LINK_SCHEME_RE_GROUP,
+  buildTaskDeepLink,
   stripDeepLinkPathPrefix,
 } from '../../shared/deepLinkSchemes';
 
@@ -42,7 +43,7 @@ function sessionDeepLinkQuery(
 }
 
 export function buildSessionDeepLink(sessionId: string, opts?: SessionDeepLinkOptions): string {
-  return `${SESSION_PREFIX}${encodeURIComponent(sessionId)}${sessionDeepLinkQuery(opts)}`;
+  return buildTaskDeepLink(sessionId, opts?.deviceId);
 }
 
 /** 带消息锚点的会话深链:点击后跳到会话内指定消息(clientId 语义,跨设备稳定)。 */

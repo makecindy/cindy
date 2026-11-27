@@ -76,6 +76,16 @@ export const DEFAULT_IGNORE_DIRS: ReadonlySet<string> = new Set([
 
 const URL_SCHEME_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
 
+/**
+ * `\\host\share\...` names a share on another machine (it is also what a
+ * `file://host/share/...` link resolves to). Only a Windows owner can open it;
+ * elsewhere Node sees a relative path, and joining it onto the workspace plus
+ * the suffix BFS would open an unrelated local `host/share/...` file.
+ */
+function isUnreachableUncPath(probe: string): boolean {
+  return /^\\\\[^\\]/.test(probe) && !path.isAbsolute(probe);
+}
+
 function pathSegments(value: string): string[] {
   return value.split(/[\\/]+/);
 }
@@ -250,6 +260,7 @@ export async function resolveWorkspacePath(
   // normalizeWindowsDriveHref) — on POSIX `/D:` is a legal path of its own.
   let probe = expandTilde(decodedHref, options.homeDir ?? os.homedir());
   if (isWindowsPathLike(workingDir)) probe = stripWindowsDriveUriSlash(probe);
+  if (isUnreachableUncPath(probe)) return { status: 'none', candidates: [] };
 
   // Path 1: probe is absolute (incl. an expanded `~`) — just stat it. A `~`
   // path that misses returns 'none' here rather than falling through to the
@@ -396,7 +407,7 @@ export async function bfsFindManyBySuffix(
     { dir: root, depth: 0, crossed: [] },
   ];
   let visited = 0;
-  for (let cursor = 0; cursor < queue.length && !allFull(); cursor++) {
+  walk: for (let cursor = 0; cursor < queue.length && !allFull(); cursor++) {
     const { dir, depth, crossed } = queue[cursor]!;
     // Release consumed paths without shifting the pending breadth-first queue.
     queue[cursor] = undefined;
@@ -427,6 +438,9 @@ export async function bfsFindManyBySuffix(
           if (!crossed.every((pair) => bucket.named.has(pair))) continue;
           if (norm.endsWith(bucket.suffix) && isPathAllowed(abs)) {
             bucket.out.push(abs);
+            // No later entry can change any bucket once every candidate limit
+            // is reached. Do not process the rest of a wide directory or yield.
+            if (bucket.out.length >= maxCandidates && allFull()) break walk;
           }
         }
       }
@@ -481,6 +495,10 @@ export async function resolveWorkspacePathBatch(
     // result key stays the original href so the renderer cache lines up.
     let probe = expandTilde(decodedHref, homeDir);
     if (driveUriEnabled) probe = stripWindowsDriveUriSlash(probe);
+    if (isUnreachableUncPath(probe)) {
+      out[href] = { status: 'none', candidates: [] };
+      continue;
+    }
     if (path.isAbsolute(probe)) {
       try {
         const s = await fs.promises.stat(probe);

@@ -5,7 +5,7 @@ export default {
   notCovered: 'Live plugin discovery and file selection; entries are scenario data',
   cases: {
     default: { about: '#9573 regression: omitted height cap with a long list on a tall window' },
-    'new-task': { about: 'Explicit 240px cap remains effective' },
+    'new-task': { about: '240px cap with task directory and project settings at the bottom' },
     short: { about: 'Viewport still limits the default cap', viewport: { width: 720, height: 360 } },
   },
   async check(page, ui) {
@@ -19,6 +19,11 @@ export default {
     await scroller.hover();
     await page.mouse.wheel(0, 2000);
     await page.waitForFunction(() => document.querySelector('[data-composer-suggestion-panel] > div').scrollTop > 0);
+    if (ui.case === 'new-task') {
+      const rows = scroller.getByRole('button');
+      assert.equal(await rows.last().textContent(), await ui.t('projectSettings.title'));
+      assert.equal(await rows.nth(-2).textContent(), await ui.t('extraDirs.add'));
+    }
     await ui.capture('scrolled');
     await page.locator('[data-composer-suggestion-search]').fill('notes-23');
     await page.waitForFunction(() => document.querySelector('[data-composer-suggestion-panel]').getBoundingClientRect().height < 200);

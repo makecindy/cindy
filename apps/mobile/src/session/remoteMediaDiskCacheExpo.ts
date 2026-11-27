@@ -66,7 +66,7 @@ async function downloadCancellable(
   }
 }
 
-async function copyRemoteFile(
+export async function copyRemoteFile(
   url: string,
   target: File,
   signal?: AbortSignal,

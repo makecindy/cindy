@@ -92,6 +92,8 @@ export interface PluginCompanion {
     lastActivityAt: number | null;
   };
   interactions: PluginCompanionInteraction[];
+  /** Whether this desktop's sidebar has an unread reply. Absent when unavailable. */
+  unread?: boolean;
   /** When the latest completed reply was persisted; a change means `reply` has something new. */
   lastReplyAt: number | null;
 }

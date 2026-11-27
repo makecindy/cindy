@@ -1,6 +1,7 @@
 import { AppFrame, forbid, mountPage, subscription } from '../../ui-page/harness';
 import { ProviderShareManagePage } from '../../../src/renderer/features/provider-share/ProviderShareManagePage';
 import { ProviderShareReceivedDetail } from '../../../src/renderer/features/provider-share/ProviderShareReceivedRail';
+import { ToastContainer } from '../../../src/renderer/components/ui/toast';
 import type {
   ProviderShareInsights,
   ProviderShareQuotaAccount,
@@ -10,7 +11,7 @@ import { DEFAULT_REMOTE_AGENT_LIMITS, type RemoteAgentLimitsView } from '../../.
 import type { ProviderGroupConfig, ProviderGroupView } from '../../../src/shared/providerGroup';
 
 const ownerGroupConfig: ProviderGroupConfig = {
-  strategy: 'least', autoSwitch: true, allowFast: true,
+  strategy: 'expiring', autoSwitch: true, allowFast: true,
   members: [
     { key: 'local', kind: 'local', agentDeviceId: null, providerId: 'xd', label: 'Mac mini', limit: 10, weight: 1, paused: false },
     { key: 'device:work-pc:xd', kind: 'device', agentDeviceId: 'work-pc', providerId: 'xd', label: 'Work PC', limit: 10, weight: 1, paused: false },
@@ -221,7 +222,10 @@ void mountPage({
                 providerId: 'xd',
                 providerLabel: 'Cindy AI',
                 createdAt: '2026-10-01T00:00:00Z',
-                members: [],
+                members: [{
+                  memberId: 'fixture-person', displayName: 'Alex', note: 'Team A', region: 'global', avatarUrl: null,
+                  status: 'active', joinedAt: '2026-10-02T00:00:00Z', lastUsedAt: null, runningTasks: 0, models: [],
+                }],
                 requests: [],
               },
             ],
@@ -264,6 +268,7 @@ void mountPage({
       },
       providerShare: {
         command,
+        exportRoster: async () => { throw new Error('Synthetic roster save failure'); },
         onOwnedChanged: subscription('ownedShares'),
         onReceivedChanged: subscription('receivedShares'),
       },
@@ -271,6 +276,7 @@ void mountPage({
   },
   render: (ctx) => (
     <AppFrame>
+      <ToastContainer />
       <div className="flex h-full min-h-0 flex-col">
         <p className="shrink-0 px-5 py-2 text-12 text-[var(--text-secondary)]">
           UI fixture · 测试数据 · Test data

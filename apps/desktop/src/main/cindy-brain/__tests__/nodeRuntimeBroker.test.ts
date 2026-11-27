@@ -6,7 +6,9 @@ import path from 'node:path';
 import { PassThrough } from 'node:stream';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { AgentStartupCleanupPendingError, AgentStartupStoppedError } from '@cindy/maker-core';
 
+import { adaptPluginNodeProcess } from '../nodeRuntimeProcessAdapter';
 import type { InstalledGhost } from '../../../shared/ghost';
 import { withGhostResolvedLocale } from '../../../shared/ghost';
 import { handlePluginHostToolRequest, type PluginHostToolPorts } from '../hostToolSlot.js';
@@ -420,6 +422,55 @@ afterEach(() => {
 });
 
 describe('nodeRuntimeBroker · Electron utilityProcess 适配', () => {
+  // #10189, unit: exercise the real adapter with OS outcomes injected. Native-event
+  // tests did not cover lost exits, unknown identity or kill requests without exit.
+  it.each(['EPERM', 'EACCES', 'unknown', 'alive'])('retains quota on %s until a real exit', code => {
+    const native = new FakeUtilityProcess();
+    const probe = vi.fn(() => { if (code !== 'alive') throw Object.assign(new Error('probe'), { code }); });
+    const proc = adaptPluginNodeProcess(native, true, probe);
+    const exit = vi.fn();
+    proc.on('exit', exit);
+    proc.kill();
+    expect(proc.reconcileExit!()).toBe(false);
+    expect(exit).not.toHaveBeenCalled();
+    native.emit('exit', 0);
+    expect(proc.reconcileExit!()).toBe(true);
+    expect(exit).toHaveBeenCalledExactlyOnceWith(0, null);
+  });
+
+  it('reconciles an observed PID once despite missing PID and late events', () => {
+    const native = new FakeUtilityProcess();
+    const probe = vi.fn(() => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }); });
+    const proc = adaptPluginNodeProcess(native, true, probe);
+    const exit = vi.fn();
+    proc.on('exit', exit);
+    native.pid = undefined;
+    expect(proc.reconcileExit!()).toBe(true);
+    expect(probe).toHaveBeenCalledExactlyOnceWith(4321, 0);
+    native.emit('exit', 1);
+    native.emit('error', 'late', 'channel');
+    native.emit('message', { type: 'ready' });
+    expect(proc.kill('SIGKILL')).toBe(false);
+    expect(proc.reconcileExit!()).toBe(true);
+    expect(exit).toHaveBeenCalledExactlyOnceWith(null, null);
+    expect(native.kill).not.toHaveBeenCalled();
+    expect(proc.readStartupState!().readySeen).toBe(false);
+  });
+
+  it('does not probe without a PID, then captures the native spawn identity', () => {
+    const native = new FakeUtilityProcess();
+    native.pid = undefined;
+    const probe = vi.fn(() => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }); });
+    const proc = adaptPluginNodeProcess(native, true, probe);
+    expect(proc.reconcileExit!()).toBe(false);
+    expect(probe).not.toHaveBeenCalled();
+    native.pid = 4322;
+    native.emit('spawn');
+    native.pid = undefined;
+    expect(proc.reconcileExit!()).toBe(true);
+    expect(probe).toHaveBeenCalledExactlyOnceWith(4322, 0);
+  });
+
   describe.each(['darwin', 'win32', 'linux'] as const)('%s 系统权限责任归属', (platform) => {
     it.each([
       { mode: '普通工作进程', childArgs: undefined },
@@ -462,6 +513,46 @@ describe('nodeRuntimeBroker · Electron utilityProcess 适配', () => {
         worker?.kill();
       }
     });
+  });
+
+  // #11953: exercise the environment actually handed to the Desktop fork.
+  it.each([
+    ['http://127.0.0.1:18080', undefined, undefined, true],
+    ['http://127.0.0.1:18080', 'corp.test,localhost', undefined, true],
+    ['http://127.0.0.1:18080', undefined, 'upper.test', true],
+    ['http://127.0.0.1:18080', 'corp.test', 'upper.test', true],
+    ['http://localhost:99999', undefined, undefined, false],
+    [undefined, undefined, undefined, false],
+  ] as const)('passes safe CLI proxy routes through the Desktop fork (%s, %s, %s)', (endpoint, lower, upper, allowed) => {
+    // A plain object also exercises distinct POSIX aliases on a Windows runner.
+    const environment = process.env;
+    process.env = {
+      ...environment, HTTP_PROXY: undefined, NO_PROXY: upper,
+      http_proxy: endpoint, no_proxy: lower,
+      https_proxy: 'http://demo:synthetic@localhost:8080',
+      HTTPS_PROXY: 'http://localhost:18081',
+    };
+    const fork = vi.fn((_entry: string, _args: string[], _options: { env: NodeJS.ProcessEnv }) => new FakeUtilityProcess());
+    const worker = createUtilityNodeWorkerProcess('demo.cjs', os.tmpdir(), 'demo', fork as never);
+    try {
+      const env = fork.mock.calls[0][2].env;
+      expect(env.http_proxy ?? env.HTTP_PROXY).toBe(allowed ? endpoint : undefined);
+      for (const [value, inherited] of [[env.no_proxy, lower ?? upper], [env.NO_PROXY, upper ?? lower]]) {
+        if (allowed) {
+          const entries = value?.split(',');
+          expect(entries).toEqual(expect.arrayContaining(['localhost', '127.0.0.1', '::1']));
+          for (const item of inherited?.split(',') ?? []) expect(entries).toContain(item);
+          expect(entries?.length).toBe(new Set(entries).size);
+        } else {
+          expect(value).toBeUndefined();
+        }
+      }
+      expect(env.https_proxy).toBeUndefined();
+      expect(env.HTTPS_PROXY).toBeUndefined();
+    } finally {
+      worker.kill();
+      process.env = environment;
+    }
   });
 
   it('不依赖 RunAsNode，过滤宿主秘密，并只用 parentPort 推送 stdin', () => {
@@ -2960,6 +3051,63 @@ describe('nodeRuntimeBroker · 宿主代启子进程(childSpawn,2026-07-23)', ()
     });
   });
 
+  // #10189, unit: real broker+adapter; fake probe isolates system absence from
+  // native transport. Existing quota tests only delivered native exit. Four live
+  // children must block; one ESRCH must admit the next spawn without a restart.
+  it('10189 reclaims a missing exit on the next spawn and before stop snapshot', async () => {
+    const natives: FakeUtilityProcess[] = [];
+    const dead = new Set<number>();
+    const { broker, worker, spawned } = await bootWorker(childSpawnGhost(), () => {
+      const native = new FakeUtilityProcess();
+      native.pid = 8000 + natives.length;
+      natives.push(native);
+      native.kill.mockImplementation(() => { queueMicrotask(() => native.emit('exit', 0)); return true; });
+      const proc = adaptPluginNodeProcess(native, true, pid => {
+        if (dead.has(pid)) throw Object.assign(new Error('gone'), { code: 'ESRCH' });
+      });
+      queueMicrotask(() => native.emit('message', { type: 'ready' }));
+      return proc as unknown as FakeRawChild;
+    }, false);
+    try {
+      for (let i = 0; i < 4; i++) worker.emitControl({ type: 'spawn-child', reqId: `r${i}`, entry: 'node/maker.cjs' });
+      await vi.waitFor(() => expect(worker.sentControl.filter(m => m.type === 'spawn-child-result' && m.ok)).toHaveLength(4));
+      worker.emitControl({ type: 'spawn-child', reqId: 'full', entry: 'node/maker.cjs' });
+      expect(worker.lastOf('spawn-child-result')).toMatchObject({ reqId: 'full', ok: false });
+      dead.add(8000);
+      worker.emitControl({ type: 'spawn-child', reqId: 'recovered', entry: 'node/maker.cjs' });
+      await vi.waitFor(() => expect(worker.lastOf('spawn-child-result')).toMatchObject({ reqId: 'recovered', ok: true }));
+      expect(spawned).toHaveLength(5);
+      natives[0].emit('exit', 1);
+      natives[0].emit('error', 'late', 'channel');
+      expect(worker.sentControl.filter(m => m.type === 'child-exit')).toHaveLength(1);
+      dead.add(8001);
+      await broker.stopAndWait('node-ghost');
+      expect(natives[0].kill).not.toHaveBeenCalled();
+      expect(natives[1].kill).not.toHaveBeenCalled();
+    } finally { broker.destroyAll(); }
+  });
+
+  // #10189, unit: ready resolves a Promise, but exit can arrive in the same
+  // turn before promotion to children. The old suite covered only exit-before-ready.
+  it('10189 rejects a child that exits in the ready turn without retaining quota', async () => {
+    let attempt = 0;
+    const { broker, worker, spawned } = await bootWorker(childSpawnGhost(), () => {
+      const child = new FakeRawChild();
+      const exits = attempt++ === 0;
+      queueMicrotask(() => { child.emit('spawn'); if (exits) child.emit('exit', 0); });
+      return child;
+    }, false);
+    try {
+      worker.emitControl({ type: 'spawn-child', reqId: 'race', entry: 'node/maker.cjs' });
+      await vi.waitFor(() => expect(worker.lastOf('spawn-child-result')).toMatchObject({ reqId: 'race', ok: false }));
+      for (let i = 0; i < 4; i++) worker.emitControl({ type: 'spawn-child', reqId: `next${i}`, entry: 'node/maker.cjs' });
+      await vi.waitFor(() => expect(worker.sentControl.filter(m => m.type === 'spawn-child-result' && m.ok)).toHaveLength(4));
+      expect(spawned).toHaveLength(5);
+      expect(spawned[0].child.killed).toBe(false);
+      await broker.stopAndWait('node-ghost');
+    } finally { broker.destroyAll(); }
+  });
+
   it('数量顶:同插件同时在世子进程超 4 个即拒', async () => {
     const { worker, spawned } = await bootWorker(childSpawnGhost());
     for (let i = 1; i <= 5; i += 1) {
@@ -3103,5 +3251,206 @@ describe('nodeRuntimeBroker · 宿主代启子进程(childSpawn,2026-07-23)', ()
     );
     await vi.advanceTimersByTimeAsync(2_500);
     await stopping;
+  });
+});
+
+/*
+ * 测试价值
+ * - 生产入口与可观察结果：GhostNodeRuntimeBroker.spawnHarness 是否 fork、fork 的入口路径与参数、返回的
+ *   原样 stdio 进程，以及 stop / stopAndWait 在替换安装目录前收掉引擎进程。
+ * - Bug／规则依据：docs/plans/acp-plugin-bridge.md「引擎进程」；plugin-security-and-authoring.md §2/§3
+ *   （只执行清单声明的包内入口、守门现查）与 nodeRuntimeBroker 头注释的原位更新约束（Windows 文件锁）。
+ * - 现有覆盖缺口：childSpawn 用例只覆盖 worker 发起的子进程，引擎进程由主进程发起、不挂 worker。
+ * - 最小失败输入：receipt 未批准的引擎；入口越出安装目录；握手前停用；更新期间再次启动。
+ * - tier：unit（进程假体）。实测耗时：随本文件整体数秒。
+ */
+describe('nodeRuntimeBroker · 任务执行引擎进程(harnesses)', () => {
+  class FakeHarnessProcess extends EventEmitter {
+    stdin = { destroyed: false, write: vi.fn((_chunk: string) => true) };
+    stdout = new PassThrough();
+    stderr = new PassThrough();
+    pid = 4321;
+    killed = false;
+    kill(signal?: NodeJS.Signals): boolean {
+      this.killed = true;
+      queueMicrotask(() => this.emit('exit', null, signal ?? 'SIGTERM'));
+      return true;
+    }
+  }
+
+  function harnessGhost(patch: (ghost: InstalledGhost) => void = () => {}): InstalledGhost {
+    const ghost = fakeGhost();
+    ghost.manifest.schemaVersion = 3;
+    ghost.manifest.node = { entry: 'node/worker.cjs', protocol: 'json-rpc-stdio', entries: ['node/engine.cjs'] };
+    ghost.manifest.harnesses = [{ id: 'dsh', name: 'DSH', protocol: 'acp', entry: 'node/engine.cjs' }];
+    ghost.approval = { state: 'approved', revision: 'r1' };
+    ghost.approvedHarnesses = ['dsh'];
+    patch(ghost);
+    return ghost;
+  }
+
+  function setupHarness(ghost: InstalledGhost, autoSpawn = true) {
+    const spawned: Array<{ entryPath: string; cwd: string; args: string[]; proc: FakeHarnessProcess }> = [];
+    const warn = vi.fn();
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess: () => { throw new Error('worker must not start'); },
+      spawnChildProcess: (entryPath, cwd, _ghostId, args) => {
+        const proc = new FakeHarnessProcess();
+        spawned.push({ entryPath, cwd, args, proc });
+        if (autoSpawn) queueMicrotask(() => proc.emit('spawn'));
+        return proc as unknown as NodeWorkerProcess;
+      },
+      log: { info: vi.fn(), warn },
+    });
+    return { broker, spawned, warn };
+  }
+
+  it('starts the declared entry in raw stdio mode without childSpawn and logs bounded stderr', async () => {
+    const ghost = harnessGhost();
+    const { broker, spawned, warn } = setupHarness(ghost);
+    try {
+      const proc = await broker.spawnHarness('node-ghost', 'dsh');
+      expect(spawned).toHaveLength(1);
+      expect(spawned[0]).toMatchObject({
+        entryPath: path.resolve(ghost.dir, 'node', 'engine.cjs'), cwd: path.resolve(ghost.dir), args: [],
+      });
+      expect(proc).toBe(spawned[0].proc);
+      expect(broker.harnessProcessCount('node-ghost')).toBe(1);
+      spawned[0].proc.stderr.write('x'.repeat(70 * 1024));
+      spawned[0].proc.stderr.write('more');
+      await new Promise<void>(resolve => setImmediate(resolve));
+      const logged = warn.mock.calls.filter(([message]) => message === 'ghost harness stderr');
+      expect(logged.length).toBeGreaterThan(0);
+      expect(logged.every(([, meta]) => String(meta?.text).length <= 4_096)).toBe(true);
+      expect(warn).toHaveBeenCalledWith('ghost harness stderr truncated', { ghostId: 'node-ghost', harnessId: 'dsh' });
+      spawned[0].proc.kill();
+      await vi.waitFor(() => expect(broker.harnessProcessCount('node-ghost')).toBe(0));
+    } finally { broker.destroyAll(); }
+  });
+
+  // 对外协议(plugin-harnesses.md「自己的其他电脑使用插件引擎」)：任务的文件在另一台电脑时，入口进程收到的
+  // 唯一参数是宿主固定给的 --cindy-remote-workspace，插件据此关掉 Agent 自带的文件与命令工具。字面量就是
+  // 插件作者依赖的约定，改了它已发布的插件就认不出这种启动；平常启动必须仍然没有任何参数。
+  it('passes only the host-authored remote/guest workspace arguments to an engine started for another computer', async () => {
+    const { broker, spawned } = setupHarness(harnessGhost());
+    try {
+      await broker.spawnHarness('node-ghost', 'dsh', { remoteWorkspace: true });
+      expect(spawned[0].args).toEqual(['--cindy-remote-workspace']);
+      await broker.spawnHarness('node-ghost', 'dsh', { remoteWorkspace: true, guestWorkspace: true });
+      expect(spawned[1].args).toEqual(['--cindy-remote-workspace', '--cindy-guest-workspace']);
+      await broker.spawnHarness('node-ghost', 'dsh');
+      expect(spawned[2].args).toEqual([]);
+    } finally { broker.destroyAll(); }
+  });
+
+  it.each([
+    ['disabled', (g: InstalledGhost) => { g.enabled = false; }],
+    ['not approved', (g: InstalledGhost) => { g.approval = { state: 'legacy-unapproved' }; }],
+    ['receipt without engine approval', (g: InstalledGhost) => { g.approvedHarnesses = undefined; }],
+    ['unknown protocol', (g: InstalledGhost) => { g.manifest.harnesses![0].protocol = 'acp/2'; }],
+    ['undeclared engine', (g: InstalledGhost) => { g.manifest.harnesses![0].id = 'other'; g.approvedHarnesses = ['other']; }],
+    ['entry outside node.entries', (g: InstalledGhost) => { g.manifest.harnesses![0].entry = 'node/worker.cjs'; }],
+    ['entry escaping the install dir', (g: InstalledGhost) => {
+      g.manifest.node!.entries = ['../escape.cjs']; g.manifest.harnesses![0].entry = '../escape.cjs';
+    }],
+    ['no node worker', (g: InstalledGhost) => { g.manifest.node = undefined; }],
+  ])('refuses to fork when %s', async (_label, patch) => {
+    const { broker, spawned } = setupHarness(harnessGhost(patch));
+    try {
+      await expect(broker.spawnHarness('node-ghost', 'dsh')).rejects.toBeInstanceOf(AgentStartupStoppedError);
+      expect(spawned).toHaveLength(0);
+    } finally { broker.destroyAll(); }
+  });
+
+  // #12224 / #12595: task engines are host-initiated per user task (unlike plugin childSpawn),
+  // so spawning a 9th+ engine process for the same plugin must succeed and remain tracked until exit.
+  it('allows spawning more than 8 task engine processes for a plugin and tracks exits', async () => {
+    const { broker, spawned } = setupHarness(harnessGhost());
+    try {
+      for (let i = 0; i < 9; i++) await broker.spawnHarness('node-ghost', 'dsh');
+      expect(spawned).toHaveLength(9);
+      expect(broker.harnessProcessCount('node-ghost')).toBe(9);
+
+      spawned[0].proc.emit('exit', 0);
+      await vi.waitFor(() => expect(broker.harnessProcessCount('node-ghost')).toBe(8));
+    } finally { broker.destroyAll(); }
+  });
+
+  it('refuses while the account boundary is switching', async () => {
+    const ghost = harnessGhost();
+    const spawnChildProcess = vi.fn();
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost, spawnProcess: () => { throw new Error('unused'); }, spawnChildProcess,
+      ownerScope: { capture: () => 1, isCurrent: () => true, isStable: () => false },
+    });
+    try {
+      await expect(broker.spawnHarness('node-ghost', 'dsh')).rejects.toThrow('owner');
+      expect(spawnChildProcess).not.toHaveBeenCalled();
+    } finally { broker.destroyAll(); }
+  });
+
+  // Unit regression for PR #11549: broker startup can fail before ACP has a
+  // transport. A failed process must keep its task's cleanup receipt until exit.
+  it('hands the failed startup process back for confirmed cleanup', async () => {
+    const { broker, spawned } = setupHarness(harnessGhost(), false);
+    try {
+      const starting = broker.spawnHarness('node-ghost', 'dsh').catch((error: unknown) => error);
+      const proc = spawned[0]!.proc;
+      const kill = vi.spyOn(proc, 'kill').mockReturnValue(true);
+      proc.emit('error', new Error('bootstrap failed'));
+      const error = await starting;
+      expect(error).toBeInstanceOf(AgentStartupCleanupPendingError);
+      if (!(error instanceof AgentStartupCleanupPendingError)) throw error;
+      const release = vi.fn();
+      void error.whenStopped.then(release);
+      await Promise.resolve();
+      expect(release).not.toHaveBeenCalled();
+      expect(broker.harnessProcessCount('node-ghost')).toBe(1);
+
+      const retry = error.retryCleanup?.();
+      expect(kill).toHaveBeenCalledTimes(2);
+      expect(kill).toHaveBeenLastCalledWith('SIGKILL');
+      proc.emit('exit', null, 'SIGKILL');
+      await retry;
+      await error.whenStopped;
+      expect(release).toHaveBeenCalledOnce();
+      expect(broker.harnessProcessCount('node-ghost')).toBe(0);
+    } finally { broker.destroyAll(); }
+  });
+
+  it('kills an engine that was disabled or updated before its startup handshake', async () => {
+    const ghost = harnessGhost();
+    const { broker, spawned } = setupHarness(ghost, false);
+    try {
+      const starting = broker.spawnHarness('node-ghost', 'dsh');
+      await vi.waitFor(() => expect(spawned).toHaveLength(1));
+      ghost.approval = { state: 'approved', revision: 'r2' };
+      spawned[0].proc.emit('spawn');
+      await expect(starting).rejects.toThrow('changed');
+      expect(spawned[0].proc.killed).toBe(true);
+    } finally { broker.destroyAll(); }
+  });
+
+  it('stopAndWait waits for running engines and blocks new ones until the plugin is resumed', async () => {
+    const ghost = harnessGhost();
+    const { broker, spawned } = setupHarness(ghost);
+    try {
+      await broker.spawnHarness('node-ghost', 'dsh');
+      const starting = broker.spawnHarness('node-ghost', 'dsh');
+      // A second engine is still in its startup window when the update begins.
+      let settled = false;
+      const stopping = broker.stopAndWait('node-ghost').then(() => { settled = true; });
+      expect(spawned.every(entry => entry.proc.killed)).toBe(true);
+      expect(settled).toBe(false);
+      await stopping;
+      await starting.catch(() => undefined);
+      expect(broker.harnessProcessCount('node-ghost')).toBe(0);
+      // Before the directory is replaced nothing may start, even though the old install still looks enabled.
+      await expect(broker.spawnHarness('node-ghost', 'dsh')).rejects.toThrow('stopping or updating');
+      expect(spawned).toHaveLength(2);
+      broker.resumeHarnesses('node-ghost');
+      await expect(broker.spawnHarness('node-ghost', 'dsh')).resolves.toBeDefined();
+    } finally { broker.destroyAll(); }
   });
 });

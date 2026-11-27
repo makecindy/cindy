@@ -1,3 +1,4 @@
+import type { CreationPreview } from '@/features/device-link/remoteProjectsStore';
 import { isOrdinaryTaskListSession } from '../../shared/sessionSource';
 import { applySessionRebalancePreferencePatch } from '@/features/provider-group/sessionRebalanceCache';
 import { emitTaskTagCatalog } from '@/features/task-tags/taskTagEvents';
@@ -115,6 +116,7 @@ function withoutHiddenSessions(list: Session[]): Session[] {
 interface SessionSpendOverride {
   revision: number;
   totalCostUsd?: number;
+  totalCostUsdIsApproximate?: boolean;
   /** CN 构建推送只带结构化金额,与 totalCostUsd 一样需要防旧列表覆盖。 */
   totalMoney?: NonNullable<Session['totalMoney']>;
 }
@@ -552,6 +554,9 @@ function applySessionSpendOverrides(list: Session[], afterRevision: number): Ses
     ) {
       patch.totalCostUsd = override.totalCostUsd;
     }
+    if (override.totalCostUsdIsApproximate !== undefined && override.totalCostUsdIsApproximate !== session.totalCostUsdIsApproximate) {
+      patch.totalCostUsdIsApproximate = override.totalCostUsdIsApproximate;
+    }
     if (override.totalMoney && !sameMoney(override.totalMoney, session.totalMoney)) {
       patch.totalMoney = override.totalMoney;
     }
@@ -770,7 +775,25 @@ function applyAuthoritativeStatusSession(
   for (const filter of toBackfill) requestFilterBackfill(filter);
 }
 
+// A local plugin checkout has no committed task row until its directory is ready.
+// Only project it into UI list reads. Refreshes and DB mutations still use the real rows.
+const creationPreviews = new Map<string, CreationPreview>();
+let previewLists = new WeakMap<Session[], Session[]>();
+
 export const sessionsStore = {
+  setCreationPreview(preview: CreationPreview): void {
+    if (creationPreviews.get(preview.row.id)?.row !== preview.row) previewLists = new WeakMap();
+    creationPreviews.set(preview.row.id, preview);
+    notify();
+  },
+  getCreationPreview(id?: string): CreationPreview | undefined {
+    return id ? creationPreviews.get(id) : undefined;
+  },
+  clearCreationPreview(id: string): void {
+    if (!creationPreviews.delete(id)) return;
+    previewLists = new WeakMap();
+    notify();
+  },
   /** Original list mutations, including rows outside a consumer's loaded window. */
   subscribePatches(fn: SessionPatchListener): () => void {
     patchSubs.add(fn);
@@ -785,7 +808,15 @@ export const sessionsStore = {
 
   /** 当前桶快照；null 表示该桶尚未加载过（hook 据此判定 isLoading 初值）。 */
   getByFilter(filter: ListStatusFilter): Session[] | null {
-    return cache.get(filter) ?? null;
+    const rows = cache.get(filter);
+    if (!rows || filter === 'archived' || !creationPreviews.size) return rows ?? null;
+    const previous = previewLists.get(rows);
+    if (previous) return previous;
+    const pending = [...creationPreviews.values()].reverse()
+      .filter(preview => !rows.some(row => row.id === preview.row.id));
+    const visible = pending.length ? [...pending.map(preview => preview.row), ...rows] : rows;
+    previewLists.set(rows, visible);
+    return visible;
   },
 
   /**
@@ -1174,6 +1205,7 @@ export const sessionsStore = {
       const prev = sessionSpendOverrides.get(id);
       sessionSpendOverrides.set(id, {
         revision: sessionSpendRevision,
+        totalCostUsdIsApproximate: patch.totalCostUsdIsApproximate ?? prev?.totalCostUsdIsApproximate,
         totalCostUsd: patch.totalCostUsd ?? prev?.totalCostUsd,
         totalMoney: patch.totalMoney ?? prev?.totalMoney,
       });
@@ -1301,6 +1333,8 @@ export const sessionsStore = {
 
   /** 仅供测试 / 登出清理。 */
   reset(): void {
+    creationPreviews.clear();
+    previewLists = new WeakMap();
     cache.clear();
     inflight.clear();
     sessionSpendOverrides.clear();
@@ -1386,11 +1420,12 @@ if (typeof window !== 'undefined') {
   });
 
   window.electronAPI?.onUsageSessionSpendChanged?.(
-    ({ sessionId, totalMoney, totalCostUsd }, ownerStamp) => {
+    ({ sessionId, totalMoney, totalCostUsd, totalCostUsdIsApproximate }, ownerStamp) => {
       if (!isDataOwnerPushCurrent(ownerStamp)) return;
       sessionsStore.patchLocal(sessionId, {
         ...(totalMoney ? { totalMoney } : {}),
         ...(typeof totalCostUsd === 'number' ? { totalCostUsd } : {}),
+        ...(totalCostUsdIsApproximate !== undefined && { totalCostUsdIsApproximate }),
       });
     },
   );
@@ -1416,6 +1451,8 @@ if (typeof window !== 'undefined') {
       if (!isDataOwnerPushCurrent(ownerStamp)) return;
       applySessionRebalancePreferencePatch(sessionId, patch);
       sessionsStore.patchLocal(sessionId, patch);
+      // A follow-up may have been absent from every loaded task list until its first worker committed.
+      if (patch.sideChatPromoted) refreshAfterNotification();
     });
     sessionsPush.onCreated((_payload, ownerStamp) => {
       if (!isDataOwnerPushCurrent(ownerStamp)) return;

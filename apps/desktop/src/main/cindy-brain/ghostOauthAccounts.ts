@@ -46,6 +46,7 @@ import {
   type GhostOauthClientConfig,
   type GhostOauthFlowError,
   type GhostOauthLogger,
+  type StartGhostOauthFlowOptions,
 } from './ghostOauthFlow.js';
 import { tokenBrokerIssuesClientId } from './ghostOauthBroker.js';
 import {
@@ -109,6 +110,8 @@ export interface GhostOauthVault {
   read(instanceKey: string, storageKey: string): string | null;
   /** Optional strict read used only by durable reconciliation. */
   readStrict?(instanceKey: string, storageKey: string): string | null;
+  /** Under the consumer lock, a platform can retire an unreadable manifest. */
+  readForUninstall?(instanceKey: string, storageKey: string): string | null;
   /** 返回 false = 写失败(safeStorage 不可用等),调用方折叠结构化错误。 */
   store(instanceKey: string, storageKey: string, value: string): boolean;
   remove(instanceKey: string, storageKey: string): void;
@@ -123,6 +126,11 @@ export interface GhostOauthAccountManagerDeps {
   fetchImpl: typeof fetch;
   /** 拉起系统浏览器(仅 connect 用;生产注入 shell.openExternal)。 */
   openExternal(url: string): void | Promise<void>;
+  /**
+   * 设备码登录需要用户手输验证码时的本机展示(如复制到剪贴板);返回本单结束时的
+   * 清理函数。未注入时只拉起确认页。远程单由控制端展示,不经这里。
+   */
+  presentDeviceUserCode?: StartGhostOauthFlowOptions['presentDeviceUserCode'];
   /** XDT server token broker 调用器(tokenBroker 声明的意识用;接线处注入并核验企业绑定)。 */
   broker?: GhostOauthBrokerClient;
   /**
@@ -791,6 +799,9 @@ export class GhostOauthAccountManager {
       ...(clientSecret ? { clientSecret } : {}),
       ...(decl.redirectPort !== undefined ? { redirectPort: decl.redirectPort } : {}),
       ...(decl.tokenBroker !== undefined ? { tokenBroker: decl.tokenBroker } : {}),
+      ...(decl.deviceAuthorizationUrl !== undefined
+        ? { deviceAuthorizationUrl: decl.deviceAuthorizationUrl }
+        : {}),
       ...(publicRedirectUri !== null ? { publicRedirectUri } : {}),
       ...(decl.brokerBounce !== undefined ? { callbackPath: decl.brokerBounce.callbackPath } : {}),
     };
@@ -885,14 +896,25 @@ export class GhostOauthAccountManager {
 
   /** Follow the existing source archive (including inverse recovery), or remove
    * incoming reuse rows after uninstall. Ordinary accounts are untouched. */
-  async relocateSourceReferences(from: string, to: string | null, targets: readonly { instanceKey: string; keys: readonly string[] }[]): Promise<void> {
+  async relocateSourceReferences(
+    from: string,
+    to: string | null,
+    targets: readonly { instanceKey: string; keys: readonly string[] }[],
+  ): Promise<void> {
     const read = this.deps.vault.readStrict ?? this.deps.vault.read;
+    const readForUninstall = to === null ? this.deps.vault.readForUninstall : undefined;
     for (const target of targets) {
       for (const key of target.keys) {
         if (!key.endsWith(accountsKey(''))) continue;
-        if (!parseManifest(read(target.instanceKey, key)).accounts.some(row => row.reused?.instanceKey === from)) continue;
+        try {
+          if (!parseManifest(read(target.instanceKey, key)).accounts.some(row => row.reused?.instanceKey === from)) continue;
+        } catch (error) {
+          if (!readForUninstall) throw error;
+          // Retry under the consumer lock before retiring an unreadable record.
+        }
         await this.withMutationLock(target.instanceKey, () => {
-          const manifest = parseManifest(read(target.instanceKey, key));
+          const manifest = parseManifest((readForUninstall ?? read)(target.instanceKey, key));
+          if (!manifest.accounts.some(row => row.reused?.instanceKey === from)) return;
           const accounts = manifest.accounts.flatMap(row => row.reused?.instanceKey !== from ? [row]
             : to === null ? [] : [{ ...row, reused: { ...row.reused, instanceKey: to } }]);
           const next = { ...manifest, accounts,
@@ -1099,6 +1121,7 @@ export class GhostOauthAccountManager {
       config,
       remote: opts?.remote,
       openExternal: (url) => { opts?.onAuthorizationUrl?.(url); return this.deps.openExternal(url); },
+      ...(this.deps.presentDeviceUserCode ? { presentDeviceUserCode: this.deps.presentDeviceUserCode } : {}),
       fetchImpl: this.deps.fetchImpl,
       broker: this.deps.broker,
       brandName: this.deps.brandName,

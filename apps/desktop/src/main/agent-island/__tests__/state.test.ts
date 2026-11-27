@@ -37,6 +37,7 @@ import {
   setAgentIslandHovered,
   setAgentIslandLayoutDragActive,
   setAgentIslandPointerZones,
+  setAgentIslandSessionBackgroundWork,
   setAgentIslandSessionDisplaySuppressed,
   setAgentIslandVisibleSession,
   type AgentIslandCompanionChatProjection,
@@ -3438,4 +3439,47 @@ it.each([['read', 'test'], ['test', 'read']])('keeps the remaining parallel tool
   expect(phase()).toBe(last === 'test' ? 'testing' : 'reading-file');
   applyAgentIslandEvent(state, meta, { type: 'tool_result', data: { toolUseId: last } }, 104);
   expect(phase()).toBe(last === 'test' ? 'reviewing-checks' : 'reviewing-files');
+});
+
+// Unit (2026-11-20): a plugin engine (Antigravity) answered and kept working; each of its tool
+// calls outside a turn lit the task as running and nothing ever turned it off. Minimal input:
+// a completed turn, then one tool call outside any turn. Production entries: applyAgentIslandEvent
+// and setAgentIslandSessionBackgroundWork; observable result: the relayed activity snapshot that
+// the sidebar, other devices and the phone render.
+describe('plugin engine work after its turn', () => {
+  const meta = { sessionId: 'agy', title: 'Delete provider', agentKind: 'acp' };
+  const background = (event: AgentEvent): AgentEvent => ({ ...event, turnScope: 'background' });
+  const snapshot = (state: ReturnType<typeof createAgentIslandState>) =>
+    buildAllSessionActivitySnapshots(state).find((entry) => entry.sessionId === 'agy');
+
+  it('shows running only while the background-work signal holds it, then settles without a new reminder', () => {
+    const state = createAgentIslandState();
+    applyAgentIslandEvent(state, meta, statusEvent(true, 'Working'), 1_000);
+    applyAgentIslandEvent(state, meta, doneEvent(), 2_000);
+    expect(snapshot(state)).toMatchObject({ phase: 'completed', attention: true });
+
+    applyAgentIslandEvent(state, meta, background(toolUseEvent('push')), 2_100);
+    expect(snapshot(state)?.phase).toBe('completed');
+
+    expect(setAgentIslandSessionBackgroundWork(state, meta, true, 2_200)).toBe(true);
+    applyAgentIslandEvent(state, meta, background(toolUseEvent('push')), 2_300);
+    expect(snapshot(state)).toMatchObject({ phase: 'running', detail: expect.stringMatching(/\S/) });
+
+    expect(setAgentIslandSessionBackgroundWork(state, meta, false, 60_000)).toBe(true);
+    expect(snapshot(state)).toMatchObject({ phase: 'completed', attention: true, completionNotification: 'silent' });
+  });
+
+  it('hands the run to a turn that starts while the engine is still working', () => {
+    const state = createAgentIslandState();
+    applyAgentIslandEvent(state, meta, statusEvent(true, 'Working'), 1_000);
+    applyAgentIslandEvent(state, meta, doneEvent(), 2_000);
+    setAgentIslandSessionBackgroundWork(state, meta, true, 2_100);
+    expect(setAgentIslandSessionBackgroundWork(state, meta, false, 5_000, { turnStarting: true })).toBe(true);
+    applyAgentIslandEvent(state, meta, statusEvent(true, 'Working'), 5_000);
+    expect(snapshot(state)).toMatchObject({ phase: 'running', startedAt: 5_000 });
+    // The turn's own end is an ordinary completion; a late background "off" changes nothing.
+    applyAgentIslandEvent(state, meta, doneEvent(), 6_000);
+    expect(setAgentIslandSessionBackgroundWork(state, meta, false, 6_100)).toBe(false);
+    expect(snapshot(state)?.phase).toBe('completed');
+  });
 });

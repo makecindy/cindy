@@ -27,7 +27,7 @@ const SUPPORTED_TEXT_EXTS = new Set([
   '.js', '.ts', '.tsx', '.jsx', '.mjs', '.cjs', '.py', '.go', '.rs', '.java',
   '.c', '.cpp', '.cc', '.cxx', '.h', '.hpp', '.hh', '.cs', '.rb', '.php',
   '.swift', '.kt', '.kts', '.scala', '.groovy', '.coffee',
-  '.lua', '.dart', '.r', '.pl', '.pm', '.ex', '.exs', '.elm',
+  '.sol', '.lua', '.dart', '.r', '.pl', '.pm', '.ex', '.exs', '.elm',
   '.clj', '.cljs', '.cljc', '.fs', '.fsi', '.fsx', '.ml', '.mli',
   '.hs', '.erl', '.hrl', '.zig', '.nim', '.vim', '.applescript',
   '.sh', '.bash', '.zsh', '.fish', '.ps1', '.psm1', '.bat', '.cmd',

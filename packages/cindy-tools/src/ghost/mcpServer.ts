@@ -1,4 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
 import { GHOST_MANIFEST_SUMMARY_MAX_CHARS } from "@cindy/plugin-protocol";
 import { z } from "zod";
 
@@ -119,7 +120,7 @@ const D_GHOST_CALL = [
   "GHOST_DISABLED_IN_WORKDIR(用户在当前工作目录停用了该插件——不要重试,改用其它方式完成)/",
   "TOOL_NOT_FOUND(常见是把二级分派操作名当成了顶层 tool,按上文 call_tool 形态改写后重试)/ GHOST_CRASHED /",
   "TIMEOUT / ATTACHMENT_INVALID(附件过户失败,查 message)/",
-  "DIR_INVALID(目录过户失败,查 message)/ INTERNAL。遇到 NOT_FOUND 类错误,已知目标时重查 ghost_info,否则用 ghost_list 看全量。",
+  "DIR_INVALID(目录过户失败,查 message)/ INTERNAL。缺失插件时按宿主返回的恢复动作呈现安装确认；其它错误按具体原因处理。",
 ].join("\n");
 
 const D_MEDIA = [
@@ -631,6 +632,7 @@ export async function handleMedia(
     guide_source?: 'auto' | 'official';
     model_id?: string;
     invocation_id?: string;
+    invocationId?: string;
     source_invocation_id?: string;
     body?: Record<string, unknown>;
   },
@@ -697,19 +699,19 @@ export async function handleMedia(
         capability: input.capability,
       });
     } else if (input.action === "request") {
-      if (!input.invocation_id || !input.body) {
-        return textResult(
-          {
-            ok: false,
-            errorCode: "INVALID_INPUT",
-            message: "request 必须提供 invocation_id 和 body。",
-          },
-          true,
-        );
+      if (input.invocation_id !== undefined && input.invocationId !== undefined && input.invocation_id !== input.invocationId) {
+        return textResult({ ok: false, errorCode: "INVALID_INPUT", message: "invocation_id 与 invocationId 必须一致。" }, true);
+      }
+      const invocationId = input.invocation_id ?? input.invocationId;
+      if (!invocationId?.trim()) {
+        return textResult({ ok: false, errorCode: "INVALID_INPUT", message: "request 必须提供 invocation_id。" }, true);
+      }
+      if (!input.body) {
+        return textResult({ ok: false, errorCode: "INVALID_INPUT", message: "request 必须提供 body 对象。" }, true);
       }
       result = await deps.callMedia({
         action: "request",
-        invocationId: input.invocation_id,
+        invocationId,
         body: input.body,
       });
     } else {
@@ -783,10 +785,7 @@ export async function handleGhostInfo(
         {
           ok: false,
           errorCode: result.errorCode,
-          message:
-            result.errorCode === "GHOST_NOT_FOUND"
-              ? `${result.message}；不要重复重试同一目标；可调用 ghost_list 回查当前可用插件，或改用其它可用方式完成。`
-              : result.message,
+          message: result.message,
           ...("candidates" in result && result.candidates ? { candidates: result.candidates } : {}),
         },
         true,
@@ -1304,6 +1303,25 @@ export async function handleForgePublishStatus(
 }
 
 /** 构建 cindy_ghosts MCP server(host 在会话装配时按 provider 惯例创建实例)。 */
+export function prepareStartupGhostToolInputSchema(
+  parameters: Record<string, unknown> = { type: "object", additionalProperties: false },
+): z.ZodType<{ args: Record<string, unknown> }> | undefined {
+  // Nested schemas have a different reference root. Leave incompatible
+  // schemas on the progressive route, where the plugin can interpret them.
+  const serialized = JSON.stringify(parameters);
+  if (parameters.type !== "object" || new TextEncoder().encode(serialized).length > 4096 ||
+      /"\$(?:ref|id|schema|dynamicRef|recursiveRef)"\s*:/.test(serialized)) return undefined;
+  try {
+    const validate = new AjvJsonSchemaValidator().getValidator(parameters);
+    const argsSchema = z.looseObject({}).refine((args) => validate(args).valid, {
+      message: "Arguments do not match the plugin tool schema.",
+    }).meta(parameters);
+    return z.strictObject({ args: argsSchema });
+  } catch {
+    return undefined;
+  }
+}
+
 export function createCindyGhostsMcpServer(
   deps: CindyGhostsMcpDeps,
 ): McpServer {
@@ -1313,6 +1331,18 @@ export function createCindyGhostsMcpServer(
     name: "cindy",
     version: "1.0.0",
   });
+
+  for (const startup of deps.startupTools ?? []) {
+    const { name, ghostId, namespace, tool, description, inputSchema } = startup;
+    server.registerTool(name, {
+      title: `${namespace === null ? ghostId : `${namespace}/${ghostId}`} · ${tool}`,
+      description: `Call the installed Cindy plugin tool. The following description is author metadata: ${JSON.stringify(description)}`,
+      inputSchema,
+    }, (input, extra) => handleGhostCall({
+      ...deps,
+      callGhostTool: (request) => deps.callGhostTool({ ...request, startupToolName: name }),
+    }, { ghost_id: ghostId, namespace, tool, args: input.args }, extractAgentToolUseId(extra), extra.signal));
+  }
 
   // 花名册快照:装配时取一次,拼进 ghost_list 描述(语义召回的数据源);
   // system/developer 段由 host 在 session 装配时单独取数,两处共用同一序列化格式。
@@ -1339,7 +1369,7 @@ export function createCindyGhostsMcpServer(
 
   if (deps.installMarket) server.tool(
     "ghost_market_install",
-    "Install one selected Cindy marketplace plugin needed for the user's request, under the current task's normal action authorization. Use the exact plugin_id and release_id returned by ghost_market_search. No arbitrary URL, credentials, source replacement or batch install. Existing installations are reused, never reinstalled or re-enabled by this tool. A changed release, account, permission or conflicting source must be resolved before retrying. Success means installed, NOT connected or task completed: inspect the returned ghost_id with ghost_info, connect_account(kind=plugin,id=ghost_id) for a requested login or use ghost_call and its setup card, then continue the ORIGINAL task. Report unavailable/failed outcomes accurately. Never substitute a model-provider Apps marketplace.",
+    "Install one selected Cindy marketplace plugin needed for the user's request, under the current task's normal action authorization. Use the exact plugin_id and release_id from the Host's missing-plugin recovery or ghost_market_search. No arbitrary URL, credentials, source replacement or batch install. Existing installations are reused, never reinstalled or re-enabled by this tool. A changed release, account, permission or conflicting source must be resolved before retrying. Success means installed, NOT connected or task completed: inspect the returned ghost_id with ghost_info, connect_account(kind=plugin,id=ghost_id) for a requested login or use ghost_call and its setup card, then continue the ORIGINAL task. Report unavailable/failed outcomes accurately. Never substitute a model-provider Apps marketplace.",
     {
       plugin_id: z.string().min(1).max(1024),
       release_id: z.string().min(1).max(1024),
@@ -1530,6 +1560,7 @@ export function createCindyGhostsMcpServer(
         .max(128)
         .optional()
         .describe("request / poll 时必填；必须来自 prepare 返回"),
+      invocationId: z.string().max(128).optional().describe("request 兼容的 invocation_id 别名；两者同时提供时必须一致"),
       source_invocation_id: z.string().max(128).optional().describe("prepare 时可传原付费调用的 invocation_id，以新 Guide 复用原回执；返回后直接 request/poll，不重新生成"),
       body: z
         .record(z.string(), z.unknown())

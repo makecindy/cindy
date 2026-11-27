@@ -177,7 +177,7 @@ function ThinkingActivityRow({ activity }: { activity: ProjectedThinkingActivity
       aria-expanded={canExpand ? expanded : undefined}
       onClick={() => setExpanded((value) => !value)}
       className={cn(
-        'flex w-full min-w-0 gap-1.5 px-2 py-[3px] text-left outline-none',
+        'flex w-full min-w-0 gap-1.5 px-2 py-0.5 text-left outline-none',
         ACTIVITY_ROW_RADIUS_CLASS,
         expanded ? 'items-start' : 'items-center',
         canExpand
@@ -269,7 +269,7 @@ function ThinkingLineRow({
       data-scroll-disclosure-header=""
       onClick={onActivate}
       className={cn(
-        'group flex w-full min-w-0 cursor-pointer select-none items-center gap-1.5 px-2 py-[3px] text-left outline-none',
+        'group flex w-full min-w-0 cursor-pointer select-none items-center gap-1.5 px-2 py-0.5 text-left outline-none',
         'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
         ACTIVITY_ROW_RADIUS_CLASS,
         ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
@@ -612,7 +612,7 @@ function ActivityWorkGroupBlock({
           data-scroll-disclosure-header=""
           disabled={!canToggle}
           className={cn(
-            fitHeader ? 'flex w-fit max-w-full items-center gap-1.5 py-[2px]' : 'flex w-full items-center gap-1.5 py-[2px]',
+            fitHeader ? 'flex w-fit max-w-full items-center gap-1.5 py-0.5' : 'flex w-full items-center gap-1.5 py-0.5',
             'select-none',
             compact && 'min-h-8 rounded-full px-2 focus-ring hover:bg-[var(--surface-hover)]',
             'text-left',
@@ -653,7 +653,7 @@ function ActivityWorkGroupBlock({
           <div
             data-live-work-preview="true"
             className={cn(
-              'mt-1 min-w-0 border-l-2 border-[var(--agent-actions-rail)] py-[2px] pl-3',
+              'mt-1 min-w-0 border-l-2 border-[var(--agent-actions-rail)] py-0.5 pl-3',
               'flex flex-col',
             )}
           >
@@ -678,7 +678,7 @@ function ActivityWorkGroupBlock({
         <Collapse open={effectiveExpanded}>
           <div
             className={cn(
-              'mt-1 min-w-0 pl-3 py-[2px]',
+              'mt-1 min-w-0 pl-3 py-0.5',
               'border-l-2 border-[var(--agent-actions-rail)]',
               'flex flex-col gap-2',
             )}

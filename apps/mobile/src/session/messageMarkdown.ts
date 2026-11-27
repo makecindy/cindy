@@ -11,7 +11,7 @@ import {
   resolveChatAbsPath,
   toWorkdirRel,
 } from '@/session/chatPathCandidate';
-import { DEEP_LINK_SCHEME_GROUP } from '@/session/sessionLinks';
+import { DEEP_LINK_SCHEME_GROUP, unescapeMarkdownLabelBrackets } from '@/session/sessionLinks';
 // App bootstrap initializes this instance; parsing summaries must not initialize React bindings.
 import i18n from 'i18next';
 import { createMarkdownRegexSearch } from './markdownRegexSearch';
@@ -69,6 +69,16 @@ export type MobileMarkdownBlock =
   // (仿 mermaid 块的形态),失败/离线降级显示源码。
   | { type: 'math'; key: string; srcLine?: number; text: string }
   | { type: 'code'; key: string; srcLine?: number; language?: string; text: string };
+
+/** Preserve the rendered grid when pasting a complete table into a spreadsheet. */
+export function mobileMarkdownTableToTsv(table: Extract<MobileMarkdownBlock, { type: 'table' }>): string {
+  const rows = [table.header, ...table.rows.map(row => row.cells)];
+  const columns = Math.max(...rows.map(row => row.length));
+  return rows.map(row => Array.from({ length: columns }, (_, index) =>
+    (row[index] ?? []).map(inline => inline.type === 'image' ? inline.alt : inline.text)
+      .join('').replace(/[\t\r\n]+/g, ' '),
+  ).join('\t')).join('\n');
+}
 
 /** Plain summaries share the message parser, keeping labels and omitting link destinations. */
 export function mobileMarkdownPreviewText(markdown: string): string {
@@ -1294,7 +1304,11 @@ function createInlineParseContext(input: string, startsInsideHtmlComment: boolea
   let probe: string | undefined;
   let imagesAllowed: boolean | undefined;
   let bareUrl: ReturnType<typeof matchBareUrl> | undefined;
+  let markdownLink: ReturnType<typeof matchMarkdownLink> | undefined;
+  let localPathLink: ReturnType<typeof matchLocalPathLink> | undefined;
+  let linkLabelStarts: Map<number, number> | undefined;
   const commentProbe = () => (probe ??= blankEscapedAngles(blankCodeSpans(input)));
+  const getLinkLabelStarts = () => (linkLabelStarts ??= buildMarkdownLinkLabelStarts(input));
   return {
     startsInsideHtmlComment,
     search: createMarkdownRegexSearch<{ index: number; end: number; inline: MobileMarkdownInline } | null>(input),
@@ -1302,6 +1316,18 @@ function createInlineParseContext(input: string, startsInsideHtmlComment: boolea
     hasMarkdownImage: input.includes('!['),
     hasHtmlImage: HTML_IMG_HINT_RE.test(input),
     commentProbe,
+    nextLink: (from: number) => {
+      if (markdownLink === undefined || (markdownLink !== null && markdownLink.index < from)) {
+        markdownLink = matchMarkdownLink(input, from, getLinkLabelStarts);
+      }
+      return markdownLink;
+    },
+    nextLocalPathLink: (from: number) => {
+      if (localPathLink === undefined || (localPathLink !== null && localPathLink.index < from)) {
+        localPathLink = matchLocalPathLink(input, from, getLinkLabelStarts);
+      }
+      return localPathLink;
+    },
     nextBareUrl: (from: number) => {
       // parseInlines advances monotonically. Reuse only this paragraph's pending
       // candidate (including a miss), never a token whose start was consumed.
@@ -1339,29 +1365,13 @@ function findNextInlineToken(
     // markdown 源码,review P1)。cindy-media 只收字节仓严格地址中的视频
     // 后缀;由 managedMediaKind 让渲染层走既有媒体查看器/远端取件,绝不把
     // 私有 scheme 交给 Linking.openURL。
-    context.search.next('Link', from, () => matchRegex(
-      input,
-      from,
-      new RegExp(
-        `\\[([^\\]]+)\\]\\(((?:https?://|(?:${DEEP_LINK_SCHEME_GROUP})://(?:session|project)/)[^)\\s]+|cindy-media://blobs/[0-9a-f]{64}\\.(?:mp4|webm|mov))\\)`,
-        'g',
-      ),
-      (match) => {
-        const url = trimUrlPunctuation(match[2]);
-        return {
-          type: 'link' as const,
-          text: match[1],
-          url,
-          ...(url.startsWith('cindy-media://') ? { managedMediaKind: 'video' as const } : {}),
-        };
-      },
-      undefined,
-      context.search.exec,
-    )),
+    // label 采用 CommonMark 方括号平衡回扫(支持 `[\[Schedule\] 标题](url)` /
+    // `[[WIP] 标题](url)` 等转义或嵌套方括号,并在展示前反转义 `\[` / `\]`)。
+    context.nextLink(from),
     // 本地路径链接:[README.md](/abs/path/README.md:17) 这类模型高频输出形态。
     // URL 经 classifyChatPathLinkTarget 判形状(http/session 之外的路径形态才收),
     // 渲染层再经被控端 stat 决定点亮 chip 还是保持纯文本标签。
-    context.search.next('LocalPathLink', from, () => matchLocalPathLink(input, from, context)),
+    context.nextLocalPathLink(from),
     // 正文纯文本里裸写的本地路径(`见 src/App.tsx 第 20 行`、`改的是 C:\proj\a.ts`):
     // 模型高频形态,桌面端由 remarkLocalPathLinks 切成 link 节点,这里补齐同一入口。
     // 产出 link inline 后与 `[label](path)` 形态共用 LinkPathChipSpan → 远端 stat →
@@ -1441,6 +1451,124 @@ function matchBareUrl(input: string, from: number) {
   return raw;
 }
 
+/**
+ * 一次性前向 O(n) 计算段落内每个未转义 `]` 对应的配对 `[` 下标(不跨行,
+ * 跳过反斜杠转义 `\[` / `\]` 与 inline code span `` `...` `` 内的括号)。
+ * 供 `matchMarkdownLink` 与 `matchLocalPathLink` 共用:
+ * - 查找任意 `](` 的标签起点均为 O(1),杜绝重复回扫导致平方级耗时;
+ * - 行内代码内的方括号(如 ``[`arr[0`](https://example.com)``)不污染括号栈,
+ *   避免外层链接被拆开。
+ */
+function buildMarkdownLinkLabelStarts(input: string): Map<number, number> {
+  const map = new Map<number, number>();
+  const codeEnds = new Map<number, number>();
+  if (input.includes('`')) {
+    const runs: Array<{ start: number; end: number; len: number }> = [];
+    const byLen = new Map<number, number[]>();
+    let pos = 0;
+    while (pos < input.length) {
+      const tick = input.indexOf('`', pos);
+      if (tick === -1) break;
+      let end = tick + 1;
+      while (end < input.length && input[end] === '`') end += 1;
+      const len = end - tick;
+      const idx = runs.length;
+      runs.push({ start: tick, end, len });
+      let list = byLen.get(len);
+      if (!list) {
+        list = [];
+        byLen.set(len, list);
+      }
+      list.push(idx);
+      pos = end;
+    }
+    const headByLen = new Map<number, number>();
+    let r = 0;
+    while (r < runs.length) {
+      const run = runs[r];
+      const list = byLen.get(run.len)!;
+      let head = headByLen.get(run.len) ?? 0;
+      while (head < list.length && list[head] <= r) head += 1;
+      headByLen.set(run.len, head);
+      if (head >= list.length) {
+        r += 1;
+        continue;
+      }
+      const closeIdx = list[head];
+      headByLen.set(run.len, head + 1);
+      codeEnds.set(run.start, runs[closeIdx].end);
+      r = closeIdx + 1;
+    }
+  }
+
+  const stack: number[] = [];
+  let i = 0;
+  while (i < input.length) {
+    const codeEnd = codeEnds.get(i);
+    if (codeEnd !== undefined) {
+      i = codeEnd;
+      continue;
+    }
+    const ch = input.charCodeAt(i);
+    if (ch === 92 /* \\ */) {
+      i += 2;
+      continue;
+    }
+    if (ch === 10 /* \n */) {
+      stack.length = 0;
+      i += 1;
+      continue;
+    }
+    if (ch === 91 /* [ */) {
+      stack.push(i);
+      i += 1;
+      continue;
+    }
+    if (ch === 93 /* ] */) {
+      const openIdx = stack.pop();
+      if (openIdx !== undefined) {
+        map.set(i, openIdx);
+      }
+      i += 1;
+      continue;
+    }
+    i += 1;
+  }
+  return map;
+}
+
+const MARKDOWN_LINK_CLOSE_RE_SOURCE =
+  `\\]\\(((?:https?://|(?:${DEEP_LINK_SCHEME_GROUP})://(?:session|project)/)[^)\\s]+|cindy-media://blobs/[0-9a-f]{64}\\.(?:mp4|webm|mov))\\)`;
+
+function matchMarkdownLink(
+  input: string,
+  from: number,
+  getLabelStarts: () => Map<number, number>,
+): { index: number; end: number; inline: MobileMarkdownInline } | null {
+  if (input.indexOf('](', from) === -1 || input.indexOf('[', from) === -1) return null;
+  const labelStarts = getLabelStarts();
+  const closeRe = new RegExp(MARKDOWN_LINK_CLOSE_RE_SOURCE, 'g');
+  closeRe.lastIndex = from;
+  let match: RegExpExecArray | null;
+  while ((match = closeRe.exec(input)) !== null) {
+    const closeIdx = match.index;
+    const labelStart = labelStarts.get(closeIdx);
+    if (labelStart === undefined || labelStart < from || closeIdx <= labelStart + 1) continue;
+    const url = trimUrlPunctuation(match[1]);
+    return {
+      index: labelStart,
+      end: closeIdx + match[0].length,
+      inline: {
+        type: 'link',
+        text: unescapeMarkdownLabelBrackets(input.slice(labelStart + 1, closeIdx)),
+        url,
+        ...(url.startsWith('cindy-media://') ? { managedMediaKind: 'video' as const } : {}),
+      },
+    };
+  }
+  return null;
+}
+
 // 本地路径链接 matcher:通用 [text](url) 形态逐个 exec,URL 过
 // classifyChatPathLinkTarget 形状门(http(s) / 会话深链 / mailto 等 scheme 不收,
 // 那些归原有 matcher);`![alt](url)` 是图片语法,前置 `!` 时跳过——图片 matcher
@@ -1455,22 +1583,31 @@ function matchBareUrl(input: string, from: number) {
 function matchLocalPathLink(
   input: string,
   from: number,
-  context: InlineParseContext,
+  getLabelStarts: () => Map<number, number>,
 ): { index: number; end: number; inline: MobileMarkdownInline } | null {
-  if (!input.includes('](')) return null;
+  if (input.indexOf('](', from) === -1 || input.indexOf('[', from) === -1) return null;
   // 正则每次调用新建:g 标志的 lastIndex 是可变状态,模块级共享在提前 return /
   // 未过重置路径时会漏匹配(bot review 实捉);同文件其它 matcher 也是每调用新建字面量。
-  const re = /\[([^\]]+)\]\((<[^>\n]+>|(?:[^()\n]|\([^()\n]*\))+)\)/g;
-  re.lastIndex = from;
+  const closeRe = /\]\((<[^>\n]+>|(?:[^()\n]|\([^()\n]*\))+)\)/g;
+  closeRe.lastIndex = from;
+  let labelStarts: Map<number, number> | null = null;
   let match: RegExpExecArray | null;
-  while ((match = context.search.exec(re)) !== null) {
-    if (match.index > 0 && input[match.index - 1] === '!') continue;
-    const url = parseLocalMarkdownDestination(match[2]);
+  while ((match = closeRe.exec(input)) !== null) {
+    // 先判目标是否为本地路径,排除 http(s)/深链等不支持的目标,再 O(1) 查预计算的括号表
+    const url = parseLocalMarkdownDestination(match[1]);
     if (!url || !classifyChatPathLinkTarget(url)) continue;
+    const closeIdx = match.index;
+    const labelStart = (labelStarts ??= getLabelStarts()).get(closeIdx);
+    if (labelStart === undefined || labelStart < from || closeIdx <= labelStart + 1) continue;
+    if (labelStart > 0 && input[labelStart - 1] === '!') continue;
     return {
-      index: match.index,
-      end: match.index + match[0].length,
-      inline: { type: 'link', text: match[1], url },
+      index: labelStart,
+      end: closeIdx + match[0].length,
+      inline: {
+        type: 'link',
+        text: unescapeMarkdownLabelBrackets(input.slice(labelStart + 1, closeIdx)),
+        url,
+      },
     };
   }
   return null;

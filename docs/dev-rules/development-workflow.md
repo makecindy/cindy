@@ -2,15 +2,21 @@
 
 > **状态**：权威开发规则（authoritative）
 > **读取时机**：在 Cindy 内嵌的 worktree 会话里工作、准备提交或直推、做 code review，
-> 或决定开发中得到的知识该写到哪里、整理与迁移规则文档之前
+> 或决定开发中得到的知识该写到哪里、新增规则文档、整理与迁移规则文档之前
+> **适用路径**：`AGENTS.md`、`{apps,packages}/**/AGENTS.md`、`REVIEW.md`、`CONTRIBUTING*.md`、
+> `docs/dev-rules/**`、`docs/product-rules/**`、`docs/design-rules/**`、`scripts/rule-index.mjs`、
+> `scripts/check-dco.mjs`、`scripts/repo-worktrees.mjs`、`.githooks/**`、`.github/PULL_REQUEST_TEMPLATE.md`
 
 本文是仓库交付约定的正本，维护 worktree 会话契约、DCO、提交验证、直推 `main` 的
-额外门禁、review 严重度口径、项目知识归属与文档整理原则；根 [AGENTS.md](../../AGENTS.md)
+额外门禁、合并方式、review 严重度口径、项目知识归属与文档整理原则；根 [AGENTS.md](../../AGENTS.md)
 保留关键约束与阅读入口。提交、push 和 PR 的时机由用户或宿主工作流决定，本文不额外授权外部写操作。
 自动审阅是建议性检查，口径与修改入口见 [REVIEW.md](../../REVIEW.md)，不替代人工 review
 或 CI 门禁。
 
 ## 1. Dogfooding：在本仓 worktree 会话里工作
+
+托管 worktree 从刚拉取的远端默认分支切出；拉取失败时 `create_task_worktree` 返回
+`base_fetched: false`，说明起点可能不是最新，要告诉用户。
 
 Cindy 创建或重建托管 worktree 时，会尽力向 Git 本地 `info/exclude` 追加所用托管目录的
 根级排除规则，避免基础仓库的未跟踪扫描进入这些目录。保留已有规则，不修改项目
@@ -28,9 +34,11 @@ Cindy 创建或重建托管 worktree 时，会尽力向 Git 本地 `info/exclude
 引擎缓存（常见十万级文件、数十 GB），比较只会长时间占住该仓库的创建队列。
 Multibox 建完才返回（2026-11-16 实测 Unity 项目 67–88 秒），所以远程创建（另一台电脑或
 手机发起）的等待上限是 5 分钟（`packages/device-link/src/allowlist.ts` 的 `worktree:create`），
-期间控制端一直显示创建中，建好后才建任务，Agent 不会进入半成品目录；未更新的控制端仍按
-60 秒超时。Desktop 的创建中卡片（`WorktreeCreatingOverlay`）超过 3 秒后显示已等待时长：本机
-新建在任务页替代输入框；远程创建时显示在新建页输入框下方，Goal 创建时显示在目标弹窗内。
+被控端建好目录才建任务，Agent 不会进入半成品目录；未更新的控制端仍按
+60 秒超时。Desktop 普通新建任务先进入任务页显示首条消息。工作区准备期间可以切走或继续写草稿，
+目录就绪并交接首条消息后才能发送补充内容。本机插件引擎的任务预览只存在于界面，完整检出后才
+创建真实任务；准备失败可从预览回到编辑，恢复原文、附件及补写内容。
+Goal 仍在目标弹窗内显示创建进度，超过 3 秒显示已等待时长。
 手机新建页暂无同款卡片与计时。
 
 正常回收后的完整 Git 快照恢复也使用 Multibox：直接在最终目录检出快照 commit 并携带缓存，
@@ -68,6 +76,7 @@ Multibox 建完才返回（2026-11-16 实测 Unity 项目 67–88 秒），所�
   `apps/desktop/logs/`，读日志时拼 baseRepo 的绝对路径。
 - **会话结束与工作区保留**：是否 commit 由用户或宿主工作流决定，不能仅因会话结束
   强制提交。会话被删除或归档时脏 worktree 会先把改动和新文件存进 Git 快照再删目录；
+  手动归档单条任务时可明确选择丢弃，回收完成后会释放匹配的恢复快照。
   被 `.gitignore` 忽略的文件（依赖、构建产物）和 worktree 内克隆／初始化的嵌套仓库不保留。**PR
   merged／closed 不等于 Cindy 会话已结束**：只要 owning session 仍 active，任何外部 Git
   cleanup 都必须跳过该 `.cindy-worktrees` / `.xdt-worktrees` 目录与本地 `cindy/*` / `xdt/*` 分支，交给
@@ -95,9 +104,15 @@ owner 的目录；旧 owner 的缺失路径沿用目录不可用结果，不自�
 worktree 建成空目录或自动切到项目根继续修改代码。
 
 恢复说明随本轮消息传给 Agent，明确原路径、文件未恢复和当前运行位置；消息被接受
-之后才消费说明。SSH 不使用本机备用目录；设备互联和手机沿用被控 Desktop 的发送链。
-实现见 `apps/desktop/src/main/maker-ipc/workingDirectoryRecovery.ts` 与 `register.ts`，
-回归见 `workingDirectoryRecovery.test.ts` 和 `makerSendTransaction.test.ts`。
+之后才消费说明。绑定到该任务的定时触发（含前置检查脚本 cwd 与会话启动）共用同一套
+恢复登记与回落边界：`gone` 时在备用目录继续运行并遵循同一运行期不自动切回，`retry`
+仍保持阻断；仅脚本自动化自身 `workingDir` 落在缺失 worktree 内时保持失败，不在空
+备用目录里跑仓库脚本。SSH 不使用本机备用目录；设备互联和手机沿用被控 Desktop 的发送链。
+实现见 `apps/desktop/src/main/maker-ipc/workingDirectoryRecovery.ts`、
+`workingDirectoryRecovery.desktop.ts`、`register.ts` 与
+`apps/desktop/src/main/scheduler-host/{restore-target,runner,script-runner}.ts`，
+回归见 `workingDirectoryRecovery.test.ts`、`makerSendTransaction.test.ts`、
+`runnerPreRunHookCwd.test.ts` 和 `scriptRunner.test.ts`。
 
 ### 提交门禁
 
@@ -173,6 +188,31 @@ worktree 建成空目录或自动切到项目根继续修改代码。
   `docs/` 下规则找实际问题；发现 P0／P1 必须先修复并重新 review，直到没有 P0／P1。commit
   可以先创建，但 push 的必须是 review 通过的最终 commit。
 
+### 合并方式
+
+- **普通 PR 以 squash 合入 `main`**：主线一条记录对应一个 PR。仓库设置让这条记录的标题
+  固定取 PR 标题（带 `(#N)`），正文保留各提交信息与 `Signed-off-by`；分支内的过程提交和
+  同步 `main` 的 merge 留在 PR 页面。PR 标题会原样成为主线记录，按 PR 模板写清楚。
+- **例外只有两种**：维护者给 PR 加 `merge:keep-commits` 标签时用 merge commit，保留分支内
+  逐条提交，用于长期分支合回、上游同步或刻意分步的大改动；维护者在主干侧代为解决冲突时也用
+  merge commit，因为只有 PR head 进入主线历史，GitHub 才会自动把 PR 标记为已合并。不使用
+  rebase merge。
+- **由合并流程执行，不由单次调用选择**：维护者的自动审查合并流程（review-pr）按同一策略
+  决定合并方式；调用方传入与策略不一致的方式会被拒绝，标签不是维护者添加的会停止合并。
+- **旧历史不改写**：2026-11-26 之前主线以 merge commit 为主（近 7 天 664 个合入 PR 中 615 个），
+  原因是没有写明策略、由每次合并自行选择，不是有意的约定。
+
+squash 后分支里的提交不会出现在 `main` 的历史中，对日常开发有这些影响：
+
+- 判断分支是否已合入看 PR 状态，不看 Git 祖先关系：`git branch --merged`、
+  `git merge-base --is-ancestor` 对 squash 合入的分支都显示未合入，`git branch -d` 会拒绝删除；
+  确认 PR 已合入后用 `git branch -D`。`pnpm repo:worktrees` 已按 PR 识别，base 列显示
+  `pr-merged`（实现与回归见 `scripts/repo-worktrees.mjs`、`scripts/__tests__/repo-worktrees.test.mjs`）。
+- 合入后的新工作从最新 `main` 新开分支，不在已合入的分支上接着提交：新 PR 会重复显示已合入
+  的改动，还可能与 `main` 冲突。
+- 以另一个 PR 分支为 base 的叠放 PR：下层合入后，上层先 rebase 到最新 `main`
+  （`git rebase --onto origin/main <下层分支合入前的 head>`）再继续，否则会带着下层的旧提交。
+
 ## 3. Review 严重度口径
 
 对照 `docs/` 下各规则与 `.github/PULL_REQUEST_TEMPLATE.md`（以现行内容为准，不凭记忆）：
@@ -198,7 +238,7 @@ worktree 建成空目录或自动切到项目根继续修改代码。
 | 信息 | 维护位置 |
 | --- | --- |
 | 实现约束、固定输入、自动判定 | 代码、配置与测试；能机判的同时落到 lint、测试或契约脚本 |
-| 工程规则、环境与工具链的坑、排错结论 | `docs/dev-rules/` 对应专题；单模块的放嵌套 `AGENTS.md`；根 `AGENTS.md` 只留触发条件 |
+| 工程规则、环境与工具链的坑、排错结论 | `docs/dev-rules/` 对应专题；单模块的放嵌套 `AGENTS.md`；何时要读写在专题自己的开头（见下），不往根 `AGENTS.md` 登记 |
 | 产品行为裁决与理由 | `docs/product-rules/` 对应专题；跨专题的放 `core-product-principles.md` |
 | 视觉、交互裁决与理由 | `docs/design-rules/`；带日期的取舍记进 `design-decision-log.md` |
 | 已发生的回归、复现与验证证据 | 对应测试；任务体验类归 `docs/dev-rules/session-regressions.md`；大图和录屏挂到 issue 或 PR |
@@ -211,6 +251,31 @@ worktree 建成空目录或自动切到项目根继续修改代码。
 
 本节回答「写到哪里」，不新增「每个 PR 都要写文档」的义务：是否需要回写仍按第 3 节「核对受影响
 的文档」「经验回写到已有依据」判断。
+
+### 规则文档声明何时要读
+
+一份规则在什么情况下必须先读，写在它自己开头的引用块里，不登记到别处：
+
+```markdown
+> **读取时机**：修改客户端自动更新链路之前
+> **适用路径**：`apps/desktop/src/main/updateService.ts`、`apps/desktop/cindy-updater/**`
+```
+
+- 「适用路径」写仓库相对路径通配（`**` 跨目录，`*` 不跨目录，`{a,b}` 多选一，目录要写
+  `/**`），覆盖这项功能在 Desktop、Mobile、共享 package 与 Host 的实际位置。只写「改到这里
+  多半需要这份规则」的路径；通配过宽会让每个改动都被提示，提示就没人看了。
+- 没有任何路径能判定的规则（原则、命名、流程）写 `> **适用路径**：按主题`。
+- 根条目里原有而正文没有的硬约束，写成 `> **要点**：…` 留在同一个引用块里。
+
+[规则索引](rule-index.md) 由 `pnpm rules:index` 从这些声明生成，不手改。动手前按要改的路径
+查索引或运行 `pnpm rules:for <路径…>`，提交前运行 `pnpm rules:changed`；自动审阅同样据此
+确定对照哪些规则（[REVIEW.md](../../REVIEW.md)）。`pnpm check:dev-docs` 核对：有读取时机的
+文档都声明了适用路径、每条路径仍匹配现存文件、索引是最新的。实现见
+[`scripts/rule-index.mjs`](../../scripts/rule-index.mjs)。
+
+起因（2026-11-17）：触发条件原先都登记在根 `AGENTS.md`，每个任务都要读完 58 条，条目多了
+反而被忽略——更新器那条一直在上下文里，#10938 仍未经确认就改了更新链路，靠独立审查才发现；
+按改动路径提示则不依赖记住全部条目。
 
 ## 5. 文档的信息与组织
 
@@ -226,4 +291,7 @@ worktree 建成空目录或自动切到项目根继续修改代码。
 标注，不为迁就现状改写承诺。
 
 根 `AGENTS.md` 每个任务都会完整加载。一句话放进去要同时满足：影响大多数任务；在知道该读
-哪份专题之前就需要；链接不能替代。其余放对应正文，根文件只留触发条件与硬约束。
+哪份专题之前就需要；链接不能替代。其余放对应正文，根文件只留满足这三条的条目与硬约束。
+`pnpm check:dev-docs` 限制它的条目数和字节数：超出时把内容移进专题，不调高上限。
+（2026-11-17：它曾有 58 条「改 X 前先读 Y」、24 KB，多数只关系到很少的任务；Codex 只读入
+说明文件的前 32 KiB，继续增长会让排在后面的规则读不到。）

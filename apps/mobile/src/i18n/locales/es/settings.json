@@ -62,6 +62,28 @@
       "dark": "Oscuro"
     },
     "saveFailed": "No se pudo guardar el modo de apariencia. La configuración anterior volverá después del reinicio.",
+    "wallpaper": {
+      "title": "Fondo de pantalla",
+      "choose": "Elegir foto o vídeo",
+      "replace": "Reemplazar fondo de pantalla",
+      "remove": "Quitar fondo de pantalla",
+      "importing": "Procesando…",
+      "tooLarge": "Elige una foto de hasta 20 MB o un vídeo de hasta 100 MB.",
+      "importFailed": "No se pudo importar la foto o el vídeo.",
+      "saveFailed": "No se pudo guardar el ajuste del fondo de pantalla.",
+      "static": "Estático",
+      "dynamic": "Dinámico",
+      "motionLabel": "Visualización",
+      "options": {
+        "none": "Ninguno",
+        "custom": "Fondo de pantalla personalizado",
+        "cindy-whisper": "Susurro",
+        "cindy-night-glance": "Mirada nocturna",
+        "cindy-scarlet-stroll": "Paseo Escarlata",
+        "cindy-neon": "Silueta de neón",
+        "cindy-prism": "Fragmentos de prisma"
+      }
+    },
     "userBubble": {
       "title": "Color de burbuja de mi mensaje",
       "presets": "Color",
@@ -263,7 +285,7 @@
     "openUserAgreement": "Abrir el acuerdo de usuario",
     "appFilingNumber": "Número de registro de la aplicación",
     "analytics": "Estadísticas de uso",
-    "analyticsHint": "Nos ayuda a entender los inicios de la app y la retención. Envía información del dispositivo, como el modelo, el sistema operativo, la versión de la aplicación y un identificador de dispositivo, además de tu ID de cuenta cuando inicias sesión; nunca conversaciones, archivos ni indicaciones.",
+    "analyticsHint": "Si activas esta opción, usaremos un alias de cuenta y un identificador de dispositivo para conocer los inicios de la aplicación y las visitas recurrentes. Esto nos ayuda a mejorar el producto. Los pagos usan otro alias. Estas estadísticas no incluyen tus conversaciones, archivos ni instrucciones.\nLos registros antiguos contienen los ID de cuenta originales. Quien pueda consultarlos podría vincular un alias nuevo con esa cuenta si coincide el identificador de dispositivo.",
     "analyticsSaveFailed": "No se pudo guardar esta configuración; puede revertirse después de reiniciar.",
     "analyticsReset": "Restablecer los valores predeterminados",
     "analyticsResetAction": "Restablecer"
@@ -488,7 +510,42 @@
     "discard": "Descartar",
     "colors": {
       "default": "Predeterminado (según el tema)"
-    }
+    },
+    "directories": "Directorios del proyecto",
+    "directoriesHint": "Se aplica a todas las tareas de este proyecto a partir del siguiente turno. Se conservan los directorios propios de cada tarea.",
+    "removeDirectory": "Quitar directorio",
+    "directoryPath": "Ruta completa del directorio",
+    "addDirectory": "Añadir directorio",
+    "browseDirectory": "Explorar directorios",
+    "mainDirectory": "Directorio principal",
+    "createTitle": "Nuevo proyecto",
+    "createAction": "Crear proyecto",
+    "repository": "URL del repositorio",
+    "repositoryHint": "Compatible con GitHub, GitLab y otros repositorios Git mediante HTTPS o SSH.",
+    "autoDirectory": "Sin elegir directorio, se crea en {{path}}. Si el nombre existe, se añade un número.",
+    "cloning": "Clonando repositorio…",
+    "invalidRepository": "Introduce una URL válida de GitHub, GitLab o Git.",
+    "createFailed": "No se pudo crear el proyecto. Revisa los permisos de escritura, la URL y el acceso a Git de este equipo. El destino de clonación debe estar vacío.",
+    "createNamePlaceholder": "Nombre del proyecto",
+    "createNameHint": "Dale un nombre a tu proyecto para empezar.",
+    "createFromRepository": "Crear desde un repositorio de código",
+    "createBlank": "Cambiar a un proyecto vacío",
+    "source_blank": "Proyecto vacío",
+    "source_existing": "Abrir carpeta existente",
+    "source_repository": "Importar repositorio",
+    "sourceHint_blank": "Escribe un nombre. La carpeta se creará automáticamente.",
+    "sourceHint_existing": "Elige una carpeta de proyecto en este equipo.",
+    "sourceHint_repository": "Pega el enlace del repositorio para descargarlo en este equipo.",
+    "source": "Origen del proyecto",
+    "sourceShort_blank": "Nuevo",
+    "sourceShort_existing": "Carpeta",
+    "sourceShort_repository": "Repositorio",
+    "automaticMain": "Principal · Automático",
+    "source_local": "Carpeta local",
+    "sourceShort_local": "Carpeta local",
+    "sourceHint_local": "Escribe un nombre para crear una carpeta o elige una existente.",
+    "chooseExistingFolder": "Elegir carpeta existente",
+    "changeMainDirectory": "Cambiar"
   },
   "navigation": {
     "unavailable": "No se pudo abrir la configuración del equipo de destino. Comprueba que esté conectado y permita el control remoto; actualiza Cindy si usa una versión antigua."

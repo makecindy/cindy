@@ -33,6 +33,7 @@ import { installedGhostStoragePart } from '../../../shared/pluginIdentity';
 import type { CindyGhostsHostDeps } from '../ghost.desktop';
 import type { GhostInstallConsentPrompt } from '../../cindy-brain/ghostInstallConsent';
 import { beginHeadlessGhostSetupTurn } from '../ghostSetupInteractionSurface';
+import { STARTUP_GHOST_TOOLS_OWNER_KEY } from '../../cindy-brain/startupGhostTool';
 import type { InstalledGhost, GhostSetupAssessment } from '../../../shared/ghost';
 
 const tmpUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'ghost-workdir-gate-'));
@@ -114,6 +115,9 @@ const ledgerAddRefMock = vi.fn(async (params: TestLedgerRef) => {
   ledgerRefs.push({ ...params });
   return `ref-${ledgerRefs.length}`;
 });
+const githubConnectMock = vi.fn();
+const instanceConfigMock = vi.fn<() => object | null>(() => null);
+vi.mock('../../instance-runtime/config.js', () => ({ getInstanceConfig: instanceConfigMock }));
 const callCindyMediaMock = vi.fn();
 const callEvaluateMock = vi.fn();
 const readEvaluationImageFileMock = vi.fn();
@@ -209,6 +213,7 @@ const sessionSnapshotMock = vi.fn(async (): Promise<{
   remoteHostId: null,
 }));
 vi.mock('../../cindy-brain/index.js', () => ({
+  connectGhostGithubAccount: githubConnectMock,
   getGhostManager: () => ({ list: listInstalledMock,
     findInstalledInstance: findInstalledInstanceMock,
     readApprovedInstallReceipt: approvedReceiptMock, managedRootDirs: () => [] }),
@@ -398,6 +403,8 @@ beforeEach(() => {
   listInstalledMock.mockClear();
   listInstalledAsyncMock.mockClear();
   findInstalledInstanceMock.mockClear();
+  githubConnectMock.mockReset();
+  instanceConfigMock.mockReturnValue(null);
   listMock.mockReset();
   listMock.mockReturnValue([chipGhost('art'), chipGhost('other')]);
   activeSessionAvailableMock.mockReset();
@@ -1407,6 +1414,24 @@ describe('connect_account ordinary task entry', () => {
     expect(ensureReadyMock).not.toHaveBeenCalled();
     expect(dispatchMock).not.toHaveBeenCalled();
   });
+  // Rule: the GitHub device login helper ships only in the managed cloud image, so only a cloud instance
+  // takes that path; every other desktop keeps Cindy's GitHub sign-in. Minimal input: a signed-out gh-cli
+  // GitHub plugin whose device login answers as it does without the helper, with and without an instance
+  // configuration (unit).
+  it.each([
+    ['an ordinary desktop', null, { errorCode: 'GITHUB_SIGN_IN_REQUIRED', signInOpened: true }],
+    ['a managed cloud instance', { deviceId: 'cloud-device-test' }, { errorCode: 'GITHUB_LOGIN_UNAVAILABLE' }],
+  ])('connects GitHub on %s through the login that machine has', async (_machine, instanceConfig, expected) => {
+    instanceConfigMock.mockReturnValue(instanceConfig);
+    githubConnectMock.mockResolvedValue({ ok: false, errorCode: 'GITHUB_LOGIN_UNAVAILABLE', ghostId: 'cindy-github' });
+    listMock.mockReturnValue([chipGhost('cindy-github', ['tool'], {
+      network: { secrets: [{ key: 'my_token', label: 'GitHub', source: 'gh-cli' }] },
+    })]);
+    githubSignIn.read.mockResolvedValueOnce({ status: 'missing' });
+    expect(await makeDeps().connectAccount!({ kind: 'plugin', id: 'cindy-github', reauthorize: true }))
+      .toMatchObject({ ok: false, ...expected });
+    expect(githubConnectMock).toHaveBeenCalledTimes(instanceConfig ? 1 : 0);
+  });
   it('blocks disabled GitHub before offering its existing connection method', async () => {
     listMock.mockReturnValue([chipGhost('cindy-github')]);
     setGhostDisabledForWorkdir(WORKDIR, 'cindy-github', true);
@@ -1801,8 +1826,39 @@ describe('花名册 / ghost_list 过滤', () => {
     await expect(makeDeps().getAwakeGhost('missing')).resolves.toEqual({
       ok: false,
       errorCode: 'GHOST_NOT_FOUND',
-      message: t('newChat.pluginSetup.targetNotFound'),
+      message: expect.stringContaining('Plugins settings link for the task computer'),
     });
+  });
+
+  it.each([
+    ['cindy-helper', 'cindy_helper'],
+    ['cindy_helper', 'cindy_helper'],
+    ['cindy-scheduler', 'cindy_scheduler'],
+    ['cindy_scheduler', 'cindy_scheduler'],
+    ['cindy', 'cindy_helper'],
+  ])('ghost_info 对内置 MCP 名 %s 返回精准纠偏而非市场搜索', async (requestedId, expectedServer) => {
+    const result = await makeDeps().getAwakeGhost(requestedId);
+    expect(result).toEqual({
+      ok: false,
+      errorCode: 'GHOST_NOT_FOUND',
+      message: expect.stringContaining(expectedServer),
+    });
+    if (!result.ok) {
+      expect(result.message).toContain('not an installed plugin');
+      expect(result.message).not.toContain('Plugins settings link for the task computer');
+    }
+  });
+
+  it('ghost_info 不把 Object.prototype 属性名误判为内置 MCP 提示', async () => {
+    const result = await makeDeps().getAwakeGhost('constructor');
+    expect(result).toEqual({
+      ok: false,
+      errorCode: 'GHOST_NOT_FOUND',
+      message: expect.stringContaining('Plugins settings link for the task computer'),
+    });
+    if (!result.ok) {
+      expect(result.message).not.toContain('function Object');
+    }
   });
 
   it('ghost_info 对未启用目标返回 GHOST_ASLEEP', async () => {
@@ -2036,6 +2092,56 @@ describe('Manual-only Ghost discovery and read gates', () => {
 });
 
 describe('ghost_call 兜底拒绝', () => {
+  // Unit: existing workdir cases only exercise progressive discovery. A
+  // retained alias must still reject the smallest stale input, a new receipt
+  // revision for the same enabled plugin and tool.
+  it('pins the startup tool to its enabled installation and revokes it before dispatch', async () => {
+    const ghost: InstalledGhost = {
+      ...chipGhost('library', ['tool'], { tools: [
+        ...['recent', 'genres', 'authors'].map(name => ({
+          name, description: 'Query with a referenced schema', exposure: 'startup',
+          parameters: { type: 'object', $ref: '#/$defs/query' },
+        })),
+        { name: 'find', description: 'Find books', exposure: 'startup' },
+        { name: 'list', description: 'List books' },
+      ] }) as InstalledGhost,
+      dir: path.join(tmpUserData, 'library'),
+      approval: { state: 'approved', revision: 'first-revision' },
+    };
+    listMock.mockReturnValue([ghost]);
+    const ctx: LiziMcpSessionContext = {
+      agentKind: 'claude-code', sessionId: 's1', sessionInstanceId: 's1-instance', workingDir: WORKDIR,
+      vendorOptions: { [STARTUP_GHOST_TOOLS_OWNER_KEY]: 'cloud:member-1:7' },
+    };
+    const live = vi.fn(() => true);
+    const deps = getCindyGhostsMcpDeps(ctx, { isStartupToolSessionCurrent: live });
+    expect(deps.startupTools?.map(tool => tool.tool)).toEqual(['find']);
+    expect(dispatchMock).not.toHaveBeenCalled();
+    const { name: startupToolName, ghostId, namespace, tool } = deps.startupTools![0];
+    const request = { ghostId, namespace, tool, args: { query: 'atlas' }, startupToolName };
+    await expect(deps.callGhostTool(request)).resolves.toMatchObject({ ok: true });
+    expect(dispatchMock).toHaveBeenCalledWith(expect.objectContaining({
+      ghostId: installedGhostStoragePart(ghost), tool: 'find', args: { query: 'atlas' },
+    }));
+    expect(cardRegisterMock).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ startupToolName }));
+    expect(live).toHaveBeenCalledWith('s1', 's1-instance', WORKDIR);
+    dispatchMock.mockClear();
+    for (const installed of [
+      [{ ...ghost, approval: { state: 'approved', revision: 'second-revision' } }],
+      [{ ...ghost, enabled: false }], [],
+    ]) {
+      listMock.mockReturnValue(installed);
+      await expect(deps.callGhostTool(request)).resolves.toMatchObject({ ok: false });
+    }
+    expect(deps.startupTools?.map(tool => tool.name)).toEqual([startupToolName]);
+    const reopened = getCindyGhostsMcpDeps({ ...ctx }, { isStartupToolSessionCurrent: live });
+    expect(reopened.startupTools?.map(tool => tool.name)).toEqual([startupToolName]);
+    const nextTask = getCindyGhostsMcpDeps({ ...ctx, sessionId: 's2', sessionInstanceId: 's2-instance',
+      vendorOptions: { ...ctx.vendorOptions } }, { isStartupToolSessionCurrent: live });
+    expect(nextTask.startupTools).toBeUndefined();
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
   it('不存在优先于未登录与残留目录偏好返回 GHOST_NOT_FOUND', async () => {
     listMock.mockReturnValue([]);
     activeSessionAvailableMock.mockReturnValue(false);
@@ -2046,7 +2152,7 @@ describe('ghost_call 兜底拒绝', () => {
     ).resolves.toEqual({
       ok: false,
       errorCode: 'GHOST_NOT_FOUND',
-      message: t('newChat.pluginSetup.targetNotFound'),
+      message: expect.stringContaining('Plugins settings link for the task computer'),
     });
     expect(ensureReadyMock).not.toHaveBeenCalled();
     expect(dispatchMock).not.toHaveBeenCalled();
@@ -2450,6 +2556,30 @@ describe('Cindy media 本机路径揭示', () => {
     const handoff = await deps.callGhostTool({ ghostId: 'art', tool: 'run', args: {}, dir });
     expect(handoff).toMatchObject({ ok: false, message: expect.stringContaining(reason) });
     expect(JSON.stringify([media, handoff])).toContain('并非用户手动拒绝');
+  });
+
+  // 复盘(2026-11):主人在手机上点不了只在电脑上出现的确认卡,超时被报成 DENIED 且叫 Agent
+  // 「提醒用户后重试」,伙伴连等 4 轮。超时要有独立错误码,并说清是没人确认、别自动重试。
+  it('确认卡超时与用户拒绝区分开,并告诉 Agent 不要自动重试', async () => {
+    const url = `cindy-media://blobs/${'c'.repeat(64)}.png`;
+    callCindyMediaMock.mockResolvedValue({ ok: true, url, local_path: process.execPath, mime_type: 'image/png' });
+    confirmRequestMock.mockResolvedValue({ confirmed: false, allowDirs: false, reason: 'timeout' });
+    const deps = makeDeps('claude-code', 'confirm-timeout');
+    const media = await deps.callMedia?.({ action: 'resolve_local_path', url });
+    expect(media).toMatchObject({ ok: false, errorCode: 'LOCAL_PATH_REVEAL_TIMEOUT' });
+    expect(media).not.toHaveProperty('local_path');
+    const dir = path.join(outsideDir, 'confirm-timeout');
+    fs.mkdirSync(dir, { recursive: true });
+    const handoff = await deps.callGhostTool({ ghostId: 'art', tool: 'run', args: {}, dir });
+    expect(handoff).toMatchObject({ ok: false });
+    for (const result of [media, handoff]) {
+      const message = String((result as { message?: unknown }).message);
+      expect(message).toContain('这不是用户拒绝');
+      expect(message).toContain('不要自动重试');
+      // 超时后旧卡已撤下:恢复顺序只能是用户就位后重新调用、确认新卡,不能叫用户先去点旧卡。
+      expect(message).toContain('新的确认卡');
+      expect(message).not.toContain('后重试');
+    }
   });
 
   it('用户拒绝或调用缺少会话语境时不把路径放进工具结果', async () => {
@@ -3646,6 +3776,7 @@ describe('market install live authority', () => {
   ) {
     const ghost = { manifest: { id: 'mail-suite', name: 'Mail', version: '1' }, enabled: true };
     const market = {
+      lookup: vi.fn(async () => ({ items: [{ pluginId: 'p1', ghostId: 'mail-suite', namespace: null, releaseId: 'r1', installState: 'not-installed' }], unavailableCustomSourceNames: [] })),
       snapshot: vi.fn(async () => ({ items: [], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] })),
       query: vi.fn(async () => ({ items: [], nextCursor: null, counts: null, unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] })),
       detail: vi.fn(async () => ({ ghostId: 'mail-suite', releaseId: 'r1', manifest: ghost.manifest })),
@@ -3654,6 +3785,24 @@ describe('market install live authority', () => {
     const deps = makeDeps(agentKind, 's1', 's1-instance', {}, market as unknown as CindyGhostsHostDeps['pluginMarket'], requestHostPermission);
     return { deps, market };
   }
+
+  // A missing PR plugin used to end the task with only a generic not-found error.
+  it('guides missing-plugin discovery without eager market I/O from info, manual or call', async () => {
+    const { deps, market } = marketHarness();
+    for (const result of [
+      await deps.getAwakeGhost('mail-suite', null),
+      await deps.readGhostManual({ ghostId: 'mail-suite', namespace: null }),
+      await deps.callGhostTool({ ghostId: 'mail-suite', namespace: null, tool: 'pr_card', args: {} }),
+    ]) {
+      expect(result).toMatchObject({ ok: false, errorCode: 'GHOST_NOT_FOUND',
+        message: expect.stringContaining('match the exact identity {"ghost_id":"mail-suite","namespace":null}') });
+    }
+    expect(market.lookup).not.toHaveBeenCalled();
+    expect(market.query).not.toHaveBeenCalled();
+    expect(market.install).not.toHaveBeenCalled();
+    const mismatch = await deps.getAwakeGhost('mail-suite', 'acme');
+    expect(mismatch).toMatchObject({ ok: false, message: expect.stringContaining('{"ghost_id":"mail-suite","namespace":"acme"}') });
+  });
 
   it.each(['claude-code', 'codex', 'pi'] as const)('uses the live %s task and does not connect on install', async (kind) => {
     liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', isCurrent: () => true });

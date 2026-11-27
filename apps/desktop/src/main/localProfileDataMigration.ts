@@ -21,6 +21,13 @@ import {
 } from './localDb/betterSqliteFactory.js';
 import { LOCAL_PROFILE_DATA_OWNER_ID } from './profile/profileRegistryModel.js';
 import { atomicWriteFileSync, readAtomicFileSync } from './utils/atomicWriteFile.js';
+import { createLogger } from './logger.js';
+import {
+  discardUnpublishedProviderKeys,
+  finishLocalProviderKeys,
+  hasPendingLocalProviderKeys,
+  freezeLocalProviderKeys,
+} from './secrets/localProviderKeyAdoption.js';
 import { recordModelVisibilityAdoption } from './localDb/modelVisibilityAdoption.js';
 
 export const LOCAL_PROFILE_MIGRATION_TMP_SUFFIX = '.local-profile-migration-tmp';
@@ -41,7 +48,7 @@ export interface LocalProfileDataMigrationFs {
   backupDatabase(source: string, target: string): Promise<void>;
   link(source: string, target: string): Promise<void>;
   /** Publish a complete snapshot without replacing an existing target. */
-  copyNoReplace(source: string, target: string): Promise<void>;
+  copyNoReplace(source: string, target: string, providerKeyBatch?: string): Promise<void>;
   removeIfExists(file: string): Promise<void>;
 }
 
@@ -94,7 +101,7 @@ const realFs: LocalProfileDataMigrationFs = {
     }
   },
   link: (source, target) => fs.promises.link(source, target),
-  copyNoReplace: async (source, target) => {
+  copyNoReplace: async (source, target, providerKeyBatch) => {
     const pending = `${target}${DB_COPY_PENDING_SUFFIX}`;
     const attemptId = randomUUID();
     writePendingDatabaseCopyMarker(pending, {
@@ -165,7 +172,7 @@ const realFs: LocalProfileDataMigrationFs = {
       // The open target handle was synced immediately before close; only the
       // parent directory entry still needs an explicit barrier here.
       syncMarkerDirectory(target);
-      recordModelVisibilityAdoption(target);
+      recordModelVisibilityAdoption(target, target, providerKeyBatch);
       updatePendingDatabaseCopyMarker(pending, {
         version: DB_COPY_PENDING_VERSION,
         attemptId,
@@ -296,29 +303,6 @@ export async function withLocalProfileMigrationStartupBarrier<T>(
   }
 }
 
-/** Run a retained-data handoff only for the finalized first cloud owner. */
-export async function withCommittedLocalProfileDataOwner<T>(
-  ownerId: string,
-  userDataDir: string,
-  dbFilePrefix: string,
-  operation: () => Promise<T>,
-): Promise<T | undefined> {
-  return withLocalProfileMigrationStartupBarrier(userDataDir, dbFilePrefix, async () => {
-    const marker = path.join(
-      userDataDir,
-      `${dbFilePrefix}-${LOCAL_PROFILE_DATA_OWNER_ID}${LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX}`,
-    );
-    const raw = readAtomicFileSync(marker);
-    if (raw === null) return undefined;
-    const claim = parseLocalProfileMigrationMarker(raw);
-    if (!claim) throw new Error('local profile ownership is unreadable');
-    if (claim.ownerId !== ownerId || claim.claimToken || ownerId === LOCAL_PROFILE_DATA_OWNER_ID) {
-      return undefined;
-    }
-    return operation();
-  });
-}
-
 export type LocalProfileMigrationReservation =
   'claimed' | 'already-owned' | 'owned-by-other' | 'failed';
 
@@ -332,6 +316,7 @@ export interface LocalProfileMigrationReservationDetails {
 export type PendingLocalProfileReservationRecovery = 'none' | 'finalized' | 'released' | 'failed';
 
 interface LocalProfileMigrationMarker {
+  adoptProviderKeys?: string;
   ownerId: string;
   claimToken?: string;
 }
@@ -348,6 +333,8 @@ function parseLocalProfileMigrationMarker(raw: string): LocalProfileMigrationMar
     }
     return {
       ownerId: parsed.ownerId.trim(),
+      ...(typeof parsed.adoptProviderKeys === 'string' && /^[0-9a-f-]{36}$/.test(parsed.adoptProviderKeys)
+        ? { adoptProviderKeys: parsed.adoptProviderKeys } : {}),
       ...(parsed.claimToken ? { claimToken: parsed.claimToken } : {}),
     };
   } catch {
@@ -583,7 +570,7 @@ function recoverReleasedLocalProfileMigrationMarker(
     if (!restoreClaimedLocalProfileMarker(candidate, marker)) return 'failed';
     replaceLocalProfileMigrationMarker(
       marker,
-      `${JSON.stringify({ ownerId: parsed.ownerId, claimedAt: Date.now() })}\n`,
+      `${JSON.stringify({ ownerId: parsed.ownerId, adoptProviderKeys: parsed.adoptProviderKeys, claimedAt: Date.now() })}\n`,
     );
     return 'finalized';
   }
@@ -637,6 +624,7 @@ function reserveLocalProfileDataOwnerWhileLocked(
   normalizedOwnerId: string,
   marker: string,
   provisional: boolean,
+  adoptProviderKeys = false,
 ): LocalProfileMigrationReservationDetails {
   try {
     recoverPendingLocalProfileMigrationMarker(marker);
@@ -651,6 +639,7 @@ function reserveLocalProfileDataOwnerWhileLocked(
   const contents = `${JSON.stringify({
     ownerId: normalizedOwnerId,
     ...(claimToken ? { claimToken } : {}),
+    ...(adoptProviderKeys ? { adoptProviderKeys: randomUUID() } : {}),
     claimedAt: Date.now(),
   })}\n`;
   for (let attempt = 0; attempt < 4; attempt += 1) {
@@ -667,7 +656,7 @@ function reserveLocalProfileDataOwnerWhileLocked(
         if (!provisional && parsed.claimToken) {
           replaceLocalProfileMigrationMarker(
             marker,
-            `${JSON.stringify({ ownerId: normalizedOwnerId, claimedAt: Date.now() })}\n`,
+            `${JSON.stringify({ ownerId: normalizedOwnerId, adoptProviderKeys: parsed.adoptProviderKeys, claimedAt: Date.now() })}\n`,
           );
         }
         return { status: 'already-owned', ownerId: normalizedOwnerId };
@@ -705,6 +694,7 @@ export function reserveLocalProfileDataOwnerDetailed(
   ownerId: string,
   userDataDir: string,
   dbFilePrefix: string,
+  adoptProviderKeys = false,
 ): LocalProfileMigrationReservationDetails {
   const normalizedOwnerId = ownerId.trim();
   if (!normalizedOwnerId || normalizedOwnerId === LOCAL_PROFILE_DATA_OWNER_ID) {
@@ -715,7 +705,7 @@ export function reserveLocalProfileDataOwnerDetailed(
     `${dbFilePrefix}-${LOCAL_PROFILE_DATA_OWNER_ID}${LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX}`,
   );
   return withLocalProfileMigrationLock(marker, { status: 'failed' }, () =>
-    reserveLocalProfileDataOwnerWhileLocked(normalizedOwnerId, marker, true),
+    reserveLocalProfileDataOwnerWhileLocked(normalizedOwnerId, marker, true, adoptProviderKeys),
   );
 }
 
@@ -827,7 +817,7 @@ export function recoverPendingLocalProfileDataOwner(
         if (parsed.ownerId === normalizedCommittedOwnerId) {
           replaceLocalProfileMigrationMarker(
             marker,
-            `${JSON.stringify({ ownerId: parsed.ownerId, claimedAt: Date.now() })}\n`,
+            `${JSON.stringify({ ownerId: parsed.ownerId, adoptProviderKeys: parsed.adoptProviderKeys, claimedAt: Date.now() })}\n`,
           );
           return 'finalized';
         }
@@ -1047,15 +1037,38 @@ export async function inspectPassiveLocalProfileAdoption(
   }
 }
 
+// Only the verified local → cloud transition can mint this one-shot grant.
+// An older committed reservation, even for the same owner, carries no grant.
+function providerKeyGrant(marker: string, owner: string, consume = false): string | undefined {
+  const raw = readAtomicFileSync(marker);
+  const claim = raw && parseLocalProfileMigrationMarker(raw);
+  if (!claim || claim.ownerId !== owner || claim.claimToken || !claim.adoptProviderKeys) return;
+  if (!consume) return claim.adoptProviderKeys;
+  const remaining = JSON.parse(raw);
+  delete remaining.adoptProviderKeys;
+  replaceLocalProfileMigrationMarker(marker, JSON.stringify(remaining));
+  return claim.adoptProviderKeys;
+}
+
+function discardProviderKeyGrant(marker: string, owner: string): void {
+  try {
+    providerKeyGrant(marker, owner, true);
+  } catch {
+    createLogger('localProfileDataMigration').warn('could not retire custom provider key adoption grant');
+  }
+}
+
 async function copyDatabaseAtomically(
   deps: LocalProfileDataMigrationDeps,
   sourceDb: string,
   targetDb: string,
+  owner: string,
 ): Promise<boolean> {
   await cleanupTemps(deps, targetDb);
   const attemptId = randomUUID();
   const dbTmp = `${targetDb}${LOCAL_PROFILE_MIGRATION_TMP_SUFFIX}.${attemptId}`;
   let published = false;
+  let providerKeyBatch: string | undefined;
   try {
     // SQLite's online backup API takes one coherent snapshot even while another
     // process is writing the WAL. The resulting standalone database therefore
@@ -1067,9 +1080,28 @@ async function copyDatabaseAtomically(
     // Claim the target with a no-replace filesystem primitive. Never use
     // rename here: a later initializer must lose with EEXIST rather than
     // overwrite the database already published by the first initializer.
-    recordModelVisibilityAdoption(targetDb, dbTmp);
-    const linked = await claimDatabaseTargetWithoutReplacement(deps, dbTmp, targetDb);
-    if (!linked) return false;
+    try {
+      const grant = providerKeyGrant(migrationMarkerPath(deps), owner);
+      if (grant) {
+        providerKeyBatch = freezeLocalProviderKeys(dbTmp, targetDb, owner, grant);
+        if (!providerKeyBatch) discardProviderKeyGrant(migrationMarkerPath(deps), owner);
+      }
+    } catch {
+      // A later attempt may replay a frozen batch, but must not mint a batch
+      // from a local profile that has changed since this first publication.
+      discardProviderKeyGrant(migrationMarkerPath(deps), owner);
+      createLogger('localProfileDataMigration').warn('custom provider snapshot unavailable');
+    }
+    recordModelVisibilityAdoption(targetDb, dbTmp, providerKeyBatch);
+    const linked = await claimDatabaseTargetWithoutReplacement(deps, dbTmp, targetDb, providerKeyBatch);
+    if (!linked) {
+      discardProviderKeyGrant(migrationMarkerPath(deps), owner);
+      if (providerKeyBatch) {
+        try { discardUnpublishedProviderKeys(targetDb, owner, providerKeyBatch); }
+        catch { createLogger('localProfileDataMigration').warn('could not retire unpublished provider key snapshot'); }
+      }
+      return false;
+    }
     published = true;
     flushPublishedDatabase(targetDb);
     // Both publication paths already have a durable receipt: hard links retain
@@ -1078,6 +1110,12 @@ async function copyDatabaseAtomically(
     // publication could leave only a .bak and block catalog initialization.
     if (deps.hasExclusiveSourceAccess && !deps.hasExclusiveSourceAccess()) {
       throw new Error('local profile database adoption deferred: concurrent live instance');
+    }
+    try {
+      discardProviderKeyGrant(migrationMarkerPath(deps), owner);
+      if (providerKeyBatch) finishLocalProviderKeys(targetDb, owner);
+    } catch {
+      createLogger('localProfileDataMigration').warn('custom provider key adoption incomplete');
     }
     return true;
   } catch (error) {
@@ -1092,6 +1130,7 @@ async function claimDatabaseTargetWithoutReplacement(
   deps: LocalProfileDataMigrationDeps,
   dbTmp: string,
   targetDb: string,
+  providerKeyBatch?: string,
 ): Promise<boolean> {
   try {
     await deps.fs.link(dbTmp, targetDb);
@@ -1103,7 +1142,7 @@ async function claimDatabaseTargetWithoutReplacement(
       throw error;
     }
     try {
-      await deps.fs.copyNoReplace(dbTmp, targetDb);
+      await deps.fs.copyNoReplace(dbTmp, targetDb, providerKeyBatch);
       return true;
     } catch (fallbackError) {
       if ((fallbackError as NodeJS.ErrnoException | null)?.code === 'EEXIST') return false;
@@ -1159,6 +1198,17 @@ export async function adoptLocalProfileDatabase(
     }
     if (targetState.mainExists || targetState.sidecarExists) {
       await cleanupTemps(deps, targetDb);
+      discardProviderKeyGrant(marker, normalizedOwnerId);
+      try {
+        if (hasPendingLocalProviderKeys(targetDb, normalizedOwnerId)) {
+          sourcePublicationBarrier = (await deps.acquireSourcePublicationBarrier?.()) ?? null;
+          if ((sourcePublicationBarrier?.isHeld() ?? true) && (deps.hasExclusiveSourceAccess?.() ?? true)) {
+            finishLocalProviderKeys(targetDb, normalizedOwnerId);
+          }
+        }
+      } catch {
+        createLogger('localProfileDataMigration').warn('custom provider key adoption deferred');
+      }
       return { status: 'target-exists' };
     }
     if (deps.acquireSourcePublicationBarrier) {
@@ -1180,6 +1230,7 @@ export async function adoptLocalProfileDatabase(
       if (guardedDeps.hasExclusiveSourceAccess && !guardedDeps.hasExclusiveSourceAccess()) {
         throw new Error('local profile database adoption deferred: concurrent live instance');
       }
+      discardProviderKeyGrant(marker, normalizedOwnerId);
       return { status: 'no-local-db' };
     }
     // The same crash-released SQLite writer lock serializes marker repair and
@@ -1188,7 +1239,7 @@ export async function adoptLocalProfileDatabase(
     if (guardedDeps.hasExclusiveSourceAccess && !guardedDeps.hasExclusiveSourceAccess()) {
       throw new Error('local profile database adoption deferred: concurrent live instance');
     }
-    const adopted = await copyDatabaseAtomically(guardedDeps, sourceDb, targetDb);
+    const adopted = await copyDatabaseAtomically(guardedDeps, sourceDb, targetDb, normalizedOwnerId);
     return adopted ? { status: 'adopted', sourceDb, targetDb } : { status: 'target-exists' };
   } catch (error) {
     // Migration snapshots are shared across processes. Only the SQLite writer

@@ -3,7 +3,7 @@ import { PLUGIN_COLLECTION, REMOTE_RESOURCE_CHANGED_CHANNEL, REMOTE_RESOURCE_INV
 
 vi.mock('@/lib/remoteDataOwnerPushFence', () => ({ isDeviceLinkRemotePushCurrent: () => true }));
 
-import { __resetGhostCardStoreForTest, ensureRemoteCard, getGhostCardEntry, retainRemoteCardSession } from '../ghostCardStore';
+import { __resetGhostCardStoreForTest, ensureRemoteCard, getGhostCardEntry, ensureSessionCards, retainRemoteCardSession } from '../ghostCardStore';
 import { __resetGhostCardActionsForTest, dispatchGhostCardAction, routeForPicker } from '../ghostCardActions';
 
 // Production entries: MessageStream calls ensureRemoteCard for a remote task's card results, and
@@ -78,6 +78,27 @@ describe('remote plugin cards', () => {
     expect(getGhostCardEntry('b')).toEqual({ status: 'missing' });
   });
 
+  // Unit: one hidden remote card plus 512 local historical cards crosses the cache budget.
+  // If the next refresh fails, the prior body and its remote action owner must survive.
+  it('preserves an offline remote card and its action owner under cache pressure', async () => {
+    const { api } = stubApi();
+    const release = retainRemoteCardSession('host', 'remote-task');
+    ensureRemoteCard('host', 'remote-task', 'remote-call');
+    await flush();
+    release();
+    Object.assign(api.ghosts, { listCardsBySession: async () => ({ cards:
+      Array.from({ length: 512 }, (_, i) => ({ callId: String(i), ghostId: 'local', html: 'ok', height: 80 })),
+    }) });
+    ensureSessionCards('local-task');
+    await flush();
+    api.ghosts.getRemoteCard.mockRejectedValueOnce(new Error('offline'));
+    retainRemoteCardSession('host', 'remote-task');
+    await flush();
+    expect(getGhostCardEntry('remote-call')).toMatchObject({ html: '<p>remote-call</p>', remote: { deviceId: 'host', revision: 'rev-remote-call' } });
+    expect((await dispatchGhostCardAction('remote-call', 'open')).ok).toBe(true);
+    expect(api.ghosts.dispatchCardAction).not.toHaveBeenCalled();
+  });
+
   // Regression #10734, unit: public store + actual change notification.
   // Existing coverage completed every read before a notice; minimal failing timing is a notice
   // during the first in-flight read. Leaving both task/preview views must stop shared-link IO.
@@ -110,6 +131,21 @@ describe('remote plugin cards', () => {
     expect(api.ghosts.getRemoteCard).toHaveBeenCalledTimes(4);
   });
 
+  // #11099 review: default lookups reuse misses (including permanent null); explicit user
+  // retry must re-read immediately. Prior tests only exercised recovery via host notices. Unit.
+  it.each([true, false])('explicit retry bypasses a cached miss (failed=%s)', async (failed) => {
+    const { api } = stubApi();
+    api.ghosts.getRemoteCard.mockResolvedValueOnce({ card: null, ...(failed ? { failed: true } : {}) } as never);
+    ensureRemoteCard('host', 'session', 'retry');
+    await flush();
+    ensureRemoteCard('host', 'session', 'retry');
+    expect(api.ghosts.getRemoteCard).toHaveBeenCalledTimes(1);
+    ensureRemoteCard('host', 'session', 'retry', { force: true });
+    await flush();
+    expect(getGhostCardEntry('retry')).toMatchObject({ status: 'ready', html: '<p>retry</p>' });
+    expect(api.ghosts.getRemoteCard).toHaveBeenCalledTimes(2);
+  });
+
   it('sends remote clicks to the task computer with its card version and translated model choices', async () => {
     const { api } = stubApi();
     ensureRemoteCard('host', 'session', 'call');
@@ -136,6 +172,21 @@ describe('remote plugin cards', () => {
     expect(api.ghosts.getRemoteCard).toHaveBeenCalledTimes(2);
     await dispatchGhostCardAction('call', 'merge');
     expect(api.deviceLink.invoke.mock.calls.filter(([, , args]) => (args[0] as { actionId: string }).actionId === 'open-interaction')).toHaveLength(2);
+  });
+
+  // Remote mail cards: a file uploaded from this computer reaches the task's computer only as the
+  // transfer reference a phone sends; a local card never takes one (it uses the native picker there).
+  it('sends a remote mail attachment as an uploaded reference only', async () => {
+    const { api } = stubApi();
+    ensureRemoteCard('host', 'session', 'mail');
+    await flush();
+    const mailAttachment = { url: 'xdt-oss-attach://m/ref', name: 'report.pdf' };
+    expect(await dispatchGhostCardAction('mail', 'mail:attach:k', { formValues: { to: 'a' }, mailAttachment })).toEqual({ ok: true });
+    const sent = api.deviceLink.invoke.mock.calls.map(([, , args]) => args[0] as { collectionId: string; actionId: string; input: Record<string, unknown> })
+      .find((request) => request.collectionId === 'plugin-results' && request.actionId === 'mail:attach:k');
+    expect(sent?.input).toMatchObject({ revision: 'rev-mail', pageId: 'page-1', formValues: { to: 'a' }, mailAttachment });
+    expect(await dispatchGhostCardAction('local-card', 'mail:attach:k', { mailAttachment })).toEqual({ ok: false });
+    expect(api.ghosts.dispatchCardAction).not.toHaveBeenCalled();
   });
 
   it('keeps local cards on this computer', async () => {

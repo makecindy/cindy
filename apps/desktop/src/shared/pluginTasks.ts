@@ -40,6 +40,7 @@ export interface PluginTaskView {
   revision: number;
   resolvedConfig: PluginTaskRoute;
   workingDir?: string;
+  workspaceKind?: 'project' | 'dialogue';
   permissionMode?: string;
   /** Independent Plan Mode; the stored permission remains available after it ends. */
   planModeEnabled?: boolean;
@@ -77,7 +78,28 @@ export interface PluginTaskRun {
   completedAt?: number;
   error?: string;
   usage: { status: 'unavailable'; reason: string };
+  /**
+   * getRun only (capabilities().runPreview): the assistant text block currently streaming in this
+   * run's live execution. Partial, may reset after a tool call, never the final output; never stored.
+   */
+  preview?: { text: string };
+  /**
+   * capabilities().followUps: present when `send` asked for follow-ups (and on every follow-up run).
+   * `tasks` counts the tasks this run's turn opened with `send_to_session`; when one of them sends
+   * word back, that turn in this task is a follow-up run until `until` (unix ms).
+   */
+  followUps?: { tasks: number; until?: number };
+  /**
+   * A follow-up run: a task that run `followUpOf` opened sent word back into this task. The Host
+   * started it, not the plugin: the turn's answer belongs where that run's request came from.
+   * `NO_REPLY` as the whole answer means nothing is to be delivered.
+   */
+  followUpOf?: string;
 }
+/** How long tasks a run opened can still send word back as follow-up runs. */
+export const PLUGIN_TASK_FOLLOW_UP_MS = 7 * 24 * 60 * 60_000;
+/** UTF-16 chars kept from the start of a streaming preview. */
+export const PLUGIN_TASK_RUN_PREVIEW_MAX_CHARS = 32_768;
 export interface PluginTeamPlan {
   concurrency: number | null;
   /** Plugin-authored scope, authenticated by Host registration; never user-authored intent. */
@@ -93,8 +115,32 @@ export function isPluginTeamPlanWithinBudget(plan: unknown): boolean {
     return typeof json === 'string' && json.length <= PLUGIN_TEAM_PLAN_MAX_JSON_CHARS;
   } catch { return false; }
 }
+/**
+ * A plugin's own setting for one IM conversation, on top of the shared IM project settings
+ * (capabilities().imProjectOverrides). Omitted fields follow the project. The directory always
+ * follows the project; a permission looser than the project's needs a Host confirmation grant.
+ */
+export interface PluginImProjectOverride {
+  route?: PluginTaskRoute;
+  permissionMode?: PluginTaskPermissionMode;
+  /** Opaque id returned by confirmImPermission; only meaningful for this plugin and project. */
+  permissionGrant?: string;
+}
+/** Display label the plugin shows in Cindy's confirmation; never an identity or a grant. */
+export const PLUGIN_IM_CONVERSATION_LABEL_MAX_CHARS = 120;
 export type PluginTaskRequest = (
-  | { type: 'tasks-request'; kind: 'capabilities' | 'models' }
+  | { type: 'tasks-request'; kind: 'capabilities' | 'models' | 'imProjects' }
+  /** Current shared settings of one project, i.e. what "follow IM" resolves to now. */
+  | { type: 'tasks-request'; kind: 'imProjectConfig'; imProject: string }
+  /** Cindy's own dialog; a plugin page cannot draw or click it. Required only to loosen. */
+  | {
+      type: 'tasks-request';
+      kind: 'confirmImPermission';
+      imProject: string;
+      permissionMode: PluginTaskPermissionMode;
+      conversation: { label: string; kind: 'group' | 'direct' };
+    }
+  | { type: 'tasks-request'; kind: 'followImProject'; taskId: string; expectedRevision: number; imProject: string; imOverride?: PluginImProjectOverride }
   | { type: 'tasks-request'; kind: 'setModel'; taskId: string; expectedRevision: number; route: PluginTaskRoute | 'plugin-default' }
   | {
       type: 'tasks-request';
@@ -105,6 +151,10 @@ export type PluginTaskRequest = (
       title?: string;
       /** Opt in to Host naming after the first accepted message; omit title. */
       autoTitle?: boolean;
+      /** Shared IM project: chat or a directory returned by imProjects. Requires agent.targets. */
+      imProject?: string;
+      /** Only with imProject; this conversation's own model and permission. */
+      imOverride?: PluginImProjectOverride;
       route?: PluginTaskRoute;
       /** New task only; the plugin's Host card ceiling applies only when enabled. */
       permissionMode?: PluginTaskPermissionMode;
@@ -121,7 +171,7 @@ export type PluginTaskRequest = (
   | { type: 'tasks-request'; kind: 'setTeamPlan'; taskId: string; plan: PluginTeamPlan }
   | { type: 'tasks-request'; kind: 'releaseWorker'; taskId: string; workerId: string; completedAt: number }
   | { type: 'tasks-request'; kind: 'requestWriteAccess'; taskId: string; mode?: 'acceptEdits' | 'auto' }
-  | { type: 'tasks-request'; kind: 'readMessages'; taskId: string; after?: string; limit?: number }
+  | { type: 'tasks-request'; kind: 'readMessages'; taskId: string; progressForRun?: string; after?: string; limit?: number }
   | {
       type: 'tasks-request';
       kind: 'send';
@@ -139,6 +189,11 @@ export type PluginTaskRequest = (
       invocationId?: string;
       /** Optional IM relay context (capabilities().messageRelay); rendered as an IM card. */
       relay?: PluginTaskMessageRelay;
+      /**
+       * capabilities().followUps: word sent back by tasks this turn opens becomes follow-up runs of
+       * this task, whose answers the plugin delivers where this message came from. Only `true`.
+       */
+      followUps?: true;
     }
   | { type: 'tasks-request'; kind: 'getRun'; runId: string }
   | { type: 'tasks-request'; kind: 'listRuns'; taskId: string; after?: string; limit?: number }

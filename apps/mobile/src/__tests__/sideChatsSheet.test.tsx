@@ -11,6 +11,7 @@ import { getMobileAuthOwner } from '../auth/authOwnerGeneration';
 import { useSideChatCount } from '../session/useSideChatCount';
 import { summarizeSessionOverview } from '../session/sessionOverview';
 import { projectMobileSessionActions } from '../session/sessionActionProjection';
+import { sessionNavigationTitleMaxWidth } from '../platform/chrome/navigationTitleWidth';
 import type { RemoteSession } from '../session/types';
 
 const summaryStore = vi.hoisted(() => ({
@@ -83,6 +84,7 @@ const nativeActions = vi.fn((_props: unknown) => null);
 const nativeTitle = vi.fn((_props: unknown) => null);
 const toolbar = Object.assign(native, { View: native });
 const headerBindings = {
+  sessionNavigationTitleMaxWidth,
   ...bindings, isSharedTaskPeer: () => false, useRemoteProjectAliases: () => new Map(), projectDirectoryName: (s: string) => s.split("/").pop(), deviceDisplayName: () => "PC", ProjectSettingsSheet: icon, sessionProjectDirectory, ProjectPickerIcon: icon, MessagesSquare: icon, summarizeSessionOverview, projectMobileSessionActions, Platform: headerPlatform,
   Pressable: native,
   useAdaptiveWindow: () => ({ width: 400, height: 800, insets: { top: 0, bottom: 0, left: 0, right: 0 } }),
@@ -202,6 +204,24 @@ describe('side chat picker', () => {
       await update(false); await update(true); await update(false);
       act(() => sheet.props.onClosed());
       expect(onSelect).not.toHaveBeenCalled();
+    } finally { act(() => root.unmount()); }
+  });
+
+  it('opens the new child while the existing follow-ups are still loading', async () => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    const host = document.createElement('div'), root = createRoot(host);
+    let finish!: (rows: typeof child[]) => void;
+    const maker = { listSideChats: () => new Promise<typeof child[]>(resolve => { finish = resolve; }), getSession: vi.fn() };
+    const onCreate = vi.fn(async () => child), onSelect = vi.fn(), onClose = vi.fn();
+    try {
+      await act(async () => root.render(<Picker visible session={main} maker={maker} onClose={onClose} onSelect={onSelect} onCreate={onCreate} />));
+      const button = host.querySelector<HTMLButtonElement>('[data-testid="session.sideChat.create"]')!;
+      await act(async () => { button.click(); button.click(); });
+      expect(onCreate).toHaveBeenCalledExactlyOnceWith(main);
+      expect(onClose).toHaveBeenCalledOnce();
+      act(() => sheet.props.onClosed());
+      expect(onSelect).toHaveBeenCalledExactlyOnceWith(child);
+      await act(async () => finish([]));
     } finally { act(() => root.unmount()); }
   });
 

@@ -3,13 +3,12 @@ import { describe, expect, it } from 'vitest';
 import {
   UPSTREAM_STREAM_INTERRUPTED_REASON,
   isStreamInterruptedErrorMessage,
+  providerErrorExplanation,
   unwrapProviderErrorDisplay,
 } from '@/utils/streamInterruptError';
 
 /** 与 Pi + LiteLLM + xAI 实锤信封同构,避免手写转义把 JSON 写坏。 */
-function xaiRejectedEnvelope(
-  innerMessage = 'Upstream rejected the request!',
-): string {
+function xaiRejectedEnvelope(innerMessage = 'Upstream rejected the request!'): string {
   return `OpenAI API error (400): ${JSON.stringify({
     message: `litellm.BadRequestError: XaiException - ${JSON.stringify({
       error: { message: innerMessage, type: 'invalid_request_error' },
@@ -22,9 +21,9 @@ function xaiRejectedEnvelope(
 
 describe('isStreamInterruptedErrorMessage', () => {
   it('accepts the classified reason even when the message has been rewritten', () => {
-    expect(
-      isStreamInterruptedErrorMessage('anything', UPSTREAM_STREAM_INTERRUPTED_REASON),
-    ).toBe(true);
+    expect(isStreamInterruptedErrorMessage('anything', UPSTREAM_STREAM_INTERRUPTED_REASON)).toBe(
+      true,
+    );
   });
 
   it('matches the observed LiteLLM envelope without a reason', () => {
@@ -33,6 +32,37 @@ describe('isStreamInterruptedErrorMessage', () => {
         'OpenAI API error (500): {"message":"litellm.APIError: Response API in-stream error","type":null,"param":null,"code":"500"}',
       ),
     ).toBe(true);
+  });
+});
+
+/**
+ * PR #11314 review 回归；unit tier，生产入口 providerErrorExplanation 决定两种错误卡片的常显说明。
+ * 旧覆盖缺少真实换行堆栈和含 JSON 示例的说明；最小输入见下表。
+ * 纯内存解析，无 I/O；单文件实测 1.67 秒（16 项，2026-11-18）。
+ */
+describe('providerErrorExplanation', () => {
+  it.each(['message', 'detail', 'user_message'])('keeps diagnostics collapsed for %s', (field) => {
+    for (const diagnostic of [
+      'Error: upstream failure\n    at request (/srv/provider/client.js:12:4)',
+      '[{"type":"diagnostic"}]',
+      '{"type":"diagnostic"}',
+    ]) {
+      expect(providerErrorExplanation(JSON.stringify({ [field]: diagnostic }))).toBeNull();
+    }
+  });
+
+  it.each(['message', 'detail', 'user_message'])('preserves JSON examples in %s', (field) => {
+    const explanation = 'Use {"type":"string"} and retry.';
+    expect(providerErrorExplanation(JSON.stringify({ [field]: explanation }))).toBe(explanation);
+  });
+
+  it('still unwraps a transport message containing a nested error', () => {
+    expect(providerErrorExplanation(xaiRejectedEnvelope('Try again later.'))).toBe(
+      'Try again later.',
+    );
+    expect(
+      providerErrorExplanation(JSON.stringify({ message: 'Try again.\nCheck your settings.' })),
+    ).toBe('Try again.\nCheck your settings.');
   });
 });
 
@@ -75,12 +105,12 @@ describe('unwrapProviderErrorDisplay', () => {
     expect(unwrapProviderErrorDisplay('OpenAI API error (400): invalid_prompt')).toBe(
       'OpenAI API error (400): invalid_prompt',
     );
-    expect(
-      unwrapProviderErrorDisplay('Azure OpenAI API error (401): invalid_api_key'),
-    ).toBe('Azure OpenAI API error (401): invalid_api_key');
-    expect(
-      unwrapProviderErrorDisplay('OpenAI API error (400): {"message":"invalid_prompt"}'),
-    ).toBe('OpenAI API error (400): {"message":"invalid_prompt"}');
+    expect(unwrapProviderErrorDisplay('Azure OpenAI API error (401): invalid_api_key')).toBe(
+      'Azure OpenAI API error (401): invalid_api_key',
+    );
+    expect(unwrapProviderErrorDisplay('OpenAI API error (400): {"message":"invalid_prompt"}')).toBe(
+      'OpenAI API error (400): {"message":"invalid_prompt"}',
+    );
   });
 
   it('does not rewrite the other Pi API error dialects', () => {
