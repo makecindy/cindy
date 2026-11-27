@@ -8979,7 +8979,10 @@
             "user": "ユーザー",
             "assistant": "アシスタント"
           }
-        }
+        },
+        "agentChecks": "新しい内容があるか確認できます",
+        "agentChecksDetail": "許可済みのプラグインと、変更あり・変更なし・不明の状態だけを共有します。各プラグインは自分に接続されたアカウントを使い、メッセージ本文や認証情報は共有しません。確認にはモデルを使いません。 ローカルの Cindy 会話の更新も、内容を返さずに確認します。",
+        "agentChecksRequest": "変更確認の権限を確認"
       },
       "connections": {
         "confirmTitle": "接続先の追加",
@@ -17564,6 +17567,13 @@
         "inbox": "受信トレイ",
         "enterInbox": "受信トレイモードに切り替え",
         "leaveInbox": "タスク一覧モードに切り替え"
+      },
+      "filterHideTaskCreated": "他のタスクから作成されたタスクを非表示",
+      "origin": {
+        "createdByTask": "他のタスクから作成",
+        "createdByTaskNamed": "タスク「{{title}}」から作成",
+        "createdByRemoteTask": "{{device}} 上のタスクから作成",
+        "createdByRemoteTaskNamed": "{{device}} 上のタスク「{{title}}」から作成"
       }
     },
     "rename": {
@@ -17584,7 +17594,9 @@
       "orcaRemoteLead": "{{device}} からの協同",
       "orcaRemoteLeadReleased": "協同は終了しました · {{device}} から",
       "orcaRemoteLeadUnknownDevice": "別のパソコン",
-      "orcaRemoteLeadTip": "{{device}} の「{{lead}}」の Worker です。タスク、フォルダー、コマンドはこのパソコンで実行されます。ここで送ったメッセージは Lead に報告されません。"
+      "orcaRemoteLeadTip": "{{device}} の「{{lead}}」の Worker です。タスク、フォルダー、コマンドはこのパソコンで実行されます。ここで送ったメッセージは Lead に報告されません。",
+      "createdByTask": "他のタスクから",
+      "createdByTaskNamed": "「{{title}}」から"
     },
     "gitContext": {
       "detached": "Detached HEAD",

@@ -8979,7 +8979,10 @@
             "user": "사용자",
             "assistant": "어시스턴트"
           }
-        }
+        },
+        "agentChecks": "새 콘텐츠가 있는지 확인할 수 있음",
+        "agentChecksDetail": "승인된 다른 플러그인과 변경 있음, 변경 없음 또는 확인 불가 상태만 공유합니다. 각 플러그인은 자체 연결 계정을 사용하며 메시지 본문이나 인증 정보를 공유하지 않습니다. 확인에는 모델을 사용하지 않습니다. 로컬 Cindy 대화의 변경 여부도 내용 반환 없이 확인합니다.",
+        "agentChecksRequest": "변경 확인 권한 검토"
       },
       "connections": {
         "confirmTitle": "연결 주소 추가",
@@ -17564,6 +17567,13 @@
         "inbox": "받은 편지함",
         "enterInbox": "받은 편지함 모드로 전환",
         "leaveInbox": "작업 목록 모드로 전환"
+      },
+      "filterHideTaskCreated": "다른 작업에서 만든 작업 숨기기",
+      "origin": {
+        "createdByTask": "다른 작업에서 생성됨",
+        "createdByTaskNamed": "「{{title}}」 작업에서 생성됨",
+        "createdByRemoteTask": "{{device}}의 작업에서 생성됨",
+        "createdByRemoteTaskNamed": "{{device}}의 「{{title}}」 작업에서 생성됨"
       }
     },
     "rename": {
@@ -17584,7 +17594,9 @@
       "orcaRemoteLead": "{{device}}에서 온 협업",
       "orcaRemoteLeadReleased": "협업 종료됨 · {{device}}에서",
       "orcaRemoteLeadUnknownDevice": "다른 컴퓨터",
-      "orcaRemoteLeadTip": "{{device}}에 있는 “{{lead}}”의 Worker입니다. 작업, 폴더, 명령은 이 컴퓨터에서 실행됩니다. 여기서 보낸 메시지는 Lead에 보고되지 않습니다."
+      "orcaRemoteLeadTip": "{{device}}에 있는 “{{lead}}”의 Worker입니다. 작업, 폴더, 명령은 이 컴퓨터에서 실행됩니다. 여기서 보낸 메시지는 Lead에 보고되지 않습니다.",
+      "createdByTask": "다른 작업에서 시작",
+      "createdByTaskNamed": "「{{title}}」에서 시작"
     },
     "gitContext": {
       "detached": "Detached HEAD",

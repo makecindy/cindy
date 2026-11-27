@@ -65,6 +65,7 @@ function props(groupDevice: boolean): ProjectsSectionProps {
     filter: {
       creators: 'all', creatorOptions: [], toggleCreator: vi.fn(), setCreatorsAll: vi.fn(), setCreatorsNone: vi.fn(),
       hideAutomations: false, setHideAutomations: vi.fn(),
+      hideTaskCreated: false, setHideTaskCreated: vi.fn(),
       groupBy: 'project', groupDialogue: true, groupAutomation: false, groupMessaging: false, groupDevice, sortBy: 'recency',
       pinnedSortBy: 'manual', setPinnedSortBy: vi.fn(),
       projectOrder: 'activity', manualProjectOrder: [], projects: 'all', status: 'active', isFilterActive: false,

@@ -366,7 +366,11 @@
       "close": "Schließen",
       "cancelRename": "Umbenennen abbrechen",
       "createdBy": "Erstellt von {{name}}",
-      "ownedBy": "Gehört zu {{name}}"
+      "ownedBy": "Gehört zu {{name}}",
+      "orcaRemoteLead": "Zusammenarbeit von {{device}}",
+      "createdByTask": "Von einer anderen Aufgabe geöffnet",
+      "createdByTaskNamed": "Von Aufgabe „{{title}}“ geöffnet",
+      "unknownDevice": "einem anderen Computer"
     },
     "accounts": {
       "title": "Konto wechseln",

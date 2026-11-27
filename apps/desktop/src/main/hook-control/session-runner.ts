@@ -61,7 +61,6 @@ import {
 
 import { emitSessionCreated } from '../localDb/ipc/sessionCreatedBroadcast.js';
 import { getMaker } from '../maker-host/index.js';
-import { hasBuiltinAgentKind } from '../maker-host/engineKind.js';
 import { setSessionEffort, setSessionFastMode } from '../maker-host/session-effort-store.js';
 import { desktopSessionStorage } from '../maker-host/session-storage.js';
 import { resolveLenientRoute } from '../maker-host/model-route-guard.js';
@@ -1520,6 +1519,7 @@ export function createMakerHookSessionRunner(deps: {
           ? decodeAttachments(req.attachments, log)
           : { images: [], files: [], skipped: 0 };
       let inboundAttachmentFailures = decoded.skipped;
+      const readOnlyAttachmentPaths: string[] = [];
       const imageBlocks: UserContentBlock[] = [];
       const imageRefs: Array<{ url: string; mimeType: string; originalName: string }> = [];
       for (const img of decoded.images) {
@@ -1538,6 +1538,7 @@ export function createMakerHookSessionRunner(deps: {
           });
           const { absPath } = resolveCindyMediaUrl(url);
           imageBlocks.push({ type: 'image', path: absPath, mimeType: img.mimeType });
+          readOnlyAttachmentPaths.push(absPath);
           imageRefs.push({
             url,
             mimeType: img.mimeType,
@@ -1582,6 +1583,7 @@ export function createMakerHookSessionRunner(deps: {
           });
           const { absPath } = resolveCindyMediaUrl(url);
           fileBlocks.push({ type: 'file', path: absPath, mimeType });
+          readOnlyAttachmentPaths.push(absPath);
           const safeName = sanitizeAttachmentName(file.name);
           fileRefs.push({ name: safeName, path: url, mimeType });
         } catch (err) {
@@ -1609,6 +1611,7 @@ export function createMakerHookSessionRunner(deps: {
               try {
                 await fs.writeFile(absPath, file.bytes);
                 fileBlocks.push({ type: 'file', path: absPath, mimeType: file.mimeType });
+                readOnlyAttachmentPaths.push(absPath);
                 fileRefs.push({ name: safeName, path: absPath, mimeType: file.mimeType });
               } catch (err) {
                 inboundAttachmentFailures += 1;
@@ -1623,6 +1626,11 @@ export function createMakerHookSessionRunner(deps: {
               `hook attachment dir create failed: ${err instanceof Error ? err.message : String(err)}`,
             );
           }
+      }
+      const contextImageBlocks: UserContentBlock[] = [];
+      for (const img of req.contextImages ?? []) {
+        contextImageBlocks.push({ type: 'image', path: img.absPath, mimeType: img.mimeType });
+        readOnlyAttachmentPaths.push(img.absPath);
       }
       // 渠道说明只进喂给 agent 的内容,不进落库的 userMessageContent ——
       // 渲染层展示的用户消息保持来源 IM 原话。逐 turn 追加固定文本,教模型
@@ -1706,8 +1714,13 @@ export function createMakerHookSessionRunner(deps: {
         }
       }
       const sendContentBase =
-        imageBlocks.length > 0 || fileBlocks.length > 0
-          ? [{ type: 'text' as const, text: promptWithNote }, ...imageBlocks, ...fileBlocks]
+        imageBlocks.length > 0 || fileBlocks.length > 0 || contextImageBlocks.length > 0
+          ? [
+              { type: 'text' as const, text: promptWithNote },
+              ...imageBlocks,
+              ...fileBlocks,
+              ...contextImageBlocks,
+            ]
           : promptWithNote;
       const sendContent = replacementHandoff
         ? (prependHandoffToUserMessage(
@@ -1729,10 +1742,14 @@ export function createMakerHookSessionRunner(deps: {
       // Same projection as personal IM: the server-stamped reply target (captured before
       // display bounding) and the attachments actually delivered, never parsed from the prompt.
       const autoReviewReferences = trustedChannelOrigin
-        ? hookAutoReviewReferences(req.autoReviewReplyTarget, {
-            images: imageRefs.length,
-            files: fileRefs.length,
-          })
+        ? hookAutoReviewReferences(
+            req.autoReviewReplyTarget,
+            {
+              images: imageRefs.length,
+              files: fileRefs.length,
+            },
+            readOnlyAttachmentPaths,
+          )
         : undefined;
       const bindAttemptProviderHooks = (): void => {
         if (req.onRuntimeRecovery) bindRuntimeRecoveryNotice(session, async (text) => {
@@ -1903,11 +1920,8 @@ export function createMakerHookSessionRunner(deps: {
                     : {}),
                 },
               });
-              // Turn change capture relies on built-in engine hooks (same rule as desktop sends).
-              if (hasBuiltinAgentKind(session)) {
-                await beginTurnChangeSetAtDispatch(session, turnChangeAnchorClientId);
-                turnChangeSetStarted = true;
-              }
+              await beginTurnChangeSetAtDispatch(session, turnChangeAnchorClientId);
+              turnChangeSetStarted = true;
               // 每次被接受的 IM 消息都是一次用户发送: bump userSendAt 让排序
               // 时间轴与桌面端 sendMessage 口径一致, sessions:patched 广播顺带把
               // 复用/接管会话即时重排序(新建路径已在广播前落过, 这里更新为实际
@@ -2120,13 +2134,11 @@ export function createMakerHookSessionRunner(deps: {
                       agentMeta: { origin, autoResume: true },
                     });
                   }
-                  if (hasBuiltinAgentKind(session)) {
-                    await beginTurnChangeSetAtDispatch(
-                      session,
-                      hadAnyOutput ? retryClientId : turnChangeAnchorClientId,
-                    );
-                    retryTurnChangeSetStarted = true;
-                  }
+                  await beginTurnChangeSetAtDispatch(
+                    session,
+                    hadAnyOutput ? retryClientId : turnChangeAnchorClientId,
+                  );
+                  retryTurnChangeSetStarted = true;
                 },
               });
               if (retryPendingHandoff && retrySendResult.accepted) {

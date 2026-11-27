@@ -9096,7 +9096,10 @@
             "user": "Utilisateur",
             "assistant": "Assistant"
           }
-        }
+        },
+        "agentChecks": "Peut vérifier si les sources ont du nouveau",
+        "agentChecksDetail": "Échange uniquement les états modifié, inchangé ou inconnu avec les autres plugins autorisés. Chaque plugin utilise ses propres comptes connectés, sans partager de messages ni d’identifiants. La vérification ne sollicite aucun modèle. Vérifie aussi les changements des conversations Cindy locales sans en renvoyer le contenu.",
+        "agentChecksRequest": "Vérifier l’autorisation de détection"
       },
       "connections": {
         "confirmTitle": "Ajouter une adresse de connexion",
@@ -17805,6 +17808,13 @@
         "inbox": "Boîte de réception",
         "enterInbox": "Passer en mode boîte de réception",
         "leaveInbox": "Passer en mode liste des tâches"
+      },
+      "filterHideTaskCreated": "Masquer les tâches créées par d’autres tâches",
+      "origin": {
+        "createdByTask": "Ouverte par une autre tâche",
+        "createdByTaskNamed": "Ouverte par la tâche « {{title}} »",
+        "createdByRemoteTask": "Ouverte par une tâche sur {{device}}",
+        "createdByRemoteTaskNamed": "Ouverte par « {{title}} » sur {{device}}"
       }
     },
     "rename": {
@@ -17825,7 +17835,9 @@
       "orcaRemoteLead": "Collaboration depuis {{device}}",
       "orcaRemoteLeadReleased": "Collaboration terminée · depuis {{device}}",
       "orcaRemoteLeadUnknownDevice": "un autre ordinateur",
-      "orcaRemoteLeadTip": "Un Worker pour « {{lead}} » sur {{device}}. Sa tâche, son dossier et ses commandes s'exécutent sur cet ordinateur. Les messages que vous envoyez ici ne sont pas transmis au Lead."
+      "orcaRemoteLeadTip": "Un Worker pour « {{lead}} » sur {{device}}. Sa tâche, son dossier et ses commandes s'exécutent sur cet ordinateur. Les messages que vous envoyez ici ne sont pas transmis au Lead.",
+      "createdByTask": "Depuis une autre tâche",
+      "createdByTaskNamed": "Depuis « {{title}} »"
     },
     "gitContext": {
       "detached": "HEAD détachée",
