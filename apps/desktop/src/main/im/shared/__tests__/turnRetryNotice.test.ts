@@ -442,6 +442,9 @@ describe('额度类终态错误', () => {
     expect(terminalErrorText({ message: raw }, { ...PERSONAL, providerLabel: 'Antigravity' })).toContain(
       '账号用量已达上限',
     );
+    expect(terminalErrorText({ message: 'HTTP 402: Usage limit reached' }, { ...PERSONAL, providerLabel: 'Custom' })).toContain(
+      '账号余额或配额不足',
+    );
 
     const overloadText = terminalErrorText(
       { reason: 'acp-overloaded', message: 'Upstream busy' },

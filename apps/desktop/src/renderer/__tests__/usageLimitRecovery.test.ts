@@ -231,6 +231,9 @@ describe('usage limit recovery detection', () => {
     expect(
       extractUsageLimitRecoveryHint({ message: 'insufficient_quota: add billing credits' }, NOW),
     ).toBeNull();
+    expect(
+      extractUsageLimitRecoveryHint({ message: 'HTTP 402: Usage limit reached' }, NOW),
+    ).toBeNull();
   });
 
   it('keeps an upstream overload that also says "rate limit exceeded" out of the limit path', () => {

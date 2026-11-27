@@ -1,4 +1,5 @@
 import {
+  hasExplicitPaymentRequiredText,
   isAccountUsageLimitReachedText,
   isProviderSafetyRefusalError,
   readProviderAccountLimitCode,
@@ -338,6 +339,7 @@ export function isBillingDepletionError(data: unknown): boolean {
   } }) : typeof root.message === 'string' ? root.message : text);
   if (code) return code !== 'rate_limit_exceeded';
   if (root.sdkError === 'billing_error') return true;
+  if (hasExplicitPaymentRequiredText(text)) return true;
   if ((status === undefined || status === 403 || status === 429) && GROK_BILLING_DEPLETION_PATTERN.test(text)) return true;
   if (status !== undefined && status !== 429) return false;
   return BILLING_DEPLETION_PATTERN.test(text);

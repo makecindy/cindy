@@ -263,7 +263,15 @@ const ACCOUNT_USAGE_LIMIT_REACHED_PATTERNS = [
   /\byou\s+have\s+exhausted\s+your\s+quota\b/i,
 ];
 
-/** Balance, budget and spend caps need a top-up or an owner, not a reset. */
+/** Explicit HTTP 402 / Payment Required wording (requiring status context so plain numbers like "line 402" never match). */
+const EXPLICIT_PAYMENT_REQUIRED_PATTERN =
+  /\bpayment\s+required\b|(?:\b(?:http|status|code|error)\b[^0-9a-z]{0,10}402\b|\(\s*402\s*\)|\b402\s+payment\s+required\b|(?:^|[\r\n])\s*402\s*:)/i;
+
+export function hasExplicitPaymentRequiredText(input: string): boolean {
+  return Boolean(input) && EXPLICIT_PAYMENT_REQUIRED_PATTERN.test(input);
+}
+
+/** Balance, budget, payment (HTTP 402) and spend caps need a top-up or an owner, not a reset. */
 const USAGE_LIMIT_NOT_PERIODIC_PATTERN =
   /\binsufficient|budget|\bspend(?:ing)?[-_ ]?cap\b|\bbilling|\bcredit(?:s| balance)?\s+(?:depleted|exhausted|too low)\b|余额不足|欠费/i;
 
@@ -271,10 +279,13 @@ const USAGE_LIMIT_NOT_PERIODIC_PATTERN =
  * UI-only: the upstream text plainly says the account used up its periodic
  * allowance. Desktop and Mobile use it to replace the generic "reply failed"
  * summary with a readable one. It never decides waiting or auto-continue, and
- * excludes transient rate limiting (`429`, `rate limit`) and balance depletion.
+ * excludes transient rate limiting (`429`, `rate limit`) and balance/payment depletion.
  */
 export function isAccountUsageLimitReachedText(input: string): boolean {
-  if (!input || USAGE_LIMIT_NOT_PERIODIC_PATTERN.test(input)) return false;
+  if (!input || USAGE_LIMIT_NOT_PERIODIC_PATTERN.test(input) || EXPLICIT_PAYMENT_REQUIRED_PATTERN.test(input)) {
+    return false;
+  }
+  if (readProviderBillingCode(undefined, input)) return false;
   return ACCOUNT_USAGE_LIMIT_REACHED_PATTERNS.some((pattern) => pattern.test(input));
 }
 

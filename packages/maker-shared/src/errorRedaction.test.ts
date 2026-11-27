@@ -188,6 +188,11 @@ describe('isAccountUsageLimitReachedText', () => {
     "You've hit your session limit: budget_exceeded",
     'insufficient_quota: usage limit reached',
     'Credit balance too low: individual quota reached',
+    'HTTP 402: Usage limit reached',
+    '402: Usage limit reached',
+    'upstream error (402): Individual quota reached',
+    '402 Payment Required: usage limit reached',
+    '{"error":{"code":"credit_balance_exhausted","message":"Usage limit reached"}}',
     'You hit your spend cap set by the owner of your workspace.',
     'Shared task limit reached',
   ])('leaves other failures to their own guidance: %s', (message) => {

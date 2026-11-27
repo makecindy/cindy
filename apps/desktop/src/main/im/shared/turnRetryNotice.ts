@@ -27,7 +27,11 @@ import { parseOutputLimitDetails, isReasoningDominatedOutputLimit } from '@cindy
  * 文案走 imText(`imBot.text.shared.*`), 跟随主人的 Cindy 界面语言, 发送时现取。
  */
 
-import { isAccountUsageLimitReachedText, redactSensitiveText } from '@cindy/maker-shared/error-redaction';
+import {
+  hasExplicitPaymentRequiredText,
+  isAccountUsageLimitReachedText,
+  redactSensitiveText,
+} from '@cindy/maker-shared/error-redaction';
 import {
   isAutoReviewConfirmUndeliveredNotice,
   isAutoReviewUnavailableNotice,
@@ -262,13 +266,17 @@ export function quotaFailureNotice(
   options: QuotaFailureNoticeOptions,
 ): string | null {
   if (!isQuotaExhaustionFailure(data)) return null;
-  const { message, codexErrorInfo, reason } = terminalErrorRecord(data);
+  const { message, codexErrorInfo, reason, errorStatus, sdkError } = terminalErrorRecord(data);
+  const explicitPaymentError =
+    errorStatus === 402 || sdkError === 'billing_error' || hasExplicitPaymentRequiredText(message);
   const headlineKey = SPEND_CAP_RE.test(message)
     ? 'imBot.text.shared.quota.headlineSpendCap'
-    : codexErrorInfo === 'usageLimitExceeded'
-        || reason === 'acp-usage-limit'
-        || USAGE_LIMIT_RE.test(message)
-        || isAccountUsageLimitReachedText(message)
+    : !explicitPaymentError && (
+          codexErrorInfo === 'usageLimitExceeded'
+          || reason === 'acp-usage-limit'
+          || USAGE_LIMIT_RE.test(message)
+          || isAccountUsageLimitReachedText(message)
+        )
       ? 'imBot.text.shared.quota.headlineUsageLimit'
       : 'imBot.text.shared.quota.headlineBalance';
   const display = (value: string | null | undefined): string =>

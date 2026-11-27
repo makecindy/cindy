@@ -118,6 +118,7 @@ export function ErrorTailErrorBanner({
   forkStripEncryptedRunning,
   onDiagnose,
   errorReason,
+  errorCreatedAt,
   reconnectHandoff,
   toolLoop,
   outputLimit,
@@ -149,6 +150,8 @@ export function ErrorTailErrorBanner({
   forkStripEncryptedRunning?: boolean;
   onDiagnose?: (error: ErrorDiagnosisSource) => void;
   errorReason?: string | null;
+  /** 持久化错误行的创建时间（ISO 8601 或 unix ms），用于锚定原文里的相对重置倒计时，避免重开会话后恢复时间不断后移。 */
+  errorCreatedAt?: string | number | null;
   reconnectHandoff?: ReconnectHandoff;
   toolLoop?: ToolLoopErrorDetails;
   outputLimit?: OutputLimitDetails;
@@ -157,13 +160,22 @@ export function ErrorTailErrorBanner({
   className?: string;
   style?: React.CSSProperties;
 }) {
-  const usageLimitRecovery = useMemo(
-    () => extractUsageLimitRecoveryHint({
-      message: errorText,
-      ...(errorReason ? { reason: errorReason } : {}),
-    }),
-    [errorText, errorReason],
-  );
+  const usageLimitRecovery = useMemo(() => {
+    const parsedCreatedAt =
+      typeof errorCreatedAt === 'number'
+        ? errorCreatedAt
+        : typeof errorCreatedAt === 'string'
+          ? Date.parse(errorCreatedAt)
+          : Number.NaN;
+    const anchorMs = Number.isFinite(parsedCreatedAt) && parsedCreatedAt > 0 ? parsedCreatedAt : Date.now();
+    return extractUsageLimitRecoveryHint(
+      {
+        message: errorText,
+        ...(errorReason ? { reason: errorReason } : {}),
+      },
+      anchorMs,
+    );
+  }, [errorText, errorReason, errorCreatedAt]);
 
   return (
     <ErrorBanner
