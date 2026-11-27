@@ -673,6 +673,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       const support = await handoff([{ action: 'task-action-capability' }]);
       assert.equal(support.ok, true, JSON.stringify(support));
       assert.equal(support.result.ordinaryCreateVersion, 1);
+      assert.equal(support.result.ordinaryCreatePluginEngine, undefined);
       assert.equal(support.result.projectCatalogVersion, 1);
       assert.equal(support.result.taskActionVersion, 1);
 
@@ -745,6 +746,29 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       assert.deepEqual(secondPage.page.items.map(row => [row.sessionId, row.role, row.content]),
         [[`host::${id}`, 'assistant', 'Result from the Host']]);
       assert.equal((await readHistory('missing')).errorCode, 'NOT_FOUND');
+
+      const unsupportedPlugin = await send({ deviceId: 'host', sessionId: randomUUID() }, {
+        sender, message: 'Plugin engine task',
+        create: async () => ({ permissionMode: 'ask', agentKind: 'acp', providerId: 'acp-plugin:antigravity:acp', model: 'gemini-4-neon', projectDir: null }),
+      });
+      assert.equal(unsupportedPlugin.ok, false, JSON.stringify(unsupportedPlugin));
+      assert.equal(unsupportedPlugin.errorCode, 'REMOTE_UNSUPPORTED');
+      const bypassPlugin = createRemoteSessionHandoff({
+        captureAccess: () => () => {},
+        invoke: async (_id, channel, args) => {
+          const res = await desktop.invoke('host', { channel, args });
+          if (args[0]?.action === 'task-action-capability' && res.ok && res.result)
+            return { ...res, result: { ...res.result, ordinaryCreatePluginEngine: 1 } };
+          return res;
+        },
+      });
+      const hostRejectedPlugin = await bypassPlugin({ deviceId: 'host', sessionId: randomUUID() }, {
+        sender, message: 'Bypassed plugin engine task',
+        create: async () => ({ permissionMode: 'ask', agentKind: 'acp', providerId: 'acp-plugin:antigravity:acp', model: 'gemini-4-neon', projectDir: null }),
+      });
+      assert.equal(hostRejectedPlugin.ok, false, JSON.stringify(hostRejectedPlugin));
+      assert.equal(hostRejectedPlugin.errorCode, 'UNSUPPORTED_CAPABILITY');
+      assert.equal(handoffQueue.length, 2);
 
       await handoffQueue[1].handoff.taskActionDeliveryGuard.onSettled();
       await assert.rejects(handoffQueue[1].handoff.taskActionDeliveryGuard(), /TASK_ACTION_AUTHORIZATION_EXPIRED/);
@@ -944,6 +968,7 @@ const PINNED_DISPATCH_PORTS = {
   'service-gate': ['executeTaskTags', 'dispatchLocalInvoke'],
   'refused-at-entry': ['requestPluginOauth'],
   unbound: ['readUsageWidgetSnapshot', 'configureStandbyGuestCleanup', 'prepareShareAvailability',
+    'readZhipuCodingPlanAccountUsage', 'isRemoteProviderInvocationAllowed',
     'readKimiCodingAccountUsage', 'readOpenCodeGoAccountUsage', 'requestFilePeer', 'stopFilePeers', 'requestTaskMigration',
     'delegatedProviderShareGuestAccess', 'locallyProvenProviderShareDelegation',
     'delegatedProviderShareLeases', 'invalidateProviderShareDelegation',

@@ -119,7 +119,6 @@ export function BotRosterView({ onCreated, onClose, restoreFocus, inline = false
             label={t('bots.settingsTabs.model')}
             value={(modelOverride ?? getEffectiveBotModelChain()).slice(0, 1)}
             disabled={creating}
-            allowFallbacks={false}
             onChange={(routes) => { setModelOverride(routes.slice(0, 1)); setError(null); }}
             onNavigateToProviders={() => {
               providerSetupDraft = { owner: getDataOwnerGeneration(), dataOwnerId, name, portrait, initialPortrait, modelOverride };

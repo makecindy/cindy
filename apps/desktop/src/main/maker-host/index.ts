@@ -122,7 +122,7 @@ import { setAgentAppUpdateSessionHost } from '../agent-app-update/index.js';
 import { isAppUpdateOwnerTurn } from '../agent-app-update/callerAuthority.js';
 import { markKnownOrcaWorkerSession } from '../maker-ipc/orcaManualInterrupt.js';
 import { markOrcaMcpHydratedIfNeeded } from '../maker-ipc/orcaMcpHydrationCache.js';
-import { preparePersistedOrcaSessionStart } from '../maker-ipc/orcaSessionStartOptions.js';
+import { appendOrcaDiscoveryPrompt, preparePersistedOrcaSessionStart } from '../maker-ipc/orcaSessionStartOptions.js';
 import {
   hydrateBotProfileRuntime,
   markBotProfileRuntimeApplied,
@@ -320,7 +320,8 @@ import {
 import { createDesktopMcpProviders } from '../mcp-integrations/mcp-providers.js';
 import { getGhostRosterPrompt } from '../mcp-integrations/ghost.desktop.js';
 import { STARTUP_GHOST_TOOLS_OWNER_KEY } from '../cindy-brain/startupGhostTool.js';
-import { readSessionSource } from '../localDb/sessionDispatchSnapshot.js';
+import { getSessionRowSnapshotStrict } from '../localDb/sessionDispatchSnapshot.js';
+import { isManagedDialogueWorkspace } from '../localDb/dialogueWorkspace.js';
 import { getPiExtraSpawnConfig, invalidatePiEnvironment } from '../mcp-integrations/piEnvironment.desktop.js';
 import { captureKnownFileBefore, noteOpaqueTurnChange } from '../turn-change-set/store.js';
 import {
@@ -2685,12 +2686,17 @@ export function getMaker(): Maker {
             opts.vendorOptions = { ...opts.vendorOptions };
             delete opts.vendorOptions[STARTUP_GHOST_TOOLS_OWNER_KEY];
           }
-          if (['claude-code', 'codex', 'pi'].includes(opts.agentKind) && !opts.reviewMode &&
-              !opts.remoteHostId && !opts.agentDeviceId && !opts.vendorOptions?.orcaRole) {
+          if (['claude-code', 'codex', 'pi'].includes(opts.agentKind) && !opts.reviewMode && !opts.vendorOptions?.orcaRole) {
             const owner = activeOwnerScopeKey();
-            const source = await readSessionSource(sessionId).catch(() => null);
-            if (source === 'desktop' && owner === activeOwnerScopeKey() && !isAppSessionBoundaryPending()) {
-              opts.vendorOptions = { ...opts.vendorOptions, [STARTUP_GHOST_TOOLS_OWNER_KEY]: owner };
+            const row = await getSessionRowSnapshotStrict(sessionId).catch(error => {
+              desktopMakerLogger.warn('Session startup source lookup failed', { sessionId, error: String(error) });
+              return undefined;
+            });
+            if (owner === activeOwnerScopeKey() && !isAppSessionBoundaryPending()) {
+              appendOrcaDiscoveryPrompt(opts, row, (id, dir) => getPluginRegistry().isEnabled(id, dir), isManagedDialogueWorkspace);
+              if (!opts.remoteHostId && !opts.agentDeviceId && row?.source === 'desktop') {
+                opts.vendorOptions = { ...opts.vendorOptions, [STARTUP_GHOST_TOOLS_OWNER_KEY]: owner };
+              }
             }
           }
           if (opts.agentKind === 'pi' && opts.thinkingEnabled === undefined) {
