@@ -15,8 +15,8 @@
   },
   "sharedTaskRecovery": {
     "title": "Fortsetzen auf dem ursprünglichen Computer nicht möglich",
-    "description": "Wähle einen anderen Computer oder Anbieter, um mit einer Kontextübergabe fortzufahren. Deine Nachrichten bleiben erhalten, der vollständige Ausführungszustand des ursprünglichen Computers wird jedoch nicht übertragen.",
-    "choose": "Anderen Computer wählen",
+    "description": "Öffne die Modellauswahl, um zu einem anderen Computer, Anbieter oder Modell zu wechseln und mit einer Kontextübergabe fortzufahren. Deine Nachrichten bleiben erhalten, der vollständige Ausführungszustand des ursprünglichen Computers wird jedoch nicht übertragen.",
+    "choose": "Modell oder Anbieter wechseln",
     "cancel": "Hier bleiben",
     "stage": {
       "owner": "Fehler beim Kontakt mit dem freigebenden Computer.",

@@ -93,6 +93,21 @@ export function sharedTaskRecoveryError(stage: SharedTaskRecoveryStage, reason: 
   return error;
 }
 
+export function sharedTaskRecoveryStage(message: string): SharedTaskRecoveryStage | undefined {
+  const stage = /\[SHARED_TASK_STAGE_(owner|allocation|executor|capability|authorization)\]/.exec(message)?.[1];
+  return stage as SharedTaskRecoveryStage | undefined;
+}
+
+/** Whether a failed historical direct-task restore is eligible to ask O for an in-group context-handoff switch. */
+export function canSwitchSharedHistoryOnRestoreFailure(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  if (/^\[REMOTE_AGENT_SHARE_(?:PAUSED|REMOVED|LEGACY_DISABLED)\]/.test(message)) return false;
+  const stage = sharedTaskRecoveryStage(message);
+  const reason = sharedTaskRecoveryReason(message);
+  if (!stage || !reason || stage === 'owner') return false;
+  return !['denied', 'model', 'policy'].includes(reason);
+}
+
 /** Only pre-open recovery requests may be retried. Never retry permission, quota, capacity or unknown failures. */
 export function canRetrySharedTaskRecovery(error: unknown): boolean {
   return ['timeout', 'relay'].includes(sharedTaskFailureReason(error));
