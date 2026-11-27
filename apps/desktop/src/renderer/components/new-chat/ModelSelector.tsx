@@ -188,6 +188,7 @@ import {
   getModel,
   isCustomRoutedProvider,
   isCodexGatewayWireModel,
+  movedCindyAutoSourceId,
   modelSupportsFastMode,
   providerOffersModel,
   resolveModelIconKind,
@@ -203,7 +204,7 @@ import { compactEnglishEffortLabel } from '@cindy/maker-shared/agent-capabilitie
 import type { ModelAccessAccountTier } from '../../../shared/modelAccess';
 import { applyProviderOrder } from '../../../shared/providerOrder';
 import type { ModelPricingCatalog } from '../../../shared/regionalMoney';
-import { buildProviderSections, withFollowedAccountSource } from './sourceSwitch';
+import { buildProviderSections, isSelectedSourceDisconnected, withFollowedAccountSource } from './sourceSwitch';
 import type { ModelPickerPreferenceStore } from './modelPickerPreferences';
 import { mergeSshCodexCatalog, type SshCodexCatalog } from '@/lib/sshCodexCatalog';
 
@@ -936,6 +937,8 @@ export interface ModelSelectorBaseProps {
    * 其他消费方(ScheduleChips / ImDefaultSettingsSection / CreateWorkerPopover 等)不传 = 行为不变。
    */
   sourceDisconnected?: boolean;
+  /** Check the fixed source of a saved model against the local catalog. */
+  checkSavedSource?: boolean;
   /** A saved draft retains its model trigger while the source is being checked or unavailable. */
   preserveDraftModel?: boolean;
   /** 语义同 ModelSelectorContentProps.actualRoute(仅已建会话传 true)。 */
@@ -4673,6 +4676,7 @@ export function ModelSelector({
   'data-setting-id': settingId,
   currentProviderId,
   sourceDisconnected = false,
+  checkSavedSource = false,
   preserveDraftModel = false,
   actualRoute = false,
   subscriptionTaskId,
@@ -5083,8 +5087,20 @@ export function ModelSelector({
       ? modelSupportsFastMode(triggerActiveProvider, modelId, currentAgentKind)
       : !!currentModel?.supportsFastMode;
   const triggerFastOn = triggerFastSupported ? fastMode ?? false : false;
-  // 已建任务的断开态保留模型身份；菜单同时提供重新连接与改选其他来源。
-  const showSourceDisconnected = !noSource && sourceDisconnected && !!currentProviderId;
+  // Saved partner routes have no task binding. Inspect the picker catalog once
+  // it is ready, preserving the saved identity when its source disconnects.
+  const canCheckSavedSource = checkSavedSource && !deviceId && !localModelLoading
+    && !localProviders.loadFailed && !routeProvider?.subscriptionReadUnavailable;
+  const movedAutoSource = canCheckSavedSource && currentAgentKind && modelId !== 'auto'
+    && movedCindyAutoSourceId(providers, { agent: currentAgentKind, model: modelId, providerId: currentProviderId ?? null });
+  const savedSourceDisconnected = canCheckSavedSource && !movedAutoSource && isSelectedSourceDisconnected({
+    providers,
+    agent: currentAgentKind,
+    modelId,
+    selectedProviderId: currentProviderId,
+    providersLoading: false,
+  });
+  const showSourceDisconnected = !noSource && (sourceDisconnected || savedSourceDisconnected) && !!currentProviderId;
   // A connected provider lacking this model is unavailable, not signed out.
   const selectedSourceUnavailable = showSourceDisconnected && disconnectedProvider?.connected === true &&
     !!currentAgentKind && chatEligibleSourcesForModel([disconnectedProvider], modelId, currentAgentKind, { includeDisabled: true }).length === 0;

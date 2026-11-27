@@ -29,6 +29,10 @@ import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
 import type { LocalCatalogFailure } from '@/lib/localCatalogLoadState';
 import { toggleModelGroupFavorite } from '@/features/model-groups/modelGroupFavorites';
 import { refreshModelGroups } from '@/features/model-groups/modelGroupsClient';
+import { BuddyModelPanel } from '@/components/settings/BuddyModelPanel';
+import { BotModelChainEditor } from '@/features/bots/BotModelChainEditor';
+import type { BotModelRoute } from '../../shared/botModelChain';
+import { MODEL_GROUPS_DEFAULTS } from '../../shared/modelGroups';
 
 /** 统一面板发起的深度写入带上「面板已串行」标记(见 ModelSelector 的 onEffortChangeLive)。 */
 const FROM_PANEL = { serializedByPanel: true };
@@ -278,6 +282,52 @@ import { setModelEngineOverride } from '@/state/modelEnginePrefs';
 import { sshModel, sshNativeCodexProvider } from '@/features/cc-agent/__tests__/sshModelFixtures';
 
 const onProviderChange = vi.fn();
+
+// #13463, unit: mounted partner settings and form picker must show a saved
+// source's disconnection even while the source still lists the saved model.
+it('shows a disconnected saved buddy model until the owner restores the default', async () => {
+  const originalProviders = providersRef.providers;
+  const source = originalProviders[0] as ProviderView;
+  const next = originalProviders[1] as ProviderView;
+  const saved: BotModelRoute = { harness: 'claude', providerId: source.id, model: 'claude-opus-5', effort: 'medium', fastMode: false };
+  const recommended: BotModelRoute = { harness: 'codex', providerId: next.id, model: 'gpt-5.6', effort: 'medium', fastMode: false };
+  const save = vi.fn();
+  const status = 'newChat.modelSelector.source.disconnected';
+  function Fixture() {
+    const [fixed, setFixed] = React.useState(true);
+    const chain = [fixed ? saved : recommended];
+    return (
+      <>
+        <BuddyModelPanel buddies={[]} defaultChain={chain} onDefaultChange={save} onSetBuddy={vi.fn()}
+          onDefaultRestore={fixed ? () => setFixed(false) : undefined} />
+        <BotModelChainEditor value={chain} onChange={save} />
+      </>
+    );
+  }
+  try {
+    window.electronAPI.modelGroups = { get: async () => MODEL_GROUPS_DEFAULTS } as typeof window.electronAPI.modelGroups;
+    providersRef.providers = [source, next];
+    const view = render(<Fixture />);
+    expect(screen.queryByText(status)).toBeNull();
+    providersRef.providers = [{ ...source, connected: false }, next];
+    providersRef.loading = true;
+    view.rerender(<Fixture />);
+    expect(screen.queryByText(status)).toBeNull();
+    providersRef.loading = false;
+    view.rerender(<Fixture />);
+    expect(screen.getAllByText(status)).toHaveLength(2);
+    expect(screen.getAllByText('Opus 5')).toHaveLength(2);
+    fireEvent.click(screen.getByRole('button', { name: 'settings.defaults.restore' }));
+    expect(screen.queryByText(status)).toBeNull();
+    expect(screen.getAllByText('GPT-5.6')).toHaveLength(2);
+    expect(save).not.toHaveBeenCalled();
+    await act(async () => {});
+  } finally {
+    providersRef.providers = originalProviders;
+    providersRef.loading = false;
+    cleanup();
+  }
+});
 
 // Regression: plugin selection promises a request-local draft. The real dialog,
 // ModelSelector and row actions must never write engine/favorite defaults (unit).
@@ -4902,7 +4952,6 @@ vi.mock('@/features/bots/botStore', () => ({ getEffectiveBotModelSettings: () =>
   model: 'claude-opus-5', providerId: 'anthropic', effort: 'medium', fastMode: false,
 }) }));
 vi.mock('@/features/bots/botPronounContext', () => ({ useBotTranslation: () => ({ t: (key: string) => key }) }));
-import { BotModelChainEditor } from '@/features/bots/BotModelChainEditor';
 
 describe('teammate settings selected location catalog', () => {
   const originalProviders = providersRef.providers;

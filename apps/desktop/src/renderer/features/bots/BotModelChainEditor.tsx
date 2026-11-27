@@ -318,6 +318,7 @@ export function BotModelChainEditor({
           modelId={route.model}
           effort={route.effort}
           currentProviderId={routeIsPluginEngine ? null : route.providerId}
+          checkSavedSource={!!route.model && !remote && !deviceId && !route.agentDeviceId && !routeIsPluginEngine && !route.modelGroup}
           agentIdentity={{ vendorKey: vendorFor(route.harness), state: 'current' }}
           triggerVariant={triggerVariant}
           popoverSide="bottom"
