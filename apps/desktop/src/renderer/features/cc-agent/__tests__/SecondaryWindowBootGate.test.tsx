@@ -142,6 +142,50 @@ describe('SecondaryWindowBootGate', () => {
       }),
     );
     expect(mocks.getSessionFor).not.toHaveBeenCalled();
+
+    // Carried remote draft workspace hints reconstruct route state on clean `/cc-agent/new` and fall back to hint deviceName.
+    cleanup();
+    mocks.navigate.mockReset();
+    mocks.getBootSessionId.mockReturnValue(
+      '/cc-agent/new?workingDir=%2Fremote%2Frepo&deviceName=Studio+Box',
+    );
+    mocks.getBootDeviceId.mockReturnValue('device-unlisted');
+    render(<SecondaryWindowBootGate />);
+    await waitFor(() =>
+      expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/new', {
+        replace: true,
+        state: {
+          workspacePrompt: 'generic',
+          dialogueTargetRequest: expect.objectContaining({
+            deviceId: 'device-unlisted',
+            deviceName: 'Studio Box',
+            preserveWorkspaceIfSameDevice: true,
+            workingDir: '/remote/repo',
+          }),
+        },
+      }),
+    );
+
+    cleanup();
+    mocks.navigate.mockReset();
+    mocks.getBootSessionId.mockReturnValue('/cc-agent/new?explicitNoProject=1');
+    mocks.getBootDeviceId.mockReturnValue('device-remote');
+    render(<SecondaryWindowBootGate />);
+    await waitFor(() =>
+      expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/new', {
+        replace: true,
+        state: {
+          workspacePrompt: 'generic',
+          dialogueTargetRequest: expect.objectContaining({
+            deviceId: 'device-remote',
+            deviceName: 'Remote Mac',
+            preserveWorkspaceIfSameDevice: true,
+            explicitNoProject: true,
+          }),
+        },
+      }),
+    );
+    expect(mocks.getSessionFor).not.toHaveBeenCalled();
   });
 
   // Unit regression: these sidebar targets have no local task row at window boot.

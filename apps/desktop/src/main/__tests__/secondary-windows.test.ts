@@ -457,5 +457,21 @@ describe('secondary window target matching', () => {
       window: newTaskWin,
       matchKind: 'direct',
     });
+
+    const remoteDraftBootSession = '/cc-agent/new?workingDir=%2Fremote%2Fapp&deviceName=Remote+Mac';
+    openSessionInNewWindow(remoteDraftBootSession, null, 'remote-mac');
+    const remoteDraftWin = mocks.createdWindows.at(-1)!;
+    const remoteLoadedUrl = new URL(mocks.loadURL.mock.calls.at(-1)![0]);
+    expect(remoteLoadedUrl.searchParams.get('bootSession')).toBe(remoteDraftBootSession);
+    expect(remoteLoadedUrl.searchParams.get('bootDevice')).toBe('remote-mac');
+    expect(findSecondaryWindowForSession({ sessionId: remoteDraftBootSession, deviceId: 'remote-mac' })).toBeNull();
+    expect(findSecondaryWindowForSession({ sessionId: 'new', deviceId: 'remote-mac' })).toBeNull();
+
+    remoteDraftWin.currentUrl =
+      'http://localhost:5173/?secondaryWindow=1&bootSession=%2Fcc-agent%2Fnew%3FworkingDir%3D%252Fremote%252Fapp&bootDevice=remote-mac#/cc-agent/remote-created-1?device=remote-mac';
+    expect(findSecondaryWindowForSession({ sessionId: 'remote-created-1', deviceId: 'remote-mac' })).toEqual({
+      window: remoteDraftWin,
+      matchKind: 'direct',
+    });
   });
 });

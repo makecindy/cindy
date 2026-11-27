@@ -30,6 +30,7 @@ import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts
 import {
   makeNewTaskSecondaryWindowRouteState,
   NEW_TASK_SECONDARY_WINDOW_TARGET,
+  parseNewTaskSecondaryWindowTarget,
 } from './lib/newTaskSecondaryWindow';
 import { SessionEntryError, sessionEntryFailure } from './SessionEntryError';
 import { createLogger } from '@/lib/logger';
@@ -47,10 +48,11 @@ export function SecondaryWindowBootGate() {
       navigate('/cc-agent', { replace: true });
       return;
     }
-    if (bootSessionId === NEW_TASK_SECONDARY_WINDOW_TARGET) {
+    const newTaskDraftHint = parseNewTaskSecondaryWindowTarget(bootSessionId);
+    if (newTaskDraftHint) {
       navigate(NEW_TASK_SECONDARY_WINDOW_TARGET, {
         replace: true,
-        state: makeNewTaskSecondaryWindowRouteState(getBootDeviceId()),
+        state: makeNewTaskSecondaryWindowRouteState(getBootDeviceId(), newTaskDraftHint),
       });
       return;
     }
