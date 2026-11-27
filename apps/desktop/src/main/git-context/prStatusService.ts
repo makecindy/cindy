@@ -57,6 +57,40 @@ export function withoutPrMetadata(result: PrStatusResult): PrStatusResult {
   return rest;
 }
 
+const MAX_BROADCAST_TRACKED = 500;
+
+/** Content digest for main→renderer push deduplication; ignores volatile observedAt/revision and heavy metadata. */
+export function prStatusBroadcastDigest(result: PrStatusResult): string {
+  const stripped = withoutPrMetadata(result);
+  if (!stripped.ok) return `err:${stripped.reason}`;
+  const { observedAt: _observedAt, revision: _revision, ...stable } = stripped;
+  return JSON.stringify(stable);
+}
+
+/** Broadcasts metadata-stripped PR status updates to local windows only when visible status content changes. */
+export function createPrStatusBroadcastGate(
+  broadcast: (status: PrStatusResult) => void,
+): { observe: (query: PrStatusQuery, result: PrStatusResult) => void; reset: () => void } {
+  const lastDigest = new Map<string, string>();
+  return {
+    observe(query, result) {
+      if (!result.ok && result.reason !== 'not-found') return;
+      const key = prStatusKey(query);
+      const digest = prStatusBroadcastDigest(result);
+      if (lastDigest.get(key) === digest) return;
+      lastDigest.delete(key);
+      lastDigest.set(key, digest);
+      if (lastDigest.size > MAX_BROADCAST_TRACKED) {
+        lastDigest.delete(lastDigest.keys().next().value!);
+      }
+      broadcast(withoutPrMetadata(result));
+    },
+    reset() {
+      lastDigest.clear();
+    },
+  };
+}
+
 /** 单条 PR 的远端原始字段(github-client GithubPullRequest 的子集 + thread 统计)。 */
 export interface PrRemoteState {
   state: 'open' | 'closed';
@@ -238,8 +272,9 @@ export class PrStatusService {
     if (inflight) return inflight;
 
     const generation = this.generation;
+    const expectedScope = this.scope;
     const p = this.fetchOne(q)
-      .then((result) => {
+      .then(async (result) => {
         // 只缓存确定性结果(ok / not-found)。其余失败都不缓存:
         //  - gh-missing / gh-not-logged-in / no-token:用户装完 gh 或登录后,
         //    下一次查询应立即生效(token source 自带 30s 负缓存兜底);
@@ -247,6 +282,18 @@ export class PrStatusService {
         //    下次渲染触发查询时立即重试(review 反馈)。过期条目遇到这类失败时
         //    保留原值继续作为 stale 回答,直到 staleUntil。
         if (generation === this.generation && (result.ok || result.reason === 'not-found')) {
+          if (this.deps.scope) {
+            let currentScope: string | null = null;
+            try {
+              currentScope = await this.deps.scope();
+            } catch {
+              currentScope = null;
+            }
+            if (generation !== this.generation || currentScope !== expectedScope) {
+              if (generation === this.generation) this.invalidate();
+              return { ok: false, ...prStatusQuery(q), reason: 'no-token' } satisfies PrStatusResult;
+            }
+          }
           const fetchedAt = this.now();
           if (this.cache.size >= 200 && !this.cache.has(key))
             this.cache.delete(this.cache.keys().next().value!);

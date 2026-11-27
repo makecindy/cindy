@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { addImports } from '../overlay-imports.mjs';
 
 const service = 'apps/desktop/src/main/updateService.ts';
 const preload = 'apps/desktop/src/preload/preload.ts';
@@ -21,7 +22,8 @@ export function transformCloudUpdateSource(code, relativePath) {
   if (!targets.includes(relativePath)) return null;
   assert.ok(!code.includes('cloudUpdatesManaged'), 'Cloud update overlay must not be injected twice');
   if (relativePath === service) {
-    code = `import { getInstanceConfig } from './instance-runtime/config.js';\nfunction cloudUpdatesManaged() { return process.platform === 'linux' && getInstanceConfig() !== null; }\n${code}`;
+    code = addImports(code, relativePath, ["import { getInstanceConfig } from './instance-runtime/config.js';"])
+      + "\nfunction cloudUpdatesManaged() { return process.platform === 'linux' && getInstanceConfig() !== null; }\n";
     // The personal-build guards already fence staging, staged patches, installer
     // execution and polling; ordinary-desktop paths stay unchanged.
     assert.equal(code.split('isCindyPersonalRuntime()').length, 9, 'Cloud update guards changed');
