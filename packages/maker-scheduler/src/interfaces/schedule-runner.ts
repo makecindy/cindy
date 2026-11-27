@@ -151,6 +151,8 @@ export interface FireResult {
    * deferred=true 时必填(否则 nextFireAt 不前移会导致下个 tick 立刻再触发的忙循环)。
    */
   deferRetryMs?: number;
+  /** Optional diagnostic reason for a deferred fire (e.g. 'already-queued', 'session-running'). */
+  deferReason?: string;
   /**
    * true = 本轮被前置检查脚本(preRunHook exit 2)拦截，或发送到模型前被用户停止：
    * 未消耗模型 token。engine 据此:把预插的 running run 改成 status='skipped'(带

@@ -652,6 +652,9 @@
     "ignore": "Ignorar",
     "executionResultUnavailable": "No se puede recuperar el resultado de la ejecución. La continuación automática se ha detenido. Pide al asistente que verifique el resultado de la ejecución existente.",
     "unexecutedToolMarkup": "El modelo escribió una llamada a una herramienta como texto. No se pudo confirmar la ejecución, por lo que este turno no se completó.",
+    "codexReconnectStalled": "No se pudo restablecer la conexión con el modelo en 2 minutos.",
+    "reconnectAutoResumeDisabled": "La continuación automática está desactivada.",
+    "reconnectAutoResumeExhausted": "Se alcanzó el límite de reintentos automáticos.",
     "silentStopExhausted": "Se ha detectado una respuesta vacía. La continuación automática está en pausa.",
     "outputLimit": "El modelo alcanzó su límite de salida, por lo que esta respuesta puede estar incompleta. Envía un nuevo mensaje para continuar. Si se repite, reduce la intensidad de razonamiento o compacta primero el historial de la conversación.",
     "outputLimitReasoning": "El razonamiento consumió la mayor parte del presupuesto de salida de esta solicitud, por lo que la respuesta puede estar incompleta. Reduce la intensidad de razonamiento o compacta el historial de la conversación antes de continuar.",
@@ -698,7 +701,7 @@
     "SNAPSHOT_DISPATCH_INTENT_TIMEOUT": "No se envió el mensaje. Cindy no pudo confirmar a tiempo el registro de seguridad.",
     "HARNESS_SWITCH_NOT_READY": "El cambio de Harness aún no está listo. Revisa los detalles del error y vuelve a intentarlo cuando el Harness esté listo.",
     "REMOTE_AGENT_GROUP_USAGE_LIMIT": "Las cuentas disponibles para este modelo alcanzaron su límite de uso. Cambia de modelo o continúa cuando se restablezca la cuota.",
-    "REMOTE_AGENT_GROUP_UNAVAILABLE": "Ninguna computadora del grupo de proveedores puede ejecutar esta tarea en este momento. Es posible que estén desconectadas, en pausa, enfriándose o sin este modelo. Revisa el grupo en la página Remoto y compartido de este proveedor en la computadora.",
+    "REMOTE_AGENT_GROUP_UNAVAILABLE": "Ninguna computadora del grupo de equipos puede ejecutar esta tarea en este momento. Es posible que estén desconectadas, en pausa, enfriándose o sin este modelo. Revisa el grupo en la página Remoto y compartido de este proveedor en la computadora.",
     "REMOTE_DAEMON_CLOSED": "La conexión remota se interrumpió, posiblemente durante una actualización. Este turno ha terminado. Envía el mensaje nuevamente.",
     "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "No se puede acceder a archivos ni imágenes adjuntos locales en sesiones remotas. En su lugar, pega el contenido directamente.",
     "AUTO_REVIEW_UNAVAILABLE_QUOTA": "Un modelo de revisión automática ha agotado su cuota. Revisa el uso o la facturación, o personaliza los modelos auxiliares en los ajustes del ordenador que ejecuta el Agent. Las acciones que requieren revisión siguen necesitando tu confirmación.",
@@ -864,7 +867,8 @@
       "WORKER_CREATION_IN_PROGRESS": "Se está creando un Worker con el mismo nombre. Vuelve a intentarlo en breve.",
       "WORKER_NOT_FOUND": "Este Worker ya no existe. La lista fue actualizada.",
       "ORCA_CREATE_UNCONFIRMED": "Se agotó el tiempo de espera para crear el Worker y no se pudo confirmar. Primero revisa la lista de Workers y vuelve a intentarlo solo si no aparece ningún Worker nuevo.",
-      "ORCA_ACTION_UNCONFIRMED": "Se agotó el tiempo de espera de la solicitud, así que el resultado aún no está confirmado. La lista se actualizó; guíate por lo que muestra ahora."
+      "ORCA_ACTION_UNCONFIRMED": "Se agotó el tiempo de espera de la solicitud, así que el resultado aún no está confirmado. La lista se actualizó; guíate por lo que muestra ahora.",
+      "PLUGIN_ENGINE_CANNOT_LEAD": "La versión en este equipo no admite iniciar colaboración en una tarea con motor de complemento."
     },
     "workerCountSummary_many": "{{count}} Workers · {{running}} funcionando",
     "barLead_many": "Colaboración · {{count}} Workers · {{running}} en ejecución"

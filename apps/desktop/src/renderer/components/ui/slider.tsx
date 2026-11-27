@@ -7,7 +7,10 @@ import './slider.css';
 
 const Slider = React.forwardRef<
   React.ComponentRef<typeof SliderPrimitives.Root>,
-  React.ComponentPropsWithoutRef<typeof SliderPrimitives.Root>
+  React.ComponentPropsWithoutRef<typeof SliderPrimitives.Root> & {
+    /** A canceled gesture reports the restored value before replaying it. */
+    onValueCancel?: (restored: number[]) => void;
+  }
 >(
   (
     {
@@ -21,6 +24,7 @@ const Slider = React.forwardRef<
       onPointerCancel,
       onLostPointerCapture,
       onValueChange,
+      onValueCancel,
       value,
       defaultValue = [0],
       ...props
@@ -40,6 +44,9 @@ const Slider = React.forwardRef<
       if (!current) return;
       gesture.current = null;
       setPressed(false);
+      // 取消手势：先告诉消费者这是一次取消，再回放按下前的值。
+      // 消费者靠数值巧合猜不出取消（拖回起点与回放同值），只能靠这个信号。
+      onValueCancel?.(current.before);
       change(current.before);
       if (current.target.hasPointerCapture(current.id))
         current.target.releasePointerCapture(current.id);

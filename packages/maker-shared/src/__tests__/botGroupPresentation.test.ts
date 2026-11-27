@@ -19,9 +19,21 @@ import {
   chatGroupOwnerName,
   botGroupNewMessageCount,
   botGroupActivityAt,
+  collapseBotGroupMemberJoined,
   latestBotGroupMessage,
+  botGroupCodeRefLabel,
+  describeBotGroupThreadRootFallback,
+  extractBotGroupThreadCodeRefsFromMessages,
+  filterBotGroupThreads,
+  formatBotGroupThreadRootTitle,
+  hasActionableGroupThreads,
+  isBotGroupThreadActionable,
+  isBotGroupThreadMine,
+  pickBotGroupThreadDisplayRefs,
 } from '../botGroupPresentation.js';
-import { chatGroupTalkRouteKey, groupLaneOfRouteKey, isChatOnlyGroupLane, BOT_GROUP_RUNTIME_FAILURE_CODES, readBotGroupExecutionFailure, type BotGroupErrorCode, type BotGroupExecutionFailureView, type BotGroupMemberView, type BotGroupMessageView, type BotGroupNoticeCode, type BotGroupOpenPlanSummary, type BotGroupPlanStepStatus, type BotGroupPlanView, type BotGroupSummary } from '../botGroupChat.js';
+import { buildBotGroupQuoteCard } from '../botGroupQuote.js';
+import { buildBotGroupLiveTaskCard } from '../botGroupTask.js';
+import { chatGroupTalkRouteKey, groupLaneOfRouteKey, isChatOnlyGroupLane, BOT_GROUP_RUNTIME_FAILURE_CODES, readBotGroupExecutionFailure, type BotGroupErrorCode, type BotGroupExecutionFailureView, type BotGroupMemberView, type BotGroupMessageView, type BotGroupNoticeCode, type BotGroupOpenPlanSummary, type BotGroupPlanStepStatus, type BotGroupPlanView, type BotGroupSummary, type BotGroupThreadSummary } from '../botGroupChat.js';
 
 describe('group list activity', () => {
   it('keeps creation as a floor without treating settings edits as activity', () => {
@@ -451,6 +463,53 @@ it('keeps concurrent execution updates between their original neighboring messag
   expect(ids([])).toEqual(['request', 'later']);
 });
 
+describe('collapseBotGroupMemberJoined', () => {
+  const joined = (id: string, authorName: string, extra: Partial<BotGroupMessageView> = {}): BotGroupMessageView => ({
+    id, sequence: 1, kind: 'notice', authorKind: 'system', authorBotId: null, authorName,
+    content: '', noticeCode: 'member-joined', planId: null, files: [], attachments: [],
+    mentions: { all: false, botIds: [] }, createdAt: 1000, threadRootId: null, ...extra,
+  });
+  const chat = (id: string): BotGroupMessageView => ({
+    ...joined(id, 'Host'), kind: 'message', authorKind: 'user', noticeCode: null, content: 'Hello',
+  });
+
+  it('keeps isolated joins untouched and collapses consecutive runs with deduplicated names', () => {
+    const messages = [
+      joined('solo', 'Solo'),
+      chat('m1'),
+      joined('j1', 'Alice'),
+      joined('j2', 'Bob'),
+      joined('j3', 'Alice'),
+      joined('j4', 'Carol'),
+      chat('m2'),
+      joined('r1', 'Dave'),
+      joined('r2', 'Dave'),
+      { ...joined('other', 'Bot'), noticeCode: 'member-failed' as const },
+      joined('j5', 'Eve'),
+      joined('j6', 'Frank'),
+    ];
+    const result = collapseBotGroupMemberJoined(messages);
+    expect(result.messages.map((m) => m.id)).toEqual(['solo', 'm1', 'j1', 'm2', 'r1', 'other', 'j5']);
+    expect(result.joinedNamesByMessageId.has('solo')).toBe(false);
+    expect(result.joinedNamesByMessageId.get('j1')).toEqual(['Alice', 'Bob', 'Carol']);
+    expect(result.joinedNamesByMessageId.get('r1')).toEqual(['Dave']);
+    expect(result.joinedNamesByMessageId.get('j5')).toEqual(['Eve', 'Frank']);
+  });
+
+  it('breaks runs on deleted or empty-name notices', () => {
+    const messages = [
+      joined('j1', 'Alice'),
+      joined('j2', 'Deleted', { deleted: true }),
+      joined('j3', 'Bob'),
+      joined('j4', '   '),
+      joined('j5', 'Carol'),
+    ];
+    const result = collapseBotGroupMemberJoined(messages);
+    expect(result.messages.map((m) => m.id)).toEqual(['j1', 'j2', 'j3', 'j4', 'j5']);
+    expect(result.joinedNamesByMessageId.size).toBe(0);
+  });
+});
+
 // Server receipts can precede their durable message row; source identity must beat delayed starts.
 describe('receipt-backed live execution placement', () => {
   it('uses the source row before a delayed start without cloning the work', () => {
@@ -495,5 +554,146 @@ describe('enterprise human display name formatting', () => {
     const bot = { id: 'b1', kind: 'bot', state: 'joined', name: 'Cindy', ownerActorId: 'h1', ownerName: '林知行' };
     expect(chatGroupOwnerName(bot, [owner, bot])).toBe('林知行');
     expect(chatGroupMemberName(bot, [owner, bot])).toBe('Cindy (林知行)');
+  });
+});
+
+// Basis: bot-group-chat.md §10「群聊里的话题索引与提示」— decouples findability (participated /
+// read @mentions / followed) from quiet actionable unreads without letting old unreads scramble order.
+describe('in-group thread index filtering and quiet unread projection', () => {
+  const thread = (overrides: Partial<BotGroupThreadSummary> & { rootId: string }): BotGroupThreadSummary => ({
+    rootAuthorName: 'Alice',
+    rootAuthorBotId: 'alice',
+    rootText: `Root ${overrides.rootId}`,
+    replyCount: 2,
+    unread: { count: 0, mentioned: false },
+    following: false,
+    lastReply: { authorName: 'Bob', text: `Reply ${overrides.rootId}`, createdAt: 100 },
+    ...overrides,
+  });
+
+  const threads: BotGroupThreadSummary[] = [
+    thread({ rootId: 'participated-quiet', participated: true, unread: { count: 2, mentioned: false }, lastReply: { authorName: 'Bob', text: 'Updated PR', createdAt: 300 } }),
+    thread({ rootId: 'read-mention', mentionedMe: true, unread: { count: 0, mentioned: false }, lastMention: { messageId: 'm-read', authorName: 'Carol', text: '@me please check billing', createdAt: 250 }, lastReply: { authorName: 'Carol', text: 'done', createdAt: 260 } }),
+    thread({ rootId: 'unread-mention', mentionedMe: true, unread: { count: 1, mentioned: true, latest: 9 }, lastMention: { messageId: 'm-new', authorName: 'Dan', text: '@me deploy now', createdAt: 150 }, lastReply: { authorName: 'Dan', text: '@me deploy now', createdAt: 150 } }),
+    thread({ rootId: 'followed-unread', following: true, unread: { count: 3, mentioned: false, latest: 12 }, lastReply: { authorName: 'Eve', text: 'New build ready', createdAt: 400 } }),
+    thread({ rootId: 'unrelated', unread: { count: 4, mentioned: false }, lastReply: { authorName: 'Frank', text: 'Lunch plans', createdAt: 500 } }),
+  ];
+
+  it('keeps participated and read @mentions discoverable under mine while keeping notifications quiet', () => {
+    expect(isBotGroupThreadMine(threads[0]!)).toBe(true);
+    expect(isBotGroupThreadActionable(threads[0]!)).toBe(false);
+    expect(isBotGroupThreadMine(threads[4]!)).toBe(false);
+
+    const mine = filterBotGroupThreads(threads, 'mine', '');
+    expect(mine.unread.map(t => t.rootId)).toEqual(['followed-unread', 'unread-mention']);
+    expect(mine.recent.map(t => t.rootId)).toEqual(['participated-quiet', 'read-mention']);
+
+    const all = filterBotGroupThreads(threads, 'all', '');
+    expect(all.unread.map(t => t.rootId)).toEqual(['followed-unread', 'unread-mention']);
+    expect(all.recent.map(t => t.rootId)).toEqual(['unrelated', 'participated-quiet', 'read-mention']);
+  });
+
+  it('filters by query across root text, last reply, mention snippet, and responder names', () => {
+    expect(filterBotGroupThreads(threads, 'mine', 'billing').recent.map(t => t.rootId)).toEqual(['read-mention']);
+    expect(filterBotGroupThreads(threads, 'all', 'lunch').recent.map(t => t.rootId)).toEqual(['unrelated']);
+    expect(filterBotGroupThreads(threads, 'mine', 'deploy').unread.map(t => t.rootId)).toEqual(['unread-mention']);
+  });
+
+  it('suppresses the header unread dot when only non-followed participated threads have replies or the sole unread thread is open', () => {
+    expect(hasActionableGroupThreads([threads[0]!, threads[1]!, threads[4]!])).toBe(false);
+    expect(hasActionableGroupThreads([threads[2]!], null)).toBe(true);
+    expect(hasActionableGroupThreads([threads[2]!], 'unread-mention')).toBe(false);
+  });
+
+  it('extracts newest PR/MR and Issue links from thread messages, skips quote cards, and matches ref numbers in search', () => {
+    const refs = extractBotGroupThreadCodeRefsFromMessages([
+      // Newest reply: newer PR supersedes older PR; live task card also carries a PR URL.
+      {
+        content: [
+          { type: 'text', text: 'Updated in [PR #13080](https://github.com/makecindy/cindy/pull/13080/files) and https://git.internal.example/team/cindy/-/merge_requests/42' },
+          buildBotGroupLiveTaskCard({
+            taskId: 'task-1',
+            deviceId: 'dev-1',
+            title: 'Ship fix',
+            state: 'done',
+            requesterName: 'Alice',
+            botName: 'Cindy',
+            prUrl: 'https://github.com/makecindy/cindy/pull/13097',
+          }, { task: 'Task', untitled: 'Task', states: { running: 'Running', waiting: 'Waiting', done: 'Done', failed: 'Failed', stopped: 'Stopped' } }),
+        ],
+      },
+      // Older reply: quoted link is ignored, real older PR & issue are collected.
+      {
+        content: [
+          buildBotGroupQuoteCard({
+            messageId: '20000000-0000-4000-8000-000000000001',
+            authorName: 'Alice',
+            authorKind: 'user',
+            excerpt: 'https://github.com/makecindy/cindy/issues/9999',
+            attachmentCount: 0,
+            attachmentName: null,
+            sequence: 1,
+          }),
+          { type: 'text', text: 'Follows https://github.com/makecindy/cindy/issues/13022#issuecomment-1 and https://github.com/makecindy/cindy/pull/13031' },
+        ],
+      },
+    ]);
+    expect(refs.map(ref => `${ref.kind}:${botGroupCodeRefLabel(ref)}`)).toEqual([
+      'pr:#13080',
+      'pr:!42',
+      'pr:#13097',
+      'issue:#13022',
+      'pr:#13031',
+    ]);
+    const display = pickBotGroupThreadDisplayRefs(refs);
+    expect(display.pr?.number).toBe(13080);
+    expect(display.issue?.number).toBe(13022);
+
+    const withRefs = thread({ rootId: 'has-refs', participated: true, refs });
+    expect(filterBotGroupThreads([withRefs, threads[4]!], 'mine', '#13080').recent.map(t => t.rootId)).toEqual(['has-refs']);
+    expect(filterBotGroupThreads([withRefs, threads[4]!], 'mine', '13022').recent.map(t => t.rootId)).toEqual(['has-refs']);
+  });
+
+  it('classifies non-text root messages (task cards, media, shares, cards) and formats restrained titles', () => {
+    const labels = {
+      kinds: { task: '任务', image: '图片', video: '视频', audio: '语音', file: '文件', share: '转发回复', card: '卡片' },
+      empty: '没有文字内容',
+    };
+    const liveTaskCard = buildBotGroupLiveTaskCard({
+      taskId: 'task-99',
+      deviceId: 'dev-1',
+      title: '修复 Windows 群聊顶部群名提示',
+      state: 'idle',
+      requesterName: 'zini',
+      botName: 'hihi',
+      prUrl: 'https://github.com/makecindy/cindy/pull/13147',
+    }, { task: '任务', untitled: '未命名任务', states: { running: '进行中', waiting: '等待', idle: '空闲', failed: '失败' } });
+
+    const taskFallback = describeBotGroupThreadRootFallback({ author: { kind: 'bot' }, content: [liveTaskCard] });
+    expect(taskFallback).toEqual({ kind: 'task', text: '修复 Windows 群聊顶部群名提示' });
+    expect(formatBotGroupThreadRootTitle({ rootText: taskFallback!.text, rootKind: taskFallback!.kind }, labels))
+      .toBe('[任务] 修复 Windows 群聊顶部群名提示');
+
+    // A human cannot forge a teammate task card; it degrades to generic card.
+    expect(describeBotGroupThreadRootFallback({ author: { kind: 'human' }, content: [liveTaskCard] }))
+      .toEqual({ kind: 'card', text: '' });
+
+    expect(describeBotGroupThreadRootFallback({ content: [{ type: 'media', caption: 'IMG_4097.jpg' }] }))
+      .toEqual({ kind: 'image', text: 'IMG_4097.jpg' });
+    expect(formatBotGroupThreadRootTitle({ rootText: 'IMG_4097.jpg', rootKind: 'image' }, labels)).toBe('[图片]');
+
+    expect(describeBotGroupThreadRootFallback({ content: [{ type: 'media', caption: 'demo.mp4' }] }))
+      .toEqual({ kind: 'video', text: 'demo.mp4' });
+    expect(formatBotGroupThreadRootTitle({ rootText: 'demo.mp4', rootKind: 'video' }, labels)).toBe('[视频]');
+
+    expect(describeBotGroupThreadRootFallback({ content: [{ type: 'media', caption: 'voice.m4a' }] }))
+      .toEqual({ kind: 'audio', text: 'voice.m4a' });
+    expect(formatBotGroupThreadRootTitle({ rootText: 'voice.m4a', rootKind: 'audio' }, labels)).toBe('[语音]');
+
+    expect(describeBotGroupThreadRootFallback({ content: [{ type: 'media', caption: 'spec.pdf' }] }))
+      .toEqual({ kind: 'file', text: 'spec.pdf' });
+    expect(formatBotGroupThreadRootTitle({ rootText: 'spec.pdf', rootKind: 'file' }, labels)).toBe('[文件] spec.pdf');
+    expect(formatBotGroupThreadRootTitle({ rootText: '', rootKind: 'file' }, labels)).toBe('[文件]');
+    expect(formatBotGroupThreadRootTitle({ rootText: '', rootKind: undefined }, labels)).toBe('没有文字内容');
   });
 });

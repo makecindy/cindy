@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { createContext, useContext, useState, type ReactNode } from 'react';
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, Outlet, RouterProvider, useLocation, useNavigate } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MainViewHistoryProvider } from '@/contexts/MainViewHistoryContext';
@@ -20,6 +20,8 @@ const mainViewsMock = vi.hoisted(() => ({
   sidebarVisible: [] as MainViewMock[],
 }));
 const authMock = vi.hoisted(() => ({ owner: 'owner-1' as string | null }));
+const toastError = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/toast', () => ({ toast: { error: toastError } }));
 const preloadPluginPage = vi.hoisted(() => vi.fn());
 vi.mock('@/features/plugin/GhostPluginRoute', () => ({ preloadPluginPage }));
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: authMock.owner }) }));
@@ -71,6 +73,7 @@ function seedKnownPlugins(ids: string[]) {
   navigationTesting.resetArrivals();
 }
 beforeEach(() => {
+  toastError.mockClear();
   preloadPluginPage.mockClear();
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
   searchMock.query = '';
@@ -825,4 +828,68 @@ it.each(['disabled', 'archived', 'revoked', 'enabled', 'approved'])('uses the re
   const entry = screen.getByRole('button', { name: 'sidebar.tabs.plugins' });
   const tone = status === 'enabled' || status === 'approved' ? 'done' : 'error';
   expect([...entry.querySelectorAll('span')].some(span => span.className.includes(`--card-status-${tone}`))).toBe(true);
+});
+
+// 测试价值:
+// - 生产入口与可观察结果: SidebarTopNav 左侧导航「新建」按钮；验证 macOS Command+点击、Windows Ctrl+点击以及
+//   右键 / 键盘菜单「在新窗口打开」均调用 openSessionInNewWindow('/cc-agent/new') 并保留当前窗口路由，普通点击仍原地跳转。
+// - Bug／规则依据: 左侧导航新建按钮需支持按住 Command 点击在新窗口打开，以及右键菜单在新窗口打开；跨平台遵循工程约定 §4。
+// - 现有覆盖缺口: 此前 SidebarTopNav.test.tsx 未覆盖「新建」按钮的修饰键点击与右键菜单打开新窗口路径。
+// - 最小失败输入: 在任务页上对「新建」按钮触发 metaKey/ctrlKey 点击或 contextmenu 后点「在新窗口打开」。
+// - tier: unit（jsdom）。
+describe('left navigation New button open-in-new-window', () => {
+  const stubDesktopApi = (platform: 'darwin' | 'win32', openSessionInNewWindow = vi.fn(async () => undefined)) => {
+    vi.stubGlobal('electronAPI', {
+      platform,
+      maker: { openSessionInNewWindow },
+    });
+    return openSessionInNewWindow;
+  };
+
+  it('opens a new window on Command+Click on macOS while keeping plain click and Ctrl+Click in-window', async () => {
+    const openSessionInNewWindow = stubDesktopApi('darwin');
+    render(<Harness initialPath="/cc-agent/session-1" />);
+    const newButton = screen.getByRole('button', { name: 'ccAgent.layout.new' });
+
+    fireEvent.click(newButton, { metaKey: true });
+    await waitFor(() => expect(openSessionInNewWindow).toHaveBeenCalledWith('/cc-agent/new', undefined));
+    expect(screen.getByTestId('location').textContent).toBe('/cc-agent/session-1');
+
+    // Ctrl+Click on macOS must not hijack the native context-menu modifier as a new-window click.
+    openSessionInNewWindow.mockClear();
+    fireEvent.click(newButton, { ctrlKey: true });
+    expect(openSessionInNewWindow).not.toHaveBeenCalled();
+    expect(screen.getByTestId('location').textContent).toBe('/cc-agent/new');
+  });
+
+  it('opens a new window on Ctrl+Click on Windows while keeping Meta+Click in-window', async () => {
+    const openSessionInNewWindow = stubDesktopApi('win32');
+    render(<Harness initialPath="/cc-agent/session-1" />);
+    const newButton = screen.getByRole('button', { name: 'ccAgent.layout.new' });
+
+    fireEvent.click(newButton, { ctrlKey: true });
+    await waitFor(() => expect(openSessionInNewWindow).toHaveBeenCalledWith('/cc-agent/new', undefined));
+    expect(screen.getByTestId('location').textContent).toBe('/cc-agent/session-1');
+
+    openSessionInNewWindow.mockClear();
+    fireEvent.click(newButton, { metaKey: true });
+    expect(openSessionInNewWindow).not.toHaveBeenCalled();
+    expect(screen.getByTestId('location').textContent).toBe('/cc-agent/new');
+  });
+
+  it('opens a new window from the right-click and keyboard context menu and reports failures', async () => {
+    const openSessionInNewWindow = stubDesktopApi('darwin');
+    render(<Harness initialPath="/cc-agent/session-1" />);
+    const newButton = screen.getByRole('button', { name: 'ccAgent.layout.new' });
+
+    fireEvent.contextMenu(newButton, { clientX: 48, clientY: 88 });
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'ccAgent.sidebar.sessionMenu.openInNewWindow' }));
+    await waitFor(() => expect(openSessionInNewWindow).toHaveBeenCalledWith('/cc-agent/new', undefined));
+    expect(screen.getByTestId('location').textContent).toBe('/cc-agent/session-1');
+
+    openSessionInNewWindow.mockRejectedValueOnce(new Error('window failed'));
+    fireEvent.keyDown(newButton, { key: 'F10', shiftKey: true });
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'ccAgent.sidebar.sessionMenu.openInNewWindow' }));
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith('ccAgent.common.openFailed'));
+  });
 });

@@ -345,7 +345,7 @@
     "tabOwned": "Compartido por mí",
     "startIntro": "Invita a un compañero de equipo a leer todo en esta tarea y trabajar con el mismo Agent.",
     "runsOnThisDevice": "Se ejecuta en este dispositivo",
-    "inviteNotice": "Cualquiera que tenga el enlace de invitación puede unirse después de iniciar sesión, con el mismo acceso Agent que el anfitrión.",
+    "inviteNotice": "Cualquiera que tenga el enlace de invitación puede unirse después de iniciar sesión, con el mismo acceso Agent que el anfitrión. Los invitados pueden revisar los cambios actuales de todo el repositorio Git, incluso si solo se comparte una subcarpeta.",
     "offlineAutoClose": "El uso compartido finaliza automáticamente si la computadora host permanece desconectada.",
     "inviteBoxHint": "Envía el enlace a tu compañero de equipo. Puede abrirlo para unirse o pegarlo en “Unirse a una tarea compartida” en Cindy.",
     "invitationMessage": "Estás invitado a unirte a “{{title}}”\n{{link}}\nAbre el enlace para unirte. Si Cindy no se abre, elige “Unirse a una tarea compartida” en Cindy y pega este enlace.",
@@ -406,7 +406,7 @@
       "progress": "Participación actual {{used}}% · límite {{limit}}%",
       "paused": "Este modelo está en pausa. Elige otro modelo disponible.",
       "recommendation": "Recomendado: {{model}}",
-      "unsupported": "Los límites de participación de modelo aún no son compatibles con este grupo de proveedores.",
+      "unsupported": "Los límites de participación de modelo aún no son compatibles con este grupo de equipos.",
       "basis": "Últimos 7 días calendario · tokens de entrada + salida, sin incluir caché",
       "maxPercent": "Proporción máxima de uso personal",
       "empty": "No se registró ningún uso",
@@ -505,14 +505,14 @@
         "confirm": "Quitar uso compartido"
       },
       "reshare": {
-        "applying": "quiere usarlo a través del grupo de proveedores de {{owner}}",
+        "applying": "quiere usarlo a través del grupo de equipos de {{owner}}",
         "requestedAt": "Solicitado {{time}}",
         "usageHint": "Si aceptas, las sesiones de {{name}} se pueden ejecutar en esta computadora y el uso se contabiliza a nombre de {{owner}}",
         "approve": "Aceptar",
         "reject": "Rechazar",
         "summaryUsing_one": "{{count}} persona lo usa a través del grupo de proveedores de {{owner}}",
-        "summaryUsing_other": "{{count}} personas lo usan a través del grupo de proveedores de {{owner}}",
-        "summaryOwner": "A través del grupo de proveedores de {{owner}}",
+        "summaryUsing_other": "{{count}} personas lo usan a través del grupo de equipos de {{owner}}",
+        "summaryOwner": "A través del grupo de equipos de {{owner}}",
         "summaryDeclined_one": "{{count}} solicitud rechazada",
         "summaryDeclined_other": "{{count}} solicitudes rechazadas",
         "stateApproved": "Aceptado",
@@ -520,10 +520,10 @@
         "revoke": "Retirar",
         "revokeAria": "Retirar el acuerdo para {{name}}",
         "approveAria": "Acepta que {{name}} lo use",
-        "toastApproved": "{{name}} ahora puede usar {{provider}} a través del grupo de proveedores de {{owner}}",
+        "toastApproved": "{{name}} ahora puede usar {{provider}} a través del grupo de equipos de {{owner}}",
         "toastRejected": "Solicitud rechazada de {{name}}",
         "toastRevoked": "Se retiró el acuerdo para {{name}}. Se detuvieron las sesiones en ejecución.",
-        "listTitle": "Utilizándolo a través del grupo de proveedores de {{owner}}",
+        "listTitle": "Utilizándolo a través del grupo de equipos de {{owner}}",
         "summaryUsing_many": "La gente de {{count}} lo usa a través del grupo de proveedores de {{owner}}.",
         "summaryDeclined_many": "{{count}} solicitudes rechazadas"
       },
@@ -571,7 +571,7 @@
       "requestedAt": "Solicitado {{time}} con tu enlace para compartir",
       "pairingHint": "Antes de aprobar, puedes preguntarle por el canal por el que le enviaste el enlace: “¿Qué código de emparejamiento ves?”. Aprueba si coincide.",
       "callout": "Una vez aprobado, {{name}} puede usar los modelos de {{provider}} en sus propias sesiones. El Agent se ejecuta en esta computadora y el uso cuenta para tu {{provider}}. Puedes pausar o quitar el acceso en cualquier momento en “{{provider}} · Remoto y compartido”.",
-      "calloutGroup": "Una vez aprobado, {{name}} puede usar los modelos de {{provider}} en sus propias sesiones. El grupo de proveedores elige la computadora que ejecuta el Agent y el uso cuenta para tu {{provider}}. Puedes pausar o quitar el acceso en cualquier momento en “{{provider}} · Remoto y compartido”.",
+      "calloutGroup": "Una vez aprobado, {{name}} puede usar los modelos de {{provider}} en sus propias sesiones. El grupo de equipos elige la computadora que ejecuta el Agent y el uso cuenta para tu {{provider}}. Puedes pausar o quitar el acceso en cualquier momento en “{{provider}} · Remoto y compartido”.",
       "calloutRemote": "Una vez aprobado, {{name}} puede usar los modelos de {{provider}} en sus propias sesiones. El Agent se ejecuta en la computadora que aloja este proveedor y el uso cuenta para tu {{provider}}. Puedes pausar o quitar el acceso en cualquier momento en “{{provider}} · Remoto y compartido”.",
       "calloutClaudeEmail": "Mientras {{name}} lo usa, el Agent puede ver la dirección de correo electrónico con la que inicias sesión en Claude.",
       "calloutUnknown": "Si no reconoces a esta persona, rechaza la solicitud; el enlace deja de funcionar una vez rechazada.",
@@ -711,7 +711,7 @@
       "rejectedTitle": "Solicitud de compartir rechazada",
       "rejectedBody": "{{name}} se negó a compartir {{provider}}",
       "reshareTitle": "Nueva solicitud de uso",
-      "reshareBody": "{{name}} quiere usar tu {{provider}} compartido a través del grupo de proveedores de {{owner}}"
+      "reshareBody": "{{name}} quiere usar tu {{provider}} compartido a través del grupo de equipos de {{owner}}"
     },
     "runLimits": {
       "title": "Límites de sesión remota",
@@ -767,7 +767,7 @@
   },
   "providerGroup": {
     "management": {
-      "note": "Gestionando el grupo de proveedores en {{device}}. Los cambios se guardan en esa computadora; mantenla en línea.",
+      "note": "Gestionando el grupo de equipos en {{device}}. Los cambios se guardan en esa computadora; mantenla en línea.",
       "unsupported": "La versión de Cindy en la computadora que tiene este grupo aún no admite la administración remota. Actualiza primero Cindy en esa computadora."
     },
     "page": {
@@ -839,27 +839,13 @@
       "computerCount_many": "Computadoras {{count}}"
     },
     "section": {
-      "title": "Grupo de proveedores",
+      "title": "Grupo de equipos",
       "addComputer": "Agregar computadora",
       "delete": "Eliminar grupo",
       "empty": "Agrega {{provider}} desde tus otras computadoras y las tareas elegirán una automáticamente",
-      "loading": "Cargando grupo de proveedores…",
-      "loadFailed": "No se pudo cargar el grupo de proveedores",
+      "loading": "Cargando grupo de equipos…",
+      "loadFailed": "No se pudo cargar el grupo de equipos",
       "note": "Para las sesiones en esta computadora y las de las personas con las que compartes, el grupo elige la computadora que ejecuta el Agent"
-    },
-    "strategy": {
-      "label": "Estrategia de grupo",
-      "least": "Menos ocupado",
-      "round": "Rotación",
-      "order": "En orden",
-      "weight": "Por peso",
-      "quotaFirst": "Cuando el uso de la suscripción está disponible, van primero las computadoras cuya cuota se restablece pronto y a las que les queda bastante, de modo que cada cuenta se agote de manera uniforme con el tiempo; las que estén parejas siguen la estrategia del grupo",
-      "description": {
-        "least": "Va a la menos ocupada",
-        "round": "Gira entre computadoras",
-        "order": "Primero las que están antes en la lista",
-        "weight": "Se reparte según el peso"
-      }
     },
     "autoSwitch": {
       "label": "Cambiar de computadora automáticamente",
@@ -919,9 +905,9 @@
         }
       },
       "removeConfirm": {
-        "title": "¿Eliminar {{name}} del grupo de proveedores?",
+        "title": "¿Eliminar {{name}} del grupo de equipos?",
         "description": "No recibirá nuevas tareas. Las tareas que ya se están ejecutando allí permanecen en esa computadora.",
-        "lastDescription": "Es la última computadora del grupo, por lo que al eliminarla se elimina el grupo de proveedores {{provider}}.",
+        "lastDescription": "Es la última computadora del grupo, por lo que al eliminarla se elimina el grupo de equipos {{provider}}.",
         "confirm": "Eliminar del grupo"
       },
       "sourceGroupOwner": "Aloja el grupo",
@@ -964,12 +950,12 @@
       "send": "Enviar mensaje"
     },
     "deleteConfirm": {
-      "title": "¿Eliminar el grupo de proveedores {{provider}}?",
+      "title": "¿Eliminar el grupo de equipos {{provider}}?",
       "description": "Las nuevas tareas en esta computadora se ejecutarán aquí. Las tareas que ya están en otras computadoras permanecen donde están.",
       "confirm": "Eliminar grupo"
     },
     "add": {
-      "title": "Agregar computadoras al grupo de proveedores {{provider}}",
+      "title": "Agregar computadoras al grupo de equipos {{provider}}",
       "sourceAria": "Computadora de origen",
       "tabAvailable": "Ya disponible",
       "tabLink": "Enlace compartido",
@@ -986,11 +972,11 @@
     },
     "toast": {
       "added_one": "Se agregó {{count}} computadora al grupo de proveedores {{provider}}",
-      "added_other": "Se agregaron {{count}} computadoras al grupo de proveedores {{provider}}",
+      "added_other": "Se agregaron {{count}} computadoras al grupo de equipos {{provider}}",
       "addedAccounts_one": "Se agregó {{count}} cuenta al grupo de proveedores {{provider}}",
-      "addedAccounts_other": "Se agregaron {{count}} cuentas al grupo de proveedores {{provider}}",
-      "removed": "Se eliminó {{name}} del grupo de proveedores.",
-      "deleted": "Se eliminó el grupo de proveedores {{provider}}.",
+      "addedAccounts_other": "Se agregaron {{count}} cuentas al grupo de cuentas {{provider}}",
+      "removed": "Se eliminó {{name}} del grupo de equipos.",
+      "deleted": "Se eliminó el grupo de equipos {{provider}}.",
       "added_many": "Se agregaron computadoras {{count}} al grupo de proveedores {{provider}}.",
       "addedAccounts_many": "Se agregaron cuentas {{count}} al grupo de proveedores {{provider}}."
     }
@@ -1391,7 +1377,7 @@
     "DEVICE_LINK_BUSY": "La computadora remota está ocupada. Inténtalo de nuevo en breve.",
     "INVALID_PARAMS": "Entrada no válida. Revísala e inténtalo de nuevo.",
     "PRECONDITION_FAILED": "Esta acción no está disponible en el estado actual. Inténtalo de nuevo.",
-    "PROVIDER_GROUP_CHANGED": "El grupo de proveedores cambió en otro lugar, por lo que esta acción no se aplicó. Revisa la configuración más reciente y vuelve a intentarlo.",
+    "PROVIDER_GROUP_CHANGED": "El grupo de equipos cambió en otro lugar, por lo que esta acción no se aplicó. Revisa la configuración más reciente y vuelve a intentarlo.",
     "MODEL_CONTEXT_USAGE_UNKNOWN": "Modelo no cambiado: Cindy no puede verificar cuánto contexto usa esta tarea. Mantén el modelo actual o inicia una nueva tarea.",
     "MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN": "Modelo no cambiado: Cindy no puede verificar la ventana de contexto del modelo actual. Si es un modelo personalizado, revisa su configuración de ventana. Si no se puede cambiar, mantén el modelo actual o inicia una nueva tarea.",
     "MODEL_WINDOW_TARGET_CONTEXT_UNKNOWN": "Modelo no cambiado: Cindy no puede verificar la ventana de contexto del modelo de destino. Si es un modelo personalizado, revisa su configuración de ventana. Si no se puede cambiar, elige otro modelo o inicia una nueva tarea.",
@@ -1939,7 +1925,7 @@
       "imBot": "Bots de mensajería",
       "ghosts": "Complementos",
       "cindyMake": "Cindy Make",
-      "modelGroups": "Grupos de modelos"
+      "modelGroups": "Enrutamiento inteligente"
     },
     "sections": {
       "user": "Usuario",
@@ -2603,7 +2589,7 @@
       "skinLabel": "Personaje",
       "skinHint": "El personaje que aparece en Agent Notch y en la Dynamic Island.",
       "soundLabel": "Sonidos de eventos",
-      "soundHint": "Si se configura un sonido de evento, solo se reproduce ese sonido. Si no se configura o se desactiva, se usan los ajustes de notificación del sistema.",
+      "soundHint": "Elija un sonido de 8 bits para cada aviso; Agent Notch y la Dynamic Island lo comparten. El sonido de toque solo suena al pulsar Agent Notch.",
       "soundAria": "Alternar sonidos de Agent Notch",
       "soundSelectAria": "Sonido para {{event}}",
       "soundPreviewAria": "Vista previa del sonido {{event}}",
@@ -2658,7 +2644,7 @@
         "select": "Acción de clic"
       },
       "soundOptions": {
-        "none": "Según el sistema",
+        "none": "Ninguno",
         "startup-chime": "Timbre de inicio",
         "ring-chime": "Timbre circular",
         "item-found": "Objeto encontrado",
@@ -4380,9 +4366,12 @@
           "compaction": {
             "title": "Compactación automática",
             "hint": "Compacta el contexto al alcanzar el porcentaje de uso seleccionado. Los valores más bajos compactan antes; los límites del motor siguen aplicándose.",
-            "default": "{{pct}}% (predeterminado)",
-            "timing": "Se aplica a todos los motores disponibles para este modelo y origen en ejecuciones posteriores, sin interrumpir una respuesta."
+            "timing": "Se aplica a todos los motores disponibles para este modelo y origen en ejecuciones posteriores, sin interrumpir una respuesta.",
+            "defaultBadge": "Predeterminado",
+            "sliderAria": "Ajustar el umbral de compactación automática",
+            "restoreAria": "Restaurar la proporción de compactación automática predeterminada"
           },
+          "antigravityHydrogenDescription": "Diseñado para la programación diaria y la ejecución rápida.",
           "contextLimitRoute": "{{tokens}} tokens actuales",
           "contextLimitOverWindow": "Por encima de la ventana declarada por el proveedor; las solicitudes pueden fallar.",
           "restoreDefault": "Restaurar valor predeterminado",
@@ -4471,10 +4460,10 @@
         "detailNote": "El Agent se ejecuta en {{device}}, con el inicio de sesión y la cuota de esa computadora. Para usarlo, selecciónalo en la lista de modelos al iniciar una tarea. Para modificar este proveedor, abre Configuración → Proveedores en esa computadora.",
         "modelsTitle": "Modelos disponibles",
         "modelsEmpty": "Este proveedor aún no tiene modelos disponibles en esa computadora.",
-        "rowLabelGroup": "{{provider}} · {{device}} · Grupo de proveedores",
+        "rowLabelGroup": "{{provider}} · {{device}} · Grupo de equipos",
         "groupBadge_one": "Grupo de proveedores · {{count}} computadora",
-        "groupBadge_other": "Grupo de proveedores · {{count}} computadoras",
-        "groupNote": "{{device}} convirtió a este proveedor en un grupo de proveedores. Cuando inicia una tarea con él, {{device}} asigna la tarea a una de las siguientes computadoras según su estrategia de grupo y la mueve a otra si esa computadora tiene un problema. Mientras {{device}} esté en línea, use Remoto y compartido aquí para administrar el grupo y sus recursos compartidos.",
+        "groupBadge_other": "Grupo de equipos · {{count}} computadoras",
+        "groupNote": "{{device}} convirtió a este proveedor en un grupo de equipos. Cuando inicia una tarea con él, {{device}} asigna la tarea a una de las siguientes computadoras según su estrategia de grupo y la mueve a otra si esa computadora tiene un problema. Mientras {{device}} esté en línea, use Remoto y compartido aquí para administrar el grupo y sus recursos compartidos.",
         "groupMembersTitle": "Computadoras en el grupo",
         "groupMembersFailed": "No se pudo obtener el estado de las computadoras del grupo en este momento.",
         "groupBadge_many": "Grupo de proveedores · {{count}} computadoras",
@@ -4527,7 +4516,7 @@
         "remoteAccess": {
           "label": "Permitir uso remoto",
           "description": "Cuando está activado, sus otras computadoras y las personas con las que comparte pueden usar los modelos de este proveedor. El Agent se ejecuta en esta computadora, utilizando el inicio de sesión y la cuota de esta computadora.",
-          "descriptionGroup": "Cuando está activado, sus otras computadoras y las personas con las que comparte pueden usar los modelos de este proveedor. El grupo de proveedores elige la computadora que ejecuta el Agent.",
+          "descriptionGroup": "Cuando está activado, sus otras computadoras y las personas con las que comparte pueden usar los modelos de este proveedor. El grupo de equipos elige la computadora que ejecuta el Agent.",
           "ariaLabel": "Permita que sus otras computadoras y las personas con las que comparte usen este proveedor",
           "writeFailed": "No se pudo guardar la configuración de acceso remoto. Por favor inténtalo de nuevo.",
           "followsPool": "Esta conexión se fusionó con «{{pool}}» y sigue su «Permitir uso remoto». Cámbialo allí."
@@ -4832,6 +4821,7 @@
         "discoveryHint": "Estos modelos los devolvió el catálogo del proveedor. La ejecución de voz no se ha probado.",
         "saved": "Añadido",
         "reference": "Referencia",
+        "realtimeConfirmed": "Endpoint en tiempo real confirmado",
         "discovered": "Descubierto",
         "more": "Más modelos de voz ({{count}})",
         "manual": "Ingrese un ID de modelo de voz",
@@ -5734,7 +5724,8 @@
           "runtime": "Las últimas solicitudes a los modelos auxiliares fallaron. Puede afectar al nombrado de tareas, los resúmenes y las tareas de complementos, como la traducción de subtítulos.",
           "open": "Abrir configuración"
         }
-      }
+      },
+      "missingRoute": "Modo eliminado"
     },
     "compaction": {
       "codex": {
@@ -7234,7 +7225,14 @@
           "routeUnavailable": "No disponible",
           "routeMeasuring": "Midiendo…",
           "routeDirectUnavailableHint": "La conexión directa no está disponible actualmente en esta red",
-          "routePreferenceFailed": "No se pudo cambiar la ruta. Inténtalo de nuevo."
+          "routePreferenceFailed": "No se pudo cambiar la ruta. Inténtalo de nuevo.",
+          "autoRule": {
+            "title": "Reglas de enrutamiento automático",
+            "faster": "Elige la ruta con menor latencia y prefiere conexión directa si la diferencia es mínima.",
+            "thresholds": "Cambia a relay cuando es 25–50 ms+ más rápido; vuelve a directa cuando queda a ≤ 15 ms del relay.",
+            "cooldown": "Usa 30 s de enfriamiento para evitar oscilaciones; cambia de inmediato ante degradación grave (≥ 2× más lento y ≥ 100 ms peor).",
+            "peerOverride": "Si el otro equipo fijó directa/relay o usa una versión anterior, prevalece su ajuste o capacidad."
+          }
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -7381,6 +7379,98 @@
             "noUpdate": "No hay ninguna actualización instalable disponible en «{{name}}».",
             "busy": "«{{name}}» ya está ejecutando otra actualización. Inténtalo en un momento.",
             "failed": "No se pudo actualizar Cindy en «{{name}}»."
+          }
+        },
+        "tabs": {
+          "aria": "Vista de topología",
+          "devices": "Conexiones de dispositivos",
+          "providers": "Proveedores remotos"
+        },
+        "providers": {
+          "empty": "No hay tareas en ejecución usando un proveedor remoto. Cuando una tarea se ejecute en otro equipo o proveedor compartido, su ruta y relay aparecerán aquí.",
+          "noMatch": "Ninguna tarea, equipo o relay coincide con el filtro.",
+          "searchPlaceholder": "Buscar tareas, equipos o relays…",
+          "clearFilter": "Limpiar filtro",
+          "expand": "Expandir",
+          "collapse": "Contraer",
+          "groupTitle": "Grupo de proveedores {{provider}}",
+          "groupCount": "{{count}} en total",
+          "groupIdleSummary": "Otros {{count}} miembros: {{online}} en línea · {{offline}} sin conexión",
+          "filter": {
+            "aria": "Filtrar por estado de tarea",
+            "all": "Todas las tareas ({{count}})",
+            "running": "Solo en ejecución ({{count}})"
+          },
+          "columns": {
+            "tasks": "Mis tareas",
+            "path": "Ruta",
+            "machines": "Equipos proveedores remotos"
+          },
+          "usage": {
+            "remoteModel": "Modelo remoto"
+          },
+          "bundle": {
+            "mixed": "{{running}} en ejecución · {{ready}} listas",
+            "runningOnly": "{{running}} en ejecución",
+            "readyOnly": "{{ready}} listas",
+            "countBadge": "{{count}} total",
+            "popoverTitle": "Tareas en {{name}} ({{count}})"
+          },
+          "badge": {
+            "own": "Mi equipo",
+            "groupMember": "Grupo",
+            "share": "Proveedor compartido",
+            "shareShort": "Compartido",
+            "shareGroup": "Grupo compartido · {{count}}",
+            "shareGroupShort": "Grupo · {{count}}"
+          },
+          "relayRole": {
+            "officialShort": "Oficial",
+            "selfHostedShort": "Propio",
+            "sharerRelayShort": "Relay compartido",
+            "officialFull": "Relay oficial de Cindy",
+            "selfHostedFull": "Relay propio",
+            "sharerRelayFull": "Relay propio del remitente"
+          },
+          "status": {
+            "ready": "En línea",
+            "busy": "Ocupado",
+            "paused": "En pausa",
+            "idle": "Inactivo",
+            "standby": "En espera"
+          },
+          "machineLine": {
+            "live": "{{flow}} · {{count}} tareas",
+            "ready": "Listo · {{count}} tareas"
+          },
+          "popover": {
+            "models": "Modelos activos",
+            "tasksCount": "Tareas vinculadas ({{count}})",
+            "clickToOpenHint": "Haz clic para abrir",
+            "relayHost": "Dirección del relay",
+            "relayRegion": "Región",
+            "relayHop": "Local a relay",
+            "relayLoad": "Por este relay",
+            "relayLoadValue": "{{machines}} equipos · {{tasks}} tareas"
+          },
+          "idleStrip": {
+            "summary": "{{count}} proveedores remotos en línea están inactivos",
+            "show": "Mostrar inactivos",
+            "hide": "Ocultar inactivos"
+          },
+          "stats": {
+            "empty": "Sin tareas en ejecución en proveedores remotos",
+            "tasks": "{{total}} tareas",
+            "tasksWithRunning": "{{total}} tareas ({{running}} en ejecución)",
+            "machines": "{{active}} equipos proveedores",
+            "machinesWithTotal": "{{active}} activos / {{total}} proveedores",
+            "relays": "{{count}} relays"
+          },
+          "legend": {
+            "live": "Línea azul discontinua: intercambiando mensajes",
+            "ready": "Línea verde continua: enlace Agent-Net listo",
+            "busy": "Punto naranja: tarea en ejecución / ocupado",
+            "error": "Línea roja punteada: sin respuesta o en pausa"
           }
         }
       }
@@ -7982,6 +8072,10 @@
         "toggle-sidebar": {
           "label": "Mostrar u ocultar la barra lateral",
           "description": "Contraer o expandir la barra lateral de la lista de sesiones"
+        },
+        "copy-session-link": {
+          "label": "Copiar enlace de la sesión",
+          "description": "Copia el enlace de la sesión abierta"
         },
         "session-history-back": {
           "label": "Tarea anterior",
@@ -8756,8 +8850,8 @@
         "hostTools_controlDetail": "Usar las herramientas de Cindy para editar, archivar, restaurar y controlar tareas y proyectos existentes, e importar archivos de tareas en formato nativo en este ordenador.",
         "hostTools_handoff": "Mensajes a tareas",
         "hostTools_handoffDetail": "Usar las herramientas de Cindy para enviar mensajes a tareas existentes. Las operaciones que necesitan una tarea actual requieren un destino explícito.",
-        "hostTools_usage": "Leer el uso y el estado de los grupos de proveedores",
-        "hostTools_usageDetail": "Lee los ID, planes, períodos de cuota y horas de actualización de las cuentas locales de Claude/Codex conectadas a tu cuenta de Cindy. Lee el uso diario y por modelo registrado, los costes estimados, la configuración y el estado de los grupos de proveedores y los ID, nombres y avatares visibles de miembros y dispositivos, tanto en este equipo como en otros equipos autorizados de la misma cuenta. No permite leer correos de inicio de sesión de las suscripciones, directorios de cuentas, huellas de identidad internas, credenciales ni archivos, ni modificar cuentas o ajustes. También lee la cuota de las tareas accesibles, incluso en otro ordenador autorizado de la misma cuenta o mediante un proveedor compartido que permite ver la cuota.",
+        "hostTools_usage": "Leer el uso y el estado de los grupos de equipos",
+        "hostTools_usageDetail": "Lee los ID, planes, períodos de cuota y horas de actualización de las cuentas locales de Claude/Codex conectadas a tu cuenta de Cindy. Lee el uso diario y por modelo registrado, los costes estimados, la configuración y el estado de los grupos de equipos y los ID, nombres y avatares visibles de miembros y dispositivos, tanto en este equipo como en otros equipos autorizados de la misma cuenta. No permite leer correos de inicio de sesión de las suscripciones, directorios de cuentas, huellas de identidad internas, credenciales ni archivos, ni modificar cuentas o ajustes. También lee la cuota de las tareas accesibles, incluso en otro ordenador autorizado de la misma cuenta o mediante un proveedor compartido que permite ver la cuota.",
         "hostTools_settings": "Ajustes de la aplicación",
         "hostTools_settingsDetail": "Usar las herramientas de Cindy para leer y cambiar la configuración. No se devuelven secretos y los datos privados los introduces tú.",
         "hostTools_scheduler": "Gestión de automatizaciones",
@@ -8880,6 +8974,8 @@
         "networkSecretOauthDetail": "Cindy administra el inicio de sesión y los tokens. Puedes autorizar una cuenta nueva o elegir una cuenta conectada compatible. Revisa los alcances siguientes; las cuentas conectadas conservan sus permisos existentes.",
         "networkConnections": "Puede conectarse a las direcciones {{label}} que agregues",
         "networkConnectionsDetail": "Las direcciones se agregan en la interfaz de configuración de este complemento; cada nueva dirección requiere tu confirmación y la credencial que proporciones se inyecta solo para su propia dirección.",
+        "networkConnectionsGlabCli": "Puede conectarse a las direcciones de {{label}} que añadas y usar instancias con sesión iniciada en glab local",
+        "networkConnectionsGlabCliDetail": "Las credenciales añadidas en los ajustes del complemento tienen prioridad; para otras instancias, el host lee el token de glab local bajo demanda y lo inyecta solo en solicitudes HTTPS a esa instancia. El complemento no puede leer ni guardar el token.",
         "codeDetailNetwork": "Se ejecuta en un entorno aislado sin acceso a tus archivos; el acceso a la red se limita a los dominios indicados arriba y pasa por el host.",
         "codeDetailWithNode": "La interfaz del panel se ejecuta en un entorno aislado; el procesamiento local lo proporciona el entorno de ejecución de Node declarado arriba.",
         "added": "Nuevo",
@@ -8908,7 +9004,7 @@
         "nodeChildSpawnDetail": "Solo se pueden iniciar archivos JS declarados dentro de su propio paquete (con los mismos permisos locales que el programa principal); no se pueden ejecutar comandos arbitrarios. Los subprocesos se cierran junto con el complemento cuando este se desactiva o se cierra.",
         "skill": "Agrega la habilidad \"{{name}}\" a tus asistentes de IA",
         "skillDetail": "Una habilidad es un archivo de instrucciones que la IA carga y sigue como propio, con todos tus permisos, en Claude Code y Codex, en todos los proyectos; no se limita al entorno aislado de este complemento. Permanece disponible mientras el complemento está habilitado y se elimina cuando el complemento se deshabilita o desinstala; desactivar el complemento para una sola carpeta no la oculta. No se puede obtener una vista previa del texto completo de la habilidad aquí; instala solo complementos en los que confíes.",
-        "routineEvents": "Eventos de rutina",
+        "routineEvents": "Eventos de automatización",
         "mcpUi": "Mostrar páginas interactivas en la conversación",
         "mcpUiDomains": "Dominios de red de las páginas: {{domains}}",
         "mcpAppOnly": "Solo página",
@@ -9000,7 +9096,10 @@
             "user": "Usuario",
             "assistant": "Asistente"
           }
-        }
+        },
+        "agentChecks": "Puede comprobar si hay contenido nuevo",
+        "agentChecksDetail": "Solo intercambia estados de cambio, sin cambios o desconocido con otros complementos autorizados. Cada complemento usa sus propias cuentas conectadas, sin compartir mensajes ni credenciales. La comprobación no usa ningún modelo. También comprueba cambios en conversaciones locales de Cindy sin devolver su contenido.",
+        "agentChecksRequest": "Revisar permiso de comprobación"
       },
       "connections": {
         "confirmTitle": "Agregar dirección de conexión",
@@ -11736,18 +11835,14 @@
     "model": {
       "description": "Elige los modelos que usa este amigo.",
       "primary": "Modelo principal",
-      "restoreDefault": "Restaurar modelo predeterminado"
+      "restoreDefault": "Restaurar modelo predeterminado",
+      "followsDefault": "Usa el modelo predeterminado",
+      "ownModel": "Modelo propio",
+      "managedInSettings": "Los modelos de los amigos se configuran en Proveedores → Enrutamiento inteligente.",
+      "openSettings": "Abrir ajustes"
     },
     "modelChain": {
-      "primary": "Modelo principal",
-      "fallback": "Alternativa {{index}}",
-      "routeLabel": "Modelo candidato {{index}}",
-      "add": "Agregar modelo alternativo",
-      "remove": "Quitar este candidato",
-      "moveUp": "Subir",
-      "moveDown": "Bajar",
-      "description": "Configura hasta 5 modelos. Si uno no está disponible, el amigo continúa automáticamente con el siguiente, sin cambiar de tarea ni reintentar manualmente.",
-      "options": "Modelos de respaldo ({{count}})"
+      "routeLabel": "Modelo candidato {{index}}"
     },
     "actions": {
       "message": "Mensaje",
@@ -11937,6 +12032,7 @@
           "title": "Menciones a mí",
           "me": "Yo",
           "markAll": "Marcar todo como leído",
+          "markReadFailed": "No se pudieron marcar las menciones como leídas.",
           "empty": "No hay menciones no leídas",
           "thread": "Hilo",
           "main": "Chat grupal",
@@ -12124,6 +12220,8 @@
         "loadEarlierFailed": "No se pudieron cargar los mensajes anteriores. Inténtalo de nuevo.",
         "emptyTitle": "Aún no hay mensajes en este grupo",
         "emptyDescription": "Di algo para comenzar y tus amigos se unirán. @ un amigo para que solo ellos respondan.",
+        "emptyDescriptionWithAssistant": "Menciona a @Cindy o usa el menú de invitación de la esquina superior derecha para invitar a personas o agregar amigos.",
+        "emptyDescriptionInvite": "Desde el menú de invitación de la esquina superior derecha puedes invitar a personas o agregar amigos.",
         "roundEnded": "Los amigos terminaron",
         "stepTag": "Paso {{count}}",
         "sending": "Enviando",
@@ -12144,6 +12242,8 @@
       },
       "notice": {
         "memberJoined": "{{name}} se unió al grupo",
+        "memberJoinedList": "{{names}} se unieron al grupo",
+        "memberJoinedSummary": "{{names}} y {{others}} más se unieron al grupo",
         "memberFailed": "{{name}} no pudo responder esta vez",
         "memberTimeout": "{{name}} tardó demasiado en responder y esta vez se omitió",
         "memberUnavailable": "{{name}} no está disponible y no habló esta vez",
@@ -12173,7 +12273,9 @@
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} no pudo ejecutar la herramienta: la autorización del grupo ha caducado o no permite esta acción. La persona propietaria del amigo puede volver a solicitarla en este grupo.",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "No se pudo verificar la autorización de grupo de {{name}}, por lo que la herramienta no se ejecutó. Vuelve a intentarlo cuando se restablezca la conexión.",
           "ATTACHMENTS_UNAVAILABLE": "Algunos adjuntos no llegaron a {{name}} por un fallo de descarga o por el límite de adjuntos. Vuelve a enviar los archivos necesarios para esta solicitud.",
-          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, conecta tu Cindy para que Cindy pueda trabajar por ti (ahora no tienes ningún Cindy conectado)."
+          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, conecta tu Cindy para que Cindy pueda trabajar por ti (ahora no tienes ningún Cindy conectado).",
+          "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}, elige un equipo para este grupo para continuar con la solicitud.",
+          "GROUP_ASSISTANT_DEVICE_OFFLINE": "El equipo que {{name}} eligió para este grupo está desconectado."
         }
       },
       "settings": {
@@ -12324,6 +12426,8 @@
         "threadNew": "Mensajes nuevos del hilo",
         "replyingTo": "En respuesta a \"{{name}}\": {{text}}",
         "filesOutsideWorkingDir": "No se adjuntaron los archivos fuera del directorio de trabajo.",
+        "modelFallback": "El modelo seleccionado no está en este equipo, así que esta respuesta usa {{model}}.",
+        "modelFallbackUnnamed": "El modelo seleccionado no está en este equipo, así que esta respuesta usa un modelo disponible aquí.",
         "earlierOmitted": "(Mensajes anteriores omitidos)",
         "actingFor": "{{name}} · por {{person}}",
         "checkout": {
@@ -12404,12 +12508,37 @@
           "unfollowTip": "Dejar de seguir: solo recibirás avisos cuando alguien te mencione",
           "listLabel": "Hilos de este chat grupal",
           "listNews": "Nuevas respuestas",
-          "listOthers": "Otros hilos",
           "newSeparator": "Nuevas respuestas",
           "open_many": "Abrir hilo, {{count}} respuestas",
           "alsoSendFailed_many": "Las respuestas de {{count}} están en el hilo, pero no se pudieron enviar al chat principal.",
           "newReplies_many": "{{count}} nuevas respuestas",
-          "hintMany_many": "Nuevas respuestas en {{count}} hilos"
+          "hintMany_many": "Nuevas respuestas en {{count}} hilos",
+          "openIndex": "Hilos",
+          "indexTitle": "Hilos",
+          "backToList": "Volver a hilos",
+          "filterAria": "Filtrar hilos",
+          "filterMine": "Para mí",
+          "filterAll": "Todos",
+          "searchPlaceholder": "Buscar hilos, respuestas o miembros",
+          "clearSearch": "Borrar búsqueda",
+          "listRecent": "Recientes",
+          "indexParticipatedTag": "Participaste",
+          "indexMentionedTag": "Mencionado",
+          "locateInGroup": "Ver en el grupo",
+          "indexEmptyMine": "Aún no hay hilos en los que hayas participado o te hayan mencionado",
+          "indexEmptyAll": "Aún no hay hilos en este grupo",
+          "indexEmptySearch": "No hay hilos que coincidan",
+          "viewAllThreads": "Ver todos los hilos",
+          "syncingHistory": "Cargando hilos anteriores…",
+          "rootKind": {
+            "task": "Tarea",
+            "image": "Imagen",
+            "video": "Video",
+            "audio": "Audio",
+            "file": "Archivo",
+            "share": "Respuesta compartida",
+            "card": "Tarjeta"
+          }
         },
         "replyPlaceholder": "Responde a este mensaje; usa @ para mencionar a un amigo…",
         "sendReply": "Enviar respuesta",
@@ -12462,7 +12591,7 @@
         "loginRequired": "Inicia sesión en tu cuenta y vuelve a intentarlo.",
         "requestFailed": "El servicio de chat no está disponible. Vuelve a intentarlo en unos momentos.",
         "copyFailed": "No se pudo copiar. Selecciona el enlace y cópialo manualmente.",
-        "createDescription": "Elige amigos o crea primero el grupo e invita a otras personas a unirse.",
+        "createDescription": "Después de crear el grupo, puedes invitar a personas y agregar amigos.",
         "settings": {
           "name": "Nombre del grupo",
           "topic": "Tema",
@@ -12594,6 +12723,8 @@
           "accessToolsHint": "Puede usar las herramientas existentes de {{name}} y tu información privada. Los resultados son visibles para todos. Se siguen aplicando las reglas de aprobación; revocar el acceso no deshace las acciones ya completadas.",
           "capabilitiesRow": "Herramientas y acceso de {{name}}",
           "accessMenu": "Permisos aquí",
+          "assistantComputer": "Equipo de ejecución",
+          "chooseComputer": "Elegir equipo",
           "notifications": {
             "title": "Notificaciones de mensajes",
             "all": "Todos los mensajes",
@@ -12897,7 +13028,7 @@
       "arrivingLater": "{{name}} se movió a esta computadora y aún se está preparando. Pronto aparecerá entre tus amigos",
       "arrivalPermissions": "{{name}} ahora usa los permisos predeterminados de esta computadora.",
       "arrivalModel": "El modelo guardado de {{name}} no está disponible en esta computadora, así que usa el modelo predeterminado de esta computadora.",
-      "arrivalModelSetup": "{{name}} ya está en esta computadora, pero aún no tiene un modelo disponible. Conecta un proveedor de modelos o elige un modelo en los ajustes de este amigo, en Modelo.",
+      "arrivalModelSetup": "{{name}} llegó a esta computadora, pero aún no tiene un modelo utilizable. Conecta un proveedor de modelos o configura el modelo predeterminado de amigos en Proveedores → Enrutamiento inteligente.",
       "arrivalPartialContent": "{{name}} ahora se ejecuta en esta computadora, pero algunos elementos sincronizados no se pudieron restaurar. Sus copias en la nube siguen intactas.",
       "missingProfileTitle": "¿Continuar con {{name}} usando el perfil predeterminado?",
       "missingProfileDescription": "La computadora principal original aún no subió la personalidad ni la descripción de {{name}}. Si esa computadora se reinstaló o no se puede recuperar, puedes continuar aquí con un perfil predeterminado y conservar las conversaciones y el contenido ya sincronizados.",
@@ -13880,6 +14011,9 @@
           "allow": "permitir",
           "deny": "denegar",
           "approve": "aprobar"
+        },
+        "companion": {
+          "retryLater": "inténtalo de nuevo más tarde"
         }
       },
       "hook": {
@@ -14872,7 +15006,7 @@
         "providerGroupLabel": "{{provider}} · {{group}}",
         "providerGroupRunningOn": "Se ejecuta en {{device}}",
         "providerGroupRunningHere": "Se ejecuta en esta computadora",
-        "providerGroupUnassigned": "El grupo de proveedores elige una computadora al iniciar la tarea; luego, el uso se muestra para esa computadora"
+        "providerGroupUnassigned": "El grupo de equipos elige una computadora al iniciar la tarea; luego, el uso se muestra para esa computadora"
       },
       "speed": {
         "label": "Velocidad",
@@ -15787,7 +15921,6 @@
       "piRetryHistoryUnavailable": "Tu mensaje no se envió. Pi no pudo leer el historial necesario para enviarlo. Puedes volver a intentarlo o continuar en una tarea nueva.",
       "upstreamStatusError": "El proveedor devolvió {{status}}, por lo que la respuesta no pudo completarse.",
       "messageNotSent": "Tu mensaje no se envió.",
-      "upstreamEmpty550": "El servicio del modelo devolvió HTTP 550 con una respuesta vacía",
       "replyFailed": "No se pudo completar la respuesta",
       "queuedSendRecovery": "Tu mensaje no se envió. Selecciona «Reintentar» para enviarlo tal cual. Si envías un mensaje nuevo, reemplazará al anterior.",
       "retryTitle": "Reenviar el último mensaje",
@@ -16340,10 +16473,11 @@
         "groupSwitch": "Continuado en otra computadora automáticamente"
       },
       "autoResumeSeparator": {
-        "label": "Conexión interrumpida: se reanuda automáticamente"
+        "label": "Respuesta vacía. Se ha continuado automáticamente"
       },
       "autoResumePending": {
         "label": "Reconectando",
+        "continuingWithProgress": "Continuando automáticamente ({{attempt}}/{{total}})…",
         "labelWithProgress": "Reconectando {{attempt}}/{{total}}",
         "groupSwitch": "Cambiando a otra computadora"
       },
@@ -16658,7 +16792,7 @@
       "REMOTE_AGENT_SHARE_UNAVAILABLE": "El proveedor compartido no está disponible temporalmente. Es posible que la computadora del propietario esté desconectada o que el uso compartido esté desactivado por ahora. Inténtalo de nuevo más tarde o cambia a otro modelo para continuar.",
       "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Este es un recurso compartido antiguo y no se puede usar mientras «Usar solo Agent-Net» esté activado. Desactívalo para continuar o cambia a otro modelo.",
       "REMOTE_AGENT_GROUP_USAGE_LIMIT": "Las cuentas disponibles para este modelo han alcanzado su límite de uso. Cambia de modelo o continúa cuando se restablezca la cuota.",
-      "REMOTE_AGENT_GROUP_UNAVAILABLE": "Ninguna computadora del grupo de proveedores puede ejecutar esta tarea en este momento. Es posible que estén desconectadas, pausadas, en período de espera o que no tengan este modelo. Revisa el grupo en la página Remoto y compartido de este proveedor.",
+      "REMOTE_AGENT_GROUP_UNAVAILABLE": "Ninguna computadora del grupo de equipos puede ejecutar esta tarea en este momento. Es posible que estén desconectadas, pausadas, en período de espera o que no tengan este modelo. Revisa el grupo en la página Remoto y compartido de este proveedor.",
       "REMOTE_AGENT_GROUP_FULL": "Todas las cuentas o computadoras que pueden ejecutar esta tarea alcanzaron su límite de tareas simultáneas. Espera a que termine una tarea en curso o aumenta el límite en la configuración del proveedor.",
       "SUBSCRIPTION_ACCOUNTS_FULL": "Todas las cuentas o computadoras que pueden ejecutar esta tarea alcanzaron su límite de tareas simultáneas. Espera a que termine una tarea en curso o aumenta el límite en la configuración del proveedor.",
       "REMOTE_AGENT_DEVICE_LIMIT": "Este dispositivo ha alcanzado su límite de sesiones remotas. Archiva las sesiones que no uses o pide al propietario del proveedor que aumente el límite en Remoto y compartido.",
@@ -16928,6 +17062,8 @@
       "retryIn": "Reintento automático en {{seconds}} s"
     },
     "subscriptionAccountError": {
+      "unreachable": "El servicio de cuentas de Codex no responde.",
+      "rechecking": "El servicio de cuentas de Codex no responde. Se reintentará a las {{resetAt}}.",
       "poolModelLimited": "Se ha alcanzado el límite de uso de la suscripción para este modelo. Puedes cambiar de modelo.",
       "poolRetryUntil": "Vuelve a intentarlo después de {{resetAt}}.",
       "poolOtherSignedOut": "Otra cuenta de suscripción tiene la sesión cerrada. Inicia sesión en el equipo que ejecuta la tarea y vuelve a intentarlo.",
@@ -17197,9 +17333,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "Añadir equipo en la nube",
-        "preparingCloud": "Preparando el equipo en la nube",
-        "manageCloud": "Gestionar equipo en la nube",
         "allMachines": "Todo",
         "localMachine": "Local",
         "connecting": "Conectando…",
@@ -17566,6 +17699,8 @@
         "moveToProjectRemoteUnsupported": "Aún no se pueden mover sesiones remotas",
         "moveToProjectWorktreeBlocked": "El directorio de trabajo de esta tarea es un worktree, por lo que aún no se puede mover a otro proyecto",
         "openInNewWindow": "Abrir en una ventana nueva",
+        "openInNewWindowShortcutMac": "⌘+clic",
+        "openInNewWindowShortcutOther": "Ctrl+clic",
         "exportShare": "Exportar sesión…",
         "exportHtml": "Exportar a HTML…",
         "exportHtmlSuccess": "Sesión exportada a HTML",
@@ -17683,7 +17818,14 @@
         "hours": "En {{count}} horas",
         "hours_one": "En {{count}} hora",
         "hours_many": "En {{count}} horas",
-        "hours_other": "En {{count}} horas"
+        "hours_other": "En {{count}} horas",
+        "pendingSync": "Pendiente de sincronizar",
+        "pendingArchiveSync": "Se archivará cuando el ordenador vuelva a estar en línea",
+        "offlineCompleteRejectedDirty": "«{{title}}» volvió a Pendientes: hay cambios sin confirmar en el worktree que requieren confirmación antes de archivar.",
+        "offlineCompleteRejectedNewActivity": "«{{title}}» volvió a Pendientes: hubo nueva actividad en su ordenador mientras estaba sin conexión.",
+        "offlineCompleteRejectedRunning": "«{{title}}» volvió a Pendientes: la tarea está en ejecución.",
+        "offlineCompleteRejectedAttached": "«{{title}}» volvió a Pendientes: la tarea está conectada o compartida y no se archivó automáticamente.",
+        "offlineCompleteRejectedPreflight": "«{{title}}» volvió a Pendientes: no se pudo verificar el estado del worktree antes de archivar."
       },
       "taskListMode": {
         "heading": "Modo de tareas",
@@ -17691,6 +17833,13 @@
         "inbox": "Bandeja de entrada",
         "enterInbox": "Cambiar al modo bandeja de entrada",
         "leaveInbox": "Cambiar al modo lista de tareas"
+      },
+      "filterHideTaskCreated": "Ocultar tareas creadas por otras tareas",
+      "origin": {
+        "createdByTask": "Abierta por otra tarea",
+        "createdByTaskNamed": "Abierta por la tarea «{{title}}»",
+        "createdByRemoteTask": "Abierta por una tarea en {{device}}",
+        "createdByRemoteTaskNamed": "Abierta por «{{title}}» en {{device}}"
       }
     },
     "rename": {
@@ -17711,7 +17860,9 @@
       "orcaRemoteLead": "Colaboración desde {{device}}",
       "orcaRemoteLeadReleased": "Colaboración finalizada · desde {{device}}",
       "orcaRemoteLeadUnknownDevice": "otra computadora",
-      "orcaRemoteLeadTip": "Un Worker de «{{lead}}» en {{device}}. Su tarea, carpeta y comandos se ejecutan en esta computadora. Los mensajes que envíes aquí no se comunican al Lead."
+      "orcaRemoteLeadTip": "Un Worker de «{{lead}}» en {{device}}. Su tarea, carpeta y comandos se ejecutan en esta computadora. Los mensajes que envíes aquí no se comunican al Lead.",
+      "createdByTask": "Desde otra tarea",
+      "createdByTaskNamed": "Desde «{{title}}»"
     },
     "gitContext": {
       "detached": "HEAD separado",
@@ -17915,8 +18066,8 @@
           }
         },
         "gitlab": {
-          "missing": "No se encontró GitLab CLI (glab). Instala glab e inicia sesión para ver el estado de las MR.",
-          "notLoggedIn": "El glab local no ha iniciado sesión en {{host}}. Ejecuta glab auth login en una terminal para ver el estado de las MR.",
+          "missing": "No se encontró GitLab CLI (glab) y el complemento de GitLab no tiene conexión con esta instancia. Instala glab e inicia sesión, o añade la instancia en el complemento de GitLab, para ver el estado de las MR.",
+          "notLoggedIn": "El glab local no ha iniciado sesión en {{host}} y el complemento de GitLab no tiene conexión con ella. Ejecuta glab auth login en una terminal, o añade la instancia en el complemento de GitLab, para ver el estado de las MR.",
           "unsupported": "Esta computadora aún no admite el estado de MR de GitLab",
           "openAria": "Abrir MR !{{number}} en el navegador",
           "summaryAria": "Resumen de MR !{{number}}",
@@ -18145,6 +18296,13 @@
         "active": "{{count}} filtros",
         "reset": "Restablecer",
         "allProjects": "Todos los proyectos"
+      },
+      "match": {
+        "label": "Palabras clave",
+        "any": "Cualquier palabra",
+        "all": "Todas las palabras",
+        "help": "Elige todas las palabras clave y sepáralas con espacios para exigirlas en un mismo mensaje. Usa “frase exacta” para texto consecutivo. Los títulos se comparan por separado.",
+        "partial": "Los resultados pueden estar incompletos. Usa palabras más específicas o limita la búsqueda a un proyecto."
       }
     }
   },
@@ -18345,7 +18503,8 @@
         "pause": "Pausar",
         "deleteAutomation": "Eliminar automatización"
       },
-      "tagWebhook": "Webhook"
+      "tagWebhook": "Webhook",
+      "tagPluginEvent": "Evento de complemento"
     },
     "detail": {
       "manualTrigger": "Activación manual",
@@ -18454,7 +18613,7 @@
           "sessions_dispatch": "Enviar sesiones",
           "feishu_read": "Leer mensajes de Feishu",
           "settings_read": "Leer miembros con acceso compartido",
-          "usage_read": "Leer el uso y el estado de los grupos de proveedores"
+          "usage_read": "Leer el uso y el estado de los grupos de equipos"
         },
         "project": "Directorio del proyecto",
         "capabilitiesLabel": "Capacidades permitidas",
@@ -18468,7 +18627,7 @@
           "sessions_dispatch": "Crear o reactivar sesiones de {{appName}} y entregar mensajes",
           "feishu_read": "Listar chats con actividad reciente; obtener mensajes recientes de un chat (grupal o directo)",
           "settings_read": "Lee los miembros con los que compartes y sus modelos permitidos en este equipo u otros equipos autorizados de la misma cuenta; no realiza cambios",
-          "usage_read": "Lee los ID, planes, períodos de cuota y horas de actualización de las cuentas locales de Claude/Codex conectadas a tu cuenta de Cindy. Lee el uso diario y por modelo registrado, los costes estimados, la configuración y el estado de los grupos de proveedores y los ID, nombres y avatares visibles de miembros y dispositivos, tanto en este equipo como en otros equipos autorizados de la misma cuenta. No permite leer correos de inicio de sesión de las suscripciones, directorios de cuentas, huellas de identidad internas, credenciales ni archivos, ni modificar cuentas o ajustes."
+          "usage_read": "Lee los ID, planes, períodos de cuota y horas de actualización de las cuentas locales de Claude/Codex conectadas a tu cuenta de Cindy. Lee el uso diario y por modelo registrado, los costes estimados, la configuración y el estado de los grupos de equipos y los ID, nombres y avatares visibles de miembros y dispositivos, tanto en este equipo como en otros equipos autorizados de la misma cuenta. No permite leer correos de inicio de sesión de las suscripciones, directorios de cuentas, huellas de identidad internas, credenciales ni archivos, ni modificar cuentas o ajustes."
         },
         "capabilityWarn": {
           "ghostMissing": "Requiere el complemento \"{{name}}\", que no está instalado; esta capacidad fallará al ejecutarse",
@@ -18686,11 +18845,123 @@
         "cindyConnectionTitle": "GitHub · Conexión mediante Cindy",
         "manualConnectionTitle": "GitHub · Webhook manual",
         "githubAppHint": "Conecta GitHub App en el ordenador que ejecuta esta tarea y autoriza estos repositorios. No se necesita una URL de Webhook ni un secreto aparte.",
-        "githubAppPaused": "Esta tarea está en pausa. Los eventos no la iniciarán."
+        "githubAppPaused": "Esta tarea está en pausa. Los eventos no la iniciarán.",
+        "plugin": {
+          "source": "Eventos de complementos",
+          "label": "Complementos y eventos",
+          "empty": "Ningún complemento de este ordenador ofrece eventos todavía. Instala y activa un complemento que declare eventos para elegirlo aquí.",
+          "unavailable": "Complemento no disponible",
+          "remove": "Quitar",
+          "hint": "Los complementos no filtran ningún evento por ti, ni siquiera los mensajes que envía esta automatización. Indica qué atender en el prompt o en una comprobación previa. Los eventos se pierden mientras el ordenador está suspendido o apagado, o el complemento está desactivado.",
+          "offlineHint": "Los eventos se pierden mientras el ordenador está suspendido o apagado, o el complemento está desactivado. Si no puede perderse ninguno, añade también una comprobación programada.",
+          "required": "Elige al menos un evento de complemento",
+          "state": {
+            "listening": "Escuchando",
+            "disconnected": "Desconectado",
+            "error": "Error de conexión",
+            "stopped": "Sin ejecutar",
+            "unknown": "Esperando el estado del complemento"
+          },
+          "filterOnly": "Solo",
+          "filterField": "Campo",
+          "filterOperator": "Condición",
+          "filterValue": "Valor",
+          "filterRemove": "Quitar condición",
+          "filterAdd": "Añadir condición «solo»",
+          "operators": {
+            "equals": "es igual a",
+            "contains": "contiene",
+            "not-equals": "no es igual a"
+          }
+        },
+        "scopeLabel": "Alcance",
+        "scope": {
+          "repository": "Todo el repositorio",
+          "repositoryHint": "Se ejecuta con nuevos eventos del repositorio, como pull requests, comentarios o CI terminada.",
+          "repositoryNeedsAccount": "Inicia sesión en una cuenta de Cindy para recibir eventos del repositorio.",
+          "item": "Pull request o issue concreto",
+          "itemHint": "Vigila un pull request o un issue: el pull request se ejecuta cuando su estado cambia de verdad; el issue, con nueva actividad.",
+          "project": "Todo el proyecto",
+          "projectHint": "Se ejecuta con nuevos eventos del proyecto, como merge requests, issues o pipelines terminados.",
+          "gitlabItem": "Merge request o issue concreto",
+          "gitlabItemHint": "Vigila un merge request o issue: el merge request se ejecuta cuando su estado cambia de verdad; el issue, cuando cambia."
+        },
+        "item": {
+          "label": "Pull request o issue",
+          "placeholder": "42, #42, owner/repo#42 o un enlace",
+          "hint": "Escribe un número, owner/repo#número o pega un enlace. Cindy detecta de cuál se trata.",
+          "resolving": "Identificando…",
+          "pr": "Pull request #{{number}}",
+          "issue": "Issue #{{number}}",
+          "closed": "Cerrado",
+          "required": "Escribe el pull request o issue y espera a que se identifique.",
+          "issueHint": "Un issue concreto recibe eventos mediante la GitHub App conectada desde Cindy, lo que requiere una cuenta de Cindy.",
+          "errors": {
+            "invalid": "Escribe un número, #número, owner/repo#número o un enlace de GitHub a un pull request o issue.",
+            "no-repository": "Un número solo necesita el repositorio. Escribe owner/repo#42 o pega un enlace.",
+            "not-connected": "Conecta GitHub para saber si es un pull request o un issue.",
+            "not-found": "No se encontró ese número en el repositorio o no tienes acceso.",
+            "unavailable": "No se puede conectar con GitHub ahora. Inténtalo más tarde.",
+            "needs-account": "Es un issue. Un issue concreto requiere una cuenta de Cindy y GitHub conectado desde Cindy."
+          },
+          "issueChange": {
+            "any": "Actividad del issue",
+            "comment": "Nuevo comentario",
+            "closed": "Issue cerrado",
+            "reopened": "Issue reabierto"
+          },
+          "mr": "Merge request !{{number}}"
+        },
+        "gitlabSignedConnection": "Token de firma (GitLab 19+)",
+        "gitlabSignedConnectionHint": "Usa un token de firma en la configuración de webhooks del proyecto de GitLab para más seguridad.",
+        "gitlabTokenConnection": "Secret token",
+        "gitlabTokenConnectionHint": "Para versiones anteriores de GitLab: introduce un secret token en la configuración del webhook.",
+        "gitlabPluginConnection": "Mediante el complemento de GitLab",
+        "gitlabPluginConnectionHint": "Comprueba cada minuto con la cuenta conectada en el complemento de GitLab. No necesita webhook de GitLab ni cuenta de Cindy. Los cambios mientras este ordenador está en reposo o apagado no se entregan después.",
+        "gitlabMrPollConnection": "Comprobar estado periódicamente",
+        "gitlabMrPollConnectionHint": "Lee el estado de la solicitud de fusión según «Comprobar también con horario» (sin ejecutar la tarea), priorizando la cuenta del complemento de GitLab y usando glab local como alternativa.",
+        "gitlabSetupHint": "Después de guardar, copia la dirección y el secreto de los detalles de la tarea en el proyecto de GitLab, en Configuración › Webhooks.",
+        "gitlabItem": {
+          "label": "Merge request o issue",
+          "placeholder": "!12, #12, group/project!12 o un enlace",
+          "hint": "Escribe !número para un merge request, #número para un issue, o pega un enlace.",
+          "required": "Escribe el merge request o issue que quieres vigilar.",
+          "mrHint": "GitLab no envía notificaciones. Cindy lee el estado según «Comprobar también de forma programada» (sin ejecutar la tarea), con glab en este ordenador o con la cuenta conectada en el complemento de GitLab.",
+          "mrPluginHint": "El complemento de GitLab comprueba esta solicitud de fusión cada minuto, incluidos nuevos commits, comentarios, aprobaciones y resultados de pipelines.",
+          "issueHint": "Los cambios de este issue llegan por un webhook de GitLab. Los eventos de comentario no distinguen merge requests de issues, así que solo cuentan crear, editar, cerrar y reabrir el issue.",
+          "issuePluginHint": "El complemento de GitLab comprueba este issue cada minuto, incluidos los comentarios nuevos.",
+          "errors": {
+            "invalid": "Escribe !número, #número, group/project!número o un enlace de GitLab.",
+            "ambiguous": "GitLab numera por separado merge requests e issues. Escribe !12 (merge request) o #12 (issue), o pega un enlace.",
+            "needs-link": "Un merge request concreto necesita su instancia de GitLab. Pega el enlace.",
+            "needs-account": "Esto es un issue. Un issue concreto de GitLab necesita el complemento de GitLab o una cuenta de Cindy para recibir webhooks de GitLab."
+          },
+          "mrChange": {
+            "any": "Actividad del merge request",
+            "merged": "Fusionado",
+            "review": "Actividad de revisión",
+            "ci": "Cambia el estado del pipeline"
+          },
+          "issueChange": {
+            "any": "El issue cambia",
+            "comment": "Nuevo comentario en el issue",
+            "closed": "Issue cerrado",
+            "reopened": "Issue reabierto"
+          }
+        },
+        "gitlabPlugin": {
+          "projectLabel": "Proyecto",
+          "projectHint": "Escribe group/project o un enlace del proyecto. Pega un enlace si el complemento de GitLab está conectado a varias instancias.",
+          "projectInvalid": "Escribe group/project o un enlace https del proyecto.",
+          "eventsLabel": "Eventos",
+          "eventsHint": "Si no marcas ninguno, responde a todos los eventos de este proyecto.",
+          "unavailable": "El complemento de GitLab no está instalado o está desactivado. Actívalo en Complementos y vuelve a guardar."
+        }
       },
       "trigger": {
         "label": "Modo de activación",
-        "timed": "Programado"
+        "timed": "Programado",
+        "event": "Evento"
       },
       "runSettings": "Ajustes de ejecución"
     },
@@ -18769,7 +19040,7 @@
         "categoryListAria": "Modelos de {{category}}",
         "effortListAria": "Intensidad de razonamiento",
         "boundLocationLocked": "Las tareas vinculadas siguen ejecutándose donde están. Elige un modelo de esa computadora.",
-        "modelGroupTitle": "Grupo de modelos «{{name}}»: elige una fuente al crear una tarea nueva"
+        "modelGroupTitle": "Enrutamiento inteligente «{{name}}»: elige una fuente cuando una ejecución inicia una tarea nueva"
       }
     },
     "toast": {
@@ -18981,7 +19252,8 @@
         "reconnectConfirm": "¿Reconectar Webhook?",
         "reconnectConfirmHint": "Se usará una plaza y se creará una nueva dirección de recepción. Actualiza la dirección y el secreto en el remitente.",
         "reconnectFailed": "No se pudo reconectar. Comprueba las plazas disponibles antes de intentarlo de nuevo."
-      }
+      },
+      "pluginTitle": "Activador por evento de complemento"
     }
   },
   "issueTracker": {
@@ -19427,6 +19699,7 @@
     }
   },
   "commandPalette": {
+    "buddyNewHint": "En los ajustes del amigo, elige «{{restart}}» para reconstruir el contexto de trabajo y conservar el historial de mensajes. Para hablar de algo por separado, elige «{{startTopic}}» en las acciones de un mensaje.",
     "viewSkillDetails": "Ver detalles de la habilidad",
     "projectSkillNotLoaded": "Esta tarea de Pi no ha cargado esta habilidad del proyecto. Las tareas nuevas intentarán cargarla automáticamente.",
     "pluginSkillSetup": {
@@ -20229,6 +20502,9 @@
       "permissionTightenInterruptFailed": "No se pudo detener la tarea en ejecución al restringir los permisos; podría seguir ejecutándose sin solicitar aprobación hasta que termine. Detenla manualmente si es necesario.",
       "codexAutoReviewUnavailable": "La revisión automática no está disponible temporalmente. Se bloqueó la acción actual y los permisos cambiaron a Predeterminado. Reintenta la solicitud; Cindy te preguntará cuando sea necesario.",
       "hostShellCommandBlocked": "Cindy bloqueó este comando de shell. Revisa el comando y usa una herramienta o un comando disponible para continuar.",
+      "reconnectAutoResumeExhausted": "Se alcanzó el límite de reintentos automáticos.",
+      "reconnectAutoResumeDisabled": "La continuación automática está desactivada.",
+      "codexReconnectStalled": "No se pudo restablecer la conexión con el modelo en 2 minutos.",
       "upstreamResponseIdleTimeout": "El modelo dejó de responder durante mucho tiempo, por lo que se interrumpió este turno para evitar un bloqueo indefinido. Las llamadas a herramientas completadas se conservan; envía el siguiente mensaje para continuar.",
       "codexHistoryOversized": "El historial de imágenes es demasiado grande para reanudar automáticamente. Envía “Continuar” y Cindy retomará la tarea actual.",
       "codexHistoryOversizedRemote": "El historial de esta tarea incluye imágenes demasiado grandes, por lo que la compactación remota no puede completarse. Abre la tarea en el equipo que ejecuta Codex y envía el mensaje de nuevo; Cindy omitirá esas imágenes allí.",
@@ -21291,7 +21567,7 @@
   "routines": {
     "hourly": "Cada hora",
     "everyMinutes": "Cada {{count}} minutos",
-    "pluginCapability": "Publica los eventos declarados en tus rutinas. Solo pueden ejecutarse las rutinas que configures.",
+    "pluginCapability": "Publica los eventos declarados para las automatizaciones. Solo pueden ejecutarse las automatizaciones que eligieron este complemento.",
     "advancedSettings": "Configuraciones avanzadas"
   },
   "cindyMakeDoctor": {
@@ -22944,9 +23220,6 @@
     "lineNumbers": "Números de línea"
   },
   "openAiAccountGroup": {
-    "strategy": "Estrategia del grupo de cuentas",
-    "leastHint": "Priorizar la conexión con menos tareas en ejecución",
-    "quotaHint": "Si se puede consultar el uso de las suscripciones, Cindy filtra las conexiones por uso antes de aplicar la estrategia del grupo.",
     "removeDescription": "Esta conexión dejará de recibir tareas nuevas del grupo. Las tareas en curso continuarán en esta conexión.",
     "mergeDescription": "Las tareas nuevas que se inicien en {{target}} podrán usar ambos proveedores. Las sesiones iniciadas, las claves y las tareas existentes se mantienen. Cindy probará la clave API de {{apiKey}} antes de vincular los proveedores.",
     "modelUnavailable": "Esta conexión no puede usar el modelo elegido para la prueba. Puedes probar de nuevo con otro candidato.",
@@ -23002,6 +23275,30 @@
     "loginMayHaveExpired": "El inicio de sesión puede haber vencido",
     "loginExpiryUnknown": "Vencimiento del inicio de sesión desconocido",
     "loginExpiryDetail": "Vencimiento estimado: {{date}}. Es una estimación de Claude; el inicio de sesión puede vencer antes.",
+    "longLivedToken": {
+      "tag": "Token de larga duración",
+      "use": "Usar un token de larga duración (alrededor de un año)",
+      "renew": "Crear un nuevo token de larga duración",
+      "remove": "Dejar de usar el token de larga duración",
+      "confirmTitle": "¿Usar un token de larga duración para {{name}}?",
+      "confirmDescription": "El navegador abrirá la página de autorización de Claude. Elige allí esta misma cuenta. El token dura alrededor de un año y se guarda en este ordenador, así que las tareas siguen ejecutándose cuando termina el inicio de sesión normal.",
+      "confirmAction": "Continuar en el navegador",
+      "removeTitle": "¿Dejar de usar el token de larga duración de {{name}}?",
+      "removeDescription": "El token se elimina de este ordenador y la cuenta vuelve a su inicio de sesión normal. El token sigue siendo válido en Anthropic hasta que caduque.",
+      "removeAction": "Dejar de usar",
+      "expiresInDays": "El token caduca en unos {{days}} días",
+      "mayHaveExpired": "Es posible que el token haya caducado",
+      "active": "Funciona con un token de larga duración",
+      "detailExpiry": "Caducidad estimada: {{date}}.",
+      "detailLoginActive": "El inicio de sesión normal sigue activo, así que la cuenta y su uso se leen en directo.",
+      "detailLoginEnded": "El inicio de sesión normal ha terminado. El uso se actualiza cuando se ejecutan tareas; vuelve a iniciar sesión para actualizarlo en cualquier momento.",
+      "detailPending": "Aún no se ha comprobado que el token pertenezca a esta cuenta. Se comprobará cuando se ejecute su primera tarea.",
+      "detailSettingsOnly": "En este ordenador, una vez terminado el inicio de sesión normal, el token no puede usarse en tareas ejecutadas para otro ordenador ni en amigos aislados.",
+      "mismatchStatus": "El token pertenece a otra cuenta",
+      "needsLogin": "Inicia sesión primero en esta cuenta y después crea su token de larga duración.",
+      "notPermitted": "Tu organización no permite los tokens de larga duración.",
+      "unsupported": "Esta cuenta no puede usar un token de larga duración en este ordenador."
+    },
     "loginAccountAria": "Volver a iniciar sesión en {{name}}",
     "loginIdentityMismatchStatus": "La cuenta no coincide",
     "loginIdentityMismatch": "Has iniciado sesión en otra cuenta. Vuelve a iniciar sesión y elige la cuenta que aparece en esta fila.",
@@ -23018,7 +23315,6 @@
       "useCodex": "Iniciar sesión con Codex"
     },
     "title": "Cuentas de suscripción",
-    "strategy": "Equilibrio de carga",
     "add": "Añadir cuenta",
     "defaultTag": "Predeterminada",
     "ready": "Conectada",
@@ -23093,21 +23389,21 @@
     "refreshFailed": "El tema se ha instalado, pero no se pudo actualizar la lista. Actualízala en los ajustes de apariencia."
   },
   "modelGroups": {
-    "title": "Grupos de modelos",
-    "description": "Combina varias fuentes que ya tienes en Proveedores en una sola opción. Elígela en «Grupos de modelos» del selector de modelos y Cindy decide qué fuente usar cada vez.",
-    "routes": "Modos",
-    "routesDescription": "Un modo contiene varias fuentes. Cada tarea nueva elige una según la regla del modo.",
+    "title": "Enrutamiento inteligente",
+    "description": "Combina fuentes que ya tienes en Proveedores de modelos en una sola opción. Elígela en «Enrutamiento inteligente» del selector de modelos y Cindy decide qué fuente usar.",
+    "routes": "Rutas",
+    "routesDescription": "Combina varias fuentes en una sola opción. Una fuente puede ser un proveedor completo (elige un modelo como siempre y la ruta decide cuál lo ejecuta) o un modelo concreto. Los proveedores de la misma marca se combinan automáticamente.",
     "sourceCount_one": "{{count}} fuente",
     "sourceCount_many": "{{count}} fuentes",
     "sourceCount_other": "{{count}} fuentes",
     "strategy": {
       "expiring": {
-        "title": "Primero lo que caduca",
+        "title": "Automático",
         "hint": "Usa primero la cuota de suscripción que más sobra y que está a punto de restablecerse, para no desperdiciarla. Las fuentes sin cuota legible van después."
       },
       "order": {
         "title": "En orden",
-        "hint": "Pasa a la siguiente fuente solo cuando la anterior no se puede usar."
+        "hint": "Pasa a la siguiente fuente solo cuando la de arriba no se puede usar."
       },
       "rotate": {
         "title": "Por turnos",
@@ -23131,12 +23427,17 @@
       }
     },
     "picker": {
-      "empty": "Aún no hay grupos de modelos. Combina varias fuentes en un modo en Ajustes para elegirlo aquí.",
-      "manage": "Gestionar grupos de modelos",
-      "deviceTitle": "Grupos de modelos · {{device}}",
+      "empty": "Aún no hay enrutamiento inteligente. Combina varias fuentes en una ruta en Ajustes para elegirla aquí.",
+      "manage": "Gestionar enrutamiento inteligente",
+      "deviceTitle": "Enrutamiento inteligente · {{device}}",
       "switched": "«{{name}}» cambió esta tarea a {{model}}",
       "switchUnavailable": "«{{name}}» no tiene ahora ninguna fuente que esta tarea pueda usar. No se cambió el modelo.",
-      "chooseUnavailable": "«{{name}}» no tiene ahora ninguna fuente utilizable, así que no se seleccionó."
+      "chooseUnavailable": "«{{name}}» no tiene ahora ninguna fuente utilizable, así que no se seleccionó.",
+      "mergedLabel_many": "{{name}} · ruta ({{count}} fuentes)",
+      "mergedLabel_one": "{{name}} · ruta ({{count}} fuente)",
+      "mergedLabel_other": "{{name}} · ruta ({{count}} fuentes)",
+      "routeDecides": "La ruta «{{name}}» decide qué fuente usa esta tarea",
+      "quotaOf": "Cuota: {{name}}"
     },
     "why": {
       "expiringQuota": "Le queda un {{left}}% de cuota y se restablece el {{reset}}, así que va primero",
@@ -23148,7 +23449,7 @@
       "soonestUntil": "Todas las fuentes agotaron su cuota; esta se recupera antes ({{reset}})",
       "standby": "Esta vez no le toca",
       "standbyQuota": "Le queda un {{left}}% de cuota y no se restablece hasta el {{reset}}, así que se reserva",
-      "off": "Desactivada en este modo",
+      "off": "Desactivada en esta ruta",
       "unavailable": "Sin conexión, o este modelo no se puede elegir ahora",
       "limited": "Cuota agotada",
       "limitedUntil": "Cuota agotada hasta el {{reset}}",
@@ -23163,23 +23464,24 @@
       "noVision": "El mensaje tiene imágenes y esta fuente no puede verlas",
       "exceptionImage": "El mensaje tiene imágenes, así que solo se consideraron las fuentes que pueden verlas",
       "exceptionImageFallback": "El mensaje tiene imágenes, pero ninguna fuente puede verlas, así que se eligió como siempre",
-      "exceptionHours": "En este horario usa «{{name}}»",
+      "exceptionHours": "En este horario usa «{{name}}» en su lugar",
       "separator": "; "
     },
     "settings": {
       "autoSwitch": {
-        "title": "Cambiar de fuente automáticamente si falla",
-        "hint": "Cuando falla la fuente que usa este modo, pasar a la siguiente disponible y anotarlo bajo ese turno. Si está desactivado, solo se propone el cambio en el error."
+        "title": "Cambiar de fuente automáticamente si una falla",
+        "hint": "Cuando falla la fuente que usa esta ruta, pasar a la siguiente disponible y anotarlo bajo ese turno. Si está desactivado, solo se propone el cambio en el error."
       },
-      "newRoute": "Nuevo modo",
-      "newRouteName": "Nuevo modo",
-      "routesEmpty": "Aún no hay modos. Crea uno y añade varias fuentes.",
-      "scopeNote": "Los grupos de modelos se aplican a las tareas de este ordenador. Una tarea nueva elige una fuente al empezar. Si eliges uno en una tarea en curso, cambia una vez en ese momento y después no cambia por sí sola.",
-      "back": "Volver a grupos de modelos",
+      "newRoute": "Nueva ruta",
+      "newRouteName": "Nueva ruta",
+      "routesEmpty": "Aún no hay rutas. Crea una y añade varias fuentes.",
+      "scopeNote": "El enrutamiento inteligente se aplica a las tareas de este ordenador. Una tarea nueva elige una fuente al empezar. Si eliges una ruta en una tarea en curso, cambia una vez en ese momento y después no cambia por sí sola.",
+      "back": "Volver al enrutamiento inteligente",
       "name": "Nombre",
       "nameHint": "Se muestra en el selector de modelos.",
-      "routeShownAs": "Se muestra en «Grupos de modelos» del selector de modelos.",
+      "routeShownAs": "Se muestra en «Enrutamiento inteligente» del selector de modelos.",
       "pick": "Cuál usar",
+      "moreStrategies": "Más opciones",
       "effort": "Intensidad de razonamiento",
       "effortUnset": "Sin especificar",
       "effortHint": "Si el modelo elegido no admite este nivel, se ejecuta con su valor predeterminado.",
@@ -23189,14 +23491,15 @@
       "sources": "Fuentes que puede usar",
       "sourcesHint": "Puede haber modelos distintos. La tarea indica cuál se usó.",
       "sourcesEmpty": "Aún no hay fuentes. Añade abajo un modelo conectado.",
-      "sourcesFull": "Un modo admite hasta {{count}} fuentes.",
+      "sourcesEmptyMerged": "Aún no hay fuentes. Añade abajo un proveedor conectado.",
+      "sourcesFull": "Una ruta admite hasta {{count}} fuentes.",
       "addSource": "Añadir fuente",
       "chooseModel": "Elegir un modelo",
       "notConnected": "Sin conexión",
       "moveUp": "Subir",
       "moveDown": "Bajar",
-      "remove": "Quitar de este modo",
-      "useSource": "Permitir que este modo use {{name}}",
+      "remove": "Quitar de esta ruta",
+      "useSource": "Permitir que esta ruta use {{name}}",
       "try": {
         "title": "Probar",
         "hint": "Mira qué fuente usaría ahora una tarea nueva. No se envía nada ni se gasta cuota.",
@@ -23204,11 +23507,14 @@
         "picked": "Usar esta",
         "standby": "En reserva",
         "skipped": "Omitida",
-        "unavailable": "Ninguna fuente de este modo se puede usar ahora. Una tarea nueva usará el modelo que tenías seleccionado."
+        "unavailable": "Ninguna fuente de esta ruta se puede usar ahora. Una tarea nueva usará el modelo que tenías seleccionado.",
+        "failed": "No se pudo hacer la prueba. Inténtalo de nuevo.",
+        "model": "Modelo que probar"
       },
-      "deleteRoute": "Eliminar este modo",
+      "deleteRoute": "Eliminar esta ruta",
       "deleteRouteConfirmTitle": "¿Eliminar «{{name}}»?",
-      "deleteRouteConfirmDescription": "Las excepciones por horario de otros modos que cambian a él también se eliminan. Las tareas ya iniciadas no se ven afectadas.",
+      "deleteRouteConfirmDescription": "Las excepciones por horario de otras rutas que cambian a ella también se eliminan. Las tareas ya iniciadas no se ven afectadas.",
+      "deleteMergedRouteConfirmDescription": "Las tareas ya iniciadas no se ven afectadas.",
       "delete": "Eliminar",
       "cancel": "Cancelar",
       "saveFailed": "No se pudo guardar. Inténtalo de nuevo.",
@@ -23217,8 +23523,8 @@
         "hint": "Se comprueban antes de la regla de elección, de arriba abajo.",
         "empty": "Aún no hay excepciones. Cada tarea nueva usa la regla de elección de arriba.",
         "imageRule": "Cuando el mensaje tenga imágenes, usar solo fuentes que puedan verlas",
-        "hoursRule": "{{from}}–{{to}}: usar «{{name}}»",
-        "hoursRuleDays": "{{days}} {{from}}–{{to}}: usar «{{name}}»",
+        "hoursRule": "{{from}}–{{to}}: usar «{{name}}» en su lugar",
+        "hoursRuleDays": "{{days}} {{from}}–{{to}}: usar «{{name}}» en su lugar",
         "remove": "Quitar esta excepción",
         "add": "Añadir una excepción",
         "choose": "Elegir una situación",
@@ -23233,23 +23539,78 @@
         "addHours": "Añadir",
         "sameHour": "El inicio y el fin no pueden ser la misma hora.",
         "full": "Hasta {{count}} excepciones.",
-        "needOtherRoute": "Crea otro modo para poder cambiar a él por horario."
+        "needOtherRoute": "Crea otra ruta para poder cambiar a ella por horario."
       }
     },
     "overview": {
       "mapTitle": "Cómo eligen modelo las tareas nuevas",
-      "mapDescription": "De izquierda a derecha: el modo que sigue y la fuente a la que llega. Haz clic en un modo para cambiarlo.",
+      "mapDescription": "De izquierda a derecha: la ruta que sigue una tarea nueva y la fuente a la que llega. Haz clic en una ruta para cambiarla.",
       "columnSources": "Fuentes",
       "columnEmpty": "Aún no hay",
-      "openRoute": "Abrir el modo «{{name}}»",
+      "openRoute": "Abrir la ruta «{{name}}»",
       "recentTitle": "Elecciones recientes",
-      "recentEmpty": "Ninguna tarea ha usado aún un modo.",
-      "keptOriginal": "No había ningún modelo disponible, así que la tarea usó el modelo que habías elegido.",
+      "recentEmpty": "Ninguna tarea ha usado aún una ruta.",
+      "keptOriginal": "No había nada disponible en ella, así que la tarea mantuvo el modelo que habías elegido.",
       "keptOriginalShort": "Se mantuvo tu modelo",
       "latest": "El camino que siguió la última tarea"
     },
     "switchOffer": {
       "action": "Continuar con {{model}}"
+    },
+    "auto": {
+      "accounts_one": "{{count}} cuenta",
+      "accounts_many": "{{count}} cuentas",
+      "accounts_other": "{{count}} cuentas",
+      "computers_one": "{{count}} ordenador",
+      "computers_many": "{{count}} ordenadores",
+      "computers_other": "{{count}} ordenadores",
+      "pickFor": "Estrategia de {{name}}",
+      "hiddenTag": "Oculto",
+      "show": "Mostrar en el selector de modelos",
+      "assignedBy": "Las tareas nuevas se asignan según «{{strategy}}»",
+      "adjust": "Ajustar en Enrutamiento inteligente"
+    },
+    "sources": {
+      "models_one": "{{count}} modelo",
+      "models_many": "{{count}} modelos",
+      "models_other": "{{count}} modelos",
+      "autoTag": "Automático",
+      "chooseProvider": "Elegir proveedor",
+      "removeAria": "Quitar {{name}} de esta ruta",
+      "note": "Las rutas automáticas siguen tus proveedores conectados. No se pueden añadir ni quitar miembros, pero puedes reordenarlos, asignar pesos, desactivar uno, cambiar la estrategia u ocultar la ruta.",
+      "providers_one": "{{count}} proveedor",
+      "providers_many": "{{count}} proveedores",
+      "providers_other": "{{count}} proveedores",
+      "addWhole": "Añadir un proveedor completo",
+      "addWholeHint": "Todos sus modelos entran en esta ruta. En el selector de modelos, la ruta funciona como un proveedor: elige el modelo como siempre y la ruta decide qué miembro lo ejecuta.",
+      "addModelHint": "Añade un modelo de un proveedor. Al elegir esta ruta se escoge una de estas fuentes según su estrategia.",
+      "detailHint": "Esta ruta combina proveedores completos. En el selector de modelos funciona como un proveedor: elige modelo e intensidad de razonamiento como siempre y la ruta decide qué miembro lo ejecuta."
+    },
+    "kinds": {
+      "byModel": "Por modelo",
+      "byProvider": "Por proveedor"
+    },
+    "buddies": {
+      "title": "Modelos de los amigos",
+      "description": "Los amigos comparten un modelo predeterminado; da a uno su propio modelo solo si necesita algo distinto. Para que cambie de fuente cuando algo falle, elige un enrutamiento inteligente.",
+      "saveFailed": "No se guardó el modelo del amigo. Inténtalo de nuevo.",
+      "defaultLabel": "Modelo predeterminado",
+      "defaultHint": "Todos los amigos lo usan salvo que se indique otra cosa, incluidos los nuevos y los que se traen de otra computadora.",
+      "ownTitle": "Amigos con su propio modelo",
+      "ownTitleWithRest_many": "Amigos con su propio modelo · {{count}} más usan el predeterminado",
+      "ownTitleWithRest_one": "Amigos con su propio modelo · {{count}} más usa el predeterminado",
+      "ownTitleWithRest_other": "Amigos con su propio modelo · {{count}} más usan el predeterminado",
+      "addOwn": "Dar a un amigo su propio modelo",
+      "allFollow": "Todos los amigos usan el modelo predeterminado.",
+      "otherComputers": "Amigos en otras computadoras",
+      "deviceBuddies_many": "{{count}} amigos",
+      "deviceBuddies_one": "{{count}} amigo",
+      "deviceBuddies_other": "{{count}} amigos",
+      "devicePageTitle": "Amigos en {{device}}",
+      "devicePageHint": "Elige entre los modelos y enrutamientos inteligentes que puede usar esa computadora. Se guarda allí.",
+      "deviceDefaultReadOnly": "Actualiza esa computadora para cambiar aquí su modelo predeterminado.",
+      "deviceUnavailable": "Ahora no se pueden leer los ajustes de amigos de esa computadora. Comprueba que esté en línea y vuelve a abrirlo.",
+      "deviceLoading": "Leyendo los ajustes de esa computadora…"
     }
   },
   "projectSettings": {

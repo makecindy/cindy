@@ -14,11 +14,12 @@ import { createChatInviteShares } from './chatInviteShare';
 import { cacheChatRoster, forgetRemoteResource, hideCachedChatRooms, markRemoteResourceRead, peekCachedChatRoster, readCachedChatRoster } from '@/device-link/remoteResourceCache';
 import { useRemoteSyncCoordinator } from '@/device-link/remoteSyncTask';
 import type { BotGroupChatState } from '@/session/useBotGroupChat';
-import { chatAccessLost, chatCursor, chatGroupView, chatThreadMetadata, chatHttpsUrl, chatRoomRow, chatReadAt, chatReadSequence, chatLastReplyAt, chatLastReplySequence, createChatServerClient, type ChatAccountIdentity, type ChatActor, type ChatPage, type ChatRequest, type ChatSnapshot } from './chatServerClient';
+import { chatAccessLost, chatCursor, chatGroupView, chatThreadMetadata, chatHttpsUrl, chatRoomRow, chatReadAt, chatReadSequence, chatLastReplyAt, chatLastReplySequence, createChatServerClient, type ChatAccountIdentity, type ChatActor, type ChatMessage, type ThreadBackfill, type ChatPage, type ChatRequest, type ChatSnapshot } from './chatServerClient';
 import { subscribeChatServer } from './chatServerSubscription';
 import { createChatHistory, type ChatHistory } from '@cindy/maker-shared/chat-history';
 import { createMobileChatHistoryStore, mobileChatHistoryStoreEpoch } from './chatHistoryStore';
 import { cacheChatMessages, flushChatMessageCache, forgetChatMessages, peekChatMessages, readChatMessages, subscribeChatInvalidation } from './chatMessageCache';
+import { clearChatServerMediaCache, forgetChatServerMediaRoom } from './chatServerMediaCache';
 import { useJsonSnapshotState } from '@/utils/useStableValue';
 import { createChatServerUpload } from './chatServerUpload';
 import { uploadPublicAvatar } from './publicAvatarUpload';
@@ -223,7 +224,9 @@ export function useChatServerRoster(enabled: boolean) {
               rows.push(chatRoomRow(room, value, self, activity));
             }
           } catch (error) {
-            if (!chatAccessLost(error)) {
+            if (chatAccessLost(error)) {
+              forgetChatServerMediaRoom(room.id);
+            } else {
               mobileDebugLog('warn', 'recovery', 'companion-roster-refresh', { source: 'group-detail', status: (error as { status?: number })?.status });
               partial = true;
               const previous = cached.items.find(row => row.item.ref.id === room.id);
@@ -256,7 +259,10 @@ export function useChatServerRoster(enabled: boolean) {
       if (!run.isStale() && api.current()) {
         mobileDebugLog('warn', 'recovery', 'companion-roster-refresh', { source: 'group-list', status: (error as { status?: number })?.status });
         setState(old => ({ owner: api.owner, rooms: old.owner === api.owner && !chatAccessLost(error) ? old.rooms.filter(row => !api.client.personalList.hidden(row.item.ref.id)) : [], loading: false, refreshing: false, error: error instanceof Error && error.message === 'CHAT_ENDPOINT_UNAVAILABLE' ? error.message : 'CHAT_LIST_FAILED' }));
-        if (chatAccessLost(error)) await cacheChatRoster(api.userId, api.realm, [], known.current.ids);
+        if (chatAccessLost(error)) {
+          clearChatServerMediaCache({ clearNativeImageCache: true });
+          await cacheChatRoster(api.userId, api.realm, [], known.current.ids);
+        }
       }
     }
   }, api.owner);
@@ -291,8 +297,8 @@ export function useChatServerRoster(enabled: boolean) {
         }, reset: async () => { await api.client.resyncListState(); await read({ reason: 'connected' }); }, changed: changes => {
           for (const change of changes ?? []) {
             if (change.type === 'conversation.list.changed') api.client.personalList.merge(change.data);
-            // Personal read positions live in actor scope and do not advance room.head.
-            if (change.type === 'read.changed' && typeof change.entityId === 'string') {
+            // Personal reads and membership preferences do not advance room.head.
+            if ((change.type === 'read.changed' || change.type === 'membership.changed') && typeof change.entityId === 'string') {
               api.client.invalidateHistory(change.entityId, true);
               snapshots.current.delete(change.entityId);
             }
@@ -305,11 +311,12 @@ export function useChatServerRoster(enabled: boolean) {
     const foreground = AppState.addEventListener('change', value => { if (value === 'active') start(); else { stop?.(); clearInterval(poll); } });
     return () => { stop?.(); clearInterval(poll); foreground.remove(); };
   }, [api, enabled, read]));
-  useEffect(() => api.client.personalList.subscribe(() => {
+  useEffect(() => api.client.personalList.subscribe(({ conversationId, hidden }) => {
     if (!api.current()) return;
-    for (const id of api.client.personalList.ids()) known.current.ids.add(id);
+    known.current.ids.add(conversationId);
+    if (hidden) forgetChatServerMediaRoom(conversationId);
     setState(old => old.owner !== api.owner ? old : { ...old, rooms: old.rooms.filter(row => !api.client.personalList.hidden(row.item.ref.id)) });
-    void hideCachedChatRooms(api.userId, api.realm, api.client.personalList.ids().filter(id => api.client.personalList.hidden(id)));
+    if (hidden) void hideCachedChatRooms(api.userId, api.realm, [conversationId]);
   }), [api]);
   const own = state.owner === api.owner;
   return { items: own ? state.rooms : [], serverIds: known.current.ids, loading: api.enabled && (!own || state.loading),
@@ -364,11 +371,34 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
   const valid = useCallback(() => api.current() && active.current === identity, [api, identity]);
   const loseAccess = useCallback(() => {
     accessGeneration.current++; freshRead.current = false; page.current = null;
+    forgetChatServerMediaRoom(groupId);
     if (valid()) { void forgetRemoteResource(api.userId, groupId); void forgetChatMessages(groupId); }
     setState({ identity, value: { kind: 'missing' }, online: false, loadingOlder: false });
   }, [valid, api.userId, groupId, identity]);
-  // Keep room-wide activity for settings; the chat screen scopes its timeline to the current topic.
-  const view = useCallback((next: ChatPage, self: string, actors: ChatActor[]) => ({ ...chatGroupView(next, self, actors, 'group'), ...api.client.lifecycleCapabilities() }), [api]);
+  const [threadsSyncing, setThreadsSyncing] = useState(false);
+  const index = useRef<{ identity: string; generation: number; revision?: string; result: ThreadBackfill; mentionVersion: string } | null>(null);
+  const backfillInFlight = useRef<AbortController | null>(null);
+  const retryAtRef = useRef(0);
+  useEffect(() => {
+    setThreadsSyncing(false);
+    return () => {
+      backfillInFlight.current?.abort();
+      backfillInFlight.current = null;
+      index.current = null;
+      retryAtRef.current = 0;
+    };
+  }, [identity]);
+  const currentIndex = useCallback((revision?: string) => {
+    const saved = index.current;
+    return saved?.identity === identity && saved.generation === accessGeneration.current && saved.revision === revision ? saved : null;
+  }, [identity]);
+  const view = useCallback((next: ChatPage, self: string, actors: ChatActor[]) => {
+    const history = currentIndex(next.historyRevision)?.result;
+    // Enrich only the displayed index. The timeline and its on-disk copy keep their original window.
+    const shown = history ? { ...next, cachedMessages: [...history.messages, ...(next.cachedMessages ?? [])],
+      threadRoots: { ...history.roots, ...next.threadRoots } } : next;
+    return { ...chatGroupView(shown, self, actors, 'group'), ...api.client.lifecycleCapabilities() };
+  }, [api, currentIndex]);
   const hydrate = useCallback(async (previous: NonNullable<typeof page.current>) => {
     const enriched = await api.client.hydrateThreads(groupId, previous.page);
     if (!valid() || page.current !== previous || olderPending.current) return;
@@ -482,18 +512,40 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
           return head === null ? { scope: `conversation:${groupId}`, cursor: latest.page.snapshot.cursor }
             : [{ scope: `conversation:${groupId}`, cursor: latest.page.snapshot.cursor }, { scope: `actor:${actorId}`, cursor: head }];
         }, reset: async () => { await api.client.resyncListState(); await api.client.refreshHistory(groupId, true); await request({ reason: 'connected' }); }, changed: async changes => {
-          let personalOnly = !!changes?.length, reads = true;
+          let personalOnly = !!changes?.length, reads = true, membershipChanged = false;
           for (const change of changes ?? []) {
+            if (change.type === 'message.updated' || change.type === 'message.deleted' || change.type === 'membership.changed') {
+              // A targeted edit or an access change can invalidate rows outside the current page.
+              backfillInFlight.current?.abort();
+              if (change.type === 'membership.changed') index.current = null;
+              else if (index.current) {
+                const id = change.entityId ?? (change.data as { message?: { id?: unknown } } | null)?.message?.id;
+                const saved = index.current.result;
+                if (typeof id === 'string') {
+                  const retained = saved.messages.findIndex(message => message.id === id);
+                  if (change.type === 'message.deleted') saved.pendingEdits.delete(id);
+                  else if (retained >= 0 || saved.roots[id]) saved.pendingEdits.add(id);
+                  if (retained >= 0) saved.messages.splice(retained, 1);
+                  delete saved.roots[id];
+                }
+              }
+            }
             if (change.type === 'conversation.list.changed') api.client.personalList.merge(change.data);
             // The account's own read position (this phone's receipt, or another of its devices)
             // carries its new value: merge it instead of downloading the room again.
             else if (change.type === 'read.changed' && typeof change.entityId === 'string') {
               const applied = await api.client.acceptRead(change.entityId, change.data).catch(() => false);
               if (change.entityId === groupId && !applied) reads = false;
-            } else personalOnly = false;
+            } else {
+              personalOnly = false;
+              if (change.type === 'membership.changed' && change.entityId === groupId) membershipChanged = true;
+            }
           }
-          if (personalOnly && reads) { void request({ reason: 'reads' }); return; }
-          try { await api.client.refreshHistory(groupId, !reads); }
+          if (personalOnly && reads) {
+            if (!api.client.personalList.hidden(groupId)) void request({ reason: 'reads' });
+            return;
+          }
+          try { await api.client.refreshHistory(groupId, membershipChanged || !reads); }
           finally { void request({ reason: 'changed' }); }
         }, available: () => { subscribed = true; }, unavailable: () => { subscribed = false; freshRead.current = false; api.client.invalidateHistory(groupId); } });
       }).catch(() => {}); // Read presents endpoint errors.
@@ -587,6 +639,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
       const operationId = (await import('expo-crypto')).randomUUID();
       if (action === 'hide') {
         await api.client.hide(groupId, operationId);
+        forgetChatServerMediaRoom(groupId);
         if (valid()) { accessGeneration.current++; page.current = null; setState({ identity, value: { kind: 'missing' }, online: true, loadingOlder: false });
           await forgetRemoteResource(api.userId, groupId); await forgetChatMessages(groupId); }
       } else if (action === 'leave') {
@@ -603,9 +656,10 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
     const owner = getMobileAuthOwner();
     if (!valid() || owner.accountId !== api.userId || mobileDurableOutbox.getAccountId() !== owner.accountKey) throw new Error('OWNER_CHANGED');
     const mentions = input.mentions as import('@cindy/maker-shared/botGroupChat').BotGroupMention;
-    const root = threadRootId ? latest.page.messages.find(message => message.id === threadRootId) : undefined;
+    const inferAuthor = threadRootId && !mentions.all && !mentions.allBots && !mentions.botIds.length;
+    const root = inferAuthor ? latest.page.messages.find(message => message.id === threadRootId) : undefined;
     const recipients = [...mentions.botIds];
-    if (!mentions.all && !mentions.allBots && root && latest.page.snapshot.members.some(member => member.id === root.authorId && member.kind === 'bot' && member.state === 'joined')) recipients.push(root.authorId);
+    if (root && latest.page.snapshot.members.some(member => member.id === root.authorId && member.kind === 'bot' && member.state === 'joined')) recipients.push(root.authorId);
     await enqueueChatMessage(mobileDurableOutbox, owner.accountKey, groupId, {
       ...(latest.page.snapshot.room.kind === 'direct' ? { conversationKind: 'direct' as const } : {}),
       clientId: String(input.clientId), text: String(input.text), threadRootId,
@@ -649,8 +703,8 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
       throw error;
     }
   }, [api, groupId, valid, loseAccess]);
-  useEffect(() => api.client.personalList.subscribe(() => {
-    if (valid() && api.client.personalList.hidden(groupId)) {
+  useEffect(() => api.client.personalList.subscribe(({ conversationId, hidden }) => {
+    if (valid() && conversationId === groupId && hidden) {
       loseAccess();
       void forgetRemoteResource(api.userId, groupId);
     }
@@ -673,7 +727,10 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
     if (!api.current()) throw new Error('OWNER_CHANGED');
     if ((value as { conversationId?: unknown } | null)?.conversationId !== groupId) throw new Error('INVALID_CHAT_LIST_STATE');
     api.client.personalList.merge(value);
-    if (api.current() && api.client.personalList.hidden(groupId)) await forgetRemoteResource(api.userId, groupId);
+    if (api.current() && api.client.personalList.hidden(groupId)) {
+      forgetChatServerMediaRoom(groupId);
+      await forgetRemoteResource(api.userId, groupId);
+    }
   }, [api, groupId]);
   const followThread = useCallback(async (following: boolean) => {
     if (!valid() || !enabled || !threadRootId) throw new Error('THREAD_FOLLOW_UNSUPPORTED');
@@ -709,6 +766,35 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
     await api.client.react(groupId, messageId, emoji, present, operationId);
     if (valid()) reload();
   }, [valid, enabled, api, groupId, reload]);
+  const backfillThreads = useCallback((mentions: readonly ChatMessage[] = []) => {
+    const current = page.current;
+    if (!valid() || !enabled || threadRootId || !current || current.identity !== identity
+      || current.page.snapshot.room.kind === 'direct' || backfillInFlight.current) return;
+    const previous = currentIndex(current.page.historyRevision);
+    const mentionVersion = mentions.map(m => m.id + ':' + (m.revision ?? 0)).join(',');
+    if (previous && !previous.result.retryRoots.length && !previous.result.pendingEdits.size && previous.mentionVersion === mentionVersion) return;
+    if (Date.now() < retryAtRef.current) return;
+    const controller = new AbortController();
+    const generation = accessGeneration.current;
+    backfillInFlight.current = controller;
+    setThreadsSyncing(true);
+    void api.client.backfillThreads(groupId, current.page.snapshot, current.page.messages, controller.signal, mentions, previous?.result)
+      .then(result => {
+        const latest = page.current;
+        if (controller.signal.aborted || !valid() || generation !== accessGeneration.current || latest?.identity !== identity
+          || current.page.historyRevision !== latest.page.historyRevision) return;
+        index.current = { identity, generation, revision: latest.page.historyRevision, result, mentionVersion };
+        retryAtRef.current = result.retryRoots.length || result.pendingEdits.size ? Date.now() + 60_000 : 0;
+        setState(old => old.identity === identity ? { ...old, value: { kind: 'ready', group: view(latest.page, latest.self, latest.actors) } } : old);
+      })
+      .catch(() => { if (!controller.signal.aborted) retryAtRef.current = Date.now() + 60_000; })
+      .finally(() => {
+        if (backfillInFlight.current === controller) {
+          backfillInFlight.current = null;
+          if (valid()) setThreadsSyncing(false);
+        }
+      });
+  }, [valid, enabled, threadRootId, currentIndex, identity, api, groupId, view]);
   const latest = page.current?.identity === identity ? page.current : null;
   const retryAt = latest?.page.threadRetryAt;
   useEffect(() => {
@@ -720,6 +806,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
   return { state: state.identity === identity ? state.value : { kind: 'loading' } as BotGroupChatState,
     listHidden: api.current() && api.client.personalList.hidden(groupId),
     online: state.identity === identity && state.online, reload, act, pending, pendingAction, threadMeta, followThread, shareToMain, react,
+    backfillThreads, threadsSyncing: state.identity === identity && threadsSyncing,
     canQueue: enabled && api.enabled && state.identity === identity && state.value.kind === 'ready' && !api.client.personalList.hidden(groupId),
     acceptListState, isListHidden: () => api.client.personalList.hidden(groupId), loadOlder, loadingOlder: state.loadingOlder, media, markRead, uploadAttachment };
 }
