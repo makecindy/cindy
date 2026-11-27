@@ -59,7 +59,7 @@ export function useScheduleUnreadRunCounts(
       const event = raw as SchedulerEvent;
       if (
         event.type === 'completed' ||
-        event.type === 'failed' ||
+        (event.type === 'failed' && !event.silenced) ||
         event.type === 'session-bound' ||
         event.type === 'changed' ||
         event.type === 'read' ||

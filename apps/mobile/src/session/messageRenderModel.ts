@@ -27,7 +27,9 @@ import {
 
 const MAX_VALID_DATE_MS = 8.64e15;
 export type MobileTodoItem = MessageRenderTodoItem;
-export type MobileMessageItem = MessageRenderMessageItem<NormalizedRemoteMessage>;
+export type MobileMessageItem = MessageRenderMessageItem<NormalizedRemoteMessage> & {
+  historyConfirmation?: import('./durableOutbox').OutboxHistoryConfirmation;
+};
 export type MobileThinkingItem = MessageRenderThinkingItem<NormalizedRemoteMessage>;
 export type MobileToolGroupItem = MessageRenderToolGroupItem<NormalizedRemoteMessage>;
 export type MobileToolMediaItem = MessageRenderToolMediaItem<NormalizedRemoteMessage>;
@@ -70,7 +72,8 @@ export interface MobileForkOrigin {
 }
 
 export type MobileMessageRenderItem =
-  | MessageRenderItem<NormalizedRemoteMessage>
+  | Exclude<MessageRenderItem<NormalizedRemoteMessage>, MessageRenderMessageItem<NormalizedRemoteMessage>>
+  | MobileMessageItem
   | MobileSubagentGroupItem
   | MobileForkOriginItem
   // 待发送气泡(排队 / 落定 / 本地 outbox)也是消息流的一等项:与正式消息同容器同 key,

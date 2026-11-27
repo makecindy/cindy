@@ -113,6 +113,8 @@ async function searchCatalog(cloud) {
   const bundle = await require('esbuild').build({
     entryPoints: [catalog], bundle: true, write: false, platform: 'node', format: 'cjs',
     alias: { '@': renderer },
+    // As the cloud build defines it (stage-cloud-overlays.mjs); sidecars may read the region.
+    define: { 'import.meta.env.VITE_CINDY_AUTH_REGION': '"cn"' },
     plugins: [{ name: 'real-cloud-search-fixture', setup(build) {
       // Workspace packages resolve through their own exports, as the app build does.
       build.onResolve({ filter: /^@cindy\// }, ({ path: specifier }) => {

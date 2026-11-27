@@ -219,6 +219,10 @@ export const markRemoteResourceRead = (userId: string, deviceId: string, resourc
     if (sequences[key] === undefined || BigInt(sequence) > BigInt(sequences[key])) sequences[key] = sequence;
   }
 });
+export async function readRemoteResourceReadAt(userId: string, deviceId: string, resourceId: string): Promise<number | null> {
+  const snapshot = await readRemoteResourceSnapshot(userId);
+  return snapshot.read[remoteResourceReadKey(deviceId, resourceId)] ?? null;
+}
 export function isRemoteResourceUnread(userId: string, deviceId: string, resourceId: string, at?: number, sequence?: string): boolean {
   const snapshot = snapshots.get(userId);
   const key = remoteResourceReadKey(deviceId, resourceId);

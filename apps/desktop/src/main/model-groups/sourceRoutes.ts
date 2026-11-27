@@ -5,6 +5,7 @@
  * 「能不能为新任务选用」由调用方给，与解析路由时用的是同一个判断。
  */
 import { createHash } from 'node:crypto';
+import { isAntigravityEngine } from '@cindy/maker-shared/branding';
 import {
   listedSourceFolds,
   recommendedAgentForModel,
@@ -27,6 +28,14 @@ import {
   type ModelGroupSourceRoute,
   modelGroupSourceKey,
 } from '../../shared/modelGroups.js';
+import {
+  PLUGIN_ENGINE_DEFAULT_MODEL,
+  isPluginEngineModelDisabled,
+  isPluginEngineOfferedRemotely,
+  pluginEngineKeyFromProviderId,
+  type PluginEngineView,
+} from '../../shared/pluginEngines.js';
+import { isOrganizationPluginNamespace, parsePluginStoragePart } from '../../shared/pluginIdentity.js';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 
 const GROUP_KIND: Partial<Record<AgentKind, ModelGroupAgentKind>> = { 'claude-code': 'cc', codex: 'codex', pi: 'pi' };
@@ -45,14 +54,47 @@ export function providerFamily(view: ProviderView): string | null {
 
 const usable = (view: ProviderView) => view.connected && !view.suspended && !view.removed;
 
-/** 合成与展开用的目录：本机的供应商与可用引擎；其他电脑与分享来的位置各自允许远程调用的供应商(读得到的那些)。 */
+const usableLocalPluginEngine = (engine: PluginEngineView) => !engine.suspended && engine.availability.state !== 'unavailable';
+const usableRemotePluginEngine = (engine: PluginEngineView) => isPluginEngineOfferedRemotely(engine);
+
+/** 一个插件执行引擎属于哪一家：Antigravity 跨安装来源归同一家，其余按同一插件+引擎标识归一家(去掉独立账号后缀)。 */
+export function pluginEngineFamily(engine: Pick<PluginEngineView, 'providerId' | 'ghostId' | 'name'>): string | null {
+  if (isAntigravityEngine(engine)) return 'antigravity';
+  const rawKey = pluginEngineKeyFromProviderId(engine.providerId);
+  if (!rawKey) return null;
+  const baseKey = rawKey.replace(/~[a-z0-9]{8}$/, '');
+  const sep = baseKey.lastIndexOf(':');
+  if (sep <= 0 || sep >= baseKey.length - 1) return null;
+  const storagePart = baseKey.slice(0, sep);
+  const harnessId = baseKey.slice(sep + 1);
+  const parsed = parsePluginStoragePart(storagePart);
+  if (!parsed) return `acp:${baseKey}`;
+  return isOrganizationPluginNamespace(parsed.namespace)
+    ? `acp:${storagePart}:${harnessId}`
+    : `acp:${parsed.ghostId}:${harnessId}`;
+}
+
+export function isPluginEngineModelSelectable(engine: PluginEngineView, modelId: string): boolean {
+  const disabledIds = engine.disabledModels?.map((item) => item.id);
+  if (isPluginEngineModelDisabled(modelId, disabledIds)) return false;
+  if (modelId === PLUGIN_ENGINE_DEFAULT_MODEL) return engine.defaultModelAllowed !== false;
+  return engine.models.length === 0 || engine.models.some((item) => item.id === modelId);
+}
+
+/** 合成与展开用的目录：本机的供应商、插件引擎与可用引擎；其他电脑与分享来的位置各自允许远程调用的供应商与插件引擎(读得到的那些)。 */
 export interface SourceCatalog {
   views: readonly ProviderView[];
   agents: readonly string[];
+  /** 本机已安装的插件执行引擎(如 Antigravity)。 */
+  pluginEngines?: readonly PluginEngineView[];
   /** 运行位置(另一台电脑的设备 id 或 `share:<id>`) → 那里的供应商。没读到的位置不在里面。 */
   remote?: ReadonlyMap<string, readonly ProviderView[]>;
+  /** 运行位置(另一台电脑的设备 id 或 `share:<id>`) → 那里开放的插件执行引擎。 */
+  remotePluginEngines?: ReadonlyMap<string, readonly PluginEngineView[]>;
   /** 这个来源现在能不能为新任务选用；views / agents 是它所在位置的目录。 */
   available(candidate: ModelGroupCandidate, views: readonly ProviderView[], agents: readonly string[]): boolean;
+  /** 插件执行引擎的可用性检查；不传时按本机未停用且可用 / 远程已开放远程调用 + 模型允许判断。 */
+  pluginEngineAvailable?(candidate: ModelGroupCandidate, engine: PluginEngineView): boolean;
 }
 
 /** 别的位置上可以远程调用的引擎，与插件卡片里的远程模型同一份名单。 */
@@ -60,6 +102,8 @@ const REMOTE_AGENTS: readonly string[] = ['codex', 'claude-code', 'pi'];
 
 const locationViews = (catalog: SourceCatalog, agentDeviceId: string | undefined) =>
   (agentDeviceId ? catalog.remote?.get(agentDeviceId) ?? [] : catalog.views);
+const locationPluginEngines = (catalog: SourceCatalog, agentDeviceId: string | undefined) =>
+  (agentDeviceId ? catalog.remotePluginEngines?.get(agentDeviceId) ?? [] : catalog.pluginEngines ?? []);
 const locationAgents = (catalog: SourceCatalog, agentDeviceId: string | undefined) => (agentDeviceId ? REMOTE_AGENTS : catalog.agents);
 
 /**
@@ -67,7 +111,7 @@ const locationAgents = (catalog: SourceCatalog, agentDeviceId: string | undefine
  * 就是两个成员)。同一个登录在几处出现只算一个，用设置页、选择器同一条合并规则。名字用这一家里排在最前的那个的名字。
  */
 export function buildAutoSourceRoutes(
-  catalog: Pick<SourceCatalog, 'views' | 'remote'>,
+  catalog: Pick<SourceCatalog, 'views' | 'remote' | 'pluginEngines' | 'remotePluginEngines'>,
   config: Pick<ModelGroupsConfig, 'hiddenAuto' | 'autoStrategy' | 'autoSwitchOff' | 'autoSources' | 'autoExceptions'>,
   /** 只要只剩一个能用成员的那几家(见 effectiveModelGroupsConfig 的 forSelected)。 */
   single = false,
@@ -76,14 +120,24 @@ export function buildAutoSourceRoutes(
   // 去重只在自己的电脑之间做(同一个登录在两台电脑上算一个)。别人分享来的各是各的账号，即使供应商同名也都算成员，
   // 与选择器一致：分享不参与这条合并规则。
   const folds = listedSourceFolds({ base: catalog.views, others: others.filter((other) => !isProviderShareAgentDeviceId(other.deviceId)) });
-  const families = new Map<string, { view: ProviderView; agentDeviceId?: string }[]>();
+  const families = new Map<string, { id: string; name: string; agentDeviceId?: string }[]>();
   const add = (view: ProviderView, agentDeviceId?: string) => {
     const family = usable(view) ? providerFamily(view) : null;
-    if (family) families.set(family, [...(families.get(family) ?? []), { view, ...(agentDeviceId ? { agentDeviceId } : {}) }]);
+    if (family) families.set(family, [...(families.get(family) ?? []), { id: view.id, name: view.name, ...(agentDeviceId ? { agentDeviceId } : {}) }]);
+  };
+  const addPluginEngine = (engine: PluginEngineView, agentDeviceId?: string) => {
+    const ok = agentDeviceId ? usableRemotePluginEngine(engine) : usableLocalPluginEngine(engine);
+    const hasModels = engine.models.length > 0 || engine.defaultModelAllowed !== false;
+    const family = ok && hasModels ? pluginEngineFamily(engine) : null;
+    if (family) families.set(family, [...(families.get(family) ?? []), { id: engine.providerId, name: engine.name, ...(agentDeviceId ? { agentDeviceId } : {}) }]);
   };
   for (const view of catalog.views) if (!folds.hiddenBase.has(view.id)) add(view);
   for (const { deviceId, providers } of others) {
     for (const view of providers) if (!folds.hiddenOther.get(deviceId)?.has(view.id)) add(view, deviceId);
+  }
+  for (const engine of catalog.pluginEngines ?? []) addPluginEngine(engine);
+  for (const [deviceId, engines] of catalog.remotePluginEngines ?? []) {
+    for (const engine of engines) addPluginEngine(engine, deviceId);
   }
   const hidden = new Set(config.hiddenAuto ?? []);
   const switchOff = new Set(config.autoSwitchOff ?? []);
@@ -94,7 +148,7 @@ export function buildAutoSourceRoutes(
     // 成员是谁仍按连接自动定；用户排过先后、填过权重、暂停过的，按他存的来(没排到的新成员排在后面)。
     const saved = config.autoSources?.[id] ?? [];
     const rank = new Map(saved.map((source, index) => [modelGroupSourceKey(source), { index, source }]));
-    const detected = members.map(({ view, agentDeviceId }): ModelGroupSource => ({ providerId: view.id, ...(agentDeviceId ? { agentDeviceId } : {}) }));
+    const detected = members.map(({ id: providerId, agentDeviceId }): ModelGroupSource => ({ providerId, ...(agentDeviceId ? { agentDeviceId } : {}) }));
     const ordered = detected
       .map((source, index) => ({ source, index, saved: rank.get(modelGroupSourceKey(source)) }))
       .sort((a, b) => (a.saved ? a.saved.index : saved.length + a.index) - (b.saved ? b.saved.index : saved.length + b.index))
@@ -103,7 +157,7 @@ export function buildAutoSourceRoutes(
       }));
     routes.push({
       id,
-      name: members[0].view.name.slice(0, MODEL_GROUP_LIMITS.name),
+      name: members[0].name.slice(0, MODEL_GROUP_LIMITS.name),
       strategy: config.autoStrategy?.[id] ?? 'expiring',
       sources: ordered.slice(0, MODEL_GROUP_LIMITS.candidates),
       ...(switchOff.has(id) ? { autoSwitch: false as const } : {}),
@@ -140,10 +194,39 @@ const expandedId = (routeId: string, modelKey: string) => {
   return id;
 };
 
+export function pluginEngineSourceModelKey(modelId: string): string {
+  return unifiedModelKeyId(modelId.toLowerCase().replace(/^[a-z0-9][a-z0-9._-]*\/([^/]+)$/, '$1'));
+}
+
 /** 一条供应商路由展开成每个模型一条普通路由：成员里谁提供这个模型，谁就是这条的来源(顺序同成员顺序)。 */
 export function expandSourceRoute(route: ModelGroupSourceRoute, catalog: SourceCatalog): ModelGroupRoute[] {
   const byModel = new Map<string, { name: string; candidates: ModelGroupCandidate[] }>();
   for (const source of route.sources) {
+    if (pluginEngineKeyFromProviderId(source.providerId)) {
+      const engine = locationPluginEngines(catalog, source.agentDeviceId).find((item) => item.providerId === source.providerId);
+      const ok = engine && (source.agentDeviceId ? usableRemotePluginEngine(engine) : usableLocalPluginEngine(engine));
+      if (!engine || !ok) continue;
+      const models = engine.models.length > 0
+        ? engine.models
+        : (engine.defaultModelAllowed !== false ? [{ id: PLUGIN_ENGINE_DEFAULT_MODEL, displayName: PLUGIN_ENGINE_DEFAULT_MODEL }] : []);
+      const seen = new Set<string>();
+      for (const model of models) {
+        if (!isPluginEngineModelSelectable(engine, model.id)) continue;
+        const key = pluginEngineSourceModelKey(model.id);
+        if (seen.has(key)) continue;
+        const candidate: ModelGroupCandidate = {
+          agentKind: 'acp', providerId: engine.providerId, model: model.id,
+          ...(source.agentDeviceId ? { agentDeviceId: source.agentDeviceId } : {}),
+          ...(source.off ? { off: true } : {}), ...(source.weight ? { weight: source.weight } : {}),
+        };
+        if (catalog.pluginEngineAvailable && !catalog.pluginEngineAvailable(candidate, engine)) continue;
+        seen.add(key);
+        const entry = byModel.get(key) ?? { name: model.displayName || model.id, candidates: [] };
+        entry.candidates.push(candidate);
+        byModel.set(key, entry);
+      }
+      continue;
+    }
     const views = locationViews(catalog, source.agentDeviceId);
     const agents = locationAgents(catalog, source.agentDeviceId);
     const allowed = agents.filter((agent): agent is AgentKind => agent in GROUP_KIND);

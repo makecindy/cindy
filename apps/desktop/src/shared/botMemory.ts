@@ -10,9 +10,10 @@
 export const BOT_MEMORY_TYPES = ['user', 'feedback', 'project', 'reference'] as const;
 export type BotMemoryType = (typeof BOT_MEMORY_TYPES)[number];
 
-/** 与 maker-core DEFAULT_MEMORY_CONFIG 对齐:标题字符数上限、正文字节硬上限。 */
+/** 与 maker-core 对齐:标题字符数上限、V1 单条 8KB 上限、V2 项目自由 Markdown 56KB 上限。 */
 export const BOT_MEMORY_TITLE_MAX = 100;
 export const BOT_MEMORY_BODY_MAX_BYTES = 8192;
+export const BOT_PROJECT_MEMORY_BODY_MAX_BYTES = 56 * 1024;
 
 /** 列表里的一条:正文只带开头一段,够显示两行预览。 */
 export interface BotMemorySummary {
