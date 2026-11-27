@@ -13,9 +13,13 @@ import {
   projectBotGroupExecutionFailures,
   botGroupExecutionFailureBatches,
   botGroupSidebarPlanPreview,
+  chatGroupHumanDisplayName,
+  chatGroupMemberName,
   chatGroupMembership,
+  chatGroupOwnerName,
   botGroupNewMessageCount,
   botGroupActivityAt,
+  collapseBotGroupMemberJoined,
   latestBotGroupMessage,
 } from '../botGroupPresentation.js';
 import { chatGroupTalkRouteKey, groupLaneOfRouteKey, isChatOnlyGroupLane, BOT_GROUP_RUNTIME_FAILURE_CODES, readBotGroupExecutionFailure, type BotGroupErrorCode, type BotGroupExecutionFailureView, type BotGroupMemberView, type BotGroupMessageView, type BotGroupNoticeCode, type BotGroupOpenPlanSummary, type BotGroupPlanStepStatus, type BotGroupPlanView, type BotGroupSummary } from '../botGroupChat.js';
@@ -448,6 +452,53 @@ it('keeps concurrent execution updates between their original neighboring messag
   expect(ids([])).toEqual(['request', 'later']);
 });
 
+describe('collapseBotGroupMemberJoined', () => {
+  const joined = (id: string, authorName: string, extra: Partial<BotGroupMessageView> = {}): BotGroupMessageView => ({
+    id, sequence: 1, kind: 'notice', authorKind: 'system', authorBotId: null, authorName,
+    content: '', noticeCode: 'member-joined', planId: null, files: [], attachments: [],
+    mentions: { all: false, botIds: [] }, createdAt: 1000, threadRootId: null, ...extra,
+  });
+  const chat = (id: string): BotGroupMessageView => ({
+    ...joined(id, 'Host'), kind: 'message', authorKind: 'user', noticeCode: null, content: 'Hello',
+  });
+
+  it('keeps isolated joins untouched and collapses consecutive runs with deduplicated names', () => {
+    const messages = [
+      joined('solo', 'Solo'),
+      chat('m1'),
+      joined('j1', 'Alice'),
+      joined('j2', 'Bob'),
+      joined('j3', 'Alice'),
+      joined('j4', 'Carol'),
+      chat('m2'),
+      joined('r1', 'Dave'),
+      joined('r2', 'Dave'),
+      { ...joined('other', 'Bot'), noticeCode: 'member-failed' as const },
+      joined('j5', 'Eve'),
+      joined('j6', 'Frank'),
+    ];
+    const result = collapseBotGroupMemberJoined(messages);
+    expect(result.messages.map((m) => m.id)).toEqual(['solo', 'm1', 'j1', 'm2', 'r1', 'other', 'j5']);
+    expect(result.joinedNamesByMessageId.has('solo')).toBe(false);
+    expect(result.joinedNamesByMessageId.get('j1')).toEqual(['Alice', 'Bob', 'Carol']);
+    expect(result.joinedNamesByMessageId.get('r1')).toEqual(['Dave']);
+    expect(result.joinedNamesByMessageId.get('j5')).toEqual(['Eve', 'Frank']);
+  });
+
+  it('breaks runs on deleted or empty-name notices', () => {
+    const messages = [
+      joined('j1', 'Alice'),
+      joined('j2', 'Deleted', { deleted: true }),
+      joined('j3', 'Bob'),
+      joined('j4', '   '),
+      joined('j5', 'Carol'),
+    ];
+    const result = collapseBotGroupMemberJoined(messages);
+    expect(result.messages.map((m) => m.id)).toEqual(['j1', 'j2', 'j3', 'j4', 'j5']);
+    expect(result.joinedNamesByMessageId.size).toBe(0);
+  });
+});
+
 // Server receipts can precede their durable message row; source identity must beat delayed starts.
 describe('receipt-backed live execution placement', () => {
   it('uses the source row before a delayed start without cloning the work', () => {
@@ -474,4 +525,23 @@ it('pins receipt-backed work to its exact row despite differing source clocks', 
   const other = { executionId: 'b', sourceMessageId: 'other' };
   const entries = interleaveBotGroupWork([{ id: 'local-own', serverMessageId: 'server-own', createdAt: 50 }, { id: 'other', createdAt: 30 }], [other, own]);
   expect(entries.map(entry => entry.kind === 'message' ? entry.value.id : entry.value.executionId)).toEqual(['local-own', 'a', 'other', 'b']);
+});
+
+// Basis: bot-group-chat.md §5 enterprise identity; verifies · Org suffix, nickname override,
+// idempotency, and companion owner name without nested org suffix (unit tier).
+describe('enterprise human display name formatting', () => {
+  it('appends · OrgName only for humans with showOrgName and no group nickname', () => {
+    expect(chatGroupHumanDisplayName({ actorKind: 'human', name: '林知行', orgName: '星辰科技', showOrgName: true })).toBe('林知行 · 星辰科技');
+    expect(chatGroupHumanDisplayName({ actorKind: 'human', name: '林知行 · 星辰科技', orgName: '星辰科技', showOrgName: true })).toBe('林知行 · 星辰科技');
+    expect(chatGroupHumanDisplayName({ actorKind: 'human', name: '阿行', nickname: '阿行', orgName: '星辰科技', showOrgName: true })).toBe('阿行');
+    expect(chatGroupHumanDisplayName({ actorKind: 'human', name: '林知行', orgName: '星辰科技', showOrgName: false })).toBe('林知行');
+    expect(chatGroupHumanDisplayName({ actorKind: 'bot', name: 'Cindy', orgName: '星辰科技', showOrgName: true })).toBe('Cindy');
+  });
+
+  it('keeps companion owner labels on the human base name without nested org suffixes', () => {
+    const owner = { id: 'h1', kind: 'human', state: 'joined', name: '林知行' };
+    const bot = { id: 'b1', kind: 'bot', state: 'joined', name: 'Cindy', ownerActorId: 'h1', ownerName: '林知行' };
+    expect(chatGroupOwnerName(bot, [owner, bot])).toBe('林知行');
+    expect(chatGroupMemberName(bot, [owner, bot])).toBe('Cindy (林知行)');
+  });
 });

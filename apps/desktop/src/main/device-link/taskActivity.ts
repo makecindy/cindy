@@ -6,7 +6,7 @@ import {
 import type { AgentIslandSessionSnapshot } from '../../shared/agentIsland.js';
 
 /**
- * Full execution-host projection, independent of Home pagination and island UI visibility.
+ * Execution-host counts from the island overview (not Home pagination), so the phone matches this computer.
  * `includeCompanion` adds the selected task's companion identity for the same-account
  * device-link snapshot. The official task-activity upload keeps its documented body.
  */

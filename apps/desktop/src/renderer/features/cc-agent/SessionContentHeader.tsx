@@ -48,7 +48,13 @@ import { useProjectPickerOptions } from '@/hooks/useProjectPickerOptions';
 import { useSessionRunningStatus } from '@/hooks/useSessionRunningStatus';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useConfirmTaskArchive } from './hooks/useConfirmTaskArchive';
-import { DropdownMenu, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import {
+  DropdownMenu,
+  DropdownMenuItem,
+  DropdownMenuShortcut,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { useAppShortcut, useAppShortcutDisplay } from '@/hooks/useAppShortcut';
 import { WINDOW_NO_DRAG_STYLE, useManualWindowDrag } from '@/components/layout/windowDrag';
 import { recentWorkdirsStore } from '@/lib/recentWorkdirsStore';
 import { useRegisterContentHeader } from '../feature-context';
@@ -319,6 +325,13 @@ export function SessionContentHeader({
     }
   }, [session.deviceLinkDeviceId, session.id, t]);
 
+  const canShowTaskMenu = !isEditing && !readOnly && (!sharedGuest || session.status === 'active');
+  const copyShortcut = useAppShortcutDisplay('copy-session-link');
+  useAppShortcut('copy-session-link', () => {
+    void handleCopyDeepLink();
+    return true;
+  }, { enabled: canShowTaskMenu });
+
   const handleOpenInNewWindow = useCallback(() => {
     if (remoteWritesBlocked) {
       showRemoteWriteBlockedToast();
@@ -389,23 +402,19 @@ export function SessionContentHeader({
         }
       }
 
-      // 与 CCAgentSidebarUpper 同款:worktree 会话不能改到它绑定 worktree 之外的目录
-      // (半移动)。判定不在这里做:归属只有共享写路径一处权威,renderer 的缓存/复核都是
-      // 异步镜像,任何「先查询再决定」都会有「查询通过后、写入前恰好回收」的窗口,把
-      // 主进程本会放行的移动挡在请求之前;这里照常发请求,被守卫拒绝时在下面映射成
-      // 同一条 toast。「移到对话」不改目录,不受影响。
       const oldPatch = {
         workingDir: session.workingDir,
+        projectDir: session.projectDir,
         workspaceKind: session.workspaceKind,
       };
       if (target.kind !== 'dialogue' && !targetWorkingDir) return;
-      const nextPatch =
-        target.kind === 'dialogue'
-          ? { workspaceKind: 'dialogue' as const }
-          : { workingDir: targetWorkingDir, workspaceKind: 'project' as const };
-      patchLocal(session.id, nextPatch);
+      const request = target.kind === 'dialogue'
+        ? { workspaceKind: 'dialogue' as const }
+        : { workspaceKind: 'project' as const, workingDir: targetWorkingDir };
+      patchLocal(session.id, { workspaceKind: request.workspaceKind, projectDir: targetWorkingDir ?? null });
       try {
-        await sessionService.update(session.id, nextPatch);
+        const moved = await sessionService.update(session.id, request);
+        patchLocal(session.id, { workingDir: moved.workingDir, projectDir: moved.projectDir, workspaceKind: moved.workspaceKind });
         if (target.kind !== 'dialogue') {
           void recentWorkdirsStore.forceRefresh().catch(() => undefined);
         }
@@ -463,7 +472,7 @@ export function SessionContentHeader({
         // 绑定了 active 自动化:后续运行会恢复原任务,需要确认。读本地缓存,排在 worktree 预检之前。
         const scheduleNames =
           (await loadActiveBoundScheduleNames([
-            { id: session.id, deviceLinkDeviceId: session.deviceLinkDeviceId },
+            { id: session.id, deviceLinkDeviceId: session.deviceLinkDeviceId, orcaRole: session.orcaRole },
           ])).get(session.id) ?? [];
         // **worktree 预检必须是最后一个前置条件**(codex review):原来这里用 Promise.all
         // 一起等,dirty 先返回 clean、接管查询还在飞的那段时间就是 clean 结论的失效窗口。
@@ -664,7 +673,7 @@ export function SessionContentHeader({
 
       {!isEditing && <BotTaskOwnerChip session={session} />}
 
-      {!isEditing && !readOnly && (!sharedGuest || session.status === 'active') && (
+      {canShowTaskMenu && (
         // 菜单打开就把归档/删除的 dirty 预检发出去:用户从展开菜单到点条目至少
         // 一次反应时间,足够这次 git status 跑完,点下去时命中缓存、零等待。
         <DropdownMenu
@@ -680,7 +689,7 @@ export function SessionContentHeader({
               <button
                 ref={menuTriggerRef}
                 className={cn(
-                  'flex h-7 w-7 shrink-0 items-center justify-center rounded-md',
+                  'flex h-7 w-7 shrink-0 items-center justify-center rounded-lg',
                   'text-[var(--cmd-palette-item-meta)] transition-colors',
                   'hover:bg-titlebar-button-hover hover:text-foreground',
                   'focus-visible:outline-none data-[state=open]:bg-titlebar-button-hover',
@@ -711,6 +720,7 @@ export function SessionContentHeader({
                 className={MENU_ITEM_CLASS}
               >
                 {t('ccAgent.sidebar.sessionMenu.copySessionLink')}
+                {copyShortcut && <DropdownMenuShortcut aria-hidden>{copyShortcut}</DropdownMenuShortcut>}
               </DropdownMenuItem>
             }
             exportShare={
@@ -753,7 +763,7 @@ export function SessionContentHeader({
           sessionId={newProjectSessionId}
           onOpenChange={closeNewProjectDialog}
           onCreated={(result) => {
-            patchLocal(newProjectSessionId, { workingDir: result.workingDir, workspaceKind: 'project' });
+            patchLocal(newProjectSessionId, { ...result.session, workspaceKind: 'project' });
             void recentWorkdirsStore.forceRefresh().catch(() => undefined);
             toast.success(t('ccAgent.sidebar.newProjectDialog.done'));
           }}

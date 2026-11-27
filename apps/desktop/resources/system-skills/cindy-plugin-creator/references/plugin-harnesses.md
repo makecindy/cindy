@@ -109,6 +109,19 @@ Agent 把内容注入当前这一轮后回 `{ "outcome": "injected" }`,插话之
 入口原样转发字节时什么都不用做,外部 Agent 自己声明、自己处理。入口会改写 `initialize` 回包时要保留 `_meta.steering`;
 外部 Agent 本身不支持时,不要替它声明,否则 Cindy 会把插话发给它而收不到 `injected`。
 
+**聊天里的每轮权限闸**:用户把任务接到飞书、微信等聊天后,群聊、访客和个人微信发来的消息带一条「这一轮哪些操作必须先让
+用户确认」的规则,内置引擎在执行每个工具前检查它。插件引擎要让 Cindy 看到这一轮的每一次工具调用,才能执行这条规则。
+Agent(或入口)能做到时,在 `initialize` 结果的**顶层** `_meta` 里声明 `{ "permissionGate": { "supported": true } }`。
+声明支持后，每条 `session/prompt` 的 `_meta.permissionGate` 都带 `turnId`。受限轮次另外带
+`scope: "all-tool-calls"`，Agent 在这轮及其后台工作中执行任何工具前都发 `session/request_permission`。
+所有审批请求都要在顶层 `_meta.permissionGate.turnId` 原样回传发起这项工作的轮次 ID。新一轮开始后，
+旧轮次的审批请求会拒绝。Agent 自己原本无需询问的调用可同时带 `routine: true`。Cindy 能识别操作和输入且
+渠道规则允许时会直接同意读取和搜索，其余请求走审批。只允许文字回复的轮次拒绝全部工具请求。
+
+`toolCall.kind` 照 ACP 填写(`read`、`edit`、`delete`、`execute` 等),执行命令时把命令放在 `rawInput.command`:聊天的安全
+规则按它们判断,例如群聊里不能删除文件。没有声明的 Agent 收不到这类轮次,聊天里提示当前引擎不支持,主人私聊的普通消息
+照常运行;任务处在「全部允许」时这类轮次同样不运行,与内置引擎一致。声明了就必须做到,做不到时不要声明。
+
 ### 入口进程
 
 用户在任务里选了你的引擎后,Cindy 以插件 Node 运行时的「原样 stdio」模式启动 `entry`(与

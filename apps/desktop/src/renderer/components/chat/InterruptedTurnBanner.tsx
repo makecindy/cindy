@@ -1,3 +1,4 @@
+import type { ReconnectHandoff } from '../../../shared/agentInputQueue';
 /**
  * 「会话尾部停在错误行」的可操作提示条(输入框上方,与 live ErrorBanner 同位置)
  * ---------------------------------------------------------------------------
@@ -117,6 +118,7 @@ export function ErrorTailErrorBanner({
   forkStripEncryptedRunning,
   onDiagnose,
   errorReason,
+  reconnectHandoff,
   toolLoop,
   outputLimit,
   onSilentStopContinue,
@@ -147,6 +149,7 @@ export function ErrorTailErrorBanner({
   forkStripEncryptedRunning?: boolean;
   onDiagnose?: (error: ErrorDiagnosisSource) => void;
   errorReason?: string | null;
+  reconnectHandoff?: ReconnectHandoff;
   toolLoop?: ToolLoopErrorDetails;
   outputLimit?: OutputLimitDetails;
   onSilentStopContinue?: () => void;
@@ -164,6 +167,7 @@ export function ErrorTailErrorBanner({
       onChooseComputer={onChooseComputer}
       error={errorText}
       errorReason={errorReason}
+      reconnectHandoff={reconnectHandoff}
       toolLoop={toolLoop}
       outputLimit={outputLimit}
       retryText={ERROR_TAIL_RETRY_TOKEN}

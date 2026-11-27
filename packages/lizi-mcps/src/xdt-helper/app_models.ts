@@ -13,7 +13,7 @@ const endpoint = z.string().url().max(2048).refine(value => {
 }, 'Use a public endpoint without credentials, query or fragment');
 const interruptCodex = z.boolean().optional().describe('Only after the owner agrees to interrupt running local Codex work; call from Claude Code or Pi.');
 const connectionModel = z.strictObject({ id, name: z.string().min(1).max(256).optional(),
-  mode: z.enum(['chat', 'image_generation', 'video_generation']).optional().describe('媒体型号按用户资料显式声明；不根据品牌或型号名称猜测。Guide 可随后通过 manage_media_guide 补齐。'),
+  mode: z.enum(['chat', 'image_generation', 'video_generation', 'audio_speech', 'audio_transcription', 'realtime']).optional().describe('按用户资料声明型号类型；realtime 对话需声明 audio 输入与输出，账号权限需实际验证。图片/视频 Guide 可通过 manage_media_guide 补齐。'),
   modalities: z.strictObject({ input: z.array(z.enum(['text', 'image', 'video', 'audio'])).min(1).max(4),
     output: z.array(z.enum(['text', 'image', 'video', 'audio'])).min(1).max(4) }).optional().describe('实际输入/输出能力；图片编辑或图生视频须声明 image 输入。媒体能力独立于聊天图片输入和 supportsImageGeneration。'),
 });
@@ -77,7 +77,8 @@ export const appProviderChange = z.discriminatedUnion('action', [
       accountId: id.optional(), loginKey: z.string().regex(/^[A-Za-z0-9_-]{1,100}$/).optional(),
       methodId: z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/).optional(),
       target: accountProviderId.nullable().optional(),
-      strategy: z.enum(['least', 'round', 'order', 'weight', 'usage']).optional(),
+      // Same strategies as smart routes; the four former names are still accepted and converted on the computer.
+      strategy: z.enum(['expiring', 'order', 'rotate', 'weighted', 'drain', 'headroom', 'least', 'round', 'weight', 'usage']).optional(),
       paused: z.boolean().optional(), limit: z.number().int().min(1).max(16).nullable().optional(), weight: z.number().int().min(1).max(100).optional(),
     }) }),
 ]);

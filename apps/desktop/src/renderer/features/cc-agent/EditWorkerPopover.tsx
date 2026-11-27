@@ -157,7 +157,7 @@ export function EditWorkerPopover({
               <button
                 type="button"
                 aria-label={t('orca.editWorker.closeAria')}
-                className="inline-flex h-6 w-6 items-center justify-center rounded text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+                className="inline-flex h-6 w-6 items-center justify-center rounded-lg text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
                 disabled={isSubmitting}
                 onClick={handleClose}
               >

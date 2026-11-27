@@ -17,6 +17,7 @@ export type LoginLocale = SupportedLocale;
 const messages = {
   "zh-TW": {
     title: "登入 Cindy",
+    restoringSession: "正在恢復登入狀態",
     phonePlaceholder: "輸入手機號",
     emailPlaceholder: "輸入電子郵件地址",
     invalidEmail: "請輸入正確的電子郵件地址",
@@ -140,6 +141,7 @@ const messages = {
   },
   "zh-Hant-x-lzh": {
     title: "登 Cindy 之門",
+    restoringSession: "復其登入中",
     phonePlaceholder: "書手機號",
     emailPlaceholder: "書電子郵件地址",
     invalidEmail: "電子郵件地址有誤，請正書之",
@@ -263,6 +265,7 @@ const messages = {
   },
   "zh-Hans-x-lzh": {
     title: "登 Cindy 之门",
+    restoringSession: "复其登录中",
     phonePlaceholder: "书手机号",
     emailPlaceholder: "书电子邮件地址",
     invalidEmail: "电子邮件地址有误，请正书之",
@@ -386,6 +389,7 @@ const messages = {
   },
   "zh-CN": {
     title: "登录 Cindy",
+    restoringSession: "正在恢复登录状态",
     phonePlaceholder: "输入手机号",
     emailPlaceholder: "输入邮箱地址",
     invalidEmail: "请输入正确邮箱",
@@ -509,6 +513,7 @@ const messages = {
   },
   en: {
     title: "Sign in to Cindy",
+    restoringSession: "Restoring your session",
     phonePlaceholder: "Phone number",
     emailPlaceholder: "Email address",
     invalidEmail: "Please enter a valid email address",
@@ -646,6 +651,7 @@ const messages = {
   },
   ja: {
     title: "Cindy にログイン",
+    restoringSession: "ログイン状態を復元しています",
     phonePlaceholder: "携帯電話番号",
     emailPlaceholder: "メールアドレスを入力",
     invalidEmail: "正しいメールアドレスを入力してください",
@@ -782,6 +788,7 @@ const messages = {
   },
   ko: {
     title: "Cindy 로그인",
+    restoringSession: "로그인 상태 복원 중",
     phonePlaceholder: "휴대전화 번호",
     emailPlaceholder: "이메일 주소 입력",
     invalidEmail: "올바른 이메일 주소를 입력하세요",
@@ -915,6 +922,7 @@ const messages = {
 
   "es": {
     "title": "Iniciar sesión en Cindy",
+    restoringSession: "Restaurando tu sesión",
     "phonePlaceholder": "Número de teléfono",
     "emailPlaceholder": "Dirección de correo electrónico",
     "invalidEmail": "Ingresa un correo electrónico válido",
@@ -1025,6 +1033,7 @@ const messages = {
   },
   "fr": {
     "title": "Se connecter à Cindy",
+    restoringSession: "Restauration de votre session",
     "phonePlaceholder": "Numéro de téléphone",
     "emailPlaceholder": "Adresse e-mail",
     "invalidEmail": "Veuillez saisir une adresse e-mail valide",
@@ -1135,6 +1144,7 @@ const messages = {
   },
   "de": {
     "title": "Bei Cindy anmelden",
+    restoringSession: "Sitzung wird wiederhergestellt",
     "phonePlaceholder": "Telefonnummer",
     "emailPlaceholder": "E-Mail-Adresse",
     "invalidEmail": "Gib eine gültige E-Mail-Adresse ein",
@@ -1245,6 +1255,7 @@ const messages = {
   },
   "pt-PT": {
     "title": "Iniciar sessão na Cindy",
+    restoringSession: "A restaurar a sessão",
     "phonePlaceholder": "Número de telemóvel",
     "emailPlaceholder": "Endereço de e-mail",
     "invalidEmail": "Introduza um endereço de e-mail válido",
@@ -1355,6 +1366,7 @@ const messages = {
   },
   "pt-BR": {
     "title": "Entrar na Cindy",
+    restoringSession: "Restaurando sua sessão",
     "phonePlaceholder": "Número de celular",
     "emailPlaceholder": "Endereço de e-mail",
     "invalidEmail": "Digite um endereço de e-mail válido",
@@ -1817,6 +1829,34 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   "pt-PT": "O serviço de início de sessão está temporariamente indisponível.",
   "pt-BR": "O serviço de login está temporariamente indisponível.",
 },
+  AUTH_VAULT_INVALID: {
+    "zh-CN": "无法恢复本机登录记录，请重新登录。",
+    "zh-TW": "無法恢復本機登入記錄，請重新登入。",
+    "zh-Hant-x-lzh": "本機登入之錄不可復，請再登門。",
+    "zh-Hans-x-lzh": "本机登录之录不可复，请再登门。",
+    en: "Your saved sign-in could not be restored. Sign in again.",
+    ja: "保存されたログイン情報を復元できませんでした。再度ログインしてください。",
+    ko: "저장된 로그인 정보를 복원할 수 없습니다. 다시 로그인해 주세요.",
+    es: "No se pudo restaurar tu inicio de sesión guardado. Vuelve a iniciar sesión.",
+    fr: "Impossible de restaurer votre connexion enregistrée. Veuillez vous reconnecter.",
+    de: "Die gespeicherte Anmeldung konnte nicht wiederhergestellt werden. Melde dich erneut an.",
+    "pt-PT": "Não foi possível restaurar o início de sessão guardado. Inicie sessão novamente.",
+    "pt-BR": "Não foi possível restaurar seu login salvo. Entre novamente.",
+  },
+  SESSION_EXPIRED: {
+    "zh-CN": "登录已失效，请重新登录。",
+    "zh-TW": "登入已失效，請重新登入。",
+    "zh-Hant-x-lzh": "登入已失效，請再登門。",
+    "zh-Hans-x-lzh": "登录已失效，请再登门。",
+    en: "Your session expired. Sign in again.",
+    ja: "ログインの有効期限が切れました。もう一度ログインしてください。",
+    ko: "세션이 만료되었습니다. 다시 로그인해 주세요.",
+    es: "Tu sesión ha caducado. Vuelve a iniciar sesión.",
+    fr: "Votre session a expiré. Veuillez vous reconnecter.",
+    de: "Deine Sitzung ist abgelaufen. Melde dich erneut an.",
+    "pt-PT": "A sessão expirou. Inicie sessão novamente.",
+    "pt-BR": "Sua sessão expirou. Entre novamente.",
+  },
   ACCOUNT_UNAVAILABLE: {
     "zh-CN": "当前账号不可用，已退出登录。",
     "zh-TW": "目前帳號不可用，已登出。",

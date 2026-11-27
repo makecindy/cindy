@@ -265,7 +265,10 @@ export function patchCustomBotSkillSource(source: string,
       end++;
     }
   }
-  return `---\n${lines.join('\n')}\n---\n\n${edit.body.trim()}\n`;
+  const patched = `---\n${lines.join('\n')}\n---\n\n${edit.body.trim()}\n`;
+  if (Buffer.byteLength(parseBotSkillFile(patched).body, 'utf8') > BOT_SKILL_MAX_BODY_BYTES)
+    throw new BotSkillStoreError('SKILL_BODY_TOO_LARGE', 'Skill body too large');
+  return patched;
 }
 
 /** 解析 SKILL.md。frontmatter 缺失或残缺时尽力而为,不抛 —— 手写的技能也要能列出来。 */
@@ -598,14 +601,13 @@ export async function listBotSkillSources(userDataDir: string, botId: string): P
 
 /**
  * Write a whole SKILL.md verbatim (cloud companions restoring a copy), so native frontmatter
- * survives; same write queue, size limit and runtime refresh as saveBotSkill. `enabled` sets
+ * survives; same write queue and runtime refresh as saveBotSkill. Authoring limits do not
+ * apply to imported content restored from another computer. `enabled` sets
  * where it lives (moving the whole skill folder); omitted, it keeps its current state.
  */
 export async function saveBotSkillSource(userDataDir: string, botId: string, slug: string, source: string,
   options: { enabled?: boolean; expectedUpdatedAt?: string } = {}): Promise<void> {
   if (!normalizeBotSkillSlug(slug) || normalizeBotSkillSlug(slug) !== slug) throw new BotSkillStoreError('INVALID_ARGS', 'Invalid skill slug');
-  if (Buffer.byteLength(parseBotSkillFile(source).body, 'utf8') > BOT_SKILL_MAX_BODY_BYTES)
-    throw new BotSkillStoreError('SKILL_BODY_TOO_LARGE', 'Skill body too large');
   const key = botSkillRootDir(userDataDir, botId);
   const pending = (skillWrites.get(key) ?? Promise.resolve()).catch(() => {}).then(async () => {
     const previous = await readBotSkill(userDataDir, botId, slug);

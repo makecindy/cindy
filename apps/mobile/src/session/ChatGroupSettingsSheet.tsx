@@ -8,13 +8,16 @@
  * 直连时读写走账号自己的聊天服务（`management`）；经电脑打开的群只能做电脑支持的那几项，
  * 其余入口不显示。
  */
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useMemo, useState, type ReactNode } from 'react';
+import { createBotGroupMemberSearch } from '@cindy/maker-shared/botGroupMemberSearch';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 import { Check, Ellipsis, Plus, Reply, SlidersHorizontal, UserPlus } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import { resolveRemoteText } from '@cindy/device-link';
 import { BOT_GROUP_NAME_MAX_CHARS, type BotGroupMemberView, type BotGroupRemoteActionId, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
-import { chatGroupMembership, isActiveBotGroupMember } from '@cindy/maker-shared/botGroupPresentation';
+import { chatGroupHumanDisplayName, chatGroupMembership, isActiveBotGroupMember } from '@cindy/maker-shared/botGroupPresentation';
+import { BotGroupExternalBadge } from './BotGroupExternalBadge';
+import { botGroupMentionDisplayName } from './botGroupMentions';
 import { useAuth } from '@/auth/AuthContext';
 import { Text, TextInput } from '@/components/AppText';
 import { MainWindowActionButton } from '@/components/MobilePrimitives';
@@ -294,16 +297,23 @@ export function ChatGroupSettingsSheet({ visible, group, host, identityFor, onli
           {archived && !dissolved ? <Notice>{k('archived')}</Notice> : null}
           {soleOwner && !archived && !dissolved ? <Notice>{k('soleOwnerHint')}</Notice> : null}
           <About k={k} group={group} canEdit={writable} canFill={direct} onEdit={openEdit} />
-          {!dissolved && me?.actorId && (direct || maskRow) ? <SettingsGroup title={k('me')} footer={maskRow ? k('maskHint') : null} testID="botGroup.settings.me">
+          {!dissolved && me?.actorId && (direct || maskRow || group.assistantComputers) ? <SettingsGroup title={k('me')} footer={maskRow ? k('maskHint') : null} testID="botGroup.settings.me">
             {direct ? <ActionInfoRow key="profile" lead={avatar(identityOf(me))} label={k('myProfile')} value={me.name} accessibilityLabel={k('myProfile')}
               onPress={() => { setNickname(me.nickname ?? ''); setPage({ kind: 'profile' }); }} testID="botGroup.settings.profile" /> : null}
+            {group.assistantComputers ? <BotGroupMenu testID="botGroup.settings.assistantComputer" title={k('assistantComputer')} accessibilityLabel={k('assistantComputer')}
+              disabled={!online || archived || busy || (direct && !management?.ready) || !group.assistantComputers.length}
+              sections={[{ id: 'computer', options: group.assistantComputers.map(device => ({ id: device.id, title: device.name, selected: device.id === group.assistantDeviceId })) }]}
+              onSelect={deviceId => { if (deviceId !== group.assistantDeviceId) void settings('assistantDevice', { deviceId }); }}>
+              {open => <ActionInfoRow label={k('assistantComputer')} accessibilityLabel={k('assistantComputer')}
+                value={group.assistantComputers?.find(device => device.id === group.assistantDeviceId)?.name ?? k('chooseComputer')} onPress={open} />}
+            </BotGroupMenu> : null}
             {maskRow ? <ActionInfoRow key="mask" testID="botGroup.settings.mask"
               lead={maskCompanion ? <GroupMaskAvatar self={mask!.state!.self} companion={maskCompanion} deviceId={host.deviceId} />
                 : <RowIcon><Reply size={iconSize.md} color={colors.textSecondary} /></RowIcon>}
               label={t('groupChat.mask.title')} value={t(`groupChat.mask.status.${mask!.state!.status}`)} accessibilityLabel={t('groupChat.mask.title')} onPress={onMask} /> : null}
           </SettingsGroup> : null}
           {!dissolved && me?.actorId && group.supportsNotificationSettings && group.notificationMode ? <GroupNotificationSettings key={scope}
-            title={direct || maskRow ? undefined : k('me')} mode={group.notificationMode}
+            title={direct || maskRow || group.assistantComputers ? undefined : k('me')} mode={group.notificationMode} inherited={group.notificationModeInherited}
             disabled={!visible || !online || archived || busy || (direct && !management.ready)}
             save={mode => management ? management.act('notifications', { mode }) : act('notifications', { mode })} /> : null}
           {(direct || group.supportsOwnBotRemoval === true) && !dissolved && !archived && ownBots.length ? <SettingsGroup title={k('myTeammates')} footer={k('myTeammatesCaption')} testID="botGroup.settings.myTeammates">
@@ -375,13 +385,14 @@ function MembersTab({ k, group, owner, manager, direct, busy, ownRemoval, identi
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const [query, setQuery] = useState('');
-  const needle = query.trim().toLocaleLowerCase();
-  const shown = needle ? group.members.filter(member => member.name.toLocaleLowerCase().includes(needle)) : group.members;
+  const searchMembers = useMemo(() => createBotGroupMemberSearch(group.members, botGroupMentionDisplayName), [group.members]);
+  const shown = useMemo(() => searchMembers(query), [searchMembers, query]);
   return <>
     <TextInput value={query} onChangeText={setQuery} accessibilityLabel={k('searchMembers')} placeholder={k('searchMembers')}
       placeholderTextColor={colors.textPlaceholder} autoCorrect={false} returnKeyType="search" style={styles.search} testID="botGroup.settings.memberSearch" />
     {shown.length ? <View style={styles.card} testID="botGroup.settings.members">
       {shown.map((member, index) => {
+        const displayName = botGroupMentionDisplayName(member);
         const bot = member.actorKind === 'bot';
         const mine = bot && member.isOwned === true && member.assistant !== true && !!member.actorId;
         // Owners manage everyone but themselves; admins everyone but the owner. Ownership goes to a person.
@@ -394,15 +405,19 @@ function MembersTab({ k, group, owner, manager, direct, busy, ownRemoval, identi
           ...((manageable && (direct || group.supportsMemberRemoval) || mine && ownRemoval) ? [{ id: 'remove', title: t('groupChat.settings.remove'), destructive: true }] : []),
         ];
         const paused = !isActiveBotGroupMember(member);
-        const meta = bot ? `${k('teammateTag')} · ${k(paused ? 'paused' : ACCESS_LABEL[member.guestAccess ?? 'chat'])}` : t(`groupChat.settings.roles.${member.role ?? 'member'}`);
+        const orgInfo = !bot ? (member.departmentPath || member.department || (member.nickname && member.orgName ? member.orgName : null)) : null;
+        const meta = bot
+          ? `${k('teammateTag')} · ${k(paused ? 'paused' : ACCESS_LABEL[member.guestAccess ?? 'chat'])}`
+          : [t(`groupChat.settings.roles.${member.role ?? 'member'}`), orgInfo].filter(Boolean).join(' · ');
         // With a native menu the system opens it from the row; the fallback sheet passes `open`.
-        const row = (menu: boolean, open?: () => void) => <Pressable accessibilityRole={menu ? 'button' : undefined} accessibilityLabel={`${member.name}, ${meta}`}
+        const row = (menu: boolean, open?: () => void) => <Pressable accessibilityRole={menu ? 'button' : undefined} accessibilityLabel={[displayName, member.external ? t('groupChat.externalBadge') : '', meta].filter(Boolean).join(', ')}
           disabled={!menu || busy} onPress={open} style={({ pressed }) => [styles.memberRow, pressed && menu && mobileInteractionStyles.pressed]}
           testID={`botGroup.settings.member.${member.botId}`}>
           <View style={paused ? styles.inactive : undefined}>{avatar(identityOf(member))}</View>
           <View style={styles.flex}>
             <View style={styles.nameLine}>
-              <Text numberOfLines={1} style={styles.rowTitle}>{member.name}</Text>
+              <Text numberOfLines={1} style={styles.rowTitle}>{displayName}</Text>
+              {member.external === true ? <BotGroupExternalBadge /> : null}
               {member.isSelf ? <Text style={styles.tag}>{k('you')}</Text> : null}
             </View>
             <Text numberOfLines={1} style={styles.rowMeta}>{meta}</Text>
@@ -411,7 +426,7 @@ function MembersTab({ k, group, owner, manager, direct, busy, ownRemoval, identi
           {index < shown.length - 1 ? <View style={styles.memberDivider} /> : null}
         </Pressable>;
         if (!options.length || group.dissolvedAt) return <View key={member.botId}>{row(false)}</View>;
-        return <BotGroupMenu key={member.botId} title={member.name} disabled={busy} accessibilityLabel={member.name}
+        return <BotGroupMenu key={member.botId} title={displayName} disabled={busy} accessibilityLabel={displayName}
           testID={`botGroup.settings.memberMenu.${member.botId}`} sections={[{ id: 'member', options }]}
           onSelect={id => { if (id === 'access') access(member.actorId!); else if (id === 'role') role(member); else if (id === 'transfer') transfer(member); else remove(member); }}>
           {open => row(true, open)}
@@ -454,6 +469,11 @@ function ManagePage({ k, group, owner, writable, online, busy, direct, settings,
         { id: 'mentioned', title: t('groupChat.settings.replyModeMentioned') }, { id: 'all', title: t('groupChat.settings.replyModeAll') },
       ], 'replyMode', 'botGroup.settings.replyMode')}
     </SettingsGroup>
+    {!direct && group.supportsGroupAssistant && typeof group.assistantEnabled === 'boolean' ? <SettingsGroup footer={k('assistantHint')}>
+      <SettingsSwitchRow label={k('assistant')} value={group.assistantEnabled}
+        disabled={!writable || busy || !group.supportsAssistantManagement || group.revision === undefined} switchTestID="botGroup.settings.assistant"
+        onValueChange={assistant => { void settings('set-assistant', { assistant }); }} />
+    </SettingsGroup> : null}
     {group.supportsMentionAudiences && owner ? <SettingsGroup footer={t('groupChat.settings.allowMentionAllBotsHint')}>
       <SettingsSwitchRow label={t('groupChat.settings.allowMentionAllBots')} value={group.allowMentionAllBots === true}
         disabled={!writable || busy} switchTestID="botGroup.settings.allowMentionAllBots"
@@ -524,7 +544,7 @@ function ProfilePage({ k, me, identity, avatar, nickname, onNickname, editable, 
     </View>
     <View style={styles.section}>
       <Text style={styles.sectionTitle}>{k('nickname')}</Text>
-      <TextInput accessibilityLabel={k('nickname')} value={nickname} maxLength={40} editable={editable} placeholder={me.displayName ?? me.name}
+      <TextInput accessibilityLabel={k('nickname')} value={nickname} maxLength={40} editable={editable} placeholder={chatGroupHumanDisplayName({ ...me, nickname: null, name: me.displayName ?? me.name })}
         onChangeText={onNickname} placeholderTextColor={colors.textPlaceholder} style={styles.input} testID="botGroup.settings.nickname" />
       <Text style={styles.note}>{k('nicknameHint')}</Text>
     </View>

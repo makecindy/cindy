@@ -13,6 +13,7 @@ export async function runSessionExecutionAction(params: {
     setExecutionPaused(id: string, paused: boolean): void;
     isExecutionPaused(id: string): boolean;
     isQueuePaused(id: string): boolean;
+    getWorkdirBlockedQueueHead(id: string): string | undefined;
     resume(id: string): unknown;
     retryLastError(id: string, expectedQueueHeadClientId?: string, expectedSwitchRevision?: number,
       guards?: { beforeMutation: () => Promise<void>; beforeDelivery: () => Promise<void> }): Promise<unknown>;
@@ -62,5 +63,15 @@ export async function runSessionExecutionAction(params: {
   } else await coordinator.retryLastError(id, undefined, undefined, { beforeMutation, beforeDelivery });
   await deps.persist(id);
   await beforeMutation();
-  return { ok: true as const, result: { executionPaused: coordinator.isExecutionPaused(id), queuePaused: coordinator.isQueuePaused(id) } };
+  const blockedHead = action === 'resume' ? coordinator.getWorkdirBlockedQueueHead(id) : undefined;
+  return { ok: true as const, result: {
+    executionPaused: coordinator.isExecutionPaused(id),
+    queuePaused: coordinator.isQueuePaused(id),
+    ...(blockedHead ? { queueBlock: {
+      code: 'WORKDIR_MISSING',
+      queuedMessageId: blockedHead,
+      nextAction: 'retry',
+      message: 'Restore the working directory, then retry the queued message.',
+    } } : {}),
+  } };
 }

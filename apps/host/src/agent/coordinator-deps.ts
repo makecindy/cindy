@@ -244,17 +244,18 @@ export function hostCoordinatorDeps(ctx: HostCoordinatorContext): AgentInputCoor
     // here; the Host has none of them.
     onRejectedUserTurn: ctx.autoResume.onRejectedUserTurn,
     onDispatchedUserTurn: (id, item, preVendorDispatchAt) => {
-      if (!item.autoResume) void deps.touchSessionActivity?.(id, preVendorDispatchAt);
+      if (!item.autoResume && item.origin?.kind !== 'scheduler') void deps.touchSessionActivity?.(id, preVendorDispatchAt);
       void settleTaskActionInput(item).catch(() => undefined);
       const attemptToken = ctx.autoResume.autoResumeAttemptToken(item);
       // The vendor accepted the resume: the held error is dropped, unless a newer attempt owns it.
       if (attemptToken !== null) ctx.autoResume.autoResumeBookkeeping.discardSuppressedError(id, attemptToken);
     },
     onSteerAccepted: (id, item) => {
-      if (!item.autoResume) void deps.touchSessionActivity?.(id);
+      if (!item.autoResume && item.origin?.kind !== 'scheduler') void deps.touchSessionActivity?.(id);
       void settleTaskActionInput(item).catch(() => undefined);
       // The desktop also releases the Orca accepted callback; Orca tasks are refused at Host admission.
     },
+    workerInputs: undefined, // Orca Worker recovery is owned by the desktop runtime.
     onUiRetry: (id, clientId, source, attemptToken) => {
       const bookkeeping = ctx.autoResume.autoResumeBookkeeping;
       bookkeeping.claimSuppressedErrorForRetry(id, clientId, source);

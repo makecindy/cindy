@@ -130,5 +130,5 @@ export function filterSharedHomeRows<Row extends { item?: RemoteSessionListItem 
 
 function sessionVendor(item: RemoteSessionListItem): HomeVendorFilter {
   const kind = (item.session as { agentKind?: unknown }).agentKind;
-  return kind === 'codex' || kind === 'pi' ? kind : 'cc';
+  return kind === 'codex' || kind === 'pi' || kind === 'acp' ? kind : 'cc';
 }

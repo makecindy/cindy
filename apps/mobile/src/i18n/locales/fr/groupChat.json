@@ -100,6 +100,8 @@
   },
   "notice": {
     "memberJoined": "{{name}} a rejoint le groupe",
+    "memberJoinedList": "{{names}} ont rejoint le groupe",
+    "memberJoinedSummary": "{{names}} et {{others}} autres ont rejoint le groupe",
     "memberFailed": "{{name}} n'a pas pu répondre cette fois",
     "memberTimeout": "{{name}} a mis trop de temps à répondre et a été ignoré cette fois",
     "memberUnavailable": "{{name}} est indisponible et n'est pas intervenu cette fois",
@@ -178,7 +180,9 @@
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} n’a pas pu exécuter cet outil : l’autorisation du groupe a expiré ou ne permet pas cette action. Le propriétaire de l’ami peut renouveler la demande dans ce groupe.",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "L’autorisation de groupe de {{name}} n’a pas pu être vérifiée ; cet outil n’a donc pas été exécuté. Réessayez une fois la connexion rétablie.",
       "ATTACHMENTS_UNAVAILABLE": "Certaines pièces jointes n’ont pas été transmises à {{name}} en raison d’un échec de téléchargement ou de la limite de pièces jointes. Renvoyez celles nécessaires à cette demande.",
-      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, connectez votre Cindy pour que Cindy puisse travailler pour vous (aucun de vos Cindy n'est en ligne pour le moment)."
+      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, connectez votre Cindy pour que Cindy puisse travailler pour vous (aucun de vos Cindy n'est en ligne pour le moment).",
+      "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}, choisissez un ordinateur pour ce groupe afin de poursuivre cette demande.",
+      "GROUP_ASSISTANT_DEVICE_OFFLINE": "L’ordinateur choisi par {{name}} pour ce groupe est hors ligne."
     }
   },
   "plan": {
@@ -507,10 +511,12 @@
       "tools": "Outils et informations autorisés par le propriétaire",
       "authorizeTitle": "Autoriser ce groupe à utiliser les outils et les informations de {{name}} ?",
       "toolsHint": "Les membres pourront utiliser les outils existants et les informations privées de cet ami. Les résultats sont visibles par tous. Les règles d'approbation existantes restent appliquées. La révocation arrête les demandes en cours, mais ne peut pas annuler les actions déjà terminées.",
-      "confirm": "Confirmer"
+      "confirm": "Autoriser les outils"
     }
   },
   "groupSettings": {
+    "assistantComputer": "Ordinateur d’exécution",
+    "chooseComputer": "Choisir un ordinateur",
     "tabSettings": "Paramètres",
     "youAreOwner": "Vous êtes propriétaire",
     "youAreAdmin": "Vous êtes administrateur",
@@ -552,6 +558,8 @@
     "accessChat": "Conversation de groupe uniquement",
     "accessTools": "Peut utiliser les outils et les informations",
     "replies": "Mode de réponse des amis",
+    "assistant": "Cindy du groupe",
+    "assistantHint": "Travaille sur l’ordinateur de la personne qui la @mentionne.",
     "replyModeMentionedNote": "Les amis restent silencieux, sauf si quelqu’un les @mentionne.",
     "work": "Répartitions du travail",
     "organizerHint": "Décide qui effectue chaque étape. Par défaut, le premier ami.",
@@ -596,7 +604,7 @@
     "removeOwnHint": "{{name}} ne recevra plus les messages de « {{group}} ». L’historique est conservé ; les autres groupes et discussions privées ne sont pas affectés.",
     "removeOwnActiveHint": "Ses demandes en cours dans ce groupe seront arrêtées. Les tâches lancées indépendamment continueront.",
     "stopAndRemove": "Arrêter et retirer",
-    "confirm": "Confirmer",
+    "confirm": "Autoriser les outils",
     "inviteTitle": "Inviter dans le groupe",
     "reusableLink": "Sans expiration · Réutilisable par plusieurs personnes",
     "singleUseUntil": "Usage unique · Expire le {{date}}",
@@ -655,5 +663,6 @@
     "externalFormatError": "Rouvrez le lien complet du message d'origine."
   },
   "memberCount_many": "{{count}} membres",
-  "waitingForOwner": "En attente de confirmation"
+  "waitingForOwner": "En attente de confirmation",
+  "externalBadge": "Externe"
 }

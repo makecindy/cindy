@@ -74,6 +74,34 @@ it.each(['live', 'tail'] as const)('keeps silent-stop %s copy neutral and preser
   expect(diagnose).toHaveBeenCalledWith(expect.objectContaining({ details: message, reason }));
 });
 
+// Unit · a reconnect deadline can precede any assistant output. Live and restored
+// errors must offer continuation, and an accepted automatic attempt owns the tail.
+it('offers continuation for a reconnect stall until automatic recovery takes over', async () => {
+  await i18n.changeLanguage('en');
+  const reason = 'codex_reconnect_stalled';
+  const message = 'The model connection has been retrying for 120s';
+  const input = {
+    messages: [{ ...row(message), content: { message, reason, reconnectHandoff: 'exhausted' } }], session: null,
+    projection: { error: null, credentialSwitchWait: null }, isSessionStreaming: false,
+    continuationInFlight: false, sessionMetadataSyncedForConnection: true,
+    interruptAcked: false, hiddenErrorClientIds: new Set<string>(),
+  };
+  const resume = vi.fn();
+  const tail = resolveSessionTailBanner(input);
+  await act(async () => root.render(<SessionTailBanner state={tail!} onContinue={resume} onDismiss={vi.fn()} />));
+  expect(host.textContent).toContain(i18n.t('session.tail.codexReconnectStalled'));
+  expect(host.textContent).toContain(i18n.t('session.tail.reconnectAutoResumeExhausted'));
+  await act(async () => clickText(i18n.t('session.tail.continueTask')));
+  await act(async () => root.render(<InlineQueueSection projection={{ error: message, errorReason: reason, reconnectHandoff: 'disabled' } as InputProjection}
+    onRetryError={vi.fn()} onContinueAfterError={resume} onClearError={vi.fn()} onResume={vi.fn()} />));
+  await act(async () => clickText(i18n.t('session.tail.continueTask')));
+  expect(host.textContent).toContain(i18n.t('session.tail.reconnectAutoResumeDisabled'));
+  expect(resume).toHaveBeenCalledTimes(2);
+  expect(resolveSessionTailBanner({ ...input,
+    projection: { ...input.projection, autoResumePending: { reason, attempt: 1, maxAttempts: 5 } },
+  })).toBeNull();
+});
+
 // 诊断入口只在展开详情后出现；预填给新任务的提示带出错任务链接，且与详情同样脱敏。
 it('offers diagnosis after expanding details with a redacted prompt for the failed session', async () => {
   await i18n.changeLanguage('en');

@@ -67,6 +67,7 @@ function fixture() {
     onPcm16k: vi.fn(),
   };
   const player = {
+    playedMilliseconds: vi.fn(() => 275),
     play: vi.fn<SpeechPlayer['play']>(async (_read, _rate, onStarted) => {
       onStarted?.();
     }),
@@ -125,6 +126,67 @@ function fixture() {
     questionTarget,
   };
 }
+
+describe('native realtime calls', () => {
+  const realtime = { mode: 'realtime' as const, providerId: 'byok', agent: 'codex' as const,
+    modelId: 'gpt-realtime-2', voice: 'marin', protocol: 'openai-realtime' as const };
+
+  it('does not reopen capture after End while the initial question state is being installed', async () => {
+    const f = fixture();
+    let finish!: () => void;
+    const pending = vi.fn(() => new Promise<void>(resolve => { finish = resolve; }));
+    Object.assign(f.api, { setRealtimeQuestion: pending });
+    const opening = f.controller.start(realtime);
+    await vi.waitFor(() => expect(pending).toHaveBeenCalledOnce());
+    f.controller.end();
+    finish();
+    await opening;
+    expect(f.microphone.start).not.toHaveBeenCalled();
+    expect(f.controller.getSnapshot().phase).toBe('idle');
+  });
+
+  it('plays native audio directly, reports the heard duration, and does not synthesize call transcripts', async () => {
+    const f = fixture();
+    f.player.play.mockImplementation(async (read, _rate, onStarted) => { await read(); onStarted?.(); await new Promise(() => {}); });
+    await f.controller.start(realtime);
+    f.emit({ type: 'call-record', record: { version: 1, callId: 'call-1', startedAt: Date.now(), handoffs: [],
+      turns: [{ id: 'answer', role: 'assistant', text: 'Already spoken by realtime', complete: true, createdAt: Date.now() }] } });
+    f.emit({ type: 'realtime-audio', itemId: 'answer' });
+    await Promise.resolve(); await Promise.resolve();
+    expect(f.api.readSpeech).toHaveBeenCalledWith('call-1', 'answer');
+    expect(f.api.speak).not.toHaveBeenCalled();
+    f.emit({ type: 'realtime-interrupt', throughResponse: 1 });
+    expect(f.api.interrupt).toHaveBeenLastCalledWith('call-1', { itemId: 'answer', playedMs: 275 }, 1);
+    f.controller.end();
+  });
+
+  it('does not send realtime transcripts through the old text conversation pipeline', async () => {
+    const f = fixture(); await f.controller.start(realtime);
+    f.emit({ type: 'realtime-input-start', itemId: 'user-a' });
+    f.emit({ type: 'realtime-utterance', itemId: 'user-a', text: '你好', question: false });
+    await Promise.resolve();
+    expect(f.send).not.toHaveBeenCalled();
+    expect(f.api.speak).not.toHaveBeenCalled();
+    f.controller.end();
+  });
+
+  it('keeps a late realtime answer bound to its original visible question', async () => {
+    const f = fixture();
+    const a = { receive: vi.fn() } as unknown as VoiceQuestionTarget;
+    const b = { receive: vi.fn() } as unknown as VoiceQuestionTarget;
+    f.questionPending.mockReturnValue(true); f.questionTarget.mockReturnValue(a);
+    await f.controller.start(realtime);
+    f.emit({ type: 'realtime-input-start', itemId: 'question-a' });
+    f.questionTarget.mockReturnValue(b);
+    f.emit({ type: 'realtime-input-start', itemId: 'question-b' });
+    f.emit({ type: 'realtime-utterance', itemId: 'question-a', text: 'first', question: true });
+    expect(a.receive).not.toHaveBeenCalled(); expect(b.receive).not.toHaveBeenCalled();
+    f.emit({ type: 'realtime-utterance', itemId: 'question-b', text: 'second', question: true });
+    expect(b.receive).toHaveBeenCalledWith('second');
+    expect(f.send).not.toHaveBeenCalled();
+    f.controller.end();
+  });
+});
 
 describe('independent call transcript and task acceptance', () => {
   beforeEach(() => vi.useFakeTimers());

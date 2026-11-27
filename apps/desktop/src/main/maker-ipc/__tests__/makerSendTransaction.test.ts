@@ -5463,6 +5463,33 @@ describe('repeatable environment notes are sent only when they change', () => {
     await transaction.sendToAgentAccepted('session-1', 'b');
     expect(sentAt(session, 1)).toBe('b');
   });
+
+  it('keeps ACP leading slash commands clean and defuses slash mentions in host wire notes without altering user text', async () => {
+    let handoff: string | null = 'Earlier turn mentioned /learn and /compact.\n\n== End of handoff note; the user\'s new message follows ==';
+    const consumePendingHandoff = vi.fn(() => { handoff = null; });
+    const session = createSession({ agentKind: 'acp' });
+    const { transaction } = setup({
+      getSession: vi.fn(() => session),
+      peekPendingHandoff: vi.fn(async () => handoff),
+      consumePendingHandoff,
+    });
+    // Leading `/plan` on mobile: no client note or handoff prepended, handoff stays pending.
+    await transaction.sendToAgentAccepted('session-1', '/plan 检查登录流程', undefined, { sourceDevice: phone });
+    expect(sentAt(session, 0)).toBe('/plan 检查登录流程');
+    expect(consumePendingHandoff).not.toHaveBeenCalled();
+
+    // Next normal message: client note + handoff are prepended with `/learn` and `/compact` defused,
+    // while `/learn` inside the user's own message stays intact.
+    await transaction.sendToAgentAccepted('session-1', '顺便查一下为什么 /learn 会被触发', undefined, {
+      sourceDevice: phone,
+      persistUserMessage: { clientId: 'm-acp-1', content: '顺便查一下为什么 /learn 会被触发' },
+    });
+    const dispatched = sentAt(session, 1);
+    expect(dispatched).toContain('[客户端说明]');
+    expect(dispatched).toContain('Earlier turn mentioned learn and compact.');
+    expect(dispatched).toMatch(/顺便查一下为什么 \/learn 会被触发$/);
+    expect(consumePendingHandoff).toHaveBeenCalledOnce();
+  });
 });
 
 describe('Agent prewarm', () => {

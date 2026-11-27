@@ -57,7 +57,7 @@ const VM = {
   weight: 1,
   paused: false,
 };
-const CONFIG: ProviderGroupConfig = { strategy: 'least', autoSwitch: true, members: [VM] };
+const CONFIG: ProviderGroupConfig = { strategy: 'expiring', autoSwitch: true, members: [VM] };
 type DeviceVersions = { devices: Array<{ deviceId: string; appVersion: string | null }> };
 
 function deferred<T>() {

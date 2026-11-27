@@ -1166,6 +1166,24 @@ describe('translateErrorNotification', () => {
     },
   );
 
+  // Production error classification feeds both live errors and turn/completed.
+  // Native response.incomplete previously missed existing output-limit guidance.
+  // Minimal input: native's exact incomplete message; tier: unit (no IO).
+  it('preserves output truncation as output-limit without inventing usage or retrying', async () => {
+    const message = 'Incomplete response returned, reason: max_output_tokens';
+    const queue = createAsyncQueue<AgentEvent>();
+    translateErrorNotification(makeParams({ message, willRetry: false }), queue, makeCtx(newCodexRuntimeState()));
+    expect(await collect(queue)).toMatchObject([{ type: 'error', data: {
+      message, reason: 'output-limit', isTerminal: true, willRetry: false,
+    } }]);
+    expect(classifyCodexError({ message }).data).not.toHaveProperty('outputLimit');
+    for (const other of ['max_output_tokens is not supported', 'Incomplete response returned, reason: content_filter',
+      'stream disconnected before completion', 'You have exceeded your quota']) {
+      expect(classifyCodexError({ message: other }).reason).not.toBe('output-limit');
+    }
+    expect(classifyCodexError({ message, codexErrorInfo: 'contextWindowExceeded' }).reason).toBe('context-overflow');
+  });
+
   it('classifyCodexError 把 contextWindowExceeded 与 overload 映射成稳定 reason', () => {
     expect(classifyCodexError({
       message: 'window full',
@@ -3357,5 +3375,72 @@ describe('codex speed around unpaired output and human waits', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// 测试价值：依据 Codex 0.156.0 新增 CodexErrorInfo 变体与供应商安全拦截不换号换模型的契约；此前未识别 misalignmentPolicyViolation、
+// rateLimitExceeded 及文本/JSON 安全拦截，会把安全拦截漏标 reason 或混入 usageLimit/model_unavailable；
+// 生产入口 classifyCodexError；最小失败输入为 misalignmentPolicyViolation、cyberPolicy、safety_violation 与 rateLimitExceeded；tier: unit。
+describe('classifyCodexError safety refusal and 0.156 error tags', () => {
+  it.each([
+    ['cyberPolicy tag', { message: 'Request blocked', codexErrorInfo: 'cyberPolicy' as CodexErrorInfo }],
+    ['misalignmentPolicyViolation tag', { message: 'Request blocked', codexErrorInfo: 'misalignmentPolicyViolation' as CodexErrorInfo }],
+    ['OpenAI safety_violation JSON', { message: '{"error":{"code":"safety_violation","message":"Blocked"}}', codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 403 } } as CodexErrorInfo }],
+    ['OpenAI usage policy text', { message: 'Your prompt was flagged as potentially violating our usage policy.', codexErrorInfo: 'badRequest' as CodexErrorInfo }],
+  ])('classifies %s as provider-safety-refusal without usageLimit or capacity retry', (_label, input) => {
+    const classified = classifyCodexError(input);
+    expect(classified.reason).toBe('provider-safety-refusal');
+    expect(classified.usageLimit).toBe(false);
+    expect(classified.isCapacityError).toBe(false);
+    expect(classified.data).toMatchObject({
+      reason: 'provider-safety-refusal',
+    });
+    expect(classified.data).not.toHaveProperty('usageLimit');
+  });
+
+  it('keeps rateLimitExceeded distinct from model_unavailable and preserves its structured tag', () => {
+    const classified = classifyCodexError({
+      message: 'HTTP 429 Too Many Requests: rate limit exceeded',
+      codexErrorInfo: 'rateLimitExceeded',
+    });
+    expect(classified.reason).toBeUndefined();
+    expect(classified.usageLimit).toBe(true);
+    expect(classified.errorStatus).toBe(429);
+    expect(classified.data).toMatchObject({
+      codexErrorInfo: 'rateLimitExceeded',
+      errorStatus: 429,
+      usageLimit: true,
+    });
+  });
+});
+describe('translateItemNotification clock.sleep', () => {
+  // #11022: 长等待 / 轮询的长任务里 codex 会连续发 clock.sleep 通知(item type 为 `sleep`)。
+  // 它没有正文、也没有可展示的进度, 走 default 只会在日志里刷出成百上千条
+  // unhandled item type 警告, 把真正的故障行埋掉。
+  it('treats clock.sleep items as intentional silence, and still warns on a genuinely unknown type', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const warnings: Array<{ message: string; data?: unknown }> = [];
+    const ctx = {
+      rt,
+      log: {
+        info: (): void => undefined,
+        error: (): void => undefined,
+        debug: (): void => undefined,
+        warn: (message: string, data?: unknown): void => { warnings.push({ message, data }); },
+      },
+    };
+
+    for (const phase of ['started', 'completed'] as const) {
+      translateItemNotification(phase, { threadId: 't1', turnId: 'turn-a',
+        item: { type: 'sleep', id: `sleep-${phase}` } } as never, q, ctx);
+    }
+    expect(warnings).toEqual([]);
+    expect(await collect(q)).toEqual([]);
+
+    // 声明 sleep 不能变成「静音一切未知类型」: 真未知的 item 仍要留警告。
+    translateItemNotification('started', { threadId: 't1', turnId: 'turn-a',
+      item: { type: 'notARealCodexItem', id: 'mystery' } } as never, q, ctx);
+    expect(warnings).toMatchObject([{ message: 'unhandled item type', data: { itemType: 'notARealCodexItem' } }]);
   });
 });

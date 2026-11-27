@@ -2,6 +2,7 @@ import { ProjectIcon } from '@/features/cc-agent/sidebar/ProjectIcon';
 import { useProjectInfo } from '@/features/cc-agent/hooks/useProjectInfo';
 import { resolveProjectIcon } from '@cindy/maker-shared/project-alias-sync';
 import { ErrorNotice } from '@/components/ui/error-notice';
+import { SearchInput } from '@/components/ui/search-input';
 import { Button } from '@/components/ui/button';
 import {
   Folder,
@@ -10,7 +11,6 @@ import {
   Loader2,
   MessageCircle,
   RefreshCw,
-  Search,
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -230,11 +230,33 @@ export function FolderPickerPopover({
     () => filterFolderPickerOptions(effectiveProjectOptions, activeProjectQuery),
     [effectiveProjectOptions, activeProjectQuery],
   );
+  // 当前高亮的项目行:回车选它,方向键与鼠标移动都改它。null = 默认:有词指向首个结果,
+  // 无词不高亮。每次改词(输入、Esc 清空、关闭)都显式回到默认,回到曾输入过的词也不复活
+  // 旧高亮;另记下所在的搜索词,搜索框因项目数变化出现/消失时同样回到默认。
+  // 列表异步变短时夹到末项;空列表时为 -1。
+  const [highlight, setHighlight] = useState<{ query: string; index: number | null }>({
+    query: '',
+    index: null,
+  });
+  const resetHighlight = () => setHighlight({ query: '', index: null });
+  const highlightIndex = Math.min(
+    highlight.index !== null && highlight.query === activeProjectQuery
+      ? highlight.index
+      : activeProjectQuery
+        ? 0
+        : -1,
+    visibleProjectOptions.length - 1,
+  );
+  const setHighlightIndex = (index: number) => {
+    if (index === highlightIndex) return;
+    setHighlight({ query: activeProjectQuery, index });
+  };
 
-  // 每次打开都从完整列表开始,不残留上次的搜索词。
+  // 每次打开都从完整列表开始,不残留上次的搜索词与高亮。
   useEffect(() => {
     if (!open) {
       setProjectQuery('');
+      setHighlight({ query: '', index: null });
       setBrowseFailed(false);
     }
   }, [open]);
@@ -304,8 +326,8 @@ export function FolderPickerPopover({
 
   const renderProject = (project: FolderPickerOption, index: number) => {
     const canRemove = allowRemove && (!project.remoteDevice || onRemoveRemoteProject !== undefined);
-    // 有搜索词时首个结果常亮:回车选中的就是它。
-    const isEnterTarget = activeProjectQuery !== '' && index === 0;
+    // 高亮行就是回车会选中的行;键盘与鼠标共用这一个指示,不再各亮一行。
+    const isHighlighted = index === highlightIndex;
     return (
       /* 行容器**不可交互**(Codex review P1):选择与删除是**兄弟**控件。
          之前为了避开 <button> 里嵌 <button> 的非法 HTML,把外层改成 div[role="button"] ——
@@ -315,11 +337,19 @@ export function FolderPickerPopover({
          语义清晰,也不再需要 stopPropagation 去拦冒泡。 */
       <div
         key={project.key ?? project.path}
+        data-folder-picker-index={index}
+        data-highlighted={isHighlighted || undefined}
+        onMouseMove={(e) => {
+          // 方向键滚动(或弹层刚出现)时,行会滑到静止的指针下,浏览器为此补发的 mousemove
+          // 没有位移;只有指针真的动了才算用户在用鼠标,高亮不会被拽到指针所在行。
+          if (e.movementX === 0 && e.movementY === 0) return;
+          setHighlightIndex(index);
+        }}
         className={cn(
-          'group flex w-full items-center gap-3 rounded-lg px-3 py-2.5',
+          // scroll-my-6 与列表边缘 24px 渐隐等宽:方向键滚入的行不会停在半透明的边上。
+          'group flex w-full scroll-my-6 items-center gap-3 rounded-lg px-3 py-2.5',
           'transition-colors',
-          'hover:bg-[var(--folder-item-hover)]',
-          isEnterTarget && 'bg-[var(--folder-item-hover)]',
+          isHighlighted && 'bg-[var(--folder-item-hover)]',
         )}
       >
         <button
@@ -448,6 +478,7 @@ export function FolderPickerPopover({
           if (!projectQuery) return;
           e.preventDefault();
           setProjectQuery('');
+          resetHighlight();
         }}
         aria-busy={selectionPending}
       >
@@ -484,46 +515,57 @@ export function FolderPickerPopover({
             </div>
             {showProjectSearch && (
               <div className="px-1 pb-1">
-                <div className="relative">
-                  <Search
-                    size={12}
-                    className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--folder-item-path)]"
-                  />
-                  <input
-                    ref={projectSearchRef}
-                    type="text"
-                    value={projectQuery}
-                    onChange={(e) => {
-                      setProjectQuery(e.target.value);
-                      if (projectScrollEl) projectScrollEl.scrollTop = 0;
-                    }}
-                    onKeyDown={(e) => {
-                      // 弹层经 portal 渲染,React 事件仍会冒泡到所在的输入区;搜索框的按键只归它自己。
-                      e.stopPropagation();
-                      if (e.key !== 'Enter' || e.nativeEvent.isComposing) return;
-                      const first = activeProjectQuery ? visibleProjectOptions[0] : undefined;
-                      if (!first) return;
+                <SearchInput
+                  surface="panel"
+                  inputRef={projectSearchRef}
+                  value={projectQuery}
+                  onChange={(value) => {
+                    setProjectQuery(value);
+                    resetHighlight();
+                    if (projectScrollEl) projectScrollEl.scrollTop = 0;
+                  }}
+                  onKeyDown={(e) => {
+                    // 弹层经 portal 渲染,React 事件仍会冒泡到所在的输入区;搜索框的按键只归它自己。
+                    e.stopPropagation();
+                    // 输入法组字时的回车与方向键属于候选词,不动列表。
+                    if (e.nativeEvent.isComposing) return;
+                    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                      const last = visibleProjectOptions.length - 1;
+                      if (last < 0) return;
                       e.preventDefault();
-                      void handleSelectPath(first.path, 'project', first);
-                    }}
-                    placeholder={t('newChat.folderPicker.searchProjects')}
-                    aria-label={t('newChat.folderPicker.searchProjects')}
-                    className={cn(
-                      'h-8 w-full rounded-full border border-[var(--folder-picker-border)] bg-transparent',
-                      'pl-7 pr-2 text-13 text-[var(--folder-item-name)] outline-none',
-                      // DESIGN.md §4 Inputs & Forms:单行 input 一律 pill;placeholder 与 focus
-                      // 对齐分支选择器的搜索框。
-                      'placeholder:text-[var(--text-placeholder)]',
-                      'focus:border-[var(--focus-ring)] focus:ring-1 focus:ring-[var(--focus-ring-soft)]',
-                    )}
-                  />
-                </div>
+                      // 首尾停住不循环;尚无高亮时 ↓ 进首项、↑ 进末项。
+                      const next =
+                        e.key === 'ArrowDown'
+                          ? Math.min(highlightIndex + 1, last)
+                          : highlightIndex < 0
+                            ? last
+                            : Math.max(highlightIndex - 1, 0);
+                      setHighlightIndex(next);
+                      // 焦点留在搜索框,只把高亮行滚进可视区(行已在 DOM,无需等重渲染)。
+                      projectScrollEl
+                        ?.querySelector<HTMLElement>(`[data-folder-picker-index="${next}"]`)
+                        ?.scrollIntoView?.({ block: 'nearest' });
+                      return;
+                    }
+                    if (e.key !== 'Enter') return;
+                    const target = visibleProjectOptions[highlightIndex];
+                    if (!target) return;
+                    e.preventDefault();
+                    void handleSelectPath(target.path, 'project', target);
+                  }}
+                  placeholder={t('newChat.folderPicker.searchProjects')}
+                  aria-label={t('newChat.folderPicker.searchProjects')}
+                />
               </div>
             )}
             <div
               ref={setProjectScrollEl}
               data-folder-picker-scroll="true"
               onScroll={updateScrollFade}
+              // 无搜索词时高亮只是悬停反馈,指针离开就熄灭;有搜索词时它是回车目标,保留。
+              onMouseLeave={() => {
+                if (!activeProjectQuery) setHighlightIndex(-1);
+              }}
               className={cn(
                 'pending-queue-scroll -mr-2 overflow-x-hidden overflow-y-auto overscroll-contain pr-2',
                 scrollFade.top && 'folder-picker-fade-top',

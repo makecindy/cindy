@@ -23,6 +23,7 @@
  * （schema migration 时生成,较陈旧）作为最后保障。
  */
 
+import { installDeletedTaskVectorCleanup } from './deletedTaskVectors.js';
 import type Database from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { localDbHostUi } from './hostUi.js';
@@ -30,8 +31,11 @@ import { userDataPath } from '../userDataPath.js';
 import { isHostClientMode } from '../host-client-mode.js';
 import { isCindyPersonalRuntime } from '../cindy-make/versionRuntimeIdentity.js';
 import fs from 'node:fs';
+import { ownerScopedPath } from '../dataOwnerPath.js';
+import { recoverWorkspaceMovesAtStartup } from '../workspace-migration/service.js';
 
 import { createBetterSqliteDatabase } from './betterSqliteFactory';
+import { isSqliteCorruption } from './client/sqliteCorruption.js';
 import { ensureCjkFtsTempTriggersInstalled } from './registerCjkSeg';
 import {
   getDrizzleDir,
@@ -234,6 +238,23 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
       exists: fs.existsSync(filePath),
     }),
   );
+
+  try {
+    // No sessions, project-memory stores or scheduler for this owner may start
+    // before its offline workspace cutover has completed (or restored the source).
+    await recoverWorkspaceMovesAtStartup(ownerScopedPath(userDataPath(), userId), startupLease.kind === 'writer');
+  } catch (error) {
+    releaseSchemaLeasesAfterFailure();
+    const reason = error instanceof Error ? error.message : 'WORKSPACE_MOVE_RECOVERY_REQUIRED';
+    const blocked = reason === 'WORKSPACE_MOVE_REQUIRES_EXCLUSIVE_STARTUP' || reason === 'WORKSPACE_MOVE_IN_PROGRESS' || reason === 'MIGRATION_BUSY';
+    const code = blocked ? 'DB_SCHEMA_LOCKED' : 'DB_INIT_FAILED';
+    const message = blocked
+      ? localDbText(reason === 'WORKSPACE_MOVE_REQUIRES_EXCLUSIVE_STARTUP' ? 'localDbFatal.schemaLease.readers-active' : 'localDbFatal.schemaLease.writer-active')
+      : `${localDbText('localDbFatal.initFailed.description')} (WORKSPACE_MOVE_RECOVERY_REQUIRED)`;
+    log.error('workspace migration startup recovery blocked', { code });
+    showFatalDialog(localDbText('localDbFatal.initFailed.title'), message, code);
+    return { ready: false, error: { code, message } };
+  }
 
   let maintenance: { handled: boolean; originalDatabaseReady: boolean };
   try {
@@ -486,6 +507,8 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
     );
   }
 
+  if (vecResult.loaded) installDeletedTaskVectorCleanup(db);
+
   // F-COLLAB:每次启动幂等修复「悬空 Lead」——orca_role='lead' 但已无 active team 的会话
   // (上一次关闭协同被中途打断遗留)。不修的话会被永久困在空 split view 且点 X 也关不掉,
   // 见 orcaStrandedLeadReconcile.ts。同样必须在 migration / drift-repair 之后跑(依赖 orca_teams)。
@@ -499,7 +522,12 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
 
   // 启动 optimize: 0x10002 mask 会强制对从未 ANALYZE 过的表跑一次,
   // 之后挂 24h 周期任务按需更新统计。详见 runOptimize 注释。
-  runOptimize(0x10002);
+  const corruption = runOptimize(0x10002);
+  if (corruption) {
+    markRuntimeDbCorrupt(userId, corruption);
+    closeDb({ skipOptimize: true, preserveSchemaMigrationLease: !readerLeaseAcquiredThisCall });
+    throw corruption;
+  }
   startOptimizeSchedule();
 
   log.info(JSON.stringify({ event: 'localDb.ensureReady.ok', userId, dbPath: filePath }));
@@ -545,9 +573,9 @@ function openWithPragmas(filePath: string): Database.Database {
  * 跑一次 PRAGMA optimize, 让 query planner 拿到新鲜的索引选择性统计。
  * - mask=0x10002: 启动时强制对从未 ANALYZE 过的表跑一次 (SQLite 官方推荐启动 mask)
  * - mask 缺省:    按需 analyze, 没变化时近乎 no-op
- * 失败仅记日志, 不影响业务。
+ * 启动方用 SQLite 损坏错误隔离当前文件；周期和关闭时的优化仍是尽力执行。
  */
-function runOptimize(mask?: number): void {
+function runOptimize(mask?: number): Error | undefined {
   if (!_db || (_currentDbPath && runtimeCorruptFiles.has(_currentDbPath))) return;
   const t0 = performance.now();
   try {
@@ -561,6 +589,9 @@ function runOptimize(mask?: number): void {
     );
   } catch (err) {
     log.error('PRAGMA optimize failed', err);
+    if (isSqliteCorruption(err)) {
+      return err instanceof Error ? err : Object.assign(new Error('SQLite corruption during optimize'), err);
+    }
   }
 }
 
