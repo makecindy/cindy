@@ -573,6 +573,7 @@ interface Run {
    * 会话索引、受邀者目录与运行数都按(控制端, relay)分开。
    */
   relayKey?: string;
+  acceptsRelayUsageReceipts?: boolean;
   /**
    * 受邀者(本机的分享成员)的组转来的、它分享的那个人的任务：那个人的转分享键。主人撤回对这个人的同意时
    * 按它结束任务(abortReshare)。
@@ -1984,6 +1985,10 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         throw new Error(reply.type === 'error' ? reply.error.message : 'interaction failed');
       });
       append(run, { t: 'started', handle: describeHandle(handle, shadowDir, mirrorRoot, extraDirs, writableDirs, payload.virtualWorkspace === true, previousMirrorRoots) });
+      // Older group owners only learn the metering model from state, even though started already carries it.
+      if (run.kind === 'codex' && run.relayKey && !run.acceptsRelayUsageReceipts) {
+        append(run, { t: 'state', state: { model: handle.model } });
+      }
       run.lastState = JSON.stringify(snapshotHandleState(handle));
       run.unsubscribeCapabilities = handle.onCapabilitiesChange?.(() => emitState(run));
       run.stateTimer = setInterval(() => emitState(run), STATE_INTERVAL_MS);
@@ -2115,9 +2120,16 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         if (pairedDone && failed.send !== run.lastSendCallId) {
           // N's error was already published. Both meters need the receipt, but N+1 owns the lifecycle.
           meterRunUsage(run, failed.model, event, failed.turn);
-          if (run.relayKey) append(run, { t: 'relay-usage', receipt: {
-            ...codexRelayUsageReceipt(event, nativeTurn.id), sendCallId: failed.send,
-          } });
+          if (run.relayKey) {
+            const receipt = codexRelayUsageReceipt(event, nativeTurn.id);
+            if (run.acceptsRelayUsageReceipts) {
+              append(run, { t: 'relay-usage', receipt: { ...receipt, sendCallId: failed.send } });
+            } else {
+              // Legacy group owners meter ordinary done events, but a background event cannot end their foreground send.
+              append(run, { t: 'event', event: { type: 'done', source: 'codex', turnScope: 'background',
+                data: { usage: receipt.usage, requestUsage: receipt.requestUsage } } });
+            }
+          }
           continue;
         }
         const currentTerminal = (run.terminalOwnership ??= new RemoteTurnTerminalOwnership()).observe(event);
@@ -2128,10 +2140,11 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         // A fenced prior done cannot settle the new turn. Continuation receipts still belong to the live turn.
         const staleDone = isProductTurnDoneEvent(event) && !currentTerminal;
         const usageTurn = pairedDone ? failed.turn : staleDone ? undefined : run.companyTurn;
-        meterRunUsage(run, pairedDone ? failed.model : handle.model, event, usageTurn);
+        const sendModel = run.terminalOwnership?.sendModel ?? handle.model;
+        meterRunUsage(run, pairedDone ? failed.model : sendModel, event, usageTurn);
         if (currentTerminal) {
           if (run.kind === 'codex' && event.source === 'codex' && event.type === 'error') {
-            failedCodex = { turn: run.companyTurn, send: run.lastSendCallId, model: handle.model };
+            failedCodex = { turn: run.companyTurn, send: run.lastSendCallId, model: sendModel };
           }
           run.companyTurn = undefined;
         }
@@ -2385,7 +2398,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   function relayedOpenPayload(run: Run, payload: RemoteAgentOpenPayload, member: GroupRelayMember): RemoteAgentOpenPayload {
     // 「需要换一台」只在受邀者与本机之间：组内电脑不认识也不需要。受邀者自己填的转分享键不转发。
     const { acceptsGroupSwitch: _accepts, groupSwitchToken: _token, requireGroupSwitchToken: _required,
-      reshareKey: _reshare, relayModelAccess: _modelAccess, ...rest } = payload;
+      reshareKey: _reshare, relayModelAccess: _modelAccess, acceptsRelayUsageReceipts: _usage, ...rest } = payload;
     // 分享来的组内电脑按这个人的转分享键核对它的主人是否同意过(provider-sharing.md §4.3)。
     const reshareKey = member.sameAccount ? undefined : reshareKeyForGuest(run.controller);
     return {
@@ -2393,6 +2406,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       sessionId: relaySessionIdFor(run.controller, payload.sessionId),
       groupAssigned: true,
       relay: relayKeyFor(run.controller),
+      ...(run.kind === 'codex' ? { acceptsRelayUsageReceipts: true } : {}),
       ...(run.relay?.modelAccess ? { relayModelAccess: true } : {}),
       ...(reshareKey ? { reshareKey } : {}),
       options: { ...payload.options, providerId: member.providerId },
@@ -2583,7 +2597,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     if (method === 'send') {
       (run.terminalOwnership ??= new RemoteTurnTerminalOwnership()).beginSend(
         run.activeTurn === true || run.abortRequested === true, callId,
-        run.activeTurn === true, run.abortRequested === true);
+        run.activeTurn === true, run.abortRequested === true,
+        run.kind === 'codex' ? run.handle?.model ?? run.authorizedModel ?? run.relay?.model : undefined);
       run.abortRequested = false;
       run.activeTurn = true;
       run.accountFailure = undefined;
@@ -2760,7 +2775,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           // Older members send a failed turn's trailing receipt as an ordinary done.
           const paired = priorError && nativeTurn && (priorError.send === run.lastSendCallId ||
             nativeTurn.status === 'failed' || nativeTurn.status === 'interrupted');
-          meterRunUsage(run, paired ? priorError.model : backend.model, typed, undefined);
+          const sendModel = run.terminalOwnership?.sendModel ?? backend.model;
+          meterRunUsage(run, paired ? priorError.model : sendModel, typed, undefined);
           if (paired && priorError.send !== run.lastSendCallId) return;
           const deliver = () => {
             if (!run.closing) append(run, { t: 'event', event }, {
@@ -2774,7 +2790,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           const failure = currentTerminal ? relayRunFailureOf(event) : null;
           if (currentTerminal) {
             if (typed.source === 'codex' && typed.type === 'error') {
-              pendingCodexError = { send: run.lastSendCallId, model: backend.model ?? payload.options.model };
+              pendingCodexError = { send: run.lastSendCallId, model: sendModel ?? payload.options.model };
             }
             run.activeTurn = false;
             run.abortRequested = false;
@@ -4446,7 +4462,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
             && request.agentKind === 'pi' && !relayKey && !payload.options.localApplication && !!deps.nativeHistory,
           controller,
           trust,
-          ...(relayKey ? { relayKey } : {}),
+          ...(relayKey ? { relayKey, acceptsRelayUsageReceipts: payload.acceptsRelayUsageReceipts === true } : {}),
           ...(reshareKey ? { reshareKey } : {}),
           owner: deps.captureOwner(),
           kind: request.agentKind,

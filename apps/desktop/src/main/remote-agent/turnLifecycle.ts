@@ -27,6 +27,7 @@ interface TerminalOwnershipState {
   terminalKind: 'done' | 'error' | 'prior-error' | 'idle' | null;
   priorError: 'settled' | 'unsettled' | null;
   dispatchId: string | undefined;
+  sendModel?: string;
   active: boolean;
   aborted: boolean;
 }
@@ -36,6 +37,7 @@ function observeOwnership(state: TerminalOwnershipState, event: AgentEvent): boo
   if (event.turnScope === 'background') return false;
   if ((event.type === 'done' || event.type === 'status') && isTurnContinuationBoundaryEvent(event)) return false;
   if (startsRemoteProductTurn(event)) {
+    if (!state.active && !state.aborted) state.sendModel = undefined;
     if (!state.aborted) state.active = true;
     state.priorGeneration = null;
     state.terminalKind = null;
@@ -85,12 +87,18 @@ export class RemoteTurnTerminalOwnership {
   // A single fixed-size checkpoint, never an event buffer or a replay path.
   private pending: { callId: string; previous: TerminalOwnershipState } | undefined;
 
-  beginSend(unsettled: boolean, dispatchId: string, previousActive = unsettled, previousAborted = false): void {
+  /** Model selected for this dispatch, retained across setModel and restored on rejection. */
+  get sendModel(): string | undefined {
+    return this.state.sendModel;
+  }
+
+  beginSend(unsettled: boolean, dispatchId: string, previousActive = unsettled, previousAborted = false, sendModel?: string): void {
     const previous = { ...this.state, active: previousActive, aborted: previousAborted };
     this.pending = { callId: dispatchId, previous };
     this.state = { ...previous };
     this.state.priorError = this.state.terminalKind === 'error' ? (unsettled ? 'unsettled' : 'settled') : null;
     this.state.dispatchId = dispatchId;
+    this.state.sendModel = sendModel;
     this.state.priorGeneration = this.state.generation > 0 && (unsettled || this.state.terminalKind === 'error')
       ? this.state.generation : null;
     this.state.generation += 1;

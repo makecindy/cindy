@@ -270,6 +270,8 @@ export interface RemoteAgentOpenPayload {
   relay?: string;
   /** Capability-negotiated reverse checks against the original sharing member. */
   relayModelAccess?: boolean;
+  /** The group owner can meter a late receipt without forwarding a foreground terminal. */
+  acceptsRelayUsageReceipts?: boolean;
   /**
    * 供应商组转分享：组所在电脑把受邀者的任务转给分享来的组内电脑时，带上这个受邀者(按账号)的转分享键，
    * 与组所在电脑经 op `reshare` 报上去的键相同。那台的主人同意过这个人才运行；没同意或没带时拒绝。
@@ -462,6 +464,7 @@ export function decodeOpenPayload(value: unknown): RemoteAgentOpenPayload {
     ...(value.groupAssigned === true ? { groupAssigned: true } : {}),
     ...(typeof value.relay === 'string' && REMOTE_AGENT_RELAY_KEY_PATTERN.test(value.relay) ? { relay: value.relay } : {}),
     ...(value.relayModelAccess === true ? { relayModelAccess: true } : {}),
+    ...(value.acceptsRelayUsageReceipts === true ? { acceptsRelayUsageReceipts: true } : {}),
     ...(typeof value.reshareKey === 'string' && REMOTE_AGENT_RELAY_KEY_PATTERN.test(value.reshareKey)
       ? { reshareKey: value.reshareKey }
       : {}),

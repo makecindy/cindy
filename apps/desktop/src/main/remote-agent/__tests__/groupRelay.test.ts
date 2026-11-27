@@ -41,6 +41,7 @@ import {
   type HostedStartInput,
   type RemoteAgentGroupRelayDeps,
 } from '../host/runHost';
+import { createGuestUsageMeter, type GuestUsageSample } from '../host/guestUsage';
 import { managedSkillDigest } from '../managedSkillDigest';
 
 const GUEST_A = 'share-guest-a';
@@ -2976,20 +2977,54 @@ describe('provider group "switch to another computer" for shared users', () => {
     } finally { await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
   });
 
-  it.each([false, true])('meters a late failed Codex receipt once at both relay endpoints (cumulative=%s)', async cumulative => {
+  it('delivers one late failed receipt to a legacy group owner through its ordinary event handler', async () => {
+    const env = setup({});
+    // Legacy owners only consume ordinary events and do not advertise dedicated receipt support.
+    const meter = createGuestUsageMeter('codex');
+    const samples: GuestUsageSample[] = [];
+    let lastReportedModel = '';
+    const peer = await openAsGuest({ ...env, owner: env.members.mini }, OWNER_DEVICE,
+      openPayload(SESSION, { groupAssigned: true, relay: relayKeyFor(GUEST_A), options: { model: 'codex-a' } }), {
+        onState: state => { if (typeof state.model === 'string') lastReportedModel = state.model; },
+        onEvent: event => samples.push(...meter.observe(event as AgentEvent, lastReportedModel)),
+      }, 'codex');
+    try {
+      await peer.client.call('send', [{ content: 'first' }, {}]);
+      const record = env.memberStarted.mini[0];
+      record.emit({ type: 'error', source: 'codex', data: { isTerminal: true, reason: 'turn-failed' } } as AgentEvent);
+      await waitFor(() => peer.stream.some(item => item.t === 'event' && item.event.type === 'error'));
+      await peer.client.call('send', [{ content: 'second' }, {}]);
+      const receipt = { type: 'done', source: 'codex', data: { raw: { id: 'first', status: 'failed' },
+        usage: { promptTokens: 40, completionTokens: 7 }, result: 'private fixture' } } as AgentEvent;
+      record.emit(receipt);
+      record.emit(receipt);
+      record.end();
+      await waitFor(() => peer.isClosed());
+      expect(samples).toMatchObject([{ model: 'codex-a', inputTokens: 40, outputTokens: 7, turns: 1 }]);
+      const done = peer.stream.filter(item => item.t === 'event' && item.event.type === 'done');
+      expect(done).toMatchObject([{ event: { turnScope: 'background' } }]);
+      expect(JSON.stringify(done)).not.toContain('private fixture');
+    } finally { await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
+  });
+
+  it.each([
+    { cumulative: false, switchBeforeError: false }, { cumulative: true, switchBeforeError: false },
+    { cumulative: false, switchBeforeError: true }, { cumulative: true, switchBeforeError: true },
+  ])('meters a late failed Codex receipt once at both relay endpoints (cumulative=$cumulative, switchBeforeError=$switchBeforeError)', async ({ cumulative, switchBeforeError }) => {
     const ownerUsage = vi.fn(), memberUsage = vi.fn();
     const env = setup({ plans: [{ kind: 'member', ...MEMBER_MINI }, { kind: 'member', ...MEMBER_STUDIO }],
       owner: { recordGuestUsage: ownerUsage }, mini: { recordGuestUsage: memberUsage },
       switchWorthy: failure => failure.reason === 'remote_agent_closed' });
-    const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }), undefined, 'codex');
+    const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true, options: { model: 'codex-a' } }), undefined, 'codex');
     try {
       await guest.client.call('send', [{ content: 'first' }, {}]);
       const record = env.memberStarted.mini[0];
+      if (switchBeforeError) await guest.client.call('setModel', ['codex-b']);
       record.emit({ type: 'error', source: 'codex', data: { isTerminal: true, reason: 'turn-failed' } } as AgentEvent);
       await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'error'));
-      await guest.client.call('setModel', ['another-model']);
+      if (!switchBeforeError) await guest.client.call('setModel', ['codex-b']);
       await guest.client.call('send', [{ content: 'second' }, {}]);
-      const snapshot = { epoch: 'fixture', models: [{ model: 'fixture-model', inputTokens: 40, outputTokens: 7 }] };
+      const snapshot = { epoch: 'fixture', models: [{ model: 'codex-a', inputTokens: 40, outputTokens: 7 }] };
       const done = { type: 'done', source: 'codex', data: { raw: { id: 'first', status: 'failed' },
         ...(cumulative && { requestUsage: snapshot }),
         usage: { promptTokens: 40, completionTokens: 7 } } } as AgentEvent;
@@ -3000,11 +3035,11 @@ describe('provider group "switch to another computer" for shared users', () => {
       await waitFor(() => guest.isClosed());
       for (const meter of [memberUsage, ownerUsage]) {
         expect(meter).toHaveBeenCalledTimes(1);
-        const samples = meter.mock.calls[0][1].samples as { turns: number; inputTokens: number; outputTokens: number }[];
+        const samples = meter.mock.calls[0][1].samples as GuestUsageSample[];
         expect(samples.reduce((n, s) => n + s.inputTokens, 0)).toBe(40);
         expect(samples.reduce((n, s) => n + s.outputTokens, 0)).toBe(7);
         expect(samples.reduce((n, s) => n + s.turns, 0)).toBe(1);
-        expect(samples.find(s => s.turns)).toMatchObject({ model: record.input.options.model });
+        expect(new Set(samples.map(s => s.model))).toEqual(new Set(['codex-a']));
       }
       expect(ownerUsage.mock.calls[0]).toMatchObject([GUEST_A, { memberKey: MEMBER_MINI.memberKey }, SESSION]);
       expect(switchTokenIn(guest.stream)).toBeDefined();

@@ -300,6 +300,18 @@ describe('remote stream close settles the product turn', () => {
     } finally { await f.session.close(); }
   });
 
+  it('restores the dispatch model on rejection and drops it when a provider starts a new turn', () => {
+    const owner = new RemoteTurnTerminalOwnership();
+    owner.beginSend(false, 'accepted', false, false, 'codex-a');
+    owner.acceptSend('accepted');
+    owner.beginSend(true, 'rejected', true, false, 'codex-b');
+    owner.rejectSend('rejected');
+    expect(owner.sendModel).toBe('codex-a');
+    expect(owner.observe({ type: 'done', source: 'codex', data: {} })).toBe(true);
+    owner.observe({ type: 'text', source: 'codex', data: { text: 'next' } });
+    expect(owner.sendModel).toBeUndefined();
+  });
+
   it('keeps the prior-error tail fence only until its own send is accepted', () => {
     const owner = new RemoteTurnTerminalOwnership();
     const error: AgentEvent = { type: 'error', source: 'codex', data: { isTerminal: true, message: 'prior failure' } };
