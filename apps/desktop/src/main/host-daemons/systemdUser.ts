@@ -373,10 +373,11 @@ export function createSystemdUserAdapter(deps: SystemdUserAdapterDeps = {}): Hos
     unit: string,
     mainPath: string,
     index?: Map<string, Set<string>>,
+    layerCache?: Map<string, Promise<string[] | null>>,
   ): Promise<SystemdUnitFile | null> {
     const main = await readFile(mainPath, 'utf8').catch(() => null);
     if (main === null) return null;
-    const drops = await dropInTexts(unit, index);
+    const drops = await dropInTexts(unit, index, layerCache);
     // drop-in 读不了 = 有效定义判断不了：当成读不到这个单元（动作侧据此拒绝）。
     if (drops === null) return null;
     return parseSystemdUnitFiles([main, ...drops]);
@@ -399,33 +400,48 @@ export function createSystemdUserAdapter(deps: SystemdUserAdapterDeps = {}): Hos
   async function dropInTexts(
     unit: string,
     index?: Map<string, Set<string>>,
+    layerCache?: Map<string, Promise<string[] | null>>,
   ): Promise<string[] | null> {
     const texts: string[] = [];
     for (const layer of dropInLayerNames(unit)) {
-      // 同一层内按文件名字典序；同名文件在优先目录里覆盖低优先目录。
-      const byName = new Map<string, string>();
-      for (const dir of dirs) {
-        const known = index?.get(dir);
-        if (known && !known.has(layer)) continue;
-        const layerDir = join(dir, layer);
-        let entries: string[];
-        try {
-          entries = await readdir(layerDir);
-        } catch (error) {
-          // 目录不存在 = 没有这一层覆盖；读不了 = 判断不了。
-          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return null;
-          continue;
-        }
-        for (const name of entries) {
-          if (!name.endsWith('.conf') || byName.has(name)) continue;
-          const text = await readFile(join(layerDir, name), 'utf8').catch(() => null);
-          if (text === null) return null;
-          byName.set(name, text);
-        }
+      let pending = layerCache?.get(layer);
+      if (!pending) {
+        pending = readDropInLayer(layer, index);
+        layerCache?.set(layer, pending);
       }
-      for (const name of [...byName.keys()].sort()) texts.push(byName.get(name)!);
+      const layerTexts = await pending;
+      if (layerTexts === null) return null;
+      texts.push(...layerTexts);
     }
     return texts;
+  }
+
+  async function readDropInLayer(
+    layer: string,
+    index?: Map<string, Set<string>>,
+  ): Promise<string[] | null> {
+    // 同一层内按文件名字典序；同名文件在优先目录里覆盖低优先目录。
+    const byName = new Map<string, string>();
+    for (const dir of dirs) {
+      const known = index?.get(dir);
+      if (known && !known.has(layer)) continue;
+      const layerDir = join(dir, layer);
+      let entries: string[];
+      try {
+        entries = await readdir(layerDir);
+      } catch (error) {
+        // 目录不存在 = 没有这一层覆盖；读不了 = 判断不了。
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return null;
+        continue;
+      }
+      for (const name of entries) {
+        if (!name.endsWith('.conf') || byName.has(name)) continue;
+        const text = await readFile(join(layerDir, name), 'utf8').catch(() => null);
+        if (text === null) return null;
+        byName.set(name, text);
+      }
+    }
+    return [...byName.keys()].sort().map((name) => byName.get(name)!);
   }
 
   async function requireUnit(unit: string): Promise<SystemdUnitFile> {
@@ -526,6 +542,8 @@ export function createSystemdUserAdapter(deps: SystemdUserAdapterDeps = {}): Hos
       // 热路径，不为每个单元逐个目录试探 drop-in）。
       const dirEntries = new Map<string, string[]>();
       const dropInIndex = new Map<string, Set<string>>();
+      // 同一扫描中的类型级与模板级覆盖可由多个单元共享；动作仍单独重读。
+      const layerCache = new Map<string, Promise<string[] | null>>();
       for (const dir of dirs) {
         let names: string[];
         try {
@@ -546,7 +564,7 @@ export function createSystemdUserAdapter(deps: SystemdUserAdapterDeps = {}): Hos
           if (!unit.endsWith('.service') && !unit.endsWith('.timer')) continue;
           if (!isUserUnitFile(path, dirs)) continue;
           // 读有效定义（主文件 + drop-in）：只读主文件会把 drop-in 改过的目标当成没改。
-          const file = await readEffectiveUnit(unit, path, dropInIndex);
+          const file = await readEffectiveUnit(unit, path, dropInIndex, layerCache);
           if (!file) continue;
           parsed.set(unit, file);
           paths.set(unit, path);
@@ -559,7 +577,7 @@ export function createSystemdUserAdapter(deps: SystemdUserAdapterDeps = {}): Hos
           if (!name.endsWith('.service') && !name.endsWith('.timer')) continue;
           const path = join(dir, name);
           if (usedPaths.has(path)) continue;
-          const file = await readEffectiveUnit(name, path, dropInIndex);
+          const file = await readEffectiveUnit(name, path, dropInIndex, layerCache);
           if (!file) continue;
           parsed.set(name, file);
           paths.set(name, path);
