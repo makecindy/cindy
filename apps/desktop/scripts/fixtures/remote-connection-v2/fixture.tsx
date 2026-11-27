@@ -117,6 +117,26 @@ function scenario(name: string): { devices: Device[]; links: Link[]; relayRttMs:
       relayRttMs: 21,
     };
   }
+  if (name === 'relay-below') {
+    // 七台直连拆成两组，左边直连在上、两台经中转在下，中转点远在这台电脑下方，
+    // 这台电脑到中转站那段线很陡;中转往返只有个位数。
+    const devices: Device[] = [SELF];
+    const links: Link[] = [];
+    const direct = [
+      ['design', 'Design Mac', 'darwin', 1], ['office', 'Office Mac', 'darwin', 5], ['studio', 'Studio Mac', 'darwin', 1],
+      ['laptop', 'Spare MacBook', 'darwin', 260], ['work-pc', 'Work PC', 'win32', 9], ['vm', 'Linux VM', 'linux', 354],
+    ] as const;
+    for (const [id, name, platform, rtt] of direct) {
+      devices.push(device({ deviceId: id, name, platform }));
+      links.push(link(id, 'direct', rtt));
+    }
+    devices.push(device({ deviceId: 'cloud', name: '云端 Cindy', platform: 'linux' }));
+    links.push({ ...link('cloud', 'direct', 12), encrypted: false });
+    devices.push(device({ deviceId: 'small-pc', name: 'Small PC' }), device({ deviceId: 'friend-phone', name: 'iPhone', platform: 'ios', app: 'cindy-friend' }));
+    links.push(link('small-pc', 'relay', 25), link('friend-phone', 'relay', 58));
+    for (let i = 0; i < 2; i++) devices.push(device({ deviceId: `off${i}`, name: `Old device ${i + 1}`, online: false, lastSeenAt: '2026-11-20T08:00:00Z' }));
+    return { devices, links, relayRttMs: 9 };
+  }
   if (name === 'split-direct') {
     // 直连多到拆成两组:第二组直连在左边上方,中转组排在它下面,中转站整个落在这台电脑的名字下面。
     const devices: Device[] = [SELF];
@@ -183,11 +203,27 @@ if (ctx.case === 'narrow-fleet') {
     return link;
   });
 }
-const agentNetRoutes: DeviceLinkPeerLinksSnapshot['agentNetRoutes'] = ctx.case === 'default' ? [
+const defaultRoutes: NonNullable<DeviceLinkPeerLinksSnapshot['agentNetRoutes']> = ctx.case === 'default' ? [
   { deviceId: 'mini', path: 'direct', rttMs: 1 },
   { deviceId: 'pixel', path: 'connecting', rttMs: null },
-] : undefined;
-if (agentNetRoutes) data.links = data.links.filter((link) => link.deviceId !== 'mini');
+] : [];
+if (ctx.case === 'default') data.links = data.links.filter((link) => link.deviceId !== 'mini');
+/**
+ * 经中转的 Agent-Net 设备自己到中转走 UDP 还是 WS(对方经控制流告诉本机，2026-11-27):拓扑在通往它的线上写这一段，
+ * 这台电脑那一段写在它到中转站的线上。不在表里的走 UDP;值为 null 的当旧版，不说。
+ */
+const PEER_RELAY_VIA: Record<string, 'udp' | 'websocket' | null> = {
+  nas: 'websocket', 'relay-peer': 'websocket', rel2: 'websocket', rel5: null, future: null, 'friend-phone': null,
+};
+function agentNetRoutes(): DeviceLinkPeerLinksSnapshot['agentNetRoutes'] {
+  const legs = data.links.flatMap((link) => {
+    if (link.path !== 'relay' || link.encrypted !== true) return [];
+    const via = link.deviceId in PEER_RELAY_VIA ? PEER_RELAY_VIA[link.deviceId] : 'udp';
+    return via ? [{ deviceId: link.deviceId, path: 'relay' as const, rttMs: link.rttMs, peerRelayVia: via }] : [];
+  });
+  const routes = [...defaultRoutes, ...legs];
+  return routes.length ? routes : undefined;
+}
 if (ctx.case === 'remote-switch-controller-strict') data.links = data.links.filter((l) => l.encrypted);
 /**
  * 这台电脑实际用的连接方式(拓扑中间名字下面):打开 Agent-Net 后通常就是 Agent-Net;self-device-link 是开着开关、
@@ -283,7 +319,7 @@ void mountPage({
           lastHour: { 'device-link': { sent: 524288, received: 1048576 }, 'agent-net': { sent: 2097152, received: 8388608 } },
           lastDay: { 'device-link': { sent: 8388608, received: 25165824 }, 'agent-net': { sent: 33554432, received: 100663296 } },
         },
-        agentNetRoutes,
+        agentNetRoutes: agentNetRoutes(),
         relayProtocol: selfEncrypted ? 'agent-net' : 'device-link',
         // Agent-Net 经中转的数据走 UDP;fleet 演示 UDP 不通退回 WebSocket。Device Link 只有 WebSocket。
         relayTransport: selfEncrypted && scene !== 'fleet' ? 'udp' : 'websocket',

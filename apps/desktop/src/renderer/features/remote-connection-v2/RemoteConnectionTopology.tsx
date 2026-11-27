@@ -206,7 +206,15 @@ const PILL_W = 116;
 const PILL_H = 16;
 const PILL_TEXT = 'text-11 leading-none tabular-nums';
 const INLINE_PILL_PADDING = 'px-1.5';
+const STACKED_PILL_LAYOUT = 'grid auto-rows-[1em] justify-items-center gap-0.5 px-px';
+/**
+ * 标签的外形：一行是胶囊;上下两行时是又窄又高的一块，胶囊的大圆角会把四角的字切掉(2026-11-27 真机截图:「9 ms」的 s 被切),
+ * 改用小圆角。拓扑示意图的名称与模型标注底色，可能折成两行，4px 是示意图固有几何（DESIGN.md §5 登记）
+ */
+const pillShape = (stacked: boolean) => (stacked ? cn(STACKED_PILL_LAYOUT, 'rounded') : cn(INLINE_PILL_PADDING, 'rounded-full'));
 const INLINE_PILL_SAMPLE_RTT_MS = 9_999;
+/** 「这台电脑 → 中转站」线上那个标签按这个样例量宽(「UDP · 999 ms」),往返变了布局不跳;更长时在线上截断。 */
+const TRUNK_PILL_SAMPLE_RTT_MS = 999;
 const STACKED_PILL_MIN_W = 52;
 const PILL_COLUMN_GAP = 4;
 /** Keep at least 2px of clearance next to a computer tile. */
@@ -244,9 +252,9 @@ function LatencyPill({
     >
       <span
         className={cn(
-          'truncate rounded-full bg-[var(--settings-theme-card-bg)] py-0.5',
+          'truncate bg-[var(--settings-theme-card-bg)] py-0.5',
           PILL_TEXT,
-          stacked ? 'grid auto-rows-[1em] justify-items-center gap-0.5 px-px' : INLINE_PILL_PADDING,
+          pillShape(stacked),
           strong ? 'text-[var(--text-secondary)]' : 'text-[var(--text-tertiary)]',
         )}
         style={{ maxWidth }}
@@ -260,6 +268,49 @@ function LatencyPill({
       </span>
     </div>
   );
+}
+
+/**
+ * 「这台电脑 → 中转站」那段线中间的标签：这台电脑到中转怎么走、往返多少(2026-11-27 用户要求：本机那一段写在这段线上，
+ * 对方那一段写在通往对方的线上，两台电脑对照起来才对得上)。和设备线上的标签同一个样子，居中压在线上;设备线上的标签
+ * 上下叠放时它也叠放。
+ */
+function TrunkPill({ at, maxWidth, stacked, parts, strong, animate }: {
+  at: Point;
+  maxWidth: number;
+  stacked: boolean;
+  parts: readonly string[];
+  strong: boolean;
+  animate: boolean;
+}) {
+  return (
+    <div className="pointer-events-none flex items-center justify-center" style={placed(at.x, at.y, PILL_W, PILL_H, animate)} aria-hidden>
+      <span
+        className={cn(
+          'truncate bg-[var(--settings-theme-card-bg)] py-0.5',
+          PILL_TEXT,
+          pillShape(stacked),
+          strong ? 'text-[var(--text-secondary)]' : 'text-[var(--text-tertiary)]',
+        )}
+        style={{ maxWidth }}
+      >
+        {stacked ? parts.map((part) => <span key={part} className="max-w-full truncate">{part}</span>) : parts.join(' · ')}
+      </span>
+    </div>
+  );
+}
+
+/** 设备线上标签那一列能用的宽度，以及是否要把协议和延迟上下叠放(与标签同字体、同语言的样例量出 inlinePillWidth)。 */
+function pillColumns(layout: TopologyLayout, inlinePillWidth: number) {
+  const { m } = layout;
+  const relaySide = layout.groups.find((group) => group.relay)?.side;
+  const labelReach = m.tile - m.half - LINK_LABEL_TILE_GAP - PILL_COLUMN_GAP;
+  const hubPillRoom = labelReach - HUB_TEXT_W / 2;
+  const relayPillRoom = Math.min(hubPillRoom, labelReach - m.relay - RELAY_LABEL_OUTER);
+  const narrowestPillRoom = relaySide === undefined ? hubPillRoom : relayPillRoom;
+  // Use the same font and locale as the labels. A fixed sample keeps the layout stable as RTTs change.
+  const stackPills = Math.min(PILL_W, narrowestPillRoom + PILL_MAX_SHIFT) < inlinePillWidth;
+  return { relaySide, hubPillRoom, relayPillRoom, stackPills, minPillWidth: stackPills ? STACKED_PILL_MIN_W : inlinePillWidth };
 }
 
 /**
@@ -337,6 +388,8 @@ export function RemoteConnectionTopology({
   const reduced = useReducedMotion();
   const [ref, measured] = useMeasuredWidth<HTMLDivElement>();
   const [inlinePillRef, measuredInlinePillWidth] = useMeasuredWidth<HTMLSpanElement>();
+  const [trunkPillRef, measuredTrunkPillWidth] = useMeasuredWidth<HTMLSpanElement>();
+  const [stackedTrunkPillRef, measuredStackedTrunkPillWidth] = useMeasuredWidth<HTMLSpanElement>();
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
   const hubButton = useRef<HTMLButtonElement>(null);
@@ -355,17 +408,33 @@ export function RemoteConnectionTopology({
   }, [settled, measuredOnce, ready]);
   // 位置过渡与流动虚线都等图稳定之后。
   const animate = !reduced && settled;
-  const layout = layoutTopology(model.groups, width, model.dense);
-  const { m, hub } = layout;
-  const relaySide = layout.groups.find((group) => group.relay)?.side;
-  const labelReach = m.tile - m.half - LINK_LABEL_TILE_GAP - PILL_COLUMN_GAP;
-  const hubPillRoom = labelReach - HUB_TEXT_W / 2;
-  const relayPillRoom = Math.min(hubPillRoom, labelReach - m.relay - RELAY_LABEL_OUTER);
-  const narrowestPillRoom = relaySide === undefined ? hubPillRoom : relayPillRoom;
+  const relayRtt = model.relay.rttMs === null ? null : formatRtt(model.relay.rttMs, t);
+  // 这台电脑到中转那一段怎么走、往返多少，如「UDP · 25 ms」:放得下就写在这台电脑到中转站的线上，否则写在中转点上方。
+  const relayPathParts = [relayTransportLabel(model.relay, t), relayRtt].filter((part): part is string => Boolean(part));
+  const relayPath = relayPathParts.join(' · ');
   const inlinePillWidth = Math.ceil(measuredInlinePillWidth) || PILL_W;
-  // Use the same font and locale as the labels. A fixed sample keeps the layout stable as RTTs change.
-  const stackPills = Math.min(PILL_W, narrowestPillRoom + PILL_MAX_SHIFT) < inlinePillWidth;
-  const minPillWidth = stackPills ? STACKED_PILL_MIN_W : inlinePillWidth;
+  const plainLayout = layoutTopology(model.groups, width, model.dense);
+  const plainPills = pillColumns(plainLayout, inlinePillWidth);
+  // 线上的标签和设备线上的一个样子：设备标签一行写得下就一行(线要够长),叠放时它也叠放(线短一些也放得下)。
+  // 给这段线腾地方不能让原本一行写得下的设备标签折成两行；两种都放不下就仍写在中转点上方。
+  let picked: { layout: TopologyLayout; columns: ReturnType<typeof pillColumns>; trunkStacked: boolean } = {
+    layout: plainLayout, columns: plainPills, trunkStacked: false,
+  };
+  // 设备线上的标签一行写得下时，扇出的线只让出它们还富余的那点宽度，其余由设备列往外挪。
+  const fanGive = plainPills.stackPills ? undefined : plainPills.relayPillRoom + PILL_MAX_SHIFT - inlinePillWidth;
+  for (const [stacked, labelW] of [[false, measuredTrunkPillWidth], [true, measuredStackedTrunkPillWidth]] as const) {
+    if (!relayPath || labelW <= 0) continue;
+    const trunkLayout = layoutTopology(model.groups, width, model.dense, { trunkLabelW: Math.ceil(labelW), fanGive });
+    if (!trunkLayout.trunkLabel) continue;
+    const columns = pillColumns(trunkLayout, inlinePillWidth);
+    // 一行的线上标签只配一行的设备标签;叠放的线上标签不能让原本一行的设备标签因此叠放。
+    if (stacked ? columns.stackPills && !plainPills.stackPills : columns.stackPills) continue;
+    picked = { layout: trunkLayout, columns, trunkStacked: stacked };
+    break;
+  }
+  const { layout } = picked;
+  const { relaySide, hubPillRoom, relayPillRoom, stackPills, minPillWidth } = picked.columns;
+  const { m, hub } = layout;
   const selfName = model.self?.name || t('settings.devices.thisDevice');
   const selfProtocol = selfProtocolKind(model, linkStatus);
   const selfProtocolLabel = protocolKindLabel(selfProtocol, t);
@@ -423,10 +492,22 @@ export function RemoteConnectionTopology({
         flowing.push({ id: `${group.id}:relay`, shape: toRelay.shape, flow: model.relay.flow });
       }
       const relayProtocol = protocolKindLabel(model.relay.protocol, t);
-      const relayRtt = model.relay.rttMs === null ? null : formatRtt(model.relay.rttMs, t);
-      // 最下面一行：经中转的数据走 UDP 还是 WS,紧跟那条路的往返，如「UDP · 25 ms」。
-      const relayPath = [relayTransportLabel(model.relay, t), relayRtt].filter(Boolean).join(' · ');
       const relayDescription = [model.relay.name, relayRouteLabel(model.relay, t), relayRtt].filter(Boolean).join(' · ');
+      // 这台电脑到中转那一段的走法与往返：线够长就写在这段线上(layoutTopology 的 trunkLabel),否则仍是中转点上方第三行。
+      const pathOnTrunk = layout.trunkLabel && relayPath !== '';
+      if (pathOnTrunk) {
+        pills.push(
+          <TrunkPill
+            key={`${group.id}:relay:pill`}
+            at={toRelay.at}
+            maxWidth={Math.abs(g.relay.x - hub.x) - (m.relayR + 3) - m.ring - 4}
+            stacked={picked.trunkStacked}
+            parts={relayPathParts}
+            strong={emphasis !== 'rest' && emphasis !== 'dim'}
+            animate={animate}
+          />,
+        );
+      }
       const size = m.relayR * 2;
       // 中转站的名字、连接方式和往返写在小圆点正上方、居中(用户反馈 2026-11-18:原来写在圆点下面朝中间排开,
       // 和这台电脑的名字、连接方式挤成一团)。这台电脑的字总在圆盘下面,所以只有中转站整个落在那些字
@@ -436,9 +517,9 @@ export function RemoteConnectionTopology({
       // 「Retransmissor Cindy」、自建中转的长名字),再长才截断(悬停圆点与两张卡片里有全名)。
       // 名字下面写协议，再下面写经中转的数据走 UDP 还是 WS 和那条路的往返(用户要求 2026-11-18:这台电脑名字下面的
       // 「Agent-Net」看不出是在说中转，也分不出 Agent-Net 的 UDP、WS 和 Device Link)。协议和走法分两行：
-      // 中转点离中间近时(fleet)「Agent-Net · WS」写在一行放不下。
+      // 中转点离中间近时(fleet)「Agent-Net · WS」写在一行放不下。走法写到线上以后，这里只剩名字和协议。
       const labelBelow = g.relay.y + m.relayR + RELAY_LABEL_GAP >= hub.y + m.ring + HUB_TEXT_BOTTOM + 4;
-      const towardHub = relayReachTowardHub(m, hub, g.relay, labelBelow, relayPath !== '');
+      const towardHub = relayReachTowardHub(m, hub, g.relay, labelBelow, relayPath !== '' && !pathOnTrunk);
       const leftRoom = group.side === -1 ? RELAY_LABEL_OUTER : towardHub;
       const rightRoom = group.side === -1 ? towardHub : RELAY_LABEL_OUTER;
       nodes.push(
@@ -473,7 +554,7 @@ export function RemoteConnectionTopology({
               <ProtocolMark kind={model.relay.protocol} label={relayProtocol} className="text-11 leading-[1.3] text-[var(--text-tertiary)]" />
             </span>
           ) : null}
-          {relayPath ? (
+          {relayPath && !pathOnTrunk ? (
             <span
               className={cn(
                 // 拓扑示意图的名称与模型标注底色，可能折成两行，4px 是示意图固有几何（DESIGN.md §5 登记）
@@ -610,6 +691,7 @@ export function RemoteConnectionTopology({
             <DeviceNodePopover
               node={node}
               relayName={model.relay.name}
+              selfRelayTransport={model.relay.transport ?? null}
               onRemoteDesktop={onRemoteDesktop}
               onDelete={onDelete && (() => {
                 setOpenId(null);
@@ -645,6 +727,21 @@ export function RemoteConnectionTopology({
         aria-hidden
       >
         {linkTransportLabel('webrtc', t)} · {formatRtt(INLINE_PILL_SAMPLE_RTT_MS, t)}
+      </span>
+      <span
+        ref={trunkPillRef}
+        className={cn('invisible absolute left-0 top-0 w-max whitespace-nowrap', PILL_TEXT, INLINE_PILL_PADDING)}
+        aria-hidden
+      >
+        {linkTransportLabel('udp', t)} · {formatRtt(TRUNK_PILL_SAMPLE_RTT_MS, t)}
+      </span>
+      <span
+        ref={stackedTrunkPillRef}
+        className={cn('invisible absolute left-0 top-0 w-max whitespace-nowrap', PILL_TEXT, STACKED_PILL_LAYOUT)}
+        aria-hidden
+      >
+        <span>{linkTransportLabel('udp', t)}</span>
+        <span>{formatRtt(TRUNK_PILL_SAMPLE_RTT_MS, t)}</span>
       </span>
       <svg className="pointer-events-none absolute inset-0" width={layout.w} height={layout.h} aria-hidden>
         {lines}

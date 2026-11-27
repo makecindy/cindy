@@ -7102,6 +7102,8 @@
           "controlling": "方操控此機",
           "protocol": "連線之法",
           "rttNote": "近測",
+          "relayLegSelf": "此機 {{transport}}",
+          "relayLegPeer": "彼機 {{transport}}",
           "manage": "理裝置…",
           "linkStatus": "與「{{name}}」",
           "version": "Cindy {{version}}",
