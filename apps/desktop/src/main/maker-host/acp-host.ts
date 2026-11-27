@@ -5,7 +5,7 @@
  * Desktop's Electron-backed Pi MCP bridge environment (`getPiExtraSpawnConfig`).
  */
 
-import type { AcpAgent } from '@cindy/maker-core';
+import type { AcpAgent, AcpAgentDeps } from '@cindy/maker-core';
 import { getPiExtraSpawnConfig } from '../mcp-integrations/piEnvironment.desktop.js';
 import {
   buildAcpAgentCore,
@@ -23,6 +23,11 @@ export {
   type CachedPluginEngineModel,
 } from './pluginEngineModelCache.js';
 
+const desktopVerificationForTask: NonNullable<AcpAgentDeps['verificationForTask']> = (key, sessionId) =>
+  key === '_root__cindy-antigravity-acp:agy'
+    ? async (probe, signal) => (await import('./antigravityVerification.desktop.js')).verifyAntigravityAccount(sessionId, probe, signal)
+    : undefined;
+
 export type BuildAcpAgentOpts = Omit<BuildAcpAgentCoreOpts, 'preparePiExtraSpawnConfig'> & {
   preparePiExtraSpawnConfig?: BuildAcpAgentCoreOpts['preparePiExtraSpawnConfig'];
 };
@@ -33,6 +38,7 @@ export function buildAcpAgent(opts: BuildAcpAgentOpts): AcpAgent {
     ...opts,
     preparePiExtraSpawnConfig: opts.preparePiExtraSpawnConfig
       ?? ((providers, ctx) => getPiExtraSpawnConfig(providers, logger, ctx)),
+    verificationForTask: opts.verificationForTask ?? desktopVerificationForTask,
   });
 }
 
@@ -46,5 +52,6 @@ export function installPluginEngines(opts: InstallPluginEnginesOpts): () => void
     ...opts,
     preparePiExtraSpawnConfig: opts.preparePiExtraSpawnConfig
       ?? ((providers, ctx) => getPiExtraSpawnConfig(providers, logger, ctx)),
+    verificationForTask: opts.verificationForTask ?? desktopVerificationForTask,
   });
 }

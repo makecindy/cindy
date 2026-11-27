@@ -61,6 +61,8 @@ export interface BuildAcpAgentCoreOpts {
   preparePiExtraSpawnConfig: NonNullable<AgentDeps['preparePiExtraSpawnConfig']>;
   /** Starts the declared entry of a listed harness in raw-stdio mode. */
   spawnHarness(key: string, options?: { remoteWorkspace?: boolean; guestWorkspace?: boolean; accountDir?: string }): Promise<NodeWorkerProcess>;
+  /** Optional in-task account verification recovery hook (Desktop only). */
+  verificationForTask?: AcpAgentDeps['verificationForTask'];
   /** Called on real task/turn activity for a plugin engine (used for adaptive usage refresh). */
   onActivity?(key: string, accountDir?: string): void;
 }
@@ -144,6 +146,7 @@ export function buildAcpAgentCore(opts: BuildAcpAgentCoreOpts): AcpAgent {
         logger,
       ),
     },
+    ...(opts.verificationForTask ? { verificationForTask: opts.verificationForTask } : {}),
     onSessionCapabilities: rememberCapabilities,
     observeModelDetails: observePluginEngineModelDetails,
   });
@@ -161,6 +164,7 @@ export interface InstallPluginEnginesCoreOpts {
   listSessionSkills?: AcpAgentDeps['listSessionSkills'];
   getMcpToolApprovalPolicy?: AgentDeps['getMcpToolApprovalPolicy'];
   preparePiExtraSpawnConfig: NonNullable<AgentDeps['preparePiExtraSpawnConfig']>;
+  verificationForTask?: AcpAgentDeps['verificationForTask'];
   wrapAgent?: (agent: AcpAgent) => AcpAgent;
   onActivity?: (key: string, accountDir?: string) => void;
 }
@@ -185,6 +189,7 @@ export function installPluginEnginesCore(opts: InstallPluginEnginesCoreOpts): ()
       ...(opts.listSessionSkills ? { listSessionSkills: opts.listSessionSkills } : {}),
       getMcpToolApprovalPolicy: opts.getMcpToolApprovalPolicy ?? getDesktopMcpToolApprovalPolicy,
       preparePiExtraSpawnConfig: opts.preparePiExtraSpawnConfig,
+      ...(opts.verificationForTask ? { verificationForTask: opts.verificationForTask } : {}),
       spawnHarness: (key, options) => (options ? registry.spawn(key, options) : registry.spawn(key)),
       onActivity: opts.onActivity ?? ((key, accountDir) => recordPluginHarnessActivity(key, accountDir)),
     });
