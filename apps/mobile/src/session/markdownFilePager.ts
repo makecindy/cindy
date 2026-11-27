@@ -6,10 +6,20 @@ export function parseMarkdownPageSwipe(data: string): MarkdownPageDirection | nu
   return null;
 }
 
+/** Parse a WebView tap message requesting ImageLightbox for a document image index. */
+export function parseMarkdownImageOpen(data: string): number | null {
+  if (!data || !data.startsWith('markdown-image:open:')) return null;
+  const raw = data.slice('markdown-image:open:'.length);
+  if (!/^\d+$/.test(raw)) return null;
+  const index = Number(raw);
+  return Number.isSafeInteger(index) && index >= 0 ? index : null;
+}
+
 /**
  * Classify inside the document, where the touched scroll container is known.
- * Passive listeners leave vertical scrolling, formula panning and selection native.
- * The host receives only a completed page swipe, never document content.
+ * Passive listeners leave vertical scrolling, formula panning, carousel swiping,
+ * and selection native. The host receives only a completed page swipe, never
+ * document content.
  */
 export const MARKDOWN_FILE_PAGER_SCRIPT = `
 (function () {
@@ -23,7 +33,8 @@ export const MARKDOWN_FILE_PAGER_SCRIPT = `
   function ownsHorizontalPan(target) {
     var element = target && (target.nodeType === 1 ? target : target.parentElement);
     while (element && element !== document.body) {
-      if (element.tagName === 'A') return true;
+      if (element.tagName === 'A' || element.tagName === 'BUTTON') return true;
+      if (element.classList && element.classList.contains('xdt-carousel')) return true;
       var overflow = window.getComputedStyle(element).overflowX;
       if ((overflow === 'auto' || overflow === 'scroll') &&
           element.scrollWidth > element.clientWidth + 1) return true;
