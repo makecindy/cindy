@@ -626,7 +626,14 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     isPreparingUserTurn: () => state.preparing === true,
     getCurrentTurnId: () => (typeof state.currentTurnId === 'string' ? state.currentTurnId : null),
     getPlanMode: () => (typeof state.planMode === 'boolean' ? state.planMode : null),
-    getExecutionPlanMode: () => (typeof state.executionPlanMode === 'boolean' ? state.executionPlanMode : null),
+    // Remote ACP handles only implement getPlanMode(); an omitted executionPlanMode falls back to planMode,
+    // while an explicit executionPlanMode: null keeps the fail-closed unknown state.
+    getExecutionPlanMode: () => {
+      if ('executionPlanMode' in state) {
+        return typeof state.executionPlanMode === 'boolean' ? state.executionPlanMode : null;
+      }
+      return typeof state.planMode === 'boolean' ? state.planMode : null;
+    },
     getFastMode: () => state.fastMode === 'ultrafast' ? 'ultrafast' : state.fastMode === true,
     getEffort: () => (typeof state.effort === 'string' ? state.effort as Effort : null),
     listBackgroundTasks: () => (Array.isArray(state.backgroundTasks) ? state.backgroundTasks as BackgroundTaskSnapshot[] : []),
@@ -665,7 +672,13 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       deps.onFastMode?.(enabled);
     }),
     ...optional('setPlanMode', async (enabled: boolean) => {
-      if (!await callIfLive('setPlanMode', enabled)) state = { ...state, planMode: enabled };
+      if (!await callIfLive('setPlanMode', enabled)) {
+        state = {
+          ...state,
+          planMode: enabled,
+          ...('executionPlanMode' in state ? { executionPlanMode: enabled } : {}),
+        };
+      }
       deps.onPlanMode?.(enabled);
     }),
     ...optional('setThinkingEnabled', async (enabled: boolean) => {

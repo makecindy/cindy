@@ -3438,8 +3438,9 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
         setRemoteDraftPluginEngine(null);
       }
       if (req.deviceId && (deviceChanged || req.remoteSnapshot)) {
-        evictDeviceCapabilities(req.deviceId);
-        evictDeviceProviders(req.deviceId);
+        // 仅刷新目标主机自己的直接目录快照，不级联驱逐它代读的共享模型 / 其他电脑目录。
+        evictDeviceCapabilities(req.deviceId, { directOnly: true });
+        evictDeviceProviders(req.deviceId, { directOnly: true });
         evictDeviceGitSafetySettings(req.deviceId);
       }
 
@@ -3592,13 +3593,20 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     modePickerSelectionSeqRef.current += 1;
     const currentDraft = getDraft();
     const sameDevice = isSameNewMakerDevice(dialogueTargetRequest.deviceId, currentDraft);
-    const defaultDir =
-      (location.state as { workspacePrompt?: string } | null)?.workspacePrompt === 'generic' &&
-      dialogueTargetRequest.deviceId === null
+    const isGenericPrompt =
+      (location.state as { workspacePrompt?: string } | null)?.workspacePrompt === 'generic';
+    const defaultDir = isGenericPrompt
+      ? dialogueTargetRequest.deviceId === null
         ? getDefaultNewTaskWorkingDir(dataOwnerId)
-        : null;
+        : (dialogueTargetRequest.workingDir ?? null)
+      : null;
     const explicitDialogue =
       (location.state as { workspacePrompt?: string } | null)?.workspacePrompt === 'dialogue';
+    const preserveRemoteExplicitNoProject =
+      isGenericPrompt &&
+      dialogueTargetRequest.deviceId !== null &&
+      defaultDir === null &&
+      dialogueTargetRequest.explicitNoProject === true;
     if (
       !dialogueTargetRequest.preserveWorkspaceIfSameDevice ||
       !sameDevice
@@ -3614,7 +3622,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
         deviceId: dialogueTargetRequest.deviceId,
         deviceName: dialogueTargetRequest.deviceName,
         workingDir: defaultDir,
-        explicitNoProject: explicitDialogue,
+        explicitNoProject: explicitDialogue || preserveRemoteExplicitNoProject,
       });
     } else if (
       defaultDir && shouldPrefillDefaultNewTaskWorkingDir(location.state, currentDraft)
