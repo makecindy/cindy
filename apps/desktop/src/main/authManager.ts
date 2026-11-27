@@ -4922,13 +4922,27 @@ function qrHandoffFailureCode(error: unknown): string {
   return error instanceof AuthApiError ? error.code : 'AUTH_REQUEST_FAILED';
 }
 
+/**
+ * 记下请求发起时的登录态：弹窗轮询期间用户可能已换号，旧请求迟到的 401 只能让
+ * 发起它的那个登录态失效，不能登出之后切换到的账号。
+ */
+function captureQrHandoffSession(): () => boolean {
+  const epoch = authStateEpoch;
+  const realm = activeAuthRealm;
+  const userId = currentUser?.id;
+  return () => authStateEpoch === epoch && activeAuthRealm === realm && currentUser?.id === userId;
+}
+
 /** 生成一次性出码；二维码同时是本版本官网下载页链接。凭据只在 main 与 auth-server 之间。 */
 export async function createQrLoginHandoff(): Promise<DesktopQrHandoffResult> {
   try {
     if (!accessToken || !currentUser) throw new AuthApiError('UNAUTHENTICATED', 401, 'QR handoff requires login');
     const token = accessToken;
     const realm = activeAuthRealm;
-    const created = await runProtectedAuthRequest(() => createAuthClient(realm).createQrHandoff(token));
+    const created = await runProtectedAuthRequest(
+      () => createAuthClient(realm).createQrHandoff(token),
+      captureQrHandoffSession(),
+    );
     const name = localDeviceName().trim().slice(0, 64);
     const payload = encodeQrLoginUrl(qrLoginDownloadPageUrl(), {
       kind: 'handoff',
@@ -4951,8 +4965,9 @@ export async function getQrLoginHandoffState(handoffId: string): Promise<Desktop
   try {
     if (!accessToken) throw new AuthApiError('UNAUTHENTICATED', 401, 'QR handoff requires login');
     const token = accessToken;
-    const state = await runProtectedAuthRequest(() =>
-      createAuthClient(activeAuthRealm).qrHandoffState(token, handoffId),
+    const state = await runProtectedAuthRequest(
+      () => createAuthClient(activeAuthRealm).qrHandoffState(token, handoffId),
+      captureQrHandoffSession(),
     );
     if (state.status === 'expired') return { success: true, status: 'expired' };
     const requester: QrRequesterInfo | undefined = state.requester;
@@ -4963,7 +4978,8 @@ export async function getQrLoginHandoffState(handoffId: string): Promise<Desktop
       ...(requester ? { requester } : {}),
     };
   } catch (error) {
-    return { success: false, code: qrHandoffFailureCode(error) };
+    const retryAt = error instanceof AuthApiError ? error.retryAt : undefined;
+    return { success: false, code: qrHandoffFailureCode(error), ...(retryAt !== undefined ? { retryAt } : {}) };
   }
 }
 
@@ -4974,8 +4990,9 @@ export async function decideQrLoginHandoff(
   try {
     if (!accessToken) throw new AuthApiError('UNAUTHENTICATED', 401, 'QR handoff requires login');
     const token = accessToken;
-    await runProtectedAuthRequest(() =>
-      createAuthClient(activeAuthRealm).decideQrHandoff(token, handoffId, approve),
+    await runProtectedAuthRequest(
+      () => createAuthClient(activeAuthRealm).decideQrHandoff(token, handoffId, approve),
+      captureQrHandoffSession(),
     );
     log.info(`qr handoff decided approve=${approve}`);
     return { success: true };

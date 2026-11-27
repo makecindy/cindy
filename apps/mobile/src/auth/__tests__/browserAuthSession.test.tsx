@@ -34,6 +34,7 @@ const native = vi.hoisted(() => ({
   verifyCode: vi.fn(),
   signup: vi.fn(),
   claimQrHandoff: vi.fn(),
+  pollQrHandoff: vi.fn(),
   clientOptions: [] as Array<{ region?: string; capabilities?: readonly string[] }>,
   crossRealm: false,
   state: 0,
@@ -91,6 +92,7 @@ vi.mock('@cindy/auth-client', async (importOriginal) => {
       verifyCode = native.verifyCode;
       signup = native.signup;
       claimQrHandoff = native.claimQrHandoff;
+      pollQrHandoff = native.pollQrHandoff;
       refresh = native.refresh;
       getProviders = native.providers;
       requestCode = native.requestCode;
@@ -253,6 +255,7 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     native.verifyCode.mockReset().mockResolvedValue(verifiedOutcome);
     native.signup.mockReset().mockResolvedValue(verifiedOutcome);
     native.claimQrHandoff.mockReset().mockResolvedValue({ expiresAt: new Date(Date.now() + 120_000).toISOString() });
+    native.pollQrHandoff.mockReset().mockResolvedValue({ status: 'pending' });
     native.clientOptions.length = 0;
     root = createRoot(document.createElement('div'));
     await act(async () => { root.render(<AuthProvider><Probe /></AuthProvider>); });
@@ -1523,6 +1526,41 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     expect(native.clientOptions.at(-1)?.region).toBe('global');
     expect(auth.loginState?.step).toBe('qr-waiting');
     await act(async () => { await auth.dispatchLoginAction({ type: 'reset' }); });
+  });
+
+  // 依据:server-channel-review —— 服务端给了 Retry-After 就等到那时再问;要等到码过期之后才行就结束等待。
+  it('waits for the server retry time while waiting for the computer and stops when that is past expiry', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const payload = {
+        kind: 'handoff', region: 'global', id: 'fixture-handoff-0002', scanToken: 'fixture-scan-token-0000000000000002',
+      } as const;
+      native.pollQrHandoff.mockImplementationOnce(async () => {
+        throw new AuthApiError('RATE_LIMITED', 429, 'slow down', Date.now() + 30_000);
+      });
+      await act(async () => { await auth.dispatchLoginAction({ type: 'qr-claim', payload }); });
+      await act(async () => { await auth.dispatchLoginAction({ type: 'confirm-qr-region-switch' }); });
+      expect(auth.loginState?.step).toBe('qr-waiting');
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+      expect(native.pollQrHandoff).toHaveBeenCalledTimes(1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(29_000); });
+      expect(native.pollQrHandoff).toHaveBeenCalledTimes(1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+      expect(native.pollQrHandoff).toHaveBeenCalledTimes(2);
+
+      native.pollQrHandoff.mockImplementationOnce(async () => {
+        throw new AuthApiError('RATE_LIMITED', 429, 'slow down', Date.now() + 600_000);
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+      expect(native.pollQrHandoff).toHaveBeenCalledTimes(3);
+      expect(auth.loginState?.step).not.toBe('qr-waiting');
+      expect(auth.authError).toBe('RATE_LIMITED');
+      await act(async () => { await vi.advanceTimersByTimeAsync(120_000); });
+      expect(native.pollQrHandoff).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('keeps add-account initialization and cancellation as explicit lifecycle boundaries', async () => {

@@ -134,8 +134,15 @@ export function useQrLoginHandoff(
           return;
         }
       }
-      // 单次失败不终止；到期前继续，到期后停在 expired。
-      timer = setTimeout(() => void tick(), QR_HANDOFF_POLL_INTERVAL_MS);
+      // 单次失败不终止；到期前继续，到期后停在 expired。服务端要求稍后再试时等到指定时刻，
+      // 要等到码过期之后才行就直接停在 expired。
+      const retryAt = result && !result.success ? result.retryAt : undefined;
+      if (retryAt !== undefined && retryAt >= expiresAt) {
+        setSnapshot((previous) => ({ ...previous, phase: 'expired' }));
+        return;
+      }
+      const delay = Math.max(QR_HANDOFF_POLL_INTERVAL_MS, (retryAt ?? 0) - now());
+      timer = setTimeout(() => void tick(), delay);
     };
     timer = setTimeout(() => void tick(), QR_HANDOFF_POLL_INTERVAL_MS);
     return () => {

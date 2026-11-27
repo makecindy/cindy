@@ -42,7 +42,8 @@ export type DesktopQrHandoffStateResult =
       expiresAt?: string;
       requester?: { clientType: 'desktop' | 'mobile' | 'web'; deviceName?: string; platform?: string };
     }
-  | { success: false; code: string };
+  /** `retryAt`：服务端 Retry-After 给出的重试时刻（epoch ms），只在限流 / 暂不可用时出现。 */
+  | { success: false; code: string; retryAt?: number };
 
 export type DesktopQrHandoffDecisionResult = { success: true } | { success: false; code: string };
 

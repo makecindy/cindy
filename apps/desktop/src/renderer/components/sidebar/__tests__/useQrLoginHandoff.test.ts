@@ -4,7 +4,7 @@
  * - 生产入口与可观察结果:useQrLoginHandoff 的 phase / payload 与它发出的 IPC 调用次数。
  * - 规则依据:docs/dev-rules/server-channel-review.md(轮询须有上限、离开即停、不自动续码)。
  * - 现有覆盖缺口:新增 hook,无相邻覆盖。
- * - 最小失败输入:弹窗关闭后仍轮询;被认领 / 到期后继续轮询;老服务端无接口时把下载码弄丢。
+ * - 最小失败输入:弹窗关闭后仍轮询;被认领 / 到期后继续轮询;限流后仍按 2 秒重试;老服务端无接口时把下载码弄丢。
  * - tier:unit(jsdom + fake timers + 内存 IPC fake)。
  */
 import { act, renderHook } from '@testing-library/react';
@@ -106,6 +106,40 @@ describe('useQrLoginHandoff', () => {
     expect(result.current.requester).toBeNull();
     // 等待决定期间只按本地到期时间判断，不额外轮询服务端。
     expect(api.authQrHandoffState).toHaveBeenCalledTimes(1);
+  });
+
+  // 依据:server-channel-review —— 服务端给了 Retry-After 就不在等待期内重试;要等到码过期之后才行就直接停。
+  it('waits until the server retry time when rate limited and stops if that is past expiry', async () => {
+    const api = fakeApi([]);
+    api.authQrHandoffState.mockImplementationOnce(async () => ({
+      success: false as const, code: 'RATE_LIMITED', retryAt: Date.now() + 30_000,
+    }));
+    const { result } = renderHook(() => useQrLoginHandoff(true, api));
+    await act(async () => {});
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(QR_HANDOFF_POLL_INTERVAL_MS);
+    });
+    expect(api.authQrHandoffState).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(29_000);
+    });
+    expect(api.authQrHandoffState).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(api.authQrHandoffState).toHaveBeenCalledTimes(2);
+
+    api.authQrHandoffState.mockImplementationOnce(async () => ({
+      success: false as const, code: 'RATE_LIMITED', retryAt: Date.now() + 600_000,
+    }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(QR_HANDOFF_POLL_INTERVAL_MS);
+    });
+    expect(result.current.phase).toBe('expired');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    expect(api.authQrHandoffState).toHaveBeenCalledTimes(3);
   });
 
   it('falls back to the plain download code when the server cannot create a login code', async () => {
