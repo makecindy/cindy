@@ -3260,10 +3260,13 @@ describe('buildPiNativeProvidersFromConfigs', () => {
   // pi-native-catalog.ts:442, a catalog name overwrote it unconditionally, so a stale or
   // corrupted catalog entry silently replaced what the user (or a correct DB snapshot) said.
   // Assert the emitted spec name, not the encoding: this case is about which name wins.
+  // The third row covers the source-switch branch: when the catalog carries no row for the
+  // model at all, the configured name stands on its own — a different branch from the two above.
   it.each([
-    ['explicit name wins over the catalog', true, '·'],
-    ['an unnamed preset row still takes the catalog name', false, '路'],
-  ])('%s', (_label, nameExplicit, expected) => {
+    ['explicit name wins over the catalog', true, '·', true],
+    ['an unnamed preset row still takes the catalog name', false, '路', true],
+    ['a model missing from the catalog keeps the configured name', true, '·', false],
+  ])('%s', (_label, nameExplicit, expected, catalogHasRow) => {
     const explicit = 'DeepSeek V4.1 Flash 1017 · OpenCode Go';
     const catalogName = 'DeepSeek V4.1 Flash 1017 路 OpenCode Go';
     const config = {
@@ -3277,12 +3280,14 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     const projected = buildUserProvider(config as never, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
     const catalog: Catalog = {
       ...BUNDLED_CATALOG,
-      providers: [...BUNDLED_CATALOG.providers, projected].map(provider =>
-        provider.id !== 'magpie-local' ? provider : {
-          ...provider,
-          models: { ...provider.models, pi: (provider.models.pi ?? []).map(model =>
-            model.id !== 'opencode-go/deepseek-v4.1-flash' ? model : { ...model, name: catalogName }) },
-        }),
+      providers: [...BUNDLED_CATALOG.providers, projected]
+        .filter(provider => catalogHasRow || provider.id !== 'magpie-local')
+        .map(provider =>
+          provider.id !== 'magpie-local' ? provider : {
+            ...provider,
+            models: { ...provider.models, pi: (provider.models.pi ?? []).map(model =>
+              model.id !== 'opencode-go/deepseek-v4.1-flash' ? model : { ...model, name: catalogName }) },
+          }),
     } as Catalog;
 
     const name = buildPiNativeProvidersFromConfigs([config], () => 'k', undefined, undefined, catalog)
