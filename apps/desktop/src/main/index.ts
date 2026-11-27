@@ -2,6 +2,7 @@ import './personalBuildMonitor.js';
 import { configureWindowsAtomicRename } from './windowsAtomicRename.js';
 import './personalLaunchCwd.js';
 // Entry: Electron startup → bootstrap-electron.ts (dynamic import).
+import { acquireDesktopInstanceLock } from './desktopInstanceLock.js';
 import fixPath from 'fix-path';
 import { ensureMacPackageManagerPath } from './agentToolPath.js';
 import { app, utilityProcess } from 'electron';
@@ -76,13 +77,6 @@ prepareCindyVersionStartup();
 // 进程级默认值,兜住 main 里所有不走自建 dispatcher 的 fetch / net.connect。
 setDefaultAutoSelectFamilyAttemptTimeout(2500);
 
-// Logger 不再直接 import electron：宿主事实由调用方注入，Node 的 cindy-host
-// 因此能加载同一份日志与依赖它的 storage 模块。
-initLogger({
-  isPackaged: app.isPackaged,
-  userDataDir: app.getPath('userData'),
-  version: app.getVersion(),
-});
 configureGhostSnapshotProcess((parentDir) => utilityProcess.fork(
   path.join(__dirname, 'ghostSnapshotWorkerProcess.js'), [], {
     cwd: parentDir,
@@ -91,11 +85,10 @@ configureGhostSnapshotProcess((parentDir) => utilityProcess.fork(
   },
 ));
 
-const log = createLogger('fix-path');
-log.debug(`[fix-path] before PATH=${process.env.PATH ?? ''}`);
+const pathBeforeFix = process.env.PATH;
 if (!instanceConfig) fixPath();
 ensureMacPackageManagerPath();
-log.debug(`[fix-path] after PATH=${process.env.PATH ?? ''}`);
+const pathAfterFix = process.env.PATH;
 
 // Guarantee /usr/sbin:/sbin are on PATH before anything resolves the device id.
 // A Finder/Dock-launched GUI process inherits a minimal PATH without them, so
@@ -354,18 +347,28 @@ if (!process.env.XDT_BROWSER_RUNTIME_DIR) {
 }
 refreshBrowserRuntimeConfigDir();
 
-// After the final userData and before the bootstrap chunk, which is most of the main bundle.
-const mainCompileCache = startMainCompileCache({
-  userDataDir: app.getPath('userData'),
-  buildId: mainBundleBuildId(app.getVersion(), __dirname),
-  isPackaged: app.isPackaged,
-  platform: process.platform,
-  resourcesPath: process.resourcesPath,
-  homeDir: app.getPath('home'),
-});
-
 async function dispatch(): Promise<void> {
   if (await dispatchCindyVersionStartup()) return;
+  if (!acquireDesktopInstanceLock()) return;
+  // Logger 不再直接 import electron：宿主事实由调用方注入，Node 的 cindy-host
+  // 因此能加载同一份日志与依赖它的 storage 模块。
+  initLogger({
+    isPackaged: app.isPackaged,
+    userDataDir: app.getPath('userData'),
+    version: app.getVersion(),
+  });
+  const log = createLogger('fix-path');
+  log.debug(`[fix-path] before PATH=${pathBeforeFix ?? ''}`);
+  log.debug(`[fix-path] after PATH=${pathAfterFix ?? ''}`);
+  // After the final userData and before the bootstrap chunk, which is most of the main bundle.
+  const mainCompileCache = startMainCompileCache({
+    userDataDir: app.getPath('userData'),
+    buildId: mainBundleBuildId(app.getVersion(), __dirname),
+    isPackaged: app.isPackaged,
+    platform: process.platform,
+    resourcesPath: process.resourcesPath,
+    homeDir: app.getPath('home'),
+  });
   const cleanupDevInstance = await beginDesktopDevInstance(desktopDevInstanceOptions);
   // Windows updater forceQuit() ends in process.exit(0), which bypasses Electron will-quit.
   process.once('exit', cleanupDevInstance);

@@ -132,10 +132,7 @@ import { execFile, execFileSync, spawn } from 'node:child_process';
 import windowStateKeeper from 'electron-window-state';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 import { assertCindyMakeEnabled } from './cindy-make/featureGate.js';
-import {
-  shouldRequestSingleInstanceLock,
-  resolveSingleInstanceLockUserDataDir,
-} from './devCliFlags.js';
+import { handleInstanceLaunches } from './desktopInstanceLock.js';
 import {
   recordDesktopDevAuthStartupResult,
   markDesktopDevStartupFailed,
@@ -454,7 +451,6 @@ import {
   watchCindyVersionStartupResult,
 } from './cindy-make/versionStartup.js';
 import {
-  getCindyVersionLockScope,
   isCindyPersonalRuntime,
 } from './cindy-make/versionRuntimeIdentity.js';
 import { createStorageIpcHandlers } from './cindy-media/storageIpc';
@@ -732,8 +728,7 @@ import { createOpenLogsMenuItem, openLogsDirectory } from './logSupport';
 import { sidebarWindowExpansion } from './sidebarWindowExpansion';
 import { registerSidebarWindowExpansionIpc } from './sidebarWindowExpansionIpc';
 import { WindowManualDragController } from './windowManualDrag';
-import { loadPackagedWindowsShellNative, loadWindowsTaskbarNative } from './windowsTaskbarNative';
-import { createWindowsDeepLinkHandoff, deepLinkRequestData } from './windowsDeepLinkHandoff';
+import { loadWindowsTaskbarNative } from './windowsTaskbarNative';
 import { setWindowsWindowDarkMode } from './windowsWindowDarkMode';
 import {
   issueWritableDirectoryPickerGrant,
@@ -4471,155 +4466,29 @@ app.on('open-file', (event, filePath) => {
   handleIncomingOpenFolder(filePath, 'open-file');
 });
 
-// ── Single instance lock ─────────────────────────────────────────────────
-// 正常 dev 与 packaged 一律启用。这是把 OS 因深链(cindy://focus 授权返回 /
-// cindy://session 等)/ 右键 "通过 Cindy 打开" 而拉起的第二个进程 redirect 成
-// "聚焦已运行窗口" 的机制。Windows 普通浏览器不能经 WM_COPYDATA 通知提权实例，
-// 这种权限组合补走同用户、同锁域的有界深链管道，沿用同一解析与 pending 入口。
-//
-// 锁按 flavor 分域(resolveSingleInstanceLockUserDataDir):packaged 锁真实
-// userData(release 之间单实例);dev 锁 `<userData>/dev-single-instance-lock`
-// 子目录(dev 之间单实例、深链 redirect 保持有效)。因此 dev 与正式版可以共库
-// 双开——这是明确支持的工作流,跨实例并发由 SQLite WAL + busy_timeout、scheduler
-// DB 级原子认领、auth replacement-retry 等既有仲裁收敛(与 --passive 共库多开
-// 同一套)。2026-07-19 曾让 dev 与 packaged 抢同一把锁(修 dev 深链冷启动重复
-// 实例),误伤了 dev + release 双开,2026-07-20 按 flavor 分域恢复,两个目标同时保住。
-//
-// dev `--passive` 仍完全跳过锁:它的公开契约是与 primary 共享数据任意多开,一个
-// primary 后可并行任意多个 preview。此模式没有 second-instance redirect,deep link
-// 落到哪个实例由当前 OS 协议注册归属决定。localDb 首次开库时会只读核对
-// schema_version、完整 migration history 与 SQL/companion TS runtime 指纹;
-// pending / 超前 / drift 都拒绝启动。passive 自己不迁移/repair schema,并用多
-// reader lease 阻止之后的 primary 抢跑 migration。
-// 隔离数据实例走 `--isolated[=<名字>]`(独立 userData → 独立锁域,见 docs/dev-rules/desktop-development.md)。
-let singleInstanceRejected = false;
-const deepLinkHandoffLog = createLogger('deepLink:handoff');
-if (
-  getCindyVersionLockScope() !== null ||
-  shouldRequestSingleInstanceLock({
-    isPackaged: app.isPackaged,
-    schedulerPassive: process.env.XDT_SCHEDULER_PASSIVE === '1',
-  })
-) {
-  const realUserDataDir = app.getPath('userData');
-  const lockScopeDir =
-    getCindyVersionLockScope() === 'profile'
-      ? realUserDataDir
-      : getCindyVersionLockScope() === 'dev'
-        ? path.join(realUserDataDir, 'dev-single-instance-lock')
-        : resolveSingleInstanceLockUserDataDir({
-            isPackaged: app.isPackaged,
-            userDataDir: realUserDataDir,
-          });
-  const startupUrl = process.platform === 'win32' ? findDeepLinkInArgv(process.argv) : null;
-  const startupRequest = startupUrl ? deepLinkRequestData() : undefined;
-  let windowsHandoff: ReturnType<typeof createWindowsDeepLinkHandoff> | undefined;
-  if (process.platform === 'win32' && app.isPackaged) {
-    try {
-      const native = loadPackagedWindowsShellNative();
-      if (native) {
-        windowsHandoff = createWindowsDeepLinkHandoff({
-          lockScopeDir,
-          native,
-          isDeepLink: (url) => findDeepLinkInArgv([url]) !== null,
-          dispatch: (url, source) => {
-            handleIncomingDeepLink(url, source);
-            if (source === 'windows-handoff' && startupWindowCreationAllowed && !focusMainWindow()) {
-              createWindow();
-            }
-          },
-          // Do not log native exceptions or incoming URLs: they may hold secrets.
-          onFailure: (stage) => deepLinkHandoffLog.warn('Windows handoff failed', { stage }),
-        });
-      }
-    } catch {
-      deepLinkHandoffLog.warn('Windows handoff unavailable');
-    }
-  }
-  let gotTheLock: boolean;
-  if (lockScopeDir === realUserDataDir) {
-    gotTheLock = app.requestSingleInstanceLock(startupRequest);
+if (app.hasSingleInstanceLock()) finishCindyVersionStartup();
+handleInstanceLaunches((launch) => {
+  if (launch.kind === 'link') {
+    handleIncomingDeepLink(launch.url, launch.source);
   } else {
-    // Electron 没有自定义锁作用域的 API:锁文件 / socket 按调用时刻的 userData
-    // 路径生成。这里在同步窗口内临时切换 userData 再还原——主进程单线程,中间
-    // 不会有其它 JS 观察到临时值;锁建立后内部通道与 userData 后续取值无关。
-    fs.mkdirSync(lockScopeDir, { recursive: true });
-    app.setPath('userData', lockScopeDir);
-    try {
-      gotTheLock = app.requestSingleInstanceLock(startupRequest);
-    } finally {
-      app.setPath('userData', realUserDataDir);
-    }
-  }
-  if (!gotTheLock) {
-    singleInstanceRejected = true;
-    // Synchronous, bounded send in the losing process, before app.quit(). The
-    // owning process coalesces this with second-instance by the launch ID.
-    if (startupUrl && windowsHandoff) {
-      const queued = windowsHandoff.forward(startupUrl, startupRequest);
-      if (queued) deepLinkHandoffLog.info('queued Windows handoff');
-    }
-    if (startupUrl) redactConsumedDeepLinkInArgv(process.argv, startupUrl);
-    markDesktopDevStartupFailed(
-      'SINGLE_INSTANCE_OWNED',
-      'Another Cindy instance already owns this single-instance lock scope.',
-      { userDataDir: realUserDataDir, lockScopeDir },
-    );
-    app.quit();
-  } else {
-    windowsHandoff?.start();
-    app.once('will-quit', () => windowsHandoff?.close());
-    finishCindyVersionStartup();
-    app.on('second-instance', (_event, argv, _workingDirectory, additionalData) => {
-      // Windows: 用户点 cindy://(或历史 xdt-maker://)链接 / 右键 "通过 Cindy 打开" 时,
-      // OS 会再起一个本 app 实例; 单例锁把它 redirect 成 second-instance 事件,
-      // URL 或 --open-folder 参数都在 argv 里。macOS 不走这个路径(走 open-url),
-      // Linux 由 .desktop 决定。
-      //
-      // 两类入口互斥 (else if):argv 在现实里只会有其一,但如果手工命令行同时
-      // 给了两种,优先 deep link URL (历史语义先行,xdt-maker:// 比 --open-folder
-      // 早一个版本上线),避免双 dispatch / 双 navigate 让 renderer 看到一闪而过
-      // 的中间态。
-      const url = findDeepLinkInArgv(argv);
-      if (url) {
-        redactConsumedDeepLinkInArgv(argv, url);
-        if (windowsHandoff) windowsHandoff.dispatch(url, additionalData, 'second-instance');
-        else handleIncomingDeepLink(url, 'second-instance');
+    const argv = launch.argv;
+    const openFolder = findOpenFolderInArgv(argv);
+    if (openFolder) {
+      handleIncomingOpenFolder(openFolder, 'second-instance');
+    } else {
+      // 双击已关联的 .cindy(Windows):装入 + 停靠。
+      const openShareFile = findOpenShareFileInArgv(argv);
+      if (openShareFile) {
+        handleIncomingShareFile(openShareFile, 'second-instance');
       } else {
-        const openFolder = findOpenFolderInArgv(argv);
-        if (openFolder) {
-          handleIncomingOpenFolder(openFolder, 'second-instance');
-        } else {
-          // 双击已关联的 .cindy(Windows):装入 + 停靠。
-          const openShareFile = findOpenShareFileInArgv(argv);
-          if (openShareFile) {
-            handleIncomingShareFile(openShareFile, 'second-instance');
-          } else {
-            const cindyFile = findCindyFileInArgv(argv);
-            if (cindyFile) void handleIncomingCindyFile(cindyFile, 'second-instance');
-          }
-        }
+        const cindyFile = findCindyFileInArgv(argv);
+        if (cindyFile) void handleIncomingCindyFile(cindyFile, 'second-instance');
       }
-      // 端点清单阻断期间(startupWindowCreationAllowed=false)禁止建窗:
-      // 否则 preload 的模块级 sendSync 找不到 handler 直接白屏,且窗口会带着
-      // 烘焙端点绕过"拉不到清单不放行"的阻断语义。deep-link 分发不受影响
-      // (deepLink 只向已有窗口投递/排队,不建窗)。
-      if (startupWindowCreationAllowed && !focusMainWindow()) {
-        createWindow();
-      }
-    });
+    }
   }
-}
-
-if (
-  app.hasSingleInstanceLock() ||
-  (getCindyVersionLockScope() === null &&
-    !shouldRequestSingleInstanceLock({
-      isPackaged: app.isPackaged,
-      schedulerPassive: process.env.XDT_SCHEDULER_PASSIVE === '1',
-    }))
-)
-  deliverCindyVersionOpenEvents();
+  if (startupWindowCreationAllowed && !focusMainWindow()) createWindow();
+});
+deliverCindyVersionOpenEvents();
 
 // 冷启动 argv 扫描 — Windows 上首次点链接 / 右键 "通过 Cindy 打开" 启动 app
 // 时, URL 或 --open-folder 在 process.argv 末尾。macOS deep link 走 open-url
@@ -4627,7 +4496,7 @@ if (
 // 入口 (mac 走 LSItemContentTypes / open-file 事件), 也不会在 mac argv 出现。
 //
 // 同 second-instance:两类入口互斥, 优先 deep link URL。
-if (!singleInstanceRejected && process.platform !== 'darwin') {
+if (process.platform !== 'darwin') {
   const coldStartUrl = findDeepLinkInArgv(process.argv);
   if (coldStartUrl) {
     redactConsumedDeepLinkInArgv(process.argv, coldStartUrl);
@@ -4652,10 +4521,6 @@ if (!singleInstanceRejected && process.platform !== 'darwin') {
 
 // 启动时尝试自注册 Windows 右键菜单(显示文案走 BRAND_NAME)。fire-and-forget,
 // 完全不阻塞启动流程;失败仅 warn log。详见 folderContextMenu.ts 模块头注释。
-//
-// 位置在 single-instance 锁之后,但 app.quit() 不中止顶层同步代码,第二实例
-// (gotTheLock=false)仍会执行到这里——三个自愈都是幂等 + 全吞错,重复执行无害,
-// 不为此加门控。
 if (app.isPackaged) {
   void registerFolderContextMenu();
   // Windows .cindy 文件关联自注册(双击装入意识)。同款 best-effort 口径。
