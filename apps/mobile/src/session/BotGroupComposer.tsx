@@ -87,7 +87,9 @@ export interface BotGroupComposerHandle {
 function focusFromTimeline(input: TextInputInstance | null) {
   if (!input) return;
   // Android can keep the input focused after Back hides the keyboard.
-  if (input.isFocused() && !Keyboard.isVisible()) input.blur();
+  // Avoid blurring on iOS: resigning first responder commits active IME composition
+  // and drops the pending controlled value update until a second long press.
+  if (Platform.OS === 'android' && input.isFocused() && !Keyboard.isVisible()) input.blur();
   input.focus();
 }
 

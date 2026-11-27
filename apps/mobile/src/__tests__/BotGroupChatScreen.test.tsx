@@ -36,6 +36,8 @@ const h = vi.hoisted(() => ({
   nativeMenus: true,
   appState: 'active',
   appStateListeners: new Set<(state: string) => void>(),
+  screenReader: false,
+  screenReaderListeners: new Set<(enabled: boolean) => void>(),
   closeSettings: null as null | (() => void),
   row: null as any,
   accessibility: new Map<string, {
@@ -155,6 +157,13 @@ vi.mock('react-native', () => {
     } },
     BackHandler: { addEventListener: (_event: string, fn: () => boolean) => { h.hardwareBack = fn; return { remove() {} }; } },
     Keyboard: { dismiss: () => {}, isVisible: () => h.keyboardVisible },
+    AccessibilityInfo: {
+      isScreenReaderEnabled: () => Promise.resolve(h.screenReader),
+      addEventListener: (_event: string, listener: (enabled: boolean) => void) => {
+        h.screenReaderListeners.add(listener);
+        return { remove: () => h.screenReaderListeners.delete(listener) };
+      },
+    },
     Animated: { createAnimatedComponent: (component: any) => component, View: box('div'), Value: class { setValue() {} interpolate() { return this; } }, timing: () => ({ start() {}, stop() {} }),
       loop: () => ({ start() {}, stop() {} }), sequence: () => ({}) },
     Easing: { inOut: () => undefined, ease: undefined, bezier: () => undefined },
@@ -511,6 +520,7 @@ beforeEach(() => {
   h.exported = []; h.pngExport.mockResolvedValue('encoded');
   h.uuid = 0; h.inputs = {}; h.teammateQuery = ''; h.teammates = { rows: [], loading: false, failed: false };
   h.appState = 'active'; h.appStateListeners.clear();
+  h.screenReader = false; h.screenReaderListeners.forEach(listener => listener(false));
   h.platform.OS = 'ios'; h.focused = true; h.inputFocused = false; h.keyboardVisible = false; h.keyboardAvoidingView = null; h.headerBlur = []; h.headerFade = []; h.screenOptions = [];
   h.insets = { top: 59, bottom: 34, left: 0, right: 0 };
   h.chat = { pending: [], reload: vi.fn(), act: vi.fn(async () => ({ effects: [] })), online: true };
@@ -1662,13 +1672,16 @@ describe('group composer', () => {
 
   // Every reply tap must bring the keyboard back. The quote id alone does not change when the same
   // message is replied to again, and RN's focus() is a no-op on an input that is still focused —
-  // Android keeps focus after Back hides the keyboard. With the keyboard up, the input is not blurred
-  // so an IME composition survives.
+  // Android keeps focus after Back hides the keyboard. On iOS, blurring an already-focused input
+  // commits active IME composition and drops the pending controlled value update, so only Android
+  // blurs when the keyboard is hidden.
   it.each([
-    { state: 'unfocused', focused: false, keyboard: false, blurs: 0 },
-    { state: 'focused with the keyboard hidden', focused: true, keyboard: false, blurs: 1 },
-    { state: 'focused with the keyboard up', focused: true, keyboard: true, blurs: 0 },
-  ])('re-focuses the input when replying to the same message again ($state)', async ({ focused, keyboard, blurs }) => {
+    { state: 'unfocused', platform: 'android', focused: false, keyboard: false, blurs: 0 },
+    { state: 'Android focused with the keyboard hidden', platform: 'android', focused: true, keyboard: false, blurs: 1 },
+    { state: 'iOS focused with the keyboard hidden', platform: 'ios', focused: true, keyboard: false, blurs: 0 },
+    { state: 'focused with the keyboard up', platform: 'android', focused: true, keyboard: true, blurs: 0 },
+  ])('re-focuses the input when replying to the same message again ($state)', async ({ platform, focused, keyboard, blurs }) => {
+    h.platform.OS = platform;
     const originalId = '22222222-2222-4222-8222-222222222222';
     await render(group({ serverBacked: true, openPlan: null, messages: [
       message(originalId, 1, { authorName: '咪咪', authorBotId: 'mimi', content: '请回复这条' }),
@@ -1724,7 +1737,12 @@ describe('group composer', () => {
     await click('botGroup.avatarMention.mimi');
     expect(h.row.value).toBe('A draft');
 
+    // iOS with hardware/IME typing active keeps focus without blurring (which would commit and overwrite the draft).
+    h.inputFocused = true; h.keyboardVisible = false;
+    h.inputBlur.mockClear(); h.inputFocus.mockClear();
     await act(async () => holdAvatar('abu'));
+    expect(h.inputBlur).not.toHaveBeenCalled();
+    expect(h.inputFocus).toHaveBeenCalledTimes(1);
     expect(h.row.value).toBe('A draft @Ann ');
     expect(h.chat.act).not.toHaveBeenCalled();
     await click('botGroup.composer.send');
@@ -1778,10 +1796,20 @@ describe('group composer', () => {
 
     await act(async () => h.accessibility.get(messageAvatar)?.action?.({ nativeEvent: { actionName: 'longpress' } }));
     expect(h.row.value).toBe('A draft @Ann @Ann @Ann ');
+
+    // Real iOS VoiceOver double-tap on a button Pressable synthesizes a press event instead of onAccessibilityTap;
+    // enable onPress only while a screen reader is active, then turn it back off when the screen reader stops.
+    await act(async () => { h.screenReader = true; h.screenReaderListeners.forEach(listener => listener(true)); });
+    await click(messageAvatar);
+    await click(runningAvatar);
+    expect(h.row.value).toBe('A draft @Ann @Ann @Ann @Ann @Ann ');
+    await act(async () => { h.screenReader = false; h.screenReaderListeners.forEach(listener => listener(false)); });
+    await click(messageAvatar);
+    expect(h.row.value).toBe('A draft @Ann @Ann @Ann @Ann @Ann ');
     expect(h.chat.act).not.toHaveBeenCalled();
     await click('botGroup.composer.send');
     expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({
-      text: 'A draft @Ann @Ann @Ann', mentions: { all: false, botIds: ['mimi', 'abu'] },
+      text: 'A draft @Ann @Ann @Ann @Ann @Ann', mentions: { all: false, botIds: ['mimi', 'abu'] },
     }));
   });
 
