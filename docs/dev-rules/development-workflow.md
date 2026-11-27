@@ -34,10 +34,11 @@ Cindy 创建或重建托管 worktree 时，会尽力向 Git 本地 `info/exclude
 引擎缓存（常见十万级文件、数十 GB），比较只会长时间占住该仓库的创建队列。
 Multibox 建完才返回（2026-11-16 实测 Unity 项目 67–88 秒），所以远程创建（另一台电脑或
 手机发起）的等待上限是 5 分钟（`packages/device-link/src/allowlist.ts` 的 `worktree:create`），
-期间控制端一直显示创建中，建好后才建任务，Agent 不会进入半成品目录；未更新的控制端仍按
-60 秒超时。Desktop 的创建中卡片（`WorktreeCreatingOverlay`）超过 3 秒后显示已等待时长：本机
-内置引擎新建在任务页替代输入框；远程创建与普通本机插件引擎在新建页输入框下方显示，
-Goal 创建在目标弹窗内显示。普通本机插件引擎完整检出后才建任务并送出首条消息。
+被控端建好目录才建任务，Agent 不会进入半成品目录；未更新的控制端仍按
+60 秒超时。Desktop 普通新建任务先进入任务页显示首条消息。工作区准备期间可以切走或继续写草稿，
+目录就绪并交接首条消息后才能发送补充内容。本机插件引擎的任务预览只存在于界面，完整检出后才
+创建真实任务；准备失败可从预览回到编辑，恢复原文、附件及补写内容。
+Goal 仍在目标弹窗内显示创建进度，超过 3 秒显示已等待时长。
 手机新建页暂无同款卡片与计时。
 
 正常回收后的完整 Git 快照恢复也使用 Multibox：直接在最终目录检出快照 commit 并携带缓存，
@@ -103,9 +104,15 @@ owner 的目录；旧 owner 的缺失路径沿用目录不可用结果，不自�
 worktree 建成空目录或自动切到项目根继续修改代码。
 
 恢复说明随本轮消息传给 Agent，明确原路径、文件未恢复和当前运行位置；消息被接受
-之后才消费说明。SSH 不使用本机备用目录；设备互联和手机沿用被控 Desktop 的发送链。
-实现见 `apps/desktop/src/main/maker-ipc/workingDirectoryRecovery.ts` 与 `register.ts`，
-回归见 `workingDirectoryRecovery.test.ts` 和 `makerSendTransaction.test.ts`。
+之后才消费说明。绑定到该任务的定时触发（含前置检查脚本 cwd 与会话启动）共用同一套
+恢复登记与回落边界：`gone` 时在备用目录继续运行并遵循同一运行期不自动切回，`retry`
+仍保持阻断；仅脚本自动化自身 `workingDir` 落在缺失 worktree 内时保持失败，不在空
+备用目录里跑仓库脚本。SSH 不使用本机备用目录；设备互联和手机沿用被控 Desktop 的发送链。
+实现见 `apps/desktop/src/main/maker-ipc/workingDirectoryRecovery.ts`、
+`workingDirectoryRecovery.desktop.ts`、`register.ts` 与
+`apps/desktop/src/main/scheduler-host/{restore-target,runner,script-runner}.ts`，
+回归见 `workingDirectoryRecovery.test.ts`、`makerSendTransaction.test.ts`、
+`runnerPreRunHookCwd.test.ts` 和 `scriptRunner.test.ts`。
 
 ### 提交门禁
 

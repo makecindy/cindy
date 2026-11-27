@@ -190,8 +190,8 @@ export default {
     }
     await page.getByRole('button', { name: await ui.t('chat.askUserQuestion.customAnswer') }).click();
     const expandedFrame = await readVoiceFrame();
-    assert.equal(expandedFrame.width, 32);
-    assert.equal(expandedFrame.height, 32);
-    assert.ok(expandedFrame.radius >= 16, 'Expanded microphone action frame follows the same pill tier');
+    assert.equal(expandedFrame.width, 30);
+    assert.equal(expandedFrame.height, 30);
+    assert.ok(expandedFrame.radius >= 15, 'Expanded microphone action frame follows the unified 30px pill spec');
   },
 };

@@ -18,12 +18,14 @@ import { providerRoutingForModel } from '../maker-host/provider-route.js';
 import { createLogger } from '../logger.js';
 import {
   hasRestoredCodexQuota,
+  readLocalSubscriptionTaskUsageLimit,
   acquirePendingAgentSwitchForDirectSend,
   isSessionInTurn,
   ensureGoalInputReady,
   isGoalInputBlocked,
   resolveSessionRuntimeRoute,
   stopActiveGoalTurnForClear,
+  tryGoalModelGroupRecovery,
 } from '../maker-ipc/register.js';
 import { isSessionSharedTaskActive } from '../device-link/sharedTaskDispatch.js';
 import { createMessage } from '../localDb/ipc/messages.js';
@@ -164,9 +166,17 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
       // 那台的独立账号本机目录认不出(上面判不出订阅家族)时也到这里,同样不读。
       // SSH 沿用原有的网关预算回落。
       if (row?.agentDeviceId && !row.remoteHostId) return null;
-      const subscription = await readAccountUsageLimit(agentKind, providerId, modelId).catch(
-        () => null,
-      );
+      const subscription = await (async () => {
+        if (family === 'claude' || family === 'codex') {
+          const pooled = await readLocalSubscriptionTaskUsageLimit(
+            family,
+            { sessionId, nativeSessionId: row?.sdkSessionId, providerId, agentKind, modelId },
+            { fresh: turnError !== undefined },
+          );
+          if (pooled !== undefined) return pooled;
+        }
+        return readAccountUsageLimit(agentKind, providerId, modelId);
+      })().catch(() => null);
       if (subscription !== undefined) return subscription;
       // 非订阅的 Claude Code 会话(Cindy 网关):读 LiteLLM 预算周期。
       if (agentKind === 'claude-code') {
@@ -182,6 +192,7 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
     },
     // usageLimited 到点自动续跑时,落一条"用量已恢复,继续目标"提示(渲染成 system card)。
     isSessionShared: (sessionId) => isSessionSharedTaskActive(sessionId),
+    tryModelGroupRecovery: (sessionId, signals) => tryGoalModelGroupRecovery(sessionId, signals),
     persistGoalNotice: async (sessionId, kind) => {
       await createMessage(sessionId, {
         clientId: randomUUID(),

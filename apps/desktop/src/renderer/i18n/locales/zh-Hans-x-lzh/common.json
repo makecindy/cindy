@@ -1,4 +1,9 @@
 {
+  "antigravityVerification": {
+    "title": "验 Google 账户",
+    "note": "请扫码，或启 Google 页以验之。Antigravity 确认可用，则续前事。",
+    "refresh": "更新验证码"
+  },
   "runtimePlugins": {
     "save": "存之",
     "promptUnsupported": "此 Pi 所在之处不支持系统提示词片段。",
@@ -340,7 +345,7 @@
     "tabOwned": "吾所发起",
     "startIntro": "邀同僚尽览此差事，与同一 Agent 并肩协作。",
     "runsOnThisDevice": "行于此机",
-    "inviteNotice": "持邀请链接者登门即可入，所得 Agent 使用权柄与东道同。",
+    "inviteNotice": "持邀请链接者登门即可入，所得 Agent 使用权柄与东道同。 虽仅共享子目录，客亦可阅全 Git 仓之现改。",
     "offlineAutoClose": "东道之机久脱机，共享将自终。",
     "inviteBoxHint": "遣链接予同僚，彼点之即可入；亦可于 Cindy 中点「入共事」贴此链接。",
     "invitationMessage": "邀君入「{{title}}」\n{{link}}\n点链接即入；若 Cindy 未启，可于 Cindy 中点「入共事」并贴此链接。",
@@ -2521,7 +2526,7 @@
       "skinLabel": "角色",
       "skinHint": "任务胶囊与灵动岛中所显之角色。",
       "soundLabel": "事之音",
-      "soundHint": "事件设音，则独奏所择之声；未设或关之，则从系统通知之设。",
+      "soundHint": "为诸类提醒择 8-bit 之音，任务胶囊与灵动岛共之；点按之音唯触任务胶囊时鸣。",
       "soundAria": "切换任务胶囊之音",
       "soundSelectAria": "{{event}}之音",
       "soundPreviewAria": "先听{{event}}之音",
@@ -2576,7 +2581,7 @@
         "select": "点击"
       },
       "soundOptions": {
-        "none": "随系统",
+        "none": "无",
         "startup-chime": "启动之音",
         "ring-chime": "圆环之音",
         "item-found": "得宝",
@@ -4275,6 +4280,7 @@
             "sliderAria": "调整自动压缩阈值",
             "restoreAria": "还原自动压缩的默认比例"
           },
+          "antigravityHydrogenDescription": "宜日常编程，执行迅捷。",
           "contextLimitRoute": "今 {{tokens}} tokens",
           "contextLimitOverWindow": "已逾上游所宣之长度，请求或将未成。",
           "restoreDefault": "复预设",
@@ -4721,6 +4727,7 @@
         "discoveryHint": "下列型号由供方目录传回，尚未验其语声调用。",
         "saved": "已增",
         "reference": "参照型号",
+        "realtimeConfirmed": "实时端点已验",
         "discovered": "目录所回",
         "more": "余语声型号（{{count}}）",
         "manual": "亲书语声型号",
@@ -7151,6 +7158,7 @@
         },
         "onlyEncrypted": "唯用 Agent-Net",
         "onlyEncryptedHint": "启之则旧版设备及仍循旧路之分享不可用。常例为阖。",
+        "removedOff": "此机已自名籍中移除，Agent-Net 已自闭。复启即可重新加入。",
         "peerSwitch": {
           "row": {
             "toAgentNet": "方转 Agent-Net…",
@@ -8764,6 +8772,8 @@
         "nodeRuntime": "可于此机运行法器所附之 Node 程序",
         "nodeMcp": "可于此机运行法器所附之 stdio MCP",
         "nodeRuntimeDetail": "高风险：其与君本人无异，可读写君名籍所能及之本机文件、访问网络并启动他程序。Cindy 不能以浏览器沙箱约束之。",
+        "nodeInheritEnv": "承本机环境",
+        "nodeInheritEnvDetail": "高风险：法器之 Node 程序及子处理程序，皆得 Cindy 当下全部环境变量，包括 Proxy、证书配置，亦可得其中所存 API Key、Token 等机密。",
         "nodeSecret": "可将已存凭证「{{name}}」交予此机 Node 程序",
         "nodeSecretDetail": "Cindy 加密保管，仅于下列已声明之 Worker 方法运行时临时注入。Node 程序所得为明文，亦可将其回传、记录、保存，或泄于浏览器侧法器代码及 Agent 参数；请仅纳可信之法器。",
         "nodeResident": "Node 程序可常驻背后",
@@ -8828,6 +8838,8 @@
         "networkSecretOauthDetail": "登录与令牌由 Cindy 代管，可新授权，亦可择同服务既连之账号。请核下列所请之权；用既连账号时，以其已有之权为准。",
         "networkConnections": "可连君所增之 {{label}}",
         "networkConnectionsDetail": "地址于此法器之设置界面中增之；每增一地址皆须君确认，君所供之凭证仅注入相应地址。",
+        "networkConnectionsGlabCli": "可连君所增之 {{label}}，并先用此机 glab 已登之实例",
+        "networkConnectionsGlabCliDetail": "君于法器设置中所增之实例凭证为先；未另增之实例，主机按需取此机 glab 之登录令牌，唯注入其自身之 HTTPS 请求，法器代码不得读取或存留令牌。",
         "codeDetailNetwork": "于独立沙箱中运行，不能访问君之文件；网络仅限上方所声明之网域，由主机代发。",
         "codeDetailWithNode": "面板 UI 于独立沙箱中运行；此机处理之能由上方所声明之 Node 运行环境提供。",
         "added": "新",
@@ -8856,7 +8868,7 @@
         "nodeChildSpawnDetail": "仅能启其包内已申报之 JS 文件(与主程序同等本机权柄)，不能行任意命令；法器禁用或退出时，子处理程序一并关闭。",
         "skill": "为 AI 助手增技艺「{{name}}」",
         "skillDetail": "技艺乃一份指令文件，AI 将视为己之指令加载而行，具君之全部权柄，于 Claude Code 与 Codex、一切案中皆生效——不受本法器沙箱所约。法器启用期间持续可用，禁用或卸除即移除；仅对某卷匣关闭本法器，不能隐之。此处不能先览技艺全文——请仅纳君所信之法器。",
-        "routineEvents": "例行差事事件",
+        "routineEvents": "自动化之事",
         "mcpUi": "可于言谈中示交互页面",
         "mcpUiDomains": "页面可连之网域：{{domains}}",
         "mcpAppOnly": "唯页面可用",
@@ -8968,7 +8980,10 @@
         "subscribeToolResult": "可处理所选任务的工具结果",
         "subscribeToolResultDetail": "可读取结果，按引擎能力补充上下文或改写结果；不会撤销已执行的操作。",
         "subscribeStartTask": "可为新差事择模型",
-        "subscribeStartTaskDetail": "新任务择其所供之模型时，彼阅首条消息，于汝已连之模型中择一。此节唯于首条消息发出前行一次。"
+        "subscribeStartTaskDetail": "新任务择其所供之模型时，彼阅首条消息，于汝已连之模型中择一。此节唯于首条消息发出前行一次。",
+        "agentChecks": "可验诸源有无新增",
+        "agentChecksDetail": "与他已获许之法器互报有变、无变或未能验明。各源用其已连之账号，不传讯息正文或凭证，亦不调用模型。可验本机 Cindy 对谈有无新增，不返其文。",
+        "agentChecksRequest": "确认验新之权柄"
       },
       "connections": {
         "confirmTitle": "增连接地址",
@@ -11896,6 +11911,7 @@
           "title": "@ 我之讯",
           "me": "我",
           "markAll": "尽标已读",
+          "markReadFailed": "未能标所及为已读。",
           "empty": "无人 @ 君，耳根清净",
           "thread": "话题",
           "main": "群议",
@@ -12103,6 +12119,8 @@
       },
       "notice": {
         "memberJoined": "{{name}}入群议",
+        "memberJoinedList": "{{names}}入群议",
+        "memberJoinedSummary": "{{names}}及余{{others}}人入群议",
         "memberFailed": "{{name}}此番未能回复",
         "memberTimeout": "{{name}}久未回复，此番暂略之",
         "memberUnavailable": "{{name}}今不可用，此番未发言",
@@ -12132,7 +12150,9 @@
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具调用未执行：群内授权已失效或不允许此操作。请由伙伴主人在当前群重新发起。",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "暂时无法核验 {{name}} 的群聊授权，这次工具调用未执行。请在连接恢复后重试。",
           "ATTACHMENTS_UNAVAILABLE": "部分附件未交给 {{name}}（下载失败或数量限制）。请重新发送本次需要的附件。",
-          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，连君之 Cindy，而后 Cindy 可代君行事（君之电脑今无在线之 Cindy）。"
+          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，连君之 Cindy，而后 Cindy 可代君行事（君之电脑今无在线之 Cindy）。",
+          "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}，请择本群执行之机，既择即续此事。",
+          "GROUP_ASSISTANT_DEVICE_OFFLINE": "{{name}} 于本群所择之机已离线。"
         }
       },
       "settings": {
@@ -12175,6 +12195,8 @@
         "projectDirSaveFailed": "案之卷匣未能存，确其尚存后再试",
         "allowMemberInvites": "许诸成员邀友",
         "allowMemberInvitesHint": "启之，已入群者皆可邀友。唯群主与管理员可改。",
+        "allowMemberMentionAll": "许诸众 @所有人",
+        "allowMemberMentionAllHint": "启之，诸众皆可 @所有人；闭则惟群主与管理员可用。唯群主与管理员可改。",
         "allowMentionAllBots": "许 @诸同伴",
         "allowMentionAllBotsHint": "唯群主可改。诸同伴或皆回复，大群宜慎启之。此开关不涉 AI 代答。"
       },
@@ -12206,6 +12228,7 @@
         "groupDissolved": "群议已散，仍可览有权访问之旧讯。",
         "lastOwner": "请先转让群主或解散群议，再退出。",
         "allBotsMentionDisabled": "群主尚未启 @诸同伴。",
+        "allHumansMentionForbidden": "惟群主与管事可 @所有人。",
         "turnAlreadyStarted": "此同伴已始行，不可略过"
       },
       "organizer": "主事",
@@ -12281,6 +12304,8 @@
         "threadNew": "话题新言",
         "replyingTo": "答「{{name}}」：{{text}}",
         "filesOutsideWorkingDir": "部分文件不在工作目录内，未附上。",
+        "modelFallback": "所择之模不在此机，今以 {{model}} 应之。",
+        "modelFallbackUnnamed": "所择之模不在此机，今以本机可用之模应之。",
         "earlierOmitted": "（更早之言略之）",
         "actingFor": "{{name}} · 代 {{person}}",
         "checkout": {
@@ -12361,13 +12386,40 @@
           "unfollowTip": "不复留意之后，唯有人提及君时方告",
           "listLabel": "此群议中之话题",
           "listNews": "有新答",
-          "listOthers": "他话题",
-          "newSeparator": "新答"
+          "newSeparator": "新答",
+          "openIndex": "话题",
+          "indexTitle": "话题",
+          "backToList": "返话题录",
+          "filterAria": "筛选话题",
+          "filterMine": "与己相关",
+          "filterAll": "全览",
+          "searchPlaceholder": "检索话题、回复或同席",
+          "clearSearch": "清检索",
+          "listRecent": "近日",
+          "indexParticipatedTag": "曾与议",
+          "indexMentionedTag": "曾见及",
+          "locateInGroup": "定位于群议",
+          "indexEmptyMine": "尚无与议或见及之话题",
+          "indexEmptyAll": "此群尚无话题",
+          "indexEmptySearch": "无相合之话题",
+          "viewAllThreads": "览全部话题",
+          "syncingHistory": "方溯旧话…",
+          "rootKind": {
+            "task": "差事",
+            "image": "图画",
+            "video": "影像",
+            "audio": "语音",
+            "file": "卷宗",
+            "share": "转传回复",
+            "card": "笺卡"
+          }
         },
         "replyPlaceholder": "覆此讯，可用 @ 点名同伴…",
         "sendReply": "遣回复",
+        "moreReactions": "余诸表情",
         "addReaction": "增表情回应",
         "reactionCount": "{{emoji}} · {{count}} 人应之",
+        "reactionTotal": "{{emoji}} · 凡应 {{count}} 次",
         "reactionWho": "{{emoji}} · {{count}} 人应之：{{names}}",
         "reactorSelf": "君",
         "reactorFormer": "{{name}}（已不在群中）",
@@ -12491,6 +12543,7 @@
           "accessNone": "唯主可用",
           "accessChat": "仅于群议",
           "accessTools": "可用工具与资料",
+          "memberPermissions": "群员权柄",
           "replies": "同伴如何接话",
           "replyModeMentionedNote": "不 @ 人时，同伴不接话。",
           "assistant": "群中 Cindy",
@@ -12547,6 +12600,8 @@
           "accessToolsHint": "可用 {{name}} 已有之工具与君之私人数据，结果全群可见。原有操作审批照常；撤回之后，已成之操作不可撤销。",
           "capabilitiesRow": "{{name}} 之工具与授权",
           "accessMenu": "于本群之权柄",
+          "assistantComputer": "执行之机",
+          "chooseComputer": "择机",
           "notifications": {
             "title": "消息告知",
             "all": "凡讯皆告",
@@ -13809,6 +13864,9 @@
           "allow": "允许",
           "deny": "拒绝",
           "approve": "批准"
+        },
+        "companion": {
+          "retryLater": "请少顷再试"
         }
       },
       "hook": {
@@ -15609,7 +15667,8 @@
       "runningFor": "已行 {{duration}}",
       "startedAt": "始于 {{time}}",
       "recentOutput": "近出 · {{time}} 前更",
-      "noOutputYet": "尚无所出"
+      "noOutputYet": "尚无所出",
+      "recentActivity": "近事"
     },
     "planPill": {
       "step": "第 {{current}} / {{total}} 步",
@@ -16135,7 +16194,30 @@
       },
       "status": {
         "running": "方行",
-        "done": "已毕"
+        "done": "已毕",
+        "failed": "未成"
+      },
+      "collab": {
+        "wait": "候 Subagent",
+        "waitCount_one": "候 {{count}} Subagent",
+        "waitCount_other": "候 {{count}} Subagent",
+        "sendInput": "传谕 Subagent",
+        "sendInputCount_one": "传谕 {{count}} Subagent",
+        "sendInputCount_other": "传谕 {{count}} Subagent",
+        "resume": "复启 Subagent",
+        "resumeCount_one": "复启 {{count}} Subagent",
+        "resumeCount_other": "复启 {{count}} Subagent",
+        "close": "罢 Subagent",
+        "closeCount_one": "罢 {{count}} Subagent",
+        "closeCount_other": "罢 {{count}} Subagent",
+        "spawn": "启 Subagent",
+        "spawnCount_one": "启 {{count}} Subagent",
+        "spawnCount_other": "启 {{count}} Subagent",
+        "targets": "所向：{{targets}}",
+        "targetCount_one": "所向：{{count}} Subagent",
+        "targetCount_other": "所向：{{count}} Subagent",
+        "prompt": "谕旨：{{prompt}}",
+        "model": "模型：{{model}}"
       }
     },
     "systemCard": {
@@ -16258,6 +16340,7 @@
       },
       "autoResumePending": {
         "label": "方重连",
+        "continuingWithProgress": "自动续行中（{{attempt}}/{{total}}）…",
         "labelWithProgress": "方重连 {{attempt}}/{{total}}",
         "groupSwitch": "方易一机续之"
       },
@@ -17062,9 +17145,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "增云机",
-        "preparingCloud": "云机备置中",
-        "manageCloud": "理云机",
         "allMachines": "诸机",
         "localMachine": "此机",
         "connecting": "方连…",
@@ -17424,6 +17504,8 @@
         "moveToProjectRemoteUnsupported": "暂不支持移远程差事",
         "moveToProjectWorktreeBlocked": "此差事之工作目录乃 worktree，暂不支持移至他案",
         "openInNewWindow": "于新窗启",
+        "openInNewWindowShortcutMac": "⌘+点",
+        "openInNewWindowShortcutOther": "Ctrl+点",
         "exportShare": "输差事…",
         "exportHtml": "输为 HTML…",
         "exportHtmlSuccess": "言谈已输为 HTML",
@@ -17540,7 +17622,14 @@
         "snoozeFailed": "未能保存稍后处理时间，请检查连接并确认任务所属电脑已更新。",
         "hours": "{{count}} 小时后",
         "hours_one": "{{count}} 小时后",
-        "hours_other": "{{count}} 小时后"
+        "hours_other": "{{count}} 小时后",
+        "pendingSync": "待同步",
+        "pendingArchiveSync": "俟电脑上线自归档",
+        "offlineCompleteRejectedDirty": "「{{title}}」已返待处：worktree 尚有未呈之改，须复核方归档。",
+        "offlineCompleteRejectedNewActivity": "「{{title}}」已返待处：离线期间此差事有新进。",
+        "offlineCompleteRejectedRunning": "「{{title}}」已返待处：此差事方行。",
+        "offlineCompleteRejectedAttached": "「{{title}}」已返待处：此差事方受接管或共治，未自归档。",
+        "offlineCompleteRejectedPreflight": "「{{title}}」已返待处：未克核验 worktree，须手核方归档。"
       },
       "taskListMode": {
         "heading": "任务模式",
@@ -17548,6 +17637,13 @@
         "inbox": "收件箱",
         "enterInbox": "转至收件箱之式",
         "leaveInbox": "转至任务列之式"
+      },
+      "filterHideTaskCreated": "隐他差事所立之务",
+      "origin": {
+        "createdByTask": "他差事所立",
+        "createdByTaskNamed": "差事「{{title}}」所立",
+        "createdByRemoteTask": "{{device}} 上差事所立",
+        "createdByRemoteTaskNamed": "{{device}} 上差事「{{title}}」所立"
       }
     },
     "rename": {
@@ -17568,7 +17664,9 @@
       "orcaRemoteLead": "自 {{device}} 之协同",
       "orcaRemoteLeadReleased": "协同已终 · 自 {{device}}",
       "orcaRemoteLeadUnknownDevice": "他机",
-      "orcaRemoteLeadTip": "{{device}} 上「{{lead}}」之 Worker。差事、目录与命令皆于此机行之；君于此所遣之讯不回报 Lead。"
+      "orcaRemoteLeadTip": "{{device}} 上「{{lead}}」之 Worker。差事、目录与命令皆于此机行之；君于此所遣之讯不回报 Lead。",
+      "createdByTask": "出自他差事",
+      "createdByTaskNamed": "出自「{{title}}」"
     },
     "gitContext": {
       "detached": "分离 HEAD",
@@ -17772,8 +17870,8 @@
           }
         },
         "gitlab": {
-          "missing": "未见 GitLab CLI（glab），故无 MR 状态。装 glab 并登录乃可见。",
-          "notLoggedIn": "本机 glab 未登录 {{host}}，故无 MR 状态。于终端行 glab auth login，登录乃可见。",
+          "missing": "未见 GitLab CLI（glab），GitLab 法器亦无此实例之连，故无 MR 状态。装 glab 并登录，或于 GitLab 法器添此实例，乃可见。",
+          "notLoggedIn": "本机 glab 未登录 {{host}}，GitLab 法器亦无此实例之连，故无 MR 状态。于终端行 glab auth login，或于 GitLab 法器添此实例，乃可见。",
           "unsupported": "此机尚不支持 GitLab MR 状态",
           "openAria": "于浏览器开 MR !{{number}}",
           "summaryAria": "MR !{{number}} 概览",
@@ -17999,6 +18097,13 @@
         "active": "筛 {{count}}",
         "reset": "重设",
         "allProjects": "诸案"
+      },
+      "match": {
+        "label": "检词",
+        "any": "任一词",
+        "all": "诸词俱备",
+        "help": "择“全部关键词”，以空格分词，诸词须同见于一则消息。以“精确短语”寻相连之文。标题另验。",
+        "partial": "所得或有未尽，请细其词或限其案。"
       }
     }
   },
@@ -18199,7 +18304,8 @@
         "pause": "暂止",
         "deleteAutomation": "删自运"
       },
-      "tagWebhook": "Webhook"
+      "tagWebhook": "Webhook",
+      "tagPluginEvent": "法器之事"
     },
     "detail": {
       "manualTrigger": "手触",
@@ -18540,11 +18646,123 @@
         "cindyConnectionTitle": "GitHub · 经 Cindy 连接",
         "manualConnectionTitle": "GitHub · 手动 Webhook",
         "githubAppHint": "于执行此任务之电脑连接 GitHub App，授权所列仓库，无须另设 Webhook 地址或密钥。",
-        "githubAppPaused": "任务已暂停，事件不启之。"
+        "githubAppPaused": "任务已暂停，事件不启之。",
+        "plugin": {
+          "source": "法器之事",
+          "label": "择法器与事",
+          "empty": "本机尚无能报事之法器。装而启用申明有事之法器，乃可于此择之。",
+          "unavailable": "法器不可用",
+          "remove": "除之",
+          "hint": "法器不代汝滤事，虽此自动化自发之讯亦然；当否处之，宜于提示或前置检查中言明。机寐、机关或法器停用之时，事不可得。",
+          "offlineHint": "机寐、机关或法器停用之时，事不可得；不容遗漏者，宜另设定时之察。",
+          "required": "请至少择一法器之事",
+          "state": {
+            "listening": "方听",
+            "disconnected": "已断",
+            "error": "连接有误",
+            "stopped": "未行",
+            "unknown": "待法器报其状"
+          },
+          "filterOnly": "唯察",
+          "filterField": "字段",
+          "filterOperator": "约",
+          "filterValue": "值",
+          "filterRemove": "除此约",
+          "filterAdd": "增「唯察」之约",
+          "operators": {
+            "equals": "等于",
+            "contains": "含",
+            "not-equals": "不等于"
+          }
+        },
+        "scopeLabel": "所及",
+        "scope": {
+          "repository": "全库",
+          "repositoryHint": "库有新事则行，如新 PR、评语、CI 竣事。",
+          "repositoryNeedsAccount": "须登 Cindy 之号，乃能受库之事。",
+          "item": "指定之 PR 或 Issue",
+          "itemHint": "唯察一 PR 或 Issue：PR 状实有变乃行，Issue 有新动则行。",
+          "project": "全项",
+          "projectHint": "项有新事则行，如新 MR、Issue、流水竣事。",
+          "gitlabItem": "指定之 MR 或 Issue",
+          "gitlabItemHint": "唯察一 MR 或 Issue：MR 状实有变乃行，Issue 有变则行。"
+        },
+        "item": {
+          "label": "PR 或 Issue",
+          "placeholder": "42、#42、owner/repo#42 或链",
+          "hint": "书编号、owner/repo#编号，或贴 PR / Issue 之链，Cindy 自辨其类。",
+          "resolving": "辨之中…",
+          "pr": "PR #{{number}}",
+          "issue": "Issue #{{number}}",
+          "closed": "已闭",
+          "required": "请书所察之 PR 或 Issue，待其辨毕。",
+          "issueHint": "指定 Issue 借 Cindy 所连之 GitHub App 受事，须登 Cindy 之号。",
+          "errors": {
+            "invalid": "请书编号、#编号、owner/repo#编号，或 GitHub 上 PR / Issue 之链。",
+            "no-repository": "唯书编号则须知其库，请书 owner/repo#42，或贴其链。",
+            "not-connected": "连 GitHub 而后能辨 PR 抑 Issue。",
+            "not-found": "此库无此编号，或君无权观之。",
+            "unavailable": "暂不能连 GitHub，请稍后再试。",
+            "needs-account": "此乃 Issue。指定 Issue 须登 Cindy 之号，并借 Cindy 连 GitHub。"
+          },
+          "issueChange": {
+            "any": "Issue 有新动",
+            "comment": "有新评",
+            "closed": "Issue 已闭",
+            "reopened": "Issue 复开"
+          },
+          "mr": "MR !{{number}}"
+        },
+        "gitlabSignedConnection": "签名之令（GitLab 十九以上）",
+        "gitlabSignedConnectionHint": "于 GitLab 项之 Webhook 设中用签名之令，更为稳妥。",
+        "gitlabTokenConnection": "Secret token",
+        "gitlabTokenConnectionHint": "宜于旧版 GitLab：于 Webhook 设中书 Secret token。",
+        "gitlabPluginConnection": "借 GitLab 法器",
+        "gitlabPluginConnectionHint": "以 GitLab 法器所连之号，每分一察，无须于 GitLab 设 Webhook，亦无须登 Cindy 之号。机寐或机关之时所变，不复补报。",
+        "gitlabMrPollConnection": "按时察其进止",
+        "gitlabMrPollConnectionHint": "依「兼按时省察」之期读 MR 之状（不行差事），先取法器所录之号，次取此机 glab 之登。",
+        "gitlabSetupHint": "存后于差事详情取收址与密钥，书于 GitLab 项之「设置 › Webhooks」。",
+        "gitlabItem": {
+          "label": "MR 或 Issue",
+          "placeholder": "!12、#12、group/project!12 或链",
+          "hint": "MR 书 !编号，Issue 书 #编号，亦可径贴其链。",
+          "required": "请书所察之 MR 或 Issue。",
+          "mrHint": "GitLab 无推报，Cindy 依「兼定时察」之时读 MR 之状（不行差事），用此机 glab 之登，或 GitLab 法器所连之号。",
+          "mrPluginHint": "GitLab 法器每分一察此 MR，新提交、评注、核准及管线成败皆在其中。",
+          "issueHint": "借 GitLab Webhook 受此 Issue 之变。评语之事不能辨 MR 与 Issue，故唯应 Issue 自身之新立、修改、闭与复开。",
+          "issuePluginHint": "GitLab 法器每分一察此 Issue，新评亦在其中。",
+          "errors": {
+            "invalid": "请依 !12（MR）、#12（Issue）或 group/project!12 之式书之，亦可贴 GitLab 之链。",
+            "ambiguous": "GitLab 之 MR 与 Issue 编号各别，请书 !12（MR）或 #12（Issue），或贴其链。",
+            "needs-link": "指定 MR 须知 GitLab 之所，请贴 MR 之链。",
+            "needs-account": "此乃 Issue。指定 GitLab Issue，须装 GitLab 法器，或登 Cindy 之号以受 GitLab Webhook。"
+          },
+          "mrChange": {
+            "any": "MR 有新动",
+            "merged": "MR 已合",
+            "review": "审有新动",
+            "ci": "流水之状有变"
+          },
+          "issueChange": {
+            "any": "Issue 有变",
+            "comment": "Issue 有新评",
+            "closed": "Issue 已闭",
+            "reopened": "Issue 复开"
+          }
+        },
+        "gitlabPlugin": {
+          "projectLabel": "项目",
+          "projectHint": "书 group/project 或项目之链。法器连数实例者，宜贴其链。",
+          "projectInvalid": "宜书 group/project 或以 https 起之项目链。",
+          "eventsLabel": "事",
+          "eventsHint": "皆不择者，应此项目诸事。",
+          "unavailable": "GitLab 法器未装或已停，请于「法器」启之，然后存。"
+        }
       },
       "trigger": {
         "label": "触发方式",
-        "timed": "定时"
+        "timed": "定时",
+        "event": "事"
       },
       "runSettings": "运行设置"
     },
@@ -18835,7 +19053,26 @@
         "reconnectConfirm": "重连 Webhook 乎？",
         "reconnectConfirmHint": "此举将占一名额并生新受信之址。请以新址与密钥更设发信方。",
         "reconnectFailed": "暂未能重连，请察所余名额后再试。"
-      }
+      },
+      "pluginTitle": "法器之事触发"
+    },
+    "pause": {
+      "prBarTitle": "暂歇之 PR 循察凡 {{count}} 条",
+      "viewPaused": "览视",
+      "resumeAll": "悉数复行",
+      "cleanMerged": "涤去已并",
+      "checking": "查验中…",
+      "resumeAllConfirmTitle": "复行暂歇之 PR 循察 {{count}} 条乎？",
+      "resumeAllConfirmDescription": "将复行当前所见暂歇之 PR 自运，并重计下次定期查验之时。",
+      "resumeAllConfirmAction": "悉数复行",
+      "resumeAllDone": "已复行 PR 循察 {{count}} 条",
+      "resumeAllPartial": "已复行 PR 循察 {{resumed}} 条（{{failed}} 条未果）",
+      "noMergedFound": "暂歇之 PR 自运中无已并或已阖之 PR",
+      "cleanMergedConfirmTitle": "删去已竣之 PR 自运 {{count}} 条乎？",
+      "cleanMergedConfirmDescription": "下列暂歇自运所系之 PR 皆已并或已阖：{{names}}",
+      "cleanMergedConfirmAction": "删去",
+      "cleanMergedDone": "已删去已竣之 PR 自运 {{count}} 条",
+      "checkFailed": "此刻未能查验 PR 状态"
     }
   },
   "issueTracker": {
@@ -20066,6 +20303,9 @@
       "permissionTightenInterruptFailed": "收紧权柄时未能止方行之差事，其或将免确认而行至终；如有需要，请手止之。",
       "codexAutoReviewUnavailable": "自动审批暂不可用，此举已阻，权柄已改为预设。请再试，需时当问于君。",
       "hostShellCommandBlocked": "Cindy 已阻此 Shell 命令。请察其命令，改用可用之工具或命令续之。",
+      "reconnectAutoResumeExhausted": "自动续行已达重试之限。",
+      "reconnectAutoResumeDisabled": "自动续行未启。",
+      "codexReconnectStalled": "模型断连，两分钟未复。",
       "upstreamResponseIdleTimeout": "模型久无所应，此轮已自断，以免空待无期。已成之工具调用皆存，径遣下一讯即可续之。",
       "codexHistoryOversized": "图之历史过巨，未能自复。请遣「继续」，Cindy 当接续今之差事。",
       "codexHistoryOversizedRemote": "此段历史中有过巨之图，远程压缩遣之不出。请于行 Codex 之机开此差事再遣，Cindy 将自略其图而续之。",
@@ -21112,7 +21352,7 @@
   "routines": {
     "hourly": "每时",
     "everyMinutes": "每 {{count}} 分",
-    "pluginCapability": "向例行差事呈已声明之事，唯触发君所设之例行差事",
+    "pluginCapability": "向自动化呈已声明之事，唯触发择此法器之自动化",
     "advancedSettings": "高级之设"
   },
   "cindyMakeDoctor": {
@@ -22794,6 +23034,30 @@
     "loginMayHaveExpired": "登入或已期满",
     "loginExpiryUnknown": "登入期限未详",
     "loginExpiryDetail": "约于 {{date}} 期满。此为 Claude 估期，亦或先失效。",
+    "longLivedToken": {
+      "tag": "长期令牌",
+      "use": "改用长期令牌（约一岁）",
+      "renew": "重制长期令牌",
+      "remove": "停用长期令牌",
+      "confirmTitle": "令 {{name}} 改用长期令牌乎？",
+      "confirmDescription": "浏览器将启 Claude 授权之页，请于彼择同一账号。令牌约一岁有效，存于此机；寻常登入期满之后，差事仍可续行。",
+      "confirmAction": "往浏览器授权",
+      "removeTitle": "停用 {{name}} 之长期令牌乎？",
+      "removeDescription": "令牌将自此机删去，账号复归寻常登入。令牌于 Anthropic 处仍有效，至期满乃止。",
+      "removeAction": "停用",
+      "expiresInDays": "令牌约 {{days}} 日后期满",
+      "mayHaveExpired": "令牌或已期满",
+      "active": "方用长期令牌",
+      "detailExpiry": "约于 {{date}} 期满。",
+      "detailLoginActive": "寻常登入尚存，账号与用量皆可即时读取。",
+      "detailLoginEnded": "寻常登入已终。用量随差事运行而更新；重登之后可随时刷新。",
+      "detailPending": "尚未核验令牌是否属此账号，首件差事运行时乃核。",
+      "detailSettingsOnly": "于此机，寻常登入既终，令牌不可用于代他机所行之差事及隔离之同伴。",
+      "mismatchStatus": "令牌属他账号",
+      "needsLogin": "请先登入此账号，再制长期令牌。",
+      "notPermitted": "贵组织不许用长期令牌。",
+      "unsupported": "此账号于此机不可用长期令牌。"
+    },
     "loginAccountAria": "重登 {{name}}",
     "loginIdentityMismatchStatus": "登入账号不符",
     "loginIdentityMismatch": "所登非所选账号。请重登，选此列所示账号。",
@@ -22929,7 +23193,10 @@
       "chooseUnavailable": "「{{name}}」今无可用之源，未取之。",
       "mergedLabel_other": "{{name}} · 路（{{count}} 源）",
       "routeDecides": "此番用何源，由路「{{name}}」定之",
-      "quotaOf": "额度：{{name}}"
+      "quotaOf": "额度：{{name}}",
+      "managedBy": "今由「{{name}}」常管",
+      "detach": "解管",
+      "detached": "已解智能路由常管，仍用今之模型"
     },
     "why": {
       "expiringQuota": "限额尚余 {{left}}%，{{reset}} 重设，故先用之",
@@ -22967,7 +23234,7 @@
       "newRoute": "立新路",
       "newRouteName": "新路",
       "routesEmpty": "尚无路。立其一，纳数源于中。",
-      "scopeNote": "智能路由用于此机之差事：起新差事时定一源；于行中之差事择之，即时易一次，此后不自易。",
+      "scopeNote": "智能路由用于此机及诸入口之差事：起新差事或行中择路后，皆常管此差事——发前察其可用与余量、夹图自易观图之源、护提示缓存且遇障自替，迄解管或手易他模型止。",
       "back": "归智能路由",
       "name": "名",
       "nameHint": "择模型时显此名。",
@@ -23095,6 +23362,11 @@
       "deviceDefaultReadOnly": "彼机更新后，方可于此改其默认模型。",
       "deviceUnavailable": "今不能读彼机伙伴之设。确其在线后再开。",
       "deviceLoading": "方读彼机之设…"
+    },
+    "turnSwitch": {
+      "preflightUnavailable": "今源暂不可用或额已满，发前自易他源",
+      "imageInput": "此轮夹图，自易善观图之源",
+      "cacheExpired": "缓存既逾，依路法重择其源"
     }
   },
   "projectSettings": {

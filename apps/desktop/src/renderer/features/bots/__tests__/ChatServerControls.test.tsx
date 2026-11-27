@@ -1,17 +1,18 @@
 // @vitest-environment jsdom
+import * as groupChatContract from '@cindy/maker-shared/botGroupChat';
 import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from "@/cindy-brain/PluginUiContributions";
 import { StrictMode, useState, type ReactNode } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { act, cleanup, createEvent, fireEvent, render as renderUI, screen, waitFor, within } from '@testing-library/react';
 import { Tooltip } from '@/components/ui/tooltip';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
-import { ChatMessageActions } from '../ChatServerControls';
+import { GroupReactionFixture } from './GroupReactionFixture';
 import { ChatInviteDialog } from '../ChatInviteDialog';
 import { ChatThreadPanel } from '../ChatThreadPanel';
 import { BotGroupThreadHint } from '../BotGroupThreadHint';
 import { GroupMaskProvider } from '../GroupMaskProvider';
 import { GroupMaskIndicator } from '../GroupMaskControls';
-import { GroupMaskContext, useGroupMask, useReadLocatedMention, type GroupMaskPresentation } from '../groupMaskPresentation';
+import { GroupMaskContext, useGroupMask, useGroupMentionHistory, useReadLocatedMention, type GroupMaskPresentation } from '../groupMaskPresentation';
 import { botGroupThreadDraftKey } from '../botGroupAttachments';
 import { discardDraft, getAllDraftAttachmentUrls, getDraft, saveDraft } from '@/lib/composerDraftStore';
 import type { AttachedFile } from '@/lib/fileTypes';
@@ -49,7 +50,8 @@ vi.mock('@/components/chat/MarkdownRenderer', () => ({ MarkdownRenderer: ({ cont
 vi.mock('../BotAvatar', () => ({ BotAvatar: ({ bot }: { bot: { avatar?: string } }) => <span>{bot.avatar}</span> }));
 vi.mock('../botGroupStore', () => ({ refreshBotGroups: mocks.refresh }));
 vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
-vi.mock('@/contexts/dataOwnerGeneration', () => ({
+vi.mock('@/contexts/dataOwnerGeneration', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/contexts/dataOwnerGeneration')>(),
   getDataOwnerGeneration: () => 1, isDataOwnerGenerationCurrent: () => mocks.ownerCurrent, isDataOwnerPushCurrent: () => true,
 }));
 const k = (name: string) => `bots.groupChat.server.${name}`;
@@ -97,6 +99,11 @@ describe('chat interaction controls', () => {
         <button onClick={mask.retry}>Retry mask</button>{mask.error && <span role="alert">Save failed</span>}</>}
     </>;
   }
+  function renderWithPersonalReplies(probe: ReactNode) {
+    const enabled = vi.spyOn(groupChatContract, 'BOT_GROUP_PERSONAL_REPLIES_ENABLED', 'get').mockReturnValue(true);
+    onTestFinished(() => enabled.mockRestore());
+    return render(probe);
+  }
   // Unit: actual Provider actions, missing coverage for permanent delegation.
   // A keystroke must not send a takeover; an explicit disable must still persist.
   it.each(['always', 'scheduled', 'manual'] as const)('keeps %s delegation under its own participation policy', async trigger => {
@@ -106,7 +113,7 @@ describe('chat interaction controls', () => {
       if (action?.type === 'participate') state = { ...state, status: 'paused' };
       return { ok: true, state };
     });
-    render(<GroupMaskProvider groupId="room"><MaskProbe /></GroupMaskProvider>);
+    renderWithPersonalReplies(<GroupMaskProvider groupId="room"><MaskProbe /></GroupMaskProvider>);
     const participate = await screen.findByText('Participate');
     await act(async () => fireEvent.click(participate));
     expect(mocks.mask.mock.calls.filter(([input]) => input.action?.type === 'participate')).toHaveLength(trigger === 'always' ? 0 : 1);
@@ -129,7 +136,7 @@ describe('chat interaction controls', () => {
       }
       return { ok: true, state };
     });
-    render(<MemoryRouter><GroupMaskProvider groupId="room"><GroupMaskIndicator groupId="room" onTakeOver={vi.fn()} /></GroupMaskProvider></MemoryRouter>);
+    renderWithPersonalReplies(<MemoryRouter><GroupMaskProvider groupId="room"><GroupMaskIndicator groupId="room" onTakeOver={vi.fn()} /></GroupMaskProvider></MemoryRouter>);
     fireEvent.click(await screen.findByTestId('group-mask-status'));
     fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.mask.stop' }));
     expect((await screen.findByRole('alert')).textContent).toBe('bots.groupChat.mask.saveError');
@@ -157,7 +164,7 @@ describe('chat interaction controls', () => {
       if (action?.type === 'save') state = { ...state, revision: 2, settings: action.settings };
       return { ok: true, state };
     });
-    render(<GroupMaskProvider groupId="room"><MaskProbe /></GroupMaskProvider>);
+    renderWithPersonalReplies(<GroupMaskProvider groupId="room"><MaskProbe /></GroupMaskProvider>);
     const read = await screen.findByText('Read original');
     await act(async () => fireEvent.click(read));
     if (mode === 'failed') await act(async () => fireEvent.click(screen.getByText('Participate')));
@@ -178,7 +185,7 @@ describe('chat interaction controls', () => {
     let finish!: (value: unknown) => void, changed = () => {};
     mocks.mask.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
     window.electronAPI.maker.onBotGroupChanged = callback => { changed = () => callback({ groupId: 'room', change: 'messages' }, undefined); return () => {}; };
-    render(<GroupMaskProvider groupId="room"><MaskProbe /></GroupMaskProvider>);
+    renderWithPersonalReplies(<GroupMaskProvider groupId="room"><MaskProbe /></GroupMaskProvider>);
     fireEvent.change(screen.getByLabelText('Chat draft'), { target: { value: 'My unfinished message' } });
     await act(async () => finish({ ok: true, state: maskState() }));
     await screen.findByText('Config ready');
@@ -202,7 +209,7 @@ describe('chat interaction controls', () => {
       else { documentHidden = hidden; document.dispatchEvent(new Event('visibilitychange')); }
     });
     mocks.mask.mockResolvedValue({ ok: true, state: maskState() });
-    render(<GroupMaskProvider groupId="room"><MaskProbe /></GroupMaskProvider>);
+    renderWithPersonalReplies(<GroupMaskProvider groupId="room"><MaskProbe /></GroupMaskProvider>);
     await screen.findByText('Config ready');
     await waitFor(() => expect(mocks.mask).toHaveBeenCalledTimes(1));
     await setHidden(true);
@@ -224,7 +231,7 @@ describe('chat interaction controls', () => {
       }
       return { ok: true, state };
     });
-    render(<GroupMaskProvider groupId="room"><MaskProbe /></GroupMaskProvider>);
+    renderWithPersonalReplies(<GroupMaskProvider groupId="room"><MaskProbe /></GroupMaskProvider>);
     fireEvent.click(await screen.findByText('Disable reply'));
     await screen.findByRole('alert');
     await act(async () => fireEvent.click(screen.getByText(operation)));
@@ -236,16 +243,48 @@ describe('chat interaction controls', () => {
     expect(saves).toHaveLength(2);
     expect(saves[1]![0]).toMatchObject({ action: { settings: { enabled: false } }, operationId: saves[0]![0].operationId });
   });
-  it.each([true, false])('offers post-join setup only with confirmed personal capability (%s)', async supported => {
+  // Unit, #13080: render the actual provider and attention popup. A single
+  // rejected mark-read must keep the mention visible and allow the same write
+  // to be retried without personal replies. Loading alone missed this branch.
+  it('shows and retries a failed mention read when personal replies are paused', async () => {
+    const mention = { messageId: 'question', sequence: '1', authorName: 'Peer', text: 'Please confirm' };
+    let unread = true, rejected = false;
+    mocks.mentions.mockImplementation(async ({ readIds }) => {
+      if (readIds) {
+        if (!rejected) { rejected = true; return { ok: false, errorCode: 'NETWORK_ERROR' }; }
+        unread = false;
+      }
+      return { ok: true, mentions: unread ? [mention] : [], hasMore: false };
+    });
+    function Inbox() {
+      const history = useGroupMentionHistory('room');
+      return <BotGroupThreadHint threads={[]} openRootId={null} onOpen={vi.fn()}
+        mentions={history?.unreadMentions} saving={history?.saving}
+        onReadMentions={() => history?.markMentionsRead()} onRetryMentionRead={history?.retryRead} />;
+    }
+    render(<GroupMaskProvider groupId="room"><Inbox /></GroupMaskProvider>);
+    fireEvent.click(await screen.findByTestId('group-attention-hint'));
+    fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.mask.catchup.markAll' }));
+    expect((await screen.findByRole('alert')).textContent).toContain('bots.groupChat.mask.catchup.markReadFailed');
+    expect(screen.getByText('Please confirm')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'commonUi.retry' }));
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    expect(screen.queryByText('Please confirm')).toBeNull();
+    const writes = mocks.mentions.mock.calls.filter(([input]) => input.readIds);
+    expect(writes).toHaveLength(2);
+    expect(writes[1]![0]).toMatchObject({ readIds: ['question'], operationId: writes[0]![0].operationId });
+    expect(mocks.mask).not.toHaveBeenCalled();
+  });
+  it.each([true, false])('joins directly while personal replies are paused, even with host capability %s', async supported => {
     mocks.status.mockResolvedValue({ enabled: true, connected: true, ...(supported ? { personalMask: true } : {}) });
     const joined = vi.fn();
     render(<ChatInviteDialog initialLink="cindy://chat-invite/test" onClose={vi.fn()} onJoined={joined} />);
     await screen.findByText('Invited group');
     const toggle = screen.queryByRole('checkbox', { name: 'bots.groupChat.mask.joinSetup' });
-    expect(!!toggle).toBe(supported);
-    if (toggle) fireEvent.click(toggle);
+    expect(toggle).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: k('accept') }));
-    await waitFor(() => expect(joined).toHaveBeenCalledWith(...(supported ? ['room', true] : ['room'])));
+    await waitFor(() => expect(joined).toHaveBeenCalledWith('room'));
   });
 
   // Unit regression for the human-read contract: prior inbox tests covered opening/dismissal,
@@ -284,19 +323,25 @@ describe('chat interaction controls', () => {
   it('keeps the original single followed-thread shortcut', () => {
     const onOpen = vi.fn();
     const thread = {rootId:'root',rootText:'Followed topic',replyCount:2,following:true,unread:{count:1,mentioned:false,latest:3}} as BotGroupThreadSummary;
-    render(<BotGroupThreadHint threads={[thread]} members={[]} openRootId={null} onOpen={onOpen} />);
+    render(<BotGroupThreadHint threads={[thread]} openRootId={null} onOpen={onOpen} />);
     fireEvent.click(screen.getByTestId('group-attention-hint'));
     expect(onOpen).toHaveBeenCalledWith('root');
   });
 
-  it('lists main and thread mentions in the existing hint without reading on locate or dismiss', async () => {
+  it('lists main and thread mentions in the existing hint without showing group threads or reading on locate/dismiss', async () => {
     const locate = vi.fn(), read = vi.fn();
     const mentions = [{messageId:'main',authorName:'Peer',text:'Please confirm'},
       {messageId:'reply',threadRootId:'root',authorName:'Peer',text:'Topic question',reply:{companion:{id:'cindy',name:'Cindy'},text:'Waiting for the owner'}}];
-    const props = {threads:[],members:[],openRootId:null,onOpen:vi.fn(),mentions,onLocateMention:locate,onReadMentions:read};
+    const threads = [
+      {rootId:'followed',rootAuthorName:'Peer',rootAuthorBotId:null,rootText:'Followed thread',replyCount:3,following:true,unread:{count:1,mentioned:false,latest:5},lastReply:null},
+      {rootId:'other',rootAuthorName:'Peer',rootAuthorBotId:null,rootText:'Unrelated thread',replyCount:2,following:false,unread:{count:0,mentioned:false},lastReply:null},
+    ] as BotGroupThreadSummary[];
+    const props = {threads,members:[],openRootId:null,onOpen:vi.fn(),mentions,onLocateMention:locate,onReadMentions:read};
     const view=render(<BotGroupThreadHint {...props} />);
     fireEvent.click(screen.getByTestId('group-attention-hint'));
     fireEvent.click(await screen.findByText('Topic question'));
+    expect(screen.queryByText('Followed thread')).toBeNull();
+    expect(screen.queryByText('Unrelated thread')).toBeNull();
     expect(locate).toHaveBeenCalledWith(mentions[1]);
     expect(read).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button',{name:k('thread.hintDismiss')}));
@@ -679,15 +724,28 @@ describe('chat interaction controls', () => {
     await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
   });
 
+  it('keeps only the last reaction picker when activating three message triggers', () => {
+    render(<>{['first', 'second', 'third'].map(id =>
+      <GroupReactionFixture key={id} pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room"
+        groupId="room" message={{ ...message, id }} onChanged={vi.fn()} />
+    )}</>);
+    const triggers = screen.getAllByRole('button', { name: 'bots.groupChat.server.addReaction' });
+    act(() => { for (const trigger of triggers) fireEvent.click(trigger); });
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+    expect(triggers.map(button => button.getAttribute('aria-expanded'))).toEqual(['false', 'false', 'true']);
+  });
+
   it('preserves copy and image sharing beside thread replies and reactions in one toolbar', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined), reply = vi.fn();
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
-    render(<ChatMessageActions pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room" groupId="room" message={{ ...message, replyCount: 2 }} onReply={reply} onChanged={vi.fn()} />);
-    fireEvent.click(screen.getByRole('button', { name: 'chat.messageActionBar.copy' }));
+    render(<GroupReactionFixture pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room" groupId="room" message={{ ...message, replyCount: 2 }} onReply={reply} onChanged={vi.fn()} />);
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'chat.messageActionBar.moreActions' }), { button: 0, ctrlKey: false });
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'chat.messageActionBar.copy' }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith('Root message'));
     fireEvent.click(screen.getByRole('button', { name: k('openTopic') }));
     expect(reply).toHaveBeenCalledOnce();
-    fireEvent.click(screen.getByRole('button', { name: 'chat.shareImage.entry' }));
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'chat.messageActionBar.moreActions' }), { button: 0, ctrlKey: false });
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'chat.shareImage.entry' }));
     expect(shareSelectionStore.isActive('group:room')).toBe(true);
     expect(shareSelectionStore.getSelectedIds()).toEqual(['root']);
     fireEvent.click(screen.getByRole('button', { name: k('addReaction') }));
@@ -758,12 +816,30 @@ describe('chat interaction controls', () => {
 
   it('removes only the current actor reaction and refreshes the authoritative message', async () => {
     const changed = vi.fn();
-    render(<ChatMessageActions pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room" groupId="room" message={message} onChanged={changed} />);
+    render(<GroupReactionFixture pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room" groupId="room" message={message} onChanged={changed} />);
     const reaction = screen.getByRole('button', { name: k('reactionCount') });
     expect(reaction.getAttribute('aria-pressed')).toBe('true');
     fireEvent.click(reaction);
     await waitFor(() => expect(changed).toHaveBeenCalledOnce());
     expect(mocks.react).toHaveBeenCalledWith({ groupId: 'room', messageId: 'root', emoji: '👍', present: false });
+  });
+
+  it('keeps a failed thread reaction until a normal refresh returns the unchanged root', async () => {
+    let push = () => {};
+    window.electronAPI.maker.onBotGroupChanged = listener => {
+      push = () => listener({ groupId: group.id, change: 'messages' }, undefined);
+      return () => {};
+    };
+    mocks.react.mockResolvedValue({ ok: false, errorCode: 'SERVICE_ERROR' });
+    render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />);
+    const chip = await screen.findByRole('button', { name: k('reactionCount') });
+    await act(async () => fireEvent.click(chip));
+    expect(chip.getAttribute('aria-pressed')).toBe('false');
+    expect(mocks.thread).toHaveBeenCalledTimes(1);
+    await act(async () => push());
+    expect(chip.getAttribute('aria-pressed')).toBe('true');
+    expect(mocks.thread).toHaveBeenCalledTimes(2);
+    expect(mocks.react).toHaveBeenCalledTimes(1);
   });
 
   // Unit, PR #7396: a latest refresh must not invalidate the reaction recheck for
@@ -1134,6 +1210,27 @@ describe('chat interaction controls', () => {
       view.rerender(<ChatThreadPanel group={{ ...group, members: namesakes, supportsMentionAudiences: true, allowMentionAllBots: false }} rootId="root" onClose={vi.fn()} />);
       type(input, '@');
       expect(labels().some(label => label?.includes('allBots'))).toBe(false);
+    });
+
+    it('hides @everyone from ordinary members when restricted to managers, while keeping it for owners and admins', () => {
+      const restricted = (role: 'owner' | 'admin' | 'member') => ({
+        ...group,
+        serverBacked: true,
+        supportsMemberMentionAll: true,
+        allowMemberMentionAll: false,
+        members: [
+          { actorId: 'self', botId: 'self', actorKind: 'human' as const, isSelf: true, isOwned: true, role, name: 'Me', avatar: '', avatarColor: '', status: 'active' as const },
+          ...namesakes,
+        ],
+      });
+      const view = render(<ChatThreadPanel group={restricted('member')} rootId="root" onClose={vi.fn()} />);
+      const input = screen.getByRole('textbox', { name: k('replyPlaceholder') }) as HTMLTextAreaElement;
+      type(input, '@');
+      expect(labels()).toEqual(['Me', 'Ann', 'Ann', 'Bo']);
+      for (const role of ['admin', 'owner'] as const) {
+        view.rerender(<Tooltip.Provider><ChatThreadPanel group={restricted(role)} rootId="root" onClose={vi.fn()} /></Tooltip.Provider>);
+        expect(labels()[0]).toBe('bots.groupChat.mention.allbots.groupChat.mention.allHint');
+      }
     });
 
     it('opens on @ with the main composer candidates, filters, and picks a namesake by keyboard', async () => {

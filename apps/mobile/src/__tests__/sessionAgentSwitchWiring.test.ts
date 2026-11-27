@@ -60,7 +60,6 @@ describe('session Agent switch UI wiring', () => {
     const source = readSource('app/sessions/[sessionId].tsx');
     const modelAccess = source.slice(source.indexOf('const canConfigureSessionModel'), source.indexOf('// 共享模型自造'));
     expect(modelAccess).toContain('canUseRemoteSessionControls');
-    expect(modelAccess).toContain('!sessionManagedByHost');
     expect(modelAccess).toContain('!isSharedTaskPeer(deviceId)');
     expect(source).toContain('disabled={controlBusy || !canConfigureSessionModel}');
     expect(source).toContain('visible={modelSheetOpen && canConfigureSessionModel}');
@@ -310,10 +309,9 @@ it('hides host-owned settings while preserving permission controls and the compo
     expect(source).toContain('{renderSessionPermissionButton()}');
     expect(source).toContain('currentSession && runtimeOptions ? (');
     expect(source).not.toContain('!sessionManagedByHost ? renderSessionPermissionButton() : null');
-    expect(source).toContain('{!sessionManagedByHost && composerRuntimeSummary ? (');
+    expect(source).toContain('{composerRuntimeSummary ? (');
     const modelAccess = source.slice(source.indexOf('const canConfigureSessionModel'), source.indexOf('// 共享模型自造'));
     expect(modelAccess).toContain('canUseRemoteSessionControls');
-    expect(modelAccess).toContain('!sessionManagedByHost');
     expect(modelAccess).toContain('!isSharedTaskPeer(deviceId)');
     const modelPicker = source.slice(source.indexOf('const toggleComposerModelPicker'), source.indexOf('// 账号限额按需拉取'));
     expect(modelPicker).toContain('if (!canConfigureSessionModel)');

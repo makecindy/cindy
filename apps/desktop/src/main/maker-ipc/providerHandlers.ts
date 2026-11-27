@@ -1,3 +1,6 @@
+import { clearGlmFlashDiscovery, GLM_REALTIME_FLASH, hasGlmFlashDiscovery, isGlmApiBase, isGlmPresetRoute } from '../../shared/glmRealtimeDiscovery.js';
+import { createGlmFlashProbeBatch } from '../voice-conversation/glmFlashProbe.js';
+import { realtimeHeaders } from '../voice-conversation/realtimeProtocol.js';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import type { ProviderListOptions } from '../maker-host/provider-service.js';
 import type { ProviderPickerVisibilityScope } from '../maker-host/model-visibility-mirror.js';
@@ -484,7 +487,7 @@ export interface ProviderHandlerDeps {
   readSavedProviderRoute(
     providerId: string,
     agent: AgentKind,
-  ): { baseUrl: string; modelsUrl: string | null } | null;
+  ): { baseUrl: string; modelsUrl: string | null; catalogPresetId?: string } | null;
   /**
    * 本机 agent CLI 安装 / 登录态扫描(生产 = scanLocalCliAuth(createLocalCliScanDeps());
    * 单测注入 stub 不碰真实 home)。只 stat 不读内容(规则 23)。
@@ -706,6 +709,9 @@ function parseModelsFetchInput(input: unknown): ProviderModelsFetchSpec | null {
     ...(spec.redirect === 'error' ? { redirect: 'error' as const } : {}),
     apiKey: (spec.apiKey as string | null | undefined) ?? null,
     headers: spec.headers as Record<string, string> | undefined,
+    ...(typeof spec.catalogPresetId === 'string' && /^[a-z0-9-]{1,80}$/.test(spec.catalogPresetId)
+      ? { catalogPresetId: spec.catalogPresetId } : {}),
+    ...(typeof spec.refreshBatch === 'string' && /^[a-zA-Z0-9-]{1,64}$/.test(spec.refreshBatch) ? { refreshBatch: spec.refreshBatch } : {}),
     ...(typeof spec.savedProviderId === 'string' ? { savedProviderId: spec.savedProviderId } : {}),
     ...(typeof spec.wireProtocol === 'string'
       ? { wireProtocol: spec.wireProtocol as ProviderModelsFetchSpec['wireProtocol'] }
@@ -736,6 +742,7 @@ export function registerProviderHandlers(
   registry: IpcHandlerRegistry,
   deps: ProviderHandlerDeps,
 ) {
+  const probeGlmFlash = createGlmFlashProbeBatch();
   const modelDiscoveryRequests = new Map<string, symbol>();
   // The dispatch revision is intentionally Codex-specific for config-only edits.
   // Keep a discovery-only stamp for other runtimes, including edit-away/edit-back.
@@ -817,7 +824,13 @@ export function registerProviderHandlers(
         const listedUpstream = sameContext && ((proven && submittedListed === true) || (priorModel?.listedUpstream === true
           && JSON.stringify(priorModel.route ?? null) === JSON.stringify(model.route ?? null)));
         // A stale renderer cannot restore a source invalidated by another edit/request.
-        return { ...rest, ...((accepted ? source : old) ? { discoveredSource: accepted ? source : old } : {}),
+        // Reusing a row after a GLM key or route edit requires evidence for the
+        // new credentials. A stale Settings save cannot re-enable a denied row.
+        const glmRow = model.id === GLM_REALTIME_FLASH && (isGlmApiBase(runtime.baseUrl) || isGlmPresetRoute(runtime.baseUrl, runtime.catalogPresetId)
+          || (prior && (isGlmApiBase(prior.baseUrl) || isGlmPresetRoute(prior.baseUrl, prior.catalogPresetId))));
+        const savedModel = glmRow && !(accepted && signatures.length) && !hasGlmFlashDiscovery(priorModel)
+          ? clearGlmFlashDiscovery(rest) : rest;
+        return { ...savedModel, ...((accepted ? source : old) ? { discoveredSource: accepted ? source : old } : {}),
           ...(listedUpstream ? { listedUpstream: true as const } : {}),
           // The absence receipt is never inherited: only the refresh that observed it may set it.
           ...(listedUpstream && proven && submittedMissing === true ? { missingUpstream: true as const } : {}) };
@@ -3187,14 +3200,17 @@ export function registerProviderHandlers(
     // Authorization 等厂商私密头越过 main-only 边界发到任意地址)。因此先按 savedProviderId
     // 读已存端点,把请求目标**钉回已存 baseUrl/modelsUrl**(完全从已存配置构造目标),
     // 再合并密文头;已存路由不存在(供应商已删 / 无该 runtime)则不合并密文头,按无头降级。
+    let allowGlmProbe = !parsed.savedProviderId && (!parsed.catalogPresetId || parsed.catalogPresetId === 'zhipu-glm-cn');
     if (parsed.savedProviderId) {
-      let savedRoute: { baseUrl: string; modelsUrl: string | null } | null = null;
+      let savedRoute: { baseUrl: string; modelsUrl: string | null; catalogPresetId?: string } | null = null;
       try {
         savedRoute = deps.readSavedProviderRoute(parsed.savedProviderId, parsed.agent);
       } catch {
         savedRoute = null;
       }
       if (savedRoute) {
+        parsed.catalogPresetId = savedRoute.catalogPresetId;
+        allowGlmProbe = !savedRoute.catalogPresetId || savedRoute.catalogPresetId === 'zhipu-glm-cn';
         parsed.baseUrl = savedRoute.baseUrl;
         parsed.modelsUrl = savedRoute.modelsUrl;
         let storedHeaders: Record<string, string> | null = null;
@@ -3225,6 +3241,11 @@ export function registerProviderHandlers(
       && modelDiscoveryRequests.get(requestKey) === generation
       && (!id || (getProviderRouteCredentialRevision(id) === revision
         && modelSourceConfigGenerations.get(id) === configGeneration));
+    if (allowGlmProbe && parsed.authMethod === 'apiKey' && parsed.apiKey?.trim() && (isGlmApiBase(parsed.baseUrl) || isGlmPresetRoute(parsed.baseUrl, parsed.catalogPresetId))) {
+      const headers = realtimeHeaders(parsed.apiKey.trim(), parsed.catalogPresetId === 'zhipu-glm-cn' ? undefined : parsed.headers);
+      const batch = parsed.refreshBatch ? JSON.stringify([owner, id, revision, parsed.refreshBatch]) : undefined;
+      parsed.probeGlmFlash = () => current() ? probeGlmFlash(headers, current, batch) : Promise.resolve('unknown');
+    }
     let result = await deps.fetchModels(parsed);
     const knownGateway = id && (deps.getModelCatalog().providers ?? []).some(provider =>
       provider.id === runtimeCustomProviderId(id) && Object.values(provider.models).some(models =>

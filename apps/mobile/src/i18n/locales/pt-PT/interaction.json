@@ -274,6 +274,7 @@
     "inlineFormActionGeneric": "Introduzir uma definição no seu computador"
   },
   "inputHandoff": {
+    "refreshVerification": "Atualizar código QR",
     "originWarning": {
       "insecure": "Esta página não usa uma ligação segura. O que introduzir pode ser lido por terceiros.",
       "ip-address": "Esta página usa um endereço IP em vez de um domínio. Certifique-se de que é o site esperado.",

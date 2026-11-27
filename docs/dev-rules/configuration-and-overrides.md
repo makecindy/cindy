@@ -240,15 +240,20 @@ Pi 使用逐模型 reserveTokens，Claude Code 同步原生环境与 host 判断
 
 ### 事件音效与系统通知
 
-每个事件直接根据现有音效设置决定声音归属，不另设音效来源。事件音效开启且该事件选了
-内置或自定义声音时，只播放所选声音；该事件选择「跟随系统」（存储仍为 `builtin/none`），
-或关闭事件音效时，保留系统通知并遵循系统通知设置。不新增开关或持久化字段。
+任务胶囊开启（且选定显示器可用）或系统实时活动正在接管提醒时，统一由主进程通过
+`AgentIslandService.ownsTaskAlert` 仲裁接管，不再另弹系统通知，**与事件音效总开关是否开启、
+单个事件是否选为「无」（`builtin/none`）无关**；仅开系统实时活动时，出错因无实时活动样式仍发
+系统通知。renderer 只校验全局系统通知总开关与远程任务口径，不凭本地保存的胶囊开关提前吞掉
+`channels.desktop`，确保选定外接屏断开期间本机任务也能正常回退系统通知。关闭事件音效或把某
+事件设为「无」只表示不播放 Cindy 的 8-bit 音效，不重新放行系统通知弹窗。
 
-主进程在系统通知创建出口按事件决定 `silent`，覆盖普通任务、其他电脑的任务、定时任务与直接提醒。
-没有会话的提醒（如未创建会话就失败的定时任务）没有事件音效可替代，群聊消息也不触发任务音效，
-二者沿用系统通知声音。任务胶囊与系统实时活动共用规则；未启用任一界面时沿用系统通知。开始和点击等没有系统通知的事件，在「跟随系统」时不会额外造通知。
-实时活动原生 alert 保持无声；已有完成事件去重、免打扰和历史恢复静音规则不变。
-实现见 `hasAgentIslandNotificationSound`、`AgentIslandService.shouldSilenceTaskNotification` 与 `notificationService`。
+当某条任务系统通知确实需要弹出时（例如仅开系统实时活动时的出错通知、选定外接屏断开期间的
+回退通知，或主进程直接发出的提醒），主进程在系统通知创建出口按事件决定 `silent`：该事件已
+配置内置或自定义音效且对应界面会播放该音效时置为静音，避免与事件音效叠音；否则保留系统通知音。
+没有会话的提醒（如未创建会话就失败的定时任务）没有事件音效可替代，群聊回退消息也不触发任务音效，
+二者沿用系统通知声音。实时活动原生 alert 保持无声；已有完成事件去重、免打扰和历史恢复静音规则不变。
+实现见 `AgentIslandService.ownsTaskAlert`、`hasAgentIslandNotificationSound`、
+`AgentIslandService.shouldSilenceTaskNotification`、`sessionEventNotification` 与 `notificationService`。
 
 ## 4. 恢复默认
 

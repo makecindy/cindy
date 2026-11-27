@@ -185,7 +185,8 @@
     "groupSent": "從群聊傳送",
     "sourceGroupId": "群聊 ID：{{id}}",
     "selectText": "選取文字",
-    "you": "你"
+    "you": "你",
+    "recentActivity": "最近活動"
   },
   "actions": {
     "attachmentsPrefix": "附件：{{names}}",
@@ -250,6 +251,7 @@
     "edit": "編輯",
     "steer": "插話",
     "steerQueued": "尚未送達，訊息仍保留在佇列中。",
+    "steerUnsupportedNotice": "目前引擎不支援插話，排隊中的訊息會在目前回合結束後送出。",
     "moveUp": "提前一位",
     "moveDown": "延後一位",
     "cancelSend": "取消傳送",
@@ -267,6 +269,8 @@
     "imagesNotUploaded_other": "{{count}} 張圖片沒傳上去",
     "waitingForNamedComputer": "連上{{name}}後自動傳送",
     "reconnectComputer": "立即重連",
+    "pendingDelivery": "待送達",
+    "pendingDeliveryHint": "訊息已儲存在手機上，正在等待電腦確認。",
     "waitingForComputer": "等電腦連上後傳送",
     "waitingForNetwork": "等網路恢復後傳送",
     "queued": "排隊中",
@@ -305,6 +309,7 @@
       "neutral": "重新連線",
       "usageReset": "用量已恢復，已自動繼續",
       "pending": "重新連線中…",
+      "continuingWithProgress": "正在自動繼續（{{attempt}}/{{total}}）…",
       "pendingWithProgress": "重新連線中 {{attempt}}/{{total}}…",
       "groupSwitchPending": "正在換一台電腦繼續…",
       "details": "本次重試 {{attempt}}/{{total}} · 本任務累計重連 {{count}} 次",

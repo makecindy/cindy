@@ -185,7 +185,8 @@
     "groupSent": "Enviado de um grupo",
     "sourceGroupId": "ID do grupo: {{id}}",
     "selectText": "Selecionar texto",
-    "you": "Você"
+    "you": "Você",
+    "recentActivity": "Atividade recente"
   },
   "actions": {
     "attachmentsPrefix": "Anexos: {{names}}",
@@ -250,6 +251,7 @@
     "edit": "Editar",
     "steer": "Intervir",
     "steerQueued": "Ainda não entregue. Sua mensagem continua na fila.",
+    "steerUnsupportedNotice": "Este motor não permite orientar. As mensagens na fila serão enviadas quando o turno atual terminar.",
     "moveUp": "Mover para antes",
     "moveDown": "Mover para depois",
     "cancelSend": "Cancelar envio",
@@ -267,6 +269,8 @@
     "imagesNotUploaded_other": "{{count}} imagens não foram enviadas",
     "waitingForNamedComputer": "Envio automático quando {{name}} se conectar",
     "reconnectComputer": "Reconectar",
+    "pendingDelivery": "Aguardando entrega",
+    "pendingDeliveryHint": "Mensagem salva neste celular. Aguardando a confirmação do computador.",
     "waitingForComputer": "Será enviado quando seu computador voltar",
     "waitingForNetwork": "Será enviado quando você estiver online novamente",
     "queued": "Na fila",
@@ -306,6 +310,7 @@
       "neutral": "Reconectar",
       "usageReset": "Limite de uso redefinido, continuação automática",
       "pending": "Reconectando…",
+      "continuingWithProgress": "Continuando automaticamente ({{attempt}}/{{total}})…",
       "pendingWithProgress": "Reconectando {{attempt}}/{{total}}…",
       "groupSwitchPending": "Mudando para outro computador…",
       "details": "Tentativa {{attempt}}/{{total}} · {{count}} reconexões nesta sessão",

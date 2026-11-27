@@ -22,6 +22,7 @@ import {
 } from '../../shared/utilityModelProfiles.js';
 import { createLogger } from '../logger.js';
 import { getDesktopSelectableCatalog } from '../maker-host/createDesktopProviderService.js';
+import { getModelGroupStartBridge } from '../model-groups/startBridge.js';
 import { getCindyAiProviderName } from '../cindyAiProviderName.js';
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
 import { readProviderOrder } from '../maker-host/provider-order-store.js';
@@ -336,7 +337,7 @@ export function registerAuxiliaryModelSettingsIpc(): void {
     assertTrustedAppRendererEvent(event);
     try {
       // 合并整个供应商的路由按供应商目录合成：先让配置读取带上此刻的目录(一秒内的重复读取共用一次，不等别的电脑)。
-      await import('../model-groups/desktopResolver.js').then(({ refreshAutoModelGroupRoutes }) => refreshAutoModelGroupRoutes()).catch(() => undefined);
+      await getModelGroupStartBridge()?.refresh?.().catch(() => undefined);
       return settingsWire();
     } catch (error) {
       if (isIpcError(error)) throw error;

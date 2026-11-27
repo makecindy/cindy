@@ -157,6 +157,7 @@
     "electron-squirrel-startup": "^1.0.1",
     "electron-store": "^7.0.3",
     "electron-window-state": "^5.0.3",
+    "emoji-picker-react": "5.1.4",
     "exceljs": "^4.4.0",
     "fix-path": "^5.0.0",
     "gifenc": "1.0.3",

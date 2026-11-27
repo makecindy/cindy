@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { materializeToolProcessMedia } from './cindy-media/toolProcessMedia.js';
 import {
   withToolProcessMedia,
@@ -745,13 +746,35 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
    * 序列化(sqlite 本就单写者)。每个 link 单独 catch,失败只 warn、不打断后续写。
    */
   let writeChain: Promise<unknown> = Promise.resolve();
+  const MAX_FAILED_WRITES = 512;
   const failedWrites: {
     label: string;
     ownerScope: OwnerScope;
     canStart?: () => boolean;
     perform: (scope: OwnerScope) => Promise<unknown>;
   }[] = [];
+  let droppedFailedWritesCount = 0;
   const OWNER_SCOPE_SUPERSEDED = 'OWNER_SCOPE_SUPERSEDED';
+
+  function pushFailedWrite(entry: (typeof failedWrites)[number]): void {
+    // Reclaim entries whose app-session owner is already superseded before enforcing the cap.
+    for (let i = failedWrites.length - 1; i >= 0; i -= 1) {
+      const existing = failedWrites[i]!;
+      const valid = existing.canStart ? existing.canStart() : isOwnerScopeCurrent(existing.ownerScope);
+      if (!valid) failedWrites.splice(i, 1);
+    }
+    while (failedWrites.length >= MAX_FAILED_WRITES) {
+      failedWrites.shift();
+      droppedFailedWritesCount += 1;
+      if (droppedFailedWritesCount === 1 || droppedFailedWritesCount % 100 === 0) {
+        log.warn('failedWrites queue reached cap; dropping oldest pending write', {
+          cap: MAX_FAILED_WRITES,
+          droppedTotal: droppedFailedWritesCount,
+        });
+      }
+    }
+    failedWrites.push(entry);
+  }
 
   function captureOwnerScope(): ReturnType<
     typeof broadcastTap.captureDataOwnerBroadcastScope
@@ -788,14 +811,14 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
           return;
         }
         if (deps.onPersistenceError && failedWrites.length) {
-          failedWrites.push({ label, ownerScope, perform: fn });
+          pushFailedWrite({ label, ownerScope, perform: fn });
           return;
         }
         return fn(ownerScope);
       })
       .catch((err) => {
         if (deps.onPersistenceError && isOwnerScopeCurrent(ownerScope)) {
-          failedWrites.push({ label, ownerScope, perform: fn });
+          pushFailedWrite({ label, ownerScope, perform: fn });
           deps.onPersistenceError(err);
         }
         log.warn('message persist failed', {
@@ -824,7 +847,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
             return;
           }
           if (deps.onPersistenceError && failedWrites.length) {
-            failedWrites.push({ label, ownerScope, perform: fn });
+            pushFailedWrite({ label, ownerScope, perform: fn });
           } else await fn(ownerScope);
         } finally {
           resolveTurnErrorWaiter(sessionId, persistId);
@@ -832,7 +855,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
       })
       .catch((err) => {
         if (deps.onPersistenceError && isOwnerScopeCurrent(ownerScope)) {
-          failedWrites.push({ label, ownerScope, perform: fn });
+          pushFailedWrite({ label, ownerScope, perform: fn });
           deps.onPersistenceError(err);
         }
         log.warn('message persist failed', {
@@ -882,7 +905,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
             return;
           }
           if (deps.onPersistenceError && failedWrites.length) {
-            failedWrites.push({ label, ownerScope, canStart, perform: async (scope) => fn(scope) });
+            pushFailedWrite({ label, ownerScope, canStart, perform: async (scope) => fn(scope) });
             reject(new Error('Message persistence is paused'));
             return;
           }
@@ -896,7 +919,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
             resolve(value);
           } catch (err) {
             if (deps.onPersistenceError && current()) {
-              failedWrites.push({ label, ownerScope, canStart, perform: async (scope) => fn(scope) });
+              pushFailedWrite({ label, ownerScope, canStart, perform: async (scope) => fn(scope) });
               deps.onPersistenceError(err);
             }
             if (!isOwnerScopeSupersededError(err)) {
@@ -1011,7 +1034,61 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     Map<string, { persistId: string; input: unknown }>
   >();
 
-  const toolUseInfoBySession = new Map<string, Map<string, { toolName: string; input: unknown }>>();
+  const MAX_RETAINED_TOOL_USE_INPUT_CHARS = 64 * 1024;
+  const MAX_TOOL_USE_INFO_PER_SESSION = 2000;
+  const toolUseInfoBySession = new Map<
+    string,
+    Map<string, { toolName: string; input?: unknown }>
+  >();
+
+  function retainToolUseInputForTurn(toolName: string, input: unknown): unknown {
+    if (toolName === 'update_plan') return input;
+    if (
+      !toolName.startsWith('mcp__lizi_art__') &&
+      !toolName.startsWith('mcp__lizi_mivo__')
+    ) {
+      return undefined;
+    }
+    try {
+      const serialized = JSON.stringify(input);
+      if (serialized && serialized.length <= MAX_RETAINED_TOOL_USE_INPUT_CHARS) return input;
+    } catch {
+      // Unserializable input cannot match mediaToolResultFallback anyway.
+    }
+    return undefined;
+  }
+
+  function rememberToolUseInfo(
+    sessionId: string,
+    toolUseId: string,
+    toolName: string,
+    input: unknown,
+  ): void {
+    const map = getOrCreateSessionMap(toolUseInfoBySession, sessionId);
+    map.set(toolUseId, {
+      toolName,
+      input: retainToolUseInputForTurn(toolName, input),
+    });
+    if (map.size > MAX_TOOL_USE_INFO_PER_SESSION) {
+      for (const [id, info] of map) {
+        if (map.size <= MAX_TOOL_USE_INFO_PER_SESSION) break;
+        if (info.toolName === 'update_plan' || info.toolName.startsWith('collab:')) continue;
+        map.delete(id);
+      }
+    }
+  }
+
+  function releaseToolUseInputOnResult(sessionId: string, toolUseIds: readonly string[]): void {
+    const map = toolUseInfoBySession.get(sessionId);
+    if (!map) return;
+    for (const id of toolUseIds) {
+      const info = map.get(id);
+      if (info && info.input !== undefined && info.toolName !== 'update_plan') {
+        info.input = undefined;
+      }
+    }
+  }
+
   function getHistoryToolName(sessionId: string, toolUseId: string): string {
     return toolUseInfoBySession.get(sessionId)?.get(toolUseId)?.toolName ?? '';
   }
@@ -1209,6 +1286,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
   }
 
   interface BackgroundTurnPersistState {
+    createdAt: number;
     agentMeta: AgentMeta | null;
     knownToolUseIds: Set<string>;
     pendingToolUseIds: Set<string>;
@@ -1218,6 +1296,9 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     toolResultContentByClientId: Map<string, string>;
   }
 
+  const MAX_BACKGROUND_TURN_STATES_PER_SESSION = 16;
+  const BACKGROUND_TURN_STATE_TTL_MS = 30 * 60 * 1000;
+
   /**
    * Late child results are still useful after a parent turn has ended, but must
    * not borrow the next turn's persistence context. Keep snapshots keyed by the
@@ -1226,6 +1307,36 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
    * and report its result between turns, so every pending call of theirs is kept.
    */
   const backgroundTurnPersistStatesBySession = new Map<string, BackgroundTurnPersistState[]>();
+
+  function pruneBackgroundTurnPersistStates(sessionId: string, now = Date.now()): void {
+    const snapshots = backgroundTurnPersistStatesBySession.get(sessionId);
+    if (!snapshots || snapshots.length === 0) return;
+    const cutoff = now - BACKGROUND_TURN_STATE_TTL_MS;
+    let writeIdx = 0;
+    for (let i = 0; i < snapshots.length; i += 1) {
+      const state = snapshots[i]!;
+      if (state.createdAt > cutoff) {
+        snapshots[writeIdx++] = state;
+      }
+    }
+    snapshots.length = writeIdx;
+    if (snapshots.length > MAX_BACKGROUND_TURN_STATES_PER_SESSION) {
+      snapshots.splice(0, snapshots.length - MAX_BACKGROUND_TURN_STATES_PER_SESSION);
+    }
+    if (snapshots.length === 0) {
+      backgroundTurnPersistStatesBySession.delete(sessionId);
+    }
+  }
+
+  function pushBackgroundTurnPersistState(
+    sessionId: string,
+    snapshot: BackgroundTurnPersistState,
+  ): void {
+    const snapshots = backgroundTurnPersistStatesBySession.get(sessionId) ?? [];
+    snapshots.push(snapshot);
+    backgroundTurnPersistStatesBySession.set(sessionId, snapshots);
+    pruneBackgroundTurnPersistStates(sessionId, snapshot.createdAt);
+  }
 
   function preserveTurnPersistStateForBackground(sessionId: string): void {
     const knownToolUseIds = knownToolUseIdsBySession.get(sessionId) ?? new Set<string>();
@@ -1245,7 +1356,12 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     // completed collab result already has its normal persistence row and needs
     // no snapshot; this also keeps the state bounded by in-flight tool ids.
     if (pendingToolUseIds.size === 0) return;
+    const collabResultIds = new Map(
+      [...resultIds].filter(([toolUseId]) => collabToolUseIds.has(toolUseId)),
+    );
+    const collabPersistIds = new Set(collabResultIds.values());
     const snapshot: BackgroundTurnPersistState = {
+      createdAt: Date.now(),
       agentMeta: lastAgentMetaBySession.get(sessionId) ?? null,
       knownToolUseIds: new Set(collabToolUseIds),
       pendingToolUseIds,
@@ -1254,9 +1370,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
           collabToolUseIds.has(toolUseId),
         ),
       ),
-      toolResultIdByToolUseId: new Map(
-        [...resultIds].filter(([toolUseId]) => collabToolUseIds.has(toolUseId)),
-      ),
+      toolResultIdByToolUseId: collabResultIds,
       pendingFullTextByToolUseId: new Map(
         [...(pendingFullTextByToolUseId.get(sessionId) ?? [])].filter(([toolUseId]) =>
           collabToolUseIds.has(toolUseId),
@@ -1264,19 +1378,18 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
       ),
       toolResultContentByClientId: new Map(
         [...(toolResultContentByClientId.get(sessionId) ?? [])].filter(([persistId]) =>
-          [...resultIds.values()].includes(persistId),
+          collabPersistIds.has(persistId),
         ),
       ),
     };
-    const snapshots = backgroundTurnPersistStatesBySession.get(sessionId) ?? [];
-    snapshots.push(snapshot);
-    backgroundTurnPersistStatesBySession.set(sessionId, snapshots);
+    pushBackgroundTurnPersistState(sessionId, snapshot);
   }
 
   function backgroundStateForToolUse(
     sessionId: string,
     toolUseIds: string[],
   ): BackgroundTurnPersistState | null {
+    pruneBackgroundTurnPersistStates(sessionId);
     const snapshots = backgroundTurnPersistStatesBySession.get(sessionId);
     if (!snapshots || snapshots.length === 0) return null;
     for (let i = snapshots.length - 1; i >= 0; i -= 1) {
@@ -1431,7 +1544,12 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
         return undefined;
       }
       const tools = toolUseInfoBySession.get(sessionId);
-      if (tools?.has(toolUseId)) tools.set(toolUseId, { toolName, input: persistedInput });
+      if (tools?.has(toolUseId)) {
+        tools.set(toolUseId, {
+          toolName,
+          input: retainToolUseInputForTurn(toolName, persistedInput),
+        });
+      }
       enqueueWrite(`tool_use_update:${sessionId}:${persistId}`, async (ownerScope) => {
         const updated = await updateDbMessageContent(sessionId, persistId, { toolUseId, toolName, input: persistedInput });
         if (updated) broadcastMessageRow(sessionId, updated, ownerScope);
@@ -1469,6 +1587,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
       // next turn's maps, metadata, or adjacent-message dedup state.
       if (toolUseId) {
         const state: BackgroundTurnPersistState = {
+          createdAt,
           agentMeta,
           knownToolUseIds: new Set([toolUseId]),
           pendingToolUseIds: new Set([toolUseId]),
@@ -1477,9 +1596,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
           pendingFullTextByToolUseId: new Map(),
           toolResultContentByClientId: new Map(),
         };
-        const snapshots = backgroundTurnPersistStatesBySession.get(sessionId) ?? [];
-        snapshots.push(state);
-        backgroundTurnPersistStatesBySession.set(sessionId, snapshots);
+        pushBackgroundTurnPersistState(sessionId, state);
       }
       const persistId = createId();
       const persistedMeta = agentTaskMetaForToolUse(sessionId, toolUseId, toolName, agentMeta);
@@ -1498,10 +1615,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
 
     if (toolUseId) {
       rememberToolUseId(sessionId, toolUseId, createdAt);
-      getOrCreateSessionMap(toolUseInfoBySession, sessionId).set(toolUseId, {
-        toolName,
-        input: persistedInput,
-      });
+      rememberToolUseInfo(sessionId, toolUseId, toolName, persistedInput);
     }
     const existingPersistId =
       !acpTool && isUpdatableToolUse(toolName) && toolUseId
@@ -1829,7 +1943,59 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     string,
     Map<string, { text: string; createdAt: number }>
   >();
+  const MAX_TOOL_RESULT_CONTENT_ENTRIES_PER_SESSION = 64;
+  const MAX_TOOL_RESULT_CONTENT_ENTRY_CHARS = 64 * 1024;
   const toolResultContentByClientId = new Map<string, Map<string, string>>();
+  const toolResultMetaByContentMap = new WeakMap<
+    Map<string, string>,
+    Map<string, { fullLength: number; fullHash: string; capped: string }>
+  >();
+
+  function hashToolResultText(text: string): string {
+    return createHash('sha256').update(text).digest('hex');
+  }
+
+  function getToolResultMetaMap(
+    contentMap: Map<string, string>,
+  ): Map<string, { fullLength: number; fullHash: string; capped: string }> {
+    let meta = toolResultMetaByContentMap.get(contentMap);
+    if (!meta) {
+      meta = new Map();
+      toolResultMetaByContentMap.set(contentMap, meta);
+    }
+    return meta;
+  }
+
+  /**
+   * Store bounded tool_result content for in-turn growth / dedup checks without holding
+   * unbounded multi-MB tool outputs in main-process RAM for hours-long turns.
+   */
+  function storeToolResultContent(
+    contentMap: Map<string, string>,
+    persistId: string,
+    fullText: string,
+    capped: string,
+  ): void {
+    const retained =
+      fullText.length <= MAX_TOOL_RESULT_CONTENT_ENTRY_CHARS ? fullText : capped;
+    // Refresh insertion order for LRU eviction.
+    contentMap.delete(persistId);
+    contentMap.set(persistId, retained);
+    const metaMap = getToolResultMetaMap(contentMap);
+    metaMap.delete(persistId);
+    metaMap.set(persistId, {
+      fullLength: fullText.length,
+      fullHash: fullText.length > MAX_TOOL_RESULT_CONTENT_ENTRY_CHARS ? hashToolResultText(fullText) : '',
+      capped,
+    });
+    while (contentMap.size > MAX_TOOL_RESULT_CONTENT_ENTRIES_PER_SESSION) {
+      const oldestKey = contentMap.keys().next().value;
+      if (oldestKey === undefined) break;
+      contentMap.delete(oldestKey);
+      metaMap.delete(oldestKey);
+      processMediaByContentMap.get(contentMap)?.delete(oldestKey);
+    }
+  }
   // Tied to the exact turn's content map; pending imports keep their old map alive
   // without polluting the next turn or retaining completed sessions globally.
   const processMediaByContentMap = new WeakMap<
@@ -1951,21 +2117,32 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
 
     if (existing) {
       for (const id of ids) idMap.set(id, existing);
+      releaseToolUseInputOnResult(sessionId, ids);
       const prev = contentMap.get(existing);
-      // 内容没增长 → 不写库;renderer 已显示该条,返回现有内容即可(upsert 命中后无变化)。
-      if (prev === undefined || content.length <= prev.length) {
+      const prevMeta = toolResultMetaByContentMap.get(contentMap)?.get(existing);
+      const prevLength = prevMeta?.fullLength ?? prev?.length;
+      // 内容没增长 → 不写库;renderer 已显示该条。若上次接受的是 >64KB 原文(contentMap
+      // 仅保留 8KB 截断版)或已被 LRU 淘汰，返回 null(与 onToolResultFullEvent 幂等无变更
+      // 同契约)，防止 renderer 的 upsertToolResultMessage 用截断缓存或短摘要覆盖完整展示。
+      if (prevLength === undefined || content.length <= prevLength) {
         if (backgroundState) releaseBackgroundStateForToolUses(sessionId, backgroundState, ids);
+        if (
+          prev === undefined ||
+          (prevMeta !== undefined && prevMeta.fullLength > MAX_TOOL_RESULT_CONTENT_ENTRY_CHARS)
+        ) {
+          return null;
+        }
         return {
           persistId: existing,
-          content: contentWithProcessMedia(contentMap, existing, prev ?? content),
+          content: contentWithProcessMedia(contentMap, existing, prev),
         };
       }
-      // contentMap 存全文(增长比较与 renderer 显示都要它);DB 只落有界内容。
+      // contentMap 存有界内容 + fullLength/capped 元信息;DB 只落有界内容。
       // 截断后内容没变(全文都在 8KB 之外增长)就跳过 UPDATE——省掉重复写同一
       // 前缀,也省掉 messages 表 UPDATE 附带的 FTS 触发器开销。
-      const cappedPrev = capToolResultTextForPersist(prev);
-      contentMap.set(existing, content);
+      const cappedPrev = prevMeta?.capped ?? capToolResultTextForPersist(prev!);
       const capped = persistableToolResultContent(sessionId, content);
+      storeToolResultContent(contentMap, existing, content, capped);
       if (capped !== cappedPrev) {
         enqueueWrite(`tool_result_update:${sessionId}:${existing}`, () =>
           updateDbMessageContent(
@@ -1985,11 +2162,13 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
 
     const persistId = createId();
     for (const id of ids) idMap.set(id, persistId);
-    contentMap.set(persistId, content);
+    releaseToolUseInputOnResult(sessionId, ids);
+    const capped = persistableToolResultContent(sessionId, content);
+    storeToolResultContent(contentMap, persistId, content, capped);
     enqueueVisibleDbMessage(`tool_result:${sessionId}:${persistId}`, sessionId, {
       clientId: persistId,
       role: 'tool_result',
-      content: persistableToolResultContent(sessionId, content),
+      content: capped,
       toolUseId: primaryToolUseId,
       agentMeta: backgroundState ? backgroundState.agentMeta : toolResultMeta(sessionId, agentMeta),
       createdAt,
@@ -2108,12 +2287,14 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
         // tool_use 已到但还没 tool_result 摘要 → 直接建一条带全文的 tool_result。
         const persistId = createId();
         idMap.set(toolUseId, persistId);
+        releaseToolUseInputOnResult(sessionId, [toolUseId]);
         pending.delete(toolUseId);
-        contentMap.set(persistId, fullText);
+        const capped = persistableToolResultContent(sessionId, fullText);
+        storeToolResultContent(contentMap, persistId, fullText, capped);
         enqueueVisibleDbMessage(`tool_result_eager:${sessionId}:${persistId}`, sessionId, {
           clientId: persistId,
           role: 'tool_result',
-          content: persistableToolResultContent(sessionId, fullText),
+          content: capped,
           toolUseId,
           agentMeta: backgroundState
             ? backgroundState.agentMeta
@@ -2133,13 +2314,22 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
       return null;
     }
 
+    releaseToolUseInputOnResult(sessionId, [toolUseId]);
     const prev = contentMap.get(target);
-    if (prev === fullText) return null; // 幂等:内容没变,renderer 无需更新。
-    // 同 onToolResultEvent 增长分支:contentMap 存全文,DB 只落有界内容,截断后
-    // 内容不变则跳过 UPDATE(renderer 仍拿全文刷新显示)。
-    const cappedPrev = prev === undefined ? undefined : capToolResultTextForPersist(prev);
-    contentMap.set(target, fullText);
+    const prevMeta = toolResultMetaByContentMap.get(contentMap)?.get(target);
+    const isSameContent =
+      prev === fullText ||
+      (prevMeta !== undefined &&
+        prevMeta.fullHash !== '' &&
+        prevMeta.fullLength === fullText.length &&
+        prevMeta.fullHash === hashToolResultText(fullText));
+    if (isSameContent) return null; // 幂等:内容没变,renderer 无需更新。
+    // 同 onToolResultEvent 增长分支:contentMap 有界缓存 + 元信息,DB 只落有界内容,
+    // 截断后内容不变则跳过 UPDATE(renderer 仍拿全文刷新显示)。
+    const cappedPrev =
+      prevMeta?.capped ?? (prev === undefined ? undefined : capToolResultTextForPersist(prev));
     const capped = persistableToolResultContent(sessionId, fullText);
+    storeToolResultContent(contentMap, target, fullText, capped);
     if (capped !== cappedPrev) {
       enqueueWrite(`tool_result_full:${sessionId}:${target}`, () =>
         updateDbMessageContent(
@@ -2339,11 +2529,13 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     const persistOrphan = (toolUseId: string, text: string, createdAt: number): void => {
       const persistId = createId();
       idMap.set(toolUseId, persistId);
-      contentMap.set(persistId, text);
+      releaseToolUseInputOnResult(sessionId, [toolUseId]);
+      const capped = persistableToolResultContent(sessionId, text);
+      storeToolResultContent(contentMap, persistId, text, capped);
       enqueueVisibleDbMessage(`tool_result_orphan:${sessionId}:${persistId}`, sessionId, {
         clientId: persistId,
         role: 'tool_result',
-        content: persistableToolResultContent(sessionId, text),
+        content: capped,
         toolUseId,
         agentMeta: meta,
         createdAt: clampAfterToolUse(sessionId, toolUseId, createdAt),
@@ -3100,6 +3292,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
           sdkError?: unknown;
           toolLoop?: unknown;
           outputLimit?: unknown;
+          reconnectHandoff?: unknown;
         }
       | null
       | undefined,
@@ -3145,6 +3338,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
           sdkError?: unknown;
           toolLoop?: unknown;
           outputLimit?: unknown;
+          reconnectHandoff?: unknown;
         }
       | null
       | undefined,
@@ -3215,7 +3409,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
   function buildTurnErrorContent(
     sessionId: string,
     data:
-      | { reason?: unknown; sdkError?: unknown; toolLoop?: unknown; outputLimit?: unknown }
+      | { reason?: unknown; sdkError?: unknown; toolLoop?: unknown; outputLimit?: unknown; reconnectHandoff?: unknown }
       | null
       | undefined,
     message: string,
@@ -3224,6 +3418,9 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     if (typeof data?.reason === 'string' && data.reason) content.reason = data.reason;
     if (typeof data?.sdkError === 'string' && data.sdkError) {
       content.sdkError = redactSensitiveText(data.sdkError);
+    }
+    if (data?.reason === 'codex_reconnect_stalled' && (data.reconnectHandoff === 'disabled' || data.reconnectHandoff === 'exhausted')) {
+      content.reconnectHandoff = data.reconnectHandoff;
     }
     const toolLoop = parseToolLoopErrorDetails(data?.toolLoop);
     const outputLimit = parseOutputLimitDetails(data?.outputLimit);

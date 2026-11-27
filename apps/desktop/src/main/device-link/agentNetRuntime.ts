@@ -73,7 +73,16 @@ const membership = new AgentNetMembership({
     noteListedPhones(scope, devices);
     return devices.map((device) => device.deviceId);
   },
-  apply: (rule) => { if (current && membershipScope !== null && membershipScope === officialMembershipScope()) current.restrictPeers?.(rule); },
+  apply: (rule) => {
+    if (!current || membershipScope === null || membershipScope !== officialMembershipScope()) return;
+    current.restrictPeers?.(rule);
+    // A later read of the list (it is read again in the background) no longer has this computer: removed, as at open below.
+    const self = authManager.getDeviceId();
+    if (self && rule.allowed && !rule.allowed.includes(self)) {
+      if (agentNetRequiresEncryption()) current.close(4410);
+      else noteAgentNetRemoved();
+    }
+  },
   // Background reads only while this account's official Agent-Net connection is up (never with Agent-Net off).
   active: () => current !== null && membershipScope !== null && membershipScope === officialMembershipScope() && isAgentNetActive(),
   log: agentNetLog,
@@ -138,8 +147,11 @@ function relayChanged(): void {
     try { listener(); } catch (error) { agentNetLog.error('agent-net relay listener threw', error); }
   }
 }
-/** 这台电脑换了网络：Agent-Net 主连接马上探测中转、从新地址发包（AgentNetWorkerSocket.networkChanged）。Agent-Net 关着时什么也不做。 */
-export function agentNetNetworkChanged(): void { current?.networkChanged?.(); }
+/** 这台电脑换了网络：Agent-Net 主连接与资源专用连接马上探测中转、重建可能失效的 UDP 套接字并重探直连。Agent-Net 关着时什么也不做。 */
+export function agentNetNetworkChanged(): void {
+  current?.networkChanged?.();
+  for (const socket of scopedSockets) socket.networkChanged?.();
+}
 /** 发往这个对端的会话请求超时、它此刻走中转：让承载它的连接判断中转 UDP 是否只通登记（relayUdp.ts noteStall）。 */
 export function agentNetRelayStalled(peer: string): void { sessionSocket(peer)?.relayStalled?.(); }
 /** 本机在官方 Device Link 里删掉了这台设备：Agent-Net 上马上不认它。 */
@@ -354,12 +366,58 @@ export function noteAgentNetIdentityRefused(reason: string): boolean {
  * while its revoked certificate has not expired, then forgets the refusal so the next connection uses Agent-Net again.
  * 'skipped' when there is nothing to lift: a self-hosted relay is selected, or this device never enrolled and has Agent-Net off.
  */
-export async function rejoinOfficialAgentNet(): Promise<'rejoined' | 'skipped'> {
-  if (activeSelfHostedRelay() || !officialAgentNetBase()) return 'skipped';
-  if (!readRelaySecrets(officialAgentNetSlot())?.agentNet && readDeviceLinkSettings().agentNetEnabled !== true) return 'skipped';
+export async function rejoinOfficialAgentNet(options?: { force?: boolean }): Promise<'rejoined' | 'skipped'> {
+  if (activeSelfHostedRelay() || !officialAgentNetBase()) { membership.reset(); return 'skipped'; }
+  if (options?.force !== true && !readRelaySecrets(officialAgentNetSlot())?.agentNet && readDeviceLinkSettings().agentNetEnabled !== true) {
+    membership.reset();
+    return 'skipped';
+  }
   await ensureOfficialAgentNetClient(deviceName(), { rejoin: true });
   refusedSelection = null;
+  membership.reset();
   return 'rejoined';
+}
+/**
+ * Whether the official services say this computer was removed from the account, asked once when the person on this computer
+ * turns the switch on (selfHostedRelayRuntime.ts): the account's Device Link device list does not have it (signed in again
+ * after a removal, Device Link is back but every computer of the account refuses it on Agent-Net), or the Agent-Net service
+ * says its identity was revoked (one `/directory` read, only once it enrolled there). False for every other answer, offline
+ * included; each answer is waited for at most 3 s so the switch is not held for a client's 10 s timeout.
+ */
+export async function officialAgentNetRemoved(): Promise<boolean> {
+  if (activeSelfHostedRelay() || !officialAgentNetBase()) return false;
+  const self = authManager.getDeviceId();
+  const devices = await Promise.race([(deviceLinkDeviceList?.() ?? Promise.resolve(null)).catch(() => null),
+    new Promise<null>((resolve) => { setTimeout(() => resolve(null), 3_000).unref(); })]);
+  if (self && devices && !devices.some((device) => device.deviceId === self)) return true;
+  if (!readRelaySecrets(officialAgentNetSlot())?.agentNet) return false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      (async () => {
+        try { await (await ensureOfficialAgentNetClient(deviceName())).directory(AbortSignal.timeout(3_000)); return false; }
+        catch (error) { return (error as { code?: unknown } | null)?.code === 'DEVICE_REVOKED'; }
+      })(),
+      new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), 3_000); timer.unref(); }),
+    ]);
+  } finally { if (timer) clearTimeout(timer); }
+}
+const removalListeners = new Set<() => void>();
+/**
+ * 2026-11-26（用户定：被删后默认关掉，再打开就重新加入）：官方服务说这台电脑被移除过——身份被撤销（`DEVICE_REVOKED`），或读到的
+ * 账号设备列表里没有它——selfHostedRelayRuntime.ts 把开关关掉并记下原因，远程连接页写明「重新打开即可重新加入」。网络错误不算；
+ * 「仅使用 Agent-Net」时不通知（关了就会改走 Device Link），照旧走「已移除」的重新加入入口。
+ */
+export function onAgentNetRemoved(listener: () => void): () => void {
+  removalListeners.add(listener);
+  return () => { removalListeners.delete(listener); };
+}
+export function noteOfficialAgentNetRemoved(): void { noteAgentNetRemoved(); }
+function noteAgentNetRemoved(): void {
+  if (activeSelfHostedRelay() || agentNetRequiresEncryption() || readDeviceLinkSettings().agentNetEnabled !== true) return;
+  for (const listener of [...removalListeners]) {
+    try { listener(); } catch (error) { agentNetLog.error('agent-net removal listener threw', error); }
+  }
 }
 export function agentNetSupportsPeer(id: string): boolean { return current?.supports(id) ?? false; }
 export function agentNetRequiresEncryption(): boolean {
@@ -392,6 +450,7 @@ export async function createAgentNetOrLegacySocket<T>(
       && (error as { code?: unknown } | null)?.code === 'DEVICE_REVOKED') {
       throw new DeviceLinkRegistrationRemovedError();
     }
+    if (!activeSelfHostedRelay() && (error as { code?: unknown } | null)?.code === 'DEVICE_REVOKED') noteAgentNetRemoved();
     if (!isAgentNetIdentityRefusal(error) || !noteAgentNetIdentityRefused(error instanceof Error ? error.message : 'refused')) throw error;
     // This attempt's credentials were taken for Agent-Net; the next one (Device Link's usual retry) runs on Device Link.
     throw new Error('AGENT_NET_IDENTITY_REFUSED');
@@ -626,6 +685,11 @@ export async function createAgentNetAppSocket(identityConflict?: AgentNetIdentit
   const remembered = answered ? undefined : lastUdpServer.get(api.base);
   if (remembered) { primaryStun = remembered; relayUdpServer = remembered; }
   if (listing) { await listing; assertOwner(); }
+  // Signed in again after a removal: Device Link is back, but the account's device list does not have this computer, so every
+  // computer of the account refuses it on Agent-Net. Removed, as a revoked identity (2026-11-26): no connection that waits on them.
+  if (members?.lists(api.identity.deviceId) === false) {
+    throw Object.assign(new Error('AGENT_NET_DEVICE_NOT_LISTED'), { code: 'DEVICE_REVOKED' });
+  }
   const allowPeerStun = !relay && peerOfficialBase !== null && primaryMode !== 'self-hosted';
   const initialPeerStun = allowPeerStun ? getCachedPeerOfficialStunServer(peerOfficialBase) : null;
   const stunServers = mergeStunServers(primaryStun, initialPeerStun);
@@ -678,7 +742,7 @@ export async function createAgentNetAppSocket(identityConflict?: AgentNetIdentit
   }); } catch (error) {
     approver.close();
     assertOwner();
-    if (!relay && agentNetRequiresEncryption() && isAgentNetIdentityRefusal(error)) await checkRemoval();
+    if (!relay && isAgentNetIdentityRefusal(error)) await checkRemoval();
     throw error;
   }
   socket.once('close', () => approver.close());

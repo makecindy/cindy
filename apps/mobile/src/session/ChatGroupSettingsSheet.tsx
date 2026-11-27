@@ -8,7 +8,8 @@
  * 直连时读写走账号自己的聊天服务（`management`）；经电脑打开的群只能做电脑支持的那几项，
  * 其余入口不显示。
  */
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useMemo, useState, type ReactNode } from 'react';
+import { createBotGroupMemberSearch } from '@cindy/maker-shared/botGroupMemberSearch';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 import { Check, Ellipsis, Plus, Reply, SlidersHorizontal, UserPlus } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
@@ -296,16 +297,23 @@ export function ChatGroupSettingsSheet({ visible, group, host, identityFor, onli
           {archived && !dissolved ? <Notice>{k('archived')}</Notice> : null}
           {soleOwner && !archived && !dissolved ? <Notice>{k('soleOwnerHint')}</Notice> : null}
           <About k={k} group={group} canEdit={writable} canFill={direct} onEdit={openEdit} />
-          {!dissolved && me?.actorId && (direct || maskRow) ? <SettingsGroup title={k('me')} footer={maskRow ? k('maskHint') : null} testID="botGroup.settings.me">
+          {!dissolved && me?.actorId && (direct || maskRow || group.assistantComputers) ? <SettingsGroup title={k('me')} footer={maskRow ? k('maskHint') : null} testID="botGroup.settings.me">
             {direct ? <ActionInfoRow key="profile" lead={avatar(identityOf(me))} label={k('myProfile')} value={me.name} accessibilityLabel={k('myProfile')}
               onPress={() => { setNickname(me.nickname ?? ''); setPage({ kind: 'profile' }); }} testID="botGroup.settings.profile" /> : null}
+            {group.assistantComputers ? <BotGroupMenu testID="botGroup.settings.assistantComputer" title={k('assistantComputer')} accessibilityLabel={k('assistantComputer')}
+              disabled={!online || archived || busy || (direct && !management?.ready) || !group.assistantComputers.length}
+              sections={[{ id: 'computer', options: group.assistantComputers.map(device => ({ id: device.id, title: device.name, selected: device.id === group.assistantDeviceId })) }]}
+              onSelect={deviceId => { if (deviceId !== group.assistantDeviceId) void settings('assistantDevice', { deviceId }); }}>
+              {open => <ActionInfoRow label={k('assistantComputer')} accessibilityLabel={k('assistantComputer')}
+                value={group.assistantComputers?.find(device => device.id === group.assistantDeviceId)?.name ?? k('chooseComputer')} onPress={open} />}
+            </BotGroupMenu> : null}
             {maskRow ? <ActionInfoRow key="mask" testID="botGroup.settings.mask"
               lead={maskCompanion ? <GroupMaskAvatar self={mask!.state!.self} companion={maskCompanion} deviceId={host.deviceId} />
                 : <RowIcon><Reply size={iconSize.md} color={colors.textSecondary} /></RowIcon>}
               label={t('groupChat.mask.title')} value={t(`groupChat.mask.status.${mask!.state!.status}`)} accessibilityLabel={t('groupChat.mask.title')} onPress={onMask} /> : null}
           </SettingsGroup> : null}
           {!dissolved && me?.actorId && group.supportsNotificationSettings && group.notificationMode ? <GroupNotificationSettings key={scope}
-            title={direct || maskRow ? undefined : k('me')} mode={group.notificationMode} inherited={group.notificationModeInherited}
+            title={direct || maskRow || group.assistantComputers ? undefined : k('me')} mode={group.notificationMode} inherited={group.notificationModeInherited}
             disabled={!visible || !online || archived || busy || (direct && !management.ready)}
             save={mode => management ? management.act('notifications', { mode }) : act('notifications', { mode })} /> : null}
           {(direct || group.supportsOwnBotRemoval === true) && !dissolved && !archived && ownBots.length ? <SettingsGroup title={k('myTeammates')} footer={k('myTeammatesCaption')} testID="botGroup.settings.myTeammates">
@@ -377,15 +385,8 @@ function MembersTab({ k, group, owner, manager, direct, busy, ownRemoval, identi
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const [query, setQuery] = useState('');
-  const needle = query.trim().toLocaleLowerCase();
-  const shown = needle ? group.members.filter(member => [
-    botGroupMentionDisplayName(member),
-    member.name,
-    member.displayName,
-    member.orgName,
-    member.department,
-    member.departmentPath,
-  ].some(field => field?.toLocaleLowerCase().includes(needle))) : group.members;
+  const searchMembers = useMemo(() => createBotGroupMemberSearch(group.members, botGroupMentionDisplayName), [group.members]);
+  const shown = useMemo(() => searchMembers(query), [searchMembers, query]);
   return <>
     <TextInput value={query} onChangeText={setQuery} accessibilityLabel={k('searchMembers')} placeholder={k('searchMembers')}
       placeholderTextColor={colors.textPlaceholder} autoCorrect={false} returnKeyType="search" style={styles.search} testID="botGroup.settings.memberSearch" />
@@ -462,6 +463,16 @@ function ManagePage({ k, group, owner, writable, online, busy, direct, settings,
     {rename ? <SettingsGroup>
       <ActionInfoRow label={k('name')} value={group.name} accessibilityLabel={k('name')} disabled={!writable || busy} onPress={rename} testID="botGroup.settings.rename" />
     </SettingsGroup> : null}
+    {group.supportsMemberInvites ? <SettingsGroup title={k('memberPermissions')} footer={t('groupChat.settings.allowMemberInvitesHint')}>
+      <SettingsSwitchRow label={t('groupChat.settings.allowMemberInvites')} value={group.allowMemberInvites === true}
+        disabled={!writable || busy} switchTestID="botGroup.settings.allowMemberInvites"
+        onValueChange={allowMemberInvites => { void settings('update', { allowMemberInvites }); }} />
+    </SettingsGroup> : null}
+    {group.supportsMemberMentionAll ? <SettingsGroup title={group.supportsMemberInvites ? undefined : k('memberPermissions')} footer={t('groupChat.settings.allowMemberMentionAllHint')}>
+      <SettingsSwitchRow label={t('groupChat.settings.allowMemberMentionAll')} value={group.allowMemberMentionAll === true}
+        disabled={!writable || busy} switchTestID="botGroup.settings.allowMemberMentionAll"
+        onValueChange={allowMemberMentionAll => { void settings('update', { allowMemberMentionAll }); }} />
+    </SettingsGroup> : null}
     <SettingsGroup title={k('replies')} footer={group.replyMode === 'all'
       ? t(group.singleSpeaker ? 'groupChat.settings.replyModeNoteQueue' : 'groupChat.settings.replyModeNote') : k('replyModeMentionedNote')}>
       {choice(t('groupChat.settings.replyMode'), group.replyMode, [
@@ -477,11 +488,6 @@ function ManagePage({ k, group, owner, writable, online, busy, direct, settings,
       <SettingsSwitchRow label={t('groupChat.settings.allowMentionAllBots')} value={group.allowMentionAllBots === true}
         disabled={!writable || busy} switchTestID="botGroup.settings.allowMentionAllBots"
         onValueChange={allowMentionAllBots => { void settings('update', { allowMentionAllBots }); }} />
-    </SettingsGroup> : null}
-    {group.supportsMemberInvites ? <SettingsGroup footer={t('groupChat.settings.allowMemberInvitesHint')}>
-      <SettingsSwitchRow label={t('groupChat.settings.allowMemberInvites')} value={group.allowMemberInvites === true}
-        disabled={!writable || busy} switchTestID="botGroup.settings.allowMemberInvites"
-        onValueChange={allowMemberInvites => { void settings('update', { allowMemberInvites }); }} />
     </SettingsGroup> : null}
     {/* Single-speaker servers always answer one teammate at a time, so there is no speaking mode. */}
     {group.singleSpeaker ? null : <SettingsGroup footer={t(group.speakingMode === 'sequential' ? 'groupChat.settings.speakingModeSequentialNote' : 'groupChat.settings.speakingModeAutoNote')}>

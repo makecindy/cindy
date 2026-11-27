@@ -649,6 +649,9 @@
     "ignore": "忽略",
     "executionResultUnavailable": "未能取得執行結果，已停止自動接續。可以請助手檢查既有的執行結果。",
     "unexecutedToolMarkup": "模型把工具呼叫寫成了文字，無法確認執行結果，本輪未完成。",
+    "codexReconnectStalled": "模型連線在 2 分鐘內未能恢復。",
+    "reconnectAutoResumeDisabled": "自動續跑已關閉。",
+    "reconnectAutoResumeExhausted": "自動續跑已達重試次數上限。",
     "silentStopExhausted": "偵測到空回應，自動續跑已暫停。",
     "outputLimit": "模型已達到輸出長度上限，本輪回覆可能不完整。可以傳送新訊息繼續；若反覆觸發，請降低推理強度或先壓縮對話記錄。",
     "outputLimitReasoning": "思考已消耗本次輸出的大部分預算，回覆可能不完整。建議降低推理強度，或先壓縮對話記錄，再繼續。",
@@ -861,7 +864,8 @@
       "WORKER_CREATION_IN_PROGRESS": "另一個同名 Worker 正在建立，請稍後重試。",
       "WORKER_NOT_FOUND": "這個 Worker 已不存在，列表已重新整理。",
       "ORCA_CREATE_UNCONFIRMED": "建立 Worker 逾時，暫時無法確認是否成功。請先查看 Worker 列表，確認沒有新建的 Worker 後再重試。",
-      "ORCA_ACTION_UNCONFIRMED": "操作逾時，暫時無法確認結果。已重新整理列表，請以目前顯示的狀態為準。"
+      "ORCA_ACTION_UNCONFIRMED": "操作逾時，暫時無法確認結果。已重新整理列表，請以目前顯示的狀態為準。",
+      "PLUGIN_ENGINE_CANNOT_LEAD": "這台電腦的版本不支援在插件引擎任務中開啟協同。"
     }
   },
   "resetAutoUse": {

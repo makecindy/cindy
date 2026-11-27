@@ -4,6 +4,8 @@ import {
   ModelSelector,
   type RemoteAgentSelectorOptions,
 } from '@/components/new-chat/ModelSelector';
+import { resolveDeviceModelGroup, useDeviceModelGroups } from '@/features/model-groups/remoteModelGroups';
+import type { ModelGroupSelection } from '../../../shared/modelGroups';
 import {
   ImDefaultSettingsSectionFrame,
   ImDefaultSettingsSectionView,
@@ -18,9 +20,11 @@ import { Button } from '@/components/ui/button';
 import { toast } from '@/lib/toast';
 import { additionalSettingsSchemas } from '../../../shared/settingsEditableCatalog';
 import {
+  activeImDefaultAgentSettings,
+  isImDefaultBuiltinAgentKind,
   isImDefaultEffort,
   isImDefaultPermissionMode,
-  type ImDefaultAgentKind,
+  type ImDefaultBuiltinAgentKind,
   type ImDefaultSettingsChannel,
 } from '../../../shared/imDefaultSettings';
 import type { CloudSettingsDomain, CloudSettingsState } from '../../../shared/cloudSettings';
@@ -41,8 +45,9 @@ const channels = {
   dingtalk: 'imDingtalk',
   wecom: 'imWecom',
 } as const;
-const routeKey = (agent: ImDefaultAgentKind) => (agent === 'claude-code' ? 'claudeCode' : agent);
-const vendorOf = (agent: ImDefaultAgentKind) => (agent === 'claude-code' ? 'cc' : agent);
+const routeKey = (agent: ImDefaultBuiltinAgentKind) =>
+  agent === 'claude-code' ? 'claudeCode' : agent;
+const vendorOf = (agent: ImDefaultBuiltinAgentKind) => (agent === 'claude-code' ? 'cc' : agent);
 type Props = {
   itemId: string;
   section?: 'defaults' | 'telegram';
@@ -81,6 +86,8 @@ export function CloudImSettings({
   display,
 }: Props) {
   const { t } = useTranslation();
+  const deviceGroups = useDeviceModelGroups(section === 'defaults' ? deviceId : null, section === 'defaults');
+  const lastUnifiedCloudRef = useRef<{ agent: ImDefaultBuiltinAgentKind; modelId: string; providerId: string | null; effort: unknown } | null>(null);
   const channel = itemId.replace(/^bot:/, '') as keyof typeof channels;
   const domain = channels[channel];
   if (!domain || (section === 'telegram' && channel !== 'telegram')) return null;
@@ -105,11 +112,11 @@ export function CloudImSettings({
   const agents = (state?.choices?.agentKind ?? [])
     .map((choice) => choice.value)
     .filter(
-      (agent): agent is ImDefaultAgentKind =>
+      (agent): agent is ImDefaultBuiltinAgentKind =>
         agent === 'claude-code' || agent === 'codex' || agent === 'pi',
     );
   const select = (
-    agent: ImDefaultAgentKind,
+    agent: ImDefaultBuiltinAgentKind,
     modelId: string,
     providerId: string | null,
     effort: unknown,
@@ -136,7 +143,31 @@ export function CloudImSettings({
       toast.error(t('hostSettings.saveFailed'));
       return false;
     }
-    return commit(state, { agentKind: agent, [routeKey(agent)]: { providerId, modelId, effort } });
+    return commit(state, {
+      agentKind: agent,
+      [routeKey(agent)]: { providerId, modelId, effort },
+      ...(value.modelGroup ? { modelGroup: null } : {}),
+    });
+  };
+  const selectModelGroup = async (selection: ModelGroupSelection) => {
+    if (!state || !value || !deviceGroups.config) return;
+    const group = deviceGroups.config.routes.find((r) => r.id === selection.id);
+    const preview = await resolveDeviceModelGroup(deviceId, selection, undefined, undefined, undefined);
+    if (preview?.outcome !== 'routed') {
+      toast.warning(t('modelGroups.picker.chooseUnavailable', { name: group?.name ?? '' }));
+      return;
+    }
+    const agent: ImDefaultBuiltinAgentKind = preview.route.agentKind === 'cc' ? 'claude-code' : preview.route.agentKind;
+    if (!agents.includes(agent)) {
+      toast.warning(t('modelGroups.picker.chooseUnavailable', { name: group?.name ?? '' }));
+      return;
+    }
+    const effort = isImDefaultEffort(preview.route.effort) ? preview.route.effort : value[routeKey(agent)].effort;
+    await commit(state, {
+      agentKind: agent,
+      [routeKey(agent)]: { providerId: preview.route.providerId, modelId: preview.route.model, effort },
+      modelGroup: selection.id,
+    });
   };
   const always = Array.isArray(groups?.value?.always)
     ? groups.value.always.filter((id): id is string => typeof id === 'string')
@@ -151,7 +182,12 @@ export function CloudImSettings({
   const available = !loading && !readFailed && supported && state && value && active;
   // Like the local picker, the automatic route shows the model it resolves to ("Auto · 高").
   const shown =
-    display && value && active && !active.modelId && display.automaticModel
+    display &&
+    value &&
+    active &&
+    !active.modelId &&
+    display.automaticModel &&
+    isImDefaultBuiltinAgentKind(display.agentKind)
       ? { agentKind: display.agentKind, route: display.agents[display.agentKind] }
       : null;
   return (
@@ -232,13 +268,19 @@ export function CloudImSettings({
                   : 'auto',
               isCustomized: !!state.isCustomized,
             }}
-            reset={() => commit(state, {}, Object.keys(state.defaults ?? {}))}
-            automaticModel={!active.modelId}
+            reset={() =>
+              commit(state, {}, [
+                ...Object.keys(state.defaults ?? {}),
+                ...(value.modelGroup ? ['modelGroup'] : []),
+              ])
+            }
+            automaticModel={!active.modelId && !value.modelGroup}
             activeModel={active.modelId}
             showAutomaticUnavailable={false}
             useAutomatic={() =>
               commit(state, {
                 agentKind: 'claude-code',
+                ...(value.modelGroup ? { modelGroup: null } : {}),
                 ...Object.fromEntries(
                   ['claudeCode', 'codex', 'pi'].map((key) => [
                     key,
@@ -259,6 +301,26 @@ export function CloudImSettings({
                 disabled={disabled}
                 fastModeConfigurable={false}
                 unifiedAgents={agents}
+                {...(deviceGroups.config ? {
+                  modelGroups: {
+                    config: deviceGroups.config,
+                    active: value.modelGroup && deviceGroups.config.routes.some((r) => r.id === value.modelGroup)
+                      ? { type: 'route' as const, id: value.modelGroup }
+                      : null,
+                    onSelect: (selection: ModelGroupSelection) => { void selectModelGroup(selection); },
+                    onAttach: (selection: ModelGroupSelection) => {
+                      const last = lastUnifiedCloudRef.current;
+                      lastUnifiedCloudRef.current = null;
+                      if (!last) return;
+                      const effort = isImDefaultEffort(last.effort) ? last.effort : value[routeKey(last.agent)].effort;
+                      void commit(state, {
+                        agentKind: last.agent,
+                        [routeKey(last.agent)]: { providerId: last.providerId, modelId: last.modelId, effort },
+                        modelGroup: selection.id,
+                      });
+                    },
+                  },
+                } : {})}
                 configurationEnabled={false}
                 recordRecentUsage={false}
                 currentProviderId={active.providerId}
@@ -284,9 +346,11 @@ export function CloudImSettings({
                     effort ?? active.effort,
                   )
                 }
-                onUnifiedSelect={({ engine, modelId, providerId, effort }) =>
-                  select(engine === 'cc' ? 'claude-code' : engine, modelId, providerId, effort)
-                }
+                onUnifiedSelect={({ engine, modelId, providerId, effort }) => {
+                  const agent: ImDefaultBuiltinAgentKind = engine === 'cc' ? 'claude-code' : engine;
+                  lastUnifiedCloudRef.current = { agent, modelId, providerId, effort };
+                  return select(agent, modelId, providerId, effort);
+                }}
               />
             }
           />
@@ -332,7 +396,7 @@ export function cloudImSettingsSummary(
   if (display?.automaticModel)
     return {
       agentKind: display.agentKind,
-      model: display.agents[display.agentKind].model || automaticLabel,
+      model: activeImDefaultAgentSettings(display).model || automaticLabel,
     };
   const state = states[domain];
   const parsed =

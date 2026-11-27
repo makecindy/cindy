@@ -4,6 +4,7 @@ import { beginTemporaryImPermission } from './temporaryTurnPermission';
 import { imText } from './imText';
 import { formatTaskTopicTitle } from '@cindy/maker-shared/session-title';
 import { getSessionRuntimeStartOverride } from '../../maker-ipc/sessionRuntimeControl';
+import { BOT_INACTIVE_INPUT_MESSAGE } from '../../maker-ipc/botSessionInputGuard';
 import { readImRemoteProviderRoute } from '../remoteProviderRoute';
 import {
   createLocalImSource,
@@ -120,9 +121,9 @@ import type {
 import { transformXdtRefs } from '@cindy/im';
 import type { AutoReviewUserReferences } from '@cindy/maker-shared/auto-review-intent';
 
-import { hasBuiltinAgentKind } from '../../maker-host/engineKind';
 import { readImPluginEngine } from './pluginEngineCatalog';
 import { persistUserMessage } from '../messagePersistence';
+import { getModelGroupStartBridge } from '../../model-groups/startBridge.js';
 import { imAutoReviewReferences } from './autoReviewReferences';
 import { bindingStore } from '../binding';
 import { buildImUserMessage } from './inboundMessage';
@@ -192,7 +193,21 @@ import {
   tokenRateFromStatus,
   type TurnActivityState,
 } from './turnActivity';
-import { isQuotaExhaustionFailure, openAiSubscriptionReconnectNotice, terminalErrorText, turnRetryNotice } from './turnRetryNotice';
+import {
+  isQuotaExhaustionFailure,
+  openAiSubscriptionReconnectNotice,
+  overloadRetryNotice,
+  terminalErrorText,
+  turnRetryNotice,
+} from './turnRetryNotice';
+import {
+  CHANNEL_OVERLOAD_RETRY_MAX_ATTEMPTS,
+  channelOverloadRetryDelayMs,
+  formatChannelOverloadRetryNotice,
+  isChannelOverloadRetryable,
+  shouldRetryChannelOverload,
+} from './overloadAutoRetry';
+import { CONTINUE_AFTER_ERROR_PROMPT } from '../../../shared/interruptedTurn';
 import { resolveSessionErrorContext } from './sessionProviderLabel';
 import { createTurnPresenter, DEFAULT_PRESENTER_POLICY, type TurnPresenter } from './turnPresenter';
 import {
@@ -283,6 +298,20 @@ interface TurnState {
   /** Empty for SSH sessions: remote paths must never be opened through local fs. */
   allowedFileRoots: string[];
   done: boolean;
+  /** 本轮是否已收到模型实质输出（文本 / 工具调用 / 工具结果），决定过载重试走续跑还是重发。 */
+  hadOutput: boolean;
+  /** 本轮是否已收到底层引擎发出的非终止过载重试进度事件。 */
+  hadInTurnOverloadRetry: boolean;
+  /** 本轮已执行的外层过载自动重试次数（从 0 起）。 */
+  overloadRetryCount: number;
+  /** 外层过载重试是否正处于判定或退避等待中（防重复排期，并供 !stop 立即收口）。 */
+  overloadRetryPending: boolean;
+  /** 外层过载重试退避定时器。 */
+  overloadRetryTimer: ReturnType<typeof setTimeout> | null;
+  /** 外层过载重试代次（done / error / stop / cleanup 自增，使在途异步失效）。 */
+  overloadRetryGeneration: number;
+  /** 触发本轮的原始派发上下文，供外层过载重试复用。 */
+  overloadRetryItem: QueuedSend | null;
   /** 过程区耗时刷新的低频 ticker(首个 tool_use 启动, 收口清除)。 */
   activityTicker: ReturnType<typeof setInterval> | null;
   outputCardMessageId: string | null;
@@ -388,15 +417,14 @@ type DetachDrainOutcome = 'rewire' | 'cancelled';
  */
 type BuiltinMakerSession = MakerSession;
 
-
 interface SessionState {
   /** Keep the original session configuration even when no persistent takeover exists. */
   preserveSessionConfig: boolean;
   waitingForAuthRetry?: boolean;
   /** Both cancel this channel's turn; only runtime disposal retires late replacements. */
   disposalIntent?: 'runtime' | 'observation';
-  /** Maker session (in-process), always on a built-in engine (see IM_CHANNEL_FEATURE). */
-  makerSession: BuiltinMakerSession;
+  /** Maker session (in-process), supports built-in engines and plugin ACP engines. */
+  makerSession: MakerSession;
   /** 渠道 user id of the bot's owner — kept here so listeners can address replies. */
   userId: string;
   /** 当前 session 的受管工作目录；本地生成图片仅允许从这里物化。 */
@@ -503,9 +531,36 @@ export interface RouteTarget {
   botOwned?: { botId: string; lane: 'canonical' | 'channel' };
 }
 
+/**
+ * 连接已交给伙伴, 但伙伴此刻解析不出落点任务(暂停 / 归档、主任务正在变化、新群时没有
+ * 可用模型…)。这条消息不回落渠道自己的路由(那是另一个身份), 由调用方拒绝并回一句
+ * 「伙伴暂时不可用」, 与已有专线的发送前守卫同一口径(cindy-bots-runtime.md §2 IM 专线)。
+ */
+interface CompanionRouteUnavailable {
+  kind: 'companion-unavailable';
+  errorCode: string;
+  message: string;
+}
+
+/** 伙伴资料不是 active(暂停 / 归档 / 缺失): 与发送前守卫一样报「未启用」。 */
+const COMPANION_INACTIVE_ERROR_CODES = new Set(['TARGET_BOT_INACTIVE', 'BOT_UNAVAILABLE']);
+/** 主任务恢复 / 换绑中的瞬时态: 先短暂重试, 仍不行再拒绝。 */
+const COMPANION_TRANSIENT_ERROR_CODES = new Set(['TARGET_CANONICAL_UNAVAILABLE', 'SESSION_UNAVAILABLE']);
+const COMPANION_TRANSIENT_RETRY_DELAYS_MS = [200, 600] as const;
+
+/**
+ * 回给 IM 的原因。暂停 / 归档沿用已有专线发送前守卫的原句(群里本来就这样说); 其余
+ * (没有可用模型、主任务正在变化、内部异常)一律只说稍后再试: 群里不论谁发言都不透露
+ * 内部细节。主人私聊只解析伙伴主任务, 不会遇到「没有可用模型」, 所以也不另给详细原因。
+ */
+function companionUnavailableReason(unavailable: CompanionRouteUnavailable): string {
+  if (COMPANION_INACTIVE_ERROR_CODES.has(unavailable.errorCode)) return BOT_INACTIVE_INPUT_MESSAGE;
+  return imText('imBot.text.shared.companion.retryLater');
+}
+
 type DefaultRouteTargetResolution =
   | { target: RouteTarget; missingAuth?: never }
-  | { target: null; missingAuth: ImAuthRouteStatus & { agentKind: AgentKind; model: string } };
+  | { target: null; missingAuth: ImAuthRouteStatus & { agentKind: EngineKind; model: string } };
 
 export interface ImRunAgentTurnArgs {
   /** Revalidate the ingress lease immediately before provider start, including internally queued sends. */
@@ -618,6 +673,8 @@ export type ImTurnDispatch =
   | {
       kind: 'busy' | 'rejected';
       reason: string;
+      /** 已按渠道文案拼好的拒绝提示(external 调用方自己发送时优先用它)。 */
+      notice?: string;
     };
 
 /** createTurnRunner 返回的编排实例 — per channel 一个。 */
@@ -691,10 +748,13 @@ export interface ImTurnRunner {
   companionBotIdFor?(botContextId: string): string | null;
   /**
    * 连接已交给伙伴时的 `/new`: 群 / 话题 → 归档当前专线并新开一条('rotated');
-   * 主人私聊 → 不轮换伙伴主任务('owner-dm')。未交出或伙伴当前解析不出 →
-   * 'unbound', 调用方走原有 `/new`。
+   * 主人私聊 → 不轮换伙伴主任务('owner-dm')。未交出 → 'unbound', 调用方走原有
+   * `/new`; 伙伴当前解析不出 → { unavailable: 拼好的提示 }, 调用方回这句, 不走原有 `/new`。
    */
-  rotateCompanionLane?(botContextId: string, userId: string): Promise<'unbound' | 'owner-dm' | 'rotated'>;
+  rotateCompanionLane?(
+    botContextId: string,
+    userId: string,
+  ): Promise<'unbound' | 'owner-dm' | 'rotated' | { unavailable: string }>;
   /**
    * 只读: 连接交给伙伴后这条消息会落到的任务行(主人私聊 → 主任务; 群 / 话题 / 外部
    * 用户 → 专线)。不建行、不恢复主任务; 未交出或还没有这条任务时返回 null。
@@ -706,7 +766,6 @@ export interface ImTurnRunner {
    * 未接线 / 接管 / 通知回复任务返回 undefined。
    */
   vendorOptionsForSession(sessionId: string): Record<string, unknown> | undefined;
-  /** Permission choices exposed by the session's concrete Agent implementation. */
   /**
    * The task's permission menu. A plugin-engine task (agentKind 'acp') offers its engine's own modes: the
    * live session's negotiated modes, then its execution computer's catalog. Only local tasks use
@@ -745,8 +804,7 @@ function routeOfRow(
 ): ImDefaultRoute {
   return {
     agentDeviceId: row.agentDeviceId ?? null,
-    // Channel default routes are built-in; a plugin-engine row ('acp') simply never matches one.
-    agentKind: row.agentKind as AgentKind,
+    agentKind: row.agentKind,
     model: row.model,
     providerId: row.providerId,
     effort: row.effort,
@@ -766,13 +824,18 @@ export interface ImTurnRunnerDeps {
   channelDefaultRoute?: Pick<ImChannelDefaultRouteSync, 'previewSwitchTarget' | 'syncBeforeWiring'>;
   /** 连接交给伙伴后的路由(只对实现了 adapter.companionLane 的渠道生效)。 */
   companion?: ImCompanionRouteDeps;
+  /** 同池是否存在另一个此刻可接手该任务的健康账号（用于过载立即切号重试）。 */
+  canSwitchAccount?: (sessionId: string) => Promise<boolean>;
   /**
    * 与桌面直发同源的发送前故障恢复(`register.prepareUnhealthySessionForSend`)。
    * 健康伙伴主对话与 IM 专线均沿用 Session 原生压缩,不按空闲时长或伙伴阈值换窗。
    * 体检重建时会以 'runtime-refresh' 关掉当前 live handle,新 handle 由
    * `refreshSessionAfterPendingAgentSwitch` 按最新 DB 行重建。
    */
-  prepareUnhealthySession?: (sessionId: string) => Promise<void>;
+  prepareUnhealthySession?: (
+    sessionId: string,
+    retry?: { userClientId: string; onHandoff(full: string, forRetry: string): void },
+  ) => Promise<void>;
 }
 
 export function createTurnRunner(
@@ -880,10 +943,11 @@ export function createTurnRunner(
     userId: string,
     scopeKey?: string,
   ): Promise<RouteTarget | null> {
-    const existing = await resolveExistingRouteTarget(botContextId, userId, scopeKey, {
+    const existing = await resolveExistingRouteOrUnavailable(botContextId, userId, scopeKey, {
       createCompanion: true,
     });
-    if (existing) return existing;
+    // 伙伴解析不出: 不替它建渠道自己的任务。
+    if (existing) return routeTargetOnly(existing);
     return (await createAuthenticatedDefaultRouteTarget(botContextId, userId, scopeKey)).target;
   }
 
@@ -917,10 +981,12 @@ export function createTurnRunner(
   /**
    * 连接已交给伙伴时的落点: 主人私聊 → 伙伴主任务; 群 / 话题 / 陌生人私聊 →
    * 伙伴的 channel 专线。未交出返回 null。伙伴解析不出(资料缺失 / 暂停 / 没有可用
-   * 模型 / 主任务服务未就绪)时也返回 null, 由调用方走原有渠道路由 —— 主人不能
-   * 因为伙伴出问题就收不到任何回复; 每个连接只告警一次。
+   * 模型 / 主任务正在变化)时返回 companion-unavailable, 调用方拒绝这条消息, 不回落
+   * 渠道自己的路由 —— 那会以另一个身份回话、绕过暂停, 消息也进不了伙伴时间线
+   * (cindy-bots-runtime.md §2 IM 专线)。主任务正在变化这类瞬时态先短暂重试。
+   * 每个连接只告警一次。
    *
-   * create=false(停止、提前落库、接管预接线)只找已有任务, 不建行; 伙伴可用但
+   * create=false(停止、提前落库、接管预接线)只找已有任务, 不建行、不重试; 伙伴可用但
    * 还没有这条任务时返回 'absent'(调用方不能回落到渠道自己的旧行 —— 那不是这条
    * 消息会去的地方)。
    */
@@ -929,7 +995,7 @@ export function createTurnRunner(
     userId: string,
     scopeKey: string | undefined,
     create: boolean,
-  ): Promise<RouteTarget | 'absent' | null> {
+  ): Promise<RouteTarget | CompanionRouteUnavailable | 'absent' | null> {
     const companion = deps.companion;
     const botId = companionBotIdFor(botContextId, userId);
     if (!companion || !botId || !adapter.companionLane) return null;
@@ -942,43 +1008,58 @@ export function createTurnRunner(
             routeKey: companionLaneRouteKey(channel, botContextId, lane),
             title: adapter.sessions.defaultTitle(userId),
           };
-    let resolved: Awaited<ReturnType<ImCompanionRouteDeps['resolveSession']>>;
-    try {
-      resolved = await companion.resolveSession({ botId, target, create });
-    } catch (err) {
-      resolved = {
-        ok: false,
-        errorCode: 'RESOLVE_FAILED',
-        message: err instanceof Error ? err.message : String(err),
-      };
-    }
-    if (!resolved) {
-      if (create && adapter.requiresCompanionLane?.(userId)) throw new Error('GROUP_RECIPIENT_UNAVAILABLE');
-      return 'absent';
-    }
-    if (resolved.ok) {
-      const row = await repo.peekSessionById(resolved.sessionId);
-      if (row) {
-        companionFallbackWarned.delete(botContextId);
-        return {
-          row,
-          attached: false,
-          scopeKey,
-          created: resolved.created,
-          botOwned: { botId, lane: target.kind },
+    let failure: { errorCode: string; message: string };
+    for (let attempt = 0; ; attempt += 1) {
+      let resolved: Awaited<ReturnType<ImCompanionRouteDeps['resolveSession']>>;
+      try {
+        resolved = await companion.resolveSession({ botId, target, create });
+      } catch (err) {
+        if (isImAccountScopeClosedError(err)) throw err;
+        resolved = {
+          ok: false,
+          errorCode: 'RESOLVE_FAILED',
+          message: err instanceof Error ? err.message : String(err),
         };
       }
-      resolved = { ok: false, errorCode: 'SESSION_UNAVAILABLE', message: 'companion session row missing' };
+      if (!resolved) {
+        if (create && adapter.requiresCompanionLane?.(userId)) throw new Error('GROUP_RECIPIENT_UNAVAILABLE');
+        return 'absent';
+      }
+      if (resolved.ok) {
+        const row = await repo.peekSessionById(resolved.sessionId);
+        if (row) {
+          companionFallbackWarned.delete(botContextId);
+          return {
+            row,
+            attached: false,
+            scopeKey,
+            created: resolved.created,
+            botOwned: { botId, lane: target.kind },
+          };
+        }
+        resolved = { ok: false, errorCode: 'SESSION_UNAVAILABLE', message: 'companion session row missing' };
+      }
+      failure = resolved;
+      // 明确指派给某位伙伴的群(#12116)保持 main 的行为: 收件人不可用就报错, 不重试、不走下面的提示。
+      if (adapter.requiresCompanionLane?.(userId)) throw new Error('GROUP_RECIPIENT_UNAVAILABLE');
+      const delay = COMPANION_TRANSIENT_RETRY_DELAYS_MS[attempt];
+      if (!create || delay === undefined || !COMPANION_TRANSIENT_ERROR_CODES.has(failure.errorCode)) break;
+      await new Promise<void>((resolve) => setTimeout(resolve, delay));
     }
-    if (adapter.requiresCompanionLane?.(userId)) throw new Error('GROUP_RECIPIENT_UNAVAILABLE');
     if (!companionFallbackWarned.has(botContextId)) {
       companionFallbackWarned.add(botContextId);
       log.warn(
         `connection bound to companion bot=...${botId.slice(-8)} but its ${target.kind} task is unavailable ` +
-          `(${resolved.errorCode}: ${resolved.message}) — falling back to the channel's own routing`,
+          `(${failure.errorCode}: ${failure.message}) — rejecting instead of using the channel's own routing`,
       );
     }
-    return null;
+    return { kind: 'companion-unavailable', errorCode: failure.errorCode, message: failure.message };
+  }
+
+  function routeTargetOnly<T extends RouteTarget>(
+    target: T | CompanionRouteUnavailable | 'absent' | null,
+  ): T | null {
+    return target && target !== 'absent' && !('kind' in target) ? target : null;
   }
 
   async function peekCompanionRouteTarget(
@@ -986,36 +1067,57 @@ export function createTurnRunner(
     userId: string,
   ): Promise<ImSessionRow | null> {
     const target = await resolveCompanionRouteTarget(botContextId, userId, undefined, false);
-    return target && target !== 'absent' ? target.row : null;
+    return routeTargetOnly(target)?.row ?? null;
   }
 
   async function rotateCompanionLane(
     botContextId: string,
     userId: string,
-  ): Promise<'unbound' | 'owner-dm' | 'rotated'> {
+  ): Promise<'unbound' | 'owner-dm' | 'rotated' | { unavailable: string }> {
     const companion = deps.companion;
     const botId = companionBotIdFor(botContextId, userId);
     if (!companion || !botId || !adapter.companionLane) return 'unbound';
     const lane = adapter.companionLane(userId);
+    const settle = (
+      target: Awaited<ReturnType<typeof resolveCompanionRouteTarget>>,
+      ok: 'owner-dm' | 'rotated',
+    ): 'unbound' | 'owner-dm' | 'rotated' | { unavailable: string } => {
+      if (target && target !== 'absent' && 'kind' in target) {
+        // 伙伴解析不出: 不退回渠道自己的 `/new`(那会新建另一个身份的任务), 与消息路由同口径拒绝。
+        return { unavailable: companionUnavailableText(target) };
+      }
+      return routeTargetOnly(target) ? ok : 'unbound';
+    };
     if (lane.kind === 'owner-dm') {
-      // 伙伴主任务是长期时间线, `/new` 不换它(cindy-bots-runtime §3.1)。只有伙伴确实
-      // 接得住时才这样回; 解析不出时退回原有 `/new`, 与消息路由的回落一致。
-      const current = await resolveCompanionRouteTarget(botContextId, userId, undefined, true);
-      return current && current !== 'absent' ? 'owner-dm' : 'unbound';
+      // 伙伴主任务是长期时间线, `/new` 不换它(cindy-bots-runtime §3.1)。
+      return settle(await resolveCompanionRouteTarget(botContextId, userId, undefined, true), 'owner-dm');
     }
     const routeKey = companionLaneRouteKey(channel, botContextId, lane);
     const archived = channel === 'imessage' ? await companion.archiveLane(routeKey, botId) : await companion.archiveLane(routeKey);
     for (const sessionId of archived) await disposeOneSession(sessionId);
-    const fresh = await resolveCompanionRouteTarget(botContextId, userId, undefined, true);
-    return fresh && fresh !== 'absent' ? 'rotated' : 'unbound';
+    return settle(await resolveCompanionRouteTarget(botContextId, userId, undefined, true), 'rotated');
   }
 
+  function companionUnavailableText(unavailable: CompanionRouteUnavailable): string {
+    const reason = companionUnavailableReason(unavailable);
+    return ui.agent.companionUnavailable?.(reason) ?? ui.agent.runtimeError(reason);
+  }
+
+  /** 只读路径(停止、提前落库、接管预接线): 伙伴解析不出时与「没有任务」同样处理。 */
   async function resolveExistingRouteTarget(
     botContextId: string,
     userId: string,
     scopeKey?: string,
-    opts: { createCompanion?: boolean } = {},
   ): Promise<RouteTarget | null> {
+    return routeTargetOnly(await resolveExistingRouteOrUnavailable(botContextId, userId, scopeKey));
+  }
+
+  async function resolveExistingRouteOrUnavailable(
+    botContextId: string,
+    userId: string,
+    scopeKey?: string,
+    opts: { createCompanion?: boolean } = {},
+  ): Promise<RouteTarget | CompanionRouteUnavailable | null> {
     // 优先查 binding 是否命中 — bindingStore.get 走进程内 Map, 同步且 O(1)。
     // threadScoped 渠道的 binding 按 (identity, scopeKey) 维度存(多重接管)。
     const targetSessionId = bindingStore.get({
@@ -1067,6 +1169,7 @@ export function createTurnRunner(
       });
     }
     // 连接已交给伙伴: 落在伙伴的任务上(`/ctr` 接管与通知回复的优先级在它之上)。
+    // 伙伴解析不出时不落渠道自己的行: 只读路径得到 null, 派发路径得到拒绝原因。
     const companionTarget = await resolveCompanionRouteTarget(
       botContextId,
       userId,
@@ -1106,9 +1209,25 @@ export function createTurnRunner(
 
     // 路由分流 — 先查 binding: 命中走 desktop session (接管模式 C),
     // 未命中走渠道默认 session (B' 行为)。这是 /ctr 接管能生效的关键入口。
-    let target = args.notificationSessionId
+    const routed = args.notificationSessionId
       ? await resolveNotificationTarget(args.notificationSessionId, scopeKey)
-      : await resolveExistingRouteTarget(botContextId, userId, scopeKey, { createCompanion: true });
+      : await resolveExistingRouteOrUnavailable(botContextId, userId, scopeKey, { createCompanion: true });
+    if (routed && 'kind' in routed) {
+      // 伙伴连接上伙伴解析不出: 与已有专线的发送前守卫同一口径拒绝, 不建渠道自己的任务。
+      const notice = companionUnavailableText(routed);
+      if (args.queueMode === 'internal') {
+        try {
+          const consumed = (await args.onEarlyReject?.('companion_unavailable', notice)) ?? false;
+          if (!consumed) await sendTextClaimingOpener(userId, notice, scopeKey);
+        } catch (err) {
+          log.warn(`companion unavailable notice failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      // 有界等待: 回执表情请求卡住时不能拖住同一会话后面的消息。
+      await waitForAckCleanupBounded(discardHandedOverAck(userMessageId, args.ackReactionIdPromise));
+      return { kind: 'rejected', reason: 'companion_unavailable', notice };
+    }
+    let target: RouteTarget | null = routed;
     if (!target) {
       const created = await createAuthenticatedDefaultRouteTarget(botContextId, userId, scopeKey);
       if (!created.target) {
@@ -1337,6 +1456,13 @@ export function createTurnRunner(
       mediaAbsPaths: [],
       allowedFileRoots,
       done: false,
+      hadOutput: false,
+      hadInTurnOverloadRetry: false,
+      overloadRetryCount: 0,
+      overloadRetryPending: false,
+      overloadRetryTimer: null,
+      overloadRetryGeneration: 0,
+      overloadRetryItem: null,
       activityTicker: null,
       outputCardMessageId: args.outputCardMessageId ?? null,
       outputCardPrefix: args.outputCardPrefix ?? '',
@@ -1520,6 +1646,7 @@ export function createTurnRunner(
     if (args.protectedContent !== true) await adoptStagedInboundFiles(row.id, attachments);
     const autoReviewReferences = imAutoReviewReferences({
       attachments,
+      contextAttachments: args.contextAttachments,
       replyContext: args.replyContext,
     });
     const item: QueuedSend = {
@@ -1544,8 +1671,8 @@ export function createTurnRunner(
       queueMode: args.queueMode,
       ...(args.beforeProviderStart ? { beforeProviderStart: args.beforeProviderStart } : {}),
       ...(args.onRouteResolved ? { onRouteResolved: args.onRouteResolved } : {}),
-      // Binding presence is insufficient: unavailable companions fall back to
-      // channel-owned sessions, which must retain the mandatory policy.
+      // Binding presence is insufficient: only an actually resolved companion
+      // task may drop the mandatory policy; every other route retains it.
       ...(args.turnPermissionPolicy && !(args.inheritCompanionOwnerPermissions === true
         && args.requesterIsOwner === true && target.botOwned)
         ? { turnPermissionPolicy: args.turnPermissionPolicy } : {}),
@@ -1749,6 +1876,7 @@ export function createTurnRunner(
     if (item.notified && adapter.queuedEmoji) {
       replaceAckReaction(item.turn, adapter.processingEmoji);
     }
+    item.turn.overloadRetryItem = item;
     state.queue.push(item.turn);
     log.info(
       `enqueued turn for session=${rowId.slice(-8)} queueDepth=${state.queue.length} pendingSends=${state.sendQueue.length}`,
@@ -2163,13 +2291,11 @@ export function createTurnRunner(
           // 别的 session(/new 重置等), 那份预落库不属于本轮, 照常自己落一条。
           const persisted = await persistAcceptedInput(item);
           if (persisted) {
+            getModelGroupStartBridge()?.dispatched(rowId, persisted.clientId);
             item.prePersistedUserMessage = { sessionId: rowId, clientId: persisted.clientId };
             if (item.channelToolScope) item.channelToolScope.inputClientId = persisted.clientId;
-            // Turn change capture relies on built-in engine hooks (same rule as desktop sends).
-            if (hasBuiltinAgentKind(state.makerSession)) {
-              await beginTurnChangeSetAtDispatch(state.makerSession, persisted.clientId);
-              turnChangeSetStarted = true;
-            }
+            await beginTurnChangeSetAtDispatch(state.makerSession, persisted.clientId);
+            turnChangeSetStarted = true;
           }
         },
       });
@@ -2319,6 +2445,7 @@ export function createTurnRunner(
   }
 
   function effectiveRuntimeAuthRow(row: ImSessionRow): ImSessionRow {
+    if (row.agentKind === 'acp') return row;
     const profile = getSessionRuntimeStartOverride(row.id, row.agentKind, row.agentDeviceId);
     return { ...row, model: profile.model ?? row.model,
       providerId: profile.providerId === undefined ? row.providerId : profile.providerId };
@@ -2382,7 +2509,7 @@ export function createTurnRunner(
         agentKind,
         workingDir: row.workingDir,
         model: row.model,
-        effort: row.effort,
+        ...(row.effort ? { effort: row.effort } : {}),
         permissionMode: row.permissionMode,
         fastMode: row.fastMode,
         // 保留 DB 的 null 语义：Pi 用 null 表示清除显式 provider，不能退化为 undefined。
@@ -2481,7 +2608,7 @@ export function createTurnRunner(
   }
 
   /** Rebind observation without discarding accepted or queued IM messages. */
-  function rebindSessionOutput(state: SessionState, current: BuiltinMakerSession, userId: string): void {
+  function rebindSessionOutput(state: SessionState, current: MakerSession, userId: string): void {
     for (const unsubscribe of state.unsubscribers) {
       try {
         unsubscribe();
@@ -2643,7 +2770,7 @@ export function createTurnRunner(
 
   async function replyMissingAuth(
     userId: string,
-    auth: ImAuthRouteStatus & { agentKind: AgentKind; model: string },
+    auth: ImAuthRouteStatus & { agentKind: EngineKind; model: string },
     scopeKey?: string,
     attached = false,
   ): Promise<void> {
@@ -2728,12 +2855,16 @@ export function createTurnRunner(
     // routingTransform)读它决定走哪个供应商上游/钥匙。进程重启后 IM turn 首次起会话时,
     // 内存 store 是空的;不 hydrate 的话 /model 选过的供应商会丢、回落默认路由。对齐
     // renderer 开会话(register.ts)与 scheduler(runner.ts)的 hydrate 时机。
-    const startOverride = getSessionRuntimeStartOverride(row.id, row.agentKind, row.agentDeviceId);
-    hydrateSessionProvider(row.id, startOverride.providerId === undefined ? row.providerId : startOverride.providerId);
-    // bridge 会话态(effort / fast)同点 hydrate —— chatgpt/ / xai/ 模型经 IM 触发 turn 时,
-    // compat-proxy 路由决策从这两个 store 读出闭包进订阅 handler(与 register.ts bootstrapSession 对齐)。
-    setSessionEffort(row.id, startOverride.model ? startOverride.effort : row.effort);
-    setSessionFastMode(row.id, startOverride.fastMode ?? row.fastMode ?? false);
+    const startOverride = row.agentKind === 'acp'
+      ? {}
+      : getSessionRuntimeStartOverride(row.id, row.agentKind, row.agentDeviceId);
+    if (row.agentKind !== 'acp') {
+      hydrateSessionProvider(row.id, startOverride.providerId === undefined ? row.providerId : startOverride.providerId);
+      // bridge 会话态(effort / fast)同点 hydrate —— chatgpt/ / xai/ 模型经 IM 触发 turn 时,
+      // compat-proxy 路由决策从这两个 store 读出闭包进订阅 handler(与 register.ts bootstrapSession 对齐)。
+      setSessionEffort(row.id, startOverride.model ? startOverride.effort : (row.effort || undefined));
+      setSessionFastMode(row.id, startOverride.fastMode ?? row.fastMode ?? false);
+    }
     // 接管路径: 必须传 resumeSessionId 让 Claude SDK 用 desktop 留下的 sdkSessionId
     // resume, 否则 maker.activeSessions 没该 row.id 时会 spawn 全新空会话——oneshot
     // "总结当前状态" 就变成总结空会话, agent 输出短促/无内容; 用户看到渠道卡片
@@ -2744,7 +2875,7 @@ export function createTurnRunner(
       agentKind: row.agentKind,
       workingDir: row.workingDir,
       model: row.model,
-      effort: row.effort,
+      ...(row.effort ? { effort: row.effort } : {}),
       permissionMode: row.permissionMode,
       fastMode: row.fastMode,
       // 保留 DB 的 null 语义：Pi 用 null 表示清除显式 provider，不能退化为 undefined。
@@ -3265,13 +3396,29 @@ export function createTurnRunner(
         }
         return;
       }
+      if (turn.overloadRetryPending || turn.overloadRetryTimer !== null) {
+        // 失败轮次已进入外层过载重试判定/退避：忽略该轮的尾帧（例如 Codex
+        // turn/completed(failed) 在终态 error 之后补发的同代次 done），防止误把半截回答
+        // 按成功收口并取消重试。
+        if (event.type === 'session_id') return persistSdkSessionId(localSessionId, event.data);
+        return;
+      }
       switch (event.type) {
         case 'text':
           return handleTextEvent(turn, event);
         // Keep reasoning private on Feishu/Discord. Slack hook-control has an
         // explicit live-work surface and opts into the compact thinking row.
-        case 'thinking':
+        case 'thinking': {
+          const data = event.data as { text?: unknown; stage?: unknown } | null;
+          if (
+            data &&
+            (data.stage === 'redacted' ||
+              (typeof data.text === 'string' && data.text.trim().length > 0))
+          ) {
+            turn.hadOutput = true;
+          }
           return;
+        }
         case 'tool_use':
           // 过程展示: 折叠进卡片顶部的滚动时间线(turnActivity.ts), 让用户在
           // 长 agentic turn 里看到"正在干什么", 而不是盯占位符干等结果。
@@ -3297,6 +3444,18 @@ export function createTurnRunner(
           // 渠道那条消息本来一帧都收不到。
           if (!isTerminalAgentErrorEvent(event)) {
             return handleRetryNoticeEvent(turn, event);
+          }
+          if (
+            state.queue[0] === turn &&
+            !turn.done &&
+            !turn.stopRequested &&
+            !turn.overloadRetryPending &&
+            !turn.overloadRetryTimer &&
+            turn.overloadRetryItem &&
+            isChannelOverloadRetryable(event.data)
+          ) {
+            void tryScheduleOverloadRetry(state, userId, turn, event.data);
+            return;
           }
           return handleTurnErrorAsync(state, userId, event.data);
         case 'session_id':
@@ -3391,6 +3550,7 @@ export function createTurnRunner(
    * materializeTurnLocalImages 会按真实路径去重并清理正文引用，渠道最终只发一份。
    */
   function handleToolResultFullEvent(turn: TurnState, event: AgentEvent): void {
+    turn.hadOutput = true;
     if (turn.allowedFileRoots.length === 0) return;
     const extraAbsPaths = collectToolResultImages(turn.mediaAbsPaths, event);
     if (extraAbsPaths.length === 0) return;
@@ -3460,6 +3620,7 @@ export function createTurnRunner(
   /** tool_use → 过程区时间线推进 + 卡片刷新(渠道 handle 自带节流兜底)。 */
   function handleToolUseEvent(turn: TurnState, event: AgentEvent): void {
     if (!turn.presenter.applyToolUse(event)) return;
+    turn.hadOutput = true;
     ensureActivityTicker(turn);
     void ensureStreamingHandle(turn).then((h) => h?.replace(composeStreamingView(turn)));
   }
@@ -3477,6 +3638,7 @@ export function createTurnRunner(
    * 同一张卡上, 重试耗尽时 handleTurnErrorAsync 会把它 finalize 成失败说明。
    */
   function handleRetryNoticeEvent(turn: TurnState, event: AgentEvent): void {
+    if (overloadRetryNotice(event.data) !== null) turn.hadInTurnOverloadRetry = true;
     if (!turn.presenter.applyRetryNotice(event)) return;
     ensureActivityTicker(turn);
     void ensureStreamingHandle(turn).then((h) => h?.replace(composeStreamingView(turn)));
@@ -4134,6 +4296,8 @@ export function createTurnRunner(
     // deltas, 这时卡片会一直停在 "灵感正在路上..." placeholder 直到 done; done 之间
     // 几秒延迟里用户看着像 stuck。replace 一次保证用户即时看到回复内容。
     if (!turn.presenter.applyText(event)) return;
+    const textData = event.data as { text?: unknown } | null;
+    if (typeof textData?.text === 'string' && textData.text.trim().length > 0) turn.hadOutput = true;
     void ensureStreamingHandle(turn).then((h) => h?.replace(composeStreamingView(turn)));
   }
 
@@ -4246,6 +4410,308 @@ export function createTurnRunner(
     turn.silentStopSettleUnsub = unsub;
   }
 
+  /** 取消本 turn 尚未开火的外层过载重试定时器并推进代次，使在途异步判定失效（幂等）。 */
+  function clearOverloadRetryTimer(turn: TurnState): void {
+    turn.overloadRetryGeneration += 1;
+    turn.overloadRetryPending = false;
+    if (turn.overloadRetryTimer) {
+      clearTimeout(turn.overloadRetryTimer);
+      turn.overloadRetryTimer = null;
+    }
+  }
+
+  /**
+   * 个人 IM 上游过载（`upstream-overload` / 529 / `at capacity`）外层自动重试与同池换号。
+   *
+   * 若同池存在健康兄弟账号，通过 `prepareUnhealthySession` 切换账号并带交接上下文续跑；
+   * 已有产出的轮次发送 `CONTINUE_AFTER_ERROR_PROMPT`（不重放原消息，防重复副作用），
+   * 零产出轮次重放原消息（不重复落可见用户气泡）。
+   */
+  async function tryScheduleOverloadRetry(
+    state: SessionState,
+    userId: string,
+    turn: TurnState,
+    errData: unknown,
+  ): Promise<void> {
+    const rowId = state.makerSession.id;
+    turn.overloadRetryPending = true;
+    turn.overloadRetryGeneration += 1;
+    const generation = turn.overloadRetryGeneration;
+    const canSwitchAccount = deps.canSwitchAccount
+      ? await deps.canSwitchAccount(rowId).catch(() => false)
+      : false;
+    if (
+      sessionStates.get(rowId) !== state ||
+      state.queue[0] !== turn ||
+      turn.done ||
+      turn.stopRequested ||
+      turn.overloadRetryGeneration !== generation
+    ) {
+      return;
+    }
+    if (
+      !shouldRetryChannelOverload({
+        errorData: errData,
+        attempt: turn.overloadRetryCount,
+        hasOutput: turn.hadOutput,
+        hadInTurnOverloadRetry: turn.hadInTurnOverloadRetry,
+        canSwitchAccount,
+      })
+    ) {
+      turn.overloadRetryPending = false;
+      await handleTurnErrorAsync(state, userId, errData);
+      return;
+    }
+    // 释放上一 attempt 的交互路由与工具作用域（保留 headlessSetupClosed=false 以便重试轮重新登记）。
+    releaseTurnInteractionRoute(turn, 'overload_retry');
+    turn.releaseHeadlessSetupTurn?.();
+    turn.releaseHeadlessSetupTurn = null;
+    turn.overloadRetryCount += 1;
+    const delayMs = channelOverloadRetryDelayMs(turn.overloadRetryCount, canSwitchAccount);
+    log.warn(
+      `[${channel}/turn] hit upstream-overload; scheduling retry (session=...${rowId.slice(-8)}, attempt=${turn.overloadRetryCount}/${CHANNEL_OVERLOAD_RETRY_MAX_ATTEMPTS}, hasOutput=${turn.hadOutput}, canSwitchAccount=${canSwitchAccount}, delayMs=${delayMs})`,
+    );
+    if (setActivityNotice(turn.presenter.activity, formatChannelOverloadRetryNotice(turn.overloadRetryCount))) {
+      ensureActivityTicker(turn);
+      void ensureStreamingHandle(turn).then((h) => h?.replace(composeStreamingView(turn)));
+    }
+    turn.overloadRetryTimer = setTimeout(() => {
+      turn.overloadRetryTimer = null;
+      void executeOverloadRetryAsync(state, userId, turn, errData, generation);
+    }, delayMs);
+    turn.overloadRetryTimer.unref?.();
+  }
+
+  async function executeOverloadRetryAsync(
+    state: SessionState,
+    userId: string,
+    turn: TurnState,
+    errData: unknown,
+    generation: number,
+  ): Promise<void> {
+    const rowId = state.makerSession.id;
+    const isStillCurrent = (): boolean =>
+      sessionStates.get(rowId) === state &&
+      state.queue[0] === turn &&
+      !turn.done &&
+      !turn.stopRequested &&
+      turn.overloadRetryGeneration === generation;
+    if (!isStillCurrent()) return;
+    const item = turn.overloadRetryItem;
+    if (!item) {
+      turn.overloadRetryPending = false;
+      await handleTurnErrorAsync(state, userId, errData);
+      return;
+    }
+    let releaseAgentSwitchLock = (): void => {};
+    let retryTurnChangeSetStarted = false;
+    try {
+      let retryHandoff: string | undefined;
+      const retryOption =
+        !turn.hadOutput && item.prePersistedUserMessage?.clientId
+          ? {
+              userClientId: item.prePersistedUserMessage.clientId,
+              onHandoff: (_full: string, forRetry: string) => {
+                retryHandoff = forRetry;
+              },
+            }
+          : undefined;
+      if (deps.prepareUnhealthySession) {
+        await deps.prepareUnhealthySession(rowId, retryOption);
+        if (!isStillCurrent()) return;
+      }
+      if (deps.acquirePendingAgentSwitch) {
+        const suppression = { expectedSession: state.makerSession };
+        expectedSessionCloses.set(rowId, suppression);
+        try {
+          releaseAgentSwitchLock = await deps.acquirePendingAgentSwitch(rowId, {
+            channelOwned: false,
+          });
+        } finally {
+          expectedSessionCloses.delete(rowId);
+        }
+        if (!isStillCurrent()) return;
+        await refreshSessionAfterPendingAgentSwitch(state, rowId, userId);
+      } else {
+        await refreshSessionAfterPendingAgentSwitch(state, rowId, userId);
+      }
+      if (!isStillCurrent()) return;
+      const retryPendingHandoff = await agentHandoffPending.peek(rowId);
+      const effectiveHandoff = retryHandoff ?? retryPendingHandoff;
+      const baseMsg = turn.hadOutput
+        ? ({ type: 'user', content: CONTINUE_AFTER_ERROR_PROMPT } as typeof item.userMessage)
+        : item.userMessage;
+      const retryOutgoing = effectiveHandoff
+        ? prependHandoffToUserMessage(
+            baseMsg as Parameters<typeof prependHandoffToUserMessage>[0],
+            effectiveHandoff,
+          )
+        : baseMsg;
+      const effectiveTurnPolicy = await resolveEffectiveTurnPolicy(item);
+      if (!isStillCurrent()) return;
+      // 即将真正发出新一轮 attempt：清除 pending 标志，使新轮若再次过载仍可继续进入退避判断。
+      turn.overloadRetryPending = false;
+      const sendResult = await state.makerSession.send(retryOutgoing as typeof item.userMessage, {
+        planMode: false,
+        origin: channel === 'telegram' && ownsChannelOutput(state) && !turn.notificationReply
+          ? telegramOriginForTurn(state, userId, turn.scopeKey, item.requesterIsOwner === true, effectiveTurnPolicy)
+          : { kind: 'user', surface: 'im' },
+        [MAIN_OWNED_SEND_CONTEXT]: {
+          origin: { kind: 'im', channel, taskId: turn.userMessageId ?? undefined },
+          rawChannelText: turn.hadOutput ? CONTINUE_AFTER_ERROR_PROMPT : item.text,
+          ...(item.autoReviewReferences ? { autoReviewReferences: item.autoReviewReferences } : {}),
+        },
+        ...(effectiveTurnPolicy ? { turnPermissionPolicy: effectiveTurnPolicy } : {}),
+        afterTurnReserved: async () => {
+          if (!effectiveTurnPolicy) return;
+          await beginTemporaryImPermission(
+            state.makerSession,
+            (cleanup) => {
+              turn.hostTurnLeaseRelease = cleanup;
+            },
+            (err) => {
+              log.warn(`temporary IM permission cleanup failed: ${err instanceof Error ? err.message : String(err)}`);
+            },
+          );
+        },
+        beforeProviderStart: async () => {
+          const noticeSession = state.makerSession;
+          const noticeScope = turn.scopeKey;
+          bindRuntimeRecoveryNotice(noticeSession, async (text) => {
+            if (sessionStates.get(rowId)?.makerSession !== noticeSession) return false;
+            return im.sendText(userId, text, { threadTs: noticeScope });
+          }, log);
+          bindInputHandoffChannelNotice(noticeSession, async (text) => {
+            if (sessionStates.get(rowId)?.makerSession !== noticeSession) return false;
+            return im.sendText(userId, text, { threadTs: noticeScope });
+          });
+          if (effectiveTurnPolicy) {
+            turn.hostTurnLeaseRelease ??= state.makerSession.acquireTurnLease();
+          }
+          if (item.groupHistoryAccess) {
+            turn.groupHistoryAccessRelease = beginGroupHistoryAccess({
+              sessionId: rowId,
+              sessionInstanceId: state.makerSession.instanceId,
+              scope: item.groupHistoryAccess,
+            });
+          }
+          if (item.channelToolScope?.channel === 'imessage' && adapter.steerWhileBusy) {
+            turn.imInputGeneration = state.makerSession.getTurnGeneration();
+          }
+          if (item.channelToolScope) {
+            delete item.channelToolScope.inputClientId;
+            turn.channelToolScopeRelease = beginChannelToolScope({
+              sessionId: rowId,
+              sessionInstanceId: state.makerSession.instanceId,
+              scope: item.channelToolScope,
+            });
+          }
+          turn.interactionRouteLease =
+            effectiveTurnPolicy?.confirmationSurface === 'desktop'
+              ? beginInteractionRoute(state.makerSession, {
+                  route: {
+                    sessionId: rowId,
+                    turnId: turn.turnId,
+                    origin: effectiveTurnPolicy.origin,
+                    interactionSurface: 'desktop',
+                    requesterAuthority: item.requesterIsOwner === true ? 'owner' : 'unknown',
+                    ...(effectiveTurnPolicy.confirmationTimeoutMs
+                      ? { timeoutMs: effectiveTurnPolicy.confirmationTimeoutMs }
+                      : {}),
+                    ...(effectiveTurnPolicy.onInteractionStateChange
+                      ? { onStateChange: effectiveTurnPolicy.onInteractionStateChange }
+                      : {}),
+                  },
+                })
+              : beginInteractionRoute(state.makerSession, {
+                  route: {
+                    sessionId: rowId,
+                    turnId: turn.turnId,
+                    origin: effectiveTurnPolicy?.origin ?? { kind: 'im', channel },
+                    interactionSurface: 'channel-card',
+                    sourceDescription: turn.sourceDescription,
+                    requesterAuthority: item.requesterIsOwner === true ? 'owner' : 'unknown',
+                    ...(effectiveTurnPolicy?.confirmationTimeoutMs
+                      ? { timeoutMs: effectiveTurnPolicy.confirmationTimeoutMs }
+                      : {}),
+                    ...(effectiveTurnPolicy?.onInteractionStateChange
+                      ? { onStateChange: effectiveTurnPolicy.onInteractionStateChange }
+                      : {}),
+                  },
+                  handle: handleInteractionFor(
+                    rowId,
+                    userId,
+                    turn.scopeKey,
+                    effectiveTurnPolicy?.confirmationTimeoutMs,
+                  ),
+                  permissionGuard: (request) => {
+                    const guard = checkChannelDestructiveToolCall(request.toolName, request.input, request.metadata);
+                    return guard.destructive
+                      ? { kind: 'permission', behavior: 'deny', reason: `[destructiveGuard] ${guard.reason}` }
+                      : null;
+                  },
+                  onCancel: (requestId, decision) =>
+                    adapter.cancelTextInteraction?.(userId, requestId, decision) === true ||
+                    dropInteractionCard(
+                      requestId,
+                      'reason' in decision
+                        ? decision.reason ?? 'interaction_route_released'
+                        : 'interaction_route_released',
+                    ),
+                });
+        },
+        onAccepted: async () => {
+          if (!markAttachedImTurnHeadlessDispatched(turn, rowId, turn.reusesExistingSession === true)) return;
+          const replyTargetClientId = item.prePersistedUserMessage?.clientId;
+          if (turn.hadOutput) {
+            const persisted = await persistUserMessage({
+              sessionId: rowId,
+              text: CONTINUE_AFTER_ERROR_PROMPT,
+              autoResume: true,
+            });
+            const inputClientId = replyTargetClientId ?? persisted?.clientId;
+            if (item.channelToolScope && inputClientId) {
+              item.channelToolScope.inputClientId = inputClientId;
+            }
+            const anchorClientId = persisted?.clientId ?? replyTargetClientId;
+            if (anchorClientId) {
+              await beginTurnChangeSetAtDispatch(state.makerSession, anchorClientId);
+              retryTurnChangeSetStarted = true;
+            }
+          } else if (replyTargetClientId) {
+            if (item.channelToolScope) item.channelToolScope.inputClientId = replyTargetClientId;
+            await beginTurnChangeSetAtDispatch(state.makerSession, replyTargetClientId);
+            retryTurnChangeSetStarted = true;
+          }
+        },
+      });
+      if (retryPendingHandoff && sendResult.accepted) {
+        agentHandoffPending.consume(rowId);
+      }
+      const outcome = toDesktopSessionDispatchOutcome(sendResult, {
+        source: `${channel}-runner`,
+        context: buildSendContext(rowId),
+      });
+      if (!outcome.dispatched) {
+        if (retryTurnChangeSetStarted) clearPendingTurnChangeSets(rowId);
+        if (sessionStates.get(rowId) === state && state.queue[0] === turn && !turn.done && !turn.stopRequested) {
+          await handleTurnErrorAsync(state, userId, errData);
+        }
+      }
+    } catch (err) {
+      if (retryTurnChangeSetStarted) clearPendingTurnChangeSets(rowId);
+      log.warn(
+        `[${channel}/turn] overload retry dispatch failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      if (sessionStates.get(rowId) === state && state.queue[0] === turn && !turn.done && !turn.stopRequested) {
+        turn.overloadRetryPending = false;
+        await handleTurnErrorAsync(state, userId, errData);
+      }
+    } finally {
+      releaseAgentSwitchLock();
+    }
+  }
+
   /** 真 done / error 收口前清掉挂着的 silent-stop settle 订阅(幂等)。 */
   function clearSilentStopSettleWait(turn: Pick<TurnState, 'silentStopSettleUnsub'>): void {
     if (turn.silentStopSettleUnsub) {
@@ -4258,6 +4724,7 @@ export function createTurnRunner(
     const turn = state.queue.shift();
     if (!turn) return;
     userId = turn.userId;
+    clearOverloadRetryTimer(turn);
     clearSilentStopSettleWait(turn);
     turn.done = true;
     clearActivityTicker(turn);
@@ -4392,6 +4859,7 @@ export function createTurnRunner(
     // 或内部英文 SDK 串——从本地化文案回归英文实现细节(review #844 codex P1)。
     // hook runner 与调度转播共用同一个 helper，三条渠道链路口径一致；上游原文留在
     // 本地日志。
+    if (turn) clearOverloadRetryTimer(turn);
     if (turn) clearSilentStopSettleWait(turn);
     if (turn) clearActivityTicker(turn);
     if (turn) {
@@ -4816,6 +5284,7 @@ export function createTurnRunner(
     state.replyMediaRelease = undefined;
     for (const turn of state.queue) {
       releaseAttachedImTurnHeadless(turn);
+      clearOverloadRetryTimer(turn);
       clearActivityTicker(turn);
       clearSilentStopSettleWait(turn);
     }
@@ -4964,6 +5433,46 @@ export function createTurnRunner(
     return { sessionId, clientId: persisted.clientId };
   }
 
+  /** !stop 命中正在等待外层过载重试的 turn 时，底层 SDK 已无在途轮次，直接收口该 turn。 */
+  async function settleAbortedOverloadRetryTurn(
+    state: SessionState,
+    turn: TurnState,
+  ): Promise<void> {
+    clearOverloadRetryTimer(turn);
+    clearSilentStopSettleWait(turn);
+    clearActivityTicker(turn);
+    clearRunningIndicators(turn.presenter.activity);
+    releaseTurnInteractionRoute(turn, 'user_stop');
+    releaseAttachedImTurnHeadless(turn);
+    const idx = state.queue.indexOf(turn);
+    if (idx >= 0) state.queue.splice(idx, 1);
+    if (!turn.streamingHandle && turn.streamingHandlePromise) {
+      try {
+        await turn.streamingHandlePromise;
+      } catch {
+        // ignore missing surface
+      }
+    }
+    if (turn.streamingHandle) {
+      const view = composeStreamingView(turn, true);
+      await finalizeTurnStream(turn, view);
+    } else if (output.kind === 'chunked-text' && turn.chunkedReplyBegun) {
+      try {
+        await output.commitFinal({
+          userId: turn.userId,
+          text: ui.agent.stopDone(0),
+          terminal: 'aborted',
+          threadTs: turn.scopeKey,
+        });
+      } catch {
+        // ignore best-effort abort finalize
+      }
+    }
+    await completeTurnCallbackAfterAck(turn);
+    settleTurnTerminal(turn);
+    finishDeferredDetachIfIdle(state);
+  }
+
   async function stopActiveTurn(args: {
     notificationSessionId?: string;
     botContextId: string;
@@ -4990,8 +5499,11 @@ export function createTurnRunner(
       if (!active || !matches(active)) return { stopped: removed.length > 0, droppedQueued: removed.length };
       active.stopRequested = true;
       active.terminalKind = 'aborted';
+      const waitingOverloadRetry = active.overloadRetryPending || active.overloadRetryTimer !== null;
+      clearOverloadRetryTimer(active);
       // 与桌面 Stop 同一套清理(撤续跑 / 取消恢复 / 暂停 Goal / 停输入队列并中止当前一轮)。
       await stopSessionTurnExplicitly(state.makerSession.id);
+      if (waitingOverloadRetry) await settleAbortedOverloadRetryTurn(state, active);
       return { stopped: true, droppedQueued: removed.length };
     }
     const running =
@@ -5001,15 +5513,22 @@ export function createTurnRunner(
     // 先清排队再 abort — abort 触发的 done/error 会走 maybeDispatchNextQueued,
     // 队列不清空的话下一条排队消息会在中止后立刻自动派发。
     clearPendingSends(state);
-    if (state.queue[0]) {
-      state.queue[0].stopRequested = true;
-      state.queue[0].terminalKind = 'aborted';
+    const activeTurn = state.queue[0];
+    let waitingOverloadRetry = false;
+    if (activeTurn) {
+      activeTurn.stopRequested = true;
+      activeTurn.terminalKind = 'aborted';
+      waitingOverloadRetry = activeTurn.overloadRetryPending || activeTurn.overloadRetryTimer !== null;
+      clearOverloadRetryTimer(activeTurn);
     }
     // 与桌面 Stop 同一套清理(docs/dev-rules/im-turn-flow.md 不变量 9): 撤 silent-stop /
     // 中断续跑守卫(turn 若正挂在 silentStop 的决策窗里, abort 对早已收尾的 SDK turn 是
     // no-op, 不重置的话守卫照样自动续跑, 用户喊停后 agent 原地复活)、取消上下文溢出恢复、
     // 暂停 Goal、停输入队列并中止当前一轮(唯一的一次 abort)。
     await stopSessionTurnExplicitly(state.makerSession.id);
+    if (activeTurn && waitingOverloadRetry) {
+      await settleAbortedOverloadRetryTurn(state, activeTurn);
+    }
     log.info(
       `!stop aborted turn for session=...${state.makerSession.id.slice(-8)} droppedQueued=${droppedQueued}`,
     );

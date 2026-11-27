@@ -31,17 +31,23 @@ import {
 } from './windowBounds.js';
 import { readWindowBehaviorSettings } from './window-behavior-settings-store.js';
 import {
+  fitMacBackdropToWindow,
   fitWindowsBackdropToWindow,
+  isMacTransparentWindow,
   isWindowsTransparentWindow,
+  markMacTransparentWindow,
   markWindowsTransparentWindow,
+  resolveMacWindowTransparent,
   resolveVibrancyConfig,
   resolveWindowVibrancyConfig,
   resolveWindowsWindowTransparent,
 } from './vibrancyConfig.js';
 import {
+  createGpuFallbackArgument,
   createWindowBackdropMaterialArgument,
   WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL,
 } from '../shared/windowBackdrop.js';
+import { isHardwareAccelerationDisabled } from './gpuRenderingPolicy.js';
 import type { WindowsBackdropMaterial } from './vibrancyConfig.js';
 import { installSelectionContextMenu } from './selection-context-menu.js';
 import { applyAppearanceToWindow, installWindowZoomRestoration } from './appearance-settings-ipc.js';
@@ -49,11 +55,25 @@ import { installWindowFullscreenStateBroadcast } from './mainWindowFullscreenSta
 import { installWindowsTransparentTitleBar } from './windowsTransparentTitleBar.js';
 import { resolveAppThemeIsDark } from './resolved-app-theme.js';
 import { readWindowThemeSnapshot } from './window-theme-mode-store.js';
+import {
+  findSecondaryWindowForGroupChat,
+  findSecondaryWindowForSession,
+  getSecondaryAppWindows,
+  isSecondaryAppWindow,
+  parseSecondaryWindowUrlTarget,
+  registerSecondaryAppWindow,
+  updateSecondaryWindowVisibleSessions,
+} from './secondaryWindowRegistry.js';
 
 const log = createLogger('secondary-windows');
 
-// E4D:副窗 vibrancy 同主窗(lead 裁决副窗同处理)。持有副窗 set 供 applyVibrancyToSecondaryWindows 遍历。
-const secondaryWindows = new Set<BrowserWindow>();
+export {
+  findSecondaryWindowForGroupChat,
+  findSecondaryWindowForSession,
+  isSecondaryAppWindow,
+  parseSecondaryWindowUrlTarget,
+  updateSecondaryWindowVisibleSessions,
+};
 
 // 副窗相对主窗右下错开的像素,让用户一眼看出弹出了新窗(而非严丝合缝盖住主窗)。
 const OFFSET_PX = 30;
@@ -117,7 +137,10 @@ export function openSessionInNewWindow(
     process.platform === 'darwin'
       ? { titleBarStyle: 'hidden' as const, trafficLightPosition: { x: 12, y: 16 } }
       : { frame: false };
-  const persistedTheme = process.platform === 'win32' ? readWindowThemeSnapshot() : null;
+  const persistedTheme =
+    process.platform === 'win32' || process.platform === 'darwin'
+      ? readWindowThemeSnapshot()
+      : null;
   const isDark = process.platform === 'win32'
     ? resolveAppThemeIsDark(
         nativeTheme.shouldUseDarkColors,
@@ -125,16 +148,29 @@ export function openSessionInNewWindow(
         persistedTheme?.resolvedIsDark,
       )
     : nativeTheme.shouldUseDarkColors;
-  const bgColor = isDark ? '#1f1f1e' : '#f8f8f6';
+  const gpuFallback = isHardwareAccelerationDisabled();
+  const bgColor =
+    process.platform === 'darwin' && !gpuFallback
+      ? '#00000000'
+      : isDark
+        ? '#1f1f1e'
+        : '#f8f8f6';
   const winBackdropConfig = resolveVibrancyConfig(
     persistedTheme?.familyId ?? 'cindy',
     isDark,
     process.platform,
   );
-  // Windows: a transparent window flickers under a system backdrop (see vibrancyConfig).
+  // Windows: a transparent window flickers under a system backdrop.
+  // macOS: a transparent window triggers high WindowServer GPU usage (#11670) while
+  // `transparent: false` + `vibrancy: 'hud'` preserves behind-window vibrancy (see vibrancyConfig).
+  // Software-rendering GPU fallback also disables window transparency and vibrancy to prevent compositor artifacts.
   const windowTransparent =
-    process.platform !== 'win32' ||
-    resolveWindowsWindowTransparent(winBackdropConfig, persistedTheme?.needsTransparentWindow);
+    !gpuFallback &&
+    (process.platform === 'win32'
+      ? resolveWindowsWindowTransparent(winBackdropConfig, persistedTheme?.needsTransparentWindow)
+      : process.platform === 'darwin'
+        ? resolveMacWindowTransparent(winBackdropConfig, persistedTheme?.needsTransparentWindow)
+        : true);
 
   const base = mainWindow && !mainWindow.isDestroyed() ? mainWindow.getBounds() : null;
   const requestedSize = base
@@ -173,12 +209,14 @@ export function openSessionInNewWindow(
           backgroundColor: winBackdropConfig.backgroundColor,
         }
       : {}),
+    ...(process.platform === 'darwin' && !gpuFallback ? { vibrancy: 'hud' as const } : {}),
     acceptFirstMouse: !swallowActivationClick,
     ...platformOptions,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       additionalArguments: [
         createWindowBackdropMaterialArgument(winBackdropConfig.backgroundMaterial ?? 'none'),
+        ...(gpuFallback ? [createGpuFallbackArgument()] : []),
       ],
       spellcheck: false,
       // A task drag that misses a renderer drop target must never navigate the
@@ -188,6 +226,7 @@ export function openSessionInNewWindow(
   });
   markAppContentWindow(win);
   if (process.platform === 'win32' && windowTransparent) markWindowsTransparentWindow(win);
+  if (process.platform === 'darwin' && windowTransparent) markMacTransparentWindow(win);
   installWindowsTransparentTitleBar(win);
   applyAppearanceToWindow(win);
   win.webContents.on('did-finish-load', () => {
@@ -203,10 +242,10 @@ export function openSessionInNewWindow(
   installWindowFullscreenStateBroadcast(win, {
     getDisplayBounds: (bounds) => screen.getDisplayMatching(bounds).bounds,
   });
-  // E4D:副窗加入 set,供 vibrancy 动态开关;关闭时移除。
-  secondaryWindows.add(win);
-  win.once('closed', () => {
-    secondaryWindows.delete(win);
+  // E4D:副窗加入注册表,供 vibrancy 动态开关与灵动岛优先唤起已有副窗使用;关闭时移除。
+  registerSecondaryAppWindow(win, {
+    bootSession: sessionId,
+    bootDeviceId: deviceId ?? null,
   });
 
   installExternalLinkGuards(win);
@@ -282,28 +321,18 @@ export function openSessionInNewWindowIfDroppedOutside(
   return true;
 }
 
-// E4D 毛玻璃(lead 裁决副窗同处理):遍历副窗 set,用同 resolveVibrancyConfig 映射
-/**
- * 是不是本模块开出来的会话副窗口。
- *
- * 给 main 侧那些「只想放行承载应用外壳(router / MainLayout)的窗口」的闸用：副窗口跑的是
- * 同一套路由,设置页在里面照样打得开;而 appContentWindows 那个 WeakSet 还包含右侧栏、
- * Ghost 面板 —— 它们不承载路由,不该拿到这类能力。
- */
-export function isSecondaryAppWindow(win: BrowserWindow | null | undefined): boolean {
-  return Boolean(win && !win.isDestroyed() && secondaryWindows.has(win));
-}
-
 // 开关 vibrancy(仅 CINDY 透壁纸)。副窗 renderer 首帧/切 family 时 IPC theme:apply-vibrancy
 // → main applyWindowVibrancy → 调主窗 + 本函数(副窗)。
 export function applyVibrancyToSecondaryWindows(familyId: string, isDark: boolean): void {
-  for (const win of secondaryWindows) {
+  for (const win of getSecondaryAppWindows()) {
     if (win.isDestroyed()) continue;
     const requested = resolveWindowVibrancyConfig(win, familyId, isDark, process.platform);
     const config =
       process.platform === 'win32'
         ? fitWindowsBackdropToWindow(requested, isWindowsTransparentWindow(win))
-        : requested;
+        : process.platform === 'darwin'
+          ? fitMacBackdropToWindow(requested, isMacTransparentWindow(win))
+          : requested;
 
     // Windows 11:副窗口与主窗口一致地应用 acrylic/mica 材质;切回非 CINDY family 时
     // config.backgroundMaterial 为 'none',显式复位,避免会话副窗口残留上一次的毛玻璃材质。

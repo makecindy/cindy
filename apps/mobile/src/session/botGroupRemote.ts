@@ -263,6 +263,7 @@ function parseMessage(value: unknown): BotGroupMessageView | null {
     ...(runtimeFailureReason ? { runtimeFailureReason } : {}),
     ...(kind === 'notice' && authorKind === 'bot' && record.deleted !== true && isBotGroupCapabilityNoticeCode(record.capabilityNoticeCode)
       ? { capabilityNoticeCode: record.capabilityNoticeCode } : {}),
+    ...(kind === 'notice' && record.capabilityNoticeCode === 'GROUP_ASSISTANT_DEVICE_REQUIRED' && record.canChooseAssistantDevice === true ? { canChooseAssistantDevice: true as const } : {}),
     planId: optionalId(record.planId),
     files: stringList(record.files, MAX_FILES, 1_024),
     // Older computers send no attachments.
@@ -433,6 +434,8 @@ export function parseBotGroupChatData(value: unknown): BotGroupRemoteChatData | 
     supportsScopedStop: record.supportsScopedStop === true,
     supportsMentionAudiences: record.supportsMentionAudiences === true,
     allowMentionAllBots: record.allowMentionAllBots === true,
+    supportsMemberMentionAll: record.supportsMemberMentionAll === true,
+    allowMemberMentionAll: record.allowMemberMentionAll === true,
     supportsMemberInvites: record.supportsMemberInvites === true,
     allowMemberInvites: record.allowMemberInvites === true,
     supportsDivision: record.supportsDivision === true,
@@ -441,6 +444,14 @@ export function parseBotGroupChatData(value: unknown): BotGroupRemoteChatData | 
     supportsDissolve: record.supportsDissolve === true,
     supportsGroupLeave: record.supportsGroupLeave === true,
     supportsListRemoval: record.supportsListRemoval === true,
+    ...(Array.isArray(record.assistantComputers) ? {
+      assistantDeviceId: text(record.assistantDeviceId, 200),
+      assistantComputers: record.assistantComputers.slice(0, 129).flatMap(raw => {
+        const device = recordOf(raw);
+        const id = text(device?.id, 200), name = text(device?.name, 200);
+        return id && name ? [{ id, name }] : [];
+      }),
+    } : {}),
     supportsNotificationSettings: record.supportsNotificationSettings === true,
     ...(record.notificationMode === 'all' || record.notificationMode === 'mentions' || record.notificationMode === 'none'
       ? { notificationMode: record.notificationMode,
@@ -506,7 +517,7 @@ const ERROR_CODES: readonly BotGroupErrorCode[] = [
   'LAST_OWNER',
   'MEMBER_LIMIT',
   'MEMBER_UNAVAILABLE',
-  'MENTION_UNAVAILABLE', 'ALL_BOTS_MENTION_DISABLED',
+  'MENTION_UNAVAILABLE', 'ALL_BOTS_MENTION_DISABLED', 'ALL_HUMANS_MENTION_FORBIDDEN',
   'PLAN_OPEN',
   'PLAN_CLOSED',
   'TURN_ALREADY_STARTED',

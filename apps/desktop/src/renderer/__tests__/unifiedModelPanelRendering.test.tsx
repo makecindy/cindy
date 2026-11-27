@@ -364,11 +364,16 @@ it('defers a large catalog arriving before the open picker has painted', async (
   const models = Array.from({ length: 80 }, (_, i) => ({ ...model, id: 'late-' + i, name: 'Late ' + i }));
   const props = { remoteAgent: undefined, modelId: model.id, currentProviderId: provider.id, effort: 'medium' as const,
     onModelChange: vi.fn(), onEffortChange: vi.fn(), onProviderChange: vi.fn() };
+  const height = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+    return this.getAttribute('role') === 'listbox' ? 400 : 40;
+  });
+  onTestFinished(() => height.mockRestore());
   const view = render(<ModelSelectorContent {...props} providersOverride={[]} />);
   const search = screen.getByRole('textbox');
   view.rerender(<ModelSelectorContent {...props} providersOverride={[{ ...provider, models: { 'claude-code': models } }]} />);
   expect(screen.getByRole('textbox')).toBe(search);
   expect(screen.queryByText('Late 79')).toBeNull();
+  fireEvent.change(search, { target: { value: 'Late 79' } });
   await waitFor(() => expect(rowFor('Late 79')).toBeTruthy());
 });
 
@@ -1585,12 +1590,10 @@ describe('统一面板 · 会话内形态', () => {
     expect(onCrossEngineSelect).not.toHaveBeenCalled();
   });
 
-  /**
-   * Chris 2026-08-19 实测「一次打开内切 rail,面板弹开一些,感觉有点怪」:面板是 `w-max`
-   * 且 morph 宿主 stickyWidth 只进不退,停在**最窄**的同引擎视图,切「全部」时二次撑宽。
-   * 定宽 sizer = 打开第一帧就渲染一份不可见的全量视图供量宽。
-   */
-  it('非全量视图挂一份不可见的定宽 sizer(全量视图不挂)', async () => {
+  // The real picker keeps intrinsic width stable across rail changes (#9403).
+  // The browser fixture covers geometry. This unit case guards the cost when
+  // a filter displays one catalog but sizing considers both catalogs.
+  it('过滤视图保留少量测宽行，不重复挂载模型目录', async () => {
     const { container } = renderPanel({
       sessionEngineFilter,
       currentProviderId: 'xd',
@@ -1599,26 +1602,10 @@ describe('统一面板 · 会话内形态', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cindy AI' }));
     const sizer = container.querySelector('[data-width-sizer]');
     expect(sizer).toBeTruthy();
-    // 量的是**全量视图**:同引擎视图里看不到的 Opus 5 也在 sizer 里。
-    expect(sizer?.textContent).toContain('Opus 5');
-    expect(sizer?.textContent).toContain('GPT-5.5');
-    // 组头与真实组头同字号同字重,量出的宽度才可信。
-    const realLabel = container.querySelector('[role="listbox"] [role="group"] > div');
-    const sizerLabel = sizer?.querySelector(':scope > div > div');
-    expect(sizerLabel?.className).toContain('text-12 font-medium leading-[1.33]');
-    expect(realLabel?.className).toContain('text-12 font-medium leading-[1.33]');
-    // 不可见、零高度、不进 listbox、不带选中标记(自动对齐永远不会挑中它)。
+    expect(sizer?.querySelectorAll('[data-unified-triple]').length).toBe(1);
+    expect(sizer?.querySelector('button, [tabindex], [role="option"]')).toBeNull();
     expect(sizer?.getAttribute('aria-hidden')).toBe('true');
-    expect(sizer?.className).toContain('invisible');
-    expect(sizer?.className).toContain('h-0');
-    // ★ 纵向 padding 一点不能带(2026-08-19 预审 P1-2):border-box 下 h-0 只钳内容盒,
-    // p-2/pb-3 会让 sizer 实占 20px,把「切视图宽度抖」换成「切视图高度抖」。
-    expect(sizer?.className).toContain('px-2');
-    expect(sizer?.className).not.toContain('p-2 ');
-    expect(sizer?.className).not.toContain('pb-3');
-    expect(sizer?.className).not.toContain('py-');
     expect(screen.getByRole('listbox').contains(sizer)).toBe(false);
-    expect(sizer?.querySelector('[data-model-selected="true"]')).toBeNull();
 
     // 已经是全量视图 → 不必再量自己一遍。
     await act(async () => {
@@ -5896,6 +5883,30 @@ describe('providers hidden from the picker stay reachable', () => {
       const favorites = screen.getAllByRole('group').find((group) => group.getAttribute('aria-label') === '收藏');
       expect(favorites && within(favorites).getByText('Switched Off Model')).toBeTruthy();
     } finally { hiddenModelIds.delete('quiet-model'); }
+  });
+
+  // #13137, unit: expanding individually hidden models must bound interactive rows
+  // and include offscreen long names when measuring the picker.
+  it('windows a large hidden section and sizes for its widest model', async () => {
+    const provider = source('quiet', 'Quiet', 'Listed Model');
+    const wideName = 'Long hidden model name '.repeat(5).trim();
+    const models = Array.from({ length: 100 }, (_, index) => ({
+      ...provider.models.codex[0]!, id: `quiet-${index}`, name: index === 99 ? wideName : `Hidden model ${index}`,
+    }));
+    for (const model of models) hiddenModelIds.add(model.id);
+    onTestFinished(() => { for (const model of models) hiddenModelIds.delete(model.id); });
+    const height = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.getAttribute('role') === 'listbox' ? 400 : 40;
+    });
+    onTestFinished(() => height.mockRestore());
+    providersRef.providers = [{ ...provider, models: { codex: [...provider.models.codex, ...models] } }] as never;
+    renderPanel({ vendorKey: 'codex', currentProviderId: 'quiet', modelId: 'quiet-model', modelMemory: memory });
+    await waitFor(() => expect(document.querySelector('[data-hidden-models-toggle]')).toBeTruthy());
+    fireEvent.click(document.querySelector('[data-hidden-models-toggle]')!);
+    const list = within(screen.getByRole('listbox'));
+    await waitFor(() => expect(list.getByText('Hidden model 0')).toBeTruthy());
+    expect(list.getAllByRole('option').length).toBeLessThan(30);
+    expect(document.querySelector('[data-width-sizer]')?.textContent).toContain(wideName);
   });
 
   it('opens the fold by itself when the task is already using a hidden provider', () => {

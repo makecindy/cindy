@@ -46,8 +46,8 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Sparkles,
   Unplug,
-  Waypoints,
   WifiOff,
   Zap,
   Lock,
@@ -84,15 +84,13 @@ import {
   type UnifiedSelectedRow,
 } from './UnifiedModelPanel';
 import { matchPluginModels, PluginModelIcon, PluginModelsSection, type PluginModelsPickerProps } from './PluginModelsSection';
+import { useFavoritePluginModelCount } from '@/features/cc-agent/pluginModelFavorites';
 import { MODEL_GROUPS_DEFAULTS } from '../../../shared/modelGroups';
 import { isSourceRouteProviderId, withSourceRouteProviders } from '@/features/model-groups/sourceRouteProviders';
 import { buildModelGroupPickerRows, isModelGroupSelected, matchModelGroupRows, ModelGroupIcon, ModelGroupsPickerSection, useFavoriteModelGroupCount, useModelGroupPickerRows, type ModelGroupsPickerProps } from './ModelGroupsPickerSection';
 import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import {
-  activePluginEngineModelId,
-  matchPluginEngineRows,
   PluginEngineSessionPanel,
-  PluginEnginesSection,
   usePluginEngineChoiceLabel,
   type PluginEnginePendingSelection,
   type PluginEngineSessionPickerProps,
@@ -103,7 +101,6 @@ import {
   isSamePluginEngineChoice,
   pluginEngineModelName,
   resolvePluginEngineEffort,
-  visiblePluginEngineChoices,
   type PluginEngineChoice,
 } from '@/lib/pluginEngineSelection';
 import type { PluginEngineEffort } from '../../../shared/pluginEngines';
@@ -121,6 +118,11 @@ import {
 import { useApiKey } from '@/hooks/useApiKey';
 import { useConnectedSource } from '@/hooks/useConnectedSource';
 import { useGatewayModelPricing, useReferenceModelPricing } from '@/hooks/useModelPricing';
+import {
+  getDataOwnerGeneration,
+  isDataOwnerGenerationCurrent,
+  type DataOwnerGeneration,
+} from '@/contexts/dataOwnerGeneration';
 import { retryProviderShareCatalog } from '@/lib/remoteCatalogSnapshot';
 import { useModelAccessStatus } from '@/hooks/useModelAccessStatus';
 import { requestPluginEnginesRefresh } from '@/hooks/usePluginEngines';
@@ -205,6 +207,66 @@ import type { ModelPricingCatalog } from '../../../shared/regionalMoney';
 import { buildProviderSections, withFollowedAccountSource } from './sourceSwitch';
 import type { ModelPickerPreferenceStore } from './modelPickerPreferences';
 import { mergeSshCodexCatalog, type SshCodexCatalog } from '@/lib/sshCodexCatalog';
+
+const MAX_PREFETCH_REMOTE_CATALOGS = 8;
+const REMOTE_CATALOG_WARM_RETRY_MS = 15_000;
+const failedRemoteCatalogWarmAt = new WeakMap<DataOwnerGeneration, Map<string, number>>();
+const warmingRemoteCatalogKeys = new WeakMap<DataOwnerGeneration, Set<string>>();
+
+function orderedRemoteCatalogKeys(
+  devices: readonly { deviceId: string }[] | undefined,
+  catalogHostDeviceId?: string,
+): string[] {
+  if (!devices?.length) return [];
+  const shares: string[] = [];
+  const others: string[] = [];
+  for (const device of devices) {
+    const key = modelCatalogKey(device.deviceId, catalogHostDeviceId);
+    if (!key) continue;
+    if (isProviderShareAgentDeviceId(device.deviceId)) shares.push(key);
+    else others.push(key);
+  }
+  return [...shares, ...others].slice(0, MAX_PREFETCH_REMOTE_CATALOGS);
+}
+
+function warmRemoteModelCatalogs(keys: readonly string[]): void {
+  if (keys.length === 0) return;
+  if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+  const owner = getDataOwnerGeneration();
+  let failed = failedRemoteCatalogWarmAt.get(owner);
+  if (!failed) {
+    failed = new Map();
+    failedRemoteCatalogWarmAt.set(owner, failed);
+  }
+  let active = warmingRemoteCatalogKeys.get(owner);
+  if (!active) {
+    active = new Set();
+    warmingRemoteCatalogKeys.set(owner, active);
+  }
+  const now = Date.now();
+  for (const key of keys) {
+    if (active.has(key)) continue;
+    const failedAt = failed.get(key);
+    if (failedAt !== undefined && now - failedAt < REMOTE_CATALOG_WARM_RETRY_MS) continue;
+    active.add(key);
+    void Promise.resolve(prefetchDeviceProviders(key))
+      .then((payload) => {
+        if (!isDataOwnerGenerationCurrent(owner)) return;
+        if (payload === null) {
+          failed.set(key, Date.now());
+          return;
+        }
+        failed.delete(key);
+        if (payload && remoteAgentProviders(payload.providers).length > 0) {
+          return prefetchDeviceCapabilities(key);
+        }
+        return undefined;
+      })
+      .finally(() => {
+        active.delete(key);
+      });
+  }
+}
 
 // 短刷新（尤其 auto-refresh cooldown 命中）不应让状态行参与 MorphPopover 的首帧量高：
 // 否则它在 220ms 开场内消失后，settle 补量会把面板再缩一次，形成“先变大再变小”。
@@ -498,7 +560,7 @@ function DefaultProviderMark({
   }
   // 智能路由(合并了整个供应商、或自己排的那几条)没有品牌标时画路由图形，不画名字的第一个字(「智」)。
   if (isSourceRouteProviderId(providerId)) {
-    return <Waypoints size={markSize} strokeWidth={2.2} aria-hidden className={common} />;
+    return <Sparkles size={markSize} strokeWidth={2.2} aria-hidden className={common} />;
   }
   if (!name) return null;
   // 未知自定义供应商:首字母描边方盒(border 跟随 currentColor = colorClass 设定的文字色)。
@@ -1425,20 +1487,12 @@ function ModelSelectorContentView({
   useEffect(() => {
     readModelGroupDevices?.();
   }, [readModelGroupDevices]);
-  // 已装但未登录 / 未就绪的插件引擎不在选择器里占位；仅当前任务正选着该引擎时保留以便识别状态。
-  const visiblePluginEngines = useMemo(
-    () => pluginEngines
-      ? { ...pluginEngines, engines: visiblePluginEngineChoices(pluginEngines.engines, pluginEngines.active) }
-      : undefined,
-    [pluginEngines],
-  );
   // 当前来源解析器:已建会话 = 实际路由口径(含停用拷贝),其余 = 准入口径。
   const resolveCurrentSourceId = actualRoute ? actualSourceIdForModel : effectiveSourceIdForModel;
   const { t, i18n } = useTranslation();
-  // 插件引擎的显示名：在自己另一台电脑上的带电脑名。
-  const pluginEngineChoiceLabel = usePluginEngineChoiceLabel();
   const modelGroupRows = useModelGroupPickerRows(modelGroups?.config ?? MODEL_GROUPS_DEFAULTS);
   const favoriteModelGroupCount = useFavoriteModelGroupCount(modelGroups?.config ?? MODEL_GROUPS_DEFAULTS);
+  const favoritePluginModelCount = useFavoritePluginModelCount(pluginModels?.models ?? []);
   const { received: receivedShares } = useProviderShareReceived();
   // ── 远程 Agent:面板在本机目录与其他电脑的目录之间切换浏览 ─────────────────────
   // 打开时停在草稿当前的落点(Agent 在哪台电脑就先列哪台);左侧栏点到另一台电脑的供应商时,
@@ -1446,7 +1500,7 @@ function ModelSelectorContentView({
   const remoteAgentDeviceId = remoteAgent?.selectedDeviceId ?? null;
   // 插件引擎在独立的来源格。浏览从任务所在电脑的目录开始，换内置模型时照常按实际运行位置判断是否要换电脑。
   // 选着供应商路由下的模型时同理：合并后的条目列在任务所在电脑的目录里，从那里开始，不跳到某个成员所在的电脑。
-  const activeSourceRouteAtOpen = !!modelGroupsProp?.onAttach && !!modelGroupsProp.active
+  const activeSourceRouteAtOpen = (!!modelGroupsProp?.onAttach || !!modelGroupsProp?.onPickMerged) && !!modelGroupsProp.active
     && modelGroupsProp.config.routes.some((route) => route.id === modelGroupsProp.active?.id && !!route.parent && !route.hidden);
   // 面板里「当前选择」显示在哪份目录里。选着合并条目下的模型时是任务所在电脑的目录(合并后的那一格)：草稿里记的那个
   // 成员可以在别的电脑上或是分享来的，按它算的话，面板会认为当前选择不在眼前这份目录里——不显示选中的行。
@@ -1604,17 +1658,27 @@ function ModelSelectorContentView({
   const listedProviders = deviceId
     ? remoteCatalogProviders
     : filterModelSelectorRoutes(providersOverride ?? sshCatalogProviders ?? localTaskProviders, null, routeFilter);
-  // 供应商路由在面板里就是一个普通供应商(sourceRouteProviders.ts)：只在新任务草稿、看本机目录时这样列。
-  const sourceRoutesListed = (!!modelGroupsProp?.onAttach || !!modelGroupsProp?.onPickMerged) && !!onUnifiedSelectProp && !deviceId && !providersOverride && !sshCatalogProviders;
-  const sourceRouteConfig = sourceRoutesListed ? modelGroupsProp?.config : null;
+  // 供应商路由在面板里就是一个普通供应商(sourceRouteProviders.ts)：草稿(onAttach)与进行中的任务(onPickMerged)、
+  // 本机与远程控制被控端自身的目录均生效；切去浏览「其他电脑」时只停用右侧列表，左栏本机/宿主区仍保持稳定。
+  const homeSourceRouteConfig = ((!!modelGroupsProp?.onAttach && !!onUnifiedSelectProp) || !!modelGroupsProp?.onPickMerged)
+    && !providersOverride && !sshCatalogProviders
+    ? modelGroupsProp?.config ?? null
+    : null;
+  const sourceRoutesListed = !!homeSourceRouteConfig && !remoteBrowse;
+  const sourceRouteConfig = sourceRoutesListed ? homeSourceRouteConfig : null;
+  const sourceRouteCatalogHostId = remoteAgent?.catalogHostDeviceId ?? homeDeviceId;
   // 成员可以在其他电脑上或是分享来的：读那些位置的目录(与下面列那台模型用的是同一份缓存，不多发请求)。
-  const sourceRouteRemoteIds = useMemo(() => [...new Set((sourceRouteConfig?.sourceRoutes ?? []).filter((route) => !route.hidden)
-    .flatMap((route) => route.sources.flatMap((source) => (source.agentDeviceId ? [source.agentDeviceId] : []))))], [sourceRouteConfig]);
-  const sourceRouteRemoteCatalogs = useDevicesProviders(sourceRouteRemoteIds, { retainDisplaySnapshot: true });
-  const sourceRouteRemote = useMemo(() => new Map(sourceRouteRemoteIds.flatMap((id) => {
-    const catalog = sourceRouteRemoteCatalogs.get(id);
+  const sourceRouteRemoteIds = useMemo(() => [...new Set((homeSourceRouteConfig?.sourceRoutes ?? []).filter((route) => !route.hidden)
+    .flatMap((route) => route.sources.flatMap((source) => (source.agentDeviceId ? [source.agentDeviceId] : []))))], [homeSourceRouteConfig]);
+  const sourceRouteRemoteCatalogKeys = useMemo(
+    () => sourceRouteRemoteIds.map((id) => modelCatalogKey(id, sourceRouteCatalogHostId) ?? id),
+    [sourceRouteRemoteIds, sourceRouteCatalogHostId],
+  );
+  const sourceRouteRemoteCatalogs = useDevicesProviders(sourceRouteRemoteCatalogKeys, { retainDisplaySnapshot: true });
+  const sourceRouteRemote = useMemo(() => new Map(sourceRouteRemoteIds.flatMap((id, index) => {
+    const catalog = sourceRouteRemoteCatalogs.get(sourceRouteRemoteCatalogKeys[index]);
     return catalog ? [[id, remoteAgentProviders(catalog.providers)] as const] : [];
-  })), [sourceRouteRemoteIds, sourceRouteRemoteCatalogs]);
+  })), [sourceRouteRemoteIds, sourceRouteRemoteCatalogKeys, sourceRouteRemoteCatalogs]);
   const sourceRouteCurrent = useMemo(
     () => ({ providerId: currentProviderIdProp, modelId, agentDeviceId: remoteAgentDeviceId }),
     [currentProviderIdProp, modelId, remoteAgentDeviceId],
@@ -2026,6 +2090,13 @@ function ModelSelectorContentView({
   }, [remoteAgent, deviceId, remoteProviders.providers, remoteAgentDevices, homeDeviceId, homeDeviceProviders.providers,
     localProviders.providers, localProviderGroups, remoteDeviceCatalogs,
     remoteAgentDeviceId, currentProviderId, remoteDisable, remoteProviderGroups.hidden, remoteProviderGroups.groups, routeFilter, t]);
+  // 有其他电脑可选时，宿主那一段的侧栏另从这份列表建：供应商路由同样作为一个普通供应商列在里面。
+  // 放在 remoteAgentGroups 之前，供后者过滤已被合并进供应商路由的远程/共享成员。
+  const homeBaseProviders = homeDeviceId ? homeDeviceProviders.providers : localProviders.providers;
+  const homeSourceRoutes = useMemo(
+    () => withSourceRouteProviders(homeBaseProviders, homeSourceRouteConfig, sourceRouteCurrent, sourceRouteRemote, sourceRouteLabel),
+    [homeBaseProviders, homeSourceRouteConfig, sourceRouteCurrent, sourceRouteRemote, sourceRouteLabel],
+  );
   const remoteAgentGroups = useMemo(() => {
     if (!remoteAgentDevices) return [];
     // A share always has exactly one provider: key its rail cell by it whatever the catalog state
@@ -2067,7 +2138,7 @@ function ModelSelectorContentView({
         (providerId) =>
           !runLocationFold.hiddenRemote.has(remoteProviderEntryKey(device.deviceId, providerId)) &&
           // 已经并进某条供应商路由的成员不再单列一格。
-          !sourceRoutes.hidesRemote(device.deviceId, providerId) &&
+          !homeSourceRoutes.hidesRemote(device.deviceId, providerId) &&
           ((!hiddenThere.has(providerId) && !remoteDisable.isHidden(device.deviceId, providerId)) ||
             (remoteAgentDeviceId === device.deviceId && currentProviderId === providerId)),
       );
@@ -2088,7 +2159,23 @@ function ModelSelectorContentView({
       return [];
     });
   }, [remoteAgentDevices, remoteDeviceCatalogs, remoteProviderGroups, runLocationFold, remoteDisable, remoteAgentDeviceId, currentProviderId,
-    receivedShares, sourceRoutes]);
+    receivedShares, homeSourceRoutes]);
+  // 面板展开后，凡是左栏已经拿到可选模型的远程/共享来源，立刻在后台预取其 capabilities，
+  // 避免用户点击该来源图标时再经历第二段「加载远程模型…」转圈。
+  const warmCapabilityKeysKey = useMemo(
+    () => remoteAgentGroups
+      .filter((group) => group.entries.length > 0)
+      .map((group) => modelCatalogKey(group.deviceId, remoteAgent?.catalogHostDeviceId))
+      .filter((key): key is string => !!key)
+      .join('\n'),
+    [remoteAgentGroups, remoteAgent?.catalogHostDeviceId],
+  );
+  useEffect(() => {
+    if (!warmCapabilityKeysKey) return;
+    for (const key of warmCapabilityKeysKey.split('\n')) {
+      void prefetchDeviceCapabilities(key);
+    }
+  }, [warmCapabilityKeysKey]);
   // 其他电脑的模式只在那台电脑已列在「其他电脑」那一段时出现：选了它，Agent 在那台运行，只能用那台开了
   // 「允许被远程调用」的来源(model-groups.md §3.1、§6.3)。
   const deviceModelGroupChoices = useMemo(() => {
@@ -2106,14 +2193,12 @@ function ModelSelectorContentView({
     [remoteAgentDevices, remoteDeviceCatalogs],
   );
   const hasRemoteAgent = remoteAgent !== undefined;
-  // 有其他电脑可选时，本机那一段的侧栏另从这份列表建：供应商路由同样作为一个普通供应商列在里面。
-  const homeSourceRoutes = useMemo(
-    () => withSourceRouteProviders(localProviders.providers, sourceRouteConfig, sourceRouteCurrent, sourceRouteRemote, sourceRouteLabel),
-    [localProviders.providers, sourceRouteConfig, sourceRouteCurrent, sourceRouteRemote, sourceRouteLabel],
-  );
   const homeProviders = useMemo(() => {
-    if (homeDeviceId) return filterModelSelectorRoutes(homeDeviceProviders.providers, homeDeviceId, routeFilter);
-    if (providersOverride && routeFilter) return filterModelSelectorRoutes(providersOverride, null, routeFilter);
+    // An exact-route picker never shows source routes; filter that device's own catalog instead.
+    if (routeFilter) {
+      if (homeDeviceId) return filterModelSelectorRoutes(homeDeviceProviders.providers, homeDeviceId, routeFilter);
+      if (providersOverride) return filterModelSelectorRoutes(providersOverride, null, routeFilter);
+    }
     return homeSourceRoutes.providers;
   }, [homeDeviceId, homeDeviceProviders.providers, providersOverride, routeFilter, homeSourceRoutes.providers]);
   const homeModelVisibilityOverrides = homeDeviceProviders.modelVisibilityOverrides;
@@ -3869,7 +3954,7 @@ function ModelSelectorContentView({
       setRemoteBrowse({ deviceId: targetDeviceId, providerId });
       return false;
     };
-    const panelSessionEngineFilter =
+    const baseSessionEngineFilter =
       sessionEngineFilter && relocate
         ? {
             ...sessionEngineFilter,
@@ -3897,6 +3982,36 @@ function ModelSelectorContentView({
               ),
           }
         : sessionEngineFilter;
+    const panelSessionEngineFilter =
+      baseSessionEngineFilter && pickMerged
+        ? {
+            ...baseSessionEngineFilter,
+            onCrossEngineSelect: (args: Parameters<NonNullable<typeof baseSessionEngineFilter>['onCrossEngineSelect']>[0]) => {
+              const hit = sourceRoutes.hit(args.providerId, args.modelId);
+              if (hit) {
+                pickMerged({ type: 'route', id: hit.route.id }, {
+                  ...(args.effort ? { effort: args.effort } : {}),
+                  ...(args.fast ? { fastMode: args.fast === 'ultrafast' ? 'ultrafast' : true } : {}),
+                });
+                closeOptionsPanel();
+                onDismiss?.();
+                return true;
+              }
+              return baseSessionEngineFilter.onCrossEngineSelect(args);
+            },
+            onCrossEngineConfigure: (args: Parameters<NonNullable<typeof baseSessionEngineFilter>['onCrossEngineSelect']>[0]) => {
+              const hit = sourceRoutes.hit(args.providerId, args.modelId);
+              if (hit) {
+                pickMerged({ type: 'route', id: hit.route.id }, {
+                  ...(args.effort ? { effort: args.effort } : {}),
+                  ...(args.fast ? { fastMode: args.fast === 'ultrafast' ? 'ultrafast' : true } : {}),
+                });
+                return true;
+              }
+              return baseSessionEngineFilter.onCrossEngineConfigure?.(args) ?? false;
+            },
+          }
+        : baseSessionEngineFilter;
     return (
       // 外层多包一层「百分比钳制」:面板列自身的 max-h 公式(560px/100vh)不知道宿主
       // popover 实际给了多少纵向空间 —— morph 弹层按锚点位置算出的可用高度可能更小,
@@ -3964,12 +4079,18 @@ function ModelSelectorContentView({
                   ),
                 }
               : {})}
-            {...(pluginModels || modelGroups || (visiblePluginEngines && visiblePluginEngines.engines.length > 0) ? {
-              // 模型组在「全部」最上方：不搜索时整段列出(用户建好就天天要用)，搜索时只列命中的。
-              // 插件引擎是独立的一组(不混进供应商目录)，排在它们之后、内置模型之前。
+            {...(pluginModels || modelGroups ? {
+              // 模型组与插件路由模型排在「全部」收藏区之后、插件引擎与内置模型之前。
               pinnedTop: (
                 <>
-                  {pluginModels && <PluginModelsSection picker={pluginModels} query={query} onPicked={() => onDismiss?.()} />}
+                  {pluginModels && (
+                    <PluginModelsSection
+                      picker={pluginModels}
+                      query={query}
+                      onPicked={() => onDismiss?.()}
+                      allowFavorites={unifiedSelectionPolicy === 'personalized'}
+                    />
+                  )}
                   {modelGroups && (
                     <ModelGroupsPickerSection picker={modelGroups} query={query} onPicked={() => onDismiss?.()}
                       variant={query.trim() ? 'search' : 'all'} />
@@ -3979,26 +4100,31 @@ function ModelSelectorContentView({
                     <ModelGroupsPickerSection key={`model-groups:${device.deviceId}`} picker={modelGroups} query={query}
                       deviceId={device.deviceId} onPicked={() => onDismiss?.()} variant="search" />
                   ))}
-                  {visiblePluginEngines && visiblePluginEngines.engines.length > 0 && (
-                    <PluginEnginesSection picker={visiblePluginEngines} query={query} onPicked={() => onDismiss?.()} />
-                  )}
                 </>
               ),
               pinnedTopHasRows: (pluginModels ? matchPluginModels(pluginModels.models, query).length > 0 : false)
+                || (!!modelGroups && !query.trim() && !!modelGroups.managedMeta && !!modelGroups.onDetach)
                 || (!!modelGroups && matchModelGroupRows(modelGroupRows, query) > 0)
                 || (!!modelGroups && !!query.trim() && deviceModelGroupChoices.some((device) =>
-                  matchModelGroupRows(buildModelGroupPickerRows(device.config, t, device.deviceId), query) > 0))
-                || (!!visiblePluginEngines && matchPluginEngineRows(
-                  visiblePluginEngines.engines,
-                  query,
-                  (engine) => activePluginEngineModelId(visiblePluginEngines.active, engine),
-                  t('newChat.pluginEngines.defaultModel').toLowerCase(),
-                ) > 0),
+                  matchModelGroupRows(buildModelGroupPickerRows(device.config, t, device.deviceId), query) > 0)),
             } : {})}
-            {...(modelGroups && modelGroupRows.length > 0 ? {
+            {...(modelGroups && (modelGroupRows.length > 0 || (!!modelGroups.managedMeta && !!modelGroups.onDetach)) ? {
               modelGroupsView: <ModelGroupsPickerSection picker={modelGroups} query="" onPicked={() => onDismiss?.()} />,
-              favoritesPinned: <ModelGroupsPickerSection picker={modelGroups} query="" onPicked={() => onDismiss?.()} variant="favorites" />,
-              favoritesPinnedHasRows: favoriteModelGroupCount > 0,
+            } : {})}
+            {...((modelGroups && modelGroupRows.length > 0) || (pluginModels && unifiedSelectionPolicy === 'personalized') ? {
+              favoritesPinned: (
+                <>
+                  {pluginModels && unifiedSelectionPolicy === 'personalized' && (
+                    <PluginModelsSection picker={pluginModels} query="" onPicked={() => onDismiss?.()} variant="favorites" />
+                  )}
+                  {modelGroups && modelGroupRows.length > 0 && (
+                    <ModelGroupsPickerSection picker={modelGroups} query="" onPicked={() => onDismiss?.()} variant="favorites" />
+                  )}
+                </>
+              ),
+              favoritesPinnedHasRows:
+                (modelGroups && modelGroupRows.length > 0 ? favoriteModelGroupCount > 0 : false)
+                || (pluginModels && unifiedSelectionPolicy === 'personalized' ? favoritePluginModelCount > 0 : false),
             } : {})}
             {...(modelGroups && deviceModelGroupChoices.length ? {
               // 其他电脑自己的模式：每台一格，排进那台电脑那一段；由那台选来源(model-groups.md §6.3)。
@@ -4007,27 +4133,9 @@ function ModelSelectorContentView({
                 <ModelGroupsPickerSection picker={modelGroups} query="" deviceId={deviceId} onPicked={() => onDismiss?.()} />
               ),
             } : {})}
-            {...(visiblePluginEngines && visiblePluginEngines.engines.length > 0 ? {
-              // 和供应商一样每个引擎在左侧栏单独一格(插件自己的图标)，点开只列这个引擎的模型；
-              // 「全部」最上方照旧列出全部引擎。
-              // 自己另一台电脑上的引擎带着电脑名，格位排进那台电脑那一段(见 UnifiedModelPanel)。
-              pluginEngineTabs: visiblePluginEngines.engines.map((engine) => ({
-                providerId: engine.providerId,
-                ...(engine.deviceId ? { deviceId: engine.deviceId } : {}),
-                name: pluginEngineChoiceLabel(engine),
-                ...(engine.iconDataUrl ? { iconDataUrl: engine.iconDataUrl } : {}),
-              })),
-              renderPluginEngine: (providerId: string, engineDeviceId?: string) => (
-                <PluginEnginesSection
-                  picker={{
-                    ...visiblePluginEngines,
-                    engines: visiblePluginEngines.engines.filter((engine) =>
-                      isSamePluginEngineChoice(engine, { providerId, deviceId: engineDeviceId })),
-                  }}
-                  query=""
-                  onPicked={() => onDismiss?.()}
-                />
-              ),
+            {...(pluginEngines && pluginEngines.engines.length > 0 ? {
+              pluginEngines,
+              onPluginEnginePicked: () => onDismiss?.(),
             } : {})}
             {...(!remoteAgentBrowsing && deviceId && (remoteModelListStatus === 'loading' || remoteModelListStatus === 'error')
               ? {
@@ -4067,9 +4175,9 @@ function ModelSelectorContentView({
             // field 形态的面板宽度绑 trigger,定宽 sizer 无用武之地(见该 prop 说明)。
             panelWidthFluid={fluidWidth}
             readableRows={readableRows}
-            // 选中插件模型时选中的是插件那一行，普通模型行不再同时显示选中底色。
-            selected={pluginModels?.active || (modelGroups?.active && !activeSourceRoute) || pluginEngines?.active ? NO_MODEL_SELECTION : panelSelection}
-            selectedFavoriteUid={browsingSelectionCatalog && !pluginModels?.active && !(modelGroups?.active && !activeSourceRoute) && !pluginEngines?.active
+            // 选中插件模型或草稿智能路由(非供应商路由、非进行中任务托管)时，普通模型行不再同时显示选中底色。
+            selected={pluginModels?.active || (modelGroups?.active && !activeSourceRoute && !modelGroups.managedMeta) || pluginEngines?.active ? NO_MODEL_SELECTION : panelSelection}
+            selectedFavoriteUid={browsingSelectionCatalog && !pluginModels?.active && !(modelGroups?.active && !activeSourceRoute && !modelGroups.managedMeta) && !pluginEngines?.active
               ? selectedFavoriteUid : null}
             liveAgentKind={
               unifiedSelectionPolicy === 'official' || !browsingLiveCatalog ? null : currentAgentKind
@@ -4198,6 +4306,18 @@ function ModelSelectorContentView({
                   return applied;
                 });
               }
+              if (pickMerged) {
+                const hit = sourceRoutes.hit(providerId, id);
+                if (hit) {
+                  pickMerged({ type: 'route', id: hit.route.id }, {
+                    ...(rowEffortValue ? { effort: rowEffortValue } : {}),
+                    ...(rowConfig.fast ? { fastMode: rowConfig.fast === 'ultrafast' ? 'ultrafast' : true } : {}),
+                  });
+                  closeOptionsPanel();
+                  onDismiss?.();
+                  return true;
+                }
+              }
               if (relocate) {
                 const agent = vendorKeyToAgentKind(rowConfig.engine);
                 if (!agent) return false;
@@ -4236,6 +4356,16 @@ function ModelSelectorContentView({
                   ...(rowConfig.resetToRecommended ? { resetToRecommended: true as const } : {}),
                   ...withAgentDevice,
                 });
+              }
+              if (pickMerged) {
+                const hit = sourceRoutes.hit(providerId, id);
+                if (hit) {
+                  pickMerged({ type: 'route', id: hit.route.id }, {
+                    ...(nextEffort ? { effort: nextEffort } : {}),
+                    ...(rowConfig.fast ? { fastMode: rowConfig.fast === 'ultrafast' ? 'ultrafast' : true } : {}),
+                  });
+                  return true;
+                }
               }
               if (relocate) {
                 const agent = vendorKeyToAgentKind(rowConfig.engine);
@@ -5123,11 +5253,15 @@ export function ModelSelector({
       })
     : null;
   // Agent 在另一台电脑运行:图标上的信号波纹之外,悬停 / 读屏也要说出是哪台。
-  // 选着合并条目下的模型时，这次在哪里运行由路由决定：不写草稿里暂记的那个成员所在的位置。
+  // 选着合并条目下的模型、或进行中的任务正由智能路由持续托管时，画路由角标并在 tooltip 标明所属路由。
   const activeSourceRouteName = modelGroups?.onAttach && modelGroups.active
     ? modelGroups.config.routes.find((route) => route.id === modelGroups.active?.id && !route.hidden)?.parent?.name ?? null
     : null;
-  const agentDeviceLabel = activeSourceRouteName
+  const activeManagedRouteName = modelGroups?.managedMeta?.routeName ?? null;
+  const activeRouteBadgeName = activeSourceRouteName ?? activeManagedRouteName;
+  const agentDeviceLabel = activeManagedRouteName
+    ? t('modelGroups.picker.managedBy', { name: activeManagedRouteName })
+    : activeSourceRouteName
     ? t('modelGroups.picker.routeDecides', { name: activeSourceRouteName })
     : agentDevice
     ? agentDevice.name
@@ -5151,8 +5285,10 @@ export function ModelSelector({
         : modelGroupRows
       ).find((row) => isModelGroupSelected(modelGroups.active, row.selection)) ?? null
     : null;
-  // 供应商路由下的模型在草稿里就是普通模型：按钮照常写「模型 · 思考深度」，不写路由名。
-  const shownModelGroupRow = activeModelGroupRow?.parent && modelGroups?.onAttach ? null : activeModelGroupRow;
+  // 供应商路由下的模型在草稿里就是普通模型；进行中的任务托管时也保留实际运行的模型名(图标叠路由角标)。
+  const shownModelGroupRow = modelGroups?.managedMeta || (activeModelGroupRow?.parent && modelGroups?.onAttach)
+    ? null
+    : activeModelGroupRow;
   const triggerTitleBase = withAgentDeviceLabel(pendingSelectionTitle
     ? `${pendingSelectionTitle}${showSourceIssue ? ` · ${sourceIssueLabel}` : ''}`
     : showSourceIssue ? baseAriaLabel : displayIdentityLabel);
@@ -5318,6 +5454,29 @@ export function ModelSelector({
       }
     : undefined;
 
+  // 远控被控电脑(catalogHostDeviceId 已选定)时，在草稿/会话就绪后立刻后台预热它名下的共享模型
+  // 与远程来源目录(providers → capabilities)，避免点开选择器或切到共享来源时出现加载过程；
+  // 本机任务不在启动时扇出，改在鼠标悬停/键盘聚焦触发器时预热，兼顾零启动风暴与首开速度。
+  const controlledWarmKeys = useMemo(
+    () => (remoteAgent?.catalogHostDeviceId
+      ? orderedRemoteCatalogKeys(remoteAgent.devices, remoteAgent.catalogHostDeviceId)
+      : []),
+    [remoteAgent?.catalogHostDeviceId, remoteAgent?.devices],
+  );
+  const controlledWarmKeysKey = controlledWarmKeys.join('\n');
+  useEffect(() => {
+    if (disabled || !controlledWarmKeysKey) return;
+    warmRemoteModelCatalogs(controlledWarmKeysKey.split('\n'));
+  }, [disabled, controlledWarmKeysKey]);
+  const triggerWarmKeys = useMemo(
+    () => orderedRemoteCatalogKeys(remoteAgent?.devices, remoteAgent?.catalogHostDeviceId),
+    [remoteAgent?.devices, remoteAgent?.catalogHostDeviceId],
+  );
+  const handleTriggerWarmIntent = useCallback(() => {
+    if (disabled || switching || openRef.current || triggerWarmKeys.length === 0) return;
+    warmRemoteModelCatalogs(triggerWarmKeys);
+  }, [disabled, switching, triggerWarmKeys]);
+
   const trigger = (
     <button
       data-setting-id={settingId}
@@ -5326,6 +5485,8 @@ export function ModelSelector({
       // 阻 mousedown 抢焦点 —— 否则点 pill 会先把光标从输入框挪走,选完模型后
       // 还要再点一次才能接着打字。键盘 Tab 仍可正常 focus。
       onMouseDown={morphEnabled ? (event) => event.preventDefault() : undefined}
+      onPointerEnter={handleTriggerWarmIntent}
+      onFocus={handleTriggerWarmIntent}
       onClick={morphEnabled ? () => handleOpenChange(!openRef.current) : undefined}
       aria-expanded={open && !disabled}
       aria-haspopup="listbox"
@@ -5541,8 +5702,8 @@ export function ModelSelector({
           )}
           {/* 图标统一规则:模型条目 icon(AI Gateway / 目录设定)优先、缺省回落
               当前真正路由的来源标(activeSourceId)——客户端不按 model id 猜厂牌。 */}
-          {activeSourceId && activeSourceRouteName ? (
-            // 选着合并整个供应商的路由下的模型：这次用哪个成员(在哪里运行)由路由决定，画路由角标，不画某个成员所在位置的信号波纹。
+          {activeSourceId && activeRouteBadgeName ? (
+            // 选着合并整个供应商的路由下的模型或处于智能路由持续托管：画路由角标。
             <span className={cn('mr-1.5 inline-flex', isCreateAgentVariant ? 'text-[var(--create-agent-control-icon)]' : 'text-[var(--model-trigger-text)]')}>
               <RouteSourceMark markSize={14}>
                 <ModelIconMark
@@ -5704,6 +5865,8 @@ export function ModelSelector({
     <PluginEngineSessionPanel
       picker={pluginEngineSession}
       disabled={switching || disabled}
+      deviceId={deviceId}
+      selectionPolicy={unifiedSelectionPolicy}
       onPicked={() => setOpenWithoutAutoRefresh(false)}
     />
   ) : (
