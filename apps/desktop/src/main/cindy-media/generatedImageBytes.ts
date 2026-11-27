@@ -4,6 +4,7 @@
  * blob store (generatedMedia.ts re-exports these names).
  */
 
+import { isStrictBase64Chars, parseBase64DataUrl } from '@cindy/maker-shared';
 import { sniffMediaMime } from './sniffMediaMime';
 import { readBoundedFileNoFollow } from '../utils/readBoundedFile';
 
@@ -19,13 +20,16 @@ export const MAX_GENERATED_IMAGE_BYTES = 20 * 1024 * 1024;
 /** Decode only in the Host. Declared MIME and filename do not establish the image type. */
 export function generatedImageBytes(data: GeneratedImageSource): { mimeType: string; buffer: Buffer } | null {
   const encoded = data.data ?? (data.url?.startsWith('data:')
-    ? /^data:image\/[a-zA-Z0-9.+-]+;base64,([\s\S]*)$/.exec(data.url)?.[1]
+    ? parseBase64DataUrl(data.url, /^data:image\/[a-zA-Z0-9.+-]+;base64$/, {
+      allowEmpty: true,
+      allowLineTerminators: true,
+    })?.payload
     : undefined);
   if (encoded === undefined) return null;
   if (encoded.length > Math.ceil(MAX_GENERATED_IMAGE_BYTES / 3) * 4 + 4096)
     throw new Error('MEDIA_TOO_LARGE');
   const compact = encoded.replace(/\s/g, '');
-  if (!compact || !/^[A-Za-z0-9+/]*={0,2}$/.test(compact) || compact.length % 4 === 1)
+  if (!compact || !isStrictBase64Chars(compact, { allowEmpty: true }) || compact.length % 4 === 1)
     throw new Error('INVALID_IMAGE');
   const buffer = Buffer.from(compact, 'base64');
   if (buffer.length > MAX_GENERATED_IMAGE_BYTES) throw new Error('MEDIA_TOO_LARGE');
