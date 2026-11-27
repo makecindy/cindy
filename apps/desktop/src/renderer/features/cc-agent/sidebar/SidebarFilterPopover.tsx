@@ -39,6 +39,7 @@ import {
   CircleDot,
   Clock,
   Coins,
+  CornerDownRight,
   Filter,
   Folder,
   Folders,
@@ -901,6 +902,12 @@ export function SidebarFilterPopover({
                   checked={filter.hideAutomations}
                   onToggle={() => filter.setHideAutomations(!filter.hideAutomations)}
                   Icon={Timer}
+                />
+                <CheckMenuItem
+                  label={t('ccAgent.sidebar.filterHideTaskCreated')}
+                  checked={filter.hideTaskCreated}
+                  onToggle={() => filter.setHideTaskCreated(!filter.hideTaskCreated)}
+                  Icon={CornerDownRight}
                 />
                 <DropdownMenuSeparator />
                 <DropdownMenuItem

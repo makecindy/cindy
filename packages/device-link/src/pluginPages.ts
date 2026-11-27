@@ -314,7 +314,7 @@ export type PluginNativeIntent = {
 } & (
   | { kind: "task"; taskId: string }
   | { kind: "preview"; url: string }
-  | { kind: "schedule"; name: string; prompt: string; intervalMs?: number }
+  | { kind: "schedule"; name: string; prompt: string; intervalMs?: number; preRunPlugin?: { pluginId: string; onFailure: "allow" } }
   /** @deprecated Read compatibility for older hosts only; no longer produced. */
   | { kind: "simulator" }
   | { kind: "media"; path: string; mediaKind: "image" | "video" }

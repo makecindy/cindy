@@ -49,6 +49,7 @@ import {
   CloudAuxiliarySettings,
   CloudSubagentSettings,
 } from './CloudModelSettings';
+import type { BrowserBackendKind } from '../../../shared/browserBackend';
 import type { AvailableShell, ShellId } from '../../../shared/terminal-bridge';
 import { CLOUD_SETTINGS_LOCALES } from '../../../shared/settingsEditableCatalog';
 import { SETTINGS_DISPLAY_LOCALES } from '../../../shared/settingsReadCatalog';
@@ -736,7 +737,7 @@ export function NativeCloudSections(props: Props) {
                   target computer's browser; they are not settings and stay local-only. */}
               {ready('browserBackend') && (
                 <BrowserBackendSubsection
-                  active={String(s('browserBackend').value?.kind) as 'external' | 'rsb-webview'}
+                  active={String(s('browserBackend').value?.kind) as BrowserBackendKind}
                   pending={disabled}
                   recovering={false}
                   health={null}

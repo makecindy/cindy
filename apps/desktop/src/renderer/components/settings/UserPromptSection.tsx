@@ -9,6 +9,9 @@ import { cn } from '@/lib/utils';
 import { useUserPrompt } from '@/hooks/useUserPrompt';
 import { USER_PROMPT_MAX_LENGTH } from '@/lib/userPrompt.constants';
 import { toast } from '@/lib/toast';
+import { FieldVoiceInputNotice } from '@/voice-input/FieldVoiceInputNotice';
+import { useFieldVoiceInput } from '@/voice-input/useFieldVoiceInput';
+import { VoiceInputButton } from '@/voice-input/VoiceInputButton';
 import appI18n from 'i18next';
 
 export function UserPromptSection() {
@@ -77,6 +80,9 @@ export function UserPromptEditor({
   const [draft, setDraft] = useState({ value, revision, ownerKey });
   const previousValue = useRef(value);
   const [saving, setSaving] = useState(false);
+  const [stoppingVoice, setStoppingVoice] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const savingRef = useRef(false);
 
   // 同 owner 的外部修改不吞掉正在编辑的草稿；其旧 revision 会阻止覆盖。
   useEffect(() => {
@@ -89,30 +95,66 @@ export function UserPromptEditor({
     );
   }, [value, revision, ownerKey]);
 
-  const length = draft.value.length;
+  const currentValue = draft.ownerKey === ownerKey ? draft.value : value;
+  const voice = useFieldVoiceInput({
+    draftKey: `user-prompt:${ownerKey}`,
+    inputRef: textareaRef,
+    value: currentValue,
+    onChange: (next) =>
+      setDraft((current) => ({
+        value: next,
+        revision: current.value === value ? revision : current.revision,
+        ownerKey,
+      })),
+    disabled: !ready || saving,
+  });
+
+  const length = voice.displayText.length;
   const overLimit = length > USER_PROMPT_MAX_LENGTH;
-  const dirty = draft.value !== value;
+  const dirty = voice.displayText !== value;
   useEffect(() => {
     onDirtyChange?.(dirty);
   }, [dirty, onDirtyChange]);
   const conflicted = dirty && draft.revision !== revision;
-  const canSave = ready && dirty && !overLimit && !saving && !conflicted;
+  const busy = saving || stoppingVoice;
+  const canSave = ready && dirty && !overLimit && !busy && !conflicted;
 
   const handleSave = useCallback(async () => {
-    if (!canSave || !draft.revision) return;
+    if (!canSave || !draft.revision || savingRef.current) return;
+    savingRef.current = true;
+    let finalValue = currentValue;
+    if (voice.isBusy) {
+      setStoppingVoice(true);
+      try {
+        const stoppedValue = await voice.stop();
+        if (stoppedValue === null) {
+          savingRef.current = false;
+          return;
+        }
+        finalValue = stoppedValue;
+      } finally {
+        setStoppingVoice(false);
+      }
+      if (finalValue.length > USER_PROMPT_MAX_LENGTH || finalValue === value) {
+        savingRef.current = false;
+        return;
+      }
+    }
     setSaving(true);
     try {
-      await setValue(draft.value, draft.revision);
+      await setValue(finalValue, draft.revision);
       toast.success(t('settings.personalization.toast.saved'));
     } catch {
       toast.error(t('hostSettings.saveFailed'));
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
-  }, [canSave, draft, setValue, t]);
+  }, [canSave, currentValue, draft.revision, setValue, t, value, voice.isBusy, voice.stop]);
 
   const handleReset = useCallback(async () => {
-    if (!resetValue || !ready || !revision || saving) return;
+    if (!resetValue || !ready || !revision || busy) return;
+    if (voice.isBusy) void voice.cancel();
     setSaving(true);
     try {
       await resetValue(revision);
@@ -123,7 +165,7 @@ export function UserPromptEditor({
     } finally {
       setSaving(false);
     }
-  }, [ready, revision, saving, resetValue, ownerKey, t]);
+  }, [ready, revision, busy, resetValue, ownerKey, t, voice.cancel, voice.isBusy]);
 
   const counter = `${length.toLocaleString(appI18n.language)} / ${USER_PROMPT_MAX_LENGTH.toLocaleString(appI18n.language)}`;
 
@@ -131,31 +173,44 @@ export function UserPromptEditor({
     <SettingsCard>
       {/* 名称/说明在输入框上方, 与输入框同属一项 */}
       <SettingsField title={setting.title} hint={setting.description}>
-        <textarea {...setting.anchorProps} {...setting.controlProps}
-          value={draft.ownerKey === ownerKey ? draft.value : value}
-          disabled={!ready || saving}
-          onChange={(e) =>
-            setDraft((current) => ({
-              value: e.target.value,
-              revision: current.value === value ? revision : current.revision,
-              ownerKey,
-            }))
-          }
-          placeholder={t('settings.personalization.placeholder')}
-          aria-label={t('settings.personalization.ariaLabel')}
-          rows={7}
+        <div
           className={cn(
-            'min-h-[160px] w-full resize-y rounded-lg',
-            'p-4',
+            'flex flex-col rounded-lg',
             'bg-[var(--settings-input-bg)]',
             'border border-[var(--settings-input-border)]',
-            'text-13 leading-[1.6] text-[var(--settings-input-text)]',
-            'placeholder:font-normal placeholder:text-[var(--settings-input-placeholder)]',
-            'outline-none focus:border-[var(--settings-input-border-focus)]',
+            'focus-within:border-[var(--settings-input-border-focus)]',
             'transition-colors',
           )}
-          style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
-        />
+        >
+          <textarea {...setting.anchorProps} {...setting.controlProps}
+            ref={textareaRef}
+            value={voice.displayText}
+            readOnly={voice.isBusy}
+            disabled={!ready || saving}
+            onChange={(e) =>
+              setDraft((current) => ({
+                value: e.target.value,
+                revision: current.value === value ? revision : current.revision,
+                ownerKey,
+              }))
+            }
+            placeholder={t('settings.personalization.placeholder')}
+            aria-label={t('settings.personalization.ariaLabel')}
+            rows={6}
+            className={cn(
+              'min-h-[132px] w-full resize-y bg-transparent',
+              'px-4 pt-3.5 pb-1',
+              'text-13 leading-[1.6] text-[var(--settings-input-text)]',
+              'placeholder:font-normal placeholder:text-[var(--settings-input-placeholder)]',
+              'outline-none',
+            )}
+            style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
+          />
+          <div className="flex items-center justify-end px-2.5 pb-2.5 pt-1">
+            <VoiceInputButton {...voice.buttonProps} testId="user-prompt-voice" tipSide="top" />
+          </div>
+        </div>
+        <FieldVoiceInputNotice error={voice.lastError} speakerFiltered={voice.speakerFiltered} />
 
         {(unavailable || conflicted) && (
           <p role="status" className="text-13 text-[var(--settings-section-desc)]">
@@ -182,7 +237,7 @@ export function UserPromptEditor({
               <Button data-settings-search-action="Reset the custom instructions of the Host this page edits"
                 variant="secondary"
                 onClick={handleReset}
-                disabled={!ready || !customized || saving || conflicted}
+                disabled={!ready || !customized || busy || conflicted}
               >
                 {t('hostSettings.reset')}
               </Button>
@@ -194,7 +249,7 @@ export function UserPromptEditor({
               type="button"
               onClick={handleSave}
               disabled={!canSave}
-              loading={saving}
+              loading={busy}
             >
               {t('settings.personalization.save')}
             </Button>

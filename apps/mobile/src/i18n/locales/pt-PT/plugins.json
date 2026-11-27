@@ -110,6 +110,7 @@
   "selectFolder": "Selecionar esta pasta",
   "automationDraft": "Nova automatização",
   "automationDraftHint": "Confirme o conteúdo, o horário e o modelo e, em seguida, guarde para criar esta automatização.",
+  "automationCheck": "Deixar {{name}} verificar antes de usar um modelo",
   "automationName": "Nome",
   "automationPrompt": "O que fazer",
   "automationInterval": "Intervalo (minutos)",

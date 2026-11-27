@@ -976,7 +976,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     this.deps.logger.info?.(
       `[runner] defer fire (${reason}) schedule=${schedule.id} retryIn=${RETRY_DELAY_MS}ms`,
     );
-    return { sessionId, deferred: true, deferRetryMs: RETRY_DELAY_MS };
+    return { sessionId, deferred: true, deferRetryMs: RETRY_DELAY_MS, deferReason: reason };
   }
 
   /**
@@ -1317,6 +1317,18 @@ export class MakerScheduleRunner implements ScheduleRunner {
       if (target && target.status !== 'deleted') {
         await this.runtime.restoreScheduledTarget(schedule.targetSessionId, target, ctx.signal);
       }
+    }
+
+    // Short-circuit before running preRunHook when a previous passed fire for this exact
+    // schedule is already waiting in the bound session's queue: running the hook again can only
+    // end in deferFire('already-queued') and wastes external API calls (e.g. PR gate polls).
+    if (
+      schedule.source !== 'bot' &&
+      schedule.targetSessionId &&
+      this.canDefer(schedule, ctx) &&
+      this.deps.schedulerQueue?.hasQueuedPrompt(schedule.targetSessionId, schedule.id)
+    ) {
+      return this.deferFire(schedule, schedule.targetSessionId, 'already-queued');
     }
 
     // 1.5 前置检查脚本(Pre-run Hook):放在 worktree 创建 / session 创建

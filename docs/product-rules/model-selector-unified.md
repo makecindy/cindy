@@ -2,13 +2,14 @@
 
 > **状态**:实施设计文档(本次交付的权威规格;合并后其中「交互契约」章节升为产品规则)
 > **读取时机**:实现、review 或修改新版模型选择器(新会话/会话内)前
-> **适用路径**：`apps/desktop/src/renderer/components/new-chat/{ModelSelector,ModelPickerAccount,UnifiedModel,unifiedModelSelection,modelPickerPreferences}*`、
+> **适用路径**：`apps/desktop/src/renderer/components/new-chat/{ModelSelector,ModelPickerAccount,UnifiedModel,unifiedModelSelection,modelPickerPreferences,PluginEnginesSection,PluginModelsSection}*`、
+> `apps/desktop/src/renderer/lib/pluginEngineFavorites.ts`、`apps/desktop/src/renderer/features/cc-agent/pluginModelFavorites.ts`、
 > `apps/desktop/src/renderer/__tests__/{modelSelector,modelPicker,unifiedModel}*`、
-> `apps/mobile/src/session/{UnifiedModelPicker,MobileModelPickerList,ModelPicker,modelPicker}*`、
-> `apps/mobile/src/__tests__/{modelPicker,unifiedMobilePicker,androidModelPickerParity}*`、
+> `apps/mobile/src/session/{UnifiedModelPicker,MobileModelPickerList,ModelPicker,modelPicker,pluginEngines}*`、
+> `apps/mobile/src/__tests__/{modelPicker,unifiedMobilePicker,androidModelPickerParity,pluginEngines}*`、
 > `packages/model-providers/src/**/unifiedSelection*`、`packages/device-link/src/**/modelFavorites*`、
 > `apps/desktop/src/renderer/state/modelFavorites.ts`、
-> `apps/desktop/scripts/fixtures/{model-selector-performance,model-selector-remote-repro}/**`
+> `apps/desktop/scripts/fixtures/{model-selector-performance,model-selector-remote-repro,plugin-engines}/**`
 > **来源**:2026-08-12 交互设计稿(Chris 逐轮裁决)+ 三路代码侦察(选择器结构/目录平面/偏好持久化)
 
 ## 0. 一句话
@@ -116,6 +117,7 @@ Mobile `useMobileModelQuotas`、`unifiedMobilePicker`；共享模型准入 `unif
   实现见 `PluginTaskPrefs.tsx`、`PluginTaskSettings.tsx`、`pluginTaskPrefsStore.ts`、`mobileTaskSettings.ts` 与
   `register.ts` 的插件路由解析。
 - 协同 Worker 的面板与新任务一样列出远程供应商（2026-10-10）：任务所在电脑的供应商之后接其他电脑与分享来的供应商，选中哪一行，Worker 的 Agent 就在哪台运行，默认选中 Lead 的位置。Desktop、Desktop 远程控制与 Mobile 同口径；远程那几行的档位记在本机为那台单独记的一份，不进本机 Worker 偏好。
+- **插件执行引擎（ACP）与插件路由模型（`route`）**：桌面与手机的统一模型选择器分别通过 `PluginEnginesSection`（及手机 `pluginEngines.ts`）和 `PluginModelsSection` 呈现这两类能力。插件执行引擎遵循执行端目录、逐模型开关（关闭任意模型后 `defaultModelAllowed: false`）与统一收藏通道（wire 固定写 `PLUGIN_ENGINE_FAVORITE_WIRE_AGENT = 'cc'`，按 `acp-plugin:` 识别）；插件路由模型仅在本机桌面新任务草稿可见，收藏仅存本机 `localStorage`（`cindy:pluginModelFavorites:v1`），且单任务草稿临时替换（alternate）时必须遮罩已保存的插件路由模型与模型组模式（#13238）。完整产品边界见[插件引擎与插件模型](plugin-engines-and-models.md)。
 - 模型选择、配置编辑与“跟随默认”均等待保存结果；失败保留面板与原配置。选模型或跟随默认成功才收起，配置编辑保持浮层打开。无模型记忆表的设置入口编辑非当前模型时，直接应用其完整配置。已有待生效配置时再次远程选模，先展示最新用户选择；运行时当前配置的来源、模型、引擎、深度与 Fast 始终来自同一快照。
 - 结构:搜索框贴顶 → 左侧 rail(最近 / ★收藏 / 全部 / 各供应商图标) → 右侧列表 → 底部「＋配置模型」。
   「最近」格在 ★ 之上（2026-09-16 裁决），与 ★ 一样常驻，图标用时钟回弹箭头（History），点击进入**独立的最近视图**；空列表时显示引导空态。常规视图（全部 / 各供应商 / 同引擎）**不**陈列最近区（与收藏上下叠放会产生视觉歧义）。

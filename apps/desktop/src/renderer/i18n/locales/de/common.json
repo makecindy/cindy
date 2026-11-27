@@ -9022,7 +9022,10 @@
             "user": "Benutzer",
             "assistant": "Assistent"
           }
-        }
+        },
+        "agentChecks": "Kann Quellen auf neue Inhalte prüfen",
+        "agentChecksDetail": "Tauscht mit anderen genehmigten Plugins nur den Status geändert, unverändert oder unbekannt aus. Jedes Plugin verwendet seine eigenen verbundenen Konten. Nachrichteninhalte und Zugangsdaten werden nicht geteilt. Die Prüfung nutzt kein Modell. Prüft auch lokale Cindy-Unterhaltungen auf Änderungen, ohne Inhalte zurückzugeben.",
+        "agentChecksRequest": "Berechtigung zur Änderungsprüfung prüfen"
       },
       "connections": {
         "confirmTitle": "Verbindungsadresse hinzufügen",
@@ -12147,6 +12150,8 @@
       },
       "notice": {
         "memberJoined": "{{name}} ist der Gruppe beigetreten",
+        "memberJoinedList": "{{names}} sind der Gruppe beigetreten",
+        "memberJoinedSummary": "{{names}} und {{others}} weitere sind der Gruppe beigetreten",
         "memberFailed": "{{name}} konnte diesmal nicht antworten",
         "memberTimeout": "{{name}} hat zu lange für die Antwort gebraucht und wurde diesmal übersprungen",
         "memberUnavailable": "{{name}} ist nicht verfügbar und hat diesmal nicht gesprochen",
@@ -12327,6 +12332,8 @@
         "threadNew": "Neue Nachrichten im Thread",
         "replyingTo": "Antwort an „{{name}}“: {{text}}",
         "filesOutsideWorkingDir": "Dateien außerhalb des Arbeitsverzeichnisses wurden nicht angehängt.",
+        "modelFallback": "Das ausgewählte Modell ist auf diesem Computer nicht verfügbar, daher antwortet diesmal {{model}}.",
+        "modelFallbackUnnamed": "Das ausgewählte Modell ist auf diesem Computer nicht verfügbar, daher antwortet diesmal ein hier verfügbares Modell.",
         "earlierOmitted": "(Ältere Nachrichten ausgelassen)",
         "actingFor": "{{name}} · für {{person}}",
         "checkout": {
@@ -17143,9 +17150,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "Cloud-Computer hinzufügen",
-        "preparingCloud": "Cloud-Computer wird vorbereitet",
-        "manageCloud": "Cloud-Computer verwalten",
         "allMachines": "Alle",
         "localMachine": "Lokal",
         "connecting": "Verbindung wird hergestellt…",
@@ -17637,6 +17641,13 @@
         "inbox": "Posteingang",
         "enterInbox": "Zum Posteingangsmodus wechseln",
         "leaveInbox": "Zum Aufgabenlistenmodus wechseln"
+      },
+      "filterHideTaskCreated": "Von anderen Aufgaben erstellte Aufgaben ausblenden",
+      "origin": {
+        "createdByTask": "Von einer anderen Aufgabe geöffnet",
+        "createdByTaskNamed": "Von Aufgabe „{{title}}“ geöffnet",
+        "createdByRemoteTask": "Von einer Aufgabe auf {{device}} geöffnet",
+        "createdByRemoteTaskNamed": "Von „{{title}}“ auf {{device}} geöffnet"
       }
     },
     "rename": {
@@ -17657,7 +17668,9 @@
       "orcaRemoteLead": "Zusammenarbeit von {{device}}",
       "orcaRemoteLeadReleased": "Zusammenarbeit beendet · von {{device}}",
       "orcaRemoteLeadUnknownDevice": "einem anderen Computer",
-      "orcaRemoteLeadTip": "Ein Worker für „{{lead}}“ auf {{device}}. Seine Aufgabe, sein Ordner und seine Befehle werden auf diesem Computer ausgeführt. Nachrichten, die du hier sendest, werden nicht an den Lead weitergegeben."
+      "orcaRemoteLeadTip": "Ein Worker für „{{lead}}“ auf {{device}}. Seine Aufgabe, sein Ordner und seine Befehle werden auf diesem Computer ausgeführt. Nachrichten, die du hier sendest, werden nicht an den Lead weitergegeben.",
+      "createdByTask": "Aus anderer Aufgabe",
+      "createdByTaskNamed": "Aus „{{title}}“"
     },
     "gitContext": {
       "detached": "Detached HEAD",

@@ -366,7 +366,11 @@
       "close": "Close",
       "cancelRename": "Cancel rename",
       "createdBy": "Created by {{name}}",
-      "ownedBy": "Belongs to {{name}}"
+      "ownedBy": "Belongs to {{name}}",
+      "orcaRemoteLead": "Collaboration from {{device}}",
+      "createdByTask": "Opened by another task",
+      "createdByTaskNamed": "Opened by task “{{title}}”",
+      "unknownDevice": "another computer"
     },
     "accounts": {
       "title": "Switch account",
