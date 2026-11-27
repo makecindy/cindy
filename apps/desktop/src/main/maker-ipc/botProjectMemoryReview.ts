@@ -5,6 +5,17 @@ import { UI_ACTION_TRIGGER_PREFIX } from '@cindy/maker-shared/synthetic-trigger'
 
 export const LEGACY_MEMORY_REVIEW_HOOK_COMMAND = 'xdt-node "../.memory-review-check-v1.cjs"';
 export const MEMORY_REVIEW_HOOK_COMMAND = 'cindy-node-script "../.memory-review-check-v1.cjs"';
+export const MEMORY_REVIEW_CHECK_FILENAME = '.memory-review-check-v1.cjs';
+export const MEMORY_REVIEW_STATE_FILENAME = '.memory-review-state-v1.json';
+
+const HISTORICAL_BUNDLED_CHECK_SHA256 = new Set([
+  '32dd10c0fb4c51e5fde92f0e57b80d6a4391c35d7fc134f847ac6496c76ef47c',
+  '4765ed7d8092d3c2a594e965966db40a88336ddb0b858309b4b19febba64097f',
+  '8d85213bf0d533c2cf1bf9376a21f5994aa2fe73a1257f9e49096fa1fb8418cb',
+  '8e97ec8f8733954427efb43d81b9cd58d5940baa2d4f238737727a3903e6dd65',
+  'dff1c6e5c4b697265735fb990b878cf6ef97b6810e9e4612ccf35a7da579f9d3',
+  'ed9421bcbc8a12756db140f78f6aa0e15f4eb7941b4d35fbe9e7e6eb6ffa4ece',
+]);
 
 /** The bundled check lives beside the workspace, not in its Git history: its database path is
  * local account data. Memory itself remains ordinary portable project files. No model or new
@@ -13,14 +24,7 @@ export const MEMORY_REVIEW_HOOK_COMMAND = 'cindy-node-script "../.memory-review-
  * (2026-11-22: teammates of owners who chat less were never reviewed). Its record of the last
  * review sits beside it, outside Git. `bundledCheck` is false when the owner edited the check;
  * it is not part of the hook config. */
-export async function ensureMemoryReviewHook(input: {
-  workingDir: string;
-  botId: string;
-  databasePath: string;
-  previousCommand?: string;
-}): Promise<{ command: string; timeoutMs: number; bundledCheck: boolean }> {
-  const filename = '.memory-review-check-v1.cjs';
-  const check = String.raw`
+const CURRENT_MEMORY_REVIEW_CHECK_BODY = String.raw`
 (async () => {
 const { DatabaseSync } = require('node:sqlite');
 let input = '';
@@ -187,6 +191,15 @@ if (run && changed.length > 0) {
 process.stdout.write('', () => process.exit(process.exitCode || 0));
 })().catch(error => { console.error(error); process.stderr.write('', () => process.exit(1)); });
 `;
+
+export async function ensureMemoryReviewHook(input: {
+  workingDir: string;
+  botId: string;
+  databasePath: string;
+  previousCommand?: string;
+}): Promise<{ command: string; timeoutMs: number; bundledCheck: boolean }> {
+  const filename = '.memory-review-check-v1.cjs';
+  const check = CURRENT_MEMORY_REVIEW_CHECK_BODY;
   const source = `const source = ${JSON.stringify({ databasePath: input.databasePath, botId: input.botId, workspace: input.workingDir, syntheticPrefix: UI_ACTION_TRIGGER_PREFIX })};\n` + check;
   // Preserve an owner's edits to the supplied check. A missing database or broken check fails
   // closed through the existing preRunHook protocol; it never silently starts the model.
@@ -202,19 +215,7 @@ process.stdout.write('', () => process.exit(process.exitCode || 0));
     // Git/editor line-ending conversion does not make a bundled check owner-customized.
     const oldCheck = old.slice(old.indexOf('\n') + 1).replace(/\r\n/g, '\n');
     // Exact prior bundled bodies; owner-edited checks stay untouched.
-    const previousBundled = createHash('sha256').update(oldCheck).digest('hex')
-      === '32dd10c0fb4c51e5fde92f0e57b80d6a4391c35d7fc134f847ac6496c76ef47c'
-      || createHash('sha256').update(oldCheck).digest('hex')
-        === '4765ed7d8092d3c2a594e965966db40a88336ddb0b858309b4b19febba64097f'
-      || createHash('sha256').update(oldCheck).digest('hex')
-        === '8d85213bf0d533c2cf1bf9376a21f5994aa2fe73a1257f9e49096fa1fb8418cb'
-      || createHash('sha256').update(oldCheck).digest('hex')
-        === '8e97ec8f8733954427efb43d81b9cd58d5940baa2d4f238737727a3903e6dd65'
-      || createHash('sha256').update(oldCheck).digest('hex')
-        === 'dff1c6e5c4b697265735fb990b878cf6ef97b6810e9e4612ccf35a7da579f9d3'
-      // Messages counted over the last day only (before the count since the last review).
-      || createHash('sha256').update(oldCheck).digest('hex')
-        === 'ed9421bcbc8a12756db140f78f6aa0e15f4eb7941b4d35fbe9e7e6eb6ffa4ece';
+    const previousBundled = HISTORICAL_BUNDLED_CHECK_SHA256.has(createHash('sha256').update(oldCheck).digest('hex'));
     if (oldCheck !== check && !previousBundled && input.previousCommand) {
       return { command: input.previousCommand, timeoutMs: 10_000, bundledCheck: false };
     }
@@ -228,4 +229,15 @@ process.stdout.write('', () => process.exit(process.exitCode || 0));
     }
   }
   return { command: MEMORY_REVIEW_HOOK_COMMAND, timeoutMs: 10_000, bundledCheck: true };
+}
+
+/** Whether a `.memory-review-check-v1.cjs` file matches any untouched bundled check (current or historical). */
+export function isBundledMemoryReviewCheckScript(rawScript: string): boolean {
+  if (!rawScript.startsWith('const source = {')) return false;
+  const newline = rawScript.indexOf('\n');
+  if (newline < 0) return false;
+  const body = rawScript.slice(newline + 1).replace(/\r\n/g, '\n');
+  if (body === CURRENT_MEMORY_REVIEW_CHECK_BODY) return true;
+  const digest = createHash('sha256').update(body).digest('hex');
+  return HISTORICAL_BUNDLED_CHECK_SHA256.has(digest);
 }

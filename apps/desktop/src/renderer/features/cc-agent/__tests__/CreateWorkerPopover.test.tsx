@@ -111,7 +111,26 @@ const mocks = vi.hoisted(() => ({
   pluginEngineSubscriptions: [] as boolean[],
 }));
 
-// 本机插件引擎(docs/plans/acp-plugin-bridge.md)：只在弹窗要读引擎列表时给出一个可用引擎。
+// 本机与远端插件引擎(docs/plans/acp-plugin-bridge.md)：只在弹窗要读引擎列表时给出一个可用引擎。
+vi.mock('@/hooks/usePickerPluginEngines', () => ({
+  usePickerPluginEngines: (opts: { enabled?: boolean } = {}) => {
+    const enabled = opts.enabled ?? true;
+    mocks.pluginEngineSubscriptions.push(enabled);
+    const engines = enabled ? [{
+      key: 'dsh-acp:dsh', providerId: 'acp-plugin:dsh-acp:dsh', ghostId: 'dsh-acp', harnessId: 'dsh', name: 'DSH',
+      availability: { state: 'available' }, models: [{ id: 'dsh-pro', displayName: 'DSH Pro' }],
+      permissionModes: [{ id: 'ask' }, { id: 'bypassPermissions' }], defaultPermissionMode: 'ask',
+    }] : [];
+    return {
+      engines,
+      hasSources: engines.length > 0,
+      readCatalogue: () => {},
+      findEngine: (providerId: string | null | undefined) =>
+        engines.find((e) => e.providerId === providerId) ?? null,
+    };
+  },
+}));
+
 vi.mock('@/hooks/usePluginEngines', () => ({
   usePluginEngines: (enabled = true) => {
     mocks.pluginEngineSubscriptions.push(enabled);

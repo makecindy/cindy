@@ -1029,8 +1029,9 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
                   fastExplicit: Boolean(fastMode),
                 },
               ),
-            performCrossSwitch: ({ sessionId: sid, targetAgentKind, agentDeviceId, model, providerId, effort, fastMode, skipBootstrap }) =>
-              performSessionAgentSwitch(agentSwitchDeps, {
+            performCrossSwitch: async ({ sessionId: sid, targetAgentKind, agentDeviceId, model, providerId, effort, fastMode, skipBootstrap }) => {
+              if (targetAgentKind === 'acp') return { switched: false };
+              return performSessionAgentSwitch(agentSwitchDeps, {
                 sessionId: sid,
                 targetAgentKind,
                 agentDeviceId,
@@ -1042,7 +1043,8 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
                 skipBootstrap,
                 configStaged: true,
                 preserveModelGroupBinding: true,
-              }),
+              });
+            },
             writeSwitchNote: async (sid, note, clientId) => {
               await deps.createDbMessage(sid, {
                 clientId,
