@@ -9548,17 +9548,20 @@ describe('CodexAgent MCP thread context hooks', () => {
   // Regression (2026-11-22, teammate iMessage lane): a subscription-account session's host key carries
   // the account, the writer check did not, so the session's own host looked like another writer and every
   // explicit route apply closed and relinked an unchanged session (provider-thread-relink, same provider).
-  it('treats the subscription account host of the same session as the target, not another writer', async () => {
+  it.each([['openai', false], ['openai-old', true]] as const)('checks the real subscription writer for %s', async (providerId, transferRequired) => {
     const profile: NativeSubscriptionAccount = { id: 'pooled', configDir: '/fixture/.codex-pooled',
       assertCurrent() {}, readState: async () => ({ authenticated: true }) };
-    const deps = createDeps();
+    const deps = createDeps({}, { isCodexAccountProvider: (id) => id === 'openai-old' });
     deps.auth.getAuthEnv = async options => ({ CODEX_HOME: options?.nativeSubscriptionAccount?.configDir ?? '/fixture/legacy' });
     const agent = new CodexAgent(deps);
     try {
       const handle = await agent.startSession({ sessionId: 'lane', providerId: 'openai', model: 'gpt-5.4', workingDir: '/repo', [NATIVE_SUBSCRIPTION_ACCOUNT]: profile });
       createdTransports[0].setMockResponse('thread/loaded/list', { result: { data: [handle.id], nextCursor: null } });
-      const query = { sessionId: 'lane', threadId: handle.id, model: 'gpt-5.4', providerId: 'openai' };
-      expect(await agent.requiresCodexThreadHostTransfer({ ...query, [NATIVE_SUBSCRIPTION_ACCOUNT]: profile })).toBe(false);
+      const query = { sessionId: 'lane', threadId: handle.id, model: 'gpt-5.4', providerId };
+      expect(await agent.requiresCodexThreadHostTransfer({ ...query, [NATIVE_SUBSCRIPTION_ACCOUNT]: profile })).toBe(transferRequired);
+      // A different subscription account must not be treated as the same writer.
+      const otherProfile = { ...profile, id: 'other-account', configDir: '/fixture/.codex-other' };
+      expect(await agent.requiresCodexThreadHostTransfer({ ...query, [NATIVE_SUBSCRIPTION_ACCOUNT]: otherProfile })).toBe(true);
       // A route without that account still has to move the writer.
       expect(await agent.requiresCodexThreadHostTransfer(query)).toBe(true);
       await handle.close();
@@ -9625,15 +9628,18 @@ describe('CodexAgent MCP thread context hooks', () => {
     // 4 小时的已完成会话被写 app-server force-retired 错误)。修复后 host 发结构化
     // hostForcedRetire 信号,由每个 session 按自身状态收口:空闲订阅者静默失效,
     // 真实在飞的订阅者收到终态错误 + Done。
-    const agent = new CodexAgent(createDeps());
+    const closeCodexMcpSessionInstance = vi.fn();
+    const agent = new CodexAgent(createDeps({}, { closeCodexMcpSessionInstance }));
 
     const idleHandle = await agent.startSession({
       sessionId: 'session-force-retire-idle',
+      sessionInstanceId: 'instance-force-retire-idle',
       model: 'gpt-5.4',
       workingDir: '/repo-local',
     });
     const busyHandle = await agent.startSession({
       sessionId: 'session-force-retire-busy',
+      sessionInstanceId: 'instance-force-retire-busy',
       model: 'gpt-5.4',
       workingDir: '/repo-local',
     });
@@ -9663,6 +9669,13 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(idleHandle.isTurnRunning?.()).toBe(false);
 
     await agent.forceDisposeLocalHostForAuthChange('test forced retire with idle subscriber');
+
+    // #13076: host retirement ends both streams without a caller invoking close().
+    // Unit tier, real retirement entry with fake app-server transport. Both live
+    // instances must reach the bridge port even when no public close follows.
+    expect(closeCodexMcpSessionInstance.mock.calls.map(([id]) => id).sort()).toEqual([
+      'instance-force-retire-busy', 'instance-force-retire-idle',
+    ]);
 
     // busy 会话:照旧收到一次终态 transport error + Done,isTurnRunning 复位。
     expect(busyHandle.isTurnRunning?.()).toBe(false);
@@ -12028,7 +12041,8 @@ describe('CodexAgent MCP thread context hooks', () => {
   });
 
   it('retires the captured host and rejects an unused-thread replacement when release fails', async () => {
-    const agent = new CodexAgent(createDeps());
+    const closeCodexMcpSessionInstance = vi.fn();
+    const agent = new CodexAgent(createDeps({}, { closeCodexMcpSessionInstance }));
     let threadStartSeq = 0;
     const host = installFakeHost(agent, (method) => {
       if (method === Method.ThreadStart) {
@@ -12049,6 +12063,7 @@ describe('CodexAgent MCP thread context hooks', () => {
       .mockResolvedValue(undefined);
     const handle = await agent.startSession({
       sessionId: 'session-unused-replacement-release-failure',
+      sessionInstanceId: 'instance-unused-replacement-release-failure',
       model: 'gpt-5.4',
       workingDir: '/repo',
     });
@@ -12071,6 +12086,9 @@ describe('CodexAgent MCP thread context hooks', () => {
       expect.objectContaining({ failIfActive: true }),
     );
     expect(host.subscribeThread).toHaveBeenCalledTimes(1);
+    // #13076, unit: a rejected unsubscribe can terminate the handle directly,
+    // without the public close path. The dead instance must release its bridge.
+    expect(closeCodexMcpSessionInstance).toHaveBeenCalledExactlyOnceWith('instance-unused-replacement-release-failure');
   });
 
   describe('automatic remote compaction summary fallback', () => {
@@ -21588,7 +21606,15 @@ describe('CodexAgent MCP thread context hooks', () => {
       }],
     }, { requestId: 'req-native-descendant' });
 
-    expect(result).toEqual({ answers: {} });
+    expect(result).toEqual({
+      answers: {
+        direction: {
+          answers: [
+            '[System — not a user answer] User questions are only available to the root agent. Report the question to the parent agent, which can decide whether to ask the user.',
+          ],
+        },
+      },
+    });
     expect(resolveInteraction).not.toHaveBeenCalled();
     await handle.close();
   });
@@ -29357,7 +29383,13 @@ describe('CodexAgent turn lifecycle', () => {
       requestId: 'child-input-request',
     });
     await expect(childInputPromise).resolves.toEqual({
-      answers: {},
+      answers: {
+        continue: {
+          answers: [
+            '[System — not a user answer] User questions are only available to the root agent. Report the question to the parent agent, which can decide whether to ask the user.',
+          ],
+        },
+      },
     });
     await expect(handlers.dynamicToolCall({
       ...child,
@@ -33872,7 +33904,7 @@ describe('CodexAgent reconnect-stall watchdog', () => {
         },
       } as never);
       handlers.itemStarted?.({ threadId: 'start-thread-id', turnId: 'turn-1',
-        item: { type: 'commandExecution', id: 'cmd-pending', command: 'build' },
+        item: { type: 'commandExecution', id: 'cmd-pending', command: 'build', status: 'inProgress' },
       } as never);
       reconnect('turn-1', 1, 502);
       await vi.advanceTimersByTimeAsync(60_000);
@@ -33880,11 +33912,12 @@ describe('CodexAgent reconnect-stall watchdog', () => {
       reconnect('turn-1', 3); // A status-less progress notice must not erase known facts.
       await vi.advanceTimersByTimeAsync(60_001);
       expect(seen).toContainEqual(expect.objectContaining({ type: 'error', data: expect.objectContaining({
-        reason: 'codex_reconnect_stalled', errorStatus: 503, pendingToolCount: 1, isTerminal: true,
-        message: expect.stringContaining('(HTTP 503)'), idleMs: 120_000,
+        reason: 'codex_reconnect_stalled', errorStatus: 503, isTerminal: true,
+        reconnectAttempt: 3, reconnectMaxAttempts: 5, pendingToolCount: 1,
+        message: expect.stringContaining('Last reconnect attempt: 3/5. Pending tool calls at interruption: 1.'), idleMs: 120_000,
       }) }));
       expect(seen).toContainEqual(expect.objectContaining({ type: 'error', data: expect.objectContaining({
-        message: expect.stringContaining('unconfirmed tool results'),
+        message: expect.stringMatching(/unconfirmed tool results.*\(HTTP 503\)/),
       }) }));
       expect(JSON.stringify(seen)).not.toMatch(/private|secret|PRIVATE_RESPONSE|EOF/);
       const priorEnd = seen.length;
@@ -33896,7 +33929,7 @@ describe('CodexAgent reconnect-stall watchdog', () => {
       const terminal = seen.slice(priorEnd).find(e => e.type === 'error' && (e.data as { reason?: string }).reason === 'codex_reconnect_stalled');
       expect(terminal).toBeDefined();
       expect(terminal!.data).not.toHaveProperty('errorStatus');
-      expect(terminal!.data).not.toHaveProperty('pendingToolCount');
+      expect(terminal!.data).toMatchObject({ reconnectAttempt: 1, reconnectMaxAttempts: 5, pendingToolCount: 0 });
       expect((terminal!.data as { message: string }).message).not.toContain('HTTP');
       await handle.close();
     } finally { vi.useRealTimers(); }
@@ -37580,6 +37613,29 @@ describe('Codex native manual compaction', () => {
     started(); completed();
     await expect(result).resolves.toEqual({ noop: true });
     await handle.close();
+  });
+
+  // #13076 review, unit tier: a rejected native compact request ends the handle
+  // internally. Explicit-close coverage misses this path to the bridge port.
+  it('releases the bridge instance when a failed compact ends the session internally', async () => {
+    const closeCodexMcpSessionInstance = vi.fn();
+    const agent = new CodexAgent(createDeps({}, { closeCodexMcpSessionInstance }));
+    installFakeHost(agent, (method) => {
+      if (method === Method.ThreadCompactStart) throw new Error('compact admission failed');
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'compact-bridge-release',
+      sessionInstanceId: 'instance-compact-bridge-release',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const ended = (async () => { for await (const _event of handle.events()) { /* drain */ } })();
+    await expect(handle.compactSession!()).rejects.toThrow('compact admission failed');
+    await ended;
+    expect(closeCodexMcpSessionInstance).toHaveBeenCalledExactlyOnceWith('instance-compact-bridge-release');
+    await handle.close();
+    expect(closeCodexMcpSessionInstance).toHaveBeenCalledTimes(1);
   });
 
   it('refreshes context from the native zero-cost compact frame with unchanged billing totals', async () => {

@@ -68,7 +68,7 @@ it.each(['recovery', 'ordinary', 'missing-offer', 'pending', 'new-provider', 'ne
       runtimeBaselineRecoveryPending: scenario !== 'missing-offer',
       runtimePending: scenario === 'pending' ? route : null, runtimeEffective: route };
     const send = runInNewContext(code, { readOnly: false, cindyMakeInputLocked: false, awaitingSessionCreation: false, creationFailed: false,
-      invalidateHistoryRecoveryNavigation: vi.fn(), getDataOwnerGeneration: () => 1,
+      sessionHandoffPreparing: false, invalidateHistoryRecoveryNavigation: vi.fn(), getDataOwnerGeneration: () => 1,
       remoteDeviceId: null, catalogDeviceId: undefined, displayAgentKind: 'codex', isCodex: true, session,
       pluginEngineTask: false, pluginEngineSwitchIntent: null,
       agentSwitchIntent: scenario === 'new-intent' ? { target: 'pi' } : null,
@@ -90,7 +90,7 @@ it('authenticates the recovered Harness on subsequent sends after a legacy proje
   const beforeEnqueue = vi.fn(async () => false);
   const displayAgentKind = dbToMakerAgentKind(session.agentKind);
   const send = runInNewContext(code, { readOnly: false, cindyMakeInputLocked: false, awaitingSessionCreation: false, creationFailed: false,
-    invalidateHistoryRecoveryNavigation: vi.fn(), getDataOwnerGeneration: () => 1,
+    sessionHandoffPreparing: false, invalidateHistoryRecoveryNavigation: vi.fn(), getDataOwnerGeneration: () => 1,
     remoteDeviceId: null, catalogDeviceId: undefined, displayAgentKind, isCodex: displayAgentKind === 'codex', session,
     pluginEngineTask: false, pluginEngineSwitchIntent: null, agentSwitchIntent: null, vendorAuthGate: { checkAndConfirm: auth },
   });

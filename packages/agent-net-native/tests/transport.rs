@@ -235,3 +235,69 @@ fn notification_trust_expires_only_the_selected_sender() {
     let mut legacy = config.clone(); legacy["version"] = json!(2); legacy.as_object_mut().unwrap().remove("peerExpiresAt");
     assert!(phone.command(&json!({"op":"notificationOpen", "config":legacy, "envelope":envelope, "now":now})).is_ok());
 }
+
+// Regression (2026-11-26, #12887 + #12184): Desktop runs the Rust native engine by default; stopping a macOS transparent
+// proxy permanently invalidates the previous UDP descriptor. Observable: `migrate` rebinds the UDP socket in place without
+// dropping an established connection, carries traffic counters forward, reports `udpRebind` in `poll`, wakes an existing
+// `Waiter` on datagrams arriving on the new port, and enforces the cooldown / no-inbound auto-rebind cap.
+// Existing tests never exercised UDP socket rebinding or waiter redirection across rebinds.
+#[test]
+fn migrate_rebinds_udp_socket_keeps_connection_alive_and_redirects_existing_waiter() {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    let enhanced = |seed: u8, id: &str| {
+        create(&json!({"seed":URL_SAFE_NO_PAD.encode([seed;32]),"context":"native-host-unit",
+            "deviceId":id,"enhancedTransport":true})).unwrap()
+    };
+    let mut a = enhanced(41, "native-rebind-a");
+    let mut b = enhanced(43, "native-rebind-b");
+    let ia = command(&mut a, json!({"op":"identity"}));
+    let ib = command(&mut b, json!({"op":"identity"}));
+    assert!(ia["features"].as_array().unwrap().iter().any(|f| f == "udp-rebind"));
+    let old_port = ia["udpPort"].as_u64().unwrap() as u16;
+    let waiter = a.waiter();
+    command(&mut a, json!({"op":"admit","peers":[{"key":ib["transportKey"],"link":1}]}));
+    command(&mut b, json!({"op":"admit","peers":[{"key":ia["transportKey"],"link":1}]}));
+    let id = command(&mut a, json!({"op":"connect","key":ib["transportKey"],
+        "address":{"address":"127.0.0.1","port":ib["udpPort"]}}));
+    until(&mut a, &mut b, |pa, pb| pa["connections"].as_array().unwrap().iter().any(|c| c["established"] == true)
+        && pb["connections"].as_array().unwrap().iter().any(|c| c["established"] == true));
+    let traffic_before = command(&mut a, json!({"op":"poll"}))["udpTraffic"].clone();
+    let migrated = command(&mut a, json!({"op":"migrate"}));
+    assert_eq!(migrated["rebound"], true);
+    let new_port = migrated["udpPort"].as_u64().unwrap() as u16;
+    assert_ne!(new_port, 0);
+    assert_eq!(command(&mut a, json!({"op":"identity"}))["udpPort"].as_u64().unwrap() as u16, new_port);
+    // An existing Waiter created before `migrate` must wake immediately on datagrams arriving at `new_port`.
+    let sender = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let send = std::thread::spawn(move || {
+        sleep(Duration::from_millis(30));
+        sender.send_to(b"after-rebind", ("127.0.0.1", new_port)).unwrap();
+    });
+    assert!(waiter.wait(2_000), "existing waiter must follow rebound UDP socket");
+    send.join().unwrap();
+    // Poll reports `udpRebind` and preserves cumulative UDP traffic across the rebind.
+    let poll = command(&mut a, json!({"op":"poll"}));
+    assert_eq!(poll["udpRebind"]["gen"], 1);
+    assert_eq!(poll["udpRebind"]["port"], new_port);
+    assert_eq!(poll["udpRebind"]["reason"], "network-changed");
+    assert!(poll["udpTraffic"][0].as_u64().unwrap() >= traffic_before[0].as_u64().unwrap());
+    // Stream traffic continues on the same established connection without reopening.
+    let stream = command(&mut a, json!({"op":"openStream","id":id}));
+    let payload = b"survives-native-udp-rebind";
+    assert_eq!(command(&mut a, json!({"op":"write","id":id,"stream":stream,"data":URL_SAFE_NO_PAD.encode(payload)})), payload.len());
+    let mut received = Vec::new();
+    until(&mut a, &mut b, |_, pb| {
+        for connection in pb["connections"].as_array().unwrap() {
+            for chunk in connection["data"].as_array().unwrap() {
+                received.extend(URL_SAFE_NO_PAD.decode(chunk["data"].as_str().unwrap()).unwrap());
+            }
+        }
+        received.len() == payload.len()
+    });
+    assert_eq!(received, payload);
+    // Immediate second migrate within the 3s cooldown does not spin-rebind.
+    let second = command(&mut a, json!({"op":"migrate"}));
+    assert_eq!(second["rebound"], false);
+    assert_eq!(second["udpPort"].as_u64().unwrap() as u16, new_port);
+    let _ = old_port;
+}

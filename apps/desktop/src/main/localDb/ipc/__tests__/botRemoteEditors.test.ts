@@ -64,7 +64,11 @@ describe('portable teammate editors', () => {
     expect(f.deps.create).toHaveBeenCalledWith(expect.objectContaining({ capabilities: { modelChainOverride: [route] } }));
     expect(f.deps.update).not.toHaveBeenCalled();
     await expect(f.send(await f.resource('create'), { ...input, modelChain: '[]' })).rejects.toThrow();
-    await expect(f.send(await f.resource('create'), { ...input, modelChain: JSON.stringify([route, route]) })).rejects.toThrow();
+    // 2026-11-26 单模型决定：旧端的多条路由被接受并只留第一条；超过 5 条仍整体拒绝。
+    await f.send(await f.resource('create'), { ...input, modelChain: JSON.stringify([route, { ...route, model: 'backup' }]) });
+    expect(f.deps.create).toHaveBeenLastCalledWith(expect.objectContaining({ capabilities: { modelChainOverride: [route] } }));
+    const six = Array.from({ length: 6 }, (_, index) => ({ ...route, model: `m${index}` }));
+    await expect(f.send(await f.resource('create'), { ...input, modelChain: JSON.stringify(six) })).rejects.toThrow();
   });
 
   it('keeps the same durable create identity across a lost ACK, but separates paired controllers and owners', async () => {

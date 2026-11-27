@@ -19,6 +19,8 @@
 import { createHash } from 'node:crypto';
 import * as path from 'node:path';
 
+import { parseBase64DataUrl } from '@cindy/maker-shared';
+
 import { isDangerousAttachmentName } from '../shared/attachmentSafety';
 import { parseRemoteMediaUrl } from '../shared/remoteMediaUrl';
 
@@ -113,9 +115,9 @@ export function classifyLightboxMediaUrl(url: string, forSave = false): Lightbox
     return { kind: 'remote-media', url };
   }
   if (url.startsWith('data:')) {
-    const match = /^data:(image\/[a-z0-9+.-]+);base64,(.+)$/i.exec(url);
-    if (!match) return { kind: 'unsupported' };
-    return { kind: 'data', mimeType: match[1].toLowerCase(), base64: match[2] };
+    const parsed = parseBase64DataUrl(url, /^data:(image\/[a-z0-9+.-]+);base64$/i);
+    if (!parsed) return { kind: 'unsupported' };
+    return { kind: 'data', mimeType: parsed.header[1].toLowerCase(), base64: parsed.payload };
   }
   return { kind: 'unsupported' };
 }

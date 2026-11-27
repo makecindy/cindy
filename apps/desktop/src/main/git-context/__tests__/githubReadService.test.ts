@@ -529,3 +529,272 @@ it('reuses refreshed observation first pages and refreshes only their continuati
   expect(direct.items).toMatchObject([{ body: 'three' }, { body: 'three' }]);
   expect(host.fetch).toHaveBeenCalledTimes(6);
 });
+
+// 测试价值：
+// - 防退化点：当并发追踪超过 50 个 PR（100+ REST+GraphQL 请求）时，ttl:0 的 POST /graphql
+//   响应曾挤占 100 条 FIFO 缓存并逐出 REST ETag，导致后续轮询失去 304 Not Modified。
+// - 触发条件：120 个 PR 交替发起 GET /repos/o/r/pulls/:n (ttl:0, 带 ETag) 与 POST /graphql (ttl:0, 无 ETag)。
+// - 生产入口与可观察结果：直接调用 GithubReadTransport.read，断言第二轮 120 个 GET 全部携带
+//   If-None-Match 命中 304 复用原数据，而 ttl:0 的 GraphQL 每次都重新请求不返回旧缓存。
+// - 依赖策略：仅注入内存 fake fetch，不触发真实网络或时钟等待。
+// - 对应规则或根因：docs/dev-rules/server-channel-review.md（条件请求 304 与受控重试）。
+it('keeps REST ETags across >100 interleaved GraphQL ttl:0 status reads and revalidates with 304', async () => {
+  const etags = new Map<string, string>();
+  const seenIfNoneMatch = new Map<string, string | null>();
+  let graphqlCalls = 0;
+  const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const method = init?.method ?? 'GET';
+    if (method === 'POST') {
+      graphqlCalls += 1;
+      return Response.json({ data: { call: graphqlCalls } });
+    }
+    const headers = init?.headers as Record<string, string> | undefined;
+    const inm = headers?.['If-None-Match'] ?? null;
+    seenIfNoneMatch.set(url, inm);
+    const expected = etags.get(url);
+    if (expected && inm === expected) {
+      return new Response(null, { status: 304 });
+    }
+    const tag = `W/"etag-${url.split('/').pop()}"`;
+    etags.set(url, tag);
+    return new Response(JSON.stringify({ url, seq: 1 }), {
+      status: 200,
+      headers: { 'content-type': 'application/json', etag: tag },
+    });
+  });
+
+  const transport = new GithubReadTransport(fetcher as typeof fetch, () => 10_000, 12);
+  const count = 120;
+  for (let i = 1; i <= count; i += 1) {
+    await transport.read('acct', 'tok', `/repos/o/r/pulls/${i}`, { ttl: 0 });
+    await transport.read('acct', 'tok', '/graphql', {
+      body: { query: 'query Summary($n:Int!){}', variables: { n: i } },
+      ttl: 0,
+    });
+  }
+  expect(graphqlCalls).toBe(count);
+
+  for (let i = 1; i <= count; i += 1) {
+    const path = `/repos/o/r/pulls/${i}`;
+    const res = await transport.read('acct', 'tok', path, { ttl: 0 });
+    expect(res).toEqual({ url: `https://api.github.com${path}`, seq: 1 });
+    expect(seenIfNoneMatch.get(`https://api.github.com${path}`)).toBe(`W/"etag-${i}"`);
+  }
+
+  // ttl:0 GraphQL must not serve stale cached data on a subsequent read.
+  const freshGql = await transport.read('acct', 'tok', '/graphql', {
+    body: { query: 'query Summary($n:Int!){}', variables: { n: 1 } },
+    ttl: 0,
+  });
+  expect(freshGql).toEqual({ data: { call: count + 1 } });
+});
+
+// 测试价值：
+// - 防退化点：304 回填未走容量上限检查时，请求在途期间被淘汰的条目回写会让缓存超出 MAX_CACHE_ENTRIES 且持续膨胀。
+// - 触发条件：maxCacheEntries=2，缓存满 /a、/b 后发起 /a 条件刷新，在途期间写入 /c、/d 挤出 /a，再返回 304。
+// - 生产入口与可观察结果：GithubReadTransport.read，通过后续请求实际携带的 If-None-Match 头部断言
+//   304 回写后缓存严格保持 2 条（/c 被逐出、/d 与 /a 保留）。
+// - 依赖策略：仅内存 fake fetch 与可控 Promise，无网络与真实时钟等待。
+// - 对应规则或根因：PR #13282 Greptile P2（缓存容量不变量）。
+it('enforces maxCacheEntries when a 304 revalidation reinserts an entry evicted while in flight', async () => {
+  let release304!: (response: Response) => void;
+  let holdNextA = false;
+  const seenIfNoneMatch: Array<{ path: string; inm: string | null }> = [];
+  const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = new URL(String(input)).pathname;
+    const headers = init?.headers as Record<string, string> | undefined;
+    seenIfNoneMatch.push({ path, inm: headers?.['If-None-Match'] ?? null });
+    if (path === '/repos/o/r/pulls/1' && holdNextA) {
+      holdNextA = false;
+      return new Promise<Response>((resolve) => {
+        release304 = resolve;
+      });
+    }
+    return new Response(JSON.stringify({ path }), {
+      status: 200,
+      headers: { 'content-type': 'application/json', etag: `W/"${path}"` },
+    });
+  });
+
+  const transport = new GithubReadTransport(fetcher as typeof fetch, () => 10_000, 6, 2);
+  await transport.read('acct', 'tok', '/repos/o/r/pulls/1', { ttl: 0 });
+  await transport.read('acct', 'tok', '/repos/o/r/pulls/2', { ttl: 0 });
+
+  // Start conditional revalidation for /1; while it is in flight, /3 and /4 evict /1 and /2.
+  holdNextA = true;
+  const revalidating = transport.read('acct', 'tok', '/repos/o/r/pulls/1', { ttl: 0 });
+  await Promise.resolve();
+  await transport.read('acct', 'tok', '/repos/o/r/pulls/3', { ttl: 0 });
+  await transport.read('acct', 'tok', '/repos/o/r/pulls/4', { ttl: 0 });
+  // Cache currently holds {/3, /4} (size 2). Resolving /1 with 304 must evict /3 so size stays 2.
+  release304(new Response(null, { status: 304 }));
+  await expect(revalidating).resolves.toEqual({ path: '/repos/o/r/pulls/1' });
+
+  seenIfNoneMatch.length = 0;
+  // /4 and /1 must still be cached (carry If-None-Match); /3 must have been evicted (no If-None-Match).
+  await transport.read('acct', 'tok', '/repos/o/r/pulls/4', { ttl: 0 });
+  await transport.read('acct', 'tok', '/repos/o/r/pulls/1', { ttl: 0 });
+  await transport.read('acct', 'tok', '/repos/o/r/pulls/3', { ttl: 0 });
+  expect(seenIfNoneMatch).toEqual([
+    { path: '/repos/o/r/pulls/4', inm: 'W/"/repos/o/r/pulls/4"' },
+    { path: '/repos/o/r/pulls/1', inm: 'W/"/repos/o/r/pulls/1"' },
+    { path: '/repos/o/r/pulls/3', inm: null },
+  ]);
+});
+
+// 测试价值：
+// - 防退化点：GitHub GraphQL 限流返回 HTTP 200 + errors[RATE_LIMITED] 时，若只识别 HTTP 429/403，
+//   会导致 transport 不进入退避、反复打 /graphql 且把错误体写进缓存。
+// - 触发条件：向 /graphql 依次返回 (1) HTTP 200 主限流（remaining=0 + RATE_LIMITED）、
+//   (2) HTTP 200 次级限流（remaining>0 + retry-after + RATE_LIMITED）、
+//   (3) HTTP 200 正常响应但消耗完最后 1 点配额（remaining=0）。
+// - 生产入口与可观察结果：GithubReadTransport.read，断言抛出 GITHUB_RATE_LIMITED、不缓存错误体、
+//   按 bucket 熔断后续 /graphql 请求且不阻塞 REST、以及到重置时间后自动恢复。
+// - 依赖策略：内存 fake fetch 与可控虚拟时钟，无网络和真实等待（unit tier）。
+// - 对应规则或根因：线上 PR 巡检 GraphQL 配额打满实测（HTTP 200 + X-Ratelimit-Remaining: 0）。
+it('arms GraphQL rate-limit backoff on HTTP 200 RATE_LIMITED errors and exhausted remaining headers without caching errors', async () => {
+  let now = 1_700_000_000_000;
+  const fetcher = vi
+    .fn()
+    // 1) GraphQL HTTP 200 primary exhaustion with RATE_LIMITED error payload.
+    .mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          errors: [{ type: 'RATE_LIMITED', message: 'API rate limit already exceeded for user' }],
+        }),
+        {
+          status: 200,
+          headers: {
+            'content-type': 'application/json',
+            'x-ratelimit-remaining': '0',
+            'x-ratelimit-reset': String(Math.floor((now + 600_000) / 1000)),
+          },
+        },
+      ),
+    )
+    // 2) REST read while GraphQL bucket is rate-limited must still work.
+    .mockResolvedValueOnce(Response.json({ ok: 'rest-ok' }))
+    // 3) After GraphQL reset, GraphQL returns HTTP 200 secondary rate limit (remaining > 0, retry-after: 45).
+    .mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          errors: [{ type: 'RATE_LIMITED', message: 'You have exceeded a secondary rate limit.' }],
+        }),
+        {
+          status: 200,
+          headers: {
+            'content-type': 'application/json',
+            'retry-after': '45',
+            'x-ratelimit-remaining': '4500',
+            'x-ratelimit-reset': String(Math.floor((now + 4_200_000) / 1000)),
+          },
+        },
+      ),
+    )
+    // 4) After 45s secondary backoff, valid HTTP 200 GraphQL response uses the very last quota point (remaining=0).
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ data: { viewer: { login: 'dash' } } }), {
+        status: 200,
+        headers: {
+          'content-type': 'application/json',
+          'x-ratelimit-remaining': '0',
+          'x-ratelimit-reset': String(Math.floor((now + 900_000) / 1000)),
+        },
+      }),
+    )
+    // 5) After that reset passes, GraphQL resumes normally.
+    .mockResolvedValueOnce(Response.json({ data: { viewer: { login: 'dash-recovered' } } }));
+
+  const transport = new GithubReadTransport(fetcher as typeof fetch, () => now);
+  const queryA = { body: { query: '{ viewer { login } }' }, ttl: 60_000 };
+  const queryB = { body: { query: '{ viewer { id } }' }, ttl: 60_000 };
+
+  await expect(transport.read('acct', 'tok', '/graphql', queryA)).rejects.toThrow('GITHUB_RATE_LIMITED');
+  // Same query must not hit cache and must fail fast with 0 extra network requests before reset.
+  now += 120_000;
+  await expect(transport.read('acct', 'tok', '/graphql', queryA)).rejects.toThrow('GITHUB_RATE_LIMITED');
+  await expect(transport.read('acct', 'tok', '/graphql', queryB)).rejects.toThrow('GITHUB_RATE_LIMITED');
+  // REST bucket stays unaffected.
+  await expect(transport.read('acct', 'tok', '/repos/o/r/pulls/1')).resolves.toEqual({ ok: 'rest-ok' });
+  expect(fetcher).toHaveBeenCalledTimes(2);
+
+  // Past 10m GraphQL reset -> hits secondary 45s rate limit on HTTP 200.
+  now += 500_000;
+  await expect(transport.read('acct', 'tok', '/graphql', queryA)).rejects.toThrow('GITHUB_RATE_LIMITED');
+  now += 30_000;
+  await expect(transport.read('acct', 'tok', '/graphql', queryB)).rejects.toThrow('GITHUB_RATE_LIMITED');
+  expect(fetcher).toHaveBeenCalledTimes(3);
+
+  // Past 45s retry-after (still well before the 1h primary reset) -> succeeds on final point,
+  // returning valid data while arming GraphQL bucket backoff until its reset.
+  now += 20_000;
+  await expect(transport.read('acct', 'tok', '/graphql', queryA)).resolves.toEqual({
+    data: { viewer: { login: 'dash' } },
+  });
+  await expect(transport.read('acct', 'tok', '/graphql', queryB)).rejects.toThrow('GITHUB_RATE_LIMITED');
+  expect(fetcher).toHaveBeenCalledTimes(4);
+
+  // Past final reset -> GraphQL recovers cleanly.
+  now += 300_000;
+  await expect(transport.read('acct', 'tok', '/graphql', queryB)).resolves.toEqual({
+    data: { viewer: { login: 'dash-recovered' } },
+  });
+  expect(fetcher).toHaveBeenCalledTimes(5);
+});
+
+// 测试价值：
+// - 防退化点：仅在剩余配额归零（HTTP 403/429）时才限流会导致后台轮询直接打穿配额；需要在低配额阶段渐进降频并在窗口重置后自动恢复。
+// - 触发条件：连续响应返回 remaining=900/5000（low）、remaining=100/5000（critical）、时钟跨过 resetAt（恢复 normal）、invalidate 清除状态。
+// - 生产入口与可观察结果：GithubReadTransport.read + getRateLimitPressure + getCombinedRateLimitPressure。
+// - 依赖策略：纯内存 fake fetch 与可控 now 时钟。
+// - 对应规则或根因：docs/dev-rules/server-channel-review.md（GitHub API 低配额自适应降频与自动恢复）。
+it('tracks x-ratelimit pressure per resource bucket and auto-recovers after resetAt or invalidate', async () => {
+  let now = 1_700_000_000_000;
+  const resetSec = String(Math.floor((now + 1_800_000) / 1000));
+  const fetcher = vi
+    .fn()
+    .mockResolvedValueOnce(
+      Response.json({ ok: 1 }, {
+        headers: {
+          'x-ratelimit-resource': 'core',
+          'x-ratelimit-limit': '5000',
+          'x-ratelimit-remaining': '900',
+          'x-ratelimit-reset': resetSec,
+        },
+      }),
+    )
+    .mockResolvedValueOnce(
+      Response.json({ data: { ok: 2 } }, {
+        headers: {
+          'x-ratelimit-resource': 'graphql',
+          'x-ratelimit-limit': '5000',
+          'x-ratelimit-remaining': '100',
+          'x-ratelimit-reset': resetSec,
+        },
+      }),
+    );
+  const transport = new GithubReadTransport(fetcher as typeof fetch, () => now);
+  expect(transport.getCombinedRateLimitPressure('acct')).toBe('normal');
+
+  await transport.read('acct', 'tok', '/repos/o/r/pulls/1', { ttl: 0 });
+  expect(transport.getRateLimitPressure('acct', 'rest')).toMatchObject({ level: 'low', remaining: 900, limit: 5000 });
+  expect(transport.getRateLimitPressure('acct', 'graphql').level).toBe('normal');
+  expect(transport.getCombinedRateLimitPressure('acct')).toBe('low');
+
+  await transport.read('acct', 'tok', '/graphql', { body: { query: '{ viewer { login } }' }, ttl: 0 });
+  expect(transport.getRateLimitPressure('acct', 'graphql')).toMatchObject({ level: 'critical', remaining: 100, limit: 5000 });
+  expect(transport.getCombinedRateLimitPressure('acct')).toBe('critical');
+
+  // Once the reset window passes, pressure returns to normal automatically without needing a network probe.
+  now += 1_801_000;
+  expect(transport.getRateLimitPressure('acct', 'rest').level).toBe('normal');
+  expect(transport.getRateLimitPressure('acct', 'graphql').level).toBe('normal');
+  expect(transport.getCombinedRateLimitPressure('acct')).toBe('normal');
+
+  // invalidate() also drops recorded quota state immediately (e.g. account switch).
+  now -= 1_000_000;
+  expect(transport.getCombinedRateLimitPressure('acct')).toBe('critical');
+  transport.invalidate();
+  expect(transport.getCombinedRateLimitPressure('acct')).toBe('normal');
+});

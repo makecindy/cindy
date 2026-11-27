@@ -13,7 +13,7 @@ import { RetiredFeatureDetail } from './RetiredFeatureDetail';
 import { Button } from '@/components/ui/button';
 import { UnderlineTabs } from '@/components/ui/underline-tabs';
 import { PLUGIN_PAGE_SIZE, type PluginMarketRowMetric } from './PluginCatalogBrowser';
-import { pluginCatalogMemory, pluginCatalogOwnerKey, pluginInstalledGrid, readLocalPluginSnapshot, readPluginRecommendations, usePluginCatalogState } from './lib/pluginCatalogMemory';
+import { usePluginCatalogMemory, pluginCatalogOwnerKey, pluginInstalledGrid, readLocalPluginSnapshot, readPluginRecommendations, usePluginCatalogState } from './lib/pluginCatalogMemory';
 import { selectPluginRecommendationBatch, type PluginRecommendationDeck } from './lib/PluginRecommendationSlots';
 import { marketDetailAccessRejected, marketDetailCacheFor, retainMarketDetailIcon, marketItemSummary } from './lib/marketDetailCache';
 /**
@@ -623,7 +623,7 @@ function LocalPluginCatalogSource({
     .join('\0');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const catalogOwnerKey = pluginCatalogOwnerKey(mode, dataOwnerId, dataOwnerGeneration, marketLocale);
-  const catalogMemory = pluginCatalogMemory(catalogOwnerKey, 'local');
+  const catalogMemory = usePluginCatalogMemory(catalogOwnerKey, 'local');
   const catalogMemoryRef = useRef(catalogMemory);
   catalogMemoryRef.current = catalogMemory;
   const [query, setQuery] = usePluginCatalogState(catalogMemory, 'query');
@@ -662,6 +662,7 @@ function LocalPluginCatalogSource({
     setIgnoredRound(readIgnoredRound(ignoredRoundKey));
   }, [ignoredRoundKey]);
   const [originFilter, setOriginFilter] = usePluginCatalogState(catalogMemory, 'originFilter');
+  const [searchScope, setSearchScope] = usePluginCatalogState(catalogMemory, 'searchScope');
   const [marketDetail, setMarketDetail] = useState<PluginMarketItem | PluginMarketDetail | null>(null);
   const [marketDetailError, setMarketDetailError] = useState<string | null>(null);
   const [marketDetailRefreshing, setMarketDetailRefreshing] = useState(false);
@@ -2324,6 +2325,8 @@ function LocalPluginCatalogSource({
         onSelectCatalogTab,
         query,
         onQueryChange: setQuery,
+        searchScope,
+        onSearchScope: setSearchScope,
         scrollRef: pluginCatalogListRef,
         onScroll: onPluginCatalogScroll,
         tabsRef: secondaryTabs,

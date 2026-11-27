@@ -21,6 +21,7 @@ export default {
     critical: { about: 'Only the depleted total-week percentage turns red', data: { totalUsed: 95 } },
     rejected: { about: 'Request rejection is a separate red status with quota details', data: { totalUsed: 76, rejected: true } },
     narrow: { about: 'Extra total-week warning at narrow desktop width', viewport: { width: 320, height: 400 }, data: { totalUsed: 76 } },
+    days: { about: 'Weekly window resets in 4 days 1 hour: the chip keeps the hour instead of rounding the day up', data: { totalUsed: 76, resetInDays: 4 } },
   },
   async ready(page) {
     await page.getByTestId('task-usage-trigger').getByText(/75%/).waitFor();
@@ -33,6 +34,20 @@ export default {
     const total = await ui.t('todaySpend.claude.totalWeeklyLabel');
     assert.equal((await trigger.textContent()).includes(total), ui.case !== 'normal');
     assert.equal(await trigger.locator('[class*="error-fg"]').count(), ui.case === 'rejected' ? 1 : 0);
+    if (ui.case === 'days') {
+      // 剩 4天1小时: 胶囊必须带小时段, 不能向上取整成「5天」(与悬浮窗同串)。
+      // 期望值按当前语言拼, 换 --locale 时断言跟着走。
+      const duration = `4${await ui.t('todaySpend.unit.day')} 1${await ui.t('todaySpend.unit.hour')}`;
+      const chip = (await trigger.textContent()) ?? '';
+      assert.ok(chip.includes(duration), `chip keeps the hour: ${chip}`);
+      assert.ok(!chip.includes(`5${await ui.t('todaySpend.unit.day')}`), `chip must not round the day up: ${chip}`);
+      await ui.capture('chip');
+      await trigger.hover();
+      const card = page.getByTestId('quota-hover-card');
+      await card.waitFor();
+      const resetIn = await ui.t('quotaCard.resetIn', { duration });
+      assert.ok(((await card.textContent()) ?? '').includes(resetIn), `hover card reads ${resetIn}`);
+    }
     if (ui.case === 'rejected' || ui.case.startsWith('official-plan-name')) {
       await ui.capture('chip');
       await trigger.hover();

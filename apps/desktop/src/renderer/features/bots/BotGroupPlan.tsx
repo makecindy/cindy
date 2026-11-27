@@ -14,6 +14,7 @@ import { Check, ChevronDown, ChevronUp, Circle, CircleAlert, CircleCheck, Circle
 import { botGroupPlanStepState, botGroupQueueWindow, canSkipBotGroupPlanStep } from '@cindy/maker-shared/botGroupPresentation';
 import { useTranslation } from 'react-i18next';
 
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -65,9 +66,9 @@ function stepIdentity(step: BotGroupPlanStepView, members: readonly BotGroupMemb
 export function BotGroupOrganizerTag() {
   const { t } = useTranslation();
   return (
-    <span className="inline-flex min-h-[18px] shrink-0 select-none items-center rounded-full bg-[var(--surface-chip)] px-1.5 py-px text-11 font-medium leading-tight text-[var(--text-secondary)]">
+    <Badge>
       {t('bots.groupChat.organizer')}
-    </span>
+    </Badge>
   );
 }
 

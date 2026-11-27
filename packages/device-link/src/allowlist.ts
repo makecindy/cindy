@@ -294,6 +294,9 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   'model-groups:resolve',
   'model-groups:commit',
   'model-groups:bind-session',
+  'model-groups:unbind-session',
+  'model-groups:get-session-binding',
+  'model-groups:switch-offer',
   'model-groups:route-note',
   // —— 能力查询 ——
   'maker:get-capabilities',

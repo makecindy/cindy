@@ -1,4 +1,5 @@
 import type { ProviderShareUsageDetails } from '../../../shared/providerShareInsights';
+import { Badge } from '@/components/ui/badge';
 import { ErrorNotice } from '@/components/ui/error-notice';
 /**
  * 「远程与分享」页的「用量」块(供应商组 §7、§10)：与设置 → 用量同一套版式(2026-10-17 用户确认原型)——
@@ -940,9 +941,9 @@ function ModelTable({
                   <span className="flex min-w-0 items-center gap-2">
                     <Swatch color={color} />
                     <span className="truncate font-medium" title={model}>{formatModelShort(model)}</span>
-                    <span className="shrink-0 rounded-full border border-[var(--border-default)] px-1 py-px text-11 leading-[1.4] text-[var(--text-tertiary)]">
+                    <Badge tone="outline">
                       {kind}
-                    </span>
+                    </Badge>
                   </span>
                 </td>
                 <td className={TD_CLASS}>{used ? formatShareTokens(totals.tokens) : NONE}</td>

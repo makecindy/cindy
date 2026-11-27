@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../../shared/claudeSubscriptionUsage';
 import type { ProviderGroupMember } from '../../../shared/providerGroup';
-import { pickProviderGroupMember } from '../scheduler';
+import { pickRouteMember } from '../scheduler';
 import {
   createProviderGroupUsageReader, providerGroupUsageSnapshot, providerGroupUsageState,
   providerGroupCodexUsageSnapshot, providerGroupMemberUsageState,
@@ -105,7 +105,7 @@ describe('OpenAI group quota snapshots', () => {
       key: String(index), usable: true, paused: false, running: index === 0 ? 13 : 0,
       limit: 16, weight: 1, ...state(usage),
     }));
-    expect(pickProviderGroupMember(members, 'least')).toBe('1');
+    expect(pickRouteMember(members, 'expiring').key).toBe('1');
     expect(idle?.appServerBuckets?.codex.primary?.windowMinutes).toBe(10_080);
   });
 
@@ -194,7 +194,7 @@ describe('provider group quota eligibility', () => {
   it('does not keep blocking a reset window or rank it as unused before fresh data arrives', () => {
     const value = { ...snapshot(20, 100), sevenDay: { utilization: 100, resetsAt: NOW / 1000 } };
     expect(providerGroupUsageState(value, 'opus', NOW))
-      .toEqual({ limited: false, resetAtMs: null, fiveHourTight: false, urgency: null, quota: null });
+      .toEqual({ limited: false, resetAtMs: null, fiveHourTight: false, fiveHourLeft: null, urgency: null, headroom: null, quota: null });
   });
 
   it('keeps unknown and stale data distinct from low usage', () => {

@@ -59,6 +59,7 @@ import {
   reconcileProjectSelectionWithVisibleProjects,
   useConversationSearch,
 } from './ConversationSearchBox';
+import { CONVERSATION_SEARCH_KEEPALIVE_SELECTOR } from './searchResultTaskMenuModel';
 import {
   buildPersistentLocalProjects,
   type PersistentLocalProject,
@@ -208,8 +209,7 @@ export function ConversationSearchProvider({ children }: { children: ReactNode }
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target as Element | null;
       if (!target) return;
-      if (target.closest('[data-conversation-search-surface]')) return;
-      if (target.closest('[data-radix-popper-content-wrapper]')) return;
+      if (target.closest(CONVERSATION_SEARCH_KEEPALIVE_SELECTOR)) return;
       dismiss();
     };
     document.addEventListener('pointerdown', handlePointerDown, true);

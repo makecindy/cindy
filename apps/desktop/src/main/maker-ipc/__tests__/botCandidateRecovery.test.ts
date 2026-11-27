@@ -464,11 +464,18 @@ describe('model group failure handling', () => {
     ['a Claude subscription window limit with usageResetAt', { sdkError: 'rate_limit', usageLimit: true, usageResetAt: 1_900_000_000_000, message: "You've hit your session limit" }, 'connection'],
     ['a Codex usageLimitExceeded tag', { codexErrorInfo: 'usageLimitExceeded', errorStatus: 429, usageLimit: true, message: 'usage_limit_reached' }, 'connection'],
     ['a dead login', { reason: 'provider_auth_or_access' }, 'connection'],
+    // 2026-11-27: a Claude account on hold was sorted transient, so the task retried the held account twice.
+    ['a Claude account on hold', { sdkError: 'account_on_hold',
+      message: "Your account is on hold and can't use Claude Code. View details or appeal: https://claude.ai/restricted" }, 'connection'],
     ['an unauthorized key', { errorStatus: 401 }, 'connection'],
     ['an ACP agent quota', { reason: 'acp-usage-limit' }, 'connection'],
     // Seen on a Pi task with a dead Agnes AI key: the status only exists as the text's prefix.
     ['a dead key reported only as text', { sdkError: '401: {"code":"","message":"Invalid token (request id: x)","type":"AgnesAI_error"}',
       message: '401: {"code":"","message":"Invalid token (request id: x)","type":"AgnesAI_error"}' }, 'connection'],
+    // 2026-11-26 audit: a provider's account pool with no account left used to retry the same source twice first.
+    ['an OpenAI account pool with no account left', { message: 'No subscription account is available' }, 'connection'],
+    ['every pooled account limited for this model', { message: '[SUBSCRIPTION_POOL_MODEL_LIMITED] Subscription usage limit for this model' }, 'connection'],
+    ['every pooled account busy', { message: '[SUBSCRIPTION_ACCOUNTS_FULL] every available subscription account has reached its concurrency limit' }, 'connection'],
     ['a removed model', { reason: 'model_unavailable' }, 'model'],
     ['Pi giving up after its own retries', { reason: 'pi-gateway-drop' }, 'model'],
     ['an engine that would not start', { reason: 'agent-start-failed' }, 'model'],

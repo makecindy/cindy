@@ -9,6 +9,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { getActiveAppSession, ownerScopedUserDataPath } from '../appSessionState.js';
+import { hardenLocalCredentialDirectory } from '../security/localCredentialDirProtection.js';
 
 const SEGMENT = /^[A-Za-z0-9._-]{1,128}$/;
 /** Same shape as the built-in pool's account ids, so shared validators accept them. */
@@ -36,6 +37,12 @@ export function newPluginEngineAccountId(): string {
   return `cindy-${prefix}-${randomUUID()}`;
 }
 
+/** Owner-scoped parent holding all plugin-engine isolated account directories. */
+export function pluginEngineAccountsOwnerRoot(): string | null {
+  if (!getActiveAppSession().dataOwnerId) return null;
+  return ownerScopedUserDataPath('plugin-engine-accounts');
+}
+
 /** The engine's own account root; null while no Cindy account is active. */
 export function pluginEngineAccountRoot(ghostId: string, harnessId: string): string | null {
   if (!getActiveAppSession().dataOwnerId) return null;
@@ -52,6 +59,17 @@ export function pluginEngineAccountDir(ghostId: string, harnessId: string, accou
 }
 
 export async function ensurePluginEngineAccountDir(dir: string): Promise<void> {
+  const ownerRoot = pluginEngineAccountsOwnerRoot();
+  if (ownerRoot) {
+    const relative = path.relative(ownerRoot, dir);
+    const withinOwnerRoot =
+      relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+    if (withinOwnerRoot) {
+      await hardenLocalCredentialDirectory(ownerRoot, { writeMarkers: true });
+      await hardenLocalCredentialDirectory(dir, { writeMarkers: false });
+      return;
+    }
+  }
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
 }
 

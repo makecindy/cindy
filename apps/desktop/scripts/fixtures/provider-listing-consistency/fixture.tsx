@@ -66,7 +66,7 @@ Object.assign(window, { listingFixture: { snapshot, devices, catalogs },
 mountPage({
   route: '/settings?tab=providers',
   host: {
-    subscriptionAccounts: { command: async ({ providerId }: { providerId: string }) => ({ providerId, configured: false, strategy: 'least', accounts: [] }), onChanged: subscription('subscriptionAccountsChanged') },
+    subscriptionAccounts: { command: async ({ providerId }: { providerId: string }) => ({ providerId, configured: false, strategy: 'expiring', accounts: [] }), onChanged: subscription('subscriptionAccountsChanged') },
     maker: {
       listProviders: async () => snapshot,
       scanLocalCli: async () => ({ detections: [] }),

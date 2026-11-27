@@ -8,7 +8,11 @@ import { Check, ChevronDown, ChevronRight, Eye, EyeOff, Trash2 } from 'lucide-re
 import { cn } from '@/lib/utils';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useDiscordBot } from '@/hooks/useDiscordBot';
-import { ImChannelSettingsCard, useImChannelSettingsSummary } from './ImChannelSettingsCard';
+import {
+  formatImDefaultRouteSummary,
+  ImChannelSettingsCard,
+  useImChannelSettingsSummary,
+} from './ImChannelSettingsCard';
 import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
 import { ImLifecycleAnnouncementSection } from './ImLifecycleAnnouncementSection';
 import { DiscordChannelAccessSection } from './DiscordChannelAccessSection';
@@ -158,11 +162,7 @@ export function DiscordBotSectionView({
       id={`${idPrefix}${imBotSettings.discord.targetId}`}
       title={t(imBotSettings.discord.titleKey)}
       description={t('settings.discordBot.description')}
-      routeSummary={
-        routeSummary
-          ? `${t(`settings.imBot.defaults.agents.${routeSummary.agentKind}`)} · ${routeSummary.model}`
-          : null
-      }
+      routeSummary={formatImDefaultRouteSummary(routeSummary, t)}
       expanded={expanded}
       onToggle={onToggle}
       status={

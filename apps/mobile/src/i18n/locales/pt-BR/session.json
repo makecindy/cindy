@@ -398,7 +398,13 @@
     "forkConfirmTitle": "Iniciar uma nova sessão a partir daqui?",
     "forkConfirmDescription": "Uma sessão separada será criada usando o contexto deste ponto. A sessão original permanecerá inalterada, e mensagens futuras em uma sessão não afetarão a outra.",
     "forkConfirm": "Iniciar nova sessão",
-    "forkCancel": "Cancelar"
+    "forkCancel": "Cancelar",
+    "modelSwitchPreparation": {
+      "pending": "Próxima mensagem",
+      "preparing": "Preparando…",
+      "failed": "Falha ao mudar",
+      "usingPrevious": "Esta mensagem usa {{actual}}; {{target}} ainda não está pronto."
+    }
   },
   "shareImage": {
     "title": "Compartilhar conversa",
@@ -652,6 +658,9 @@
     "ignore": "Ignorar",
     "executionResultUnavailable": "Não foi possível obter o resultado da execução. A continuação automática foi interrompida. Peça ao assistente para verificar o resultado da execução existente.",
     "unexecutedToolMarkup": "O modelo escreveu uma chamada de ferramenta como texto. Não foi possível confirmar a execução, por isso este turno não foi concluído.",
+    "codexReconnectStalled": "Não foi possível restabelecer a conexão com o modelo em 2 minutos.",
+    "reconnectAutoResumeDisabled": "A continuação automática está desativada.",
+    "reconnectAutoResumeExhausted": "O limite de tentativas de continuação automática foi atingido.",
     "silentStopExhausted": "Foi detectada uma resposta vazia. A continuação automática foi pausada.",
     "outputLimit": "O modelo atingiu o limite de saída, então esta resposta pode estar incompleta. Envie uma nova mensagem para continuar. Se isso se repetir, reduza o esforço de raciocínio ou compacte primeiro o histórico da conversa.",
     "outputLimitReasoning": "O raciocínio consumiu a maior parte do orçamento de saída desta solicitação, então a resposta pode estar incompleta. Reduza o esforço de raciocínio ou compacte o histórico da conversa antes de continuar.",
@@ -864,7 +873,8 @@
       "WORKER_CREATION_IN_PROGRESS": "Um Worker com o mesmo nome está sendo criado. Tente novamente em breve.",
       "WORKER_NOT_FOUND": "Este Worker não existe mais. A lista foi atualizada.",
       "ORCA_CREATE_UNCONFIRMED": "A criação do Worker expirou e não pôde ser confirmada. Verifique primeiro a lista de Workers e tente novamente apenas se nenhum novo Worker aparecer.",
-      "ORCA_ACTION_UNCONFIRMED": "A solicitação expirou, então o resultado ainda não foi confirmado. A lista foi atualizada; considere o que ela mostra agora."
+      "ORCA_ACTION_UNCONFIRMED": "A solicitação expirou, então o resultado ainda não foi confirmado. A lista foi atualizada; considere o que ela mostra agora.",
+      "PLUGIN_ENGINE_CANNOT_LEAD": "A versão neste computador não permite iniciar colaboração em uma tarefa com mecanismo de plugin."
     },
     "workerCountSummary_many": "{{count}} Workers · {{running}} em execução",
     "barLead_many": "Colaboração · {{count}} Workers · {{running}} em execução"
