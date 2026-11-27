@@ -10,7 +10,11 @@
  */
 
 export const AGENT_PREWARM_MAX_WARM = 2;
-/** Ordinary user-owned tasks only; other sources keep their own start-up routing and checks. */
+/**
+ * Ordinary user-owned tasks only; other sources keep their own start-up routing and checks.
+ * Orca workers are excluded because they resume through `orcaWorkerResumeScheduler` and the
+ * `orca_workers` lifecycle. An Orca lead is a user-driven task like any other, so it prewarms.
+ */
 export const AGENT_PREWARM_SESSION_SOURCES: ReadonlySet<string> = new Set([
   'user',
   'desktop',
@@ -33,6 +37,9 @@ export interface AgentPrewarmSessionRow {
  * Starting a runtime loads the project's own settings (hooks, MCP servers) exactly as
  * the send that follows would, so prewarm only moves that moment earlier; a runtime
  * that is never used is closed by idle reclaim or the cap.
+ *
+ * An Orca lead goes through the same lazy create path, which synthesizes its Orca vendor
+ * options before bootstrap, so a warm lead never lacks its Orca MCP context.
  */
 export function isAgentPrewarmEligible(row: AgentPrewarmSessionRow | undefined): boolean {
   return (
@@ -41,7 +48,7 @@ export function isAgentPrewarmEligible(row: AgentPrewarmSessionRow | undefined):
     !!row.workingDir &&
     !row.remoteHostId &&
     !row.agentDeviceId &&
-    !row.orcaRole &&
+    row.orcaRole !== 'worker' &&
     AGENT_PREWARM_SESSION_SOURCES.has(row.source ?? 'user')
   );
 }

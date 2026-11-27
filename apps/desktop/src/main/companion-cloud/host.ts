@@ -18,12 +18,10 @@ import { botProfileVersions, botProfiles, botSessionLinks, messages, sessions } 
 import { parseBlobUrl, resolveSafe } from '../cindy-media/blobStore.desktop.js';
 import { sessionCanRead } from '../cindy-media/ledger.js';
 import { taskImageRoots } from '../cindy-media/taskImageDelivery.js';
-import type { BotModelRoute } from '../../shared/botModelChain.js';
 import { inferBotTemplatePresetId } from '../../shared/botTemplatePreset.js';
 import { resolveBotCanonicalSession } from '../maker-ipc/botCanonicalSessionRegistry.js';
 import { readExplicitBotModelChain } from '../maker-host/bot-model-chain-settings-store.js';
 import { listCustomMcpServers } from '../maker-host/custom-mcp-store.desktop.js';
-import { resolveAvailableTaskModels } from '../maker-ipc/appDefaultModelControl.js';
 import { botProfileDir, readBotProfileFolder, writeBotProfileFolder } from '../maker-ipc/botProfileFolder.js';
 import { readBotProjectMode } from '../../shared/botProjectMode.js';
 import { onBotRemoteResourceChanged } from '../maker-ipc/botRemoteResourceInvalidation.js';
@@ -275,18 +273,14 @@ function createMaterializer(input: {
       }
     },
     applyCapabilities: async (botId, value, fence) => {
-      // Only the same provider + model that this computer can use is kept (no credential travels);
-      // otherwise the companion follows this computer's default model.
-      const usable = async (routes: BotModelRoute[]) => (await resolveAvailableTaskModels(routes))
-        .filter((route): route is BotModelRoute => route !== null);
-      const chain = value.modelChain ? await usable(value.modelChain) : [];
+      // The companion follows this computer's default model (companionCapabilitiesPatch).
       fence.assertCurrent();
-      const patch = companionCapabilitiesPatch(value, { chain });
+      const patch = companionCapabilitiesPatch(value);
       if (Object.keys(patch).length || value.gender) {
         await updateBotProfile({ id: botId, capabilities: patch, ...(value.gender ? { gender: value.gender } : {}) });
       }
+      // No 'model' notice any more: the companion is not losing a model it could have kept, it follows the default.
       const notices: CompanionArrivalNotice[] = [];
-      if (value.modelChain && chain.length < value.modelChain.length) notices.push('model');
       return notices;
     },
     writeSystemPrompt: async (botId, text, fence) => {

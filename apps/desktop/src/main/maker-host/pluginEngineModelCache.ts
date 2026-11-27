@@ -12,9 +12,9 @@
  * a model keeps the levels last seen for it until a report actually knows them again.
  */
 import { GHOST_HARNESS_MODEL_ID_MAX, GHOST_HARNESS_MODELS_MAX } from '@cindy/plugin-protocol';
-import { ownerScopedUserDataPath } from '../appSessionState.js';
+import { getDataOwnerLifetime, ownerScopedUserDataPath } from '../appSessionState.js';
 import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile.js';
-import { PLUGIN_ENGINE_EFFORTS, type PluginEngineEffort } from '../../shared/pluginEngines.js';
+import { PLUGIN_ENGINE_EFFORTS, type PluginEngineEffort, type PluginEngineReportedModelDetails } from '../../shared/pluginEngines.js';
 
 /** What the picker shows of a model an engine offered; nothing else is kept. */
 export interface CachedPluginEngineModel {
@@ -34,6 +34,54 @@ const harnessModels = new Map<string, CachedPluginEngineModel[]>();
 /** The account file the in-memory list was read from; another account reads its own file. */
 let harnessModelsFile: string | null = null;
 const listeners = new Set<() => void>();
+const detailsListeners = new Set<() => void>();
+const liveDetails = new Map<string, Map<symbol, PluginEngineReportedModelDetails>>();
+let liveDetailsOwner = -1;
+
+function currentLiveDetails(): typeof liveDetails {
+  const owner = getDataOwnerLifetime();
+  if (owner !== liveDetailsOwner) {
+    liveDetails.clear();
+    liveDetailsOwner = owner;
+  }
+  return liveDetails;
+}
+
+/** One observer per running endpoint. No credentials, disk cache or remote reads. */
+export function observePluginEngineModelDetails(providerId: string) {
+  const owner = getDataOwnerLifetime();
+  const session = Symbol();
+  return (details: PluginEngineReportedModelDetails | undefined): void => {
+    if (getDataOwnerLifetime() !== owner) return;
+    if (details && details.modelId.length > GHOST_HARNESS_MODEL_ID_MAX) details = undefined;
+    const providers = currentLiveDetails();
+    const reports = providers.get(providerId);
+    if (details) {
+      const next = reports ?? new Map();
+      // The most recent report for each model wins, with older live sessions as fallback.
+      next.delete(session);
+      next.set(session, details);
+      providers.set(providerId, next);
+    } else {
+      if (!reports?.delete(session)) return;
+      if (!reports.size) providers.delete(providerId);
+    }
+    for (const listener of [...detailsListeners]) listener();
+  };
+}
+
+export function onReportedPluginEngineModelDetailsChanged(listener: () => void): () => void {
+  detailsListeners.add(listener);
+  return () => detailsListeners.delete(listener);
+}
+
+export function getReportedPluginEngineModelDetails(providerId: string): PluginEngineReportedModelDetails[] {
+  const reports = currentLiveDetails().get(providerId);
+  if (!reports) return [];
+  const byModel = new Map<string, PluginEngineReportedModelDetails>();
+  for (const report of reports.values()) byModel.set(report.modelId, report);
+  return [...byModel.values()];
+}
 
 function boundedText(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.slice(0, MAX_TEXT) : undefined;
@@ -100,6 +148,9 @@ export function getCachedPluginHarnessModels(key: string): CachedPluginEngineMod
 export function resetPluginHarnessModelCacheForTests(): void {
   harnessModels.clear();
   harnessModelsFile = null;
+  liveDetails.clear();
+  liveDetailsOwner = -1;
+  detailsListeners.clear();
   listeners.clear();
 }
 

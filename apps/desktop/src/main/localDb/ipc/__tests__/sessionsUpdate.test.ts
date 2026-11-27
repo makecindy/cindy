@@ -1336,6 +1336,78 @@ describe('local-db:sessions:update handler wiring', () => {
     }
   });
 
+  // 2026-11-26: bound automation temporary switch across plugin engine and built-in harnesses.
+  // Production entry: createSessionRuntimeProjector + projectScheduledPreferences + persistSessionFields.
+  // Minimal failing input: a plugin-engine baseline projected as 'cc', or a built-in baseline skipped
+  // while the row temporarily holds agent_kind='acp'. Unit tier.
+  it('projects a saved plugin-engine baseline during a built-in override and vice versa', async () => {
+    const sessionId = 'pi-local';
+    const projection = createSessionRuntimeProjection({ broadcastSessionPatched });
+    const projector = createSessionRuntimeProjector({
+      projectScheduledPreferences: projection.projectScheduledPreferences,
+      runtimePluginsSelected: () => false,
+    });
+    const acpBaseline = JSON.stringify({
+      scopeId: 'acp-owner',
+      agentKind: 'acp',
+      agentDeviceId: null,
+      model: 'gemini-4',
+      providerId: 'acp-plugin:agy:agy',
+      effort: 'high',
+      fastMode: false,
+      permissionMode: 'bypassPermissions',
+    });
+    expect(projector({
+      id: sessionId,
+      agentKind: 'codex',
+      agentDeviceId: null,
+      model: 'gpt-5.4',
+      providerId: 'openai',
+      effort: 'medium',
+      fastMode: false,
+      scheduledModelBaseline: acpBaseline,
+    })).toMatchObject({
+      agentKind: 'acp',
+      model: 'gemini-4',
+      providerId: 'acp-plugin:agy:agy',
+      effort: 'high',
+      fastMode: false,
+      permissionMode: 'bypassPermissions',
+      runtimeBaseline: undefined,
+      runtimeEffective: undefined,
+      runtimePending: null,
+      runtimeBaselineRecoveryPending: false,
+    });
+    const builtinBaseline = JSON.stringify({
+      scopeId: 'codex-owner',
+      agentKind: 'codex',
+      agentDeviceId: null,
+      model: 'gpt-5.4',
+      providerId: 'openai',
+      effort: 'high',
+      fastMode: true,
+      permissionMode: 'acceptEdits',
+    });
+    expect(projector({
+      id: sessionId,
+      agentKind: 'acp' as unknown as Parameters<typeof projector>[0]['agentKind'],
+      agentDeviceId: null,
+      model: 'gemini-4',
+      providerId: 'acp-plugin:agy:agy',
+      effort: '',
+      fastMode: false,
+      scheduledModelBaseline: builtinBaseline,
+    })).toMatchObject({
+      agentKind: 'codex',
+      model: 'gpt-5.4',
+      providerId: 'openai',
+      effort: 'high',
+      fastMode: true,
+      permissionMode: 'acceptEdits',
+      runtimeBaselineRecoveryPending: true,
+    });
+  });
+
   it('rejects setting drift for retained Review tasks while preserving metadata edits', async () => {
     await expect(invokeUpdate('review-local', { effort: 'low' })).rejects.toThrow(
       /Review task settings are fixed/,
@@ -2280,6 +2352,16 @@ describe('local-db:sessions:update handler wiring', () => {
     // 拒绝发生在任何写库/关 runtime 之前:归属分裂的“半移动”不会落盘。
     expect(h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('cc-local'))
       .toEqual({ working_dir: worktreeDir });
+    expect(h.closeSession).not.toHaveBeenCalled();
+    expect(h.relocate).not.toHaveBeenCalled();
+  });
+
+  it('persists a project move without relocating a bound worktree or its transcript', async () => {
+    const worktree = path.join(h.userDataDir!, '.cindy-worktrees', 'task');
+    h.sqlite!.prepare('UPDATE sessions SET working_dir = ? WHERE id = ?').run(worktree, 'cc-local');
+    await invokeUpdate('cc-local', { workspaceKind: 'project', workingDir: '/new/project' });
+    expect(h.sqlite!.prepare('SELECT working_dir, project_dir FROM sessions WHERE id = ?').get('cc-local'))
+      .toEqual({ working_dir: worktree, project_dir: '/new/project' });
     expect(h.closeSession).not.toHaveBeenCalled();
     expect(h.relocate).not.toHaveBeenCalled();
   });

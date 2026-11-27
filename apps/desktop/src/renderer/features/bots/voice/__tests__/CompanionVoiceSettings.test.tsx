@@ -1821,3 +1821,41 @@ it.each([
     expect(audio.start).not.toHaveBeenCalled();
   },
 );
+
+it('selects discovered GLM Flash with its default voice and auditions another voice without saving or capture', async () => {
+  const api = window.electronAPI.voiceConversation;
+  const model = { id: 'glm-realtime-flash', name: 'GLM Flash', providerId: 'glm-test', providerName: 'GLM',
+    agent: 'codex' as const, protocol: 'glm-realtime' as const, protocolLocked: true };
+  api.realtimeModels = vi.fn(async () => [model]);
+  api.setRealtimePreference = vi.fn(async (_bot, selection) => ({ selection: null, customized: true, realtimeSelection: selection ?? undefined }));
+  renderSettings();
+  const select = await screen.findByRole('combobox', { name: 'bots.voiceMode.realtime.callMode' });
+  await waitFor(() => expect((select as HTMLSelectElement).disabled).toBe(false));
+  fireEvent.change(select, { target: { value: voiceModelKey(model) } });
+  await waitFor(() => expect(api.setRealtimePreference).toHaveBeenCalledWith('bot', expect.objectContaining({
+    modelId: model.id, protocol: model.protocol, voice: 'tongtong',
+  })));
+  const menu = await openVoices(callVoiceLabel);
+  fireEvent.click(menu.getByRole('button', { name: 'bots.voiceMode.previewVoice: female-tianmei' }));
+  await waitFor(() => expect(audio.play).toHaveBeenCalledOnce());
+  expect(api.preview).toHaveBeenCalledWith(expect.objectContaining({ modelId: model.id, voice: 'female-tianmei' }));
+  expect(api.setRealtimePreference).toHaveBeenCalledTimes(1);
+  expect(audio.start).not.toHaveBeenCalled();
+});
+
+it('keeps the saved Codex Flash route selected and callable after Claude Code becomes available', async () => {
+  const api = window.electronAPI.voiceConversation;
+  const codex = { id: 'glm-realtime-flash', name: 'Flash', providerId: 'glm', providerName: 'GLM',
+    agent: 'codex' as const, protocol: 'glm-realtime' as const, protocolLocked: true };
+  const saved = { mode: 'realtime' as const, agent: codex.agent, providerId: codex.providerId,
+    modelId: codex.id, protocol: codex.protocol, voice: 'tongtong' };
+  api.preference = vi.fn(async () => ({ selection: null, customized: true, realtimeSelection: saved }));
+  api.setRealtimePreference = vi.fn();
+  api.realtimeModels = vi.fn(async () => [{ ...codex, agent: 'claude-code' as const }, codex]);
+  renderSettings();
+  const select = await screen.findByRole('combobox', { name: 'bots.voiceMode.realtime.callMode' });
+  await waitFor(() => expect((select as HTMLSelectElement).value).toBe(voiceModelKey(saved)));
+  expect(within(select).getAllByRole('option', { name: 'Flash · GLM' })).toHaveLength(1);
+  const { readVoiceCallConfiguration } = await import('../voiceConfiguration');
+  expect((await readVoiceCallConfiguration(api, 'bot')).selection).toEqual(saved);
+});

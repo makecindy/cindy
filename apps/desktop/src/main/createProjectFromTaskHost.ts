@@ -39,7 +39,7 @@ export function createLocalProjectFromTaskHandlers(deps: {
     readTask: (sessionId) =>
       inTaskContext(sessionId, async ({ client, assertCurrent }) => {
         const [row] = await client.drizzle
-          .select({ title: sessions.title, workingDir: sessions.workingDir, workspaceKind: sessions.workspaceKind })
+          .select({ title: sessions.title, projectDir: sessions.projectDir, workingDir: sessions.workingDir, workspaceKind: sessions.workspaceKind })
           .from(sessions)
           .where(eq(sessions.id, sessionId))
           .limit(1);

@@ -1,5 +1,6 @@
 import type { ScheduledModelSelection } from '../../maker-ipc/scheduledModelSelection';
 import { describe, expect, it, vi, beforeEach, onTestFinished } from 'vitest';
+import { sharedTaskGuestPeer } from '@cindy/device-link';
 
 import type {
   AgentEvent,
@@ -498,13 +499,13 @@ describe('MakerScheduleRunner send outcome policy', () => {
     expect(update).not.toHaveBeenCalled();
   });
 
-  // A plugin-engine (ACP) task runs a linked automation only on its own engine and model, on this
-  // computer (docs/plans/acp-plugin-bridge.md). Any other shape must fail visibly before restore or
-  // any engine switch, never run on a built-in engine. Minimal input: target row agent_kind='acp'
-  // with a model chosen, or on another computer. Unit fixture.
+  // A plugin-engine (ACP) task runs a linked automation on its own engine/location or via explicit
+  // modelAgentKind switch (docs/plans/acp-plugin-bridge.md). Legacy model-only overrides, SSH
+  // targets, and raw wire-peer device ids must still fail visibly before restore or switch. Unit fixture.
   it.each([
     [{}, {}, 'uses the task\'s own model'],
-    [{ model: undefined }, { agentDeviceId: 'other-computer' }, 'must run on this computer'],
+    [{ model: undefined }, { remoteHostId: 'ssh-host' }, 'SSH automation targets'],
+    [{ model: undefined }, { agentDeviceId: sharedTaskGuestPeer('task-1', 'member-1', 'peer-1') }, 'cannot be used for scheduled tasks'],
   ] as const)('refuses an unsupported plugin-engine target before restoring or switching it', async (scheduleOverrides, rowOverrides, reason) => {
     mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'archived', agentKind: 'acp', ...rowOverrides });
     const h = createSessionHarness(async () => ({ accepted: true }));
