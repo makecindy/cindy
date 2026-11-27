@@ -33,9 +33,12 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
+import type { GhostOauthAccountReference, GhostReusableOauthAccount } from '../../shared/pluginAccountReuse.js';
 
 import {
   fetchGhostOauthAvatar,
+  type GhostOauthAvatarHop,
   fetchGhostOauthIdentity,
   refreshGhostOauthToken,
   startGhostOauthFlow,
@@ -43,9 +46,12 @@ import {
   type GhostOauthClientConfig,
   type GhostOauthFlowError,
   type GhostOauthLogger,
+  type StartGhostOauthFlowOptions,
 } from './ghostOauthFlow.js';
+import { tokenBrokerIssuesClientId } from './ghostOauthBroker.js';
 import {
   changedBuiltinOauthClientSecretKeys,
+  ghostNetworkHostPatternWithinCap,
   type GhostManifest,
   type GhostSecretOauthDecl,
 } from '../../shared/ghost.js';
@@ -95,6 +101,8 @@ export interface GhostOauthAccountView {
    * 时未申请的 scope。没有证据时，老账号与主动降面账号仍不猜。
    */
   scopeStale: boolean;
+  /** The Host uses a reference to an existing account; no token was copied. */
+  reused?: true;
 }
 
 /** 保险库最小面(providerSecretStore 在接线处适配;测试喂内存假体)。 */
@@ -102,17 +110,28 @@ export interface GhostOauthVault {
   read(instanceKey: string, storageKey: string): string | null;
   /** Optional strict read used only by durable reconciliation. */
   readStrict?(instanceKey: string, storageKey: string): string | null;
+  /** Under the consumer lock, a platform can retire an unreadable manifest. */
+  readForUninstall?(instanceKey: string, storageKey: string): string | null;
   /** 返回 false = 写失败(safeStorage 不可用等),调用方折叠结构化错误。 */
   store(instanceKey: string, storageKey: string, value: string): boolean;
   remove(instanceKey: string, storageKey: string): void;
 }
 
 export interface GhostOauthAccountManagerDeps {
+  /** Only approved, enabled installations of the currently committed owner. */
+  connectionSources?(): readonly { instanceKey: string; name: string; manifest: GhostManifest }[];
+  /** Same live checks for one exact instance; token/stream guards never enumerate the catalogue. */
+  connectionSource?(instanceKey: string): { instanceKey: string; name: string; manifest: GhostManifest } | null;
   vault: GhostOauthVault;
   fetchImpl: typeof fetch;
   /** 拉起系统浏览器(仅 connect 用;生产注入 shell.openExternal)。 */
   openExternal(url: string): void | Promise<void>;
-  /** XDT server token broker 调用器(tokenBroker 声明的意识用;接线处注入并做第一方门控)。 */
+  /**
+   * 设备码登录需要用户手输验证码时的本机展示(如复制到剪贴板);返回本单结束时的
+   * 清理函数。未注入时只拉起确认页。远程单由控制端展示,不经这里。
+   */
+  presentDeviceUserCode?: StartGhostOauthFlowOptions['presentDeviceUserCode'];
+  /** XDT server token broker 调用器(tokenBroker 声明的意识用;接线处注入并核验企业绑定)。 */
   broker?: GhostOauthBrokerClient;
   /**
    * brokerBounce 声明的公网弹跳地址解析器:入参是声明的站内路径(如
@@ -124,7 +143,7 @@ export interface GhostOauthAccountManagerDeps {
   brandName?: string;
   logger?: GhostOauthLogger;
   /** 钉死端口被外部进程占用时的自动回收器(生产注入 portReclaim.reclaimLoopbackPort)。 */
-  reclaimPort?: (port: number) => Promise<boolean>;
+  reclaimPort?: (port: number, instanceKey: string, isCurrent: () => boolean) => Promise<boolean>;
   /**
    * 授权成功钩子(2026-07-14):新连与同身份重连两个成功出口都触发,调用方
    * 拿它广播"授权成功"的主机代言 tips(label = 账号展示标签,声明 identity
@@ -165,8 +184,11 @@ export interface GhostOauthAccountManagerDeps {
    * 缺省拒绝。
    */
   isTokenBrokerAuthorized?: (instanceKey: string) => boolean;
-  /** Port reclaim / identity avatar. Missing = deny. */
-  isHostPrimitiveAuthorized?: (instanceKey: string) => boolean;
+  /**
+   * 头像下载的受防护单跳请求(生产注入 guardedOutboundFetch)。头像地址来自身份
+   * 响应、对所有插件开放,只能经这条通道请求,缺省不下载头像。
+   */
+  fetchAvatarHop?: GhostOauthAvatarHop;
 }
 
 /**
@@ -193,7 +215,7 @@ export type GhostOauthConnectResult =
     };
 
 export type GhostOauthAccessTokenResult =
-  | { ok: true; accessToken: string; accountId: string }
+  | { ok: true; accessToken: string; accountId: string; reused?: true; assertCurrent?(): void }
   | {
       ok: false;
       /**
@@ -235,6 +257,7 @@ interface AccountRow {
   authFace?: 'full' | 'subset';
   /** 插件从真实 API 权限错误中上报、且已由宿主按当前声明校验的缺失 scope。 */
   insufficientScopes?: string[];
+  reused?: GhostOauthAccountReference;
 }
 
 interface AccountsManifest {
@@ -272,12 +295,16 @@ function parseManifest(raw: string | null): AccountsManifest {
       if (typeof row !== 'object' || row === null) continue;
       const r = row as Partial<AccountRow>;
       if (typeof r.id !== 'string' || r.id.length === 0) continue;
+      if (r.reused !== undefined && (!r.reused || typeof r.reused !== 'object' ||
+          !['instanceKey', 'secretKey', 'accountId'].every(key => typeof r.reused![key as keyof GhostOauthAccountReference] === 'string' &&
+            r.reused![key as keyof GhostOauthAccountReference].length > 0 && r.reused![key as keyof GhostOauthAccountReference].length <= 512))) continue;
       accounts.push({
         id: r.id,
         label: typeof r.label === 'string' && r.label.length > 0 ? r.label : null,
         displayLabel:
           typeof r.displayLabel === 'string' && r.displayLabel.length > 0 ? r.displayLabel : null,
         status: r.status === 'expired' ? 'expired' : 'connected',
+        ...(r.reused ? { reused: { instanceKey: r.reused.instanceKey, secretKey: r.reused.secretKey, accountId: r.reused.accountId } } : {}),
         ...(r.expiredReason === 'oauth_client_changed' ? { expiredReason: r.expiredReason } : {}),
         ...(typeof r.expiredFromClientId === 'string' && r.expiredFromClientId.length > 0
           ? { expiredFromClientId: r.expiredFromClientId }
@@ -327,6 +354,7 @@ function toView(
     createdAt: row.createdAt,
     avatarDataUrl,
     scopeStale: accountMissingScopes(declScopes, row).length > 0,
+    ...(row.reused ? { reused: true as const } : {}),
   };
 }
 
@@ -390,8 +418,14 @@ export class GhostOauthAccountManager {
 
   /** client 凭证是否可用(用户自填或清单内置任一即可;设置页状态展示,不回明文)。 */
   clientConfigured(instanceKey: string, secretKey: string, decl?: GhostOauthDecl): boolean {
-    // broker 模式:secret 在服务端,声明了内置 clientId 即视为可连(用户零配置)。
-    if (decl?.tokenBroker) return typeof decl.clientId === 'string' && decl.clientId.length > 0;
+    if (decl && parseManifest(this.deps.vault.read(instanceKey, accountsKey(secretKey))).accounts.some(row =>
+      row.reused && this.resolveReusableAccount(instanceKey, secretKey, decl, row.reused) !== null)) return true;
+    // broker 模式:secret 在服务端,声明了内置 clientId 即视为可连(用户零配置);
+    // 由服务端签发应用身份的 broker 连 clientId 也不需要。
+    if (decl?.tokenBroker) {
+      return tokenBrokerIssuesClientId(decl.tokenBroker)
+        || (typeof decl.clientId === 'string' && decl.clientId.length > 0);
+    }
     if (this.clientCustomized(instanceKey, secretKey)) return true;
     return typeof decl?.clientId === 'string' && decl.clientId.length > 0;
   }
@@ -504,6 +538,7 @@ export class GhostOauthAccountManager {
         let expiredCount = 0;
         const restoreOnCommitAccountIds: string[] = [];
         for (const account of manifest.accounts) {
+          if (account.reused) continue;
           if (
             currentClientId !== null &&
             account.status === 'expired' &&
@@ -668,6 +703,7 @@ export class GhostOauthAccountManager {
       const manifest = parseManifest(beforeRaw);
       let changed = 0;
       for (const account of manifest.accounts) {
+        if (account.reused) continue;
         if (
           account.status !== 'expired' ||
           account.expiredReason !== 'oauth_client_changed' ||
@@ -743,7 +779,7 @@ export class GhostOauthAccountManager {
       clientId = decl.clientId ?? null;
       clientSecret = decl.clientSecret;
     }
-    if (!clientId) return null;
+    if (!clientId && !tokenBrokerIssuesClientId(decl.tokenBroker)) return null;
     // brokerBounce → 双地址模型:公网弹跳地址由接线处解析器现拼(broker 基
     // 地址来自端点清单;当前 region 提供该服务时应为非空)。null 仅剩一种
     // 来源:宿主未接线
@@ -759,10 +795,13 @@ export class GhostOauthAccountManager {
       ...(decl.scopeDelimiter !== undefined ? { scopeDelimiter: decl.scopeDelimiter } : {}),
       pkce: decl.pkce,
       extraAuthorizeParams: decl.extraAuthorizeParams,
-      clientId,
+      ...(clientId ? { clientId } : {}),
       ...(clientSecret ? { clientSecret } : {}),
       ...(decl.redirectPort !== undefined ? { redirectPort: decl.redirectPort } : {}),
       ...(decl.tokenBroker !== undefined ? { tokenBroker: decl.tokenBroker } : {}),
+      ...(decl.deviceAuthorizationUrl !== undefined
+        ? { deviceAuthorizationUrl: decl.deviceAuthorizationUrl }
+        : {}),
       ...(publicRedirectUri !== null ? { publicRedirectUri } : {}),
       ...(decl.brokerBounce !== undefined ? { callbackPath: decl.brokerBounce.callbackPath } : {}),
     };
@@ -772,9 +811,118 @@ export class GhostOauthAccountManager {
 
   listAccounts(instanceKey: string, secretKey: string, decl?: GhostOauthDecl): GhostOauthAccountView[] {
     const manifest = parseManifest(this.deps.vault.read(instanceKey, accountsKey(secretKey)));
-    return manifest.accounts.map((a) =>
-      toView(a, manifest.defaultAccountId, this.readAvatar(instanceKey, secretKey, a.id), decl?.scopes),
-    );
+    return manifest.accounts.map(a => {
+      if (!a.reused) return toView(a, manifest.defaultAccountId, this.readAvatar(instanceKey, secretKey, a.id), decl?.scopes);
+      const currentDecl = decl ?? this.connectionSecret(instanceKey, secretKey)?.secret.oauth;
+      const source = currentDecl ? this.resolveReusableAccount(instanceKey, secretKey, currentDecl, a.reused) : null;
+      return { ...toView(a, manifest.defaultAccountId, source ? this.readAvatar(a.reused.instanceKey, a.reused.secretKey, a.reused.accountId) : null, decl?.scopes),
+        status: source ? 'connected' as const : 'expired' as const };
+    });
+  }
+
+  private connectionSecret(instanceKey: string, secretKey: string) {
+    const source = this.deps.connectionSource?.(instanceKey);
+    const secret = source?.manifest.network?.secrets?.find(item => item.key === secretKey && item.source === 'oauth' && item.oauth);
+    return source && secret?.oauth ? { source, secret: { ...secret, oauth: secret.oauth } } : null;
+  }
+
+  private reuseTargetCurrent(instanceKey: string, secretKey: string, decl: GhostOauthDecl, target: unknown): boolean {
+    return this.deps.captureConnectTarget
+      ? target !== null && target !== undefined && this.deps.isConnectTargetCurrent?.(instanceKey, secretKey, decl, target) === true
+      : this.deps.isConnectTargetCurrent?.(instanceKey, secretKey, decl) !== false;
+  }
+
+  private resolveReusableAccount(instanceKey: string, secretKey: string, decl: GhostOauthDecl, ref: GhostOauthAccountReference) {
+    if (instanceKey === ref.instanceKey && secretKey === ref.secretKey) return null;
+    const target = this.connectionSecret(instanceKey, secretKey);
+    const source = this.connectionSecret(ref.instanceKey, ref.secretKey);
+    if (!target || !source || !isDeepStrictEqual(target.secret.oauth, decl) ||
+        decl.authorizeUrl !== source.secret.oauth.authorizeUrl || decl.tokenUrl !== source.secret.oauth.tokenUrl ||
+        target.secret.inject.header.toLowerCase() !== source.secret.inject.header.toLowerCase() || target.secret.inject.format !== source.secret.inject.format) return null;
+    if ((decl.tokenBroker && !this.isTokenBrokerAuthorized(instanceKey)) ||
+        (source.secret.oauth.tokenBroker && !this.isTokenBrokerAuthorized(ref.instanceKey))) return null;
+    const targetHosts = target.secret.inject.hosts ?? target.source.manifest.network!.hosts.filter(host => !host.includes('://'));
+    const sourceHosts = source.secret.inject.hosts ?? source.source.manifest.network!.hosts.filter(host => !host.includes('://'));
+    if (!targetHosts.length || !targetHosts.every(host => sourceHosts.some(cap => ghostNetworkHostPatternWithinCap(host, cap)))) return null;
+    const row = parseManifest(this.deps.vault.read(ref.instanceKey, accountsKey(ref.secretKey))).accounts.find(item => item.id === ref.accountId);
+    if (!row || row.reused || row.status !== 'connected') return null;
+    const scopes = row.authScopes ?? source.secret.oauth.scopes ?? [];
+    if ((decl.scopes ?? []).some(scope => !scopes.includes(scope)) || accountMissingScopes(decl.scopes ?? [], row).length) return null;
+    if (!this.readClientConfig(ref.instanceKey, ref.secretKey, source.secret.oauth)) return null;
+    return { ...source, row, scopes, targetHosts };
+  }
+
+  /** Trusted Cindy UI only. This catalogue is never exposed to plugin pages. */
+  listReusableAccounts(instanceKey: string, secretKey: string, decl: GhostOauthDecl): GhostReusableOauthAccount[] {
+    const accounts: GhostReusableOauthAccount[] = [];
+    for (const source of this.deps.connectionSources?.() ?? []) {
+      for (const secret of source.manifest.network?.secrets ?? []) {
+        if (secret.source !== 'oauth' || !secret.oauth) continue;
+        for (const row of parseManifest(this.deps.vault.read(source.instanceKey, accountsKey(secret.key))).accounts) {
+          const ref = { instanceKey: source.instanceKey, secretKey: secret.key, accountId: row.id };
+          const resolved = this.resolveReusableAccount(instanceKey, secretKey, decl, ref);
+          if (resolved) accounts.push({ ...ref, pluginName: source.name, label: row.displayLabel ?? row.label, scopes: [...resolved.scopes] });
+        }
+      }
+    }
+    return accounts;
+  }
+
+  /** Reuse the ordinary OAuth account store: only a reference is persisted. */
+  async reuseAccount(instanceKey: string, secretKey: string, decl: GhostOauthDecl, ref: GhostOauthAccountReference): Promise<GhostOauthConnectResult> {
+    const source = this.resolveReusableAccount(instanceKey, secretKey, decl, ref);
+    if (!source) return { ok: false, error: 'INVALID_CONFIG' };
+    const target = this.captureConnectTarget(instanceKey);
+    const sourceTarget = this.captureConnectTarget(ref.instanceKey);
+    const generation = this.ghostGeneration(instanceKey);
+    const sourceGeneration = this.ghostGeneration(ref.instanceKey);
+    const current = () => this.ghostGeneration(instanceKey) === generation && this.ghostGeneration(ref.instanceKey) === sourceGeneration &&
+      this.reuseTargetCurrent(instanceKey, secretKey, decl, target) &&
+      this.reuseTargetCurrent(ref.instanceKey, ref.secretKey, source.secret.oauth, sourceTarget) &&
+      this.resolveReusableAccount(instanceKey, secretKey, decl, ref) !== null;
+    return this.withMutationLock(instanceKey, () => {
+      if (!current()) return { ok: false as const, error: 'INVALID_CONFIG' as const };
+      const manifest = parseManifest(this.deps.vault.read(instanceKey, accountsKey(secretKey)));
+      const existing = manifest.accounts.find(row => isDeepStrictEqual(row.reused, ref));
+      if (!existing && manifest.accounts.length >= GHOST_OAUTH_MAX_ACCOUNTS) return { ok: false as const, error: 'ACCOUNT_LIMIT' as const };
+      const row: AccountRow = existing ?? { id: randomUUID(), label: source.row.label, displayLabel: source.row.displayLabel,
+        status: 'connected', createdAt: Date.now(), authScopes: [...source.scopes], authFace: 'subset', reused: { ...ref } };
+      const next = { ...manifest, accounts: existing ? manifest.accounts : [...manifest.accounts, row], defaultAccountId: row.id };
+      if (!this.deps.vault.store(instanceKey, accountsKey(secretKey), JSON.stringify(next))) return { ok: false as const, error: 'VAULT_WRITE_FAILED' as const };
+      this.notifyConnected(instanceKey, secretKey, row.displayLabel ?? row.label);
+      return { ok: true as const, account: toView(row, row.id, this.readAvatar(ref.instanceKey, ref.secretKey, ref.accountId), decl.scopes) };
+    });
+  }
+
+  /** Follow the existing source archive (including inverse recovery), or remove
+   * incoming reuse rows after uninstall. Ordinary accounts are untouched. */
+  async relocateSourceReferences(
+    from: string,
+    to: string | null,
+    targets: readonly { instanceKey: string; keys: readonly string[] }[],
+  ): Promise<void> {
+    const read = this.deps.vault.readStrict ?? this.deps.vault.read;
+    const readForUninstall = to === null ? this.deps.vault.readForUninstall : undefined;
+    for (const target of targets) {
+      for (const key of target.keys) {
+        if (!key.endsWith(accountsKey(''))) continue;
+        try {
+          if (!parseManifest(read(target.instanceKey, key)).accounts.some(row => row.reused?.instanceKey === from)) continue;
+        } catch (error) {
+          if (!readForUninstall) throw error;
+          // Retry under the consumer lock before retiring an unreadable record.
+        }
+        await this.withMutationLock(target.instanceKey, () => {
+          const manifest = parseManifest((readForUninstall ?? read)(target.instanceKey, key));
+          if (!manifest.accounts.some(row => row.reused?.instanceKey === from)) return;
+          const accounts = manifest.accounts.flatMap(row => row.reused?.instanceKey !== from ? [row]
+            : to === null ? [] : [{ ...row, reused: { ...row.reused, instanceKey: to } }]);
+          const next = { ...manifest, accounts,
+            defaultAccountId: accounts.some(row => row.id === manifest.defaultAccountId) ? manifest.defaultAccountId : accounts[0]?.id ?? null };
+          if (!this.deps.vault.store(target.instanceKey, key, JSON.stringify(next))) throw new Error('VAULT_WRITE_FAILED');
+        });
+      }
+    }
   }
 
   /** 默认账号相对当前声明缺失的 scope；空数组 = 无需重连或判不准。 */
@@ -828,13 +976,13 @@ export class GhostOauthAccountManager {
   }
 
   /** 断开账号:清 refresh token、清头像、清缓存、从清单摘除(幂等)。 */
-  disconnectAccount(instanceKey: string, secretKey: string, accountId: string): void {
+  disconnectAccount(instanceKey: string, secretKey: string, accountId: string): boolean {
     const manifest = parseManifest(this.deps.vault.read(instanceKey, accountsKey(secretKey)));
     const remaining = manifest.accounts.filter((a) => a.id !== accountId);
     this.deps.vault.remove(instanceKey, refreshTokenKey(secretKey, accountId));
     this.deps.vault.remove(instanceKey, avatarKey(secretKey, accountId));
     this.tokenCache.delete(this.cacheKey(instanceKey, secretKey, accountId));
-    this.deps.vault.store(
+    return this.deps.vault.store(
       instanceKey,
       accountsKey(secretKey),
       JSON.stringify({
@@ -973,15 +1121,14 @@ export class GhostOauthAccountManager {
       config,
       remote: opts?.remote,
       openExternal: (url) => { opts?.onAuthorizationUrl?.(url); return this.deps.openExternal(url); },
+      ...(this.deps.presentDeviceUserCode ? { presentDeviceUserCode: this.deps.presentDeviceUserCode } : {}),
       fetchImpl: this.deps.fetchImpl,
       broker: this.deps.broker,
       brandName: this.deps.brandName,
       logger: this.deps.logger,
-      // 端口回收器只对第一方官方意识放行:
-      // 回收 = 强杀占用进程,而"杀谁"由 redirectPort 决定——第三方 manifest
-      // 可声明任意端口(如 5432),放开等于让任意意识借「连接账号」之手
-      // 强杀用户本地服务(Postgres 等),故第三方一律回落"占用即报错"。
-      reclaimPort: this.deps.isHostPrimitiveAuthorized?.(instanceKey) ? this.deps.reclaimPort : undefined,
+      // Every plugin uses the same host confirmation, bound to this connection target.
+      reclaimPort: this.deps.reclaimPort ? port => isConnectTargetCurrent()
+        ? this.deps.reclaimPort!(port, instanceKey, isConnectTargetCurrent) : Promise.resolve(false) : undefined,
     });
     if (!flow.ok) return { ok: false, error: flow.error, detail: flow.detail };
     opts?.remote?.assertCurrent();
@@ -1006,14 +1153,13 @@ export class GhostOauthAccountManager {
       });
       label = identity.label;
       display = identity.display;
-      // 头像下载只对第一方官方意识放行:
-      // 头像地址是身份端点响应里的任意 https,不受 hosts 白名单约束——放开
-      // 等于给第三方意识一个"主机代发 GET + 小图字节回沙箱"的 SSRF 读原语。
+      // 头像地址是身份端点响应里的任意 https,不受 hosts 白名单约束,只走受防护
+      // 通道(拦截内网/回环、逐跳复核、限时限量),不能用普通 fetchImpl 代发。
       // 下载本身不带任何凭证(CDN 域名不在注入白名单);失败降级无头像。
-      if (identity.avatarUrl !== null && this.deps.isHostPrimitiveAuthorized?.(instanceKey)) {
+      if (identity.avatarUrl !== null && this.deps.fetchAvatarHop) {
         avatar = await fetchGhostOauthAvatar({
           url: identity.avatarUrl,
-          fetchImpl: this.deps.fetchImpl,
+          fetchHop: this.deps.fetchAvatarHop,
         });
       }
     }
@@ -1035,7 +1181,7 @@ export class GhostOauthAccountManager {
       // 同身份合并:复用既有账号 id(默认位 / 意识侧记住的 account id 全部
       // 保持有效),只换令牌与状态。
       const existing =
-        label !== null ? manifest.accounts.find((a) => a.label === label) : undefined;
+        label !== null ? manifest.accounts.find((a) => !a.reused && a.label === label) : undefined;
       if (existing) {
         if (flow.bundle.refreshToken !== null) {
           if (
@@ -1214,6 +1360,27 @@ export class GhostOauthAccountManager {
     if (!resolvedId) return { ok: false, error: 'NO_ACCOUNT' };
     const row = manifest.accounts.find((a) => a.id === resolvedId);
     if (!row) return { ok: false, error: 'NO_ACCOUNT' };
+    if (row.reused) {
+      const source = this.resolveReusableAccount(instanceKey, secretKey, decl, row.reused);
+      if (!source) return { ok: false, error: 'AUTH_EXPIRED' };
+      const target = this.captureConnectTarget(instanceKey);
+      const sourceTarget = this.captureConnectTarget(row.reused.instanceKey);
+      const generation = this.ghostGeneration(instanceKey);
+      const sourceGeneration = this.ghostGeneration(row.reused.instanceKey);
+      if (!this.reuseTargetCurrent(instanceKey, secretKey, decl, target) ||
+          !this.reuseTargetCurrent(row.reused.instanceKey, row.reused.secretKey, source.secret.oauth, sourceTarget)) return { ok: false, error: 'AUTH_EXPIRED' };
+      const result = await this.getFreshAccessToken(row.reused.instanceKey, row.reused.secretKey, source.secret.oauth, row.reused.accountId);
+      const ref = row.reused;
+      const assertCurrent = () => {
+        const currentRow = parseManifest(this.deps.vault.read(instanceKey, accountsKey(secretKey))).accounts.find(account => account.id === resolvedId);
+        if (this.ghostGeneration(instanceKey) !== generation || this.ghostGeneration(ref.instanceKey) !== sourceGeneration ||
+            !this.reuseTargetCurrent(instanceKey, secretKey, decl, target) ||
+            !this.reuseTargetCurrent(ref.instanceKey, ref.secretKey, source.secret.oauth, sourceTarget) ||
+            !isDeepStrictEqual(currentRow?.reused, ref) || !this.resolveReusableAccount(instanceKey, secretKey, decl, ref)) throw new Error('OAUTH_REFERENCE_CHANGED');
+      };
+      try { assertCurrent(); } catch { return { ok: false, error: 'AUTH_EXPIRED' }; }
+      return result.ok ? { ...result, accountId: resolvedId, reused: true, assertCurrent } : result;
+    }
     // 旧 refresh token 与新的内置 clientId 不成对；必须重新走浏览器授权，
     // 不能先拿新 client 尝试刷新再把仍需保留的旧 token 当 invalid_grant 删除。
     if (row.status === 'expired' && row.expiredReason === 'oauth_client_changed') {
@@ -1221,29 +1388,43 @@ export class GhostOauthAccountManager {
     }
 
     const key = this.cacheKey(instanceKey, secretKey, resolvedId);
+    const generation = this.ghostGeneration(instanceKey);
+    const assertCurrent = () => {
+      const current = parseManifest(this.deps.vault.read(instanceKey, accountsKey(secretKey))).accounts.find(account => account.id === resolvedId);
+      if (this.ghostGeneration(instanceKey) !== generation || current?.status !== 'connected' || current.reused) {
+        throw new Error('OAUTH_ACCOUNT_CHANGED');
+      }
+    };
     const cached = this.tokenCache.get(key);
     if (cached && (cached.expiresAt === null || cached.expiresAt > Date.now())) {
-      return { ok: true, accessToken: cached.accessToken, accountId: resolvedId };
+      return { ok: true, accessToken: cached.accessToken, accountId: resolvedId, assertCurrent };
     }
 
-    const inflight = this.refreshInflight.get(key);
-    if (inflight) return inflight;
-
-    const generation = this.ghostGeneration(instanceKey);
-    const task = this.refreshAccount(instanceKey, secretKey, decl, resolvedId, key, generation)
-      .finally(() => {
-        if (this.refreshInflight.get(key) === task) this.refreshInflight.delete(key);
-      });
-    this.refreshInflight.set(key, task);
-    return task;
+    let task = this.refreshInflight.get(key);
+    if (!task) {
+      task = this.refreshAccount(instanceKey, secretKey, decl, resolvedId, key, generation)
+        .finally(() => {
+          if (this.refreshInflight.get(key) === task) this.refreshInflight.delete(key);
+        });
+      this.refreshInflight.set(key, task);
+    }
+    const result = await task;
+    return result.ok ? { ...result, assertCurrent } : result;
   }
 
-  /**
-   * 401 作废通道(networkSlot 上游 401 时调用):丢缓存,下一单强制刷新。
-   * 与 exchange 引擎的"作废重换整链重试一次"同一套路。
-   */
+  /** Only an explicitly bound, directly owned account may enter Node plaintext. */
+  async getNodeAccessToken(instanceKey: string, secretKey: string, decl: GhostOauthDecl, accountId?: string): Promise<
+    GhostOauthAccessTokenResult | { ok: false; error: 'HOST_INJECTION_REQUIRED' }
+  > {
+    const result = await this.getFreshAccessToken(instanceKey, secretKey, decl, accountId);
+    return result.ok && result.reused ? { ok: false, error: 'HOST_INJECTION_REQUIRED' } : result;
+  }
+
+  /** 401 invalidates the original source's cache so the next request refreshes once. */
   invalidateAccessToken(instanceKey: string, secretKey: string, accountId: string): void {
     this.tokenCache.delete(this.cacheKey(instanceKey, secretKey, accountId));
+    const ref = parseManifest(this.deps.vault.read(instanceKey, accountsKey(secretKey))).accounts.find(row => row.id === accountId)?.reused;
+    if (ref) this.tokenCache.delete(this.cacheKey(ref.instanceKey, ref.secretKey, ref.accountId));
   }
 
   private async refreshAccount(instanceKey: string,
@@ -1413,10 +1594,11 @@ export class GhostOauthAccountManager {
       const row = before.accounts.find((a) => a.id === accountId);
       if (!row) return;
       const needDisplay = template !== undefined && row.displayLabel === null;
-      // 头像回填同样只对第一方官方意识放行(connectAccount 处的 SSRF 口径)。
+      // 头像回填同样只走受防护通道(connectAccount 处的 SSRF 口径)。
+      const fetchAvatarHop = this.deps.fetchAvatarHop;
       const needAvatar =
         decl.identity.avatarPath !== undefined &&
-        this.deps.isHostPrimitiveAuthorized?.(instanceKey) === true &&
+        fetchAvatarHop !== undefined &&
         this.readAvatar(instanceKey, secretKey, accountId) === null;
       if (!needDisplay && !needAvatar) return;
       const identity = await fetchGhostOauthIdentity({
@@ -1443,11 +1625,11 @@ export class GhostOauthAccountManager {
         });
         this.deps.logger?.info('ghost oauth 账号展示名已回填', { ghostId: instanceKey, secretKey, accountId });
       }
-      if (needAvatar && identity.avatarUrl !== null) {
+      if (needAvatar && fetchAvatarHop && identity.avatarUrl !== null) {
         if (this.ghostGeneration(instanceKey) !== generation) return;
         const avatar = await fetchGhostOauthAvatar({
           url: identity.avatarUrl,
-          fetchImpl: this.deps.fetchImpl,
+          fetchHop: fetchAvatarHop,
         });
         // 存前重验账号仍在清单(拉取期间可能被断开;断开后不再写孤儿头像键)。
         if (avatar !== null) {

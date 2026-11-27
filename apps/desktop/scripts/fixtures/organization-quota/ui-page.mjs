@@ -7,7 +7,7 @@ export default {
   real: 'TodaySpendChip, QuotaHoverCard, useClaudeAccountUsage, translations and themes',
   notCovered: 'Server reads, menu bar, device-link transport, subscription providers and the unmounted home dashboard',
   stubs: {
-    'src/renderer/contexts/AuthContext': 'export const useAuth = () => ({ dataOwnerId: "fixture", dataOwnerGeneration: 1, mode: "cloud", user: { membershipKind: "org" } });',
+    'src/renderer/contexts/AuthContext': 'export const useOptionalDataOwnerGeneration = () => 1; export const useAuth = () => ({ dataOwnerId: "fixture", dataOwnerGeneration: 1, mode: "cloud", user: { membershipKind: "org" } });',
     'src/renderer/hooks/useApiKey': 'export const useApiKey = () => ({ hasSavedKey: true, isReconciling: false });',
     'src/renderer/hooks/useProviders': 'export const useProviders = () => ({ providers: [] });',
     'src/renderer/hooks/useDeviceProviders': 'export const useDeviceProviders = () => ({ providers: [] });',
@@ -20,7 +20,7 @@ export default {
     'src/renderer/hooks/useClaudeSubscriptionUsage': 'export const useClaudeSubscriptionUsage = () => null; export const requestClaudeSubscriptionRefresh = () => {};',
     'src/renderer/hooks/useCodexRuntimeRoute': 'export const useCodexRuntimeRoute = () => ({ authInjection: null });',
     'src/renderer/hooks/useCodexRateLimits': 'export const useCodexRateLimits = () => ({ snapshot: null, refresh: () => {} });',
-    'src/renderer/hooks/useRemoteDeviceUsage': 'export const useRemoteClaudeAccountUsage = () => null; export const useRemoteCodexAccountUsage = () => null; export const useRemoteXaiSubscriptionUsage = () => null; export const useRemoteXaiRateLimit = () => null; export const selectRemoteCodexAccountUsage = () => null; export const requestRemoteCodexAccountRefresh = () => {}; export const requestRemoteXaiSubscriptionRefresh = () => {};',
+    'src/renderer/hooks/useRemoteDeviceUsage': 'export const useRemoteClaudeAccountUsage = () => null; export const useRemoteCodexAccountUsage = () => null; export const useRemoteXaiSubscriptionUsage = () => null; export const useRemoteXaiRateLimit = () => null; export const selectRemoteCodexAccountUsage = () => null; export const requestRemoteCodexAccountRefresh = () => {}; export const useRemoteCodexRefreshState = () => ({ failed: false, refreshing: false }); export const requestRemoteCodexLiveRefresh = () => {}; export const requestRemoteXaiSubscriptionRefresh = () => {};',
     'src/renderer/hooks/useRemoteClaudeSubscriptionUsage': 'export const useRemoteClaudeSubscriptionUsage = () => null; export const requestRemoteClaudeSubscriptionRefresh = () => {};',
     'src/renderer/hooks/useRemoteClaudeSessionRoute': 'export const useRemoteClaudeSessionRoute = () => null;',
     'src/renderer/hooks/useXaiSubscriptionUsage': 'export const useXaiSubscriptionUsage = () => null; export const requestXaiSubscriptionRefresh = () => {};',

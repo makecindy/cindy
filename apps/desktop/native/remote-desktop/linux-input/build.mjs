@@ -30,7 +30,18 @@ const flags = run('pkg-config', [
   'wayland-client',
   'xkbcommon',
   'json-c',
+  'x11',
+  'xtst',
 ]).split(/\s+/);
+// GNOME (Mutter) input uses GIO, which every Electron-capable desktop ships.
+// Builders without its headers keep the other backends; --gnome then reports
+// itself unavailable.
+const gio = spawnSync('pkg-config', ['--cflags', '--libs', 'gio-unix-2.0'], {
+  encoding: 'utf8',
+  timeout: 60000,
+});
+const gnome = gio.status === 0 ? gio.stdout.trim().split(/\s+/).filter(Boolean) : null;
+if (!gnome) console.warn('Linux input: GNOME backend skipped (gio-unix-2.0 missing)');
 const binary = path.join(output, 'cindy-linux-desktop-input');
 run('cc', [
   '-std=c11',
@@ -38,12 +49,14 @@ run('cc', [
   '-Wextra',
   '-Werror',
   '-O2',
+  ...(gnome ? ['-DCINDY_GNOME'] : []),
   path.join(source, 'main.c'),
   path.join(output, 'virtual-keyboard-unstable-v1.c'),
   path.join(output, 'wlr-virtual-pointer-unstable-v1.c'),
   '-I',
   output,
   ...flags,
+  ...(gnome ?? []),
   '-lm',
   '-o',
   binary + '.tmp',

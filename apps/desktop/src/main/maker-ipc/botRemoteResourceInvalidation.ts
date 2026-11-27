@@ -19,6 +19,8 @@ import {
   ownerScopedUserDataPath,
 } from '../appSessionState.js';
 import { readTaskResponsibilities } from './botTaskResponsibility.js';
+import { parseBotGroupIdFromRouteKey } from '../../shared/botGroupChat.js';
+import { broadcastBotGroupRemoteResourceChanged } from './botGroupRemoteResourceInvalidation.js';
 
 const log = createLogger('maker-ipc:bot-remote-resource');
 
@@ -30,9 +32,13 @@ export function onBotRemoteResourceChanged(listener: (botId: string) => void): (
   return () => { localListeners.delete(listener); };
 }
 
-/** Notify every controller that a host-owned teammate projection must be re-read. */
-export function broadcastBotRemoteResourceChanged(botId: string): void {
-  for (const listener of localListeners) {
+/**
+ * Notify every controller that a host-owned teammate projection must be re-read.
+ * `local: false` skips in-process observers: a read position changes no profile or
+ * conversation, so it must not wake the cloud mirror and profile upload.
+ */
+export function broadcastBotRemoteResourceChanged(botId: string, options: { local?: boolean } = {}): void {
+  if (options.local !== false) for (const listener of localListeners) {
     try { listener(botId); } catch { /* observers never block the broadcast */ }
   }
   const payload = {
@@ -91,17 +97,20 @@ export function scheduleBotRemoteResourceChangedForSession(
     scheduledSessionLookups.delete(key);
     if (!isOwnerScopeCurrent(ownerScope)) return;
     void getDbClient().drizzle
-      .select({ botId: botSessionLinks.botId })
+      .select({ botId: botSessionLinks.botId, role: botSessionLinks.role, routeKey: botSessionLinks.routeKey })
       .from(botSessionLinks)
       .where(and(
         eq(botSessionLinks.sessionId, sessionId),
-        inArray(botSessionLinks.role, ['canonical', 'delegation']),
+        inArray(botSessionLinks.role, ['canonical', 'delegation', 'group']),
         isNull(botSessionLinks.archivedAt),
       ))
       .limit(1)
       .then(([link]) => {
         if (!link || !isOwnerScopeCurrent(ownerScope)) return;
-        broadcastBotRemoteResourceChanged(link.botId);
+        if (link.role === 'group') {
+          const groupId = parseBotGroupIdFromRouteKey(link.routeKey);
+          if (groupId) broadcastBotGroupRemoteResourceChanged(groupId);
+        } else broadcastBotRemoteResourceChanged(link.botId);
       })
       .catch((error: unknown) => {
         log.warn('resolve teammate Session invalidation failed', {
@@ -112,36 +121,8 @@ export function scheduleBotRemoteResourceChangedForSession(
 }
 
 /**
- * A background task the teammate started is one it looks after: once the task exists,
- * remote task rows need the roster's follow links again.
- */
-export function scheduleBotRemoteResourceChangedForDelegation(delegationId: string, childSessionId: string | null): void {
-  if (!childSessionId) return;
-  let ownerScope: string;
-  try {
-    ownerScope = activeOwnerScopeKey();
-  } catch {
-    return;
-  }
-  void getDbClient().drizzle
-    .select({ botId: botDelegations.requestingBotId })
-    .from(botDelegations)
-    .where(eq(botDelegations.id, delegationId))
-    .limit(1)
-    .then(([row]) => {
-      if (!row?.botId || !isOwnerScopeCurrent(ownerScope)) return;
-      broadcastBotRemoteResourceChanged(row.botId);
-    })
-    .catch((error: unknown) => {
-      log.warn('resolve teammate delegation invalidation failed', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
-}
-
-/**
  * Roster rows link only open tasks, so archiving or restoring a task changes the rows of the
- * teammates that started it or took it over. Extra rows re-read harmlessly; a missed one
+ * teammates that started it (send_to_session or an old V1 background task) or took it over. Extra rows re-read harmlessly; a missed one
  * would leave the mark stale.
  */
 export function scheduleBotRemoteResourceChangedForFollowedSession(sessionId: string): void {

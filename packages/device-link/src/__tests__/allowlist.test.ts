@@ -4,6 +4,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { TASK_MIGRATION_CHANNEL } from '../taskMigration.js';
+import { PEER_APP_UPDATE_CHANNEL } from '../peerAppUpdate.js';
 import {
   REMOTE_INVOKE_ALLOWLIST,
   REMOTE_REVIEW_EXTERNAL_INPUT_CHANNELS,
@@ -27,6 +28,13 @@ import {
 } from '../remoteResources.js';
 
 describe('REMOTE_INVOKE_ALLOWLIST', () => {
+  it('allows the scoped same-account peer app update channel while keeping raw update IPCs forbidden', () => {
+    expect(REMOTE_INVOKE_ALLOWLIST.has(PEER_APP_UPDATE_CHANNEL)).toBe(true);
+    for (const raw of ['update-check-now', 'update-get-status', 'update-auto-settings-set', 'relaunch-to-update']) {
+      expect(REMOTE_INVOKE_ALLOWLIST.has(raw)).toBe(false);
+    }
+  });
+
   it('allows the public composer projection without exposing the full installed plugin records', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('ghosts:composer-list')).toBe(true);
     expect(REMOTE_INVOKE_ALLOWLIST.has('ghosts:list')).toBe(false);
@@ -35,12 +43,35 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:review:start')).toBe(true);
   });
 
+  it('allows the read-only OpenCode Go quota query', () => {
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:usage:opencode-go')).toBe(true);
+  });
+
   it('allows the read-only task context-window bounds query but no generic session write', () => {
     // 只读边界查询：控制端据此才能在远程任务上给出「更大」的档位。
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:get-context-window-bounds')).toBe(true);
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:set-context-window-budget')).toBe(true);
     // 通用写入口不因这条查询放开。
     expect(REMOTE_INVOKE_ALLOWLIST.has('local-db:sessions:update')).toBe(false);
+  });
+  it('allows native window numbers without exposing model preference mutations', () => {
+    // #11716/#4477 protocol boundary: only this structured numeric read is remote.
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:model-context-limit:get')).toBe(true);
+    for (const channel of ['maker:model-context-limit:set', 'maker:model-context-limit:reset', 'maker:model-compaction:set']) {
+      expect(REMOTE_INVOKE_ALLOWLIST.has(channel)).toBe(false);
+    }
+  });
+  it('lets owner controllers use the host model groups but never edit them remotely', () => {
+    // model-groups.md §6.3：读、选路、提交、记绑定、代写说明在被控端执行；改模式只在本机。
+    // 放开 set 等于让手机或另一台电脑改写这台电脑的全局配置。
+    for (const channel of [
+      'model-groups:get', 'model-groups:resolve', 'model-groups:commit', 'model-groups:bind-session', 'model-groups:route-note',
+    ]) {
+      expect(REMOTE_INVOKE_ALLOWLIST.has(channel)).toBe(true);
+    }
+    expect(REMOTE_INVOKE_ALLOWLIST.has('model-groups:set')).toBe(false);
+    // 说明由被控端代写，裸写消息仍然不开。
+    expect(REMOTE_INVOKE_ALLOWLIST.has('local-db:messages:create')).toBe(false);
   });
   it('allows the reduced teammate directory while keeping native configuration local', () => {
     for (const channel of ['local-db:bots:list', 'local-db:bots:get']) {
@@ -95,10 +126,11 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
     }
   });
 
-  it('允许远程会话读取被控端 Git / GitHub 上下文', () => {
+  it('允许同账号远程任务读取 Git / GitHub 上下文并管理 PR 关联', () => {
     for (const ch of [
       'git-context:get-for-session',
       'git-context:pr-refs:list',
+      'git-context:pr-refs:manage',
       'git-context:pr-status',
     ]) {
       expect(REMOTE_INVOKE_ALLOWLIST.has(ch)).toBe(true);
@@ -304,6 +336,8 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
       'worktree:discard-precreated',
       'worktree:cancel-precreated',
       'worktree:removal-preview',
+      'worktree:restore-status',
+      'worktree:restore-for-session',
     ]) {
       expect(REMOTE_INVOKE_ALLOWLIST.has(ch)).toBe(true);
     }

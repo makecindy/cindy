@@ -12,12 +12,14 @@ const fixture = vi.hoisted(() => ({ handle: vi.fn(), latencyMs: 100, profiles: [
   sockets: [] as Array<import('ws').WebSocket>, routes: [] as string[], download: vi.fn(), cacheGeneration: 0, page: [] as unknown[],
   /** When the server reads its state and when the answer reaches the client, in ms after the request. */
   timing: null as null | ((route: string) => { serve: number; deliver: number }),
-  offline: false, onFrame: null as null | ((socket: unknown, frame: Record<string, unknown>) => void) }));
+  offline: false, onFrame: null as null | ((socket: unknown, frame: Record<string, unknown>) => void),
+  /** This computer's saved settings for every room; null means none, as for a history never imported. */
+  workspace: { projectDir: '/group/project', plans: {} } as Record<string, unknown> | null }));
 vi.mock('../../authManager.js', () => ({ getAccessToken: () => 'isolated-test-token', refresh: vi.fn(async () => true) }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://chat.cindy.app' }));
 vi.mock('../chatServerMedia.js', () => ({ createChatMedia: () => ({ upload: vi.fn(async () => []), download: fixture.download,
   get cacheGeneration() { return fixture.cacheGeneration; } }) }));
-vi.mock('../chatServerWorkspaces.js', () => ({ chatServerWorkspaces: () => ({ read: () => null, save: vi.fn() }) }));
+vi.mock('../chatServerWorkspaces.js', () => ({ chatServerWorkspaces: () => ({ read: () => fixture.workspace, save: vi.fn() }) }));
 vi.mock('../chatSendJournal.js', () => ({ chatSendJournal: () => ({ read: () => null, save: vi.fn(), confirm: vi.fn(), forgetRoom: vi.fn() }) }));
 vi.mock('../chatLocalHistory.js', () => ({ chatLocalHistory: () => ({ read: () => null, save: vi.fn(), forget: vi.fn() }) }));
 vi.mock('../chatMigrationReceipts.js', () => ({ chatMigrationReceipts: () => ({ read: () => null, save: vi.fn() }) }));
@@ -114,6 +116,7 @@ describe('Chat Server group open latency (simulated 100ms per request)', () => {
     vi.stubEnv('XDT_ISOLATED', '1');
     fixture.routes = []; fixture.sockets = []; fixture.profiles = []; fixture.localGroupIds = []; fixture.latencyMs = 100;
     fixture.timing = null; fixture.offline = false; fixture.onFrame = null; fixture.cacheGeneration = 0;
+    fixture.workspace = { projectDir: '/group/project', plans: {} };
     fixture.page = [message];
     fixture.handle.mockImplementation(response);
     fixture.download.mockResolvedValue(null);
@@ -122,6 +125,93 @@ describe('Chat Server group open latency (simulated 100ms per request)', () => {
     service = withChatServer(local as unknown as BotGroupChatService, { onChanged } as unknown as BotGroupChatServiceDeps);
   });
   afterEach(() => { service.dispose(); vi.useRealTimers(); vi.unstubAllEnvs(); vi.clearAllMocks(); });
+
+  // Unit: an open group's immutable kind was re-read in a full snapshot before
+  // every topic post. Keep current server write authorization even with warm UI context.
+  it('sends a reply in an already open group without another snapshot and preserves write refusals', async () => {
+    fixture.handle.mockImplementation((route, method) => route.endsWith('/members') ? { body: [] }
+      : route.endsWith(`/messages/${message.id}`) ? { body: message }
+      : route.endsWith('/messages') && method === 'POST' ? { body: { id: message.id } } : response(route));
+    // HTTP fallback must reuse immutable room kind too, even without a live socket.
+    await warm(); await timed(() => service.getGroup(rooms[0]));
+    const input = { groupId: rooms[0], rootId: message.id, text: 'Timing regression', clientId: 'topic-timing-first',
+      mentions: { all: false, botIds: [] } };
+    const reply = await timed(() => service.chatServer!.reply(input));
+    expect(reply.value).toMatchObject({ ok: true, messageId: message.id });
+    expect(reply.ms).toBeLessThanOrEqual(200);
+    expect(reply.routes.some(route => route.endsWith('/snapshot'))).toBe(false);
+    await connected();
+    const afterReconnect = await timed(() => service.chatServer!.reply({ ...input, clientId: 'topic-after-reconnect' }));
+    expect(afterReconnect.value.ok).toBe(true);
+    expect(afterReconnect.ms).toBeLessThanOrEqual(200);
+    expect(afterReconnect.routes.some(route => route.endsWith('/snapshot'))).toBe(false);
+    fixture.handle.mockImplementation((route, method) => route.endsWith(`/messages/${message.id}`)
+      ? { body: { ...message, threadRootId: rooms[1] } }
+      : route.endsWith('/members') ? { body: [] }
+        : route.endsWith('/messages') && method === 'POST' ? { body: { id: message.id } } : response(route));
+    const share = await timed(() => service.chatServer!.shareToMain({ groupId: rooms[0], messageId: message.id }));
+    expect(share.value).toMatchObject({ ok: true, messageId: message.id });
+    expect(share.ms).toBeLessThanOrEqual(200);
+    expect(share.routes.some(route => route.endsWith('/snapshot'))).toBe(false);
+    fixture.handle.mockImplementation((route, method) => route.endsWith('/members') ? { body: [] }
+      : route.endsWith(`/messages/${message.id}`) ? { body: message }
+        : route.endsWith('/messages') && method === 'POST' ? { status: 403, body: { error: { code: 'FORBIDDEN' } } } : response(route));
+    expect((await timed(() => service.chatServer!.reply({ ...input, clientId: 'topic-timing-revoked' }))).value)
+      .toMatchObject({ ok: false, errorCode: 'FORBIDDEN' });
+  });
+
+  // Unit: a successful share used to wait for snapshots/executions before its
+  // first paint. A single-message server read must publish its authorized row in
+  // two 100ms rounds, independently of slow full-room reconciliation.
+  it('publishes a posted share directly from its server row before slow room metadata', async () => {
+    const disk = new Map<string, ChatHistoryState>();
+    const store: ChatHistoryStore = { read: async key => structuredClone(disk.get(key)), write: async (key, state) => {
+      if (state) disk.set(key, structuredClone(state)); else disk.delete(key);
+    } };
+    service.dispose(); service = withChatServer(local as unknown as BotGroupChatService,
+      { onChanged, chatHistoryStore: () => store } as unknown as BotGroupChatServiceDeps);
+    const source = { ...message, id: '50000000-0000-4000-8000-000000000002', seq: '2', threadRootId: message.id,
+      content: [{ type: 'text', text: 'Authorized topic reply' }] };
+    let posted = { ...message, id: '50000000-0000-4000-8000-000000000003', seq: '58' };
+    let sourceUnavailable = false;
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route.endsWith('/snapshot')) return { body: { room: room(rooms[0]), members: [], messages: [source, message], reads: [], cursor: '57' } };
+      if (route.startsWith('/changes?')) return { body: { cursor: '57', changes: [] } };
+      if (route.endsWith(`/messages/${source.id}`)) return sourceUnavailable
+        ? { status: 404, body: { error: { code: 'MESSAGE_NOT_FOUND' } } } : { body: source };
+      if (route.endsWith(`/messages/${posted.id}`)) return { body: posted };
+      if (route.endsWith('/messages') && method === 'POST') { posted = { ...posted, content: body.content }; return { body: { id: posted.id } }; }
+      return response(route);
+    });
+    await warm(); await timed(() => service.getGroup(rooms[0])); onChanged.mockClear();
+    fixture.timing = route => ({ serve: 100, deliver: route.endsWith('/snapshot') ? 5000 : 100 });
+    const start = Date.now();
+    const shared = await timed(() => service.chatServer!.shareToMain({ groupId: rooms[0], messageId: source.id }));
+    expect(shared.value.ok).toBe(true); expect(shared.ms).toBeLessThanOrEqual(100);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(Date.now() - start).toBeLessThanOrEqual(200);
+    expect(onChanged.mock.calls.map(([payload]) => payload).find(payload => payload.messages?.length)).toMatchObject({
+      groupId: rooms[0], historyRevision: disk.get(rooms[0])!.generation,
+      messages: [{ id: posted.id, threadShare: { status: 'available', content: 'Authorized topic reply' } }],
+    });
+    expect(fixture.routes.slice(-3).some(route => route.endsWith('/members'))).toBe(false);
+    // Expiry still rechecks the source instead of treating a cached row as authority forever.
+    await vi.advanceTimersByTimeAsync(30_001);
+    const expired = await timed(() => service.chatServer!.shareToMain({ groupId: rooms[0], messageId: source.id }));
+    expect(expired.value.ok).toBe(true); expect(expired.ms).toBeLessThanOrEqual(200);
+    expect(expired.routes.some(route => route.endsWith(`/messages/${source.id}`))).toBe(true);
+    // Ready precedes replay: old cached text may have become invisible while disconnected.
+    sourceUnavailable = true;
+    await connected();
+    const revoked = await timed(() => service.chatServer!.shareToMain({ groupId: rooms[0], messageId: source.id }));
+    expect(revoked.value).toMatchObject({ ok: false, errorCode: 'SHARE_UNAVAILABLE' });
+    expect(revoked.routes.some(route => route.endsWith(`/messages/${source.id}`))).toBe(true);
+    expect(revoked.routes).not.toContain(`/conversations/${rooms[0]}/messages`);
+    sourceUnavailable = false;
+    const live = await timed(() => service.chatServer!.shareToMain({ groupId: rooms[0], messageId: source.id }));
+    expect(live.value.ok).toBe(true); expect(live.ms).toBeLessThanOrEqual(200);
+    expect(live.routes.some(route => route.endsWith(`/messages/${source.id}`))).toBe(true);
+  });
 
   // Unit: the production topic entry used to bypass persisted history on every open.
   // Restart, old-page edits and a permission reset must all share the room projection.
@@ -310,7 +400,7 @@ describe('Chat Server group open latency (simulated 100ms per request)', () => {
 
   // Unit: all successful local /read writers must update the durable UI projection
   // even while WS is unavailable; existing HTTP tests had no persistent cache.
-  it.each(['main', 'thread', 'follow'] as const)('invalidates personal metadata after a local %s write without a socket notice', async action => {
+  it.each(['main', 'thread', 'follow'] as const)('refreshes personal metadata after a local %s write without a socket notice', async action => {
     const disk = new Map<string, ChatHistoryState>();
     const store: ChatHistoryStore = { read: async room => structuredClone(disk.get(room)), write: async (room, state) => {
       if (state) disk.set(room, structuredClone(state)); else disk.delete(room);
@@ -325,7 +415,7 @@ describe('Chat Server group open latency (simulated 100ms per request)', () => {
       if (route.endsWith('/read') && method === 'POST') {
         if (body.threadRootId) { threadRead = body.readSeq; following = body.following ?? following; }
         else mainRead = body.readSeq;
-        return { body: { following } };
+        return { body: { readSeq: body.readSeq, following, muted: false, markedUnread: false } };
       }
       if (route.endsWith('/snapshot')) return { body: { room: room(rooms[0]), members: [], messages: [reply, root], cursor: '57',
         reads: [{ thread_key: 'main', read_seq: mainRead }, { thread_key: root.id, read_seq: threadRead, following }] } };
@@ -336,12 +426,13 @@ describe('Chat Server group open latency (simulated 100ms per request)', () => {
       return response(route);
     });
     await timed(() => service.getGroup(rooms[0]));
-    const result = await timed(() => action === 'main'
+    const result = await timed(async () => action === 'main'
       ? service.chatServer!.manage({ groupId: rooms[0], action: { type: 'read', messageId: root.id } })
       : action === 'thread' ? service.chatServer!.thread({ groupId: rooms[0], rootId: root.id, markRead: true })
         : service.chatServer!.followThread({ groupId: rooms[0], rootId: root.id, following: true }));
     expect(result.value.ok).toBe(true);
-    await timed(() => service.getGroup(rooms[0]));
+    const refreshed = await timed(() => service.getGroup(rooms[0]));
+    if (action !== 'follow') expect(refreshed.routes.some(route => route.endsWith('/snapshot'))).toBe(false);
     expect(disk.get(rooms[0])?.snapshot).toMatchObject({ reads: [
       { thread_key: 'main', read_seq: action === 'main' ? '1' : '0' },
       { thread_key: root.id, read_seq: action === 'thread' ? '2' : '0', following: action === 'follow' },
@@ -387,7 +478,7 @@ describe('Chat Server group open latency (simulated 100ms per request)', () => {
     expect(everyone.routes).toHaveLength(4);
   });
 
-  it('starts a claimed turn after one parallel read round and one lease check', async () => {
+  it('starts a claimed turn after context, scoped failures and the final lease check', async () => {
     service.dispose();
     const botActor = '20000000-0000-4000-8000-000000000001';
     fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
@@ -396,7 +487,10 @@ describe('Chat Server group open latency (simulated 100ms per request)', () => {
     let queued = true;
     let claimedAt = 0;
     let dispatchedAt = 0;
-    fixture.handle.mockImplementation(route => {
+    const order: string[] = [];
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route.includes('/execution-failures?')) order.push('failures');
+      if (body?.action === 'heartbeat') order.push('heartbeat');
       if (route === '/actors') return { body: [{ id: botActor, kind: 'bot', externalId: 'local-bot', name: 'Bot' }] };
       if (route === '/executions/claim') {
         if (!queued) return { body: { execution: null } };
@@ -407,13 +501,17 @@ describe('Chat Server group open latency (simulated 100ms per request)', () => {
       return response(route);
     });
     service = withChatServer(local as unknown as BotGroupChatService, { onChanged,
+      validateProjectDir: async (dir: string) => ({ ok: true as const, dir }),
       ensureLane: async () => ({ ok: true, sessionId: 'lane' }), abortLane: async () => {},
-      dispatch: async () => { dispatchedAt = Date.now(); return { ok: true }; } } as unknown as BotGroupChatServiceDeps);
+      dispatch: async () => { order.push('dispatch'); dispatchedAt = Date.now(); return { ok: true }; } } as unknown as BotGroupChatServiceDeps);
     await vi.advanceTimersByTimeAsync(3000);
-    // Before: snapshot → lease check → history → lease check → dispatch (400ms after the claim).
+    // #11097 / unit: source-scoped failures depend on authorized history. The final
+    // lease check follows that read to catch a stop while it was in flight.
+    // This adds one necessary round (100ms here), not redundant snapshot/list reads.
     console.info(`[group-pickup-latency] ${JSON.stringify({ afterClaimMs: dispatchedAt - claimedAt })}`);
     expect(dispatchedAt).toBeGreaterThan(0);
-    expect(dispatchedAt - claimedAt).toBe(200);
+    expect(dispatchedAt - claimedAt).toBe(300);
+    expect(order).toEqual(['failures', 'heartbeat', 'dispatch']);
   });
 
   it('reads a new room only after the snapshot whose cursor it follows from', async () => {
@@ -707,6 +805,17 @@ describe('Chat Server group open latency (simulated 100ms per request)', () => {
     await timed(() => service.getGroup(rooms[1]));
     expect(local.listGroups).toHaveBeenCalled();
   });
+
+  it('archives a room whose own local row appeared after the upgrade ran', async () => {
+    await timed(() => service.listGroups());
+    fixture.localGroupIds = [rooms[1]];
+    fixture.workspace = null;
+    local.listGroups.mockImplementation(async () => ({ ok: true, groups: [{
+      id: rooms[1], name: 'Room 2', replyMode: 'all', speakingMode: 'auto', members: [], organizerBotId: null,
+      projectDir: null, lastMessage: null, speakingBotIds: [], planningBotId: null, openPlan: null, createdAt: 1, updatedAt: 1 }] }));
+    const { value } = await timed(() => service.chatServer!.manage({ groupId: rooms[1], action: { type: 'archive', archived: true, expectedRevision: 1 } }));
+    expect(value).toEqual({ ok: true });
+  });
 });
 
 describe('Chat Server realtime cursor against a server model', () => {
@@ -749,7 +858,7 @@ describe('Chat Server realtime cursor against a server model', () => {
     vi.setSystemTime(new Date('2026-10-03T00:00:00Z'));
     vi.stubEnv('XDT_ISOLATED', '1');
     fixture.routes = []; fixture.sockets = []; fixture.profiles = []; fixture.localGroupIds = []; fixture.latencyMs = 20;
-    fixture.timing = null; fixture.offline = false;
+    fixture.timing = null; fixture.offline = false; fixture.workspace = { projectDir: '/group/project', plans: {} };
     head = 0; history = []; shown = []; requestVersion = 0; subscriptions.clear();
     for (const text of ['one', 'two', 'three']) commit(text);
     fixture.onFrame = (owner, frame) => {

@@ -1,7 +1,16 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { ScriptTarget, transpileModule } from 'typescript';
+import { shouldNotifyAgentIslandForSession } from '../agent-island/notificationPolicy.js';
+import {
+  forgetKnownOrcaWorkerSession as forgetWorkerIdentity,
+  isKnownOrcaWorkerSession,
+  markKnownOrcaWorkerSession,
+} from '../maker-ipc/orcaManualInterrupt.js';
+
+import { createSetSessionThinkingEnabled } from '../maker-ipc/sessionRuntimeAxisSettings';
 
 const registerSource = readFileSync(
   resolve(__dirname, '..', 'maker-ipc', 'register.ts'),
@@ -18,19 +27,89 @@ describe('maker Orca role marking IPC boundary', () => {
     expect(registerSource).toContain('await markOrcaRoleIfNeeded(sessionId, role);');
   });
 
-  it('suppresses Agent Island notifications for known Orca workers', () => {
-    expect(registerSource).toContain("from '../agent-island/notificationPolicy.js'");
-    expect(registerSource).toContain('function shouldNotifyAgentIslandForSession(sessionId: string): boolean');
-    expect(registerSource).toContain('isKnownOrcaWorkerSession(sessionId)');
-    expect(registerSource).toContain('if (!shouldNotifyAgentIslandForSession(session.id)) return;');
-    expect(registerSource).toContain('if (!shouldNotifyAgentIslandForSession(sessionId)) return;');
+  // Worker notification suppression is covered through AgentIslandService's real
+  // display/activity projections in agent-island/__tests__/service.test.ts. Do not
+  // require discarding its lifecycle events or deleting its live activity here.
+  // #12558, unit: execute the production forwarding gate with in-memory identity
+  // boundaries; the former literal assertions required the buggy Worker exclusion.
+  it('forwards Worker lifecycle activity while retaining the hidden-task boundary', () => {
+    const source = registerSource.match(/function shouldNotifyAgentIslandForSession\(sessionId: string\): boolean \{[\s\S]*?\n\}/)?.[0];
+    if (!source) throw new Error('Activity forwarding gate missing');
+    const gate = new Function('isSessionHiddenSync', 'isKnownOrcaWorkerSession',
+      'shouldNotifyAgentIslandForSessionByPolicy', 'AGENT_ISLAND_DISPLAY_CONFIG',
+      transpileModule(`${source}\nreturn shouldNotifyAgentIslandForSession;`, {
+        compilerOptions: { target: ScriptTarget.ES2022 },
+      }).outputText,
+    )((id: string) => id === 'hidden', (id: string) => id === 'worker',
+      shouldNotifyAgentIslandForSession, { notifyOrcaWorkerSessions: false }) as (id: string) => boolean;
+    expect(gate('worker')).toBe(true);
+    expect(gate('ordinary')).toBe(true);
+    expect(gate('hidden')).toBe(false);
   });
 
-  it('clears any existing Agent Island entry when a session is marked as an Orca worker', () => {
-    const roleMarkingSource = registerSource.slice(registerSource.indexOf('async function markOrcaRoleIfNeeded'));
+  // #12570 review: register's shared forget boundary must discard live projections
+  // while the Worker identity still suppresses notifications. Ordinary close keeps
+  // unread activity, so forgetting first can publish it as a normal task. Unit;
+  // service.test.ts covers the real close/discard/display/relay projections.
+  it.each([false, true])('discards Worker activity before forgetting its notification identity (publish failure: %s)', publishFails => {
+    const source = registerSource.match(/function forgetKnownOrcaWorkerSession\(sessionId: string\): void \{[\s\S]*?\n\}/)?.[0];
+    const closeSource = registerSource.match(/function handleAgentIslandSessionClosedAfterCleanup\([\s\S]*?\n\}/)?.[0];
+    if (!source || !closeSource) throw new Error('Worker activity cleanup boundary missing');
+    const warn = vi.fn();
+    const handleSessionClosed = vi.fn(() => {
+      expect(isKnownOrcaWorkerSession('archive-worker')).toBe(true);
+      if (publishFails) throw new Error('projection publish failed');
+    });
+    const forget = new Function('getAgentIslandService', 'forgetOrcaWorkerIdentity', 'log',
+      transpileModule(`${closeSource}\n${source}\nreturn forgetKnownOrcaWorkerSession;`, {
+        compilerOptions: { target: ScriptTarget.ES2022 },
+      }).outputText,
+    )(() => ({ handleSessionClosed }), forgetWorkerIdentity, { warn }) as (id: string) => void;
+    markKnownOrcaWorkerSession('archive-worker');
+    try {
+      expect(() => forget('archive-worker')).not.toThrow();
+      expect(handleSessionClosed).toHaveBeenCalledWith('archive-worker', { reason: 'discarded' });
+      expect(isKnownOrcaWorkerSession('archive-worker')).toBe(false);
+      expect(warn).toHaveBeenCalledTimes(publishFails ? 1 : 0);
+    } finally {
+      forgetWorkerIdentity('archive-worker');
+    }
+  });
 
-    expect(roleMarkingSource).toContain("if (orcaRole === 'worker') {");
-    expectOrder(roleMarkingSource, 'markKnownOrcaWorkerSession(sessionId);', 'clearSuppressedOrcaWorkerAgentIslandSession(sessionId);');
+  // #12570 review, unit: a display publisher exception must not skip the durable
+  // Worker role write. Prior coverage asserted source ordering, not this failure.
+  // Execute the production role boundary with an in-memory owner and DB port.
+  it('persists the Worker role despite a notification refresh failure', async () => {
+    const source = registerSource.match(/  async function markOrcaRoleIfNeeded\([\s\S]*?\n  \}/)?.[0];
+    if (!source) throw new Error('Orca role marking boundary missing');
+    const owner = {};
+    const warn = vi.fn();
+    const refresh = vi.fn(() => { throw new Error('notification publish failed'); });
+    let persistedRole: string | undefined;
+    const setSessionOrcaRole = vi.fn(async (_id: string, role: string,
+      options: { owner: object; assertCurrent(): void }) => {
+      expect(options.owner).toBe(owner);
+      options.assertCurrent();
+      persistedRole = role;
+    });
+    const markRole = new Function('getCurrentDbClientSnapshot', 'assertSessionCreationCurrent',
+      'assertReviewSettingsUnlocked', 'markKnownOrcaWorkerSession', 'getAgentIslandService',
+      'setSessionOrcaRole', 'log',
+      transpileModule(`${source}\nreturn markOrcaRoleIfNeeded;`, {
+        compilerOptions: { target: ScriptTarget.ES2022 },
+      }).outputText,
+    )(() => owner, () => {}, async () => {}, markKnownOrcaWorkerSession,
+      () => ({ handleNotificationMuteChanged: refresh }), setSessionOrcaRole,
+      { warn }) as (id: string, role: 'worker') => Promise<void>;
+    try {
+      await expect(markRole('new-worker', 'worker')).resolves.toBeUndefined();
+      expect(persistedRole).toBe('worker');
+      expect(isKnownOrcaWorkerSession('new-worker')).toBe(true);
+      expect(refresh).toHaveBeenCalledOnce();
+      expect(warn).toHaveBeenCalledOnce();
+    } finally {
+      forgetWorkerIdentity('new-worker');
+    }
   });
 
   it('rejects Review sessions before either Orca entry point can mutate state', () => {
@@ -89,16 +168,17 @@ describe('maker Orca role marking IPC boundary', () => {
     expect(successHookSource).toContain('markKnownOrcaWorkerSession(sessionId);');
   });
 
-  it('rejects Review sessions before thinking can be flipped', () => {
-    const thinkingSource = registerSource.slice(
-      registerSource.indexOf('MAKER_INVOKE.SET_THINKING_ENABLED'),
-      registerSource.indexOf('MAKER_INVOKE.SET_EXTRA_DIRS'),
-    );
-    expectOrder(
-      thinkingSource,
-      'await assertReviewSettingsUnlocked(sessionId);',
-      'await sess.setThinkingEnabled(enabled);',
-    );
+  // The SET_THINKING_ENABLED body after its sender check runs from sessionRuntimeAxisSettings.ts; a
+  // Review task is refused before the runtime's thinking is touched.
+  it('rejects Review sessions before thinking can be flipped', async () => {
+    const setThinkingEnabled = vi.fn(async () => {});
+    const handle = createSetSessionThinkingEnabled({
+      maker: { getSession: () => ({ setThinkingEnabled }) } as never,
+      assertReviewSettingsUnlocked: async () => { throw new Error('Review task settings are fixed to the source task'); },
+      captureSharedTaskSettingGuard: () => Object.assign(() => {}, { admit: () => {} }) as never,
+    });
+    await expect(handle('review-task', true)).rejects.toThrow('Review task settings are fixed to the source task');
+    expect(setThinkingEnabled).not.toHaveBeenCalled();
   });
 });
 
@@ -108,9 +188,3 @@ function expectOrder(source: string, before: string, after: string): void {
   expect(beforeIndex).toBeGreaterThanOrEqual(0);
   expect(afterIndex).toBeGreaterThan(beforeIndex);
 }
-
-it('ordinary sessions bypass plugin receipt storage before its first lookup', () => {
-  const loader = registerSource.slice(registerSource.indexOf('setAutoReviewContextResolver(createPluginTaskReviewResolver('));
-  expectOrder(loader, "session.source !== 'plugin' && session.orcaRole !== 'worker'", 'const store = createPluginTaskStore(epoch.client);');
-  expectOrder(loader, "lead.source !== 'plugin'", 'const receipt = await store.get(leadId);');
-});

@@ -7,13 +7,20 @@
  * 读取时只留那台电脑开了「允许被远程调用」的供应商(`remoteInvocationEnabled === true`)：
  * 换模型、协同 Worker、定时任务的默认来源都只能落在这些供应商上。
  */
-import { CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2 } from '@cindy/device-link';
+import { CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2, readProviderMetadataContinuity, readProviderShareGroupSize, scrubSharedProvider } from '@cindy/device-link';
 import { effectiveSourceIdForModel, getModel, isModelSelectableForNewRoute, isModelVisible, remoteInvocationModels, type ProviderView, type AgentKind } from '@cindy/model-providers';
+
+import { remoteProviderDisableKey, isProviderDisabled } from '@cindy/model-providers';
+import { readModelDisableOverrides } from '../../maker-host/model-disable-store.js';
+import { PLUGIN_ENGINES_INVOKE, parseOfferedPluginEngines } from '../../../shared/pluginEngines.js';
+import { isProviderShareAgentDeviceId } from '../../../shared/providerShare.js';
+import { resolveVerifiedContextWindow } from '../../../shared/sessionContextWindow.js';
 
 type RemoteInvoke = (
   deviceId: string,
   channel: string,
   args: unknown[],
+  options?: { liveProviderMetadata?: true; ownFreshness?: true },
 ) => Promise<{ ok: boolean; result?: unknown; error?: { code?: string; message?: string } }>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -48,26 +55,82 @@ export function parseDeviceProviderViews(value: unknown): ProviderView[] {
   });
 }
 
-/** 读那台电脑允许被远程调用的供应商视图。 */
-export async function readDeviceProviderViews(invoke: RemoteInvoke, deviceId: string, options: { visibleOnly?: boolean } = {}): Promise<ProviderView[]> {
-  const result = await invoke(deviceId, 'maker:provider:list', [
+/**
+ * 读那台电脑允许被远程调用的供应商视图。
+ *
+ * 分享来的供应商与控制端直读(device-link/ipc.ts)用同一份受邀者投影：用户直接选中的分享组按组判断，不看组所在
+ * 电脑本机是否登录(provider-sharing.md §5.1)。`groupMember` 给供应商组读组内电脑用，保留那台本机的状态：
+ * 组分过去的任务带 groupAssigned，在那台直接运行，不再分给它自己组里的电脑。
+ * 同时带出 Main 的 stale 标记；纯数组调用方使用下面的 readDeviceProviderViews。
+ */
+export interface DeviceProviderCatalogRead {
+  views: ProviderView[];
+  /** True when the reply is a stale continuity fallback, not a current live directory. */
+  stale: boolean;
+  /** Remaining source budget; absent for legacy replies without a continuity stamp. */
+  remainingMs?: number;
+}
+
+export async function readDeviceProviderCatalog(
+  invoke: RemoteInvoke,
+  deviceId: string,
+  /** `ownFreshness`: the caller caches the result itself and needs each read to reach the host. */
+  options: { visibleOnly?: boolean; groupMember?: boolean; live?: boolean; ownFreshness?: boolean } = {},
+): Promise<DeviceProviderCatalogRead> {
+  const args = [
     { capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2] },
-  ]);
+  ];
+  const result = options.live
+    ? await invoke(deviceId, 'maker:provider:list', args, { liveProviderMetadata: true })
+    : options.ownFreshness
+      ? await invoke(deviceId, 'maker:provider:list', args, { ownFreshness: true })
+      : await invoke(deviceId, 'maker:provider:list', args);
   if (!result.ok) {
     throw Object.assign(new Error(result.error?.message ?? 'provider list unavailable'), { code: result.error?.code });
   }
-  const providers = parseDeviceProviderViews(result.result).filter((view) => view.remoteInvocationEnabled === true).map(remoteInvocationModels);
-  if (!options.visibleOnly) return providers;
+  const continuity = readProviderMetadataContinuity(result.result);
+  const stale = continuity?.stale === true;
+  const remainingMs = continuity?.remainingMs;
+  const offered = parseDeviceProviderViews(result.result).filter((view) => view.remoteInvocationEnabled === true).map(remoteInvocationModels);
+  const access = isProviderShareAgentDeviceId(deviceId) ? undefined : readModelDisableOverrides();
+  const providers = isProviderShareAgentDeviceId(deviceId) && !options.groupMember
+    ? offered.map(scrubSharedProvider)
+    : offered.map(provider => isProviderDisabled(access, remoteProviderDisableKey(deviceId, provider.id))
+      ? { ...provider, suspended: true } : provider);
+  if (!options.visibleOnly) return { views: providers, stale, ...(remainingMs !== undefined ? { remainingMs } : {}) };
   const visibility = isRecord(result.result) && isRecord(result.result.modelVisibilityOverrides)
     ? result.result.modelVisibilityOverrides : {};
-  return providers.map((provider) => ({ ...provider, models: {
+  return { views: providers.map((provider) => ({ ...provider, models: {
     ...provider.models,
     ...Object.fromEntries(provider.agents.map((agent) => [agent,
       (provider.models[agent] ?? []).filter((model) => {
         const override = visibility[`${agent}:${provider.id}:${model.id}`];
         return isModelVisible(typeof override === 'boolean' ? override : undefined, model.defaultEnabled);
       }).map((model) => ({ ...model, defaultEnabled: true }))])),
-  } }));
+  } })), stale, ...(remainingMs !== undefined ? { remainingMs } : {}) };
+}
+
+/** Array-only compatibility wrapper; callers that must distinguish a stale snapshot use readDeviceProviderCatalog. */
+export async function readDeviceProviderViews(
+  invoke: RemoteInvoke,
+  deviceId: string,
+  options: { visibleOnly?: boolean; groupMember?: boolean; live?: boolean; ownFreshness?: boolean } = {},
+): Promise<ProviderView[]> {
+  return (await readDeviceProviderCatalog(invoke, deviceId, options)).views;
+}
+
+/** Resolve replay capacity from the same admitted device catalog as the route. */
+export function resolveDeviceHandoffWindow(
+  catalog: DeviceProviderCatalogRead, deviceId: string, agentKind: AgentKind, model: string, providerId: string | null,
+): number | null {
+  if (catalog.stale) return null;
+  const providers = catalog.views;
+  const selected = providerId ?? effectiveSourceIdForModel(providers, null, model, agentKind);
+  const provider = providers.find(view => view.id === selected);
+  // A shared group can later choose an execution computer different from the
+  // one advertising the group, so the representative window is insufficient.
+  if (!provider || (isProviderShareAgentDeviceId(deviceId) && readProviderShareGroupSize(provider) !== null)) return null;
+  return resolveVerifiedContextWindow({ providers }, agentKind, provider.id, model);
 }
 
 /** 与普通任务共用授权目录；失败不回落到本机的同名供应商。 */
@@ -78,7 +141,8 @@ export async function readRemoteProviderRoute(route: {
   model: string;
 }) {
   const { remoteBackgroundInvoke } = await import('../../device-link');
-  const providers = await readDeviceProviderViews(remoteBackgroundInvoke, route.agentDeviceId);
+  const catalog = await readDeviceProviderCatalog(remoteBackgroundInvoke, route.agentDeviceId);
+  const providers = catalog.views;
   // 已有远程任务可以未指定来源；只在执行端授权目录内按原生默认规则解析。
   // 显式来源失效仍拒绝，不换到另一个同名模型账号。
   const providerId = route.providerId ?? effectiveSourceIdForModel(providers, null, route.model, route.agentKind);
@@ -87,5 +151,18 @@ export async function readRemoteProviderRoute(route: {
   if (!provider || !model || !isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' })) {
     throw new Error('[REMOTE_AGENT_UNAVAILABLE] Selected remote provider or model is unavailable.');
   }
-  return { provider, model };
+  return {
+    provider, model,
+    verifiedContextWindow: resolveDeviceHandoffWindow(catalog, route.agentDeviceId, route.agentKind, route.model, providerId),
+  };
+}
+
+/** Read the authorized plugin engine catalog for one execution location. */
+export async function readRemotePluginEngines(deviceId: string) {
+  const { remoteBackgroundInvoke } = await import('../../device-link');
+  const reply = await remoteBackgroundInvoke(deviceId, PLUGIN_ENGINES_INVOKE.LIST, []);
+  if (!reply.ok) {
+    throw new Error('[REMOTE_AGENT_UNAVAILABLE] Selected remote plugin engine is unavailable.');
+  }
+  return parseOfferedPluginEngines(reply.result);
 }

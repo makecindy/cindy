@@ -51,6 +51,36 @@ export function parseFsWatchTopic(topic: string): string | null {
   return workdir.length > 0 ? workdir : null;
 }
 
+// Optional whole-host summary for an iPhone's foreground Live Activity.
+export const TASK_ACTIVITY_SNAPSHOT = 'agent-island:task-activity';
+export const TASK_ACTIVITY_CAPABILITY = 'task-activity-snapshot-v1';
+// revision is local to one host connection lifetime and never used as an account version.
+export type ForegroundHostTaskActivity = HostTaskActivity & { revision: number };
+export interface HostTaskActivity {
+  schemaVersion: 1;
+  waitingCount: number;
+  unreadCount: number;
+  runningCount: number;
+  selected: {
+    sessionId: string;
+    title: string;
+    status: 'attention' | 'completed' | 'error' | 'running';
+    /** Optional companion identity when the selected task speaks for one and is not running.
+     * Only on the device-link snapshot; never part of the official task-activity upload. */
+    companion?: HostTaskActivityCompanion;
+  } | null;
+}
+/** Mirrors the desktop Live Activity companion: hue family, glyph fallback and an optional
+ * base64 JPEG thumbnail of at most {@link HOST_TASK_ACTIVITY_COMPANION_JPEG_MAX} characters. */
+export interface HostTaskActivityCompanion {
+  hue: string;
+  glyph: string;
+  glyphIsInitial: boolean;
+  imageJpeg?: string;
+}
+/** ActivityKit caps a content update at 4 KB; the thumbnail must leave room for the rest. */
+export const HOST_TASK_ACTIVITY_COMPANION_JPEG_MAX = 2048;
+
 export type SessionActivityPhase = 'running' | 'needs-interaction' | 'completed' | 'error';
 
 export interface SessionActivityPayload {
@@ -154,6 +184,7 @@ export function expandMakerEventBatchPayload(payload: unknown): unknown[] {
  * 保证任何控制端都能收到并把已缓存会话的 historyLoaded 置 false。
  */
 const SESSION_LIST_CHANNELS: ReadonlySet<string> = new Set([
+  TASK_ACTIVITY_SNAPSHOT,
   'local-db:sessions:created',
   'local-db:task-tags:changed',
   'local-db:sessions:patched',
@@ -176,6 +207,7 @@ const ACCOUNT_CHANNELS: ReadonlySet<string> = new Set([
   'maker:provider:changed',
   // runtime Agent roster is a device-level snapshot; controllers refresh after this push.
   'maker:agents:changed',
+  'maker:model-catalog:changed',
   // 模块中立的资源集合失效通知；控制端已有 sessions 常驻订阅可直接接收，
   // 不为每个新模块扩张一档 topic。
   REMOTE_RESOURCE_CHANGED_CHANNEL,
@@ -200,6 +232,7 @@ const ACCOUNT_CHANNELS: ReadonlySet<string> = new Set([
   // Claude 订阅账号余量快照(账号级,无 sessionId):控制端打开远程订阅会话时 chip
   // 据此实时刷新;并入 sessions topic 随设备列表订阅到达,低频(签名去抖 + 节流)。
   'usage:claude-subscription-changed',
+  'subscription-accounts:changed',
   // Codex 账号订阅用量 / Claude 网关配额 / xAI 订阅与限流头:同上定位,账号级
   // 无 sessionId,并入 sessions topic。频率上限见 allowlist.ts 对应条目注释。
   // (maker:claude-session-route-changed 不在此表 —— payload 带 sessionId,走

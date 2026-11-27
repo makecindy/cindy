@@ -98,6 +98,7 @@ export function UserAttachmentChip({
     <>
       <button
         type="button"
+        title={file.name}
         aria-label={
           downloadOnly ? t('chat.userMessage.saveAttachmentAs', { name: file.name }) : undefined
         }
@@ -133,14 +134,14 @@ export function UserAttachmentChip({
         className={cn(
           'inline-flex items-center gap-1.5',
           'h-7 px-2.5 py-1.5',
-          'rounded-[9999px]',
+          'rounded-full',
           'bg-[var(--msg-user-bg)]',
           'border border-[var(--msg-user-border)]',
           'text-13 font-medium',
           'text-[var(--msg-user-text)]',
           'hover:bg-[var(--cmd-palette-item-hover)]',
           'transition-colors cursor-pointer',
-          'max-w-[280px]',
+          'min-w-0 max-w-[min(280px,100%)]',
         )}
       >
         {downloadOnly ? (

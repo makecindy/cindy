@@ -1,4 +1,5 @@
 import { isLegacyGptContextProfile } from './legacy-context-profiles.js';
+import { findContextWindowModels } from '../../shared/sessionContextWindow.js';
 /**
  * catalog-to-descriptors —— 把 @cindy/model-providers 目录派生成 maker-core 的 per-agent
  * availableModels（ModelDescriptor[]）。
@@ -43,7 +44,7 @@ interface SeenModelProjection {
 }
 
 /** CatalogModel → ModelDescriptor。仅透传 ModelDescriptor 需要的字段；可选字段缺省时不写键。 */
-function toDescriptor(m: CatalogModel): ModelDescriptor {
+function toDescriptor(m: CatalogModel, isPiGateway = false): ModelDescriptor {
   // The resolved catalog owns capability membership. Projection must not add
   // Harness aliases: Pi materializes models.json from this same effort list.
   const d: ModelDescriptor = {
@@ -74,9 +75,11 @@ function toDescriptor(m: CatalogModel): ModelDescriptor {
   if (m.newSessionDefault !== undefined) d.newSessionDefault = m.newSessionDefault;
   if (m.cost !== undefined) d.cost = m.cost;
   if (m.maxOutput !== undefined) d.maxOutputTokens = m.maxOutput;
-  const supportsImageInput =
-    m.supportsImageInput ??
-    (m.modalities !== undefined ? m.modalities.input.includes('image') : undefined);
+  const inputModalities = m.modalities?.input;
+  // An empty Gateway list can mean missing deployment metadata. Keep it unknown for
+  // Pi's send guard without changing the catalog or overriding an explicit boolean.
+  const supportsImageInput = m.supportsImageInput ??
+    (isPiGateway && inputModalities?.length === 0 ? undefined : inputModalities?.includes('image'));
   if (supportsImageInput !== undefined) d.supportsImageInput = supportsImageInput;
   return d;
 }
@@ -139,7 +142,7 @@ export function deriveAvailableModels(catalog: Catalog, agent: AgentKind): Model
       const customRoutedProvider = isCustomRoutedProvider(provider);
       if (isLegacyGptContextProfile(provider, m.id)) continue;
       if (!isModelSelectableForNewRoute(m, { userProvider })) continue;
-      const descriptor = toDescriptor(m);
+      const descriptor = toDescriptor(m, agent === 'pi' && provider.id === 'xd');
       const previous = seen.get(m.id);
       if (previous) {
         let merged = out[previous.index];
@@ -183,7 +186,7 @@ export function resolvePiRuntimeModelDescriptor(
   for (const provider of providers) {
     const model = (provider.models.pi ?? []).find((candidate) => candidate.id === modelId);
     if (model && isAgentSelectableModel(model, { userProvider: provider.source === 'user' })) {
-      return toDescriptor(model);
+      return toDescriptor(model, provider.id === 'xd');
     }
   }
 
@@ -225,7 +228,7 @@ export function resolveModelContextProviderId(
   }
   if (providerId) return providerId;
   const candidates = catalog.providers.filter((provider) => provider.routing[agent]?.disabled !== true &&
-    provider.models[agent]?.some((model) => model.id === modelId));
+    findContextWindowModels(provider, agent, modelId).length > 0);
   if (candidates.length === 1) return candidates[0]!.id;
   return implicitDefaultProviderId && candidates.some((provider) => provider.id === implicitDefaultProviderId)
     ? implicitDefaultProviderId : null;
@@ -251,6 +254,20 @@ export function resolveModelDefaultContextWindow(
   const model = (provider.models[agent] ?? []).find((entry) => entry.id === modelId);
   return model && Number.isSafeInteger(model.contextWindow) && model.contextWindow > 0
     ? model.contextWindow : null;
+}
+
+/** Resolve output capacity on the selected connection, without borrowing a same-name route. */
+export function resolveModelMaxOutputTokens(
+  catalog: Pick<Catalog, 'providers'>,
+  agent: AgentKind,
+  providerId: string | null | undefined,
+  modelId: string,
+): number | null {
+  if (!providerId) return null;
+  const provider = catalog.providers.find((entry) => entry.id === providerId);
+  if (!provider || provider.routing[agent]?.disabled === true) return null;
+  const value = provider.models[agent]?.find((entry) => entry.id === modelId)?.maxOutput;
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : null;
 }
 
 /**

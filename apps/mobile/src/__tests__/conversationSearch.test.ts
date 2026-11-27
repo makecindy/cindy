@@ -41,6 +41,16 @@ function session(partial: Partial<RemoteSession> & Pick<RemoteSession, 'id' | 't
   };
 }
 
+// Unit: an offline title must honor explicit syntax, rather than requiring
+// literal quotes or a plus sign in the cached title.
+it('honors exact phrases and all keywords in cached titles', () => {
+  const sessions = [session({ id: 'exact', title: 'login error cache' }), session({ id: 'gap', title: 'login other error' })];
+  const origin = { deviceId: 'dev-a', deviceName: 'Studio', reachable: false };
+  for (const query of ['"login error"', 'login + cache']) {
+    expect(searchCachedDeviceSessions(origin, { query }, sessions).results.map((item) => item.session.id)).toEqual(['exact']);
+  }
+});
+
 function indexedPage(ids: string[]): ConversationSearchResponse {
   return {
     query: 'needle',
@@ -97,6 +107,20 @@ it('finds a renamed project without mixing devices and honors project filters', 
   expect(listConversationSearchProjects(sessions, undefined, aliases).map((p) => p.title)).toEqual(['Customer Portal', 'repo']);
 });
 
+// Old group/topic sessions must remain searchable under their Buddy when the host
+// is offline; existing fallback coverage only used execution directories. Unit tier.
+it('keeps old group tasks in the Buddy project during cached search', () => {
+  const task = session({ id: 'group', title: 'Group needle', source: 'bot',
+    workingDir: '/group-repo', projectDir: '/group-repo', workspaceKind: 'dialogue',
+    companion: { id: 'buddy', role: 'group', taskProjectDir: '/home/bots/buddy/workspace' } });
+  const origin = { deviceId: 'dev-a', deviceName: 'Studio', reachable: false };
+  const page = searchCachedDeviceSessions(origin, { query: 'needle', filters: { workingDirs: ['/home/bots/buddy/workspace'] } }, [task]);
+  expect(page.results.map(item => item.session.id)).toEqual(['group']);
+  expect(page.results[0]?.session.workingDir).toBe('/group-repo');
+  expect(listConversationSearchProjects([task])[0]?.workingDir).toBe('/home/bots/buddy/workspace');
+  expect(searchCachedDeviceSessions(origin, { query: 'needle', filters: { workingDirs: ['/group-repo'] } }, [task]).results).toEqual([]);
+});
+
 const studio: ConversationSearchDeviceOrigin = {
   deviceId: 'dev-a',
   deviceName: 'Studio',
@@ -104,6 +128,64 @@ const studio: ConversationSearchDeviceOrigin = {
 };
 
 describe('searchConversationsAcrossDevices', () => {
+  // Test value (unit): the production fan-out must publish completed devices while
+  // another device is pending. Existing tests await only the final page and miss
+  // the all-devices barrier. Two deferred hosts, overlapping IDs, a result limit,
+  // and both reply orders expose premature completion or arrival-dependent merging.
+  // Standalone Vitest runtime: 1.49s (2026-11-04).
+  it.each(['dev-a', 'dev-b'])('publishes %s first and merges late results with stable deduplication', async (firstDevice) => {
+    const replies = new Map<string, (page: ConversationSearchResponse) => void>();
+    const progress: ConversationSearchResponse[] = [];
+    let firstProgress!: () => void;
+    const firstPublished = new Promise<void>((resolve) => { firstProgress = resolve; });
+    let settled = false;
+    const pending = searchConversationsAcrossDevices([
+      studio, { deviceId: 'dev-b', deviceName: 'Laptop', reachable: true },
+    ], { query: 'needle', limit: 2 }, {
+      invoke: vi.fn((deviceId: string) => new Promise<ConversationSearchResponse>((resolve) => {
+        replies.set(deviceId, resolve);
+      })) as ConversationSearchInvoke,
+      getCachedSessions: () => [],
+      onProgress: (page) => { progress.push(page); firstProgress(); },
+    }).then((page) => { settled = true; return page; });
+    const response = indexedPage(['overlap', 'overlap', 'lower']);
+    replies.get(firstDevice)!(response);
+    await firstPublished;
+    expect(settled).toBe(false);
+    expect(progress[0].results.map((item) => `${item.session.deviceLinkDeviceId}:${item.session.id}`))
+      .toEqual([`${firstDevice}:overlap`, `${firstDevice}:lower`]);
+    replies.get(firstDevice === 'dev-a' ? 'dev-b' : 'dev-a')!(response);
+    const final = await pending;
+    expect(final.results.map((item) => `${item.session.deviceLinkDeviceId}:${item.session.id}`))
+      .toEqual(['dev-a:overlap', 'dev-b:overlap']);
+    expect(progress.at(-1)).toEqual(final);
+  });
+
+  // A failed slow host must add its filtered cache without retracting an earlier
+  // offline result. The old final-only tests do not observe this intermediate page.
+  it('publishes offline cache immediately and merges filtered error fallback later', async () => {
+    let rejectSlow!: (error: Error) => void;
+    let firstProgress!: (page: ConversationSearchResponse) => void;
+    const firstPublished = new Promise<ConversationSearchResponse>((resolve) => { firstProgress = resolve; });
+    const invoke = vi.fn(() => new Promise<ConversationSearchResponse>((_resolve, reject) => { rejectSlow = reject; }));
+    const pending = searchConversationsAcrossDevices([
+      { ...studio, reachable: false }, { deviceId: 'dev-b', deviceName: 'Laptop', reachable: true },
+    ], { query: 'needle', filters: { status: 'active', workingDirs: ['/repo'] } }, {
+      invoke: invoke as ConversationSearchInvoke,
+      getCachedSessions: () => [
+        session({ id: 'offline', title: 'Needle' }),
+        session({ id: 'failed', title: 'Needle', deviceLinkDeviceId: 'dev-b' }),
+        session({ id: 'archived', title: 'Needle', deviceLinkDeviceId: 'dev-b', status: 'archived' }),
+        session({ id: 'outside', title: 'Needle', deviceLinkDeviceId: 'dev-b', workingDir: '/elsewhere' }),
+      ],
+      onProgress: firstProgress,
+    });
+    expect((await firstPublished).results.map((item) => item.session.id)).toEqual(['offline']);
+    expect(invoke).toHaveBeenCalledTimes(1);
+    rejectSlow(new Error('[TIMEOUT] slow host'));
+    expect((await pending).results.map((item) => item.session.id)).toEqual(['offline', 'failed']);
+  });
+
   // #7026: the alias fallback could outrank an indexed body hit and erase its
   // message client id. Existing alias coverage had no overlapping body result.
   // Unit: one host body hit below 1,000,000 plus a cached alias hit is sufficient;
@@ -250,7 +332,7 @@ describe('searchConversationsAcrossDevices', () => {
       {
         invoke,
         getCachedSessions: () => [
-          session({ id: 'in-project', title: 'Planning in repo', workingDir: '/repo' }),
+          session({ id: 'in-project', title: 'Planning in repo', workingDir: '/tmp/checkout', projectDir: '/repo' }),
           session({ id: 'out', title: 'Planning elsewhere', workingDir: '/other' }),
         ],
       },
@@ -352,7 +434,7 @@ describe('searchCachedDeviceSessions', () => {
 
 describe('helpers', () => {
   it('shows project aliases in search filters without changing their stable keys or mixing SSH identities', () => {
-    const local = session({ id: 'local', title: 'Local', workingDir: '/repo/app' });
+    const local = session({ id: 'local', title: 'Local', workingDir: '/tmp/checkout', projectDir: '/repo/app' });
     const projectAliases = new Map([['dev-a', {
       platform: 'darwin',
       aliases: [{ projectKey: 'local:/repo/app', alias: '黑盒自动化' }],
@@ -478,7 +560,7 @@ describe('helpers', () => {
 
   it('keeps an empty indexed search visible so filters are not silently dropped', () => {
     expect(shouldReplaceListWithSearchResults('pi', 'ready')).toBe(true);
-    expect(shouldReplaceListWithSearchResults('pi', 'searching')).toBe(false);
+    expect(shouldReplaceListWithSearchResults('pi', 'searching')).toBe(true);
     expect(shouldReplaceListWithSearchResults('', 'ready')).toBe(false);
   });
 
@@ -538,4 +620,20 @@ it('preserves companion identity and the selected archived transcript', () => {
   hit.session.companion = { id: 'bot', name: 'Melody', role: 'history', readOnly: true };
   const item = toSearchListItem(hit, Date.now());
   expect(item.title).toBe('Melody · Remote planning');
+});
+
+// Unit regression: indexed hits outside the home cache lost their labels; cached
+// hits also need fresh labels (including removal), with old-host fallback intact.
+it('preserves task tags through indexed and cached search projections', () => {
+  const tags = [{ id: 'red', name: 'Important', color: 'red' as const, favoriteOrder: null, revision: 1 }];
+  const item = indexedPage(['a']).results[0]!;
+  item.session.tags = tags;
+  expect(toSearchListItem(item, Date.now()).session.tags).toEqual(tags);
+  const cached = session({ id: 'a', title: 'needle', tags });
+  item.session.tags = [];
+  expect(toSearchListItem(item, Date.now(), undefined, cached).session.tags).toEqual([]);
+  delete item.session.tags;
+  expect(toSearchListItem(item, Date.now(), undefined, cached).session.tags).toEqual(tags);
+  const page = searchCachedDeviceSessions(studio, { query: 'needle' }, [cached]);
+  expect(page.results[0]?.session.tags).toEqual(tags);
 });

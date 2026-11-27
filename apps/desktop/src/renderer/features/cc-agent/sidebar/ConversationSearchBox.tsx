@@ -1,4 +1,8 @@
+import { TaskTagDots } from '@/features/task-tags/TaskTags';
+import { parseConversationSearchQuery, setConversationSearchAll } from '@cindy/maker-shared/conversation-search';
+import { getSearchDraft, getSearchMatchAll, setSearchDraft, setSearchMatchAll, subscribeSearchDraft } from './conversationSearchDraft';
 import { standardSessionRoute } from '@/lib/orcaSessionIdentity';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import {
@@ -9,6 +13,8 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type DragEvent as ReactDragEvent,
+  type PointerEvent as ReactPointerEvent,
 } from 'react';
 import {
   Check,
@@ -21,10 +27,31 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { NavigateFunction } from 'react-router-dom';
+import { isSharedTaskPeer } from '@cindy/device-link';
+import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
+import type { Session } from '@/lib/ccAgent.types';
+import { sessionsStore } from '@/lib/sessionsStore';
+import { toast } from '@/lib/toast';
+import { prefetchDirtyWorktreeForRemoval } from '@/lib/worktreeRemovalWarning';
+import { SessionRenameInput } from '../SessionRenameInput';
+import { isRemoteSessionWriteBlocked } from '../lib/remoteSessionWriteGuard';
+import { getSessionDisplayTitle, toStoredSessionTitle } from '../lib/sessionDisplayTitle';
+import {
+  finishSessionDrag,
+  isSplitGroupDragSource,
+  startSessionDrag,
+} from '../splitGroupDnd';
+import {
+  canOpenSearchResultTaskMenu,
+  CONVERSATION_SEARCH_KEEPALIVE_SELECTOR,
+  useHydratedSearchSession,
+  type SearchResultSelectOptions,
+  type SearchResultTaskMenuActions,
+} from './searchResultTaskMenuModel';
 import {
   consumeConversationSearchRequest,
   type ConversationSearchScopeRequest,
@@ -85,6 +112,11 @@ import {
   getRemoteProjectMachineIdentity,
   projectDisplayLabelWithMachine,
 } from '../lib/remoteProjectIdentity';
+import {
+  isSidebarNewWindowActivation,
+  openTargetInNewWindow,
+  preventMiddleClickAutoscroll,
+} from '@/lib/sidebarNewWindowActivation';
 
 const DEBOUNCE_MS = 250;
 const SEMANTIC_SEARCH_DEBOUNCE_MS = 900;
@@ -195,7 +227,25 @@ export function useConversationSearch({
   // (两侧都过 conversationSearchTitle),所以它必须进请求 **和** effect 依赖:
   // 切语言后要重发一次搜索,否则下标还按旧语言的串算、高亮会错位。
   const unnamedLabel = t('ccAgent.common.unnamedSession');
-  const [query, setQuery] = useState('');
+  const query = useSyncExternalStore(subscribeSearchDraft, getSearchDraft);
+  const menuMatchAll = useSyncExternalStore(subscribeSearchDraft, getSearchMatchAll);
+  const matchAll = menuMatchAll || parseConversationSearchQuery(query).all;
+  // The menu controls matching without rewriting the user's input. Encode it
+  // only at the existing string-based request boundary for remote compatibility.
+  const requestQuery = matchAll ? setConversationSearchAll(query.trim(), true) : query.trim();
+  const [active, setActive] = useState(false);
+  const resume = useCallback(() => setActive(true), []);
+  const setQuery = useCallback((next: string) => {
+    setSearchDraft(next);
+    setActive(true);
+  }, []);
+  const setMatchAll = useCallback((next: boolean) => {
+    setSearchMatchAll(next);
+    if (!next && parseConversationSearchQuery(query).all) {
+      setSearchDraft(setConversationSearchAll(query, false));
+    }
+    setActive(true);
+  }, [query]);
   // 排序订阅共享偏好 store(持久化 + 跨实例同步),其余筛选每次回到默认
   // ——取舍与「为什么不是各自 useState」见 conversationSearchPrefs 的文件头。
   const sortBy = useSyncExternalStore(subscribeSearchSortBy, getSearchSortBy);
@@ -230,7 +280,7 @@ export function useConversationSearch({
   );
   const requestId = projectFilterRequest?.requestId ?? 0;
 
-  const trimmed = query.trim();
+  const trimmed = active ? query.trim() : '';
   void _allowedSessionIds;
   const selectedProjectSessionIds = useMemo(() => {
     if (lockedSessionGroup) return lockedSessionGroup.sessionIds;
@@ -336,13 +386,13 @@ export function useConversationSearch({
     sessionIds: selectedProjectSessionIds,
   });
   const activeFilterCount = useMemo(() => {
-    let count = 0;
+    let count = matchAll ? 1 : 0;
     if (statusFilter !== 'all') count += 1;
     if (agentFilter !== 'all') count += 1;
     if (lastActivityFilter !== 'all') count += 1;
     if (projectSelection !== 'all' || lockedSessionGroup) count += 1;
     return count;
-  }, [agentFilter, lastActivityFilter, projectSelection, statusFilter, lockedSessionGroup]);
+  }, [agentFilter, lastActivityFilter, projectSelection, statusFilter, lockedSessionGroup, matchAll]);
 
   useEffect(() => {
     if (!requestProjectKey && requestGroupName === null) return;
@@ -360,7 +410,7 @@ export function useConversationSearch({
     setLockedProjectDeviceId(requestProjectDeviceId);
     setProjectSelection(requestProjectKey ? [requestProjectKey] : 'all');
     onProgrammaticOpen?.(); // popover:打开面板并上报托盘;内联:聚焦输入框
-    setQuery('');
+    setActive(true);
     setResponse(null);
     setStatus('idle');
     // 处理完即清零跨层请求:否则切到 rail(本组件卸载)再切回(重挂)时,本 effect 会在挂载
@@ -392,7 +442,7 @@ export function useConversationSearch({
       sessionIds: string[] | null;
     };
     const request = {
-      query: trimmed,
+      query: requestQuery,
       limit: SEARCH_LIMIT,
       sortBy,
       unnamedLabel,
@@ -406,7 +456,8 @@ export function useConversationSearch({
     let keywordPage: ConversationSearchResponse | null = null;
     let semanticPage: ConversationSearchResponse | null = null;
     let keywordSettled = false;
-    const hasLocalOrigin = scope.origins.some((origin) => origin.kind === 'local');
+    const hasLocalOrigin = !parseConversationSearchQuery(requestQuery).explicit
+      && scope.origins.some((origin) => origin.kind === 'local');
     let semanticSettled = !hasLocalOrigin;
     const publishResults = () => {
       if (seq !== requestSeqRef.current) return;
@@ -494,6 +545,7 @@ export function useConversationSearch({
     sortBy,
     statusFilter,
     trimmed,
+    requestQuery,
     unnamedLabel,
   ]);
 
@@ -505,9 +557,9 @@ export function useConversationSearch({
     setSearchSortBy(next);
   }, []);
 
-  /** 清空 query / 结果 / 状态(popover 关闭时调用)。项目锁定保留。 */
-  const reset = useCallback(() => {
-    setQuery('');
+  /** 收起结果，保留输入和项目锁定；只有用户清空输入时才删除草稿。 */
+  const dismiss = useCallback(() => {
+    setActive(false);
     setResponse(null);
     setStatus('idle');
   }, []);
@@ -528,34 +580,48 @@ export function useConversationSearch({
   // machine scope releases it, just as leaving a locked project's machine does.
   useEffect(() => {
     if (!lockedSessionGroup || lockedSessionGroup.machineSelectionKey === machineSelectionKey) return;
-    reset();
+    dismiss();
     clearLock();
-  }, [lockedSessionGroup, machineSelectionKey, reset, clearLock]);
+  }, [lockedSessionGroup, machineSelectionKey, dismiss, clearLock]);
 
   /** 筛选面板「重置」:清空各筛选;有项目锁定时回落到锁定项目。 */
   const resetFilters = useCallback(() => {
+    setMatchAll(false);
     setStatusFilter('all');
     setAgentFilter('all');
     setLastActivityFilter('all');
     setProjectSelection(lockedProjectKey ? [lockedProjectKey] : 'all');
-  }, [lockedProjectKey]);
+  }, [lockedProjectKey, setMatchAll]);
 
   const handleSelect = useCallback(
     async (
       item: ConversationSearchResultItem,
       hitOverride?: ConversationSearchResultItem['contentHit'],
+      options?: SearchResultSelectOptions,
     ) => {
       try {
         const remoteDeviceId = item.session.deviceLinkDeviceId;
         if (remoteDeviceId) {
           remoteProjectsStore.pinSessionOrigin(remoteDeviceId, item.session.id);
         }
-        const baseRoute = standardSessionRoute(item.session.id, remoteDeviceId);
         const hit = hitOverride ?? item.contentHit;
         // popover 形态:onResultChosen 关闭面板并通知托盘(SidebarActionBar 减 openChildCount),
-        // 其 reset() 会清空 query。内联展开态不传 onResultChosen——选中结果后**刻意保留 query**,
+        // 两种形态都保留 query。内联展开态不传 onResultChosen，
         // 结果 overlay 继续显示,用户可连续点开多条结果;只有点搜索区域以外才收起(见 conversationSearchContext)。
         onResultChosen?.();
+        if (options?.openInNewWindow) {
+          try {
+            await openTargetInNewWindow(
+              item.session.id,
+              remoteDeviceId,
+              hit?.messageClientId || null,
+            );
+          } catch {
+            // Opening a secondary window is independent of search state; keep results intact.
+          }
+          return;
+        }
+        const baseRoute = standardSessionRoute(item.session.id, remoteDeviceId);
         navigate(baseRoute, {
           state: hit
             ? {
@@ -580,6 +646,8 @@ export function useConversationSearch({
   return {
     query,
     setQuery,
+    matchAll,
+    setMatchAll,
     trimmed,
     sortBy,
     setSortBy,
@@ -597,12 +665,16 @@ export function useConversationSearch({
     activeFilterCount,
     status,
     results,
-    reset,
+    poolCapped: response?.poolCapped ?? false,
+    dismiss,
+    resume,
     clearLock,
     resetFilters,
     handleSelect,
   };
 }
+
+export type { SearchResultTaskMenuActions };
 
 /**
  * SearchResultsBody —— 搜索结果区(空 / 加载 / 错误 / 无结果 / 结果列表)。
@@ -616,21 +688,176 @@ export function SearchResultsBody({
   maxHeightClass,
   leading,
   leadingCount = 0,
+  poolCapped = false,
+  taskMenu,
+  statusFilter = 'all',
+  onDragSessionStart,
+  onDragSessionEnd,
 }: {
+  poolCapped?: boolean;
   trimmed: string;
   status: 'idle' | 'searching' | 'done' | 'error';
   results: ConversationSearchResultItem[];
-  onSelect: (item: ConversationSearchResultItem, hit?: ConversationSearchResultItem['contentHit']) => void;
+  onSelect: (
+    item: ConversationSearchResultItem,
+    hit?: ConversationSearchResultItem['contentHit'],
+    options?: SearchResultSelectOptions,
+  ) => void;
   /** 结果列表滚动容器的高度约束(popover 传 max-h,内联铺满时省略)。 */
   maxHeightClass?: string;
   /** 排在会话结果之前的本地命中(伙伴 / 群聊);有命中时不显示「无结果」。 */
   leading?: React.ReactNode;
   leadingCount?: number;
+  /** 任务右键菜单动作；省略时仅保留点击导航（如独立预览 fixture）。 */
+  taskMenu?: SearchResultTaskMenuActions;
+  /** 当前搜索的状态筛选；归档或恢复后立即按该口径过滤结果。 */
+  statusFilter?: ConversationSearchStatusFilter;
+  /** 拖拽开始/结束通知（供 rail Popover 在拖拽期间透明化并透传落点）。 */
+  onDragSessionStart?: () => void;
+  onDragSessionEnd?: (droppedInWindow: boolean) => void;
 }) {
   const { t } = useTranslation();
+  const [mutationState, setMutationState] = useState<{
+    resultsRef: ConversationSearchResultItem[];
+    localPatches: ReadonlyMap<string, Partial<Session>>;
+    remotePatches: ReadonlyMap<string, Partial<Session>>;
+    localDeletedIds: ReadonlySet<string>;
+    remoteDeletedIds: ReadonlySet<string>;
+  }>(() => ({
+    resultsRef: results,
+    localPatches: new Map(),
+    remotePatches: new Map(),
+    localDeletedIds: new Set(),
+    remoteDeletedIds: new Set(),
+  }));
+
+  useEffect(() => {
+    if (results.length === 0) return undefined;
+    const localIds = new Set(
+      results.filter((item) => !item.session.deviceLinkDeviceId).map((item) => item.session.id),
+    );
+    const remoteKeys = new Set(
+      results
+        .filter((item) => Boolean(item.session.deviceLinkDeviceId))
+        .map((item) => `${item.session.deviceLinkDeviceId}:${item.session.id}`),
+    );
+    const remoteIds = new Set(
+      results.filter((item) => Boolean(item.session.deviceLinkDeviceId)).map((item) => item.session.id),
+    );
+    const resetBase = () => ({
+      resultsRef: results,
+      localPatches: new Map<string, Partial<Session>>(),
+      remotePatches: new Map<string, Partial<Session>>(),
+      localDeletedIds: new Set<string>(),
+      remoteDeletedIds: new Set<string>(),
+    });
+    const unsubLocal =
+      localIds.size > 0
+        ? sessionsStore.subscribePatches?.((sessionId, patch) => {
+            if (!localIds.has(sessionId)) return;
+            setMutationState((prev) => {
+              const base = prev.resultsRef === results ? prev : resetBase();
+              const nextPatches = new Map(base.localPatches);
+              const existing = nextPatches.get(sessionId);
+              nextPatches.set(sessionId, existing ? { ...existing, ...patch } : patch);
+              const nextDeleted = new Set(base.localDeletedIds);
+              if (patch.status === 'deleted') nextDeleted.add(sessionId);
+              return {
+                ...base,
+                localPatches: nextPatches,
+                localDeletedIds: nextDeleted,
+              };
+            });
+          })
+        : undefined;
+    const unsubRemotePatch =
+      remoteKeys.size > 0
+        ? remoteProjectsStore.subscribePatches?.((deviceId, sessionId, patch) => {
+            const key = `${deviceId}:${sessionId}`;
+            if (!remoteKeys.has(key)) return;
+            setMutationState((prev) => {
+              const base = prev.resultsRef === results ? prev : resetBase();
+              const nextPatches = new Map(base.remotePatches);
+              const existing = nextPatches.get(key);
+              nextPatches.set(key, existing ? { ...existing, ...patch } : patch);
+              const nextDeleted = new Set(base.remoteDeletedIds);
+              if (patch.status === 'deleted') nextDeleted.add(sessionId);
+              return {
+                ...base,
+                remotePatches: nextPatches,
+                remoteDeletedIds: nextDeleted,
+              };
+            });
+          })
+        : undefined;
+    const unsubRemoteRemoved =
+      remoteIds.size > 0
+        ? remoteProjectsStore.subscribeRemoved?.((sessionId) => {
+            if (!remoteIds.has(sessionId)) return;
+            setMutationState((prev) => {
+              const base = prev.resultsRef === results ? prev : resetBase();
+              if (base.remoteDeletedIds.has(sessionId)) return base;
+              const nextDeleted = new Set(base.remoteDeletedIds);
+              nextDeleted.add(sessionId);
+              return { ...base, remoteDeletedIds: nextDeleted };
+            });
+          })
+        : undefined;
+    return () => {
+      unsubLocal?.();
+      unsubRemotePatch?.();
+      unsubRemoteRemoved?.();
+    };
+  }, [results]);
+
+  const activeLocalPatches =
+    mutationState.resultsRef === results ? mutationState.localPatches : null;
+  const activeRemotePatches =
+    mutationState.resultsRef === results ? mutationState.remotePatches : null;
+  const activeLocalDeletedIds =
+    mutationState.resultsRef === results ? mutationState.localDeletedIds : null;
+  const activeRemoteDeletedIds =
+    mutationState.resultsRef === results ? mutationState.remoteDeletedIds : null;
+
+  const patchForItem = (item: ConversationSearchResultItem): Partial<Session> | undefined =>
+    item.session.deviceLinkDeviceId
+      ? activeRemotePatches?.get(`${item.session.deviceLinkDeviceId}:${item.session.id}`)
+      : activeLocalPatches?.get(item.session.id);
+
+  const visibleResults = useMemo(() => {
+    if (results.length === 0) return results;
+    return results.filter((item) => {
+      const isRemote = Boolean(item.session.deviceLinkDeviceId);
+      if (
+        isRemote
+          ? activeRemoteDeletedIds?.has(item.session.id)
+          : activeLocalDeletedIds?.has(item.session.id)
+      ) {
+        return false;
+      }
+      const live = taskMenu?.resolveSession(item.session) ?? null;
+      const patch = isRemote
+        ? activeRemotePatches?.get(`${item.session.deviceLinkDeviceId}:${item.session.id}`)
+        : activeLocalPatches?.get(item.session.id);
+      const effectiveStatus = live?.status ?? patch?.status ?? item.session.status;
+      if (effectiveStatus === 'deleted') return false;
+      if (statusFilter !== 'all' && effectiveStatus !== statusFilter) return false;
+      return true;
+    });
+  }, [
+    activeLocalDeletedIds,
+    activeLocalPatches,
+    activeRemoteDeletedIds,
+    activeRemotePatches,
+    results,
+    statusFilter,
+    taskMenu,
+  ]);
+
   if (trimmed && leadingCount > 0) {
     return (
       <div className={cn('overflow-y-auto p-2', maxHeightClass)}>
+        {poolCapped && <p className="px-3 py-2 text-xs text-[var(--text-secondary)]">{t('ccAgent.search.match.partial')}</p>}
         {leading}
         {status === 'searching' ? (
           <div className="flex items-center justify-center gap-2 px-3 py-4 text-12 text-[var(--cmd-palette-item-meta)]">
@@ -640,12 +867,16 @@ export function SearchResultsBody({
         ) : status === 'error' ? (
           <ErrorNotice className="m-3" message={t('ccAgent.search.failed')} />
         ) : (
-          results.map((item) => (
+          visibleResults.map((item) => (
             <SearchResultRow
               key={conversationSearchResultKey(item)}
               item={item}
               query={trimmed}
               onSelect={onSelect}
+              taskMenu={taskMenu}
+              sessionPatch={patchForItem(item)}
+              onDragSessionStart={onDragSessionStart}
+              onDragSessionEnd={onDragSessionEnd}
             />
           ))
         )}
@@ -672,21 +903,26 @@ export function SearchResultsBody({
       <ErrorNotice className="m-3" message={t('ccAgent.search.failed')} />
     );
   }
-  if (results.length === 0) {
+  if (visibleResults.length === 0) {
     return (
       <div className="px-3 py-6 text-center text-12 text-[var(--cmd-palette-empty)]">
-        {t('ccAgent.search.noResults')}
+        {t(poolCapped ? 'ccAgent.search.match.partial' : 'ccAgent.search.noResults')}
       </div>
     );
   }
   return (
     <div className={cn('overflow-y-auto p-2', maxHeightClass)}>
-      {results.map((item) => (
+      {poolCapped && <p className="px-3 py-2 text-xs text-[var(--text-secondary)]">{t('ccAgent.search.match.partial')}</p>}
+      {visibleResults.map((item) => (
         <SearchResultRow
           key={conversationSearchResultKey(item)}
           item={item}
           query={trimmed}
           onSelect={onSelect}
+          taskMenu={taskMenu}
+          sessionPatch={patchForItem(item)}
+          onDragSessionStart={onDragSessionStart}
+          onDragSessionEnd={onDragSessionEnd}
         />
       ))}
     </div>
@@ -707,6 +943,8 @@ export interface ConversationSearchBoxProps {
   onOpenChange?: (open: boolean) => void;
   /** 挂载即打开:rail 从「更多」打开未勾选的搜索时,图标随打开一起出现。 */
   defaultOpen?: boolean;
+  /** 搜索结果行的任务右键菜单动作（与侧栏任务右键一致）。 */
+  taskMenu?: SearchResultTaskMenuActions;
 }
 
 /**
@@ -725,14 +963,15 @@ export function ConversationSearchBox({
   triggerClassName,
   onOpenChange,
   defaultOpen = false,
+  taskMenu,
 }: ConversationSearchBoxProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(defaultOpen);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // search.reset 在 search 声明后才拿得到,但 handleResultChosen 需先于 search 定义(要作为
+  // search.dismiss 在 search 声明后才拿得到,但 handleResultChosen 需先于 search 定义(要作为
   // 回调传入)——用 ref 转发,规避声明顺序的循环依赖。
-  const searchResetRef = useRef<() => void>(() => {});
+  const searchDismissRef = useRef<() => void>(() => {});
 
   const handleProgrammaticOpen = useCallback(() => {
     setOpen(true);
@@ -741,9 +980,8 @@ export function ConversationSearchBox({
   const handleResultChosen = useCallback(() => {
     setOpen(false);
     onOpenChange?.(false);
-    // 程序化关闭 popover 不经 handleOpenChange(Radix 受控 open 不回调),必须在此显式 reset,
-    // 否则去掉 handleSelect 的 setQuery('') 后,rail 选中结果重开 popover 会残留上次 query/结果。
-    searchResetRef.current();
+    // 程序化关闭也收起结果，保留草稿供下次打开继续搜索。
+    searchDismissRef.current();
   }, [onOpenChange]);
 
   const search = useConversationSearch({
@@ -757,7 +995,7 @@ export function ConversationSearchBox({
     onProgrammaticOpen: handleProgrammaticOpen,
     onResultChosen: handleResultChosen,
   });
-  searchResetRef.current = search.reset;
+  searchDismissRef.current = search.dismiss;
   useEffect(() => {
     const lockedProjectKey = search.lockedProjectKey;
     if (lockedProjectKey) {
@@ -774,7 +1012,7 @@ export function ConversationSearchBox({
           machineSelection,
         })
       ) {
-        search.reset();
+        search.dismiss();
         search.clearLock();
       }
       return;
@@ -797,23 +1035,63 @@ export function ConversationSearchBox({
     search.clearLock,
     search.lockedProjectKey,
     search.projectSelection,
-    search.reset,
+    search.dismiss,
     search.setProjectSelection,
   ]);
 
+  const [draggingResult, setDraggingResult] = useState(false);
+  const dragFrameRef = useRef<number | null>(null);
+
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      if (dragFrameRef.current !== null) {
+        cancelAnimationFrame(dragFrameRef.current);
+        dragFrameRef.current = null;
+      }
+      setDraggingResult(false);
+      return;
+    }
     window.setTimeout(() => inputRef.current?.focus(), 0);
   }, [open]);
+
+  useEffect(
+    () => () => {
+      if (dragFrameRef.current !== null) cancelAnimationFrame(dragFrameRef.current);
+    },
+    [],
+  );
 
   const handleOpenChange = useCallback(
     (next: boolean) => {
       setOpen(next);
       // Passive closes keep a project-menu lock; the global search trigger clears it explicitly.
-      if (!next) search.reset();
+      if (next) search.resume();
+      else search.dismiss();
       onOpenChange?.(next);
     },
     [onOpenChange, search],
+  );
+
+  const handleDragSessionStart = useCallback(() => {
+    if (dragFrameRef.current !== null) cancelAnimationFrame(dragFrameRef.current);
+    dragFrameRef.current = requestAnimationFrame(() => {
+      dragFrameRef.current = null;
+      setDraggingResult(true);
+    });
+  }, []);
+
+  const handleDragSessionEnd = useCallback(
+    (droppedInWindow: boolean) => {
+      if (dragFrameRef.current !== null) {
+        cancelAnimationFrame(dragFrameRef.current);
+        dragFrameRef.current = null;
+      }
+      setDraggingResult(false);
+      if (droppedInWindow) {
+        handleOpenChange(false);
+      }
+    },
+    [handleOpenChange],
   );
 
   return (
@@ -838,9 +1116,50 @@ export function ConversationSearchBox({
         side="right"
         sideOffset={8}
         collisionPadding={12}
+        onContextMenu={(event) => event.stopPropagation()}
+        onPointerDownOutside={(event) => {
+          if (draggingResult) {
+            event.preventDefault();
+            return;
+          }
+          const target = event.target as Element | null;
+          if (
+            target?.closest(CONVERSATION_SEARCH_KEEPALIVE_SELECTOR) ||
+            document.querySelector('[role="dialog"],[role="alertdialog"]')
+          ) {
+            event.preventDefault();
+          }
+        }}
+        onFocusOutside={(event) => {
+          if (draggingResult) {
+            event.preventDefault();
+            return;
+          }
+          const target = event.target as Element | null;
+          if (
+            target?.closest(CONVERSATION_SEARCH_KEEPALIVE_SELECTOR) ||
+            document.querySelector('[role="dialog"],[role="alertdialog"]')
+          ) {
+            event.preventDefault();
+          }
+        }}
+        onEscapeKeyDown={(event) => {
+          if (draggingResult) {
+            event.preventDefault();
+            return;
+          }
+          const target = event.target as Element | null;
+          if (
+            target?.closest('[data-search-result-rename="true"]') ||
+            document.querySelector('[role="dialog"],[role="alertdialog"]')
+          ) {
+            event.preventDefault();
+          }
+        }}
         className={cn(
-          'w-[min(640px,calc(100vw-32px))] rounded-xl border border-[var(--cmd-palette-border)]',
-          'bg-[var(--cmd-palette-bg)] p-0 text-[var(--cmd-palette-item-text)] shadow-[var(--cmd-palette-shadow)]',
+          'z-float w-[min(640px,calc(100vw-32px))] rounded-xl border border-[var(--cmd-palette-border)]',
+          'bg-[var(--cmd-palette-bg)] p-0 text-[var(--cmd-palette-item-text)] shadow-[shadow:var(--cmd-palette-shadow)]',
+          draggingResult && 'pointer-events-none opacity-0',
         )}
       >
         <div className="border-b border-[var(--cmd-palette-border)] p-2">
@@ -848,6 +1167,7 @@ export function ConversationSearchBox({
             <Search size={15} className="shrink-0 text-[var(--cmd-palette-item-icon)]" />
             <input
               ref={inputRef}
+              onFocus={search.resume}
               value={search.query}
               onChange={(event) => search.setQuery(event.target.value)}
               placeholder={t('ccAgent.search.placeholder')}
@@ -869,6 +1189,8 @@ export function ConversationSearchBox({
           </div>
           <div className="mt-2 flex items-center gap-2">
             <SearchFilterMenu
+              matchAll={search.matchAll}
+              onMatchAllChange={search.setMatchAll}
               status={search.statusFilter}
               agentKind={search.agentFilter}
               lastActivity={search.lastActivityFilter}
@@ -889,11 +1211,16 @@ export function ConversationSearchBox({
           </div>
         </div>
         <SearchResultsBody
+          poolCapped={search.poolCapped}
           trimmed={search.trimmed}
           status={search.status}
           results={search.results}
           onSelect={search.handleSelect}
           maxHeightClass="max-h-[min(620px,calc(100vh-140px))]"
+          taskMenu={taskMenu}
+          statusFilter={search.statusFilter}
+          onDragSessionStart={handleDragSessionStart}
+          onDragSessionEnd={handleDragSessionEnd}
         />
       </PopoverContent>
     </Popover>
@@ -908,6 +1235,8 @@ export function ConversationSearchBox({
  * 常显在首行右侧,不用展开子菜单就能看到——这也是排序选项不需要图标的原因。
  */
 export function SearchFilterMenu({
+  matchAll = false,
+  onMatchAllChange,
   status,
   agentKind,
   lastActivity,
@@ -927,6 +1256,8 @@ export function SearchFilterMenu({
   compact,
   onOpenChange,
 }: {
+  matchAll?: boolean;
+  onMatchAllChange?: (value: boolean) => void;
   status: ConversationSearchStatusFilter;
   agentKind: ConversationSearchAgentFilter;
   lastActivity: ConversationSearchLastActivityFilter;
@@ -962,6 +1293,7 @@ export function SearchFilterMenu({
           lockedProjectComparisonKey,
       ) ?? null
     : null;
+  const choosableProjects = allKnownProjects.filter((project) => !isTeammateProjectPath(project.workingDir) || project.sessions.some(session => !!session.companion?.taskProjectDir));
   const lockedProjectLabel = lockedProject
     ? projectDisplayLabelWithMachine(lockedProject)
     : lockedProjectName;
@@ -1052,6 +1384,24 @@ export function SearchFilterMenu({
           ))}
         </MenuSubRow>
 
+        {onMatchAllChange && (
+          <MenuSubRow
+            label={t('ccAgent.search.match.label')}
+            value={t(matchAll ? 'ccAgent.search.match.all' : 'ccAgent.search.match.any')}
+          >
+            {[false, true].map((all) => (
+              <SelectMenuItem
+                key={String(all)}
+                label={t(all ? 'ccAgent.search.match.all' : 'ccAgent.search.match.any')}
+                selected={matchAll === all}
+                onSelect={() => onMatchAllChange(all)}
+              />
+            ))}
+            <DropdownMenuSeparator />
+            <p className="max-w-64 px-2 py-1.5 text-xs text-[var(--text-secondary)]">{t('ccAgent.search.match.help')}</p>
+          </MenuSubRow>
+        )}
+
         <MenuSubRow label={t('ccAgent.sidebar.filterStatusHeading')} value={statusValue}>
           {STATUS_OPTIONS.map((option) => (
             <SelectMenuItem
@@ -1076,11 +1426,11 @@ export function SearchFilterMenu({
             <span className="truncate">{t('ccAgent.search.filter.allProjects')}</span>
             {projects === 'all' && <Check size={15} className="ml-auto shrink-0 text-[var(--text-primary)]" />}
           </DropdownMenuItem>
-          {allKnownProjects.length > 0 && (
+          {choosableProjects.length > 0 && (
             <DropdownMenuSeparator className="my-1 bg-[var(--cmd-palette-border)]" />
           )}
           <div className="max-h-[280px] overflow-y-auto">
-            {allKnownProjects.map((project) => {
+            {choosableProjects.map((project) => {
               const comparisonKey = projectKeyComparisonKey(project.projectKey, localPlatform);
               const selected = comparisonKey != null && (selectedProjects?.has(comparisonKey) ?? false);
               const remoteIdentity = getRemoteProjectMachineIdentity(project);
@@ -1221,23 +1571,93 @@ function SearchResultRow({
   item,
   query,
   onSelect,
+  taskMenu,
+  sessionPatch,
+  onDragSessionStart,
+  onDragSessionEnd,
 }: {
   item: ConversationSearchResultItem;
   query: string;
-  onSelect: (item: ConversationSearchResultItem, hit?: ConversationSearchResultItem['contentHit']) => void;
+  onSelect: (
+    item: ConversationSearchResultItem,
+    hit?: ConversationSearchResultItem['contentHit'],
+    options?: SearchResultSelectOptions,
+  ) => void;
+  taskMenu?: SearchResultTaskMenuActions;
+  sessionPatch?: Partial<Session>;
+  onDragSessionStart?: () => void;
+  onDragSessionEnd?: (droppedInWindow: boolean) => void;
 }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
+  const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const [editValue, setEditValue] = useState('');
+  const committedRef = useRef(false);
+  const rowButtonRef = useRef<HTMLButtonElement>(null);
+  const dragStartTargetRef = useRef<Element | null>(null);
+  const draggingActiveRef = useRef(false);
+  const onDragSessionEndRef = useRef(onDragSessionEnd);
+  onDragSessionEndRef.current = onDragSessionEnd;
+
+  useEffect(
+    () => () => {
+      if (draggingActiveRef.current) {
+        draggingActiveRef.current = false;
+        onDragSessionEndRef.current?.(false);
+      }
+    },
+    [],
+  );
+
+  const canOpenMenu = Boolean(taskMenu) && canOpenSearchResultTaskMenu(item.session);
+  const liveSession = taskMenu?.resolveSession(item.session) ?? null;
+  const remoteConnectionStatus =
+    item.session.deviceLinkDeviceId && liveSession === null
+      ? (taskMenu?.getRemoteConnectionStatus?.(item.session.deviceLinkDeviceId) ?? null)
+      : null;
+  const {
+    session: resolvedSession,
+    hydrationStatus,
+    retryHydration,
+    applyOutOfWindowPatch,
+  } = useHydratedSearchSession({
+    summary: item.session,
+    liveSession,
+    sessionPatch,
+    menuOpen: menuPos !== null,
+    remoteConnectionStatus,
+  });
+
+  const isSharedGuest = isSharedTaskPeer(resolvedSession.deviceLinkDeviceId ?? '');
+  const remoteDisconnected = isRemoteSessionWriteBlocked(resolvedSession);
+  const splitDragEnabled =
+    !isSharedGuest &&
+    menuPos === null &&
+    isSplitGroupDragSource({
+      editing: isEditing,
+      orcaRole: resolvedSession.orcaRole,
+      inSortableContainer: false,
+    });
+
+  const unnamedLabel = t('ccAgent.common.unnamedSession');
   // 与 main 的匹配串同源:未起名会话在结果行里也不能露出英文哨兵,且 titleMatchIndices
-  // 就是按这个串算出来的,换成原始 title 会让高亮下标错位。
-  const displayTitle = conversationSearchTitle(item.session.title, t('ccAgent.common.unnamedSession'));
+  // 就是按这个串算出来的,换成原始 title 会让高亮下标错位。重命名后关闭旧高亮下标。
+  const displayTitle = conversationSearchTitle(resolvedSession.title, unnamedLabel);
+  const titleMatchIndices =
+    resolvedSession.title === item.session.title ? item.titleMatchIndices : [];
+  const renamePrefillTitle = getSessionDisplayTitle(resolvedSession, unnamedLabel, t);
+  const effectiveTags = resolvedSession.tags ?? item.session.tags;
+  const effectiveWorkingDir = resolvedSession.workingDir;
+
   const primaryHit = item.contentHit;
   const allHits = item.contentHits ?? (primaryHit ? [primaryHit] : []);
   const visibleHits = expanded ? allHits : allHits.slice(0, MAX_VISIBLE_HITS_PER_RESULT);
   const hiddenHitCount = Math.max(0, allHits.length - visibleHits.length);
   const subtitle = primaryHit
     ? renderSnippet(primaryHit.snippet, query) ?? renderKeywordHighlights(primaryHit.preview, query)
-    : item.session.workingDir || '';
+    : effectiveWorkingDir || '';
   const activityIso = item.session.updatedAt;
   const activityText = formatSidebarTime(activityIso, t);
   const sourceText = primaryHit ? searchSourceLabel(primaryHit, t) : t('ccAgent.search.source.titleOnly');
@@ -1247,7 +1667,7 @@ function SearchResultRow({
     sourceText,
     activityText,
     deviceLabel,
-    item.session.companion ? null : item.session.workingDir,
+    item.session.companion ? null : effectiveWorkingDir,
   ].filter(Boolean).join(' · ');
   const tooltip = (
     <div className="space-y-2">
@@ -1260,47 +1680,253 @@ function SearchResultRow({
     </div>
   );
 
+  const handleStartRename = useCallback(() => {
+    setEditValue(renamePrefillTitle);
+    committedRef.current = false;
+    setIsEditing(true);
+  }, [renamePrefillTitle]);
+
+  const commitTitle = useCallback(
+    (raw: string) => {
+      if (committedRef.current) return;
+      committedRef.current = true;
+      const trimmedTitle = raw.trim();
+      setIsEditing(false);
+      const unchanged =
+        !trimmedTitle ||
+        trimmedTitle === renamePrefillTitle ||
+        trimmedTitle === displayTitle ||
+        trimmedTitle === resolvedSession.title;
+      if (unchanged || !taskMenu) return;
+      const prevTitle = resolvedSession.title;
+      if (!liveSession && resolvedSession.deviceLinkDeviceId) {
+        applyOutOfWindowPatch({ title: toStoredSessionTitle(resolvedSession, trimmedTitle) });
+      }
+      void Promise.resolve(taskMenu.onRename(resolvedSession.id, trimmedTitle, resolvedSession)).then(
+        (ok) => {
+          if (ok === false && !liveSession && resolvedSession.deviceLinkDeviceId) {
+            applyOutOfWindowPatch({ title: prevTitle });
+          }
+        },
+      );
+    },
+    [
+      applyOutOfWindowPatch,
+      displayTitle,
+      liveSession,
+      renamePrefillTitle,
+      resolvedSession,
+      taskMenu,
+    ],
+  );
+
+  const handleContextMenu = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      if (isEditing) {
+        // 重命名输入框上的右键交给系统的可编辑菜单(剪切/复制/粘贴),只拦截冒泡。
+        event.stopPropagation();
+        return;
+      }
+      if (!canOpenMenu) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (resolvedSession.deviceLinkDeviceId) {
+        remoteProjectsStore.pinSessionOrigin(resolvedSession.deviceLinkDeviceId, resolvedSession.id);
+      }
+      if (!isSharedTaskPeer(resolvedSession.deviceLinkDeviceId ?? '')) {
+        prefetchDirtyWorktreeForRemoval(resolvedSession.id, resolvedSession.deviceLinkDeviceId);
+      }
+      setMenuPos({ x: event.clientX, y: event.clientY });
+    },
+    [canOpenMenu, isEditing, resolvedSession.deviceLinkDeviceId, resolvedSession.id],
+  );
+
+  const handleCloseMenu = useCallback(() => setMenuPos(null), []);
+  const handleReturnFocus = useCallback(() => {
+    rowButtonRef.current?.focus();
+  }, []);
+
+  const handleOpenInNewWindowClick = useCallback(
+    (hitOverride?: ConversationSearchResultItem['contentHit']) => {
+      if (remoteDisconnected) {
+        toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
+        return;
+      }
+      void onSelect(item, hitOverride, { openInNewWindow: true });
+    },
+    [item, onSelect, remoteDisconnected, t],
+  );
+
+  const handleDragPointerDownCapture = useCallback((event: ReactPointerEvent<HTMLElement>) => {
+    dragStartTargetRef.current = event.target instanceof Element ? event.target : null;
+  }, []);
+
+  const clearDragStartTarget = useCallback(() => {
+    dragStartTargetRef.current = null;
+  }, []);
+
+  const handleDragStart = useCallback(
+    (event: ReactDragEvent<HTMLElement>) => {
+      const started = startSessionDrag(event, {
+        sessionId: resolvedSession.id,
+        deviceId: resolvedSession.deviceLinkDeviceId,
+        label: displayTitle,
+        enabled: splitDragEnabled,
+        needsDedicatedHandle: false,
+        dragStartTarget: dragStartTargetRef.current,
+      });
+      dragStartTargetRef.current = null;
+      if (started) {
+        if (resolvedSession.deviceLinkDeviceId) {
+          remoteProjectsStore.pinSessionOrigin(resolvedSession.deviceLinkDeviceId, resolvedSession.id);
+        }
+        draggingActiveRef.current = true;
+        setIsDragging(true);
+        onDragSessionStart?.();
+      }
+    },
+    [
+      displayTitle,
+      onDragSessionStart,
+      resolvedSession.deviceLinkDeviceId,
+      resolvedSession.id,
+      splitDragEnabled,
+    ],
+  );
+
+  const handleDragEnd = useCallback(
+    (event: ReactDragEvent<HTMLElement>) => {
+      dragStartTargetRef.current = null;
+      finishSessionDrag(event, resolvedSession.id, resolvedSession.deviceLinkDeviceId);
+      if (draggingActiveRef.current) {
+        draggingActiveRef.current = false;
+        setIsDragging(false);
+        const droppedInWindow = Boolean(
+          event.dataTransfer?.dropEffect && event.dataTransfer.dropEffect !== 'none',
+        );
+        onDragSessionEnd?.(droppedInWindow);
+      }
+    },
+    [onDragSessionEnd, resolvedSession.deviceLinkDeviceId, resolvedSession.id],
+  );
+
+  const dragProps = {
+    'data-split-group-drag-source': splitDragEnabled ? 'true' : undefined,
+    draggable: splitDragEnabled,
+    onPointerDownCapture: handleDragPointerDownCapture,
+    onPointerUpCapture: clearDragStartTarget,
+    onPointerCancelCapture: clearDragStartTarget,
+    onDragStart: handleDragStart,
+    onDragEnd: handleDragEnd,
+  } as const;
+
+  const rowHeaderContent = (
+    <>
+      <div className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-[var(--surface-chip)] text-[var(--cmd-palette-item-icon)]">
+        <MessageSquare size={13} />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 items-center gap-2">
+          {isEditing ? (
+            <div data-search-result-rename="true" className="min-w-0 flex-1">
+              <SessionRenameInput
+                sessionId={resolvedSession.id}
+                value={editValue}
+                onValueChange={setEditValue}
+                onCommit={commitTitle}
+                onCancel={() => {
+                  committedRef.current = true;
+                  setIsEditing(false);
+                  requestAnimationFrame(() => rowButtonRef.current?.focus());
+                }}
+                containerClassName="min-w-0 flex-1"
+                inputClassName="h-6 text-13 font-medium text-[var(--text-primary)]"
+              />
+            </div>
+          ) : (
+            <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-1">
+              <span className="min-w-0 flex-[1_0_6rem] truncate text-13 font-medium text-[var(--text-primary)]">
+                {highlightSegments(displayTitle, titleMatchIndices)}
+              </span>
+              <span className="max-w-full overflow-x-auto">
+                <TaskTagDots tags={effectiveTags} />
+              </span>
+            </span>
+          )}
+          <Tip
+            text={sourceText}
+            side="top"
+            delay={150}
+            controlledOpen={menuPos !== null || isEditing || isDragging ? false : undefined}
+            resetHoverOnControlChange
+          >
+            <Badge size="xs">
+              {t(`ccAgent.search.kind.${item.matchKind}`)}
+            </Badge>
+          </Tip>
+        </div>
+        {meta && (
+          <div className="mt-1 truncate text-11 leading-none text-[var(--text-tertiary)]">
+            {meta}
+          </div>
+        )}
+        {visibleHits.length === 0 && subtitle && (
+          <div className="mt-1.5 line-clamp-4 text-12 leading-snug text-[var(--text-secondary)]">
+            {subtitle}
+          </div>
+        )}
+      </div>
+    </>
+  );
+
   return (
     <div
       data-sidebar-session-row="true"
       data-session-id={item.session.id}
+      onContextMenu={handleContextMenu}
       className={cn(
         'rounded-lg transition-colors hover:bg-[var(--cmd-palette-item-hover)]',
+        menuPos !== null && 'bg-[var(--cmd-palette-item-hover)]',
       )}
     >
-      <Tip text={tooltip} side="right" delay={250} contentClassName="max-w-[500px] break-words">
-        <button
-          type="button"
-          onClick={() => { void onSelect(item); }}
-          className="flex w-full items-start gap-2.5 rounded-lg px-3 py-2.5 text-left"
+      {isEditing ? (
+        <div className="flex w-full items-start gap-2.5 rounded-lg px-3 py-2.5 text-left">
+          {rowHeaderContent}
+        </div>
+      ) : (
+        <Tip
+          text={tooltip}
+          side="right"
+          delay={250}
+          controlledOpen={menuPos !== null || isDragging ? false : undefined}
+          resetHoverOnControlChange
+          contentClassName="max-w-[500px] break-words"
         >
-          <div className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-[var(--surface-chip)] text-[var(--cmd-palette-item-icon)]">
-            <MessageSquare size={13} />
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="flex min-w-0 items-center gap-2">
-              <span className="min-w-0 flex-1 truncate text-13 font-medium text-[var(--text-primary)]">
-                {highlightSegments(displayTitle, item.titleMatchIndices)}
-              </span>
-              <Tip text={sourceText} side="top" delay={150}>
-                <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-1.5 py-0.5 text-10 leading-none text-[var(--text-tertiary)]">
-                  {t(`ccAgent.search.kind.${item.matchKind}`)}
-                </span>
-              </Tip>
-            </div>
-            {meta && (
-              <div className="mt-1 truncate text-11 leading-none text-[var(--text-tertiary)]">
-                {meta}
-              </div>
-            )}
-            {visibleHits.length === 0 && subtitle && (
-              <div className="mt-1.5 line-clamp-4 text-12 leading-snug text-[var(--text-secondary)]">
-                {subtitle}
-              </div>
-            )}
-          </div>
-        </button>
-      </Tip>
+          <button
+            ref={rowButtonRef}
+            type="button"
+            {...dragProps}
+            onMouseDown={preventMiddleClickAutoscroll}
+            onClick={(event) => {
+              if (isSidebarNewWindowActivation(event)) {
+                event.preventDefault();
+                handleOpenInNewWindowClick();
+                return;
+              }
+              void onSelect(item);
+            }}
+            onAuxClick={(event) => {
+              if (event.button !== 1) return;
+              event.preventDefault();
+              event.stopPropagation();
+              handleOpenInNewWindowClick();
+            }}
+            className="flex w-full items-start gap-2.5 rounded-lg px-3 py-2.5 text-left"
+          >
+            {rowHeaderContent}
+          </button>
+        </Tip>
+      )}
       {visibleHits.length > 0 && (
         <div className="mt-0.5 space-y-1 px-3 pb-2 pl-10">
           {visibleHits.map((hit) => (
@@ -1308,7 +1934,9 @@ function SearchResultRow({
               key={hit.messageId}
               hit={hit}
               query={query}
+              dragProps={dragProps}
               onSelect={() => { void onSelect(item, hit); }}
+              onOpenInNewWindow={() => { handleOpenInNewWindowClick(hit); }}
             />
           ))}
           {hiddenHitCount > 0 && (
@@ -1319,7 +1947,7 @@ function SearchResultRow({
                 setExpanded(true);
               }}
               className={cn(
-                'flex w-full items-center rounded-md border border-transparent px-2 py-1.5 text-left',
+                'flex w-full items-center rounded-lg border border-transparent px-2 py-1.5 text-left',
                 'text-10 leading-none text-[var(--text-tertiary)]',
                 'transition-colors hover:border-[var(--border-default)] hover:bg-[var(--surface-elevated)] hover:text-[var(--text-primary)]',
               )}
@@ -1329,6 +1957,21 @@ function SearchResultRow({
           )}
         </div>
       )}
+      {canOpenMenu && taskMenu && (
+        <taskMenu.MenuComponent
+          session={resolvedSession}
+          isLiveInStore={liveSession !== null}
+          hydrationStatus={hydrationStatus}
+          onRetryHydration={retryHydration}
+          menuPos={menuPos}
+          isEditing={isEditing}
+          actions={taskMenu}
+          onCloseMenu={handleCloseMenu}
+          onStartRename={handleStartRename}
+          onOutOfWindowPatch={applyOutOfWindowPatch}
+          returnFocus={handleReturnFocus}
+        />
+      )}
     </div>
   );
 }
@@ -1336,11 +1979,23 @@ function SearchResultRow({
 function SearchHitRow({
   hit,
   query,
+  dragProps,
   onSelect,
+  onOpenInNewWindow,
 }: {
   hit: NonNullable<ConversationSearchResultItem['contentHit']>;
   query: string;
+  dragProps: {
+    'data-split-group-drag-source'?: 'true';
+    draggable: boolean;
+    onPointerDownCapture: (event: ReactPointerEvent<HTMLElement>) => void;
+    onPointerUpCapture: () => void;
+    onPointerCancelCapture: () => void;
+    onDragStart: (event: ReactDragEvent<HTMLElement>) => void;
+    onDragEnd: (event: ReactDragEvent<HTMLElement>) => void;
+  };
   onSelect: () => void;
+  onOpenInNewWindow: () => void;
 }) {
   const { t } = useTranslation();
   const sourceText = searchSourceLabel(hit, t);
@@ -1350,12 +2005,28 @@ function SearchHitRow({
   return (
     <button
       type="button"
+      {...dragProps}
+      onMouseDown={(event) => {
+        event.stopPropagation();
+        preventMiddleClickAutoscroll(event);
+      }}
       onClick={(event) => {
         event.stopPropagation();
+        if (isSidebarNewWindowActivation(event)) {
+          event.preventDefault();
+          onOpenInNewWindow();
+          return;
+        }
         onSelect();
       }}
+      onAuxClick={(event) => {
+        if (event.button !== 1) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onOpenInNewWindow();
+      }}
       className={cn(
-        'flex w-full items-start rounded-md border border-transparent px-2 py-1.5 text-left',
+        'flex w-full items-start rounded-lg border border-transparent px-2 py-1.5 text-left',
         'transition-colors hover:border-[var(--border-default)] hover:bg-[var(--surface-elevated)]',
       )}
     >

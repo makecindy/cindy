@@ -26,7 +26,7 @@ function loader(namespace: string | null | undefined = undefined, pending = fals
 }
 
 describe('first-party install authorization and old organization tokens', () => {
-  it('authorizes a first official Cindy public broker install only from exact inspected server bytes', () => {
+  it('denies public Broker installs even when inspected server bytes match', () => {
     const pending = {
       scope: 'public' as const, source: 'market' as const, installed: true,
       organizationId: null, sha256: PACKAGE_SHA256,
@@ -35,11 +35,11 @@ describe('first-party install authorization and old organization tokens', () => 
       const loaded = loader().load('cindy-web-search', 'install', PERSONAL, {
         marketRecord: bindPendingMarketRecordToInspectedPackage(pending, inspectedPackageSha256),
       });
-      expect(authorizeGhostTokenBroker('cindy-web-search', loaded)).toBe(inspectedPackageSha256 === PACKAGE_SHA256);
+      expect(authorizeGhostTokenBroker('cindy-web-search', loaded)).toBe(false);
     }
   });
 
-  it('uses a Host legacy override only for same-source root updates, never an implicit install-time reader', () => {
+  it('does not turn a legacy root qualification into public Broker authorization', () => {
     const marketRecord = bindPendingMarketRecordToInspectedPackage({
       scope: 'public', source: 'market', installed: true, organizationId: null, sha256: PACKAGE_SHA256,
     }, PACKAGE_SHA256);
@@ -47,7 +47,7 @@ describe('first-party install authorization and old organization tokens', () => 
       const loaded = loader().load('filo-google', 'install', PERSONAL, {
         marketRecord, ...(legacyFirstPartyEligible !== undefined ? { legacyFirstPartyEligible } : {}),
       });
-      expect(authorizeGhostTokenBroker('filo-google', loaded)).toBe(legacyFirstPartyEligible === true);
+      expect(authorizeGhostTokenBroker('filo-google', loaded)).toBe(false);
     }
     const freshXd = loader().load('xd-helper', 'install', PERSONAL, { marketRecord, legacyFirstPartyEligible: false });
     expect(authorizeGhostHostPrimitive('xd-helper', freshXd)).toBe(false);
@@ -55,9 +55,10 @@ describe('first-party install authorization and old organization tokens', () => 
 
   it('allows approved XD namespace with an old token missing orgSlug, but rejects an explicit different slug', () => {
     const loaded = loader('xd').load('_ns/xd/helper', 'runtime', XD);
-    expect(authorizeGhostHostPrimitive('helper', loaded)).toBe(true);
+    expect(authorizeGhostTokenBroker('helper', loaded)).toBe(true);
+    expect(authorizeGhostHostPrimitive('helper', loaded)).toBe(false);
     const foreignSlug = loader('xd').load('_ns/xd/helper', 'runtime', { ...XD, orgSlug: 'other' });
-    expect(authorizeGhostHostPrimitive('helper', foreignSlug)).toBe(false);
+    expect(authorizeGhostTokenBroker('helper', foreignSlug)).toBe(false);
   });
 
   it('does not authorize a known root from a copied organization row with the same approved hash', () => {
@@ -68,11 +69,11 @@ describe('first-party install authorization and old organization tokens', () => 
     }
   });
 
-  it('allows only a real old pending XD instance with a known fixed prefix when orgSlug is missing', () => {
-    expect(authorizeGhostHostPrimitive('helper', loader(undefined, true, 'xd').load('helper', 'runtime', XD))).toBe(true);
-    expect(authorizeGhostHostPrimitive('helper', loader(undefined, false, 'xd').load('helper', 'runtime', XD))).toBe(false);
-    expect(authorizeGhostHostPrimitive('helper', loader(null, true, 'xd').load('helper', 'runtime', XD))).toBe(false);
-    expect(authorizeGhostHostPrimitive('helper', loader(undefined, true).load('helper', 'runtime', XD))).toBe(false);
-    expect(authorizeGhostHostPrimitive('helper', loader(undefined, true, 'xd').load('helper', 'runtime', { ...XD, orgSlug: 'other' }))).toBe(false);
+  it('keeps pending enterprise Broker access bound to the current organization', () => {
+    expect(authorizeGhostTokenBroker('helper', loader(undefined, true, 'xd').load('helper', 'runtime', XD))).toBe(true);
+    expect(authorizeGhostTokenBroker('helper', loader(undefined, false, 'xd').load('helper', 'runtime', XD))).toBe(false);
+    expect(authorizeGhostTokenBroker('helper', loader(null, true, 'xd').load('helper', 'runtime', XD))).toBe(false);
+    expect(authorizeGhostTokenBroker('helper', loader(undefined, true).load('helper', 'runtime', XD))).toBe(false);
+    expect(authorizeGhostTokenBroker('helper', loader(undefined, true, 'xd').load('helper', 'runtime', { ...XD, orgId: 'other' }))).toBe(false);
   });
 });

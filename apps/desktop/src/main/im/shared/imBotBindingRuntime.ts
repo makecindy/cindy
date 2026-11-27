@@ -21,7 +21,8 @@ import {
 } from '../../localDb/ipc/bots';
 import { botProfiles, sessions } from '../../localDb/schema';
 import { resolveBotCanonicalSession } from '../../maker-ipc/botCanonicalSessionRegistry';
-import { prepareBotSessionForImSend, tryGetBotDelegationService } from '../../maker-ipc/register';
+import { broadcastSessionCreated, prepareBotSessionForImSend } from '../../maker-ipc/register';
+import { ensureBotCanonicalSession } from '../../maker-ipc/botCanonicalSessionEnsure.js';
 import type { ImCompanionRouteDeps, ImCompanionSessionResult } from './imBotBindingRoute';
 
 async function readProfileStatus(botId: string): Promise<string | null> {
@@ -42,13 +43,13 @@ async function isActiveSession(sessionId: string): Promise<boolean> {
   return row?.status === 'active' && row.source === 'bot';
 }
 
-export function createImCompanionRouteDeps(ownerBotId: string | (() => string | null)): ImCompanionRouteDeps {
+export function createImCompanionRouteDeps(ownerBotId: string | ((chatId?: string) => string | null)): ImCompanionRouteDeps {
   return {
-    readBinding: () => typeof ownerBotId === 'function' ? ownerBotId() : ownerBotId,
+    readBinding: (_contextId, chatId) => typeof ownerBotId === 'function' ? ownerBotId(chatId) : ownerBotId,
 
     async resolveSession({ botId, target, create }): Promise<ImCompanionSessionResult | null> {
       if (!create) {
-        // 只查已有任务: 伙伴不可用时报不可用(调用方回落渠道自己的路由), 可用但
+        // 只查已有任务: 伙伴不可用时报不可用(调用方当作没有任务, 不落渠道自己的行), 可用但
         // 还没有这条任务时返回 null(调用方不建行)。
         const status = await readProfileStatus(botId);
         if (status !== 'active') {
@@ -65,11 +66,7 @@ export function createImCompanionRouteDeps(ownerBotId: string | (() => string | 
         return sessionId ? { ok: true, sessionId, created: false } : null;
       }
       if (target.kind === 'canonical') {
-        const service = tryGetBotDelegationService();
-        if (!service) {
-          return { ok: false, errorCode: 'DELEGATION_UNAVAILABLE', message: '伙伴消息服务尚未就绪' };
-        }
-        const ensured = await service.ensureCanonicalSession(botId);
+        const ensured = await ensureBotCanonicalSession(botId, { onCreated: broadcastSessionCreated });
         return ensured.ok
           ? { ok: true, sessionId: ensured.sessionId, created: false }
           : { ok: false, errorCode: ensured.errorCode, message: ensured.message };
@@ -84,7 +81,7 @@ export function createImCompanionRouteDeps(ownerBotId: string | (() => string | 
         : { ok: false, errorCode: lane.errorCode, message: lane.message };
     },
 
-    archiveLane: (routeKey) => archiveBotChannelLanes({ routeKey }),
+    archiveLane: (routeKey, botId) => archiveBotChannelLanes({ routeKey, botId }),
 
     prepareSend: (sessionId) => prepareBotSessionForImSend(sessionId),
   };

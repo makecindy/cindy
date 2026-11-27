@@ -31,6 +31,9 @@ vi.mock('../mirrorCachePurgeQueue', () => ({
   },
 }));
 vi.mock('../../appSessionState', () => ({
+  getDataOwnerLifetime: () => 0,
+  getActiveAppSession: () => ({ dataOwnerId: ownerKey, generation: ownerGeneration }),
+  onAppSessionInvalidated: () => () => {},
   activeOwnerScopeKey: (): string => `cloud:${ownerKey}:${ownerGeneration}`,
   isAppSessionBoundaryPending: (): boolean => false,
   ownerScopedUserDataPath: (...parts: string[]): string =>
@@ -625,6 +628,7 @@ describe('session list get / put', () => {
       {
         deviceId: 'dev-1',
         deviceName: 'Mac',
+        projectAliases: { platform: 'darwin', aliases: [{ projectKey: 'local:/repo', alias: 'Team' }], settingsSupported: true },
         sessions: [{
           id: 's1',
           status: 'active',
@@ -639,6 +643,7 @@ describe('session list get / put', () => {
       [{
         deviceId: 'dev-1',
         deviceName: 'Mac',
+        projectAliases: { platform: 'darwin', aliases: [{ projectKey: 'local:/repo', alias: 'Team' }] },
         sessions: [{ id: 's1', status: 'active', title: 'Keep me' }],
       }],
       undefined,

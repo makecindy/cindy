@@ -1,4 +1,5 @@
 import { FILE_BROWSER_EVENT_CHANNEL, FILE_BROWSER_REMOTE_OP_CHANNEL, fsWatchTopic, isSharedTaskPeer, parseFsWatchTopic, parseSharedTaskPeer, isSharedTaskAttachment, type InvokePayload, type InvokeResultPayload, type SharedTaskQueueItem } from '@cindy/device-link';
+import { GIT_REVIEW_REMOTE_OP_CHANNEL } from '@cindy/device-link';
 import type { SharedTaskHost } from './sharedTaskHost.js';
 import * as subscriptions from './subscriptions.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
@@ -10,6 +11,9 @@ export interface SharedTaskInteractionCapture {
   kind: 'permission' | 'ask_user_question' | 'plan_review';
   toolName?: string;
   suggestions?: unknown[];
+  /** Host-owned consent riding the generic card (plugin install, media download,
+   * task actions, provider credential sharing). */
+  hostOwnedConfirmation?: boolean;
 }
 let host: SharedTaskHost | null = null;
 let readQueueItem: ((sessionId: string, clientId: string) => (SharedTaskQueueItem & { attachments?: unknown }) | undefined) | null = null;
@@ -162,7 +166,8 @@ function assertSharedTaskPermissionUpdates(
 /** Shared-task guests may answer the generic Agent interaction cards. Host-only
  * confirmations (plugin setup, issue review, grants, and rename prompts) never
  * enter this branch and remain protected by the normal origin gate. Owner-only
- * Host cards that do use the generic channel (app update) are refused by name. */
+ * Host cards that do use the generic channel are refused: every card marked
+ * `hostOwnedConfirmation`, plus the app-update and contribution tools by name. */
 function assertSharedTaskInteractionResolve(
   capture: SharedTaskPeerCapture, args: unknown[], sessionId: string,
   phase: 'invoke' | 'result',
@@ -170,6 +175,7 @@ function assertSharedTaskInteractionResolve(
   if (args.length !== 2 || typeof args[0] !== 'string' || !args[0]) deny();
   const interaction = phase === 'invoke' ? readInteractionSession?.(args[0]) : undefined;
   if (phase === 'invoke' && (!interaction || interaction.sessionId !== sessionId)) deny();
+  if (interaction?.hostOwnedConfirmation) deny();
   if (interaction?.toolName && (OWNER_ONLY_HOST_CONFIRMATION_TOOL_NAMES.has(interaction.toolName) || ['ghost_contribution_submit', 'ghost_cancel_plugin_review'].includes(interaction.toolName))) deny();
   const decision = record(args[1]);
   if (!decision || typeof decision.kind !== 'string' || !interactionDecisionKinds.has(decision.kind)) deny();
@@ -288,6 +294,14 @@ export function assertSharedTaskInvoke(
     }
     return;
   }
+  if (channel === GIT_REVIEW_REMOTE_OP_CHANNEL) {
+    const request = record(args[0]);
+    const query = record(request?.payload);
+    if (args.length !== 1 || !query || query.sessionId !== sessionId || !capture.authorize('file.read')) deny();
+    if (request?.op === 'get') return;
+    if (request?.op === 'file-diff' && (query.source === 'staged' || query.source === 'unstaged')) return;
+    deny();
+  }
   if (channel === FILE_BROWSER_REMOTE_OP_CHANNEL) {
     // Workdir ownership needs the host DB; device-op binds it before any file access.
     const request = record(args[0]);
@@ -341,6 +355,6 @@ export function captureSharedTaskPush(source: string, channel: string, payload: 
       channel.startsWith('usage:message-') || channel === 'usage:session-spend-changed' || channel === 'usage:session-tokens-changed')) return null;
   if (channel === 'maker:event:batch' && (!Array.isArray(row.events) || row.events.some((event) => record(event)?.sessionId !== sessionId))) return null;
   // 代输入 is the owner's own sign-in step; guests never see or answer it.
-  if (channel === 'maker:interaction-request' && record(row.request)?.kind === 'input_handoff') return null;
+  if (channel === 'maker:interaction-request' && ['input_handoff', 'issue_confirm'].includes(String(record(row.request)?.kind))) return null;
   return () => capture.isCurrent();
 }

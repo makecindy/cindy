@@ -199,11 +199,12 @@ export function ChatAudioCard({ track, sessionId }: ChatAudioCardProps) {
     >
       {/* Cover (96×96 — 与 .pen 设计稿尺寸一致) */}
       <div
-        className="relative shrink-0 overflow-hidden rounded-[8px]"
+        className="relative shrink-0 overflow-hidden rounded-lg"
         style={{ width: 96, height: 96 }}
       >
         {track.coverUrl && !coverFailed ? (
           <img
+            data-chat-audio-cover
             src={displayCoverUrl}
             alt={title}
             className="h-full w-full object-cover"
@@ -231,7 +232,7 @@ export function ChatAudioCard({ track, sessionId }: ChatAudioCardProps) {
         {/* Top row: title + copy */}
         <div className="flex items-start gap-3">
           <div
-            className="min-w-0 flex-1 truncate text-15 font-semibold text-[var(--msg-tool-card-text)]"
+            className="min-w-0 flex-1 truncate text-15 font-medium text-[var(--msg-tool-card-text)]"
             title={title}
           >
             {title}
@@ -239,6 +240,7 @@ export function ChatAudioCard({ track, sessionId }: ChatAudioCardProps) {
           {track.tags ? (
             <Tip text={t('chat.media.audioCopyDescription')}>
               <button
+                data-chat-copy-exclude
                 type="button"
                 onClick={handleCopyDescription}
                 aria-label={t('chat.media.audioCopyDescription')}
@@ -271,7 +273,7 @@ export function ChatAudioCard({ track, sessionId }: ChatAudioCardProps) {
         ) : null}
 
         {/* Player row: play btn + currentTime + progress + duration */}
-        <div className="flex items-center gap-3">
+        <div data-chat-copy-exclude className="flex items-center gap-3">
           <Tip text={playing ? t('chat.media.audioPause') : t('chat.media.audioPlay')}>
             <button
               type="button"
@@ -283,7 +285,7 @@ export function ChatAudioCard({ track, sessionId }: ChatAudioCardProps) {
                 <Pause size={14} fill="currentColor" />
               ) : (
                 // 把 play 三角往右挪 1px 视觉居中(三角自身重心偏左)
-                <Play size={14} fill="currentColor" style={{ marginLeft: 1 }} />
+                <Play size={14} fill="currentColor" style={{ marginLeft: 'var(--space-px)' }} />
               )}
             </button>
           </Tip>

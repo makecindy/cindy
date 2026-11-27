@@ -13,7 +13,7 @@ import type { AgentEvent, Session } from '@cindy/maker-core';
 
 import { PROVIDER_GROUP_LOCAL_MEMBER_KEY } from '../../shared/providerGroup.js';
 import { PROVIDER_SHARE_AGENT_DEVICE_PREFIX } from '../../shared/providerShare.js';
-import type { ProviderGroupBinding } from '../provider-group/bindings.js';
+import type { ProviderGroupBinding } from '../provider-group/bindings.desktop.js';
 import { createGuestUsageMeter, type GuestUsageSample } from '../remote-agent/host/guestUsage.js';
 
 export interface SessionProviderPartyUsageDeps {
@@ -92,19 +92,27 @@ export function localUsageProviderOf(input: {
 
 const meters = new WeakMap<Session, ReturnType<typeof createGuestUsageMeter>>();
 
-export function recordSessionProviderPartyUsage(
-  deps: SessionProviderPartyUsageDeps,
-  session: Session,
-  event: AgentEvent,
-): void {
-  if (event.type !== 'done' && event.type !== 'status') return;
+function observeUsage(session: Session, event: AgentEvent): GuestUsageSample[] {
+  if (event.type !== 'done' && event.type !== 'status') return [];
   let meter = meters.get(session);
   if (!meter) {
     meter = createGuestUsageMeter(session.agentKind);
     meters.set(session, meter);
   }
-  // 每一轮都喂给计量器，不记的轮次也要更新 Claude 的累计基线。
-  const samples = meter.observe(event, session.model);
+  return meter.observe(event, session.model);
+}
+
+/** Consume cumulative receipts without looking up a provider, recording or reporting usage. */
+export function observeUnbilledProviderPartyUsage(session: Session, event: AgentEvent): void {
+  observeUsage(session, event);
+}
+
+export function recordSessionProviderPartyUsage(
+  deps: SessionProviderPartyUsageDeps,
+  session: Session,
+  event: AgentEvent,
+): void {
+  const samples = observeUsage(session, event);
   if (samples.length === 0) return;
   const binding = deps.bindingOf(session.id);
   const location: SessionUsageLocation = {

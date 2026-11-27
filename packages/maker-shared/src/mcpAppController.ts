@@ -7,13 +7,22 @@ export type AppRpc = {
   params?: Record<string, unknown>;
   [key: string]: unknown;
 };
-export type AppInvoker = (sessionId: string, input: Record<string, unknown>) => Promise<unknown>;
+export type AppInvoker = (sessionId: string | null, input: Record<string, unknown>) => Promise<unknown>;
+export type McpAppResourceSource = {
+  instanceId: string;
+  viewId: string;
+  composerAction?: { id: string; contributionId: string };
+};
+export { McpAppViewSlots, McpAppWindowLimitError, confirmsMcpAppViewGone, isMcpAppOpenRejectedBeforeAllocation } from './mcpAppViewSlots.js';
+
 let nextOpenId = 0;
+const closeSafeMethods = new Set(['cindy/view-state/set', 'ui/set-view-state']);
 
 /** The UI is a transport only; official negotiation, schemas and permissions live on the Host. */
 export class McpAppController {
   document?: McpAppOpenResult;
   private after = 0;
+  private pendingOpenContext?: Record<string, unknown>;
   private stopped = false;
   private closing = false;
   private teardownId?: string;
@@ -21,40 +30,68 @@ export class McpAppController {
   private finishTeardown?: () => void;
   private closePromise?: Promise<void>;
   private ready = false;
+  private generation = 0;
+  private initialized = false;
+  private handshakeDelivery?: Promise<void>;
   private outbound: AppRpc[] = [];
   private initializeId?: string | number;
   private startupTimer?: ReturnType<typeof setTimeout>;
   private readonly openId = `${Date.now()}:${++nextOpenId}`;
   constructor(
     private readonly invoke: AppInvoker,
-    readonly sessionId: string,
+    readonly sessionId: string | null,
     readonly clientId: string,
     private readonly post: (message: AppRpc) => void,
     private readonly onState: (message: AppRpc) => void,
     private readonly onError: (error: unknown) => void,
     private readonly openLink?: (url: string) => Promise<void>,
+    private readonly resourceSource?: McpAppResourceSource,
   ) {}
 
-  async open(context: Record<string, unknown>): Promise<McpAppOpenResult | undefined> {
-    const document = (await this.invoke(this.sessionId, {
-      op: 'open',
+  async open(context: Record<string, unknown>, onViewLimit?: (waiting: boolean) => boolean | Promise<boolean>): Promise<McpAppOpenResult | undefined> {
+    const request = {
+      op: this.resourceSource ? 'open-resource' : 'open',
+      ...(this.resourceSource ? { source: this.resourceSource } : {}),
       openId: this.openId,
       clientId: this.clientId,
-      context,
-    })) as McpAppOpenResult;
+    };
+    let document: McpAppOpenResult;
+    while (true) {
+      try {
+        document = await this.invoke(this.sessionId, {
+          ...request, context: this.pendingOpenContext ?? context,
+        }) as McpAppOpenResult;
+        break;
+      } catch (error) {
+        if (this.closing || !onViewLimit || !/\bMCP_APP_VIEW_LIMIT\b/.test(String(error))) throw error;
+        if (!await onViewLimit(true) || this.closing) { await this.close(); return; }
+        // Handled by the local viewer. Never forward this wait to the executing computer.
+        const granted = await this.invoke(this.sessionId, { op: 'wait-for-view-slot', openId: this.openId });
+        if (this.closing) return;
+        if (granted !== true) throw new Error('MCP_APP_LINK_CLOSED');
+        if (!await onViewLimit(false) || this.closing) { await this.close(); return; }
+      }
+    }
     this.document = document;
+    this.pendingOpenContext = undefined;
     if (this.closing) {
       await this.invoke(this.sessionId, { op: 'teardown', viewId: document.viewId });
       return;
     }
     // Resource loading has its own Host/remote budget. Give the App a complete
     // initialization window after the document reaches this controller.
-    this.startupTimer = setTimeout(
-      () => this.fail(new Error('MCP_APP_INITIALIZATION_TIMEOUT')),
-      45_000,
-    );
+    this.armInitializationTimeout();
     if (document.transport !== 'sandbox') void this.poll();
     return document;
+  }
+
+  private armInitializationTimeout(): void {
+    clearTimeout(this.startupTimer);
+    const generation = this.generation;
+    this.startupTimer = setTimeout(() => {
+      if (this.generation === generation && this.startupTimer !== undefined)
+        this.fail(new Error('MCP_APP_INITIALIZATION_TIMEOUT'));
+    }, 45_000);
   }
 
   sandboxReady(resourceUrl?: string): void {
@@ -73,8 +110,10 @@ export class McpAppController {
   receive(message: AppRpc): void {
     if (this.stopped || !this.document || !message || message.jsonrpc !== '2.0') return;
     if (this.document.transport === 'sandbox') {
-      if (message.method === 'ui/notifications/sandbox-failed')
-        this.fail(new Error('MCP_APP_SANDBOX_FAILED'));
+      if (message.method === 'ui/notifications/sandbox-failed') {
+        const code = message.params?.code;
+        this.fail(new Error(code === 'MCP_PLUGIN_UNAVAILABLE' || code === 'MCP_APP_SERVER_CHANGED' ? code : 'MCP_APP_SANDBOX_FAILED'));
+      }
       if (this.closing) return;
       if (message.method === 'ui/notifications/sandbox-escape')
         void this.displayMode('inline').catch((error) => this.fail(error));
@@ -82,7 +121,9 @@ export class McpAppController {
         clearTimeout(this.startupTimer);
         this.startupTimer = undefined;
       }
-      if (['ui/notifications/initialized', 'ui/notifications/size-changed', 'ui/notifications/host-context-changed'].includes(message.method ?? ''))
+      if (['ui/notifications/initialized', 'ui/notifications/size-changed', 'ui/notifications/host-context-changed',
+        'ui/notifications/sandbox-handshake-started', 'ui/notifications/sandbox-result-delivered',
+        'ui/notifications/sandbox-escape'].includes(message.method ?? ''))
         this.onState(message);
       return;
     }
@@ -93,30 +134,73 @@ export class McpAppController {
     }
     if (message.method === 'ui/notifications/sandbox-escape') {
       void this.displayMode('inline').catch((error) => this.fail(error));
+      this.onState(message);
       return;
     }
     if (message.method?.startsWith('ui/notifications/sandbox-')) return;
-    if (this.closing && message.method) return;
-    if (message.method === 'ui/initialize') this.initializeId = message.id;
+    if (this.closing && message.method && !closeSafeMethods.has(message.method)) return;
+    if (message.method === 'ui/initialize') {
+      if (this.initialized) {
+        this.generation++;
+        this.initialized = false;
+        this.outbound = [];
+        this.armInitializationTimeout();
+      }
+      this.initializeId = message.id;
+    }
     if (message.method === 'ui/notifications/initialized') {
+      this.initialized = true;
       clearTimeout(this.startupTimer);
       this.startupTimer = undefined;
     }
     this.onState(message);
-    void this.invoke(this.sessionId, {
-      op: 'message',
-      viewId: this.document.viewId,
-      message,
-    }).catch((error) => this.fail(error));
+    const viewId = this.document.viewId;
+    const generation = this.generation;
+    const handshake = message.method === 'ui/initialize' || message.method === 'ui/notifications/initialized';
+    const send = async () => {
+      if (this.stopped || (this.closing && message.method && !closeSafeMethods.has(message.method))) return;
+      if (!handshake && this.generation !== generation) return;
+      await this.invoke(this.sessionId, { op: 'message', viewId, message });
+    };
+    // device-link invokes may arrive out of order. Finish each handshake delivery
+    // before sending the next; pending tools must not block document replacement.
+    const delivery = this.handshakeDelivery ? this.handshakeDelivery.then(send) : send();
+    if (handshake) {
+      this.handshakeDelivery = delivery;
+      void delivery.then(() => {
+        if (this.handshakeDelivery === delivery) this.handshakeDelivery = undefined;
+      }, () => {});
+    }
+    void delivery.catch((error) => this.fail(error));
   }
 
   async context(context: Record<string, unknown>): Promise<void> {
-    if (this.document && !this.closing)
+    if (!this.document && !this.closing) this.pendingOpenContext = context;
+    if (this.document && !this.closing && !this.suspended)
       await this.invoke(this.sessionId, { op: 'context', viewId: this.document.viewId, context });
   }
   async displayMode(mode: 'inline' | 'fullscreen' | 'pip'): Promise<void> {
     if (this.document && !this.closing)
       await this.invoke(this.sessionId, { op: 'display-mode', viewId: this.document.viewId, mode });
+  }
+  private suspended = false;
+  private visibilityDelivery: Promise<void> = Promise.resolve();
+  /** Same-computer Renderer control; never issue this operation over device-link. */
+  suspend(): Promise<void> {
+    if (this.document?.transport !== 'sandbox' || this.closing || this.suspended) return this.visibilityDelivery;
+    this.suspended = true;
+    const viewId = this.document.viewId;
+    return this.visibilityDelivery = this.visibilityDelivery.then(async () => {
+      if (!this.closing) await this.invoke(this.sessionId, { op: 'suspend', viewId });
+    });
+  }
+  resume(): Promise<void> {
+    if (!this.suspended || this.closing) return this.visibilityDelivery;
+    this.suspended = false;
+    const viewId = this.document!.viewId;
+    return this.visibilityDelivery = this.visibilityDelivery.then(async () => {
+      if (!this.closing) await this.invoke(this.sessionId, { op: 'resume', viewId });
+    });
   }
   private fail(error: unknown): void {
     if (this.closing) return;
@@ -153,8 +237,12 @@ export class McpAppController {
         for (const event of events) {
           if (!Number.isSafeInteger(event.seq) || event.seq <= this.after) continue;
           this.after = event.seq;
+          // Replies already in transit cannot be recalled by the execution Host.
+          // Legacy Hosts omit generation and keep their original unfenced behavior.
+          if (event.generation !== undefined && event.generation !== this.generation) continue;
           if (event.openLink) {
             const viewId = this.document.viewId;
+            const currentDocument = () => event.generation === undefined || event.generation === this.generation;
             void (async () => {
               let success = false;
               try {
@@ -170,7 +258,7 @@ export class McpAppController {
                   )
                     throw new Error('MCP_APP_LINK_NOT_AUTHORIZED');
                   // Closing can win while the execution Host checks the current card.
-                  if (!this.closing && !this.stopped && this.document?.viewId === viewId) {
+                  if (!this.closing && !this.stopped && this.document?.viewId === viewId && currentDocument()) {
                     await this.openLink(event.openLink.url);
                     success = true;
                   }
@@ -178,7 +266,7 @@ export class McpAppController {
               } catch {
                 /* Report the failed link action to the Host so its RPC can finish. */
               }
-              if (!this.stopped && this.document?.viewId === viewId)
+              if (!this.stopped && this.document?.viewId === viewId && currentDocument())
                 await this.invoke(this.sessionId, {
                   op: 'link-result',
                   viewId,
@@ -246,14 +334,55 @@ export class McpAppController {
         alreadyNotified: !!this.teardownId,
       });
     } finally {
+      this.suspended = false;
       this.stopped = true;
       this.outbound = [];
     }
   }
 }
-export function mcpAppFailureKey(error: unknown): 'mcpApps.updateRequired' | 'mcpApps.loadFailed' {
+export function mcpAppFailureKey(error: unknown): 'mcpApps.updateRequired' | 'mcpApps.loadFailed' | 'mcpApps.viewLimit' {
+  if (/\bMCP_APP_VIEW_LIMIT\b/.test(String(error))) return 'mcpApps.viewLimit';
   return /CHANNEL_NOT_ALLOWED|UNKNOWN_CHANNEL|CHANNEL_NOT_FOUND/.test(String(error))
     ? 'mcpApps.updateRequired'
     : 'mcpApps.loadFailed';
 }
 export { MCP_APPS_INVOKE };
+
+export const MCP_APP_MAX_HEIGHT = 5_000;
+/** Bound oscillating layouts; ordinary content growth uses only the height cap.
+ * A width change starts a new layout; a lock otherwise lasts for this View. */
+export class McpAppHeightGuard {
+  private samples: Array<{ height: number; at: number }> = [];
+  private locked?: number;
+  private width?: number;
+  constructor(private readonly onLock: () => void = () => {}) {}
+  resize(width: number): void {
+    if (this.width === width) return;
+    this.width = width;
+    this.reset();
+  }
+  reset(): void {
+    this.samples = [];
+    this.locked = undefined;
+  }
+  accept(value: number, now = Date.now()): number {
+    if (this.locked !== undefined) return this.locked;
+    const height = Math.max(80, Math.min(MCP_APP_MAX_HEIGHT, Math.ceil(value)));
+    this.samples = this.samples.filter(sample => now - sample.at < 2_000);
+    const previous = this.samples.at(-1);
+    if (!previous || previous.height !== height) this.samples.push({ height, at: now });
+    if (this.samples.length >= 8) {
+      const recent = this.samples.slice(-8).map(sample => sample.height);
+      const oscillating = recent.slice(2).every((h, i) =>
+        (h - recent[i + 1]) * (recent[i + 1] - recent[i]) < 0);
+      if (oscillating) {
+        this.locked = recent[0];
+        this.onLock();
+        return this.locked;
+      }
+    }
+    return height;
+  }
+}
+
+export { McpAppMeasuredHeights, parseMcpAppMeasurements } from './mcpAppMeasuredHeights.js';

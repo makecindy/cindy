@@ -13,12 +13,34 @@ export const LETS_ENCRYPT_DIRECTORY = 'https://acme-v02.api.letsencrypt.org/dire
 
 const VALIDATION_TIMEOUT_MS = 3 * 60 * 1000;
 const POLL_INTERVAL_MS = 2_000;
+const REQUEST_TIMEOUT_MS = 30_000;
+/** 单个请求遇到网络中断、超时或 CA 临时不可用时,先短暂重试再放弃。 */
+const NETWORK_RETRY_DELAYS_MS = [2_000, 5_000];
 
 export class AcmeError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'AcmeError';
   }
+}
+
+/** 连不上证书机构(断网、超时、连接被重置、CA 临时 5xx):稍后可以重试,与 CA 拒绝验证区分开。 */
+export class AcmeNetworkError extends AcmeError {
+  readonly transient = true;
+  constructor(message: string) {
+    super(message);
+    this.name = 'AcmeNetworkError';
+  }
+}
+
+/** fetch 的网络失败只有笼统的 `fetch failed`;取出底层原因(ECONNRESET、ETIMEDOUT…)便于排查。 */
+function networkFailureReason(error: unknown): string | null {
+  if (error instanceof AcmeError || !(error instanceof Error)) return null;
+  if (error.name === 'TimeoutError' || error.name === 'AbortError') return 'timed out';
+  if (!(error instanceof TypeError)) return null;
+  const cause = (error as { cause?: { code?: unknown; message?: unknown } }).cause;
+  const reason = typeof cause?.code === 'string' ? cause.code : typeof cause?.message === 'string' ? cause.message : error.message;
+  return reason.slice(0, 80);
 }
 
 interface Directory {
@@ -107,10 +129,37 @@ export class AcmeClient {
     return b64url(createHash('sha256').update(JSON.stringify({ crv, kty, x, y })).digest());
   }
 
+  /** 发一个请求并读完响应体;网络失败与 CA 的 5xx 先重试,仍不行时抛 AcmeNetworkError。 */
+  private async send(url: string, init: RequestInit = {}): Promise<{ res: Response; text: string }> {
+    for (let attempt = 0; ; attempt++) {
+      let reason: string;
+      try {
+        const res = await this.fetchImpl(url, { ...init, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+        const text = init.method === 'HEAD' ? '' : await res.text();
+        if (res.status < 500) return { res, text };
+        reason = `HTTP ${res.status}`;
+      } catch (error) {
+        const failure = networkFailureReason(error);
+        if (!failure) throw error;
+        reason = failure;
+      }
+      if (attempt >= NETWORK_RETRY_DELAYS_MS.length) {
+        throw new AcmeNetworkError(`could not reach the certificate authority (${reason})`);
+      }
+      this.log(`certificate authority unreachable (${reason}), retrying`);
+      await this.sleep(NETWORK_RETRY_DELAYS_MS[attempt]);
+    }
+  }
+
   private async getDirectory(): Promise<Directory> {
     if (this.directory) return this.directory;
-    const res = await this.fetchImpl(this.options.directoryUrl);
-    const body = (await res.json().catch(() => null)) as Directory | null;
+    const { res, text } = await this.send(this.options.directoryUrl);
+    let body: Directory | null = null;
+    try {
+      body = JSON.parse(text) as Directory;
+    } catch {
+      body = null;
+    }
     if (!res.ok || !body?.newNonce || !body.newAccount || !body.newOrder) {
       throw new AcmeError(`certificate authority directory unavailable (${res.status})`);
     }
@@ -124,7 +173,7 @@ export class AcmeClient {
       this.nonce = null;
       return nonce;
     }
-    const res = await this.fetchImpl((await this.getDirectory()).newNonce, { method: 'HEAD' });
+    const { res } = await this.send((await this.getDirectory()).newNonce, { method: 'HEAD' });
     const nonce = res.headers.get('replay-nonce');
     if (!nonce) throw new AcmeError('certificate authority returned no nonce');
     return nonce;
@@ -145,13 +194,13 @@ export class AcmeClient {
         key: this.options.accountKey,
         dsaEncoding: 'ieee-p1363',
       });
-      const res = await this.fetchImpl(url, {
+      // 网络重试可能把同一个 nonce 再发一次;CA 已用掉它时回 badNonce,下面换新 nonce 重签。
+      const { res, text } = await this.send(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/jose+json', ...(options.accept ? { Accept: options.accept } : {}) },
         body: JSON.stringify({ protected: protectedPart, payload: payloadPart, signature: b64url(signature) }),
       });
       this.nonce = res.headers.get('replay-nonce');
-      const text = await res.text();
       let body: Record<string, any> | null = null;
       try {
         body = JSON.parse(text) as Record<string, any>;

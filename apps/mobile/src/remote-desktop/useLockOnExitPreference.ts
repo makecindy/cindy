@@ -5,10 +5,10 @@ import {
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-// Non-secret, phone-local override for this computer. Absence follows default off.
+// Non-secret, phone-local override for this computer. Absence follows the current default.
 let writes: Promise<void> = Promise.resolve();
 export function useLockOnExitPreference(deviceId: string) {
-  return useRemoteDesktopPreference(deviceId, "lock-on-exit", false);
+  return useRemoteDesktopPreference(deviceId, "lock-on-exit", true);
 }
 export function useRemoteDesktopPreference(
   deviceId: string,
@@ -32,7 +32,8 @@ export function useRemoteDesktopPreference(
           });
       })
       .catch(() => {
-        if (active) setState({ key, enabled: false, loaded: true });
+        // An unreadable override is not an opt-out: follow the current default.
+        if (active) setState({ key, enabled: defaultValue, loaded: true });
       });
     return () => {
       active = false;

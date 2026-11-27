@@ -159,7 +159,7 @@ try {
       preferredSystemLocale: 'en',
       logToMain: noop,
       appearanceSettings: { getSync: () => null, onChanged: off },
-      localThemes: { listSync: () => ({ success: true, themes: [], diagnostics: [] }) },
+      localThemes: { listSync: () => ({ success: true, themes: [], diagnostics: [] }), onChanged: off },
       authHasPersistedSessionHintSync: () => true,
       appShortcuts: {
         getState: () => ({ overrides: {}, platform: controllerPlatform }),

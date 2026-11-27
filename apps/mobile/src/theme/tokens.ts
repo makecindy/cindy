@@ -44,6 +44,13 @@ export interface ThemeColors {
   surfaceTranslucentSidebar: string;
   /** Chat 顶栏玻璃底色(M3:只给会话页顶部 chrome,不污染侧栏 / sheet) */
   chatHeaderSurface: string;
+  /**
+   * 边缘磨砂(首页 / 任务顶栏、输入框底部)在模糊之上、同一遮罩内的压暗层。深色系统材质比
+   * `surface` 亮,单靠模糊会把空白页面提亮成一条可见的带;压暗后空白处仍是 `surface`,只有背后
+   * 有内容时才看得出磨砂。浅色材质本就贴近页面,不压暗。Layered 用于顶栏三层叠加的每一层。
+   */
+  edgeBlurShade: string;
+  edgeBlurShadeLayered: string;
   /** Chat 顶栏底部分割线(M3:dark 为极弱白线) */
   chatHeaderDivider: string;
   /** 浮层卡 sheet surface 底色(R1 audit 模式3,solid 玻璃感由 backdrop blur 承担,surface 不叠 blur 规避 Android 滚动热路径) */
@@ -114,6 +121,8 @@ export interface ThemeColors {
   borderStrong: string;
   /** 主标题 / 主正文 */
   textPrimary: string;
+  /** 群聊正文点名专用；对齐 Desktop CINDY msg-link，不用于普通链接或状态。 */
+  groupMentionText: string;
   /** 次要文字 / 图标 */
   textSecondary: string;
   /** 三级文字 / metadata(时间、计数等真实信息) */
@@ -139,9 +148,11 @@ export interface ThemeColors {
   statusAccent: string;
   /** 房主皇冠标识金色；与 Desktop --warning-fg 对齐，Light / Dark 均保持醒目。 */
   warningFg: string;
-  /** 账号额度条预警填充（剩余不足 30%）；仅额度图形使用，双模式同值。 */
+  /** 额度黄（剩余不超过 30%，@cindy/maker-shared/quota-level）；仅额度使用，双模式同值。 */
   quotaBarWarn: string;
-  /** 账号额度条紧张填充（剩余不超过 10%）；仅额度图形使用，双模式同值。 */
+  /** Normal liquid in the widget-style quota tubes, shared with WidgetPalette.plenty. */
+  quotaWidgetPlenty: string;
+  /** 额度红（剩余不超过 10%）#EF4444，与 Desktop --quota-bar-crit、Mac 面板、iPhone 组件同值。 */
   quotaBarCrit: string;
   /** 会话状态点 — 等待用户回复/选择(TapTap 蓝,对齐桌面 --card-status-awaiting 与灵动岛 needs-interaction) */
   statusAwaiting: string;
@@ -157,7 +168,7 @@ export interface ThemeColors {
   permAutoAccent: string;
   /**
    * 伙伴列表未读点(信息蓝 #417CDD,L=D 同值)。对齐桌面 `--bot-unread-bg`(DESIGN.md「Bot Unread Badge」):
-   * 表示 IM 未读语义,只用于伙伴列表行(伙伴与群聊)的未读点,不是 CTA、不是状态色,不得挪作他用。
+   * 表示 IM 未读语义,用于伙伴列表行(伙伴与群聊)、群内话题入口的未读提示和时间线未读分割线,不是 CTA、不是状态色,不得挪作他用。
    */
   botUnread: string;
   /**
@@ -187,6 +198,9 @@ export interface ThemeColors {
    * 注意:侧栏/抽屉毛玻璃底色另有 surfaceTranslucentSidebar(light 近白),不受本 token 影响。
    */
   overlay: string;
+  /** 视频封面播放标记：恒深底与恒白前景，保证任意画面上的对比度。 */
+  mediaPlayBackground: string;
+  mediaPlayForeground: string;
   /** 素雅新建对话 FAB:dark 用柔白 #E6E6E6 而非 cta 近白,避免主入口在深底上过跳 */
   homeListFab: string;
   /** List FAB 描边:light 无描边(transparent),dark 按 301:1073 帧白色 hairline */
@@ -429,6 +443,8 @@ export const lightColors: ThemeColors = {
   surfaceTranslucent: 'rgba(249, 249, 246, 0.78)',
   surfaceTranslucentSidebar: 'rgba(255, 255, 252, 0.90)',
   chatHeaderSurface: 'rgba(249, 249, 246, 0.90)',
+  edgeBlurShade: 'transparent',
+  edgeBlurShadeLayered: 'transparent',
   chatHeaderDivider: '#CCCCC8',
   surfaceGlassPanel: '#FFFFFC',
   surfaceListRow: '#FFFFFC',
@@ -459,6 +475,7 @@ export const lightColors: ThemeColors = {
   borderTranslucent: 'rgba(204, 204, 200, 0.62)',
   borderStrong: '#858581',
   textPrimary: '#0F0F0F',
+  groupMentionText: '#1D4ED8',
   textSecondary: '#4D4D4A',
   textTertiary: '#686864',
   textPlaceholder: '#858581',
@@ -469,7 +486,8 @@ export const lightColors: ThemeColors = {
   statusAccent: '#EA6B17',
   warningFg: '#F3A115',
   quotaBarWarn: '#F3A115',
-  quotaBarCrit: '#D91F37',
+  quotaWidgetPlenty: '#14B8A6',
+  quotaBarCrit: '#EF4444',
   statusAwaiting: '#19D2C1',
   statusError: '#D91F37',
   statusDone: '#2AAE5B',
@@ -484,6 +502,8 @@ export const lightColors: ThemeColors = {
   // overlay:遮罩双模式恒深(light 原 0.24 太浅近白;0.50 实机过重,用户定稿 0.35,2026-07-21)。
   // 侧栏/抽屉毛玻璃底色另有 surfaceTranslucentSidebar,不受影响。
   overlay: 'rgba(38, 38, 38, 0.35)',
+  mediaPlayBackground: 'rgba(0, 0, 0, 0.55)',
+  mediaPlayForeground: '#ffffff',
   // homeListFab:反相中性,不染品牌红(lead 裁决 2026-07-17:染红=扩张红名单,超 U8
   // 已批决策表范围;日后要红 FAB 须单独过用户关卡)。light 对齐 textPrimary / cta 近黑 #0F0F0F。
   homeListFab: '#0F0F0F',
@@ -522,6 +542,9 @@ export const darkColors: ThemeColors = {
   surfaceTranslucent: 'rgba(18, 18, 18, 0.78)',
   surfaceTranslucentSidebar: 'rgba(10, 10, 10, 0.85)',
   chatHeaderSurface: 'rgba(18, 18, 18, 0.80)',
+  // iOS 27 实测:#121212 上单层(55)提亮到约 21.9、顶栏三层(各 32)约 21.4;压暗后回到 18。
+  edgeBlurShade: 'rgba(0, 0, 0, 0.18)',
+  edgeBlurShadeLayered: 'rgba(0, 0, 0, 0.08)',
   chatHeaderDivider: 'rgba(255, 255, 255, 0.08)',
   surfaceGlassPanel: '#242424',
   surfaceListRow: '#1E1E1E',
@@ -553,6 +576,7 @@ export const darkColors: ThemeColors = {
   borderTranslucent: 'rgba(56, 56, 56, 0.62)',
   borderStrong: '#8A8A8A',
   textPrimary: '#EDEDED',
+  groupMentionText: '#93C5FD',
   textSecondary: '#BDBDBD',
   textTertiary: '#999999',
   textPlaceholder: '#757575',
@@ -563,7 +587,8 @@ export const darkColors: ThemeColors = {
   statusAccent: '#EA6B17',
   warningFg: '#F3A115',
   quotaBarWarn: '#F3A115',
-  quotaBarCrit: '#D91F37',
+  quotaWidgetPlenty: '#2DD4BF',
+  quotaBarCrit: '#EF4444',
   statusAwaiting: '#19D2C1',
   statusError: '#D91F37',
   statusDone: '#2AAE5B',
@@ -576,6 +601,8 @@ export const darkColors: ThemeColors = {
   sharedTaskConfirmForeground: '#121212',
   errorBorder: '#8A8A8A',
   overlay: 'rgba(0, 0, 0, 0.45)',
+  mediaPlayBackground: 'rgba(0, 0, 0, 0.55)',
+  mediaPlayForeground: '#ffffff',
   // homeListFab:反相中性(lead 裁决,见 lightColors 注释);dark 用 #E6E6E6 柔白(比 cta 略收)。
   homeListFab: '#E6E6E6',
   homeListFabBorder: '#FFFFFF',
@@ -593,6 +620,94 @@ export const palettes: Record<ThemeMode, ThemeColors> = {
 };
 
 // —— 以下为主题无关(light / dark 一致)的不变量阶梯 ——
+
+/** Fixed pigments sampled for each physical keyboard. App appearance only affects the software keyboard. */
+export const retroKeyboardMaterials = {
+  iceblue: {
+    ink: '#354c55',
+    secondaryInk: '#495e68',
+    wellTint: 'rgba(179, 197, 201, 0.88)',
+    contact: 'rgba(65, 86, 96, 0.40)',
+    skirtLight: '#edf3f3',
+    skirtMid: '#c0ced2',
+    skirtShade: '#9aaeb5',
+    skirtFoot: '#81969e',
+    faceShade: '#cad7da',
+    face: '#e9eff0',
+    faceLight: '#f4f7f6',
+    modifierTint: 'transparent',
+  },
+  ivory: {
+    ink: '#483d30',
+    secondaryInk: '#615546',
+    wellTint: 'rgba(128, 111, 83, 0.52)',
+    contact: 'rgba(62, 50, 33, 0.50)',
+    skirtLight: '#eee4cf',
+    skirtMid: '#c2b398',
+    skirtShade: '#a49479',
+    skirtFoot: '#8a7b62',
+    faceShade: '#d2c5ad',
+    face: '#e7dcc6',
+    faceLight: '#f3ead6',
+    modifierTint: 'rgba(116, 90, 51, 0.14)',
+  },
+  platinum: {
+    ink: '#3d3e3b',
+    secondaryInk: '#555852',
+    wellTint: 'rgba(122, 122, 114, 0.63)',
+    contact: 'rgba(54, 55, 49, 0.48)',
+    skirtLight: '#e1e1d8',
+    skirtMid: '#b9b9ae',
+    skirtShade: '#97998d',
+    skirtFoot: '#7c7e75',
+    faceShade: '#c0c2b7',
+    face: '#d9dad1',
+    faceLight: '#e9eae1',
+    modifierTint: 'rgba(70, 75, 60, 0.13)',
+  },
+  powerbook: {
+    ink: '#ece5d9',
+    secondaryInk: '#d0cabd',
+    wellTint: 'rgba(57, 54, 57, 0.48)',
+    contact: 'rgba(15, 14, 18, 0.75)',
+    skirtLight: '#5c5b60',
+    skirtMid: '#39383d',
+    skirtShade: '#2e2c31',
+    skirtFoot: '#232226',
+    faceShade: '#414045',
+    face: '#504e53',
+    faceLight: '#626065',
+    modifierTint: 'transparent',
+  },
+  thinkpad: {
+    ink: '#e4e6df',
+    secondaryInk: '#adc3cd',
+    wellTint: 'rgba(33, 35, 37, 0.47)',
+    contact: 'rgba(5, 8, 10, 0.85)',
+    skirtLight: '#45484b',
+    skirtMid: '#292b2e',
+    skirtShade: '#1b1e20',
+    skirtFoot: '#161819',
+    faceShade: '#292b2c',
+    face: '#333638',
+    faceLight: '#45484a',
+    modifierTint: 'transparent',
+  },
+  macbook: {
+    ink: '#edf0ef',
+    secondaryInk: '#c6cdce',
+    wellTint: '#a1a3a3',
+    contact: 'rgba(36, 39, 40, 0.68)',
+    skirtLight: '#4a4c4d',
+    skirtMid: '#313335',
+    skirtShade: '#242628',
+    skirtFoot: '#1c1e20',
+    faceShade: '#303234',
+    face: '#343638',
+    faceLight: '#414345',
+    modifierTint: 'transparent',
+  },
+} as const;
 
 /** 间距阶梯,基数 4。 */
 export const spacing = {
@@ -642,6 +757,8 @@ export const typeScale = {
   bodyLarge: 17,
   subtitle: 18,
   title: 20,
+  /** 2026-10-28 approved invitation V9 identity, paired with listTitle (28). */
+  inviteTitle: 22,
   headline: 24,
   largeTitle: 30,
   hero: 40,
@@ -692,6 +809,7 @@ export const fontWeight = {
  * 非标准配对(如 subtitle 字号 + listTitle 行高)手动组合两个 token,但禁止字面量。
  */
 export const textStyles = {
+  unreadDivider: { fontSize: typeScale.micro, lineHeight: lineHeight.micro, fontWeight: fontWeight.medium, letterSpacing: typeScale.micro * 0.08 },
   micro: { fontSize: typeScale.micro, lineHeight: lineHeight.micro },
   caption: { fontSize: typeScale.caption, lineHeight: lineHeight.caption },
   footnote: { fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
@@ -731,10 +849,12 @@ export const iconSize = {
 
 /**
  * lucide 图标 strokeWidth 阶梯。收敛前仓库里散落 14 种碎片值(1.5~3),
- * 视觉上无法区分意图;收敛为四档:thin(大圆形图标的轻盈描边)、
+ * 通用控件收敛为四档;project 保留项目身份图标的独立描边。thin(大圆形图标的轻盈描边)、
  * regular(默认,lucide 出厂值)、medium(选中态 Check 等强调)、bold(微图标增粗保清晰)。
  */
 export const iconStroke = {
+  /** Project glyphs retain the approved light stroke at small title sizes. */
+  project: 1.6,
   thin: 1.75,
   regular: 2,
   medium: 2.2,
@@ -817,6 +937,8 @@ export const motionDuration = {
   exit: 150,
   /** 功能性 loading spinner 完整一圈(§14.4 窄例外) */
   spinnerCycle: 1000,
+  /** Desktop 流式正文逐词淡入时长(§14.4 窄例外;双端 token 同构,移动端不消费) */
+  streamWord: 500,
   /** Desktop 侧栏溢出标题每个可视宽度的阅读时长(双端 token 同构,移动端不消费) */
   sidebarTitleMarqueePerViewport: 2400,
 } as const;

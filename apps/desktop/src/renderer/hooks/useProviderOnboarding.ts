@@ -86,6 +86,11 @@ interface UseProviderOnboardingOptions {
   dismissible?: boolean;
   /** 卡片需要预设目录时传 true(banner 不需要,省一次 IPC)。 */
   loadPresets?: boolean;
+  /**
+   * 已有可用来源时也装配各行(开始引导的模型页:已开通官方服务的人仍会被推荐接上自己的套餐)。
+   * 不改变 `visible` 的口径。
+   */
+  always?: boolean;
 }
 
 export function useProviderOnboarding(
@@ -118,7 +123,7 @@ export function useProviderOnboarding(
 
   // 预设与本机 CLI 检测懒加载:仅在引导实际可见且调用方需要时拉取;失败静默空数组
   // (折叠区/检测行是增强,不是依赖)。
-  const wantPresets = Boolean(options?.loadPresets) && visible;
+  const wantPresets = Boolean(options?.loadPresets) && (visible || (Boolean(options?.always) && !options?.remote && !loading));
   const [rawPresets, setRawPresets] = useState<ProviderPreset[] | null>(null);
   useEffect(() => {
     if (!wantPresets || rawPresets != null) return;

@@ -1,18 +1,19 @@
 /**
  * + 面板的「协同模式」二级视图(会话页与新建任务页共用)。
  *
- *  - OrcaWorkerFormView:开启协同 / 创建新 Worker 的表单(角色、Agent、模型、权限、初始任务)。
- *    提交按钮由页面放在 ContextSheet 的 footer 槽。
+ *  - OrcaWorkerFormView:开启协同 / 创建新 Worker 的表单。一张卡片里从上到下是角色、交给它的
+ *    第一件事，以及与聊天输入框同序的一行工具(左边只有图标的权限，右边模型)；运行设备等不常改的
+ *    收在「更多设置」里。提交按钮由页面放在 ContextSheet 的 footer 槽。
  *  - OrcaTeamPanelView:Lead 任务的 Worker 列表 + 创建 / 结束协同。
  *
- * 两者只用 ContextSheet 的跨平台原语(Group / Row / Note / ChoiceRow / TextField)拼装,
- * iOS 原生面板与 Android 面板共用本文件。团队真身在被控端,这里只渲染镜像并回调页面。
+ * 两者只用 ContextSheet 的跨平台原语拼装，iOS 原生面板与 Android 面板共用本文件。团队真身和
+ * 角色清单都在被控端，这里只渲染镜像并回调页面。
  */
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Platform, View } from 'react-native';
-import { CircleStop, UserPlus } from 'lucide-react-native';
+import { ChevronDown, ChevronUp, CircleStop, UserPlus } from 'lucide-react-native';
 import {
-  ORCA_PREDEFINED_WORKER_ROLES,
   ORCA_WORKER_ROLE_MAX_LENGTH,
   orcaWorkerSlotState,
   type OrcaCollaborationSettings,
@@ -22,6 +23,7 @@ import {
 } from '@cindy/maker-shared/orca-team';
 import { Text } from '@/components/AppText';
 import {
+  ContextSheetChipRow,
   ContextSheetChoiceRow,
   ContextSheetGroup,
   ContextSheetError,
@@ -37,36 +39,39 @@ import {
   isAbsoluteOrcaWorkerDir,
   type OrcaWorkerFormValue,
 } from '@/session/orcaTeam';
+import { orcaRoleDisplayName } from '@/session/orcaWorkerRoles';
+import { permissionAccentColor, permissionPresentation } from '@/session/permissionPresentation';
+import {
+  PLUGIN_ENGINE_DEFAULT_MODEL,
+  pluginEngineModelName,
+  usePluginEngineFor,
+} from '@/session/pluginEngines';
 import { iconSize, iconStroke, lineHeight, radius, typeScale, useTheme } from '@/theme';
 import type { OrcaExecutionDeviceView } from '@cindy/device-link';
-
-const CUSTOM_ROLE = '__custom__';
 
 /** iOS 的下拉行(Picker menu)自带行名、分段控件选项自明;Android 的药丸 / 选择行没有行名,要靠分组标题。 */
 const ROW_NAMES_ITSELF = Platform.OS === 'ios';
 
-export function isPredefinedOrcaRole(role: string): boolean {
-  return (ORCA_PREDEFINED_WORKER_ROLES as readonly string[]).includes(role);
-}
-
-/** 自定义角色名与预设重名时的错误文案 key;其余情况 null。 */
-export function orcaWorkerFormErrorKey(form: OrcaWorkerFormValue, customRoleMode: boolean): string | null {
+/** 角色名 1–32 个字符；选了其他运行设备并指定目录时，目录必须是绝对路径。 */
+export function canSubmitOrcaWorkerForm(form: OrcaWorkerFormValue): boolean {
   const role = form.role.trim();
-  return customRoleMode && role && isPredefinedOrcaRole(role.toLowerCase())
-    ? 'session.collab.customRolePredefinedError'
-    : null;
-}
-
-export function canSubmitOrcaWorkerForm(form: OrcaWorkerFormValue, customRoleMode: boolean): boolean {
-  return form.role.trim().length > 0 && orcaWorkerFormErrorKey(form, customRoleMode) === null
+  return role.length > 0 && role.length <= ORCA_WORKER_ROLE_MAX_LENGTH
     && (!form.executionDeviceId || form.remoteDirMode !== 'path' || isAbsoluteOrcaWorkerDir(form.remoteDir ?? ''));
 }
 
 export interface OrcaWorkerFormViewProps {
+  deviceId?: string | null;
   form: OrcaWorkerFormValue;
-  /** 自定义角色模式(页面持有,以便选中「自定义」后清空的角色名仍停留在自定义输入)。 */
+  /** 正在添加角色：加号选中，下面出现角色名输入。 */
   customRoleMode: boolean;
-  onCustomRoleModeChange(next: boolean): void;
+  /** 这一排列出的角色(任务所在电脑上的清单，最近使用在前)。 */
+  roles: readonly string[];
+  /** 电脑上的清单已读到：可以添加角色、长按移除。读不到时只列内置角色。 */
+  rolesEditable: boolean;
+  /** 点一个角色；null = 加号。任务、权限和模型的带出由页面处理。 */
+  onSelectRole(role: string | null): void;
+  /** 长按一个角色：页面确认后移除。 */
+  onRemoveRole(role: string): void;
   onChange(patch: Partial<OrcaWorkerFormValue>): void;
   /** 切 Agent 交给页面:带出该 Agent 上次记住的模型 / 推理强度 / Fast。 */
   onAgentChange(agent: OrcaWorkerAgentKind): void;
@@ -76,6 +81,9 @@ export interface OrcaWorkerFormViewProps {
   onPickModel(): void;
   onPickDirectory(): void;
   busy: boolean;
+  /** 卡片下方的一句说明(开启协同时介绍 Lead 与 Worker 的分工)。 */
+  description?: string | null;
+  /** 入口暂不可用等提示；有则替代说明。 */
   notice?: string | null;
   error?: string | null;
   executionDevices?: readonly OrcaExecutionDeviceView[];
@@ -84,9 +92,13 @@ export interface OrcaWorkerFormViewProps {
 }
 
 export function OrcaWorkerFormView({
+  deviceId,
   form,
   customRoleMode,
-  onCustomRoleModeChange,
+  roles,
+  rolesEditable,
+  onSelectRole,
+  onRemoveRole,
   onChange,
   onAgentChange,
   onPermissionChange,
@@ -94,6 +106,7 @@ export function OrcaWorkerFormView({
   onPickModel,
   onPickDirectory,
   busy,
+  description,
   notice,
   error,
   executionDevices = [],
@@ -101,154 +114,65 @@ export function OrcaWorkerFormView({
   executionDevicesError,
 }: OrcaWorkerFormViewProps) {
   const { t } = useTranslation();
-  const roleOptions = [
-    ...ORCA_PREDEFINED_WORKER_ROLES.map((role) => ({ id: role as string, label: role as string })),
-    { id: CUSTOM_ROLE, label: t('session.collab.customRole') },
-  ];
-  const validation = orcaWorkerFormErrorKey(form, customRoleMode);
-  const modelLabel = form.model?.id ?? t('session.collab.modelDefault');
+  const { colors } = useTheme();
+  const [moreOpen, setMoreOpen] = useState(false);
+  const selectedPluginEngine = usePluginEngineFor(
+    form.agent === 'acp' ? deviceId : null,
+    form.agent === 'acp' ? form.model?.providerId : null,
+  );
+  const modelLabel = form.modelGroup?.name
+    ?? (form.agent === 'acp'
+      ? [
+          selectedPluginEngine?.name ?? t('models.pluginEngines.genericName'),
+          form.model?.id && form.model.id !== PLUGIN_ENGINE_DEFAULT_MODEL
+            ? (pluginEngineModelName(selectedPluginEngine, form.model.id) ?? form.model.id)
+            : t('models.pluginEngines.defaultModel'),
+        ].filter(Boolean).join(' · ')
+      : form.model?.id)
+    ?? `${orcaAgentLabel(form.agent)} · ${t('session.collab.modelDefault')}`;
+  const permission = permissionPresentation(form.permissionMode);
   const remoteDirInvalid = form.remoteDirMode === 'path' && !!form.remoteDir && !isAbsoluteOrcaWorkerDir(form.remoteDir);
+  const executionDeviceMissing = !!form.executionDeviceId
+    && !executionDevices.some((device) => device.deviceId === form.executionDeviceId && device.supported);
+  // 收起的设置里有需要处理的问题时展开，不让提交按钮无故点不了。
+  const showMore = moreOpen || remoteDirInvalid || executionDeviceMissing || !!executionDevicesError;
+  const executionDeviceName = form.executionDeviceId
+    ? executionDevices.find((device) => device.deviceId === form.executionDeviceId)?.name ?? t('session.collab.deviceUnavailable')
+    : undefined;
+  const MoreIcon = showMore ? ChevronUp : ChevronDown;
   // 设置类分组:卡片里只放「名称 + 取值」,说明与校验提示写在卡片下方(一组一段)。
   const title = (label: string) => (ROW_NAMES_ITSELF ? '' : label);
   return (
     <>
-      <ContextSheetGroup
-        footer={validation ? t(validation) : t('session.collab.roleHint')}
-        footerTone={validation ? 'error' : 'secondary'}
-        label={title(t('session.collab.roleLabel'))}
-      >
-        <ContextSheetChoiceRow
+      <ContextSheetGroup footer={notice ?? description} label={t('session.collab.taskLabel')}>
+        <ContextSheetChipRow
+          add={rolesEditable ? {
+            label: t('session.collab.addRole'),
+            onPress: () => onSelectRole(null),
+            selected: customRoleMode,
+          } : undefined}
+          chips={roles.map((role) => ({ id: role, label: orcaRoleDisplayName(role) }))}
           disabled={busy}
           label={t('session.collab.roleLabel')}
-          onChange={(next) => {
-            if (next === CUSTOM_ROLE) {
-              onCustomRoleModeChange(true);
-              onChange({ role: '' });
-              return;
-            }
-            onCustomRoleModeChange(false);
-            onChange({ role: next });
-          }}
-          options={roleOptions}
+          longPressHint={t('session.collab.removeRoleHint')}
+          onChange={onSelectRole}
+          onLongPress={rolesEditable ? onRemoveRole : undefined}
           testID="collab.roleOptions"
-          value={customRoleMode ? CUSTOM_ROLE : form.role}
+          value={customRoleMode ? null : form.role}
         />
         {customRoleMode ? (
           <ContextSheetTextField
-            accessibilityLabel={t('session.collab.customRole')}
+            accessibilityLabel={t('session.collab.roleLabel')}
+            // 点加号后直接输入角色名。
+            autoFocus
             disabled={busy}
             maxLength={ORCA_WORKER_ROLE_MAX_LENGTH}
             onChange={(role) => onChange({ role })}
-            placeholder={t('session.collab.customRolePlaceholder')}
+            placeholder={t('session.collab.roleLabel')}
             testID="collab.customRoleInput"
             value={form.role}
           />
         ) : null}
-      </ContextSheetGroup>
-      {/* 工作电脑与模型电脑独立选择。 */}
-      {(executionDevices.length > 0 || form.executionDeviceId) ? (
-        <ContextSheetGroup
-          footer={t('session.collab.executionDeviceHint')}
-          label={title(t('session.collab.executionDeviceLabel'))}
-        >
-          <ContextSheetSelectRow
-            disabled={busy || executionDevicesLoading}
-            label={t('session.collab.executionDeviceLabel')}
-            options={[
-              { id: '__lead__', label: t('session.collab.leadComputer') },
-              ...(form.executionDeviceId && !executionDevices.some((device) => device.deviceId === form.executionDeviceId)
-                ? [{ id: form.executionDeviceId, label: t('session.collab.deviceUnavailable'), disabled: true }]
-                : []),
-              ...executionDevices.map((device) => ({
-                id: device.deviceId,
-                label: device.name,
-                detail: t(device.supported ? 'session.collab.deviceOnline' : 'session.collab.deviceNeedsUpdate'),
-                disabled: !device.supported,
-              })),
-            ]}
-            value={form.executionDeviceId ?? '__lead__'}
-            onChange={(id) => onChange({ executionDeviceId: id === '__lead__' ? undefined : id })}
-            testID="collab.executionDevice"
-          />
-        </ContextSheetGroup>
-      ) : null}
-      {form.executionDeviceId ? (
-        <ContextSheetGroup
-          footer={t(form.remoteDirMode === 'path'
-            ? remoteDirInvalid ? 'session.collab.remoteDirInvalid' : 'session.collab.remoteDirPathHint'
-            : 'session.collab.remoteDirChatHint')}
-          footerTone={remoteDirInvalid ? 'error' : 'secondary'}
-          label={title(t('session.collab.remoteDirLabel'))}
-        >
-          <ContextSheetChoiceRow
-            disabled={busy}
-            label={t('session.collab.remoteDirLabel')}
-            options={[
-              { id: 'dialogue', label: t('session.collab.remoteDirChat') },
-              { id: 'path', label: t('session.collab.remoteDirPath') },
-            ]}
-            value={form.remoteDirMode ?? 'dialogue'}
-            onChange={(remoteDirMode) => onChange({ remoteDirMode })}
-            testID="collab.remoteDirMode"
-          />
-          {form.remoteDirMode === 'path' ? (
-            <ContextSheetRow
-              label={t('session.new.selectWorkspace')}
-              value={form.remoteDir || t('session.new.chooseOtherFolder')}
-              dismissBeforePress
-              disabled={busy}
-              onPress={onPickDirectory}
-              trailing="chevron"
-              testID="collab.remoteDirPicker"
-            />
-          ) : null}
-        </ContextSheetGroup>
-      ) : null}
-      {executionDevicesError ? <ContextSheetGroup label={t('session.collab.executionDeviceLabel')}>
-        <ContextSheetError text={executionDevicesError} />
-      </ContextSheetGroup> : null}
-      <ContextSheetGroup
-        footer={form.model ? null : t('session.collab.modelDefaultHint')}
-        label={title(t('session.collab.agentLabel'))}
-      >
-        <ContextSheetChoiceRow
-          disabled={busy || agents.length < 2}
-          label={t('session.collab.agentLabel')}
-          onChange={onAgentChange}
-          options={agents.map((agent) => ({ id: agent, label: orcaAgentLabel(agent) }))}
-          testID="collab.agentOptions"
-          value={form.agent}
-        />
-        <ContextSheetRow
-          // iOS 原生 sheet 不能叠开:先收起 + 面板再打开模型选择器。
-          dismissBeforePress
-          disabled={busy}
-          label={t('session.collab.modelLabel')}
-          onPress={onPickModel}
-          testID="collab.modelRow"
-          trailing="chevron"
-          value={modelLabel}
-        />
-      </ContextSheetGroup>
-      <ContextSheetGroup
-        footer={t(form.permissionMode === 'auto'
-          ? 'session.collab.permissionAutoHint'
-          : 'session.collab.permissionFullHint')}
-        label={title(t('session.collab.permissionLabel'))}
-      >
-        <ContextSheetChoiceRow
-          disabled={busy}
-          label={t('session.collab.permissionLabel')}
-          onChange={onPermissionChange}
-          options={[
-            { id: 'auto' as const, label: t('session.collab.permissionAuto') },
-            { id: 'bypassPermissions' as const, label: t('session.collab.permissionFull') },
-          ]}
-          testID="collab.permissionOptions"
-          value={form.permissionMode}
-        />
-      </ContextSheetGroup>
-      <ContextSheetGroup footer={notice} label={t('session.collab.initialTaskLabel')}>
         <ContextSheetTextField
           accessibilityLabel={t('session.collab.initialTaskLabel')}
           disabled={busy}
@@ -256,9 +180,126 @@ export function OrcaWorkerFormView({
           onChange={(initialTask) => onChange({ initialTask })}
           placeholder={t('session.collab.initialTaskPlaceholder')}
           testID="collab.initialTaskInput"
+          // 与聊天输入框同序：左边是只有图标的权限，右边是模型。
+          toolbar={{
+            action: {
+              accessibilityLabel: t('session.new.modelAccessibility', { model: modelLabel }),
+              // iOS 原生 sheet 不能叠开:先收起 + 面板再打开模型选择器。
+              dismissBeforePress: true,
+              label: modelLabel,
+              onPress: onPickModel,
+              testID: 'collab.modelRow',
+            },
+            menu: {
+              accessibilityLabel: t('models.picker.permissionModeAccessibility', { mode: permission.label }),
+              icon: (
+                <permission.Icon
+                  color={permissionAccentColor(permission.accent, colors)}
+                  size={iconSize.sm}
+                  strokeWidth={iconStroke.regular}
+                />
+              ),
+              onChange: (mode) => onPermissionChange(mode as OrcaWorkerPermissionMode),
+              options: [
+                { id: 'auto', label: t('session.collab.permissionAuto') },
+                { id: 'bypassPermissions', label: t('session.collab.permissionFull') },
+              ],
+              testID: 'collab.permissionOptions',
+              value: form.permissionMode,
+            },
+          }}
           value={form.initialTask}
         />
       </ContextSheetGroup>
+      <ContextSheetGroup label="">
+        <ContextSheetRow
+          label={t('session.collab.moreSettings')}
+          onPress={() => setMoreOpen(!showMore)}
+          testID="collab.moreSettings"
+          trailing={<MoreIcon color={colors.textTertiary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
+          trailingSize={iconSize.lg}
+          value={showMore ? undefined : executionDeviceName}
+        />
+      </ContextSheetGroup>
+      {showMore ? (
+        <>
+          <ContextSheetGroup
+            footer={form.modelGroup || form.model ? null : t('session.collab.modelDefaultHint')}
+            label={title(t('session.collab.agentLabel'))}
+          >
+            <ContextSheetChoiceRow
+              disabled={busy || agents.length < 2}
+              label={t('session.collab.agentLabel')}
+              onChange={onAgentChange}
+              options={agents.map((agent) => ({ id: agent, label: orcaAgentLabel(agent) }))}
+              testID="collab.agentOptions"
+              value={form.agent === 'acp' ? ('' as OrcaWorkerAgentKind) : form.agent}
+            />
+          </ContextSheetGroup>
+          {/* 工作电脑与模型电脑独立选择。 */}
+          {(executionDevices.length > 0 || form.executionDeviceId) ? (
+            <ContextSheetGroup
+              footer={t('session.collab.executionDeviceHint')}
+              label={title(t('session.collab.executionDeviceLabel'))}
+            >
+              <ContextSheetSelectRow
+                disabled={busy || executionDevicesLoading}
+                label={t('session.collab.executionDeviceLabel')}
+                options={[
+                  { id: '__lead__', label: t('session.collab.leadComputer') },
+                  ...(form.executionDeviceId && !executionDevices.some((device) => device.deviceId === form.executionDeviceId)
+                    ? [{ id: form.executionDeviceId, label: t('session.collab.deviceUnavailable'), disabled: true }]
+                    : []),
+                  ...executionDevices.map((device) => ({
+                    id: device.deviceId,
+                    label: device.name,
+                    detail: t(device.supported ? 'session.collab.deviceOnline' : 'session.collab.deviceNeedsUpdate'),
+                    disabled: !device.supported,
+                  })),
+                ]}
+                value={form.executionDeviceId ?? '__lead__'}
+                onChange={(id) => onChange({ executionDeviceId: id === '__lead__' ? undefined : id })}
+                testID="collab.executionDevice"
+              />
+            </ContextSheetGroup>
+          ) : null}
+          {form.executionDeviceId ? (
+            <ContextSheetGroup
+              footer={t(form.remoteDirMode === 'path'
+                ? remoteDirInvalid ? 'session.collab.remoteDirInvalid' : 'session.collab.remoteDirPathHint'
+                : 'session.collab.remoteDirChatHint')}
+              footerTone={remoteDirInvalid ? 'error' : 'secondary'}
+              label={title(t('session.collab.remoteDirLabel'))}
+            >
+              <ContextSheetChoiceRow
+                disabled={busy}
+                label={t('session.collab.remoteDirLabel')}
+                options={[
+                  { id: 'dialogue', label: t('session.collab.remoteDirChat') },
+                  { id: 'path', label: t('session.collab.remoteDirPath') },
+                ]}
+                value={form.remoteDirMode ?? 'dialogue'}
+                onChange={(remoteDirMode) => onChange({ remoteDirMode })}
+                testID="collab.remoteDirMode"
+              />
+              {form.remoteDirMode === 'path' ? (
+                <ContextSheetRow
+                  label={t('session.new.selectWorkspace')}
+                  value={form.remoteDir || t('session.new.chooseOtherFolder')}
+                  dismissBeforePress
+                  disabled={busy}
+                  onPress={onPickDirectory}
+                  trailing="chevron"
+                  testID="collab.remoteDirPicker"
+                />
+              ) : null}
+            </ContextSheetGroup>
+          ) : null}
+          {executionDevicesError ? <ContextSheetGroup label={t('session.collab.executionDeviceLabel')}>
+            <ContextSheetError text={executionDevicesError} />
+          </ContextSheetGroup> : null}
+        </>
+      ) : null}
       {error ? (
         <ContextSheetGroup label="">
           <ContextSheetError text={error} testID="collab.formError" />
@@ -269,6 +310,7 @@ export function OrcaWorkerFormView({
 }
 
 export interface OrcaTeamPanelViewProps {
+  deviceId?: string | null;
   workers: readonly OrcaTeamWorker[];
   /** null = 还没读到被控端设置:不在手机上判名额,由被控端裁决。 */
   settings: OrcaCollaborationSettings | null;
@@ -299,7 +341,63 @@ function WorkerStatusDot({ status }: { status: OrcaTeamWorker['status'] }) {
   );
 }
 
+function OrcaTeamWorkerRow({
+  deviceId,
+  worker,
+  busy,
+  onWorkerPress,
+  onWorkerLongPress,
+}: {
+  deviceId?: string | null;
+  worker: OrcaTeamWorker;
+  busy: boolean;
+  onWorkerPress(worker: OrcaTeamWorker): void;
+  onWorkerLongPress(worker: OrcaTeamWorker): void;
+}) {
+  const { t } = useTranslation();
+  const { colors } = useTheme();
+  const pluginEngine = usePluginEngineFor(
+    worker.pluginEngineProviderId ? deviceId : null,
+    worker.pluginEngineProviderId ?? null,
+  );
+  const pluginModel = worker.pluginEngineProviderId
+    ? (worker.model === PLUGIN_ENGINE_DEFAULT_MODEL
+      ? t('models.pluginEngines.defaultModel')
+      : (pluginEngineModelName(pluginEngine, worker.model) ?? worker.model))
+    : worker.model;
+  return (
+    <ContextSheetRow
+      detail={(worker.executionDevice
+        ? [
+            worker.executionDevice.deviceName ?? t('session.collab.otherComputer'),
+            ...(worker.executionDevice.reachable === false
+              ? [t('session.collab.deviceUnreachable')]
+              : [orcaAgentLabel(worker.agentKind), worker.model]),
+          ]
+        : [
+            worker.pluginEngineProviderId
+              ? (pluginEngine?.name ?? t('models.pluginEngines.genericName'))
+              : orcaAgentLabel(worker.agentKind),
+            pluginModel,
+          ]
+      ).filter(Boolean).join(' · ')}
+      disabled={busy}
+      icon={<WorkerStatusDot status={worker.status} />}
+      label={orcaWorkerDisplayName(worker)}
+      onLongPress={() => onWorkerLongPress(worker)}
+      onPress={() => onWorkerPress(worker)}
+      testID={`collab.worker.${worker.workerId}`}
+      trailing={worker.executionDevice?.reachable === false ? undefined : (
+        <Text style={{ color: worker.status === 'error' ? colors.statusError : colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption }}>
+          {orcaWorkerStatusLabel(worker.status)}
+        </Text>
+      )}
+    />
+  );
+}
+
 export function OrcaTeamPanelView({
+  deviceId,
   workers,
   settings,
   loading,
@@ -323,28 +421,13 @@ export function OrcaTeamPanelView({
     <>
       <ContextSheetGroup label={t('session.collab.workerCountSummary', { count: workers.length, running })}>
         {workers.map((worker) => (
-          <ContextSheetRow
-            detail={(worker.executionDevice
-              ? [
-                  worker.executionDevice.deviceName ?? t('session.collab.otherComputer'),
-                  ...(worker.executionDevice.reachable === false
-                    ? [t('session.collab.deviceUnreachable')]
-                    : [orcaAgentLabel(worker.agentKind), worker.model]),
-                ]
-              : [orcaAgentLabel(worker.agentKind), worker.model]
-            ).filter(Boolean).join(' · ')}
-            disabled={busy}
-            icon={<WorkerStatusDot status={worker.status} />}
+          <OrcaTeamWorkerRow
+            busy={busy}
+            deviceId={deviceId}
             key={worker.workerId}
-            label={orcaWorkerDisplayName(worker)}
-            onLongPress={() => onWorkerLongPress(worker)}
-            onPress={() => onWorkerPress(worker)}
-            testID={`collab.worker.${worker.workerId}`}
-            trailing={worker.executionDevice?.reachable === false ? undefined : (
-              <Text style={{ color: worker.status === 'error' ? colors.statusError : colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption }}>
-                {orcaWorkerStatusLabel(worker.status)}
-              </Text>
-            )}
+            onWorkerLongPress={onWorkerLongPress}
+            onWorkerPress={onWorkerPress}
+            worker={worker}
           />
         ))}
         {workers.length === 0 ? (

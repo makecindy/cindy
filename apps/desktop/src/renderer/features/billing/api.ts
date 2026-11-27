@@ -1,11 +1,19 @@
 import type {
   BillingCatalog,
   BillingCurrentSubscription,
+  BillingGiftCardPurchasePolicy,
+  BillingGiftCardPreviewResult,
+  BillingGiftCardRedeemResult,
   BillingOrderList,
+  BillingPaymentHistory,
   BillingPaymentOrder,
   BillingPlanChange,
+  BillingPurchasedGiftCardCode,
+  BillingSendGiftCardEmailResult,
+  BillingPurchasedGiftCardList,
   BillingSubscriptionPortalResult,
   BillingSubscription,
+  CreateBillingGiftCardOrderRequest,
   CreateBillingSubscriptionRequest,
   CreateBillingTopupRequest,
 } from '../../../shared/billing';
@@ -23,6 +31,9 @@ export const billingApi = {
   },
   listOrders(limit = 20): Promise<BillingOrderList> {
     return window.electronAPI.billing.listOrders({ limit });
+  },
+  listPaymentHistory(limit = 10, cursor?: string): Promise<BillingPaymentHistory> {
+    return window.electronAPI.billing.listPaymentHistory({ limit, ...(cursor ? { cursor } : {}) });
   },
   getOrder(orderId: string): Promise<BillingPaymentOrder> {
     return window.electronAPI.billing.getOrder({ orderId });
@@ -77,5 +88,29 @@ export const billingApi = {
   },
   openPaymentRedirect(url: string): Promise<{ success: boolean }> {
     return window.electronAPI.billing.openPaymentRedirect({ url });
+  },
+  previewGiftCard(code: string): Promise<BillingGiftCardPreviewResult> {
+    return window.electronAPI.billing.previewGiftCard({ code });
+  },
+  redeemGiftCard(code: string): Promise<BillingGiftCardRedeemResult> {
+    return window.electronAPI.billing.redeemGiftCard({ code });
+  },
+  getGiftCardPurchasePolicy(): Promise<BillingGiftCardPurchasePolicy> {
+    return window.electronAPI.billing.getGiftCardPurchasePolicy();
+  },
+  createGiftCardOrder(
+    request: CreateBillingGiftCardOrderRequest,
+    idempotencyKey: string,
+  ): Promise<BillingPaymentOrder> {
+    return window.electronAPI.billing.createGiftCardOrder({ request, idempotencyKey });
+  },
+  listPurchasedGiftCards(limit = 20, cursor?: string): Promise<BillingPurchasedGiftCardList> {
+    return window.electronAPI.billing.listPurchasedGiftCards({ limit, ...(cursor ? { cursor } : {}) });
+  },
+  revealPurchasedGiftCard(cardId: string, faceCode: string): Promise<BillingPurchasedGiftCardCode> {
+    return window.electronAPI.billing.revealPurchasedGiftCard({ cardId, faceCode });
+  },
+  sendPurchasedGiftCardEmail(cardId: string, email: string): Promise<BillingSendGiftCardEmailResult> {
+    return window.electronAPI.billing.sendPurchasedGiftCardEmail({ cardId, email });
   },
 };

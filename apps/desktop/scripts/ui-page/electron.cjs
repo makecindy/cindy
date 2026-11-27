@@ -21,6 +21,7 @@ const origin = 'http://cindy-ui.test';
 const types = {
   '.html': 'text/html',
   '.js': 'text/javascript',
+  '.mjs': 'text/javascript',
   '.css': 'text/css',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
@@ -36,10 +37,42 @@ const types = {
 };
 // Background checks must not take focus or add a Dock icon to the user's desktop.
 if (!preview) app.dock?.hide();
+// The runner closes this process and removes its scratch folder. When the runner is killed
+// outright (SIGKILL, a stopped task, a tool timeout) none of that runs and a hidden window
+// would stay forever, so quit as soon as the runner is gone. POSIX reparents an orphan, which
+// also covers a reused owner PID; Windows keeps the old parent PID, so probe the owner there.
+const ownerPid = Number(process.env.CINDY_UI_OWNER_PID);
+if (Number.isSafeInteger(ownerPid) && ownerPid > 0) {
+  const parentPid = process.ppid;
+  const ownerGone = () => {
+    if (process.platform !== 'win32' && process.ppid !== parentPid) return true;
+    try {
+      process.kill(ownerPid, 0);
+      return false;
+    } catch (error) {
+      return error.code === 'ESRCH';
+    }
+  };
+  setInterval(() => {
+    if (ownerGone()) app.exit(0);
+  }, 1000);
+}
 app.whenReady().then(() => {
   const ownSession = session.fromPartition('ui-check');
-  ownSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
-  ownSession.setPermissionCheckHandler(() => false);
+  const allowsFullscreen = (wc, permission, requestingUrl) => {
+    if (permission !== 'fullscreen' || !wc) return false;
+    try {
+      return new URL(requestingUrl).origin === origin && new URL(wc.getURL()).origin === origin;
+    } catch {
+      return false;
+    }
+  };
+  ownSession.setPermissionRequestHandler((wc, permission, callback, details) =>
+    callback(allowsFullscreen(wc, permission, details.requestingUrl)),
+  );
+  ownSession.setPermissionCheckHandler((wc, permission, requestingOrigin) =>
+    Boolean(allowsFullscreen(wc, permission, requestingOrigin)),
+  );
   ownSession.on('will-download', (event) => event.preventDefault());
   ownSession.webRequest.onBeforeRequest((details, callback) => {
     const url = new URL(details.url);
@@ -70,37 +103,50 @@ app.whenReady().then(() => {
       return new Response(null, { status: 404 });
     }
   });
-  const win = new BrowserWindow({
+  const createWindow = (size) => {
+    const win = new BrowserWindow({
+      width: size.width,
+      height: size.height,
+      useContentSize: true,
+      // Native decorations round at forced 2x DPI on Windows (400 CSS px became
+      // 401). Background captures need only the content, not a platform frame.
+      frame: preview,
+      show: preview,
+      title: 'Cindy UI Check',
+      webPreferences: {
+        // A hidden native Windows window can retain its old renderer size and
+        // stop producing frames. Offscreen rendering keeps checks hidden while
+        // allowing exact resizing and screenshots without showing a native window.
+        offscreen: !preview && process.platform === 'win32',
+        // Exercise the real DOM fullscreen/top layer without asking an invisible
+        // offscreen native window to enter OS fullscreen.
+        // Native fullscreen transitions remain a full-Desktop acceptance check.
+        disableHtmlFullscreenWindowResize: !preview,
+        session: ownSession,
+        sandbox: true,
+        contextIsolation: true,
+        nodeIntegration: false,
+        nodeIntegrationInSubFrames: false,
+        nodeIntegrationInWorker: false,
+        webSecurity: true,
+        allowRunningInsecureContent: false,
+        experimentalFeatures: false,
+        plugins: false,
+        navigateOnDragDrop: false,
+      },
+    });
+    win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    win.webContents.on('will-navigate', (event, url) => {
+      if (new URL(url).origin !== origin) event.preventDefault();
+    });
+    void win.loadURL('about:blank');
+    return win;
+  };
+  // Main-process test harness only; no renderer IPC or app bootstrap is exposed.
+  app.on('ui-check:create-window', createWindow);
+  createWindow({
     width: Number(process.env.CINDY_UI_WIDTH),
     height: Number(process.env.CINDY_UI_HEIGHT),
-    useContentSize: true,
-    // Native decorations round at forced 2x DPI on Windows (400 CSS px became
-    // 401). Background captures need only the content, not a platform frame.
-    frame: preview,
-    show: preview,
-    title: 'Cindy UI Check',
-    webPreferences: {
-      // A hidden native Windows window can retain its old renderer size and
-      // stop producing frames. Offscreen rendering keeps checks hidden while
-      // allowing exact resizing and screenshots without showing a native window.
-      offscreen: !preview && process.platform === 'win32',
-      session: ownSession,
-      sandbox: true,
-      contextIsolation: true,
-      nodeIntegration: false,
-      nodeIntegrationInSubFrames: false,
-      nodeIntegrationInWorker: false,
-      webSecurity: true,
-      allowRunningInsecureContent: false,
-      experimentalFeatures: false,
-      plugins: false,
-      navigateOnDragDrop: false,
-    },
   });
-  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  win.webContents.on('will-navigate', (event, url) => {
-    if (new URL(url).origin !== origin) event.preventDefault();
-  });
-  void win.loadURL('about:blank');
 });
 app.on('window-all-closed', () => app.quit());

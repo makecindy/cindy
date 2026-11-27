@@ -1,9 +1,15 @@
 /// <reference lib="dom" />
 
+export type FilePeerCloseReason = "failed" | "closed" | "disconnect-timeout";
+
 export interface FilePeerRuntimeBridge {
+  /** A local observer returns a disposer that takes the final reading and closes the peer connection. */
+  observePeerConnection?(pc: RTCPeerConnection): () => void;
   /** Local lifecycle event, never a wire message. */
-  closed?(connection: string): void;
+  closed?(connection: string, reason?: FilePeerCloseReason): void;
   read(connection: string, ticket: string, offset: number): Promise<string>;
+  /** Local read batching only; wire frames and receive credit stay unchanged. */
+  readBatch?(connection: string, ticket: string, offset: number, maxBytes: number): Promise<string>;
   write(sink: string, offset: number, base64: string): Promise<void>;
   /** Local bridge capability only; coalesces already-arrived frames up to 256 KiB. */
   writeBatch?(sink: string, offset: number, base64: string): Promise<void>;
@@ -49,10 +55,12 @@ interface SendProgress {
 }
 interface PeerState {
   pc: RTCPeerConnection;
+  closePeer: () => void;
   dc: RTCDataChannel | null;
   busy: boolean;
   recv?: ReceiveProgress;
   send?: SendProgress;
+  disconnectTimer?: ReturnType<typeof setTimeout>;
 }
 
 /**
@@ -267,24 +275,41 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
       },
     });
   }
-  function close(id: string) {
+  function close(id: string, reason?: FilePeerCloseReason) {
+    const p = peers.get(id);
     const rpc = rpcPeers.get(id);
     rpcPeers.delete(id);
     rpc?.close();
-    const p = peers.get(id);
     peers.delete(id);
+    clearTimeout(p?.disconnectTimer);
     p?.dc?.close();
-    p?.pc.close();
-    if (p) bridge.closed?.(id);
+    if (p) {
+      p.pc.ondatachannel = null;
+      p.closePeer();
+      if (reason) bridge.closed?.(id, reason);
+      else bridge.closed?.(id);
+    }
   }
   function create(id: string, servers: RTCIceServer[]) {
     if (peers.has(id) || peers.size >= 4) throw new Error("FILE_PEER_BUSY");
     const pc = new RTCPeerConnection({ iceServers: servers });
-    const p: PeerState = { pc, dc: null, busy: false };
+    const p: PeerState = { pc, dc: null, busy: false, closePeer: bridge.observePeerConnection?.(pc) ?? (() => pc.close()) };
     peers.set(id, p);
     pc.onconnectionstatechange = () => {
-      if (peers.get(id) === p && ["failed", "closed", "disconnected"].includes(pc.connectionState))
-        close(id);
+      if (peers.get(id) !== p) return;
+      if (pc.connectionState === "disconnected") {
+        // ICE can recover without replacing the established direct path. Bound
+        // this grace by the existing command/stall budget; repeated events do
+        // not extend it, and terminal failure/explicit cancellation still close.
+        p.disconnectTimer ??= setTimeout(() => {
+          if (peers.get(id) === p) close(id, "disconnect-timeout");
+        }, 15000);
+      } else if (pc.connectionState === "connected" || pc.connectionState === "failed" || pc.connectionState === "closed") {
+        clearTimeout(p.disconnectTimer);
+        p.disconnectTimer = undefined;
+        if (pc.connectionState === "failed" || pc.connectionState === "closed")
+          close(id, pc.connectionState);
+      }
     };
     return p;
   }
@@ -312,16 +337,31 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
       throw new Error("FILE_PEER_CLOSED");
     return pc.localDescription.sdp;
   }
-  function decode(text: string) {
-    if (
-      text.length > 22000 ||
-      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
-        text,
+  function isCanonicalBase64(text: string) {
+    const len = text.length;
+    if (len === 0) return true;
+    if (len % 4 !== 0) return false;
+    const pad = text.endsWith("==") ? 2 : text.endsWith("=") ? 1 : 0;
+    const end = len - pad;
+    for (let index = 0; index < end; index += 1) {
+      const code = text.charCodeAt(index);
+      if (
+        (code >= 0x41 && code <= 0x5a) ||
+        (code >= 0x61 && code <= 0x7a) ||
+        (code >= 0x30 && code <= 0x39) ||
+        code === 0x2b ||
+        code === 0x2f
       )
-    )
+        continue;
+      return false;
+    }
+    return true;
+  }
+  function decode(text: string, limit = chunkBytes) {
+    if (text.length > Math.ceil(limit / 3) * 4 || !isCanonicalBase64(text))
       throw new Error("FILE_PEER_BLOCK");
     const s = atob(text);
-    if (s.length > chunkBytes) throw new Error("FILE_PEER_BLOCK");
+    if (s.length > limit) throw new Error("FILE_PEER_BLOCK");
     return Uint8Array.from(s, (c) => c.charCodeAt(0));
   }
   async function offer(id: string, servers: RTCIceServer[], streaming = false) {
@@ -362,13 +402,17 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
           try {
             while (source && source.credit > 0) {
               const current = source;
-              current.credit--;
+              const limit = bridge.readBatch ? Math.min(current.credit, 16) * chunkBytes : chunkBytes;
               const readStartedAt = Date.now();
-              const bytes = decode(
-                await bridge.read(id, current.ticket, current.offset),
-              );
+              const bytes = decode(bridge.readBatch
+                ? await bridge.readBatch(id, current.ticket, current.offset, limit)
+                : await bridge.read(id, current.ticket, current.offset), limit);
               if (peers.get(id) !== p || channel.readyState !== "open") return;
-              channel.send(bytes.buffer);
+              if (bytes.length > limit) throw new Error('FILE_PEER_BLOCK');
+              for (let at = 0; at < Math.max(1, bytes.length); at += chunkBytes) {
+                channel.send(bytes.slice(at, at + chunkBytes).buffer);
+                current.credit--;
+              }
               current.offset += bytes.length;
               if (p.send) {
                 const ms = Date.now() - readStartedAt;
@@ -714,9 +758,7 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
       if (
         typeof body !== "string" ||
         body.length > Math.ceil(RPC_BODY_MAX_BYTES / 3) * 4 ||
-        !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
-          body,
-        )
+        !isCanonicalBase64(body)
       )
         throw new Error("FILE_PEER_RPC_SIZE");
       return rpc.request(
@@ -800,7 +842,20 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
       const now = Date.now();
       const recv = p.recv;
       const send = p.send;
+      // Bounded check outcomes, without candidate IDs, addresses or credentials.
+      const checks = [...entries.values()]
+        .filter((entry) => entry.type === "candidate-pair")
+        .slice(0, 8)
+        .map((entry) => ({
+          ...pick(entry, ["state", "requestsSent", "responsesReceived"]),
+          local: pick(entries.get(entry.localCandidateId), ["candidateType", "protocol"]),
+          remote: pick(entries.get(entry.remoteCandidateId), ["candidateType", "protocol"]),
+          selected: entry === selected,
+        }));
       return JSON.stringify({
+        connectionState: p.pc.connectionState,
+        iceConnectionState: p.pc.iceConnectionState,
+        checks,
         path: !selected
           ? "unknown"
           : local?.candidateType === "relay" ||

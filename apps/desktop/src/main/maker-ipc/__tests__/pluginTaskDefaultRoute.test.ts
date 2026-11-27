@@ -1,0 +1,73 @@
+import { describe, expect, it } from 'vitest';
+
+import { encodeCatalogModelPin } from '../../../shared/catalogModelPin.js';
+import {
+  auxiliaryChainSessionCandidates,
+  pluginTaskRouteAttempts,
+  pluginTaskSelectionIsOpen,
+  resolveLightestPluginTaskFallback,
+} from '../pluginTaskDefaultRoute.js';
+
+describe('auxiliaryChainSessionCandidates', () => {
+  // Rule: a plugin's own persistent task (no originating session) follows the
+  // auxiliary chain instead of the new-task composer selection. tier: unit.
+  it('maps catalog pins and lightweight profiles to session routes in chain order', () => {
+    const refs = [
+      encodeCatalogModelPin({ providerId: 'xd', agentKind: 'codex', model: 'deepseek/deepseek-v4-flash' }),
+      'codex-gpt-5.4-mini',
+      'litellm-gpt-5.4-mini',
+      encodeCatalogModelPin({ providerId: 'xd', agentKind: 'codex', model: 'deepseek/deepseek-v4-flash' }),
+      'not-a-ref',
+      // Retained remote settings cannot become a local plugin task route.
+      'remote-cat:other:cat:xd:codex:remote-only',
+    ];
+    expect(auxiliaryChainSessionCandidates(refs)).toEqual([
+      { agentKind: 'codex', providerId: 'xd', model: 'deepseek/deepseek-v4-flash' },
+      { agentKind: 'codex', providerId: 'openai', model: 'gpt-5.4-mini' },
+      { agentKind: 'codex', providerId: 'xd', model: 'gpt-5.4-mini' },
+    ]);
+  });
+
+  // Rule (2026-10-28): plugin tasks run on Pi when the model is offered there; a
+  // chain head without a light effort level yields to a later candidate that has
+  // one; default efforts are only a last pass. tier: unit.
+  it('tries each candidate on Pi first, every candidate at a light effort before any default', () => {
+    const a = { agentKind: 'codex' as const, providerId: 'xd', model: 'a' };
+    const b = { agentKind: 'pi' as const, providerId: 'xd', model: 'b' };
+    const aPi = { ...a, agentKind: 'pi' as const };
+    expect(pluginTaskRouteAttempts([a, b])).toEqual([
+      { candidate: aPi, effort: 'low' }, { candidate: aPi, effort: 'medium' },
+      { candidate: a, effort: 'low' }, { candidate: a, effort: 'medium' },
+      { candidate: b, effort: 'low' }, { candidate: b, effort: 'medium' },
+      { candidate: aPi, effort: undefined }, { candidate: a, effort: undefined }, { candidate: b, effort: undefined },
+    ]);
+  });
+
+  it('treats any explicit identifying field as a closed selection', () => {
+    expect(pluginTaskSelectionIsOpen({})).toBe(true);
+    expect(pluginTaskSelectionIsOpen({ effort: 'low' })).toBe(true);
+    expect(pluginTaskSelectionIsOpen({ model: 'gpt-6.1-sol' })).toBe(false);
+    expect(pluginTaskSelectionIsOpen({ providerId: 'openai' })).toBe(false);
+  });
+});
+
+describe('resolveLightestPluginTaskFallback', () => {
+  // Rule (docs/product-rules/auxiliary-model-health.md, 2026-11-23): when no
+  // auxiliary candidate can run a plugin task, the new-task model is used at its
+  // lightest accepted effort instead of the user's coding effort (xhigh made
+  // subtitle passages 3x slower). tier: unit.
+  const defaultRoute = { agentKind: 'codex', model: 'gpt-6.2-astra', providerId: 'openai-1', effort: 'xhigh', fastMode: 'ultrafast' as const };
+  it.each([
+    ['accepts low', ['low', 'medium', 'xhigh'], 'low'],
+    ['only medium among the light levels', ['medium', 'xhigh'], 'medium'],
+    ['no light level at all', ['xhigh'], 'xhigh'],
+  ] as const)('the new-task model %s', async (_name, accepted, expected) => {
+    const resolve = async (selection: { effort?: string; fastMode?: boolean | 'ultrafast' }) => {
+      if (selection.effort === undefined) return defaultRoute;
+      if (!(accepted as readonly string[]).includes(selection.effort)) throw new Error('effort not supported');
+      return { ...defaultRoute, effort: selection.effort, fastMode: selection.fastMode ?? false };
+    };
+    const route = await resolveLightestPluginTaskFallback(resolve, {});
+    expect(route).toEqual({ ...defaultRoute, effort: expected });
+  });
+});

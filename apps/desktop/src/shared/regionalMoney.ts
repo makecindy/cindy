@@ -1,3 +1,4 @@
+import { sumUsageAmounts, supplementalConversationAmounts } from '@cindy/maker-shared/usage-cost-details';
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 
 import { CURRENT_CINDY_REGION } from './brandRegion.js';
@@ -36,12 +37,15 @@ export interface ModelPriceQuote {
   outputPerMtok: number;
   cacheReadPerMtok?: number;
   cacheCreatePerMtok?: number;
+  /** 1h TTL cache write price; missing → 1h writes use cacheCreatePerMtok. */
+  cacheCreate1hPerMtok?: number;
   /** Declared fast/priority tariff. Missing fields make that request unpriceable. */
   priority?: {
     inputPerMtok?: number;
     outputPerMtok?: number;
     cacheReadPerMtok?: number;
     cacheCreatePerMtok?: number;
+    cacheCreate1hPerMtok?: number;
     inputTokenPriceBands?: ModelPriceQuote['inputTokenPriceBands'];
   };
   /**
@@ -55,8 +59,9 @@ export interface ModelPriceQuote {
     outputPerMtok?: number;
     cacheReadPerMtok?: number;
     cacheCreatePerMtok?: number;
+    cacheCreate1hPerMtok?: number;
   }>;
-  /** Gateway 声明的折扣比例；计费金额按原价 × (1 - costDiscount)。 */
+  /** 平台或企业 Gateway 声明的折扣比例；计费金额按原价 × (1 - costDiscount)。 */
   costDiscount?: number;
   /**
    * 该报价的币种不是上游声明的，而是本地按兜底链推断出来的。
@@ -159,16 +164,7 @@ export function regionalizeUsd(
 }
 
 /**
- * 把 USD 口径金额投影到目标账本币种。
- *
- * 与 regionalizeMoney 的区别：投影目标是**账号的结算币种**而不是构建区域。本地账本是
- * 单币种的，写入侧只接受该币种（见 main/usage/ledgerCurrency），所以非 Gateway 渠道
- * （订阅价值估算、第三方供应商 SDK 费用，原始口径都是 USD）必须按账本币种投影而不是按
- * 区域 —— 否则以 USD 结算的账号在 CN 构建上会拿到 CNY 金额，被账本守卫当异币种全部丢弃，
- * 这些渠道的花费就再也记不进日账本、按模型统计与「本对话」累计。
- *
- * 只支持 USD → CNY（固定汇率本就是为这个方向的展示投影设的）。已是目标币种的原样返回；
- * CNY → USD 没有反向汇率契约，不猜、原样返回交给上层的异币种处理。
+ * Legacy fixed-rate display projection. Persist the original provider amount and currency.
  */
 export function toLedgerCurrency(
   money: RegionalMoney,
@@ -227,6 +223,37 @@ export function addRegionalMoney(values: readonly RegionalMoney[]): RegionalMone
   };
 }
 
+/** Combine the session's dedicated USD column with the amount in its tagged currency. */
+export function sessionSpendAmounts(usd: number, tagged?: RegionalMoney, usdApproximate = false): {
+  totalMoney: RegionalMoney;
+  totalCostUsd?: number;
+  totalCostUsdIsApproximate?: boolean;
+} {
+  const dollars = { ...legacyUsdMoney(usd), approximate: usdApproximate };
+  if (!tagged || (usd > 0 && tagged.amount === 0)) return {totalMoney: dollars, totalCostUsd: usd};
+  if (tagged.currency === 'USD') {
+    const totalMoney = usd > 0 ? addRegionalMoney([dollars, tagged]) : tagged;
+    return {totalMoney, totalCostUsd: totalMoney.amount};
+  }
+  return usd > 0 ? {totalMoney: tagged, totalCostUsd: usd, ...(usdApproximate && { totalCostUsdIsApproximate: true })} : {totalMoney: tagged};
+}
+
+export function mixedEstimateAmounts(values: readonly RegionalMoney[]): { estimatedValueAmounts?: RegionalMoney[] } {
+  const amounts = sumMoneyByCurrency(values.filter(value => value.amount > 0));
+  return amounts.length > 1 ? { estimatedValueAmounts: amounts } : {};
+}
+
+/** Sum each native currency independently, in the order it occurs in the turn. */
+export function sumMoneyByCurrency(values: readonly RegionalMoney[]): RegionalMoney[] {
+  const buckets = new Map<MoneyCurrency, RegionalMoney[]>();
+  for (const value of values) {
+    const bucket = buckets.get(value.currency);
+    if (bucket) bucket.push(value);
+    else buckets.set(value.currency, [value]);
+  }
+  return Array.from(buckets.values(), addRegionalMoney);
+}
+
 /**
  * Read-side compatibility for persisted/history projections.
  *
@@ -248,6 +275,27 @@ export function addCompatibleRegionalMoney(
     currencyCandidates[0].currency;
   const compatible = values.filter((value) => value.currency === currency);
   return compatible.length > 0 ? addRegionalMoney(compatible) : null;
+}
+
+/** Build the display snapshot for one user round, including its single-currency compatibility field. */
+export function userRoundCostProjection(
+  prior: { money: RegionalMoney | null; hasEstimatedValue: boolean; amounts?: RegionalMoney[] },
+  current: RegionalMoney | null,
+  details: unknown,
+) {
+  const supplemental = supplementalConversationAmounts({ turnCost: current, turnUsageDetails: details });
+  const segment = current ? [current, ...supplemental] : supplemental;
+  const primary = addCompatibleRegionalMoney([...(prior.money ? [prior.money] : []), ...segment], current?.currency);
+  if (!primary) return null;
+  const priorDisplay = prior.money && prior.hasEstimatedValue
+    ? { ...prior.money, kind: 'value-estimate' as const } : prior.money;
+  const amounts = sumUsageAmounts([...(prior.amounts ?? (priorDisplay ? [priorDisplay] : [])), ...segment]);
+  const selected = amounts.find(value => value.currency === primary.currency) ?? primary;
+  return {
+    money: { ...primary, amount: selected.amount, approximate: selected.approximate || primary.approximate },
+    isEstimate: selected.kind === 'value-estimate',
+    ...(amounts.length > 1 && { userTurnAmounts: amounts }),
+  };
 }
 
 export function asValueEstimateMoney(money: RegionalMoney): RegionalMoney {

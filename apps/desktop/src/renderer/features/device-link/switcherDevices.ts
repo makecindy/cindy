@@ -10,11 +10,15 @@ import { deviceDisplayName } from '@/lib/deviceName';
  *
  * 无缓存的离线设备 / 未开启被控 / 与本机无关的设备不进切换栏(归 设置→远程控制 管理)。
  * 本机(isSelf)排除。
+ *
+ * status 只回答「同步到哪一步了」,答不了「这台设备现在在不在」——「在线但还没同步出
+ * 任务来」和「只有断线缓存」在 status 里都是 connecting。所以 presence 单独用 online
+ * 表达(设备目录上报在线,或同步分片是活的),别拿 status 顶替。
  */
 
 import type { RemoteDeviceSummary } from './remoteProjectsStore';
 import { isSharedTaskPeer } from '@cindy/device-link';
-import { compareDevicesByName, isMobilePlatform } from '@cindy/maker-shared/device-list';
+import { compareDevicesByName, isCindyApp, isMobilePlatform } from '@cindy/maker-shared/device-list';
 
 export type DeviceConnectionStatus = 'connected' | 'connecting' | 'rejected';
 
@@ -22,11 +26,21 @@ export interface SwitcherDevice {
   deviceId: string;
   name: string;
   status: DeviceConnectionStatus;
+  /**
+   * 设备 presence(设备现在在不在)—— 与 status 是两回事。
+   *
+   * status 把「在线可控但尚未同步」和「只有断线缓存」都压成 connecting,
+   * 所以它回答不了「这台设备现在在不在」;online 回答的正是这个:
+   * 设备目录说它在线,就是在线(哪怕还没同步出任务来)。
+   */
+  online: boolean;
 }
 
 export interface BuildSwitcherDevicesInput {
   /** 全量同账号设备(device-link:list-devices);null = 尚未加载。 */
   fullList: readonly DeviceLinkDeviceView[] | null;
+  /** 完整目录确认过的成员；首份完整目录到达之前仍可使用缓存。 */
+  registeredDeviceIds?: ReadonlySet<string> | null;
   /** 已同步或保留断线缓存的被控设备(remoteProjectsStore)。 */
   syncedDevices: readonly RemoteDeviceSummary[];
   /** 被对方撤销了本机访问权限的设备 id 集合(revokedDevicesStore)。 */
@@ -35,25 +49,29 @@ export interface BuildSwitcherDevicesInput {
 
 export function buildSwitcherDevices({
   fullList,
+  registeredDeviceIds = fullList && new Set(fullList.map(device => device.deviceId)),
   syncedDevices,
   revoked,
 }: BuildSwitcherDevicesInput): SwitcherDevice[] {
   const list = fullList ?? [];
   const nameById = new Map<string, string>();
   const selfIds = new Set<string>();
-  const mobileIds = new Set<string>();
+  const controllerOnlyIds = new Set<string>();
   const onlineControllable = new Set<string>();
+  // presence 单独一套:设备目录说它在线就是在线,不受「本机是否允许控它」这类本地偏好影响。
+  const presenceOnline = new Set<string>();
   for (const d of list) {
     nameById.set(d.deviceId, d.name);
     if (d.isSelf) {
       selfIds.add(d.deviceId);
       continue;
     }
-    // 手机等移动端无法被控,永不进列表(即便异常上报 remoteControlEnabled=true 也挡掉)。
-    if (isMobilePlatform(d.platform)) {
-      mobileIds.add(d.deviceId);
+    // 手机和非 Cindy App 仅作为控制端,不进电脑列表(即便自报 remoteControlEnabled=true)。
+    if (!isCindyApp(d.app) || isMobilePlatform(d.platform)) {
+      controllerOnlyIds.add(d.deviceId);
       continue;
     }
+    if (d.online) presenceOnline.add(d.deviceId);
     // controlEnabled 是本机「是否允许主动控制该设备」的本地偏好;关掉的设备不进切换栏
     // (与 useDeviceLinkRemoteProjects 的合格判定 disabledControlDeviceIds 同口径)。
     if (d.online && d.remoteControlEnabled && d.controlEnabled) onlineControllable.add(d.deviceId);
@@ -71,7 +89,13 @@ export function buildSwitcherDevices({
   // 候选 = 已连接 ∪ 被拒 ∪ 在线可控(连接中),排除本机与移动端。
   const candidates = new Set<string>([...cached.keys(), ...revoked, ...onlineControllable]);
   for (const id of selfIds) candidates.delete(id);
-  for (const id of mobileIds) candidates.delete(id);
+  for (const id of controllerOnlyIds) candidates.delete(id);
+
+  if (registeredDeviceIds) {
+    for (const id of candidates) {
+      if (!registeredDeviceIds.has(id)) candidates.delete(id);
+    }
+  }
 
   const nameSources = [...candidates].map((deviceId) => ({ deviceId, name: nameById.get(deviceId) }));
   const devices: SwitcherDevice[] = [];
@@ -85,7 +109,16 @@ export function buildSwitcherDevices({
     } else if (cachedDevice && cachedDevice.connected !== false) {
       status = 'connected';
     }
-    devices.push({ deviceId, name: deviceDisplayName(deviceId, nameById.get(deviceId), nameSources), status });
+    devices.push({
+      deviceId,
+      name: deviceDisplayName(deviceId, nameById.get(deviceId), nameSources),
+      status,
+      // presence 与 status 分开表达:
+      // - 设备目录上报它在线 → 在线(哪怕还没同步出任务来);
+      // - 同步分片是活的(relay 已连上)→ 同样是在线(设备目录还没加载时也只有这条路)。
+      // 真正离线的缓存设备两者都不满足 → online: false。
+      online: presenceOnline.has(deviceId) || cachedDevice?.connected === true,
+    });
   }
 
   // 统一按稳定身份(名字 → deviceId)排,不含状态/在线/时间 → 状态抖动不改变顺序

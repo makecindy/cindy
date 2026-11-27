@@ -43,13 +43,13 @@ export function ProviderShareDialog({
   return (
     <Dialog.Root open={open} onOpenChange={(next) => { if (!next && busy) return; onOpenChange(next); }}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" style={WINDOW_DRAG_STYLE}>
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" style={WINDOW_DRAG_STYLE}>
           <Dialog.Content
             role={role}
             data-testid={testId}
             aria-describedby={undefined}
             className={cn(
-              'modal-panel fixed inset-0 z-[10000] m-auto h-fit',
+              'modal-panel fixed inset-0 z-modal m-auto h-fit',
               'flex max-h-[85vh] w-full flex-col overflow-y-auto overscroll-contain p-4',
               'text-[var(--text-primary)]',
             )}
@@ -73,7 +73,7 @@ export function ProviderShareDialog({
             } : undefined}
           >
             {closeLabel && (
-              <Tip text={closeLabel} contentClassName="z-[10001]">
+              <Tip text={closeLabel}>
                 <Button
                   variant="secondary"
                   size="md"
@@ -108,7 +108,7 @@ export function ProviderShareDialogTitle({
   );
 }
 
-/** 弹窗底部按钮行：右对齐、可换行；主操作在前，取消在后(DESIGN §4)。 */
+/** 弹窗底部按钮行：右对齐、可换行；取消（或拒绝、关闭）在左，主操作在右(DESIGN §4 Button order)。 */
 export function ProviderShareDialogFooter({ children, className }: { children: ReactNode; className?: string }) {
   return <div className={cn('mt-6 flex shrink-0 flex-wrap justify-end gap-2.5', className)}>{children}</div>;
 }

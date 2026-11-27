@@ -11,7 +11,7 @@ import type {
 
 export const RUNTIME_MCP_NAMES_KEY = 'cindyRuntimeMcpServerNames';
 
-export interface AgentCapabilityQuery { server?: string; category?: string; toolQuery?: string; offset?: number; }
+export interface AgentCapabilityQuery { server?: string; category?: string; toolQuery?: string; offset?: number; toolName?: string; }
 
 /** The caller session's engine view of one MCP server; null = engine has no such entry. */
 export type HarnessMcpToolsReader = (server: string) => Promise<AgentMcpServerToolsReport | null>;
@@ -98,8 +98,13 @@ export async function readAgentCapabilityCatalog(
     } while (cursor);
     // Only first-party progressive metadata is expanded here. Custom servers
     // may name arbitrary business operations list_tools; never execute those.
-    const discovery = declaration.source === 'builtin' && tools.some((tool) => tool.name === 'list_tools')
-      ? await client.callTool({ name: 'list_tools', arguments: query.category ? { category: query.category } : {} })
+    const entry = tools.find((tool) => tool.name === 'list_tools');
+    if (query.toolName && !entry?.inputSchema.properties?.name) return {
+      ok: false, capability: declaration, errorCode: 'TOOL_SCHEMA_DISCOVERY_UNAVAILABLE',
+      message: '该服务没有声明按名称查询参数的入口；请沿其原生发现方式查询。',
+    };
+    const discovery = declaration.source === 'builtin' && entry
+      ? await client.callTool({ name: 'list_tools', arguments: query.toolName ? { name: query.toolName } : query.category ? { category: query.category } : {} })
       : undefined;
     return { ok: true, capability: declaration, tools, ...(discovery ? { discovery } : {}) };
   } catch {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { latexToUnicodeApproximation, normalizeMathDelimiters } from '../mathMarkdown.js';
+import { latexToUnicodeApproximation, normalizeMathDelimiters, tokenizeInlineMath } from '../mathMarkdown.js';
 
 describe('normalizeMathDelimiters', () => {
   it('无定界符时返回原引用(快速通路,保住下游缓存)', () => {
@@ -71,6 +71,12 @@ describe('normalizeMathDelimiters', () => {
   it('同段多个公式全部转换', () => {
     expect(normalizeMathDelimiters('\\(a\\) 与 \\(b\\)')).toBe('$a$ 与 $b$');
   });
+
+  it('keeps escaped literal delimiters and skips escaped closers', () => {
+    expect(normalizeMathDelimiters(String.raw`\\(literal\\) and \(x\)`)).toBe(String.raw`\\(literal\\) and $x$`);
+    expect(normalizeMathDelimiters(String.raw`\(a\\)b\)`)).toBe(String.raw`$a\\)b$`);
+    expect(normalizeMathDelimiters(String.raw`\\[literal\\]`)).toBe(String.raw`\\[literal\\]`);
+  });
 });
 
 describe('normalizeMathDelimiters — link destination 保护', () => {
@@ -102,6 +108,63 @@ describe('normalizeMathDelimiters — link destination 保护', () => {
 
   it('未闭合 destination 不吞掉后续公式', () => {
     expect(normalizeMathDelimiters('[x](broken\ndest \\(a\\)')).toBe('[x](broken\ndest $a$');
+  });
+});
+
+describe('normalizeMathDelimiters — link label / GFM table / 正文转义方括号保护', () => {
+  // 生产入口 normalizeMathDelimiters: 链接标签与表格单元格里的 CommonMark 转义方括号
+  // `\[...\]` 曾被展开成 `\n\n$$\n...\n$$\n\n`, 炸碎表格、拆断链接并中断后续有序列表。
+  it.each([
+    [
+      'inline link label 里的 \\[Schedule\\](含 cindy:// 深链)',
+      '[\\[Schedule\\] torchlight2 PR 审查与合并](cindy://session/b379a11d-3b48-4eb3-8f6f-2a6be2d284b7?device=dev1)',
+    ],
+    [
+      'inline link label 内混排 inline code 与 \\[...\\]',
+      '[\\[Schedule\\] `torchlight2` 巡检](cindy://session/abc)',
+    ],
+    [
+      'inline link label 含数学形态的转义方括号也不拆成 display 块',
+      '[\\[E=mc^2\\] 推导笔记](https://example.com/math)',
+    ],
+    [
+      'reference link label 里的 \\[...\\]',
+      '[\\[Schedule\\] 每日汇总][ref-1]',
+    ],
+    [
+      'GFM 表格行(含同行 inline code + 多个转义方括号链接)不插入换行',
+      [
+        '| 类别 | 数量 | 说明与代表项 |',
+        '| --- | ---: | --- |',
+        '| 过期定时任务 | 10 | `torchlight2` 巡检，如 [\\[Schedule\\] A](cindy://session/1)、[\\[Schedule\\] B](cindy://session/2) 与 \\[E=mc^2\\] |',
+      ].join('\n'),
+    ],
+    [
+      '列表项与正文行中的 CommonMark 转义方括号标签',
+      '4. \\[飞书·Cindy·CRT鸣谢添加感谢zkyo创意\\] 805a77\n请填写 \\[姓名\\] 和 \\[日期\\]，访问 a\\[i\\] 与 b\\[0\\]。',
+    ],
+    [
+      '未闭合的游离 \\[ 不与后续链接标签内的 \\] 跨界配对',
+      '未闭合 \\[foo 见 [\\[Schedule\\] 巡检](cindy://session/1)',
+    ],
+  ])('原样保留 %s', (_label, src) => {
+    expect(normalizeMathDelimiters(src)).toBe(src);
+  });
+
+  it('链接标签与表格单元格内的行内 \\(...\\) 仍正常转成 $...$', () => {
+    expect(normalizeMathDelimiters('[公式 \\(E=mc^2\\) \\[注\\]](https://example.com)')).toBe(
+      '[公式 $E=mc^2$ \\[注\\]](https://example.com)',
+    );
+    expect(
+      normalizeMathDelimiters('| 名称 | 公式 |\n| --- | --- |\n| 质能 | \\(E=mc^2\\) \\[注\\] |'),
+    ).toBe('| 名称 | 公式 |\n| --- | --- |\n| 质能 | $E=mc^2$ \\[注\\] |');
+  });
+
+  it('独占一行(含引用块 / CRLF)与含明确数学信号的行中 \\[...\\] 仍转为 display 块', () => {
+    expect(normalizeMathDelimiters('> \\[x\\]')).toBe('> \n\n$$\nx\n$$\n\n');
+    expect(normalizeMathDelimiters('\\[x\\]\r\n下段')).toBe('\n\n$$\nx\n$$\n\n\r\n下段');
+    expect(normalizeMathDelimiters('即 \\[\\frac{1}{2}\\] 如下')).toBe('即 \n\n$$\n\\frac{1}{2}\n$$\n\n 如下');
+    expect(normalizeMathDelimiters('有 \\[a + b = c\\] 成立')).toBe('有 \n\n$$\na + b = c\n$$\n\n 成立');
   });
 });
 
@@ -147,6 +210,20 @@ describe('normalizeMathDelimiters — 对抗性输入(ReDoS 回归,CodeQL js/pol
     );
     expect(normalizeMathDelimiters('尾部未闭合 \\alpha \\(x')).toBe('尾部未闭合 \\alpha \\(x');
   });
+
+  it('大量未闭合方括号、表格管道符与单长行重复 \\[...\\] 均线性完成', () => {
+    const adversarial = '['.repeat(30000) + '\\[Schedule\\]' + '](x) ' + '|'.repeat(30000);
+    const sameLineRepeatedMath = '\\[x=1\\] '.repeat(20000);
+    const sameLineRepeatedTag = '\\[tag\\] '.repeat(20000);
+    const started = Date.now();
+    const out = normalizeMathDelimiters(adversarial);
+    const outMath = normalizeMathDelimiters(sameLineRepeatedMath);
+    const outTag = normalizeMathDelimiters(sameLineRepeatedTag);
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(out).toBe(adversarial);
+    expect(outMath).toContain('$$\nx=1\n$$');
+    expect(outTag).toBe(sameLineRepeatedTag);
+  });
 });
 
 describe('latexToUnicodeApproximation', () => {
@@ -180,9 +257,78 @@ describe('latexToUnicodeApproximation', () => {
     expect(latexToUnicodeApproximation('\\sqrt{a+b}')).toBe('√(a+b)');
   });
 
+  // Production fallback used by mobile RN Text (MessageRenderer.renderInline).
+  // Screenshot regression: nested radicals bypassed FRAC_RE; accents leaked
+  // command names. Existing coverage only exercised flat braced arguments.
+  it.each([
+    ['\\frac{2\\sqrt{3}}{3}\\pi = 3.63', '((2√3)/3)π = 3.63'],
+    ['\\frac{1}{\\frac{a}{b}}', '1/(a/b)'],
+    ['\\frac{a}{bc}', 'a/(bc)'],
+    ['\\sqrt{\\frac{a+b}{c}}', '√((a+b)/c)'],
+    ['\\dot c', 'c\u0307'],
+    ['\\dot{c}(t)', 'c\u0307(t)'],
+    ['\\ddot{x}_1', 'x\u0308₁'],
+    ['\\dot{\\theta}', 'θ\u0307'],
+    ['t_s \\approx \\frac{3}{\\xi\\omega_n}', 'tₛ ≈ 3/(ξωₙ)'],
+    ['\\frac{a}{b}^2', '(a/b)²'],
+    ['\\frac{a}{b}c', '(a/b)c'],
+    ['\\frac{x^{a+b}}{y}', '(x^(a+b))/y'],
+    ['\\frac\\sqrt{3}2', '(√3)/2'],
+    ['\\sqrt[3]{x}', '∛x'],
+    ['\\sqrt[4]{x}', '∜x'],
+    ['\\sqrt[n]{a+b}', '√[n](a+b)'],
+    ['\\sqrt{1-x^{2}}', '√(1-x²)'],
+    ['\\sqrt{\\alpha}x', '√αx'],
+    ['\\sqrt[n]{\\alpha}x', '√[n]αx'],
+    ['\\hat{x} + \\bar{y} + \\vec{v}', 'x\u0302 + y\u0305 + v\u20d7'],
+    ['\\{x\\} + x\\_1', '{x} + x_1'],
+    ['x\\,y\\quad z', 'x y z'],
+  ])('preserves inline math structure: %s', (source, expected) => {
+    expect(latexToUnicodeApproximation(source)).toBe(expected);
+  });
+
+  it('handles incomplete streaming fragments and bounded nesting without throwing', () => {
+    for (const source of [String.raw`\frac{\sqrt[3]{x}}{y}`, String.raw`e\in\mathcal{\mathbf E}_\mathrm i`]) {
+      for (let end = 0; end <= source.length; end += 1) {
+        expect(() => latexToUnicodeApproximation(source.slice(0, end))).not.toThrow();
+      }
+    }
+    for (const command of ['\\sqrt{', '\\mathbf{']) {
+      expect(() => latexToUnicodeApproximation(command.repeat(2000) + 'x' + '}'.repeat(2000))).not.toThrow();
+    }
+  });
+
+  // PR #7560 / Greptile 4391615793: the numerator must not be rendered
+  // speculatively when a denominator is absent. This exact input previously
+  // exceeded a 3s isolated reproduction budget (exponential repeated work).
+  it('returns readable text for nested fractions with missing denominators', () => {
+    const source = '\\frac{'.repeat(30) + 'x' + '}'.repeat(30);
+    expect(latexToUnicodeApproximation(source)).toBe('frac'.repeat(30) + 'x');
+  });
+
   it('样式包装剥壳保内容,函数名保字面', () => {
     expect(latexToUnicodeApproximation('\\text{速度} v')).toBe('速度 v');
     expect(latexToUnicodeApproximation('\\mathbf{A} \\sin x')).toBe('A sin x');
+  });
+
+  // #9422: the mobile Text/share fallback must preserve symbols and argument
+  // scope. Existing style coverage only tested an isolated, braced wrapper;
+  // stripping it before command mapping merged \in + E into unknown \inE.
+  // Unit: exercise the production converter's visible text, including single
+  // tokens, nested wrappers and wrappers used as structural/script arguments.
+  it.each([
+    [String.raw`e\in\mathcal E`, 'e∈E'],
+    [String.raw`e\in\mathcal{E}`, 'e∈E'],
+    [String.raw`\mathrm{\alpha}x`, 'αx'],
+    [String.raw`\mathbf{\mathcal{E}}`, 'E'],
+    [String.raw`\mathbf\alpha+x`, 'α+x'],
+    [String.raw`\frac\mathrm{12}2`, '(12)/2'],
+    [String.raw`\sqrt\mathrm{2}`, '√2'],
+    [String.raw`x^{\mathrm{12}}+y_\mathrm i`, 'x¹²+yᵢ'],
+    [String.raw`e\in\mathrm{\{E\}}`, 'e∈{E}'],
+    [String.raw`\mathcal{}x`, 'x'],
+  ])('preserves styled inline math argument boundaries: %s', (source, expected) => {
+    expect(latexToUnicodeApproximation(source)).toBe(expected);
   });
 
   it('\\left \\right 修饰被丢弃', () => {
@@ -196,5 +342,102 @@ describe('latexToUnicodeApproximation', () => {
 
   it('未知命令去反斜杠保留名字,永不抛错', () => {
     expect(latexToUnicodeApproximation('\\unknowncmd x')).toBe('unknowncmd x');
+  });
+});
+
+describe('tokenizeInlineMath', () => {
+  it('renders all subscript letters cleanly without falling back to raw underscores', () => {
+    expect(tokenizeInlineMath("f'_x(0,0)=f'_y(0,0)=0")).toEqual([
+      { kind: 'var', text: 'f' },
+      { kind: 'text', text: "'" },
+      { kind: 'sub', text: 'x', italic: true },
+      { kind: 'text', text: '(0,0)=' },
+      { kind: 'var', text: 'f' },
+      { kind: 'text', text: "'" },
+      { kind: 'sub', text: 'y', italic: true },
+      { kind: 'text', text: '(0,0)=0' },
+    ]);
+  });
+
+  it('keeps functions, numbers, operators and sqrt delimiters upright and avoids double parens', () => {
+    expect(tokenizeInlineMath('(\\sqrt{|x|}+\\sqrt{|y|})^2 = \\rho(\\sqrt{|\\cos\\theta|}+\\sqrt{|\\sin\\theta|})^2')).toEqual([
+      { kind: 'text', text: '(√|' },
+      { kind: 'var', text: 'x' },
+      { kind: 'text', text: '|+√|' },
+      { kind: 'var', text: 'y' },
+      { kind: 'text', text: '|)' },
+      { kind: 'sup', text: '²', italic: false },
+      { kind: 'text', text: ' = ' },
+      { kind: 'var', text: 'ρ' },
+      { kind: 'text', text: '(√|cos ' },
+      { kind: 'var', text: 'θ' },
+      { kind: 'text', text: '|+√|sin ' },
+      { kind: 'var', text: 'θ' },
+      { kind: 'text', text: '|)' },
+      { kind: 'sup', text: '²', italic: false },
+    ]);
+  });
+
+  it('separates variables from upright digits/operators and supports extended letter superscripts', () => {
+    expect(tokenizeInlineMath('x^4+y^4 \\le (x^2+y^2)^2 = \\rho^4')).toEqual([
+      { kind: 'var', text: 'x' },
+      { kind: 'sup', text: '⁴', italic: false },
+      { kind: 'text', text: '+' },
+      { kind: 'var', text: 'y' },
+      { kind: 'sup', text: '⁴', italic: false },
+      { kind: 'text', text: ' ≤ (' },
+      { kind: 'var', text: 'x' },
+      { kind: 'sup', text: '²', italic: false },
+      { kind: 'text', text: '+' },
+      { kind: 'var', text: 'y' },
+      { kind: 'sup', text: '²', italic: false },
+      { kind: 'text', text: ')' },
+      { kind: 'sup', text: '²', italic: false },
+      { kind: 'text', text: ' = ' },
+      { kind: 'var', text: 'ρ' },
+      { kind: 'sup', text: '⁴', italic: false },
+    ]);
+    expect(tokenizeInlineMath('e^z + \\|x\\|_{a,1}')).toEqual([
+      { kind: 'var', text: 'e' },
+      { kind: 'sup', text: 'ᶻ', italic: false },
+      { kind: 'text', text: ' + ‖' },
+      { kind: 'var', text: 'x' },
+      { kind: 'text', text: '‖' },
+      { kind: 'sub', text: 'a', italic: true },
+      { kind: 'sub', text: ',1', italic: false },
+    ]);
+  });
+
+  it('handles \\text / \\mathrm upright, \\frac, and deeply nested streaming inputs safely', () => {
+    expect(tokenizeInlineMath('\\text{速度} v + \\mathrm{d}x')).toEqual([
+      { kind: 'text', text: '速度 ' },
+      { kind: 'var', text: 'v' },
+      { kind: 'text', text: ' + d' },
+      { kind: 'var', text: 'x' },
+    ]);
+    expect(() => tokenizeInlineMath('\\sqrt{'.repeat(2000) + 'x')).not.toThrow();
+  });
+
+  it('ignores Object.prototype keys like \\toString and \\constructor instead of throwing', () => {
+    expect(tokenizeInlineMath('\\toString + \\constructor + \\valueOf')).toEqual([
+      { kind: 'text', text: 'toString + constructor + valueOf' },
+    ]);
+    expect(latexToUnicodeApproximation('\\toString + \\constructor')).toBe('toString + constructor');
+  });
+
+  it('keeps outer parentheses unless a single delimiter pair wraps the whole operand', () => {
+    const plain = (latex: string) => tokenizeInlineMath(latex).map((s) => s.text).join('');
+    expect(plain('\\frac{(a)+(b)}{c}')).toBe('((a)+(b))/c');
+    expect(plain('\\frac{a}{(b)+(c)}')).toBe('a/((b)+(c))');
+    expect(plain('\\sqrt{(a)+(b)}')).toBe('√((a)+(b))');
+    expect(plain('\\sqrt{|x|+|y|}')).toBe('√(|x|+|y|)');
+    expect(plain('\\sqrt{(a+b)}')).toBe('√(a+b)');
+    expect(plain('\\sqrt{|x|}')).toBe('√|x|');
+  });
+
+  it('preserves nested subscript boundaries inside superscripts', () => {
+    const plain = (latex: string) => tokenizeInlineMath(latex).map((s) => s.text).join('');
+    expect(plain('x^{a_b}')).toBe('x^(a_b)');
+    expect(plain('2^{n_1+n_2}')).toBe('2^(n₁+n₂)');
   });
 });

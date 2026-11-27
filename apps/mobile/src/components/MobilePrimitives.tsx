@@ -1,3 +1,4 @@
+import type { ViewInstance } from 'react-native';
 import { useEffect, useRef, useState, type ReactNode, type Ref } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronLeft } from 'lucide-react-native';
@@ -17,7 +18,7 @@ import {
 } from 'react-native';
 import { Text } from '@/components/AppText';
 import { QuietSyncIndicator } from '@/components/QuietSyncIndicator';
-import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
+import { useLoopingAnimation } from '@/hooks/useLoopingAnimation';
 import { mobileInteractionStyles } from './mobileInteractionStyles';
 import { fontWeight, iconSize, iconStroke, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
@@ -230,8 +231,7 @@ export function StatusDot({
 }) {
   const styles = useThemedStyles(makeStyles);
   const pulse = useRef(new Animated.Value(1)).current;
-  const reduceMotion = useReduceMotionEnabled();
-  const animatePulse = pulsing && reduceMotion === false;
+  const animatePulse = useLoopingAnimation(pulsing);
 
   useEffect(() => {
     if (!animatePulse) {
@@ -636,7 +636,7 @@ export function MainWindowActionButton({
   numberOfLines?: number;
   style?: StyleProp<ViewStyle>;
   textStyle?: StyleProp<TextStyle>;
-  buttonRef?: Ref<View>;
+  buttonRef?: Ref<ViewInstance>;
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();

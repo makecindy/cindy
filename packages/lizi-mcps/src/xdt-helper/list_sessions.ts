@@ -25,6 +25,7 @@ import { historyDeviceShape, HISTORY_DEVICE_DESCRIPTION, queryHistoryDevices } f
 const DESCRIPTION = [
   HISTORY_DEVICE_DESCRIPTION,
   'sessionUrl 是可直接引用的任务链接；用 [任务标题](sessionUrl) 返回给用户。',
+  '需要链接到某条用户消息时，用返回的任务 id 调用 get_chat_history({session_ids: [id], roles: ["user"]})，取目标行的 clientId，按 get_chat_history 的说明在原 sessionUrl 上设置消息锚点。',
   '列出所选电脑数据库里的 session 元数据(id / title / workingDir / agentKind / model /',
   '时间戳 / messageCount 等), 按多种过滤条件组合查。**不返回 messages 内容** —',
   '要拉具体聊天内容请用 get_chat_history。',
@@ -39,12 +40,14 @@ const DESCRIPTION = [
   '  - agent_kind: cc(Claude Code) | codex | pi',
   '  - include_deleted: 默认 false (排除 status=deleted)',
   '',
+  'pinned 表示侧栏置顶状态。旧版远程电脑省略该字段时可查 get_task_digest。',
   '【输出】messageCount 已过滤被 rewind 软删的消息, 是用户可见的真实条数。',
   '本机结果的 queuedCount 是当前尚未消费的输入队列条数，可用 list_session_queue 查看本机明细；远程结果不含队列计数。',
   '时间戳均为 ISO 8601 字符串(对应 DB 里的 unix ms 转换)。',
   'orcaRole / parentSessionId / userSendAt 仅在非 null 时出现(默认场景几乎全为 null, 已 omit)。',
   '',
   '【分页】游标分页, 默认 100 条/次, 最大 1000。串联 nextCursor 拿全量。',
+  '源设备可按完整记录的 64 KiB 软预算提前分页；单条超大记录仍完整返回。limit 是条数上限，结束以 hasMore 为准。',
 ].join('\n');
 
 export interface ListSessionsToolDeps {
@@ -161,6 +164,8 @@ export function registerListSessionsTool(
             workspaceKind: s.workspaceKind,
             model: s.model,
             status: s.status,
+            ...(s.pinnedAt !== undefined && { pinned: s.pinnedAt !== null }),
+            ...(s.hiddenAt != null ? { hiddenAt: new Date(s.hiddenAt).toISOString() } : {}),
             source: s.source,
             createdAt: new Date(s.createdAt).toISOString(),
             updatedAt: new Date(s.updatedAt).toISOString(),

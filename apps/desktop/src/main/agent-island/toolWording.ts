@@ -7,9 +7,12 @@
  * 因此独立于纯模块 state.ts / toolDetail.ts,由 service 注入。
  */
 import type { ToolRowWording } from '@cindy/maker-shared/message-presentation';
+import { formatCollabTargetsSummary } from '@cindy/maker-shared/tool-use-descriptor';
 
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import {
+  COLLAB_ROW_COUNT_VERB_KEY,
+  COLLAB_ROW_VERB_KEY,
   FILE_CHANGE_FILES_I18N_KEY,
   INTENT_ROW_VERB_KEY,
   TOOL_ROW_VERB_I18N_KEY,
@@ -24,5 +27,21 @@ export function createLocalizedToolRowWording(): ToolRowWording {
     // main 的迷你 i18n 只支持 {{appName}} 插值,{{count}} 在调用点手动替换。
     updateFilesLabel: (count) =>
       `${t(UPDATED_VERB_I18N_KEY)} ${t(FILE_CHANGE_FILES_I18N_KEY).replace('{{count}}', String(count))}`,
+    collabLabel: (descriptor) => {
+      if (descriptor.action === 'other') {
+        return `${t(TOOL_ROW_VERB_I18N_KEY.use)} ${descriptor.toolLabel}`.trim();
+      }
+      const targets = formatCollabTargetsSummary(descriptor.targets, descriptor.targetCount);
+      if (targets) {
+        return `${t(COLLAB_ROW_VERB_KEY[descriptor.action])} ${targets}`.trim();
+      }
+      if (descriptor.targetCount && descriptor.targetCount > 0) {
+        const baseKey = COLLAB_ROW_COUNT_VERB_KEY[descriptor.action];
+        const countKey = descriptor.targetCount === 1 ? `${baseKey}_one` : `${baseKey}_other`;
+        const localized = t(countKey).replace('{{count}}', String(descriptor.targetCount));
+        if (localized && localized !== countKey) return localized;
+      }
+      return t(COLLAB_ROW_VERB_KEY[descriptor.action]);
+    },
   };
 }

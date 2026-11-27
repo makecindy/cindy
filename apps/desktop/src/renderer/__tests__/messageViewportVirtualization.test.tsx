@@ -3,6 +3,8 @@ import { act, useLayoutEffect, useRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MessageViewport, type MessageViewportApi } from '../components/chat/MessageViewport';
+import { StreamFadeSpan, StreamFadeListItem } from '../components/chat/StreamFadeSpan';
+import { createWordFadeState } from '../components/chat/rehypeStreamWordFade';
 import { acquirePageTextAccess, isPageTextAccessActive } from '../lib/pageTextAccess';
 
 let host: HTMLDivElement;
@@ -10,20 +12,26 @@ let root: Root;
 let frames: Map<number, FrameRequestCallback>;
 let sequence: number;
 let viewportHeight: number;
+let headerHeight: number;
 let scrollWrites: number[];
+let viewportRenders: number;
+// jsdom does not clamp scrollTop like a browser; mocked scrollTop lives here.
+const tops = new WeakMap<HTMLElement, number>();
 let rowMeasurements: number;
 let parentRenders: number;
 let notifyResize: () => void;
 let syncViewport: () => void;
 let reconcileViewport: () => void;
+let getViewportTopRow: () => HTMLElement | null;
 let setFollowing: (value: boolean) => void;
 const entries = Array.from({ length: 80 }, (_, index) => ({ key: String(index), retain: index === 79 }));
 const rectangle = (top: number, height: number) => ({ top, bottom: top + height, height, width: 800,
   left: 0, right: 800, x: 0, y: top, toJSON() {} }) as DOMRect;
-function Fixture({ disabled = false, restore = false, restoreOffset, onProgrammaticScroll }: {
-  disabled?: boolean; restore?: boolean; restoreOffset?: number; onProgrammaticScroll?: () => void;
+function Fixture({ disabled = false, restore = false, restoreOffset, onProgrammaticScroll, fade = false }: {
+  disabled?: boolean; restore?: boolean; restoreOffset?: number; onProgrammaticScroll?: () => void; fade?: boolean;
 }) {
   parentRenders++;
+  const fadeState = useRef(createWordFadeState());
   const scrollRef = useRef<HTMLDivElement>(null);
   const itemsRef = useRef<HTMLDivElement>(null);
   const followRef = useRef(!restore);
@@ -38,10 +46,19 @@ function Fixture({ disabled = false, restore = false, restoreOffset, onProgramma
       initialAnchor: restore ? '40' : undefined,
       initialHeights: restore ? Object.fromEntries(entries.map(entry => [entry.key, 180])) : undefined,
     }}>{viewport => {
+      viewportRenders++;
       syncViewport = () => apiRef.current!.syncViewport();
       reconcileViewport = () => apiRef.current!.reconcileViewport();
+      getViewportTopRow = () => apiRef.current!.getViewportTopRow();
       return <div ref={itemsRef}>{entries.map(entry => viewport.shouldMount(entry)
-      ? <div key={entry.key} data-render-item-key={entry.key}><button>Row {entry.key}</button></div>
+      ? <div key={entry.key} data-render-item-key={entry.key}><button>Row {entry.key}</button>{fade && <ul><StreamFadeListItem
+          wordFadeState={fadeState.current} data-stream-marker
+          node={{ type: 'element', tagName: 'li', properties: { dataWfKey: entry.key }, children: [] }}>
+          <StreamFadeSpan wordFadeState={fadeState.current} className="stream-word"
+            node={{ type: 'element', tagName: 'span', properties: { dataWfKey: entry.key }, children: [] }}>
+            Streaming word
+          </StreamFadeSpan>
+        </StreamFadeListItem></ul>}</div>
       : <div key={entry.key} data-render-item-key={entry.key} data-message-placeholder=""
         style={{ height: viewport.placeholderHeight(entry.key) }} />)}</div>;
     }}</MessageViewport></div>;
@@ -56,7 +73,7 @@ const scroller = () => host.querySelector<HTMLElement>('[data-scroll]')!;
 const row = (key: number) => host.querySelector<HTMLElement>(`[data-render-item-key="${key}"]`)!;
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  frames = new Map(); sequence = 0; viewportHeight = 600; scrollWrites = []; rowMeasurements = 0; parentRenders = 0;
+  frames = new Map(); sequence = 0; viewportHeight = 600; headerHeight = 0; scrollWrites = []; rowMeasurements = 0; parentRenders = 0; viewportRenders = 0;
   vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.set(++sequence, callback); return sequence; });
   vi.stubGlobal('cancelAnimationFrame', (id: number) => { frames.delete(id); });
   vi.stubGlobal('ResizeObserver', class {
@@ -66,7 +83,7 @@ beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
     if (this.hasAttribute('data-render-item-key')) {
       rowMeasurements++;
-      let top = 0;
+      let top = headerHeight;
       for (const sibling of Array.from(this.parentElement!.children) as HTMLElement[]) {
         if (sibling === this) break;
         top += Number.parseFloat(sibling.style.height) || 180;
@@ -78,10 +95,8 @@ beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(() => viewportHeight);
   vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
     return Array.from(this.querySelectorAll<HTMLElement>('[data-render-item-key]'))
-      .reduce((sum, row) => sum + (Number.parseFloat(row.style.height) || 180), 0);
+      .reduce((sum, row) => sum + (Number.parseFloat(row.style.height) || 180), headerHeight);
   });
-  // jsdom does not clamp scrollTop like a browser.
-  const tops = new WeakMap<HTMLElement, number>();
   vi.spyOn(HTMLElement.prototype, 'scrollTop', 'get').mockImplementation(function (this: HTMLElement) { return tops.get(this) || 0; });
   vi.spyOn(HTMLElement.prototype, 'scrollTop', 'set').mockImplementation(function (this: HTMLElement, value: number) {
     scrollWrites.push(value);
@@ -96,6 +111,108 @@ afterEach(async () => {
   host.remove(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals();
 });
 describe('message viewport content virtualization', () => {
+  // #12504: ordinary commits and clicks caused synchronous browser layout.
+  // Count the browser API calls at the real viewport boundary in jsdom.
+  it('reuses the mounted window on an unchanged commit without reading layout', async () => {
+    await act(async () => root.render(<Fixture restore />));
+    await flushFrames();
+    const height = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get');
+    height.mockClear();
+    await act(async () => root.render(<Fixture restore />));
+    expect(height).not.toHaveBeenCalled();
+    expect(row(40).querySelector('button')).not.toBeNull();
+  });
+
+  it('does not query native selection on an ordinary pointer or focus change', async () => {
+    vi.useFakeTimers();
+    await act(async () => root.render(<Fixture restore />));
+    const selection = vi.spyOn(document, 'getSelection');
+    await act(async () => {
+      row(40).dispatchEvent(new Event('pointerdown', { bubbles: true }));
+      row(40).dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+      vi.runOnlyPendingTimers();
+    });
+    expect(selection).not.toHaveBeenCalled();
+  });
+  // A thread root lives before items and can resize without any row mutation.
+  // Keep scrollTop fixed to model reading after a header layout change.
+  it.each([{ height: 0, anchor: 42 }, { height: 720, anchor: 38 }])(
+    'refreshes the reading anchor when the preceding header becomes $height pixels tall', async ({ height, anchor }) => {
+      headerHeight = 360;
+      await act(async () => root.render(<Fixture restore />));
+      await flushFrames();
+      expect(getViewportTopRow()).toBe(row(40));
+      headerHeight = height;
+      expect(getViewportTopRow()).toBe(row(anchor));
+    },
+  );
+
+  // Regression: reading-position snapshots scanned the entire expanded history
+  // on every wheel frame despite virtualization already owning a geometry index.
+  // Unit layout fixture checks both the actual anchor and the DOM-read budget;
+  // browser scrolling/performance is covered by the transcript-scroll UI page.
+  it('finds the reading anchor without measuring preceding history on each scroll', async () => {
+    await act(async () => root.render(<Fixture restore />));
+    await flushFrames();
+    rowMeasurements = 0;
+    for (let index = 0; index < 10; index++) {
+      scroller().scrollTop = 40 * 180 + index;
+      expect(getViewportTopRow()).toBe(row(40));
+    }
+    // One origin-row read per query, independent of preceding history length.
+    expect(rowMeasurements).toBeLessThanOrEqual(10);
+  });
+
+  it('refreshes an anchor after a synchronous row resize before observer delivery', async () => {
+    await act(async () => root.render(<Fixture restore />));
+    await flushFrames();
+    const previous = row(39);
+    previous.style.height = '540px';
+    // takeRecords must see the pending mutation in this same task. The reading
+    // position now intersects row 39, even before ResizeObserver has fired.
+    expect(getViewportTopRow()).toBe(previous);
+    await flushFrames();
+  });
+
+  it.each(['observer', 'synchronous scroll'] as const)('does not remeasure rows for completed fades via %s', async delivery => {
+    await act(async () => root.render(<Fixture restore fade />));
+    await flushFrames();
+    const visible = row(40);
+    const top = visible.getBoundingClientRect().top;
+    rowMeasurements = 0;
+    await act(async () => {
+      for (const [selector, name] of [['span', 'stream-word-in'], ['li', 'stream-marker-in']]) {
+        const event = new Event('webkitAnimationEnd', { bubbles: true });
+        Object.defineProperty(event, 'animationName', { value: name });
+        visible.querySelector(selector)!.dispatchEvent(event);
+      }
+      if (delivery === 'synchronous scroll') syncViewport();
+    });
+    await flushFrames();
+    expect(visible.querySelector('.stream-word')).toBeNull();
+    expect(visible.querySelector('[data-stream-marker]')).toBeNull();
+    expect(rowMeasurements).toBe(0);
+    expect(visible.getBoundingClientRect().top).toBe(top);
+    // A real size change in the same row must still invalidate geometry.
+    rowMeasurements = 0;
+    await act(async () => { visible.style.height = '360px'; });
+    await flushFrames();
+    expect(rowMeasurements).toBeGreaterThan(0);
+    expect(visible.getBoundingClientRect().height).toBe(360);
+  });
+  it('still measures a class change batched with fade completion', async () => {
+    await act(async () => root.render(<Fixture restore fade />));
+    await flushFrames();
+    rowMeasurements = 0;
+    await act(async () => {
+      const word = row(40).querySelector('span')!;
+      word.classList.remove('stream-word');
+      word.classList.add('text-xl');
+    });
+    await flushFrames();
+    expect(rowMeasurements).toBeGreaterThan(0);
+  });
+
   it('initializes before the owner restores a precise reading offset', async () => {
     await act(async () => root.render(<Fixture restore restoreOffset={97} />));
     await flushFrames();
@@ -168,6 +285,7 @@ describe('message viewport content virtualization', () => {
       // Before MutationObserver delivery: synchronous navigation must also see it.
       syncViewport();
     });
+    await flushFrames();
     expect(rowMeasurements).toBeGreaterThan(0);
     expect(row(39).querySelector('button')).not.toBeNull();
     expect(row(40).querySelector('button')).not.toBeNull();
@@ -178,6 +296,7 @@ describe('message viewport content virtualization', () => {
     await flushFrames();
     expect(row(48).querySelector('button')).toBeNull();
     await act(async () => { viewportHeight = 1600; syncViewport(); });
+    await flushFrames();
     expect(row(48).querySelector('button')).not.toBeNull();
   });
 
@@ -253,25 +372,47 @@ describe('message viewport content virtualization', () => {
     await act(async () => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', ctrlKey: true, bubbles: true })));
     expect(host.querySelectorAll('button').length).toBeLessThan(20);
   });
-  it.each([false, true])('exposes offscreen controls before Tab enters from outside (reverse: %s), then releases on exit', async shiftKey => {
+  // BWG3 regression (unit): Tab must reach virtual controls in either direction
+  // without synchronously mounting every row. Earlier tests required 80 mounts.
+  it.each([false, true])('reveals only the next Tab destination (reverse: %s), then releases on exit', async shiftKey => {
     vi.useFakeTimers();
     await act(async () => root.render(<Fixture restore />));
-    const outside = host.appendChild(document.createElement('input'));
+    const outside = document.createElement('input');
+    if (shiftKey) host.append(outside); else host.prepend(outside);
     outside.focus();
     expect(row(0).querySelector('button')).toBeNull();
     await act(async () => {
       outside.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey, bubbles: true }));
-      // Assert during keydown, before the browser chooses its default target.
-      expect(row(0).querySelector('button')).not.toBeNull();
-      row(0).querySelector('button')!.focus();
+      // jsdom does not move native focus: inspect the destination before
+      // emulating the browser, then traverse into the next virtual row.
+      const first = shiftKey ? 79 : 0;
+      expect(row(first).querySelector('button')).not.toBeNull();
+      row(first).querySelector('button')!.focus();
+      row(first).querySelector('button')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey, bubbles: true }));
+      const second = shiftKey ? 78 : 1;
+      expect(row(second).querySelector('button')).not.toBeNull();
+      row(second).querySelector('button')!.focus();
       vi.runOnlyPendingTimers();
     });
-    expect(host.querySelectorAll('button')).toHaveLength(80);
+    expect(host.querySelectorAll('button').length).toBeLessThan(20);
     await act(async () => { outside.focus(); vi.runOnlyPendingTimers(); });
     expect(host.querySelectorAll('button').length).toBeLessThan(20);
     // The row that was actually used keeps its state; untouched rows can unmount.
-    expect(row(0).querySelector('button')).not.toBeNull();
-    expect(row(1).hasAttribute('data-message-placeholder')).toBe(true);
+    expect(row(shiftKey ? 78 : 1).querySelector('button')).not.toBeNull();
+    expect(row(shiftKey ? 1 : 78).hasAttribute('data-message-placeholder')).toBe(true);
+  });
+  it('does not expand messages for a Tab between unrelated controls', async () => {
+    await act(async () => root.render(<Fixture restore />));
+    const first = document.createElement('input');
+    const second = document.createElement('input');
+    host.append(first, second);
+    first.focus();
+    const before = host.querySelectorAll('button').length;
+    const event = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+    await act(async () => first.dispatchEvent(event));
+    expect(event.defaultPrevented).toBe(false);
+    expect(host.querySelectorAll('button').length).toBe(before);
+    expect(row(0).querySelector('button')).toBeNull();
   });
   it('releases a prevented external Tab that leaves focus outside the messages', async () => {
     vi.useFakeTimers();
@@ -314,6 +455,46 @@ describe('message viewport content virtualization', () => {
     });
     expect(host.querySelectorAll('button').length).toBeLessThan(20);
   });
+  it('keeps just the selected rows available across scrolling without rereading on pointer or focus', async () => {
+    vi.useFakeTimers();
+    await act(async () => root.render(<Fixture restore />));
+    const outside = host.appendChild(document.createElement('button'));
+    const selection = document.getSelection()!;
+    await act(async () => {
+      const range = document.createRange();
+      range.setStart(row(40).querySelector('button')!.firstChild!, 0);
+      range.setEndAfter(row(42).querySelector('button')!);
+      selection.addRange(range);
+      vi.runOnlyPendingTimers();
+    });
+    expect(scroller().querySelectorAll('button').length).toBeLessThan(20);
+    await act(async () => {
+      scroller().scrollTop = 0;
+      scroller().dispatchEvent(new Event('scroll'));
+    });
+    await flushFrames();
+    expect(row(0).querySelector('button')).not.toBeNull();
+    expect(selection.toString()).toBe('Row 40Row 41Row 42');
+    const readSelection = vi.spyOn(document, 'getSelection');
+    await act(async () => {
+      outside.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+      // jsdom collapses the selection when focus() is called, unlike a
+      // Chromium focus change that leaves the page selection intact.
+      outside.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+      vi.runOnlyPendingTimers();
+    });
+    // #12504: selection getters can synchronously flush Chromium layout.
+    expect(readSelection).not.toHaveBeenCalled();
+    expect(scroller().querySelectorAll('button').length).toBeLessThan(20);
+    await act(async () => {
+      selection.removeAllRanges();
+      document.dispatchEvent(new Event('selectionchange'));
+      vi.runOnlyPendingTimers();
+    });
+    await flushFrames();
+    expect(row(40).querySelector('button')).toBeNull();
+    expect(scroller().querySelectorAll('button').length).toBeLessThan(20);
+  });
   it('keeps page-text access active when a selection ends, then releases independently', async () => {
     await act(async () => root.render(<Fixture restore />));
     let release = () => {};
@@ -334,9 +515,9 @@ describe('message viewport content virtualization', () => {
   it('mounts rows reached by a large scroll and remembers heights when they leave', async () => {
     await act(async () => root.render(<Fixture />));
     await act(async () => { scroller().dispatchEvent(new WheelEvent('wheel', { bubbles: true })); scroller().scrollTop = 0; scroller().dispatchEvent(new Event('scroll')); });
-    // The destination must exist before another animation frame is allowed.
-    // Otherwise fast wheel/scrollbar input can paint a viewport of placeholders.
-    expect(row(0).querySelector('button')).not.toBeNull();
+    // The destination must be mounted by this frame's rAF callbacks, which run
+    // before this frame paints. Otherwise fast wheel/scrollbar input can paint
+    // a viewport of placeholders.
     await flushFrames();
     expect(row(0).querySelector('button')).not.toBeNull();
     expect(scroller().scrollTop).toBe(0);
@@ -352,14 +533,41 @@ describe('message viewport content virtualization', () => {
     expect(row(0).style.height).toBe('180px');
     expect(host.querySelectorAll('button').length).toBeLessThan(20);
   });
-  it('commits a programmatic jump before the browser has dispatched its scroll event', async () => {
+  it('commits a programmatic jump in the same frame before paint', async () => {
     await act(async () => root.render(<Fixture restore />));
     await act(async () => {
       scroller().scrollTop = 1800;
       syncViewport();
-      expect(row(10).querySelector('button')).not.toBeNull();
     });
+    // The window commits once, in the pending frame callback before paint;
+    // a scroll event arriving later describes an already mounted destination.
+    await flushFrames();
+    expect(row(10).querySelector('button')).not.toBeNull();
     expect(row(10).getBoundingClientRect().top).toBe(0);
+  });
+  it('coalesces a burst of scroll and resize signals into one window commit', async () => {
+    await act(async () => root.render(<Fixture restore />));
+    await flushFrames();
+    const rendersBefore = viewportRenders;
+    await act(async () => {
+      // Move between scroll events without a programmatic write (tops mocks
+      // the native position), the way several scroll events can arrive before
+      // one frame renders.
+      tops.set(scroller(), 3600);
+      scroller().dispatchEvent(new Event('scroll'));
+      tops.set(scroller(), 0);
+      scroller().dispatchEvent(new Event('scroll'));
+      tops.set(scroller(), 1800);
+      scroller().dispatchEvent(new Event('scroll'));
+      viewportHeight = 1600;
+      notifyResize();
+    });
+    await flushFrames();
+    // Scroll dispatches before this frame's rAF callbacks, so the burst must
+    // settle in a single window render before paint, not one forced commit per event.
+    expect(viewportRenders - rendersBefore).toBe(1);
+    expect(row(10).querySelector('button')).not.toBeNull();
+    expect(row(48).querySelector('button')).toBeNull();
   });
   it('mounts a direct animation-frame write at its microtask checkpoint without a scroll event', async () => {
     await act(async () => root.render(<Fixture restore />));

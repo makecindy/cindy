@@ -9,9 +9,11 @@
 import { useState, type ReactNode } from 'react';
 import type { LucideIcon } from 'lucide-react';
 
+import { useTaskListMode } from '@/hooks/useTaskListMode';
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
 import { MachineSwitcherMenu } from './MachineSwitcherMenu';
+import { sidebarContentFilterCount } from '../hooks/helpers/sidebarFilterCore';
 import { SidebarFilterPopover } from './SidebarFilterPopover';
 import type { ProjectNode as ProjectNodeData } from '../lib/projectGrouping';
 import type { UseSidebarFilterReturn } from '../hooks/useSidebarFilter';
@@ -45,6 +47,10 @@ export function MainListScopeHeader({
     disabled: boolean;
   } | null;
 }): ReactNode {
+  const { mode } = useTaskListMode();
+  const showReminder = mode === 'inbox'
+    ? sidebarContentFilterCount(filter) > 0
+    : filter.status === 'archived';
   const [displaySettingsOpen, setDisplaySettingsOpen] = useState(false);
   return (
     <div className="group/sidebar-header flex h-6 items-center justify-between pr-0 pl-6">
@@ -62,7 +68,7 @@ export function MainListScopeHeader({
                   disabled={fold.disabled}
                   aria-label={fold.label}
                   className={cn(
-                    'flex h-7 w-7 items-center justify-center rounded-md',
+                    'flex h-7 w-7 items-center justify-center rounded-lg',
                     'text-[var(--sidebar-list-muted)]',
                     'transition-colors hover:text-[var(--sidebar-nav-text)]',
                     'disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent',
@@ -74,7 +80,7 @@ export function MainListScopeHeader({
             </div>
           ) : null}
           {/* 在看已归档任务时设置按钮常驻(带点),否则跟随段头 hover 出现。 */}
-          <div className={filter.status === 'archived' ? undefined : HEADER_HOVER_ACTION_CLASS}>
+          <div className={showReminder ? undefined : HEADER_HOVER_ACTION_CLASS}>
             <SidebarFilterPopover
               filter={filter}
               allKnownProjects={allKnownProjects}

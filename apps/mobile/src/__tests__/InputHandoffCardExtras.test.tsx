@@ -4,6 +4,32 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import type { InputHandoffSnapshot } from "@cindy/device-link";
 
+// Render the platform's real sheet with native controls projected into the test DOM.
+let platform: "android" | "ios" = "android";
+vi.mock("@/inputHandoff/InputHandoffSheet", async (importOriginal) => {
+  const android = await importOriginal<typeof import("@/inputHandoff/InputHandoffSheet")>();
+  const ios = await import("@/inputHandoff/InputHandoffSheet.ios");
+  return { InputHandoffSheet: (props: Parameters<typeof android.InputHandoffSheet>[0]) =>
+    createElement(platform === "ios" ? ios.InputHandoffSheet : android.InputHandoffSheet, props) };
+});
+vi.mock("@expo/ui", () => ({ Host: ({ children }: { children: ReactNode }) => children }));
+vi.mock("@expo/ui/swift-ui", () => {
+  const group = ({ children }: { children: ReactNode }) => children;
+  return {
+    Group: group, HStack: group, VStack: group, Text: group, ScrollView: group, RNHostView: group,
+    Image: () => null, Spacer: () => null,
+    BottomSheet: ({ isPresented, children }: { isPresented: boolean; children: ReactNode }) =>
+      isPresented ? createElement("div", { "data-testid": "interaction.inputHandoff.sheet" }, children) : null,
+    Button: ({ children, onPress }: { children: ReactNode; onPress(): void }) => createElement("button", { onClick: onPress }, children),
+  };
+});
+vi.mock("@expo/ui/swift-ui/modifiers", () => ({
+  ...Object.fromEntries(("accessibilityLabel background buttonStyle contentShape disabled fixedSize font foregroundStyle frame " +
+    "layoutPriority lineLimit multilineTextAlignment onGeometryChange padding presentationDetents presentationDragIndicator " +
+    "scrollDismissesKeyboard strokeBorder useScrollGeometryChange").split(/ +/).map(key => [key, () => undefined])),
+  shapes: { capsule: () => null, rectangle: () => null, roundedRectangle: () => null },
+}));
+
 const push = vi.fn();
 const openURL = vi.fn(async () => true);
 const setStringAsync = vi.fn(async () => true);
@@ -49,6 +75,7 @@ vi.mock("react-native", async () => {
     useWindowDimensions: () => ({ width: 390, height: 844 }),
     ScrollView: box,
     KeyboardAvoidingView: box,
+    Keyboard: { addListener: () => ({ remove() {} }) },
     // The sheet exists in the tree only while presented.
     Modal: ({ visible, children }: { visible: boolean; children?: ReactNode }) => (visible ? box({ children }) : null),
     Pressable: ({ children, onPress, onLayout, testID, accessibilityLabel }: { children?: ReactNode; onPress(e: unknown): void; onLayout?(e: unknown): void; testID?: string; accessibilityLabel?: string }) => {
@@ -93,6 +120,7 @@ vi.mock("@/components/MobilePrimitives", async () => {
 vi.mock("@/theme", () => ({
   useTheme: () => ({ colors: {} }),
   useThemedStyles: () => ({}),
+  radius: {},
   iconSize: {},
   iconStroke: {},
   spacing: {},
@@ -119,6 +147,7 @@ let roots: Root[] = [];
 afterEach(() => {
   act(() => roots.forEach((root) => root.unmount()));
   roots = [];
+  platform = "android";
   for (const fn of [push, openURL, setStringAsync, submit, shareAsync, writeAsStringAsync, openPicture]) fn.mockClear();
   answers.length = 0;
 });
@@ -154,12 +183,15 @@ function mount(snapshot: InputHandoffSnapshot) {
   const root = createRoot(container);
   roots.push(root);
   const onDecision = vi.fn();
+  const onQuietDecision = vi.fn();
   const render = (next: InputHandoffSnapshot) =>
     act(() => {
-      root.render(createElement(InputHandoffCard, { deviceId: "mac", snapshot: next, decisionBusy: false, onDecision }));
+      root.render(
+        createElement(InputHandoffCard, { deviceId: "mac", snapshot: next, decisionBusy: false, onDecision, onQuietDecision }),
+      );
     });
   render(snapshot);
-  return { container, onDecision, render };
+  return { container, onDecision, onQuietDecision, render };
 }
 const buttons = (container: Element) => [...container.querySelectorAll("button")].map((b) => b.textContent);
 const press = async (container: Element, label: string) => {
@@ -215,6 +247,51 @@ it("closes the sheet without cancelling, and comes back by itself for the next s
   expect((container.querySelector("input") as HTMLInputElement).value).toBe("");
 });
 
+// Production card regression: the encrypted receipt may beat the Host push.
+// An accepted step must not reopen empty or submit twice; the next step still opens. Tier: unit.
+it("keeps an accepted form closed until the next step arrives", async () => {
+  const { container, render } = mount(step());
+  await press(container, "interaction.inputHandoff.action.fill");
+  type(container.querySelector("input")!, "synthetic-account");
+  await press(container, "interaction.inputHandoff.action.continue");
+  expect(sheet(container)).toBeNull();
+  render(step({ revision: 3 }));
+  expect(sheet(container)).toBeNull();
+  render(step({ revision: 4, stepNumber: 2, controls: [{ id: "code", kind: "text", label: "Code", contentType: "one-time-code" }] }));
+  expect(sheet(container)).not.toBeNull();
+  expect((container.querySelector("input") as HTMLInputElement).value).toBe("");
+});
+
+// Unit: Host can publish ready/origin_changed without increasing stepNumber.
+// Exercise both receipt/push orders through the production card, including a second retry.
+it.each(["before", "after"])("reopens a retryable form when the Host update arrives %s the receipt", async (order) => {
+  let accept!: () => void;
+  submit.mockImplementationOnce(() => new Promise<undefined>(resolve => { accept = () => resolve(undefined); }));
+  const { container, render } = mount(step());
+  await press(container, "interaction.inputHandoff.action.fill");
+  type(container.querySelector("input")!, "old-account");
+  await press(container, "interaction.inputHandoff.action.continue");
+  const retry = step({ revision: 4, failure: "origin_changed", source: { app: "Google Chrome", origin: "https://other.example.com" } });
+  if (order === "before") render(retry);
+  await act(async () => accept());
+  if (order === "after") {
+    expect(sheet(container)).toBeNull();
+    render(retry);
+  }
+  expect(sheet(container)).not.toBeNull();
+  expect(container.textContent).toContain("interaction.inputHandoff.failure.origin_changed");
+  expect((container.querySelector("input") as HTMLInputElement).value).toBe("");
+  type(container.querySelector("input")!, "new-account");
+  await press(container, "interaction.inputHandoff.action.continue");
+  expect(submit).toHaveBeenCalledTimes(2);
+  expect(submit).toHaveBeenLastCalledWith(retry, {
+    expectedRevision: 4, values: { c0: "new-account" }, action: { kind: "submit" },
+  });
+  expect(sheet(container)).toBeNull(); // The previous failure is not a new retry receipt.
+  render({ ...retry, revision: 6 });
+  expect(sheet(container)).not.toBeNull();
+});
+
 it("offers handing back when nothing is left to type, and a countdown when it looks done", async () => {
   const { container, onDecision, render } = mount(step({ controls: [] }));
   expect(container.textContent).toContain("interaction.inputHandoff.nothingLeft");
@@ -237,6 +314,34 @@ it("opens a live view of just this window on the computer running the task", asy
   expect(buttons(ended.container)).not.toContain("interaction.inputHandoff.action.liveView");
 });
 
+it("sends a sign-in to the live view, and keeps the form when there is none", async () => {
+  const { container, onQuietDecision } = mount(step({ directSignIn: true, liveView: true }));
+  expect(container.textContent).toContain("interaction.inputHandoff.directSignIn.hint");
+  expect(buttons(container)).not.toContain("interaction.inputHandoff.action.fill");
+  await press(container, "interaction.inputHandoff.action.openRemoteDesktop");
+  expect(push).toHaveBeenCalledWith({
+    pathname: "/devices/desktop/[deviceId]",
+    params: { deviceId: "mac", deviceName: "Studio", handoff: "req1" },
+  });
+  // Working on the window takes the card, so other devices show it as being handled.
+  expect(onQuietDecision).toHaveBeenCalledWith(expect.objectContaining({ action: "claim", expectedRevision: 2 }));
+  await press(container, "interaction.inputHandoff.action.useForm");
+  expect(buttons(container)).toContain("interaction.inputHandoff.action.fill");
+  const noLive = mount(step({ directSignIn: true }));
+  expect(buttons(noLive.container)).toContain("interaction.inputHandoff.action.fill");
+});
+
+it("prefers the planned sign-in form on the phone and keeps access to the window", async () => {
+  const { container } = mount(step({ directSignIn: true, liveView: true, preferRemoteForm: true }));
+  expect(buttons(container)).not.toContain("interaction.inputHandoff.action.openRemoteDesktop");
+  await press(container, "interaction.inputHandoff.action.fill");
+  await press(container, "interaction.inputHandoff.action.liveView");
+  expect(push).toHaveBeenCalledWith({
+    pathname: "/devices/desktop/[deviceId]",
+    params: { deviceId: "mac", deviceName: "Studio", handoff: "req1" },
+  });
+});
+
 it("offers a sign-in code to copy and its link to open on this phone", async () => {
   const deviceCode = {
     code: "WDJB-MJHT",
@@ -257,6 +362,34 @@ it("offers a sign-in code to copy and its link to open on this phone", async () 
   // A link whose shown origin does not match is never offered.
   const forged = mount(step({ deviceCode: { ...deviceCode, origin: "https://example.com" }, controls: [] }));
   expect(buttons(forged.container)).not.toContain("interaction.inputHandoff.action.fill");
+});
+
+// Tier 1: the account challenge must open on the same phone even when it is the only device
+// available. After refresh, both the image and the primary button must use the new revision.
+it.each(["android", "ios"] as const)("opens, refreshes and cancels account verification on %s", async (os) => {
+  platform = os;
+  const first = step({ controls: [], picture: true, qr: "scan", accountVerification: true });
+  const { container, render, onDecision } = mount(first);
+  await act(async () => {});
+  const code = () => container.querySelector<HTMLButtonElement>('[data-testid="interaction.inputHandoff.qr.code"]');
+  expect(code()).not.toBeNull();
+  expect(buttons(container)).not.toContain("interaction.inputHandoff.qr.share");
+  await act(async () => code()!.click());
+  expect(openURL).toHaveBeenLastCalledWith(qrLink);
+  expect(answers).toHaveLength(0);
+  await press(container, "interaction.inputHandoff.refreshVerification");
+  expect(onDecision).toHaveBeenLastCalledWith({ kind: "input_handoff", action: "refresh", expectedRevision: 2 });
+  const nextUrl = "https://example.test/renewed";
+  openPicture.mockImplementationOnce(async (_snapshot, answer) => {
+    await answer({ ...qrPicture, qr: { text: nextUrl, url: nextUrl } });
+  });
+  render({ ...first, revision: 3 });
+  await press(container, "interaction.inputHandoff.qr.open");
+  expect(openURL).toHaveBeenLastCalledWith(nextUrl);
+  await press(container, "interaction.inputHandoff.action.close");
+  expect(onDecision).toHaveBeenLastCalledWith({ kind: "input_handoff", action: "cancel", expectedRevision: 3 });
+  render({ ...first, revision: 4, phase: "cancelled", terminal: true });
+  expect(sheet(container)).toBeNull();
 });
 
 it("hands a QR code from the computer to this phone: open its link here, or save or share it", async () => {
@@ -289,6 +422,23 @@ it("hands a QR code from the computer to this phone: open its link here, or save
   expect(sheet(container)).toBeNull();
   await press(container, "interaction.inputHandoff.action.done");
   expect(onDecision).toHaveBeenLastCalledWith({ kind: "input_handoff", action: "done", expectedRevision: 4 });
+});
+
+// ask_owner kind=scan with the agent's screenshot (2026-10-30): the host cannot see that
+// screen, so the sheet says where the picture came from, has nothing to tap, and the
+// owner hands back after confirming the sign-in on this phone.
+it("labels a code from the agent's screenshot and lets the owner hand back after scanning", async () => {
+  const { container, onDecision } = mount(step({ controls: [], picture: true, qr: "scan", agentPicture: true, agentControlled: true }));
+  await press(container, "interaction.inputHandoff.action.scan");
+  expect(container.textContent).toContain("interaction.inputHandoff.agentPicture");
+  expect(container.textContent).not.toContain("interaction.inputHandoff.agentControlled");
+  expect(container.textContent).not.toContain("interaction.inputHandoff.qr.hintLink");
+  expect(buttons(container)).not.toContain("interaction.inputHandoff.action.picture");
+  const code = container.querySelector('[data-testid="interaction.inputHandoff.qr.code"]') as HTMLButtonElement;
+  await act(async () => code.click());
+  expect(answers).toEqual([]);
+  await press(container, "interaction.inputHandoff.action.done");
+  expect(onDecision).toHaveBeenLastCalledWith({ kind: "input_handoff", action: "done", expectedRevision: 2 });
 });
 
 it("opens an app link here first, the way the phone camera would", async () => {

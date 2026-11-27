@@ -1,3 +1,6 @@
+import { projectAliasesForCache } from './remoteProjectAliases';
+import { cachedProjectAliases, projectAliasesForSessionList } from '@cindy/maker-shared/project-alias-sync';
+import { normalizeHomeDisplayOrder, type HomeDisplayOrder } from './homeProjectOrder';
 import { parseTaskCompanion, parseTaskTeammate } from './teammateTaskSource';
 import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 import { normalizeTaskTags } from '@cindy/maker-shared';
@@ -33,6 +36,7 @@ const HOME_LIST_PERSIST_DEBOUNCE_MS = 1200;
 export interface CachedHomeDeviceSnapshot {
   deviceId: string;
   deviceName: string;
+  projectAliases?: import('@cindy/maker-shared/project-alias-sync').CachedProjectAliases;
   sessions: RemoteSession[];
 }
 
@@ -40,6 +44,7 @@ type StoredHomeListCache = {
   version: 1;
   updatedAt: number;
   devices: CachedHomeDeviceSnapshot[];
+  displayOrder?: HomeDisplayOrder | null;
 };
 
 function storageKeyForUser(userId: string): string {
@@ -48,19 +53,25 @@ function storageKeyForUser(userId: string): string {
 
 // 读取快照;无缓存 / JSON 损坏 / 形状不对 / userId 缺失一律静默返回空数组(乐观 hydrate 不应抛错)。
 export async function getCachedHomeListSnapshot(userId: string): Promise<CachedHomeDeviceSnapshot[]> {
+  return (await getCachedHomeListState(userId)).devices;
+}
+
+export async function getCachedHomeListState(userId: string): Promise<{ devices: CachedHomeDeviceSnapshot[]; displayOrder: HomeDisplayOrder | null }> {
+  const empty = { devices: [], displayOrder: null };
   // 废弃的 v1 全局 key 顺带清掉(fire-and-forget,不阻塞冷启动首帧)。
   void AsyncStorage.removeItem(LEGACY_STORAGE_KEY).catch(() => undefined);
-  if (!userId.trim()) return [];
+  if (!userId.trim()) return empty;
   const raw = await AsyncStorage.getItem(storageKeyForUser(userId)).catch(() => null);
-  if (!raw) return [];
+  if (!raw) return empty;
   try {
     const parsed = JSON.parse(raw) as unknown;
     const devices = isRecord(parsed) && Array.isArray((parsed as StoredHomeListCache).devices)
       ? (parsed as StoredHomeListCache).devices
       : [];
-    return normalizeSnapshotDevices(devices, MAX_CACHED_HOME_SESSIONS_PER_DEVICE);
+    return { devices: normalizeSnapshotDevices(devices, MAX_CACHED_HOME_SESSIONS_PER_DEVICE),
+      displayOrder: isRecord(parsed) ? normalizeHomeDisplayOrder(parsed.displayOrder) : null };
   } catch {
-    return [];
+    return empty;
   }
 }
 
@@ -74,13 +85,17 @@ export async function cacheHomeListSnapshot(userId: string, sessions: readonly R
   // 账号的快照写回。写前写后各核对一次,写后发现被作废则删掉刚落盘的产物。
   const epoch = writeEpoch;
   const grouped = groupSessionsByDevice(sessions);
+  for (const device of grouped) {
+    device.projectAliases = projectAliasesForSessionList(projectAliasesForCache(userId, device.deviceId), device.sessions);
+  }
   for (const perDeviceLimit of SHRINK_STEPS) {
     const devices = normalizeSnapshotDevices(grouped, perDeviceLimit);
     if (devices.length === 0) {
       await AsyncStorage.removeItem(storageKey).catch(() => undefined);
       return;
     }
-    const payload: StoredHomeListCache = { version: 1, updatedAt: Date.now(), devices };
+    const payload: StoredHomeListCache = { version: 1, updatedAt: Date.now(), devices,
+      displayOrder: displayOrderOwner === userId ? displayOrder : null };
     const serialized = JSON.stringify(payload);
     if (utf8ByteLength(serialized) > MAX_CACHED_HOME_LIST_BYTES) continue;
     if (epoch !== writeEpoch) return;
@@ -91,6 +106,14 @@ export async function cacheHomeListSnapshot(userId: string, sessions: readonly R
     return;
   }
   // 缩到最小档仍超体积上限:放弃本次写入,保留旧快照(缓存只是首屏加速,不追求完整)。
+}
+
+// Reuse the existing snapshot write/debounce; no additional storage read or timer.
+let displayOrderOwner = '';
+let displayOrder: HomeDisplayOrder | null = null;
+export function rememberHomeDisplayOrder(userId: string, order: HomeDisplayOrder): void {
+  displayOrderOwner = userId;
+  displayOrder = normalizeHomeDisplayOrder(order);
 }
 
 // 去抖回写:collect 在定时器触发时才执行,拿的是届时最新的 store 快照(不闭包旧数据)。
@@ -126,6 +149,8 @@ export function scheduleHomeListSnapshotPersist(
 export async function clearCachedHomeListSnapshot(): Promise<void> {
   // 自增代际,作废所有 in-flight 的 cacheHomeListSnapshot 写入(见其代际核对)。
   writeEpoch += 1;
+  displayOrderOwner = '';
+  displayOrder = null;
   if (persistTimer) {
     clearTimeout(persistTimer);
     persistTimer = null;
@@ -177,14 +202,14 @@ function normalizeSnapshotDevices(
     const deviceName = typeof item.deviceName === 'string' && item.deviceName.trim()
       ? item.deviceName.trim()
       : deviceId;
-    devices.push({ deviceId, deviceName, sessions });
+    devices.push({ deviceId, deviceName, sessions, projectAliases: cachedProjectAliases(item.projectAliases) });
   }
   return devices
     .sort((a, b) => lastActivityTime(b.sessions[0]).localeCompare(lastActivityTime(a.sessions[0])))
     .slice(0, MAX_CACHED_HOME_DEVICES);
 }
 
-// 会话字段白名单瘦身:只保留列表渲染(标题 / 预览 / 时间 / 图标)、分组(workingDir / workspaceKind)
+// 会话字段白名单瘦身:只保留列表渲染(标题 / 预览 / 时间 / 图标)、分组(projectDir / workingDir / workspaceKind)
 // 与跳转(id)需要的字段。刻意丢弃:
 //  - live-only 状态(attached / deviceLinkAttached 等):冷启动时设备尚未连上,缓存它会画出假的在线态;
 //  - orcaRole === 'worker' 的会话:mobile 全局隐藏 worker 子会话,缓存它纯占体积;
@@ -207,25 +232,38 @@ function coerceCachedSession(item: unknown): RemoteSession | null {
     id,
     userId: typeof item.userId === 'string' ? item.userId : '',
     title: truncateText(typeof item.title === 'string' ? item.title : ''),
-    workingDir: typeof item.workingDir === 'string' ? truncateText(item.workingDir) : null,
+    workingDir: typeof item.workingDir === 'string' ? item.workingDir : null,
     workspaceKind: item.workspaceKind === 'dialogue' ? 'dialogue' : 'project',
     model: typeof item.model === 'string' ? truncateText(item.model) : '',
     effort: typeof item.effort === 'string' ? item.effort : '',
     permissionMode: typeof item.permissionMode === 'string' ? item.permissionMode : '',
     fastMode: (item.fastMode === 'ultrafast' ? 'ultrafast' : item.fastMode === true),
     status,
-    agentKind: item.agentKind === 'codex' || item.agentKind === 'pi' ? item.agentKind : 'cc',
+    agentKind: item.agentKind === 'codex' || item.agentKind === 'pi' || item.agentKind === 'acp' ? item.agentKind : 'cc',
     userSendAt: typeof item.userSendAt === 'string' ? item.userSendAt : null,
     lastActivityAt: typeof item.lastActivityAt === 'string' ? item.lastActivityAt : null,
     createdAt,
     updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : createdAt,
   };
+  if (session.agentKind === 'acp') {
+    if (typeof item.providerId === 'string' && item.providerId.trim()) {
+      session.providerId = truncateText(item.providerId.trim());
+    }
+    if (typeof item.agentDeviceId === 'string' && item.agentDeviceId.trim()) {
+      session.agentDeviceId = truncateText(item.agentDeviceId.trim());
+    }
+  }
+  // Project identity must round-trip exactly; truncating a path changes the project key.
+  if (typeof item.projectDir === 'string' || item.projectDir === null) session.projectDir = item.projectDir;
+  // Without projectDir the full workingDir identifies the project for cold alias lookup.
+  if (session.projectDir != null && session.workingDir) session.workingDir = truncateText(session.workingDir);
   if (typeof item.worktreePath === 'string') session.worktreePath = truncateText(item.worktreePath);
   if (typeof item.totalTokenUsage === 'number' && Number.isFinite(item.totalTokenUsage)) {
     session.totalTokenUsage = item.totalTokenUsage;
   }
   if (typeof item.totalCostUsd === 'number' && Number.isFinite(item.totalCostUsd)) {
     session.totalCostUsd = item.totalCostUsd;
+    if (item.totalCostUsdIsApproximate === true) session.totalCostUsdIsApproximate = true;
   }
   const totalMoney = normalizeRemoteMoney(item.totalMoney);
   if (totalMoney) session.totalMoney = totalMoney;
@@ -233,10 +271,16 @@ function coerceCachedSession(item: unknown): RemoteSession | null {
   // Keep that identity in the cold-start list too; otherwise an SSH row can borrow a local alias.
   if (typeof item.remoteHostId === 'string') session.remoteHostId = item.remoteHostId;
   if (typeof item.source === 'string') session.source = item.source;
+  if (item.sideChatPromoted === true) session.sideChatPromoted = true;
   session.companion = parseTaskCompanion(item.companion);
   session.taskTeammate = parseTaskTeammate(item.taskTeammate);
   if (orcaRole) session.orcaRole = orcaRole;
   if (typeof item.pinnedAt === 'string') session.pinnedAt = item.pinnedAt;
+  for (const field of ['snoozedUntil', 'snoozedAt'] as const) {
+    session[field] = typeof item[field] === 'string' && Number.isFinite(Date.parse(item[field]))
+      ? item[field] : null;
+  }
+  if (session.pinnedAt && typeof item.summary === 'string') session.summary = truncateText(item.summary);
   if (typeof item.preview === 'string') session.preview = truncateText(item.preview);
 
   // interface 之外的草稿类布尔标记(HomeSessionRow 用 readBooleanField 读取),只保留 true 值。

@@ -11,6 +11,7 @@ import {
   CINDY_SKILL_CREATOR_NAME,
   CINDY_BUILT_IN_SKILL_NAMES,
   CINDY_PLUGIN_CREATOR_NAME,
+  CINDY_THEME_CREATOR_NAME,
 } from '../../shared/cindyBuiltInSkills';
 import { withSkillMutation } from '../skillhub/sharedMutationLease';
 import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile';
@@ -24,9 +25,16 @@ const MANIFEST_FILE = '.cindy-system-skills.json';
 const VERSIONS_DIRECTORY = '.versions';
 const ACTIVE_BUNDLE_LINK = '.active';
 const BUILT_IN_SKILL_MUTATION_WAIT_MS = 5_000;
-/** Increment whenever shipped built-in Skill bytes change between releases. */
-export const BUILT_IN_SKILLS_BUNDLE_VERSION = 23;
+/**
+ * Compatibility floor for historical hand-incremented bundles; never lower it.
+ * The version is this base plus the number of record files shipped in
+ * `<bundled root>/_versions/`, see readBuiltInSkillsBundleVersion.
+ */
+export const BUILT_IN_SKILLS_BUNDLE_VERSION_BASE = 108;
+/** Directory beside the bundled Skills holding one record file per bundle change. */
+export const BUILT_IN_SKILLS_VERSION_RECORDS_DIRECTORY = '_versions';
 const PLUGIN_CREATOR_FIRST_BUNDLE_VERSION = 13;
+const THEME_CREATOR_FIRST_BUNDLE_VERSION = 113;
 
 export interface BuiltInSkillDescriptor {
   name: string;
@@ -51,6 +59,12 @@ export interface PrepareBuiltInSkillsResult {
   projectionSafe: boolean;
   changed: boolean;
   warnings: string[];
+  /**
+   * Subset of `warnings` describing stable state that retrying cannot clear (for example,
+   * preserving a verified newer installed bundle on an older build). Callers may cache past
+   * them and report each distinct set once instead of on every run.
+   */
+  persistentWarnings: string[];
 }
 
 export interface RefreshBuiltInClaudeSkillLinksOptions {
@@ -94,14 +108,16 @@ interface PublishedMaterializationManifest extends MaterializationManifest {
   activeBundle: string;
 }
 
-/** A pre-creator release legitimately contains only the two older Skills. */
+/** Releases before each creator legitimately omit that Skill. */
 function committedSkillDescriptors(
   descriptors: BuiltInSkillDescriptor[],
   manifest: MaterializationManifest,
 ): BuiltInSkillDescriptor[] {
   return descriptors.filter((descriptor) => !(
-    descriptor.name === CINDY_PLUGIN_CREATOR_NAME
-    && manifest.bundleVersion < PLUGIN_CREATOR_FIRST_BUNDLE_VERSION
+    (descriptor.name === CINDY_PLUGIN_CREATOR_NAME
+      && manifest.bundleVersion < PLUGIN_CREATOR_FIRST_BUNDLE_VERSION
+      || descriptor.name === CINDY_THEME_CREATOR_NAME
+      && manifest.bundleVersion < THEME_CREATOR_FIRST_BUNDLE_VERSION)
     && !Object.prototype.hasOwnProperty.call(manifest.fingerprints, descriptor.name)
   ));
 }
@@ -124,6 +140,67 @@ export function builtInSkillDescriptors(
   userDataDir: string,
   appDataDir?: string,
 ): BuiltInSkillDescriptor[] {
+  try {
+    const snapshot = readBuiltInSkillSnapshot(userDataDir, appDataDir);
+    if (!snapshot) return [];
+    for (const descriptor of snapshot.descriptors) {
+      if (!fs.lstatSync(descriptor.absolutePath).isDirectory()) return [];
+      if (hashDirectorySync(descriptor.absolutePath) !== snapshot.manifest.fingerprints[descriptor.name]) return [];
+      if (!fs.lstatSync(path.join(descriptor.absolutePath, 'SKILL.md')).isFile()) return [];
+    }
+    return snapshot.descriptors;
+  } catch {
+    return [];
+  }
+}
+
+/** List discovery yields during full content verification, without caching trust. */
+export async function builtInSkillDescriptorsAsync(
+  userDataDir: string,
+  appDataDir?: string,
+): Promise<BuiltInSkillDescriptor[]> {
+  try {
+    const snapshot = readBuiltInSkillSnapshot(userDataDir, appDataDir);
+    if (!snapshot) return [];
+    const entries = new Map<string, fs.BigIntStats>();
+    // Independent Skills can yield together; keep file hashing within each
+    // directory ordered and cap I/O at four lanes. No verified result is cached.
+    for (let offset = 0; offset < snapshot.descriptors.length; offset += 4) {
+      const verified = await Promise.all(snapshot.descriptors.slice(offset, offset + 4).map(async descriptor => {
+        try {
+          // Pin reads to the version selected before yielding, not a moving .active link.
+          const directory = path.join(snapshot.target, descriptor.name);
+          if (!(await fsp.lstat(directory)).isDirectory()) return false;
+          if (await hashDirectory(directory, entries) !== snapshot.manifest.fingerprints[descriptor.name]) return false;
+          return (await fsp.lstat(path.join(directory, 'SKILL.md'))).isFile();
+        } catch {
+          return false;
+        }
+      }));
+      if (verified.some(valid => !valid)) return [];
+    }
+    const current = readBuiltInSkillSnapshot(userDataDir, appDataDir);
+    if (!current || current.raw !== snapshot.raw || current.target !== snapshot.target
+      || current.realTarget !== snapshot.realTarget
+      || current.targetStat.dev !== snapshot.targetStat.dev
+      || current.targetStat.ino !== snapshot.targetStat.ino) return [];
+    // No further yields: reject edits to an early Skill while a later one was
+    // hashing. Recheck metadata, not file contents, to bound synchronous I/O.
+    // Directory stamps also detect added/deleted/replaced children; ctime catches
+    // same-size writes even when a writer restores the original mtime.
+    for (const [entry, before] of entries) {
+      const after = fs.lstatSync(entry, { bigint: true });
+      if (before.dev !== after.dev || before.ino !== after.ino || before.mode !== after.mode
+        || before.size !== after.size || before.mtimeNs !== after.mtimeNs
+        || before.ctimeNs !== after.ctimeNs) return [];
+    }
+    return snapshot.descriptors;
+  } catch {
+    return [];
+  }
+}
+
+function readBuiltInSkillSnapshot(userDataDir: string, appDataDir?: string) {
   const root = appDataDir
     ? sharedBuiltInSkillsRoot(appDataDir)
     : builtInSkillsRoot(userDataDir);
@@ -132,26 +209,24 @@ export function builtInSkillDescriptors(
   try {
     const raw = readAtomicFileSync(path.join(root, MANIFEST_FILE));
     const manifest = raw === null ? null : parseManifest(raw);
-    if (manifest?.schemaVersion !== 3 || !manifest.activeBundle) return [];
+    if (manifest?.schemaVersion !== 3 || !manifest.activeBundle) return null;
     const active = path.join(root, ACTIVE_BUNDLE_LINK);
     const target = activeBundleTarget(root, manifest.activeBundle);
-    if (!fs.lstatSync(active).isSymbolicLink()) return [];
-    if (!samePath(path.resolve(root, fs.readlinkSync(active)), target)) return [];
+    if (!fs.lstatSync(active).isSymbolicLink()) return null;
+    if (!samePath(path.resolve(root, fs.readlinkSync(active)), target)) return null;
     // A lexical in-root link must not escape through a substituted parent,
     // bundle, or Skill directory either.
     for (const directory of [path.dirname(target), target]) {
-      if (!fs.lstatSync(directory).isDirectory()) return [];
+      if (!fs.lstatSync(directory).isDirectory()) return null;
     }
-    if (!samePath(fs.realpathSync.native(active), fs.realpathSync.native(target))) return [];
+    const realTarget = fs.realpathSync.native(target);
+    if (!samePath(fs.realpathSync.native(active), realTarget)) return null;
+    const targetStat = fs.lstatSync(target);
+    if (!targetStat.isDirectory()) return null;
     const descriptors = committedSkillDescriptors(stableBuiltInSkillDescriptors(root, userDataDir), manifest);
-    for (const descriptor of descriptors) {
-      if (!fs.lstatSync(descriptor.absolutePath).isDirectory()) return [];
-      if (hashDirectorySync(descriptor.absolutePath) !== manifest.fingerprints[descriptor.name]) return [];
-      if (!fs.lstatSync(path.join(descriptor.absolutePath, 'SKILL.md')).isFile()) return [];
-    }
-    return descriptors;
+    return { raw, manifest, target, realTarget, targetStat, descriptors };
   } catch {
-    return [];
+    return null;
   }
 }
 
@@ -237,9 +312,14 @@ function hashDirectorySync(root: string): string {
   return hash.digest('hex');
 }
 
-async function hashDirectory(root: string): Promise<string> {
+async function hashDirectory(root: string, observed?: Map<string, fs.BigIntStats>): Promise<string> {
   const hash = createHash('sha256');
   const visit = async (directory: string): Promise<void> => {
+    if (observed) {
+      const stat = await fsp.lstat(directory, { bigint: true });
+      if (!stat.isDirectory()) throw new Error('bundled Skill directory changed');
+      observed.set(directory, stat);
+    }
     const entries = await fsp.readdir(directory, { withFileTypes: true });
     entries.sort((a, b) => a.name.localeCompare(b.name));
     for (const entry of entries) {
@@ -247,12 +327,35 @@ async function hashDirectory(root: string): Promise<string> {
       const relative = path.relative(root, absolute).split(path.sep).join('/');
       hash.update(entry.isDirectory() ? `d\0${relative}\0` : `f\0${relative}\0`);
       if (entry.isDirectory()) await visit(absolute);
-      else if (entry.isFile()) hash.update(await fsp.readFile(absolute));
+      else if (entry.isFile()) {
+        if (observed) {
+          const stat = await fsp.lstat(absolute, { bigint: true });
+          if (!stat.isFile()) throw new Error('bundled Skill file changed');
+          observed.set(absolute, stat);
+        }
+        hash.update(await fsp.readFile(absolute));
+      }
       else throw new Error(`unsupported bundled Skill entry: ${relative}`);
     }
   };
   await visit(root);
   return hash.digest('hex');
+}
+
+/** Finish a verification phase before any recovery/publication can mutate it. */
+async function readSkillFingerprints(
+  descriptors: readonly BuiltInSkillDescriptor[],
+): Promise<Map<string, string | null>> {
+  const fingerprints = new Map<string, string | null>();
+  for (let offset = 0; offset < descriptors.length; offset += 4) {
+    const batch = descriptors.slice(offset, offset + 4);
+    const results = await Promise.all(batch.map(descriptor =>
+      hashDirectory(descriptor.absolutePath).catch(() => null)));
+    for (let index = 0; index < batch.length; index++) {
+      fingerprints.set(batch[index]!.name, results[index]!);
+    }
+  }
+  return fingerprints;
 }
 
 function emptyManifest(): MaterializationManifest {
@@ -971,6 +1074,35 @@ async function projectBuiltInSkillLinksUnlocked(
 }
 
 /**
+ * Bundle version of the Skills shipped at `bundledRoot`: the base plus one per
+ * `*.md` record in its `_versions/` directory. A change to shipped Skill bytes
+ * adds a new record file instead of editing a shared number, so two changes
+ * never touch the same line and a merge of both is automatically newer than
+ * either. `pnpm check:built-in-skills` keeps the count from going backwards
+ * and from being reused for different bytes.
+ *
+ * A missing or empty directory is an incomplete package, not version zero:
+ * guessing low would make this build treat its own Skills as older than the
+ * installed ones and silently keep stale bytes.
+ */
+export async function readBuiltInSkillsBundleVersion(bundledRoot: string): Promise<number> {
+  const recordsRoot = path.join(bundledRoot, BUILT_IN_SKILLS_VERSION_RECORDS_DIRECTORY);
+  let entries: fs.Dirent[];
+  try {
+    entries = await fsp.readdir(recordsRoot, { withFileTypes: true });
+  } catch (error) {
+    throw new Error(
+      `built-in Skill version records are missing at ${recordsRoot}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  const records = entries.filter((entry) => entry.isFile() && entry.name.endsWith('.md')).length;
+  if (records < 1) {
+    throw new Error(`built-in Skill version records are empty at ${recordsRoot}`);
+  }
+  return BUILT_IN_SKILLS_BUNDLE_VERSION_BASE + records;
+}
+
+/**
  * Materialize Cindy-owned Skill bytes, keep every managed Agent projection on
  * the stable active path, then publish the whole bundle through one pointer.
  * The immutable old bundle remains available throughout the transaction.
@@ -982,9 +1114,10 @@ export async function prepareBuiltInSkills(
     ? sharedBuiltInSkillsRoot(options.appDataDir)
     : builtInSkillsRoot(options.userDataDir);
   const warnings: string[] = [];
+  const persistentWarnings: string[] = [];
   let changed = false;
   let projectionSafe = false;
-  const bundleVersion = options.bundleVersion ?? BUILT_IN_SKILLS_BUNDLE_VERSION;
+  const bundleVersion = options.bundleVersion ?? await readBuiltInSkillsBundleVersion(options.bundledRoot);
   if (!Number.isSafeInteger(bundleVersion) || bundleVersion < 1) {
     throw new Error(`invalid built-in Skill bundle version: ${bundleVersion}`);
   }
@@ -1035,14 +1168,9 @@ export async function prepareBuiltInSkills(
         activeBundleTarget(root, committedBundle),
         options.userDataDir,
       ), manifest);
-      committedBundleVerified = true;
-      for (const descriptor of committedDescriptors) {
-        const installed = await hashDirectory(descriptor.absolutePath).catch(() => null);
-        if (installed !== manifest.fingerprints[descriptor.name]) {
-          committedBundleVerified = false;
-          break;
-        }
-      }
+      const committedFingerprints = await readSkillFingerprints(committedDescriptors);
+      committedBundleVerified = committedDescriptors.every(descriptor =>
+        committedFingerprints.get(descriptor.name) === manifest.fingerprints[descriptor.name]);
       if (committedBundleVerified) {
         try {
           changed = await switchActiveBundle(
@@ -1061,13 +1189,9 @@ export async function prepareBuiltInSkills(
       }
       descriptors = stableDescriptors;
     }
-    const installedFingerprints = new Map<string, string | null>();
-    for (const descriptor of descriptors) {
-      installedFingerprints.set(
-        descriptor.name,
-        await hashDirectory(descriptor.absolutePath).catch(() => null),
-      );
-    }
+    // Re-read after pointer recovery: committed bytes and the active projection
+    // are separate facts, even when they normally resolve to the same directory.
+    const installedFingerprints = await readSkillFingerprints(descriptors);
     const existingDescriptors = committedSkillDescriptors(descriptors, manifest);
     projectionSafe = !isEmptyManifest(manifest) && committedBundleVerified && existingDescriptors.every((descriptor) => (
       typeof manifest.fingerprints[descriptor.name] === 'string'
@@ -1103,9 +1227,11 @@ export async function prepareBuiltInSkills(
     }
     const newerBundleIsInstalled = manifest.bundleVersion > bundleVersion;
     if (newerBundleIsInstalled) {
-      warnings.push(
-        `kept built-in Skill bundle ${manifest.bundleVersion}; this build only carries older bundle ${bundleVersion}`,
-      );
+      const warning =
+        `kept built-in Skill bundle ${manifest.bundleVersion}; this build only carries older bundle ${bundleVersion}`;
+      warnings.push(warning);
+      // Only treat the kept newer bundle as stable state when its projections were verified.
+      if (projectionSafe) persistentWarnings.push(warning);
       return true;
     }
 
@@ -1115,30 +1241,39 @@ export async function prepareBuiltInSkills(
       fingerprint: string;
       installedFingerprint: string | null;
     }> = [];
-    for (const descriptor of descriptors) {
-      const source = path.join(options.bundledRoot, descriptor.name);
-      try {
-        if (!(await fsp.stat(path.join(source, 'SKILL.md')).catch(() => null))?.isFile()) {
-          throw new Error(`bundled Skill is missing SKILL.md: ${source}`);
+    // Only source reads overlap. Drain every lane and preserve descriptor order
+    // before any materialization or publication, including when a read fails.
+    for (let offset = 0; offset < descriptors.length; offset += 4) {
+      const outcomes = await Promise.all(descriptors.slice(offset, offset + 4).map(async (descriptor): Promise<
+        { plan: (typeof plans)[number] } | { warning: string }
+      > => {
+        const source = path.join(options.bundledRoot, descriptor.name);
+        try {
+          if (!(await fsp.stat(path.join(source, 'SKILL.md')).catch(() => null))?.isFile()) {
+            throw new Error(`bundled Skill is missing SKILL.md: ${source}`);
+          }
+          const fingerprint = await hashDirectory(source);
+          const installedFingerprint = installedFingerprints.get(descriptor.name) ?? null;
+          const recordedFingerprint = manifest.fingerprints[descriptor.name];
+          const sameVersionConflict =
+            manifest.bundleVersion === bundleVersion &&
+            recordedFingerprint !== undefined &&
+            recordedFingerprint !== fingerprint;
+          if (sameVersionConflict) {
+            return { warning:
+              `kept built-in Skill ${descriptor.name} because bundle version ${bundleVersion} was reused for different bytes`,
+            };
+          }
+          return { plan: { descriptor, source, fingerprint, installedFingerprint } };
+        } catch (error) {
+          return { warning:
+            `could not materialize built-in Skill ${descriptor.name}: ${error instanceof Error ? error.message : String(error)}`,
+          };
         }
-        const fingerprint = await hashDirectory(source);
-        const installedFingerprint = installedFingerprints.get(descriptor.name) ?? null;
-        const recordedFingerprint = manifest.fingerprints[descriptor.name];
-        const sameVersionConflict =
-          manifest.bundleVersion === bundleVersion &&
-          recordedFingerprint !== undefined &&
-          recordedFingerprint !== fingerprint;
-        if (sameVersionConflict) {
-          warnings.push(
-            `kept built-in Skill ${descriptor.name} because bundle version ${bundleVersion} was reused for different bytes`,
-          );
-          continue;
-        }
-        plans.push({ descriptor, source, fingerprint, installedFingerprint });
-      } catch (error) {
-        warnings.push(
-          `could not materialize built-in Skill ${descriptor.name}: ${error instanceof Error ? error.message : String(error)}`,
-        );
+      }));
+      for (const outcome of outcomes) {
+        if ('plan' in outcome) plans.push(outcome.plan);
+        else warnings.push(outcome.warning);
       }
     }
 
@@ -1241,5 +1376,6 @@ export async function prepareBuiltInSkills(
     projectionSafe,
     changed,
     warnings,
+    persistentWarnings,
   };
 }

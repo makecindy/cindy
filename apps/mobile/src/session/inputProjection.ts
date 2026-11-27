@@ -1,3 +1,8 @@
+import type { MobileMakerTransport } from '@/device-link/mobileMakerTransport';
+import { agentKindForSession, leadingSlashInvocation, slashCommandDisplayLabel } from './composerPalette';
+import { lookupMobileSkillInvocation } from './newSession';
+import { isPluginEngineSessionKind } from './pluginEngines';
+import { parseOutputLimitDetails } from '@cindy/maker-shared';
 import { readChatReplyQuote, type ChatReplyQuote } from '@cindy/maker-shared/chat-reply-quote';
 import {
   buildAttachmentPersistFileRefs,
@@ -13,6 +18,8 @@ import type { RemoteSerializedAttachment } from '@/session/types';
 import { parseMobileToolLoopErrorDetails } from '@/session/agentErrorI18n';
 import { i18n } from '@/i18n';
 import { resolveSystemLocale } from '@/i18n/locale';
+import { currentClassicalStyleForLocale } from '@/i18n/classicalStyleStore';
+import { defaultClassicalReplyStyleFor, replyStyleFamilyOf } from '@cindy/maker-shared/classical-reply';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import {
   composerDocumentsEqual,
@@ -64,6 +71,7 @@ export function buildQueueRowPresentation(
 export const EMPTY_INPUT_PROJECTION: InputProjection = Object.freeze({
   sessionId: '',
   pendingQueue: [],
+  steerUnsupported: false,
   steeringQueueClientIds: [],
   queuePaused: false,
   queueExpanded: false,
@@ -73,6 +81,7 @@ export const EMPTY_INPUT_PROJECTION: InputProjection = Object.freeze({
   error: null,
   errorReason: null,
   toolLoop: null,
+  outputLimit: null,
   recovery: null,
   errorRetryText: null,
   credentialSwitchWait: null,
@@ -91,6 +100,7 @@ export function normalizeInputProjection(value: unknown, fallbackSessionId = '')
   return {
     sessionId: readString(record?.sessionId) ?? fallbackSessionId,
     pendingQueue,
+    steerUnsupported: record?.steerUnsupported === true,
     steeringQueueClientIds: readStringArray(record?.steeringQueueClientIds),
     queuePaused: record?.queuePaused === true,
     queueExpanded: record?.queueExpanded === true,
@@ -99,7 +109,10 @@ export function normalizeInputProjection(value: unknown, fallbackSessionId = '')
     queueAbortPending: record?.queueAbortPending === true,
     error: readString(record?.error),
     errorReason: readString(record?.errorReason),
+    ...(record?.reconnectHandoff === 'disabled' || record?.reconnectHandoff === 'exhausted'
+      ? { reconnectHandoff: record.reconnectHandoff } : {}),
     toolLoop: parseMobileToolLoopErrorDetails(record?.toolLoop),
+    outputLimit: parseOutputLimitDetails(record?.outputLimit) ?? null,
     recovery: record?.recovery,
     errorRetryText: readString(record?.errorRetryText),
     errorCanContinue: record?.errorCanContinue === true,
@@ -130,6 +143,47 @@ function readCredentialSwitchWait(
   if (blockedBySessionIds.length === 0) return null;
   const clientId = readString(record.clientId) ?? undefined;
   return { ...(clientId ? { clientId } : {}), blockedBySessionIds };
+}
+
+/** Resolve confirmed composer atoms at delivery; plain typed slash text stays literal. */
+export async function buildQueuedMessageForEngine(
+  maker: Pick<MobileMakerTransport, 'listAgentSkills'>,
+  ...args: Parameters<typeof buildQueuedTextMessage>
+): Promise<QueuedRemoteMessage> {
+  const [session, text, now, clientId, options] = args;
+  const ranges = options?.slashCommandRanges;
+  const token = ranges?.length ? leadingSlashInvocation(text) : undefined;
+  if (!token || !ranges?.some(range => range.start === token.start && range.end === token.end)) {
+    return buildQueuedTextMessage(...args);
+  }
+  const shortName = slashCommandDisplayLabel('/' + token.name).slice(1);
+  const targetIsPluginEngine = !!session.pluginEngineSwitchIntent
+    || (isPluginEngineSessionKind(session.agentKind) && !session.agentSwitchIntent);
+  const kind = targetIsPluginEngine
+    ? ('acp' as const)
+    : (session.agentSwitchIntent?.targetAgentKind ?? agentKindForSession(session));
+  const sourceKind = token.name.startsWith('skill:') ? 'pi' : 'claude-code';
+  if (shortName === token.name || kind === sourceKind) return buildQueuedTextMessage(...args);
+  const intentAgentDeviceId = targetIsPluginEngine
+    ? session.pluginEngineSwitchIntent?.agentDeviceId
+    : session.agentSwitchIntent?.agentDeviceId;
+  const agentDeviceId = intentAgentDeviceId === undefined ? session.agentDeviceId : intentAgentDeviceId;
+  const name = agentDeviceId || session.remoteHostId ? shortName
+    : kind === 'acp'
+      ? await lookupMobileSkillInvocation(maker, kind, session.workingDir ?? '', shortName).catch(() => shortName)
+      : await lookupMobileSkillInvocation(maker, kind, session.workingDir ?? '', shortName);
+  const delta = name.length - token.name.length;
+  const boundary = token.end;
+  function rebase<T extends { start: number; end: number }>(range: T): T {
+    return { ...range, start: range.start >= boundary ? range.start + delta : range.start,
+      end: range.end >= boundary ? range.end + delta : range.end };
+  }
+  return buildQueuedTextMessage(session, text.slice(0, token.start) + '/' + name + text.slice(token.end), now, clientId, {
+    ...options,
+    slashCommandRanges: ranges.map(rebase),
+    pastedTextRanges: options?.pastedTextRanges?.map(rebase),
+    agentReferences: options?.agentReferences?.map(rebase),
+  });
 }
 
 export function buildQueuedTextMessage(
@@ -170,11 +224,16 @@ export function buildQueuedTextMessage(
   );
   const createdAt = now.toISOString();
   const uiLanguage = resolveSystemLocale(i18n.resolvedLanguage || i18n.language);
+  // 文言界面与简体 / 繁體中文界面的文风分开记忆;每轮只随当前界面语境的取值上报。
+  const classicalStyle = replyStyleFamilyOf(uiLanguage)
+    ? currentClassicalStyleForLocale(uiLanguage) ?? defaultClassicalReplyStyleFor(uiLanguage)
+    : undefined;
 
   return {
     clientId,
     text: trimmed,
     uiLanguage,
+    ...(classicalStyle ? { classicalStyle } : {}),
     persistedContent,
     ...(attachments.length > 0 ? { files: [...attachments] } : {}),
     ...(options.agentReferences?.length ? { agentReferences: options.agentReferences } : {}),
@@ -198,6 +257,7 @@ export function buildQueuedTextMessage(
       agentKind,
       ...(options.planMode !== undefined ? { planMode: options.planMode } : {}),
       workingDir,
+      ...(session.projectDir ? { projectDir: session.projectDir } : {}),
       model: session.model,
       effort,
       permissionMode,

@@ -2,7 +2,17 @@ import { useTranslation } from 'react-i18next';
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover';
 import type { BotGroupMemberView, BotGroupMention } from '../../../shared/botGroupChat';
 import { BotAvatar } from './BotAvatar';
+import { BotGroupExternalBadge } from './BotGroupExternalBadge';
 import { botGroupMemberDisplayName } from './BotGroupTimelineModel';
+
+// Keep sent broadcasts intact across reader locales and the Buddy rename.
+// The timeline and identity resolver must recognize the same complete labels.
+export const BOT_GROUP_BOT_BROADCAST_LABELS = [
+  '所有伙伴', '所有夥伴', 'すべての仲間', '모든 동반자', 'All buddies',
+  'Alle Freunde', 'Tous les amis', 'Todos los amigos', 'Todos os amigos', '诸同伴', '諸同伴',
+  'All teammates', '모든 동료', 'Alle Teammitglieder', 'Tous les coéquipiers',
+  'Todos los compañeros', 'Todos os colegas', '诸同僚', '諸同僚', 'bots',
+] as const;
 
 const key = (name: string) => `bots.groupChat.server.settings.${name}`;
 
@@ -13,10 +23,12 @@ const key = (name: string) => `bots.groupChat.server.settings.${name}`;
 export function botGroupMentionMember(label: string, members: readonly BotGroupMemberView[],
   mentions: BotGroupMention, allLabel: string, serverBacked = false): BotGroupMemberView | undefined {
   const name = label.replace(/^@/, '').trim();
-  const fallback = serverBacked && !mentions.all && mentions.botIds.length === 0;
+  const fallback = serverBacked && !mentions.all && !mentions.allBots && mentions.botIds.length === 0;
   // The sender's locale can differ from the reader's; cover every shipped broadcast label.
   const broadcast = [allLabel, '所有人', '全員', '모두', 'all', 'everyone'].some((label) => label.toLowerCase() === name.toLowerCase());
   if ((mentions.all || fallback) && broadcast) return undefined;
+  const botBroadcast = BOT_GROUP_BOT_BROADCAST_LABELS.some(label => label.toLowerCase() === name.toLowerCase());
+  if ((mentions.allBots || fallback) && botBroadcast) return undefined;
   const mentioned = new Set(mentions.botIds);
   const matches = members.filter((member) => (fallback || mentioned.has(member.botId))
     && [member.name, botGroupMemberDisplayName(member), member.nickname || member.displayName || member.name]
@@ -45,6 +57,9 @@ export function BotGroupMentionCard({ member, anchor, onPointerEnter, onPointerL
   const status = !member || member.status === 'active' ? ''
     : member.status === 'paused' ? t('bots.groupChat.memberStatus.paused') : t('bots.groupChat.memberStatus.unavailable');
   const fullName = member?.nickname && member.displayName && member.nickname !== member.displayName ? member.displayName : null;
+  const orgDetail = member && member.actorKind === 'human'
+    ? (member.departmentPath || member.department || (member.nickname && member.orgName ? member.orgName : null))
+    : null;
   return (
     <Popover open={open}>
       <PopoverAnchor asChild>
@@ -59,8 +74,12 @@ export function BotGroupMentionCard({ member, anchor, onPointerEnter, onPointerL
           onPointerEnter={onPointerEnter} onPointerLeave={onPointerLeave}>
           <BotAvatar bot={member} size="md" />
           <span className="flex min-w-0 flex-1 flex-col">
-            <span className="truncate text-14 font-medium leading-5 text-[var(--text-primary)]">{botGroupMemberDisplayName(member)}</span>
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className="truncate text-14 font-medium leading-5 text-[var(--text-primary)]">{botGroupMemberDisplayName(member)}</span>
+              {member.external ? <BotGroupExternalBadge /> : null}
+            </span>
             {fullName ? <span className="truncate text-12 leading-4 text-[var(--text-secondary)]">{fullName}</span> : null}
+            {orgDetail ? <span className="truncate text-12 leading-[1.333] text-[var(--text-secondary)]" title={orgDetail}>{orgDetail}</span> : null}
             {role || status ? (
               <span className="truncate text-12 leading-4 text-[var(--text-tertiary)]">{[role, status].filter(Boolean).join(' · ')}</span>
             ) : null}

@@ -36,7 +36,8 @@ describe('mobile session list drawer', () => {
     // 动效全走 motionDuration/motionEasing 档位(review #1328):入场 enter+out、
     // 退场 exit+in、回弹 fast+move、spinner 走 spinnerCycle 语义例外档。
     expect(text).toContain('duration: motionDuration.enter');
-    expect(text).toContain('duration: motionDuration.exit');
+    expect(text).toContain('const remainingDuration = motionDuration.exit * effective;');
+    expect(text).toContain('duration: remainingDuration');
     expect(text).toContain('duration: motionDuration.fast');
     expect(text).toContain('Easing.bezier(...motionEasing.out)');
     expect(text).toContain('Easing.bezier(...motionEasing.in)');
@@ -48,7 +49,7 @@ describe('mobile session list drawer', () => {
     const text = source();
     expect(text).toContain("BackHandler.addEventListener('hardwareBackPress', () => {");
     // 多处除以 panelWidth,宽度必须有正下限(除零保险,不寄托在调用方身上)。
-    expect(text).toContain('Math.max(1, width + insets.left)');
+    expect(text).toContain('Math.max(1, shownWidth + insets.left)');
     // 手势位移并回 progress:关闭动画从当前视觉位置继续,不跳帧。
     expect(text).toContain('progress.value + dragX.value / panelWidth');
     // A cancelled left swipe must animate the merged visual position back to
@@ -60,7 +61,7 @@ describe('mobile session list drawer', () => {
     expect(text).toContain('.failOffsetX(16)');
     expect(text).toContain('.failOffsetY([-16, 16])');
     // 关闭动画期间 overlay 恒拦截,不放行点击穿透半透明 scrim(review #1328)。
-    expect(text).toContain('pointerEvents="auto"');
+    expect(text).toContain('pointerEvents={handoffShell ? "none" : "auto"}');
     // 临时面板不再有重复主页底栏;左上角与常驻列一样是系统菜单,关闭走遮罩、左滑与系统返回。
     expect(text).not.toContain('sessionDrawer.home');
     expect(text).not.toContain('onDismiss');

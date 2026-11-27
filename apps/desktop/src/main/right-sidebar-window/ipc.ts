@@ -7,12 +7,12 @@
  */
 
 import { ipcMain } from 'electron';
-import type { BrowserWindow, WebContents } from 'electron';
+import type { BrowserWindow } from 'electron';
 import type { SubagentProvider } from '@cindy/maker-shared/subagent-workspace';
 
 import { MAKER_INVOKE, MAKER_SEND } from '../maker-ipc/channels.js';
+import { getActiveDataOwnerPushStamp, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { createLogger } from '../logger.js';
-import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { requireEnum, requireObject, throwIpcError } from '../utils/ipcValidate.js';
 import type {
   RsbWindowCommand,
@@ -29,6 +29,8 @@ import {
   type RsbWindowTabHandoff,
 } from '../../shared/rightSidebarWindow.js';
 import { parseConversationSearchJump } from '../../shared/conversationSearchJump.js';
+import { isDataOwnerPushStamp } from '../../shared/dataOwnerPush.js';
+import { isPluginInstanceKey } from '../../shared/pluginIdentity.js';
 import { hasActiveRsbNativePopupSurfaces } from '../rsb-browser-bridge/native-popup-surfaces.js';
 import type { RsbWindowController } from './controller.js';
 
@@ -93,8 +95,25 @@ function parseContext(raw: unknown): RsbWindowContext {
   };
 }
 
+function parsePluginResource(r: Record<string, unknown>) {
+  if (typeof r.instanceId !== 'string' || !r.instanceId || r.instanceId.length > 256)
+    throwIpcError('INVALID_PARAMS', 'Invalid plugin instance');
+  if (r.resourceViewId !== undefined && (typeof r.resourceViewId !== 'string' || !/^[a-z][a-z0-9_-]{0,63}$/.test(r.resourceViewId)))
+    throwIpcError('INVALID_PARAMS', 'Invalid plugin resource view');
+  if (r.resourceInput !== undefined && (!r.resourceInput || typeof r.resourceInput !== 'object' || Array.isArray(r.resourceInput) ||
+    Buffer.byteLength(JSON.stringify(r.resourceInput), 'utf8') > MAX_STATE_JSON_BYTES)) throwIpcError('INVALID_PARAMS', 'Invalid plugin resource input');
+  return { instanceId: r.instanceId,
+    ...(r.resourceViewId === undefined ? {} : { resourceViewId: r.resourceViewId as string }),
+    ...(r.resourceInput === undefined ? {} : { resourceInput: r.resourceInput as Record<string, unknown> }) };
+}
+
 function parseCommand(raw: unknown): RsbWindowCommand {
   const r = requireObject(raw, 'command');
+  if (r.type === 'open-plugin-view') {
+    if (r.sessionId !== undefined || r.resourceViewId === undefined)
+      throwIpcError('INVALID_PARAMS', 'Global plugin views require a resource and no task');
+    return { type: 'open-plugin-view', ...parsePluginResource(r), resourceViewId: r.resourceViewId as string };
+  }
   if (
     typeof r.sessionId !== 'string' ||
     r.sessionId.length === 0 ||
@@ -112,7 +131,23 @@ function parseCommand(raw: unknown): RsbWindowCommand {
     if (typeof r.url !== 'string' || r.url.length === 0) {
       throwIpcError('INVALID_PARAMS', 'command.url required');
     }
-    return { type: r.type, sessionId: r.sessionId, url: r.url };
+    if (r.type === 'open-mail-preview' || r.pluginPreview === undefined) {
+      return { type: r.type, sessionId: r.sessionId, url: r.url };
+    }
+    const preview = requireObject(r.pluginPreview, 'command.pluginPreview');
+    if (!isPluginInstanceKey(preview.instanceId) || !isDataOwnerPushStamp(preview.ownerStamp) ||
+        (preview.reuseExisting !== undefined && preview.reuseExisting !== true)) {
+      throwIpcError('INVALID_PARAMS', 'Invalid plugin preview context');
+    }
+    const { dataOwnerId, ownerGeneration } = preview.ownerStamp;
+    return {
+      type: r.type, sessionId: r.sessionId, url: r.url,
+      pluginPreview: {
+        instanceId: preview.instanceId,
+        ownerStamp: { dataOwnerId, ownerGeneration },
+        ...(preview.reuseExisting === true ? { reuseExisting: true } : {}),
+      },
+    };
   }
   if (r.type === 'open-mail-card') {
     if (typeof r.callId !== 'string' || !r.callId || r.callId.length > 128) {
@@ -153,14 +188,11 @@ function parseCommand(raw: unknown): RsbWindowCommand {
     return { type: 'close-orca-workers-tab', sessionId: r.sessionId };
   }
   if (r.type === 'open-plugin-task') {
-    if (typeof r.instanceId !== 'string' || !r.instanceId || r.instanceId.length > 256) {
-      throwIpcError('INVALID_PARAMS', 'Invalid plugin instance');
-    }
-    return { type: 'open-plugin-task', sessionId: r.sessionId, instanceId: r.instanceId };
-  }
-  if (r.type === 'open-routines-tab') {
-    if (typeof r.botId !== 'string' || !r.botId || r.botId.length > 128) throwIpcError('INVALID_PARAMS', 'Invalid teammate');
-    return { type: 'open-routines-tab', sessionId: r.sessionId, botId: r.botId };
+    const path = r.resourceWorkingDir;
+    if (path !== undefined && (typeof path !== 'string' || !path || path.length > MAX_CONTEXT_PATH_LENGTH || !r.resourceViewId))
+      throwIpcError('INVALID_PARAMS', 'Invalid plugin resource working directory');
+    return { type: 'open-plugin-task', sessionId: r.sessionId, ...parsePluginResource(r),
+      ...(path === undefined ? {} : { resourceWorkingDir: path }) };
   }
   if (r.type === 'open-background-tasks-tab') {
     const hasFocusTaskId =
@@ -295,10 +327,13 @@ function parseCommandRouteRequest(raw: unknown): RsbWindowCommandRouteRequest {
   if (request.userInitiated !== undefined && typeof request.userInitiated !== 'boolean') {
     throwIpcError('INVALID_PARAMS', 'request.userInitiated must be boolean');
   }
+  const command = parseCommand(request.command);
+  const userInitiated = command.type === 'open-web-browser' && command.pluginPreview
+    ? false : request.userInitiated;
   return {
-    command: parseCommand(request.command),
+    command,
     allowOpen: request.allowOpen,
-    ...(request.userInitiated === undefined ? {} : { userInitiated: request.userInitiated }),
+    ...(userInitiated === undefined ? {} : { userInitiated }),
   };
 }
 
@@ -382,29 +417,8 @@ function parseTabHandoff(raw: unknown): RsbWindowTabHandoff | undefined {
 export function registerRsbWindowIpc(opts: {
   controller: RsbWindowController;
   getMainWindow: () => BrowserWindow | null;
-  allowBotWorkbenchPermission: (botId: string, sessionId: string, requestId: string) => { accepted: boolean };
-  authorizePoppedWorkbench?: (sender: WebContents, botId: string) => Promise<boolean>;
 }): void {
-  const { controller, getMainWindow, allowBotWorkbenchPermission, authorizePoppedWorkbench } = opts;
-
-  ipcMain.handle(MAKER_INVOKE.RSB_WINDOW_ALLOW_BOT_WORKBENCH_PERMISSION, async (event, raw: unknown) => {
-    assertTrustedAppRendererEvent(event);
-    const request = requireObject(raw, 'workbench permission');
-    for (const key of ['botId', 'sessionId', 'requestId'] as const) {
-      if (typeof request[key] !== 'string' || !request[key] || request[key].length > 128) {
-        throwIpcError('INVALID_PARAMS', `${key} must be a 1–128 character string`);
-      }
-    }
-    const context = event.sender === controller.getVisibleSidebarWebContents() ? controller.getContext() : null;
-    const botOwner = context?.botOwner;
-    const authorizedSidebar = Boolean(botOwner && botOwner.botId === request.botId &&
-      botOwner.canonical && context?.remoteHostId === null);
-    const authorizedPopout = !authorizedSidebar && await authorizePoppedWorkbench?.(event.sender, request.botId as string);
-    if (!authorizedSidebar && !authorizedPopout) {
-      return { accepted: false };
-    }
-    return allowBotWorkbenchPermission(request.botId as string, request.sessionId as string, request.requestId as string);
-  });
+  const { controller, getMainWindow } = opts;
 
   ipcMain.handle(MAKER_INVOKE.RSB_WINDOW_GET_STATE, () => controller.getState());
 
@@ -501,6 +515,12 @@ export function registerRsbWindowIpc(opts: {
     if (!main || main.isDestroyed() || event.sender !== main.webContents) {
       log.warn('RSB_WINDOW_SEND_COMMAND from non-main-window sender, dropped');
       return 'stale-context';
+    }
+    if (request.command.type === 'open-web-browser' && request.command.pluginPreview) {
+      const { ownerStamp } = request.command.pluginPreview;
+      const current = getActiveDataOwnerPushStamp();
+      if (isAppSessionBoundaryPending() || ownerStamp.dataOwnerId !== current.dataOwnerId ||
+          ownerStamp.ownerGeneration !== current.ownerGeneration) return 'stale-context';
     }
     return controller.routeCommand(request);
   });

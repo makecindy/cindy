@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createPluginMarketAgentTools } from '../agentTools.js';
-import type { PluginMarketDetail, PluginMarketSnapshot } from '../../../shared/pluginMarket.js';
+import type { PluginMarketDetail, PluginMarketPage } from '../../../shared/pluginMarket.js';
 import type { InstalledGhost } from '../../../shared/ghost.js';
-import { ServerApiError } from '../../serverApiClient.js';
+import { ServerApiError } from '../../serverApiClient.desktop.js';
 import { throwIpcError } from '../../utils/ipcValidate.js';
 import type { PluginMarketInstallContext } from '../service.js';
 
@@ -14,8 +14,9 @@ function harness(ghostId = 'mail-suite', name = 'Google Gmail') {
     installState: 'not-installed', enabled: null, sourceType: 'server', sourceMarketName: null,
     manifest: { schemaVersion: 3, id: ghostId, name, kind: 'chip', version: '1.0.0', entry: 'main.js' },
   };
-  const snapshot: PluginMarketSnapshot = {
+  const snapshot: PluginMarketPage = {
     items: [detail], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [],
+    nextCursor: null, counts: null,
   };
   const state = { installed: false, errorCode: null as string | null, current: true };
   const assertCurrent = vi.fn(() => {
@@ -24,7 +25,8 @@ function harness(ghostId = 'mail-suite', name = 'Google Gmail') {
   const release = vi.fn();
   const consentPrompt = vi.fn(async () => true);
   const market = {
-    snapshot: vi.fn(async () => snapshot), detail: vi.fn(async () => detail),
+    lookup: vi.fn(async () => snapshot),
+    query: vi.fn(async () => snapshot), detail: vi.fn(async () => detail),
     install: vi.fn(async (_id: string, _options: unknown, context: PluginMarketInstallContext) => {
       context.assertCurrent?.();
       state.installed = true;
@@ -34,7 +36,7 @@ function harness(ghostId = 'mail-suite', name = 'Google Gmail') {
   const tools = createPluginMarketAgentTools({
     market, installedState: () => ({ exists: state.installed, errorCode: state.errorCode }),
     captureRead: () => assertCurrent,
-    captureInstall: () => { assertCurrent(); return { assertCurrent, release, consentPrompt }; },
+    captureInstall: () => { assertCurrent(); return { assertCurrent, release, ownerGeneration: 1, consentPrompt: () => consentPrompt }; },
   });
   return { tools, market, detail, snapshot, state, release, consentPrompt };
 }
@@ -52,7 +54,7 @@ describe('Agent plugin discovery and installation', () => {
     'discovers and installs %s through the same catalog contract', async (id, name, query) => {
       const h = harness(id, name);
       expect(await h.tools.search(query)).toMatchObject({ ok: true, complete: true, items: [{ ghost_id: id, plugin_id: 'catalog-id', release_id: 'release-1', installed: false }] });
-      expect(h.market.snapshot).toHaveBeenCalledWith({ discoveryOnly: true });
+      expect(h.market.query).toHaveBeenCalledWith({ query, limit: 20, counts: false });
       expect(h.market.install).not.toHaveBeenCalled();
       expect(await h.tools.install({ pluginId: 'catalog-id', releaseId: 'release-1' })).toMatchObject({ ok: true, status: 'installed', ghost_id: id });
       expect(h.market.install).toHaveBeenCalledWith('catalog-id', { expectedReleaseId: 'release-1', expectedManifest: h.detail.manifest, allowSourceReplacement: false }, {
@@ -132,7 +134,7 @@ describe('Agent plugin discovery and installation', () => {
   });
 
   it('rejects an account switch during discovery before returning old account metadata', async () => {
-    const h = harness(); h.market.snapshot.mockImplementation(async () => { h.state.current = false; return h.snapshot; });
+    const h = harness(); h.market.query.mockImplementation(async () => { h.state.current = false; return h.snapshot; });
     await expect(h.tools.search('gmail')).rejects.toThrow();
   });
 
@@ -150,6 +152,24 @@ describe('Agent plugin discovery and installation', () => {
     });
     expect(await h.tools.install({ pluginId: 'catalog-id', releaseId: 'release-1' })).toMatchObject({ ok: false, errorCode: change === 'scope' ? 'PERMISSION_DENIED' : 'PRECONDITION_FAILED' });
     expect(h.release).toHaveBeenCalledOnce();
+  });
+
+  // A group and its dedicated follow-up can request the same release concurrently.
+  it('keeps one live offer and releases it after a declined installation', async () => {
+    const h = harness();
+    let decline!: () => void;
+    const decision = new Promise<void>(resolve => { decline = resolve; });
+    h.market.install.mockImplementationOnce(async () => {
+      await decision;
+      return throwIpcError('MUTATION_CANCELLED', 'declined');
+    });
+    const request = { pluginId: 'catalog-id', releaseId: 'release-1' };
+    const first = h.tools.install(request);
+    expect(await h.tools.install(request)).toMatchObject({ ok: false, errorCode: 'INSTALL_IN_PROGRESS' });
+    expect(h.market.install).toHaveBeenCalledOnce();
+    decline();
+    expect(await first).toMatchObject({ errorCode: 'MUTATION_CANCELLED' });
+    expect(await h.tools.install(request)).toMatchObject({ status: 'installed' });
   });
 
   it('tells the Agent not to retry when the user declines the install confirmation', async () => {

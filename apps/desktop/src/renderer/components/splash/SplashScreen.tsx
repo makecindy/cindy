@@ -1,9 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import type {
   DbSlimmingStartupPhase,
   DbSlimmingStartupProgress,
 } from '../../../shared/localDbMaintenance';
+import type {
+  WorkspaceMigrationStartupPhase,
+  WorkspaceMigrationStartupProgress,
+} from '../../../shared/workspaceMigration';
+import { formatBytes } from '@/components/chat/formatBytes';
 
 import { cn } from '@/lib/utils';
 import {
@@ -31,6 +37,9 @@ import {
   SPLASH_PANEL,
   STAGE,
 } from '@/components/login/loginDesignTokens';
+import { formatDownloadEta } from '@/components/ui/download-meter';
+import type { DownloadProgress } from '../../../shared/downloadProgress';
+import { modernLocaleOf, type SupportedLocale } from '../../../shared/locale';
 
 /**
  * SplashScreen — wave4 白底统一面板版(implementation-plan Step 3b WHAT1)。
@@ -51,9 +60,9 @@ import {
  *   manifest_failed/download_failed = 各自重试动作(checkEnvironment);
  *   spawn_failed 的 CTA =「前往下载」打开现网下载页(onSpawnFailedDownload),禁 retry。
  *
- * 不透明白底全盖 + 最短停留 3s 地板(+热更重启守地板)机制不变:前者由
+ * 不透明白底全盖 + 首启/热更 3s、已有会话返回启动 2s 的最短停留机制:前者由
  * LoginBrandStage 背景子层承载(var(--surface) token),后者仍在 useSplash
- * (MIN_DISPLAY_MS,fake-timer 用例保留)。
+ * (fake-timer 用例覆盖)。加载安全门不变；返回启动淡出复用标准 motion-enter。
  *
  * dev-only 状态遍历:VITE_SPLASH_PHASE_FIXTURE(readSplashPhaseFixture,DEV 短路)
  * 只覆盖**显示** phase,生命周期(fade/卸载/data-splash-active)仍跟真实 phase。
@@ -119,8 +128,23 @@ function dbCleanupPhaseTranslationKey(phase: DbSlimmingStartupPhase): string {
   }
 }
 
+function workspaceMigrationPhaseTranslationKey(phase: WorkspaceMigrationStartupPhase): string {
+  switch (phase) {
+    case 'preparing':
+      return 'splash.workspaceMigration.phase.preparing';
+    case 'copying':
+      return 'splash.workspaceMigration.phase.copying';
+    case 'verifying':
+      return 'splash.workspaceMigration.phase.verifying';
+    case 'switching':
+      return 'splash.workspaceMigration.phase.switching';
+    case 'cleaning':
+      return 'splash.workspaceMigration.phase.cleaning';
+  }
+}
+
 export function SplashScreen() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const splash = useSplash();
   const { step, totalSteps } = useEnvCheck();
   const { coverHeld } = useAppShellCover();
@@ -130,6 +154,8 @@ export function SplashScreen() {
   const [dbCleanupProgress, setDbCleanupProgress] = useState<DbSlimmingStartupProgress | null>(
     null,
   );
+  const [workspaceMigrationProgress, setWorkspaceMigrationProgress] =
+    useState<WorkspaceMigrationStartupProgress | null>(null);
   const [dbCleanupNow, setDbCleanupNow] = useState(() => Date.now());
   const [dbCleanupCancelPending, setDbCleanupCancelPending] = useState(false);
   const prevCoverHeldRef = useRef(coverHeld);
@@ -157,6 +183,24 @@ export function SplashScreen() {
   }, []);
 
   useEffect(() => {
+    const migration = window.electronAPI?.localDb?.bots?.workspaceMigration;
+    if (!migration?.onStartupProgress || !migration.getStartupProgress) return;
+    let disposed = false;
+    const applyProgress = (progress: WorkspaceMigrationStartupProgress | null) => {
+      if (disposed) return;
+      setWorkspaceMigrationProgress(progress);
+    };
+    const unsubscribe = migration.onStartupProgress(applyProgress);
+    void migration.getStartupProgress().then(applyProgress, () => {
+      // Startup presentation is best-effort; ensureReady remains the source of truth.
+    });
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
     if (!dbCleanupProgress) return;
     setDbCleanupNow(Date.now());
     const timer = window.setInterval(() => setDbCleanupNow(Date.now()), 1_000);
@@ -175,6 +219,7 @@ export function SplashScreen() {
       : realPhase;
 
   const {
+    isReturningSession,
     isDownloading: realIsDownloading,
     downloadProgress,
     downloadInfo,
@@ -229,16 +274,17 @@ export function SplashScreen() {
     prevCoverHeldRef.current &&
     !coverHeld &&
     (realPhase === 'splash_done' || realPhase === 'splash_skipped');
+  const startupMaintenanceActive = Boolean(workspaceMigrationProgress || dbCleanupProgress);
   const splashCanUnmount =
     !fixture &&
     (realPhase === 'splash_done' || realPhase === 'splash_skipped') &&
     !shellCoverVisible &&
     !shellCoverFadePending &&
-    !dbCleanupProgress;
+    !startupMaintenanceActive;
 
   useEffect(() => {
     const root = document.documentElement;
-    if (splashLifecycleActive || shellCoverVisible || dbCleanupProgress) {
+    if (splashLifecycleActive || shellCoverVisible || startupMaintenanceActive) {
       root.setAttribute('data-splash-active', '1');
     } else {
       root.removeAttribute('data-splash-active');
@@ -246,7 +292,7 @@ export function SplashScreen() {
     return () => {
       root.removeAttribute('data-splash-active');
     };
-  }, [dbCleanupProgress, shellCoverVisible, splashLifecycleActive]);
+  }, [shellCoverVisible, splashLifecycleActive, startupMaintenanceActive]);
 
   // handoff 推进锚之一:Splash 开始退场(fading_out/done/skipped)即上报。
   const splashExitReportedRef = useRef(false);
@@ -281,22 +327,46 @@ export function SplashScreen() {
 
   const isMac = window.electronAPI?.platform === 'darwin';
 
-  const title = dbCleanupProgress
-    ? t('splash.databaseCleanup.title')
-    : splashTitleFor(displayPhase, t, step, totalSteps);
+  const title = workspaceMigrationProgress
+    ? workspaceMigrationProgress.totalCount > 1
+      ? `${t('splash.workspaceMigration.title')} (${workspaceMigrationProgress.currentIndex}/${workspaceMigrationProgress.totalCount})`
+      : t('splash.workspaceMigration.title')
+    : dbCleanupProgress
+      ? t('splash.databaseCleanup.title')
+      : splashTitleFor(displayPhase, t, step, totalSteps);
   // 进度条仅更新下载态面板形态(updating/downloading);fixture 模式按显示 phase。
   const isDownloading =
-    !dbCleanupProgress &&
+    !startupMaintenanceActive &&
     (fixture
       ? displayPhase === 'splash_updating' || displayPhase === 'splash_downloading'
       : realIsDownloading);
   // fixture 冻结走查没有真实下载遥测,给进度行一组演示数据看排版
   // (dev-only:readSplashPhaseFixture 在 PROD 恒 null,本分支不可达)。
   const statsProgress = fixture && !realIsDownloading ? 31 : downloadProgress;
+  // Keep raw precision in the bar; only completed transfers show 100% in the label.
+  const statsPercent = Number.isFinite(statsProgress)
+    ? Math.min(statsProgress >= 100 ? 100 : 99, Math.max(0, Math.round(statsProgress)))
+    : 0;
   const statsInfo =
     fixture && !realIsDownloading
       ? { speed: '11.5 MB/s', downloaded: '29.7 MB', total: '97.1 MB' }
       : downloadInfo;
+  // The splash keeps its registered brand-canvas bar (§16 / loginDesignTokens) instead of the
+  // standard DownloadMeter; only its stats line follows the shared progress: a non-transfer
+  // phase (retrying and why, verifying, installing) replaces speed and bytes, and an active
+  // transfer adds time left.
+  const statsDownload: DownloadProgress | undefined =
+    fixture && !realIsDownloading ? undefined : downloadInfo.download;
+  const statsStatus = splashDownloadStatus(statsDownload, t);
+  const statsEta =
+    !statsStatus && statsDownload?.etaSeconds != null && statsDownload.speedBps > 0
+      ? t('downloadProgress.eta', {
+          time: formatDownloadEta(
+            statsDownload.etaSeconds,
+            modernLocaleOf((i18n?.language ?? 'en') as SupportedLocale),
+          ),
+        })
+      : null;
   // 三失败弹窗 → 统一面板形态(fixture 模式按显示 phase 遍历)。
   const dialogKind = fixture
     ? displayPhase === 'splash_manifest_failed'
@@ -314,7 +384,10 @@ export function SplashScreen() {
           ? 'spawn'
           : null;
   const isEnvFailed = displayPhase === 'splash_failed';
-  const showSpinner = !dbCleanupProgress && dialogKind === null && !isEnvFailed;
+  const showSpinner = !startupMaintenanceActive && dialogKind === null && !isEnvFailed;
+  const workspaceMigrationPercent = workspaceMigrationProgress
+    ? Math.round(Math.min(100, Math.max(0, workspaceMigrationProgress.progress)))
+    : 0;
   const dbCleanupPercent = dbCleanupProgress
     ? Math.round(Math.min(100, Math.max(0, dbCleanupProgress.progress)))
     : 0;
@@ -344,8 +417,8 @@ export function SplashScreen() {
   return (
     <div
       className={cn(
-        'fixed inset-0 z-[9999] overflow-hidden',
-        (realPhase === 'fading_out' || shellCoverFading) && !fixture && !dbCleanupProgress
+        'fixed inset-0 z-fullscreen overflow-hidden',
+        (realPhase === 'fading_out' || shellCoverFading) && !fixture && !startupMaintenanceActive
           ? 'pointer-events-none opacity-0'
           : 'opacity-100',
       )}
@@ -353,7 +426,9 @@ export function SplashScreen() {
         {
           // 根透明:不透明白底全盖由 LoginBrandStage 背景子层(var(--surface))承载,
           // 品牌五要素从下层透出——本层只叠状态面板与窗口 chrome。
-          transition: 'opacity var(--splash-fade-duration) var(--splash-fade-easing)',
+          transition: `opacity ${
+            isReturningSession ? 'var(--motion-enter)' : 'var(--splash-fade-duration)'
+          } var(--splash-fade-easing)`,
           WebkitAppRegion: 'drag',
         } as React.CSSProperties
       }
@@ -361,8 +436,8 @@ export function SplashScreen() {
       data-testid="splash-root"
     >
       {/* Toolbar:z-10(关闭/最小化,仅 Windows 原生 chrome) */}
-      <div className="relative z-10 flex h-[46px] shrink-0 items-center justify-end px-2">
-        {!isMac && !dbCleanupProgress && (
+      <div className="relative z-raised flex h-[46px] shrink-0 items-center justify-end px-2">
+        {!isMac && !startupMaintenanceActive && (
           <div style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
             <WindowControls />
           </div>
@@ -406,15 +481,17 @@ export function SplashScreen() {
                 // 距 spinner(y=188)/主按钮(y=300)均有余量。
                 subtitleMaxLines={3}
                 subtitle={
-                  dbCleanupProgress
-                    ? `${t(dbCleanupPhaseTranslationKey(dbCleanupProgress.phase))} · ${dbCleanupPercent}%`
-                    : dialogKind === 'manifest'
-                      ? t('splash.manifestFailed.description')
-                      : dialogKind === 'download'
-                        ? t('splash.downloadFailed.description')
-                        : dialogKind === 'spawn'
-                          ? t('splash.spawnFailed.description')
-                          : undefined
+                  workspaceMigrationProgress
+                    ? `${t(workspaceMigrationPhaseTranslationKey(workspaceMigrationProgress.phase))} · ${workspaceMigrationPercent}%`
+                    : dbCleanupProgress
+                      ? `${t(dbCleanupPhaseTranslationKey(dbCleanupProgress.phase))} · ${dbCleanupPercent}%`
+                      : dialogKind === 'manifest'
+                        ? t('splash.manifestFailed.description')
+                        : dialogKind === 'download'
+                          ? t('splash.downloadFailed.description')
+                          : dialogKind === 'spawn'
+                            ? t('splash.spawnFailed.description')
+                            : undefined
                 }
               />
             )}
@@ -480,26 +557,107 @@ export function SplashScreen() {
                     color: LOGIN_COLORS.secondaryText,
                   }}
                 >
-                  <span>{statsProgress}%</span>
-                  {statsInfo.speed && (
-                    <>
-                      <span>·</span>
-                      <span>{statsInfo.speed}</span>
-                    </>
-                  )}
-                  {statsInfo.downloaded && statsInfo.total && (
-                    <>
-                      <span>·</span>
-                      <span>
-                        {statsInfo.downloaded} / {statsInfo.total}
+                  <span>{statsPercent}%</span>
+                  {statsStatus ? (
+                    statsStatus.map((part) => (
+                      <span key={part} className="contents">
+                        <span>·</span>
+                        <span>{part}</span>
                       </span>
+                    ))
+                  ) : (
+                    <>
+                      {statsInfo.speed && (
+                        <>
+                          <span>·</span>
+                          <span>{statsInfo.speed}</span>
+                        </>
+                      )}
+                      {statsInfo.downloaded && statsInfo.total && (
+                        <>
+                          <span>·</span>
+                          <span>
+                            {statsInfo.downloaded} / {statsInfo.total}
+                          </span>
+                        </>
+                      )}
+                      {statsEta && (
+                        <>
+                          <span>·</span>
+                          <span>{statsEta}</span>
+                        </>
+                      )}
                     </>
                   )}
                 </div>
               </>
             )}
 
-            {dbCleanupProgress && (
+            {workspaceMigrationProgress && (
+              <>
+                <div
+                  role="progressbar"
+                  aria-label={t('splash.workspaceMigration.progressLabel')}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={workspaceMigrationPercent}
+                  data-testid="workspace-migration-progress-track"
+                  className="absolute overflow-hidden"
+                  style={{
+                    left: SPLASH_PANEL.progress.x,
+                    top: SPLASH_PANEL.databaseCleanup.progressY + 14,
+                    width: SPLASH_PANEL.progress.width,
+                    height: SPLASH_PANEL.progress.height,
+                    borderRadius: SPLASH_PANEL.progress.radius,
+                    background: LOGIN_COLORS.splashProgressTrack,
+                  }}
+                >
+                  <div
+                    data-testid="workspace-migration-progress-fill"
+                    className="h-full transition-[width] duration-[var(--motion-base)] ease-[var(--motion-ease-out)] motion-reduce:transition-none"
+                    style={{
+                      width: `${workspaceMigrationPercent}%`,
+                      borderRadius: SPLASH_PANEL.progress.radius,
+                      background: LOGIN_COLORS.splashProgressFill,
+                    }}
+                  />
+                </div>
+                {workspaceMigrationProgress.totalBytes > 0 ? (
+                  <div
+                    data-testid="workspace-migration-bytes"
+                    className="absolute flex items-center justify-center tabular-nums"
+                    style={{
+                      left: SPLASH_PANEL.stats.x,
+                      top: SPLASH_PANEL.databaseCleanup.statsY + 20,
+                      width: SPLASH_PANEL.stats.width,
+                      height: SPLASH_PANEL.stats.height,
+                      fontSize: SPLASH_PANEL.stats.fontSize,
+                      color: LOGIN_COLORS.secondaryText,
+                    }}
+                  >
+                    {formatBytes(workspaceMigrationProgress.copiedBytes)} /{' '}
+                    {formatBytes(workspaceMigrationProgress.totalBytes)}
+                  </div>
+                ) : null}
+                <div
+                  data-testid="workspace-migration-safety-hint"
+                  className="absolute flex items-center justify-center text-center [text-wrap:pretty]"
+                  style={{
+                    left: SPLASH_PANEL.databaseCleanup.hint.x,
+                    top: 274,
+                    width: SPLASH_PANEL.databaseCleanup.hint.width,
+                    height: 104,
+                    fontSize: SPLASH_PANEL.stats.fontSize,
+                    lineHeight: 1.45,
+                    color: LOGIN_COLORS.secondaryText,
+                  }}
+                >
+                  {t('splash.workspaceMigration.safetyHint')}
+                </div>
+              </>
+            )}
+
+            {!workspaceMigrationProgress && dbCleanupProgress && (
               <>
                 <div
                   role="progressbar"
@@ -614,4 +772,20 @@ export function SplashScreen() {
       </div>
     </div>
   );
+}
+
+/** Status words for a phase in which bytes are not moving; null while transferring. */
+function splashDownloadStatus(
+  download: DownloadProgress | undefined,
+  t: TFunction,
+): string[] | null {
+  if (!download || download.phase === 'downloading') return null;
+  if (download.phase === 'retrying') {
+    const parts = [t(`downloadProgress.retry.${download.retryReason ?? 'network'}`)];
+    if (download.attempt) parts.push(t('downloadProgress.attempt', { attempt: download.attempt }));
+    return parts;
+  }
+  if (download.phase === 'verifying' || download.phase === 'installing')
+    return [t(`downloadProgress.phase.${download.phase}`)];
+  return null;
 }

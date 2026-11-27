@@ -12,9 +12,12 @@
  */
 
 /** 结构化错误码 —— renderer 按 `providerError.<code>` 取 i18n 文案。 */
+import { isContextOverflowErrorMessage } from '@cindy/maker-shared/context-overflow-error';
 import {
   matchesDeterministicUsageExhaustionText,
+  readProviderBillingCode,
   redactSensitiveText,
+  type ProviderBillingCode,
 } from '@cindy/maker-shared/error-redaction';
 
 export type ProviderErrorCode =
@@ -34,17 +37,26 @@ export type ProviderErrorCode =
   | 'CONTEXT_TOO_LONG'
   /** 400 且命中「不认识的请求字段」类措辞：wire 兼容性问题（端点不完全兼容该协议）。 */
   | 'WIRE_INCOMPATIBLE'
+  /** 连接测试：返回体为空或无法识别为 Responses 结果。 */
+  | 'INVALID_PROBE_RESPONSE'
+  /** 连接测试：响应没有足够的生成证据。 */
+  | 'PROBE_NO_OUTPUT'
+  /** 连接测试：模型拒绝生成或响应被内容过滤。 */
+  | 'PROBE_REFUSED'
   /** 5xx：上游服务端错误，可重试。 */
   | 'UPSTREAM_ERROR'
   /** 网络层不可达（DNS / 连接被拒 / 连接超时），可重试。 */
   | 'UPSTREAM_UNREACHABLE'
   /** 请求超时（探测 10s / 观察侧不产生此码）。 */
   | 'TIMEOUT'
+  /** HTTPS 证书验证失败；检查证书链/信任配置，原样重试无效。 */
+  | 'CERT_ERROR'
   /** 无法归类。 */
   | 'UNKNOWN';
 
 export interface ProviderErrorClassification {
   code: ProviderErrorCode;
+  billingCode?: ProviderBillingCode;
   /** 是否值得原样重试（限流 / 网络抖动 / 上游 5xx）。 */
   retryable: boolean;
   /** 上游原始信息摘要（日志 / 详情展开用；UI 主文案走 i18n，不直接展示 detail）。 */
@@ -58,6 +70,12 @@ export interface ProviderErrorInput {
   bodyText?: string;
   /** 网络层错误码（ECONNREFUSED / ENOTFOUND / ETIMEDOUT / abort 等）。 */
   networkErrorCode?: string;
+}
+
+export function providerRetryAfterAt(value: string | null | undefined, now: number): number | undefined {
+  if (!value?.trim()) return;
+  const at = /^\d+(?:\.\d+)?$/.test(value.trim()) ? now + Number(value) * 1000 : Date.parse(value);
+  return Number.isFinite(at) && at >= now ? at : undefined;
 }
 
 /** 网络层「不可达」错误码集合（Node fetch/undici 常见值）。 */
@@ -75,17 +93,74 @@ const UNREACHABLE_CODES = new Set([
 /** 超时类错误码（AbortSignal.timeout 抛 TimeoutError / AbortError）。 */
 const TIMEOUT_CODES = new Set(['ETIMEDOUT', 'ABORT_ERR', 'TimeoutError', 'AbortError']);
 
+/** Node TLS certificate validation codes (https://nodejs.org/api/tls.html).
+ * Exclude protocol/cipher errors and OUT_OF_MEM, which is a resource failure. */
+const CERTIFICATE_CODES = new Set([
+  'CERT_HAS_EXPIRED',
+  'CERT_NOT_YET_VALID',
+  'CERT_REJECTED',
+  'CERT_REVOKED',
+  'CERT_CHAIN_TOO_LONG',
+  'CERT_SIGNATURE_FAILURE',
+  'CRL_HAS_EXPIRED',
+  'CRL_NOT_YET_VALID',
+  'CRL_SIGNATURE_FAILURE',
+  'ERROR_IN_CERT_NOT_AFTER_FIELD',
+  'ERROR_IN_CERT_NOT_BEFORE_FIELD',
+  'ERROR_IN_CRL_LAST_UPDATE_FIELD',
+  'ERROR_IN_CRL_NEXT_UPDATE_FIELD',
+  'HOSTNAME_MISMATCH',
+  'INVALID_CA',
+  'INVALID_PURPOSE',
+  'PATH_LENGTH_EXCEEDED',
+  'UNABLE_TO_DECODE_ISSUER_PUBLIC_KEY',
+  'UNABLE_TO_DECRYPT_CERT_SIGNATURE',
+  'UNABLE_TO_DECRYPT_CRL_SIGNATURE',
+  'UNABLE_TO_GET_CRL',
+  'CERT_UNTRUSTED',
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'ERR_TLS_CERT_ALTNAME_INVALID',
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'UNABLE_TO_GET_ISSUER_CERT',
+  'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+]);
+
+/** Preserve transport codes through fetch/SDK causes and AggregateError without
+ * exposing messages, URLs or certificate contents. Bound both cycles and breadth.
+ */
+export function providerNetworkErrorCode(error: unknown): string {
+  if (error instanceof Error && TIMEOUT_CODES.has(error.name)) return error.name;
+  const queue: unknown[] = [error];
+  const seen = new Set<object>();
+  let fallback: string | undefined;
+  for (let i = 0; i < queue.length && i < 32; i += 1) {
+    const item = queue[i];
+    if (!item || typeof item !== 'object' || seen.has(item)) continue;
+    seen.add(item);
+    const { code, cause, errors } = item as { code?: unknown; cause?: unknown; errors?: unknown };
+    if (typeof code === 'string' && /^[A-Z][A-Z0-9_]{0,79}$/.test(code)) {
+      if (CERTIFICATE_CODES.has(code) || TIMEOUT_CODES.has(code) || UNREACHABLE_CODES.has(code)) return code;
+      fallback ??= code;
+    }
+    if (cause && queue.length < 32) queue.push(cause);
+    if (Array.isArray(errors)) {
+      for (let j = 0; j < errors.length && queue.length < 32; j += 1) queue.push(errors[j]);
+    }
+  }
+  return fallback ?? (error instanceof Error && ['Error', 'TypeError', 'RangeError', 'AggregateError'].includes(error.name)
+    ? error.name : 'UNKNOWN_NETWORK_ERROR');
+}
+
 // ── 错误体 pattern（大小写不敏感；只在对应 status 分支内使用，避免误伤）───────────
 /** 模型不存在 / 无权使用：Anthropic "model: xxx not found"、OpenAI "The model `x` does not exist"、
  *  litellm "Invalid model name"、通用 "model_not_found"。 */
 const MODEL_NOT_FOUND_RE =
   /model[^\n]{0,80}(not.{0,4}(found|exist)|does not exist|invalid|unknown|unsupported)|model_not_found|invalid model/i;
-/** 上下文超长：Anthropic "prompt is too long"、OpenAI "maximum context length"、通用 token limit 措辞。 */
-const CONTEXT_TOO_LONG_RE =
-  /prompt is too long|maximum (?:context|prompt) length|context.{0,20}(length|window).{0,40}(exceed|too)|context_length_exceeded/i;
-/** wire 兼容性：端点不认识请求里的字段 / 参数（典型：litellm/Azure 对 Anthropic-only 字段报错）。 */
+/** wire 兼容性：端点不认识请求里的字段 / 参数（典型：litellm/Azure 对 Anthropic-only 字段报错）。
+ * Google 的 Unknown name 仅在明确 JSON payload 拒收且给出字段名时匹配（#9470）；兼容 JSON 转义引号。 */
 const WIRE_RE =
-  /(unknown|unexpected|unsupported|extra|unrecognized).{0,16}(field|parameter|argument|inputs?|property|request param)|extra inputs are not permitted|invalid_request_error[^\n]{0,120}(field|param)/i;
+  /(unknown|unexpected|unsupported|extra|unrecognized).{0,16}(field|parameter|argument|inputs?|property|request param)|extra inputs are not permitted|invalid_request_error[^\n]{0,120}(field|param)|\binvalid json payload received\.\s+unknown name\s+\\?"[^"\\\r\n]+\\?"/i;
 /** 鉴权失败措辞（个别网关 401 语义但回 400/403 文本）。 */
 const AUTH_RE = /invalid.{0,10}(api.?key|token)|authentication_error|unauthorized|api key not valid|令牌|鉴权失败/i;
 
@@ -129,6 +204,9 @@ export function classifyProviderError(input: ProviderErrorInput): ProviderErrorC
   const detail = body ? redactSensitiveText(body.slice(0, 500)) : undefined;
 
   if (networkErrorCode) {
+    if (CERTIFICATE_CODES.has(networkErrorCode)) {
+      return { code: 'CERT_ERROR', retryable: false, detail: networkErrorCode };
+    }
     if (TIMEOUT_CODES.has(networkErrorCode)) return { code: 'TIMEOUT', retryable: true, detail: networkErrorCode };
     if (UNREACHABLE_CODES.has(networkErrorCode)) {
       return { code: 'UPSTREAM_UNREACHABLE', retryable: true, detail: networkErrorCode };
@@ -140,7 +218,8 @@ export function classifyProviderError(input: ProviderErrorInput): ProviderErrorC
   if (status === undefined) return { code: 'UNKNOWN', retryable: false, detail };
 
   if (status === 401) return { code: 'AUTH_INVALID', retryable: false, detail };
-  if (status === 402) return { code: 'QUOTA_EXCEEDED', retryable: false, detail };
+  const billingCode = readProviderBillingCode(status, body);
+  if (billingCode) return { code: 'QUOTA_EXCEEDED', retryable: false, detail, billingCode };
   if (status === 403) {
     // 部分网关把 key 无效也报 403 —— 命中鉴权措辞时归 AUTH_INVALID（提示用户重填 key 更可行动）。
     if (AUTH_RE.test(body)) return { code: 'AUTH_INVALID', retryable: false, detail };
@@ -152,8 +231,13 @@ export function classifyProviderError(input: ProviderErrorInput): ProviderErrorC
     return { code: 'ENDPOINT_NOT_FOUND', retryable: false, detail };
   }
   if (status === 400 || status === 422) {
-    if (MODEL_NOT_FOUND_RE.test(body)) return { code: 'MODEL_NOT_FOUND', retryable: false, detail };
-    if (CONTEXT_TOO_LONG_RE.test(body)) return { code: 'CONTEXT_TOO_LONG', retryable: false, detail };
+    // Google reports rejected field names in a list. A field called `model`
+    // must not let the broad model regex consume the next field's "Unknown".
+    const modelErrorBody = /\binvalid json payload received\.\s+unknown name\s+\\?"[^"\\\r\n]+\\?"/i.test(body)
+      ? body.replace(/\bunknown name\s+\\?"[^"\\\r\n]+\\?"/gi, '')
+      : body;
+    if (MODEL_NOT_FOUND_RE.test(modelErrorBody)) return { code: 'MODEL_NOT_FOUND', retryable: false, detail };
+    if (isContextOverflowErrorMessage(body)) return { code: 'CONTEXT_TOO_LONG', retryable: false, detail };
     if (matchesDeterministicUsageExhaustionText(body)) {
       return { code: 'QUOTA_EXCEEDED', retryable: false, detail };
     }

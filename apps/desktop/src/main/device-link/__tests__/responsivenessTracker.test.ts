@@ -4,9 +4,18 @@
  * 状态机本体(阈值 / 退避 / 代数作废)在 maker-shared 的 deviceResponsiveness.test.ts;
  * 这里锁 main 接线层的语义:门禁快速失败、探测 tick 的单飞与前置条件、恢复回调、
  * 成功 / 失败分类(超时计失败、控制帧成功不定论、探测通道回包关熔断)。
+ *
+ * 测试价值
+ * - 生产入口与可观察结果：createResponsivenessTracker 的 guardInvoke / probeTick；对端正在持续送达业务分片时不误开
+ *   DEVICE_UNRESPONSIVE 熔断，超过 90 秒单向推送无业务回包仍照常熔断，其它静默对端互不影响。
+ * - Bug／规则依据：2026-11-24 远程任务断链回归（对端正在持续回传 272 KB 大包时并发请求超时误开熔断）。
+ * - 现有覆盖缺口：原测试仅覆盖整条共享 relay 静默（confirmRelayForTimeout），未覆盖单对端持续送达业务帧与耐心上限。
+ * - 最小失败输入：目标对端持续送达业务数据期间连续 3 批 INVOKE_TIMEOUT，以及超过 PEER_ACTIVE_DELIVERY_PATIENCE_MS 后继续超时。
+ * - tier：unit（纯内存时钟注入，无 Electron 或网络 I/O）。
+ * - 实测耗时：1.02s（pnpm --dir apps/desktop exec vitest run src/main/device-link/__tests__/responsivenessTracker.test.ts）
  */
 import { describe, expect, it, vi } from 'vitest';
-import { DeviceLinkError } from '@cindy/device-link';
+import { DeviceLinkError, providerShareHostPeer, REMOTE_AGENT_CHANNEL } from '@cindy/device-link';
 import {
   BREAKER_FAILURE_THRESHOLD,
   BREAKER_PROBE_BACKOFF_BASE_MS,
@@ -14,6 +23,7 @@ import {
 import {
   DEVICE_RESPONSIVENESS_PROBE_CHANNEL,
   OPEN_LINK_OBSERVATION_CHANNEL,
+  PEER_ACTIVE_DELIVERY_PATIENCE_MS,
   classifyDeviceSendFailure,
   classifyDeviceSendSuccess,
   createResponsivenessTracker,
@@ -30,6 +40,9 @@ function timeoutError(): DeviceLinkError {
 function harness(overrides?: {
   probeInvoke?: ReturnType<typeof vi.fn>;
   isProbeEligible?: () => boolean;
+  confirmRelayForTimeout?: (deviceId: string) => boolean;
+  isPeerDeliveringTraffic?: (deviceId: string, elapsedMs: number) => boolean;
+  canUpgradeLink?: (deviceId: string) => boolean;
   recoverLink?: ReturnType<typeof vi.fn>;
 }) {
   let at = 1_000_000;
@@ -40,6 +53,9 @@ function harness(overrides?: {
     onUnresponsiveChanged,
     isProbeEligible: overrides?.isProbeEligible ?? (() => true),
     recoverLink: overrides?.recoverLink,
+    confirmRelayForTimeout: overrides?.confirmRelayForTimeout,
+    isPeerDeliveringTraffic: overrides?.isPeerDeliveringTraffic,
+    canUpgradeLink: overrides?.canUpgradeLink,
     now: () => at,
   });
   return {
@@ -69,6 +85,35 @@ async function openBreaker(
 }
 
 describe('responsivenessTracker', () => {
+  // Unit: the screenshot's provider-share target never authorizes local-db:sessions:list.
+  // This exercises half-open recovery itself, not just the channel selector.
+  it.each(['group-owner', 'executor-m'])('probes the actual scoped Agent service for %s without reading its task database', async device => {
+    const target = providerShareHostPeer('shared', device);
+    const h = harness(); await openBreaker(h, target);
+    h.advance(BREAKER_PROBE_BACKOFF_BASE_MS); h.tracker.probeTick();
+    await Promise.resolve(); await Promise.resolve();
+    expect(h.probeInvoke).toHaveBeenCalledWith(target, REMOTE_AGENT_CHANNEL, [{ op: 'caps' }]);
+    expect(h.tracker.isUnresponsive(target)).toBe(false);
+  });
+  // Oct 30 multi-device outage: shared silence is not independent peer failure.
+  // Existing tests supplied only peer timeout codes, never relay health evidence.
+  it('does not open peer breakers or reopen links during an unconfirmed shared outage', async () => {
+    const confirmRelayForTimeout = vi.fn(() => false);
+    const recoverLink = vi.fn(async () => {});
+    const h = harness({ confirmRelayForTimeout, recoverLink });
+    for (let i = 0; i < BREAKER_FAILURE_THRESHOLD; i++) {
+      for (const peer of [DEV, OTHER_DEV])
+        await expect(h.tracker.guardInvoke(peer, 'local-db:sessions:list', async () => { throw timeoutError(); }))
+          .rejects.toThrow('no invoke-result');
+      h.advance(1100);
+    }
+    expect(h.tracker.getUnresponsiveDeviceIds()).toEqual([]);
+    expect(recoverLink).not.toHaveBeenCalled();
+    confirmRelayForTimeout.mockReturnValue(true);
+    await openBreaker(h);
+    expect(h.tracker.isUnresponsive(DEV)).toBe(true);
+    expect(h.tracker.isUnresponsive(OTHER_DEV)).toBe(false);
+  });
   it('local socket queue expiry neither opens the peer circuit nor starts link recovery', async () => {
     const recoverLink = vi.fn(async () => undefined);
     const h = harness({ recoverLink });
@@ -227,6 +272,8 @@ describe('responsivenessTracker', () => {
       'maker:get-capabilities',
       'maker:provider:list',
       'maker:git-safety:get',
+      'maker:list-agent-skills',
+      'maker:scan-at-resources',
     ];
     const timeoutBatch = async (): Promise<void> => {
       const results = await Promise.allSettled(
@@ -569,5 +616,53 @@ describe('classifyDeviceSendFailure / classifyDeviceSendSuccess', () => {
   it('持有探测席位时只有探测通道的回包算恢复', () => {
     expect(classifyDeviceSendSuccess('maker:list-agent-commands', true)).toBe('inconclusive');
     expect(classifyDeviceSendSuccess(DEVICE_RESPONSIVENESS_PROBE_CHANNEL, true)).toBe('responded');
+  });
+
+  it('对端持续回传业务数据期间不误开熔断,超耐心上限仍照常熔断且不影响静默对端', async () => {
+    let canUpgrade = false;
+    const recoverLink = vi.fn(async () => undefined);
+    const h = harness({
+      recoverLink,
+      isPeerDeliveringTraffic: (id, elapsedMs) => id === DEV && elapsedMs > 0,
+      canUpgradeLink: (id) => id === DEV && canUpgrade,
+    });
+    for (let i = 0; i < BREAKER_FAILURE_THRESHOLD + 1; i++) {
+      await expect(
+        h.tracker.guardInvoke(DEV, 'local-db:sessions:list', async () => {
+          h.advance(12_000);
+          throw timeoutError();
+        }),
+      ).rejects.toThrow('no invoke-result');
+      h.advance(1_100);
+    }
+    expect(h.tracker.isUnresponsive(DEV)).toBe(false);
+    // Pure V1 busy delivery avoids duplicate link-open spam; an available session upgrade still triggers recovery once.
+    expect(recoverLink).not.toHaveBeenCalled();
+    canUpgrade = true;
+    await expect(
+      h.tracker.guardInvoke(DEV, 'local-db:sessions:list', async () => {
+        h.advance(12_000);
+        throw timeoutError();
+      }),
+    ).rejects.toThrow('no invoke-result');
+    expect(recoverLink).toHaveBeenCalledWith(DEV);
+
+    // Silent neighbor still opens its own breaker normally.
+    await openBreaker(h, OTHER_DEV);
+    expect(h.tracker.isUnresponsive(OTHER_DEV)).toBe(true);
+    expect(h.tracker.isUnresponsive(DEV)).toBe(false);
+
+    // Exceeding PEER_ACTIVE_DELIVERY_PATIENCE_MS without any completed response stops excusing timeouts.
+    h.advance(PEER_ACTIVE_DELIVERY_PATIENCE_MS);
+    for (let i = 0; i < BREAKER_FAILURE_THRESHOLD; i++) {
+      await expect(
+        h.tracker.guardInvoke(DEV, 'local-db:sessions:list', async () => {
+          h.advance(1_000);
+          throw timeoutError();
+        }),
+      ).rejects.toThrow('no invoke-result');
+      h.advance(1_100);
+    }
+    expect(h.tracker.isUnresponsive(DEV)).toBe(true);
   });
 });

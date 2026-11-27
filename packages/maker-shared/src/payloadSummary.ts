@@ -1,4 +1,10 @@
-import { piEditReplacements } from './toolUseDescriptor.js';
+import { base64DecodedByteLength, isLooseBase64Chars, parseBase64DataUrl } from './dataUrl.js';
+import {
+  describeToolUse,
+  formatCollabTargetsSummary,
+  piEditReplacements,
+  truncateToolText,
+} from './toolUseDescriptor.js';
 import { presentationText, type PresentationLocalizer } from './presentationLocalization.js';
 
 export type PayloadKind = 'text' | 'diff' | 'media' | 'mermaid' | 'file';
@@ -211,6 +217,15 @@ export function buildDiffPayload<Diff extends PayloadToolDiffLike>(
 }
 
 export function formatPayloadToolUseSummary(toolName: string, input: unknown): string {
+  if (toolName.startsWith('collab:')) {
+    const descriptor = describeToolUse(toolName, input);
+    if (descriptor.kind === 'collab') {
+      if (descriptor.prompt) return truncateToolText(descriptor.prompt, 120);
+      const targets = formatCollabTargetsSummary(descriptor.targets, descriptor.targetCount, 4);
+      if (targets) return targets;
+      return '';
+    }
+  }
   const inp = readPayloadRecord(input);
   if (!inp) return `${toolName}()`;
   const keyParamMap: Record<string, string[]> = {
@@ -462,6 +477,13 @@ export function extractPayloadToolCardIds(text: string): string[] {
   if (!parsed) return [];
   return [...new Set([parsed.xdt_card_id, parsed.xdt_anchor_card_id]
     .filter((id): id is string => typeof id === 'string' && id.length > 0 && id.length <= 128))];
+}
+
+/** 声明排到本轮末尾的卡片 id(host 在 tool_result 里注入 xdt_card_turn_end: true)。 */
+export function extractPayloadTurnEndCardIds(text: string): string[] {
+  const parsed = parseToolResultPayload(text);
+  return parsed?.xdt_card_turn_end === true && typeof parsed.xdt_card_id === 'string'
+    && parsed.xdt_card_id.length > 0 && parsed.xdt_card_id.length <= 128 ? [parsed.xdt_card_id] : [];
 }
 
 export interface PayloadToolFile { url: string; title: string }
@@ -994,24 +1016,32 @@ function formatMediaPayloadDisplayText(
 }
 
 function describeDataImageUrl(url: string): { mimeLabel: string; sizeLabel: string } | null {
-  const match = /^data:image\/([^;,]+)(?:;[^,]*)?,([a-zA-Z0-9+/=\s]+)$/.exec(url);
-  if (!match) return null;
-  const subtype = match[1]?.trim().toUpperCase() || 'IMAGE';
-  const encoded = (match[2] ?? '').replace(/\s/g, '');
-  const padding = encoded.endsWith('==') ? 2 : encoded.endsWith('=') ? 1 : 0;
-  const bytes = Math.max(0, Math.floor((encoded.length * 3) / 4) - padding);
+  const parsed = parseBase64DataUrl(url, /^data:image\/([^;,]+)(?:;[^,]*)?$/, {
+    allowLineTerminators: true,
+  });
+  if (!parsed || !isLooseBase64Chars(parsed.payload, { allowWhitespace: true })) return null;
+  const subtype = parsed.header[1]?.trim().toUpperCase() || 'IMAGE';
+  const bytes = base64DecodedByteLength(parsed.payload);
   return {
     mimeLabel: subtype,
     sizeLabel: formatPayloadByteSize(bytes),
   };
 }
 
+const PAYLOAD_BYTE_UNITS = ['KB', 'MB'] as const;
+
 function formatPayloadByteSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
-  const kib = bytes / 1024;
-  if (kib < 1024) return `${kib.toFixed(kib >= 10 ? 0 : 1)} KB`;
-  const mib = kib / 1024;
-  return `${mib.toFixed(mib >= 10 ? 0 : 1)} MB`;
+  // 与 filePreview 的字节口吻同一个规则:档位按取整后的展示值选,约 1 MiB 的图片
+  // 不该显示成 "1024 KB" —— 那一档的合法最大值是 1023。
+  let value = Math.round(bytes) / 1024;
+  for (let unit = 0; ; unit += 1) {
+    const text = value < 10 ? value.toFixed(1) : `${Math.round(value)}`;
+    if (Number(text) < 1024 || unit === PAYLOAD_BYTE_UNITS.length - 1) {
+      return `${text} ${PAYLOAD_BYTE_UNITS[unit]}`;
+    }
+    value /= 1024;
+  }
 }
 
 export function isPayloadDesktopLocalMediaUrl(url: unknown): url is string {

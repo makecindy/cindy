@@ -15,7 +15,7 @@ vi.mock('@/hooks/useReducedMotion', () => ({ useReducedMotion: () => state.reduc
 vi.mock('@/lib/wallpaper', () => ({ isSceneWallpaper: (id: string) => id.startsWith('cindy-') }));
 
 describe('dynamic wallpaper lifecycle', () => {
-  it('keeps visibility on the video over an opaque theme backing without an independent veil', () => {
+  it('keeps visibility on the frame over an opaque theme backing without an independent veil', () => {
     // The import tracks CSS dependencies for Vitest related; unit mode stubs CSS
     // modules, so read the source explicitly. Pixel/HDR acceptance stays separate.
     const css = parse(readFileSync(resolve(__dirname, '../../../styles/globals.css'), 'utf8'));
@@ -30,7 +30,7 @@ describe('dynamic wallpaper lifecycle', () => {
     };
     expect(declarations('.app-wallpaper-video').background).toBe('var(--surface)');
     expect(declarations('.app-wallpaper-video').opacity).toBeUndefined();
-    expect(declarations('.app-wallpaper-video video').opacity).toBe(
+    expect(declarations('.app-wallpaper-video :is(video, canvas)').opacity).toBe(
       'calc(100% - var(--app-wallpaper-veil))',
     );
     css.walkRules((rule) => {
@@ -103,6 +103,64 @@ describe('dynamic wallpaper lifecycle', () => {
     expect(ensureVideo).not.toHaveBeenCalled();
     unmount();
     expect(document.documentElement.dataset.wallpaperMotion).toBeUndefined();
+  });
+  // Regression: a viewport-sized playing video lets Chromium hold a display
+  // wake lock. The macOS media layer needs a hidden decoder and a visible frame.
+  it('keeps the macOS decoder out of layout and paints its frames onto the wallpaper', () => {
+    vi.stubGlobal('electronAPI', { ...window.electronAPI, platform: 'darwin' });
+    const drawImage = vi.fn();
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+      drawImage,
+    } as unknown as CanvasRenderingContext2D);
+    const videoPrototype = HTMLVideoElement.prototype;
+    const originalRequest = Object.getOwnPropertyDescriptor(videoPrototype, 'requestVideoFrameCallback');
+    const originalCancel = Object.getOwnPropertyDescriptor(videoPrototype, 'cancelVideoFrameCallback');
+    const requestFrame = vi.fn<(callback: VideoFrameRequestCallback) => number>();
+    requestFrame.mockReturnValueOnce(1).mockReturnValueOnce(2).mockReturnValue(3);
+    const cancelFrame = vi.fn();
+    Object.defineProperties(videoPrototype, {
+      requestVideoFrameCallback: { configurable: true, value: requestFrame },
+      cancelVideoFrameCallback: { configurable: true, value: cancelFrame },
+    });
+    try {
+      const src = `cindy-media://client-wallpaper/${'a'.repeat(64)}.mp4`;
+      const { rerender, unmount } = render(
+        <WallpaperVideo wallpaperId="custom" motion="static" customWallpaperUrl={src} />,
+      );
+      const video = document.querySelector('video')!;
+      const canvas = document.querySelector('canvas')!;
+      Object.defineProperties(video, {
+        readyState: { value: HTMLMediaElement.HAVE_CURRENT_DATA },
+        videoWidth: { value: 1920 },
+        videoHeight: { value: 1080 },
+      });
+
+      expect(video.hidden).toBe(true);
+      expect(video.muted).toBe(true);
+      expect(video.play).not.toHaveBeenCalled();
+      fireEvent.loadedData(video);
+      expect(canvas.width).toBe(1920);
+      expect(canvas.height).toBe(1080);
+      expect(drawImage).toHaveBeenCalledWith(video, 0, 0);
+      expect(canvas.parentElement!.style.opacity).toBe('1');
+
+      rerender(<WallpaperVideo wallpaperId="custom" motion="dynamic" customWallpaperUrl={src} />);
+      expect(video.play).toHaveBeenCalledOnce();
+      const [callback] = requestFrame.mock.calls[0]!;
+      callback(0, {} as VideoFrameCallbackMetadata);
+      expect(drawImage).toHaveBeenCalledTimes(2);
+      expect(requestFrame).toHaveBeenCalledTimes(2);
+      unmount();
+      expect(cancelFrame).toHaveBeenCalledWith(2);
+    } finally {
+      cleanup();
+      if (originalRequest)
+        Object.defineProperty(videoPrototype, 'requestVideoFrameCallback', originalRequest);
+      else Reflect.deleteProperty(videoPrototype, 'requestVideoFrameCallback');
+      if (originalCancel)
+        Object.defineProperty(videoPrototype, 'cancelVideoFrameCallback', originalCancel);
+      else Reflect.deleteProperty(videoPrototype, 'cancelVideoFrameCallback');
+    }
   });
   it('reports an unplayable custom video and releases its decoder', () => {
     const onFailure = vi.fn();
@@ -314,5 +372,195 @@ describe('dynamic wallpaper lifecycle', () => {
     );
     expect(document.querySelector('video')).toBe(video);
     expect(ensureVideo).not.toHaveBeenCalled();
+  });
+  // #10690: a native loop's short waiting must not remove the marker that
+  // keeps production composer backgrounds transparent (unit tier).
+  it.each(['cindy-window', 'custom'] as const)(
+    'keeps the %s canvas and composer mode through short loop waits',
+    (wallpaperId) => {
+      vi.useFakeTimers();
+      render(
+        <WallpaperVideo
+          wallpaperId={wallpaperId}
+          motion="dynamic"
+          officialVideoUrl="/cached.mp4"
+          customWallpaperUrl={`cindy-media://client-wallpaper/${'a'.repeat(64)}.mp4`}
+        />,
+      );
+      const video = document.querySelector('video')!;
+      fireEvent.playing(video);
+      fireEvent.waiting(video);
+      act(() => vi.advanceTimersByTime(10));
+      expect(video.parentElement!.style.opacity).toBe('1');
+      expect(document.documentElement.dataset.wallpaperMotion).toBe('dynamic');
+      fireEvent.playing(video);
+      act(() => vi.advanceTimersByTime(5_000));
+      expect(video.parentElement!.style.opacity).toBe('1');
+      expect(document.documentElement.dataset.wallpaperMotion).toBe('dynamic');
+      expect(video.load).not.toHaveBeenCalled();
+    },
+  );
+  it('bounds repeated waiting before falling back and cancels a pending hide on unmount', () => {
+    vi.useFakeTimers();
+    const { unmount } = render(
+      <WallpaperVideo wallpaperId="cindy-window" motion="dynamic" officialVideoUrl="/cached.mp4" />,
+    );
+    const video = document.querySelector('video')!;
+    fireEvent.playing(video);
+    fireEvent.waiting(video);
+    act(() => vi.advanceTimersByTime(400));
+    fireEvent.waiting(video);
+    act(() => vi.advanceTimersByTime(100));
+    expect(video.parentElement!.style.opacity).toBe('0');
+    expect(document.documentElement.dataset.wallpaperMotion).toBeUndefined();
+    fireEvent.playing(video);
+    fireEvent.waiting(video);
+    unmount();
+    const loads = vi.mocked(video.load).mock.calls.length;
+    act(() => vi.advanceTimersByTime(10_000));
+    expect(video.load).toHaveBeenCalledTimes(loads);
+    expect(document.documentElement.dataset.wallpaperMotion).toBeUndefined();
+  });
+  it('keeps a decoded custom frame when motion stops during the waiting grace period', () => {
+    vi.useFakeTimers();
+    const src = `cindy-media://client-wallpaper/${'a'.repeat(64)}.mp4`;
+    const { rerender } = render(
+      <WallpaperVideo wallpaperId="custom" motion="dynamic" customWallpaperUrl={src} />,
+    );
+    const video = document.querySelector('video')!;
+    Object.defineProperty(video, 'readyState', { configurable: true, value: 2 });
+    fireEvent.playing(video);
+    fireEvent.waiting(video);
+    rerender(<WallpaperVideo wallpaperId="custom" motion="static" customWallpaperUrl={src} />);
+    act(() => vi.advanceTimersByTime(10_000));
+    expect(video.parentElement!.style.opacity).toBe('1');
+    expect(document.documentElement.dataset.wallpaperMotion).toBe('dynamic');
+    expect(video.load).not.toHaveBeenCalled();
+  });
+  it.each([
+    ['static', 10],
+    ['static', 500],
+    ['reduced', 10],
+    ['reduced', 500],
+  ] as const)(
+    'retains a custom %s frame across hide/restore after %ims waiting',
+    async (mode, delay) => {
+      vi.useFakeTimers();
+      const src = `cindy-media://client-wallpaper/${'a'.repeat(64)}.mp4`;
+      const { rerender } = render(
+        <WallpaperVideo wallpaperId="custom" motion="dynamic" customWallpaperUrl={src} />,
+      );
+      const video = document.querySelector('video')!;
+      Object.defineProperty(video, 'readyState', { configurable: true, value: 2 });
+      fireEvent.playing(video);
+      fireEvent.waiting(video);
+      act(() => vi.advanceTimersByTime(delay));
+      state.reduced = mode === 'reduced';
+      rerender(
+        <WallpaperVideo
+          wallpaperId="custom"
+          motion={mode === 'static' ? 'static' : 'dynamic'}
+          customWallpaperUrl={src}
+        />,
+      );
+      expect(video.parentElement!.style.opacity).toBe('1');
+      await act(async () => document.documentElement.setAttribute(HIDDEN_ANIMATION_ATTR, 'true'));
+      await act(async () => document.documentElement.removeAttribute(HIDDEN_ANIMATION_ATTR));
+      expect(video.parentElement!.style.opacity).toBe('1');
+      Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+      fireEvent(document, new Event('visibilitychange'));
+      Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+      fireEvent(document, new Event('visibilitychange'));
+      act(() => vi.advanceTimersByTime(15_000));
+      expect(document.querySelector('video')).toBe(video);
+      expect(video.parentElement!.style.opacity).toBe('1');
+      expect(video.play).toHaveBeenCalledOnce();
+      expect(video.load).not.toHaveBeenCalled();
+      Reflect.deleteProperty(document, 'hidden');
+    },
+  );
+  it('releases a failed decoder even during a short wait', () => {
+    vi.useFakeTimers();
+    render(
+      <WallpaperVideo wallpaperId="cindy-window" motion="dynamic" officialVideoUrl="/cached.mp4" />,
+    );
+    const video = document.querySelector('video')!;
+    fireEvent.playing(video);
+    fireEvent.waiting(video);
+    fireEvent.error(video);
+    expect(document.querySelector('video')).toBeNull();
+    expect(document.documentElement.dataset.wallpaperMotion).toBeUndefined();
+    const loads = vi.mocked(video.load).mock.calls.length;
+    act(() => vi.advanceTimersByTime(10_000));
+    expect(video.load).toHaveBeenCalledTimes(loads);
+  });
+  // #8597: the opaque video backing must not hide the still after a decoder
+  // interruption. Exercise the production component's media events (unit tier).
+  it.each(['waiting', 'emptied', 'stalled'])(
+    'reveals the still on %s and cancels recovery when playback returns',
+    (event) => {
+      vi.useFakeTimers();
+      render(
+        <WallpaperVideo
+          wallpaperId="cindy-window"
+          motion="dynamic"
+          officialVideoUrl="/cached.mp4"
+        />,
+      );
+      const video = document.querySelector('video')!;
+      Object.defineProperty(video, 'readyState', { configurable: true, value: 1 });
+      fireEvent.playing(video);
+      expect(video.parentElement!.style.opacity).toBe('1');
+      fireEvent(video, new Event(event));
+      if (event === 'waiting') act(() => vi.advanceTimersByTime(500));
+      expect(video.parentElement!.style.opacity).toBe('0');
+      expect(document.documentElement.dataset.wallpaperMotion).toBeUndefined();
+      act(() => vi.advanceTimersByTime(event === 'waiting' ? 4_500 : 5_000));
+      expect(video.load).toHaveBeenCalledOnce();
+      Object.defineProperty(video, 'readyState', { configurable: true, value: 4 });
+      fireEvent.playing(video);
+      expect(video.parentElement!.style.opacity).toBe('1');
+      act(() => vi.advanceTimersByTime(15_000));
+      expect(video.load).toHaveBeenCalledOnce();
+    },
+  );
+  it('suspends interrupted recovery while hidden and bounds reloads after returning', async () => {
+    vi.useFakeTimers();
+    const { unmount } = render(
+      <WallpaperVideo wallpaperId="cindy-window" motion="dynamic" officialVideoUrl="/cached.mp4" />,
+    );
+    const video = document.querySelector('video')!;
+    fireEvent.playing(video);
+    fireEvent.waiting(video);
+    await act(async () => document.documentElement.setAttribute(HIDDEN_ANIMATION_ATTR, 'true'));
+    act(() => vi.advanceTimersByTime(15_000));
+    expect(video.load).not.toHaveBeenCalled();
+    await act(async () => document.documentElement.removeAttribute(HIDDEN_ANIMATION_ATTR));
+    act(() => vi.advanceTimersByTime(15_000));
+    expect(video.load).toHaveBeenCalledTimes(2);
+    expect(video.parentElement!.style.opacity).toBe('0');
+    unmount();
+    // Unmount releases once, but must cancel every pending recovery callback.
+    const calls = vi.mocked(video.load).mock.calls.length;
+    act(() => vi.advanceTimersByTime(15_000));
+    expect(video.load).toHaveBeenCalledTimes(calls);
+  });
+  it('retains a decoded paused custom frame when buffering stalls with current data', () => {
+    vi.useFakeTimers();
+    render(
+      <WallpaperVideo
+        wallpaperId="custom"
+        motion="static"
+        customWallpaperUrl={`cindy-media://client-wallpaper/${'a'.repeat(64)}.mp4`}
+      />,
+    );
+    const video = document.querySelector('video')!;
+    Object.defineProperty(video, 'readyState', { configurable: true, value: 4 });
+    fireEvent.loadedData(video);
+    fireEvent.stalled(video);
+    act(() => vi.advanceTimersByTime(15_000));
+    expect(video.parentElement!.style.opacity).toBe('1');
+    expect(video.load).not.toHaveBeenCalled();
+    expect(video.play).not.toHaveBeenCalled();
   });
 });

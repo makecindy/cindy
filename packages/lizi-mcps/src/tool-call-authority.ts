@@ -1,4 +1,4 @@
-import { errorPayload } from './xdt-helper/_payload.js';
+import { controlErrorPayload, type errorPayload } from './xdt-helper/_payload.js';
 
 /**
  * Host decision for one tool call. Tool lists stay stable for a whole session
@@ -8,8 +8,14 @@ export type ToolCallAuthorization =
   | { ok: true; run?<T>(operation: () => Promise<T>): Promise<T> }
   | { ok: false; errorCode: string; message: string };
 
+export type HostToolCaller =
+  | { kind: 'task'; sessionId: string | undefined }
+  | { kind: 'plugin'; pluginId: string; dataOwnerId: string | null; ownerGeneration: number };
+
 export type ToolCallAuthorizer = (input: {
   sessionId: string | undefined;
+  /** Attested by the Host. Absent retains the existing task caller semantics. */
+  caller?: HostToolCaller;
   server: 'cindy_helper' | 'cindy_scheduler' | 'cindy_orca';
   tool: string;
   args: unknown;
@@ -28,6 +34,6 @@ export async function withToolCallAuthority<T>(
   } catch {
     decision = { ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE', message: '暂时无法确认这次调用的权限，请稍后重试。' };
   }
-  if (!decision.ok) return errorPayload(decision.errorCode, decision.message);
+  if (!decision.ok) return controlErrorPayload(decision);
   return decision.run ? decision.run(operation) : operation();
 }

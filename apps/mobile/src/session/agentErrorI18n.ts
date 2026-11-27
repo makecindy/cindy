@@ -1,7 +1,8 @@
-import { isResponsesLiteParallelToolCallsError, parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
+import { parseOutputLimitDetails, isReasoningDominatedOutputLimit } from '@cindy/maker-shared';
+import { isAccountUsageLimitReachedText, parseGeminiInputRateLimit, isRemoteAgentResumeRejectedError, isResponsesLiteParallelToolCallsError, localizeSubscriptionAccountError, parseAgentErrorCode, isRemoteCompactEncryptedContentError } from '@cindy/maker-shared/error-redaction';
 import { requiresAgentErrorConfigurationChange as requiresConfigurationChange } from '@cindy/maker-shared/error-redaction';
 import { i18n } from '@/i18n';
-import { describeAgentAuthError } from '@/device-link/remoteStatus';
+import { describeAgentAuthError, isCodexSharedAuthLinkUnavailableError } from '@/device-link/remoteStatus';
 
 export function requiresAgentErrorConfigurationChange(message: string): boolean {
   return message.includes('[REMOTE_AGENT_MEMBER_BUDGET_PAUSED]') || requiresConfigurationChange(message);
@@ -12,11 +13,15 @@ export function requiresAgentErrorConfigurationChange(message: string): boolean 
  * Retrying cannot fix missing host credentials, a lost Codex thread or content
  * encrypted for a different provider. Desktop has additional local-context gates.
  */
-export function describeNonRetryableAgentError(text: string): string | null {
+export function describeNonRetryableAgentError(text: string, reason?: unknown): string | null {
   if (text.includes('[REMOTE_AGENT_MEMBER_BUDGET_PAUSED]')) return i18n.t('session.remoteError.REMOTE_AGENT_MEMBER_BUDGET_PAUSED');
+  // 「共享凭证连不上」是可恢复的：电脑上把链接权限修好就能重试。归到「不可重试」会把
+  // 历史错误提示条里的「重试」按钮藏掉 —— 用户修好了权限，却没地方再试一次（#10301 review P2）。
+  if (isCodexSharedAuthLinkUnavailableError(text)) return null;
   const authGuidance = describeAgentAuthError(text);
   if (authGuidance) return authGuidance;
   if (/thread not found/i.test(text)) return i18n.t('session.tail.codexThreadLost');
+  if (isRemoteCompactEncryptedContentError(text, reason)) return null;
   if (/invalid_encrypted_content/i.test(text)) return i18n.t('session.tail.encryptedContentInvalid');
   return null;
 }
@@ -70,9 +75,41 @@ export function parseMobileToolLoopErrorDetails(value: unknown): MobileToolLoopE
 export function localizeAgentError(
   reason: unknown,
   toolLoop: MobileToolLoopErrorDetails | null,
+  message = '',
+  outputLimit?: unknown,
+  reconnectHandoff?: unknown,
 ): string | null {
+  // 「共享凭证连不上」的引导文案走这里：它可恢复，不能占用「不可重试」那条路
+  // （见 describeNonRetryableAgentError），但提示条仍要显示这段可执行的说明。
+  if (isCodexSharedAuthLinkUnavailableError(message)) {
+    return describeAgentAuthError(message);
+  }
+  if (parseGeminiInputRateLimit(message) !== null) return i18n.t(reason === 'gemini-input-retry-exhausted'
+    ? 'chat.geminiRateLimit.exhausted' : 'chat.geminiRateLimit.title');
+  const subscriptionGuidance = localizeSubscriptionAccountError(message, i18n.t, i18n.resolvedLanguage ?? i18n.language);
+  if (subscriptionGuidance) return subscriptionGuidance;
+  if (isRemoteCompactEncryptedContentError(message, reason)) return i18n.t('session.tail.remoteCompactEncryptedContent');
+  if (reason === 'acp-usage-limit') return i18n.t('session.tail.usageLimitReached');
+  if (reason === 'acp-auth-required') return i18n.t('chat.subscriptionAccountError.loginRequired');
+  if (reason === 'UPSTREAM_OVERLOADED' || reason === 'acp-overloaded') return i18n.t('interaction.contextSheet.goalStatus.capacityLimited');
+  if (reason === 'unexecuted-tool-markup') return i18n.t('session.tail.unexecutedToolMarkup');
   if (reason === 'yield-continuation-incomplete') return i18n.t('session.tail.executionResultUnavailable');
-  if (reason === 'output-limit') return i18n.t('session.tail.outputLimit');
+  if (reason === 'codex_reconnect_stalled') {
+    const summary = i18n.t('session.tail.codexReconnectStalled');
+    if (reconnectHandoff === 'disabled') return `${summary} ${i18n.t('session.tail.reconnectAutoResumeDisabled')}`;
+    if (reconnectHandoff === 'exhausted') return `${summary} ${i18n.t('session.tail.reconnectAutoResumeExhausted')}`;
+    return summary;
+  }
+  if (reason === 'silent-stop-exhausted') return i18n.t('session.tail.silentStopExhausted');
+  if (reason === 'output-limit') {
+    const details = parseOutputLimitDetails(outputLimit);
+    const guidance = i18n.t(details && isReasoningDominatedOutputLimit(details)
+      ? 'session.tail.outputLimitReasoning' : 'session.tail.outputLimit');
+    if (!details) return guidance;
+    const usage = i18n.t(details.reasoningTokens === undefined
+      ? 'session.tail.outputLimitOutputUsage' : 'session.tail.outputLimitUsage', { ...details });
+    return `${usage} ${guidance}`;
+  }
   if (reason !== 'tool_use_loop_detected') return null;
   if (!toolLoop) return i18n.t('session.tail.toolUseLoopDetected');
   return i18n.t(TOOL_LOOP_I18N_KEYS[toolLoop.kind], { count: toolLoop.count });
@@ -90,6 +127,7 @@ export function autoReviewUnavailableGuidanceCode(sessionSource: unknown): strin
 
 /** Unknown provider messages stay in diagnostic details, never in the localized summary. */
 export function unclassifiedAgentErrorI18nKey(message: string, sessionSource?: unknown): string {
+  if (isRemoteAgentResumeRejectedError(message)) return 'session.remoteError.REMOTE_AGENT_RESUME_UNAVAILABLE';
   if (message.includes('[REMOTE_AGENT_MEMBER_BUDGET_PAUSED]')) return 'session.remoteError.REMOTE_AGENT_MEMBER_BUDGET_PAUSED';
   const limitReason = /\[REMOTE_AGENT_BUSY\] \[(DEVICE_LIMIT|TOTAL_LIMIT)\]/.exec(message)?.[1];
   if (limitReason) return `session.remoteError.REMOTE_AGENT_${limitReason}`;
@@ -99,8 +137,10 @@ export function unclassifiedAgentErrorI18nKey(message: string, sessionSource?: u
     : parsed?.code;
   const key = code ? `session.remoteError.${code}` : null;
   if (key && i18n.exists(key)) return key;
-  return isResponsesLiteParallelToolCallsError(message)
-    ? 'session.tail.requestFormatError'
+  if (isResponsesLiteParallelToolCallsError(message)) return 'session.tail.requestFormatError';
+  // The account ran out of its periodic allowance: say so instead of "reply failed".
+  return isAccountUsageLimitReachedText(message)
+    ? 'session.tail.usageLimitReached'
     : 'session.tail.replyFailed';
 }
 
@@ -109,6 +149,7 @@ export function unclassifiedAgentErrorI18nKey(message: string, sessionSource?: u
  * Unknown codes return null so the caller keeps its own fallback instead of "reply failed".
  */
 export function remoteActionErrorI18nKey(message: string): string | null {
+  if (isRemoteAgentResumeRejectedError(message)) return 'session.remoteError.REMOTE_AGENT_RESUME_UNAVAILABLE';
   if (message.includes('[REMOTE_AGENT_MEMBER_BUDGET_PAUSED]')) return 'session.remoteError.REMOTE_AGENT_MEMBER_BUDGET_PAUSED';
   const code = parseAgentErrorCode(message)?.code;
   const key = code ? `session.remoteError.${code}` : null;
@@ -116,5 +157,6 @@ export function remoteActionErrorI18nKey(message: string): string | null {
 }
 
 export function localizeUnclassifiedAgentError(message: string, sessionSource?: unknown): string {
-  return i18n.t(unclassifiedAgentErrorI18nKey(message, sessionSource));
+  return localizeSubscriptionAccountError(message, i18n.t, i18n.resolvedLanguage ?? i18n.language)
+    ?? i18n.t(unclassifiedAgentErrorI18nKey(message, sessionSource));
 }

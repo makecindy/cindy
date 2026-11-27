@@ -58,14 +58,10 @@ describe('ChatInput 的入口门控与调用路由', () => {
 
   it('lazy-create 从 DB 对齐原子模型选择的 effort 与 Fast,不复用旧排队快照', () => {
     const hostSource = readFileSync(
-      resolve(process.cwd(), 'src/main/maker-ipc/register.ts'),
+      resolve(process.cwd(), 'src/main/maker-ipc/sessionOptionsReconciler.ts'),
       'utf8',
     );
-    const start = hostSource.indexOf('async function reconcileCreateOptsAgainstDb(');
-    const end = hostSource.indexOf('const agentSwitchDeps:', start);
-    expect(start).toBeGreaterThan(-1);
-    expect(end).toBeGreaterThan(start);
-    const body = hostSource.slice(start, end);
+    const body = hostSource;
     expect(body).toContain('effort: sessions.effort,');
     expect(body).toContain('fastMode: sessions.fastMode,');
     expect(body).toContain('permissionMode: sessions.permissionMode,');
@@ -330,9 +326,6 @@ describe('ChatInput 的入口门控与调用路由', () => {
     const start = source.indexOf('const sessionEngineFilter = useMemo(');
     expect(start).toBeGreaterThan(-1);
     const body = source.slice(start, source.indexOf('}, [', start));
-    // 取消确认 = false(现状,不变)。**有意变更**(Chris 2026-08-20):确认只认任务真实引擎,
-    // 挂着的意图不算已经确认过 —— Claude 任务点了 Pi 收藏再点另一条,仍要弹框。
-    expect(body).toContain('if (!(await confirmAgentBrowseSwitch(targetAgent))) return false;');
     expect(body).toContain('runtimeAgent: runtimeAgentKind ?? undefined,');
     // 真实结果原样交出去;绝不再出现 fire-and-forget + 提前 true。
     expect(body).toContain('const applied = await performAgentSwitchRef.current(');
@@ -392,7 +385,7 @@ describe('ChatInput 的入口门控与调用路由', () => {
 
   /**
    * Chris 2026-08-19「面板原地刷新」+ 2026-08-20「改思维闪关菜单」:
-   * disabled 不得参与 popover 开关。`(open && !disabled) || keepOpen` 只保住确认框那条路,
+   * disabled 不得参与 popover 开关。`(open && !disabled) || keepOpen` 只保住跨引擎事务在途的场景,
    * 改思维走 performAgentSwitch 时 keepOpen 是 false,选单照关。
    */
   it('ModelSelector 的保命锁不被 disabled 压穿(两个 popover 分支同一表达式)', () => {
@@ -400,20 +393,15 @@ describe('ChatInput 的入口门控与调用路由', () => {
       resolve(process.cwd(), 'src/renderer/components/new-chat/ModelSelector.tsx'),
       'utf8',
     ).replace(/\r\n/g, '\n');
-    const matches = selectorSource.match(/open=\{open \|\| keepOpenForAgentConfirmation\}/g) ?? [];
+    const matches = selectorSource.match(/open=\{open \|\| keepOpenForAgentSwitch\}/g) ?? [];
     expect(matches).toHaveLength(2);
-    expect(selectorSource).not.toContain('(open || keepOpenForAgentConfirmation) && !disabled');
-    expect(selectorSource).not.toContain('(open && !disabled) || keepOpenForAgentConfirmation');
+    expect(selectorSource).not.toContain('(open || keepOpenForAgentSwitch) && !disabled');
+    expect(selectorSource).not.toContain('(open && !disabled) || keepOpenForAgentSwitch');
     // 配置切引擎保持展开；选中模型行成功后收起。disabled 仍不得参与开关。
     expect(selectorSource).toContain('setOpenWithoutAutoRefresh(configuring || applied === false)');
     expect(selectorSource).toContain(
       "onProviderChange(args.providerId, args.wireModelId, args.effort ?? '', args.config.fast)",
     );
-  });
-
-  it('换引擎确认:回原引擎或点已确认的意图目标不再弹,换第三家仍要问', () => {
-    expect(source).toContain('runtimeAgentKind === targetAgent');
-    expect(source).toContain('agentSwitchIntent?.target === targetAgent');
   });
 
   it('会话传入历史收藏 uid，由统一面板校验完整配置后显示选中态', () => {
@@ -482,18 +470,18 @@ describe('CCAgentSessionView 上下文环压缩入口按 agent 能力分流(#192
     'utf8',
   ).replace(/\r\n/g, '\n');
 
-  it('onCompact 门控:通道存在 + pi 排除 SSH 远程(remoteHostId) + pi running 禁用,codex 无通道不开放', () => {
+  it('onCompact 门控:通道存在 + compact-session 排除 SSH 远程及 running', () => {
     // 门控不再硬编码 agentKind 排除列表:以 compactChannel(能力判定)为准;
-    // pi 的 SSH 远程会话(remoteHostId)无 compact-session 路由 → 显式排除
+    // Pi / Codex 的 SSH 远程会话(remoteHostId)无 compact-session 路由 → 显式排除
     // (与 SessionContentHeader 压缩菜单仅本地/device-link 一致,Copilot P2)。
     expect(viewSource).toContain('compactChannel !== null');
-    expect(viewSource).toContain("!(realAgentKind === 'pi' && !!session?.remoteHostId)");
+    expect(viewSource).toContain("!(compactChannel === 'compact-session' && !!session?.remoteHostId)");
     // pi 回合运行中会拒绝压缩 → compact-session 通道 running 时禁用(与
     // SessionContentHeader 的 runningSessionIds 一致,codex P1);claude-input 保留旧行为。
     expect(viewSource).toContain(
       "!(compactChannel === 'compact-session' && agentStatus.isRunning)",
     );
-    // codex(无 manualCompact)→ compactChannel null → 不开放(纯展示)。
+    // 未声明 manualCompact 的 agent → compactChannel null → 不开放。
   });
 
   it('compact-session 分支:粘滞路由 + 确认框后重新分流 + 失败反馈', () => {

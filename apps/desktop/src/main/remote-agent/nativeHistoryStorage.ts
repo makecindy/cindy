@@ -3,6 +3,7 @@ import { createReadStream, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { findClaudeSessionJsonl, sanitizeClaudeProjectKey } from '@cindy/maker-core';
 import { defaultClaudeConfigDirCandidates } from '../maker-orchestration/claudeTranscriptAnchors';
+import { readBoundClaudeConfigDir } from '../subscription-accounts/store.js';
 import { readCodexThreadStorageReadOnly } from '../maker-host/codex-thread-storage';
 import { dumpCodexThreadStateRows, importSharedCodexThread, removeSharedCodexThread } from '../maker-host/codex-local-sessions';
 import { migrationNativeContext } from '../session-share/migrationNativeContext';
@@ -13,11 +14,12 @@ import type { NativeHistoryStorage } from './nativeHistoryTransfer';
 /** Reuses the task-copy native writers without importing a second Cindy task or any credentials. */
 export function nativeHistoryStorage(userDataDir: string): NativeHistoryStorage {
   return {
-    async locate(kind, nativeId) {
+    async locate(kind, nativeId, checkpoint) {
       if (kind !== 'pi' && !/^[a-f0-9-]{36}$/i.test(nativeId)) throw new Error('NATIVE_HISTORY_INVALID_ID');
       if (kind === 'claude-code') {
         let file: string | null = null;
-        for (const dir of defaultClaudeConfigDirCandidates()) {
+        const boundDir = readBoundClaudeConfigDir(nativeId);
+        for (const dir of boundDir ? [boundDir] : defaultClaudeConfigDirCandidates()) {
           file = await findClaudeSessionJsonl(nativeId, undefined, path.join(dir, 'projects'));
           if (file) break;
         }
@@ -31,7 +33,9 @@ export function nativeHistoryStorage(userDataDir: string): NativeHistoryStorage 
         return { file: rolloutPath, state };
       }
       // Pi resumes by absolute JSONL path. Only native history within Cindy's Pi home is transferable.
-      const root = await fs.realpath(path.join(userDataDir, 'pi-agent-home'));
+      const root = await fs.realpath(checkpoint
+        ? path.join(userDataDir, 'pi-agent-home', 'sessions')
+        : path.join(userDataDir, 'pi-agent-home'));
       const file = await fs.realpath(nativeId);
       const relative = path.relative(root, file);
       if (!relative || relative.startsWith('..') || path.isAbsolute(relative) || !file.endsWith('.jsonl')) throw new Error('NATIVE_HISTORY_INVALID_ID');

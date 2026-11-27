@@ -1,26 +1,29 @@
+import { remotePrStatuses, prStatusQuery, type PrIdentity } from '@cindy/maker-shared';
 /**
  * get_task_digest 的 Desktop 数据源:把 `taskDigest.ts` 的纯组装接到本机数据库、会话控制、
  * 观察层与跨电脑只读通路上。跨电脑只走已有、已在被控端白名单里的读通道
  * (local-db:sessions:get / maker:list-active / 历史消息 / PR 引用与状态),不新增 wire 协议。
  */
 import { and, eq, isNull } from 'drizzle-orm';
+import { DL_HISTORY_MESSAGES_CHANNEL } from '@cindy/device-link';
 import type { InvokeResultPayload } from '@cindy/device-link';
-import type { HistoryDevice, TaskDigestRoute } from '@cindy/mcps';
+import type { HistoryDevice, TaskDigestCurrentRoute, TaskDigestRoute } from '@cindy/mcps';
+import { isProviderSafetyRefusalError, PROVIDER_SAFETY_REFUSAL_REASON } from '@cindy/maker-shared/error-redaction';
 import type { AgentKind } from '@cindy/model-providers';
 
-import { deriveFollowUpUsage, suggestFollowUpRoute } from '../bot-autonomy/followUpRoute.js';
-import { parseActiveSessionList } from '../bot-autonomy/phase.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { botProfileVersions, botSessionLinks, sessions } from '../localDb/schema.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import { readEffectiveBotModelChain } from '../maker-host/bot-model-chain-settings-store.js';
 import { resolveConfiguredContextWindow } from '../maker-host/model-context-settings.js';
 import { lookupVerifiedContextWindow } from '../maker-ipc/contextOverflowRollover.js';
+import { readLatestWorkerTurnError } from '../maker-ipc/orcaTurnErrorQuery.js';
 import { getSessionRuntimeControlSnapshot } from '../maker-ipc/sessionRuntimeControl.js';
-import { readWatchedSession } from '../maker-ipc/botWorkbenchAutonomyBridge.js';
-import { lastExchange, readSessionLastExchange } from '../maker-ipc/botWorkbenchTranscripts.js';
+import { lastExchange, readSessionLastExchange } from '../maker-ipc/sessionLastExchange.js';
 import type { BotHarness } from '../../shared/botModelChain.js';
+import { deriveFollowUpUsage, suggestFollowUpRoute } from './followUpRoute.js';
 import { readChatHistoryMessages } from './remoteChatHistory.js';
+import { parseActiveSessionList } from './taskPhase.js';
 import {
   formatPrStatuses,
   historyContentText,
@@ -33,6 +36,7 @@ type Invoke = (deviceId: string, channel: string, args: unknown[]) => Promise<In
 
 interface RuntimeLike {
   phase?: unknown;
+  source?: unknown;
   interactionKind?: unknown;
   startedAtMs?: unknown;
   lastActivityAtMs?: unknown;
@@ -45,6 +49,7 @@ export interface DesktopTaskDigestHost {
   listDevices?: () => Promise<HistoryDevice[]>;
   getSessionRuntime(sessionId: string): Promise<{ ok: true; runtime: RuntimeLike } | { ok: false }>;
   listSessionQueuedCounts(sessionIds: string[]): Promise<{ ok: true; counts: Record<string, number> } | { ok: false }>;
+  readLocalQueuePaused?(sessionId: string): boolean | undefined;
   /** 本机任务的 PR 状态(git-context 同一服务与缓存)。 */
   readSessionPrStatuses(sessionId: string): Promise<Parameters<typeof formatPrStatuses>[0]>;
   /**
@@ -54,17 +59,17 @@ export interface DesktopTaskDigestHost {
   readRuntimeFacts?(sessionId: string): Promise<{
     live: { contextTokens: number; contextWindow: number } | null;
     closed: { contextTokens: number; contextWindow: number } | null;
-    terminalError: { sdkError?: string; errorStatus?: number; codexErrorInfo?: string } | null;
+    terminalError: { message?: string; sdkError?: string; errorStatus?: number; codexErrorInfo?: string } | null;
   }>;
 }
 
 const num = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : null);
 
-function routeFromProfile(profile: RuntimeLike['effectiveProfile']): TaskDigestRoute | null {
+function routeFromProfile(profile: RuntimeLike['effectiveProfile']): TaskDigestCurrentRoute | null {
   if (!profile || typeof profile.model !== 'string' || !profile.model) return null;
   const kind = profile.agentKind;
   return {
-    harness: kind === 'codex' || kind === 'pi' ? kind : 'claude-code',
+    harness: kind === 'codex' || kind === 'pi' || kind === 'acp' ? kind : 'claude-code',
     model: profile.model,
     provider_id: typeof profile.providerId === 'string' ? profile.providerId : null,
     effort: typeof profile.effort === 'string' ? profile.effort : null,
@@ -72,12 +77,14 @@ function routeFromProfile(profile: RuntimeLike['effectiveProfile']): TaskDigestR
   };
 }
 
-const toBotHarness = (harness: TaskDigestRoute['harness']): BotHarness => (harness === 'claude-code' ? 'claude' : harness);
-const toDigestHarness = (harness: BotHarness): TaskDigestRoute['harness'] => (harness === 'claude' ? 'claude-code' : harness);
-const toAgentKind = (harness: BotHarness): AgentKind => (harness === 'claude' ? 'claude-code' : harness);
+type BuiltinBotHarness = Exclude<BotHarness, 'acp'>;
+const toBotHarness = (harness: TaskDigestRoute['harness']): BuiltinBotHarness => (harness === 'claude-code' ? 'claude' : harness);
+const toDigestHarness = (harness: BuiltinBotHarness): TaskDigestRoute['harness'] => (harness === 'claude' ? 'claude-code' : harness);
+const toAgentKind = (harness: BuiltinBotHarness): AgentKind => (harness === 'claude' ? 'claude-code' : harness);
 
 /** 目录里核实过的窗口(与主机切换闸门同一口径);查不到返回 null。 */
 function verifiedRouteWindow(harness: BotHarness, model: string, providerId: string | null): number | null {
+  if (harness === 'acp') return null;
   const catalog = getActiveCatalog();
   return lookupVerifiedContextWindow(
     (agentKind, modelId, pid) => resolveConfiguredContextWindow(catalog, agentKind as AgentKind, pid, modelId),
@@ -153,23 +160,20 @@ async function readRemoteMessageItems(invoke: Invoke, deviceId: string, sessionI
   };
 }
 
-/** 工作台跨电脑读取用:那台电脑上一件任务最近的用户 / 助手文字(时间正序)。 */
-export function createRemoteWorkbenchMessageReader(invoke: Invoke) {
-  return async (deviceId: string, sessionId: string) => {
-    const result = await readRemoteMessageItems(invoke, deviceId, sessionId, 60);
-    return result.ok ? result : { ok: false as const, errorCode: result.errorCode, message: result.message };
-  };
-}
-
 export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDigestDeps {
   return {
     now: () => Date.now(),
-    watched: readWatchedSession,
+    // The V1 follow-up watch is gone: the digest derives the phase from live activity.
+    watched: () => null,
     local: {
       readSession: async (sessionId) => {
         const [row] = await getDbClient()
           .drizzle.select({
             title: sessions.title,
+            pinnedAt: sessions.pinnedAt,
+            clearedAt: sessions.clearedAt,
+            activeTurnStartedAt: sessions.activeTurnStartedAt,
+            lastTurnEndedAt: sessions.lastTurnEndedAt,
             status: sessions.status,
             source: sessions.source,
             agentKind: sessions.agentKind,
@@ -189,6 +193,7 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
         const runtime = result.runtime;
         return {
           phase: typeof runtime.phase === 'string' ? runtime.phase : 'idle',
+          source: typeof runtime.source === 'string' ? runtime.source : undefined,
           interactionKind: typeof runtime.interactionKind === 'string' ? runtime.interactionKind : null,
           startedAtMs: num(runtime.startedAtMs),
           lastActivityAtMs: num(runtime.lastActivityAtMs),
@@ -196,16 +201,52 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
           route: routeFromProfile(runtime.effectiveProfile),
         };
       },
+      readError: async (sessionId, activity, facts) => {
+        if (activity?.phase !== 'error') return null;
+        const runtime = await host.readRuntimeFacts?.(sessionId).catch(() => null);
+        const terminal = runtime?.terminalError;
+        if (terminal) {
+          const detail = [
+            typeof terminal.errorStatus === 'number' ? `HTTP ${terminal.errorStatus}` : '',
+            terminal.message,
+            terminal.sdkError,
+            terminal.codexErrorInfo,
+          ].filter(Boolean).join(':\n');
+          // Preserve line boundaries until the reader's final redaction/bounding pass.
+          if (detail.trim()) return detail;
+        }
+        // This reader already enforces the tail, rewind and /clear boundaries.
+        const stored = await readLatestWorkerTurnError(sessionId);
+        if (!stored) return null;
+        const startedAt = Math.max(facts.startedAtMs ?? 0, activity.startedAtMs ?? 0);
+        if (stored.createdAt < startedAt) {
+          // An immediate failure can be ordered after the input but dated before the
+          // turn marker. Only the confirmed persisted terminal of a settled turn can
+          // supply a safety reason here. Never return its provider text on this path.
+          const matchesSettledTerminal =
+            activity.source === 'persisted'
+            && activity.lastActivityAtMs === stored.createdAt
+            && facts.startedAtMs === activity.startedAtMs
+            && (facts.endedAtMs ?? 0) >= startedAt;
+          return matchesSettledTerminal && isProviderSafetyRefusalError(stored.message, stored.reason)
+            ? PROVIDER_SAFETY_REFUSAL_REASON
+            : null;
+        }
+        return [stored.message, stored.sdkError].filter(Boolean).join(':\n').trim() || null;
+      },
       readLastExchange: readSessionLastExchange,
       queuedCount: async (sessionId) => {
         const result = await host.listSessionQueuedCounts([sessionId]);
         return result.ok ? (result.counts[sessionId] ?? 0) : null;
       },
+      queuePaused: (sessionId) => host.readLocalQueuePaused?.(sessionId),
       prStatus: async (sessionId) => formatPrStatuses(await host.readSessionPrStatuses(sessionId)),
       suggestRoute: async ({ callerSessionId, targetSessionId, current, failure }) => {
         if (!callerSessionId) return null;
         const chain = await readCallerBotChain(callerSessionId);
         if (!chain?.length) return null;
+        const builtinChain = chain.filter((candidate) => candidate.harness !== 'acp');
+        if (!builtinChain.length) return null;
         const [target] = await getDbClient()
           .drizzle.select({ remoteHostId: sessions.remoteHostId, contextTokens: sessions.contextTokens })
           .from(sessions)
@@ -219,7 +260,7 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
           dbContextTokens: target?.contextTokens,
         });
         const next = suggestFollowUpRoute({
-          chain,
+          chain: builtinChain,
           current: { harness, model: current.model, providerId: current.provider_id },
           failure: { ...failure, ...(failure.phase === 'errored' ? runtime?.terminalError ?? {} : {}) },
           visitedRoutes: getSessionRuntimeControlSnapshot(targetSessionId).visitedRoutes,
@@ -228,7 +269,7 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
           currentContextWindow: usage.contextWindow ?? verifiedRouteWindow(harness, current.model, current.provider_id),
           windowOf: (candidate) => verifiedRouteWindow(candidate.harness, candidate.model, candidate.providerId),
         });
-        return next
+        return next && next.harness !== 'acp'
           ? {
               harness: toDigestHarness(next.harness),
               model: next.model,
@@ -261,12 +302,42 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
         if (!row) return { phase: 'idle' };
         return { phase: typeof row.activityPhase === 'string' ? row.activityPhase : row.isTurnRunning === true ? 'running' : 'idle' };
       },
+      readError: async (deviceId, sessionId, activity, facts) => {
+        if (activity?.phase !== 'error' && activity?.phase !== 'idle') return null;
+        // One bounded read, using the same authorized history channel as the UI.
+        // The terminal marker must refer to this exact error row, not a newer turn.
+        const page = await unwrap(host.invokeRemote, deviceId, DL_HISTORY_MESSAGES_CHANNEL, [{
+          sessionId, workdir: null,
+          fromMs: Math.max((facts.clearedAt ?? 0) + 1, facts.startedAtMs ?? 0),
+          toMs: null, agentKind: null, roles: ['error'], includeRewound: false,
+          limit: 1, cursor: null, order: 'desc', contentCharLimit: 8000,
+        }]) as { items?: Array<{ sessionId?: unknown; role?: unknown; content?: unknown; createdAt?: unknown }>; terminal?: { status?: unknown; createdAt?: unknown } | null };
+        const row = page?.items?.[0];
+        if (page?.terminal?.status !== 'error' || !row || row.role !== 'error'
+          || row.sessionId !== sessionId || typeof row.createdAt !== 'number'
+          || row.createdAt !== page.terminal.createdAt
+          || row.createdAt <= (facts.clearedAt ?? 0)
+          || row.createdAt < (facts.startedAtMs ?? 0)) return null;
+        let content = row.content;
+        if (typeof content === 'string') {
+          try { content = JSON.parse(content); } catch { return null; }
+        }
+        if (!content || typeof content !== 'object' || Array.isArray(content)) return null;
+        const error = content as Record<string, unknown>;
+        if (error.dismissed === true) return null;
+        return [error.message, error.sdkError]
+          .filter((value): value is string => typeof value === 'string').join(':\n').trim() || null;
+      },
       readLastExchange: async (deviceId, sessionId) => {
         const result = await readRemoteMessageItems(host.invokeRemote, deviceId, sessionId, 20);
         return result.ok ? lastExchange(result.items) : { lastUserAsk: null, lastAssistantLine: null };
       },
       prStatus: async (deviceId, sessionId) => {
-        const refs = (await unwrap(host.invokeRemote, deviceId, 'git-context:pr-refs:list', [sessionId])) as Array<{
+        const refs = (await unwrap(host.invokeRemote, deviceId, 'git-context:pr-refs:list', [
+          sessionId,
+        ])) as Array<{
+          provider?: unknown;
+          host?: unknown;
           owner?: unknown;
           repo?: unknown;
           prNumber?: unknown;
@@ -274,10 +345,14 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
         const queries = (Array.isArray(refs) ? refs : [])
           .filter((ref) => typeof ref.owner === 'string' && typeof ref.repo === 'string' && typeof ref.prNumber === 'number')
           .slice(0, 3)
-          .map((ref) => ({ owner: ref.owner, repo: ref.repo, prNumber: ref.prNumber }));
+          .map((ref) => prStatusQuery(ref as PrIdentity));
         if (queries.length === 0) return null;
-        const statuses = await unwrap(host.invokeRemote, deviceId, 'git-context:pr-status', [{ sessionId, queries }]);
-        return Array.isArray(statuses) ? formatPrStatuses(statuses as Parameters<typeof formatPrStatuses>[0]) : null;
+        const statuses = await remotePrStatuses(queries, sessionId, (channel, args) =>
+          unwrap(host.invokeRemote, deviceId, channel, args),
+        );
+        return Array.isArray(statuses)
+          ? formatPrStatuses(statuses as Parameters<typeof formatPrStatuses>[0])
+          : null;
       },
     },
   };

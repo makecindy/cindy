@@ -38,15 +38,12 @@ describe('isMissingOrEmptyTextFile / isNonEmptyTextFile', () => {
 });
 
 describe('detect — agents-md kind', () => {
-  it('claude-code session: AGENTS.md non-empty + CLAUDE.md missing → 1 item to-claude', async () => {
+  it('claude-code session: AGENTS.md alone does not prompt or create CLAUDE.md', async () => {
     await fs.writeFile(path.join(tmpDir, 'AGENTS.md'), '# agents');
     const r = await detect({ workingDir: tmpDir, agentKind: 'claude-code' });
-    expect(r.items).toHaveLength(1);
-    expect(r.items[0]).toMatchObject({
-      kind: 'agents-md',
-      direction: 'to-claude',
-      label: 'AGENTS.md → CLAUDE.md',
-    });
+    expect(r.items).toEqual([]);
+    await expect(fs.stat(path.join(tmpDir, 'CLAUDE.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await fs.readFile(path.join(tmpDir, 'AGENTS.md'), 'utf8')).toBe('# agents');
   });
 
   it('codex session: CLAUDE.md non-empty + AGENTS.md missing → 1 item to-codex', async () => {
@@ -73,11 +70,13 @@ describe('detect — agents-md kind', () => {
     expect((await detect({ workingDir: tmpDir, agentKind: 'claude-code' })).items).toHaveLength(0);
   });
 
-  it('CLAUDE.md 是空文件 + AGENTS.md 非空 → 仍然推（codex 语义：目标 trim 为空算缺失）', async () => {
+  it('empty CLAUDE.md + non-empty AGENTS.md does not prompt or overwrite either file', async () => {
     await fs.writeFile(path.join(tmpDir, 'CLAUDE.md'), '\n  ');
     await fs.writeFile(path.join(tmpDir, 'AGENTS.md'), '# real');
     const r = await detect({ workingDir: tmpDir, agentKind: 'claude-code' });
-    expect(r.items).toHaveLength(1);
+    expect(r.items).toEqual([]);
+    expect(await fs.readFile(path.join(tmpDir, 'CLAUDE.md'), 'utf8')).toBe('\n  ');
+    expect(await fs.readFile(path.join(tmpDir, 'AGENTS.md'), 'utf8')).toBe('# real');
   });
 
   it('empty workingDir → 0 items', async () => {
@@ -211,12 +210,12 @@ describe('detect — mcp', () => {
 });
 
 describe('detect — hooks', () => {
-  it('to-codex: claude has hooks dir + settings.json hooks → 1 hooks item', async () => {
+  it('to-codex: an empty event and an unreferenced script do not prompt', async () => {
     await fs.mkdir(path.join(tmpDir, '.claude', 'hooks'), { recursive: true });
     await fs.writeFile(path.join(tmpDir, '.claude', 'hooks', 'p.sh'), 'x');
     await fs.writeFile(path.join(tmpDir, '.claude', 'settings.json'), JSON.stringify({ hooks: { PreToolUse: [] } }));
     const r = await detect({ workingDir: tmpDir, agentKind: 'codex' });
-    expect(r.items.find((i) => i.kind === 'hooks')).toBeDefined();
+    expect(r.items.find((i) => i.kind === 'hooks')).toBeUndefined();
   });
 
   it('双端齐全 → 0 hooks item', async () => {
@@ -254,10 +253,11 @@ describe('detect — hooks', () => {
   });
 
   it('to-codex: target has legacy flat hooks.json → item so the wrapper upgrade can run', async () => {
+    const stop = [{ hooks: [{ type: 'command', command: 'true' }] }];
     await fs.mkdir(path.join(tmpDir, '.claude'), { recursive: true });
-    await fs.writeFile(path.join(tmpDir, '.claude', 'settings.json'), JSON.stringify({ hooks: { Stop: [] } }));
+    await fs.writeFile(path.join(tmpDir, '.claude', 'settings.json'), JSON.stringify({ hooks: { Stop: stop } }));
     await fs.mkdir(path.join(tmpDir, '.codex'), { recursive: true });
-    await fs.writeFile(path.join(tmpDir, '.codex', 'hooks.json'), JSON.stringify({ Stop: [] }));
+    await fs.writeFile(path.join(tmpDir, '.codex', 'hooks.json'), JSON.stringify({ Stop: stop }));
     const r = await detect({ workingDir: tmpDir, agentKind: 'codex' });
     expect(r.items.find((i) => i.kind === 'hooks')).toBeDefined();
   });

@@ -14,7 +14,7 @@ import { deviceDisplayName } from '@/lib/deviceName';
  * platform password manager (1Password, Passwords) can fill them.
  */
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type {
@@ -60,6 +60,8 @@ interface StripAction {
   label: string;
   primary?: boolean;
   onClick: () => void;
+  /** Stands in for the plain button (it needs hooks of its own). */
+  element?: ReactNode;
 }
 
 export function InputHandoffCard({ sessionId, snapshot, remote }: InputHandoffCardProps) {
@@ -69,6 +71,11 @@ export function InputHandoffCard({ sessionId, snapshot, remote }: InputHandoffCa
   // Stays wanted across steps: after Continue the dialog hides while the
   // computer types and comes back by itself for the next screen to fill.
   const [dialogWanted, setDialogWanted] = useState(false);
+  useEffect(() => {
+    if (snapshot.accountVerification) setDialogWanted(true);
+  }, [snapshot.requestId, snapshot.accountVerification]);
+  // The owner chose the form over the window (the live view or the window could not be used).
+  const [formFor, setFormFor] = useState<string | null>(null);
 
   // A new screen clears any message about the previous one.
   const stepKey = inputHandoffStepKey(snapshot);
@@ -146,6 +153,13 @@ export function InputHandoffCard({ sessionId, snapshot, remote }: InputHandoffCa
   );
   const liveView = liveViewDevice(sessionId, snapshot);
   const dialogContent = inputHandoffDialogHasContent(snapshot, heldElsewhere);
+  // A sign-in happens on the window: here on this computer, through the live view from elsewhere.
+  // Without a live view from another computer, the form stays the way to finish it.
+  const onThisComputer = !getStickySessionDeviceId(sessionId);
+  const canUseForm = snapshot.controls.length > 0 || snapshot.picture === true;
+  const directSignIn = snapshot.directSignIn === true
+    && (onThisComputer || (!!liveView && snapshot.preferRemoteForm !== true))
+    && formFor !== snapshot.requestId;
   const qrScan = snapshot.qr === 'scan' && snapshot.picture === true;
 
   const skip: StripAction = { label: t('inputHandoff.action.skip'), onClick: () => void decide('cancel') };
@@ -181,6 +195,27 @@ export function InputHandoffCard({ sessionId, snapshot, remote }: InputHandoffCa
     spinner = true;
     status = t('inputHandoff.qr.scanned');
     actions = [skip, handBack];
+  } else if (snapshot.phase === 'ready' && directSignIn) {
+    status = t('inputHandoff.directSignIn.hint');
+    actions = [
+      skip,
+      {
+        label: t(!onThisComputer ? 'inputHandoff.action.openRemoteDesktop' : 'inputHandoff.action.openWindow'),
+        primary: true,
+        onClick: () => {
+          setError(null);
+          // Working on the window is answering: take the card, so other devices show it as being handled.
+          claimQuietly();
+          void window.electronAPI.maker
+            .raiseInputHandoff(snapshot.requestId)
+            .then((raised) => {
+              if (!raised) setError(t('inputHandoff.error.raise'));
+            })
+            .catch(() => setError(t('inputHandoff.error.raise')));
+        },
+        ...(liveView ? { element: <LiveViewButton deviceId={liveView} requestId={snapshot.requestId} onBeforeOpen={claimQuietly} /> } : {}),
+      },
+    ];
   } else if (snapshot.phase === 'ready' && dialogContent) {
     actions = [
       skip,
@@ -211,12 +246,12 @@ export function InputHandoffCard({ sessionId, snapshot, remote }: InputHandoffCa
       aria-label={snapshot.purpose}
       data-testid="input-handoff-strip"
       className={cn(
-        'w-full max-w-[914px] rounded-[12px] border px-3 py-2.5',
+        'w-full max-w-[914px] rounded-xl border px-3 py-2.5',
         'border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)]',
       )}
     >
       <div className="flex min-w-0 items-center gap-3">
-        <span className="flex size-9 shrink-0 items-center justify-center rounded-[8px] bg-[var(--surface-chip)] text-[var(--text-primary)]">
+        <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-[var(--surface-chip)] text-[var(--text-primary)]">
           <Icon size={18} aria-hidden />
         </span>
         <div className="min-w-0 flex-1">
@@ -225,18 +260,22 @@ export function InputHandoffCard({ sessionId, snapshot, remote }: InputHandoffCa
         </div>
         {actions.length > 0 && (
           <div className="flex shrink-0 items-center gap-2">
-            {actions.map((action) => (
-              <Button
-                key={action.label}
-                size="sm"
-                variant={action.primary ? 'primary' : 'secondary'}
-                tone={action.primary ? 'default' : 'quiet'}
-                disabled={busy}
-                onClick={action.onClick}
-              >
-                {action.label}
-              </Button>
-            ))}
+            {actions.map((action) =>
+              action.element ? (
+                <Fragment key={action.label}>{action.element}</Fragment>
+              ) : (
+                <Button
+                  key={action.label}
+                  size="sm"
+                  variant={action.primary ? 'primary' : 'secondary'}
+                  tone={action.primary ? 'default' : 'quiet'}
+                  disabled={busy}
+                  onClick={action.onClick}
+                >
+                  {action.label}
+                </Button>
+              ),
+            )}
           </div>
         )}
       </div>
@@ -251,7 +290,12 @@ export function InputHandoffCard({ sessionId, snapshot, remote }: InputHandoffCa
           {error}
         </p>
       )}
-      {liveView && !dialogContent && (
+      {directSignIn && canUseForm && snapshot.directSignIn === true && (
+        <div className="mt-1 pl-12">
+          <QuietLink onClick={() => setFormFor(snapshot.requestId)}>{t('inputHandoff.action.useForm')}</QuietLink>
+        </div>
+      )}
+      {liveView && !dialogContent && !directSignIn && (
         <div className="mt-1 pl-12">
           <LiveViewLink deviceId={liveView} requestId={snapshot.requestId} />
         </div>
@@ -323,6 +367,28 @@ function InputHandoffStepDialog({
         onError={onError}
       />
     );
+    // Cindy cannot see the agent's screen, so the owner says when the scan is done.
+    if (snapshot.accountVerification) {
+      footer = (
+        <div className="flex flex-wrap justify-center gap-2">
+          <Button variant="secondary" disabled={busy} onClick={() => onDecide('refresh')}>
+            {t('antigravityVerification.refresh')}
+          </Button>
+          <Button variant="secondary" disabled={busy} onClick={() => onDecide('cancel')}>{t('inputHandoff.action.close')}</Button>
+        </div>
+      );
+    } else if (snapshot.agentPicture) {
+      footer = (
+        <div className="flex flex-col gap-2">
+          <Button size="lg" variant="cta" palette="confirmation" disabled={busy} onClick={() => onDecide('done')}>
+            {t('inputHandoff.action.done')}
+          </Button>
+          <Button size="lg" variant="secondary" palette="confirmation" onClick={onClose}>
+            {t('inputHandoff.action.close')}
+          </Button>
+        </div>
+      );
+    }
   } else if (mode === 'picture') {
     body = (
       <InputHandoffPictureStep
@@ -382,7 +448,7 @@ function InputHandoffStepDialog({
     );
   }
   // A terminal prompt has no screen to look at; a picture step already is one, except a QR code cut out of it.
-  const canPicture = !snapshot.command && mode !== 'picture';
+  const canPicture = !snapshot.accountVerification && !snapshot.command && mode !== 'picture' && !snapshot.agentPicture;
   const links =
     canPicture || liveView ? (
       <>
@@ -440,34 +506,48 @@ function liveViewDevice(sessionId: string, snapshot: InputHandoffSnapshot): stri
   return deviceId && snapshot.liveView && !snapshot.terminal ? deviceId : null;
 }
 
-function LiveViewLink({ deviceId, requestId }: { deviceId: string; requestId: string }) {
+function useLiveViewOpener(deviceId: string | null, requestId: string): () => void {
   const { t } = useTranslation();
   const devices = useDeviceLinkDeviceList();
-  const [opening, setOpening] = useState(false);
-  const mounted = useRef(true);
-  useEffect(
-    () => () => {
-      mounted.current = false;
-    },
-    [],
-  );
-  const name = deviceDisplayName(deviceId, undefined, devices ?? []);
+  return () => {
+    if (!deviceId) return;
+    const name = deviceDisplayName(deviceId, undefined, devices ?? []);
+    void window.electronAPI
+      .openRemoteDesktop({ deviceId, name, handoff: requestId })
+      .catch(() => toast.error(t('remoteDesktop.connectionError')));
+  };
+}
+
+function LiveViewButton({
+  deviceId,
+  requestId,
+  onBeforeOpen,
+}: {
+  deviceId: string;
+  requestId: string;
+  onBeforeOpen: () => void;
+}) {
+  const { t } = useTranslation();
+  const open = useLiveViewOpener(deviceId, requestId);
   return (
-    <QuietLink
-      disabled={opening}
+    <Button
+      size="sm"
+      variant="primary"
+      tone="default"
       onClick={() => {
-        setOpening(true);
-        void window.electronAPI
-          .openRemoteDesktop({ deviceId, name, handoff: requestId })
-          .catch(() => toast.error(t('remoteDesktop.connectionError')))
-          .finally(() => {
-            if (mounted.current) setOpening(false);
-          });
+        onBeforeOpen();
+        open();
       }}
     >
-      {t('inputHandoff.action.liveView')}
-    </QuietLink>
+      {t('inputHandoff.action.openRemoteDesktop')}
+    </Button>
   );
+}
+
+function LiveViewLink({ deviceId, requestId }: { deviceId: string; requestId: string }) {
+  const { t } = useTranslation();
+  const open = useLiveViewOpener(deviceId, requestId);
+  return <QuietLink onClick={open}>{t('inputHandoff.action.liveView')}</QuietLink>;
 }
 
 function holderLabel(snapshot: InputHandoffSnapshot, t: (key: string) => string): string {

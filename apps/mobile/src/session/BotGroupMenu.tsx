@@ -62,7 +62,8 @@ export function BotGroupMenu({ title, sections, onSelect, accessibilityLabel, di
   const chosen = useRef<string | null>(null);
   const known = new Set(sections.flatMap((section) => section.options.filter((option) => !option.disabled).map((option) => option.id)));
   const select = (id: string) => { if (known.has(id)) onSelect(id); };
-  if (usesNativePullDownMenu()) {
+  // Informational menus still open a sheet when the native trigger would disable itself.
+  if (usesNativePullDownMenu() && known.size > 0) {
     return <NativePullDownMenu actions={botGroupMenuActions(sections)} onAction={select} disabled={disabled}
       accessibilityLabel={accessibilityLabel} testID={testID}>
       {children(undefined)}

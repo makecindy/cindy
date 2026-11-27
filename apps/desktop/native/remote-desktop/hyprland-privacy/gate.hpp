@@ -11,10 +11,16 @@ struct PrivacyGate {
     Resume,
     Disconnect
   } phase = Off;
+  bool away = false;
   std::set<unsigned> held;
   bool consume(bool physical, unsigned key, bool down, bool trigger) {
     if (phase == Off)
       return false;
+    if (away) {
+      if (!physical) return phase != Active;
+      if (phase == Active && trigger) phase = Pending;
+      return true;
+    }
     // Main drains its old helper before presenting confirmation. Let that
     // helper release already-held input, but reject any new press immediately.
     if (!physical)
@@ -36,6 +42,7 @@ struct PrivacyGate {
   }
   void stop() {
     phase = Off;
+    away = false;
     held.clear();
   }
 };

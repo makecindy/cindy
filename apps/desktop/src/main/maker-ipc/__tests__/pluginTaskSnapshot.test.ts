@@ -8,13 +8,67 @@ import ts from 'typescript';
 import { PluginTaskError, readPluginTaskPlanReceipt } from '../pluginTaskService.js';
 import type { PluginTaskRoute } from '../../../shared/pluginTasks.js';
 import { resolvePluginWorkerDirectory } from '../pluginWorkerDirectory.js';
+import { pluginTaskRouteAttempts, pluginTaskSelectionIsOpen } from '../pluginTaskDefaultRoute.js';
 
 import { createSessionExecutionResolver } from '../sessionExecutionSelection';
 import { createGhostProductionCallbacks } from '../../cindy-brain/__tests__/ghostProductionCallbacksFixture.js';
 import { clampPluginTaskPermissionMode } from '../../cindy-brain/pluginTaskPrefsStore.js';
+import { resolveRemotePluginTaskRoute, savedPluginTaskRemoteRoute } from '../pluginTaskModelRoute.js';
+import { readDeviceProviderViews } from '../../remote-agent/controller/deviceCatalog.js';
+import * as sessionAgentSwitch from '../sessionAgentSwitchHandler.js';
+import { getSessionRuntimeControlSnapshot } from '../sessionRuntimeControl.js';
+import { createSessionControlService, type SessionControlServiceDeps } from '../sessionControlService.js';
+import { createSessionControlRuntimeWriter } from '../sessionControlRuntimeWriter.js';
 
 const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
+
+// User regression: tasks must consume the exact source returned by pickModel. Existing
+// local admission tests could accidentally validate a remote namesake against this host.
+// Production remote parser + route resolver, no network/real account; tier: unit.
+it.each(['other-computer', 'share:provider'])('admits %s only against its authorized live catalog and axes', async agentDeviceId => {
+  const route: PluginTaskRoute = { agentKind: 'codex', providerId: 'same', model: 'model', effort: 'high', fastMode: false, agentDeviceId };
+  const provider = { id: 'same', name: 'Provider', source: 'user', connected: true,
+    remoteInvocationEnabled: true, agents: ['codex'], routing: { codex: {} },
+    models: { codex: [{ id: 'model', efforts: ['high'], supportsFastMode: false }] } };
+  let authorized = true;
+  const invoke = vi.fn(async () => ({ ok: true, result: { providers: authorized ? [provider] : [] } }));
+  const deps = { assertCurrent: vi.fn(), readProviders: (id: string) => readDeviceProviderViews(invoke, id) };
+  expect(await resolveRemotePluginTaskRoute(route, deps)).toEqual(route);
+  expect(invoke).toHaveBeenLastCalledWith(agentDeviceId, 'maker:provider:list', expect.any(Array));
+  for (const changed of [{ providerId: 'other' }, { model: 'other' }, { effort: 'low' }, { fastMode: true }]) {
+    await expect(resolveRemotePluginTaskRoute({ ...route, ...changed }, deps)).rejects.toMatchObject({ code: 'ROUTE_UNAVAILABLE' });
+  }
+  // The provider still exists, with the very same ID, after its remote grant is withdrawn.
+  provider.remoteInvocationEnabled = false;
+  await expect(resolveRemotePluginTaskRoute(route, deps)).rejects.toMatchObject({ code: 'ROUTE_UNAVAILABLE' });
+  authorized = false;
+  await expect(resolveRemotePluginTaskRoute(route, deps)).rejects.toMatchObject({ code: 'ROUTE_UNAVAILABLE' });
+  deps.readProviders = async () => { throw Error('private endpoint and token'); };
+  await expect(resolveRemotePluginTaskRoute(route, deps)).rejects.toMatchObject({ code: 'ROUTE_UNAVAILABLE' });
+  await expect(resolveRemotePluginTaskRoute(route, deps)).rejects.not.toThrow('private endpoint');
+  deps.readProviders = async () => { return []; };
+  deps.assertCurrent.mockImplementationOnce(() => {}).mockImplementationOnce(() => { throw new PluginTaskError('PERMISSION_DENIED', 'Owner changed'); });
+  await expect(resolveRemotePluginTaskRoute(route, deps)).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+});
+
+it.each(['other-computer', 'share:provider'])('forwards %s from the production task creator into ordinary Session storage', async agentDeviceId => {
+  const creatorSource = readFileSync(new URL('../../localDb/ipc/pluginWorkspaceSessions.ts', import.meta.url), 'utf8');
+  const tree = ts.createSourceFile('creator.ts', creatorSource, ts.ScriptTarget.Latest, true);
+  const declaration = tree.statements.find((node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === 'createPluginTaskSession')!;
+  const openSession = vi.fn(async ({ body }: { body: object }) => ({ row: body }));
+  const create = compile(`return (${declaration.getText(tree).replace(/^export\s+/, '')});`, {
+    getCurrentDbClientSnapshot: () => 'owner', projectForNewTask: async () => ({ projectDir: null, workspaceKind: 'dialogue' }),
+    openSession, normalizeWorkingDirForStorage: (value: string) => value, log: { info: vi.fn() },
+  });
+  await create({ ghostId: 'p', sessionId: 'task', title: 'Remote', agentKind: 'codex', providerId: 'same', model: 'model',
+    agentDeviceId, permissionMode: 'ask' });
+  expect(openSession).toHaveBeenCalledWith(expect.objectContaining({
+    source: 'plugin', body: expect.objectContaining({ agentDeviceId, providerId: 'same', permissionMode: 'ask' }),
+  }));
+});
 function compile(text: string, deps: Record<string, unknown>) {
+  // The production route resolver reads the saved run location through this pure helper.
+  deps = { readProviderGroupBinding: () => null, providerGroupService: null, savedPluginTaskRemoteRoute, ...deps };
   return new Function(...Object.keys(deps), ts.transpileModule(text, {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   }).outputText)(...Object.values(deps));
@@ -24,12 +78,136 @@ function handler(kind: string, next: string, deps: Record<string, unknown>) {
   return compile(`return async function(pluginId,request){switch(request.kind){${branch}}}`, deps);
 }
 
+// Unlike the existing helper fixture, this runs the production runtime writer.
+// A remote-only model and an unavailable local catalog must still stage the exact source.
+it.each(['other-computer', 'share:provider'])('uses the %s catalog in the production runtime controller', async agentDeviceId => {
+  const remote = vi.fn(async () => [{ id: 'remote-only', name: 'Remote', source: 'user', connected: true,
+    agents: ['codex'], routing: { codex: {} }, models: { codex: [{ id: 'model', efforts: ['high'] }] } }]);
+  const local = vi.fn(() => { throw Error('Local catalog must not be used'); });
+  let pending: Record<string, unknown> | undefined;
+  const stage = vi.fn<typeof sessionAgentSwitch.performSessionAgentSwitch>(async (_deps, selection) => {
+    pending = { runtimeSource: 'agent', targetAgentKind: selection.targetAgentKind, model: selection.model,
+      providerId: selection.providerId, effort: selection.effort, fastMode: selection.fastMode,
+      targetAgentDeviceId: selection.agentDeviceId };
+    return { switched: false, agentKind: 'codex', model: 'old', engineReady: false, deferred: true };
+  });
+  const ports = {
+    agentSwitchPending: { revision: () => 0, get: () => pending },
+    readSessionRuntimeProfiles: async () => ({ effective: { agentKind: 'codex', model: 'old', effort: null, fastMode: false } }),
+    readUsableAgentDeviceProviders: remote, getDesktopProviderService: local, assertModelRouteUsable: local,
+    agentSwitchDeps: {},
+    updateScheduledPreference: async () => true, reconcileBotModelRoute: { acceptTaskChoice: async () => {} },
+  };
+  const run = createSessionControlRuntimeWriter(ports as unknown as Parameters<typeof createSessionControlRuntimeWriter>[0]);
+  const request = { targetSessionId: 'task', expectedGeneration: getSessionRuntimeControlSnapshot('task').generation,
+    patch: { harness: 'codex' as const, agentDeviceId, model: 'model', providerId: 'remote-only', effort: 'high' as const, fastMode: false } };
+  const switchRoute = vi.spyOn(sessionAgentSwitch, 'performSessionAgentSwitch').mockImplementation(stage);
+  try {
+    expect(await run(request)).toMatchObject({ ok: true, pendingMutation: { profile: { agentDeviceId, model: 'model' } } });
+    expect(remote).toHaveBeenCalledWith(agentDeviceId, 'codex', 'model', 'remote-only');
+    expect(stage).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ agentDeviceId, providerId: 'remote-only' }));
+    expect(local).not.toHaveBeenCalled();
+    remote.mockResolvedValueOnce([]);
+    expect(await run(request)).toMatchObject({ ok: false, errorCode: 'ROUTE_UNAVAILABLE' });
+    expect(stage).toHaveBeenCalledTimes(1);
+  } finally {
+    switchRoute.mockRestore();
+  }
+});
+
+// Remote output is persisted on the task computer. Read the production history
+// branch and recheck ownership after the async read, as with local tasks. Tier: unit.
+it('reads remote output from its own task history and withholds it after plugin revocation', async () => {
+  const epoch = {};
+  let authorized = true;
+  let revokeOnRead = false;
+  const get = vi.fn(async () => {
+    if (!authorized) throw new PluginTaskError('TASK_NOT_FOUND', 'Task not found');
+    return { resolvedConfig: { agentDeviceId: 'share:provider' } };
+  });
+  const read = vi.fn(async () => {
+    if (revokeOnRead) authorized = false;
+    return { items: [{ id: 'db-id', clientId: 'remote-output', role: 'assistant', content: 'Remote answer', createdAt: 100 }], nextCursor: null };
+  });
+  const run = handler('readMessages', 'getRun', { service: { get }, getCurrentDbClientSnapshot: () => epoch,
+    drainPersistQueue: async () => {}, getMessagesForHistory: read, PluginTaskError });
+  expect(await run('p', { kind: 'readMessages', taskId: 'own-remote-task' })).toEqual({
+    items: [{ id: 'remote-output', role: 'assistant', content: 'Remote answer', createdAt: 100 }], nextCursor: null,
+  });
+  expect(read).toHaveBeenCalledWith(expect.objectContaining({ sessionIds: ['own-remote-task'] }));
+  revokeOnRead = true;
+  await expect(run('p', { kind: 'readMessages', taskId: 'own-remote-task' })).rejects.toMatchObject({ code: 'TASK_NOT_FOUND' });
+});
+
+// Unit: a plugin may own two chats. A run from one cannot select or label the
+// other's history, and an ordinary read must never look like a scoped progress page.
+it('ties the progress page to the authorized run and its own task', async () => {
+  const epoch = {};
+  const read = vi.fn(async () => ({ items: [], nextCursor: null }));
+  const run = handler('readMessages', 'getRun', {
+    service: { get: async () => ({}), getRun: async () => ({
+      runId: 'r', taskId: 'chat-a', inputMessageId: 'plugin-task:r', acceptedAt: 123,
+    }) },
+    getCurrentDbClientSnapshot: () => epoch, getMessagesForHistory: read, drainPersistQueue: async () => {}, PluginTaskError,
+  });
+  await expect(run('p', { kind: 'readMessages', taskId: 'chat-b', progressForRun: 'r' }))
+    .rejects.toMatchObject({ code: 'TASK_NOT_FOUND' });
+  expect(read).not.toHaveBeenCalled();
+  expect(await run('p', { kind: 'readMessages', taskId: 'chat-a', progressForRun: 'r' }))
+    .toEqual({ progressForRun: 'r', items: [], nextCursor: null });
+  expect(read).toHaveBeenCalledWith(expect.objectContaining({ sessionIds: ['chat-a'],
+    pluginProgressInputId: 'plugin-task:r', fromMs: 123 }));
+});
+
+// PR #10988: the old live Agent must not veto a permission supported by the
+// selected Agent. Existing adapters mocked SessionControlService's mixed validation.
+// One Codex -> Claude acceptEdits continuation; real control service, unit tier.
+it('applies project permission only after the selected idle Agent has replaced the old one', async () => {
+  const start = source.indexOf('      setModel: async (');
+  const property = source.slice(start, source.indexOf('      assertTeamPlanUnstarted:', start)).trim().replace(/,$/, '');
+  let effective = { agentKind: 'codex' as 'codex' | 'claude-code', model: 'old', providerId: 'old', effort: null, fastMode: false };
+  let pending: typeof effective | null = null;
+  let generation = 0;
+  let permission = 'auto';
+  const live = { agentKind: effective.agentKind, isTurnRunning: () => false, getTurnControlSnapshot: () => ({}),
+    capabilities: { permissionModes: [{ id: 'ask' }, { id: 'auto' }], setPermissionModeMidSession: { supported: true } } };
+  const writePermission = vi.fn(async ({ mode, beforeMutation }: { mode: string; beforeMutation?: () => Promise<void> }) => {
+    await beforeMutation?.();
+    if (!live.capabilities.permissionModes.some(item => item.id === mode)) throw Error('Old Agent cannot use this permission');
+    permission = mode;
+  });
+  const control = createSessionControlService({
+    sessionExists: async () => true, getLiveSession: () => live,
+    getSessionActivitySnapshot: async () => ({}),
+    getSessionRuntimeDetails: async () => ({ runtimeGeneration: generation, effectiveProfile: effective,
+      baselineProfile: effective, pendingMutation: pending ? { profile: pending } : null, permissionMode: permission }),
+    setSessionRuntime: async ({ patch, beforeMutation }: Parameters<SessionControlServiceDeps['setSessionRuntime']>[0]) => {
+      await beforeMutation?.();
+      pending = { ...effective, ...patch, agentKind: patch.harness ?? effective.agentKind } as typeof effective;
+      return { ok: true, status: 'deferred', generation: ++generation, effectiveProfile: effective, pendingMutation: { profile: pending } };
+    },
+    setSessionPermissionMode: writePermission,
+  } as unknown as SessionControlServiceDeps);
+  const handoff = vi.fn(async () => {
+    effective = pending!; pending = null;
+    live.agentKind = 'claude-code'; live.capabilities.permissionModes = [{ id: 'ask' }, { id: 'acceptEdits' }];
+  });
+  const apply = compile(`return ({${property}}).setModel;`, {
+    PluginTaskError, sessionControlService: control, agentSwitchDeps: {}, applyPendingAgentSwitchIfIdle: handoff,
+  });
+  await expect(apply('task', { agentKind: 'cc', providerId: 'claude', model: 'model', effort: '', fastMode: false },
+    async () => {}, 'acceptEdits')).resolves.toEqual({ status: 'applied' });
+  expect(handoff).toHaveBeenCalledOnce();
+  expect(permission).toBe('acceptEdits');
+  expect(writePermission).toHaveBeenCalledOnce();
+});
+
 it.each([
   {pending:'claude-code', target:'codex', harness:'codex'},
   {pending:undefined, target:'cc', harness:'claude-code'},
   {pending:undefined, target:'codex', harness:undefined},
 ])('routes an explicit model choice through the correct runtime controller: %j', async ({pending,target,harness}) => {
-  const start = source.indexOf('      setModel: async (taskId, route, assertUnchanged) =>');
+  const start = source.indexOf('      setModel: async (');
   const property = source.slice(start, source.indexOf('      assertTeamPlanUnstarted:',start)).trim().replace(/,$/, '');
   const set = vi.fn(async () => ({ok:true,status:'applied'}));
   const apply = compile(`return ({${property}}).setModel;`, {PluginTaskError,sessionControlService:{
@@ -44,8 +222,91 @@ it.each([
   }});
 });
 
+it.each([
+  { current: undefined, target: 'other-computer' },
+  { current: 'other-computer', target: 'share:provider' },
+  { current: 'share:provider', target: undefined },
+  { current: 'share:provider', target: 'share:provider' },
+])('stages the complete source change $current → $target without touching the active turn', async ({ current, target }) => {
+  const start = source.indexOf('      setModel: async (');
+  const property = source.slice(start, source.indexOf('      assertTeamPlanUnstarted:', start)).trim().replace(/,$/, '');
+  const set = vi.fn(async () => ({ ok: true, status: 'deferred' }));
+  const apply = compile(`return ({${property}}).setModel;`, { PluginTaskError, sessionControlService: {
+    getSessionRuntime: async () => ({ ok: true, runtime: { runtimeGeneration: 7,
+      effectiveProfile: { agentKind: 'codex', agentDeviceId: current }, pendingMutation: null } }),
+    setSessionRuntime: set,
+  } });
+  const guard = vi.fn();
+  await apply('task', { agentKind: 'codex', providerId: 'same', model: 'model', effort: '', fastMode: false,
+    ...(target ? { agentDeviceId: target } : {}) }, guard);
+  expect(set).toHaveBeenCalledWith(expect.objectContaining({ beforeMutation: guard,
+    patch: { harness: 'codex', providerId: 'same', model: 'model', effort: null, fastMode: false, agentDeviceId: target ?? null } }));
+});
+
+// Plugin task routes must distinguish local and remote namesakes on both deferred and
+// effective snapshots. Existing snapshot tests changed the model but never its location.
+// Production entry: readSession callback; minimum input: one plugin row and a staged move. Tier: unit.
+it.each(['other-computer', 'share:provider'])('keeps source %s in task configuration and revision across deferred relocation', async agentDeviceId => {
+  const start = source.indexOf('      readSession: async taskId =>');
+  const property = source.slice(start, source.indexOf('      scheduleAutoTitle:', start)).trim().replace(/,$/, '');
+  const local = { agentKind: 'codex', providerId: 'provider', model: 'model', effort: 'high', fastMode: false };
+  const remote = { ...local, agentDeviceId };
+  const row = { id: 'task', source: 'plugin', status: 'active', permissionMode: 'ask', ...local };
+  const query = { from: () => query, where: () => query, limit: async () => [row] };
+  let profile = { effective: local, pendingMutation: null as { profile: typeof remote } | null };
+  const read = compile(`return ({${property}}).readSession;`, {
+    assertCurrent: () => {}, snapshot: { client: { drizzle: { select: () => query } } },
+    sessions: {}, eq: () => true, pluginTaskConfigHash: createHash, readSessionRuntimeProfiles: async () => profile,
+  });
+  const before = await read('task');
+  profile.pendingMutation = { profile: remote };
+  const pending = await read('task');
+  expect(pending.resolvedConfig).toEqual(remote);
+  expect(pending.revision).not.toBe(before.revision);
+  profile = { effective: remote, pendingMutation: null };
+  const applied = await read('task');
+  expect(applied.resolvedConfig).toEqual(remote);
+  expect(applied.revision).toBe(pending.revision);
+});
+
+// Ordinary provider-group assignment can choose a member before vendor acceptance.
+// The selected group remains the logical source only with Host-verified membership.
+it('keeps a verified remote provider group as the source while rejecting an unrelated executor', async () => {
+  const start = source.indexOf('      readSession: async taskId =>');
+  const property = source.slice(start, source.indexOf('      scheduleAutoTitle:', start)).trim().replace(/,$/, '');
+  const configuration = { agentKind: 'codex', model: 'model', providerId: 'member-account', effort: 'high', fastMode: false, agentDeviceId: 'executor' };
+  const row = { id: 'task', source: 'plugin', status: 'active', ...configuration };
+  const query = { from: () => query, where: () => query, limit: async () => [row] };
+  let group: { groupDeviceId: string; providerId: string } | null = { groupDeviceId: 'group-computer', providerId: 'group-account' };
+  let pending = true;
+  let unavailable = false;
+  const read = compile(`return ({${property}}).readSession;`, {
+    assertCurrent: () => {}, snapshot: { client: { drizzle: { select: () => query } } },
+    sessions: {}, eq: () => true, pluginTaskConfigHash: createHash,
+    readSessionRuntimeProfiles: async () => ({ effective: configuration, pendingMutation: pending
+      ? { profile: { ...configuration, providerId: group!.providerId, agentDeviceId: group!.groupDeviceId } } : null }),
+    readProviderGroupBinding: () => ({}), providerGroupService: { sessionGroup: async () => {
+      if (unavailable) throw Error('Group computer is offline');
+      return group;
+    } },
+  });
+  // PR #9155 P2: the same logical route was hashed in a different property order
+  // after group assignment. The existing test only read an already bound task.
+  const staged = await read('task');
+  pending = false;
+  const bound = await read('task');
+  expect(bound.resolvedConfig).toEqual({ ...configuration, agentDeviceId: 'group-computer', providerId: 'group-account' });
+  expect(bound.revision).toBe(staged.revision);
+  group = null;
+  const unbound = await read('task');
+  expect(unbound.resolvedConfig).toEqual(configuration);
+  expect(unbound.revision).not.toBe(bound.revision);
+  unavailable = true;
+  expect((await read('task')).resolvedConfig).toEqual(configuration);
+});
+
 it.each(['codex', 'cc'])('rechecks preferences after runtime admission waits for %s', async agentKind => {
-  const start = source.indexOf('      setModel: async (taskId, route, assertUnchanged) =>');
+  const start = source.indexOf('      setModel: async (');
   const property = source.slice(start, source.indexOf('      assertTeamPlanUnstarted:', start)).trim().replace(/,$/, '');
   let selectedModel = 'selected';
   let release!: () => void;
@@ -193,6 +454,10 @@ it.each(['provider', 'receipt', 'directory', 'creator'])('keeps default-route co
         },
       }),
       routeUnavailable: () => { throw Error('unavailable'); },
+      // These configurations name a complete route, so the auxiliary-chain default never applies.
+      pluginTaskSelectionIsOpen, pluginTaskRouteAttempts,
+      getEffectiveAuxiliaryModelRefs: () => [], getEffectiveAuxiliaryModelChainSnapshot: () => '',
+      auxiliaryChainSessionCandidates: () => [],
       resolvePluginWorkerDirectory: async () => { if (phase === 'directory') change(); return '/root'; },
       createPluginTaskSession: create, clampPluginTaskPermissionMode: (value: string) => value,
       getCurrentDbClientSnapshot: () => epoch, isPluginTaskAuthorized: () => true,

@@ -2,11 +2,13 @@
  * Input —— DESIGN.md §4 单行输入标准控件，升格自 SettingsTextInput。
  *
  * 尺寸：sm/md/lg = 32/36/40px（DS-4 G1；输入框保留三档，按钮不设 40）。
+ * 默认 md（36px），与默认 Select、Button lg 同高；lg 只给需要宽松的字段显式选用
+ * （2026-11-11 维护者裁决 C-08）。
  * 圆角：单行一律胶囊（§5）；textarea 变体一律 8px。
  * placeholder 一律 `--text-placeholder`（§4 G3）。
  *
  * `surface="ivory"` 已在 DS-6 D2 确认用于白面板，默认仍为 elevated。
- * API 原样搬：secret 眼睛显形、mono、trailing。
+ * API 原样搬：secret 眼睛显形、mono、trailing；leading 给搜索图标这类前置装饰（SearchInput）。
  *
  * 字段的 label / 说明 / 错误关系由 FormField 组合，业务校验由消费者持有。
  */
@@ -43,23 +45,37 @@ const SURFACE_STYLES: Record<InputSurface, string> = {
 /** 各档的框体几何 + 无 trailing 时的右内边距（有 trailing 时统一让位给按钮）。 */
 const SIZE_STYLES: Record<
   InputSize,
-  { box: string; paddingLeft: string; paddingRight: string; trailingPaddingRight: string }
+  {
+    box: string;
+    paddingLeft: string;
+    paddingRight: string;
+    trailingPaddingRight: string;
+    /** 有 leading 时：图标的左偏移和文字的左内边距（图标按 14px 计，图标与文字间隔 6px）。 */
+    leadingOffset: string;
+    leadingPaddingLeft: string;
+  }
 > = {
   sm: {
     box: 'h-8 text-12',
     paddingLeft: 'pl-3',
+    leadingOffset: 'left-3',
+    leadingPaddingLeft: 'pl-8',
     paddingRight: 'pr-3',
     trailingPaddingRight: 'pr-8',
   },
   md: {
     box: 'h-9 text-13',
     paddingLeft: 'pl-4',
+    leadingOffset: 'left-3.5',
+    leadingPaddingLeft: 'pl-9',
     paddingRight: 'pr-4',
     trailingPaddingRight: 'pr-9',
   },
   lg: {
     box: 'h-[var(--size-input-lg)] text-14',
     paddingLeft: 'pl-[var(--space-input-lg)]',
+    leadingOffset: 'left-4',
+    leadingPaddingLeft: 'pl-10',
     paddingRight: 'pr-[var(--space-input-lg)]',
     trailingPaddingRight: 'pr-9',
   },
@@ -96,6 +112,7 @@ export interface InputProps extends Omit<
   inputRef?: Ref<HTMLInputElement>;
   /** 兼容 SettingsTextInput 的可读名称别名，映射为原生 aria-label。 */
   ariaLabel?: string;
+  /** 默认 `md`（36px）；`lg`（40px）只给需要宽松的字段。 */
   size?: InputSize;
   /** 底色档:默认 §4 规定的 `--surface-elevated`;`ivory` 见 SURFACE_STYLES 注释。 */
   surface?: InputSurface;
@@ -105,12 +122,16 @@ export interface InputProps extends Omit<
   secret?: boolean;
   /** 自定义尾随元素（需自行绝对定位）。`secret` 优先，两者不叠加。 */
   trailing?: ReactNode;
+  /**
+   * 前置装饰（搜索图标这类），由组件定位在框内左侧并让出左内边距，不接收指针事件。
+   * 按 14px 图标计算位置；可交互的前置控件不要放这里。
+   */
+  leading?: ReactNode;
   /** 错误态：边框 / focus 环切到 `--error-*` 族。 */
   error?: boolean;
   /**
-   * secret 眼睛按钮 Tip 的内容样式。Tip 经 Portal 渲染到 body,默认 `z-[60]` 会被
-   * `z-[10000]` 的模态层盖住;输入位于手写模态内时传 `z-[10001]` 盖过宿主弹窗
-   * (与本仓其它模态内 Tip 的既有做法一致)。
+   * secret 眼睛按钮 Tip 的内容样式。Tip 默认在 tooltip 层(10011),已高于弹窗与菜单,
+   * 不需要为弹窗再抬层级(DESIGN.md §6 层级刻度)。
    */
   secretTipContentClassName?: string;
   /** 附加到**外层容器**（内层 input 恒为 w-full），供 flex 行传 `flex-1 min-w-0`。 */
@@ -125,11 +146,12 @@ export function Input({
   onBlur,
   placeholder,
   type = 'text',
-  size = 'lg',
+  size = 'md',
   surface = 'elevated',
   mono = false,
   secret = false,
   trailing,
+  leading,
   error = false,
   secretTipContentClassName,
   className,
@@ -175,6 +197,18 @@ export function Input({
 
   return (
     <div className={cn('relative', className)}>
+      {leading ? (
+        <span
+          aria-hidden="true"
+          className={cn(
+            'pointer-events-none absolute top-1/2 flex -translate-y-1/2 items-center',
+            sizeStyle.leadingOffset,
+            disabled && 'opacity-60',
+          )}
+        >
+          {leading}
+        </span>
+      ) : null}
       <input
         {...rest}
         ref={inputRef}
@@ -193,7 +227,7 @@ export function Input({
         className={cn(
           'w-full rounded-full outline-none transition-colors',
           sizeStyle.box,
-          sizeStyle.paddingLeft,
+          leading ? sizeStyle.leadingPaddingLeft : sizeStyle.paddingLeft,
           trailingNode ? sizeStyle.trailingPaddingRight : sizeStyle.paddingRight,
           mono && 'font-mono',
           FIELD_CHROME,

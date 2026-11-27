@@ -26,7 +26,7 @@ import {
 import { readExistingTextSync } from '../executor/files';
 import type { ExecutorAction, ExecutorGateDecision } from '../executor/gate';
 import { resolveExecutorShell } from '../executor/shell';
-import type { ExecutorAgentProjection, ExecutorWorkspace } from '../executor/workspace';
+import { ExecutorPathError, type ExecutorAgentProjection, type ExecutorWorkspace } from '../executor/workspace';
 
 export const EXEC_SERVER_WS_PATH = '/ws/exec-server';
 /** exec-server 单行(一条 JSON-RPC 消息)上限：大文件读写的 base64 也在这里面。 */
@@ -46,7 +46,7 @@ export interface ExecServerRelayDeps {
   cwd: string;
   workspace: ExecutorWorkspace;
   authorize(action: ExecutorAction): ExecutorGateDecision;
-  /** 凭证类操作在本机补问(供应商分享的受邀者任务)；允许后再 authorize 一次即放行。 */
+  /** 权限上限拦下的操作在本机补问(含供应商分享的受邀者任务里的凭证类操作)；允许后再 authorize 一次即放行。 */
   confirm?(action: ExecutorAction): Promise<boolean>;
   push(frames: RemoteAgentPushFrame[]): Promise<void>;
   env?: NodeJS.ProcessEnv;
@@ -534,7 +534,13 @@ export class ExecServerRelay {
     let actions: ExecutorAction[] = [];
     if (message && typeof message.method === 'string' && message.id !== undefined) {
       this.counts.requests += 1;
-      message.params = mapExecServerParams(message.params, this.deps.workspace, message.method, false);
+      try {
+        message.params = mapExecServerParams(message.params, this.deps.workspace, message.method, false);
+      } catch (error) {
+        if (!(error instanceof ExecutorPathError)) throw error;
+        this.rejectInvalidPath(connId, message.id, error.message);
+        return;
+      }
       data = JSON.stringify(message);
       actions = execServerActions(message.method, message.params, this.deps.cwd);
       if (message.method === 'process/start') {
@@ -561,7 +567,7 @@ export class ExecServerRelay {
         this.reject(connId, id, decision);
         return;
       }
-      // 等本机用户确认(凭证类)：这一条与之后的消息都按顺序等它。已放行的操作不再检查(批准只能用一次)。
+      // 等本机用户确认：这一条与之后的消息都按顺序等它。已放行的操作不再检查(批准只能用一次)。
       const rest = actions.slice(index);
       this.enqueue(connection, () => this.deliver(connId, connection, id, line, rest));
       return;
@@ -644,11 +650,16 @@ export class ExecServerRelay {
     }));
   }
 
+  private rejectInvalidPath(connId: string, id: unknown, message: string): void {
+    this.counts.rejected += 1;
+    this.sendMessage(connId, JSON.stringify({ id, error: { code: -32602, message: this.deps.workspace.mapTextForAgent(message) } }));
+  }
+
   private enqueueOutput(connId: string, connection: Connection, line: string): void {
     connection.child.stdout.pause();
     const next = (connection.output ?? Promise.resolve()).then(async () => {
       if (connection.closed) return;
-      const projected = await this.projectOutbound(line);
+      const projected = await this.projectOutbound(line, connId);
       if (!connection.closed) this.sendMessage(connId, projected);
     }).catch(() => {
       // 不发送未投影的本机路径；只结束这条连接，不能影响同一设备上的其它任务。
@@ -665,13 +676,21 @@ export class ExecServerRelay {
     });
   }
 
-  private async projectOutbound(line: string): Promise<string> {
+  private async projectOutbound(line: string, connId: string): Promise<string> {
     let value: unknown;
     try {
       value = JSON.parse(line);
     } catch {
       const projection = await this.deps.workspace.prepareAgentProjection();
       return projection.mapTextForAgent(line);
+    }
+    const reply = asJsonRecord(value);
+    const error = asJsonRecord(reply?.error);
+    if (error?.code === -32602 && error.message === 'sandbox intent cannot be enforced on this executor') {
+      this.deps.log?.warn('remote agent: exec-server cannot enforce sandbox', {
+        connId, platform: process.platform, code: error.code,
+      });
+      error.message += '. Check sandbox support and the Codex version on the executing computer before retrying with the requested restrictions.';
     }
     return JSON.stringify(await mapExecServerResult(value, this.deps.workspace));
   }

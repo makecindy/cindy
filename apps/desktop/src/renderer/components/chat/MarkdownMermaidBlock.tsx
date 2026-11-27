@@ -20,7 +20,7 @@
  * Theme: re-renders when <html class="dark"> toggles, via MutationObserver.
  */
 
-import { memo, useEffect, useId, useRef, useState } from 'react';
+import { memo, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { Check, Code2, Copy, Expand, Eye, Pen } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { repairMermaidSource } from '@cindy/maker-shared/mermaid-autofix';
@@ -28,7 +28,7 @@ import { repairMermaidSource } from '@cindy/maker-shared/mermaid-autofix';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { resolveExportBackground, svgToPngBlob } from '@/lib/rasterizeToImage';
-import { MermaidLightbox } from './MermaidLightbox';
+import { MermaidLightbox } from './lazyPreviewLightboxes';
 import { useCopyAsImage } from './useCopyAsImage';
 import {
   DropdownMenu,
@@ -39,9 +39,12 @@ import {
 
 interface MarkdownMermaidBlockProps {
   raw: string;
+  fullscreen?: boolean;
+  fullscreenFallback?: ReactNode;
+  onClose?: () => void;
 }
 
-type MermaidModule = typeof import('mermaid')['default'];
+type MermaidModule = (typeof import('mermaid'))['default'];
 
 let mermaidPromise: Promise<MermaidModule> | null = null;
 
@@ -57,6 +60,9 @@ function isDarkMode(): boolean {
 
 export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
   raw,
+  fullscreen = false,
+  fullscreenFallback,
+  onClose,
 }: MarkdownMermaidBlockProps) {
   const { t } = useTranslation();
   const reactId = useId();
@@ -210,12 +216,27 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
   // a hard error (not just streaming-partial).
   const showSourceView = showSource || (svg == null && error != null);
 
+  if (fullscreen && !svg && fullscreenFallback) return fullscreenFallback;
+
+  if (fullscreen && svg)
+    return (
+      <>
+        <MermaidLightbox
+          svg={svg}
+          source={raw}
+          onClose={onClose ?? (() => {})}
+          onAnnotate={canAnnotate ? openAnnotate : undefined}
+        />
+        {annotateNode}
+      </>
+    );
+
   return (
     <div ref={blockRef} className="group relative my-3">
       {showSourceView ? (
         <pre
           className={cn(
-            'overflow-x-auto rounded-[12px]',
+            'overflow-x-auto rounded-xl',
             'border border-[var(--msg-code-block-border)]',
             'bg-[var(--msg-code-block-bg)]',
             'p-4 font-mono text-[length:var(--app-code-font-size)] leading-[1.5]',
@@ -226,6 +247,7 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
         </pre>
       ) : svg != null ? (
         <div
+          data-chat-mermaid
           role="button"
           tabIndex={0}
           onClick={() => setLightboxOpen(true)}
@@ -243,7 +265,7 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
           aria-label={t('chat.mermaid.clickToZoom')}
           title={t('chat.mermaid.clickToZoom')}
           className={cn(
-            'overflow-x-auto rounded-[12px]',
+            'overflow-x-auto rounded-xl',
             'border border-[var(--msg-code-block-border)]',
             'bg-[var(--msg-code-block-bg)]',
             'p-4 flex justify-center cursor-zoom-in',
@@ -260,7 +282,7 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
         // matching the code-block frame so layout doesn't jump.
         <pre
           className={cn(
-            'overflow-x-auto rounded-[12px]',
+            'overflow-x-auto rounded-xl',
             'border border-[var(--msg-code-block-border)]',
             'bg-[var(--msg-code-block-bg)]',
             'p-4 font-mono text-[length:var(--app-code-font-size)] leading-[1.5]',
@@ -284,6 +306,7 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
       ) : null}
 
       <div
+        data-chat-copy-exclude
         className={cn(
           'absolute right-2 top-2 flex gap-1',
           'opacity-0 transition-opacity duration-150',
@@ -301,7 +324,7 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
             title={t('chat.mermaid.zoom')}
             className={cn(
               'inline-flex h-7 w-7 items-center justify-center',
-              'rounded-md border border-[var(--msg-code-block-border)]',
+              'rounded-lg border border-[var(--msg-code-block-border)]',
               'bg-[var(--msg-code-block-bg)] text-[var(--msg-tool-text)]',
               'hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--msg-assistant-text)]',
             )}
@@ -320,7 +343,7 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
             title={t('chat.mermaid.annotate')}
             className={cn(
               'inline-flex h-7 w-7 items-center justify-center',
-              'rounded-md border border-[var(--msg-code-block-border)]',
+              'rounded-lg border border-[var(--msg-code-block-border)]',
               'bg-[var(--msg-code-block-bg)] text-[var(--msg-tool-text)]',
               'hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--msg-assistant-text)]',
             )}
@@ -339,7 +362,7 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
             title={showSourceView ? t('chat.mermaid.viewDiagram') : t('chat.mermaid.viewSource')}
             className={cn(
               'inline-flex h-7 w-7 items-center justify-center',
-              'rounded-md border border-[var(--msg-code-block-border)]',
+              'rounded-lg border border-[var(--msg-code-block-border)]',
               'bg-[var(--msg-code-block-bg)] text-[var(--msg-tool-text)]',
               'hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--msg-assistant-text)]',
             )}
@@ -360,7 +383,7 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
           title={copied || copiedImage ? t('chat.mermaid.copied') : t('chat.mermaid.copy')}
           className={cn(
             'inline-flex h-7 w-7 items-center justify-center',
-            'rounded-md border border-[var(--msg-code-block-border)]',
+            'rounded-lg border border-[var(--msg-code-block-border)]',
             'bg-[var(--msg-code-block-bg)] text-[var(--msg-tool-text)]',
             'hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--msg-assistant-text)]',
           )}

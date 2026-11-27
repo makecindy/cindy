@@ -12,7 +12,7 @@ describe('claudeBehaviorFlagsForSpawn', () => {
     const flags = claudeBehaviorFlagsForSpawn({ providerId: 'anthropic-work',
       nativeAuth: 'claude', credentialMode: 'provider-oauth', oauthConnected: () => true });
     expect(flags.CLAUDE_CODE_ATTRIBUTION_HEADER).toBe('0');
-    expect(flags.ENABLE_TOOL_SEARCH).toBe('auto');
+    expect(flags.ENABLE_TOOL_SEARCH).toBe('true');
     expect(claudeToolSearchMode('grok-work', 'provider-oauth', 'xai')).toBe('false');
   });
 
@@ -30,8 +30,8 @@ describe('claudeBehaviorFlagsForSpawn', () => {
     // oauth-bearer / 未显式指定:CLI 可能用本机登录直连 api.anthropic.com,归因块必须保留,
     // 否则分类器子请求被上游 429。
     const cases = [
-      { credentialMode: 'oauth-bearer', providerId: 'anthropic', toolSearch: 'auto' },
-      { credentialMode: undefined, providerId: undefined, toolSearch: 'auto' },
+      { credentialMode: 'oauth-bearer', providerId: 'anthropic', toolSearch: 'true' },
+      { credentialMode: undefined, providerId: undefined, toolSearch: 'true' },
     ] as const;
     for (const { credentialMode, providerId, toolSearch } of cases) {
       const flags = claudeBehaviorFlagsForSpawn({
@@ -74,10 +74,10 @@ describe('claudeBehaviorFlagsForSpawn', () => {
   });
 
   it('enables Tool Search only for known compatible upstreams', () => {
-    expect(claudeToolSearchMode('xd', 'gateway-key')).toBe('auto');
-    expect(claudeToolSearchMode('anthropic', 'oauth-bearer')).toBe('auto');
-    expect(claudeToolSearchMode(null, 'gateway-key')).toBe('auto');
-    expect(claudeToolSearchMode(null, 'oauth-bearer')).toBe('auto');
+    expect(claudeToolSearchMode('xd', 'gateway-key')).toBe('true');
+    expect(claudeToolSearchMode('anthropic', 'oauth-bearer')).toBe('true');
+    expect(claudeToolSearchMode(null, 'gateway-key')).toBe('true');
+    expect(claudeToolSearchMode(null, 'oauth-bearer')).toBe('true');
 
     expect(claudeToolSearchMode('openrouter-custom', 'provider-oauth')).toBe('false');
     expect(claudeToolSearchMode('xai', 'provider-oauth')).toBe('false');

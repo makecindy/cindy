@@ -100,6 +100,24 @@ describe('payloadSummary', () => {
       command: 'pnpm --filter mobile test -- --runInBand --very-long-argument',
     })).toBe('Bash(pnpm --filter mobile test -- --runInBand --very-long-argu...)');
     expect(formatPayloadToolUseSummary('UnknownTool', { value: 'x' })).toBe('UnknownTool()');
+    expect(
+      formatPayloadToolUseSummary('collab:wait', {
+        senderThreadId: '019d8f44-1111-7222-8333-444444444444',
+        receiverThreadIds: [],
+      }),
+    ).toBe('');
+    expect(
+      formatPayloadToolUseSummary('collab:wait', {
+        targets: ['scout', 'reviewer'],
+        targetCount: 2,
+      }),
+    ).toBe('scout, reviewer');
+    expect(
+      formatPayloadToolUseSummary('collab:sendInput', {
+        targets: ['scout'],
+        prompt: 'Verify the build',
+      }),
+    ).toBe('Verify the build');
 
     expect(buildPayloadToolDiff('Edit', {
       file_path: '/repo/app.ts',
@@ -393,6 +411,18 @@ describe('payloadSummary', () => {
       uri: 'data:image/png;base64,aaa',
     }))).toMatchObject({
       previewText: '内联图片数据 · PNG · 2 B',
+    });
+
+    // 约 1 MiB 的内联图片:档位要按取整后的展示值选,不能留在 KB 档显示 "1024 KB"。
+    // 1048575 字节的 base64 载荷,按解码后的字节数计(无 padding)。
+    const nearMibB64 = 'A'.repeat(1398100);
+    expect(summarizeMessagePayloadBody(buildAttachmentPayload({
+      kind: 'image',
+      name: 'big.png',
+      previewable: true,
+      uri: `data:image/png;base64,${nearMibB64}`,
+    }))).toMatchObject({
+      bodyText: '内联图片数据 · PNG · 1.0 MB',
     });
 
     expect(buildAttachmentPayload({

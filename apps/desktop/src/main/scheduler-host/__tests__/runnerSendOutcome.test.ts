@@ -1,5 +1,6 @@
 import type { ScheduledModelSelection } from '../../maker-ipc/scheduledModelSelection';
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, onTestFinished } from 'vitest';
+import { sharedTaskGuestPeer } from '@cindy/device-link';
 
 import type {
   AgentEvent,
@@ -55,9 +56,11 @@ vi.mock('../runners/_shared', () => ({
   backfillSessionMeta: mocks.backfillSessionMeta,
 }));
 
-import { MakerScheduleRunner } from '../runner';
+import { RemoteAgentRemoteError } from '../../remote-agent/controller/runClient';
+import { MakerScheduleRunner } from '../runner.desktop';
 import { ScheduledModelSelectionBusyError } from '../../maker-ipc/scheduledModelSelection';
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface';
+import { GitSnapshotCoordinator } from '../../git-snapshot/gitSnapshotCoordinator.js';
 
 type SessionSendOptions = Parameters<Session['send']>[1];
 type SendImpl = (
@@ -173,6 +176,7 @@ function createRunnerHarness(
     getSessionMeta: vi.fn(async () => null),
     isSessionAlive: vi.fn(() => false),
     closeSession: vi.fn(async () => undefined),
+    recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
   } as unknown as Maker;
   const runner = new MakerScheduleRunner({
     maker,
@@ -495,6 +499,31 @@ describe('MakerScheduleRunner send outcome policy', () => {
     expect(update).not.toHaveBeenCalled();
   });
 
+  // A plugin-engine (ACP) task runs a linked automation on its own engine/location or via explicit
+  // modelAgentKind switch (docs/plans/acp-plugin-bridge.md). Legacy model-only overrides, SSH
+  // targets, and raw wire-peer device ids must still fail visibly before restore or switch. Unit fixture.
+  it.each([
+    [{}, {}, 'uses the task\'s own model'],
+    [{ model: undefined }, { remoteHostId: 'ssh-host' }, 'SSH automation targets'],
+    [{ model: undefined }, { agentDeviceId: sharedTaskGuestPeer('task-1', 'member-1', 'peer-1') }, 'cannot be used for scheduled tasks'],
+  ] as const)('refuses an unsupported plugin-engine target before restoring or switching it', async (scheduleOverrides, rowOverrides, reason) => {
+    mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'archived', agentKind: 'acp', ...rowOverrides });
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    const acquirePendingAgentSwitch = vi.fn();
+    const { runner, maker, notifier } = createRunnerHarness(h.session, { acquirePendingAgentSwitch });
+    const error = await runner.fire(baseSchedule({ targetSessionId: h.session.id, ...scheduleOverrides }), createFireContext())
+      .catch((refusal: unknown) => refusal);
+    expect(error).toMatchObject({
+      code: 'PLUGIN_ENGINE_UNSUPPORTED',
+      message: expect.stringContaining(reason),
+    });
+    expect(latestNotifiedRun(notifier)).toMatchObject({ status: 'failed', errorMsg: (error as Error).message });
+    expect(mocks.restoreArchivedSessionForSend).not.toHaveBeenCalled();
+    expect(acquirePendingAgentSwitch).not.toHaveBeenCalled();
+    expect(maker.createSession).not.toHaveBeenCalled();
+    expect(h.send).not.toHaveBeenCalled();
+  });
+
   it('keeps the schedule active when the target is archived again during preparation', async () => {
     const h = createSessionHarness(async () => ({ accepted: true }));
     mocks.getSessionRowSnapshot.mockResolvedValueOnce({ status: 'active' })
@@ -673,6 +702,67 @@ describe('MakerScheduleRunner send outcome policy', () => {
     expect(ctx.removeAbortListener).toHaveBeenCalledTimes(1);
   });
 
+  // #10161 / unit: the idle scheduler goes straight through this runner.
+  // Its generic error sanitization used to erase the safe, typed send diagnosis.
+  it('keeps the dispatch intent diagnosis in an idle scheduled run', async () => {
+    vi.useFakeTimers();
+    const receipt = Promise.withResolvers<{ attemptId: string }>();
+    const entered = Promise.withResolvers<void>();
+    const snapshots = new GitSnapshotCoordinator({
+      snapshotTimeoutMs: 50,
+      recordTurnAttempt: () => { entered.resolve(); return receipt.promise; },
+      readAutoSnapshotEnabled: () => true,
+      getSessionContext: vi.fn(), detectRepoRoot: vi.fn(),
+      createShadowSavepoint: vi.fn(), createShadowMarker: vi.fn(),
+      oneShot: vi.fn(), logger: createLogger(),
+    });
+    const dispatch = vi.fn();
+    const h = createSessionHarness(async (_message, opts) => {
+      await opts?.onAccepted?.();
+      dispatch();
+      return { accepted: true };
+    });
+    const { runner, notifier } = createRunnerHarness(h.session, {
+      beforeDispatchUserTurn: (id, signal) => snapshots.onTurnStart(id, signal),
+    });
+    try {
+      const result = runner.fire(baseSchedule(), createFireContext()).catch(error => error);
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(50);
+      const errorMsg = expect.stringMatching(/^\[SNAPSHOT_DISPATCH_INTENT_TIMEOUT\]/);
+      expect(await result).toMatchObject({ message: errorMsg });
+      expect(latestNotifiedRun(notifier)).toMatchObject({ status: 'failed', errorMsg });
+      expect(mocks.createMessage).toHaveBeenCalledOnce();
+      expect(dispatch).not.toHaveBeenCalled();
+    } finally {
+      receipt.resolve({ attemptId: 'late' });
+      vi.useRealTimers();
+    }
+  });
+
+  // Unit regression for the idle shared reconnect: after acceptance, a confirmed
+  // startup failure still closes out this occurrence through the normal runner.
+  // The allocator/runtime suite drives the real reconnect and token delivery.
+  it('fails the scheduled occurrence once when an accepted send cannot reopen the old remote run', async () => {
+    const error = new RemoteAgentRemoteError({
+      name: 'AgentStartupStoppedError',
+      code: 'SUBSCRIPTION_ACCOUNT_LIMITED',
+      message: '[SUBSCRIPTION_ACCOUNT_LIMITED] The task subscription account is waiting for its usage window to reset',
+    }, 'start');
+    const h = createSessionHarness(async (_message, opts) => {
+      await opts?.onAccepted?.();
+      throw error;
+    });
+    const { runner, notifier, maker } = createRunnerHarness(h.session);
+    await expect(runner.fire(baseSchedule(), createFireContext())).rejects.toThrow(/Session send failed before dispatch/);
+    expect(latestNotifiedRun(notifier)).toMatchObject({ status: 'failed' });
+    expect(notifier.notify).toHaveBeenCalledOnce();
+    expect(mocks.createMessage).toHaveBeenCalledOnce();
+    expect(maker.createSession).toHaveBeenCalledOnce();
+    expect(h.send).toHaveBeenCalledOnce();
+    expect(h.listenerCount()).toBe(0);
+  });
+
   it('keeps quota failures in scheduler notifications free of IM recovery instructions', async () => {
     const h = createSessionHarness(async (_message, opts) => {
       await opts?.onAccepted?.();
@@ -693,6 +783,10 @@ describe('MakerScheduleRunner send outcome policy', () => {
   });
 
   it('projects tool-loop terminal errors to a safe scheduler notification', async () => {
+    // 终止原因文案随界面语言（imBot.text.shared.*），这里固定中文以核对投影内容。
+    const { setMainLocale } = await import('../../i18n.desktop');
+    setMainLocale('zh-CN');
+    onTestFinished(() => setMainLocale('en'));
     const h = createSessionHarness(async (_message, opts) => {
       await opts?.onAccepted?.();
       return { accepted: true };
@@ -789,5 +883,53 @@ describe('MakerScheduleRunner send outcome policy', () => {
     await lateOnAccepted?.();
     expect(isHeadlessGhostSetupTurn('scheduler-session')).toBe(false);
     expect(mocks.createMessage).not.toHaveBeenCalled();
+  });
+
+  it('rebuilds a recycled runtime in place and dispatches on the rebuilt instance (direct-send degradation)', async () => {
+    // 回归(MagicLizi P1):直发降级的「漂移回收 → 就地重建 → wireSessionToIpc 重接」
+    // 分支此前零覆盖;换实例不重接会让本轮回复与工具记录不进聊天页(两次踩中的隐性契约)。
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    const rebuilt = createSessionHarness(async () => ({ accepted: true }));
+    const { runner, maker, logger, notifier } = createRunnerHarness(h.session);
+    (maker.recyclePiRuntimeIfResourcesDrifted as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+    let created = 0;
+    (maker.createSession as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      created += 1;
+      return created === 1 ? h.session : rebuilt.session;
+    });
+    const ctx = createFireContext();
+    const firePromise = runner.fire(baseSchedule(), ctx);
+    await vi.waitFor(() => expect(rebuilt.send).toHaveBeenCalled());
+    // accepted 后 fire 等 turn 终态:重建实例上发出 done 收口本轮。
+    rebuilt.emit({ type: 'done', data: {} } as AgentEvent);
+    await firePromise;
+
+    expect(maker.recyclePiRuntimeIfResourcesDrifted).toHaveBeenCalledWith(h.session);
+    expect(logger.info).toHaveBeenCalledWith(
+      '[runner] project resources drifted, recycled runtime before dispatch',
+      { sessionId: 'scheduler-session' },
+    );
+    // 投递必须落在重建实例上;旧实例已关闭,打到它只会得到误导性的失败。
+    expect(mocks.wireSessionToIpc).toHaveBeenCalledWith(rebuilt.session);
+    expect(rebuilt.send).toHaveBeenCalledTimes(1);
+    expect(h.send).not.toHaveBeenCalled();
+    expect(latestNotifiedRun(notifier).status).toBe('success');
+  });
+
+  it('surfaces rebuild failure loudly after a successful recycle instead of sending to a closed instance', async () => {
+    // 回归(fe45afa803 语义):回收成功(旧实例已关)后的重建失败必须上抛原始原因,
+    // 继续用已关闭实例只会把真实原因换成误导性的「会话已关闭」。
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    const { runner, maker, notifier } = createRunnerHarness(h.session);
+    (maker.recyclePiRuntimeIfResourcesDrifted as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+    (maker.createSession as ReturnType<typeof vi.fn>)
+      .mockImplementationOnce(async () => h.session)
+      .mockRejectedValueOnce(new Error('pi startup failed: model catalog unavailable'));
+    const ctx = createFireContext();
+
+    // 重建失败在 run 组装前裸上抛(不产出 failed run):大声失败正是修复语义。
+    await expect(runner.fire(baseSchedule(), ctx)).rejects.toThrow(/pi startup failed/);
+    expect(h.send).not.toHaveBeenCalled();
+    expect(notifier.notify).not.toHaveBeenCalled();
   });
 });

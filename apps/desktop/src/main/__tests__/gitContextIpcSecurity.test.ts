@@ -31,16 +31,23 @@ describe('git-context remote IPC security contract', () => {
     expect(requireId).toBeGreaterThan(guard);
   });
 
-  it('fails closed when device-link PR refs lookup is unavailable', () => {
+  it('fails closed when device-link PR refs lookup is unavailable and restricts forceRefresh to trusted local callers', () => {
     const lookup = ipcSource.indexOf('const refs = await listPrRefs(remoteSessionId);');
     const clear = ipcSource.indexOf('return [];', lookup);
     const statusQuery = ipcSource.indexOf(
-      'return prStatusService!.getStatuses(parsed, { remote: remoteSessionId !== null });',
+      'const statuses = await prStatusService!.getStatuses(parsed, {',
     );
+    const remoteOption = ipcSource.indexOf('remote: remoteSessionId !== null,', statusQuery);
+    const forceRefreshDecl = ipcSource.indexOf('const forceRefresh =');
+    const forceRefreshGuard = ipcSource.indexOf('assertTrustedAppRendererEvent(event);', forceRefreshDecl);
 
     expect(ipcSource).toContain("log.warn('remote PR refs lookup failed (fail closed)'");
+    expect(ipcSource).toContain('!remoteSessionId &&');
     expect(lookup).toBeGreaterThanOrEqual(0);
     expect(clear).toBeGreaterThan(lookup);
     expect(statusQuery).toBeGreaterThan(clear);
+    expect(remoteOption).toBeGreaterThan(statusQuery);
+    expect(forceRefreshDecl).toBeGreaterThanOrEqual(0);
+    expect(forceRefreshGuard).toBeGreaterThan(forceRefreshDecl);
   });
 });

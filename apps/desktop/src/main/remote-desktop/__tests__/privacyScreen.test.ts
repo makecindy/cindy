@@ -1,13 +1,57 @@
 import { EventEmitter } from 'node:events';
+import { release } from 'node:os';
 import { beforeEach, expect, it, vi } from 'vitest';
 
+vi.mock('node:os', { spy: true });
 const state = vi.hoisted(() => ({ windows: [] as any[], displays: [] as any[], confirm: vi.fn() }));
-vi.mock('../../i18n', () => ({ t: (key: string) => key }));
-vi.mock('../../logger', () => ({ createLogger: () => ({ debug: vi.fn(), warn: vi.fn() }) }));
+const excludeMask = vi.hoisted(() => vi.fn((_handle: Buffer) => true));
+vi.mock('../../windowsTaskbarNative', () => ({
+  loadWindowsTaskbarNative: async () => ({ excludePrivacyMaskFromCapture: excludeMask }),
+}));
+const away = vi.hoisted(() => ({
+  permission: vi.fn<() => Promise<'missing' | 'unknown' | 'granted'>>(),
+  ended: (_locked: boolean) => {},
+  quit: () => {},
+  lock: vi.fn<() => Promise<void>>(),
+  helperLock: vi.fn<() => Promise<boolean>>(),
+}));
+vi.mock('../../i18n.desktop', () => ({ t: (key: string) => key }));
+vi.mock('../../logger', () => ({
+  createLogger: () => ({ debug: vi.fn(), warn: vi.fn(), info: vi.fn(), error: vi.fn() }),
+}));
+vi.mock('../../lifecycle', () => ({
+  onQuit: (_key: string, quit: () => void) => { away.quit = quit; },
+}));
+vi.mock('node:child_process', () => ({
+  execFile: (
+    _file: string, _args: string[], _options: unknown,
+    done: (error: null, stdout: string, stderr: string) => void,
+  ) => done(null, '', ''),
+}));
+vi.mock('../../security/trustedAppRenderer', () => ({ assertTrustedAppRendererEvent: vi.fn() }));
+vi.mock('../inputHost', () => ({
+  readDesktopInputPermission: away.permission,
+  requestDesktopInputPermission: async () => {},
+  lockDesktopScreen: away.lock,
+  // The owner has not answered the system verification yet.
+  verifyDesktopOwner: () => new Promise(() => {}),
+}));
+vi.mock('../privacyInput', () => ({
+  watchPrivacyInput: vi.fn(),
+  watchAwayGuardInput: async (ended: (locked: boolean) => void) => {
+    away.ended = ended;
+    return { stop: async () => {}, lock: away.helperLock, lockOnExit: () => {} };
+  },
+}));
 vi.mock('electron', () => ({
   app: { focus: vi.fn() },
+  powerMonitor: new EventEmitter(),
+  powerSaveBlocker: { start: () => 1, stop: vi.fn() },
+  ipcMain: { handle: vi.fn() },
   dialog: { showMessageBox: state.confirm },
   BrowserWindow: class extends EventEmitter {
+    static getFocusedWindow() { return null; }
+    getNativeWindowHandle() { return Buffer.from([this.id]); }
     id = state.windows.length + 1;
     destroyed = false;
     options: any;
@@ -22,9 +66,11 @@ vi.mock('electron', () => ({
       state.windows.push(this);
     }
     setMenuBarVisibility() {}
-    async loadURL() {}
+    page = '';
+    async loadURL(url: string) { this.page = decodeURIComponent(url); }
     setContentProtection() {}
     setIgnoreMouseEvents = vi.fn();
+    setOpacity = vi.fn();
     setFocusable = vi.fn();
     setVisibleOnAllWorkspaces() {}
     setAlwaysOnTop() {}
@@ -71,7 +117,9 @@ vi.mock('electron', () => ({
 }));
 
 import { PrivacyScreen } from '../privacyScreen';
-import { screen } from 'electron';
+import { AWAY_GUARD_GET_STATE_CHANNEL, AWAY_GUARD_PREVIEW_CHANNEL, AWAY_GUARD_PREVIEW_DELAY_MS } from '../../../shared/awayGuard';
+import { registerAwayGuardIpc, startAwayGuard } from '../awayGuardService';
+import { ipcMain, powerMonitor, screen } from 'electron';
 beforeEach(() => {
   screen.removeAllListeners();
   state.displays = [{ id: 1, bounds: { x: 0, y: 0, width: 1440, height: 900 } }];
@@ -102,7 +150,28 @@ it('relayouts the non-captured display and releases its listeners on stop', asyn
   expect(screen.listenerCount('display-metrics-changed')).toBe(0);
 });
 
-function fixture() {
+// Unit: a second monitor rejecting capture exclusion must not acknowledge an
+// active privacy screen or leave the first mask and its input hook installed.
+it('rejects Windows privacy activation when one monitor cannot exclude its mask', async () => {
+  vi.stubGlobal('process', Object.create(process, { platform: { value: 'win32' } }));
+  try {
+    state.displays.push({ id: 2, bounds: { x: 1440, y: 0, width: 900, height: 1200 } });
+    excludeMask.mockImplementation(handle => handle[0] === 1);
+    const h = fixture();
+    const preparing = h.masks.set(true, () => true);
+    expect(h.masks.active).toBe(true);
+    await expect(preparing).rejects.toThrow('DESKTOP_PRIVACY_UNAVAILABLE');
+    expect(excludeMask).toHaveBeenCalledWith(Buffer.from([2]));
+    expect(state.windows.every(window => window.destroyed)).toBe(true);
+    expect(h.monitor.stop).toHaveBeenCalled();
+    expect(h.masks.active).toBe(false);
+  } finally {
+    excludeMask.mockImplementation(() => true);
+    vi.unstubAllGlobals();
+  }
+});
+
+function fixture(heldInput?: () => void) {
   const stopped = vi.fn();
   const excluded = vi.fn();
   const resume = vi.fn(async () => {});
@@ -114,13 +183,15 @@ function fixture() {
   };
   let local!: () => void;
   let failed!: () => void;
-  const masks = new PrivacyScreen(excluded, stopped, suspend, async (onLocal, onFailed) => {
+  const watch = vi.fn(async (onLocal: () => void, onFailed: () => void) => {
     local = onLocal;
     failed = onFailed;
     return monitor;
   });
+  const masks = new PrivacyScreen(excluded, stopped, suspend, watch, { heldInput });
   return {
     masks,
+    watch,
     stopped,
     excluded,
     suspend,
@@ -133,6 +204,28 @@ function fixture() {
 const settle = async () => {
   for (let i = 0; i < 12; i++) await Promise.resolve();
 };
+
+// Unit: keep the Win32 layer opaque and excluded once build 26300 uses an
+// alpha-capable surface to let the covered taskbar receive pointer input.
+it('keeps the Windows 26300 taskbar-compatible mask opaque and capture-excluded', async () => {
+  vi.stubGlobal('process', Object.create(process, { platform: { value: 'win32' } }));
+  vi.mocked(release).mockReturnValueOnce('10.0.26300');
+  excludeMask.mockClear();
+  const f = fixture();
+  try {
+    await f.masks.set(true, () => true);
+    const window = state.windows[0];
+    expect(window.options).toMatchObject({ transparent: true, backgroundColor: '#000000' });
+    expect(window.setOpacity).toHaveBeenCalledWith(1);
+    expect(window.setOpacity).toHaveBeenCalledBefore(excludeMask);
+    expect(excludeMask).toHaveBeenCalledWith(window.getNativeWindowHandle());
+    expect(window.getBounds()).toEqual(state.displays[0].bounds);
+    expect(window.setIgnoreMouseEvents).toHaveBeenLastCalledWith(true);
+  } finally {
+    f.masks.stop();
+    vi.unstubAllGlobals();
+  }
+});
 
 it('keeps the full-display mask passive so injected input reaches underlying apps', async () => {
   const f = fixture();
@@ -238,6 +331,36 @@ it('ends the lease instead of leaving an inescapable mask when its native watche
   await settle();
   expect(f.stopped).toHaveBeenCalledOnce();
   expect(state.windows[0].destroyed).toBe(true);
+});
+
+// docs/product-rules/privacy-screen.md (2026-11-14): when the lock cannot be confirmed the
+// masks stay. Before this, clicks passed through to apps nobody could see, and the owner
+// had no way out short of quitting Cindy. Held masks catch clicks; releasing input for the
+// system's owner verification is not a failure (no second lock attempt); re-arming lets
+// the next touch retry the lock on the same masks.
+it('holds masks without click-through, releases input quietly and re-arms the watcher', async () => {
+  const f = fixture();
+  f.stopped.mockResolvedValue(false);
+  await f.masks.set(true, () => true);
+  const window = state.windows[0];
+  f.failed();
+  await settle();
+  expect(f.stopped).toHaveBeenCalledOnce();
+  expect(window.destroyed).toBe(false);
+  f.masks.holdInput();
+  expect(window.setIgnoreMouseEvents).toHaveBeenLastCalledWith(false);
+  await f.masks.rearmInput();
+  await f.masks.releaseInput();
+  expect(f.monitor.stop).toHaveBeenCalled();
+  // The released watcher reporting its end must not count as a failure.
+  f.failed();
+  await settle();
+  expect(f.stopped).toHaveBeenCalledOnce();
+  await f.masks.rearmInput();
+  f.failed();
+  await settle();
+  expect(f.stopped).toHaveBeenCalledTimes(2);
+  expect(window.destroyed).toBe(false);
 });
 
 it.each(['confirmed', 'watcher', 'renderer'] as const)(
@@ -347,4 +470,158 @@ it('does not lock a replacement lease after delayed old hook teardown', async ()
   expect(f.stopped).not.toHaveBeenCalled();
   expect(state.windows[1].destroyed).toBe(false);
   f.masks.stop();
+});
+
+// PR #10639: releasing an input helper must not detach live mask failure protection.
+it.each(['closed', 'render-process-gone'])('locks on %s after verification releases and rearms input', async (event) => {
+  const f = fixture();
+  await f.masks.set(true, () => true);
+  await f.masks.releaseInput();
+  await f.masks.rearmInput();
+  const window = state.windows[0];
+  (event === 'closed' ? window : window.webContents).emit(event);
+  await settle();
+  expect(f.stopped).toHaveBeenCalledOnce();
+});
+
+// PR #10639: failed native re-arm must leave a local recovery path on the mask.
+it('retries from a held mask click when the native watcher cannot re-arm', async () => {
+  const retry = vi.fn();
+  const f = fixture(retry);
+  await f.masks.set(true, () => true);
+  const window = state.windows[0];
+  f.masks.holdInput();
+  await f.masks.releaseInput();
+  f.watch.mockRejectedValueOnce(new Error('ACCESSIBILITY_DENIED'));
+  await expect(f.masks.rearmInput()).rejects.toThrow('ACCESSIBILITY_DENIED');
+  window.webContents.emit('before-mouse-event', {}, { type: 'mouseMove' });
+  expect(retry).not.toHaveBeenCalled();
+  window.webContents.emit('before-mouse-event', {}, { type: 'mouseDown' });
+  expect(retry).toHaveBeenCalledOnce();
+  f.masks.stop();
+  window.webContents.emit('before-mouse-event', {}, { type: 'mouseDown' });
+  expect(retry).toHaveBeenCalledOnce();
+});
+
+// Service integration in the existing window fixture: a failed native lock must
+// retain the cover until a system lock/unlock, then leave no stale failure page.
+// The pure controller tests cannot observe these Electron event/window callbacks.
+// One service lifetime covers held and in-flight failures without module resets.
+it('recovers away-guard failure masks after OS unlock, including late lock failures', async () => {
+  vi.useFakeTimers();
+  // Keep process methods: vitest reports errors through process.listeners.
+  vi.stubGlobal(
+    'process',
+    Object.create(process, {
+      platform: { value: 'darwin' },
+      getSystemVersion: { value: () => '15.0' },
+      execPath: { value: '/Applications/Cindy Personal.app/Contents/MacOS/Cindy' },
+    }),
+  );
+  let enabled = true;
+  away.lock.mockRejectedValue(new Error('DESKTOP_LOCK_FAILED'));
+  away.helperLock.mockResolvedValue(false);
+  try {
+    startAwayGuard({
+      excludedWindows: () => {},
+      notifyFailure: vi.fn(),
+      // Covers appear only while work needs the screen (displayDemand.ts).
+      needsDisplay: () => true,
+      enabled: () => enabled,
+      delaySeconds: () => 30,
+      screenLocked: () => false,
+      seedScreenLocked: () => {},
+      msSinceOwnerInput: () => Infinity,
+    });
+    // Unit regression, same service lifetime: a preflight grant used to report
+    // preview success even when there were no displays to cover three seconds later.
+    registerAwayGuardIpc({
+      read: () => ({ enabled, delaySeconds: 30 }), writeEnabled: vi.fn(), writeDelay: vi.fn(),
+    });
+    const preview = vi.mocked(ipcMain.handle).mock.calls.find(([key]) => key === AWAY_GUARD_PREVIEW_CHANNEL)![1];
+    const event = {} as Electron.IpcMainInvokeEvent;
+    away.permission.mockResolvedValue('unknown');
+    const readState = vi.mocked(ipcMain.handle).mock.calls.find(([key]) => key === AWAY_GUARD_GET_STATE_CHANNEL)![1];
+    await expect(readState(event)).resolves.toMatchObject({
+      permission: 'unknown', permissionAppPath: '/Applications/Cindy Personal.app',
+    });
+    expect(await preview(event)).toEqual({ ok: false, reason: 'checkFailed' });
+    away.permission.mockResolvedValue('missing');
+    expect(await preview(event)).toEqual({ ok: false, reason: 'permission' });
+    away.permission.mockResolvedValue('granted');
+    const displays = state.displays;
+    state.displays = [];
+    const result = preview(event);
+    await vi.advanceTimersByTimeAsync(AWAY_GUARD_PREVIEW_DELAY_MS);
+    expect(await result).toEqual({ ok: false, reason: 'unavailable' });
+    state.displays = displays;
+    await vi.advanceTimersByTimeAsync(30_000);
+    const held = state.windows.at(-1);
+    expect(held).toBeDefined();
+    away.ended(false);
+    await settle();
+    expect(held.destroyed).toBe(false);
+    expect(held.page).toContain('awayGuard.lockFailed.status');
+    // The prior lock notification may have been missed; unlock is OS evidence too.
+    powerMonitor.emit('unlock-screen');
+    await settle();
+    expect.soft(held.destroyed).toBe(true);
+    powerMonitor.emit('lock-screen');
+
+    for (const trigger of ['helper', 'disable'] as const) {
+      enabled = true;
+      await vi.advanceTimersByTimeAsync(32_000);
+      const pending = state.windows.at(-1);
+      expect(pending.destroyed).toBe(false);
+      let failLock!: (error: Error) => void;
+      away.lock.mockImplementationOnce(() => new Promise((_, reject) => { failLock = reject; }));
+      if (trigger === 'helper') away.ended(false);
+      else {
+        enabled = false;
+        vi.advanceTimersByTime(2_000);
+      }
+      await settle();
+      expect(failLock).toBeDefined();
+      // OS lock + authenticated unlock can finish before the helper's failure.
+      powerMonitor.emit('lock-screen');
+      powerMonitor.emit('unlock-screen');
+      failLock(new Error('DESKTOP_LOCK_FAILED'));
+      await settle();
+      expect.soft(pending.destroyed).toBe(true);
+      expect.soft(pending.page).not.toContain('awayGuard.lockFailed.status');
+      powerMonitor.emit('lock-screen');
+    }
+
+    // An old helper callback can arrive only after the owner has unlocked.
+    enabled = true;
+    await vi.advanceTimersByTimeAsync(32_000);
+    const late = state.windows.at(-1);
+    const calls = away.lock.mock.calls.length;
+    powerMonitor.emit('lock-screen');
+    powerMonitor.emit('unlock-screen');
+    away.ended(false);
+    await settle();
+    expect(late.destroyed).toBe(true);
+    expect(away.lock).toHaveBeenCalledTimes(calls);
+
+    // The native lock can settle after unlock, before Main's fallback would run.
+    await vi.advanceTimersByTimeAsync(32_000);
+    const slow = state.windows.at(-1);
+    let finishHelper!: (locked: boolean) => void;
+    away.helperLock.mockImplementationOnce(() => new Promise(resolve => { finishHelper = resolve; }));
+    enabled = false;
+    vi.advanceTimersByTime(2_000);
+    await settle();
+    powerMonitor.emit('lock-screen');
+    powerMonitor.emit('unlock-screen');
+    finishHelper(false);
+    await settle();
+    expect(slow.destroyed).toBe(true);
+    expect(away.lock).toHaveBeenCalledTimes(calls);
+  } finally {
+    away.quit();
+    powerMonitor.removeAllListeners();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  }
 });

@@ -13,6 +13,7 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { classifyMarkdownLinkTarget } from '@/lib/markdownTarget';
 
 import {
   resolveWorkspacePath,
@@ -31,6 +32,7 @@ import {
   resolveLocalPathSmart,
   resolveLocalPathSmartCached,
   resolveToolFilePath,
+  revalidateNegativeLocalPathSmart,
   toFileUrl,
   toLocalFileUrl,
 } from '@/lib/localPathResolver';
@@ -169,6 +171,37 @@ describe('looksLikeDirectoryPath', () => {
 });
 
 describe('resolveLocalPath', () => {
+  // Directory classification removes the trailing slash: /E:/ reaches the
+  // resolver as /E:. It must remain a drive root, never drive-relative E:.
+  it.each([
+    ['C:/repo', 'E:/'],
+    ['/home/user', '/E:'],
+  ])('preserves the root identity of /E:/ for %s', (cwd, expected) => {
+    const target = classifyMarkdownLinkTarget('/E:/');
+    expect(target.kind).toBe('local-candidate');
+    if (target.kind === 'local-candidate') {
+      expect(resolveLocalPath(target.href, cwd)).toBe(expected);
+    }
+  });
+
+  // Regression: authored Markdown links such as [source](/E:/demo) must use
+  // the file owner's Windows path semantics, including in remote sessions.
+  it.each([
+    ['E:/repo', '/E:/demo', 'E:/demo'],
+    ['C:\\repo', '/E:\\demo\\a.ts', 'E:\\demo\\a.ts'],
+    ['\\\\server\\share', '/E:/demo', 'E:/demo'],
+    ['//server/share', '/E:/demo', 'E:/demo'],
+    ['/home/user', '/E:/demo', '/E:/demo'],
+    ['', '/E:/demo', '/E:/demo'],
+    ['C:/repo', '/home/a.ts', '/home/a.ts'],
+    ['C:/repo', '//server/share/a.ts', '//server/share/a.ts'],
+    ['C:/repo', '//E:/demo', '//E:/demo'],
+    // 小写盘符同规则(#8726 实例里模型实际写的是 /d:/…)
+    ['C:/repo', '/d:/docs/app.tsx', 'd:/docs/app.tsx'],
+  ])('resolves %s + %s without changing other path identities', (cwd, href, expected) => {
+    expect(resolveLocalPath(href, cwd)).toBe(expected);
+  });
+
   it('returns POSIX absolute href as-is regardless of cwd', () => {
     expect(resolveLocalPath('/abs/x.tsx', 'C:\\proj')).toBe('/abs/x.tsx');
   });
@@ -217,9 +250,36 @@ describe('resolveLocalPath', () => {
   it('returns UNC share href as-is instead of joining it onto the cwd', () => {
     expect(resolveLocalPath('\\\\server\\share\\a.ts', 'C:\\proj')).toBe('\\\\server\\share\\a.ts');
   });
+
+  // A file URL's host names another machine. It used to be stripped to the
+  // relative `nas/share/x.pdf`, which main joined onto the task folder and
+  // suffix-searched the workspace for. localhost and the malformed
+  // file://C:/ spelling keep naming a local path (localhost never a share). Hosts `.`/`..`/`?` (even
+  // escaped) keep the relative pre-UNC text instead of a \\.\ or \\?\ device path.
+  it.each([
+    ['file://nas/share/x.pdf', 'C:\\proj', '\\\\nas\\share\\x.pdf'],
+    ['file:////nas/share/x.pdf', 'C:/proj', '\\\\nas\\share\\x.pdf'],
+    ['file:////repo/x.pdf', '/repo', '//repo/x.pdf'],
+    ['file://nas/share/a%20b%2520.pdf', '/home/u', '\\\\nas\\share\\a b%20.pdf'],
+    ['file://a%2Fb/share/x.pdf', 'C:\\proj', '\\\\a%2Fb\\share\\x.pdf'],
+    ['file://localhost/C:/x.png', 'C:\\proj', 'C:/x.png'],
+    ['file://LocalHost/abs/x.png', '/cwd', '/abs/x.png'],
+    // localhost cannot name a share: extra leading separators stay a local path, not //nas.
+    ['file://localhost//nas/share/x.png', 'C:\\proj', '/nas/share/x.png'],
+    ['file://localhost/\\nas\\share\\x.png', 'C:\\proj', '/nas\\share\\x.png'],
+    ['file://C:/x.png', 'C:\\proj', 'C:/x.png'],
+    ['file://./docs/a.md', 'C:\\proj', './docs/a.md'],
+    ['file://%3F/C:/x.png', 'C:\\proj', '?/C:/x.png'],
+  ])('maps %s (cwd %s) to %s', (href, cwd, expected) => {
+    expect(resolveLocalPath(href, cwd)).toBe(expected);
+  });
 });
 
 describe('resolveToolFilePath (agent tool-input path absolutizer)', () => {
+  it('preserves literal absolute tool paths instead of applying Markdown drive compatibility', () => {
+    expect(resolveToolFilePath('/E:/demo/a.ts', 'E:/repo')).toBe('/E:/demo/a.ts');
+  });
+
   // Regression: a model (e.g. Kimi K3) may emit a RELATIVE Read file_path;
   // the runtime resolves it against the session cwd and the Read succeeds,
   // but the preview/reveal IPCs require absolute paths — the chip click used
@@ -286,6 +346,117 @@ describe('resolveLocalPathSmart', () => {
 describe('file URL decoding across renderer and main', () => {
   afterEach(() => {
     _clearSmartResolveCache();
+  });
+
+  // Real production lookup, including host allow-list checks. Windows CI
+  // exercises the malformed /C:/ spelling; POSIX keeps native paths intact.
+  it('resolves slash-prefixed drive directories in direct and batched lookups without bypassing permissions', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-drive-link-'));
+    const target = path.join(root, 'source');
+    fs.mkdirSync(target);
+    const href = process.platform === 'win32' ? `/${target.replace(/\\/g, '/')}` : target;
+    let allowed = true;
+    const isPathAllowed = vi.fn((_absPath: string) => allowed);
+    vi.stubGlobal('window', { electronAPI: {
+      resolvePath: ({ href: lookup, workingDir }: { href: string; workingDir: string }) =>
+        resolveWorkspacePath(lookup, workingDir, { isPathAllowed }),
+      resolvePathBatch: ({ hrefs, workingDir }: { hrefs: string[]; workingDir: string }) =>
+        resolveWorkspacePathBatch(hrefs, workingDir, { isPathAllowed }),
+    } });
+    try {
+      for (const canAccess of [true, false]) {
+        allowed = canAccess;
+        isPathAllowed.mockClear();
+        _clearSmartResolveCache();
+        const results = [
+          await resolveLocalPathSmart(href, root, { refresh: true }),
+          await resolveLocalPathSmartCached(href, root),
+        ];
+        for (const result of results) {
+          expect(result.status).toBe(canAccess ? 'unique' : 'none');
+          if (result.status === 'unique') {
+            expect(result.kind).toBe('directory');
+            expect(path.normalize(result.absPath)).toBe(target);
+          }
+        }
+        expect(isPathAllowed).toHaveBeenCalled();
+        for (const [candidate] of isPathAllowed.mock.calls) {
+          expect(path.normalize(candidate)).toBe(target);
+        }
+      }
+      // Stat the actual drive root on Windows; no files are created there.
+      if (process.platform === 'win32') {
+        allowed = true;
+        const driveRoot = path.parse(root).root;
+        const rootTarget = classifyMarkdownLinkTarget(`/${driveRoot.replace(/\\/g, '/')}`);
+        expect(rootTarget.kind).toBe('local-candidate');
+        if (rootTarget.kind === 'local-candidate') {
+          const results = [
+            await resolveLocalPathSmart(rootTarget.href, root),
+            await resolveLocalPathSmartCached(rootTarget.href, root),
+          ];
+          for (const result of results) {
+            expect(result.status).toBe('unique');
+            if (result.status === 'unique') {
+              expect(result.kind).toBe('directory');
+              expect(path.normalize(result.absPath)).toBe(driveRoot);
+            }
+          }
+        }
+      }
+      fs.rmdirSync(target);
+      await expect(resolveLocalPathSmart(href, root, { refresh: true })).resolves.toMatchObject({ status: 'none' });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // A file://host link must never reach the workspace join / suffix BFS. A
+  // POSIX owner cannot open a UNC share, so it is not found — even when the
+  // task folder has a same-named host/share/... file (which used to open).
+  // Windows owners stat the UNC path itself (a network lookup), so this
+  // fixture runs on POSIX CI only.
+  it.skipIf(process.platform === 'win32')(
+    'does not open a same-named workspace file for a file://host link',
+    async () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-unc-link-'));
+      fs.mkdirSync(path.join(root, 'nas', 'share'), { recursive: true });
+      fs.writeFileSync(path.join(root, 'nas', 'share', 'x.pdf'), '%PDF');
+      vi.stubGlobal('window', { electronAPI: {
+        resolvePath: ({ href, workingDir }: { href: string; workingDir: string }) =>
+          resolveWorkspacePath(href, workingDir),
+        resolvePathBatch: ({ hrefs, workingDir }: { hrefs: string[]; workingDir: string }) =>
+          resolveWorkspacePathBatch(hrefs, workingDir),
+      } });
+      try {
+        for (const href of ['file://nas/share/x.pdf', '\\\\nas\\share\\x.pdf']) {
+          _clearSmartResolveCache();
+          const expected = { status: 'none', fallbackAbsPath: '\\\\nas\\share\\x.pdf' };
+          await expect(resolveLocalPathSmart(href, root, { refresh: true })).resolves.toEqual(expected);
+          await expect(resolveLocalPathSmartCached(href, root)).resolves.toEqual(expected);
+        }
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  // Rendering must not contact a host named in message content (on Windows main
+  // would stat \\nas\share, i.e. SMB + NTLM): render-time lookups and their
+  // re-checks answer without IPC; an explicit open still asks main.
+  it.each(['file://nas/share/x.pdf', 'file:////nas/share/x.pdf', 'file:///\\nas/share/x.pdf'])('looks up shared URL %s in main only on an explicit open', async (href) => {
+    const resolvePath = vi.fn().mockResolvedValue({ status: 'none', candidates: [] });
+    const resolvePathBatch = vi.fn().mockResolvedValue({});
+    vi.stubGlobal('window', { electronAPI: { resolvePath, resolvePathBatch } });
+    const absPath = resolveLocalPath(href, 'C:\\proj');
+    const none = { status: 'none', fallbackAbsPath: absPath };
+
+    await expect(resolveLocalPathSmartCached(href, 'C:\\proj')).resolves.toEqual(none);
+    await expect(revalidateNegativeLocalPathSmart(href, 'C:\\proj', Date.now())).resolves.toEqual(none);
+    expect(resolvePathBatch).not.toHaveBeenCalled();
+
+    await expect(resolveLocalPathSmart(href, 'C:\\proj', { refresh: true })).resolves.toEqual(none);
+    expect(resolvePath).toHaveBeenCalledWith({ href: absPath, workingDir: 'C:\\proj', refresh: true });
   });
 
   // F3: both IPC paths reach the production host decoder after file URL conversion.
@@ -456,6 +627,35 @@ describe('resolveLocalPathSmartCached + peekResolveLocalPathSmart (renderer cach
     vi.stubGlobal('window', { electronAPI: {} });
     const r = await resolveLocalPathSmartCached('src/x.ts', '/repo');
     expect(r).toEqual({ status: 'none', fallbackAbsPath: '/repo/src/x.ts' });
+  });
+
+  // 否定重查还没返回时，这条结论被缓存容量（500 条）挤掉：同路径的普通查找要加入这次重查，
+  // 不能再发一个不带 revalidateNegative 的查找，让两个结果互相覆盖。
+  it('joins a negative re-check in flight after the cache dropped the entry', async () => {
+    let answer!: (raw: Record<string, unknown>) => void;
+    const resolvePathBatch = vi.fn(
+      async ({ hrefs, revalidateNegative }: { hrefs: string[]; revalidateNegative?: boolean }) => {
+        if (revalidateNegative) return new Promise<Record<string, unknown>>((resolve) => { answer = resolve; });
+        return Object.fromEntries(hrefs.map((href) => [href, { status: 'none', candidates: [] }]));
+      },
+    );
+    vi.stubGlobal('window', { electronAPI: { resolvePathBatch } });
+    await resolveLocalPathSmartCached('out/clip.mp4', '/task');
+    const start = Date.now();
+    vi.spyOn(Date, 'now').mockImplementation(() => start + 3_000);
+
+    const recheck = revalidateNegativeLocalPathSmart('out/clip.mp4', '/task', start + 3_000);
+    await Promise.resolve();
+    await Promise.all(Array.from({ length: 500 }, (_, i) => resolveLocalPathSmartCached(`other-${i}.ts`, '/task')));
+    expect(peekResolveLocalPathSmart('out/clip.mp4', '/task')).toBeUndefined();
+    const calls = resolvePathBatch.mock.calls.length;
+
+    const plain = resolveLocalPathSmartCached('out/clip.mp4', '/task');
+    answer({ 'out/clip.mp4': { status: 'unique', candidates: ['/task/film/out/clip.mp4'] } });
+    expect(await plain).toEqual({ status: 'unique', absPath: '/task/film/out/clip.mp4' });
+    expect(await recheck).toEqual({ status: 'unique', absPath: '/task/film/out/clip.mp4' });
+    expect(resolvePathBatch).toHaveBeenCalledTimes(calls);
+    vi.restoreAllMocks();
   });
 });
 

@@ -1,3 +1,4 @@
+import { pluginSourceTooltip } from '@cindy/maker-shared/mcp-apps';
 /**
  * plugin-view —— 右侧栏里承载插件页面的页签(全局页签,不跟对话)。
  *
@@ -11,6 +12,8 @@
  */
 
 import { Puzzle } from 'lucide-react';
+import { PluginUiView } from '@/cindy-brain/PluginUiView';
+import { getApprovedGhostHostUi } from '../../../../../shared/ghost';
 import type { TFunction } from 'i18next';
 
 import {
@@ -20,7 +23,7 @@ import {
 } from '@/cindy-brain/ghostPanelBody';
 import { useGhostRuntimeState } from '@/cindy-brain/runtimeStates';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
-import { MAIN_VIEW_ICONS } from '@/cindy-brain/mainViewIcons';
+import { MAIN_VIEW_ICONS, mainViewIconName } from '@/cindy-brain/mainViewIcons';
 import type { InstalledGhost } from '../../../../../shared/ghost';
 import { installedGhostStoragePart } from '../../../../../shared/pluginIdentity';
 import {
@@ -38,17 +41,22 @@ function useInstalledGhostByInstance(instanceId: string): InstalledGhost | undef
 function PluginViewTabPillTitle({ state, t }: { state: PluginViewTabState; t: TFunction }) {
   const ghost = useInstalledGhostByInstance(state.instanceId);
   return (
-    <>
+    <span title={ghost ? pluginSourceTooltip(ghost.manifest.name, ghost.installationSource, t, state.resourceViewId ? getApprovedGhostHostUi(ghost)?.views?.find(view => view.id === state.resourceViewId)?.title : undefined) : undefined}>
       {ghost
-        ? globalTabTitleForGhost(ghost, effectivePluginView(state, ghost))
+        ? (state.resourceViewId ? getApprovedGhostHostUi(ghost)?.views?.find(view => view.id === state.resourceViewId)?.title ?? ghost.manifest.name : globalTabTitleForGhost(ghost, effectivePluginView(state, ghost)))
         : t('rightSidebar.tabs.kinds.pluginView')}
-    </>
+    </span>
   );
 }
 
 function PluginViewTabPillIcon({ state }: { state: PluginViewTabState }) {
   const ghost = useInstalledGhostByInstance(state.instanceId);
-  const Icon = MAIN_VIEW_ICONS[ghost?.manifest.mainView?.icon ?? 'puzzle'] ?? Puzzle;
+  // 与 plugin-task 页签一致：插件有品牌图标时优先显示，否则回退到 mainView 系统图标
+  if (ghost?.iconDataUrl) {
+    // design: intrinsic-geometry — 插件品牌图沿用 plugin-task 页签同款 13px 内容裁剪（图标自身的圆角，不是控件边框）
+    return <img src={ghost.iconDataUrl} alt="" width={13} height={13} className="rounded-[3px]" />;
+  }
+  const Icon = MAIN_VIEW_ICONS[mainViewIconName(ghost?.manifest.mainView)];
   return <Icon size={13} />;
 }
 
@@ -57,6 +65,7 @@ function PluginViewBody({ state }: TabKindBodyProps<PluginViewTabState>) {
   const runtimeState = useGhostRuntimeState(state.instanceId);
   // 停用 / 卸载的瞬间投影层已把页签隐藏,这里只兜住收起前的一两帧。
   if (!ghost || ghost.enabled === false) return null;
+  if (state.resourceViewId) return <PluginUiView chrome="panel" sizing="fill" ghost={ghost} viewId={state.resourceViewId} sessionId={null} input={state.resourceInput} />;
   if (runtimeState === 'crashed' || runtimeState === 'fused') {
     return <GhostPanelError ghost={ghost} state={runtimeState} />;
   }
@@ -71,7 +80,7 @@ function PluginViewBody({ state }: TabKindBodyProps<PluginViewTabState>) {
       {panelHtml ? (
         <GhostChipPanelBody ghost={ghost} />
       ) : (
-        <GhostWebviewBody ghost={ghost} html={ghost.manifest.mainView?.html} />
+        <GhostWebviewBody ghost={ghost} html={ghost.manifest.mainView?.html} wallpaperCanvas />
       )}
     </div>
   );
@@ -100,6 +109,10 @@ const plugin: TabKindPlugin<PluginViewTabState> = {
         : '';
     // 页签记着它承载的是 panel 还是 main 页面;丢了它就会一律回落成停靠面板那一份。
     const view = (raw as { view?: unknown } | null)?.view;
+    const resourceViewId = (raw as { resourceViewId?: unknown } | null)?.resourceViewId;
+    const resourceInput = (raw as PluginViewTabState | null)?.resourceInput;
+    if (typeof resourceViewId === 'string') return { instanceId, resourceViewId,
+      ...(resourceInput && typeof resourceInput === 'object' && !Array.isArray(resourceInput) ? { resourceInput } : {}) };
     return view === 'panel' || view === 'main' ? { instanceId, view } : { instanceId };
   },
 };

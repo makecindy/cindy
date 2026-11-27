@@ -23,7 +23,7 @@ import { Button } from '@/components/ui/button';
  *    top instead of a divider stripe cutting through the conversation.
  */
 
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertCircle, ChevronDown, LoaderCircle, SendHorizontal, Square } from 'lucide-react';
 import type {
@@ -35,6 +35,7 @@ import type {
 import { AssistantMessage } from '@/components/chat/AssistantMessage';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { UserMessage } from '@/components/chat/UserMessage';
+import { usePluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
 import {
@@ -67,6 +68,9 @@ import {
 } from './subagentFormat';
 
 import type { ErrorDiagnosisSource } from '@/lib/errorDiagnosisPrompt';
+import { FieldVoiceInputNotice } from '@/voice-input/FieldVoiceInputNotice';
+import { useFieldVoiceInput } from '@/voice-input/useFieldVoiceInput';
+import { VoiceInputButton } from '@/voice-input/VoiceInputButton';
 
 export type SubagentControlIntent = 'steer' | 'follow_up' | 'resume';
 
@@ -275,12 +279,18 @@ function PiDurableDetailView({
   onDiagnose,
 }: SubagentDetailViewProps) {
   const { t } = useTranslation();
+  const pluginUi = usePluginUiMessageCandidates();
   const { preference: sendShortcutPreference } = useComposerSendShortcutPreference();
   const [controlDrafts, setControlDrafts] = useState<Record<string, string>>({});
   const [selectedChildId, setSelectedChildId] = useState<string | null>(null);
   const [controlBusy, setControlBusy] = useState(false);
+  const [stoppingVoice, setStoppingVoice] = useState(false);
+  const [dragOverSend, setDragOverSend] = useState(false);
   const [controlError, setControlError] = useState(false);
   const [technicalOpen, setTechnicalOpen] = useState(false);
+  const controlInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const sendButtonRef = useRef<HTMLButtonElement | null>(null);
+  const submittingVoiceRef = useRef(false);
   const children = detail?.children ?? [];
   const hasMultipleChildren = children.length > 1;
   // The selection survives a resume, which renames the child underneath it: the
@@ -320,6 +330,32 @@ function PiDurableDetailView({
     () => buildSubagentConversation(visibleTranscript),
     [visibleTranscript],
   );
+  const selectedChildActive = !selectedChild
+    || selectedChild.status === 'running'
+    || selectedChild.status === 'queued';
+  const controlDraftKey = selectedChild?.id ?? 'all';
+  const controlMessage = controlDrafts[controlDraftKey] ?? '';
+  const setControlMessage = useCallback(
+    (message: string): void => {
+      setControlDrafts((current) => ({ ...current, [controlDraftKey]: message }));
+    },
+    [controlDraftKey],
+  );
+  const composerActive = Boolean(
+    detail
+    && (detail.status !== 'running'
+      ? detail.capabilities.resume
+      : detail.capabilities.steer && selectedChildActive),
+  );
+  const controlVoice = useFieldVoiceInput({
+    draftKey: `subagent-control:${detail?.id ?? 'none'}:${controlDraftKey}`,
+    inputRef: controlInputRef,
+    value: controlMessage,
+    onChange: setControlMessage,
+    active: composerActive,
+    disabled: controlBusy,
+    maxLength: 32_000,
+  });
 
   if (loading && !detail) {
     return (
@@ -341,9 +377,6 @@ function PiDurableDetailView({
     ? selectedChild.output ?? ''
     : detail.returnedResult ?? (detail.status === 'failed' ? '' : detail.summary ?? '');
   const displayedRunStatus = selectedChild?.status ?? detail.status;
-  const selectedChildActive = !selectedChild
-    || selectedChild.status === 'running'
-    || selectedChild.status === 'queued';
   // Commentary can populate output while tools are still running. Only older
   // hosts/runners without explicit readiness need the output-based fallback.
   const selectedChildResultReady = selectedChild?.resultReady
@@ -365,18 +398,28 @@ function PiDurableDetailView({
   };
   const defaultComposerAction = composerActionForIntent('queue');
   const steerAvailable = composerActionForIntent('steer') === 'steer';
-  const controlDraftKey = selectedChild?.id ?? 'all';
-  const controlMessage = controlDrafts[controlDraftKey] ?? '';
-  const setControlMessage = (message: string): void => {
-    setControlDrafts((current) => ({ ...current, [controlDraftKey]: message }));
-  };
   const sendShortcutLabel = getComposerSendShortcutLabel(
     sendShortcutPreference,
     window.electronAPI?.platform,
   );
-  const submitControl = (action: SubagentControlIntent | undefined): void => {
-    const message = controlMessage.trim();
-    if (!message || !action || controlBusy) return;
+  const controlActionBusy = controlBusy || stoppingVoice;
+  const submitControl = async (action: SubagentControlIntent | undefined): Promise<void> => {
+    if (!action || controlActionBusy || submittingVoiceRef.current) return;
+    let nextMessage = controlMessage;
+    if (controlVoice.isBusy) {
+      submittingVoiceRef.current = true;
+      setStoppingVoice(true);
+      try {
+        const stoppedMessage = await controlVoice.stop();
+        if (stoppedMessage === null) return;
+        nextMessage = stoppedMessage;
+      } finally {
+        submittingVoiceRef.current = false;
+        setStoppingVoice(false);
+      }
+    }
+    const message = nextMessage.trim();
+    if (!message) return;
     setControlBusy(true);
     setControlError(false);
     void onControl(detail, action, message, selectedChild?.id).then((ok) => {
@@ -550,6 +593,7 @@ function PiDurableDetailView({
 
           {showAssignmentFallback ? (
             <UserMessage
+              pluginUi={pluginUi}
               workingDir={workdir}
               allowPrivilegedLinks={allowPrivilegedLinks}
               content={assignment}
@@ -571,6 +615,7 @@ function PiDurableDetailView({
               render it a second time. */}
           {showDurableResultFallback ? (
             <AssistantMessage
+              pluginUi={pluginUi}
               workingDir={workdir}
               allowPrivilegedLinks={allowPrivilegedLinks}
               content={visibleResult}
@@ -686,7 +731,9 @@ function PiDurableDetailView({
           <div className="mx-auto flex max-w-[720px] flex-col gap-2 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-2">
             <div className="flex items-end gap-2">
               <textarea
-                value={controlMessage}
+                ref={controlInputRef}
+                value={controlVoice.displayText}
+                readOnly={controlVoice.isBusy}
                 onChange={(event) => setControlMessage(event.target.value)}
                 onKeyDown={(event) => {
                   const intent = resolveComposerEnterIntent(
@@ -700,7 +747,7 @@ function PiDurableDetailView({
                   if (intent === 'native' || intent === null) return;
                   event.preventDefault();
                   if (intent === 'ignore') return;
-                  submitControl(composerActionForIntent(intent));
+                  void submitControl(composerActionForIntent(intent));
                 }}
                 disabled={controlBusy}
                 maxLength={32_000}
@@ -714,22 +761,39 @@ function PiDurableDetailView({
                 title={t('rightSidebar.subagents.sendShortcutHint', { shortcut: sendShortcutLabel })}
                 className="min-h-10 min-w-0 flex-1 resize-none rounded-lg bg-transparent px-2 py-1.5 text-13 leading-5 text-[var(--text-primary)] placeholder:text-[var(--text-placeholder)] focus-visible:outline-none disabled:cursor-wait disabled:opacity-60"
               />
-              <Tip text={t(`rightSidebar.subagents.controlActions.${defaultComposerAction}`)} side="top">
-                <button
-                  type="button"
-                  disabled={controlBusy || !controlMessage.trim()}
-                  onClick={() => submitControl(defaultComposerAction)}
-                  aria-label={t(`rightSidebar.subagents.controlActions.${defaultComposerAction}`)}
-                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--surface-chip)] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-                >
-                  {controlBusy ? (
-                    <Spinner icon={LoaderCircle} spinning size={14} />
-                  ) : (
-                    <SendHorizontal size={14} aria-hidden="true" />
-                  )}
-                </button>
-              </Tip>
+              <div className="flex shrink-0 items-center gap-1.5">
+                <VoiceInputButton
+                  {...controlVoice.buttonProps}
+                  testId="subagent-control-voice"
+                  tipSide="top"
+                  sendTargetRef={sendButtonRef}
+                  canReleaseToSend={Boolean(defaultComposerAction) && !controlActionBusy}
+                  releaseToSendActive={dragOverSend}
+                  onStopAndSend={() => submitControl(defaultComposerAction)}
+                  onReleaseToSendChange={setDragOverSend}
+                />
+                <Tip text={t(`rightSidebar.subagents.controlActions.${defaultComposerAction}`)} side="top">
+                  <button
+                    ref={sendButtonRef}
+                    type="button"
+                    disabled={controlActionBusy || !controlVoice.displayText.trim()}
+                    onClick={() => void submitControl(defaultComposerAction)}
+                    aria-label={t(`rightSidebar.subagents.controlActions.${defaultComposerAction}`)}
+                    className={cn(
+                      'inline-flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full bg-[var(--surface-chip)] text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                      dragOverSend && 'ring-2 ring-[var(--accent-cta-bg)] ring-offset-1 ring-offset-[var(--surface-elevated)]',
+                    )}
+                  >
+                    {controlActionBusy ? (
+                      <Spinner icon={LoaderCircle} spinning size={14} />
+                    ) : (
+                      <SendHorizontal size={14} aria-hidden="true" />
+                    )}
+                  </button>
+                </Tip>
+              </div>
             </div>
+            <FieldVoiceInputNotice error={controlVoice.lastError} speakerFiltered={controlVoice.speakerFiltered} />
             {controlError ? (
               <ErrorNotice role="alert" message={t('rightSidebar.subagents.controlFailed')} />
             ) : null}

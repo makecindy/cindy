@@ -73,6 +73,7 @@ import {
   getClientEndpointForRealm,
   getResolvedClientEndpoints,
   initClientEndpoints,
+  isCloudInstanceServiceConfigured,
   loadClientEndpointsForRealm,
   isUsingCachedClientEndpoints,
   registerClientEndpointsIpc,
@@ -1588,6 +1589,67 @@ describe('getter / IPC', () => {
     }
   });
 
+  it('个人版保留正式 Webhook 地址，只有明确的开发覆盖才使用本机服务', () => {
+    resetClientEndpointsForTest(TEST_CLIENT_ENDPOINTS);
+    vi.stubEnv('CINDY_PERSONAL_FIXED_APP', '/Applications/Example Personal.app');
+    vi.stubEnv('XDT_WEBHOOK_CN_LOCAL_URL', '');
+    vi.stubEnv('XDT_WEBHOOK_GLOBAL_LOCAL_URL', '');
+    try {
+      expect(getClientEndpointForRealm('cn', 'webhookApiBaseUrl')).not.toMatch(/127\.0\.0\.1/);
+      expect(getClientEndpointForRealm('global', 'webhookApiBaseUrl')).toBe(TEST_CLIENT_ENDPOINTS.webhookApiBaseUrl);
+      expect(getClientEndpoint('authApiBaseUrl')).toBe(TEST_CLIENT_ENDPOINTS.authApiBaseUrl);
+      vi.stubEnv('XDT_WEBHOOK_GLOBAL_LOCAL_URL', 'http://127.0.0.1:33356');
+      expect(getClientEndpointForRealm('global', 'webhookApiBaseUrl')).toBe('http://127.0.0.1:33356');
+      Object.defineProperty(app, 'isPackaged', { configurable: true, value: true });
+      expect(getClientEndpoint('webhookApiBaseUrl')).toBe(TEST_CLIENT_ENDPOINTS.webhookApiBaseUrl);
+      Object.defineProperty(app, 'isPackaged', { configurable: true, value: false });
+      vi.stubEnv('CINDY_PERSONAL_FIXED_APP', '');
+      vi.stubEnv('XDT_WEBHOOK_GLOBAL_LOCAL_URL', '');
+      expect(getClientEndpoint('webhookApiBaseUrl')).toBe(TEST_CLIENT_ENDPOINTS.webhookApiBaseUrl);
+    } finally {
+      Object.defineProperty(app, 'isPackaged', { configurable: true, value: false });
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('开发版只覆盖回环Webhook地址，两个区域的认证与模型端点保持独立', () => {
+    const cn = { ...TEST_CLIENT_ENDPOINTS, authApiBaseUrl: 'https://auth.cn.example.com' };
+    const global = { ...TEST_CLIENT_ENDPOINTS, authApiBaseUrl: 'https://auth.global.example.com' };
+    resetClientEndpointsForTest(global, { buildRegion: 'global', realmEndpoints: { cn, global } });
+    vi.stubEnv('XDT_WEBHOOK_CN_LOCAL_URL', 'http://127.0.0.1:33355');
+    vi.stubEnv('XDT_WEBHOOK_GLOBAL_LOCAL_URL', 'http://127.0.0.1:33356');
+    try {
+      for (const region of ['cn', 'global'] as const) {
+        activateClientEndpointRealm(region);
+        const local = region === 'cn' ? 'http://127.0.0.1:33355' : 'http://127.0.0.1:33356';
+        expect(getClientEndpoint('webhookApiBaseUrl')).toBe(local);
+        expect(getClientEndpointForRealm(region, 'webhookApiBaseUrl')).toBe(local);
+        const expected = region === 'cn' ? cn : global;
+        expect(getClientEndpoint('authApiBaseUrl')).toBe(expected.authApiBaseUrl);
+        expect(getClientEndpointForRealm(region, 'authApiBaseUrl')).toBe(expected.authApiBaseUrl);
+        expect(getClientEndpoint('modelAccessApiBaseUrl')).toBe(expected.modelAccessApiBaseUrl);
+      }
+      Object.defineProperty(app, 'isPackaged', { configurable: true, value: true });
+      expect(getClientEndpoint('webhookApiBaseUrl')).toBe(global.webhookApiBaseUrl);
+      expect(getClientEndpointForRealm('cn', 'webhookApiBaseUrl')).toBe(cn.webhookApiBaseUrl);
+    } finally {
+      Object.defineProperty(app, 'isPackaged', { configurable: true, value: false });
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it.each(['http://192.0.2.1:33355', 'http://user:secret@127.0.0.1:33355', 'file:///tmp/test', 'http://127.0.0.1:33355/other'])('拒绝开发版Webhook覆盖的非回环或含凭据/路径输入 %s', (value) => {
+    resetClientEndpointsForTest(TEST_CLIENT_ENDPOINTS);
+    vi.stubEnv('XDT_WEBHOOK_CN_LOCAL_URL', value);
+    vi.stubEnv('XDT_WEBHOOK_GLOBAL_LOCAL_URL', value);
+    try {
+      expect(() => getClientEndpoint('webhookApiBaseUrl')).toThrow(/loopback/);
+      expect(getClientEndpoint('authApiBaseUrl')).toBe(TEST_CLIENT_ENDPOINTS.authApiBaseUrl);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('仅设置旧 CN 测试地址时不会把 Global 账号的请求发往 CN 服务', () => {
     const cn = { ...TEST_CLIENT_ENDPOINTS, deviceLinkApiBaseUrl: 'https://device.cn.example.com' };
     const global = { ...TEST_CLIENT_ENDPOINTS, deviceLinkApiBaseUrl: 'https://device.global.example.com' };
@@ -1696,5 +1758,56 @@ describe('getter / IPC', () => {
       authApiBaseUrl: 'https://auth.global.example.com',
     });
     expect(netRequest).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('isCloudInstanceServiceConfigured', () => {
+  const withService = (url: string) => ({ ...TEST_CLIENT_ENDPOINTS, cloudInstanceApiBaseUrl: url });
+
+  it('is false before startup and for a manifest without the endpoint', () => {
+    expect(isCloudInstanceServiceConfigured()).toBe(false);
+    resetClientEndpointsForTest(TEST_CLIENT_ENDPOINTS, { buildRegion: 'cn' });
+    expect(isCloudInstanceServiceConfigured()).toBe(false);
+  });
+
+  it('follows any loaded region and never reads the network', () => {
+    resetClientEndpointsForTest(withService('https://cis.example.com'), { buildRegion: 'cn' });
+    expect(isCloudInstanceServiceConfigured()).toBe(true);
+    resetClientEndpointsForTest(TEST_CLIENT_ENDPOINTS, {
+      buildRegion: 'cn',
+      realmEndpoints: { global: withService('https://cis.example.com') },
+    });
+    expect(isCloudInstanceServiceConfigured()).toBe(true);
+    expect(netRequest).not.toHaveBeenCalled();
+  });
+});
+
+// A private manifest keeps its cloud endpoint across restarts and same-region account switches;
+// the other region never inherits it.
+describe('cloud instance endpoint in a local manifest', () => {
+  it('survives restarts and same-region account switches only', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cloud-endpoint-manifest-'));
+    const file = path.join(root, 'endpoint.json');
+    vi.stubEnv('XDT_ENDPOINT_MANIFEST_FILE', file);
+    vi.stubEnv('XDT_ENDPOINTS_CDN', '0');
+    fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(FULL_MANIFEST), cloudInstanceApiBaseUrl: 'https://cis.example.com' }));
+    try {
+      for (let launch = 0; launch < 2; launch++) {
+        resetClientEndpointsForTest();
+        expect(await initClientEndpoints()).toBe(true);
+        const { buildRegion } = (await import('../clientEndpointsService')).getClientEndpointRealmConfig();
+        for (let account = 0; account < 3; account++) {
+          resetClientEndpointRealm();
+          await loadClientEndpointsForRealm(buildRegion);
+          activateClientEndpointRealm(buildRegion);
+          expect(getClientEndpointForRealm(buildRegion, 'cloudInstanceApiBaseUrl')).toBe('https://cis.example.com');
+        }
+        expect(() => getClientEndpointForRealm(buildRegion === 'cn' ? 'global' : 'cn', 'cloudInstanceApiBaseUrl')).toThrow(/not loaded/);
+        expect(netRequest).not.toHaveBeenCalled();
+      }
+    } finally {
+      vi.unstubAllEnvs();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });

@@ -6,22 +6,47 @@ import type { BotGroupAttachment } from '@cindy/maker-shared/botGroupChat';
 import type { ResolveRemoteMediaFn } from '@/session/remoteMedia';
 
 // This suite exercises attachments; MCP App's native WebView is covered by mcpAppCard.test.tsx.
+// Window geometry is a native boundary; preview placement has its own production-hook suite.
+vi.mock('@/session/usePreviewChromeFrame', () => ({ usePreviewChromeFrame: () => ({
+  top: 0, bottom: 0, left: 12, right: 12, contentTop: 48,
+  documentContentTop: 64, documentHeaderHeight: 64, sharedStatusRow: false,
+}) }));
 vi.mock('@/session/McpAppCard', () => ({ McpAppCard: () => null }));
+// Card previews have their own regression suite; do not load Expo's native viewer in this attachment suite.
+vi.mock('@/plugins/PluginNativeIntent', () => ({ PluginNativeIntent: () => null }));
+// Model selection has its own card regression; keep native catalogs out of this attachment test.
+vi.mock('@/plugins/PluginModelPicker', () => ({ PluginModelPicker: () => null }));
 // The shared message renderer also imports the site-video native surface.
 vi.mock('react-native-webview', () => ({ WebView: () => null }));
-vi.mock('expo-modules-core', () => ({ requireOptionalNativeModule: () => null }));
+vi.mock('expo-modules-core', () => ({
+  requireOptionalNativeModule: () => null,
+  // The message cost sheet reaches Expo Blur; its native view is not part of attachment behavior.
+  requireNativeViewManager: () => () => null,
+}));
 
 // Group attachments open the real shared ImageLightbox here (#5875): the timeline strip, the payload
 // conversion and the viewer are production code; only native surfaces and unrelated views are replaced.
 const runtime = vi.hoisted(() => ({
   alerts: [] as unknown[][],
   accountGeneration: 1,
+  userId: undefined as string | null | undefined,
+  clearMemoryCache: vi.fn(async () => true),
+  clearDiskCache: vi.fn(async () => true),
   imageEvents: new Map<string, { onLoad?: (event: unknown) => void; onError?: () => void }>(),
 }));
 const openBrowserAsync = vi.hoisted(() => vi.fn(async (_url: string) => ({})));
+vi.mock("expo-sharing", () => ({ shareAsync: vi.fn() }));
+vi.mock("expo-file-system", () => ({
+  File: class {
+    exists = false;
+  },
+}));
+vi.mock("@/session/SheetModal", () => ({
+  SheetModal: ({ visible, children }: any) => (visible ? children : null),
+}));
 vi.mock('expo-web-browser', () => ({ openBrowserAsync }));
 vi.mock('react-i18next', async (importOriginal) => ({
-  ...await importOriginal<typeof import('react-i18next')>(),
+  ...(await importOriginal<typeof import('react-i18next')>()),
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 vi.mock('react-native', async () => {
@@ -50,18 +75,43 @@ vi.mock('lucide-react-native', () => Object.fromEntries([
   'Mail', 'CalendarDays', 'Folder', 'ChartColumn', 'Info', 'Clock', 'MapPin', 'Coffee', 'Image', 'Users', 'Star',
   'Database', 'FileArchive', 'FileAudio', 'FileChartColumn', 'FileCode', 'FileImage', 'FileSpreadsheet', 'FileText', 'FileVideo',
   'ArrowLeftRight', 'ArrowUp', 'Bot', 'Check', 'ChevronDown', 'ChevronRight', 'ChevronUp', 'Circle', 'CircleAlert', 'CircleCheck',
-  'CircleDashed', 'CircleStop', 'Copy', 'Ellipsis', 'ExternalLink', 'File', 'Ghost', 'Layers', 'ListTodo', 'LoaderCircle',
+  'CircleDashed', 'CircleMinus', 'CircleStop', 'CircleX', 'Copy', 'Download', 'Ellipsis', 'ExternalLink', 'File', 'Ghost', 'Layers', 'ListTodo', 'LoaderCircle',
   'MessageSquarePlus', 'Pen', 'PencilLine', 'RefreshCw', 'Send', 'Share', 'Sparkles', 'Split', 'Timer', 'Trash2', 'TriangleAlert',
-  'Undo2', 'X',
-].map(name => [name, () => null])));
+  'Undo2',
+      "Redo2",
+      "X",
+      "Minus",
+      "Plus",
+      "Scan",
+      "Maximize",
+      "ChevronLeft",
+      "Search",
+      "WrapText",
+      "ListOrdered",
+      "Code",
+].map((name) => [name, () => null])));
 vi.mock('react-native-svg', () => ({ default: () => null, Circle: () => null, Path: () => null }));
 vi.mock('react-native-uitextview', () => ({ UITextView: () => null }));
 vi.mock('expo-image', async () => {
   const { createElement } = await import('react');
-  return { Image: ({ source, onLoad, onError }: any) => {
-    runtime.imageEvents.set(source.uri, { onLoad, onError });
-    return createElement('img', { src: source.uri });
-  } };
+  const Image = Object.assign(
+    ({ source, recyclingKey, style, onLoad, onError }: any) => {
+      runtime.imageEvents.set(source.uri, { onLoad, onError });
+      const frame = Object.assign({}, ...[style].flat(Infinity).filter(Boolean));
+      return createElement('img', {
+        src: source.uri,
+        'data-cache-key': source.cacheKey,
+        'data-recycling-key': recyclingKey,
+        'data-width': frame.width,
+        'data-height': frame.height,
+      });
+    },
+    {
+      clearMemoryCache: () => runtime.clearMemoryCache(),
+      clearDiskCache: () => runtime.clearDiskCache(),
+    },
+  );
+  return { Image };
 });
 vi.mock('expo-router', () => ({
   useRouter: () => ({ push: vi.fn() }), useFocusEffect: vi.fn(),
@@ -71,14 +121,19 @@ vi.mock('@/device-link/DeviceLinkContext', () => ({
   useDeviceLink: () => ({ status: 'offline', connectionEpoch: 0, getPresenceAvailability: () => false, invoke: vi.fn(), openLink: vi.fn() }),
   subscribeRemoteBotChanges: () => () => {},
 }));
-vi.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) }));
+vi.mock('react-native-safe-area-context', () => ({
+  SafeAreaProvider: ({ children }: any) => children,
+  useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) }));
 vi.mock('@/theme', async () => {
   const tokens = await import('@/theme/tokens');
   const colors = new Proxy({}, { get: () => '#777777' });
   return { ...tokens, monoFont: 'monospace', useTheme: () => ({ colors, mode: 'light' }), useThemedStyles: (make: any) => make(colors) };
 });
 vi.mock('@/components/AppText', async () => ({ Text: (await import('react-native')).Text, MAX_FONT_SIZE_MULTIPLIER: 2 }));
-vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ accountGeneration: runtime.accountGeneration }) }));
+vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({
+  accountGeneration: runtime.accountGeneration,
+  ...(runtime.userId !== undefined ? { user: runtime.userId ? { id: runtime.userId } : null } : {}),
+}) }));
 vi.mock('@/session/usePluginResultCard', () => ({ usePluginResultCard: () => ({}), useSessionPluginResource: () => ({ title: 'Art' }) }));
 vi.mock('@/session/remoteMediaDiskCacheExpo', () => ({ downloadRemoteMediaShareTemp: vi.fn() }));
 vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => true }));
@@ -95,10 +150,10 @@ vi.mock('@/session/AuthorizationMessageCard', () => ({ AuthorizationMessageCard:
 vi.mock('@/session/CompanionMessageActions', () => ({ CompanionMessageActions: () => null }));
 vi.mock('@/session/CompanionMessageCard', () => ({ CompanionMessageCard: () => null }));
 vi.mock('@/session/PendingSendBubble', () => ({ PendingSendBubble: () => null }));
-vi.mock('@/session/messageActions', async (original) => ({ ...await original<object>(), copyMessageText: vi.fn(), writeClipboardText: vi.fn() }));
+vi.mock('@/session/messageActions', async (original) => ({ ...(await original<object>()), copyMessageText: vi.fn(), writeClipboardText: vi.fn() }));
 vi.mock('@/platform/gestureHandler', async () => {
   const { View } = await import('react-native');
-  const make = (): any => new Proxy({}, { get: (_target, key) => key === 'then' ? undefined : () => make() });
+  const make = (): any => new Proxy({}, { get: (_target, key) => (key === 'then' ? undefined : () => make()) });
   return {
     GestureHandlerRootView: View,
     GestureDetector: ({ children }: { children: unknown }) => children,
@@ -122,12 +177,39 @@ vi.mock('react-native-reanimated', async () => {
 
 import { BotGroupMessageAttachments } from '@/session/BotGroupMessageAttachments';
 import { MessageListVisibility, MessageListVisibilityContext } from '@/session/messageListVisibility';
+import {
+  __testing as mediaCacheTesting,
+  setCachedServerMedia,
+  forgetChatServerMediaRoom,
+} from '@/chat/chatServerMediaCache';
+import {
+  __testing as authOwnerTesting,
+  setMobileAuthOwner,
+} from '@/auth/authOwnerGeneration';
+import {
+  attachmentIntrinsicSizeCache,
+  clearAttachmentIntrinsicSizes,
+} from '@/session/attachmentIntrinsicSizeCache';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root | undefined;
 let host: HTMLDivElement | undefined;
-afterEach(() => { act(() => root?.unmount()); root = undefined; host?.remove(); host = undefined; });
-beforeEach(() => { runtime.accountGeneration = 1; runtime.alerts = []; runtime.imageEvents.clear(); openBrowserAsync.mockClear(); });
+afterEach(() => {
+  act(() => root?.unmount()); root = undefined; host?.remove(); host = undefined;
+  vi.useRealTimers();
+});
+beforeEach(() => {
+  runtime.accountGeneration = 1;
+  runtime.userId = undefined;
+  runtime.alerts = [];
+  runtime.imageEvents.clear();
+  runtime.clearMemoryCache.mockClear();
+  runtime.clearDiskCache.mockClear();
+  openBrowserAsync.mockClear();
+  authOwnerTesting.reset();
+  mediaCacheTesting.reset();
+  clearAttachmentIntrinsicSizes();
+});
 
 // Placeholder for a short-lived authorized address; never a real signed URL.
 const signedImageUrl = 'https://chat.example.invalid/media/group-picture.png?signature=placeholder';
@@ -170,9 +252,9 @@ describe('Chat Server group image attachments (#5875)', () => {
     const resolveServerMedia = vi.fn(async (id: string) => ({ ...serverAttachment, id, category: 'image' as const, url: `${signedImageUrl}#${id}` }));
     const container = await render({}, visibility);
     await act(async () => root!.render(createElement(MessageListVisibilityContext.Provider, { value: visibility },
-      ...['history', 'latest'].map(messageId => createElement(BotGroupMessageAttachments, {
+      ...['history', 'latest'].map((messageId) => createElement(BotGroupMessageAttachments, {
         key: messageId, messageId, align: 'right', resolveServerMedia, onResolveRemoteMedia: vi.fn(),
-        attachments: (messageId === 'history' ? ['old-1', 'old-2'] : ['latest']).map(id => ({ ...serverAttachment, id })),
+        attachments: (messageId === 'history' ? ['old-1', 'old-2'] : ['latest']).map((id) => ({ ...serverAttachment, id })),
       })),
     )));
     expect(resolveServerMedia).not.toHaveBeenCalled();
@@ -198,7 +280,9 @@ describe('Chat Server group image attachments (#5875)', () => {
     expect(resolveServerMedia).toHaveBeenCalledTimes(1);
 
     await click(container.querySelector('[data-testid="message.mediaPreviewButton"]'));
-    expect(resolveServerMedia).toHaveBeenCalledWith('media-1');
+    expect(resolveServerMedia).toHaveBeenCalledWith('media-1',
+      expect.any(AbortSignal),
+    );
     const viewer = container.querySelector('[data-testid="message.imageLightbox"]');
     expect(viewer?.querySelector('img')?.getAttribute('src')).toBe(signedImageUrl);
     expect(container.textContent).not.toContain(loadFailedKey);
@@ -255,7 +339,7 @@ describe('Chat Server group image attachments (#5875)', () => {
     let finishRefresh!: (value: BotGroupAttachment) => void;
     const resolveServerMedia = vi.fn<() => Promise<BotGroupAttachment>>()
       .mockResolvedValueOnce({ ...serverAttachment, category: 'image', url: signedImageUrl })
-      .mockImplementationOnce(() => new Promise(resolve => { finishRefresh = resolve; }));
+      .mockImplementationOnce(() => new Promise((resolve) => { finishRefresh = resolve; }));
     const container = await render({ resolveServerMedia }, visibility);
     await act(async () => visibility.update([]));
     await act(async () => runtime.imageEvents.get(signedImageUrl)!.onError?.());
@@ -269,7 +353,7 @@ describe('Chat Server group image attachments (#5875)', () => {
 
   // PR #7145 r4371557412: the first automatic request has no cached preview.
   // A successful tap must populate the group list even if that request fails or hangs.
-  it.each(['late-success', 'late-failure', 'already-failed'])('keeps the tapped preview before initial authorization completes (%s)', async outcome => {
+  it.each(['late-success', 'late-failure', 'already-failed'])('keeps the tapped preview before initial authorization completes (%s)', async (outcome) => {
     let finishInitial!: (value: BotGroupAttachment) => void;
     let failInitial!: (error: Error) => void;
     const tappedUrl = `${signedImageUrl}&tap=initial`;
@@ -299,13 +383,13 @@ describe('Chat Server group image attachments (#5875)', () => {
     const refreshedUrl = `${signedImageUrl}&retry=initial`;
     let targetCalls = 0;
     const resolveServerMedia = vi.fn((id: string): Promise<BotGroupAttachment> => {
-      if (id !== serverAttachment.id) return new Promise(resolve => finishNeighbours.push(resolve));
+      if (id !== serverAttachment.id) return new Promise((resolve) => finishNeighbours.push(resolve));
       targetCalls++;
       if (targetCalls === 1) return new Promise((_resolve, reject) => { failInitial = reject; });
       return Promise.resolve({ ...serverAttachment, category: 'image', url: targetCalls === 2 ? tappedUrl : refreshedUrl });
     });
     const container = await render({ resolveServerMedia,
-      attachments: [serverAttachment, ...['neighbour-1', 'neighbour-2'].map(id => ({ ...serverAttachment, id }))] });
+      attachments: [serverAttachment, ...['neighbour-1', 'neighbour-2'].map((id) => ({ ...serverAttachment, id }))] });
     try {
       await click(container.querySelector('[data-testid="message.filePreviewButton"]'));
       await click(container.querySelector('[data-testid="message.imageLightboxCloseButton"]'));
@@ -325,7 +409,7 @@ describe('Chat Server group image attachments (#5875)', () => {
     const tappedUrl = `${signedImageUrl}&tap=1`;
     const resolveServerMedia = vi.fn<() => Promise<BotGroupAttachment>>()
       .mockResolvedValueOnce({ ...serverAttachment, category: 'image', url: signedImageUrl })
-      .mockImplementationOnce(() => new Promise(resolve => { finishRefresh = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { finishRefresh = resolve; }))
       .mockResolvedValueOnce({ ...serverAttachment, category: 'image', url: tappedUrl });
     const container = await render({ resolveServerMedia });
     await act(async () => runtime.imageEvents.get(signedImageUrl)!.onError?.());
@@ -357,7 +441,7 @@ describe('Chat Server group image attachments (#5875)', () => {
     const resolveServerMedia = vi.fn(async (id: string, signal?: AbortSignal) => {
       if (id === 'neighbour') {
         neighbourSignal = signal;
-        return new Promise<BotGroupAttachment>(resolve => { finishNeighbour = resolve; });
+        return new Promise<BotGroupAttachment>((resolve) => { finishNeighbour = resolve; });
       }
       return { ...serverAttachment, category: 'image' as const, url: signedImageUrl };
     });
@@ -387,14 +471,18 @@ describe('Chat Server group image attachments (#5875)', () => {
     expect(resolveServerMedia).toHaveBeenCalledTimes(2);
   });
 
-  it('opens a non-image server file through its short-lived download address, not the viewer', async () => {
+  it("opens an authorized PDF in the common viewer without sending its URL to another browser", async () => {
     const fileUrl = 'https://chat.example.invalid/media/report.pdf?signature=placeholder';
     const resolveServerMedia = vi.fn(async (id: string): Promise<BotGroupAttachment> => ({
       id, name: 'report.pdf', category: 'file', mimeType: 'application/pdf', size: 10, url: fileUrl, path: null,
     }));
     const container = await render({ resolveServerMedia, attachments: [{ ...serverAttachment, name: 'report.pdf' }] });
     await click(container.querySelector('[data-testid^="message.filePreviewButton"]'));
-    expect(openBrowserAsync).toHaveBeenCalledWith(fileUrl);
+    expect(openBrowserAsync).not.toHaveBeenCalled();
+    expect(
+      container.querySelector('[data-testid="preview.header"]'),
+    ).not.toBeNull();
+    expect(container.textContent).toContain("report.pdf");
     expect(container.querySelector('[data-testid="message.imageLightbox"]')).toBeNull();
   });
 
@@ -413,23 +501,23 @@ describe('Chat Server group image attachments (#5875)', () => {
     const visibility = new MessageListVisibility();
     visibility.update([{ key: 'message-1', isViewable: true }]);
     const pending: Array<(value: BotGroupAttachment) => void> = [];
-    const resolveServerMedia = vi.fn(() => new Promise<BotGroupAttachment>(resolve => pending.push(resolve)));
+    const resolveServerMedia = vi.fn(() => new Promise<BotGroupAttachment>((resolve) => pending.push(resolve)));
     const attachments = Array.from({ length: 4 }, (_, index) => ({ ...serverAttachment, id: `media-${index}` }));
     const container = await render({ resolveServerMedia, attachments }, visibility);
     expect(resolveServerMedia).toHaveBeenCalledTimes(3);
     await act(async () => visibility.update([]));
-    await act(async () => pending.forEach(resolve => resolve({ ...serverAttachment, category: 'image', url: signedImageUrl })));
+    await act(async () => pending.forEach((resolve) => resolve({ ...serverAttachment, category: 'image', url: signedImageUrl })));
     expect(resolveServerMedia).toHaveBeenCalledTimes(3);
     expect(container.querySelector('img')).toBeNull();
   });
 
   // PR #7145 r4371434693: three stalled requests must not block another page
   // until their 20s timeout. Unit through the real strip; old tests settled them first.
-  it.each(['message', 'account'])('aborts old preview jobs and frees slots before stale requests settle (%s)', async change => {
+  it.each(['message', 'account'])('aborts old preview jobs and frees slots before stale requests settle (%s)', async (change) => {
     const signals: Array<AbortSignal | undefined> = [];
     const finishes: Array<(value: BotGroupAttachment) => void> = [];
     const oldResolver = vi.fn((_id: string, signal?: AbortSignal) => {
-      signals.push(signal); return new Promise<BotGroupAttachment>(resolve => finishes.push(resolve));
+      signals.push(signal); return new Promise<BotGroupAttachment>((resolve) => finishes.push(resolve));
     });
     const container = await render({ resolveServerMedia: oldResolver,
       attachments: Array.from({ length: 4 }, (_, n) => ({ ...serverAttachment, id: `old-${n}` })) });
@@ -442,11 +530,11 @@ describe('Chat Server group image attachments (#5875)', () => {
       attachments: [serverAttachment], onResolveRemoteMedia: vi.fn(), resolveServerMedia: nextResolver,
     })));
     try {
-      expect(signals.every(signal => signal?.aborted)).toBe(true);
+      expect(signals.every((signal) => signal?.aborted)).toBe(true);
       expect(nextResolver).toHaveBeenCalledTimes(1);
       expect(container.querySelector('img')?.getAttribute('src')).toBe(nextUrl);
     } finally {
-      await act(async () => finishes.forEach(finish => finish({ ...serverAttachment, category: 'image', url: signedImageUrl })));
+      await act(async () => finishes.forEach((finish) => finish({ ...serverAttachment, category: 'image', url: signedImageUrl })));
     }
     expect(oldResolver).toHaveBeenCalledTimes(3);
     expect(container.querySelector('img')?.getAttribute('src')).toBe(nextUrl);
@@ -454,8 +542,8 @@ describe('Chat Server group image attachments (#5875)', () => {
 
   it('bounds preview authorization and ignores late results when the message changes', async () => {
     const pending: Array<(value: BotGroupAttachment) => void> = [];
-    const resolveServerMedia = vi.fn((id: string) => new Promise<BotGroupAttachment>(resolve => {
-      pending.push(value => resolve({ ...value, id }));
+    const resolveServerMedia = vi.fn((id: string) => new Promise<BotGroupAttachment>((resolve) => {
+      pending.push((value) => resolve({ ...value, id }));
     }));
     const attachments = Array.from({ length: 8 }, (_, index) => ({ ...serverAttachment, id: `media-${index}` }));
     const container = await render({ resolveServerMedia, attachments });
@@ -463,9 +551,197 @@ describe('Chat Server group image attachments (#5875)', () => {
     await act(async () => root!.render(createElement(BotGroupMessageAttachments, {
       messageId: 'replacement', align: 'right', attachments: [], onResolveRemoteMedia: vi.fn(), resolveServerMedia,
     })));
-    await act(async () => pending.forEach(resolve => resolve({ ...serverAttachment, category: 'image', url: signedImageUrl })));
+    await act(async () => pending.forEach((resolve) => resolve({ ...serverAttachment, category: 'image', url: signedImageUrl })));
     expect(resolveServerMedia).toHaveBeenCalledTimes(3);
     expect(container.querySelector('img')).toBeNull();
+  });
+
+  it('reuses cached preview URL, stable cacheKey and intrinsic dimensions across unmount/remount with zero duplicate requests', async () => {
+    runtime.userId = 'user-1';
+    setMobileAuthOwner('user-1', 'global');
+    const resolveServerMedia = vi.fn(async () => ({
+      ...serverAttachment, category: 'image' as const, url: signedImageUrl,
+    }));
+    const first = await render({ roomId: 'room-1', resolveServerMedia });
+    expect(resolveServerMedia).toHaveBeenCalledTimes(1);
+    const firstImg = first.querySelector('img')!;
+    const stableCacheKey = firstImg.getAttribute('data-cache-key');
+    expect(stableCacheKey).toBeTruthy();
+    expect(firstImg.getAttribute('data-recycling-key')).toBe(stableCacheKey);
+    act(() => runtime.imageEvents.get(signedImageUrl)!.onLoad?.({ source: { width: 800, height: 400 } }));
+    expect(attachmentIntrinsicSizeCache.get(stableCacheKey!)).toEqual({ width: 800, height: 400 });
+
+    // Simulate navigating away or list cell recycling (complete unmount + remount).
+    act(() => root!.unmount());
+    root = undefined;
+    host!.remove();
+    host = undefined;
+
+    const remounted = await render({ roomId: 'room-1', resolveServerMedia });
+    expect(resolveServerMedia).toHaveBeenCalledTimes(1);
+    const remountedImg = remounted.querySelector('img')!;
+    expect(remountedImg.getAttribute('src')).toBe(signedImageUrl);
+    expect(remountedImg.getAttribute('data-cache-key')).toBe(stableCacheKey);
+    expect(remountedImg.getAttribute('data-recycling-key')).toBe(stableCacheKey);
+    // Intrinsic dimensions were restored immediately from cache before any new onLoad.
+    expect(remountedImg.parentElement?.style.height).not.toBe('180px');
+    expect(Number(remountedImg.parentElement?.getAttribute('data-width') ?? 0) || attachmentIntrinsicSizeCache.get(stableCacheKey!)?.width).toBe(800);
+  });
+
+  // A recycled row may mount offscreen even when the session already knows its signed URL.
+  it('waits for visibility before mounting a cached image', async () => {
+    const cached = { ...serverAttachment, category: 'image' as const, url: signedImageUrl };
+    setCachedServerMedia('gen:1', 'room-1', cached);
+    const visibility = new MessageListVisibility();
+    const resolveServerMedia = vi.fn(async () => cached);
+    const container = await render({ roomId: 'room-1', resolveServerMedia }, visibility);
+    expect(container.querySelector('img')).toBeNull();
+    await act(async () => visibility.update([{ key: 'message-1', isViewable: true }]));
+    expect(container.querySelector('img')?.getAttribute('src')).toBe(signedImageUrl);
+    expect(resolveServerMedia).not.toHaveBeenCalled();
+  });
+
+  // Background renewal and the retry after a native error can settle in either order.
+  it.each(['pending', 'failed'])('recovers a failed stale thumbnail when its renewal succeeds (retry %s)', async (retryState) => {
+    const cached = { ...serverAttachment, category: 'image' as const, url: signedImageUrl };
+    const renewed = { ...cached, url: signedImageUrl + '&renewed=1' };
+    setCachedServerMedia('gen:1', 'room-1', cached, Date.now() - 10 * 60_000);
+    let finishRenewal!: (value: BotGroupAttachment) => void;
+    let failRetry!: (reason: Error) => void;
+    const resolveServerMedia = vi.fn<() => Promise<BotGroupAttachment>>()
+      .mockImplementationOnce(() => new Promise(resolve => { finishRenewal = resolve; }))
+      .mockImplementationOnce(() => new Promise((_, reject) => { failRetry = reject; }));
+    const container = await render({ roomId: 'room-1', resolveServerMedia });
+    await act(async () => runtime.imageEvents.get(signedImageUrl)!.onError?.());
+    expect(container.querySelector('[data-testid="message.mediaThumbFallback"]')).not.toBeNull();
+    if (retryState === 'failed') await act(async () => failRetry(new Error('offline')));
+    await act(async () => finishRenewal(renewed));
+    if (retryState === 'pending') await act(async () => failRetry(new Error('offline')));
+    expect(container.querySelector('img')?.getAttribute('src')).toBe(renewed.url);
+  });
+
+  it('renews an expired presigned URL on remount while preserving the stable cacheKey and intrinsic size', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-26T12:00:00.000Z'));
+    runtime.userId = 'user-1';
+    setMobileAuthOwner('user-1', 'global');
+    const urlV1 = 'https://chat.example.invalid/media/1.png?X-Amz-Date=20261126T120000Z&X-Amz-Expires=180&sig=v1';
+    const urlV2 = 'https://chat.example.invalid/media/1.png?X-Amz-Date=20261126T120230Z&X-Amz-Expires=180&sig=v2';
+    const resolveServerMedia = vi.fn<() => Promise<BotGroupAttachment>>()
+      .mockResolvedValueOnce({ ...serverAttachment, category: 'image', url: urlV1 })
+      .mockResolvedValueOnce({ ...serverAttachment, category: 'image', url: urlV2 });
+
+    const first = await render({ roomId: 'room-1', resolveServerMedia });
+    const cacheKey1 = first.querySelector('img')?.getAttribute('data-cache-key');
+    expect(cacheKey1).toBeTruthy();
+    act(() => runtime.imageEvents.get(urlV1)!.onLoad?.({ source: { width: 640, height: 320 } }));
+    expect(attachmentIntrinsicSizeCache.get(cacheKey1!)).toEqual({ width: 640, height: 320 });
+
+    act(() => root!.unmount());
+    root = undefined;
+    host!.remove();
+    host = undefined;
+
+    // Advance past 180s - 60s safety window -> must renew signed URL.
+    vi.advanceTimersByTime(150_000);
+
+    const renewed = await render({ roomId: 'room-1', resolveServerMedia });
+    expect(resolveServerMedia).toHaveBeenCalledTimes(2);
+    const renewedImg = renewed.querySelector('img')!;
+    expect(renewedImg.getAttribute('src')).toBe(urlV2);
+    expect(renewedImg.getAttribute('data-cache-key')).toBe(cacheKey1);
+    expect(attachmentIntrinsicSizeCache.get(cacheKey1!)).toEqual({ width: 640, height: 320 });
+  });
+
+  it('clears cached previews, intrinsic sizes and native image caches on room revocation and account switch', async () => {
+    runtime.userId = 'user-1';
+    setMobileAuthOwner('user-1', 'global');
+    const url1 = `${signedImageUrl}&v=1`;
+    const url2 = `${signedImageUrl}&v=2`;
+    const url3 = `${signedImageUrl}&v=3`;
+    const resolveServerMedia = vi.fn<() => Promise<BotGroupAttachment>>()
+      .mockResolvedValueOnce({ ...serverAttachment, category: 'image', url: url1 })
+      .mockResolvedValueOnce({ ...serverAttachment, category: 'image', url: url2 })
+      .mockResolvedValueOnce({ ...serverAttachment, category: 'image', url: url3 });
+
+    const first = await render({ roomId: 'room-1', resolveServerMedia });
+    const keyBeforeRevoke = first.querySelector('img')!.getAttribute('data-cache-key')!;
+    act(() => runtime.imageEvents.get(url1)!.onLoad?.({ source: { width: 500, height: 250 } }));
+    expect(attachmentIntrinsicSizeCache.has(keyBeforeRevoke)).toBe(true);
+
+    // Room access loss (leave / 403 / hide) clears mounted preview, intrinsic size and native cache.
+    await act(async () => { forgetChatServerMediaRoom('room-1'); });
+    expect(first.querySelector('img')).toBeNull();
+    expect(attachmentIntrinsicSizeCache.has(keyBeforeRevoke)).toBe(false);
+    expect(runtime.clearMemoryCache).toHaveBeenCalledTimes(1);
+    expect(runtime.clearDiskCache).toHaveBeenCalledTimes(1);
+
+    act(() => root!.unmount());
+    root = undefined;
+    host!.remove();
+    host = undefined;
+
+    // Re-entering after re-join must re-authorize and use a new room-epoch cacheKey.
+    const rejoined = await render({ roomId: 'room-1', resolveServerMedia });
+    expect(resolveServerMedia).toHaveBeenCalledTimes(2);
+    const keyAfterRejoin = rejoined.querySelector('img')!.getAttribute('data-cache-key')!;
+    expect(keyAfterRejoin).not.toBe(keyBeforeRevoke);
+    expect(rejoined.querySelector('img')?.getAttribute('src')).toBe(url2);
+
+    // Switching account immediately clears cache and forces fresh authorization under the new owner.
+    act(() => root!.unmount());
+    root = undefined;
+    host!.remove();
+    host = undefined;
+    runtime.userId = 'user-2';
+    runtime.accountGeneration++;
+    setMobileAuthOwner('user-2', 'global');
+    expect(runtime.clearMemoryCache).toHaveBeenCalledTimes(2);
+    expect(runtime.clearDiskCache).toHaveBeenCalledTimes(2);
+
+    const switched = await render({ roomId: 'room-1', resolveServerMedia });
+    expect(resolveServerMedia).toHaveBeenCalledTimes(3);
+    expect(switched.querySelector('img')?.getAttribute('src')).toBe(url3);
+    expect(switched.querySelector('img')?.getAttribute('data-cache-key')).not.toBe(keyAfterRejoin);
+  });
+
+  it('drops in-flight preview authorization if the room loses access before it settles', async () => {
+    runtime.userId = 'user-1';
+    setMobileAuthOwner('user-1', 'global');
+    let finish!: (value: BotGroupAttachment) => void;
+    const resolveServerMedia = vi.fn(() => new Promise<BotGroupAttachment>((resolve) => { finish = resolve; }));
+
+    const container = await render({ roomId: 'room-1', resolveServerMedia });
+    expect(resolveServerMedia).toHaveBeenCalledTimes(1);
+
+    await act(async () => { forgetChatServerMediaRoom('room-1'); });
+    await act(async () => { finish({ ...serverAttachment, category: 'image', url: signedImageUrl }); });
+    expect(container.querySelector('img')).toBeNull();
+    expect(mediaCacheTesting.size()).toBe(0);
+  });
+
+  it('never reads or populates the preview cache when previewServerImages is false', async () => {
+    runtime.userId = 'user-1';
+    setMobileAuthOwner('user-1', 'global');
+    const resolveServerMedia = vi.fn(async () => ({
+      ...serverAttachment, category: 'image' as const, url: signedImageUrl,
+    }));
+    // Warm cache from a group chat first.
+    await render({ roomId: 'room-1', resolveServerMedia });
+    expect(resolveServerMedia).toHaveBeenCalledTimes(1);
+    act(() => root!.unmount());
+    root = undefined;
+    host!.remove();
+    host = undefined;
+
+    // CloudCompanionScreen uses previewServerImages={false}: must stay tap-only and never display cached inline image.
+    const cloud = await render({ roomId: 'room-1', resolveServerMedia, previewServerImages: false });
+    expect(cloud.querySelector('img')).toBeNull();
+    expect(resolveServerMedia).toHaveBeenCalledTimes(1);
+    await click(cloud.querySelector('[data-testid="message.filePreviewButton"]'));
+    expect(resolveServerMedia).toHaveBeenCalledTimes(2);
+    await click(cloud.querySelector('[data-testid="message.imageLightboxCloseButton"]'));
+    expect(cloud.querySelector('img')).toBeNull();
   });
 });
 

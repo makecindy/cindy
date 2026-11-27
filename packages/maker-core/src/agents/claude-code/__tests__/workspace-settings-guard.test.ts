@@ -9,6 +9,7 @@ import {
   UNPARSEABLE_SETTINGS_KEY,
   workspaceConfigChangeBlockReason,
   workspaceSettingsOverrideMessage,
+  workspaceSettingsFiles,
 } from '../workspace-settings-guard.js';
 
 const dirs: string[] = [];
@@ -31,6 +32,28 @@ afterEach(async () => {
 });
 
 describe('findWorkspaceSettingsOverride', () => {
+  // PR #9055: the exported discovery now also protects MCP source selection.
+  // Unit filesystem fixture: an external link into a linked worktree must include
+  // both the real working directory and the main repository's local settings.
+  it('discovers native MCP policy files through an external link into a linked worktree', async () => {
+    const main = await tempDir();
+    const gitdir = path.join(main, '.git', 'worktrees', 'feature');
+    await fs.mkdir(gitdir, { recursive: true });
+    const worktree = await tempDir();
+    await fs.writeFile(path.join(worktree, '.git'), `gitdir: ${gitdir}\n`);
+    const sub = path.join(worktree, 'packages', 'app');
+    await fs.mkdir(sub, { recursive: true });
+    const policy = { deniedMcpServers: [{ serverName: 'native_tools' }] };
+    const canonicalLocal = await writeSettings(main, 'settings.local.json', policy);
+    const realProject = await writeSettings(sub, 'settings.json', policy);
+    const linkParent = await tempDir();
+    const link = path.join(linkParent, 'link');
+    await fs.symlink(sub, link, process.platform === 'win32' ? 'junction' : 'dir');
+    const files = await workspaceSettingsFiles(link);
+    expect(files).toContain(canonicalLocal);
+    expect(files).toContain(realProject);
+    expect(JSON.parse(await fs.readFile(canonicalLocal, 'utf8'))).toEqual(policy);
+  });
   it.each([
     ['ANTHROPIC_BASE_URL'],
     ['anthropic_auth_token'],

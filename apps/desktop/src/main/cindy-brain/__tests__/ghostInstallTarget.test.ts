@@ -3,7 +3,6 @@
 import { expect, it } from 'vitest';
 import type { InstalledGhost } from '../../../shared/ghost.js';
 import {
-  GhostInstallTargetRequiredError,
   resolveForgeInstallTarget,
 } from '../ghostInstallTarget.js';
 const ghost = (namespace: string | null, instanceKey: string) =>
@@ -13,11 +12,10 @@ const ghost = (namespace: string | null, instanceKey: string) =>
     instanceKey,
     enabled: true,
   }) as InstalledGhost;
-it('updates the root instance without creating an organization copy after an organization login', () => {
+it('defaults to a local copy without updating market instances after an organization login', () => {
   const root = ghost(null, '_root__mail-test');
   expect(resolveForgeInstallTarget([root], 'mail-test', 'team', {})).toEqual({
-    namespace: null,
-    installed: root,
+    namespace: 'local',
   });
   expect(
     resolveForgeInstallTarget(
@@ -26,7 +24,7 @@ it('updates the root instance without creating an organization copy after an org
       'team',
       {},
     ),
-  ).toEqual({ namespace: null, installed: root });
+  ).toEqual({ namespace: 'local' });
   expect(
     resolveForgeInstallTarget([root], 'mail-test', 'team', { targetInstanceId: root.instanceKey }),
   ).toEqual({ namespace: null, installed: root });
@@ -44,16 +42,13 @@ it('retains normal installs and updates while rejecting stale, ambiguous or fore
   const root = ghost(null, '_root__mail-test'),
     team = ghost('team', '_ns__team__mail-test'),
     foreign = ghost('other', '_ns__other__mail-test');
-  expect(resolveForgeInstallTarget([], 'mail-test', 'team', {})).toEqual({ namespace: null });
+  expect(resolveForgeInstallTarget([], 'mail-test', 'team', {})).toEqual({ namespace: 'local' });
   expect(resolveForgeInstallTarget([], 'mail-test', 'team', { namespace: 'team' })).toEqual({
     namespace: 'team',
   });
-  expect(() => resolveForgeInstallTarget([foreign], 'mail-test', 'team', {})).toThrow(
-    GhostInstallTargetRequiredError,
-  );
+  expect(resolveForgeInstallTarget([foreign], 'mail-test', 'team', {})).toEqual({ namespace: 'local' });
   expect(resolveForgeInstallTarget([team], 'mail-test', 'team', {})).toEqual({
-    namespace: 'team',
-    installed: team,
+    namespace: 'local',
   });
   for (const options of [
     { targetInstanceId: foreign.instanceKey },
@@ -61,9 +56,17 @@ it('retains normal installs and updates while rejecting stale, ambiguous or fore
     { namespace: 'other' },
     { targetInstanceId: root.instanceKey, namespace: 'team' },
     { targetInstanceId: team.instanceKey, installCopy: true },
-    { installCopy: true },
   ])
     expect(() =>
       resolveForgeInstallTarget([root, team, foreign], 'mail-test', 'team', options),
     ).toThrow();
+});
+
+it('updates the same local instance and permits an explicit current-enterprise self-test', () => {
+  const local = ghost('local', '_ns__local__mail-test');
+  const team = ghost('team', '_ns__team__mail-test');
+  expect(resolveForgeInstallTarget([local, team], 'mail-test', 'team', {})).toEqual({ namespace: 'local', installed: local });
+  expect(resolveForgeInstallTarget([local, team], 'mail-test', 'team', { namespace: 'team' }))
+    .toEqual({ namespace: 'team', installed: team });
+  expect(() => resolveForgeInstallTarget([local], 'mail-test', 'team', { installCopy: true })).toThrow();
 });

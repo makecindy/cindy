@@ -3,13 +3,13 @@ export { PLUGIN_SYNC_CHANNEL } from '@cindy/device-link';
 import { randomUUID } from 'node:crypto';
 import type { InstalledGhost } from '../../shared/ghost.js';
 import { ghostInstallApprovalToken } from '../../shared/ghost.js';
-import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
+import { installedGhostStoragePart, pluginAutomationHostKey } from '../../shared/pluginIdentity.js';
 import {
-  encryptContactsSyncBytes,
-  decryptContactsSyncBytes,
-  isValidContactsSyncPublicKey,
-} from '../contacts-sync/crypto.js';
-import type { ContactsSyncKeyStore } from '../contacts-sync/keyStore.js';
+  encryptDeviceSyncBytes,
+  decryptDeviceSyncBytes,
+  isValidDeviceSyncPublicKey,
+} from '../device-sync-keys/crypto.js';
+import type { DeviceSyncKeyStore } from '../device-sync-keys/keyStore.js';
 
 /** Opaque, bounded RPC between the same plugin on authenticated owner desktops.
  * Persistence, merge rules and retry idempotency belong to the plugin. No model runs.
@@ -33,14 +33,21 @@ export interface PluginSyncTransport {
 }
 interface Deps {
   scope(): string;
+  automationHost?(ghost: InstalledGhost, key: string, choice: { revision: number; useThisDevice: boolean } | null, current: () => boolean): Promise<unknown>;
   keys: Pick<
-    ContactsSyncKeyStore,
+    DeviceSyncKeyStore,
     'prepare' | 'getIdentity' | 'getPeerPublicKey' | 'pinPeerPublicKey'
   >;
   getGhost(id: string): InstalledGhost | null;
   listGhosts(): InstalledGhost[];
   deliver(ghost: InstalledGhost, message: unknown, isCurrent: () => boolean): Promise<boolean>;
 }
+type HostRequest = {
+  instance: string;
+  selecting: boolean;
+  current(): boolean;
+  promise: Promise<unknown>;
+};
 type Pending = {
   peer: string;
   plugin: Identity;
@@ -79,6 +86,8 @@ export class PluginDeviceSync {
   private scope = '';
   private readonly pending = new Map<string, Pending>();
   private readonly incoming = new Map<string, Incoming>();
+  // Stale operations still count towards the bound until their network call settles.
+  private readonly hostRequests = new Set<HostRequest>();
   private readonly keyReplies = new Map<string, number>();
   private readonly receiving = new Map<string, Promise<void>>();
   private receivingCount = 0;
@@ -175,8 +184,30 @@ export class PluginDeviceSync {
     };
   }
   private atCapacity(instance: string): boolean {
-    return this.pending.size + this.incoming.size >= 32 ||
-      [...this.pending.values(), ...this.incoming.values()].filter(p => p.instance === instance).length >= 2;
+    return this.pending.size + this.incoming.size + this.hostRequests.size >= 32 ||
+      [...this.pending.values(), ...this.incoming.values(), ...this.hostRequests].filter(p => p.instance === instance).length >= 2;
+  }
+  private handleHostRequest(ghost: InstalledGhost, instance: string, key: string,
+    choice: { revision: number; useThisDevice: boolean } | null, current: () => boolean): Promise<unknown> {
+    const active = [...this.hostRequests].find(r => r.instance === instance && r.current());
+    if (active?.selecting) return Promise.resolve(error('SYNC_BUSY'));
+    if (active && !choice) return active.promise;
+    if (this.atCapacity(instance)) return Promise.resolve(error('SYNC_BUSY'));
+    // A read issued before a new selection must never replace its newer result.
+    if (active) active.current = () => false;
+    const request: HostRequest = { instance, selecting: !!choice, current, promise: Promise.resolve() };
+    this.hostRequests.add(request);
+    request.promise = (async () => {
+      try {
+        const result = await this.deps.automationHost!(ghost, key, choice, () => request.current());
+        return request.current() ? result : error('SYNC_RESULT_UNKNOWN');
+      } catch {
+        return error('AUTOMATION_HOST_UNAVAILABLE');
+      } finally {
+        this.hostRequests.delete(request);
+      }
+    })();
+    return request.promise;
   }
   async handle(instance: string, raw: unknown): Promise<unknown> {
     if (this.scope !== this.deps.scope()) this.reset();
@@ -191,6 +222,16 @@ export class PluginDeviceSync {
         peers: this.active ? (this.transport?.peers() ?? []) : [],
         maxBytes: MAX_BYTES,
       };
+    if (raw.op === 'automationHost' || raw.op === 'selectAutomationHost') {
+      const ghost = this.deps.getGhost(instance);
+      if (!ghost || ghost.manifest.agent?.schedule !== true || !this.deps.automationHost) return error('UNSUPPORTED_CAPABILITY');
+      const current = this.capture(instance);
+      if (!current?.()) return error('SYNC_OFFLINE');
+      const key = pluginAutomationHostKey(plugin.namespace, plugin.id);
+      if (raw.op === 'selectAutomationHost' && (typeof raw.revision !== 'number' || !Number.isSafeInteger(raw.revision) || raw.revision < 0 || typeof raw.useThisDevice !== 'boolean')) return error('INVALID_PARAMS');
+      const choice = raw.op === 'selectAutomationHost' ? { revision: raw.revision as number, useThisDevice: raw.useThisDevice as boolean } : null;
+      return this.handleHostRequest(ghost, instance, key, choice, current);
+    }
     if (raw.op === 'reply') {
       const p = typeof raw.requestId === 'string' ? this.incoming.get(raw.requestId) : null;
       if (!p || p.instance !== instance) return error('SYNC_REQUEST_EXPIRED');
@@ -252,7 +293,7 @@ export class PluginDeviceSync {
     if (bytes.length > MAX_BYTES) throw new Error('packet too large');
     // Domain bind this channel in authenticated transferId, separate from legacy contacts packets.
     const transferId = `plugin-sync:${randomUUID()}`;
-    const enc = encryptContactsSyncBytes(bytes, this.deps.keys.getIdentity().privateKey, key, {
+    const enc = encryptDeviceSyncBytes(bytes, this.deps.keys.getIdentity().privateKey, key, {
       srcDeviceId: self,
       dstDeviceId: peer,
       transferId,
@@ -281,7 +322,7 @@ export class PluginDeviceSync {
     if (this.receivingCount >= 64 ||
       (raw.kind !== 'key' && raw.kind !== 'data') ||
       (raw.kind === 'data' && (typeof raw.data !== 'string' || raw.data.length > Math.ceil(MAX_BYTES / 3) * 4)) ||
-      (raw.kind === 'key' && !isValidContactsSyncPublicKey(raw.publicKey))) return;
+      (raw.kind === 'key' && !isValidDeviceSyncPublicKey(raw.publicKey))) return;
     const generation = this.generation,
       scope = this.deps.scope(),
       receivedAt = Date.now(),
@@ -321,7 +362,7 @@ export class PluginDeviceSync {
       await wait(this.deps.keys.prepare());
       if (!current()) return;
       if (raw.kind === 'key') {
-        if (!isValidContactsSyncPublicKey(raw.publicKey)) return;
+        if (!isValidDeviceSyncPublicKey(raw.publicKey)) return;
         await wait(this.deps.keys.pinPeerPublicKey(peer, raw.publicKey));
         if (!current()) return;
         if (Date.now() - (this.keyReplies.get(peer) ?? 0) > 5000) {
@@ -348,7 +389,7 @@ export class PluginDeviceSync {
         typeof raw.tag !== 'string'
       )
         return;
-      const bytes = decryptContactsSyncBytes(
+      const bytes = decryptDeviceSyncBytes(
         { ciphertext: Buffer.from(raw.data, 'base64'), iv: raw.iv, tag: raw.tag },
         this.deps.keys.getIdentity().privateKey,
         key,

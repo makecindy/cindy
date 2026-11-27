@@ -24,6 +24,7 @@ import {
   ProviderShareDialogTitle,
   ProviderSharePairingCode,
 } from './ProviderShareDialog';
+import { OwnRelayCrossAccountNotice } from '../device-link/OwnRelayCrossAccountNotice';
 import { providerShareJoinErrorKind } from './providerShareFormat';
 import { ShareAvatar } from './ShareAvatar';
 
@@ -199,13 +200,14 @@ export function ProviderShareApplyDialog({
             <Fact icon={<ShieldCheck size={16} aria-hidden />} title={t('providerShare.apply.factApproval', { name: owner })}
               detail={t('providerShare.apply.factApprovalDetail', { name: owner })} />
           </ul>
+          <OwnRelayCrossAccountNotice feature="providerShare" className="mt-2.5" />
           <ProviderShareDialogFooter>
+            <Button variant="secondary" palette="confirmation" size="lg" disabled={busy !== null} onClick={onClose}>
+              {t('providerShare.apply.cancel')}
+            </Button>
             <Button variant="cta" palette="confirmation" size="lg" loading={busy === 'send'} disabled={busy !== null}
               onClick={() => void send()}>
               {t('providerShare.apply.send')}
-            </Button>
-            <Button variant="secondary" palette="confirmation" size="lg" disabled={busy !== null} onClick={onClose}>
-              {t('providerShare.apply.cancel')}
             </Button>
           </ProviderShareDialogFooter>
         </>
@@ -255,11 +257,11 @@ export function ProviderShareApplyDialog({
             description={label ? t('providerShare.apply.doneDescription', { label }) : t('providerShare.apply.doneDescriptionGeneric')}
           />
           <ProviderShareDialogFooter>
-            <Button variant="cta" palette="confirmation" size="lg" onClick={() => { onClose(); onNewTask(); }}>
-              {t('providerShare.apply.newTask')}
-            </Button>
             <Button variant="secondary" palette="confirmation" size="lg" onClick={onClose}>
               {t('providerShare.apply.later')}
+            </Button>
+            <Button variant="cta" palette="confirmation" size="lg" onClick={() => { onClose(); onNewTask(); }}>
+              {t('providerShare.apply.newTask')}
             </Button>
           </ProviderShareDialogFooter>
         </>
@@ -311,11 +313,11 @@ export function ProviderShareApplyDialog({
         <>
           <StateCenter icon={<Info size={18} aria-hidden />} title={t('providerShare.apply.errorTitle')} description={view.message} />
           <ProviderShareDialogFooter>
+            {closeButton}
             <Button variant="cta" palette="confirmation" size="lg" loading={busy === 'send'} disabled={busy !== null}
               onClick={() => void (view.retry === 'send' ? send() : loadPreview())}>
               {t('providerShare.apply.retry')}
             </Button>
-            {closeButton}
           </ProviderShareDialogFooter>
         </>
       );

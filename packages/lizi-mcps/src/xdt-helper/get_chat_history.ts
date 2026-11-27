@@ -13,6 +13,7 @@
  */
 
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
+import { redactSensitiveTextDeep } from '@cindy/maker-shared/error-redaction';
 import { z } from 'zod';
 
 import type { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
@@ -22,6 +23,7 @@ import { parseIsoMs } from './_history_time.js';
 import { stringArrayParam } from './_array-param.js';
 import { encodeCursor, decodeCursor } from './_history_cursor.js';
 import { resolveHistoryScope } from './_history_scope.js';
+import { containsManagedImageReference, HISTORY_IMAGE_VIEW_HINT } from './historyImageHint.js';
 
 const ROLE_VALUES = [
   'user',
@@ -31,6 +33,7 @@ const ROLE_VALUES = [
   'ask_user',
   'plan_review',
   'thinking',
+  'error',
 ] as const satisfies readonly HistoryRole[];
 
 /**
@@ -69,9 +72,18 @@ const DESCRIPTION = [
   '传 include_full_history=true 解锁。响应里的 query.auto_window_days 会标明窗口是否生效。',
   '',
   '【默认只返问答类 role】不传 roles = 只返 user / assistant / ask_user / plan_review,',
-  '排除 tool_use / tool_result / thinking 这些开发者 debug 用的技术性 role(体积大且',
+  '排除 tool_use / tool_result / thinking / error 这些开发者 debug 用的技术性 role(体积大且',
   '对"回顾对话"无价值)。需要工具调用 / 思考链等技术 role 时, 在 roles 里显式列出',
-  '(例如要全量就传 roles=["user","assistant","tool_use","tool_result","ask_user","plan_review","thinking"])。',
+  '(例如要全量就传 roles=["user","assistant","tool_use","tool_result","ask_user","plan_review","thinking","error"])。',
+  '',
+  '【error 是技术性 role, 需显式列出】role="error" 是终端错误诊断行(worker 派发成功后',
+  '无输出就终止等技术性终止会落一行), 默认集不含它——roles 数组里包含 "error" 就会返回,',
+  '可以和其他 role 一起传(例如 roles=["user","error"]), 不要求 roles 只含 error 一项。',
+  'error 行 content 在出口统一过 redactSensitiveTextDeep 递归脱敏(凭据值呈现为 [REDACTED]',
+  '或 [REDACTED_KEY], Bearer 形态保留前缀如 "Bearer [REDACTED]"); 写入侧只脱敏过 message /',
+  'sdkError, reason 等其余字段是入库原样内容, 但出口这一层会把整条 content 连同它们一起脱敏,',
+  '所以这里拿到的 reason 等字段同样是脱敏后的结果, 不是入库原文, 没有任何路径能取回原始值。',
+  '仍只用于判断"这轮是不是技术性失败", 不应当作对话正文渲染给用户。',
   '',
   '【返回原始数据】content 是 JSON.parse 后的原始结构 (按 role 形态不同, 调用方自己解析),',
   '不做任何 markdown / 文本拼装。',
@@ -80,10 +92,13 @@ const DESCRIPTION = [
   '  - sessions: { [sessionId]: { workingDir, agentKind, title } } —— 涉及到的 session 元数据,',
   '    按 id 索引一次, 避免在每条 message 上重复(同 session 拉 N 条消息 → 元数据只出现一次)。',
   '  - messages: 数组, 每行字段 id / sessionId / role / content(已 JSON 解析) / createdAt(ISO);',
-  '    可选字段(仅在非 null 时出现): toolUseId / agentMeta(已 JSON 解析) / rewindAt(ISO)。',
+  '    可选字段: clientId（源记录提供时返回）/ toolUseId / agentMeta(已 JSON 解析) / rewindAt(ISO)。',
   '  要拿某条 message 的 workdir / agentKind / title, 用 sessions[message.sessionId] 查。',
+  '【用户消息链接】取目标用户消息的 clientId，在原 sessionUrl 上设置 message 查询参数并保留 device 等现有参数，例如 cindy://session/s1?device=d1&message=c1。',
+  '  示例：const url = new URL(sessionUrl); url.searchParams.set("message", clientId); 使用 url.href。clientId 缺失时引用原任务链接。消息行 id 和 agentMeta.uuid 不能用作消息锚点。',
   '',
   '【分页】游标分页, 默认 200/次, 最大 1000。串联 nextCursor 多次调用拿全量, 信息不丢。',
+  '源设备可按完整记录的 64 KiB 软预算提前分页；单条超大记录仍完整返回。limit 是条数上限，继续读 nextCursor，不要按返回条数判断结束。',
   '默认按 createdAt desc + id desc, 同毫秒多消息靠 id 兜底排序稳定。',
 ].join('\n');
 
@@ -125,7 +140,10 @@ export function registerGetChatHistoryTool(
         .optional()
         .describe(
           '只返这些 role 的消息。不传 = 默认只返问答类(user/assistant/ask_user/plan_review),' +
-            '排除 tool_use/tool_result/thinking 等技术性 role。需要技术 role 时, 在数组里显式列出。',
+            '排除 tool_use/tool_result/thinking/error 等技术性 role。需要技术 role 时, 在数组里显式列出。' +
+            'role="error" 是终端错误诊断行(默认不返), 数组里包含 "error" 即返回, 可与其他 role 混合;' +
+            '其 content 在出口统一过 redactSensitiveTextDeep 递归脱敏(写入侧只脱敏过 message / sdkError),' +
+            '返回的是脱敏结果而非入库原文, 不存在取回原始值的路径。',
         ),
       include_rewound: z
         .boolean()
@@ -173,7 +191,7 @@ export function registerGetChatHistoryTool(
       ) {
         return errorPayload(
           'HISTORY_SCOPE_DENIED',
-          '请求的任务不在当前伙伴可读取的历史范围内。不要把空结果解释成对方没有回复；请改用伙伴状态或可追踪委派结果。',
+          '请求的任务不在当前伙伴可读取的历史范围内。不要把空结果解释成对方没有回复；请改用伙伴状态或任务摘要（get_task_digest）。',
           { denied_session_ids: scope.deniedSessionIds },
         );
       }
@@ -257,21 +275,28 @@ export function registerGetChatHistoryTool(
             ...(deps.history.sessionUrl ? { sessionUrl: deps.history.sessionUrl(m.sessionId) } : {}),
           };
         }
+        // error 行的 content：写入侧只对 message / sdkError 过过 redactSensitiveText，
+        // reason 等其余字段是入库原样内容。出口必须自己兜住，否则未知结构的原始字段会
+        // 直接出网 —— 与 desktop 侧历史出口同一口径。
+        // 其余 role 逐字节透传，保持既有行为不变。
         const out: Record<string, unknown> = {
           id: m.id,
           sessionId: m.sessionId,
           role: m.role,
-          content: m.content,
+          content: m.role === 'error' ? redactSensitiveTextDeep(m.content) : m.content,
           createdAt: new Date(m.createdAt).toISOString(),
         };
         if (m.toolUseId !== null) out.toolUseId = m.toolUseId;
+        if (m.clientId !== undefined) out.clientId = m.clientId;
         if (m.agentMeta !== null && m.agentMeta !== undefined) out.agentMeta = m.agentMeta;
         if (m.rewindAt !== null) out.rewindAt = new Date(m.rewindAt).toISOString();
         return out;
       });
+      const imageViewHint = containsManagedImageReference(messagesOut) ? { image_view_hint: HISTORY_IMAGE_VIEW_HINT } : {};
       return okPayload({
         sessions: sessionsMap,
         messages: messagesOut,
+        ...imageViewHint,
         nextCursor: page.nextCursor ? encodeCursor(page.nextCursor) : null,
         hasMore: page.hasMore,
         query: {

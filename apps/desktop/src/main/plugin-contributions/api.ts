@@ -3,7 +3,7 @@ import type { z } from 'zod';
 import * as wire from '../../shared/pluginContributionContract.js';
 import { getAccessToken, getActiveAuthRealm, getAuthState, refresh } from '../authManager.js';
 import { getClientEndpoint, getClientEndpointForRealm } from '../clientEndpointsService.js';
-import { ServerApiError, serverApiFetch } from '../serverApiClient.js';
+import { ServerApiError, serverApiFetch } from '../serverApiClient.desktop.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { assertContributionOwner, contributionOwnerKey } from './prepared.js';
 
@@ -158,6 +158,9 @@ export class ContributionApi {
   }
   operation(id: string) {
     return this.request(`/operations/${encodeURIComponent(id)}`, wire.contributionOperation);
+  }
+  changes() {
+    return this.request('/changes', wire.contributionChanges);
   }
   list(input: { query: string; filter: string; cursor?: string }) {
     const params = new URLSearchParams({

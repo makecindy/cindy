@@ -12,10 +12,35 @@
 Node worker ↔ JSON-RPC stdio ↔ 你的 main.js ↔ Cindy 主机能力
 ```
 
-Node 不能直接拿到 `cindy`、Electron IPC 或 Agent 会话。它向主机发反向 JSON-RPC
-请求时，主机会固定返回 `-32601`；需要 Cindy 能力时，Node 先把数据回给 `main.js`，
+Node 不持有 Electron IPC 或 Agent 会话。宿主提供的 `cindy.host.call` 可通过私有通道调用
+与 Agent 共用的宿主工具，须声明并批准 `agent.hostTools`，详见[宿主工具调用](plugin-host-tools.md)。
+`cindy.fetch` 与 `cindy.network.open/read/send/close` 也经同一私有宿主通道提供网络代发、
+流式读取与 WebSocket；沿用本插件已批准的 `network` 目标及凭证注入，不给 Worker 凭证明文，
+不接受自报 callId 借用任务权限，详见[网络](plugin-network.md)。
+引用已连接 OAuth 账号时只允许宿主代注入，`node.secretBindings` 返回
+`HOST_INJECTION_REQUIRED`，不把原账号的令牌交给 Worker。
+其它反向 JSON-RPC 请求仍返回 `-32601`；需要其它 Cindy 能力时，Node 先把数据回给 `main.js`，
 再由 `main.js` 调 Cindy 通道。插件自主调用继续按 manifest 验权；当前
 Agent tool-call 内的网络与 workdir 操作按 §4.2 复用 Agent 授权。
+
+#### 继承宿主环境
+
+需要沿用本机 CLI 的代理、证书、用户会话或其他环境配置时，在清单声明
+`node.inheritEnv: true`。声明适用于同一插件的全部 Node 入口、宿主代启子进程及
+插件执行引擎；普通子进程按自身启动选项继承 Worker 环境。它不是每次 RPC 的参数。
+
+开启时，宿主在启动进程时复制自身全部环境变量，不按变量名过滤，也不改写值；仅将
+`CINDY_GHOST_ID` 设为当前插件。环境可能含 API Key、Token 或代理密码，Node 程序及其
+子进程均可读取。只继承执行电脑宿主当时已有的环境，不额外加载 shell 配置、生成系统
+代理变量或开启 Node 代理选项；联网程序是否使用这些变量仍由程序自身决定。
+
+省略或 `false` 保留原有基础环境与已有代理兼容行为。插件详情和普通安装确认会单列
+环境继承权限，普通更新从关闭改为开启时按原扩权流程确认；服务端默认下发插件继续
+沿用原免确认行为。已有整包安装批准直接覆盖该版本声明，不增加分项批准记录或版本门禁。
+
+继承环境的 Worker 与执行引擎沿用宿主现有含凭据进程的日志保护：原始 stderr 不进入
+宿主日志或退出诊断，输出发生时只记 `[REDACTED]`。这不改变 JSON-RPC 业务返回或
+子进程 stdio 中继，也不能阻止插件主动回传或保存秘密；插件仍须避免泄露敏感值。
 
 ### 4.12.1 自定义 Node 服务(JSON-RPC stdio)
 
@@ -66,8 +91,12 @@ Node 请求及其子进程一并结束，晚到的授权或子进程启动会被
 
 声明 node 和 network.hosts 后可用 cindy.downloads.start({id,url,sha256,bytes})；
 只接受声明的 HTTPS 主机（每次重定向复核），不发送 Cookie、凭证或自定义请求头。
-SHA-256 和精确字节数必填，单文件最多 8 GiB。下载从获得队列槽位起最多 2 小时（含重试，不计排队），不改变 Node 调用期限。返回 {ok:true,token,bytes,sha256,fromCache}，
-没有宿主路径。取消用 cindy.downloads.cancel({id})。
+SHA-256 必填，单文件最多 8 GiB。bytes 可选：知道精确字节数时照旧传入；只拿得到发布者签名的
+SHA-256 时可以省略，宿主改用响应声明的大小（Content-Length 或 Content-Range）先预留缓存再写盘，
+响应没有声明大小、超过 8 GiB 或重连后大小变化都直接失败，内容仍以 SHA-256 为准。较早的宿主要求
+bytes，省略时返回 ok:false；需要兼容它们时，在失败后改用其他途径取得大小再带 bytes 重试。
+下载从获得队列槽位起最多 2 小时（含重试，不计排队），不改变 Node 调用期限。返回 {ok:true,token,bytes,sha256,fromCache}，
+bytes 为实际字节数，没有宿主路径。取消用 cindy.downloads.cancel({id})。
 订阅 onHostMessage 的 download-progress 事件：data 含 id、phase、loaded、total、speedBps；
 phase 为 queued/downloading/verifying/retrying/completed/failed/cancelled，retrying 另含 attempt、delayMs。
 无 loaded/total 时显示不确定进度，下载成功不等于解包成功。
@@ -212,6 +241,9 @@ MCP server 的 sampling / elicitation / roots 等 server→client 反向请求�
 
 ### 4.12.3 打包和生命周期红线
 
+宿主服务依赖使用 `agent.hostTools` 并在调用时解析；能力查询与资源退出规则见
+[宿主服务依赖与生命周期](plugin-host-tools.md#服务依赖与生命周期)。服务不可用不代替安装批准，也不授予管理其他插件的能力。
+
 - 用户不需要安装 Node、npm、CLI 或 MCP。运行时由 Cindy 随包提供；你必须在制作阶段
   把依赖打成单个 worker 文件或连同静态资源放进目录；**禁止**在安装/首次运行时执行
   `npm install`、`npx`、`postinstall` 或从网络下载可执行代码；
@@ -219,13 +251,15 @@ MCP server 的 sampling / elicitation / roots 等 server→client 反向请求�
   最多 2048 个文件、解压后 256MB、.cindy 128MB；超限直接拒绝；
 - `on-demand` 首次 `cindy.node.request` 才启动，缺省空闲 120 秒关闭；停用、更新、
   卸载、退出 Cindy 都立即关闭。`resident` 会随插件启用一直运行，详情页单独显示；
-- 每个插件最多 32 条在途请求；单次 params 256KB、单行 stdout 1MB。单次请求缺省
+  交互页面的状态恢复规则与回收验收见 [§4.23](plugin-interactive-pages.md)；
+- 每个插件最多 32 条在途请求；单次 params 256KB、单行 stdout 1MB。未收齐换行的 stdout 缓冲区超限会
+  杀掉该工作进程，使它的全部在途请求失败。输出前检查完整 JSON 行的字节数，多份响应合并也按总量计。单次请求缺省
   30 秒、上限 120 秒;长任务用 maxTotalMs 开启"有动静就续期",绝对上限 15 分钟
   (见 §4.12.1)。进程崩溃只影响
   自己，所有在途请求收到结构化失败，下次请求可重新启动；
 - **最重要的安全事实**：Node 进程不是浏览器沙箱，它拥有当前登录系统账号能拿到的
   本机权限，能读写文件、联网、起别的进程。Cindy 会在插件详情中显著展示这项能力，
-  但安装不会追加确认弹窗；不需要本机能力的插件不要声明 node，用户也只应安装可信来源。
+  安装确认弹窗也会独立列出 Node / stdio MCP 高风险项；不需要本机能力的插件不要声明 node，用户也只应安装可信来源。
 - macOS 的 Node 工作进程及宿主代启的 Node 子进程保留 Cindy 的系统权限责任归属，
   可在系统允许范围内使用 Cindy 已获得的系统授权。尚未取得的权限仍由系统决定是否需要
   授权；原生子进程的签名与用途声明也会影响结果。这不额外开放 Cindy IPC 或托管凭证。
@@ -325,3 +359,29 @@ undefined；不支持时明确报错，远程流程不能回退到在执行设�
 断开控制端或事务到期会取消该 Node RPC 及其绑定子进程。不要把 URL、轮询码或 token 放进
 stdout 的 RPC 结果、通知、模型回复或错误；业务状态返回固定摘要。此卡片不改变 Host 的
 network setup/readiness，不能拿 CLI 的登录结果冒充宿主凭据配置已完成。
+
+交互页面不依赖 Node，见[交互页面 MCP Apps（§4.23）](plugin-interactive-pages.md)。
+
+### 4.12.6 Node 短期鉴权票据上传
+
+逻辑页通过真实工具调用的 callId 发起 cancelWithCall:true 的 Node 请求。
+Node 在该 RPC 内捕获 globalThis.__CINDY_NODE__.bindHostServices()；旧 Host 无此入口时
+明确返回不支持，不发送替代请求。凭据由插件自己的安全存储管理，本接口不保存凭据。
+
+返回对象包含 signal 及 authenticatedFetch(request, authorization)。authorization 为
+短期 Bearer；request 必须使用 method:'POST' 和 uploadDir:{token,fields?,fileField?}，
+不接受 body、upload 或任意文件路径。只消费当前插件、原工具调用的 dir_deposit 票据；
+Host 覆盖 callId，复用文件数量/大小/一次性消费约束及声明 network.hosts，拒绝重定向，
+401/超时不自动重放。信号与 RPC 结束、取消、账号和安装失效绑定。
+
+Bearer 只经 bootstrap 私有通道进入网络槽，不交给页面或模型。不要写入日志或结果；
+Host 阻断已知短期令牌的原样输出，不替代插件保密责任。每个 worker 最多 8 项待处理，
+每个 RPC 最多 4 项，超时 120 秒。
+
+设置页可经已有 BroadcastChannel 请求 main.js 发起独立 Node RPC，由插件 SDK 自己
+领取、校验和保存授权结果。无真实 tool-call 时不传 callId/cancelWithCall，不调用
+bindAuthorization，不伪造 Host 授权。只将展示授权 URL 短暂传回自己的页面，轮询凭据、
+兑换结果和密钥留在 Node，不进入页面、KV 或模型。
+
+交互页面的宿主标题、来源提示、全屏按钮声明和页签固定尺寸见 [插件界面扩展](plugin-host-ui.md#标题全屏与可用尺寸)。
+页签与全屏的页面需自行滚动，不能依赖宿主自动增高；`hostFullscreenButton: false` 只隐藏宿主按钮，不撤销页面请求全屏的能力。

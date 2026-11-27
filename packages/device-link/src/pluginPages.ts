@@ -273,6 +273,10 @@ export interface PluginPagePoll {
 }
 
 export interface PluginModelSelection {
+  /** Optional Agent location relative to the plugin's execution computer. */
+  agentDeviceId?: string;
+  /** Optional Smart Routing group id; the 6 concrete fields remain the fallback for legacy plugins. */
+  modelGroup?: string;
   agentKind: 'cc' | 'codex' | 'pi';
   providerId: string;
   model: string;
@@ -285,7 +289,9 @@ export function isPluginModelSelection(value: unknown): value is PluginModelSele
   const v = value as Record<string, unknown>;
   const text = (key: string, max: number) => typeof v[key] === 'string' &&
     (v[key] as string).trim().length > 0 && (v[key] as string).length <= max;
-  return Object.keys(v).every(key => ['agentKind', 'providerId', 'model', 'effort', 'fastMode'].includes(key)) &&
+  return Object.keys(v).every(key => ['agentKind', 'providerId', 'model', 'effort', 'fastMode', 'agentDeviceId', 'modelGroup'].includes(key)) &&
+    (v.agentDeviceId === undefined || text('agentDeviceId', 128)) &&
+    (v.modelGroup === undefined || text('modelGroup', 128)) &&
     ['cc', 'codex', 'pi'].includes(String(v.agentKind)) && text('providerId', 128) && text('model', 256) &&
     typeof v.effort === 'string' && v.effort.length <= 32 &&
     (typeof v.fastMode === 'boolean' || v.fastMode === 'ultrafast');
@@ -293,6 +299,8 @@ export function isPluginModelSelection(value: unknown): value is PluginModelSele
 
 /** Native Host model selection; never forwarded into the plugin document. */
 export interface PluginModelPickerRequest {
+  /** Opt in only when the caller can execute remote routes. Old requests remain local. */
+  allowRemote?: boolean;
   requestId: string;
   ghostId: string;
   ghostName: string;
@@ -306,7 +314,7 @@ export type PluginNativeIntent = {
 } & (
   | { kind: "task"; taskId: string }
   | { kind: "preview"; url: string }
-  | { kind: "schedule"; name: string; prompt: string; intervalMs?: number }
+  | { kind: "schedule"; name: string; prompt: string; intervalMs?: number; preRunPlugin?: { pluginId: string; onFailure: "allow" } }
   /** @deprecated Read compatibility for older hosts only; no longer produced. */
   | { kind: "simulator" }
   | { kind: "media"; path: string; mediaKind: "image" | "video" }
@@ -328,17 +336,30 @@ export function isPluginPageSurface(
   return value === "panel" || value === "mainView" || value === "settings";
 }
 
-/** Trusted native settings; no directory, credentials or provider execution routing on the wire. */
+/**
+ * Trusted native settings; no directory, credentials or provider endpoints on the wire.
+ * `config.agentDeviceId` names where the Agent runs (a computer id or share:<id>), never how to reach it.
+ */
 export interface PluginTaskPreferences {
   revision: string;
   config: {
     agentKind?: "cc" | "codex" | "pi";
     model?: string;
     providerId?: string;
+    /** Remote run location, null = explicit Host choice, omitted = legacy default/reuse behavior. */
+    agentDeviceId?: string | null;
     effort?: string;
     fastMode?: boolean | 'ultrafast';
+    /** Optional Smart Routing group id paired with the concrete fallback fields above. */
+    modelGroup?: string;
     permissionMode?: string;
   };
   permissionModes: string[];
   defaultPermissionMode: string;
+  /**
+   * The Host saves and runs a model from another computer or share (`model.agentDeviceId`
+   * in task-settings:set; null explicitly selects this Host). Older Hosts omit it:
+   * controllers then list only that Host's models and do not send the location field.
+   */
+  remoteRoutes?: boolean;
 }

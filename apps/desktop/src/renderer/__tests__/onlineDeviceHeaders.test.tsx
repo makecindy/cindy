@@ -50,9 +50,9 @@ vi.mock('@/components/sidebar/SortableList', () => ({
 vi.mock('../features/cc-agent/sidebar/sections/ProjectNode', () => ({
   ProjectNode: ({ project }: { project: ProjectNode }) => <span>{project.displayName}</span>,
 }));
-// Keep device grouping real; the header bridge is outside this rendering test.
-vi.mock('../features/cc-agent/sidebar/DeviceSectionHeader', () => ({
-  DeviceSectionHeader: ({ children }: { children: ReactNode }) => <>{children}</>,
+// Remote desktop probing is outside the project creation entry's unit scope.
+vi.mock('@/features/remote-desktop/useRemoteDesktopAvailability', () => ({
+  useRemoteDesktopAvailability: () => ({ available: true, checking: false, retryable: false }),
 }));
 vi.mock('../features/cc-agent/sidebar/sections/UnclassifiedSection', () => ({
   UnclassifiedSection: ({ sessions }: { sessions: Session[] }) => (
@@ -63,7 +63,6 @@ vi.mock('../features/cc-agent/sidebar/sections/UnclassifiedSection', () => ({
     </>
   ),
 }));
-vi.mock('@/features/bots/BotAvatar', () => ({ BotAvatar: () => <span>Bot avatar</span> }));
 vi.mock('../features/cc-agent/sidebar/SessionItem', () => ({ SessionItem: () => null }));
 vi.mock('../features/cc-agent/sidebar/SessionCard', () => ({ SessionCard: () => null }));
 vi.mock('../features/cc-agent/sidebar/AutomationSessionGroupItem', () => ({
@@ -77,13 +76,17 @@ function props(groupDevice: boolean): ProjectsSectionProps {
     dialogues: [],
     allKnownProjects: [],
     allProjectKeysForOrder: [],
-    bots: [],
     filter: {
       creators: 'all', creatorOptions: [], toggleCreator: vi.fn(), setCreatorsAll: vi.fn(), setCreatorsNone: vi.fn(),
+      hideAutomations: false, setHideAutomations: vi.fn(),
+      hideTaskCreated: false, setHideTaskCreated: vi.fn(),
       groupBy: 'project',
       groupDialogue: true,
+      groupAutomation: false,
       groupDevice,
       sortBy: 'recency',
+      pinnedSortBy: 'manual',
+      setPinnedSortBy: vi.fn(),
       projectOrder: 'activity',
       manualProjectOrder: [],
       projects: 'all',
@@ -103,6 +106,7 @@ function props(groupDevice: boolean): ProjectsSectionProps {
       setLastActivity: vi.fn(),
       setGroupBy: vi.fn(),
       setGroupDialogue: vi.fn(),
+      setGroupAutomation: vi.fn(),
       setGroupDevice: vi.fn(),
       setSortBy: vi.fn(),
       setProjectOrder: vi.fn(),
@@ -125,16 +129,13 @@ function props(groupDevice: boolean): ProjectsSectionProps {
     onTogglePin: vi.fn(),
     onScheduleAction: vi.fn(),
     onToggleProject: vi.fn(),
-    onToggleProjectPin: vi.fn(),
+    onSettings: vi.fn(),
     onRenameProject: vi.fn(),
-    onRemoveFromSidebar: vi.fn(),
     onCollapseAll: vi.fn(),
     onExpandAll: vi.fn(),
     onCreateInProject: vi.fn(),
     onOpenConversationSearch: vi.fn(),
     onOpenInExplorer: vi.fn(),
-    onLinkCodexProject: vi.fn(),
-    linkingCodexProject: null,
     onBrowseFiles: vi.fn(),
     onArchiveAll: vi.fn(),
     onSearchDialogues: vi.fn(),
@@ -161,6 +162,24 @@ afterEach(() => {
 });
 
 describe('Online device headers without tasks', () => {
+  // Device-row creation must target that row, independent of the global scope.
+  // Existing folding tests did not exercise creation. Minimal unit input: two
+  // empty device sections; click each add button and verify target + fold state.
+  it('creates on the clicked device without collapsing its section', () => {
+    const onCreateProject = vi.fn();
+    render(<ProjectsSection {...props(true)} onCreateProject={onCreateProject} />);
+    for (const [name, target] of [
+      ['ccAgent.sidebar.deviceGroup.local', null],
+      ['Remote device', { deviceId: 'remote', deviceName: 'Remote device' }],
+    ] as const) {
+      const header = screen.getByText(name).closest('button')!;
+      const add = within(header.parentElement!).getByRole('button', { name: 'ccAgent.sidebar.newProject' });
+      fireEvent.click(add);
+      expect(onCreateProject).toHaveBeenLastCalledWith(target);
+      expect(header.getAttribute('aria-expanded')).toBe('true');
+    }
+    expect(onCreateProject).toHaveBeenCalledTimes(2);
+  });
   // #7237: unit regression through the real group headers. One unnamed host
   // was covered, but two ID-as-name hosts previously had indistinguishable labels.
   it('distinguishes unnamed device headers and folds only the selected device', () => {
@@ -176,7 +195,7 @@ describe('Online device headers without tasks', () => {
   });
 
   it('renders and folds an empty online device, then removes it when offline', () => {
-    const p = { ...props(true), bots: [], allProjectKeysForOrder: [] };
+    const p = { ...props(true), allProjectKeysForOrder: [] };
     const view = render(<ProjectsSection {...p} />);
     const header = screen.getByText('Remote device').closest('button')!;
     expect(header.getAttribute('aria-expanded')).toBe('true');
@@ -196,7 +215,7 @@ describe('Online device headers without tasks', () => {
   });
 
   it('does not show device headers when device grouping is disabled', () => {
-    render(<ProjectsSection {...props(false)} bots={[]} allProjectKeysForOrder={[]} />);
+    render(<ProjectsSection {...props(false)} allProjectKeysForOrder={[]} />);
     expect(screen.queryByText('Remote device')).toBeNull();
   });
 });

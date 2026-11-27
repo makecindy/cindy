@@ -1,0 +1,500 @@
+{
+  "completed": false,
+  "failureCode": "DEVICE_LINK_BUSY",
+  "baseline": "4538b647a6af841aed5c49f00fa96f581538f7b8",
+  "limitations": [
+    "Exploratory adapter used explicit background priority, unlike production.",
+    "4 MiB completed; next fixture interrupted by relay-connectivity check. No replay.",
+    "Use upload-live-window-comparison.json and upload-live-final.json for final conclusions."
+  ],
+  "records": [
+    {
+      "kind": "small2",
+      "round": 0,
+      "sourceBytes": 4194327,
+      "gzipBytes": 3159117,
+      "chunks": 25,
+      "uploadMs": 1122.6329590000005,
+      "peakUploadRequests": 2,
+      "uploadRequests": 25,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 49.790125000000444
+        },
+        {
+          "op": "close",
+          "ms": 77.87820800000009
+        },
+        {
+          "op": "caps",
+          "ms": 65.58866699999999
+        },
+        {
+          "op": "close",
+          "ms": 67.0487919999996
+        },
+        {
+          "op": "caps",
+          "ms": 51.6810830000004
+        },
+        {
+          "op": "close",
+          "ms": 53.00458299999991
+        },
+        {
+          "op": "caps",
+          "ms": 185.65229199999976
+        },
+        {
+          "op": "close",
+          "ms": 74.44295800000054
+        },
+        {
+          "op": "caps",
+          "ms": 42.69775000000027
+        },
+        {
+          "op": "close",
+          "ms": 54.8237079999999
+        },
+        {
+          "op": "caps",
+          "ms": 50.95062499999949
+        },
+        {
+          "op": "close",
+          "ms": 85.14950000000044
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "small4",
+      "round": 0,
+      "sourceBytes": 4194327,
+      "gzipBytes": 3159117,
+      "chunks": 25,
+      "uploadMs": 920.7067500000003,
+      "peakUploadRequests": 4,
+      "uploadRequests": 25,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 67.13208299999951
+        },
+        {
+          "op": "close",
+          "ms": 105.57204200000069
+        },
+        {
+          "op": "caps",
+          "ms": 66.40408300000036
+        },
+        {
+          "op": "close",
+          "ms": 128.92399999999998
+        },
+        {
+          "op": "caps",
+          "ms": 115.38324999999986
+        },
+        {
+          "op": "close",
+          "ms": 278.21587499999987
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "window4",
+      "round": 0,
+      "sourceBytes": 4194327,
+      "gzipBytes": 3159117,
+      "chunks": 7,
+      "uploadMs": 592.7228329999998,
+      "peakUploadRequests": 4,
+      "uploadRequests": 7,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 286.90629199999967
+        },
+        {
+          "op": "close",
+          "ms": 198.03712499999983
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "serial",
+      "round": 0,
+      "sourceBytes": 4194327,
+      "gzipBytes": 3159117,
+      "chunks": 7,
+      "uploadMs": 845.5469579999999,
+      "peakUploadRequests": 1,
+      "uploadRequests": 7,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 154.06979200000023
+        },
+        {
+          "op": "close",
+          "ms": 132.3603750000002
+        },
+        {
+          "op": "caps",
+          "ms": 123.06620800000019
+        },
+        {
+          "op": "close",
+          "ms": 97.7095419999996
+        },
+        {
+          "op": "caps",
+          "ms": 73.69183300000077
+        },
+        {
+          "op": "close",
+          "ms": 88.21416700000009
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "small4",
+      "round": 1,
+      "sourceBytes": 4194327,
+      "gzipBytes": 3159117,
+      "chunks": 25,
+      "uploadMs": 900.6434169999993,
+      "peakUploadRequests": 4,
+      "uploadRequests": 25,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 124.69066700000076
+        },
+        {
+          "op": "close",
+          "ms": 160.91804199999933
+        },
+        {
+          "op": "caps",
+          "ms": 117.87462500000038
+        },
+        {
+          "op": "close",
+          "ms": 118.23395800000071
+        },
+        {
+          "op": "caps",
+          "ms": 102.99220799999966
+        },
+        {
+          "op": "close",
+          "ms": 111.29570799999965
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "window4",
+      "round": 1,
+      "sourceBytes": 4194327,
+      "gzipBytes": 3159117,
+      "chunks": 7,
+      "uploadMs": 642.1872920000005,
+      "peakUploadRequests": 4,
+      "uploadRequests": 7,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 299.132791
+        },
+        {
+          "op": "close",
+          "ms": 237.31333300000006
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "serial",
+      "round": 1,
+      "sourceBytes": 4194327,
+      "gzipBytes": 3159117,
+      "chunks": 7,
+      "uploadMs": 823.1924579999995,
+      "peakUploadRequests": 1,
+      "uploadRequests": 7,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 77.93974999999955
+        },
+        {
+          "op": "close",
+          "ms": 147.59208299999955
+        },
+        {
+          "op": "caps",
+          "ms": 114.86091699999997
+        },
+        {
+          "op": "close",
+          "ms": 116.31066600000122
+        },
+        {
+          "op": "caps",
+          "ms": 85.76725000000079
+        },
+        {
+          "op": "close",
+          "ms": 105.78904200000034
+        },
+        {
+          "op": "caps",
+          "ms": 6.822541000001365
+        },
+        {
+          "op": "close",
+          "ms": 5.021208000000115
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "small2",
+      "round": 1,
+      "sourceBytes": 4194327,
+      "gzipBytes": 3159117,
+      "chunks": 25,
+      "uploadMs": 1099.1442500000012,
+      "peakUploadRequests": 2,
+      "uploadRequests": 25,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 28.632665999999517
+        },
+        {
+          "op": "close",
+          "ms": 67.87866700000086
+        },
+        {
+          "op": "caps",
+          "ms": 55.09883300000001
+        },
+        {
+          "op": "close",
+          "ms": 70.23466600000029
+        },
+        {
+          "op": "caps",
+          "ms": 47.04545800000051
+        },
+        {
+          "op": "close",
+          "ms": 257.9947080000002
+        },
+        {
+          "op": "caps",
+          "ms": 16.246125000001484
+        },
+        {
+          "op": "close",
+          "ms": 72.33870800000113
+        },
+        {
+          "op": "caps",
+          "ms": 40.276834000000235
+        },
+        {
+          "op": "close",
+          "ms": 88.33937499999956
+        },
+        {
+          "op": "caps",
+          "ms": 34.197166999998444
+        },
+        {
+          "op": "close",
+          "ms": 76.41908300000068
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "window4",
+      "round": 2,
+      "sourceBytes": 4194327,
+      "gzipBytes": 3159117,
+      "chunks": 7,
+      "uploadMs": 692.9605419999989,
+      "peakUploadRequests": 4,
+      "uploadRequests": 7,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 378.44295799999963
+        },
+        {
+          "op": "close",
+          "ms": 207.57300000000032
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "serial",
+      "round": 2,
+      "sourceBytes": 4194327,
+      "gzipBytes": 3159117,
+      "chunks": 7,
+      "uploadMs": 795.0232500000002,
+      "peakUploadRequests": 1,
+      "uploadRequests": 7,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 61.28966700000092
+        },
+        {
+          "op": "close",
+          "ms": 217.9203749999997
+        },
+        {
+          "op": "caps",
+          "ms": 101.90899999999965
+        },
+        {
+          "op": "close",
+          "ms": 87.17483399999946
+        },
+        {
+          "op": "caps",
+          "ms": 72.05379200000061
+        },
+        {
+          "op": "close",
+          "ms": 85.76475000000028
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "small2",
+      "round": 2,
+      "sourceBytes": 4194327,
+      "gzipBytes": 3159117,
+      "chunks": 25,
+      "uploadMs": 1585.8820000000014,
+      "peakUploadRequests": 2,
+      "uploadRequests": 25,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 29.52179100000103
+        },
+        {
+          "op": "close",
+          "ms": 45.443875000000844
+        },
+        {
+          "op": "caps",
+          "ms": 43.2684160000008
+        },
+        {
+          "op": "close",
+          "ms": 93.43345799999952
+        },
+        {
+          "op": "caps",
+          "ms": 40.04437500000131
+        },
+        {
+          "op": "close",
+          "ms": 187.83462500000132
+        },
+        {
+          "op": "caps",
+          "ms": 48.877542000000176
+        },
+        {
+          "op": "close",
+          "ms": 62.94200000000092
+        },
+        {
+          "op": "caps",
+          "ms": 96.51912500000071
+        },
+        {
+          "op": "close",
+          "ms": 533.1969580000004
+        },
+        {
+          "op": "caps",
+          "ms": 34.10254200000054
+        },
+        {
+          "op": "close",
+          "ms": 85.9078329999993
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "small4",
+      "round": 2,
+      "sourceBytes": 4194327,
+      "gzipBytes": 3159117,
+      "chunks": 25,
+      "uploadMs": 1358.7939590000005,
+      "peakUploadRequests": 4,
+      "uploadRequests": 25,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 93.52795800000058
+        },
+        {
+          "op": "close",
+          "ms": 433.8305420000015
+        },
+        {
+          "op": "caps",
+          "ms": 92.49295900000106
+        },
+        {
+          "op": "close",
+          "ms": 121.16441699999996
+        },
+        {
+          "op": "caps",
+          "ms": 85.64979200000016
+        },
+        {
+          "op": "close",
+          "ms": 323.95566699999836
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    }
+  ]
+}

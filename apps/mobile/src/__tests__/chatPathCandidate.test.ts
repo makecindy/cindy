@@ -6,9 +6,11 @@ import * as React from 'react';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import ts from 'typescript';
+import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
+import { MarkdownLinkActivationContext } from '@/session/chatFilePathContext';
 
 const rendererTree = ts.createSourceFile('renderer.tsx', readFileSync(join(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-const pathFunctions = new Set(['ChatPathChipSpan', 'LinkPathChipSpan', 'clickableInlineStyle', 'underlineDecoration']);
+const pathFunctions = new Set(['useChatPathInteraction', 'ChatPathChipSpan', 'LinkPathChipSpan', 'clickableInlineStyle', 'underlineDecoration']);
 const spanTree = ts.createSourceFile('span.tsx', readFileSync(join(process.cwd(), 'src/session/ChatPathChipSpan.tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const pathCode = [rendererTree, spanTree].flatMap((tree) => tree.statements.filter((node) => ts.isFunctionDeclaration(node) && node.name && pathFunctions.has(node.name.text)).map((node) => node.getText(tree).replace(/^export /, ''))).join('\n');
 const compiledPath = ts.transpileModule(pathCode, { compilerOptions: { jsx: ts.JsxEmit.React, target: ts.ScriptTarget.ES2022 } }).outputText;
@@ -18,8 +20,9 @@ const verdictListeners = new Set<(key: string) => void>();
 const verifyPath = vi.fn(async () => undefined);
 const pathBindings = {
   React, useContext: React.useContext, useCallback: React.useCallback, useEffect: React.useEffect, useMemo: React.useMemo, useRef: React.useRef,
-  useRecyclingState: React.useState, ChatFilePathContext: pathContext,
-  resolveChatAbsPath, toWorkdirRel, canOpenChatPathChip, classifyChatPathLinkTarget, chatPathLabelReadsAsFileReference,
+  useRowStateHook: () => React.useState, ChatFilePathContext: pathContext, MarkdownLinkActivationContext,
+  getMobileAuthOwner, isMobileAuthOwnerCurrent,
+  resolveChatAbsPath, toWorkdirRel, canOpenChatPathChip, classifyChatPathLinkTarget, chatPathLabelReadsAsFileReference, isUncPathOutsideWorkdir,
   StyleSheet: { flatten: flattenStyle },
   peekRemotePathVerdictForRender: () => 'unknown', peekRemotePathVerdict: () => undefined,
   remotePathVerdictKey: (device: string, workdir: string, path: string) => [device, workdir, path].join('|'),
@@ -30,6 +33,31 @@ const productionPath = new Function(...Object.keys(pathBindings), compiledPath +
 const pathStyles = { markdownLink: { textDecorationLine: 'underline' }, markdownPathChip: { textDecorationLine: 'underline' }, markdownInlineCode: { fontFamily: 'monospace' }, markdownUnderlineStrike: { textDecorationLine: 'underline line-through' } };
 
 describe('production path spans', () => {
+  // #11474: an authored link can be mid-stat during native/WebView turnover.
+  it('opens the validated file after its span was replaced within the same message', async () => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    const open = vi.fn();
+    let finish!: (value: { kind: 'file' }) => void;
+    const statPath = vi.fn(() => new Promise(resolve => { finish = resolve; }));
+    const context = { deviceId: 'd1', workdir: '/repo', statPath, onOpenPath: open };
+    const activation = { active: true, pendingMail: new Set<string>() };
+    const SpanText = ({ children, onPress }: any) => React.createElement('span', { onClick: onPress }, children);
+    const redraw = (key: string) => act(() => root.render(React.createElement(pathContext.Provider, { value: context },
+      React.createElement(MarkdownLinkActivationContext.Provider, { value: activation },
+        React.createElement(productionPath.LinkPathChipSpan, { key, url: 'src/a.ts', display: '源文件', bare: false,
+          styles: pathStyles, SpanText, baseStyle: {}, streaming: true })))));
+    try {
+      redraw('native');
+      act(() => container.querySelector('span')!.click());
+      expect(statPath).toHaveBeenCalledExactlyOnceWith('/repo/src/a.ts');
+      redraw('document');
+      await act(async () => finish({ kind: 'file' }));
+      expect(open).toHaveBeenCalledExactlyOnceWith({ kind: 'file', absPath: '/repo/src/a.ts', relPath: 'src/a.ts' });
+    } finally { act(() => root.unmount()); }
+  });
+
   it('adds the clickable signal only when a handler exists and preserves strike-through', () => {
     expect(flattenStyle(productionPath.clickableInlineStyle(pathStyles, undefined, {}))).toEqual({});
     expect(flattenStyle(productionPath.clickableInlineStyle(pathStyles, () => {}, {}))).toEqual({ textDecorationLine: 'underline' });
@@ -68,6 +96,40 @@ describe('production path spans', () => {
     } finally { await act(async () => root.unmount()); }
     expect(verdictListeners.size).toBe(0);
   });
+
+  // 渲染时自动 stat UNC 会让被控 Windows 桌面向消息点名的主机发起 SMB;workdir 自身在共享上时照常验证。
+  // 带 `..` 段的路径字面上以 workdir 开头,被控端规范化后却在 workdir 之外,不能按前缀算作 workdir 内。
+  it.each([
+    ['file://nas/share/x.pdf', 'C:\\proj', 0],
+    ['file://nas/share/proj/../secret.svg', '\\\\nas\\share\\proj', 0],
+    // #11261 review: file://// keeps forward slashes; the Windows owner still treats these as SMB.
+    ['file:////nas/share/x.pdf', 'C:\\proj', 0],
+    ['file:///\\nas/share/x.pdf', 'C:\\proj', 0],
+    ['//nas\\share/x.pdf', 'C:/proj', 0],
+    ['file:////nas/share/proj/../secret.svg', '\\\\nas\\share\\proj', 0],
+    ['//NAS/share/proj/x.pdf', '\\\\nas\\share\\proj', 1],
+    ['\\\\nas/share/proj/x.pdf', '//nas/share/proj', 1],
+    ['//nas/share/proj2/x.pdf', '//nas/share/proj', 0],
+    ['//repo/x.pdf', '/repo', 1],
+    ['C:\\x\\a.pdf', 'C:\\proj', 1],
+    ['src/a.ts', '\\\\srv\\share\\proj', 1],
+  ])('auto-verifies link %s in workdir %s %i time(s)', async (url, workdir, calls) => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    verifyPath.mockClear();
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    const SpanText = ({ children, onPress }: any) => React.createElement('span', { onClick: onPress }, children);
+    const context = { deviceId: 'd1', workdir, statPath: vi.fn(async () => ({ kind: 'file' })), onOpenPath: vi.fn() };
+    try {
+      await act(async () => root.render(React.createElement(pathContext.Provider, { value: context },
+        React.createElement(productionPath.LinkPathChipSpan, { url, display: 'x', styles: pathStyles, SpanText, baseStyle: {} }))));
+      expect(verifyPath).toHaveBeenCalledTimes(calls);
+      expect(context.statPath).not.toHaveBeenCalled();
+      await act(async () => container.querySelector('span')!.click());
+      expect(context.statPath).toHaveBeenCalledTimes(1);
+      expect(context.onOpenPath).toHaveBeenCalledTimes(1);
+    } finally { await act(async () => root.unmount()); }
+  });
 });
 
 import {
@@ -78,6 +140,7 @@ import {
   dropDotSegments,
   findBareFilePathMatch,
   isAbsolutePathShape,
+  isUncPathOutsideWorkdir,
   looksLikeBareFileReference,
   looksLikeFilePath,
   pathDisplayName,
@@ -237,6 +300,31 @@ describe('classifyChatPathLinkTarget', () => {
 });
 
 describe('resolveChatAbsPath', () => {
+  it.each([
+    ['C:/repo', 'E:/'],
+    ['/home/user', '/E:'],
+  ])('保留盘根链接 /E:/ 经目录分类后的身份（%s）', (workdir, expected) => {
+    const candidate = classifyChatPathLinkTarget('/E:/');
+    expect(candidate).not.toBeNull();
+    if (candidate) expect(resolveChatAbsPath(candidate.href, workdir)).toBe(expected);
+  });
+
+  // Target-workdir semantics: a phone must not reinterpret a POSIX host's
+  // literal /E: directory as a Windows drive, or keep the extra slash on Windows.
+  it.each([
+    ['E:/repo', '/E:/demo', 'E:/demo'],
+    ['C:\\repo', '/E:\\demo\\a.ts', 'E:\\demo\\a.ts'],
+    ['\\\\server\\share', '/E:/demo', 'E:/demo'],
+    ['//server/share', '/E:/demo', 'E:/demo'],
+    ['/home/user', '/E:/demo', '/E:/demo'],
+    ['', '/E:/demo', '/E:/demo'],
+    ['C:/repo', '/home/a.ts', '/home/a.ts'],
+    ['C:/repo', '//server/share/a.ts', '//server/share/a.ts'],
+    ['C:/repo', '//E:/demo', '//E:/demo'],
+  ])('按目标工作目录 %s 解析 %s', (workdir, href, expected) => {
+    expect(resolveChatAbsPath(href, workdir)).toBe(expected);
+  });
+
   it('POSIX workdir join 相对路径', () => {
     expect(resolveChatAbsPath('src/App.tsx', '/w/proj')).toBe('/w/proj/src/App.tsx');
     expect(resolveChatAbsPath('./a.md', '/w/proj/')).toBe('/w/proj/./a.md');
@@ -254,6 +342,26 @@ describe('resolveChatAbsPath', () => {
   it('file:// 解包(含 Windows 形态)', () => {
     expect(resolveChatAbsPath('file:///w/a.ts', '/w')).toBe('/w/a.ts');
     expect(resolveChatAbsPath('file:///C:/x/a.ts', 'C:\\proj')).toBe('C:/x/a.ts');
+  });
+
+  // file://host/share/… 曾被剥成 host/share/… 再拼到 workdir 上,远端 stat 到的是 workdir
+  // 里的另一个文件;localhost 与盘符误写 file://C:/ 维持本机路径语义;host 为 `.`/`..`/`?`
+  // (含转义写法)维持旧的解码原文,不得拼出设备命名空间 `\\.\` / `\\?\`。
+  it.each([
+    ['file://nas/share/a%20b.pdf', 'C:\\proj', '\\\\nas\\share\\a b.pdf'],
+    ['file://nas/share/x.pdf', '/w', '\\\\nas\\share\\x.pdf'],
+    ['\\\\nas\\share\\x.pdf', '/w', '\\\\nas\\share\\x.pdf'],
+    ['file://localhost/C:/x/a.ts', 'C:\\proj', 'C:/x/a.ts'],
+    ['file://LOCALHOST/w/a.ts', '/w', '/w/a.ts'],
+    // localhost 不可能指向共享:多余的前导分隔符仍是本机路径,不得变成 //nas。
+    ['file://localhost//nas/share/x.pdf', 'C:\\proj', '/nas/share/x.pdf'],
+    ['file://localhost/\\nas\\share\\x.pdf', 'C:\\proj', '/nas\\share\\x.pdf'],
+    ['file://C:/x/a.ts', 'C:\\proj', 'C:/x/a.ts'],
+    ['file://./docs/a.md', 'C:\\proj', './docs/a.md'],
+    ['file://%2E%2E/a.md', '/w', '../a.md'],
+    ['file://?/C:/x', 'C:\\proj', '?/C:/x'],
+  ])('%s 不拼到 workdir(%s)上', (href, workdir, expected) => {
+    expect(resolveChatAbsPath(href, workdir)).toBe(expected);
   });
 
   it('file:// 含非法百分号序列不 throw,回退原文', () => {

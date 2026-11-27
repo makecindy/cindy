@@ -1,3 +1,4 @@
+import { SsrFBlockedError } from '@cindy/browser-control-runtime/ssrf-runtime';
 import { app } from 'electron';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -5,20 +6,21 @@ import path from 'node:path';
 import manifest from '../shared/wallpaper-video-manifest.json';
 import type { WallpaperDownloadProgress } from '../shared/appearanceSettings.js';
 import { ingestClientWallpaper } from './cindy-media/ingest.js';
-import { resolveHashRef, blobUrl } from './cindy-media/blobStore.js';
+import { resolveHashRef, blobUrl } from './cindy-media/blobStore.desktop.js';
 import { withClientWallpaperLock } from './cindy-media/clientWallpaperLock.js';
 import { recycleClientWallpapers } from './cindy-media/recycler.js';
 import { readBoundedFileNoFollow } from './utils/readBoundedFile.js';
 import { getClientEndpoint } from './clientEndpointsService.js';
-import { guardedOutboundFetch } from './maker-host/outbound-fetch.js';
+import { guardedOutboundFetch } from './maker-host/outbound-fetch.desktop.js';
 import { throwIpcError } from './utils/ipcValidate.js';
 import { readReferencedClientWallpaperUrls } from './custom-wallpaper-settings.js';
 import { createDownloader } from './downloader/index.js';
+import { createDownloadProgressReporter } from './downloader/progressReporter.js';
 import { createLogger } from './logger.js';
 
 type OfficialWallpaper = keyof typeof manifest;
 type Asset = { sha256: string; bytes: number };
-type ProgressBytes = Pick<WallpaperDownloadProgress, 'loaded' | 'total'>;
+type ProgressBytes = Pick<WallpaperDownloadProgress, 'loaded' | 'total' | 'download'>;
 type Transfer = {
   promise: Promise<string | null>;
   progress: ProgressBytes;
@@ -57,8 +59,17 @@ async function ensureWallpaperAsset(
   if (!transfer) {
     const progress: ProgressBytes = { loaded: 0, total: asset.bytes };
     const listeners = new Set<(progress: ProgressBytes) => void>();
+    // `loaded` stays the raw byte count the tile draws (a retry truthfully restarts from
+    // zero); `download` adds the standard phase so assistive text can say why it restarted.
+    const reporter = createDownloadProgressReporter({
+      initialPhase: 'downloading',
+      total: asset.bytes,
+      throttleMs: 0,
+      emit: () => undefined,
+    });
     const report = (loaded: number) => {
       progress.loaded = Number.isFinite(loaded) ? Math.max(0, Math.min(loaded, asset.bytes)) : 0;
+      progress.download = reporter.snapshot();
       for (const listener of listeners) listener({ ...progress });
     };
     const operation = (async () => {
@@ -69,6 +80,7 @@ async function ensureWallpaperAsset(
         const cached = await readBoundedFileNoFollow(cachedPath, asset.bytes).catch(() => null);
         // Check durable media before even resolving the CDN: offline upgrades need no network config.
         if (cached && matchesWallpaperVideo(cached, asset)) {
+          reporter.setPhase('completed');
           report(asset.bytes);
           return url;
         }
@@ -88,15 +100,54 @@ async function ensureWallpaperAsset(
           maxBytes: asset.bytes,
           redirect: 'error',
           isUrlAllowed: (candidate) => candidate === source.href,
-          request: (url, init) =>
-            guardedOutboundFetch(url, { ...init, credentials: 'omit' }, () => {}),
+          request: async (url, init) => {
+            try {
+              return await guardedOutboundFetch(url, { ...init, credentials: 'omit' }, () => {}, {
+                targetUrl: source.href,
+                // Manifest assets only; the transport binds this to the exact URL/host.
+                allowBenchmarkFakeIp: true,
+              });
+            } catch (error) {
+              // Capture before the downloader's privacy-preserving NETWORK wrapper.
+              // Never log raw errors: even nested messages may contain signed URLs.
+              let cause: unknown = error;
+              let reason = 'Network request failed';
+              let code: string | undefined;
+              for (let depth = 0; depth < 5 && cause instanceof Error; depth++) {
+                if (cause instanceof SsrFBlockedError) {
+                  reason = 'SSRF policy blocked the wallpaper request';
+                  code = 'SSRF_BLOCKED';
+                  break;
+                }
+                const candidate = (cause as NodeJS.ErrnoException).code;
+                if (
+                  candidate &&
+                  /^(?:ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH|CERT_HAS_EXPIRED|DEPTH_ZERO_SELF_SIGNED_CERT|ERR_TLS_CERT_ALTNAME_INVALID|UND_ERR_CONNECT_TIMEOUT)$/.test(
+                    candidate,
+                  )
+                ) {
+                  code = candidate;
+                  reason = 'Wallpaper network request failed';
+                }
+                cause = cause.cause;
+              }
+              log.warn('Wallpaper request failed', { wallpaperId: id, kind, reason, code });
+              throw error;
+            }
+          },
           resume: false,
           retry: { maxAttempts: 3 },
           timeout: { totalMs: 120_000 },
           logger: log,
-          onProgress: ({ loaded }) => report(loaded),
+          onProgress: (event) => {
+            reporter.callbacks.onProgress(event);
+            report(event.loaded);
+          },
           // These small files restart from zero after a failed attempt; report that truthfully.
-          onRetry: () => report(0),
+          onRetry: (event) => {
+            reporter.callbacks.onRetry(event);
+            report(0);
+          },
         });
         const bytes = await readBoundedFileNoFollow(targetPath, asset.bytes);
         if (!bytes || !matchesWallpaperVideo(bytes, asset))
@@ -111,6 +162,7 @@ async function ensureWallpaperAsset(
           );
           return media.url;
         });
+        reporter.setPhase('completed');
         report(asset.bytes);
         return published;
       } catch {

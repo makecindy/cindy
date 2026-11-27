@@ -66,9 +66,12 @@ function toDesktopScheduleFormState(schedule: RemoteSchedule): ScheduleFormState
     timezone: schedule.timezone ?? 'Asia/Shanghai',
     recurring: schedule.recurring ?? true,
     manual: !!schedule.manual,
-    agentKind: schedule.agentKind ?? 'claude-code',
+    agentKind: schedule.agentKind === 'acp' ? 'claude-code' : (schedule.agentKind ?? 'claude-code'),
     model: schedule.model ?? '',
     // RemoteSchedule 没有 provider 概念,parity fixture 取桌面空默认(provider 同 model 成对)
+    preRunSource: 'script',
+    preRunPluginId: '',
+    preRunPluginOnFailure: 'block',
     providerId: '',
     effort: asDesktopEffort(schedule.effort),
     fastMode: !!schedule.fastMode,

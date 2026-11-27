@@ -12,7 +12,10 @@
 
 import {
   buildBotMemoryScopeKey,
+  isSafeMemoryMarkdownFilename,
   MemoryError,
+  parseFilename,
+  PROJECT_MEMORY_HARD_BYTES,
   type MakerMemoryStore,
   type MemoryRecord,
 } from '@cindy/maker-core';
@@ -55,6 +58,8 @@ export function splitImportedMemoryText(text: string): string[] {
 interface BotMemoryOwner {
   canonicalSessionId: string | null;
   assertCurrent?: () => void;
+  /** A project-mode teammate keeps its memory in its project, like an ordinary task there. */
+  scopeKey?: string;
 }
 
 export interface BotMemoryServiceDeps {
@@ -129,11 +134,30 @@ function translateStoreError(error: unknown): never {
   throw error;
 }
 
-function readFilename(value: unknown): string {
-  if (typeof value !== 'string' || !FILENAME_RE.test(value)) {
-    throwIpcError('INVALID_PARAMS', 'Invalid memory');
+function readFilename(value: unknown, allowFreeform = false): string {
+  if (typeof value !== 'string') throwIpcError('INVALID_PARAMS', 'Invalid memory');
+  if (FILENAME_RE.test(value)) return value;
+  if (
+    allowFreeform
+    && isSafeMemoryMarkdownFilename(value, { allowIndex: true })
+    && parseFilename(value)?.type !== 'digest'
+  ) {
+    return value;
   }
-  return value;
+  throwIpcError('INVALID_PARAMS', 'Invalid memory');
+}
+
+/** Cloud copies include internal shards, freeform project notes, and curated MEMORY.md. */
+function readRawFilename(value: unknown, allowFreeform = false) {
+  if (typeof value !== 'string') throwIpcError('INVALID_PARAMS', 'Invalid memory');
+  const parsed = parseFilename(value);
+  if (parsed && parsed.slug.length <= 64 && !/[^a-z0-9_-]/.test(parsed.slug)) {
+    return { filename: value, parsed, freeform: false };
+  }
+  if (allowFreeform && isSafeMemoryMarkdownFilename(value, { allowIndex: true })) {
+    return { filename: value, parsed: null, freeform: true };
+  }
+  throwIpcError('INVALID_PARAMS', 'Invalid memory');
 }
 
 function readExpected(value: unknown): string {
@@ -150,14 +174,20 @@ export function createBotMemoryService(deps: BotMemoryServiceDeps) {
   const clearTimer =
     deps.clearTimer ?? ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>));
 
-  async function storeOf(
-    botId: string,
-  ): Promise<{ store: MakerMemoryStore; owner: BotMemoryOwner }> {
+  async function ownerOf(botId: string): Promise<BotMemoryOwner> {
     const owner = await deps.readBot(botId);
-    if (!owner) throwIpcError('NOT_FOUND', 'Teammate not found');
+    if (!owner) throwIpcError('NOT_FOUND', 'Buddy not found');
+    owner.assertCurrent?.();
+    return owner;
+  }
+
+  async function storeForOwner(
+    botId: string,
+    owner: BotMemoryOwner,
+  ): Promise<{ store: MakerMemoryStore; owner: BotMemoryOwner }> {
     try {
       owner.assertCurrent?.();
-      const store = await deps.getStore(buildBotMemoryScopeKey(botId));
+      const store = await deps.getStore(owner.scopeKey ?? buildBotMemoryScopeKey(botId));
       owner.assertCurrent?.();
       return { store, owner };
     } catch (error) {
@@ -165,7 +195,17 @@ export function createBotMemoryService(deps: BotMemoryServiceDeps) {
     }
   }
 
-  function scheduleRefresh(owner: BotMemoryOwner): void {
+  async function storeOf(
+    botId: string,
+  ): Promise<{ store: MakerMemoryStore; owner: BotMemoryOwner }> {
+    const owner = await ownerOf(botId);
+    return storeForOwner(botId, owner);
+  }
+
+  function scheduleRefresh(owner: BotMemoryOwner, changedFilename?: string): void {
+    // V2 project teammates only inject MEMORY.md at session start; editing ordinary topic notes
+    // on disk does not need a session runtime epoch rebuild (keeps prompt cache warm).
+    if (owner.scopeKey && changedFilename && changedFilename !== 'MEMORY.md') return;
     const sessionId = owner.canonicalSessionId;
     if (!sessionId) return;
     const previous = pendingRefresh.get(sessionId);
@@ -246,7 +286,7 @@ export function createBotMemoryService(deps: BotMemoryServiceDeps) {
         if (!query) {
           return (await store.list()).flatMap((record) => toSummary(record) ?? []).sort(byNewest);
         }
-        const hits = await store.search(query, { limit: SEARCH_LIMIT });
+        const hits = await store.search(query, { limit: SEARCH_LIMIT, excludeTypes: ['digest'] });
         const entries: BotMemorySummary[] = [];
         for (const hit of hits) {
           if (!isBotMemoryType(hit.type)) continue;
@@ -265,13 +305,13 @@ export function createBotMemoryService(deps: BotMemoryServiceDeps) {
     },
 
     async read(botId: string, rawFilename: unknown): Promise<BotMemoryDetail> {
-      const filename = readFilename(rawFilename);
-      const { store } = await storeOf(botId);
+      const owner = await ownerOf(botId);
+      const filename = readFilename(rawFilename, !!owner.scopeKey);
+      const { store } = await storeForOwner(botId, owner);
       return toDetail(await store.read(filename).catch(translateStoreError));
     },
 
     async update(input: BotMemoryUpdateInput): Promise<BotMemoryDetail> {
-      const filename = readFilename(input.filename);
       const expected = readExpected(input.expectedUpdatedAt);
       if (typeof input.title !== 'string' || typeof input.body !== 'string') {
         throwIpcError('INVALID_PARAMS', 'Invalid memory');
@@ -281,10 +321,13 @@ export function createBotMemoryService(deps: BotMemoryServiceDeps) {
       if (!title || Array.from(title).length > BOT_MEMORY_TITLE_MAX) {
         throwIpcError('INVALID_PARAMS', 'Invalid memory title');
       }
-      if (!body || Buffer.byteLength(body, 'utf8') > BOT_MEMORY_BODY_MAX_BYTES) {
+      const owner = await ownerOf(input.botId);
+      const filename = readFilename(input.filename, !!owner.scopeKey);
+      const maxBodyBytes = owner.scopeKey ? PROJECT_MEMORY_HARD_BYTES : BOT_MEMORY_BODY_MAX_BYTES;
+      if (!body || Buffer.byteLength(body, 'utf8') > maxBodyBytes) {
         throwIpcError('INVALID_PARAMS', 'Invalid memory content');
       }
-      const { store, owner } = await storeOf(input.botId);
+      const { store } = await storeForOwner(input.botId, owner);
       return serialized(`${input.botId}/${filename}`, async () => {
         const current = await readCurrent(store, filename, expected);
         const type = current.frontmatter.type;
@@ -297,62 +340,81 @@ export function createBotMemoryService(deps: BotMemoryServiceDeps) {
         const saved = toDetail(await store
           .update(filename, expected, { title, description, body })
           .catch(translateStoreError));
-        scheduleRefresh(owner);
+        scheduleRefresh(owner, filename);
         return saved;
       });
     },
 
     /**
      * Restore one memory file exactly as another computer stored it (cloud companions).
-     * Goes through the store so MEMORY.md, FTS and the runtime refresh stay consistent.
+     * Goes through the store so FTS and runtime refresh stay consistent; V2 project stores
+     * preserve freeform Markdown files, MEMORY.md and >8KB notes verbatim via writeRaw.
      */
     async restoreRaw(botId: string, rawFilename: unknown, raw: string): Promise<void> {
-      const filename = readFilename(rawFilename);
-      const [, type, name] = /^([a-z]+)_(.+)\.md$/.exec(filename)!;
+      const owner = await ownerOf(botId);
+      const allowFreeform = !!owner.scopeKey;
+      const target = readRawFilename(rawFilename, allowFreeform);
+      const { filename } = target;
+      if (allowFreeform && (target.freeform || filename === 'MEMORY.md' || Buffer.byteLength(raw, 'utf8') > BOT_MEMORY_BODY_MAX_BYTES)) {
+        if (!raw.trim()) throwIpcError('INVALID_PARAMS', 'Invalid memory content');
+        const { store } = await storeForOwner(botId, owner);
+        await serialized(`${botId}/${filename}`, async () => {
+          owner.assertCurrent?.();
+          await store.writeRaw(filename, raw).catch(translateStoreError);
+          owner.assertCurrent?.();
+        });
+        scheduleRefresh(owner, filename);
+        return;
+      }
+      if (!target.parsed) throwIpcError('INVALID_PARAMS', 'Invalid memory');
+      const { type, slug: name } = target.parsed;
       const parsed = matter(raw);
       const data = parsed.data as { title?: unknown; description?: unknown; bodyLength?: unknown };
-      const title = typeof data.title === 'string' && data.title.trim() ? data.title.trim().slice(0, BOT_MEMORY_TITLE_MAX) : name!;
+      const title = typeof data.title === 'string' && data.title.trim() ? data.title.trim().slice(0, BOT_MEMORY_TITLE_MAX) : name;
       const exact = Number.isSafeInteger(data.bodyLength) && parsed.content.length === (data.bodyLength as number) + 1 && parsed.content.endsWith('\n');
       const body = exact ? parsed.content.slice(0, -1) : parsed.content.trim();
       if (!body) throwIpcError('INVALID_PARAMS', 'Invalid memory content');
       const description = typeof data.description === 'string' && data.description.trim()
         ? data.description.trim().slice(0, DESCRIPTION_MAX) : botMemoryDescriptionFromBody(body) || title;
-      const { store, owner } = await storeOf(botId);
+      const { store } = await storeForOwner(botId, owner);
       await serialized(`${botId}/${filename}`, async () => {
         owner.assertCurrent?.();
         const existing = await store.read(filename).catch((error: unknown) => {
           if (error instanceof MemoryError && error.code === 'not-found') return null;
           throw error;
         });
-        await store.write({ type: type as BotMemoryType, name: name!, title, description, body,
+        // 传完整文件名: 恢复要原样重建旧分片 (可能带 <type>- 前缀), 不能当成新 slug
+        await store.write({ type, name: filename, title, description, body,
           mode: existing ? 'update' : 'create', preserveBody: exact }).catch(translateStoreError);
         owner.assertCurrent?.();
       });
-      scheduleRefresh(owner);
+      scheduleRefresh(owner, filename);
     },
 
     /** Remove a memory regardless of its version (cloud tombstone). Missing is fine. */
     async removeRaw(botId: string, rawFilename: unknown): Promise<void> {
-      const filename = readFilename(rawFilename);
-      const { store, owner } = await storeOf(botId);
+      const owner = await ownerOf(botId);
+      const { filename } = readRawFilename(rawFilename, !!owner.scopeKey);
+      const { store } = await storeForOwner(botId, owner);
       await serialized(`${botId}/${filename}`, async () => {
         await store.delete(filename).catch((error: unknown) => {
           if (error instanceof MemoryError && error.code === 'not-found') return;
           translateStoreError(error);
         });
       });
-      scheduleRefresh(owner);
+      scheduleRefresh(owner, filename);
     },
 
     async delete(input: BotMemoryDeleteInput): Promise<void> {
-      const filename = readFilename(input.filename);
       const expected = readExpected(input.expectedUpdatedAt);
-      const { store, owner } = await storeOf(input.botId);
+      const owner = await ownerOf(input.botId);
+      const filename = readFilename(input.filename, !!owner.scopeKey);
+      const { store } = await storeForOwner(input.botId, owner);
       await serialized(`${input.botId}/${filename}`, async () => {
         await readCurrent(store, filename, expected);
         await store.delete(filename, expected).catch(translateStoreError);
       });
-      scheduleRefresh(owner);
+      scheduleRefresh(owner, filename);
     },
   };
 }

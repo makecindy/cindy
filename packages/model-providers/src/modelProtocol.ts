@@ -33,13 +33,26 @@ export function modelProtocolComparison(
   const declaredApis = Object.values(models).map(m => m.nativeApis).filter(v => v !== undefined);
   const nativeApis = declaredApis.length ? declaredApis.every(v => JSON.stringify(v) === JSON.stringify(declaredApis[0]))
     ? declaredApis[0] : null : reference ? [reference] : null;
+  const protocolOf = (api: string | null | undefined) => compatibilityProtocol(api) ?? api ?? null;
+  const harnessApi = (agent: AgentKind, api: PiModelApi | null): PiModelApi | null =>
+    agent === 'pi' ? api : agent === 'codex' ? 'openai-responses' : 'anthropic-messages';
+  /** Compatibility mode means Cindy's local conversion only; any API the upstream offers is used as is. */
+  const pathFor = (agent: AgentKind, api: PiModelApi | null | undefined): 'direct' | 'local' | 'unknown' => {
+    if (!api) return 'unknown';
+    return protocolOf(api) === protocolOf(harnessApi(agent, api)) ? 'direct' : 'local';
+  };
+  // Built-in subscriptions (ChatGPT, SuperGrok, Claude) speak their vendor's own API. A
+  // cross-vendor engine there reaches it through Cindy's local bridge without declaring a
+  // per-model API, so the vendor API is the real upstream. Cindy AI is a gateway, not a bridge.
+  const subscriptionBridge = provider.source === 'builtin' && provider.id !== 'xd';
   const forAgent = (agent: AgentKind) => {
     const model = models[agent];
     if (!model) return null;
     const routing = provider.routing?.[agent];
-    const outbound = model.api ?? (
+    const explicit = model.api ?? (agent === 'pi' ? model.piApi : undefined);
+    const outbound = explicit ?? (subscriptionBridge && reference ? reference : (
       agent === 'pi'
-        ? (model.piApi ?? apiFromWireProtocol(model.route?.wireProtocol ?? routing?.wireProtocol))
+        ? apiFromWireProtocol(model.route?.wireProtocol ?? routing?.wireProtocol)
         : apiFromWireProtocol(
             model.route?.wireProtocol ??
               routing?.wireProtocol ??
@@ -49,32 +62,40 @@ export function modelProtocolComparison(
                   ? 'openai-responses'
                   : 'anthropic-messages'
                 : undefined),
-          ));
-    const harness: PiModelApi | null =
-      agent === 'pi' ? outbound : agent === 'codex' ? 'openai-responses' : 'anthropic-messages';
-    const outboundProtocol = compatibilityProtocol(outbound) ?? outbound;
-    const harnessProtocol = compatibilityProtocol(harness) ?? harness;
-    const localConversion = Boolean(agent !== 'pi' && outboundProtocol && harnessProtocol && outboundProtocol !== harnessProtocol);
-    // Pi speaks the selected upstream API directly. Fixed-protocol harnesses
-    // also need compatibility when the supplier converts the model's native API.
-    // The location of that conversion never changes the default-on decision.
-    const compatibility =
-      localConversion || Boolean(agent !== 'pi' && nativeApis?.length && outboundProtocol && !nativeApis.some(api => (compatibilityProtocol(api) ?? api) === outboundProtocol));
+          )));
+    const harness = harnessApi(agent, outbound);
+    const path = pathFor(agent, outbound);
+    const localConversion = path === 'local';
     return {
       harness,
       outbound,
       localConversion,
-      mode: compatibility
+      path,
+      mode: localConversion
         ? ('compatibility' as const)
-        : outbound && (nativeApis?.length || agent === 'pi')
+        : outbound
           ? ('matching' as const)
           : ('unknown' as const),
     };
   };
-  return { reference, nativeApis, forAgent };
+  /** APIs this source offers for the model: bound interfaces plus every engine's declared outbound
+   * API (local conversion changes the engine side, not what the upstream serves). The
+   * manufacturer's own API is not evidence that a channel offers it. */
+  const offered = new Set<string>([
+    ...Object.values(models).flatMap(model => (model.availableInterfaces ?? []).map(item => item.api)),
+    ...(Object.keys(models) as AgentKind[]).flatMap(agent => {
+      const protocol = forAgent(agent);
+      return protocol?.outbound ? [protocol.outbound] : [];
+    }),
+  ]);
+  const order = ['anthropic', 'openai-responses', 'openai-chat', 'google'];
+  const upstreamApis = [...new Map([...offered].map(api => [protocolOf(api), api as PiModelApi])).entries()]
+    .sort(([a], [b]) => (order.indexOf(a ?? '') + 1 || 99) - (order.indexOf(b ?? '') + 1 || 99))
+    .map(([, api]) => api);
+  return { reference, nativeApis, upstreamApis, pathFor, forAgent };
 }
 
-/** Default-on engines use a configured protocol without harness or provider compatibility. */
+/** Default-on engines use an API the upstream offers, without Cindy's local conversion. */
 export function nativeModelAgents(
   provider: Pick<Provider, 'id' | 'routing'> & Partial<Pick<Provider, 'source'>>,
   models: Partial<Record<AgentKind, CatalogModel>>,

@@ -26,7 +26,7 @@
  */
 
 import { createLogger } from '../logger';
-import * as blobStore from './blobStore';
+import * as blobStore from './blobStore.desktop';
 import * as ledger from './ledger';
 import type { LedgerDb } from './ledger';
 

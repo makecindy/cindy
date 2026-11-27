@@ -20,7 +20,8 @@ const io = vi.hoisted(() => ({
   resumable: vi.fn(),
   cancel: vi.fn(async () => undefined),
   deleteAsync: vi.fn(async () => undefined),
-  progress: (_value: { totalBytesWritten: number }) => {},
+  writeBase64: vi.fn(async (uri: string, base64: string) => { io.sizes.set(uri, Math.floor(base64.length * 3 / 4)); }),
+  progress: (_value: { totalBytesWritten: number; totalBytesExpectedToWrite?: number }) => {},
 }));
 
 vi.mock('expo-file-system/legacy', () => ({
@@ -29,6 +30,8 @@ vi.mock('expo-file-system/legacy', () => ({
     return { downloadAsync: () => io.resumable(url, uri), cancelAsync: io.cancel };
   },
   deleteAsync: io.deleteAsync,
+  writeAsStringAsync: io.writeBase64,
+  EncodingType: { Base64: 'base64' },
 }));
 
 vi.mock('expo-file-system', () => ({
@@ -56,7 +59,7 @@ vi.mock('expo-file-system', () => ({
     get exists() { return true; }
     async base64() { return 'aGVsbG8='; }
     async text() { return ''; }
-    write(value: string | Uint8Array) { io.sizes.set(this.uri, value.length); }
+    writeSync(value: string | Uint8Array) { io.sizes.set(this.uri, value.length); }
     moveSync(target: { uri: string }) {
       io.sizes.set(target.uri, this.size);
       io.sizes.delete(this.uri);
@@ -83,6 +86,7 @@ beforeEach(() => {
   io.resumable.mockReset().mockResolvedValue({ status: 200 });
   io.cancel.mockClear();
   io.deleteAsync.mockClear();
+  io.writeBase64.mockClear();
 });
 
 describe('versioned cache with the Expo adapter', () => {
@@ -120,6 +124,30 @@ describe('versioned cache with the Expo adapter', () => {
 });
 
 describe('bounded temporary media downloads', () => {
+  // Unit regression #8085: playable data-video payloads above the small inline
+  // file limit must be saved through native Base64 IO, without a JS byte copy.
+  it('saves a data-video larger than 1 MiB with native decoding', async () => {
+    const encoded = 'AAAA'.repeat(400_000);
+    const uri = await downloadRemoteMediaShareTemp(`data:video/mp4;base64,${encoded}`, 'video/mp4', 'clip.mp4');
+    expect(uri).toMatch(/clip\.mp4$/);
+    expect(io.writeBase64).toHaveBeenCalledExactlyOnceWith(uri, encoded, { encoding: 'base64' });
+  });
+  // Tier 1: video export uses the existing cancellable transfer, including its
+  // native byte counts; mocked button tests cannot verify the adapter wiring.
+  it('forwards native progress and cancels an unfinished video export', async () => {
+    io.resumable.mockReturnValue(new Promise(() => {}));
+    const controller = new AbortController();
+    const progress = vi.fn();
+    const result = downloadRemoteMediaShareTemp('https://example.com/clip.mp4', 'video/mp4', 'video.mp4', controller.signal, progress);
+    await vi.waitFor(() => expect(io.resumable).toHaveBeenCalledOnce());
+    io.progress({ totalBytesWritten: 42, totalBytesExpectedToWrite: 100 });
+    expect(progress).toHaveBeenCalledWith(42, 100);
+    controller.abort();
+    expect(await result).toBeNull();
+    io.progress({ totalBytesWritten: 60, totalBytesExpectedToWrite: 100 });
+    expect(progress).toHaveBeenCalledOnce();
+    expect(io.cancel).toHaveBeenCalled(); expect(io.deleteAsync).toHaveBeenCalled();
+  });
   it('reports an over-limit download after cancelling and cleaning its temporary file', async () => {
     io.resumable.mockReturnValue(new Promise(() => {}));
     const onTooLarge = vi.fn();
@@ -162,7 +190,7 @@ describe('bounded temporary media downloads', () => {
     expect(io.remove).not.toHaveBeenCalled();
     finish('dimensions and embedded bytes');
     expect(await result).toBe('dimensions and embedded bytes');
-    expect(io.remove).toHaveBeenCalledExactlyOnceWith(io.download.mock.calls[0]![1].uri);
+    expect(io.remove).toHaveBeenCalledExactlyOnceWith(io.resumable.mock.calls[0]![1]);
   });
 
   // Unit: large text fallback must stop a slow/oversized OSS download and clean
@@ -216,7 +244,7 @@ describe('bounded temporary media downloads', () => {
 
   it.each(['download', 'read'])('removes partial files after a %s failure', async (failure) => {
     const read = vi.fn(async () => { throw new Error('read failed'); });
-    if (failure === 'download') io.download.mockRejectedValueOnce(new Error('interrupted'));
+    if (failure === 'download') io.resumable.mockRejectedValueOnce(new Error('interrupted'));
     expect(await withDownloadedRemoteMediaFile('https://example.com/image', 'image/png', 8, read)).toBeNull();
     expect(io.remove).toHaveBeenCalledOnce();
   });
@@ -228,10 +256,29 @@ describe('bounded temporary media downloads', () => {
     expect(io.download).not.toHaveBeenCalled();
   });
 
-  it('preserves the existing inline-resource download contract', async () => {
+  it('preserves the existing inline-resource download contract and stops on cancel or oversize', async () => {
     expect(await downloadRemoteMediaAsDataUri('https://example.com/image', 'image/png', 8))
       .toBe('data:image/png;base64,aGVsbG8=');
     expect(io.remove).toHaveBeenCalledOnce();
+
+    // Signal aborts an in-flight downloadRemoteMediaAsDataUri fallback cleanly.
+    io.resumable.mockReturnValueOnce(new Promise(() => {}));
+    const abort = new AbortController();
+    const cancelled = downloadRemoteMediaAsDataUri('https://example.com/slow.gif', 'image/gif', 100, abort.signal);
+    await vi.waitFor(() => expect(io.resumable).toHaveBeenCalledTimes(2));
+    abort.abort();
+    expect(await cancelled).toBeNull();
+    expect(io.cancel).toHaveBeenCalled();
+    expect(io.deleteAsync).toHaveBeenCalled();
+
+    // Expected Content-Length over maxBytes aborts immediately before finishing download.
+    io.cancel.mockClear();
+    io.resumable.mockReturnValueOnce(new Promise(() => {}));
+    const oversize = downloadRemoteMediaAsDataUri('https://example.com/huge.gif', 'image/gif', 100);
+    await vi.waitFor(() => expect(io.resumable).toHaveBeenCalledTimes(3));
+    io.progress({ totalBytesWritten: 10, totalBytesExpectedToWrite: 500 });
+    expect(await oversize).toBeNull();
+    expect(io.cancel).toHaveBeenCalled();
   });
 });
 

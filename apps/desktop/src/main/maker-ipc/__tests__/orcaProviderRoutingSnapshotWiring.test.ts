@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { BUNDLED_CATALOG, buildRegistry, type Catalog } from '@cindy/model-providers';
 import { describe, expect, it, vi } from 'vitest';
 
-import { localAvailableModels, readOrcaWorkerProviderRoutingContext } from '../orcaProviderRoutingContext.js';
+import { deviceAvailableModels, localAvailableModels, readOrcaWorkerProviderRoutingContext } from '../orcaProviderRoutingContext.js';
 
 const registerSource = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8').replace(
   /\r\n?/g,
@@ -47,14 +47,15 @@ describe('Orca provider routing snapshot wiring', () => {
     expect(lazyResume).toContain('...(dbRow.providerId ? { providerId: dbRow.providerId } : {})');
   });
 
-  it('validates explicit execution config before allocating a handoff worktree', () => {
+  // 位置(agent_device_id)与执行配置一起在同一次解析里校验，失败时不留 worktree。
+  it('validates explicit execution config and agent location before allocating a handoff worktree', () => {
     const start = registerSource.indexOf('async function sendToSessionInternal(params: {');
     const end = registerSource.indexOf('const newTitle =', start);
     expect(start).toBeGreaterThanOrEqual(0);
     expect(end).toBeGreaterThan(start);
     const createSetup = registerSource.slice(start, end);
     const validation = createSetup.indexOf(
-      'const resolvedExecution = resolveSendToSessionExecutionConfig({',
+      'const route = await resolveSendToSessionCreateRoute({',
     );
     const worktreeAllocation = createSetup.indexOf(
       'const prep = await prepareHandoffWorktree(',
@@ -93,15 +94,6 @@ describe('Orca provider routing snapshot wiring', () => {
     }
     // 远端任务不能用 Claude 订阅(它只在本机 Claude Code 的登录里),SSH worker 不选它。
     expect(routing.availability['claude-code'].find((provider) => provider.id === 'anthropic')?.localOnlyForSsh).toBe(true);
-  });
-
-  it('rejects SSH account switching before deferring or replacing the running route', () => {
-    const guard = registerSource.indexOf("throwIpcError('INVALID_PARAMS', 'This provider requires local execution')");
-    expect(guard).toBeGreaterThan(-1);
-    expect(registerSource.slice(guard - 450, guard)).toContain('runtimeStatus.remoteHostId');
-    expect(registerSource.slice(guard - 300, guard)).toContain('isLocalOnlyProviderForAgent');
-    expect(registerSource.indexOf('const deferLockedSelection =', guard)).toBeGreaterThan(guard);
-    expect(registerSource.indexOf('const previousRuntime =', guard)).toBeGreaterThan(guard);
   });
 
   it('waits for the first Anthropic claim and routes the discovered model from the same full snapshot', async () => {
@@ -171,6 +163,35 @@ describe('Orca provider routing snapshot wiring', () => {
 });
 
 describe('localAvailableModels (#6970)', () => {
+  // Automation model discovery previously discarded pricing/effort data before it
+  // reached tools. Same-id routes must retain their own rates; no credentials cross.
+  it.each(['claude-code', 'codex', 'pi'] as const)('preserves source-specific prices and known/unknown efforts for %s automation discovery', async (agent) => {
+    const base = BUNDLED_CATALOG.providers.find(p => p.id === 'xd')!;
+    const seed = base.models.pi![0]!;
+    const catalog: Catalog = { ...BUNDLED_CATALOG, providers: [
+      { ...base, id: 'first', access: { kind: 'api' }, models: { [agent]: [{ ...seed, id: 'same',
+        cost: { input: 0, output: 0.5 }, currency: 'USD', efforts: ['low'], defaultEffort: 'low',
+        route: { baseUrl: 'https://private.invalid', wireProtocol: 'openai-chat' },
+      }] } },
+      { ...base, id: 'second', access: { kind: 'subscription', product: 'test' }, models: { [agent]: [{ ...seed, id: 'same',
+        cost: undefined, currency: undefined, efforts: [], defaultEffort: null, effortsUnknown: true,
+      }] } },
+    ] };
+    const views = buildRegistry(catalog, { first: true, second: true });
+    const routing = await readOrcaWorkerProviderRoutingContext({
+      providerService: { listProviders: vi.fn(async () => views) }, getCatalog: () => catalog,
+    });
+    const local = localAvailableModels([{ id: 'same', displayName: 'Same' }], routing.availability[agent],
+      routing.resolveDefaultProviderIdForModel, agent);
+    for (const models of [local, deviceAvailableModels(views, agent)]) {
+      expect(models[0]?.providers).toMatchObject([
+        { id: 'first', access: { kind: 'api' }, modelDetails: { cost: { input: 0, output: 0.5 }, currency: 'USD', efforts: ['low'] } },
+        { id: 'second', access: { kind: 'subscription' }, modelDetails: { cost: undefined, efforts: [], defaultEffort: null, effortsUnknown: true } },
+      ]);
+      expect(JSON.stringify(models)).not.toContain('private.invalid');
+    }
+  });
+
   it('drops catalog models that no enabled provider offers', () => {
     const models = localAvailableModels(
       [

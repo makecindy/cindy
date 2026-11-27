@@ -1,4 +1,10 @@
-import { readProviderPresentation } from './provider-presentation-store.js';
+import { listEvaluationModels } from '../cindy-evaluate/models.js';
+import { createXaiProviderTokenReader } from './xaiProviderToken.js';
+import { createCatalogCache } from './catalogCache.js';
+import { isModelContextLimitCustomized, readModelContextLimits } from './model-context-limit-store.js';
+import { requestCodexApiModelProbe } from './codex-api-model-capabilities.js';
+import { readModelPriceOverrideView } from '../usage/modelPriceOverrideStore.js';
+import { readProviderPresentation, readProviderConnectionIcons } from './provider-presentation-store.js';
 import { projectSubscriptionFastPolicy } from './subscription-fast-policy.js';
 import { filterLegacyGptContextProfiles } from './legacy-context-profiles.js';
 import { subscriptionAccountState, isXaiSubscriptionProviderId, resetSubscriptionAccountCaches } from './subscription-account-auth.js';
@@ -21,10 +27,23 @@ import { subscriptionAccountState, isXaiSubscriptionProviderId, resetSubscriptio
  */
 
 import { app, net } from 'electron';
-import { createHash, randomUUID } from 'node:crypto';
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 
+import { subscriptionProviderAccountKeys, hasConnectedSubscriptionPool, hasUnavailableSubscriptionPoolAccount, isSubscriptionPoolReadUnreachable, lastConfirmedSubscriptionModelsAt, refreshSubscriptionPool,
+  refreshSubscriptionPoolCodexModels,
+  refreshSubscriptionPoolClaudeModels,
+  resetDefaultSubscriptionCodexDiscovery } from '../subscription-accounts/runtime.js';
+import { readPool } from '../subscription-accounts/store.js';
+import {
+  accountProviderId,
+  readCreatedSubscriptionProviders,
+  readCreatedSubscriptionProvidersIfReadable,
+  readMergedProviderAccount,
+  restoreAutoMergedLegacyCodexAccounts,
+  resolveSubscriptionPoolProvider,
+} from '../subscription-accounts/placement.js';
+import { setMergedProviderPoolResolver } from './mergedProviderPool.js';
 import {
   BUNDLED_CATALOG,
   compareModelRegistryRevisions,
@@ -44,7 +63,13 @@ import {
 } from '@cindy/model-providers';
 
 import { createLogger } from '../logger.js';
-import { codexAccountState } from './codex-account-auth.js';
+import { codexAccountState, codexAccountHome } from './codex-account-auth.desktop.js';
+import { codexAccountDisplayKey } from './codex-auth-identity.js';
+import { readNativeCodexTokens } from '../subscription-accounts/nativeCli.js';
+import { getCodexHome } from './codex-home-path.js';
+import { publishSubscriptionPoolProviders as publishSubscriptionPoolProvidersWith } from './subscriptionPoolCatalog.js';
+import { getDesktopProviderModelAccessCatalog, projectDesktopSubscriptionPoolCatalog as projectSubscriptionPoolCatalog } from './subscriptionPoolCatalog.desktop.js';
+import { setGuestProviderModelCatalogReader } from './guest-provider-route-store.js';
 import { listReadyProviderMediaModels } from '../cindy-media/providerMediaRuntime.js';
 import { speechModels } from '../voice-conversation/models.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
@@ -67,6 +92,7 @@ import {
   setCustomProviders,
   setDiscoveredCodexModels,
   setLocalCatalogOverrides,
+  setSubscriptionPoolProviders,
 } from './active-catalog.js';
 import { readModelCatalogOverrides } from './model-catalog-override-store.js';
 import {
@@ -85,7 +111,7 @@ import {
   refreshXaiModelsFromHttp,
 } from './model-discovery/xai.js';
 import { createProviderService, type ProviderService } from './provider-service.js';
-import { readModelDisableOverrides } from './model-disable-store.js';
+import { readModelDisableOverrides, setProviderDisabled } from './model-disable-store.js';
 import { listCustomProvidersWithSecureHeaders } from './custom-provider-header-secrets.js';
 import { updateCustomProviderIfUnchanged } from './custom-provider-store.js';
 import { migrateManagedOllamaProvider } from '../local-model-runtime/managedOllamaProvider.js';
@@ -102,9 +128,9 @@ import { setDiagnosticsKeyReader, setDiagnosticsOAuthTokenReader } from './provi
 import {
   configureGenericOAuth,
   hasGenericOAuthLogin,
-  readCachedGenericOAuthAccessToken,
+  readGenericOAuthAccessToken,
   resetGenericOAuthMemoryCache,
-} from './generic-oauth.js';
+} from './generic-oauth.desktop.js';
 import {
   genericOAuthSecretIo,
   addProviderSecretsClearedListener,
@@ -117,22 +143,23 @@ import {
 } from '../secrets/providerSecretStore.js';
 import { hasClaudeNativeLogin, hasClaudeNativeLoginUnbound } from './claude-native-auth.js';
 import { readClaudeNativeLogin } from './claude-native-connection.js';
-import { readClaudeCliLoginStatus } from './claude-native-cli.js';
+import { readClaudeCliLoginStatus } from './claude-native-cli.desktop.js';
 import {
   getGrokAccessToken,
   hasGrokOAuthLogin,
   grokAccountIdentity,
   recoverGrokAuthAfterRejection,
   resetGrokOAuthMemoryCache,
-} from './grok-oauth-login.js';
+} from './grok-oauth-login.desktop.js';
 import {
   notifyOpenAiMediaCredentialChanged,
   refreshOpenAiMediaModels,
 } from './model-discovery/openai-media.js';
 import { clearXaiMediaModels } from './model-discovery/xai-media.js';
+import { organizationProviderLogoKind } from '../organizationProviderLogo.js';
 import { getAuthState } from '../authManager.js';
-import { getCindyAiProviderName } from '../cindyAiProviderName.js';
-import { getActiveAppSession } from '../appSessionState.js';
+import { getCindyAiProviderName, getCindyAiProviderLogoKind } from '../cindyAiProviderName.js';
+import { getActiveAppSession, activeOwnerScopeKey } from '../appSessionState.js';
 import { filterProviderCatalogForAccount } from './provider-access-policy.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import {
@@ -143,7 +170,7 @@ import {
   migrateLegacyNativeProviderAuthBindings,
 } from './nativeProviderAuthBinding.js';
 import { hasLegacyOwnerNamespaceClaim } from '../ownerNamespaceMigration.js';
-import { broadcastReferenceModelPricing } from '../usage/referenceModelPricing.js';
+import { broadcastReferenceModelPricing, setReferencePricingDisplayProviders } from '../usage/referenceModelPricing.js';
 
 const log = createLogger('provider-service');
 
@@ -199,157 +226,7 @@ function fetchText(url: string, timeoutMs: number): Promise<string> {
   });
 }
 
-const CATALOG_LKG_VERSION = 2;
-
-interface CatalogLkgEnvelope {
-  version: typeof CATALOG_LKG_VERSION;
-  scopeHash: string;
-  catalog: string;
-}
-
-interface CatalogLkgFileIo {
-  rename(from: string, to: string): Promise<void>;
-  rm(target: string, options: { force: boolean }): Promise<void>;
-}
-
-const catalogLkgWriteTails = new Map<string, Promise<void>>();
-
-function catalogScopeHash(scope: string): string {
-  return createHash('sha256').update(scope).digest('hex');
-}
-
-function catalogLkgPath(scope: string): string {
-  return path.join(
-    app.getPath('userData'),
-    'cache',
-    'model-catalog',
-    `${catalogScopeHash(scope).slice(0, 24)}.json`,
-  );
-}
-
-function catalogLkgEnvelope(scope: string, catalog: string): CatalogLkgEnvelope {
-  return {
-    version: CATALOG_LKG_VERSION,
-    scopeHash: catalogScopeHash(scope),
-    catalog,
-  };
-}
-
-async function readCatalogLkg(scope: string): Promise<string | null> {
-  const file = catalogLkgPath(scope);
-  for (const candidate of [file, `${file}.bak`]) {
-    try {
-      const envelope = JSON.parse(
-        await fsp.readFile(candidate, 'utf8'),
-      ) as Partial<CatalogLkgEnvelope>;
-      return envelope.version === CATALOG_LKG_VERSION &&
-        envelope.scopeHash === catalogScopeHash(scope) &&
-        typeof envelope.catalog === 'string'
-        ? envelope.catalog
-        : null;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
-      throw err;
-    }
-  }
-  return null;
-}
-
-/**
- * Replace an existing LKG without depending on POSIX rename-overwrite semantics. Windows may
- * reject that operation while the destination exists, so preserve the prior snapshot until the
- * new file is in place and restore it if the second rename fails.
- */
-async function replaceCatalogLkgFile(
-  temporary: string,
-  file: string,
-  fileIo: CatalogLkgFileIo = fsp,
-): Promise<void> {
-  try {
-    await fileIo.rename(temporary, file);
-    await fileIo.rm(`${file}.bak`, { force: true }).catch(() => undefined);
-    return;
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code !== 'EPERM' && code !== 'EACCES' && code !== 'EBUSY' && code !== 'EEXIST') throw err;
-  }
-
-  const backup = `${file}.bak`;
-  await fileIo.rm(backup, { force: true }).catch(() => undefined);
-  let preservedExisting = false;
-  try {
-    await fileIo.rename(file, backup);
-    preservedExisting = true;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-  }
-  try {
-    await fileIo.rename(temporary, file);
-  } catch (err) {
-    if (preservedExisting) {
-      await fileIo.rename(backup, file).catch(() => undefined);
-    }
-    throw err;
-  }
-  if (preservedExisting) {
-    await fileIo.rm(backup, { force: true }).catch(() => undefined);
-  }
-}
-
-function catalogLkgTemporaryPath(file: string, nonce = randomUUID()): string {
-  return `${file}.${process.pid}.${nonce}.tmp`;
-}
-
-/** Serialize the complete replace transaction per scope while leaving different scopes parallel. */
-async function serializeCatalogLkgWrite<T>(file: string, write: () => Promise<T>): Promise<T> {
-  const previous = catalogLkgWriteTails.get(file) ?? Promise.resolve();
-  const current = previous.catch(() => undefined).then(write);
-  const tail = current.then(
-    () => undefined,
-    () => undefined,
-  );
-  catalogLkgWriteTails.set(file, tail);
-  try {
-    return await current;
-  } finally {
-    if (catalogLkgWriteTails.get(file) === tail) catalogLkgWriteTails.delete(file);
-  }
-}
-
-function selectCatalogLkgSnapshot(incoming: string, current: string | null): string {
-  if (current === null) return incoming;
-  try {
-    const incomingRegistry = parseCatalog(incoming).modelRegistry;
-    const currentRegistry = parseCatalog(current).modelRegistry;
-    const decision = decideModelRegistrySnapshot(incomingRegistry, currentRegistry);
-    if (decision !== 'accept-incoming') {
-      // Registry 缺失、revision 回退或同 revision 异内容都不能覆盖磁盘 LKG；否则
-      // 下一次启动已经失去可对照的 last-good，source 层的守卫也无法再救回旧快照。
-      return current;
-    }
-  } catch {
-    // An invalid current envelope payload is not an LKG; replace it with the already-validated input.
-  }
-  return incoming;
-}
-
-async function writeCatalogLkg(scope: string, catalog: string): Promise<string> {
-  const file = catalogLkgPath(scope);
-  return serializeCatalogLkgWrite(file, async () => {
-    const selected = selectCatalogLkgSnapshot(catalog, await readCatalogLkg(scope));
-    if (selected !== catalog) return selected;
-    const temporary = catalogLkgTemporaryPath(file);
-    await fsp.mkdir(path.dirname(file), { recursive: true });
-    const envelope = catalogLkgEnvelope(scope, selected);
-    await fsp.writeFile(temporary, JSON.stringify(envelope), 'utf8');
-    try {
-      await replaceCatalogLkgFile(temporary, file);
-    } finally {
-      await fsp.rm(temporary, { force: true }).catch(() => undefined);
-    }
-    return selected;
-  });
-}
+const { catalogLkgEnvelope, catalogLkgPath, catalogLkgTemporaryPath, readCatalogLkg, replaceCatalogLkgFile, selectCatalogLkgSnapshot, serializeCatalogLkgWrite, writeCatalogLkg } = createCatalogCache(() => app.getPath('userData'));
 
 /** 桌面端 CatalogIO —— net + fs + 按端点隔离的 last-known-good 快照。 */
 const io: CatalogIO = {
@@ -427,25 +304,10 @@ let endpointReloadInflight: {
   promise: Promise<Catalog>;
 } | null = null;
 
-async function readXaiProviderOAuthToken(
-  options?: ProviderOAuthTokenReadOptions,
-  providerId = 'xai',
-): Promise<string | null> {
-  if (!options?.forceRefresh) return getGrokAccessToken(providerId);
-
-  // A forced retry must stay bound to the exact bearer rejected upstream. Without that
-  // baseline we cannot safely decide which account generation to refresh.
-  const staleToken = options.staleToken;
-  if (!staleToken) return null;
-
-  const outcome = await recoverGrokAuthAfterRejection(staleToken, providerId);
-  if (outcome !== 'refreshed' && outcome !== 'superseded') return null;
-
-  // `superseded` means another request/login already replaced the rejected credential.
-  // Return that newer token, but never replay the bearer which caused the 401/403.
-  const token = await getGrokAccessToken(providerId);
-  return token !== staleToken ? token : null;
-}
+const readXaiProviderOAuthToken = createXaiProviderTokenReader({
+  getGrokAccessToken: (...args) => getGrokAccessToken(...args),
+  recoverGrokAuthAfterRejection: (...args) => recoverGrokAuthAfterRejection(...args),
+});
 
 /** Set 用稳定函数引用去重，ensureActiveCatalogLoaded 的幂等调用不会重复注册清理副作用。 */
 function handleProviderSecretsCleared(): void {
@@ -460,7 +322,7 @@ function handleProviderSecretsCleared(): void {
 
 /**
  * 启动期（splash）await 一次：加载远端目录写入 active-catalog。幂等 + 并发去重。
- * loadCatalog 永不抛（最差回落 bundled），故本函数也不会抛。
+ * loadCatalog 永不抛（最差回落 bundled），加载后的 Claude 账号池预热失败也只记日志，故本函数也不会抛。
  * 调用点：bootstrap-electron 的 registerMakerIpcsAfterSplash，第一次 getMaker() 构造之前。
  */
 export function ensureActiveCatalogLoaded(): Promise<Catalog> {
@@ -477,7 +339,7 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
   // 测试连接探测与路由同源读 key（同 setter 模式，见 provider-diagnostics.ts）。
   setDiagnosticsKeyReader(readCustomProviderKey);
   // 通用 OAuth Runner 接线（idempotent）：safeStorage blob IO + 系统浏览器拉起;
-  // 路由热路径的同步 token 读取（描述符现查目录,临期后台单飞刷新,不阻塞路由）。
+  // 路由与连接测试共用异步 reader，必要时先完成刷新。
   configureGenericOAuth({
     storage: genericOAuthSecretIo,
     openExternal: async (url) => {
@@ -488,11 +350,11 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
   // 账号切换清空本机密钥后,同步失效 generic-oauth 的内存缓存——
   // 不失效的话磁盘 blob 已删但缓存还热,B 账号会继续用 A 的 token 路由(串号)。
   addProviderSecretsClearedListener(handleProviderSecretsCleared);
-  const readOAuthToken = (providerId: string): string | null => {
+  const readOAuthToken = (providerId: string): Promise<string | null> => {
     const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
     const storageProviderId =
       provider?.source === 'user' ? storedCustomProviderId(providerId) : providerId;
-    return readCachedGenericOAuthAccessToken(storageProviderId, provider?.auth.oauth);
+    return readGenericOAuthAccessToken(storageProviderId, provider?.auth.oauth);
   };
   setOAuthTokenReader(readOAuthToken);
   setDiagnosticsOAuthTokenReader(readOAuthToken);
@@ -514,7 +376,7 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
     return Promise.resolve(activeCatalog);
   }
   if (!activeInflight) {
-    const source = buildSource();
+    const source = { ...buildSource(), remoteBudgetMs: 2_500 };
     const sourceKey = catalogSourceKey(source);
     // 首次加载时顺手清掉旧版磁盘缓存孤儿（fire-and-forget，每进程一次）。
     void cleanupLegacyCatalogCache();
@@ -549,7 +411,15 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
         // 让首次 maker 构建的 availableModels 派生就包含它。gate 读的是 CLI 登录态:只有
         // 已连接 Claude 订阅的用户才等一次 `claude auth status`(约 0.1–0.3s),其余用户的
         // 启动不等 CLI 进程(未绑定时缓存加载本就早退)。此后由会话 init 的 SDK 捕获刷新。
-        if (isNativeProviderAuthBound('anthropic')) {
+        // 账号池读取只是预热:启动时账号边界(未登录 → 已登录)尚未提交完会让它抛
+        // `Subscription account owner changed`。splash 的 check-environment 会 await 本函数,
+        // 抛出就把启动打成「环境初始化失败」;这里只记日志,之后的 provider 读取按新 owner 重读。
+        if (readPool('anthropic')) {
+          await refreshSubscriptionPool('anthropic').catch((err: unknown) => {
+            log.warn('Claude subscription pool warm-up skipped during catalog load', { error: String(err) });
+          });
+        }
+        if (isNativeProviderAuthBound('anthropic') || hasConnectedSubscriptionPool('anthropic')) {
           await readClaudeCliLoginStatus();
           await loadAnthropicModelsFromDiskCache();
         }
@@ -772,6 +642,8 @@ export async function refreshDiscoveredCodexModels(
   authenticated = true,
   shouldApply: () => boolean = () => true,
 ): Promise<void> {
+  if (!shouldApply()) return;
+  resetDefaultSubscriptionCodexDiscovery(authenticated);
   if (!authenticated) {
     if (shouldApply()) setDiscoveredCodexModels([]);
     return;
@@ -794,6 +666,12 @@ export async function refreshDiscoveredCodexModels(
 // the in-memory routing catalog until the next full app restart.
 let customProviderCatalogRefreshGeneration = 0;
 
+let upgradeSplitRepair: (() => Promise<void>) | null = null;
+/** Installed by subscription-accounts/upgradeSplitRepair.desktop.ts (window process only; Host never writes). */
+export function setUpgradeSplitRepair(repair: (() => Promise<void>) | null): void {
+  upgradeSplitRepair = repair;
+}
+
 export async function refreshCustomProvidersIntoCatalog(
   shouldApply: () => boolean = () => true,
 ): Promise<void> {
@@ -802,8 +680,9 @@ export async function refreshCustomProvidersIntoCatalog(
     return;
   }
   const generation = ++customProviderCatalogRefreshGeneration;
+  const owner = activeOwnerScopeKey();
   const isCurrent = (): boolean =>
-    generation === customProviderCatalogRefreshGeneration && shouldApply();
+    generation === customProviderCatalogRefreshGeneration && owner === activeOwnerScopeKey() && shouldApply();
   try {
     const configs = await listCustomProvidersWithSecureHeaders();
     if (!isCurrent()) {
@@ -844,10 +723,36 @@ export async function refreshCustomProvidersIntoCatalog(
         return;
       }
       setCustomProviderConfigs(fresh);
+      requestCodexApiModelProbe();
       log.info('custom providers merged into active catalog after cas miss', { count: fresh.length });
       return;
     }
     setCustomProviderConfigs(next);
+    // Publish old routes first. Accounts are never merged automatically any more (2026-11-13,
+    // subscription-account-pools.md 合并与拿出由用户决定); connections the 11-11 upgrade folded into
+    // OpenAI belong to their own connection again, keeping their account, login and task bindings.
+    try {
+      await restoreAutoMergedLegacyCodexAccounts(
+        new Set(next.filter(config => config.auth?.method === 'oauth' && config.auth.native === 'codex')
+          .map(config => config.id)),
+        {
+          disable: providerId => setProviderDisabled(providerId, true),
+          isDisabled: providerId => readModelDisableOverrides().disabledProviders?.[providerId] === true,
+          isCurrent,
+        },
+      );
+    } catch {
+      // The merged view stays as it was; the next refresh retries.
+      log.warn('restoring pooled subscription accounts did not complete');
+    }
+    // Old pooled accounts stay in their built-in provider (2026-11-18, subscription-account-pools.md
+    // 升级不再自动拆分). Where the 0.1.137–0.1.139 split left the built-in provider without a usable
+    // account, the desktop wiring merges the untouched split provider back. Not awaited: a merge
+    // reads account snapshots, which must not hold up provider readiness; it never rejects.
+    if (isCurrent()) void upgradeSplitRepair?.();
+    if (!isCurrent()) return;
+    publishSubscriptionPoolProviders();
+    requestCodexApiModelProbe();
     log.info('custom providers merged into active catalog', { count: next.length });
   } catch (err) {
     if (!isCurrent()) {
@@ -981,13 +886,55 @@ let singleton: ProviderService | null = null;
  * Cindy account session keeps the full active catalog.
  */
 export function getDesktopSelectableCatalog(): Catalog {
-  return filterProviderCatalogForAccount(filterLegacyGptContextProfiles(getActiveCatalog()), {
+  return filterLegacyGptContextProfiles(projectSubscriptionPoolCatalog(getDesktopSelectableBaseCatalog()));
+}
+
+function getDesktopSelectableBaseCatalog(): Catalog {
+  return filterProviderCatalogForAccount(getActiveCatalog(), {
     canUseCindyGateway: getAppCapabilities().canUseCindyGateway,
   });
 }
 
+/**
+ * Publish the providers Cindy created for this owner's subscription accounts into the catalog
+ * (subscription-account-pools.md 合并与拿出由用户决定). Hidden ones (merged away, no accounts left)
+ * stay in the catalog so old tasks keep resolving; the provider view marks them as merged.
+ */
+export function publishSubscriptionPoolProviders(): void {
+  publishSubscriptionPoolProvidersWith({ readCreatedSubscriptionProvidersIfReadable, setSubscriptionPoolProviders, log });
+}
+
+/**
+ * Read the built-in subscription together with created and legacy targets of its kind.
+ * Their connection state comes from these reads; reading only the built-in left a created provider
+ * "not connected" (missing from the model picker) until its settings page was opened.
+ */
+async function refreshSubscriptionPoolsOfKind(kind: 'openai' | 'anthropic'): Promise<void> {
+  let created: string[] = [];
+  try {
+    created = Object.entries(readCreatedSubscriptionProviders())
+      .filter(([, entry]) => entry.kind === kind).map(([id]) => id);
+  } catch {
+    // Unreadable files return an empty list; thrown reads also skip created providers this round.
+  }
+  await refreshSubscriptionPool(kind);
+  const legacy = kind === 'openai' ? Object.keys(readPool(kind)?.legacyCodexAccounts ?? {}) : [];
+  await Promise.all([...new Set([...created, ...legacy])].map((id) => refreshSubscriptionPool(id).catch(() => undefined)));
+}
+
+// Reference prices shown beside models follow the same account-aware membership as the lists.
+setReferencePricingDisplayProviders(() => getDesktopProviderModelAccessCatalog().providers);
+
+// A connection merged into an account pool follows the pool's 「允许被远程调用」 (it has no switch on screen).
+setMergedProviderPoolResolver((providerId) => {
+  const merged = readMergedProviderAccount(providerId);
+  const ref = merged ? resolveSubscriptionPoolProvider(providerId) : null;
+  return ref && merged ? accountProviderId(ref.kind, merged) : undefined;
+});
+
 /** 进程内单例：注入 active-catalog（同步读）+ 实时连接状态读取器。 */
 export function getDesktopProviderService(options: { allowSideEffects?: boolean } = {}): ProviderService {
+  setGuestProviderModelCatalogReader(getDesktopProviderModelAccessCatalog);
   const authState = getAuthState();
   const ownerId = getActiveAppSession().dataOwnerId;
   if (
@@ -1007,7 +954,29 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
   }
   if (singleton) return singleton;
   singleton = createProviderService({
-    projectProvider: projectSubscriptionFastPolicy,
+    getModelContextLimits: readModelContextLimits,
+    projectProvider: provider => {
+      const accountKeys = subscriptionProviderAccountKeys(provider.id)
+        ?? (provider.connected && provider.openAiAccount?.accountKey ? [provider.openAiAccount.accountKey] : undefined);
+      const projected = { ...projectSubscriptionFastPolicy(provider),
+        ...(accountKeys ? { subscriptionAccountKeys: accountKeys } : {}) };
+      // Only a provider whose own account belongs to another provider (and that has no accounts
+      // left) is hidden behind it: a merged legacy connection or a merged created provider.
+      const mergedAccount = readMergedProviderAccount(provider.id);
+      if (mergedAccount) {
+        const ref = resolveSubscriptionPoolProvider(provider.id);
+        return { ...projected, subscriptionPoolAlias: true,
+          ...(ref ? { subscriptionPoolTarget: accountProviderId(ref.kind, mergedAccount) } : {}) };
+      }
+      // Clients manage this provider's accounts through the account pool (2026-11-13).
+      const pool = resolveSubscriptionPoolProvider(provider.id);
+      return pool && readPool(pool.kind) ? { ...projected, subscriptionAccountPool: pool.kind } : projected;
+    },
+    getProviderConnectionIcons: readProviderConnectionIcons,
+    getOrganizationProviderLogoKind: (provider) => {
+      const state = getAuthState();
+      return organizationProviderLogoKind(provider, state.mode === 'cloud' ? state.user : null);
+    },
     getProviderPresentation: (providerId) => {
       const presentation = readProviderPresentation(providerId);
       if (providerId !== 'xd') return presentation;
@@ -1015,14 +984,40 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
       return {
         ...presentation,
         name: getCindyAiProviderName(),
+        logoKind: getCindyAiProviderLogoKind(),
       };
     },
-    getCatalog: getDesktopSelectableCatalog,
+    getCatalog: getDesktopSelectableBaseCatalog,
+    refreshPickerPools: async providers => {
+      await Promise.all(providers.map(async provider => {
+        const pool = resolveSubscriptionPoolProvider(provider.id);
+        if (!pool || !readPool(pool.kind)) return;
+        if (provider.id === pool.kind) await refreshSubscriptionPool(provider.id);
+        else await refreshSubscriptionPool(provider.id).catch(() => undefined);
+        if (pool.kind === 'openai') await refreshSubscriptionPoolCodexModels(false, provider.id);
+        else void refreshSubscriptionPoolClaudeModels(false, provider.id).catch(() => log.warn('Background Claude model discovery unavailable'));
+      }));
+    },
+    projectCatalog: (catalog, routingCatalog, include, includeLastConfirmed) => {
+      const projected = projectSubscriptionPoolCatalog(catalog, routingCatalog, include, includeLastConfirmed);
+      return routingCatalog ? projected : filterLegacyGptContextProfiles(projected);
+    },
     connection: {
       xd: () => getAppCapabilities().canUseCindyGateway && readClaudeApiKey() != null,
       // Claude/Codex 是原生 Harness，可继承本机 CLI 凭证；xAI 是下游 provider，
       // 只能读取已经由 Cindy OAuth 明确绑定的 token，禁止在连接态读取时自动认领。
-      anthropic: async ({ allowSideEffects, waitForDiscovery, snapshotOnly }) => {
+      anthropic: async ({ allowSideEffects, waitForDiscovery, snapshotOnly, includeBoundAccounts, pickerPoolsReady }) => {
+        if (readPool('anthropic')) {
+          if (!snapshotOnly && !pickerPoolsReady) {
+            await refreshSubscriptionPoolsOfKind('anthropic');
+            const discovery = refreshSubscriptionPoolClaudeModels();
+            // Ordinary provider reads also serve Codex/API/remote tasks. Do not make
+            // them wait for Claude's SDK subprocess; explicit discovery may wait.
+            if (waitForDiscovery) await discovery;
+            else void discovery.catch(() => log.warn('Background Claude model discovery unavailable'));
+          }
+          return hasConnectedSubscriptionPool('anthropic', { includeBoundAccounts });
+        }
         if (snapshotOnly) return hasClaudeNativeLogin();
         // 自愈会写绑定文件、读凭证作用域缓存并发起带凭证的上游请求。listProviders 这条通道
         // 同时服务 device-link 与可能不受信的渲染上下文,所以副作用只在本机主页面发起时
@@ -1054,10 +1049,17 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
       // hasCodexOAuthLogin() 经 getAccessToken 触发 reconcileWithSystemCodex,它会把本机 CLI
       // 凭证硬链进 codex-home 并为首个 owner 补写绑定 —— 判据不是「有没有发上游请求」,而是
       // 「不受信 sender 能不能引发特权状态变更」,建硬链和写绑定都在其内(PR #548 review)。
-      openai: ({ allowSideEffects }) =>
-        allowSideEffects
-          ? desktopCodexAuthAdapter.hasCodexOAuthLogin()
-          : desktopCodexAuthAdapter.hasCodexOAuthLoginReadOnly(),
+      openai: async ({ allowSideEffects, snapshotOnly, includeBoundAccounts, pickerPoolsReady }) => {
+        if (readPool('openai')) {
+          if (!snapshotOnly && !pickerPoolsReady) {
+            // Created providers of the kind are read with it (their connection state comes from it).
+            await refreshSubscriptionPoolsOfKind('openai');
+            await refreshSubscriptionPoolCodexModels();
+          }
+          return hasConnectedSubscriptionPool('openai', { includeBoundAccounts });
+        }
+        return allowSideEffects ? desktopCodexAuthAdapter.hasCodexOAuthLogin() : desktopCodexAuthAdapter.hasCodexOAuthLoginReadOnly();
+      },
       // xAI is a downstream provider, not a native Harness. Its connection state
       // only reflects a Cindy OAuth binding (or the explicit legacy migration above);
       // reading the provider list must never auto-claim an arbitrary local token.
@@ -1065,8 +1067,15 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
     },
     // 通用 OAuth 供应商（目录 auth.oauth 描述符驱动）：连接态 = 本机凭证 blob 是否存在。
     genericOAuthConnected: (providerId) => hasGenericOAuthLogin(storedCustomProviderId(providerId)),
-    codexAccountConnected: (providerId) => codexAccountState(providerId).authenticated,
+    codexAccountConnected: (providerId, options) => resolveSubscriptionPoolProvider(providerId)
+      ? hasConnectedSubscriptionPool(providerId, options) : codexAccountState(providerId).authenticated,
+    subscriptionPoolConnected: hasConnectedSubscriptionPool,
     subscriptionAccountConnected: (providerId) => subscriptionAccountState(providerId).authenticated,
+    subscriptionModelsConfirmedAt: lastConfirmedSubscriptionModelsAt,
+    subscriptionReadUnavailable: (providerId) => !!resolveSubscriptionPoolProvider(providerId)
+      && hasUnavailableSubscriptionPoolAccount(providerId),
+    subscriptionReadUnreachable: (providerId) => !!resolveSubscriptionPoolProvider(providerId)
+      && isSubscriptionPoolReadUnreachable(providerId),
     subscriptionAccountInfo: async (providerId) => {
       if (providerId === 'anthropic') {
         const login = await readClaudeNativeLogin();
@@ -1087,10 +1096,20 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
     },
     openAiAccountInfo: async (providerId) => {
       const state = providerId === 'openai' ? await desktopCodexAuthAdapter.readAccountPresentationState() : codexAccountState(providerId);
+      let accountKey: string | undefined;
+      // Native logins can predate account pools. Read their existing authorized profile;
+      // do not create a pool or adopt a CLI login just to simplify its display.
+      if (state.authenticated && state.identity && (!readPool('openai') || !resolveSubscriptionPoolProvider(providerId))) {
+        try {
+          const native = await readNativeCodexTokens(providerId === 'openai' ? getCodexHome() : codexAccountHome(providerId));
+          if (native.canDispatch()) accountKey = codexAccountDisplayKey(state.identity, native.chatgptAccountId);
+        } catch { /* Unknown workspace identity keeps the sources separate. */ }
+      }
       return {
         source: providerId !== 'openai' ? 'oauth' : state.credentialScope === 'system-shared'
           ? 'local' : state.credentialScope === 'instance-isolated' ? 'oauth' : 'unknown',
         ...(state.identity ? { identity: state.identity } : {}),
+        ...(accountKey ? { accountKey } : {}),
         reconnectRequired: !state.authenticated && !!state.errorReason,
       };
     },
@@ -1100,6 +1119,8 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
     customApiKeyConnected: (provider) =>
       hasCustomProviderCredential(provider, readCustomProviderKey),
     getAvailableMediaModels: () => [
+      // Settings must keep hidden models ready so their switch can turn them back on.
+      ...[...listEvaluationModels('decisions', { includeHidden: true }), ...listEvaluationModels('rerank', { includeHidden: true })].map(model => ({ providerId: model.provider_id, id: model.id })),
       ...listReadyProviderMediaModels(),
       // Keep hidden, admitted TTS routes manageable. This is the same catalog/key
       // policy as companion voice; list visibility never grants execution access.
@@ -1137,6 +1158,9 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
     // 「模型 / 供应商停用」override:main 侧持久化真源,烘焙进 ProviderView 后
     // renderer / IM / Orca / device-link 全部消费同一份准入事实。
     getModelAccess: readModelDisableOverrides,
+    hasModelAliasOverride: (providerId, agent, modelId) =>
+      isModelContextLimitCustomized(agent, providerId, modelId) ||
+      readModelPriceOverrideView({ providerId, agent, modelId }, getActiveCatalog().modelRegistry).override !== null,
   });
   return singleton;
 }
@@ -1151,4 +1175,9 @@ export const __testing = {
   selectCatalogLkgSnapshot,
   serializeCatalogLkgWrite,
   writeCatalogLkg,
+  /** Return to the state of a fresh app start, so the next ensureActiveCatalogLoaded runs the startup load again. */
+  resetStartupCatalogLoad: (): void => {
+    activeLoaded = false;
+    activeInflight = null;
+  },
 };

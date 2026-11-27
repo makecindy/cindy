@@ -56,12 +56,84 @@ it('does not create a late session after the authenticated owner was suspended d
   expect(fake.commands).toHaveLength(0);
 });
 
-it('releases active paths after a renderer crash and bounds automatic process restarts', async () => {
-  vi.useFakeTimers();
+// Capacity regression, unit tier: the lazy Desktop adapter must expose one shared
+// pool and claim a released slot synchronously when an admission callback runs.
+// The shared-package bridge tests cannot catch a wrapper dropping those hooks.
+it('uses the desktop budget and synchronously claims a released native slot', async () => {
+  const before = fake.starts, sessions = [];
+  let replacement: ReturnType<typeof desktopDirectRuntime.create> | undefined;
+  let opening: Promise<string> | undefined;
+  let cancel: (() => void) | undefined;
+  try {
+    for (let i = 0; i < 64; i++) {
+      const session = desktopDirectRuntime.create(`capacity-${i}`, events(), { kind: i < 8 ? 'device' : 'share' });
+      sessions.push(session); await session.offer();
+    }
+    expect(fake.starts).toBe(before + 1);
+    expect(() => desktopDirectRuntime.create('overflow', events(), { kind: 'share' })).toThrow('DIRECT_CAPACITY_FULL');
+    cancel = desktopDirectRuntime.capacity!.wait('share', () => {
+      replacement = desktopDirectRuntime.create('replacement', events(), { kind: 'share' });
+      opening = replacement.offer();
+    });
+    sessions[8].close();
+    await Promise.resolve();
+    expect(desktopDirectRuntime.capacity!.snapshot()).toMatchObject({ active: 64, queued: 0 });
+    await expect(opening).resolves.toBe('fixture-sdp');
+  } finally { cancel?.(); replacement?.close(); sessions.forEach(session => session.close()); }
+});
+
+// Regression: two transient renderer failures must not disable every peer's direct
+// path until the app restarts. The bridge tests do not cover this native startup
+// gate. Fake time covers cooldown, shared startup and healthy recovery in unit tier.
+it('bounds crash-loop restarts but lets authorized demand recover after a cooldown', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'performance'] });
   const observer = events(), session = desktopDirectRuntime.create('one', observer);
   await session.offer();
   fake.failed!(); expect(observer.closed).toHaveBeenCalledOnce();
   const second = desktopDirectRuntime.create('two', events()); await second.offer();
   fake.failed!();
+  const before = fake.starts;
+  const stale = desktopDirectRuntime.create('stale', events());
+  const cancelled = desktopDirectRuntime.create('cancelled', events());
+  cancelled.close();
+  desktopDirectRuntime.suspend?.();
   await expect(desktopDirectRuntime.create('three', events()).offer()).rejects.toThrow('UNAVAILABLE');
+  vi.setSystemTime(Date.now() - 60 * 60_000); // Clock correction cannot prolong an elapsed cooldown.
+  await vi.advanceTimersByTimeAsync(60_000);
+  await expect(stale.offer()).rejects.toThrow('CLOSED');
+  await expect(cancelled.offer()).rejects.toThrow('CLOSED');
+  expect(fake.starts).toBe(before); // Cooling down never launches a process by itself.
+  await Promise.all([
+    desktopDirectRuntime.create('recovered-a', events()).offer(),
+    desktopDirectRuntime.create('recovered-b', events()).offer(),
+  ]);
+  expect(fake.starts).toBe(before + 1);
+
+  // A third rapid crash extends the shared cooldown instead of starting a loop.
+  fake.failed!();
+  await vi.advanceTimersByTimeAsync(60_000);
+  await expect(desktopDirectRuntime.create('still-cooling', events()).offer()).rejects.toThrow('UNAVAILABLE');
+  expect(fake.starts).toBe(before + 1);
+  await vi.advanceTimersByTimeAsync(60_000);
+  await desktopDirectRuntime.create('stable', events()).offer();
+  expect(fake.starts).toBe(before + 2);
+
+  // Continued failures back off to a bounded five minutes, not permanent denial.
+  for (const cooldownMs of [240_000, 300_000, 300_000]) {
+    fake.failed!();
+    const attempts = fake.starts;
+    await vi.advanceTimersByTimeAsync(cooldownMs - 1);
+    await expect(desktopDirectRuntime.create('before-deadline', events()).offer()).rejects.toThrow('UNAVAILABLE');
+    expect(fake.starts).toBe(attempts);
+    await vi.advanceTimersByTimeAsync(1);
+    await desktopDirectRuntime.create(`after-${cooldownMs}`, events()).offer();
+    expect(fake.starts).toBe(attempts + 1);
+  }
+
+  // A healthy process clears old failures; a later isolated crash gets its retry.
+  const stableStarts = fake.starts;
+  await vi.advanceTimersByTimeAsync(60_000);
+  fake.failed!();
+  await desktopDirectRuntime.create('fresh-retry', events()).offer();
+  expect(fake.starts).toBe(stableStarts + 1);
 });

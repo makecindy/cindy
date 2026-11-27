@@ -342,6 +342,23 @@ describe('Auto-review wiring: native first, Cindy fallback', () => {
     await handle.close();
   });
 
+  // Review P1 (#12128): teammate channel lanes now load user/project settings, whose permissions.allow
+  // rules skip canUseTool in every mode. A non-owner call the channel policy must confirm is handed back
+  // to the approval chain at PreToolUse in Ask too (the other mode that accepts a turn policy); other calls are unchanged.
+  it('hands forced channel confirmations back to Cindy in Ask', async () => {
+    const { handle, preToolUse } = await startSession('default');
+    await handle.send({ type: 'user', content: 'guest request' }, {
+      turnPermissionPolicy: {
+        origin: { kind: 'im', channel: 'imessage', taskId: 'guest-turn' },
+        confirmationSurface: 'channel',
+        forceConfirmToolCall: (toolName, input) => toolName === 'Bash' && /\brm\b/.test(String((input as { command?: string }).command)),
+      },
+    });
+    expect(await preToolUse('Bash', { command: 'rm -rf build' })).toEqual(['ask']);
+    expect(await preToolUse('Bash', { command: 'ls' })).toEqual([]);
+    await handle.close();
+  });
+
   it('keeps SDK auto for official Claude OAuth without host MCPs', async () => {
     const { handle, queryPermissionMode, reviewAutoPermissionAction } = await startSession('auto', {
       providerId: 'anthropic',
@@ -399,6 +416,32 @@ describe('Auto-review wiring: native first, Cindy fallback', () => {
     expect(reviewAutoPermissionAction).toHaveBeenCalledOnce();
     expect(permissionRequests(seen)).toHaveLength(0);
     await handle.close();
+  });
+
+  it('switches the live Auto query to Cindy while Plan is armed for the next turn (#1646)', async () => {
+    const { handle, canUseTool, fakeQuery, queryPermissionMode, seen } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+      reviewVerdict: 'block',
+    });
+
+    try {
+      expect(queryPermissionMode).toBe('auto');
+      await handle.send({ type: 'user', content: 'Inspect the project.' });
+      await handle.setPlanMode!(true);
+      expect(fakeQuery.setPermissionMode).not.toHaveBeenCalled();
+
+      await handle.useCindyAutoReviewFallback!();
+      expect(fakeQuery.setPermissionMode.mock.calls).toEqual([['default']]);
+      expect(sdkMock.query).toHaveBeenCalledOnce();
+      expect(handle.getPlanMode?.()).toBe(true);
+      await expect(canUseTool('Bash', { command: 'npx tsc --noEmit' }, {
+        toolUseID: 'armed-plan-fallback',
+      })).resolves.toMatchObject({ behavior: 'deny', message: 'Cindy Auto-review denied this tool call: reviewed' });
+      expect(permissionRequests(seen)).toHaveLength(0);
+    } finally {
+      await handle.close();
+    }
   });
 });
 
@@ -903,6 +946,15 @@ describe('Auto-review wiring: lightweight reviewer controls gray actions', () =>
     await handle.close();
   });
 
+  it("passes the Bash description as the stated purpose, and omits it when absent", async () => {
+    const { handle, canUseTool, reviewAutoPermissionAction } = await startSession('auto', { reviewVerdict: 'allow' });
+    await canUseTool('Bash', { command: 'npm install left-pad', description: 'Install the missing dependency' }, { toolUseID: 't-desc' });
+    await canUseTool('Bash', { command: 'npm install right-pad' }, { toolUseID: 't-plain', agentID: 'sub-1' } as never);
+    expect(reviewedRequest(reviewAutoPermissionAction, 0).agentContext).toEqual({ statedPurpose: 'Install the missing dependency' });
+    expect(reviewedRequest(reviewAutoPermissionAction, 1)).not.toHaveProperty('agentContext');
+    await handle.close();
+  });
+
   it('reviewer block → denies silently and tells the agent to choose a safer action', async () => {
     const { handle, canUseTool, seen } = await startSession('auto', {
       reviewVerdict: 'block',
@@ -1031,6 +1083,20 @@ describe('Auto-review wiring: reviewer outages surface once per session', () => 
 
   /** 让 push 进队列的事件 fan-out 到收集器。 */
   const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
+
+  // #8706 unit: unavailable used to discard reason before the real SDK confirmation callback.
+  it('keeps quota cause on the Claude confirmation and session notice', async () => {
+    const { handle, canUseTool, seen } = await startSession('auto', {
+      reviewer: async () => ({ verdict: 'ask', unavailable: true, unavailableReason: 'quota_exhausted' }),
+    });
+    const { notices } = startNoticeCollector(handle);
+    try {
+      await canUseTool('Write', { file_path: '/tmp/quota-output.txt' }, { toolUseID: 'quota' });
+      expect(permissionRequests(seen)[0]?.metadata).toMatchObject({ autoReviewUnavailable: true, autoReviewUnavailableReason: 'quota_exhausted' });
+      await vi.waitFor(() => expect(notices.some(message => message.includes('[AUTO_REVIEW_UNAVAILABLE_QUOTA]'))).toBe(true));
+      expect(notices.join('')).not.toContain('Full access');
+    } finally { await handle.close(); }
+  });
 
   it('emits one notice for a broken reviewer, not one per blocked action', async () => {
     // reviewer 抛错 = resolveAutoReviewDecision 走 unavailable 兜底 block。

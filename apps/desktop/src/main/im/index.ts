@@ -1,3 +1,5 @@
+import { wireIMessageOrchestrator } from './imessage/adapter';
+import { configureCloudWechatManagement } from '../host-settings/managementBots.js';
 /**
  * main/im/index.ts
  * ---------------------------------------------------------------------------
@@ -57,7 +59,7 @@ import { TELEGRAM_DEFAULT_BEHAVIOR } from '@cindy/im';
 import path from 'node:path';
 
 import { ipcMain, BrowserWindow, dialog, type IpcMainEvent } from 'electron';
-import { and, eq, like, ne, sql } from 'drizzle-orm';
+import { and, eq, ne } from 'drizzle-orm';
 
 import { getDbClient } from '../localDb/client/current';
 import {
@@ -76,11 +78,15 @@ import {
   wecomIm,
   createBotDingTalkIM,
   createBotDiscordIM,
+  createBotIMessageIM,
   createBotFeishuIM,
   createBotTelegramIM,
   createBotWecomIM,
 } from './host';
 import { wireFeishuOrchestrator, type FeishuOrchestratorConfig } from './feishu';
+import { backfillPersonalFeishuSessions } from './feishu/legacySessionBackfill';
+import { setControlProjectCatalogSource } from './shared/controlProjects';
+import { loadImProjectCatalog } from '../hook-control/projectCatalog';
 import { wireDiscordOrchestrator } from './discord';
 import { wireTelegramOrchestrator } from './telegram';
 import { listTelegramKnownGroups } from './telegram/groupWindow';
@@ -124,6 +130,8 @@ import { getUpdateStatus, isUpdateRelaunchImminent } from '../updateService';
 import { createLogger } from '../logger';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
 import { throwIpcError } from '../utils/ipcValidate';
+import { registerCloudDomainCall } from '../host-settings/managementCalls';
+import { CLOUD_WECHAT_WORKING_DIR_SET } from '../../shared/cloudImSettings';
 import {
   readWechatChannelSettings,
   resetWechatWorkingDir,
@@ -251,6 +259,8 @@ export function startImOrchestrators(): void {
   wechatCompatibilityPolicy.start();
   if (wired) return;
   wired = true;
+  // /ctr 与 /project 列的项目就是侧栏的本机项目(与官方机器人同一份)。
+  setControlProjectCatalogSource(loadImProjectCatalog);
   // Production bootstrap wires handlers before login/DbClient readiness.
   // Keep the synchronous ingress gate closed until startImConnection reaches
   // the authenticated account's initialized DB boundary.
@@ -276,6 +286,11 @@ export function startImOrchestrators(): void {
   wireWechatOrchestrator(wechatIm, WECHAT_CONFIG);
   wireWecomOrchestrator(wecomIm, WECOM_CONFIG);
 
+  configureCloudWechatManagement({
+    state: () => wechatIm.getState(),
+    authorize: signal => connectionLifecycle.runWhileStarted(() => wechatIm.authorize(signal)),
+    unbind: () => connectionLifecycle.runWhileStarted(() => wechatIm.unbind()),
+  });
   // 伙伴自有 IM 连接: 每条记录一份传输层 + 编排器, 与上面设置页那份并存。
   // 实例在 initializeImConnection 里按记录起, 这里只注入装配方式。
   configureBotImConnectionRuntime({
@@ -292,6 +307,11 @@ export function startImOrchestrators(): void {
     },
     create: (record) => {
       const prefix = secretKeyPrefixFor(record.id);
+      if (record.channel === 'imessage') {
+        const im = createBotIMessageIM(prefix, record.id);
+        const orchestrator = wireIMessageOrchestrator(im, DINGTALK_CONFIG, { instanceKey: `imessage#${record.id}`, companionBotId: record.botId, connectionId: record.id });
+        return { kind: 'imessage', im, orchestrator };
+      }
       if (record.channel === 'telegram') {
         // 群参与模式按连接各一份, 每次使用时现读 → 伙伴页改动即生效, 不重启传输层。
         const im = createBotTelegramIM(prefix, {
@@ -331,7 +351,13 @@ export function startImOrchestrators(): void {
         });
         return { kind: 'dingtalk', im, orchestrator };
       }
-      const im = createBotDiscordIM(prefix);
+      // 服务器频道白名单按连接各一份、每次使用时现读连接记录：撤销 / 删除连接即时生效，
+      // 不同连接（不同 connectionId）互不串；存量记录没有该字段 = 不开放任何频道。
+      const im = createBotDiscordIM(prefix, {
+        channelAccess: {
+          read: () => readBotImConnection(record.id)?.discordChannelAccess ?? { channels: [] },
+        },
+      });
       const orchestrator = wireDiscordOrchestrator(im, DISCORD_CONFIG, {
         instanceKey: `discord#${record.id}`,
         companionBotId: record.botId,
@@ -461,7 +487,7 @@ export function startImOrchestrators(): void {
   ipcMain.handle('wechatBot:set-companion', (event, botId: unknown) => {
     assertTrustedAppRendererEvent(event);
     if (botId !== null && (typeof botId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(botId))) {
-      throwIpcError('INVALID_ARGUMENT', 'Invalid teammate');
+      throwIpcError('INVALID_ARGUMENT', 'Invalid buddy');
     }
     return setWechatCompanion(botId as string | null);
   });
@@ -500,6 +526,25 @@ export function startImOrchestrators(): void {
       return resetWechatWorkingDir();
     } catch {
       throw new Error('WECHAT_WORKING_DIR_UPDATE_FAILED');
+    }
+  });
+  // The owner's cloud settings page reads and resets the same settings, and sets a directory
+  // chosen in this instance's directory browser (there is no dialog to show here).
+  registerCloudDomainCall('wechatBot:get-channel-settings', () => readWechatChannelSettings());
+  registerCloudDomainCall('wechatBot:reset-working-directory', () => {
+    try {
+      return resetWechatWorkingDir();
+    } catch {
+      throwIpcError('INTERNAL', 'WECHAT_WORKING_DIR_UPDATE_FAILED');
+    }
+  });
+  registerCloudDomainCall(CLOUD_WECHAT_WORKING_DIR_SET, (selected) => {
+    if (typeof selected !== 'string' || selected.length > 4096)
+      throwIpcError('INVALID_PARAMS', 'a directory path is required');
+    try {
+      return writeWechatWorkingDir(selected as string);
+    } catch {
+      throwIpcError('INVALID_PARAMS', 'WECHAT_WORKING_DIR_INVALID');
     }
   });
 
@@ -625,19 +670,9 @@ async function initializeImConnection(): Promise<void> {
     const msg = err instanceof Error ? err.message : String(err);
     log.error(`bindingStore.preload failed (non-fatal): ${msg}`);
   }
-  // 存量 feishu 会话行补 workspaceKind='dialogue' —— 2026-07 起 feishu 会话
-  // 进侧边栏「对话」分组(sessionSource.ts 白名单 + feishu adapter 声明),
-  // 此前落库的行还是默认 'project', 不补会以 im-working-dir/{botAppId}
-  // 聚成一个假项目组。幂等一次性 UPDATE; 不 bump updatedAt(避免重排列表)。
-  try {
-    await getDbClient()
-      .drizzle.update(sessions)
-      .set({ workspaceKind: 'dialogue' })
-      .where(and(eq(sessions.source, 'feishu'), ne(sessions.workspaceKind, 'dialogue')));
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    log.warn(`feishu sessions workspaceKind backfill failed (non-fatal): ${msg}`);
-  }
+  // 存量个人飞书会话补「对话」分组与新标题; 官方飞书 hook 任务同为
+  // source='feishu', 由 helper 按 feishuBotAppId 排除。
+  await backfillPersonalFeishuSessions(getDbClient().drizzle, log);
   // Discord personal DM sessions use the same managed dialogue bucket as
   // Feishu/Telegram. Older Discord rows were created before the adapter
   // declared workspaceKind='dialogue' and otherwise remain grouped under the
@@ -652,20 +687,10 @@ async function initializeImConnection(): Promise<void> {
     const msg = err instanceof Error ? err.message : String(err);
     log.warn(`discord sessions workspaceKind backfill failed (non-fatal): ${msg}`);
   }
-  // 存量 feishu 会话的旧默认标题 `飞书 · {后6位}` 迁到新风格 `[飞书·DM] {后6位}`。
-  try {
-    await getDbClient()
-      .drizzle.update(sessions)
-      .set({ title: sql`'[飞书·DM] ' || substr(${sessions.title}, 6)` })
-      .where(and(eq(sessions.source, 'feishu'), like(sessions.title, '飞书 · %')));
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    log.warn(`feishu sessions title backfill failed (non-fatal): ${msg}`);
-  }
   activateImAccountBoundary();
-  await im.init();
-  // 伙伴自有连接跟在设置页那份后面起; 各自失败只记日志。
-  await startBotImConnections();
+  // 设置页那份与伙伴自有连接同时起, 互不等待(两边凭证与传输层实例各自独立);
+  // 各自失败只记日志。
+  await Promise.all([im.init(), startBotImConnections()]);
 }
 
 /**
@@ -692,6 +717,15 @@ async function reconcileOwnerScopedImWorkingDirs(): Promise<void> {
         .where(eq(sessions.source, 'feishu'));
       for (const row of rows) {
         if (!row.botContextId) continue;
+        // 同 Telegram: /project 切到项目目录是用户显式选择, 重连不得覆盖回托管目录 ——
+        // 本归一只服务跨 owner 命名空间迁移的旧托管路径(完整尾段判定)。
+        // 两种分隔符都认: Windows 上库里的目录可能是正斜杠形态, 也可能是反斜杠。
+        if (
+          row.workingDir &&
+          !row.workingDir.replace(/\\/g, '/').endsWith(`/im-working-dir/${row.botContextId}`)
+        ) {
+          continue;
+        }
         const scoped = feishuAdapter.sessions.ensureWorkingDir(row.botContextId);
         if (row.workingDir === scoped) continue;
         await db.update(sessions).set({ workingDir: scoped }).where(eq(sessions.id, row.id));
@@ -704,12 +738,14 @@ async function reconcileOwnerScopedImWorkingDirs(): Promise<void> {
           id: sessions.id,
           workingDir: sessions.workingDir,
           botContextId: sessions.imBotContextId,
+          imUserId: sessions.imUserId,
         })
         .from(sessions)
         .where(eq(sessions.source, 'discord'));
       for (const row of rows) {
         if (!row.botContextId) continue;
-        const scoped = discordAdapter.sessions.ensureWorkingDir(row.botContextId);
+        // 服务器频道 lane 各有独立托管目录, 按 lane id 重算, 不能被改写回私聊目录。
+        const scoped = discordAdapter.sessions.ensureWorkingDir(row.botContextId, row.imUserId ?? undefined);
         if (row.workingDir === scoped) continue;
         await db.update(sessions).set({ workingDir: scoped }).where(eq(sessions.id, row.id));
       }

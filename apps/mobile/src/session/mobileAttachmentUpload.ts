@@ -1,12 +1,17 @@
 import { apiFetchRaw } from '@/api/client';
+import { assertMobileLegacyMediaAllowed, canUploadEncryptedMobileMedia, tryUploadEncryptedMobileMedia } from '@/device-link/agentNetMediaRegistry';
+import { fromBase64Url } from '@cindy/agent-net/portable';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import { canMobilePeerUpload, tryMobilePeerUpload } from '@/device-link/peerFileRegistry';
-import { DEVICE_LINK_API_BASE_URL } from '@/config/env';
+import { DEVICE_LINK_API_BASE_URL, getOfficialDeviceLinkApiBaseUrl } from '@/config/env';
+import { deviceLinkMediaApiBaseUrl } from '@/device-link/selfHostedRelayRouting';
 import { i18n } from '@/i18n';
+import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { isAttachmentOssRef, parseAttachmentOssRef } from '@/session/attachmentOssRef';
 import {
   buildMobileUploadedAttachment,
+  effectiveUploadMimeType,
   assertMobileDocumentSize,
   assertMobileOssAttachmentSize,
   isWithinMobileOssAttachmentLimit,
@@ -29,6 +34,11 @@ export interface MobileAttachmentPresignResult {
   putUrl: string;
   key: string;
   expiresAt: string;
+  /**
+   * 可选的加速线路签名地址:同一 bucket、同一 key、同样的签名头。服务端配置了加速
+   * 线路才返回,只在普通地址传输失败后的那次重试使用;缺省时上传行为与原来完全一致。
+   */
+  accelerateUrl?: string;
 }
 
 export type MobileAttachmentUploadBody = BodyInit;
@@ -54,28 +64,18 @@ interface UploadDeps {
 const PRESIGN_TIMEOUT_MS = 12_000;
 const PRESIGN_MAX_ATTEMPTS = 2;
 
-/**
- * mimeType 缺失时的统一兜底。预签名的 contentType 与 PUT 实发的 Content-Type
- * 必须**逐字节一致**且**都不能缺**:缺失时预签名把 Content-Type 位签成空串,而
- * expo-file-system 原生直传层会自动补 application/octet-stream,两边不一致直接
- * OSS SignatureDoesNotMatch 403(2026-07 粘贴图片无 mimeType 实撞)。presign 与
- * buildMobileAttachmentUploadHeaders 都必须经 effectiveUploadMimeType 取值。
- */
-const FALLBACK_UPLOAD_MIME = 'application/octet-stream';
-
-export function effectiveUploadMimeType(mimeType: string | undefined): string {
-  const trimmed = mimeType?.trim();
-  return trimmed ? trimmed : FALLBACK_UPLOAD_MIME;
-}
+// Preserve the existing helper import for upload callers.
+export { effectiveUploadMimeType } from '@/session/attachments';
 
 export async function presignMobileAttachmentUpload(
   candidate: MobileAttachmentUploadCandidate,
   options: { token: string | null; sharedTaskId?: string; deps?: UploadDeps },
 ): Promise<MobileAttachmentPresignResult> {
+  assertMobileLegacyMediaAllowed();
   const apiFetch = options.deps?.apiFetch ?? apiFetchRaw;
   const result = await withTransientRemoteRetry(
     () => apiFetch<MobileAttachmentPresignResult>('/api/device-link/media/presign-put', {
-      baseUrl: DEVICE_LINK_API_BASE_URL,
+      baseUrl: options.sharedTaskId ? getOfficialDeviceLinkApiBaseUrl() : DEVICE_LINK_API_BASE_URL,
       method: 'POST',
       token: options.token,
       timeoutMs: PRESIGN_TIMEOUT_MS,
@@ -96,10 +96,11 @@ export async function putMobileAttachmentUpload(
   body: MobileAttachmentUploadBody,
   mimeType: string | undefined,
   deps: UploadDeps = {},
+  opts: Pick<UploadRecoveryOptions, 'accelerateUrl'> = {},
 ): Promise<void> {
   const fetchImpl = deps.fetch ?? fetch;
-  await putAttachmentWithRecovery(async (signal) => {
-    const response = await fetchImpl(putUrl, {
+  await putAttachmentWithRecovery(putUrl, async (url, signal) => {
+    const response = await fetchImpl(url, {
       method: 'PUT',
       headers: buildMobileAttachmentUploadHeaders(mimeType),
       body,
@@ -109,7 +110,7 @@ export async function putMobileAttachmentUpload(
       status: response.status,
       body: response.ok ? undefined : await readResponseTextSafe(response),
     };
-  });
+  }, { accelerateUrl: opts.accelerateUrl });
 }
 
 function buildMobileAttachmentUploadHeaders(mimeType: string | undefined): Record<string, string> {
@@ -177,7 +178,10 @@ async function uploadFileNative(
   }
 }
 
-/** 同一签名地址、同一份不可变字节最多两次 PUT，不重新创建附件或发送消息。 */
+/**
+ * 同一份不可变字节最多两次 PUT，不重新创建附件或发送消息。服务端给了加速线路时，
+ * 第二次改走加速地址（同一对象），否则仍重试原签名地址；次数与判定条件不变。
+ */
 const UPLOAD_TRANSPORT_ATTEMPTS = 2;
 const PUT_IDLE_TIMEOUT_MS = 60_000;
 const PUT_ATTEMPT_TIMEOUT_MS = 120_000;
@@ -192,10 +196,13 @@ interface UploadRecoveryOptions {
   signal?: AbortSignal;
   /** 最终失败后原生 PUT 仍迟到成功时，再回收中转对象。 */
   onLateSuccess?: () => void;
+  /** 服务端签发的加速线路地址；只用于普通地址可重试失败后的那一次重试。 */
+  accelerateUrl?: string;
 }
 
 async function putAttachmentWithRecovery(
-  send: (signal: AbortSignal, onProgress: (bytesSent: number) => void) => Promise<{ status: number; body?: string }>,
+  putUrl: string,
+  send: (url: string, signal: AbortSignal, onProgress: (bytesSent: number) => void) => Promise<{ status: number; body?: string }>,
   opts: UploadRecoveryOptions = {},
   reportsProgress = false,
 ): Promise<void> {
@@ -204,6 +211,8 @@ async function putAttachmentWithRecovery(
   try {
     for (let attempt = 0; attempt < UPLOAD_TRANSPORT_ATTEMPTS; attempt += 1) {
       if (opts.signal?.aborted) throw new Error(uploadAbortedMessage());
+      const viaAccelerate = attempt > 0 && !!opts.accelerateUrl;
+      const url = viaAccelerate ? opts.accelerateUrl! : putUrl;
       const controller = new AbortController();
       let rejectWait!: (error: Error) => void;
       const interrupted = new Promise<never>((_resolve, reject) => { rejectWait = reject; });
@@ -233,7 +242,7 @@ async function putAttachmentWithRecovery(
       let result: { status: number; body?: string };
       try {
         result = await Promise.race([
-          send(controller.signal, onProgress).then((value) => {
+          send(url, controller.signal, onProgress).then((value) => {
             if (terminalFailure && value.status >= 200 && value.status < 300) opts.onLateSuccess?.();
             return value;
           }),
@@ -251,7 +260,11 @@ async function putAttachmentWithRecovery(
         clearTimeout(idleTimer);
         opts.signal?.removeEventListener('abort', cancel);
       }
-      if (result.status >= 200 && result.status < 300) return;
+      if (result.status >= 200 && result.status < 300) {
+        // 只记线路种类，不记地址：签名地址可直接复用上传。
+        if (viaAccelerate) mobileDebugLog('info', 'device-link', 'attachment upload recovered via accelerate route');
+        return;
+      }
       if (result.status !== 0) {
         const code = extractOssErrorCode(result.body);
         lastError = new Error(i18n.t('composer.upload.failedHttp', {
@@ -276,11 +289,13 @@ export async function putMobileAttachmentUploadFromFile(
   fileUri: string,
   mimeType: string | undefined,
   deps: UploadDeps = {},
-  opts: UploadRecoveryOptions = {},
+  opts: UploadRecoveryOptions & { signedHeaders?: Readonly<Record<string, string>> } = {},
 ): Promise<void> {
   const uploadFile = deps.uploadFile ?? uploadFileNative;
-  const headers = buildMobileAttachmentUploadHeaders(mimeType);
-  await putAttachmentWithRecovery((signal, onProgress) => uploadFile(putUrl, fileUri, headers, { signal, onProgress }), opts, true);
+  // Chat Server signs a different header set from device-link. Never add OSS
+  // headers to an already signed request; preserve the device-link default.
+  const headers = opts.signedHeaders ? { ...opts.signedHeaders } : buildMobileAttachmentUploadHeaders(mimeType);
+  await putAttachmentWithRecovery(putUrl, (url, signal, onProgress) => uploadFile(url, fileUri, headers, { signal, onProgress }), opts, true);
 }
 
 /** 原生 NSError 描述冗长(整条预签名 URL 都在里面),截前段给用户当排查线索即可。 */
@@ -300,15 +315,29 @@ export async function statMobileAttachmentFileSize(uri: string): Promise<number>
 export async function uploadMobileAttachment(
   candidate: MobileAttachmentUploadCandidate,
   body: MobileAttachmentUploadBody,
-  options: { token: string | null; sharedTaskId?: string; id?: string; deps?: UploadDeps },
+  options: { token: string | null; sharedTaskId?: string; deviceId?: string; id?: string; deps?: UploadDeps },
 ): Promise<RemoteSerializedAttachment> {
   // presign 前先校验体积:超出 OSS 上限的文件若先 presign + PUT、再在
   // buildMobileUploadedAttachment 处被拒,会在 device-link OSS 桶里留下永不被引用的孤儿对象。
   assertMobileDocumentSize(candidate.size);
+  const encrypted = await tryUploadEncryptedMobileMedia({ deviceId: options.deviceId,
+    size: candidate.size, contentType: effectiveUploadMimeType(candidate.mimeType), read: async (offset, length) => {
+      if (body instanceof Blob) return new Uint8Array(await body.slice(offset, offset + length).arrayBuffer());
+      if (body instanceof ArrayBuffer) return new Uint8Array(body, offset, length);
+      if (ArrayBuffer.isView(body)) return new Uint8Array(body.buffer, body.byteOffset + offset, length);
+      throw new Error('AGENT_NET_NATIVE_FILE_SOURCE_REQUIRED');
+    } });
+  if (encrypted) {
+    const attachment = buildMobileUploadedAttachment({ ...candidate, id: options.id, ossKey: encrypted.key, sha256: encrypted.sha256 });
+    if (!attachment) throw new Error(i18n.t('composer.upload.noFileRead'));
+    return attachment;
+  }
   assertMobileOssAttachmentSize(candidate.size);
   const sha256 = await sha256MobileAttachmentBody(body, candidate.size);
   const presigned = await presignMobileAttachmentUpload(candidate, options);
-  await putMobileAttachmentUpload(presigned.putUrl, body, candidate.mimeType, options.deps);
+  await putMobileAttachmentUpload(presigned.putUrl, body, candidate.mimeType, options.deps, {
+    accelerateUrl: presigned.accelerateUrl,
+  });
   const attachment = buildMobileUploadedAttachment({
     id: options.id,
     ossKey: presigned.key,
@@ -347,6 +376,7 @@ export async function uploadMobileAttachmentFromFile(
   const peerCandidate = !!options.deviceId && !options.sharedTaskId;
   if (
     !isWithinMobileOssAttachmentLimit(candidate.size) &&
+    !canUploadEncryptedMobileMedia(options.deviceId) &&
     !(peerCandidate && await canMobilePeerUpload(options.deviceId!, candidate.size))
   ) {
     assertMobileOssAttachmentSize(candidate.size);
@@ -375,6 +405,19 @@ export async function uploadMobileAttachmentFromFile(
     if (snapshot.size !== candidate.size) {
       throw new Error(`Attachment size changed: expected ${candidate.size}, actual ${snapshot.size}`);
     }
+    const encrypted = await tryUploadEncryptedMobileMedia({ deviceId: options.deviceId,
+      size: candidate.size, contentType: effectiveUploadMimeType(candidate.mimeType), signal: options.signal,
+      assertCurrent: () => { if (!isActive()) throw new Error('AGENT_NET_OWNER_CHANGED'); },
+      read: async (offset, length) => {
+        const base64 = options.deps?.readFileChunk ? await options.deps.readFileChunk(snapshot.uri, offset, length)
+          : await (await import('expo-file-system/legacy')).readAsStringAsync(snapshot.uri, { encoding: 'base64', position: offset, length });
+        return fromBase64Url(base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''));
+      } });
+    if (encrypted) {
+      const attachment = buildMobileUploadedAttachment({ ...candidate, id: options.id, ossKey: encrypted.key, sha256: encrypted.sha256 });
+      if (!attachment) throw new Error(i18n.t('composer.upload.noFileRead'));
+      return await retain(attachment);
+    }
     const sha256 = await sha256MobileAttachmentFile(snapshot.uri, candidate.size, {
       readChunk: options.deps?.readFileChunk,
       signal: options.signal,
@@ -400,6 +443,7 @@ export async function uploadMobileAttachmentFromFile(
         options.deps,
         {
           signal: options.signal,
+          accelerateUrl: presigned.accelerateUrl,
           onLateSuccess: () => { void deleteMobileAttachmentUpload(presigned.key, options).catch(() => undefined); },
         },
       );
@@ -453,7 +497,7 @@ export async function deleteMobileAttachmentUpload(
 ): Promise<void> {
   const apiFetch = options.deps?.apiFetch ?? apiFetchRaw;
   await apiFetch<{ deleted: boolean }>('/api/device-link/media', {
-    baseUrl: DEVICE_LINK_API_BASE_URL,
+    baseUrl: deviceLinkMediaApiBaseUrl(ossKey),
     method: 'DELETE',
     token: options.token,
     body: { key: ossKey },
@@ -496,9 +540,21 @@ function normalizePresignResult(value: MobileAttachmentPresignResult): MobileAtt
   if (!value || typeof value.putUrl !== 'string' || typeof value.key !== 'string') {
     throw new Error(i18n.t('composer.upload.invalidUploadUrl'));
   }
+  // 加速地址是可选的兜底：缺失或形状不对时直接忽略，回到只用 putUrl 的原有行为。
+  let accelerateUrl: string | undefined;
+  if (typeof value.accelerateUrl === 'string' && value.accelerateUrl !== value.putUrl) {
+    try {
+      const parsed = new URL(value.accelerateUrl);
+      if ((parsed.protocol === 'https:' || parsed.protocol === 'http:') && parsed.hostname) {
+        // 保留原签名地址，不经 URL 重新序列化。
+        accelerateUrl = value.accelerateUrl;
+      }
+    } catch { /* 可选地址无法解析时仍重试普通线路。 */ }
+  }
   return {
     putUrl: value.putUrl,
     key: value.key,
     expiresAt: typeof value.expiresAt === 'string' ? value.expiresAt : '',
+    ...(accelerateUrl ? { accelerateUrl } : {}),
   };
 }

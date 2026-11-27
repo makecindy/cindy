@@ -29,7 +29,7 @@ import {
   patchMessageAgentMeta,
   broadcastMessageAgentMetaUpdate,
 } from '../localDb/ipc/messages';
-import { enqueueDurableWrite } from '../messagePersistBroadcaster';
+import { enqueueDurableWrite } from '../messagePersistBroadcaster.desktop';
 import type { ImMessageSource } from '../../shared/imMessageSource';
 import { createLogger } from '../logger';
 
@@ -50,6 +50,8 @@ export async function persistUserMessage(args: {
   text: string;
   attachments?: readonly IMAttachment[];
   source?: ImMessageSource;
+  /** 自动续跑补发（隐藏合成指令，不重置人工介入计数）。 */
+  autoResume?: boolean;
   /** Only use a pre-persisted row belonging to this session. Never reinsert it. */
   existingClientId?: string;
 }): Promise<{ clientId: string } | null> {
@@ -73,11 +75,18 @@ export async function persistUserMessage(args: {
       }
       return { clientId };
     }
+    const agentMeta =
+      args.source || args.autoResume
+        ? {
+            ...(args.source ? { imSource: args.source } : {}),
+            ...(args.autoResume ? { autoResume: true } : {}),
+          }
+        : undefined;
     await createMessage(sessionId, {
       clientId,
       role: 'user',
       content,
-      ...(args.source ? { agentMeta: { imSource: args.source } } : {}),
+      ...(agentMeta ? { agentMeta } : {}),
     });
     return { clientId };
   } catch (err) {

@@ -1,3 +1,4 @@
+import { resolveTeammateStatus, type TeammateStatus } from '@cindy/maker-shared/teammate-status';
 import { deviceDisplayName } from '@/device-link/deviceName';
 import { readWorkingPhase } from '@cindy/maker-shared';
 import { memo, useCallback, useLayoutEffect, useMemo, useRef, useSyncExternalStore } from 'react';
@@ -11,9 +12,9 @@ import type { HostedRemoteCollectionItem, RemoteResourceHostTarget } from '@/dev
 import { useMinuteNow } from '@/utils/useMinuteNow';
 import { BotGroupListRow, OFFLINE_AVATAR_OPACITY } from './BotGroupList';
 import { orderedBotGroups } from './botGroupRemote';
-import { CompanionListRow, CompanionPresenceDot, COMPANION_ROW_AVATAR_SIZE } from './CompanionListRow';
-import { CompanionPresenceRing } from './CompanionPresenceRing';
-import { remoteSessionStore } from './remoteSessionStore';
+import { CompanionListRow, COMPANION_ROW_AVATAR_SIZE } from './CompanionListRow';
+import { TeammateStatusDot } from './TeammateStatusDot';
+import { useRosterActivities, teammateAttention } from './useTeammateStatus';
 import { formatRemoteSessionSidebarTime } from './sessionList';
 import { orderedTeammates } from './teammateNavigation';
 import { parseMobileMarkdownInlines } from './messageMarkdown';
@@ -38,24 +39,36 @@ interface TeammateRowOptions {
   onSelect(item: HostedRemoteCollectionItem): void;
   /** Group chats, mixed with the teammates by latest activity. */
   groups?: TeammateListGroups;
+  /** Live activity already read by the caller for these rows; the renderer then subscribes to none. */
+  activities?: ReadonlyMap<string, string>;
 }
 
-function conversationSessionId(row: HostedRemoteCollectionItem): string | null {
+const NO_ROWS: readonly HostedRemoteCollectionItem[] = [];
+
+export function conversationSessionId(row: HostedRemoteCollectionItem): string | null {
   const target = row.item.links.find(({ rel, target: link }) => rel === 'conversation' && link.kind === 'session')?.target;
   return target?.kind === 'session' ? target.sessionId : null;
 }
 
-/** Bot conversations stopped on a question or a permission prompt (「等你确认」). */
-function useAwaitingSessions(items: readonly HostedRemoteCollectionItem[]): ReadonlySet<string> {
-  const sessions = useMemo(() => items.map(conversationSessionId).filter((id): id is string => !!id), [items]);
-  const snapshot = useCallback(() => sessions.filter((id) => remoteSessionStore.getSessionLiveActivity(id)?.phase === 'needs-interaction'
-    || remoteSessionStore.getPendingInteractions(id).length > 0).join('\u0000'), [sessions]);
-  // A joined id string keeps unrelated store churn (streaming, other sessions) from re-rendering the list.
-  const key = useSyncExternalStore(remoteSessionStore.subscribe, snapshot);
-  return useMemo(() => new Set(key ? key.split('\u0000') : []), [key]);
-}
-
 export type TeammateListEntry = { kind: 'bot' | 'group'; row: HostedRemoteCollectionItem };
+
+/**
+ * What a teammate's row shows, from its roster row and the live activity of its conversation.
+ * The inbox passes `quiet: true`: an unreachable computer is not a request for the user.
+ */
+export function teammateRowState(row: HostedRemoteCollectionItem, input: {
+  online: boolean; connected: boolean | null; quiet: boolean;
+  activities: ReadonlyMap<string, string>; userId: string; language: string;
+}) {
+  const display = row.item.display;
+  const generating = input.online && !!display.generation
+    && display.teammateActivity?.phase !== 'needs-interaction' && input.activities.get(row.key) !== 'needs-interaction';
+  const { attention, waiting } = teammateAttention(row, input.online, input.activities, input.language);
+  const unread = isRemoteResourceUnread(input.userId, row.host.deviceId, row.item.ref.id, display.lastReplyAt);
+  const status = resolveTeammateStatus({ online: input.connected, quietOffline: input.quiet, unread, waiting,
+    failed: !!attention, working: generating, activities: [display.teammateActivity, { phase: input.activities.get(row.key) ?? '' }] });
+  return { generating, attention, waiting, unread, status };
+}
 
 /** Teammates and group chats, mixed by latest activity and filtered by the same search. */
 export function useTeammateEntries(items: readonly HostedRemoteCollectionItem[], groups: readonly HostedRemoteCollectionItem[] | undefined, query = '') {
@@ -70,11 +83,12 @@ export function useTeammateEntries(items: readonly HostedRemoteCollectionItem[],
 }
 
 /** The teammate / group row of the task home's teammate section. */
-export function useTeammateRowRenderer({ items, isOnline, connectionState, quietPresence, onSelect, groups }: TeammateRowOptions) {
+export function useTeammateRowRenderer({ items, isOnline, connectionState, quietPresence, onSelect, groups, activities: provided }: TeammateRowOptions) {
   const { i18n } = useTranslation();
   const { user } = useAuth();
   const now = useMinuteNow();
-  const awaiting = useAwaitingSessions(items);
+  const subscribed = useRosterActivities(provided ? NO_ROWS : items);
+  const activities = provided ?? subscribed;
   // Resource refreshes replace objects and navigation closures even when the row
   // looks identical. Keep presses current without invalidating every visible row.
   const selection = useRef({ items, onSelect });
@@ -98,21 +112,17 @@ export function useTeammateRowRenderer({ items, isOnline, connectionState, quiet
   const deviceNameSources = useMemo(() => items.map(row => ({
     deviceId: row.host.deviceId, name: row.host.deviceName,
   })), [items]);
-  const renderBot = (row: HostedRemoteCollectionItem, last: boolean) => {
+  const renderBot = (row: HostedRemoteCollectionItem, last: boolean, timeLabel?: string, actions?: TeammateRowActions) => {
     const display = row.item.display;
     const title = resolveRemoteText(display.title, i18n.language);
     const online = isOnline(row.host);
     const connected = connectionState ? connectionState(row.host) : online;
-    const generating = online && !!display.generation;
-    const attention = display.status?.tone === 'warning' || display.status?.tone === 'critical'
-      ? resolveRemoteText(display.status.label, i18n.language) : '';
-    const sessionId = conversationSessionId(row);
-    const waiting = online && !generating && !!sessionId && awaiting.has(sessionId);
+    const { generating, attention, waiting, unread, status } = teammateRowState(row, {
+      online, connected, quiet: !!quietPresence?.(row), activities, userId: user?.id ?? '', language: i18n.language });
     const ambiguous = (duplicateNames.get(title.normalize('NFKC').toLocaleLowerCase(i18n.language)) ?? 0) > 1;
-    const unread = isRemoteResourceUnread(user?.id ?? '', row.host.deviceId, row.item.ref.id, display.lastReplyAt);
     const timestamp = display.timestamp;
-    const time = timestamp !== undefined && Number.isFinite(new Date(timestamp).getTime())
-      ? formatRemoteSessionSidebarTime(new Date(timestamp).toISOString(), now) : '';
+    const time = timeLabel ?? (timestamp !== undefined && Number.isFinite(new Date(timestamp).getTime())
+      ? formatRemoteSessionSidebarTime(new Date(timestamp).toISOString(), now) : '');
     return <TeammateRow key={`bot:${row.key}`} rowKey={row.key} deviceId={row.host.deviceId} botId={row.item.ref.id}
       title={title} device={ambiguous ? deviceDisplayName(row.host.deviceId, row.host.deviceName, deviceNameSources) : undefined}
       rawPreview={!generating && display.preview ? resolveRemoteText(display.preview, i18n.language) : ''}
@@ -121,17 +131,31 @@ export function useTeammateRowRenderer({ items, isOnline, connectionState, quiet
       avatarFallback={display.avatar?.fallbackText} avatarColor={display.avatar?.color}
       generating={generating} phase={generating ? display.generation!.phase : ''}
       startedAt={generating ? display.generation!.startedAt : null}
+      status={status}
       connected={connected} quiet={!!quietPresence?.(row)} attention={attention} waiting={waiting}
-      unread={unread} time={time} last={last} onSelect={select} />;
+      unread={unread} time={time} last={last} onSelect={select} actions={actions?.list} onAction={actions?.run} />;
   };
-  return (entry: TeammateListEntry, last: boolean) => {
-    if (entry.kind === 'bot' || !groups) return renderBot(entry.row, last);
+  /**
+   * `timeLabel` replaces the activity time (the inbox shows when a snoozed row returns);
+   * `actions` are the row's swipe actions, offered to screen readers on the row itself.
+   */
+  return (entry: TeammateListEntry, last: boolean, timeLabel?: string, actions?: TeammateRowActions) => {
+    if (entry.kind === 'bot' || !groups) return renderBot(entry.row, last, timeLabel, actions);
     return <BotGroupListRow key={`group:${entry.row.key}`} row={entry.row} online={groups.isOnline(entry.row.host)} last={last}
       onPress={() => groups.onSelect(entry.row)} />;
   };
 }
 
+/** Pass stable references: the row is memoized. */
+export interface TeammateRowActions {
+  list: readonly { name: string; label: string }[];
+  run(name: string): void;
+}
+
 interface TeammateRowProps {
+  actions?: TeammateRowActions['list'];
+  onAction?: TeammateRowActions['run'];
+  status: TeammateStatus;
   rowKey: string; deviceId: string; botId: string; title: string; device?: string;
   rawPreview: string; subtitle: string;
   avatarKind?: string; avatarValue?: string; avatarFallback?: string; avatarColor?: string;
@@ -146,7 +170,7 @@ interface TeammateRowProps {
 const TeammateAvatar = memo(RemoteCompanionAvatar);
 const TeammateRow = memo(function TeammateRow({ rowKey, deviceId, botId, title, device, rawPreview, subtitle,
   avatarKind, avatarValue, avatarFallback, avatarColor, generating, phase, startedAt,
-  connected, quiet, attention, waiting, unread, time, last, onSelect }: TeammateRowProps) {
+  connected, quiet, attention, waiting, unread, time, last, onSelect, status, actions, onAction }: TeammateRowProps) {
   const { t } = useTranslation();
   const preview = useMemo(() => rawPreview ? parseMobileMarkdownInlines(rawPreview)
     .map(inline => inline.type === 'image' ? inline.alt : inline.text).join('').replace(/\s+/g, ' ').trim() : '', [rawPreview]);
@@ -159,24 +183,26 @@ const TeammateRow = memo(function TeammateRow({ rowKey, deviceId, botId, title, 
   const workingCopy = generating ? t(`devices.companions.working.${readWorkingPhase(phase) ?? 'processing'}`) : '';
   const connection = quiet ? '' : connected === false ? t('devices.resources.hostOffline')
     : connected === null ? t('devices.resources.connectionUnknown') : '';
-  const prefix = attention || (waiting ? t('devices.companions.awaiting') : '');
+  const prefix = status === 'awaiting' ? t('devices.companions.awaiting') : attention;
+  const running = status === 'running';
   return <CompanionListRow testID={`teammates.item.${deviceId}.${botId}`}
-    accessibilityLabel={[title, device, connection, prefix, generating ? workingCopy : summary, time,
+    accessibilityLabel={[title, device, connection, prefix,
+      status !== 'idle' && status !== 'awaiting' ? t(`devices.companions.avatarStatus.${status}`) : '',
+      generating ? workingCopy : summary, time,
       unread ? t('devices.companions.unread') : ''].filter(Boolean).join(', ')}
     avatar={<>
       <View style={connected === false && !quiet ? { opacity: OFFLINE_AVATAR_OPACITY } : undefined}>
         <TeammateAvatar avatar={avatar} deviceId={deviceId} name={title} online={connected === true} size={COMPANION_ROW_AVATAR_SIZE} framed />
       </View>
-      <CompanionPresenceRing active={generating} />
-      {quiet ? null : <CompanionPresenceDot connected={connected} />}
+      <TeammateStatusDot status={status} />
     </>}
     title={title} device={device}
-    trailing={generating ? { kind: 'working' } : { kind: 'time', text: time }}
-    preview={generating ? <TeammateGenerationLabel deviceId={deviceId} botId={botId} generation={{ phase, startedAt }} />
+    trailing={{ kind: 'time', text: time }}
+    preview={running ? <TeammateGenerationLabel deviceId={deviceId} botId={botId} generation={{ phase, startedAt }} />
       : connection ? `${connection} · ${summary}` : summary}
     previewTone={connection ? 'tertiary' : 'secondary'}
     previewPrefix={connection ? undefined : prefix || undefined}
     previewPrefixTestID={attention ? 'teammate.attention' : undefined}
-    unread={unread} unreadLabel={t('devices.companions.unread')}
-    last={last} onPress={press} />;
+    unread={false} unreadLabel={t('devices.companions.unread')}
+    last={last} onPress={press} accessibilityActions={actions} onAccessibilityAction={onAction} />;
 });

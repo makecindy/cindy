@@ -31,6 +31,7 @@ import { BRAND_NAME } from '@cindy/maker-shared/branding';
 
 import {
   EXPIRY_SAFETY_MARGIN_MS,
+  type GhostOauthBrokerBootstrapResult,
   type GhostOauthBrokerClient,
   type GhostOauthBrokerResult,
   type GhostOauthLogger,
@@ -45,6 +46,17 @@ import {
 // 'slack' slug 已于 2026-07-19 随 cindy-slack 意识退役(Slack 能力并轨 hook
 // 通道, user token 改由 slack-hook-server 在 bind v2 授权时托管)。
 export const SUPPORTED_TOKEN_BROKERS: ReadonlySet<string> = new Set(['feishu', 'jira']);
+
+/**
+ * 由服务端按企业配置签发应用身份的 slug:授权开始时经 bootstrap 取 clientId 与
+ * 一次性授权事务,清单可不内置 clientId。其它 slug 继续用清单里的 clientId。
+ */
+const CLIENT_ISSUING_TOKEN_BROKERS: ReadonlySet<string> = new Set(['feishu']);
+
+/** 该 tokenBroker 是否由服务端签发 clientId(插件清单可缺省)。 */
+export function tokenBrokerIssuesClientId(slug: string | undefined): boolean {
+  return slug !== undefined && CLIENT_ISSUING_TOKEN_BROKERS.has(slug);
+}
 
 /**
  * server 401 里明确表示"上游服务商拒绝了这份授权"的错误码白名单——只有命中
@@ -63,6 +75,13 @@ interface BrokerTokenResponse {
   refreshToken?: unknown;
   expiresIn?: unknown;
   scope?: unknown;
+}
+
+/** bootstrap 端点的响应形态(oauth-broker routes/oauth.ts 的返回契约)。 */
+interface BrokerBootstrapResponse {
+  clientId?: unknown;
+  transactionId?: unknown;
+  redirectUri?: unknown;
 }
 
 /** apiPost 抛出的错误最小面(生产 = serverApiClient.ServerApiError 的字段)。 */
@@ -107,11 +126,11 @@ function isApiError(err: unknown): err is GhostOauthBrokerApiError {
 }
 
 export function createGhostOauthBrokerClient(deps: GhostOauthBrokerDeps): GhostOauthBrokerClient {
-  const call = async (
+  const post = async (
     slug: string,
-    action: 'exchange' | 'refresh',
+    action: 'bootstrap' | 'exchange' | 'refresh',
     body: Record<string, unknown>,
-  ): Promise<GhostOauthBrokerResult> => {
+  ): Promise<{ ok: true; raw: unknown } | Extract<GhostOauthBrokerResult, { ok: false }>> => {
     if (!SUPPORTED_TOKEN_BROKERS.has(slug)) {
       return { ok: false, error: 'EXCHANGE_FAILED', invalidGrant: false, detail: `不支持的 tokenBroker:${slug}` };
     }
@@ -160,21 +179,54 @@ export function createGhostOauthBrokerClient(deps: GhostOauthBrokerDeps): GhostO
       // 不能误导用户检查网络。
       return { ok: false, error: 'EXCHANGE_FAILED', invalidGrant: false, detail: String(err) };
     }
-    const bundle = toBundle(raw);
+    return { ok: true, raw };
+  };
+
+  const call = async (
+    slug: string,
+    action: 'exchange' | 'refresh',
+    body: Record<string, unknown>,
+  ): Promise<GhostOauthBrokerResult> => {
+    const posted = await post(slug, action, body);
+    if (!posted.ok) return posted;
+    const bundle = toBundle(posted.raw);
     if (!bundle) {
       return { ok: false, error: 'EXCHANGE_FAILED', invalidGrant: false, detail: 'broker 响应缺少 accessToken' };
     }
     return { ok: true, bundle };
   };
 
+  const bootstrap = async (
+    slug: string,
+    { redirectUri }: { redirectUri: string },
+  ): Promise<GhostOauthBrokerBootstrapResult | null> => {
+    if (!tokenBrokerIssuesClientId(slug)) return null;
+    const posted = await post(slug, 'bootstrap', { redirectUri });
+    if (!posted.ok) return { ok: false, error: posted.error, detail: posted.detail };
+    const parsed = (typeof posted.raw === 'object' && posted.raw !== null ? posted.raw : {}) as BrokerBootstrapResponse;
+    if (
+      typeof parsed.clientId !== 'string' || parsed.clientId.length === 0
+      || typeof parsed.transactionId !== 'string' || parsed.transactionId.length === 0
+    ) {
+      return { ok: false, error: 'EXCHANGE_FAILED', detail: 'broker 授权应用响应字段不完整' };
+    }
+    // 服务端按企业配置校验回调地址;回显不一致说明两端对授权事务的理解已分叉。
+    if (parsed.redirectUri !== redirectUri) {
+      return { ok: false, error: 'EXCHANGE_FAILED', detail: 'broker 返回的回调地址与本机不一致' };
+    }
+    return { ok: true, clientId: parsed.clientId, transactionId: parsed.transactionId };
+  };
+
   return {
+    bootstrap,
     // codeVerifier:PKCE 流(feishu)由 broker 端点透传上游;不吃 PKCE 的
     // provider(jira/slack)声明 pkce:false,不会带到这里。
-    exchange: (slug, { code, redirectUri, codeVerifier }) =>
+    exchange: (slug, { code, redirectUri, codeVerifier, transactionId }) =>
       call(slug, 'exchange', {
         code,
         redirectUri,
         ...(codeVerifier !== undefined ? { codeVerifier } : {}),
+        ...(transactionId !== undefined ? { transactionId } : {}),
       }),
     refresh: (slug, { refreshToken }) => call(slug, 'refresh', { refreshToken }),
   };

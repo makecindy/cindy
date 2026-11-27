@@ -1,3 +1,5 @@
+import { isKimiCodingProviderView, kimiUsageWindowMinutes } from '../../../shared/kimiCodingUsage';
+import { isOpenCodeGoProviderView, opencodeGoUsageWindowMinutes } from '../../../shared/opencodeGoUsage';
 import { useCodexRateLimitReset } from '@/hooks/useCodexRateLimitReset';
 import { CodexResetCredits } from './CodexResetCredits';
 import {
@@ -5,7 +7,7 @@ import {
   formatCompactTimeUntilReset,
   WEEKLY_WINDOW_MINUTES,
 } from '@/lib/compactQuotaCountdown';
-import { isCodexGatewayWireModel, isOpenAiSubscriptionProvider, type AgentKind } from '@cindy/model-providers';
+import { isClaudeSubscriptionProvider, isCodexGatewayWireModel, isOpenAiSubscriptionProvider, type AgentKind } from '@cindy/model-providers';
 import { providerDisplayNameById } from '@/lib/providerDisplayName';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { useProviders } from '@/hooks/useProviders';
@@ -49,6 +51,8 @@ import { useClaudeOAuthConnected } from '@/hooks/useClaudeOAuthConnected';
 import { useClaudeSessionRoute } from '@/hooks/useClaudeSessionRoute';
 import { useSessionUsageMoney, type SessionUsageMoney } from '@/hooks/useSessionUsageMoney';
 import { useSessionTokens } from '@/hooks/useSessionTokens';
+import { useUsageCostDetails } from '@/hooks/useUsageCostDetails';
+import { UsageCostDetails } from './UsageCostDetails';
 import { useChatDisplaySnapshot } from '@/components/chat/ChatDisplaySnapshotContext';
 import {
   requestCodexAccountRefresh,
@@ -77,16 +81,17 @@ import {
   selectRemoteCodexAccountUsage,
   useRemoteClaudeAccountUsage,
   useRemoteCodexAccountUsage,
+  useRemoteCodexRefreshState,
+  requestRemoteCodexLiveRefresh,
   useRemoteXaiRateLimit,
   useRemoteXaiSubscriptionUsage,
 } from '@/hooks/useRemoteDeviceUsage';
 import {
-  isClaudeSubscriptionAlerting,
-  isClaudeUsageWindowAlerting,
   matchScopedWindowForModel,
   type ClaudeUsageWindow,
 } from '../../../shared/claudeSubscriptionUsage';
 import { useCodexRuntimeRoute } from '@/hooks/useCodexRuntimeRoute';
+import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
 import { useXaiRateLimit } from '@/hooks/useXaiRateLimit';
 import {
@@ -131,6 +136,8 @@ import {
   buildDeepSeekUsageCard,
   buildXaiUsageCard,
   buildZhipuUsageCard,
+  buildKimiUsageCard,
+  buildOpenCodeGoUsageCard,
   type UsageCardAccount,
 } from './usageCardModel';
 import { useProviderAccountUsage } from '@/hooks/useProviderAccountUsage';
@@ -140,6 +147,20 @@ import {
   isZhipuCodingPlanProviderView,
 } from '@/lib/providerAccountUsageView';
 import { type ProviderAccountUsageSnapshot, type ZhipuCodingPlanQuotaSnapshot } from '../../../shared/providerAccountUsage';
+import {
+  quotaLevelFromRemaining,
+  quotaLevelFromSeverity,
+  quotaLevelFromUsed,
+  strongerQuotaLevel,
+  type QuotaLevel,
+} from '@cindy/maker-shared/quota-level';
+import { QUOTA_TEXT_COLOR_CLASSES } from './QuotaBar';
+import {
+  sessionAccountCodexPayload,
+  sessionAccountDisplay,
+  useSessionSubscriptionAccount,
+  sessionSubscriptionPoolProvider,
+} from '../new-chat/SessionSubscriptionAccount';
 
 // XD 网关 / 托管账号之前会跳到内部用量看板(内部域名)—— 开源前移除该硬编码。
 // 登录随凭据只下发 { endpoint, apiKey }(见 main/model-access/credentialsSync.ts),不含
@@ -148,7 +169,8 @@ import { type ProviderAccountUsageSnapshot, type ZhipuCodingPlanQuotaSnapshot } 
 // TODO(后续): 若 model-access-server 在下发凭据时附带看板地址(按个人 / 企业租户区分的
 // usageDashboardUrl / consoleUrl),据此恢复网关账号的跳转 + tooltip 链接行
 // (i18n 文案 todaySpend.openProxyUsage 已保留待复用,勿当死 key 删)。
-const CODEX_USAGE_DASHBOARD_URL = 'https://chatgpt.com/codex/settings/usage';
+// /codex/settings/usage 已随 ChatGPT 前端改版失效(登录后落回首页),与 Codex CLI 一致改用 /settings/usage。
+const CODEX_USAGE_DASHBOARD_URL = 'https://chatgpt.com/settings/usage';
 const XAI_USAGE_DASHBOARD_URL = 'https://grok.com';
 const CLAUDE_USAGE_DASHBOARD_URL = 'https://claude.ai/settings/usage';
 
@@ -294,8 +316,14 @@ interface ChipWindowSegment extends ChipWindowSlot {
    * 而不是僵住的旧百分比, 新快照落地时由重置滚动动画揭晓。
    */
   resetPending: boolean;
-  /** 本窗口自身达到告警条件:chip 只把这一段的剩余百分比染红, 其余段保持常色。 */
-  alerting: boolean;
+  /** 本窗口的额度级别(共用 quota-level 规则):chip 只给这一段的剩余百分比上色, 其余段保持常色。 */
+  level: QuotaLevel;
+}
+
+/** Claude 窗口:剩余比例按共用规则, 服务端 severity 只会把级别往上提。 */
+function claudeWindowLevel(window: { utilization?: number | null; severity?: string | null }): QuotaLevel {
+  const used = typeof window.utilization === 'number' ? quotaLevelFromUsed(clampPercent(window.utilization)) : 'normal';
+  return strongerQuotaLevel(used, quotaLevelFromSeverity(window.severity));
 }
 
 // 悬念期上限常量在 quotaResetRollup.ts(tick 节奏要踩着超时边界调度, 判定与
@@ -371,7 +399,7 @@ function toCodexChipWindow(
     remainingPercent: 100 - clampPercent(window.usedPercent),
     resetsAtMs,
     resetPending: isResetPending(resetsAtMs, nowMs),
-    alerting: false,
+    level: quotaLevelFromUsed(clampPercent(window.usedPercent)),
   };
 }
 
@@ -420,6 +448,22 @@ function getCodexApiEmptyState(
 // ── Claude 订阅 (Anthropic OAuth) 形态 ───────────────────────────────────────
 // 主 chip 方案 B: 5h 剩余% · 当前模型周限剩余% (weekly_scoped 按模型家族匹配, 匹配
 // 不到回退总周限并标注口径) · 本会话价值 $。utilization 语义 = 已用百分比 (0-100)。
+
+/** Account-wide rejection must not leak another model's exhausted quota into this task. */
+function isClaudeSessionRejected(
+  snapshot: ClaudeSubscriptionUsageSnapshot | null,
+  modelId: string | null | undefined,
+): boolean {
+  if (snapshot?.rateLimitStatus?.trim().toLowerCase() !== 'rejected') return false;
+  // An explicit rejection of a shared window still applies even before its usage reaches 100%.
+  if (snapshot.representativeClaim === 'five_hour' || snapshot.representativeClaim === 'seven_day') return true;
+  const exhausted = (window: ClaudeUsageWindow | null | undefined) =>
+    !!window && Number.isFinite(window.utilization) && window.utilization >= 100;
+  const scoped = matchScopedWindowForModel(snapshot.scoped, modelId);
+  if ([snapshot.fiveHour, snapshot.sevenDay, scoped].some(exhausted)) return true;
+  // Retain unclassified rejections when there is no model-specific exhaustion to explain them.
+  return !snapshot.scoped?.some(exhausted);
+}
 
 /**
  * 当前会话生效的周限窗口: 命中当前模型的 weekly_scoped 条目优先 (label 带模型名,
@@ -478,7 +522,7 @@ function getClaudeChipWindows(
       remainingPercent: 100 - clampPercent(fiveHour.utilization),
       resetsAtMs,
       resetPending: isResetPending(resetsAtMs, nowMs),
-      alerting: isClaudeUsageWindowAlerting(fiveHour),
+      level: claudeWindowLevel(fiveHour),
     });
   }
   const weekly = resolveClaudeWeeklyWindow(snapshot, modelId, t);
@@ -508,7 +552,24 @@ function getClaudeChipWindows(
       remainingPercent: 100 - clampPercent(weekly.window.utilization),
       resetsAtMs,
       resetPending: isResetPending(resetsAtMs, nowMs),
-      alerting: isClaudeUsageWindowAlerting(weekly.window),
+      level: claudeWindowLevel(weekly.window),
+    });
+  }
+  // A scoped model window replaces the total week in the compact view. Reveal
+  // the total when it needs attention, so the warning always has a visible cause.
+  const totalWeek = snapshot.sevenDay;
+  if (
+    weekly?.modelDisplayName && totalWeek && Number.isFinite(totalWeek.utilization)
+    && claudeWindowLevel(totalWeek) !== 'normal'
+  ) {
+    const resetsAtMs = toEpochMs(totalWeek.resetsAt);
+    windows.push({
+      key: 'claude-weekly:total',
+      label: t('todaySpend.claude.totalWeeklyLabel'),
+      remainingPercent: 100 - clampPercent(totalWeek.utilization),
+      resetsAtMs,
+      resetPending: isResetPending(resetsAtMs, nowMs),
+      level: claudeWindowLevel(totalWeek),
     });
   }
   return windows.map((window) => ({
@@ -547,17 +608,13 @@ function getZhipuChipWindows(
       remainingPercent,
       resetsAtMs,
       resetPending: isResetPending(resetsAtMs, nowMs),
-      alerting: remainingPercent <= 20,
+      level: quotaLevelFromRemaining(remainingPercent),
     });
   };
   push('zhipu-5h', snapshot.fiveHour, '5h', FIVE_HOUR_WINDOW_MINUTES);
   push('zhipu-weekly', snapshot.weekly, t('quotaCard.weeklyLabel'), WEEKLY_WINDOW_MINUTES);
   return windows;
 }
-
-// 告警判定 (chip 变红的口径 + allowed_warning 为何不染红、为何不用 representativeClaim
-// 的取舍) 已收进 shared/claudeSubscriptionUsage.ts 的
-// isClaudeSubscriptionAlerting (纯数据判定, 有直接单测)。
 
 /** 最近一轮 tooltip 使用的 assistant 消息明细。 */
 interface LatestTurnUsageSummary {
@@ -608,7 +665,9 @@ function toQuotaHoverCardTurnUsage(
 ): QuotaHoverCardTurnUsage | null {
   if (!summary) return null;
   const { details } = summary;
-  const costText = summary.money
+  const costText = details.userTurnAmounts?.length
+    ? details.userTurnAmounts.map(formatTurnCostMoney).join(' + ')
+    : summary.money
     ? formatTurnCostMoney(summary.money)
     : summary.costUsd != null
       ? formatTurnCostUsd(summary.costUsd)
@@ -640,6 +699,12 @@ function toQuotaHoverCardTurnUsage(
   };
 }
 
+function formatSessionAmounts(amounts: RegionalMoney[] | undefined, fallback: RegionalMoney): string {
+  return (amounts?.length ? amounts : [fallback]).map(money =>
+    money.kind === 'actual-cost' && money.approximate ? `≈${formatTurnCostMoney(money)}` : formatTurnCostMoney(money),
+  ).join(' + ');
+}
+
 /** 把会话金额投影成卡片数据；混合合计保留实际费用与价值估算两条构成。 */
 function toQuotaHoverCardSessionUsage(
   sessionUsage: SessionUsageMoney,
@@ -663,9 +728,9 @@ function toQuotaHoverCardSessionUsage(
     costIsEstimate:
       totalMoney?.kind === 'value-estimate' ||
       Boolean(!actualMoney?.amount && estimatedValueMoney?.amount),
-    ...(actualMoney?.amount ? { actualCostText: formatTurnCostMoney(actualMoney) } : {}),
+    ...(actualMoney?.amount ? { actualCostText: formatSessionAmounts(sessionUsage.actualAmounts, actualMoney) } : {}),
     ...(estimatedValueMoney?.amount
-      ? { estimatedValueText: formatTurnCostMoney(estimatedValueMoney) }
+      ? { estimatedValueText: formatSessionAmounts(sessionUsage.estimatedAmounts, estimatedValueMoney) }
       : {}),
   };
 }
@@ -750,7 +815,7 @@ function getXaiChipWindows(
       remainingPercent: 100 - clampPercent(used),
       resetsAtMs,
       resetPending: isResetPending(resetsAtMs, nowMs),
-      alerting: isXaiSubscriptionAlerting(snapshot, nowMs),
+      level: quotaLevelFromUsed(clampPercent(used)),
     },
   ];
 }
@@ -793,7 +858,15 @@ function formatDeepSeekBalanceSegment(
   return t('providerAccountUsage.deepSeek.chipBalance', { balance });
 }
 
-function renderSegmentedLabel(segments: React.ReactNode[]): React.ReactNode {
+function renderSegmentedLabel(segments: React.ReactNode[], wrap = false): React.ReactNode {
+  if (wrap) return segments.map((seg, i) => (
+    <span key={i} className="inline-flex min-h-5 items-center whitespace-nowrap tabular-nums">
+      {seg}
+      {i < segments.length - 1 && (
+        <span aria-hidden="true" className="mx-2 inline-block h-3 w-px bg-current opacity-30" />
+      )}
+    </span>
+  ));
   return segments.map((seg, i) => (
     <React.Fragment key={i}>
       {i > 0 && (
@@ -821,6 +894,7 @@ interface TodaySpendChipProps {
   /** 来自 session.totalCostUsd（sessionService.get 拿到）— mount 后由 IPC push 更新。 */
   sessionInitialMoney?: RegionalMoney | null;
   sessionInitialCostUsd?: number | null;
+  sessionInitialUsdApproximate?: boolean;
   /** 来自 session.totalTokenUsage（sessionService.get 拿到）— mount 后由 IPC push 更新。 */
   sessionInitialTokens?: number | null;
   /** 远端 Codex 由远端 daemon 路由,本机不能拿本地 app-server route / 账号快照来归类。 */
@@ -845,6 +919,7 @@ export function TodaySpendChip({
   sessionId,
   sessionInitialMoney,
   sessionInitialCostUsd,
+  sessionInitialUsdApproximate,
   sessionInitialTokens,
   remoteHostId,
   deviceLinkDeviceId,
@@ -872,7 +947,7 @@ export function TodaySpendChip({
   });
   // cc 订阅判定对齐 main 的 isClaudeSubscriptionSession(register.ts)+ proxy 实际路由:
   //   - 显式选 Anthropic 供应商 → 订阅直连(Claude 模型直连 api.anthropic.com,
-  //     LiteLLM 看不到, gateway quota 不代表真实花费, 抑制 daily/monthly 展示);
+  //     这类消费不计入 Cindy AI 账号额度, gateway quota 不代表真实花费, 抑制 daily/monthly 展示);
   //   - 默认路由(providerId=null)→ **优先用 proxy 观察到的会话生效路由**
   //     (claude-session-route-registry, 每请求真值):cc 子进程凭证在 spawn 时冻结,
   //     用全局活性凭证状态重算会与实际路由发散(典型:gateway-spawn 会话跑着时
@@ -897,12 +972,13 @@ export function TodaySpendChip({
     isDefaultRouteClaudeSession &&
     observedClaudeRoute == null &&
     (gatewayKeyReconciling || (!hasGatewayKey && claudeOAuthConnected == null));
-  const { providers: localQuotaProviders } = useProviders();
-  const { providers: deviceQuotaProviders } = useDeviceProviders(accountDeviceId ?? undefined);
+  const { providers: localQuotaProviders, loading: localQuotaLoading, error: localQuotaError } = useProviders();
+  const { providers: deviceQuotaProviders, loading: deviceQuotaLoading, error: deviceQuotaError } = useDeviceProviders(accountDeviceId ?? undefined);
   const quotaProviders = isDeviceLinkRemote ? deviceQuotaProviders : localQuotaProviders;
   const selectedQuotaProvider = quotaProviders.find((provider) => provider.id === providerId);
   const isClaudeAccount =
-    providerId === 'anthropic' || selectedQuotaProvider?.auth?.native === 'claude';
+    providerId === 'anthropic' || selectedQuotaProvider?.auth?.native === 'claude' ||
+    isClaudeSubscriptionProvider(selectedQuotaProvider);
   const isXaiAccount = providerId === 'xai' || selectedQuotaProvider?.auth?.native === 'xai';
   // Remote provider ids belong to the device running the Agent. Reuse its existing provider
   // catalog (also used by the model selector), never the controller's same-named account.
@@ -962,8 +1038,21 @@ export function TodaySpendChip({
     isCodexBudgetModel && (providerId == null || providerId === 'xd');
   const isCodexXaiProvider =
     vendorKey === 'codex' && (isXaiAccount || (providerId == null && isXaiPrefixedModel));
+  // A saved null route can resume on its pinned account's isolated OAuth host even
+  // when the default host has no login or still reports a gateway credential.
+  // Only an actual task binding establishes this fact; unknown/default reads do not.
+  const implicitCodexAccount = useSessionSubscriptionAccount(null, accountDeviceId,
+    !accountUnreadable && vendorKey === 'codex' && providerId == null &&
+    !remoteHostId && !isCodexXaiProvider && !isCodexGatewayBudgetModel &&
+    sessionSubscriptionPoolProvider('codex', providerId, remoteHostId, undefined, true, {
+      modelId, providers: quotaProviders,
+      catalogReady: isDeviceLinkRemote
+        ? !deviceQuotaLoading && !deviceQuotaError
+        : !localQuotaLoading && !localQuotaError,
+    }) === 'openai');
+  const hasImplicitCodexBinding = implicitCodexAccount?.state === 'bound';
   // 显式 OpenAI 订阅连接在执行端固定走该账号的 OAuth（独立账号有自己的 host）。
-  // 全局 authInjection 只用于未指定来源的旧任务，不能因本机 Codex 断开或其它
+  // 全局 authInjection 仅作为未确认任务绑定的旧来源回退，不能因本机 Codex 断开或其它
   // API host 的状态隐藏所选账号的额度。xAI 由 proxy 注入 SuperGrok OAuth。
   // 远端 Codex 的事实在远端 daemon 上,本机只记录 token 价值估算,不写本地 gateway cost。
   // device-link 远程 codex 与 SSH 远程同口径:非 xai / 非折扣模型 / 非显式 XD 即按订阅
@@ -981,7 +1070,7 @@ export function TodaySpendChip({
     (isRemoteCodexSession ||
       isDeviceLinkRemoteCodexOauth ||
       (!isCodexGatewayBudgetModel &&
-        (isOpenAiAccount || (providerId == null && codexAuthInjection === 'oauth-bearer'))));
+        (isOpenAiAccount || (providerId == null && (hasImplicitCodexBinding || codexAuthInjection === 'oauth-bearer')))));
   const isCodexSubscription = isCodexOauth || isCodexXaiProvider;
   const isCodexApi = vendorKey === 'codex' && !isCodexSubscription;
   const isPiGateway =
@@ -995,6 +1084,10 @@ export function TodaySpendChip({
   // codex-oauth 与 cc+chatgpt/ bridge 共用同一 ChatGPT 账户 → 同一套限额窗口 chip 渲染。
   const usesCodexQuotaForm = isCodexOauth || isChatgptBridge;
   const usesXaiQuotaForm = isCodexXaiProvider || isXaiBridge;
+  // 订阅空态回退（#12149）覆盖 codex 订阅与 xai-backed codex（xai 账号 / xai/ 模型）：
+  // 这两类远程会话都不读本机额度、反向隧道计费为 0，chipSegments 同样会空。只按
+  // usesCodexQuotaForm 会漏掉 xai-backed codex（它归 usesXaiQuotaForm，同样空态）。
+  const codexFamilyQuotaForm = usesCodexQuotaForm || isCodexXaiProvider;
   // 远程会话不读本机账户快照 —— 额度事实在远端:SSH 用 remoteHostId 判,device-link 与
   // 远程 Agent 用 isDeviceLinkRemote 判(任一成立即远程,turn 消耗的是远端账号的额度)。
   const isAnyRemoteSession = Boolean(remoteHostId) || isDeviceLinkRemote;
@@ -1004,7 +1097,9 @@ export function TodaySpendChip({
     !isAnyRemoteSession && Boolean(hasDeepSeekOfficialRouteView(selectedQuotaProvider));
   const usesZhipuCodingPlanForm =
     !isAnyRemoteSession && Boolean(isZhipuCodingPlanProviderView(selectedQuotaProvider));
-  const usesProviderAccountUsageForm = usesDeepSeekAccountForm || usesZhipuCodingPlanForm;
+  const usesKimiCodingForm = !remoteHostId && !accountUnreadable && isKimiCodingProviderView(selectedQuotaProvider);
+  const usesOpenCodeGoForm = !remoteHostId && !accountUnreadable && isOpenCodeGoProviderView(selectedQuotaProvider);
+  const usesProviderAccountUsageForm = usesDeepSeekAccountForm || usesZhipuCodingPlanForm || usesKimiCodingForm || usesOpenCodeGoForm;
   // 会话所在引擎 → 查询用 runtime：同一供应商各引擎可用不同账户的独立密钥，
   // 余额/配额必须对准当前会话实际路由的账户（vendorKey 缺省 = 默认路由，不传）。
   const providerAccountAgent: AgentKind | undefined =
@@ -1018,11 +1113,12 @@ export function TodaySpendChip({
   const providerAccountUsage = useProviderAccountUsage(
     usesProviderAccountUsageForm && providerAccountAgent ? selectedQuotaProvider : undefined,
     providerAccountAgent,
+    usesKimiCodingForm || usesOpenCodeGoForm ? accountDeviceId : null,
   );
   const providerAccountSnapshot =
     providerAccountUsage.result?.status === 'ready' ? providerAccountUsage.result.snapshot : null;
   // Model Access 配额只属于实际走 XD/Cindy AI Gateway 的本地会话。显式自定义供应商即使
-  // 复用了 env-key / oauth-bearer host，也不能据 host 的启动凭证把 /v2/user/info 串进来。
+  // 复用了 env-key / oauth-bearer host，也不能据 host 的启动凭证读取企业账号额度。
   const isClaudeGateway =
     vendorKey === 'cc' &&
     !isAnyRemoteSession &&
@@ -1044,7 +1140,7 @@ export function TodaySpendChip({
           (codexAuthInjection === 'provider-oauth' && hasGatewayKey))));
   const usesGatewayQuota = isClaudeGateway || isCodexGateway || isPiGateway;
   // device-link 远程网关形态:显式 XD / codex 折扣模型 / pi 默认(provider 创建时固化,
-  // 空即 XD)直接判;cc 默认路由用被控端路由观察镜像。数据走被控端 LiteLLM 配额镜像,
+  // 空即 XD)直接判;cc 默认路由用被控端路由观察镜像。数据走被控端 Cindy AI 企业账号配额镜像,
   // 本机 quota hook(usesGatewayQuota)对远程保持关闭;credit 三池 handler 绑定主窗口
   // sender 不镜像 —— 按本机「拿不到就隐藏」的既有降级语义,credit 行远程不显示。
   const isDeviceLinkRemoteGateway =
@@ -1062,10 +1158,21 @@ export function TodaySpendChip({
         !isClaudeSubscription &&
         !isSubscriptionBridge &&
         (providerId == null || providerId === 'xd')));
-  const shouldReadLocalCodexAccountUsage = usesCodexQuotaForm && !isAnyRemoteSession;
+  // 账号池：任务固定在一个账号上，用量与账号名只读那个账号，不读默认账号或下一个待分配的账号。
+  // 默认账号、没有账号池或旧任务时 taskAccount 不替换用量，原来的读取就是这个账号。
+  const explicitTaskAccount = useSessionSubscriptionAccount(
+    !accountUnreadable && (usesCodexQuotaForm || (isClaudeSubscription && !isSubscriptionBridge))
+      ? providerId
+      : null,
+    accountDeviceId,
+  );
+  const taskAccount = sessionAccountDisplay(implicitCodexAccount ?? explicitTaskAccount, t);
+  const readsTaskAccountUsage = taskAccount?.replacesUsage === true;
+  const shouldReadLocalCodexAccountUsage =
+    usesCodexQuotaForm && !isAnyRemoteSession && !readsTaskAccountUsage;
   // 会话金额只由已发生的 turn 决定，不由当前选中的 provider/模型决定。实际费用从
   // session ledger 读取，订阅价值从消息明细重建，再统一汇总成“本对话”投影。
-  const sessionUsage = useSessionUsageMoney(sessionId, sessionInitialMoney, sessionInitialCostUsd);
+  const sessionUsage = useSessionUsageMoney(sessionId, sessionInitialMoney, sessionInitialCostUsd, sessionInitialUsdApproximate);
   const sessionTokens = useSessionTokens(
     vendorKey === 'pi' ||
       isCodexApi ||
@@ -1091,19 +1198,41 @@ export function TodaySpendChip({
   );
   // device-link 远程 codex / chatgpt-bridge:账号所在电脑的权威组合 payload 镜像,选槽 / 选桶
   // 与本机同口径在消费点执行(selectRemoteCodexAccountUsage)。
+  const remoteCodexDeviceId = isDeviceLinkRemote && usesCodexQuotaForm && !readsTaskAccountUsage ? accountDeviceId : null;
+  const liveRemoteCodex = Boolean(remoteCodexDeviceId && !isChatgptBridge && !isProviderShareAgentDeviceId(remoteCodexDeviceId));
   const remoteCodexAccountPayload = useRemoteCodexAccountUsage(
-    isDeviceLinkRemote && usesCodexQuotaForm ? accountDeviceId : null,
+    remoteCodexDeviceId,
     providerId ?? 'openai',
+    // Native quota reads persist a snapshot on the host. Long-lived task chips
+    // share Settings updates and refresh on opening/recovery, without polling.
+    { live: liveRemoteCodex, poll: false },
   );
-  const accountUsage = isDeviceLinkRemote
-    ? selectRemoteCodexAccountUsage(
-        remoteCodexAccountPayload,
-        isChatgptBridge ? 'openai-web' : 'app-server',
-        modelId,
-      )
-    : localAccountUsage;
-  const { snapshot: codexRateLimits, refresh: refreshCodexRateLimits } = useCodexRateLimits(
-    usesCodexQuotaForm && !isAnyRemoteSession,
+  const remoteCodexRefresh = useRemoteCodexRefreshState(liveRemoteCodex ? remoteCodexDeviceId : null, providerId ?? 'openai');
+  const taskAccountCodexPayload = React.useMemo(
+    () =>
+      readsTaskAccountUsage && usesCodexQuotaForm
+        ? sessionAccountCodexPayload(taskAccount?.usage ?? null)
+        : null,
+    [readsTaskAccountUsage, usesCodexQuotaForm, taskAccount?.usage],
+  );
+  const accountUsage =
+    isDeviceLinkRemote || readsTaskAccountUsage
+      ? selectRemoteCodexAccountUsage(
+          readsTaskAccountUsage ? taskAccountCodexPayload : remoteCodexAccountPayload,
+          isChatgptBridge && !readsTaskAccountUsage ? 'openai-web' : 'app-server',
+          readsTaskAccountUsage && isChatgptBridge
+            ? modelId?.slice(CHATGPT_MODEL_PREFIX.length)
+            : modelId,
+        )
+      : localAccountUsage;
+  // 重置次数属于默认账号；任务用的是账号池里的其他账号时不显示。
+  const {
+    snapshot: codexRateLimits,
+    refresh: refreshCodexRateLimits,
+    failed: codexQuotaReadFailed,
+    refreshing: codexQuotaRefreshing,
+  } = useCodexRateLimits(
+    usesCodexQuotaForm && !isAnyRemoteSession && !readsTaskAccountUsage,
     providerId ?? 'openai',
   );
   const manualReset = useCodexRateLimitReset(codexRateLimits, refreshCodexRateLimits, providerId ?? 'openai');
@@ -1143,20 +1272,31 @@ export function TodaySpendChip({
   // 优先(不消耗 Claude 订阅额度),此时不读。device-link 远程会话 / 远程 Agent 读账号所在
   // 电脑的镜像,本机快照与其无关(额度事实在那台),两个 hook 的 enabled 互斥。
   const localClaudeSubscriptionUsage = useClaudeSubscriptionUsage(
-    isClaudeSubscription && !isSubscriptionBridge && !isDeviceLinkRemote,
+    isClaudeSubscription && !isSubscriptionBridge && !isDeviceLinkRemote && !readsTaskAccountUsage,
     providerId ?? 'anthropic',
   );
   const remoteClaudeSubscriptionUsage = useRemoteClaudeSubscriptionUsage(
-    isDeviceLinkRemoteClaudeSubscription && !isSubscriptionBridge ? accountDeviceId : null,
+    isDeviceLinkRemoteClaudeSubscription && !isSubscriptionBridge && !readsTaskAccountUsage
+      ? accountDeviceId
+      : null,
     providerId ?? 'anthropic',
   );
-  const claudeSubscriptionUsage = isDeviceLinkRemote
-    ? remoteClaudeSubscriptionUsage
-    : localClaudeSubscriptionUsage;
+  const claudeSubscriptionUsage = readsTaskAccountUsage
+    ? (taskAccount?.usage?.claude ?? null)
+    : isDeviceLinkRemote
+      ? remoteClaudeSubscriptionUsage
+      : localClaudeSubscriptionUsage;
   const latestTurnUsage = useLatestTurnUsageSummary(sessionId);
   const quotaCardSessionUsage = toQuotaHoverCardSessionUsage(sessionUsage, sessionTokens);
   const quotaCardTurnUsage = toQuotaHoverCardTurnUsage(latestTurnUsage, t);
   const [quotaPopoverOpen, setQuotaPopoverOpen] = React.useState(false);
+  const refreshRemoteCodex = React.useCallback(() => {
+    if (liveRemoteCodex && remoteCodexDeviceId) requestRemoteCodexLiveRefresh(remoteCodexDeviceId, providerId ?? 'openai');
+  }, [liveRemoteCodex, remoteCodexDeviceId, providerId]);
+  React.useEffect(() => {
+    if (quotaPopoverOpen) refreshRemoteCodex();
+  }, [quotaPopoverOpen, refreshRemoteCodex]);
+  const costDetails = useUsageCostDetails(sessionId, quotaPopoverOpen);
   // 浮层宿主：紧跟触发器之后（见 popover.tsx 的 portalContainer 注释）。portal 到 body
   // 末尾时，键盘焦点一旦进卡就再也 Tab 不回底栏（用户实测）。
   const [quotaPopoverPortalHost, setQuotaPopoverPortalHost] = React.useState<HTMLDivElement | null>(
@@ -1362,12 +1502,12 @@ export function TodaySpendChip({
     : [
         sessionUsage.actualMoney?.amount
           ? t('todaySpend.tooltip.sessionUsed', {
-              cost: formatTurnCostMoney(sessionUsage.actualMoney),
+              cost: formatSessionAmounts(sessionUsage.actualAmounts, sessionUsage.actualMoney),
             })
           : null,
         sessionUsage.estimatedValueMoney?.amount
           ? t('todaySpend.codex.sessionValueLabel', {
-              cost: formatTurnCostMoney(sessionUsage.estimatedValueMoney),
+              cost: formatSessionAmounts(sessionUsage.estimatedAmounts, sessionUsage.estimatedValueMoney),
             })
           : null,
       ]
@@ -1399,7 +1539,9 @@ export function TodaySpendChip({
         ? t('todaySpend.openCodexUsage')
         : isClaudeSubscription
           ? t('todaySpend.openClaudeUsage')
-          : usesDeepSeekAccountForm
+          : usesKimiCodingForm
+            ? t('providerAccountUsage.kimi.usage')
+            : usesDeepSeekAccountForm
             ? t('providerAccountUsage.openDashboard')
             : usesZhipuCodingPlanForm
               ? t('providerAccountUsage.zhipuCodingPlan.usage')
@@ -1412,7 +1554,31 @@ export function TodaySpendChip({
 
   // 当前形态下 chip 展示的限额窗口段 (Codex 订阅 / Claude 订阅 / 智谱 Coding Plan 共用结构);
   // 其它形态为空数组, 两个 rollup slot 空转。
-  const chipWindows: ChipWindowSegment[] = usesCodexQuotaForm
+  const chipWindows: ChipWindowSegment[] = usesKimiCodingForm
+    ? (providerAccountSnapshot?.kind === 'kimi-coding-quota' && providerAccountUsage.result?.status === 'ready' && !providerAccountUsage.result.stale
+      ? providerAccountSnapshot.windows.slice(0, 2).map(w => ({
+        key: w.id,
+        label: w.id === 'limit_month_total' || w.id === 'limit_month_code'
+          ? t(`providerAccountUsage.kimi.${w.id}`)
+          : formatCompactTimeUntilReset(w.resetsAt === null ? null : w.resetsAt / 1000, windowLabelNowMs, t, kimiUsageWindowMinutes(w.id)) ?? t(`providerAccountUsage.kimi.${w.id}`),
+        remainingPercent: 100 - w.usedPercent,
+        resetsAtMs: w.resetsAt,
+        resetPending: isResetPending(w.resetsAt, windowLabelNowMs),
+        level: quotaLevelFromUsed(w.usedPercent),
+      })) : [])
+    : usesOpenCodeGoForm
+    ? (providerAccountSnapshot?.kind === 'opencode-go-quota' && providerAccountUsage.result?.status === 'ready' && !providerAccountUsage.result.stale
+      ? providerAccountSnapshot.windows.map(w => ({
+        key: w.id,
+        label: w.id === 'monthly'
+          ? t('providerAccountUsage.kimi.limit_month_total')
+          : formatCompactTimeUntilReset(w.resetsAt === null ? null : w.resetsAt / 1000, windowLabelNowMs, t, opencodeGoUsageWindowMinutes(w.id)) ?? t(w.id === 'rolling' ? 'providerAccountUsage.kimi.limit_5h' : 'providerAccountUsage.kimi.limit_7d'),
+        remainingPercent: 100 - w.usedPercent,
+        resetsAtMs: w.resetsAt,
+        resetPending: isResetPending(w.resetsAt, windowLabelNowMs),
+        level: quotaLevelFromUsed(w.usedPercent),
+      })) : [])
+    : usesCodexQuotaForm
     ? getCodexChipWindows(accountUsage, t, windowLabelNowMs)
     : usesXaiQuotaForm
       ? getXaiChipWindows(xaiSubscriptionUsage, t, windowLabelNowMs)
@@ -1427,13 +1593,15 @@ export function TodaySpendChip({
               windowLabelNowMs,
             )
           : [];
-  // chip 最多两个窗口段, 固定两个 slot 无条件调 hook(Rules of Hooks)。
+  // OpenCode Go exposes three meters; keep one rollup slot per window segment.
   // 重置滚动: 快照刷新中同窗口剩余百分比大幅回升(典型: 窗口到点重置 0% → 100%)
   // 时, 显示值从 0% 快速滚动到新值。
   const windowSlotA = chipWindows[0] ?? null;
   const windowSlotB = chipWindows[1] ?? null;
+  const windowSlotC = chipWindows[2] ?? null;
   const rollupA = useQuotaResetRollup(windowSlotA);
   const rollupB = useQuotaResetRollup(windowSlotB);
+  const rollupC = useQuotaResetRollup(windowSlotC);
   // 窗口段元素登记表(key → span): 撒花锚点用, 段消失时由 ref 回调置 null。
   const segmentElsRef = React.useRef<Record<string, HTMLSpanElement | null>>({});
   const windowSegments: React.ReactNode[] = chipWindows.map((window, index) => {
@@ -1449,7 +1617,7 @@ export function TodaySpendChip({
         </React.Fragment>
       );
     }
-    const rollup = index === 0 ? rollupA : rollupB;
+    const rollup = index === 0 ? rollupA : index === 1 ? rollupB : rollupC;
     const text = t(
       usesCodexQuotaForm
         ? 'todaySpend.codex.windowSegment'
@@ -1470,7 +1638,7 @@ export function TodaySpendChip({
       >
         {interpolateRemaining(
           text,
-          window.alerting ? <span className="text-[var(--error-fg)]">{remaining}</span> : remaining,
+          window.level !== 'normal' ? <span className={QUOTA_TEXT_COLOR_CLASSES[window.level]}>{remaining}</span> : remaining,
         )}
       </span>
     );
@@ -1528,6 +1696,7 @@ export function TodaySpendChip({
       && !usesXaiQuotaForm
       && !isClaudeSubscription
       && !usesZhipuCodingPlanForm
+      && !usesKimiCodingForm
       && !quotaPopoverOpen
     ) {
       return undefined;
@@ -1542,6 +1711,7 @@ export function TodaySpendChip({
     usesXaiQuotaForm,
     isClaudeSubscription,
     usesZhipuCodingPlanForm,
+    usesKimiCodingForm,
     quotaPopoverOpen,
     windowLabelNowMs,
     chipResetsAtMsList,
@@ -1597,7 +1767,6 @@ export function TodaySpendChip({
     windowLabelNowMs,
   ]);
 
-  const isDashboardClickable = usageDashboardUrl !== null;
   const handleClick = () => {
     if (!usageDashboardUrl) return; // 网关账号暂无看板:点击无反应
     void window.electronAPI.openExternal(usageDashboardUrl);
@@ -1608,10 +1777,15 @@ export function TodaySpendChip({
   const deviceLinkRemoteFormResolved =
     !accountUnreadable &&
     (isDeviceLinkRemoteClaudeSubscription ||
+      usesOpenCodeGoForm ||
       (isDeviceLinkRemote &&
         (usesCodexQuotaForm || usesXaiQuotaForm || isDeviceLinkRemoteGateway)));
   let labelNode: React.ReactNode;
   let account: UsageCardAccount = { title: t('quotaCard.usageTitle'), windows: [] };
+  // 订阅(codex/xai/claude)与 codex-api 两个形态共用的「有没有用量数据」判定（#12149）：
+  // 只在这里调一次 getCodexApiEmptyState，两个空态分支各按自身条件取用，避免同一判定
+  // 出现两份口径（下面的源码契约测试也钉住只有一个调用点）。
+  const codexEmptyState = getCodexApiEmptyState(latestTurnUsage);
   if (isDeviceLinkRemote && !deviceLinkRemoteFormResolved) {
     // device-link 远程会话不读取本机账号形态；金额仍使用同一个会话合计投影。
     // (形态已解析的远程会话不走这里——落到下方对应形态分支,用被控端镜像渲染。)
@@ -1631,17 +1805,56 @@ export function TodaySpendChip({
       ...(usesDeepSeekAccountForm && deepSeekBalanceSegment ? [deepSeekBalanceSegment] : []),
       ...windowSegments,
     ];
+    if (isClaudeSubscription && isClaudeSessionRejected(claudeSubscriptionUsage, modelId)) {
+      chipSegments.push(
+        <span key="claude-rejected" className="text-[var(--error-fg)]">
+          {t('todaySpend.claude.temporarilyLimited')}
+        </span>,
+      );
+    }
     if (sessionSegment) chipSegments.push(sessionSegment);
+    // 订阅形态没有可展示的额度窗口、也没有金额时（典型：SSH 远程 Codex —— 账号快照
+    // 读不到、反向隧道计费为 0），回退展示会话已记录的 token；与下方 codex-api 分支
+    // 同一把尺子（#12149）：有额度或金额保持原展示，都没有而有 token 显示会话 token，
+    // 连 token 都没有时区分「尚无用量」与「数据暂不可用」，不再渲染孤立的货币符号。
+    // codex 家族（含 xai-backed codex）远程会话同样两手空空，一并覆盖。
+    const codexQuotaTokenFallback =
+      codexFamilyQuotaForm && chipSegments.length === 0 && hasPositiveSessionTokens(sessionTokens);
+    if (codexQuotaTokenFallback) {
+      chipSegments.push(
+        t('todaySpend.codex.sessionTokensLine', {
+          tokens: formatCompactTokens(Math.floor(sessionTokens ?? 0)),
+        }),
+      );
+    }
+    const codexQuotaEmptyState =
+      codexFamilyQuotaForm &&
+      chipSegments.length === 0 &&
+      !hasPositiveSessionTokens(sessionTokens)
+        ? codexEmptyState
+        : null;
     labelNode =
       chipSegments.length > 0 ? (
-        renderSegmentedLabel(chipSegments)
+        renderSegmentedLabel(chipSegments, isClaudeSubscription)
+      ) : codexQuotaEmptyState ? (
+        <span className="tabular-nums opacity-60">
+          {t(
+            codexQuotaEmptyState === 'no-usage'
+              ? 'todaySpend.codex.noUsageLabel'
+              : 'todaySpend.codex.unavailableLabel',
+          )}
+        </span>
       ) : (
         <span className="tabular-nums opacity-60">{DEFAULT_MONEY_SYMBOL}</span>
       );
     // SSH 远程(remoteHostId)没有账号快照镜像,只显示价值估算;device-link 远程的
     // accountUsage / xai / claude 快照均已在上方切到被控端镜像,与本机同一套卡片渲染。
     if (!remoteHostId) {
-      account = usesCodexQuotaForm
+      account = usesKimiCodingForm
+        ? buildKimiUsageCard(providerAccountSnapshot?.kind === 'kimi-coding-quota' ? providerAccountSnapshot : null, t)
+        : usesOpenCodeGoForm
+        ? buildOpenCodeGoUsageCard(providerAccountSnapshot?.kind === 'opencode-go-quota' ? providerAccountSnapshot : null, t)
+        : usesCodexQuotaForm
         ? buildCodexUsageCard(
             accountUsage,
             !isAnyRemoteSession && codexRateLimits?.rateLimitResetCredits ? null : codexResetSummary,
@@ -1665,8 +1878,9 @@ export function TodaySpendChip({
                   t,
                 )
               : buildClaudeUsageCard(claudeSubscriptionUsage, t);
+      if ((usesKimiCodingForm || usesOpenCodeGoForm) && providerAccountUsage.result?.status === 'ready' && providerAccountUsage.result.stale) account.notices = [{ text: t('providerAccountUsage.kimi.stale'), tone: 'warn' }];
       if (usesProviderAccountUsageForm && providerAccountUsage.result?.status === 'unavailable') {
-        account.emptyText = t(`providerAccountUsage.error.${providerAccountUsage.result.error}`);
+        account.emptyText = t(`providerAccountUsage.${usesKimiCodingForm ? 'kimi.' : ''}error.${providerAccountUsage.result.error}`);
       }
       if (
         !usesProviderAccountUsageForm &&
@@ -1678,9 +1892,12 @@ export function TodaySpendChip({
             provider.id ===
             (providerId ?? (usesCodexQuotaForm ? 'openai' : usesXaiQuotaForm ? 'xai' : 'anthropic')),
         );
-        account.identity = usesCodexQuotaForm
-          ? identityProvider?.openAiAccount?.identity
-          : identityProvider?.subscriptionAccount?.identity;
+        // 账号池里的任务写它实际在用的账号，不写默认账号。
+        account.identity = taskAccount
+          ? taskAccount.identity
+          : usesCodexQuotaForm
+            ? identityProvider?.openAiAccount?.identity
+            : identityProvider?.subscriptionAccount?.identity;
       }
     }
   } else {
@@ -1690,7 +1907,7 @@ export function TodaySpendChip({
       isCodexApi && !slots.session.available && hasPositiveSessionTokens(sessionTokens);
     const codexApiEmptyState =
       isCodexApi && !slots.session.available && !hasPositiveSessionTokens(sessionTokens)
-        ? getCodexApiEmptyState(latestTurnUsage)
+        ? codexEmptyState
         : null;
     if (codexApiHasTokenFallback) {
       chipSegments.push(
@@ -1700,7 +1917,7 @@ export function TodaySpendChip({
       );
     }
     // Account quota is separate from lifetime task cost. API and SSH-remote routes never borrow it;
-    // device-link 网关形态用被控端 LiteLLM 配额镜像(claudeQuota 已切换),credit 三池不镜像。
+    // device-link 网关形态用被控端 Cindy AI 企业账号配额镜像(claudeQuota 已切换),credit 三池不镜像。
     if (usesGatewayQuota || isDeviceLinkRemoteGateway) {
       account.title = providerDisplayNameById('xd', quotaProviders, t);
       if (creditTotals) {
@@ -1786,22 +2003,18 @@ export function TodaySpendChip({
     account.emptyText = t('todaySpend.codex.noUsageDetail');
   }
 
-  // 告警态: 达到条件的窗口只把它自己的剩余百分比染 error 色 (语义豁免色, 跨主题一致),
-  // 其它窗口段、分隔线与任务价值保持常色。其它模型的周限吃紧不染红 —— chip 上没有
-  // 那一段, 红了也无从解释 (见 isClaudeSubscriptionAlerting 对 allowed_warning 的取舍)。
-  // 兜底: 当前会话确实受限 (headers 报 rejected, 或 scoped 周限占位时总周限告警) 但
-  // chip 上没有任何一个窗口达到条件 → 仍整条变红, 不丢受限信号。悬念期的告警窗口也算
-  // 「chip 上有」: 它的旧数据已失真, 段上显示「重置中…」不染红, 也不借兜底把整条染红。
-  const hasAlertingChipWindow = chipWindows.some((window) => window.alerting);
-  const chipAlertingFallback =
-    !hasAlertingChipWindow &&
-    ((isClaudeSubscription && isClaudeSubscriptionAlerting(claudeSubscriptionUsage, modelId)) ||
-      (usesXaiQuotaForm && isXaiSubscriptionAlerting(xaiSubscriptionUsage)));
+  // Claude warnings are attached to their own window or explicit rejection
+  // segment. Neither the separators nor the task value inherit an alert color.
+  const chipAlertingFallback = usesXaiQuotaForm
+    && !chipWindows.some((window) => window.level !== 'normal')
+    && isXaiSubscriptionAlerting(xaiSubscriptionUsage);
 
   // 与 ContextCapacityRing 视觉对齐 (h-5 = 20px) + reset button UA 默认 padding/border。
   // tabular-nums 让 "$306 / $1.2k" 这类数字段的字符宽度等宽, 段间数字落点对齐。
   const buttonClass = cn(
-    'inline-flex h-5 shrink-0 items-center',
+    isClaudeSubscription
+      ? 'inline-flex min-h-5 min-w-0 max-w-full flex-wrap items-center justify-end gap-y-1'
+      : 'inline-flex h-5 shrink-0 items-center',
     'text-12 font-medium leading-none tabular-nums',
     chipAlertingFallback
       ? 'text-[var(--error-fg)] hover:text-[var(--error-fg-strong)]'
@@ -1814,9 +2027,13 @@ export function TodaySpendChip({
   return (
     <div
       ref={chipRef}
-      className="inline-flex h-5 shrink-0 items-center gap-3"
+      className={cn('inline-flex items-center gap-3', isClaudeSubscription ? 'min-h-5 min-w-0 max-w-full' : 'h-5 shrink-0')}
       onMouseEnter={refreshCodexRateLimits}
-      onFocusCapture={refreshCodexRateLimits}
+      onFocusCapture={(event) => {
+        // Focusing Retry inside the portal must not start a read and disable
+        // that button before the user can activate it.
+        if (event.target === quotaPopoverTriggerRef.current) refreshCodexRateLimits();
+      }}
     >
       <Popover
         open={quotaPopoverOpen && !resetListOpen}
@@ -1831,10 +2048,8 @@ export function TodaySpendChip({
             ref={setQuotaPopoverFocusTarget}
             type="button"
             onClick={(event) => {
-              // 阻止 Radix 把 dashboard 点击解释成开关，chip 原动作保持不变。
               event.preventDefault();
-              if (isDashboardClickable) handleClick();
-              else openQuotaPopoverImmediately();
+              openQuotaPopoverImmediately();
             }}
             onMouseEnter={handleQuotaPopoverTriggerMouseEnter}
             onMouseLeave={handleQuotaPopoverMouseLeave}
@@ -1853,7 +2068,8 @@ export function TodaySpendChip({
               closeQuotaPopoverImmediately();
             }}
             className={buttonClass}
-            aria-label={usageDashboardLabel ?? t('quotaCard.usageTitle')}
+            aria-label={t('quotaCard.usageTitle')}
+            data-testid="task-usage-trigger"
           >
             {labelNode}
           </button>
@@ -1918,14 +2134,19 @@ export function TodaySpendChip({
           className="w-auto max-w-[calc(100vw-16px)] border-0 bg-transparent p-0 shadow-none"
         >
           <QuotaHoverCard
-            account={account}
+            account={codexQuotaReadFailed || remoteCodexRefresh.failed ? {
+              ...account,
+              refreshFailure: liveRemoteCodex
+                ? { retry: refreshRemoteCodex, retrying: remoteCodexRefresh.refreshing }
+                : { retry: refreshCodexRateLimits, retrying: codexQuotaRefreshing },
+            } : account}
             nowMs={windowLabelNowMs}
             sessionUsage={quotaCardSessionUsage}
             turnUsage={quotaCardTurnUsage}
             dashboardLabel={usageDashboardLabel}
             onOpenDashboard={handleClick}
             dashboardButtonRef={quotaPopoverDashboardButtonRef}
-            windowAction={usesCodexQuotaForm && !isAnyRemoteSession && (codexRateLimits?.rateLimitResetCredits || manualReset.canRetry) ? (
+            windowAction={usesCodexQuotaForm && !isAnyRemoteSession && !readsTaskAccountUsage && (codexRateLimits?.rateLimitResetCredits || manualReset.canRetry) ? (
               <Button size="xs" compact tone="quiet" aria-label={t('codexResets.title')} title={t('codexResets.title')}
                 onClick={() => {
                   quotaPopoverFocusTakenRef.current = false;
@@ -1935,16 +2156,18 @@ export function TodaySpendChip({
                 {manualReset.canRetry ? t('codexResets.retryReset') : t('codexResets.available', { count: codexRateLimits?.rateLimitResetCredits?.availableCount ?? 0 })}
               </Button>
             ) : null}
-          />
+          >
+            {sessionId ? <div className="px-4 py-3"><UsageCostDetails rows={costDetails} /></div> : null}
+          </QuotaHoverCard>
         </PopoverContent>
       </Popover>
-      <Dialog.Root open={resetListOpen && usesCodexQuotaForm && !isAnyRemoteSession} onOpenChange={setResetListOpen}>
+      <Dialog.Root open={resetListOpen && usesCodexQuotaForm && !isAnyRemoteSession && !readsTaskAccountUsage} onOpenChange={setResetListOpen}>
         <Dialog.Portal>
-          <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
+          <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
           <Dialog.Content
             aria-describedby={undefined}
             onPointerDownOutside={(event) => event.preventDefault()}
-            className="modal-panel fixed left-1/2 top-1/2 z-[10000] w-[400px] max-w-[calc(100vw-32px)] -translate-x-1/2 -translate-y-1/2 p-4"
+            className="modal-panel fixed left-1/2 top-1/2 z-modal w-[400px] max-w-[calc(100vw-32px)] -translate-x-1/2 -translate-y-1/2 p-4"
             onCloseAutoFocus={(event) => {
               event.preventDefault();
               // The confirmation owns focus when it opens after this dialog closes.
@@ -1968,7 +2191,7 @@ export function TodaySpendChip({
                 }} />
             </div>
             <Dialog.Close asChild>
-              <Tip text={t('common.dismiss')} contentClassName="z-[10001]">
+              <Tip text={t('common.dismiss')}>
                 <button type="button" aria-label={t('common.dismiss')}
                   className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full text-[var(--confirm-desc)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--confirm-title)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]">
                   <X className="h-4 w-4" aria-hidden="true" />

@@ -20,6 +20,7 @@ import {
   customType,
 } from 'drizzle-orm/sqlite-core';
 
+import type { MrRunObservation } from '@cindy/maker-scheduler';
 import type { SessionSource } from '../../shared/sessionSource.js';
 
 /** Rebuildable Chat Server projection inside the owner's database; namespace includes server and reader. */
@@ -106,9 +107,11 @@ const SESSION_SOURCES = [
   'telegram',
   'x',
   'discord',
+  'discord-hook',
   'wechat',
   'dingtalk',
   'wecom',
+  'imessage',
   'scheduler',
   'learn',
   'review',
@@ -126,9 +129,11 @@ export const sessions = sqliteTable(
     id: text('id').primaryKey(),
     title: text('title').notNull().default('New Maker'),
     workingDir: text('working_dir'),
+    /** Explicit project membership; null retains the legacy cwd-based grouping. */
+    projectDir: text('project_dir'),
     /**
      * 产品归属语义, 与 working_dir 解耦:
-     * - project: working_dir 是项目目录, 参与侧边栏 Projects 分组。
+     * - project: 按 project_dir 归组；旧任务缺省回落 working_dir。
      * - dialogue: working_dir 是对话自己的运行/文件目录, 不作为项目展示。
      */
     workspaceKind: text('workspace_kind', { enum: ['project', 'dialogue'] })
@@ -153,6 +158,7 @@ export const sessions = sqliteTable(
     sdkSessionId: text('sdk_session_id'),
     totalTokenUsage: integer('total_token_usage').notNull().default(0),
     totalCostUsd: real('total_cost_usd').notNull().default(0),
+    totalCostUsdIsApproximate: integer('total_cost_usd_is_approximate', { mode: 'boolean' }).notNull().default(false),
     /** 新版区域金额；legacy total_cost_usd 仍保留为历史 USD 事实。 */
     totalCostAmount: real('total_cost_amount').notNull().default(0),
     totalCostCurrency: text('total_cost_currency', { enum: ['CNY', 'USD'] }),
@@ -176,6 +182,8 @@ export const sessions = sqliteTable(
     planModeEnabled: integer('plan_mode_enabled', { mode: 'boolean' }).notNull().default(false),
     clearedAt: integer('cleared_at'), // unix ms
     pinnedAt: integer('pinned_at'), // unix ms
+    snoozedUntil: integer('snoozed_until'), // unix ms; presentation only
+    snoozedAt: integer('snoozed_at'), // host time of the explicit snooze
     /**
      * 后台隐藏时刻（unix ms）。非 NULL = 插件以 `agent.hiddenTasks` 声明创建或切换为
      * 隐藏的后台任务：不进入任务列表、搜索、未结束提示与新任务通知；用户仍可在插件
@@ -251,6 +259,9 @@ export const sessions = sqliteTable(
      * 进入桌面 sidebar；feishu 仍由飞书模块独立查询，不混进桌面主列表。
      */
     source: text('source', { enum: SESSION_SOURCES }).notNull().default('desktop'),
+    /** Display an Orca lead as an independent task while retaining its side-chat provenance. */
+    sideChatPromoted: integer('side_chat_promoted', { mode: 'boolean' }).notNull().default(false),
+    sideChatClosePending: integer('side_chat_close_pending', { mode: 'boolean' }).notNull().default(false),
     /**
      * feishu-bot: 对方的飞书 open_id（仅 source='feishu' 时有值）。
      * 99% 场景是 bot owner 自己。findActiveFeishu 用 (botAppId, openId) 复合查询。
@@ -320,6 +331,12 @@ export const sessions = sqliteTable(
      * 任务、目录与命令都在本机；Lead 与团队在那台。NULL = 普通任务。
      */
     orcaRemoteLead: text('orca_remote_lead'),
+    /**
+     * 由其他任务通过 send_to_session（create 模式）新建时的来源任务元数据
+     * (JSON，见 shared/sessionOrigin.ts)。独立于 parent_session_id（仅用于 fork / 侧边追问）。
+     * NULL = 非任务新建（用户直接新建、自动化、导入或旧版数据）。
+     */
+    createdBySession: text('created_by_session'),
     /**
      * interrupted-turn-resume: 最近一次 turn 的启动时刻(unix ms)。与
      * lastTurnEndedAt 配对做「疑似中断」纯读判定(startedAt > endedAt),两个
@@ -963,6 +980,16 @@ export const messages = sqliteTable(
   }),
 );
 
+export const mcpAppViewStates = sqliteTable('mcp_app_view_states', {
+  messageId: text('message_id').primaryKey().references(() => messages.id, { onDelete: 'cascade' }),
+  sessionId: text('session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
+  serverId: text('server_id').notNull(),
+  serverRevision: text('server_revision').notNull(),
+  pluginInstance: text('plugin_instance'),
+  stateJson: text('state_json').notNull(),
+  byteLength: integer('byte_length').notNull(),
+}, t => ({ bySession: index('idx_mcp_app_view_states_session').on(t.sessionId) }));
+
 /**
  * messages_fts 的稳定整数行号映射。
  *
@@ -1105,19 +1132,68 @@ export const sessionPrRefs = sqliteTable(
     sessionId: text('session_id')
       .notNull()
       .references(() => sessions.id, { onDelete: 'cascade' }),
+    provider: text('provider', { enum: ['github', 'gitlab'] })
+      .notNull()
+      .default('github'),
+    host: text('host').notNull().default('github.com'),
     owner: text('owner').notNull(),
     repo: text('repo').notNull(),
     prNumber: integer('pr_number').notNull(),
     url: text('url').notNull(),
     firstSeenAt: integer('first_seen_at').notNull(), // unix ms
     lastSeenAt: integer('last_seen_at').notNull(), // unix ms
+    pinned: integer('pinned', { mode: 'boolean' }).notNull().default(false),
+    priority: integer('priority').notNull().default(0),
+    manuallyAdded: integer('manually_added', { mode: 'boolean' }).notNull().default(false),
+    associationSource: text('association_source').notNull().default('legacy'),
+    associationOrigin: text('association_origin'),
+    removedAt: integer('removed_at'),
   },
   (t) => ({
-    uniqRef: uniqueIndex('uniq_session_pr_refs').on(t.sessionId, t.owner, t.repo, t.prNumber),
+    uniqRef: uniqueIndex('uniq_session_pr_refs').on(
+      t.sessionId,
+      t.provider,
+      t.host,
+      t.owner,
+      t.repo,
+      t.prNumber,
+    ),
     idxSessionLastSeen: index('idx_session_pr_refs_session_last_seen').on(
       t.sessionId,
       t.lastSeenAt,
     ),
+  }),
+);
+
+/**
+ * 从其他工具导入的任务的来源记录（session-import）。一行对应一个导入任务。
+ *
+ * - (source, source_session_id) 唯一：同一来源任务只导入一次，中断后重试据此续上；
+ * - mode：native = 已复制原生历史、用同名引擎原样续做；handoff = 记录转成消息，
+ *   由 Cindy 引擎经交接接着做；
+ * - status：importing（任务行仍隐藏）/ ready / action（需要用户处理，issue 写原因）/ failed；
+ * - 只导入、不同步：source_fingerprint 记录导入时源文件的状态，之后不再读取源文件。
+ */
+export const sessionImports = sqliteTable(
+  'session_imports',
+  {
+    sessionId: text('session_id')
+      .primaryKey()
+      .references(() => sessions.id, { onDelete: 'cascade' }),
+    source: text('source').notNull(),
+    sourceSessionId: text('source_session_id').notNull(),
+    sourceFingerprint: text('source_fingerprint'),
+    sourceVersion: text('source_version'),
+    mode: text('mode', { enum: ['native', 'handoff'] }).notNull(),
+    status: text('status', { enum: ['importing', 'ready', 'action', 'failed'] }).notNull(),
+    issue: text('issue'),
+    originalCwd: text('original_cwd'),
+    requestId: text('request_id'),
+    importedAt: integer('imported_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    uniqSource: uniqueIndex('uniq_session_imports_source').on(t.source, t.sourceSessionId),
   }),
 );
 
@@ -1420,6 +1496,8 @@ export const schedules = sqliteTable(
       .notNull()
       .default('agent'),
     scriptConfig: text('script_config'),
+    /** JSON ScheduleWebhookTrigger；NULL = 未开启。签名密钥不进数据库。 */
+    webhookTrigger: text('webhook_trigger'),
     source: text('source').default('user'),
     projectConfigId: text('project_config_id'),
     /**
@@ -1450,11 +1528,13 @@ export const schedules = sqliteTable(
      * 引擎 fireOne 优先用 intervalMs 算 nextFireAt；旧 cron 数据 0015 migration 自动回填。
      */
     intervalMs: integer('interval_ms'),
-    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi'] }).notNull(),
+    // 'acp' = plugin engine (docs/plans/acp-plugin-bridge.md); TS-only enum, no CHECK constraint.
+    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi', 'acp'] }).notNull(),
     /** NULL preserves legacy bound-task Harness inheritance. */
-    modelAgentKind: text('model_agent_kind', { enum: ['claude-code', 'codex', 'pi'] }),
+    modelAgentKind: text('model_agent_kind', { enum: ['claude-code', 'codex', 'pi', 'acp'] }),
     /** NULL inherits a bound task; empty string explicitly selects the automation host. */
     modelAgentDeviceId: text('model_agent_device_id'),
+    inheritedProjectDir: text('inherited_project_dir'),
     model: text('model'),
     /**
      * 显式选定的供应商(来源)id。NULL = 回落该 agent 原生默认来源(no-break,
@@ -1471,6 +1551,11 @@ export const schedules = sqliteTable(
     effort: text('effort', {
       enum: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
     }),
+    /**
+     * 模型组(模式)id：设了时新建任务按模式选来源(发到已有任务按那个任务自己的模式)，上面的具体模型是选不出来时沿用的
+     * (model-groups.md §6.3)。NULL = 没选模式，与原来一致。
+     */
+    modelGroup: text('model_group'),
     /**
      * 速度档位沿用整数列：0 标准、1 快速、2 超快。超快仅用于获授权的 Codex 模型。
      */
@@ -1501,9 +1586,18 @@ export const schedules = sqliteTable(
      * exit 0 放行 / exit 2 跳过本轮(run 记 'skipped') / 其它、超时阻止本轮并记 failed。
      * 内存对象里与 timeout 合成 `Schedule.preRunHook` 嵌套对象(同 notify 的拆列模式)。
      */
+    prTrigger: text('pr_trigger'),
     preRunHookCommand: text('pre_run_hook_command'),
     /** 前置检查脚本超时毫秒。NULL = 不限时。仅 command 非空时有意义。 */
     preRunHookTimeoutMs: integer('pre_run_hook_timeout_ms'),
+    /**
+     * 插件前置检查:用户为本任务选定的插件实例 id。NULL = 未启用。与 preRunHookCommand
+     * 可并存(先问插件再跑脚本)。内存里与 on_failure 合成 `Schedule.preRunPlugin`。
+     */
+    preRunPluginId: text('pre_run_plugin_id'),
+    primaryHostKey: text('primary_host_key'),
+    /** 插件没回应 / 出错 / 不可用时的处理:allow | skip | block。仅 plugin id 非空时有意义。 */
+    preRunPluginOnFailure: text('pre_run_plugin_on_failure'),
     /**
      * 跳过留痕承载会话 id(runner 管理)。前置检查拦截时合成的"已跳过"消息写进
      * 该会话;首次跳过创建、后续复用,避免高频任务每次跳过都新建会话。
@@ -1578,7 +1672,8 @@ export const sessionGoals = sqliteTable(
     /** usageLimited 时记录的限额重置时刻(unix ms);到点自动续跑。其它状态为 null。 */
     usageResetAt: integer('usage_reset_at'),
     lastReason: text('last_reason'),
-    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi'] }).notNull(),
+    /** 'acp' = 插件引擎任务的目标(2026-11-25；列无 CHECK 约束，只放宽 TS 枚举，无需迁移)。 */
+    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi', 'acp'] }).notNull(),
     startedAt: integer('started_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
   },
@@ -1659,6 +1754,8 @@ export const scheduleRuns = sqliteTable(
     /** 新版区域真实费用与订阅价值；旧 USD 列只做历史兼容。 */
     costAmount: real('cost_amount').notNull().default(0),
     estimatedValueAmount: real('estimated_value_amount').notNull().default(0),
+    /** Estimate denominated in the other native currency (USD or CNY). */
+    otherEstimatedValueAmount: real('other_estimated_value_amount').notNull().default(0),
     costCurrency: text('cost_currency', { enum: ['CNY', 'USD'] }),
     costIsApproximate: integer('cost_is_approximate', { mode: 'boolean' }).notNull().default(false),
     /**
@@ -1678,6 +1775,9 @@ export const scheduleRuns = sqliteTable(
     resultText: text('result_text'),
     /** 前置检查一次执行的结构化 JSON 结果；NULL 表示本轮未配置/未执行检查。 */
     preRunHookResult: text('pre_run_hook_result'),
+    /** 本轮触发来源；NULL = 定时或手动。 */
+    triggerSource: text('trigger_source'),
+    mrObservation: text('mr_observation', { mode: 'json' }).$type<MrRunObservation>(),
     readAt: integer('read_at'),
     /**
      * In-flight 心跳时间戳（毫秒）——跨实例的"仍有活实例在跑"租约信号。
@@ -1688,6 +1788,9 @@ export const scheduleRuns = sqliteTable(
   },
   (t) => ({
     idxBySchedule: index('idx_schedule_runs_schedule').on(t.scheduleId, t.firedAt),
+    idxMrObservation: index('idx_schedule_runs_mr_observation')
+      .on(t.scheduleId, t.status, t.firedAt, t.id)
+      .where(sql`${t.mrObservation} IS NOT NULL`),
     idxRunningSchedule: index('idx_schedule_runs_running_schedule')
       .on(t.scheduleId)
       .where(sql`${t.status} = 'running'`),
@@ -1775,6 +1878,12 @@ export const embeddingJobs = sqliteTable(
   }),
 );
 
+// Row IDs only. Writers without sqlite-vec can unlink chat content immediately;
+// the next vector-capable connection finishes deleting the physical index rows.
+export const deletedChatVectorRows = sqliteTable('deleted_chat_vector_rows', {
+  rowid: integer('rowid').primaryKey(),
+});
+
 /**
  * embedding-host (Phase 1.1): vec 虚表元信息登记。
  *
@@ -1853,6 +1962,35 @@ export const dailySpend = sqliteTable(
   }),
 );
 
+/** Auxiliary requests are independent of task turns and retain their own attribution. */
+export const auxiliaryUsageReceipts = sqliteTable('auxiliary_usage_receipts', {
+  receiptId: text('receipt_id').primaryKey(),
+  providerId: text('provider_id').notNull(),
+  model: text('model').notNull(),
+  source: text('source').notNull(),
+  sessionId: text('session_id'),
+  transport: text('transport').notNull(),
+  day: text('day').notNull(),
+  recordedAt: integer('recorded_at').notNull(),
+  inputTokens: integer('input_tokens'),
+  outputTokens: integer('output_tokens'),
+  cacheReadTokens: integer('cache_read_tokens'),
+  cacheCreateTokens: integer('cache_create_tokens'),
+}, t => ({ dayIndex: index('auxiliary_usage_receipts_day_idx').on(t.day) }));
+
+/** Immutable request receipts; insertion and aggregate increments share one transaction. */
+export const piUsageReceipts = sqliteTable('pi_usage_receipts', {
+  sessionId: text('session_id').notNull(),
+  settlementId: text('settlement_id').notNull(),
+  receiptId: text('receipt_id').notNull(),
+  recordedAt: integer('recorded_at').notNull(),
+  priced: integer('priced', { mode: 'boolean' }).notNull().default(false),
+  pricingPayload: text('pricing_payload'),
+}, t => ({
+  pk: primaryKey({ columns: [t.sessionId, t.settlementId, t.receiptId] }),
+  pending: index('pi_usage_receipts_pending_idx').on(t.priced),
+}));
+
 /**
  * 每日按模型用量聚合表 (daily_model_usage) — 支撑首页用量仪表盘的"按模型拆分"。
  *
@@ -1861,7 +1999,7 @@ export const dailySpend = sqliteTable(
  *     costUsd 为 SDK 实报美元。
  *   - codex: done.data.usage 的 per-turn token 数 (SDK 不报 cost, costUsd 恒 0,
  *     美元在读取时用 modelPricing 价格表估算 — 价格会变, 不在写入时冻结)。
- *   - pi: done.data.usage 的 per-turn token/cache 数；订阅路由读时估值，API 路由写时记费。
+ *   - pi: 每个请求的 usage 回执增量入账，终态重放补漏；旧事件仍按 turn 入账。
  *
  * 与 daily_spend 的关系: daily_spend 仍是日总额 canonical 来源 (热力图 / streak 用它);
  * 本表只做按模型的拆分展示, 两边求和因舍入可能有微小差异 — 设计取舍。
@@ -1900,6 +2038,38 @@ export const dailyModelUsage = sqliteTable(
     pk: primaryKey({ columns: [t.day, t.agentKind, t.model, t.costCurrency] }),
   }),
 );
+
+/** UTC execution-day token counts. Account and task identity stay outside this table. */
+export const dailyTokenAttribution = sqliteTable('daily_token_attribution', {
+  day: text('day').notNull(),
+  provider: text('provider').notNull(),
+  billingSource: text('billing_source').notNull(),
+  model: text('model').notNull(),
+  inputTokens: integer('input_tokens').notNull(),
+  outputTokens: integer('output_tokens').notNull(),
+  cacheReadTokens: integer('cache_read_tokens').notNull(),
+  cacheCreateTokens: integer('cache_create_tokens').notNull(),
+}, t => ({ pk: primaryKey({ columns: [t.day, t.provider, t.billingSource, t.model] }) }));
+
+// Only the first, partial UTC day needs an exact enrollment timestamp. All later days
+// reuse dailyTokenAttribution. A fresh generation isolates same-day opt-out/re-enrollment.
+export const tokenReportingWindow = sqliteTable('token_reporting_window', {
+  id: integer('id').primaryKey(),
+  generation: text('generation').notNull(),
+  day: text('day').notNull(),
+  startsAt: integer('starts_at').notNull(),
+});
+
+export const tokenReportingFirstDay = sqliteTable('token_reporting_first_day', {
+  provider: text('provider').notNull(),
+  billing: text('billing').notNull(),
+  model: text('model').notNull(),
+  generation: text('generation').notNull(),
+  input: integer('input').notNull(),
+  output: integer('output').notNull(),
+  cacheRead: integer('cache_read').notNull(),
+  cacheWrite: integer('cache_write').notNull(),
+}, t => ({ pk: primaryKey({ columns: [t.provider, t.billing, t.model] }) }));
 
 /**
  * 每日按任务 token 用量 (daily_session_usage) — 支撑用量历史「最耗 token 的任务」按所选
@@ -2146,7 +2316,7 @@ export const rightSidebarTabs = sqliteTable(
  * 覆盖写(队列空则删行),重启后打开会话时懒恢复为「暂停中的队列」。
  *
  * 设计要点:
- *   - payload 是 `AgentInputQueuedMessage[]` 的 JSON.stringify;读侧逐条做形状
+ *   - payload 是排队消息与可选 Main 停止元数据组成的 JSON 数组；读侧逐条做形状
  *     校验,坏行整体丢弃(尽力而为的恢复信号,不做跨版本迁移)。
  *   - 单行覆盖写而非逐条行:队列通常只有个位数条目,整体快照避免"逐条 CRUD 与
  *     内存态漂移"一族一致性问题;体量上限与超限降级在写入模块做。
@@ -2156,7 +2326,7 @@ export const agentInputQueueSnapshots = sqliteTable('agent_input_queue_snapshots
   sessionId: text('session_id')
     .primaryKey()
     .references((): AnySQLiteColumn => sessions.id, { onDelete: 'cascade' }),
-  /** AgentInputQueuedMessage[] 的 JSON 字符串。 */
+  /** 队列消息与可选 Main 停止元数据的 JSON 数组；元数据不是消息。 */
   payload: text('payload').notNull(),
   updatedAt: integer('updated_at').notNull(),
 });
@@ -2425,7 +2595,9 @@ export const sessionTaskTags = sqliteTable(
 export const pluginTaskRequests = sqliteTable('plugin_task_requests', {
   id: text('id').primaryKey(),
   pluginId: text('plugin_id').notNull(),
-  operation: text('operation', { enum: ['create', 'send', 'target'] }).notNull(),
+  // imPermission: a looser IM-project permission the user allowed in Cindy (TypeScript-only enum).
+  // followUp: a task a plugin run's turn opened, whose word back becomes a follow-up run (targetId = that task).
+  operation: text('operation', { enum: ['create', 'send', 'target', 'imPermission', 'followUp'] }).notNull(),
   targetId: text('target_id').notNull(),
   requestKey: text('request_key').notNull(),
   fingerprint: text('fingerprint').notNull(),
@@ -2436,3 +2608,10 @@ export const pluginTaskRequests = sqliteTable('plugin_task_requests', {
   uniqueIndex('plugin_task_request_key').on(table.pluginId, table.operation, table.targetId, table.requestKey),
   index('plugin_task_target').on(table.targetId, table.pluginId),
 ]);
+
+/** Account-local observed facts and independent consumer cursors, never credentials. */
+export const githubObservations = sqliteTable('github_observations', {
+  key: text('key').primaryKey(),
+  state: text('state').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+});

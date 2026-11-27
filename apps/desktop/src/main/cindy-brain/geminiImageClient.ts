@@ -52,12 +52,14 @@ interface GeminiGenerateContentResponse {
 export interface CreateGeminiImageChannelOptions {
   /** 读取用户的 Gemini API key(providerSecretStore('gemini'));null = 未配置。 */
   getApiKey(): string | null;
+  /** Owner and selected connection at the start of a reference-image upload. */
+  credentialScope?(): string;
   fetchImplementation?: typeof fetch;
   /**
    * 派发前钩子(host 注入停用轴判定):payload 与凭证就绪、请求发出紧前调用,
    * 抛错即取消本次付费提交(与 gatewayImageClient.beforeDispatch 同语义)。
    */
-  beforeDispatch?(model: string): void;
+  beforeDispatch?(model: string): void | Promise<void>;
 }
 
 function upstreamModelId(catalogId: string): string {
@@ -94,7 +96,7 @@ async function humanizeGeminiHttpError(res: Response, model: string): Promise<ne
     upstreamMessage = text.slice(0, 200);
   }
   if (res.status === 400 && /API key not valid/i.test(upstreamMessage)) {
-    throw new Error('Gemini API key 无效,请到「设置 → 模型供应商 → Google Gemini」检查后重新保存');
+    throw new Error('Gemini API key 无效,请在「设置 → 模型供应商」中检查用于 Gemini 生图的连接并重新保存');
   }
   if (res.status === 429) {
     throw new Error('Gemini 图像配额已用尽或请求过于频繁,请稍后重试');
@@ -115,7 +117,7 @@ export function createGeminiImageChannel(opts: CreateGeminiImageChannelOptions):
   function requireApiKey(): string {
     const key = opts.getApiKey()?.trim() ?? '';
     if (!key) {
-      throw new Error('Gemini API key 未配置,请到「设置 → 模型供应商 → Google Gemini」填入后重试');
+      throw new Error('Gemini API key 未配置,请在「设置 → 模型供应商」中为 Gemini 生图连接配置 Key 后重试');
     }
     return key;
   }
@@ -127,6 +129,9 @@ export function createGeminiImageChannel(opts: CreateGeminiImageChannelOptions):
     signal?: AbortSignal;
   }): Promise<ImageChannelResult> {
     const options = normalizeImageParameters('gemini', params.model, params);
+    const config = options.nativeParameters?.generationConfig as Record<string, unknown> | undefined;
+    const nativeImageConfig = config?.imageConfig as Record<string, unknown> | undefined;
+    const scope = opts.credentialScope?.();
     const apiKey = requireApiKey();
     const upstream = upstreamModelId(params.model);
     const parts: Array<Record<string, unknown>> = [{ text: params.prompt }];
@@ -137,17 +142,24 @@ export function createGeminiImageChannel(opts: CreateGeminiImageChannelOptions):
       parts.push({ inlineData: { mimeType: mime, data: bytes.toString('base64') } });
     }
     const body: Record<string, unknown> = {
+      ...options.nativeParameters,
       contents: [{ parts }],
       generationConfig: {
         responseModalities: ['TEXT', 'IMAGE'],
-        ...(options.aspectRatio || options.resolution ? { imageConfig: {
+        ...config,
+        ...(options.aspectRatio || options.resolution || nativeImageConfig ? { imageConfig: {
           ...(options.aspectRatio ? { aspectRatio: options.aspectRatio } : {}),
           ...(options.resolution ? { imageSize: options.resolution } : {}),
+          ...nativeImageConfig,
         } } : {}),
       },
     };
     // 停用轴派发前重查:参考图 fs.readFile 是 await,窗口内被停用即拒(同 gatewayImageClient)。
-    opts.beforeDispatch?.(params.model);
+    const pending = opts.beforeDispatch?.(params.model);
+    if (pending) await pending;
+    if ((pending || params.imagePaths?.length) && (scope !== opts.credentialScope?.() || requireApiKey() !== apiKey)) {
+      throw new Error('Gemini API Key 已变更，请重新提交本次编辑');
+    }
     const res = await doFetch(`${GEMINI_API_BASE}/models/${upstream}:generateContent`, {
       method: 'POST',
       headers: {

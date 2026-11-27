@@ -1,19 +1,19 @@
 <!doctype html>
-<html lang="zh">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Cindy 更新</title>
+    <title>Cindy</title>
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
     <main class="card">
       <header class="header" data-tauri-drag-region>
-        <h1 id="title" class="title" data-tauri-drag-region>Cindy 更新</h1>
-        <span id="phase-chip" class="chip phase-waiting">等待</span>
+        <h1 id="title" class="title" data-tauri-drag-region>Cindy</h1>
+        <span id="phase-chip" class="chip phase-waiting"></span>
       </header>
 
-      <p id="message" class="message">正在准备更新…</p>
+      <p id="message" class="message"></p>
 
       <div class="spacer"></div>
 
@@ -23,16 +23,21 @@
 
       <div id="error-bar" class="error-bar" hidden>
         <p id="error-text" class="error-text"></p>
+        <details id="error-details" hidden>
+          <summary id="error-details-label"></summary>
+          <p id="error-diagnostic" class="error-text"></p>
+        </details>
       </div>
 
       <footer class="footer">
         <button id="btn-retry" type="button" class="btn" hidden></button>
-        <button id="btn-log" type="button" class="btn">打开日志文件夹</button>
-        <button id="btn-quit" type="button" class="btn" hidden>关闭</button>
+        <button id="btn-log" type="button" class="btn"></button>
+        <button id="btn-quit" type="button" class="btn" hidden></button>
       </footer>
     </main>
 
     <script src="./retry-copy.js"></script>
+    <script src="./copy.js"></script>
     <script type="module" src="./app.js"></script>
   </body>
 </html>

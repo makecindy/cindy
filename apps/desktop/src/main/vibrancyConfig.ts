@@ -1,9 +1,12 @@
 /**
+ * 无壁纸时采用用户的桌面模糊数值；以下为没有桌面覆盖状态的主题默认值。
  * E4D 毛玻璃 vibrancy 配置(R1 audit,用户裁决透壁纸 2026-07-17)。
  * 仅 CINDY family 启用 macOS vibrancy + 透明底(透出桌面壁纸);其他 family 恢复
- * 不透明。Windows 11 CINDY family 启用 Electron backgroundMaterial;Windows 10/Linux
- * 回退不透明。
+ * 不透明。Windows 11 22H2+ CINDY family 启用 Electron backgroundMaterial;Windows 10、
+ * 较早 Windows 11 与 Linux 回退不透明。
  */
+import type { BrowserWindow } from 'electron';
+import { isHardwareAccelerationDisabled } from './gpuRenderingPolicy.js';
 import { createLogger } from './logger.js';
 import {
   CINDY_ACRYLIC_WINDOW_BACKING,
@@ -19,10 +22,44 @@ export interface VibrancyConfig {
   vibrancy: string | null;
   backgroundColor: string;
   backgroundMaterial?: WindowsBackdropMaterial;
+  desktopBlurRadius?: number;
+  sidebarMaterial?: 'light' | 'dark';
 }
 
 export interface ResolveVibrancyConfigOptions {
   getSystemVersion?: () => string;
+  wallpaperCovered?: boolean;
+  desktopBlur?: number | null;
+  gpuFallback?: boolean;
+}
+
+// Coverage belongs to the rendered window, not the shared wallpaper selection:
+// another window may still be loading its canvas. Never persist this display state.
+const wallpaperCoveredWindows = new WeakSet<BrowserWindow>();
+const desktopBlurWindows = new WeakMap<BrowserWindow, number>();
+
+export function setWindowDesktopBlur(win: BrowserWindow, blur: number | null): void {
+  if (blur === null) desktopBlurWindows.delete(win);
+  else desktopBlurWindows.set(win, blur);
+}
+
+export function setWindowWallpaperCovered(win: BrowserWindow, covered: boolean): void {
+  if (covered) wallpaperCoveredWindows.add(win);
+  else wallpaperCoveredWindows.delete(win);
+}
+
+export function resolveWindowVibrancyConfig(
+  win: BrowserWindow,
+  familyId: string,
+  isDark: boolean,
+  platform: string,
+  options?: ResolveVibrancyConfigOptions,
+): VibrancyConfig {
+  return resolveVibrancyConfig(familyId, isDark, platform, {
+    ...options,
+    wallpaperCovered: wallpaperCoveredWindows.has(win),
+    desktopBlur: desktopBlurWindows.get(win),
+  });
 }
 
 function readWindowsSystemVersion(options?: ResolveVibrancyConfigOptions): string | null {
@@ -44,9 +81,119 @@ function parseWindowsBuild(systemVersion: string | null): number | null {
   return Number.isFinite(build) ? build : null;
 }
 
-function isWindows11(options?: ResolveVibrancyConfigOptions): boolean {
+/** Electron applies Windows system backdrops only from Windows 11 22H2 (build 22621). */
+const WINDOWS_SYSTEM_BACKDROP_MIN_BUILD = 22621;
+
+function supportsWindowsSystemBackdrop(options?: ResolveVibrancyConfigOptions): boolean {
   const build = parseWindowsBuild(readWindowsSystemVersion(options));
-  return build !== null && build >= 22000;
+  return build !== null && build >= WINDOWS_SYSTEM_BACKDROP_MIN_BUILD;
+}
+
+// Windows: a BrowserWindow created with `transparent: true` must not carry a system backdrop.
+// Measured on Windows 11 build 26200 (2026-11-11): whenever any window on the desktop is shown
+// or hidden, DWM intermittently stops drawing what lies behind such a window, so the material
+// blurs nothing and the translucent sidebar flips to a flat dark fill. A regular frameless
+// window with the same material is stable, and so is a transparent window without a material.
+// `transparent` is fixed at creation: choose it from what the window has to show, and keep a
+// running window usable when that need changes before the next launch.
+const windowsTransparentWindows = new WeakSet<BrowserWindow>();
+
+export function markWindowsTransparentWindow(win: BrowserWindow): void {
+  windowsTransparentWindows.add(win);
+}
+
+export function isWindowsTransparentWindow(win: BrowserWindow): boolean {
+  return windowsTransparentWindows.has(win);
+}
+
+/** See-through with no system material behind it: only a transparent window can show this. */
+export function needsWindowsTransparentWindow(config: VibrancyConfig): boolean {
+  return config.backgroundMaterial === 'none' && config.backgroundColor === '#00000000';
+}
+
+/**
+ * `rememberedNeed` is the last need the main window reported (writeWindowTransparencyHint).
+ * Systems without a system backdrop have no material to conflict with, and clear desktop
+ * transparency must stay available there without a restart.
+ */
+export function resolveWindowsWindowTransparent(
+  creationConfig: VibrancyConfig,
+  rememberedNeed: boolean | undefined,
+  options?: ResolveVibrancyConfigOptions,
+): boolean {
+  if (!supportsWindowsSystemBackdrop(options)) return true;
+  return rememberedNeed === true || needsWindowsTransparentWindow(creationConfig);
+}
+
+/**
+ * A regular window cannot be clear, so it keeps the frosted desktop until the next launch
+ * creates a transparent one. A transparent window shows whatever is requested.
+ */
+export function fitWindowsBackdropToWindow(
+  config: VibrancyConfig,
+  windowIsTransparent: boolean,
+  options?: ResolveVibrancyConfigOptions,
+): VibrancyConfig {
+  if (windowIsTransparent || !needsWindowsTransparentWindow(config)) return config;
+  if (!supportsWindowsSystemBackdrop(options)) return config;
+  return { ...config, backgroundMaterial: 'acrylic' };
+}
+
+// macOS: a BrowserWindow created with `transparent: true` sets NSWindow.backgroundColor to
+// clearColor, which triggers per-frame alpha shadow recomputation and disables rectangular
+// occlusion culling in WindowServer (~7-10x WindowServer GPU overhead on 4K HiDPI displays, #11670).
+// A regular window (`transparent: false`) created with `vibrancy: 'hud'` + `#00000000` still keeps
+// behind-window NSVisualEffectView vibrancy (contentOpaque=0) on WindowServer's fast path.
+// Only custom desktop-blur / clear see-through mode (which clears vibrancy and relies on an alpha-0
+// NSWindow background + CGSSetWindowBackgroundBlurRadius) requires `transparent: true`.
+const macTransparentWindows = new WeakSet<BrowserWindow>();
+
+export function markMacTransparentWindow(win: BrowserWindow): void {
+  macTransparentWindows.add(win);
+}
+
+export function isMacTransparentWindow(win: BrowserWindow): boolean {
+  return macTransparentWindows.has(win);
+}
+
+/** Custom desktop blur or unblurred see-through without system vibrancy requires `transparent: true`. */
+export function needsMacTransparentWindow(config: VibrancyConfig): boolean {
+  return (
+    config.desktopBlurRadius !== undefined ||
+    (config.vibrancy === null && config.backgroundColor === '#00000000')
+  );
+}
+
+/**
+ * `rememberedNeed` is the last need the main window reported (writeWindowTransparencyHint).
+ * Default CINDY vibrancy and opaque themes use a regular window (`transparent: false`);
+ * custom desktop-transparency mode opts into `transparent: true`.
+ */
+export function resolveMacWindowTransparent(
+  creationConfig: VibrancyConfig,
+  rememberedNeed: boolean | undefined,
+): boolean {
+  return rememberedNeed === true || needsMacTransparentWindow(creationConfig);
+}
+
+/**
+ * A regular macOS window keeps an opaque NSWindow background once vibrancy is cleared, so custom
+ * CGS desktop blur / clear-desktop mode cannot reveal the desktop until the next launch creates a
+ * transparent window. Keep the system vibrancy fallback in the meantime.
+ */
+export function fitMacBackdropToWindow(
+  config: VibrancyConfig,
+  windowIsTransparent: boolean,
+): VibrancyConfig {
+  if (windowIsTransparent || !needsMacTransparentWindow(config)) return config;
+  const fitted: VibrancyConfig = {
+    vibrancy: config.vibrancy ?? 'under-window',
+    backgroundColor: config.backgroundColor,
+  };
+  if (config.backgroundMaterial !== undefined) {
+    fitted.backgroundMaterial = config.backgroundMaterial;
+  }
+  return fitted;
 }
 
 function resolveBackdropMaterial(): WindowsBackdropMaterial {
@@ -68,8 +215,30 @@ export function resolveVibrancyConfig(
   platform: string,
   options?: ResolveVibrancyConfigOptions,
 ): VibrancyConfig {
-  const isCindy = familyId === 'cindy';
   const opaqueBg = isDark ? '#1f1f1e' : '#f8f8f6';
+  const gpuFallback = options?.gpuFallback ?? isHardwareAccelerationDisabled();
+  if (gpuFallback) {
+    // 软件渲染回退模式关闭透明窗、原生 vibrancy 与桌面模糊，规避 GPU 合成花屏/黑块。
+    return {
+      vibrancy: null,
+      backgroundColor: opaqueBg,
+      ...(platform === 'win32' ? { backgroundMaterial: 'none' as const } : {}),
+    };
+  }
+  if (!options?.wallpaperCovered && typeof options?.desktopBlur === 'number') {
+    return {
+      vibrancy: platform === 'darwin' && options.desktopBlur ? 'under-window' : null,
+      backgroundColor: '#00000000',
+      ...(platform === 'darwin' ? { desktopBlurRadius: options.desktopBlur } : {}),
+      ...(platform === 'darwin' && familyId === 'cindy'
+        ? { sidebarMaterial: isDark ? 'dark' as const : 'light' as const } : {}),
+      ...(platform === 'win32' ? {
+        backgroundMaterial: options.desktopBlur && supportsWindowsSystemBackdrop(options)
+          ? 'acrylic' : 'none',
+      } : {}),
+    };
+  }
+  const isCindy = familyId === 'cindy' && !options?.wallpaperCovered;
   if (platform === 'darwin') {
     // 材质 A/B 旋钮(dev 调参用):XDT_VIBRANCY_MATERIAL=sidebar|hud|under-window|fullscreen-ui|
     // popover|menu|none('none'=无材质纯透明,壁纸不模糊直透)。缺省 'hud'(用户实测定稿,2026-07-19 回写)。
@@ -80,7 +249,9 @@ export function resolveVibrancyConfig(
     };
   }
   if (platform === 'win32') {
-    if (isCindy && isWindows11(options)) {
+    // Earlier Windows 11 builds have no system backdrop: a translucent Acrylic backing
+    // without its material would leave the window see-through, so keep the opaque surface.
+    if (isCindy && supportsWindowsSystemBackdrop(options)) {
       const backgroundMaterial = resolveBackdropMaterial();
       return {
         vibrancy: null,

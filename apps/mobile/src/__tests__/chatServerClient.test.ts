@@ -1,12 +1,13 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { resolveRemoteText } from '@cindy/device-link';
 import { i18n } from '@/i18n';
-import { botGroupNewMessageCount } from '@cindy/maker-shared/botGroupPresentation';
+import { botGroupNewMessageCount, interleaveBotGroupWork } from '@cindy/maker-shared/botGroupPresentation';
 import { createChatHistory, type ChatHistoryState } from '@cindy/maker-shared/chat-history';
 import { chatGroupView, chatRoomRow, chatReadAt, createChatServerClient, type ChatMessage, type ChatPage, type ChatRoom, type ChatSnapshot } from '@/chat/chatServerClient';
 import type { ChatHistory } from '@cindy/maker-shared/chat-history';
-import { botGroupQuoteFromMessage, resolveBotGroupQuote, buildBotGroupQuoteCard, buildBotGroupTaskCard } from '@cindy/maker-shared/botGroupChat';
+import { buildBotGroupCapabilityNotice, botGroupQuoteFromMessage, resolveBotGroupQuote, buildBotGroupQuoteCard, buildBotGroupTaskCard, botGroupProcessCard } from '@cindy/maker-shared/botGroupChat';
 import { orderedBotGroups } from '@/session/botGroupRemote';
+import { createChatInviteShares } from '@/chat/chatInviteShare';
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const room = (n = 1, state = 'joined'): ChatRoom => ({ id: id(n), name: 'Discussion', kind: 'group', state, archived: false,
   revision: 1, created_at: '2026-10-01', updated_at: '2026-10-09', response_mode: 'all', speaking_mode: 'auto' });
@@ -17,7 +18,308 @@ const snapshot = (): ChatSnapshot => ({ room: room(), cursor: '9007199254741099'
   { id: id(10), kind: 'human', name: 'Other member', state: 'joined', ownerActorId: id(10), ownerName: '', avatar: null, role: 'member' },
 ] });
 
+// Unit: mobile group shares must match #8386's existing Share Server contract.
+// The old suite only covered incoming invitations, not authenticated creation,
+// trusted-origin validation or account changes while publishing a share.
+// Minimal regression: create one invite and receive one opaque web reference.
+describe('mobile invitation share transport', () => {
+  const token = 'A'.repeat(43), shareId = 'b'.repeat(32), base = 'https://share.example.invalid';
+  const response = () => ({ schemaVersion: 1, kind: 'chat-invite', includeAttribution: true,
+    shareId, url: `${base}/chat-invite/${shareId}` });
+  function fixture(region: 'cn' | 'global' = 'global', realm: 'cn' | 'global' = region) {
+    const state = { current: true, base };
+    const apiFetch = vi.fn().mockResolvedValue(response());
+    const shares = createChatInviteShares({ baseUrl: () => state.base, region, realm, current: () => state.current, apiFetch });
+    return { state, apiFetch, shares };
+  }
+  afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
+  it.each(['cn', 'global'] as const)('publishes a %s web link using the captured account realm', async region => {
+    const realm = region === 'cn' ? 'global' : 'cn';
+    const { shares, apiFetch } = fixture(region, realm);
+    expect(await shares.create(id(1), token, id(10))).toBe(response().url);
+    expect(apiFetch).toHaveBeenCalledExactlyOnceWith('/api/shares', expect.objectContaining({
+      baseUrl: base, method: 'POST', cache: 'no-store', redirect: 'error', timeoutMs: 20_000,
+      body: { kind: 'chat-invite', reference: id(1), token, actorId: id(10), region, authRealm: realm,
+        lang: region === 'cn' ? 'zh-CN' : 'en', includeAttribution: true },
+    }));
+  });
+  it.each([
+    { url: `https://another.example.invalid/chat-invite/${shareId}` },
+    { url: `cindy://chat-invite/${token}` }, { shareId: token },
+    { schemaVersion: 2 }, { includeAttribution: false }, { kind: 'other' },
+  ])('rejects a malformed or foreign share response: %j', async invalid => {
+    const { shares, apiFetch } = fixture(); apiFetch.mockResolvedValue({ ...response(), ...invalid });
+    await expect(shares.create(id(1), token, id(10))).rejects.toThrow('CHAT_RESPONSE_INVALID');
+  });
+  it.each(['http://share.example.invalid', 'https://user:password@share.example.invalid',
+    `${base}/other`, `${base}/?query=1`, `${base}/#fragment`])('refuses an invalid configured origin before transport: %s', async configured => {
+    const { shares, apiFetch, state } = fixture(); state.base = configured;
+    await expect(shares.create(id(1), token, id(10))).rejects.toThrow('CHAT_ENDPOINT_UNAVAILABLE');
+    expect(apiFetch).not.toHaveBeenCalled();
+  });
+  it('rejects late share results and prevents old-account authentication retries', async () => {
+    const { shares, apiFetch, state } = fixture();
+    let complete!: (value: unknown) => void;
+    apiFetch.mockReturnValueOnce(new Promise(resolve => { complete = resolve; }));
+    const pending = shares.create(id(1), token, id(10)); state.current = false;
+    complete(response()); await expect(pending).rejects.toThrow('OWNER_CHANGED');
+    expect(() => apiFetch.mock.calls[0][1].assertCurrent()).toThrow('OWNER_CHANGED');
+    await expect(shares.create(id(1), token, id(10))).rejects.toThrow('OWNER_CHANGED');
+    expect(apiFetch).toHaveBeenCalledTimes(1);
+  });
+  it('resolves an opaque id only at the captured configured origin without account credentials', async () => {
+    const { shares, apiFetch } = fixture();
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ token }), { status: 200 }));
+    vi.stubGlobal('fetch', fetch);
+    expect(await shares.resolve(shareId)).toBe(token);
+    expect(fetch).toHaveBeenCalledExactlyOnceWith(`${base}/api/chat-invites/${shareId}/token`, {
+      method: 'POST', redirect: 'error', cache: 'no-store', signal: expect.any(AbortSignal),
+    });
+    expect(apiFetch).not.toHaveBeenCalled();
+  });
+  it('bounds revocation projection retries without undoing a successful Chat Server revocation', async () => {
+    const { shares, apiFetch, state } = fixture(); apiFetch.mockRejectedValue(new Error('offline'));
+    await expect(shares.revoked(shareId)).resolves.toBeUndefined();
+    expect(apiFetch).toHaveBeenCalledTimes(2);
+    expect(apiFetch.mock.calls[0]).toEqual([`/api/chat-invites/${shareId}/revoked`, expect.objectContaining({ body: { authRealm: 'global' } })]);
+    apiFetch.mockClear(); state.current = false;
+    await shares.revoked(shareId); expect(apiFetch).not.toHaveBeenCalled();
+  });
+});
+
+// #5759, unit: the real direct client must retain human-authored plan cards, refresh
+// their server state and use revision/actor authorization. Existing tests only covered
+// ordinary messages and stop-all; the minimal regression is one cindy.plan message.
+describe('direct group plans', () => {
+  const plan = () => ({ id: id(40), revision: 3, source_message_id: id(20), request_text: 'Build it',
+    organizer_id: id(12), creator_id: id(10), status: 'proposed', current_step: null,
+    steps: [{ position: 0, botId: id(12), botName: 'Builder', task: 'Build', status: 'pending' },
+      { position: 1, botId: id(13), botName: 'Reviewer', task: 'Review', status: 'pending' }],
+    kind: 'work', created_at: '2026-10-09', updated_at: '2026-10-09' });
+  const card = () => ({ ...message(21), content: [{ type: 'card', namespace: 'cindy.plan', schemaRevision: 1,
+    data: { planId: id(40) }, fallback: '1. Builder: Build 2. Reviewer: Review' }] });
+  function fixture() {
+    const state = { plan: plan(), snapshot: { ...snapshot(), members: [...snapshot().members, ...[12, 13].map(n => ({ ...snapshot().members[0]!, id: id(n), kind: 'bot' as const }))] } };
+    const request = vi.fn(async (path: string, method = 'GET') => {
+      if (path === '/me') return { actor: { id: id(10), kind: 'human' } };
+      if (path.endsWith('/snapshot')) return state.snapshot;
+      if (path.includes('/messages?')) return [card()];
+      if (path.includes('/plans') && method === 'GET') return [state.plan];
+      if (method === 'POST') return { ok: true };
+      return [];
+    });
+    return { state, request, client: createChatServerClient(request as any) };
+  }
+  it('projects the card and refreshes cancellation without a new message', async () => {
+    const { client, state } = fixture();
+    const first = chatGroupView(await client.load(id(1)), id(10));
+    expect(first.messages[0]).toMatchObject({ kind: 'plan', planId: id(40), authorKind: 'user' });
+    expect(first.plans[0]).toMatchObject({ status: 'proposed', canManage: true, workDir: null, steps: [{ task: 'Build' }, { task: 'Review' }] });
+    expect(first.openPlan).toMatchObject({ id: id(40), status: 'proposed' });
+    state.plan = { ...state.plan, status: 'dismissed', revision: 4 };
+    const reopened = chatGroupView(await client.load(id(1)), id(10));
+    expect(reopened.plans[0].status).toBe('dismissed');
+    expect(reopened.openPlan).toBeNull();
+  });
+  it('refuses to end another creator?s plan through an admin companion', async () => {
+    const { client, state, request } = fixture();
+    state.plan = { ...state.plan, status: 'waiting', creator_id: id(99) };
+    state.snapshot.members.push({ ...state.snapshot.members[0], id: id(12), kind: 'bot', role: 'admin', ownerActorId: id(10) });
+    const page = await client.load(id(1));
+    expect(chatGroupView(page, id(10)).plans[0].canManage).toBe(true);
+    const controller = new AbortController();
+    await expect(client.actPlan(id(1), page.plans![0], { action: 'dismiss' }, 'operation-plan-dismiss', () => true, controller.signal)).rejects.toThrow('ROLE_REQUIRED');
+    expect(request.mock.calls.some(([, method]) => method === 'POST')).toBe(false);
+  });
+  it('refuses another member’s plan and rejects a lost manager role before writing', async () => {
+    const { client, state, request } = fixture();
+    state.plan.creator_id = id(99);
+    const page = await client.load(id(1));
+    expect(chatGroupView(page, id(10)).plans[0].canManage).toBe(false);
+    state.snapshot = { ...state.snapshot, members: state.snapshot.members.map(member => ({ ...member, role: 'admin' })) };
+    const manageable = await client.load(id(1));
+    expect(chatGroupView(manageable, id(10)).plans[0].canManage).toBe(true);
+    state.snapshot = snapshot();
+    await expect(client.actPlan(id(1), manageable.plans![0], { action: 'start' }, 'operation-plan-start')).rejects.toThrow('ROLE_REQUIRED');
+    expect(request.mock.calls.some(([, method]) => method === 'POST')).toBe(false);
+  });
+  it.each([
+    ['start', 'proposed', 'pending'], ['dismiss', 'proposed', 'pending'],
+    ['continue', 'waiting', 'done'], ['retry', 'waiting', 'failed'],
+  ])('submits %s with revision protection and preserves a server conflict', async (action, status, stepStatus) => {
+    const { client, state, request } = fixture();
+    Object.assign(state.plan, { status, current_step: status === 'waiting' ? 0 : null });
+    state.plan.steps[0].status = stepStatus;
+    const page = await client.load(id(1));
+    const original = request.getMockImplementation()!;
+    request.mockImplementation((path, method) => method === 'POST'
+      ? Promise.reject(Object.assign(new Error('REVISION_CONFLICT'), { status: 409 })) : original(path, method));
+    await expect(client.actPlan(id(1), page.plans![0], { action: action as any }, 'operation-plan-conflict')).rejects.toThrow('REVISION_CONFLICT');
+    expect(request).toHaveBeenLastCalledWith(`/conversations/${id(1)}/plans/${id(40)}`, 'POST',
+      { operationId: 'operation-plan-conflict', expectedRevision: 3, action }, undefined, undefined);
+  });
+  it('keeps unsupported plan cards distinct from own messages without hiding access errors', async () => {
+    const { client, request } = fixture();
+    const original = request.getMockImplementation()!;
+    request.mockImplementation((path, method) => path.includes('/plans')
+      ? Promise.reject(Object.assign(new Error('NOT_FOUND'), { status: 404, code: 'NOT_FOUND' })) : original(path, method));
+    const view = chatGroupView(await client.load(id(1)), id(10));
+    expect(view.messages[0]).toMatchObject({ kind: 'plan', planId: id(40), content: '1. Builder: Build 2. Reviewer: Review' });
+    expect(view.plans).toEqual([]);
+    request.mockImplementation((path, method) => path.includes('/plans')
+      ? Promise.reject(Object.assign(new Error('FORBIDDEN'), { status: 403 })) : original(path, method));
+    await expect(client.load(id(1))).rejects.toThrow('FORBIDDEN');
+  });
+  it('reads historical plans for cards newly loaded by pagination', async () => {
+    const { client, state, request } = fixture();
+    const first = await client.load(id(1));
+    const original = request.getMockImplementation()!;
+    const older = { ...card(), id: id(19), seq: '19', content: [{ ...card().content[0], data: { planId: id(41) } }] };
+    request.mockImplementation((path, method) => path.includes('/messages?') ? Promise.resolve([older]) : original(path, method));
+    state.plan = { ...state.plan, id: id(41), status: 'done' };
+    const next = await client.older(id(1), { ...first, before: '21' });
+    expect(request).toHaveBeenCalledWith(`/conversations/${id(1)}/plans?ids=${id(40)},${id(41)}`);
+    expect(chatGroupView(next, id(10)).plans[0]).toMatchObject({ id: id(41), status: 'done' });
+  });
+  it('projects future-skip support and sends only a pending position while the current bot runs', async () => {
+    const { client, state, request } = fixture();
+    Object.assign(state.plan, { kind: 'talk', status: 'running', current_step: 0, supportsPendingSkip: true,
+      activeExecution: { id: id(50), status: 'running' } });
+    state.plan.steps[0].status = 'running';
+    state.plan.steps.push({ ...state.plan.steps[0], position: 1, status: 'pending' });
+    const page = await client.load(id(1));
+    expect(chatGroupView(page, id(10)).plans[0].supportsPendingSkip).toBe(true);
+    await client.actPlan(id(1), page.plans![0], { action: 'skip', position: 1 }, 'future-skip');
+    expect(request).toHaveBeenLastCalledWith(`/conversations/${id(1)}/plans/${id(40)}`, 'POST',
+      { action: 'skip', position: 1, expectedRevision: 3, operationId: 'future-skip' }, undefined, undefined);
+    await expect(client.actPlan(id(1), { ...page.plans![0], supportsPendingSkip: undefined },
+      { action: 'skip', position: 1 }, 'old-server')).rejects.toThrow('PLAN_CLOSED');
+  });
+  it('projects live Cindy requester names from members rather than companion ownership', async () => {
+    const { client } = fixture();
+    const page = await client.load(id(1));
+    page.snapshot.members = page.snapshot.members.filter(member => member.id !== id(12));
+    page.snapshot.members.push({ ...page.snapshot.members[0]!, id: id(12), kind: 'bot', name: 'Cindy', assistant: true });
+    const requester = page.snapshot.members.find(member => member.id === id(10))!;
+    requester.name = 'Ann'; requester.displayName = 'Ann'; requester.nickname = null;
+    page.executions = [{ id: id(50), bot_id: id(12), requester_id: id(10), source_message_id: id(20), threadRootId: null, epoch: 1, status: 'running' }];
+    expect(chatGroupView(page, id(10)).round.speakers[0]).toMatchObject({ requesterName: 'Ann', isSelfRequested: true });
+    page.snapshot.members.at(-1)!.assistant = false;
+    expect(chatGroupView(page, id(10)).round.speakers[0]).not.toHaveProperty('requesterName');
+  });
+
+  it('projects the exact queued attempt and sends it with the displayed revision', async () => {
+    const { client, state, request } = fixture();
+    Object.assign(state.plan, { kind: 'talk', status: 'running', current_step: 0,
+      activeExecution: { id: id(50), status: 'queued' } });
+    state.plan.steps[0].status = 'running';
+    const page = await client.load(id(1));
+    expect(chatGroupView(page, id(10)).plans[0].steps[0]).toMatchObject({ executionId: id(50), executionStatus: 'queued' });
+    await client.actPlan(id(1), page.plans![0], { action: 'skip', position: 0, executionId: id(50) }, 'skip');
+    expect(request).toHaveBeenLastCalledWith(`/conversations/${id(1)}/plans/${id(40)}`, 'POST',
+      { action: 'skip', position: 0, executionId: id(50), expectedRevision: 3, operationId: 'skip' }, undefined, undefined);
+    await expect(client.actPlan(id(1), { ...page.plans![0], activeExecution: { id: id(50), status: 'running' } },
+      { action: 'skip', position: 0, executionId: id(50) }, 'claimed')).rejects.toThrow('TURN_ALREADY_STARTED');
+    await expect(client.actPlan(id(1), { ...page.plans![0], kind: 'work' },
+      { action: 'skip', position: 0, executionId: id(50) }, 'work')).rejects.toThrow('PLAN_CLOSED');
+    expect(request.mock.calls.filter(([, method]) => method === 'POST')).toHaveLength(1);
+  });
+  it('reassigns only eligible work steps and refuses talk-plan edits', async () => {
+    const { client, state, request } = fixture();
+    Object.assign(state.plan, { status: 'waiting', current_step: 0 });
+    state.plan.steps[0].status = 'failed';
+    state.snapshot.members.push({ ...state.snapshot.members[0], id: id(14), kind: 'bot' });
+    const page = await client.load(id(1));
+    await client.actPlan(id(1), page.plans![0], { action: 'reassign', position: 0, botId: id(14) }, 'reassign');
+    expect(request).toHaveBeenLastCalledWith(`/conversations/${id(1)}/plans/${id(40)}`, 'POST',
+      { action: 'reassign', position: 0, botId: id(14), expectedRevision: 3, operationId: 'reassign' }, undefined, undefined);
+    await expect(client.actPlan(id(1), { ...page.plans![0], kind: 'talk' }, { action: 'remove', position: 0 }, 'remove')).rejects.toThrow('PLAN_CLOSED');
+    expect(request.mock.calls.filter(([, method]) => method === 'POST')).toHaveLength(1);
+  });
+});
+
 describe('group list activity', () => {
+  // #10822 review / unit: roster refreshes must not download missing plans for
+  // failures excluded by the shared alert time window. Existing cases only use
+  // a recent failure with no latest message, so cannot detect this extra request.
+  it('only fetches missing plans for failures that can still produce an alert', async () => {
+    const value = { ...snapshot(), messages: [{ ...message(1), createdAt: '2026-10-10T00:00:00Z' }] };
+    const executions = [
+      { status: 'failed', plan_id: id(40), updated_at: '2026-10-09T00:00:00Z' },
+      { status: 'failed', plan_id: id(41), updated_at: 'invalid' },
+    ];
+    const request = vi.fn().mockImplementation(async (path: string) => path.endsWith('/executions') ? executions
+      : path.includes('/plans?ids=') ? [{ id: id(42), status: 'stopped' }] : []);
+    const client = createChatServerClient(request);
+    for (let refresh = 0; refresh < 2; refresh++) {
+      request.mockClear();
+      expect(await client.rosterActivity(id(1), value)).toEqual({ phase: 'idle' });
+      expect(request.mock.calls.map(([path]) => path)).toEqual([
+        `/conversations/${id(1)}/executions`, `/conversations/${id(1)}/plans`,
+      ]);
+    }
+    // A failure at the latest message timestamp remains actionable.
+    executions.push({ status: 'failed', plan_id: id(42), updated_at: value.messages[0]!.createdAt });
+    request.mockClear();
+    expect(await client.rosterActivity(id(1), value)).toEqual({ phase: 'idle' });
+    expect(request.mock.calls.map(([path]) => path)).toEqual([
+      `/conversations/${id(1)}/executions`, `/conversations/${id(1)}/plans`,
+      `/conversations/${id(1)}/plans?ids=${id(42)}`,
+    ]);
+  });
+
+  // #10822 / unit: use the direct mobile production reader, not a copied status
+  // reducer. The existing roster test lacks failed executions with closed plans.
+  it('settles a stopped plan from server records even when there is no local Session', async () => {
+    const failed = { status: 'failed', plan_id: id(40), updated_at: '2026-10-10T00:00:00Z' };
+    let planStatus = 'stopped';
+    let executions = [failed];
+    const request = vi.fn().mockImplementation(async (path: string) => path.endsWith('/executions') ? executions
+      : path.includes(`/plans?ids=${id(40)}`) || planStatus === 'waiting' ? [{ id: id(40), status: planStatus }] : []);
+    const client = createChatServerClient(request);
+    expect(await client.rosterActivity(id(1), snapshot())).toEqual({ phase: 'idle' });
+    expect(request).toHaveBeenCalledWith(`/conversations/${id(1)}/plans?ids=${id(40)}`);
+    executions = [failed, { ...failed, plan_id: id(41) }];
+    expect(await client.rosterActivity(id(1), snapshot())).toEqual({ phase: 'error' });
+    planStatus = 'waiting';
+    expect(await client.rosterActivity(id(1), snapshot())).toEqual({ phase: 'needs-interaction' });
+  });
+
+  it('keeps in-progress executions idle outside the group while surfacing needs_input and tolerating an older server', async () => {
+    const request = vi.fn().mockResolvedValueOnce([{ status: 'running' }]).mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ status: 'needs_input' }]).mockResolvedValueOnce([])
+      .mockRejectedValueOnce(Object.assign(new Error('NOT_FOUND'), { status: 404 })).mockResolvedValueOnce([]);
+    const client = createChatServerClient(request);
+    const value = snapshot();
+    expect(await client.rosterActivity(value.room.id, value)).toEqual({ phase: 'idle' });
+    const awaiting = await client.rosterActivity(value.room.id, value);
+    expect(chatRoomRow(value.room, value, undefined, awaiting).item.display.teammateActivity)
+      .toEqual({ phase: 'needs-interaction' });
+    expect(await client.rosterActivity(value.room.id, value)).toBeUndefined();
+    expect(request.mock.calls.every(([path]) => /\/(executions|plans)$/.test(path))).toBe(true);
+  });
+
+  it.each([
+    { label: 'peer-requested Cindy', execution: { status: 'running', bot_id: id(20), requester_id: id(12) } },
+    { label: 'self-requested Cindy', execution: { status: 'running', bot_id: id(20), requester_id: id(11) } },
+    { label: 'peer companion', execution: { status: 'running', bot_id: id(22), requester_id: id(11) } },
+    { label: 'own companion requested by peer', execution: { status: 'running', bot_id: id(21), requester_id: id(12) } },
+  ])('reports idle roster activity for $label', async ({ execution }) => {
+    const request = vi.fn().mockImplementation(async (path: string) => path.endsWith('/executions') ? [execution] : []);
+    const client = createChatServerClient(request);
+    const value: ChatSnapshot = {
+      ...snapshot(),
+      members: [
+        { id: id(11), kind: 'human', name: 'Self', state: 'joined', ownerActorId: id(11), ownerName: 'Self', avatar: null, role: 'owner' },
+        { id: id(12), kind: 'human', name: 'Peer', state: 'joined', ownerActorId: id(12), ownerName: 'Peer', avatar: null, role: 'member' },
+        { id: id(20), kind: 'bot', assistant: true, name: 'Cindy', state: 'joined', ownerActorId: '', ownerName: '', avatar: null, role: 'member' },
+        { id: id(21), kind: 'bot', name: 'MyBot', state: 'joined', ownerActorId: id(11), ownerName: 'Self', avatar: null, role: 'member' },
+        { id: id(22), kind: 'bot', name: 'PeerBot', state: 'joined', ownerActorId: id(12), ownerName: 'Peer', avatar: null, role: 'member' },
+      ],
+    };
+    expect(await client.rosterActivity(value.room.id, value)).toEqual({ phase: 'idle' });
+  });
+
   it('places a newly created empty group and a group with a new topic ahead of an older main chat', () => {
     const old = chatRoomRow(room(1), { ...snapshot(), messages: [{ ...message(20), createdAt: '2026-10-10T12:00:00Z' }] });
     const fresh = chatRoomRow({ ...room(2), created_at: '2026-10-11T12:00:00Z' }, { ...snapshot(), messages: [] });
@@ -76,6 +378,7 @@ it('retains fresh executions when cached history changes during load', async () 
     if (path === '/me') return { actor: { id: id(11), kind: 'human' } };
     if (path.endsWith('/executions')) return [{ id: id(++reads === 1 ? 30 : 31), bot_id: id(12), status: 'stopping', epoch: 1, source_message_id: id(20) }];
     if (path.includes('/execution-failures?')) return [];
+    if (path.endsWith('/plans')) return [];
     throw new Error(path);
   });
   const client = createChatServerClient(request as any, undefined, async () => stored as unknown as ChatHistory);
@@ -92,7 +395,7 @@ describe('direct Chat Server client', () => {
     const request = vi.fn().mockImplementation(async (path: string) => {
       if (path === '/me') return { actor: { id: id(10), kind: 'human' } };
       if (path.endsWith('/snapshot')) return snapshot();
-      if (path.endsWith('/executions')) return [{ id: id(30), bot_id: id(12), status: executionStatus, epoch: 1, source_message_id: id(20) }];
+      if (path.endsWith('/executions')) return [{ id: id(30), bot_id: id(12), status: executionStatus, epoch: 1, source_message_id: id(21) }];
       if (path.endsWith(`/messages/${id(20)}`)) return message(20);
       if (path.includes('/messages?')) return [{ ...message(21), threadRootId: id(20) }];
       return [];
@@ -222,6 +525,7 @@ describe('direct Chat Server client', () => {
     let status = 'failed';
     const request = vi.fn().mockImplementation(async (path: string) => {
       if (path.endsWith('/snapshot')) return snapshot();
+      if (path.endsWith('/plans')) return [];
       if (path.includes('/execution-failures?')) {
         const ids = new URLSearchParams(path.split('?')[1]).get('sourceIds')!.split(',');
         return ids.includes(id(1)) ? [{ id: id(500), source_message_id: id(1), bot_id: id(10), epoch: 1, status,
@@ -278,12 +582,13 @@ describe('direct Chat Server client', () => {
     const blankText = { ...onlyMedia, content: [{ type: 'text', text: ' \n' }, ...onlyMedia.content] };
     expect(chatRoomRow(room(), { ...snapshot(), messages: [blankText] }, id(11)).item.display.preview).toBe('a.png, b.pdf');
   });
-  it.each(['AUTH_REQUIRED', 'private diagnostic', undefined])('reads executions and projects a safe notice beside its visible source: %s', async failure_code => {
+  it.each(['AUTH_REQUIRED', 'RUNTIME_TIMEOUT', 'private diagnostic', undefined])('reads executions and projects a safe notice beside its visible source: %s', async failure_code => {
     const source = message(20);
     let status = 'failed';
     const request = vi.fn();
     request.mockImplementation(async (path: string) => path.endsWith('/snapshot') ? snapshot()
-      : path.includes('/execution-failures?') ? [{ id: id(30), source_message_id: source.id, bot_id: id(10), epoch: 1, status, failure_code }]
+      : path.endsWith('/plans') ? []
+      : path.includes('/execution-failures?') ? [{ id: id(30), source_message_id: source.id, bot_id: id(10), epoch: 1, status, failure_code, failure_reason: 'unclaimed_timeout' }]
       : [source]);
     const client = createChatServerClient(request);
     const page = await client.load(id(1));
@@ -292,7 +597,8 @@ describe('direct Chat Server client', () => {
     expect(view.messages).toHaveLength(2);
     expect(view.messages[0]).toMatchObject({ id: source.id, kind: 'message' });
     expect(view.messages[1]).toMatchObject({ id: `execution-failure:${id(30)}:1`, sequence: view.messages[0].sequence,
-      kind: 'notice', runtimeFailureCode: failure_code === 'AUTH_REQUIRED' ? failure_code : 'RUNTIME_ERROR' });
+      kind: 'notice', runtimeFailureCode: failure_code === 'AUTH_REQUIRED' || failure_code === 'RUNTIME_TIMEOUT' ? failure_code : 'RUNTIME_ERROR' });
+    expect(view.messages[1].runtimeFailureReason).toBe(failure_code === 'RUNTIME_TIMEOUT' ? 'unclaimed_timeout' : undefined);
     expect(view.lastMessage?.preview).toBe('20');
     expect(JSON.stringify(view.messages)).not.toContain('private diagnostic');
     status = 'queued';
@@ -316,17 +622,31 @@ describe('direct Chat Server client', () => {
   });
   it('falls back only for a missing endpoint on an older server', async () => {
     const source = message(20);
-    const request = vi.fn().mockResolvedValueOnce(snapshot()).mockResolvedValueOnce([source]).mockResolvedValueOnce([])
-      .mockRejectedValueOnce(Object.assign(new Error('NOT_FOUND'), { status: 404 }))
+    // Order: snapshot, executions (alongside the page), messages, failures, plans, then the fallback.
+    const request = vi.fn().mockResolvedValueOnce(snapshot()).mockResolvedValueOnce([]).mockResolvedValueOnce([source])
+      .mockRejectedValueOnce(Object.assign(new Error('NOT_FOUND'), { status: 404 })).mockResolvedValueOnce([])
       .mockResolvedValueOnce([{ id: id(30), source_message_id: source.id, bot_id: id(10), epoch: 1, status: 'failed', failure_code: 'AUTH_REQUIRED' }]);
     const page = await createChatServerClient(request).load(id(1));
     expect(request.mock.calls.at(-1)?.[0]).toBe(`/conversations/${id(1)}/executions`);
     expect(chatGroupView(page, id(11)).messages[1].runtimeFailureCode).toBe('AUTH_REQUIRED');
   });
+  // Unit, group-open latency: executions, failure notices and plans were three round trips in a row.
+  it('requests executions, failure notices and plans together once the page is known', async () => {
+    const pending: Array<{ path: string; resolve(value: unknown): void }> = [];
+    const request = vi.fn((path: string) => path.endsWith('/snapshot') ? Promise.resolve(snapshot())
+      : path.includes('/messages?') ? Promise.resolve([message(20)])
+      : new Promise(resolve => { pending.push({ path: path.replace(/\?.*/, ''), resolve }); }));
+    const loading = createChatServerClient(request as never).load(id(1));
+    await vi.waitFor(() => expect(pending).toHaveLength(3), { interval: 1 });
+    // All three are in flight before any of them has answered.
+    expect(pending.map(read => read.path.split('/').at(-1)).sort()).toEqual(['execution-failures', 'executions', 'plans']);
+    for (const read of pending) read.resolve([]);
+    expect(await loading).toMatchObject({ messages: [{ id: message(20).id }], executions: [], failures: [], plans: [] });
+  });
   it('surfaces execution read denial or malformed success through the existing load error path', async () => {
-    const request = vi.fn().mockResolvedValueOnce(snapshot()).mockResolvedValueOnce([message(20)])
-      .mockRejectedValueOnce(Object.assign(new Error('NOT_MEMBER'), { status: 403 }))
-      .mockResolvedValueOnce(snapshot()).mockResolvedValueOnce([message(20)]).mockResolvedValueOnce({});
+    const request = vi.fn().mockResolvedValueOnce(snapshot())
+      .mockRejectedValueOnce(Object.assign(new Error('NOT_MEMBER'), { status: 403 })).mockResolvedValueOnce([message(20)]).mockResolvedValueOnce([]).mockResolvedValueOnce([])
+      .mockResolvedValueOnce(snapshot()).mockResolvedValueOnce([]).mockResolvedValueOnce([message(20)]).mockResolvedValueOnce({}).mockResolvedValueOnce([]);
     const client = createChatServerClient(request);
     await expect(client.load(id(1))).rejects.toMatchObject({ status: 403 });
     await expect(client.load(id(1))).rejects.toThrow('INVALID_CHAT_EXECUTIONS');
@@ -356,13 +676,13 @@ describe('direct Chat Server client', () => {
   });
   it('opens and paginates main history, preserving exact sequence cursors and author identity', async () => {
     const messages = Array.from({ length: 100 }, (_, n) => message(200 - n));
-    const request = vi.fn().mockResolvedValueOnce(snapshot()).mockResolvedValueOnce(messages).mockResolvedValueOnce([]).mockResolvedValueOnce([])
-      .mockResolvedValueOnce([message(100)]).mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+    const request = vi.fn().mockResolvedValueOnce(snapshot()).mockResolvedValueOnce([]).mockResolvedValueOnce(messages).mockResolvedValueOnce([]).mockResolvedValueOnce([])
+      .mockResolvedValueOnce([message(100)]).mockResolvedValueOnce([]).mockResolvedValueOnce([]).mockResolvedValueOnce([]);
     const client = createChatServerClient(request);
     const page = await client.load(id(1));
     expect(page.before).toBe(messages.at(-1)!.seq);
     const older = await client.older(id(1), page);
-    expect(request.mock.calls[4][0]).toBe(`/conversations/${id(1)}/messages?limit=100&before=${messages.at(-1)!.seq}`);
+    expect(request).toHaveBeenCalledWith(`/conversations/${id(1)}/messages?limit=100&before=${messages.at(-1)!.seq}`);
     expect(older.before).toBeNull();
     const view = chatGroupView(older, id(11));
     expect(view.messages).toHaveLength(101);
@@ -400,6 +720,30 @@ describe('direct Chat Server client', () => {
       operationId: 'same-operation', content: [{ type: 'text', text: 'hello' }], mentions: [id(3)],
     });
     expect(request.mock.calls[0]).toEqual(request.mock.calls[1]);
+  });
+  // Unit: broadcasts must override an implicit quoted companion and retain their wire audience.
+  it.each([true, false])('keeps human broadcasts directed with server capability=%s', async supported => {
+    const original = { ...message(20), authorId: id(12), author: { kind: 'bot', name: 'Companion' } };
+    const member = { ...snapshot().members[0], id: id(12), kind: 'bot', state: 'joined' };
+    const request = vi.fn(async (path: string, method?: string) => {
+      if (path === '/me') return { actor: { id: id(11), kind: 'human' }, capabilities: supported ? { groupMentionAudiences: 1 } : {} };
+      if (method === 'POST') return { id: id(21) };
+      return path.endsWith('/members') ? [member] : original;
+    });
+    const client = createChatServerClient(request as any);
+    const input = { clientId: 'broadcast', text: '@Everyone', mentions: { all: true, botIds: [] }, quote: { messageId: id(20) } };
+    await client.send(id(1), input);
+    const posted = request.mock.calls.at(-1) as unknown as [string, string, Record<string, unknown>];
+    expect(posted[2].mentions).toEqual(supported ? [] : [id(11)]);
+    expect(posted[2].mentionAudience).toBe(supported ? 'humans' : undefined);
+    const bots = { ...input, clientId: 'bots', mentions: { all: false, allBots: true, botIds: [] } };
+    if (supported) {
+      await client.send(id(1), bots);
+      expect((request.mock.calls.at(-1) as unknown as [string, string, Record<string, unknown>])[2]).toMatchObject({ mentionAudience: 'bots', mentions: [] });
+    } else {
+      await expect(client.send(id(1), bots)).rejects.toThrow('ALL_BOTS_MENTION_DISABLED');
+      expect(request.mock.calls.filter(([, method]) => method === 'POST')).toHaveLength(1);
+    }
   });
   // Product rule: quoting a present companion addresses that companion; a deleted
   // original must not send a stale quote or silently lose the user's reply.
@@ -441,13 +785,24 @@ describe('direct Chat Server client', () => {
     expect(request.mock.calls.at(-1)).toEqual(posted);
     expect(request.mock.calls.filter(([, method]) => method !== 'POST')).toHaveLength(2);
   });
+  it.each(['', 'with files'])('sends sealed attachment IDs with text=%s and preserves the retry body', async text => {
+    const request = vi.fn().mockResolvedValue({ id: id(9) });
+    const client = createChatServerClient(request);
+    const input = { text, clientId: 'same-media-message', mentions: { all: false, botIds: [] },
+      attachments: [{ id: id(2), name: 'report.pdf', category: 'file' as const, path: '', ext: 'pdf', mimeType: 'application/pdf', size: 42 }] };
+    await client.send(id(1), input); await client.send(id(1), input);
+    expect(request.mock.calls[0][2]).toEqual({ operationId: 'same-media-message', mentions: [],
+      content: [...(text ? [{ type: 'text', text }] : []), { type: 'media', mediaId: id(2), caption: 'report.pdf' }] });
+    expect(request.mock.calls[0]).toEqual(request.mock.calls[1]);
+    expect(chatGroupView({ snapshot: snapshot(), messages: [], before: null }, id(10)).supportsAttachments).toBe(true);
+  });
   it('reauthorizes and replaces loaded older history on refresh instead of retaining deleted text', async () => {
     const recent = Array.from({ length: 100 }, (_, n) => message(200 - n));
-    const request = vi.fn().mockResolvedValueOnce(snapshot()).mockResolvedValueOnce(recent)
+    const request = vi.fn().mockResolvedValueOnce(snapshot()).mockResolvedValueOnce([]).mockResolvedValueOnce(recent)
       .mockResolvedValueOnce([{ ...message(100), content: [{ type: 'text', text: 'edited' }] }]).mockResolvedValueOnce([]).mockResolvedValueOnce([]).mockResolvedValueOnce([]);
     const page = await createChatServerClient(request).load(id(1), message(100).seq);
     expect(chatGroupView(page, id(10)).messages[0].content).toBe('edited');
-    expect(request.mock.calls[2][0]).toContain(`before=${message(101).seq}`);
+    expect(request.mock.calls[3][0]).toContain(`before=${message(101).seq}`);
   });
 
   it('counts only other members as unread and maps the server read cursor exactly', () => {
@@ -509,38 +864,101 @@ describe('group lifecycle contract', () => {
 });
 
 // Missing mobile stop path: preserve server revision and actor ownership; unit tier.
-it('stops my requests and companions without stopping another member’s work', async () => {
+it('stops only my companions even when they work for another member', async () => {
   const ownBot = { ...snapshot().members[0], id: id(12), kind: 'bot', ownerActorId: id(11) };
   const planId = id(40);
-  const execution = (n: number, bot: number, requester: number, plan_id: string | null = null) => ({ id: id(n), bot_id: id(bot), requester_id: id(requester), status: 'running', plan_id });
+  const execution = (n: number, bot: number, requester: number, plan_id: string | null = null) => ({ id: id(n), bot_id: id(bot), requester_id: id(requester), status: 'running', epoch: 3, plan_id });
   const request = vi.fn(async (path: string, method?: string) => {
     if (method === 'POST') return {};
     if (path === '/me') return { actor: { id: id(11), kind: 'human' } };
-    if (path.endsWith('/snapshot')) return { ...snapshot(), members: [...snapshot().members, ownBot] };
-    if (path.endsWith('/plans')) return [{ id: planId, creator_id: id(11), status: 'running', revision: 7 }];
+    if (path.endsWith('/snapshot')) return { ...snapshot(), members: [...snapshot().members, ownBot, { ...ownBot, id: id(13), ownerActorId: id(10) }] };
+    if (path.endsWith('/plans')) return [{ id: planId, creator_id: id(11), status: 'running', revision: 7, steps: [{ botId: id(12), status: 'running' }] }];
     if (path.endsWith('/executions')) return [execution(30, 12, 10), execution(31, 13, 11), execution(32, 13, 10), execution(33, 12, 11, planId)];
     throw new Error(path);
   });
   await createChatServerClient(request as any).stop(id(1), 'stop-operation');
   const writes = request.mock.calls.filter(([, method]) => method === 'POST');
   expect(writes).toEqual([
-    [`/conversations/${id(1)}/plans/${planId}`, 'POST', { operationId: `stop-operation:plan:${planId}`, expectedRevision: 7, action: 'stop' }],
-    [`/conversations/${id(1)}/executions/${id(30)}/control`, 'POST', { operationId: `stop-operation:execution:${id(30)}`, action: 'stop' }, id(12)],
-    [`/conversations/${id(1)}/executions/${id(31)}/control`, 'POST', { operationId: `stop-operation:execution:${id(31)}`, action: 'stop' }, undefined],
+    [`/conversations/${id(1)}/plans/${planId}`, 'POST', { operationId: `stop-operation:plan:${planId}`, expectedRevision: 7, action: 'stop' }, undefined],
+    [`/conversations/${id(1)}/executions/${id(30)}/control?runEpoch=3`, 'POST', { operationId: `stop-operation:execution:${id(30)}`, action: 'stop' }, undefined],
   ]);
+});
+
+// Unit / Nov 16 stop isolation: the public Cindy shares one actor across members.
+// Existing companion tests cannot detect an admin cancelling a different request to that actor.
+it.each([id(99), undefined])('stops only my public Cindy turn, with peer requester %s', async peer => {
+  const data = snapshot();
+  data.members[0]!.role = 'admin';
+  data.members.push({ ...data.members[0]!, id: id(12), kind: 'bot', assistant: true, ownerActorId: '' });
+  const request = vi.fn(async (path: string, method?: string) => {
+    if (method === 'POST') return {};
+    if (path === '/me') return { actor: { id: id(10), kind: 'human' } };
+    if (path.endsWith('/snapshot')) return data;
+    if (path.endsWith('/plans')) return [];
+    if (path.endsWith('/executions')) return [
+      { id: id(30), bot_id: id(12), requester_id: id(10), status: 'running' },
+      { id: id(31), bot_id: id(12), requester_id: peer, status: 'running' },
+    ];
+    throw new Error(path);
+  });
+  const stopped = createChatServerClient(request as any).stop(id(1), 'public-stop');
+  if (peer) await stopped;
+  else await expect(stopped).rejects.toThrow('STOP_OWNERSHIP_UNKNOWN');
+  expect(request.mock.calls.filter(([, method]) => method === 'POST').map(([path]) => path))
+    .toEqual([`/conversations/${id(1)}/executions/${id(30)}/control`]);
+});
+
+// Unit / same policy: an owned arrangement must not confer control of its foreign steps.
+it('stops my step without stopping a mixed-owner plan or skipping the foreign step', async () => {
+  const data = snapshot();
+  data.members[0]!.role = 'admin';
+  data.members.push(...[12, 13].map(n => ({ ...data.members[0]!, id: id(n), kind: 'bot' as const, ownerActorId: id(n === 12 ? 10 : 99) })));
+  const plan = { id: id(40), revision: 3, creator_id: id(10), status: 'running', kind: 'talk', current_step: 0,
+    steps: [{ position: 0, botId: id(12), status: 'running' }, { position: 1, botId: id(13), status: 'pending' }] };
+  const request = vi.fn(async (path: string, method?: string) => {
+    if (method === 'POST') return {};
+    if (path === '/me') return { actor: { id: id(10), kind: 'human' } };
+    if (path.endsWith('/snapshot')) return data;
+    if (path.endsWith('/plans')) return [plan];
+    if (path.endsWith('/executions')) return [{ id: id(30), bot_id: id(12), requester_id: id(10), plan_id: plan.id, status: 'running' }];
+    throw new Error(path);
+  });
+  const client = createChatServerClient(request as any);
+  await client.stop(id(1), 'mixed-stop');
+  await expect(client.actPlan(id(1), { ...plan, status: 'waiting' } as any, { action: 'dismiss' }, 'end')).rejects.toThrow('ROLE_REQUIRED');
+  await expect(client.actPlan(id(1), plan as any, { action: 'skip', position: 1 }, 'skip')).rejects.toThrow('ROLE_REQUIRED');
+  expect(request.mock.calls.filter(([, method]) => method === 'POST').map(([path]) => path))
+    .toEqual([`/conversations/${id(1)}/executions/${id(30)}/control`]);
 });
 
 it('projects waiting and stopping executions without inventing task IDs or losing concurrent turns', () => {
   const common = { source_message_id: id(20), bot_id: id(12), epoch: 1 };
-  const page = { snapshot: snapshot(), messages: [], before: null, executions: [
-    { ...common, id: id(30), status: 'needs_input' }, { ...common, id: id(31), status: 'stopping' },
+  const page = { snapshot: snapshot(), messages: [message(20)], before: null, executions: [
+    { ...common, id: id(30), status: 'needs_input', requester_id: id(11), created_at: '2026-11-13T00:00:00Z' }, { ...common, id: id(31), status: 'stopping' },
     { ...common, id: id(32), status: 'succeeded' },
   ] };
   const view = chatGroupView(page, id(11));
+  expect(view.round.speakers[0]).toMatchObject({ sourceMessageId: id(20), isSelfRequested: true, timelineAt: Date.parse('2026-11-13T00:00:00Z') });
+  expect(view.round.speakers[1]?.isSelfRequested).toBe(false);
   expect(view.round.status).toBe('running');
   expect(view.round.speakers.map(speaker => [speaker.executionId, speaker.executionStatus, speaker.sessionId])).toEqual([
     [id(30), 'needs_input', null], [id(31), 'stopping', null],
   ]);
+});
+
+// Unit / #10345: direct-server executions had no elapsed start and disappeared above loaded history.
+it('positions direct-server work by enqueue time without inventing elapsed time across refreshes', () => {
+  const messages = [message(20), message(21), message(22)].map((row, index) => ({ ...row,
+    createdAt: new Date([10_000, 30_000, 50_000][index]!).toISOString() }));
+  const execution = { source_message_id: id(21), bot_id: id(12), epoch: 1, id: id(30),
+    status: 'queued', created_at: new Date(40_000).toISOString() };
+  for (const status of ['queued', 'running', 'needs_input', 'stopping']) {
+    const view = chatGroupView({ snapshot: snapshot(), messages, before: null,
+      executions: [{ ...execution, status, updated_at: new Date(100_000).toISOString() }] }, id(11));
+    expect(view.round.speakers[0]?.startedAt).toBeUndefined();
+    expect(interleaveBotGroupWork(view.messages, view.round.speakers).map(row =>
+      row.kind === 'work' ? row.value.executionId : row.value.id)).toEqual([id(20), id(21), id(30), id(22)]);
+  }
 });
 
 // Unit: cross-device Cindy filters use profile identity, including exact legacy presets.
@@ -554,5 +972,549 @@ it('reads Cindy preset identity without inferring from names and retains known I
   const actors = [1, 2, 3, 4].map(n => ({ id: id(n), externalId: `bot-${n}`, kind: 'bot', name: 'Cindy', avatar: null, homeDeviceId: 'mac' }));
   const ids = await createChatServerClient(request as any).cindyCompanionIds(actors, ['bot-4']);
   expect(ids).toEqual(['bot-1', 'bot-2', 'bot-4']);
-  expect(request.mock.calls.every(call => call[0] === '/preferences' && call[1] === 'GET')).toBe(true);
+  expect(request.mock.calls.every(call => call[0] === '/preferences?key=companion.profile.v1' && call[1] === 'GET')).toBe(true);
+});
+
+// Unit: group and thread projections retain the optional process locator while
+// old messages, human-authored cards and deleted replies keep their prior behavior.
+it('keeps process metadata out of the reply and preview, and exposes it only for a bot', () => {
+  const ref = { groupId: id(1), executionId: id(40), sessionId: 'lane', clientId: 'source' };
+  const reply = { ...message(20), author: { kind: 'bot' as const, name: 'Cindy' },
+    threadRootId: id(15), content: [{ type: 'text', text: 'Result' }, botGroupProcessCard(ref)] };
+  const page = { snapshot: snapshot(), messages: [reply], before: null } as ChatPage;
+  const [view] = chatGroupView(page, id(11)).messages;
+  expect(view).toMatchObject({ content: 'Result', process: ref, threadRootId: id(15) });
+  expect(chatRoomRow(room(), { ...snapshot(), messages: [reply] }, id(11)).item.display.preview).toBe('Result');
+  for (const changed of [{ ...reply, author: { kind: 'human' as const, name: 'Other' } }, { ...reply, deleted: true }]) {
+    expect(chatGroupView({ ...page, messages: [changed] }, id(11)).messages[0]?.process).toBeUndefined();
+  }
+});
+
+// Unit: invitation contract (bot-group-chat §10). Existing client tests covered joined rooms only.
+// A pre-join link must POST just its token to this account's server, never fetch members or accept implicitly.
+describe('invitation preview and explicit acceptance', () => {
+  const token = 'A'.repeat(43);
+  const preview = { groupId: id(1), name: 'Weekend', inviterName: 'Lin', joined: false, expiresAt: null, reusable: true };
+  // Unit regression: #8386 covered incoming links only. A phone-created invite
+  // must return the Share Server URL, not expose its raw token in a native link.
+  // Minimal input: one valid reusable invite; existing tests only preview/accept.
+  it('creates a web share and preserves the server invitation lifetime', async () => {
+    const link = `https://share.example.invalid/chat-invite/${'b'.repeat(32)}`;
+    const request = vi.fn().mockResolvedValue({ token, expiresAt: null, reusable: true });
+    const shares = { create: vi.fn().mockResolvedValue(link), resolve: vi.fn(), revoked: vi.fn() };
+    const client = createChatServerClient(request, undefined, undefined, shares);
+    await expect(client.createInvite(id(1), id(10), 'create-operation')).resolves.toEqual({ link, expiresAt: null, reusable: true });
+    expect(shares.create).toHaveBeenCalledExactlyOnceWith(id(1), token, id(10));
+    expect(request).toHaveBeenCalledExactlyOnceWith(`/conversations/${id(1)}/invite-links`, 'POST', { operationId: 'create-operation' }, id(10));
+  });
+  it('does not fall back to a native link when sharing fails', async () => {
+    const request = vi.fn().mockResolvedValue({ token, expiresAt: null, reusable: true });
+    const shares = { create: vi.fn().mockRejectedValue(new Error('offline')), resolve: vi.fn(), revoked: vi.fn() };
+    await expect(createChatServerClient(request, undefined, undefined, shares).createInvite(id(1), id(10), 'op')).rejects.toThrow('offline');
+    await expect(createChatServerClient(request).createInvite(id(1), id(10), 'op')).rejects.toThrow('CHAT_ENDPOINT_UNAVAILABLE');
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+  it('revokes the token behind a web link before notifying the share service', async () => {
+    const request = vi.fn().mockResolvedValue({ revoked: true });
+    const shares = { create: vi.fn(), resolve: vi.fn().mockResolvedValue(token), revoked: vi.fn() };
+    const shareId = 'b'.repeat(32);
+    const client = createChatServerClient(request, undefined, undefined, shares);
+    await client.revokeInvite(id(1), id(10), `https://share.example.invalid/chat-invite/${shareId}`, 'revoke-operation');
+    expect(shares.resolve).toHaveBeenCalledExactlyOnceWith(shareId);
+    expect(request).toHaveBeenCalledExactlyOnceWith(`/conversations/${id(1)}/invite-links/revoke`, 'POST', { token, operationId: 'revoke-operation' }, id(10));
+    expect(shares.revoked).toHaveBeenCalledExactlyOnceWith(shareId);
+    request.mockRejectedValueOnce(new Error('FORBIDDEN')); shares.revoked.mockClear();
+    await expect(client.revokeInvite(id(1), id(10), `https://share.example.invalid/chat-invite/${shareId}`, 'denied')).rejects.toThrow('FORBIDDEN');
+    expect(shares.revoked).not.toHaveBeenCalled();
+    request.mockResolvedValueOnce({});
+    await expect(client.revokeInvite(id(1), id(10), `https://share.example.invalid/chat-invite/${shareId}`, 'invalid-receipt')).rejects.toThrow('CHAT_RESPONSE_INVALID');
+    expect(shares.revoked).not.toHaveBeenCalled();
+  });
+  it.each(['cindy', 'cindycn', 'cindydev'])('still revokes an existing %s native invitation without the share service', async scheme => {
+    const request = vi.fn().mockResolvedValue({ revoked: true });
+    await createChatServerClient(request).revokeInvite(id(1), id(10), `${scheme}://chat-invite/${token}`, 'old-operation');
+    expect(request).toHaveBeenCalledExactlyOnceWith(`/conversations/${id(1)}/invite-links/revoke`, 'POST', { token, operationId: 'old-operation' }, id(10));
+  });
+  it('previews only and preserves real optional identity without guessing missing counts', async () => {
+    const request = vi.fn().mockResolvedValueOnce({ ...preview, avatar: 'https://images.example.invalid/group.png', memberCount: 8 })
+      .mockResolvedValueOnce(preview).mockResolvedValueOnce({ ...preview, memberCount: -1 });
+    const client = createChatServerClient(request);
+    expect(await client.previewInvite(`cindy://chat-invite/${token}`)).toMatchObject({ memberCount: 8, avatar: 'https://images.example.invalid/group.png' });
+    expect(request).toHaveBeenCalledExactlyOnceWith('/invite-links/preview', 'POST', { token }, undefined, undefined);
+    expect((await client.previewInvite(token)).memberCount).toBeUndefined();
+    expect((await client.previewInvite(token)).memberCount).toBeUndefined();
+  });
+  // V9 summary is optional and bounded; a missing image is still a real member slot.
+  it('keeps ordered avatar slots and Unicode initials without granting a member-roster read', async () => {
+    const memberAvatars = [
+      { avatar: 'https://images.example.invalid/a.png', initial: '林' },
+      { avatar: 'cindy://avatar/preset/cindy', initial: 'C' },
+      { avatar: '🐱', initial: 'é' }, { avatar: null, initial: '👩🏽‍💻' }, { avatar: null, initial: '' },
+    ];
+    const request = vi.fn().mockResolvedValueOnce({ ...preview, memberAvatars, memberCount: 19 })
+      .mockResolvedValueOnce(preview).mockResolvedValueOnce({ ...preview, memberAvatars: [] })
+      .mockResolvedValueOnce({ ...preview, memberAvatars: 'invalid' })
+      .mockResolvedValueOnce({ ...preview, memberAvatars: [...memberAvatars, memberAvatars[0]] })
+      .mockResolvedValueOnce({ ...preview, memberAvatars: [{ avatar: {}, initial: '林' }, null] });
+    const client = createChatServerClient(request);
+    expect(await client.previewInvite(token)).toMatchObject({ memberAvatars, memberCount: 19 });
+    expect((await client.previewInvite(token)).memberAvatars).toBeUndefined();
+    expect((await client.previewInvite(token)).memberAvatars).toEqual([]);
+    expect((await client.previewInvite(token)).memberAvatars).toBeUndefined();
+    expect((await client.previewInvite(token)).memberAvatars).toEqual(memberAvatars);
+    expect((await client.previewInvite(token)).memberAvatars).toEqual([{ avatar: null, initial: '林' }, { avatar: null, initial: '' }]);
+    expect(request.mock.calls.every(call => call[0] === '/invite-links/preview' && call[1] === 'POST')).toBe(true);
+  });
+  it('rejects malformed links before HTTP and invalid responses before navigation', async () => {
+    const request = vi.fn().mockResolvedValue({ ...preview, groupId: 'not-a-room' });
+    const client = createChatServerClient(request);
+    await expect(client.previewInvite('https://example.invalid/other#secret')).rejects.toThrow('INVALID_INVITATION_LINK');
+    expect(request).not.toHaveBeenCalled();
+    await expect(client.previewInvite(token)).rejects.toThrow('INVALID_CHAT_ID');
+    request.mockResolvedValue({ ...preview, expiresAt: 'invalid' });
+    await expect(client.previewInvite(token)).rejects.toThrow('INVALID_CHAT_RESPONSE');
+  });
+  it('accepts through the existing operation contract and validates its room receipt', async () => {
+    const request = vi.fn().mockResolvedValueOnce({ groupId: id(1) }).mockResolvedValueOnce({ groupId: 'bad' });
+    const client = createChatServerClient(request);
+    const signal = new AbortController().signal;
+    expect(await client.acceptInvite(token, 'operation-1', signal)).toEqual({ groupId: id(1) });
+    expect(request).toHaveBeenCalledExactlyOnceWith('/invite-links/accept', 'POST', { token, operationId: 'operation-1' }, undefined, signal);
+    await expect(client.acceptInvite(token, 'operation-1')).rejects.toThrow('INVALID_CHAT_ID');
+  });
+});
+
+// D2 root-deletion regression (unit): production load used to classify every 404
+// as room access loss. Existing cache-reopen coverage only has a successful root.
+// Minimal input: an authorized reply page followed by a missing root lookup.
+it.each([false, true])('keeps authorized thread replies when the root is missing (stored=%s)', async stored => {
+  const reply = { ...message(21), threadRootId: id(20) };
+  const request = vi.fn().mockImplementation(async (path: string) => {
+    if (path === '/me') return { actor: { id: id(11), kind: 'human' } };
+    if (path.endsWith('/snapshot')) return snapshot();
+    if (path.startsWith('/changes?')) return { cursor: snapshot().cursor, changes: [], hasMore: false };
+    if (path.endsWith(`/messages/${id(20)}`)) throw { status: 404, code: 'MESSAGE_NOT_FOUND' };
+    if (path.includes('/messages?')) return [reply];
+    return [];
+  });
+  let saved: ChatHistoryState | undefined;
+  const history = createChatHistory({ api: request, current: () => true, newGeneration: () => 'topic',
+    store: { read: async () => saved, write: async (_, state) => { saved = state ?? undefined; } } });
+  const client = createChatServerClient(request, undefined, stored ? async () => history : undefined);
+  const page = await client.load(id(1), undefined, id(20));
+  expect(page.threadRootId).toBe(id(20));
+  expect(chatGroupView(page, id(11)).messages.map(m => m.id)).toEqual([id(21)]);
+});
+
+it.each([{ status: 403, code: 'PERMISSION_DENIED' }, { status: 404, code: 'CONVERSATION_NOT_FOUND' }])(
+  'does not turn root lookup access failure $code into readable thread content', async error => {
+    const request = vi.fn().mockImplementation(async (path: string) => {
+      if (path.endsWith('/snapshot')) return snapshot();
+      if (path.endsWith(`/messages/${id(20)}`)) throw error;
+      if (path.includes('/messages?')) return [{ ...message(21), threadRootId: id(20) }];
+      return [];
+    });
+    await expect(createChatServerClient(request).load(id(1), undefined, id(20))).rejects.toEqual(error);
+  });
+
+// PC parity, unit: actual HTTP client/projection. Earlier tests never exercised
+// root summaries, explicit following, or trustworthy thread-share source resolution.
+it('projects authoritative reply counts, distinct responders, unread mentions and resolved shares', () => {
+  const root = { ...message(20), replyCount: 17 };
+  const reply = { ...message(21), threadRootId: root.id, mentions: [id(11)], mentionAudience: 'bots' as const };
+  const share = { ...message(22), mentions: [id(10)], content: [{ type: 'card', namespace: 'cindy.thread-share', schemaRevision: 1,
+    data: { messageId: reply.id, threadRootId: root.id }, fallback: 'Untrusted old text' }] };
+  const s = { ...snapshot(), messages: [share, reply, root], reads: [] };
+  const view = chatGroupView({ snapshot: s, messages: [root, share], before: null }, id(11));
+  expect(view.messages[0]).toMatchObject({ replyCount: 17, threadUnread: { count: 1, mentioned: true },
+    threadPreview: { responders: [{ authorBotId: reply.authorId }], replies: [{ id: reply.id }] } });
+  // PR #8818: source identity travels with source text; delivery recipients stay intact.
+  expect(view.messages[1]).toMatchObject({ content: '', mentions: { all: false, botIds: [id(10)] },
+    threadShare: { status: 'available', content: '21', sharedByAuthor: true,
+      mentions: { all: false, allBots: true, botIds: [id(11)] } } });
+  expect(chatGroupView({ snapshot: { ...s, reads: undefined }, messages: [root], before: null }, id(11)).messages[0].threadUnread).toBeUndefined();
+  expect(chatGroupView({ snapshot: s, messages: [share], before: null, threadSources: { [reply.id]: null } }, id(11)).messages[0])
+    .toMatchObject({ content: '', threadShare: { status: 'unavailable', content: '', attachments: [] } });
+});
+
+it('changes explicit following without advancing the existing read cursor', async () => {
+  const request = vi.fn(async (path: string, _method?: string, body?: any) => path.endsWith('/snapshot')
+    ? { ...snapshot(), reads: [{ thread_key: id(20), read_seq: '9007199254740993' }] } : { following: body.following });
+  const client = createChatServerClient(request as any);
+  await expect(client.followThread(id(1), id(20), true, 'follow-op')).resolves.toEqual({ following: true });
+  expect(request).toHaveBeenLastCalledWith(`/conversations/${id(1)}/read`, 'POST', {
+    operationId: 'follow-op', threadRootId: id(20), readSeq: '9007199254740993', following: true,
+  });
+});
+
+it('persists a self-directed share body before posting and retries identical bytes after source edits', async () => {
+  let stored: any;
+  let edited = false;
+  const bodies: any[] = [];
+  const request = vi.fn(async (path: string, method?: string, body?: any) => {
+    if (path === '/me') return { actor: { id: id(11), kind: 'human' } };
+    if (path.endsWith('/members')) return snapshot().members;
+    if (path.endsWith(`/messages/${id(21)}`)) return { ...message(21), threadRootId: id(20), content: [{ type: 'text', text: edited ? 'changed' : '@bot original' }] };
+    if (method === 'POST') { expect(stored).toEqual(body); bodies.push(body); if (!edited) throw new Error('lost response'); return { id: id(22) }; }
+    throw new Error(path);
+  });
+  const client = createChatServerClient(request as any);
+  const save = async (body: any) => { stored = body; };
+  await expect(client.shareToMain(id(1), id(21), id(20), { save })).rejects.toThrow('lost response');
+  edited = true;
+  await expect(client.shareToMain(id(1), id(21), id(20), { body: stored, save })).resolves.toEqual({ messageId: id(22), alreadyShared: false });
+  expect(bodies[1]).toEqual(bodies[0]);
+  expect(bodies[0]).toMatchObject({ operationId: `thread-share:${id(21)}`, mentions: [id(11)], content: [{ data: { messageId: id(21), threadRootId: id(20) } }] });
+});
+
+// #7847 review, unit: an old share can be the only visible reference to its thread.
+// Earlier hydration tests kept a recent reply in the snapshot and missed this case.
+it('hydrates the root and latest replies for an old share outside the snapshot', async () => {
+  const root = { ...message(20), replyCount: 17 };
+  const source = { ...message(21), threadRootId: root.id };
+  const latest = { ...message(29), threadRootId: root.id, createdAt: '2026-10-29T12:00:00Z' };
+  const share = { ...message(30), content: [{ type: 'card', namespace: 'cindy.thread-share', schemaRevision: 1,
+    data: { messageId: source.id, threadRootId: root.id }, fallback: '' }] };
+  const request = vi.fn(async (path: string) => {
+    if (path.endsWith(`/messages/${root.id}`)) return root;
+    if (path.endsWith(`/messages/${source.id}`)) return source;
+    if (path.includes(`threadRootId=${root.id}`)) return [latest, source];
+    throw new Error(`Unexpected request: ${path}`);
+  });
+  const page = { snapshot: { ...snapshot(), messages: Array.from({ length: 100 }, (_, i) => message(100 + i)) }, messages: [share], before: null };
+  const view = chatGroupView(await createChatServerClient(request as any).hydrateThreads(id(1), page), id(11));
+  expect(view.messages[0].threadShare).toMatchObject({ status: 'available', replyCount: 17,
+    threadPreview: { replies: [{ id: source.id }, { id: latest.id, createdAt: Date.parse(latest.createdAt) }] } });
+});
+
+it('resolves an off-window root and retries a failed source on its bounded deadline without leaking fallback', async () => {
+  vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-28T00:00:00Z'));
+  try {
+    const share = { ...message(30), content: [{ type: 'card', namespace: 'cindy.thread-share', schemaRevision: 1,
+      data: { messageId: id(21), threadRootId: id(20) }, fallback: 'private old text' }] };
+    const reply = { ...message(22), threadRootId: id(20) };
+    const request = vi.fn(async (path: string) => {
+      if (path.endsWith(`/messages/${id(20)}`)) return { ...message(20), replyCount: 17 };
+      throw new Error('offline');
+    });
+    const client = createChatServerClient(request as any);
+    const page = { snapshot: { ...snapshot(), messages: [reply, share], reads: [] }, messages: [share], before: null };
+    expect(chatGroupView(page, id(11)).messages[0]?.threadShare?.status).toBe('loading');
+    const hydrated = await client.hydrateThreads(id(1), page);
+    expect(chatGroupView(hydrated, id(11)).messages[0]?.threadShare?.replyCount).toBe(17);
+    expect(hydrated.threadRetryAt).toBe(Date.now() + 30000);
+    expect(chatGroupView(hydrated, id(11)).messages[0]).toMatchObject({ content: '', threadShare: { status: 'loading', content: '' } });
+    const sourceCalls = () => request.mock.calls.filter(([path]) => path.endsWith(`/messages/${id(21)}`)).length;
+    await client.hydrateThreads(id(1), page); expect(sourceCalls()).toBe(1);
+    vi.setSystemTime(Date.now() + 30000);
+    await client.hydrateThreads(id(1), page); expect(sourceCalls()).toBe(2);
+    client.invalidateHistory(id(1), true); await client.hydrateThreads(id(1), page); expect(sourceCalls()).toBe(3);
+    expect(chatRoomRow(room(), page.snapshot, id(11)).item.display.preview).not.toContain('private old text');
+  } finally { vi.useRealTimers(); }
+});
+
+it('projects real cached read fields through load, not only a hand-built UI fixture', async () => {
+  const root = { ...message(20), replyCount: 3, reactions: [{ emoji: '👍', count: 2, me: true }] };
+  const reply = { ...message(21), threadRootId: root.id };
+  const request = vi.fn(async (path: string) => {
+    if (path === '/me') return { actor: { id: id(11), kind: 'human' } };
+    if (path.endsWith('/snapshot')) return { ...snapshot(), messages: [reply, root], reads: [{ thread_key: root.id, read_seq: '0', following: true }] };
+    if (path.includes('/messages?')) return [root];
+    return [];
+  });
+  const history = createChatHistory({ api: request as any, current: () => true, newGeneration: () => 'projection', store: { read: async () => undefined, write: async () => {} } });
+  const client = createChatServerClient(request as any, undefined, async () => history);
+  const view = chatGroupView(await client.load(id(1)), id(11));
+  expect(view.messages[0]).toMatchObject({ replyCount: 3, reactions: [{ emoji: '👍', count: 2, me: true }], threadUnread: { count: 1 }, threadPreview: { replies: [{ id: reply.id }] } });
+});
+
+it.each([403, 404, 410])('treats source %s as terminal unavailability without posting', async status => {
+  const request = vi.fn().mockRejectedValue({ status });
+  await expect(createChatServerClient(request).shareToMain(id(1), id(21), id(20))).rejects.toThrow('SHARE_UNAVAILABLE');
+  expect(request.mock.calls.every(call => call[1] !== 'POST')).toBe(true);
+});
+
+
+// A persisted post must not be replayed into a different root or wake other actors.
+it.each(['root', 'mentions'])('rejects a mismatched persisted share %s before POST', async changed => {
+  const { buildBotGroupThreadShareCard } = await import('@cindy/maker-shared/botGroupChat');
+  const body = { operationId: `thread-share:${id(21)}`, mentions: [changed === 'mentions' ? id(10) : id(11)], content: [
+    buildBotGroupThreadShareCard({ messageId: id(21), threadRootId: changed === 'root' ? id(99) : id(20), authorName: 'Author', text: 'Reply' }),
+  ] };
+  const request = vi.fn(async () => ({ actor: { id: id(11), kind: 'human' } }));
+  await expect(createChatServerClient(request as any).shareToMain(id(1), id(21), id(20), { body, save: async () => {} })).rejects.toThrow('SHARE_UNAVAILABLE');
+  expect(request.mock.calls).toEqual([['/me']]);
+});
+
+// Personal delegation is a separate server contract: viewing/AI output never consumes human unread (unit).
+describe('personal mask transport', () => {
+  it('does not call unsupported mask endpoints on an older server', async () => {
+    const request = vi.fn(async (_path: string) => ({ actor: { id: id(1), kind: 'human' } }));
+    const client = createChatServerClient(request as never);
+    expect(await client.mask(id(2))).toBeNull();
+    expect(await client.maskMentions(id(2))).toEqual({ mentions: [], hasMore: false });
+    expect(request.mock.calls.every(call => call[0] === '/me')).toBe(true);
+  });
+  it('pairs the original mention with its reply and acknowledges only the selected message', async () => {
+    const companion = { id: id(3), name: 'Cindy', avatarUrl: null };
+    const request = vi.fn(async (path: string, method?: string, body?: unknown) => {
+      if (path === '/me') return { actor: { id: id(1), kind: 'human' }, capabilities: { personalMask: 1 } };
+      if (path.endsWith('/read')) return {};
+      return { messages: [{ ...message(20), reply: { content: [{ type: 'text', text: 'Recorded' }], maskAttribution: { companion } } }], hasMore: false };
+    });
+    const client = createChatServerClient(request as never);
+    await expect(client.mask(id(2), { type: 'resume' })).rejects.toThrow('UNSUPPORTED_OPERATION');
+    expect((await client.maskMentions(id(2))).mentions[0]).toMatchObject({ messageId: id(20), text: '20', reply: { companion, text: 'Recorded' } });
+    expect(request.mock.calls.some(([, method]) => method === 'POST')).toBe(false);
+    await client.maskMentions(id(2), undefined, [id(20)], 'read-one');
+    expect(request.mock.calls.filter(([, method]) => method === 'POST')).toEqual([[`/conversations/${id(2)}/mentions/read`, 'POST', { operationId: 'read-one', messageIds: [id(20)] }]]);
+  });
+  it('keeps the human author and stand-in attribution in the actual mobile timeline', () => {
+    const attribution = { self: { id: id(10), name: 'Chris', avatarUrl: null }, companion: { id: id(3), name: 'Cindy', avatarUrl: null }, sourceMessageId: id(19) };
+    const page = { snapshot: snapshot(), messages: [{ ...message(20), maskAttribution: attribution }], before: null };
+    expect(chatGroupView(page, id(10)).messages[0]).toMatchObject({ authorKind: 'user', isSelf: true, maskAttribution: attribution });
+  });
+});
+
+// Unit: direct mobile reads must match the Desktop projection; human-authored
+// copies remain ordinary messages and the original fallback stays readable.
+it.each(['bot', 'human'] as const)('projects a capability notice only from its companion author (%s)', kind => {
+  const item = { ...message(50), author: { kind, name: 'Writer' }, content: [buildBotGroupCapabilityNotice('ATTACHMENTS_UNAVAILABLE', 'Some attachments were not delivered')] };
+  const page = { snapshot: snapshot(), messages: [item], hasMore: false, executions: [], plans: [] } as unknown as ChatPage;
+  const view = chatGroupView(page, id(11));
+  expect(view.messages[0].kind).toBe(kind === 'bot' ? 'notice' : 'message');
+  expect(view.messages[0].capabilityNoticeCode).toBe(kind === 'bot' ? 'ATTACHMENTS_UNAVAILABLE' : undefined);
+  expect(view.messages[0].content).toBe('Some attachments were not delivered');
+});
+
+// 测试价值：群聊 §4.0 的默认本人范围和显式 all，以及真实拒绝/收尾竞态。
+// 旧测试只覆盖一次本人 happy path；最小输入是一条他人的执行或一条被拒的本人执行。
+// tier: unit，生产 ChatServerClient 通过内存 request，不连接服务器。
+it.each(['owner', 'admin', 'member'] as const)('rejects explicit all regardless of the %s role', async role => {
+  const request = vi.fn(async (path: string, method?: string) => {
+    if (path === '/me') return { actor: { id: id(10), kind: 'human' }, capabilities: { groupSingleSpeaker: 1 } };
+    if (path.endsWith('/snapshot')) return { ...snapshot(), members: snapshot().members.map(member => ({ ...member, role })) };
+    if (path.endsWith('/plans')) return [];
+    if (path.endsWith('/executions')) return [{ id: id(30), bot_id: id(12), requester_id: id(99), status: 'running' }];
+    if (method === 'POST') return {};
+    throw new Error(path);
+  });
+  const client = createChatServerClient(request as any);
+  await expect(client.stop(id(1), 'all-op', 'all')).rejects.toThrow('ROLE_REQUIRED');
+  expect(request.mock.calls.some(([, method]) => method === 'POST')).toBe(false);
+});
+it.each(['running', 'stopping', 'cancelled', 'missing'] as const)('preserves a refused stop unless reread explicitly settles it (%s)', async latest => {
+  let reads = 0;
+  const rejection = Object.assign(new Error('FORBIDDEN'), { status: 403 });
+  const request = vi.fn(async (path: string, method?: string) => {
+    if (method === 'POST') throw rejection;
+    if (path === '/me') return { actor: { id: id(10), kind: 'human' } };
+    if (path.endsWith('/snapshot')) return { ...snapshot(), members: [...snapshot().members, { ...snapshot().members[0], id: id(12), kind: 'bot' }] };
+    if (path.endsWith('/plans')) return [];
+    if (path.endsWith('/executions')) {
+      reads++;
+      return reads > 1 && latest === 'missing' ? [] : [{ id: id(30), bot_id: id(12), requester_id: id(10), status: reads === 1 ? 'running' : latest }];
+    }
+    throw new Error(path);
+  });
+  const action = createChatServerClient(request as any).stop(id(1), 'stop-op');
+  if (latest === 'stopping' || latest === 'cancelled') await expect(action).resolves.toBeUndefined();
+  else await expect(action).rejects.toBe(rejection);
+});
+it('does not send a later stop after its group action owner changes', async () => {
+  let current = true;
+  const request = vi.fn(async (path: string) => {
+    if (path === '/me') return { actor: { id: id(10), kind: 'human' } };
+    current = false;
+    return snapshot();
+  });
+  await expect(createChatServerClient(request as any).stop(id(1), 'stale-op', undefined, () => current)).rejects.toThrow('OWNER_CHANGED');
+  expect(request.mock.calls.map(([path]) => path)).toHaveLength(2);
+});
+
+it('does not impersonate an admin companion to stop everyone', async () => {
+  const manager = { ...snapshot().members[0], id: id(12), kind: 'bot', ownerActorId: id(10), role: 'admin' };
+  const request = vi.fn(async (path: string, method?: string) => {
+    if (method === 'POST') return {};
+    if (path === '/me') return { actor: { id: id(10), kind: 'human' }, capabilities: { groupSingleSpeaker: 1 } };
+    if (path.endsWith('/snapshot')) return { ...snapshot(), members: [...snapshot().members, manager] };
+    if (path.endsWith('/plans')) return [{ id: id(40), creator_id: id(99), status: 'running', revision: 7 }];
+    if (path.endsWith('/executions')) return [{ id: id(30), bot_id: id(13), requester_id: id(99), status: 'running' }];
+    throw new Error(path);
+  });
+  await expect(createChatServerClient(request as any).stop(id(1), 'all-op', 'all')).rejects.toThrow('ROLE_REQUIRED');
+  expect(request.mock.calls.some(([, method]) => method === 'POST')).toBe(false);
+});
+
+// Unit regression: mixed main/topic executions used to appear together in the main group.
+// Existing waiting-state coverage had only one source; assert the public projection per scope.
+it('keeps main and two topics isolated including waiting work and unknown sources', () => {
+  const messages = [message(20), { ...message(21), threadRootId: id(20) }, { ...message(22), threadRootId: id(19) }];
+  const page = { snapshot: snapshot(), messages, before: null, executions: [20, 21, 22, 99].map(n => ({
+    id: id(n + 100), bot_id: id(12), source_message_id: id(n), epoch: 1, status: 'needs_input',
+  })) };
+  expect(chatGroupView(page, id(10)).round.speakers.map(s => s.executionId)).toEqual([id(120)]);
+  expect(chatGroupView({ ...page, threadRootId: id(20) }, id(10)).round.speakers.map(s => s.executionId)).toEqual([id(121)]);
+  expect(chatGroupView({ ...page, threadRootId: id(19) }, id(10)).round.speakers.map(s => s.executionId)).toEqual([id(122)]);
+  expect(chatGroupView({ ...page, threadRootId: id(18) }, id(10)).round).toMatchObject({ status: 'running', speakers: [] });
+  // Group settings need every active request, even when its source cannot be resolved yet.
+  expect(chatGroupView(page, id(10), [], 'group').round.speakers.map(s => s.executionId))
+    .toEqual([id(120), id(121), id(122), id(199)]);
+});
+
+// Unit: source-level denials used to reject a readable room; existing coverage only had
+// MESSAGE_NOT_FOUND. Keep history and per-load dedup for 403/404/410, but propagate outages.
+it.each([
+  { label: 'message not found', error: { status: 404, code: 'MESSAGE_NOT_FOUND' }, unavailable: true },
+  { label: 'forbidden source', error: { status: 403, code: 'FORBIDDEN' }, unavailable: true },
+  { label: 'gone source', error: { status: 410, code: 'MESSAGE_GONE' }, unavailable: true },
+  { label: 'generic not found', error: { status: 404, code: 'NOT_FOUND' }, unavailable: true },
+  { label: 'server outage', error: { status: 503, code: 'UNAVAILABLE' }, unavailable: false },
+  { label: 'network outage', error: new Error('source offline'), unavailable: false },
+])('keeps execution source failures scoped: $label', async ({ error, unavailable }) => {
+  const visible = message(21);
+  const request = vi.fn(async (path: string) => {
+    if (path.endsWith('/snapshot')) return snapshot();
+    if (path.includes('/messages?')) return [visible];
+    if (path.includes('/execution-failures?') || path.endsWith('/plans')) return [];
+    if (path.endsWith('/executions')) return [30, 31].map(n => ({ id: id(n), bot_id: id(12), status: 'running', epoch: 1, source_message_id: id(20) }));
+    if (path.endsWith(`/messages/${id(20)}`)) throw error;
+    throw new Error(path);
+  });
+  const client = createChatServerClient(request as any);
+  if (!unavailable) {
+    await expect(client.load(id(1))).rejects.toBe(error);
+    return;
+  }
+  for (let count = 1; count <= 2; count++) {
+    const page = await client.load(id(1));
+    expect(page.messages).toEqual([visible]);
+    expect(chatGroupView(page, id(10)).round.speakers).toEqual([]);
+    expect(request.mock.calls.filter(([path]) => path.endsWith(`/messages/${id(20)}`))).toHaveLength(count);
+  }
+});
+
+// Unit regression: public execution rows must survive denial of the stop affordance.
+// Earlier projection coverage did not distinguish request ownership.
+// Stopping own work plus a running peer exposed a stop that the real route cannot act on.
+it.each([10, 11].flatMap(requester => ['running', 'stopping'].map(status => ({ requester, status }))))('keeps public work visible while projecting stop permission for $requester ($status)', ({ requester, status }) => {
+  const page = { snapshot: { ...snapshot(), members: [...snapshot().members, { ...snapshot().members[0]!, id: id(12), kind: 'bot' as const, assistant: true }] }, messages: [message(20), message(21)], before: null, executions: [
+    { id: id(30), source_message_id: id(20), bot_id: id(12), epoch: 1, status, requester_id: id(requester) },
+    { id: id(31), source_message_id: id(21), bot_id: id(12), epoch: 1, status: 'running', requester_id: id(10) },
+  ] };
+  const view = chatGroupView(page, id(11));
+  expect(view.round.speakers.map(s => s.executionStatus)).toEqual([status, 'running']);
+  expect(view.round.canStop).toBe(requester === 11 && status === 'running');
+});
+
+// Unit: bot-group-chat.md §10 in-group 话题 index on mobile direct groups.
+// Verifies participated, mentionedMe, lastMention, responders and unread projection survive read.
+it('projects group thread summaries with participation and persistent @mention targets', () => {
+  const root = { ...message(20), authorId: id(11), author: { kind: 'human', name: 'Peer' }, replyCount: 2, content: [{ type: 'text', text: 'Release checklist https://github.com/makecindy/cindy/issues/13022' }] };
+  const myReply = { ...message(21), authorId: id(10), author: { kind: 'human', name: 'Me' }, threadRootId: root.id, content: [{ type: 'text', text: 'I will check iOS https://github.com/makecindy/cindy/pull/13080' }] };
+  const mentionReply = { ...message(22), authorId: id(11), author: { kind: 'human', name: 'Peer' }, threadRootId: root.id, mentions: [id(10)], content: [{ type: 'text', text: '@Me ready to ship?' }] };
+  const snap = { ...snapshot(), messages: [mentionReply, myReply, root], reads: [{ thread_key: root.id, read_seq: mentionReply.seq, following: false }] };
+  const view = chatGroupView({ snapshot: snap, messages: [root], before: null }, id(10));
+  expect(view.threads).toEqual([expect.objectContaining({
+    rootId: root.id,
+    rootText: 'Release checklist https://github.com/makecindy/cindy/issues/13022',
+    replyCount: 2,
+    participated: true,
+    mentionedMe: true,
+    following: false,
+    unread: { count: 0, mentioned: false },
+    refs: [
+      expect.objectContaining({ kind: 'pr', number: 13080, url: 'https://github.com/makecindy/cindy/pull/13080' }),
+      expect.objectContaining({ kind: 'issue', number: 13022, url: 'https://github.com/makecindy/cindy/issues/13022' }),
+    ],
+    lastMention: expect.objectContaining({ messageId: mentionReply.id, text: '@Me ready to ship?' }),
+    lastReply: expect.objectContaining({ text: '@Me ready to ship?' }),
+  })]);
+  expect(view.threads?.[0]?.responders?.map(r => r.authorBotId)).toEqual([id(10), id(11)]);
+
+  // Broadcast @everyone / @humans replies do not mark mentionedMe in the thread index.
+  const broadcastReply = { ...message(23), authorId: id(11), author: { kind: 'human', name: 'Peer' }, threadRootId: root.id, mentions: [id(10)], mentionAudience: 'humans' as const, content: [{ type: 'text', text: '@所有人 check update' }] };
+  const broadcastSnap = { ...snapshot(), messages: [broadcastReply, root], reads: [{ thread_key: root.id, read_seq: broadcastReply.seq, following: false }] };
+  const broadcastView = chatGroupView({ snapshot: broadcastSnap, messages: [root], before: null }, id(10));
+  expect(broadcastView.threads?.[0]?.mentionedMe).toBeUndefined();
+  expect(broadcastView.threads?.[0]?.lastMention).toBeUndefined();
+
+  // Non-text task-card root messages resolve rootKind='task' + task title instead of empty text.
+  const taskRoot = {
+    ...message(24),
+    id: id(24),
+    seq: '24',
+    authorId: id(12),
+    author: { kind: 'bot', name: 'Helper' },
+    replyCount: 1,
+    content: [{
+      type: 'card',
+      namespace: 'cindy.task',
+      schemaRevision: 2,
+      fallback: '[任务] 修复 Windows 提示 · 空闲',
+      data: { taskId: 't-1', deviceId: null, title: '修复 Windows 提示', state: 'idle', requesterName: 'Peer', botName: 'Helper' },
+    }],
+  };
+  const taskReply = { ...message(25), id: id(25), seq: '25', authorId: id(10), author: { kind: 'human', name: 'Me' }, threadRootId: taskRoot.id, content: [{ type: 'text', text: 'Done' }] };
+  const taskSnap = { ...snapshot(), messages: [taskReply, taskRoot], reads: [] };
+  const taskView = chatGroupView({ snapshot: taskSnap, messages: [taskRoot], before: null }, id(10));
+  expect(taskView.threads?.[0]).toMatchObject({
+    rootId: taskRoot.id,
+    rootKind: 'task',
+    rootText: '修复 Windows 提示',
+  });
+});
+
+it('backfills historical threads from older pages and snapshot reads on mobile', async () => {
+  const oldRoot = { ...message(5), id: id(50), seq: '5', authorId: id(11), author: { kind: 'human', name: 'Peer' }, replyCount: 2, content: [{ type: 'text', text: 'Historical topic' }] };
+  const oldMyReply = { ...message(6), id: id(51), seq: '6', authorId: id(10), author: { kind: 'human', name: 'Me' }, threadRootId: oldRoot.id, content: [{ type: 'text', text: 'Joined earlier' }] };
+  const oldMention = { ...message(7), id: id(52), seq: '7', authorId: id(11), author: { kind: 'human', name: 'Peer' }, threadRootId: oldRoot.id, mentions: [id(10)], content: [{ type: 'text', text: '@Me confirm?' }] };
+  const filler = Array.from({ length: 100 }, (_, i) => ({ ...message(200 + i), id: id(300 + i), seq: String(200 + i), authorId: id(11) })).reverse();
+  const snap = { ...snapshot(), messages: filler, reads: [{ thread_key: 'main', read_seq: '300' }, { thread_key: oldRoot.id, read_seq: '7', following: true }] };
+  const client = createChatServerClient((async (route: string) => {
+    if (route === '/actors') return [{ id: id(10), kind: 'human', name: 'Me' }];
+    if (route.includes('before=200')) return [oldRoot];
+    if (route.includes(`threadRootId=${oldRoot.id}`)) return [oldMention, oldMyReply];
+    if (route.endsWith(`/messages/${oldRoot.id}`)) return oldRoot;
+    return [];
+  }) as unknown as Parameters<typeof createChatServerClient>[0]);
+  const backfilled = await client.backfillThreads(id(1), snap, filler);
+  const view = chatGroupView({ snapshot: snap, messages: filler, cachedMessages: backfilled.messages, threadRoots: backfilled.roots, before: null }, id(10));
+  expect(view.threads).toEqual([expect.objectContaining({
+    rootId: oldRoot.id,
+    rootText: 'Historical topic',
+    participated: true,
+    mentionedMe: true,
+    following: true,
+    lastMention: expect.objectContaining({ messageId: oldMention.id }),
+  })]);
+});
+
+it('uses the main-page cursor with an isolated cached lookup and retries missing replies without rescanning history', async () => {
+  const root = { ...message(6), replyCount: 2 };
+  const mention = { ...message(8), threadRootId: root.id, authorId: id(11), mentions: [id(10)] };
+  const reply = { ...message(7), threadRootId: root.id };
+  const page = Array.from({ length: 100 }, (_, i) => message(200 + i)).reverse();
+  const snap = { ...snapshot(), messages: page, reads: [] };
+  let attempts = 0;
+  const request = vi.fn(async (route: string) => {
+    if (route === '/me') return { actor: { id: id(10), kind: 'human' } };
+    if (route.includes('threadRootId=')) {
+      if (++attempts === 1) throw Object.assign(new Error('busy'), { status: 429 });
+      return [reply, mention];
+    }
+    return [];
+  });
+  const client = createChatServerClient(request as never, undefined, async () => ({
+    cachedMessages: () => [{ ...message(1), seq: '1' }],
+    lookup: async () => new Map([[root.id, { message: root }]]),
+  }) as never);
+  const partial = await client.backfillThreads(id(1), snap, page, undefined, [mention]);
+  expect(partial.retryRoots).toEqual([root.id]);
+  const completed = await client.backfillThreads(id(1), snap, page, undefined, [mention], partial);
+  expect(completed.retryRoots).toEqual([]);
+  expect(request.mock.calls.filter(([route]) => route.includes('before=')).map(([route]) => route))
+    .toEqual([`/conversations/${id(1)}/messages?limit=100&before=${page.at(-1)!.seq}`]);
+  expect(chatGroupView({ snapshot: snap, before: null, messages: page, cachedMessages: completed.messages }, id(10)).threads)
+    .toContainEqual(expect.objectContaining({ rootId: root.id, participated: true, mentionedMe: true }));
 });

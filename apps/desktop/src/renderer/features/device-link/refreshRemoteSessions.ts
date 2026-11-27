@@ -1,3 +1,5 @@
+import { remoteProjectAliases } from './remoteProjectAliases';
+import { projectAliasesForSessionList } from '@cindy/maker-shared/project-alias-sync';
 /**
  * refreshRemoteDeviceSessions —— 立即(可 await)重拉某被控设备的会话列表(bootstrap / reconcile)。
  *
@@ -40,11 +42,16 @@ const log = createLogger('device-link-refresh');
  * (review: codex P1)。断连分片是**有意保留**的,快照必须带上它们。
  */
 export function collectSessionListSnapshot(): CachedDeviceSessionsSnapshot[] {
-  return remoteProjectsStore.getAllDeviceIds().map((deviceId) => ({
-    deviceId,
-    deviceName: remoteProjectsStore.getDeviceName(deviceId) ?? deviceId,
-    sessions: [...remoteProjectsStore.getDeviceSessions(deviceId)],
-  }));
+  const snapshots = remoteProjectAliases.getSnapshot();
+  return remoteProjectsStore.getAllDeviceIds().map((deviceId) => {
+    const sessions = [...remoteProjectsStore.getDeviceSessions(deviceId)];
+    return {
+      deviceId,
+      deviceName: remoteProjectsStore.getDeviceName(deviceId) ?? deviceId,
+      sessions,
+      projectAliases: projectAliasesForSessionList(snapshots.get(deviceId), sessions),
+    };
+  });
 }
 
 /** 与 listing tier 的拉取上限一致(useDeviceLinkRemoteProjects 的 LIST_LIMIT)。 */
@@ -191,6 +198,25 @@ interface RefreshTask {
 
 const refreshTasks = new Map<string, RefreshTask>();
 
+/** Every schedule index read takes the next sequence number when it starts. */
+let scheduleIndexReadSeq = 0;
+const lastScheduleIndexRead = new Map<string, { seq: number; startedAt: number }>();
+
+/**
+ * The last schedule index read that succeeded for this device. A refresh result of
+ * `ok` does not prove the index was read: a weak periodic tick may reuse a
+ * sessions-only refresh, and scope `both` tolerates an index failure. Compare `seq`
+ * with {@link remoteScheduleIndexReadSeq} taken earlier to know whether a read started
+ * after that point.
+ */
+export function remoteScheduleIndexLastRead(deviceId: string): { seq: number; startedAt: number } | undefined {
+  return lastScheduleIndexRead.get(deviceId);
+}
+
+export function remoteScheduleIndexReadSeq(): number {
+  return scheduleIndexReadSeq;
+}
+
 function refreshTaskKey(deviceId: string, status: RemoteSessionStatus): string {
   return `${deviceId}\u0000${status}`;
 }
@@ -226,6 +252,14 @@ function reconcileMissingStatusProbeQueue(
   }
   missingStatusProbeQueues.set(queueKey, queue);
   return queue;
+}
+
+/** A completion notification can reach the controller before its schedule mirror updates. */
+export async function readRemoteScheduleIndex(deviceId: string) {
+  const raw = await window.electronAPI.deviceLink.invoke(deviceId, 'maker:schedule:list-sidebar-index-runs', []);
+  const snapshot = raw as Partial<ScheduleSidebarIndexSnapshot> | null;
+  if (!Array.isArray(snapshot?.runs)) throw new Error('Invalid remote schedule index');
+  return projectScheduleSidebarIndex(snapshot.runs);
 }
 
 export async function refreshRemoteDeviceSessions(
@@ -452,31 +486,24 @@ async function runRefreshRemoteDeviceSessions(
       if (opts.scope === 'schedule' || opts.scope === 'both') {
         if (unresponsiveDevicesStore.has(deviceId)) return 'gave-up';
         let scheduleIndexError: unknown;
+        const pendingIndex = remoteProjectsStore.beginDeviceScheduleIndexRead(deviceId);
         try {
-          const raw = await window.electronAPI.deviceLink.invoke(
-            deviceId,
-            'maker:schedule:list-sidebar-index-runs',
-            [],
-          );
+          const indexRead = { seq: ++scheduleIndexReadSeq, startedAt: Date.now() };
+          const index = await readRemoteScheduleIndex(deviceId);
           if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status))
             return 'superseded';
-          if (
-            !raw ||
-            typeof raw !== 'object' ||
-            !Array.isArray((raw as ScheduleSidebarIndexSnapshot).runs)
-          ) {
-            throw new Error('Invalid remote schedule index');
+          if (!pendingIndex.commit(index)) return 'superseded';
+          if (indexRead.seq > (lastScheduleIndexRead.get(deviceId)?.seq ?? 0)) {
+            lastScheduleIndexRead.set(deviceId, indexRead);
           }
-          remoteProjectsStore.setDeviceScheduleIndex(
-            deviceId,
-            projectScheduleSidebarIndex((raw as ScheduleSidebarIndexSnapshot).runs),
-          );
         } catch (error) {
           // Older peers may not expose this existing channel. Keep the last mirror;
           // failure of optional schedule metadata must not hide a valid session list.
           if (String(error).includes(ACCESS_REVOKED_MARKER)) throw error;
           scheduleIndexError = error;
           log.debug('remote schedule index unavailable');
+        } finally {
+          pendingIndex.release();
         }
         // 与现有首拉、重连及 schedule push 共用刷新与代次保护，每设备一份列表。
         // 不能从 run 索引猜绑定：尚未首次运行、绑定多个调度、解除绑定都需要当前列表。

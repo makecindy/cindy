@@ -1,0 +1,25 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application>
+    <receiver android:name="app.cindy.usagewidgets.QuotaWidgetProvider" android:exported="true" android:label="@string/cindy_widget_quota_label">
+      <intent-filter>
+        <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+      </intent-filter>
+      <meta-data android:name="android.appwidget.provider" android:resource="@xml/cindy_quota_widget_info" />
+    </receiver>
+    <receiver android:name="app.cindy.usagewidgets.UsageWidgetProvider" android:exported="true" android:label="@string/cindy_widget_usage_label">
+      <intent-filter>
+        <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+      </intent-filter>
+      <meta-data android:name="android.appwidget.provider" android:resource="@xml/cindy_usage_widget_info" />
+    </receiver>
+    <activity
+      android:name="app.cindy.usagewidgets.ComputerConfigActivity"
+      android:exported="true"
+      android:excludeFromRecents="true"
+      android:theme="@android:style/Theme.Translucent.NoTitleBar">
+      <intent-filter>
+        <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
+      </intent-filter>
+    </activity>
+  </application>
+</manifest>

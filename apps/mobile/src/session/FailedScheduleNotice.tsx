@@ -4,6 +4,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   compareFailedScheduleRuns,
   scheduleFailureMessageKey,
+  scheduleFailureMessageParams,
+  scheduleFailureDetails,
   type FailedScheduleRunSnapshot,
 } from '@cindy/maker-shared/schedule-model';
 import { useEffect, useState } from 'react';
@@ -26,7 +28,7 @@ export function FailedScheduleNotice({
   const [dismissed, setDismissed] = useState<FailedScheduleRunSnapshot | null>(
     null,
   );
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   useEffect(() => {
     let active = true;
     setLoaded(false);
@@ -60,20 +62,20 @@ export function FailedScheduleNotice({
     setDismissed(run);
     void AsyncStorage.setItem(key, JSON.stringify({ runId: run.runId, firedAt: run.firedAt })).catch(() => undefined);
   };
+  const message = t(`session.failedScheduleNotice.${scheduleFailureMessageKey(run)}`,
+    scheduleFailureMessageParams(run, i18n?.resolvedLanguage));
   return (
     <ErrorNotice
       style={{ marginTop: spacing.sm }}
       testID="session.failedScheduleNotice"
-      message={t(
-        `session.failedScheduleNotice.${scheduleFailureMessageKey(run)}`,
-      )}
+      message={message}
       onDismiss={dismiss}
       dismissLabel={t('session.failedScheduleNotice.dismissTitle')}
     >
       {run.errorMsg ? <AgentErrorDetails message={run.errorMsg}
         onDiagnose={onDiagnose ? () => onDiagnose({
-          message: t(`session.failedScheduleNotice.${scheduleFailureMessageKey(run)}`),
-          details: run.errorMsg!,
+          message,
+          details: scheduleFailureDetails(run),
         }) : undefined} /> : null}
     </ErrorNotice>
   );

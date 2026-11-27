@@ -7,6 +7,7 @@
  * 这条链路本来就是它和多处注入的唯一粘合点。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setMainLocale } from '../../../i18n.desktop';
 
 import type { AskUserQuestionItem } from '@cindy/maker-core';
 import type { ChannelIM, IMCardActionEvent } from '@cindy/im';
@@ -186,6 +187,11 @@ beforeEach(() => {
 afterEach(() => {
   for (const id of liveRequestIds.splice(0)) cancelPending(id, 'test-end');
 });
+
+
+// 这些用例断言中文控制文案：显式切到 zh-CN，结束后复位为 en。
+beforeEach(() => setMainLocale('zh-CN'));
+afterEach(() => setMainLocale('en'));
 
 describe('本机凭证确认卡的 IM 按钮', () => {
   it.each(['direct', 'shared'] as const)('%s 路径保留任务授权，普通卡忽略按钮伪造的标记', async (route) => {
@@ -382,5 +388,41 @@ describe('ask 多题/多选打勾卡', () => {
     expect(last.buttons).toEqual([]);
     expect(last.body).toContain('卡片已过期');
     await expect(decisionPromise).resolves.toEqual({ kind: 'ask_user_question', answers: {} });
+  });
+
+  // IM 单问卡与多题卡必须保留选项 preview 与首行缩进，并受整卡字节预算约束。
+  it('buildAskUserCard 与 buildAskMultiCard 渲染选项 preview（保留缩进并限制总字节）', () => {
+    const single = cards.buildAskUserCard({
+      kind: 'ask_user_question',
+      requestId: 'req-single-preview',
+      questions: [{
+        header: '群里同步',
+        question: '要发吗？',
+        options: [
+          { label: '发送', preview: '    code()\n第二行' },
+          { label: '先不发' },
+        ],
+      }],
+    });
+    expect(single?.body).toContain('**发送**\n>     code()\n> 第二行');
+
+    const huge = '中'.repeat(12_000);
+    const multi = cards.buildAskMultiCard({
+      requestId: 'req-multi-preview',
+      questions: [{
+        header: '群里同步',
+        question: '勾选要发的内容',
+        multiSelect: true,
+        options: [
+          { label: '摘要', preview: '  进度已完成' },
+          { label: '长文 1', preview: huge },
+          { label: '长文 2', preview: huge },
+          { label: '长文 3', preview: huge },
+        ],
+      }],
+      selections: new Map(),
+    });
+    expect(multi.body).toContain('**1·1. 摘要**\n>   进度已完成');
+    expect(Buffer.byteLength(multi.body, 'utf8')).toBeLessThan(10_000);
   });
 });

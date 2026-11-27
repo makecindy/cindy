@@ -1,0 +1,27 @@
+{
+  "sharedTaskReadOnly": "Seul le propriétaire de la session peut interagir avec cette carte.",
+  "retry": "Recharger",
+  "viewLimit": "Trop de pages sont ouvertes. Faites défiler ou repliez une autre page pour que celle-ci s’ouvre automatiquement.",
+  "pluginRevoked": "Le plugin a été désactivé ou modifié. Cette page n'est plus disponible.",
+  "loadFailed": "Impossible de charger l'application. Vérifiez la connexion et rechargez.",
+  "updateRequired": "Cet ordinateur ne prend pas encore en charge les MCP Apps. Mettez à jour Cindy sur cet ordinateur et réessayez.",
+  "appName": "MCP App",
+  "cardTitle": "{{title}}",
+  "messageSource": "Envoyé par $t(mcpApps.appName) « {{name}} »",
+  "serverId": "ID du serveur MCP : {{id}}",
+  "exitFullscreen": "Quitter le plein écran",
+  "mobileUpdateRequired": "Mettez à jour Cindy sur ce téléphone pour ouvrir cette carte.",
+  "filesOnExecutionComputer": "Afficher le contenu du fichier sur l'ordinateur d'exécution",
+  "source": {
+    "official": "Cindy officiel",
+    "organization": "Organisation · {{namespace}}",
+    "market": "Marché des plugins",
+    "third-party": "Source tierce",
+    "local": "Installation locale",
+    "unknown": "Source inconnue"
+  },
+  "customMcp": "MCP personnalisé",
+  "sourceLabel": "Source",
+  "signatureLabel": "Signature",
+  "fullscreen": "Plein écran"
+}

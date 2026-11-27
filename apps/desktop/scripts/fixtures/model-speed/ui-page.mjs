@@ -7,8 +7,17 @@ export default {
   cases: {
     default: { about: 'GPT-6 Astra: catalog reasoning levels and Ultrafast speed' },
     sol: { about: 'GPT-6.1 Sol: catalog reasoning levels and Ultrafast speed' },
+    'remote-context': { about: '#9501: remote 1M is not replaced by local same-model 272K' },
   },
   async check(page, ui) {
+    if (ui.case === 'remote-context') {
+      const expected = await ui.t('newChat.modelSelector.meta.context', { value: '1M' });
+      if (!(await page.locator('main').innerText()).includes(expected)) {
+        throw new Error('Remote context window was replaced by local metadata');
+      }
+      await ui.capture('remote-context');
+      return;
+    }
     const button = page.getByRole('button', { name: await ui.t('newChat.modelSelector.speed.label'), exact: true });
     await button.click();
     await page.getByRole('menuitemradio', { name: await ui.t('newChat.modelSelector.speed.ultrafast'), exact: true }).waitFor();

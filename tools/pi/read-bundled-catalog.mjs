@@ -36,8 +36,9 @@ function literal(node) {
 
 export function readBundledCatalog(source) {
   const result = {};
+  // Pi 0.x inlines `var x = {...}`; Pi 1.x wraps each shard in a lazy `__esm` initializer.
   const marker =
-    /\/\/ [^\n]*ai\/src\/providers\/data\/([^/\n]+)\.json\r?\nvar [\w$]+ = /g;
+    /\/\/ [^\n]*ai\/src\/providers\/data\/([^/\n]+)\.json\r?\n(?:var [\w$]+;\r?\nvar [\w$]+ = __esm\(\(\) => \{\r?\n\s*[\w$]+ = |var [\w$]+ = )/g;
   for (const match of source.matchAll(marker)) {
     // Pi's index is not a provider and has no /providers/.manifest endpoint.
     if (match[1] === '.manifest') continue;
@@ -72,8 +73,12 @@ export function readBundledCatalog(source) {
       file.statements[0].declarationList.declarations[0].initializer,
     );
     const rows = Object.values(data).flatMap((group) => Object.values(group));
+    // Pi 1.x shards also carry image and classifier models; only chat models are catalog rows.
     result[match[1]] = rows.filter(
-      (row) => row.contextWindow > 0 && row.provider === match[1],
+      (row) =>
+        row.contextWindow > 0 &&
+        row.provider === match[1] &&
+        (row.type === undefined || row.type === "chat"),
     );
   }
   if (!Object.keys(result).length)

@@ -26,3 +26,15 @@ export interface WorkerProjectContext {
   dialogue: boolean;
   projects: Array<{ path: string; name: string; description: string; missing: boolean }>;
 }
+
+/** Actual revision used to create a Worker checkout, including a rejected preference. */
+export interface WorkerWorktreeSourceSelection {
+  sourceBranch: string;
+  source: 'memory' | 'current' | 'explicit';
+  fallbackReason?: string;
+}
+
+/** Local branch names that look like an origin shorthand need an explicit namespace. */
+export function qualifyLocalWorkerBranch(branch: string): string {
+  return branch.startsWith('origin/') ? `refs/heads/${branch}` : branch;
+}

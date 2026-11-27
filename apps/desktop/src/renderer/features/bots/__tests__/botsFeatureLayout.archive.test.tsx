@@ -29,6 +29,8 @@ beforeEach(() => {
   resetBotGroupStoreForTests();
   groups = [group()];
   Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: {
+    chatServer: {},
+    onBotGroupChanged: vi.fn(() => () => undefined),
     listBotGroups: vi.fn(async () => ({ ok: true, groups })),
   } } });
 });

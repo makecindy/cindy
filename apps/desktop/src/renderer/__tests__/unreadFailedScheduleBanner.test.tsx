@@ -2,6 +2,7 @@
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useEffect, useReducer } from 'react';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { UnreadFailedScheduleBanner } from '@/components/chat/UnreadFailedScheduleBanner';
 import { useReadFailedScheduleRuns } from '@/features/scheduler/hooks/useReadFailedScheduleRuns';
@@ -9,6 +10,10 @@ import { subscribeScheduleRunReadSync } from '@/features/scheduler/lib/scheduleR
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
+}));
+const installedGhosts: unknown[] = [];
+vi.mock('@/cindy-brain/useInstalledGhosts', () => ({
+  readInstalledGhostsSnapshot: () => installedGhosts,
 }));
 vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ warn: vi.fn() }),
@@ -71,15 +76,26 @@ afterEach(() => {
 });
 
 describe('historical failed schedule notice', () => {
-  it('exposes the recorded failure without marking or rerunning it', () => {
+  // PR #11319: the real banner's diagnose action must identify the failed run,
+  // including legacy records without a schedule ID. The old assertion only
+  // covered the error text. Minimal input is one failed run with an error;
+  // this remains a jsdom unit test with no external I/O.
+  it.each([undefined, 'schedule-1'])('exposes the recorded failure and run identity with schedule ID %s without marking or rerunning it', (scheduleId) => {
     const onDiagnose = vi.fn();
     render(<UnreadFailedScheduleBanner dataOwnerId="owner" sessionId="session"
-      latestFailedRun={{ runId: 'failed', firedAt: 1, errorMsg: 'provider mismatch api_key=private-test-value' }}
+      latestFailedRun={{ runId: 'failed', scheduleId, firedAt: 1, errorMsg: 'provider mismatch api_key=private-test-value' }}
       onDiagnose={onDiagnose} />);
     fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
     expect(screen.queryByText(/private-test-value/)).toBeNull();
     fireEvent.click(screen.getByText('chat.errorBanner.diagnose'));
-    expect(onDiagnose).toHaveBeenCalledWith(expect.objectContaining({ details: 'provider mismatch api_key=private-test-value' }));
+    expect(onDiagnose).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      details: [
+        ...(scheduleId ? [`scheduleId: ${scheduleId}`] : []),
+        'runId: failed',
+        'firedAt: 1970-01-01T00:00:00.001Z',
+        'provider mismatch api_key=private-test-value',
+      ].join('\n'),
+    }));
     expect(markRunRead).not.toHaveBeenCalled();
   });
   it('distinguishes precheck failures while preserving the warning', () => {
@@ -87,6 +103,97 @@ describe('historical failed schedule notice', () => {
       latestFailedRun={{ runId: 'failed', firedAt: 1, failureKind: 'rate-limit', scheduleId: 'schedule' }} />);
     expect(screen.getByText('chat.unreadFailedScheduleBanner.rateLimited')).toBeTruthy();
     expect(screen.queryByTestId('unread-failed-schedule-banner')).not.toBeNull();
+  });
+  // #10609: legacy error prefixes also classify as precheck, but only a
+  // structured block confirms that this run never reached execution.
+  it.each([
+    [true, 'preRunBlocked'],
+    [undefined, 'precheck'],
+  ] as const)('uses the confirmed stage only with a structured block (%s)', (preRunBlocked, key) => {
+    render(<UnreadFailedScheduleBanner dataOwnerId="owner" sessionId="session"
+      latestFailedRun={{ runId: 'failed', firedAt: 1, failureKind: 'precheck', preRunBlocked }} />);
+    expect(screen.getByText(`chat.unreadFailedScheduleBanner.${key}`)).toBeTruthy();
+  });
+  // Uninstalling a plugin removed its check script; the banner must say which plugin and
+  // let the user install it (previously only "checks blocked" plus an exit code). Since
+  // 2026-11-17 that happens right here, without opening the plugin page.
+  it('names a missing plugin, installs that market listing here and closes once it is usable', async () => {
+    const item = { pluginId: 'p1', ghostId: 'cindy-github', namespace: null, installState: 'not-installed' };
+    const install = vi.fn(async () => ({ ghost: { manifest: { id: 'cindy-github', name: 'GitHub' } } }));
+    Object.assign(window.electronAPI, {
+      ghosts: { listSync: () => ({ ghosts: installedGhosts }) },
+      pluginMarket: {
+        lookup: async () => ({ items: [item, { ...item, pluginId: 'other-source' }] }),
+        detail: async () => ({ ...item, releaseId: 'r1', manifest: { id: 'cindy-github' } }),
+        install,
+      },
+    });
+    const Location = () => <span data-testid="location">{useLocation().pathname + useLocation().search}</span>;
+    render(
+      <MemoryRouter initialEntries={['/session']}>
+        <Routes>
+          <Route path="/session" element={<UnreadFailedScheduleBanner dataOwnerId="owner" sessionId="session"
+            latestFailedRun={{ runId: 'failed', firedAt: 1, failureKind: 'precheck',
+              missingPlugin: { ghostId: 'cindy-github', pluginId: 'p1', name: 'GitHub' } }} />} />
+          <Route path="/plugins" element={<Location />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(screen.getByText('chat.unreadFailedScheduleBanner.pluginMissing')).toBeTruthy();
+    fireEvent.click(screen.getByText('chat.unreadFailedScheduleBanner.installPlugin'));
+    await waitFor(() => expect(screen.queryByText('chat.unreadFailedScheduleBanner.pluginMissing')).toBeNull());
+    // The listing the check names, even with another source of the same id.
+    expect(install).toHaveBeenCalledExactlyOnceWith('p1', {
+      expectedReleaseId: 'r1',
+      expectedManifest: { id: 'cindy-github' },
+      allowSourceReplacement: false,
+    });
+    expect(screen.queryByTestId('location')).toBeNull();
+  });
+  // Review #11030: a record without a namespace names the root plugin. A same-id copy from
+  // an organization must not be turned on in its place (the check would stay blocked).
+  it('installs the root plugin a record names even when another source of it is installed', async () => {
+    const org = { manifest: { id: 'cindy-github', name: 'GitHub' }, dir: '/plugins/_ns/acme/cindy-github', namespace: 'acme', enabled: false, approval: { state: 'approved', revision: 'r' } };
+    installedGhosts.push(org);
+    try {
+      const root = { pluginId: 'p1', ghostId: 'cindy-github', namespace: null, installState: 'not-installed' };
+      const install = vi.fn(async () => ({ ghost: { manifest: { id: 'cindy-github', name: 'GitHub' } } }));
+      const setEnabled = vi.fn();
+      Object.assign(window.electronAPI, {
+        ghosts: { listSync: () => ({ ghosts: installedGhosts }), setEnabled },
+        pluginMarket: {
+          lookup: async () => ({ items: [root, { ...root, pluginId: 'p2', namespace: 'acme', installState: 'installed' }] }),
+          detail: async () => ({ ...root, releaseId: 'r1', manifest: { id: 'cindy-github' } }),
+          install,
+        },
+      });
+      render(
+        <MemoryRouter>
+          <UnreadFailedScheduleBanner dataOwnerId="owner" sessionId="session"
+            latestFailedRun={{ runId: 'failed', firedAt: 1, failureKind: 'precheck',
+              missingPlugin: { ghostId: 'cindy-github', pluginId: 'p1', name: 'GitHub' } }} />
+        </MemoryRouter>,
+      );
+      fireEvent.click(screen.getByText('chat.unreadFailedScheduleBanner.installPlugin'));
+      await waitFor(() => expect(install).toHaveBeenCalledOnce());
+      expect(install).toHaveBeenCalledWith('p1', expect.objectContaining({ allowSourceReplacement: false }));
+      expect(setEnabled).not.toHaveBeenCalled();
+    } finally {
+      installedGhosts.length = 0;
+    }
+  });
+  // Review (#8957): a remote task's check runs on another computer; this computer's plugin
+  // pages would fix the wrong machine, so the message stays but the action is not offered.
+  it('does not offer the plugin action for a remote task', () => {
+    render(
+      <MemoryRouter>
+        <UnreadFailedScheduleBanner dataOwnerId="owner" sessionId="session" remote
+          latestFailedRun={{ runId: 'failed', firedAt: 1, failureKind: 'precheck',
+            missingPlugin: { ghostId: 'cindy-github', pluginId: 'p1', name: 'GitHub' } }} />
+      </MemoryRouter>,
+    );
+    expect(screen.getByText('chat.unreadFailedScheduleBanner.pluginMissing')).toBeTruthy();
+    expect(screen.queryByText('chat.unreadFailedScheduleBanner.installPlugin')).toBeNull();
   });
   it('reads on opening even when running or specific errors replace the generic banner', async () => {
     render(<View runIds={['old']} showBanner={false} />);

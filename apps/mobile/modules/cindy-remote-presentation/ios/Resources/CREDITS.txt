@@ -1,0 +1,47 @@
+Cindy remote keyboard sound recordings
+
+MacBook / modern use actual MacBook Air M2 samples. Other skins are stylistic pairings, not recordings of the named computers.
+
+File mapping: {'macbook-key': 'm2-r-quiet', 'macbook-space': 'm2-space-quiet', 'classic-key': 'mechanical-single', 'macii-key': 'whitefox-single', 'powerbook-key': 'macbook-single', 'thinkpad-key': 'brown-single'}
+
+m2-r-quiet.wav — MacBook Air M2 · 普通键 R
+Author: Sadiquecat
+Source: https://freesound.org/people/Sadiquecat/sounds/799110/
+License: CC0 https://creativecommons.org/publicdomain/zero/1.0/
+Modified from public HQ MP3 preview: PCM16/44100 Hz mono conversion, -12.04 dB gain, 0.5 ms edge fades. No synthesis or EQ. Source itself was normalized by its author; this is not a calibrated loudness measurement.
+
+m2-space-quiet.wav — MacBook Air M2 · 空格键
+Author: Sadiquecat
+Source: https://freesound.org/people/Sadiquecat/sounds/799113/
+License: CC0 https://creativecommons.org/publicdomain/zero/1.0/
+Modified from public HQ MP3 preview: PCM16/44100 Hz mono conversion, -12.04 dB gain, 0.5 ms edge fades. No synthesis or EQ. Source itself was normalized by its author; this is not a calibrated loudness measurement.
+
+Single-key sound candidates for Cindy
+
+macbook-single.wav
+MacBook Pro 实录 — Joseph SARDIN
+Source: https://bigsoundbank.com/slow-macbook-pro-keyboard-1-s1728.html
+License: CC0 (https://creativecommons.org/publicdomain/zero/1.0/)
+Excerpt: 0.630–0.815 seconds; mono 22050 Hz PCM16, DC removal, peak scaling, short boundary fades.
+
+whitefox-single.wav
+WhiteFox · Hako Violet — grcekh
+Source: https://freesound.org/people/grcekh/sounds/546167/
+License: CC0 (https://creativecommons.org/publicdomain/zero/1.0/)
+Excerpt: 141.460–141.720 seconds; mono 22050 Hz PCM16, DC removal, peak scaling, short boundary fades.
+
+brown-single.wav
+茶轴机械键盘 — aalorv
+Source: https://freesound.org/people/aalorv/sounds/744992/
+License: CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/)
+Excerpt: 5.235–5.365 seconds; mono 22050 Hz PCM16, DC removal, peak scaling, short boundary fades.
+
+mechanical-single.wav
+机械键盘 · 短录音 — D.S.G.
+Source: https://freesound.org/people/D.S.G./sounds/423648/
+License: CC0 (https://creativecommons.org/publicdomain/zero/1.0/)
+Excerpt: 2.115–2.355 seconds; mono 22050 Hz PCM16, DC removal, peak scaling, short boundary fades.
+
+
+Bundled derivatives: M2 quiet samples further attenuated by 0.65 to match the audition default. Other single-key samples attenuated by 0.4. No EQ or synthesis.
+The aalorv brown-switch sample (thinkpad-key.wav) is CC BY 4.0, not covered by the application Apache license. Attribution and source/license links above remain part of this bundle. No endorsement is implied.

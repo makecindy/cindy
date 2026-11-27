@@ -222,7 +222,11 @@ budget and versioned `caps`, `offer`, `open`, `close` actions. Signaling keeps t
 existing account, enabled-host and controller-revocation checks. It introduces no
 relay envelope kind or server file API. Both peers use the existing ICE endpoint;
 ICE chooses a direct or TURN path. The file channel does not share desktop video,
-input handling, capture permissions or capture-process lifetime.
+input handling, capture permissions or capture-process lifetime. Having no capture
+permission, its Desktop window sets the same address policy as the control channel,
+so host candidates carry the default route's literal address rather than mDNS names;
+the per-channel table and the macOS Local Network behaviour are in
+[`remote-and-mobile-adaptation.md`](remote-and-mobile-adaptation.md) (“各通道的局域网地址与系统权限”).
 
 Desktop prepares the file-transfer host (up to 10 seconds) and fetches ICE
 configuration (up to 8 seconds) concurrently, then rechecks the owning connection

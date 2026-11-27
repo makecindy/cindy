@@ -25,7 +25,9 @@ describe('new task remote Agent wiring', () => {
     expect(select).toContain('setRemoteAgentChoice(null);');
     // 普通创建与目标模式都把远程选择落进草稿,且不按被控电脑的目录 / 登录拦。
     expect(source.split('applyRemoteAgentPick(draft, remoteAgentPick)')).toHaveLength(3);
-    expect(source.split('const runGuard = () => effectiveDraft.agentDeviceId ? Promise.resolve({')).toHaveLength(3);
+    expect(source.split(
+      'const runGuard = () => (effectiveDraft.agentDeviceId || effectiveDraft.pluginEngine) ? Promise.resolve({',
+    )).toHaveLength(3);
     expect(source).toContain('confirmUnauthenticated: effectiveDraft.agentDeviceId');
     expect(source).toContain("agentAuthVerdict === 'unauthenticated' || remoteAgentPick");
     // 恢复的远程位置拆分行为由 newSessionDraftRecovery.test.ts 直接调用生产
@@ -35,11 +37,29 @@ describe('new task remote Agent wiring', () => {
 });
 
 describe('session Agent switch UI wiring', () => {
+  // L342 protocol/ordering guard. Dropping a screen call site's protection
+  // lets an older host patch replace a newer in-flight pick. The real frame
+  // and pending-write behavior are covered in historyViewProvider.test.tsx.
+  it('protects both model pickers until their optimistic settings writes settle', () => {
+    const source = readSource('app/sessions/[sessionId].tsx');
+    const routeControls = source.slice(source.indexOf('const runControlAction = useCallback'),
+      source.indexOf('const writeSessionAgentSwitchIntent = useCallback'));
+    expect(routeControls).toMatch(/if \(opts\?\.protectModelSelection\) \{\s*releaseModelWrite = sessionPendingWrites\.track\(sessionId, Object\.keys\(optimisticPatch\)\);/);
+    expect(routeControls).toMatch(/finally \{\s*releaseModelWrite\?\.\(\);/);
+    for (const [picker, next] of [
+      ['selectComposerModelRow', 'selectUnifiedComposerModel'],
+      ['selectUnifiedComposerModel', 'selectComposerPluginEngine'],
+    ]) {
+      const start = source.indexOf(`const ${picker} = useCallback`);
+      const end = source.indexOf(`const ${next} = useCallback`, start);
+      expect(source.slice(start, end)).toContain("}, { recover: 'refetch', protectModelSelection: true });");
+    }
+  });
+
   it('locks guest model controls while preserving message and stop controls', () => {
     const source = readSource('app/sessions/[sessionId].tsx');
     const modelAccess = source.slice(source.indexOf('const canConfigureSessionModel'), source.indexOf('// 共享模型自造'));
     expect(modelAccess).toContain('canUseRemoteSessionControls');
-    expect(modelAccess).toContain('!sessionManagedByHost');
     expect(modelAccess).toContain('!isSharedTaskPeer(deviceId)');
     expect(source).toContain('disabled={controlBusy || !canConfigureSessionModel}');
     expect(source).toContain('visible={modelSheetOpen && canConfigureSessionModel}');
@@ -63,37 +83,58 @@ describe('session Agent switch UI wiring', () => {
     const source = readSource('app/sessions/[sessionId].tsx');
     expect(source).toContain('maker.getSessionAgentSwitchIntent(sessionId)');
     expect(source).toContain('maker.switchSessionAgent(');
-    expect(source).toContain('agentSwitchIntent: normalizeSessionAgentSwitchIntent(result)');
+    // 回读的权威意图拆成内置 / 插件引擎两个字段(sessionAgentSwitchIntentPatch)。
+    expect(source).toContain('remoteSessionStore.applySessionPatch(deviceId, sessionId, sessionAgentSwitchIntentPatch(result))');
     expect(source).toContain('agentSwitch={sessionAgentSwitchSupported ? {');
-    expect(source).toContain('confirmMobileSessionAgentSwitch(next, !!agentSwitchIntent)');
     expect(source).toContain('targetAgentKind: modelSheetAgentKind');
     expect(source).toContain('...(agentSwitchIntent ? { agentSwitchIntent: null } : {})');
   });
 
-  it('lists other computers in the model sheet and moves the Agent only after confirmation', () => {
+  it('lists other computers in the model sheet and stages explicit moves while keeping the host capability gates', () => {
     const source = readSource('app/sessions/[sessionId].tsx');
     const writerStart = source.indexOf('const writeSessionAgentSwitchIntent = useCallback');
     const writer = source.slice(writerStart, source.indexOf('// Context 面板', writerStart));
     // 唯一写出口把 intent 的位置作为第 7 参转给被控端;没有位置时不发(旧 6 参 wire)。
     expect(writer).toContain('nextIntent.agentDeviceId !== undefined');
     expect(writer).toContain('? { agentDeviceId: nextIntent.agentDeviceId }');
-    // Orca 可以切 Agent，但和共享任务访客一样不能挪运行位置。
+    // Orca 可以切 Agent；Lead / 本机 Worker 要被控电脑声明 supportsOrcaAgentRelocation 才能挪运行位置，
+    // 运行设备 Worker 要声明 supportsOrcaRemoteWorkerAgentRelocation(2026-11-12)；共享任务访客始终不能挪。
     expect(source).toContain('const agentLocationMovable = sessionAgentSwitchSupported');
     const locationGate = source.slice(source.indexOf('const agentLocationMovable ='),
       source.indexOf('/** Agent 现在所在的电脑'));
-    expect(locationGate).toContain('&& !currentSession.orcaRole');
-    expect(locationGate).toContain('&& !currentSession.orcaRemoteLead');
+    expect(locationGate).toContain('&& !orcaAgentLocationLocked');
+    expect(locationGate).toContain('&& !orcaRemoteWorkerLocationLocked');
     const expression = locationGate.match(/const agentLocationMovable = ([\s\S]*?);/)?.[1];
     expect(expression).toBeDefined();
-    const movable = new Function('currentSession',
+    const lockExpression = source.match(/const orcaAgentLocationLocked = ([\s\S]*?);/)?.[1];
+    expect(lockExpression).toBeDefined();
+    const remoteWorkerLockExpression = source.match(/const orcaRemoteWorkerLocationLocked = ([\s\S]*?);/)?.[1];
+    expect(remoteWorkerLockExpression).toBeDefined();
+    const movable = new Function('currentSession', 'capabilities',
       `const sessionAgentSwitchSupported = true, deviceId = 'host', isSharedTaskPeer = () => false;
+       const orcaAgentLocationLocked = ${lockExpression};
+       const orcaRemoteWorkerLocationLocked = ${remoteWorkerLockExpression};
        return !!(${expression});`);
     const worker = { agentDeviceId: null, orcaRole: null,
       orcaRemoteLead: { leadDeviceId: 'lead', leadSessionId: 'lead-s1', workerLabel: 'worker' } };
+    const relocation = { supportsOrcaAgentRelocation: true };
+    const remoteWorkerRelocation = { supportsOrcaAgentRelocation: true, supportsOrcaRemoteWorkerAgentRelocation: true };
+    // 旧被控端(没声明运行设备 Worker 换位置)仍不开放，避免点了被拒。
     expect(movable(worker)).toBe(false);
+    expect(movable(worker, relocation)).toBe(false);
     expect(movable({ ...worker, orcaRemoteLead: { ...worker.orcaRemoteLead, releasedAt: 1 } })).toBe(false);
+    // 声明后运行设备 Worker(含已结束协同的)与普通任务一样可换电脑。
+    expect(movable(worker, remoteWorkerRelocation)).toBe(true);
+    expect(movable({ ...worker, orcaRemoteLead: { ...worker.orcaRemoteLead, releasedAt: 1 } }, remoteWorkerRelocation))
+      .toBe(true);
     expect(movable({ ...worker, orcaRemoteLead: null })).toBe(true);
     expect(movable(null)).toBe(false);
+    for (const orcaRole of ['lead', 'worker']) {
+      const member = { agentDeviceId: null, orcaRole, orcaRemoteLead: null };
+      expect(movable(member)).toBe(false);
+      expect(movable(member, {})).toBe(false);
+      expect(movable(member, relocation)).toBe(true);
+    }
     expect(source).toContain("&& !isSharedTaskPeer(deviceId)");
     expect(source).toContain("Object.prototype.hasOwnProperty.call(currentSession, 'agentDeviceId')");
     // 模型列表另列其他电脑的供应商,选中态跟着下一条消息时 Agent 所在的电脑。
@@ -106,8 +147,6 @@ describe('session Agent switch UI wiring', () => {
       'enabled: agentLocationMovable && modelSheetOpen && !intentChangesAgentLocation(agentSwitchIntent),',
     );
     expect(source).toContain('running: { deviceId: currentAgentDeviceId, providerId: currentProviderId },');
-    // 顶部常驻说明已去掉,由换电脑前的二次确认代替。
-    expect(source).not.toContain('notice={agentLocationNotice}');
 
     const rowSelector = source.slice(
       source.indexOf('const selectComposerModelRow'),
@@ -122,10 +161,10 @@ describe('session Agent switch UI wiring', () => {
       source.indexOf('const browseComposerModelAgent'),
     );
     for (const selector of [rowSelector, unifiedSelector, flatSelector]) {
-      expect(selector).toContain('await confirmAgentLocationForPick({');
-      expect(selector).toContain('intent: agentSwitchIntent,');
-      // 换电脑的选择走切换意图,而且必须在 setModel 之前分流;取消 = 什么都不改。
-      expect(selector).toMatch(/if \(!location(?: \|\| deviceIdRef\.current !== deviceId)?\) return/);
+      // 位置受限的任务不能借任一选择入口把 Agent 挪出许可范围。
+      expect(selector).toContain('resolveAgentLocationPick({');
+      expect(selector).toContain('movable: agentLocationMovable,');
+      expect(selector).toContain('if (!location) return');
       expect(selector.indexOf('writeSessionAgentSwitchIntent(')).toBeGreaterThan(-1);
       expect(selector.indexOf('writeSessionAgentSwitchIntent(')).toBeLessThan(
         selector.indexOf('setComposerModel('),
@@ -142,7 +181,7 @@ describe('session Agent switch UI wiring', () => {
       source.indexOf('const toggleComposerModelPicker'),
     );
     expect(toggles.match(
-      /\(orcaModelSelectionUsesIntent \|\| modelSheetAgentKind !== sessionAgentKind \|\| intentChangesAgentLocation\(agentSwitchIntent\)\)/g,
+      /\(modelSelectionUsesWindowIntent \|\| orcaModelSelectionUsesIntent \|\| modelSheetAgentKind !== sessionAgentKind \|\| intentChangesAgentLocation\(agentSwitchIntent\)\)/g,
     )).toHaveLength(2);
 
     // 模型药丸按 Agent 所在电脑的目录显示,带远程标记;读屏标签读出那台电脑。
@@ -188,22 +227,15 @@ describe('session Agent switch UI wiring', () => {
       source.indexOf('const writeSessionAgentSwitchIntent'),
     );
 
-    const legacyGuard = helper.indexOf('shouldBlockLegacyRemoteModelWindowSwitch({');
+    const legacyGuard = alertHelper.indexOf('shouldBlockLegacyRemoteModelWindowSwitch({');
+    const admission = helper.indexOf('!canStageModelWindowSelection(');
     const setModel = helper.indexOf(
       'await maker.setModel(sessionId, args.model, args.providerId, args.selection)',
     );
     expect(legacyGuard).toBeGreaterThan(-1);
-    expect(legacyGuard).toBeLessThan(setModel);
-    expect(helper.slice(legacyGuard, setModel)).toContain('return false;');
-    expect(helper).toContain(
-      'hostGuardSupported: modelSheetCapabilities?.supportsModelWindowSwitchGuard === true',
-    );
-    expect(helper).toContain('agentKind: sessionAgentKind');
-    expect(helper).not.toContain('isSsh');
-    expect(helper).toContain('contextTokens: currentSession?.contextTokens');
-    expect(helper).toContain('currentContextWindow: currentSession?.contextWindow');
-    expect(helper).toContain('targetContextWindow: args.targetContextWindow');
-    expect(helper).toContain('showRemoteModelWindowUnsupported(args.targetContextWindow);');
+    expect(admission).toBeGreaterThan(-1);
+    expect(admission).toBeLessThan(setModel);
+    expect(helper.slice(admission, setModel)).toContain('return false;');
     expect(rowSelector).toContain(
       'modelSheetCapabilities?.supportsModelWindowSwitchGuard === true',
     );
@@ -277,10 +309,9 @@ it('hides host-owned settings while preserving permission controls and the compo
     expect(source).toContain('{renderSessionPermissionButton()}');
     expect(source).toContain('currentSession && runtimeOptions ? (');
     expect(source).not.toContain('!sessionManagedByHost ? renderSessionPermissionButton() : null');
-    expect(source).toContain('{!sessionManagedByHost && composerRuntimeSummary ? (');
+    expect(source).toContain('{composerRuntimeSummary ? (');
     const modelAccess = source.slice(source.indexOf('const canConfigureSessionModel'), source.indexOf('// 共享模型自造'));
     expect(modelAccess).toContain('canUseRemoteSessionControls');
-    expect(modelAccess).toContain('!sessionManagedByHost');
     expect(modelAccess).toContain('!isSharedTaskPeer(deviceId)');
     const modelPicker = source.slice(source.indexOf('const toggleComposerModelPicker'), source.indexOf('// 账号限额按需拉取'));
     expect(modelPicker).toContain('if (!canConfigureSessionModel)');

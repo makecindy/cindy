@@ -88,3 +88,62 @@ it('subscribes focused history and the human account scope together, forwarding 
   await receive(ws, { type: 'changes', scope: `actor:${actorId}`, cursor: '11', changes });
   expect(changed).toHaveBeenCalledWith(changes);
 });
+
+// Chat Server work.available (cindy-server#1151) only wakes computer companions. Each
+// changed() reloads the list and re-downloads every visible room snapshot on the phone.
+it('acknowledges owner work hints without reloading, but still reloads mixed batches', async () => {
+  const changed = vi.fn();
+  stop = subscribeChatServer({ baseUrl: 'https://chat.example.invalid', token: async () => 'fixture', current: () => true,
+    socket, ready: async () => ({ scope: `actor:${actorId}`, cursor: '0' }), changed, unavailable: vi.fn() });
+  await Promise.resolve(); const ws = sockets[0];
+  await receive(ws, { type: 'ready', actorId });
+  const hint = { type: 'work.available', entityId: actorId, data: { work: [{ botId: actorId, conversationId: actorId }] } };
+  await receive(ws, { type: 'changes', scope: `actor:${actorId}`, cursor: '1', changes: [hint] });
+  expect(changed).not.toHaveBeenCalled();
+  expect(ws.send).toHaveBeenLastCalledWith(JSON.stringify({ type: 'ack', scope: `actor:${actorId}`, cursor: '1' }));
+  const mixed = [hint, { type: 'notice.created', entityId: actorId, data: {} }];
+  await receive(ws, { type: 'changes', scope: `actor:${actorId}`, cursor: '2', changes: mixed });
+  expect(changed).toHaveBeenCalledWith(mixed);
+});
+
+it.each([
+  [7_000, 7_000],
+  [31 * 86_400_000, 600_000],
+])('forwards contiguous cursors and reconnects after the bounded retry delay (%i ms)', async (requestedMs, waitMs) => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2026-11-26T04:00:00.000Z'));
+  const frames: Array<{ scope: string; cursor: string; subscribedAfter?: string }> = [];
+  const onReceive = vi.fn(async (frame: { scope: string; cursor: string; subscribedAfter?: string }) => {
+    frames.push({ scope: frame.scope, cursor: frame.cursor, subscribedAfter: frame.subscribedAfter });
+  });
+  stop = subscribeChatServer({
+    baseUrl: 'https://chat.example.invalid',
+    token: async () => 'fixture',
+    current: () => true,
+    socket,
+    ready: async () => ({ scope: 'conversation:room', cursor: '10' }),
+    changed: vi.fn(),
+    receive: onReceive,
+    unavailable: vi.fn(),
+  });
+  await Promise.resolve();
+  const ws = sockets[0];
+  await receive(ws, { type: 'ready', actorId });
+  await receive(ws, { type: 'changes', scope: 'conversation:room', cursor: '11', changes: [{ type: 'message.created', data: {} }] });
+  await receive(ws, { type: 'changes', scope: 'conversation:room', cursor: '12', changes: [{ type: 'message.created', data: {} }] });
+  expect(frames).toEqual([
+    { scope: 'conversation:room', cursor: '11', subscribedAfter: '10' },
+    { scope: 'conversation:room', cursor: '12', subscribedAfter: '11' },
+  ]);
+  expect(ws.send).toHaveBeenLastCalledWith(JSON.stringify({ type: 'ack', scope: 'conversation:room', cursor: '12' }));
+
+  onReceive.mockRejectedValueOnce(Object.assign(new Error('RATE_LIMITED'), { status: 429, retryAt: Date.now() + requestedMs }));
+  ws.send.mockClear();
+  await receive(ws, { type: 'changes', scope: 'conversation:room', cursor: '13', changes: [{ type: 'message.created', data: {} }] });
+  expect(ws.send).not.toHaveBeenCalled();
+  expect(ws.close).toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(waitMs - 1);
+  expect(sockets).toHaveLength(1);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(sockets).toHaveLength(2);
+});

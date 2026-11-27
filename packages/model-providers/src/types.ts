@@ -56,6 +56,13 @@ export const PI_MODEL_APIS = [
 ] as const;
 export type PiModelApi = (typeof PI_MODEL_APIS)[number];
 
+/** Standalone async video APIs a custom connection can opt into, independent of its chat protocol. */
+export const PROVIDER_VIDEO_APIS = ["xai-videos", "minimax-videos", "openai-videos"] as const;
+export type ProviderVideoApi = (typeof PROVIDER_VIDEO_APIS)[number];
+export function isProviderVideoApi(value: unknown): value is ProviderVideoApi {
+  return (PROVIDER_VIDEO_APIS as readonly unknown[]).includes(value);
+}
+
 /**
  * Cindy 自带鉴权的订阅账号家族(ChatGPT / Claude / SuperGrok)。新增订阅家族只在这里加一项:
  * 各端按家族读取账号余量的入口都以 `Record<NativeSubscriptionAuth, …>` 声明,漏接会直接
@@ -184,6 +191,10 @@ export type OAuthProviderDescriptor =
  * 真实上游 + 鉴权 + model id 还原。加新供应商 = 加这份数据，不改路由器代码。
  */
 export interface RoutingDescriptor {
+  /** Originating BYOK preset, available even when this runtime contains no models. */
+  catalogPresetId?: string;
+  /** Verified public connection preset for aggregate usage reporting. */
+  usagePresetId?: string;
   modelInterface?: ModelInterfaceSnapshot;
   /**
    * 上游 wire protocol。Claude Code / Codex 缺省保持历史语义；Pi 必须显式声明。
@@ -204,7 +215,7 @@ export interface RoutingDescriptor {
   /** Explicit standalone image API; independent of chat wire and Codex hosted tools. */
   imageApi?: "openai-images";
   /** Explicit standalone async video API, independent of the chat protocol. */
-  videoApi?: "xai-videos";
+  videoApi?: ProviderVideoApi;
   /** Enterprise BYOK image model binding used by the Codex Images route. */
   imageModel?: { wireModel: string; litellmModel: string; supportsEdit: boolean };
   /** 真实上游 base URL（direct 时是供应商自家；gateway 时是 XD 网关 base）。 */
@@ -219,6 +230,8 @@ export interface RoutingDescriptor {
   requestPath?: string;
   /** 鉴权策略（见 AuthStrategy）。 */
   authStrategy: AuthStrategy;
+  /** Enterprise BYOK API-key routes force Cindy's Codex originator, including resumed threads. */
+  forceCindyCodexOriginator?: boolean;
   /**
    * 配置保留用于展示/修复，但运行时不得向该上游路由。用于把升级前不再满足安全边界的
    * 历史配置留在设置页，同时让所有路由解析 fail closed。
@@ -320,18 +333,31 @@ export interface ModelInterfaceSnapshot {
   nativeApis?: import('./modelAccessBean.js').ModelNativeApi[] | null;
 }
 export interface CatalogModel {
+  opaqueModelId?: true;
+  discoveredSource?: import("./modelSource.js").DiscoveredModelSource;
   interfaceUnavailable?: boolean;
   selectedInterface?: ModelInterfaceSnapshot;
   availableInterfaces?: ModelInterfaceSnapshot[];
   nativeApis?: import("./modelAccessBean.js").ModelNativeApi[] | null;
+  /** Catalog-recommended engine for this source and model (Registry `recommendedAgents`). */
+  recommendedAgent?: AgentKind;
   /** Same-provider display-only pricing; never inherited through public model metadata. */
   displayPricing?: ModelDisplayPricing;
   currency?: 'USD' | 'CNY';
   costDiscount?: number;
 
+  /** Execution-host derived display identity only; original id remains the request/storage key. */
+  selectionAliasKey?: string;
   supportsToolCalls?: boolean;
+  supportsReasoning?: boolean;
+  reasoningOffEffort?: ModelMetadata["reasoningOffEffort"];
   reasoningRequired?: boolean;
   userModelConfig?: ProviderRuntimeModelConfig;
+  /** Local Pi Chat compatibility override; not inherited public model metadata. */
+  supportsStore?: boolean;
+  supportsLongCacheRetention?: false;
+  /** Connection-scoped Pi Chat ID constraint; null explicitly preserves native IDs. */
+  maxToolCallIdLength?: 64 | null;
   catalogPresetId?: string;
   discoveredMetadata?: ModelMetadata;
   discoveredCost?: ModelCost;
@@ -375,6 +401,8 @@ export interface CatalogModel {
   sortOrder?: number;
   /** 上下文窗口（tokens）。该 agent 下的权威值(host 派生进 ModelDescriptor.contextWindow)。 */
   contextWindow: number;
+  /** Host-owned explicit working budget. Kept separate from the catalog default for settings. */
+  contextWindowOverride?: number;
   /** Provider-declared maximum before a per-harness recommended window is applied. */
   contextWindowMax?: number;
   /**
@@ -539,6 +567,8 @@ export interface ProviderMediaModel extends Pick<
   discoveredMetadata?: ModelMetadata;
   /** Local projection provenance; not part of the public Registry metadata. */
   sourceAgent?: AgentKind;
+  /** All actual runtime connections; sourceAgent is set only for a unique preferred route. */
+  sourceAgents?: AgentKind[];
   /** Same-provider display-only pricing; never inherited through public model metadata. */
   displayPricing?: ModelDisplayPricing;
   currency?: 'USD' | 'CNY';
@@ -561,6 +591,8 @@ export interface Provider {
   name: string;
   /** 内置 / 用户自定义 / 企业下发。企业连接走自定义路由，但不能当个人连接编辑。 */
   source: ProviderSource;
+  /** Owner-only display artwork: sanitized organization SVG or a small user connection PNG data URL. */
+  customIcon?: string;
   /** ★这家能用在哪些 agent；决定它出现在哪个 agent 的来源列表里 + 路由按哪个 agent 取。 */
   agents: AgentKind[];
   /**
@@ -569,6 +601,11 @@ export interface Provider {
    * （anthropic / openai / xai 现状）。
    */
   auth: { method: AuthMethod; oauth?: OAuthProviderDescriptor; native?: NativeSubscriptionAuth };
+  /**
+   * 2026-11-13：Cindy 为订阅账号新建的供应商（单独供应商或用户合并出的同类供应商），沿用该内置订阅
+   * （`openai` / `anthropic`）的路由与模型，账号由本机账号池按该供应商自己的账号分配。旧端忽略。
+   */
+  subscriptionPool?: 'openai' | 'anthropic';
   /** 用户使用该供应商时的额度来源；旧目录可缺省，由 source 从 bundled 同 id 条目补齐。 */
   access?: ProviderAccess;
   /**
@@ -611,6 +648,8 @@ export interface Provider {
   videoModels?: ProviderMediaModel[];
   /** Speech, transcription and realtime audio; each entry retains its explicit mode. */
   audioModels?: ProviderMediaModel[];
+  /** Non-chat decision and reranking endpoints. */
+  evaluationModels?: ProviderMediaModel[];
   /**
    * 视频能力的默认选型(与 videoModels 配套;值必须是 videoModels 里的 id;
    * 语义同 imageDefaults:standard 必填,draft/best 缺省回落 standard)。
@@ -647,6 +686,22 @@ export interface Provider {
  * 并随用户配置持久化，避免已知长上下文模型被错误降级。
  */
 export interface ProviderRuntimeModelConfig extends ModelMetadata {
+  opaqueModelId?: true;
+  /**
+   * Set only when a manual Settings refresh found this ID in the runtime's own catalog.
+   * Only such models may later be offered as withdrawn (#11298); manual, preset, import
+   * and pre-upgrade rows stay unmarked and are never offered for removal.
+   */
+  listedUpstream?: true;
+  /**
+   * Current-absence receipt (#11298): the latest complete Settings refresh did not list
+   * this marked model. A later refresh that lists it again clears it, and it is never
+   * inherited across saves, so only a still-current absence can be confirmed for removal.
+   */
+  missingUpstream?: true;
+  /** Transient discovery receipt; normalization excludes it from persistent configuration. */
+  discoverySnapshotId?: string;
+  discoveredSource?: import("./modelSource.js").DiscoveredModelSource;
   /** User override; absent follows the directory. Never persist derived snapshots. */
   interfaceId?: string;
   interfaceUnavailable?: boolean;
@@ -812,7 +867,7 @@ export interface CustomProviderRuntimeConfig {
   supportsImageGeneration?: boolean;
   /** Opt-in to standalone OpenAI Images generation/edits on this runtime's connection. */
   imageApi?: "openai-images";
-  videoApi?: "xai-videos";
+  videoApi?: ProviderVideoApi;
   /** 用户模型；contextWindow 可由预设带入，缺省时由 `buildUserProvider` 补保守默认。 */
   models: ProviderRuntimeModelConfig[];
   /**

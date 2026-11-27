@@ -103,6 +103,23 @@ describe('pi session tree adapter', () => {
       .toThrow('no failed response');
   });
 
+  // #8383: a gateway that enforces a request-body byte limit answers HTTP 400
+  // (BadRequest.TooLarge), not 413. requestTooLarge decides whether a user retry compacts
+  // before resending; missing it resends the same image history and the task stops at
+  // "Could not complete the reply". Existing cases cover only the 413 and buffer wordings.
+  // Each spelling is a separate row so dropping either alternative fails that row alone;
+  // the transport-failure row keeps the boundary from widening. The combined production
+  // payload is covered end-to-end by the gateway-400 mode in pi-provider-routing.test.ts.
+  it.each([
+    { spelling: 'the BadRequest.TooLarge error type', errorMessage: '400 {"error":{"message":"Bad Request","type":"BadRequest.TooLarge"}}', requestTooLarge: true },
+    { spelling: 'the max-bytes request-body wording', errorMessage: '400 {"error":{"message":"Exceeded limit on max bytes to request body : 16777216"}}', requestTooLarge: true },
+    { spelling: 'an unrelated transport failure', errorMessage: 'upstream returned 502 Bad Gateway', requestTooLarge: false },
+  ])('scores $spelling as requestTooLarge=$requestTooLarge', ({ errorMessage, requestTooLarge }) => {
+    expect(piRetryBranch(retryTree([{
+      type: 'message', message: { role: 'assistant', stopReason: 'error', content: [], errorMessage },
+    }]), '0')).toEqual({ parentId: null, requestTooLarge });
+  });
+
   it('still protects a context edit that replaces message content', () => {
     expect(() => piRetryBranch(retryTree([
       emptyFailure,
@@ -119,6 +136,38 @@ describe('pi session tree adapter', () => {
   ])('still protects output and other session state after settings changes: %j', entry => {
     expect(() => piRetryBranch(retryTree([emptyFailure, ...settings, entry]), '0'))
       .toThrow('discard output or session state');
+  });
+
+  // #11339, unit: branch rehydration must distinguish old and new calls even
+  // when their raw Pi tool names match. Existing tests only restored MCP calls.
+  it('distinguishes a native extension call from old and new Cindy subagent calls', () => {
+    const toolCall = (id: string, name: string) => ({
+      type: 'toolCall', id, name, arguments: {},
+    });
+    const data = retryTree([
+      { type: 'message', message: { role: 'assistant', content: [toolCall('same-call-id', 'subagent')] } },
+      { type: 'message', message: { role: 'assistant', content: [
+        toolCall('same-call-id', 'subagent'), toolCall('built-in', 'cindy_subagent'),
+      ] } },
+      { type: 'custom', customType: 'cindy-native-subagent-call', data: { toolCallId: 'same-call-id' } },
+      { type: 'message', message: { role: 'toolResult', toolCallId: 'same-call-id', content: 'extension result' } },
+    ]);
+    const snapshot = normalizePiSessionTree(data);
+    expect(snapshot.activePathIds).toEqual(['0', '1', '2', '4']);
+    expect(snapshot.roots[0].children[0].children[0].children).toEqual([
+      expect.objectContaining({ id: '4', parentId: '2', role: 'tool' }),
+    ]);
+    // A stopped turn can leave the metadata as the raw leaf.
+    expect(normalizePiSessionTree({ ...data, leafId: '3' }).leafId).toBe('2');
+    const expectedCalls = [
+      { toolUseId: 'same-call-id', toolName: 'subagent', input: {} },
+      { toolUseId: 'same-call-id', toolName: 'dynamic:subagent', input: {} },
+      { toolUseId: 'built-in', toolName: 'subagent', input: {} },
+    ];
+    for (const leafId of ['4', '2']) {
+      expect(activePiHistoryFromTree({ ...data, leafId }).filter(message => message.role === 'tool_use')
+        .map(message => message.content)).toEqual(expectedCalls);
+    }
   });
 
   it('restores gateway calls using the same tool contract as live events', () => {

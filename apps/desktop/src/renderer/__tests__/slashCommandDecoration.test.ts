@@ -3,9 +3,11 @@ import { Schema, type Node as PMNode } from '@tiptap/pm/model';
 import { EditorState } from '@tiptap/pm/state';
 
 import {
+  commandPaletteReplacementNames,
   createSlashCommandPlugin,
   findSlashCommandMatches,
   replaceSlashCommandRunWithText,
+  resolveSlashCommandRunEnd,
 } from '../components/new-chat/SlashCommandDecoration';
 
 const schema = new Schema({
@@ -80,6 +82,66 @@ describe('SlashCommandDecoration', () => {
     state = state.apply(state.tr.delete(6, 7));
     expect(state.doc.textContent).toBe('/skil');
     expect(decorationRanges(plugin, state)).toEqual([]);
+  });
+
+  it('palette 选择只替换光标前的命令查询词并保留无空格草稿', () => {
+    let state = EditorState.create({
+      schema,
+      doc: doc(p(txt('/goal已有草稿'))),
+    });
+    const runEnd = resolveSlashCommandRunEnd(state.doc, 1, 'goal', ['goal']);
+
+    state = state.apply(replaceSlashCommandRunWithText(state.tr, schema, 1, runEnd, 'goal'));
+
+    expect(state.doc.textContent).toBe('/goal 已有草稿');
+  });
+
+  it('输入法别名前缀(首字符顿号)按同一区间整段替换成 `/命令 `', () => {
+    let state = EditorState.create({
+      schema,
+      doc: doc(p(txt('、learn 已有草稿'))),
+    });
+    // 触发符位置与 `/` 同算法:顿号也是单个 UTF-16 单元,from 仍指住它本身。
+    const runEnd = resolveSlashCommandRunEnd(state.doc, 1, 'lea', ['learn']);
+
+    state = state.apply(replaceSlashCommandRunWithText(state.tr, schema, 1, runEnd, 'learn'));
+
+    expect(state.doc.textContent).toBe('/learn 已有草稿');
+  });
+
+  it('光标位于带参数命令中间时仍替换匹配的命令后缀', () => {
+    let state = EditorState.create({
+      schema,
+      doc: doc(p(txt('/compact 参数'))),
+    });
+    const runEnd = resolveSlashCommandRunEnd(state.doc, 1, 'compa', ['compact']);
+
+    state = state.apply(replaceSlashCommandRunWithText(state.tr, schema, 1, runEnd, 'compact'));
+
+    expect(state.doc.textContent).toBe('/compact 参数');
+  });
+
+  it('意识指令按显示标签补全光标后的后缀', () => {
+    let state = EditorState.create({
+      schema,
+      doc: doc(p(txt('$draw'))),
+    });
+    const command = {
+      kind: 'desktop' as const,
+      name: 'draw/@root',
+      label: 'draw',
+      description: '',
+    };
+    const runEnd = resolveSlashCommandRunEnd(
+      state.doc,
+      1,
+      'dra',
+      commandPaletteReplacementNames(command),
+    );
+
+    state = state.apply(state.tr.replaceWith(1, runEnd, schema.text('$draw/@root ')));
+
+    expect(state.doc.textContent).toBe('$draw/@root ');
   });
 
   it('旧草稿的 slash atom 在首个 transaction 自动迁移为纯文本', () => {

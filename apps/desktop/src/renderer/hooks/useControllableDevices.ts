@@ -3,13 +3,18 @@
  *
  * 与 useDeviceLinkSettings(被控开关 / controlledBy / 轮询 / getState 全套)不同,这里只
  * 拉设备列表 + 订阅 presence / 本地控制偏好,筛出**可控目标**:
- * `online && remoteControlEnabled && controlEnabled && !isSelf && !isMobilePlatform(platform)`。
+ * `online && remoteControlEnabled && controlEnabled && !isSelf && isCindyApp(app) && !isMobilePlatform(platform)`。
  * 供「添加远程项目」弹窗的设备下拉 + 入口 gate(useHasAnyRemoteTarget)共用,避免在首页
  * 常驻时背上整套设置页的订阅开销。device-link 不可用(未登录 / relay 断)→ 静默空列表。
  */
 
-import { useEffect, useRef, useState } from 'react';
-import { isMobilePlatform } from '@cindy/maker-shared/device-list';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { isCindyApp, isControllableDevice as isControllableCindyDevice, isMobilePlatform } from '@cindy/maker-shared/device-list';
+import {
+  useDeviceLinkDeviceList,
+  useDeviceLinkDeviceListRequestState,
+  type DeviceLinkDeviceListStatus,
+} from '@/features/device-link/useDeviceLinkDeviceList';
 
 export interface ControllableDevice {
   deviceId: string;
@@ -23,13 +28,7 @@ export interface ControllableDevice {
  * 纯函数,供 hook 过滤 + 单测复用(守住这条准入,避免误把离线 / 未开被控 / 本机 / 手机列进去)。
  */
 export function isControllableDevice(d: DeviceLinkDeviceView): boolean {
-  return (
-    d.online &&
-    d.remoteControlEnabled &&
-    d.controlEnabled &&
-    !d.isSelf &&
-    !isMobilePlatform(d.platform)
-  );
+  return d.controlEnabled && isControllableCindyDevice(d);
 }
 
 /** 把设备全量列表(含本机/离线/未开被控)收敛成可控目标视图。纯函数,便于单测整条 transform。 */
@@ -81,7 +80,7 @@ export interface SelectableDevice extends ControllableDevice {
 export function isSelectableDevice(d: DeviceLinkDeviceView): boolean {
   // 手机端是控制端而非被控端。即便旧版本或异常 presence 报出 remoteControlEnabled=true，
   // 也不能把 iOS / Android 暴露成新建对话的运行目标。
-  if (d.isSelf || !d.controlEnabled || isMobilePlatform(d.platform)) return false;
+  if (d.isSelf || !d.controlEnabled || !isCindyApp(d.app) || isMobilePlatform(d.platform)) return false;
   return d.online ? d.remoteControlEnabled : true;
 }
 
@@ -114,9 +113,9 @@ export function sameSelectableList(
 /**
  * 创建页设备切换器的数据源(含离线设备)。
  *
- * 故意不与 useControllableDevices 共用订阅:那个 hook 服务「添加远程项目」弹窗与入口 gate,
- * 语义是「现在就能建远程项目的目标」(必须在线),行为不能动。两者同页挂载会各自订阅一次
- * presence —— 代价是一次 listDevices + 一个监听,换来两套语义互不干扰。
+ * 读侧栏共用的设备目录(useDeviceLinkDeviceList):继承它的中继重连刷新、失败退避重试、
+ * Device Link 停用时清空和乱序响应保护,各处挂载不再各自 listDevices。这里只投影创建页
+ * 的准入语义(保留离线设备)。
  *
  * 返回值带 `loaded`:**空列表必须能区分「还没拉到」和「拉到了,确实一台都没有」**。
  * 唯一配对的对端被解除配对 / 关掉被控时列表会合法地变空,下游要靠这个标志把草稿里的
@@ -124,56 +123,41 @@ export function sameSelectableList(
  * 用户在 UI 上再也切不回本机。反过来,首帧未就绪或 device-link 暂时不可用(抛错)时的空
  * 不能当权威,否则一次抖动就把用户刚选的设备抹掉。
  */
-export function useSelectableDevices(): { devices: SelectableDevice[]; loaded: boolean } {
-  const [devices, setDevices] = useState<SelectableDevice[]>([]);
-  const [loaded, setLoaded] = useState(false);
-  /**
-   * 请求序号:首次加载与两个监听(presence / control-target)都会并发调 refresh,而 REST 响应可能
-   * 乱序返回。没有它,一个更早的 listDevices 晚到就会把新的权威快照覆盖掉 —— 设备刚被解除配对
-   * 或撤销控制时,那份过期响应会把它连同 loaded=true 一起写回来,于是失效回落认为目标仍有效、
-   * picker 也允许再次选中它,直到下一次事件才纠正。同 useDeviceLinkProjects 的做法。
-   */
-  const requestIdRef = useRef(0);
+export function useSelectableDevices(): SelectableDevicesSnapshot {
+  const list = useDeviceLinkDeviceList();
+  const { status } = useDeviceLinkDeviceListRequestState();
+  const previous = useRef(EMPTY_SELECTABLE_DEVICES);
+  const next = useMemo(() => nextSelectableDevices(previous.current, list, status), [list, status]);
+  previous.current = next;
+  return next;
+}
 
-  useEffect(() => {
-    let cancelled = false;
-    const refresh = async () => {
-      const requestId = requestIdRef.current + 1;
-      requestIdRef.current = requestId;
-      try {
-        const { devices: list } = await window.electronAPI.deviceLink.listDevices();
-        if (cancelled || requestIdRef.current !== requestId) return;
-        const next = toSelectableDevices(list);
-        setDevices((prev) => (sameSelectableList(prev, next) ? prev : next));
-        // 成功拿到快照 —— 哪怕是空的,也是权威的空。
-        setLoaded(true);
-      } catch {
-        // device-link 暂时不可用(未登录 / relay 断)。
-        //
-        // **保留上次已知的设备行**,只把 loaded 置回 false。清空会造成一个死角:选了远程设备后
-        // 一次瞬时失败就让 DeviceSwitcherPill 因为没有设备而返回 null,而失效回落 effect 又
-        // (正确地)因为这个空不权威而不动草稿 —— 于是草稿仍指着那台设备,UI 上却没有任何控件能
-        // 切回本机,直到下一次成功刷新。保留旧行的代价只是它们可能已过期(在线状态尤其),
-        // 而 loaded=false 已经如实表达了「这份快照不权威」。
-        if (cancelled || requestIdRef.current !== requestId) return;
-        setLoaded(false);
-      }
-    };
-    void refresh();
-    const off = window.electronAPI.deviceLink.onPresenceChanged(() => {
-      void refresh();
-    });
-    const offControlTarget = window.electronAPI.deviceLink.onControlTargetChanged(() => {
-      void refresh();
-    });
-    return () => {
-      cancelled = true;
-      off();
-      offControlTarget();
-    };
-  }, []);
+export interface SelectableDevicesSnapshot {
+  devices: SelectableDevice[];
+  loaded: boolean;
+}
 
-  return { devices, loaded };
+const EMPTY_SELECTABLE_DEVICES: SelectableDevicesSnapshot = { devices: [], loaded: false };
+
+/**
+ * 共享目录 → 创建页快照。保留旧 hook 对消费者的两条约定:
+ * - 名单不变时沿用原数组,重新读取期间 `loaded` 不回落。消费者(如 Telegram 的远程设备区)
+ *   按数组引用和 `loaded` 重新探测每台电脑,无关的目录刷新不能让它们重来一遍。
+ * - 目录过期或读取失败、暂时拿不到列表时保留上次的设备行并一律标为离线:切换器不消失,
+ *   用户仍能切回本机,也不会选到状态未知的远程电脑。只有 Device Link 停用后的
+ *   ready + 无列表才是权威的空;读取失败时共享目录自己保留的旧行照常列出,但不是权威快照。
+ */
+export function nextSelectableDevices(
+  previous: SelectableDevicesSnapshot,
+  list: readonly DeviceLinkDeviceView[] | null,
+  status: DeviceLinkDeviceListStatus,
+): SelectableDevicesSnapshot {
+  let devices = list ? toSelectableDevices(list)
+    : status === 'ready' ? []
+    : previous.devices.map((d) => (d.online ? { ...d, online: false } : d));
+  if (sameSelectableList(previous.devices, devices)) devices = previous.devices;
+  const loaded = status === 'ready' || (status === 'loading' && list !== null && previous.loaded);
+  return devices === previous.devices && loaded === previous.loaded ? previous : { devices, loaded };
 }
 
 export function useControllableDevices(): ControllableDevice[] {

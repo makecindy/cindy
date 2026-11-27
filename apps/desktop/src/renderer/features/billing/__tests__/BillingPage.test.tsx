@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
 
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createInstance } from 'i18next';
 import type {
   BillingPaymentOrder,
+  BillingPurchasedGiftCard,
+  BillingPurchasedGiftCardCode,
   BillingSubscription,
   BillingSubscriptionPortalResult,
 } from '../../../../shared/billing';
@@ -14,8 +16,22 @@ import ja from '../../../i18n/locales/ja/common.json';
 import ko from '../../../i18n/locales/ko/common.json';
 import zhCN from '../../../i18n/locales/zh-CN/common.json';
 import zhTW from '../../../i18n/locales/zh-TW/common.json';
+import de from '../../../i18n/locales/de/common.json';
+import es from '../../../i18n/locales/es/common.json';
+import fr from '../../../i18n/locales/fr/common.json';
+import ptBR from '../../../i18n/locales/pt-BR/common.json';
+import ptPT from '../../../i18n/locales/pt-PT/common.json';
+import zhHansLzh from '../../../i18n/locales/zh-Hans-x-lzh/common.json';
+import zhHantLzh from '../../../i18n/locales/zh-Hant-x-lzh/common.json';
 
 const invoiceLocales = { en, ja, ko, 'zh-CN': zhCN, 'zh-TW': zhTW };
+const billingLocales = {
+  ...invoiceLocales, de, es, fr, 'pt-BR': ptBR, 'pt-PT': ptPT,
+  'zh-Hans-x-lzh': zhHansLzh, 'zh-Hant-x-lzh': zhHantLzh,
+};
+// The page formats period ends in the machine's local time zone. Build the instants that
+// tests read back as a calendar date from local noon, so the date holds in every zone.
+const localNoon = (year: number, month: number, day: number) => new Date(year, month - 1, day, 12).toISOString();
 
 const i18n = createInstance();
 void i18n.init({
@@ -23,7 +39,7 @@ void i18n.init({
   initAsync: false,
   interpolation: { escapeValue: false },
   resources: Object.fromEntries(
-    Object.entries(invoiceLocales).map(([locale, resource]) => [locale, { translation: resource }]),
+    Object.entries(billingLocales).map(([locale, resource]) => [locale, { translation: resource }]),
   ),
 });
 
@@ -79,10 +95,14 @@ vi.mock('react-i18next', async (importOriginal) => ({
       if (providerLabels[key]) return providerLabels[key];
       if (
         [
+          'billing.settings.supportHint',
+          'billing.usage.promotionalDetails.rolloverName',
           'billing.orders.invoice.personalInvoicePolicy',
           'billing.orders.invoice.invoiceTitleHint',
           'billing.orders.invoice.emailSubject',
           'billing.orders.invoice.emailBody',
+          'billing.orders.refund.emailSubject',
+          'billing.orders.refund.emailBody',
         ].includes(key)
       ) {
         return i18n.t(key, params);
@@ -132,7 +152,13 @@ vi.mock('qrcode', () => ({
   toDataURL: vi.fn(async () => 'data:image/png;base64,fixture'),
 }));
 
-import { BillingPage } from '../BillingPage';
+import { BillingPage, PURCHASED_CARDS_RETRY_DELAYS_MS } from '../BillingPage';
+import {
+  EMAIL_REFRESH_DELAY_MS,
+  EMAIL_REFRESH_MAX_PAGES,
+  EMAIL_REFRESH_MAX_ROUNDS,
+  usePurchasedGiftCards,
+} from '../usePurchasedGiftCards';
 import * as QRCode from 'qrcode';
 
 beforeEach(async () => {
@@ -421,6 +447,9 @@ describe('BillingPage remote catalog rendering', () => {
           })),
           getCurrentSubscription: vi.fn(async () => ({ subscription: null })),
           listOrders: vi.fn(async () => ({ orders: [], nextCursor: null })),
+          listPaymentHistory: vi.fn(async () => ({ records: [], nextCursor: null })),
+          // 没买过卡：成功读到空列表时不显示「我买的礼品卡」。
+          listPurchasedGiftCards: vi.fn(async () => ({ cards: [], nextCursor: null, emailSupported: false })),
           openPaymentRedirect: vi.fn(async () => ({ success: true })),
         },
         maker: {
@@ -429,6 +458,13 @@ describe('BillingPage remote catalog rendering', () => {
         openExternal: vi.fn(),
       },
     });
+  });
+
+  it('opens Usage history from the balance usage section', async () => {
+    routerState.search = 'tab=billing';
+    render(<BillingPage />);
+    fireEvent.click(await screen.findByRole('button', { name: 'billing.usage.viewUsage' }));
+    expect(routerState.search).toBe('tab=usage');
   });
 
   it('shows the server ledger total and all three balance pools', async () => {
@@ -492,7 +528,7 @@ describe('BillingPage remote catalog rendering', () => {
         subscriptionId: 'subscription_fixture',
         status: 'ACTIVE' as const,
         currentPeriodStartAt: '2026-07-01T00:00:00.000Z',
-        currentPeriodEndAt: '2026-08-01T00:00:00.000Z',
+        currentPeriodEndAt: localNoon(2026, 8, 1),
         entitlementValidUntil: '2026-08-02T00:00:00.000Z',
         cancelAtPeriodEnd: false,
         effectivePlan: {
@@ -647,12 +683,19 @@ describe('BillingPage remote catalog rendering', () => {
     expect(screen.queryByText((text) => text.startsWith('billing.recovery'))).toBeNull();
   });
 
-  it('shows usage progress and each promotional grant with its own state and expiry', async () => {
+  // D20 replaces D19 (unit): exercise the real BillingPage header controls and
+  // visible rows. Previous coverage only grouped/collapsed history. Mixed states and expiry
+  // dates, 21/30 records and 0/9/10 records expose sorting, page boundaries,
+  // partial last pages and empty/single-page behavior without changing the API.
+  // 人工审查后的排序契约：active 优先，各组按到期时间排序；旧测试把未到期的
+  // depleted/voided 排在 active 前。五条乱序状态通过真实页面验证顺序和金额（unit）。
+  it('sorts active grants first and each group by expiry while preserving usage details', async () => {
+    const now = Date.now();
     window.electronAPI.billing.getCreditUsage = vi.fn(async () => ({
-      available: '66',
+      available: '68',
       plan: { remaining: '40', used: '60', total: '100' },
       purchased: { remaining: '20', used: '30', total: '50' },
-      promotional: { remaining: '6', used: '6', total: '12' },
+      promotional: { remaining: '8', used: '6', total: '14' },
       promotionalGrants: [
         {
           grantId: 'welcome',
@@ -660,7 +703,7 @@ describe('BillingPage remote catalog rendering', () => {
           originalAmount: '10',
           usedAmount: '4',
           remainingAmount: '6',
-          expiresAt: '2026-08-01T00:00:00Z',
+          expiresAt: new Date(now + 3 * 86_400_000).toISOString(),
           state: 'active' as const,
         },
         {
@@ -669,7 +712,7 @@ describe('BillingPage remote catalog rendering', () => {
           originalAmount: '2',
           usedAmount: '2',
           remainingAmount: '0',
-          expiresAt: '2026-08-02T00:00:00Z',
+          expiresAt: new Date(now + 86_400_000).toISOString(),
           state: 'depleted' as const,
         },
         {
@@ -678,7 +721,7 @@ describe('BillingPage remote catalog rendering', () => {
           originalAmount: '5',
           usedAmount: '1.25',
           remainingAmount: '0',
-          expiresAt: '2026-07-01T00:00:00Z',
+          expiresAt: new Date(now).toISOString(),
           state: 'expired' as const,
         },
         {
@@ -687,8 +730,17 @@ describe('BillingPage remote catalog rendering', () => {
           originalAmount: '3',
           usedAmount: '0.5',
           remainingAmount: '0',
-          expiresAt: '2026-08-03T00:00:00Z',
+          expiresAt: new Date(now + 2 * 86_400_000).toISOString(),
           state: 'voided' as const,
+        },
+        {
+          grantId: 'active-sooner',
+          displayName: 'Active sooner',
+          originalAmount: '2',
+          usedAmount: '0',
+          remainingAmount: '2',
+          expiresAt: new Date(now + 2 * 86_400_000).toISOString(),
+          state: 'active' as const,
         },
       ],
       promotionalGrantsComplete: true,
@@ -701,19 +753,29 @@ describe('BillingPage remote catalog rendering', () => {
     render(<BillingPage />);
 
     expect(await screen.findByText('Welcome grant')).toBeTruthy();
+    expect(screen.getByText('Depleted grant')).toBeTruthy();
+    expect(screen.getByText('Voided grant')).toBeTruthy();
+    expect(screen.getAllByRole('listitem')).toHaveLength(5);
     expect(screen.getByText('billing.usage.promotionalDetails.unnamed')).toBeTruthy();
-    expect(screen.getByText('billing.usage.promotionalDetails.states.active')).toBeTruthy();
+    expect(screen.getAllByText('billing.usage.promotionalDetails.states.active')).toHaveLength(2);
     expect(screen.getByText('billing.usage.promotionalDetails.states.depleted')).toBeTruthy();
     expect(screen.getByText('billing.usage.promotionalDetails.states.expired')).toBeTruthy();
     expect(screen.getByText('billing.usage.promotionalDetails.states.voided')).toBeTruthy();
 
-    const grantRows = within(screen.getByRole('list')).getAllByRole('listitem');
+    const grantRows = screen.getAllByRole('listitem');
+    for (const [index, name] of [
+      'Active sooner', 'Welcome grant', 'billing.usage.promotionalDetails.unnamed',
+      'Depleted grant', 'Voided grant',
+    ].entries()) {
+      expect(within(grantRows[index]).getByText(name)).toBeTruthy();
+    }
     const formatter = new Intl.NumberFormat('en', { style: 'currency', currency: 'CNY' });
     for (const [row, usedAmount] of [
-      [grantRows[0], 4],
-      [grantRows[1], 2],
+      [grantRows[0], 0],
+      [grantRows[1], 4],
       [grantRows[2], 1.25],
-      [grantRows[3], 0.5],
+      [grantRows[3], 2],
+      [grantRows[4], 0.5],
     ] as const) {
       const usedLabel = within(row).getByText('billing.usage.promotionalDetails.used');
       expect(usedLabel.nextElementSibling?.textContent).toBe(formatter.format(usedAmount));
@@ -725,6 +787,185 @@ describe('BillingPage remote catalog rendering', () => {
     expect(screen.queryByText(legacyWarningKey)).toBeNull();
     expect(screen.getAllByRole('progressbar')).toHaveLength(3);
     expect(window.electronAPI.billing.getBalance).not.toHaveBeenCalled();
+  });
+
+  it.each([21, 30])('pages %s grants from the title with disabled boundary buttons and no extra requests', async (count) => {
+    window.electronAPI.billing.getCreditUsage = vi.fn(async () => ({
+      available: '0',
+      plan: { remaining: '0', used: null, total: null },
+      purchased: { remaining: '0', used: '0', total: '0' },
+      promotional: { remaining: '0', used: null, total: null },
+      promotionalGrants: Array.from({ length: count }, (_, index) => ({
+        grantId: `history-${index}`, displayName: `Past grant ${index + 1}`,
+        originalAmount: '1', usedAmount: '0', remainingAmount: '0',
+        expiresAt: '2020-01-01T00:00:00Z', state: 'expired' as const,
+      })),
+      promotionalGrantsComplete: false, promotionalGrantConsistency: 'OBSERVED' as const,
+      ledgerUpdatedAt: null, scale: 9 as const, observedAt: '2026-11-17T00:00:00Z',
+    }));
+    render(<BillingPage />);
+    await screen.findByText('Past grant 1');
+    const header = within(screen.getByRole('heading', {
+      name: 'billing.usage.promotionalDetails.title',
+    }).parentElement!);
+    const previous = header.getByRole('button', { name: 'billing.orders.history.previous' });
+    const next = header.getByRole('button', { name: 'billing.orders.history.next' });
+    expect(header.getByText(`billing.usage.promotionalDetails.count:{"count":${count}}`)).toBeTruthy();
+    expect(header.getByText('1/3')).toBeTruthy();
+    expect(previous.hasAttribute('disabled')).toBe(true);
+    expect(next.hasAttribute('disabled')).toBe(false);
+    expect(screen.getAllByRole('listitem')).toHaveLength(10);
+    expect(screen.getByText('Past grant 10')).toBeTruthy();
+    expect(screen.queryByText('Past grant 11')).toBeNull();
+    fireEvent.click(previous);
+    expect(header.getByText('1/3')).toBeTruthy();
+    fireEvent.click(next);
+    expect(header.getByText('2/3')).toBeTruthy();
+    expect(screen.getByText('Past grant 11')).toBeTruthy();
+    expect(screen.getAllByRole('listitem')).toHaveLength(10);
+    expect(previous.hasAttribute('disabled')).toBe(false);
+    fireEvent.click(next);
+    expect(header.getByText('3/3')).toBeTruthy();
+    expect(next.hasAttribute('disabled')).toBe(true);
+    expect(previous.hasAttribute('disabled')).toBe(false);
+    expect(screen.getAllByRole('listitem')).toHaveLength(count - 20);
+    expect(screen.getByText(`Past grant ${count}`)).toBeTruthy();
+    expect(screen.queryByText('Past grant 20')).toBeNull();
+    fireEvent.click(next);
+    expect(header.getByText('3/3')).toBeTruthy();
+    fireEvent.click(previous);
+    expect(header.getByText('2/3')).toBeTruthy();
+    expect(screen.getByText('Past grant 11')).toBeTruthy();
+    expect(screen.getByText(`billing.usage.promotionalDetails.incomplete:{"count":${count}}`)).toBeTruthy();
+    expect(window.electronAPI.billing.getCreditUsage).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([0, 9, 10])('shows %s grants without pagination and retains the empty state', async (count) => {
+    window.electronAPI.billing.getCreditUsage = vi.fn(async () => ({
+      available: '0',
+      plan: { remaining: '0', used: null, total: null },
+      purchased: { remaining: '0', used: '0', total: '0' },
+      promotional: { remaining: '0', used: '0', total: '0' },
+      promotionalGrants: Array.from({ length: count }, (_, index) => ({
+        grantId: `past-${index}`, displayName: `Past grant ${index + 1}`, originalAmount: '1',
+        usedAmount: '0', remainingAmount: '0', expiresAt: '2020-01-01T00:00:00Z',
+        state: 'expired' as const,
+      })),
+      promotionalGrantsComplete: true, promotionalGrantConsistency: 'OBSERVED' as const,
+      ledgerUpdatedAt: null, scale: 9 as const, observedAt: '2026-11-17T00:00:00Z',
+    }));
+    render(<BillingPage />);
+    expect(await screen.findByText(count > 0
+      ? 'Past grant 1' : 'billing.usage.promotionalDetails.empty')).toBeTruthy();
+    expect(screen.queryAllByRole('listitem')).toHaveLength(count);
+    expect(screen.queryByRole('button', { name: 'billing.orders.history.previous' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'billing.orders.history.next' })).toBeNull();
+  });
+
+  // D17: render the server's stable source as a localized name, without guessing
+  // from displayName. Existing grant coverage only exercised source-less records (unit).
+  it.each([
+    ['en', 'Rollover grant'],
+    ['zh-CN', '滚存额度'],
+  ])('localizes rollover grants in %s and preserves other grant names', async (locale, name) => {
+    await i18n.changeLanguage(locale);
+    const grant = {
+      originalAmount: '10', usedAmount: '0', remainingAmount: '10',
+      expiresAt: new Date(Date.now() + 86_400_000).toISOString(), state: 'active' as const,
+    };
+    window.electronAPI.billing.getCreditUsage = vi.fn(async () => ({
+      available: '30',
+      plan: { remaining: '0', used: null, total: null },
+      purchased: { remaining: '0', used: '0', total: '0' },
+      promotional: { remaining: '30', used: '0', total: '30' },
+      promotionalGrants: [
+        { ...grant, grantId: 'rollover', displayName: 'Server fallback',
+          source: { type: 'subscription_rollover' as const } },
+        { ...grant, grantId: 'other', displayName: '滚存额度' },
+        { ...grant, grantId: 'null-source', displayName: 'Other gift', source: null },
+      ],
+      promotionalGrantsComplete: true, promotionalGrantConsistency: 'OBSERVED' as const,
+      ledgerUpdatedAt: null, scale: 9 as const, observedAt: '2026-11-17T00:00:00Z',
+    }));
+    render(<BillingPage />);
+    const rows = within(await screen.findByRole('list')).getAllByRole('listitem');
+    expect(within(rows[0]).getByText(name)).toBeTruthy();
+    expect(screen.queryByText('Server fallback')).toBeNull();
+    expect(within(rows[1]).getByText('滚存额度')).toBeTruthy();
+    expect(within(rows[2]).getByText('Other gift')).toBeTruthy();
+  });
+
+  // Server contract (unit): gift_card/rollover objects and null can share
+  // one usage response. Earlier cases rendered these origins separately; this
+  // checks the real BillingPage keeps both localized names and the null fallback.
+  it('shows gift card and localized rollover names from the same usage response', async () => {
+    const grant = {
+      originalAmount: '10', usedAmount: '0', remainingAmount: '10',
+      expiresAt: new Date(Date.now() + 86_400_000).toISOString(), state: 'active' as const,
+    };
+    window.electronAPI.billing.getCreditUsage = vi.fn(async () => ({
+      available: '30',
+      plan: { remaining: '0', used: '0', total: '0' },
+      purchased: { remaining: '0', used: '0', total: '0' },
+      promotional: { remaining: '30', used: '0', total: '30' },
+      promotionalGrants: [
+        { ...grant, grantId: 'gift', displayName: 'Server gift fallback',
+          source: { type: 'gift_card' as const, senderName: 'Sample sender' } },
+        { ...grant, grantId: 'rollover', displayName: 'Server rollover fallback',
+          source: { type: 'subscription_rollover' as const } },
+        { ...grant, grantId: 'other', displayName: 'Other grant', source: null },
+      ],
+      promotionalGrantsComplete: true, promotionalGrantConsistency: 'OBSERVED' as const,
+      ledgerUpdatedAt: null, scale: 9 as const, observedAt: '2026-11-17T00:00:00Z',
+    }));
+    render(<BillingPage />);
+    const rows = within(await screen.findByRole('list')).getAllByRole('listitem');
+    expect(within(rows[0]).getByText('billing.usage.promotionalDetails.giftCard:{"sender":"Sample sender"}')).toBeTruthy();
+    expect(within(rows[1]).getByText('Rollover grant')).toBeTruthy();
+    expect(within(rows[2]).getByText('Other grant')).toBeTruthy();
+    expect(screen.queryByText('Server gift fallback')).toBeNull();
+    expect(screen.queryByText('Server rollover fallback')).toBeNull();
+  });
+
+  // 契约：礼品卡到账的赠送在明细里要认得出来。此前这一行只显示通用名称，和其它赠送无法区分。
+  // 组件层：真实 BillingPage + 假的宿主数据，验证名称的选择规则，不涉及服务端如何标注来源。
+  it('names a redeemed gift card with its sender, and keeps other grants as they were', async () => {
+    const grant = (grantId: string, extra: Record<string, unknown>) => ({
+      grantId,
+      displayName: null,
+      originalAmount: '20',
+      usedAmount: '0',
+      remainingAmount: '20',
+      expiresAt: '2026-08-01T00:00:00Z',
+      state: 'active' as const,
+      ...extra,
+    });
+    window.electronAPI.billing.getCreditUsage = vi.fn(async () => ({
+      available: '60',
+      plan: { remaining: '0', used: '0', total: '0' },
+      purchased: { remaining: '0', used: '0', total: '0' },
+      promotional: { remaining: '60', used: '0', total: '60' },
+      promotionalGrants: [
+        grant('gift', { source: { type: 'gift_card' as const, senderName: 'Cindy Team' } }),
+        // 礼品卡来源优先于 Gateway 上的名称；没有来源的赠送沿用原来的名称或通用名称。
+        grant('named', { displayName: 'Welcome grant' }),
+        grant('plain', {}),
+      ],
+      promotionalGrantsComplete: true,
+      promotionalGrantConsistency: 'OBSERVED' as const,
+      ledgerUpdatedAt: '2026-07-23T12:00:00Z',
+      scale: 9 as const,
+      observedAt: '2026-07-23T12:00:00Z',
+    }));
+
+    render(<BillingPage />);
+
+    expect(await screen.findByText('Welcome grant')).toBeTruthy();
+    const rows = within(screen.getByRole('list')).getAllByRole('listitem');
+    expect(within(rows[0]).getByText((text) => text.startsWith('billing.usage.promotionalDetails.giftCard'))).toBeTruthy();
+    expect(rows[0].textContent).toContain('Cindy Team');
+    expect(within(rows[2]).getByText('billing.usage.promotionalDetails.unnamed')).toBeTruthy();
+    expect(screen.getAllByText((text) => text.startsWith('billing.usage.promotionalDetails.giftCard'))).toHaveLength(1);
   });
 
   it('refreshes the balance and XD models once when a top-up succeeds', async () => {
@@ -804,6 +1045,568 @@ describe('BillingPage remote catalog rendering', () => {
     );
     view.rerender(<BillingPage />);
     expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledTimes(1);
+  });
+
+  // 「购买礼品卡」只在目录真的在卖礼品卡时出现；礼品卡是一次性付款，不能被当成订阅渠道滤掉。
+  it('offers Buy Gift Card only when the catalog sells gift cards', async () => {
+    const view = render(<BillingPage />);
+    await screen.findByText('billing.giftCard.action');
+    expect(screen.queryByText('billing.giftCardPurchase.action')).toBeNull();
+    view.unmount();
+
+    const getCatalog = window.electronAPI.billing.getCatalog as ReturnType<typeof vi.fn>;
+    getCatalog.mockResolvedValueOnce({
+      products: [{
+        code: 'gift_card', name: 'Gift card', kind: 'GIFT_CARD', level: null, sortOrder: 2,
+        offers: [{
+          code: 'gift_card_100', interval: null, currency: 'cny', amount: '100', minAmount: null,
+          maxAmount: null, creditAmount: '100', rolloverCap: null,
+          purchaseOptions: [{ id: 'listing_alipay', provider: 'alipay', capability: 'ONE_TIME_PAYMENT', paymentAction: 'QR_CODE' }],
+        }],
+      }],
+    });
+    render(<BillingPage />);
+    expect(await screen.findByText('billing.giftCardPurchase.action')).toBeTruthy();
+  });
+
+  // 买礼品卡不改买家自己的余额和分组：付款完成后换成「礼品卡已备好」，只列这一单的卡，
+  // 不重拉模型目录；之后在「我买的礼品卡」里一直能找到它们。
+  it('turns a paid gift card checkout into the cards-ready dialog for that order', async () => {
+    const giftOrder = {
+      orderId: 'order_gift',
+      productCode: 'gift_card',
+      offerCode: 'gift_card_100',
+      amount: '200',
+      currency: 'cny',
+      status: 'PENDING' as const,
+      paymentAction: null,
+      productKind: 'GIFT_CARD' as const,
+      quantity: 2,
+      createdAt: '2026-11-19T08:00:00.000Z',
+      updatedAt: '2026-11-19T08:00:00.000Z',
+    };
+    const purchased = (cardId: string, orderId: string, codeTail: string) => ({
+      cardId, orderId, faceCode: 'cat', face: null, amount: '100', currency: 'cny', senderName: '小鱼',
+      message: '生日快乐', codeTail, status: 'UNCLAIMED' as const, claimedAt: null,
+      claimedByName: null, purchasedAt: '2026-11-19T08:01:00.000Z', email: null,
+    });
+    const listPurchasedGiftCards = vi.fn(async () => ({
+      cards: [
+        purchased('card_1', 'order_gift', '7KQ2'),
+        purchased('card_2', 'order_gift', 'M3XD'),
+        purchased('card_old', 'order_old', 'Q8TR'),
+      ],
+      nextCursor: null,
+      emailSupported: false,
+    }));
+    window.electronAPI.billing.listPurchasedGiftCards = listPurchasedGiftCards;
+    window.electronAPI.billing.revealPurchasedGiftCard = vi.fn(async () => ({
+      code: 'C012-3456-789A-BCDE',
+      claimUrl: 'https://share.example.test/gift?face=cat#C012-3456-789A-BCDE',
+    }));
+    Object.assign(checkout.state, {
+      open: true,
+      kind: 'TOPUP',
+      phase: 'AWAITING_PAYMENT',
+      order: giftOrder,
+    });
+    const view = render(<BillingPage />);
+    await waitFor(() => expect(listPurchasedGiftCards).toHaveBeenCalledTimes(1));
+    const getBalance = window.electronAPI.billing.getBalance as ReturnType<typeof vi.fn>;
+    const balanceCalls = getBalance.mock.calls.length;
+
+    Object.assign(checkout.state, { phase: 'COMPLETED', order: { ...giftOrder, status: 'SUCCEEDED' } });
+    view.rerender(<BillingPage />);
+
+    await screen.findByText('billing.giftCardPurchase.done.title:{"count":2}');
+    expect(checkout.close).toHaveBeenCalled();
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getAllByText(/billing\.giftCardPurchase\.done\.cardTitle/)).toHaveLength(2);
+    expect(within(dialog).queryByText(/Q8TR/)).toBeNull();
+    expect(modelCatalogMocks.refreshBuiltinProviderModels).not.toHaveBeenCalled();
+    expect(getBalance.mock.calls.length).toBe(balanceCalls);
+
+    fireEvent.click(within(dialog).getAllByRole('button', { name: /billing\.giftCardPurchase\.actions\.copyLink/ })[0]!);
+    await waitFor(() => expect(uiMocks.clipboardWriteText)
+      .toHaveBeenCalledWith('https://share.example.test/gift?face=cat#C012-3456-789A-BCDE'));
+    expect(window.electronAPI.billing.revealPurchasedGiftCard).toHaveBeenCalledWith({ cardId: 'card_1', faceCode: 'cat' });
+  });
+
+  // 「我买的礼品卡」读取失败要显示错误与重试；只有成功读到空列表或旧服务端没有这个接口时才不显示。
+  it.each([
+    ['an outage', () => new Error('timeout'), true],
+    ['an old server', () => Object.assign(new Error('[NOT_FOUND] no route'), { code: 'NOT_FOUND' as const }), false],
+  ])('shows the purchased-card load failure after %s only when it is real', async (_label, failure, shown) => {
+    const list = vi.fn(async () => {
+      throw failure();
+    });
+    window.electronAPI.billing.listPurchasedGiftCards = list;
+    render(<BillingPage />);
+    await waitFor(() => expect(list).toHaveBeenCalled());
+    if (shown) {
+      expect(await screen.findByText('billing.giftCardPurchase.list.loadFailed')).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'billing.giftCardPurchase.list.retry' })).toBeTruthy();
+    } else {
+      await waitFor(() => expect(screen.queryByText('billing.giftCardPurchase.list.loadFailed')).toBeNull());
+      expect(screen.queryByText('billing.giftCardPurchase.list.title')).toBeNull();
+    }
+  });
+
+  // 退款或拒付还在处理的卡（ON_HOLD）之后可能恢复：显示「处理中，暂不可用」，不给取码、发信等操作，
+  // 也不说已退款。
+  it('shows a card held by a pending refund or chargeback as processing, without actions', async () => {
+    const held = {
+      cardId: 'card_held', orderId: 'order_gift', faceCode: 'cat', face: null, amount: '100', currency: 'cny',
+      senderName: '小鱼', message: null, codeTail: '7KQ2', status: 'ON_HOLD' as const, claimedAt: null,
+      claimedByName: null, purchasedAt: '2026-11-19T08:01:00.000Z', email: null,
+    };
+    window.electronAPI.billing.listPurchasedGiftCards = vi.fn(async () => ({
+      cards: [held], nextCursor: null, emailSupported: true,
+    }));
+    render(<BillingPage />);
+    expect(await screen.findByText(/billing\.giftCardPurchase\.list\.status\.onHold/)).toBeTruthy();
+    // 处理中的卡之后可能恢复：卡面照常显示，只有已退款的卡变淡（DESIGN.md 礼品卡卡面一节）。
+    expect(screen.getByRole('img', { name: /billing\.giftCard\.cardLabel/ }).closest('.opacity-50')).toBeNull();
+    expect(screen.queryByText(/billing\.giftCardPurchase\.list\.status\.refunded/)).toBeNull();
+    expect(screen.queryByRole('button', { name: /billing\.giftCardPurchase\.actions\./ })).toBeNull();
+  });
+
+  // 付款成功后发卡结果可能还没读到（列表请求失败，或先于发卡可见）：按退避有限次重读，读到这一单的卡
+  // 就显示；一直没有才说「稍后会出现在我买的礼品卡」。关闭弹窗后不再读。
+  it.each([
+    ['shows the cards once they appear', 3, 'billing.giftCardPurchase.done.title:{"count":1}'],
+    ['gives up after a bounded wait', 1 + PURCHASED_CARDS_RETRY_DELAYS_MS.length, 'billing.giftCardPurchase.done.missing'],
+  ])('keeps fetching a paid order\'s cards (%s)', async (_label, reads, text) => {
+    vi.useFakeTimers();
+    try {
+      const issued = {
+        cardId: 'card_new', orderId: 'order_gift', faceCode: 'cat', face: null, amount: '100', currency: 'cny',
+        senderName: '小鱼', message: null, codeTail: '7KQ2', status: 'UNCLAIMED' as const, claimedAt: null,
+        claimedByName: null, purchasedAt: '2026-11-19T08:01:00.000Z', email: null,
+      };
+      const empty = { cards: [], nextCursor: null, emailSupported: false };
+      // 第 1 次是进入计费页时的读取，之后是付款成功后的重读。
+      const list = vi.fn()
+        .mockResolvedValueOnce(empty)
+        .mockRejectedValueOnce(new Error('timeout'))
+        .mockResolvedValue(reads === 3 ? { ...empty, cards: [issued] } : empty);
+      window.electronAPI.billing.listPurchasedGiftCards = list;
+      const giftOrder = {
+        orderId: 'order_gift', productCode: 'gift_card', offerCode: 'gift_card_100', amount: '100',
+        currency: 'cny', status: 'PENDING' as const, paymentAction: null, productKind: 'GIFT_CARD' as const,
+        quantity: 1, createdAt: '2026-11-19T08:00:00.000Z', updatedAt: '2026-11-19T08:00:00.000Z',
+      };
+      Object.assign(checkout.state, { open: true, kind: 'TOPUP', phase: 'AWAITING_PAYMENT', order: giftOrder });
+      const view = render(<BillingPage />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(list).toHaveBeenCalledTimes(1);
+      Object.assign(checkout.state, { phase: 'COMPLETED', order: { ...giftOrder, status: 'SUCCEEDED' } });
+      view.rerender(<BillingPage />);
+      for (const delay of [...PURCHASED_CARDS_RETRY_DELAYS_MS, 30_000]) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(delay);
+        });
+      }
+      expect(list).toHaveBeenCalledTimes(reads);
+      expect(screen.getByText(text)).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops fetching a paid order\'s cards once the dialog is closed', async () => {
+    vi.useFakeTimers();
+    try {
+      const list = vi.fn(async () => ({ cards: [], nextCursor: null, emailSupported: false }));
+      window.electronAPI.billing.listPurchasedGiftCards = list;
+      const giftOrder = {
+        orderId: 'order_gift', productCode: 'gift_card', offerCode: 'gift_card_100', amount: '100',
+        currency: 'cny', status: 'PENDING' as const, paymentAction: null, productKind: 'GIFT_CARD' as const,
+        quantity: 1, createdAt: '2026-11-19T08:00:00.000Z', updatedAt: '2026-11-19T08:00:00.000Z',
+      };
+      Object.assign(checkout.state, { open: true, kind: 'TOPUP', phase: 'AWAITING_PAYMENT', order: giftOrder });
+      const view = render(<BillingPage />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      Object.assign(checkout.state, { phase: 'COMPLETED', order: { ...giftOrder, status: 'SUCCEEDED' } });
+      view.rerender(<BillingPage />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(list).toHaveBeenCalledTimes(2);
+      fireEvent.click(screen.getByRole('button', { name: 'billing.actions.close' }));
+      for (const delay of PURCHASED_CARDS_RETRY_DELAYS_MS) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(delay);
+        });
+      }
+      expect(list).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // 取码请求在离开计费页（含切换账号）之后才返回：不提示、不复制、不再读列表。
+  it.each([
+    ['rejected', 'reject'],
+    ['resolved', 'resolve'],
+  ])('does nothing once unmounted when a code request comes back %s', async (_label, outcome) => {
+    const list = vi.fn(async () => ({ cards: [], nextCursor: null, emailSupported: false }));
+    window.electronAPI.billing.listPurchasedGiftCards = list;
+    let settle: (ok: boolean) => void = () => undefined;
+    window.electronAPI.billing.revealPurchasedGiftCard = vi.fn(() => new Promise<BillingPurchasedGiftCardCode>((resolve, reject) => {
+      settle = (ok) => (ok
+        ? resolve({ code: 'C012-3456-789A-BCDE', claimUrl: null })
+        : reject(Object.assign(new Error('[PRECONDITION_FAILED] claimed'), { code: 'PRECONDITION_FAILED' as const })));
+    }));
+    const { result, unmount } = renderHook(() => usePurchasedGiftCards());
+    const copied = result.current.copy({
+      cardId: 'card_1', orderId: 'order_gift', faceCode: 'cat', face: null, amount: '100', currency: 'cny',
+      senderName: '小鱼', message: null, codeTail: '7KQ2', status: 'UNCLAIMED', claimedAt: null,
+      claimedByName: null, purchasedAt: '2026-11-19T08:01:00.000Z', email: null,
+    }, 'code');
+    unmount();
+    settle(outcome === 'resolve');
+    await expect(copied).resolves.toBe(false);
+    expect(uiMocks.toastError).not.toHaveBeenCalled();
+    expect(uiMocks.toastSuccess).not.toHaveBeenCalled();
+    expect(uiMocks.clipboardWriteText).not.toHaveBeenCalled();
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  describe('sending a bought card by email', () => {
+    // 冷却倒计时按 Date.now 计算：冷却用例只冻结时钟（定时器照常），剩余秒数不随 CI 上用例的先后与耗时漂移。
+    const freezeClock = () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-11-19T08:06:00.000Z'));
+    };
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+    const later = (seconds: number) => new Date(Date.now() + seconds * 1000).toISOString();
+    const card = (overrides: Partial<BillingPurchasedGiftCard> = {}): BillingPurchasedGiftCard => ({
+      cardId: 'card_mail', orderId: 'order_gift', faceCode: 'cat', face: null, amount: '100', currency: 'cny',
+      senderName: '小鱼', message: '生日快乐', codeTail: '7KQ2', status: 'UNCLAIMED', claimedAt: null,
+      claimedByName: null, purchasedAt: '2026-11-19T08:01:00.000Z', email: null, ...overrides,
+    });
+    const delivery = (
+      status: NonNullable<BillingPurchasedGiftCard['email']>['status'],
+      nextInSeconds = 60,
+    ): BillingPurchasedGiftCard['email'] => ({
+      recipient: 'friend@example.com', status, updatedAt: '2026-11-19T08:05:00.000Z',
+      nextAvailableAt: later(nextInSeconds),
+    });
+    const page = (cards: BillingPurchasedGiftCard[], emailSupported = true) =>
+      ({ cards, nextCursor: null, emailSupported });
+
+    async function openEmailDialog() {
+      const more = await screen.findByRole('button', { name: 'billing.giftCardPurchase.actions.more' });
+      fireEvent.pointerDown(more, { button: 0, ctrlKey: false });
+      fireEvent.click(await screen.findByRole('menuitem', { name: 'billing.giftCardPurchase.actions.sendEmail' }));
+      return screen.findByLabelText('billing.giftCardPurchase.email.recipient') as Promise<HTMLInputElement>;
+    }
+
+    // 生产入口：计费页「我买的礼品卡」→「⋯」→ 发送到邮箱。发出后就地显示正在发送，不重读整页。
+    it('sends an unclaimed card to the address the buyer typed and shows it as sending', async () => {
+      window.electronAPI.billing.listPurchasedGiftCards = vi.fn(async () => page([card()]));
+      const send = vi.fn(async () => ({ ok: true as const, card: card({ email: delivery('PENDING') }) }));
+      window.electronAPI.billing.sendPurchasedGiftCardEmail = send;
+      render(<BillingPage />);
+
+      const input = await openEmailDialog();
+      expect(input.value).toBe('');
+      fireEvent.change(input, { target: { value: ' friend@example.com ' } });
+      fireEvent.click(screen.getByRole('button', { name: 'billing.giftCardPurchase.email.send' }));
+
+      await waitFor(() => expect(send).toHaveBeenCalledWith({ cardId: 'card_mail', email: 'friend@example.com' }));
+      expect(uiMocks.toastSuccess).toHaveBeenCalledWith('billing.giftCardPurchase.toasts.emailQueued:{"email":"friend@example.com"}');
+      expect(await screen.findByText('billing.giftCardPurchase.email.status.sending:{"email":"friend@example.com"}')).toBeTruthy();
+      expect(screen.queryByLabelText('billing.giftCardPurchase.email.recipient')).toBeNull();
+      expect(window.electronAPI.billing.listPurchasedGiftCards).toHaveBeenCalledTimes(1);
+    });
+
+    // 服务端明确拒绝时就地说明，不关弹窗；冷却中的卡写明还要等几秒，可以换邮箱。
+    it.each([
+      ['INVALID_EMAIL', () => ({ ok: false as const, reason: 'INVALID_EMAIL' as const }), 'billing.giftCardPurchase.email.invalid'],
+      ['NOT_AVAILABLE', () => ({ ok: false as const, reason: 'NOT_AVAILABLE' as const }), 'billing.giftCardPurchase.toasts.unavailable'],
+      // 截止时间在用例执行时才算，不在加载测试文件时算。
+      ['COOLDOWN', () => ({ ok: false as const, reason: 'COOLDOWN' as const, retryAt: Date.now() + 42_000 }), 'billing.giftCardPurchase.email.cooldown:{"seconds":42}'],
+      // 冷却中却没给出剩余时间：按服务端的 60 秒冷却倒计时，不能立刻又能发送。
+      ['COOLDOWN without a deadline', () => ({ ok: false as const, reason: 'COOLDOWN' as const, retryAt: null }), 'billing.giftCardPurchase.email.cooldown:{"seconds":60}'],
+    ])('explains %s in the dialog', async (_reason, result, message) => {
+      freezeClock();
+      window.electronAPI.billing.listPurchasedGiftCards = vi.fn(async () => page([card()]));
+      window.electronAPI.billing.sendPurchasedGiftCardEmail = vi.fn(async () => result());
+      render(<BillingPage />);
+      const input = await openEmailDialog();
+      fireEvent.change(input, { target: { value: 'friend@example.com' } });
+      fireEvent.click(screen.getByRole('button', { name: 'billing.giftCardPurchase.email.send' }));
+      expect(await screen.findByText(message)).toBeTruthy();
+      expect(screen.getByLabelText('billing.giftCardPurchase.email.recipient')).toBeTruthy();
+      expect(uiMocks.toastSuccess).not.toHaveBeenCalled();
+    });
+
+    it('starts from the last recipient and waits out the cooldown before sending again', async () => {
+      freezeClock();
+      window.electronAPI.billing.listPurchasedGiftCards = vi.fn(async () =>
+        page([card({ email: delivery('SENT', 30) })]));
+      render(<BillingPage />);
+      expect(await screen.findByText('billing.giftCardPurchase.email.status.sent:{"email":"friend@example.com"}')).toBeTruthy();
+      const input = await openEmailDialog();
+      expect(input.value).toBe('friend@example.com');
+      expect(screen.getByText('billing.giftCardPurchase.email.cooldown:{"seconds":30}')).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'billing.giftCardPurchase.email.send' }).hasAttribute('disabled')).toBe(true);
+    });
+
+    // 旧服务端的列表不带 email 字段：没有发信接口，不出现「发送到邮箱」。
+    it('does not offer sending by email when the server cannot send', async () => {
+      window.electronAPI.billing.listPurchasedGiftCards = vi.fn(async () => page([card()], false));
+      render(<BillingPage />);
+      const more = await screen.findByRole('button', { name: 'billing.giftCardPurchase.actions.more' });
+      fireEvent.pointerDown(more, { button: 0, ctrlKey: false });
+      await screen.findByRole('menuitem', { name: 'billing.giftCardPurchase.actions.copyCode' });
+      expect(screen.queryByRole('menuitem', { name: 'billing.giftCardPurchase.actions.sendEmail' })).toBeNull();
+    });
+
+    // 邮件异步发出：仍在排队或发送中时每 5 秒重读第一页，最多 6 次；发出或窗口隐藏时不再读。
+    it.each([
+      ['keeps waiting', () => delivery('SENDING'), 'visible', 1 + EMAIL_REFRESH_MAX_ROUNDS],
+      ['stops once sent', () => delivery('SENT'), 'visible', 2],
+      ['pauses while hidden', () => delivery('SENDING'), 'hidden', 1],
+      // 某一轮读取失败后仍按剩余轮数继续读，而不是停在那一轮。
+      ['keeps going after a failed read', 'fail-then-sent', 'visible', 3],
+    ] as const)('re-reads delivery status at most a few times (%s)', async (_label, next, visibility, reads) => {
+      vi.useFakeTimers();
+      const visibilityState = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue(visibility);
+      try {
+        const list = next === 'fail-then-sent'
+          ? vi.fn()
+            .mockResolvedValueOnce(page([card({ email: delivery('PENDING') })]))
+            .mockRejectedValueOnce(new Error('offline'))
+            .mockResolvedValue(page([card({ email: delivery('SENT') })]))
+          : vi.fn()
+            .mockResolvedValueOnce(page([card({ email: delivery('PENDING') })]))
+            .mockResolvedValue(page([card({ email: next() })]));
+        window.electronAPI.billing.listPurchasedGiftCards = list;
+        const { result, unmount } = renderHook(() => usePurchasedGiftCards());
+        await act(async () => {
+          await result.current.reload();
+        });
+        for (let round = 0; round < EMAIL_REFRESH_MAX_ROUNDS + 2; round += 1) {
+          await act(async () => {
+            await vi.advanceTimersByTimeAsync(EMAIL_REFRESH_DELAY_MS);
+          });
+        }
+        expect(list).toHaveBeenCalledTimes(reads);
+        unmount();
+      } finally {
+        visibilityState.mockRestore();
+        vi.useRealTimers();
+      }
+    });
+
+    // 「加载更多」载入的卡发信后，刷新要读它所在的那一页；只读第一页时这张卡一直停在「发送中」。
+    it('re-reads the page that holds an emailed card loaded through "load more"', async () => {
+      vi.useFakeTimers();
+      try {
+        const older = card({ cardId: 'card_older', email: delivery('PENDING') });
+        const list = vi.fn(async (payload: { limit: number; cursor?: string }) => payload.cursor === 'cursor_2'
+          ? page([list.mock.calls.length > 2 ? { ...older, email: delivery('SENT') } : older])
+          : { ...page([card()]), nextCursor: 'cursor_2' });
+        window.electronAPI.billing.listPurchasedGiftCards = list;
+        const { result, unmount } = renderHook(() => usePurchasedGiftCards());
+        await act(async () => {
+          await result.current.reload();
+        });
+        await act(async () => {
+          await result.current.loadMore();
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(EMAIL_REFRESH_DELAY_MS);
+        });
+        expect(list).toHaveBeenLastCalledWith({ limit: 20, cursor: 'cursor_2' });
+        expect(result.current.state.cards.find((item) => item.cardId === 'card_older')?.email?.status).toBe('SENT');
+        unmount();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    // 评审发现（PR #11412）：自己兑换了买来的卡之后，缓存的码不能再被复制出去（重读列表失败时这张卡
+    // 仍显示为未领取）。兑换弹窗只知道码：按码清掉缓存，手动粘贴兑换的也算。
+    it('forgets a cached code once that code is redeemed, however it was typed', async () => {
+      const reveal = vi.fn(async () => ({ code: 'C012-3456-789A-BCDE', claimUrl: null }));
+      window.electronAPI.billing.revealPurchasedGiftCard = reveal;
+      window.electronAPI.billing.listPurchasedGiftCards = vi.fn(async () => page([card()]));
+      const { result, unmount } = renderHook(() => usePurchasedGiftCards());
+      await act(async () => {
+        await result.current.reload();
+      });
+      await act(async () => {
+        await result.current.reveal(card());
+        await result.current.reveal(card());
+      });
+      expect(reveal).toHaveBeenCalledTimes(1);
+      act(() => result.current.forgetCode('c0123456789abcde'));
+      await act(async () => {
+        await result.current.reveal(card());
+      });
+      expect(reveal).toHaveBeenCalledTimes(2);
+      unmount();
+    });
+
+    // 评审发现（PR #11412）：发信请求在途时列表已重读（比如关掉弹窗后兑换了这张卡），晚到的发信结果不能
+    // 把已兑换的卡改回未领取、重新放出操作；改为再重读一次，以服务端当前状态为准。
+    it('does not let a late send-to-email result overwrite a newer reload', async () => {
+      const pending = card();
+      const redeemed = { ...pending, status: 'REDEEMED_BY_YOU' as const, claimedAt: '2026-11-19T08:10:00.000Z' };
+      let resolveSend: (value: unknown) => void = () => undefined;
+      window.electronAPI.billing.sendPurchasedGiftCardEmail = vi.fn(
+        () => new Promise((resolve) => { resolveSend = resolve; }),
+      ) as never;
+      const list = vi.fn()
+        .mockResolvedValueOnce(page([pending]))
+        .mockResolvedValue(page([redeemed]));
+      window.electronAPI.billing.listPurchasedGiftCards = list;
+      const { result, unmount } = renderHook(() => usePurchasedGiftCards());
+      await act(async () => {
+        await result.current.reload();
+      });
+      let sent: Promise<unknown> = Promise.resolve();
+      act(() => {
+        sent = result.current.sendEmail(pending, 'friend@example.com');
+      });
+      await act(async () => {
+        await result.current.reload();
+      });
+      await act(async () => {
+        resolveSend({ ok: true, card: { ...pending, email: delivery('PENDING') } });
+        await sent;
+      });
+      await waitFor(() => expect(list).toHaveBeenCalledTimes(3));
+      expect(result.current.state.cards.map((item) => item.status)).toEqual(['REDEEMED_BY_YOU']);
+      unmount();
+    });
+
+    // 评审发现（PR #11412）：重读之前发出的发信状态刷新晚到时，不能用旧快照把刚兑换的卡改回未领取、
+    // 重新放出操作。
+    it('drops an email-status refresh that started before a newer reload', async () => {
+      vi.useFakeTimers();
+      try {
+        const pending = card({ email: delivery('PENDING') });
+        let resolveStale: (value: unknown) => void = () => undefined;
+        const list = vi.fn()
+          .mockResolvedValueOnce(page([pending]))
+          .mockImplementationOnce(() => new Promise((resolve) => { resolveStale = resolve; }))
+          .mockResolvedValueOnce(page([{ ...pending, status: 'REDEEMED_BY_YOU', email: delivery('SENT') }]));
+        window.electronAPI.billing.listPurchasedGiftCards = list;
+        const { result, unmount } = renderHook(() => usePurchasedGiftCards());
+        await act(async () => {
+          await result.current.reload();
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(EMAIL_REFRESH_DELAY_MS);
+        });
+        expect(list).toHaveBeenCalledTimes(2);
+        await act(async () => {
+          await result.current.reload();
+        });
+        await act(async () => {
+          resolveStale(page([pending]));
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        expect(result.current.state.cards.map((item) => [item.status, item.email?.status]))
+          .toEqual([['REDEEMED_BY_YOU', 'SENT']]);
+        unmount();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    // 评审发现（PR #11412）：发送中的卡分散在很多已加载的分页时，每轮按页并发重读会随页数无上限地
+    // 放大请求。每轮最多重读几页、逐页串行。
+    it('re-reads at most a few pages per round, one request at a time', async () => {
+      vi.useFakeTimers();
+      try {
+        let active = 0;
+        let peak = 0;
+        const list = vi.fn(async (payload: { limit: number; cursor?: string }) => {
+          active += 1;
+          peak = Math.max(peak, active);
+          await Promise.resolve();
+          active -= 1;
+          const index = payload.cursor ? Number(payload.cursor.slice('cursor_'.length)) : 1;
+          return {
+            ...page([card({ cardId: `card_${index}`, email: delivery('PENDING') })]),
+            nextCursor: index < 5 ? `cursor_${index + 1}` : null,
+          };
+        });
+        window.electronAPI.billing.listPurchasedGiftCards = list;
+        const { result, unmount } = renderHook(() => usePurchasedGiftCards());
+        await act(async () => {
+          await result.current.reload();
+        });
+        for (let loaded = 1; loaded < 5; loaded += 1) {
+          await act(async () => {
+            await result.current.loadMore();
+          });
+        }
+        expect(result.current.state.cards).toHaveLength(5);
+        const before = list.mock.calls.length;
+        peak = 0;
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(EMAIL_REFRESH_DELAY_MS);
+        });
+        expect(list.mock.calls.length - before).toBe(EMAIL_REFRESH_MAX_PAGES);
+        expect(peak).toBe(1);
+        unmount();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it('refreshes the balance and XD models once a gift card is redeemed', async () => {
+    const card = {
+      status: 'AVAILABLE' as const,
+      amount: '20',
+      faceCode: 'cindy',
+      face: null,
+      senderName: 'Cindy Team',
+      message: null,
+      destination: 'PROMOTIONAL' as const,
+      claimDeadline: '2026-12-31T16:00:00.000Z',
+      validityDays: 90,
+      claimedAt: null,
+    };
+    window.electronAPI.billing.previewGiftCard = vi.fn(async () => ({ ok: true as const, card }));
+    window.electronAPI.billing.redeemGiftCard = vi.fn(async () => ({
+      ok: true as const,
+      card: { ...card, status: 'CLAIMED_BY_YOU' as const, claimedAt: '2026-11-16T12:00:00.000Z' },
+      credit: { state: 'APPLIED' as const, amount: '20', expiresAt: '2027-02-14T12:00:00.000Z' },
+    }));
+    const getBalance = window.electronAPI.billing.getBalance;
+    render(<BillingPage />);
+    await waitFor(() => expect(getBalance).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'billing.giftCard.action' }));
+    const input = within(await screen.findByRole('alertdialog'));
+    fireEvent.change(input.getByRole('textbox'), { target: { value: 'C0123456789ABCDE' } });
+    fireEvent.click(input.getByRole('button', { name: 'billing.giftCard.continue' }));
+    // 预览后切到确认步骤（另一个对话框）；此时还没有领取，也不刷新目录。
+    const confirm = await screen.findByRole('button', { name: 'billing.giftCard.confirmAction' });
+    expect(modelCatalogMocks.refreshBuiltinProviderModels).not.toHaveBeenCalled();
+    fireEvent.click(confirm);
+
+    // 兑换礼品卡与充值等同进入 paid tier：余额与 XD 模型目录都要当场重拉。
+    await waitFor(() =>
+      expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledWith('xd'),
+    );
+    expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledTimes(1);
+    expect(getBalance).toHaveBeenCalledTimes(2);
   });
 
   it('switches to the expired hint once the server stops issuing the payment action', async () => {
@@ -1034,11 +1837,16 @@ describe('BillingPage remote catalog rendering', () => {
     await waitFor(() => expect(screen.queryByText('Configured top-up')).toBeNull());
 
     fireEvent.click(screen.getByText('billing.settings.subscriptionCard.action'));
+    await screen.findByText('Configured subscription');
+    // D1/D2/U6: the monthly purchase flow must keep the grant expiry explanation
+    // visible in both comparison and confirmation; older coverage only checked payment (unit).
+    expect(screen.getByText(/^billing\.comparison\.rolloverMonthlySummary:/)).toBeTruthy();
     fireEvent.click(
       (await screen.findByText('Configured subscription'))
         .closest('section')!
         .querySelector('button')!,
     );
+    expect(screen.getByText(/^billing\.comparison\.rolloverMonthly:/)).toBeTruthy();
     expect(screen.getByText('stripe')).toBeTruthy();
     expect(screen.queryByText('alipay')).toBeNull();
     fireEvent.click(screen.getByText('stripe').closest('button')!);
@@ -1577,7 +2385,7 @@ describe('BillingPage remote catalog rendering', () => {
         ).toBeTruthy();
         expect(
           within(currentColumn).getByText(
-            `billing.comparison.rollover:{"amount":"$${(Number(expectedAmount) * 5).toFixed(2)}","period":"billing.comparison.nextPeriod.MONTH"}`,
+            `billing.comparison.rolloverMonthlySummary:{"amount":"$${(Number(expectedAmount) * 5).toFixed(2)}","period":"billing.comparison.nextPeriod.MONTH"}`,
           ),
         ).toBeTruthy();
       };
@@ -2111,6 +2919,7 @@ describe('BillingPage plan change', () => {
       }),
     ),
     listOrders: vi.fn(async () => ({ orders: [], nextCursor: null })),
+    listPaymentHistory: vi.fn(async () => ({ records: [], nextCursor: null })),
     cancelCurrentSubscription: vi.fn(),
     resumeCurrentSubscription: vi.fn(),
     quotePlanChange: vi.fn(),
@@ -2247,7 +3056,7 @@ describe('BillingPage plan change', () => {
     const billing = install(billingMocks());
     billing.cancelCurrentSubscription.mockResolvedValue({
       ...activeSubscription(),
-      currentPeriodEndAt: '2026-09-01T00:00:00.000Z',
+      currentPeriodEndAt: localNoon(2026, 9, 1),
       cancelAtPeriodEnd: true,
     });
     uiMocks.confirm.mockResolvedValueOnce(true);
@@ -3184,9 +3993,9 @@ describe('BillingPage plan change', () => {
 });
 
 /**
- * 订单记录组。回归的是「页面只讲现在还有多少，不讲钱是怎么来的」——用户查不到上次充了多少、
- * 那笔没付成的还在不在。三条判据在这里各有用例:空态整组不渲染(不加空壳)、状态文案与支付
- * 弹窗同一判据(phaseForOrder)、服务端还有下一页时只出提示条不出分页器。
+ * 生产入口 BillingPage：全部已付订阅/充值沿用原行结构并可翻页，读取失败可重试。
+ * 用户 2026-11-05 要求不改布局；无订单仍不显示整组，不新增商品名/账期行。
+ * 新增回归的最小输入是已结束订阅账单、第二页失败及退款/零元账单；tier: unit/jsdom。
  */
 describe('BillingPage order history', () => {
   const order = (over: Partial<BillingPaymentOrder> = {}): BillingPaymentOrder => ({
@@ -3208,6 +4017,15 @@ describe('BillingPage order history', () => {
     nextCursor: string | null = null,
   ): ReturnType<typeof vi.fn> => {
     const listOrders = vi.fn(async () => ({ orders, nextCursor }));
+    const listPaymentHistory = vi.fn(async () => ({
+      records: orders.filter((order) => order.status === 'SUCCEEDED').map((order) => ({
+        recordId: `CREDIT_TOPUP:${order.orderId}`, sourceType: 'CREDIT_TOPUP' as const, sourceId: order.orderId,
+        subscriptionId: null, productName: null, billingReason: null, amountPaidMinor: Number(order.amount) * 100,
+        amount: order.amount, currency: order.currency, provider: null, providerTransactionId: null, paidAt: order.createdAt,
+        createdAt: order.createdAt, periodStartAt: null, periodEndAt: null,
+        refundSummary: { status: 'UNREFUNDED' as const, refundedMinor: 0, refundedAmount: '0' },
+      })), nextCursor,
+    }));
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
       value: {
@@ -3228,6 +4046,8 @@ describe('BillingPage order history', () => {
           getCatalog: vi.fn(async () => ({ products: [] })),
           getCurrentSubscription: vi.fn(async () => ({ subscription: null })),
           listOrders,
+          listPaymentHistory,
+          listPurchasedGiftCards: vi.fn(async () => ({ cards: [], nextCursor: null, emailSupported: false })),
           openPaymentRedirect: vi.fn(async () => ({ success: true })),
         },
         maker: {
@@ -3236,8 +4056,234 @@ describe('BillingPage order history', () => {
         openExternal: vi.fn(async () => ({ success: true })),
       },
     });
-    return listOrders;
+    return listPaymentHistory;
   };
+
+  const openBillingRequest = async (kind: 'invoice' | 'refund') => {
+    fireEvent.click(await screen.findByRole('button', { name: `billing.orders.${kind}.action` }));
+  };
+
+  // 用户要求帮助入口位于内容末尾且能打开反馈邮件；原用例只覆盖纯文本。
+  // 最小输入：无订单/一笔成功订单；unit/jsdom 验证真实页面，不启动邮件应用。
+  it.each([false, true])('opens feedback email from the page footer (has orders: %s)', async (hasOrders) => {
+    await i18n.changeLanguage('zh-CN');
+    install(hasOrders ? [order()] : []);
+
+    await act(async () => { render(<BillingPage />); });
+
+    const link = screen.getByRole('link', { name: 'feedback@cindy.app' });
+    expect(link.getAttribute('href')).toBe('mailto:feedback@cindy.app');
+    expect(link.parentElement?.textContent).toBe('遇到问题？可通过 feedback@cindy.app 寻求帮助。');
+    if (hasOrders) {
+      const lastOrder = screen.getAllByRole('listitem').at(-1)!;
+      expect(lastOrder.compareDocumentPosition(link) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+    fireEvent.click(link);
+    await waitFor(() => expect(window.electronAPI.openExternal).toHaveBeenCalledWith('mailto:feedback@cindy.app'));
+  });
+
+  it.each(['unsuccessful', 'rejected'])('keeps the feedback address available when the email app cannot open (%s)', async (failure) => {
+    install([]);
+    if (failure === 'rejected') {
+      vi.mocked(window.electronAPI.openExternal).mockRejectedValueOnce(new Error('mail app unavailable'));
+    } else {
+      vi.mocked(window.electronAPI.openExternal).mockResolvedValueOnce({ success: false });
+    }
+    await act(async () => { render(<BillingPage />); });
+
+    fireEvent.click(screen.getByRole('link', { name: 'feedback@cindy.app' }));
+
+    await waitFor(() => expect(uiMocks.toastError).toHaveBeenCalledWith(
+      'billing.orders.invoice.sendFailed:{"email":"feedback@cindy.app"}',
+    ));
+  });
+
+  // 用户确认的退款入口必须生成反馈邮箱草稿；原开票测试未覆盖该收件人和友好问题提示。
+  // 最小输入：一笔成功充值，直接点击该行退款按钮；tier: unit/jsdom，无真实发信。
+  it('opens a refund draft for the feedback inbox with the friendly issue prompt', async () => {
+    await i18n.changeLanguage('zh-CN');
+    const history = install([order()]);
+    const fixture = (await history()).records[0]!;
+    history.mockResolvedValue({ records: [{ ...fixture, provider: 'alipay', providerTransactionId: 'alipay_refund_fixture' }], nextCursor: null });
+
+    render(<BillingPage />);
+    await openBillingRequest('refund');
+    const dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByText('alipay_refund_fixture')).toBeTruthy();
+    expect(within(dialog).getByRole('button', { name: 'feedback@cindy.app' })).toBeTruthy();
+    expect(within(dialog).queryByText('遇到的问题：请在邮件中简单描述您遇到的情况。')).toBeNull();
+    expect(within(dialog).queryByText('billing.orders.invoice.fields.invoiceTitle')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'billing.orders.refund.sendAction' }));
+
+    await waitFor(() => expect(window.electronAPI.openExternal).toHaveBeenCalledTimes(1));
+    const mailto = new URL(vi.mocked(window.electronAPI.openExternal).mock.calls[0][0] as string);
+    expect(mailto.pathname).toBe('feedback@cindy.app');
+    expect(mailto.searchParams.get('subject')).toBe(`Cindy 退款申请 - ${fixture.sourceId}`);
+    const body = mailto.searchParams.get('body');
+    expect(body).toContain(`订单号：${fixture.sourceId}`);
+    expect(body).toContain('渠道交易号：alipay_refund_fixture');
+    expect(body).toContain('支付金额：¥33.00');
+    expect(body).toContain('遇到的问题：\n（请简单描述您遇到的情况）');
+    expect(body).not.toContain('退款原因');
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+  });
+
+  it.each(Object.entries(billingLocales).map(([locale, resources], index) => ({
+    locale, resources,
+    provider: index % 3 === 0 ? 'alipay' : 'stripe',
+    providerTransactionId: index % 3 === 0 ? '2026110522001400000000123456'
+      : index % 3 === 1 ? 'pi_refund_fixture' : 'ch_refund_fixture',
+    sourceType: index % 2 === 0 ? 'CREDIT_TOPUP' : 'SUBSCRIPTION_INVOICE',
+  })))(
+    '$locale: includes the paid $sourceType and $provider transaction in both refund drafts',
+    async ({ locale, resources, provider, providerTransactionId, sourceType }) => {
+      await i18n.changeLanguage(locale);
+      const history = install([order({ currency: 'usd' })]);
+      const fixture = (await history()).records[0]!;
+      history.mockResolvedValue({ records: [{ ...fixture, sourceType, provider, providerTransactionId }], nextCursor: null });
+      const openExternal = vi.mocked(window.electronAPI.openExternal);
+      openExternal.mockResolvedValueOnce({ success: false }).mockResolvedValueOnce({ success: true });
+      uiMocks.confirm.mockResolvedValueOnce(true);
+
+      render(<BillingPage />);
+      await openBillingRequest('refund');
+      const dialog = await screen.findByRole('alertdialog');
+      expect(within(dialog).getByText(providerTransactionId)).toBeTruthy();
+      fireEvent.click(within(dialog).getByRole('button', { name: 'feedback@cindy.app' }));
+      await waitFor(() => expect(uiMocks.clipboardWriteText).toHaveBeenCalledWith('feedback@cindy.app'));
+      fireEvent.click(screen.getByRole('button', { name: 'billing.orders.refund.sendAction' }));
+
+      await waitFor(() => expect(openExternal).toHaveBeenCalledTimes(2));
+      const mailto = new URL(openExternal.mock.calls[0][0] as string);
+      const gmail = new URL(openExternal.mock.calls[1][0] as string);
+      expect(mailto.pathname).toBe('feedback@cindy.app');
+      expect(gmail.origin + gmail.pathname).toBe('https://mail.google.com/mail/');
+      expect(gmail.searchParams.get('to')).toBe('feedback@cindy.app');
+      const body = mailto.searchParams.get('body')!;
+      const { fields } = resources.billing.orders.invoice;
+      expect(body.split('\n').find((line) => line.startsWith(fields.orderId))).toContain(fixture.sourceId);
+      expect(body.split('\n').find((line) => line.startsWith(fields.providerTransactionId))).toContain(providerTransactionId);
+      expect(body.split('\n').find((line) => line.startsWith(fields.application))).toContain('Cindy');
+      expect(body.split('\n').find((line) => line.startsWith(fields.paymentMethod))).toContain(provider);
+      expect(body.split('\n').find((line) => line.startsWith(resources.billing.orders.refund.fields.amount)))
+        .toContain(new Intl.NumberFormat(locale, { style: 'currency', currency: 'USD', currencyDisplay: 'narrowSymbol' }).format(33));
+      expect(body).not.toMatch(/\{\{|billing\.orders\.|退款原因|Refund reason/);
+      expect(body.split('\n').some((line) => line.startsWith(fields.invoiceTitle))).toBe(false);
+      expect(mailto.searchParams.get('subject')).toContain(fixture.sourceId);
+      expect(gmail.searchParams.get('su')).toBe(mailto.searchParams.get('subject'));
+      expect(gmail.searchParams.get('body')).toBe(body);
+      expect(uiMocks.confirm).toHaveBeenCalledWith(expect.objectContaining({
+        description: 'billing.orders.refund.gmailFallbackDescription',
+      }));
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    },
+  );
+
+  it('shows a paid invoice from an ended subscription even with no current subscription', async () => {
+    const history = install([order()]);
+    const fixture = (await history()).records[0]!;
+    history.mockResolvedValue({ records: [{
+      ...fixture, recordId: 'SUBSCRIPTION_INVOICE:old-invoice', sourceType: 'SUBSCRIPTION_INVOICE',
+      sourceId: 'old-invoice', subscriptionId: 'ended-subscription', productName: 'Historical Plus',
+      billingReason: 'subscription_cycle', periodStartAt: '2026-07-01T00:00:00.000Z',
+      periodEndAt: '2026-08-01T00:00:00.000Z', paidAt: '2026-06-29T08:00:00.000Z',
+    }], nextCursor: null });
+    render(<BillingPage />);
+    expect(await screen.findByRole('button', { name: 'billing.orders.copy.action:{"id":"old-i****voice"}' })).toBeTruthy();
+    expect(history).toHaveBeenCalledWith({ limit: 10 });
+    expect(screen.getAllByRole('listitem')).toHaveLength(1);
+    expect(screen.queryByText(/Historical Plus/)).toBeNull();
+    expect(screen.queryByText(/^billing.orders.history.period/)).toBeNull();
+  });
+
+  it('loads older successful records and can return to the preceding page', async () => {
+    const history = install([order()], 'page_two');
+    const first = (await history()).records[0]!;
+    history.mockImplementation(async (payload: { cursor?: string }) => ({
+      records: [{ ...first, amount: payload.cursor ? '11' : '33', amountPaidMinor: payload.cursor ? 1100 : 3300 }],
+      nextCursor: payload.cursor ? null : 'page_two',
+    }));
+    render(<BillingPage />);
+    await screen.findByText('CN¥33.00');
+    fireEvent.click(screen.getByRole('button', { name: 'billing.orders.history.next' }));
+    await screen.findByText('CN¥11.00');
+    expect(history).toHaveBeenLastCalledWith({ limit: 10, cursor: 'page_two' });
+    fireEvent.click(screen.getByRole('button', { name: 'billing.orders.history.previous' }));
+    await screen.findByText('CN¥33.00');
+    expect(history).toHaveBeenLastCalledWith({ limit: 10 });
+  });
+
+  it('retains the visible page when the next page fails and retries that request', async () => {
+    const history = install([order()], 'page_two');
+    const first = (await history()).records[0]!;
+    history.mockResolvedValueOnce({ records: [first], nextCursor: 'page_two' })
+      .mockRejectedValueOnce(new Error('UNAVAILABLE'))
+      .mockResolvedValue({ records: [{ ...first, amount: '44', amountPaidMinor: 4400 }], nextCursor: null });
+    render(<BillingPage />);
+    await screen.findByText('CN¥33.00');
+    fireEvent.click(screen.getByRole('button', { name: 'billing.orders.history.next' }));
+    await screen.findByText('billing.orders.history.loadFailed');
+    expect(screen.getByText('CN¥33.00')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'billing.orders.history.retry' }));
+    await screen.findByText('CN¥44.00');
+    expect(history).toHaveBeenLastCalledWith({ limit: 10, cursor: 'page_two' });
+  });
+
+  it('keeps refreshed history when an earlier pagination request finishes later', async () => {
+    const history = install([order()], 'page_two');
+    const first = (await history()).records[0]!;
+    let finishEarlier!: (value: unknown) => void;
+    history.mockResolvedValueOnce({ records: [first], nextCursor: 'page_two' })
+      .mockImplementationOnce(() => new Promise((resolve) => { finishEarlier = resolve; }))
+      .mockResolvedValue({ records: [{ ...first, amount: '44', amountPaidMinor: 4400 }], nextCursor: null });
+    render(<BillingPage />);
+    await screen.findByText('CN¥33.00');
+    fireEvent.click(screen.getByRole('button', { name: 'billing.orders.history.next' }));
+    await waitFor(() => expect(finishEarlier).toBeTypeOf('function'));
+    fireEvent.click(screen.getByRole('button', { name: 'billing.actions.refreshCatalog' }));
+    await screen.findByText('CN¥44.00');
+    await act(async () => {
+      finishEarlier({ records: [{ ...first, amount: '55', amountPaidMinor: 5500 }], nextCursor: null });
+    });
+    expect(screen.queryByText('CN¥55.00')).toBeNull();
+    expect(screen.getByText('CN¥44.00')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'billing.orders.history.previous' })).toBeNull();
+    expect(history).toHaveBeenLastCalledWith({ limit: 10 });
+  });
+
+  it('ignores a previous account’s late history response after switching accounts', async () => {
+    const history = install([order()]);
+    const first = (await history()).records[0]!;
+    let finishOld!: (value: unknown) => void;
+    history.mockImplementationOnce(() => new Promise((resolve) => { finishOld = resolve; }))
+      .mockResolvedValue({ records: [{ ...first, amount: '44', amountPaidMinor: 4400 }], nextCursor: null });
+    const { rerender } = render(<BillingPage />);
+    await waitFor(() => expect(finishOld).toBeTypeOf('function'));
+    authState.dataOwnerId = 'another-account';
+    rerender(<BillingPage />);
+    await screen.findByText('CN¥44.00');
+    await act(async () => {
+      finishOld({ records: [{ ...first, amount: '55', amountPaidMinor: 5500 }], nextCursor: null });
+    });
+    expect(screen.queryByText('CN¥55.00')).toBeNull();
+    expect(screen.getByText('CN¥44.00')).toBeTruthy();
+  });
+
+  it('keeps unknown historical money and payment time explicit without offering an incorrect invoice amount', async () => {
+    const history = install([order()]);
+    const first = (await history()).records[0]!;
+    history.mockResolvedValue({ records: [{
+      ...first, amount: null, amountPaidMinor: null, paidAt: null,
+      refundSummary: { status: null, refundedMinor: 100, refundedAmount: '1.00' },
+    }], nextCursor: null });
+    render(<BillingPage />);
+    await screen.findByText('billing.orders.history.unknownPaidAt');
+    expect(screen.getByText('billing.orders.history.unknownAmount')).toBeTruthy();
+    expect(screen.getByText('billing.orders.history.unknownAmount').getAttribute('title')).toBe('billing.orders.history.refundedAmount:{"amount":"CN¥1.00"}');
+    expect(screen.queryByText('billing.orders.history.partiallyRefunded')).toBeNull();
+    expect(screen.queryByText('billing.orders.history.refunded')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'billing.orders.invoice.action' })).toBeNull();
+  });
 
   it('lists the most recent orders with amount, masked id and status', async () => {
     const fullOrderId = 'c2309a98-d776-4ad9-99b3-418951f13c7f';
@@ -3292,11 +4338,7 @@ describe('BillingPage order history', () => {
     const supportEmailButton = screen.getByRole('button', { name: 'xd-billing@xd.com' });
     expect(supportEmailButton.getAttribute('href')).toBeNull();
     expect(screen.getByText(fullOrderId)).toBeTruthy();
-    expect(
-      within(await screen.findByRole('alertdialog')).getByText(
-        'billing.orders.invoice.notAvailable',
-      ),
-    ).toBeTruthy();
+    expect(within(await screen.findByRole('alertdialog')).getAllByText('billing.orders.invoice.notAvailable')).toHaveLength(2);
     expect(screen.getByText('billing.orders.invoice.fields.invoiceTitle')).toBeTruthy();
     expect(screen.getByText('billing.orders.invoice.fields.contact')).toBeTruthy();
     expect(screen.getByText('billing.orders.invoice.fields.phone')).toBeTruthy();
@@ -3320,6 +4362,39 @@ describe('BillingPage order history', () => {
     expect(mailBody).toContain('\n\n');
     expect(mailBody).toContain('Invoice title: ');
   });
+
+  it.each(Object.entries(invoiceLocales).flatMap(([locale, resources]) => [
+    { provider: 'alipay', sourceType: 'CREDIT_TOPUP', providerTransactionId: '2026110522001400000000123456' },
+    { provider: 'alipay', sourceType: 'SUBSCRIPTION_INVOICE', providerTransactionId: '2026110522001400000000654321' },
+    { provider: 'stripe', sourceType: 'CREDIT_TOPUP', providerTransactionId: 'pi_topup_fixture' },
+    { provider: 'stripe', sourceType: 'SUBSCRIPTION_INVOICE', providerTransactionId: 'pi_subscription_fixture' },
+    { provider: 'stripe', sourceType: 'SUBSCRIPTION_INVOICE', providerTransactionId: 'ch_subscription_fixture' },
+  ].map((record) => ({ ...record, locale, fields: resources.billing.orders.invoice.fields }))))(
+    '$locale: includes $provider transaction $providerTransactionId for $sourceType in the dialog and both email drafts',
+    async ({ locale, fields, provider, sourceType, providerTransactionId }) => {
+      await i18n.changeLanguage(locale);
+      const history = install([order()]);
+      const fixture = (await history()).records[0]!;
+      history.mockResolvedValue({ records: [{ ...fixture, recordId: `${sourceType}:${fixture.sourceId}`, provider, sourceType, providerTransactionId }], nextCursor: null });
+      const openExternal = vi.mocked(window.electronAPI.openExternal);
+      openExternal.mockResolvedValueOnce({ success: false }).mockResolvedValueOnce({ success: true });
+      uiMocks.confirm.mockResolvedValueOnce(true);
+
+      render(<BillingPage />);
+      fireEvent.click(await screen.findByRole('button', { name: 'billing.orders.invoice.action' }));
+      const dialog = await screen.findByRole('alertdialog');
+      expect(within(dialog).getByText('billing.orders.invoice.fields.providerTransactionId')).toBeTruthy();
+      expect(within(dialog).getByText(providerTransactionId)).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'billing.orders.invoice.sendAction' }));
+      await waitFor(() => expect(openExternal).toHaveBeenCalledTimes(2));
+      const mailto = new URL(openExternal.mock.calls[0][0] as string);
+      const gmail = new URL(openExternal.mock.calls[1][0] as string);
+      const body = mailto.searchParams.get('body');
+      expect(body?.split('\n').find((line) => line.startsWith(fields.orderId))).toContain(fixture.sourceId);
+      expect(body?.split('\n').find((line) => line.startsWith(fields.providerTransactionId))).toContain(providerTransactionId);
+      expect(gmail.searchParams.get('body')).toBe(body);
+    },
+  );
 
   it.each(Object.entries(invoiceLocales))(
     'shows the policy in the dialog and places title instructions beside the email field for %s',
@@ -3432,28 +4507,28 @@ describe('BillingPage order history', () => {
     expect(screen.queryByRole('alertdialog')).toBeNull();
   });
 
-  it('does not open Gmail without explicit consent after the mail app fails', async () => {
+  it.each(['invoice', 'refund'] as const)('%s: does not open Gmail without explicit consent after the mail app fails', async (kind) => {
     install([order({ orderId: 'o-gmail-no-consent' })]);
     const openExternal = vi.mocked(window.electronAPI.openExternal);
     openExternal.mockResolvedValueOnce({ success: false });
     uiMocks.confirm.mockResolvedValueOnce(false);
 
     render(<BillingPage />);
-    fireEvent.click(await screen.findByRole('button', { name: 'billing.orders.invoice.action' }));
+    await openBillingRequest(kind);
     fireEvent.click(
-      await screen.findByRole('button', { name: 'billing.orders.invoice.sendAction' }),
+      await screen.findByRole('button', { name: `billing.orders.${kind}.sendAction` }),
     );
 
     await waitFor(() => expect(uiMocks.confirm).toHaveBeenCalledTimes(1));
     expect(openExternal).toHaveBeenCalledTimes(1);
     expect(uiMocks.toastError).toHaveBeenCalledWith(
-      'billing.orders.invoice.sendFailed:{"email":"xd-billing@xd.com"}',
+      `billing.orders.invoice.sendFailed:{"email":"${kind === 'invoice' ? 'xd-billing@xd.com' : 'feedback@cindy.app'}"}`,
     );
     expect(screen.getByRole('alertdialog')).toBeTruthy();
     expect(screen.getByText('o-gmail-no-consent')).toBeTruthy();
   });
 
-  it('ignores repeated send activations while the mail request is pending', async () => {
+  it.each(['invoice', 'refund'] as const)('%s: ignores repeated send activations while the mail request is pending', async (kind) => {
     install([order({ orderId: 'o-gmail-double-click' })]);
     const openExternal = vi.mocked(window.electronAPI.openExternal);
     let resolveOpenExternal: ((result: { success: boolean }) => void) | undefined;
@@ -3465,9 +4540,9 @@ describe('BillingPage order history', () => {
     );
 
     render(<BillingPage />);
-    fireEvent.click(await screen.findByRole('button', { name: 'billing.orders.invoice.action' }));
+    await openBillingRequest(kind);
     const sendButton = await screen.findByRole('button', {
-      name: 'billing.orders.invoice.sendAction',
+      name: `billing.orders.${kind}.sendAction`,
     });
     fireEvent.click(sendButton);
     fireEvent.click(sendButton);
@@ -3518,7 +4593,7 @@ describe('BillingPage order history', () => {
     await waitFor(() => expect(uiMocks.clipboardWriteText).toHaveBeenCalledWith(fullOrderId));
   });
 
-  it('masks short ids, distinguishes copy targets and keeps the control shrinkable', async () => {
+  it('masks short ids, distinguishes copy targets and keeps the truncated hint masked', async () => {
     const shortOrderId = 'ord_8f21c4de9a';
     const otherOrderId = '1234567890abcdefghi';
     install([order({ orderId: shortOrderId }), order({ orderId: otherOrderId })]);
@@ -3537,7 +4612,10 @@ describe('BillingPage order history', () => {
       }),
     ).toBeTruthy();
     expect(shortOrderButton.className).toContain('max-w-full');
-    expect(shortOrderButton.querySelector('span')?.className).toContain('break-all');
+    // 长订单号为同行的两个操作按钮让出空间；行高由真实 UI 场景核对，悬停提示继续脱敏。
+    expect(shortOrderButton.querySelector('span')?.getAttribute('title')).toBe(
+      'billing.orders.orderId:{"id":"ord_8f****c4de9a"}',
+    );
   });
 
   it('explains how to recover when copying an order id fails', async () => {
@@ -3564,24 +4642,25 @@ describe('BillingPage order history', () => {
     expect(listOrders).toHaveBeenCalledWith({ limit: 10 });
   });
 
-  it('renders no group at all when there are no orders — the page keeps its current shape', async () => {
-    install([]);
+  it('keeps the existing page layout without an empty order group', async () => {
+    const history = install([]);
 
-    render(<BillingPage />);
-    // 等页面其余部分落地,再断言这一组确实没渲染(不是还没到)。
-    await screen.findByText('billing.usage.promotionalDetails.title');
+    await act(async () => { render(<BillingPage />); });
+    expect(history).toHaveBeenCalledWith({ limit: 10 });
     expect(screen.queryByText('billing.orders.title')).toBeNull();
+    expect(screen.queryByText('billing.orders.history.loadFailed')).toBeNull();
   });
 
-  it('renders no group when the order list cannot be fetched', async () => {
+  it('shows a retryable error when history cannot be fetched', async () => {
     install([]);
-    window.electronAPI.billing.listOrders = vi.fn(async () => {
+    window.electronAPI.billing.listPaymentHistory = vi.fn(async () => {
       throw new Error('UNAVAILABLE');
     });
 
     render(<BillingPage />);
-    await screen.findByText('billing.usage.promotionalDetails.title');
-    expect(screen.queryByText('billing.orders.title')).toBeNull();
+    await screen.findByText('billing.orders.history.loadFailed');
+    expect(screen.getByText('billing.orders.title')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'billing.orders.history.retry' })).toBeTruthy();
   });
 
   it('reloads the order history on every checkout phase landing, not only COMPLETED', async () => {
@@ -3592,7 +4671,7 @@ describe('BillingPage order history', () => {
     await screen.findByText('billing.orders.title');
     const baseline = listOrders.mock.calls.length;
 
-    // 订单一创建(AWAITING_PAYMENT)就已经是一条「待支付」记录,列表必须立刻能看到。
+    // 支付阶段变化仍读取服务端已确认历史，未付款的本次尝试不进入记录。
     checkout.state = {
       ...initialState,
       open: true,
@@ -3602,7 +4681,7 @@ describe('BillingPage order history', () => {
     rerender(<BillingPage />);
     await waitFor(() => expect(listOrders.mock.calls.length).toBe(baseline + 1));
 
-    // 轮询落到失败终态时,那一行的状态 chip 也变了 —— 不能等用户手动刷新。
+    // 失败落位后仍只读取成功历史，错误提示由支付弹窗承接。
     checkout.state = { ...checkout.state, phase: 'FAILED' };
     rerender(<BillingPage />);
     await waitFor(() => expect(listOrders.mock.calls.length).toBe(baseline + 2));
@@ -3615,29 +4694,28 @@ describe('BillingPage order history', () => {
     checkout.state = initialState;
   });
 
-  it('maps every payment status onto the checkout wording, not a second vocabulary', async () => {
-    install([
-      order({ orderId: 'o-succeeded', status: 'SUCCEEDED' }),
-      order({ orderId: 'o-created', status: 'CREATED' }),
-      order({ orderId: 'o-pending', status: 'PENDING' }),
-      order({ orderId: 'o-canceled', status: 'CANCELED' }),
-      order({ orderId: 'o-expired', status: 'EXPIRED' }),
-      order({ orderId: 'o-failed', status: 'FAILED' }),
-    ]);
-
+  it('retains original payments after refunds and labels settled zero invoices without a charge', async () => {
+    const history = install([order()]);
+    const first = (await history()).records[0]!;
+    history.mockResolvedValue({ records: [
+      first,
+      { ...first, recordId: 'CREDIT_TOPUP:refunded', sourceId: 'refunded', refundSummary: {
+        status: 'REFUNDED', refundedMinor: 3300, refundedAmount: '33',
+      } },
+      { ...first, recordId: 'SUBSCRIPTION_INVOICE:zero', sourceType: 'SUBSCRIPTION_INVOICE', sourceId: 'zero',
+        subscriptionId: 'ended-subscription', amount: '0', amountPaidMinor: 0 },
+    ], nextCursor: null });
     render(<BillingPage />);
     await screen.findByText('billing.orders.title');
 
     expect(screen.getByText('billing.orders.states.completed')).toBeTruthy();
-    // CREATED 与 PENDING 都是「还没付成」,与 checkout 的 phaseForOrder 同一判据。
-    expect(screen.getAllByText('billing.orders.states.awaitingPayment')).toHaveLength(2);
-    expect(screen.getByText('billing.orders.states.canceled')).toBeTruthy();
-    expect(screen.getByText('billing.orders.states.expired')).toBeTruthy();
-    expect(screen.getByText('billing.orders.states.failed')).toBeTruthy();
+    expect(screen.getByText('billing.orders.history.refunded')).toBeTruthy();
+    expect(screen.getByText('billing.orders.history.noPayment')).toBeTruthy();
+    expect(screen.getByTitle('billing.orders.history.refundedAmount:{"amount":"CN¥33.00"}').textContent).toBe('CN¥33.00');
+    expect(screen.getAllByText('CN¥33.00')).toHaveLength(2);
   });
 
-  it('drops the payment-method column when no order still carries a payment action', async () => {
-    // 终态订单通常不再带 paymentAction;整批都没有时留一列破折号比不留更糟。
+  it('omits the channel column when historical provider facts are unavailable', async () => {
     install([order({ paymentAction: null })]);
 
     render(<BillingPage />);
@@ -3646,39 +4724,34 @@ describe('BillingPage order history', () => {
     expect(screen.queryByText('—')).toBeNull();
   });
 
-  it('keeps the payment-method column when at least one order carries a payment action', async () => {
-    install([
-      order({
-        orderId: 'o-open',
-        status: 'CREATED',
-        paymentAction: {
-          type: 'QR_CODE',
-          value: 'https://example.invalid/qr',
-          expiresAt: '2026-08-01T14:07:00.000Z',
-        },
-      }),
-      order({ orderId: 'o-done' }),
-    ]);
+  it('shows the persisted provider rather than inferring a channel from payment actions', async () => {
+    const history = install([order(), order({ orderId: 'another' })]);
+    const records = (await history()).records;
+    history.mockResolvedValue({ records: [{ ...records[0], provider: 'alipay' }, records[1]], nextCursor: null });
 
     render(<BillingPage />);
     await screen.findByText('billing.orders.title');
-    expect(screen.getByText('billing.paymentActions.QR_CODE')).toBeTruthy();
+    expect(screen.getByText('alipay')).toBeTruthy();
+    expect(screen.queryByText('billing.paymentActions.QR_CODE')).toBeNull();
     // 缺支付方式的那一单占位,不把列整掉。
     expect(screen.getByText('—')).toBeTruthy();
   });
 
-  it('explains truncation instead of offering a pager when the server has older records', async () => {
+  it('offers paging when earlier records exist and disables previous on the first page', async () => {
     install([order()], 'cursor-2');
 
     render(<BillingPage />);
-    expect(await screen.findByText('billing.orders.incomplete:{"count":1}')).toBeTruthy();
+    const next = await screen.findByRole('button', { name: 'billing.orders.history.next' });
+    expect((next as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole('button', { name: 'billing.orders.history.previous' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it('does not explain truncation when the server has nothing older', async () => {
+  it('omits paging when the whole history fits on one page', async () => {
     install([order()]);
 
     render(<BillingPage />);
     await screen.findByText('billing.orders.title');
-    expect(screen.queryByText('billing.orders.incomplete:{"count":1}')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'billing.orders.history.next' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'billing.orders.history.previous' })).toBeNull();
   });
 });

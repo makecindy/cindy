@@ -112,6 +112,22 @@ export function mergeDeviceViewsWithFreshPresence(
   return merged;
 }
 
+/**
+ * A stale REST roster is a bounded display fallback, not proof that a device
+ * absent from it was removed. Keep every current row, using presence-updated
+ * fields where available, until a fresh roster or an explicit permission event.
+ */
+export function mergeDeviceViewsForStaleDirectory(
+  serverDevices: readonly DeviceView[],
+  currentDevices: readonly DeviceView[],
+): DeviceView[] {
+  return mergeDeviceViewsWithFreshPresence(
+    serverDevices,
+    currentDevices,
+    new Set(currentDevices.map(device => device.deviceId)),
+  );
+}
+
 function deviceViewFromPresence(
   snapshot: PresenceSnapshot,
   selfDeviceId: string | null | undefined,
@@ -123,6 +139,7 @@ function deviceViewFromPresence(
     selfName: snapshot.selfName ?? previous?.selfName ?? null,
     deviceInfo: snapshot.deviceInfo ?? previous?.deviceInfo ?? null,
     platform: snapshot.platform || previous?.platform || null,
+    app: snapshot.app ?? previous?.app,
     appVersion: snapshot.appVersion || previous?.appVersion || null,
     lastSeenAt: new Date(snapshot.lastSeenAt).toISOString(),
     online: snapshot.online,
@@ -138,6 +155,7 @@ function shallowDeviceViewEqual(a: DeviceView, b: DeviceView): boolean {
     && (a.selfName ?? null) === (b.selfName ?? null)
     && deviceInfoEqual(a.deviceInfo, b.deviceInfo)
     && a.platform === b.platform
+    && a.app === b.app
     && a.appVersion === b.appVersion
     && a.lastSeenAt === b.lastSeenAt
     && a.online === b.online

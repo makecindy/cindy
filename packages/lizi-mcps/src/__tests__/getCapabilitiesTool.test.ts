@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { RICH_ANSWER_GUIDE } from '@cindy/maker-shared/rich-answer-guide';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
@@ -81,6 +82,26 @@ describe('capabilities data source', () => {
     expect(entry!.detail).toContain('https://cindy.app');
   });
 
+  // #12282 (unit): follow the page advertised to the agent into the real host tool.
+  // Checking only the tool name allowed the unrelated Built-in Tools page to pass.
+  it('guides a task without desktop tools to Computer automation on its own device', async () => {
+    const call = vi.fn();
+    const server = createXdtHelperMcpServer({
+      appSettings: { call, navigationDeviceId: () => 'computer-a' },
+    }, sessionCtx);
+    try {
+      const payload = parsePayload(await server.hostTools.call('get_capabilities', { key: 'computer-use' }));
+      const { detail, oneLiner } = payload.capability as { detail: string; oneLiner: string };
+      expect(oneLiner).toContain('当前任务');
+      expect(detail).toContain('check_permissions');
+      expect(detail).toContain('osascript');
+      const page = detail.match(/get_settings_link\(page="([^"]+)"\)/)?.[1];
+      const link = parsePayload(await server.hostTools.call('get_settings_link', { page }));
+      expect(link.markdown).toContain('cindy://settings-link/computer-use?device=computer-a');
+      expect(call).not.toHaveBeenCalled();
+    } finally { await server.close(); }
+  });
+
   it('issue-tracker 不套固定问卷,并说明自动附加环境含 Harness / 模型 ID', () => {
     const entry = findCapability('issue-tracker');
     expect(entry).toBeDefined();
@@ -115,6 +136,17 @@ describe('capabilities data source', () => {
 });
 
 describe('get_capabilities tool', () => {
+  // Pi uses this route for advanced syntax beyond its resident basic protocol.
+  // Verify the real public envelope returns the complete protocol.
+  it('serves the complete rich answer protocol through call_tool for Pi', async () => {
+    const h = await connect(createXdtHelperMcpServer({ logger: makeLogger() }, { ...sessionCtx, agentKind: 'pi' }));
+    try {
+      const payload = parsePayload(await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'get_capabilities', args: { key: 'rich-answers' },
+      } }));
+      expect(payload).toMatchObject({ ok: true, capability: { key: 'rich-answers', detail: RICH_ANSWER_GUIDE } });
+    } finally { await h.cleanup(); }
+  });
   // Unit protocol regression: the public MCP schema must forward the page/filter
   // rather than silently stripping them and returning the same oversized page.
   it('forwards runtime tool search and pagination through the actual MCP entry', async () => {

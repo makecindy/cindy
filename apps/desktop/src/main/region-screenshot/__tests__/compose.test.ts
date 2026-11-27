@@ -62,6 +62,11 @@ describe('screenshot compose delivery', () => {
     expect(take()).toMatchObject({ action: 'ask', url: 'media:a' });
     expect(take()).toBeNull();
   });
+  // Unit: the selected target must survive async media ingestion and TAKE unchanged.
+  it('delivers the translation target with the screenshot', async () => {
+    await handOffScreenshotToTask(image, 'translate', mocks.scope, 'fr');
+    expect(take()).toMatchObject({ action: 'translate', translationLanguage: 'fr', url: 'media:a' });
+  });
   it('keeps the latest action when an older media write completes last', async () => {
     let resolve!: (value: { url: string; filename: string }) => void;
     mocks.ingest.mockReturnValueOnce(

@@ -1,0 +1,116 @@
+import { manageAppPreferences } from './preferences.js';
+import { readAppearanceSettingsState } from '../appearance-settings-store.js';
+import { updateAppearanceFromSettings, resetAppearanceFromSettings } from '../appearance-settings-ipc.js';
+import { readGitSafetySettingsState, writeGitSafetyMode, resetGitSafetySettings } from '../maker-host/git-safety-settings-store.js';
+import { readGoalSettingsState, writeGoalSettings, resetGoalSettings } from '../maker-host/goal-settings-store.js';
+import { readAgentResourceSettingsState, writeAgentResourceSetting, resetAgentResourceSettings } from '../maker-host/agent-resource-settings-store.js';
+import { notifyAppSettingsChanged } from './changes.js';
+import { runtimeSettingsSections } from './runtime.js';
+import { pluginSettingsSections } from './plugins.js';
+import { appPreferenceSchema } from '../../shared/appPreferenceControl.js';
+import { z } from 'zod';
+import { APP_ICONS, APPEARANCE_LIMITS, WALLPAPER_IDS } from '../../shared/appearanceSettings.js';
+import { createAppSettingsService, type AppSettingsSection } from './service.js';
+import { taskManagementStore } from '../task-management/store.js';
+import { taskArchiveEngine, updateTaskArchiveSettings } from '../task-management/service.js';
+import { DEFAULT_TASK_ARCHIVE_SETTINGS } from '../../shared/taskManagement.js';
+import { getInstanceConfig } from '../instance-runtime/config.js';
+
+const numberIn = (range: { min: number; max: number }) => z.number().min(range.min).max(range.max);
+
+/**
+ * Preferences the cloud settings page also manages on a managed cloud instance. Elsewhere the
+ * preferences section keeps its ordinary fields, so Agents can neither read nor change these.
+ */
+const CLOUD_INSTANCE_PREFERENCES = {
+  sidebarPinned: true, sidebarTasks: true, feishuNotifications: true, swallowActivationClick: true, networkDebug: true,
+} as const;
+const desktopPreferenceSchema = appPreferenceSchema.omit(CLOUD_INSTANCE_PREFERENCES);
+const isManagedCloudInstance = () => getInstanceConfig() !== null;
+function withoutCloudOnlyPreferences<T extends { value?: Record<string, unknown> }>(state: T): T {
+  if (isManagedCloudInstance() || !state.value) return state;
+  return { ...state, value: Object.fromEntries(Object.entries(state.value).filter(([key]) => !Object.hasOwn(CLOUD_INSTANCE_PREFERENCES, key))) };
+}
+
+/** Shared host operations; discovery only serializes their registered metadata. */
+export const appSettingsSections: AppSettingsSection[] = [{
+  id: 'task-management', title: '存储空间与自动归档',
+  description: '当前账号在本机的闲置任务自动归档；默认关闭，保留 1–365 天。读取含可归档与保留的任务数量；复用普通归档。', effective: 'immediate',
+  schema: z.strictObject({ enabled: z.boolean().optional(), days: z.number().int().min(1).max(365).optional() }),
+  read: async () => ({ value: taskManagementStore.read(), defaults: DEFAULT_TASK_ARCHIVE_SETTINGS, preview: await taskArchiveEngine.preview() }),
+  update: async patch => { await updateTaskArchiveSettings(patch); },
+  reset: async () => { await updateTaskArchiveSettings(null); },
+}, {
+  id: 'preferences', title: '语言、主题与使用偏好',
+  get description() {
+    return isManagedCloudInstance()
+      ? '界面语言、明暗主题、主题家族、通知与飞书提醒、发送快捷键、运行中发送方式、链接打开方式、流式动效、消息导航、文件显示、首页、侧栏显示样式、切回窗口防误触、网络诊断日志，以及新建 worktree 是否用模型按任务取名（worktreeModelNaming）。'
+      : '界面语言、明暗主题、主题家族、通知、发送快捷键、运行中发送方式、链接打开方式、流式动效、消息导航、文件显示、首页偏好，以及新建 worktree 是否用模型按任务取名（worktreeModelNaming）。';
+  },
+  effective: 'immediate',
+  get schema() { return isManagedCloudInstance() ? appPreferenceSchema : desktopPreferenceSchema; },
+  read: async () => withoutCloudOnlyPreferences(await manageAppPreferences('get')),
+  // The app window keeps these preferences, so it compares the read values itself before applying.
+  update: async (patch, guard) => withoutCloudOnlyPreferences(await (guard?.expected
+    ? manageAppPreferences('update', patch, undefined, { expected: guard.expected })
+    : manageAppPreferences('update', patch))),
+}, {
+  id: 'appearance', title: '外观、字体与壁纸',
+  description: '界面、代码、终端字体和字号，窗口缩放，壁纸及动态效果，macOS Dock 图标。', effective: 'immediate',
+  schema: z.strictObject({
+    uiFamily: z.string().max(256).optional(), codeFamily: z.string().max(256).optional(),
+    terminalFamily: z.string().max(256).optional(), uiSize: numberIn(APPEARANCE_LIMITS.uiSize).optional(),
+    codeSize: numberIn(APPEARANCE_LIMITS.codeSize).optional(), terminalSize: numberIn(APPEARANCE_LIMITS.terminalSize).optional(),
+    windowZoom: numberIn(APPEARANCE_LIMITS.windowZoom).optional(), wallpaperId: z.enum(WALLPAPER_IDS).optional(),
+    wallpaperOverlay: numberIn(APPEARANCE_LIMITS.wallpaperOverlay).optional(),
+    wallpaperVisibility: numberIn(APPEARANCE_LIMITS.wallpaperVisibility).nullable().optional(),
+    wallpaperBlur: numberIn(APPEARANCE_LIMITS.wallpaperBlur).nullable().optional(),
+    wallpaperMotion: z.enum(['static', 'dynamic']).optional(),
+    appIcon: z.enum(APP_ICONS).optional(),
+  }),
+  read: async () => {
+    const state = readAppearanceSettingsState();
+    const value = { ...state.value };
+    const defaults = { ...state.defaults };
+    delete value.customWallpaperUrl;
+    delete defaults.customWallpaperUrl;
+    return { ...state, value, defaults };
+  },
+  update: async (patch, guard) => { await updateAppearanceFromSettings(patch, guard ? { assertCurrent: () => guard.assertUnchanged() } : undefined); },
+  reset: async () => { await resetAppearanceFromSettings(); },
+}, {
+  id: 'git-safety', title: 'Git 安全快照', description: '关闭、仅现有 Git 项目或所有项目自动快照。', effective: 'next-turn',
+  schema: z.strictObject({ mode: z.enum(['off', 'existing-git', 'all-projects']).optional() }),
+  read: async () => readGitSafetySettingsState(),
+  update: async (patch, guard) => { guard?.assertUnchanged(); return writeGitSafetyMode(patch.mode as 'off' | 'existing-git' | 'all-projects'); },
+  reset: async guard => { guard?.assertUnchanged(); return resetGitSafetySettings(); },
+}, {
+  id: 'goal-defaults', title: '目标模式默认限制', description: '以后启动目标模式的轮数、token 预算和无进展轮数；null 为不限。', effective: 'new-goals',
+  schema: z.strictObject({ maxTurns: z.number().int().positive().nullable().optional(),
+    budgetTokens: z.number().int().positive().nullable().optional(), noProgressLimit: z.number().int().positive().nullable().optional() }),
+  read: async () => readGoalSettingsState(),
+  update: async patch => writeGoalSettings(patch),
+  reset: async () => resetGoalSettings(),
+}, {
+  id: 'agent-resources', title: '运行资源', description: '命令并发、进程优先级和工具链线程限制；并发 0 为不限。恢复 normal 仅作用于新进程。', effective: 'new-commands-and-processes',
+  schema: z.strictObject({ maxConcurrentCommands: z.number().int().min(0).max(64).optional(),
+    processPriority: z.enum(['normal', 'low', 'lowest']).optional(), capToolchainThreads: z.boolean().optional() }),
+  read: async () => readAgentResourceSettingsState(),
+  update: async (patch, guard) => {
+    guard?.assertUnchanged();
+    for (const [key, value] of Object.entries(patch)) writeAgentResourceSetting(
+      key as keyof import('../maker-host/agent-resource-settings-store.js').AgentResourceSettings,
+      value as number | boolean | 'normal' | 'low' | 'lowest');
+  },
+  reset: async guard => { guard?.assertUnchanged(); return resetAgentResourceSettings(); },
+}];
+
+export const manageAppSettings: ReturnType<typeof createAppSettingsService> = async (input, assertCurrent, write) => {
+  const result = await createAppSettingsService([...appSettingsSections, ...runtimeSettingsSections(), ...pluginSettingsSections()])(input, assertCurrent, write);
+  if ((input.operation === 'update' || input.operation === 'reset') && !('errorCode' in result)) {
+    await assertCurrent();
+    // Plugin KV publishes the same event for every write path, including /kv.
+    if (!input.section?.startsWith('plugins.')) notifyAppSettingsChanged(input.section!);
+  }
+  return result;
+};

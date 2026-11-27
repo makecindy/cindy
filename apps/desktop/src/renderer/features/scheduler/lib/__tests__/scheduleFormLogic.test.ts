@@ -26,6 +26,8 @@ import {
   buildHookCommandForScriptFile,
   applyRunMode,
   buildScheduleInput,
+  scheduleEngineFormFields,
+  webhookSourceFormFields,
   canSubmitSessionBinding,
   captureBinding,
   deriveRunMode,
@@ -34,6 +36,7 @@ import {
   missingRequiredTemplateParamLabel,
   isFollowingSessionSelection,
   needsBoundSessionGenerationRouteResolution,
+  buildPreRunHook,
   resolveScheduleGenerationProviderId,
   resolveScheduleModelEfforts,
   resolveTemplateAgentFields,
@@ -42,7 +45,9 @@ import {
   usesBoundSessionGenerationModel,
   usesBoundSessionModel,
 } from '../scheduleFormLogic';
+import { pluginCheckState, pluginEventChecked, setPluginEventSelected, setPluginSelected } from '../pluginEventSelection';
 import type { ScheduleFormState } from '../scheduleFormLogic';
+import { formToProjectConfig } from '../projectAutomationConfig';
 import {
   cronExprToIntervalMs,
   intervalMsToCronExpr,
@@ -70,6 +75,30 @@ const tapsvcProvider: ProviderView = {
     }],
   },
 };
+
+// An automation with both a script and a plugin (set by an Agent) opens on the
+// plugin; saving an unrelated edit must keep the script, while choosing the plugin instead of a
+// script must still drop it. Existing cases do not cover the plugin source.
+// Issue 8886 / unit: both desktop save paths must retain, edit and clear the cutoff.
+it('serializes deadline edits through normal and project automation forms', () => {
+  const expireAt = new Date(2027, 3, 5, 10, 30, 15).getTime();
+  const form = makeForm({ deadline: '2027-04-05T10:30', sourceExpireAt: expireAt });
+  expect(buildScheduleInput(form).expireAt).toBe(expireAt);
+  expect(formToProjectConfig(form, 'expiry').expireAt).toBe(expireAt);
+  expect(buildScheduleInput({ ...form, deadline: '' }).expireAt).toBeNull();
+  expect(formToProjectConfig({ ...form, deadline: '' }, 'expiry').expireAt).toBeUndefined();
+  expect(buildScheduleInput({ ...form, deadline: '2027-04-06T11:45' }).expireAt)
+    .toBe(new Date(2027, 3, 6, 11, 45).getTime());
+});
+
+describe('buildPreRunHook with a plugin source', () => {
+  const form = { preRunHookEnabled: true, preRunHookCommand: 'sh check.sh', preRunHookTimeoutSec: '' };
+  it('keeps the saved script only when the task opened with both', () => {
+    expect(buildPreRunHook({ ...form, preRunSource: 'plugin', preRunKeepScript: true })?.command).toBe('sh check.sh');
+    expect(buildPreRunHook({ ...form, preRunSource: 'plugin' })).toBeUndefined();
+    expect(buildPreRunHook({ ...form, preRunSource: 'script' })?.command).toBe('sh check.sh');
+  });
+});
 
 describe('resolveScheduleGenerationProviderId', () => {
   it('materializes the effective custom provider when the stored provider id is empty', () => {
@@ -311,6 +340,114 @@ describe('canSubmitSessionBinding', () => {
   });
 });
 
+// Rule: docs/product-rules/schedule-webhook-trigger.md. Turning the switch off must clear the
+// trigger, and a caller that never touched it must not; JSON null is the only clearing form.
+describe('buildScheduleInput webhook trigger', () => {
+  it.each([
+    [{ webhookEnabled: true, webhookEvents: ' check_suite, pull_request.closed ,' }, { events: ['check_suite', 'pull_request.closed'] }],
+    [{ webhookEnabled: true, webhookEvents: '' }, { events: [] }],
+    [{ webhookEnabled: false, webhookEvents: 'issues' }, null],
+  ])('%j', (fields, expected) => {
+    expect(buildScheduleInput(makeForm(fields)).webhookTrigger).toEqual(expected);
+  });
+
+  it('omits the key when the form does not carry the field', () => {
+    expect(Object.prototype.hasOwnProperty.call(buildScheduleInput(makeForm()), 'webhookTrigger')).toBe(false);
+  });
+
+  // A sender this build does not know came from a newer version; submitting it as GitHub
+  // would switch the server's format and reject every delivery.
+  it.each([
+    [{ webhookPreset: 'github-app', webhookRepositories: 'Example/Project\nother/repo, example/project' }, { preset: 'github-app', repositories: ['example/project', 'other/repo'] }],
+    [{ webhookPreset: 'stripe', webhookSigned: false }, { preset: 'stripe', signed: false }],
+    [{ webhookPreset: 'linear', webhookSigned: true }, { preset: 'linear' }],
+    [{ webhookPreset: 'from-a-newer-version' }, undefined],
+    [{ webhookPreset: 'custom', webhookFormat: '{"version":1,"signature":null,"fields":{}}' }, { preset: 'custom', format: { version: 1, signature: null, fields: {} } }],
+    [{ webhookPreset: 'custom', webhookFormat: '{"version":1}' }, undefined],
+    // The timestamp must be signed, otherwise an old request with a fresh timestamp passes.
+    [
+      {
+        webhookPreset: 'custom',
+        webhookFormat: JSON.stringify({
+          version: 1,
+          signature: {
+            type: 'hmac', algorithm: 'sha256', header: 'x-sig', encoding: 'hex', payload: '{body}', secret: 'text',
+            timestamp: { source: { header: 'x-ts' }, unit: 's', toleranceSec: 300 },
+          },
+          fields: {},
+        }),
+      },
+      undefined,
+    ],
+  ])('sender %j', (fields, source) => {
+    const trigger = buildScheduleInput(makeForm({ webhookEnabled: true, ...fields })).webhookTrigger;
+    expect(trigger).toEqual({ events: [], ...(source ? { source } : {}) });
+  });
+
+  it('round-trips a saved sender through the form fields', () => {
+    const sources = [undefined, { preset: 'stripe', signed: false }, { preset: 'custom', format: { version: 1, signature: null, fields: {} } }] as const;
+    for (const source of sources) {
+      const form = makeForm({ webhookEnabled: true, ...webhookSourceFormFields(source) });
+      expect(buildScheduleInput(form).webhookTrigger).toEqual({ events: [], source: source ?? { preset: 'github' } });
+    }
+  });
+
+  // docs/product-rules/plugin-event-triggers.md: plugin sources pick events per plugin. A stale
+  // top-level filter left from another sender would make the engine reject the save, and the form
+  // must keep field conditions an Agent set even though it does not edit them.
+  it('saves plugin sources with their filters and never a top-level event filter', () => {
+    const source = { preset: 'plugin' as const, sources: [
+      { plugin: 'public/chat', events: ['message.received'], filters: [{ field: 'chatId', operator: 'equals' as const, value: 'c1' }] },
+    ] };
+    const form = makeForm({ webhookEnabled: true, webhookEvents: 'issues', ...webhookSourceFormFields(source) });
+    expect(buildScheduleInput(form).webhookTrigger).toEqual({ events: [], source });
+  });
+
+  // 2026-11-24: GitLab through the GitLab plugin is stored as that plugin's source with project / issue
+  // conditions; reopening it shows GitLab again (not the generic plugin list) and saving keeps it unchanged.
+  it.each([
+    ['a whole project', { preset: 'plugin' as const, sources: [{ plugin: 'cindy-gitlab', events: ['merge_request.merged'], filters: [
+      { field: 'host', operator: 'equals' as const, value: 'git.example.com' },
+      { field: 'project', operator: 'equals' as const, value: 'group/app' },
+    ] }] }],
+    ['one issue', { preset: 'plugin' as const, sources: [{ plugin: 'cindy-gitlab', events: ['issue.comment'], filters: [
+      { field: 'project', operator: 'equals' as const, value: 'group/app' },
+      { field: 'iid', operator: 'equals' as const, value: '3' },
+      { field: 'kind', operator: 'equals' as const, value: 'issue' },
+    ] }] }],
+    ['one MR', { preset: 'plugin' as const, sources: [{ plugin: 'cindy-gitlab', events: ['merge_request.comment', 'merge_request.approved'], filters: [
+      { field: 'host', operator: 'equals' as const, value: 'git.example.com' },
+      { field: 'project', operator: 'equals' as const, value: 'group/app' },
+      { field: 'iid', operator: 'equals' as const, value: '12' },
+      { field: 'kind', operator: 'equals' as const, value: 'mr' },
+    ] }] }],
+  ])('reopens and saves GitLab through the plugin for %s', (_name, source) => {
+    const fields = webhookSourceFormFields(source);
+    expect(fields.webhookPreset).toBe('gitlab-plugin');
+    expect(buildScheduleInput(makeForm({ webhookEnabled: true, ...fields })).webhookTrigger).toEqual({ events: [], source });
+  });
+});
+
+// Same rule: ticking a plugin means all of its events (including ones it declares later);
+// unticking the last event removes the plugin; Agent-set filters survive every toggle.
+describe('plugin event selection', () => {
+  const chat = { plugin: 'public/chat', events: [{ type: 'message.received' }, { type: 'mention' }] };
+  const filters = [{ field: 'chatId', operator: 'equals' as const, value: 'c1' }];
+  it('moves between all, some and none while keeping filters', () => {
+    let sources = setPluginSelected([], chat.plugin, true);
+    expect(sources).toEqual([{ plugin: 'public/chat' }]);
+    expect(pluginCheckState(sources, chat.plugin)).toBe('all');
+    sources = [{ plugin: 'public/chat', filters }];
+    sources = setPluginEventSelected(sources, chat, 'mention', false);
+    expect(sources).toEqual([{ plugin: 'public/chat', events: ['message.received'], filters }]);
+    expect(pluginCheckState(sources, chat.plugin)).toBe('some');
+    expect(pluginEventChecked(sources, chat.plugin, 'mention')).toBe(false);
+    expect(setPluginEventSelected(sources, chat, 'mention', true)).toEqual([{ plugin: 'public/chat', filters }]);
+    expect(setPluginEventSelected(sources, chat, 'message.received', false)).toEqual([]);
+    expect(setPluginSelected(sources, chat.plugin, false)).toEqual([]);
+  });
+});
+
 function makeForm(overrides: Partial<ScheduleFormState> = {}): ScheduleFormState {
   return {
     name: 'follow-up',
@@ -322,6 +459,9 @@ function makeForm(overrides: Partial<ScheduleFormState> = {}): ScheduleFormState
     manual: false,
     agentKind: 'claude-code',
     model: '',
+    preRunSource: 'script',
+    preRunPluginId: '',
+    preRunPluginOnFailure: 'block',
     providerId: '',
     effort: '',
     fastMode: false,
@@ -1046,5 +1186,215 @@ describe('missingRequiredTemplateParamLabel', () => {
         { key: 'suite', label: 'Suite', type: 'string', required: true, default: 'full' },
       ],
     } as ScheduleTemplate, { suite: '' })).toBeNull();
+  });
+});
+
+// Plugin engines (docs/plans/acp-plugin-bridge.md, 2026-11-19), unit: the form keeps the engine next
+// to the built-in choice (like the new-task draft). Minimal failing inputs: a saved plugin-engine
+// automation reopening as Claude Code with model 'deepseek-v4', saving with Fast / another computer
+// still attached, or dropping the worktree choice (2026-11-25: plugin engines use worktrees like built-ins).
+describe('plugin engine selection', () => {
+  const ENGINE = 'acp-plugin:_ns__local__dsh-acp:dsh';
+  it('saves the engine as a local new-task-each-run route and reopens it as the engine', () => {
+    const input = buildScheduleInput(makeForm({
+      agentKind: 'codex', model: 'gpt-5.5', providerId: 'openai', fastMode: true,
+      workspaceKind: 'project', workingDir: '/repo', useWorktree: true, agentDeviceId: 'studio',
+      pluginEngine: { providerId: ENGINE, modelId: 'deepseek-v4', effort: 'max' },
+    }));
+    expect(input).toMatchObject({ agentKind: 'acp', modelAgentKind: 'acp', providerId: ENGINE, model: 'deepseek-v4',
+      effort: 'max', fastMode: false, useWorktree: true, agentDeviceId: undefined, modelAgentDeviceId: undefined });
+    const fields = scheduleEngineFormFields({ ...input, id: 's', status: 'active', createdAt: 1, updatedAt: 1,
+      notify: { desktop: true, feishu: false } } as Schedule);
+    expect(fields).toMatchObject({ pluginEngine: { providerId: ENGINE, modelId: 'deepseek-v4', effort: 'max' },
+      model: '', providerId: '', modelAgentKind: undefined });
+    expect(fields.agentKind).not.toBe('acp');
+  });
+
+  it('saves and reopens a bound plugin-engine override while keeping follow-task acp bindings as follow', () => {
+    const input = buildScheduleInput(makeForm({
+      targetSessionId: 'task-1',
+      boundAgent: { sessionId: 'task-1', agentKind: 'codex' },
+      agentKind: 'codex',
+      model: '',
+      providerId: '',
+      fastMode: true,
+      pluginEngine: { providerId: ENGINE, modelId: 'deepseek-v4', effort: 'high' },
+    }));
+    expect(input).toMatchObject({
+      targetSessionId: 'task-1',
+      agentKind: 'acp',
+      modelAgentKind: 'acp',
+      providerId: ENGINE,
+      model: 'deepseek-v4',
+      effort: 'high',
+      fastMode: false,
+      useWorktree: false,
+      agentDeviceId: undefined,
+      modelAgentDeviceId: '',
+    });
+    const reopened = scheduleEngineFormFields({
+      ...input,
+      id: 's-bound',
+      status: 'active',
+      createdAt: 1,
+      updatedAt: 1,
+      notify: { desktop: true, feishu: false },
+    } as Schedule);
+    expect(reopened).toMatchObject({
+      boundAgent: { sessionId: 'task-1', agentKind: 'claude-code' },
+      pluginEngine: { providerId: ENGINE, modelId: 'deepseek-v4', effort: 'high' },
+      model: '',
+      providerId: '',
+      modelAgentKind: undefined,
+    });
+    expect(reopened.pluginEngine?.deviceId).toBeUndefined();
+    const followAcp = scheduleEngineFormFields({
+      ...input,
+      id: 's-follow-acp',
+      agentKind: 'acp',
+      modelAgentKind: undefined,
+      model: undefined,
+      providerId: undefined,
+      effort: undefined,
+      status: 'active',
+      createdAt: 1,
+      updatedAt: 1,
+      notify: { desktop: true, feishu: false },
+    } as Schedule);
+    expect(followAcp.pluginEngine).toBeNull();
+    expect(followAcp.boundAgent).toEqual({ sessionId: 'task-1', agentKind: 'claude-code' });
+  });
+
+  // 2026-11-26: remote plugin engines keep their deviceId across fresh and bound schedule round-trips.
+  // Minimal failing input: a remote plugin engine saved with deviceId='studio' dropping its location.
+  it('saves and reopens remote plugin-engine selections for fresh and bound schedules', () => {
+    const freshInput = buildScheduleInput(makeForm({
+      agentKind: 'codex',
+      model: 'gpt-5.5',
+      providerId: 'openai',
+      fastMode: true,
+      workspaceKind: 'project',
+      workingDir: '/repo',
+      useWorktree: true,
+      pluginEngine: { providerId: ENGINE, modelId: 'deepseek-v4', effort: 'high', deviceId: 'studio' },
+    }));
+    expect(freshInput).toMatchObject({
+      agentKind: 'acp',
+      modelAgentKind: 'acp',
+      providerId: ENGINE,
+      model: 'deepseek-v4',
+      effort: 'high',
+      fastMode: false,
+      useWorktree: true,
+      agentDeviceId: 'studio',
+      modelAgentDeviceId: 'studio',
+    });
+    const reopenedFresh = scheduleEngineFormFields({
+      ...freshInput,
+      id: 's-remote-fresh',
+      status: 'active',
+      createdAt: 1,
+      updatedAt: 1,
+      notify: { desktop: true, feishu: false },
+    } as Schedule);
+    expect(reopenedFresh.pluginEngine).toEqual({
+      providerId: ENGINE,
+      modelId: 'deepseek-v4',
+      effort: 'high',
+      deviceId: 'studio',
+    });
+
+    const boundInput = buildScheduleInput(makeForm({
+      targetSessionId: 'task-1',
+      boundAgent: { sessionId: 'task-1', agentKind: 'codex' },
+      agentKind: 'codex',
+      model: '',
+      providerId: '',
+      pluginEngine: { providerId: ENGINE, modelId: 'deepseek-v4', deviceId: 'studio' },
+    }));
+    expect(boundInput).toMatchObject({
+      targetSessionId: 'task-1',
+      agentKind: 'acp',
+      modelAgentKind: 'acp',
+      providerId: ENGINE,
+      model: 'deepseek-v4',
+      fastMode: false,
+      agentDeviceId: undefined,
+      modelAgentDeviceId: 'studio',
+    });
+    const reopenedBound = scheduleEngineFormFields({
+      ...boundInput,
+      id: 's-remote-bound',
+      status: 'active',
+      createdAt: 1,
+      updatedAt: 1,
+      notify: { desktop: true, feishu: false },
+    } as Schedule);
+    expect(reopenedBound.pluginEngine).toEqual({
+      providerId: ENGINE,
+      modelId: 'deepseek-v4',
+      deviceId: 'studio',
+    });
+  });
+
+  // 2026-11-27: persistent plugin-engine schedules preserve agentKind='acp', providerId, model,
+  // effort, and deviceId both before and after binding targetSessionId.
+  it('saves and reopens persistent plugin-engine schedules before and after binding', () => {
+    const unboundPersistent = buildScheduleInput(makeForm({
+      persistentSession: true,
+      workspaceKind: 'project',
+      workingDir: '/repo',
+      pluginEngine: { providerId: ENGINE, modelId: 'deepseek-v4', effort: 'high', deviceId: 'studio' },
+    }));
+    expect(unboundPersistent).toMatchObject({
+      persistentSession: true,
+      agentKind: 'acp',
+      modelAgentKind: 'acp',
+      providerId: ENGINE,
+      model: 'deepseek-v4',
+      effort: 'high',
+      fastMode: false,
+      agentDeviceId: 'studio',
+      modelAgentDeviceId: 'studio',
+    });
+    const boundPersistent = buildScheduleInput(makeForm({
+      persistentSession: true,
+      targetSessionId: 'persist-acp-1',
+      boundAgent: { sessionId: 'persist-acp-1', agentKind: 'claude-code' },
+      pluginEngine: { providerId: ENGINE, modelId: 'deepseek-v4', effort: 'high', deviceId: 'studio' },
+    }));
+    expect(boundPersistent).toMatchObject({
+      persistentSession: true,
+      targetSessionId: 'persist-acp-1',
+      agentKind: 'acp',
+      modelAgentKind: 'acp',
+      providerId: ENGINE,
+      model: 'deepseek-v4',
+      effort: 'high',
+      fastMode: false,
+      agentDeviceId: 'studio',
+      modelAgentDeviceId: 'studio',
+    });
+    const reopened = scheduleEngineFormFields({
+      ...boundPersistent,
+      id: 's-persist-acp',
+      status: 'active',
+      createdAt: 1,
+      updatedAt: 1,
+      notify: { desktop: true, feishu: false },
+    } as Schedule);
+    expect(reopened.pluginEngine).toEqual({
+      providerId: ENGINE,
+      modelId: 'deepseek-v4',
+      effort: 'high',
+      deviceId: 'studio',
+    });
+  });
+
+  it('keeps built-in automations unchanged', () => {
+    const input = buildScheduleInput(makeForm({ agentKind: 'codex', model: 'gpt-5.5', pluginEngine: null }));
+    expect(input.agentKind).toBe('codex');
+    expect(scheduleEngineFormFields({ ...input, id: 's', status: 'active', createdAt: 1, updatedAt: 1,
+      notify: { desktop: true, feishu: false } } as Schedule).pluginEngine).toBeNull();
   });
 });

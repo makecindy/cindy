@@ -1,3 +1,9 @@
+import { parseOrcaWorkerRoles, type OrcaWorkerRoles } from '@cindy/device-link';
+import { isDataOwnerPushStamp, type DataOwnerPushStamp } from '../../shared/dataOwnerPush.js';
+import {
+  normalizeWorkerCreationSelection,
+  type WorkerCreationSelection,
+} from '../../shared/workerCreationSelection.js';
 import {
   isOrcaWorkerPermissionMode,
   type OrcaWorkerPermissionMode,
@@ -5,6 +11,14 @@ import {
 
 interface WorkerCreationPrefsSyncDeps<TEvent> {
   assertTrustedSender: (event: TEvent) => void;
+  getActiveOwner?: () => DataOwnerPushStamp;
+  isBoundaryPending?: () => boolean;
+  setSelection?: (
+    selection: WorkerCreationSelection | null,
+    ownerStamp: DataOwnerPushStamp,
+    /** 角色清单镜像；快照里没带或格式不对时为 null。 */
+    roles: OrcaWorkerRoles | null,
+  ) => void;
   setWorkerPermissionMode: (mode: OrcaWorkerPermissionMode) => void;
 }
 
@@ -23,5 +37,22 @@ export function createWorkerCreationPrefsSyncHandler<TEvent>(
     const mode = (payload as { workerPermissionMode?: unknown }).workerPermissionMode;
     if (!isOrcaWorkerPermissionMode(mode)) return;
     deps.setWorkerPermissionMode(mode);
+    const p = payload as { ownerStamp?: unknown; selection?: unknown; roles?: unknown };
+    const owner = deps.getActiveOwner?.();
+    if (
+      !owner ||
+      deps.isBoundaryPending?.() ||
+      !isDataOwnerPushStamp(p.ownerStamp) ||
+      p.ownerStamp.dataOwnerId !== owner.dataOwnerId ||
+      p.ownerStamp.ownerGeneration !== owner.ownerGeneration
+    )
+      return;
+    let roles: OrcaWorkerRoles | null = null;
+    try {
+      roles = p.roles === undefined || p.roles === null ? null : parseOrcaWorkerRoles(p.roles);
+    } catch {
+      // 读不懂的角色清单当作没镜像：远程读取会得到「未就绪」，不会拿到半截数据。
+    }
+    deps.setSelection?.(normalizeWorkerCreationSelection(p.selection), owner, roles);
   };
 }

@@ -21,15 +21,30 @@ import {
 } from '../sections/PinnedSection';
 
 const view = vi.hoisted(() => ({ mode: 'text' }));
+const renderedRowFlags = vi.hoisted(() => [] as Array<{ component: string; id: string; inboxMode?: boolean; hideInboxActions?: boolean }>);
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('@/hooks/useReducedMotion', () => ({ useReducedMotion: () => false }));
 vi.mock('@/hooks/useSidebarCardMode', () => ({
   useSidebarCardMode: () => ({ mode: view.mode, setMode: vi.fn() }),
 }));
-vi.mock('../SessionItem', () => ({ SessionItem: () => null }));
-vi.mock('../SessionCard', () => ({ SessionCard: () => null }));
-vi.mock('../CardMasonry', () => ({ CardMasonry: () => null }));
-vi.mock('@/components/sidebar/SortableList', () => ({ SortableList: () => null }));
+vi.mock('../SessionItem', () => ({
+  SessionItem: ({ session, inboxMode, hideInboxActions }: { session: Session; inboxMode?: boolean; hideInboxActions?: boolean }) => {
+    renderedRowFlags.push({ component: 'SessionItem', id: session.id, inboxMode, hideInboxActions });
+    return <span>{session.id}</span>;
+  },
+}));
+vi.mock('../SessionCard', () => ({
+  SessionCard: ({ session, variant, inboxMode, hideInboxActions }: { session: Session; variant?: string; inboxMode?: boolean; hideInboxActions?: boolean }) => {
+    renderedRowFlags.push({ component: `SessionCard:${variant}`, id: session.id, inboxMode, hideInboxActions });
+    return <span>{session.id}</span>;
+  },
+}));
+vi.mock('../CardMasonry', () => ({
+  CardMasonry: ({ items, renderItem }: { items: PinnedSidebarEntry[]; renderItem: (item: PinnedSidebarEntry, index: number) => ReactNode }) => (
+    <>{items.map((item, index) => <div key={item.id}>{renderItem(item, index)}</div>)}</>
+  ),
+}));
+vi.mock('@/components/sidebar/SortableList', () => ({ SortableList: ({ items, renderItem }: { items: PinnedSidebarEntry[]; renderItem: (item: PinnedSidebarEntry, index: number) => ReactNode }) => <>{items.map((item, index) => <div key={item.id}>{renderItem(item, index)}</div>)}</> }));
 vi.mock('@/components/ui/tooltip', () => ({
   Tip: ({ children }: { children: ReactNode }) => children,
 }));
@@ -38,12 +53,16 @@ vi.mock('@/components/ui/dropdown-menu', () => ({
   DropdownMenuTrigger: ({ children }: { children: ReactNode }) => children,
   DropdownMenuContent: () => null,
   DropdownMenuItem: () => null,
+  DropdownMenuLabel: () => null,
+  DropdownMenuSeparator: () => null,
 }));
 
 const session = (id: string, deviceLinkDeviceId: string | null = null) =>
   ({ id, deviceLinkDeviceId }) as Session;
 const entry = (s: Session): PinnedSidebarEntry => ({ kind: 'session', id: s.id, session: s });
 const props = (entries: PinnedSidebarEntry[], running: string[] = []): PinnedSectionProps => ({
+  sortBy: 'manual',
+  onSortByChange: vi.fn(),
   entries,
   allKnownProjects: [],
   renderProject: () => null,
@@ -56,82 +75,18 @@ const props = (entries: PinnedSidebarEntry[], running: string[] = []): PinnedSec
   onTogglePin: vi.fn(),
   onReorder: vi.fn(),
 });
-const pin = (container: HTMLElement) => container.querySelector('svg.lucide-pin')?.parentElement;
-const isRunning = (container: HTMLElement) =>
-  pin(container)?.classList.contains('session-status-breathing');
 afterEach(() => {
   cleanup();
+  renderedRowFlags.length = 0;
   clearRemoteSessionActivity();
   resetSessionStartingStoreForTests();
   remoteProjectsStore.__resetPinnedOriginsForTest();
   view.mode = 'text';
+  // The section's collapse is remembered; each case starts expanded.
+  localStorage.clear();
 });
 
-describe('pinned section running indicator', () => {
-  // Regression: an expanded PinnedSection with one running task must stay still.
-  // Existing unit coverage expected breathing in both states; exercise the real header toggle.
-  it.each(['text', 'list', 'card'])('only pulses while collapsed in %s mode', (mode) => {
-    view.mode = mode;
-    const entries = [entry(session('pinned'))];
-    const { container, rerender } = render(<PinnedSection {...props(entries)} />);
-    expect(isRunning(container)).toBe(false);
-    rerender(<PinnedSection {...props(entries, ['other'])} />);
-    expect(isRunning(container)).toBe(false);
-    rerender(<PinnedSection {...props(entries, ['pinned'])} />);
-    expect(isRunning(container)).toBe(false);
-    fireEvent.click(screen.getByRole('button', { name: 'ccAgent.sidebar.pinned' }));
-    expect(isRunning(container)).toBe(true);
-    expect(container.querySelector('svg.session-status-breathing')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'ccAgent.sidebar.pinned' }));
-    expect(isRunning(container)).toBe(false);
-    fireEvent.click(screen.getByRole('button', { name: 'ccAgent.sidebar.pinned' }));
-    expect(isRunning(container)).toBe(true);
-    rerender(<PinnedSection {...props(entries)} />);
-    expect(isRunning(container)).toBe(false);
-    expect(pin(container)?.getAttribute('aria-hidden')).toBe('true');
-  });
-
-  it('includes project children beyond the visible collapse limit', () => {
-    const children = Array.from({ length: 25 }, (_, i) => session(`child-${i}`));
-    const projectEntry = {
-      kind: 'project',
-      id: 'project',
-      project: { sessions: children },
-      displaySessions: children,
-    } as PinnedSidebarEntry;
-    const { container, rerender } = render(
-      <PinnedSection {...props([projectEntry], ['child-24'])} />,
-    );
-    expect(isRunning(container)).toBe(false);
-    fireEvent.click(screen.getByRole('button', { name: 'ccAgent.sidebar.pinned' }));
-    expect(isRunning(container)).toBe(true);
-    rerender(<PinnedSection {...props([], ['child-24'])} />);
-    expect(container.innerHTML).toBe('');
-  });
-
-  it('tracks remote updates after collapse without confusing same-ID devices or local tasks', () => {
-    const entries = [entry(session('same', 'device-a'))];
-    const { container } = render(<PinnedSection {...props(entries, ['same'])} />);
-    expect(isRunning(container)).toBe(false);
-    fireEvent.click(screen.getByRole('button', { name: 'ccAgent.sidebar.pinned' }));
-    act(() => applyRemoteSessionActivity('device-b', { sessionId: 'same', phase: 'running' }));
-    expect(isRunning(container)).toBe(false);
-    act(() => applyRemoteSessionActivity('device-a', { sessionId: 'same', phase: 'running' }));
-    expect(isRunning(container)).toBe(true);
-    fireEvent.click(screen.getByRole('button', { name: 'ccAgent.sidebar.pinned' }));
-    expect(isRunning(container)).toBe(false);
-    fireEvent.click(screen.getByRole('button', { name: 'ccAgent.sidebar.pinned' }));
-    expect(isRunning(container)).toBe(true);
-    act(() =>
-      applyRemoteSessionActivity('device-a', { sessionId: 'same', phase: 'needs-interaction' }),
-    );
-    expect(isRunning(container)).toBe(false);
-    act(() => applyRemoteSessionActivity('device-a', { sessionId: 'same', phase: 'running' }));
-    expect(isRunning(container)).toBe(true);
-    act(() => clearRemoteSessionActivity());
-    expect(isRunning(container)).toBe(false);
-  });
-
+describe('pinned section remote starting settlement', () => {
   it.each(['session', 'project'] as const)(
     'settles remote optimistic starting for a collapsed pinned %s',
     (kind) => {
@@ -153,26 +108,22 @@ describe('pinned section running indicator', () => {
         return <PinnedSection {...props([...entries])} runningSessionIds={starting} />;
       }
       markSessionStarting(task.id);
-      const { container } = render(<StartingPinned />);
-      expect(isRunning(container)).toBe(false);
+      render(<StartingPinned />);
       fireEvent.click(screen.getByRole('button', { name: 'ccAgent.sidebar.pinned' }));
-      expect(isRunning(container)).toBe(true);
       act(() => applyRemoteSessionActivity('device-b', { sessionId: task.id, phase: 'running' }));
       expect(getStartingSessionIds().has(task.id)).toBe(true);
       act(() => applyRemoteSessionActivity('device-a', { sessionId: task.id, phase: 'running' }));
       expect(getStartingSessionIds().has(task.id)).toBe(false);
-      expect(isRunning(container)).toBe(true);
       act(() =>
         applyRemoteSessionActivity('device-a', { sessionId: task.id, phase: 'needs-interaction' }),
       );
-      expect(isRunning(container)).toBe(false);
       // Answering an existing interaction must keep the new send's prelight.
       act(() => markSessionStarting(task.id));
-      expect(isRunning(container)).toBe(true);
+      expect(getStartingSessionIds().has(task.id)).toBe(true);
       act(() =>
         applyRemoteSessionActivity('device-b', { sessionId: 'unrelated', phase: 'running' }),
       );
-      expect(isRunning(container)).toBe(true);
+      expect(getStartingSessionIds().has(task.id)).toBe(true);
       act(() => applyRemoteSessionActivity('device-a', { sessionId: task.id, phase: 'running' }));
       expect(getStartingSessionIds().has(task.id)).toBe(false);
       act(() =>
@@ -182,15 +133,87 @@ describe('pinned section running indicator', () => {
           attention: true,
         }),
       );
-      expect(isRunning(container)).toBe(false);
       // A new send discards the old terminal mirror and keeps its optimistic lamp.
       act(() => markSessionStarting(task.id));
-      expect(isRunning(container)).toBe(true);
+      expect(getStartingSessionIds().has(task.id)).toBe(true);
       act(() =>
         applyRemoteSessionActivity('device-a', { sessionId: task.id, phase: 'needs-interaction' }),
       );
       expect(getStartingSessionIds().has(task.id)).toBe(false);
-      expect(isRunning(container)).toBe(false);
     },
   );
+});
+
+// Collapse previously hid notifications together with ordinary pins. Unit: two pins,
+// unread removal and remote waiting arrival must change visible rows without reopening.
+it('keeps unread pins visible and reacts to remote feedback while collapsed', () => {
+  const local = session('local');
+  const remote = session('remote', 'device-a');
+  const base = props([entry(local), entry(remote)]);
+  const page = render(<PinnedSection {...base} notifications={new Set(['local'])} />);
+  fireEvent.click(screen.getByRole('button', { name: 'ccAgent.sidebar.pinned' }));
+  expect(screen.getByText('local')).toBeTruthy();
+  expect(screen.queryByText('remote')).toBeNull();
+  act(() => applyRemoteSessionActivity('device-a', { sessionId: 'remote', phase: 'needs-interaction' }));
+  expect(screen.getByText('remote')).toBeTruthy();
+  page.rerender(<PinnedSection {...base} />);
+  expect(screen.queryByText('local')).toBeNull();
+  expect(screen.getByText('remote')).toBeTruthy();
+  act(() => clearRemoteSessionActivity());
+  expect(screen.queryByText('remote')).toBeNull();
+  const header = screen.getByRole('button', { name: 'ccAgent.sidebar.pinned' });
+  expect(header.getAttribute('aria-expanded')).toBe('false');
+  fireEvent.click(header);
+  expect(screen.getByText('local')).toBeTruthy();
+});
+
+// Unit regression for review #4555472387: a read persisted interruption must
+// remain reachable without notification/activity mirrors. Existing cases only
+// cover those volatile mirrors. One task, direct or project pin, local or remote.
+it.each([
+  ['session', null], ['session', 'device-a'],
+  ['project', null], ['project', 'device-a'],
+] as const)('keeps persisted interruptions in collapsed %s pins (device: %s)', (kind, deviceId) => {
+  const interrupted = {
+    ...session('interrupted', deviceId), status: 'active',
+    activeTurnStartedAt: 1000, interruptedTurnStartedAt: 1000, lastTurnEndedAt: 900,
+  } as Session;
+  const entries = (task: Session): PinnedSidebarEntry[] => kind === 'session'
+    ? [entry(task)]
+    : [{ kind: 'project', id: 'project', project: { sessions: [task] }, displaySessions: [task] } as PinnedSidebarEntry];
+  const page = render(<PinnedSection {...props(entries(interrupted))} />);
+  fireEvent.click(screen.getByRole('button', { name: 'ccAgent.sidebar.pinned' }));
+  expect(screen.getByText('interrupted')).toBeTruthy();
+  page.rerender(<PinnedSection {...props(entries({ ...interrupted, lastTurnEndedAt: 1000 }))} />);
+  expect(screen.queryByText('interrupted')).toBeNull();
+});
+
+// 测试价值
+// - 生产入口与可观察结果：PinnedSection 在 inboxMode 下对 text / list / card 三种显示模式
+//   均向置顶任务行透传 inboxMode=true 与 hideInboxActions=true；普通模式保持 false。
+// - Bug／规则依据：docs/product-rules/task-inbox.md「收件箱项目图标」（2026-11-26 用户决定）。
+// - 现有覆盖缺口：PinnedSection 既有测试只测远程 running 与折叠保留，未覆盖 inboxMode 透传。
+// - 最小失败输入：1 条置顶任务在 inboxMode=true 下分别以 text / list / card 模式渲染。
+// - tier：unit（与本文件已有 PinnedSection 组件测试共用环境）。
+it.each([
+  ['text', 'SessionItem'],
+  ['list', 'SessionCard:list'],
+  ['card', 'SessionCard:card'],
+] as const)('passes inbox display rules without inbox actions in %s mode', (mode, component) => {
+  view.mode = mode;
+  const pinnedTask = session('pin-1');
+  const page = render(<PinnedSection {...props([entry(pinnedTask)])} inboxMode />);
+  expect(renderedRowFlags.at(-1)).toEqual({
+    component,
+    id: 'pin-1',
+    inboxMode: true,
+    hideInboxActions: true,
+  });
+  page.rerender(<PinnedSection {...props([entry(pinnedTask)])} inboxMode={false} />);
+  expect(renderedRowFlags.at(-1)).toEqual({
+    component,
+    id: 'pin-1',
+    inboxMode: false,
+    hideInboxActions: false,
+  });
 });

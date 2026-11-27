@@ -1,3 +1,5 @@
+import { GithubAppCard } from '@/features/cc-agent/GithubAppCard';
+import { schedulePrTriggers, isGithubPrTriggerUrl } from '@cindy/maker-scheduler/pr-trigger';
 import { Button } from '@/components/ui/button';
 import { shouldShowOpenPathError } from '../../../../shared/openPathResult';
 /**
@@ -23,18 +25,22 @@ import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
-import type { AgentKind, Schedule, ScheduleRun } from '@cindy/maker-scheduler';
+import type { Schedule, ScheduleAgentKind, ScheduleRun } from '@cindy/maker-scheduler';
+import { usePluginEngineIdentity } from '@/hooks/usePluginEngines';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { clearSessionAttentionMany } from '@/lib/sessionAttentionStore';
 
 import { useRuns } from '../hooks/useRuns';
 import { useSessionReferences } from '../hooks/useSessionReferences';
-import { cronToConfig, summarizeConfig } from '../lib/cronCodexPreset';
-import { basenameOf, describeDestination, humanizeAgentKind } from '../lib/formatters';
+import { cronToConfig, formatIntervalDuration, summarizeConfig } from '../lib/cronCodexPreset';
+import { describeDestination, humanizeAgentKind } from '../lib/formatters';
+import { useProjectLabel } from '../hooks/useProjectLabel';
 import { groupRunsForHistory } from '../lib/runHistoryGrouping';
 
 import { RunHistoryCard } from './RunHistoryCard';
+import { WebhookTriggerPanel } from './WebhookTriggerPanel';
+import appI18n from 'i18next';
 
 const PERSISTENT_SESSION_PREVIEW_LIMIT = 3;
 
@@ -50,6 +56,8 @@ interface Props {
    * 此时 detail pane 的 Run Now 按钮也应禁用，防止双发。
    */
   runNowBusy?: boolean;
+  /** The editor owns connection setup while its modal covers this pane. */
+  connectionSetupVisible?: boolean;
 }
 
 export function RunHistoryPane({
@@ -59,8 +67,16 @@ export function RunHistoryPane({
   onEdit,
   onDelete,
   runNowBusy = false,
+  connectionSetupVisible = true,
 }: Props) {
   const { t } = useTranslation();
+  // 插件引擎自动任务按引擎自己的名字显示(插件停用后用通用名称；另一台电脑时从该电脑目录读取)。
+  const pluginEngineIdentity = usePluginEngineIdentity(
+    s.agentKind === 'acp' ? s.providerId : null,
+    (s.modelAgentDeviceId || s.agentDeviceId) || undefined,
+  );
+  const pluginEngineName = s.agentKind === 'acp' ? pluginEngineIdentity.name : undefined;
+  const projectLabel = useProjectLabel();
   // 展示策略（避免切任务闪烁）：
   // - hasLoaded=false（应用启动后第一次都没拉过）→ 整块 run 区域不挂载
   // - hasLoaded=true 但 runsScheduleId !== s.id → 切任务过渡期，runs 还是上一个
@@ -87,14 +103,15 @@ export function RunHistoryPane({
   );
   const sessionReferences = useSessionReferences(runSessionIds);
   const sessionAgentMap = useMemo(() => {
-    const m = new Map<string, AgentKind>();
+    const m = new Map<string, ScheduleAgentKind>();
     for (const sess of allSessions) {
-      m.set(sess.id, sess.agentKind === 'cc' ? 'claude-code' : sess.agentKind === 'pi' ? 'pi' : 'codex');
+      m.set(sess.id, sess.agentKind === 'cc' ? 'claude-code' : sess.agentKind === 'pi' ? 'pi'
+        : (sess.agentKind as string) === 'acp' ? 'acp' : 'codex');
     }
     return m;
   }, [allSessions]);
   const resolveRunAgent = useCallback(
-    (run: ScheduleRun): AgentKind => {
+    (run: ScheduleRun): ScheduleAgentKind => {
       if (!run.sessionId) return s.agentKind;
       const referenceAgent = sessionReferences.get(run.sessionId)?.agentKind;
       return (
@@ -150,6 +167,7 @@ export function RunHistoryPane({
         description: t('scheduler.confirm.deleteRun.description'),
         confirmText: t('scheduler.confirm.deleteRun.confirm'),
         cancelText: t('scheduler.confirm.deleteRun.cancel'),
+        confirmVariant: 'destructive',
       });
       if (!ok) return;
       try {
@@ -208,10 +226,20 @@ export function RunHistoryPane({
   // 用 summarizeConfig 复用创建对话框那套语义化摘要（"Daily at 09:00" / "Hourly" / "Weekly on Mon, Wed at 14:30" ...），
   // 跟 chip 文案 100% 对齐；不再用 cronToHuman 的 "At 09:00" 风格。
   // manual schedule 不参与 cron，cron 字段是占位 → header 显示 "Manual trigger"。
-  const cronText = s.manual
+  const timingText = s.manual
     ? t('scheduler.detail.manualTrigger')
-    : summarizeConfig(cronToConfig(s.cronExpr), t);
-  const agentText = humanizeAgentKind(s.agentKind);
+    : s.intervalMs ? formatIntervalDuration(s.intervalMs, appI18n.language) : summarizeConfig(cronToConfig(s.cronExpr), t);
+  const rules = schedulePrTriggers(s);
+  // GitHub PR: owner/repo#N; GitLab MR: group/project!N.
+  const prText = rules.map(rule => `${rule.url.replace(/^https:\/\/github\.com\//, '').replace('/pull/', '#')
+    .replace(/^https:\/\/[^/]+\//, '').replace('/-/merge_requests/', '!')} · ${t(`scheduler.prTrigger.${rule.change}`)}`).join(', ');
+  const eventTitle = t(s.webhookTrigger?.source?.preset === 'plugin' ? 'scheduler.webhook.pluginTitle' : 'scheduler.webhook.title');
+  const cronText = prText ? (s.manual ? prText : `${timingText} · ${prText}`) : s.webhookTrigger
+    ? s.manual ? eventTitle : `${timingText} · ${eventTitle}`
+    : timingText;
+  const agentText = s.agentKind === 'acp'
+    ? pluginEngineName ?? t('newChat.pluginEngines.genericName')
+    : humanizeAgentKind(s.agentKind);
   const dest = describeDestination(s, t);
   // title 兜底显示完整路径，悬浮即可看到 — basename 视觉简洁，hover/title 看全量
   const titleText = `${cronText} · ${agentText} · ${dest.prefix}${dest.workingDir ?? ''}`;
@@ -230,11 +258,17 @@ export function RunHistoryPane({
   return (
     <section className="flex min-w-0 flex-1 flex-col">
       {/* Pane header */}
-      <header className="flex shrink-0 items-start justify-between gap-3 px-6 pt-[18px]">
+      <header className="flex shrink-0 items-start justify-between gap-3 px-6 pt-4">
         <div className="flex min-w-0 flex-col gap-1.5">
           <h2 className="truncate text-lg font-medium text-[var(--msg-assistant-text)]">
             {s.name}
           </h2>
+          {s.expireAt != null && (
+            <p className="text-xs text-[var(--text-secondary)]">
+              {t('scheduler.deadline.label')} · {new Date(s.expireAt).toLocaleString(appI18n.language)} · {Intl.DateTimeFormat().resolvedOptions().timeZone}
+              {isExpired && s.expireAt <= Date.now() && <> · {t('scheduler.deadline.expired')}</>}
+            </p>
+          )}
           <p className="truncate text-xs text-[var(--cmd-palette-item-meta)]" title={titleText}>
             {cronText} · {agentText} ·{' '}
             {dest.workingDir ? (
@@ -243,12 +277,13 @@ export function RunHistoryPane({
                 onClick={() => void handleOpenWorkingDir()}
                 title={dest.workingDir}
                 className={cn(
+                  // 无框文字按钮：圆角只塑形键盘焦点环（DESIGN.md §5 登记）
                   'rounded text-[var(--cmd-palette-item-meta)] underline-offset-2 transition-colors',
                   'hover:text-[var(--msg-assistant-text)] hover:underline',
                 )}
               >
                 {dest.prefix}
-                {basenameOf(dest.workingDir)}
+                {dest.workingDir ? projectLabel(dest.workingDir) : null}
               </button>
             ) : (
               dest.prefix
@@ -296,21 +331,26 @@ export function RunHistoryPane({
         </div>
       </header>
 
-      {/* Recent runs label —— 跟下面的列表区一起挂载/卸载，避免数字 0→N 跳变。
-          count 与逐 run 卡片数量一致；持续会话也不再按 sessionId 折叠。 */}
-      {hasLoaded && (
-        <div className="px-6 pb-2 pt-4 text-10 font-medium tracking-[0.6px] text-[var(--cmd-palette-item-meta)]">
-          {t('scheduler.detail.recentRuns', { count: runs.length })}
-        </div>
-      )}
+      {/* 连接引导与执行结果一起滚动，较小窗口仍能看完密钥和测试步骤。 */}
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
+        {rules.some(rule => isGithubPrTriggerUrl(rule.url)) && connectionSetupVisible && <GithubAppCard automation timedPrCheck={!s.manual}
+          repositories={rules.filter(rule => isGithubPrTriggerUrl(rule.url)).map(rule => rule.url.split('/').slice(3, 5).join('/'))} />}
+        {s.webhookTrigger && <WebhookTriggerPanel key={s.id} schedule={s} connectionSetupVisible={connectionSetupVisible} />}
+
+        {hasLoaded && (
+          <div className="pb-3 pt-5 text-13 font-medium text-[var(--text-primary)]">
+            {t('scheduler.detail.recentRuns', { count: runs.length })}
+          </div>
+        )}
 
       {/* Run list 容器：始终挂载占位（保持滚动区高度），内容仅在 hasLoaded 后渲染 */}
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
         {hasLoaded &&
           (isCurrent && error ? (
             <p className="text-xs text-[var(--cmd-palette-item-meta)]">
               {t('scheduler.detail.runsLoadFailed', { error })}
             </p>
+          ) : isCurrent && runs.length === 0 && s.webhookTrigger ? (
+            <p className="pb-4 text-12 leading-relaxed text-[var(--text-secondary)]">{t('scheduler.webhook.noRunsHint')}</p>
           ) : isCurrent && runs.length === 0 ? (
             <div className="flex h-full items-center justify-center">
               <div className="flex flex-col items-center gap-2 py-12 text-center">

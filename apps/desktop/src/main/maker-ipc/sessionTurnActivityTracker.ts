@@ -88,6 +88,7 @@ export class SessionTurnActivityTracker {
   private lastAnySessionTurnKeepalive = false;
   private onAnySessionTurnKeepaliveChange: ((isRunning: boolean) => void) | null = null;
   private onSessionTurnChange: ((sessionId: string) => void) | null = null;
+  private readonly sessionTurnObservers = new Set<(sessionId: string) => void>();
 
   setTurnKeepaliveChangeListener(listener: ((isRunning: boolean) => void) | null): void {
     this.onAnySessionTurnKeepaliveChange = listener;
@@ -100,15 +101,23 @@ export class SessionTurnActivityTracker {
     this.onSessionTurnChange = listener;
   }
 
+  /** 额外的旁观者(与上面的主监听方并存);返回取消订阅。语义相同:只通知变化。 */
+  addSessionTurnObserver(observer: (sessionId: string) => void): () => void {
+    this.sessionTurnObservers.add(observer);
+    return () => this.sessionTurnObservers.delete(observer);
+  }
+
   private setInTurn(sessionId: string, isRunning: boolean | null): void {
     const before = this.sessionInTurn.get(sessionId) === true;
     if (isRunning === null) this.sessionInTurn.delete(sessionId);
     else this.sessionInTurn.set(sessionId, isRunning);
     if (before !== (isRunning === true)) {
-      try {
-        this.onSessionTurnChange?.(sessionId);
-      } catch {
-        // 监听方的问题不能影响 turn 记账。
+      for (const listener of [this.onSessionTurnChange, ...this.sessionTurnObservers]) {
+        try {
+          listener?.(sessionId);
+        } catch {
+          // 监听方的问题不能影响 turn 记账。
+        }
       }
     }
   }

@@ -1170,3 +1170,85 @@ describe('formatRemoteSessionSidebarTime', () => {
     expect(formatRemoteSessionSidebarTime('2025-12-30T12:00:00.000Z', now, t)).toBe('2 天');
   });
 });
+
+describe('project sections fold Windows path spelling', () => {
+  const now = new Date('2026-01-01T00:10:00.000Z').getTime();
+
+  it('keeps one section when Windows sessions report the same project differently', () => {
+    const sessions = [
+      session('win-backslash', { workingDir: 'C:\\Repo\\App' }),
+      session('win-forward', { workingDir: 'c:/repo/app' }),
+    ];
+    const sections = buildRemoteSessionSections(sessions, now);
+    const projectSections = sections.filter((section) => section.key.startsWith('project:'));
+    expect(projectSections).toHaveLength(1);
+    expect(projectSections[0].data).toHaveLength(2);
+    // 标题取组内首条会话的原始写法，不能被分组键的小写归一覆盖。
+    expect(projectSections[0].title).toBe('App');
+    expect(summarizeRemoteSessionOverview(sessions, new Map(), new Map()).projectCount).toBe(1);
+  });
+
+  it('folds a trailing separator and a projectDir/workingDir split into one section', () => {
+    const trailing = buildRemoteSessionSections(
+      [session('no-slash', { workingDir: '/repo/app' }), session('slash', { workingDir: '/repo/app/' })],
+      now,
+    );
+    expect(trailing.filter((section) => section.key.startsWith('project:'))).toHaveLength(1);
+
+    const mixed = buildRemoteSessionSections(
+      [
+        session('with-project-dir', { workingDir: 'C:\\Repo\\App', projectDir: 'C:\\Repo\\App' }),
+        session('cwd-only', { workingDir: 'c:/repo/app' }),
+      ],
+      now,
+    );
+    const mixedProjects = mixed.filter((section) => section.key.startsWith('project:'));
+    expect(mixedProjects).toHaveLength(1);
+    expect(mixedProjects[0].title).toBe('App');
+  });
+});
+
+describe('trim whitespace before grouping', () => {
+  const now = new Date('2026-01-01T00:10:00.000Z').getTime();
+
+  it('does not lose the section title when a session reports a padded working dir', () => {
+    const sessions = [
+      session('padded', { workingDir: ' /repo/app/ ' }),
+      session('plain', { workingDir: '/repo/app' }),
+    ];
+    const sections = buildRemoteSessionSections(sessions, now);
+    const projectSections = sections.filter((section) => section.key.startsWith('project:'));
+    expect(projectSections).toHaveLength(1);
+    expect(projectSections[0].title).toBe('app');
+    expect(summarizeRemoteSessionOverview(sessions, new Map(), new Map()).projectCount).toBe(1);
+  });
+});
+
+// Unit: existing group lanes retain their own cwd but belong to the buddy project on phones.
+// Covers the zero-message failure path absent from ordinary project fixtures.
+it('groups companion lanes by owner project even when execution is dialogue-only', () => {
+  const lane = session('old-group', { source: 'bot', workspaceKind: 'dialogue', workingDir: '/isolated/chat',
+    companion: { taskProjectDir: '/buddy/workspace' }, _count: { messages: 0 } });
+  const sections = buildRemoteSessionSections([lane], Date.now());
+  expect(sections.map(s => s.key)).toEqual(['project:/buddy/workspace']);
+  expect(sections[0].data[0].session.workingDir).toBe('/isolated/chat');
+});
+
+it('derives an active follow-up from active current targets, independently of the latest run', () => {
+  const bound = schedule('active', { targetSessionId: 's1' });
+  // 2026-11-18 user decision: any active automation bound to the task counts, not only PR follow-ups.
+  expect(buildSessionScheduleIndex([schedule('routine', { targetSessionId: 's1' })], new Map()).get('s1')?.hasActiveFollowUp).toBe(true);
+  const stopped = schedule('paused', { targetSessionId: 's1', status: 'paused' });
+  const runs = new Map([
+    ['paused', [run('latest', 'paused')]],
+    ['historical', [run('old', 'historical', { sessionId: 'old-task' })]],
+  ]);
+  const index = buildSessionScheduleIndex([bound, stopped, schedule('historical')], runs);
+  expect(index.get('s1')).toMatchObject({ running: false, scheduleStatus: 'paused', hasActiveFollowUp: true });
+  expect(index.get('old-task')?.hasActiveFollowUp).toBe(false);
+  expect(buildSessionScheduleIndex([stopped], runs).get('s1')?.hasActiveFollowUp).toBe(false);
+  expect(buildSessionScheduleIndex([{ ...bound, status: 'expired' }, stopped], runs).get('s1')?.hasActiveFollowUp).toBe(false);
+  const retargeted = buildSessionScheduleIndex([{ ...bound, targetSessionId: 'new-task' }, stopped], runs);
+  expect(retargeted.get('s1')?.hasActiveFollowUp).toBe(false);
+  expect(retargeted.get('new-task')).toMatchObject({ hasActiveFollowUp: true, running: false, latestRunAt: 0 });
+});

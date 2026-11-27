@@ -15,6 +15,13 @@ const links: Record<string, ProviderSetupLink> = {
   openai: key('https://platform.openai.com/api-keys'),
   xai: key('https://console.x.ai/team/default/api-keys'),
   openrouter: key('https://openrouter.ai/settings/keys'),
+  tokenrhythm: key('https://tokenrhythm.studio/account/keys'),
+  'command-code': key('https://commandcode.ai/settings/keys'),
+  openhubs: key('https://openhubs.zhidemai.com/console/api-keys'),
+  hinoki: account('https://app.hinoki.security'),
+  'iflytek-maas': key('https://maas.xfyun.cn/apikey'),
+  'open-design': account('https://open-design.ai/'),
+  'ollama-cloud': key('https://ollama.com/settings/keys'),
   // Official Claude CLI guide directs users here to sign in and create a key.
   agnes: account('https://platform.agnes-ai.com/'),
   deepseek: key('https://platform.deepseek.com/api_keys'),
@@ -70,7 +77,7 @@ export function providerSetupLink(preset: Pick<ProviderPreset, 'id' | 'docsUrl' 
   const link = links[sourceProviderForPreset(preset.id)];
   if (link) return link;
   // Local servers have no provider account. Keep their setup help without asking for a cloud key.
-  if (['litellm', 'lmstudio', 'llamacpp', 'vllm', 'sub2api'].includes(preset.id) && preset.docsUrl) {
+  if (['litellm', 'lmstudio', 'llamacpp', 'vllm', 'sub2api', 'magpie'].includes(preset.id) && preset.docsUrl) {
     return { url: preset.docsUrl, kind: 'setup' };
   }
   return undefined;

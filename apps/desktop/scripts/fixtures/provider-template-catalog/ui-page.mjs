@@ -3,27 +3,85 @@ import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
 // Load the same production catalog in Node and in the browser, without a stale ID snapshot.
 const bundled = await build({ entryPoints: [fileURLToPath(new URL('./cases.ts', import.meta.url))], bundle: true, platform: 'node', format: 'esm', write: false });
-const { cases, presets, bindInput } = await import(`data:text/javascript;base64,${Buffer.from(bundled.outputFiles[0].text).toString('base64')}`);
+const { cases, presets, bindInput, retainedPreset } = await import(`data:text/javascript;base64,${Buffer.from(bundled.outputFiles[0].text).toString('base64')}`);
 export default {
   name: 'provider-template-catalog', entry: './fixture.tsx', viewport: { width: 1000, height: 900 },
   real: 'Every bundled preset, real custom dialog and wizard, simulated clicks through identification and save',
   notCovered: 'Discovery and saving are fake host interfaces. No real keys, OAuth, network, disk persistence or model generation.',
-  cases: { default: { about: 'Catalog completeness smoke' }, ...Object.fromEntries(cases.map(c => [c.id, { about: `${c.kind}: ${c.providerId} ${c.address}` }])) },
+  cases: { 'wizard-bulk-selection': { about: 'Bulk selection in a built-in preset with 36 discovered models' },
+    'custom-model-picker': { about: 'Reference bulk controls in the custom connection model picker' },
+    default: { about: 'Catalog completeness smoke' }, 'official-model-plugins': { about: 'Search the official engine and open its exact market entry' }, ...Object.fromEntries(cases.map(c => [c.id, { about: `${c.kind}: ${c.providerId} ${c.address}` }])) },
   async ready(page) { await page.getByRole('dialog').waitFor(); },
   async check(page, ui) {
+    if (ui.case === 'official-model-plugins') {
+      const search = page.getByRole('textbox', { name: await ui.t('settings.providers.wizard.searchPlaceholder') });
+      await search.fill('Antigravity');
+      const row = page.getByRole('button', { name: /Antigravity/ });
+      await row.waitFor();
+      assert.equal(await row.count(), 1);
+      await page.getByText(await ui.t('settings.providers.wizard.officialModelPlugins'), { exact: true }).waitFor();
+      await ui.capture('official-list');
+      await row.click();
+      await page.getByRole('button', { name: await ui.t('settings.providers.wizard.installAndConfigure') }).waitFor();
+      await ui.capture('official-setup');
+      await page.getByRole('button', { name: await ui.t('settings.providers.wizard.back') }).click();
+      assert.equal(await search.inputValue(), 'Antigravity');
+      return;
+    }
+    if (['wizard-bulk-selection', 'custom-model-picker'].includes(ui.case)) {
+      const button = async key => page.getByRole('button', { name: await ui.t(key), exact: true });
+      const selectAll = await button('settings.providers.custom.fetch.selectAll');
+      const clear = await button('settings.providers.custom.fetch.clearAll');
+      await page.locator('input[type=password]').fill('fake-ui-key');
+      if (ui.case === 'custom-model-picker') {
+        await page.getByPlaceholder(await ui.t('settings.providers.custom.fields.baseUrlPlaceholder')).fill('https://fixture.example/v1');
+        await (await button('settings.providers.custom.fetch.button')).click();
+        await selectAll.waitFor();
+        await clear.waitFor();
+        await ui.capture('custom-bulk-controls');
+        return;
+      }
+      await (await button('settings.providers.wizard.next')).click();
+      const row = name => page.getByRole('checkbox', { name, exact: true });
+      const first = row('Fixture chat 1');
+      await first.waitFor();
+      const checkboxes = page.locator('input[type=checkbox][data-settings-search-action]');
+      const initial = await checkboxes.evaluateAll(rows => rows.map(row => row.checked));
+      assert.ok(initial.filter(value => !value).length >= 36);
+      assert.ok(initial.some(Boolean), 'Recommended models start selected');
+      await ui.capture('preset-models', { locator: page.getByRole('dialog') });
+      assert.equal(await selectAll.count(), 1, 'Built-in preset must offer Select all');
+      assert.equal(await clear.count(), 1, 'Built-in preset must offer Clear');
+      await selectAll.click();
+      assert.equal(await checkboxes.evaluateAll(rows => rows.every(row => row.checked)), true);
+      await first.click();
+      assert.equal(await first.isChecked(), false);
+      assert.equal(await row('Fixture chat 2').isChecked(), true);
+      await clear.click();
+      assert.equal(await checkboxes.evaluateAll(rows => rows.some(row => row.checked)), false);
+      await row('Fixture chat 2').click();
+      await (await button('settings.providers.wizard.finish')).click();
+      await page.waitForFunction(() => window.templateEvidence.saved);
+      const runtimes = await page.evaluate(() => Object.values(window.templateEvidence.saved.runtimes));
+      for (const runtime of runtimes) {
+        assert.deepEqual(runtime.models.filter(model => model.defaultEnabled !== false).map(model => model.id), ['fixture-chat-2']);
+      }
+      return;
+    }
     assert.deepEqual(await page.evaluate(() => window.templateIds), presets.map(p => p.id));
     const item = cases.find(c => c.id === ui.case) ?? cases[0];
-    const preset = presets.find(p => p.id === item.providerId);
+    const retained = item.id === 'wizard-deepseek-retained';
+    const preset = retained ? retainedPreset : presets.find(p => p.id === item.providerId);
     if (item.kind === 'address') {
       await page.getByPlaceholder(await ui.t('settings.providers.custom.fields.namePlaceholder')).fill(`Review ${item.providerId}`);
       await page.getByPlaceholder(await ui.t('settings.providers.custom.fields.apiKeyPlaceholder')).fill('fake-ui-key');
       await page.getByPlaceholder(await ui.t('settings.providers.custom.fields.baseUrlPlaceholder')).fill(item.address);
       if (item.expectedIds.length !== 1) {
-        await page.getByText(await ui.t('settings.providers.detection.ambiguous'), { exact: true }).waitFor();
+        await page.getByText(await ui.t(item.expectedIds.length ? 'settings.providers.detection.ambiguous' : 'settings.providers.detection.custom'), { exact: true }).waitFor();
         await page.waitForTimeout(1400);
         assert.equal(await page.getByRole('button', { name: await ui.t('settings.providers.detection.configure'), exact: true }).count(), 0);
         assert.equal(await page.evaluate(() => window.templateEvidence.handoff), undefined);
-        await ui.capture('ambiguous-stayed-custom');
+        await ui.capture(item.expectedIds.length ? 'ambiguous-stayed-custom' : 'unrecognized-stayed-custom');
         return;
       }
       const configure = page.getByRole('button', { name: await ui.t('settings.providers.detection.configure'), exact: true });
@@ -50,14 +108,20 @@ export default {
     await finish.waitFor();
     // The catalog response is fixed; selecting it uses the real model picker, not state injection.
     let selectedModelId = 'ui-catalog-probe';
-    if (item.kind === 'wizard' && preset.id === 'opencode-go') {
-      // Go retains its curated plan members; arbitrary discovered IDs are not plan models.
+    if (retained) {
+      selectedModelId = 'deepseek-v4-flash-vision-exp';
+      await page.getByText('DeepSeek V4 Flash Vision Exp', { exact: true }).click();
+    } else if (['opencode-go', 'moonshot-kimi-cn', 'moonshot-kimi-global', 'agnes'].includes(preset.id)) {
+      // A shared cross-protocol inventory cannot assign an unknown ID to every engine.
+      // Exercise saving a catalog member supported by all of this template's runtimes.
       const model = preset.runtimes.pi.models.find(m => Object.values(preset.runtimes).every(rt => rt.models.some(row => row.id === m.id)));
       assert.ok(model);
       selectedModelId = model.id;
       const row = page.getByText(model.name, { exact: true });
-      await row.click(); await row.click(); // Exercise selection, then restore the recommended row.
-    } else if (item.kind === 'wizard') await page.getByText('UI catalog probe', { exact: true }).click();
+      await row.click();
+      // Direct entry preselects recommendations; address handoff starts with no selected models.
+      if (item.kind === 'wizard') await row.click();
+    } else await page.getByText('UI catalog probe', { exact: true }).click();
     await ui.capture('models');
     await finish.click();
     await page.waitForFunction(() => window.templateEvidence.saved);

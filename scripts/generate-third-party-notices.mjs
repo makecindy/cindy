@@ -25,6 +25,7 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import parseSpdxExpression from "spdx-expression-parse";
+import yaml from "js-yaml";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..");
@@ -469,7 +470,7 @@ function mergeClosures(...closures) {
 }
 
 /**
- * 由根 package.json 的 `pnpm.supportedArchitectures` 叉乘出的目标平台集合。
+ * 由 pnpm-workspace.yaml 的 supportedArchitectures 叉乘出的目标平台集合。
  *
  * 覆盖「本仓声明支持的全部架构」而非单一发行产物的闭包必须逐个 target 收集再合并：
  * collectClosure() 判断一个平台可选依赖是否存在只看 `node_modules` 里有没有对应目录，
@@ -478,19 +479,19 @@ function mergeClosures(...closures) {
  * 架构。
  */
 function readSupportedTargets() {
-  const declared = readJson(path.join(REPO_ROOT, "package.json")).pnpm
+  const declared = yaml.load(fs.readFileSync(path.join(REPO_ROOT, "pnpm-workspace.yaml"), "utf8"))
     ?.supportedArchitectures;
   for (const axis of ["os", "cpu", "libc"]) {
     const values = declared?.[axis];
     if (!Array.isArray(values) || values.length === 0) {
       throw new Error(
-        `pnpm.supportedArchitectures.${axis} must list explicit values in the root package.json`,
+        `supportedArchitectures.${axis} must list explicit values in pnpm-workspace.yaml`,
       );
     }
     // pnpm 支持 "current" 表示生成机器自身的架构，那会把机器差异重新带回产物。
     if (values.includes("current")) {
       throw new Error(
-        `pnpm.supportedArchitectures.${axis} must not use "current": license notices would depend on the generating machine`,
+        `supportedArchitectures.${axis} must not use "current": license notices would depend on the generating machine`,
       );
     }
   }
@@ -673,6 +674,13 @@ function buildProviderBrandingEntries() {
       url: "https://github.com/BerriAI/litellm-docs/blob/main/static/img/logo.svg",
       licenseText: MIT_TEXT("MIT License\n\nCopyright (c) 2026 Berri AI"),
     }),
+    bundledComponent({
+      name: "Magpie SVG mark (adapted)",
+      version: "adapted",
+      license: "MIT",
+      url: "https://github.com/yetone/magpie/blob/main/site/public/img/magpie-small.svg",
+      licenseText: MIT_TEXT("MIT License\n\nCopyright (c) 2026 yetone"),
+    }),
   ];
   return entries.sort(
     (a, b) =>
@@ -728,6 +736,30 @@ function buildDesktopCommonEntries(apacheText, sharpPackageNames) {
   const entries = [
     ...buildSpeakerModelEntries(apacheText),
     onnxRuntimeEntry("bundled with sherpa-onnx-node 1.13.8"),
+    bundledComponent({
+      name: "JetBrains Mono fonts",
+      version: "bundled",
+      license: "OFL-1.1",
+      url: "https://github.com/JetBrains/JetBrainsMono",
+      licenseText: readBundledLicense(
+        "apps/desktop/resources/system-skills/cindy-plugin-creator/references/examples/interactive-pages/host-ui/assets/JetBrainsMono-OFL.txt",
+      ),
+    }),
+    bundledComponent({
+      name: "Microsoft Fluent Emoji Animated (reaction artwork)",
+      version: "daa0365c09795789ed2bc6e8b228c97736cb6669",
+      license: "MIT",
+      url: "https://github.com/microsoft/fluentui-emoji-animated",
+      licenseText: readBundledLicense("apps/desktop/src/renderer/assets/chat-reactions/LICENSE"),
+    }),
+    // This repository-owned core and its wasm wrapper have no third-party crates.
+    bundledComponent({
+      name: "Cindy agent-net WebAssembly core",
+      version: `sha256:${JSON.parse(readBundledLicense("packages/agent-net-core/prebuilt/manifest.json")).binaryDigest}`,
+      license: "Apache-2.0",
+      url: "https://github.com/makecindy/cindy/tree/main/packages/agent-net-core",
+      licenseText: readBundledLicense("LICENSE"),
+    }),
   ];
 
   // ripgrep — 随包分发的搜索二进制
@@ -1535,6 +1567,9 @@ function assertTrackedBinariesRegistered() {
   const registeredFiles = new Set([
     "apps/desktop/resources/cindy-updater-runtime/vcruntime140.dll",
     "apps/desktop/resources/cindy-updater-runtime/vcruntime140_1.dll",
+    // Disclosed by buildDesktopCommonEntries; keep these registrations exact.
+    "apps/desktop/resources/system-skills/cindy-plugin-creator/references/examples/interactive-pages/host-ui/assets/JetBrainsMono-Regular.ttf",
+    "packages/agent-net-core/prebuilt/core.wasm",
   ]);
   const files = execFileSync("git", ["ls-files", "-z"], {
     cwd: REPO_ROOT,

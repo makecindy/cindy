@@ -46,53 +46,45 @@
     }
   },
   "contextWindowSwitch": {
-    "title": "这个模型装不下当前对话",
+    "condensedToast": "为了适应新模型，较早的对话会压缩，完整的对话记录仍可查看。",
     "remoteTitle": "当前远程任务无法安全切换模型",
-    "description": "当前对话已使用 {{used}}，超过新模型可容纳的 {{total}}（约 {{pct}}%）。继续切换时，Cindy 会先生成简短摘要再继续；对话记录仍会保留，但不会再逐字传给新模型。",
     "remoteDescription": "当前远程任务的上下文已用 {{used}} / {{total}}（约 {{pct}}%），无法安全切换到这个小窗口模型。请保留当前模型，或新建任务后再选择。",
-    "cancel": "保留当前模型",
-    "confirm": "切换并继续"
+    "cancel": "保留当前模型"
   },
   "switchOutcome": {
     "applied": "模型来源切换已生效。",
-    "failed": "模型来源切换失败，请重新选择。"
+    "failed": "模型来源切换失败，请重新选择。",
+    "previousSettingsRetained": "本次切换未完成，任务会继续使用原来的设置。"
   },
   "agentSwitch": {
-    "browseAccessibility": "浏览 {{agent}} 模型",
-    "confirmTitle": "切换到 {{agent}}？",
-    "confirmMessage": "下一条消息发送时，{{appName}} 会把当前任务交接给 {{agent}}。两个 Agent 对上下文和工具的理解可能不同，请确认后再选择目标模型。",
-    "cancel": "取消",
-    "confirm": "继续选择"
-  },
-  "agentRelocation": {
-    "titleOther": "改到「{{device}}」上运行 Agent？",
-    "titleHost": "改回「{{host}}」上运行 Agent？",
-    "titleHostUnnamed": "改回任务所在的电脑运行 Agent？",
-    "message": "原来那台电脑上的对话记录带不过来，会整理成交接摘要接上，思考内容等不能保证完美继承。下一条消息发出时生效。",
-    "confirm": "换电脑运行",
-    "cancel": "保持不变"
+    "browseAccessibility": "浏览 {{agent}} 模型"
   },
   "unified": {
-      "favoriteConfiguration": "收藏此配置",
-      "savedConfiguration": "已收藏 · 点击取消",
-      "currentConfiguration": "当前配置",
-      "usingRecommended": "使用推荐设置",
-      "customized": "已自定义",
-      "resetScopeHint": "恢复推荐会重置引擎、推理强度和 Fast，已有收藏保持不变。",
-      "saveFavoriteHint": "保存这套参数，方便下次从收藏列表直接使用。",
-      "removeFavoriteHint": "取消仅移除快捷入口，当前参数保持不变。",
-      "editFavorite": "编辑原收藏",
-      "editFavoriteHint": "仅编辑这条收藏，保存后生效；正在使用的配置保持不变。",
-      "saveFavorite": "保存收藏",
-      "cancelEdit": "取消编辑",
-      "originalFavoriteKept": "参数已调整，原收藏保留。",
-      "parametersSaved": "参数已保存。",
-      "restoredHint": "已恢复推荐设置，已有收藏保持不变。",
-      "favoriteRemoved": "已取消收藏，当前参数保持不变。",
-      "favoriteSaved": "已收藏这套配置。",
-      "favoriteUpdated": "收藏已更新，正在使用的配置保持不变。",
-      "favoriteChanged": "原收藏已被修改或删除。取消编辑后重新打开再试。",
-      "favoriteExists": "已存在相同配置的收藏。取消编辑后可直接使用。",
+    "remoteCopyUnavailableOn": "「{{device}}」上的 {{provider}} 现在无法使用。",
+    "remoteCopyUnavailableOnTaskComputer": "任务所在电脑上的 {{provider}} 现在无法使用。",
+    "accountCount_one": "{{count}} 个账号",
+    "accountCount_other": "{{count}} 个账号",
+    "accountFallback": "账号 {{index}}",
+    "favoriteConfiguration": "收藏此配置",
+    "savedConfiguration": "已收藏 · 点击取消",
+    "currentConfiguration": "当前配置",
+    "usingRecommended": "使用推荐设置",
+    "customized": "已自定义",
+    "resetScopeHint": "恢复推荐会重置 Harness、推理强度和 Fast，已有收藏保持不变。",
+    "saveFavoriteHint": "保存这套参数，方便下次从收藏列表直接使用。",
+    "removeFavoriteHint": "取消仅移除快捷入口，当前参数保持不变。",
+    "editFavorite": "编辑原收藏",
+    "editFavoriteHint": "仅编辑这条收藏，保存后生效；正在使用的配置保持不变。",
+    "saveFavorite": "保存收藏",
+    "cancelEdit": "取消编辑",
+    "originalFavoriteKept": "参数已调整，原收藏保留。",
+    "parametersSaved": "参数已保存。",
+    "restoredHint": "已恢复推荐设置，已有收藏保持不变。",
+    "favoriteRemoved": "已取消收藏，当前参数保持不变。",
+    "favoriteSaved": "已收藏这套配置。",
+    "favoriteUpdated": "收藏已更新，正在使用的配置保持不变。",
+    "favoriteChanged": "原收藏已被修改或删除。取消编辑后重新打开再试。",
+    "favoriteExists": "已存在相同配置的收藏。取消编辑后可直接使用。",
     "favorites": "收藏",
     "all": "全部模型",
     "recommended": "推荐",
@@ -100,8 +92,8 @@
     "remoteProvider": "{{provider}} · {{device}}",
     "remoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
     "providerGroup": "{{provider}} · {{group}}",
-    "groupBadge_one": "供应商组 · {{count}} 台电脑",
-    "groupBadge_other": "供应商组 · {{count}} 台电脑",
+    "groupBadge_one": "电脑组 · {{count}} 台电脑",
+    "groupBadge_other": "电脑组 · {{count}} 台电脑",
     "harness": "Harness",
     "restoreRecommended": "恢复推荐",
     "saveFailed": "未能保存，请重试。",
@@ -112,6 +104,67 @@
       "hour": "小时",
       "minute": "分钟",
       "second": "秒"
+    },
+    "quotaAverage": "平均余量 {{percent}}%",
+    "quotaUpdating": "余量待更新",
+    "quotaResetSoon": "即将重置",
+    "quotaResetIn": "{{duration}}后重置",
+    "quotaAverageHint": "周配额 · 按账号等权平均",
+    "quotaResetHint": "按当前使用速度，重置时可能仍有余量：24 小时内为黄色，6 小时内为红色。"
+  },
+  "modelGroups": {
+    "title": "模型组",
+    "sourceCount_one": "{{count}} 个来源",
+    "sourceCount_other": "{{count}} 个来源",
+    "strategy": {
+      "expiring": "快作废的先用",
+      "order": "按顺序",
+      "rotate": "轮流",
+      "cheapest": "最省钱",
+      "drain": "用完再换",
+      "headroom": "余量最多的先用",
+      "weighted": "按权重"
+    },
+    "sourceOnDevice": "{{provider}} · {{device}}",
+    "why": {
+      "expiringQuota": "还剩 {{left}}% 配额，{{reset}} 重置，先用它",
+      "expiring": "按配额排在最前",
+      "order": "排在最前面的可用来源",
+      "rotate": "这次轮到它",
+      "only": "现在只有它能用",
+      "soonest": "所有来源的配额都用完了，它最早恢复",
+      "soonestUntil": "所有来源的配额都用完了，它最早恢复（{{reset}}）",
+      "cheapest": "标价最低",
+      "cheapestFree": "订阅还有配额，不另外花钱",
+      "drain": "接着用它，直到配额用完",
+      "drainNext": "上一个来源用完或用不了，换到它",
+      "headroom": "剩余配额最多",
+      "headroomQuota": "还剩 {{left}}% 配额，比其他来源都多",
+      "weighted": "按权重这次分到它",
+      "exceptionImage": "消息里有图片，只在能看图的来源里选",
+      "exceptionImageFallback": "消息里有图片，但没有能看图的来源，照常选",
+      "exceptionHours": "这个时段改走「{{name}}」",
+      "separator": "；"
+    },
+    "picker": {
+      "switched": "「{{name}}」把这个任务换成了 {{model}}",
+      "switchUnavailable": "「{{name}}」里现在没有能给这个任务用的来源，模型没换。",
+      "chooseUnavailable": "「{{name}}」里现在没有能用的来源，没有选它。",
+      "managedBy": "当前由「{{name}}」持续托管",
+      "detach": "解除托管",
+      "detached": "已解除智能路由托管，保留当前模型"
+    },
+    "anotherDevice": "另一台电脑",
+    "sourceRouteTitle_one": "{{name}} · 智能路由（{{count}} 个来源）",
+    "sourceRouteTitle_other": "{{name}} · 智能路由（{{count}} 个来源）",
+    "switchOffer": {
+      "button": "切换到 {{model}} 并继续"
     }
+  },
+  "pluginEngines": {
+    "genericName": "插件引擎",
+    "defaultModel": "默认模型",
+    "unavailable": "{{engine}} 暂不可用",
+    "unavailableWithHint": "{{engine}} 暂不可用：{{hint}}"
   }
 }

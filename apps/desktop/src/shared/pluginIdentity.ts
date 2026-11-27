@@ -1,6 +1,13 @@
 import { isValidPluginNamespace } from '@cindy/plugin-protocol';
 import { ghostInstallApprovalToken, ghostPartition, isValidGhostId, type GhostInstallApproval } from './ghost.js';
 
+/** Host-owned authoring domain; never an organization identity. */
+export const LOCAL_PLUGIN_NAMESPACE = 'local';
+
+export function isOrganizationPluginNamespace(namespace: string | null | undefined): namespace is string {
+  return typeof namespace === 'string' && namespace !== LOCAL_PLUGIN_NAMESPACE;
+}
+
 interface InstalledGhostIdentitySource {
   manifest: { id: string };
   dir?: string;
@@ -26,6 +33,12 @@ type PluginNamespaceState =
 export interface PluginLogicalIdentity {
   namespace: string | null;
   ghostId: string;
+}
+
+/** Stable account resource, shared by schedule drafts and the resident plugin slot. */
+export function pluginAutomationHostKey(namespace: string | null, ghostId: string): string {
+  const channel = namespace === null ? 'public' : namespace === LOCAL_PLUGIN_NAMESPACE ? 'local' : 'org.' + namespace;
+  return channel + '/' + ghostId;
 }
 
 export function resolvePluginNamespaceState(raw: unknown): PluginNamespaceState {
@@ -362,6 +375,15 @@ export function findInstalledRootGhostForFileImport<
   return matches.length === 1 ? matches[0]! : null;
 }
 
+/** File import updates only the authoring copy; old and market installations stay in place. */
+export function findInstalledLocalGhostForFileImport<T extends {
+  manifest: { id: string }; namespace?: string | null; namespaceState?: 'confirmed' | 'unconfirmed' | 'pending';
+}>(ghosts: readonly T[], ghostId: string): T | null {
+  const matches = ghosts.filter(ghost => ghost.manifest.id === ghostId &&
+    ghost.namespace === LOCAL_PLUGIN_NAMESPACE && ghost.namespaceState === 'confirmed');
+  return matches.length === 1 ? matches[0]! : null;
+}
+
 export function findInstalledGhostByInstanceId<T extends InstalledGhostIdentitySource>(
   ghosts: readonly T[],
   instanceId: string,
@@ -501,7 +523,7 @@ export function formatInstalledGhostAmbiguity(
     const namespace = installedGhostNamespaceLabel(candidate);
     return namespace === null ? `root/${ghostId}` : `${namespace}/${ghostId}`;
   });
-  return `插件 ${ghostId} 存在多个实例（${labels.join('、')}）。请指定 namespace：null 表示 root，字符串表示企业 orgSlug。`;
+  return `插件 ${ghostId} 存在多个实例（${labels.join('、')}）。请指定 namespace：null 表示 root，字符串 local 表示本地开发副本，其它字符串表示企业 orgSlug。`;
 }
 
 /** JSON-safe ledger / map key. Root and legacy stay `ghostId`; org uses storage part. */

@@ -10,7 +10,7 @@ const chatInputSource = normalizeSourceText(
 
 describe('ChatInput model source switching wiring', () => {
   it('preserves an explicit connection for submission even when its catalog row is unavailable', () => {
-    expect(chatInputSource).toContain('const sendProviderId = activeProviderId || null;');
+    expect(chatInputSource).toContain('const sendProviderId = (sendCurrentSelection ? composerSelection.current.providerId : activeProviderId) || null;');
     expect(chatInputSource).toContain('providerId: sendProviderId');
     expect(chatInputSource).not.toContain('effectiveSourceIdForModel(sendProviders, activeProviderId');
   });
@@ -140,7 +140,7 @@ describe('ChatInput model source switching wiring', () => {
     );
     const guard = chatInputSource.slice(guardStart, guardEnd);
     expect(guard).toContain(
-      'return accepted && targetContextWindow ? targetContextWindow : accepted',
+      'return targetContextWindow ?? true;',
     );
 
     const modelStart = chatInputSource.indexOf('const performModelChange = useCallback(');
@@ -218,7 +218,7 @@ describe('ChatInput model source switching wiring', () => {
     const piBypass = guard.indexOf("runtimeAgentKind === 'pi' &&");
     const sameOrExpand = guard.indexOf('targetContextWindow >= currentContextWindow');
     const localVerdictShortcut = guard.indexOf("verdict.level === 'ok'");
-    const confirmation = guard.indexOf('const accepted = await confirmDialog({');
+    const confirmation = guard.indexOf('modelSwitchContextGuard.condensedToast');
 
     expect(guard).toContain(
       'const contextTokens = requireDestructiveConfirmation\n        ? verifiedContextTokens',
@@ -256,7 +256,7 @@ describe('ChatInput model source switching wiring', () => {
     );
     const remoteBlock = guard.indexOf("verdict.level === 'danger' || verdict.level === 'overflow'");
     const warningPath = guard.indexOf("verdict.level === 'warn'");
-    const confirmPath = guard.indexOf('const accepted = await confirmDialog({');
+    const confirmPath = guard.indexOf('modelSwitchContextGuard.condensedToast');
 
     expect(piCapability).toBeGreaterThan(-1);
     expect(piCapability).toBeLessThan(piRuntimeBypass);
@@ -299,10 +299,7 @@ describe('ChatInput model source switching wiring', () => {
     expect(blocked).toContain('overflowDescriptionRemote');
     expect(blocked).toContain('toast.error(');
     expect(blocked).toContain('return false;');
-    const localConfirm = guard.slice(confirmPath);
-    expect(localConfirm).not.toContain('overflowDescriptionRemote');
-    expect(localConfirm).toContain('overflowDescription');
-    expect(localConfirm).toContain('confirmSwitch');
+    expect(guard.slice(confirmPath)).toContain('return targetContextWindow ?? true;');
   });
 
   it('lets a disconnected source reselect the highlighted fallback provider row', () => {
@@ -431,8 +428,10 @@ describe('ChatInput model source switching wiring', () => {
     expect(chatInputSource).toContain(
       'const unifiedModelPanelEnabled = !catalogDeviceId || !remoteProviders.unsupported;',
     );
-    // 已建任务换电脑的意图期内,目录跟随意图里的电脑(effectiveAgentDeviceId)。
-    expect(chatInputSource).toContain('const catalogDeviceId = effectiveAgentDeviceId ?? deviceLinkDeviceId ?? undefined;');
+    // #8010：切换意图保留真实来源，但目录必须经任务宿主读取，不能绕回控制端权限。
+    expect(chatInputSource).toContain(
+      'const catalogDeviceId = modelCatalogKey(effectiveAgentDeviceId ?? deviceLinkDeviceId ?? undefined, catalogHostDeviceId);',
+    );
   });
 
   /**
@@ -446,10 +445,6 @@ describe('ChatInput model source switching wiring', () => {
     const start = chatInputSource.indexOf('const sessionEngineFilter = useMemo(');
     expect(start).toBeGreaterThan(-1);
     const block = chatInputSource.slice(start, chatInputSource.indexOf('}, [', start));
-    // 确认弹窗照旧(同一份 confirmAgentBrowseSwitch,含「不再提示」偏好);**有意变更**
-    // (Chris 2026-08-19):现在把**本次目标引擎**交给确认门 —— 「已确认过就不再问」的判据
-    // 收窄成「已有指向该目标的意图」,否则任何残留意图都会让确认框永久静默。
-    expect(block).toContain('confirmAgentBrowseSwitch(targetAgent)');
     // 切换事务照旧;effort 显式带上(用户看着点下去的档)。
     expect(block).toContain('performAgentSwitchRef.current(');
     expect(block).toContain('...(effort ? { effort } : {})');

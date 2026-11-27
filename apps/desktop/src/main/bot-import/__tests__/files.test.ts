@@ -6,6 +6,45 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+// Regression: Hermes resources above 16 MiB were rejected and failed subtrees
+// consumed the shared budget. Existing tests only covered rejection, not a
+// healthy sibling after failure. Unit tier: real readers and temporary files.
+it('imports a resource above 16 MiB intact while retaining the document and total byte bounds', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-import-large-resource-'));
+  try {
+    const file = path.join(root, 'resource.bin');
+    const bytes = Buffer.alloc(16 * 1024 * 1024 + 1, 7);
+    await fs.writeFile(file, bytes);
+    const files = await readImportSkillTree(root, undefined, createImportBudget());
+    expect(files).toHaveLength(1);
+    expect(files[0]!.bytes.equals(bytes)).toBe(true);
+    await expect(readImportSkillTree(root, undefined, createImportBudget(bytes.length))).rejects.toThrow('SOURCE_SNAPSHOT_TOO_LARGE');
+    await fs.rename(file, path.join(root, 'SKILL.md'));
+    await expect(readImportSkillTree(root, undefined, createImportBudget())).rejects.toThrow('SOURCE_FILE_TOO_LARGE');
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+it('reclaims a failed skill read without releasing previously retained files', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-import-budget-rollback-'));
+  try {
+    const broken = path.join(root, 'broken');
+    await fs.mkdir(broken);
+    await fs.writeFile(path.join(broken, 'a'), Buffer.alloc(800));
+    await fs.writeFile(path.join(broken, 'b'), Buffer.alloc(800));
+    await fs.writeFile(path.join(root, 'healthy'), 'saved');
+    const budget = createImportBudget(2000);
+    await readImportFile(root, path.join(root, 'healthy'), budget);
+    // The first resource fits; the second exhausts the budget. Repeat to prove
+    // an explicit retry neither leaks nor over-refunds its nested reservations.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await expect(readImportSkillTree(broken, undefined, budget)).rejects.toThrow('SOURCE_SNAPSHOT_TOO_LARGE');
+    }
+    const sibling = await readImportFile(broken, path.join(broken, 'a'), budget);
+    expect(sibling.bytes.length).toBe(800);
+    await expect(readImportFile(broken, path.join(broken, 'b'), budget)).rejects.toThrow('SOURCE_SNAPSHOT_TOO_LARGE');
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
 it('reads an explicit native memory file link without granting traversal of external directories', async ctx => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-import-file-link-'));
   try {

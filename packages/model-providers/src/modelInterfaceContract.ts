@@ -45,6 +45,20 @@ export function modelInterfacesError(value: Record<string, unknown>): string | n
     if (ids.has(profile.id)) return 'duplicate interface profile';
     ids.set(profile.id, profile);
   }
+  // Only an absent field defaults to empty; an explicit null must fail the array contract.
+  const rules = value.recommendedAgents === undefined ? [] : value.recommendedAgents;
+  if (!Array.isArray(rules) || rules.length > 4096) return 'recommendedAgents must be an array';
+  const ruleKeys = new Set<string>();
+  for (const rule of rules) {
+    if (!object(rule) || Object.keys(rule).some(key => !['providerId', 'modelId', 'modelIdPrefix', 'agent'].includes(key)) ||
+        !text(rule.providerId) || rule.providerId.length > 128 || !agents.includes(rule.agent as string) ||
+        (rule.modelId === undefined) === (rule.modelIdPrefix === undefined) ||
+        (rule.modelId !== undefined && (!text(rule.modelId) || rule.modelId.length > 256)) ||
+        (rule.modelIdPrefix !== undefined && (!text(rule.modelIdPrefix) || rule.modelIdPrefix.length > 256))) return 'invalid recommendedAgents rule';
+    const key = `${rule.providerId}\u0000${rule.modelId !== undefined ? `=${rule.modelId}` : `^${rule.modelIdPrefix}`}`;
+    if (ruleKeys.has(key)) return 'duplicate recommendedAgents rule';
+    ruleKeys.add(key);
+  }
   for (const entry of (Array.isArray(value.models) ? value.models : []) as Record<string, unknown>[]) {
     if (!object(entry)) continue; // ordinary registry validator owns entry shape
     if (entry.nativeApis !== undefined && entry.nativeApis !== null &&
@@ -72,10 +86,17 @@ export function modelInterfacesError(value: Record<string, unknown>): string | n
   return null;
 }
 
+/** Released V6 parsers reject unknown registry fields: only capable clients receive recommendations. */
+export function withoutRecommendedAgents(registry: ModelRegistry): ModelRegistry {
+  if (registry.recommendedAgents === undefined) return registry;
+  const { recommendedAgents: _recommended, ...rest } = registry;
+  return rest;
+}
+
 /** Exact legacy contract: no new fields, defaults or priority changes leak into V5. */
 export function projectRegistryV5(registry: ModelRegistry): ModelRegistry {
   if (registry.schemaVersion < 6) return registry;
-  const { interfaceProfiles: _profiles, ...legacy } = registry;
+  const { interfaceProfiles: _profiles, recommendedAgents: _recommended, ...legacy } = registry;
   return { ...legacy, schemaVersion: 5, models: registry.models.map(({ nativeApis: _apis, ...entry }) => ({
     ...entry, routes: entry.routes.map(({ interfaces: _interfaces, preferredInterfaces: _preferred, ...route }) => route),
   })) };

@@ -1,3 +1,4 @@
+import { schedulePrTriggers } from '@cindy/maker-scheduler/pr-trigger';
 /**
  * TaskListCell — 左侧任务列表单元格
  * ---------------------------------------------------------------------------
@@ -38,6 +39,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 
 import { formatLastRun, formatNextRun } from '../lib/formatters';
+import { Badge } from '@/components/ui/badge';
 
 interface Props {
   schedule: Schedule;
@@ -149,6 +151,7 @@ export function TaskListCell({
   // 而不是"上次跑完是什么时候"。长跑任务在 running 中也能立刻看到 "Last HH:mm"。
   const lastText = formatLastRun(s.lastFiredAt, Date.now(), t);
   const nextText = s.status === 'active' ? formatNextRun(s.nextFireAt, Date.now(), t) : null;
+  const prRule = schedulePrTriggers(s)[0];
   let subtitle: string | null;
   if (queuedForSession) {
     // 排在目标会话队列里等派发 —— 比"没抢到执行槽"更靠前判定:这一轮已经触发过了，
@@ -162,7 +165,8 @@ export function TaskListCell({
   } else if (s.status === 'paused') {
     subtitle = t('scheduler.cell.subtitlePaused');
   } else if (s.manual) {
-    subtitle = lastText ?? t('scheduler.cell.subtitleManual');
+    subtitle = lastText ?? (prRule ? t(`scheduler.prTrigger.${prRule.change}`) : s.webhookTrigger
+      ? t(s.webhookTrigger.source?.preset === 'plugin' ? 'scheduler.webhook.pluginTitle' : 'scheduler.webhook.title') : t('scheduler.cell.subtitleManual'));
   } else if (!s.recurring) {
     subtitle = lastText ?? t('scheduler.cell.subtitleOnce');
   } else if (lastText && nextText) {
@@ -265,7 +269,7 @@ export function TaskListCell({
       onKeyDown={handleKeyDown}
       onContextMenu={handleContextMenu}
       className={cn(
-        'group relative flex cursor-pointer flex-col gap-[5px] rounded-[10px] px-[14px] py-3',
+        'group relative flex cursor-pointer flex-col gap-1 rounded-xl px-[14px] py-3',
         'outline-none transition-colors',
         'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
         selected
@@ -292,7 +296,7 @@ export function TaskListCell({
             // size-5 幽灵按钮 + Silver 图标 + hover 浅灰底,连 token 都复用同一组,
             // 两处"运行"入口视觉与后续调整保持同步。零阴影(docs/design-rules/cindy-design-system.md §6)、
             // 零缩放位移(§14.4),只保留 ≤150ms 的 opacity/颜色功能性过渡。
-            'flex size-5 items-center justify-center rounded-md',
+            'flex size-5 items-center justify-center rounded-lg',
             'text-sidebar-action-icon',
             // 只在行 hover / 按钮 focus 时露出。
             'opacity-0 transition-[opacity,background-color,color] duration-150',
@@ -343,7 +347,7 @@ export function TaskListCell({
               // 高度 / 内边距对齐外面那个 <span>（text-sm 自然 line-height = 20px），
               // 用 h-5 + py-0 + -mx-1 让 input 在视觉上"原地"覆盖标题，
               // 避免双击进入编辑时 cell 整体被撑高 4px 的跳变。
-              'min-w-0 flex-1 h-5 px-1 -mx-1 py-0 rounded',
+              'min-w-0 flex-1 h-5 px-1 -mx-1 py-0 rounded-full',
               'text-sm font-medium text-[var(--msg-assistant-text)]',
               'bg-transparent outline-none',
               'border-[1.5px] border-[var(--focus-ring)]',
@@ -363,26 +367,18 @@ export function TaskListCell({
             视觉规格：椭圆描边 + 11px 灰字。
             编辑态下隐藏 chip 给输入框留满宽度。 */}
         {!isEditing && isProjectSchedule && (
-          <span
-            className={cn(
-              'shrink-0 inline-flex items-center gap-1 rounded-full border px-2 py-[2px] text-11 font-medium leading-none',
-              'border-[var(--cmd-palette-border)] text-[var(--cmd-palette-item-meta)]',
-            )}
+          <Badge
+            tone="outline"
+            icon={<FolderGit2 size={10} strokeWidth={1.8} />}
             title={t('scheduler.projectAutomation.cell.tooltip')}
           >
-            <FolderGit2 size={10} strokeWidth={1.8} />
             {t('scheduler.projectAutomation.cell.tag')}
-          </span>
+          </Badge>
         )}
-        {!isEditing && (s.manual || !s.recurring) && (
-          <span
-            className={cn(
-              'shrink-0 translate-x-[2px] rounded-full border px-2 py-[2px] text-11 font-medium leading-none',
-              'border-[var(--cmd-palette-border)] text-[var(--cmd-palette-item-meta)]',
-            )}
-          >
-            {s.manual ? t('scheduler.cell.tagManual') : t('scheduler.cell.tagOnce')}
-          </span>
+        {!isEditing && (prRule || s.webhookTrigger || s.manual || !s.recurring) && (
+          <Badge tone="outline" className="translate-x-[2px]">
+            {prRule ? (prRule.url.includes('/-/merge_requests/') ? 'MR' : 'PR') : s.webhookTrigger ? t(s.webhookTrigger.source?.preset === 'plugin' ? 'scheduler.cell.tagPluginEvent' : 'scheduler.cell.tagWebhook') : s.manual ? t('scheduler.cell.tagManual') : t('scheduler.cell.tagOnce')}
+          </Badge>
         )}
       </div>
       {hasMetaRow && (

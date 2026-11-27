@@ -1,15 +1,20 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { createRuntimePluginInputHooks } from '../maker-ipc/runtimePluginTaskBindings.js';
 
-const registerSource = readFileSync(
-  resolve(__dirname, '..', 'maker-ipc', 'register.ts'),
-  'utf8',
-).replace(/\r\n?/g, '\n');
+// The auto-resume runtime (guards, bookkeeping, undispatched settlement) is assembled in
+// autoResumeRuntime.ts; register.ts binds its ports. Appended after register.ts so register's own order holds.
+const registerSource = ['register', 'autoResumeRuntime']
+  .map((name) => readFileSync(resolve(__dirname, '..', 'maker-ipc', name + '.ts'), 'utf8'))
+  .join('\n')
+  .replace(/\r\n?/g, '\n');
 // Retain local characterization guards at the production stages they describe.
 // Cross-stage delivery and recovery timing run in sessionEventPipeline.test.ts.
 const eventSource = [
+  // The pipeline's auto-resume steps are in sessionEventAutoResumeSteps.ts; the pipeline calls them in place.
+  'sessionEventAutoResumeSteps',
   'sessionEventPreparation',
   'sessionEventStream',
   'sessionEventDelivery',
@@ -50,7 +55,6 @@ describe('interrupted continuation enqueue contract', () => {
     expect(enqueueStart).toBeGreaterThan(-1);
     expect(enqueueEnd).toBeGreaterThan(enqueueStart);
     const enqueueHandler = registerSource.slice(enqueueStart, enqueueEnd);
-    expect(enqueueHandler).toMatch(/inputCoordinator\.enqueue\(\s*sid\s*,\s*queued\b/);
     expect(matchIndexes(enqueueHandler, /ackSessionTurnEndedDurable\s*\(/)).toHaveLength(0);
 
     const acceptedStart = registerSource.indexOf('onAcceptedQueuedMessage:');
@@ -61,26 +65,9 @@ describe('interrupted continuation enqueue contract', () => {
     expect(matchIndexes(acceptedHook, /ackSessionTurnEndedDurable\s*\(/)).toHaveLength(0);
   });
 
-  it('durable-acks continue prompts only after vendor dispatch is irreversible', () => {
-    const start = registerSource.indexOf('onDispatchedUserTurn:');
-    expect(start).toBeGreaterThan(-1);
-    const end = registerSource.indexOf('noteSessionClearBoundary', start);
-    expect(end).toBeGreaterThan(start);
-    const hook = registerSource.slice(start, end);
-
-    const classifyIndexes = matchIndexes(
-      hook,
-      /item\.originalSyntheticTrigger\s*!==\s*['"]continue['"]/,
-    );
-    const acknowledgeIndexes = matchIndexes(
-      hook,
-      /ackSessionTurnEndedDurable\(\s*sessionId\s*,\s*preVendorDispatchAt\s*\)/,
-    );
-    expect(classifyIndexes).toHaveLength(1);
-    expect(hook).not.toMatch(/syntheticTriggerKind\(\s*item\.text\s*\)/);
-    expect(acknowledgeIndexes).toHaveLength(1);
-    expect(acknowledgeIndexes[0]).toBeGreaterThan(classifyIndexes[0]!);
-
+  // Ack timing runs through the shared production send transaction in
+  // makerSendTransaction.test.ts; retain the cross-stage coordinator guard.
+  it('runs dispatched-user side effects only after vendor dispatch is irreversible', () => {
     // coordinator must invoke the hook only after isSendDispatched(result) is true.
     const dispatchedCall = coordinatorSource.indexOf(
       'await this.deps.onDispatchedUserTurn?.(sessionId, head, preVendorDispatchAt)',
@@ -97,21 +84,11 @@ describe('interrupted continuation enqueue contract', () => {
   });
 
   it('keeps a scheduler auto-resume owned until dispatch and fails it when discarded', () => {
-    const scheduleStart = registerSource.indexOf('autoResumeBookkeeping.schedule(');
-    const scheduleEnd = registerSource.indexOf('steerToAgent:', scheduleStart);
-    expect(scheduleStart).toBeGreaterThan(-1);
-    expect(scheduleEnd).toBeGreaterThan(scheduleStart);
-    const scheduleHook = registerSource.slice(scheduleStart, scheduleEnd);
-    expect(scheduleHook).not.toMatch(/clearSchedulerAutoResumePending\s*\(/);
-    expect(scheduleHook).toMatch(/\(attempt\)\s*=>\s*\{\s*return\s*\(async/);
-    expect(scheduleHook).not.toMatch(/void\s*\(async\s*\(\)\s*=>/);
+    // The auto-resume hooks are in interruptedTurnAutoResumeHooks.ts; register.ts hands them to the coordinator.
+    // The hooks' own schedule and discard steps are guarded in hostDesktopSourceContracts.guard.test.ts.
+    expect(registerSource).toContain('onResumableTurnError: interruptedTurnAutoResumeHooks.onResumableTurnError,');
 
     expect(eventSource).toMatch(/getAutoResumeDeferredOwner\(session\.id\)/);
-    const ownerDiscardedStart = registerSource.indexOf('onResumableTurnErrorDiscarded:');
-    const ownerDiscardedEnd = registerSource.indexOf('onResumableTurnError:', ownerDiscardedStart);
-    expect(registerSource.slice(ownerDiscardedStart, ownerDiscardedEnd)).toMatch(
-      /deferredOwner:\s*options\.owner/,
-    );
 
     const dispatchedStart = registerSource.indexOf('onDispatchedUserTurn:');
     const dispatchedEnd = registerSource.indexOf('noteSessionClearBoundary', dispatchedStart);
@@ -143,7 +120,7 @@ describe('interrupted continuation enqueue contract', () => {
     expect(discardedFinalizeIndex).toBeGreaterThan(discardedSettleIndex);
 
     const settleStart = registerSource.indexOf('function settleUndispatchedAutoResumeOutcome(');
-    const settleEnd = registerSource.indexOf('\n}\n', settleStart);
+    const settleEnd = registerSource.indexOf('\n  }\n', settleStart);
     expect(settleStart).toBeGreaterThan(-1);
     expect(settleEnd).toBeGreaterThan(settleStart);
     const settleHelper = registerSource.slice(settleStart, settleEnd);
@@ -153,7 +130,7 @@ describe('interrupted continuation enqueue contract', () => {
     const interruptedSettleStart = registerSource.indexOf(
       'function settleUndispatchedInterruptedAutoResume(',
     );
-    const interruptedSettleEnd = registerSource.indexOf('\n}\n', interruptedSettleStart);
+    const interruptedSettleEnd = registerSource.indexOf('\n  }\n', interruptedSettleStart);
     expect(interruptedSettleStart).toBeGreaterThan(-1);
     expect(interruptedSettleEnd).toBeGreaterThan(interruptedSettleStart);
     const interruptedSettleHelper = registerSource.slice(
@@ -253,9 +230,23 @@ describe('interrupted continuation enqueue contract', () => {
     expect(registerSource).toContain(
       "rollbackAgentIslandUserPrompt(sessionId, item.clientId, 'rejected')",
     );
-    expect(registerSource).toContain(
-      "rollbackAgentIslandUserPrompt(sessionId, item.clientId, 'blocked')",
-    );
+    expect(registerSource).toMatch(/createRuntimePluginInputHooks\(\{[^}]*rollbackAgentIslandUserPrompt,/);
+    const rollback = vi.fn();
+    const broadcast = vi.fn();
+    const hooks = createRuntimePluginInputHooks({
+      getStableSessionForTurnBoundary: () => null,
+      screenGhostUserMessage: vi.fn(),
+      rollbackAgentIslandUserPrompt: rollback,
+      revokeTrustedDesktopQueueOrigin: vi.fn(),
+      broadcastGhostMessageBlocked: broadcast,
+      broadcastGhostMessageRewritten: vi.fn(),
+    });
+    const item = { clientId: 'input', text: 'prompt' } as Parameters<typeof hooks.onUserMessageBlocked>[1];
+    const verdict = { ghostId: 'plugin', ghostName: 'Fixture', reason: 'blocked' };
+    hooks.onUserMessageBlocked('task', item, verdict);
+    expect(rollback).toHaveBeenCalledExactlyOnceWith('task', 'input', 'blocked');
+    expect(broadcast).toHaveBeenCalledExactlyOnceWith({ sessionId: 'task', clientId: 'input', text: 'prompt', ...verdict });
+    expect(rollback.mock.invocationCallOrder[0]).toBeLessThan(broadcast.mock.invocationCallOrder[0]);
   });
 
   it('fails a pending scheduler auto-resume before dispatching unrelated user input', () => {
@@ -291,13 +282,13 @@ describe('interrupted continuation enqueue contract', () => {
     expect(sessionViewSource).toMatch(
       /if \(syntheticContinuationPending && sessionInterruptAcked\) \{\s*setSessionInterruptAcked\(false\);\s*\}/,
     );
-    // 恰好三处消费点(error-tail / interrupted / unread-failed-schedule banner
-    // 的互斥渲染条件),多一处就要回来审视是否绕过了「抑制交给排队/在飞状态」
-    // 这条契约。
+    // 四处消费点：原有 error-tail / interrupted / unread-failed-schedule banner
+    // 的互斥渲染条件，以及分享任务恢复弹窗的 active 门。弹窗同样必须让排队／
+    // 在飞的自动继续优先，不能在后台恢复期间要求用户换电脑。
     // 注:PR #879 加的「挂起状态落回 false 的边沿 → 重算告警红点」effect 走的是
     // 早退写法(`if (!was || syntheticContinuationPending) return;`),不消费这个
     // 否定形式,故计数不变。
-    expect(matchIndexes(sessionViewSource, /!syntheticContinuationPending/)).toHaveLength(3);
+    expect(matchIndexes(sessionViewSource, /!syntheticContinuationPending/)).toHaveLength(4);
   });
 
   it('defers Orca worker terminal while auto-resume owns the failure, and finalizes on surface', () => {

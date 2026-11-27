@@ -548,7 +548,8 @@ fn remove_staging_dir(path: &Path) -> io::Result<()> {
 /// rollbacks (which we intentionally do NOT auto-delete at end-of-run).
 /// Best-effort: any IO failure is ignored — sweeping is purely housekeeping.
 pub fn sweep_stale_temp_dirs() {
-    const MAX_AGE_SECS: u64 = 7 * 24 * 60 * 60; // 7 days
+    // 7 days.
+    const MAX_AGE_SECS: u64 = 7 * 24 * 60 * 60;
     // Broad prefixes catch:
     //   - cindy-update-{ts}/           current workdir layout (2026-07 rebrand)
     //   - xdt-update-{ts}/             legacy workdir layout
@@ -577,7 +578,10 @@ pub fn sweep_stale_temp_dirs() {
             Ok(m) => m,
             Err(_) => continue,
         };
-        let age_secs = now.duration_since(modified).map(|d| d.as_secs()).unwrap_or(0);
+        let age_secs = now
+            .duration_since(modified)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
         if age_secs < MAX_AGE_SECS {
             continue;
         }
@@ -609,7 +613,10 @@ fn workdir_ts(workdir: &Path) -> String {
     workdir
         .file_name()
         .and_then(|n| n.to_str())
-        .and_then(|n| n.strip_prefix("cindy-update-").or_else(|| n.strip_prefix("xdt-update-")))
+        .and_then(|n| {
+            n.strip_prefix("cindy-update-")
+                .or_else(|| n.strip_prefix("xdt-update-"))
+        })
         .map(|s| s.to_string())
         .unwrap_or_else(|| chrono::Local::now().timestamp_millis().to_string())
 }
@@ -709,11 +716,7 @@ fn rollback<F: FnMut(u64, u64)>(
     Ok(())
 }
 
-fn copy_tree<F: FnMut(u64, u64)>(
-    src: &Path,
-    dst: &Path,
-    mut on_progress: F,
-) -> anyhow::Result<()> {
+fn copy_tree<F: FnMut(u64, u64)>(src: &Path, dst: &Path, mut on_progress: F) -> anyhow::Result<()> {
     let entries: Vec<_> = walkdir::WalkDir::new(src)
         .into_iter()
         .filter_map(Result::ok)
@@ -786,12 +789,9 @@ fn is_process_running_by_name(name: &str) -> bool {
     let mut sys = System::new_all();
     sys.refresh_all();
     let target = name.to_lowercase();
-    sys.processes().values().any(|p| {
-        p.name()
-            .to_string_lossy()
-            .to_lowercase()
-            .contains(&target)
-    })
+    sys.processes()
+        .values()
+        .any(|p| p.name().to_string_lossy().to_lowercase().contains(&target))
 }
 
 /// Poll sysinfo every `LAUNCH_VERIFY_POLL` until the process appears or
@@ -819,11 +819,7 @@ fn poll_until_process_running(name: &str, timeout: Duration) -> bool {
 /// path lives under `app_dir`, excluding ourselves. The updater runs from
 /// %TEMP% (updateService copies it out of resources/ precisely so it never
 /// locks the install dir), so the self-pid exclusion is just belt-and-braces.
-fn collect_appdir_processes(
-    sys: &mut System,
-    app_dir: &Path,
-    self_pid: u32,
-) -> Vec<(u32, String)> {
+fn collect_appdir_processes(sys: &mut System, app_dir: &Path, self_pid: u32) -> Vec<(u32, String)> {
     sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
     sys.processes()
         .iter()
@@ -848,7 +844,10 @@ fn collect_appdir_processes(
 /// process survives the full grace+kill cycle, we bail (clean abort — no lock
 /// was written, no files were touched yet). The user gets an error message
 /// naming the culprit processes and can retry after manually ending them.
-fn terminate_appdir_processes<F: FnMut(InstallerEvent)>(app_dir: &Path, emit: &mut F) -> anyhow::Result<()> {
+fn terminate_appdir_processes<F: FnMut(InstallerEvent)>(
+    app_dir: &Path,
+    emit: &mut F,
+) -> anyhow::Result<()> {
     let self_pid = std::process::id();
     let mut sys = System::new();
 
@@ -863,7 +862,7 @@ fn terminate_appdir_processes<F: FnMut(InstallerEvent)>(app_dir: &Path, emit: &m
     ));
     emit(InstallerEvent::Phase(
         Phase::Waiting,
-        "等待残留进程退出…".into(),
+        "waitProcesses".into(),
     ));
 
     let grace_start = Instant::now();
@@ -878,7 +877,7 @@ fn terminate_appdir_processes<F: FnMut(InstallerEvent)>(app_dir: &Path, emit: &m
 
     emit(InstallerEvent::Phase(
         Phase::Waiting,
-        "结束残留进程…".into(),
+        "stopProcesses".into(),
     ));
     for (pid, name) in &lingering {
         if let Some(p) = sys.process(sysinfo::Pid::from_u32(*pid)) {
@@ -903,7 +902,10 @@ fn terminate_appdir_processes<F: FnMut(InstallerEvent)>(app_dir: &Path, emit: &m
         std::thread::sleep(APPDIR_PROCESS_POLL);
     }
 
-    let names: Vec<_> = lingering.iter().map(|(pid, name)| format!("{} (pid {})", name, pid)).collect();
+    let names: Vec<_> = lingering
+        .iter()
+        .map(|(pid, name)| format!("{} (pid {})", name, pid))
+        .collect();
     anyhow::bail!(
         "安装目录下仍有进程无法终止: {}。可能被杀软或系统保护，请手动结束后重试更新",
         names.join(", ")
@@ -1150,7 +1152,9 @@ fn build_elevation_arg_string(args: &CliArgs) -> String {
 }
 
 fn installation_version_key(args: &CliArgs) -> Option<String> {
-    args.install_key.clone().or_else(|| std::env::var("CINDY_VERSION_SYNC_KEY").ok())
+    args.install_key
+        .clone()
+        .or_else(|| std::env::var("CINDY_VERSION_SYNC_KEY").ok())
 }
 
 #[cfg(test)]
@@ -1161,15 +1165,27 @@ mod version_metadata_args_tests {
     #[test]
     fn legacy_launchers_work_and_elevation_preserves_optional_install_key() {
         let mut args = CliArgs::try_parse_from([
-            "updater", "--zip", "patch.zip", "--app-dir", "app", "--exe-name",
-            "Cindy.exe", "--pid", "123", "--log", "update.log", "--lock", "lock",
-            "--workdir", "temp",
-        ]).unwrap();
+            "updater",
+            "--zip",
+            "patch.zip",
+            "--app-dir",
+            "app",
+            "--exe-name",
+            "Cindy.exe",
+            "--pid",
+            "123",
+            "--log",
+            "update.log",
+            "--lock",
+            "lock",
+            "--workdir",
+            "temp",
+        ])
+        .unwrap();
         assert!(args.install_key.is_none());
         args.install_key = Some("5a59f1e9-8f21-5646-8eed-e6da4126bb5c".into());
-        assert!(build_elevation_arg_string(&args).ends_with(
-            "--install-key 5a59f1e9-8f21-5646-8eed-e6da4126bb5c --elevated"
-        ));
+        assert!(build_elevation_arg_string(&args)
+            .ends_with("--install-key 5a59f1e9-8f21-5646-8eed-e6da4126bb5c --elevated"));
     }
 }
 

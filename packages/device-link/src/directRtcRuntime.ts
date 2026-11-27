@@ -1,13 +1,15 @@
 /// <reference lib="dom" />
 import { MAX_FRAME_BYTES } from './protocol.js';
-import type { DirectRuntime, DirectRuntimeEvents, DirectRuntimeSession } from './directNegotiation.js';
+import type { DirectRuntime, DirectRuntimeEvents, DirectRuntimeSession, DirectRuntimeCloseReason } from './directNegotiation.js';
 
 /** Data-only WebRTC, shared by Electron and the isolated Mobile WebView. No STUN/TURN:
  * host candidates try the LAN, and the existing authenticated relay is the fallback.
- * Binary fragments preserve UTF-8 (including surrogate pairs) across 16 KiB SCTP limits. */
-export function createDirectRtcRuntime(): DirectRuntime {
+ * Binary fragments preserve UTF-8 (including surrogate pairs) across 16 KiB SCTP limits.
+ * A local traffic observer owns closing the peer connection after its final reading. */
+export function createDirectRtcRuntime(observe?: (pc: RTCPeerConnection) => () => void): DirectRuntime {
   return { create(_id: string, events: DirectRuntimeEvents): DirectRuntimeSession {
     const pc = new RTCPeerConnection({ iceServers: [] });
+    const closePeer = observe?.(pc) ?? (() => pc.close());
     let dc: RTCDataChannel | undefined;
     let closed = false;
     let receiveBytes = 0;
@@ -16,15 +18,15 @@ export function createDirectRtcRuntime(): DirectRuntime {
     let bufferTimer: ReturnType<typeof setTimeout> | undefined;
     const encoder = new TextEncoder();
     const decoder = new TextDecoder('utf-8', { fatal: true });
-    const close = () => {
+    const close = (reason: DirectRuntimeCloseReason = 'channel-closed') => {
       if (closed) return;
       closed = true;
       clearTimeout(receiveTimer);
       clearTimeout(bufferTimer);
       parts = [];
       dc?.close();
-      pc.close();
-      events.closed();
+      closePeer();
+      events.closed(reason);
     };
     const scheduleBufferReport = () => {
       if (!closed && dc && dc.bufferedAmount > 0 && !bufferTimer) {
@@ -47,8 +49,8 @@ export function createDirectRtcRuntime(): DirectRuntime {
       // Always report the final zero, including messages smaller than a low-water mark.
       dc.bufferedAmountLowThreshold = 0;
       dc.onopen = () => { if (!closed) events.open(); };
-      dc.onclose = close;
-      dc.onerror = close;
+      dc.onclose = () => close();
+      dc.onerror = () => close('network-failed');
       dc.onbufferedamountlow = () => {
         clearTimeout(bufferTimer);
         bufferTimer = undefined;
@@ -75,7 +77,9 @@ export function createDirectRtcRuntime(): DirectRuntime {
     };
     pc.ondatachannel = ({ channel }) => bind(channel);
     pc.onconnectionstatechange = () => {
-      if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) close();
+      if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+        close('network-failed');
+      } else if (pc.connectionState === 'closed') close();
     };
     const gather = async (description: RTCSessionDescriptionInit): Promise<string> => {
       await pc.setLocalDescription(description);
@@ -117,7 +121,7 @@ export function createDirectRtcRuntime(): DirectRuntime {
         } catch (error) { close(); throw error; }
       },
       get bufferedAmount() { return dc?.bufferedAmount ?? 0; },
-      close,
+      close: () => close(),
     };
   } };
 }

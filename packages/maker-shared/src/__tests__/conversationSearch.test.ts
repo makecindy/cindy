@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  parseConversationSearchQuery,
+  enforceExplicitConversationSearchResponse,
+  setConversationSearchAll,
   conversationSearchResultKey,
   emptyConversationSearchResponse,
   filterResultsByRequestFilters,
@@ -13,6 +16,23 @@ import {
   type ConversationSearchResponse,
   type ConversationSearchResultItem,
 } from '../conversationSearch.js';
+
+// Query is the cross-device search contract. These cases distinguish literal
+// plus signs and quoted phrases from task-level conjunction (unit tier).
+describe('explicit search syntax', () => {
+  it('keeps phrases intact and does not treat C++ as an operator', () => {
+    expect(parseConversationSearchQuery('C++ “登录 失败” + 缓存')).toMatchObject({
+      all: true, explicit: true,
+      terms: [{ text: 'C++', quoted: false }, { text: '登录 失败', quoted: true }, { text: '缓存', quoted: false }],
+    });
+    expect(parseConversationSearchQuery('登录 缓存').explicit).toBe(false);
+    expect(parseConversationSearchQuery('""')).toMatchObject({ explicit: true, terms: [] });
+  });
+  it('lets the menu switch conjunction without losing phrases', () => {
+    expect(setConversationSearchAll('"login error" + cache', false)).toBe('"login error" cache');
+    expect(setConversationSearchAll('"login error" cache', true)).toBe('+ "login error" cache');
+  });
+});
 
 const feature = vi.hoisted(() => ({ enabled: false }));
 vi.mock('../cindyMakeFeature.js', async (importOriginal) => ({
@@ -59,6 +79,37 @@ function response(results: ConversationSearchResultItem[]): ConversationSearchRe
 }
 
 describe('remoteConversationSearchRequest', () => {
+  // Mixed-version hosts return OR hits. Validate each visible message separately;
+  // neither multiple messages nor title+body may prove an AND query (unit tier).
+  it('filters legacy OR results without combining message snippets or titles', () => {
+    const hit = (preview: string) => ({ messageId: preview, messageClientId: preview,
+      role: 'user' as const, createdAt: '', snippet: null, preview, score: 1, ftsRank: 1, vectorRank: null });
+    const split = { ...result('alpha', 1), contentHits: [hit('alpha'), hit('beta')], contentHit: hit('beta') };
+    const together = { ...result('other', 1), contentHits: [hit('alpha beta')], contentHit: hit('alpha beta') };
+    const snippetHit = { ...hit('unrelated'), snippet: '<mark>alpha</mark> beta' };
+    const snippet = { ...result('snippet', 1), contentHits: [snippetHit], contentHit: snippetHit };
+    const page = response([split, together, result('alpha beta', 1), snippet]);
+    const checked = enforceExplicitConversationSearchResponse(page, { query: 'alpha + beta' });
+    expect(checked.results.map((item) => [item.session.id, item.matchKind])).toEqual([
+      ['other', 'content'], ['alpha beta', 'title'], ['snippet', 'content'],
+    ]);
+    expect(checked.poolCapped).toBe(true);
+    expect(enforceExplicitConversationSearchResponse(page, { query: 'alpha beta' })).toBe(page);
+    const supported = { ...page, querySyntaxVersion: 1 as const };
+    expect(enforceExplicitConversationSearchResponse(supported, { query: 'alpha + beta' })).toBe(supported);
+    expect(stampRemoteSearchResponse(supported, { deviceId: 'remote' }).querySyntaxVersion).toBe(1);
+  });
+  it('filters by explicit project membership while preserving the execution directory', () => {
+    const page = response([result('checkout', 1, { projectDir: '/project', workingDir: '/tmp/checkout' }), result('legacy', 2)]);
+    expect(filterResultsByWorkingDirs(page, ['/project']).results.map(item => item.session.id)).toEqual(['checkout']);
+    expect(filterResultsByWorkingDirs(page, ['/repo']).results.map(item => item.session.id)).toEqual(['legacy']);
+    expect(remoteIndexedSearchIgnoredWorkingDirs(response([page.results[0]!]), ['/project'])).toBe(false);
+    expect(page.results[0]?.session.workingDir).toBe('/tmp/checkout');
+    const buddy = response([result('group', 1, { taskProjectDir: '/buddy', projectDir: '/group-repo', workingDir: '/group-repo' })]);
+    expect(filterResultsByWorkingDirs(buddy, ['/buddy']).results).toHaveLength(1);
+    expect(filterResultsByWorkingDirs(buddy, ['/group-repo']).results).toHaveLength(0);
+    expect(remoteIndexedSearchIgnoredWorkingDirs(buddy, ['/buddy'])).toBe(false);
+  });
   afterEach(() => { feature.enabled = false; });
 
   it.each([undefined, 1, 3, 24, 50, 100])('uses the bounded remote candidate pool for limit %s', (limit) => {

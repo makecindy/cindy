@@ -1,8 +1,8 @@
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
-import type { ControlSteerOutcome } from './agent-input-coordinator.js';
+import type { ControlSteerOutcome } from './agent-input-coordinator.desktop.js';
 
 export type SessionQueueControlFailureCode =
-  'QUEUED_MESSAGE_NOT_FOUND' | 'MESSAGE_CONSUMING' | 'NOT_AUTHORIZED' | 'INVALID_ARGS';
+  'QUEUED_MESSAGE_NOT_FOUND' | 'MESSAGE_CONSUMING' | 'NOT_AUTHORIZED' | 'INVALID_ARGS' | 'UNSUPPORTED_CAPABILITY';
 
 export type SessionQueueControlResult =
   | { ok: true; queuedMessageId: string }
@@ -50,7 +50,7 @@ export interface SessionQueueControlDeps {
 
 export type SessionQueueAuthorization = (
   item: AgentInputQueuedMessage,
-) => { ok: true } | { ok: false; message: string };
+) => { ok: true } | { ok: false; message: string; errorCode?: 'UNSUPPORTED_CAPABILITY' };
 
 type BaseControlParams = {
   sessionId: string;
@@ -81,7 +81,7 @@ export function createSessionQueueControlService(deps: SessionQueueControlDeps) 
     if (!authorization.ok) {
       return {
         ok: false,
-        errorCode: 'NOT_AUTHORIZED',
+        errorCode: authorization.errorCode ?? 'NOT_AUTHORIZED',
         message: authorization.message,
       };
     }
@@ -100,10 +100,10 @@ export function createSessionQueueControlService(deps: SessionQueueControlDeps) 
 
   return {
     async update(
-      params: BaseControlParams & {
-        message: string;
-        rebuild: (item: AgentInputQueuedMessage, message: string) => AgentInputQueuedMessage;
-      },
+      params: BaseControlParams & { message: string } & (
+        | { rebuild: (item: AgentInputQueuedMessage, message: string) => AgentInputQueuedMessage }
+        | { updateText: (expected: AgentInputQueuedMessage) => boolean }
+      ),
     ): Promise<SessionQueueControlResult> {
       if (params.message.trim().length === 0) {
         return { ok: false, errorCode: 'INVALID_ARGS', message: 'message must not be empty' };
@@ -111,6 +111,11 @@ export function createSessionQueueControlService(deps: SessionQueueControlDeps) 
       const resolved = await resolve(params);
       if (!resolved.ok) return resolved;
       await params.beforeMutation?.();
+      if ('updateText' in params) {
+        return params.updateText(resolved.item)
+          ? { ok: true, queuedMessageId: params.queuedMessageId }
+          : classifyLostRace(params.sessionId, params.queuedMessageId);
+      }
       const next = params.rebuild(resolved.item, params.message);
       if (
         next.clientId !== params.queuedMessageId ||

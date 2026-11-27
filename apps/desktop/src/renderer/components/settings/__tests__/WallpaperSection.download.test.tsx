@@ -11,6 +11,7 @@ const state = vi.hoisted(() => ({
   pending: false,
   failed: false,
   progress: 0,
+  retryReason: undefined as 'slow' | undefined,
   retry: vi.fn(),
   select: vi.fn(),
 }));
@@ -23,9 +24,11 @@ vi.mock('@/hooks/useWallpaperSettings', () => ({
     downloadPending: state.pending,
     downloadFailed: state.failed,
     downloadProgress: state.progress,
+    downloadRetryReason: state.retryReason,
     retryDownload: state.retry,
     setWallpaper: state.select,
     setVisibility: vi.fn(),
+    previewVisibility: vi.fn(),
     setBlur: vi.fn(),
     previewBlur: vi.fn(),
     setMotion: vi.fn(),
@@ -37,6 +40,7 @@ beforeEach(() => {
   state.pending = false;
   state.failed = false;
   state.progress = 0;
+  state.retryReason = undefined;
   vi.stubGlobal(
     'ResizeObserver',
     class {
@@ -81,6 +85,10 @@ describe('wallpaper download feedback', () => {
         expect(status.getAttribute('aria-valuenow')).toBe(String(progress * 100));
         expect(within(tile).queryByText(String(progress * 100) + '%')).toBeNull();
       }
+      // A transfer that restarted for a retry says why to assistive technology.
+      state.retryReason = 'slow';
+      rerender(<WallpaperSection />);
+      expect(status.getAttribute('aria-valuetext')).toBe('downloadProgress.retry.slow');
       state.pending = false;
       rerender(<WallpaperSection />);
       expect(screen.queryByRole('status')).toBeNull();

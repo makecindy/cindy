@@ -6,13 +6,12 @@ public class CindyComposerModule: Module {
     Name("CindyComposer")
     Constant("available") { true }
     View(CindyComposerView.self) {
-      Events("onDocumentChange", "onSelectionChange", "onFocusChange", "onContentHeight", "onPasteText", "onPasteImages")
+      Events("onDocumentChange", "onSelectionChange", "onFocusChange", "onContentHeight", "onScrollEdge", "onPasteText", "onPasteImages")
       Prop("document") { (view: CindyComposerView, value: [String: Any]) in view.apply(value) }
       Prop("colorScheme") { (view: CindyComposerView, value: String) in
         view.overrideUserInterfaceStyle = value == "dark" ? .dark : .light
         view.editor.keyboardAppearance = value == "dark" ? .dark : .light
       }
-      AsyncFunction("expand") { (view: CindyComposerView) in view.expand() }
       Prop("placeholder") { (view: CindyComposerView, value: String) in view.placeholder.text = value }
       Prop("editable") { (view: CindyComposerView, value: Bool) in view.editor.isEditable = value }
       Prop("textColor") { (view: CindyComposerView, value: UIColor) in view.foreground = value; view.updateStyle() }
@@ -27,6 +26,7 @@ public class CindyComposerModule: Module {
       AsyncFunction("setDocument") { (view: CindyComposerView, value: [String: Any], offset: Int, focus: Bool) in
         guard view.apply(value) else { return }
         view.editor.selectedRange = NSRange(location: min(max(0, offset), view.editor.attributedText.length), length: 0)
+        view.revealCaret()
         if focus { view.editor.becomeFirstResponder() }
         view.emitSelection()
       }
@@ -57,6 +57,19 @@ final class ComposerTextView: UITextView {
   private let history = UndoManager()
   override var undoManager: UndoManager? { history }
   weak var owner: CindyComposerView?
+  var atScrollTop: Bool { contentOffset.y <= -adjustedContentInset.top + 1 }
+  var atScrollBottom: Bool {
+    !isScrollEnabled || contentOffset.y >= contentSize.height + adjustedContentInset.bottom - bounds.height - 1
+  }
+  // Dragging past an edge resizes the composer (JS body drag). Not starting the
+  // pan here keeps UIKit's rubber band from claiming that touch first.
+  override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+    if gestureRecognizer === panGestureRecognizer {
+      let dy = panGestureRecognizer.translation(in: self).y
+      if (dy > 0 && atScrollTop) || (dy < 0 && atScrollBottom) { return false }
+    }
+    return super.gestureRecognizerShouldBegin(gestureRecognizer)
+  }
   override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
     if action == #selector(UIResponderStandardEditActions.paste(_:)) {
       guard isEditable, isSelectable, isUserInteractionEnabled, !isHidden, alpha > 0.01 else { return false }
@@ -108,16 +121,19 @@ final class CindyComposerView: ExpoView, UITextViewDelegate {
   let onSelectionChange = EventDispatcher()
   let onFocusChange = EventDispatcher()
   let onContentHeight = EventDispatcher()
+  let onScrollEdge = EventDispatcher()
   let onPasteText = EventDispatcher()
   let onPasteImages = EventDispatcher()
   let editor = ComposerTextView()
   let placeholder = UILabel()
-  var expandedController: UIViewController?
   var revision = 0
   var foreground = UIColor.label
   var chipColor = UIColor.secondarySystemFill
   private var applying = false
+  // JS 写入的转写(未聚焦、系统不会自动滚)要跟住插入点;用户拖动或开始编辑后交还给系统。
+  private var followsCaret = false
   private var lastHeight: CGFloat = 0
+  private var lastScrollEdge: (top: Bool, bottom: Bool)?
   private var deferred: [String: Any]?
   private var textFont: UIFont { UIFont.preferredFont(forTextStyle: .body) }
   private var typingStyle: [NSAttributedString.Key: Any] { [.font: textFont, .foregroundColor: foreground] }
@@ -142,14 +158,11 @@ final class CindyComposerView: ExpoView, UITextViewDelegate {
   }
   override func layoutSubviews() {
     super.layoutSubviews()
-    guard expandedController == nil else { return }
     editor.frame = bounds
     placeholder.frame = CGRect(x: 0, y: 3, width: bounds.width, height: textFont.lineHeight)
     measure()
-  }
-  override func didMoveToWindow() {
-    super.didMoveToWindow()
-    if window == nil { expandedController?.dismiss(animated: false) }
+    // 输入框随内容长高时 bounds 晚于文字到位,长高后再对齐一次插入点。
+    if followsCaret { scrollCaretVisible() }
   }
   func updateStyle() {
     guard editor.markedTextRange == nil else { return }
@@ -208,10 +221,15 @@ final class CindyComposerView: ExpoView, UITextViewDelegate {
     let wasEmpty = editor.attributedText.length == 0
     editor.attributedText = next
     editor.typingAttributes = typingStyle
-    editor.selectedRange = wasEmpty ? NSRange(location: next.length, length: 0) : NSRange(location: min(range.location, next.length), length: min(range.length, max(0, next.length - range.location)))
+    if let caret = value["caret"] as? Int {
+      editor.selectedRange = NSRange(location: min(max(0, caret), next.length), length: 0)
+    } else {
+      editor.selectedRange = wasEmpty ? NSRange(location: next.length, length: 0) : NSRange(location: min(range.location, next.length), length: min(range.length, max(0, next.length - range.location)))
+    }
     applying = false
     emitSelection()
     measure()
+    if value["caret"] is Int { revealCaret() }
     return true
   }
   func resolveLink(_ href: String, semantic: [String: Any]) {
@@ -276,16 +294,40 @@ final class CindyComposerView: ExpoView, UITextViewDelegate {
     if editor.markedTextRange == nil, let value = deferred { deferred = nil; apply(value) }
   }
   func textViewDidChangeSelection(_ textView: UITextView) { if !applying { emitSelection() } }
+  // Which end the text is scrolled to: JS decides from this whether a drag on the
+  // text scrolls it or resizes the composer.
+  func scrollViewDidScroll(_ scrollView: UIScrollView) { emitScrollEdge() }
+  private func emitScrollEdge() {
+    let top = editor.atScrollTop
+    let bottom = editor.atScrollBottom
+    if let last = lastScrollEdge, last.top == top, last.bottom == bottom { return }
+    lastScrollEdge = (top, bottom)
+    onScrollEdge(["atTop": top, "atBottom": bottom])
+  }
   func emitSelection() {
     onSelectionChange(["start": editor.selectedRange.location, "end": NSMaxRange(editor.selectedRange), "revision": revision])
   }
-  func textViewDidBeginEditing(_ textView: UITextView) { onFocusChange(["focused": true]) }
+  func textViewDidBeginEditing(_ textView: UITextView) { followsCaret = false; onFocusChange(["focused": true]) }
+  func scrollViewWillBeginDragging(_ scrollView: UIScrollView) { followsCaret = false }
+  func revealCaret() {
+    followsCaret = true
+    scrollCaretVisible()
+  }
+  private func scrollCaretVisible() {
+    guard let end = editor.selectedTextRange?.end else { return }
+    editor.layoutIfNeeded()
+    var rect = editor.caretRect(for: end)
+    guard !rect.isNull, !rect.isInfinite else { return }
+    rect.size.height += editor.textContainerInset.bottom
+    editor.scrollRectToVisible(rect, animated: false)
+  }
   func textViewDidEndEditing(_ textView: UITextView) { onFocusChange(["focused": false]) }
   private func measure() {
     placeholder.isHidden = editor.attributedText.length > 0
-    guard expandedController == nil, bounds.width > 0 else { return }
+    guard bounds.width > 0 else { return }
     let height = ceil(editor.sizeThatFits(CGSize(width: bounds.width, height: .greatestFiniteMagnitude)).height)
     editor.isScrollEnabled = height > bounds.height + 1
     if height != lastHeight { lastHeight = height; onContentHeight(["height": height]) }
+    emitScrollEdge()
   }
 }

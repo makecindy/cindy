@@ -36,7 +36,7 @@ vi.mock('../../turn-change-set/store.js', () => ({
   listTurnChangeSets: async () => [],
   getTurnChangeSets: async () => [],
 }));
-vi.mock('../../imageCacheStore.js', () => ({
+vi.mock('../../imageCacheStore.desktop.js', () => ({
   collectSessionImageUrls: () => [],
   resolveSafe: () => {
     throw new Error('not used');
@@ -45,7 +45,7 @@ vi.mock('../../imageCacheStore.js', () => ({
 vi.mock('../../cindy-media/chatAttachments.js', () => ({
   collectCindyMediaUrls: () => [],
 }));
-vi.mock('../../cindy-media/blobStore.js', () => ({
+vi.mock('../../cindy-media/blobStore.desktop.js', () => ({
   resolveSafe: () => {
     throw new Error('not used');
   },

@@ -7,11 +7,16 @@
  * 语义对齐桌面 `useDeviceProviders`:按 deviceId 隔离 + inflight 去重 + 代际驱逐
  * (evict 时自增代际,作废在途 fetch 的回写,防设备切换 / 重连后串旧供应商)。
  */
-import type { ProviderView } from '@cindy/model-providers/registry';
+import { actualSourceIdForModel, nativeDefaultSourceId, type ProviderView } from '@cindy/model-providers/registry';
+import { isPreconditionFailedRemoteError } from '@cindy/maker-shared/device-link-contract';
+import { MetadataSnapshotExpiry, isProviderAccessDeniedError, type ProviderMetadataContinuity, type ProviderPickerModel } from '@cindy/device-link';
 
 /** PROVIDER_LIST 隧道回包:目录 + 被控端「模型显示/隐藏」override 快照(旧被控端无)。 */
 export interface DeviceProvidersPayload {
   providers: ProviderView[];
+  /** Same-account hosts omit these suspended sources until an existing task needs its model. */
+  deferredProviderIds?: string[];
+  providerContinuity?: ProviderMetadataContinuity;
   /** Host-owned display order; absent on older hosts. */
   providerOrder?: string[];
   /** key = `${agent}:${providerId}:${modelId}`;undefined = 旧被控端,调用方不过滤。 */
@@ -20,6 +25,66 @@ export interface DeviceProvidersPayload {
 
 /** 被控端供应商目录的取数器(通常 = `() => transport.listProviders()`)。 */
 export type DeviceProvidersFetcher = () => Promise<DeviceProvidersPayload>;
+
+/** Only exact suspended rows and their visibility, scoped to the requesting task and base snapshot. */
+export interface RetainedProviderCatalog {
+  base: DeviceProvidersPayload;
+  key: string;
+  payload: DeviceProvidersPayload;
+}
+
+export function retainedProviderModelKey(route: ProviderPickerModel): string {
+  return JSON.stringify([route.agent, route.providerId, route.modelId]);
+}
+
+export function needsRetainedProviderModel(
+  base: DeviceProvidersPayload,
+  route: ProviderPickerModel,
+  projectProviders?: (providers: readonly ProviderView[]) => ProviderView[],
+): boolean {
+  const deferred = base.deferredProviderIds;
+  if (!route.modelId || !deferred?.length) return false;
+  if (route.providerId !== null) return deferred.includes(route.providerId);
+  const providers = projectProviders ? projectProviders(base.providers) : base.providers;
+  const source = actualSourceIdForModel(providers, null, route.modelId, route.agent);
+  if (!source) return true;
+  // Even if every deferred source offered this model, could any of them win the existing route?
+  // Without a complete host order, give the unknown sources the earliest possible fallback position.
+  const candidates = new Set([...deferred, source]);
+  const ordered = new Set(base.providerOrder?.filter(id => candidates.has(id)));
+  const ids = ordered.size === candidates.size ? [...ordered] : [...candidates];
+  return nativeDefaultSourceId(ids.map(id => ({ id })), route.agent) !== source;
+}
+
+/** Compose the running and pending rows for display without publishing either to the device cache. */
+export function taskProviderCatalog(
+  base: DeviceProvidersPayload,
+  ...catalogs: (RetainedProviderCatalog | undefined)[]
+): DeviceProvidersPayload {
+  const matches = catalogs.filter((catalog): catalog is RetainedProviderCatalog => catalog?.base === base);
+  if (!matches.length) return base;
+  const kept = new Map<string, ProviderView>();
+  const visibility = { ...base.modelVisibilityOverrides };
+  for (const { payload } of matches) {
+    Object.assign(visibility, payload.modelVisibilityOverrides);
+    for (const provider of payload.providers) {
+      const previous = kept.get(provider.id);
+      if (!previous) {
+        kept.set(provider.id, provider);
+        continue;
+      }
+      // Two selections can belong to the same source, including different models of the same agent.
+      const models = { ...previous.models };
+      for (const agent of Object.keys(provider.models) as (keyof ProviderView['models'])[]) {
+        const entries = models[agent] ?? [];
+        models[agent] = [...entries, ...(provider.models[agent] ?? []).filter(m => !entries.some(old => old.id === m.id))];
+      }
+      kept.set(provider.id, { ...previous, models });
+    }
+  }
+  return orderDeviceProviders({ ...base, providers: [...base.providers.filter(p => !kept.has(p.id)), ...kept.values()],
+    modelVisibilityOverrides: visibility });
+}
 
 /** Recognize both transport codes and the host's serialized IPC error prefix. */
 function providerErrorCode(error: unknown): string | undefined {
@@ -78,8 +143,22 @@ async function requestDeviceProviders(
   }
 }
 
+// Current-task lookups share only an in-flight read for the same immutable base snapshot
+// and route. They never replace the device-wide selectable directory.
+const retainedReads = new WeakMap<DeviceProvidersPayload, Map<string, Promise<DeviceProvidersPayload>>>();
+export function readRetainedProviderModel(base: DeviceProvidersPayload, key: string, fetcher: DeviceProvidersFetcher) {
+  const reads = retainedReads.get(base) ?? new Map<string, Promise<DeviceProvidersPayload>>();
+  const existing = reads.get(key);
+  if (existing) return existing;
+  retainedReads.set(base, reads);
+  const pending = fetcher().finally(() => reads.delete(key));
+  reads.set(key, pending);
+  return pending;
+}
+
 // 缓存按被控设备隔离;代际同桌面(evict 时自增,作废在途 fetch 的回写)。
 const cache = new Map<string, DeviceProvidersPayload>();
+const expiry = new MetadataSnapshotExpiry();
 const inflight = new Map<string, Promise<DeviceProvidersPayload>>();
 const readGeneration = new WeakMap<Promise<DeviceProvidersPayload>, number>();
 const deviceGen = new Map<string, number>();
@@ -100,7 +179,8 @@ export function subscribeDeviceProvidersError(deviceId: string, listener: (error
 function notifyDeviceProvidersError(deviceId: string, error: unknown): void {
   // A downgraded host cannot serve any of the cached provider routes. Retire only
   // that device's snapshot; an empty success notification would incorrectly mark it ready.
-  if (isDeviceProvidersUnsupportedError(error)) cache.delete(deviceId);
+  if (isDeviceProvidersUnsupportedError(error) || isProviderAccessDeniedError(error)
+    || isPreconditionFailedRemoteError(error)) { cache.delete(deviceId); expiry.forget(deviceId); }
   for (const listener of errorListeners.get(deviceId) ?? []) listener(error);
 }
 
@@ -139,7 +219,7 @@ export function subscribeDeviceProviders(
 
 /** 读缓存命中(同步),供 hook 初始化 state 用。 */
 export function getCachedDeviceProviders(deviceId: string): DeviceProvidersPayload | undefined {
-  return cache.get(deviceId);
+  return expiry.valid(deviceId) ? cache.get(deviceId) : undefined;
 }
 
 /**
@@ -150,7 +230,7 @@ export async function fetchDeviceProviders(
   deviceId: string,
   fetcher: DeviceProvidersFetcher,
 ): Promise<DeviceProvidersPayload> {
-  const cached = cache.get(deviceId);
+  const cached = getCachedDeviceProviders(deviceId);
   if (cached) return cached;
   // 重连期间 fresh 在途时 join fresh(greptile P1:重连请求覆盖 fresh 目录)——
   // connectionEpoch 变化会让 useDeviceProviders 重跑 effect 发起普通请求;该请求
@@ -165,15 +245,23 @@ export async function fetchDeviceProviders(
   const startGen = deviceGen.get(deviceId) ?? 0;
   const isCurrent = (): boolean => (deviceGen.get(deviceId) ?? 0) === startGen;
 
+  const requestedAt = { wall: Date.now(), mono: performance.now() };
   const p = requestDeviceProviders(fetcher, isCurrent)
     .then((res) => {
       const payload: DeviceProvidersPayload = {
         providers: res?.providers ?? [],
+        ...(res?.deferredProviderIds ? { deferredProviderIds: res.deferredProviderIds } : {}),
+        ...(res?.providerOrder ? { providerOrder: res.providerOrder } : {}),
+        ...(res?.providerContinuity !== undefined ? { providerContinuity: res.providerContinuity } : {}),
         ...(res?.modelVisibilityOverrides !== undefined
           ? { modelVisibilityOverrides: res.modelVisibilityOverrides }
           : {}),
       };
       if (isCurrent()) {
+        if (!expiry.remember(deviceId, payload, requestedAt, () => expireDeviceProviders(deviceId))) {
+          cache.delete(deviceId);
+          throw new Error('[MODEL_VISIBILITY_NOT_READY] Provider directory snapshot expired');
+        }
         cache.set(deviceId, payload);
         inflight.delete(deviceId);
         notifyDeviceProviders(deviceId, payload);
@@ -214,6 +302,7 @@ function joinProviderRead(
  * readiness. Keep in-flight slots so a burst cannot start overlapping reads. */
 export function invalidateDeviceProvidersForRefresh(deviceId: string): void {
   cache.delete(deviceId);
+  expiry.forget(deviceId);
   deviceGen.set(deviceId, getDeviceProvidersGen(deviceId) + 1);
   notifyDeviceProvidersGen(deviceId, 'fresh-invalidate');
 }
@@ -262,15 +351,23 @@ export async function fetchDeviceProvidersFresh(
   const startGen = deviceGen.get(deviceId) ?? 0;
   const isCurrent = (): boolean => (deviceGen.get(deviceId) ?? 0) === startGen;
 
+  const requestedAt = { wall: Date.now(), mono: performance.now() };
   const p = requestDeviceProviders(fetcher, isCurrent)
     .then((res) => {
       const payload: DeviceProvidersPayload = {
         providers: res?.providers ?? [],
+        ...(res?.deferredProviderIds ? { deferredProviderIds: res.deferredProviderIds } : {}),
+        ...(res?.providerOrder ? { providerOrder: res.providerOrder } : {}),
+        ...(res?.providerContinuity !== undefined ? { providerContinuity: res.providerContinuity } : {}),
         ...(res?.modelVisibilityOverrides !== undefined
           ? { modelVisibilityOverrides: res.modelVisibilityOverrides }
           : {}),
       };
       if (isCurrent()) {
+        if (!expiry.remember(deviceId, payload, requestedAt, () => expireDeviceProviders(deviceId))) {
+          cache.delete(deviceId);
+          throw new Error('[MODEL_VISIBILITY_NOT_READY] Provider directory snapshot expired');
+        }
         cache.set(deviceId, payload);
         notifyDeviceProviders(deviceId, payload);
       }
@@ -291,10 +388,32 @@ export async function fetchDeviceProvidersFresh(
 /** device-link:被控设备切换 / 下线时驱逐其供应商缓存(只清该设备 + 代际自增作废在途)。 */
 export function evictDeviceProviders(deviceId: string): void {
   cache.delete(deviceId);
+  expiry.forget(deviceId);
   inflight.delete(deviceId);
   freshInflight.delete(deviceId);
   deviceGen.set(deviceId, (deviceGen.get(deviceId) ?? 0) + 1);
   notifyDeviceProvidersGen(deviceId, 'evict');
+}
+
+/**
+ * A suspended JS runtime can wake after the wall deadline but before the expiry
+ * timer callback runs. A synchronous cache getter must retire the payload
+ * immediately so a second read in the same tick cannot use it. Notify mounted
+ * consumers from a microtask: a getter can run during React render, and its
+ * generation listener starts a replacement read.
+ */
+function expireDeviceProviders(deviceId: string): void {
+  cache.delete(deviceId);
+  expiry.forget(deviceId);
+  inflight.delete(deviceId);
+  freshInflight.delete(deviceId);
+  deviceGen.set(deviceId, (deviceGen.get(deviceId) ?? 0) + 1);
+  const generation = deviceGen.get(deviceId) ?? 0;
+  queueMicrotask(() => {
+    // clearAll/evict may switch owner or start a newer read before this runs.
+    if ((deviceGen.get(deviceId) ?? 0) !== generation) return;
+    notifyDeviceProvidersGen(deviceId, 'evict');
+  });
 }
 
 /**
@@ -364,6 +483,7 @@ export function clearAllDeviceProviders(): void {
   // 重拉只会命中旧账号缓存或加入旧请求,随后 Map 被清掉,既没真正访问新账号,
   // 也没有 payload 通知恢复 hook,目录长期停在 ready=false。
   cache.clear();
+  expiry.clear();
   inflight.clear();
   freshInflight.clear();
   for (const id of ids) {

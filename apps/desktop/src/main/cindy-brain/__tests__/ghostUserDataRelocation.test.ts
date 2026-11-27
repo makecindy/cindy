@@ -17,6 +17,7 @@ import { GhostManager } from '../GhostManager.js';
 import { createGhostInstallReceipt, GhostInstallReceiptStore, hashApprovedSkillContent } from '../ghostInstallReceipt.js';
 import { runGhostSnapshotWorkerRequest } from '../ghostSnapshotWorkerProcess.js';
 import { relocateGhostUserDataResources, type GhostUserDataRelocationResources } from '../ghostUserDataRelocation.js';
+import { withGhostOauthMutationLock } from '../ghostOauthMutationLock.js';
 import { writeTestCindyPackage } from './cindyPackageFixture.js';
 
 const scope = vi.hoisted(() => ({ dir: '' }));
@@ -72,7 +73,6 @@ beforeEach(() => {
     media: noOp,
     cards: noOp,
     unread: unread.relocateGhostUnread,
-    routines: noOp,
     recommendations: noOp,
     recentUsage: noOp,
   };
@@ -109,6 +109,7 @@ async function seedSourceResources() {
   }), { skillSourceDir: path.join(root, from) });
   fs.mkdirSync(path.join(scope.dir, 'ghost-kv'));
   fs.writeFileSync(path.join(scope.dir, 'ghost-kv', from + '.json'), JSON.stringify({ private: 'org' }));
+  fs.mkdirSync(path.join(scope.dir, 'ghost-handoff', from, 'copy'), { recursive: true });
   cindy.writeGhostCindyInflightLimit(from, 3);
   errand.writePluginTaskConfig(from, { permissionMode: 'auto', workingDir: '/org-workspace' });
   errand.writeGhostErrandSessionId(from, 'org-session');
@@ -154,6 +155,9 @@ it('archives and restores source-owned data without changing logical UI placemen
   await tasks.insert(run);
   await tasks.insert({ ...task, id: 'other', pluginId: to });
   await relocateGhostUserDataResources(from, archive, resources);
+  // Chat file handoff copies move with the archived source, invisible to the new one.
+  expect(fs.existsSync(path.join(scope.dir, 'ghost-handoff', archive, 'copy'))).toBe(true);
+  expect(fs.existsSync(path.join(scope.dir, 'ghost-handoff', from))).toBe(false);
   expect(await tasks.find(from, 'create', '', task.requestKey)).toBeUndefined();
   expect(await tasks.get(task.id)).toEqual({ ...task, pluginId: archive, revision: 1 });
   expect(await tasks.get(run.id)).toEqual({ ...run, pluginId: archive, revision: 1 });
@@ -198,7 +202,9 @@ it('completes source replacement and another plugin uninstall without reversing 
   let entered!: () => void, finish!: () => void;
   const started = new Promise<void>(resolve => { entered = resolve; });
   const gate = new Promise<void>(resolve => { finish = resolve; });
-  const manager = new GhostManager({ getRootDir: () => root, onArchiveSourceState: async (source, destination) => {
+  const manager = new GhostManager({ getRootDir: () => root,
+    onUninstallSourceState: id => withGhostOauthMutationLock(scope.dir, id, path.join(scope.dir, `${id}.oauth.lock`), async () => {}),
+    onArchiveSourceState: async (source, destination) => {
     entered(); await gate; await service.relocatePlugin(source, destination);
   } });
   await manager.commitPendingNamespace(from, 'acme', 'market-organization');
@@ -269,12 +275,9 @@ it('moves downloads, recent usage and recommendations with the archived instance
   recs.markGhostRecommendationInstalled(from);
   resources.recentUsage = recent.relocateGhostRecentUsage;
   resources.recommendations = recs.relocateGhostRecommendations;
-  const routines = vi.fn();
-  resources.routines = routines;
   await relocateGhostUserDataResources(from, archive, resources);
   expect(fs.readFileSync(path.join(scope.dir, 'plugin-downloads', archive, 'pkg.bin'), 'utf8')).toBe('bytes');
   expect(fs.existsSync(path.join(scope.dir, 'plugin-downloads', from))).toBe(false);
   expect(recent.loadGhostRecentIds()).toEqual(['other-plugin', archive]);
   expect(recs.readGhostRecommendationEntries().map((entry) => entry.id)).toEqual([archive]);
-  expect(routines).toHaveBeenCalledWith(from, archive);
 });

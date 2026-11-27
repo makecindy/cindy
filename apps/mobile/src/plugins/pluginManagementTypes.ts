@@ -1,3 +1,4 @@
+import { pluginHasToolUi } from '@cindy/plugin-protocol';
 /** Mobile projection of the existing Host management contract. Never contains saved settings. */
 export interface ManagedPluginManifest {
   [key: string]: unknown;
@@ -20,6 +21,8 @@ export interface ManagedPlugin {
   approval: PluginApproval;
   iconDataUrl?: string;
   builtin?: boolean;
+  uiCapabilityApproved?: true;
+  uiPromptSuppressed?: true;
 }
 export interface ManagedMarketItem {
   pluginId: string;
@@ -56,7 +59,10 @@ export interface PluginManagementSnapshot {
     organizationAccessError?: string | null;
   };
   settingsPage?: true;
+  uiCapabilityApproval?: true;
 }
+export interface PluginUiConsentItem { instanceKey: string; name: string; approvalToken: string; }
+export interface PluginUiConsentSnapshot { version: 1; uiCapabilityApproval?: true; item?: PluginUiConsentItem; }
 export interface PluginPermissionItem {
   key: string;
   kind: string;
@@ -79,10 +85,12 @@ export interface PluginManagementReceipt {
   errorCode?: string;
   consent?: {
     requestId: string;
+    installationSource?: import('@cindy/maker-shared/mcp-apps').PluginInstallationSource;
     initiator: 'user' | 'agent';
     origin: 'market' | 'custom-market' | 'local-file' | 'forge';
     originLabel?: string;
-    purpose?: 'task-capability';
+    purpose?: 'task-capability' | 'ui-capability';
+    trust?: 'unverified' | 'cindy-official' | 'reviewed' | 'verified-publisher';
     facts: PluginConsentFacts;
   };
 }
@@ -123,6 +131,8 @@ function installed(v: unknown): v is ManagedPlugin {
   return record(v) && str(v.instanceKey) && namespace(v) && manifest(v.manifest) && typeof v.enabled === 'boolean'
     && (v.namespaceState === undefined || oneOf(v.namespaceState, ['confirmed', 'unconfirmed', 'pending']))
     && record(v.approval) && (v.approval.state === 'approved' ? revision(v.approval.revision) : oneOf(v.approval.state, ['legacy-unapproved', 'invalid']))
+    && (v.uiCapabilityApproved === undefined || v.uiCapabilityApproved === true)
+    && (v.uiPromptSuppressed === undefined || v.uiPromptSuppressed === true)
     && optionalString(v.iconDataUrl) && (v.builtin === undefined || typeof v.builtin === 'boolean');
 }
 function marketItem(v: unknown): v is ManagedMarketItem {
@@ -149,11 +159,28 @@ export function parsePluginManagementSnapshot(value: unknown): PluginManagementS
     || !value.market.items.every(marketItem) || !nullableString(value.market.unavailableReason)
     || !strings(value.market.customSourceNames) || !strings(value.market.unavailableCustomSourceNames)
     || (value.market.organizationAccessError !== undefined && !nullableString(value.market.organizationAccessError))
+    || (value.uiCapabilityApproval !== undefined && value.uiCapabilityApproval !== true)
     || (value.settingsPage !== undefined && value.settingsPage !== true)
     || new Set(value.ghosts.map((g) => g.instanceKey)).size !== value.ghosts.length) return invalid();
   const data = value as unknown as PluginManagementSnapshot;
   return { version: 1, ghosts: data.ghosts.map((g) => ({ ...g })), market: { ...data.market, items: data.market.items.map(safeMarketItem) },
+    ...(data.uiCapabilityApproval ? { uiCapabilityApproval: true } : {}),
     ...(data.settingsPage ? { settingsPage: true } : {}) };
+}
+export function parsePluginUiConsent(value: unknown): PluginUiConsentSnapshot {
+  if (!isBoundedPluginResponse(value) || !record(value) || value.version !== 1
+    || (value.uiCapabilityApproval !== undefined && value.uiCapabilityApproval !== true)) return invalid();
+  if (value.item !== undefined) {
+    const item = value.item;
+    if (!record(item) || !str(item.instanceKey, 1024) || !str(item.name, 1024)
+      || !str(item.approvalToken, 256)
+      || !(item.approvalToken === 'legacy-unapproved' || item.approvalToken === 'invalid'
+        || /^approved:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(item.approvalToken))) return invalid();
+    // Additive wire fields must not turn a compact item into a full plugin locally.
+    return { ...value, item: { instanceKey: item.instanceKey, name: item.name,
+      approvalToken: item.approvalToken } } as unknown as PluginUiConsentSnapshot;
+  }
+  return value as unknown as PluginUiConsentSnapshot;
 }
 export function parsePluginManagementDetail(value: unknown): ManagedMarketDetail {
   if (!isBoundedPluginResponse(value) || !marketItem(value) || !manifest((value as ManagedMarketDetail).manifest)) return invalid();
@@ -171,7 +198,8 @@ export function parsePluginManagementReceipt(value: unknown, operationId: string
   if (value.consent !== undefined) {
     const c = value.consent;
     if (!record(c) || !str(c.requestId) || !oneOf(c.initiator, ['user', 'agent']) || !oneOf(c.origin, ['market', 'custom-market', 'local-file', 'forge'])
-      || !optionalString(c.originLabel) || (c.purpose !== undefined && c.purpose !== 'task-capability') || !record(c.facts)) return invalid();
+      || !optionalString(c.originLabel) || (c.purpose !== undefined && !oneOf(c.purpose, ['task-capability', 'ui-capability']))
+      || (c.trust !== undefined && !oneOf(c.trust, ['unverified', 'cindy-official', 'reviewed', 'verified-publisher'])) || !record(c.facts)) return invalid();
     const f = c.facts;
     const permissions = (v: unknown) => Array.isArray(v) && v.every(permission);
     if (!str(f.ghostId) || !str(f.name) || !str(f.version) || (f.kind === 'install' ? !permissions(f.permissions)
@@ -188,4 +216,10 @@ export function pluginApprovalToken(plugin: ManagedPlugin): string {
 export function marketItemMatchesPlugin(item: ManagedMarketItem, plugin: ManagedPlugin): boolean {
   return item.ghostId === plugin.manifest.id && (item.namespace !== undefined && plugin.namespace !== undefined
     ? item.namespace === plugin.namespace : plugin.instanceKey === item.ghostId);
+}
+
+/** Presentation only; the executing Host owns declaration validation and approval. */
+export function pluginNeedsUiApproval(plugin: ManagedPlugin): boolean {
+  return plugin.enabled && plugin.approval.state === 'approved' && !plugin.uiCapabilityApproved
+    && pluginHasToolUi(plugin.manifest);
 }

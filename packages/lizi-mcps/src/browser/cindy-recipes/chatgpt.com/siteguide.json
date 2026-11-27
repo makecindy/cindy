@@ -1,0 +1,11 @@
+{
+  "site": "chatgpt.com",
+  "auth": "使用浏览器里已登录的 ChatGPT 账号；有多个账号时，先在设置的「账户」栏确认当前是哪个邮箱。",
+  "entry": {
+    "home": "https://chatgpt.com/",
+    "settings": "https://chatgpt.com/settings/account",
+    "billing": "https://chatgpt.com/settings/billing"
+  },
+  "notes": "设置是独立页面，不是弹窗；左侧各栏目有固定地址 /settings/<栏目>，可直接 navigate，不必经过个人资料菜单。旧地址 #settings/Account 会跳到 /settings/account，邮件里的「管理订阅」等旧链接可能落回首页，改用上面的地址。账单栏列出当前套餐、最近交易和付款方式，每笔交易有打开发票的链接（发票在 Stripe 页面），「查看全部」看更早的交易。栏目和按钮文字随界面语言变化。个人资料菜单在左下角头像按钮，点击没展开时对它按回车。",
+  "source": "Cindy"
+}

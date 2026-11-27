@@ -8,7 +8,7 @@ const portraits = vi.hoisted(() => ({ load: vi.fn(async (index: number) => `data
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string, options?: Record<string, string>) => options ? `${key} ${Object.values(options).join(' ')}` : key }) }));
 vi.mock('../botStore', () => ({ useBotProfiles: () => [] }));
-vi.mock('../BotPortraitPicker', () => ({ BOT_PORTRAIT_COUNT: 17, galleryPortrait: portraits.load, BotPortraitPicker: ({ onChange, disabled }: { onChange(value: string): void; disabled: boolean }) => <button disabled={disabled} onClick={() => onChange('data:image/png;base64,chosen')}>existing-portrait-picker</button> }));
+vi.mock('../BotPortraitPicker', () => ({ BOT_PORTRAIT_COUNT: 26, galleryPortrait: portraits.load, BotPortraitPicker: ({ onChange, disabled }: { onChange(value: string): void; disabled: boolean }) => <button disabled={disabled} onClick={() => onChange('data:image/png;base64,chosen')}>existing-portrait-picker</button> }));
 beforeEach(() => portraits.load.mockClear());
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
@@ -31,7 +31,7 @@ it('draws from the existing full gallery once per form and retains the choice th
   render(<BotImportForm {...props} />);
   fireEvent.click(await screen.findByRole('button', { name: /Ada.*Hermes/ }));
   await screen.findByRole('button', { name: 'existing-portrait-picker' });
-  expect(portraits.load).toHaveBeenLastCalledWith(16);
+  expect(portraits.load).toHaveBeenLastCalledWith(25);
 });
 
 it('preserves an imported portrait instead of replacing it with a gallery default', async () => {
@@ -147,6 +147,33 @@ it('uses the existing credential checkboxes as alternatives without selecting an
   fireEvent.click(screen.getByRole('button', { name: 'bots.import.back' }));
   fireEvent.click(screen.getByRole('button', { name: 'bots.import.submit' }));
   await waitFor(() => expect(api.start).toHaveBeenCalledWith(expect.objectContaining({ entryIds: ['personal'] })));
+});
+
+// Regression (#12342 review PRRT_kwDOTgdRUs67AjO1). Production entry: BotImportForm category row.
+// Bulk selection never guesses between exclusive credentials, so clicking a partial category whose
+// only unselected entries are an exclusive pair leaves the selection — and the `indeterminate`
+// prop — unchanged. The browser still clears the native flag on click; the shared Checkbox must
+// restore it, or the row reads "unselected" while Shared is still imported. Existing tests only
+// covered the pair inside the category page. Minimal input: Shared selected, Work/Personal not,
+// click the category box. Tier: unit (jsdom).
+it('keeps a partially imported category visibly partial after its checkbox is clicked', async () => {
+  const api: CompanionImportApi = { sources: async () => [{ id: 'source', name: 'Ada', kind: 'hermes' }], preview: async () => ({ id: 'preview', name: 'Ada', source: { id: 'source', name: 'Ada', kind: 'hermes' }, entries: [
+    { id: 'shared', category: 'connections', name: 'Shared', selected: false },
+    { id: 'work', category: 'connections', name: 'Work', selected: false, exclusiveWith: ['personal'] },
+    { id: 'personal', category: 'connections', name: 'Personal', selected: false, exclusiveWith: ['work'] },
+  ] }), status: async () => undefined, start: vi.fn<CompanionImportApi['start']>(async input => ({ requestId: input.requestId, botId: 'bot', status: 'complete', checks: [] })) };
+  render(<BotImportForm api={api} onCreated={() => {}} onBack={() => {}} onBusy={() => {}} />);
+  fireEvent.click(await screen.findByRole('button', { name: /Ada.*Hermes/ }));
+  await screen.findByRole('button', { name: 'existing-portrait-picker' });
+  fireEvent.click(screen.getByRole('button', { name: /bots.import.connections/ }));
+  fireEvent.click(screen.getByLabelText('Shared'));
+  fireEvent.click(screen.getByRole('button', { name: 'bots.import.back' }));
+  const category = screen.getByRole('checkbox', { name: 'bots.import.connections' }) as HTMLInputElement;
+  expect(category.indeterminate).toBe(true);
+  fireEvent.click(category);
+  expect(category.checked).toBe(false);
+  expect(category.indeterminate).toBe(true);
+  expect(category.getAttribute('aria-checked')).toBe('mixed');
 });
 
 it('shows 142 selected skills in a flat searchable paginated list and opens chat after deferred setup', async () => {

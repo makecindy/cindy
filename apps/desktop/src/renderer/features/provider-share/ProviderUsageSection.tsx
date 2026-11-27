@@ -1,4 +1,5 @@
 import type { ProviderShareUsageDetails } from '../../../shared/providerShareInsights';
+import { Badge } from '@/components/ui/badge';
 import { ErrorNotice } from '@/components/ui/error-notice';
 /**
  * 「远程与分享」页的「用量」块(供应商组 §7、§10)：与设置 → 用量同一套版式(2026-10-17 用户确认原型)——
@@ -25,7 +26,7 @@ import { UsageFilterSelect, type UsageFilterOption } from '@/components/settings
 import { UsageSeriesBars } from '@/components/settings/usage/UsageTokenBars';
 import { formatUsagePercent } from '@/components/settings/usage/formatUsagePercent';
 import { usageHistoryModelColor } from '@/components/settings/usage/usageHistoryColors';
-import { isUsageHistorySingleDay, usageRangeDay, type UsageHistoryRange } from '@/components/settings/usage/usageHistoryStats';
+import { isUsageHistorySingleDay, modelTokenTotal, usageRangeDay, type UsageHistoryRange } from '@/components/settings/usage/usageHistoryStats';
 import { Input } from '@/components/ui/input';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { Spinner } from '@/components/ui/spinner';
@@ -49,6 +50,7 @@ import { providerShareComputerName, useProviderShareOwnerNameOf } from './provid
 import { deviceIdOfMemberKey, shareAgentDeviceIdOfMemberKey } from './providerUsageBreakdown';
 import {
   computerOrder,
+  currentComputerKey,
   filterUsageRows,
   groupUsageRows,
   keysByTokens,
@@ -71,6 +73,7 @@ import {
   type ProviderShareMemberActions,
 } from './ShareMemberControls';
 import type { ShareTimeFormat } from './useShareTimeFormat';
+import { SETTINGS_SECTION_TITLE_CLASS } from '@/components/ui/settings-rows';
 
 /** 读取状态：legacy = 那台电脑是旧版本，只有所有时间的合计。 */
 export type ProviderUsageStatus = 'loading' | 'ready' | 'failed' | 'legacy';
@@ -78,7 +81,6 @@ export type ProviderUsageStatus = 'loading' | 'ready' | 'failed' | 'legacy';
 type StackBy = 'party' | 'computer' | 'model';
 
 /** 热力图与「设置 → 用量」共用；这里只按 token 着色，金额占位不显示。 */
-const HEATMAP_WINDOW_DAYS = 140;
 const ZERO_MONEY: RegionalMoney = { amount: 0, currency: DEFAULT_USAGE_CURRENCY, approximate: false, kind: 'actual-cost' };
 /** 「更早的记录」(当时没有区分电脑)在柱图里的分段键。 */
 const UNATTRIBUTED = '\u0000unattributed';
@@ -155,7 +157,7 @@ export function ProviderUsageSection({
   const breakdownId = useId();
   const [stackChoice, setStack] = useState<StackBy>('party');
   const stack: StackBy = !group && stackChoice === 'computer' ? 'party' : stackChoice;
-  const [heatmapWeeks, setHeatmapWeeks] = useState(20);
+  const [heatmapWeeks, setHeatmapWeeks] = useState(53);
   const todayKey = sharedUsage?.todayKey ?? history?.todayKey ?? '';
 
   const rows = useMemo<ProviderUsageRow[]>(() => {
@@ -320,9 +322,9 @@ export function ProviderUsageSection({
   );
   const series = useMemo(() => chartRows.flatMap((row) => row.day === null ? [] : [{
     day: row.day,
-    key: stack === 'party' ? row.party : stack === 'computer' ? row.computer ?? UNATTRIBUTED : modelKeyOf(row),
-    tokens: row.inputTokens + row.outputTokens,
-  }]), [chartRows, stack]);
+    key: stack === 'party' ? row.party : stack === 'computer' ? currentComputerKey(memberKeys, row.computer) ?? UNATTRIBUTED : modelKeyOf(row),
+    tokens: modelTokenTotal(row),
+  }]), [chartRows, memberKeys, stack]);
   const seriesOrder = useMemo(() => stack === 'party'
     ? parties.map((item) => item.key)
     : stack === 'computer'
@@ -354,7 +356,7 @@ export function ProviderUsageSection({
     <section className="usage-history-charts mt-8 shrink-0" aria-labelledby="provider-usage-title">
       {/* 标题在左、筛选在右；放不下时筛选整组换到下一行、靠左。下拉本身写着「所有人」「所有组内电脑」，不另加说明文字。 */}
       <div className="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-        <h3 id="provider-usage-title" className="text-13 font-medium text-[var(--settings-section-title)]">
+        <h3 id="provider-usage-title" className={SETTINGS_SECTION_TITLE_CLASS}>
           {t('providerGroup.usage.title')}
         </h3>
         <div className="flex min-w-0 flex-wrap items-center gap-2" data-testid="provider-usage-filters">
@@ -441,9 +443,10 @@ export function ProviderUsageSection({
       {charts && (
         <UsageCard title={t('usageHistory.heatmap.title')} subtitle={t('usageHistory.heatmap.subtitle', { count: heatmapWeeks })}>
           <UsageHeatmap
+            fillWidth
             days={heatDays}
             todayKey={todayKey}
-            windowDays={HEATMAP_WINDOW_DAYS}
+            windowDays="auto"
             metric="tokens"
             selectedDay={selectedDay}
             onDayClick={handleDayClick}
@@ -464,8 +467,7 @@ export function ProviderUsageSection({
               id: `${breakdownId}-${option.value}`,
               'aria-controls': `${breakdownId}-panel`,
             }))}
-            height={28}
-            optionHeight={24}
+            density="sm"
           />
         )}
         subtitle={breakdownSubtitle}
@@ -527,8 +529,7 @@ export function ProviderUsageSection({
                 onValueChange={setStack}
                 aria-label={t('providerGroup.usage.stack.aria')}
                 options={stackOptions}
-                height={28}
-                optionHeight={24}
+                density="sm"
               />
             )}
           >
@@ -594,6 +595,7 @@ function ShareStrip({ items }: { items: Array<{ key: string; tokens: number; col
 }
 
 const ROW_CLASS = 'cursor-pointer transition-colors motion-reduce:transition-none hover:bg-[var(--surface-hover)]';
+// NAME_BUTTON_CLASS：无框文字按钮：圆角只塑形键盘焦点环（DESIGN.md §5 登记）
 const NAME_BUTTON_CLASS =
   'min-w-0 truncate rounded-sm text-left font-medium text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]';
 
@@ -633,7 +635,7 @@ function PartyTable({
       list,
       totals: summarizeUsageRows(list),
       today: summarizeUsageRows(todayByParty.get(party.key) ?? []).tokens,
-      computers: new Set(list.filter((row) => row.computer !== null && row.inputTokens + row.outputTokens > 0).map((row) => row.computer)).size,
+      computers: new Set(list.filter((row) => row.computer !== null && modelTokenTotal(row) > 0).map((row) => row.computer)).size,
       color: colorOf(party.key),
     };
   });
@@ -734,7 +736,7 @@ function PartyTable({
                       <td className={cn(tdClass, 'text-[var(--text-tertiary)]')}>{today > 0 ? formatShareTokens(today) : NONE}</td>
                     )}
                     <td className={cn(tdClass, used && 'text-[var(--text-primary)]')}>
-                      {used && totals.amount ? formatShareMoney(totals.amount) : NONE}
+                      {totals.amount ? formatShareMoney(totals.amount) : NONE}
                     </td>
                     {showComputers && (
                       <td className={cn(tdClass, 'text-[var(--text-tertiary)]')}>{computers > 0 ? computers : NONE}</td>
@@ -797,7 +799,7 @@ function ComputerTable({
   onToggle: (key: string) => void;
 }) {
   const { t } = useTranslation();
-  const keyOf = (row: ProviderUsageRow) => row.computer !== null && groupKeys.includes(row.computer) ? row.computer : null;
+  const keyOf = (row: ProviderUsageRow) => currentComputerKey(groupKeys, row.computer);
   const byComputer = groupUsageRows(filterUsageRows(rows, filter, { computer: true }), keyOf);
   const todayByComputer = groupUsageRows(filterUsageRows(rows, { ...filter, range: 'today' }, { computer: true }), keyOf);
   const computers = [...groupKeys, ...(byComputer.has(null) ? [null] : [])];
@@ -808,12 +810,12 @@ function ComputerTable({
         key,
         totals: summarizeUsageRows(list),
         today: summarizeUsageRows(todayByComputer.get(key) ?? []).tokens,
-        parties: new Set(list.filter((row) => row.inputTokens + row.outputTokens > 0).map((row) => row.party)).size,
+        parties: new Set(list.filter((row) => modelTokenTotal(row) > 0).map((row) => row.party)).size,
         color: colorOf(key),
       };
     })
-    // 组里的电脑都列；更早的记录只在这段时间用过时列。
-    .filter((item) => item.totals.tokens > 0 || (item.key !== null && groupKeys.includes(item.key)));
+    // 组里的电脑都列；更早的记录只在这段时间有 token 或金额时列。
+    .filter((item) => item.totals.tokens > 0 || item.totals.amount !== null || (item.key !== null && groupKeys.includes(item.key)));
   const total = items.reduce((sum, item) => sum + item.totals.tokens, 0);
   return (
     <>
@@ -879,7 +881,7 @@ function ComputerTable({
                     <td className={cn(TD_CLASS, 'text-[var(--text-tertiary)]')}>{today > 0 ? formatShareTokens(today) : NONE}</td>
                   )}
                   <td className={cn(TD_CLASS, used && 'text-[var(--text-primary)]')}>
-                    {used && totals.amount ? formatShareMoney(totals.amount) : NONE}
+                    {totals.amount ? formatShareMoney(totals.amount) : NONE}
                   </td>
                   <td className={cn(TD_CLASS, 'text-[var(--text-tertiary)]')}>{used ? parties : NONE}</td>
                 </tr>
@@ -907,7 +909,7 @@ function ModelTable({
   const { t } = useTranslation();
   const items = [...groupUsageRows(rows, modelKeyOf).entries()]
     .map(([key, list]) => ({ key, kind: list[0]!.kind, model: list[0]!.model, totals: summarizeUsageRows(list) }))
-    .filter((item) => item.totals.tokens > 0 || item.totals.turns > 0)
+    .filter((item) => item.totals.tokens > 0 || item.totals.turns > 0 || item.totals.amount !== null)
     .sort((a, b) => b.totals.tokens - a.totals.tokens || order.indexOf(a.key) - order.indexOf(b.key));
   const total = items.reduce((sum, item) => sum + item.totals.tokens, 0);
   if (items.length === 0) {
@@ -932,19 +934,20 @@ function ModelTable({
         <tbody>
           {items.map(({ key, kind, model, totals }) => {
             const color = colorOf(key);
+            const used = totals.tokens > 0;
             return (
               <tr key={key} data-testid="provider-usage-model">
                 <td className={cn(TD_CLASS, FIRST_COL_CLASS, 'text-left')}>
                   <span className="flex min-w-0 items-center gap-2">
                     <Swatch color={color} />
                     <span className="truncate font-medium" title={model}>{formatModelShort(model)}</span>
-                    <span className="shrink-0 rounded border border-[var(--border-default)] px-1 py-px text-11 leading-[1.4] text-[var(--text-tertiary)]">
+                    <Badge tone="outline">
                       {kind}
-                    </span>
+                    </Badge>
                   </span>
                 </td>
-                <td className={TD_CLASS}>{formatShareTokens(totals.tokens)}</td>
-                <ShareCell share={total > 0 ? totals.tokens / total : 0} color={color} />
+                <td className={TD_CLASS}>{used ? formatShareTokens(totals.tokens) : NONE}</td>
+                {used && total > 0 ? <ShareCell share={totals.tokens / total} color={color} /> : <td className={TD_CLASS}>{NONE}</td>}
                 <td className={TD_CLASS}>{formatShareTokens(totals.inputTokens)}</td>
                 <td className={TD_CLASS}>{formatShareTokens(totals.outputTokens)}</td>
                 <td className={TD_CLASS}>{formatShareTokens(totals.cacheReadTokens)}</td>

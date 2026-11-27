@@ -6,10 +6,12 @@
  */
 import type { ProviderView } from '@cindy/model-providers';
 import { describe, expect, it, vi } from 'vitest';
+import { readTurnUsageResetAt } from '../../goal-host/usageLimit';
+import { createAutomaticContinueEligibility, type CompanionFailoverSnapshot } from '../../maker-ipc/automaticContinueEligibility';
 
 import type { ProviderGroupConfig, ProviderGroupMember } from '../../../shared/providerGroup';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../../shared/claudeSubscriptionUsage';
-import type { ProviderGroupBinding, ProviderGroupRef } from '../bindings';
+import type { ProviderGroupBinding, ProviderGroupRef } from '../bindings.desktop';
 import type { ProviderGroupDirectory, ResolvedMemberState, ResolvedProviderGroupMember } from '../directory';
 import { PROVIDER_GROUP_FAILURE_COOLDOWN_MS } from '../cooling';
 import { createProviderGroupGuestSwitch, PROVIDER_GROUP_SWITCH_OFFER_TTL_MS } from '../guestSwitch';
@@ -43,7 +45,8 @@ function view(id: string, model: Record<string, unknown> = {}): ProviderView {
 
 function member(kind: ProviderGroupMember['kind'], agentDeviceId: string | null, providerId: string): ProviderGroupMember {
   const key = kind === 'local' ? 'local' : `${kind}:${agentDeviceId!.replace(/^share:/, '')}:${providerId}`;
-  return { key, kind, agentDeviceId, providerId, limit: 4, weight: 1, paused: false };
+  // An explicit limit: unset limits are unlimited, and these fixtures exercise a full target.
+  return { key, kind, agentDeviceId, providerId, limit: 4, limitSet: true, weight: 1, paused: false };
 }
 
 const LEASE = { recovery: 'lease' };
@@ -60,6 +63,8 @@ const STUDIO = member('share', 'share:s1', 'anthropic');
 
 function harness(options: {
   members?: ProviderGroupMember[];
+  /** 组的选法；默认「按顺序」。 */
+  strategy?: ProviderGroupConfig['strategy'];
   row?: Partial<ProviderGroupSessionRow>;
   offline?: string[];
   autoSwitch?: boolean;
@@ -67,10 +72,13 @@ function harness(options: {
   unusableModel?: Record<string, Record<string, unknown>>;
   usage?: Record<string, ClaudeSubscriptionUsageSnapshot>;
   codexUsage?: Record<string, ProviderGroupCodexUsageSnapshot>;
+  /** 这些组内电脑按「那台用不了」报；stale 表示这条判定来自有界快照，不是现读。 */
+  cachedUnavailable?: { members: string[]; stale: boolean };
+  stale?: string[];
 } = {}) {
   let now = 1_000_000;
   const config: ProviderGroupConfig = {
-    strategy: 'order',
+    strategy: options.strategy ?? 'order',
     autoSwitch: options.autoSwitch ?? true,
     members: options.members ?? [LOCAL, MINI, STUDIO],
   };
@@ -80,6 +88,7 @@ function harness(options: {
   const released = new Map<string, ProviderGroupRef>();
   /** 选过「以后自动换号」的任务。 */
   const autoRebalance = new Set<string>();
+  const disabledRebalance = new Set<string>();
   // 现读那台的状态：默认与组内电脑状态同一份离线名单，单测按需逐次指定。
   const probe = vi.fn(async (agentDeviceId: string, providerId: string): Promise<ResolvedMemberState> => {
     const found = config.members.find((m) => m.agentDeviceId === agentDeviceId && m.providerId === providerId);
@@ -89,8 +98,12 @@ function harness(options: {
     async resolveMembers(_providerId, current) {
       return current.members.map((m): ResolvedProviderGroupMember => offline.has(m.key)
         ? { member: m, label: m.key, state: 'offline' }
-        : { member: m, label: `${m.key}-name`, state: 'ok', view: view(m.providerId, options.unusableModel?.[m.key]),
-          claudeUsage: options.usage?.[m.key], codexUsage: options.codexUsage?.[m.key] });
+        : options.cachedUnavailable?.members.includes(m.key)
+          ? { member: m, label: `${m.key}-name`, state: 'unavailable',
+            ...(options.cachedUnavailable.stale ? { providerContinuity: { stale: true, remainingMs: 600_000 } } : {}) }
+          : { member: m, label: `${m.key}-name`, state: 'ok', view: view(m.providerId, options.unusableModel?.[m.key]),
+            ...(options.stale?.includes(m.key) ? { providerContinuity: { stale: true, remainingMs: 600_000 } } : {}),
+            claudeUsage: options.usage?.[m.key], codexUsage: options.codexUsage?.[m.key] });
     },
     async listCandidates() {
       return [];
@@ -108,7 +121,6 @@ function harness(options: {
     listBindings: () => Object.fromEntries(bindings),
     isTurnRunning: () => false,
     now: () => now,
-    random: () => 0,
   });
   const row: ProviderGroupSessionRow = {
     agentKind: 'claude-code',
@@ -142,7 +154,7 @@ function harness(options: {
       row.providerId = route.providerId;
     }),
     hasAssistantHistory: vi.fn(async () => false),
-    isFailoverEligible: vi.fn(async () => true),
+    isFailoverEligible: vi.fn<ProviderGroupServiceDeps['isFailoverEligible']>(async () => true),
     leaseRecovery: vi.fn((): object | null => LEASE),
     isLeaseCurrent: vi.fn(() => true),
     rearmContinue: vi.fn((): number | null => 99),
@@ -155,8 +167,13 @@ function harness(options: {
     hasLiveSession: vi.fn((_id: string) => true),
     continueSession: vi.fn(async () => 'resumed' as const),
     fallback: vi.fn(),
-    readResetAt: vi.fn(() => null),
+    readResetAt: vi.fn<ProviderGroupServiceDeps['readResetAt']>(() => null),
     readAutoRebalance: vi.fn((id: string) => autoRebalance.has(id)),
+    readRebalanceDisabled: vi.fn((id: string) => disabledRebalance.has(id)),
+    writeRebalanceEnabled: vi.fn(async (id: string, enabled: boolean) => {
+      if (enabled) disabledRebalance.delete(id);
+      else disabledRebalance.add(id);
+    }),
     writeAutoRebalance: vi.fn(async (id: string) => {
       autoRebalance.add(id);
     }),
@@ -172,6 +189,164 @@ function harness(options: {
 async function flush() {
   for (let i = 0; i < 60; i++) await Promise.resolve();
 }
+
+describe('companion group failover eligibility', () => {
+  // Unit: the production eligibility policy plus group service must relocate a
+  // direct companion input. The old fixture always returned true and missed the
+  // source=bot exclusion. Minimum: active canonical/thread, A limited, B available.
+  function companionHarness(role = 'canonical') {
+    const h = harness({ members: [LOCAL, MINI] });
+    const companion: CompanionFailoverSnapshot = { role, profileStatus: 'active', hiddenAt: null, shadowed: false };
+    const state = { source: 'bot', status: 'active', orcaRole: null as string | null };
+    const deps = {
+      ownerEpoch: () => 'owner', isPaused: () => false, isShared: () => false,
+      readSession: async () => state, goalOwnsRecovery: async () => false,
+      readCompanion: async (): Promise<CompanionFailoverSnapshot | null> => companion, ownsCompanionInput: () => true,
+    };
+    const eligibility = createAutomaticContinueEligibility(deps);
+    h.deps.isFailoverEligible.mockImplementation(eligibility.providerGroup);
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: LOCAL.key, at: 1 });
+    return { ...h, companion, state, eligibility, eligibilityDeps: deps };
+  }
+
+  it.each(['canonical', 'thread'])('relocates a failed %s input once without scheduling quota recovery', async role => {
+    const h = companionHarness(role);
+    await h.service.onTurnError('s1', { message: "You've hit your usage limit", sdkError: 'rate_limit' }, 1);
+    expect(h.row.agentDeviceId).toBe('mini');
+    expect(h.deps.continueSession).toHaveBeenCalledTimes(1);
+    expect(h.deps.fallback).not.toHaveBeenCalled();
+    expect(await h.eligibility.usageLimit('s1')).toBe(false);
+  });
+
+  // Unit regression: the real eligibility gate used to reject every shared
+  // task before the group could move an exhausted/offline member to another.
+  it.each([{ sdkError: 'rate_limit' }, { message: '[REMOTE_AGENT_UNAVAILABLE] offline' }])(
+    'relocates shared ordinary tasks but keeps delayed quota waits disabled: %j', async signals => {
+      const h = companionHarness();
+      h.state.source = 'desktop';
+      h.eligibilityDeps.isShared = () => true;
+      await h.service.onTurnError('s1', signals, 1);
+      expect(h.row.agentDeviceId).toBe('mini');
+      expect(h.deps.continueSession).toHaveBeenCalledOnce();
+      expect(h.deps.fallback).not.toHaveBeenCalled();
+      expect(await h.eligibility.usageLimit('s1')).toBe(false);
+      expect(await h.eligibility.providerGroup('s1', { kind: 'rebalance' })).toBe(false);
+    },
+  );
+
+  // Unit regression (#11111): restart bypasses normal group lookup, while a
+  // one-member group's reconnect has no switch candidate. Exercise the real
+  // policy + service; shared recovery must require a live selected group.
+  it.each(['remote_agent_restarted', 'remote_agent_lost'])(
+    'reconnects a shared one-member group after %s', async reason => {
+      const h = companionHarness();
+      h.state.source = 'desktop';
+      h.eligibilityDeps.isShared = () => true;
+      h.config.members = [MINI];
+      Object.assign(h.row, { agentDeviceId: MINI.agentDeviceId, providerId: MINI.providerId });
+      h.bindings.set('s1', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+      await h.service.onTurnError('s1', { reason }, 1);
+      expect(h.deps.continueSession).toHaveBeenCalledExactlyOnceWith('s1', 99,
+        expect.objectContaining({ agentReconnect: expect.any(Object) }));
+      expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+      expect(h.deps.fallback).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['unbound', 'removed-member', 'disabled-group'])(
+    'does not restart a shared remote task with %s', async condition => {
+      const h = companionHarness();
+      h.state.source = 'desktop';
+      h.eligibilityDeps.isShared = () => true;
+      Object.assign(h.row, { agentDeviceId: MINI.agentDeviceId, providerId: MINI.providerId });
+      if (condition === 'unbound') h.bindings.delete('s1');
+      else h.bindings.set('s1', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+      if (condition === 'removed-member') h.config.members = [LOCAL];
+      if (condition === 'disabled-group') h.config.autoSwitch = false;
+      await h.service.onTurnError('s1', { reason: 'remote_agent_restarted' }, 1);
+      expect(h.deps.continueSession).not.toHaveBeenCalled();
+      expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+      expect(h.deps.fallback).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('does not use ungrouped reconnect when a shared task cannot read its selected group', async () => {
+    const h = companionHarness();
+    h.state.source = 'desktop';
+    h.eligibilityDeps.isShared = () => true;
+    Object.assign(h.row, { agentDeviceId: MINI.agentDeviceId, providerId: MINI.providerId });
+    h.bindings.set('s1', { providerId: 'anthropic', groupDeviceId: 'unreachable-owner', memberKey: MINI.key, at: 1 });
+    await h.service.onTurnError('s1', { reason: 'remote_agent_lost' }, 1);
+    expect(h.deps.continueSession).not.toHaveBeenCalled();
+    expect(h.deps.fallback).toHaveBeenCalledOnce();
+  });
+
+  it('moves a retry away from the exhausted member before sending, without balancing healthy inputs', async () => {
+    const h = companionHarness();
+    await h.service.beforeSend('s1', { clientId: 'retry' });
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    h.router.markCooling('anthropic', LOCAL.key, 2_000_000);
+    await h.service.beforeSend('s1', { clientId: 'retry' });
+    expect(h.row.agentDeviceId).toBe('mini');
+    expect(h.deps.continueSession).not.toHaveBeenCalled();
+    expect(await h.service.rebalanceSuggestion('s1')).toBeNull();
+  });
+
+  it.each(['group', 'channel', 'routine', 'delegation', 'history'])('leaves %s recovery with its existing owner', async role => {
+    const h = companionHarness(role);
+    const beforeFallback = vi.fn();
+    await h.service.onTurnError('s1', { sdkError: 'rate_limit' }, 1, { beforeFallback });
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(beforeFallback).toHaveBeenCalledOnce();
+    expect(h.deps.fallback).toHaveBeenCalledOnce();
+  });
+
+  it.each(['paused', 'hidden', 'shadowed', 'archived', 'missing-link', 'unknown-input', 'shared', 'goal', 'owner-changed'])(
+    'hands back a companion error when %s instead of swallowing it', async reason => {
+      const h = companionHarness();
+      if (reason === 'paused') h.companion.profileStatus = 'paused';
+      if (reason === 'hidden') h.companion.hiddenAt = 1;
+      if (reason === 'shadowed') h.companion.shadowed = true;
+      if (reason === 'archived') h.state.status = 'archived';
+      if (reason === 'unknown-input') h.eligibilityDeps.ownsCompanionInput = () => false;
+      if (reason === 'shared') h.eligibilityDeps.isShared = () => true;
+      if (reason === 'goal') h.eligibilityDeps.goalOwnsRecovery = async () => true;
+      if (reason === 'missing-link') h.eligibilityDeps.readCompanion = async () => null;
+      if (reason === 'owner-changed') h.eligibilityDeps.goalOwnsRecovery = async () => {
+        h.eligibilityDeps.ownerEpoch = () => 'new-owner';
+        return false;
+      };
+      const beforeFallback = vi.fn();
+      await h.service.onTurnError('s1', { sdkError: 'rate_limit' }, 1, { beforeFallback });
+      expect(h.row.agentDeviceId).toBeNull();
+      expect(h.deps.continueSession).not.toHaveBeenCalled();
+      expect(beforeFallback).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('returns the final error when the remaining companion member also fails', async () => {
+    const h = companionHarness();
+    h.deps.switchAgentLocation.mockRejectedValue(new Error('[REMOTE_AGENT_UNAVAILABLE] failed to start'));
+    const beforeFallback = vi.fn();
+    await h.service.onTurnError('s1', { sdkError: 'rate_limit' }, 1, { beforeFallback });
+    expect(h.deps.switchAgentLocation).toHaveBeenCalledOnce();
+    expect(h.deps.continueSession).not.toHaveBeenCalled();
+    expect(beforeFallback).toHaveBeenCalledOnce();
+    expect(h.deps.fallback).toHaveBeenCalledOnce();
+    expect(await h.eligibility.usageLimit('s1')).toBe(false);
+  });
+
+  it.each(['reconnect', 'restart', 'rebalance'] as const)('does not extend %s to companions', async kind => {
+    const h = companionHarness();
+    expect(await h.eligibility.providerGroup('s1', { kind })).toBe(false);
+    h.state.source = 'desktop';
+    h.state.orcaRole = 'worker';
+    expect(await h.eligibility.providerGroup('s1', { kind })).toBe(true);
+    expect(await h.eligibility.usageLimit('s1')).toBe(false);
+    h.state.orcaRole = null;
+    expect(await h.eligibility.usageLimit('s1')).toBe(true);
+  });
+});
 
 describe('own tasks after this computer becomes available again', () => {
   it.each([false, true].flatMap((paused) =>
@@ -256,6 +431,10 @@ describe('assignBeforeStart', () => {
     expect(context?.route).toEqual({ agentDeviceId: null, providerId: null });
     expect(h.deps.persistRoute).not.toHaveBeenCalled();
     expect(h.bindings.get('s1')).toMatchObject({ providerId: 'anthropic', memberKey: 'local' });
+    // Reopening the binding must still resolve the local default (#11088).
+    const reopened = await h.service.assignBeforeStart({ sessionId: 's1', agentKind: 'claude-code', model: MODEL });
+    expect(reopened?.member.key).toBe('local');
+    expect(h.deps.markReleased).not.toHaveBeenCalled();
   });
 
   it('leaves tasks that already run elsewhere alone and never moves a started task', async () => {
@@ -432,6 +611,46 @@ describe('assignBeforeStart', () => {
 });
 
 describe('nextAfterStartFailure', () => {
+  // Unit, PR #10223: stable subscription-limit errors must retain their reset
+  // across startup and both handoff paths. Existing cases only used generic
+  // startup failures, so dropping resetAt silently imposed the 30-minute fallback.
+  // Minimum: a member reports resetAtMs five minutes away; the real router must
+  // select it again at that time. Use the production error parser, not a stubbed date.
+  it.each(['start', 'before-send-target', 'running-target'] as const)(
+    'expires subscription cooling at the reported reset after %s failure', async phase => {
+      const h = harness({ members: phase === 'start' ? [LOCAL] : [LOCAL, MINI, STUDIO] });
+      const now = Date.parse('2026-11-12T13:00:00Z');
+      h.advance(now - h.deps.now());
+      h.deps.readResetAt.mockImplementation(signals => readTurnUsageResetAt(signals, now, { localTimeZoneTrusted: false }));
+      const resetAt = now + 5 * 60_000;
+      const error = new Error('[SUBSCRIPTION_ACCOUNT_LIMITED] The task subscription account is waiting for its usage window to reset'
+        + `\nresetAtMs=${resetAt}`);
+      const failedMember = phase === 'start' ? LOCAL : MINI;
+      if (phase === 'start') {
+        const context = await h.service.assignBeforeStart({ sessionId: 's1', agentKind: 'claude-code', model: MODEL });
+        expect(await h.service.nextAfterStartFailure(context!, error)).toBeNull();
+      } else {
+        h.bindings.set('s1', { providerId: 'anthropic', memberKey: LOCAL.key, at: now });
+        h.deps.switchAgentLocation.mockRejectedValueOnce(error);
+        if (phase === 'before-send-target') {
+          h.router.markCooling('anthropic', LOCAL.key, now + PROVIDER_GROUP_DEFAULT_COOLDOWN_MS, MODEL);
+          await h.service.beforeSend('s1');
+        } else {
+          await h.service.onTurnError('s1', { sdkError: 'rate_limit' }, 1);
+        }
+        expect(h.bindings.get('s1')?.memberKey).toBe(STUDIO.key);
+      }
+      expect(h.router.coolingUntil('anthropic', failedMember.key, MODEL)).toBe(resetAt);
+      expect(h.router.coolingUntil('anthropic', failedMember.key, 'claude-sonnet-5')).toBeNull();
+      h.advance(resetAt - now);
+      const retry = await h.router.pick({
+        providerId: 'anthropic',
+        agentKind: 'claude-code', model: MODEL, exclude: new Set(),
+      });
+      expect(retry.kind === 'member' && retry.member.key).toBe(failedMember.key);
+    },
+  );
+
   it('moves to the next computer when the assigned one could not start the agent', async () => {
     const h = harness({ offline: ['local'] });
     const context = await h.service.assignBeforeStart({ sessionId: 's1', agentKind: 'claude-code', model: MODEL });
@@ -590,6 +809,24 @@ describe('onTurnError (automatic switch)', () => {
     expect(none.deps.continueSession).not.toHaveBeenCalled();
   });
 
+  // Unit, PR #12569: both declined and exhausted/rearmed turn recovery must use
+  // the caller-owned fallback. The global fallback cannot carry a Schedule run.
+  it.each(['declined', 'rearmed'] as const)('retains the turn-owned quota fallback: %s', async mode => {
+    const h = harness({ members: mode === 'rearmed' ? [LOCAL] : [LOCAL, MINI], autoSwitch: mode === 'rearmed' });
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });
+    if (mode === 'rearmed') {
+      h.deps.leaseRecovery.mockReturnValueOnce(LEASE).mockReturnValue(null);
+      h.deps.rearmContinue.mockReturnValue(42);
+    }
+    const service = createProviderGroupService({ ...h.deps, readAccountSwitch: async () => null });
+    const fallback = vi.fn();
+    await service.onTurnError('s1', { sdkError: 'rate_limit' }, 1, { fallback });
+    expect(fallback).toHaveBeenCalledOnce();
+    expect(fallback.mock.calls[0][0]).toBe(mode === 'rearmed' ? 42 : 1);
+    expect(fallback.mock.calls[0][1]).toEqual(mode === 'rearmed' ? { accountSwitchChecked: true } : undefined);
+    expect(h.deps.fallback).not.toHaveBeenCalled();
+  });
+
   it('stops without blaming the target when the handoff fails for an unrelated reason', async () => {
     const h = harness();
     h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });
@@ -686,13 +923,24 @@ describe('onTurnError (automatic switch)', () => {
     expect(h.deps.fallback).not.toHaveBeenCalled();
   });
 
-  it('never switches between two accounts on the same computer', async () => {
+  // #10893, unit: a connection failure must not exclude a healthy account on
+  // the same host. The previous regression required skipping that connection.
+  it('switches to another independent connection on the same computer', async () => {
     const MINI2 = member('device', 'mini', 'anthropic-9f9f9f9f');
-    const h = harness({ members: [MINI, MINI2, LOCAL], row: { agentDeviceId: 'mini', providerId: MINI.providerId } });
+    const h = harness({ members: [MINI, MINI2], row: { agentDeviceId: 'mini', providerId: MINI.providerId } });
     h.bindings.set('s1', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+    expect(h.service.mayHandleTurnError('s1', { sdkError: 'rate_limit' })).toBe(true);
     h.service.onTurnError('s1', { sdkError: 'rate_limit' }, 1);
     await flush();
-    expect(h.deps.switchAgentLocation).toHaveBeenCalledWith('s1', expect.objectContaining({ agentDeviceId: null }), expect.anything());
+    expect(h.deps.switchAgentLocation).toHaveBeenCalledWith('s1', expect.objectContaining({
+      agentDeviceId: 'mini', providerId: MINI2.providerId,
+    }), expect.anything());
+    expect(h.row.providerId).toBe(MINI2.providerId);
+    expect(h.bindings.get('s1')?.memberKey).toBe(MINI2.key);
+    expect(h.router.coolingUntil('anthropic', MINI.key, MODEL)).not.toBeNull();
+    expect(h.router.coolingUntil('anthropic', MINI2.key, MODEL)).toBeNull();
+    expect(h.deps.continueSession).toHaveBeenCalledOnce();
+    expect(h.deps.fallback).not.toHaveBeenCalled();
   });
 
   it('reports the group of a task bound to this computer’s group', async () => {
@@ -1120,6 +1368,36 @@ describe('beforeSend', () => {
     expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
   });
 
+  // Test value
+  // - Production entry: createProviderGroupService().beforeSend → localSource.shouldMoveAway →
+  //   the checkFresh live probe → switchAgentLocation (a real move of a running task).
+  // - Rule: provider-groups.md「短暂失联时的目录与已有任务」——有界快照供展示与新任务分配，
+  //   缓存的可用/忙闲不能单独把正在运行的任务换电脑；remote-and-mobile-adaptation.md——确认必须实时触达。
+  // - Gap: the remote-group branch already skipped a stale view (`source.shouldMoveAway`), but the
+  //   local-group branch decided「那台用不了」straight from resolveMembers and moved with no live read.
+  // - Minimal failing input: MINI reports {state:'unavailable'} from a bounded snapshot; a live probe says ok.
+  // - Tier: unit (real service + router; only directory data and probe results are set).
+  it('confirms a cached "that computer cannot be used" freshly before moving a running task', async () => {
+    const options = { members: [MINI, STUDIO], cachedUnavailable: { members: [MINI.key], stale: true },
+      row: { agentDeviceId: 'mini', providerId: MINI.providerId, sdkSessionId: 'native' } };
+    // 现读确认确实用不了：照常换下一台。
+    const moves = harness(options);
+    moves.bindings.set('s1', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+    moves.probe.mockResolvedValue('unavailable');
+    await moves.service.beforeSend('s1');
+    expect(moves.probe).toHaveBeenCalledWith('mini', MINI.providerId);
+    expect(moves.bindings.get('s1')?.memberKey).toBe(STUDIO.key);
+
+    // 快照说用不了、现读那台其实能用：留在原电脑，不凭缓存挪走运行中的任务。
+    const stays = harness(options);
+    stays.bindings.set('s1', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+    stays.probe.mockResolvedValue('ok');
+    await stays.service.beforeSend('s1');
+    expect(stays.probe).toHaveBeenCalledWith('mini', MINI.providerId);
+    expect(stays.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(stays.bindings.get('s1')?.memberKey).toBe(MINI.key);
+  });
+
   it('checks the computer freshly when the send has to reopen the session there', async () => {
     const options = { members: [MINI, LOCAL], row: { agentDeviceId: 'mini', providerId: MINI.providerId, sdkSessionId: 'native' } };
     const reopen = harness(options);
@@ -1181,6 +1459,24 @@ describe('beforeSend', () => {
     await h.service.beforeSend('s1');
     expect(h.row.agentDeviceId).toBe('mini');
     expect(h.router.coolingUntil('anthropic', 'local')).toBeNull();
+  });
+
+  // Unit: bounded directory fallback cannot relocate an existing task using old
+  // quota (provider-groups.md, continuity contract). Existing cases only covered
+  // stale unavailable state, not a usable directory plus an exhausted quota.
+  it('ignores stale quota before sending but still honors a real failure cooldown', async () => {
+    const h = harness({ members: [MINI, LOCAL], stale: [MINI.key],
+      row: { agentDeviceId: 'mini', providerId: MINI.providerId, sdkSessionId: 'native' },
+      usage: { [MINI.key]: { updatedAt: 1_000_000, fiveHour: { utilization: 100, resetsAt: 3_000 } } },
+    });
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+    await h.service.beforeSend('s1');
+    expect(h.row.agentDeviceId).toBe('mini');
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    h.router.markCooling('anthropic', MINI.key, 2_000_000, MODEL);
+    await h.service.beforeSend('s1');
+    expect(h.row.agentDeviceId).toBeNull();
+    expect(h.deps.switchAgentLocation).toHaveBeenCalledOnce();
   });
 
   // Unit: beforeSend must use the task's bridge quota, not the unrelated native Codex bucket.
@@ -1267,6 +1563,7 @@ describe('beforeSend', () => {
 // 2026-10-21 用户裁决(provider-groups.md §6.2「任务进行中换号」)：上一轮结束后用户发下一条消息前，另一个账号的配额明显
 // 更该先用时提议换号；用户确认才换(可选这个任务以后自动换)，定时任务的消息不换。确认、等待与失败都在这里决定，
 // 客户端只问与转达选择，所以从服务入口验证。
+// 为了先用另一台的配额而换号只属于「快作废的先用」(2026-11-26)：这一段都按这个选法建组。
 describe('switching accounts between messages to balance quota', () => {
   // 本机：周配额才用 10%，快一周后才重置；mini：一天后重置，还剩 80%(明显更该先用)。时间单位与 harness 的 now 一致。
   const paceUsage = (updatedAt: number): Record<string, ClaudeSubscriptionUsageSnapshot> => ({
@@ -1275,10 +1572,67 @@ describe('switching accounts between messages to balance quota', () => {
   });
   function paced() {
     const usage = paceUsage(1_000_000);
-    const h = harness({ members: [LOCAL, MINI], usage });
+    const h = harness({ members: [LOCAL, MINI], usage, strategy: 'expiring' });
     h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1_000_000 });
     return { ...h, usage };
   }
+
+  // 2026-11-26 用户裁决：选了别的选法就完全按那个选法，不再为了配额劝换(回归：「按顺序」的组仍被劝着换到更急的那台)。
+  it('does not suggest moving for quota unless the group picks by expiring quota', async () => {
+    const h = harness({ members: [LOCAL, MINI], usage: paceUsage(1_000_000), strategy: 'order' });
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1_000_000 });
+    expect(await h.service.rebalanceSuggestion('s1')).toBeNull();
+  })
+
+  // #10893: physical-device equality must not hide a more urgent independent
+  // account. The accepted message must retain that exact connection binding.
+  it('balances quota between two independent connections on the same computer', async () => {
+    const second = member('device', 'mini', 'anthropic-second');
+    const usage = paceUsage(1_000_000);
+    const h = harness({ members: [MINI, second], strategy: 'expiring',
+      row: { agentDeviceId: 'mini', providerId: MINI.providerId, sdkSessionId: 'native' },
+      usage: { [MINI.key]: usage.local, [second.key]: usage[MINI.key] },
+    });
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+    expect(await h.service.rebalanceSuggestion('s1')).toMatchObject({ memberKey: second.key });
+    expect(await h.service.rebalanceDecision('s1', second.key, false, 'message-a')).toBe(true);
+    await h.service.beforeSend('s1', { clientId: 'message-a' });
+    expect(h.row).toMatchObject({ agentDeviceId: 'mini', providerId: second.providerId });
+    expect(h.bindings.get('s1')?.memberKey).toBe(second.key);
+  });
+
+  // Unit: both sides of quota balancing must be live. The original fixtures
+  // always returned live members and missed stale origins/targets and expiry
+  // between the suggestion and the actual send.
+  const backup = member('device', 'backup', 'anthropic-backup');
+  function remotePaced(stale: string[]) {
+    const usage = paceUsage(1_000_000);
+    const h = harness({ members: [MINI, backup, LOCAL], stale, strategy: 'expiring',
+      row: { agentDeviceId: 'mini', providerId: MINI.providerId, sdkSessionId: 'native' },
+      usage: { [MINI.key]: usage.local, [backup.key]: usage[MINI.key] },
+    });
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+    return h;
+  }
+
+  it.each([MINI.key, backup.key])('does not propose balancing with a stale member: %s', async key => {
+    const stale = [key];
+    const h = remotePaced(stale);
+    expect(await h.service.rebalanceSuggestion('s1')).toBeNull();
+    stale.length = 0;
+    expect(await h.service.rebalanceSuggestion('s1')).toMatchObject({ memberKey: backup.key });
+  });
+
+  it.each([MINI.key, backup.key])('rechecks stale evidence after a balancing suggestion was accepted: %s', async key => {
+    const stale: string[] = [];
+    const h = remotePaced(stale);
+    expect(await h.service.rebalanceSuggestion('s1')).toMatchObject({ memberKey: backup.key });
+    expect(await h.service.rebalanceDecision('s1', backup.key, false, 'message-a')).toBe(true);
+    stale.push(key);
+    await h.service.beforeSend('s1', { clientId: 'message-a' });
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(h.row.agentDeviceId).toBe('mini');
+  });
 
   it('automatically offers native relocation and binds the move to the next user message', async () => {
     const h = paced();
@@ -1360,6 +1714,42 @@ describe('switching accounts between messages to balance quota', () => {
     expect(await h.service.rebalanceSuggestion('s2')).toMatchObject({ kind: 'auto', memberKey: MINI.key });
   });
 
+  // Unit, §6.2：原覆盖只有同意/取消；关闭后旧控制端的缓存决定不能再迁移，另一个任务不受影响。
+  it('disables quota balancing for this task, rejects stale approvals, and can restore the default', async () => {
+    const h = paced();
+    h.bindings.set('s2', { providerId: 'anthropic', memberKey: 'local', at: 1_000_000 });
+    await h.service.rebalanceDecision('s1', MINI.key, true, 'message-a');
+    expect(await h.service.rebalancePreference('s1', false)).toBe(true);
+    expect(await h.service.rebalanceSuggestion('s1')).toBeNull();
+    expect(await h.service.rebalanceSuggestion('s2')).toMatchObject({ kind: 'auto' });
+    expect(await h.service.rebalanceDecision('s1', MINI.key, true, 'message-b')).toBe(false);
+    await h.service.beforeSend('s1', { clientId: 'message-a' });
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(await h.service.rebalancePreference('s1', true)).toBe(true);
+    expect(await h.service.rebalanceSuggestion('s1')).toMatchObject({ kind: 'auto' });
+  });
+
+  // Unit/协议：旧提议仍在但任务已经手动挪到组外时，不能凭未清理的绑定写入隐藏偏好。
+  it('does not save a preference after the task has moved outside its cached group', async () => {
+    const h = paced();
+    expect(await h.service.rebalanceSuggestion('s1')).not.toBeNull();
+    h.row.agentDeviceId = 'outside-group';
+    expect(await h.service.rebalancePreference('s1', false)).toBe(false);
+    expect(h.deps.writeRebalanceEnabled).not.toHaveBeenCalled();
+  });
+
+  // Unit, §6.2：只关闭配额均衡；原电脑真正不可用时仍按故障恢复处理。
+  it('keeps fault recovery after disabling quota balancing and reports preference write failure', async () => {
+    const h = paced();
+    h.deps.writeRebalanceEnabled.mockRejectedValueOnce(new Error('disk full'));
+    await expect(h.service.rebalancePreference('s1', false)).rejects.toThrow('disk full');
+    expect(await h.service.rebalanceSuggestion('s1')).not.toBeNull();
+    await h.service.rebalancePreference('s1', false);
+    h.usage.local.sevenDay = { utilization: 100, resetsAt: 600_000 };
+    await h.service.beforeSend('s1', { clientId: 'message-a' });
+    expect(h.bindings.get('s1')?.memberKey).toBe(MINI.key);
+  });
+
   // §6.2：A 确认后离开而未发送，B 取消或没有提议时不能继承 A 的换号；此前只按任务 id 暂存。
   it('consumes a confirmation only for the message whose client id was confirmed', async () => {
     const h = paced();
@@ -1388,6 +1778,36 @@ describe('switching accounts between messages to balance quota', () => {
 });
 
 describe('onTurnError — one decision for every failure (failurePolicy)', () => {
+  // Unit, §6.1: existing stay coverage used invalid_request, which hides this
+  // gap. A terminal shared-provider scope refusal with a healthy spare must
+  // preserve the original error rather than move the task or enqueue a retry.
+  it('returns an explicit shared-provider scope refusal without relocating or continuing', async () => {
+    const h = harness();
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });
+    const signals = { message: 'unexpected status 403 Forbidden: [SHARED_PROVIDER_SCOPE_DENIED] This request is outside the provider shared with you.', errorStatus: 403 };
+    await h.service.onTurnError('s1', signals, 7);
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(h.deps.continueSession).not.toHaveBeenCalled();
+    expect(h.deps.fallback).toHaveBeenCalledTimes(1);
+    expect(h.bindings.get('s1')?.memberKey).toBe('local');
+    expect(h.router.coolingUntil('anthropic', 'local')).toBeNull();
+  });
+
+  // Unit, §6.1 / review 4614256549: a disappearing model used the same old
+  // 403 sentence as a scope denial. A healthy spare must still receive the task.
+  it('continues on a healthy member after an ambiguous legacy model refusal', async () => {
+    const h = harness();
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });
+    await h.service.onTurnError('s1', {
+      message: 'unexpected status 403 Forbidden: This request is outside the provider shared with you.', errorStatus: 403,
+    }, 7);
+    expect(h.bindings.get('s1')?.memberKey).toBe(MINI.key);
+    expect(h.deps.switchAgentLocation).toHaveBeenCalledTimes(1);
+    expect(h.deps.continueSession).toHaveBeenCalledTimes(1);
+    expect(h.deps.fallback).not.toHaveBeenCalled();
+    expect(h.router.coolingUntil('anthropic', 'local')).toBeNull();
+  });
+
   it('switches when the agent there ends mid-turn without a terminal event (default: switch), without cooling it', async () => {
     const h = harness();
     h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });
@@ -1447,7 +1867,7 @@ describe('onTurnError for a shared user (the sharer’s group picks the computer
       model: MODEL,
       providerId: 'alice-anthropic',
       agentDeviceId: SHARE_ROUTE,
-    }, { isCurrent: expect.any(Function), relocate: true });
+    }, { isCurrent: expect.any(Function), relocate: true, recoveryToken: 7 });
     // 交接时重新打开带上凭证(这里交接是假的，凭证仍在等打开)。
     expect(h.guestSwitch.takeForOpen('s1')).toBe('token-aaaaaaaaaaaaaaaa');
     expect(h.deps.continueSession).toHaveBeenCalledWith('s1', 99, expect.objectContaining({
@@ -1522,6 +1942,82 @@ describe('onTurnError for a shared user (the sharer’s group picks the computer
     expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
     expect(h.deps.fallback).toHaveBeenCalledTimes(1);
   });
+
+  // Unit, provider-sharing-direct-execution §7: the live-handle case never
+  // closed M while reading eligibility or waiting for O's switch token.
+  // Retain only the failed input's grant; cancellation/replacement still fence it.
+  it.each(['before-lookup', 'during-request', 'input-cancelled', 'grant-replaced', 'no-grant'] as const)(
+    'fences direct quota recovery across runtime close: %s', async mode => {
+      const h = guestHarness();
+      let grantCurrent = true;
+      const requestSwitch = vi.fn(async () => {
+        live = null;
+        if (mode === 'input-cancelled') h.deps.isLeaseCurrent.mockReturnValue(false);
+        if (mode === 'grant-replaced') grantCurrent = false;
+        return 'token-direct-aaaaaaaaaaaa';
+      });
+      const direct = { ownerRoute: SHARE_ROUTE, requestSwitch,
+        captureRecovery: () => mode === 'no-grant' ? null : ({
+          ownerRoute: SHARE_ROUTE, requestSwitch, isCurrent: () => grantCurrent,
+        }) };
+      let live: typeof direct | null = direct;
+      if (mode === 'before-lookup') h.deps.isFailoverEligible.mockImplementation(async () => {
+        live = null;
+        return true;
+      });
+      const service = createProviderGroupService({ ...h.deps, guestSwitch: h.guestSwitch,
+        directGuestSession: () => live });
+      await service.onTurnError('s1', { message: 'You have hit your usage limit' }, 7);
+      const recovered = mode === 'before-lookup' || mode === 'during-request';
+      expect(requestSwitch).toHaveBeenCalledTimes(mode === 'no-grant' ? 0 : 1);
+      expect(h.deps.switchAgentLocation).toHaveBeenCalledTimes(recovered ? 1 : 0);
+      expect(h.deps.continueSession).toHaveBeenCalledTimes(recovered ? 1 : 0);
+      expect(h.guestSwitch.takeForOpen('s1')).toBe(recovered ? 'token-direct-aaaaaaaaaaaa' : undefined);
+    },
+  );
+
+  // Unit, #9854: O's token can arrive before the send lock/history wait ends.
+  // Earlier close-during-request cases did not invalidate the grant after receipt
+  // or distinguish our own close from user takeover.
+  it.each(['expired-wait', 'gate-expired', 'own-close', 'user-takeover', 'missing-grant-with-offer'] as const)(
+    'keeps direct authorization until relocation admission: %s', async mode => {
+      const h = guestHarness();
+      let clock = 0, grantActive = true;
+      const mutations: string[] = [];
+      const validity: boolean[] = [];
+      const direct = { ownerRoute: SHARE_ROUTE,
+        requestSwitch: vi.fn(async () => 'token-direct-aaaaaaaaaaaa'),
+        captureRecovery: () => mode === 'missing-grant-with-offer' ? null : ({
+          ownerRoute: SHARE_ROUTE, requestSwitch: async () => direct.requestSwitch(),
+          isCurrent: () => grantActive && clock < 10,
+        }),
+      };
+      const move = vi.fn<ProviderGroupServiceDeps['switchAgentLocation']>(async (_id, _route, options) => {
+        await Promise.resolve(); // the production adapter may wait for the send lock
+        if (mode === 'expired-wait') clock = 11;
+        validity.push(options?.isCurrent?.() === true);
+        if (!validity.at(-1)) throw new Error(PROVIDER_GROUP_SUPERSEDED_ERROR);
+        if (mode === 'gate-expired') clock = 11;
+        options?.onRelocationMutationStart?.();
+        mutations.push('close');
+        grantActive = false;
+        if (mode === 'user-takeover') h.deps.isLeaseCurrent.mockReturnValue(false);
+        validity.push(options?.isCurrent?.() === true);
+        if (!validity.at(-1)) throw new Error(PROVIDER_GROUP_SUPERSEDED_ERROR);
+        mutations.push('db');
+      });
+      if (mode === 'missing-grant-with-offer') h.guestSwitch.offer('s1', 'token-direct-aaaaaaaaaaaa');
+      const service = createProviderGroupService({ ...h.deps, guestSwitch: h.guestSwitch,
+        directGuestSession: () => direct, switchAgentLocation: move });
+      await service.onTurnError('s1', { message: 'You have hit your usage limit' }, 7);
+      expect(validity).toEqual(mode === 'own-close' ? [true, true] : mode === 'user-takeover' ? [true, false]
+        : mode === 'expired-wait' ? [false] : mode === 'gate-expired' ? [true] : []);
+      expect(mutations).toEqual(mode === 'own-close' ? ['close', 'db'] : mode === 'user-takeover' ? ['close'] : []);
+      expect(h.deps.continueSession).toHaveBeenCalledTimes(mode === 'own-close' ? 1 : 0);
+      expect(h.guestSwitch.takeForOpen('s1')).toBe(mode === 'own-close' ? 'token-direct-aaaaaaaaaaaa' : undefined);
+      expect(h.deps.fallback).toHaveBeenCalledTimes(['expired-wait', 'gate-expired', 'missing-grant-with-offer'].includes(mode) ? 1 : 0);
+    },
+  );
 
   it('ignores a stale token, a token the user already took over from, and failures any computer would hit', async () => {
     const stale = guestHarness();
@@ -1731,6 +2227,18 @@ describe('using the state the group keeps (2026-10-11)', () => {
 });
 
 describe('moving a task into a group on this computer from the model list (2026-10-11)', () => {
+  it('preserves a selected connection on the current computer instead of falling back to the group provider', async () => {
+    const h = harness({ members: [MINI], row: { agentDeviceId: 'mini', providerId: 'anthropic-other' } });
+    const route = await h.service.resolveSwitchTarget('s1', {
+      agentKind: 'claude-code', model: MODEL, providerId: 'anthropic', agentDeviceId: null,
+      current: { agentDeviceId: 'mini', providerId: 'anthropic-other' },
+    });
+    expect(route).toMatchObject({ agentDeviceId: 'mini', providerId: MINI.providerId });
+    expect(h.bindings.size).toBe(0);
+    await route?.commitBinding();
+    expect(h.bindings.get('s1')?.memberKey).toBe(MINI.key);
+  });
+
   it('picks a computer by the group state, skipping one that is cooling down', async () => {
     const h = harness({ members: [LOCAL, MINI, STUDIO], row: { agentDeviceId: 'elsewhere', providerId: 'openai', sdkSessionId: 'native' } });
     h.router.markCooling('anthropic', 'local', 2_000_000);
@@ -1758,5 +2266,126 @@ describe('moving a task into a group on this computer from the model list (2026-
       current: { agentDeviceId: 'elsewhere', providerId: 'openai' },
     })).toBeNull();
     expect(h.bindings.size).toBe(0);
+  });
+});
+
+// Unit regression: plain remote suppliers must use the same cancelled/leased recovery
+// as group suppliers. Previously only a group binding could enter this path.
+describe('supplier process restart', () => {
+  const signals = { reason: 'remote_agent_restarted' };
+  // Unit regression: onTurnError used to hand back after restart probes even
+  // when an authorized group target remained. Existing restart cases had no binding.
+  it.each(['offline', 'unavailable'] as const)('relocates a bound task after its restarted executor remains %s', async outcome => {
+    const h = harness({ members: [MINI, STUDIO], row: { agentDeviceId: MINI.agentDeviceId, providerId: MINI.providerId } });
+    h.bindings.set('task', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+    h.probe.mockResolvedValue(outcome);
+    await h.service.onTurnError('task', signals, 1);
+    expect(h.row.agentDeviceId).toBe(STUDIO.agentDeviceId);
+    expect(h.deps.continueSession).toHaveBeenCalledOnce();
+    expect(h.deps.fallback).not.toHaveBeenCalled();
+    expect(h.probe).toHaveBeenCalledTimes(outcome === 'offline' ? PROVIDER_GROUP_RECONNECT_MAX_ATTEMPTS + 1 : 1);
+  });
+  it('continues on the original computer without a group binding or relocation', async () => {
+    const h = harness({ row: { agentDeviceId: MINI.agentDeviceId, providerId: MINI.providerId } });
+    expect(h.service.mayHandleTurnError('task', signals)).toBe(true);
+    await h.service.onTurnError('task', signals, 1);
+    expect(h.deps.continueSession).toHaveBeenCalledExactlyOnceWith('task', 99, expect.objectContaining({
+      attempt: 1, maxAttempts: 1, agentReconnect: { computer: '' },
+    }));
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(h.deps.fallback).not.toHaveBeenCalled();
+  });
+
+  it.each(['stop', 'close', 'disabled'] as const)('does not relocate a bound restarted task after %s', async outcome => {
+    const h = harness({ members: [MINI, STUDIO], autoSwitch: outcome !== 'disabled',
+      row: { agentDeviceId: MINI.agentDeviceId, providerId: MINI.providerId } });
+    h.bindings.set('task', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+    h.probe.mockImplementation(async () => {
+      if (outcome === 'stop') h.service.noteUserAction('task');
+      if (outcome === 'close') h.deps.leaseRecovery.mockReturnValue(null);
+      return 'unavailable';
+    });
+    await h.service.onTurnError('task', signals, 1);
+    expect(h.row.agentDeviceId).toBe(MINI.agentDeviceId);
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(h.deps.continueSession).not.toHaveBeenCalled();
+    expect(h.deps.fallback).toHaveBeenCalledTimes(outcome === 'disabled' ? 1 : 0);
+  });
+
+  // Closing clears the restart candidate but deliberately retains its recovery
+  // lease. Cover the async selection/handoff gap, absent from probe-only cases.
+  it.each(['selection', 'handoff', 'own-close'] as const)('preserves the restart close fence during %s', async phase => {
+    const h = harness({ members: [MINI, STUDIO], row: { agentDeviceId: MINI.agentDeviceId, providerId: MINI.providerId } });
+    h.bindings.set('task', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+    h.probe.mockResolvedValue('unavailable');
+    if (phase === 'selection') h.deps.isFailoverEligible.mockImplementation(async (_id, context) => {
+      if (context.kind === 'failure') h.deps.leaseRecovery.mockReturnValue(null);
+      return true;
+    });
+    const switchAgentLocation = vi.fn<ProviderGroupServiceDeps['switchAgentLocation']>(async (_id, route, options) => {
+      if (phase === 'handoff') h.deps.leaseRecovery.mockReturnValue(null);
+      if (!options?.isCurrent?.()) throw new Error('provider group: superseded by user action');
+      options.onRelocationMutationStart?.();
+      h.deps.leaseRecovery.mockReturnValue(null);
+      expect(options.isCurrent()).toBe(true);
+      h.row.agentDeviceId = route.agentDeviceId;
+      h.row.providerId = route.providerId;
+    });
+    const service = createProviderGroupService({ ...h.deps, switchAgentLocation });
+    await service.onTurnError('task', signals, 1);
+    expect(h.row.agentDeviceId).toBe(phase === 'own-close' ? STUDIO.agentDeviceId : MINI.agentDeviceId);
+    expect(h.deps.continueSession).toHaveBeenCalledTimes(phase === 'own-close' ? 1 : 0);
+    expect(h.deps.fallback).not.toHaveBeenCalled();
+  });
+
+  // Unit: the persisted share:<id> route identifies O; only a live direct
+  // handle can probe its pinned M. Expiry during the probe must cancel recovery.
+  it('does not arm a guest switch token when closed while requesting it', async () => {
+    const route = 'share:restart-close';
+    const h = harness({ row: { agentDeviceId: route, providerId: 'shared-provider' } });
+    const guestSwitch = createProviderGroupGuestSwitch();
+    const direct = { ownerRoute: route, probeReconnect: async () => 'unavailable' as const,
+      requestSwitch: async () => { h.deps.leaseRecovery.mockReturnValue(null); return 'late-token'; } };
+    const service = createProviderGroupService({ ...h.deps, guestSwitch, directGuestSession: () => direct });
+    await service.onTurnError('task', signals, 1);
+    expect(guestSwitch.takeForOpen('task')).toBeUndefined();
+    expect(guestSwitch.hasOffer('task')).toBe(false);
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(h.deps.continueSession).not.toHaveBeenCalled();
+  });
+
+  it.each(['returns', 'expires'] as const)('probes the direct executor instead of its share owner: %s', async outcome => {
+    const SHARE_ROUTE = 'share:direct-restart';
+    let live = true;
+    const direct = { ownerRoute: SHARE_ROUTE, requestSwitch: async () => undefined,
+      probeReconnect: vi.fn(async () => { if (outcome === 'expires') live = false; return 'ok' as const; }) };
+    const h = harness({ row: { agentDeviceId: SHARE_ROUTE, providerId: 'shared-provider' } });
+    const service = createProviderGroupService({ ...h.deps, directGuestSession: () => live ? direct : null });
+    await service.onTurnError('task', signals, 1);
+    expect(h.probe).not.toHaveBeenCalled();
+    expect(direct.probeReconnect).toHaveBeenCalledOnce();
+    expect(h.deps.continueSession).toHaveBeenCalledTimes(outcome === 'returns' ? 1 : 0);
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+  });
+
+  it.each(['stop', 'close', 'close-probe-rejected', 'removed', 'unavailable', 'offline'] as const)('does not continue after %s', async outcome => {
+    const h = harness({ row: { agentDeviceId: MINI.agentDeviceId, providerId: MINI.providerId } });
+    if (outcome === 'removed') h.deps.isFailoverEligible.mockResolvedValue(false);
+    else if (outcome === 'close' || outcome === 'close-probe-rejected') h.probe.mockImplementation(async () => {
+      h.deps.leaseRecovery.mockReturnValue(null);
+      if (outcome === 'close-probe-rejected') throw new Error('probe failed after close');
+      return 'ok';
+    });
+    else if (outcome === 'stop') h.probe.mockImplementation(async () => {
+      h.service.noteUserAction('task');
+      return 'ok';
+    });
+    else h.probe.mockResolvedValue(outcome);
+    await h.service.onTurnError('task', signals, 1);
+    expect(h.deps.continueSession).not.toHaveBeenCalled();
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    if (outcome === 'offline') expect(h.probe).toHaveBeenCalledTimes(PROVIDER_GROUP_RECONNECT_MAX_ATTEMPTS + 1);
+    if (outcome !== 'stop' && outcome !== 'close' && outcome !== 'close-probe-rejected') expect(h.deps.fallback).toHaveBeenCalledOnce();
+    else expect(h.deps.fallback).not.toHaveBeenCalled();
   });
 });

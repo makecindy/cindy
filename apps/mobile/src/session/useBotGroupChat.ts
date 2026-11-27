@@ -7,7 +7,7 @@ import type { RemoteActionInvokeResponse, RemoteResource } from '@cindy/device-l
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import { useRevokedDevices } from '@/device-link/revokedDevicesStore';
 import { clearHistoryDisk, historyDiskAuthority, readConversationDisk, writeConversationDisk } from './remoteHistoryDiskCache';
-import { BOT_GROUP_REMOTE_COLLECTION_ID, type BotGroupRemoteActionId, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
+import { BOT_GROUP_PERSONAL_REPLIES_ENABLED, BOT_GROUP_REMOTE_COLLECTION_ID, type BotGroupRemoteActionId, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
 import { useAuth } from '@/auth/AuthContext';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscription';
@@ -16,6 +16,8 @@ import { formatRemoteError } from '@/device-link/remoteStatus';
 import { useRemoteSyncCoordinator } from '@/device-link/remoteSyncTask';
 import { isTransientRemoteError } from '@/device-link/remoteRetry';
 import { BOT_GROUP_CLIENT_PRIMITIVES, botGroupChatDataFromResource, botGroupErrorCode, botGroupResourceRef } from './botGroupRemote';
+import type { DurableOutboxRecord } from './durableOutbox';
+import { reuseJsonSnapshot } from '@/utils/reuseJsonSnapshot';
 
 export type BotGroupChatState =
   | { kind: 'loading' }
@@ -26,6 +28,7 @@ export type BotGroupChatState =
 /** Pushes for one change arrive in bursts (messages, round, plan); read once per burst. */
 const PUSH_COALESCE_MS = 150;
 const READ_RECOVERY_MS = 30_000;
+const NO_PENDING: readonly DurableOutboxRecord[] = [];
 let cacheOwner = getMobileAuthOwner();
 const cachedGroups = new Map<string, BotGroupRemoteChatData>();
 
@@ -46,7 +49,7 @@ export function useBotGroupChat(host: RemoteResourceHostTarget, groupId: string,
   const { i18n } = useTranslation();
   const identity = JSON.stringify([accountGeneration, host.deviceId, groupId]);
   const identityRef = useRef(identity); identityRef.current = identity;
-  const [state, setState] = useState<{ identity: string; value: BotGroupChatState }>(() => ({ identity,
+  const [state, setState] = useState<{ identity: string; value: BotGroupChatState; verified?: boolean }>(() => ({ identity,
     value: !revoked && cachedGroups.has(cacheKey) ? { kind: 'ready', group: cachedGroups.get(cacheKey)! } : { kind: 'loading' } }));
   // A queued read may fail before React commits the previous successful snapshot.
   const recovery = useRef({ identity, hasGroup: false });
@@ -58,6 +61,15 @@ export function useBotGroupChat(host: RemoteResourceHostTarget, groupId: string,
     if (revoked) {
       fresh.current++; cachedGroups.delete(cacheKey); void clearHistoryDisk(namespace, groupId);
       setState({ identity, value: { kind: 'missing' } }); return;
+    }
+    const known = cachedGroups.get(cacheKey);
+    if (known) {
+      // Memory may already be ahead of an in-flight/failed disk write. Reopening
+      // should validate with the host, never roll the visible conversation back.
+      recovery.current.hasGroup = true;
+      setState(previous => previous.identity === identity && previous.value.kind === 'ready' && previous.value.group === known
+        ? previous : { identity, value: { kind: 'ready', group: known } });
+      return;
     }
     let cancelled = false;
     const revision = fresh.current;
@@ -87,12 +99,14 @@ export function useBotGroupChat(host: RemoteResourceHostTarget, groupId: string,
       await openLink(host.deviceId);
       const resource = await getRemoteResource(invoke, host, botGroupResourceRef(groupId), i18n.language, BOT_GROUP_CLIENT_PRIMITIVES);
       if (!valid()) return;
-      const group = botGroupChatDataFromResource(resource);
-      if (!group || group.id !== groupId) throw new Error('INVALID_GROUP_DATA');
+      const incoming = botGroupChatDataFromResource(resource);
+      if (!incoming || incoming.id !== groupId) throw new Error('INVALID_GROUP_DATA');
+      const group = reuseJsonSnapshot(cachedGroups.get(cacheKey), incoming);
       fresh.current++; cachedGroups.set(cacheKey, group);
       void writeConversationDisk(authority, resource);
       recovery.current.hasGroup = true;
-      setState({ identity: owner, value: { kind: 'ready', group } });
+      setState(previous => previous.identity === owner && previous.verified && previous.value.kind === 'ready' && previous.value.group === group
+        ? previous : { identity: owner, value: { kind: 'ready', group }, verified: true });
     } catch (error) {
       if (!valid()) return;
       if (['NOT_FOUND', 'PERMISSION_DENIED'].includes(botGroupErrorCode(error) ?? '')) {
@@ -156,6 +170,7 @@ export function useBotGroupChat(host: RemoteResourceHostTarget, groupId: string,
 
   /** Run a group action; rejects with the host's error (see `botGroupErrorCode`). */
   const act = useCallback(async (actionId: BotGroupRemoteActionId, input?: Record<string, unknown>): Promise<RemoteActionInvokeResponse> => {
+    if (actionId === 'mask' && input?.action && !BOT_GROUP_PERSONAL_REPLIES_ENABLED) throw new Error('UNSUPPORTED_OPERATION');
     try {
       await openLink(host.deviceId);
       if (identityRef.current !== identity) throw new Error('OWNER_CHANGED');
@@ -177,15 +192,28 @@ export function useBotGroupChat(host: RemoteResourceHostTarget, groupId: string,
     } finally {
       // A refused action usually means the phone's copy is stale (PLAN_CLOSED, PLAN_OPEN): re-read either way.
       // A deleted group is left by the screen instead.
-      if (actionId !== 'delete' && actionId !== 'read' && identityRef.current === identity) reload();
+      if (actionId !== 'delete' && actionId !== 'read' && actionId !== 'mask' && actionId !== 'mask-mentions' && identityRef.current === identity) reload();
     }
   }, [cacheKey, namespace, groupId, host, i18n.language, identity, invoke, openLink, reload, server.acceptListState]);
 
   const value: BotGroupChatState = !host.deviceId || !groupId || server.isListHidden() || revoked
     ? { kind: 'missing' }
     : state.identity === identity ? state.value : { kind: 'loading' };
+  const reportedLocalRead = useRef({ identity, at: 0 });
   const markRead = useCallback(async (messageIds: string[]) => {
-    if (state.identity !== identity || state.value.kind !== 'ready' || !state.value.group.supportsReadReceipts) return;
+    if (state.identity !== identity || state.value.kind !== 'ready') return;
+    if (!state.value.group.supportsReadReceipts) {
+      if (!state.value.group.supportsLocalReadSync) return;
+      // Early local group: hand the computer the newest main-timeline message shown, once per advance.
+      const seenIds = new Set(messageIds);
+      const at = state.value.group.messages.reduce((latest, message) =>
+        seenIds.has(message.id) && !message.threadRootId ? Math.max(latest, message.createdAt) : latest, 0);
+      if (reportedLocalRead.current.identity !== identity) reportedLocalRead.current = { identity, at: 0 };
+      if (at <= reportedLocalRead.current.at) return;
+      reportedLocalRead.current = { identity, at };
+      await act('read', { at }).catch(() => { if (reportedLocalRead.current.identity === identity && reportedLocalRead.current.at === at) reportedLocalRead.current = { identity, at: 0 }; });
+      return;
+    }
     const seen = new Set(messageIds);
     const message = state.value.group.messages.filter(message => seen.has(message.id) && !message.threadRootId)
       .reduce<(typeof state.value.group.messages)[number] | undefined>((last, row) => !last || row.sequence > last.sequence ? row : last, undefined);
@@ -194,6 +222,6 @@ export function useBotGroupChat(host: RemoteResourceHostTarget, groupId: string,
   void presenceVersion;
   // Unknown presence still allows actions; the host answers or the link reports offline.
   const online = status === 'online' && !!host.deviceId && getPresenceAvailability(host.deviceId) !== false;
-  return !host.deviceId ? { ...server, server: true } : { state: value, reload, act, online, server: false, listHidden: server.listHidden, loadOlder: undefined, loadingOlder: false, media: undefined, markRead,
-    pending: [], pendingAction: undefined, canQueue: false };
+  return !host.deviceId ? { ...server, server: true } : { state: value, reload, act, online, verified: value.kind === 'ready' && state.verified === true, server: false, listHidden: server.listHidden, loadOlder: undefined, loadingOlder: false, media: undefined, markRead,
+    uploadAttachment: undefined, pending: NO_PENDING, pendingAction: undefined, canQueue: false, threadMeta: undefined, followThread: undefined, shareToMain: undefined, react: undefined, backfillThreads: undefined, threadsSyncing: false };
 }

@@ -15,13 +15,16 @@ const h = vi.hoisted(() => ({
   params: {} as { sessionId?: string; deviceId?: string; sharedTaskId?: string; expectedOwnedSharedTaskId?: string; mode?: string }, generation: 1,
   router: { replace: vi.fn(), push: vi.fn() }, alert: vi.fn(), revoked: vi.fn(),
   link: { sharedTaskAvailable: true, invoke: vi.fn(), openLink: vi.fn(), closeLink: vi.fn(), readDeviceList: vi.fn() },
-  api: { list: vi.fn(), get: vi.fn(), join: vi.fn(), leave: vi.fn(), close: vi.fn() },
+  api: { list: vi.fn(), get: vi.fn(), join: vi.fn(), leave: vi.fn(), close: vi.fn(), isPrivateOwner: vi.fn() },
   store: { getSessions: vi.fn(), removeDevice: vi.fn(), setDeviceSessions: vi.fn(), upsertDeviceSession: vi.fn() },
   t: (key: string, options?: { title?: string; link?: string }) => key === 'sharedTask.invitationMessage' ? `Join “${options?.title}”\n${options?.link}\nOpen the link, or paste it into Join Shared Task in Cindy.` : options?.title ? key + ':' + options.title : key,
 }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: h.t }) }));
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: { getItem: vi.fn(async () => null), setItem: vi.fn(async () => undefined) } }));
-vi.mock('@/config/env', () => ({ DEVICE_LINK_API_BASE_URL: 'https://relay.example.test', APP_SCHEME: 'cindy' }));
+// PR #8182: shared invitations contain bearer tokens. The selected device relay
+// must differ from the official sharing origin so copy/admission tests catch
+// accidentally sending the token to a relay operator (real screen, unit tier).
+vi.mock('@/config/env', () => ({ DEVICE_LINK_API_BASE_URL: 'https://own-relay.example.test', getOfficialDeviceLinkApiBaseUrl: () => 'https://relay.example.test', APP_SCHEME: 'cindy' }));
 vi.mock('@/i18n', () => ({ i18n: { t: (key: string) => key } }));
 vi.mock('lucide-react-native', () => ({ Check: () => null, Laptop: () => null, Link: () => null, Users: () => null, Clock: () => null, FileText: () => null, Square: () => null, X: () => null }));
 vi.mock('@/device-link/accessRevoked', () => ({ markDeviceAccessRevoked: h.revoked }));
@@ -209,7 +212,7 @@ it('retries failed Make membership rollback without exposing the task', async ()
   expect(h.api.leave).toHaveBeenCalledTimes(2);
   expect(element.textContent).toContain('sharedTask.invitationUnavailable');
 });
-it('copies a shareable invitation message with a link accepted by automatic and manual admission', async () => {
+it('copies an official invitation while using its own relay, accepted by automatic and manual admission', async () => {
   h.params = { sessionId: 'task', deviceId: 'desktop' };
   h.link.invoke.mockImplementation(async (_device, _channel, [command]) => command.action === 'invite' ? { invitation: 'A'.repeat(43) } : { available: true, detail });
   await render(); await click('sharedTask.invite');
@@ -219,8 +222,8 @@ it('copies a shareable invitation message with a link accepted by automatic and 
   expect(content).toContain('paste it into Join Shared Task in Cindy');
   expect(parseSharedTaskInvitation(content, 'https://relay.example.test')).toEqual({ ok: true, invitation: 'A'.repeat(43) });
 });
-it('rejects an invitation from another service without joining', async () => {
-  await render(); await fill('sharedTask.invitation', invitationLink.replace('relay.example.test', 'other.example.test'));
+it('rejects an invitation on the selected self-hosted origin without joining', async () => {
+  await render(); await fill('sharedTask.invitation', invitationLink.replace('relay.example.test', 'own-relay.example.test'));
   await click('sharedTask.join');
   expect(h.api.join).not.toHaveBeenCalled();
   expect(element.textContent).toContain('sharedTask.invitationDifferentServer');
@@ -429,9 +432,12 @@ it('replaces stale guest state only for confirmed membership loss and can join a
   await click('sharedTask.returnToTasks');
   expect(h.router.replace).toHaveBeenCalledWith('/devices');
 });
-it('closes only the confirmed owned tasks and retains failures for retry', async () => {
+// #11276: a private row must close on its original host while existing rows retain their route.
+// Unit through the actual management screen, one successful close and one retryable failure.
+it.each([false, true])('closes only confirmed owned tasks and retains failures for retry (private=%s)', async privateFirst => {
   h.params = { sessionId: 'task', deviceId: 'host' };
-  h.api.list.mockResolvedValue([owned('one'), owned('two'), { ...owned('foreign'), ownerAccountId: 'other' }]);
+  h.api.isPrivateOwner.mockImplementation((id: string) => privateFirst && id === 'one');
+  h.api.list.mockResolvedValue([{ ...owned('one'), hostDeviceId: privateFirst ? 'desktop' : 'host' }, owned('two'), { ...owned('foreign'), ownerAccountId: 'other' }]);
   await render(); await click('sharedTask.tabOwned'); await click('sharedTask.closeAll');
   expect(h.alert.mock.lastCall![3].cancelable).toBe(true);
   await act(async () => h.alert.mock.lastCall![3].onDismiss());
@@ -441,9 +447,14 @@ it('closes only the confirmed owned tasks and retains failures for retry', async
   expect(h.api.close).not.toHaveBeenCalled();
   expect(h.alert.mock.lastCall![1]).toContain('Test computer');
   h.api.close.mockImplementation((id: string) => id === 'two' ? Promise.reject(new Error('offline')) : Promise.resolve());
+  h.link.invoke.mockImplementation(async (_device, _channel, [command]) => command.action === 'close' ? { ok: true } : { available: true, detail: null });
   h.api.list.mockResolvedValue([owned('two')]);
   await act(async () => confirmation()[1].onPress!());
-  expect(h.api.close.mock.calls.map(([id]) => id)).toEqual(['one', 'two']);
+  expect(h.api.close.mock.calls.map(([id]) => id)).toEqual(privateFirst ? ['two'] : ['one', 'two']);
+  if (privateFirst) {
+    expect(h.link.openLink).toHaveBeenCalledWith('desktop');
+    expect(h.link.invoke).toHaveBeenCalledWith('desktop', 'maker:shared-task', [{ action: 'close', sharedTaskId: 'one' }]);
+  }
   expect(element.textContent).toContain('sharedTask.closeFailedToast');
   expect(element.textContent).toContain('two'); expect(element.textContent).not.toContain('one');
 });

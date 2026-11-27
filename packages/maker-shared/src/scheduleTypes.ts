@@ -1,5 +1,5 @@
 export type RemoteScheduleStatus = 'active' | 'paused' | 'expired';
-export type RemoteScheduleAgentKind = 'claude-code' | 'codex' | 'pi';
+export type RemoteScheduleAgentKind = 'claude-code' | 'codex' | 'pi' | 'acp';
 export type RemoteScheduleWorkspaceKind = 'project' | 'dialogue';
 export type RemoteScheduleRunStatus = 'running' | 'success' | 'failed' | 'aborted' | 'interrupted' | 'skipped';
 export type RemoteScheduleExecutionMode = 'agent' | 'script';
@@ -29,6 +29,8 @@ export interface RemoteScheduleWriteInput {
    * create 里省略 = 不设间隔(纯 cron 语义),update 里省略 = 不修改现有值。
    */
   intervalMs?: number | null;
+  /** Absolute Unix milliseconds; null clears, omission preserves on update. */
+  expireAt?: number | null;
   agentKind: RemoteScheduleAgentKind;
   modelAgentKind?: RemoteScheduleAgentKind;
   /** Absent = inherit bound task; empty string = automation host. */
@@ -42,6 +44,8 @@ export interface RemoteScheduleWriteInput {
   agentDeviceId?: string | null;
   effort?: string;
   fastMode?: boolean | 'ultrafast';
+  /** Optional smart route id; null clears on update, omitted preserves / unused on older hosts. */
+  modelGroup?: string | null;
   workspaceKind?: RemoteScheduleWorkspaceKind;
   workingDir?: string;
   useWorktree: boolean;
@@ -107,6 +111,8 @@ export interface RemoteSchedule {
   timezone?: string;
   recurring?: boolean;
   manual?: boolean;
+  /** 存在 = 开启了 Webhook 触发；旧版本电脑不返回。 */
+  webhookTrigger?: { endpointId: string; events?: string[] };
   intervalMs?: number;
   agentKind?: RemoteScheduleAgentKind;
   modelAgentKind?: RemoteScheduleAgentKind;
@@ -118,6 +124,8 @@ export interface RemoteSchedule {
   agentDeviceId?: string;
   effort?: string;
   fastMode?: boolean | 'ultrafast';
+  /** Optional smart route id; null clears on update, omitted preserves / unused on older hosts. */
+  modelGroup?: string | null;
   workspaceKind?: RemoteScheduleWorkspaceKind;
   workingDir?: string;
   useWorktree?: boolean;
@@ -146,12 +154,16 @@ export interface RemoteScheduleRun {
   /** Optional lightweight host projection; history and read receipts stay unchanged. */
   failureKind?: 'precheck' | 'rate-limit' | 'execution';
   failureRecovered?: boolean;
-  preRunHookResult?: { decision?: string; checkSucceeded?: boolean; stderr?: string };
+  /** Lightweight host projection of preRunHookResult.missingPlugin. */
+  missingPlugin?: unknown;
+  prCheckDiagnosis?: unknown;
+  preRunHookResult?: { decision?: string; checkSucceeded?: boolean; stderr?: string; prCheckDiagnosis?: unknown; missingPlugin?: unknown };
   resultText?: string;
   costUsd?: number;
   estimatedValueUsd?: number;
   costMoney?: RemoteScheduleRunMoney;
   estimatedValueMoney?: RemoteScheduleRunMoney;
+  estimatedValueAmounts?: RemoteScheduleRunMoney[];
   costAttribution?: 'exact' | 'direct' | 'mixed' | 'zero' | 'unavailable' | 'legacy';
   readAt?: RemoteTimestamp;
 }

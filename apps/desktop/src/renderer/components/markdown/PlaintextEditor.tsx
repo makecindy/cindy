@@ -69,6 +69,7 @@ import {
   markdownDarkEditorTheme,
 } from './codemirrorGithubTheme';
 import { getCodeMirrorLanguage } from './codemirrorLanguages';
+import { diffLineHighlight, isDiffLanguage } from './codemirrorDiffLines';
 import {
   clamp,
   findMarkdownTableAtLine,
@@ -88,9 +89,11 @@ import {
 import {
   imageBaseDirFacet,
   imageLocaleFacet,
+  imageRemoteOriginFacet,
   markdownImageDecorationField,
   findImageTargets,
 } from './markdownImageLivePreview';
+import type { RemoteMediaOrigin } from '../../../shared/remoteMediaUrl';
 import {
   docSearchIndexOfLine,
   docSearchRangesField,
@@ -167,6 +170,9 @@ export interface PlaintextEditorProps {
   /** Read-only mode. Toggled at runtime via Compartment.reconfigure,
    *  不重建 EditorView,scrollTop 自然保留。 */
   readOnly?: boolean;
+  /** Optional reading controls; undefined preserves the editor defaults. */
+  wordWrap?: boolean;
+  showLineNumbers?: boolean;
   /** Forwarded to the outer wrapper. */
   className?: string;
   /** highlight.js-style language alias ('python', 'json', 'typescript', ...).
@@ -185,6 +191,9 @@ export interface PlaintextEditorProps {
    *  父目录(不是 session cwd)。不传 / 空串时相对路径图片显示"无法解析"占位
    *  卡。仅 markdown chrome 消费,其它模式忽略。 */
   imageBaseDir?: string;
+  /** 远程会话(device-link / SSH)媒体来源:Markdown live-preview 图片解析后经
+   *  cindy-remote-media:// 拉取。null / undefined 表示本地会话。 */
+  imageRemoteOrigin?: RemoteMediaOrigin | null;
   /** view.scrollDOM 滚动事件回调,带最新 scrollTop。passive listener,无
    *  额外 React state,父组件可以把它直接落到 fileScrollStore。 */
   onScroll?: (top: number, line: number | null, offset: number | null) => void;
@@ -1070,12 +1079,15 @@ export const PlaintextEditor = forwardRef<PlaintextEditorHandle, PlaintextEditor
       initialValue,
       onChange,
       readOnly = false,
+      wordWrap,
+      showLineNumbers,
       className,
       language,
       initialScrollTop,
       initialScrollLine,
       initialScrollOffset,
       imageBaseDir,
+      imageRemoteOrigin = null,
       onScroll,
     },
     ref,
@@ -1135,15 +1147,20 @@ export const PlaintextEditor = forwardRef<PlaintextEditorHandle, PlaintextEditor
     // readOnly 用 Compartment 包起来,让 preview↔edit 可以 reconfigure 而不
     // remount。否则父组件靠 key 切换 readOnly 会让 CodeMirror 整个销毁重建,
     // 滚动位置会被重置回顶部 —— 用户拖到下面点编辑就会"跳回顶上"。
+    const wrapCompartment = useRef(new Compartment()).current;
+    const lineNumbersCompartment = useRef(new Compartment()).current;
     const editableCompartment = useRef(new Compartment()).current;
     const tableLabelsCompartment = useRef(new Compartment()).current;
     const mermaidLocaleCompartment = useRef(new Compartment()).current;
     const imageBaseDirCompartment = useRef(new Compartment()).current;
+    const imageRemoteOriginCompartment = useRef(new Compartment()).current;
 
     // imageBaseDir 走 ref 保鲜:init effect 不能依赖它(否则 prop identity 变化
     // 会重建 EditorView 丢滚动位置);运行时变更由下面的 reconfigure effect 处理。
     const imageBaseDirRef = useRef(imageBaseDir ?? '');
     imageBaseDirRef.current = imageBaseDir ?? '';
+    const imageRemoteOriginRef = useRef<RemoteMediaOrigin | null>(imageRemoteOrigin);
+    imageRemoteOriginRef.current = imageRemoteOrigin;
 
     const tableMenuLabels = useMemo<TableMenuLabels>(
       () => ({
@@ -1306,9 +1323,13 @@ export const PlaintextEditor = forwardRef<PlaintextEditorHandle, PlaintextEditor
       const extensions = [
         history(),
         keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap]),
-        ...(initialConfig.skipWrap ? [] : [EditorView.lineWrapping]),
-        ...(initialConfig.useCodeChrome ? [lineNumbers()] : []),
+        wrapCompartment.of(initialConfig.skipWrap || wordWrap === false ? [] : EditorView.lineWrapping,
+        ),
+        lineNumbersCompartment.of(
+          (showLineNumbers ?? initialConfig.useCodeChrome) ? lineNumbers() : []),
         ...highlightExtensions,
+        // .diff/.patch rows keep their red/green fill even when highlighting is skipped.
+        ...(isDiffLanguage(initialConfig.language) ? [diffLineHighlight] : []),
         ...(initialConfig.isMarkdown
           ? [
               // 命中集合先于表格 decoration 挂上:markdownTableDecorationField
@@ -1321,6 +1342,9 @@ export const PlaintextEditor = forwardRef<PlaintextEditorHandle, PlaintextEditor
               markdownMermaidDecorationField,
               markdownImageDecorationField,
               imageBaseDirCompartment.of(imageBaseDirFacet.of(imageBaseDirRef.current)),
+              imageRemoteOriginCompartment.of(
+                imageRemoteOriginFacet.of(imageRemoteOriginRef.current),
+              ),
               // mermaid / image widget 的 i18n 文案都在 toDOM 时读取,共用同一个
               // locale compartment,语言切换时一次 reconfigure 触发两个 field 重建。
               mermaidLocaleCompartment.of([
@@ -1506,6 +1530,21 @@ export const PlaintextEditor = forwardRef<PlaintextEditorHandle, PlaintextEditor
       });
     }, [isMarkdown, imageBaseDir, imageBaseDirCompartment]);
 
+    const imageRemoteOriginKey = imageRemoteOrigin
+      ? imageRemoteOrigin.kind === 'device'
+        ? `device:${imageRemoteOrigin.deviceId}`
+        : `ssh:${imageRemoteOrigin.remoteHostId}:${imageRemoteOrigin.workdir}`
+      : '';
+    useEffect(() => {
+      const view = cmViewRef.current;
+      if (!view || !isMarkdown) return;
+      view.dispatch({
+        effects: imageRemoteOriginCompartment.reconfigure(
+          imageRemoteOriginFacet.of(imageRemoteOriginRef.current),
+        ),
+      });
+    }, [isMarkdown, imageRemoteOriginKey, imageRemoteOriginCompartment]);
+
     // readOnly 切换 → 通过 Compartment.reconfigure 在 EditorView 内运行时改写,
     // 不销毁 view、不重建 DOM,scrollTop 自然保留。配合父组件移除 key 里的
     // editMode,实现"代码文件预览↔编辑切换 不掉滚动位置"。
@@ -1516,6 +1555,19 @@ export const PlaintextEditor = forwardRef<PlaintextEditorHandle, PlaintextEditor
         effects: editableCompartment.reconfigure(EditorView.editable.of(!readOnly)),
       });
     }, [readOnly, editableCompartment]);
+
+    useEffect(() => {
+      cmViewRef.current?.dispatch({
+        effects: [
+          wrapCompartment.reconfigure(
+            wordWrap === false || initialConfigRef.current?.skipWrap ? [] : EditorView.lineWrapping,
+          ),
+          lineNumbersCompartment.reconfigure(
+            (showLineNumbers ?? initialConfigRef.current?.useCodeChrome) ? lineNumbers() : [],
+          ),
+        ],
+      });
+    }, [wordWrap, showLineNumbers, wrapCompartment, lineNumbersCompartment]);
 
     return (
       // select-text:globals.css 全局禁了文本选中,CodeMirror 内部的 .cm-scroller /

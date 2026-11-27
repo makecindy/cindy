@@ -18,10 +18,10 @@ export function bundleInputDigest(pkgDir, dependencyDirs = []) {
       inputs.push([prefix, rel.replaceAll('\\', '/'), fileDigest(abs)]);
     }
   }
-  for (const rel of ['src', 'build.mjs', 'package.json']) visit(pkgDir, rel, 'package');
+  for (const rel of ['src', 'prebuilt', 'build.mjs', 'package.json', 'Cargo.toml', 'Cargo.lock']) visit(pkgDir, rel, 'package');
   dependencyDirs.forEach((dependency, index) => {
     if (!existsSync(dependency)) throw new Error(`Remote bundle source dependency is missing: ${dependency}`);
-    for (const rel of ['src', 'package.json', 'LICENSE.opencodex']) visit(dependency, rel, `dependency:${index}`);
+    for (const rel of ['src', 'wasm/node.mts', 'package.json', 'Cargo.toml', 'Cargo.lock', 'LICENSE.opencodex']) visit(dependency, rel, `dependency:${index}`);
   });
   return createHash('sha256').update(JSON.stringify(inputs)).digest('hex');
 }

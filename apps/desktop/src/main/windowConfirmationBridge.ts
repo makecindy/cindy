@@ -13,6 +13,7 @@ interface PendingConfirmation<T> {
   resolve(confirmed: boolean): void;
   timer: ReturnType<typeof setTimeout>;
   signal?: AbortSignal;
+  onDecision?(confirmed: boolean): void;
   abort(): void;
 }
 
@@ -26,7 +27,7 @@ export class WindowConfirmationBridge<T> {
   request(
     target: WindowConfirmationTarget<T>,
     request: T,
-    options: { signal?: AbortSignal; key?: string } = {},
+    options: { signal?: AbortSignal; key?: string; onDecision?(confirmed: boolean): void } = {},
   ): Promise<boolean> {
     if (options.signal?.aborted) return Promise.resolve(false);
     if (options.key && [...this.pending.values()].some(entry => entry.key === options.key))
@@ -35,7 +36,7 @@ export class WindowConfirmationBridge<T> {
     return new Promise<boolean>((resolve, reject) => {
       const abort = () => this.settle(requestId, false);
       const timer = setTimeout(abort, this.deps.timeoutMs ?? HOST_CONFIRM_TIMEOUT_MS);
-      this.pending.set(requestId, { target, key: options.key, resolve, timer, signal: options.signal, abort });
+      this.pending.set(requestId, { target, key: options.key, resolve, timer, signal: options.signal, abort, onDecision: options.onDecision });
       options.signal?.addEventListener('abort', abort, { once: true });
       let delivered = false;
       try {
@@ -55,6 +56,7 @@ export class WindowConfirmationBridge<T> {
   resolve(requesterId: number, requestId: string, confirmed: unknown): boolean {
     const entry = this.pending.get(requestId);
     if (!entry || entry.target.id !== requesterId) return false;
+    if (typeof confirmed === 'boolean') entry.onDecision?.(confirmed);
     this.settle(requestId, confirmed === true);
     return true;
   }

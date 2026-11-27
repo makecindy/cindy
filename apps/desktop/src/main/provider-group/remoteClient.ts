@@ -16,6 +16,7 @@ import {
   type ProviderGroupRemoteLease,
   type ProviderGroupRemotePick,
   type ProviderGroupRemoteUsageRow,
+  type ProviderGroupDisplayRead,
   type ProviderGroupView,
 } from '../../shared/providerGroup.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
@@ -39,6 +40,8 @@ export interface ProviderGroupRemoteClient {
     model: string;
     exclude: readonly string[];
     quotaRebalance?: string;
+    /** Existing tasks must keep the owner's live answer; new tasks may use a prepared context. */
+    allowOffline?: boolean;
   }): Promise<ProviderGroupRemotePick>;
   cool(ownerDeviceId: string, input: {
     providerId: string;
@@ -48,7 +51,7 @@ export interface ProviderGroupRemoteClient {
     model?: string;
   }): Promise<void>;
   leases(ownerDeviceId: string, seq: number, entries: readonly ProviderGroupRemoteLease[]): Promise<void>;
-  view(ownerDeviceId: string, providerId: string, modelOrOptions?: string | { model?: string; agentKind?: 'claude-code' | 'codex' | 'pi'; includeGuestSupport?: boolean }): Promise<ProviderGroupView>;
+  view(ownerDeviceId: string, providerId: string, modelOrOptions?: string | { model?: string; agentKind?: 'claude-code' | 'codex' | 'pi'; includeGuestSupport?: boolean; display?: ProviderGroupDisplayRead }): Promise<ProviderGroupView>;
   /** 报告经组、在组里别的电脑上运行的用量；组所在电脑是旧版本时抛 ProviderGroupRemoteUnsupportedError。 */
   usage(ownerDeviceId: string, report: { seq: number; sinceDay: string | null; rows: readonly ProviderGroupRemoteUsageRow[] }, beforeSend?: () => void): Promise<void>;
 }
@@ -150,6 +153,7 @@ export function createProviderGroupRemoteClient(invoke: ProviderGroupRemoteInvok
         providerId,
         ...(model ? { model } : {}),
         ...(agentKind ? { agentKind } : {}),
+        ...(typeof modelOrOptions === 'object' && modelOrOptions.display ? { display: modelOrOptions.display } : {}),
         ...(includeGuestSupport ? { includeGuestSupport: true } : {}),
       }), providerId);
       recoverProviderGroupViewShares(view, recoverShares);

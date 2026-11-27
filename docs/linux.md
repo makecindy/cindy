@@ -10,8 +10,9 @@
 | pacman/AUR or another third-party package | That package manager | Use that package manager, not the in-app installer |
 
 The user installer supports x64 and arm64 payload identities, but requires a
-matching published artifact. Arm64 does not currently support the Beta channel;
-this change's host checks use x64 Omarchy; release acceptance is listed below.
+matching published artifact. Both architectures support the Beta channel when a
+matching Beta installer is available. Host checks here use x64 Omarchy;
+release acceptance is listed below.
 Alpine/musl, root desktop sessions,
 and unpacking old releases by hand are not supported user-install routes.
 This does not add Linux equivalents of features that require macOS or Windows.
@@ -45,9 +46,14 @@ For Wayland screen sharing and file dialogs, keep your compositor's portal
 backend and PipeWire installed and working. Omarchy normally configures these;
 this installer deliberately does not rewrite Hyprland, PAM or portal settings.
 See the [Electron safeStorage documentation](https://www.electronjs.org/docs/latest/api/safe-storage)
-for the backend model. KDE and GNOME retain Electron's existing selection;
-Hyprland selects `gnome-libsecret` before app readiness; other desktops retain
-Electron's selection. Desktop identity uses the first non-empty value from
+for the backend model. KDE, GNOME, XFCE and other recognized desktops retain
+Electron's existing selection. Before app readiness, Cindy selects
+`gnome-libsecret` for Hyprland, labwc, and a session with no desktop identity.
+Named desktops Chromium does not recognize, including sway and niri, keep
+Electron's selection. An empty identity otherwise falls back to `basic_text`,
+which a packaged build cannot use to save a login. Selecting libsecret does not
+install or unlock a keyring; if libsecret is missing, Chromium still falls back
+and Cindy refuses plaintext. Desktop identity uses the first non-empty value from
 `XDG_CURRENT_DESKTOP`, `XDG_SESSION_DESKTOP`, and `DESKTOP_SESSION`.
 An explicit `--password-store` always wins and survives an in-app update restart.
 
@@ -148,11 +154,20 @@ command belonging to a different installation.
 
 ## Updates, existing installations, and recovery
 
-Choose Update in Cindy, then restart when convenient. Linux never installs
-while idle. Managed user installs need no system password. System `.deb`
-installs still request authorization. Unknown/package-manager-owned layouts
-are rejected **before Cindy quits or stops active work** with a guide prompt.
-The downloaded package remains available.
+Managed user installs need no system password, so they behave like macOS:
+Settings → About offers "Install updates automatically when idle", and a staged
+update is also applied at the next launch. System `.deb` installs request
+pkexec authorization, so they only install when you choose to restart and the
+switch is not shown. An administrator can make a system `.deb` install
+unattended as well by letting polkit grant `org.freedesktop.policykit.exec`
+to the desktop user without a prompt (Cindy checks this with `pkcheck`); the
+switch then appears and idle/startup installs proceed. Only do this where that
+user already has equivalent passwordless root, such as a single-user cloud
+desktop. Unknown/package-manager-owned layouts, and system `.deb`
+installs on a computer without `pkexec`, are rejected **before Cindy quits or
+stops active work** with a guide prompt. The downloaded package remains
+available; switching to a managed user install (above) enables unattended
+updates.
 
 Each update verifies the manifest size and SHA-256 again using a private
 snapshot, checks the package's version/architecture/region, then prepares a new

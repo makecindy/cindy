@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { WallpaperId } from '@/../shared/appearanceSettings';
+import type { DownloadRetryReason } from '@/../shared/downloadProgress';
 import { isCdnWallpaper } from '@/lib/wallpaper';
 import manifest from '@/../shared/wallpaper-video-manifest.json';
 
@@ -8,6 +9,8 @@ type AssetState = {
   url: string | null;
   status: 'loading' | 'ready' | 'failed';
   loaded: number;
+  /** Set while Main is waiting to retry this transfer; explains a bar that restarted. */
+  retryReason?: DownloadRetryReason;
 };
 
 /** Only selected media is requested. Main owns durable caching and cross-window deduplication. */
@@ -44,7 +47,14 @@ export function useWallpaperAsset(id: WallpaperId, kind: 'image' | 'video', enab
       if (!Number.isFinite(progress.loaded) || progress.total !== total) return;
       setState((previous) =>
         previous?.key === key && previous.status === 'loading'
-          ? { ...previous, loaded: Math.max(0, Math.min(total, progress.loaded)) }
+          ? {
+              ...previous,
+              loaded: Math.max(0, Math.min(total, progress.loaded)),
+              retryReason:
+                progress.download?.phase === 'retrying'
+                  ? (progress.download.retryReason ?? 'network')
+                  : undefined,
+            }
           : previous,
       );
     });
@@ -93,12 +103,12 @@ export function useWallpaperAsset(id: WallpaperId, kind: 'image' | 'video', enab
 
   return {
     url,
-    // Report pending on the selection's first render, before the effect starts,
-    // so the canvas cannot flash its thumbnail for a frame.
+    // Report progress on the selection's first render, before the effect starts.
     loading: active && !url && !failed && canEnsure,
     failed,
     loaded: active ? (url ? total : state?.key === key ? state.loaded : 0) : 0,
     total: active ? total : 0,
+    retryReason: active && !url && state?.key === key ? state.retryReason : undefined,
     retry,
   };
 }

@@ -15,7 +15,10 @@
 
 import { installResponseGuard } from './response-guard.js';
 import { collectRecoverableBody } from './oversized-attachments.js';
-import { createHash } from 'node:crypto';
+import { countInlineRequestImages, mergeRequestSizeBudgets, requestSizeBudgetAfterRejection, requestSizeModelFamily, type ImageRouteInfo, type RequestSizeBudget, type WireFormat } from './request-size-control.js';
+import { classifyRequestSizeError, type RequestSizeError } from './request-size-errors.js';
+import { createHash, randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { createServer, request as httpRequest, type ClientRequest, type IncomingMessage, type RequestOptions, type Server, type ServerResponse } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import type { Socket, TcpSocketConnectOpts } from 'node:net';
@@ -47,6 +50,8 @@ import {
 import type {
   ForwardLifecycleObserver,
   ForwardLifecycleFailure,
+  InboundAdmissionCtx,
+  InboundRejection,
   LocalRequestHandler,
   ProxyHandle,
   ProxyLogger,
@@ -320,6 +325,11 @@ function formatUpstreamBase(t: UpstreamTarget): string {
   );
 }
 
+/** 只含协议、主机与非默认端口;不含 basePath / query(可能带密钥),用于失败日志。 */
+function formatUpstreamOrigin(t: UpstreamTarget): string {
+  return `${t.protocol}//${formatHostHeader(t.hostname, t.port, t.protocol)}`;
+}
+
 function isRetryableListenError(error: unknown): boolean {
   if (!error || typeof error !== 'object' || !('code' in error)) return false;
   const code = (error as NodeJS.ErrnoException).code;
@@ -427,6 +437,19 @@ function respondRoutingFailure(
     return;
   }
   res.destroy(err instanceof Error ? err : new Error(String(err)));
+}
+
+/** Runs the optional inbound admission check; a throwing check rejects. */
+function admitInbound(
+  check: ProxyOptions['authorizeInbound'],
+  ctx: InboundAdmissionCtx,
+): InboundRejection | null {
+  if (!check) return null;
+  try {
+    return check(ctx);
+  } catch {
+    return { status: 401, code: 'inbound_admission_failed', message: 'The request could not be admitted.' };
+  }
 }
 
 /**
@@ -677,7 +700,8 @@ function respondRequestTooLarge(opts: {
   /** Content-Length 预检命中时的声明字节数;流式守卫命中时为 null。 */
   declaredBytes: number | null;
   receivedBytes: number;
-  reason?: 'request_body_too_large' | 'attachment_recovery_storage_exhausted';
+  reason?: 'request_body_too_large' | 'attachment_recovery_storage_exhausted'
+    | 'attachment_recovery_unavailable' | 'recovered_body_too_large';
 }): void {
   const { req, res, logger } = opts;
   const storageExhausted = opts.reason === 'attachment_recovery_storage_exhausted';
@@ -959,7 +983,9 @@ function forward(
   beforeRetry?: () => Promise<boolean>,
   // Optional request-local operational observer. It never receives raw request/response data.
   forwardLifecycle?: ForwardLifecycleObserver | null,
-  recoverUpstreamOversized?: (body: Buffer, signal: AbortSignal) => Promise<Buffer>,
+  recoverUpstreamOversized?: (body: Buffer, signal: AbortSignal, error: () => RequestSizeError) => Promise<Buffer | null>,
+  recoverRequestSize?: (body: Buffer, error: ReturnType<typeof classifyRequestSizeError>, signal: AbortSignal, ctx?: RequestTransformCtx) => Promise<Buffer | null>,
+  requestContext?: RequestTransformCtx,
 ): void {
   // Diagnostics are a strict side channel: callback failures must never change forwarding.
   const notifyForwardLifecycle = (notify: () => void): void => {
@@ -993,8 +1019,18 @@ function forward(
   const queryIndex = routedPath.indexOf('?');
   const routedPathname = queryIndex === -1 ? routedPath : routedPath.slice(0, queryIndex);
   const routedQuery = queryIndex === -1 ? '' : routedPath.slice(queryIndex + 1);
+  // #12233: 与连接探测 joinAnthropicMessagesUrl 同一把尺子——有效请求路径以 /v1/ 开头
+  // (或就是 /v1)时,剥掉上游 basePath 末尾重叠的一段 /v1。自定义供应商的 Messages 地址
+  // 常存成 …/v1(Pi/Codex 通道需要带 /v1),Claude Code CLI 又自己补 /v1/messages,直接
+  // 相加会拼出 /v1/v1/messages,上游空 404 还被误报成「模型不存在」;探测能过、会话挂,
+  // 就是两条路径规则不一致。网关前缀只消除重叠的一段(/proxy/v1 → /proxy/v1/messages);
+  // 显式 requestPath(pathOverride)仍优先——剥与不剥由它自己的前缀决定,不另设规则。
+  const upstreamBasePath =
+    routedPathname === '/v1' || routedPathname.startsWith('/v1/')
+      ? actualTarget.basePath.replace(/\/v1$/, '')
+      : actualTarget.basePath;
   const upstreamPathname =
-    `${actualTarget.basePath}${routedPathname.startsWith('/') ? routedPathname : '/' + routedPathname}`;
+    `${upstreamBasePath}${routedPathname.startsWith('/') ? routedPathname : '/' + routedPathname}`;
   const upstreamQuery = [actualTarget.baseQuery, routedQuery].filter(Boolean).join('&');
   const upstreamPath = upstreamQuery ? `${upstreamPathname}?${upstreamQuery}` : upstreamPathname;
 
@@ -1037,6 +1073,7 @@ function forward(
     }
   }
   const upstreamReq = reqFn(upstreamOptions);
+  const upstreamStartedAt = Date.now();
   if (forwardLifecycle?.onStart) {
     notifyForwardLifecycle(() => forwardLifecycle.onStart?.());
   }
@@ -1155,7 +1192,64 @@ function forward(
       ? recoveryRules.filter((r) => r.enabled() && (canRetry || r.unrecoverableCode))
       : [];
     const recover413 = status === 413 && canRetry && recoverUpstreamOversized;
-    if (activeRules.length > 0 || recover413) {
+    const recoverSize400 = status === 400 && canRetry && recoverRequestSize;
+    if (recover413) {
+      // A 413 is final at the HTTP status line. Start recovery immediately instead of waiting
+      // for a gateway body that may never finish (ALB commonly follows it with a 400/FIN).
+      const recoveryAbort = new AbortController();
+      const abortRecovery = (): void => recoveryAbort.abort();
+      clientRes.once('close', abortRecovery);
+      const early413Chunks: Buffer[] = [];
+      upstreamRes.on('data', (chunk: Buffer) => early413Chunks.push(chunk));
+      upstreamRes.once('error', () => undefined);
+      upstreamRes.resume();
+      // Let the already-arrived status body drain for compatibility, then close the old
+      // upload connection so a late ALB 400/FIN cannot keep it alive.
+      setImmediate(() => upstreamReq.destroy());
+      void (async () => {
+        let recovered: Buffer | null | undefined;
+        try { recovered = await recoverUpstreamOversized(body, recoveryAbort.signal, () => {
+          const error = classifyRequestSizeError(decodeBodyForLog(Buffer.concat(early413Chunks), String(upstreamRes.headers['content-encoding'] ?? '')).toString('utf8'));
+          return error.kind === 'other' ? { kind: 'request-too-large' } : error;
+        }); }
+        catch { recovered = undefined; }
+        finally { clientRes.off('close', abortRecovery); }
+        if (clientRes.destroyed || clientRes.writableEnded) return;
+        if (recovered && !recovered.equals(body)) {
+          try {
+            if (beforeRetry && !(await beforeRetry())) return;
+          } catch {
+            recovered = undefined;
+          }
+          if (!recovered || clientRes.destroyed || clientRes.writableEnded) return;
+          logger.info?.('upstream 413 attachment recovery retry', {
+            reqId, originalBytes: body.length, recoveredBytes: recovered.length,
+          });
+          forward(
+            target, method, path, headers, recovered, clientRes, logger,
+            recoveryRules, reqId, false, overrideTarget, headerOverride,
+            headerDelete, responseObserver, transformResponse, clientModel,
+            outboundProxy, pathOverride, responseToolUseIds, threadMintedIdCache,
+            requestDeclaredStream, beforeRetry, forwardLifecycle,
+          );
+          return;
+        }
+        if (!clientRes.headersSent) {
+          if (upstreamRes.readableEnded) {
+            // Preserve complete errors byte-for-byte, including their encoding.
+            clientRes.writeHead(413, { ...respHeaders, connection: 'close' });
+            clientRes.end(Buffer.concat(early413Chunks));
+          } else {
+            // Early cancellation may leave only part of a gzip/br body. Do not
+            // forward that fragment or wait for the closed upload to finish it.
+            clientRes.writeHead(413, { 'content-type': 'application/json; charset=utf-8', connection: 'close' });
+            clientRes.end(JSON.stringify({ error: { type: 'request_too_large', message: 'Upstream rejected this request as too large.' } }));
+          }
+        }
+      })();
+      return;
+    }
+    if (activeRules.length > 0 || recover413 || recoverSize400) {
       const chunks: Buffer[] = [];
       const failBufferedResponse = (
         reason: 'error' | 'aborted' | 'close',
@@ -1203,31 +1297,24 @@ function forward(
         // (回客户端仍是原始 errBody + content-encoding 头透传, 客户端自己解压, 见下方 clientRes.end)
         const decodedErrBody = decodeBodyForLog(errBody, String(upstreamRes.headers['content-encoding'] ?? ''));
         const decodedText = decodedErrBody.toString('utf8');
-        if (recover413) {
-          const recoveryAbort = new AbortController();
-          const abortRecovery = (): void => recoveryAbort.abort();
-          clientRes.once('close', abortRecovery);
-          let recovered: Buffer | undefined;
-          try {
-            recovered = await recover413(body, recoveryAbort.signal);
-          } catch {
-            // Storage failure, unsupported content and cancellation must never
-            // replace the original 413 with an unrelated recovery error.
-            logger.info?.('upstream 413 attachment recovery unavailable', { reqId });
-          } finally {
-            clientRes.off('close', abortRecovery);
-          }
-          if (clientRes.destroyed || clientRes.writableEnded) return;
-          if (recovered && recovered.length < body.length) {
-            try {
-              if (beforeRetry && !(await beforeRetry())) return;
-            } catch {
-              recovered = undefined;
-            }
+        if (status === 400 && recoverRequestSize && canRetry) {
+          const sizeError = classifyRequestSizeError(decodedText);
+          if (sizeError.kind !== 'other' && sizeError.kind !== 'unsupported-image' && sizeError.kind !== 'context-too-long') {
+            const retryAbort = new AbortController();
+            const abortRetry = (): void => retryAbort.abort();
+            clientRes.once('close', abortRetry);
+            let recovered: Buffer | null = null;
+            try { recovered = await recoverRequestSize(body, sizeError, retryAbort.signal, requestContext); }
+            catch { recovered = null; }
+            finally { clientRes.off('close', abortRetry); }
             if (clientRes.destroyed || clientRes.writableEnded) return;
-            if (recovered) {
-              logger.info?.('upstream 413 attachment recovery retry', {
-                reqId, originalBytes: body.length, recoveredBytes: recovered.length,
+            if (recovered && !recovered.equals(body)) {
+              try { if (beforeRetry && !(await beforeRetry())) return; }
+              catch { recovered = null; }
+            }
+            if (recovered && !recovered.equals(body)) {
+              logger.info?.('upstream request size recovery retry', {
+                reqId, originalBytes: body.length, recoveredBytes: recovered.length, reason: sizeError.kind,
               });
               forward(
                 target, method, path, headers, recovered, clientRes, logger,
@@ -1277,7 +1364,7 @@ function forward(
               const model = appliedRule.useUpstreamModel
                 ? extractBodyModel(body)
                 : clientModel || extractBodyModel(body);
-              if (model) appliedRule.onRetry?.(threadId, model);
+              if (model) appliedRule.onRetry?.(threadId, model, formatUpstreamBase(actualTarget));
             }
           }
           const retry = (): void => {
@@ -1942,11 +2029,22 @@ function forward(
         ),
       );
     }
+    // 只凭错误文案(如 write EPIPE)分不清原因:上游嫌请求太大而断开、复用了上游已关闭的
+    // 空闲连接、还是超时。补上请求体字节数、耗时与连接是否复用("写完"只代表进了本机缓冲,
+    // 不代表上游收到,故不记)。上游地址只记协议/主机/端口,query 可能带用户配置的密钥,
+    // 不进日志。
+    const errorCode = (err as NodeJS.ErrnoException | null)?.code;
     logger.error?.('upstream request failed', {
       reqId,
       err: String(err),
+      ...(typeof errorCode === 'string' ? { errorCode } : {}),
       method,
       path: upstreamPathname,
+      upstreamOrigin: formatUpstreamOrigin(actualTarget),
+      bodyBytes: body.length,
+      reusedSocket: upstreamReq.reusedSocket,
+      elapsedMs: Date.now() - upstreamStartedAt,
+      ...(requestTimedOut ? { timedOut: true } : {}),
       ...(outboundProxy ? { viaProxy: outboundProxy.target.url } : {}),
     });
     if (upstreamResponseTerminal === null) upstreamResponseTerminal = 'error';
@@ -1962,6 +2060,46 @@ function forward(
   });
 
   upstreamReq.end(body);
+}
+
+// Spooling must not change route identity when `model` follows a large input.
+// Skip JSON strings in the byte buffer; only decode short keys and the top-level
+// model value, without parsing or materializing the whole request again.
+function requestModelHint(body: Buffer): { model?: string } {
+  const whitespace = (byte: number) => byte === 32 || byte === 9 || byte === 10 || byte === 13;
+  const stringEnd = (start: number): number => {
+    let end = body.indexOf(34, start + 1);
+    while (end !== -1) {
+      let slash = end - 1;
+      while (slash > start && body[slash] === 92) slash--;
+      if ((end - slash - 1) % 2 === 0) return end;
+      end = body.indexOf(34, end + 1);
+    }
+    throw new SyntaxError('Unterminated JSON string');
+  };
+  let depth = 0;
+  let model: string | undefined;
+  for (let offset = 0; offset < body.length; offset++) {
+    const byte = body[offset];
+    if (byte === 34) {
+      const end = stringEnd(offset);
+      if (depth === 1 && end - offset <= 32) {
+        let colon = end + 1;
+        while (whitespace(body[colon])) colon++;
+        if (body[colon] === 58) {
+          const key = body.toString('utf8', offset, end + 1);
+          if (key === '"model"' || (key.includes('\\') && JSON.parse(key) === 'model')) {
+            let value = colon + 1;
+            while (whitespace(body[value])) value++;
+            model = body[value] === 34 ? JSON.parse(body.toString('utf8', value, stringEnd(value) + 1)) as string : undefined;
+          }
+        }
+      }
+      offset = end;
+    } else if (byte === 123 || byte === 91) depth++;
+    else if (byte === 125 || byte === 93) depth--;
+  }
+  return model === undefined ? {} : { model };
 }
 
 /**
@@ -1991,6 +2129,13 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
   const host = opts.host ?? '127.0.0.1';
   const maxBodyBytes = opts.maxRequestBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES;
   const oversizedRequestCompactor: OversizedRequestCompactor | undefined = opts.oversizedRequestCompactor;
+  const requestSizeController = opts.requestSizeController;
+  const learnedRequestSizeRoutes = new Map<string, RequestSizeBudget>();
+  const requestSizeRouteKey = (ctx: RequestTransformCtx, body: unknown, format: string, route: ImageRouteInfo): string => {
+    const model = route.modelId ?? (isRecord(body) && typeof body.model === 'string' ? body.model : '');
+    const account = ctx.headers.authorization ?? ctx.headers['x-api-key'] ?? '';
+    return JSON.stringify([account, route.providerId ?? '', route.endpoint ?? ctx.url, model, 'http', format]);
+  };
   // Treat a malformed ingress override as unset.  Letting NaN reach the
   // stream guard would make `total > NaN` false forever and turn the bounded
   // ingress into an unbounded read.
@@ -2140,6 +2285,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
   const resolveOutboundForTarget = async (
     target: UpstreamTarget,
     reqId: number,
+    wsAttempt?: { proxyInstanceId: string; reqId: number; attempt: number },
   ): Promise<ResolvedOutboundProxy | undefined> => {
     const resolver = opts.resolveOutboundProxy;
     if (!resolver) return undefined;
@@ -2150,20 +2296,20 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     try {
       raw = await resolver(upstreamOrigin);
     } catch (err) {
-      logger.warn?.('outbound proxy resolver threw — using direct connection', { reqId, err: String(err) });
+      logger.warn?.('outbound proxy resolver threw — using direct connection', wsAttempt ?? { reqId, err: String(err) });
       return undefined;
     }
     if (!raw) return undefined;
     const parsed = parseOutboundProxyUrl(raw);
     if (!parsed) {
       // raw 可能带凭证,只记脱敏形态。
-      logger.warn?.('unsupported outbound proxy url — using direct connection', {
+      logger.warn?.('unsupported outbound proxy url — using direct connection', wsAttempt ?? {
         reqId,
         proxy: redactProxyUrlForLog(String(raw)),
       });
       return undefined;
     }
-    logger.debug?.('using outbound proxy for upstream', {
+    logger.debug?.('using outbound proxy for upstream', wsAttempt ?? {
       reqId,
       proxy: parsed.url,
       upstream: upstreamOrigin,
@@ -2190,9 +2336,8 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
   let inflight = 0;
   const inflightSockets = new Set<Socket>();
 
-  // 单调递增 reqId, 用来在 cc-proxy.log 里把"▶ forward / ◀ response / error" 三条
-  // 日志归到同一笔请求,grep `reqId=N` 就能拉出完整往返。整数 wrap 后(非常远的未来)
-  // 重复也无所谓,只用于读日志的人眼对齐。
+  // reqId 仅在本实例内递增。跨实例统计 WS 握手用 (proxyInstanceId, reqId)，不能只数 reqId。
+  const proxyInstanceId = randomUUID();
   let reqIdSeq = 0;
 
   const server: Server = createServer(async (req, res) => {
@@ -2225,7 +2370,25 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     const method = req.method ?? 'GET';
     const url = req.url ?? '/';
     const headers = flattenRequestHeaders(req.headers);
+    const inboundRejection = admitInbound(opts.authorizeInbound, { method, url, headers });
+    if (inboundRejection) {
+      logger.warn?.('inbound request rejected', { reqId, method, path: url.split('?')[0], code: inboundRejection.code });
+      req.resume();
+      res.writeHead(inboundRejection.status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(JSON.stringify({ type: 'error', error: {
+        type: inboundRejection.status === 401 ? 'authentication_error' : 'permission_error',
+        code: inboundRejection.code, message: inboundRejection.message } }));
+      return;
+    }
     const requestCtx: RequestTransformCtx = { reqId, method, url, headers };
+    const logRequestSizeSkip = (reason: string, body: Buffer, error?: unknown) => {
+      logger.info?.('request size control skipped', {
+        reqId, reason, originalBytes: body.length, imageCount: countInlineRequestImages(body),
+        ...(error === undefined ? {} : { errorType: error instanceof TypeError ? 'TypeError'
+          : error instanceof SyntaxError ? 'SyntaxError' : error instanceof RangeError ? 'RangeError'
+          : error instanceof Error ? 'Error' : typeof error }),
+      });
+    };
     const threadId = selectedHeaderValue(headers, STABLE_THREAD_ID_HEADERS) ?? '';
     const contentType = headers['content-type'] ?? '';
     let recoverOversized: ReturnType<NonNullable<ProxyOptions['oversizedRequestRecovery']>> = null;
@@ -2235,6 +2398,59 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       try { recoverOversized = opts.oversizedRequestRecovery?.(requestCtx) ?? null; }
       catch { /* No stable owner: retain the existing bounded request path. */ }
     }
+    // Freeze the kill switch for this request. Compression still runs below, but
+    // disabled size control must retain the original disk-backed overflow recovery.
+    const sizeControlEnabled = Boolean(requestSizeController) && requestSizeController?.enabled?.() !== false;
+    // Retain a reference (not a copy) until the first response, so a retry can
+    // replay the original history rather than recutting already omitted images.
+    let replaySource: Buffer | undefined;
+    let sizeIdentity: { key: string; route: ImageRouteInfo; format: WireFormat } | undefined;
+    const releaseReplaySource = () => { replaySource = undefined; };
+    res.once('finish', releaseReplaySource);
+    res.once('close', releaseReplaySource);
+    // Keep route identity, learned limits and controller inputs identical for
+    // buffered bodies and bodies collected through the disk spool.
+    const controlRequestBody = async (body: Buffer, parsed: unknown, format: WireFormat, signal: AbortSignal) => {
+      if (!requestSizeController) return null;
+      const route = requestSizeController.route?.(requestCtx, parsed) ?? {};
+      sizeIdentity = { key: requestSizeRouteKey(requestCtx, parsed, format, route), route, format };
+      if (sizeControlEnabled) replaySource ??= body;
+      const learned = sizeControlEnabled ? learnedRequestSizeRoutes.get(sizeIdentity.key) : undefined;
+      return requestSizeController.control(body, format, {
+        route, signal, context: requestCtx, allowRemoval: sizeControlEnabled,
+        ...learned, ...(learned ? { reason: 'learned' } : {}),
+      });
+    };
+    let sizeControlledAtIngress = false;
+    let ingressParsedBody: unknown;
+    // Request-size control owns the pre-dispatch 32 MiB budget. Above that threshold use the
+    // existing disk-backed collector; only the bounded controller result returns to memory.
+    const ingressRecovery = sizeControlEnabled && requestSizeController
+      ? async (body: import('./oversized-attachments.js').OversizedBody): Promise<Buffer | null> => {
+        let raw: Buffer | undefined;
+        try {
+          raw = await readFile(body.filePath);
+          const parsedHint = requestModelHint(raw);
+          const format = requestSizeController.format?.(requestCtx, parsedHint);
+          if (!format) { logRequestSizeSkip('format-unknown', raw); return null; }
+          const controlled = await controlRequestBody(raw, parsedHint, format, body.signal);
+          if (!controlled) return null;
+          sizeControlledAtIngress = true;
+          ingressParsedBody = controlled.parsedBody;
+          logger.info?.('request size control applied from disk spool', {
+            reqId, originalBytes: controlled.originalBytes, bytes: controlled.bytes,
+            removedImages: controlled.removedImages, reason: controlled.reason,
+          });
+          return controlled.body;
+        } catch (error) {
+          if (raw) logRequestSizeSkip('error', raw, error);
+          else logger.info?.('request size control skipped', { reqId, reason: 'error', originalBytes: body.bytes, imageCount: 0, errorType: 'Error' });
+          return null;
+        }
+      }
+      : recoverOversized
+      ? (body: import('./oversized-attachments.js').OversizedBody) => recoverOversized!(body, maxBodyBytes)
+      : null;
     let requestGuard: ReturnType<NonNullable<ProxyOptions['requestGuard']>>;
     try {
       requestGuard = opts.requestGuard?.(requestCtx) ?? null;
@@ -2254,7 +2470,9 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     // hard limit for other media types so enabling it cannot accidentally make
     // binary/form uploads consume the larger ingress window.
     const requestIngressBytes =
-      oversizedRequestCompactor && contentType.toLowerCase().startsWith('application/json')
+      sizeControlEnabled && contentType.toLowerCase().startsWith('application/json')
+        ? maxBodyBytes
+        : oversizedRequestCompactor && contentType.toLowerCase().startsWith('application/json')
         ? oversizedIngressBytes
         : maxBodyBytes;
 
@@ -2369,7 +2587,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     // 只有 chunked 上传才落到 collectRequestBody 的流式守卫)。
     // 注意读原始 req.headers —— flattenRequestHeaders 会剥掉 content-length(转发时重算)。
     const declaredBytes = Number(req.headers['content-length'] ?? '');
-    if (!recoverOversized && Number.isFinite(declaredBytes) && declaredBytes > requestIngressBytes) {
+    if (!ingressRecovery && Number.isFinite(declaredBytes) && declaredBytes > requestIngressBytes) {
       respondRequestTooLarge({
         req, res, logger, reqId, method, url, headers,
         limitBytes: maxBodyBytes,
@@ -2384,10 +2602,10 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     const abortRecovery = () => recoveryAbort.abort();
     res.once('close', abortRecovery);
     try {
-      rawBody = recoverOversized
+      rawBody = ingressRecovery
         ? await collectRecoverableBody(req, maxBodyBytes, async body => {
             try {
-              const recovered = await recoverOversized!(body, maxBodyBytes);
+              const recovered = await ingressRecovery!(body);
               if (recovered) logger.info?.('oversized attachments preserved outside request', {
                 reqId, originalBytes: body.bytes, recoveredBytes: recovered.length,
               });
@@ -2403,10 +2621,13 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg === 'REQUEST_TOO_LARGE' || msg === 'RECOVERY_STORAGE_EXHAUSTED') {
+        const recoveryReason = (err as { recoveryReason?: string }).recoveryReason;
         respondRequestTooLarge({
           req, res, logger, reqId, method, url, headers,
           limitBytes: maxBodyBytes,
-          reason: msg === 'RECOVERY_STORAGE_EXHAUSTED' ? 'attachment_recovery_storage_exhausted' : 'request_body_too_large',
+          reason: msg === 'RECOVERY_STORAGE_EXHAUSTED' ? 'attachment_recovery_storage_exhausted'
+            : recoveryReason === 'attachment_recovery_unavailable' || recoveryReason === 'recovered_body_too_large'
+              ? recoveryReason : 'request_body_too_large',
           declaredBytes: null,
           receivedBytes: (err as { receivedBytes?: number }).receivedBytes ?? 0,
         });
@@ -2421,7 +2642,13 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     }
 
     if (requestGuard) {
-      try { rawBody = requestGuard.transformBody(rawBody); headers['content-length'] = String(rawBody.length); }
+      try {
+        rawBody = requestGuard.transformBody(rawBody);
+        // The ingress controller parsed the pre-guard bytes. Never let a local
+        // bridge reuse that object and reintroduce tools removed by the guard.
+        ingressParsedBody = undefined;
+        headers['content-length'] = String(rawBody.length);
+      }
       catch { res.destroy(); return; }
     }
 
@@ -2430,12 +2657,21 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     // 提前到 ▶ inbound 日志**之前**计算: 路由只依赖 rawBody / headers / contentType,与下方
     // runTransforms 的输出无关,提前是安全的; 这样 inbound 日志能直接打出本请求**最终**发往的
     // upstream(订阅直连 api.anthropic.com / 走网关 endpoint),而非静态默认上游。
-    let rawParsed: unknown = undefined;
+    let rawParsed: unknown = ingressParsedBody;
+    let parsedBodyBytes: Buffer | undefined = ingressParsedBody === undefined ? undefined : rawBody;
+    let cachedParsedBody: unknown = ingressParsedBody;
+    const readParsedBody = (): unknown => {
+      if (parsedBodyBytes === rawBody) return cachedParsedBody;
+      parsedBodyBytes = rawBody;
+      cachedParsedBody = undefined;
+      cachedParsedBody = JSON.parse(rawBody.toString('utf8'));
+      return cachedParsedBody;
+    };
     const jsonRequest = contentType.toLowerCase().startsWith('application/json');
     const routeOpaqueRequest = !jsonRequest && opts.routeOpaqueRequestBody?.(requestCtx) === true;
     if (opts.routingTransform && (jsonRequest || routeOpaqueRequest)) {
       try {
-        if (jsonRequest) rawParsed = JSON.parse(rawBody.toString('utf8'));
+        if (jsonRequest) rawParsed = readParsedBody();
       } catch {
         // Some native clients (notably PI's ChatGPT adapter) send compressed
         // JSON while keeping content-type=application/json. Header/path based
@@ -2453,9 +2689,50 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     }
     decision = applyDispatchGate(decision, reqId, requestCtx);
 
+    // Apply request-size control before either local dispatch or the normal transform chain.
+    // The controller is host-injected so this package remains independent of media storage.
+    if (requestSizeController && jsonRequest && !sizeControlledAtIngress) {
+      let sizeParsed = rawParsed;
+      if (sizeParsed === undefined) {
+        try { sizeParsed = rawParsed = readParsedBody(); }
+        catch { sizeParsed = undefined; }
+      }
+      const format = sizeParsed === undefined ? null : requestSizeController.format?.(requestCtx, sizeParsed);
+      if (format) {
+        const sizeStartedAt = Date.now();
+        try {
+          const controlled = await controlRequestBody(rawBody, sizeParsed, format, recoveryAbort.signal);
+          if (controlled) {
+            rawBody = controlled.body;
+            rawParsed = controlled.parsedBody ?? readParsedBody();
+            parsedBodyBytes = rawBody;
+            cachedParsedBody = rawParsed;
+            logger.info?.('request size control applied', {
+              reqId,
+              originalBytes: controlled.originalBytes,
+              bytes: controlled.bytes,
+              removedImages: controlled.removedImages,
+              reason: controlled.reason,
+              elapsedMs: Date.now() - sizeStartedAt,
+            });
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (message === 'REQUEST_TEXT_TOO_LARGE') {
+            logger.warn?.('request text exceeds local size budget', { reqId, bytes: rawBody.length });
+            res.writeHead(413, { 'content-type': 'application/json; charset=utf-8', connection: 'close' });
+            res.end(JSON.stringify({ error: { type: 'request_too_large', message: 'Request text exceeds the local 32 MiB request budget after image recovery.' } }));
+            return;
+          }
+          logRequestSizeSkip('error', rawBody, error);
+        }
+      } else logRequestSizeSkip('format-unknown', rawBody);
+    }
+
     // 本地 handler 命中:不转发上游、不跑 transform 链,由 handler 直接消费(协议翻译场景)。
     // parsedBody 复用路由阶段的解析结果,不二次 parse。
     if (decision?.localHandler) {
+      releaseReplaySource();
       // PI native subscription handlers also receive provider-native JSON and
       // can carry the same accumulated vision history as forwarded requests.
       // Apply the bounded compactor before the local-handler hard-limit check;
@@ -2468,7 +2745,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         let oversizedParsed: unknown = rawParsed;
         if (oversizedParsed === undefined && jsonRequest) {
           try {
-            oversizedParsed = JSON.parse(rawBody.toString('utf8'));
+            oversizedParsed = readParsedBody();
           } catch {
             oversizedParsed = undefined;
           }
@@ -2557,13 +2834,17 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     };
     const originalRawBodyBytes = rawBody.length;
     let bodyForTransforms = rawBody;
-    let parsedForTransforms: unknown = undefined;
+    let parsedForTransforms: unknown = rawParsed;
+    if (parsedForTransforms === undefined && jsonRequest) {
+      try { parsedForTransforms = rawParsed = readParsedBody(); }
+      catch { /* Opaque/compressed bodies keep the existing passthrough path. */ }
+    }
     if (rawBody.length > maxBodyBytes && oversizedRequestCompactor) {
       const compactStartedAt = Date.now();
       let oversizedParsed: unknown = rawParsed;
       if (oversizedParsed === undefined && jsonRequest) {
         try {
-          oversizedParsed = JSON.parse(rawBody.toString('utf8'));
+          oversizedParsed = readParsedBody();
         } catch {
           oversizedParsed = undefined;
         }
@@ -2661,7 +2942,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     let parsedForRewrite: unknown = rawParsed ?? parsedForTransforms;
     if (parsedForRewrite === undefined && jsonRequest) {
       try {
-        parsedForRewrite = JSON.parse(rawBody.toString('utf8'));
+        parsedForRewrite = readParsedBody();
       } catch {
         parsedForRewrite = undefined;
       }
@@ -2736,7 +3017,60 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       return;
     }
 
-    const forwardLifecycle = guardForwardLifecycleObserver(decision?.forwardLifecycle);
+    let pendingBudget: { key: string; rule: RequestSizeBudget } | undefined;
+    const originalLifecycle = guardForwardLifecycleObserver(decision?.forwardLifecycle);
+    const forwardLifecycle: ForwardLifecycleObserver = {
+      ...originalLifecycle,
+      onComplete: status => {
+        if (pendingBudget && status >= 200 && status < 300 && sizeControlEnabled && requestSizeController?.enabled?.() !== false) {
+          learnedRequestSizeRoutes.set(pendingBudget.key,
+            mergeRequestSizeBudgets(learnedRequestSizeRoutes.get(pendingBudget.key), pendingBudget.rule));
+        }
+        pendingBudget = undefined;
+        originalLifecycle?.onComplete?.(status);
+      },
+    };
+    const recoverSize = async (body: Buffer, error: RequestSizeError, signal: AbortSignal): Promise<Buffer | null> => {
+      if (!requestSizeController || !sizeControlEnabled || requestSizeController.enabled?.() === false) return null;
+      if (error.kind === 'unsupported-image-format') {
+        const restored = await requestSizeController.retry?.(body, error, requestCtx, signal);
+        return restored && restored.length <= maxBodyBytes ? restored : null;
+      }
+      const parsed = requestModelHint(replaySource ?? body);
+      const format = sizeIdentity?.format ?? requestSizeController.format?.(requestCtx, parsed);
+      if (!format) return null;
+      const imageRoute = sizeIdentity?.route ?? requestSizeController.route?.(requestCtx, parsed) ?? {};
+      const key = sizeIdentity?.key ?? requestSizeRouteKey(requestCtx, parsed, format, imageRoute);
+      const proposed = requestSizeBudgetAfterRejection(learnedRequestSizeRoutes.get(key), error,
+        { bytes: body.length, images: error.kind === 'image-count' || error.limitCount !== undefined ? countInlineRequestImages(body) : 0 },
+        requestSizeModelFamily(imageRoute.modelId));
+      let recovered: Buffer | null;
+      transformsCompleted = false;
+      try {
+        if (opts.requestSizeRetry) recovered = await opts.requestSizeRetry(body, error, signal);
+        else {
+          const controlled = await requestSizeController.control(replaySource ?? body, format, {
+            route: imageRoute, signal, context: requestCtx, ...proposed, reason: `retry:${error.kind}`, allowRemoval: true,
+          });
+          if (!controlled) return null;
+          signal.throwIfAborted();
+          let restored = controlled.body;
+          if (requestGuard) restored = requestGuard.transformBody(restored);
+          const parsedRestored = restored === controlled.body ? controlled.parsedBody : undefined;
+          const bypass = opts.bypassRequestTransforms?.(parsedRestored, transformCtx) === true;
+          recovered = bypass ? restored : await runTransforms(restored, contentType, transforms, transformCtx, logger, parsedRestored) ?? restored;
+          if (decision?.transformRequestBody) recovered = (await decision.transformRequestBody(recovered, transformCtx)).body;
+          if (requestGuard) recovered = requestGuard.transformBody(recovered, transformCtx);
+        }
+      } finally {
+        transformsCompleted = true;
+        notifyTransformSettlement();
+      }
+      signal.throwIfAborted();
+      if (!recovered || recovered.equals(body) || recovered.length > maxBodyBytes) return null;
+      pendingBudget = { key, rule: proposed };
+      return recovered;
+    };
 
     forward(
       route.target,
@@ -2752,9 +3086,12 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       route.overrideTarget,
       route.headerOverride,
       route.headerDelete,
-      opts.responseObserver,
+      ctx => {
+        if (ctx.status >= 200 && ctx.status < 300) releaseReplaySource();
+        return opts.responseObserver?.(ctx) ?? null;
+      },
       opts.transformResponse,
-      extractBodyModel(rawBody),
+      isRecord(parsedForRewrite) && typeof parsedForRewrite.model === 'string' ? parsedForRewrite.model : '',
       outbound,
       route.pathOverride,
       responseToolUseIds,
@@ -2762,14 +3099,23 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       requestDeclaredStream,
       beforeRetry,
       forwardLifecycle,
-      recoverOversized
-        ? (body, signal) => collectRecoverableBody(
-            Readable.from([body]),
-            body.length - 1,
-            (spooled) => recoverOversized!({ ...spooled, upstreamRejected: true }, body.length - 1),
-            signal,
-          )
-        : undefined,
+      sizeControlEnabled && requestSizeController
+        ? async (body, signal, readError) => {
+          // Recovery starts from the 413 status; one event-loop turn lets the
+          // old upload close and any already-arrived limit text drain, without
+          // waiting for an error body's end (which may never arrive).
+          await new Promise<void>(resolve => setImmediate(resolve));
+          signal.throwIfAborted();
+          const error = readError();
+          return recoverSize(body, error.kind === 'other' ? { kind: 'request-too-large' } : error, signal);
+        }
+        : recoverOversized ? (body, signal) => collectRecoverableBody(
+          Readable.from([body]), body.length - 1,
+          spooled => recoverOversized!({ ...spooled, upstreamRejected: true }, body.length - 1), signal,
+        ) : undefined,
+      requestSizeController && !sizeControlEnabled ? undefined : requestSizeController
+        ? recoverSize : opts.requestSizeRetry,
+      requestCtx,
     );
   });
 
@@ -2810,33 +3156,47 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
    */
   server.on('upgrade', (req, clientSocket: Socket, head: Buffer) => {
     const reqId = ++reqIdSeq;
+    let upstreamAttempt = 0;
+    const attemptFields = () => ({ proxyInstanceId, reqId, attempt: upstreamAttempt });
+    const startedAt = performance.now();
+    let handshakeFinished = false;
+    const finishUpgrade = (
+      outcome: 'success' | 'failed' | 'cancelled' | 'http-fallback', why: string, status?: number,
+      level: 'info' | 'warn' | 'error' = 'info',
+    ): void => {
+      if (handshakeFinished) return;
+      handshakeFinished = true;
+      logger[level]?.('websocket upgrade result', {
+        ...attemptFields(), outcome, why, status, elapsedMs: Math.round(performance.now() - startedAt),
+      });
+    };
     const headers = flattenRequestHeaders(req.headers);
     const url = req.url ?? '/';
+    const inboundRejection = admitInbound(opts.authorizeInbound, { method: req.method ?? 'GET', url, headers });
+    if (inboundRejection) {
+      finishUpgrade('failed', 'inbound upgrade rejected', inboundRejection.status, 'warn');
+      writeUpgradeFailure(clientSocket, inboundRejection.status, inboundRejection.status === 401 ? 'Unauthorized' : 'Forbidden');
+      return;
+    }
     const resolveWsUpstream = opts.resolveWebSocketUpstream;
 
     // 不配 resolver = 本 proxy 不接 upgrade(Claude Code 侧就是这样, 行为与扩展前一致)。
     if (!resolveWsUpstream) {
-      logger.debug?.('upgrade rejected — resolveWebSocketUpstream not configured', { reqId, url });
+      finishUpgrade('failed', 'no-upstream-resolver', 501);
       writeUpgradeFailure(clientSocket, 501, 'Not Implemented');
       return;
     }
     // 只接 websocket; 其它 upgrade 协议(h2c 等)不猜语义。
     if ((headers.upgrade ?? '').toLowerCase() !== 'websocket') {
-      logger.debug?.('upgrade rejected — not a websocket upgrade', {
-        reqId, url, upgrade: headers.upgrade ?? '',
-      });
+      finishUpgrade('failed', 'unsupported-upgrade', 501);
       writeUpgradeFailure(clientSocket, 501, 'Not Implemented');
       return;
     }
     let upstreamUrl: string | null;
     try {
       upstreamUrl = resolveWsUpstream({ url, headers });
-    } catch (err) {
-      logger.error?.('resolveWebSocketUpstream threw', {
-        reqId,
-        url,
-        err: String(err),
-      });
+    } catch {
+      finishUpgrade('failed', 'resolver-error', 500, 'error');
       writeUpgradeFailure(clientSocket, 500, 'Internal Server Error');
       return;
     }
@@ -2845,7 +3205,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       // 降级是 session 级(一次即稳定)。宿主返回 null 的语义是"这个会话走 HTTP 更合适"
       // (需要 recoveryRules / responseObserver), 不是拒绝服务 —— 用 501 会让 codex
       // 直接报错而不是降级。
-      logger.debug?.('upgrade declined by host — signalling 426 to fall back to HTTP', { reqId, url });
+      finishUpgrade('http-fallback', 'host-declined', 426);
       writeUpgradeFailure(clientSocket, 426, 'Upgrade Required');
       return;
     }
@@ -2855,11 +3215,8 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     let target: UpstreamTarget;
     try {
       target = parseUpstream(resolvedWebSocketUpstream);
-    } catch (err) {
-      logger.error?.('resolveWebSocketUpstream returned an unusable url', {
-        reqId,
-        err: String(err),
-      });
+    } catch {
+      finishUpgrade('failed', 'invalid-upstream', 500, 'error');
       writeUpgradeFailure(clientSocket, 500, 'Internal Server Error');
       return;
     }
@@ -2877,7 +3234,6 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       clearTimeout(handshakeTimer);
       handshakeTimer = null;
     };
-    let upstreamAttempt = 0;
     let removeAuthorizationListener: (() => void) | undefined;
     let authorizeWebSocket: (() => boolean) | undefined;
     let preparedTransforms: (() => { outbound: Transform; inbound: Transform }) | undefined;
@@ -2904,13 +3260,13 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       clientSocket,
       upstreamSocket: null,
       closeForHostFallback: () => {
-        settle('host-http-fallback');
+        settle('host-http-fallback', 'cancelled');
         connection.upstreamSocket?.destroy();
         clientSocket.destroy();
         if (!established) upstreamReqForEarlyClose?.destroy();
       },
     };
-    const settle = (why: string, err?: Error): void => {
+    const settle = (why: string, outcome: 'failed' | 'cancelled' | 'http-fallback' = 'failed', status?: number): void => {
       if (settled) return;
       settled = true;
       clearHandshakeTimer();
@@ -2921,13 +3277,11 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       }
       liveWebSockets -= 1;
       liveWebSocketConnections.delete(connection);
-      logger.info?.('◀ websocket closed', {
-        reqId,
-        threadId: threadId || undefined,
-        why,
-        live: liveWebSockets,
-        err: err ? String(err) : undefined,
-      });
+      if (handshakeFinished) {
+        logger.info?.('◀ websocket closed', { ...attemptFields(), why, live: liveWebSockets });
+      } else {
+        finishUpgrade(outcome, why, status);
+      }
     };
     liveWebSocketConnections.add(connection);
 
@@ -2937,12 +3291,12 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     // can otherwise stay half-open until its upstream eventually responds.
     clientSocket.on('end', () => {
       if (established || settled) return;
-      settle('client-end-before-upgrade');
+      settle('client-end-before-upgrade', 'cancelled');
       upstreamReqForEarlyClose?.destroy();
       clientSocket.end();
     });
     clientSocket.on('close', () => {
-      settle('client-close');
+      settle('client-close', 'cancelled');
       if (!established) {
         upstreamReqForEarlyClose?.destroy();
         return;
@@ -2955,10 +3309,9 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     // resolver / PAC 解析本身是异步的。error listener 必须在 await 之前安装,否则
     // Windows 代理切换、网络瞬断等事件若恰好落在这个窗口,Socket 的未监听 error
     // 可能上抛到进程级。upstream request 尚未创建时只记账；创建后同时终止它。
-    clientSocket.on('error', (err) => {
+    clientSocket.on('error', () => {
       if (established) return;
-      logger.debug?.('client socket error before upgrade established', { reqId, err: String(err) });
-      settle('client-error', err);
+      settle('client-error', 'cancelled');
       upstreamReqForEarlyClose?.destroy();
     });
 
@@ -2968,18 +3321,15 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       clientSocket.pause();
       try {
         clientSocket.write(localHandshake);
-        logger.info?.('websocket reconnect held by local proxy', {
-          reqId,
-          threadId,
-        });
-      } catch (err) {
-        settle('local-reconnect-handshake-error', err instanceof Error ? err : undefined);
+        logger.info?.('websocket reconnect held by local proxy', attemptFields());
+      } catch {
+        settle('local-reconnect-handshake-error');
         clientSocket.destroy();
         return;
       }
     }
 
-    const scheduleReconnectAttempt = (why: string, err?: Error): void => {
+    const scheduleReconnectAttempt = (why: string): void => {
       if (!locallyAcceptedForReconnect || settled || clientSocket.destroyed) return;
       clearHandshakeTimer();
       upstreamReqForEarlyClose = null;
@@ -2989,12 +3339,9 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         WEBSOCKET_RECONNECT_MAX_DELAY_MS,
       );
       logger.warn?.('websocket reconnect upstream unavailable; retrying in proxy', {
-        reqId,
-        threadId,
-        attempt: upstreamAttempt,
+        ...attemptFields(),
         delayMs,
         why,
-        err: err ? String(err) : undefined,
       });
       reconnectTimer = setTimeout(() => {
         reconnectTimer = null;
@@ -3005,15 +3352,16 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
 
     function startUpstreamAttempt(): void {
       upstreamAttempt += 1;
+      const attempt = attemptFields();
       void (async () => {
-        const outbound = await resolveOutboundForTarget(target, reqId);
+        const outbound = await resolveOutboundForTarget(target, reqId, attempt);
         if (settled || clientSocket.destroyed) return;
         let outboundHeaders = headers;
         if (opts.prepareWebSocketRequest) {
           const prepared = await opts.prepareWebSocketRequest({ url, headers });
           if (settled || clientSocket.destroyed) return;
           const revoke = (): void => {
-            settle('host-authorization-revoked');
+            settle('host-authorization-revoked', 'cancelled');
             upstreamReqForEarlyClose?.destroy();
             connection.upstreamSocket?.destroy();
             clientSocket.destroy();
@@ -3044,10 +3392,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       // 这条链路出问题时"有没有建连 / 谁先关的 / 关在哪一步"是唯一有用的线索,
       // debug 级别在打包版里拿不到。
       logger.info?.('▶ upgrade to upstream', {
-        reqId,
-        upstreamBase: formatUpstreamBase(target),
-        path: upstreamPath,
-        viaProxy: outbound ? outbound.target.url : 'direct',
+        ...attempt, viaProxy: Boolean(outbound),
       });
 
       // flattenRequestHeaders 刻意剥掉 hop-by-hop header(connection / keep-alive /
@@ -3073,16 +3418,15 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         why: 'handshake-timeout' | 'upstream-error',
         status: 502 | 504,
         message: 'Bad Gateway' | 'Gateway Timeout',
-        err?: Error,
       ): void => {
         if (attemptSettled || established || settled) return;
         attemptSettled = true;
         clearHandshakeTimer();
         if (locallyAcceptedForReconnect) {
-          scheduleReconnectAttempt(why, err);
+          scheduleReconnectAttempt(why);
           return;
         }
-        settle(why, err);
+        settle(why, 'failed', status);
         writeUpgradeFailure(clientSocket, status, message);
       };
 
@@ -3091,7 +3435,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       // This deadline is removed on 101; it never limits model inference.
       handshakeTimer = setTimeout(() => {
         if (attemptSettled || established || settled) return;
-        logger.warn?.('upgrade handshake timed out', { reqId, path: upstreamPath });
+        logger.warn?.('upgrade handshake timed out', attempt);
         failTransientAttempt('handshake-timeout', 504, 'Gateway Timeout');
         upstreamReq.destroy();
       }, WEBSOCKET_UPGRADE_TIMEOUT_MS);
@@ -3112,7 +3456,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         // 客户端可能恰好在上游 101 到达前断开。此时 close listener 已经 settle，
         // 或 socket 已 destroy 但 close 事件尚未派发；都不能再把上游连接接入隧道。
         if (settled || clientSocket.destroyed || upstreamSocket.destroyed) {
-          settle('upgrade-raced-with-close');
+          settle('upgrade-raced-with-close', clientSocket.destroyed ? 'cancelled' : 'failed');
           upstreamSocket.destroy();
           clientSocket.destroy();
           return;
@@ -3162,8 +3506,8 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         });
 
         // 只有出错才强拆两端 —— 那时缓冲里的数据已经没有意义。
-        const abort = (why: string) => (err?: Error): void => {
-          settle(why, err);
+        const abort = (why: string) => (): void => {
+          settle(why);
           upstreamSocket.destroy();
           clientSocket.destroy();
         };
@@ -3208,21 +3552,15 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
 
           clientSocket.setNoDelay(true);
           upstreamSocket.setNoDelay(true);
-        } catch (err) {
-          abort('handshake-forward-error')(
-            err instanceof Error ? err : new Error(String(err)),
-          );
+        } catch {
+          abort('handshake-forward-error')();
           return;
         }
 
         upstreamSocket.pipe(guarded?.inbound ?? clientSocket);
         clientSocket.pipe(outboundStream);
         if (locallyAcceptedForReconnect) clientSocket.resume();
-        logger.info?.('◀ websocket established', {
-          reqId, status: upstreamRes.statusCode, live: liveWebSockets,
-          upstreamHeadBytes: upstreamHead?.length ?? 0,
-          clientHeadBytes: head?.length ?? 0,
-        });
+        finishUpgrade('success', 'established', upstreamRes.statusCode);
       });
 
       // 上游没给 101 而是普通响应(403 / 426 / 503 等): **连 body 一起原样回写**。
@@ -3236,8 +3574,9 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         attemptSettled = true;
         clearHandshakeTimer();
         upstreamReqForEarlyClose = null;
-        settle('upstream-refused');
         const status = upstreamRes.statusCode ?? 502;
+        const fallbackToHttp = !locallyAcceptedForReconnect && shouldFallbackToHttpAfterUpgradeResponse(status);
+        settle('upstream-refused', fallbackToHttp ? 'http-fallback' : 'failed', status);
         if (onUpgradeFailure && (status === 401 || status === 403)) {
           const observe = onUpgradeFailure;
           const chunks: Buffer[] = [];
@@ -3251,9 +3590,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
           });
         }
         logger.warn?.('upstream refused websocket upgrade', {
-          reqId,
-          status,
-          path: upstreamPath,
+          ...attempt, status,
         });
         upstreamReq.setTimeout(0);
         if (locallyAcceptedForReconnect) {
@@ -3265,21 +3602,16 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
           clientSocket.destroy();
           return;
         }
-        if (shouldFallbackToHttpAfterUpgradeResponse(status)) {
+        if (fallbackToHttp) {
           logger.info?.('websocket upgrade unsupported on current path — falling back to HTTP', {
-            reqId,
-            status,
-            path: upstreamPath,
+            ...attempt, status,
           });
           // 客户端已经只需要 426，仍要消费上游 body 才能复用/释放连接；但 resume
           // 不会吞掉源流 error。代理/WAF 若在 403 body 中途断开，监听并记日志，
           // 避免 IncomingMessage error 上升成进程级未处理异常。
-          upstreamRes.once('error', (err) => {
+          upstreamRes.once('error', () => {
             logger.warn?.('websocket fallback response body failed', {
-              reqId,
-              status,
-              path: upstreamPath,
-              err: String(err),
+              ...attempt, status,
             });
           });
           upstreamRes.resume();
@@ -3302,18 +3634,11 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         // IncomingMessage error 还可能升级为进程级异常。用 end 而不是立即 destroy，
         // 先尽量刷出已经收到的状态行和错误详情。
         let refusalBodyTerminal = false;
-        const failRefusalBody = (
-          reason: 'error' | 'aborted' | 'close',
-          err?: Error,
-        ): void => {
+        const failRefusalBody = (reason: 'error' | 'aborted' | 'close'): void => {
           if (refusalBodyTerminal) return;
           refusalBodyTerminal = true;
           logger.warn?.('websocket refusal response body failed', {
-            reqId,
-            status,
-            path: upstreamPath,
-            reason,
-            err: err ? String(err) : undefined,
+            ...attempt, status, reason,
           });
           if (!clientSocket.destroyed) {
             clientSocket.end(() => clientSocket.destroy());
@@ -3322,7 +3647,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         upstreamRes.once('end', () => {
           refusalBodyTerminal = true;
         });
-        upstreamRes.once('error', (err) => failRefusalBody('error', err));
+        upstreamRes.once('error', () => failRefusalBody('error'));
         // IncomingMessage 对提前断流的事件形态取决于 Node/代理/平台：可能有 error，
         // 也可能只有 aborted 或 incomplete close。三路必须汇入同一个幂等收口，
         // 否则裸 socket 没有 EOF，Codex 会一直等拒绝响应结束。
@@ -3334,26 +3659,22 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         upstreamRes.pipe(clientSocket);
       });
 
-      upstreamReq.on('error', (err) => {
-        logger.warn?.('upgrade upstream request failed', {
-          reqId,
-          err: String(err),
-        });
-        failTransientAttempt('upstream-error', 502, 'Bad Gateway', err);
+      upstreamReq.on('error', () => {
+        if (!attemptSettled && !established && !settled) logger.warn?.('upgrade upstream request failed', attempt);
+        failTransientAttempt('upstream-error', 502, 'Bad Gateway');
       });
 
       upstreamReq.end();
-      })().catch((err: unknown) => {
+      })().catch(() => {
         // 与 respondRoutingFailure 同款理由: 不让 async handler 的 rejection 漂成
         // process-level unhandledRejection。
-        logger.error?.('websocket upgrade handler threw', { reqId, err: String(err) });
+        logger.error?.('websocket upgrade handler threw', attempt);
         if (established || settled) return;
-        const error = err instanceof Error ? err : new Error(String(err));
         if (locallyAcceptedForReconnect) {
-          scheduleReconnectAttempt('handler-error', error);
+          scheduleReconnectAttempt('handler-error');
           return;
         }
-        settle('handler-error', error);
+        settle('handler-error', 'failed', 500);
         writeUpgradeFailure(clientSocket, 500, 'Internal Server Error');
       });
     }

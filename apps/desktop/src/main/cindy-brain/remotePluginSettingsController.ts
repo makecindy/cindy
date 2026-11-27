@@ -26,6 +26,8 @@ import {
 import {
   REMOTE_PLUGIN_SETTINGS_PARTITION,
   REMOTE_PLUGIN_SETTINGS_DIRECTORY,
+  REMOTE_PLUGIN_SETTINGS_STATUS,
+  type RemotePluginSettingsStatus,
   type RemotePluginSettingsTarget,
   type RemotePluginSettingsView,
 } from '../../shared/remotePluginSettings.js';
@@ -36,7 +38,7 @@ import { handleAssistPluginOauth, type LocalOauthDeps } from '../plugin-oauth/lo
 import { GHOST_HTML_CSP, registerGhostWebContents } from './runtime/electronSandboxAdapter.js';
 import { remoteSettingsBroadcastScript } from './remoteSettingsBroadcast.js';
 import { getSafeDataOwnerPushStamp } from '../device-link/broadcast-tap.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 
 interface SettingsDocument {
   pageId: string;
@@ -192,7 +194,7 @@ export async function openRemotePluginSettings(
       collectionId: 'plugins',
       actionId: 'settings:open',
       resourceRef: { collectionId: 'plugins', kind: 'plugin', id: input.instanceId },
-      input: { expectedInstalledApproval: input.expectedInstalledApproval },
+      input: { expectedInstalledApproval: input.expectedInstalledApproval, modelPickerRemoteSources: true },
     },
   ]);
   assertCurrent();
@@ -203,6 +205,15 @@ export async function openRemotePluginSettings(
   );
   const id = randomUUID(),
     partition = REMOTE_PLUGIN_SETTINGS_PARTITION + id;
+  const reportStatus = (status: RemotePluginSettingsStatus['status']) => {
+    if (closed || host.isDestroyed() || deps.owner() !== owner) return;
+    const value: RemotePluginSettingsStatus = { viewId: id, status };
+    try {
+      host.send(REMOTE_PLUGIN_SETTINGS_STATUS, value, getSafeDataOwnerPushStamp());
+    } catch {
+      // The app renderer may be exiting. Reporting must not stop lease cleanup.
+    }
+  };
   const origin = 'cindy-ghost://' + doc.manifestId;
   const src = origin + '/' + doc.entry;
   const internal = '/__cindy_remote_settings_' + randomUUID();
@@ -210,6 +221,7 @@ export async function openRemotePluginSettings(
   let renew: Promise<void> | undefined,
     renewedAt = 0,
     sent = 0;
+  let pendingWrites = 0;
   const connect = async () => {
     assertCurrent();
     const target = await deps.identity(input.deviceId, assertCurrent);
@@ -245,7 +257,19 @@ export async function openRemotePluginSettings(
     }
     assertCurrent();
     sent++;
-    return exchange!({ op: 'settings', id: doc.pageId, command });
+    const mutation =
+      command.kind === 'post' ||
+      command.kind === 'authorization-result' ||
+      (command.kind === 'fetch' && !['GET', 'HEAD'].includes(command.method));
+    if (mutation) pendingWrites++;
+    try {
+      return await exchange!({ op: 'settings', id: doc.pageId, command });
+    } catch (error) {
+      if (mutation) reportStatus('write-unconfirmed');
+      throw error;
+    } finally {
+      if (mutation) pendingWrites--;
+    }
   };
   await connect();
   assertCurrent();
@@ -441,14 +465,34 @@ export async function openRemotePluginSettings(
       response.headers.set('Cache-Control', 'no-store');
       return response;
     } catch {
+      if (request.method === 'GET' && request.url === src) reportStatus('unavailable');
       return failure();
     }
   });
-  const keepAlive = setInterval(() => {
-    void poll(0).catch(() => view.close());
-  }, 30_000);
-  keepAlive.unref();
-  const attachDeadline = setTimeout(() => view.close(), 30_000);
+  const retireUnavailable = () => {
+    if (pendingWrites) reportStatus('write-unconfirmed');
+    reportStatus('unavailable');
+    view.close();
+  };
+  let keepAlive: ReturnType<typeof setTimeout> | undefined;
+  const scheduleKeepAlive = (retry = false) => {
+    keepAlive = setTimeout(async () => {
+      try {
+        await poll(0);
+      } catch {
+        if (closed) return;
+        if (!retry) {
+          scheduleKeepAlive(true);
+          return;
+        }
+        retireUnavailable();
+        return;
+      }
+      if (!closed) scheduleKeepAlive();
+    }, retry ? 2_000 : 30_000);
+    keepAlive.unref();
+  };
+  const attachDeadline = setTimeout(retireUnavailable, 30_000);
   attachDeadline.unref();
   const view: View = {
     id,
@@ -467,10 +511,11 @@ export async function openRemotePluginSettings(
     },
     close: () => {
       if (closed) return;
-      void send({ kind: 'close' }).catch(() => {});
+      // Best-effort with the existing key. Starting a renewal here would outlive the local view.
+      void exchange?.({ op: 'settings', id: doc.pageId, command: { kind: 'close' } }).catch(() => {});
       closed = true;
       for (const requestId of [...modelPickers]) dismissModelPicker(requestId);
-      clearInterval(keepAlive);
+      clearTimeout(keepAlive);
       clearTimeout(attachDeadline);
       views.delete(partition);
       host.removeListener('destroyed', view.close);
@@ -522,6 +567,7 @@ export async function openRemotePluginSettings(
   };
   views.set(partition, view);
   host.once('destroyed', view.close);
+  scheduleKeepAlive();
   return { id, partition, src };
 }
 

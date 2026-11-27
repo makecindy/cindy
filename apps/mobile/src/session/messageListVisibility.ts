@@ -2,6 +2,19 @@ import { createContext, useCallback, useContext, useEffect, useLayoutEffect, use
 
 /** One store per LegendList lifetime; only rows whose visibility changes are notified. */
 export class MessageListVisibility {
+  private readonly viewportListeners = new Set<() => void>();
+  constructor(readonly viewport?: () => { top: number; bottom: number } | undefined) {}
+
+  // Only quota-blocked inline pages subscribe. Normal list scrolling performs no measurements.
+  onViewportChange(listener: () => void): () => void {
+    this.viewportListeners.add(listener);
+    return () => { this.viewportListeners.delete(listener); };
+  }
+
+  viewportChanged(): void {
+    for (const listener of this.viewportListeners) listener();
+  }
+
   private visibleKeys = new Set<string>();
   private listeners = new Map<string, Set<() => void>>();
 
@@ -36,9 +49,15 @@ export class MessageListVisibility {
 }
 
 export const MessageListVisibilityContext = createContext<MessageListVisibility | null>(null);
+/**
+ * Whether the message row is really in view (unlike heavy-content visibility, the focused row does not count unless it
+ * is). null outside a message list, where the content is the screen itself.
+ */
+export const MessageListItemViewableContext = createContext<boolean | null>(null);
 
-export function useMessageListItemVisible(key: string): boolean {
-  const store = useContext(MessageListVisibilityContext);
+export function useMessageListItemVisible(key: string, override?: MessageListVisibility | null): boolean {
+  const parent = useContext(MessageListVisibilityContext);
+  const store = override ?? parent;
   const subscribe = useCallback((listener: () => void) => store?.subscribe(key, listener) ?? (() => {}), [store, key]);
   const getSnapshot = useCallback(() => store?.isVisible(key) ?? false, [store, key]);
   // LegendList's useViewability reads during render, then subscribes in an effect
@@ -62,11 +81,13 @@ export class ScrollViewMessageVisibility extends MessageListVisibility {
   setViewport(offsetY: number, height: number): void {
     this.offsetY = offsetY;
     this.height = height;
+    this.viewportChanged();
     this.refresh();
   }
 
   setHeight(height: number): void {
     this.height = height;
+    this.viewportChanged();
     this.refresh();
   }
 

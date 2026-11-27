@@ -1,22 +1,28 @@
 /** Provider snapshots are adapted here; the card renders only this common presentation model. */
+import { kimiUsageWindowMinutes, type KimiCodingUsageSnapshot } from '../../../shared/kimiCodingUsage';
 import type { TFunction } from 'i18next';
 import type { CodexRateLimitResetSummary } from '@cindy/maker-shared/session-controls';
 import type { RateLimitSnapshot } from '@/hooks/useAccountUsage';
 import type { XaiRateLimitSnapshot } from '@/hooks/useXaiRateLimit';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../../shared/claudeSubscriptionUsage';
+import type { SubscriptionAccountUsage } from '../../../shared/subscriptionAccounts';
+import { matchCodexBucketForModel } from '@cindy/maker-shared/codex-usage-buckets';
 import type {
   DeepSeekAccountUsageSnapshot,
   ZhipuCodingPlanQuotaSnapshot,
 } from '../../../shared/providerAccountUsage';
+import type { OpenCodeGoUsageSnapshot } from '../../../shared/opencodeGoUsage';
 import {
   isXaiWeeklyUsageCurrent,
   type XaiSubscriptionUsageSnapshot,
 } from '../../../shared/xaiSubscriptionUsage';
 import { formatCompactTokens } from '@/lib/usageFormat';
+import { formatQuotaRemainingDuration } from '@/lib/compactQuotaCountdown';
 import {
   formatClaudeSubscriptionPlanLabel,
   formatCodexPlanLabel,
 } from '@/lib/subscriptionPlanLabel';
+import appI18n from 'i18next';
 
 export interface UsageCardWindow {
   key: string;
@@ -45,6 +51,8 @@ export interface UsageCardAccount {
   notices?: Array<{ text: string; tone: 'warn' | 'crit' }>;
   emptyText?: string;
   updatedAt?: number | null;
+  /** Optional recovery for a failed read; counters and other usage stay intact. */
+  refreshFailure?: { retry: () => void; retrying: boolean };
 }
 
 /** Compact surfaces lead with time remaining; round up to minutes and show
@@ -55,25 +63,19 @@ export function formatQuotaResetCountdown(
   t: TFunction,
 ): string | null {
   if (typeof resetsAt !== 'number' || !Number.isFinite(resetsAt) || resetsAt <= 0) return null;
-  const remainingMs = resetsAt * 1000 - nowMs;
-  if (remainingMs <= 0) return t('quotaCard.resetPending');
-  const minutes = Math.ceil(remainingMs / 60_000);
-  const days = Math.floor(minutes / 1440);
-  const hours = Math.floor((minutes % 1440) / 60);
-  const remainder = minutes % 60;
-  const parts =
-    days > 0
-      ? [
-          `${days}${t('todaySpend.unit.day')}`,
-          ...(hours ? [`${hours}${t('todaySpend.unit.hour')}`] : []),
-        ]
-      : hours > 0
-        ? [
-            `${hours}${t('todaySpend.unit.hour')}`,
-            ...(remainder ? [`${remainder}${t('todaySpend.unit.minute')}`] : []),
-          ]
-        : [`${minutes}${t('todaySpend.unit.minute')}`];
-  return t('quotaCard.resetIn', { duration: parts.join(' ') });
+  const duration = formatQuotaResetDuration(resetsAt, nowMs, t);
+  return duration === null ? t('quotaCard.resetPending') : t('quotaCard.resetIn', { duration });
+}
+
+/** The bare time left in a window, without the "resets in" wording; null when unknown or elapsed.
+ * 与胶囊共用同一分解(compactQuotaCountdown): 胶囊的 label 必是本串的前缀。 */
+export function formatQuotaResetDuration(
+  resetsAt: number | null | undefined,
+  nowMs: number,
+  t: TFunction,
+): string | null {
+  if (typeof resetsAt !== 'number' || !Number.isFinite(resetsAt) || resetsAt <= 0) return null;
+  return formatQuotaRemainingDuration(resetsAt * 1000 - nowMs, t);
 }
 
 export function formatQuotaResetAt(
@@ -129,7 +131,7 @@ export function buildClaudeUsageCard(
     typeof rawRateLimitStatus === 'string' ? rawRateLimitStatus.trim().toLowerCase() : undefined;
   return {
     title: 'Claude',
-    planLabel: formatClaudeSubscriptionPlanLabel(snapshot.subscriptionType),
+    planLabel: formatClaudeSubscriptionPlanLabel(snapshot.subscriptionType, snapshot.planTier, snapshot.planDisplayName),
     windows,
     updatedAt: snapshot.updatedAt,
     emptyText: windows.length ? undefined : t('quotaCard.noWindows'),
@@ -321,6 +323,33 @@ export function buildCodexUsageCard(
   };
 }
 
+/** One pooled subscription account's own snapshot, rendered with the provider's usage card. */
+export function buildSubscriptionAccountUsageCard(
+  usage: SubscriptionAccountUsage | undefined,
+  t: TFunction,
+  nowMs: number,
+  locale?: string,
+): UsageCardAccount | null {
+  if (usage?.claude) return buildClaudeUsageCard(usage.claude, t);
+  if (!usage?.codex) return null;
+  // As in the settings card, the generic bucket stands for the account; an empty one stays empty.
+  const bucket = matchCodexBucketForModel(usage.codex.buckets, undefined, nowMs);
+  const window = (value: NonNullable<typeof bucket>['primary'] | undefined) =>
+    value?.usedPercent === undefined ? null : { ...value, usedPercent: value.usedPercent };
+  return buildCodexUsageCard(
+    {
+      ...bucket,
+      primary: window(bucket?.primary),
+      secondary: window(bucket?.secondary),
+      credits: usage.codex.credits,
+    },
+    null,
+    t,
+    nowMs,
+    locale,
+  );
+}
+
 export function buildXaiUsageCard(
   usage: XaiSubscriptionUsageSnapshot | null,
   rateLimit: XaiRateLimitSnapshot | null,
@@ -356,8 +385,8 @@ export function buildXaiUsageCard(
   ) {
     details.push(
       t('todaySpend.xai.requestsLine', {
-        remaining: rateLimit.remainingRequests.toLocaleString(),
-        limit: rateLimit.limitRequests.toLocaleString(),
+        remaining: rateLimit.remainingRequests.toLocaleString(appI18n.language),
+        limit: rateLimit.limitRequests.toLocaleString(appI18n.language),
       }),
     );
   }
@@ -380,5 +409,44 @@ export function buildXaiUsageCard(
     details,
     updatedAt: usage?.updatedAt,
     emptyText: windows.length ? undefined : t('todaySpend.xai.noQuotaDetail'),
+  };
+}
+
+/** All returned Kimi windows retain their own period; never call a monthly window weekly. */
+export function buildKimiUsageCard(snapshot: KimiCodingUsageSnapshot | null, t: TFunction): UsageCardAccount {
+  return {
+    title: 'Kimi Code',
+    windows: snapshot?.windows.map(window => ({
+      key: window.id,
+      title: t(`providerAccountUsage.kimi.${window.id}`),
+      showRemaining: true,
+      window: { utilization: window.usedPercent, resetsAt: window.resetsAt === null ? null : window.resetsAt / 1000 },
+      paceWindowMinutes: kimiUsageWindowMinutes(window.id),
+    })) ?? [],
+    updatedAt: snapshot?.fetchedAt,
+    emptyText: snapshot?.windows.length ? undefined : t(snapshot ? 'quotaCard.noWindows' : 'quotaCard.waiting'),
+  };
+}
+
+/** OpenCode Go exposes independent rolling, weekly, and monthly used meters. */
+export function buildOpenCodeGoUsageCard(snapshot: OpenCodeGoUsageSnapshot | null, t: TFunction): UsageCardAccount {
+  const labels = {
+    rolling: 'providerAccountUsage.kimi.limit_5h',
+    weekly: 'providerAccountUsage.kimi.limit_7d',
+    monthly: 'providerAccountUsage.kimi.limit_month_total',
+  } as const;
+  const windows: UsageCardWindow[] = snapshot?.windows.map(window => ({
+    key: window.id,
+    title: t(labels[window.id]),
+    showRemaining: true,
+    window: { utilization: window.usedPercent, resetsAt: window.resetsAt === null ? null : window.resetsAt / 1000 },
+    paceWindowMinutes: window.id === 'rolling' ? 300 : window.id === 'weekly' ? 10_080 : undefined,
+  })) ?? [];
+  return {
+    title: 'OpenCode Go',
+    windows,
+    updatedAt: snapshot?.fetchedAt,
+    emptyText: windows.length ? undefined : t(snapshot ? 'quotaCard.noWindows' : 'quotaCard.waiting'),
+    notices: snapshot?.windows.some(window => window.limited) ? [{ text: t('quotaCard.limitRejected'), tone: 'crit' }] : [],
   };
 }

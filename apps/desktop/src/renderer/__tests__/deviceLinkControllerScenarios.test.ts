@@ -773,7 +773,9 @@ describe('device-link controller mirror — end-to-end scenarios', () => {
     thinking({ stage: 'start', startedAt });
     thinking({ stage: 'delta', text: 'current thought' });
     const current = () => makerChatStore.getSnapshot(s).messages.find(row => row.clientId === 'live-thought');
-    expect(current()).toMatchObject({ content: 'current thought', isStreaming: true, thinkingStartedAt: startedAt });
+    await vi.waitFor(() => {
+      expect(current()).toMatchObject({ content: 'current thought', isStreaming: true, thinkingStartedAt: startedAt });
+    });
     // Child-agent thinking stays inline in the real Host projection. Its
     // getSessionThinkingSnapshots() row is synthetic, with no terminal marker.
     const liveSnapshot: Message = {
@@ -789,7 +791,9 @@ describe('device-link controller mirror — end-to-end scenarios', () => {
     expect(JSON.stringify(getRemoteHistoryView(s)!.getSnapshot().items)).toContain('history-live:live-thought');
     expect(current()).toMatchObject({ content: 'current thought', isStreaming: true, thinkingStartedAt: startedAt });
     thinking({ stage: 'delta', text: ' continues' });
-    expect(current()).toMatchObject({ content: 'current thought continues', isStreaming: true });
+    await vi.waitFor(() => {
+      expect(current()).toMatchObject({ content: 'current thought continues', isStreaming: true });
+    });
     expect(makerChatStore.getSnapshot(s).messages.filter(row => row.clientId === 'live-thought')).toHaveLength(1);
 
     // A lost final event is still healed once the Host returns a durable row.
@@ -1076,7 +1080,7 @@ describe('device-link controller mirror — end-to-end scenarios', () => {
       finish();
       await flush();
       await flush();
-      expect(applied.at(-1)).toEqual([work.type === 'work' ? work.summary : undefined]);
+      expect(applied.at(-1)).toEqual([{ key: work.key, firstMessageId: 'work', lastMessageId: 'work' }]);
       expect(getRemoteHistoryView(s)).toBe(current);
     } finally {
       finish();

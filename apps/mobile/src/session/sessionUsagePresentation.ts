@@ -7,6 +7,7 @@ import {
 } from "./remoteMoney";
 import type { RemoteSession } from "./types";
 import { quotaCountdown } from "./mobileModelRowPresentation";
+import { quotaLevelFromRemaining, type QuotaLevel } from "@cindy/maker-shared/quota-level";
 
 /**
  * Time left until a quota resets, used as the window label like the desktop status
@@ -37,8 +38,9 @@ export function formatSessionUsageMoney(money: RemoteMoney): string {
 }
 
 export function sessionUsageAmounts(
-  session: Pick<RemoteSession, "totalMoney" | "totalCostUsd">,
+  session: Pick<RemoteSession, "totalMoney" | "totalCostUsd" | "totalCostUsdIsApproximate">,
   estimate: RemoteMoney | null,
+  estimateAmounts?: RemoteMoney[],
 ) {
   const actual =
     normalizeRemoteMoney(session.totalMoney) ??
@@ -48,12 +50,17 @@ export function sessionUsageAmounts(
       ? {
           amount: session.totalCostUsd,
           currency: "USD" as const,
-          approximate: false,
+          approximate: session.totalCostUsdIsApproximate === true,
           kind: "actual-cost" as const,
         }
       : null);
   // Do not combine incompatible currencies or relabel a value estimate as a bill.
-  const values = [actual, estimate].filter(
+  const actualAmounts = actual ? [actual] : [];
+  if (actual?.currency === "CNY" && typeof session.totalCostUsd === "number" && Number.isFinite(session.totalCostUsd) && session.totalCostUsd > 0) {
+    actualAmounts.push({ amount: session.totalCostUsd, currency: "USD", kind: "actual-cost", approximate: session.totalCostUsdIsApproximate === true });
+  }
+  const estimates = estimateAmounts?.length ? estimateAmounts : estimate ? [estimate] : [];
+  const values = [...actualAmounts, ...estimates].filter(
     (value): value is RemoteMoney => value !== null && value.amount > 0,
   );
   const total =
@@ -71,14 +78,15 @@ export function sessionUsageAmounts(
               : ("actual-cost" as const),
           }
         : null;
-  return { actual, estimate, total, mixed: values.length > 1 };
+  return { actual, estimate, actualAmounts, estimates, total, mixed: values.length > 1 };
 }
 
 export interface AccountUsageRow {
   label: string;
   value: string;
   detail?: string;
-  warning?: boolean;
+  /** Shared quota rule (`@cindy/maker-shared/quota-level`): yellow at 30% left, red at 10%. */
+  level?: QuotaLevel;
 }
 
 export function accountUsageRows(
@@ -119,7 +127,7 @@ export function accountUsageRows(
         : t("session.menu.usage.remaining", {
             percent: Math.round(window.remainingPercent),
           }),
-      warning: !expired && window.remainingPercent <= 10,
+      level: expired ? "normal" : quotaLevelFromRemaining(window.remainingPercent),
     });
   }
   const credits = account.credits;
@@ -146,23 +154,23 @@ export function accountUsageRows(
     rows.push({
       label: t("session.menu.usage.credits"),
       value: parts.join(" · "),
-      warning: credits.status === "depleted",
+      level: credits.status === "depleted" ? "crit" : "normal",
     });
   }
   for (const amount of account.amounts) {
-    const money: RemoteMoney = {
-      amount: amount.amount,
-      currency: amount.currency,
-      approximate: false,
-      kind: "actual-cost",
-    };
+    const currency = amount.currency;
+    const formatMoney = (value: number) => currency === "USD" || currency === "CNY"
+      ? formatSessionUsageMoney({ amount: value, currency, approximate: false, kind: "actual-cost" })
+      : new Intl.NumberFormat(locale, { style: "currency", currency, currencyDisplay: "code" }).format(value);
     rows.push({
       label: t(`session.menu.usage.${amount.id}`),
-      value: `${formatSessionUsageMoney(money)}${amount.limit === undefined ? "" : ` / ${formatSessionUsageMoney({ ...money, amount: amount.limit })}`}`,
-      warning:
+      value: `${formatMoney(amount.amount)}${amount.limit === undefined ? "" : ` / ${formatMoney(amount.limit)}`}`,
+      level:
         amount.id === "balance"
-          ? amount.amount <= 0
-          : amount.limit !== undefined && amount.amount >= amount.limit,
+          ? amount.amount <= 0 ? "crit" : "normal"
+          : amount.limit !== undefined && amount.limit > 0
+            ? quotaLevelFromRemaining(((amount.limit - amount.amount) / amount.limit) * 100)
+            : "normal",
     });
   }
   return rows;

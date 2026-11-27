@@ -1,3 +1,4 @@
+import type { StandbyUsageTotal } from './providerShareAvailabilityUsage.js';
 /**
  * 供应商分享的用量账本(分享者电脑上)：按(日期、分享、受邀者、Agent、供应商、模型)聚合 token 与轮次。
  *
@@ -26,7 +27,7 @@ const MAX_DIRECT_TASK_LOCATIONS = 20_000;
 const MAX_DIRECT_CLEANUP_TARGETS = 20_000;
 const DIRECT_RECEIPT_GRACE_MS = 30 * 60_000;
 const USAGE_RETRY_DEDUP_MS = DIRECT_RECEIPT_GRACE_MS + 2 * 60_000;
-const FLUSH_DELAY_MS = 1_000;
+const FLUSH_DELAY_MS = 60_000;
 const MEMBER_KEY = /^[A-Za-z0-9_.:-]{1,300}$/;
 /** 一行里最多分几台组内电脑(防止损坏的文件无限膨胀)。 */
 const MAX_MEMBERS_PER_ROW = 512;
@@ -68,6 +69,9 @@ export interface ProviderShareDirectReceiptRoute {
   revokedAt?: number;
   /** Exact server membership incarnation, never compared with a local clock. */
   memberJoinedAt?: string;
+  /** A prepared executor can account for admitted tasks, but its own ID has no task history. */
+  standbyOnly?: true;
+  standbyLimit?: number | null;
 }
 
 export interface ProviderShareMemberGeneration {
@@ -250,6 +254,9 @@ function parseDirectReceiptRoute(value: unknown): ProviderShareDirectReceiptRout
       || (route.committedAt as number) <= 0))
     || (route.revokedAt !== undefined && (!Number.isSafeInteger(route.revokedAt)
       || (route.revokedAt as number) <= 0))
+    || (route.standbyLimit !== null && route.standbyLimit !== undefined && (!Number.isInteger(route.standbyLimit)
+      || Number(route.standbyLimit) < 1 || Number(route.standbyLimit) > 16))
+    || (route.standbyOnly === true && route.standbyLimit === undefined)
     || (route.memberJoinedAt !== undefined && !bounded('memberJoinedAt', 128))) return null;
   return {
     ownerScope: route.ownerScope as string, ownerDeviceId: route.ownerDeviceId as string,
@@ -263,6 +270,8 @@ function parseDirectReceiptRoute(value: unknown): ProviderShareDirectReceiptRout
     ...(route.committedAt !== undefined ? { committedAt: route.committedAt as number } : {}),
     ...(route.revokedAt !== undefined ? { revokedAt: route.revokedAt as number } : {}),
     ...(route.memberJoinedAt !== undefined ? { memberJoinedAt: route.memberJoinedAt as string } : {}),
+    ...(route.standbyOnly === true ? { standbyOnly: true as const } : {}),
+    ...(route.standbyLimit === null || typeof route.standbyLimit === 'number' ? { standbyLimit: route.standbyLimit } : {}),
   };
 }
 
@@ -341,6 +350,7 @@ function parseDirectCleanupTarget(value: unknown): ProviderShareDirectCleanupTar
 export function createProviderShareUsageStore(filePath: string, options: { now?: () => number } = {}) {
   const now = options.now ?? Date.now;
   let rows: Map<string, ProviderShareUsageRow> | null = null;
+  const standbyTotals = new Map<string, StandbyUsageTotal>();
   const recentUsageIds = new Map<string, number>();
   const directReceiptRoutes = new Map<string, ProviderShareDirectReceiptRoute>();
   const directTaskLocations = new Map<string, ProviderShareDirectTaskLocation>();
@@ -351,6 +361,9 @@ export function createProviderShareUsageStore(filePath: string, options: { now?:
   // Missing data on/before this local date can affect a rolling snapshot until it ages out.
   let incompleteThroughDay: string | null = null;
   let writing: Promise<void> = Promise.resolve();
+  // Usage is authoritative in memory. Checkpoints are best effort until an explicit flush;
+  // route publication, revocation and cleanup continue to require atomic replacement.
+  let dirty = false;
 
   const keyOf = (row: Pick<ProviderShareUsageRow, 'day' | 'shareId' | 'memberId' | 'kind' | 'providerId' | 'model'>) =>
     JSON.stringify([row.day, row.shareId, row.memberId, row.kind, row.providerId, row.model]);
@@ -407,6 +420,11 @@ export function createProviderShareUsageStore(filePath: string, options: { now?:
       }
       return result;
     };
+    const loadedStandby = readSafetyMap<StandbyUsageTotal>('standbyTotals', raw => {
+      const row = raw as StandbyUsageTotal;
+      return row && /^[a-f0-9]{64}$/.test(row.id) && Number.isSafeInteger(row.sequence) && row.sequence > 0
+        && /^\d{4}-\d{2}-\d{2}$/.test(row.day) && row.totals && COUNTERS.every(key => isCount(row.totals[key])) ? row : null;
+    }, row => row.id);
     const loadedMembers = readSafetyMap('memberGenerations', parseMemberGeneration, memberGenerationKey);
     const loadedUsageIds = readSafetyMap<[string, number]>('recentUsageIds', (raw) => {
       if (!Array.isArray(raw) || raw.length !== 2 || typeof raw[0] !== 'string'
@@ -446,6 +464,7 @@ export function createProviderShareUsageStore(filePath: string, options: { now?:
     if (parsed.incompleteThroughDay !== undefined) markIncomplete(parsed.incompleteThroughDay, false);
     else if (parsed.incomplete === true) markIncomplete();
     // All parsing/migration succeeded; publish the complete snapshot together.
+    for (const [key, row] of loadedStandby) standbyTotals.set(key, row);
     for (const [key, member] of loadedMembers) memberGenerations.set(key, member);
     for (const [key, entry] of loadedUsageIds) recentUsageIds.set(key, entry[1]);
     for (const [key, route] of loadedRoutes) {
@@ -461,13 +480,14 @@ export function createProviderShareUsageStore(filePath: string, options: { now?:
 
   function prune(map: Map<string, ProviderShareUsageRow>): void {
     const cutoff = localDay(now() - RETAIN_DAYS * 86_400_000);
+    for (const [key, row] of standbyTotals) if (row.day < cutoff) standbyTotals.delete(key);
     for (const [key, row] of map) if (row.day < cutoff) map.delete(key);
     if (map.size <= MAX_ROWS) return;
     const oldest = [...map.entries()].sort((a, b) => a[1].lastAt - b[1].lastAt);
     for (const [key] of oldest.slice(0, map.size - MAX_ROWS)) map.delete(key);
   }
 
-  async function writeNow(commit?: { route: ProviderShareDirectReceiptRoute; location: ProviderShareDirectTaskLocation }): Promise<void> {
+  async function writeNow(commit?: { route: ProviderShareDirectReceiptRoute; location?: ProviderShareDirectTaskLocation }): Promise<void> {
     const map = load();
     if (timer) {
       clearTimeout(timer);
@@ -479,45 +499,40 @@ export function createProviderShareUsageStore(filePath: string, options: { now?:
     for (const [key, route] of directReceiptRoutes) {
       if (route.expiresAt + DIRECT_RECEIPT_GRACE_MS <= now()) directReceiptRoutes.delete(key);
     }
-    // A committing location is staged only in the disk image. Synchronous lookups
-    // and receipts cannot observe it until the atomic replacement has succeeded.
+    // Synchronous lookups and receipts can see a commit only after the atomic replacement succeeds.
     const receiptRoutes = commit
       ? new Map(directReceiptRoutes).set(directReceiptRouteKey(commit.route), commit.route) : directReceiptRoutes;
-    const taskLocations = commit
+    const taskLocations = commit?.location
       ? new Map(directTaskLocations).set(directTaskLocationKey(commit.location), commit.location) : directTaskLocations;
     const body = JSON.stringify({ version: FILE_VERSION, rows: [...map.values()], recentUsageIds: [...recentUsageIds],
       directReceiptRoutes: [...receiptRoutes.values()], directCleanupTargets: [...directCleanupTargets.values()],
-      directTaskLocations: [...taskLocations.values()], memberGenerations: [...memberGenerations.values()],
+      standbyTotals: [...standbyTotals.values()], directTaskLocations: [...taskLocations.values()], memberGenerations: [...memberGenerations.values()],
       ...(incompleteThroughDay ? { incomplete: true, incompleteThroughDay } : {}) });
     const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-    await fsp.mkdir(path.dirname(filePath), { recursive: true });
+    const hadDirty = dirty;
+    dirty = false;
     try {
+      await fsp.mkdir(path.dirname(filePath), { recursive: true });
       await fsp.writeFile(tmp, body, { encoding: 'utf8', mode: 0o600 });
       await fsp.rename(tmp, filePath);
       cleanupPersistenceFailed = false;
+    } catch (error) {
+      // Keep accepted counters/IDs and retry the checkpoint; never publish a failed route.
+      if (hadDirty || dirty) scheduleFlush();
+      throw error;
     } finally {
       await fsp.rm(tmp, { force: true }).catch(() => undefined);
     }
   }
 
   function scheduleFlush(): void {
+    dirty = true;
     if (timer) return;
     timer = setTimeout(() => {
       timer = null;
-      writing = writing.then(() => writeNow()).catch(() => undefined);
+      writing = writing.then(() => dirty ? writeNow() : undefined).catch(() => undefined);
     }, FLUSH_DELAY_MS);
     (timer as { unref?: () => void }).unref?.();
-  }
-
-  /** Receipt ACKs and route publication require the same durable ledger image. */
-  async function persistNow(): Promise<void> {
-    if (timer) {
-      clearTimeout(timer);
-      timer = null;
-    }
-    const pending = writing.then(() => writeNow());
-    writing = pending.catch(() => undefined);
-    await pending;
   }
 
   /** Include mutation AND rollback in the write queue, so another write cannot
@@ -762,7 +777,7 @@ export function createProviderShareUsageStore(filePath: string, options: { now?:
         if (!route || route.expiresAt <= now()) throw new Error('Invalid direct receipt route');
         load();
         if (!memberGenerationReady(route, route.memberJoinedAt)) throw new Error('Provider share member cleanup is pending');
-        if (!directTaskLocations.has(directTaskLocationKey(route)) && directTaskLocations.size >= MAX_DIRECT_TASK_LOCATIONS) {
+        if (!route.standbyOnly && !directTaskLocations.has(directTaskLocationKey(route)) && directTaskLocations.size >= MAX_DIRECT_TASK_LOCATIONS) {
           throw new Error('Direct task location ledger is full');
         }
         for (const [key, saved] of directReceiptRoutes) {
@@ -818,19 +833,22 @@ export function createProviderShareUsageStore(filePath: string, options: { now?:
         if (route.committedAt !== undefined) return;
         const locationKey = directTaskLocationKey(route);
         const previousLocation = directTaskLocations.get(locationKey);
-        if (!previousLocation && directTaskLocations.size >= MAX_DIRECT_TASK_LOCATIONS) {
+        if (!route.standbyOnly && !previousLocation && directTaskLocations.size >= MAX_DIRECT_TASK_LOCATIONS) {
           throw new Error('Direct task location ledger is full');
         }
         const updated = { ...route, committedAt: now() };
-        const location = parseDirectTaskLocation(updated)!;
+        const location = updated.standbyOnly ? undefined : parseDirectTaskLocation(updated)!;
         await writeNow({ route: updated, location });
         directReceiptRoutes.set(key, updated);
-        directTaskLocations.set(locationKey, location);
+        if (location) directTaskLocations.set(locationKey, location);
       });
     },
     async recordDirectReceipt(ownerScope: string, ownerDeviceId: string, executorDeviceId: string,
       receipt: ProviderShareDirectReceipt): Promise<boolean> {
       load();
+      // Accepted replays need no new mutation or write. New receipts wait for transactions
+      // including rollback, so a failed standby import cannot erase acknowledged counters.
+      if (!recentUsageIds.has(receipt.usageId)) await writing;
       const route = [...directReceiptRoutes.values()].find((saved) => saved.ownerScope === ownerScope
         && saved.ownerDeviceId === ownerDeviceId && saved.executorDeviceId === executorDeviceId
         && saved.shareId === receipt.shareId && saved.memberId === receipt.memberId
@@ -849,10 +867,42 @@ export function createProviderShareUsageStore(filePath: string, options: { now?:
         kind: route.agentKind, providerId: route.providerId, memberKey: route.memberKey,
         samples: receipt.samples,
       });
-      await persistNow();
       return recorded;
     },
-    /** Idempotent report from an assigned executor; IDs survive a host restart. */
+    /** Cumulative cloud counters and their watermarks commit in the same ledger image. */
+    importStandbyTotal(shareId: string, total: StandbyUsageTotal): Promise<void> {
+      return serializeMutation(async () => {
+        const map = load();
+        const cutoff = localDay(now() - RETAIN_DAYS * 86_400_000);
+        if (total.day < cutoff) return;
+        if (!/^[a-f0-9]{64}$/.test(total.id) || !Number.isSafeInteger(total.sequence) || total.sequence < 1
+          || !total.totals || COUNTERS.some(field => !isCount(total.totals[field]))) throw new Error('Invalid standby usage');
+        const old = standbyTotals.get(total.id);
+        if (old && old.sequence >= total.sequence) return;
+        if (old && COUNTERS.some(field => old.totals[field] > total.totals[field])) throw new Error('Standby usage decreased');
+        const identity = { day: total.day, shareId, memberId: total.memberId, kind: total.kind, providerId: total.providerId, model: total.model };
+        const key = keyOf(identity);
+        const previous = map.get(key);
+        const row = structuredClone(previous ?? { ...identity, ...emptyCounters(), lastAt: now() });
+        const delta = Object.fromEntries(COUNTERS.map(field => [field, total.totals[field] - (old?.totals[field] ?? 0)])) as Counters;
+        addCounters(row, delta);
+        if (total.memberKey && MEMBER_KEY.test(total.memberKey)) {
+          row.byMember ??= {};
+          if (row.byMember[total.memberKey]) addCounters(row.byMember[total.memberKey], delta);
+          else if (Object.keys(row.byMember).length < MAX_MEMBERS_PER_ROW) row.byMember[total.memberKey] = { ...delta };
+        }
+        row.lastAt = Math.max(row.lastAt, Date.parse(total.day));
+        map.set(key, row);
+        standbyTotals.set(total.id, structuredClone(total));
+        try { await writeNow(); }
+        catch (error) {
+          if (previous) map.set(key, previous); else map.delete(key);
+          if (old) standbyTotals.set(total.id, old); else standbyTotals.delete(total.id);
+          throw error;
+        }
+      });
+    },
+    /** Idempotent in memory; counters and IDs survive restart after the next checkpoint. */
     recordOnce(usageId: string, shareId: string, memberId: string,
       usage: { kind: string; providerId: string | null; memberKey: string; samples: readonly GuestUsageSample[] }): boolean {
       load();
@@ -980,12 +1030,8 @@ export function createProviderShareUsageStore(filePath: string, options: { now?:
 
     async flush(): Promise<void> {
       load();
-      if (timer) {
-        clearTimeout(timer);
-        timer = null;
-        writing = writing.then(() => writeNow()).catch(() => undefined);
-      }
-      await writing;
+      // The returned operation rejects on disk failure; the queue remains usable for retry.
+      await serializeMutation(async () => { if (dirty) await writeNow(); });
     },
   };
 }
@@ -1001,4 +1047,9 @@ export function installProviderShareUsageStore(userDataDir: string): ProviderSha
 
 export function getProviderShareUsageStore(): ProviderShareUsageStore | null {
   return store;
+}
+
+/** Await after producers stop, before the normal quit/owner-disposal path closes storage. */
+export async function flushProviderShareUsageStore(): Promise<void> {
+  await store?.flush();
 }

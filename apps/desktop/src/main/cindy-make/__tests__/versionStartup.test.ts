@@ -64,7 +64,7 @@ vi.mock('../../terminal/ptyFactory.js', () => ({ defaultPtySpawn: h.pty }));
 vi.mock('../../logger.js', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
 }));
-vi.mock('../../i18n.js', () => ({ t: (key: string) => key }));
+vi.mock('../../i18n.desktop.js', () => ({ t: (key: string) => key }));
 vi.mock('../../../shared/brandRegion.js', () => ({ CURRENT_CINDY_REGION: 'global' }));
 vi.mock('@cindy/maker-shared/cindy-make-feature', () => ({
   get CINDY_MAKE_ENABLED() {
@@ -129,6 +129,7 @@ beforeEach(async ({ task }) => {
     'XDT_ENDPOINT_MANIFEST_FILE',
     'XDT_ENDPOINTS_CDN',
     'XDT_DESKTOP_DEV_MODE',
+    'XDT_DISABLE_GLOBAL_SHORTCUTS',
   ])
     vi.stubEnv(key, undefined);
   vi.stubEnv('PATH', path.dirname(originalExec));
@@ -247,6 +248,7 @@ describe('one original version type for Dev and installed Cindy', () => {
   it('captures Dev as the original and keeps full Forge/Vite return information without credentials', async () => {
     vi.stubEnv('OPENAI_API_KEY', 'fake-never-persist');
     vi.stubEnv('NODE_OPTIONS', '--require private-hook');
+    vi.stubEnv('XDT_DISABLE_GLOBAL_SHORTCUTS', '1');
     const value = await startup.rememberOriginalVersion(originalExec);
     expect(value.version).toBe('0.1.99');
     expect(store.readOriginalVersion(h.profile)?.version).toBe('0.1.99');
@@ -254,15 +256,28 @@ describe('one original version type for Dev and installed Cindy', () => {
       root: path.join(root, 'checkout'),
       node: originalExec,
       mode: 'remote',
+      capabilities: { 'dev-environment-overrides': true },
     });
     expect(value.development?.environment).not.toHaveProperty('OPENAI_API_KEY');
     expect(value.development?.environment).not.toHaveProperty('NODE_OPTIONS');
+    expect(value.development?.environmentOverrides).toMatchObject({ XDT_DISABLE_GLOBAL_SHORTCUTS: '1' });
+    expect(store.readOriginalVersion(h.profile)?.development?.environmentOverrides).toMatchObject({
+      XDT_DISABLE_GLOBAL_SHORTCUTS: '1',
+    });
     expect(JSON.parse(value.profile.endpointSnapshot!.manifestText).authApiBaseUrl).toBe(
       'https://auth.example.invalid',
     );
     expect(store.selectedVersion(h.profile)).toBe('original');
     expect(await startup.dispatchCindyVersionStartup()).toBe(false);
     expect(h.spawn).not.toHaveBeenCalled();
+  });
+  it('does not persist an inactive shortcut override', async () => {
+    vi.stubEnv('XDT_DISABLE_GLOBAL_SHORTCUTS', '0');
+    const value = await startup.rememberOriginalVersion(originalExec);
+    expect(value.development?.environmentOverrides).toBeUndefined();
+    expect(
+      store.readOriginalVersion(h.profile)?.development?.environmentOverrides,
+    ).toBeUndefined();
   });
   it('rejects a declared endpoint realm that differs from the running original', async () => {
     await writeFile(
@@ -403,6 +418,7 @@ describe('one original version type for Dev and installed Cindy', () => {
     vi.stubEnv('WAYLAND_DISPLAY', 'wayland-1');
     vi.stubEnv('XDG_RUNTIME_DIR', '/run/user/1000');
     vi.stubEnv('DBUS_SESSION_BUS_ADDRESS', 'unix:path=/run/user/1000/bus');
+    original.development!.environmentOverrides = { XDT_DISABLE_GLOBAL_SHORTCUTS: '1' };
     saveOriginal();
     const value = launchRequest({ state: 'pending' });
     process.argv.push('--cindy-version-profile=' + h.profile, '--cindy-version-helper=' + value.id);
@@ -415,6 +431,7 @@ describe('one original version type for Dev and installed Cindy', () => {
         WAYLAND_DISPLAY: 'wayland-1',
         XDG_RUNTIME_DIR: '/run/user/1000',
         DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/1000/bus',
+        XDT_DISABLE_GLOBAL_SHORTCUTS: '1',
       });
       queueMicrotask(() => {
         const file = startup.versionRequestPath(h.profile, value.id);
@@ -445,6 +462,38 @@ describe('one original version type for Dev and installed Cindy', () => {
     await expect(result).resolves.toBe(true);
     expect(h.exit).toHaveBeenCalledWith(0);
     expect(kill).not.toHaveBeenCalled();
+  });
+  it('rejects a packaged helper that cannot forward recorded Dev overrides', async () => {
+    h.packaged = true;
+    original.development = {
+      root: path.join(root, 'checkout'),
+      node: originalExec,
+      mode: 'remote',
+      environment: {},
+      environmentOverrides: { XDT_DISABLE_GLOBAL_SHORTCUTS: '1' },
+    };
+    saveOriginal();
+    const personal = await savePersonalVersion();
+    const item = store.readPersonalVersion(h.profile, personal.id);
+    Object.defineProperty(process, 'execPath', {
+      value: personal.executable,
+      configurable: true,
+      writable: true,
+    });
+    Object.defineProperty(process, 'resourcesPath', {
+      value: path.join(store.versionDirectory(h.profile, personal.id), item.resources),
+      configurable: true,
+    });
+    const value = launchRequest({ targetId: personal.id });
+    process.argv.push(
+      '--cindy-version-profile=' + h.profile,
+      '--cindy-version-launch=' + value.id,
+    );
+    startup.prepareCindyVersionStartup();
+    await expect(startup.startVersionHandoff('original')).rejects.toMatchObject({
+      code: 'incompatible',
+    });
+    expect(h.spawn).not.toHaveBeenCalled();
   });
 });
 

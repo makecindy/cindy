@@ -19,7 +19,7 @@
 
 import fs from 'node:fs/promises';
 
-import * as blobStore from './blobStore';
+import * as blobStore from './blobStore.desktop';
 import * as ledger from './ledger';
 import type { LedgerDb } from './ledger';
 import { ingestMedia } from './ingest';

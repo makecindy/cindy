@@ -5,6 +5,7 @@ import { isModelEnabled, getModelVisibilityVersion } from '@/state/modelVisibili
 import { botInvitationProgress, type BotInvitationProgress } from '../../../shared/botInvitation';
 import { useSyncExternalStore } from 'react';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { extractIpcError } from '../../utils/ipcError';
 import { getModel } from '@cindy/model-providers';
 import { getDefaultModelForVendor } from '@/lib/modelDefinitions';
 import { pickConnectedModelForAgent } from '@/lib/draftModelCalibration';
@@ -15,8 +16,8 @@ import { getCachedProvidersSnapshot } from '@/lib/providersSnapshotStore';
 import {
   NEW_BOT_DEFAULT_HARNESS,
 } from '../../../shared/botDefaults';
-import { getBotLastReadAtMap, pruneBotReadState, seedMissingBotReadState } from './botReadState';
-import type { BotAutonomySettingsView } from '../../../shared/botAutonomy';
+import { getBotLastReadAtMap, seedMissingBotReadState } from './botReadState';
+import { parseTeammateInboxSnooze, type TeammateInboxSnooze } from './remoteBotRoster';
 import { registerLoadedBotProfilesReader } from './botSessionOwners';
 import { canonicalBotSession } from './botSessionOwners';
 export { canonicalBotSession } from './botSessionOwners';
@@ -37,15 +38,15 @@ export interface BotCapabilities {
   /** Only present when the user explicitly chose a model for this Bot. */
   modelOverride?: BotModelOverride | null;
   providerId?: string | null;
+  /** Mirror of the primary route; null/absence means the teammate's computer. */
+  agentDeviceId?: string | null;
   effort: string;
   fastMode: boolean | 'ultrafast';
-  harness: 'claude' | 'codex' | 'pi';
+  harness: BotHarness;
   /** Ordered, complete runtime routes. The first route is the normal choice. */
   modelChain: BotModelRoute[];
   /** null follows the global Bot default; an array is this Bot's explicit chain. */
   modelChainOverride?: BotModelRoute[] | null;
-  /** Independent background-task route; absent/null inherits the live primary model. */
-  taskModelOverride?: BotModelRoute | null;
   skillMode: 'inherit' | 'allowlist';
   /**
    * @deprecated 旧版“跟随全局”配置的兼容字段。Bot 已不继承全局 Skill，
@@ -67,6 +68,8 @@ export interface BotCapabilities {
    * 缺省 = false：别的伙伴开的任务，负责所有任务的伙伴默认只看不跟（shared/botAutonomy.ts）。
    */
   allowSchedulerFollow?: boolean;
+  /** Experimental: the teammate's workspace is a project (shared/botProjectMode.ts). Missing = off. */
+  projectMode?: boolean;
 }
 
 export interface BotModelOverride {
@@ -80,11 +83,12 @@ export type { BotHarness, BotModelRoute };
 export { BOT_MODEL_CHAIN_MAX };
 
 function vendorForHarness(harness: BotCapabilities['harness']): 'cc' | 'codex' | 'pi' {
-  return harness === 'claude' ? 'cc' : harness;
+  return harness === 'claude' ? 'cc' : harness === 'acp' ? 'pi' : harness;
 }
 
 function normalizeBotModel(model: unknown, harness: BotCapabilities['harness']): string {
   if (typeof model === 'string' && model.trim()) return model.trim();
+  if (harness === 'acp') return 'default';
   // 旧记录缺 model 时走与新建同一条口径,不另读 lastByVendor 的种子快照。
   return defaultBotModel(vendorForHarness(harness));
 }
@@ -218,6 +222,8 @@ export interface BotProfile {
   lastMessageAt?: number | null;
   /** Who sent that message — lets the list read like a chat list, not a log. */
   lastMessageRole?: 'user' | 'assistant' | null;
+  /** Inbox snooze of the main conversation's Session; absent while there is no conversation. */
+  inboxSnooze?: TeammateInboxSnooze;
   createdAt: number;
   sessions: BotSessionProjection[];
 }
@@ -390,11 +396,28 @@ function applyGlobalModelChain(
   emit();
 }
 
+/**
+ * Re-reads and re-projections build fresh rows even when nothing changed. Keep
+ * each unchanged row, and the whole array when every row is kept, by identity:
+ * `useBotProfiles()` subscribers then skip re-rendering for a no-op refresh.
+ */
+function keepUnchangedProfiles(previous: BotProfile[], next: BotProfile[]): BotProfile[] {
+  const previousById = new Map(previous.map((bot) => [bot.id, bot]));
+  let changed = next.length !== previous.length;
+  const merged = next.map((bot, index) => {
+    const old = previousById.get(bot.id);
+    const kept = old && JSON.stringify(old) === JSON.stringify(bot) ? old : bot;
+    if (kept !== previous[index]) changed = true;
+    return kept;
+  });
+  return changed ? merged : previous;
+}
+
 function projectGlobalModelChain(): void {
   if (!globalModelChainCache) return;
   const chain = getEffectiveBotModelChain();
   const primary = chain[0] ?? { model: '', providerId: null, effort: '', fastMode: false };
-  profiles = profiles.map((bot) =>
+  profiles = keepUnchangedProfiles(profiles, profiles.map((bot) =>
     bot.capabilities.modelChainOverride === null
       ? {
           ...bot,
@@ -407,7 +430,7 @@ function projectGlobalModelChain(): void {
           },
         }
       : bot,
-  );
+  ));
 }
 
 export async function setBotGlobalModelChain(chain: BotModelRoute[]): Promise<void> {
@@ -508,9 +531,12 @@ let profiles: BotProfile[] = [];
 const listeners = new Set<() => void>();
 let hydrated = false;
 let profileListLoaded = false;
+/** Read outcome is separate from the last successful (possibly empty) snapshot. */
+let profileLoadState: 'pending' | 'ready' | 'error' = 'pending';
 let profileOwner = getDataOwnerGeneration();
 let hydrationGeneration = 0;
 const hydrationPromises = new Set<Promise<void>>();
+let activeHydration: { owner: ReturnType<typeof getDataOwnerGeneration>; refreshPending: boolean } | null = null;
 /** 每个伙伴各自的写入代际 —— 见 updateBotProfile 里的 isLatestWrite。 */
 const profileWriteGenerations = new Map<string, number>();
 
@@ -520,12 +546,14 @@ function ensureProfileOwner(): void {
   profileOwner = getDataOwnerGeneration();
   profiles = [];
   profileListLoaded = false;
+  profileLoadState = 'pending';
   unreadCounts = {};
   globalModelChainCache = null;
   globalModelChainCustomized = null;
   modelSettingsQueue = Promise.resolve();
   profileWriteGenerations.clear();
   hydrationPromises.clear();
+  activeHydration = null;
   hydrationGeneration += 1;
   hydrated = false;
 }
@@ -535,7 +563,22 @@ function assertCurrentOwner(owner: ReturnType<typeof getDataOwnerGeneration>): v
 }
 
 function trackHydration(): void {
-  const promise = hydrateFromDatabase();
+  if (activeHydration) return;
+  const flight = { owner: getDataOwnerGeneration(), refreshPending: false };
+  activeHydration = flight;
+  const promise = (async () => {
+    try {
+      do {
+        flight.refreshPending = false;
+        await hydrateFromDatabase();
+        // Notifications during a read only retain one successor. A failed read
+        // does not retry itself, and an old owner can neither restart nor clear
+        // the new owner's flight.
+      } while (flight.refreshPending && isDataOwnerGenerationCurrent(flight.owner));
+    } finally {
+      if (activeHydration === flight) activeHydration = null;
+    }
+  })();
   hydrationPromises.add(promise);
   void promise.then(
     () => hydrationPromises.delete(promise),
@@ -573,7 +616,14 @@ export function normalizeDbProfile(value: unknown): BotProfile | null {
   const followsDefault = rawCapabilities?.modelChainOverride === null || rawCapabilities?.modelOverride === null;
   const resolvedModel = modelOverride ?? (followsDefault
     ? { model: '', providerId: null, effort: '', fastMode: false }
-    : getEffectiveBotModelSettings(vendorForHarness(harness), null));
+    : harness === 'acp'
+      ? {
+          model: typeof rawCapabilities?.model === 'string' && rawCapabilities.model.trim() ? rawCapabilities.model.trim() : 'default',
+          providerId: typeof rawCapabilities?.providerId === 'string' ? rawCapabilities.providerId : null,
+          effort: typeof rawCapabilities?.effort === 'string' ? rawCapabilities.effort : '',
+          fastMode: false,
+        }
+      : getEffectiveBotModelSettings(vendorForHarness(harness), null));
   const modelChain = normalizeBotModelChain(rawCapabilities?.modelChain, followsDefault ? null : {
     harness,
     model: resolvedModel.model || rawCapabilities?.model,
@@ -690,6 +740,7 @@ export function normalizeDbProfile(value: unknown): BotProfile | null {
       item.lastMessageRole === 'user' || item.lastMessageRole === 'assistant'
         ? item.lastMessageRole
         : null,
+    ...(parseTeammateInboxSnooze(item.inboxSnooze) ? { inboxSnooze: parseTeammateInboxSnooze(item.inboxSnooze) } : {}),
     createdAt: typeof item.createdAt === 'number' ? item.createdAt : Date.now(),
     sessions: Array.isArray(item.sessions)
       ? item.sessions.filter((s): s is BotSessionProjection => !!s && typeof s.id === 'string')
@@ -744,6 +795,11 @@ async function hydrateFromDatabase(): Promise<void> {
   const owner = getDataOwnerGeneration();
   const generation = ++hydrationGeneration;
   const isCurrent = () => isDataOwnerGenerationCurrent(owner) && generation === hydrationGeneration;
+  // Stays a per-refresh 'pending': RemoteBotSessionView's local-recovery hand-off
+  // waits for it as "the roster caught up". keepUnchangedProfiles keeps this
+  // emit from re-rendering useBotProfiles() subscribers.
+  profileLoadState = 'pending';
+  emit();
   try {
     if (typeof api.getModelChainSettings === 'function') {
       try {
@@ -768,38 +824,48 @@ async function hydrateFromDatabase(): Promise<void> {
     const rows = await api.list({ lastReadAtByBotId: getBotLastReadAtMap(), welcomeContext: readCachedBotWelcomeContext(), locale: getEffectiveLocale() });
     if (!isCurrent()) return;
     const dbProfiles = rows.map(normalizeDbProfile).filter((item): item is BotProfile => !!item);
+    const previous = profiles;
     profiles = dbProfiles;
     profileListLoaded = true;
+    profileLoadState = 'ready';
     projectGlobalModelChain();
+    profiles = keepUnchangedProfiles(previous, profiles);
     applyUnreadCounts(rows);
-    // A Bot we have never tracked starts read: shipping unread badges must not
-    // retroactively mark every existing conversation as unread. Pruning keeps
-    // the stored map from growing with deleted Bots.
-    const visibleIds = profiles.map((bot) => bot.id);
-    seedMissingBotReadState(visibleIds);
-    pruneBotReadState(visibleIds);
+    // Discovery is not an acknowledgement; absent/hidden rows never delete shared reads.
+    seedMissingBotReadState(profiles.map((bot) => bot.id));
     emit();
   } catch {
     // DB readiness can race the first renderer render during account/bootstrap.
     // The Bots layout explicitly calls refreshBotProfiles when entered, so do
     // not keep polling a signed-out renderer in the background.
-    if (isCurrent()) { hydrated = false; profileListLoaded = true; emit(); }
+    if (isCurrent()) {
+      hydrated = false;
+      profileLoadState = 'error';
+      // Keep the last successful snapshot; a failed first read proves no emptiness.
+      emit();
+    }
   }
 }
 
-trackHydration();
-
+// Do not read at module import: auth can precede LocalDbGate. AppWindowSync
+// mounts useBotUnreadSync after readiness; other consumers explicitly ensure.
 export function refreshBotProfiles(): void {
   ensureProfileOwner();
   emit();
   hydrated = false;
+  if (activeHydration) {
+    activeHydration.refreshPending = true;
+    // A pre-notification snapshot must not overwrite a just-accepted edit.
+    hydrationGeneration += 1;
+    return;
+  }
   trackHydration();
 }
 
 /**
- * Wait for the current owner's profiles outside the Bots views. The module-level
- * hydration can run before sign-in, and an owner change clears the projection
- * without reloading it; `refresh` also re-reads a projection that is already loaded.
+ * Wait for the current owner's profiles outside the Bots views. An owner change
+ * clears the projection without reloading it; `refresh` also re-reads a projection
+ * that is already loaded.
  */
 export async function ensureBotProfilesLoaded(refresh = false): Promise<BotProfile[]> {
   ensureProfileOwner();
@@ -848,6 +914,15 @@ export async function runBotLifecycleAction(
     }
   }
   return result;
+}
+
+/** Subscribe independently: a failed read need not replace the profile array. */
+export function useBotProfilesLoadState(): typeof profileLoadState {
+  const snapshot = () => {
+    ensureProfileOwner();
+    return profileLoadState;
+  };
+  return useSyncExternalStore(subscribeBotProfiles, snapshot, snapshot);
 }
 
 export function hasLoadedBotProfiles(): boolean {
@@ -903,7 +978,7 @@ export function addBotProfile(input: CreateBotProfileInput): BotProfile {
         }),
   };
   const bot: BotProfile = {
-    id: `bot_${now}_${Math.random().toString(36).slice(2, 8)}`,
+    id: `bot_${now}_${crypto.randomUUID()}`,
     templateId: input.templateId,
     name: input.name.trim() || 'New Bot',
     description: input.description.trim(),
@@ -1014,6 +1089,8 @@ export type BotProfileUpdatePatch = Partial<
   >
 > & {
   avatarUploadToken?: string;
+  /** Explicit picker action, including accepting an unchanged configured route. Never persisted. */
+  acceptModelSelection?: boolean;
   capabilities?: Partial<BotCapabilities>;
   capabilityBaseline?: BotCapabilityBaseline;
 };
@@ -1022,7 +1099,8 @@ export function updateBotProfile(id: string, patch: BotProfileUpdatePatch): Prom
   ensureProfileOwner();
   const before = profiles.find((bot) => bot.id === id);
   if (!before) return Promise.reject(new Error('Bot not found'));
-  const { avatarUploadToken, capabilityBaseline, ...profilePatch } = patch;
+  const { avatarUploadToken, capabilityBaseline, acceptModelSelection, ...profilePatch } = patch;
+  if (acceptModelSelection && !before.currentVersion) return Promise.reject(new Error('Bot profile version is unavailable'));
   // 这一行的写入代际。回填与回滚都要求「我仍然是这一行最新的那次写」——
   // 落后的响应一律丢弃,不许覆盖更新的状态(见下面两处 isLatestWrite)。
   const generation = (profileWriteGenerations.get(id) ?? 0) + 1;
@@ -1043,6 +1121,7 @@ export function updateBotProfile(id: string, patch: BotProfileUpdatePatch): Prom
     .update({
       id,
       ...profilePatch,
+      ...(acceptModelSelection ? { acceptSavedModelSelectionVersion: before.currentVersion } : {}),
       ...(capabilityBaseline ? { capabilityBaseline } : {}),
       ...(avatarUploadToken ? { avatarUploadToken } : {}),
       ...(profilePatch.avatar !== undefined || avatarUploadToken
@@ -1061,7 +1140,7 @@ export function updateBotProfile(id: string, patch: BotProfileUpdatePatch): Prom
       emit();
       return next;
     })
-    .catch((error) => {
+    .catch(async (error) => {
       /*
         只回滚**这一行**,而且只在自己仍是最新那次写的时候回滚。
 
@@ -1075,8 +1154,16 @@ export function updateBotProfile(id: string, patch: BotProfileUpdatePatch): Prom
         有 hydrated 闸),所以数据库里是对的,界面上却一直显示被还原的旧值。
       */
       if (isLatestWrite()) {
-        profiles = profiles.map((bot) => (bot.id === id ? before : bot));
-        emit();
+        let rollback = before;
+        if (acceptModelSelection && extractIpcError(error)?.code === 'PRECONDITION_FAILED') {
+          const latest = normalizeDbProfile(await api.get(id).catch(() => null));
+          if (latest) rollback = latest;
+        }
+        // Reading can cross another write or an account switch.
+        if (isLatestWrite()) {
+          profiles = profiles.map((bot) => (bot.id === id ? rollback : bot));
+          emit();
+        }
       }
       throw error;
     });
@@ -1132,7 +1219,7 @@ export async function duplicateBotProfile(id: string): Promise<BotProfile> {
     ? await window.electronAPI.readCachedImageAsBase64({ url: source.avatar })
     : undefined;
   assertCurrentOwner(owner);
-  if (avatarImage && !avatarImage.base64) throw new Error('Could not read teammate avatar');
+  if (avatarImage && !avatarImage.base64) throw new Error('Could not read buddy avatar');
   return addBotProfileAndWait({
     name: duplicateBotName(source.name),
     description: source.description,
@@ -1207,86 +1294,4 @@ export function removeBotProfile(id: string): void {
 export async function retryBotInvitation(id: string): Promise<void> {
   await botsApi()?.update({ id, retryInvitation: true });
   refreshBotProfiles();
-}
-
-// ── 自动跟进所有任务（账号级，只存 override） ─────────────────────────────
-// 宿主是唯一事实源：这里只缓存最近一次读到的视图，按需读取，收到
-// onBotAutonomyChanged 后重读；换账号时丢弃旧视图与在途读取。
-
-let autonomyView: BotAutonomySettingsView | null = null;
-let autonomyOwner = getDataOwnerGeneration();
-let autonomyRequest = 0;
-let autonomyOff: (() => void) | null = null;
-const autonomyListeners = new Set<() => void>();
-
-function autonomyApi() {
-  return window.electronAPI?.localDb?.bots?.autonomy;
-}
-
-function ensureAutonomyOwner(): void {
-  if (isDataOwnerGenerationCurrent(autonomyOwner)) return;
-  autonomyOwner = getDataOwnerGeneration();
-  autonomyView = null;
-  autonomyRequest += 1;
-}
-
-function applyAutonomyView(view: BotAutonomySettingsView, owner: ReturnType<typeof getDataOwnerGeneration>): void {
-  if (!isDataOwnerGenerationCurrent(owner)) return;
-  ensureAutonomyOwner();
-  autonomyView = view;
-  for (const listener of autonomyListeners) listener();
-}
-
-function loadAutonomySettings(): void {
-  const api = autonomyApi();
-  if (!api) return;
-  ensureAutonomyOwner();
-  const owner = getDataOwnerGeneration();
-  const request = ++autonomyRequest;
-  void api.getSettings().then((view) => {
-    if (request === autonomyRequest) applyAutonomyView(view, owner);
-  }).catch(() => undefined);
-}
-
-export function subscribeBotAutonomySettings(listener: () => void): () => void {
-  autonomyListeners.add(listener);
-  if (autonomyListeners.size === 1) {
-    autonomyOff = window.electronAPI?.maker?.onBotAutonomyChanged?.(() => loadAutonomySettings()) ?? null;
-    loadAutonomySettings();
-  }
-  return () => {
-    autonomyListeners.delete(listener);
-    if (autonomyListeners.size === 0) {
-      autonomyOff?.();
-      autonomyOff = null;
-    }
-  };
-}
-
-export function getBotAutonomySettings(): BotAutonomySettingsView | null {
-  ensureAutonomyOwner();
-  return autonomyView;
-}
-
-/** null = 还没读到（或宿主不支持）；界面在读到之前不显示开关状态。 */
-export function useBotAutonomySettings(): BotAutonomySettingsView | null {
-  return useSyncExternalStore(subscribeBotAutonomySettings, getBotAutonomySettings, getBotAutonomySettings);
-}
-
-/** 把「自动跟进所有任务」交给某个伙伴（null = 没有伙伴负责）。写入的是用户 override。 */
-export async function setBotSchedulerBotId(schedulerBotId: string | null): Promise<void> {
-  const api = autonomyApi();
-  if (!api) throw new Error('Bot autonomy settings are not ready');
-  const owner = getDataOwnerGeneration();
-  autonomyRequest += 1;
-  applyAutonomyView(await api.setSettings({ schedulerBotId }), owner);
-}
-
-/** 恢复默认 = 删除 override，跟随当前版本默认（关闭）。 */
-export async function resetBotAutonomySettings(): Promise<void> {
-  const api = autonomyApi();
-  if (!api) throw new Error('Bot autonomy settings are not ready');
-  const owner = getDataOwnerGeneration();
-  autonomyRequest += 1;
-  applyAutonomyView(await api.resetSettings(), owner);
 }

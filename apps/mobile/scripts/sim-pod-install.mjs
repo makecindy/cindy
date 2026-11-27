@@ -7,8 +7,38 @@
 // 所以这里用**输出空转看门狗**——连续 idleTimeoutMs 无任何输出才 SIGKILL,
 // 把"无限等"变成"分钟级失败",同时不影响慢速但健康的下载。
 import { execFileSync, spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { delimiter, join } from 'node:path';
 
-export const COCOAPODS_SETUP_HINT = '请按 docs/dev-rules/environment-setup.md 的 iOS 工具链说明准备 CocoaPods，并在当前 Agent 环境验证 pod --version；已有 Homebrew 可用 brew install cocoapods，否则使用独立 Ruby 的 gem install cocoapods --user-install 并配置 PATH。';
+export const COCOAPODS_SETUP_HINT = '已查过当前 PATH 和用户 gem 目录（Gem.user_dir/bin）。pod=missing 才表示未安装，请按 docs/dev-rules/environment-setup.md 的 iOS 工具链说明准备 CocoaPods：已有 Homebrew 可用 brew install cocoapods，否则使用独立 Ruby 的 gem install cocoapods --user-install。pod=failed 或 timeout 表示已找到但运行失败，先修复现有安装。';
+
+const probeOptions = (env) => ({
+  env: { ...env, LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8' },
+  encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10_000,
+  killSignal: 'SIGKILL',
+});
+
+// `gem install --user-install` 把 pod 放进用户 gem 目录,但 Agent 子进程的 PATH 通常不含它,
+// 只看 PATH 会把已装好的 CocoaPods 误判成未安装。只读探测;追加到 PATH 末尾,不遮蔽已有命令。
+/** @param {{ env?: NodeJS.ProcessEnv, run?: typeof execFileSync, exists?: (path: string) => boolean }} options */
+export function withUserGemPodOnPath({ env = process.env, run = execFileSync, exists = existsSync } = {}) {
+  try {
+    run('pod', ['--version'], probeOptions(env));
+    return env;
+  } catch (error) {
+    if (error.code !== 'ENOENT') return env;
+  }
+  let userDir;
+  try {
+    userDir = run('ruby', ['-r', 'rubygems', '-e', 'puts Gem.user_dir'], probeOptions(env)).trim();
+  } catch {
+    return env;
+  }
+  if (!userDir) return env;
+  const binDir = join(userDir, 'bin');
+  if (!exists(join(binDir, 'pod'))) return env;
+  return { ...env, PATH: env.PATH ? `${env.PATH}${delimiter}${binDir}` : binDir };
+}
 
 // Only call after a cache miss: installing a compatible cached app does not need CocoaPods.
 // Version/SDK probes are read-only; never install tools or accept Xcode licenses here.
@@ -20,11 +50,7 @@ export function inspectIOSBuildTools({ env = process.env, run = execFileSync } =
     ['pod', ['--version']],
   ].map(([tool, args]) => {
     try {
-      run(tool, args, {
-        env: { ...env, LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8' },
-        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10_000,
-        killSignal: 'SIGKILL',
-      });
+      run(tool, args, probeOptions(env));
       return { tool, healthy: true, code: 'ready' };
     } catch (error) {
       // Do not return arbitrary child output or environment values in the receipt.

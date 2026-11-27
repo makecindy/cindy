@@ -1,0 +1,17 @@
+    Finished `sim` profile [optimized] target(s) in 0.05s
+     Running tests\migration.rs (target\sim\deps\migration-6aaa36ac414f7f9c.exe)
+
+running 10 tests
+test every_packet_names_its_receiver ... ok
+test idle_connections_only_keep_alive ... ok
+test validation_of_a_spoofed_address_is_abandoned ... ok
+test forged_and_replayed_packets_from_elsewhere_change_nothing ... ok
+test spoofed_copies_cannot_amplify_or_hijack ... ok
+test copies_of_every_packet_do_not_strand_a_moved_client ... ok
+test the_new_path_is_measured_from_scratch ... ok
+test port_only_changes_keep_the_estimates ... ok
+test switching_networks_keeps_the_connection ... ok
+test random_moves_deliver_intact_streams ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.41s
+

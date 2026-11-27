@@ -858,3 +858,65 @@ it('still releases host input when a local view-only switch abandons an in-fligh
   viewer.receive({ type: 'control', enabled: false });
   expect(messages.filter((m) => m.type === 'input').length).toBe(count);
 });
+
+function finger(type: string, id: number, x: number, y: number) {
+  const e = new MouseEvent(type, { clientX: x, clientY: y, bubbles: true, cancelable: true });
+  Object.defineProperty(e, 'pointerId', { value: id });
+  stage.dispatchEvent(e);
+}
+
+it('sends device touches with every contact, an edge for system swipes and no local zoom', () => {
+  viewer.receive({ type: 'deviceTouch', enabled: true, maxTouches: 2 });
+  messages = [];
+  finger('pointerdown', 7, 500, 650);
+  finger('pointerdown', 8, 250, 202);
+  finger('pointerdown', 9, 100, 100); // past the device's two contacts
+  finger('pointermove', 7, 500, 502);
+  finger('pointerup', 7, 500, 502);
+  finger('pointercancel', 8, 250, 202);
+  vi.advanceTimersByTime(40);
+  expect(events()).toEqual([
+    {
+      kind: 'touch',
+      touches: [{ id: 0, x: 0.5, y: expect.closeTo(0.997, 2), phase: 'began' }],
+      edge: 'bottom',
+    },
+    {
+      kind: 'touch',
+      touches: [
+        { id: 0, x: 0.5, y: expect.closeTo(0.997, 2), phase: 'stationary' },
+        { id: 1, x: 0.25, y: 0.25, phase: 'began' },
+      ],
+    },
+    {
+      kind: 'touch',
+      touches: [
+        { id: 0, x: 0.5, y: 0.75, phase: 'moved' },
+        { id: 1, x: 0.25, y: 0.25, phase: 'stationary' },
+      ],
+    },
+    {
+      kind: 'touch',
+      touches: [
+        { id: 0, x: 0.5, y: 0.75, phase: 'ended' },
+        { id: 1, x: 0.25, y: 0.25, phase: 'stationary' },
+      ],
+    },
+    { kind: 'touch', touches: [{ id: 1, x: 0.25, y: 0.25, phase: 'cancelled' }] },
+  ]);
+  expect(document.getElementById('image')!.style.width).toBe('1000px');
+});
+
+it('takes no contacts on a device without touch and returns to desktop input when turned off', () => {
+  viewer.receive({ type: 'deviceTouch', enabled: true, maxTouches: 0 });
+  messages = [];
+  finger('pointerdown', 1, 500, 352);
+  finger('pointerup', 1, 500, 352);
+  vi.advanceTimersByTime(40);
+  expect(events()).toEqual([]);
+  viewer.receive({ type: 'deviceTouch', enabled: false });
+  pointer('pointerdown');
+  pointer('pointerup');
+  vi.advanceTimersByTime(40);
+  expect(events()).toContainEqual({ kind: 'button', button: 0, down: true, x: 0.5, y: 0.5 });
+});

@@ -14,13 +14,14 @@
  * 兼容已发出的旧卡片, 见 cardBuilders 头注释)。
  */
 
+import { imText } from './imText';
 import fs from 'node:fs';
 
 import type { ChannelIM, IMCardActionEvent } from '@cindy/im';
 import {
   hasSessionPermissionUpdates,
-  type AgentKind,
   type Effort,
+  type EngineKind,
   type InteractionDecision,
   type PermissionMode,
 } from '@cindy/maker-core';
@@ -28,6 +29,7 @@ import {
 import { createLogger } from '../../logger';
 import { readImRemoteProviderRoute } from '../remoteProviderRoute';
 import { getMaker } from '../../maker-host';
+import { PluginEngineUnsupportedError } from '../../maker-host/engineKind';
 import {
   resolveLenientSessionRoute,
   resolveNewTaskDefaultModelRoute,
@@ -49,6 +51,12 @@ import {
 } from '../../maker-ipc/register';
 import { applyRuntimeSetModelChange } from '../../maker-ipc/runtimeSetModel';
 import { cancelPendingSessionRuntimeMutation } from '../../maker-ipc/sessionRuntimeControl';
+import { admitPluginEngineSwitchTarget } from '../../maker-ipc/pluginEngineSessionAdmission';
+import { listPluginEngineViews } from '../../maker-ipc/pluginEnginesIpc';
+import {
+  PLUGIN_ENGINES_INVOKE,
+  parseOfferedPluginEngines,
+} from '../../../shared/pluginEngines';
 import { getDesktopCcPrefs, type DesktopCcPrefs } from '../index';
 import {
   captureImAccountGeneration,
@@ -64,12 +72,13 @@ import {
   type ControlProject,
   type ControlSession,
 } from './controlProjects';
+import { projectToken } from './projectToken';
 import { exitControl } from './controlState';
 import { startThreadControlFlow } from './controlFlow';
 import { bindingStore, executeDetach, type BindingAttachResult } from '../binding';
 import { generateTakeoverSummary } from './sessionSummary';
 import { broadcastSessionCreated } from './sessionBroadcast';
-import { readImDefaultSettings } from '../defaultSettingsStore';
+import { feishuGroupPermissionMode } from '../feishu/groupOverrides';
 import { decodeFeishuLaneUserId, type IdentityKey } from '@cindy/im';
 import {
   readModelRouteSnapshot,
@@ -79,7 +88,7 @@ import {
   updateModelEffort,
   updatePermissionMode,
 } from './sessionRepo';
-import { COMPANION_MANAGED_COMMAND_FALLBACK } from './botCommands';
+import { companionManagedCommandFallback } from './botCommands';
 import { markImSessionManualRouteOverride } from './manualRouteOverride';
 import { changeSessionPermissionMode } from './permissionModeControl';
 import type { ImCardBuilders } from './cardBuilders';
@@ -351,8 +360,39 @@ export function createCardActionHandler(
       const liveBeforePick = turnRunner.getMakerSessionById(sessionId);
       const sessionAgentKind = liveBeforePick?.agentKind ??
         (await getMaker().getSessionMeta?.(sessionId))?.agentKind;
+      const isPluginEngineSession = sessionAgentKind === 'acp';
+      // 插件引擎任务(docs/plans/acp-plugin-bridge.md)：只在同一个引擎内换模型(卡片按钮带它自己的 providerId)，
+      // 与应用内选择器同一条路径；换到别的引擎要交接，只在应用里做。
+      if (isPluginEngineSession && (providerId ?? previousProviderId) !== previousProviderId) {
+        return new PluginEngineUnsupportedError('IM channels').message;
+      }
       const isPiSession = sessionAgentKind === 'pi';
-      if (previousRoute?.agentDeviceId && sessionAgentKind) {
+      let admittedPluginTarget: { model: string; effort: Effort | '' } | null = null;
+      if (isPluginEngineSession) {
+        const targetProviderId = previousRoute?.providerId ?? (providerId ?? null);
+        const agentDeviceId = previousRoute?.agentDeviceId ?? null;
+        try {
+          const engines = agentDeviceId
+            ? await (async () => {
+                const { remoteBackgroundInvoke } = await import('../../device-link');
+                const reply = await remoteBackgroundInvoke(agentDeviceId, PLUGIN_ENGINES_INVOKE.LIST, []);
+                if (!reply.ok) {
+                  throw new Error(reply.error?.message || '无法读取远程电脑上的插件引擎列表。请稍后重试。');
+                }
+                return parseOfferedPluginEngines(reply.result);
+              })()
+            : listPluginEngineViews();
+          const admitted = admitPluginEngineSwitchTarget(
+            { providerId: targetProviderId, model: modelId, effort },
+            engines,
+          );
+          admittedPluginTarget = { model: admitted.model, effort: admitted.effort };
+        } catch (error) {
+          return error instanceof Error ? error.message : String(error);
+        }
+      }
+      // A plugin engine on another computer is checked via its plugin catalog above, not built-in provider routes.
+      if (previousRoute?.agentDeviceId && sessionAgentKind && !isPluginEngineSession) {
         try {
           await readImRemoteProviderRoute({
             agentDeviceId: previousRoute.agentDeviceId,
@@ -379,7 +419,7 @@ export function createCardActionHandler(
         }
       };
       const rollbackRuntimeChange = async (reason: string): Promise<void> => {
-        setSessionProvider(sessionId, previousProviderId);
+        if (!isPluginEngineSession) setSessionProvider(sessionId, previousProviderId);
         const liveForRollback = turnRunner.getMakerSessionById(sessionId);
         if (!previousRoute) return;
         try {
@@ -391,7 +431,7 @@ export function createCardActionHandler(
               providerId: previousRoute.providerId,
             });
           }
-          if (liveForRollback && effort) {
+          if (liveForRollback && effort && previousRoute.effort) {
             await liveForRollback.setEffort(previousRoute.effort);
           }
         } catch (rollbackErr) {
@@ -404,7 +444,12 @@ export function createCardActionHandler(
       // 持久化与运行态切换必须和 send / agent switch 共用 session 锁，保证后选覆盖先选。
       if (!isPiSession) {
         try {
-          await updateModelEffort(sessionId, modelId, effort ?? 'high', providerId);
+          // Plugin engines keep their own level when the model lists none ('' = the engine decides).
+          const nextModel = admittedPluginTarget ? admittedPluginTarget.model : modelId;
+          const nextEffort = admittedPluginTarget
+            ? admittedPluginTarget.effort
+            : (effort ?? (isPluginEngineSession ? '' : 'high'));
+          await updateModelEffort(sessionId, nextModel, nextEffort, isPluginEngineSession ? undefined : providerId);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           log.error(`model:pick DB update failed: ${msg}`);
@@ -423,7 +468,17 @@ export function createCardActionHandler(
       try {
         const runtimeChange = isPiSession
           ? await applyPiImModelSelectionUnderLock(sessionId, modelId, providerId, previousRoute)
-          : await applyRuntimeSetModelChange({
+          : isPluginEngineSession
+            ? await (async () => {
+                const live = turnRunner.getMakerSessionById(sessionId);
+                const nextModel = admittedPluginTarget ? admittedPluginTarget.model : modelId;
+                const nextEffort = admittedPluginTarget?.effort || undefined;
+                if (live) {
+                  await live.setModel(nextModel, nextEffort ? { effort: nextEffort } : undefined);
+                }
+                return { status: 'applied' as const };
+              })()
+            : await applyRuntimeSetModelChange({
           maker: getMaker(),
           sessionId,
           model: modelId,
@@ -443,7 +498,9 @@ export function createCardActionHandler(
           try {
             // The Pi host transaction reads the old DB route to protect native
             // history and register a correct rollback snapshot while busy.
-            await updateModelEffort(sessionId, modelId, effort ?? 'high',
+            await updateModelEffort(sessionId,
+              'effectiveModelId' in runtimeChange ? runtimeChange.effectiveModelId ?? modelId : modelId,
+              effort ?? 'high',
               'effectiveProviderId' in runtimeChange ? runtimeChange.effectiveProviderId : providerId);
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
@@ -516,12 +573,34 @@ export function createCardActionHandler(
     }
   }
 
+  async function resolveTaskPermissionModes(sessionId: string, payloadAgentKind: unknown) {
+    // A plugin-engine task validates against its own engine's modes (docs/plans/acp-plugin-bridge.md);
+    // the task row, not the card payload, decides which engine that is.
+    const task = await getMaker().getSessionMeta?.(sessionId).catch(() => null);
+    const agentKind: EngineKind = task?.agentKind === 'acp' || payloadAgentKind === 'acp'
+      ? 'acp'
+      : payloadAgentKind === 'codex'
+        ? 'codex'
+        : payloadAgentKind === 'pi'
+          ? 'pi'
+          : adapter.config.agentKind;
+    const permissionModes = task?.agentKind === 'acp'
+      ? await turnRunner.getPermissionModes('acp', {
+          sessionId,
+          providerId: task.providerId,
+          agentDeviceId: task.agentDeviceId,
+        })
+      : agentKind === 'acp'
+        ? []
+        : getMaker().getCapabilities(agentKind).permissionModes;
+    return { agentKind, permissionModes };
+  }
+
   async function handlePermissionModePick(im: ChannelIM, event: IMCardActionEvent): Promise<void> {
     const sessionId = String(event.payload.sessionId ?? '');
     const mode = String(event.payload.mode ?? '') as PermissionMode;
     const modeLabel = String(event.payload.modeLabel ?? mode);
-    const agentKind: AgentKind =
-      event.payload.agentKind === 'codex' ? 'codex' : adapter.config.agentKind;
+    const { agentKind, permissionModes } = await resolveTaskPermissionModes(sessionId, event.payload.agentKind);
 
     if (event.buttonId === 'permmode:confirm-full-access' && mode !== 'bypassPermissions') {
       log.warn(`permmode:confirm-full-access received non-full mode=${mode} — ignoring`);
@@ -533,7 +612,7 @@ export function createCardActionHandler(
     const result = await changeSessionPermissionMode({
       sessionId,
       mode,
-      modes: getMaker().getCapabilities(agentKind).permissionModes,
+      modes: permissionModes,
       confirmedFullAccess: event.buttonId === 'permmode:confirm-full-access',
       readPreviousMode: () => readPermissionMode(sessionId),
       getLiveSession: () => turnRunner.getMakerSessionById(sessionId),
@@ -628,12 +707,11 @@ export function createCardActionHandler(
       log.warn('permissionMode:fix-auto missing sessionId/fixUi — ignoring');
       return;
     }
-    const agentKind: AgentKind =
-      event.payload.agentKind === 'codex' ? 'codex' : adapter.config.agentKind;
+    const { permissionModes } = await resolveTaskPermissionModes(sessionId, event.payload.agentKind);
     const result = await changeSessionPermissionMode({
       sessionId,
       mode: 'auto',
-      modes: getMaker().getCapabilities(agentKind).permissionModes,
+      modes: permissionModes,
       confirmedFullAccess: false,
       readPreviousMode: () => readPermissionMode(sessionId),
       getLiveSession: () => turnRunner.getMakerSessionById(sessionId),
@@ -853,7 +931,7 @@ export function createCardActionHandler(
       try {
         await im.sendMarkdownText(
           event.senderId,
-          summary ?? '_(回顾失败了, 在这个 thread 里直接发消息接着聊就行)_',
+          summary ?? imText('imBot.text.shared.takeover.summaryFailedThread'),
           { threadTs: established.scopeKey },
         );
       } catch (err) {
@@ -933,7 +1011,7 @@ export function createCardActionHandler(
     // 总结失败时 fallback — 用户至少看到"已接管 + 直接发消息接着聊"。
     const summaryBody = summary
       ? `${headerText}\n\n${summary}`
-      : `${headerText}\n\n_(回顾失败了, 直接发消息接着聊就行)_`;
+      : `${headerText}\n\n${imText('imBot.text.shared.takeover.summaryFailed')}`;
     try {
       await im.patchMarkdownCard(event.messageId, summaryBody);
     } catch (err) {
@@ -999,11 +1077,15 @@ export function createCardActionHandler(
     // (群 oc_ / p2p 是对方 open_id)保留作兜底判据: 上面的 fail-closed 已经把
     // 「群卡 + 非 lane senderId」拦在建绑定之前, 这条兜底如今够不着, 留着是为了
     // 万一那道门被放宽时权限档不会静默退回私聊那档(宁可按群算)。
+    // 这个群在设置页「群聊」里单独设置过权限档时以它为准(同 permissionModeFor)。
+    const feishuControlLane = channel === 'feishu' ? decodeFeishuLaneUserId(event.senderId) : null;
     const isFeishuGroupControl =
-      channel === 'feishu' &&
-      (decodeFeishuLaneUserId(event.senderId) !== null || event.chatId.startsWith('oc_'));
+      channel === 'feishu' && (feishuControlLane !== null || event.chatId.startsWith('oc_'));
     const controlNewPermissionMode = isFeishuGroupControl
-      ? readImDefaultSettings('feishu').groupPermissionMode
+      ? feishuGroupPermissionMode(
+          botContextId,
+          feishuControlLane?.chatId ?? (event.chatId.startsWith('oc_') ? event.chatId : null),
+        )
       : desktopPrefs.permissionMode;
     log.info(
       `control:new permission mode=${controlNewPermissionMode} group=${isFeishuGroupControl} ` +
@@ -1327,7 +1409,7 @@ export function createCardActionHandler(
       await patchProjectCard(
         im,
         event.messageId,
-        adapter.ui.slash.companionManagedCommand ?? COMPANION_MANAGED_COMMAND_FALLBACK,
+        adapter.ui.slash.companionManagedCommand ?? companionManagedCommandFallback(),
       );
       return;
     }
@@ -1336,9 +1418,21 @@ export function createCardActionHandler(
     let displayName: string;
     let workspaceKind: 'project' | 'dialogue';
     if (kind === 'project') {
-      workingDir = String(event.payload.workingDir ?? '');
-      displayName = String(event.payload.displayName ?? workingDir);
+      // 按钮只带不透明标记, 目录从当前项目清单找回; 清单里已经没有这个项目就按失败收口。
+      // 升级前发出的旧卡片按钮里还带着目录本身, 照旧认。
+      const token = String(event.payload.projectToken ?? '');
+      const picked = token
+        ? (await listProjectsForControl({ projectsOnly: true, all: true })).find(
+            (project) => projectToken(project.workingDir) === token,
+          )
+        : undefined;
+      workingDir = picked?.workingDir ?? (token ? '' : String(event.payload.workingDir ?? ''));
+      displayName = picked?.displayName ?? String(event.payload.displayName ?? workingDir);
       workspaceKind = 'project';
+      if (token && !picked) {
+        await patchProjectCard(im, event.messageId, projectUi.switchFailed(displayName));
+        return;
+      }
       if (!workingDir) {
         log.warn('project:pick missing workingDir — ignoring');
         return;
@@ -1542,7 +1636,7 @@ export function createCardActionHandler(
       case 'ask_user_question': {
         // 协议层多选是 JSON 数组; 收口卡展示再解成逗号分隔, 多问用分号。
         const joined = formatAskAnswersForDisplay(d.answers);
-        return joined ? ui.cards.ask.resolved(joined) : '✅ 已选择：继续';
+        return joined ? ui.cards.ask.resolved(joined) : imText('imBot.text.shared.card.askResolvedContinue');
       }
     }
   }
@@ -1559,6 +1653,15 @@ export function createCardActionHandler(
           log.info(
             `card action sender=...${event.senderId.slice(-8)} button=${event.buttonId} payload=${JSON.stringify(event.payload).slice(0, 200)}`,
           );
+
+          // 公共对话(服务器频道)不接入本机桌面任务 / 项目: 即使旧卡仍在，接管 / 项目按钮也不执行。
+          if (
+            (event.buttonId.startsWith('control:') || event.buttonId.startsWith('project:')) &&
+            adapter.blocksLocalTaskAccess?.(event.senderId)
+          ) {
+            log.warn(`ignored local-task card action in public conversation button=${event.buttonId}`);
+            return;
+          }
 
           // model:pick is NOT an InteractionRequest reply — it's a direct command
           // triggered by the /model slash command's picker card. Handle it

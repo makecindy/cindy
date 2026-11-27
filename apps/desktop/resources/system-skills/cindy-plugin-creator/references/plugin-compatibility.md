@@ -23,9 +23,12 @@
 - cindy 详单格式错(已知类目的动作不是合法标识、空数组或重复动作)
 - agent 详单格式错(background / errand / schedule 存在但不是 true；基础点击触发请写 `agent: {}`)
   · `hiddenTasks` 不是布尔值,或写了 `hiddenTasks: true` 却没有 `tasks: true`
+  · `modelPreferences` 不是布尔值(旧版 Cindy 把它当未知字段保留,不拒装也不授予)
 - node 详单格式错(entry 不是包内 CommonJS .js/.cjs、protocol 不在 json-rpc-stdio / mcp-stdio、
   resident 又写 idleTimeoutSeconds)；未知 command/args/shell/env 只保留，不传给进程启动器
-- id 用了 `cindy-` 前缀(平台保留,正式版用户通道拒装)。`filo-` / `xd-` 只是普通名称，不授予官方资格
+- harnesses 格式错(不是 1–4 项的数组、id 不合规或重复、name 缺失或超 64 字、description 超 200 字、
+  缺 protocol、entry 没有逐字命中 node.entries 或写成 node.entry 主入口、没声明 node)；
+  不认识的 protocol 不算错，保留但不生效。旧版 Cindy 把整个字段当未知字段保留，不拒装也不生效
 - ghost.json 声明了 namespace(包括 null)。namespace 由可信交付及 Host 安装事实决定，作者不能自报
 - 企业发布遵循当前服务端准入。S1 或 S2 尚未开启时仍保留旧认领和前缀命名流程，不能把收到 namespace 当作自由命名已开放
 - network 详单格式错(hosts 缺失/裸 TLD/IP/带端口/通配不在最左、secret 缺 inject、
@@ -33,7 +36,7 @@
   inject.hosts 不是 hosts 声明条目的子集、
   secret.source 不是 "user"/"login-email"/"oauth"/"gh-cli"/"oidc-token"、
   source:"login-email" 或 source:"oidc-token" 声明了 url 或 exchange、
-  source:"gh-cli" 不是官方 cindy-github、注入形态不是 api.github.com 的
+  source:"gh-cli" 注入形态不是 api.github.com 的
   Authorization Bearer、或声明了 exchange、
   声明了 user 凭证但没声明 settingsHtml、遗留 input 字段值不是 "ghost")
 - exchange 声明格式错(url 非 https/域名不在 hosts 白名单、bodyFormat 不是恰含一个

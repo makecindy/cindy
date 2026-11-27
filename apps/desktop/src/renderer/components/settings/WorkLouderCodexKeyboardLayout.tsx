@@ -1,7 +1,7 @@
 import { Button } from '@/components/ui/button';
+import { SearchInput } from '@/components/ui/search-input';
 import type { CSSProperties, ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { Search } from 'lucide-react';
 
 import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
@@ -119,8 +119,8 @@ export function WorkLouderCodexKeyboardLayout({
       // all black. Hardware is the same — only the factory keycap kit differs.
       className={
         isCreator
-          ? 'bg-[var(--wl-command-cap)] shadow-[var(--wl-command-shadow)]'
-          : 'bg-[var(--wl-agent-cap)] shadow-[var(--wl-agent-shadow)]'
+          ? 'bg-[var(--wl-command-cap)]'
+          : 'bg-[var(--wl-agent-cap)]'
       }
     >
       {/* Agent keys wear no artwork — just the lit dot that marks a task slot. */}
@@ -142,7 +142,7 @@ export function WorkLouderCodexKeyboardLayout({
         disabled={disabled}
         pressed={pressedParts?.has(slot) ?? false}
         onEdit={editHandlerFor(slot)}
-        className={cn('bg-[var(--wl-command-cap)] shadow-[var(--wl-command-shadow)]', className)}
+        className={cn('bg-[var(--wl-command-cap)]', className)}
       >
         <WorkLouderCodexKeycapGlyph
           keycapId={keycapId}
@@ -169,7 +169,7 @@ export function WorkLouderCodexKeyboardLayout({
     <div
       className={cn(
         'grid w-fit grid-cols-4 gap-2 rounded-[20px] p-3',
-        'border border-[var(--wl-edge)] bg-[var(--wl-board)] shadow-[var(--wl-board-shadow)]',
+        'border border-[var(--wl-edge)] bg-[var(--wl-board)]',
       )}
       data-testid="worklouder-codex-keyboard-layout"
       style={{
@@ -213,7 +213,7 @@ export function WorkLouderCodexKeyboardLayout({
         <StatusLights />
         <span
           aria-hidden="true"
-          className="size-8 rounded-full bg-[var(--wl-command-cap)] shadow-[var(--wl-command-shadow)]"
+          className="size-8 rounded-full bg-[var(--wl-command-cap)]"
         />
       </div>
     </div>
@@ -245,25 +245,17 @@ const WORKLOUDER_CODEX_BOARD_TOKENS = {
   // microphone key spans two columns without getting any taller.
   '--wl-key-size': '64px',
   '--wl-board': 'var(--surface-chip)',
-  // The rim reads as the edge of a case: a lit top edge, a shadow under it.
+  // The rim reads as the edge of a case.
   '--wl-edge': 'var(--border-default)',
-  '--wl-board-shadow':
-    'inset 0 1px 0 rgb(255 255 255 / 0.06), inset 0 0 0 1px rgb(0 0 0 / 0.12), 0 2px 8px rgb(0 0 0 / 0.22)',
   // Task keys: pale translucent caps, the lightest thing on the board.
   '--wl-agent-cap': 'rgb(214 214 214 / 0.92)',
-  '--wl-agent-shadow':
-    'inset 0 0 0 1px rgb(255 255 255 / 0.5), inset 0 1px 2px rgb(255 255 255 / 0.6), 0 1px 3px rgb(0 0 0 / 0.35)',
   '--wl-agent-dot': '#8177c8',
   // Command keys: dark caps with light artwork.
   '--wl-command-cap': '#2a2b30',
-  '--wl-command-shadow':
-    'inset 0 0 0 1px rgb(255 255 255 / 0.08), inset 0 1px 2px rgb(255 255 255 / 0.06), 0 1px 3px rgb(0 0 0 / 0.4)',
   '--wl-command-glyph': 'rgb(236 236 236)',
   // The stick: a well the same colour family as the task keys, so the dark
   // thumb cap reads against it instead of disappearing into a black square.
   '--wl-stick-housing': 'rgb(198 198 200 / 0.96)',
-  '--wl-stick-housing-shadow':
-    'inset 0 1px 3px rgb(0 0 0 / 0.22), inset 0 0 0 1px rgb(0 0 0 / 0.08), 0 1px 0 rgb(255 255 255 / 0.35)',
   '--wl-stick-cap': '#2a2b30',
 } as CSSProperties;
 
@@ -275,22 +267,14 @@ const WORKLOUDER_CREATOR_BOARD_TOKENS = {
   '--wl-key-size': '64px',
   '--wl-board': 'var(--surface-chip)',
   '--wl-edge': 'var(--border-default)',
-  '--wl-board-shadow':
-    'inset 0 1px 0 rgb(255 255 255 / 0.06), inset 0 0 0 1px rgb(0 0 0 / 0.12), 0 2px 8px rgb(0 0 0 / 0.22)',
   // Task keys: the same black PBT as the command keys, with a brighter slot
   // dot so the six agent keys stay readable against all-dark caps.
   '--wl-agent-cap': '#2a2b30',
-  '--wl-agent-shadow':
-    'inset 0 0 0 1px rgb(255 255 255 / 0.08), inset 0 1px 2px rgb(255 255 255 / 0.06), 0 1px 3px rgb(0 0 0 / 0.4)',
   '--wl-agent-dot': '#a99df2',
   // Command keys: identical black caps.
   '--wl-command-cap': '#2a2b30',
-  '--wl-command-shadow':
-    'inset 0 0 0 1px rgb(255 255 255 / 0.08), inset 0 1px 2px rgb(255 255 255 / 0.06), 0 1px 3px rgb(0 0 0 / 0.4)',
   '--wl-command-glyph': 'rgb(236 236 236)',
   '--wl-stick-housing': 'rgb(198 198 200 / 0.96)',
-  '--wl-stick-housing-shadow':
-    'inset 0 1px 3px rgb(0 0 0 / 0.22), inset 0 0 0 1px rgb(0 0 0 / 0.08), 0 1px 0 rgb(255 255 255 / 0.35)',
   '--wl-stick-cap': '#2a2b30',
 } as CSSProperties;
 
@@ -385,7 +369,7 @@ function AnalogStick({
       title={label}
       data-stick-angle={distance > 0 ? String(angle) : undefined}
       data-stick-distance={String(distance)}
-      className="relative flex size-full items-center justify-center rounded-xl bg-[var(--wl-stick-housing)] shadow-[var(--wl-stick-housing-shadow)]"
+      className="relative flex size-full items-center justify-center rounded-xl bg-[var(--wl-stick-housing)]"
     >
       <span
         data-testid="worklouder-codex-stick-cap"
@@ -405,7 +389,7 @@ function Encoder({ label, turns }: { label: string; turns: number }) {
       aria-hidden="true"
       title={label}
       data-encoder-turns={String(turns)}
-      className="block size-full overflow-hidden rounded-full bg-[var(--wl-command-cap)] shadow-[var(--wl-command-shadow)]"
+      className="block size-full overflow-hidden rounded-full bg-[var(--wl-command-cap)]"
       style={{ transform: `rotate(${-turns * WORKLOUDER_CODEX_ENCODER_DETENT_DEG}deg)` }}
     >
       <span className="relative block size-full bg-gradient-to-br from-white/[0.14] to-transparent">
@@ -501,8 +485,8 @@ export function WorkLouderCodexKeycapPicker({
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
-        <Dialog.Content onPointerDownOutside={(event) => event.preventDefault()} className="modal-panel fixed left-1/2 top-1/2 z-[10000] flex max-h-[min(760px,calc(100vh-48px))] w-[min(720px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden text-[var(--text-primary)] focus:outline-none">
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
+        <Dialog.Content onPointerDownOutside={(event) => event.preventDefault()} className="modal-panel fixed left-1/2 top-1/2 z-modal flex max-h-[min(760px,calc(100vh-48px))] w-[min(720px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden text-[var(--text-primary)] focus:outline-none">
           <div className="flex items-start justify-between gap-4 px-6 pb-4 pt-6">
             <div className="min-w-0">
               <Dialog.Title className="text-18 font-medium leading-[1.3]">
@@ -515,16 +499,13 @@ export function WorkLouderCodexKeycapPicker({
           </div>
           {header ? <div className="px-6 pb-4">{header}</div> : null}
           <div className="px-6 pb-4">
-            <label className="flex h-10 items-center gap-2 rounded-lg border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-3 focus-within:ring-2 focus-within:ring-[var(--focus-ring-soft)]">
-              <Search size={16} className="text-[var(--text-tertiary)]" aria-hidden="true" />
-              <input
-                value={query}
-                onChange={(event) => onQueryChange(event.currentTarget.value)}
-                placeholder={copy.searchPlaceholder}
-                autoFocus
-                className="min-w-0 flex-1 bg-transparent text-13 text-[var(--settings-input-text)] outline-none placeholder:text-[var(--text-placeholder)]"
-              />
-            </label>
+            <SearchInput
+              value={query}
+              onChange={onQueryChange}
+              placeholder={copy.searchPlaceholder}
+              aria-label={copy.searchPlaceholder}
+              autoFocus
+            />
           </div>
           <div className="grid min-h-0 flex-1 grid-cols-6 gap-3 overflow-y-auto px-6 pb-6 max-md:grid-cols-4">
             {keycaps.map((keycapId) => {
@@ -610,8 +591,8 @@ export function WorkLouderCodexPartEditor({
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
-        <Dialog.Content onPointerDownOutside={(event) => event.preventDefault()} className="modal-panel fixed left-1/2 top-1/2 z-[10000] flex max-h-[min(700px,calc(100vh-48px))] w-[min(520px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden text-[var(--text-primary)] focus:outline-none">
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
+        <Dialog.Content onPointerDownOutside={(event) => event.preventDefault()} className="modal-panel fixed left-1/2 top-1/2 z-modal flex max-h-[min(700px,calc(100vh-48px))] w-[min(520px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden text-[var(--text-primary)] focus:outline-none">
           <div className="px-6 pb-4 pt-6">
             <Dialog.Title className="text-18 font-medium leading-[1.3]">{title}</Dialog.Title>
             <Dialog.Description className="mt-1 text-13 leading-[1.4] text-[var(--text-secondary)]">

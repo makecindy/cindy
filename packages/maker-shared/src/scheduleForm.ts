@@ -64,6 +64,8 @@ export interface MobileScheduleDraft {
   providerId: string;
   effort: string;
   fastMode: boolean | 'ultrafast';
+  /** Optional smart route id; null explicitly clears an existing schedule route. */
+  modelGroup?: string | null;
   workspaceKind: RemoteScheduleWorkspaceKind;
   workingDir: string;
   useWorktree: boolean;
@@ -134,6 +136,32 @@ export function localizeTemplateParamValidation(
 const DEFAULT_CRON = '0 9 * * *';
 const DEFAULT_TIMEZONE = 'Asia/Shanghai';
 
+function deadlineTimestamp(value: number | string | null | undefined): number | undefined {
+  if (value == null) return undefined;
+  const ms = typeof value === 'number' ? value : /^\d+$/.test(value) ? Number(value) : Date.parse(value);
+  return Number.isFinite(ms) ? ms : undefined;
+}
+
+/** The label must name the editing client's timezone, not the execution host's. */
+export function formatScheduleDeadline(value: number | string | null | undefined): string {
+  const ms = deadlineTimestamp(value);
+  if (ms === undefined) return '';
+  const d = new Date(ms);
+  if (!Number.isFinite(d.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** null explicitly clears; NaN is invalid. Preserve original sub-minute precision. */
+export function parseScheduleDeadline(value: string, original?: number): number | null {
+  if (!value.trim()) return null;
+  const local = value.trim().replace(' ', 'T');
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(local)) return NaN;
+  const ms = new Date(local).getTime();
+  if (!Number.isFinite(ms) || formatScheduleDeadline(ms) !== local) return NaN;
+  return original !== undefined && formatScheduleDeadline(original) === local ? original : ms;
+}
+
 export function createMobileScheduleDraft(
   schedule?: RemoteSchedule | null,
   opts: { fallbackWorkingDir?: string | null } = {},
@@ -184,6 +212,7 @@ export function createMobileScheduleDraft(
     providerId: schedule.providerId ?? '',
     effort: schedule.effort ?? '',
     fastMode: (schedule.fastMode ?? false),
+    ...(schedule.modelGroup ? { modelGroup: schedule.modelGroup } : {}),
     workspaceKind,
     workingDir: schedule.workingDir ?? '',
     useWorktree: workspaceKind === 'project' && !!schedule.useWorktree,
@@ -463,12 +492,12 @@ export function buildMobileScheduleInput(draft: MobileScheduleDraft): RemoteSche
   if (draft.modelAgentDeviceId !== undefined) {
     input.modelAgentDeviceId = draft.model.trim() ? draft.modelAgentDeviceId : '';
   }
-  if (draft.modelAgentKind && draft.model.trim()) {
+  if ((draft.modelAgentKind || draft.agentKind === 'acp') && draft.model.trim()) {
     input.modelAgentKind = draft.agentKind;
     input.model = draft.model.trim();
     input.providerId = draft.providerId.trim();
     input.effort = draft.effort.trim();
-    input.fastMode = draft.fastMode;
+    input.fastMode = draft.agentKind === 'acp' ? false : draft.fastMode;
   }
 
   if (targetSessionId) {
@@ -492,6 +521,7 @@ export function buildMobileScheduleInput(draft: MobileScheduleDraft): RemoteSche
   // Fast 对 Codex 与 Pi 都生效(runner 对 claude-code 忽略此字段,并按模型 supportsFastMode
   // 收口);只序列化 codex 会让 Pi 任务里开的 Fast 被静默丢弃。
   if (draft.agentKind === 'codex' || draft.agentKind === 'pi') input.fastMode = draft.fastMode;
+  if (draft.modelGroup !== undefined) input.modelGroup = draft.modelGroup;
   return input;
 }
 

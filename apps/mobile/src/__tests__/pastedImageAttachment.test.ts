@@ -104,8 +104,12 @@ describe('粘贴接线源码断言(防重构掉线)', () => {
   it('两个 composer 页面都接了占位回调,托盘计入占位卡', () => {
     for (const page of ['app/sessions/new.tsx', 'app/sessions/[sessionId].tsx']) {
       const source = read(page);
-      expect(source, page).toContain('onPasteImagesLoading={beginPastePlaceholders}');
-      expect(source, page).toContain('onPasteImagesLoadFailed={failPastePlaceholders}');
+      // 已有任务页的实际回调、占位与发送锁已迁到 composerRichInputLifecycle
+      // 的挂载编辑器行为测试；不能再要求它无条件直通占位回调。
+      if (page === 'app/sessions/new.tsx') {
+        expect(source, page).toContain('onPasteImagesLoading={beginPastePlaceholders}');
+        expect(source, page).toContain('onPasteImagesLoadFailed={failPastePlaceholders}');
+      }
       expect(source, page).toContain('pastePlaceholderCount={pastePlaceholderCount}');
     }
   });
@@ -182,7 +186,9 @@ describe('粘贴接线源码断言(防重构掉线)', () => {
   it('context-sheet 选图限额走同一占坑真源(直接入队路径不绕过粘贴占位)', () => {
     for (const page of ['app/sessions/new.tsx', 'app/sessions/[sessionId].tsx']) {
       const source = read(page);
-      expect(source, page).toContain('attachments.length + getPendingUploadCount() >= MOBILE_MAX_ATTACHMENTS');
+      // 入队(单张与选择圈多选共用)与多选待选两处限额,都读含粘贴占位的 getPendingUploadCount。
+      expect(source, page).toContain('attachments.length + getPendingUploadCount() + fresh.length > MOBILE_MAX_ATTACHMENTS');
+      expect(source, page).toContain('MOBILE_MAX_ATTACHMENTS - attachments.length - getPendingUploadCount()');
     }
   });
 });

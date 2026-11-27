@@ -15,10 +15,14 @@
  *     定稿:完全淡出会让人忘记它的存在,减淡保留"地图在这"的心理暗示,
  *     阅读态噪音仍然很低)。
  *
- * 入口去重:导航条**完整覆盖导航**(出场且未截断)时,父级抑制右上角
- * "跳到上一条提问"chip —— 同一个导航任务只保留一套入口(经
- * onNavCoverageChange 上报)。刻度被截断的超长会话里 chip 回归,截断区
- * 仍有导航可用(PR #830 review)。
+ * 窗口化:刻度不再压缩、不再无限截断。可用高度只决定"一窗放几根",
+ * 窗口跟随当前阅读位置滑动(滞回区 8 根,命中区内不搬动,避免点击/滚动
+ * 时整条带抖动)。拖到窗口上下缘时逐格推进,所以窗外目标仍能扫到。
+ *
+ * 入口去重:导航条出场时,父级抑制右上角"跳到上一条提问"chip —— 同一个
+ * 导航任务只保留一套入口(经 onNavCoverageChange 上报)。窗口化后当前项
+ * 的两侧永远各留至少一根刻度(滞回边距保证),chip 与相邻刻度重复,所以
+ * 出场即算覆盖。
  *
  * 几何职责分工:
  *   - 本组件只做 DOM 测量(scroll + ResizeObserver,rAF 节流,与
@@ -42,6 +46,11 @@ import {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { formatAbsolute } from '@/hooks/useRelativeTime';
+import { SessionNavigationModeProvider } from '@/features/cc-agent/embeddedSessionNavigation';
+import { hookTaskCardHeading, ImIcon } from './HookTaskCard';
+import { OrcaMessageHeading } from './OrcaMessageHeading';
+import { MessageSourceLabels, QueueSourceDeviceTag } from './MessageSourceLabels';
 import { cn } from '@/lib/utils';
 import { Tooltip } from '@/components/ui/tooltip';
 
@@ -54,9 +63,11 @@ import {
   hasNavRailRoom,
   pickActiveNavId,
   pickVisibleNavRange,
-  planNavRailTicks,
+  planNavRailWindow,
   planNavRailTickWidth,
+  pickScrubEdgeDirection,
   planNavRailTickProgress,
+  stepNavRailWindow,
   type NavRailEntry,
 } from './messageNavRailModel';
 import { forwardNavRailWheel } from './messageNavRailWheel';
@@ -75,6 +86,11 @@ const WAKE_GUTTER_PX = 48;
 // 刻度带的上下保留:顶部对齐内容区 pt-7;底部在输入 overlay 之上再让 16px。
 const RAIL_TOP_PX = 28;
 const RAIL_BOTTOM_EXTRA_PX = 16;
+// 拖动指针进入窗口上下缘这么宽的区域就自动推进。留一档余量,避免贴着
+// 末根刻度慢拖时被当即顶走(取值在 messageNavRailModel 的 NAV_RAIL_SCRUB_EDGE_PX)。
+// 边缘推进的步频。onJump 会触发布局与滚动,按帧率 60 次/秒打过去会与
+// 平滑滚动互相抢,取 30ms 一档。
+const SCRUB_ADVANCE_INTERVAL_MS = 30;
 
 export interface MessageNavRailProps {
   /** 已加载的全部真实提问(deriveNavRailEntries 产物,时间正序)。 */
@@ -90,14 +106,49 @@ export interface MessageNavRailProps {
   /** 点击刻度 → 跳到该提问。目标可能在渲染窗口外,由父级扩窗后滚动。 */
   onJump: (clientId: string) => void;
   /**
-   * "导航条完整覆盖导航"变化上报(出场资格 && 刻度未截断)。父级用它做
-   * 入口去重:覆盖时抑制"跳到上一条提问"chip;导航条缺席或截断了更早
-   * 刻度时 chip 回归。与淡入淡出无关 —— chip 只在滚动时出现,而滚动一定
-   * 会唤醒导航条,按覆盖态抑制即可,信号稳定不闪烁。
+   * "导航条覆盖导航"变化上报(出场资格)。父级用它做入口去重:覆盖时抑制
+   * "跳到上一条提问"chip,导航条缺席时 chip 回归。与淡入淡出无关 —— chip
+   * 只在滚动时出现,而滚动一定会唤醒导航条,按覆盖态抑制即可,信号稳定不闪烁。
    */
   onNavCoverageChange?: (covers: boolean) => void;
   /** 切会话重置几何与 pending 态(与 usePrevUserMessageInView 同款)。 */
   resetKey?: string;
+  /** 预览来源标签所在的任务，用于解析远程任务与伙伴。 */
+  sessionId?: string;
+}
+
+function PreviewHeading({ entry, sessionId }: { entry: NavRailEntry; sessionId?: string }) {
+  const { t } = useTranslation();
+  const { sourceDevice, sourcePlugin, automationOrigin, sharedAuthorName, hookSource, createdAt } = entry.sender;
+  const time = formatAbsolute(createdAt);
+  let author;
+  if (entry.isOwn) {
+    author = <>{t('chat.messageNavRail.you')}{sourceDevice && <QueueSourceDeviceTag device={sourceDevice} separator />}</>;
+  } else {
+    // 与 UserMessage 气泡上方的署名同构：共享成员名，来源标签（发送方与设备是两个独立标签），
+    // Orca / IM 再加卡片标题。照搬各分支传给 MessageSourceLabels 的字段，不在这里另挑一部分。
+    const labels = (origin?: typeof automationOrigin) => (
+      <MessageSourceLabels automationOrigin={origin} sourceDevice={sourceDevice} sourcePlugin={sourcePlugin}
+        hostSessionId={sessionId} align="start" />
+    );
+    author = (
+      <>
+        {sharedAuthorName && <span className="truncate">{sharedAuthorName}</span>}
+        {entry.orcaSource ? (
+          <>{labels(automationOrigin)}<OrcaMessageHeading source={entry.orcaSource} origin={automationOrigin} /></>
+        ) : hookSource ? (
+          // IM 卡片头已写明渠道，聊天在这一支也不传 automationOrigin。
+          <>{labels()}<ImIcon im={hookSource.im} /><span className="truncate">{hookTaskCardHeading(hookSource.im, hookSource.origin, t).label}</span></>
+        ) : labels(automationOrigin)}
+      </>
+    );
+  }
+  return (
+    <div className="flex min-w-0 items-center gap-1.5 text-12 text-[var(--text-secondary)]">
+      <SessionNavigationModeProvider mode="sidebar-embedded">{author}</SessionNavigationModeProvider>
+      {time && <time dateTime={createdAt} title={time} className="shrink-0 text-[var(--text-tertiary)]">· {time.slice(11, 16)}</time>}
+    </div>
+  );
 }
 
 export function MessageNavRail({
@@ -109,6 +160,7 @@ export function MessageNavRail({
   onJump,
   onNavCoverageChange,
   resetKey,
+  sessionId,
 }: MessageNavRailProps) {
   const { t } = useTranslation();
 
@@ -123,6 +175,8 @@ export function MessageNavRail({
   const [availHeight, setAvailHeight] = useState(0);
   // 淡入淡出:挂载即亮(给切进会话的用户一个初始定位),此后随活动唤醒。
   const [awake, setAwake] = useState(true);
+  // 拖动扫描时的冻结窗口起点;null = 正常跟随阅读位置。
+  const [scrubBandStart, setScrubBandStart] = useState<number | null>(null);
 
   const rafRef = useRef<number | null>(null);
   const pendingTimerRef = useRef<number | null>(null);
@@ -137,6 +191,18 @@ export function MessageNavRail({
     button: HTMLButtonElement;
   } | null>(null);
   const suppressClickRef = useRef(false);
+  // 滞回锚点:上一帧的窗口起点。拖动扫描期间用 ref 作真值(mirror 到
+  // state 只为重渲),避免 rAF 里读到上一帧的闭包值。
+  const anchorStartRef = useRef<number | null>(null);
+  const scrubBandRef = useRef<number | null>(null);
+  const scrubAdvanceRef = useRef<{ dir: number; raf: number | null; lastStepAt: number }>({
+    dir: 0,
+    raf: null,
+    lastStepAt: 0,
+  });
+  // 拖动结束监听挂在 window 上:推进会把按下时捕获指针的那根刻度移出窗
+  // 口一起卸掉,按钮自身的 pointerup 就再也不会到。
+  const detachScrubEndRef = useRef<(() => void) | null>(null);
   // 容器左缘缓存,给高频 mousemove 的左缘唤醒判定用,免得每次事件都
   // getBoundingClientRect 强制布局读;measure(scroll/resize 都会触发)时刷新。
   const containerLeftRef = useRef(0);
@@ -158,6 +224,15 @@ export function MessageNavRail({
   const bottomOffsetRef = useRef(bottomOffset);
   bottomOffsetRef.current = bottomOffset;
 
+  const stopScrubAdvance = useCallback(() => {
+    const state = scrubAdvanceRef.current;
+    state.dir = 0;
+    if (state.raf !== null) {
+      cancelAnimationFrame(state.raf);
+      state.raf = null;
+    }
+  }, []);
+
   // 切会话全部归零,防旧目标 / 旧乐观态残留;重新亮一次做初始定位。
   useEffect(() => {
     setActiveId(null);
@@ -166,6 +241,9 @@ export function MessageNavRail({
     setHoveredId(null);
     setScrubId(null);
     scrubRef.current = null;
+    scrubBandRef.current = null;
+    setScrubBandStart(null);
+    anchorStartRef.current = null;
     setAwake(true);
   }, [resetKey]);
 
@@ -315,10 +393,22 @@ export function MessageNavRail({
     entries.length >= NAV_RAIL_MIN_ENTRIES &&
     hasRoom &&
     availHeight >= NAV_RAIL_MIN_AVAIL_HEIGHT_PX;
-  const plan = planNavRailTicks(entries.length, availHeight);
-  // 覆盖态上报(入口去重用);卸载时收回。截断时不算覆盖 —— 被截掉的
-  // 早期区域没有刻度,chip 必须回归兜底。
-  const railCoversNav = eligible && plan.hiddenCount === 0;
+  const displayActiveId = pendingId ?? activeId;
+  const foundIndex =
+    displayActiveId === null ? null : entries.findIndex((entry) => entry.id === displayActiveId);
+  const activeIndex = foundIndex !== null && foundIndex >= 0 ? foundIndex : null;
+  const plan = planNavRailWindow({
+    entryCount: entries.length,
+    availableHeightPx: availHeight,
+    activeIndex,
+    anchorStart: anchorStartRef.current,
+    frozenStart: scrubBandStart,
+  });
+  // 窗口起点回存,下一帧做滞回判定。拖动期间不更新 —— 窗口由边缘推进接管。
+  if (scrubBandStart === null) anchorStartRef.current = plan.startIndex;
+  // 覆盖态上报(入口去重用);卸载时收回。窗口化后当前项两侧至少各留一根
+  // 刻度(滞回边距保证),chip 与相邻刻度重复,所以出场即算覆盖。
+  const railCoversNav = eligible;
   useEffect(() => {
     onNavCoverageChange?.(railCoversNav);
   }, [railCoversNav, onNavCoverageChange]);
@@ -336,8 +426,10 @@ export function MessageNavRail({
       if (idleTimerRef.current !== null) {
         window.clearTimeout(idleTimerRef.current);
       }
+      detachScrubEndRef.current?.();
+      stopScrubAdvance();
     };
-  }, []);
+  }, [stopScrubAdvance]);
 
   const handleTickClick = useCallback(
     (clientId: string) => {
@@ -358,19 +450,26 @@ export function MessageNavRail({
     [onJump],
   );
 
-  const findScrubIndex = useCallback((clientY: number): number | null => {
-    const rail = railRef.current;
-    if (!rail) return null;
-    let nearest: { index: number; distance: number } | null = null;
-    for (const button of rail.querySelectorAll<HTMLButtonElement>('[data-message-nav-index]')) {
-      const index = Number(button.dataset.messageNavIndex);
-      if (!Number.isInteger(index)) continue;
-      const rect = button.getBoundingClientRect();
-      const distance = Math.abs(clientY - (rect.top + rect.height / 2));
-      if (nearest === null || distance < nearest.distance) nearest = { index, distance };
-    }
-    return nearest?.index ?? null;
-  }, []);
+  const findScrubHit = useCallback(
+    (clientY: number): { index: number; top: number; bottom: number } | null => {
+      const rail = railRef.current;
+      if (!rail) return null;
+      let nearest: { index: number; distance: number } | null = null;
+      let top = Number.POSITIVE_INFINITY;
+      let bottom = Number.NEGATIVE_INFINITY;
+      for (const button of rail.querySelectorAll<HTMLButtonElement>('[data-message-nav-index]')) {
+        const index = Number(button.dataset.messageNavIndex);
+        if (!Number.isInteger(index)) continue;
+        const rect = button.getBoundingClientRect();
+        top = Math.min(top, rect.top);
+        bottom = Math.max(bottom, rect.bottom);
+        const distance = Math.abs(clientY - (rect.top + rect.height / 2));
+        if (nearest === null || distance < nearest.distance) nearest = { index, distance };
+      }
+      return nearest === null ? null : { index: nearest.index, top, bottom };
+    },
+    [],
+  );
 
   const jumpToScrubIndex = useCallback(
     (index: number) => {
@@ -391,6 +490,95 @@ export function MessageNavRail({
     [entries, onJump],
   );
 
+  const setScrubBand = useCallback((value: number | null) => {
+    scrubBandRef.current = value;
+    setScrubBandStart(value);
+  }, []);
+
+  // 拖到窗口上下缘后逐格推进:冻结窗口整体平移一格,目标落在新窗口的边界
+  // 刻上 —— 指针停着不动也能一路扫到会话首尾(原先靠全量刻度 + 压缩,窗化
+  // 后必须显式推进)。
+  const stepScrubRef = useRef<(dir: number) => boolean>(() => false);
+  stepScrubRef.current = (dir) => {
+    const current = scrubBandRef.current;
+    if (current === null) return false;
+    // 平移与跳转目标都由模型算:占位格会在 0→1 时多出一个,刻度数随之变化。
+    const step = stepNavRailWindow({
+      start: current,
+      dir,
+      entryCount: entries.length,
+      capacity: plan.capacity,
+    });
+    if (step === null) return false;
+    setScrubBand(step.start);
+    jumpToScrubIndex(step.targetIndex);
+    return true;
+  };
+
+  const driveScrubAdvance = useCallback(
+    (dir: number) => {
+      const state = scrubAdvanceRef.current;
+      state.dir = dir;
+      if (dir === 0 || scrubBandRef.current === null) {
+        stopScrubAdvance();
+        return;
+      }
+      if (state.raf !== null) return;
+      const tick = (now: number) => {
+        const live = scrubAdvanceRef.current;
+        live.raf = null;
+        if (live.dir === 0 || scrubBandRef.current === null) return;
+        if (now - live.lastStepAt >= SCRUB_ADVANCE_INTERVAL_MS) {
+          live.lastStepAt = now;
+          if (!stepScrubRef.current(live.dir)) {
+            live.dir = 0;
+            return;
+          }
+        }
+        live.raf = requestAnimationFrame(tick);
+      };
+      state.raf = requestAnimationFrame(tick);
+    },
+    [stopScrubAdvance],
+  );
+
+  const scrubEdgeDir = useCallback(
+    (clientX: number, clientY: number, top: number, bottom: number): -1 | 0 | 1 => {
+      const rect = railRef.current?.getBoundingClientRect();
+      return pickScrubEdgeDirection({
+        clientX,
+        clientY,
+        railLeft: rect?.left ?? clientX,
+        railRight: rect?.right ?? clientX,
+        bandTop: top,
+        bandBottom: bottom,
+        startIndex: scrubBandRef.current ?? plan.startIndex,
+        slotCount: plan.slotCount,
+        entryCount: entries.length,
+      });
+    },
+    [entries.length, plan.slotCount, plan.startIndex],
+  );
+
+  const endScrub = useCallback(
+    (suppressFollowUpClick: boolean) => {
+      const scrub = scrubRef.current;
+      if (!scrub) return;
+      detachScrubEndRef.current?.();
+      if (scrub.button.hasPointerCapture?.(scrub.pointerId)) {
+        scrub.button.releasePointerCapture?.(scrub.pointerId);
+      }
+      suppressClickRef.current = suppressFollowUpClick && scrub.moved;
+      scrubRef.current = null;
+      setScrubId(null);
+      stopScrubAdvance();
+      setScrubBand(null);
+    },
+    [setScrubBand, stopScrubAdvance],
+  );
+  const endScrubRef = useRef(endScrub);
+  endScrubRef.current = endScrub;
+
   const handleTickPointerDown = useCallback(
     (index: number, event: ReactPointerEvent<HTMLButtonElement>) => {
       if (event.button !== 0) return;
@@ -405,36 +593,67 @@ export function MessageNavRail({
         button,
       };
       setScrubId(entries[index]?.id ?? null);
+      stopScrubAdvance();
+      setScrubBand(plan.startIndex);
       wake();
       button.setPointerCapture?.(event.pointerId);
+      // 推进会把正在拖的那根刻度移出窗口、连带卸掉 pointer capture,
+      // 指针离开后它再收不到 pointerup。结束事件必须挂在不随窗口重排的
+      // window 上,否则拖动会一直推进到会话尾部。
+      const pointerId = event.pointerId;
+      const onEnd = (endEvent: PointerEvent) => {
+        if (endEvent.pointerId !== pointerId) return;
+        detachScrubEndRef.current?.();
+        endScrubRef.current(false);
+      };
+      const onCancel = (cancelEvent: PointerEvent) => {
+        if (cancelEvent.pointerId !== pointerId) return;
+        detachScrubEndRef.current?.();
+        endScrubRef.current(true);
+      };
+      const onMove = (moveEvent: PointerEvent) => {
+        if (moveEvent.pointerId !== pointerId) return;
+        scrubMoveRef.current(moveEvent.clientX, moveEvent.clientY, pointerId);
+      };
+      const detach = () => {
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onEnd);
+        window.removeEventListener('pointercancel', onCancel);
+      };
+      detachScrubEndRef.current?.();
+      detachScrubEndRef.current = detach;
+      // 指针事件的唯一来源挂 window:抓着的刻度被推进移出窗口后,它自身
+      // 收不到 pointermove,方向就永远停在推进态。
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onEnd);
+      window.addEventListener('pointercancel', onCancel);
     },
-    [entries, wake],
+    [entries, plan.startIndex, setScrubBand, stopScrubAdvance, wake],
   );
 
-  const handleTickPointerMove = useCallback(
-    (event: ReactPointerEvent<HTMLButtonElement>) => {
+  const handleScrubPointerMove = useCallback(
+    (clientX: number, clientY: number, pointerId: number) => {
       const scrub = scrubRef.current;
-      if (!scrub || scrub.pointerId !== event.pointerId) return;
-      if (!scrub.moved && Math.abs(event.clientY - scrub.startY) < 3) return;
+      if (!scrub || scrub.pointerId !== pointerId) return;
+      if (!scrub.moved && Math.abs(clientY - scrub.startY) < 3) return;
       scrub.moved = true;
-      const index = findScrubIndex(event.clientY);
-      if (index !== null) jumpToScrubIndex(index);
+      const hit = findScrubHit(clientY);
+      if (!hit) return;
+      jumpToScrubIndex(hit.index);
+      driveScrubAdvance(scrubEdgeDir(clientX, clientY, hit.top, hit.bottom));
     },
-    [findScrubIndex, jumpToScrubIndex],
+    [driveScrubAdvance, findScrubHit, jumpToScrubIndex, scrubEdgeDir],
   );
+  const scrubMoveRef = useRef(handleScrubPointerMove);
+  scrubMoveRef.current = handleScrubPointerMove;
 
   const finishScrub = useCallback(
     (event: ReactPointerEvent<HTMLButtonElement>, suppressFollowUpClick: boolean) => {
       const scrub = scrubRef.current;
       if (!scrub || scrub.pointerId !== event.pointerId) return;
-      if (scrub.button.hasPointerCapture?.(event.pointerId)) {
-        scrub.button.releasePointerCapture?.(event.pointerId);
-      }
-      suppressClickRef.current = suppressFollowUpClick && scrub.moved;
-      scrubRef.current = null;
-      setScrubId(null);
+      endScrub(suppressFollowUpClick);
     },
-    [],
+    [endScrub],
   );
 
   const handleTickMouseEnter = useCallback(() => {
@@ -468,8 +687,8 @@ export function MessageNavRail({
 
   if (!eligible) return null;
 
-  const shown = entries.slice(plan.startIndex);
-  const displayActiveId = pendingId ?? activeId;
+  // 窗口内条目:有更早的窗外条目时让出一格给"⋯"占位,窗口本身不因此变高。
+  const shown = entries.slice(plan.startIndex, plan.startIndex + plan.slotCount);
   // 可见范围 id → 下标(渲染时按 id 回查,测量与渲染间 entries 变更也不会
   // 错位)。单次遍历同时定位两端,滚动高频重渲下不扫两遍数组。
   let rangeStartIdx = -1;
@@ -494,7 +713,7 @@ export function MessageNavRail({
       // 见 tickEvents 注释),不挡左缘留白里的文字选择;justify-center 让
       // 刻度组在(避开输入 overlay 的)带内垂直居中。
       className={cn(
-        'pointer-events-none absolute inset-y-0 left-2 z-30 flex w-6 flex-col items-stretch justify-center',
+        'pointer-events-none absolute inset-y-0 left-2 z-page-overlay flex w-6 flex-col items-stretch justify-center',
         // §14.4 禁硬编码 duration / cubic-bezier。不透明度变化属 fast 档
         // (150ms);原先是 Tailwind 的 duration-200 + ease-out。
         'transition-opacity duration-[var(--motion-fast)] ease-[var(--motion-ease-out)]',
@@ -515,7 +734,7 @@ export function MessageNavRail({
        * (在 <Tip> 外面套一层 Provider 没用 —— 内层会把外层遮住。)
        */}
       <Tooltip.Provider delayDuration={150} skipDelayDuration={700}>
-        {plan.hiddenCount > 0 ? (
+        {plan.hiddenBefore > 0 ? (
           <Tooltip.Root>
             <Tooltip.Trigger asChild>
               <div
@@ -535,7 +754,7 @@ export function MessageNavRail({
             {/* 占位刻度是**标签**,继续用默认 tooltip 面色(近黑),与下面的
                 内容预览卡两类不混 —— 面色决策同 #830 原状。 */}
             <Tooltip.Content side="right">
-              {t('chat.messageNavRail.hiddenEarlier', { count: plan.hiddenCount })}
+              {t('chat.messageNavRail.hiddenEarlier', { count: plan.hiddenBefore })}
             </Tooltip.Content>
           </Tooltip.Root>
         ) : null}
@@ -596,7 +815,6 @@ export function MessageNavRail({
                     handleTickMouseEnter();
                   }}
                   onPointerDown={(event) => handleTickPointerDown(fullIdx, event)}
-                  onPointerMove={handleTickPointerMove}
                   onPointerUp={(event) => finishScrub(event, true)}
                   onPointerCancel={(event) => finishScrub(event, false)}
                   onLostPointerCapture={(event) => finishScrub(event, false)}
@@ -608,6 +826,7 @@ export function MessageNavRail({
                   // --focus-ring token(AgentTaskCard 同款),键盘 Tab 可见
                   // (PR #830 review:纯 outline-none 会让键盘用户丢焦点)。
                   className={cn(
+                    // 导航刻度行没有框：圆角只塑形键盘焦点环（DESIGN.md §5 无框文字按钮登记）
                     'group flex w-full items-center rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
                     tickEvents,
                   )}
@@ -661,8 +880,14 @@ export function MessageNavRail({
                     'dark:border-[var(--border-default)]',
                   )}
                 >
-                  <span className="flex max-w-[344px] flex-col gap-1">
-                    <span className="truncate text-13 font-medium">{preview}</span>
+                  <div className="flex max-w-[344px] flex-col gap-1">
+                    <PreviewHeading entry={entry} sessionId={sessionId} />
+                    {/* DESIGN.md §4 Desktop message nav rail preview：只有本人提问可用气泡圆角底框。 */}
+                    <span className={cn('truncate text-13', entry.isOwn
+                      ? 'max-w-full self-start rounded-xl border border-[var(--msg-user-border)] bg-[var(--msg-user-bg)] px-2.5 py-1 font-medium text-[var(--msg-user-text)]'
+                      : 'text-[var(--text-secondary)]')}>
+                      {preview}
+                    </span>
                     {entry.answerExcerpt ? (
                       // 摘要 = 三级文字档。原为「主文字色 × 50% 透明度」(多轮实机验收后
                       // 用户直接指定,2026-07-28);2026-10-22 起文字是墨水阶梯,三级档
@@ -672,7 +897,7 @@ export function MessageNavRail({
                         {entry.answerExcerpt}
                       </span>
                     ) : null}
-                  </span>
+                  </div>
                 </Tooltip.Content>
               ) : null}
             </Tooltip.Root>

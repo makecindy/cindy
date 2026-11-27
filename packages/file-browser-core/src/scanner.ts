@@ -25,6 +25,20 @@ const log = scopedLogger('file-browser/scanner');
 // Reuse the locale-aware comparator across lazy directory expansions.
 const entryNameCollator = new Intl.Collator(undefined, { numeric: true });
 
+/** Bound single-layer entry classification, including link realpath/stat work. */
+const DIRECTORY_SCAN_BATCH_SIZE = 64;
+
+function isSameOrInside(parent: string, child: string): boolean {
+  const relative = path.relative(parent, child);
+  return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
+
+function isGitMetadata(root: string, target: string): boolean {
+  // realpath retains on-disk casing, even on case-insensitive volumes. Match
+  // the presentation ignore rules without treating names like .github as metadata.
+  return path.relative(root, target).split(path.sep).some(segment => segment.toLowerCase() === '.git');
+}
+
 /** Hard cap on file size we'll send to the renderer. Anything larger gets
  *  truncated; renderer shows a "file truncated, open in OS to see more"
  *  banner. 2 MiB is enough for any realistic markdown/code file. */
@@ -77,9 +91,13 @@ export interface DirEntry {
   size: number;
   /** ms since epoch */
   mtimeMs: number;
+  /** Directory links only: canonical workdir-relative POSIX target for watcher invalidation. */
+  symlinkTarget?: string;
 }
 
 export interface FileReadResult {
+  /** Canonical workdir-relative target captured with the read; absent on old hosts. */
+  resolvedPath?: string;
   relPath: string;
   /** UTF-8 contents (truncated to MAX_FILE_BYTES) */
   content: string;
@@ -158,6 +176,19 @@ async function assertRealParentInsideWorkdir(
   }
 }
 
+/** Resolve a directory link for presentation only. Broken links, loops and
+ * targets outside the workdir are not browsable entries. File links stay hidden. */
+async function resolveDirectoryLink(realRoot: string, abs: string): Promise<{ abs: string; stat: Stats } | null> {
+  try {
+    const realAbs = await fs.realpath(abs);
+    if (!isSameOrInside(realRoot, realAbs) || isGitMetadata(realRoot, realAbs)) return null;
+    const stat = await fs.stat(realAbs);
+    return stat.isDirectory() ? { abs: realAbs, stat } : null;
+  } catch {
+    return null;
+  }
+}
+
 export interface ListDirOptions {
   /** Optional transfer budget; exceeding it fails instead of returning a partial list. */
   maxEntries?: number;
@@ -201,15 +232,16 @@ function isDocModeFile(name: string): boolean {
  * whether to surface a subdir.
  *
  * Implementation:
- *   - Sibling subdirs are walked in parallel (Promise.all over the level)
- *     so a top-level dir like apps/desktop/ doesn't serialize 50 subwalks.
+ *   - listDir runs at most 64 sibling probes. Each probe walks depth-first,
+ *     issuing one filesystem operation at a time; nested fan-out cannot
+ *     multiply that budget and no recursive parent holds a semaphore slot.
  *   - Overlapping probes share only the in-flight `readdir` for each absolute
  *     directory. Traversals keep their own `Found` cell, preserving sibling
  *     short-circuiting without allowing one probe's result to contaminate
  *     another; completed directory reads are never cached.
  *
  * Worst case (deep subtree with no matching file): walks the whole subtree
- * once, but in parallel. BUILTIN_IGNORE prunes node_modules / Library /
+ * once per logical route. BUILTIN_IGNORE prunes node_modules / Library /
  * etc., which are the only realistic huge subtrees.
  */
 type Found = { v: boolean };
@@ -236,50 +268,66 @@ function readDocDirents(abs: string): Promise<Dirent[]> {
 }
 
 async function hasDocDescendantInner(
+  realRoot: string,
   abs: string,
   relPath: string,
   matcher: Matcher,
   found: Found,
+  ancestors: ReadonlySet<string>,
 ): Promise<boolean> {
   if (found.v) return true;
   let dirents: Dirent[];
+  let realAbs: string;
   try {
-    dirents = await readDocDirents(abs);
+    realAbs = await fs.realpath(abs);
+    if (!isSameOrInside(realRoot, realAbs) || isGitMetadata(realRoot, realAbs)) return false;
+    if ([...ancestors].some(ancestor => isSameOrInside(realAbs, ancestor))) return false;
+    dirents = await readDocDirents(realAbs);
   } catch {
     return false;
   }
   if (found.v) return true;
   // Pass 1: own files (cheaper than recursing).
-  const subdirs: { name: string; childRel: string }[] = [];
+  const nextAncestors = new Set(ancestors).add(realAbs);
+  const subdirs: { abs: string; childRel: string }[] = [];
   for (const d of dirents) {
     const childRel = relPath === '' ? d.name : `${relPath}/${d.name}`;
-    const isDir = d.isDirectory();
+    let isDir = d.isDirectory();
+    let childAbs = path.join(realAbs, d.name);
+    if (d.isSymbolicLink()) {
+      if (matcher.ignores(childRel, true)) continue;
+      const target = await resolveDirectoryLink(realRoot, childAbs);
+      if (!target) continue;
+      childAbs = target.abs;
+      isDir = true;
+    }
     if (matcher.ignores(childRel, isDir)) continue;
-    if (d.isSymbolicLink()) continue;
     if (isDir) {
-      subdirs.push({ name: d.name, childRel });
-    } else if (isDocModeFile(d.name)) {
+      subdirs.push({ abs: childAbs, childRel });
+    } else if (d.isFile() && isDocModeFile(d.name)) {
       found.v = true;
       return true;
     }
   }
   if (subdirs.length === 0 || found.v) return found.v;
-  // Pass 2: recurse all subdirs in parallel. Each traversal keeps the same
-  // `Found` cell, so a fast hit stops deeper work in sibling branches.
-  const results = await Promise.all(
-    subdirs.map((s) =>
-      hasDocDescendantInner(path.join(abs, s.name), s.childRel, matcher, found),
-    ),
-  );
-  return results.some(Boolean);
+  // Only top-level probes run concurrently. Descending sequentially keeps the
+  // entire listing bounded, unlike a separate Promise.all at every depth.
+  for (const s of subdirs) {
+    if (await hasDocDescendantInner(realRoot, s.abs, s.childRel, matcher, found, nextAncestors)) return true;
+  }
+  return false;
 }
 
 async function hasDocDescendant(
+  realRoot: string,
   abs: string,
   relPath: string,
   matcher: Matcher,
+  ancestors: ReadonlySet<string>,
 ): Promise<boolean> {
-  return hasDocDescendantInner(abs, relPath, matcher, { v: false });
+  // Each branch owns its ancestors: sibling aliases may have different ignore
+  // rules, so a traversal-wide visited set would discard legitimate documents.
+  return hasDocDescendantInner(realRoot, abs, relPath, matcher, { v: false }, ancestors);
 }
 
 /**
@@ -298,8 +346,25 @@ export async function listDir(
     throw new Error('Invalid directory entry limit');
   }
   const sub = assertInsideWorkdir(workdir, relPath);
-  const abs = sub === '' ? workdir : path.join(workdir, sub);
-  await assertRealPathInsideWorkdir(workdir, abs);
+  const abs = await assertRealPathInsideWorkdir(workdir, sub === '' ? workdir : path.join(workdir, sub));
+  const realRoot = await fs.realpath(workdir);
+  // Recheck on expansion: an alias can change after the parent was listed.
+  // Unfiltered transfer enumeration retains its existing behavior.
+  if (matcher && (isGitMetadata(realRoot, abs) || sub.split('/').some(segment => segment.toLowerCase() === '.git'))) {
+    throw new Error('Directory presentation cannot enter .git metadata');
+  }
+  let ancestors: Promise<string[]> | undefined;
+  const loadAncestors = () => ancestors ??= (async () => {
+    const folders = [realRoot];
+    let current = workdir;
+    // Resolve logical prefixes too: a/to-b/to-a cycles even when a and b are
+    // siblings on disk. Share this snapshot across links in this listing only.
+    for (const segment of sub.split('/').filter(Boolean)) {
+      current = path.join(current, segment);
+      folders.push(await fs.realpath(current));
+    }
+    return folders;
+  })();
   // In doc mode this top-level read participates in the same in-flight map as
   // recursive descendant probes. An overlapping `listDir('src')` can thus
   // reuse the read already started while listing the root, without retaining
@@ -310,51 +375,67 @@ export async function listDir(
   if (opts.maxEntries !== undefined && dirents.length > opts.maxEntries) {
     throw new Error('DIRECTORY_TOO_LARGE');
   }
+  // Complete the shared ancestor snapshot before starting concurrent probes.
+  const docAncestors = opts.docMode ? new Set(await loadAncestors()) : undefined;
 
-  // Process all entries in parallel. With docMode on, each surviving subdir
-  // triggers a recursive hasDocDescendant probe — running siblings in
-  // parallel turns a (#subdirs × per-subdir-walk) wall-clock cost into one
-  // bounded by the slowest subtree. lstat + readdir all overlap.
-  const candidates = await Promise.all(
-    dirents.map(async (d): Promise<DirEntry | null> => {
-      const childRel = sub === '' ? d.name : `${sub}/${d.name}`;
-      const isDir = d.isDirectory();
-      if (matcher?.ignores(childRel, isDir)) return null;
-      // 原子写中间产物 — 隐藏不让前端看到一闪而过的临时行。
-      if (matcher && !isDir && d.name.endsWith(XDT_TMP_SUFFIX)) return null;
-      // We need stats for size + mtime; use lstat to avoid following symlinks
-      // into Library/ et al. (some Unity setups symlink huge caches in).
-      let st: Stats;
-      try {
-        st = await fs.lstat(path.join(abs, d.name));
-      } catch (error) {
-        // Complete enumeration must not silently return a partial snapshot.
-        if (!matcher) throw error;
-        // Presentation mode tolerates files removed mid-scan or inaccessible entries.
-        return null;
-      }
-      // Skip symlinks unless they point inside the workdir; cheaper to just
-      // skip than to chase them. User can open via OS if needed.
-      if (st.isSymbolicLink()) return null;
-      if (!st.isDirectory() && !st.isFile()) return null;
-      if (opts.docMode) {
-        if (isDir) {
-          if (!(await hasDocDescendant(path.join(abs, d.name), childRel, matcher ?? { ignores: () => false }))) {
-            return null;
-          }
-        } else if (!isDocModeFile(d.name)) {
+  // Do not enqueue one filesystem operation per entry in a large directory.
+  // Batching preserves complete enumeration and the final natural sort.
+  const candidates: (DirEntry | null)[] = [];
+  for (let offset = 0; offset < dirents.length; offset += DIRECTORY_SCAN_BATCH_SIZE) {
+    candidates.push(...await Promise.all(
+      dirents.slice(offset, offset + DIRECTORY_SCAN_BATCH_SIZE).map(async (d): Promise<DirEntry | null> => {
+        const childRel = sub === '' ? d.name : `${sub}/${d.name}`;
+        // A directory symlink's Dirent.isDirectory() is false. Classify links as
+        // directory candidates before applying directory-only ignore patterns.
+        let isDir = d.isDirectory() || d.isSymbolicLink();
+        if (matcher?.ignores(childRel, isDir)) return null;
+        // 原子写中间产物 — 隐藏不让前端看到一闪而过的临时行。
+        if (matcher && !isDir && d.name.endsWith(XDT_TMP_SUFFIX)) return null;
+        let childAbs = path.join(abs, d.name);
+        let symlinkTarget: string | undefined;
+        let st: Stats;
+        try {
+          st = await fs.lstat(childAbs);
+        } catch (error) {
+          // Complete enumeration must not silently return a partial snapshot.
+          if (!matcher) throw error;
+          // Presentation mode tolerates files removed mid-scan or inaccessible entries.
           return null;
         }
-      }
-      return {
-        name: d.name,
-        relPath: childRel,
-        type: isDir ? 'directory' : 'file',
-        size: isDir ? 0 : st.size,
-        mtimeMs: st.mtimeMs,
-      };
-    }),
-  );
+        if (st.isSymbolicLink()) {
+          // Unfiltered enumeration is also used by recursive transfers. Preserve
+          // its no-follow behavior; only the lazy presentation tree exposes links.
+          if (!matcher) return null;
+          const target = await resolveDirectoryLink(realRoot, childAbs);
+          if (!target) return null;
+          if ((await loadAncestors()).some(ancestor => isSameOrInside(target.abs, ancestor))) return null;
+          childAbs = target.abs;
+          st = target.stat;
+          symlinkTarget = path.relative(realRoot, target.abs).split(path.sep).join('/');
+        }
+        if (!st.isDirectory() && !st.isFile()) return null;
+        isDir = st.isDirectory();
+        if (matcher?.ignores(childRel, isDir)) return null;
+        if (opts.docMode) {
+          if (isDir) {
+            if (!(await hasDocDescendant(realRoot, childAbs, childRel, matcher ?? { ignores: () => false }, docAncestors!))) {
+              return null;
+            }
+          } else if (!isDocModeFile(d.name)) {
+            return null;
+          }
+        }
+        return {
+          name: d.name,
+          relPath: childRel,
+          type: isDir ? 'directory' : 'file',
+          size: isDir ? 0 : st.size,
+          mtimeMs: st.mtimeMs,
+          ...(symlinkTarget === undefined ? {} : { symlinkTarget }),
+        };
+      }),
+    ));
+  }
   const out: DirEntry[] = candidates.filter((e): e is DirEntry => e !== null);
 
   // Directories first, then natural name order within each group.
@@ -404,6 +485,7 @@ export async function readFile(
     }
     return {
       relPath: sub,
+      resolvedPath: path.relative(await fs.realpath(workdir), realAbs).split(path.sep).join('/'),
       content: buf.toString('utf8'),
       size: st.size,
       mtimeMs: st.mtimeMs,
@@ -489,11 +571,21 @@ export async function writeFile(
   workdir: string,
   relPath: string,
   content: string,
-): Promise<{ size: number; mtimeMs: number }> {
+  expectedResolvedPath?: string,
+): Promise<{ size: number; mtimeMs: number; resolvedPath: string }> {
   const sub = assertInsideWorkdir(workdir, relPath);
   if (sub === '') throw new Error('cannot write workdir root');
   const abs = path.join(workdir, sub);
   const realAbs = await assertRealPathInsideWorkdir(workdir, abs);
+
+  const resolvedPath = path.relative(await fs.realpath(workdir), realAbs).split(path.sep).join('/');
+  const assertTarget = async () => {
+    if (expectedResolvedPath !== undefined && (expectedResolvedPath !== resolvedPath
+        || await assertRealPathInsideWorkdir(workdir, abs) !== realAbs)) {
+      throw new Error('FILE_TARGET_CHANGED: file target changed; reopen the file before saving');
+    }
+  };
+  await assertTarget();
 
   // File must exist. Editing-a-file-that-was-just-deleted is a corner case
   // we surface as an error instead of silently re-creating.
@@ -523,6 +615,42 @@ export async function writeFile(
     await probeHandle.close();
   }
 
+  await publishFileBytes(realAbs, buf, assertTarget);
+  const after = await fs.stat(realAbs);
+  return { size: after.size, mtimeMs: after.mtimeMs, resolvedPath };
+}
+
+/** Bounded callers may create or replace binary files using the editor's same
+ * atomic publisher. Policy and byte budgets belong to the calling Host service. */
+export async function writeFileBytes(workdir: string, relPath: string, bytes: Uint8Array,
+  assertCurrent: () => Promise<void>): Promise<void> {
+  const sub = assertInsideWorkdir(workdir, relPath);
+  if (!sub) throw new Error('cannot write workdir root');
+  const abs = path.join(workdir, sub);
+  // Check the existing ancestor before recursive mkdir can cross a symlink.
+  let ancestor = path.dirname(abs);
+  for (;;) {
+    try { await assertRealPathInsideWorkdir(workdir, ancestor); break; }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || ancestor === path.dirname(ancestor)) throw error;
+      ancestor = path.dirname(ancestor);
+    }
+  }
+  await assertCurrent();
+  await fs.mkdir(path.dirname(abs), { recursive: true });
+  await assertRealParentInsideWorkdir(workdir, abs);
+  await assertCurrent();
+  await publishFileBytes(abs, bytes, async () => {
+    await assertRealParentInsideWorkdir(workdir, abs);
+    try {
+      const stat = await fs.lstat(abs);
+      if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('target is not a regular file');
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+    await assertCurrent();
+  });
+}
+
+async function publishFileBytes(realAbs: string, buf: Uint8Array, beforePublish?: () => Promise<void>): Promise<void> {
   // 临时名带随机段并以 'wx' 独占创建:固定名可被工作目录里预置的符号链接
   // 占位,'w' 会跟随链接写到工作目录外,rename 还会把链接本身搬成目标文件。
   // 仍以 XDT_TMP_SUFFIX 结尾,listDir / watcher 的过滤照旧生效。
@@ -537,14 +665,12 @@ export async function writeFile(
     }
     // rename is atomic on same filesystem (which .xdt-tmp guarantees since
     // we wrote it in the same directory).
+    await beforePublish?.();
     await fs.rename(tmp, realAbs);
   } catch (err) {
     await fs.rm(tmp, { force: true }).catch(() => {});
     throw err;
   }
-
-  const after = await fs.stat(realAbs);
-  return { size: after.size, mtimeMs: after.mtimeMs };
 }
 
 /**
@@ -621,11 +747,15 @@ export async function renameEntry(
   const absFrom = path.join(workdir, fromSub);
   const absTo = path.join(workdir, toSub);
   const realFrom = await assertRealPathInsideWorkdir(workdir, absFrom);
+  // Resolve parents, but retain the selected final entry. Renaming a visible
+  // directory link must move the link rather than the directory it points to.
+  const source = path.join(await assertRealPathInsideWorkdir(workdir, path.dirname(absFrom)), path.basename(absFrom));
+  const st = await fs.stat(realFrom);
   await assertRealParentInsideWorkdir(workdir, absTo);
   const caseOnly = fromSub.toLowerCase() === toSub.toLowerCase();
   if (caseOnly) {
     try {
-      const [fromStat, toStat] = await Promise.all([fs.stat(realFrom), fs.stat(absTo)]);
+      const [fromStat, toStat] = await Promise.all([fs.lstat(source), fs.lstat(absTo)]);
       if (fromStat.dev !== toStat.dev || fromStat.ino !== toStat.ino) {
         throw new Error(`目标已存在: ${toSub}`);
       }
@@ -635,15 +765,14 @@ export async function renameEntry(
     }
   } else {
     try {
-      await fs.access(absTo);
+      await fs.lstat(absTo);
       throw new Error(`目标已存在: ${toSub}`);
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code !== 'ENOENT') throw err;
     }
   }
-  await fs.rename(realFrom, absTo);
-  const st = await fs.lstat(absTo);
+  await fs.rename(source, absTo);
   return {
     relPath: toSub,
     type: st.isDirectory() ? 'directory' : 'file',
@@ -661,10 +790,12 @@ export async function deleteEntry(workdir: string, relPath: string): Promise<voi
   const sub = assertInsideWorkdir(workdir, relPath);
   if (sub === '') throw new Error('cannot delete workdir root');
   const abs = path.join(workdir, sub);
-  const realAbs = await assertRealPathInsideWorkdir(workdir, abs);
+  await assertRealPathInsideWorkdir(workdir, abs);
+  const entryAbs = path.join(await assertRealPathInsideWorkdir(workdir, path.dirname(abs)), path.basename(abs));
   // rm with recursive+force handles both file and directory; force only
   // suppresses "not found" which is fine for a delete operation.
-  await fs.rm(realAbs, { recursive: true, force: true });
+  // rm does not follow the final symlink; removing a link must preserve its target.
+  await fs.rm(entryAbs, { recursive: true, force: true });
 }
 
 /** Cheap stat for the unrenderable placeholder (size + mtime). */

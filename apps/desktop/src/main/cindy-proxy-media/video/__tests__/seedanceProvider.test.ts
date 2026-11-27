@@ -38,9 +38,8 @@ describe('seedance provider · capabilities', () => {
    * capabilities 是 per-provider 而非 per-alias(run.ts 与 cindy-brain 的
    * getGhostVideoCapabilities 取的都是 `provider.capabilities`),所以把 2.5 挂成
    * 这里的第三个 alias 会让它整份继承下面这些 2.0 的值域 —— 时长被卡在
-   * 4/6/8/10(2.5 的 4–30 长片一律明拒)、1080p 被放行(2.5 只到 720p)、
-   * 画幅没有 adaptive、后缀串还照 2.0 写 `--fps`。反向同样成立:2.5 的宽值域
-   * 挤进来就替 2.0 放宽了。2.5 归 createSeedance25Provider,见
+   * 4/6/8/10(2.5 的 4–30 长片一律明拒)、画幅没有 adaptive、后缀串还照 2.0
+   * 写 `--fps`。反向同样成立:2.5 的宽值域挤进来就替 2.0 放宽了。2.5 归 createSeedance25Provider,见
    * seedance25Provider.test.ts。
    */
   it('不承载 2.5:2.0 的 capabilities 里只有 2.0 的档位', () => {

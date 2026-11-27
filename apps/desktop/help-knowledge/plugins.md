@@ -4,7 +4,7 @@ title: Plugins (extending what the agents can do)
 summary: Where the Plugins page is, the built-in plugins, installing (marketplace, .cindy file, custom marketplaces), enabling / disabling globally or per project, updates, uninstalling, account / key setup, $commands, panels, and the permission model.
 tab: ghosts
 ---
-Plugins extend what the agents can do — they add tools the agent can call, panels that live as tabs in the right sidebar, full-page app views, and integrations with outside services. Each plugin is a self-contained `.cindy` package that runs in its own isolated sandbox.
+Plugins extend what the agents can do — they add tools the agent can call, panels that live as tabs in the right sidebar, full-page app views, integrations with outside services, task execution engines (ACP), and routing models for the model picker. Each plugin is a self-contained `.cindy` package that runs in its own isolated sandbox.
 
 **The Plugins page:**
 
@@ -75,4 +75,5 @@ Plugins extend what the agents can do — they add tools the agent can call, pan
 
 **Notes:**
 
+- The former built-in **Smart Contacts** is now the **Contacts** plugin (`cindy-contacts`). Install it from **Recommended**; on first launch it copies your existing Smart Contacts data (the old data stays on disk, read-only), and it can sync between your own computers.
 - You can manage the plugins installed on your other computers from the same page by switching the computer at the top (the target computer must be online and on a recent Cindy version).

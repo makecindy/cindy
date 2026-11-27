@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { act, createElement } from 'react';
+import { act, createElement, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
   auth: { user: { id: 'owner' }, accountGeneration: 1, apiFetch: vi.fn(), getAccessToken: vi.fn(async () => 'fixture') },
   link: { status: 'offline', connectionEpoch: 1, presenceVersion: 1, invoke: vi.fn(), openLink: vi.fn(),
@@ -10,11 +10,14 @@ const h = vi.hoisted(() => ({
   targets: [] as { deviceId: string; deviceName: string }[],
   disk: new Map<string, string>(),
   history: new Map<string, string>(),
+  historyWriteFails: false,
+  focused: true,
   foreground: new Set<(state: string) => void>(),
+  put: vi.fn(async (..._args: unknown[]) => {}),
 }));
 vi.mock('@/session/historyDiskStoreExpo', () => ({ createHistoryDiskIO: () => ({
   read: async (key: string) => h.history.get(key) ?? null,
-  write: async (key: string, value: string) => { h.history.set(key, value); },
+  write: async (key: string, value: string) => { if (h.historyWriteFails) throw new Error('disk full'); h.history.set(key, value); },
   remove: async (key: string) => { h.history.delete(key); },
   files: async () => [...h.history.keys()],
 }) }));
@@ -25,17 +28,19 @@ vi.mock('@/session/mobileDurableOutbox', async () => {
   return { mobileDurableOutbox: createDurableOutbox(storage) };
 });
 vi.mock('expo-crypto', () => ({ randomUUID: () => 'fixture-operation-id' }));
+vi.mock('@/session/mobileAttachmentUpload', () => ({ putMobileAttachmentUploadFromFile: (...args: unknown[]) => h.put(...args) }));
 vi.mock('react-native', () => ({ AppState: { currentState: 'active', addEventListener: (_: string, fn: (state: string) => void) => { h.foreground.add(fn); return { remove: () => h.foreground.delete(fn) }; } } }));
-vi.mock('expo-router', async () => { const { useEffect } = await import('react'); return { useFocusEffect: (fn: any) => useEffect(fn, [fn]) }; });
+vi.mock('expo-router', async () => { const { useEffect } = await import('react'); return { useIsFocused: () => h.focused, useFocusEffect: (fn: any) => useEffect(() => h.focused ? fn() : undefined, [fn, h.focused]) }; });
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ i18n: { language: 'en' } }) }));
 vi.mock('@/i18n', () => ({ default: { t: (key: string) => key } }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => h.auth }));
-vi.mock('@/config/env', () => ({ getActiveMobileSessionRealm: () => 'global', getMobileEndpointForRealm: () => 'https://chat.example.invalid', loadMobileEndpointsForRealm: vi.fn() }));
+vi.mock('@/config/env', () => ({ BUILD_AUTH_REGION: 'global', getActiveMobileSessionRealm: () => 'global', getMobileEndpointForRealm: () => 'https://chat.example.invalid', loadMobileEndpointsForRealm: vi.fn() }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => h.link }));
 vi.mock('@/device-link/revokedDevicesStore', () => ({ useRevokedDevices: () => new Set() }));
 vi.mock('@/session/useRemoteResourceList', () => ({ useRemoteResourceList: () => h.legacy }));
 vi.mock('@/device-link/remoteStatus', () => ({ formatRemoteError: String }));
 import { useBotGroupChat } from '@/session/useBotGroupChat';
+import { apiFetchRaw } from '@/api/client';
 import { useBotGroupRoster } from '@/session/useBotGroupRoster';
 import { botGroupRoute } from '@/session/botGroupNavigation';
 import { mobileDurableOutbox } from '@/session/mobileDurableOutbox';
@@ -46,7 +51,7 @@ import { createChatServerClient } from '@/chat/chatServerClient';
 import { forgetChatMessages } from '@/chat/chatMessageCache';
 import { getMobileAuthOwner, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { clearHistoryDisk } from '@/session/remoteHistoryDiskCache';
-import { peekChatMessages } from '@/chat/chatMessageCache';
+import { cacheChatMessages, flushChatMessageCache, peekChatMessages, readChatMessages } from '@/chat/chatMessageCache';
 import { isRemoteResourceUnread, clearRemoteResourceCache, readCachedChatRoster } from '@/device-link/remoteResourceCache';
 const id = '00000000-0000-4000-8000-000000000001';
 const self = '00000000-0000-4000-8000-000000000002';
@@ -57,8 +62,10 @@ let root: Root | undefined;
 let roster: ReturnType<typeof useBotGroupRoster>;
 let chat: ReturnType<typeof useBotGroupChat>;
 let showChat = false;
-function Probe() { roster = useBotGroupRoster(h.targets, !showChat); chat = useBotGroupChat(host, showChat ? id : ''); return null; }
-async function render() { root ??= createRoot(document.createElement('div')); await act(async () => root!.render(createElement(Probe))); }
+let threadRootId: string | undefined;
+const timelineChanges = vi.fn();
+function Probe() { roster = useBotGroupRoster(h.targets, !showChat); chat = useBotGroupChat(host, showChat ? id : '', threadRootId); useEffect(() => { timelineChanges(); }, [chat.state]); return null; }
+async function render(Component = Probe) { root ??= createRoot(document.createElement('div')); await act(async () => root!.render(createElement(Component))); }
 async function send(input: Record<string, unknown>) {
   await chat.act('send', input);
   const runner = createChatOutboxDelivery({ store: mobileDurableOutbox,
@@ -68,11 +75,14 @@ async function send(input: Record<string, unknown>) {
 }
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 beforeEach(async () => {
+  h.historyWriteFails = false;
+  h.focused = true;
   setMobileAuthOwner(null); peekChatMessages(id); await clearHistoryDisk();
   await clearRemoteResourceCache(); h.auth.user.id = 'owner';
   await mobileDurableOutbox.activate(''); h.disk.clear(); h.history.clear(); setMobileAuthOwner('owner');
   await mobileDurableOutbox.activate(getMobileAuthOwner().accountKey);
-  vi.clearAllMocks(); h.foreground.clear(); showChat = false; h.auth.accountGeneration = 1; h.legacy.items = []; h.targets = []; h.legacy.isOnline.mockReturnValue(false);
+  vi.clearAllMocks(); h.foreground.clear(); showChat = false; threadRootId = undefined; h.auth.accountGeneration = 1; h.legacy.items = []; h.targets = []; h.legacy.isOnline.mockReturnValue(false);
+  h.put.mockImplementation(async () => {});
   vi.stubGlobal('WebSocket', class { close() {} });
   h.auth.apiFetch.mockImplementation(async (path: string, options: any) => {
     options.assertCurrent();
@@ -81,19 +91,256 @@ beforeEach(async () => {
     if (path.startsWith('/v1/changes?')) return { head: '1', cursor: '1', changes: [], hasMore: false };
     if (path.endsWith('/members')) return [{ id: self, kind: 'human', state: 'joined', name: 'Me', ownerActorId: self, ownerName: '', role: 'member', avatar: null }];
     if (path.endsWith('/snapshot')) return { room, members: [{ id: self, kind: 'human', state: 'joined', name: 'Me', ownerActorId: self, ownerName: '', role: 'member', avatar: null }], messages: [], cursor: '1' };
-    if ((path.endsWith('/executions') || path.includes('/execution-failures?'))) return [];
+    if ((path.endsWith('/executions') || path.includes('/execution-failures?') || path.endsWith('/plans'))) return [];
     if (path.includes('/messages?')) return [{ id: self, seq: '9007199254740993', authorId: self, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: 'Fixture message' }], createdAt: '2026-10-09', deleted: false, threadRootId: null }];
     if (path.endsWith('/messages')) return { id: self };
     throw new Error('Unexpected request');
   });
 });
 // Regression: entering a saved group must not depend on Chat Server latency.
+// Unit: exercise the direct Chat Server path too; the remote-computer hook alone
+// cannot protect against identical load + thread-hydration snapshots rebuilding rows.
+it('keeps an unchanged direct group timeline stable across refresh and thread hydration', async () => {
+  showChat = true; await render();
+  const first = chat.state;
+  timelineChanges.mockClear();
+  for (let i = 0; i < 10; i++) await act(async () => { chat.reload(); });
+  expect(timelineChanges).not.toHaveBeenCalled();
+  expect(chat.state).toBe(first);
+  expect(chat.state).toMatchObject({ kind: 'ready', group: { messages: [{ content: 'Fixture message' }] } });
+  h.auth.apiFetch.mockRejectedValue({ status: 403 });
+  await act(async () => { chat.reload(); });
+  expect(chat.state.kind).toBe('missing');
+});
+
+it('publishes the first verified read when the server returns the restored disk snapshot unchanged', async () => {
+  showChat = true;
+  await render();
+  await act(async () => { root!.unmount(); root = undefined; });
+  setMobileAuthOwner(null); peekChatMessages(id); setMobileAuthOwner('owner');
+
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    await gate;
+    return original(path, options);
+  });
+  const committed = vi.fn();
+  function ReadStatus() {
+    const group = useBotGroupChat(host, id);
+    useEffect(() => { committed(group.verified, group.state.kind); }, [group.verified, group.state.kind]);
+    return null;
+  }
+  await render(ReadStatus);
+  expect(committed).toHaveBeenLastCalledWith(false, 'ready');
+  await act(async () => { release(); });
+  expect(committed).toHaveBeenLastCalledWith(true, 'ready');
+});
+
+it('retains an old mention across a complete group refresh without writing the reply to the timeline cache', async () => {
+  const rootId = '00000000-0000-4000-8000-000000000017';
+  const mention = { id: '00000000-0000-4000-8000-000000000018', threadRootId: rootId, seq: '18',
+    authorId: rootId, author: { kind: 'human', name: 'Member' }, createdAt: '2026-10-09',
+    content: [{ type: 'text', text: 'Please confirm' }], deleted: false, mentions: [self] };
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    if (path.endsWith('/messages/' + rootId)) return { ...mention, id: rootId, seq: '17', threadRootId: null,
+      mentions: [], replyCount: 1, content: [{ type: 'text', text: 'Earlier decision' }] };
+    const result = await original(path, options);
+    return path.endsWith('/snapshot') ? { ...result, reads: [] } : result;
+  });
+  showChat = true;
+  await render();
+  await act(async () => { chat.backfillThreads!([mention]); });
+  const expected = { kind: 'ready', group: { threads: [expect.objectContaining({ rootId, mentionedMe: true })] } };
+  expect(chat.state).toMatchObject(expected);
+  await act(async () => { chat.reload(); });
+  expect(chat.state).toMatchObject(expected);
+  expect(peekChatMessages(id)?.page.cachedMessages?.map(message => message.id) ?? []).not.toContain(mention.id);
+});
+
+// Integration tier, group-open latency (2026-11-17): opening a group ran the whole read two or
+// three times (focus, realtime handshake, the echo of the reader's own read position), each a
+// serial chain of requests, from a client that shared nothing with the list behind it.
+describe('opening a group the account already knows', () => {
+  const requests = () => h.auth.apiFetch.mock.calls.map(([path]) => String(path).replace(`/v1/conversations/${id}`, '').replace(/\?.*/, ''));
+  const roomReads = ['/executions', '/execution-failures', '/plans', '/messages', '/v1/actors'];
+  // The shared fixture has no actor list; here its successful read is part of what is counted.
+  beforeEach(() => {
+    const original = h.auth.apiFetch.getMockImplementation()!;
+    h.auth.apiFetch.mockImplementation(async (path, options) => path === '/v1/actors' ? [] : original(path, options));
+  });
+  function sockets() {
+    const opened: Array<{ onmessage: ((event: { data: string }) => void) | null; send: ReturnType<typeof vi.fn> }> = [];
+    vi.stubGlobal('WebSocket', class {
+      readyState = 1; onmessage = null; onopen = null; onclose = null; onerror = null;
+      send = vi.fn(); close() {}
+      constructor() { opened.push(this); }
+    });
+    return { opened, frame: async (value: unknown) => { await act(async () => { opened.at(-1)!.onmessage!({ data: JSON.stringify(value) }); }); } };
+  }
+  it('keeps participation and refreshes links after editing a reply found only by backfill', async () => {
+    const socket = sockets();
+    const rootId = '00000000-0000-4000-8000-000000000017';
+    const reply = { id: '00000000-0000-4000-8000-000000000018', threadRootId: rootId, seq: '18',
+      authorId: self, author: { kind: 'human', name: 'Me' }, createdAt: '2026-10-09', deleted: false, revision: 1,
+      content: [{ type: 'text', text: 'https://github.com/makecindy/cindy/issues/123' }] };
+    const edited = { ...reply, revision: 2, content: [{ type: 'text', text: 'https://github.com/makecindy/cindy/pull/456' }] };
+    const original = h.auth.apiFetch.getMockImplementation()!;
+    h.auth.apiFetch.mockImplementation(async (path, options) => {
+      if (path.endsWith('/messages/' + reply.id)) return edited;
+      if (path.endsWith('/messages/' + rootId)) return { ...reply, id: rootId, seq: '17', threadRootId: null,
+        authorId: rootId, replyCount: 1, content: [{ type: 'text', text: 'Earlier discussion' }] };
+      const result = await original(path, options);
+      return path.endsWith('/snapshot') ? { ...result, reads: [] } : result;
+    });
+    showChat = true;
+    await render();
+    await socket.frame({ type: 'ready', actorId: self });
+    const openIndex = () => act(async () => { chat.backfillThreads!([reply]); });
+    const thread = () => chat.state.kind === 'ready' && chat.state.group.threads?.find(item => item.rootId === rootId);
+    await openIndex();
+    expect(thread()).toMatchObject({ participated: true, refs: [{ number: 123 }] });
+    await socket.frame({ type: 'changes', scope: `conversation:${id}`, cursor: '2',
+      changes: [{ type: 'message.updated', entityId: reply.id, data: {} }] });
+    await openIndex();
+    expect(thread()).toMatchObject({ participated: true, refs: [{ kind: 'pr', number: 456 }] });
+    h.auth.apiFetch.mockClear();
+    await openIndex();
+    expect(requests()).toEqual([]);
+    expect(peekChatMessages(id)?.page.cachedMessages?.map(message => message.id) ?? []).not.toContain(reply.id);
+  });
+  it('reuses the identity and the room the list just verified', async () => {
+    await render();
+    expect(roster.items).toHaveLength(1);
+    h.auth.apiFetch.mockClear();
+    showChat = true; await render();
+    expect(chat.state).toMatchObject({ kind: 'ready', group: { messages: [{ content: 'Fixture message' }] } });
+    // No second identification, no second snapshot or delta: only what the list never read.
+    expect(requests().sort()).toEqual(['/execution-failures', '/executions', '/messages', '/plans', '/v1/actors']);
+  });
+  it('lets the realtime handshake refresh personal metadata without re-reading an unchanged room', async () => {
+    const socket = sockets();
+    showChat = true; await render();
+    h.auth.apiFetch.mockClear();
+    await socket.frame({ type: 'ready', actorId: self });
+    expect(socket.opened.at(-1)!.send.mock.calls.some(([body]) => JSON.parse(body).type === 'subscribe')).toBe(true);
+    expect(requests()).toEqual(expect.arrayContaining(['/v1/changes', '/snapshot']));
+    expect(requests().filter(path => roomReads.includes(path))).toEqual([]);
+    expect(chat.state.kind).toBe('ready');
+  });
+  // Review finding on the first version: a failed actor read became an empty list that the
+  // handshake then reused, so the owner's running companions stayed without their computer.
+  it('asks for the actor list again at the handshake when the first read of it failed', async () => {
+    const socket = sockets();
+    const original = h.auth.apiFetch.getMockImplementation()!;
+    let fail = true;
+    h.auth.apiFetch.mockImplementation(async (path, options) => {
+      if (path === '/v1/actors') { if (fail) throw new Error('offline'); return [{ id: self, kind: 'human', externalId: 'owner', name: 'Me', avatar: null }]; }
+      return original(path, options);
+    });
+    showChat = true; await render();
+    expect(chat.state.kind).toBe('ready');
+    fail = false; h.auth.apiFetch.mockClear();
+    await socket.frame({ type: 'ready', actorId: self });
+    expect(requests().filter(path => path === '/v1/actors')).toHaveLength(1);
+    // Once read, the next handshake-only refresh leaves it alone.
+    h.auth.apiFetch.mockClear();
+    await socket.frame({ type: 'changes', scope: `actor:${self}`, cursor: '2', changes: [{ type: 'read.changed', entityId: id,
+      data: { readSeq: '0', threadRootId: null, following: false, muted: false } }] });
+    expect(requests().filter(path => path === '/v1/actors')).toEqual([]);
+  });
+  it('re-reads the room when its cursor moved before the handshake', async () => {
+    const socket = sockets();
+    showChat = true; await render();
+    const original = h.auth.apiFetch.getMockImplementation()!;
+    h.auth.apiFetch.mockImplementation(async (path, options) => path.startsWith('/v1/changes?')
+      ? { head: '2', cursor: '2', changes: [{ type: 'execution.changed', entityId: self }], hasMore: false } : original(path, options));
+    h.auth.apiFetch.mockClear();
+    await socket.frame({ type: 'ready', actorId: self });
+    expect(requests()).toEqual(expect.arrayContaining(['/executions', '/execution-failures', '/plans']));
+  });
+  it('merges the reader\'s own position from its receipt and its event instead of downloading the room', async () => {
+    const socket = sockets();
+    const messages = ['6', '7'].map((seq, index) => ({ id: `00000000-0000-4000-8000-${String(index + 20).padStart(12, '0')}`, seq, authorId: id,
+      author: { kind: 'human', name: 'Other' }, content: [{ type: 'text', text: 'hello' }], createdAt: '2026-10-09T10:00:00Z', deleted: false, threadRootId: null }));
+    let notificationScope: 'all' | null = null;
+    const original = h.auth.apiFetch.getMockImplementation()!;
+    h.auth.apiFetch.mockImplementation(async (path, options) => {
+      if (path === '/v1/me') return { actor: { id: self, kind: 'human' }, capabilities: { conversationListStateVersion: 1 } };
+      if (path.startsWith('/v1/conversation-list-state?')) return [];
+      if (path.includes('/changes?')) return { head: '7', cursor: '7', changes: [], hasMore: false };
+      if (path.endsWith('/read')) return { readSeq: options.body.readSeq, following: false, muted: false, markedUnread: false, notificationScope: null };
+      if (path.includes('/messages?')) return messages;
+      const value = await original(path, options);
+      return path.endsWith('/snapshot') ? { ...value, room: { ...value.room, default_notification_scope: 'mentions' }, messages, cursor: '7', reads: [{ thread_key: 'main', read_seq: '6', notification_scope: notificationScope }] } : value;
+    });
+    showChat = true; await render();
+    await socket.frame({ type: 'ready', actorId: self });
+    const shown = () => chat.state.kind === 'ready' ? chat.state.group : undefined;
+    const mainRead = () => peekChatMessages(id)?.page.snapshot.reads?.find(read => read.thread_key === 'main');
+    expect(shown()?.notificationMode).toBe('mentions');
+    h.auth.apiFetch.mockClear();
+    await act(async () => { await chat.markRead!(messages.map(message => message.id)); });
+    const event = (cursor: string, data: unknown) => socket.frame({ type: 'changes', scope: `actor:${self}`, cursor, changes: [{ type: 'read.changed', entityId: id, data }] });
+    // The echo of this phone's own read.
+    await event('3', { readSeq: '7', threadRootId: null, following: false, muted: false, markedUnread: false, notificationScope: null });
+    expect(requests()).toEqual(['/read']);
+    expect(mainRead()?.read_seq).toBe('7');
+    // Another device of the account mutes the group: shown here without a request.
+    await event('4', { readSeq: '7', threadRootId: null, following: false, muted: true, markedUnread: false, notificationScope: null });
+    expect(requests()).toEqual(['/read']);
+    expect(shown()?.notificationMode).toBe('none');
+    expect(mainRead()).toMatchObject({ read_seq: '7', muted: true });
+    // A position this phone cannot merge (an older server's bare event) still refreshes it.
+    await event('5', { readSeq: '7' });
+    expect(requests()).toEqual(expect.arrayContaining(['/snapshot']));
+    // A membership preference changes independently of the group's message cursor.
+    notificationScope = 'all';
+    h.auth.apiFetch.mockClear();
+    await socket.frame({ type: 'changes', scope: `actor:${self}`, cursor: '8',
+      changes: [{ type: 'membership.changed', entityId: id, data: {} }] });
+    expect(requests()).toContain('/snapshot');
+    expect(shown()?.notificationMode).toBe('all');
+  });
+});
+
+// Unit, group-open latency: each refresh serialized the whole page to disk before the screen
+// could draw it, and again a moment later when the thread summaries arrived.
+it('saves a refreshed page once after it is drawn, and at once when the outbox depends on it', async () => {
+  const saved = (text: string) => [...h.history.values()].some(value => value.includes(text));
+  const page = (text: string) => ({ version: 1 as const, self, actors: [], page: { snapshot: { room, members: [], messages: [], cursor: '1' } as never, before: null,
+    messages: [{ id: self, seq: '1', authorId: self, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text }], createdAt: '2026-10-09', deleted: false, threadRootId: null }] as never } });
+  vi.useFakeTimers();
+  try {
+    const first = cacheChatMessages(id, page('first-draft'), true), second = cacheChatMessages(id, page('second-draft'), true);
+    // Memory answers immediately; the disk waits for the burst to end.
+    expect(peekChatMessages(id)?.page.messages[0].content[0].text).toBe('second-draft');
+    await vi.advanceTimersByTimeAsync(399);
+    expect(h.history.size).toBe(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await Promise.all([first, second])).toEqual([true, true]);
+    expect(saved('second-draft')).toBe(true);
+    expect(saved('first-draft')).toBe(false);
+    const waiting = cacheChatMessages(id, page('third-draft'), true);
+    expect(await cacheChatMessages(id, page('confirmed'))).toBe(true);
+    expect(await waiting).toBe(true);
+    expect(saved('confirmed')).toBe(true);
+    const leaving = cacheChatMessages(id, page('left-screen'), true);
+    flushChatMessageCache();
+    expect(await leaving).toBe(true);
+    expect(saved('left-screen')).toBe(true);
+  } finally { vi.useRealTimers(); }
+});
+
 // Integration tier: real hook, real disk store, controlled native IO / HTTP.
 it('reopens saved history offline from memory and disk, and purges it after membership loss', async () => {
   setMobileAuthOwner('owner'); showChat = true; await render();
   expect(chat.state).toMatchObject({ kind: 'ready', group: { messages: [{ content: 'Fixture message' }] } });
   await act(async () => { root!.unmount(); root = undefined; });
-  h.auth.apiFetch.mockImplementation(() => new Promise(() => {}));
+  const stalled: Array<(error: unknown) => void> = [];
+  h.auth.apiFetch.mockImplementation(() => new Promise((_, reject) => { stalled.push(reject); }));
   await render();
   expect(chat.state.kind).toBe('ready');
   await act(async () => { root!.unmount(); root = undefined; });
@@ -102,7 +349,10 @@ it('reopens saved history offline from memory and disk, and purges it after memb
   await render();
   expect(chat.state).toMatchObject({ kind: 'ready', group: { messages: [{ content: 'Fixture message' }] } });
   h.auth.apiFetch.mockRejectedValue({ status: 403 });
-  // Restart the mounted request too, since its earlier HTTP read intentionally never resolves.
+  // Screens of one account share its reads in flight; the stalled ones end as request timeouts
+  // and leave the saved conversation on screen. Reopening then asks the server again.
+  await act(async () => { stalled.splice(0).forEach(reject => reject(new Error('REQUEST_TIMEOUT'))); });
+  expect(chat.state.kind).toBe('ready');
   await act(async () => { root!.unmount(); root = undefined; });
   await render();
   expect(chat.state.kind).toBe('missing');
@@ -121,6 +371,212 @@ it('does not show one account\'s saved group to another account', async () => {
   expect(chat.state.kind).toBe('loading');
 });
 afterEach(() => { act(() => root?.unmount()); root = undefined; vi.unstubAllGlobals(); vi.useRealTimers(); });
+
+// Unit / PR #10861: exercise the real hook/client with a bot and its authenticated owner.
+// The old fixture used a human as the target; cover both an owned future skip and a refused foreign one.
+it.each([true, false])('sends a future skip only for an owned companion (owned=%s)', async owned => {
+  const planId = '00000000-0000-4000-8000-000000000040';
+  const companion = { id: '00000000-0000-4000-8000-000000000003', kind: 'bot', state: 'joined', name: 'Bot',
+    ownerActorId: owned ? self : '00000000-0000-4000-8000-000000000004', ownerName: 'Owner', role: 'member', avatar: null };
+  const plan = { id: planId, revision: 2, creator_id: self, organizer_id: companion.id, source_message_id: self,
+    request_text: 'Talk', kind: 'talk', status: 'running', current_step: 0, supportsPendingSkip: true,
+    activeExecution: { id: self, status: 'running' }, created_at: '2026-10-09', updated_at: '2026-10-09',
+    steps: [0, 1].map(position => ({ position, botId: companion.id, botName: 'Bot', task: '', status: position === 0 ? 'running' : 'pending' })) };
+  const writes: unknown[] = [];
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    if (path.endsWith('/snapshot')) {
+      const snapshot = await original(path, options);
+      return { ...snapshot, members: [...snapshot.members, companion] };
+    }
+    if (path.includes('/plans') && options.method === 'POST') { writes.push(options.body); return { ok: true }; }
+    if (path.includes('/plans')) return [plan];
+    return original(path, options);
+  });
+  showChat = true; await render();
+  if (!owned) {
+    await act(async () => { await expect(chat.act('plan-edit', { planId, expectedRevision: 2, action: 'skip', position: 1 })).rejects.toThrow('ROLE_REQUIRED'); });
+    expect(writes).toEqual([]);
+    return;
+  }
+  await act(async () => { await chat.act('plan-edit', { planId, expectedRevision: 2, action: 'skip', position: 1 }); });
+  expect(writes).toEqual([expect.objectContaining({ expectedRevision: 2, action: 'skip', position: 1 })]);
+  expect(writes[0]).not.toHaveProperty('executionId');
+});
+
+// #5759, unit: exercise the actual direct hook/client, not the remote-resource
+// mock. A human-signed proposal previously rendered as text and rejected plan-start.
+// The blur cases retain the original group in the navigation stack while its snapshot is pending.
+it.each(['receipt', 'leave', 'unmount', 'blur', 'refocus', 'blur-before-submit'])('handles a direct plan action across %s without a duplicate or stale write', async transition => {
+  const planId = '00000000-0000-4000-8000-000000000040';
+  let plan = { id: planId, revision: 2, creator_id: self, organizer_id: self, source_message_id: self,
+    request_text: 'Build', kind: 'work', status: 'proposed', current_step: null as number | null,
+    created_at: '2026-10-09', updated_at: '2026-10-09',
+    steps: [{ position: 0, botId: self, botName: 'Builder', task: 'Build', status: 'pending' }] };
+  let finish!: () => void;
+  let writes = 0;
+  const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
+  const mutation = new Promise<void>(resolve => { finish = resolve; });
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    if (path.includes('/plans') && options.method === 'POST') {
+      await mutation;
+      if (transition === 'blur-before-submit') return apiFetchRaw(path, options);
+      writes++;
+      return { ok: true };
+    }
+    if (path.includes('/plans')) return [plan];
+    return original(path, options);
+  });
+  showChat = true; await render();
+  expect(chat.state).toMatchObject({ kind: 'ready', group: { plans: [{ id: planId, status: 'proposed' }] } });
+  if (transition !== 'receipt' && transition !== 'blur-before-submit') {
+    const loaded = h.auth.apiFetch.getMockImplementation()!;
+    h.auth.apiFetch.mockImplementation(async (path, options) => {
+      if (path.endsWith('/snapshot')) await mutation;
+      return loaded(path, options);
+    });
+  }
+  let first!: Promise<unknown>;
+  await act(async () => { first = chat.act('plan-start', { planId, expectedRevision: 2 }); });
+  await act(async () => { await expect(chat.act('plan-start', { planId, expectedRevision: 2 })).rejects.toThrow('PLAN_OPEN'); });
+  if (transition !== 'receipt') {
+    await act(async () => {
+      if (transition === 'unmount') { root!.unmount(); root = undefined; }
+      else if (transition === 'blur' || transition === 'refocus' || transition === 'blur-before-submit') { h.focused = false; await render(); }
+      else { showChat = false; await render(); }
+    });
+    if (transition === 'refocus') { h.focused = true; await render(); }
+    await act(async () => {
+      finish();
+      await expect(first).rejects.toThrow(transition === 'blur-before-submit' ? 'Request cancelled' : 'OWNER_CHANGED');
+    });
+    expect(writes).toBe(0);
+    if (transition !== 'blur-before-submit') {
+      expect(h.auth.apiFetch.mock.calls.some(([path, options]) => path.includes('/plans/') && options.method === 'POST')).toBe(false);
+    } else {
+      // Auth can still be awaiting a token after preflight; the real transport must not send.
+      expect(fetch).not.toHaveBeenCalled();
+    }
+    if (transition === 'refocus') {
+      await act(async () => { await chat.act('plan-start', { planId, expectedRevision: 2 }); });
+      expect(h.auth.apiFetch.mock.calls.filter(([path, options]) => path.includes('/plans/') && options.method === 'POST')).toHaveLength(1);
+    }
+    return;
+  }
+  plan = { ...plan, revision: 3, status: 'running', current_step: 0, steps: [{ ...plan.steps[0], status: 'running' }] };
+  await act(async () => { finish(); await first; });
+  expect(h.auth.apiFetch.mock.calls.filter(([path, options]) => path.includes('/plans/') && options.method === 'POST')).toHaveLength(1);
+  expect(chat.state).toMatchObject({ kind: 'ready', group: { plans: [{ status: 'running' }] } });
+  expect(h.link.invoke).not.toHaveBeenCalled();
+});
+
+// #8456, unit: refresh while a positional edit is open; the old callback must not borrow a newer revision.
+it('rejects a stale step edit after refresh and sends the displayed revision on a new edit', async () => {
+  const planId = '00000000-0000-4000-8000-000000000040';
+  let plan = { id: planId, revision: 2, creator_id: self, organizer_id: self,
+    status: 'proposed', current_step: null, created_at: '2026-10-09', updated_at: '2026-10-09',
+    steps: [0, 1, 2].map(position => ({ position, botId: self, botName: 'Builder', task: 'Build', status: 'pending' })) };
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  const writes: unknown[] = [];
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    if (path.includes('/plans') && options.method === 'POST') { writes.push(options.body); return { ok: true }; }
+    if (path.includes('/plans')) return [plan];
+    return original(path, options);
+  });
+  showChat = true; await render();
+  const oldAct = chat.act;
+  plan = { ...plan, revision: 3, steps: plan.steps.slice(1).map((step, position) => ({ ...step, position })) };
+  await act(async () => { chat.reload(); });
+  await act(async () => { await expect(oldAct('plan-edit', { planId, position: 0, action: 'remove', expectedRevision: 2 })).rejects.toThrow('REVISION_CONFLICT'); });
+  expect(writes).toEqual([]);
+  await act(async () => { await expect(chat.act('plan-start', { planId })).rejects.toThrow('REVISION_CONFLICT'); });
+  await act(async () => { await chat.act('plan-start', { planId, expectedRevision: 3 }); });
+  expect(writes).toEqual([expect.objectContaining({ expectedRevision: 3, action: 'start' })]);
+});
+
+// #7847 review: real hook/client pagination must survive a concurrent summary read.
+// Existing root-loss tests never completed hydration between starting and finishing an older page (unit).
+it('keeps an older page when thread summary hydration finishes while it is loading', async () => {
+  const initial = Array.from({ length: 100 }, (_, index) => ({
+    id: `00000000-0000-4000-8000-${String(300 - index).padStart(12, '0')}`, seq: String(300 - index),
+    authorId: self, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: `Message ${index}` }],
+    createdAt: '2026-10-09', deleted: false, threadRootId: null, ...(index === 0 ? { replyCount: 2 } : {}),
+  }));
+  const older = { ...initial[0], id: '00000000-0000-4000-8000-000000000200', seq: '200', content: [{ type: 'text', text: 'Older page arrived' }] };
+  let finishPreview!: (rows: unknown[]) => void;
+  let finishOlder!: (rows: unknown[]) => void;
+  const preview = new Promise<unknown[]>(resolve => { finishPreview = resolve; });
+  const previousPage = new Promise<unknown[]>(resolve => { finishOlder = resolve; });
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockImplementation((path, options) => {
+    if (path.endsWith('/snapshot')) return Promise.resolve({ room, members: [], messages: initial, cursor: '300' });
+    if (path.startsWith('/v1/changes?')) return Promise.resolve({ head: '300', cursor: '300', changes: [], hasMore: false });
+    if (path.includes('/messages?') && path.includes('threadRootId=')) return preview;
+    if (path.includes('/messages?') && path.includes('before=')) return previousPage;
+    if (path.includes('/messages?')) return Promise.resolve(initial);
+    return original(path, options);
+  });
+  showChat = true; await render();
+  expect(chat.state.kind).toBe('ready');
+  let loading!: Promise<void>;
+  await act(async () => { loading = chat.loadOlder!(); });
+  expect(chat.loadingOlder).toBe(true);
+  await act(async () => { finishPreview([{ ...initial[0], id: '00000000-0000-4000-8000-000000000301', seq: '301', threadRootId: initial[0].id }]); });
+  await act(async () => { finishOlder([older]); await loading; });
+  expect(chat.state).toMatchObject({ kind: 'ready', group: { hasMoreBefore: false } });
+  if (chat.state.kind !== 'ready') throw new Error('Expected paged group');
+  expect(chat.state.group.messages.some(message => message.content === 'Older page arrived')).toBe(true);
+  expect(chat.state.group.messages.find(message => message.id === initial[0].id)?.threadPreview?.replies)
+    .toEqual(expect.arrayContaining([expect.objectContaining({ id: '00000000-0000-4000-8000-000000000301' })]));
+  expect(chat.loadingOlder).toBe(false);
+});
+
+// #7847: the real hook must retain an older thread page when following changes during the request.
+// Unit: the hydration regression above does not exercise the follow acknowledgement and reload.
+it.each([false, true])('settles following without losing a concurrent older page (pagination fails=%s)', async paginationFails => {
+  const initial = Array.from({ length: 100 }, (_, index) => ({
+    id: `00000000-0000-4000-8000-${String(300 - index).padStart(12, '0')}`, seq: String(300 - index),
+    authorId: self, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: `Reply ${index}` }],
+    createdAt: '2026-10-09', deleted: false, threadRootId: id,
+  }));
+  const older = { ...initial[0], id: '00000000-0000-4000-8000-000000000200', seq: '200', content: [{ type: 'text', text: 'Older reply arrived' }] };
+  const threadRoot = { ...initial[0], id, seq: '1', threadRootId: null };
+  let finishOlder!: (rows: unknown[]) => void;
+  let failOlder!: (error: Error) => void;
+  const previousPage = new Promise<unknown[]>((resolve, reject) => { finishOlder = resolve; failOlder = reject; });
+  let following = true;
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockImplementation((path, options) => {
+    if (path.endsWith('/snapshot')) return Promise.resolve({ room, members: [], messages: [], cursor: '300',
+      reads: [{ thread_key: id, read_seq: '0', following }] });
+    if (path.endsWith('/read')) { following = options.body.following; return Promise.resolve({ following }); }
+    if (path.startsWith('/v1/changes?')) return Promise.resolve({ head: '300', cursor: '300', changes: [], hasMore: false });
+    if (path.endsWith(`/messages/${id}`)) return Promise.resolve(threadRoot);
+    if (path.includes('/messages?') && path.includes('before=')) return previousPage;
+    if (path.includes('/messages?')) return Promise.resolve(initial);
+    return original(path, options);
+  });
+  showChat = true; threadRootId = id; await render();
+  let loading!: Promise<void>;
+  let unfollowing!: Promise<boolean>;
+  let loadResult!: Promise<unknown>;
+  await act(async () => { loading = chat.loadOlder!(); loadResult = loading.catch(error => error); });
+  await act(async () => { unfollowing = chat.followThread!(false); });
+  expect(following).toBe(false);
+  await act(async () => {
+    if (paginationFails) failOlder(new Error('network unavailable'));
+    else finishOlder([older]);
+    await loadResult; await unfollowing;
+  });
+  expect(await loadResult).toEqual(paginationFails ? new Error('network unavailable') : undefined);
+  expect(chat.state).toMatchObject({ kind: 'ready', group: { hasMoreBefore: paginationFails } });
+  if (chat.state.kind !== 'ready') throw new Error('Expected paged thread');
+  expect(chat.state.group.messages.some(message => message.content === 'Older reply arrived')).toBe(!paginationFails);
+  expect(chat.threadMeta?.following).toBe(false);
+  expect(chat.loadingOlder).toBe(false);
+});
+
 it('shows safe execution failures through the direct phone entry and removes them after retry', async () => {
   const original = h.auth.apiFetch.getMockImplementation()!;
   let status = 'failed';
@@ -173,19 +629,101 @@ it('keeps the account owner label when quoting from a direct phone entry', async
     mentions: [botId], content: [expect.objectContaining({ data: expect.objectContaining({ authorName: 'Companion X (Account B)' }) }), { type: 'text', text: 'Agreed' }],
   }) }));
 });
-it('never includes the current human actor in explicit or everyone server mentions', async () => {
+// Direct mobile thread replies use the real outbox and HTTP serializer. A named
+// companion must be the sole recipient even when public Cindy wrote the root.
+it.each([false, true])('addresses a bot-authored thread with an explicit target=%s', async explicit => {
+  const author = '00000000-0000-4000-8000-000000000003';
+  const personal = '00000000-0000-4000-8000-000000000004';
+  const member = { id: author, kind: 'bot', state: 'joined', name: 'Cindy', role: 'member', ownerActorId: null };
+  const root = { id: self, seq: '1', authorId: author, author: { kind: 'bot', name: 'Cindy' },
+    content: [{ type: 'text', text: 'Topic' }], createdAt: '2026-10-09', deleted: false, threadRootId: null };
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    const members = [member, { ...member, id: personal, ownerActorId: self }];
+    if (path.endsWith('/snapshot')) return { room, members, messages: [root], cursor: '1' };
+    if (path.endsWith('/members')) return members;
+    if (path.includes('/messages?')) return [];
+    if (path.endsWith('/messages/' + self)) return root;
+    return original(path, options);
+  });
+  showChat = true; threadRootId = self; await render();
+  await act(async () => { await send({ clientId: 'thread-recipient', text: 'Please reply', mentions: { all: false, botIds: explicit ? [personal] : [] } }); });
+  expect(h.auth.apiFetch).toHaveBeenCalledWith('/v1/conversations/' + id + '/messages', expect.objectContaining({
+    method: 'POST', body: expect.objectContaining({ threadRootId: self, mentions: [explicit ? personal : author] }),
+  }));
+});
+
+// Integration: useBotGroupChat -> upload -> durable outbox -> real HTTP serializer.
+// Topic attachment parity: existing media cases only covered the main timeline;
+// an attachment-only topic reply must retain its root in the eventual POST.
+it.each([
+  { text: '', topic: false }, { text: 'look at this', topic: false },
+  { text: '', topic: true }, { text: 'look at this', topic: true },
+])('uploads and sends direct media with all computers offline, text=$text topic=$topic', async ({ text, topic }) => {
+  const mediaId = '00000000-0000-4000-8000-000000000003';
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    if (path.endsWith('/media')) return { id: mediaId, uploadUrl: 'https://upload.example.invalid/signed' };
+    if (path.endsWith('/complete')) return {};
+    if (path.endsWith(`/messages/${self}`)) return (await original(`/v1/conversations/${id}/messages?limit=100`, options))[0];
+    return original(path, options);
+  });
+  showChat = true; threadRootId = topic ? self : undefined; await render();
+  expect(chat.state).toMatchObject({ kind: 'ready', group: { supportsAttachments: true } });
+  const attachment = await chat.uploadAttachment!({ name: 'photo.jpg', mimeType: 'image/jpeg', size: 42 }, 'file:///photo', { token: 'fixture' });
+  const input = { clientId: 'same-media-send', text, mentions: { all: false, botIds: [] }, attachments: [attachment] };
+  await act(async () => { await send(input); });
+  const posts = h.auth.apiFetch.mock.calls.filter(([path]) => path.endsWith('/messages'));
+  expect(posts).toHaveLength(1);
+  expect(posts[0][1].body).toEqual({ operationId: 'same-media-send', mentions: [],
+    ...(topic ? { threadRootId: self } : {}),
+    content: [...(text ? [{ type: 'text', text }] : []), { type: 'media', mediaId, caption: 'photo.jpg' }] });
+  expect(h.put).toHaveBeenCalledWith('https://upload.example.invalid/signed', 'file:///photo', 'image/jpeg', {},
+    { signal: undefined, signedHeaders: { 'Content-Type': 'image/jpeg' } });
+  expect(h.link.invoke).not.toHaveBeenCalled(); expect(h.link.openLink).not.toHaveBeenCalled();
+});
+
+it('clears a group when the upload prepare rejects its membership', async () => {
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    if (path.endsWith('/media')) throw Object.assign(new Error('NOT_MEMBER'), { status: 403 });
+    return original(path, options);
+  });
+  showChat = true; await render();
+  await act(async () => {
+    await expect(chat.uploadAttachment!({ name: 'a.pdf', size: 42 }, 'file:///picked', { token: 'fixture' })).rejects.toMatchObject({ status: 403 });
+  });
+  expect(chat.state.kind).toBe('missing');
+  expect(h.put).not.toHaveBeenCalled();
+});
+
+it('refuses a late PUT result after account changes before media completion', async () => {
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockImplementation(async (path, options) => path.endsWith('/media')
+    ? { id: self, uploadUrl: 'https://upload.example.invalid/signed' } : original(path, options));
+  h.put.mockImplementation(async () => { h.auth.accountGeneration++; await render(); });
+  showChat = true; await render();
+  const upload = chat.uploadAttachment!;
+  await expect(upload({ name: 'a.pdf', size: 42 }, 'file:///picked', { token: 'fixture' })).rejects.toThrow('OWNER_CHANGED');
+  expect(h.auth.apiFetch.mock.calls.some(([path]) => path.endsWith('/complete'))).toBe(false);
+  expect(h.auth.apiFetch.mock.calls.some(([path]) => path.endsWith('/messages'))).toBe(false);
+});
+
+it.each(['group', 'direct'])('preserves explicit self only in groups and excludes the sender from broadcasts (%s)', async kind => {
   const other = '00000000-0000-4000-8000-000000000003';
   const original = h.auth.apiFetch.getMockImplementation()!;
   h.auth.apiFetch.mockImplementation(async (path, options) => {
     const value = await original(path, options);
     if (path.endsWith('/members')) return [...value, { ...value[0], id: other, name: 'Other', ownerActorId: other }];
-    return path.endsWith('/snapshot') ? { ...value, members: [...value.members, { ...value.members[0], id: other, name: 'Other', ownerActorId: other }] } : value;
+    return path.endsWith('/snapshot') ? { ...value, room: { ...value.room, kind }, members: [...value.members, { ...value.members[0], id: other, name: 'Other', ownerActorId: other }] } : value;
   });
   showChat = true; await render();
   for (const all of [false, true]) {
     await act(async () => { await send({ text: 'hello', clientId: `fixture-${all}`, mentions: { all, botIds: [self, other] } }); });
-    expect(h.auth.apiFetch).toHaveBeenCalledWith(`/v1/conversations/${id}/messages`, expect.objectContaining({ method: 'POST', body: { operationId: `fixture-${all}`, content: [{ type: 'text', text: 'hello' }], mentions: [other] } }));
+    expect(h.auth.apiFetch).toHaveBeenCalledWith(`/v1/conversations/${id}/messages`, expect.objectContaining({ method: 'POST', body: { operationId: `fixture-${all}`, content: [{ type: 'text', text: 'hello' }], mentions: kind === 'direct' ? [other] : [self, other] } }));
   }
+  await act(async () => { await send({ text: 'hello', clientId: 'broadcast-only', mentions: { all: true, botIds: [] } }); });
+  expect(h.auth.apiFetch).toHaveBeenCalledWith(`/v1/conversations/${id}/messages`, expect.objectContaining({ method: 'POST', body: { operationId: 'broadcast-only', content: [{ type: 'text', text: 'hello' }], mentions: [other] } }));
 });
 it('imports read_seq and acknowledges only displayed incoming messages with their exact sequences', async () => {
   await clearRemoteResourceCache();
@@ -260,7 +798,7 @@ it('resolves everyone using authorized members at send time instead of the displ
   h.auth.apiFetch.mockImplementation(async (path, options) => {
     if (path.endsWith('/members')) {
       const [member] = await original(path, options);
-      return [member, { ...member, id: joined, kind: 'bot', name: 'New teammate' },
+      return [member, { ...member, id: joined, kind: 'human', name: 'New person' },
         { ...member, id: invited, state: 'invited' }, { ...member, id: left, state: 'left' }];
     }
     return original(path, options);
@@ -340,8 +878,14 @@ it.each([403, 404])('clears revoked access immediately when a send returns %s', 
   expect(chat.online).toBe(false);
   await expect(send({ text: 'again', clientId: 'fixture-no-page', mentions: { all: false, botIds: [] } })).rejects.toThrow('CHAT_READ_FAILED');
 });
-it.each([403, 404])('clears revoked access when attachment authorization returns %s', async (status) => {
+it.each([403, 404])('clears revoked access and cached room media when attachment authorization returns %s', async (status) => {
   showChat = true; await render();
+  const { setCachedServerMedia, peekCachedServerMedia, chatServerMediaRoomEpoch } = await import('@/chat/chatServerMediaCache');
+  setCachedServerMedia('owner:1', id, {
+    id: self, name: 'photo.png', category: 'image', mimeType: 'image/png', size: 10,
+    url: 'https://cdn.example.invalid/photo.png?sig=1', path: null,
+  });
+  const epochBefore = chatServerMediaRoomEpoch(id);
   const original = h.auth.apiFetch.getMockImplementation()!;
   h.auth.apiFetch.mockImplementation(async (path, options) => {
     if (path.includes('/media/')) throw Object.assign(new Error('NOT_MEMBER'), { status });
@@ -350,6 +894,8 @@ it.each([403, 404])('clears revoked access when attachment authorization returns
   await act(async () => { await expect(chat.media!(self)).rejects.toMatchObject({ status }); });
   expect(chat.state.kind).toBe('missing');
   expect(chat.online).toBe(false);
+  expect(peekCachedServerMedia('owner:1', id, self)).toBeNull();
+  expect(chatServerMediaRoomEpoch(id)).toBeGreaterThan(epochBefore);
 });
 it('keeps authorized history when only the attachment is missing', async () => {
   showChat = true; await render();
@@ -520,6 +1066,12 @@ it('exposes an actor-scope personal hide to the current screen and clears it aft
   ] }) }); });
   expect(chat.state.kind).toBe('missing');
   expect(chat.listHidden).toBe(true);
+  const { chatServerMediaRoomEpoch } = await import('@/chat/chatServerMediaCache');
+  const hiddenEpoch = chatServerMediaRoomEpoch(id);
+  await act(async () => { sockets[0].onmessage({ data: JSON.stringify({ type: 'changes', scope: `actor:${self}`, cursor: '12', changes: [
+    { type: 'conversation.list.changed', data: { conversationId: '00000000-0000-4000-8000-000000000003', hidden: false, revision: 2 } },
+  ] }) }); });
+  expect(chatServerMediaRoomEpoch(id)).toBe(hiddenEpoch);
   expect(h.auth.apiFetch.mock.calls.some(([path, options]) => path.endsWith('/list-state') && options.method === 'POST')).toBe(false);
   h.auth.accountGeneration++;
   await render();
@@ -678,25 +1230,32 @@ it.each(['missing', 'empty', 'read-error'] as const)('keeps initial loading corr
 
 // Integration: the actual ledger and HTTP adapter survive a process restart after
 // a committed POST loses its response. Existing direct-send tests cannot cover it.
-it('persists the exact uncertain send across restart and never rebuilds its recipients', async () => {
+it.each([
+  { withMedia: false, topic: false }, { withMedia: true, topic: false }, { withMedia: true, topic: true },
+])('persists the exact uncertain send across restart and never rebuilds its recipients (media=$withMedia topic=$topic)', async ({ withMedia, topic }) => {
   const storage = { getAllKeys: async () => [...h.disk.keys()], getItem: async (key: string) => h.disk.get(key) ?? null,
     setItem: async (key: string, value: string) => { h.disk.set(key, value); }, removeItem: async (key: string) => { h.disk.delete(key); } };
   const account = getMobileAuthOwner().accountKey;
   let store = createDurableOutbox(storage); await store.activate(account);
-  await enqueueChatMessage(store, account, id, { clientId: 'lost-response', text: 'saved offline', mentions: { all: true, botIds: [] } }, 1);
+  const attachments = withMedia ? [{ id, name: 'report.pdf', path: '', ext: 'pdf', size: 42, mimeType: 'application/pdf', category: 'file' as const }] : [];
+  await enqueueChatMessage(store, account, id, { clientId: 'lost-response', text: 'saved offline', mentions: { all: true, botIds: [] }, attachments,
+    ...(topic ? { threadRootId: self } : {}) }, 1);
   expect(store.getSnapshot()[0]).toMatchObject({ state: 'queued', item: { text: 'saved offline' } });
   const posted: unknown[] = [];
   let memberReads = 0;
   const client = createChatServerClient(async <T,>(path: string, method?: string, body?: unknown): Promise<T> => {
     if (path === '/me') return { actor: { id: self, kind: 'human' } } as T;
-    if (path.endsWith('/members')) { memberReads++; return [{ id: self, state: 'joined' }, { id, state: 'joined' }] as T; }
+    if (path.endsWith('/members')) { memberReads++; return [{ id: self, kind: 'human', state: 'joined' }, { id, kind: 'human', state: 'joined' }] as T; }
     if (method === 'POST') { posted.push(body); if (posted.length === 1) throw new Error('response lost'); return { id: self } as T; }
     throw new Error('Unexpected request');
   });
   const delivery = () => createChatOutboxDelivery({ store, client, current: () => true, canRun: () => true, accessLost: async () => {} });
   await delivery().run();
   expect(store.getSnapshot()[0]).toMatchObject({ state: 'queued', enqueueStarted: true, chat: { body: { operationId: 'lost-response', mentions: [id] } } });
+  expect(posted[0]).toMatchObject({ content: [{ type: 'text', text: 'saved offline' }, ...(withMedia ? [{ type: 'media', mediaId: id, caption: 'report.pdf' }] : [])] });
+  expect((posted[0] as { threadRootId?: string }).threadRootId).toBe(topic ? self : undefined);
   store = createDurableOutbox(storage); await store.activate(account);
+  expect(store.getSnapshot()[0].chat?.input.attachments).toEqual(attachments);
   await delivery().run();
   expect(posted).toHaveLength(2); expect(posted[1]).toEqual(posted[0]); expect(memberReads).toBe(1);
   expect(store.getSnapshot()[0]).toMatchObject({ state: 'confirming', chat: { messageId: self } });
@@ -750,4 +1309,657 @@ it('keeps an uncertain send frozen and uncancellable when a later attempt is rej
   expect(posted).toHaveLength(2); expect(posted[1]).toEqual(posted[0]);
   expect(mobileDurableOutbox.getSnapshot()[0]).toMatchObject({ state: 'failed', enqueueStarted: true });
   await expect(chat.pendingAction!('uncertain-first', 'cancel')).rejects.toThrow('MESSAGE_ALREADY_SENDING');
+});
+
+
+// D2 root-404 regression: real mobile entry -> HTTP client -> memory/disk cache.
+// Existing membership tests only reject the whole room, not an authorized reply
+// page followed by a missing root. This integration-tier fixture distinguishes
+// the exact thread lookup exception from room-wide access loss.
+it('keeps main history in memory and on disk when only the thread root is missing', async () => {
+  showChat = true; await render();
+  expect(peekChatMessages(id)?.page.messages[0]?.id).toBe(self);
+  await act(async () => { root!.unmount(); root = undefined; });
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  const replyId = '00000000-0000-4000-8000-000000000003';
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    if (path.endsWith(`/messages/${self}`)) throw { status: 404, code: 'MESSAGE_NOT_FOUND' };
+    if (path.includes('/messages?') && path.includes(`threadRootId=${self}`)) return [{
+      id: replyId, seq: '9007199254740994', authorId: self, author: { kind: 'human', name: 'Me' },
+      content: [{ type: 'text', text: 'Still authorized reply' }], createdAt: '2026-10-09', deleted: false, threadRootId: self,
+    }];
+    return original(path, options);
+  });
+  threadRootId = self; await render();
+  expect(chat.state).toMatchObject({ kind: 'ready', group: { messages: [{ id: replyId, content: 'Still authorized reply' }] } });
+  expect(peekChatMessages(id)?.page.messages[0]?.id).toBe(self);
+  expect(peekChatMessages(id, self)?.page.messages.map(message => message.id)).toEqual([replyId]);
+  await act(async () => { root!.unmount(); root = undefined; });
+  // Discard JS memory without deleting this account's persisted conversations.
+  setMobileAuthOwner(null); peekChatMessages(id); setMobileAuthOwner('owner');
+  expect((await readChatMessages(id))?.page.messages[0]?.id).toBe(self);
+});
+
+it.each([
+  { thread: true, status: 403, code: 'MESSAGE_NOT_FOUND' },
+  { thread: true, status: 404, code: 'CONVERSATION_NOT_FOUND' },
+  { thread: true, status: 404, code: 'OTHER_NOT_FOUND' },
+  { thread: false, status: 404, code: 'MESSAGE_NOT_FOUND' },
+])('still clears room history for $status/$code outside an exact missing thread root (thread=$thread)', async ({ thread, status, code }) => {
+  showChat = true; await render();
+  expect(peekChatMessages(id)).not.toBeNull();
+  await act(async () => { root!.unmount(); root = undefined; });
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    if (thread ? path.endsWith(`/messages/${self}`) : path.startsWith('/v1/changes?')) throw { status, code };
+    if (path.includes('/messages?') && path.includes(`threadRootId=${self}`)) return [];
+    return original(path, options);
+  });
+  threadRootId = thread ? self : undefined; await render();
+  // Reopening within moments shows what the account just verified; the next verification
+  // (the realtime handshake, or here a return to the foreground) reads the room again.
+  if (!thread) await act(async () => h.foreground.forEach(fn => fn('active')));
+  expect(chat.state.kind).toBe('missing');
+  expect(peekChatMessages(id)).toBeNull();
+  expect(peekChatMessages(id, self)).toBeNull();
+  await act(async () => { root!.unmount(); root = undefined; });
+  setMobileAuthOwner(null); peekChatMessages(id); setMobileAuthOwner('owner');
+  expect(await readChatMessages(id)).toBeNull();
+});
+
+// PC parity delivery, integration: the real durable ledger and account runner.
+// A confirmed reply plus a failed second POST must survive page settlement and
+// restart without ever re-sending the reply; prior media tests lack this second stage.
+it('restores a failed share after restart, keeps its body, and does not block later replies', async () => {
+  const { settleChatOutbox } = await import('@/chat/chatOutbox');
+  const storage = { getAllKeys: async () => [...h.disk.keys()], getItem: async (key: string) => h.disk.get(key) ?? null,
+    setItem: async (key: string, value: string) => { h.disk.set(key, value); }, removeItem: async (key: string) => { h.disk.delete(key); } };
+  const account = getMobileAuthOwner().accountKey;
+  let store = createDurableOutbox(storage); await store.activate(account);
+  const replyId = '00000000-0000-4000-8000-000000000020';
+  const shareId = '00000000-0000-4000-8000-000000000021';
+  const bodies: unknown[] = [];
+  let fail = true;
+  const client = { personalList: { hidden: () => false }, syncListState: async () => {},
+    members: async () => [], me: async () => self, actors: async () => [],
+    send: vi.fn(async (_room, input, durable) => { await durable.save({ operationId: input.clientId, content: [], mentions: [] }); return { id: replyId }; }),
+    shareToMain: vi.fn(async (_room, source, root, durable) => {
+      expect(source).toBe(replyId); expect(root).toBe(self);
+      const body = durable.body ?? { operationId: `thread-share:${source}`, content: [], mentions: [self] };
+      if (!durable.body) await durable.save(body);
+      bodies.push(body); if (fail) throw new Error('offline'); return { messageId: shareId, alreadyShared: false };
+    }),
+    load: async () => ({ snapshot: { room, members: [], messages: [], cursor: '1' }, messages: [], before: null }),
+  } as any;
+  const runner = () => createChatOutboxDelivery({ store, client, current: () => true, canRun: () => true, accessLost: async () => {} });
+  await enqueueChatMessage(store, account, id, { clientId: 'topic-and-main', text: 'reply', threadRootId: self,
+    mentions: { all: false, botIds: [] }, alsoSendToMain: true }, 0);
+  await runner().run();
+  expect(client.shareToMain).not.toHaveBeenCalled();
+  await runner().run();
+  await settleChatOutbox(store, id, new Set([replyId]));
+  expect(store.getSnapshot()[0].chat).toMatchObject({ messageId: replyId, shareToMain: { state: 'failed' } });
+  await enqueueChatMessage(store, account, id, { clientId: 'later-reply', text: 'later', threadRootId: self, mentions: { all: false, botIds: [] } }, 1);
+  await runner().run();
+  expect(client.send).toHaveBeenCalledTimes(2);
+  store = createDurableOutbox(storage); await store.activate(account);
+  const row = store.getSnapshot().find(row => row.item.clientId === 'topic-and-main')!;
+  await store.update(row, { chat: { ...row.chat!, shareToMain: { ...row.chat!.shareToMain!, state: 'pending' } } });
+  fail = false;
+  await runner().run();
+  expect(client.send).toHaveBeenCalledTimes(2);
+  expect(bodies[1]).toEqual(bodies[0]);
+  expect(store.getSnapshot().find(row => row.item.clientId === 'topic-and-main')?.chat?.shareToMain)
+    .toMatchObject({ state: 'sent', messageId: shareId });
+});
+
+// #7847 review, integration: a saved share receipt survives restart beyond the
+// snapshot window. Retire it only after its canonical message reaches disk.
+// r4420823552: unlike the known-ID case, a cross-device duplicate acknowledges the
+// share with no ID. Keep its posted marker without repeatedly polling or sending.
+it.each([false, true])('recovers an off-window share after restart without resending (already shared=%s)', async alreadyShared => {
+  const storage = { getAllKeys: async () => [...h.disk.keys()], getItem: async (key: string) => h.disk.get(key) ?? null,
+    setItem: async (key: string, value: string) => { h.disk.set(key, value); }, removeItem: async (key: string) => { h.disk.delete(key); } };
+  const account = getMobileAuthOwner().accountKey;
+  let store = createDurableOutbox(storage); await store.activate(account);
+  const replyId = '00000000-0000-4000-8000-000000000041', shareId = '00000000-0000-4000-8000-000000000042';
+  const reply = { id: replyId, seq: '41', authorId: self, author: { kind: 'human', name: 'Me' },
+    content: [{ type: 'text', text: alreadyShared ? 'Edited after desktop share' : 'Reply' }], createdAt: '2026-10-29', deleted: false, threadRootId: self };
+  const shared = { ...reply, id: shareId, seq: '42', threadRootId: null, content: [{ type: 'card', namespace: 'cindy.thread-share', schemaRevision: 1,
+    data: { messageId: replyId, threadRootId: self }, fallback: '' }] };
+  await enqueueChatMessage(store, account, id, { clientId: 'confirmed-share', text: 'Reply', threadRootId: self,
+    mentions: { all: false, botIds: [] }, alsoSendToMain: true }, 0);
+  const row = store.getSnapshot()[0];
+  await store.update(row, { state: 'confirming', enqueueStarted: true,
+    chat: { ...row.chat!, messageId: replyId, shareToMain: alreadyShared ? { state: 'pending' } : { state: 'sent', messageId: shareId } } });
+  store = createDurableOutbox(storage); await store.activate(account);
+  const request = vi.fn(async (path: string, method?: string) => {
+    if (method === 'POST') {
+      if (alreadyShared) throw Object.assign(new Error('OPERATION_CONFLICT'), { code: 'OPERATION_CONFLICT', status: 409 });
+      throw new Error('Must not resend');
+    }
+    if (path === '/me') return { actor: { id: self, kind: 'human' } };
+    if (path.endsWith('/snapshot')) return { room, members: [], messages: [], cursor: '200' };
+    if (path.includes('/messages?')) return [reply];
+    if (path.endsWith(`/messages/${self}`)) return { ...reply, id: self, seq: '1', threadRootId: null };
+    if (path.endsWith(`/messages/${replyId}`)) return reply;
+    if (path.endsWith(`/messages/${shareId}`)) return shared;
+    return [];
+  });
+  const client = createChatServerClient(request as any);
+  const runner = () => createChatOutboxDelivery({ store, client, current: () => true, canRun: () => true, accessLost: async () => {} });
+  h.historyWriteFails = !alreadyShared;
+  await runner().run();
+  expect(store.getSnapshot()).toHaveLength(1);
+  expect(store.getSnapshot()[0].chat?.shareToMain).toMatchObject({ state: 'sent', messageId: alreadyShared ? null : shareId });
+  const acknowledgedRequests = request.mock.calls.length;
+  store = createDurableOutbox(storage); await store.activate(account);
+  h.historyWriteFails = false;
+  await runner().run();
+  if (alreadyShared) {
+    expect(store.getSnapshot()[0].chat?.shareToMain).toMatchObject({ state: 'sent', messageId: null });
+    expect(request).toHaveBeenCalledTimes(acknowledgedRequests);
+  } else expect(store.getSnapshot()).toEqual([]);
+  const requests = request.mock.calls.length;
+  await runner().run(); expect(request).toHaveBeenCalledTimes(requests);
+  expect(request.mock.calls.filter(([, method]) => method === 'POST')).toHaveLength(alreadyShared ? 1 : 0);
+  setMobileAuthOwner(null); peekChatMessages(id); setMobileAuthOwner('owner');
+  const saved = (await readChatMessages(id, self))!.page;
+  expect(alreadyShared ? saved.messages : saved.snapshot.messages).toContainEqual(alreadyShared ? reply : shared);
+});
+
+// The existing runner is the authority across account switches and crash windows.
+// These are ordering/persistence regressions, not a parallel UI failure queue.
+describe('two-stage topic delivery boundaries', () => {
+  const reply = '00000000-0000-4000-8000-000000000031';
+  const shared = '00000000-0000-4000-8000-000000000032';
+  async function setup() {
+    const storage = { getAllKeys: async () => [...h.disk.keys()], getItem: async (key: string) => h.disk.get(key) ?? null,
+      setItem: async (key: string, value: string) => { h.disk.set(key, value); }, removeItem: async (key: string) => { h.disk.delete(key); } };
+    const account = getMobileAuthOwner().accountKey;
+    const store = createDurableOutbox(storage); await store.activate(account);
+    const client = { personalList: { hidden: () => false }, syncListState: async () => {}, members: async () => [], me: async () => self, actors: async () => [],
+      send: vi.fn(async (_room, input, durable) => { await durable.save(durable.body ?? { operationId: input.clientId, content: [], mentions: [] }); return { id: reply }; }),
+      shareToMain: vi.fn(async (_room, _reply, _root, durable) => {
+        await durable.save(durable.body ?? { operationId: `thread-share:${reply}`, content: [], mentions: [self] });
+        return { messageId: shared, alreadyShared: false };
+      }), load: async () => ({ snapshot: { room, members: [], messages: [], cursor: '1' }, messages: [], before: null }),
+    } as any;
+    const accessLost = vi.fn(async () => {});
+    const runner = createChatOutboxDelivery({ store, client, current: () => true, canRun: () => true, accessLost });
+    await enqueueChatMessage(store, account, id, { clientId: 'both', text: 'reply', threadRootId: self,
+      mentions: { all: false, botIds: [] }, alsoSendToMain: true }, 0);
+    return { storage, account, store, client, runner, accessLost };
+  }
+  it('never starts the share from an unknown reply outcome and coalesces duplicate wakeups', async () => {
+    const { store, client, runner } = await setup();
+    const send = client.send.getMockImplementation();
+    client.send.mockImplementationOnce(async (...args: unknown[]) => { await send(...args); throw new Error('lost response'); });
+    await Promise.all([runner.run(), runner.run()]);
+    expect(client.send).toHaveBeenCalledTimes(1); expect(client.shareToMain).not.toHaveBeenCalled();
+    expect(store.getSnapshot()[0].chat?.messageId).toBeUndefined();
+    await runner.run(); await Promise.all([runner.run(), runner.run()]);
+    expect(client.send).toHaveBeenCalledTimes(2); expect(client.shareToMain).toHaveBeenCalledTimes(1);
+    expect(client.send.mock.calls[1][2].body).toEqual(client.send.mock.calls[0][2].body ?? { operationId: 'both', content: [], mentions: [] });
+  });
+  it('recovers the persisted post body after a process stops before its receipt, and settles only once represented', async () => {
+    const { storage, account, store, client, runner } = await setup();
+    await runner.run();
+    const row = store.getSnapshot()[0];
+    const body = { operationId: `thread-share:${reply}`, content: [], mentions: [self] };
+    await store.update(row, { chat: { ...row.chat!, shareToMain: { state: 'pending', body } } });
+    const restored = createDurableOutbox(storage); await restored.activate(account);
+    const resumed = createChatOutboxDelivery({ store: restored, client, current: () => true, canRun: () => true, accessLost: async () => {} });
+    await resumed.run();
+    expect(client.send).toHaveBeenCalledTimes(1); expect(client.shareToMain.mock.calls[0][3].body).toEqual(body);
+    const { settleChatOutbox } = await import('@/chat/chatOutbox');
+    await settleChatOutbox(restored, id, new Set([reply])); expect(restored.getSnapshot()).toHaveLength(1);
+    await settleChatOutbox(restored, id, new Set([reply]), new Set([reply])); expect(restored.getSnapshot()).toHaveLength(0);
+  });
+  it('does not adopt a late share receipt into another account', async () => {
+    const { store, client, runner } = await setup(); await runner.run();
+    client.shareToMain.mockImplementationOnce(async (_room: string, _reply: string, _root: string, durable: any) => {
+      await durable.save({ operationId: `thread-share:${reply}`, content: [], mentions: [self] });
+      await store.activate('global:other'); return { messageId: shared, alreadyShared: false };
+    });
+    await runner.run(); expect(store.getSnapshot()).toEqual([]);
+    await runner.run(); expect(client.shareToMain).toHaveBeenCalledTimes(1);
+  });
+  // #7847 review, integration: a deleted off-window share must not revoke the room
+  // or stop the next draft; an actual room rejection must still suspend both.
+  it.each(['MESSAGE_NOT_FOUND', 'CONVERSATION_NOT_FOUND'])('scopes a share receipt lookup rejection: %s', async code => {
+    const { store, client, runner, accessLost } = await setup();
+    await runner.run();
+    const row = store.getSnapshot()[0];
+    await store.update(row, { chat: { ...row.chat!, shareToMain: { state: 'sent', messageId: shared } } });
+    client.message = vi.fn(async () => { throw Object.assign(new Error(code), { status: 404, code }); });
+    await enqueueChatMessage(store, store.getAccountId(), id, { clientId: 'next-draft', text: 'Next',
+      mentions: { all: false, botIds: [] } }, 0);
+    await runner.run();
+    if (code === 'MESSAGE_NOT_FOUND') {
+      expect(accessLost).not.toHaveBeenCalled();
+      expect(store.getSnapshot()[0].chat?.shareToMain).toMatchObject({ state: 'unavailable', messageId: shared });
+      expect(store.getSnapshot().some(record => record.suspended)).toBe(false);
+      expect(client.send).toHaveBeenCalledTimes(2);
+      expect(peekChatMessages(id)).not.toBeNull();
+      await runner.run();
+      expect(client.message).toHaveBeenCalledTimes(1);
+      expect(client.shareToMain).not.toHaveBeenCalled();
+    } else {
+      expect(accessLost).toHaveBeenCalledWith(id);
+      expect(store.getSnapshot().every(record => record.suspended)).toBe(true);
+      expect(client.send).toHaveBeenCalledTimes(1);
+    }
+  });
+  it.each([false, true])('keeps source unavailability local but permanently stops room revocation (room=%s)', async roomLost => {
+    const { store, client, runner, accessLost } = await setup(); await runner.run();
+    client.shareToMain.mockRejectedValue(roomLost ? Object.assign(new Error('CONVERSATION_NOT_FOUND'), { status: 403 }) : new Error('SHARE_UNAVAILABLE'));
+    await runner.run(); const row = store.getSnapshot()[0];
+    if (roomLost) { expect(row.suspended).toBe(true); expect(accessLost).toHaveBeenCalledWith(id); }
+    else { expect(row.chat?.shareToMain?.state).toBe('unavailable'); expect(accessLost).not.toHaveBeenCalled(); }
+    await runner.run(); expect(client.shareToMain).toHaveBeenCalledTimes(1);
+    if (roomLost) {
+      await enqueueChatMessage(store, store.getAccountId(), id, { clientId: 'after-rejoin', text: 'Explicit new reply', threadRootId: self,
+        mentions: { all: false, botIds: [] } }, 0);
+      await runner.run(); expect(client.send).toHaveBeenCalledTimes(2); expect(client.shareToMain).toHaveBeenCalledTimes(1);
+    }
+  });
+});
+
+// Regression: mobile group chat must show fresh messages immediately on open and live WS push
+// without discarding messages on secondary 429 metadata failures or double-sweeping the roster.
+describe('incremental mobile group sync and 429 resilience', () => {
+  function fakeSockets() {
+    const opened: Array<{
+      readyState: number;
+      onmessage: ((event: { data: string }) => void) | null;
+      onopen: ((event: unknown) => void) | null;
+      onclose: ((event: unknown) => void) | null;
+      onerror: ((event: unknown) => void) | null;
+      send: ReturnType<typeof vi.fn>;
+      close: ReturnType<typeof vi.fn>;
+    }> = [];
+    vi.stubGlobal('WebSocket', class {
+      readyState = 1; onmessage = null; onopen = null; onclose = null; onerror = null;
+      send = vi.fn();
+      close = vi.fn(() => { this.readyState = 3; (this.onclose as ((e: unknown) => void) | null)?.({}); });
+      constructor() { opened.push(this); }
+    });
+    const deliver = async (ws: (typeof opened)[number], payload: unknown) => {
+      await act(async () => {
+        ws.onmessage?.({ data: JSON.stringify(payload) });
+        for (let tick = 0; tick < 12; tick++) await Promise.resolve();
+      });
+    };
+    return { opened, deliver };
+  }
+
+  it('applies contiguous WS message.created directly into ChatHistory with zero HTTP calls and ACKs after commit', async () => {
+    const { opened, deliver } = fakeSockets();
+    const msg1 = { id: self, seq: '1', authorId: self, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: 'First' }], createdAt: '2026-11-26T01:00:00Z', deleted: false, threadRootId: null };
+    const msg2Id = '00000000-0000-4000-8000-000000000202';
+    const msg2 = { id: msg2Id, seq: '2', authorId: self, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: 'Live push' }], createdAt: '2026-11-26T01:01:00Z', deleted: false, threadRootId: null };
+    const original = h.auth.apiFetch.getMockImplementation()!;
+    h.auth.apiFetch.mockImplementation(async (path, options) => {
+      if (path === '/v1/actors') return [];
+      if (path.endsWith('/snapshot')) return { room, members: [{ id: self, kind: 'human', state: 'joined', name: 'Me', ownerActorId: self, ownerName: '', role: 'member', avatar: null }], messages: [msg1], cursor: '1' };
+      if (path.includes('/messages?')) return [msg1];
+      return original(path, options);
+    });
+    showChat = true; await render();
+    const ws = opened.at(-1)!;
+    await deliver(ws, { type: 'ready', actorId: self });
+    expect(ws.send).toHaveBeenCalledWith(JSON.stringify({ type: 'subscribe', scope: `conversation:${id}`, after: '1' }));
+
+    h.auth.apiFetch.mockClear();
+    ws.send.mockClear();
+    await deliver(ws, {
+      type: 'changes',
+      scope: `conversation:${id}`,
+      cursor: '2',
+      changes: [{ type: 'message.created', entityId: msg2Id, data: { message: msg2 } }],
+    });
+    expect(chat.state).toMatchObject({ kind: 'ready', group: { messages: [{ content: 'First' }, { content: 'Live push' }] } });
+    expect(h.auth.apiFetch).not.toHaveBeenCalled();
+    expect(ws.send).toHaveBeenCalledWith(JSON.stringify({ type: 'ack', scope: `conversation:${id}`, cursor: '2' }));
+    expect(ws.close).not.toHaveBeenCalled();
+  });
+
+  it('shows fresh messages immediately on open and degrades secondary 429 metadata without 30s stall, while still enforcing 403 revocation', async () => {
+    vi.useFakeTimers();
+    const { opened, deliver } = fakeSockets();
+    const msg1 = { id: self, seq: '1', authorId: self, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: 'Old msg' }], createdAt: '2026-11-26T01:00:00Z', deleted: false, threadRootId: null };
+    const msg2Id = '00000000-0000-4000-8000-000000000203';
+    const msg2 = { id: msg2Id, seq: '2', authorId: self, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: 'Fresh from list' }], createdAt: '2026-11-26T01:02:00Z', deleted: false, threadRootId: null };
+    let cursor = '2';
+    let serverMessages = [msg2, msg1];
+    let executionsError: unknown = Object.assign(new Error('RATE_LIMITED'), { status: 429, code: 'RATE_LIMITED', retryAt: Date.now() + 2_000 });
+    const original = h.auth.apiFetch.getMockImplementation()!;
+    h.auth.apiFetch.mockImplementation(async (path, options) => {
+      if (path === '/v1/actors') return [];
+      if (path.startsWith('/v1/conversations?')) return [{ ...room, head: cursor }];
+      if (path.endsWith('/snapshot')) return { room: { ...room, head: cursor }, members: [{ id: self, kind: 'human', state: 'joined', name: 'Me', ownerActorId: self, ownerName: '', role: 'member', avatar: null }], messages: serverMessages, cursor };
+      if (path.includes('/messages?')) return serverMessages;
+      if (path.startsWith('/v1/changes?')) return { head: cursor, cursor, changes: [], hasMore: false };
+      if (path.endsWith('/executions') && executionsError) throw executionsError;
+      return original(path, options);
+    });
+    // Home roster verifies the room first (leaving the newer message in shared ChatHistory).
+    await render();
+    expect(roster.items).toHaveLength(1);
+    // Opening the group renders the fresh message immediately even while /executions returns 429.
+    showChat = true; await render();
+    expect(chat.state).toMatchObject({ kind: 'ready', group: { messages: [{ content: 'Old msg' }, { content: 'Fresh from list' }] } });
+    expect(chat.online).toBe(true);
+    expect(chat.verified).toBe(true);
+    // WS still subscribes at cursor '2' instead of failing and disconnecting.
+    const ws = opened.at(-1)!;
+    await deliver(ws, { type: 'ready', actorId: self });
+    expect(ws.send).toHaveBeenCalledWith(JSON.stringify({ type: 'subscribe', scope: `conversation:${id}`, after: '2' }));
+    // Incoming WS message during the 429 metadata cooldown renders immediately with zero HTTP calls.
+    const msg3Id = '00000000-0000-4000-8000-000000000204';
+    const msg3 = { id: msg3Id, seq: '3', authorId: self, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: 'During cooldown' }], createdAt: '2026-11-26T01:03:00Z', deleted: false, threadRootId: null };
+    cursor = '3';
+    serverMessages = [msg3, msg2, msg1];
+    h.auth.apiFetch.mockClear();
+    await deliver(ws, {
+      type: 'changes',
+      scope: `conversation:${id}`,
+      cursor: '3',
+      changes: [{ type: 'message.created', entityId: msg3Id, data: { message: msg3 } }],
+    });
+    expect(chat.state).toMatchObject({ kind: 'ready', group: { messages: [{ content: 'Old msg' }, { content: 'Fresh from list' }, { content: 'During cooldown' }] } });
+    expect(h.auth.apiFetch).not.toHaveBeenCalled();
+    expect(chat.verified).toBe(true);
+    // Once 429 clears, short-backoff recovery completes metadata well before the old 30s interval.
+    executionsError = null;
+    h.auth.apiFetch.mockClear();
+    await act(async () => { await vi.advanceTimersByTimeAsync(4_500); });
+    expect(h.auth.apiFetch.mock.calls.some(([path]) => String(path).endsWith('/executions'))).toBe(true);
+    // Access loss (403) on secondary metadata must still revoke immediately, never degrade.
+    executionsError = Object.assign(new Error('NOT_MEMBER'), { status: 403, code: 'NOT_MEMBER' });
+    await act(async () => { chat.reload(); await vi.advanceTimersByTimeAsync(50); });
+    expect(chat.state.kind).toBe('missing');
+    expect(chat.verified).toBe(false);
+  });
+
+  it('re-authorizes and wipes cache when WS delivers membership.changed followed by 403', async () => {
+    const { opened, deliver } = fakeSockets();
+    const original = h.auth.apiFetch.getMockImplementation()!;
+    let revoked = false;
+    h.auth.apiFetch.mockImplementation(async (path, options) => {
+      if (revoked) throw Object.assign(new Error('NOT_MEMBER'), { status: 403, code: 'NOT_MEMBER' });
+      if (path === '/v1/actors') return [];
+      return original(path, options);
+    });
+    showChat = true; await render();
+    const ws = opened.at(-1)!;
+    await deliver(ws, { type: 'ready', actorId: self });
+    expect(chat.state.kind).toBe('ready');
+    revoked = true;
+    await deliver(ws, {
+      type: 'changes',
+      scope: `conversation:${id}`,
+      cursor: '2',
+      changes: [{ type: 'membership.changed', entityId: self, data: {} }],
+    });
+    expect(chat.state.kind).toBe('missing');
+    expect(peekChatMessages(id)).toBeNull();
+  });
+
+  it('deduplicates roster focus+connected sweeps and stops fan-out when 429 cooldown activates', async () => {
+    vi.useFakeTimers();
+    const start = Date.now();
+    const { opened, deliver } = fakeSockets();
+    const rooms = Array.from({ length: 10 }, (_, idx) => ({
+      ...room,
+      id: `00000000-0000-4000-8000-${String(idx + 1).padStart(12, '0')}`,
+      name: `Group ${idx + 1}`,
+      head: '1',
+    }));
+    let rateLimited = false;
+    h.auth.apiFetch.mockImplementation(async (path: string, options: any) => {
+      options.assertCurrent();
+      if (path === '/v1/me') return { actor: { id: self, kind: 'human' } };
+      if (path.startsWith('/v1/conversations?')) return rooms;
+      if (path.startsWith('/v1/changes?')) {
+        if (rateLimited && path.startsWith('/v1/changes?scope=conversation:')) {
+          throw Object.assign(new Error('RATE_LIMITED'), { status: 429, retryAt: Date.now() + 31 * 86_400_000 });
+        }
+        return { head: '1', cursor: '1', changes: [], hasMore: false };
+      }
+      const snapMatch = path.match(/^\/v1\/conversations\/([^/]+)\/snapshot$/);
+      if (snapMatch) {
+        const idx = rooms.findIndex(r => r.id === snapMatch[1]);
+        return { room: rooms[idx]!, members: [{ id: self, kind: 'human', state: 'joined', name: 'Me', ownerActorId: self, ownerName: '', role: 'member', avatar: null }], messages: [], cursor: '1' };
+      }
+      if (path.endsWith('/executions') || path.endsWith('/plans')) return [];
+      throw new Error(`Unexpected path: ${path}`);
+    });
+    await render();
+    expect(roster.items).toHaveLength(10);
+    const snapshotCallsAfterFocus = h.auth.apiFetch.mock.calls.filter(([p]) => String(p).endsWith('/snapshot')).length;
+    expect(snapshotCallsAfterFocus).toBe(10);
+
+    // WS ready immediately after focus must reuse the fresh room heads with zero extra room reads.
+    h.auth.apiFetch.mockClear();
+    const ws = opened.at(-1)!;
+    await deliver(ws, { type: 'ready', actorId: self });
+    expect(h.auth.apiFetch.mock.calls.filter(([p]) => String(p).endsWith('/snapshot'))).toHaveLength(0);
+    expect(h.auth.apiFetch.mock.calls.filter(([p]) => String(p).endsWith('/executions'))).toHaveLength(0);
+
+    // When 429 hits during an automatic refresh with moved heads, stop hammering the rest of the rooms.
+    rooms.forEach(r => { r.head = '2'; });
+    rateLimited = true;
+    h.auth.apiFetch.mockClear();
+    await deliver(ws, { type: 'changes', scope: `actor:${self}`, cursor: '2', changes: [{ type: 'conversation.updated', entityId: rooms[0]!.id, data: {} }] });
+    // First batch of 4 runs in parallel, hits 429, and remaining 6 rooms short-circuit onto cached rows.
+    const roomReads = () => h.auth.apiFetch.mock.calls.filter(([path]) =>
+      String(path).startsWith('/v1/changes?scope=conversation:') || String(path).endsWith('/snapshot'));
+    expect(roomReads()).toHaveLength(4);
+    expect(roster.items).toHaveLength(10);
+
+    rateLimited = false;
+    rooms.forEach(r => { r.head = '3'; });
+    h.auth.apiFetch.mockClear();
+    const change = { type: 'conversation.updated', entityId: rooms[0]!.id, data: {} };
+    vi.setSystemTime(start + 599_999);
+    await deliver(ws, { type: 'changes', scope: `actor:${self}`, cursor: '3', changes: [change] });
+    expect(roomReads()).toHaveLength(0);
+    vi.setSystemTime(start + 600_000);
+    await deliver(ws, { type: 'changes', scope: `actor:${self}`, cursor: '4', changes: [change] });
+    expect(roomReads()).toHaveLength(10);
+  });
+
+  it('preserves WS-pushed messages committed while a slower full load is still awaiting secondary metadata', async () => {
+    const { opened, deliver } = fakeSockets();
+    const msg1 = { id: self, seq: '1', authorId: self, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: 'First' }], createdAt: '2026-11-26T01:00:00Z', deleted: false, threadRootId: null };
+    const msg2Id = '00000000-0000-4000-8000-000000000302';
+    const msg2 = { id: msg2Id, seq: '2', authorId: self, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: 'Arrived mid-load' }], createdAt: '2026-11-26T01:01:00Z', deleted: false, threadRootId: null };
+    let holdExecutions = false;
+    let releaseExecutions: (() => void) | null = null;
+    const original = h.auth.apiFetch.getMockImplementation()!;
+    h.auth.apiFetch.mockImplementation(async (path, options) => {
+      if (path === '/v1/actors') return [];
+      if (path.endsWith('/snapshot')) return { room, members: [{ id: self, kind: 'human', state: 'joined', name: 'Me', ownerActorId: self, ownerName: '', role: 'member', avatar: null }], messages: [msg1], cursor: '1' };
+      if (path.includes('/messages?')) return [msg1];
+      if (path.startsWith('/v1/changes?')) return { head: '1', cursor: '1', changes: [], hasMore: false };
+      if (path.endsWith('/executions') && holdExecutions) {
+        await new Promise<void>(resolve => { releaseExecutions = resolve; });
+        return [];
+      }
+      return original(path, options);
+    });
+    showChat = true; await render();
+    const ws = opened.at(-1)!;
+    await deliver(ws, { type: 'ready', actorId: self });
+    expect(chat.state).toMatchObject({ kind: 'ready', group: { messages: [{ content: 'First' }] } });
+
+    // Start a full reload whose /executions read stays in flight while a WS message arrives and is ACKed.
+    holdExecutions = true;
+    await act(async () => { chat.reload(); for (let tick = 0; tick < 8; tick++) await Promise.resolve(); });
+    expect(releaseExecutions).not.toBeNull();
+    await deliver(ws, {
+      type: 'changes',
+      scope: `conversation:${id}`,
+      cursor: '2',
+      changes: [{ type: 'message.created', entityId: msg2Id, data: { message: msg2 } }],
+    });
+    expect(chat.state).toMatchObject({ kind: 'ready', group: { messages: [{ content: 'First' }, { content: 'Arrived mid-load' }] } });
+
+    // Completing the older /executions read must NOT overwrite msg2 with the earlier [msg1] snapshot.
+    await act(async () => { releaseExecutions?.(); for (let tick = 0; tick < 12; tick++) await Promise.resolve(); });
+    expect(chat.state).toMatchObject({ kind: 'ready', group: { messages: [{ content: 'First' }, { content: 'Arrived mid-load' }] } });
+  });
+
+  it.each([false, true])('recovers an execution change after a stale read finishes (cooldown extended: %s)', async extended => {
+    vi.useFakeTimers();
+    const { opened, deliver } = fakeSockets();
+    const original = h.auth.apiFetch.getMockImplementation()!;
+    let holdPlans = false;
+    let releasePlans: (() => void) | undefined;
+    let failed = false;
+    h.auth.apiFetch.mockImplementation(async (path, options) => {
+      if (path === '/v1/actors') {
+        if (holdPlans) throw Object.assign(new Error('RATE_LIMITED'), { status: 429, retryAt: Date.now() + 6_000 });
+        return [];
+      }
+      if (holdPlans && path.endsWith('/plans')) await new Promise<void>(resolve => { releasePlans = resolve; });
+      if (path.includes('/media/')) throw Object.assign(new Error('RATE_LIMITED'), { status: 429, retryAt: Date.now() + 5_000 });
+      if (failed && path.includes('/execution-failures?')) {
+        return [{ id, source_message_id: self, bot_id: self, epoch: 1, status: 'failed', failure_code: 'AUTH_REQUIRED' }];
+      }
+      return original(path, options);
+    });
+    showChat = true; await render();
+    const ws = opened.at(-1)!;
+    await deliver(ws, { type: 'ready', actorId: self });
+    holdPlans = true;
+    await act(async () => { chat.reload(); });
+    expect(releasePlans).toBeDefined();
+    h.auth.apiFetch.mockClear();
+    failed = true;
+    await deliver(ws, { type: 'changes', scope: `conversation:${id}`, cursor: '2',
+      changes: [{ type: 'execution.changed', entityId: id, data: {} }] });
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    holdPlans = false;
+    await act(async () => { releasePlans!(); });
+    if (extended) await act(async () => { await expect(chat.media!(self)).rejects.toMatchObject({ status: 429 }); });
+    await act(async () => { await vi.advanceTimersByTimeAsync((extended ? 5_000 : 1_000) - 1); });
+    expect(h.auth.apiFetch.mock.calls.filter(([path]) => path.endsWith('/executions'))).toHaveLength(0);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(chat.state).toMatchObject({ kind: 'ready', group: { messages: [
+      { content: 'Fixture message' }, { runtimeFailureCode: 'AUTH_REQUIRED' },
+    ] } });
+    expect(h.auth.apiFetch.mock.calls.filter(([path]) => path.endsWith('/executions'))).toHaveLength(1);
+  });
+
+  it.each([
+    ['6', 6_000],
+    ['2678400', 600_000],
+    ['Sat, 26 Dec 2026 04:00:00 GMT', 600_000],
+  ] as const)('respects a bounded Retry-After %s while live messages arrive and resumes metadata reads', async (header, waitMs) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-26T04:00:00Z'));
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: { code: 'RATE_LIMITED', message: 'slow down' } }), {
+      status: 429, headers: { 'Retry-After': header },
+    })));
+    const { opened, deliver } = fakeSockets();
+    const msg1 = { id: self, seq: '1', authorId: self, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: 'Working' }], createdAt: '2026-11-26T01:00:00Z', deleted: false, threadRootId: null };
+    const msg2Id = '00000000-0000-4000-8000-000000000303';
+    const msg2 = { id: msg2Id, seq: '2', authorId: self, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: 'Second while cooling down' }], createdAt: '2026-11-26T01:01:00Z', deleted: false, threadRootId: null };
+    const runningExec = [{ id: 'exec-1', source_message_id: self, bot_id: 'bot-1', status: 'running', error_message: null }];
+    let execPhase: 'running' | 'rate-limit' | 'idle' = 'running';
+    const original = h.auth.apiFetch.getMockImplementation()!;
+    h.auth.apiFetch.mockImplementation(async (path, options) => {
+      if (path === '/v1/actors') return [];
+      if (path.endsWith('/snapshot')) return { room, members: [{ id: self, kind: 'human', state: 'joined', name: 'Me', ownerActorId: self, ownerName: '', role: 'member', avatar: null }], messages: [msg1], cursor: '1' };
+      if (path.includes('/messages?')) return [msg1];
+      if (path.startsWith('/v1/changes?')) return { head: '1', cursor: '1', changes: [], hasMore: false };
+      if (path.endsWith('/executions')) {
+        if (execPhase === 'running') return runningExec;
+        if (execPhase === 'rate-limit') return apiFetchRaw(path, { baseUrl: 'https://chat.example.invalid' });
+        return [];
+      }
+      return original(path, options);
+    });
+    showChat = true; await render();
+    const ws = opened.at(-1)!;
+    await deliver(ws, { type: 'ready', actorId: self });
+
+    // Trigger 429 on /executions so previous runningExec stays cached in degraded state.
+    const timer = vi.spyOn(globalThis, 'setTimeout');
+    execPhase = 'rate-limit';
+    await act(async () => { chat.reload(); for (let tick = 0; tick < 12; tick++) await Promise.resolve(); });
+
+    const waits = timer.mock.calls.map(([, delay]) => delay ?? 0);
+    timer.mockRestore();
+    expect(waits).toContain(waitMs);
+    expect(Math.max(...waits)).toBeLessThanOrEqual(600_000);
+
+    // Incoming WS message during cooldown renders immediately and does NOT bypass cooldown via hasLiveRoomWork().
+    h.auth.apiFetch.mockClear();
+    await deliver(ws, {
+      type: 'changes',
+      scope: `conversation:${id}`,
+      cursor: '2',
+      changes: [{ type: 'message.created', entityId: msg2Id, data: { message: msg2 } }],
+    });
+    expect(chat.state).toMatchObject({ kind: 'ready', group: { messages: [{ content: 'Working' }, { content: 'Second while cooling down' }] } });
+    expect(h.auth.apiFetch).not.toHaveBeenCalled();
+
+    // Once cooldown expires, scheduled recovery reads /executions and settles cleanly.
+    execPhase = 'idle';
+    await act(async () => { await vi.advanceTimersByTimeAsync(waitMs - 1); });
+    expect(h.auth.apiFetch.mock.calls.some(([path]) => String(path).endsWith('/executions'))).toBe(false);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(h.auth.apiFetch.mock.calls.some(([path]) => String(path).endsWith('/executions'))).toBe(true);
+  });
+
+  it('keeps metadataIncomplete across skipped push-message reads and revokes immediately on 403 without waiting for slow sibling metadata', async () => {
+    vi.useFakeTimers();
+    const { opened, deliver } = fakeSockets();
+    const msg1 = { id: self, seq: '1', authorId: self, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: 'Root' }], createdAt: '2026-11-26T01:00:00Z', deleted: false, threadRootId: null };
+    const replyId = '00000000-0000-4000-8000-000000000304';
+    const reply = { id: replyId, seq: '2', authorId: self, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: 'Thread reply' }], createdAt: '2026-11-26T01:01:00Z', deleted: false, threadRootId: self };
+    let execMode: '429' | 'ok' | '403' = '429';
+    let hangPlans = false;
+    const original = h.auth.apiFetch.getMockImplementation()!;
+    h.auth.apiFetch.mockImplementation(async (path, options) => {
+      if (path === '/v1/actors') return [];
+      if (path.endsWith('/snapshot')) return { room, members: [{ id: self, kind: 'human', state: 'joined', name: 'Me', ownerActorId: self, ownerName: '', role: 'member', avatar: null }], messages: [msg1], cursor: '1' };
+      if (path.includes('/messages?')) return [msg1];
+      if (path.startsWith('/v1/changes?')) return { head: '1', cursor: '1', changes: [], hasMore: false };
+      if (path.endsWith('/executions')) {
+        if (execMode === '429') throw Object.assign(new Error('RATE_LIMITED'), { status: 429, code: 'RATE_LIMITED', retryAt: Date.now() + 4_000 });
+        if (execMode === '403') throw Object.assign(new Error('NOT_MEMBER'), { status: 403, code: 'NOT_MEMBER' });
+        return [];
+      }
+      if (path.includes('/plans') && hangPlans) {
+        return await new Promise<never>(() => {});
+      }
+      return original(path, options);
+    });
+    showChat = true; await render();
+    const ws = opened.at(-1)!;
+    await deliver(ws, { type: 'ready', actorId: self });
+
+    // A thread reply triggers aggregate repair during cooldown; recovery must NOT be cancelled.
+    await deliver(ws, {
+      type: 'changes',
+      scope: `conversation:${id}`,
+      cursor: '2',
+      changes: [{ type: 'message.created', entityId: replyId, data: { message: reply } }],
+    });
+    execMode = 'ok';
+    h.auth.apiFetch.mockClear();
+    await act(async () => { await vi.advanceTimersByTimeAsync(4_500); });
+    expect(h.auth.apiFetch.mock.calls.some(([path]) => String(path).endsWith('/executions'))).toBe(true);
+
+    // 403 NOT_MEMBER on /executions must clear the screen immediately even if /plans never resolves.
+    execMode = '403';
+    hangPlans = true;
+    await act(async () => { chat.reload(); for (let tick = 0; tick < 12; tick++) await Promise.resolve(); });
+    expect(chat.state.kind).toBe('missing');
+  });
 });

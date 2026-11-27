@@ -1,26 +1,28 @@
 ---
 id: models-and-compat
 title: Choosing a model
-summary: Pick a task's model from the model selector in the composer; Cindy picks the engine (Claude Code / Codex / Pi) for you, and Customize lets you change engine, reasoning effort, and Fast. Compatibility-mode engines are off by default and are turned on per model in Settings > Providers.
+summary: Pick a task's model from the model selector in the composer; Cindy picks the built-in engine (Claude Code / Codex / Pi) for you, and also lists plugin engines (ACP) and plugin route models. Customize lets you change engine, reasoning effort, and Fast. Compatibility-mode engines are off by default and are turned on per model in Settings > Providers.
 tab: providers
 ---
 You pick the model a task uses from the **model selector in the composer toolbar** (the pill showing the current model). It works the same for a new task and inside an existing one.
 
 **The model panel:**
 
-- A search box at the top; a rail on the left with **Recent**, **Favorites**, **All**, and one icon per connected provider (source); the model list on the right; and **Configure models** at the bottom to connect more sources.
-- You choose a **model**; Cindy automatically picks the recommended **engine** (Claude Code, Codex, or Pi) for it and shows it in the pill.
+- A search box at the top; a rail on the left with **Recent**, **Favorites**, **All**, and one icon per connected provider (source), including installed plugin engines; the model list on the right; and **Configure models** at the bottom to connect more sources.
+- You choose a **model**; for built-in providers Cindy automatically picks the recommended **engine** (Claude Code, Codex, or Pi) for it and shows it in the pill.
+- **Plugin engines (ACP)** — such as Antigravity or DeepSeek Harness — appear as their own providers once installed and enabled. Their models, reasoning levels, modes, and favorites follow what the plugin reports (and can also come from your other computers or friends who shared an engine with you).
+- **Plugin route models** — routing models published by a plugin (for example a routing plugin) — appear only in new local desktop tasks and pick the underlying real model when your first message is sent. They are not shown in automations, teammates, Orca collaboration, remote computers, or mobile.
 - Hover a model row and click **Customize** (or right-click the row) to change its engine, **Reasoning Effort**, and **Speed** (Fast, where supported). **Reset to recommended** undoes your changes.
 - Click ☆ on a row to **Save to favorites** — a favorite keeps that exact setup (source, model, engine, effort, Fast). **Recent** lists the last few setups you used.
 
 **Default model for a new task:**
 
-- It depends on what you've connected: with a ChatGPT (OpenAI) subscription it's **GPT-6.1 Sol** on Codex; with a Claude (Anthropic) subscription it's **Opus 5.5** on Claude Code; otherwise it's Cindy AI's **Auto** on Pi. After that, a new task starts with the model you last picked.
+- It depends on what you've connected: with a ChatGPT (OpenAI) subscription it's **GPT-6.2 Sol** on Codex; with a Claude (Anthropic) subscription it's **Opus 5.5** on Claude Code; otherwise it's Cindy AI's **Auto** on Pi. After that, a new task starts with the model you last picked.
 
 **Switching mid-task:**
 
 - Open the selector and pick a different model. It applies from your **next message**; while a switch is pending, the pill's tooltip shows "Current" and "Next message".
-- If the new model runs on a **different engine**, Cindy asks you to confirm (**Switch Agent?**). The new engine continues from a handoff summary of the conversation, so some reasoning or details may not carry over perfectly.
+- If the new model runs on a **different engine** (including switching between a built-in engine and a plugin engine), Cindy switches seamlessly on your next message without an extra confirmation dialog and replays the conversation context within the target model's window, leaving a switch card in the thread.
 
 **Using non-Anthropic models:**
 

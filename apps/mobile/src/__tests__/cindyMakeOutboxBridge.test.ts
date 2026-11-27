@@ -1,33 +1,116 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { DurableOutboxRecord } from '@/session/durableOutbox';
-import { createOutboxSessionAccess } from '@/session/mobileOutboxSessionAdapter';
+import { canConnectOutboxPeer, createOutboxSessionAccess } from '@/session/mobileOutboxSessionAdapter';
+import { sharedTaskHostPeer } from '@cindy/device-link';
+
+import {
+  beginOutboxBackgroundSend, endOutboxBackgroundSend, hasOutboxBackgroundSend, isPendingDeliveryAfterLeaving, isPendingPlainText,
+  subscribeOutboxLeftInBackground, syncOutboxLeftInBackground,
+} from '@/session/outboxBackgroundSend';
+
+const requestWork = async () => ({ budgetMs: 8_000, end: () => {} });
 
 function harness(sessions: Array<{ id: string; source?: string; deviceLinkDeviceId: string }>) {
   const record = { deviceId: 'desktop', state: 'queued', uploads: [],
-    item: { sessionId: 'session', clientId: 'client', attachmentSlots: [] } } as unknown as DurableOutboxRecord;
+    item: { sessionId: 'session', clientId: 'client', text: '/tmp/report.txt', slashCommandRanges: [], attachmentSlots: [] } } as unknown as DurableOutboxRecord;
   const invoke = vi.fn(async (_device: string, _channel: string, _args: unknown[] | undefined, options: { preSend(): void }): Promise<{ id: string; source: string; workingDir?: string }> => {
     options.preSend(); return { id: 'session', source: 'cc', workingDir: '/repo' };
   });
-  const latest = { current: { link: { status: 'online', getPresenceAvailability: () => true, invoke } } };
-  const owner = { current: true, records: [record], creationHeld: false };
+  const connections = new Map<string, string>();
+  const latest = { current: { link: { status: 'online', getPresenceAvailability: () => true, invoke,
+    getConnectionState: (deviceId: string): { status: string } => ({ status: connections.get(deviceId) ?? latest.current.link.status }),
+  } } };
+  const owner = { current: true, records: [record], creationHeld: false, foreground: true };
   const hasCreationTask = vi.fn(() => false);
   const callbacks = createOutboxSessionAccess({
     getSessions: () => sessions,
     getRecords: () => owner.records,
     guard: () => { if (!owner.current) throw new Error('OUTBOX_OWNER_CHANGED'); },
     isCurrent: () => owner.current,
-    isForeground: () => true,
-    canConnect: () => latest.current.link.status === 'online' && latest.current.link.getPresenceAvailability() !== false,
+    isForeground: () => owner.foreground,
+    canContinueInBackground: hasOutboxBackgroundSend,
+    canConnect: (deviceId) => canConnectOutboxPeer(latest.current.link, deviceId),
     isCreationHeld: () => owner.creationHeld,
     hasCreationTask,
     needsReconciliation: () => true,
     invoke: (deviceId, channel, args, options) => latest.current.link.invoke(deviceId, channel, args, options),
     readSession: record => callbacks.invokeOwned(record)(record.deviceId, 'local-db:sessions:get', [record.item.sessionId]),
   });
-  return { record, callbacks, invoke, latest, owner, hasCreationTask };
+  return { record, callbacks, invoke, latest, owner, hasCreationTask, connections };
 }
 
 describe('Cindy Make outbox bridge guards', () => {
+  // Unit: leaving during a composer send used to block the final enqueue gate.
+  // A fresh message alone may continue until its acknowledgement or deadline.
+  it('continues only the tapped message in background and releases the connection on receipt or timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const { record, callbacks, owner } = harness([]);
+      const release = vi.fn();
+      // #11930: a typed path must reach the same handoff as ordinary text.
+      expect(isPendingPlainText(record)).toBe(true);
+      expect(isPendingPlainText({ ...record, item: {
+        ...record.item, text: '/review', slashCommandRanges: [{ start: 0, end: 7 }],
+      } })).toBe(false);
+      beginOutboxBackgroundSend(record, () => release, requestWork);
+      await Promise.resolve();
+      owner.foreground = false;
+      expect(callbacks.canRun(record)).toBe(true);
+      expect(callbacks.canRun({ ...record, accountId: 'other' })).toBe(false);
+      expect(callbacks.canRun({ ...record, cancelRequested: true })).toBe(false);
+      endOutboxBackgroundSend(record);
+      expect(release).toHaveBeenCalledTimes(1);
+      expect(callbacks.canRun(record)).toBe(false);
+      beginOutboxBackgroundSend(record, () => release, requestWork);
+      await vi.advanceTimersByTimeAsync(8_001);
+      expect(release).toHaveBeenCalledTimes(2);
+      expect(callbacks.canRun(record)).toBe(false);
+      owner.foreground = true;
+      expect(callbacks.canRun(record)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  // Unit, #11930: foreground sends already show progress and connection waits,
+  // so marking every pending text flashed "pending delivery" on ordinary sends.
+  // Only text left behind in background, including one saved just after Home,
+  // keeps that status until it settles; settled rows are forgotten.
+  it('shows pending delivery only for text still on the way after leaving the app', () => {
+    const { record } = harness([]);
+    const savedAfterHome = { ...record, item: { ...record.item, clientId: 'after-home' } } as DurableOutboxRecord;
+    const changed = vi.fn();
+    const off = subscribeOutboxLeftInBackground(changed);
+    try {
+      syncOutboxLeftInBackground([record], false);
+      expect(isPendingDeliveryAfterLeaving(record)).toBe(false);
+      syncOutboxLeftInBackground([record], true);
+      syncOutboxLeftInBackground([record, savedAfterHome], true);
+      syncOutboxLeftInBackground([record, savedAfterHome], false);
+      expect([record, savedAfterHome].map(isPendingDeliveryAfterLeaving)).toEqual([true, true]);
+      expect(isPendingDeliveryAfterLeaving({ ...record, state: 'host-owned' })).toBe(false);
+      expect(changed).toHaveBeenCalledTimes(2);
+      syncOutboxLeftInBackground([savedAfterHome], false);
+      syncOutboxLeftInBackground([record, savedAfterHome], false);
+      expect([record, savedAfterHome].map(isPendingDeliveryAfterLeaving)).toEqual([false, true]);
+    } finally {
+      off();
+      syncOutboxLeftInBackground([], false);
+    }
+  });
+  // PR #8182: an unrelated same-account relay outage must not stall a queued
+  // shared-task send. Exercise the production delivery policy, not source text.
+  it('admits a shared record on its official connection while the primary relay is offline', () => {
+    const { record, callbacks, latest, owner, connections } = harness([]);
+    const shared = { ...record, deviceId: sharedTaskHostPeer('shared', 'desktop') };
+    owner.records.push(shared);
+    latest.current.link.status = 'offline';
+    connections.set(shared.deviceId, 'online');
+    expect(callbacks.canRun(record)).toBe(false);
+    expect(callbacks.canRun(shared)).toBe(true);
+    connections.set(shared.deviceId, 'stopped');
+    expect(callbacks.canRun(shared)).toBe(false);
+  });
+
   // mobile-development: follow-ups wait for creation ownership, while policy and
   // preparation reuse the same authoritative row. Replaces old bridge literals.
   it('waits for both draft handoff and task creation before allowing delivery', () => {
@@ -39,6 +122,14 @@ describe('Cindy Make outbox bridge guards', () => {
     hasCreationTask.mockReturnValue(true);
     expect(callbacks.canRun(record)).toBe(false);
     hasCreationTask.mockReturnValue(false);
+    expect(callbacks.canRun(record)).toBe(true);
+  });
+
+  it('holds early side chat sends while the host is forking and releases the same queue on acknowledgement', () => {
+    const row = { id: 'session', source: 'side-chat', deviceLinkDeviceId: 'desktop', pendingLocalCreation: true };
+    const { record, callbacks } = harness([row]);
+    expect(callbacks.canRun(record)).toBe(false);
+    row.pendingLocalCreation = false;
     expect(callbacks.canRun(record)).toBe(true);
   });
 

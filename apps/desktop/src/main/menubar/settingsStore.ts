@@ -17,7 +17,7 @@ import {
   type MenubarSettingsPatch,
 } from '../../shared/menubarQuota.js';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
-import { createOverrideSettingsFile } from '../maker-host/override-settings-file.js';
+import { createOverrideSettingsFile, portableOverrideSettings } from '../maker-host/override-settings-file.js';
 
 const log = desktopMakerLogger.child('menubar-settings');
 const MAX_IDS = 200;
@@ -47,6 +47,7 @@ export function normalizeMenubarSettings(raw: unknown): MenubarSettings {
       : d.statusText,
     lowAlert: typeof r.lowAlert === 'boolean' ? r.lowAlert : d.lowAlert,
     privacy: typeof r.privacy === 'boolean' ? r.privacy : d.privacy,
+    currency: r.currency === 'USD' || r.currency === 'CNY' ? r.currency : d.currency,
     scope: MENUBAR_USAGE_SCOPES.includes(r.scope as never) ? (r.scope as MenubarSettings['scope']) : d.scope,
   };
 }
@@ -64,6 +65,7 @@ export function sanitizeMenubarSettingsPatch(raw: unknown): MenubarSettingsPatch
         ? Array.isArray(r[key])
         : key === 'statusText'
           ? MENUBAR_STATUS_TEXT_MODES.includes(r[key] as never)
+          : key === 'currency' ? r.currency === 'USD' || r.currency === 'CNY' || r.currency === 'auto'
           : key === 'scope'
             ? MENUBAR_USAGE_SCOPES.includes(r[key] as never)
             : typeof r[key] === 'boolean';
@@ -89,3 +91,6 @@ export function writeMenubarSettings(patch: MenubarSettingsPatch): MenubarSettin
   if (Object.keys(clean).length > 0) store.writePatch(clean);
   return store.read();
 }
+
+/** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
+export const menubarPortableSettings = portableOverrideSettings(store);

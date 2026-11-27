@@ -43,7 +43,7 @@ import { FILE_BROWSER_REMOTE_OP_CHANNEL } from '@cindy/device-link';
 import { createLogger } from '../logger.js';
 import { getRipgrepBinaryPath } from '../maker-host/runtime-configs.js';
 import { remoteInvoke } from '../device-link/index.js';
-import { downloadToFile, removeRemote } from '../device-link/mediaTransfer.js';
+import { downloadToFile, removeRemote } from '../device-link/mediaTransfer.desktop.js';
 import { discardPeerAttachment, takePeerAttachment } from '../device-link/peerAttachmentStore.js';
 import { parseRemoteAttachmentRef } from '../device-link/remoteAttachment.js';
 import { getRemoteSshPool } from '../remote-ssh/index.js';
@@ -154,6 +154,7 @@ interface ReadFileArgs extends RemoteRoutedArgs {
 }
 
 interface WriteFileArgs extends RemoteRoutedArgs {
+  expectedResolvedPath?: string;
   workdir: string;
   relPath: string;
   content: string;
@@ -894,8 +895,9 @@ export function registerFileBrowserIpc(): void {
             workdir: args.workdir,
             relPath: args.relPath,
             content: args.content,
+            expectedResolvedPath: args.expectedResolvedPath,
           })
-        : await writeFile(args.workdir, args.relPath, args.content);
+        : await writeFile(args.workdir, args.relPath, args.content, args.expectedResolvedPath);
       return { ok: true as const, ...result };
     } catch (err) {
       log.warn('write-file failed', { relPath: args.relPath, error: String(err) });

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 /**
  * Regression guards for the market Node-authorization/session-switch race.
@@ -12,6 +12,10 @@ import { describe, expect, it } from 'vitest';
 describe('market Ghost session boundary', () => {
   const source = readFileSync(
     resolve(process.cwd(), 'src/main/cindy-brain/index.ts'),
+    'utf8',
+  ).replace(/\r\n/g, '\n');
+  const availabilitySource = readFileSync(
+    resolve(process.cwd(), 'src/main/cindy-brain/ghostAvailability.ts'),
     'utf8',
   ).replace(/\r\n/g, '\n');
   const marketServiceSource = readFileSync(
@@ -119,7 +123,7 @@ describe('market Ghost session boundary', () => {
     expect(leaseBody).not.toContain('isGhostSkillProjectionBoundaryStableForOwner');
   });
 
-  it('captures before async inspection but leases only after Node authorization', () => {
+  it('captures before async inspection but leases only after install consent revalidation', () => {
     const installStart = source.indexOf(
       'export async function installOrUpdateMarketGhostPackage(',
     );
@@ -132,29 +136,39 @@ describe('market Ghost session boundary', () => {
     const captureIndex = body.indexOf(
       'const mutationOwner = captureGhostMutationOwner();',
     );
-    const inspectIndex = body.indexOf('await manager.inspect(cindyFilePath)');
+    // PR #7924 adds a stored-release source argument; the owner/consent order is unchanged.
+    const inspectIndex = body.indexOf('await manager.inspect(cindyFilePath,');
+    const consentIndex = body.indexOf('assertGhostInstallConsent(');
     const leaseIndex = body.indexOf(
       'releaseMutation = beginGhostMutation(mutationOwner);',
     );
 
     expect(captureIndex).toBeGreaterThan(-1);
+    expect(inspectIndex).toBeGreaterThan(-1);
     expect(captureIndex).toBeLessThan(inspectIndex);
-    expect(leaseIndex).toBeGreaterThan(inspectIndex);
+    expect(consentIndex).toBeGreaterThan(inspectIndex);
+    expect(leaseIndex).toBeGreaterThan(consentIndex);
     expect(body).toContain('releaseMutation?.();');
   });
 
   it('fails owner-scoped plugin reads closed while an account boundary is pending', () => {
-    const start = source.indexOf('function availableGhosts(): InstalledGhost[] {');
-    const end = source.indexOf('\n}', start);
-    const body = source.slice(start, end);
+    // availableGhosts and findGhostForInstanceId delegate to ghostAvailability.ts
+    // (shared with the Node Host); their bodies are checked there.
+    expect(source).toContain('return availableGhostsIn(getGhostManager);');
+    expect(source).toContain(
+      'return findGhostForInstanceIdIn({ getGhostManager, isGhostAvailableForActiveSession, availableGhosts }, id, namespace);',
+    );
+    const start = availabilitySource.indexOf('export function availableGhostsIn(');
+    const end = availabilitySource.indexOf('\n}', start);
+    const body = availabilitySource.slice(start, end);
     expect(body).toContain('if (isAppSessionBoundaryPending()) return [];');
     expect(source).toContain(
       'const resolved = resolveInstalledGhost(availableGhosts(), id, namespace);',
     );
-    const resolverStart = source.indexOf('export function findGhostForInstanceId(');
-    const resolverBody = source.slice(resolverStart, source.indexOf('\n}', resolverStart));
+    const resolverStart = availabilitySource.indexOf('export function findGhostForInstanceIdIn(');
+    const resolverBody = availabilitySource.slice(resolverStart, availabilitySource.indexOf('\n}', resolverStart));
     expect(resolverBody.match(/availableGhosts\(\)/g)).toHaveLength(1);
-    expect(resolverBody).toContain('resolvePluginInstanceQuery(availableGhosts(), id, namespace)');
+    expect(resolverBody).toContain('resolvePluginInstanceQuery(lookup.availableGhosts(), id, namespace)');
     expect(resolverBody).not.toContain('findInstalledGhostByInstanceId');
     // The exact-key fast path fails closed at an account boundary and keeps the
     // active-session availability filter that availableGhosts() applies.
@@ -163,7 +177,7 @@ describe('market Ghost session boundary', () => {
     const fastPath = resolverBody.slice(fastPathStart, resolverBody.indexOf('\n  }', fastPathStart));
     expect(fastPath).toContain('if (isAppSessionBoundaryPending()) return null;');
     expect(fastPath.indexOf('isAppSessionBoundaryPending()')).toBeLessThan(fastPath.indexOf('findInstalledInstance(id)'));
-    expect(fastPath).toContain('isGhostAvailableForActiveSession(ghost.manifest.id) ? ghost : null');
+    expect(fastPath).toContain('isGhostAvailableForActiveSession(installedGhostStoragePart(ghost)) ? ghost : null');
     expect(source.match(/getGhost: findAvailableGhost/g)?.length ?? 0).toBe(0);
     expect(source.match(/getGhost: findGhostForInstanceId/g)?.length ?? 0).toBeGreaterThanOrEqual(12);
     expect(resolverBody).toContain(
@@ -191,7 +205,8 @@ describe('market Ghost session boundary', () => {
     expect(assessBody).not.toContain('oauthManager.listAccounts(ghostId, key)');
     const probesStart = source.indexOf('function getGhostSetupProbes(');
     const probesBody = source.slice(probesStart, source.indexOf('export function getGhostSetupAssessment', probesStart));
-    expect(probesBody).toContain('oauthManager.listAccounts(storeId, key)');
+    expect(probesBody).toContain('pluginSetupProbes({');
+    expect(probesBody).toContain('}, storeId, runtimeManifest)');
     expect(probesBody).not.toContain('oauthManager.listAccounts(ghostId, key)');
     expect(source).toContain('return findGhostForInstanceId(id)?.manifest.name ?? null;');
   });
@@ -205,14 +220,84 @@ describe('market Ghost session boundary', () => {
     expect(source).toContain('if (expected.sourceChanged) assertGhostRelocationIdle(installedGhostStoragePart(installed));');
   });
 
+  // Codex 4431200348: a handoff stored but not yet dispatched must hold off a
+  // source change, or its copies move to the archive key under the call. Unit, real gate.
+  it('blocks relocation while a stored handoff has not finished dispatch', async () => {
+    const { createGhostProductionCallbacks } = await import('./ghostProductionCallbacksFixture.js');
+    const { assertGhostRelocationIdle } = createGhostProductionCallbacks<{ assertGhostRelocationIdle(part: string): void }>(
+      { functions: ['assertGhostRelocationIdle'] },
+    )({
+      hasPendingGhostCalls: () => false, hasRunningGhostErrand: () => false, hasRunningGhostCindyWork: () => false,
+      fsSlotSingleton: null, networkSlotSingleton: null,
+      isGhostHandoffBusy: (part: string) => part === 'busy',
+    });
+    expect(() => assertGhostRelocationIdle('busy')).toThrow('Ghost relocation is waiting for active work to finish');
+    expect(() => assertGhostRelocationIdle('idle')).not.toThrow();
+  });
+
+  // Codex 4431230310: the idle check passes before awaits inside the move, so new
+  // handoffs must be refused for the whole source change. Unit, real wrapper + store.
+  it('refuses new handoff holds from before the idle check until relocation ends', async () => {
+    const { createGhostProductionCallbacks } = await import('./ghostProductionCallbacksFixture.js');
+    const { GhostHandoffStore } = await import('../handoffStore.js');
+    const store = new GhostHandoffStore({ root: () => '/unused' });
+    const during: Array<unknown> = [];
+    const { relocateGhostUserData } = createGhostProductionCallbacks<{
+      relocateGhostUserData(from: string, to: string): Promise<void>;
+    }>({ functions: ['relocateGhostUserData'] })({
+      getGhostHandoffStore: () => store,
+      withActiveOwnerGhostOauthMutationLock: async (_id: string, task: () => unknown) => task(),
+      relocateIdleGhostUserData: async () => {
+        during.push(store.hold('old'), store.hold('archive'));
+        throw new Error('move failed');
+      },
+    });
+    await expect(relocateGhostUserData('old', 'archive')).rejects.toThrow('move failed');
+    expect(during).toEqual([null, null]);
+    expect(store.hold('old')).toBeTypeOf('function');
+  });
+
+  // Codex 4431705287: a settings delete must not race the folder move of a source change.
+  // Unit, real IPC callback + real store on a temp root.
+  it('holds the instance for a settings delete and refuses one during a source change', async () => {
+    const { createGhostProductionCallbacks } = await import('./ghostProductionCallbacksFixture.js');
+    const { GhostHandoffStore } = await import('../handoffStore.js');
+    const { GHOST_HANDOFF_REF_RE } = await import('../../../shared/ghost.js');
+    const nodeFs = await import('node:fs');
+    const os = await import('node:os');
+    const nodePath = await import('node:path');
+    const root = nodeFs.mkdtempSync(nodePath.join(os.tmpdir(), 'ghost-handoff-delete-'));
+    try {
+      const store = new GhostHandoffStore({ root: () => root });
+      const [first, second] = await store.import('art', [
+        { name: 'a.csv', bytes: new TextEncoder().encode('1') }, { name: 'b.csv', bytes: new TextEncoder().encode('2') },
+      ], () => {});
+      const busy: boolean[] = [];
+      const remove = store.delete.bind(store);
+      vi.spyOn(store, 'delete').mockImplementation((...args) => { busy.push(store.isBusy('art')); return remove(...args); });
+      const { handoffDelete } = createGhostProductionCallbacks<{ handoffDelete(event: unknown, id: unknown, ref: unknown): Promise<unknown> }>({
+        callbacks: { handoffDelete: ['ipcMain.handle', 'ghosts:handoff-delete'] },
+      })({
+        assertTrustedAppRendererEvent: () => {}, handoffStorageKey: () => 'art', GHOST_HANDOFF_REF_RE,
+        getGhostHandoffStore: () => store,
+        throwIpcError: (code: string, message: string) => { throw Object.assign(new Error(message), { code }); },
+      });
+
+      const unblock = store.blockForRelocation(['art']);
+      await expect(handoffDelete({}, 'art', first!.ref)).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+      unblock();
+      await expect(handoffDelete({}, 'art', second!.ref)).resolves.toEqual({ existed: true });
+      expect(busy).toEqual([true]);
+      expect(store.isBusy('art')).toBe(false);
+      expect((await store.list('art')).map((file) => file.name)).toEqual(['a.csv']);
+    } finally {
+      nodeFs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('allows explicit local replacement and detaches market routing before landing', () => {
-    const updateStart = source.indexOf(
-      "ipcMain.handle('ghosts:update'",
-    );
-    const updateEnd = source.indexOf(
-      "ipcMain.handle('ghosts:pick-file'",
-      updateStart,
-    );
+    const updateStart = source.indexOf('const updateLocalFile = async (');
+    const updateEnd = source.indexOf("ipcMain.handle('ghosts:update'", updateStart);
     const updateBody = source.slice(updateStart, updateEnd);
     const helperStart = source.indexOf('async function updateLocalGhostPackageLocked(');
     const helperEnd = source.indexOf(
@@ -224,7 +309,9 @@ describe('market Ghost session boundary', () => {
     const ledgerReadIndex = helperBody.indexOf(
       '= readLocalGhostUpdateSource(',
     );
-    const captureIndex = updateBody.indexOf('const mutationOwner = captureGhostMutationOwner();');
+    const manualUpdate = source.slice(updateEnd, source.indexOf('\n  });', updateEnd));
+    expect(manualUpdate).toContain('updateLocalFile(event.sender, captureGhostMutationOwner(),');
+    const captureIndex = updateBody.indexOf('mutationOwner: ActiveAppSession');
     const inspectIndex = updateBody.indexOf('await manager.inspect(lizFilePath)');
     const leaseIndex = updateBody.indexOf('const releaseMutation = beginGhostMutation(mutationOwner);');
     const helperCallIndex = updateBody.indexOf('updateLocalGhostPackageLocked(');
@@ -239,7 +326,7 @@ describe('market Ghost session boundary', () => {
       'await getGhostNodeRuntimeBroker().stopAndWait(instanceId);',
     );
     const oauthLockIndex = helperBody.indexOf(
-      'result = await withActiveOwnerGhostOauthMutationLock(',
+      'withCredentialMutation: sourceChanged ? undefined : run => withActiveOwnerGhostOauthMutationLock(',
     );
     const managerUpdateIndex = helperBody.indexOf('manager.update(cindyFilePath,');
     const detachIndex = helperBody.indexOf(
@@ -262,9 +349,14 @@ describe('market Ghost session boundary', () => {
     expect(helperBody.indexOf('if (isCurrent?.() === false)')).toBeGreaterThan(-1);
     expect(helperBody.indexOf('if (isCurrent?.() === false)')).toBeLessThan(stopAndWaitIndex);
     expect(oauthLockIndex).toBeGreaterThan(detachIndex);
-    expect(managerUpdateIndex).toBeGreaterThan(oauthLockIndex);
+    // The manager lane now precedes credential acquisition; source archival
+    // takes/releases its source lock before migrating incoming references.
+    expect(oauthLockIndex).toBeGreaterThan(managerUpdateIndex);
     expect(helperBody).toContain('marketLedger.restoreInstallation(');
     expect(helperBody).toContain('...deliveryNamespaceFields(previousGhost)');
+    expect(helperBody).toContain('expectedInstalledInstanceId: instanceId,');
+    expect(helperBody.indexOf('await manager.confirmUpdatedInstanceNamespace(result.ghost)'))
+      .toBeGreaterThan(helperBody.indexOf('manager.update(cindyFilePath,'));
     expect(helperBody).not.toContain('marketLedger.isDefaultInstallSuppressed(');
     expect(helperBody).not.toContain('marketInstallSubject');
     expect(helperBody).toContain('用户显式卸载，不得产生 default-install opt-out');
@@ -305,18 +397,22 @@ describe('market Ghost session boundary', () => {
       'await getGhostNodeRuntimeBroker().stopAndWait(',
     );
     const oauthLockIndex = body.indexOf(
-      'await withActiveOwnerGhostOauthMutationLock(installedGhostStoragePart(installed)',
+      ': run => withActiveOwnerGhostOauthMutationLock(installedGhostStoragePart(installed)',
     );
     const updateIndex = body.indexOf('manager.update(cindyFilePath,');
 
     expect(waitIndex).toBeGreaterThan(-1);
     expect(waitIndex).toBeLessThan(oauthLockIndex);
-    expect(oauthLockIndex).toBeLessThan(updateIndex);
+    expect(oauthLockIndex).toBeGreaterThan(updateIndex);
     expect(body).toContain('runtime.stop(installedGhostStoragePart(installed));');
     expect(body).toContain(
       'await getGhostNodeRuntimeBroker().stopAndWait(installedGhostStoragePart(installed));',
     );
     expect(body).toContain('runtime.resetFuse(installedGhostStoragePart(result.ghost));');
+    expect(body).toContain('...(!previousRelId ? { expectedInstalledInstanceId: installedGhostStoragePart(installed) } : {}),');
+    const confirmNamespace = body.indexOf('await manager.confirmUpdatedInstanceNamespace(result.ghost,');
+    expect(confirmNamespace).toBeGreaterThan(body.indexOf('await expected.afterCommitInLock?.(result.ghost, commitEvidence)'));
+    expect(confirmNamespace).toBeLessThan(body.indexOf('spawnIfResident(result.ghost)'));
     expect(body).not.toContain(
       'pluginStoragePart(createPluginLogicalIdentity(expected.namespace ?? null, expected.ghostId))',
     );
@@ -325,8 +421,8 @@ describe('market Ghost session boundary', () => {
   });
 
   it('releases the mutation lease for shutdown failures and restores only after confirmed shutdown', () => {
-    const updateStart = source.indexOf("ipcMain.handle('ghosts:update'");
-    const updateEnd = source.indexOf("ipcMain.handle('ghosts:pick-file'", updateStart);
+    const updateStart = source.indexOf('const updateLocalFile = async (');
+    const updateEnd = source.indexOf("ipcMain.handle('ghosts:update'", updateStart);
     const updateBody = source.slice(updateStart, updateEnd);
     const helperStart = source.indexOf('async function updateLocalGhostPackageLocked(');
     const helperEnd = source.indexOf(
@@ -339,7 +435,7 @@ describe('market Ghost session boundary', () => {
       'await getGhostNodeRuntimeBroker().stopAndWait(instanceId);',
     );
     const oauthLockIndex = helperBody.indexOf(
-      'result = await withActiveOwnerGhostOauthMutationLock(',
+      'withCredentialMutation: sourceChanged ? undefined : run => withActiveOwnerGhostOauthMutationLock(',
     );
     const updateIndex = helperBody.indexOf('manager.update(cindyFilePath');
     const restoreIndex = helperBody.indexOf(
@@ -351,7 +447,7 @@ describe('market Ghost session boundary', () => {
     // per the documented invariant (owner lease → per-id lock).
     expect(waitIndex).toBeGreaterThan(-1);
     expect(waitIndex).toBeLessThan(oauthLockIndex);
-    expect(oauthLockIndex).toBeLessThan(updateIndex);
+    expect(oauthLockIndex).toBeGreaterThan(updateIndex);
     // spawnIfResident is in the market-provenance catch block, after
     // stopAndWait (rollback if provenance check fails).
     expect(restoreIndex).toBeGreaterThan(waitIndex);
@@ -379,10 +475,10 @@ describe('market Ghost session boundary', () => {
   });
 
   it('Ghost 媒体持久化写入守卫也绑定当前进程的 owner scope', () => {
-    // 这两处是 GhostCindySlot 的 deps,内部 assertStillValid 会在 ingestMedia 的
-    // await 边界反复断言。持久化写入守卫必须同时检查本进程边界与 scope generation。
+    // 这两处是 GhostCindySlot 的源图读取与结果挂引用 deps。
+    // 跨 await 的守卫必须同时检查本进程边界与 scope generation。
     const resolveStart = source.indexOf('resolveOwnedMedia: async (ghostId, hash, ownerScopeKey)');
-    const saveStart = source.indexOf('saveGhostMedia: async ({ ghostId, buffer, mimeType, ownerScopeKey');
+    const saveStart = source.indexOf('saveGhostMedia: async ({ ghostId, media, ownerScopeKey');
     expect(resolveStart).toBeGreaterThan(-1);
     expect(saveStart).toBeGreaterThan(-1);
     const resolveBody = source.slice(resolveStart, resolveStart + 700);

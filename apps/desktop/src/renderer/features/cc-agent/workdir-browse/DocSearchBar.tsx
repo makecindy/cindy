@@ -42,7 +42,7 @@ export const DocSearchBar = forwardRef<HTMLInputElement, DocSearchBarProps>(
           'flex items-center gap-1',
           'rounded-lg border border-border',
           'bg-popover text-popover-foreground',
-          'shadow-sm',
+          'shadow-[shadow:var(--shadow-menu)]',
           'px-2 py-1',
           /* 固定 300 而非 min-width:右侧 count (1/1 / 12/345) 出现时
              不能把整条往外撑;input 内部已经 min-w-0 + flex-1,会自己
@@ -100,7 +100,7 @@ export const DocSearchBar = forwardRef<HTMLInputElement, DocSearchBarProps>(
           disabled={!query || total === 0}
           onClick={onPrev}
           className={cn(
-            'flex h-6 w-6 items-center justify-center rounded',
+            'flex h-6 w-6 items-center justify-center rounded-lg',
             'hover:bg-titlebar-button-hover',
             'disabled:opacity-40 disabled:hover:bg-transparent',
             'focus-visible:outline-none',
@@ -114,7 +114,7 @@ export const DocSearchBar = forwardRef<HTMLInputElement, DocSearchBarProps>(
           disabled={!query || total === 0}
           onClick={onNext}
           className={cn(
-            'flex h-6 w-6 items-center justify-center rounded',
+            'flex h-6 w-6 items-center justify-center rounded-lg',
             'hover:bg-titlebar-button-hover',
             'disabled:opacity-40 disabled:hover:bg-transparent',
             'focus-visible:outline-none',
@@ -127,7 +127,7 @@ export const DocSearchBar = forwardRef<HTMLInputElement, DocSearchBarProps>(
           aria-label={t('ccAgent.workdirBrowse.docSearch.close')}
           onClick={onClose}
           className={cn(
-            'flex h-6 w-6 items-center justify-center rounded',
+            'flex h-6 w-6 items-center justify-center rounded-lg',
             'hover:bg-titlebar-button-hover',
             'focus-visible:outline-none',
           )}

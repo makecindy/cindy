@@ -569,7 +569,9 @@ function modelEntryError(
       value.mode === "audio_speech" ||
       value.mode === "audio_transcription" ||
       value.mode === "realtime" ||
-      value.mode === "embedding");
+      value.mode === "embedding" ||
+      value.mode === "evaluation" ||
+      value.mode === "rerank");
   if (isV4StandaloneModel && supportedAgents.length > 0) {
     return `${path}.agents must be empty for a v4 Gateway standalone capability mode`;
   }
@@ -1227,6 +1229,8 @@ function registryEntryError(
           "audio_generation",
           "realtime",
           "embedding",
+          "evaluation",
+          "rerank",
         ].includes(routeMode as string),
     );
     if (error) return error;
@@ -1289,7 +1293,7 @@ export function parseModelRegistry(
           "nativeApiRules",
           "localModels",
           "baseModels",
-          ...(value.schemaVersion === 6 ? ["interfaceProfiles"] : []),
+          ...(value.schemaVersion === 6 ? ["interfaceProfiles", "recommendedAgents"] : []),
         ]
       : value.schemaVersion === MODEL_REGISTRY_V3_SCHEMA_VERSION
         ? [...MODEL_REGISTRY_FIELDS, "nativeApiRules"]

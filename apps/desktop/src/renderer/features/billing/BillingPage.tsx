@@ -1,13 +1,15 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import {
   Check,
   CircleDollarSign,
   ChevronDown,
   ChevronLeft,
+  ChevronRight,
   Copy,
   CreditCard,
   ExternalLink,
+  Gift,
   Mail,
   PackageOpen,
   RefreshCcw,
@@ -16,6 +18,7 @@ import {
 import { Trans, useTranslation } from 'react-i18next';
 import { useSearchParams } from 'react-router-dom';
 
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
@@ -32,6 +35,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { cn } from '@/lib/utils';
 import { extractIpcError } from '@/utils/ipcError';
 import {
+  BILLING_FEEDBACK_EMAIL,
   BILLING_SUPPORT_EMAIL,
   BILLING_SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES,
   type BillingCatalog,
@@ -39,7 +43,10 @@ import {
   type BillingCatalogOfferUnavailableReason,
   type BillingCatalogProduct,
   type BillingPaymentOrder,
+  type BillingPaymentHistory,
+  type BillingPaymentHistoryRecord,
   type BillingPendingPlanChange,
+  type BillingPurchasedGiftCard,
   type BillingSubscription,
 } from '../../../shared/billing';
 import type {
@@ -59,14 +66,24 @@ import {
   type SupportedPurchaseOption,
 } from './purchaseSupport';
 import { BillingCheckoutDialog } from './BillingCheckoutDialog';
+import { GiftCardPurchaseDialog } from './GiftCardPurchaseDialog';
+import { GiftCardEmailDialog } from './GiftCardEmailDialog';
+import { GiftCardPurchasedDialog } from './GiftCardPurchasedDialog';
+import { GiftCardRedeemDialog } from './GiftCardRedeemDialog';
+import { giftCardOffersOf } from './giftCardPurchase';
+import { PurchasedGiftCardsCard } from './PurchasedGiftCardsCard';
+import { usePurchasedGiftCards } from './usePurchasedGiftCards';
+import { takePendingGiftCardCode } from './giftCardIntent';
 import { BILLING_CURRENCY, formatBillingAmount as formatMoney } from './money';
 import {
   PlanChangeStatusDialog,
   PlanChangeTargetDialog,
   type PlanChangeCandidate,
 } from './PlanChangeDialog';
-import { phaseForOrder, useBillingCheckout } from './useBillingCheckout';
+import { isGiftCardCheckout, useBillingCheckout } from './useBillingCheckout';
 import { usePlanChange, type PlanChangeSettledKind } from './usePlanChange';
+import { SETTINGS_SECTION_TITLE_CLASS, SettingsPageHeader } from '@/components/ui/settings-rows';
+import appI18n from 'i18next';
 
 type CatalogOfferEntry = {
   product: BillingCatalogProduct;
@@ -101,36 +118,10 @@ const INVOICE_REQUIRED_FIELDS = ['invoiceTitle', 'contact', 'phone', 'email'] as
 const GMAIL_COMPOSE_URL = 'https://mail.google.com/mail/?view=cm&fs=1';
 
 /**
- * 订单记录默认只列最近 10 笔。这一组回答的是「上次充了多少、那笔没付成的还在不在」,
- * 不是账目导出 —— 更早的记录没有分页器可翻,服务端还有下一页时只用一条提示条说明。
+ * 沿用现有每页10笔的密度；服务端统一查询成功充值和每笔已付订阅账单。
  */
 const ORDER_HISTORY_LIMIT = 10;
-
-/**
- * 订单状态 chip 的文案 key。刻意复用 checkout 的 `phaseForOrder` 而不是自己再写一套
- * status→文案映射:同一个 `CREATED`,支付弹窗说「等待支付」、列表说别的,是用户直接
- * 可见的不一致。两处必须由同一个判据推导。
- */
-function orderStatusLabelKey(order: BillingPaymentOrder): string {
-  switch (phaseForOrder(order)) {
-    case 'COMPLETED':
-      return 'billing.orders.states.completed';
-    case 'CANCELED':
-      return 'billing.orders.states.canceled';
-    case 'EXPIRED':
-      return 'billing.orders.states.expired';
-    case 'FAILED':
-      return 'billing.orders.states.failed';
-    default:
-      // phaseForOrder 对未终态一律返 AWAITING_PAYMENT(CREATED / PENDING)。
-      return 'billing.orders.states.awaitingPayment';
-  }
-}
-
-/** 「待支付」是这组里唯一可能还需要用户处理的状态,给它主文本色;其余保持二级色。 */
-function isAwaitingPaymentOrder(order: BillingPaymentOrder): boolean {
-  return phaseForOrder(order) === 'AWAITING_PAYMENT';
-}
+const PROMOTIONAL_GRANTS_PAGE_SIZE = 10;
 
 /** 订单号展示保留首尾用于对单，中段固定脱敏；复制仍使用服务端返回的完整原值。 */
 function maskedOrderId(orderId: string): string {
@@ -271,7 +262,7 @@ function catalogOfferUnavailableReason(
 function currencyFractionDigits(currency: string): number {
   try {
     return (
-      new Intl.NumberFormat(undefined, {
+      new Intl.NumberFormat(appI18n.language, {
         style: 'currency',
         currency: currency.toUpperCase(),
       }).resolvedOptions().maximumFractionDigits ?? 2
@@ -288,18 +279,32 @@ function balanceIssue(error: unknown): Exclude<BalanceIssue, null> {
   return 'UNAVAILABLE';
 }
 
+/** 付款成功后取回这一单礼品卡的间隔（毫秒）：首读立即进行，之后逐次退避，最多 5 次。 */
+export const PURCHASED_CARDS_RETRY_DELAYS_MS = [0, 2_000, 4_000, 8_000, 16_000] as const;
+
 /**
  * Kept as a compatibility export for focused tests and old imports.
  * The actual product entry now lives in Settings.
  */
 export function BillingPage() {
-  const { dataOwnerId } = useAuth();
+  const { dataOwnerId, user } = useAuth();
   return (
-    <BillingSettingsSection key={`billing:${dataOwnerId ?? 'none'}`} accountId={dataOwnerId} />
+    <BillingSettingsSection
+      key={`billing:${dataOwnerId ?? 'none'}`}
+      accountId={dataOwnerId}
+      accountName={user?.name ?? null}
+    />
   );
 }
 
-export function BillingSettingsSection({ accountId }: { accountId: string | null }) {
+export function BillingSettingsSection({
+  accountId,
+  accountName = null,
+}: {
+  accountId: string | null;
+  /** 账号昵称，礼品卡署名默认用它。 */
+  accountName?: string | null;
+}) {
   const { t, i18n } = useTranslation();
   const { confirm } = useConfirmDialog();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;
@@ -319,10 +324,42 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
   const [balanceError, setBalanceError] = useState<BalanceIssue>(null);
   // 订单记录按账号天然隔离:BillingPage 用 `billing:<dataOwnerId>` 做 key,换账号会整段
   // 重挂,这份 state 连同缓存一起重建,不会把上一个账号的订单渲染给新账号。
-  const [orders, setOrders] = useState<BillingPaymentOrder[]>([]);
-  const [moreOrdersAvailable, setMoreOrdersAvailable] = useState(false);
+  const [orderHistory, setOrderHistory] = useState<BillingPaymentHistory & {
+    cursor?: string;
+    previousCursors: (string | undefined)[];
+  }>({ records: [], nextCursor: null, previousCursors: [] });
+  const [loadingOrders, setLoadingOrders] = useState(true);
+  const [ordersError, setOrdersError] = useState(false);
+  const ordersGenerationRef = useRef(0);
+  const ordersRequestRef = useRef<{ cursor?: string; previousCursors: (string | undefined)[] }>({ previousCursors: [] });
   const [subscriptionDialogOpen, setSubscriptionDialogOpen] = useState(false);
   const [topupDialogOpen, setTopupDialogOpen] = useState(false);
+  const [giftCardDialog, setGiftCardDialog] = useState<{ open: boolean; code: string | null }>({
+    open: false,
+    code: null,
+  });
+  const [giftCardPurchaseOpen, setGiftCardPurchaseOpen] = useState(false);
+  // 付款成功后的「N 张礼品卡已备好」：cards 为 null 表示还在取回这一单的卡。
+  const [purchasedDialog, setPurchasedDialog] = useState<{
+    open: boolean;
+    orderId: string | null;
+    cards: BillingPurchasedGiftCard[] | null;
+  }>({ open: false, orderId: null, cards: null });
+  const giftCards = usePurchasedGiftCards();
+  const giftCardsSectionRef = useRef<HTMLDivElement>(null);
+  /** 正在发到邮箱的那张卡（弹窗打开）；按 cardId 记，弹窗里始终显示列表里的最新状态。 */
+  const [emailCardId, setEmailCardId] = useState<string | null>(null);
+  const openGiftCardEmail = giftCards.state.emailSupported
+    ? (card: BillingPurchasedGiftCard) => setEmailCardId(card.cardId)
+    : undefined;
+  const latestGiftCard = (card: BillingPurchasedGiftCard) =>
+    giftCards.state.cards.find((item) => item.cardId === card.cardId) ?? card;
+  const emailCard =
+    emailCardId === null
+      ? null
+      : (giftCards.state.cards.find((card) => card.cardId === emailCardId) ??
+        purchasedDialog.cards?.find((card) => card.cardId === emailCardId) ??
+        null);
   const [planChangeTargetOpen, setPlanChangeTargetOpen] = useState(false);
   const [selectedProductCode, setSelectedProductCode] = useState<string | null>(null);
   const [selectedOfferCode, setSelectedOfferCode] = useState<string | null>(null);
@@ -381,6 +418,15 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     setTopupDialogOpen(true);
   }, [resetSelection, searchParams, setSearchParams]);
 
+  // 礼品卡唤起链接：兑换码不进 URL，由 MainLayout 暂存在内存，这里取走一次。
+  useEffect(() => {
+    if (searchParams.get('intent') !== 'redeem-gift-card') return;
+    const next = new URLSearchParams(searchParams);
+    next.delete('intent');
+    setSearchParams(next, { replace: true });
+    setGiftCardDialog({ open: true, code: takePendingGiftCardCode() });
+  }, [searchParams, setSearchParams]);
+
   const loadBalance = useCallback(async () => {
     setLoadingBalance(true);
     setBalanceError(null);
@@ -403,19 +449,23 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     }
   }, []);
 
-  const loadOrders = useCallback(async () => {
+  const loadOrders = useCallback(async (cursor?: string, previousCursors: (string | undefined)[] = []) => {
+    const generation = ++ordersGenerationRef.current;
+    ordersRequestRef.current = { cursor, previousCursors };
+    setLoadingOrders(true);
+    setOrdersError(false);
     try {
-      const list = await billingApi.listOrders(ORDER_HISTORY_LIMIT);
-      setOrders(list.orders);
-      // nextCursor 是「服务端还有更早的记录」的唯一实证;这一组不做分页器,只据此出提示条。
-      setMoreOrdersAvailable(list.nextCursor !== null);
+      const list = await billingApi.listPaymentHistory(ORDER_HISTORY_LIMIT, cursor);
+      if (generation !== ordersGenerationRef.current) return;
+      setOrderHistory({ ...list, cursor, previousCursors });
     } catch {
-      // 订单记录是补充叙事(钱是怎么来的),拿不到就整组不渲染 —— 余额 / 用量 / 赠送
-      // 三组都不受影响,也不为它加一个空错误壳占版面。
-      setOrders([]);
-      setMoreOrdersAvailable(false);
+      if (generation === ordersGenerationRef.current) setOrdersError(true);
+    } finally {
+      if (generation === ordersGenerationRef.current) setLoadingOrders(false);
     }
   }, []);
+
+  useEffect(() => () => { ordersGenerationRef.current += 1; }, []);
 
   const loadSubscription = useCallback(async (fallback: BillingSubscription | null = null) => {
     setLoadingSubscription(true);
@@ -453,11 +503,11 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
         .finally(() => setLoadingCatalog(false)),
       loadSubscription(),
       loadBalance(),
-      // 进页面拉一次,「刷新」也跟着重拉;不加轮询 —— 订单只在用户自己发起支付时变化,
-      // 而那条路径由 checkout 弹窗自己轮询。
+      // 进入页面和手动刷新都回到最新一页，自动续费的账单也从同一服务端历史读取。
       loadOrders(),
+      giftCards.reload(),
     ]);
-  }, [loadBalance, loadOrders, loadSubscription]);
+  }, [giftCards.reload, loadBalance, loadOrders, loadSubscription]);
 
   const refreshXdModelsAfterEntitlementChange = useCallback(async () => {
     // 订阅权益会改变 Model Access 按当前用户返回的模型集合。这里必须走 XD 的
@@ -497,18 +547,46 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
       setCurrentSubscription(null);
       void loadSubscription();
     }
-    // 关弹窗也刷一次订单:用户可能在 AWAITING_PAYMENT 中途放弃 —— 那笔「待支付」
-    // 此刻就该出现在订单记录里,而不是等他手动点「刷新」才知道它还挂着。
+    // 关闭支付弹窗后重读服务端确认的成功历史；未付款记录不进入此列表。
     void loadOrders();
   }, [checkout, loadOrders, loadSubscription]);
+
+  // 付款成功后取回这一单的卡。发卡与支付成功同事务，但列表请求可能失败，或在发卡结果可见之前
+  // 就到了：按 0、2、4、8、16 秒最多读 5 次（共约 30 秒），读到这一单的卡就停；仍没有才显示
+  // 「稍后会出现在我买的礼品卡」。弹窗关闭、计费页卸载（含切换账号）即停，不再读取。
+  const purchasedWaitRef = useRef(0);
+  useEffect(() => {
+    if (!purchasedDialog.open) purchasedWaitRef.current += 1;
+  }, [purchasedDialog.open]);
+  const waitForOrderCards = useCallback(
+    async (orderId: string | null) => {
+      const token = ++purchasedWaitRef.current;
+      const live = () => sectionMountedRef.current && purchasedWaitRef.current === token;
+      for (const delay of PURCHASED_CARDS_RETRY_DELAYS_MS) {
+        if (delay > 0) await new Promise((resolve) => window.setTimeout(resolve, delay));
+        if (!live()) return;
+        const cards = await giftCards.reload();
+        if (!live()) return;
+        const mine = (cards ?? []).filter((card) => card.orderId === orderId);
+        if (mine.length > 0 || orderId === null) {
+          setPurchasedDialog((current) =>
+            current.open && current.orderId === orderId ? { ...current, cards: mine } : current,
+          );
+          return;
+        }
+      }
+      setPurchasedDialog((current) =>
+        current.open && current.orderId === orderId ? { ...current, cards: [] } : current,
+      );
+    },
+    [giftCards.reload],
+  );
 
   useEffect(() => {
     const previousPhase = previousCheckoutPhaseRef.current;
     previousCheckoutPhaseRef.current = checkout.state.phase;
     if (previousPhase === checkout.state.phase) return;
-    // 订单记录跟着订单生命周期的每一次落位刷新,不只 COMPLETED:订单一创建(进入
-    // AWAITING_PAYMENT)就已经是一条「待支付」记录;轮询落到 FAILED / EXPIRED /
-    // CANCELED 时列表里那行的状态也变了。只刷 COMPLETED 会让其余终态全靠手动刷新。
+    // 支付阶段落位时重新读取已确认历史；当前支付结果仍由原支付弹窗承接。
     if (
       checkout.state.phase === 'AWAITING_PAYMENT' ||
       checkout.state.phase === 'COMPLETED' ||
@@ -519,8 +597,16 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
       void loadOrders();
     }
     if (previousPhase !== 'COMPLETED' && checkout.state.phase === 'COMPLETED') {
+      if (isGiftCardCheckout(checkout.state)) {
+        // 买礼品卡不改变买家自己的余额和分组：支付弹窗换成「礼品卡已备好」，取回这一单的卡。
+        const orderId = checkout.state.order?.orderId ?? null;
+        checkout.close();
+        setPurchasedDialog({ open: true, orderId, cards: null });
+        void waitForOrderCards(orderId);
+        return;
+      }
       void loadBalance();
-      // 服务端的 paid tier 同时认有效订阅和未全额退款的成功充值订单；两类支付
+      // 服务端的 paid tier 认有效订阅、兑换过的礼品卡和未全额退款的成功充值订单；两类支付
       // 完成都必须重拉 `/models`，由服务端重算 tier 并收敛 AIGateway access group。
       if (checkout.state.kind === 'TOPUP' || checkout.state.kind === 'SUBSCRIPTION') {
         void refreshXdModelsAfterEntitlementChange().catch(() => undefined);
@@ -530,6 +616,8 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
       }
     }
   }, [
+    checkout.close,
+    checkout.state,
     checkout.state.kind,
     checkout.state.phase,
     checkout.state.subscription,
@@ -537,6 +625,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     loadOrders,
     loadSubscription,
     refreshXdModelsAfterEntitlementChange,
+    waitForOrderCards,
   ]);
 
   const handlePlanChangeSettled = useCallback(
@@ -576,6 +665,18 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
   const topupOffers = useMemo(
     () => offers.filter(({ product }) => product.kind === 'CREDIT_TOPUP'),
     [offers],
+  );
+  const giftCardOffers = useMemo(() => giftCardOffersOf(catalog), [catalog]);
+
+  /** 兑换给自己：取回兑换码后走已有的兑换弹窗（预览 → 确认领取）。 */
+  const redeemPurchasedGiftCard = useCallback(
+    async (card: BillingPurchasedGiftCard) => {
+      const result = await giftCards.reveal(card);
+      if (!result) return;
+      setPurchasedDialog((current) => ({ ...current, open: false }));
+      setGiftCardDialog({ open: true, code: result.code });
+    },
+    [giftCards],
   );
 
   const subscriptionPurchaseBlocked =
@@ -1080,34 +1181,49 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     setPlanChangeTargetOpen(true);
   };
 
+  const contactSupport = async () => {
+    let opened = false;
+    try {
+      opened = (await window.electronAPI.openExternal(`mailto:${BILLING_FEEDBACK_EMAIL}`)).success;
+    } catch {
+      // IPC rejection and a missing mail application use the same visible error below.
+    }
+    if (!opened) {
+      toast.error(t('billing.orders.invoice.sendFailed', { email: BILLING_FEEDBACK_EMAIL }));
+    }
+  };
+  const [supportHintBeforeEmail, supportHintAfterEmail] = t('billing.settings.supportHint', {
+    email: BILLING_FEEDBACK_EMAIL,
+  }).split(BILLING_FEEDBACK_EMAIL);
+
   return (
     <>
       <div>
-        <div className="flex items-start justify-between gap-6">
-          <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-            {t('billing.settings.title')}
-          </h2>
-          <Button
-            variant="secondary"
-            size="md"
-            compact
-            loading={loadingCatalog || loadingSubscription || loadingBalance}
-            type="button"
-            onClick={() => void loadBillingState()}
-            disabled={
-              loadingCatalog ||
-              loadingSubscription ||
-              loadingBalance ||
-              cancelingSubscription ||
-              resumingSubscription ||
-              openingSubscriptionPortal
-            }
-            className="shrink-0"
-          >
-            <RefreshCcw size={13} />
-            {t('billing.actions.refreshCatalog')}
-          </Button>
-        </div>
+        <SettingsPageHeader
+          title={t('billing.settings.title')}
+          action={
+            <Button
+              variant="secondary"
+              size="md"
+              compact
+              loading={loadingCatalog || loadingSubscription || loadingBalance}
+              type="button"
+              onClick={() => void loadBillingState()}
+              disabled={
+                loadingCatalog ||
+                loadingSubscription ||
+                loadingBalance ||
+                cancelingSubscription ||
+                resumingSubscription ||
+                openingSubscriptionPortal
+              }
+              className="shrink-0"
+            >
+              <RefreshCcw size={13} />
+              {t('billing.actions.refreshCatalog')}
+            </Button>
+          }
+        />
 
         <div className="mt-6 flex flex-col gap-8">
           <BillingGroup title={t('billing.settings.subscriptionCard.title')}>
@@ -1147,12 +1263,52 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
               issue={balanceError}
               loading={loadingBalance}
               onPurchase={() => openPurchaseDialog('CREDIT_TOPUP')}
+              onRedeemGiftCard={() => setGiftCardDialog({ open: true, code: null })}
+              onBuyGiftCard={
+                giftCardOffers.length > 0 ? () => setGiftCardPurchaseOpen(true) : undefined
+              }
             />
           </BillingGroup>
+
+          {/* 没买过卡（成功读到空列表，或旧服务端没有这个接口）才不显示；读取失败要显示错误与重试。 */}
+          {(giftCards.state.cards.length > 0 || giftCards.state.error) && (
+            <div ref={giftCardsSectionRef}>
+              <BillingGroup
+                titleId="billing-gift-cards-title"
+                title={t('billing.giftCardPurchase.list.title')}
+                description={t('billing.giftCardPurchase.list.description')}
+                badge={
+                  giftCards.state.nextCursor === null ? (
+                    <Badge size="xs">
+                      {t('billing.giftCardPurchase.list.count', { count: giftCards.state.cards.length })}
+                    </Badge>
+                  ) : undefined
+                }
+              >
+                <PurchasedGiftCardsCard
+                  giftCards={giftCards}
+                  onRedeemSelf={(card) => void redeemPurchasedGiftCard(card)}
+                  onSendEmail={openGiftCardEmail}
+                />
+              </BillingGroup>
+            </div>
+          )}
 
           {(creditUsage || balance) && (
             <BillingGroup
               title={t('billing.usage.title')}
+              action={
+                <Button
+                  variant="secondary"
+                  tone="quiet"
+                  size="xs"
+                  compact
+                  onClick={() => setSearchParams(new URLSearchParams({ tab: 'usage' }))}
+                >
+                  {t('billing.usage.viewUsage')}
+                  <ChevronRight size={12} aria-hidden="true" />
+                </Button>
+              }
               description={
                 usageDetailsUnavailable ? t('billing.usage.detailsUnavailable') : undefined
               }
@@ -1167,37 +1323,48 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
             </BillingGroup>
           )}
 
-          {creditUsage && (
-            <BillingGroup
-              title={t('billing.usage.promotionalDetails.title')}
-              badge={
-                <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2.5 py-1 text-10 font-medium text-[var(--text-secondary)]">
-                  {t('billing.usage.promotionalDetails.count', {
-                    count: creditUsage.promotionalGrants.length,
-                  })}
-                </span>
-              }
-            >
-              <PromotionalGrantsCard usage={creditUsage} />
-            </BillingGroup>
-          )}
+          {creditUsage && <PromotionalGrantsCard usage={creditUsage} />}
 
-          {/* 空态(没有任何订单 / 拉不到)整组不渲染:页面保持现状,不加空壳 —— 从没在
-              Cindy 内付过钱的用户不需要一个写着「暂无订单」的框告诉他这件事。 */}
-          {orders.length > 0 && (
-            <BillingGroup
-              title={t('billing.orders.title')}
-              description={t('billing.orders.description')}
-              badge={
-                <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2.5 py-1 text-10 font-medium text-[var(--text-secondary)]">
-                  {t('billing.orders.count', { count: orders.length })}
-                </span>
-              }
-            >
-              <OrderHistoryCard orders={orders} hasMore={moreOrdersAvailable} />
-            </BillingGroup>
-          )}
+          {(orderHistory.records.length > 0 || ordersError) && <BillingGroup
+            title={t('billing.orders.title')}
+            description={t('billing.orders.description')}
+            badge={
+              <Badge size="xs">
+                {t('billing.orders.count', { count: orderHistory.records.length })}
+              </Badge>
+            }
+          >
+            <OrderHistoryCard
+              orders={orderHistory.records}
+              hasMore={orderHistory.nextCursor !== null}
+              page={orderHistory.previousCursors.length + 1}
+              loading={loadingOrders}
+              error={ordersError}
+              onRetry={() => void loadOrders(ordersRequestRef.current.cursor, ordersRequestRef.current.previousCursors)}
+              onNext={() => {
+                if (orderHistory.nextCursor) void loadOrders(orderHistory.nextCursor, [...orderHistory.previousCursors, orderHistory.cursor]);
+              }}
+              onPrevious={orderHistory.previousCursors.length > 0 ? () => {
+                void loadOrders(orderHistory.previousCursors.at(-1), orderHistory.previousCursors.slice(0, -1));
+              } : undefined}
+            />
+          </BillingGroup>}
         </div>
+
+        <p className="mt-6 text-12 leading-5 text-[var(--text-secondary)]">
+          {supportHintBeforeEmail}
+          <a
+            href={`mailto:${BILLING_FEEDBACK_EMAIL}`}
+            onClick={(event) => {
+              event.preventDefault();
+              void contactSupport();
+            }}
+            className="break-all underline underline-offset-2 transition-colors hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+          >
+            {BILLING_FEEDBACK_EMAIL}
+          </a>
+          {supportHintAfterEmail}
+        </p>
       </div>
 
       <BillingOfferDialog
@@ -1253,6 +1420,67 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
         onSelectPurchaseOption={setSelectedPurchaseOptionId}
         onCustomAmountChange={setCustomAmount}
         onSubmit={submit}
+      />
+
+      <GiftCardRedeemDialog
+        open={giftCardDialog.open}
+        initialCode={giftCardDialog.code}
+        onClose={() => setGiftCardDialog({ open: false, code: null })}
+        onCodeUnusable={(code) => {
+          // 查询或领取时发现码已用不了（比如在另一台设备上兑换过）：同样清掉缓存并重读列表。
+          giftCards.forgetCode(code);
+          void giftCards.reload();
+        }}
+        onRedeemed={(code) => {
+          void loadBalance();
+          // 兑换的可能是自己买的卡：先清掉缓存的这张卡的码（重读列表失败时也不能再复制出已兑换的码），
+          // 再重读列表让这张卡的状态随之变化。
+          giftCards.forgetCode(code);
+          void giftCards.reload();
+          // 兑换礼品卡与充值等同进入 paid tier；重拉 `/models` 让服务端立即收敛
+          // AIGateway access group，模型选择器当场解锁付费模型。
+          void refreshXdModelsAfterEntitlementChange().catch(() => undefined);
+        }}
+      />
+
+      <GiftCardPurchaseDialog
+        open={giftCardPurchaseOpen}
+        offers={giftCardOffers}
+        accountName={accountName}
+        onClose={() => setGiftCardPurchaseOpen(false)}
+        onSubmit={(request, unitAmount) => {
+          setGiftCardPurchaseOpen(false);
+          void checkout.startGiftCard(request, unitAmount);
+        }}
+      />
+
+      <GiftCardPurchasedDialog
+        open={purchasedDialog.open}
+        // 这一单的卡按列表里的最新状态显示（发到邮箱后的状态随列表刷新）。
+        cards={purchasedDialog.cards?.map(latestGiftCard) ?? null}
+        giftCards={giftCards}
+        onRedeemSelf={(card) => void redeemPurchasedGiftCard(card)}
+        onSendEmail={openGiftCardEmail}
+        onViewAll={() => {
+          setPurchasedDialog({ open: false, orderId: null, cards: null });
+          window.requestAnimationFrame(() =>
+            giftCardsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+          );
+        }}
+        onClose={() => setPurchasedDialog({ open: false, orderId: null, cards: null })}
+      />
+
+      <GiftCardEmailDialog
+        card={emailCard}
+        onClose={() => setEmailCardId(null)}
+        onSend={async (card, email) => {
+          const result = await giftCards.sendEmail(card, email);
+          // 已离开计费页（含切换账号）就不再提示。
+          if (result.ok && sectionMountedRef.current) {
+            toast.success(t('billing.giftCardPurchase.toasts.emailQueued', { email: result.card.email?.recipient ?? email }));
+          }
+          return result;
+        }}
       />
 
       <BillingCheckoutDialog
@@ -1357,9 +1585,9 @@ function SubscriptionOverviewCard({
             <>
               <div className="flex flex-wrap items-center gap-2">
                 <h4 className="text-14 font-medium text-[var(--text-primary)]">{facts.name}</h4>
-                <span className="select-none rounded-full bg-[var(--surface-chip)] px-2.5 py-1 text-10 font-medium text-[var(--text-secondary)]">
+                <Badge size="xs">
                   {t(`billing.subscriptionStatus.${facts.status}`)}
-                </span>
+                </Badge>
               </div>
               {(facts.price || facts.includedCredits) && facts.interval && (
                 <p className="mt-1.5 text-12 text-[var(--text-secondary)]">
@@ -1557,21 +1785,23 @@ function BillingGroup({
   titleId,
   description,
   badge,
+  action,
   children,
 }: {
   title: string;
   titleId?: string;
   description?: string;
   badge?: React.ReactNode;
+  action?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <section aria-labelledby={titleId}>
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-        <h3 id={titleId} className="text-14 font-medium text-[var(--text-primary)]">
+        <h3 id={titleId} className={SETTINGS_SECTION_TITLE_CLASS}>
           {title}
         </h3>
-        {badge}
+        {action ?? badge}
       </div>
       {description && (
         <p className="mt-1 max-w-[620px] text-12 leading-5 text-[var(--text-secondary)]">
@@ -1589,12 +1819,17 @@ function BalanceOverviewCard({
   issue,
   loading,
   onPurchase,
+  onRedeemGiftCard,
+  onBuyGiftCard,
 }: {
   usage: ModelAccessCreditUsage | null;
   balance: ModelAccessBalance | null;
   issue: BalanceIssue;
   loading: boolean;
   onPurchase: () => void;
+  onRedeemGiftCard: () => void;
+  /** 目录里有可买的礼品卡时才出现「购买礼品卡」。 */
+  onBuyGiftCard?: () => void;
 }) {
   const { t, i18n } = useTranslation();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;
@@ -1636,16 +1871,41 @@ function BalanceOverviewCard({
             </p>
           )}
         </div>
-        <Button
-          variant="secondary"
-          size="md"
-          compact
-          type="button"
-          onClick={onPurchase}
-          className="shrink-0 select-none"
-        >
-          {t('billing.settings.topupCard.action')}
-        </Button>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <Button
+            variant="secondary"
+            size="md"
+            compact
+            type="button"
+            onClick={onRedeemGiftCard}
+            className="shrink-0 select-none"
+          >
+            {t('billing.giftCard.action')}
+          </Button>
+          {onBuyGiftCard && (
+            <Button
+              variant="secondary"
+              size="md"
+              compact
+              type="button"
+              onClick={onBuyGiftCard}
+              className="shrink-0 select-none"
+            >
+              <Gift size={13} aria-hidden="true" />
+              {t('billing.giftCardPurchase.action')}
+            </Button>
+          )}
+          <Button
+            variant="secondary"
+            size="md"
+            compact
+            type="button"
+            onClick={onPurchase}
+            className="shrink-0 select-none"
+          >
+            {t('billing.settings.topupCard.action')}
+          </Button>
+        </div>
       </div>
     </section>
   );
@@ -1745,69 +2005,145 @@ function CreditPoolRow({
 function PromotionalGrantsCard({ usage }: { usage: ModelAccessCreditUsage }) {
   const { t, i18n } = useTranslation();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;
+  const [requestedPage, setPage] = useState(1);
+  const pageCount = Math.max(
+    1,
+    Math.ceil(usage.promotionalGrants.length / PROMOTIONAL_GRANTS_PAGE_SIZE),
+  );
+  const page = Math.min(requestedPage, pageCount);
+  const grants = [...usage.promotionalGrants].sort((left, right) => {
+    const leftExpiry = Date.parse(left.expiresAt);
+    const rightExpiry = Date.parse(right.expiresAt);
+    return Number(right.state === 'active') - Number(left.state === 'active') || leftExpiry - rightExpiry;
+  });
+  const pageGrants = grants.slice(
+    (page - 1) * PROMOTIONAL_GRANTS_PAGE_SIZE,
+    page * PROMOTIONAL_GRANTS_PAGE_SIZE,
+  );
+
+  // 保留主干的滚动条宽度补偿；翻页会重新挂载列表，因此同时按页码重新测量。
+  const listRef = useRef<HTMLDivElement>(null);
+  const [scrolls, setScrolls] = useState(false);
+  const grantCount = usage.promotionalGrants.length;
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const measure = () => setScrolls(list.scrollHeight > list.clientHeight + 1);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, [grantCount, page]);
+
   return (
-    <section className="overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]">
-      {!usage.promotionalGrantsComplete && (
-        <p className="border-b border-[var(--border-default)] px-5 py-3 text-11 leading-4 text-[var(--text-tertiary)]">
-          {t('billing.usage.promotionalDetails.incomplete', {
-            count: usage.promotionalGrants.length,
-          })}
-        </p>
-      )}
-      {usage.promotionalGrants.length === 0 ? (
-        <p className="px-5 py-4 text-12 text-[var(--text-secondary)]">
-          {t('billing.usage.promotionalDetails.empty')}
-        </p>
-      ) : (
-        <div
-          className="max-h-[360px] divide-y divide-[var(--border-default)] overflow-y-auto [scrollbar-gutter:stable]"
-          role="list"
-        >
-          {usage.promotionalGrants.map((grant) => (
-            <div
-              key={grant.grantId}
-              role="listitem"
-              className="grid grid-cols-3 gap-x-3 gap-y-2 px-5 py-3 lg:grid-cols-[minmax(0,1.5fr)_repeat(3,minmax(80px,0.7fr))] lg:items-center"
-            >
-              <div className="col-span-3 min-w-0 lg:col-span-1">
-                <div className="flex min-w-0 items-center gap-2">
-                  <p className="truncate text-12 font-medium text-[var(--text-primary)]">
-                    {grant.displayName ?? t('billing.usage.promotionalDetails.unnamed')}
-                  </p>
-                  <PromotionalGrantStatus state={grant.state} />
-                </div>
-                <p className="mt-1 truncate text-10 text-[var(--text-tertiary)]">
-                  {t('billing.usage.promotionalDetails.expiresAt', {
-                    date: formatLedgerTimestamp(grant.expiresAt, billingLocale),
-                  })}
-                </p>
-              </div>
-              <GrantAmount
-                label={t('billing.usage.promotionalDetails.original')}
-                amount={grant.originalAmount}
-              />
-              <GrantAmount
-                label={t('billing.usage.promotionalDetails.used')}
-                amount={grant.usedAmount}
-              />
-              <GrantAmount
-                label={t('billing.usage.promotionalDetails.remaining')}
-                amount={grant.remainingAmount}
-              />
+    <BillingGroup
+      title={t('billing.usage.promotionalDetails.title')}
+      badge={
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge size="xs">
+            {t('billing.usage.promotionalDetails.count', { count: usage.promotionalGrants.length })}
+          </Badge>
+          {pageCount > 1 && (
+            <div className="flex items-center gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                compact
+                disabled={page === 1}
+                onClick={() => setPage(page - 1)}
+              >
+                {t('billing.orders.history.previous')}
+              </Button>
+              <span aria-live="polite" className="text-11 tabular-nums text-[var(--text-secondary)]">
+                {page}/{pageCount}
+              </span>
+              <Button
+                variant="secondary"
+                size="sm"
+                compact
+                disabled={page === pageCount}
+                onClick={() => setPage(page + 1)}
+              >
+                {t('billing.orders.history.next')}
+              </Button>
             </div>
-          ))}
+          )}
         </div>
-      )}
-    </section>
+      }
+    >
+      <section className="overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]">
+        {!usage.promotionalGrantsComplete && (
+          <p className="border-b border-[var(--border-default)] px-5 py-3 text-11 leading-4 text-[var(--text-tertiary)]">
+            {t('billing.usage.promotionalDetails.incomplete', { count: usage.promotionalGrants.length })}
+          </p>
+        )}
+        {grants.length === 0 ? (
+          <p className="px-5 py-4 text-12 text-[var(--text-secondary)]">
+            {t('billing.usage.promotionalDetails.empty')}
+          </p>
+        ) : (
+          <div
+            key={page}
+            ref={listRef}
+            className="max-h-[360px] divide-y divide-[var(--border-default)] overflow-y-auto"
+            role="list"
+          >
+            {pageGrants.map((grant) => (
+              <div
+                key={grant.grantId}
+                role="listitem"
+                className={cn(
+                  'grid grid-cols-3 gap-x-3 gap-y-2 py-3 pl-5 lg:grid-cols-[minmax(0,1.5fr)_repeat(3,minmax(80px,0.7fr))] lg:items-center',
+                  scrolls ? 'pr-2' : 'pr-5',
+                )}
+              >
+                <div className="col-span-3 min-w-0 lg:col-span-1">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <p className="truncate text-12 font-medium text-[var(--text-primary)]">
+                      {grant.source?.type === 'subscription_rollover'
+                        ? t('billing.usage.promotionalDetails.rolloverName')
+                        : grant.source?.type === 'gift_card'
+                          ? t('billing.usage.promotionalDetails.giftCard', {
+                              sender: grant.source.senderName,
+                            })
+                          : grant.displayName ?? t('billing.usage.promotionalDetails.unnamed')}
+                    </p>
+                    <PromotionalGrantStatus state={grant.state} />
+                  </div>
+                  <p className="mt-1 truncate text-10 text-[var(--text-tertiary)]">
+                    {t('billing.usage.promotionalDetails.expiresAt', {
+                      date: formatLedgerTimestamp(grant.expiresAt, billingLocale),
+                    })}
+                  </p>
+                </div>
+                <GrantAmount
+                  label={t('billing.usage.promotionalDetails.original')}
+                  amount={grant.originalAmount}
+                />
+                <GrantAmount
+                  label={t('billing.usage.promotionalDetails.used')}
+                  amount={grant.usedAmount}
+                />
+                <GrantAmount
+                  label={t('billing.usage.promotionalDetails.remaining')}
+                  amount={grant.remainingAmount}
+                />
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+    </BillingGroup>
   );
 }
 
 function PromotionalGrantStatus({ state }: { state: ModelAccessPromotionalGrantState }) {
   const { t } = useTranslation();
   return (
-    <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-10 text-[var(--text-secondary)]">
+    <Badge size="xs">
       {t(`billing.usage.promotionalDetails.states.${state}`)}
-    </span>
+    </Badge>
   );
 }
 
@@ -1815,16 +2151,44 @@ function PromotionalGrantStatus({ state }: { state: ModelAccessPromotionalGrantS
  * 订单记录卡。行结构与 PromotionalGrantsCard 同一套(12px 容器 + 1px 分隔行 + 左列双行
  * 加右侧数列),因为它们在同一页里是同一类东西:一条条只读流水。
  */
-function OrderHistoryCard({
+type BillingRequest = {
+  kind: 'invoice' | 'refund';
+  order: Pick<BillingPaymentHistoryRecord, 'amount' | 'currency' | 'provider' | 'providerTransactionId'> & {
+    orderId: string;
+  };
+};
+
+export function OrderHistoryCard({
   orders,
   hasMore,
+  page,
+  loading,
+  error,
+  onNext,
+  onPrevious,
+  onRetry,
 }: {
-  orders: readonly BillingPaymentOrder[];
+  orders: readonly BillingPaymentHistoryRecord[];
   hasMore: boolean;
+  page: number;
+  loading: boolean;
+  error: boolean;
+  onNext: () => void;
+  onPrevious?: () => void;
+  onRetry: () => void;
 }) {
   const { t, i18n } = useTranslation();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;
-  const [invoiceOrder, setInvoiceOrder] = useState<BillingPaymentOrder | null>(null);
+  const [request, setRequest] = useState<BillingRequest | null>(null);
+  const openRequest = (order: BillingPaymentHistoryRecord, kind: BillingRequest['kind']) => {
+    setRequest({
+      kind,
+      order: {
+        orderId: order.sourceId, amount: order.amount, currency: order.currency,
+        provider: order.provider, providerTransactionId: order.providerTransactionId,
+      },
+    });
+  };
   const copyOrderId = async (orderId: string) => {
     try {
       await navigator.clipboard.writeText(orderId);
@@ -1833,32 +2197,29 @@ function OrderHistoryCard({
       toast.error(t('billing.orders.copy.failed'));
     }
   };
-  /**
-   * 支付方式只有在服务端还带着本单的支付动作时才知道 —— 订单投影(shared/billing.ts 的
-   * BillingPaymentOrder)里没有收单渠道字段,终态订单通常也不再带 paymentAction。整批都
-   * 拿不到时**整列不出**,免得留下一列破折号;有一单拿得到就保留该列并给缺的那些占位。
-   */
-  const showPaymentMethod = orders.some((order) => order.paymentAction !== null);
+  const showPaymentMethod = orders.some((order) => isSupportedBillingProvider(order.provider ?? undefined));
   return (
     <section className="overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]">
-      {hasMore && (
-        <p className="border-b border-[var(--border-default)] px-5 py-3 text-11 leading-4 text-[var(--text-tertiary)]">
-          {t('billing.orders.incomplete', { count: orders.length })}
-        </p>
+      {error && (
+        <div role="alert" className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-default)] px-5 py-3">
+          <p className="text-12 text-[var(--text-secondary)]">{t('billing.orders.history.loadFailed')}</p>
+          <Button variant="secondary" disabled={loading} onClick={onRetry}>{t('billing.orders.history.retry')}</Button>
+        </div>
       )}
-      {/* 不像赠送明细那样封高 + 内滚:那边的行数由服务端历史决定(可达上百条),这边行数
-          由 ORDER_HISTORY_LIMIT 封死在 10,再套一层内滚只会凭空造出嵌套滚动区。 */}
-      <div className="divide-y divide-[var(--border-default)]" role="list">
+      {orders.length > 0 && <div
+        className={cn(
+          'grid gap-x-3 divide-y divide-[var(--border-default)]',
+          showPaymentMethod
+            ? 'grid-cols-3 lg:grid-cols-[minmax(0,1.4fr)_minmax(80px,0.7fr)_minmax(80px,0.8fr)_max-content]'
+            : 'grid-cols-2 lg:grid-cols-[minmax(0,1.4fr)_minmax(80px,0.7fr)_max-content]',
+        )}
+        role="list"
+      >
         {orders.map((order) => (
           <div
-            key={order.orderId}
+            key={order.recordId}
             role="listitem"
-            className={cn(
-              'grid gap-x-3 gap-y-2 px-5 py-3.5 lg:items-center',
-              showPaymentMethod
-                ? 'grid-cols-3 lg:grid-cols-[minmax(0,1.4fr)_minmax(80px,0.7fr)_minmax(80px,0.8fr)_minmax(76px,0.6fr)]'
-                : 'grid-cols-2 lg:grid-cols-[minmax(0,1.4fr)_minmax(80px,0.7fr)_minmax(76px,0.6fr)]',
-            )}
+            className="col-span-full grid grid-cols-subgrid gap-y-2 px-5 py-3.5 lg:items-center"
           >
             <div
               className={cn(
@@ -1867,14 +2228,20 @@ function OrderHistoryCard({
               )}
             >
               <p className="truncate text-12 font-medium tabular-nums text-[var(--text-primary)]">
-                {formatLedgerTimestamp(order.createdAt, billingLocale)}
+                {order.paidAt ? formatLedgerTimestamp(order.paidAt, billingLocale) : t('billing.orders.history.unknownPaidAt')}
+                {order.sourceType === 'GIFT_CARD' && (
+                  <span className="font-normal text-[var(--text-secondary)]">
+                    {' · '}
+                    {t('billing.orders.history.giftCard', { count: order.quantity })}
+                  </span>
+                )}
               </p>
               {/* 可见值只露首尾；整块按钮含 Copy 图标，点击任一位置都复制完整订单号。 */}
               <button
                 type="button"
-                onClick={() => void copyOrderId(order.orderId)}
+                onClick={() => void copyOrderId(order.sourceId)}
                 aria-label={t('billing.orders.copy.action', {
-                  id: maskedOrderId(order.orderId),
+                  id: maskedOrderId(order.sourceId),
                 })}
                 className={cn(
                   '-ml-1.5 mt-0.5 inline-flex max-w-full cursor-pointer select-none items-center gap-1 rounded-full px-1.5 py-0.5 text-left',
@@ -1883,100 +2250,129 @@ function OrderHistoryCard({
                   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
                 )}
               >
-                <span className="min-w-0 break-all">
-                  {t('billing.orders.orderId', { id: maskedOrderId(order.orderId) })}
+                <span className="min-w-0 truncate" title={t('billing.orders.orderId', { id: maskedOrderId(order.sourceId) })}>
+                  {t('billing.orders.orderId', { id: maskedOrderId(order.sourceId) })}
                 </span>
                 <Copy aria-hidden="true" size={11} className="shrink-0" />
               </button>
             </div>
-            <p className="min-w-0 truncate text-right text-12 font-medium tabular-nums text-[var(--text-primary)]">
-              {formatMoney(order.amount, order.currency, billingLocale)}
+            <p
+              className="min-w-0 truncate text-right text-12 font-medium tabular-nums text-[var(--text-primary)]"
+              title={order.refundSummary.refundedMinor > 0
+                ? t('billing.orders.history.refundedAmount', { amount: formatMoney(order.refundSummary.refundedAmount, order.currency, billingLocale) })
+                : undefined}
+            >
+              {order.amount === null ? t('billing.orders.history.unknownAmount') : formatMoney(order.amount, order.currency, billingLocale)}
             </p>
             {showPaymentMethod && (
               <p className="min-w-0 truncate text-11 text-[var(--text-secondary)]">
-                {order.paymentAction
-                  ? t(`billing.paymentActions.${order.paymentAction.type}`)
+                {isSupportedBillingProvider(order.provider ?? undefined)
+                  ? t(`billing.providers.${order.provider}`)
                   : '—'}
               </p>
             )}
-            <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-2">
+            <div className={cn(
+              'flex flex-wrap items-center justify-end gap-x-3 gap-y-2 lg:col-span-1 lg:flex-nowrap',
+              showPaymentMethod ? 'col-span-3' : 'col-span-2',
+            )}>
               <span
-                className={cn(
-                  'shrink-0 whitespace-nowrap text-11',
-                  isAwaitingPaymentOrder(order)
-                    ? 'text-[var(--text-primary)]'
-                    : 'text-[var(--text-secondary)]',
-                )}
+                className="shrink-0 whitespace-nowrap text-11 text-[var(--text-secondary)]"
               >
-                {t(orderStatusLabelKey(order))}
+                {t(order.refundSummary.status === 'REFUNDED' ? 'billing.orders.history.refunded'
+                  : order.refundSummary.status === 'PARTIALLY_REFUNDED' ? 'billing.orders.history.partiallyRefunded'
+                    : order.amountPaidMinor === 0 ? 'billing.orders.history.noPayment'
+                      : 'billing.orders.states.completed')}
               </span>
-              {phaseForOrder(order) === 'COMPLETED' && (
+              {order.amount !== null && (
                 <Button
                   variant="secondary"
-                  onClick={() => setInvoiceOrder(order)}
+                  onClick={() => openRequest(order, 'invoice')}
                   className="whitespace-nowrap px-3"
                 >
                   {t('billing.orders.invoice.action')}
                 </Button>
               )}
+              <Button
+                variant="secondary"
+                onClick={() => openRequest(order, 'refund')}
+                className="whitespace-nowrap px-3"
+              >
+                {t('billing.orders.refund.action')}
+              </Button>
             </div>
           </div>
         ))}
-      </div>
-      <InvoiceRequestDialog order={invoiceOrder} onClose={() => setInvoiceOrder(null)} />
+      </div>}
+      {(hasMore || page > 1) && (
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border-default)] px-5 py-3">
+          <span className="text-11 text-[var(--text-secondary)]">{t('billing.orders.history.page', { page })}</span>
+          <div className="flex gap-2">
+            <Button variant="secondary" disabled={loading || !onPrevious} onClick={onPrevious}>{t('billing.orders.history.previous')}</Button>
+            <Button variant="secondary" disabled={loading || !hasMore} onClick={onNext}>{t('billing.orders.history.next')}</Button>
+          </div>
+        </div>
+      )}
+      <BillingRequestDialog request={request} onClose={() => setRequest(null)} />
     </section>
   );
 }
 
-function InvoiceRequestDialog({
-  order,
+function BillingRequestDialog({
+  request,
   onClose,
 }: {
-  order: BillingPaymentOrder | null;
+  request: BillingRequest | null;
   onClose: () => void;
 }) {
   const { t, i18n } = useTranslation();
   const { confirm } = useConfirmDialog();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;
-  const sendInvoiceLockRef = useRef(false);
-  // BillingPaymentOrder does not carry the actual acquiring provider, and a
-  // terminal order usually has no paymentAction. Never present an action type
-  // such as QR_CODE/REDIRECT as the user's payment method.
-  const paymentMethod = t('billing.orders.invoice.notAvailable');
-  const buildInvoiceEmail = () => {
+  const sendLockRef = useRef(false);
+  const order = request?.order;
+  const isRefund = request?.kind === 'refund';
+  const translationPrefix = isRefund ? 'billing.orders.refund' : 'billing.orders.invoice';
+  const recipient = isRefund ? BILLING_FEEDBACK_EMAIL : BILLING_SUPPORT_EMAIL;
+  const paymentMethod = isSupportedBillingProvider(order?.provider ?? undefined)
+    ? t(`billing.providers.${order?.provider}`) : t('billing.orders.invoice.notAvailable');
+  const providerTransactionId = order?.providerTransactionId ?? t('billing.orders.invoice.notAvailable');
+  const amount = order?.amount == null
+    ? t('billing.orders.history.unknownAmount')
+    : formatMoney(order.amount, order.currency, billingLocale);
+  const buildRequestEmail = () => {
     if (!order) return null;
-    const subject = t('billing.orders.invoice.emailSubject', { orderId: order.orderId });
-    const body = t('billing.orders.invoice.emailBody', {
+    const subject = t(`${translationPrefix}.emailSubject`, { orderId: order.orderId });
+    const body = t(`${translationPrefix}.emailBody`, {
       orderId: order.orderId,
+      providerTransactionId,
       application: 'Cindy',
       paymentMethod,
-      amount: formatMoney(order.amount, order.currency, billingLocale),
+      amount,
       invoiceTitleHint: t('billing.orders.invoice.invoiceTitleHint'),
     });
     return { subject, body };
   };
-  const invoiceEmail = buildInvoiceEmail();
-  const invoiceMailto =
-    invoiceEmail === null
+  const requestEmail = buildRequestEmail();
+  const requestMailto =
+    requestEmail === null
       ? ''
-      : `mailto:${BILLING_SUPPORT_EMAIL}?subject=${encodeURIComponent(
-          invoiceEmail.subject,
-        )}&body=${encodeURIComponent(invoiceEmail.body)}`;
+      : `mailto:${recipient}?subject=${encodeURIComponent(
+          requestEmail.subject,
+        )}&body=${encodeURIComponent(requestEmail.body)}`;
   const gmailComposeUrl =
-    invoiceEmail === null
+    requestEmail === null
       ? ''
       : `${GMAIL_COMPOSE_URL}&${new URLSearchParams({
-          to: BILLING_SUPPORT_EMAIL,
-          su: invoiceEmail.subject,
-          body: invoiceEmail.body,
+          to: recipient,
+          su: requestEmail.subject,
+          body: requestEmail.body,
         }).toString()}`;
-  const description = t('billing.orders.invoice.description', {
-    email: BILLING_SUPPORT_EMAIL,
+  const description = t(`${translationPrefix}.description`, {
+    email: recipient,
   });
-  const [descriptionBeforeEmail, descriptionAfterEmail] = description.split(BILLING_SUPPORT_EMAIL);
+  const [descriptionBeforeEmail, descriptionAfterEmail] = description.split(recipient);
   const copySupportEmail = async () => {
     try {
-      await navigator.clipboard.writeText(BILLING_SUPPORT_EMAIL);
+      await navigator.clipboard.writeText(recipient);
       toast.success(t('billing.orders.invoice.emailCopied'));
     } catch {
       toast.error(t('billing.orders.invoice.emailCopyFailed'));
@@ -1987,7 +2383,7 @@ function InvoiceRequestDialog({
     try {
       const confirmed = await confirm({
         title: t('billing.orders.invoice.gmailFallbackTitle'),
-        description: t('billing.orders.invoice.gmailFallbackDescription'),
+        description: t(`${translationPrefix}.gmailFallbackDescription`),
         confirmText: t('billing.orders.invoice.gmailFallbackConfirm'),
         cancelText: t('billing.actions.close'),
         autoFocusConfirm: true,
@@ -2000,13 +2396,13 @@ function InvoiceRequestDialog({
     }
   };
   const showSendFailed = () => {
-    toast.error(t('billing.orders.invoice.sendFailed', { email: BILLING_SUPPORT_EMAIL }));
+    toast.error(t('billing.orders.invoice.sendFailed', { email: recipient }));
   };
-  const sendInvoiceRequest = () => {
-    if (!order || !invoiceMailto || sendInvoiceLockRef.current) return;
-    sendInvoiceLockRef.current = true;
+  const sendRequest = () => {
+    if (!order || !requestMailto || sendLockRef.current) return;
+    sendLockRef.current = true;
     void window.electronAPI
-      .openExternal(invoiceMailto)
+      .openExternal(requestMailto)
       .then(async (result) => {
         if (result.success) {
           onClose();
@@ -2026,11 +2422,11 @@ function InvoiceRequestDialog({
         showSendFailed();
       })
       .finally(() => {
-        sendInvoiceLockRef.current = false;
+        sendLockRef.current = false;
       });
   };
 
-  const invoiceContent = order ? (
+  const requestContent = order ? (
     <div>
       <p className="text-12 leading-5 text-[var(--confirm-desc)]">
         {descriptionBeforeEmail}
@@ -2039,12 +2435,12 @@ function InvoiceRequestDialog({
           onClick={() => void copySupportEmail()}
           className="font-mono text-[var(--text-primary)] underline decoration-[var(--border-default)] underline-offset-2 transition-colors hover:text-[var(--text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
         >
-          {BILLING_SUPPORT_EMAIL}
+          {recipient}
         </button>
         {descriptionAfterEmail}
       </p>
 
-      <p className="mt-3 text-12 leading-5 text-[var(--confirm-desc)]">
+      {!isRefund && <p className="mt-3 text-12 leading-5 text-[var(--confirm-desc)]">
         <Trans
           i18n={i18n}
           t={t}
@@ -2053,58 +2449,65 @@ function InvoiceRequestDialog({
             strong: <strong className="font-semibold text-[var(--confirm-title)]" />,
           }}
         />
-      </p>
+      </p>}
 
       <div className="mt-4 divide-y divide-[var(--border-default)] overflow-hidden rounded-xl border border-[var(--border-default)]">
-        <InvoiceInfoRow
+        <BillingRequestInfoRow
           label={t('billing.orders.invoice.fields.orderId')}
           value={order.orderId}
           mono
         />
-        <InvoiceInfoRow label={t('billing.orders.invoice.fields.application')} value="Cindy" />
-        <InvoiceInfoRow
+        <BillingRequestInfoRow
+          label={t('billing.orders.invoice.fields.providerTransactionId')}
+          value={providerTransactionId}
+          mono
+        />
+        <BillingRequestInfoRow label={t('billing.orders.invoice.fields.application')} value="Cindy" />
+        <BillingRequestInfoRow
           label={t('billing.orders.invoice.fields.paymentMethod')}
           value={paymentMethod}
         />
-        <InvoiceInfoRow
-          label={t('billing.orders.invoice.fields.amount')}
-          value={formatMoney(order.amount, order.currency, billingLocale)}
+        <BillingRequestInfoRow
+          label={t(`${translationPrefix}.fields.amount`)}
+          value={amount}
         />
       </div>
 
-      <div className="mt-4 py-3">
-        <p className="text-12 leading-5 text-[var(--confirm-title)]">
-          {t('billing.orders.invoice.requiredInfo')}
-        </p>
-        <ul className="mt-2 list-disc space-y-1 pl-5 text-12 leading-5 text-[var(--confirm-desc)]">
-          {INVOICE_REQUIRED_FIELDS.map((field) => (
-            <li key={field}>{t(`billing.orders.invoice.fields.${field}`)}</li>
-          ))}
-        </ul>
-      </div>
+      {!isRefund && (
+        <div className="mt-4 py-3">
+          <p className="text-12 leading-5 text-[var(--confirm-title)]">
+            {t('billing.orders.invoice.requiredInfo')}
+          </p>
+          <ul className="mt-2 list-disc space-y-1 pl-5 text-12 leading-5 text-[var(--confirm-desc)]">
+            {INVOICE_REQUIRED_FIELDS.map((field) => (
+              <li key={field}>{t(`billing.orders.invoice.fields.${field}`)}</li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   ) : null;
 
   return (
     <ConfirmDialog
-      open={order !== null}
+      open={request !== null}
       onOpenChange={(open) => {
-        if (open || sendInvoiceLockRef.current) return;
+        if (open || sendLockRef.current) return;
         onClose();
       }}
-      title={t('billing.orders.invoice.title')}
-      content={invoiceContent}
+      title={t(`${translationPrefix}.title`)}
+      content={requestContent}
       maxWidth={460}
-      confirmText={t('billing.orders.invoice.sendAction')}
+      confirmText={t(`${translationPrefix}.sendAction`)}
       cancelText={t('billing.actions.close')}
       autoFocusConfirm
       confirmIcon={<Mail className="h-3.5 w-3.5" strokeWidth={1.8} />}
-      onConfirm={sendInvoiceRequest}
+      onConfirm={sendRequest}
     />
   );
 }
 
-function InvoiceInfoRow({
+function BillingRequestInfoRow({
   label,
   value,
   mono = false,
@@ -2131,7 +2534,8 @@ function GrantAmount({ label, amount }: { label: string; amount: string }) {
   const { i18n } = useTranslation();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;
   return (
-    <div className="min-w-0 text-right">
+    // 窄窗口下三项排在名称下面，和名称一起靠左；宽窗口下与名称同一行，按数字靠右对齐。
+    <div className="min-w-0 text-left lg:text-right">
       <p className="truncate text-10 text-[var(--text-tertiary)]">{label}</p>
       <p className="mt-0.5 truncate text-11 font-medium tabular-nums text-[var(--text-primary)]">
         {formatMoney(amount, BILLING_CURRENCY, billingLocale)}
@@ -2239,12 +2643,12 @@ function BillingOfferDialog({
   return (
     <Dialog.Root open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[9990]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
           aria-describedby={undefined}
           className={cn(
-            'modal-panel fixed left-1/2 top-1/2 z-[9991] flex max-h-[min(720px,calc(100vh-48px))]',
+            'modal-panel fixed left-1/2 top-1/2 z-modal-raised flex max-h-[min(720px,calc(100vh-48px))]',
             'w-[calc(100vw-48px)] -translate-x-1/2 -translate-y-1/2 flex-col',
             comparingPlans ? 'max-w-[1120px]' : 'max-w-[600px]',
             'overflow-hidden',
@@ -2387,17 +2791,27 @@ function BillingOfferDialog({
                       </p>
                     )}
                     {selected.offer.rolloverCap !== null && (
-                      <p className="text-12 text-[var(--text-secondary)]">
-                        {t('billing.comparison.rollover', {
-                          amount: formatMoney(
-                            selected.offer.rolloverCap,
-                            selected.offer.currency,
-                            billingLocale,
-                          ),
-                          period: t(
-                            `billing.comparison.nextPeriod.${selected.offer.interval ?? 'OTHER'}`,
-                          ),
-                        })}
+                      <p
+                        className={cn(
+                          'text-12 text-[var(--text-secondary)]',
+                          selected.offer.interval === 'MONTH' && 'whitespace-pre-line',
+                        )}
+                      >
+                        {t(
+                          selected.offer.interval === 'MONTH'
+                            ? 'billing.comparison.rolloverMonthly'
+                            : 'billing.comparison.rollover',
+                          {
+                            amount: formatMoney(
+                              selected.offer.rolloverCap,
+                              selected.offer.currency,
+                              billingLocale,
+                            ),
+                            period: t(
+                              `billing.comparison.nextPeriod.${selected.offer.interval ?? 'OTHER'}`,
+                            ),
+                          },
+                        )}
                       </p>
                     )}
                   </div>
@@ -2450,16 +2864,16 @@ function BillingOfferDialog({
                                 {(currentPlan || unavailableReason) && (
                                   <div className="min-w-0">
                                     {currentPlan && (
-                                      <span className="rounded-full bg-[var(--surface)] px-2 py-0.5 text-10 font-medium text-[var(--text-secondary)]">
+                                      <Badge size="xs" className="bg-[var(--surface)]">
                                         {t('billing.catalog.currentPlan')}
-                                      </span>
+                                      </Badge>
                                     )}
                                     {unavailableReason && (
-                                      <span className="rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-10 font-medium text-[var(--text-secondary)]">
+                                      <Badge size="xs">
                                         {t(
                                           `billing.catalog.unavailableReasons.${unavailableReason}`,
                                         )}
-                                      </span>
+                                      </Badge>
                                     )}
                                   </div>
                                 )}

@@ -1,9 +1,13 @@
 import { createFilePeerRuntime } from '@cindy/device-link';
 import type { FilePeerHostApi } from '../shared/filePeer';
+import { createRtcTrafficObserver } from './rtcTraffic';
 
 export function startFilePeerHost(api: FilePeerHostApi) {
-  const runtime = createFilePeerRuntime({ ...api, writeBatch: api.write,
-    closed: (connection) => { void api.closed(connection).catch(() => {}); },
+  const traffic = createRtcTrafficObserver(api.traffic);
+  let finishing = false;
+  const runtime = createFilePeerRuntime({ ...api, writeBatch: api.write, readBatch: api.read,
+    observePeerConnection: traffic.observe,
+    closed: (connection, reason) => { if (!finishing) void api.closed(connection, reason).catch(() => {}); },
   });
   const off = api.onCommand((id, c) => {
     void (async () => {
@@ -37,6 +41,11 @@ export function startFilePeerHost(api: FilePeerHostApi) {
         await api.reply(id, false);
       }
     })();
+  });
+  api.onFinishTraffic(() => {
+    finishing = true;
+    off();
+    return traffic.finish(runtime.dispose);
   });
   void api.register();
   return () => {

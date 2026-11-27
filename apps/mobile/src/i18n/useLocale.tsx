@@ -28,9 +28,16 @@ import { setManualLocaleOverride } from './appLanguage';
 import { clearPresentationDateFormatters } from './dateFormatters';
 import { i18n, detectSystemLocale, type LocalePreference, type SupportedLocale } from './index';
 import {
+  classicalReplyStyleContextOf,
+  defaultClassicalReplyStyleFor,
+  type ClassicalReplyStyleContext,
+  type ClassicalReplyStyleId,
+} from '@cindy/maker-shared/classical-reply';
+import {
   readLanguagePreference,
   saveLanguagePreference,
 } from './languagePreferenceStore';
+import { currentClassicalStyle, readClassicalStyle, saveClassicalStyle } from './classicalStyleStore';
 
 interface LocaleContextValue {
   /** 用户的偏好选择(含 'system')。 */
@@ -39,6 +46,9 @@ interface LocaleContextValue {
   effectiveLocale: SupportedLocale;
   /** 设置偏好 —— 持久化 override、刷 i18next、同步手写 catalog 桥。 */
   setLocale: (next: LocalePreference) => void;
+  /** AI 作答文风（文言、唐诗……）；现代中文界面下也可选，默认照常作答。 */
+  classicalStyle: ClassicalReplyStyleId;
+  setClassicalStyle: (next: ClassicalReplyStyleId) => void;
 }
 
 const LocaleContext = createContext<LocaleContextValue | undefined>(undefined);
@@ -70,6 +80,39 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
   const [effectiveLocale, setEffectiveLocale] = useState<SupportedLocale>(detectSystemLocale);
   // 用户已手动选择过语言时置位:挂载期的异步读回不得覆盖更晚的手动选择。
   const userChoseRef = useRef(false);
+  const [storedStyles, setStoredStyles] = useState<Record<ClassicalReplyStyleContext, ClassicalReplyStyleId | null>>(
+    () => ({ classical: currentClassicalStyle('classical'), modern: currentClassicalStyle('modern') }),
+  );
+  // 用户水合期改过哪一档就只跳过那一档的恢复:另一档照常读回，保证设置显示与
+  // 发送路径(currentClassicalStyleForLocale 读同一份存储内存)取到一致的值。
+  const chosenStyleContextRef = useRef<ClassicalReplyStyleContext | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void readClassicalStyle().then((styles) => {
+      if (cancelled) return;
+      setStoredStyles((prev) => ({
+        classical: chosenStyleContextRef.current === 'classical' ? prev.classical : styles.classical,
+        modern: chosenStyleContextRef.current === 'modern' ? prev.modern : styles.modern,
+      }));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // 文言界面与简体 / 繁體中文界面的文风分开记忆,各自从未选状态起步。
+  const styleContext = classicalReplyStyleContextOf(effectiveLocale);
+  const classicalStyle = storedStyles[styleContext] ?? defaultClassicalReplyStyleFor(effectiveLocale);
+
+  const setClassicalStyle = useCallback(
+    (next: ClassicalReplyStyleId) => {
+      chosenStyleContextRef.current = styleContext;
+      setStoredStyles((prev) => ({ ...prev, [styleContext]: next }));
+      void saveClassicalStyle(styleContext, next);
+    },
+    [styleContext],
+  );
 
   // 挂载后恢复持久化的 override;读出前按系统语言渲染(与 i18n init 值一致,
   // 未设置 override 的用户全程无切换)。
@@ -94,8 +137,8 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo<LocaleContextValue>(
-    () => ({ locale, effectiveLocale, setLocale }),
-    [locale, effectiveLocale, setLocale],
+    () => ({ locale, effectiveLocale, setLocale, classicalStyle, setClassicalStyle }),
+    [locale, effectiveLocale, setLocale, classicalStyle, setClassicalStyle],
   );
 
   return <LocaleContext.Provider value={value}>{children}</LocaleContext.Provider>;

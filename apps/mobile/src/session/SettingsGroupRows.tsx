@@ -9,9 +9,9 @@
  * footer(13/18 400 textSecondary,iOS Section footer / Android 列表辅助文字惯例),
  * 所以行组件不再提供 hint / detail;一组需要多段说明时拆成多个分组(2026-10-19 用户定稿)。
  */
-import { Children, isValidElement, type ReactNode } from 'react';
+import { Children, createContext, isValidElement, useContext, type ReactNode } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
-import { ChevronDown, ChevronRight } from 'lucide-react-native';
+import { ChevronDown, ChevronRight, ChevronUp } from 'lucide-react-native';
 import { Text } from '@/components/AppText';
 import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import { NativeSwitch } from '@/platform/chrome';
@@ -21,6 +21,7 @@ import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScal
 import { DisclosureItem } from './listDisclosureTransition';
 
 export const useSettingsRowStyles = () => useThemedStyles(makeSettingsRowStyles);
+export const SettingsCardFill = createContext<string | undefined>(undefined);
 
 export type SettingsGroupMessage = { text: string; testID?: string } | null | undefined | false;
 
@@ -47,6 +48,7 @@ export function SettingsGroup({
   titleAccessory?: ReactNode;
 }) {
   const styles = useSettingsRowStyles();
+  const cardFill = useContext(SettingsCardFill);
   // Children.toArray 会丢弃 null/false 并给每个 child 赋稳定 key(沿用元素自身 key),
   // 比 key={index} 更稳:后续插入/重排行时不会让无关行 remount。
   const rows = Children.toArray(children);
@@ -61,7 +63,7 @@ export function SettingsGroup({
         </View>
       ) : null}
       {rows.length > 0 ? (
-        <DisclosureItem style={styles.card}>
+        <DisclosureItem style={[styles.card, cardFill && { backgroundColor: cardFill }]}>
           {rows.map((row, index) => (
             <DisclosureItem exit key={isValidElement(row) && row.key != null ? row.key : index}>
               {index > 0 ? <View style={styles.divider} /> : null}
@@ -117,6 +119,7 @@ export function ChoicePickerRow({
 }) {
   const styles = useSettingsRowStyles();
   const { colors } = useTheme();
+  const Chevron = expanded ? ChevronUp : ChevronDown;
   return (
     <Pressable
       accessibilityLabel={`${label}: ${value}`}
@@ -129,7 +132,7 @@ export function ChoicePickerRow({
       <View style={styles.rowLine}>
         <Text style={styles.rowLabel}>{label}</Text>
         <Text style={styles.rowValue} numberOfLines={1}>{value}</Text>
-        <ChevronDown color={colors.textTertiary} size={iconSize.lg} strokeWidth={iconStroke.regular} />
+        <Chevron color={colors.textTertiary} size={iconSize.lg} strokeWidth={iconStroke.regular} />
       </View>
     </Pressable>
   );
@@ -159,13 +162,16 @@ export function InfoRow({
 /**
  * 可点击信息行:进入子页、轻量编辑或打开外部信息;右侧统一 lg + textTertiary 箭头。
  * 原地执行的动作(检查更新、清空日志)传 chevron={false},不画进入箭头。
+ * `lead` 是行首 28–36 的头像或图标;`destructive` 只用于退出、解散这类不可逆动作。
  */
 export function ActionInfoRow({
   accessibilityLabel,
   accessibilityRole = 'button',
   chevron = true,
+  destructive = false,
   disabled = false,
   label,
+  lead,
   onPress,
   testID,
   value = '',
@@ -173,9 +179,11 @@ export function ActionInfoRow({
   accessibilityLabel: string;
   accessibilityRole?: 'button' | 'link';
   chevron?: boolean;
+  destructive?: boolean;
   disabled?: boolean;
   label: string;
-  onPress(): void;
+  lead?: ReactNode;
+  onPress?(): void;
   testID?: string;
   value?: string;
 }) {
@@ -188,11 +196,12 @@ export function ActionInfoRow({
       accessibilityState={{ disabled }}
       disabled={disabled}
       onPress={onPress}
-      style={({ pressed }) => [styles.row, (pressed || disabled) && styles.pressed]}
+      style={({ pressed }) => [styles.row, lead ? styles.mediaRow : null, (pressed || disabled) && styles.pressed]}
       testID={testID}
     >
       <View style={styles.rowLine}>
-        <Text style={styles.rowLabel}>{label}</Text>
+        {lead}
+        <Text style={[styles.rowLabel, destructive && { color: colors.destructive }]}>{label}</Text>
         {value ? <Text style={styles.rowValue} numberOfLines={1}>{value}</Text> : null}
         {chevron ? <ChevronRight color={colors.textTertiary} size={iconSize.lg} strokeWidth={iconStroke.regular} /> : null}
       </View>
@@ -263,6 +272,8 @@ const makeSettingsRowStyles = (colors: ThemeColors) => StyleSheet.create({
   divider: { backgroundColor: colors.border, height: StyleSheet.hairlineWidth, marginLeft: spacing.lg },
   // —— 行 ——
   row: { gap: spacing.xs, justifyContent: 'center', minHeight: 52, paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
+  // Rows led by an avatar keep the 52pt rhythm: the avatar, not the padding, sets the height.
+  mediaRow: { paddingVertical: spacing.sm },
   rowLine: { alignItems: 'center', flexDirection: 'row', gap: spacing.md },
   // 左侧标签可换行(flex 1 + shrink);右侧取值右对齐、不收缩,过长截断在行宽 60% 内。
   rowLabel: { color: colors.textPrimary, flex: 1, flexShrink: 1, fontSize: typeScale.body, fontWeight: fontWeight.medium, lineHeight: lineHeight.body, minWidth: 0 },

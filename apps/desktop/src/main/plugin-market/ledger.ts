@@ -136,6 +136,19 @@ function isLedgerSnapshotText(value: unknown): value is string {
   }
 }
 
+/** 从该用户的默认下发退订名单里移除 pluginId（名单清空即删键）；返回是否确有移除。 */
+function removeDefaultInstallOptOut(
+  data: PluginMarketLedgerData,
+  userId: string,
+  pluginId: string,
+): boolean {
+  const current = data.defaultInstallOptOuts[userId] ?? [];
+  const remaining = current.filter((id) => id !== pluginId);
+  if (remaining.length > 0) data.defaultInstallOptOuts[userId] = remaining;
+  else delete data.defaultInstallOptOuts[userId];
+  return remaining.length !== current.length;
+}
+
 function emptyLedger(): PluginMarketLedgerData {
   return {
     schemaVersion: LEDGER_SCHEMA_VERSION,
@@ -515,40 +528,64 @@ export class PluginMarketLedger {
   }
 
   lookupInstallationForAuthorization(target: PluginMarketAuthorizationTarget): PluginMarketAuthorizationLookup {
-    const { main, custom, namespaced } = this.readFiles();
+    return this.installationLookup(this.readFiles())(target);
+  }
+
+  /** Display facts for one scan only. Authorization always reads current files. */
+  createListingLookup(): {
+    lookup: (target: PluginMarketAuthorizationTarget) => PluginMarketAuthorizationLookup;
+    isCurrent: () => boolean;
+  } {
+    const files = this.readFiles();
+    const captured = JSON.stringify(files);
+    return {
+      lookup: this.installationLookup(files),
+      // An async scan yields between plugins. Compare all parsed/raw facts before
+      // publishing so external edits, corruption and recovery also invalidate it.
+      isCurrent: () => {
+        try { return captured === JSON.stringify(this.readFiles()); }
+        catch { return false; }
+      },
+    };
+  }
+
+  private installationLookup({ main, custom, namespaced }: ReturnType<PluginMarketLedger['readFiles']>):
+    (target: PluginMarketAuthorizationTarget) => PluginMarketAuthorizationLookup {
     if (main.kind === 'invalid' || custom.kind === 'invalid' || namespaced.kind === 'invalid') {
-      return { kind: 'invalid' };
+      return () => ({ kind: 'invalid' });
     }
     const merged = this.mergeInstallations(main, custom, namespaced).installations;
-    const precise = hasDeliveryNamespace(target);
-    const record = precise
-      ? merged[pluginLedgerRecordKey(target)] ?? null
-      : this.recordForLookup(merged, target.ghostId);
-    if (record) {
-      if (precise && (record.ghostId !== target.ghostId ||
-          (hasDeliveryNamespace(record) && record.namespace !== target.namespace) ||
-          (target.namespace === null && record.scope === 'organization'))) {
-        return { kind: 'absent' };
-      }
-      return { kind: 'found', record };
-    }
-    const mentionsUnparsedTarget = (file: InstallationsFileRead): boolean => {
-      if (!precise) return rawMentionsGhost(file, target.ghostId);
-      const raw = file.raw?.installations;
-      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
-      return Object.entries(raw).some(([key, value]) => {
-        if (validRecord(value) && hasDeliveryNamespace(value) && value.namespace !== target.namespace) return false;
-        if (!value || typeof value !== 'object' || Array.isArray(value)) {
-          return key === pluginLedgerRecordKey(target);
+    return (target) => {
+      const precise = hasDeliveryNamespace(target);
+      const record = precise
+        ? merged[pluginLedgerRecordKey(target)] ?? null
+        : this.recordForLookup(merged, target.ghostId);
+      if (record) {
+        if (precise && (record.ghostId !== target.ghostId ||
+            (hasDeliveryNamespace(record) && record.namespace !== target.namespace) ||
+            (target.namespace === null && record.scope === 'organization'))) {
+          return { kind: 'absent' };
         }
-        const candidate = value as { ghostId?: unknown; namespace?: unknown };
-        return key === pluginLedgerRecordKey(target) ||
-          (candidate.ghostId === target.ghostId &&
-            (!hasDeliveryNamespace(candidate) || candidate.namespace === target.namespace));
-      });
+        return { kind: 'found', record };
+      }
+      const mentionsUnparsedTarget = (file: InstallationsFileRead): boolean => {
+        if (!precise) return rawMentionsGhost(file, target.ghostId);
+        const raw = file.raw?.installations;
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+        return Object.entries(raw).some(([key, value]) => {
+          if (validRecord(value) && hasDeliveryNamespace(value) && value.namespace !== target.namespace) return false;
+          if (!value || typeof value !== 'object' || Array.isArray(value)) {
+            return key === pluginLedgerRecordKey(target);
+          }
+          const candidate = value as { ghostId?: unknown; namespace?: unknown };
+          return key === pluginLedgerRecordKey(target) ||
+            (candidate.ghostId === target.ghostId &&
+              (!hasDeliveryNamespace(candidate) || candidate.namespace === target.namespace));
+        });
+      };
+      return [main, custom, namespaced].some(mentionsUnparsedTarget)
+        ? { kind: 'invalid' } : { kind: 'absent' };
     };
-    return [main, custom, namespaced].some(mentionsUnparsedTarget)
-      ? { kind: 'invalid' } : { kind: 'absent' };
   }
 
   /**
@@ -569,6 +606,40 @@ export class PluginMarketLedger {
     const data = this.read();
     this.putRecord(data, record);
     this.write(data);
+  }
+
+  /**
+   * 用户显式从市场安装／更新落位成功：视为重新订阅默认下发。安装记录与清除该用户
+   * 对此插件的退订在同一次账本写入里完成，不会出现「记录已写、退订未清」的中间态。
+   * 返回是否确有退订被清除。
+   */
+  upsertInstallationAndClearOptOut(record: PluginMarketInstallationRecord, userId: string): boolean {
+    const data = this.read();
+    this.putRecord(data, record);
+    const cleared = removeDefaultInstallOptOut(data, userId, record.pluginId);
+    this.write(data);
+    return cleared;
+  }
+
+  /**
+   * 历史遗留「已安装 + 退订」的对账修复（旧版本重装不清退订，或误把短暂缺失、
+   * 换源当成卸载）。compare-and-write：expected 记录必须原样仍在、仍为已安装的服务端
+   * 市场来源才清；并发卸载会原子写 installed=false 并补退订，比对失败即保持不变。
+   */
+  clearOptOutIfStillInstalled(expected: PluginMarketInstallationRecord, userId: string): boolean {
+    const data = this.read();
+    const current = data.installations[pluginLedgerRecordKey(expected)];
+    if (
+      !current
+      || !current.installed
+      || !SERVER_SOURCES.has(current.source)
+      || canonicalJson(current) !== canonicalJson(expected)
+      || !removeDefaultInstallOptOut(data, userId, current.pluginId)
+    ) {
+      return false;
+    }
+    this.write(data);
+    return true;
   }
 
   /** The simulator keeps its server resource; replace both local route keys in one ledger write. */
@@ -714,9 +785,7 @@ export class PluginMarketLedger {
           ...new Set([...suppressedPluginIds, record.pluginId]),
         ];
       } else {
-        const restored = suppressedPluginIds.filter((pluginId) => pluginId !== record.pluginId);
-        if (restored.length > 0) data.defaultInstallOptOuts[optOut.userId] = restored;
-        else delete data.defaultInstallOptOuts[optOut.userId];
+        removeDefaultInstallOptOut(data, optOut.userId, record.pluginId);
       }
     }
     this.write(data);
@@ -759,11 +828,7 @@ export class PluginMarketLedger {
       updatedAt: new Date().toISOString(),
       ...(rawManifestSha256 !== undefined ? { rawManifestSha256 } : {}),
     });
-    const remainingOptOuts = (data.defaultInstallOptOuts[userId] ?? []).filter(
-      (pluginId) => pluginId !== current.pluginId,
-    );
-    if (remainingOptOuts.length > 0) data.defaultInstallOptOuts[userId] = remainingOptOuts;
-    else delete data.defaultInstallOptOuts[userId];
+    removeDefaultInstallOptOut(data, userId, current.pluginId);
     this.write(data);
     return true;
   }

@@ -4,9 +4,7 @@
  * 该入口只暴露 cindy_helper 已有 history reader 的只读能力，不开放跨会话扫描。
  * 参数在被控端再次校验，避免 allowlist 只能校验 channel、不能校验 payload 的缺口。
  */
-import { ipcMain } from 'electron';
 import { eq } from 'drizzle-orm';
-import { DL_HISTORY_MESSAGES_CHANNEL } from '@cindy/device-link';
 
 import {
   getMessagesForHistory,
@@ -20,6 +18,7 @@ import { getDbClient } from '../client/current';
 import { sessions } from '../schema';
 import { readLatestSessionTerminal, type SessionTerminalHint } from '../sessionTerminal';
 import { requireObject, requireString, throwIpcError } from '../../utils/ipcValidate';
+import { redactSensitiveTextDeep } from '@cindy/maker-shared/error-redaction';
 
 const VALID_AGENT_KINDS: readonly HistoryAgentKind[] = ['cc', 'codex', 'pi'];
 const VALID_ORDERS: readonly HistoryOrder[] = ['asc', 'desc'];
@@ -31,6 +30,7 @@ const VALID_ROLES: readonly HistoryRole[] = [
   'ask_user',
   'plan_review',
   'thinking',
+  'error',
 ];
 
 /** Wire payload accepted by the remote history channel. */
@@ -266,6 +266,24 @@ function capReferenceHistoryPage(
   };
 }
 
+/**
+ * 跨设备出口前的最后一道理脱敏兜底: device-link 默认 roles=null 走全 role 集,
+ * 错误诊断行 (role='error') 会随默认集出网。写入侧只有 content.message /
+ * sdkError 过过 redactSensitiveText, reason / toolLoop 等其余字段是入库原样内容,
+ * 不过脱敏。所以出口这里必须自己把 error 行的敏感字符串叶子统一脱敏, 否则凭据 /
+ * 内部 id 会随错误行流出受控端。其余 role 逐字节透传, 行为不变。
+ */
+function redactErrorRowsInPage(
+  page: Awaited<ReturnType<typeof getMessagesForHistory>>,
+): Awaited<ReturnType<typeof getMessagesForHistory>> {
+  return {
+    ...page,
+    items: page.items.map((m) =>
+      m.role === 'error' ? { ...m, content: redactSensitiveTextDeep(m.content) } : m,
+    ),
+  };
+}
+
 const defaultSessionExists = async (sessionId: string): Promise<boolean> => {
   const rows = await getDbClient().drizzle
     .select({ id: sessions.id })
@@ -281,9 +299,9 @@ const defaultDeps: RemoteHistoryIpcDeps = {
   readTerminal: readLatestSessionTerminal,
 };
 
-/** Register the allowlisted, read-only remote history handler. */
-export function registerRemoteHistoryIpc(deps: RemoteHistoryIpcDeps = defaultDeps): void {
-  ipcMain.handle(DL_HISTORY_MESSAGES_CHANNEL, async (_event, value: unknown) => {
+/** The allowlisted, read-only history operation shared by Desktop and Node Host. */
+export function createRemoteHistoryHandler(deps: RemoteHistoryIpcDeps = defaultDeps) {
+  return async (value: unknown) => {
     const request = parseRemoteHistoryMessagesRequest(value);
     if (!(await deps.sessionExists(request.sessionId))) {
       throwIpcError('NOT_FOUND', 'Session does not exist');
@@ -313,8 +331,12 @@ export function registerRemoteHistoryIpc(deps: RemoteHistoryIpcDeps = defaultDep
       request.roles === null ||
       request.roles.some((role) => role !== 'user' && role !== 'assistant');
     return {
-      ...capReferenceHistoryPage(page, request.contentCharLimit, preserveStructuredRoles),
+      ...capReferenceHistoryPage(
+        redactErrorRowsInPage(page),
+        request.contentCharLimit,
+        preserveStructuredRoles,
+      ),
       terminal: terminal ?? null,
     };
-  });
+  };
 }

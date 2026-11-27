@@ -18,8 +18,8 @@ export function HarnessVersionMenuRow({ label, manageLabel, version, status, pen
   children: ReactNode;
 }) {
   return (
-    <div className="flex min-h-[52px] min-w-0 items-center justify-between gap-3 overflow-hidden px-[18px] py-2" data-testid={testId}>
-      <span className="shrink-0 text-13 text-[var(--settings-section-sublabel)]">{label}</span>
+    <div className="flex min-h-[52px] min-w-0 items-center justify-between gap-3 overflow-hidden px-4 py-2" data-testid={testId}>
+      <span className="shrink-0 text-13 font-medium text-[var(--settings-section-sublabel)]">{label}</span>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <button type="button" aria-label={manageLabel} className="-mr-2 flex min-h-9 min-w-0 flex-1 items-center justify-end gap-2 rounded-full px-2 text-13 font-medium text-[var(--settings-section-title)] hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]">
@@ -33,7 +33,7 @@ export function HarnessVersionMenuRow({ label, manageLabel, version, status, pen
             <ChevronDown size={13} aria-hidden className="shrink-0" />
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" sideOffset={6} className="z-[10000] w-[272px] max-w-[calc(100vw-24px)] p-1.5">
+        <DropdownMenuContent align="end" sideOffset={6} className="w-[272px] max-w-[calc(100vw-24px)] p-1.5">
           {children}
         </DropdownMenuContent>
       </DropdownMenu>

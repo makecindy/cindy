@@ -81,22 +81,22 @@ describe('unsupported request option error', () => {
     expect(unsupportedRequestOptionCompatOverride(message)).toBeUndefined();
   });
 
-  // #6570: a nullable param means no parameter was specified, as does an omitted key.
+  // #6570 / #9785: omitted, null and empty param all leave the rejected field to the message.
   describe.each(['prompt_cache_key', 'prompt_cache_retention'])('structured rejection of %s', (field) => {
     describe.each([false, true])('wrapped in error: %s', (wrapped) => {
-      it.each(['omitted', 'null', 'named'] as const)('accepts param %s', (paramForm) => {
+      it.each(['omitted', 'null', 'empty', 'named'] as const)('accepts param %s', (paramForm) => {
         const error = {
           code: null,
           message: `Validation: Unsupported parameter(s): \`${field}\``,
           type: 'invalid_request_error',
-          ...(paramForm === 'omitted' ? {} : { param: paramForm === 'null' ? null : field }),
+          ...(paramForm === 'omitted' ? {} : { param: paramForm === 'null' ? null : paramForm === 'empty' ? '' : field }),
         };
         const message = '400: ' + JSON.stringify(wrapped ? { error } : error);
         expect(isUnsupportedRequestOptionErrorMessage(message)).toBe(true);
         expect(unsupportedRequestOptionCompatOverride(message)).toEqual({ supportsLongCacheRetention: false });
       });
 
-      it.each(['temperature', 'prompt_cache_options', '', 0, false, [], {}].map(param => ({ param })))('rejects non-cache param $param', ({ param }) => {
+      it.each(['temperature', 'prompt_cache_options', ' ', 0, false, [], {}].map(param => ({ param })))('rejects non-cache param $param', ({ param }) => {
         const error = { code: null, param, type: 'invalid_request_error', message: `Unsupported parameter(s): ${field}` };
         const message = '400: ' + JSON.stringify(wrapped ? { error } : error);
         expect(isUnsupportedRequestOptionErrorMessage(message)).toBe(false);
@@ -111,10 +111,12 @@ describe('unsupported request option error', () => {
     [400, 'authentication_error', 'Unsupported parameter(s): prompt_cache_key'],
     [401, 'invalid_request_error', 'Unsupported parameter(s): prompt_cache_key'],
     [429, 'invalid_request_error', 'Unsupported parameter(s): prompt_cache_key'],
-  ])('keeps null param from bypassing rejection criteria: %s %s %s', (status, type, message) => {
-    const rejection = `${status}: ` + JSON.stringify({ error: { code: null, param: null, type, message } });
-    expect(isUnsupportedRequestOptionErrorMessage(rejection)).toBe(false);
-    expect(unsupportedRequestOptionCompatOverride(rejection)).toBeUndefined();
+  ])('keeps null and empty param from bypassing rejection criteria: %s %s %s', (status, type, message) => {
+    for (const param of [null, '']) {
+      const rejection = `${status}: ` + JSON.stringify({ error: { code: null, param, type, message } });
+      expect(isUnsupportedRequestOptionErrorMessage(rejection)).toBe(false);
+      expect(unsupportedRequestOptionCompatOverride(rejection)).toBeUndefined();
+    }
   });
 
   it.each([

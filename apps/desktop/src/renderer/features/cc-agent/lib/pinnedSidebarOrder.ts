@@ -1,4 +1,38 @@
 import { sidebarPinnedEntryComparisonKey } from '../../../../shared/sidebarSettings';
+import type { Session } from '@/lib/ccAgent.types';
+import type { PinnedSortBy } from '../hooks/helpers/sidebarFilterCore';
+import { sessionActivityMs } from './dateSessionGrouping';
+import type { ProjectNode } from './projectGrouping';
+
+export type PinnedSidebarEntry =
+  | { kind: 'session'; id: string; session: Session }
+  | {
+      kind: 'project';
+      id: string;
+      project: ProjectNode;
+      displaySessions: ProjectNode['sessions'];
+    };
+
+/** Sort a display copy; ties keep the manual order, including empty projects. */
+export function sortPinnedSidebarEntries(
+  entries: readonly PinnedSidebarEntry[],
+  sortBy: PinnedSortBy,
+): PinnedSidebarEntry[] {
+  if (sortBy === 'manual') return Array.from(entries);
+  return entries
+    .map((entry) => ({
+      entry,
+      activity:
+        entry.kind === 'session'
+          ? sessionActivityMs(entry.session)
+          : entry.project.sessions.reduce(
+              (latest, session) => Math.max(latest, sessionActivityMs(session)),
+              0,
+            ),
+    }))
+    .sort((a, b) => b.activity - a.activity)
+    .map(({ entry }) => entry);
+}
 
 /**
  * Pinned sidebar order stores conversations and projects in one persisted list.

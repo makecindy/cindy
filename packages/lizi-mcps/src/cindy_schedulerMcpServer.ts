@@ -21,6 +21,7 @@
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { HostToolMcpServer, HostToolRuntime } from './host-tool-runtime.js';
 import { z } from 'zod';
 import { jsonObjectArg } from './json-object-arg.js';
 
@@ -29,6 +30,8 @@ import {
   registerScheduleCreateTool,
   registerScheduleDeleteTool,
   registerScheduleGetTool,
+  registerScheduleWebhookTools,
+  registerScheduleListEventSourcesTool,
   registerScheduleListRunsTool,
   registerScheduleListModelsTool,
   registerScheduleListTool,
@@ -59,6 +62,7 @@ export interface SchedulerMcpSessionCtx {
   getSessionContext?: () => LiziMcpSessionContext | undefined;
   sessionId?: string;
   vendorOptions?: Record<string, unknown>;
+  hostCaller?: LiziMcpSessionContext['hostCaller'];
 }
 
 // ── Entry-tool descriptions ─────────────────────────────────────────────────
@@ -90,7 +94,7 @@ const CATEGORY_ENUM = ['scheduler'] as const;
 /** 类目概览的一句话用途 + 作用范围(本机 / 可跨电脑);改工具作用范围时同步改这里。 */
 export const SCHEDULER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number], string> = {
   scheduler:
-    '定时任务（自动化 / 心跳）的查询与管理。定时任务保存在各自的电脑上：查询、修改、暂停、恢复、删除、立即运行可指定电脑（device，查询可传 all）；新建、检查脚本安装、当前运行的通知设置只在本机。本机定时任务可完整选择本机、远程或分享来源的模型（schedule_list_models 查位置与模型），并为自动化显式指定模型运行位置。',
+    '定时任务（自动化 / 心跳）的查询与管理。定时任务保存在各自的电脑上：查询、修改、暂停、恢复、删除、立即运行，以及 schedule_create(device=) 新建，均可指定电脑（查询可传 all）；检查脚本安装、当前运行的通知设置、插件事件来源列表（schedule_list_event_sources）只在本机。Webhook 触发配置可指定电脑；密钥与更换地址由用户在目标电脑详情操作。地址清单与名额释放覆盖账号全部电脑，重新连接可指定电脑。本机定时任务可完整选择本机、远程或分享来源的模型（schedule_list_models 查位置与模型），并为自动化显式指定模型运行位置。',
 };
 
 function registerListToolsEntry(
@@ -103,13 +107,21 @@ function registerListToolsEntry(
     'list_tools',
     D_LIST_TOOLS,
     {
+      name: z.string().optional().describe('已发现的工具名；只读返回完整参数 schema，不执行操作。'),
       category: z
         .enum(CATEGORY_ENUM)
         .optional()
         .describe('工具类目。不传时返回类目概览。'),
     },
     { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    async ({ category }) => withAccountDataAccess(access, getSessionContext().sessionId, async () => {
+    async ({ category, name }) => withAccountDataAccess(access, getSessionContext().sessionId, async () => {
+      if (name) {
+        const tool = registry.get(name);
+        const value = tool ? { ok: true, tool: { name: tool.name, description: tool.description,
+          inputSchema: z.toJSONSchema(z.strictObject(tool.inputShape)) } }
+          : { ok: false, errorCode: 'UNKNOWN_TOOL' };
+        return { content: [{ type: 'text' as const, text: JSON.stringify(value) }] };
+      }
       if (category) {
         const tools = registry.list(category);
         return {
@@ -159,7 +171,16 @@ function registerCallToolEntry(
   access: AccountDataAccess | undefined,
   getSessionContext: () => LiziMcpSessionContext,
   authorizeCall: ToolCallAuthorizer | undefined,
-): void {
+): HostToolRuntime['call'] {
+  const call: HostToolRuntime['call'] = async (name, args) => {
+    const sessionId = getSessionContext().sessionId;
+    return withToolCallAuthority(
+      authorizeCall,
+      { sessionId, server: 'cindy_scheduler', tool: name, args,
+        ...(getSessionContext().hostCaller ? { caller: getSessionContext().hostCaller } : {}) },
+      () => withAccountDataAccess(access, sessionId, () => registry.call(name, args)),
+    );
+  };
   server.tool(
     'call_tool',
     D_CALL_TOOL,
@@ -169,15 +190,9 @@ function registerCallToolEntry(
         .describe('工具名，从 list_tools 获取（如 schedule_create / schedule_list）'),
       args: jsonObjectArg('工具参数（JSON 对象）。不确定 schema 时可先传 {} 触发错误反馈。'),
     },
-    async ({ name, args }) => {
-      const sessionId = getSessionContext().sessionId;
-      return withToolCallAuthority(
-        authorizeCall,
-        { sessionId, server: 'cindy_scheduler', tool: name, args },
-        () => withAccountDataAccess(access, sessionId, () => registry.call(name, args)),
-      );
-    },
+    ({ name, args }) => call(name, args),
   );
+  return call;
 }
 
 // ── Factory ────────────────────────────────────────────────────────────────
@@ -185,7 +200,7 @@ function registerCallToolEntry(
 export function createSchedulerMcpServer(
   deps: SchedulerMcpDeps,
   sessionCtx?: SchedulerMcpSessionCtx,
-): McpServer {
+): HostToolMcpServer {
   const server = new McpServer({
     name: 'cindy_scheduler',
     version: '1.0.0',
@@ -206,6 +221,9 @@ export function createSchedulerMcpServer(
   // 注册顺序 = list_tools 里的位次。读优先 → 写次之 → 危险写在最后。
   registerScheduleListTool(registry, deps);
   registerScheduleGetTool(registry, deps);
+  registerScheduleWebhookTools(registry, deps);
+  // 本机插件事件来源;host 未注入 pluginEventSources 时内部跳过注册。
+  registerScheduleListEventSourcesTool(registry, deps);
   registerScheduleListRunsTool(registry, deps);
   // 运行位置与模型目录;host 未注入 listModels 时内部跳过注册。
   registerScheduleListModelsTool(registry, deps);
@@ -225,7 +243,15 @@ export function createSchedulerMcpServer(
   registerScheduleDeleteTool(registry, deps, getSessionContext);
 
   registerListToolsEntry(server, registry, deps.withAccountDataAccess, getSessionContext);
-  registerCallToolEntry(server, registry, deps.withAccountDataAccess, getSessionContext, deps.authorizeCall);
+  const call = registerCallToolEntry(server, registry, deps.withAccountDataAccess, getSessionContext, deps.authorizeCall);
 
-  return server;
+  return Object.assign(server, { hostTools: {
+    list: () => registry.list().map(({ name, category }) => ({ name, category })),
+    describe(name: string) {
+      const tool = registry.get(name);
+      return tool ? { name: tool.name, category: tool.category } : undefined;
+    },
+    call,
+    close: () => server.close(),
+  } });
 }

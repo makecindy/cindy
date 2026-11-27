@@ -1,13 +1,16 @@
+import type { GhostHarnessUsage } from '@cindy/plugin-protocol';
+import type { ComposerSlashCommand } from '@cindy/maker-shared/composer-palette';
 import { pendingGhostCardFormDelivery } from '@cindy/maker-shared/ghost-card-form';
 import {
   tryMobilePeerFile,
   peerMediaUri,
+  peerMediaPlayback,
   releasePeerMedia,
 } from "./peerFileRegistry";
 import { withTransientRemoteRetry } from "./remoteRetry";
 import { getActiveMobileSessionRealm } from '@/config/env';
 import { expandGhostCommand, parseGhostCommandWord, splitGhostDirective } from '@cindy/maker-shared/ghost-command';
-import { composerPluginListSchema, isComposerPluginCatalogUnsupportedError, type ComposerPlugin } from '@/session/remoteComposerPlugins';
+import { composerPluginListSchema, isComposerPluginCatalogUnsupportedError as isPluginCatalogUnsupportedError, type ComposerPlugin } from '@/session/remoteComposerPlugins';
 import type { OrcaWorkerAgentKind, OrcaWorkerPermissionMode } from "@cindy/maker-shared/orca-team";
 import { fetchAgentCapabilities } from "@/session/agentCapabilitiesCache";
 import {
@@ -37,8 +40,11 @@ import {
   MOBILE_REMOTE_INVOKE_CHANNELS,
 } from "@cindy/maker-shared/device-link-contract";
 import {
-  CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+  providerPickerListArgs,
+  type ProviderPickerModel,
   ORCA_EXECUTION_DEVICES_CHANNEL,
+  ORCA_WORKER_ROLES_APPLY,
+  ORCA_WORKER_ROLES_GET,
   isSharedTaskPeer,
   readDeviceFile,
   FILE_PEER_MAX_BYTES,
@@ -47,13 +53,14 @@ import {
   assertFileReadActive,
   validFileVersion,
   type DeviceFileResult,
+  type OrcaWorkerRolesMutation,
 } from "@cindy/device-link";
 import { errorText, mediaExtOf, nextFileTrace } from "@/debug/fileDiagnostics";
 import { mobileDebugLog } from "@/debug/mobileDebugLog";
 import type {
   HistoryViewPage,
   HistoryDetailPage,
-  HistoryWorkSummary,
+  HistoryWorkReference,
 } from "@cindy/maker-shared/message-window";
 import type {
   MobileGoalLimitsInput,
@@ -73,6 +80,7 @@ import {
   type NativeSubscriptionAuth,
 } from "@cindy/model-providers/types";
 import type { RewindPreviewPayload } from "@/session/rewindPreview";
+import { normalizePluginEngines, pluginUsageReader, type MobilePluginEngine } from "@/session/pluginEngines";
 import type {
   MobileRemoteMediaFetchOptions,
   MobileRemoteMediaFetchResult,
@@ -105,7 +113,11 @@ export interface SendOptions {
 }
 
 export interface CreateSessionOptions {
-  agentKind: "claude-code" | "codex" | "pi";
+  /**
+   * 'acp' = 插件引擎(Desktop docs/plans/acp-plugin-bridge.md)：必须同时带 `acp-plugin:` providerId，
+   * 且不带远程字段；只用于从 listPluginEngines 读到的引擎(旧电脑没有该 channel，手机不会发出)。
+   */
+  agentKind: "claude-code" | "codex" | "pi" | "acp";
   /**
    * 控制端预生成的 sessionId(新建会话乐观管线用):被控端 readCreateSessionOpts
    * 自手机远控首版(2026-06-21)起透传 body.id,maker-core createSession 对
@@ -150,20 +162,7 @@ export const SUBSCRIPTION_USAGE_CHANNELS = {
   xai: "maker:usage:xai-subscription",
 } as const satisfies Record<SubscriptionUsageKind, string>;
 
-export type MobileSlashCommand =
-  | { kind: "agent-builtin"; name: string; description: string }
-  | {
-      kind: "agent-skill";
-      name: string;
-      description?: string;
-      source: "user" | "skill";
-      path?: string;
-      scope?: string;
-      enabled?: boolean;
-    }
-  // desktop 自有命令(被控端 main 的 DesktopCommandRegistry,如 /learn):
-  // 由控制端按名字分流执行,不转发给 agent。
-  | { kind: "desktop"; name: string; description: string };
+export type MobileSlashCommand = ComposerSlashCommand;
 
 export interface MobileAgentCommandListResult {
   success: boolean;
@@ -491,7 +490,7 @@ export interface MobileMakerTransport {
   /** 在被控端生成当前任务完成后的输入框推荐提示词。 */
   predictNextPrompt(request: {
     sessionId: string;
-    agentKind: MobileAgentKind;
+    agentKind: MobileAgentKind | "acp";
     turnGen: number;
     completionRevision: number;
     cacheOnly?: boolean;
@@ -504,6 +503,43 @@ export interface MobileMakerTransport {
    * 会让用户建出最终 requireAgent 报 not-registered 的会话(codex review P2)。
    */
   listAvailableAgents(): Promise<MobileAgentKind[]>;
+  /**
+   * 被控电脑上插件提供的执行引擎。旧电脑没有该 channel 时返回空列表；临时读取失败交给目录保留上一份结果。
+   */
+  listPluginEngines(): Promise<MobilePluginEngine[]>;
+  /**
+   * `sessionId`: the controlled computer's own task; an engine with several accounts reports that
+   * task's account (2026-11-23). Older computers ignore it and report the engine's original login.
+   */
+  getPluginEngineUsage(key: string, sessionId?: string): Promise<GhostHarnessUsage | null>;
+  /** 请被控电脑的引擎插件重新上报模型(那台按插件冷却)；不回结果，失败忽略。 */
+  refreshPluginEngines(): Promise<void>;
+  /**
+   * 被控电脑的模型组配置(model-groups.md §6.3)。旧电脑没有该 channel 时返回 null(不显示模型组)。
+   * 新电脑传 `{ includeSourceRoutes: true }` 以同时取回供应商合并路由与展开路由；旧电脑忽略该参数。
+   * 内容按不可信数据交给调用方解析。
+   */
+  listModelGroups(): Promise<unknown | null>;
+  /** 请被控电脑按它的模式选来源；返回那台的选路结果(按不可信数据解析)。 */
+  resolveModelGroup(request: {
+    selection: { type: 'route'; id: string };
+    context?: { hasImages?: boolean; effort?: string; fastMode?: boolean | 'ultrafast' };
+    location?: { agentDeviceId: string | null; sshHostId?: string };
+  }): Promise<unknown>;
+  commitModelGroupDecision(decisionId: string): Promise<void>;
+  bindModelGroupSession(request: {
+    sessionId: string;
+    selection: { type: 'route'; id: string };
+    route: { agentKind: 'cc' | 'codex' | 'pi' | 'acp'; providerId: string; model: string; agentDeviceId?: string };
+  }): Promise<void>;
+  /** 解除该任务的智能路由持续托管绑定(保留当前模型)；旧电脑没有该 channel 时返回 { unbound: false }。 */
+  unbindModelGroupSession(sessionId: string): Promise<{ unbound: boolean }>;
+  /** 读取该任务的智能路由绑定投影；旧电脑没有该 channel 时返回 null。 */
+  getModelGroupSessionBinding(sessionId: string): Promise<unknown | null>;
+  /** 任务出错时向被控电脑询问同一路由内的下一个可用来源；旧电脑返回 null。 */
+  getModelGroupSwitchOffer(sessionId: string): Promise<unknown | null>;
+  /** 请被控电脑在任务里写模型组那一行说明(远程不能裸写消息)。 */
+  writeModelGroupRouteNote(request: { sessionId: string; note: Record<string, unknown> }): Promise<void>;
   getSessionTree(sessionId: string): Promise<unknown | null>;
   navigateSessionTree(
     sessionId: string,
@@ -514,7 +550,8 @@ export interface MobileMakerTransport {
    * 列被控端的供应商(来源)结构,用于 provider-aware 模型下拉(隧道 maker:provider:list)。
    * modelVisibilityOverrides = 被控端「模型显示/隐藏」override 快照(旧被控端不回传)。
    */
-  listProviders(): Promise<{
+  listProviders(retainedModel?: ProviderPickerModel): Promise<{
+    deferredProviderIds?: string[];
     providers: ProviderView[];
     providerOrder?: string[];
     modelVisibilityOverrides?: Record<string, boolean>;
@@ -525,7 +562,7 @@ export interface MobileMakerTransport {
    * CHANNEL_NOT_ALLOWED，调用方忽略即可。
    */
   prewarmSession(sessionId: string, createOpts: unknown): Promise<unknown>;
-  createSideChat(sessionId: string): Promise<RemoteSession>;
+  createSideChat(sessionId: string, childId?: string): Promise<RemoteSession>;
   listSideChats(sessionId: string): Promise<Array<{ id: string }>>;
   searchConversations(
     request: ConversationSearchRequest,
@@ -560,12 +597,12 @@ export interface MobileMakerTransport {
   ): Promise<HistoryViewPage<RemoteMessage>>;
   readWorkDetails(
     sessionId: string,
-    ref: HistoryWorkSummary,
+    ref: HistoryWorkReference,
     after?: string,
   ): Promise<HistoryDetailPage<RemoteMessage>>;
   setHistoryExpanded(
     sessionId: string,
-    refs: readonly HistoryWorkSummary[],
+    refs: readonly HistoryWorkReference[],
   ): Promise<void>;
   aroundMessages(
     sessionId: string,
@@ -601,7 +638,8 @@ export interface MobileMakerTransport {
    */
   switchSessionAgent(
     sessionId: string,
-    targetAgentKind: MobileAgentKind,
+    /** 'acp' = 换到插件引擎，providerId 必须是该引擎的 acp-plugin: 标识(只限本机普通任务)。 */
+    targetAgentKind: MobileAgentKind | "acp",
     model: string,
     providerId: string | null,
     effort?: string,
@@ -632,7 +670,8 @@ export interface MobileMakerTransport {
   ): Promise<unknown>;
   getSessionEstimatedValue(
     sessionId: string,
-  ): Promise<{ totalValueMoney?: unknown; totalValueUsd?: number }>;
+    options?: { includeBreakdown?: boolean; clientId?: string },
+  ): Promise<{ totalValueMoney?: unknown; totalValueAmounts?: unknown[]; totalValueUsd?: number; costBreakdown?: unknown }>;
   /** Codex app-server authoritative windows plus banked reset credits and a bound reset offer. */
   getCodexRateLimits(providerId?: string): Promise<MobileCodexRateLimitsResult>;
   setCodexResetAutoUse(patch: Partial<CodexResetAutoUseSettings> | null, accountKey: string, providerId?: string): Promise<MobileCodexRateLimitsResult>;
@@ -722,7 +761,7 @@ export interface MobileMakerTransport {
    */
   learnStart(req: MobileLearnStartRequest): Promise<{ runId: string }>;
   listAgentSkills(
-    agentKind: MobileAgentKind,
+    agentKind: MobileAgentKind | "acp",
     opts: { workingDir?: string; forceReload?: boolean; sessionId?: string },
   ): Promise<MobileAgentSkillListResult>;
   scanAtResources(
@@ -765,7 +804,8 @@ export interface MobileMakerTransport {
   rewindCommit(
     sessionId: string,
     clientId: string,
-    opts?: { allowFileRestore?: boolean },
+    /** requireLatestUser:编辑最后一条消息专用,被控端权威核对目标仍是最新用户消息。 */
+    opts?: { allowFileRestore?: boolean; requireLatestUser?: boolean },
   ): Promise<RemoteSession>;
   deleteMessage(
     sessionId: string,
@@ -790,6 +830,12 @@ export interface MobileMakerTransport {
     acknowledgeDone(leadSessionId: string, workerId: string): Promise<unknown>;
     archiveWorker(leadSessionId: string, workerId: string): Promise<unknown>;
     getCollaborationSettings(): Promise<unknown>;
+    /**
+     * 创建 Worker 的角色清单与每个角色记的任务、权限、模型：只存在任务所在的电脑上，手机不留副本。
+     * 旧电脑没有这两个通道(CHANNEL_NOT_ALLOWED)，调用方按「只有内置角色、不记忆」处理。
+     */
+    getWorkerRoles(): Promise<unknown>;
+    applyWorkerRoles(mutation: OrcaWorkerRolesMutation): Promise<unknown>;
   };
   /**
    * 会话未读已读回执:手机端真实展示会话内容后,清掉被控端该会话的未读态
@@ -911,7 +957,7 @@ export interface MobileMakerTransport {
     clearSession(sessionId: string): Promise<InputProjection>;
   };
   fs: {
-    listDir(path: string): Promise<RemoteDirectoryListResult>;
+    listDir(path: string, canonicalDirectory?: boolean): Promise<RemoteDirectoryListResult>;
     statPath(path: string): Promise<RemotePathStatResult>;
     mkdirP(path: string): Promise<{ resolvedPath: string }>;
     readTextFilePreview(path: string, options?: { allowFileTransfer?: boolean; signal?: AbortSignal }): Promise<RemoteTextFilePreviewResult>;
@@ -970,7 +1016,8 @@ export interface MobileMakerTransport {
 
 /** `maker:session:enable-orca` 的 options(与桌面 preload maker.enableOrca 同形状)。 */
 export interface MobileOrcaEnableOptions {
-  workerAgent: OrcaWorkerAgentKind;
+  modelGroup?: string;
+  workerAgent: OrcaWorkerAgentKind | "acp";
   role?: string;
   label?: string;
   model?: string;
@@ -994,10 +1041,11 @@ export interface MobileOrcaEnableResult {
 
 /** `maker:worker:create` 的 body(与桌面 useOrcaWorkerSelection 提交同形状)。 */
 export interface MobileOrcaCreateWorkerInput {
+  modelGroup?: string;
   leadSessionId: string;
   role: string;
   label: string;
-  agent: OrcaWorkerAgentKind;
+  agent: OrcaWorkerAgentKind | "acp";
   model?: string;
   effort?: string;
   fast?: boolean | 'ultrafast';
@@ -1018,7 +1066,7 @@ export interface MobileOrcaCreateWorkerResult {
 }
 
 export type SessionMetaPatch = Partial<
-  Pick<RemoteSession, "status" | "title" | "pinnedAt">
+  Pick<RemoteSession, "status" | "title" | "pinnedAt" | "snoozedUntil">
 >;
 
 export const MOBILE_MAKER_CHANNELS = MOBILE_REMOTE_INVOKE_CHANNELS;
@@ -1059,7 +1107,7 @@ export function createMobileMakerTransport({
     try {
       return expandGhostCommand(text, await listComposerPlugins(workingDir));
     } catch (error) {
-      if (isComposerPluginCatalogUnsupportedError(error)) return text;
+      if (isPluginCatalogUnsupportedError(error)) return text;
       throw error;
     }
   };
@@ -1160,6 +1208,10 @@ export function createMobileMakerTransport({
             retain: async (result) => { await opts?.retainBackground?.(withDownload(result), fileIsCurrent); },
           },
           stream,
+          peerStream: opts?.playback && !isSharedTaskPeer(deviceId) ? async metadata => {
+            const { openPeerMediaStream } = await import("./peerMediaStream");
+            return openPeerMediaStream(deviceId, url, metadata, fileIsCurrent, opts?.signal);
+          } : undefined,
           inline: () => fetch(true),
           revalidate: () => fetch(true, true),
           inlineCache: opts?.thumbnail ? undefined : {
@@ -1179,6 +1231,8 @@ export function createMobileMakerTransport({
           peerResultIsTransient: true,
           isCurrent,
           discard: (result) => {
+            const playback = peerMediaPlayback(result);
+            if (playback) { void playback.close(); return; }
             const uri = peerMediaUri(result);
             if (uri) releasePeerMedia(uri);
             else if (
@@ -1192,7 +1246,7 @@ export function createMobileMakerTransport({
           prepare: () =>
             stage("prepare", () => fetch(!opts?.thumbnail, !opts?.thumbnail), describeResult),
           peer: (metadata) =>
-            metadata.size <= FILE_PEER_MAX_BYTES
+            !isSharedTaskPeer(deviceId) && metadata.size <= FILE_PEER_MAX_BYTES
               ? stage(
                   "direct",
                   () => tryMobilePeerFile(deviceId, url, opts?.signal, trace || undefined,
@@ -1202,7 +1256,9 @@ export function createMobileMakerTransport({
               : Promise.resolve(null),
           fallback: () => {
             try { opts?.onProgress?.(0, 0); } catch { /* Observer only; upload bytes are unavailable. */ }
-            return stage("upload", fallback ?? (() => fetch(false)), describeResult);
+            // Workdir export jobs are same-account only. Shared media fetch
+            // rechecks task access and stages bytes in the shared-task scope.
+            return stage("upload", !isSharedTaskPeer(deviceId) && fallback ? fallback : () => fetch(false), describeResult);
           },
         }),
       (result) => ({
@@ -1224,21 +1280,60 @@ export function createMobileMakerTransport({
       return call("maker:get-capabilities", [agentKind]);
     }),
     listAvailableAgents: () => call('maker:list-available-agents', []),
+    listPluginEngines: () =>
+      call<unknown>("maker:list-plugin-engines", [])
+        .then(normalizePluginEngines)
+        .catch((error: unknown) => {
+          if (isPluginCatalogUnsupportedError(error)) return [];
+          throw error;
+        }),
+    listModelGroups: () =>
+      call<unknown>("model-groups:get", [{ includeSourceRoutes: true }])
+        .catch((error: unknown) => {
+          if (isPluginCatalogUnsupportedError(error)) return null;
+          throw error;
+        }),
+    resolveModelGroup: (request) => call<unknown>("model-groups:resolve", [request]),
+    commitModelGroupDecision: async (decisionId) => { await call("model-groups:commit", [decisionId]); },
+    bindModelGroupSession: async (request) => { await call("model-groups:bind-session", [request]); },
+    unbindModelGroupSession: (sessionId) =>
+      call<{ unbound: boolean }>("model-groups:unbind-session", [{ sessionId }])
+        .catch((error: unknown) => {
+          if (isPluginCatalogUnsupportedError(error)) return { unbound: false };
+          throw error;
+        }),
+    getModelGroupSessionBinding: (sessionId) =>
+      call<unknown | null>("model-groups:get-session-binding", [{ sessionId }])
+        .catch((error: unknown) => {
+          if (isPluginCatalogUnsupportedError(error)) return null;
+          throw error;
+        }),
+    getModelGroupSwitchOffer: (sessionId) =>
+      call<unknown | null>("model-groups:switch-offer", [{ sessionId }])
+        .catch((error: unknown) => {
+          if (isPluginCatalogUnsupportedError(error)) return null;
+          throw error;
+        }),
+    writeModelGroupRouteNote: async (request) => { await call("model-groups:route-note", [request]); },
+    getPluginEngineUsage: async (key, sessionId) => {
+      if (isSharedTaskPeer(deviceId) || !isCurrent()) return null;
+      const read = pluginUsageReader.read(fileOwner, deviceId, sessionId ? `${key}|task:${sessionId}` : key, () =>
+        isCurrent() ? call<unknown>("maker:get-plugin-engine-usage", sessionId ? [key, { sessionId }] : [key]) : undefined);
+      const snapshot = await read.result;
+      return isCurrent() ? snapshot : null;
+    },
+    refreshPluginEngines: () =>
+      call<unknown>("maker:refresh-plugin-engines", []).then(() => undefined, () => undefined),
     // Pi 原生分支树通过 device-link 复用桌面端 runtime；移动会话页只在当前会话
     // 确认为 Pi 时展示入口，并在渲染前校验返回的树形状。
     getSessionTree: (sessionId) => call("maker:get-session-tree", [sessionId]),
     navigateSessionTree: (sessionId, entryId, options) =>
       call("maker:navigate-session-tree", [sessionId, entryId, options]),
-    listProviders: () =>
-      call("maker:provider:list", [
-        {
-          capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
-        },
-      ]),
+    listProviders: (retainedModel) => call("maker:provider:list", providerPickerListArgs(retainedModel)),
     getSession: (sessionId) => call("local-db:sessions:get", [sessionId]),
     prewarmSession: (sessionId, createOpts) =>
       call("maker:session:prewarm", [sessionId, createOpts]),
-    createSideChat: (sessionId) => call("maker:side-chat:v1", [sessionId]),
+    createSideChat: (sessionId, childId) => call("maker:side-chat:v1", childId ? [{ parentSessionId: sessionId, childId }] : [sessionId]),
     listSideChats: (sessionId) => call("maker:side-chat:list:v1", [sessionId]),
     searchConversations: (request) =>
       call("local-db:conversations:search", [request]),
@@ -1356,8 +1451,8 @@ export function createMobileMakerTransport({
         throw new Error("PRECONDITION_FAILED: Account scope unsupported");
       return result;
     },
-    getSessionEstimatedValue: (sessionId) =>
-      call("local-db:messages:estimatedSessionValue", [sessionId]),
+    getSessionEstimatedValue: (sessionId, options) =>
+      call("local-db:messages:estimatedSessionValue", [sessionId, ...(options ? [options] : [])]),
     getCodexRateLimits: async (providerId) => {
       const result = await call<MobileCodexRateLimitsResult>(
         "maker:usage:codex-rate-limits",
@@ -1491,6 +1586,8 @@ export function createMobileMakerTransport({
       archiveWorker: (leadSessionId, workerId) =>
         call("maker:worker:archive", [{ leadSessionId, workerId }]),
       getCollaborationSettings: () => call("maker:collaboration-settings:get"),
+      getWorkerRoles: () => call(ORCA_WORKER_ROLES_GET),
+      applyWorkerRoles: (mutation) => call(ORCA_WORKER_ROLES_APPLY, [mutation]),
     },
     clearSessionAttention: (sessionId, intent) =>
       call("notification:clear-session-attention", [sessionId, intent]),
@@ -1595,7 +1692,7 @@ export function createMobileMakerTransport({
         call("maker:input:clear-session", [sessionId]),
     },
     fs: {
-      listDir: (path) => call("fs:list-dir", [{ path }]),
+      listDir: (path, canonicalDirectory) => call("fs:list-dir", [canonicalDirectory ? { path, canonicalDirectory } : { path }]),
       statPath: (path) => call("fs:stat-path", [{ path }]),
       mkdirP: (path) => call("fs:mkdir-p", [{ path }]),
       readTextFilePreview: (filePath, options) =>
@@ -1624,7 +1721,7 @@ export function createMobileMakerTransport({
           workdir,
         });
         assertFileReadActive(signal);
-        if (!caps.fileRead) {
+        if (!caps.fileRead && !isSharedTaskPeer(deviceId)) {
           mobileDebugLog("debug", "files", "file export without direct read", {
             reason: "host-lacks-file-read",
           });

@@ -1,10 +1,20 @@
 import assert from 'node:assert/strict';
+
+async function selectDiscoveredModel(page, ui) {
+  // Discovery reports availability; the user still chooses which model to add.
+  await page.getByRole('button', { name: await ui.t('settings.providers.custom.fetch.button'), exact: true }).click();
+  const picker = page.getByRole('dialog').last();
+  await picker.getByRole('checkbox', { name: 'example-chat', exact: true }).click();
+  await picker.getByRole('button', { name: await ui.t('settings.providers.custom.fetch.confirm', { count: 1 }), exact: true }).click();
+}
+
 export default {
   name: 'provider-detection', entry: './provider-detection-fixture.tsx',
   viewport: { width: 900, height: 900 },
   real: 'ProviderConnectionDialog and AddProviderWizard, delayed handoff, model selection, translations and themes',
   notCovered: 'Network/IPC logic has separate injected production-unit tests. Live credentials, persistence integration and actual harness calls are not covered here. Windows platform is simulated when requested.',
   cases: {
+    openhubs: { about: 'Built-in three-engine OpenHubs template shows models returned by the account inventory' },
     'loopback-identity': { about: 'HTTPS loopback address is not an official brand even if a catalog entry uses it' },
     'ambiguous-official': { about: 'Two official plans sharing an address do not choose a provider automatically' },
     ...Object.fromEntries(['gateway', 'workers'].flatMap(kind => ['scheme', 'host', 'port'].map(variant =>
@@ -24,6 +34,27 @@ export default {
   },
   async ready(page) { await page.getByRole('dialog').waitFor(); },
   async check(page, ui) {
+    if (ui.case === 'openhubs') {
+      await page.locator('input[value="OpenHubs"]').waitFor();
+      await ui.capture('connection');
+      await page.getByPlaceholder('sk-…').fill('fake-ui-key');
+      await page.getByRole('button', { name: await ui.t('settings.providers.wizard.next'), exact: true }).click();
+      await page.getByText('DeepSeek V4 Flash', { exact: true }).waitFor();
+      assert.equal(await page.getByText('Kimi K3.1 Pro', { exact: true }).count(), 0);
+      await page.getByText('New Account Model', { exact: true }).waitFor();
+      await page.getByText('New Account Model', { exact: true }).click();
+      await ui.capture('models');
+      await page.getByRole('button', { name: await ui.t('settings.providers.wizard.finish'), exact: true }).click();
+      await page.waitForFunction(() => window.providerP1Evidence?.saved);
+      const saved = await page.evaluate(() => window.providerP1Evidence.saved);
+      assert.deepEqual(Object.keys(saved.runtimes), ['claude-code', 'codex', 'pi']);
+      for (const runtime of Object.values(saved.runtimes)) {
+        assert.deepEqual(runtime.models.map(model => model.id), ['deepseek-v4-flash', 'new-account-model']);
+      }
+      assert.deepEqual(saved.runtimes.pi.models.map(model => model.id), ['deepseek-v4-flash', 'new-account-model']);
+      assert.equal(saved.runtimes.pi.wireProtocol, 'openai-chat');
+      return;
+    }
     if (['loopback-identity', 'ambiguous-official'].includes(ui.case)) {
       const address = ui.case === 'loopback-identity' ? 'https://localhost:1234/v1' : 'https://api.deepseek.com';
       await page.getByPlaceholder(await ui.t('settings.providers.custom.fields.apiKeyPlaceholder')).fill('fake-ui-key');
@@ -49,6 +80,7 @@ export default {
       await page.getByRole('button', { name: await ui.t('settings.providers.wizard.next'), exact: true }).waitFor();
       await ui.capture('normalized-handoff');
       await page.getByRole('button', { name: await ui.t('settings.providers.wizard.next'), exact: true }).click();
+      await page.getByText('example-chat', { exact: true }).click();
       await page.getByRole('button', { name: await ui.t('settings.providers.wizard.finish'), exact: true }).click();
       await page.waitForFunction(() => window.providerP1Evidence?.saved);
       const saved = await page.evaluate(() => window.providerP1Evidence.saved);
@@ -93,6 +125,7 @@ export default {
         assert.equal(await page.getByRole('button', { name: await ui.t('settings.providers.detection.configure'), exact: true }).count(), 0);
       }
       await ui.capture('custom-port-preserved');
+      await selectDiscoveredModel(page, ui);
       await page.getByRole('button', { name: await ui.t('settings.providers.connection.saveProvider'), exact: true }).click();
       await page.waitForFunction(() => window.providerP1Evidence?.saved);
       assert.equal(new URL(await page.evaluate(() => window.providerP1Evidence.saved.runtimes.pi.baseUrl)).port, '9443');
@@ -101,7 +134,7 @@ export default {
     if (ui.case === 'local-noauth') {
       await page.getByPlaceholder(await ui.t('settings.providers.custom.fields.namePlaceholder')).fill('Local fixture');
       await page.getByPlaceholder(await ui.t('settings.providers.custom.fields.baseUrlPlaceholder')).fill('http://127.0.0.1:1234/v1');
-      await page.getByText('example-chat', { exact: false }).first().waitFor();
+      await selectDiscoveredModel(page, ui);
       const key = page.getByPlaceholder(await ui.t('settings.providers.custom.fields.apiKeyPlaceholder'));
       const test = page.getByRole('button', { name: await ui.t('settings.providers.custom.test.button'), exact: true });
       for (const [value, method] of [['', 'none'], ['fake-ui-key', 'apiKey'], ['', 'none']]) {

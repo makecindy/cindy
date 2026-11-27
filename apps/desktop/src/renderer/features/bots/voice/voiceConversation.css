@@ -4,7 +4,7 @@
   min-width: 0;
   /* Own the composer's 10px gap inside the collapsing content, so an empty
      presence wrapper neither leaves space nor jumps at the final unmount. */
-  margin-bottom: -10px;
+  margin-bottom: calc(var(--space-2_5) * -1);
   transition-duration: var(--motion-base);
   transition-timing-function: var(--motion-ease-move);
 }
@@ -15,7 +15,14 @@
 }
 
 .companion-voice-presence .companion-voice-toolbar {
-  margin-bottom: 10px;
+  margin-bottom: var(--space-2_5);
+}
+
+.companion-voice-floating-slot {
+  display: flex;
+  flex-shrink: 0;
+  justify-content: center;
+  padding: var(--space-2) var(--space-4) 0;
 }
 
 .companion-voice-toolbar {
@@ -31,18 +38,18 @@
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--space-2);
   min-height: 60px;
-  padding: 10px 12px;
+  padding: var(--space-2_5) var(--space-3);
   border: 1px solid var(--border-default);
-  border-radius: 12px;
+  border-radius: var(--radius-xl);
   background: var(--surface-elevated);
 }
 
 .companion-voice-identity {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   flex: 1 1 120px;
   min-width: 0;
 }
@@ -52,7 +59,7 @@
   flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
-  gap: 3px;
+  gap: var(--space-0_5);
   margin-left: auto;
 }
 
@@ -68,13 +75,13 @@
 .companion-voice-meter {
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: var(--space-0_5);
 }
 
 .companion-voice-meter > span {
   width: 2px;
   height: 20px;
-  border-radius: 9999px;
+  border-radius: var(--radius-full);
   background: currentColor;
   transform-origin: center;
   transition: transform var(--motion-instant) linear;
@@ -88,7 +95,7 @@
   padding: 0;
   overflow: hidden;
   border: 1px solid var(--border-default);
-  border-radius: 12px;
+  border-radius: var(--radius-xl);
   background: var(--surface-elevated);
   color: var(--text-primary);
   box-shadow: none;
@@ -97,12 +104,12 @@
 .companion-voice-details-heading {
   flex-shrink: 0;
   min-height: 42px;
-  padding: 4px 12px;
+  padding: var(--space-1) var(--space-3);
 }
 
 .companion-voice-details-feedback {
   flex-shrink: 0;
-  padding: 8px 12px;
+  padding: var(--space-2) var(--space-3);
   border-top: 1px solid var(--border-default);
 }
 
@@ -114,7 +121,7 @@
 .companion-voice-details [data-voice-call-transcript] {
   min-height: 0;
   max-height: min(18rem, 35vh);
-  padding: 4px 16px 16px;
+  padding: var(--space-1) var(--space-4) var(--space-4);
 }
 
 .voice-call-transcript-container {
@@ -135,11 +142,11 @@
 .voice-call-transcript {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--space-3_5);
   max-height: 240px;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 8px 0;
+  padding: var(--space-2) 0;
 }
 
 .voice-call-turn {
@@ -155,8 +162,8 @@
 }
 
 .voice-call-turn[data-role='user'] .voice-call-turn-body {
-  padding: 8px 12px;
-  border-radius: 12px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-xl);
   background: var(--surface-chip);
 }
 
@@ -164,7 +171,7 @@
   max-width: 100%;
   height: auto;
   min-height: 32px;
-  padding: 6px 10px;
+  padding: var(--space-1_5) var(--space-2_5);
 }
 
 .voice-call-task-link > svg {
@@ -183,8 +190,8 @@
   width: calc(100% - 8px);
   height: auto;
   min-height: 36px;
-  margin: 4px;
-  padding: 4px 12px;
+  margin: var(--space-1);
+  padding: var(--space-1) var(--space-3);
 }
 
 .voice-call-card-heading > svg {
@@ -192,12 +199,12 @@
 }
 
 .voice-call-card-body {
-  padding: 0 16px 12px;
+  padding: 0 var(--space-4) var(--space-3);
 }
 
 .companion-voice-error {
-  margin-top: 8px;
-  padding: 0 12px;
+  margin-top: var(--space-2);
+  padding: 0 var(--space-3);
   font-size: var(--text-12);
   line-height: 1.5;
   color: var(--error-fg);
@@ -205,15 +212,15 @@
 
 @container (max-width: 480px) {
   .companion-voice-bar {
-    padding: 10px;
-    gap: 8px;
+    padding: var(--space-2_5);
+    gap: var(--space-2);
   }
   .companion-voice-activity {
     display: none;
   }
   .companion-voice-identity {
     flex-basis: 100px;
-    gap: 6px;
+    gap: var(--space-1_5);
   }
 }
 

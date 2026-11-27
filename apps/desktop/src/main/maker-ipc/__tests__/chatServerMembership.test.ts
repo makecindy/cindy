@@ -5,6 +5,8 @@ vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'ht
 vi.mock('../chatServerMedia.js', () => ({ createChatMedia: () => ({ upload: vi.fn(async () => []), download: fixture.download }) }));
 vi.mock('../chatServerWorkspaces.js', () => ({ chatServerWorkspaces: () => ({ read: () => null, save: vi.fn() }) }));
 vi.mock('../chatMigrationReceipts.js', () => ({ chatMigrationReceipts: () => ({ read: () => null, save: vi.fn() }) }));
+vi.mock('../chatInviteShares.js', () => ({ chatInviteShareBase: () => 'https://share.example',
+  createChatInviteShare: async () => 'https://share.example/chat-invite/test', notifyChatInviteRevoked: vi.fn(), resolveChatInviteShare: vi.fn() }));
 // These transport/lifecycle fixtures isolate native disk IO; actual snapshot and
 // journal persistence is exercised through chatPersistence.test.ts and chatServer.test.ts.
 vi.mock('../chatLocalHistory.js', () => ({ chatLocalHistory: () => ({ read: () => null, save: vi.fn(), forget: vi.fn() }) }));
@@ -95,11 +97,36 @@ describe('Chat Server membership notices', () => {
     });
     const before = await service.getGroup(roomId);
     expect(before.ok && before.group.serverUnread).toEqual({ count: 1, mentioned: false });
-    expect(before.ok && before.group.lastMessage?.preview).toBe('Hello team');
+    expect(before.ok && before.group.lastMessage).toMatchObject({ messageId: messages[0]!.id, threadRootId: null, preview: 'Hello team' });
     expect(await service.chatServer!.manage({ groupId: roomId, action: { type: 'read', messageId: messages[0]!.id } })).toEqual({ ok: true });
-    expect(fixture.handle).toHaveBeenCalledWith(`/conversations/${roomId}/read`, 'POST', { operationId: `read-main:${seq}`, readSeq: seq });
+    expect(fixture.handle).toHaveBeenCalledWith(`/conversations/${roomId}/read`, 'POST', { operationId: `read-main:${roomId}:${seq}`, readSeq: seq });
     const after = await service.getGroup(roomId);
     expect(after.ok && after.group.serverUnread).toEqual({ count: 0, mentioned: false });
+  });
+
+  it('keys a main read by group as well as position, so the same position in two groups does not collide', async () => {
+    const other = '10000000-0000-4000-8000-000000000002';
+    // Server positions are numbered per group: both groups' newest message is 5.
+    const post = (id: string) => ({ ...joined(), id: `40000000-0000-4000-8000-00000000000${id.slice(-1)}`, origin: 'human', seq: '5' });
+    const bodies: Record<string, ReturnType<typeof post>> = { [roomId]: post(roomId), [other]: post(other) };
+    const original = fixture.handle.getMockImplementation()!;
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route === '/conversations?limit=100') return { body: [{ id: roomId, kind: 'group', state: 'joined' }, { id: other, kind: 'group', state: 'joined' }] };
+      const room = /^\/conversations\/([^/?]+)/.exec(route)?.[1];
+      if (room && bodies[room]) {
+        if (route.endsWith('/read')) return { body: { readSeq: body.readSeq } };
+        if (route.endsWith('/snapshot')) return { body: { ...original(route, method, body).body, room: { ...original(route, method, body).body.room, id: room },
+          reads: [{ thread_key: 'main', read_seq: '0' }], messages: [bodies[room]] } };
+        if (route.includes('/messages?')) return { body: [bodies[room]] };
+      }
+      return original(route, method, body);
+    });
+    for (const room of [roomId, other]) {
+      expect(await service.chatServer!.manage({ groupId: room, action: { type: 'read', messageId: bodies[room]!.id } })).toEqual({ ok: true });
+    }
+    const operations = fixture.handle.mock.calls.filter(([route]) => String(route).endsWith('/read')).map(([, , body]) => body.operationId);
+    expect(operations).toEqual([`read-main:${roomId}:5`, `read-main:${other}:5`]);
+    expect(new Set(operations).size).toBe(2);
   });
 
   it('reads a persisted join into the main timeline and sidebar using its name snapshot', async () => {
@@ -127,7 +154,7 @@ describe('Chat Server membership notices', () => {
       content: [{ type: 'text', text: 'Latest topic reply' }] } as unknown as ReturnType<typeof joined>;
     messages = [joined(), { ...joined(), seq: '9007199254740994', deleted: true }, topic];
     const result = await service.getGroup(roomId);
-    expect(result.ok && result.group.lastMessage).toMatchObject({ preview: 'Latest topic reply', createdAt: Date.parse(topic.createdAt) });
+    expect(result.ok && result.group.lastMessage).toMatchObject({ messageId: topic.id, threadRootId: topic.threadRootId, preview: 'Latest topic reply', createdAt: Date.parse(topic.createdAt) });
   });
 
   it('keeps separate admissions for the same member after leaving and rejoining', async () => {
@@ -225,6 +252,23 @@ describe('Chat Server membership notices', () => {
       archived: false, dissolvedAt, supportsGroupLeave: true, supportsDissolve: true, supportsListRemoval: true,
       canInvite: false, reactionRevision: expect.any(Number), reactionRevisions: {},
     } });
+  });
+  // Unit: the real adapter must use the member actor for link creation, while keeping
+  // the setting itself manager-only. Earlier tests covered only manager invitations.
+  it.each([false, true])('uses the current member invitation setting (%s) for the entry and link request', async enabled => {
+    lifecycle({ role: 'member' });
+    const previous = fixture.handle.getMockImplementation()!;
+    fixture.handle.mockImplementation((route, ...args) => {
+      if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { groupMemberInvites: 1 } } };
+      if (route.endsWith('/invite-links')) return { body: { token: 'a'.repeat(43), expiresAt: null, reusable: true } };
+      const response = previous(route, ...args);
+      if (route.endsWith('/snapshot')) response.body.room.allow_member_invites = enabled;
+      return response;
+    });
+    expect(await service.getGroup(roomId)).toMatchObject({ ok: true, group: { canInvite: enabled, supportsMemberInvites: true, allowMemberInvites: enabled } });
+    expect(await service.chatServer!.createInvite({ groupId: roomId, clientId: 'member-invite-test' })).toMatchObject(enabled
+      ? { ok: true, link: 'https://share.example/chat-invite/test' } : { ok: false, errorCode: 'ROLE_REQUIRED' });
+    expect(fixture.handle.mock.calls.some(([route, method]) => route.endsWith('/invite-links') && method === 'POST')).toBe(enabled);
   });
   it('never substitutes archive or delete on an old server', async () => {
     lifecycle({ supported: false });

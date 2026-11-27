@@ -1,19 +1,30 @@
+import { McpAppWindowLimitError } from '@cindy/maker-shared/mcp-app-controller';
+import { withHostAppSdk } from '@cindy/maker-shared/mcp-app-sdk';
 import { app, protocol, session, type WebContents, type WebFrameMain } from 'electron';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { extractIpcError } from '../../shared/ipcError.js';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { appCsp, MCP_APPS_MAX_BYTES } from './protocol.js';
 import {
   mcpAppSandboxDocument,
   mcpAppFrameUrlAllowed,
+  HOST_APP_SDK_PATH,
+  CINDY_VIEW_STATE_SDK_PATH,
+  CINDY_VIEW_STATE_REACT_SDK_PATH,
+  CINDY_COMPOSER_ATTACHMENT_SDK_PATH,
   type McpAppDocument,
 } from '../../shared/mcpApps.js';
 import { mcpAppDirectSandboxDocument } from './sandboxBridge.js';
+import { OwnerScopedAppResourceCache } from './appResourceCache.js';
 
 export const mcpAppSchemePrivilege = {
   scheme: 'cindy-mcp-app',
   privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true },
 };
+const headEndMarker = `<!--cindy-mcp-app-theme-${randomUUID()}-->`;
 const frameHeader = 'X-Cindy-Mcp-App-Frame';
+let fileReader: ((id: string, token: string, request: Request) => Promise<Response>) | undefined;
+export function setMcpAppFileReader(read: typeof fileReader): void { fileReader = read; }
 let callerCleanup: ((caller: string) => Promise<void>) | undefined;
 export function setMcpAppCallerCleanup(cleanup?: (caller: string) => Promise<void>): void {
   callerCleanup = cleanup;
@@ -21,11 +32,91 @@ export function setMcpAppCallerCleanup(cleanup?: (caller: string) => Promise<voi
 const documents = new Map<
   string,
   {
-    document: McpAppDocument; owner: object | null; caller?: string;
+    html: string; fileKey: string; document: McpAppDocument; owner: object | null; caller?: string; local?: boolean;
     dispose?: () => void;
     bridge?: { key: string; frame?: WebFrameMain; invoke(input: unknown): Promise<unknown> };
   }
 >();
+// This value is intentionally generated per process so authored plugin content cannot
+// accidentally contain it and be rewritten during per-View URL substitution.
+const viewIdPlaceholder = `__CINDY_VIEW_ID_${randomUUID()}__`;
+const preparedHtmlCache = new OwnerScopedAppResourceCache<{ html: string }>();
+const sdkAssetHashes = new WeakMap<object, string>();
+function hashText(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+function hashSdkAsset(sdk: NonNullable<McpAppDocument['sdk']>): string {
+  const cached = sdkAssetHashes.get(sdk);
+  if (cached) return cached;
+  const addon = sdk.addons?.['cindy/view-state'];
+  const composer = sdk.addons?.['cindy/composer-attachment'];
+  const value = createHash('sha256')
+    .update(sdk.source)
+    .update('\0')
+    .update(addon?.source ?? '')
+    .update('\0')
+    .update(addon?.reactSource ?? '')
+    .update('\0')
+    .update(composer?.source ?? '')
+    .digest('hex');
+  sdkAssetHashes.set(sdk, value);
+  return value;
+}
+function preparedAppHtml(document: McpAppDocument): string {
+  const owner = getCurrentDbClientSnapshot();
+  const addons = document.sdk?.addons?.['cindy/view-state'];
+  const composer = document.sdk?.addons?.['cindy/composer-attachment'];
+  const key = `${hashText(document.html)}:${document.sdk ? hashSdkAsset(document.sdk) : 'none'}`;
+  const template = (owner && preparedHtmlCache.get(owner, key)) ?? (() => {
+    const value = withHostAppSdk(document.html, 'cindy-mcp-app://' + viewIdPlaceholder + '-view' + HOST_APP_SDK_PATH,
+      addons || composer ? {
+        coreUrl: 'cindy-mcp-app://' + viewIdPlaceholder + '-view' + CINDY_VIEW_STATE_SDK_PATH,
+        reactUrl: 'cindy-mcp-app://' + viewIdPlaceholder + '-view' + CINDY_VIEW_STATE_REACT_SDK_PATH,
+        ...(composer ? { composerUrl: 'cindy-mcp-app://' + viewIdPlaceholder + '-view' + CINDY_COMPOSER_ATTACHMENT_SDK_PATH } : {}),
+      } : undefined, headEndMarker);
+    if (owner) preparedHtmlCache.set(owner, key, { html: value });
+    return { html: value };
+  })();
+  return template.html.replaceAll(viewIdPlaceholder, document.viewId);
+}
+
+type McpAppThemeContext = {
+  theme?: unknown;
+  styles?: { variables?: Record<string, unknown> };
+};
+
+const themeScript = (context: McpAppThemeContext): string => {
+  const encoded = JSON.stringify({
+    theme: context.theme === 'dark' || context.theme === 'light' ? context.theme : undefined,
+    variables: Object.fromEntries(Object.entries(context.styles?.variables ?? {})
+      .filter(([name, value]) => name.startsWith('--color-') && /^--[a-zA-Z0-9_-]+$/.test(name) && typeof value === 'string')),
+  }).replace(/</g, '\\u003c');
+  return `<script data-cindy-theme>\n(()=>{\nconst initial=${encoded};\nconst root=document.documentElement;\nconst both=()=>{\n const scheme=getComputedStyle(root).colorScheme.toLowerCase().split(/\\s+/);\n if(scheme.includes('light')&&scheme.includes('dark'))return true;\n return [...document.querySelectorAll('meta[name="color-scheme"]')].some(meta=>\n  meta.getAttribute('content')?.toLowerCase().split(/\\s+/).includes('light')&&\n  meta.getAttribute('content')?.toLowerCase().split(/\\s+/).includes('dark'));\n};\nconst supportsBoth=both();\nconst colorName=/^--color-[a-zA-Z0-9_-]+$/;\nconst written=new Set();\nconst apply=context=>{\n if(!supportsBoth||(context?.theme!=='light'&&context?.theme!=='dark'))return;\n root.style.colorScheme=context.theme;\n for(const [name,value] of Object.entries(context.variables||{})){\n  if(!name.startsWith('--color-')||!colorName.test(name)||typeof value!=='string')continue;\n  if(!written.has(name)&&getComputedStyle(root).getPropertyValue(name).trim()!=='')continue;\n  root.style.setProperty(name,value);\n  written.add(name);\n }\n};\nconst context={theme:initial.theme,variables:initial.variables};\napply(context);\naddEventListener('message',event=>{\n if(event.source!==parent)return;\n const message=event.data;\n if(message?.jsonrpc==='2.0'&&message.method==='ui/notifications/host-context-changed'&&message.params){\n  if(message.params.theme!==undefined)context.theme=message.params.theme;\n  if(message.params.styles?.variables)Object.assign(context.variables,message.params.styles.variables);\n  apply(context);\n }\n});\n})();\n</script>`;
+};
+
+/** Inject the first-frame theme separately from SDK/document preparation. */
+export function withMcpAppTheme(html: string, context: McpAppThemeContext): string {
+  if (context.theme !== 'light' && context.theme !== 'dark') return html.replace(headEndMarker, '');
+  const declared = new Set<string>();
+  for (const match of html.matchAll(/color-scheme\s*:\s*([^;}"']+)/gi)) {
+    for (const value of match[1].toLowerCase().split(/\s+/))
+      if (value === 'light' || value === 'dark') declared.add(value);
+  }
+  // Find each terminator once, including for repeated, unterminated tag openers.
+  const metaTags = /<meta\b/gi;
+  for (let match = metaTags.exec(html); match; match = metaTags.exec(html)) {
+    const end = html.indexOf('>', match.index + match[0].length);
+    if (end < 0) break;
+    const tag = html.slice(match.index, end + 1);
+    metaTags.lastIndex = end + 1;
+    const name = tag.match(/\bname\s*=\s*["']color-scheme["']/i);
+    const content = tag.match(/\bcontent\s*=\s*["']([^"']+)/i)?.[1];
+    if (!name || !content) continue;
+    for (const value of content.toLowerCase().split(/\s+/))
+      if (value === 'light' || value === 'dark') declared.add(value);
+  }
+  return html.replace(headEndMarker, () => declared.size === 1 ? '' : themeScript(context));
+}
 // Electron throws this from any WebFrameMain getter (`contents.focusedFrame`, `frame.url`,
 // `frame.parent`, `event.frame`) once the render frame is gone, which is routine while an
 // App iframe is being torn down or recreated. It must not escape a WebContents event
@@ -54,16 +145,23 @@ async function readBridgeBody(request: Request): Promise<string> {
 }
 export function supplyMcpAppDocument(
   document: McpAppDocument, caller?: string, invoke?: (input: unknown) => Promise<unknown>,
-  dispose?: () => void,
+  dispose?: () => void, hostContext?: McpAppThemeContext,
 ): void {
   documents.set(document.viewId, {
-    document, owner: getCurrentDbClientSnapshot(), caller, dispose,
+    html: withMcpAppTheme(preparedAppHtml(document), hostContext ?? {}),
+    fileKey: randomUUID(), document, owner: getCurrentDbClientSnapshot(), caller, local: caller?.startsWith('renderer:'), dispose,
     bridge: invoke ? { key: randomUUID(), invoke } : undefined,
   });
 }
-export function removeMcpAppDocument(id: string): void {
+export function removeMcpAppDocument(id: string, reason?: 'MCP_PLUGIN_UNAVAILABLE'): void {
   const entry = documents.get(id);
   documents.delete(id);
+  if (entry?.local) {
+    try {
+      const failure = { jsonrpc: '2.0', method: 'ui/notifications/sandbox-failed', params: reason ? { code: reason } : undefined };
+      void entry.bridge?.frame?.executeJavaScript?.(`window.parent.postMessage(${JSON.stringify(failure)}, '*')`).catch(() => {});
+    } catch (error) { if (!isDisposedFrameError(error)) throw error; }
+  }
   entry?.dispose?.();
 }
 export function clearMcpAppDocuments(): void {
@@ -71,6 +169,7 @@ export function clearMcpAppDocuments(): void {
 }
 export function mountRemoteAppDocument(
   input: unknown, caller: string, invoke?: (input: unknown) => Promise<unknown>, dispose?: () => void,
+  hostContext?: McpAppThemeContext,
 ): string {
   const document = input as McpAppDocument;
   if (!getCurrentDbClientSnapshot()) throw new Error('MCP_APP_OWNER_UNAVAILABLE');
@@ -81,10 +180,10 @@ export function mountRemoteAppDocument(
   )
     throw new Error('MCP_APP_INVALID_DOCUMENT');
   if ([...documents.values()].filter((item) => item.caller === caller).length >= 16)
-    throw new Error('MCP_APP_VIEW_LIMIT');
+    throw new McpAppWindowLimitError('document');
   const policy = appCsp({ csp: document.policy });
   const id = randomUUID();
-  supplyMcpAppDocument({ ...document, viewId: id, csp: policy.header, policy: policy.csp }, caller, invoke, dispose);
+  supplyMcpAppDocument({ ...document, viewId: id, csp: policy.header, policy: policy.csp }, caller, invoke, dispose, hostContext);
   return id;
 }
 export function unmountRemoteAppDocument(id: string, caller: string): void {
@@ -96,6 +195,11 @@ export function assertMcpAppDocumentCaller(id: string, caller: string): void {
   if (!entry || entry.owner !== getCurrentDbClientSnapshot() || entry.caller !== caller)
     throw new Error('MCP_APP_VIEW_UNAVAILABLE');
 }
+// Only the scheme hint may vary on a bridge's exact per-View wrapper URL.
+function isSandboxFrameUrl(url: string | undefined, id: string): boolean {
+  return url?.replace(/\?scheme=[^&#?]*$/, '') === `cindy-mcp-app://${id}/sandbox`;
+}
+
 export function registerMcpAppProtocol(): void {
   // Only Chromium's actual requesting frame can acquire this Main-only channel key.
   // It never appears in HTML, a renderer IPC response, or a JavaScript Request object.
@@ -103,13 +207,29 @@ export function registerMcpAppProtocol(): void {
     { urls: ['cindy-mcp-app://*/*'] },
     (details, callback) => {
       const url = new URL(details.url);
+      if (url.hostname.endsWith('-view') && url.pathname.startsWith('/__cindy/files/')) {
+        const entry = documents.get(url.hostname.slice(0, -5));
+        const frame = details.frame;
+        try {
+          if (!entry || !frame || entry.owner !== getCurrentDbClientSnapshot() ||
+              entry.caller !== `renderer:${details.webContentsId}` ||
+              frame.url !== `cindy-mcp-app://${url.hostname}/resource` ||
+              !['GET', 'HEAD'].includes(details.method)) { callback({ cancel: true }); return; }
+        } catch (error) {
+          if (!isDisposedFrameError(error)) throw error;
+          callback({ cancel: true }); return;
+        }
+        const headers = Object.fromEntries(Object.entries(details.requestHeaders)
+          .filter(([key]) => key.toLowerCase() !== frameHeader.toLowerCase()));
+        callback({ requestHeaders: { ...headers, [frameHeader]: entry.fileKey } }); return;
+      }
       if (url.pathname !== '/bridge') { callback({ requestHeaders: details.requestHeaders }); return; }
       const entry = documents.get(url.hostname);
       const frame = details.frame;
       if (details.method !== 'POST' || !entry?.bridge || !frame ||
         entry.owner !== getCurrentDbClientSnapshot() ||
         entry.caller !== `renderer:${details.webContentsId}` ||
-        frame.url !== `cindy-mcp-app://${url.hostname}/sandbox` ||
+        !isSandboxFrameUrl(frame.url, url.hostname) ||
         (entry.bridge.frame && entry.bridge.frame !== frame)) {
         callback({ cancel: true }); return;
       }
@@ -212,11 +332,30 @@ export function registerMcpAppProtocol(): void {
     const doc = entry?.document;
     if (!doc || entry?.owner !== getCurrentDbClientSnapshot())
       return new Response(null, { status: 404 });
+    if (url.hostname === `${id}-view` && url.pathname === HOST_APP_SDK_PATH &&
+        request.method === 'GET' && !url.search && !url.hash && doc.sdk) {
+      return new Response(doc.sdk.source, { headers: {
+        'Content-Type': 'text/javascript; charset=utf-8',
+        'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
+      } });
+    }
+    if (url.hostname === `${id}-view` && url.pathname === CINDY_VIEW_STATE_SDK_PATH && request.method === 'GET' && !url.search && !url.hash && doc.sdk?.addons?.['cindy/view-state'])
+      return new Response(doc.sdk.addons['cindy/view-state'].source, { headers: { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } });
+    if (url.hostname === `${id}-view` && url.pathname === CINDY_VIEW_STATE_REACT_SDK_PATH && request.method === 'GET' && !url.search && !url.hash && doc.sdk?.addons?.['cindy/view-state'])
+      return new Response(doc.sdk.addons['cindy/view-state'].reactSource, { headers: { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } });
+    if (url.hostname === `${id}-view` && url.pathname === CINDY_COMPOSER_ATTACHMENT_SDK_PATH && request.method === 'GET' && !url.search && !url.hash && doc.sdk?.addons?.['cindy/composer-attachment'])
+      return new Response(doc.sdk.addons['cindy/composer-attachment'].source, { headers: { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } });
+    if (url.hostname === `${id}-view` && url.pathname.startsWith('/__cindy/files/')) {
+      if (!fileReader || request.headers.get(frameHeader) !== entry.fileKey || url.search || url.hash)
+        return new Response(null, { status: 404 });
+      return fileReader(id, url.pathname.slice('/__cindy/files/'.length), request);
+    }
     if (url.pathname === '/bridge' && url.hostname === id) {
       const bridge = entry.bridge;
       if (request.method !== 'POST' || !bridge ||
         request.headers.get(frameHeader) !== bridge.key ||
-        bridge.frame?.url !== `cindy-mcp-app://${id}/sandbox`)
+        !isSandboxFrameUrl(bridge.frame?.url, id))
         return new Response(null, { status: 403 });
       try {
         const text = await readBridgeBody(request);
@@ -224,7 +363,11 @@ export function registerMcpAppProtocol(): void {
         if (documents.get(id) !== entry || entry.owner !== getCurrentDbClientSnapshot())
           return new Response(null, { status: 403 });
         return Response.json(await bridge.invoke(JSON.parse(text)), { headers: { 'Cache-Control': 'no-store' } });
-      } catch {
+      } catch (error) {
+        // A live poll can observe plugin revocation before the document is removed.
+        const code = error instanceof Error ? (extractIpcError(error)?.message ?? error.message) : undefined;
+        if (code === 'MCP_PLUGIN_UNAVAILABLE' || code === 'MCP_APP_SERVER_CHANGED')
+          return Response.json({ code }, { status: 410 });
         return new Response(null, { status: 400 });
       }
     }
@@ -239,9 +382,9 @@ export function registerMcpAppProtocol(): void {
     const resourceUrl = `cindy-mcp-app://${id}-view/resource`;
     return new Response(isSandbox
       ? entry.bridge
-        ? mcpAppDirectSandboxDocument(resourceUrl, `cindy-mcp-app://${id}/bridge`)
+        ? mcpAppDirectSandboxDocument(resourceUrl, `cindy-mcp-app://${id}/bridge`, url.search === '?scheme=dark' ? 'dark' : 'light')
         : mcpAppSandboxDocument('', resourceUrl)
-      : doc.html, {
+      : entry.html, {
       headers: {
         'Content-Type': 'text/html; charset=utf-8',
         'Cache-Control': 'no-store',

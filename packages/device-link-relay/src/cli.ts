@@ -6,7 +6,7 @@
  *               --relay-id <UUID> --owner-public-key <公钥> --owner-cert <证书 JSON 的 base64url>
  *   relay serve --data <目录> [--host 127.0.0.1] [--port 47820]
  *               [--tls-cert <PEM> --tls-key <PEM>] [--public-url <https://...>] [--trust-proxy]
- *               [--acme-identifier <域名或IP> [--acme-http-port 80] [--acme-directory <URL>]]
+ *               [--acme-identifier <域名或IP> [--acme-http-host <地址>] [--acme-http-port 80] [--acme-directory <URL>]]
  *
  * `--acme-identifier`:自动向 Let's Encrypt 申请并续期证书(http-01 验证走 `--acme-http-port`),
  * 拿到证书后才开始提供 HTTPS;申请失败按退避重试,状态写进数据目录的 status.json。
@@ -15,6 +15,7 @@
  * stdout 每行一个 JSON 事件(initialized / listening / error),供部署器解析;
  * 日志写 stderr,不含凭证、加入码与签名地址。
  */
+import { AcmeNetworkError } from './acme';
 import { CertificateManager, startChallengeServer, type TlsMaterial } from './certificates';
 import { identifierFor } from './csr';
 import { RelayError } from './errors';
@@ -26,9 +27,11 @@ import { manageNginx } from './nginx';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 
-const BOOLEAN_FLAGS = new Set(['trust-proxy', 'ipv6', 'existing-certificate']);
+const BOOLEAN_FLAGS = new Set(['trust-proxy', 'ipv6', 'existing-certificate', 'tls-at-ingress']);
 /** 首次申请证书失败后的重试间隔(Let's Encrypt 对同一名字每小时只允许几次失败验证)。 */
 const ACME_RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000, 30 * 60_000, 60 * 60_000];
+/** 只是连不上 CA(不算失败验证、不占配额)时更快重试,部署等待的几分钟里能多试几次。 */
+const ACME_NETWORK_RETRY_DELAYS_MS = [15_000, 30_000, 60_000, 2 * 60_000, 5 * 60_000];
 const RENEWAL_CHECK_MS = 60 * 60 * 1000;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -40,7 +43,7 @@ function parsePort(value: string | undefined, fallback: number, name: string): n
 }
 
 /** 自动证书:先在 80 端口提供验证,拿到(或读到)有效证书后返回;之后由调用方定时续期。 */
-async function prepareAcme(flags: Map<string, string>, dataDir: string, host: string) {
+async function prepareAcme(flags: Map<string, string>, dataDir: string) {
   const identifier = identifierFor(required(flags, 'acme-identifier'));
   const manager = new CertificateManager({
     dataDir,
@@ -48,15 +51,28 @@ async function prepareAcme(flags: Map<string, string>, dataDir: string, host: st
     directoryUrl: flags.get('acme-directory'),
     logger: stderrLogger,
   });
-  await startChallengeServer({ host, port: parsePort(flags.get('acme-http-port'), 80, 'acme-http-port'), challenges: manager.challenges });
+  // Keep legacy IPv6 CLI listeners reachable without inheriting a loopback API
+  // address. Explicit deployment/Nginx binds still take precedence.
+  let challengeHost = flags.get('acme-http-host');
+  if (challengeHost === undefined) {
+    const apiHost = flags.get('host') ?? '127.0.0.1';
+    // Node's API listener also resolves hostnames; preserve its selected family.
+    const family = isIP(apiHost) || (apiHost ? (await lookup(apiHost)).family : 4);
+    challengeHost = family === 6 || isIP(identifier.value) === 6 ? '::' : '0.0.0.0';
+  }
+  await startChallengeServer({ host: challengeHost, port: parsePort(flags.get('acme-http-port'), 80, 'acme-http-port'), challenges: manager.challenges });
   let material: TlsMaterial | null = await manager.load();
   if (material && manager.needsRenewal(material)) material = null;
-  for (let attempt = 0; !material; attempt++) {
+  let failures = 0;
+  let networkFailures = 0;
+  while (!material) {
     emit({ event: 'certificate', status: 'requesting', identifier: identifier.value });
     try {
       material = await manager.obtain();
     } catch (error) {
-      const delay = ACME_RETRY_DELAYS_MS[Math.min(attempt, ACME_RETRY_DELAYS_MS.length - 1)];
+      const delays = error instanceof AcmeNetworkError ? ACME_NETWORK_RETRY_DELAYS_MS : ACME_RETRY_DELAYS_MS;
+      const index = error instanceof AcmeNetworkError ? networkFailures++ : failures++;
+      const delay = delays[Math.min(index, delays.length - 1)];
       emit({ event: 'certificate', status: 'failed', retryInMs: delay, message: error instanceof Error ? error.message : 'unknown' });
       // 证书还没到手但旧证书仍有效:先用旧的服务,后台继续申请。
       const previous = await manager.load();
@@ -167,13 +183,13 @@ async function main(): Promise<void> {
     const port = parsePort(flags.get('port'), 47820, 'port');
     const dataDir = required(flags, 'data');
     const host = flags.get('host') ?? '127.0.0.1';
-    const acme = flags.has('acme-identifier') ? await prepareAcme(flags, dataDir, host) : null;
+    const acme = flags.has('acme-identifier') ? await prepareAcme(flags, dataDir) : null;
     let material = acme?.material ?? null;
     const handle = await startRelayServer({
       dataDir,
       host,
       port,
-      tls: material ? { cert: material.cert, key: material.key } : certPath && keyPath ? await readTlsFiles(certPath, keyPath) : undefined,
+      tls: material && !flags.has('tls-at-ingress') ? { cert: material.cert, key: material.key } : certPath && keyPath ? await readTlsFiles(certPath, keyPath) : undefined,
       publicUrl: flags.get('public-url'),
       trustProxyHeaders: flags.has('trust-proxy'),
       logger: stderrLogger,
@@ -189,7 +205,7 @@ async function main(): Promise<void> {
           .obtain()
           .then((next) => {
             material = next;
-            handle.updateTls({ cert: next.cert, key: next.key });
+            if (!flags.has('tls-at-ingress')) handle.updateTls({ cert: next.cert, key: next.key });
           })
           .catch(() => {
             // 已记录;旧证书仍有效时下个小时再试。

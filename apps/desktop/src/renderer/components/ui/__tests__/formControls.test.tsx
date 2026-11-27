@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { Button } from '../button';
 import { Input } from '../input';
 import { ConfirmDialog } from '../confirm-dialog';
+import { CountBadge } from '../badge';
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('@/lib/scrollbarAutoHide', () => ({ flashScrollbar: vi.fn() }));
@@ -36,39 +37,34 @@ it('keeps disabled secret values masked and the reveal control unavailable', () 
   expect(reveal.getAttribute('aria-pressed')).toBe('false');
 });
 
-it.each([undefined, 'standard'] as const)(
-  'preserves ordinary confirm ordering and Cancel focus (%s)',
-  async (presentation) => {
-    const onTertiary = vi.fn();
-    render(
-      <ConfirmDialog
-        presentation={presentation}
-        open
-        title="Save changes?"
-        confirmText="Save"
-        tertiaryText="Discard"
-        cancelText="Cancel"
-        onTertiary={onTertiary}
-        onOpenChange={vi.fn()}
-      />,
-    );
-    expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual([
-      'Save',
-      'Discard',
-      'Cancel',
-    ]);
-    await waitFor(() =>
-      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Cancel' })),
-    );
-    fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
-    expect(onTertiary).toHaveBeenCalledOnce();
-  },
-);
+it('orders Cancel, tertiary, primary while keeping Cancel focus', async () => {
+  const onTertiary = vi.fn();
+  render(
+    <ConfirmDialog
+      open
+      title="Save changes?"
+      confirmText="Save"
+      tertiaryText="Discard"
+      cancelText="Cancel"
+      onTertiary={onTertiary}
+      onOpenChange={vi.fn()}
+    />,
+  );
+  expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual([
+    'Cancel',
+    'Discard',
+    'Save',
+  ]);
+  await waitFor(() =>
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Cancel' })),
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+  expect(onTertiary).toHaveBeenCalledOnce();
+});
 
 it('prioritizes typed confirmation over explicit main focus and blocks busy closure', async () => {
   const close = vi.fn();
   const props = {
-    presentation: 'standard' as const,
     open: true,
     title: 'Delete?',
     confirmText: 'Delete',
@@ -88,4 +84,25 @@ it('prioritizes typed confirmation over explicit main focus and blocks busy clos
   fireEvent.keyDown(screen.getByRole('alertdialog'), { key: 'Escape' });
   fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
   expect(close).not.toHaveBeenCalled();
+});
+
+// CountBadge replaced the sidebar-only NavigationCountBadge (DESIGN.md §4 Badges). Screen readers
+// must hear the full count label as part of the row's name, not the clipped "99+", and an empty
+// count must leave no badge behind.
+it('reads a count badge by its label, caps the visible count and hides it at zero', () => {
+  const { rerender } = render(
+    <button type="button">
+      Teammates
+      <CountBadge count={120} label="120 unread messages" />
+    </button>,
+  );
+  expect(screen.getByRole('button', { name: /^Teammates\s*120 unread messages$/ })).toBeTruthy();
+  expect(screen.getByText('99+').getAttribute('aria-hidden')).toBe('true');
+  rerender(
+    <button type="button">
+      Teammates
+      <CountBadge count={0} label="0 unread messages" />
+    </button>,
+  );
+  expect(screen.getByRole('button').textContent).toBe('Teammates');
 });

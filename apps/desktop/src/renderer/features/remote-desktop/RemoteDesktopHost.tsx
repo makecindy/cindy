@@ -2,10 +2,11 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { DesktopLocalState } from '../../../shared/remoteDesktop';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
-import { Button } from '@/components/ui/button';
 import { RemoteDesktopPermissions } from '@/components/settings/RemoteDesktopPermissions';
 
-/** Main-window status and permission UI; it has no capture or media bridge. */
+/** Main-window permission guide; it has no capture or media bridge. The
+ * controlled-desktop notice is the on-screen overlay alone (controlledOverlay.ts):
+ * the main window is part of what the viewer receives. */
 export function RemoteDesktopHost() {
   const { t } = useTranslation();
   const [state, setState] = useState<DesktopLocalState | null>(null);
@@ -39,47 +40,27 @@ export function RemoteDesktopHost() {
   }, []);
   if (!state) return null;
   return (
-    <>
-      <ConfirmDialog
-        open={Boolean(state.permissionGuide)}
-        onOpenChange={(open) => {
-          if (!open) {
-            stateRevision.current++;
-            dismissing.current = true;
-            setState((previous) => (previous ? { ...previous, permissionGuide: false } : previous));
-            void window.electronAPI.remoteDesktop
-              .dismissPermissionGuide()
-              .catch(() => {})
-              .finally(() => {
-                dismissing.current = false;
-              });
-          }
-        }}
-        title={t('remoteDesktop.permissionsTitle')}
-        describeContent
-        content={state.permissionGuide ? <RemoteDesktopPermissions /> : null}
-        confirmText={t('remoteDesktop.closePermissionGuide')}
-        showCancel={false}
-        maxWidth={460}
-      />
-      {/* The on-screen overlay, where supported, carries the same notice and Disconnect. */}
-      {state.active && !state.overlay && (
-        <div
-          role="status"
-          className="fixed bottom-4 left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 rounded-full border border-[var(--border-default)] bg-[var(--settings-theme-card-bg)] px-4 py-2 text-13 text-[var(--text-primary)]"
-        >
-          <span>
-            {t(
-              state.active.controlling
-                ? 'remoteDesktop.beingControlled'
-                : 'remoteDesktop.beingViewed',
-            )}
-          </span>
-          <Button variant="secondary" onClick={() => void window.electronAPI.remoteDesktop.stop()}>
-            {t('remoteDesktop.disconnect')}
-          </Button>
-        </div>
-      )}
-    </>
+    <ConfirmDialog
+      open={Boolean(state.permissionGuide)}
+      onOpenChange={(open) => {
+        if (!open) {
+          stateRevision.current++;
+          dismissing.current = true;
+          setState((previous) => (previous ? { ...previous, permissionGuide: false } : previous));
+          void window.electronAPI.remoteDesktop
+            .dismissPermissionGuide()
+            .catch(() => {})
+            .finally(() => {
+              dismissing.current = false;
+            });
+        }
+      }}
+      title={t('remoteDesktop.permissionsTitle')}
+      describeContent
+      content={state.permissionGuide ? <RemoteDesktopPermissions /> : null}
+      confirmText={t('remoteDesktop.closePermissionGuide')}
+      showCancel={false}
+      maxWidth={460}
+    />
   );
 }

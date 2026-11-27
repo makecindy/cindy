@@ -187,6 +187,9 @@ describe('Pi device-hosted guest sessions', () => {
     model?: string;
     guestProvider?: DeviceHostedGuestProvider | null;
     deps?: Partial<AgentDeps>;
+    ghostRosterSnapshot?: string;
+    mcpServers?: string[];
+    controllerManagedSkills?: boolean;
   } = {}) {
     const model = extra.model ?? 'm';
     const providerId = extra.providerId ?? (guest ? 'xd' : undefined);
@@ -202,11 +205,12 @@ describe('Pi device-hosted guest sessions', () => {
       isGitRepo: false,
       tunnelUrl: 'http://127.0.0.1:4000/t/tok/',
       tunnelToken: 'tok',
-      mcpServers: ['cindy_contacts'],
+      mcpServers: extra.mcpServers ?? ['cindy_contacts'],
       mirrorRoot: path.join(sessionRoot, 'fs'),
       ...(guest ? { guest: true } : {}),
       ...(extra.guestHome ? { guestHome: extra.guestHome } : {}),
       ...(guest && guestProvider ? { guestProvider } : {}),
+      ...(extra.controllerManagedSkills ? { controllerManagedSkills: { claudePluginRoots: [] } } : {}),
     };
     const handle = await new PiAgent(buildDeps(extra.deps)).startSession({
       sessionId: guest ? 'guest-session' : 'owner-session',
@@ -215,6 +219,7 @@ describe('Pi device-hosted guest sessions', () => {
       model,
       ...(providerId ? { providerId } : {}),
       deviceHosted,
+      ...(extra.ghostRosterSnapshot !== undefined ? { ghostRosterSnapshot: extra.ghostRosterSnapshot } : {}),
       ...(extra.resumeSessionId ? { resumeSessionId: extra.resumeSessionId } : {}),
     });
     const args = knobs.spawnedArgs[0]!;
@@ -259,6 +264,18 @@ describe('Pi device-hosted guest sessions', () => {
       expect(spies.getManagedSkills).not.toHaveBeenCalled();
       expect(spies.getDisabledSkillPaths).not.toHaveBeenCalled();
       expect(spies.resolvePiNativePackagePaths).not.toHaveBeenCalled();
+    } finally {
+      await handle.close();
+    }
+  });
+
+  // 插件工具经 MCP 桥回到受邀者电脑：花名册用它带来的快照，本机的仍不读。
+  it('gives a guest the roster from its own computer', async () => {
+    const { handle, args } = await start(true, { ghostRosterSnapshot: 'TASK COMPUTER GHOST ROSTER', mcpServers: ['cindy'] });
+    try {
+      expect(readAppendedSystemPrompt(args)).toContain('TASK COMPUTER GHOST ROSTER');
+      expect(readAppendedSystemPrompt(args)).not.toContain('HOST GHOST ROSTER');
+      expect(spies.getGhostRosterPrompt).not.toHaveBeenCalled();
     } finally {
       await handle.close();
     }
@@ -316,8 +333,6 @@ describe('Pi device-hosted guest sessions', () => {
           CINDY_PI_UNREFERENCED: 'stray',
         },
       }),
-      // 本机用户开了视觉桥：视觉后端(本机用户自己的其它供应商)的地址与密钥。
-      resolvePiVisionBridgeEnv: () => ({ CINDY_PI_VISION_BRIDGE_TEST: 'vision-secret' }),
       registerPiProxySession: (_sessionId, _token, resolveProviderId) => {
         registered.push(resolveProviderId());
         return () => {};
@@ -346,8 +361,6 @@ describe('Pi device-hosted guest sessions', () => {
       expect(env.CINDY_PI_KEY_BYOM_B).toBeUndefined();
       expect(env.CINDY_PI_BYOM_B_HEADER_authorization).toBeUndefined();
       expect(env.CINDY_PI_UNREFERENCED).toBeUndefined();
-      // 视觉桥不进受邀者会话(视觉后端是本机用户的其它供应商，vision 工具还会直接读本机文件)。
-      expect(env.CINDY_PI_VISION_BRIDGE_TEST).toBeUndefined();
       const routes = readSubagentRoutes(env);
       expect(Object.keys(routes)).toEqual(['model-a']);
       expect(routes['model-a']!.map((route) => route.provider)).toEqual(['byom-a']);
@@ -372,7 +385,6 @@ describe('Pi device-hosted guest sessions', () => {
       expect(env.CINDY_PI_KEY_BYOM_B).toBeUndefined();
       expect(env.CINDY_PI_BYOM_A_HEADER_authorization).toBeUndefined();
       expect(env.CINDY_PI_BYOM_B_HEADER_authorization).toBeUndefined();
-      expect(env.CINDY_PI_VISION_BRIDGE_TEST).toBeUndefined();
       expect(Object.keys(readSubagentRoutes(env))).toEqual(['m']);
       expect(new Set(registered)).toEqual(new Set([null]));
     } finally {
@@ -400,7 +412,6 @@ describe('Pi device-hosted guest sessions', () => {
       expect(env.CINDY_PI_KEY_BYOM_B).toBe('key-b');
       expect(env.CINDY_PI_BYOM_B_HEADER_authorization).toBe('header-b');
       expect(env.CINDY_PI_UNREFERENCED).toBe('stray');
-      expect(env.CINDY_PI_VISION_BRIDGE_TEST).toBe('vision-secret');
       expect(Object.keys(readSubagentRoutes(env)).sort()).toEqual(['denied-model', 'm', 'model-a', 'model-b']);
       expect(new Set(registered)).toEqual(new Set(['byom-a', 'byom-b', null]));
       // §12 / review 4333949156: startup must guard every owner-native source,
@@ -409,6 +420,17 @@ describe('Pi device-hosted guest sessions', () => {
         { id: 'byom-a', name: 'byom-a', provider: 'byom-a', keyEnv: 'CINDY_PI_KEY_BYOM_A', remoteProviderId: 'byom-a' },
         { id: 'byom-b', name: 'byom-b', provider: 'byom-b', keyEnv: 'CINDY_PI_KEY_BYOM_B', remoteProviderId: 'byom-b' },
       ]);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  // 任务所在电脑带来的托管 Skill 已作为项目 Skill 放在影子目录：本机的不再挂载。
+  it('skips this computer managed skills when the task computer brings its own', async () => {
+    const { handle, args, configHome } = await start(false, { controllerManagedSkills: true });
+    try {
+      expect(repeatedArgValues(args, '--skill')).not.toContain(path.join(configHome, 'cindy-managed-skills'));
+      expect(spies.getManagedSkills).not.toHaveBeenCalled();
     } finally {
       await handle.close();
     }

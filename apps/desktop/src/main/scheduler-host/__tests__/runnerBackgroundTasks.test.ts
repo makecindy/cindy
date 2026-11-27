@@ -60,7 +60,7 @@ vi.mock('../runners/_shared', () => ({
   backfillSessionMeta: mocks.backfillSessionMeta,
 }));
 
-import { MakerScheduleRunner } from '../runner';
+import { MakerScheduleRunner } from '../runner.desktop';
 
 type SessionSendOptions = Parameters<Session['send']>[1];
 type SendImpl = (
@@ -70,12 +70,14 @@ type SendImpl = (
 
 interface FakeSessionHarness {
   session: Session;
+  cancelPendingSend: ReturnType<typeof vi.fn>;
   emit(event: AgentEvent): void;
   emitStatus(status: 'active' | 'aborting' | 'closed' | 'error'): void;
   setContinuationState(
     continuationId: number,
     state: 'awaiting' | 'active' | 'cancelled',
     emit?: boolean,
+    reason?: string,
   ): void;
 }
 
@@ -87,11 +89,14 @@ function createSessionHarness(sendImpl: SendImpl): FakeSessionHarness {
   const continuationListeners: Array<(
     continuationId: number,
     state: 'awaiting' | 'active' | 'cancelled',
+    reason?: string,
   ) => void> = [];
+  const continuationReasons = new Map<number, string>();
   const continuationStates = new Map<
     number,
     'awaiting' | 'active' | 'cancelled'
   >();
+  const cancelPendingSend = vi.fn(() => false);
   const session = {
     id: 'scheduler-session',
     agentKind: 'claude-code',
@@ -105,10 +110,12 @@ function createSessionHarness(sendImpl: SendImpl): FakeSessionHarness {
     },
     beginTurnContinuationWait: (continuationId?: number) =>
       continuationId === undefined ? null : continuationStates.get(continuationId) ?? null,
+    getTurnContinuationCancellationReason: (id: number) => continuationReasons.get(id),
     onTurnContinuationChange(
       listener: (
         continuationId: number,
         state: 'awaiting' | 'active' | 'cancelled',
+        reason?: string,
       ) => void,
     ) {
       continuationListeners.push(listener);
@@ -126,22 +133,25 @@ function createSessionHarness(sendImpl: SendImpl): FakeSessionHarness {
       });
     },
     abort: vi.fn(async () => undefined),
+    cancelPendingSend,
     close: vi.fn(async () => undefined),
   } as unknown as Session;
 
   return {
     session,
+    cancelPendingSend,
     emit(event: AgentEvent) {
       for (const listener of [...listeners]) listener(event);
     },
     emitStatus(status) {
       for (const listener of [...statusListeners]) listener(status);
     },
-    setContinuationState(continuationId, state, emit = false) {
+    setContinuationState(continuationId, state, emit = false, reason) {
       continuationStates.set(continuationId, state);
+      if (reason !== undefined) continuationReasons.set(continuationId, reason);
       if (!emit) return;
       for (const listener of [...continuationListeners]) {
-        listener(continuationId, state);
+        listener(continuationId, state, reason);
       }
     },
   };
@@ -193,6 +203,7 @@ function createRunnerHarness(session: Session, overrides: Partial<ConstructorPar
     getSessionMeta: vi.fn(async () => null),
     isSessionAlive: vi.fn(() => false),
     closeSession: vi.fn(async () => undefined),
+    recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
   } as unknown as Maker;
   const runner = new MakerScheduleRunner({
     maker,
@@ -300,7 +311,6 @@ describe('MakerScheduleRunner background subagent task tracking', () => {
     const { runner, maker, notifier } = createRunnerHarness(h.session, {
       beforeDispatchUserTurn: async () => { valid = false; },
     });
-    vi.mocked(h.session.abort).mockImplementation(() => new Promise(() => undefined));
     vi.mocked(maker.getSessionMeta).mockResolvedValue({ id: 'bot-session', agentKind: 'claude-code', model: 'claude-sonnet-4-6', workDir: '/repo/project' } as never);
     mocks.getSessionFsSnapshot.mockResolvedValue({ permissionMode: 'ask', planModeEnabled: true });
     const result = await runner.fire(baseSchedule({ source: 'bot', targetSessionId: 'bot-session' }), {
@@ -308,8 +318,35 @@ describe('MakerScheduleRunner background subagent task tracking', () => {
     });
     expect(result).toMatchObject({ deferred: true });
     expect(vendor).not.toHaveBeenCalled();
-    expect(h.session.abort).toHaveBeenCalledOnce();
+    expect(h.session.abort).not.toHaveBeenCalled();
     expect(notifier.notify).not.toHaveBeenCalled();
+  });
+
+  it('pause/delete during direct onAccepted cancels the pending send without aborting the session', async () => {
+    const h = createSessionHarness(async (_message, opts) => {
+      await opts?.onAccepted?.();
+      return { accepted: true };
+    });
+    h.cancelPendingSend.mockReturnValue(true);
+    Object.assign(h.session, { stablePermissionModeState: { mode: 'ask', generation: 0 } });
+    const abortController = new AbortController();
+    const ctx = { ...createFireContext(), signal: abortController.signal };
+    const beforeDispatch = vi.fn(async () => { abortController.abort(); });
+    const { runner, maker } = createRunnerHarness(h.session, {
+      beforeDispatchUserTurn: beforeDispatch,
+    });
+    vi.mocked(maker.getSessionMeta).mockResolvedValue({ id: 'bot-session', agentKind: 'claude-code', model: 'claude-sonnet-4-6', workDir: '/repo/project' } as never);
+    mocks.getSessionFsSnapshot.mockResolvedValue({ permissionMode: 'ask', planModeEnabled: true });
+
+    const fire = runner.fire(baseSchedule({ source: 'bot', targetSessionId: 'bot-session' }), {
+      ...ctx,
+      deferToCaller: true,
+    }).catch((error: unknown) => error);
+
+    await vi.waitFor(() => expect(beforeDispatch).toHaveBeenCalled());
+    await vi.waitFor(() => expect(h.cancelPendingSend).toHaveBeenCalled());
+    expect(h.session.abort).not.toHaveBeenCalled();
+    expect(await fire).toBeInstanceOf(Error);
   });
 
   it.each(['before create', 'before send'])('rechecks routine permission changes %s after async preparation', async (stage) => {
@@ -370,6 +407,7 @@ describe('MakerScheduleRunner background subagent task tracking', () => {
       expect(mocks.createMessage).toHaveBeenCalledOnce();
       expect(mocks.rewindPersistedUserMessageAfterClear).toHaveBeenCalledExactlyOnceWith(
         h.session.id, mocks.createMessage.mock.calls[0][1].clientId,
+        { discard: true },
       );
       expect(notifier.notify).not.toHaveBeenCalled();
     },
@@ -424,6 +462,7 @@ describe('MakerScheduleRunner background subagent task tracking', () => {
       } else {
         expect(mocks.rewindPersistedUserMessageAfterClear).toHaveBeenCalledExactlyOnceWith(
           h.session.id, mocks.createMessage.mock.calls[0][1].clientId,
+        { discard: true },
         );
         expect(vendor).not.toHaveBeenCalled();
         expect(notifier.notify).not.toHaveBeenCalled();
@@ -616,7 +655,54 @@ describe('MakerScheduleRunner background subagent task tracking', () => {
 
     h.setContinuationState(3, 'cancelled', true);
     await expect(firePromise).rejects.toThrow('Scheduled turn continuation was cancelled');
-    expect(notifiedRun(notifier)).toMatchObject({ status: 'failed', errorMsg: 'Scheduled turn continuation was cancelled' });
+    expect(notifiedRun(notifier)).toMatchObject({ status: 'failed', errorMsg: 'Scheduled turn continuation was cancelled (reason: unknown, continuationId: 3)' });
+  });
+
+  // #10547: real runner failure and persisted run diagnostics, not mock-only calls.
+  // Covers live subscription and cancellation before the queued parent done is read.
+  it.each(['live', 'snapshot', 'without-logger'] as const)('retains safe cancellation diagnostics through %s', async (path) => {
+    vi.useFakeTimers();
+    const h = createSessionHarness(acceptingSend());
+    const { runner, notifier, logger } = createRunnerHarness(h.session);
+    if (path === 'without-logger') delete logger.warn;
+    const fire = runner.fire(baseSchedule(), createFireContext());
+    const rejected = expect(fire).rejects.toThrow(
+      'Scheduled turn continuation was cancelled (reason: wake_contract_unfulfilled, continuationId: 47)',
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    h.setContinuationState(47, path === 'snapshot' ? 'cancelled' : 'awaiting', false, 'wake_contract_unfulfilled');
+    h.emit({ type: 'done', data: {}, turnContinuationId: 47 });
+    if (path !== 'snapshot') {
+      // A different claim's cancellation must not settle this run.
+      h.setContinuationState(48, 'cancelled', true, 'user_stop');
+      expect(notifier.notify).not.toHaveBeenCalled();
+      expect(() => h.setContinuationState(47, 'cancelled', true, 'wake_contract_unfulfilled')).not.toThrow();
+    }
+    await rejected;
+    expect(notifiedRun(notifier)).toMatchObject({ status: 'failed', errorMsg:
+      'Scheduled turn continuation was cancelled (reason: wake_contract_unfulfilled, continuationId: 47)' });
+    if (path !== 'without-logger') expect(logger.warn).toHaveBeenCalledWith('[runner] turn continuation cancelled', {
+      sessionId: h.session.id, continuationId: 47, reason: 'wake_contract_unfulfilled',
+    });
+  });
+
+  it.each(['live', 'snapshot'] as const)('does not copy untrusted cancellation text through %s', async (path) => {
+    vi.useFakeTimers();
+    const h = createSessionHarness(acceptingSend());
+    const { runner, notifier, logger } = createRunnerHarness(h.session);
+    const fire = runner.fire(baseSchedule(), createFireContext());
+    const rejected = expect(fire).rejects.toThrow('reason: unknown, continuationId: 47');
+    await vi.advanceTimersByTimeAsync(0);
+    const privateText = 'prompt\nAuthorization: Bearer synthetic-secret';
+    h.setContinuationState(47, path === 'live' ? 'awaiting' : 'cancelled', false, privateText);
+    h.emit({ type: 'done', data: {}, turnContinuationId: 47 });
+    if (path === 'live') h.setContinuationState(47, 'cancelled', true, privateText);
+    await rejected;
+    expect(notifiedRun(notifier).errorMsg).not.toContain(privateText);
+    expect(JSON.stringify(logger.warn ? vi.mocked(logger.warn).mock.calls : [])).not.toContain(privateText);
+    expect(logger.warn).toHaveBeenCalledWith('[runner] turn continuation cancelled', {
+      sessionId: h.session.id, continuationId: 47, reason: 'unknown',
+    });
   });
 
   it('host 消费父 done 前 continuation 已 active，仍等待第二个 done', async () => {

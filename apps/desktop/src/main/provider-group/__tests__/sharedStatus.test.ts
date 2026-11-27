@@ -8,7 +8,7 @@ import { createGuestSupportReader, readSharedGroupStatus, SHARED_GROUP_STATUS_TI
 function setup(states: ProviderGroupMemberState[] = ['available', 'full', 'cooling', 'offline', 'paused', 'unavailable']) {
   let current = true;
   let config: ProviderGroupConfig | null = {
-    strategy: 'least', autoSwitch: true,
+    strategy: 'expiring', autoSwitch: true,
     members: states.map((state, index) => ({
       key: `private-key-${index}`, label: `Secret Computer ${index}`, kind: index === 0 ? 'local' : 'device',
       agentDeviceId: index === 0 ? null : `private-device-${index}`, providerId: 'anthropic',
@@ -20,7 +20,10 @@ function setup(states: ProviderGroupMemberState[] = ['available', 'full', 'cooli
       ...member, label: member.label!, ownerName: 'private-owner', state: states[index], running: index === 1 ? 4 : 0,
     })),
   };
-  const router = { view: vi.fn(async () => view) };
+  const router = {
+    view: vi.fn(async () => view),
+    memberViews: () => new Map(config?.members.filter(member => !member.paused).map(member => [member.key, () => router.view()])),
+  };
   const readCaps = vi.fn<SharedGroupStatusDeps['readCaps']>(async () => ({ virtualWorkspace: true, guestRelay: true }) as RemoteAgentCaps);
   const isIncapable = vi.fn(() => false);
   const deps = {
@@ -69,6 +72,22 @@ describe('anonymous shared group status', () => {
       'available', 'busy', 'cooling', 'offline', 'paused', 'unavailable',
     ]);
     expect(env.readCaps).toHaveBeenCalledTimes(1);
+  });
+
+  // A live answer from O can contain stale member directories: the outer
+  // provider:list stamp is fresh, so the anonymous projection must hide old
+  // busy/available states itself (provider-groups.md short-outage contract).
+  // Real readSharedGroupStatus entry; missing coverage was this inner budget,
+  // rather than a stale outer IPC reply. Unit, no real waits or extra wire data.
+  it.each([
+    { stale: true, remainingMs: 600_000 },
+    { stale: false, remainingMs: 0 },
+  ])('reports unconfirmed member states for an old group view (%j)', async (continuity) => {
+    const env = setup(['available', 'full', 'paused']);
+    env.view.providerContinuity = continuity;
+    expect(await readSharedGroupStatus(env.deps, 'anthropic')).toEqual(['unknown', 'unknown', 'paused']);
+    env.view.providerContinuity = { stale: false, remainingMs: 600_000 };
+    expect(await readSharedGroupStatus(env.deps, 'anthropic')).toEqual(['available', 'busy', 'paused']);
   });
 
   it('bounds capability probes for 512 members and shares them across concurrent refreshes', async () => {

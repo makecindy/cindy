@@ -1,11 +1,13 @@
 //! Main-only taskbar bridge. Electron 41 always resizes overlays to 16 physical
-//! pixels; pass the original DPI-sized image to the Shell instead.
+//! pixels; pass the original DPI-sized image to the Shell instead. Also sets an
+//! owned window's light/dark mode, which tints its Windows 11 system backdrop.
 use napi::bindgen_prelude::Buffer;
 use napi_derive::napi;
+mod deep_link;
 use windows::{
     core::{w, PCWSTR},
     Win32::{
-        Foundation::{HWND, RPC_E_CHANGED_MODE},
+        Foundation::{BOOL, HWND, POINT, RECT, RPC_E_CHANGED_MODE},
         System::{
             Com::{
                 CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
@@ -13,11 +15,16 @@ use windows::{
             },
             Threading::GetCurrentProcessId,
         },
+        Graphics::{
+            Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE},
+            Gdi::{GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST},
+        },
         UI::{
             Shell::{ITaskbarList3, TaskbarList},
             WindowsAndMessaging::{
                 CreateIconFromResourceEx, DestroyIcon, GetWindowThreadProcessId, IsWindow,
-                RegisterWindowMessageW, HICON, LR_DEFAULTCOLOR,
+                RegisterWindowMessageW, GetCursorPos, GetWindowRect, SetWindowPos, HICON, LR_DEFAULTCOLOR,
+                SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
             },
         },
     },
@@ -25,6 +32,59 @@ use windows::{
 
 fn failure(error: impl std::fmt::Display) -> napi::Error {
     napi::Error::from_reason(format!("Windows taskbar: {error}"))
+}
+
+/// Read a browser's default manifest path in the current user's registry view.
+/// Validate the complete UTF-16 value before expanding environment variables.
+#[napi]
+pub fn read_browser_manifest(key: String) -> napi::Result<Option<String>> {
+    use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_MORE_DATA, ERROR_PATH_NOT_FOUND, ERROR_SUCCESS, ERROR_UNSUPPORTED_TYPE};
+    use windows_sys::Win32::System::Environment::ExpandEnvironmentStringsW;
+    use windows_sys::Win32::System::Registry::{
+        RegGetValueW, HKEY_CURRENT_USER, REG_EXPAND_SZ, RRF_NOEXPAND, RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ,
+    };
+    let unsafe_path = || napi::Error::from_reason("NATIVE_PATH_UNSAFE");
+    let key = key.strip_prefix("HKCU\\").filter(|key| !key.contains('\0'))
+        .ok_or_else(unsafe_path)?;
+    let wide: Vec<u16> = key.encode_utf16().chain(Some(0)).collect();
+    // Longest Windows path, including its terminator. Larger or malformed
+    // values must never be mistaken for an unclaimed registration.
+    let mut buffer = vec![0u16; 32768];
+    let mut bytes = (buffer.len() * 2) as u32;
+    let mut kind = 0;
+    let status = unsafe {
+        RegGetValueW(HKEY_CURRENT_USER, wide.as_ptr(), std::ptr::null(),
+            RRF_NOEXPAND | RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ, &mut kind, buffer.as_mut_ptr().cast(), &mut bytes)
+    };
+    match status {
+        ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND => Ok(None),
+        ERROR_MORE_DATA | ERROR_UNSUPPORTED_TYPE => Err(unsafe_path()),
+        ERROR_SUCCESS => {
+            let raw = buffer.get(..(bytes / 2) as usize)
+                .and_then(|data| data.strip_suffix(&[0]))
+                .filter(|data| bytes % 2 == 0 && !data.is_empty() && !data.contains(&0))
+                .ok_or_else(unsafe_path)?;
+            let mut expanded;
+            let contents = if kind == REG_EXPAND_SZ {
+                expanded = vec![0u16; 32768];
+                let length = unsafe {
+                    ExpandEnvironmentStringsW(buffer.as_ptr(), expanded.as_mut_ptr(), expanded.len() as u32)
+                };
+                if length == 0 {
+                    return Err(napi::Error::from_reason("Registry path expansion failed"));
+                }
+                if length == 1 || length as usize > expanded.len() {
+                    return Err(unsafe_path());
+                }
+                &expanded[..length as usize - 1]
+            } else {
+                raw
+            };
+            String::from_utf16(contents).map(Some)
+                .map_err(|_| unsafe_path())
+        }
+        _ => Err(napi::Error::from_reason(format!("Registry read failed ({status})"))),
+    }
 }
 
 // Only balance successful CoInitializeEx calls; Electron normally already owns
@@ -119,6 +179,81 @@ pub fn set_overlay_icon(
     }
 }
 
+// Keep drag geometry in physical pixels. Electron's DIP bounds round-trip is
+// not idempotent at fractional DPI, even when the logical size is held fixed.
+#[napi(object)]
+pub struct WindowDragOffset {
+    pub x: i32,
+    pub y: i32,
+}
+
+#[napi]
+pub fn window_drag_offset(handle: Buffer) -> napi::Result<WindowDragOffset> {
+    let window = window_from_bytes(&handle)?;
+    let mut cursor = POINT::default();
+    let mut bounds = RECT::default();
+    unsafe {
+        GetCursorPos(&mut cursor).map_err(failure)?;
+        GetWindowRect(window, &mut bounds).map_err(failure)?;
+    }
+    Ok(WindowDragOffset { x: cursor.x - bounds.left, y: cursor.y - bounds.top })
+}
+
+#[napi]
+pub fn move_window_at_cursor(handle: Buffer, offset_x: i32, offset_y: i32) -> bool {
+    let Ok(window) = window_from_bytes(&handle) else { return false; };
+    let mut cursor = POINT::default();
+    let mut bounds = RECT::default();
+    unsafe {
+        if GetCursorPos(&mut cursor).is_err() || GetWindowRect(window, &mut bounds).is_err() {
+            return false;
+        }
+        let x = cursor.x - offset_x;
+        let mut y = cursor.y - offset_y;
+        let monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+        let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+        if GetMonitorInfoW(monitor, &mut info).as_bool() {
+            y = y.max(info.rcWork.top);
+        }
+        if x == bounds.left && y == bounds.top { return true; }
+        SetWindowPos(window, HWND::default(), x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE).is_ok()
+    }
+}
+
+// A privacy mask must disappear from capture, including the area it covers.
+// Electron's content-protected state also accepts WDA_MONITOR (a black area).
+#[napi]
+pub fn exclude_privacy_mask_from_capture(handle: Buffer) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowDisplayAffinity, SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE,
+    };
+    let Ok(window) = window_from_bytes(&handle) else { return false; };
+    let mut affinity = 0;
+    unsafe {
+        SetWindowDisplayAffinity(window, WDA_EXCLUDEFROMCAPTURE).is_ok()
+            && GetWindowDisplayAffinity(window, &mut affinity).is_ok()
+            && affinity == WDA_EXCLUDEFROMCAPTURE.0
+    }
+}
+
+// The Acrylic/Mica system backdrop takes its tint from the window's own
+// light/dark mode. Electron derives that from the Windows setting, so a dark
+// Cindy theme on light Windows would otherwise show a white-tinted backdrop.
+#[napi]
+pub fn set_window_dark_mode(handle: Buffer, dark: bool) -> bool {
+    let Ok(window) = window_from_bytes(&handle) else { return false; };
+    let value = BOOL::from(dark);
+    unsafe {
+        DwmSetWindowAttribute(
+            window,
+            DWMWA_USE_IMMERSIVE_DARK_MODE,
+            (&value as *const BOOL).cast(),
+            std::mem::size_of::<BOOL>() as u32,
+        )
+        .is_ok()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,5 +297,6 @@ mod tests {
         assert!(png_size(&nonsquare).is_err());
         assert!(window_from_bytes(&[0]).is_err());
         assert!(window_from_bytes(&[0; std::mem::size_of::<usize>()]).is_err());
+        assert!(!set_window_dark_mode(Buffer::from(vec![0; std::mem::size_of::<usize>()]), true));
     }
 }

@@ -1,4 +1,6 @@
-import { and, count, desc, eq, getTableColumns, gte, inArray, isNull, ne, or } from 'drizzle-orm';
+import { normalizeTaskTags } from '@cindy/maker-shared';
+import { matchExplicitConversationSearchText, parseConversationSearchQuery } from '@cindy/maker-shared/conversation-search';
+import { and, count, desc, eq, gte, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import { normalizeProjectOrderPath } from '@cindy/maker-shared/project-order-sync';
 
 import type {
@@ -17,10 +19,11 @@ import { conversationSearchTitle } from '../../shared/conversationSearch.js';
 import type { SessionSource } from '../../shared/sessionSource.js';
 import { normalizeWorkingDirForComparison, normalizeWorkingDirForGrouping } from '../../shared/workingDir.js';
 import { getDbClient } from './client/current.js';
-import { botProfiles, botSessionLinks, messages, projectAliases, sessions } from './schema.js';
-import { searchChatHistoryHybrid } from './chatHistorySearch.js';
+import { historyCompanionJson, parseHistoryCompanion } from './historyCompanion.js';
+import { botProfiles, botSessionLinks, messages, projectAliases, sessions, sessionTaskTags, taskTags } from './schema.js';
+import { prepareChatHistorySearch } from './chatHistorySearch.js';
 import { normalizeDbAgentKind } from '../../shared/agentKindConversion.js';
-import { visibleTextMatchesMessagesFtsQuery } from './chatHistorySearch.pure.js';
+import { buildMessagesFtsMatch, visibleTextMatchesMessagesFtsQuery } from './chatHistorySearch.pure.js';
 import {
   collectContentHitsUntilUniqueSessions,
   fuzzyTitleMatch,
@@ -34,6 +37,8 @@ const MAX_LIMIT = 50;
 const CONTENT_PAGE_LIMIT = 50;
 const CONTENT_MAX_PAGES = 3;
 const CONTENT_POOL_LIMIT = CONTENT_PAGE_LIMIT * CONTENT_MAX_PAGES;
+const EXPLICIT_CONTENT_PAGE_LIMIT = 200;
+const EXPLICIT_CONTENT_MAX_PAGES = 5;
 const SEARCH_ROLES = ['user', 'assistant', 'ask_user', 'plan_review'] as const;
 const ACTIVE_STATUSES = ['active'] as const;
 const VISIBLE_STATUSES = ['active', 'archived'] as const;
@@ -48,7 +53,12 @@ const LAST_ACTIVITY_DAY_COUNTS: Record<
 };
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-type SessionRow = typeof sessions.$inferSelect & {
+type SessionRow = Pick<typeof sessions.$inferSelect,
+  | 'id' | 'title' | 'workingDir' | 'projectDir' | 'workspaceKind' | 'remoteHostId'
+  | 'agentKind' | 'status' | 'source' | 'orcaRole' | 'parentSessionId'
+  | 'userSendAt' | 'updatedAt' | 'createdAt'
+> & {
+  companionJson: string | null;
   companionId: string | null;
   companionName: string | null;
   companionStatus: string | null;
@@ -80,15 +90,21 @@ export async function searchConversations(
   }
 
   const limit = clampLimit(request.limit);
+  const parsedQuery = parseConversationSearchQuery(query);
+  if (parsedQuery.explicit && parsedQuery.terms.length === 0) {
+    return { query, querySyntaxVersion: 1, results: [], vectorUsed: false, vectorSkipReason: null, poolCapped: false };
+  }
+  const literalQuery = parsedQuery.terms.map((term) => term.text).join(' ');
   const filters = normalizeFilters(request);
   // Linked personal history may retain an imported IM source. Candidate selection
   // below owns the boundary; content retrieval uses those exact ids.
   const sessionSources = hostScope.sessionSources ?? null;
   const sortBy = normalizeSortBy(request.sortBy);
-  const skipVector = request.semanticMode === 'keyword';
+  const skipVector = request.semanticMode === 'keyword' || parsedQuery.explicit;
   if (filters.sessionIds && filters.sessionIds.length === 0) {
     return {
       query,
+      querySyntaxVersion: 1,
       results: [],
       vectorUsed: false,
       vectorSkipReason: null,
@@ -115,6 +131,7 @@ export async function searchConversations(
   if (sessionRows.length === 0) {
     return {
       query,
+      querySyntaxVersion: 1,
       results: [],
       vectorUsed: false,
       vectorSkipReason: null,
@@ -133,9 +150,14 @@ export async function searchConversations(
       // 文案,拿原始哨兵匹配会两头错位 —— 搜可见文案一条都搜不到,搜 "New Maker" 反而
       // 命中一堆不显示这个词的行,高亮下标也会落在别的字上(PR #1031 review P1)。
       // renderer 渲染时调同一个 conversationSearchTitle,两端逐字一致。
-      let match = fuzzyTitleMatch(conversationSearchTitle(row.title, request.unnamedLabel), query);
-      if (!match && row.workspaceKind === 'project' && !row.remoteHostId && row.workingDir
-        && aliasesByPath.get(normalizeProjectOrderPath(row.workingDir))?.includes(query.toLowerCase())) {
+      const title = conversationSearchTitle(row.title, request.unnamedLabel);
+      let match = parsedQuery.explicit
+        ? matchExplicitConversationSearchText(title, parsedQuery)
+        : fuzzyTitleMatch(conversationSearchTitle(row.title, request.unnamedLabel), query);
+      const taskProjectDir = parseHistoryCompanion(row.companionJson)?.taskProjectDir;
+      const projectDir = taskProjectDir ?? row.projectDir ?? row.workingDir;
+      if (!parsedQuery.explicit && !match && (taskProjectDir || row.workspaceKind === 'project') && !row.remoteHostId && projectDir
+        && aliasesByPath.get(normalizeProjectOrderPath(projectDir))?.includes(query.toLowerCase())) {
         // Alias-only hits have no highlight positions in the task's title.
         match = { score: 0, indices: [] };
       }
@@ -146,6 +168,57 @@ export async function searchConversations(
     })
     .filter((item): item is NonNullable<typeof item> => item !== null)
     .sort((a, b) => b.score - a.score || activityMs(b.session) - activityMs(a.session) || a.index - b.index);
+
+  if (parsedQuery.explicit) {
+    // Verify the complete visible message before limiting results. An indexed
+    // hit on hidden attachment metadata must not satisfy any query term.
+    const hits: Array<{ session: ConversationSearchSessionSummary; hit: ConversationSearchContentHit }> = [];
+    const counts = new Map<string, number>();
+    // An OR alternative with no FTS tokens (emoji or punctuation) can match on
+    // its own. Filtering by only the indexed alternatives would lose that hit.
+    // Reuse the bounded visible-message scan in that case. AND can still use
+    // indexed terms to narrow candidates before verifying every literal term.
+    const hasUnindexedAlternative = !parsedQuery.all
+      && parsedQuery.terms.some((term) => buildMessagesFtsMatch(term.text) === null);
+    const match = hasUnindexedAlternative ? null
+      : buildMessagesFtsMatch(literalQuery, parsedQuery.all ? 'AND' : 'OR');
+    let poolCapped = false;
+    for (let page = 0; page < EXPLICIT_CONTENT_MAX_PAGES; page++) {
+      const rows = await getDbClient().query<{
+        rowid: number; id: string; sessionId: string; clientId: string;
+        role: ConversationSearchContentHit['role']; content: string; agentMeta: string | null; createdAt: number;
+      }>(`SELECT m.rowid, m.id, m.session_id AS sessionId, m.client_id AS clientId,
+          m.role, m.content, m.agent_meta AS agentMeta, m.created_at AS createdAt
+          FROM messages m JOIN sessions s ON s.id = m.session_id
+          WHERE m.session_id IN (SELECT value FROM json_each(?))
+            AND m.rewind_at IS NULL AND (s.cleared_at IS NULL OR m.created_at > s.cleared_at)
+            AND m.role IN ('user', 'assistant', 'ask_user', 'plan_review')
+            ${match ? 'AND m.id IN (SELECT message_id FROM messages_fts WHERE messages_fts MATCH ?)' : ''}
+          ORDER BY m.created_at DESC, m.id DESC LIMIT ? OFFSET ?`, [
+            JSON.stringify(allowedSessionIds), ...(match ? [match] : []),
+            EXPLICIT_CONTENT_PAGE_LIMIT + 1, page * EXPLICIT_CONTENT_PAGE_LIMIT,
+          ]);
+      for (const row of rows.slice(0, EXPLICIT_CONTENT_PAGE_LIMIT)) {
+        const visible = visibleMessageTextForConversationSearch(row.role, row.content, row.agentMeta);
+        if (!matchExplicitConversationSearchText(visible, parsedQuery)) continue;
+        const count = counts.get(row.sessionId) ?? 0;
+        if (count >= 3) continue;
+        counts.set(row.sessionId, count + 1);
+        const preview = normalizeConversationContentPreview(row.role, row.content, literalQuery, 180, row.agentMeta);
+        hits.push({ session: sessionSummaries.get(row.sessionId)!, hit: {
+          messageId: row.id, messageClientId: row.clientId, role: row.role,
+          createdAt: new Date(row.createdAt).toISOString(), snippet: preview.snippet,
+          preview: preview.preview, score: 1, ftsRank: 1, vectorRank: null,
+        } });
+      }
+      if (rows.length <= EXPLICIT_CONTENT_PAGE_LIMIT) break;
+      poolCapped = page === EXPLICIT_CONTENT_MAX_PAGES - 1;
+    }
+    const results = mergeConversationSearchResults({
+      titleMatches, contentHits: hits, limit, sortBy,
+    });
+    return { query, querySyntaxVersion: 1, results: await attachResultMetadata(results), vectorUsed: false, vectorSkipReason: null, poolCapped };
+  }
 
   const content = await searchContentUntilUniqueSessions({
     query,
@@ -206,7 +279,7 @@ export async function searchConversations(
 
   return {
     query,
-    results: await attachMessageCounts(results),
+    results: await attachResultMetadata(results),
     vectorUsed: content.vectorUsed,
     vectorSkipReason: content.vectorSkipReason,
     poolCapped: content.poolCapped,
@@ -231,33 +304,32 @@ async function searchContentUntilUniqueSessions({
   sessionSources: readonly SessionSource[] | null;
 }) {
   const targetUniqueSessions = Math.min(limit * 2, allowedSessionIds.length);
-  const queryEmbeddingCache = new Map<string, number[]>();
+  // Keep the ranked pool within this invocation. Pages hydrate only their own
+  // hits, but do not repeat FTS/KNN retrieval or fusion for concentrated matches.
+  const fetchPage = await prepareChatHistorySearch({
+    query,
+    sessionIds: allowedSessionIds,
+    workdir: null,
+    fromMs: null,
+    toMs: null,
+    agentKind: filters.agentKind === 'all' ? null : filters.agentKind,
+    roles: [...SEARCH_ROLES],
+    contextRadius: 0,
+    sessionSources,
+    sessionStatuses: sessionStatusesForFilter(filters.status),
+    excludeCleared: true,
+    sessionActivityFromMs: activityCutoff,
+    skipVector,
+    ftsPoolLimit: CONTENT_POOL_LIMIT + 1,
+    vectorPoolLimit: CONTENT_POOL_LIMIT + 1,
+    fusePoolLimit: CONTENT_POOL_LIMIT,
+  });
 
   return collectContentHitsUntilUniqueSessions({
     maxPages: CONTENT_MAX_PAGES,
     pageLimit: CONTENT_PAGE_LIMIT,
     targetUniqueSessions,
-    fetchPage: ({ limit: pageLimit, offset }) => searchChatHistoryHybrid({
-      query,
-      sessionIds: allowedSessionIds,
-      workdir: null,
-      fromMs: null,
-      toMs: null,
-      agentKind: filters.agentKind === 'all' ? null : filters.agentKind,
-      roles: [...SEARCH_ROLES],
-      contextRadius: 0,
-      limit: pageLimit,
-      offset,
-      sessionSources,
-      sessionStatuses: sessionStatusesForFilter(filters.status),
-      excludeCleared: true,
-      sessionActivityFromMs: activityCutoff,
-      skipVector,
-      ftsPoolLimit: CONTENT_POOL_LIMIT + 1,
-      vectorPoolLimit: CONTENT_POOL_LIMIT + 1,
-      fusePoolLimit: CONTENT_POOL_LIMIT,
-      queryEmbeddingCache,
-    }),
+    fetchPage,
   });
 }
 
@@ -337,7 +409,7 @@ function applyWorkingDirFilter(
   if (workingDirs == null) return rows;
   const allowed = new Set(workingDirs.map((dir) => normalizeWorkingDirForComparison(dir)));
   return rows.filter((row) => {
-    const key = normalizeWorkingDirForComparison(row.workingDir);
+    const key = normalizeWorkingDirForComparison(parseHistoryCompanion(row.companionJson)?.taskProjectDir ?? row.projectDir ?? row.workingDir);
     return key != null && allowed.has(key);
   });
 }
@@ -363,7 +435,21 @@ async function listSearchableSessions(
     : or(gte(sessions.updatedAt, activityCutoff), gte(sessions.userSendAt, activityCutoff));
   return db
     .select({
-      ...getTableColumns(sessions),
+      id: sessions.id,
+      title: sessions.title,
+      workingDir: sessions.workingDir,
+      projectDir: sessions.projectDir,
+      workspaceKind: sessions.workspaceKind,
+      remoteHostId: sessions.remoteHostId,
+      agentKind: sessions.agentKind,
+      status: sessions.status,
+      source: sessions.source,
+      orcaRole: sessions.orcaRole,
+      parentSessionId: sessions.parentSessionId,
+      userSendAt: sessions.userSendAt,
+      updatedAt: sessions.updatedAt,
+      createdAt: sessions.createdAt,
+      companionJson: historyCompanionJson(sql`${sessions.id}`),
       companionId: botProfiles.id,
       companionName: botProfiles.displayName,
       companionStatus: botProfiles.status,
@@ -429,10 +515,13 @@ function sessionSummaryFromRow(
   row: SessionRow,
   messageCount: number,
 ): ConversationSearchSessionSummary {
+  const taskProjectDir = parseHistoryCompanion(row.companionJson)?.taskProjectDir;
   return {
     id: row.id,
     title: row.title,
     workingDir: row.workingDir,
+    projectDir: row.projectDir,
+    ...(taskProjectDir ? { taskProjectDir } : {}),
     workspaceKind: row.workspaceKind,
     agentKind: normalizeDbAgentKind(row.agentKind),
     status: row.status,
@@ -456,15 +545,32 @@ function sessionSummaryFromRow(
   };
 }
 
-async function attachMessageCounts<T extends { session: ConversationSearchSessionSummary }>(
+async function attachResultMetadata<T extends { session: ConversationSearchSessionSummary }>(
   results: T[],
 ): Promise<T[]> {
-  const countMap = await fetchMessageCounts(results.map((item) => item.session.id));
+  if (results.length === 0) return results;
+  const sessionIds = results.map((item) => item.session.id);
+  // Enrich only the final page, in one batch, including tasks outside the sidebar cache.
+  const [countMap, tagRows] = await Promise.all([
+    fetchMessageCounts(sessionIds),
+    getDbClient().drizzle
+      .select({ sessionId: sessionTaskTags.sessionId, tag: taskTags })
+      .from(sessionTaskTags)
+      .innerJoin(taskTags, eq(taskTags.id, sessionTaskTags.tagId))
+      .where(inArray(sessionTaskTags.sessionId, sessionIds)),
+  ]);
+  const tagsBySession = new Map<string, unknown[]>();
+  for (const { sessionId, tag } of tagRows) {
+    const tags = tagsBySession.get(sessionId) ?? [];
+    tags.push(tag);
+    tagsBySession.set(sessionId, tags);
+  }
   return results.map((item) => ({
     ...item,
     session: {
       ...item.session,
       _count: { messages: countMap.get(item.session.id) ?? 0 },
+      tags: normalizeTaskTags(tagsBySession.get(item.session.id)),
     },
   }));
 }

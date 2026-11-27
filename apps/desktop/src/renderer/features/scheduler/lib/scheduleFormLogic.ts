@@ -14,7 +14,7 @@
  *   - buildScheduleInput:表单 → CreateScheduleInput(原 toInput 迁入)
  */
 
-import type { Schedule, CreateScheduleInput, ScheduleTemplate, ScheduleWorkspaceKind, ScriptCapability } from '@cindy/maker-scheduler';
+import type { Schedule, CreateScheduleInput, PreRunPluginFailureAction, ScheduleTemplate, ScheduleWorkspaceKind, ScriptCapability } from '@cindy/maker-scheduler';
 import {
   effectiveSourceIdForModel,
   getModel,
@@ -22,6 +22,33 @@ import {
   type ProviderView,
 } from '@cindy/model-providers';
 import type { SessionReference } from '../../../../shared/sessionReference';
+import { PLUGIN_ENGINE_DEFAULT_MODEL, type PluginEngineSelection } from '@/lib/pluginEngineSelection';
+import { isPluginEngineEffort } from '../../../../shared/pluginEngines';
+import {
+  DEFAULT_SCHEDULE_WEBHOOK_PRESET,
+  parseWebhookFormat,
+  scheduleWebhookPreset,
+  type ScheduleWebhookSource,
+} from '@cindy/maker-scheduler/webhook-formats';
+import type { SchedulePluginEventSource } from '@cindy/maker-scheduler/plugin-events';
+import {
+  githubItemUrl,
+  gitlabIssueChangeEvents,
+  gitlabIssueChangeFromEvents,
+  gitlabPluginIssueChangeEvents,
+  gitlabPluginIssueChangeFromEvents,
+  gitlabPluginMrChangeEvents,
+  gitlabPluginMrChangeFromEvents,
+  gitlabPluginScopeFromSource,
+  gitlabPluginSource,
+  issueChangeEvents,
+  issueChangeFromEvents,
+  parseGitlabProjectReference,
+  type GitlabIssueChange,
+  type GitlabPluginIssueChange,
+  type IssueChange,
+} from '@cindy/maker-scheduler/github-item';
+import { parseScheduleDeadline } from '@cindy/maker-shared/schedule-form';
 
 /** Effort 白名单 — 与 Phase 2 mapper enum 一致;UI 提交前的最后一道关卡。 */
 export const EFFORT_VALUES = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
@@ -121,6 +148,10 @@ export function resolveScheduleModelEfforts(input: {
 }
 
 export interface ScheduleFormState {
+  /** Project review opt-in; empty model alone never means buddy inheritance. */
+  followTeammateModel?: boolean;
+  deadline?: string;
+  sourceExpireAt?: number;
   name: string;
   prompt: string;
   /** agent = run an AI turn; script = host executes scriptConfig without an AI turn. */
@@ -138,9 +169,66 @@ export interface ScheduleFormState {
   recurring: boolean;
   /** 手动模式:true → 创建后永不自动 fire,只能 Run now。UI 上需要 recurring=false 才能勾。 */
   manual: boolean;
+  /** undefined = 这次编辑不涉及 Webhook，保存时不动已有配置。 */
+  prEnabled?: boolean;
+  prUrl?: string;
+  prChange?: import('@cindy/maker-scheduler/pr-trigger').PrChange;
+  webhookEnabled?: boolean;
+  /** 逗号分隔的事件筛选，原样保留用户输入。 */
+  webhookEvents?: string;
+  /** 发送方预设 id，或 custom。 */
+  webhookPreset?: string;
+  webhookRepositories?: string;
+  /** 是否验证签名；只对预设生效，自定义格式在 JSON 里写。 */
+  webhookSigned?: boolean;
+  /** 自定义格式的 JSON 文本，原样保留用户输入。 */
+  webhookFormat?: string;
+  /** 插件事件来源（preset=plugin）。界面不编辑字段条件，但原样保留 Agent 设置的 filters。 */
+  webhookPluginSources?: SchedulePluginEventSource[];
+  /**
+   * GitHub「指定 PR 或 Issue」的输入框原文。识别为 PR 时存为 prTrigger；识别为 Issue 时
+   * 存为 github-app 来源加 githubItemRepository / githubItemNumber。webhookPreset 为 github-item
+   * 表示已选该范围但还没识别出来，不能保存。
+   */
+  githubItem?: string;
+  githubItemRepository?: string;
+  /** 识别为 Issue 时的编号；为空表示不是指定 Issue。 */
+  githubItemNumber?: number;
+  /** 指定 Issue 的条件；为空时保留已保存的事件筛选。 */
+  issueChange?: IssueChange;
+  /**
+   * GitLab「指定 MR 或 Issue」的输入框原文。MR 存为 prTrigger（GitLab MR 链接）；Issue 存为地址型
+   * GitLab 发送方加 gitlabItemProject / gitlabItemNumber。webhookPreset 为 gitlab-item 表示尚未识别。
+   */
+  gitlabItem?: string;
+  gitlabItemHost?: string;
+  gitlabItemProject?: string;
+  /** 识别出的 GitLab 单对象编号（MR 或 Issue）；为空表示不是单对象或尚未识别。 */
+  gitlabItemNumber?: number;
+  gitlabItemKind?: 'mr' | 'issue';
+  gitlabIssueChange?: GitlabIssueChange;
+  /**
+   * 「通过 GitLab 插件」（webhookPreset=gitlab-plugin，保存为插件来源）：插件安装身份、整个项目时的项目原文
+   * 与所选事件（空表示全部）；指定 Issue 时用 gitlabItem* 字段，条件存在 gitlabPluginIssueChange。
+   */
+  gitlabPluginId?: string;
+  gitlabPluginProject?: string;
+  gitlabPluginEvents?: string[];
+  gitlabPluginIssueChange?: GitlabPluginIssueChange;
   agentKind: 'claude-code' | 'codex' | 'pi';
   modelAgentKind?: 'claude-code' | 'codex' | 'pi';
+  /**
+   * 选中的插件引擎(docs/plans/acp-plugin-bridge.md)。和新建任务草稿一样单独保存在内置引擎的选择旁边：
+   * 有值时保存为 agentKind / modelAgentKind = 'acp'，内置的 agentKind / model 只是切回内置引擎时的初值。
+   * 只用于每次新建任务、在本机运行的自动任务；绑定 / 持续会话 / 脚本 / worktree 都会清掉它。
+   */
+  pluginEngine?: PluginEngineSelection | null;
   modelAgentDeviceId?: string;
+  /**
+   * 模型组(模式)id：设了时新建任务按模式选来源(model-groups.md §6.3)，下面的具体模型是选不出来时沿用的。
+   * 选任何一个具体模型或插件引擎都会清掉它。
+   */
+  modelGroup?: string;
   /** The bound task's baseline, independent of the editable model choice. Form-only. */
   boundAgent?: { sessionId: string; agentKind: ScheduleFormState['agentKind'] };
   model: string;
@@ -177,6 +265,15 @@ export interface ScheduleFormState {
   preRunHookCommand: string;
   /** 前置检查超时(秒,文本输入,无 UI 入口)。空/非法 → 不限时。 */
   preRunHookTimeoutSec: string;
+  /** 前置检查用脚本还是插件(仅 preRunHookEnabled 时有意义)。 */
+  preRunSource: 'script' | 'plugin';
+  /** 打开时脚本与插件都已配置(Agent 设的)：界面显示插件，保存时脚本原样保留。 */
+  preRunKeepScript?: boolean;
+  /** 插件前置检查选定的插件实例 id;空 = 还没选。 */
+  primaryHostKey?: string;
+  preRunPluginId: string;
+  /** 插件没回应、出错或不可用时的处理。 */
+  preRunPluginOnFailure: PreRunPluginFailureAction;
   notifyDesktop: boolean;
   notifyFeishu: boolean;
   notifyWecomGroup?: boolean;
@@ -306,6 +403,7 @@ export interface RememberedBinding {
   agentKind: ScheduleFormState['agentKind'];
   modelAgentKind?: ScheduleFormState['modelAgentKind'];
   modelAgentDeviceId?: string;
+  pluginEngine?: PluginEngineSelection | null;
   boundAgent?: ScheduleFormState['boundAgent'];
 }
 
@@ -322,6 +420,7 @@ export function captureBinding(form: ScheduleFormState): RememberedBinding | nul
     agentKind: form.agentKind,
     modelAgentKind: form.modelAgentKind,
     modelAgentDeviceId: form.modelAgentDeviceId,
+    pluginEngine: form.pluginEngine ?? null,
     boundAgent: form.boundAgent,
   };
 }
@@ -359,6 +458,7 @@ export function applyRunMode(
           agentKind: remembered.agentKind,
           modelAgentKind: remembered.modelAgentKind,
           modelAgentDeviceId: remembered.modelAgentDeviceId,
+          ...(remembered.pluginEngine !== undefined ? { pluginEngine: remembered.pluginEngine } : {}),
           boundAgent: remembered.boundAgent,
         }
       : f;
@@ -526,10 +626,12 @@ export function parsePreRunHookTimeoutMs(sec: string): number | undefined {
 }
 
 export function buildPreRunHook(
-  form: Pick<ScheduleFormState, 'preRunHookEnabled' | 'preRunHookCommand' | 'preRunHookTimeoutSec'>,
+  form: Pick<ScheduleFormState, 'preRunHookEnabled' | 'preRunHookCommand' | 'preRunHookTimeoutSec'>
+    & Partial<Pick<ScheduleFormState, 'preRunSource' | 'preRunKeepScript'>>,
 ): CreateScheduleInput['preRunHook'] {
   const command = form.preRunHookCommand.trim();
   if (!form.preRunHookEnabled || !command) return undefined;
+  if (form.preRunSource === 'plugin' && !form.preRunKeepScript) return undefined;
   // 显式填写的超时原样落库;空 / 非法 → undefined = 不限时(与 main 侧
   // resolvePreRunHookTimeoutMs 语义一致)。不再对任何值做"等于默认就不落库"
   // 的过滤——默认超时已移除,undefined 的含义是不限时而非跟随默认。
@@ -539,6 +641,15 @@ export function buildPreRunHook(
   };
 }
 
+
+/** 插件前置检查;null = 清除(脚本来源、未启用或还没选插件)。 */
+export function buildPreRunPlugin(
+  form: Pick<ScheduleFormState, 'preRunHookEnabled' | 'preRunSource' | 'preRunPluginId' | 'preRunPluginOnFailure'>,
+): CreateScheduleInput['preRunPlugin'] {
+  const pluginId = form.preRunPluginId.trim();
+  if (!form.preRunHookEnabled || form.preRunSource !== 'plugin' || !pluginId) return null;
+  return { pluginId, onFailure: form.preRunPluginOnFailure };
+}
 
 export function buildScriptConfig(
   form: Pick<ScheduleFormState, 'executionMode' | 'scriptCommand' | 'scriptTimeoutSec' | 'scriptCapabilities'>,
@@ -558,10 +669,179 @@ export function parseScriptTimeoutMs(sec: string): number | undefined {
 }
 
 /** Preserve a binding's baseline when saving; unbound tasks use the selected Harness. */
+/**
+ * 已保存的自动任务 → 表单的引擎字段。插件引擎任务('acp')放进 pluginEngine，内置引擎的字段回到默认
+ * (切回内置引擎时由表单的默认模型回填)；其余与旧版一致。
+ */
+export function scheduleEngineFormFields(
+  s: Schedule,
+): Pick<ScheduleFormState, 'agentKind' | 'modelAgentKind' | 'boundAgent' | 'model' | 'providerId' | 'pluginEngine'> {
+  if (s.modelAgentKind === 'acp' || ((!s.targetSessionId || s.persistentSession) && s.agentKind === 'acp')) {
+    const deviceId = (s.modelAgentDeviceId ?? (!s.targetSessionId || s.persistentSession ? s.agentDeviceId : undefined))?.trim() || undefined;
+    return {
+      agentKind: 'claude-code',
+      modelAgentKind: undefined,
+      boundAgent: s.targetSessionId
+        ? { sessionId: s.targetSessionId, agentKind: s.agentKind === 'acp' ? 'claude-code' : s.agentKind }
+        : undefined,
+      model: '',
+      providerId: '',
+      pluginEngine: {
+        providerId: s.providerId ?? '',
+        modelId: s.model?.trim() || PLUGIN_ENGINE_DEFAULT_MODEL,
+        ...(deviceId ? { deviceId } : {}),
+        ...(isPluginEngineEffort(s.effort) ? { effort: s.effort } : {}),
+      },
+    };
+  }
+  const normalizedAgentKind = s.agentKind === 'acp' ? 'claude-code' : s.agentKind;
+  return {
+    agentKind: s.modelAgentKind ?? normalizedAgentKind,
+    modelAgentKind: s.modelAgentKind,
+    boundAgent: s.targetSessionId ? { sessionId: s.targetSessionId, agentKind: normalizedAgentKind } : undefined,
+    model: s.model ?? '',
+    providerId: s.providerId ?? '',
+    pluginEngine: null,
+  };
+}
+
 export function scheduleAgentKindForForm(form: ScheduleFormState): ScheduleFormState['agentKind'] {
   return form.executionMode !== 'script' && hasRealBinding(form) &&
     form.boundAgent?.sessionId === form.targetSessionId.trim()
     ? form.boundAgent.agentKind : form.agentKind;
+}
+
+/** 编辑已有任务时，从它的发送方得到表单初值。 */
+export function webhookSourceFormFields(
+  source: ScheduleWebhookSource | undefined,
+  events?: readonly string[],
+): Pick<ScheduleFormState, 'webhookPreset' | 'webhookSigned' | 'webhookFormat' | 'webhookRepositories' | 'webhookPluginSources'
+  | 'githubItem' | 'githubItemRepository' | 'githubItemNumber' | 'issueChange'
+  | 'gitlabItem' | 'gitlabItemHost' | 'gitlabItemProject' | 'gitlabItemNumber' | 'gitlabItemKind' | 'gitlabIssueChange'
+  | 'gitlabPluginId' | 'gitlabPluginProject' | 'gitlabPluginEvents' | 'gitlabPluginIssueChange' | 'prChange'> {
+  if (source?.preset === 'github-app' && source.number !== undefined) {
+    const repository = source.repositories[0] ?? '';
+    const change = issueChangeFromEvents(events);
+    return { webhookPreset: 'github-app', webhookRepositories: repository, webhookSigned: true, webhookFormat: '',
+      githubItem: githubItemUrl({ repository, number: source.number }, 'issue'), githubItemRepository: repository,
+      githubItemNumber: source.number, ...(change ? { issueChange: change } : {}) };
+  }
+  if (source?.preset === 'plugin') {
+    // Saved from「通过 GitLab 插件」: reopen it as GitLab; any other combination stays a plain plugin source.
+    const gitlab = gitlabPluginScopeFromSource(source.sources);
+    const mrChange = gitlab?.mr !== undefined ? gitlabPluginMrChangeFromEvents(gitlab.events) : null;
+    const issueChange = gitlab?.issue !== undefined ? gitlabPluginIssueChangeFromEvents(gitlab.events) : null;
+    if (gitlab && (gitlab.mr !== undefined ? Boolean(mrChange) : gitlab.issue === undefined || Boolean(issueChange))) {
+      const project = gitlab.host ? `https://${gitlab.host}/${gitlab.project}` : gitlab.project;
+      return {
+        webhookPreset: 'gitlab-plugin', webhookPluginSources: source.sources.map((item) => ({ ...item })),
+        webhookSigned: true, webhookFormat: '', gitlabPluginId: gitlab.plugin,
+        ...(gitlab.mr !== undefined
+          ? { gitlabItem: gitlab.host ? `${project}/-/merge_requests/${gitlab.mr}` : `${gitlab.project}!${gitlab.mr}`,
+            ...(gitlab.host ? { gitlabItemHost: gitlab.host } : {}), gitlabItemProject: gitlab.project,
+            gitlabItemNumber: gitlab.mr, gitlabItemKind: 'mr' as const, prChange: mrChange! }
+          : gitlab.issue !== undefined
+            ? { gitlabItem: gitlab.host ? `${project}/-/issues/${gitlab.issue}` : `${gitlab.project}#${gitlab.issue}`,
+              ...(gitlab.host ? { gitlabItemHost: gitlab.host } : {}), gitlabItemProject: gitlab.project,
+              gitlabItemNumber: gitlab.issue, gitlabItemKind: 'issue' as const, gitlabPluginIssueChange: issueChange! }
+            : { gitlabPluginProject: project, gitlabPluginEvents: gitlab.events }),
+      };
+    }
+    return { webhookPreset: 'plugin', webhookPluginSources: source.sources.map((item) => ({ ...item })), webhookSigned: true, webhookFormat: '' };
+  }
+  if (source?.preset === 'github-app') {
+    return { webhookPreset: 'github-app', webhookRepositories: source.repositories.join('\n'), webhookSigned: true, webhookFormat: '' };
+  }
+  if (source?.preset === 'custom') {
+    return { webhookPreset: 'custom', webhookSigned: true, webhookFormat: JSON.stringify(source.format, null, 2) };
+  }
+  const item = source && 'number' in source && source.number !== undefined && source.repository
+    ? { repository: source.repository, number: source.number } : null;
+  const gitlabChange = item ? gitlabIssueChangeFromEvents(events) : null;
+  return {
+    webhookPreset: source?.preset ?? DEFAULT_SCHEDULE_WEBHOOK_PRESET,
+    webhookSigned: !(source && 'signed' in source && source.signed === false),
+    webhookFormat: '',
+    // A specific GitLab issue: an address-based GitLab sender narrowed to one project and number.
+    ...(item ? { gitlabItem: `${item.repository}#${item.number}`, gitlabItemProject: item.repository,
+      gitlabItemNumber: item.number, gitlabItemKind: 'issue' as const,
+      ...(gitlabChange ? { gitlabIssueChange: gitlabChange } : {}) } : {}),
+  };
+}
+
+/** 自定义格式的 JSON 文本；不合法时返回 null。 */
+export function parseWebhookFormatText(text: string | undefined): ScheduleWebhookSource | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(text ?? '');
+  } catch {
+    return null;
+  }
+  const format = parseWebhookFormat(value);
+  return format ? { preset: 'custom', format } : null;
+}
+
+/**
+ * 保存时提交的发送方。本机认不出的预设（来自更新的版本）不提交，由引擎沿用原值，
+ * 否则会被当成 GitHub 覆盖掉。
+ */
+function webhookSourceInput(form: ScheduleFormState): { source?: ScheduleWebhookSource } {
+  const preset = form.webhookPreset;
+  if (preset === undefined) return {};
+  if (preset === 'github-app' && form.githubItemNumber !== undefined && form.githubItemRepository) {
+    return { source: { preset, repositories: [form.githubItemRepository], number: form.githubItemNumber } };
+  }
+  if (preset === 'github-app') return { source: { preset, repositories: parseGithubRepositories(form.webhookRepositories) } };
+  if (preset === 'plugin') {
+    // A condition row whose value was left empty is not a condition yet.
+    const sources = (form.webhookPluginSources ?? []).map((source) => {
+      const filters = source.filters?.filter((filter) => filter.value.trim() !== '');
+      return { plugin: source.plugin, ...(source.events ? { events: source.events } : {}), ...(filters?.length ? { filters } : {}) };
+    });
+    return { source: { preset, sources } };
+  }
+  if (preset === 'gitlab-plugin') {
+    // GitLab through the GitLab plugin is stored as that plugin's event source with project / MR / issue conditions.
+    if (!form.gitlabPluginId) return {};
+    if (form.gitlabItemNumber !== undefined && form.gitlabItemProject) {
+      if (form.gitlabItemKind === 'mr') {
+        return { source: { preset: 'plugin', sources: [gitlabPluginSource({
+          plugin: form.gitlabPluginId, ...(form.gitlabItemHost ? { host: form.gitlabItemHost } : {}),
+          project: form.gitlabItemProject, mr: form.gitlabItemNumber,
+          events: gitlabPluginMrChangeEvents(form.prChange ?? 'any'),
+        })] } };
+      }
+      return { source: { preset: 'plugin', sources: [gitlabPluginSource({
+        plugin: form.gitlabPluginId, ...(form.gitlabItemHost ? { host: form.gitlabItemHost } : {}),
+        project: form.gitlabItemProject, issue: form.gitlabItemNumber,
+        events: gitlabPluginIssueChangeEvents(form.gitlabPluginIssueChange ?? 'any'),
+      })] } };
+    }
+    const project = parseGitlabProjectReference(form.gitlabPluginProject ?? '');
+    return project ? { source: { preset: 'plugin', sources: [gitlabPluginSource({
+      plugin: form.gitlabPluginId, ...project, events: form.gitlabPluginEvents ?? [],
+    })] } } : {};
+  }
+  if (preset === 'custom') {
+    const source = parseWebhookFormatText(form.webhookFormat);
+    return source ? { source } : {};
+  }
+  const known = scheduleWebhookPreset(preset);
+  if (!known) return {};
+  const base = form.webhookSigned === false ? { preset: known.id, signed: false } : { preset: known.id };
+  return form.gitlabItemNumber !== undefined && form.gitlabItemProject
+    ? { source: { ...base, repository: form.gitlabItemProject, number: form.gitlabItemNumber } }
+    : { source: base };
+}
+
+export function parseGithubRepositories(text: string | undefined): string[] {
+  return [...new Set((text ?? '').split(/[\s,]+/).filter(Boolean).map(repo => repo.toLowerCase()))];
+}
+
+export function validGithubRepositories(text: string | undefined): boolean {
+  const repositories = parseGithubRepositories(text);
+  return repositories.length > 0 && repositories.length <= 50
+    && repositories.every(repo => /^[a-z\d][a-z\d-]{0,38}\/[a-z\d_.-]{1,100}$/i.test(repo));
 }
 
 export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput {
@@ -576,6 +856,7 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
     kind: 'cron',
     cronExpr,
     timezone: form.timezone.trim(),
+    expireAt: parseScheduleDeadline(form.deadline ?? '', form.sourceExpireAt),
     recurring: form.recurring,
     manual: form.manual,
     // 恒带 key：编辑 Cron 任务时 undefined 会沿 storage patch 契约清空旧 intervalMs；
@@ -584,6 +865,8 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
     agentKind: scheduleAgentKindForForm(form),
     modelAgentKind: !isScript ? form.modelAgentKind : undefined,
     modelAgentDeviceId: !isScript && (form.model.trim() || form.modelAgentKind) ? form.modelAgentDeviceId : undefined,
+    // 恒带 key：去掉模式时 undefined 沿 patch 契约清空。脚本与插件引擎任务不按模式选。
+    modelGroup: !isScript && !form.pluginEngine && form.modelGroup ? form.modelGroup : undefined,
     // 恒带 key:运行位置与模型 / 来源成对,update 时 undefined 清回本机。只有每次新建任务
     // (含持续会话首次与重建)才用它;绑定任务的运行位置跟随任务本身。
     agentDeviceId:
@@ -595,7 +878,28 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
     persistentSession: !isScript && form.persistentSession,
     silentWhenIdle: !isScript && form.silentWhenIdle,
     targetSessionId: hasRealBinding(form) ? form.targetSessionId.trim() : undefined,
+    ...(form.prEnabled === undefined ? {} : { prTrigger: form.prEnabled
+      ? { url: form.prUrl?.trim() ?? '', change: form.prChange ?? 'any' } : null }),
     preRunHook: buildPreRunHook(form),
+    ...(form.primaryHostKey ? { primaryHostKey: form.primaryHostKey } : {}),
+    preRunPlugin: buildPreRunPlugin(form),
+    // 表单带这个字段时恒带 key：关闭时 null 清空触发条件，接收地址和密钥一并作废。
+    ...(form.webhookEnabled === undefined ? {} : {
+      webhookTrigger: form.webhookEnabled
+        ? {
+            // Plugin sources choose event types per plugin; the engine rejects a top-level filter.
+            events: form.webhookPreset === 'plugin' || form.webhookPreset === 'gitlab-plugin'
+              ? []
+              // A specific Issue saves its condition as event filters; an unknown saved set is kept as is.
+              : form.webhookPreset === 'github-app' && form.githubItemNumber !== undefined && form.issueChange
+                ? issueChangeEvents(form.issueChange)
+                : form.gitlabItemKind !== 'mr' && form.gitlabItemNumber !== undefined && form.gitlabIssueChange
+                  ? gitlabIssueChangeEvents(form.gitlabIssueChange)
+                  : (form.webhookEvents ?? '').split(',').map((name) => name.trim()).filter(Boolean),
+            ...webhookSourceInput(form),
+          }
+        : null,
+    }),
     notify: {
       desktop: form.notifyDesktop,
       feishu: form.notifyFeishu,
@@ -623,6 +927,21 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
 
   if (isHeartbeat) {
     base.useWorktree = false;
+    if (form.pluginEngine) {
+      const pluginDeviceId = form.pluginEngine.deviceId?.trim() || '';
+      return {
+        ...base,
+        agentKind: 'acp',
+        modelAgentKind: 'acp',
+        model: form.pluginEngine.modelId || PLUGIN_ENGINE_DEFAULT_MODEL,
+        providerId: form.pluginEngine.providerId,
+        effort: form.pluginEngine.effort,
+        fastMode: false,
+        agentDeviceId: form.persistentSession ? (pluginDeviceId || undefined) : undefined,
+        // 绑定任务显式保存插件引擎的位置：'' = 本机(使绑定的远程任务能切回本机)，或远程 deviceId。
+        modelAgentDeviceId: pluginDeviceId,
+      };
+    }
     // Keep the key when following so an update clears a previously saved Fast override.
     base.fastMode = form.modelAgentKind ? form.fastMode : undefined;
     base.model = form.model.trim() || undefined;
@@ -644,6 +963,21 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
   // codex 会让用户在 Pi 任务里开的 Fast 被静默丢弃(codex review)。表单侧 Fast 开关已按
   // capability × 模型 supportsFastMode 门控,Pi 只有真支持时才可能为 true。
   if (form.agentKind === 'codex' || form.agentKind === 'pi') base.fastMode = form.fastMode;
+  if (form.pluginEngine) {
+    // 插件引擎：每次新建任务或持续会话(本机或另一台电脑)；没有 Fast，worktree 与内置引擎相同。
+    const pluginDeviceId = form.pluginEngine.deviceId?.trim() || undefined;
+    return {
+      ...base,
+      agentKind: 'acp',
+      modelAgentKind: 'acp',
+      model: form.pluginEngine.modelId || PLUGIN_ENGINE_DEFAULT_MODEL,
+      providerId: form.pluginEngine.providerId,
+      effort: form.pluginEngine.effort,
+      fastMode: false,
+      agentDeviceId: pluginDeviceId,
+      modelAgentDeviceId: pluginDeviceId,
+    };
+  }
   return base;
 }
 
@@ -658,12 +992,14 @@ export function scheduleToUserCreateInput(
     kind: schedule.kind,
     cronExpr: schedule.cronExpr,
     timezone: schedule.timezone,
+    expireAt: schedule.expireAt,
     recurring: schedule.recurring,
     manual: schedule.manual,
     intervalMs: schedule.intervalMs,
     agentKind: schedule.modelAgentKind ?? schedule.agentKind,
     modelAgentKind: schedule.modelAgentKind,
     modelAgentDeviceId: schedule.modelAgentDeviceId,
+    modelGroup: schedule.modelGroup,
     model: schedule.model,
     providerId: schedule.providerId,
     agentDeviceId: schedule.agentDeviceId,

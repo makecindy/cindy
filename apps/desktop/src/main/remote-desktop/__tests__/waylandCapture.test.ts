@@ -1,5 +1,26 @@
 import { expect, it } from 'vitest';
-import { isWaylandDesktop, selectPortalSource, waylandDesktopSize } from '../waylandCapture';
+import {
+  isWaylandDesktop,
+  selectPortalSource,
+  waylandDesktopSize,
+  xwaylandSessionEvidence,
+} from '../waylandCapture';
+
+it('flags X11 Electron under a Wayland compositor even when XDG_SESSION_TYPE is missing (#9712)', () => {
+  // The reported shell had only DISPLAY; the compositor's socket was the only Wayland signal.
+  expect(
+    xwaylandSessionEvidence('x11', { DISPLAY: ':0' }, ['wayland-1', 'wayland-1.lock']),
+  ).toEqual(['socket wayland-1']);
+  expect(xwaylandSessionEvidence('x11', { XDG_SESSION_TYPE: 'wayland' }, [])).toEqual([
+    'XDG_SESSION_TYPE=wayland',
+  ]);
+  expect(
+    xwaylandSessionEvidence('x11', { XDG_SESSION_TYPE: 'x11', DISPLAY: ':0' }, ['bus']),
+  ).toEqual([]);
+  expect(
+    xwaylandSessionEvidence('wayland', { XDG_SESSION_TYPE: 'wayland' }, ['wayland-0']),
+  ).toEqual([]);
+});
 
 it('isolates Wayland and XWayland hosts from X11, macOS and Windows', () => {
   expect(isWaylandDesktop('linux', { XDG_SESSION_TYPE: 'wayland' })).toBe(true);

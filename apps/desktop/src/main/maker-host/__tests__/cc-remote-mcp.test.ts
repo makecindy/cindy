@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { RemoteHost } from '@cindy/maker-remote-ssh';
 
-import type { CodexHttpBridge } from '../../mcp-integrations/codexHttpBridge.js';
+import type { CodexHttpBridge } from '../../mcp-integrations/codexHttpBridge.desktop.js';
 import {
   CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY,
   CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY,
@@ -117,7 +117,8 @@ describe('buildCcRemoteHttpMcpServers', () => {
     vi.clearAllMocks();
   });
 
-  it.each([true, false])('injects the helper only for an identified Bot (bot=%s)', async (botSession) => {
+  // #8406: ordinary SSH tasks need the same instance-bound introspection transport.
+  it.each([true, false])('injects the helper for an identified remote task (bot=%s)', async (botSession) => {
     const { bridge, registered } = fakeBridge();
     const allowed = resolveBotAllowedBuiltinPluginIds([{
       id: 'xdt_helper',
@@ -132,11 +133,9 @@ describe('buildCcRemoteHttpMcpServers', () => {
       ensureBridgeStarted: async () => ({ port: 38080, serverNames: ['cindy_helper', 'cindy_orca'], bridge }),
       ensureForward: async () => 47921, getBridgeToken: () => 'remote-test-token', isCollabEnabled: () => false,
     });
-    expect(Object.keys(servers)).toEqual(botSession ? ['cindy_helper'] : []);
-    if (botSession) {
-      expect(servers.cindy_helper).toEqual({ type: 'http', url: 'http://127.0.0.1:47921/mcp/cindy_helper?session=bot-session&instance=bot-instance', headers: { Authorization: 'Bearer remote-test-token' } });
-      expect(registered.get('bot-session')).toMatchObject({ sessionInstanceId: 'bot-instance', remoteHostId: 'host-1' });
-    }
+    expect(Object.keys(servers)).toEqual(['cindy_helper']);
+    expect(servers.cindy_helper).toEqual({ type: 'http', url: 'http://127.0.0.1:47921/mcp/cindy_helper?session=bot-session&instance=bot-instance', headers: { Authorization: 'Bearer remote-test-token' } });
+    expect(registered.get('bot-session')).toMatchObject({ sessionInstanceId: 'bot-instance', remoteHostId: 'host-1' });
     cleanup();
     expect(registered.size).toBe(0);
   });

@@ -19,6 +19,10 @@
   <a href="https://cindy.cn">中国大陆官网</a> &nbsp;·&nbsp; <a href="https://cindy.app">国际版官网</a>
 </p>
 
+<p align="center">
+  <a href=".github/assets/star-history/trending-2026-10-26.png">★ GitHub Trending #1 · 2026.10.26</a>
+</p>
+
 Cindy 是一个**开源、开箱即用的 AI Agent**。连接你的多台电脑与手机，把熟悉的
 Agent、模型和已有订阅放在一起，培养一个懂你工作方式的伙伴。
 
@@ -66,7 +70,7 @@ Agent、模型和已有订阅放在一起，培养一个懂你工作方式的伙
 回答也不只有文字：**图表、交互控件和丰富的 HTML 内容**，都能出现在对话里。
 
 把重复的事情设成**自动化**，或者从接入的 Slack、飞书等聊天渠道交办。
-通过 **Skill、插件和 MCP**，继续连接自己的工具与工作方法。
+通过 **Skill、插件和 [MCP](docs/mcp-apps.md#接入)**，继续连接自己的工具与工作方法。
 
 ## 一开始就好用，任你打扮，任你培养。
 
@@ -90,6 +94,42 @@ Agent、模型和已有订阅放在一起，培养一个懂你工作方式的伙
 
 Linux 用户可参考 [Ubuntu、Arch Linux 与 Omarchy 安装指南](docs/linux.md)。
 
+<details>
+<summary>可以离线建立伙伴，并在任何模型推理前完成设置吗？</summary>
+
+**跳过登录**可以在离线时进入桌面端主界面，无需 Cindy 账号。
+依赖 Cindy 账号的服务需要登录；已连接的第三方 API 模型仍可使用。
+
+- **从零创建命名伙伴需要可用模型。** 在「伙伴 → + → 新建伙伴」中选择实际能运行的模型。
+  准备期间会自动启动首次问候，不必等你发送第一条消息；
+  运行时受理问候轮次后即标为就绪，不要求等完整回复显示。
+- **内置 Cindy 即使已在列表中，也可能仍在等待模型。** 首次准备未完成或失败时，
+  姓名、简介、性格与「关于我的记忆」仍只读；
+  模型设置仍可使用，可通过「更换模型」或重试继续准备同一个伙伴。
+- **目前没有受支持的手写声明／零推理建档入口**，Linux 国际版 **0.1.143** 也不支持：
+  无法通过这种方式在任何推理前创建命名伙伴、编辑资料、性格和偏好、
+  保存，并在重启后读回核对。
+- **导入不等于通用声明文本格式。** Hermes／OpenClaw 导入可以先保存识别到的来源应用资料，
+  再完成设置；原生伙伴包仅限随安装包提供并经过校验的清单，不接受用户自制包。
+- **兼容且实际可用的本地模型仍会推理**，包括普通新建伙伴的首次问候；离线不等于零推理建档。
+
+</details>
+
+<h3 align="center">好像，被一些人发现了。</h3>
+
+<p align="center">
+  <a href="https://github.com/makecindy/cindy/stargazers">
+    <picture>
+      <source media="(prefers-color-scheme: dark) and (max-width: 600px)" srcset="https://raw.githubusercontent.com/makecindy/cindy/readme-star-history/stars-dark-mobile.svg">
+      <source media="(max-width: 600px)" srcset="https://raw.githubusercontent.com/makecindy/cindy/readme-star-history/stars-light-mobile.svg">
+      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/makecindy/cindy/readme-star-history/stars-dark.svg">
+      <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/makecindy/cindy/readme-star-history/stars-light.svg">
+      <img src=".github/assets/star-history/stars-light.svg" width="100%" alt="Cindy 的 GitHub Star 趋势">
+    </picture>
+  </a>
+</p>
+<p align="center"><sub>每一颗星，都有好好记着。</sub></p>
+
 ---
 
 ## 给开发者
@@ -103,7 +143,7 @@ Linux 用户可参考 [Ubuntu、Arch Linux 与 Omarchy 安装指南](docs/linux.
 | `apps/desktop` | Electron 桌面客户端 |
 | `apps/mobile` | Expo / React Native 手机客户端 |
 | `packages/*` | 客户端共享能力（鉴权、device-link、agent 编排、模型供应商等） |
-| `apps/*-bin` | 桌面端附带的工具二进制，均不入库；claude-code / codex / ripgrep 由 `pnpm install` 按平台自动下载，Android platform-tools 在 Windows 打包前按 pin 版本下载并校验 sha256 |
+| `apps/*-bin` | 桌面端附带的工具二进制，均不入库；claude-code / codex / ripgrep / pi 由 `pnpm install` 按平台自动下载，Android platform-tools 在 Windows 打包前按 pin 版本下载并校验 sha256 |
 
 **服务端不在本仓库：** 服务端位于独立仓库，不属于本 monorepo。
 
@@ -114,8 +154,8 @@ Linux 用户可参考 [Ubuntu、Arch Linux 与 Omarchy 安装指南](docs/linux.
 
 ### 前置要求
 
-- **Node.js** 22.x
-- **pnpm** 10.x（暂不支持 v11）
+- **Node.js** >= 22.13（以根 `package.json` 的 `engines.node` 为准）
+- **pnpm** 11.x（`>=11.25 <12`，以根 `package.json` 的 `engines.pnpm` 与 `packageManager` 为准）
 - **Git LFS**
 
 ### 开始开发
@@ -180,15 +220,17 @@ agent；进入后应用内的账号状态显示为「未登录」。依赖服务
 
 ## 隐私与遥测
 
-**官方分发的安装包**包含 [TapDB](https://www.taptap.cn/tapdb) 使用统计，用于
-产品层面的汇总分析，包括设备标识、系统 / 应用版本、启动与活跃事件；登录后会
-关联账号 ID，因此不应理解为完全匿名。TapDB **不采集**聊天内容、文件内容或
-工作目录数据。
+**官方分发的安装包**包含 [TapDB](https://www.taptap.cn/tapdb) 使用统计，结合设备标识、
+系统和应用版本了解启动与回访。登录后，回访使用区域内的账号代号。参与统计的桌面设备
+按同一代号汇总每天选择的模型和模型用量。充值使用单独的代号。桌面使用新的设备标识。
+手机沿用原设备标识，能查看旧记录的人可能据此将新代号关联到原账号 ID。
+对话、提示词、文件和工作目录数据均不在统计范围内。
 
 **无需修改代码即可关闭使用统计**：桌面端在「设置 → 关于 → 使用统计」，移动端在
 设置页的「使用统计」关闭。SDK 检查本地记录的隐私同意状态和统计开关，统计开关
 默认开启。同意《隐私政策》会记录同意状态；符合条件的存量已登录用户也会通过一次性
-迁移记录为已同意。
+迁移记录为已同意。升级沿用原开关。每台桌面设备在升级并开始参与后才按账号统计模型用量，
+升级前的用量不会作为账号历史补传。
 
 **移动端已知例外**：企业 SSO 跳过协议勾选。如果本机尚无统计同意记录，并在重启应用后
 恢复该登录态，当前迁移逻辑可能把新装用户也标记为已同意。在已配置 TapDB 且统计开启时，

@@ -4,20 +4,31 @@
 > **读取时机**：修改个人 IM 渠道（`apps/desktop/src/main/im/**`）或官方 hook
 > （`apps/desktop/src/main/hook-control/**`）的找/建任务、命令、排队与插话、输入拼装、
 > 事件观察、表情、交互、收尾或停止逻辑之前
+> **适用路径**：`apps/desktop/src/main/im/**`、`apps/desktop/src/main/hook-control/**`
 
 个人 IM 渠道（Telegram / 飞书 / 微信 / 钉钉 / Discord / 企业微信）与官方 hook（官方
-Telegram / Slack / X）是同一件事的两套实现：把渠道里的一条消息变成 Cindy 任务里的一轮，
+Telegram / Slack / X / 飞书 / Lark / Discord）是同一件事的两套实现：把渠道里的一条消息变成 Cindy 任务里的一轮，
 再把结果送回渠道。本文登记两套实现**今天各自在哪一步做了什么**、**持有哪些状态**、
 **合并后归谁**，以及迁移中必须守住的不变量。用户可见的两侧差异另见
 [`../product-rules/telegram-bot-parity.md`](../product-rules/telegram-bot-parity.md)；
 台账里标「有意不同」的项以策略参数表达，合并时不抹平。
 
-连接恢复由渠道 transport 持有，不重放任务或发送内容。Telegram、Discord 的启动网络失败与
+模型输入的语言／文风规则（2026-11-15）：IM 不附加界面语言、文学形式或暂停／恢复文风说明；
+官方 hook 的 `promptWithNote` 仅保留渠道与实际业务上下文说明。模型正文和错误说明随来信、
+用户要求及模型决定，宿主固定控制文案仍按各渠道本地化规则生成。实现与发送回归见
+[session-runner.ts](../../apps/desktop/src/main/hook-control/session-runner.ts) 和
+[session-runner.test.ts](../../apps/desktop/src/main/hook-control/__tests__/session-runner.test.ts)；
+产品台账见 [Telegram bot 对齐](../product-rules/telegram-bot-parity.md)。
+
+连接恢复由渠道 transport 持有，不重放模型任务。Discord 的已完成文本终稿可由本机持久出箱补送（见下节）；其它个人渠道不重放发送内容。Telegram、Discord 的启动网络失败与
 钉钉的连接失败使用可取消的指数退避（约 1 秒起、30 秒封顶，带抖动）；Telegram 429 尊重
 服务端完整等待时间。飞书保留 SDK 重连，仅在 SDK 耗尽重试或启动抛错后补重试；就绪日志须
 与 SDK 真实连接状态一致。微信、企业微信保留已有重试循环。恢复成功立即更新状态，
 不等待下一条消息；凭据失效保留明确错误，冲突沿用各渠道原策略。主动下线、解绑、换账号或退出
 必须取消重试，旧连接结果不得复活。设置页的手动重连复用保存的凭据，不要求重新输入或解绑。
+Telegram 建连握手（`getMe`）限时 15 秒，超时按启动网络失败处理；长轮询不套用该时限。
+新绑定保存时若只是握手超时，凭证照常回滚，设置卡与伙伴「消息平台」对话框保留刚填的内容并提示「连接超时，请重试」，原输入直接重试，连上后才显示已连接（替换已有绑定时照旧恢复并重连旧绑定，界面按已有绑定显示）；超时只在本机保存结果里单独标出（`saveTimedOut`、伙伴添加的 `CONNECT_FAILED: timeout`），跨设备状态仍是 `code='network'`。
+账号 IM 启动时设置页个人 bot 与伙伴自有连接同时起，伙伴连接之间也并行，一条慢或失败不推迟其它连接。
 
 退避计算、默认间隔、抖动和可取消定时器统一放在 `@cindy/im/connection-retry`：飞书、
 Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询复用同一退避策略。
@@ -37,6 +48,62 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
 设置页在自动模式下随目录更新重读实际模型，加载、刷新与保存共用请求代次，迟到刷新不得
 覆盖用户刚固定的模型或切换后的渠道。
 
+## 0. 项目清单（2026-11-13）
+
+插件 IM 入口可经批准的 `tasks.imProjects/create/followImProject` 使用同一份项目与配置，
+不读私有文件、不另存模型默认值；微信包装插件按群/私聊保存项目选择。插件还可按群/私聊覆盖自己任务的
+模型与权限（`imOverride`，只改该任务、不写共用配置；比项目更宽的权限需用户在 Cindy 确认框里允许），
+声明 `imEntrance` 的插件会让设置页在没开官方机器人时也显示「项目与模型」。具体合同见
+[插件 IM 共用项目与模型](protocol-compatibility/plugin-im-projects.md)。官方渠道原有命令和镜像协议不变。
+
+**IM 和侧栏读取同一份本机项目登记**。IM 按登记、别名和用户移除状态生成选择清单；侧栏还按伙伴所在电脑和分组设置决定显示哪些行。界面与机器人文案一律叫
+「项目」，「工作目录」只指 Agent 实际干活的那个目录（术语表）。
+
+- **官方机器人**（Slack / Telegram / X / 飞书）：可选项目 = 当前账号的本机项目（登记过的目录减去侧栏里
+  移除的；包含本机已登记的伙伴项目，伙伴搬家后留下的目录继续作为普通项目使用），外加内置「对话」。`hook-control/projectWorkspaces.ts`
+  把项目列表投影成协议里的「名称 → 目录」表，名称跟随侧栏；`projectWorkspaceSync.ts` 在账号就绪、
+  项目列表变化（`projectCatalogEvents.ts`）、打开设置页与 IM 里查询项目之前各整理一次。设置页只列出
+  这些项目并提供「添加项目」（登记进侧栏），改名与移除在侧栏做。升级前手动配置的目录在第一次整理时
+  登记成项目，原别名改为侧栏名字，旧别名留作查找；按名称存的偏好与默认项目跟着改名。这份表同时是
+  「IM 能驱动哪些目录」的边界：一个项目要被执行，仍须由主人在 IM 里用 `/project` 选中，或在设置里设为
+  默认项目。项目选择只授权目录，伙伴私有任务仍按其专用入口校验。协议约定见 [`protocol-compatibility/hook-project-names.md`](protocol-compatibility/hook-project-names.md)。
+- **官方机器人共用一套项目配置**：每个项目的 Agent、模型、思考强度、权限档与模型来源只有一份
+  （`hook-control/sharedProjectPrefs.ts`，存在本机偏好文件里渠道键为 `shared` 的行），飞书、Telegram、
+  Slack、X 用到同一个项目时都按它跑；默认项目同样只有一个（Telegram / 飞书 / X 共用，Slack 仍在每个
+  频道里各自选项目）。设置页只有一处「项目与模型」，不按机器人重复。各渠道自己的行不再是正本，只是给
+  各自服务端 `/model`、`/settings` 卡看的镜像：共用那份变了就投影到已连接的渠道行，再由
+  `workspacePrefsMirror.ts` 推给服务端；在 IM 里用 `/model` 卡改的值并回共用那份，再投影到其他渠道
+  （快照里明确带着的全空行算「清回默认」；整行不在快照里不算改动，不会据此清空）。升级时各渠道原有配置一次性并入，顺序固定为
+  飞书 → Telegram → Slack → X：模型取第一个配置过该项目的渠道，权限档取各渠道显式填过的里面最严的
+  一档，合并不放宽任何项目；某个渠道还没连上过服务端时，它的旧配置等第一次连上后再并入（仍按上述
+  顺序：排在前面的渠道会顶替先并入、之后没被改过的行，结果与哪个机器人先连上无关），在那之前它
+  继续按自己的行跑。服务端协议与存储不变。没单独配置过的字段按「IM 新任务默认」里全局那份解析，四个
+  官方机器人都读这一份（官方 Slack 以前另读 `slack` 那份，现已并到全局）。这两份都没有界面入口：
+  旧版「新对话配置」留在盘上的值，升级后第一次启动时清掉一次（`clearLegacyGlobalDefaultsOnce`，
+  只做一次并记下），此后这些项目按内置默认跑；设置页不再有让用户自己「恢复默认」的提示。项目从
+  侧栏移除、或它的名称转给了另一个目录时，按这个名称存的模型、权限与来源一并清掉
+  （`releasedProjectNames` → `clearWorkspacePrefsFor`），同名的新项目不会继承；IM 里按名称记着的
+  旧会话不另做处理，名称现在指哪个项目就落进哪个项目。设置页里这块排在各机器人卡片之后，每个
+  项目一行，卡片展开后末尾有一行指向它。
+- **换项目后的任务归属**：复用绑定的任务要求它就在这次点名的项目里（同一项目内换目录、任务自己的
+  worktree 照旧跟随）。在 IM 里把会话从项目 A 切到 B 后，下一条消息在 B 里新建任务，不再进 A 的旧任务；
+  桌面端把任务移到别的项目同理，原会话下一条消息在它点名的项目里新建。
+- **个人机器人**：`/ctr` 第一步与 `/project` 切换卡也读取这份项目登记（`im/shared/controlProjects.ts`，
+  名字跟随侧栏、含没有任务的项目、不含已移除的）；`/ctr` 另带不在任何项目里的对话任务目录。
+  `/project` 在个人 Telegram 与个人飞书可用；用它切进项目的会话，启动时的托管目录归一与分组补写
+  （`im/index.ts`、`feishu/legacySessionBackfill.ts`）都不得把它改回去。
+- **个人飞书机器人的按群设置**（2026-11-23）：设置页「飞书 / Lark 机器人 → 群聊」可给机器人所在的群单独
+  选项目、模型（含推理强度、来源、执行位置）与权限，存在 `owners/<账号>/feishu-group-settings.json`
+  （`im/feishu/groupSettingsStore.ts`），群主线与话题共用，伙伴连接不读。新任务（含群里 `/new`）的取值
+  顺序（用户裁决）：模型——群单独设的 > 群绑定项目在上面「项目与模型」里的那一行（与插件同一个解析
+  `resolveSharedImProjectConfig`）> 渠道「新对话配置」，只有没绑项目的群才用「新对话配置」；权限——
+  群单独设的 > 绑定项目那一行（没填按完全访问，同插件）> 渠道「群聊新建任务权限档」。群工作目录只在新建与
+  `/new` 时生效。选「对话」后，`/new` 会将该群任务移回托管对话目录；「跟随默认」也只在任务确实位于绑定项目目录时才按那一行切换，
+  还在对话目录里的旧任务仍跟随渠道。项目名表与解析经端口取用（`im/feishu/groupOverrides.ts`，由
+  `groupProjectPortsWiring.ts` 在 bootstrap 接上），不直接引用 hook-control，避免循环依赖。设置页把群
+  改成完全访问、换项目或恢复继承会让群里新任务的权限变宽时先确认；在个人飞书里用 `/model` 只改当前任务，不写回
+  「项目与模型」。
+
 ## 1. 入口账本
 
 每一行是一轮任务的一个步骤。「现状」列写真正干活的函数；「目标」列写合并后的归属：
@@ -47,14 +114,14 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
 |---|---|---|---|
 | 入站 | 各渠道 adapter → `im/shared/messageHandler.ts`（微信经 `WechatTaskStore` 持久队列） | `hook-control/manager.ts` 收 `task.dispatch` → `dispatcher.handleDispatch` | 渠道适配（入站来源各自保留） |
 | 幂等与重投 | 无（个人连接无重投） | `ackHistory` / `inflightRequests` / `terminalLedger` | 渠道适配（服务端重投是 hook 的传输语义） |
-| 找任务 | `turnRunner.resolveRouteTarget`：通知回复 → `/ctr` 绑定 → 确定性 id 通道行（`sessionRepo.findActiveSession` 复活归档行） | `dispatcher.resolveTarget`：接管 sessionId → 绑定复用（每条消息按工作目录映射现场重算）→ 失效则换任务并交接 | 共用流程的「定位」骨架 + 渠道策略（台账第三节「绑定的任务失效后怎么接续」有意不同） |
+| 找任务 | `turnRunner.resolveRouteTarget`：通知回复 → `/ctr` 绑定 → 确定性 id 通道行（`sessionRepo.findActiveSession` 复活归档行） | `dispatcher.resolveTarget`：接管 sessionId → 绑定复用（每条消息按项目清单现场重算：任务必须就在这次点名的项目里）→ 绑定的普通任务已归档且原目录可用时原地恢复 → 失效则换任务并交接 | 共用流程的「定位」骨架 + 渠道策略（台账第三节「绑定的任务归档后怎么接续」） |
 | 建任务 | `sessionRepo.createSession` 确定性 id upsert；`createFreshSession`（`/new` 轮换事务）；随后 `maker.createSession` —— 2026-10 起两处建行都经 `openChannelSession` → **`openSession`**（模型准入） | `session-runner` 新任务的 `maker.createSession`、`/new` 的 `desktopSessionStorage.create` —— 同样经 `openChannelSession` → **`openSession`** | **公共入口 `openSession`**（已完成，批次 2）；渠道专属建行在 commit 回调里。live session 仍各自 `maker.createSession`，未改用 register 内部的 `bootstrapSession`（会新增项目上下文 / Orca 指令注入等行为，见 §6） |
 | 默认配置 | `resolveImSessionDefaults(channel)` + 跟随渠道默认（`channelDefaultRouteSync`） | `resolveNewSessionConfig`（目录偏好 > 全局 IM 默认 > 清单首项；权限档规则见 `defaults.ts`）+ 共用 `createDefaultRouteFollower` 跟随默认 | 渠道策略（台账第三节「新会话的默认…从哪读」有意不同） |
 | 命令 | `messageHandler.processOne` → `slashCommands`（注册表 `botCommands.ts`） | 服务端分发命令，桌面只收 `query.*` | 渠道适配（官方命令分发在服务端） |
-| 排队与插话 | `SessionState.sendQueue`（内存、无上限、重启丢失）；无插话 | `dispatcher.queues`（内存、上限 20）+ `drainPolls`；无插话 | **公共入口 `AgentInputCoordinator`**（见 §5 批次 3 与 §6 待决项） |
+| 排队与插话 | `SessionState.sendQueue`（内存、无上限、重启丢失）；iMessage 精确匹配的聊天可插话 | `dispatcher.queues`（内存、上限 20）+ `drainPolls`；无插话 | **公共入口 `AgentInputCoordinator`**（见 §5 批次 3 与 §6 待决项） |
 | 输入拼装 | `prepareAgentTurnText`（群上下文 / ambient 提示）+ `buildImChannelNote` + `buildImUserMessage`；派发时前置交接 / 计划对账 / Goal 提示 | `buildContextPrefix` + `composeXPrompt` + `buildHookPromptNote`；同样前置交接 / 计划对账（仅 IM 来源）/ Goal 提示 | 共用流程（前置层同一份；渠道说明文案有意不同，见台账「入站上下文」） |
 | 用户消息落库 | 部分渠道提前落库（`persistInboundUserMessageEarly`），`onAccepted` 补 `imSource` | 只在 `onAccepted` 落库，`agentMeta.hookSource` | 共用流程（`onAccepted` 落库；提前落库保留为渠道能力） |
-| 发送 | 发送前应用任务待切换选择，再 `makerSession.send`，`MAIN_OWNED_SEND_CONTEXT.origin.kind='im'` | 复用任务先经 `acquirePendingAgentSwitchForImSend` 跟随默认并应用任务选择，再读 meta、建会话、挂观察器和 `session.send`；发送后释放锁，origin `hook`（Telegram/X）或 `im`（Slack） | 待切换选择共用既有直发流程；Pi 管理命令授权来源按渠道各自声明（hook 不得伪装成本机命令） |
+| 发送 | 发送前应用任务待切换选择，再 `makerSession.send`，`MAIN_OWNED_SEND_CONTEXT.origin.kind='im'` | 复用任务先经 `acquirePendingAgentSwitchForImSend` 跟随默认并应用任务选择，再读 meta、建会话、挂观察器和 `session.send`；发送后释放锁，origin `hook`（Telegram / X / 飞书）或 `im`（Slack） | 待切换选择共用既有直发流程；Pi 管理命令授权来源按渠道各自声明（hook 不得伪装成本机命令） |
 | 观察事件 | `turnPresenter`（buffer-replace）+ 流式 handle | `turnObserver`（finalized-segments）+ 进度发射器 | 共用流程（presenter 已同源；两个正文累积引擎有意不同） |
 | 后台轮次回传（非 IM 入站） | `orchestrator` 的 `onChannelTurn` → `turnRunner` 转播（Agent 自己唤醒的轮次只同步标记已接线的会话） | `backgroundResults` → `turn.end(background: true)` | 已同源判据：`maker-ipc/channelTurnSignal.ts` 的开始信号与 `isRelayedChannelTurnSource`（其它任务来信；后台唤醒继承当前 Session 最近实际派发的来源，Cindy 输入及内部协调不回传；scheduler 按 `turnOrigin`）；仍属原 IM 轮次的不另发 |
 | 表情 | `TurnState` 的 ack 句柄 | `ackReactions`（msg.op react） | 渠道适配（出站载体不同，档位语义同源） |
@@ -83,7 +150,7 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
 | `pendingInteractions.pending` / `interactions.ts pending` | 两侧 | requestId / interactionId | 并入（批次 5：交互挂起表合一，超时策略按渠道参数） |
 | `groupHistoryAccess.activeBySession` | `im/shared` | sessionId | 已同源，不动 |
 | 群消息本地窗口（`hook_group_messages`）与上下文游标（`hook_group_context_cursors`） | `im/shared/groupWindowCore.ts`；个人渠道经 `im/shared/channelGroupWindow.ts`（Telegram / 企业微信 / 钉钉各一份 provider 前缀，`<渠道>-personal:<botContextId>`），官方经 `hook-control/groupWindow.ts` | provider + chat / cursorKey | 已同源，不另建存储：新渠道接群上下文时复用 `createChannelGroupWindow`，在 `prepareAgentTurnText` 入窗并拼前缀、受理后 `commit`，终稿发出后把机器人回复入窗 |
-| `channelToolScope.activeBySession`（`cindy_telegram_bot` / `cindy_feishu_bot` 轮次内工具的逐轮作用域） | `im/shared` | sessionId | 个人渠道能力；与群历史租约同一生命周期（`beforeProviderStart` 登记、`releaseTurnInteractionRoute` 释放）。Telegram、飞书 / Lark 各一种作用域，带着触发本轮那条连接自己的 transport；企业微信 / 钉钉 / Discord 没有渠道直通工具，伙伴专线轮次由 `messageHandler` 登记不带 transport 的 `LaneTurnScope`（只给触发者身份与当前对话）；`cindy_feishu_bot` 的 `send_*_to_user` 优先按它选出站 bot，无租约时按下述主人通知规则解析 |
+| `channelToolScope.activeBySession`（`cindy_telegram_bot` / `cindy_feishu_bot` / `cindy_discord` 轮次内工具的逐轮作用域） | `im/shared` | sessionId | 个人渠道能力；与群历史租约同一生命周期（`beforeProviderStart` 登记、`releaseTurnInteractionRoute` 释放）。Telegram、飞书 / Lark、Discord 各一种作用域，带着触发本轮那条连接自己的 transport；企业微信 / 钉钉没有渠道直通工具，伙伴专线轮次由 `messageHandler` 登记不带 transport 的 `LaneTurnScope`（只给触发者身份与当前对话）；`cindy_feishu_bot` 的 `send_*_to_user` 优先按它选出站 bot，无租约时按下述主人通知规则解析 |
 | Telegram 传输层（`chatQueues` / `typingLoops` / 回挂目标） | `packages/lizi-im/src/telegram/index.ts` | chat | 保留（个人出站载体） |
 
 **飞书主人通知的无租约路径**：`send_message_to_user` / `send_file_to_user` 在伙伴 canonical
@@ -112,20 +179,29 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
    IM 写 `agentMeta.imSource`，hook 写 `agentMeta.hookSource`；新数据不得塞进 `origin`
    （coordinator 把任何 `origin.kind` 当非人工输入）。
 4. **Pi 管理命令授权来源**：个人 IM 用 `authenticated-im-command`；官方 hook 的 origin
-   是 `hook`，**不得**伪装成 `local-desktop-command`；`MAIN_OWNED_SEND_CONTEXT` 是 Symbol，
+   是 `hook`，**不得**伪装成 `local-desktop-command`；官方 Telegram、官方飞书 / Lark、官方 Discord 与对应个人 bot
+   共用 `source.im`（`telegram` / `feishu` / `discord`），hook 路径（`session-runner.ts` 的 `mainOwnedChannelOrigin`）
+   必须显式映射成 `{ kind: 'hook' }`，**不得**落到个人 bot 的可信 `im` 来源（回归：`session-runner.test.ts`
+   「线程来源」表）；`MAIN_OWNED_SEND_CONTEXT` 是 Symbol，
    跨队列快照时必须由宿主在派发时重新盖章，不能指望它随队列项持久化。
 5. **session-new-v1**：`/new` 成功时新任务已落库并出现在列表；**turn-reopen-v1**：续跑轮
    断连即终局、`turn.end` 直发不缓存。
 6. **群历史租约与渠道工具租约**：`beginGroupHistoryAccess` / `beginChannelToolScope` 都在 provider 真正
    开始这一轮前登记、终态释放；`sessionInstanceId` 挡住旧实例借用新权限。轮次内原生 API 的目标 chat 与
    触发者身份只来自租约，不来自模型参数，无租约时 fail closed；飞书 `send_*_to_user` 的主人通知
-   例外见上节，不扩大原生 API 的作用域。每个可绑定渠道的 `channelNoteSourceFor` 都要在 `[渠道说明]`
+   例外见上节，不扩大原生 API 的作用域。iMessage 伙伴渠道专线另有一条无租约路径（2026-11-22）：
+   当前输入是主人在 Cindy 里的输入、或本轮是 scheduler 时，`im/imessage/laneScope.ts` 由宿主把作用域
+   解析为这条专线自己的聊天（主人输入保留主人身份，scheduler 不带主人身份），会话实例或输入边界变化即作废；
+   入站租约存在时始终以租约为准。伙伴渠道专线上的 scheduler 轮次不因「静默运行」压下渠道终稿。每个可绑定渠道的 `channelNoteSourceFor` 都要在 `[渠道说明]`
    末尾给 `toolsHint` 点名本轮可用的渠道工具（Telegram：`TELEGRAM_TOOLS_HINT`；飞书：`feishuToolsHint`），
    Agent 不该靠摸瞎试工具才知道自己在哪个渠道；新增可绑定渠道时四件事一起补——渠道说明提示、
-   `channelToolScopeFor` 作用域、轮次内直通工具、以及该渠道工具在**三个 Harness** 的挂载门禁
+   `channelToolScopeFor` 作用域、轮次内直通工具、以及该渠道工具在**内置三个 Harness** 的挂载门禁
    （`shared/botImConnection.ts` 的 `hasImChannelVendorOptions`：专线带 `<channel>ChatId`，伙伴主任务带
    `cindyBotImChannels` 标记；Codex / Pi 的共享 bridge 用空 ctx 建清单，provider `isEnabled` 必须在空
-   workdir 快照放行，再由 `codexEnvironment.buildSessionMcpConfig` / `piEnvironment` 逐会话收可见性）。
+   workdir 快照放行，再由 `codexEnvironment.buildSessionMcpConfig` / `piEnvironment` 逐会话收可见性）；
+   插件执行引擎（`acp`）任务接管 IM 时按执行电脑目录准入与读权限档，带逐轮审批策略的轮次严格要求引擎声明
+   `_meta.permissionGate`，未声明一律 fail-closed（见[ACP 插件执行引擎](acp-plugin-harness.md)与
+   [IM 权限确认](../product-rules/im-permission-confirmation.md)）。
    渠道工具租约还被 `botSkillService` 复用来判定专线上「是不是主人触发的轮次」；没有 `channelToolScopeFor`
    的可绑定渠道靠 `LaneTurnScope` 兜住这一判定，否则主人在专线上也只能只读技能。
    `onAccepted` 成功落库后把本轮输入的 `clientId` 绑定到同一租约；事件持久化在租约释放前
@@ -150,8 +226,18 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
 8. **终稿必达**（官方）：`turn.end` 先进持久出箱；客户端发布终稿时以 `clientFinal` 交回。
    带附件的轮次不由客户端发布。Telegram / Slack 的持久出箱只存文本；X 的出箱保留
    `cindy-media` 地址、引用 ID、名称、MIME 与大小，Base64 只存在传输帧和内存中。
+   Agent 在远程供应商上运行时，`[名称](xdt-file:///影子路径)` 由远程事件投影先还原成本机路径，
+   收集器再按工作目录校验；漏掉这一步，文件会被当作目录外附件跳过。
+   最终回复里按工作目录写的相对路径图片（`![说明](evidence/a.png)`）先由 `resolveRelativeImageRefs`
+   补成工作目录内的绝对路径（解析符号链接后仍须在目录内、文件确实存在），再与绝对路径的图片走同一条
+   导入与发送流程；找不到的引用原样留在正文。超过单图上限的 PNG / JPEG / WebP 先在本机压一份 WebP 副本
+   再发（只影响发给渠道的副本），压不到上限以内才跳过，并在附件提示里点名、写明上限。
+   按本机路径引用的图片先经任务图片导入（单个 20 MiB），超过的不入库、不压缩，提示里同样写明这个上限。
    X 仅收 JPEG / PNG / WebP / GIF / MP4 / MOV；单图片 5 MiB、GIF 15 MiB、视频 10 MiB，
-   一轮最多 8 项、总计 30 MiB（服务端再核验 X 的附件组合；持久出箱仍按 32 MB 总预算计入媒体的传输大小）。托管媒体通过 `ingestMedia`
+   一轮最多 8 项、总计 30 MiB（持久出箱仍按 32 MB 总预算计入媒体的传输大小）。
+   server 声明 `x-media-relay-v1` 时，视频不内联：客户端在回帖前把文件分块转传给 X（`hook-control/xMediaRelay.ts`），
+   拿到 media id 后随 `turn.end.xMediaIds` 回传，大小只受 X 限制，不做压缩；失败时正文照发并提示未发出。一条回帖最多四张图片，或一个 GIF／视频：客户端发送前先选定，回复里引用的优先，工具结果旁路带来的
+   媒体最先让位且不算发送失败；服务端再核验，组合不合规时整条回帖（含正文）都发不出去。托管媒体通过 `ingestMedia`
    作为非缓存入库；待发 pin 使用 `message` 引用、出生任务与 `hook-outbox` 来源，沿用
    任务删除清理。恢复时核对当前账号、任务与引用，失效不重放附件；仍待发的结果保留 24 小时。
    收到 `turn.delivery`（未协商回执时为 transport 接受）后清除出箱媒体地址并释放 pin；
@@ -180,6 +266,22 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
     工作中编辑进度卡；完成后在同一位置新发终稿，确认发送成功再撤回进度卡，避免失败时丢掉已有内容。
     终稿和附件不领取下一轮排队消息的锚点。空结果撤回进度卡且不发占位，图片／文件仍正常投递；
     新消息发送失败时保留进度卡并尝试就地展示终稿，撤回失败不得重复发送已成功的终稿。
+
+13. **飞书终稿完整送达、过程可回看**：终稿不截断。一张卡片装不下（请求体 30 KB，或单个富文本组件
+    超过 4 个表格）时，`@cindy/im` 的 `feishu/cardSplit.ts` 按内容边界分段：优先段落之间，其次行之间
+    （切在代码块里就补收尾围栏并在下一段重开，切在表格里就给下一段补表头），最后才按字符；第一段更新
+    原进度卡，其余按顺序在本轮回复位置另发，每张底部带页码；正文之外的图片挂不下时同样另起卡片。
+    后续某一张发不出去就停下并说明，不跳过它继续发；第一段都没送达时不再发后面的。写作中的中间帧只有
+    一张卡片，装不下时展示装得下的开头并说明写完后分条发送。
+    正常完成的轮次，`turnRunner` 把过程记录（`turnActivity.buildActivityRecord`：本轮全部工作项，最多
+    列 50 项，更早的只计数）经 `StreamingTextHandle.finalize(text, { process })` 交给渠道；飞书把它收成
+    正文上方一个默认折叠的面板，正文保持干净。没有工作项的快答不带记录，终稿与以前一致。失败收口仍把
+    过程区留在正文里（用户要看到停在哪一步）。其它卡片渠道的 handle 忽略这份记录，行为不变；
+    Telegram 的「成功终稿只含正文」裁决不受影响。
+    飞书卡片的排版只有 `@cindy/im` 的 `feishu/streamingText.ts` 这一份：它对外只依赖一条发送通道
+    （`FeishuStreamingDeps`：建卡、更新、放终稿第一张、发后续卡片）。个人 bot 与伙伴连接的通道直接调
+    飞书接口；官方飞书 / Lark 的通道经 `msg.op` 交给服务端执行（`hook-control/feishuTurnCarrier.ts`）。
+    改飞书回复长什么样只改这一处，不在服务端或 hook-control 里另写排版。
 
 ## 4. 状态模型（一轮）
 
@@ -233,10 +335,62 @@ inbound ──► admitted ──► queued? ──► dispatching ──► run
 | 排队消息在桌面端可见 / 可删 | 不可见 | 不可见 | 迁到 coordinator 后自然可见、可删（删除即视同撤回：IM 撤排队表情，hook 回 `turn.end(cancelled)`） |
 | 排队上限 | 无上限 | 每会话 20 | 各自保留：IM 不限，hook 仍按 20 拒收 |
 | 停止时同任务已排队的消息 | `/stop` 一并清掉 `sendQueue` | 服务端 `/stop` 只对正在跑的那一个 requestId 发 `task.cancel`；desktop hook 队列里同任务已排队的请求照常接着跑（本 PR 前即如此） | 未改：一并清掉等于替用户丢弃没被取消的请求、并以 cancelled 收口，属产品语义；随批次 3（hook 队列并入 coordinator）一起定 |
-| 插话（steer） | 无 | 无 | 不新增 |
+| 插话（steer） | iMessage 可按聊天开启，见下文；其他个人渠道无 | 无 | 通用迁移不扩大开启范围 |
 | 模型准入（`openSession`） | 只做凭证检查 | 新任务做路由检查 | 已按 Dash 指定改走 `openSession` 准入：新任务的模型 / 来源 / 推理强度 / Fast 不被支持时直接拒绝（文案「不会自动更换模型或供应商」），准入还会规范化来源与推理强度；渠道默认配置若指向已停用的模型，新任务会建不出来（以前会照建） |
 | live session 改走 `bootstrapSession` | 不注入项目上下文 / Orca 指令 | 同左 | 未改：改了等于给 IM / hook 任务新增项目上下文与 Orca 指令注入、目录授权准备等行为，属产品决定 |
 | 缺口 2b / 2e / 2f / 默认配置取值链 | 见台账 | 见台账 | 各自保留，合并只共享实现骨架 |
+
+iMessage 伙伴连接可通过当前账号目录的 `imessage/steering.json` 为指定聊天开启忙时插话。
+文件格式为 `{"routes":[{"connectionId":"…","botId":"…","chatSha256":"…"}]}`，
+摘要取原始 BlueBubbles chat GUID 的 UTF-8 SHA-256 小写十六进制。删除条目即可关闭，
+新聊天默认排队；聊天名单、群激活方式和权限仍由原连接管理。每次入站仍按原路由开轮或查找在途轮次。
+只有该连接、伙伴、聊天、发言权限和仍有效的 iMessage 轮次都匹配，且引擎支持同轮插话，才向其追加输入。
+主人私聊复用伙伴主任务时，来自桌面或定时执行的轮次继续排队。投递结果不明时保留原收件回执供核查。
+
+### 同一 Cindy 电脑上的多个飞书机器人（2026-11-10，未发布）
+
+协商 `feishu-multi-app-v1` 后组织 bot 和官方商店 bot 同时可用，关联状态按应用分组。
+机器人卡片显示机器人名称、应用类型及飞书企业名称；自建应用在卡片显示应用所属企业，商店应用在每条已绑定账号旁显示其安装企业。名称来自服务端可选的 `appInfo.tenantName`，不是 Cindy 组织名称；旧服务器或权限不足时省略名称，不展示内部组织标识或 tenant key。客户端沿用绑定状态推送，不增加查询或轮询。
+目录和模型设置由服务器按 Cindy 身份与电脑共享，端侧继续维护同一套本机目录映射和偏好镜像。
+执行授权来自该连接最新应用/绑定权威快照；每个派发仍精确匹配 scopeId + principalId。
+任务与确认卡、`/new`、`/stop`、工作电脑独立，不合并 session，不对双 @ 增加防重或专用调度。
+
+### 官方飞书 / Lark（第一里程碑，2026-11-04）
+
+官方飞书与 Lark 是同一个 provider `feishu`（品牌跟随组织配置的应用，不随 Cindy 版本区域切换），
+由独立部署的 feishu-hook-server 经 provider-neutral 状态机接入（`manager.ts` 的 `feishuConfig`）：
+
+- lane：私聊 `feishu:dm:…`，群消息一律在话题里回复 `feishu:topic:…`；`deriveLaneKind` 把话题 lane 视为群轮次，
+  与官方 Telegram 群一样在 send 后持有 session turn lease（不改权限档）。
+- 出站（2026-11-10 起电脑排版）：客户端 hello 在 provider-bind / provider-prefs / `provider:feishu` 之外声明
+  `msg-op-v1`、`feishu-progress-ops-v1`、`feishu-final-ops-v1`；服务端 welcome 同时宣告才生效，逐项独立。生效后
+  进度卡与**不带附件的成功终稿**由本端用个人飞书 bot 同一份排版经 `msg.op` 发布（`dispatcher` 里与官方 Telegram
+  共用的轮次载体流程，飞书的实现是 `feishuTurnCarrier.ts`）：`turn.progress` 照发（续期），终稿全部确认后
+  `turn.end` 带 `clientFinal.complete=true`，否则交回服务端发布完整终稿。发布前照旧先把不带 `clientFinal` 的
+  `turn.end` 写进持久出箱。失败 / 取消 / 带附件的终稿、确认卡仍由服务端排版（`turn.end` / `interaction.request`）；
+  任一侧没有声明时全部照旧由服务端排版。不声明 `session-picker-v1`（查询不带收件身份，不交出本机任务列表）与任何
+  `telegram-*` 能力。后台轮次回传（`backgroundResults`）暂不覆盖飞书。
+- 会话：`sessions.source` 复用 `feishu`（个人飞书会话靠 `feishu_bot_app_id` 区分）；`vendorOptions.source`
+  用 `feishu-hook`，让 `cindy_feishu_bot` 追加官方会话提示而不把它当个人渠道；模型说明为
+  `buildHookPromptNote('feishu')`。
+- 绑定链接只接受飞书 / Lark 网页授权页与打开机器人的 AppLink（`feishuDeepLink.ts`），关联码只随 pending 快照出现。
+
+### 官方 Discord（2026-11-23，未发布）
+
+官方 Discord 寄宿在 telegram-hook-server 的独立 `/discord` 路径，经 provider-neutral 状态机接入
+（`manager.ts` 的 `discordConfig`），与个人 Discord bot（`im/discord/**`、`cindy_discord`）互不相干：
+
+- lane：私信 `discord:dm:…`，服务器频道 / 子区 `discord:ch:…`（同频道每个用户一条）；`deriveLaneKind` 把
+  `discord:ch:` 视为群轮次，send 后持有 session turn lease。派发只接本机已确认绑定的应用与用户。
+- 出站全部由服务端渲染（进度、终稿、附件、交互按钮）；hello 只声明 provider-bind / provider-prefs /
+  `provider:discord`，不声明 `msg-op-v1`、`session-picker-v1`、`session-result-v1` 与任何 `telegram-*`。
+  后台轮次回传（`backgroundResults`）不覆盖 Discord。
+- 会话：`sessions.source` 与 `vendorOptions.source` 都用 `discord-hook`，不复用个人 bot 的 `discord`
+  （个人行会被启动回填强制归入「对话」并改写托管目录，`cindy_discord` 也只给个人任务用）；
+  origin 为 `{ kind: 'hook', source: 'discord' }`；模型说明为 `buildHookPromptNote('discord')`。
+- 项目与模型只读共用那一份（§0），不等并入、不吃服务端便签；Discord 没有 `/model` 卡，不是偏好镜像渠道。
+- 关联只靠一次性关联码（私信或 `/bind`），设置页把它排在动作行之前；`connectUrl` 只是添加应用，
+  本机不自动打开。协议约定见 [`protocol-compatibility/official-discord-channel.md`](protocol-compatibility/official-discord-channel.md)。
 
 ### 官方 X 的伙伴路由
 
@@ -245,3 +399,163 @@ inbound ──► admitted ──► queued? ──► dispatching ──► run
 Dispatcher 只接受宿主解析的专线 ID 和精确工作目录，忽略入站指定的任务 ID；执行与排队恢复时
 重新核对绑定。Runner 在获取切模锁前执行伙伴模型/能力刷新，provider 启动前登记 X 的
 `LaneTurnScope`，终态释放；source 仍保留 `bot`，渠道说明逐轮追加。普通未绑定 X 路由保持原样。
+
+## Discord 服务器频道（一期）
+
+个人 Discord bot 在私聊之外支持白名单内的服务器文字频道与其中已存在的文字 thread。要点（实现见
+`packages/lizi-im/src/discord/{lane,gateway,inbound,index}.ts` 与 `apps/desktop/src/main/im/discord/**`）：
+
+- **召唤**：网关只多请求标准 `GuildMessages` intent，不请求 `MessageContent`。只有直接 @ 机器人的消息会被处理
+  （@everyone / 角色提及不算）；机器人、webhook、系统消息一律忽略。未 @ 消息不触发模型、不后台收集；被 @ 时才用当前连接按同 lane 读取一页最近历史与精确引用。
+  REST 正文受应用 MESSAGE_CONTENT 和频道 ViewChannel / ReadMessageHistory 限制，与 Gateway Identify 的 intents 独立；不为 REST 给旧连接追加特权 intent。
+- **lane**：userId = `g/{guild}/{channel}[/{thread}]`，同频道共享一个会话，thread 独立一个会话，白名单只认父频道。
+  私聊 userId / session id 不变，不迁移存量。出站按 lane 解析到对应频道 / thread，每次发送复核白名单与 guild 归属。
+- **白名单（服务器级准入）**：owner-scoped `discord-channel-access.json`，默认空 = 不开放；设置页「服务器频道」每个服务器一行
+  （名称 + 摘要 + 开关 + 「更多」），首次开启 = 该服务器全部文字频道（含之后新增的，运行时按 guildId 判定，不是 UI 批量勾选），
+  「更多」里可改成仅指定频道。形状 `{ channels, guilds? }`：`channels` 只放当前生效的显式选择（存量配置含义不变：有频道
+  而没有服务器条目 = 已开启 + 仅指定频道，升级零点击不变成全服）；`guilds[]` 记 `enabled / mode(all|selected) / allowMembers /
+  savedChannels`，服务器关闭或切到全部频道时原选择收进 `savedChannels`，重新开启 / 切回仅指定恢复；设置过「仅指定 + 零选择」
+  的条目保留，再次开启仍是零选择，只有完全没有记录的服务器才是首次开启。`normalizeDiscordChannelAccess`（lane.ts）统一规范化，
+  不信任 UI；旧版本只认 `channels`，读到新配置只会少开、不会多开。thread 随父频道准入、独立上下文。设置页读取到的白名单版本
+  不是 2（`accessVersion`，更旧的电脑）时整段拒绝编辑并提示升级。配置读是实时的：撤销 / 关闭后进行中的下载丢弃、出站拒绝、旧卡片失效。
+- **个人 bot 成员准入暂不开放**：传输层支持 `allowMembers`（有测试），个人 bot 的桌面 store 读写一律丢弃它。原因：个人 bot 没有对非主人
+  轮次的硬性读 / 检索 / MCP 边界（Auto 审阅对 guest 的口径是「可做范围内读取」，`forceConfirmToolCall` 只管破坏性与不透明写）。
+  开放成员需要伙伴 chat-only lane（`isChatOnlyGroupLane`）那类真正的工具 / 目录 / 记忆边界。
+- **隔离**：每个 lane 独立托管目录 `discord-{appId}-g-{guild}-{channel}[-{thread}]`（`ensureWorkingDir(botContextId, userId?)`），
+  与私聊目录并列；目录隔离不等于文件权限隔离。群历史检索只给本 lane（`access: 'lane'`），不跨 lane / 私聊。
+  `adapter.blocksLocalTaskAccess` 让 `/ctr /exctr /session /project` 及 `control:*` / `project:*` 卡片在 lane 里不执行。
+- **伙伴连接**：白名单按连接各一份（连接记录 `discordChannelAccess`，`createBotDiscordIM` 的 getter 每次现读，删除 / 撤销即时生效、
+  不同 connectionId 互不串）；`companionLane` 把 lane 映射为 `group`（不落主人私聊主任务）。逐频道 `allowMembers` 只有伙伴连接可开，
+  语义沿用 `cindy-bots-runtime.md`（权限档唯一开关、共享 Bot 记忆、成员轮次只确认破坏性动作、命令只认主人）；
+  个人 bot 的 store 仍丢弃各层级的 `allowMembers`（逐频道、服务器级、保留的选择）。全部频道模式的「允许成员」是服务器级开关。目录隔离不等于权限隔离，不能据此宣称沙箱。
+- **出站复核**：lane 的每次 send / edit / 补传图片都复核「发起时的 bot 身份 + 当前白名单」，await 之后再复核；换 bot 或撤销后
+  不再发出内容（只放行删除机器人自己的占位消息）；终稿编辑失败的兜底改发也经同一复核。
+- **流式回复**：发到频道的 Message 对象放进有界缓存，机器人没有「读取消息历史」时仍可编辑；编辑失败终稿改发新消息。
+
+## Discord 上下文、工具与文本终稿恢复（2026-11-10）
+
+- 频道入站在附件规范化前捕获本次授权代次，并将同一进程内租约传到上下文、工具作用域与 provider 启动边界。撤权再授权不能复活旧消息；只有租约仍有效的历史读取失败才可降级为原文。归档公开 thread 的 `list_threads` 返回 `nextBefore`，下一页将其作为 `before` 传入（归档时间戳，不是消息/线程 ID）；没有后续页时返回 null。
+- 宿主只掌握已配置 bot 的凭证、身份、白名单、逐轮租约与出站边界；不增加 Token 配置、任意 REST、插件权限旁路或业务流程。`cindy_discord` 在三个 Harness 保持稳定注册，普通账号任务在执行时核实真实任务与账号后使用个人 bot；公开频道/thread 只给当前 lane，伙伴必须有触发轮的 transport，租约释放后不回退个人 bot。成员仍按原 allowMembers 与权限档，不新增本机任务/项目接管能力。
+- `status` / `list_tools` 发现连接与范围；`call_tool` 提供缓存频道/已知 thread、公开归档 thread 分页、历史、单条、服务器搜索、发送/回复、自己的表情与消息编辑/撤回、受授权本机文件发送。缓存清单/归档列表不冒充完整私有 thread 清单；私有 thread 仍要求平台可见与成员身份。聚合调用按次使用任务原权限流程，发现授权不成为后续发送授权；修改/撤回自己消息仍要求主人轮次。
+- 历史只在触发时读取同 lane 的最近一页，落入既有 `hook_group_messages` 窗口，受理后提交 `hook_group_context_cursors`。provider 按稳定账号、连接、bot/主人隔离，lane 独立；进程/adapter 重建从同一持久游标恢复，内存缓存另按当前账号代次隔离。未 @ 不启动模型，也不后台扫描全服。
+- 官方 [消息接口](https://docs.discord.com/developers/resources/message) 现已提供 Search Guild Messages；锁定的 discord.js 14.27 没有高级搜索 helper，薄适配使用同一 SDK 的固定 REST 端点与限流队列，始终限定 channel_id 并再次过滤原生 channel_id。`202/code=110000` 返回 `DISCORD_SEARCH_INDEXING` 与 retryAfter，不轮询；`429` 与权限错误结构化报告。MESSAGE_CONTENT 的 [HTTP 与 Gateway 边界](https://docs.discord.com/developers/events/gateway#http-restrictions) 分别检查，不把缺正文误报为完整历史。
+- 共享 runner 的成功收尾与明确 terminal error 文本都先调用 Discord 的 durable terminal sink，无论进度卡是否创建成功；流式卡只作进度。终稿文本先原子落在账号隔离 `discord-final-text/<连接摘要>.json` 再发送，原始触发 ID 的摘要立即成为“已完成模型轮次”墓碑，与分段送达状态分开。当前进程、连接恢复与重启只补未确认分段，不再调用模型；进行中崩溃不自动恢复执行。文字转为平台文本后分段，禁止隐式 @ 提醒。
+- 待送正文最多 256 份 / 总账 4 MiB，创建后 24 小时只结束补送并清正文；完成输入墓碑独立于投递期限，最多 4096 份，容量不足时先回收最老的无正文墓碑，不挤掉仍待送的正文。送达后立即清正文，送达 ID 最多保留 1 小时。读路径和恢复路径清理过期正文与回执；容量不足、原子写失败明确记录错误，不绕过出箱发送。状态工具可查原 lane 的 pending / uncertain，不读其它公开 lane 的记录。
+- 发起轮的账号、bot/主人、连接绑定与授权代次随输入锚定，await 后再核对。凭证代次经原子备份恢复读取：新版本外层载荷对含随机 revision 的完整加密文件表示求 SHA-256；未改写的旧 base64 载荷保留文件元数据代次，以兼容升级前的 pending 终稿。不解密或返回 Token；下一次成功写入才原子安装新代次（实现与回归：[ownerScopedStorage.ts](../../apps/desktop/src/main/im/ownerScopedStorage.ts)、[ownerScopedStorage.test.ts](../../apps/desktop/src/main/im/__tests__/ownerScopedStorage.test.ts)）。解绑、换 bot/主人/伙伴绑定或撤销目标 grant 使旧结果失效。目标 grant 代次作为宿主私有元数据随原白名单/连接文档原子保存，不进远端协议；撤销再授权仍推进代次，修改其它连接、其它服务器或不影响目标的频道选择不取消本目标积压。凭证文件代次仍仅归当前连接。
+- POST 前持久记 sending；收到分段回执后记 sent。断线前已确认的分段不重复，明确 429 尊重等待时间；POST 回执丢失或崩溃遗留 sending 转 uncertain，留待主人通过历史核实，**不自动重发**。Discord enforce_nonce 只覆盖几分钟，不承诺 24 小时 exactly-once。附件沿用即时发送且没有持久 pin，发送使用原触发的 receipt 租约，在取频道的 await 后、发送前仍复核成员资格与目标 grant 代次；不能宣称附件必达，普通进程重启恢复仅承诺文本补送。并发打开同一账号资料的多个宿主尚未做出箱互斥验收。
+- 进度消息 ID 随文字终稿持久保存；即时与恢复送达共用原 lane / bot 授权检查清理占位，不依赖附件发送。清理遇到明确权限拒绝、无效请求或目标不存在时结束该项并继续其它频道；限流与临时失败沿原出箱退避重试，但优先发送其它 pending 终稿，不重发已确认正文。
+- 一条终稿变成 uncertain 不阻塞其余 pending；明确 429 的等待截止时间由所有 drain / complete 入口共用。空正文不发文字 POST，仍可即时上传正文托管图片；正文图与工具附件按路径去重，单张失败不阻塞其余附件。
+- setConfig 尝试期间暂停出箱并等待已开始的 POST 收口；只有配置成功才取消旧绑定的输出。凭证保存或连接失败并确认回滚后，仅刷新凭证文件代次，保持原目标 grant 校验，保留 pending 与尚未提交的旧终稿；撤权后重新授权仍取消旧输出。
+
+实现与回归：`discord/context.ts`、`mcp-integrations/discordMcpServer.ts`、`discord/finalTextStorage.ts`、`packages/lizi-im/src/discord/{operations,finalTextOutbox}.ts` 及各自测试；共享终态接线由 `turnRunnerSendOutcome.test.ts` 验证。
+
+## 入站历史窗口与附件（2026-11-07）
+
+历史选择不调用辅助模型：不做相关性二分类，也不扫描正文后删除消息或跳过附件。历史与引用仍是低信任数据；现有权限、平台受保护内容、账号/群/话题隔离保持不变。
+
+共享上限在 `packages/slack-hook-protocol/src/channelHistory.ts`：最近至多 50 条历史，正文每条至多 4000 字符、窗口至多 16000 字符（含署名与时间），超限明确标注。当前请求不计入历史；精确引用优先、按消息 ID 去重并占一个名额及文本预算。附件说明/文件节选另限 4000 字符；原件仍走媒体/文件通道及既有数量、大小限制。当前附件先处理，再处理引用和最近历史；不能下载、格式不支持、没有原件或超过容量均说明，不能把 `[图片]` 当成已提供图片。
+
+| 渠道 | 自动上下文来源 | 历史附件边界 |
+| --- | --- | --- |
+| 个人飞书/Lark | 本群或本话题最近一页，另取精确引用；无模型预筛选 | 下载所选消息附件，保留来源、原件与有界文本节选 |
+| 官方飞书/Lark | 服务端最近一页，同 lane 按游标补增量，精确引用去重 | 服务端投递前下载当前、引用和所选历史附件；旧服务端需升级 |
+| 个人 Telegram | 已收到并存入本地的本群/topic 增量，加精确引用 | 可用缓存中的所选历史媒体；重启/过期缺失须可见；全响应模式不额外下载 |
+| 官方 Telegram | 桌面本地群窗口，加服务端提供的精确引用 | 现有签名图片读取链路与引用附件；不声称所有历史文件都有原件 |
+| iMessage（BlueBubbles） | 同群选中的窗口消息；群聊和私聊的内联回复优先取当条消息指向的首帖 | 从当前已连接的聊天复核原消息后读取图片与文件。当前附件先占额度，历史原件只进入本轮；全响应轮次不补群窗口附件 |
+| 企业微信、钉钉 | 已收到的同群本地窗口；企业微信另保留平台提供的精确引用，钉钉目前无引用入口 | 从同账号、同一群窗口取回已入媒体仓的图片，和当前图片共用 6 张额度；只留文件名的旧记录仍可见 |
+| 微信 | 现有私聊连续对话；平台提供的引用按统一单条上限 | 不伪造群历史或无法读取的附件；本改动不扩展渠道接收范围 |
+| Discord | 私聊沿用连续对话；服务器频道 / thread 在 @ 触发时只读同 lane 最近一页与精确引用，游标受理后推进 | 当前附件优先，引用优先于最近历史，所选历史原件走同一媒体/文件暂存通道；无权限、空正文、缺失原件与预算省略写入同一展示快照 |
+| Slack | 当前 thread 内按用户游标补增量 | 所选历史文件下载状态同时写入模型上下文与展示记录 |
+| X | 只沿当前帖的祖先回复链，近祖先优先；仍受原有付费读取预算约束 | 保留现有媒体读取能力，不扩大月度读取额度 |
+
+本上限只管每次注入，不修改历史存储保留策略或显式历史检索。模型输入与展示复用同一截断结果；展示可去掉内部身份标记，不能另取一批消息。游标仍只在实际受理后提交，拒绝/失败不吞掉下一轮历史。
+
+
+## Telegram 统一提问与生命周期（2026-11-13）
+
+普通中断式与异步提问共用 `presentQuestion`，同时拿到
+结构化问题、通过 desktopDecide 的答题入口和最终 settled Promise；先登记 App 题卡再发送。
+router 统一使用桌面处理器与 desktopDecide，避免注册第二个答案 resolver。中断式保留 route
+token、等待状态与原渠道超时（官方 30 分钟），停止/释放/超时同时清理 App pending；异步
+不绑定轮次 token、等待状态或渠道超时，保留 Session 原有撤回/新输入规则。
+`questionCard.ts` 是两条 Telegram 链路共用的选择模型：稳定 question id、完整多题提交、
+多选 JSON 数组、选择版本防旧按钮、App 先回答的仲裁；提交后不再接受第二次点击，最终
+settled 才标记完成，执行暂停时不能绕过既有答案闸门。发布失败不合成默认答案，App 仍可答。
+
+个人 Telegram 从入站 `speaker.id` 捕获本轮提问者，透传 `questionRespondentId` 到传输层；
+卡片发在原 lane，并按实际 messageId 绑定提问者。仅 `aq:` 按钮使用这个例外，其他按钮仍
+走既有账号身份校验；引用题卡的其他成员消息在进入模型前被拒绝。换配置/下线清理映射。
+按钮订阅不随本轮结束关闭，而随题卡 settled 释放；换 session 后不再写旧卡。
+
+官方双方协商 `telegram-question-ops-v1` + `msg-op-v1`，以 `turn-notice` 发/改卡，
+不复用普通 DM send，也不复用 turn-scoped interaction-card。dispatcher 保留独立按钮路由，
+回调核验连接、账号代次、requestId；取消账号清理全部路由。发送前重验目录授权、连接和能力。
+每次 op 等回执最多 10 秒；turn.end 前最多 10 秒 drain 新卡及中断式题卡的最终关闭，
+不等待未答的异步题卡。异步卡结束后仍可编辑。
+未知发送不重试，未知编辑保留 App 答题入口。Telegram 布局与普通卡片共用正文/按钮尺寸限制。
+
+服务端用原任务、绑定和 externalKey 校验首次发送；后续编辑凭卡片身份再次校验绑定。
+message route 的 requestId=null、terminal=false，externalKey 保留，因此不被当作进度、终稿
+或重跑输出回收。回调 token 绑定原 principal、卡片/键盘代际、绑定 id 和设备，并在答题前
+核验当前 lane generation。`questionMode` 在首次发送时固定：blocking 卡在 turn.end 清理，
+async 卡跨轮存活、最长 24 小时。重启后旧卡安全失效。
+引用活卡的原提问者文字转换为 `question:reply` + `answerText`，两条链路均不进入普通发送
+队列；单题直接提交，多题要求显式「题号: 答案」，与选项混合后提交。传输层先校验身份、
+群准入、卡片是否关闭，服务端另校验绑定和 lane generation；不把文字用于其他按钮。
+关闭卡片的文字回复回到正常输入路径。权限确认与敏感代输入不改变；其他 IM 普通提问见下一节。
+
+回归入口：`questionCard.test.ts`、`interactionRouter.test.ts`、`telegramNoticeOps.test.ts`、
+`dispatcher.test.ts`、`turnRunnerThreadRouting.test.ts` 和传输层 `telegramIM.test.ts`。
+
+### 所有 IM 的普通提问（2026-11-13）
+
+`questionCard.ts` 是普通中断式／异步提问的共同答案模型，`questionPresentation.ts`
+负责个人 IM 展示与回答归属；权限、计划审阅、代输入沿用各自入口。原提问者只能回答
+自己在原聊天／话题中触发的问题，不能替其他人作答，也不会因此获得工具批准权限。
+
+- Telegram、飞书／Lark、Discord 使用各自原生按钮卡；文字可用问题编号回答。
+- 微信、企业微信、钉钉、iMessage 使用同一模型的文字投影，每题选项完整列出。
+  使用 `Q… 答案`，多题使用 `Q… 2: 答案`，全部填好后以 `Q… OK` 提交；单题单选直接提交。
+  多选可写选项序号，如 `1,2`。不能编辑消息的渠道另发当前状态／最终结果。
+- 支持引用消息 ID 的渠道也可直接引用问题卡回复。普通文字不隐式回答异步问题，
+  编号、真实发言人、原 lane／scope 和有效 Session 都必须匹配。
+- `messageHandler` 在用户队列前消费这些回答；微信在 poll 批次持久确认后、普通任务
+  入队前消费。否则中断式提问会占着执行轮次，答案排在其后导致互等。
+- 中断式普通问题统一 30 分钟等待，停止／轮次释放也会清理；异步问题不因原轮结束
+  清理，仍由 App 的请求生命周期最终收口。两端共享原有 App 答案与暂停闸门。
+- 卡片注册在实际消息 ID 上。账号替换、明确下线、渠道访问撤销和 Session 替换后旧入口
+  不再接收答案。任何回调 payload 自报的身份都不参与授权。
+
+官方 Slack、飞书／Lark 双向协商 `im-question-cards-v1`，经 `interaction.request`
+可选 `questionMode`、`questionCode` 发送／更新同一问题，`interaction.cancel` 收口；
+`interaction.decision` 的 `question:reply`＋`answerText` 回传文字。未协商时沿用旧入口。
+Telegram 继续使用已协商的 `telegram-question-ops-v1`，展示模型与其余 IM 同源。
+官方飞书／Lark 一题一张卡（`createHookQuestionPublisher` 的 `sequential`）：每道题各发一张卡，各有独立的
+`interactionId` 与回复码，答完一题才发下一题，最后一题答完一次性把全部答案交给 Host；Host 先收口
+（App 已答、超时、轮次结束）时当前卡随之关闭，不再发后面的题。官方 Slack 仍是多题合卡；
+异步的多题提问在飞书／Lark 也仍合成一张卡——异步卡要在本轮结束后继续可答，而服务端只在轮次运行期间
+受理新卡，逐题发会在本轮结束后卡在中途。单题卡的选项按钮放不下（超过 24 个）时，选项逐行写进正文。
+必答题没答就点提交时不交答案，卡片正文点名还没答的题、按钮保留（所有渠道同一模型）。
+收口卡上每道题的答案只写一次，并以 Host 的最终答案为准（所有渠道同一模型）：在 App 里答了别的
+选项时，卡片上没提交的勾选不再留在题目下面，末尾也不再追加一行汇总。
+官方飞书／Lark 的单题卡答完后收成回执：标题写结论（`✅ 短标签：答案`，没有短标签时是「✅ 已选：答案」），
+正文只留灰色的原问题，不再列选项、说明和提示；答案超过 60 字或多行时放进正文，标题只留短标签。
+`interaction.cancel` 只带正文，标题要靠 `interaction.request` 才能换：在卡上答的，答完那一帧更新已带上
+回执标题；不是在卡上答的（App 已答）先补一帧更新再收口。没拿到答案就收口（超时、轮次结束）时标题不变，
+正文是原问题加「卡片已过期」。提问时有短标签就用它作标题（`发布环境 1/2`），选项带说明时选项名加粗、
+说明与提示语用灰色字（飞书卡片的 `<font color='grey'>`）。
+官方飞书服务端只接进度与终稿的 `msg.op`，表情由它自己打，本端不向它发表情操作。
+本实现不新增 X 的公开帖问答入口，不改变各渠道原有消息触发／成员准入规则。
+
+### Telegram 后台回报的媒体发送
+
+渠道自有任务收到其它任务回报、或沿渠道来源被后台唤醒时，共享 runner 在已核实的
+输出路由上建立本轮媒体发送租约。`send_media` 与正常入站共用发送流程，支持图片、
+任意类型文件、视频、音频等全部既有类型，以及本地绝对路径、公网 URL 和 Telegram
+file_id；后台回报不另设文件目录或图片专属限制。文件存在性、上传大小和平台格式限制
+沿用 Telegram transport。工具只在发送成功后返回成功回执。
+
+目标固定为原 bot 的原聊天／话题。该租约独立于 `ChannelToolScope`，不提供用户身份、
+群历史读取、群管理或跨群 API 权限，也不把普通工具过程图片自动发到群里。
+桌面输入、普通接管任务、远程 SSH 任务不建立它。终态、未派发、解绑、销毁及下一轮
+来源切换时回收；正常 Telegram 入站的权限规则不变，包括非绑定用户的文件范围限制。

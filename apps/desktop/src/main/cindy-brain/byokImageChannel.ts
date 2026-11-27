@@ -22,6 +22,7 @@ import {
 } from '../cindy-proxy-media/api/gatewayImageClient.js';
 import type { ImageChannel, ImageChannelRegistry } from './imageChannelRegistry.js';
 import { isCustomImageProvider } from './customImageChannel.js';
+import { codexImageAccountKind } from './codexImageAuthBinding.js';
 
 /**
  * Consciousness aspect → gpt-image size enum. Mirrors LEGACY_SIZES in
@@ -82,17 +83,18 @@ export function createByokImageChannel(opts: CreateByokImageChannelOptions): Ima
     get supportsEdit() {
       return opts.getSupportsEdit();
     },
-    generateImage: ({ model, prompt, aspectRatio, size: requestedSize, quality, signal }) =>
+    generateImage: ({ model, prompt, aspectRatio, size: requestedSize, quality, nativeParameters, signal }) =>
       client().generateImage(
         {
           model,
           prompt,
           ...(requestedSize ? { size: requestedSize } : size(aspectRatio)),
           ...(quality ? { quality } : {}),
+          ...(nativeParameters ? { nativeParameters } : {}),
         },
         signal,
       ),
-    editImage: ({ model, prompt, imagePaths, aspectRatio, size: requestedSize, quality, signal }) =>
+    editImage: ({ model, prompt, imagePaths, aspectRatio, size: requestedSize, quality, nativeParameters, signal }) =>
       client().editImage(
         {
           model,
@@ -100,6 +102,7 @@ export function createByokImageChannel(opts: CreateByokImageChannelOptions): Ima
           imagePaths,
           ...(requestedSize ? { size: requestedSize } : size(aspectRatio)),
           ...(quality ? { quality } : {}),
+          ...(nativeParameters ? { nativeParameters } : {}),
         },
         signal,
       ),
@@ -114,9 +117,7 @@ export function pruneDynamicImageChannels(
   registeredByok: Set<string>,
   registeredCustom: Set<string> = new Set(),
 ): void {
-  const codexIds = new Set(providers.filter((provider) =>
-    !isOrganizationManagedProvider(provider) && provider.auth.native === 'codex',
-  ).map((provider) => provider.id));
+  const codexIds = new Set(providers.filter(provider => codexImageAccountKind(provider)).map(provider => provider.id));
   const byokIds = new Set(providers.filter((provider) =>
     isOrganizationManagedProvider(provider) && provider.imageModels?.length,
   ).map((provider) => provider.id));

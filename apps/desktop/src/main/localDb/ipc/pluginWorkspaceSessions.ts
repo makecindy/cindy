@@ -24,10 +24,11 @@ import { randomUUID } from 'node:crypto';
 
 import { and, eq, isNull, isNotNull, ne, or } from 'drizzle-orm';
 
-import { getDbClient } from '../client/current';
+import { getCurrentDbClientSnapshot, getDbClient } from '../client/current';
 import { sessions } from '../schema';
 import { noteSessionHidden } from '../sessionFlagRegistry.js';
-import { upsertRecentWorkdir } from './recentWorkdirs';
+import { projectForNewTask } from '../../mcp-integrations/projectManagementCore.js';
+import { touchRecentWorkdir } from './recentWorkdirs';
 import { createLogger } from '../../logger';
 import { pickSessionForWorkdir } from '../pluginWorkspaceDedupe';
 import { normalizeWorkingDirForStorage } from '../../../shared/workingDir.js';
@@ -48,7 +49,8 @@ export async function findActiveSessionByWorkdir(dirAbs: string): Promise<string
     .where(
       and(
         eq(sessions.status, 'active'),
-        eq(sessions.workspaceKind, 'project'),
+        or(eq(sessions.workspaceKind, 'project'), eq(sessions.source, 'plugin')),
+        isNull(sessions.hiddenAt),
         isNotNull(sessions.workingDir),
         isNull(sessions.remoteHostId),
         // Orca worker 不进侧边栏,复用它等于把用户带进隐藏会话;NULL != 'worker'
@@ -62,7 +64,7 @@ export async function findActiveSessionByWorkdir(dirAbs: string): Promise<string
 /**
  * 创建 plugin 来源的空 draft 会话,返回会话 id。调用方(workspaceSlot)已
  * 完成目录授权与存在性校验;这里只负责落库与既有 create 流程的副作用对齐。
- * Orca 字段这里显式排除:插件会话永远是普通 project 会话。
+ * 项目归属使用普通任务的目录匹配。
  */
 export async function createPluginDraftSession(params: {
   dirAbs: string;
@@ -80,6 +82,8 @@ export async function createPluginDraftSession(params: {
     effort?: string;
     fastMode?: boolean | 'ultrafast';
     providerId?: string | null;
+    /** 插件设置保存的运行位置(另一台电脑或 share:<id>);任务与目录仍在本机。 */
+    agentDeviceId?: string;
   };
   /**
    * 意识旁听通知(cindy-brain notifyGhostSessionEvent,由 register 静态注入;
@@ -90,22 +94,22 @@ export async function createPluginDraftSession(params: {
   if (params.shouldContinue && !params.shouldContinue()) return null;
   const now = Date.now();
   const id = randomUUID();
+  const owner = getCurrentDbClientSnapshot();
   const workingDir = normalizeWorkingDirForStorage(params.dirAbs) ?? undefined;
   let insertRow;
   try {
     ({ row: insertRow } = await openSession({ id, now, source: 'plugin',
-      body: { ...params.defaults, workingDir, workspaceKind: 'project', ...(params.title ? { title: params.title } : {}) },
-      assertCurrent: () => { if (params.shouldContinue && !params.shouldContinue()) throw new Error('SESSION_OPEN_CANCELLED'); },
+      body: { ...params.defaults, workingDir, ...await projectForNewTask(workingDir), ...(params.title ? { title: params.title } : {}) },
+      assertCurrent: () => {
+        if (getCurrentDbClientSnapshot() !== owner || (params.shouldContinue && !params.shouldContinue()))
+          throw new Error('SESSION_OPEN_CANCELLED');
+      },
     }));
   } catch (error) {
     if (error instanceof Error && error.message === 'SESSION_OPEN_CANCELLED') return null;
     throw error;
   }
-  if (insertRow.workingDir) {
-    // 用户刚为这个目录做过授权动作(亲选/确认卡),进"最近项目"列表合理;
-    // 失败仅日志,不阻断创建流程(与既有 create 同纪律)。
-    void upsertRecentWorkdir(insertRow.workingDir, now);
-  }
+  if (insertRow.projectDir) void touchRecentWorkdir(insertRow.projectDir, now);
   // 订阅槽①旁路通知(意识旁听会话创建):经注入回调触达 cindy-brain,
   // 失败仅日志——旁听是 best-effort,不阻断创建。
   try {
@@ -128,7 +132,7 @@ export async function createPluginDraftSession(params: {
 }
 
 /**
- * Persist a visible ordinary local task created by a plugin, without starting an Agent.
+ * Persist an ordinary task on the plugin host, without starting its local or remote Agent.
  * The tasks API and legacy errand adapter both use this creator. The caller resolves
  * and validates the complete model tuple and user permission before reaching here.
  * No directory preference means a Host-managed dialogue directory; a project root
@@ -147,6 +151,7 @@ export async function createPluginTaskSession(params: {
   effort?: string;
   fastMode?: boolean | 'ultrafast';
   providerId?: string | null;
+  agentDeviceId?: string;
   permissionMode: GhostErrandPermissionMode;
   /** 用户亲选的项目目录(绝对路径);缺省 = 专属 dialogue 目录。 */
   workingDir?: string;
@@ -163,22 +168,29 @@ export async function createPluginTaskSession(params: {
   const projectDir = params.workingDir
     ? (normalizeWorkingDirForStorage(params.workingDir) ?? undefined)
     : undefined;
-  const workspaceKind = projectDir ? ('project' as const) : ('dialogue' as const);
+  const owner = getCurrentDbClientSnapshot();
+  const assertCurrent = () => {
+    if (getCurrentDbClientSnapshot() !== owner || (params.shouldContinue && !params.shouldContinue()))
+      throw new Error('Plugin task owner changed');
+  };
+  const membership = await projectForNewTask(projectDir);
+  assertCurrent();
   if (params.hidden) noteSessionHidden(id, true);
   const { row: insertRow } = await openSession({ id, now, source: 'plugin',
     ...(params.hidden ? { hiddenAt: now } : {}),
-    body: { workingDir: projectDir, workspaceKind, permissionMode: params.permissionMode,
+    body: { workingDir: projectDir, ...membership, permissionMode: params.permissionMode,
       agentKind: params.agentKind, model: params.model, effort: params.effort,
       fastMode: params.fastMode, providerId: params.providerId,
+      ...(params.agentDeviceId ? { agentDeviceId: params.agentDeviceId } : {}),
       ...(params.title ? { title: params.title } : {}) },
-    assertCurrent: () => { if (params.shouldContinue && !params.shouldContinue()) throw new Error('Plugin task owner changed'); },
+    assertCurrent,
     onPersistenceStarted: params.onPersistenceStarted,
   });
   if (params.shouldContinue && !params.shouldContinue()) throw new Error('Plugin task owner changed');
   if (projectDir && insertRow.workingDir) {
     // 项目目录是用户在插件详情页亲手选的,进"最近项目"合理;dialogue 目录
     // 是 app 管理的临时间,不进。失败仅日志,不阻断创建。
-    void upsertRecentWorkdir(insertRow.workingDir, now);
+    void touchRecentWorkdir(insertRow.projectDir, now);
   }
   try {
     params.notifySessionCreated?.({
@@ -195,7 +207,7 @@ export async function createPluginTaskSession(params: {
     sessionId: id,
     ghostId: params.ghostId,
     hidden: params.hidden === true,
-    workspaceKind,
+    workspaceKind: insertRow.workspaceKind,
     workingDir: insertRow.workingDir,
   });
   return id;

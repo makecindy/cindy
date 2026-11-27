@@ -3,6 +3,8 @@ import { InvokeScheduler } from "../invokeScheduler.js";
 import { DeviceLinkError } from "../protocol.js";
 import { isBackgroundInvoke, bypassInvokeScheduling, isInteractiveInvoke, resolveInvokePriority } from "../invokePolicy.js";
 import { sharedTaskGuestPeer, sharedTaskHostPeer } from "../sharedTaskPeer.js";
+import { providerShareGuestPeer, providerShareHostPeer } from '../providerSharePeer.js';
+import { StallDiagnostics } from '../stallDiagnostics.js';
 
 function deferred() {
   let resolve!: () => void;
@@ -17,6 +19,59 @@ const flush = async () => {
 afterEach(() => vi.useRealTimers());
 
 describe("invoke admission", () => {
+  // Unit: a full ordinary waiting queue used to reject Stop before checking
+  // its idle interactive slot. Existing coverage saturated active slots only.
+  it('uses existing interactive capacity even when ordinary waiting positions are full', async () => {
+    const scheduler = new InvokeScheduler();
+    const bulk = deferred();
+    const waiting = Array.from({ length: 140 }, () => scheduler.run('host', 'foreground', 30_000,
+      () => bulk.promise).catch(error => error));
+    const control = deferred();
+    const dispatched: number[] = [];
+    const controls = [0, 1].map(n => scheduler.run('host', 'interactive', 30_000, () => {
+      dispatched.push(n); return control.promise;
+    }));
+    expect(dispatched).toEqual([0, 1]);
+    await expect(scheduler.run('host', 'interactive', 30_000, async () => {}))
+      .rejects.toMatchObject({ code: 'BACKPRESSURE', inFlight: undefined });
+    expect(scheduler.snapshot('host')).toMatchObject({ active: 14, queued: 128 });
+    scheduler.cancel('host', new DeviceLinkError('NOT_CONNECTED', 'closed'));
+    bulk.resolve(); control.resolve();
+    await Promise.all([...waiting, ...controls]);
+    expect(dispatched).toEqual([0, 1]);
+    expect(scheduler.snapshot('host')).toMatchObject({ active: 0, queued: 0 });
+  });
+
+  // Incident: queue-full was visible but its 12 occupants and 128 waiters were
+  // not. Unit, real admission boundary; no payload is retained by diagnostics.
+  it('reports who occupies a full physical-host queue before rejecting new work', async () => {
+    let now = 0;
+    const emit = vi.fn();
+    const diagnostics = new StallDiagnostics(emit);
+    const scheduler = new InvokeScheduler(() => false,
+      (_peer, reason, fields) => diagnostics.record('admission', { reason, ...fields }), () => now);
+    const active = deferred();
+    const pending = Array.from({ length: 140 }, (_, n) => scheduler.run('host', false, 30_000,
+      () => active.promise, { channel: n < 12 ? 'local-db:sessions:list' : 'maker:session:messages:view',
+        request: `${n.toString(16).padStart(8, '0')}-0000-0000-0000-000000000000`, source: 'renderer' }).catch(e => e));
+    now = 2_000;
+    for (let n = 0; n < 20; n++) await expect(scheduler.run('host', false, 30_000, async () => 1))
+      .rejects.toMatchObject({ code: 'BACKPRESSURE' });
+    // A request flood cannot suppress the independent transport-failure sample.
+    diagnostics.record('path', { reason: 'ack-timeout' });
+    diagnostics.flush();
+    const rows = emit.mock.calls.map(([message]) => JSON.parse(message.slice('device-link diagnostic '.length)));
+    expect(rows[0]).toMatchObject({ stage: 'admission', reason: 'full', active: 12, queued: 128,
+      running: { top: [{ channel: 'local-db:sessions:list', count: 12, oldestMs: 2000, request: '00000000', source: 'renderer' }] },
+      waiting: { top: [{ count: 128, oldestMs: 2000 }] } });
+    expect(rows.filter(r => r.stage === 'admission')).toHaveLength(4);
+    expect(rows).toContainEqual(expect.objectContaining({ stage: 'path', reason: 'ack-timeout' }));
+    expect(rows.at(-1)).toMatchObject({ stage: 'suppressed', counts: { 'admission:full': 16 } });
+    await expect(scheduler.run('other', false, 30_000, async () => 42)).resolves.toBe(42);
+    scheduler.clear(new DeviceLinkError('NOT_CONNECTED', 'stop'));
+    active.resolve(); await Promise.all(pending);
+  });
+
   // A pressured peer previously refilled all four background slots. Exercise
   // production admission with deferred reads: foreground/other peers still run.
   it("reduces pressured background concurrency and recovers after delivery", async () => {
@@ -42,7 +97,8 @@ describe("invoke admission", () => {
     await Promise.all(results);
   });
 
-  const sameHost = ["host", sharedTaskHostPeer("task-a", "host"), sharedTaskGuestPeer("task-b", "member", "host")];
+  const sameHost = ["host", sharedTaskHostPeer("task-a", "host"), sharedTaskGuestPeer("task-b", "member", "host"),
+    providerShareHostPeer('share-a', 'host'), providerShareGuestPeer('share-b', 'member', 'host')];
 
   it.each([false, true])("shares physical-host active and waiting limits across scoped peers (background=%s)", async (background) => {
     const scheduler = new InvokeScheduler();
@@ -80,6 +136,26 @@ describe("invoke admission", () => {
     active.resolve();
     await Promise.all([...running, ...pending, fresh]);
     expect(started).toEqual([...sameHost.filter(peer => peer !== cancelledPeer), "fresh"]);
+  });
+
+  // Unit: a relay outage cancels unsent relay work, while bounded, healthy
+  // direct peers retain their queue and the existing concurrency limit.
+  it("keeps direct-peer admissions without replaying cancelled relay writes", async () => {
+    const scheduler = new InvokeScheduler();
+    const active = deferred();
+    const running = ['direct', 'relay'].flatMap(peer => Array.from({ length: 12 }, () =>
+      scheduler.run(peer, false, 30_000, () => active.promise)));
+    const directWrite = vi.fn(async () => {}), relayWrite = vi.fn(async () => {});
+    const kept = scheduler.run('direct', false, 30_000, directWrite);
+    const cancelled = scheduler.run('relay', false, 30_000, relayWrite);
+    const rejected = expect(cancelled).rejects.toMatchObject({ code: 'NOT_CONNECTED', inFlight: undefined });
+    scheduler.clear(new DeviceLinkError('NOT_CONNECTED', 'relay lost'), peer => peer === 'direct');
+    await rejected;
+    expect(directWrite).not.toHaveBeenCalled();
+    active.resolve();
+    await Promise.all([...running, kept]);
+    expect(directWrite).toHaveBeenCalledOnce();
+    expect(relayWrite).not.toHaveBeenCalled();
   });
 
   it("runs a 32-request burst in bounded batches and prioritizes current work", async () => {
@@ -263,7 +339,18 @@ describe("invoke admission", () => {
     expect(resolveInvokePriority("local-db:messages:view")).toBe("foreground");
     expect(resolveInvokePriority("local-db:messages:view", true)).toBe("background");
     expect(resolveInvokePriority("git-context:pr-status")).toBe("background");
+    expect(resolveInvokePriority("maker:usage:zhipu-coding-plan")).toBe("background");
     expect(resolveInvokePriority("maker:predict-prompt")).toBe("background");
+    const remote = 'maker:remote-agent:v1';
+    for (const request of [
+      ...['send', 'steer', 'abort', 'requestGracefulStop', 'stopBackgroundTask'].map(method => ({ op: 'call', method })),
+      ...['interaction', 'callback', 'error'].map(type => ({ op: 'reply', payload: { json: { type } } })),
+      { op: 'close' },
+    ]) expect(resolveInvokePriority(remote, true, [request])).toBe('interactive');
+    for (const request of [undefined, [], { op: 'poll' }, { op: 'upload' }, { op: 'open' }, { op: 'push' },
+      { op: 'call', method: 'getContextUsage' }, { op: 'call', method: 'unknown' },
+      { op: 'reply', payload: { json: { type: 'http' } } }, { op: 'reply', payload: { uploadId: 'opaque' } },
+    ]) expect(resolveInvokePriority(remote, undefined, [request])).toBe('foreground');
   });
 
   it("classifies PR reads as background and keeps control/lease maintenance outside the queue", () => {

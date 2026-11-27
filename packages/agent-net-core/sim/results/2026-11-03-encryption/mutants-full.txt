@@ -1,0 +1,133 @@
+caught    PING 写入不查空间（越界）  every_seed_delivers_an_intact_ordered_stream, outages_recover_or_give_up_within_the_deadli
+caught    一次测量就收紧上限  outage_during_startup_is_not_read_as_a_rate_limit, rtt_is_learned_even_when_every_packet_t
+caught    不发校验包  parity_is_not_starved_by_piggybacked_acks, late_packets_are_repaired_like_lost_ones, jitte
+caught    不受拥塞窗口限制  outages_cost_little_traffic_and_recover_quickly, timeouts_do_not_resend_the_whole_window, 
+caught    不按节奏发送  initial_timeout_keeps_the_first_flight_available_for_measurement, first_flight_measures_th
+caught    丢包后不保持捎带  small_messages_stay_covered_on_long_paths, result:
+caught    丢包时不捎带  small_messages_stay_covered_on_long_paths, result:
+caught    丢包率从 0 慢慢爬  first_flight_measures_the_path, repeated_outages_recover_fast, result:
+caught    从不发窗口探测  reopened_window_is_announced_immediately, slow_reader_stalls_the_sender_and_recovers, wind
+caught    共享：持续满发时补偿不收紧  misread_loss_stays_bounded_on_shallow_queues, result:
+caught    共享：排队时的丢包也算随机丢包  several_connections_do_not_collapse_the_bottleneck, misread_loss_stays_bounded_on_shallow_
+caught    共享：探测撞到丢包后不留余量  tcp_and_agent_net_both_get_a_share, several_connections_do_not_collapse_the_bottleneck, re
+caught    共享：探测见到丢包也不结束  probing_does_not_get_stuck_on_a_rate_limiter, result:
+caught    共享：等确认的时间也算迟到  fair_share_does_not_take_timeouts_for_congestion, several_connections_do_not_collapse_the_
+caught    共享：让路大窗口涨得快  fair_share_splits_the_line_with_tcp, result:
+caught    共享：让路小窗口涨得快  fair_share_splits_the_line_with_tcp, result:
+caught    共享：让路把超时当拥塞  fair_share_does_not_take_timeouts_for_congestion, fair_share_splits_the_line_with_tcp, res
+caught    共享：让路按小包算窗口  fair_share_window_floor_does_not_shrink_with_the_packet, result:
+caught    共享：让路接手后接着减窗口  fair_share_takes_an_empty_line_right_away, fair_share_splits_the_line_with_tcp, result:
+caught    共享：让路接手窗口太小  fair_share_takes_an_empty_line_right_away, fair_share_splits_the_line_with_tcp, result:
+caught    共享：让路窗口下限回到全速的下限  fair_share_window_floor_does_not_shrink_with_the_packet, fair_share_splits_the_line_with_t
+caught    共享：让路窗口不涨回来  fair_share_fills_an_empty_line_and_full_is_the_default, fair_share_splits_the_line_with_tc
+caught    共享：让路窗口保底不涨  fair_share_splits_the_line_with_tcp, result:
+caught    共享：让路见到丢包不减速  fair_share_splits_the_line_with_tcp, fair_share_fills_an_empty_line_and_full_is_the_defaul
+caught    共享：让路配置不生效  fair_share_splits_the_line_with_tcp, fair_share_fills_an_empty_line_and_full_is_the_defaul
+caught    共享：迟到的发送节奏不补  coarse_timers_do_not_cap_the_rate, result:
+caught    共享：默认改成让路  coarse_timers_do_not_cap_the_rate, probing_does_not_get_stuck_on_a_rate_limiter, fair_shar
+caught    分片账目漏减  every_seed_delivers_an_intact_ordered_stream, different_recovery_policies_interoperate, in
+caught    初始窗口发完干等第一个确认  long_paths_keep_sending_before_the_first_ack, first_flight_measures_the_path, result:
+caught    加密：不保留上一个接收密钥  encrypted_seeds_deliver_intact_streams, keys_rotate_across_the_packet_number_boundary, res
+caught    加密：不查重放窗口  replayed_packets_are_rejected, result:
+caught    加密：不检查握手超时  replayed_initiations_do_not_amplify, handshake_gives_up_when_nobody_answers, result:
+caught    加密：伪造的回复打断握手  tampered_handshakes_are_rejected_and_recover, result:
+caught    加密：包头不参与认证  tampered_packets_are_rejected_without_side_effects, result:
+caught    加密：协议名不进握手哈希  handshake_matches_the_noise_test_vectors, result:
+caught    加密：发送方向不换密钥  encrypted_seeds_deliver_intact_streams, keys_rotate_across_the_packet_number_boundary, res
+caught    加密：同时发起时双方都让  simultaneous_open_settles_on_one_handshake, result:
+caught    加密：回复按自己的包长填充  responses_never_outgrow_requests, result:
+caught    加密：回复里漏掉 se  handshake_matches_the_noise_test_vectors, encrypted_seeds_deliver_intact_streams, responde
+caught    加密：换密钥后接收方不前移  keys_rotate_across_the_packet_number_boundary, result:
+caught    加密：接受全零的 DH 结果  low_order_public_keys_are_rejected, result:
+caught    加密：握手完成不发探测  responder_can_talk_first, tampered_handshakes_are_rejected_and_recover, result:
+caught    加密：未认证的包也算确认  replayed_packets_are_rejected, responses_never_outgrow_requests, simultaneous_open_settles
+caught    加密：确认前就发数据  responses_never_outgrow_requests, replayed_initiations_do_not_amplify, encrypted_seeds_del
+caught    加密：认证前就记入重放窗口  tampered_packets_are_rejected_without_side_effects, result:
+caught    加密：迟到的同时发起请求当成新连接  simultaneous_open_settles_on_one_handshake, result:
+caught    加密：重发的请求不再回复  tampered_handshakes_are_rejected_and_recover, encrypted_seeds_deliver_intact_streams, resu
+caught    加密：防重放窗口前移时不清旧位  keys_rotate_across_the_packet_number_boundary, result:
+caught    发包前不处理到期判丢  recovery_policies_keep_streams_intact_and_make_progress, every_seed_delivers_an_intact_ord
+caught    发现不了限速  rate_limited_loss_is_not_read_as_random, rate_limiters_are_found_without_any_rtt_signal, r
+caught    受保护的包不等校验结果  parity_recovers_losses_without_a_round_trip, result:
+caught    启动不看队列  first_flight_measures_the_path, result:
+caught    宽松上限等到期才放开  outage_during_startup_is_not_read_as_a_rate_limit, result:
+caught    巡航不排空队列  bulk_transfers_do_not_keep_the_queue_full, result:
+caught    带宽是瓶颈时也发校验包  lost_messages_do_not_wait_for_the_next_one, repeated_outages_recover_fast, parity_share_st
+caught    干净网络也发校验包  initial_timeout_keeps_the_first_flight_available_for_measurement, clean_paths_carry_no_red
+caught    干净网络也捎带  clean_paths_carry_no_redundancy, result:
+caught    干净路径也逐包确认  first_flight_measures_the_path, result:
+caught    序号回绕还原错误  every_seed_delivers_an_intact_ordered_stream, recovery_policies_keep_streams_intact_and_ma
+caught    开头不捎带  small_messages_stay_covered_on_long_paths, result:
+caught    彻底断开也不判死  outages_recover_or_give_up_within_the_deadline, result:
+caught    成片丢包也发校验包  outage_during_startup_is_not_read_as_a_rate_limit, result:
+caught    把所有包都算成低于容量  rate_limited_loss_is_not_read_as_random, rate_limiters_are_found_without_any_rtt_signal, f
+caught    抖动也算晚到  jitter_is_not_counted_as_holes, result:
+caught    捎带份数不随丢包率增加  lost_messages_do_not_wait_for_the_next_one, small_messages_stay_covered_on_long_paths, res
+caught    捎带最老而不是最新  small_messages_stay_covered_on_long_paths, repeated_outages_recover_fast, result:
+caught    接受确认未发送的包  acknowledgement_of_unsent_data_is_rejected, result:
+caught    接受超出已发送范围的 una  hang detected
+caught    断网时不捎带最老的分片  repeated_outages_recover_fast, result:
+caught    断网时段也算容量  outages_cost_little_traffic_and_recover_quickly, result:
+caught    断网时继续重发整个窗口  outages_cost_little_traffic_and_recover_quickly, result:
+caught    断网时退避不封顶  outages_cost_little_traffic_and_recover_quickly, repeated_outages_recover_fast, result:
+caught    晚到的包不算空洞  late_packets_are_repaired_like_lost_ones, result:
+caught    未读数据没有上限  forged_stream_headers_stay_within_bounds, result:
+caught    校验余量不够  first_flight_measures_the_path, result:
+caught    校验包挤占数据的在途额度  late_packets_are_repaired_like_lost_ones, first_flight_measures_the_path, parity_share_sta
+caught    校验包没减掉已知分片  different_recovery_policies_interoperate, outage_during_startup_is_not_read_as_a_rate_limi
+caught    校验包算错长度也收下  late_packets_get_acknowledged, rtt_is_learned_even_when_every_packet_times_out_first, ever
+caught    校验覆盖太短  jitter_is_not_counted_as_holes, parity_recovers_losses_without_a_round_trip, parity_share_
+caught    没见过丢包也提前发校验  clean_paths_carry_no_redundancy, result:
+caught    流：不带流头的分片猜成默认流  every_seed_delivers_every_stream_intact, headerless_segments_wait_for_their_header, intera
+caught    流：不给交互流留窗口  a_full_window_keeps_room_for_interactive_messages, result:
+caught    流：丢的交互消息不优先重传  interactive_messages_go_ahead_of_retransmissions, a_flood_of_tiny_messages_cannot_overrun_
+caught    流：交互消息也要排节奏  small_interactive_messages_skip_the_pacing_queue, interactive_messages_stay_fast_beside_a_
+caught    流：交互消息放行不限量  a_flood_of_tiny_messages_cannot_overrun_the_path, bulk_data_marked_interactive_is_still_pa
+caught    流：低优先级可以饿死  priorities_share_the_link, result:
+caught    流：低优先级重传不算前进  interactive_messages_stay_fast_beside_a_full_file, result:
+caught    流：单独的交互流也压低队列  a_lone_interactive_stream_runs_at_full_speed, result:
+caught    流：压低队列时拿历史最低当基准  interactive_messages_stay_fast_beside_a_full_file, result:
+caught    流：发送不看额度  an_unread_stream_only_stalls_itself, result:
+caught    流：发送端不释放用完的流  finished_streams_release_their_slots, result:
+caught    流：同级的流不轮转  priorities_share_the_link, result:
+caught    流：开流数量不设限  forged_stream_headers_stay_within_bounds, result:
+caught    流：探测时不补发额度  lost_credit_is_sent_again, every_seed_delivers_every_stream_intact, result:
+caught    流：新消息排在重传后面  interactive_messages_go_ahead_of_retransmissions, interactive_messages_stay_fast_beside_a_
+caught    流：每个分片都带流头  a_lone_stream_does_not_repeat_its_header, headerless_segments_wait_for_their_header, every
+caught    流：混发时启动不放轻  interactive_messages_stay_fast_beside_a_full_file, result:
+caught    流：混发时在途不收紧  interactive_messages_stay_fast_beside_a_full_file, result:
+caught    流：混发时巡航不让路  interactive_messages_stay_fast_beside_a_full_file, result:
+caught    流：混发时探测不放轻  interactive_messages_stay_fast_beside_a_full_file, result:
+caught    流：等确认耽误的节奏不补  interactive_messages_stay_fast_beside_a_full_file, result:
+caught    流：结束标记不生效  finished_streams_release_their_slots, every_seed_delivers_every_stream_intact, result:
+caught    流：读了数据不更新额度  hang detected
+caught    流：调整优先级不生效  priorities_share_the_link, result:
+caught    流：路径变慢也一直降速  interactive_messages_stay_fast_beside_a_full_file, result:
+caught    流：额度更新太慢  interactive_messages_stay_fast_beside_a_full_file, credit_keeps_up_with_fast_paths, result
+caught    短中断退避太长  short_outages_recover_within_a_few_round_trips, result:
+caught    确认了超窗口的包（丢数据）  segments_beyond_the_window_are_retried_not_lost, result:
+caught    确认区间不校验下溢  acknowledgement_of_unsent_data_is_rejected, result:
+caught    确认后不释放在途名额  every_seed_delivers_an_intact_ordered_stream, initial_timeout_keeps_the_first_flight_avail
+caught    确认帧不带晚到的包  late_packets_get_acknowledged, result:
+caught    窗口卡住时不发副本  first_flight_measures_the_path, repeated_outages_recover_fast, rtt_is_learned_even_when_ev
+caught    窗口受限也算低于容量  first_flight_measures_the_path, rate_limiters_are_found_without_any_rtt_signal, repeated_o
+caught    窗口打开时不主动通知  reopened_window_is_announced_immediately, result:
+caught    第一批包不测速  first_flight_measures_the_path, outages_cost_little_traffic_and_recover_quickly, parity_sh
+caught    被对端窗口卡住也下调带宽  reopened_window_is_announced_immediately, repeated_outages_recover_fast, result:
+caught    解校验用错系数  different_recovery_policies_interoperate, outage_during_startup_is_not_read_as_a_rate_limi
+caught    误判也算晚到  initial_timeout_keeps_the_first_flight_available_for_measurement, clean_paths_carry_no_red
+caught    误判后不放宽判丢窗口  jitter_is_not_counted_as_holes, first_flight_measures_the_path, late_packets_get_acknowled
+caught    读走的分片不留给校验  jitter_is_not_counted_as_holes, parity_recovers_losses_without_a_round_trip, reordering_is
+caught    超出接收窗口也收下（内存失控）  crafted_flood_cannot_grow_receive_buffers, result:
+caught    超大分片不校验  crafted_flood_cannot_grow_receive_buffers, result:
+caught    超时一次就当断网  small_messages_stay_covered_on_long_paths, repeated_outages_recover_fast, result:
+caught    超时不算乱序余量  jitter_is_not_counted_as_holes, late_packets_get_acknowledged, result:
+caught    超时只判最老的包  recovery_policies_keep_streams_intact_and_make_progress, repeated_outages_recover_fast, ev
+caught    过期探测计时器造成空转  reopened_window_is_announced_immediately, slow_reader_stalls_the_sender_and_recovers, ever
+caught    迟到的确认不算 RTT 样本  initial_timeout_keeps_the_first_flight_available_for_measurement, first_flight_measures_th
+caught    退避按包计  long_paths_keep_sending_before_the_first_ack, outages_cost_little_traffic_and_recover_quic
+caught    重传不优先最小序号  parity_is_not_starved_by_piggybacked_acks, every_seed_delivers_an_intact_ordered_stream, r
+caught    重置后留着旧的一轮 RTT  outages_cost_little_traffic_and_recover_quickly, result:
+caught    降速阶段不按实际送达打折  repeated_outages_recover_fast, result:
+caught    随机丢包不补偿速率  random_loss_does_not_collapse_the_rate, repeated_outages_recover_fast, result:
+caught    首字节版本位不校验  packets_of_another_version_are_rejected, result:

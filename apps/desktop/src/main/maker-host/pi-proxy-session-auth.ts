@@ -8,12 +8,16 @@
  */
 
 import { timingSafeEqual } from 'node:crypto';
+import type { NativeSubscriptionAccount } from '@cindy/maker-core';
+import { captureHostedSessionModelAccess } from './session-provider-store.js';
 
 interface ActivePiProxySession {
   token: string;
   controller: AbortController;
   resolveProviderId: () => string | null;
   scope: 'session' | 'subagent-route';
+  hostedModelAccess: ReturnType<typeof captureHostedSessionModelAccess>;
+  nativeSubscriptionAccount?: NativeSubscriptionAccount;
 }
 
 const activeSessions = new Map<string, Map<string, ActivePiProxySession>>();
@@ -40,7 +44,7 @@ export function registerPiProxySession(
   sessionId: string,
   token: string,
   resolveProviderId: () => string | null = () => null,
-  options: { scope?: 'session' | 'subagent-route' } = {},
+  options: { scope?: 'session' | 'subagent-route'; nativeSubscriptionAccount?: NativeSubscriptionAccount } = {},
 ): () => void {
   if (!sessionId || !token)
     throw new Error('Pi proxy session registration requires an id and token');
@@ -48,6 +52,8 @@ export function registerPiProxySession(
     token,
     controller: new AbortController(),
     resolveProviderId,
+    nativeSubscriptionAccount: options.nativeSubscriptionAccount,
+    hostedModelAccess: captureHostedSessionModelAccess(sessionId),
     scope: options.scope === 'subagent-route' ? 'subagent-route' as const : 'session' as const,
   };
   const registrations = activeSessions.get(sessionId) ?? new Map();
@@ -72,6 +78,12 @@ export function getPiProxySessionSignal(sessionId: string, candidate: string | n
   return findPiProxySession(sessionId, candidate)?.controller.signal ?? null;
 }
 
+export function getPiProxySubscriptionAccount(sessionId: string, candidate: string | null): NativeSubscriptionAccount | undefined {
+  const account = findPiProxySession(sessionId, candidate)?.nativeSubscriptionAccount;
+  account?.assertCurrent();
+  return account;
+}
+
 /**
  * Host-resolved provider bound to the authenticated Pi process. Callers must
  * authenticate the same session immediately before reading this value.
@@ -88,6 +100,11 @@ export function isPiProxySubagentRoute(
   candidate: string | null,
 ): boolean {
   return findPiProxySession(sessionId, candidate)?.scope === 'subagent-route';
+}
+
+/** Retain the exact hosted grant until the token closes, even if it was revoked or replaced first. */
+export function getPiProxyHostedModelAccess(sessionId: string, candidate: string | null) {
+  return findPiProxySession(sessionId, candidate)?.hostedModelAccess;
 }
 
 /** Test isolation only. */

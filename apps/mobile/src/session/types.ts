@@ -1,3 +1,4 @@
+import type { OutputLimitDetails } from '@cindy/maker-shared';
 import type { MobileSessionAgentSwitchIntent } from '@cindy/maker-shared/device-link-contract';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 import type { RemoteMoney } from '@/session/remoteMoney';
@@ -33,6 +34,8 @@ export type RemoteMessageRole =
   | 'agent_switch';
 
 export interface RemoteSession {
+  /** Explicit host project membership; older hosts fall back to workingDir. */
+  projectDir?: string | null;
   tags?: import('@cindy/maker-shared').TaskTag[];
   id: string;
   userId: string;
@@ -63,6 +66,7 @@ export interface RemoteSession {
   totalMoney?: RemoteMoney;
   /** 旧 Desktop / USD 账本兼容字段。 */
   totalCostUsd?: number;
+  totalCostUsdIsApproximate?: boolean;
   contextTokens?: number;
   contextWindow?: number;
   clearedAt?: string | null;
@@ -74,17 +78,30 @@ export interface RemoteSession {
   interruptedTurnStartedAt?: number | null;
   lastTurnEndedAt?: number | null;
   status: RemoteSessionStatus;
-  agentKind: 'cc' | 'codex' | 'pi';
+  agentKind: 'cc' | 'codex' | 'pi' | 'acp';
   /**
    * 远程 Agent:非空 = Agent 在同账号另一台电脑上运行(desktop sessions.agent_device_id),
    * 任务与文件仍留在被控电脑;null / 缺省 = Agent 就在被控电脑运行(含旧被控端)。
    */
   agentDeviceId?: string | null;
-  /** main 进程内的下一条消息跨 Agent 切换意图；null = 已确认没有。 */
+  /** main 进程内的下一条消息跨 Agent 切换意图；null = 已确认没有。只含切到内置引擎的意图。 */
   agentSwitchIntent?: RemoteSessionAgentSwitchIntent | null;
-  source?: string;
+  /**
+   * 下一条消息切到插件引擎的意图(desktop 投影 targetAgentKind = 'acp')；与 agentSwitchIntent 互斥。
+   * 内置引擎的展示与切换链路只读 agentSwitchIntent，插件引擎由模型选择器单独呈现。
+   */
+  pluginEngineSwitchIntent?: import('./pluginEngines').MobilePluginEngineSwitchIntent | null;
+  /** 智能路由持续托管投影(旧电脑缺省，解除托管时为 null)。 */
+  modelGroupBinding?: RemoteSessionModelGroupBinding | null;
+  /** 任务来源；null = 已确认是普通任务，缺省 = 来源未知（任务入口须先向电脑核对）。 */
+  source?: string | null;
+  sideChatPromoted?: true;
   companion?: import("./teammateTaskSource").TaskCompanion;
   taskTeammate?: import("./teammateTaskSource").TaskTeammate | null;
+  /** Owning Lead on this device, when the active team is known. */
+  orcaLeadSessionId?: string;
+  /** Live Worker question state, independent of Agent Island visibility. */
+  orcaHasPendingQuestion?: boolean;
   orcaRole?: 'lead' | 'worker' | string | null;
   /** 运行设备上的远端 Worker 身份；团队在 Lead 电脑上，不作为本机 orcaRole 使用。旧端缺省。 */
   orcaRemoteLead?: {
@@ -95,9 +112,23 @@ export interface RemoteSession {
     workerLabel: string;
     releasedAt?: number;
   } | null;
+  /** 由另一个任务通过 send_to_session（create 模式）新建时的来源任务元数据。旧端缺省。 */
+  createdBySession?: {
+    kind: 'session';
+    sessionId: string;
+    title?: string;
+    deviceId?: string;
+    deviceName?: string;
+    botId?: string;
+    botName?: string;
+  } | null;
   parentSessionId?: string | null;
   forkedAtMessageId?: string | null;
   pinnedAt?: string | null;
+  snoozedUntil?: string | null;
+  /** Host-authoritative IM attachment flag returned by `local-db:sessions:get`. */
+  imAttached?: boolean;
+  snoozedAt?: string | null;
   userSendAt: string | null;
   lastActivityAt?: string | null;
   createdAt: string;
@@ -110,6 +141,8 @@ export interface RemoteSession {
   /** device-link 会话列表带的最近一条 user/assistant 消息纯文本预览(桌面 sessionToCamel 产出,
    *  已处理 clearedAt / rewind),供首页 idle 会话直接显示,无需 load 完整消息。 */
   preview?: string | null;
+  /** Stable summary already supplied by hosts for pinned cards. */
+  summary?: string | null;
   /** client-local:冷启动由首页快照缓存种入的行(remoteSessionStore.hydrateDeviceSessionsIfEmpty
    *  打标)。缓存行字段经瘦身/截断,只能用于列表渲染与跳转,不能作为发送参数——会话页在
    *  fresh 元数据(getSession→upsert)到达前据此禁发。fresh 对象来自服务器,天然无此标记。 */
@@ -118,6 +151,18 @@ export interface RemoteSession {
    *  createSession 还没确认,会话页据此禁发(输入可编辑存草稿)、syncSession 守卫
    *  跳过 NOT_FOUND。fresh 对象来自服务器,天然无此标记,权威 upsert 后自净。 */
   pendingLocalCreation?: boolean;
+  /** Local retry state for a side chat whose fork has not been acknowledged. */
+  sideChatCreationError?: 'session.sideChat.unsupported' | 'session.sideChat.waitForReply' | 'session.sideChat.createFailed';
+}
+
+export interface RemoteSessionModelGroupBinding {
+  selection: { type: 'route'; id: string };
+  routeName: string;
+  parentId?: string;
+  parentName?: string;
+  isSourceRoute?: true;
+  autoSwitch: boolean;
+  pendingSwitch?: true;
 }
 
 export interface RemoteSessionRuntimeProfile {
@@ -134,6 +179,9 @@ export interface RemoteSessionRuntimePending {
   profile: RemoteSessionRuntimeProfile;
 }
 
+export type MobileHandoffCoverage = 'complete' | 'condensed';
+export type MobileSystemCardData = Record<string, unknown> & { handoffCoverage?: MobileHandoffCoverage };
+
 export interface RemoteMessage {
   /** Local durable-push order, retained by the display cache. */
   cacheReceipt?: import('@cindy/maker-shared/message-window').HistoryCacheReceipt;
@@ -149,11 +197,13 @@ export interface RemoteMessage {
   createdAt: string;
   /** Large settled tool input released from the transcript mirror and recoverable by message id. */
   mobileToolInputProjection?: MobileToolInputProjection;
-  systemCardData?: Record<string, unknown>;
+  systemCardData?: MobileSystemCardData;
   systemCardType?:
     | 'help' | 'context' | 'cost' | 'pwd' | 'status' | 'compact' | 'cmd' | 'goal-complete' | 'goal-resumed' | 'context-rebuild' | 'auto-resume' | 'learn' | 'agent-switch'
     /** 代输入结束留痕(由隐藏续接行派生,无输入值)。 */
     | 'input-handoff'
+    /** 新任务「让插件选」的结果(由 agentMeta.pluginModelRoute 派生)。 */
+    | 'plugin-model-route'
     | 'mcp-app';
 }
 
@@ -222,6 +272,7 @@ export interface RemoteSerializedAttachment {
 }
 
 export interface QueuedRemoteMessage {
+  waitingForRemoteAccount?: true;
   durableDelivery?: true;
   clientId: string;
   text: string;
@@ -242,6 +293,8 @@ export interface QueuedRemoteMessage {
   userName?: string;
   /** Interface language of this phone. The desktop stamps it only for a remote turn. */
   uiLanguage?: string;
+  /** Classical output style chosen next to the language; used only with a Chinese uiLanguage. */
+  classicalStyle?: string;
   createOpts: {
     agentKind: 'claude-code' | 'codex' | 'pi';
     workingDir: string;
@@ -282,6 +335,8 @@ export type ContinuationInFlightProjectionCapability = 'unknown' | 'legacy' | 's
 export interface InputProjection {
   sessionId: string;
   pendingQueue: QueuedRemoteMessage[];
+  /** 当前会话的实时引擎不支持同轮插话（老被控端缺省 = 按支持处理）。 */
+  steerUnsupported?: boolean;
   steeringQueueClientIds: string[];
   queuePaused: boolean;
   queueExpanded: boolean;
@@ -291,8 +346,10 @@ export interface InputProjection {
   error: string | null;
   /** Stable error reason for live projections; older controlled hosts may omit it. */
   errorReason?: string | null;
+  reconnectHandoff?: 'disabled' | 'exhausted';
   /** Bounded details for tool-loop errors; older projections may omit them. */
   toolLoop?: MobileToolLoopErrorDetails | null;
+  outputLimit?: OutputLimitDetails | null;
   recovery?: unknown;
   errorRetryText: string | null;
   /** Explicit failed-turn continuation eligibility; absent on older hosts. */

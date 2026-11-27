@@ -23,6 +23,7 @@ import {
   type HookWorkspaceProviderSourceEntry,
 } from '../../shared/hookControlIpc.js';
 import { ownerScopedImUserDataPath } from '../im/ownerScopedStorage.js';
+import { createOverrideSettingsFile, type OverrideSettingsCommitOptions } from '../maker-host/override-settings-file.js';
 
 export type HookProviderChannel = HookWorkspaceProviderSourceEntry['channel'];
 /** 持久化条目形状 = IPC 契约形状(shared 单一来源, 防 main/renderer 漂移)。 */
@@ -47,14 +48,19 @@ function isEntry(raw: unknown): raw is WorkspaceProviderSourceEntry {
   if (!raw || typeof raw !== 'object') return false;
   const r = raw as Record<string, unknown>;
   return (
-    (r.channel === 'slack' || r.channel === 'telegram' || r.channel === 'x') &&
+    (r.channel === 'slack' ||
+      r.channel === 'telegram' ||
+      r.channel === 'x' ||
+      r.channel === 'feishu' ||
+      r.channel === 'shared') &&
     (r.teamId === null || (typeof r.teamId === 'string' && r.teamId.length > 0 && r.teamId.length <= 64)) &&
     typeof r.workspace === 'string' &&
     HOOK_WORKSPACE_ALIAS_RE.test(r.workspace) &&
     typeof r.providerId === 'string' &&
     r.providerId.length > 0 &&
     r.providerId.length <= 128 &&
-    (r.agentDeviceId == null || (typeof r.agentDeviceId === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(r.agentDeviceId)))
+    (r.agentDeviceId == null || (typeof r.agentDeviceId === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(r.agentDeviceId))) &&
+    (r.modelGroup == null || (typeof r.modelGroup === 'string' && r.modelGroup.length > 0 && r.modelGroup.length <= 128))
   );
 }
 
@@ -121,12 +127,15 @@ export function setWorkspaceProviderSource(
   workspace: string,
   providerId: string | null,
   agentDeviceId?: string | null,
+  modelGroup?: string | null,
 ): WorkspaceProviderSourceEntry[] {
   const fp = filePath();
   const rest = readFileEntries(fp).filter((e) => !sameKey(e, channel, teamId, workspace));
+  const trimmedGroup = typeof modelGroup === 'string' && modelGroup.trim() ? modelGroup.trim() : null;
   const next =
     providerId === null ? rest : [...rest, { channel, teamId, workspace, providerId,
-      ...(agentDeviceId ? { agentDeviceId } : {}) }];
+      ...(agentDeviceId ? { agentDeviceId } : {}),
+      ...(trimmedGroup ? { modelGroup: trimmedGroup } : {}) }];
   writeFileEntries(fp, next);
   return next;
 }
@@ -171,4 +180,60 @@ export function clearWorkspaceProviderSourcesForRemoteModelChanges(
   if (next.length === entries.length) return null;
   writeFileEntries(fp, next);
   return next;
+}
+
+/**
+ * 项目改名后, 把按旧名称存的来源偏好挪到新名称下(新名称下已有的不覆盖);
+ * 有改动时返回更新后的全量条目, 否则返回 null。来源偏好只在本机, 没有镜像。
+ */
+export function moveWorkspaceProviderSourcesToRenamed(
+  renames: ReadonlyArray<{ from: string; to: string }>,
+): WorkspaceProviderSourceEntry[] | null {
+  if (renames.length === 0) return null;
+  const fp = filePath();
+  let entries = readFileEntries(fp);
+  let changed = false;
+  for (const { from, to } of renames) {
+    if (from === to || !HOOK_WORKSPACE_ALIAS_RE.test(to)) continue;
+    for (const row of entries.filter((entry) => entry.workspace === from)) {
+      const hasTarget = entries.some((entry) => sameKey(entry, row.channel, row.teamId, to));
+      entries = [
+        ...entries.filter((entry) => entry !== row),
+        ...(hasTarget ? [] : [{ ...row, workspace: to }]),
+      ];
+      changed = true;
+    }
+  }
+  if (!changed) return null;
+  writeFileEntries(fp, entries);
+  return entries;
+}
+
+/** 清掉按这些项目名称存的全部模型来源(所有渠道与共用那份); 有变化时返回新的全量条目, 否则 null。 */
+export function clearWorkspaceProviderSourcesFor(
+  names: readonly string[],
+): WorkspaceProviderSourceEntry[] | null {
+  if (names.length === 0) return null;
+  const fp = filePath();
+  const entries = readFileEntries(fp);
+  const released = new Set(names);
+  const kept = entries.filter((entry) => !released.has(entry.workspace));
+  if (kept.length === entries.length) return null;
+  writeFileEntries(fp, kept);
+  return kept;
+}
+
+const hostSourceStore = createOverrideSettingsFile<StoreFile>({
+  filePath, defaults: { entries: [] }, normalize: raw => raw as StoreFile,
+  preserveUnreadableFile: true, maxBytes: 1024 * 1024,
+  validateOverrides: raw => {
+    if (raw.entries !== undefined && (!Array.isArray(raw.entries) || raw.entries.length > 256 || !raw.entries.every(isEntry))) throw new Error('Invalid workspace sources');
+  }, log: { info() {}, warn() {} }, label: 'hook-workspace-provider-source',
+});
+export const getHostWorkspaceProviderSourceStore = () => hostSourceStore;
+/** One CAS for the native source table; retain extension metadata on unchanged and changed rows. */
+export function commitHostWorkspaceProviderSources(entries: WorkspaceProviderSourceEntry[], options: OverrideSettingsCommitOptions) {
+  return hostSourceStore.commitAtomic(current => ({ set: { entries: entries.map(row => ({
+    ...current.value.entries.find(old => sameKey(old, row.channel, row.teamId, row.workspace)), ...row,
+  })) } }), options);
 }

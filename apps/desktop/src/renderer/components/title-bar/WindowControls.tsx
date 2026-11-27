@@ -4,6 +4,8 @@ import { useTranslation } from 'react-i18next';
 import { Minus, Square, X } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
+import { toast } from '@/lib/toast';
+import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 import { Spinner } from '@/components/ui/spinner';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
@@ -34,6 +36,23 @@ interface WindowControlsProps {
 
 const DEFAULT_ICON_CLASS = 'text-titlebar-icon';
 
+/**
+ * Windows 关闭按钮悬停：系统标准红 `#E81123` + 白色图标，Light / Dark 同值。
+ * 平台约定色，不是主题语义色（DESIGN.md §2「Windows window close button」）。
+ */
+const WINDOWS_CLOSE_HOVER_CLASS = 'hover:bg-[#E81123] hover:text-white';
+
+/**
+ * True when this renderer is served by `cindy-host` into a browser tab.
+ *
+ * A tab already has the browser's own chrome, so drawing minimize/maximize/close
+ * here would duplicate those buttons and target a window that does not exist.
+ * The flag is set by the host shim before the app module runs.
+ */
+function isHostServedWebClient(): boolean {
+  return Boolean((window as unknown as { __CINDY_HOST_WEB__?: boolean }).__CINDY_HOST_WEB__);
+}
+
 export function WindowControls({
   iconClassName = DEFAULT_ICON_CLASS,
   onMinimize,
@@ -53,6 +72,7 @@ export function WindowControls({
   // 同步触发的 onOpenChange(false) 里也能立刻拦住 (state 还没 flush 到 props)。
   const [closing, setClosing] = useState(false);
   const closingRef = useRef(false);
+  const closeOnceRef = useRef<DesktopCloseBehavior | undefined>(undefined);
   const { t } = useTranslation();
 
   useEffect(() => {
@@ -111,12 +131,16 @@ export function WindowControls({
     if (closingRef.current) return;
     closingRef.current = true;
     setClosing(true);
-    window.electronAPI.windowClose();
+    const once = closeOnceRef.current;
+    closeOnceRef.current = undefined;
+    if (once) window.electronAPI.windowClose(once);
+    else window.electronAPI.windowClose();
   };
 
-  const continueCloseWithBehavior = async (behavior: DesktopCloseBehavior): Promise<void> => {
+  const continueCloseWithBehavior = async (behavior: DesktopCloseBehavior, once = false): Promise<void> => {
     if (behavior === 'tray') {
-      window.electronAPI.windowClose();
+      if (once) window.electronAPI.windowClose(behavior);
+      else window.electronAPI.windowClose();
       return;
     }
     if (behavior === 'minimize') {
@@ -130,6 +154,7 @@ export function WindowControls({
     } catch {
       hasInFlight = false;
     }
+    closeOnceRef.current = once ? behavior : undefined;
     if (hasInFlight) {
       setShowCloseDialog(true);
     } else {
@@ -141,6 +166,7 @@ export function WindowControls({
     if (savingCloseBehaviorRef.current) return;
     savingCloseBehaviorRef.current = true;
     setSavingCloseBehavior(true);
+    let saved = true;
     try {
       if (window.electronAPI.platform === 'linux') {
         await window.electronAPI.windowBehavior.setLinuxCloseBehavior(
@@ -151,14 +177,15 @@ export function WindowControls({
           behavior === 'tray' ? behavior : 'quit',
         );
       }
-      setShowCloseBehaviorDialog(false);
-      await continueCloseWithBehavior(behavior);
-    } catch {
-      // 弹窗尚未关闭；持久化失败时保留它，不带着未知行为进入关闭流程。
+    } catch (error) {
+      saved = false;
+      toast.error(t(mapIpcErrorToI18nKey(error, { fallback: 'ipcError.INTERNAL' })));
     } finally {
+      setShowCloseBehaviorDialog(false);
       savingCloseBehaviorRef.current = false;
       setSavingCloseBehavior(false);
     }
+    await continueCloseWithBehavior(behavior, !saved);
   };
 
   // 点 X 的入口: Windows 首次关闭先在 renderer 内选择关闭行为,之后再查是否
@@ -220,6 +247,9 @@ export function WindowControls({
   const keepRunningBehavior: Exclude<DesktopCloseBehavior, 'quit'> =
     window.electronAPI.platform === 'linux' ? 'minimize' : 'tray';
 
+  // Browser tab: no desktop window chrome to control (see isHostServedWebClient).
+  if (isHostServedWebClient()) return null;
+
   return (
     <>
       <div className="flex gap-0.5">
@@ -251,7 +281,7 @@ export function WindowControls({
             className="inline-flex focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
           >
             <button
-              className={cn(controlBase, 'hover:bg-[#E81123] hover:text-white')}
+              className={cn(controlBase, WINDOWS_CLOSE_HOVER_CLASS)}
               aria-hidden="true"
               disabled
             >
@@ -260,7 +290,7 @@ export function WindowControls({
           </span>
         ) : (
           <button
-            className={cn(controlBase, 'hover:bg-[#E81123] hover:text-white')}
+            className={cn(controlBase, WINDOWS_CLOSE_HOVER_CLASS)}
             onClick={() => void handleCloseClick()}
             aria-label={t('titleBar.close')}
             data-tooltip-exempt="windows-system-control"
@@ -301,6 +331,7 @@ export function WindowControls({
           // loading 期间 Radix Action 的同步 onOpenChange(false) / Cancel /
           // 外部状态变化都一律不放过 —— 弹框必须留着直到进程死。
           if (closingRef.current && !next) return;
+          if (!next) closeOnceRef.current = undefined;
           setShowCloseDialog(next);
         }}
         title={t('titleBar.closeConfirm.title')}
@@ -332,15 +363,15 @@ function ClosingOverlay({ visible }: { visible: boolean }) {
   if (!visible) return null;
   return createPortal(
     <div
-      // z-[10000]: 高于 splash 的 z-[9999], 保证退出 overlay 永远在最顶层
-      className="fixed inset-0 z-[10000] flex select-none items-center justify-center"
+      // z-modal(10000): 高于 splash 的 fullscreen 层(9999), 保证退出 overlay 永远在最顶层
+      className="fixed inset-0 z-modal flex select-none items-center justify-center"
       style={{ background: 'rgba(0, 0, 0, 0.2)' }}
       role="alertdialog"
       aria-live="polite"
       aria-label={t('titleBar.closing.title')}
     >
       <div
-        className="flex items-center gap-2 rounded-full border border-[var(--border-default)] px-4 py-2 shadow-sm"
+        className="flex items-center gap-2 rounded-full border border-[var(--border-default)] px-4 py-2 shadow-[shadow:var(--shadow-menu)]"
         style={{ background: 'var(--surface-elevated)' }}
       >
         <Spinner size={16} className="text-[var(--text-primary)]" />

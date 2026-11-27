@@ -14,6 +14,10 @@ import {
 } from '@/device-link/providerShareLinkIntent';
 import { clearRelayJoinIntent, getPendingRelayJoinIntent } from '@/device-link/relayJoinIntent';
 import { redirectSystemPath } from '../../app/+native-intent';
+import { sharedTaskGuestPeer, sharedTaskHostPeer } from '@cindy/device-link';
+import { buildMobileSessionDeepLink } from '@/session/sessionLinks';
+import { closeChatInvite, getChatInviteIntent, openManualChatInvite, setManualChatInviteLink } from '@/chat/chatInviteIntent';
+import { closeGiftCard, getGiftCardIntent } from '@/gift-card/giftCardIntent';
 
 const invitation = 'A'.repeat(43);
 const incoming = 'cindy://shared-session?invitation=' + invitation + '&server=https%3A%2F%2Frelay.example.test';
@@ -25,10 +29,142 @@ const relayOwnerKey = 'Q'.repeat(43);
 const relayPairSecret = 'S'.repeat(43);
 const relayUnsignedIncoming = 'cindy://relay/join?u=' + encodeURIComponent('https://relay.home.example:47820/') + '&c=' + relayCode;
 const relayIncoming = relayUnsignedIncoming + '&o=' + relayOwnerKey + '&s=' + relayPairSecret;
-beforeEach(() => { vi.useFakeTimers(); clearSharedTaskInvitationIntent(); clearProviderShareLinkIntent(); clearRelayJoinIntent(); setMobileAuthOwner(null); });
-afterEach(() => { clearSharedTaskInvitationIntent(); clearProviderShareLinkIntent(); clearRelayJoinIntent(); vi.useRealTimers(); });
+function clearChatInvite() {
+  const pending = getChatInviteIntent();
+  if (pending) closeChatInvite(pending.id);
+}
+function clearGiftCard() {
+  const pending = getGiftCardIntent();
+  if (pending) closeGiftCard(pending.id);
+}
+beforeEach(() => { vi.useFakeTimers(); clearSharedTaskInvitationIntent(); clearProviderShareLinkIntent(); clearRelayJoinIntent(); clearChatInvite(); clearGiftCard(); setMobileAuthOwner(null); });
+afterEach(() => { clearSharedTaskInvitationIntent(); clearProviderShareLinkIntent(); clearRelayJoinIntent(); clearChatInvite(); clearGiftCard(); vi.useRealTimers(); });
 
 describe('mobile native deep-link redirects', () => {
+  it.each(['cindy', 'cindycn', 'cindydev'])('opens a ready device in the %s app', scheme => {
+    for (const initial of [true, false]) {
+      expect(redirectSystemPath({ path: scheme + '://devices/guest-42', initial })).toBe('/devices/guest-42');
+    }
+  });
+
+  // 契约：礼品卡兑换码等同于余额，原生入口必须在交给路由前把它收进内存。此前没有任何用例
+  // 覆盖 gift 链接；单元层即可验证（一条原生 URL，无网络、存储或原生运行时）。
+  it.each([true, false])('receives gift card links without routing their redeem code (initial=%s)', initial => {
+    for (const path of ['cindy://gift/G0123456789ABCDE', 'cindycn://gift/G012-3456-789A-BCDE', '/gift/G0123456789ABCDE']) {
+      const route = redirectSystemPath({ path, initial });
+      expect(route).toBe(initial ? '/' : null);
+      expect(getGiftCardIntent()).toMatchObject({ code: 'G0123456789ABCDE' });
+      expect(getChatInviteIntent()).toBeNull();
+      clearGiftCard();
+    }
+    // 残缺的链接也不落到 404 页：面板里提示兑换码无效。
+    expect(redirectSystemPath({ path: 'cindy://gift/oops', initial })).toBe(initial ? '/' : null);
+    expect(getGiftCardIntent()).toMatchObject({ invalidLink: true });
+  });
+
+  // A2 contract: the actual native entry must redact the invite before routing,
+  // preserve it across login, and never replace an active confirmation. Existing
+  // shared-task/provider tests do not cover group invitations. Unit tier: one
+  // native URL plus account changes, no network, storage or native runtime.
+  it.each([true, false])('receives group invitations without routing their token (initial=%s)', initial => {
+    for (const path of [
+      `cindy://chat-invite/${invitation}`,
+      `cindycn://chat-invite/${invitation}`,
+      `cindydev://chat-invite/${invitation}`,
+      `/chat-invite/${invitation}`,
+    ]) {
+      const route = redirectSystemPath({ path, initial });
+      expect(route).toBe(initial ? '/' : null);
+      expect(getChatInviteIntent()).toMatchObject({ link: `cindy://chat-invite/${invitation}`, hasOtherInvitation: false });
+      expect(getPendingSharedTaskInvitationIntent()).toBeNull();
+      clearChatInvite();
+    }
+  });
+
+  // Unit regression: two ingress hosts for one share ID must keep one intent;
+  // the prior same-URL case did not distinguish invitation identity from its host.
+  it('keeps opaque share references outside router state and deduplicates the same share', () => {
+    const link = `https://share.example.test/chat-invite/${'s'.repeat(32)}`;
+    expect(redirectSystemPath({ path: link, initial: true })).toBe('/');
+    const target = getChatInviteIntent()!;
+    expect(target.link).toBe(link);
+    for (const path of [link, link.replace('share.example.test', 'share-cn.example.test')]) {
+      expect(redirectSystemPath({ path, initial: false })).toBeNull();
+      expect(getChatInviteIntent()).toBe(target);
+    }
+  });
+
+  it('keeps a resolved manual share as the same invitation when its original link opens again', () => {
+    const link = `https://share.example.test/chat-invite/${'s'.repeat(32)}`;
+    openManualChatInvite(); const id = getChatInviteIntent()!.id;
+    setManualChatInviteLink(id, link);
+    setManualChatInviteLink(id, `cindy://chat-invite/${invitation}`);
+    for (const path of [link, link.replace('share.example.test', 'share-cn.example.test')]) {
+      redirectSystemPath({ path, initial: false });
+      expect(getChatInviteIntent()?.hasOtherInvitation).toBe(false);
+    }
+    setManualChatInviteLink(id);
+    const other = `https://share.example.test/chat-invite/${'t'.repeat(32)}`;
+    setManualChatInviteLink(id, other); setManualChatInviteLink(id, `cindy://chat-invite/${shareInvitation}`);
+    redirectSystemPath({ path: link, initial: false });
+    expect(getChatInviteIntent()?.hasOtherInvitation).toBe(true);
+  });
+
+  it('shows the local format result without retaining malformed input or selecting its server', () => {
+    for (const path of [
+      'cindy://chat-invite/short',
+      `cindycn://chat-invite/${invitation}?secret=fixture`,
+      `cindydev://chat-invite/${invitation}#fixture`,
+      `other://chat-invite/${invitation}`,
+      `cindy://CHAT-INVITE/${invitation}`,
+      `/chat-invite/join#${invitation}?app=other`,
+      `https://user@public.example.invalid/chat-invite/join#${invitation}`,
+      `http://public.example.invalid/chat-invite/join#${invitation}`,
+      `/chat-invite/join?token=${invitation}`,
+    ]) {
+      expect(redirectSystemPath({ path, initial: false })).toBeNull();
+      expect(getChatInviteIntent()).toMatchObject({ link: 'cindy://chat-invite/' });
+      clearChatInvite();
+    }
+  });
+
+  it('retains the original group target through unsuccessful login and account changes until closed', () => {
+    redirectSystemPath({ path: `cindy://chat-invite/${invitation}`, initial: true });
+    const target = getChatInviteIntent()!;
+    redirectSystemPath({ path: 'cindy://auth?error=access_denied', initial: false });
+    expect(getChatInviteIntent()).toBe(target);
+    setMobileAuthOwner('first');
+    invalidateMobileAuthOwnerForSwitch();
+    setMobileAuthOwner('second', 'cn');
+    expect(getChatInviteIntent()).toBe(target);
+    closeChatInvite(target.id);
+    expect(getChatInviteIntent()).toBeNull();
+  });
+
+  it('deduplicates a group link and leaves a different invitation to be reopened', () => {
+    redirectSystemPath({ path: `cindy://chat-invite/${invitation}`, initial: false });
+    const target = getChatInviteIntent()!;
+    redirectSystemPath({ path: `cindycn://chat-invite/${invitation}`, initial: false });
+    expect(getChatInviteIntent()).toBe(target);
+    redirectSystemPath({ path: `cindy://chat-invite/${shareInvitation}`, initial: false });
+    expect(getChatInviteIntent()).toEqual({ ...target, hasOtherInvitation: true });
+    closeChatInvite(target.id);
+    expect(getChatInviteIntent()).toBeNull(); // No pending FIFO is exposed after closing.
+  });
+
+  it('shares manual entry with the external host and ignores a stale close callback', () => {
+    openManualChatInvite();
+    const manual = getChatInviteIntent()!;
+    openManualChatInvite();
+    expect(getChatInviteIntent()).toBe(manual);
+    redirectSystemPath({ path: `cindy://chat-invite/${invitation}`, initial: false });
+    expect(getChatInviteIntent()).toEqual({ ...manual, hasOtherInvitation: true });
+    closeChatInvite(manual.id);
+    redirectSystemPath({ path: `cindy://chat-invite/${invitation}`, initial: false });
+    closeChatInvite(manual.id);
+    expect(getChatInviteIntent()?.link).toBe(`cindy://chat-invite/${invitation}`);
+  });
+
   it('keeps the invitation out of router state, survives login, and clears on an account change', () => {
     expect(redirectSystemPath({ path: incoming, initial: true })).toBe('/shared-session');
     expect(getPendingSharedTaskInvitationIntent()).toMatchObject({ invitation, server: 'https://relay.example.test' });
@@ -37,6 +173,72 @@ describe('mobile native deep-link redirects', () => {
     invalidateMobileAuthOwnerForSwitch();
     expect(getPendingSharedTaskInvitationIntent()).toBeNull();
   });
+
+  // #8205: the production native entry receives singular session links, while
+  // Expo's page route is plural and uses the normalized query names.
+  describe('session task links', () => {
+    it.each([true, false])('routes canonical and legacy links with their device and message target (initial=%s)', initial => {
+      for (const path of [
+        'cindy://session/s-123?device=host-7&message=msg-9&source=history#inbox',
+        'cindycn://session/s-123?device=host-7&message=msg-9&source=history#inbox',
+        'xdt-maker://session/s-123?device=host-7&message=msg-9&source=history#inbox',
+        '/session/s-123?device=host-7&message=msg-9&source=history#inbox',
+      ]) {
+        expect(redirectSystemPath({ path, initial })).toBe(
+          `/sessions/s-123?deviceId=host-7&focusClientId=msg-9${initial ? '' : `&focusRequestKey=${Date.now()}`}&source=history#inbox`,
+        );
+      }
+    });
+
+    it('preserves canonical query names over legacy aliases', () => {
+      expect(redirectSystemPath({
+        path: 'cindy://session/s-123?device=legacy&deviceId=canonical&message=old&focusClientId=current',
+        initial: false,
+      })).toBe('/sessions/s-123?deviceId=canonical&focusClientId=current');
+    });
+
+    it('keeps the validated path session when a query repeats the route key', () => {
+      expect(redirectSystemPath({
+        path: 'cindy://session/s-123?sessionId=other&source=history',
+        initial: false,
+      })).toBe('/sessions/s-123?source=history');
+    });
+
+    it.each([true, false])('keeps invalid singular session links out of an unmatched route (initial=%s)', initial => {
+      for (const path of ['/session/', '/session/%E0%A4%A', '/session/%2F', '/session/a/b', '/session/.hidden', '/session/a%20b', '/session/' + 'a'.repeat(129)]) {
+        expect(redirectSystemPath({ path, initial })).toBe(initial ? '/' : null);
+      }
+    });
+
+    it('does not treat an unrelated scheme as a Cindy session link', () => {
+      const path = 'evil://session/s-123?device=host-7&message=msg-9';
+      expect(redirectSystemPath({ path, initial: false })).toBe(path);
+    });
+
+    it('drops malformed query pairs without forwarding replacement characters', () => {
+      expect(redirectSystemPath({
+        path: 'cindy://session/s-123?device=%E0%A4%A&message=msg-9',
+        initial: false,
+      })).toBe(`/sessions/s-123?focusClientId=msg-9&focusRequestKey=${Date.now()}`);
+    });
+
+    it('keeps guest shared-task links on the original route contract', () => {
+      const peer = sharedTaskGuestPeer('task', 'member', 'host-7');
+      const path = `cindy://session/task?device=${encodeURIComponent(peer)}`;
+      expect(redirectSystemPath({ path, initial: false })).toBe(path);
+    });
+  });
+
+  // Unit through Expo's cold/warm entry. A copied guest link must open the scoped task screen.
+  it('opens an already joined task from the copied link without creating an invitation', () => {
+    const peer = sharedTaskHostPeer('share', 'host');
+    const link = buildMobileSessionDeepLink('task', { deviceId: peer });
+    const expected = '/sessions/task?deviceId=' + encodeURIComponent(peer);
+    expect(redirectSystemPath({ path: link, initial: true })).toBe(expected);
+    expect(redirectSystemPath({ path: link.replace('cindy:/', ''), initial: false })).toBe(expected);
+    expect(getPendingSharedTaskInvitationIntent()).toBeNull();
+  });
+
   it('handles a warm path and expires an unclaimed invitation', () => {
     redirectSystemPath({ path: incoming.replace('cindy:/', ''), initial: false });
     expect(getPendingSharedTaskInvitationIntent()).not.toBeNull();

@@ -6,34 +6,49 @@
  * 新账号看不到旧账号的电脑与冷却。冷却按账号落盘(coolingStore.ts)，新起的那份先读回来。
  * 调用方拿到的是固定的门面，每次调用按当前账号转发。
  */
-import type { ProviderView } from '@cindy/model-providers';
+
 import { createLocalAgentLoadRegistry } from '../local-agent/load.js';
 import { REMOTE_AGENT_CHANNEL, parseRemoteAgentCaps } from '@cindy/device-link';
 import { app } from 'electron';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../shared/claudeSubscriptionUsage.js';
+import type { ProviderView } from '@cindy/model-providers';
 
-import { activeOwnerScopeKey } from '../appSessionState.js';
+import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
+import { getClientEndpoint } from '../clientEndpointsService.js';
 import {
   readProviderGroupSummary,
   type ProviderGroupRebalanceSuggestion,
   type ProviderGroupSessionGroup,
 } from '../../shared/providerGroup.js';
-import { captureProviderShareGroupRecovery, getReceivedShares } from '../device-link/providerShareGuest.js';
+import { captureProviderShareGroupRecovery, getReceivedShares, providerShareAccessEpoch } from '../device-link/providerShareGuest.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
-import { remoteBackgroundInvoke } from '../device-link/index.js';
+import { onRemotePushChannel, remoteBackgroundInvoke, getDeviceLinkStatus, getRemoteLinkCloseEpoch, getSelfDeviceId, hasOfflineDirectPath } from '../device-link/index.js';
+import { captureProviderMetadataContinuityScope, isTemporaryProviderMetadataFailure } from '../device-link/providerMetadataContinuity.js';
 import { isMobilePlatform } from '../device-link/controllerPlatform.js';
 import { deviceName } from '../device-link/deviceName.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
-import { readDeviceProviderViews } from '../remote-agent/controller/deviceCatalog.js';
-import { listProviderGroupBindings } from './bindings.js';
+import { readDeviceProviderCatalog, readDeviceProviderViews } from '../remote-agent/controller/deviceCatalog.js';
+import { listProviderGroupBindings } from './bindings.desktop.js';
 import { readProviderGroupCooling, writeProviderGroupCooling } from './coolingStore.js';
-import { createProviderGroupDirectory, type ProviderGroupDirectory } from './directory.js';
+import { createProviderGroupDirectory, type ProviderGroupCatalogRead, type ProviderGroupDirectory } from './directory.js';
 import { createProviderGroupExternalLoad, type ProviderGroupExternalLoad } from './externalLoad.js';
 import { createProviderGroupRemoteClient, type ProviderGroupRemoteClient } from './remoteClient.js';
+import { captureProviderManagementScope } from './managementScope.js';
 import { createProviderGroupRouter, type ProviderGroupRouter } from './router.js';
 import type { ProviderGroupRemoteGroups } from './service.js';
 import { readProviderGroup } from './store.js';
-import { createProviderGroupUsageReader, providerGroupUsageSnapshot, providerGroupCodexUsageSnapshot, providerGroupCodexUsageFromReads, type ProviderGroupCodexUsageSnapshot } from './usage.js';
+import { onSubscriptionAccountsChanged, readSubscriptionPoolUsage, readSubscriptionPoolModelAvailability, readSubscriptionPoolScheduling } from '../subscription-accounts/runtime.js';
+import { prepareLegacyOpenAiPool } from '../subscription-accounts/openAiPoolMerge.js';
+import { isSubscriptionProvider, parseSubscriptionPoolScheduling, type SubscriptionProvider } from '../../shared/subscriptionAccounts.js';
+import { providerWeeklyQuotaSource } from '../../shared/providerQuotaSource.js';
+import { DEVICE_LINK_PUSH } from '../../shared/deviceLinkIpc.js';
+import { isModelCatalogSourceChange } from '../../shared/controlledModelCatalog.js';
+import { createGroupContinuityClient } from './continuityClient.js';
+import { createProviderGroupUsageReader, providerGroupUsageMatches, providerGroupUsageSnapshot, providerGroupCodexUsageSnapshot, providerGroupCodexUsageFromReads, providerGroupShareQuotaFromInsights, providerGroupShareQuotaSnapshot, type ProviderGroupCodexUsageSnapshot } from './usage.js';
+import { createLogger } from '../logger.js';
+import { isProviderShareAgentDeviceId, providerShareIdOfAgentDeviceId } from '../../shared/providerShare.js';
+
+const log = createLogger('provider-group');
 
 interface OwnerRuntime {
   owner: string;
@@ -41,9 +56,11 @@ interface OwnerRuntime {
   router: ProviderGroupRouter;
   externalLoad: ProviderGroupExternalLoad;
   applicationLoad: ReturnType<typeof createLocalAgentLoadRegistry>;
+  accountsChanged(deviceId: string, providerId?: SubscriptionProvider, change?: unknown): void;
 }
 
 let current: OwnerRuntime | null = null;
+let accountPushSubscribed = false;
 let applicationLoadListener: ((sessionId: string) => void) | null = null;
 let isTurnRunning: (sessionId: string) => boolean = () => false;
 let localLoad: (() => Promise<ReadonlyMap<string, number>>) | null = null;
@@ -51,14 +68,108 @@ let sessionGroupReader: ((sessionId: string) => Promise<ProviderGroupSessionGrou
 let claudeUsageReader: ((providerId: string) => Promise<ClaudeSubscriptionUsageSnapshot | null>) | null = null;
 let codexUsageReader: ((providerId: string) => Promise<unknown>) | null = null;
 let codexRateLimitsReader: ((providerId: string) => Promise<unknown>) | null = null;
+let shareQuotaReader: ((shareId: string) => Promise<unknown>) | null = null;
 
 function runtimeForActiveOwner(): OwnerRuntime {
+  if (!accountPushSubscribed) {
+    accountPushSubscribed = true;
+    onSubscriptionAccountsChanged((providerId, _resetAccountId, change) => {
+      if (current?.owner === activeOwnerScopeKey()) current.accountsChanged('', providerId, change);
+    });
+    onRemotePushChannel((deviceId, channel, payload) => {
+      if (current?.owner !== activeOwnerScopeKey()) return;
+      if (channel === DEVICE_LINK_PUSH.ACCESS_REVOKED || isModelCatalogSourceChange(channel)) {
+        current.directory.invalidate(deviceId);
+        return;
+      }
+      if (channel !== 'subscription-accounts:changed') return;
+      const event = payload && typeof payload === 'object' ? payload as { providerId?: unknown; change?: unknown } : null;
+      current.accountsChanged(deviceId, isSubscriptionProvider(event?.providerId) ? event.providerId : undefined, event?.change);
+    });
+  }
   const owner = activeOwnerScopeKey();
   if (current?.owner === owner) return current;
+  type PoolQuota = Awaited<ReturnType<typeof readSubscriptionPoolUsage>>;
+  const isCurrent = () => !isAppSessionBoundaryPending() && activeOwnerScopeKey() === owner && current?.directory === directory;
+  const captureCurrent = (member: { agentDeviceId?: string | null; providerId?: string }) => {
+    const deviceId = member.agentDeviceId;
+    const epoch = deviceId ? getRemoteLinkCloseEpoch(deviceId) : 0;
+    const identity = member.providerId ? poolProviders.get(deviceId ?? '')?.get(member.providerId)?.identity : undefined;
+    return () => isCurrent() && identity?.valid !== false && (!deviceId || getRemoteLinkCloseEpoch(deviceId) === epoch);
+  };
+  // Use the owning computer's provider metadata: a named subscription may own a pool,
+  // while an unregistered legacy connection still uses its existing single-account reader.
+  const poolProviders = new Map<string, Map<string, {
+    pooled: boolean; family: SubscriptionProvider | null; identity: { valid: boolean };
+  }>>();
+  const rememberPools = (deviceId: string, providers: ProviderView[]) => {
+    if (!isCurrent()) return [];
+    const previous = poolProviders.get(deviceId);
+    const ids = new Set(providers.filter(provider => provider.connected && !provider.suspended).map(provider => provider.id));
+    for (const [id, metadata] of previous ?? []) if (!ids.has(id)) metadata.identity.valid = false;
+    poolProviders.set(deviceId, new Map(providers.map(provider => {
+      const source = providerWeeklyQuotaSource(provider);
+      const previousIdentity = previous?.get(provider.id)?.identity;
+      return [provider.id, { pooled: !!(provider.subscriptionPool || provider.subscriptionAccountPool),
+        family: provider.subscriptionAccountPool ?? provider.subscriptionPool
+          ?? (source === 'codex' ? 'openai' : source === 'claude' ? 'anthropic' : null),
+        identity: previousIdentity?.valid ? previousIdentity
+          : { valid: provider.connected && !provider.suspended } }];
+    })));
+    return providers;
+  };
+  const hasPool = (providerId: string, deviceId = '') =>
+    isSubscriptionProvider(providerId) || poolProviders.get(deviceId)?.get(providerId)?.pooled === true;
+  const poolScheduling = new Map<string, () => boolean>();
+  const poolQuotaReads = new Map<string, { at: number; pending: boolean; result: Promise<unknown>; current: () => boolean }>();
+  function readPoolRequest<T>(deviceId: string, providerId: string, model: string | undefined,
+    request: () => Promise<T>): Promise<T | null> {
+    const key = JSON.stringify([deviceId, providerId, model]);
+    const cached = poolQuotaReads.get(key);
+    if (cached?.current() && (cached.pending || (model === undefined && Date.now() - cached.at < 30_000)))
+      return cached.result as Promise<T | null>;
+    const current = captureCurrent({ agentDeviceId: deviceId, providerId });
+    const entry = { at: Date.now(), pending: true, result: null! as Promise<T | null>, current };
+    entry.result = Promise.resolve().then(() => isCurrent() ? request() : null).catch(() => null).then(result => {
+      if (!current() || poolQuotaReads.get(key) !== entry) return null;
+      return result;
+    }).finally(() => {
+      entry.pending = false;
+      if (model !== undefined && poolQuotaReads.get(key) === entry) poolQuotaReads.delete(key);
+    });
+    poolQuotaReads.set(key, entry);
+    return entry.result;
+  }
+  const readPoolQuota = async (providerId: string, deviceId?: string): Promise<PoolQuota> => {
+    if (!hasPool(providerId, deviceId)) return undefined;
+    if (!deviceId) return readSubscriptionPoolUsage(providerId);
+    return readPoolRequest(deviceId, providerId, undefined, async (): Promise<PoolQuota> => {
+      const current = captureCurrent({ agentDeviceId: deviceId, providerId });
+      const result = await remoteBackgroundInvoke(deviceId, 'maker:subscription-pool:quota', [providerId], {
+        preSend: () => { if (!isCurrent()) throw new Error('provider group account changed'); },
+      }).catch(() => null);
+      const raw = result?.ok ? result.result as { providerId?: string; pooled?: boolean; usage?: Record<string, unknown> | null; schedulingVersion?: unknown } : null;
+      if (raw?.providerId !== providerId || raw.pooled !== true) return undefined;
+      if (current()) {
+        const key = JSON.stringify([deviceId, providerId]);
+        if (raw.schedulingVersion === 1) poolScheduling.set(key, current);
+        else poolScheduling.delete(key);
+      }
+      return raw.usage ? {
+        claudeUsage: providerGroupUsageSnapshot(raw.usage.claudeUsage, Date.now()),
+        codexUsage: providerGroupCodexUsageSnapshot(raw.usage.codexUsage),
+      } : null;
+    });
+  };
   const usage = createProviderGroupUsageReader({
     parseSnapshot: providerGroupUsageSnapshot,
-    readLocal: (providerId) => claudeUsageReader?.(providerId) ?? Promise.resolve(null),
+    readLocal: async (providerId) => {
+      const pooled = await readPoolQuota(providerId);
+      return pooled !== undefined ? pooled?.claudeUsage ?? null : claudeUsageReader?.(providerId) ?? null;
+    },
     readRemote: async (deviceId, providerId) => {
+      const pooled = await readPoolQuota(providerId, deviceId);
+      if (pooled !== undefined) return pooled?.claudeUsage ?? null;
       const result = await remoteBackgroundInvoke(deviceId, 'maker:usage:claude-subscription', [providerId], {
         preSend: () => {
           if (activeOwnerScopeKey() !== owner) throw new Error('provider group account changed');
@@ -72,10 +183,13 @@ function runtimeForActiveOwner(): OwnerRuntime {
       if (echoedProvider !== undefined ? echoedProvider !== providerId : providerId !== 'anthropic') return null;
       return raw;
     },
-    isCurrent: () => activeOwnerScopeKey() === owner,
+    isCurrent,
+    captureCurrent,
     now: () => Date.now(),
   });
   const readRemoteCodexUsage = async (deviceId: string, providerId: string, channel: string, args: unknown[]) => {
+    const pooled = await readPoolQuota(providerId, deviceId);
+    if (pooled !== undefined) return channel === 'maker:usage:account' ? pooled?.codexUsage ?? null : null;
     const result = await remoteBackgroundInvoke(deviceId, channel, args, {
       preSend: () => {
         if (activeOwnerScopeKey() !== owner) throw new Error('provider group account changed');
@@ -92,49 +206,165 @@ function runtimeForActiveOwner(): OwnerRuntime {
   const codexUsage = createProviderGroupUsageReader({
     parseSnapshot: providerGroupCodexUsageSnapshot,
     cacheLocal: true,
-    readLocal: (providerId) => codexUsageReader?.(providerId) ?? Promise.resolve(null),
+    readLocal: async (providerId) => {
+      const pooled = await readPoolQuota(providerId);
+      return pooled !== undefined ? pooled?.codexUsage ?? null : codexUsageReader?.(providerId) ?? null;
+    },
     readRemote: (deviceId, providerId) => readRemoteCodexUsage(deviceId, providerId, 'maker:usage:account', ['codex', providerId]),
-    isCurrent: () => activeOwnerScopeKey() === owner,
+    isCurrent,
+    captureCurrent,
     now: () => Date.now(),
   });
   const codexLimits = createProviderGroupUsageReader({
     parseSnapshot: providerGroupCodexUsageSnapshot,
     cacheLocal: true,
-    readLocal: async (providerId) => providerGroupCodexUsageFromReads(null, await codexRateLimitsReader?.(providerId), Date.now()),
+    readLocal: async (providerId) => {
+      const pooled = await readPoolQuota(providerId);
+      return pooled !== undefined ? pooled?.codexUsage ?? null : providerGroupCodexUsageFromReads(null, await codexRateLimitsReader?.(providerId), Date.now());
+    },
     readRemote: async (deviceId, providerId) => providerGroupCodexUsageFromReads(null,
       await readRemoteCodexUsage(deviceId, providerId, 'maker:usage:codex-rate-limits', [providerId]), Date.now()),
-    isCurrent: () => activeOwnerScopeKey() === owner,
+    isCurrent,
+    captureCurrent,
+    now: () => Date.now(),
+  });
+  // 分享来的电脑：只经该分享自己的授权读分享者开放的额度(与额度总览同一通道，不读用量历史)。每次取用都核对
+  // 分享关系与访问代次，一变在途与缓存的读数都作废；没开放、离线或旧版本时按读不到用量处理。
+  const receivedShare = (shareId: string) => getReceivedShares().find((share) => share.shareId === shareId);
+  const shareQuota = createProviderGroupUsageReader({
+    parseSnapshot: providerGroupShareQuotaSnapshot,
+    readShares: true,
+    readLocal: async () => null,
+    readRemote: async (agentDeviceId) => {
+      const shareId = providerShareIdOfAgentDeviceId(agentDeviceId);
+      const share = shareId ? receivedShare(shareId) : undefined;
+      if (!share || share.status !== 'active' || !share.hostOnline || !share.hostCapable || !shareQuotaReader) return null;
+      return providerGroupShareQuotaFromInsights(await shareQuotaReader(share.shareId), Date.now());
+    },
+    isCurrent,
+    captureCurrent: (member) => {
+      const shareId = providerShareIdOfAgentDeviceId(member.agentDeviceId);
+      const share = shareId ? JSON.stringify(receivedShare(shareId) ?? null) : null;
+      const epoch = shareId ? providerShareAccessEpoch(shareId) : 0;
+      return () => isCurrent() && shareId !== null && providerShareAccessEpoch(shareId) === epoch
+        && JSON.stringify(receivedShare(shareId) ?? null) === share;
+    },
     now: () => Date.now(),
   });
   const mergeCodexUsage = (account: ProviderGroupCodexUsageSnapshot | null, limits: ProviderGroupCodexUsageSnapshot | null) => {
-    if (activeOwnerScopeKey() !== owner) return null;
+    if (!isCurrent()) return null;
     return providerGroupCodexUsageSnapshot({
       appServerBuckets: limits?.appServerBuckets ?? account?.appServerBuckets,
       webSnapshot: account?.webSnapshot,
+      nativeAccountPool: account?.nativeAccountPool || limits?.nativeAccountPool,
     });
   };
   const directory = createProviderGroupDirectory({
-    listLocalProviders: () => getDesktopProviderService().listProviders({ allowSideEffects: false }),
+    listLocalProviders: async () => rememberPools('', await getDesktopProviderService().listProviders({ allowSideEffects: false })),
     localDeviceName: () => deviceName(),
     localAppVersion: () => app.getVersion(),
     listDevices: async () => (await handleListDevices(deviceDirectoryDeps())).devices,
-    readDeviceProviders: (agentDeviceId) => readDeviceProviderViews(remoteBackgroundInvoke, agentDeviceId),
+    readDeviceProviders: async (agentDeviceId, options) => rememberPools(agentDeviceId,
+      await readDeviceProviderViews(remoteBackgroundInvoke, agentDeviceId,
+        { groupMember: true, live: options?.live, ownFreshness: true })),
+    readDeviceProviderCatalog: async (agentDeviceId, options) => {
+      // The directory keeps its own 15s cache and its retirement decisions need the host's
+      // current answer, so it opts out of the shared fresh window (still gets continuity fallback).
+      const catalog = await readDeviceProviderCatalog(remoteBackgroundInvoke, agentDeviceId,
+        { groupMember: true, live: options?.live, ownFreshness: true });
+      rememberPools(agentDeviceId, catalog.views);
+      return catalog;
+    },
     listReceivedShares: () => getReceivedShares(),
     isMobilePlatform: (platform) => isMobilePlatform(platform),
+    captureCandidateScope: () => {
+      const endpoint = getClientEndpoint('deviceLinkApiBaseUrl');
+      return () => isCurrent() && getClientEndpoint('deviceLinkApiBaseUrl') === endpoint;
+    },
+    // Own computers only: a received share is closed under the sharer's peer key, which this
+    // generation cannot see, so its list entry keeps a single read.
+    captureLinkCloseEpoch: (agentDeviceId) => {
+      if (isProviderShareAgentDeviceId(agentDeviceId)) return () => false;
+      const epoch = getRemoteLinkCloseEpoch(agentDeviceId);
+      return () => getRemoteLinkCloseEpoch(agentDeviceId) === epoch;
+    },
+    // Only the short device id and the error code: messages may carry host details.
+    onCandidateReadFailed: (agentDeviceId, error) => {
+      const row = error && typeof error === 'object' ? error as { code?: unknown; message?: unknown } : {};
+      const code = typeof row.code === 'string' && row.code !== 'IPC_ERROR' ? row.code
+        : typeof row.message === 'string' ? /^\[([A-Z0-9_]+)\]/.exec(row.message)?.[1] ?? 'unknown' : 'unknown';
+      log.warn('add-computer list left out a computer it could not read', { device: agentDeviceId.slice(0, 8), code });
+    },
     localRunning: async (providerId) => (await readProviderRunningTurnsByProvider())?.get(providerId) ?? null,
     readClaudeUsage: (member) => usage.read(member),
     readCodexUsage: async (member) => {
+      const current = captureCurrent(member);
       const [account, limits] = await Promise.all([codexUsage.read(member), codexLimits.read(member)]);
-      return mergeCodexUsage(account, limits);
+      return current() ? mergeCodexUsage(account, limits) : null;
     },
     peekCodexUsage: (member) => mergeCodexUsage(codexUsage.peek(member), codexLimits.peek(member)),
-    invalidateUsage: () => { usage.invalidate(); codexUsage.invalidate(); codexLimits.invalidate(); },
+    readShareQuota: (member) => shareQuota.read(member),
+    invalidateUsage: (scope) => {
+      if (!scope?.preservePending) for (const key of poolScheduling.keys())
+        if (providerGroupUsageMatches(key, scope)) poolScheduling.delete(key);
+      if (!scope?.preservePending) {
+        for (const [deviceId, providers] of poolProviders) for (const [providerId, metadata] of providers) {
+          if (!providerGroupUsageMatches(JSON.stringify([deviceId, providerId]), scope)) continue;
+          metadata.identity.valid = false;
+          metadata.identity = { valid: true };
+        }
+      }
+      for (const [key, entry] of poolQuotaReads) {
+        if (!providerGroupUsageMatches(key, scope)) continue;
+        if (scope?.preservePending && entry.pending) entry.at = -Infinity;
+        else poolQuotaReads.delete(key);
+      }
+      usage.invalidate(scope); codexUsage.invalidate(scope); codexLimits.invalidate(scope); shareQuota.invalidate(scope);
+    },
     now: () => Date.now(),
+    mono: () => performance.now(),
   });
   const externalLoad = createProviderGroupExternalLoad({ now: () => Date.now() });
   const applicationLoad = createLocalAgentLoadRegistry();
   const router = createProviderGroupRouter({
+    prepareGroup: prepareLegacyOpenAiPool,
     directory,
+    readPoolScheduling: async (member, model, options) => {
+      if (!isCurrent() || !hasPool(member.providerId, member.agentDeviceId ?? '') || member.kind === 'share') return null;
+      const route = JSON.stringify(['scheduling-v1', model, options.remote, options.ownComputer === true, options.capability]);
+      return readPoolRequest(member.agentDeviceId ?? '', member.providerId, route, async () => {
+        if (member.kind === 'local') return readSubscriptionPoolScheduling(member.providerId, model, options);
+        if (!member.agentDeviceId) return null;
+        // Reuse the existing quota read as the optional capability handshake.
+        // Old peers receive no extra per-pick probes and never imply extra accounts.
+        if (poolScheduling.get(JSON.stringify([member.agentDeviceId, member.providerId]))?.() !== true) return null;
+        const result = await remoteBackgroundInvoke(member.agentDeviceId, 'maker:subscription-pool:quota',
+          [member.providerId, model, { scheduling: 1, ownComputer: options.ownComputer === true,
+            ...(options.capability ? { capability: options.capability } : {}) }], {
+            preSend: () => { if (!isCurrent()) throw new Error('provider group account changed'); },
+          });
+        if (!isCurrent() || !result.ok) return null;
+        const raw = result.result as { providerId?: unknown; model?: unknown; scheduling?: unknown } | null;
+        return raw?.providerId === member.providerId && raw.model === model
+          ? parseSubscriptionPoolScheduling(raw.scheduling) : null;
+      });
+    },
+    readPoolModelAvailability: async (member, model, options) => {
+      if (!isCurrent() || !hasPool(member.providerId, member.agentDeviceId ?? '') || member.kind === 'share') return null;
+      const route = JSON.stringify([model, options.remote, options.ownComputer === true]);
+      return readPoolRequest(member.agentDeviceId ?? '', member.providerId, route, async () => {
+        if (member.kind === 'local') return readSubscriptionPoolModelAvailability(member.providerId, model, options);
+        if (!member.agentDeviceId) return null;
+        const result = await remoteBackgroundInvoke(member.agentDeviceId, 'maker:subscription-pool:quota', [member.providerId, model], {
+          preSend: () => { if (!isCurrent()) throw new Error('provider group account changed'); },
+        });
+        if (!isCurrent() || !result.ok) return null;
+        const raw = result.result as { providerId?: unknown; model?: unknown; available?: unknown } | null;
+        // Old peers cannot prove availability for this exact model.
+        return raw?.providerId === member.providerId && raw.model === model && typeof raw.available === 'boolean'
+          ? raw.available : null;
+      });
+    },
     readCaps: async (member) => {
       if (activeOwnerScopeKey() !== owner) throw new Error('The account changed');
       const reply = await remoteBackgroundInvoke(member.agentDeviceId!, REMOTE_AGENT_CHANNEL, [{ op: 'caps' }]);
@@ -148,6 +378,7 @@ function runtimeForActiveOwner(): OwnerRuntime {
     ) }),
     isTurnRunning: (sessionId) => applicationLoad.isTurnRunning(sessionId) || isTurnRunning(sessionId),
     externalRunning: (providerId, memberKey) => externalLoad.running(providerId, memberKey),
+    externalPending: (providerId, memberKey) => externalLoad.pending(providerId, memberKey),
     coolingStore: {
       read: readProviderGroupCooling,
       // 换账号后旧账号那份还在路上的写入不落进新账号的文件。
@@ -156,12 +387,18 @@ function runtimeForActiveOwner(): OwnerRuntime {
       },
     },
     now: () => Date.now(),
-    random: () => Math.random(),
   });
   applicationLoad.subscribe((id) => {
     if (activeOwnerScopeKey() === owner) applicationLoadListener?.(id);
   });
-  current = { owner, directory, router, externalLoad, applicationLoad };
+  const accountsChanged: OwnerRuntime['accountsChanged'] = (deviceId, providerId, change) => {
+    const providerIds = providerId === undefined ? undefined : [providerId,
+      ...[...poolProviders.get(deviceId) ?? []].filter(([, metadata]) => metadata.family === providerId).map(([id]) => id)];
+    // Load updates refresh runningTurns in the catalog without changing quota evidence.
+    directory.invalidate(deviceId, { providerIds: change === 'load' && providerId ? [] : providerIds,
+      preservePending: providerId !== undefined && (change === 'usage' || change === 'load') });
+  };
+  current = { owner, directory, router, externalLoad, applicationLoad, accountsChanged };
   return current;
 }
 
@@ -169,10 +406,11 @@ const directoryFacade: ProviderGroupDirectory = {
   resolveMembers: (providerId, config, options) => runtimeForActiveOwner().directory.resolveMembers(providerId, config, options),
   listCandidates: (providerId, config) => runtimeForActiveOwner().directory.listCandidates(providerId, config),
   readDeviceCatalog: (agentDeviceId) => runtimeForActiveOwner().directory.readDeviceCatalog(agentDeviceId),
+  readDeviceCatalogState: (agentDeviceId) => runtimeForActiveOwner().directory.readDeviceCatalogState!(agentDeviceId),
   probe: (agentDeviceId, providerId) => runtimeForActiveOwner().directory.probe(agentDeviceId, providerId),
   memberLabel: (member) => runtimeForActiveOwner().directory.memberLabel(member),
   offlineForMs: async (agentDeviceId) => (await runtimeForActiveOwner().directory.offlineForMs?.(agentDeviceId)) ?? null,
-  invalidate: (agentDeviceId) => runtimeForActiveOwner().directory.invalidate(agentDeviceId),
+  invalidate: (agentDeviceId, options) => runtimeForActiveOwner().directory.invalidate(agentDeviceId, options),
 };
 
 
@@ -183,6 +421,14 @@ const routerFacade: ProviderGroupRouter = {
     const runtime = runtimeForActiveOwner();
     const view = await runtime.router.view(providerId, options);
     return activeOwnerScopeKey() === runtime.owner ? view : { providerId, config: null, members: [] };
+  },
+  memberViews: (providerId) => {
+    const runtime = runtimeForActiveOwner();
+    return new Map([...runtime.router.memberViews(providerId)].map(([key, read]) => [key, async () => {
+      if (activeOwnerScopeKey() !== runtime.owner) return { providerId, config: null, members: [] };
+      const view = await read();
+      return activeOwnerScopeKey() === runtime.owner ? view : { providerId, config: null, members: [] };
+    }]));
   },
   running: (providerId, memberKey) => runtimeForActiveOwner().router.running(providerId, memberKey),
   markCooling: (providerId, memberKey, until, model) => runtimeForActiveOwner().router.markCooling(providerId, memberKey, until, model),
@@ -225,11 +471,15 @@ export function getProviderGroupOwnerScope(): ProviderGroupOwnerScope {
   return {
     router: runtime.router,
     externalLoad: runtime.externalLoad,
-    isCurrent: () => activeOwnerScopeKey() === runtime.owner,
+    isCurrent: () => !isAppSessionBoundaryPending() && activeOwnerScopeKey() === runtime.owner && current === runtime,
   };
 }
 
 let remoteClient: ProviderGroupRemoteClient | null = null;
+let continuityClient: ReturnType<typeof createGroupContinuityClient> | null = null;
+let localContinuityHandler: ((controller: string, raw: unknown) => Promise<unknown>) | null = null;
+export function setProviderGroupContinuityHandler(handler: typeof localContinuityHandler): void { localContinuityHandler = handler; }
+export function hasProviderGroupContinuityHandler(): boolean { return localContinuityHandler !== null; }
 
 /** 问其他电脑上的组(无状态，按调用时的账号经设备互联发出)。 */
 export function getProviderGroupRemoteClient(): ProviderGroupRemoteClient {
@@ -245,18 +495,111 @@ export function getProviderGroupRemoteClient(): ProviderGroupRemoteClient {
  */
 export function getProviderGroupRemoteGroups(): ProviderGroupRemoteGroups {
   const client = getProviderGroupRemoteClient();
-  return {
-    async readGroup(ownerDeviceId, providerId) {
-      let views: ProviderView[];
-      try {
-        views = await directoryFacade.readDeviceCatalog(ownerDeviceId);
-      } catch {
-        return undefined;
+  // Re-read the local generation on every use. Binding it once at factory creation
+  // would make a later account/endpoint generation inherit the old routing scope.
+  const continuityScopeKey = () => `${activeOwnerScopeKey()}|${getClientEndpoint('deviceLinkApiBaseUrl')}`;
+  continuityClient ??= createGroupContinuityClient({
+    livePick: client.pick,
+    invoke: async (deviceId, channel, args, options) => {
+      options?.preSend?.();
+      if (deviceId === getSelfDeviceId()) {
+        if (!localContinuityHandler) throw new Error('[REMOTE_AGENT_UNAVAILABLE] Group continuity is not ready');
+        return { ok: true, result: await localContinuityHandler(deviceId, args[0]) };
       }
-      const view = views.find((candidate) => candidate.id === providerId);
-      return view ? readProviderGroupSummary((view as { group?: unknown }).group, providerId) : null;
+      return remoteBackgroundInvoke(deviceId, channel, args, options);
     },
-    pick: (ownerDeviceId, input) => client.pick(ownerDeviceId, input),
+    capture(ownerDeviceId, executor) {
+      const ownerScope = captureProviderMetadataContinuityScope(ownerDeviceId);
+      const executorScope = executor ? captureProviderMetadataContinuityScope(executor) : () => true;
+      const ownerEpoch = getRemoteLinkCloseEpoch(ownerDeviceId), executorEpoch = executor ? getRemoteLinkCloseEpoch(executor) : 0;
+      return () => ownerScope() && executorScope() && ownerEpoch === getRemoteLinkCloseEpoch(ownerDeviceId)
+        && (!executor || executorEpoch === getRemoteLinkCloseEpoch(executor));
+    },
+    onlineCapture(ownerDeviceId) {
+      let ownerScope: (() => void) | null = null;
+      try { ownerScope = captureProviderManagementScope(); } catch { return () => false; }
+      const closeEpoch = getRemoteLinkCloseEpoch(ownerDeviceId);
+      return () => {
+        try { ownerScope!(); } catch { return false; }
+        return closeEpoch === getRemoteLinkCloseEpoch(ownerDeviceId);
+      };
+    },
+    ownerMayRespond: owner => getDeviceLinkStatus() === 'online' || hasOfflineDirectPath(owner),
+    retryable: error => isTemporaryProviderMetadataFailure(error)
+      // dispatch reports an owner whose group handler has not registered yet as
+      // [UNAVAILABLE]; that is the same temporary "not ready" condition as the
+      // remote-agent channel and must not retire contexts already acknowledged
+      // by this owner and the executor.
+      || (error instanceof Error && /^\[(?:REMOTE_AGENT_UNAVAILABLE|UNAVAILABLE)\]/.test(error.message)
+        && !/Fast policy/.test(error.message)),
+    wall: Date.now, mono: () => performance.now(),
+    scopeKey: continuityScopeKey,
+  });
+  return {
+    async readGroup(ownerDeviceId, providerId, options) {
+      const scope = continuityClient?.scope();
+      const epoch = continuityClient?.scopeEpoch(ownerDeviceId, providerId);
+      // A different account/endpoint generation means the reply may belong to the
+      // previous account, so it is never used.
+      const scopeChanged = () => !!continuityClient && continuityClient.scope() !== scope;
+      // Only the destructive paths below (retiring acknowledged rows) need this
+      // fence: a routing generation which a concurrent pick created or moved
+      // during the read means those rows may be newer than this reply.
+      const routesReplaced = () => !!continuityClient
+        && continuityClient.scopeEpoch(ownerDeviceId, providerId) !== epoch;
+      const targetScope = captureProviderMetadataContinuityScope(ownerDeviceId);
+      // A full target registry deliberately makes an unregistered target fail the
+      // offline capture, while invokeProviderMetadataContinuity still permits a
+      // fenced live-only read. Do not discard that live result just because the
+      // capture was already false before the read. Once it was true, a later false
+      // still retires the old snapshot.
+      const targetScopeAtStart = targetScope();
+      // An explicit denial observed during the read retires its reply.
+      const erased = () => targetScopeAtStart && !targetScope();
+      let catalog: ProviderGroupCatalogRead;
+      try {
+        catalog = directoryFacade.readDeviceCatalogState
+          ? await directoryFacade.readDeviceCatalogState(ownerDeviceId)
+          : { views: await directoryFacade.readDeviceCatalog(ownerDeviceId), freshRead: true, stale: false };
+      } catch {
+        // A late directory result from an old local generation must not clear
+        // a newer generation's acknowledged rows for the same remote owner.
+        if (erased() || scopeChanged() || routesReplaced()) return undefined;
+        // Only a new task's first assignment may use the config carried by an
+        // earlier pick. Existing-task failover must wait for the owner.
+        return options?.allowSnapshot
+          ? continuityClient?.readConfig(ownerDeviceId, providerId) ?? undefined
+          : undefined;
+      }
+      if (erased() || scopeChanged()) return undefined;
+      const view = catalog.views.find((candidate) => candidate.id === providerId);
+      if (!view) {
+        // A cached or stale reply is not the owner's confirmation that the group is gone.
+        // Only a read started by this call with a current (non-stale) directory may
+        // retire acknowledged routes; otherwise keep them for the service snapshot path.
+        if (!catalog.freshRead || catalog.stale || routesReplaced()) return undefined;
+        continuityClient?.forgetGroup(ownerDeviceId, providerId);
+        return null;
+      }
+      const config = readProviderGroupSummary((view as { group?: unknown }).group, providerId);
+      // A stale reply is a snapshot, not current membership: it may predate a
+      // member picked later, so it cannot authorize or release a binding.
+      if (config) {
+        // Only a new task's first assignment may use this live reply when a
+        // concurrent pick created or replaced the routing generation during the
+        // read: it writes a fresh binding from the owner's current config. An
+        // existing binding's reconciliation stays conservative instead, because
+        // a reply older than those routes must not retire them.
+        if (routesReplaced() && options?.allowSnapshot !== true) return undefined;
+        return catalog.stale ? undefined : config;
+      }
+      if (!catalog.freshRead || catalog.stale || routesReplaced()) return undefined;
+      continuityClient?.forgetGroup(ownerDeviceId, providerId);
+      return null;
+    },
+    // Keep the acknowledged-config read local, but preserve the service's async contract.
+    readSnapshotGroup: async (ownerDeviceId, providerId) => continuityClient!.readConfig(ownerDeviceId, providerId),
+    pick: (ownerDeviceId, input) => continuityClient!.pick(ownerDeviceId, input),
     cool: (ownerDeviceId, input) => client.cool(ownerDeviceId, input),
     view: (ownerDeviceId, providerId, model, agentKind) => client.view(ownerDeviceId, providerId, agentKind ? { model, agentKind } : model),
     invalidate: (ownerDeviceId) => directoryFacade.invalidate(ownerDeviceId),
@@ -287,6 +630,7 @@ export async function readProviderGroupOfSession(sessionId: string): Promise<Pro
 export interface ProviderGroupSessionRebalance {
   suggest(sessionId: string): Promise<ProviderGroupRebalanceSuggestion>;
   decide(sessionId: string, memberKey: string, remember: boolean, clientId?: string): Promise<boolean>;
+  preference(sessionId: string, enabled: boolean): Promise<boolean>;
 }
 
 let sessionRebalance: ProviderGroupSessionRebalance | null = null;
@@ -315,6 +659,12 @@ export async function recordProviderGroupRebalanceDecision(sessionId: string, me
   }
 }
 
+/** 任务偏好由所属电脑保存；失败不伪报成功。 */
+export async function setProviderGroupRebalancePreference(sessionId: string, enabled: boolean): Promise<boolean> {
+  if (!sessionRebalance) return false;
+  return sessionRebalance.preference(sessionId, enabled);
+}
+
 /** register 装配会话表后注入：这台电脑上每个供应商正在运行一轮的任务数(localLoad.ts)。 */
 export function setProviderGroupLocalLoad(probe: (() => Promise<ReadonlyMap<string, number>>) | null): void {
   localLoad = probe;
@@ -323,6 +673,14 @@ export function setProviderGroupLocalLoad(probe: (() => Promise<ReadonlyMap<stri
 /** Reuse the CLI-backed subscription reader without importing the IPC adapter into routing. */
 export function setProviderGroupClaudeUsageReader(reader: typeof claudeUsageReader): void {
   claudeUsageReader = reader;
+}
+
+/**
+ * The received-share quota read (provider-share insights, quota only) used for group ranking. Injected at the
+ * composition boundary so routing does not load the provider-share runtime module graph.
+ */
+export function setProviderGroupShareQuotaReader(reader: typeof shareQuotaReader): void {
+  shareQuotaReader = reader;
 }
 
 export function setProviderGroupCodexUsageReader(reader: typeof codexUsageReader, rateLimits: typeof codexRateLimitsReader = null): void {

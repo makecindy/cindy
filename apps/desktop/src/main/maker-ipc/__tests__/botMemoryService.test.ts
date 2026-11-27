@@ -49,7 +49,7 @@ afterEach(async () => {
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-function setup(options: { bot?: { canonicalSessionId: string | null } | null } = {}) {
+function setup(options: { bot?: { canonicalSessionId: string | null; scopeKey?: string } | null } = {}) {
   const store = {
     list: () => storage.list(),
     read: (filename: string) => storage.read(filename),
@@ -60,8 +60,9 @@ function setup(options: { bot?: { canonicalSessionId: string | null } | null } =
   } as unknown as MakerMemoryStore;
   const timers: Array<() => void> = [];
   const requestRefresh = vi.fn(async () => true);
+  const getStore = vi.fn(async (_scopeKey: string) => store);
   const service = createBotMemoryService({
-    getStore: async () => store,
+    getStore,
     readBot: async () => (options.bot === undefined ? { canonicalSessionId: 'session-1' } : options.bot),
     requestRefresh,
     setTimer: (callback) => {
@@ -73,7 +74,7 @@ function setup(options: { bot?: { canonicalSessionId: string | null } | null } =
     },
   });
   const flushTimers = () => timers.splice(0).forEach((run) => run());
-  return { service, store, requestRefresh, flushTimers };
+  return { service, store, requestRefresh, flushTimers, getStore };
 }
 
 describe('bot memory service', () => {
@@ -90,6 +91,16 @@ describe('bot memory service', () => {
     ]);
   });
 
+  // 依据：项目模式伙伴的记忆在项目里；缺口：设置页仍读旧的 bot: 记忆。tier：unit。
+  it('reads a project-mode teammate\'s memory from its project', async () => {
+    const { service, getStore } = setup({ bot: { canonicalSessionId: 'session-1', scopeKey: '/bots/bot-1/workspace' } });
+    await service.list('bot-1');
+    expect(getStore).toHaveBeenCalledWith('/bots/bot-1/workspace');
+    const classic = setup();
+    await classic.service.list('bot-1');
+    expect(classic.getStore).toHaveBeenCalledWith('bot:bot-1');
+  });
+
   it('searches through the store and skips internal or vanished hits', async () => {
     const { service, store } = setup();
     hits = [
@@ -98,7 +109,7 @@ describe('bot memory service', () => {
       { filename: 'feedback_verify-before-claiming.md', type: 'feedback', title: '', snippet: '', score: 0 },
     ];
     const entries = await service.list('bot-1', ' 核实 ');
-    expect(store.search).toHaveBeenCalledWith('核实', { limit: 50 });
+    expect(store.search).toHaveBeenCalledWith('核实', { limit: 50, excludeTypes: ['digest'] });
     expect(entries.map((entry) => entry.filename)).toEqual(['feedback_verify-before-claiming.md']);
   });
 
@@ -324,8 +335,112 @@ describe('cloud companion restore', () => {
     expect(requestRefresh).toHaveBeenCalledWith('session-1');
   });
 
-  it('rejects filenames outside the memory naming rule', async () => {
+  // #9339: production restore/remove must accept storage-generated digest shards;
+  // existing cloud tests cover curated files only. Minimal input: one digest filename.
+  // Unit tier, real isolated MemoryStorage; FTS remains a test port.
+  it('restores and tombstones internal digests without exposing curated editing', async () => {
+    const { service, requestRefresh, flushTimers } = setup();
+    const filename = 'digest_pi-compaction-1.md';
+    const raw = await fs.readFile(path.join(dir, filename), 'utf8');
+    await storage.delete(filename);
+    await service.restoreRaw('bot-1', filename, raw);
+    await service.restoreRaw('bot-1', filename, raw);
+    expect((await storage.read(filename)).body).toBe('summary');
+    expect(await storage.getIndex()).not.toContain(filename);
+    expect((await service.list('bot-1')).map(entry => entry.filename)).not.toContain(filename);
+    const updatedAt = (await storage.read(filename)).frontmatter.updatedAt;
+    await expect(service.update({ botId: 'bot-1', filename, title: 'edit', body: 'edit', expectedUpdatedAt: updatedAt }))
+      .rejects.toThrow('[INVALID_PARAMS]');
+    await expect(service.delete({ botId: 'bot-1', filename, expectedUpdatedAt: updatedAt })).rejects.toThrow('[INVALID_PARAMS]');
+    await service.removeRaw('bot-1', filename);
+    await service.removeRaw('bot-1', filename);
+    await expect(storage.read(filename)).rejects.toMatchObject({ code: 'not-found' });
+    flushTimers();
+    expect(requestRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('restores a legacy double-prefixed shard on an empty destination', async () => {
     const { service } = setup();
-    await expect(service.restoreRaw('bot-1', '../evil.md', 'x')).rejects.toThrow();
+    await service.restoreRaw('bot-1', 'project_project-legacy-note.md', '---\ntitle: Legacy\n---\nold body');
+    expect((await storage.read('project_project-legacy-note.md')).body).toBe('old body');
+  });
+
+  it('restores a legacy name even when a single-prefixed alias exists', async () => {
+    const { service } = setup();
+    await storage.write({ type: 'project', name: 'legacy-note', title: 'Local', description: 'd', body: 'local body' });
+
+    await service.restoreRaw('bot-1', 'project_project-legacy-note.md', '---\ntitle: Legacy\n---\nold body');
+
+    expect((await storage.read('project_project-legacy-note.md')).body).toBe('old body');
+    expect((await storage.read('project_legacy-note.md')).body).toBe('local body');
+  });
+
+  // Cloud inputs remain bounded basenames, even for internal memory types (#9339, unit).
+  it.each(['../digest_x.md', 'digest_../x.md', 'digest_..\\x.md', 'unknown_x.md', 'digest_.md',
+    'digest_' + 'x'.repeat(65) + '.md', 'digest_x.md\n', 'digest_x\n.md', 'MEMORY.md'])('rejects unsafe cloud filename %s before opening storage', async filename => {
+    const { service, getStore } = setup();
+    await expect(service.restoreRaw('bot-1', filename, 'body')).rejects.toThrow('[INVALID_PARAMS]');
+    await expect(service.removeRaw('bot-1', filename)).rejects.toThrow('[INVALID_PARAMS]');
+    expect(getStore).not.toHaveBeenCalled();
+  });
+
+  // Teammate memory v3 (unit): V2 project memory accepts freeform .md and MEMORY.md (up to 56 KB),
+  // preserves MEMORY.md on topic edits, and only requests a runtime refresh when MEMORY.md changes.
+  it('supports V2 freeform topic files and MEMORY.md, refreshing runtime only on MEMORY.md edits', async () => {
+    const v2Dir = await fs.mkdtemp(path.join(os.tmpdir(), 'bot-memory-v2-'));
+    try {
+      const v2Storage = new MemoryStorage(v2Dir, DEFAULT_MEMORY_CONFIG, undefined, true);
+      const v2Store = {
+        list: () => v2Storage.list(),
+        read: (filename: string) => v2Storage.read(filename),
+        search: vi.fn(async () => []),
+        write: (input: Parameters<MemoryStorage['write']>[0]) => v2Storage.write(input),
+        writeRaw: (filename: string, raw: string) => v2Storage.writeRaw(filename, raw),
+        update: (...args: Parameters<MemoryStorage['update']>) => v2Storage.update(...args),
+        delete: (...args: Parameters<MemoryStorage['delete']>) => v2Storage.delete(...args),
+      } as unknown as MakerMemoryStore;
+      const requestRefresh = vi.fn(async () => true);
+      const timers: Array<() => void> = [];
+      const service = createBotMemoryService({
+        readBot: async () => ({ scopeKey: 'proj:v2-bot', canonicalSessionId: 'session-v2' }),
+        getStore: async () => v2Store,
+        requestRefresh,
+        setTimer: (callback) => { timers.push(callback); return timers.length; },
+        clearTimer: (handle) => { timers[(handle as number) - 1] = () => {}; },
+      });
+
+      const bigBody = `# Release Checklist\n\n${'Step details.\n'.repeat(800)}`;
+      await service.restoreRaw('bot-v2', 'release-checklist.md', bigBody);
+      await service.restoreRaw('bot-v2', 'MEMORY.md', '# Core\n- Always double check tags\n');
+
+      // Editing an ordinary V2 topic file should NOT trigger a runtime epoch refresh.
+      const topic = await service.read('bot-v2', 'release-checklist.md');
+      expect(topic.title).toBe('Release Checklist');
+      await service.update({
+        botId: 'bot-v2',
+        filename: 'release-checklist.md',
+        title: 'Release Checklist',
+        body: `${bigBody}\nAdded step`,
+        expectedUpdatedAt: topic.updatedAt,
+      });
+      timers.splice(0).forEach((fn) => fn());
+      // Only restoreRaw('MEMORY.md') scheduled a refresh so far.
+      expect(requestRefresh).toHaveBeenCalledTimes(1);
+
+      // Editing MEMORY.md MUST preserve raw core text and schedule a runtime refresh.
+      const core = await service.read('bot-v2', 'MEMORY.md');
+      await service.update({
+        botId: 'bot-v2',
+        filename: 'MEMORY.md',
+        title: 'Core',
+        body: '# Core\n- Always double check tags\n- Keep answers concise\n',
+        expectedUpdatedAt: core.updatedAt,
+      });
+      timers.splice(0).forEach((fn) => fn());
+      expect(requestRefresh).toHaveBeenCalledTimes(2);
+      expect(await fs.readFile(path.join(v2Dir, 'MEMORY.md'), 'utf8')).toContain('Keep answers concise');
+    } finally {
+      await fs.rm(v2Dir, { recursive: true, force: true });
+    }
   });
 });

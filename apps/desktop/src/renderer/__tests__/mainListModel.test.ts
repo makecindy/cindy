@@ -19,6 +19,7 @@ import type { ProjectNode } from '../features/cc-agent/lib/projectGrouping';
 import {
   advanceViewedPriorityHold,
   buildMainListEntries,
+  dialogueGroupActionSessions,
   getMainListEntrySessions,
   holdViewedPriorityRank,
   sessionPriorityRecencyMs,
@@ -79,10 +80,10 @@ function labels(entries: MainListEntry[]): string[] {
         ? 'dlg-group'
         : entry.kind === 'automation-group'
           ? `auto:${entry.group.title}`
-          : entry.kind === 'bot-group'
-            ? `bot:${entry.bot.displayName}`
-            : entry.kind === 'cindy-make-group'
-              ? 'cindy-make-group'
+          : entry.kind === 'cindy-make-group'
+            ? 'cindy-make-group'
+            : entry.kind === 'automations-group'
+              ? `automations:${entry.sessions.map((session) => session.title).join(',')}`
               : `s:${entry.session.title}`,
   );
 }
@@ -538,6 +539,95 @@ describe('buildMainListEntries — 混排(recency)', () => {
         .slice(2)
         .map((run) => run.id)
         .reverse(),
+    ]);
+  });
+});
+
+describe('automations sidebar group', () => {
+  it('folds same-id runs from two computers into one automation subgroup per computer', async () => {
+    const { groupAutomationSidebarEntries } = await import('../features/cc-agent/lib/automationSidebarGrouping');
+    const run = (id: string, deviceLinkDeviceId: string | null, updatedAt: string) =>
+      session({ id, title: 'Nightly', source: 'scheduler', updatedAt, ...(deviceLinkDeviceId ? { deviceLinkDeviceId } : {}) });
+    const entries = groupAutomationSidebarEntries([
+      run('r1', null, '2026-11-16T00:00:00Z'),
+      run('r2', null, '2026-11-15T00:00:00Z'),
+      run('r1', 'mac-2', '2026-11-14T00:00:00Z'),
+      run('r2', 'mac-2', '2026-11-13T00:00:00Z'),
+    ], { notifications: new Set() });
+    expect(entries.map((entry) => entry.kind === 'automation-group' ? entry.group.sessions.length : entry.kind)).toEqual([2, 2]);
+  });
+
+  it('keeps same-id automation runs from different computers', () => {
+    const local = session({ id: 'run', title: 'local', source: 'scheduler', updatedAt: '2026-11-16T00:00:00Z' });
+    const remote = session({ id: 'run', title: 'remote', source: 'scheduler', deviceLinkDeviceId: 'mac-2', updatedAt: '2026-11-15T00:00:00Z' });
+    const entries = buildMainListEntries({
+      projects: [], dialogues: [local, remote], groupBy: 'project', groupDialogue: true,
+      groupAutomation: true, sortBy: 'recency', manualProjectOrder: [],
+    });
+    const group = entries.find((entry) => entry.kind === 'automations-group');
+    expect(group && getMainListEntrySessions(group).map((item) => item.title)).toEqual(['local', 'remote']);
+  });
+
+  it('keeps chat-group bulk actions off tasks moved into the automations group', () => {
+    const digest = session({ title: 'digest', source: 'scheduler', pinnedAt: '2026-11-14T00:00:00Z', updatedAt: '2026-11-14T00:00:00Z' });
+    const chat = session({ title: 'chat', pinnedAt: '2026-11-13T00:00:00Z', updatedAt: '2026-11-13T00:00:00Z' });
+    const titles = (sessions: readonly Session[]) => sessions.map((item) => item.title);
+    expect(titles(dialogueGroupActionSessions([digest, chat], { groupAutomation: true }))).toEqual(['chat']);
+    expect(titles(dialogueGroupActionSessions([digest, chat], { groupAutomation: false }))).toEqual(['digest', 'chat']);
+  });
+
+  const teammateDir = '/Users/u/Cindy/owners/acct/bots/bot_1/workspace';
+
+  it('collects automation runs out of projects and chats, hiding a teammate project left empty', () => {
+    const review = session({
+      title: 'review', source: 'scheduler', workspaceKind: 'project',
+      workingDir: teammateDir, updatedAt: '2026-11-17T03:30:00Z',
+    });
+    const report = session({
+      title: 'report', source: 'scheduler', workspaceKind: 'project',
+      workingDir: '/repo', updatedAt: '2026-11-16T09:00:00Z',
+    });
+    const work = session({ title: 'work', workspaceKind: 'project', workingDir: '/repo', updatedAt: '2026-11-15T00:00:00Z' });
+    const digest = session({ title: 'digest', source: 'scheduler', updatedAt: '2026-11-14T00:00:00Z' });
+    const chat = session({ title: 'chat', updatedAt: '2026-11-13T00:00:00Z' });
+    const input = {
+      projects: [
+        project(teammateDir, [review]),
+        project('/repo', [report, work]),
+        { ...project('/saved', [session({ title: 'nightly', source: 'scheduler', workspaceKind: 'project', workingDir: '/saved', updatedAt: '2026-11-12T00:00:00Z' })]), isPersistentLocal: true },
+      ],
+      dialogues: [digest, chat],
+      groupBy: 'project' as const,
+      groupDialogue: true,
+      sortBy: 'recency' as const,
+      manualProjectOrder: [],
+    };
+
+    expect(labels(buildMainListEntries({ ...input, groupAutomation: true }))).toEqual([
+      'automations:review,report,digest,nightly',
+      'p:/repo',
+      'dlg-group',
+      'p:/saved',
+    ]);
+    // Off: runs stay where they ran; a teammate project with tasks is shown as before.
+    expect(labels(buildMainListEntries(input))).toEqual([
+      `p:${teammateDir}`, 'p:/repo', 'dlg-group', 'p:/saved',
+    ]);
+  });
+
+  it('splits the automations group by device like the chat group', () => {
+    const local = session({ title: 'local', source: 'scheduler', updatedAt: '2026-11-17T00:00:00Z' });
+    const remote = session({
+      title: 'remote', source: 'scheduler', deviceLinkDeviceId: 'dev-a', updatedAt: '2026-11-16T00:00:00Z',
+    });
+    const entries = buildMainListEntries({
+      projects: [], dialogues: [local, remote], groupBy: 'project', groupDialogue: true,
+      groupAutomation: true, sortBy: 'recency', manualProjectOrder: [],
+    });
+    expect(splitEntriesByDevice(entries, ['dev-a'], { sortBy: 'recency' })
+      .map((section) => [section.deviceId, labels(section.entries)])).toEqual([
+      [null, ['automations:local']],
+      ['dev-a', ['automations:remote']],
     ]);
   });
 });
@@ -1321,45 +1411,6 @@ it('keeps manual project order while creation-time tasks stay stable inside each
   const activityOrder = buildMainListEntries({ ...input, sortBy: 'recency' });
   expect(labels(activityOrder)).toEqual(['p:beta', 'p:alpha']);
   expect(getMainListEntrySessions(activityOrder[1]).map((s) => s.id)).toEqual(['old', 'recent']);
-});
-
-describe('splitEntriesByDevice — Bot ownership', () => {
-  it('partitions local, known and cached devices without mutating Bot identity or task order', () => {
-    const sessions = [
-      session({ id: 'b-new', deviceLinkDeviceId: 'b', updatedAt: '2026-09-09T12:00:00Z' }),
-      session({ id: 'local', updatedAt: '2026-09-09T10:00:00Z' }),
-      session({ id: 'cached', deviceLinkDeviceId: 'cached', updatedAt: '2026-09-09T09:00:00Z' }),
-      session({ id: 'a', deviceLinkDeviceId: 'a', updatedAt: '2026-09-09T08:00:00Z' }),
-      session({ id: 'b-old', deviceLinkDeviceId: 'b', updatedAt: '2026-09-09T07:00:00Z' }),
-    ];
-    const bot = { botId: 'demo', displayName: 'Demo', avatar: 'avatar', avatarColor: 'color', sessions, latestActivityAt: sessions[0].updatedAt };
-    const result = splitEntriesByDevice([{ kind: 'bot-group', bot }], ['a', 'b'], { sortBy: 'recency' });
-    expect(result.map((section) => section.deviceId)).toEqual([null, 'a', 'b', 'cached']);
-    expect(result.map((section) => section.entries.flatMap((entry) => getMainListEntrySessions(entry).map((s) => s.id))))
-      .toEqual([['local'], ['a'], ['b-new', 'b-old'], ['cached']]);
-    for (const section of result) {
-      expect(section.entries).toHaveLength(1);
-      expect(section.entries[0]).toMatchObject({ kind: 'bot-group', bot: { botId: 'demo', displayName: 'Demo', avatar: 'avatar', avatarColor: 'color' } });
-    }
-    expect(bot.sessions).toBe(sessions);
-    expect(bot.sessions.map((s) => s.id)).toEqual(['b-new', 'local', 'cached', 'a', 'b-old']);
-  });
-
-  it('ranks each device fragment from its own sessions alongside dialogue groups', () => {
-    const local = session({ id: 'local', updatedAt: '2026-09-09T01:00:00Z' });
-    const remote = session({ id: 'remote', deviceLinkDeviceId: 'remote', updatedAt: '2026-09-09T12:00:00Z' });
-    const entries: MainListEntry[] = [
-      { kind: 'bot-group', bot: { botId: 'demo', displayName: 'Demo', avatar: '', avatarColor: '', sessions: [remote, local], latestActivityAt: remote.updatedAt } },
-      { kind: 'dialogue-group', sessions: [
-        session({ id: 'dlg-local', updatedAt: '2026-09-09T06:00:00Z' }),
-        session({ id: 'dlg-remote', deviceLinkDeviceId: 'remote', updatedAt: '2026-09-09T06:00:00Z' }),
-      ] },
-    ];
-    const result = splitEntriesByDevice(entries, ['remote'], { sortBy: 'recency' });
-    expect(result.map((section) => labels(section.entries))).toEqual([
-      ['dlg-group', 'bot:Demo'], ['bot:Demo', 'dlg-group'],
-    ]);
-  });
 });
 
 describe('per-sort numeric keys', () => {

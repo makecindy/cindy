@@ -13,16 +13,13 @@ import { useChatDisplaySnapshot } from '@/components/chat/ChatDisplaySnapshotCon
 import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { makerChatStore, type ChatMessage } from '@/lib/makerChatStore';
 import { estimatedSessionValueFor } from '@/lib/makerTransport';
-import { resolveStaleCodexSubscriptionValueEstimate } from '../../shared/codexSubscriptionValue';
+import { legacyEstimateMoney, turnEstimateAmounts } from '../../shared/turnEstimateAmounts';
 import {
   addCompatibleRegionalMoney,
   normalizeRegionalMoney,
-  usdMoney,
-  USD_TO_CNY_FIXED_RATE,
-  type MoneyEstimateReason,
+  sumMoneyByCurrency,
   type RegionalMoney,
 } from '../../shared/regionalMoney';
-import { normalizeTurnUsageDetails } from '../../shared/turnUsageDetails';
 
 interface EstimatedValueStoreSnapshot {
   messages: ChatMessage[];
@@ -31,8 +28,9 @@ interface EstimatedValueStoreSnapshot {
 }
 
 interface EstimatedValueStoreSyncResult {
-  costs: Map<string, RegionalMoney>;
-  storeClientIds: Set<string>;
+  costs: Map<string, RegionalMoney[]>;
+  /** Loaded window clientIds, oldest first; the next sync uses the order. */
+  storeClientIds: string[];
 }
 
 interface EstimatedValueTurnCostPayload {
@@ -48,69 +46,10 @@ interface EstimatedValueTurnCostPayload {
   turnUsageDetails?: unknown;
 }
 
-function asValueEstimate(
-  money: RegionalMoney,
-  reason: MoneyEstimateReason = 'subscription-value',
-): RegionalMoney {
-  const estimateReasons = [...new Set([...(money.estimateReasons ?? []), reason])];
-  return {
-    ...money,
-    approximate: true,
-    kind: 'value-estimate',
-    estimateReasons,
-  };
-}
+type EstimateEntry = { clientId: string; money: RegionalMoney; additionalEstimates?: RegionalMoney[] };
 
-function correctStaleUsdEstimate(
-  money: RegionalMoney,
-  turnUsageDetails: unknown,
-  model?: string,
-): RegionalMoney {
-  const reasons = money.estimateReasons ?? [];
-  const isLegacyCnyProjection =
-    money.currency === 'CNY' &&
-    reasons.includes('legacy-usd') &&
-    reasons.includes('fixed-fx');
-  if (money.currency !== 'USD' && !isLegacyCnyProjection) return money;
-  const amountUsd = isLegacyCnyProjection
-    ? money.amount / USD_TO_CNY_FIXED_RATE
-    : money.amount;
-  const corrected = resolveStaleCodexSubscriptionValueEstimate(
-    amountUsd,
-    normalizeTurnUsageDetails(turnUsageDetails),
-    model,
-  );
-  if (corrected == null) return money;
-  return {
-    ...money,
-    amount: isLegacyCnyProjection
-      ? corrected * USD_TO_CNY_FIXED_RATE
-      : corrected,
-  };
-}
-
-function legacyEstimateMoney(costUsd: number): RegionalMoney | null {
-  if (!Number.isFinite(costUsd) || costUsd <= 0) return null;
-  return usdMoney(costUsd, 'value-estimate', 'legacy-usd');
-}
-
-function estimateFromChatMessage(message: ChatMessage): { clientId: string; money: RegionalMoney } | null {
-  if (message.role !== 'assistant') return null;
-  if (message.turnCostIsEstimate !== true) return null;
-  const normalized =
-    normalizeRegionalMoney(message.turnMoney) ??
-    (typeof message.turnCostUsd === 'number'
-      ? legacyEstimateMoney(message.turnCostUsd)
-      : null);
-  if (!normalized || normalized.amount <= 0) return null;
-  return {
-    clientId: message.clientId,
-    money: correctStaleUsdEstimate(
-      asValueEstimate(normalized),
-      message.turnUsageDetails,
-      message.model,
-    ),
-  };
+function estimateFromChatMessage(message: ChatMessage): EstimateEntry | null {
+  return message.role === 'assistant' ? resolveEstimatedValueTurnCostEntry(message) : null;
 }
 
 function areMoneyEqual(a: RegionalMoney, b: RegionalMoney): boolean {
@@ -129,13 +68,13 @@ function areMoneyEqual(a: RegionalMoney, b: RegionalMoney): boolean {
 }
 
 function areCostMapsEqual(
-  a: ReadonlyMap<string, RegionalMoney>,
-  b: ReadonlyMap<string, RegionalMoney>,
+  a: ReadonlyMap<string, RegionalMoney[]>,
+  b: ReadonlyMap<string, RegionalMoney[]>,
 ): boolean {
   if (a.size !== b.size) return false;
   for (const [key, value] of a) {
     const other = b.get(key);
-    if (!other || !areMoneyEqual(value, other)) return false;
+    if (!other || value.length !== other.length || !value.every((money, index) => areMoneyEqual(money, other[index]))) return false;
   }
   return true;
 }
@@ -157,30 +96,43 @@ export function shouldApplyEstimatedValueEntry(
   return hasVisibleClientId(snapshot, clientId);
 }
 
+/**
+ * The loaded chat window is only the newest slice of a task: it is trimmed,
+ * reseeded with the latest page and replaced on reconnect. Rows that leave the
+ * top of the window (older than the oldest row still loaded) remain persisted,
+ * so their DB-backed value stays in the total. Explicit removals apply even
+ * when the row is outside the loaded range or the display snapshot is stale.
+ */
 export function syncEstimatedValueCostsFromStoreSnapshot(
-  currentCosts: ReadonlyMap<string, RegionalMoney>,
-  previousStoreClientIds: ReadonlySet<string>,
+  currentCosts: ReadonlyMap<string, RegionalMoney[]>,
+  previousStoreClientIds: readonly string[],
   snapshot: EstimatedValueStoreSnapshot,
+  removedClientIds?: ReadonlySet<string>,
 ): EstimatedValueStoreSyncResult | null {
   if (snapshot.messages.length === 0 && !snapshot.historyLoaded) return null;
 
-  const storeClientIds = new Set<string>();
   const next = new Map(currentCosts);
   if (isAuthoritativeEmptyTranscript(snapshot)) {
-    return { costs: new Map(), storeClientIds };
+    return { costs: new Map(), storeClientIds: [] };
   }
 
+  const loaded = new Set<string>();
   for (const message of snapshot.messages) {
-    if (message.clientId) storeClientIds.add(message.clientId);
+    if (message.clientId) loaded.add(message.clientId);
   }
-  for (const clientId of previousStoreClientIds) {
-    if (!storeClientIds.has(clientId)) next.delete(clientId);
+  const storeClientIds = [...loaded];
+  const oldestRetained = previousStoreClientIds.findIndex((clientId) => loaded.has(clientId));
+  if (oldestRetained >= 0) {
+    for (const [index, clientId] of previousStoreClientIds.entries()) {
+      if (index > oldestRetained && !loaded.has(clientId)) next.delete(clientId);
+    }
   }
+  for (const clientId of removedClientIds ?? []) next.delete(clientId);
   for (const message of snapshot.messages) {
-    if (!message.clientId) continue;
+    if (!message.clientId || removedClientIds?.has(message.clientId)) continue;
     const entry = estimateFromChatMessage(message);
     if (entry) {
-      next.set(entry.clientId, entry.money);
+      next.set(entry.clientId, [entry.money, ...(entry.additionalEstimates ?? [])]);
     } else {
       next.delete(message.clientId);
     }
@@ -193,45 +145,30 @@ export function syncEstimatedValueCostsFromStoreSnapshot(
 
 export function resolveEstimatedValueTurnCostEntry(
   payload: EstimatedValueTurnCostPayload,
-): { clientId: string; money: RegionalMoney } | null {
-  if (payload.turnCostIsEstimate !== true) return null;
+): EstimateEntry | null {
   if (!payload.clientId) return null;
-  const normalized =
-    normalizeRegionalMoney(payload.turnMoney) ??
-    (typeof payload.turnCostUsd === 'number'
-      ? legacyEstimateMoney(payload.turnCostUsd)
-      : null);
-  if (!normalized || normalized.amount <= 0) return null;
-  return {
-    clientId: payload.clientId,
-    money: correctStaleUsdEstimate(
-      asValueEstimate(normalized),
-      payload.turnUsageDetails,
-    ),
-  };
+  const [money, ...additionalEstimates] = turnEstimateAmounts({ ...payload, turnCost: payload.turnMoney });
+  return money ? { clientId: payload.clientId, money, ...(additionalEstimates.length > 0 && { additionalEstimates }) } : null;
 }
 
-function sumCosts(costs: Map<string, RegionalMoney>): RegionalMoney | null {
-  const values = [...costs.values()];
-  if (values.length === 0) return null;
-  const total = addCompatibleRegionalMoney(values);
-  if (!total) return null;
-  return total.amount > 0 ? total : null;
+function sumCosts(costs: Map<string, RegionalMoney[]>): RegionalMoney[] {
+  return sumMoneyByCurrency([...costs.values()].flat().filter(money => money.amount > 0));
 }
 
 const NOOP_UNSUBSCRIBE = () => {};
 
-export function useSessionEstimatedValue(
+export function useSessionEstimatedAmounts(
   sessionId: string | undefined,
   enabled: boolean,
-): RegionalMoney | null {
+): RegionalMoney[] {
   const displaySnapshot = useChatDisplaySnapshot(sessionId);
   const displaySnapshotRef = useRef(displaySnapshot);
   const shouldListenForDirectTurnCost = !displaySnapshot || displaySnapshot.chatRealtime;
-  const costsRef = useRef<Map<string, RegionalMoney>>(new Map());
-  const storeClientIdsRef = useRef<Set<string>>(new Set());
+  const costsRef = useRef<Map<string, RegionalMoney[]>>(new Map());
+  const storeClientIdsRef = useRef<string[]>([]);
   const transcriptClearedRef = useRef(false);
-  const [valueMoney, setValueMoney] = useState<RegionalMoney | null>(null);
+  const removedClientIdsRef = useRef(new Set<string>());
+  const [valueMoney, setValueMoney] = useState<RegionalMoney[]>([]);
   const subscribeSnapshot = useCallback(
     (cb: () => void) =>
       !enabled || !sessionId || displaySnapshot
@@ -251,9 +188,24 @@ export function useSessionEstimatedValue(
 
   useEffect(() => {
     costsRef.current = new Map();
-    storeClientIdsRef.current = new Set();
+    storeClientIdsRef.current = [];
     transcriptClearedRef.current = false;
-    setValueMoney(null);
+    removedClientIdsRef.current.clear();
+    setValueMoney([]);
+  }, [enabled, sessionId]);
+
+  useEffect(() => {
+    if (!enabled || !sessionId) return undefined;
+    return makerChatStore.subscribeToMessageRemovals(sessionId, (clientIds) => {
+      let changed = false;
+      for (const clientId of clientIds) {
+        // A history read or turn-cost push already in flight can still contain this row.
+        removedClientIdsRef.current.add(clientId);
+        if (displaySnapshotRef.current?.chatRealtime === false) continue;
+        if (costsRef.current.delete(clientId)) changed = true;
+      }
+      if (changed) setValueMoney(sumCosts(costsRef.current));
+    });
   }, [enabled, sessionId]);
 
   useEffect(() => {
@@ -265,6 +217,7 @@ export function useSessionEstimatedValue(
       costsRef.current,
       storeClientIdsRef.current,
       storeSnapshot,
+      removedClientIdsRef.current,
     );
     if (!result) return;
     storeClientIdsRef.current = result.storeClientIds;
@@ -276,25 +229,17 @@ export function useSessionEstimatedValue(
   useEffect(() => {
     if (!enabled || !sessionId) return undefined;
     let cancelled = false;
-    const applyCosts = (next: Map<string, RegionalMoney>): void => {
+    const applyCosts = (next: Map<string, RegionalMoney[]>): void => {
       if (cancelled || areCostMapsEqual(costsRef.current, next)) return;
       costsRef.current = next;
       setValueMoney(sumCosts(next));
     };
-    const mergeEntry = (entry: { clientId: string; money: RegionalMoney } | null): void => {
-      if (cancelled || !entry || !entry.clientId || entry.money.amount <= 0) return;
+    const canMerge = (clientId: string): boolean => {
+      if (cancelled || !clientId || removedClientIdsRef.current.has(clientId)) return false;
       const snapshot = displaySnapshotRef.current ?? makerChatStore.getSnapshot(sessionId);
-      if (!shouldApplyEstimatedValueEntry(
-        snapshot,
-        entry.clientId,
-        transcriptClearedRef.current,
-      )) return;
-      const prev = costsRef.current.get(entry.clientId);
-      if (prev && areMoneyEqual(prev, entry.money)) return;
-      const next = new Map(costsRef.current);
-      next.set(entry.clientId, entry.money);
-      applyCosts(next);
+      return shouldApplyEstimatedValueEntry(snapshot, clientId, transcriptClearedRef.current);
     };
+    let updatedDuringRead: Set<string> | null = new Set();
 
     if (!shouldListenForDirectTurnCost) {
       return () => {
@@ -306,32 +251,41 @@ export function useSessionEstimatedValue(
       (payload, ownerStamp) => {
         if (!isDataOwnerPushCurrent(ownerStamp)) return;
         if (payload.sessionId !== sessionId) return;
-        mergeEntry(resolveEstimatedValueTurnCostEntry(payload));
+        if (!canMerge(payload.clientId)) return;
+        const entry = resolveEstimatedValueTurnCostEntry(payload);
+        if (!entry && payload.turnCostIsEstimate === undefined && !payload.turnMoney) return;
+        updatedDuringRead?.add(payload.clientId);
+        const next = new Map(costsRef.current);
+        if (entry) next.set(entry.clientId, [entry.money, ...(entry.additionalEstimates ?? [])]);
+        else next.delete(payload.clientId);
+        applyCosts(next);
       },
     );
     // 按会话来源路由:device-link 远程会话查被控端(本地库无该会话的行,查本机恒 0)。
     void estimatedSessionValueFor(sessionId)
       .then((snapshot) => {
         if (cancelled) return;
+        const next = new Map(costsRef.current);
         for (const entry of snapshot.entries) {
+          if (updatedDuringRead?.has(entry.clientId) || !canMerge(entry.clientId)) continue;
           const normalized =
             normalizeRegionalMoney(entry.money) ??
             (typeof entry.costUsd === 'number'
               ? legacyEstimateMoney(entry.costUsd)
               : null);
           if (!normalized) continue;
-          mergeEntry({
-            clientId: entry.clientId,
-            money: correctStaleUsdEstimate(
-              asValueEstimate(normalized),
-              entry.turnUsageDetails,
-            ),
-          });
+          const amounts = entry.additionalEstimates?.length
+            ? [normalized, ...entry.additionalEstimates.map(normalizeRegionalMoney)
+                .filter((value): value is RegionalMoney => value?.kind === 'value-estimate' && value.amount > 0)]
+            : turnEstimateAmounts({ turnCost: normalized, turnCostIsEstimate: true, turnUsageDetails: entry.turnUsageDetails });
+          if (amounts.length) next.set(entry.clientId, amounts);
         }
+        applyCosts(next);
       })
       .catch(() => {
         // 历史汇总失败不影响实时增量；本 hook 只是展示辅助信息。
-      });
+      })
+      .finally(() => { updatedDuringRead = null; });
 
     return () => {
       cancelled = true;
@@ -340,4 +294,8 @@ export function useSessionEstimatedValue(
   }, [enabled, sessionId, shouldListenForDirectTurnCost]);
 
   return valueMoney;
+}
+
+export function useSessionEstimatedValue(sessionId: string | undefined, enabled: boolean): RegionalMoney | null {
+  return addCompatibleRegionalMoney(useSessionEstimatedAmounts(sessionId, enabled));
 }

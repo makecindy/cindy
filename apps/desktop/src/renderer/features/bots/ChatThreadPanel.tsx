@@ -1,3 +1,9 @@
+import { canStopBotGroupSpeaker } from '@cindy/maker-shared/botGroupChat';
+import { interleaveBotGroupWork } from '@cindy/maker-shared/botGroupPresentation';
+import { BotGroupProgressStrip, BotGroupSpeakerInteraction, type BotGroupLiveSpeaker } from './BotGroupLiveStatus';
+import { copyChatSelection } from '@/components/chat/chatSelectionClipboard';
+import { usePluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
+import { useProcessDisclosureScroll } from './useProcessDisclosureScroll';
 /**
  * 话题（Thread）面板：与主时间线同一套消息行（BotGroupTimelineItem）与密度规则——根消息、
  * 「N 条回复」分隔、回复按作者五分钟合并；有新回复且读者在底部时跟到底。
@@ -7,23 +13,27 @@
  * 服务器的回复到了原地替换；失败撤掉、文字放回，原因写在输入框上方。
  */
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { Bell, BellRing, Check, CornerDownRight, MessageSquareShare } from 'lucide-react';
+import { ArrowLeft, Bell, BellRing, CornerDownRight, MessageSquareShare } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
-import { findThreadMessageElement, flashThreadTarget } from './BotGroupThreadViews';
+import { flashThreadTarget } from './BotGroupThreadViews';
+import { useReadLocatedMention } from './groupMaskPresentation';
 import { Button } from '@/components/ui/button';
 import { Tip } from '@/components/ui/tooltip';
+import { useAttachments } from '@/hooks/useAttachments';
 import { ShareSelectionBar } from '@/components/chat/ShareSelectionBar';
 import { shareSelectionStore, useShareSelectionActive } from '@/components/chat/shareSelectionStore';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
-import type { BotGroupDetail, BotGroupExecutionFailureView, BotGroupMessageView } from '../../../shared/botGroupChat';
+import type { BotGroupDetail, BotGroupExecutionFailureView, BotGroupMessageView, ChatServerApi } from '../../../shared/botGroupChat';
 import { resolveBotGroupQuote } from '../../../shared/botGroupChat';
-import { botGroupThreadDraftKey, refreshPendingBotGroupAttachments } from './botGroupAttachments';
+import { botGroupAttachmentPreview, botGroupThreadDraftKey, refreshPendingBotGroupAttachments } from './botGroupAttachments';
 import { refreshBotGroups } from './botGroupStore';
-import { mergeBotGroupMessages, projectBotGroupExecutionFailures } from './botGroupPresentation';
+import { canMentionAllInBotGroup, mergeBotGroupMessages, projectBotGroupExecutionFailures } from './botGroupPresentation';
 import { BotGroupComposer, type BotGroupOutgoingMessage, type BotGroupSendOutcome } from './BotGroupComposer';
-import { BotGroupTimelineItem } from './BotGroupTimelineItem';
+import { focusBotGroupComposer } from './botGroupTextInput';
+import { BotGroupTimelineItem, BotGroupUnreadDivider } from './BotGroupTimelineItem';
+import { BOT_GROUP_BOT_BROADCAST_LABELS } from './BotGroupMentionCard';
 import {
   botGroupMemberDisplayName,
   botGroupOwnedBotNames,
@@ -35,11 +45,26 @@ import {
   type BotGroupPendingSend,
   type BotGroupTimelineMessage,
 } from './BotGroupTimelineModel';
-import { chatErrorKey, messageReactionRevision } from './ChatServerControls';
+import { ChatReactionReads } from './useChatReactions';
+import { chatErrorKey } from './chatError';
+import { messageReactionRevision } from './ChatServerControls';
 import { ThreadPanel, ThreadPanelRoot } from './ThreadPanel';
 import type { ThreadPanelResize } from './useThreadPanelResize';
+import { ThreadMessageWindow } from './ThreadMessageWindow';
+import { Checkbox } from '@/components/ui/checkbox';
 const key = (name: string) => `bots.groupChat.server.${name}`;
 const api = () => window.electronAPI.maker.chatServer;
+/** Unconfirmed rich replies keep their operation id across panel remounts, isolated by account. */
+const richReplyAttempts = { owner: getDataOwnerGeneration().dataOwnerId, ids: new Map<string, string>() };
+function richReplyClientId(key: string): string {
+  const owner = getDataOwnerGeneration().dataOwnerId;
+  if (richReplyAttempts.owner !== owner) { richReplyAttempts.owner = owner; richReplyAttempts.ids.clear(); }
+  const clientId = richReplyAttempts.ids.get(key) ?? crypto.randomUUID();
+  richReplyAttempts.ids.delete(key);
+  richReplyAttempts.ids.set(key, clientId);
+  if (richReplyAttempts.ids.size > 256) richReplyAttempts.ids.delete(richReplyAttempts.ids.keys().next().value!);
+  return clientId;
+}
 const STICK_TO_BOTTOM_PX = 48;
 /** Earlier pages read while looking for a reply opened from the main chat. */
 const FOCUS_PAGE_LIMIT = 5;
@@ -150,12 +175,15 @@ async function runFollowSave(key: string, groupId: string, rootId: string, save:
   }
 }
 
-export function animateThreadPanelWidth(panel: HTMLElement, from: string, to: string): Animation | null {
+// Keep the flex slot at its final width: sliding must not rewrap both timelines on every frame.
+export function animateThreadPanel(panel: HTMLElement, direction: 'open' | 'close'): Animation | null {
   const style = getComputedStyle(panel);
   const token = style.getPropertyValue('--motion-base').trim();
   const duration = parseFloat(token) * (token.endsWith('ms') ? 1 : 1000);
   if (!panel.animate || !Number.isFinite(duration) || duration <= 0) return null;
-  return panel.animate([{ width: from }, { width: to }], {
+  const from = direction === 'open' ? 'translateX(100%)' : style.transform || 'none';
+  const to = direction === 'open' ? 'translateX(0)' : 'translateX(100%)';
+  return panel.animate([{ transform: from }, { transform: to }], {
     duration, easing: style.getPropertyValue('--motion-ease-move').trim() || 'linear', fill: 'forwards',
   });
 }
@@ -164,29 +192,36 @@ export function animateThreadPanelWidth(panel: HTMLElement, from: string, to: st
  * `quoteSources` are the main timeline's verified messages (older pages included), so a
  * 话题 root's quote reads the same as it does in the timeline; without them, the latest page.
  */
-export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, focus, sharedReplies, onRevealShare, onClose, resize }: {
+export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping = false, quoteSources = group.messages, focus, sharedReplies, onPostPending, onRevealShare, onBack, onClose, resize }: {
+  speakers?: BotGroupLiveSpeaker[];
+  onStop?: (scope?: 'all') => void;
+  stopping?: boolean;
   group: BotGroupDetail; rootId: string; quoteSources?: readonly BotGroupMessageView[];
   /** A reply to bring into view; a new nonce repeats the jump. */
   focus?: { messageId: string; nonce: number } | null;
   sharedReplies?: BotGroupSharedReplies;
+  onPostPending?: (source: BotGroupMessageView) => (messageId: string | null) => void;
   /** Scroll the main chat to a share; false when it is not loaded there. */
   onRevealShare?: (messageId: string) => boolean;
+  /** Return to the in-group 话题 index inside the same right-side panel. */
+  onBack?: () => void;
   onClose: () => void;
   resize?: ThreadPanelResize;
 }) {
   const { t, i18n } = useTranslation();
+  const pluginUi = usePluginUiMessageCandidates();
   const locale = i18n.language;
   const shareScope = `bot-group:${group.id}:thread:${rootId}`;
+  const readLocatedMention = useReadLocatedMention(group.id);
   const sharing = useShareSelectionActive(shareScope);
   const readOnly = Boolean(group.archived || group.dissolvedAt);
   const contentRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
+  const processScroll = useProcessDisclosureScroll(scrollRef, contentRef, stickToBottomRef, STICK_TO_BOTTOM_PX);
+  const { resumeFollow } = processScroll;
   const panelRef = useRef<HTMLElement>(null);
-  useEffect(() => {
-    const panel = panelRef.current;
-    (panel?.querySelector<HTMLTextAreaElement>('textarea:not(:disabled)') ?? panel?.querySelector<HTMLButtonElement>('header button'))?.focus();
-  }, []);
+  useEffect(() => focusBotGroupComposer(panelRef.current), []);
   useEffect(() => {
     shareSelectionStore.exitIfNotSession(shareScope);
     return () => { if (shareSelectionStore.isActive(shareScope)) shareSelectionStore.exit(); };
@@ -202,6 +237,7 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
   const revisionRef = useRef(initial?.revision);
   const historyEpochRef = useRef(0);
   const latestReadRef = useRef(0);
+  const [hasRead, setHasRead] = useState(false);
   const [root, setRoot] = useState<BotGroupMessageView | null>(initial?.root ?? null);
   const [executionFailures, setExecutionFailures] = useState<BotGroupExecutionFailureView[]>(initial?.executionFailures ?? []);
   const [replies, setReplies] = useState<BotGroupMessageView[]>(initial?.replies ?? []);
@@ -220,6 +256,7 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
   const repliesRef = useRef(replies);
   repliesRef.current = replies;
   const aliveRef = useRef(true);
+  const [reactionReads] = useState(() => new ChatReactionReads());
   const inFlightRef = useRef(false);
   const queuedRef = useRef(false);
   const queuedSourcesRef = useRef(new Set<string>());
@@ -245,6 +282,7 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
 
   const clearHistory = useCallback((wholeRoom = true) => {
     historyEpochRef.current++;
+    setHasRead(false);
     queuedSourcesRef.current.clear();
     changedRepliesRef.current.clear();
     for (const key of windows().keys())
@@ -276,11 +314,13 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
     const anchorId = before ? shown[0]?.id : undefined;
     const anchored = (replies: BotGroupMessageView[]) => !anchorId || replies.some(reply => reply.id === anchorId);
     try {
-      // Reading the latest page marks the Thread read only while the reader is at the newest reply:
-      // a reply that arrives while they read further up stays unread until they scroll down to it.
-      const markRead = !before && stickToBottomRef.current;
+      // Background updates (including a companion's replies) never consume human unread.
+      // Match the main timeline: only a focused, visible reader at the newest reply acknowledges it.
+      const markRead = !before && stickToBottomRef.current
+        && document.visibilityState === 'visible' && document.hasFocus();
       const save = followSave(followKey);
       const followWrites = save.writes;
+      const settlePage = reactionReads.beginRead();
       const result = await api().thread({ groupId: group.id, rootId, before,
         sourceMessageIds: [...new Set([...shown.map(message => message.id), ...extraSources])], markRead });
       if (!current()) return;
@@ -306,14 +346,22 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
         readBeforeRef.current = result.readBefore;
         setReadBefore(result.readBefore);
       }
-      if (!stalePage) setRoot(previous => (previous && JSON.stringify(previous) === JSON.stringify(result.root) ? previous : result.root));
+      if (!stalePage) {
+        settlePage([result.root]);
+        setRoot(previous => (previous && JSON.stringify(previous) === JSON.stringify(result.root) ? previous : result.root));
+      }
       setError('');
+      setHasRead(true);
       const floor = result.replies.reduce((min, reply) => Math.min(min, reply.sequence), Number.POSITIVE_INFINITY);
       // A latest page that neither overlaps nor directly adjoins the shown replies may leave a gap:
       // start over from it, as on first load, so 「查看更早」 reads on from right below it.
       const gap = !before && result.hasMore && result.replies.length > 0 && shown.length > 0
         && floor > shown.reduce((max, reply) => Math.max(max, reply.sequence), Number.NEGATIVE_INFINITY) + 1;
       if (!reset && !anchored(repliesRef.current)) return;
+      if (!stalePage) {
+        settlePage(result.replies);
+        if (result.messageUpdates) settlePage(result.messageUpdates);
+      }
       const addedSources = new Set(stalePage
         ? result.replies.filter(reply => !repliesRef.current.some(shown => shown.id === reply.id)).map(reply => reply.id) : []);
       if (!stalePage) setExecutionFailures(result.executionFailures ?? []);
@@ -349,6 +397,8 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
       // A refresh reads only the latest page: replies on opened older pages keep the attachments they
       // arrived with, so re-read the pages whose attachments were not here yet.
       if (!before && !gap && !reset && result.replies.length > 0) {
+        const settleAttachments = reactionReads.beginRead();
+        const received = new Set<BotGroupMessageView>();
         const refreshed = await refreshPendingBotGroupAttachments(shown, floor, async page => {
           const earlier = await api().thread({ groupId: group.id, rootId, before: page });
           if (!current()) return null;
@@ -361,15 +411,17 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
           if (earlier.historyRevision && earlier.historyRevision !== revisionRef.current) {
             clearHistory(); revisionRef.current = earlier.historyRevision; refreshRef.current(); return null;
           }
+          for (const message of earlier.replies) received.add(message);
           return earlier.replies;
         });
         if (refreshed && current()) {
+          settleAttachments(refreshed.filter(message => message.sequence < floor && received.has(message)));
           const fresh = new Map(refreshed.map(message => [message.sequence, message]));
           setReplies(previous => previous.map(message => message.sequence < floor ? fresh.get(message.sequence) ?? message : message));
         }
       }
     } catch { if (current()) setError(t(key('requestFailed'))); }
-  }, [group.id, rootId, t, clearHistory]);
+  }, [group.id, rootId, t, clearHistory, reactionReads]);
   const readRef = useRef(read);
   readRef.current = read;
   /** One refresh in flight; pushes meanwhile collapse into one follow-up read. */
@@ -418,15 +470,25 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
   useEffect(() => {
     aliveRef.current = true;
     refreshRef.current();
+    const acknowledgeVisible = () => {
+      if (document.visibilityState === 'visible' && document.hasFocus() && stickToBottomRef.current)
+        refreshRef.current();
+    };
+    window.addEventListener('focus', acknowledgeVisible);
+    document.addEventListener('visibilitychange', acknowledgeVisible);
     const stop = window.electronAPI.maker.onBotGroupChanged((event, stamp) => {
       if (isDataOwnerPushCurrent(stamp) && event.groupId === group.id) refreshRef.current();
     });
-    return () => { aliveRef.current = false; stop(); };
+    return () => {
+      aliveRef.current = false; stop();
+      window.removeEventListener('focus', acknowledgeVisible);
+      document.removeEventListener('visibilitychange', acknowledgeVisible);
+    };
   }, [group.id, rootId]);
 
   const members = group.members;
   const mentionLabels = useMemo(
-    () => [t('bots.groupChat.mention.all'), ...members.flatMap((member) => [member.name, botGroupMemberDisplayName(member), member.nickname || member.displayName || member.name])],
+    () => [t('bots.groupChat.mention.all'), t('bots.groupChat.mention.allBots'), ...BOT_GROUP_BOT_BROADCAST_LABELS, ...members.flatMap((member) => [member.name, botGroupMemberDisplayName(member), member.nickname || member.displayName || member.name])],
     [members, t],
   );
   const memberById = useMemo(() => new Map(members.map((member) => [member.botId, member])), [members]);
@@ -457,37 +519,52 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
     refreshRef.current();
   }, []);
   const onSendStart = useCallback((message: BotGroupOutgoingMessage) => {
-    stickToBottomRef.current = true;
+    resumeFollow();
     setPendingSends((previous) => [
       ...previous.filter((send) => send.clientId !== message.clientId),
       { ...message, createdAt: Date.now(), afterSequence: lastRealSequenceRef.current },
     ]);
-  }, []);
+  }, [resumeFollow]);
   const onSendSettled = useCallback((clientId: string, outcome: BotGroupSendOutcome) => {
     setPendingSends((previous) => outcome.ok
       ? previous.map((send) => (send.clientId === clientId ? { ...send, messageId: outcome.messageId } : send))
       : previous.filter((send) => send.clientId !== clientId));
   }, []);
-  // A share opened this thread: find its reply, reading back a few pages if needed.
+  // A share or sidebar preview opened this thread: find its reply, reading back a few pages if needed.
   const focusSearch = useRef<{ nonce: number; pages: number } | null>(null);
   useEffect(() => {
-    if (!focus || !replies.length) return;
+    if (!focus || !root) return;
     if (focusSearch.current?.nonce !== focus.nonce) focusSearch.current = { nonce: focus.nonce, pages: 0 };
     const search = focusSearch.current;
     if (search.pages < 0) return;
-    const target = findThreadMessageElement(contentRef.current, focus.messageId);
-    if (target) { stickToBottomRef.current = false; search.pages = -1; flashThreadTarget(target); return; }
-    if (!hasMore || search.pages >= FOCUS_PAGE_LIMIT) { search.pages = -1; return; }
+    // Loaded targets are revealed by the DOM window, even when they are currently unmounted.
+    if (root.id === focus.messageId || replies.some(reply => reply.id === focus.messageId)) return;
+    // Cached replies can be located while refresh waits or fails. Only a successful
+    // read can justify paging further or reporting that the reply is unavailable.
+    if (error || !hasRead) return;
+    if (!hasMore || search.pages >= FOCUS_PAGE_LIMIT) {
+      search.pages = -1;
+      toast.info(t(key('thread.replyNotFound')));
+      return;
+    }
     // A push refresh may overtake this page; then its replies trigger the next attempt, and
     // only a page that was merged counts against the limit.
     void readRef.current(replies[0]?.sequence, false, () => { search.pages += 1; });
-  }, [focus, replies, hasMore]);
+  }, [focus, replies, hasMore, root, error, hasRead, t]);
+  const onLocated = useCallback((messageId: string, target: HTMLElement) => {
+    stickToBottomRef.current = false;
+    flashThreadTarget(target);
+    if (!repliesRef.current.find(reply => reply.id === messageId)?.deleted) readLocatedMention(messageId, target);
+  }, [readLocatedMention]);
 
   /** One server operation per reply and person, so a retry never posts twice. */
-  async function postToMain(messageId: string, fromComposer: boolean) {
+  async function postToMain(messageId: string, fromComposer: boolean, acceptedSource?: BotGroupMessageView) {
     if (readOnly || postingRef.current.has(messageId)) return false;
     postingRef.current.add(messageId); setPosting(new Set(postingRef.current));
     const owner = getDataOwnerGeneration();
+    const source = acceptedSource ?? repliesRef.current.find(message => message.id === messageId);
+    const settlePending = source ? onPostPending?.({ ...source, threadRootId: rootId }) : undefined;
+    let receipt: string | null = null;
     const failed = (code?: string) => {
       if (!isDataOwnerGenerationCurrent(owner)) return;
       if (code === 'SHARE_UNAVAILABLE') {
@@ -500,13 +577,14 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
       const result = await api().shareToMain({ groupId: group.id, messageId });
       if (!isDataOwnerGenerationCurrent(owner)) return false;
       if (!result.ok) { failed(result.errorCode); return false; }
+      receipt = result.messageId;
       setPosted(previous => new Map(previous).set(messageId, result.messageId));
       setUnposted(previous => { const next = new Set(previous); next.delete(messageId); return next; });
       if (result.alreadyShared && !fromComposer) toast.info(t(key('thread.alreadyPosted')));
       refreshBotGroups();
       return true;
     } catch { failed(); return false; }
-    finally { postingRef.current.delete(messageId); setPosting(new Set(postingRef.current)); }
+    finally { settlePending?.(receipt); postingRef.current.delete(messageId); setPosting(new Set(postingRef.current)); }
   }
   async function retryUnposted() {
     // The queue belongs to the account that started the retry; stop once it is switched.
@@ -527,17 +605,41 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
   const revealShare = (shareId: string) => {
     if (!onRevealShare?.(shareId)) toast.info(t(key('thread.shareNotLoaded')));
   };
-  const sendReply = async (input: { text: string; clientId: string; mentions: BotGroupMessageView['mentions'] }) => {
+  const attachmentScope = botGroupThreadDraftKey(group.id, rootId);
+  const attachmentState = useAttachments(attachmentScope);
+  const sendReply = async (input: Omit<Parameters<ChatServerApi['reply']>[0], 'groupId' | 'rootId'>) => {
     const owner = getDataOwnerGeneration();
     const toMain = alsoSend;
     const result = await api().reply({ groupId: group.id, rootId, ...input });
     if (result.ok && isDataOwnerGenerationCurrent(owner)) {
       setAlsoSend(false);
-      if (toMain) await postToMain(result.messageId, true);
+      // The topic receipt settles its own send; the optional main-chat copy has its own retry.
+      if (toMain) void postToMain(result.messageId, true, { ...pendingBotGroupMessage({
+        clientId: input.clientId, text: input.text, mentions: input.mentions,
+        attachments: (input.attachments ?? []).map(file => botGroupAttachmentPreview({ ...file, ext: file.ext ?? '', size: file.size ?? 0 })), quote: null,
+        createdAt: Date.now(), afterSequence: lastRealSequenceRef.current }), id: result.messageId, threadRootId: rootId });
     }
     return result;
   };
   const onSent = useCallback(() => { refreshRef.current(); refreshBotGroups(); }, []);
+  // A component reply belongs to this thread; the composer's “also send” choice and draft stay intact.
+  const sendRichAnswer = async (text: string, sourceMessageId: string) => {
+    if (readOnly || sharing) return false;
+    const owner = getDataOwnerGeneration();
+    const attemptKey = JSON.stringify([group.id, rootId, sourceMessageId, text]);
+    const input = { text, clientId: richReplyClientId(attemptKey), mentions: { all: false, botIds: [] } };
+    onSendStart({ ...input, attachments: [], quote: null });
+    try {
+      const result = await api().reply({ groupId: group.id, rootId, ...input });
+      if (!isDataOwnerGenerationCurrent(owner)) return false;
+      onSendSettled(input.clientId, result.ok ? { ok: true, messageId: result.messageId } : { ok: false });
+      if (result.ok) { richReplyAttempts.ids.delete(attemptKey); onSent(); }
+      return result.ok;
+    } catch {
+      if (isDataOwnerGenerationCurrent(owner)) onSendSettled(input.clientId, { ok: false });
+      return false;
+    }
+  };
 
   // Follow new replies while the reader is at the bottom, including content that grows later.
   const lastKey = replyRows[replyRows.length - 1]?.id ?? '';
@@ -559,8 +661,9 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
 
   const renderRow = (message: BotGroupTimelineMessage, continued: boolean) => {
     const member = message.authorBotId ? memberById.get(message.authorBotId) : undefined;
-    const authorName = (member && message.authorKind !== 'system' ? botGroupMemberDisplayName(member) : '') || message.authorName || member?.name || '';
-    const owned = message.authorKind === 'user' && message.isSelf === false ? botGroupOwnedBotNames(member, members).join(separator) : '';
+    const authorName = (member && !member.assistant && message.authorKind !== 'system' ? botGroupMemberDisplayName(member) : '') || message.authorName || member?.name || '';
+    const isOtherHuman = message.authorKind === 'user' && message.isSelf === false;
+    const owned = isOtherHuman ? botGroupOwnedBotNames(member, members).join(separator) : '';
     const shared = message.id !== root?.id && !message.pending ? sharedState(message.id) : null;
     const onReveal = shared?.shareId ? () => revealShare(shared.shareId!) : undefined;
     const postAction = readOnly || message.pending || message.id === root?.id || message.deleted || message.kind !== 'message' ? undefined
@@ -568,17 +671,26 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
       : { key: 'post-to-main', label: t(key('thread.postToMain')), disabled: posting.has(message.id), icon: <MessageSquareShare size={14} strokeWidth={2} className="shrink-0" />, onSelect: () => void postToMain(message.id, false) };
     return (
       <BotGroupTimelineItem
+        showDeviceChoice={!!group.assistantComputers && !group.assistantDeviceId}
+        pluginUi={pluginUi}
         message={message}
         continued={continued}
         authorName={authorName}
         avatar={{ name: authorName, avatar: member?.avatar ?? null, avatarUrl: member?.avatarUrl, avatarColor: member?.avatarColor ?? null }}
         ownerOf={owned || undefined}
+        department={isOtherHuman ? member?.department ?? undefined : undefined}
+        departmentPath={isOtherHuman ? member?.departmentPath ?? undefined : undefined}
+        external={isOtherHuman && member?.external === true ? true : undefined}
         members={members}
         mentionLabels={mentionLabels}
         locale={locale}
         shareScope={shareScope}
         sharing={sharing}
+        readOnly={readOnly}
+        onRichSend={text => sendRichAnswer(text, message.id)}
         reactionGroupId={group.id}
+        readersEnabled={group.supportsMessageReaders === true}
+        reactionReads={reactionReads}
         reactionRevision={messageReactionRevision(group, message.id)}
         // A 话题 root may itself be a 引用回复; its original lives in the main timeline.
         quoteDisplay={message.quote ? resolveBotGroupQuote(message.quote, quoteSources) : undefined}
@@ -596,8 +708,29 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
   // when older replies sit above it.
   const firstNewIndex = readBefore === null ? -1 : replyRows.findIndex(message => message.sequence > readBefore && !message.isSelf && !message.deleted && message.authorKind !== 'system');
   const firstNewId = firstNewIndex > 0 ? replyRows[firstNewIndex]!.id : null;
+  const navigateTimeline = (navigate: () => void) => {
+    const wasFollowing = stickToBottomRef.current;
+    navigate();
+    // Wheel/End can resume before a scroll event, or without any displacement.
+    // Use the existing coalesced reader once for every return to visible replies.
+    if (!wasFollowing && stickToBottomRef.current) refreshRef.current();
+  };
 
-  return <ThreadPanel panelRef={panelRef} resize={resize} onClose={onClose} actions={<>
+  const liveEntries = interleaveBotGroupWork(replyRows, sharing ? [] : speakers);
+  const executionSpeakers = liveEntries.flatMap(entry => entry.kind === 'work' && entry.value.activity !== 'planning' ? [entry.value] : []);
+  const canStopMine = executionSpeakers.some(speaker => canStopBotGroupSpeaker(group, { ...speaker, botId: speaker.member.botId })) && group.round.canStop !== false;
+  const stopSpeaker = [...executionSpeakers].reverse().find(speaker => group && canStopBotGroupSpeaker(group, { ...speaker, botId: speaker.member.botId }));
+  return <ThreadPanel inlineActions={false} panelRef={panelRef} resize={resize} onClose={onClose}
+    leading={onBack ? (
+      <Tip text={t(key('thread.backToList'))}>
+        <Button variant="secondary" tone="quiet" size="md"
+          className="-ml-2 w-8 rounded-none px-0 [&::before]:rounded-full"
+          aria-label={t(key('thread.backToList'))} onClick={onBack}>
+          <ArrowLeft size={16} aria-hidden />
+        </Button>
+      </Tip>
+    ) : undefined}
+    actions={<>
             {following !== undefined ? (
               <Tip text={t(key(following ? 'thread.unfollowTip' : 'thread.followTip'))}>
                 <Button variant="secondary" tone="quiet" size="sm" aria-pressed={following} data-thread-follow=""
@@ -609,66 +742,84 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
               </Tip>
             ) : null}
         </>}>
-        <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-5 pb-4 pt-3"
-          onScroll={(event) => {
-            const element = event.currentTarget;
-            const wasAtBottom = stickToBottomRef.current;
-            stickToBottomRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < STICK_TO_BOTTOM_PX;
-            // Back at the newest reply: what arrived meanwhile has now been seen.
-            if (!wasAtBottom && stickToBottomRef.current) refreshRef.current();
-          }}>
+        <div ref={scrollRef} onCopy={copyChatSelection} className="min-h-0 flex-1 overflow-y-auto px-5 pb-4 pt-3"
+          onClickCapture={processScroll.onClickCapture}
+          onWheel={event => navigateTimeline(() => processScroll.onWheel(event))}
+          onKeyDown={event => navigateTimeline(() => processScroll.onKeyDown(event))}
+          onPointerDown={processScroll.onPointerDown}
+          onPointerUp={processScroll.onPointerUp}
+          onPointerCancel={processScroll.onPointerUp}
+          onScroll={event => navigateTimeline(() => {
+            stickToBottomRef.current = processScroll.onScroll(event);
+          })}>
           <div ref={contentRef} className="flex min-w-0 flex-col">
-            <ThreadPanelRoot replyCount={replyCount} testId="bot-group-thread-replies">
-              {rootRows.map(message => <Fragment key={message.id}>{renderRow(message, false)}</Fragment>)}
-            </ThreadPanelRoot>
-            {hasMore && <div className="mt-2"><Button variant="secondary" size="sm" onClick={() => void read(replies[0]?.sequence)}>{t('bots.groupChat.timeline.loadEarlier')}</Button></div>}
-            {replyRows.map(message => (
-              <Fragment key={adoptedKeysRef.current.get(message.id) ?? message.id}>
+            <ThreadMessageWindow items={[
+              { key: 'root', messageId: root?.id },
+              ...(hasMore ? [{ key: 'earlier' }] : []),
+              ...liveEntries.map(entry => entry.kind === 'work'
+                ? { key: `work:${entry.value.executionId ?? entry.value.member.botId}`, keepMounted: true }
+                : { key: adoptedKeysRef.current.get(entry.value.id) ?? entry.value.id, messageId: entry.value.id }),
+            ]} scrollRef={scrollRef} following={stickToBottomRef} sharing={sharing} focus={focus} onLocated={onLocated}
+              renderItem={itemIndex => {
+                if (itemIndex === 0) return <ThreadPanelRoot replyCount={replyCount} testId="bot-group-thread-replies">
+                  {rootRows.map(message => <Fragment key={message.id}>{renderRow(message, false)}</Fragment>)}
+                </ThreadPanelRoot>;
+                if (hasMore && itemIndex === 1) return <div className="mt-2"><Button variant="secondary" size="sm" onClick={() => void read(replies[0]?.sequence)}>{t('bots.groupChat.timeline.loadEarlier')}</Button></div>;
+                const index = itemIndex - 1 - Number(hasMore);
+                const entry = liveEntries[index]!;
+              if (entry.kind === 'work') {
+                const speaker = entry.value;
+                return <Fragment key={`work:${speaker.executionId ?? speaker.member.botId}`}>
+                  <BotGroupProgressStrip step={null} speakers={[speaker]} onStop={onStop} stopping={stopping}
+                    canStop={canStopMine} showStop={speaker === stopSpeaker}
+                    stopPending={stopping || executionSpeakers.filter(item => canStopBotGroupSpeaker(group, { ...item, botId: item.member.botId })).every(item => item.stopping || item.executionStatus === 'stopping')} />
+                  <BotGroupSpeakerInteraction speaker={speaker} />
+                </Fragment>;
+              }
+              const message = entry.value;
+              return <Fragment key={adoptedKeysRef.current.get(message.id) ?? message.id}>
                 {message.id === firstNewId ? (
-                  <div data-testid="bot-group-thread-new-replies" className="mt-3 flex select-none items-center gap-3 text-12 font-medium text-[var(--text-primary)]">
-                    <span className="flex shrink-0 items-center gap-1.5"><span aria-hidden className="size-1.5 rounded-full bg-[var(--bot-unread-bg)]" />{t(key('thread.newSeparator'))}</span>
-                    <span aria-hidden className="h-px flex-1 bg-[var(--border-default)]" />
-                  </div>
+                  <BotGroupUnreadDivider thread />
                 ) : null}
-                {renderRow(message, firstNewId === message.id ? false : layout.get(message.id)?.continued ?? false)}
-              </Fragment>
-            ))}
+                {renderRow(message, liveEntries[index - 1]?.kind !== 'work' && firstNewId !== message.id && (layout.get(message.id)?.continued ?? false))}
+              </Fragment>;
+              }} />
           </div>
         </div>
         {sharing ? <ShareSelectionBar sessionId={shareScope} barWidth="100%"
           getContentWidth={() => contentRef.current?.querySelector('article')?.getBoundingClientRect().width ?? 400} /> : <>
-          {error && <p role="alert" className="px-4 pt-3 text-13 text-[var(--error-fg)]">{error}</p>}
+          {error && <div role="alert" className="flex items-center gap-2 px-4 pt-3 text-13 text-[var(--error-fg)]">
+            <span className="min-w-0 flex-1">{error}</span>
+            <Button variant="secondary" size="sm" compact onClick={() => refreshRef.current()}>{t('commonUi.retry')}</Button>
+          </div>}
           {/* Kept apart from read errors: a thread refresh must not hide the retry. */}
           {unposted.size > 0 && <div role="alert" className="mb-2 px-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-13 text-[var(--error-fg)]">
             <span className="min-w-0">{t(key('thread.alsoSendFailed'), { count: unposted.size })}</span>
             <Button variant="secondary" size="sm" compact disabled={readOnly} loading={[...unposted].some(id => posting.has(id))} onClick={() => void retryUnposted()}>
               {t(key('thread.retryPost'))}</Button>
           </div>}
-          <div className="border-t border-[var(--border-default)]">
-            <BotGroupComposer
+            <BotGroupComposer allowMentionAll={canMentionAllInBotGroup(group)} allowMentionAllBots={group.supportsMentionAudiences === true && group.allowMentionAllBots === true}
               mode="thread"
               groupId={group.id}
-              draftKey={botGroupThreadDraftKey(group.id, rootId)}
+              draftKey={attachmentScope}
+              attachmentScope={attachmentScope}
+              attachments={attachmentState}
               members={members}
               running={false}
               disabled={readOnly}
               footerStart={sending => (
-                <button type="button" role="checkbox" aria-checked={alsoSend} disabled={sending || readOnly}
-                  onClick={() => setAlsoSend(value => !value)}
-                  className="-ml-1.5 inline-flex min-h-7 min-w-0 select-none items-center gap-2 rounded-full px-1.5 text-13 text-[var(--text-secondary)] outline-none transition-colors duration-[var(--motion-fast)] enabled:hover:bg-[var(--surface-hover)] enabled:hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-50">
-                  <span aria-hidden className={cn('flex h-4 w-4 shrink-0 items-center justify-center rounded-full transition-colors duration-[var(--motion-fast)]',
-                    alsoSend ? 'bg-[var(--accent-cta-bg-pure)] text-[var(--accent-pure-cta-fg)]' : 'border border-[var(--border-default)]')}>
-                    {alsoSend ? <Check size={10} strokeWidth={3} /> : null}
-                  </span>
-                  <span className="min-w-0 truncate">{t(key('thread.alsoSend'))}</span>
-                </button>
+                // Applied with the next reply: shared Checkbox in a label row (DESIGN.md §4, B-10).
+                <label className={cn('inline-flex min-h-7 min-w-0 select-none items-center gap-2 text-13 text-[var(--text-secondary)] transition-colors duration-[var(--motion-fast)]',
+                  sending || readOnly ? 'opacity-50' : 'cursor-pointer hover:text-[var(--text-primary)]')}>
+                  <Checkbox checked={alsoSend} disabled={sending || readOnly} onChange={event => setAlsoSend(event.currentTarget.checked)} />
+                  <span className="min-w-0 truncate" title={t(key('thread.alsoSend'))}>{t(key('thread.alsoSend'))}</span>
+                </label>
               )}
               sendReply={sendReply}
               onSendStart={onSendStart}
               onSendSettled={onSendSettled}
               onSent={onSent}
             />
-          </div>
         </>}
   </ThreadPanel>;
 }

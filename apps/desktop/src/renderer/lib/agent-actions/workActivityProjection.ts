@@ -32,11 +32,12 @@ export function projectRecentWorkActivities(
 export function projectWorkActivities(
   childItems: readonly ProjectableWorkChild<ChatMessage>[],
   isStreaming: boolean,
+  preserveRepeatedReads = false,
 ): WorkActivityProjection {
   // Group wrappers and result Maps are reconstructed on mount. Their immutable
   // source messages and the exact values consumed by the projector are stable.
   // Never retain rendered-child closures in the cross-mount cache.
-  const dependencies: unknown[] = [isStreaming];
+  const dependencies: unknown[] = [isStreaming, preserveRepeatedReads];
   let first: ChatMessage | undefined;
   for (const child of childItems) {
     dependencies.push(child.kind, child.key);
@@ -55,6 +56,6 @@ export function projectWorkActivities(
       dependencies.push(child.message);
     }
   }
-  const compute = () => projectSharedWorkActivities(childItems, isStreaming);
+  const compute = () => projectSharedWorkActivities(childItems, isStreaming, preserveRepeatedReads);
   return first ? projectSnapshot(first, dependencies, compute) : compute();
 }

@@ -1,19 +1,31 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render as renderView, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createElement } from 'react';
+import { createElement, type ReactElement } from 'react';
+import { i18n as applicationI18n } from '@/i18n';
+import { MemoryRouter, useLocation } from 'react-router-dom';
+
+function LocationProbe() {
+  const location = useLocation();
+  return <output data-testid="location">{location.pathname}{location.search}</output>;
+}
+
+function render(view: ReactElement) {
+  return renderView(<MemoryRouter>{view}<LocationProbe /></MemoryRouter>);
+}
 
 const { useCodexRuntimeRouteMock } = vi.hoisted(() => ({
   useCodexRuntimeRouteMock: vi.fn(),
 }));
 
 vi.mock('react-i18next', () => ({
+  initReactI18next: { type: '3rdParty', init: () => undefined },
   useTranslation: () => ({
     i18n: { exists: () => true },
     // 插值参数拼进返回值，让进度类文案能断言实际传入的 attempt/maxAttempts。
     t: (key: string, options?: { attempt?: number; maxAttempts?: number }) =>
-      options?.attempt && options.maxAttempts
+      key === 'ipcError.PRECONDITION_FAILED' ? applicationI18n.t(key) : options?.attempt && options.maxAttempts
         ? `${key}:${options.attempt}/${options.maxAttempts}`
         : key,
   }),
@@ -27,12 +39,25 @@ vi.mock('@/hooks/useCodexRuntimeRoute', () => ({
   useCodexRuntimeRoute: useCodexRuntimeRouteMock,
 }));
 
+vi.mock('@/hooks/useProviders', () => ({
+  useProviders: () => ({
+    providers: [{ id: 'work-openai', name: 'Work account', connected: true, auth: { method: 'oauth', native: 'codex' } }],
+    refetch: vi.fn(),
+  }),
+}));
+
+vi.mock('@/hooks/useCodexAuth', async importOriginal => ({
+  ...await importOriginal<typeof import('@/hooks/useCodexAuth')>(),
+  useCodexAuth: () => ({ state: { kind: 'unauthenticated' }, recoveryCheck: 'idle' }),
+}));
+
 vi.mock('@/hooks/useCodexSessionExpiredPrompt', () => ({
   isCodexSessionExpiredError: () => false,
   useCodexSessionExpiredPrompt: () => vi.fn(),
 }));
 
 import { ErrorBanner } from '@/components/chat/ErrorBanner';
+import { ErrorMessageCard } from '@/components/chat/ErrorMessageCard';
 
 afterEach(() => {
   cleanup();
@@ -72,10 +97,96 @@ describe('ErrorBanner Codex xAI auth classification', () => {
 
     expect(screen.queryByTitle('chat.errorBanner.retryTitle')).toBeNull();
     expect(screen.getByText('chat.errorBanner.codexAuthMissingLocal')).toBeTruthy();
+    // SplitGroup uses this contract to prevent its focus navigation racing settings.
+    expect(screen.getByRole('button', { name: 'logic.confirm.goToSettings' })
+      .getAttribute('data-split-pane-route-action')).toBe('');
+    fireEvent.click(screen.getByRole('button', { name: 'logic.confirm.goToSettings' }));
+    expect(screen.getByTestId('location').textContent).toBe('/settings?tab=providers&connect=openai');
+  });
+
+  // Unit: generic authentication failures previously had no actionable recovery,
+  // and a changed model selection could send the user to the wrong account.
+  it.each([
+    ['401 Unauthorized', 'openai'],
+    ['Missing bearer token', 'openai'],
+    ['401 Unauthorized', 'work-openai'],
+  ])(
+    'offers the failed connection even after runtime fallback: %s / %s', (error, failedProvider) => {
+      useCodexRuntimeRouteMock.mockReturnValue({ authInjection: 'env-key' });
+      const onRetry = vi.fn();
+      render(<ErrorBanner error={error} agentKind="codex" providerId="xai"
+        errorSourceProviderId={failedProvider} onRetry={onRetry} retryText="original" />);
+      // An independent account's cached connected flag is not recovery evidence.
+      // Keep settings available and allow a manual retry without claiming recovery.
+      expect(screen.queryByText('chatgptAuthRecovery.recovered')).toBeNull();
+      if (failedProvider === 'work-openai') {
+        fireEvent.click(screen.getByTitle('chat.errorBanner.retryTitle'));
+        expect(onRetry).toHaveBeenCalledWith('original');
+      } else {
+        expect(screen.queryByTitle('chat.errorBanner.retryTitle')).toBeNull();
+      }
+      fireEvent.click(screen.getByRole('button', { name: 'logic.confirm.goToSettings' }));
+      expect(screen.getByTestId('location').textContent).toBe(`/settings?tab=providers&connect=${failedProvider}`);
+    },
+  );
+
+  it.each([
+    { providerId: 'openai', errorSourceProviderId: 'custom-deepseek' },
+    { providerId: 'openai', agentDeviceId: 'other-computer' },
+    { providerId: 'openai', deviceLinkDeviceId: 'other-computer' },
+    { providerId: 'openai', remoteHostId: 'ssh-computer' },
+  ])('does not repair a different provider or computer locally: %j', props => {
+    render(<ErrorBanner error="401 Unauthorized" agentKind="codex" onRetry={vi.fn()} {...props} />);
+    expect(screen.queryByRole('button', { name: 'logic.confirm.goToSettings' })).toBeNull();
+    expect(screen.queryByText('chat.errorBanner.codexAuthMissingLocal')).toBeNull();
   });
 });
 
 describe('ErrorBanner context-overflow retry', () => {
+  // #7951: current translators retain concrete overflow details. The legacy
+  // no-details fallback must not replace that evidence with ciphertext advice.
+  it.each(['live', 'history'])('preserves a remote compact overflow in the %s view', (view) => {
+    const message = 'Error running remote compact task: maximum context length exceeded';
+    render(view === 'live'
+      ? createElement(ErrorBanner, { error: message, errorReason: 'context-overflow', onRetry: vi.fn() })
+      : createElement(ErrorMessageCard, { message, reason: 'context-overflow' }));
+    expect(screen.getByText('chat.errorBanner.contextOverflow')).toBeTruthy();
+    expect(screen.queryByText('chat.errorBanner.remoteCompactEncryptedContent')).toBeNull();
+  });
+  it.each([
+    'Error running remote compact task: invalid_encrypted_content',
+    'Error running remote compact task',
+  ])('corrects a persisted legacy compact error without rewriting history (%s)', (message) => {
+    render(createElement(ErrorMessageCard, {
+      message,
+      reason: 'context-overflow',
+    }));
+    expect(screen.getByText('chat.errorBanner.remoteCompactEncryptedContent')).toBeTruthy();
+    expect(screen.queryByText('chat.errorBanner.contextOverflow')).toBeNull();
+  });
+  // The same compact failure used to show either oversized-input or switch-provider advice.
+  it.each([
+    ['context-overflow', false, 'Error running remote compact task: invalid_encrypted_content'],
+    ['remote-compact-encrypted-content', true, 'Error running remote compact task: invalid_encrypted_content'],
+    ['context-overflow', true, 'Error running remote compact task'],
+  ])(
+    'shows compact recovery guidance for %s (remote=%s)',
+    (errorReason, remote, error) => {
+      const onRetry = vi.fn();
+      render(createElement(ErrorBanner, {
+        error,
+        errorReason,
+        agentKind: 'codex',
+        deviceLinkDeviceId: remote ? 'other-computer' : null,
+        retryText: 'retry-token',
+        onRetry,
+      }));
+      expect(screen.getByText('chat.errorBanner.remoteCompactEncryptedContent')).toBeTruthy();
+      expect(screen.queryByText('chat.errorBanner.contextOverflow')).toBeNull();
+      fireEvent.click(screen.getByTitle('chat.errorBanner.retryTitle'));
+      expect(onRetry).toHaveBeenCalledWith('retry-token');
+    },
+  );
   it('keeps Retry when automatic rollover failed and recovery is still available', () => {
     const onRetry = vi.fn();
     render(
@@ -263,4 +374,31 @@ describe('ErrorBanner terminal rate-limit retry guidance', () => {
     fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
     expect(screen.getByText(RATE_LIMIT)).toBeTruthy();
   });
+});
+
+// Integration: Electron rejects invoke with a wrapped string. The visible banner
+// must retain the safe Host guidance after the real send failure reaches the store.
+it.each([
+  ['恢复', '当前状态下无法执行此操作，请稍后重试。'],
+  ['占用', 'HOST_PROFILE_IN_USE_BY_DESKTOP: occupied'],
+])('renders the final Host refusal after a rejected enqueue (%s)', async (kind, detail) => {
+  const { makerChatStore } = await import('@/lib/makerChatStore');
+  const { i18n } = await import('@/i18n');
+  const previous = i18n.language;
+  await i18n.changeLanguage('zh-CN');
+  const raw = "Error invoking remote method 'maker:input:enqueue': Error: [PRECONDITION_FAILED] " + detail;
+  const enqueue = vi.fn().mockRejectedValue(new Error(raw));
+  const api = window.electronAPI;
+  vi.stubGlobal('electronAPI', { ...api, maker: { ...api?.maker, input: { enqueue }, autoTitle: vi.fn().mockResolvedValue({ applied: true, done: true }) } });
+  try {
+    const id = 'release-banner-' + kind;
+    expect(await makerChatStore.sendMessage(id, 'continue', 'test-model', 'medium', 'auto', '/test')).toBe(false);
+    expect(enqueue).toHaveBeenCalledOnce();
+    const error = makerChatStore.getSnapshot(id).error!;
+    const view = render(createElement(ErrorBanner, { error, onRetry: vi.fn() }));
+    const expected = kind === '恢复' ? detail : i18n.t('logic.errors.hostProfileInUseByDesktop');
+    if (kind === '占用') fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
+    expect(view.container.textContent).toContain(expected);
+    expect(view.container.textContent).not.toMatch(/Error invoking remote method|\[PRECONDITION_FAILED\]|HOST_PROFILE_IN_USE_BY_DESKTOP/);
+  } finally { vi.unstubAllGlobals(); await i18n.changeLanguage(previous); }
 });

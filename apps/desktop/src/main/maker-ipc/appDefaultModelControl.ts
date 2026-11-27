@@ -1,6 +1,10 @@
+import { readRemotePluginEngines } from '../remote-agent/controller/deviceCatalog.js';
 import { randomUUID } from 'node:crypto';
-import { effectiveSourceIdForModel, isModelVisible, type ProviderView } from '@cindy/model-providers';
+import { effectiveSourceIdForModel, isModelVisible, isModelSelectableForNewRoute, type ProviderView } from '@cindy/model-providers';
 import type { resolveNewMakerDefaultTuple } from '../../shared/newMakerDefaultTuple.js';
+import type { ModelRoute } from '@cindy/maker-shared/model-route';
+import { listPluginEngineViews } from './pluginEnginesIpc.js';
+import { PLUGIN_ENGINE_DEFAULT_MODEL, isPluginEngineEffort } from '../../shared/pluginEngines.js';
 import type { BotModelRoute } from '../../shared/botModelChain.js';
 import { sameModelRoute, type AppDefaultModelSelection } from '../../shared/appDefaultModelSelection.js';
 import { activeOwnerScopeKey, getActiveDataOwnerPushStamp, isAppSessionBoundaryPending } from '../appSessionState.js';
@@ -18,8 +22,8 @@ export function configureAppDefaultModelSelection(dispatch: typeof dispatchSelec
 /** Validate exactly the requested model; recommendations belong to default
  * selection, never to admission of an explicit task or teammate route. */
 function resolveAvailableLocalRoute(
-  args: Parameters<typeof resolveNewMakerDefaultTuple>[0] & { preferredRoute?: BotModelRoute | null },
-): BotModelRoute | null {
+  args: Parameters<typeof resolveNewMakerDefaultTuple>[0] & { preferredRoute?: ModelRoute | null },
+): ModelRoute | null {
   const preferred = args.preferredRoute;
   // Remote routes are validated against their own authorized catalog below.
   if (!preferred || preferred.agentDeviceId || args.providersLoading || !args.availableAgentsLoaded) return null;
@@ -27,14 +31,15 @@ function resolveAvailableLocalRoute(
   if (!args.availableAgents.has(agent === 'claude-code' ? 'cc' : agent)) return null;
   const providers = args.providers.filter(p => p.connected && !p.suspended && !p.modelDiscoveryFailure)
     .map(p => ({ ...p, models: { ...p.models, [agent]: (p.models[agent] ?? []).filter(m =>
-      args.isModelEnabled?.(agent, p.id, m) ?? m.defaultEnabled !== false) } }));
+      isModelSelectableForNewRoute(m, { userProvider: p.source === 'user' }) &&
+      (args.isModelEnabled?.(agent, p.id, m) ?? m.defaultEnabled !== false)) } }));
   const providerId = effectiveSourceIdForModel(providers, preferred.providerId, preferred.model, agent);
   return providerId ? { ...preferred, providerId } : null;
 }
 
 export function availableAppDefaultModels(input: {
   providers: readonly ProviderView[];
-  currentRoute?: BotModelRoute | null;
+  currentRoute?: ModelRoute | null;
   tuning?: (agent: 'claude-code' | 'codex' | 'pi', providerId: string, model: string) => { effort?: string; fastMode?: boolean | 'ultrafast' };
   availableAgents: ReadonlySet<'cc' | 'codex' | 'pi'>;
   enabled: NonNullable<Parameters<typeof resolveAvailableLocalRoute>[0]['isModelEnabled']>;
@@ -45,7 +50,7 @@ export function availableAppDefaultModels(input: {
   return input.providers.flatMap(provider => (['claude-code', 'codex', 'pi'] as const).flatMap(agent =>
     (provider.models[agent] ?? []).flatMap(model => {
       const remembered = input.tuning?.(agent, provider.id, model.id);
-      const route: BotModelRoute = { harness: agent === 'claude-code' ? 'claude' : agent,
+      const route: ModelRoute = { harness: agent === 'claude-code' ? 'claude' : agent,
         providerId: provider.id, model: model.id,
         effort: model.defaultEffort && model.efforts.includes(model.defaultEffort) ? model.defaultEffort : '',
         fastMode: false };
@@ -92,6 +97,37 @@ export async function inspectAppDefaultModel() {
   return { current, available };
 }
 
+/**
+ * This computer's plugin engines as choices for a teammate's own model chain, the same engines
+ * the teammate settings editor lists: available, not hidden from this computer's pickers, with
+ * the models the user left on (or the engine default). Never valid as the application default,
+ * which only routes built-in engines (`normalizeModelRoute`).
+ */
+export function teammatePluginEngineModelChoices(engines: ReturnType<typeof listPluginEngineViews> = listPluginEngineViews()) {
+  return engines.filter(engine => engine.availability.state !== 'unavailable' && !engine.hidden && !engine.suspended)
+    .flatMap(engine => {
+      // The engine default stays a choice whenever the engine allows it, as the saved-chain check
+      // (`resolveAvailableTaskModels`) does: a chain saved with it must stay editable once the engine
+      // reports its models.
+      const models = engine.defaultModelAllowed === false || engine.models.some(model => model.id === PLUGIN_ENGINE_DEFAULT_MODEL)
+        ? engine.models
+        : [{ id: PLUGIN_ENGINE_DEFAULT_MODEL, displayName: PLUGIN_ENGINE_DEFAULT_MODEL }, ...engine.models];
+      return models.map(model => {
+        const efforts = (model.efforts ?? []).filter(isPluginEngineEffort);
+        const route: BotModelRoute = { harness: 'acp', providerId: engine.providerId, model: model.id, effort: '', fastMode: false };
+        return { id: JSON.stringify([route.harness, route.providerId, route.model]), route, efforts,
+          supportsFastMode: false, supportsUltrafastMode: false, teammateOnly: true as const,
+          engine: engine.name, ...(model.displayName && model.displayName !== model.id ? { displayName: model.displayName } : {}) };
+      });
+    });
+}
+
+/** Model choices for a teammate's own chain: the application's choices plus this computer's plugin engines. */
+export async function inspectTeammateModelChoices() {
+  const { current, available } = await inspectAppDefaultModel();
+  return { current, available: [...available, ...teammatePluginEngineModelChoices()] };
+}
+
 export interface TaskModelSelection {
   id: string;
   effort?: string;
@@ -99,7 +135,7 @@ export interface TaskModelSelection {
 }
 
 /** Resolve one per-task selection from the live catalog; never mutate picker/default preferences. */
-export async function resolveTaskModelSelection(selection: TaskModelSelection): Promise<BotModelRoute> {
+export async function resolveTaskModelSelection(selection: TaskModelSelection): Promise<ModelRoute> {
   const { available } = await inspectAppDefaultModel();
   const option = available.find(entry => entry.id === selection.id);
   if (!option) throw new Error('任务模型已不可用，请重新查询可用模型');
@@ -118,8 +154,34 @@ export async function resolveTaskModelSelection(selection: TaskModelSelection): 
 /** Resolve legacy implicit sources using the ordinary default policy, without persisting changes. */
 export async function resolveAvailableTaskModels(routes: readonly BotModelRoute[]): Promise<Array<BotModelRoute | null>> {
   const owner = activeOwnerScopeKey();
-  const local = routes.some(route => !route.agentDeviceId) ? await readSelection() : null;
+  const local = routes.some(route => route.harness !== 'acp' && !route.agentDeviceId) ? await readSelection() : null;
+  const assertOwner = () => {
+    if (activeOwnerScopeKey() !== owner || isAppSessionBoundaryPending()) throw new Error('Account changed during model lookup');
+  };
+  const localEngines = routes.some(route => route.harness === 'acp' && !route.agentDeviceId) ? listPluginEngineViews() : [];
+  const remoteEngineCatalogs = new Map<string, Promise<typeof localEngines>>();
+  const readEngines = (deviceId: string) => {
+    let pending = remoteEngineCatalogs.get(deviceId);
+    if (!pending) {
+      assertOwner();
+      pending = readRemotePluginEngines(deviceId).catch(() => []);
+      remoteEngineCatalogs.set(deviceId, pending);
+    }
+    return pending;
+  };
+  assertOwner();
   return Promise.all(routes.map(async route => {
+    if (route.harness === 'acp') {
+      if (route.fastMode) return null;
+      const engines = route.agentDeviceId ? await readEngines(route.agentDeviceId) : localEngines;
+      assertOwner();
+      const engine = engines.find(item => item.providerId === route.providerId && item.availability.state !== 'unavailable');
+      if (!engine) return null;
+      const offered = engine.models.find(model => model.id === route.model);
+      if (!offered && (route.model !== PLUGIN_ENGINE_DEFAULT_MODEL || engine.defaultModelAllowed === false)) return null;
+      if (route.effort && (!isPluginEngineEffort(route.effort) || !offered?.efforts?.includes(route.effort))) return null;
+      return route;
+    }
     if (route.agentDeviceId) {
       const { readRemoteProviderRoute } = await import('../remote-agent/controller/deviceCatalog.js');
       // An unavailable saved source must leave the form open for reselection.
@@ -157,17 +219,19 @@ export async function validateTaskModel(route: BotModelRoute): Promise<boolean> 
 }
 
 /** Wait for a fresh owner-fenced mirror after the real setter persisted the selected route. */
-export async function changeAppDefaultModel(id: string, effort?: string, assertCaller: () => void = () => {}) {
-  assertCaller();
+export async function changeAppDefaultModel(id: string, effort?: string, assertCaller: () => void | Promise<void> = () => {}, fastMode?: boolean | 'ultrafast') {
+  await assertCaller();
   const state = await readSelection();
-  assertCaller();
+  await assertCaller();
   const choice = state.available.find(item => item.id === id);
   if (!choice || (effort !== undefined && effort !== '' && !choice.efforts.some(value => value === effort)))
     throw new Error('该模型或思考档不可用，请重新查询已启用模型');
-  const route = { ...choice.route, ...(effort !== undefined ? { effort } : {}) };
+  if (fastMode && (!choice.supportsFastMode || (fastMode === 'ultrafast' && !choice.supportsUltrafastMode)))
+    throw new Error('该模型不支持所选 Fast 档位，请重新查询');
+  const route = { ...choice.route, ...(effort !== undefined ? { effort } : {}), ...(fastMode !== undefined ? { fastMode } : {}) };
   if (!dispatchSelection) throw new Error('客户端默认模型设置入口尚未就绪');
   state.assertOwner();
-  assertCaller();
+  await assertCaller();
   const dispatch = dispatchSelection;
   await new Promise<void>((resolve, reject) => {
     const requestId = randomUUID();
@@ -186,7 +250,7 @@ export async function changeAppDefaultModel(id: string, effort?: string, assertC
     } catch (error) { clearTimeout(timer); off(); reject(error); }
   });
   state.assertOwner();
-  assertCaller();
+  await assertCaller();
   const current = getSelectedNewMakerRoute(state.owner);
   if (!sameModelRoute(current, route)) throw new Error('默认模型已被其他操作改变，请重新查询');
   return { current: route };

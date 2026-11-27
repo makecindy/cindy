@@ -46,6 +46,15 @@ async function reserveDisk(bytes: number): Promise<number> {
   return operation;
 }
 
+/** Share the existing recovery quota with controller-side attachment transfers. */
+export async function reserveAttachmentTransferDisk(bytes: number): Promise<() => void> {
+  await reserveDisk(bytes);
+  let released = false;
+  return () => {
+    if (!released) { released = true; reservedDiskBytes -= bytes; }
+  };
+}
+
 /** Normal requests remain byte-for-byte unchanged. Only overflow spills to disk. */
 export async function collectRecoverableBody(
   req: Readable,
@@ -90,8 +99,16 @@ export async function collectRecoverableBody(
       reserved += overhead;
     } });
     signal.throwIfAborted();
-    if (!result || result.length > limit) throw new Error('REQUEST_TOO_LARGE');
+    if (!result || result.length > limit) throw Object.assign(new Error('REQUEST_TOO_LARGE'), {
+      receivedBytes: bytes,
+      recoveryReason: result ? 'recovered_body_too_large' : 'attachment_recovery_unavailable',
+    });
     return result;
+  } catch (error) {
+    if (error instanceof Error && ['REQUEST_TOO_LARGE', 'RECOVERY_STORAGE_EXHAUSTED'].includes(error.message)) {
+      Object.assign(error, { receivedBytes: bytes });
+    }
+    throw error;
   } finally {
     try { await file?.close(); }
     finally {

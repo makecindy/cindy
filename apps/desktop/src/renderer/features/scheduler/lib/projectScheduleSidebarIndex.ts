@@ -2,7 +2,7 @@ import type { AutomationScheduleSessionInfo } from '../../cc-agent/lib/automatio
 import type { ScheduleSidebarIndexRun } from './scheduleSidebarIndexRuns';
 import { isUnreadFailedScheduleRun, isUnreadScheduleRun } from './runUnread';
 import { compareFailedScheduleRuns } from './failedScheduleDismissal';
-import { activeScheduleFailures } from '@cindy/maker-shared/schedule-model';
+import { activeScheduleFailures, readPrCheckDiagnosis } from '@cindy/maker-shared/schedule-model';
 
 /** Local and remote snapshots have the same unread projection. */
 export function projectScheduleSidebarIndex(
@@ -25,8 +25,13 @@ export function projectScheduleSidebarIndex(
     if (activeFailures.has(run.runId)) {
       const candidate = {
         runId: run.runId, firedAt: run.firedAt ?? 0, scheduleId: run.scheduleId,
+        finishedAt: run.finishedAt,
+        nextFireAt: run.scheduleStatus === 'active' ? run.nextFireAt : undefined,
         failureKind: run.failureKind,
+        preRunBlocked: run.status === 'failed' && run.preRunBlocked === true ? true as const : undefined,
         errorMsg: run.status === 'failed' ? run.errorMsg : undefined,
+        prCheckDiagnosis: run.status === 'failed' ? readPrCheckDiagnosis(run.prCheckDiagnosis) : undefined,
+        missingPlugin: run.status === 'failed' ? run.missingPlugin : undefined,
       };
       if (!latestFailedRun || compareFailedScheduleRuns(candidate, latestFailedRun) > 0)
         latestFailedRun = candidate;
@@ -48,6 +53,7 @@ export function projectScheduleSidebarIndex(
       nextFireAt: run.nextFireAt,
       workingDir: run.workingDir,
       projectConfigId: run.projectConfigId,
+      ...(run.canSwitchPluginEngine && { canSwitchPluginEngine: true }),
       unreadRunIds,
       unreadFailedRunIds,
       latestUnreadFailedRunId,

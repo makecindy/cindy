@@ -1,19 +1,20 @@
+import { AgentInputCoordinator, type AgentInputCoordinatorDeps } from '../agent-input-coordinator.js';
 import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import ts from 'typescript';
+import { createOrcaTeamService, type OrcaTeamServiceDeps } from '../orcaTeamService.js';
+import { pluginTaskRouteAttempts, resolveLightestPluginTaskFallback, pluginTaskSelectionIsOpen } from '../pluginTaskDefaultRoute.js';
 import { createSessionExecutionResolver } from '../sessionExecutionSelection.js';
 import { Session } from '@cindy/maker-core';
-import { fastModeToStorage } from '@cindy/maker-shared';
 import { handlePluginTaskRequest } from '../../cindy-brain/taskSlot.js';
 import { withParsedPluginMessageAttachments } from '../../cindy-media/pluginMessageAttachments.js';
 import { PLUGIN_ATTACHMENT_MAX_BYTES } from '../../../shared/pluginAttachments.js';
 import type { InstalledGhost } from '../../../shared/ghost.js';
 import {
   createPluginTaskService,
+  pluginTaskMatchesImProject,
   isPluginTaskPermissionAllowed,
-  isTeamPlanLabelLocked,
-  isTeamPlanLabelLockedByReceipt,
   PluginTaskError,
   assertPluginTaskResult,
   readPluginTaskPlanReceipt,
@@ -21,40 +22,331 @@ import {
   type PluginTaskStore,
   type PluginTaskServiceDeps,
 } from '../pluginTaskService.js';
-import type { PluginTeamPlan, PluginTaskView } from '../../../shared/pluginTasks.js';
+import type { PluginTaskRoute, PluginTaskView } from '../../../shared/pluginTasks.js';
 import { controlOwnedSessionExecution, isSameSessionExecution, withdrawOwnedSessionInputs } from '../sessionExecutionOwnership.js';
-import { PLUGIN_TEAM_PLAN_MAX_JSON_CHARS, PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS } from '../../../shared/pluginTasks.js';
+import { PLUGIN_TEAM_PLAN_MAX_JSON_CHARS, PLUGIN_TASK_FOLLOW_UP_MS, PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS } from '../../../shared/pluginTasks.js';
+import { resolveRemotePluginTaskRoute, savedPluginTaskRemoteRoute } from '../pluginTaskModelRoute.js';
+import type { ProviderView } from '@cindy/model-providers';
 
-it('locks only unsettled team-plan labels for worker rename', () => {
-  const route = {} as never;
-  const plan = {
-    concurrency: 2,
-    items: [
-      { label: 'w0', workingDir: '/answer', route },
-      { label: 'w1', workingDir: '/answer', route },
-    ],
-  } as unknown as PluginTeamPlan;
-  expect(isTeamPlanLabelLocked(plan, [], ['w0'])).toBe(true);
-  expect(isTeamPlanLabelLocked(plan, [], ['w1', null])).toBe(true);
-  expect(isTeamPlanLabelLocked(plan, ['w0'], ['w0'])).toBe(false);
-  expect(isTeamPlanLabelLocked(plan, ['w0'], ['w1'])).toBe(true);
-  expect(isTeamPlanLabelLocked(plan, [], ['other'])).toBe(false);
-  expect(isTeamPlanLabelLocked(undefined, [], ['w0'])).toBe(false);
+// User contract: plugin IM entrances share project settings. Existing route tests
+// lack project defaults, directory boundaries and permission changes on continuation.
+// Minimal cases: one create retry after a setting change; one existing task; one moved task.
+// Tier: unit, production task service with in-memory persistence.
+it('creates from shared IM settings and replays creation after those settings change', async () => {
+  const f = fixture();
+  const shared = { ...f.route, agentDeviceId: 'share:owner', effort: 'medium' };
+  f.deps.readPermissionMode = () => undefined;
+  f.deps.resolveImProject = vi.fn(async () => ({ route: shared, workingDir: '/project', permissionMode: 'bypassPermissions' as const,
+    assertCurrent: () => {}, matches: () => true }));
+  const request = { requestKey: 'im-create', title: 'Group', imProject: '/project' };
+  const task = await f.service.create('p', request);
+  expect(task.resolvedConfig).toEqual(shared);
+  expect(f.deps.createSession).toHaveBeenCalledWith('p', task.taskId, 'Group', shared, undefined,
+    shared, expect.any(Function), undefined, undefined, expect.objectContaining({ workingDir: '/project' }), 'bypassPermissions');
+  f.deps.resolveImProject = vi.fn(async () => { throw new Error('source offline'); });
+  expect(await f.service.create('p', request)).toEqual(task);
+  expect(f.deps.resolveImProject).not.toHaveBeenCalled();
+  await expect(f.service.create('p', { ...request, imProject: 'chat' })).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
 });
 
-it('releases the plan label lock only after the plugin is uninstalled', () => {
-  const route = {} as never;
-  const plan = {
-    concurrency: 1,
-    items: [{ label: 'w0', workingDir: '/answer', route }],
-  } as unknown as PluginTeamPlan;
-  const receipt = { payload: JSON.stringify({ teamPlan: plan }), operation: 'create' as const };
-  expect(isTeamPlanLabelLockedByReceipt(receipt, true, ['w0'])).toBe(true);
-  // 插件卸载（任务归属确实撤销）后，保留的收据不再锁定改名；
-  // 停用 / 未批准仍传入 true（可恢复），继续锁定由上层保证。
-  expect(isTeamPlanLabelLockedByReceipt(receipt, false, ['w0'])).toBe(false);
-  expect(isTeamPlanLabelLockedByReceipt({ payload: receipt.payload, operation: 'send' }, true, ['w0'])).toBe(false);
-  expect(isTeamPlanLabelLockedByReceipt(undefined, true, ['w0'])).toBe(false);
+it('keeps chat, nested projects and Windows project directories separate', async () => {
+  const task = await fixture().create();
+  const projects = ['C:/work', 'C:/work/nested'];
+  expect(pluginTaskMatchesImProject({ ...task, workspaceKind: 'dialogue' }, undefined, projects)).toBe(true);
+  expect(pluginTaskMatchesImProject({ ...task, workingDir: 'C:/work' }, undefined, projects)).toBe(false);
+  expect(pluginTaskMatchesImProject({ ...task, workingDir: 'c:\\WORK\\src' }, 'C:/work', projects)).toBe(true);
+  expect(pluginTaskMatchesImProject({ ...task, workingDir: 'C:/work/nested/src' }, 'C:/work', projects)).toBe(false);
+  expect(pluginTaskMatchesImProject({ ...task, workingDir: 'C:/work-other' }, 'C:/work', projects)).toBe(false);
+  expect(pluginTaskMatchesImProject({ ...task, workingDir: 'C:/work/../other' }, 'C:/work', projects)).toBe(false);
+  expect(pluginTaskMatchesImProject({ ...task, workingDir: 'C:/work' }, 'C:/work', [])).toBe(false);
+});
+
+it('follows project model and permission in the same task through both runtime write boundaries', async () => {
+  const f = fixture();
+  f.deps.readPermissionMode = () => undefined;
+  const task = await f.create();
+  const route = { ...f.route, effort: 'medium', agentDeviceId: 'share:owner' };
+  f.deps.resolveImProject = async () => ({ route, permissionMode: 'ask', assertCurrent: () => {}, matches: () => true });
+  f.deps.setModel = async (id, selected, assertCurrent, permissionMode) => {
+    await assertCurrent();
+    Object.assign(f.tasks.get(id)!, { resolvedConfig: selected, revision: 2 });
+    await assertCurrent(); // actual SessionControlService checks again before permission
+    Object.assign(f.tasks.get(id)!, { permissionMode, revision: 3 });
+    return { status: 'applied' };
+  };
+  const result = await f.service.followImProject('p', { taskId: task.taskId, expectedRevision: task.revision, imProject: 'chat' });
+  expect(result.task).toMatchObject({ taskId: task.taskId, resolvedConfig: route, permissionMode: 'ask' });
+  expect(JSON.parse(f.rows.get(task.taskId)!.payload).imProject).toBe('chat');
+  f.deps.assertImProjectDispatch = () => { throw new PluginTaskError('PERMISSION_DENIED', 'project tightened'); };
+  await expect(f.service.send('p', { taskId: task.taskId, expectedRevision: 3, requestKey: 'new', text: 'hello' }))
+    .rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+  expect(f.deps.dispatch).not.toHaveBeenCalled();
+});
+
+it('does not move an existing task or override a project configuration changed during resolution', async () => {
+  const f = fixture();
+  const task = await f.create();
+  f.deps.setModel = vi.fn();
+  f.deps.resolveImProject = async () => ({ route: f.route, permissionMode: 'auto', assertCurrent: () => {}, matches: () => false });
+  const request = { taskId: task.taskId, expectedRevision: task.revision, imProject: '/other' };
+  await expect(f.service.followImProject('p', request)).rejects.toMatchObject({ code: 'PROJECT_MISMATCH' });
+  f.deps.resolveImProject = async () => ({ route: f.route, permissionMode: 'auto', matches: () => true,
+    assertCurrent: () => { throw new PluginTaskError('STALE_REVISION', 'settings changed'); } });
+  await expect(f.service.followImProject('p', request)).rejects.toMatchObject({ code: 'STALE_REVISION' });
+  expect(f.deps.setModel).not.toHaveBeenCalled();
+  expect(await f.service.get('p', task.taskId)).toEqual(task);
+});
+
+// User decision 2026-11-18: one IM conversation in a plugin may keep its own model and permission on
+// top of the shared project; a permission looser than the project needs the user's allow in Cindy.
+// Existing cases only followed the project. Minimal inputs: own route + stricter permission; looser
+// without a grant, with another project's grant, then with this project's grant. Tier: unit.
+it("applies a conversation's own settings and loosens only with a grant for that project", async () => {
+  const f = fixture();
+  f.deps.readPermissionMode = () => undefined;
+  const task = await f.create();
+  const own = { ...f.route, model: 'own-model', effort: 'low' };
+  f.deps.resolveImProject = async (_plugin, _project, route) => ({ route: route ?? f.route, permissionMode: 'auto', assertCurrent: () => {}, matches: () => true });
+  let revision = task.revision;
+  const setModel = vi.fn(async (id: string, selected: PluginTaskRoute, assertCurrent: () => Promise<void>, permissionMode?: string) => {
+    await assertCurrent();
+    Object.assign(f.tasks.get(id)!, { resolvedConfig: selected, ...(permissionMode ? { permissionMode } : {}), revision: ++revision });
+    return { status: 'applied' };
+  });
+  f.deps.setModel = setModel as PluginTaskServiceDeps['setModel'];
+  const follow = (imOverride: object) => f.service.followImProject('p',
+    { taskId: task.taskId, expectedRevision: revision, imProject: 'chat', imOverride });
+  await expect(follow({ route: own, permissionMode: 'ask' }))
+    .resolves.toMatchObject({ task: { resolvedConfig: own, permissionMode: 'ask' } });
+  const elsewhere = await f.service.recordImPermissionGrant('p', '/other', 'bypassPermissions');
+  for (const grant of [{}, { permissionGrant: elsewhere }])
+    await expect(follow({ permissionMode: 'bypassPermissions', ...grant })).rejects.toMatchObject({ code: 'CONFIRMATION_REQUIRED' });
+  expect(setModel).toHaveBeenCalledOnce();
+  const grant = await f.service.recordImPermissionGrant('p', 'chat', 'bypassPermissions');
+  await expect(follow({ permissionMode: 'bypassPermissions', permissionGrant: grant }))
+    .resolves.toMatchObject({ task: { resolvedConfig: f.route, permissionMode: 'bypassPermissions' } });
+  expect(JSON.parse(f.rows.get(task.taskId)!.payload)).toMatchObject({ imProject: 'chat', imPermissionGrant: grant });
+  // Dispatch receives the user's grant; following the project again forgets it.
+  const granted = vi.fn();
+  f.deps.assertImProjectDispatch = (_plugin, _project, _task, mode) => granted(mode);
+  await f.service.send('p', { taskId: task.taskId, expectedRevision: revision, requestKey: 'loose', text: 'hi' });
+  expect(granted).toHaveBeenLastCalledWith('bypassPermissions');
+  // PR #11208 unit regression: TASK_BUSY must leave the previous grant usable.
+  const autoGrant = await f.service.recordImPermissionGrant('p', 'chat', 'auto');
+  const oldResolver = f.deps.resolveImProject;
+  f.deps.resolveImProject = async (...args) => ({ ...await oldResolver(...args), permissionMode: 'ask' });
+  setModel.mockRejectedValueOnce(new PluginTaskError('TASK_BUSY', 'Busy'));
+  await expect(follow({ permissionMode: 'auto', permissionGrant: autoGrant })).rejects.toMatchObject({ code: 'TASK_BUSY' });
+  await f.service.assertDispatch('p', task.taskId);
+  expect(granted).toHaveBeenLastCalledWith('bypassPermissions');
+  f.deps.resolveImProject = oldResolver;
+  await follow({});
+  expect(JSON.parse(f.rows.get(task.taskId)!.payload).imPermissionGrant).toBeUndefined();
+  expect(f.tasks.get(task.taskId)).toMatchObject({ resolvedConfig: f.route, permissionMode: 'auto' });
+});
+
+// PR #11208 unit regression: a legacy task without a project can still send after
+// a failed permission change. Previously the rejection left a project binding behind.
+it('preserves legacy dispatch when following an IM project fails before changing permissions', async () => {
+  const f = fixture();
+  f.deps.readPermissionMode = () => undefined;
+  const task = await f.create();
+  Object.assign(f.tasks.get(task.taskId)!, { permissionMode: 'bypassPermissions' });
+  f.deps.resolveImProject = async () => ({ route: f.route, permissionMode: 'ask', assertCurrent: () => {}, matches: () => true });
+  f.deps.assertImProjectDispatch = () => { throw new PluginTaskError('PERMISSION_DENIED', 'Project has no grant'); };
+  f.deps.setModel = async () => { throw new PluginTaskError('TASK_BUSY', 'Busy'); };
+  const grant = await f.service.recordImPermissionGrant('p', 'chat', 'auto');
+  await expect(f.service.followImProject('p', { taskId: task.taskId, expectedRevision: task.revision, imProject: 'chat',
+    imOverride: { permissionMode: 'auto', permissionGrant: grant } })).rejects.toMatchObject({ code: 'TASK_BUSY' });
+  await expect(f.service.assertDispatch('p', task.taskId)).resolves.toMatchObject({ permissionMode: 'bypassPermissions' });
+  expect(JSON.parse(f.rows.get(task.taskId)!.payload)).not.toHaveProperty('imProjectTransition');
+  f.deps.setModel = async () => {
+    Object.assign(f.tasks.get(task.taskId)!, { permissionMode: 'auto' });
+    throw new PluginTaskError('TASK_BUSY', 'Runtime changed before the update returned');
+  };
+  await expect(f.service.followImProject('p', { taskId: task.taskId, expectedRevision: task.revision, imProject: 'chat',
+    imOverride: { permissionMode: 'auto', permissionGrant: grant } })).rejects.toMatchObject({ code: 'TASK_BUSY' });
+  await expect(f.service.assertDispatch('p', task.taskId)).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+});
+
+// Same decision for the first message of a conversation. Existing creation cases had no per-conversation
+// input. Minimal inputs: looser without a grant, then own route + granted permission, then a retry
+// after the conversation went back to following the project (same creation key). Tier: unit.
+it('creates with conversation settings, needs a grant to loosen and replays without a conflict', async () => {
+  const f = fixture();
+  f.deps.readPermissionMode = () => undefined;
+  let defaultOffline = false;
+  f.deps.resolveImProject = async (_plugin, _project, route) => {
+    // PR #11208 unit regression: an offline default must not prevent explicit routing.
+    if (defaultOffline && !route) throw new Error('Default source offline');
+    return { route: route ?? f.route, workingDir: '/project', permissionMode: 'ask', assertCurrent: () => {}, matches: () => true };
+  };
+  const own = { ...f.route, model: 'own-model' };
+  const request = { requestKey: 'im-own', title: 'Group', imProject: '/project' };
+  await expect(f.service.create('p', { ...request, imOverride: { permissionMode: 'auto' } })).rejects.toMatchObject({ code: 'CONFIRMATION_REQUIRED' });
+  expect(f.deps.createSession).not.toHaveBeenCalled();
+  const grant = await f.service.recordImPermissionGrant('p', '/project', 'auto');
+  defaultOffline = true;
+  f.deps.resolveImProjectPermission = async () => ({ permissionMode: 'ask', label: 'Project', assertCurrent: () => {}, matches: () => true });
+  await expect(f.service.imProjectPermission('p', '/project')).resolves.toMatchObject({ permissionMode: 'ask', label: 'Project' });
+  const task = await f.service.create('p', { ...request, imOverride: { route: own, permissionMode: 'auto', permissionGrant: grant } });
+  expect(f.deps.createSession).toHaveBeenLastCalledWith('p', task.taskId, 'Group', own, undefined, own, expect.any(Function),
+    undefined, undefined, expect.objectContaining({ workingDir: '/project' }), 'auto');
+  expect(JSON.parse(f.rows.get(task.taskId)!.payload)).toMatchObject({ imProject: '/project', imPermissionGrant: grant });
+  expect(await f.service.create('p', request)).toEqual(task);
+});
+
+// PR #9155 P1: a cold/offline remote read held the shared receipt queue, so
+// even another plugin's already running task could not stop. Existing lifecycle
+// tests did not suspend admission while cancelling. Production service, unit.
+it.each(['create-route', 'create-session', 'setModel-route', 'setModel-runtime', 'send', 'accept'] as const)(
+  'keeps cancellation responsive while %s awaits a remote source', async phase => {
+    const f = fixture();
+    const task = await f.create();
+    const run = await f.send();
+    await f.service.accept(task.taskId, { clientId: run.inputMessageId }, f.execution);
+    const remote = { ...f.route, agentDeviceId: 'other-computer' };
+    const remoteTask = await f.service.create('other-plugin', { requestKey: 'remote', title: 'Remote', route: remote });
+    const remoteRun = await f.service.send('other-plugin', { taskId: remoteTask.taskId, expectedRevision: remoteTask.revision, requestKey: 'first', text: 'remote' });
+    let release!: () => void, entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const pause = async () => { entered(); await gate; };
+    if (phase === 'create-session') {
+      const create = f.deps.createSession;
+      f.deps.createSession = async (...args) => { await pause(); return create(...args); };
+    } else if (phase === 'setModel-runtime') {
+      f.deps.setModel = async (_id, _route, assertCurrent) => { await pause(); await assertCurrent(); return { status: 'applied' }; };
+    } else {
+      f.deps.resolveRoute = async (_plugin, route) => { await pause(); return route ?? f.route; };
+    }
+    f.deps.setModel ??= async (_id, _route, assertCurrent) => { await assertCurrent(); return { status: 'applied' }; };
+    const pending = phase.startsWith('create')
+      ? f.service.create('other-plugin', { requestKey: 'second', title: 'Remote', route: remote })
+      : phase.startsWith('setModel')
+        ? f.service.setModel('other-plugin', { taskId: remoteTask.taskId, expectedRevision: remoteTask.revision, route: remote })
+        : phase === 'send'
+          ? f.service.send('other-plugin', { taskId: remoteTask.taskId, expectedRevision: remoteTask.revision, requestKey: 'second', text: 'remote' })
+          : f.service.accept(remoteTask.taskId, { clientId: remoteRun.inputMessageId }, f.execution);
+    await started;
+    let drained = false;
+    const drain = f.service.drain().then(() => { drained = true; });
+    const cancellations = [f.service.cancel('p', run.runId), f.service.cancel('other-plugin', remoteRun.runId)];
+    const outcome = pending.catch(error => error);
+    try {
+      // Fixture reads/writes use microtasks only. One event-loop turn proves the
+      // independent cancellation was admitted without releasing remote I/O.
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(drained).toBe(false);
+      expect(f.deps.cancel).toHaveBeenCalledTimes(2);
+      expect((await Promise.all(cancellations)).every(value => value.status === 'cancelled')).toBe(true);
+    } finally {
+      release();
+      await Promise.all([...cancellations, outcome]);
+      await drain;
+    }
+    if (phase === 'accept') {
+      expect(await outcome).toMatchObject({ code: 'REQUEST_EXPIRED' });
+      expect(JSON.parse(f.rows.get(remoteRun.runId)!.payload).status).toBe('cancelled');
+    }
+  },
+);
+
+// User regression: picker routes were not executable by plugin tasks. The existing
+// local lifecycle matrix never exercised source identity at acceptance or after restart.
+// Production service + remote admission; paired/share sources, completion/cancellation. Tier: unit.
+it.each([
+  ['other-computer', 'completed'], ['share:provider', 'completed'],
+  ['other-computer', 'cancelled'], ['share:provider', 'cancelled'],
+] as const)('preserves %s through create, send, %s and restored run receipts', async (agentDeviceId, outcome) => {
+  const f = fixture();
+  const route = { ...f.route, agentDeviceId };
+  const readProviders = vi.fn(async (_deviceId: string) => [{ id: 'mine', source: 'user', connected: true, agents: ['codex'], routing: { codex: {} },
+    models: { codex: [{ id: 'model', efforts: ['high'] }] } }] as unknown as ProviderView[]);
+  f.deps.resolveRoute = vi.fn(async (_, selected) => selected?.agentDeviceId
+    ? resolveRemotePluginTaskRoute(selected, { readProviders, assertCurrent: f.deps.assertCurrent }) : f.route);
+  const task = await f.service.create('p', { requestKey: 'remote-create', title: 'Remote', route, hidden: false });
+  expect(task.resolvedConfig).toEqual(route);
+  const run = await f.service.send('p', { taskId: task.taskId, expectedRevision: task.revision, requestKey: 'remote-send', text: 'hello' });
+  expect(f.deps.dispatch).toHaveBeenCalledExactlyOnceWith('p', task.taskId, run.inputMessageId, 'hello', [], undefined);
+  expect(run.acceptedConfig).toEqual(route);
+  await f.service.accept(task.taskId, { clientId: run.inputMessageId }, f.execution);
+  f.deps.inspect = vi.fn(async () => ({ execution: f.execution, pending: [] }));
+  if (outcome === 'cancelled') {
+    f.deps.cancel = vi.fn(async () => 'stopping' as const);
+    expect((await f.service.cancel('p', run.runId)).status).toBe('stopping');
+    expect(f.deps.cancel).toHaveBeenCalledWith('p', task.taskId, expect.arrayContaining([run.inputMessageId]), f.execution);
+  }
+  // A terminal from a previous remote proxy/turn cannot complete this input.
+  await f.service.settle(task.taskId, { ...f.execution, generation: 0 }, 'completed', 'stale');
+  expect((await f.service.getRun('p', run.runId)).status).toBe(outcome === 'cancelled' ? 'stopping' : 'running');
+  await f.service.settle(task.taskId, f.execution, outcome, 'remote-output');
+  const restored = createPluginTaskService(f.deps);
+  expect(await restored.getRun('p', run.runId)).toMatchObject({ status: outcome, acceptedConfig: route, outputMessageId: 'remote-output' });
+  expect((await restored.listRuns('p', task.taskId)).items[0]).toMatchObject({ status: outcome, acceptedConfig: route });
+  expect(await restored.create('p', { requestKey: 'remote-create', title: 'Remote', route, hidden: false })).toEqual(task);
+  await expect(restored.create('p', { requestKey: 'remote-create', title: 'Remote', route: { ...route, agentDeviceId: 'different' }, hidden: false }))
+    .rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+  expect(readProviders.mock.calls.every(([id]) => id === agentDeviceId)).toBe(true);
+});
+
+// Split admission must re-read configuration and preserve exactly-once receipts;
+// the old tests covered mutations inside one locked request, not concurrent sends.
+it('deduplicates concurrent sends after unlocked remote admission', async () => {
+  const f = fixture();
+  const task = await f.service.create('p', { requestKey: 'remote', title: 'Remote', route: { ...f.route, agentDeviceId: 'other-computer' } });
+  let release!: () => void, entered!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  f.deps.resolveRoute = async (_plugin, route) => { entered(); await gate; return route!; };
+  const request = { taskId: task.taskId, expectedRevision: task.revision, requestKey: 'same', text: 'hello' };
+  const first = f.service.send('p', request);
+  await started;
+  const second = f.service.send('p', request);
+  release();
+  const results = await Promise.all([first, second]);
+  expect(results[0].runId).toBe(results[1].runId);
+  expect(f.deps.dispatch).toHaveBeenCalledOnce();
+  expect((await f.service.listRuns('p', task.taskId)).items).toHaveLength(1);
+});
+
+it.each(['send', 'accept'] as const)('rejects a source changed during unlocked %s admission', async phase => {
+  const f = fixture();
+  const task = await f.service.create('p', { requestKey: 'remote', title: 'Remote', route: { ...f.route, agentDeviceId: 'other-computer' } });
+  const request = { taskId: task.taskId, expectedRevision: task.revision, requestKey: 'send', text: 'hello' };
+  const run = phase === 'accept' ? await f.service.send('p', request) : undefined;
+  f.deps.resolveRoute = async (_plugin, route) => {
+    f.tasks.get(task.taskId)!.resolvedConfig.agentDeviceId = 'different-source';
+    f.tasks.get(task.taskId)!.revision++;
+    return route!;
+  };
+  if (run) {
+    await expect(f.service.accept(task.taskId, { clientId: run.inputMessageId }, f.execution))
+      .rejects.toMatchObject({ code: 'ROUTE_UNAVAILABLE' });
+    expect(JSON.parse(f.rows.get(run.runId)!.payload).status).toBe('queued');
+  } else {
+    await expect(f.service.send('p', request)).rejects.toMatchObject({ code: 'REVISION_CONFLICT' });
+    expect(f.deps.dispatch).not.toHaveBeenCalled();
+    expect(await f.deps.store.forSession(task.taskId)).toEqual([]);
+  }
+});
+
+it('blocks a revoked remote source before vendor acceptance and never substitutes a local namesake', async () => {
+  const f = fixture();
+  const route = { ...f.route, agentDeviceId: 'share:provider' };
+  const task = await f.service.create('p', { requestKey: 'remote', title: 'Remote', route });
+  const run = await f.service.send('p', { taskId: task.taskId, expectedRevision: task.revision, requestKey: 'send', text: 'hello' });
+  f.deps.resolveRoute = vi.fn(async (_, selected) => resolveRemotePluginTaskRoute(selected!, {
+    readProviders: async () => [], assertCurrent: f.deps.assertCurrent,
+  }));
+  await expect(f.service.accept(task.taskId, { clientId: run.inputMessageId }, f.execution))
+    .rejects.toMatchObject({ code: 'ROUTE_UNAVAILABLE' });
+  expect(JSON.parse(f.rows.get(run.runId)!.payload).status).toBe('queued');
+  // A source-only change is a different configuration even if all model fields are identical.
+  f.tasks.get(task.taskId)!.resolvedConfig = { ...f.route, agentDeviceId: 'different' };
+  await expect(f.service.accept(task.taskId, { clientId: run.inputMessageId }, f.execution))
+    .rejects.toMatchObject({ code: 'ROUTE_UNAVAILABLE' });
+  expect(f.deps.resolveRoute).toHaveBeenCalledTimes(1);
 });
 
 it('rejects oversized plans before saving and refuses oversized legacy receipts without truncation', async () => {
@@ -66,30 +358,7 @@ it('rejects oversized plans before saving and refuses oversized legacy receipts 
   for (const payload of [' '.repeat(PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS+1), JSON.stringify({teamPlan:{task:'x'.repeat(PLUGIN_TEAM_PLAN_MAX_JSON_CHARS)}})])
     expect(()=>readPluginTaskPlanReceipt(payload)).toThrow('size');
   f.rows.get(task.taskId)!.payload=JSON.stringify({teamPlan:plan});
-  await expect(f.service.settleWorkerLabel('p',task.taskId,'w0')).rejects.toMatchObject({code:'INVALID_REQUEST'});
-});
-
-it.each([false,true])('production Auto context checks uninstall after its projection await (worker=%s)', async worker => {
-  for (const revoked of [false,true]) {
-    const f=fixture(),task=await f.create();
-    const session={...f.route,source:'plugin',workingDir:'/answer',permissionMode:'auto',status:'active'};
-    const results=[[session],worker?[{leadId:task.taskId,label:'w',teamId:'team',teamStatus:'active'}]:[],[session]];
-    const query={from:()=>query,where:()=>query,innerJoin:()=>query,limit:async()=>results.shift()};
-    const epoch={client:{drizzle:{select:()=>query},queryOne:async()=>({unchanged:1}),tx:async()=>{if(revoked)await f.service.withUninstall('p',async()=>{});return {};}}};
-    let load!:(id:string)=>Promise<unknown>;
-    const deps={setAutoReviewContextResolver:(callback:typeof load)=>{load=callback;},createPluginTaskReviewResolver:(callback:typeof load)=>callback,
-      getCurrentDbClientSnapshot:()=>epoch,sessions:{},orcaWorkers:{},orcaTeams:{},eq:()=>true,fastModeToStorage,
-      createPluginTaskStore:()=>f.deps.store,drainPersistQueue:async()=>{},
-      pluginTaskServiceForCurrentOwner:()=>f.service,getPluginTaskDefaults:()=>({permissionMode:'auto'}),
-      readPluginTaskPlanReceipt,isPluginTaskPermissionAllowed,pluginTaskAuthorizationRevision:()=> 'new-install',isPluginTaskAuthorized:()=>true};
-    const source=readFileSync(new URL('../register.ts',import.meta.url),'utf8');
-    const start=source.indexOf('  setAutoReviewContextResolver(createPluginTaskReviewResolver(async sessionId => {');
-    const block=source.slice(start,source.indexOf('\n  }));',start)+7);
-    const js=ts.transpileModule(block,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
-    new Function(...Object.keys(deps),js)(...Object.values(deps));
-    if(revoked)await expect(load(worker?'worker':task.taskId)).rejects.toMatchObject({code:'TASK_NOT_FOUND'});
-    else await expect(load(worker?'worker':task.taskId)).resolves.toMatchObject({authorized:true,pluginId:'p'});
-  }
+  await expect(f.service.setTeamPlan('p',task.taskId,{concurrency:1,items:[]})).rejects.toMatchObject({code:'INVALID_REQUEST'});
 });
 
 function fixture() {
@@ -133,6 +402,8 @@ function fixture() {
       ),
     forSession: async (t) =>
       copy([...rows.values()].filter((r) => r.operation === 'send' && r.targetId === t)),
+    followUpLinks: async (t) =>
+      copy([...rows.values()].filter((r) => r.operation === 'followUp' && r.targetId === t)),
     insert: async (r) => {
       expect(rows.has(r.id)).toBe(false);
       rows.set(r.id, copy(r));
@@ -227,6 +498,8 @@ function useProductionPermissionCreator(f: ReturnType<typeof fixture>, configure
     PluginTaskError, isPluginTaskPermissionAllowed, createPluginTaskSession: persist,
     clampPluginTaskPermissionMode: (mode: unknown) => mode ?? 'ask', snapshot,
     getCurrentDbClientSnapshot: () => snapshot, isPluginTaskAuthorized: () => true,
+    pendingPluginGroupStarts: new Map(), pluginGroupKey: () => '',
+    modelGroupSessionStart: { attach: () => {} },
   };
   f.deps.readPermissionMode = () => useDefaults ? configured.permissionMode : undefined;
   f.deps.createSession = new Function(...Object.keys(deps), permissionCreatorCode)(...Object.values(deps));
@@ -310,21 +583,117 @@ it.each(['route', 'persistence'] as const)('rechecks creation permission after %
 
 // 通用统计：保护真实 send 接受边界，不将空任务、拒绝或同键重放计为新调用。
 // unit: new-title intent lives in the existing create receipt; context must reach
-// dispatch and participate in deduplication rather than becoming visible prose.
+// dispatch and participate in deduplication, but must not become title-model material.
 it('persists automatic naming intent and dispatches separate context without duplicating title requests', async () => {
   const f = fixture();
   const schedule = vi.fn();
   f.deps.scheduleAutoTitle = schedule;
   const task = await f.service.create('p', { requestKey: 'new', autoTitle: true });
   expect(JSON.parse(f.rows.get(task.taskId)!.payload)).toMatchObject({ autoTitle: true });
-  const request = { taskId: task.taskId, expectedRevision: task.revision, requestKey: 'send', text: 'Look here', context: 'Window contents' };
+  const request = { taskId: task.taskId, expectedRevision: task.revision, requestKey: 'send',
+    text: 'Release this project', context: 'Capture metadata. '.repeat(30) };
   await f.service.send('p', request);
   await f.service.send('p', request);
   expect(f.deps.dispatch).toHaveBeenCalledOnce();
-  expect(vi.mocked(f.deps.dispatch).mock.calls[0]?.[5]).toBe('Window contents');
+  expect(vi.mocked(f.deps.dispatch).mock.calls[0]?.[5]).toBe(request.context);
   expect(schedule).toHaveBeenCalledOnce();
+  expect(schedule).toHaveBeenCalledWith('p', task.taskId, request.text, request.text);
   await expect(f.service.send('p', { ...request, context: 'Another window' }))
     .rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+});
+
+// unit: message-source.md「插件转发的 IM 消息」(2026-11-16). relay joins the send identity only when
+// present: the digest literal below was written by the build before relay existed, so a plugin
+// retrying an old requestKey still replays instead of conflicting. Relay reaches dispatch as-is.
+it('keeps relay-free send receipts replayable and binds a relay to its request key', async () => {
+  const f = fixture(), task = await f.create();
+  const request = { taskId: task.taskId, expectedRevision: task.revision, requestKey: 'send',
+    text: '群里有人问发布时间', context: '<group_chat_context>' };
+  await f.service.send('p', request);
+  const receipt = [...f.rows.values()].find(row => row.operation === 'send')!;
+  expect(receipt.fingerprint).toBe('b80eb91c8bf354d5846b2e1f951852685d31a52722cf00fdcb7a1a8db9f026e1');
+  expect(f.deps.dispatch).toHaveBeenCalledExactlyOnceWith('p', task.taskId, expect.any(String), request.text, [], request.context);
+  const relay = { platform: 'wechat', chatType: 'group' as const, chatName: '产品群', sender: { id: 'wxid_a', name: 'Chris', isOwner: false } };
+  await expect(f.service.send('p', { ...request, relay })).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+  const run = await f.service.send('p', { ...request, requestKey: 'relay', relay });
+  expect(f.deps.dispatch).toHaveBeenLastCalledWith('p', task.taskId, run.inputMessageId, request.text, [], request.context, relay);
+  // Key order is not identity; a changed relay is.
+  const { sender, ...rest } = relay;
+  expect(await f.service.send('p', { ...request, requestKey: 'relay', relay: { sender, ...rest } })).toEqual(run);
+  await expect(f.service.send('p', { ...request, requestKey: 'relay', relay: { ...relay, sender: { ...sender, isOwner: true } } }))
+    .rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+  expect(f.deps.dispatch).toHaveBeenCalledTimes(2);
+});
+
+// unit: plugin-agent-tasks.md「后续轮次」(2026-11-25). A WeChat question's turn opened a task; its
+// result came back into the WeChat task but nothing reached WeChat, because the plugin only knows runs
+// it sent. Entries: send(followUps) → noteOpenedTask → openFollowUp → accept/settle → getRun/listRuns/
+// cancel. Observable: only word back from the task that opted-in run opened becomes a run the plugin
+// can read (never the owner's turns, other tasks, another plugin, or after the window), and the
+// plugin's dispatch checks never hold that word back. Minimal inputs: one opted-in and one plain run,
+// word from the opened task, from another task and after 7 days, a config change before acceptance.
+it('turns word back from a task an opted-in run opened into a follow-up run, and nothing else', async () => {
+  const f = fixture();
+  let clock = 1;
+  const relay = { platform: 'wechat', chatType: 'group' as const, chatName: '产品群', sender: { id: 'wxid_a', name: 'Chris', isOwner: true } };
+  const readInputRelay = vi.fn(async () => relay);
+  const service = createPluginTaskService({ ...f.deps, now: () => clock, readInputRelay });
+  const task = await service.create('p', { requestKey: 'create', title: 'WeChat group' });
+  const base = { taskId: task.taskId, expectedRevision: task.revision };
+  const plain = await service.send('p', { ...base, requestKey: 'plain', text: 'plain' });
+  const asked = await service.send('p', { ...base, requestKey: 'asked', text: '查一下', followUps: true });
+  expect([plain.followUps, asked.followUps]).toEqual([undefined, { tasks: 0 }]);
+  // A turn without the opt-in (as the owner's own turns) remembers nothing.
+  await service.noteOpenedTask(task.taskId, [plain.inputMessageId], 'helper');
+  expect(await service.openFollowUp('helper', task.taskId)).toBeUndefined();
+  await service.noteOpenedTask(task.taskId, [asked.inputMessageId], 'helper');
+  await service.noteOpenedTask(task.taskId, [asked.inputMessageId], 'helper');
+  expect(readInputRelay).toHaveBeenCalledExactlyOnceWith(task.taskId, [asked.inputMessageId]);
+  expect((await service.getRun('p', asked.runId)).followUps).toEqual({ tasks: 1, until: 1 + PLUGIN_TASK_FOLLOW_UP_MS });
+  for (const [sender, target] of [['other', task.taskId], ['helper', 'another-task']])
+    expect(await service.openFollowUp(sender, target)).toBeUndefined();
+  const followUp = (await service.openFollowUp('helper', task.taskId))!;
+  expect(followUp).toEqual({ runId: expect.any(String), clientId: `plugin-task:${followUp.runId}`, pluginId: 'p', relay });
+  // The word is already accepted for delivery: a changed task configuration never rejects it.
+  f.tasks.get(task.taskId)!.resolvedConfig = { ...f.route, model: 'changed' };
+  await expect(service.accept(task.taskId, { clientId: followUp.clientId }, f.execution)).resolves.toBeUndefined();
+  await service.settle(task.taskId, f.execution, 'completed', 'answer');
+  expect(await service.getRun('p', followUp.runId)).toMatchObject({ status: 'completed', outputMessageId: 'answer',
+    followUpOf: asked.runId, followUps: { tasks: 0 }, acceptedConfig: { model: 'changed' } });
+  expect((await service.listRuns('p', task.taskId)).items.map(run => run.runId)).toContain(followUp.runId);
+  await expect(service.getRun('other', followUp.runId)).rejects.toMatchObject({ code: 'TASK_NOT_FOUND' });
+  // Each word back is its own follow-up; the plugin cannot withdraw another task's word.
+  const next = (await service.openFollowUp('helper', task.taskId))!;
+  await expect(service.cancel('p', next.runId)).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+  await service.abandonFollowUp(next.runId);
+  expect(await service.getRun('p', next.runId)).toMatchObject({ status: 'failed' });
+  clock = 2 + PLUGIN_TASK_FOLLOW_UP_MS;
+  expect(await service.openFollowUp('helper', task.taskId)).toBeUndefined();
+});
+
+// unit: plugin-agent-tasks.md「消息附件」(2026-11-17). A relayed photo may come without words, and
+// model-only references (group history) bind to the request key and reach dispatch separately.
+it('accepts an attachment-only relay through the public boundary and binds its context attachments', async () => {
+  const f = fixture(), task = await f.create();
+  const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).toString('base64');
+  const ghost = { enabled: true, taskCapabilityApproved: true, approval: { state: 'approved' },
+    manifest: { agent: { tasks: true } } } as InstalledGhost;
+  const send = (request: Record<string, unknown>) => handlePluginTaskRequest('p', {
+    type: 'tasks-request', kind: 'send', taskId: task.taskId, expectedRevision: task.revision, ...request,
+  } as never, { getGhost: () => ghost, isCurrent: () => true,
+    handler: (pluginId, value) => f.service.send(pluginId, value as never) });
+  // Words are still required when nothing of the message itself is attached.
+  expect(await send({ requestKey: 'empty', text: '', contextAttachments: [{ base64: png }] }))
+    .toMatchObject({ ok: false, error: { code: 'INVALID_REQUEST' } });
+  const first = await send({ requestKey: 'photo', text: '', attachments: [{ base64: png, name: 'photo.png' }],
+    contextAttachments: [{ base64: png, name: 'earlier.png' }] });
+  expect(first).toMatchObject({ ok: true });
+  expect(f.deps.dispatch).toHaveBeenCalledExactlyOnceWith('p', task.taskId, expect.any(String), '',
+    [expect.objectContaining({ name: 'photo.png', kind: 'image' })], undefined, undefined,
+    [expect.objectContaining({ name: 'earlier.png', kind: 'image' })]);
+  expect(await send({ requestKey: 'photo', text: '', attachments: [{ base64: png, name: 'photo.png' }] }))
+    .toMatchObject({ ok: false, error: { code: 'IDEMPOTENCY_CONFLICT' } });
+  expect(f.deps.dispatch).toHaveBeenCalledOnce();
 });
 
 // unit: a failed naming-metadata read must not leave an unsent receipt that
@@ -412,18 +781,20 @@ it.each(['INVALID_ATTACHMENTS', 'TASK_BUSY'] as const)('preserves %s across the 
   const pending: Promise<unknown>[] = [];
   try {
     if (code === 'TASK_BUSY') {
-      const large = Buffer.alloc(PLUGIN_ATTACHMENT_MAX_BYTES);
+      // Two held sends, each using the whole per-send budget across shown and context attachments.
+      const large = Buffer.alloc(PLUGIN_ATTACHMENT_MAX_BYTES / 2);
       png.copy(large);
       const attachments = [{ base64: large.toString('base64') }];
-      pending.push(withParsedPluginMessageAttachments(attachments, () => held));
-      pending.push(withParsedPluginMessageAttachments(attachments, () => held));
+      pending.push(withParsedPluginMessageAttachments(attachments, () => held, attachments));
+      pending.push(withParsedPluginMessageAttachments(attachments, () => held, attachments));
     }
     const ghost = { enabled: true, taskCapabilityApproved: true, approval: { state: 'approved' },
       manifest: { agent: { tasks: true } } } as InstalledGhost;
     const result = await handlePluginTaskRequest('p', {
       type: 'tasks-request', kind: 'send', taskId: task.taskId, requestKey: 'attachment-error',
       expectedRevision: task.revision, text: 'context',
-      attachments: [{ base64: (code === 'TASK_BUSY' ? png : Buffer.from('not an image')).toString('base64') }],
+      // Non-canonical base64 (padding bits set) cannot be decoded faithfully.
+      attachments: [{ base64: code === 'TASK_BUSY' ? png.toString('base64') : 'AB==' }],
     }, {
       getGhost: () => ghost, isCurrent: () => true,
       handler: (pluginId, request) => {
@@ -565,6 +936,14 @@ it.each(['completed','failed','cancelled','interrupted'] as const)('prefers a ne
   }
 });
 
+function productionCancelAdapter(deps: Record<string, unknown>): PluginTaskServiceDeps['cancel'] {
+  const source=readFileSync(new URL('../register.ts',import.meta.url),'utf8');
+  const start=source.indexOf('      cancel: async (pluginId, taskId, inputClientIds, execution, mode) => {');
+  const block=source.slice(start+'      cancel: '.length,source.indexOf('\n      },',start)+8);
+  const js=ts.transpileModule('return ('+block+');',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+  return new Function(...Object.keys(deps),js)(...Object.values(deps));
+}
+
 it.each(['restore','restart'] as const)('the production cancel adapter rechecks revoked ownership after %s waits', async point => {
   const f=fixture(),run=await f.send();
   let release!:()=>void,entered!:()=>void,restores=0;
@@ -583,11 +962,7 @@ it.each(['restore','restart'] as const)('the production cancel adapter rechecks 
     withSessionRestartLock:async(_id:string,operation:()=>Promise<void>)=>{if(point==='restart')await pause();await operation();},
     readExecution:()=>f.execution,resetAutomaticRecoveryForExplicitStop:vi.fn(),contextOverflowRolloverHolder:null,
     sessionControlService:{stopSessionTurn:stop}};
-  const source=readFileSync(new URL('../register.ts',import.meta.url),'utf8');
-  const start=source.indexOf('      cancel: async (pluginId, taskId, inputClientIds, execution) => {');
-  const block=source.slice(start+'      cancel: '.length,source.indexOf('\n      },',start)+8);
-  const js=ts.transpileModule('return ('+block+');',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
-  const cancel=new Function(...Object.keys(deps),js)(...Object.values(deps));
+  const cancel=productionCancelAdapter(deps);
   const operation=cancel('p',run.taskId,[run.inputMessageId],f.execution);
   const result=expect(operation).rejects.toMatchObject({code:'TASK_NOT_FOUND'});
   await started;await f.service.withUninstall('p',async()=>{});release();await result;
@@ -821,6 +1196,31 @@ describe('plugin ordinary task receipts', () => {
       outputMessageId: 'output',
     });
   });
+  // Side panel streaming (2026-11-17, capabilities().runPreview): getRun shows the run's own live
+  // streaming block. Entry: service.getRun; nothing covered preview before. Minimum inputs: the
+  // task now executing a different generation, an empty snapshot, an oversized block, and a run
+  // that already settled while a stale block lingers. Tier: unit (in-memory deps).
+  it('previews only the streaming text of the run\'s own live execution', async () => {
+    const f = fixture();
+    const run = await f.send();
+    await f.service.accept(run.taskId, { clientId: run.inputMessageId }, f.execution);
+    f.deps.inspect = async () => ({ execution: f.execution, pending: [] });
+    let live: { execution: typeof f.execution | null; text: string | null } = { execution: f.execution,
+      text: 'Answer citeturn1search1so far' };
+    f.deps.readLivePreview = () => live;
+    expect(await f.service.getRun('p', run.runId)).toMatchObject({ status: 'running', preview: { text: 'Answer so far' } });
+    live = { execution: f.execution, text: 'x'.repeat(40_000) };
+    expect((await f.service.getRun('p', run.runId)).preview?.text).toHaveLength(32_768);
+    for (const other of [{ execution: { ...f.execution, generation: 2 }, text: 'next input' }, { execution: f.execution, text: null }]) {
+      live = other;
+      expect((await f.service.getRun('p', run.runId)).preview).toBeUndefined();
+    }
+    live = { execution: f.execution, text: 'stale' };
+    await f.service.settle(run.taskId, f.execution, 'completed', 'output');
+    const settled = await f.service.getRun('p', run.runId);
+    expect([settled.status, settled.preview]).toEqual(['completed', undefined]);
+    expect(JSON.parse(f.rows.get(run.runId)!.payload).preview).toBeUndefined();
+  });
   it('transfers only native recovery aliases to the new execution', async () => {
     const f = fixture();
     const run = await f.send();
@@ -942,6 +1342,130 @@ describe('plugin ordinary task receipts', () => {
     ).resolves.toBeUndefined();
     expect(await f.service.getRun('p', run.runId)).toMatchObject({ status: 'failed' });
   });
+  // Unit, #13300: receipt-only tests missed the restored queue head after a pre-accept rejection.
+  it('withdraws the rejected plugin input from the live queue and restart snapshot', async () => {
+    const f = fixture();
+    const run = await f.send();
+    const task = await f.create();
+    const other = await f.service.send('p', { taskId: task.taskId, expectedRevision: task.revision,
+      requestKey: 'second', text: 'next' });
+    const sid = run.taskId;
+    type Item = Parameters<AgentInputCoordinator['enqueue']>[1];
+    const item = (clientId: string): Item => ({
+      clientId, text: 'hello', persistedContent: 'hello', model: 'model', effort: 'medium',
+      permissionMode: 'default', workingDir: '/repo',
+      chatMessage: { clientId, role: 'user', content: 'hello', isStreaming: false, createdAt: new Date(0).toISOString() },
+      createOpts: { agentKind: 'codex', model: 'model', effort: 'medium', permissionMode: 'default',
+        workingDir: '/repo', userPrompt: '', makerMemoryEnabled: true, displayReasoning: 'summarized' },
+    });
+    const snapshots = new Map<string, Item[]>();
+    let busy = true;
+    let settlement: Promise<void> | undefined;
+    let original!: Item;
+    const deps: AgentInputCoordinatorDeps = {
+      isTurnRunning: () => busy, hasPendingInteraction: () => false, getAgentKind: () => 'codex',
+      getSdkSessionId: async () => undefined, createUserMessage: vi.fn(), touchUserSend: async () => {},
+      steerToAgent: vi.fn(), abortSession: vi.fn(), emitProjection: vi.fn(),
+      loadQueueSnapshot: async id => snapshots.get(id) ?? [],
+      persistQueueSnapshot: (id, items) => { snapshots.set(id, structuredClone(items)); },
+      sendToAgent: async () => {
+        busy = true;
+        return { kind: 'host-send', accepted: false, code: 'LAZY_CREATE_FAILED', message: 'unavailable' };
+      },
+      onRejectedUserTurn: (id, rejected) => {
+        original = rejected;
+        settlement = f.service.discard(id, rejected, 'failed', async () => { queue.discardRejectedInput(id, rejected); });
+      },
+    };
+    const queue = new AgentInputCoordinator(deps);
+    for (const id of [sid, 'other-session']) await queue.ensureQueueRestored(id);
+    queue.enqueue(sid, item(run.inputMessageId));
+    queue.enqueue(sid, item(other.inputMessageId));
+    queue.enqueue('other-session', item(run.inputMessageId));
+    busy = false;
+    queue.wakeSession(sid, 'test');
+    await vi.waitFor(() => expect(settlement).toBeDefined());
+    await settlement;
+    expect((await f.service.getRun('p', run.runId)).status).toBe('failed');
+    const ids = (items: readonly Item[]) => items.map(row => row.clientId);
+    expect({ live: ids(queue.getProjection(sid).pendingQueue), saved: ids(snapshots.get(sid)!) })
+      .toEqual({ live: [other.inputMessageId], saved: [other.inputMessageId] });
+    expect(ids(queue.getProjection('other-session').pendingQueue)).toEqual([run.inputMessageId]);
+    const revision = f.rows.get(run.runId)!.revision;
+    await f.service.discard(sid, original, 'failed', async () => {
+      expect(queue.discardRejectedInput(sid, original)).toBe(false);
+    });
+    expect(f.rows.get(run.runId)!.revision).toBe(revision);
+    const restarted = new AgentInputCoordinator(deps);
+    await restarted.ensureQueueRestored(sid);
+    expect(ids(restarted.getProjection(sid).pendingQueue)).toEqual([other.inputMessageId]);
+    // Once a queued steer is in progress it still appears in the queue until vendor acceptance.
+    const consuming = queue.getQueueControlSnapshot(sid).pendingQueue[0]!;
+    let release!: () => void;
+    const steerEntered = new Promise<void>(entered => {
+      deps.steerToAgent = async () => { entered(); await new Promise<void>(resolve => { release = resolve; }); };
+    });
+    const steering = queue.steer(sid, consuming, { removeFromQueue: true });
+    await steerEntered;
+    try {
+      expect(queue.discardRejectedInput(sid, consuming)).toBe(false);
+      expect(ids(queue.getQueueControlSnapshot(sid).pendingQueue)).toEqual([other.inputMessageId]);
+    } finally {
+      release();
+      await steering;
+    }
+  });
+
+  // Unit, #13300: an old failed receipt can predate cleanup. A cold owner cancel must flush
+  // the exact original input, without treating a later user retry alias as plugin-owned.
+  it('repairs the old queue snapshot through the owning plugin cancel receipt', async () => {
+    const f = fixture(), run = await f.send();
+    await f.service.discard(run.taskId, { clientId: run.inputMessageId }, 'failed');
+    const failed = await f.service.getRun('p', run.runId);
+    const rows = [{ clientId: run.inputMessageId }, { clientId: 'another-run' },
+      { clientId: 'user-retry', retrySourceClientId: run.inputMessageId }];
+    let saved = structuredClone(rows);
+    let pending: typeof rows = [];
+    let restored = false;
+    let consuming = true;
+    let flushFails = true;
+    const adapter = {
+      assertPlugin: () => {}, assertCurrent: () => {}, PluginTaskError,
+      pluginTaskServiceForCurrentOwner: () => f.service,
+      inputCoordinator: {
+        ensureQueueRestored: async (id: string) => {
+          expect(id).toBe(run.taskId);
+          if (!restored) pending = structuredClone(saved);
+          restored = true;
+        },
+        isQueueRestored: () => restored,
+        getActiveInputClientIds: () => consuming ? [run.inputMessageId] : [],
+        getQueueControlSnapshot: () => ({ pendingQueue: pending, steeringQueueClientIds: [] }),
+        discardRejectedInput: (_id: string, item: typeof rows[number]) => {
+          pending = pending.filter(row => row !== item);
+          return true;
+        },
+      },
+      awaitAgentInputQueueSnapshotPersistence: async () => {
+        if (flushFails) throw new Error('snapshot write failed');
+        saved = structuredClone(pending);
+      },
+    };
+    f.deps.cancel = productionCancelAdapter(adapter);
+    await expect(f.service.cancel('other-plugin', run.runId)).rejects.toMatchObject({ code: 'TASK_NOT_FOUND' });
+    expect(restored).toBe(false);
+    await expect(f.service.cancel('p', run.runId)).rejects.toMatchObject({ code: 'TASK_BUSY' });
+    expect(pending).toEqual(rows);
+    consuming = false;
+    await expect(f.service.cancel('p', run.runId)).rejects.toThrow('snapshot write failed');
+    expect(saved).toEqual(rows);
+    flushFails = false;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      expect(await f.service.cancel('p', run.runId)).toEqual(failed);
+      expect(saved).toEqual(rows.slice(1));
+    }
+  });
+
   it('keeps multi-hop recovery aliases but never adopts an unrelated user input', async () => {
     const f = fixture();
     const run = await f.send();
@@ -996,7 +1520,7 @@ it('preserves exact retries of pre-canonical development receipts', async () => 
   await expect(createPluginTaskService(f.deps).create('p', request)).resolves.toEqual(task);
   await expect(f.service.create('p', { ...request, route: { ...f.route, model: 'changed' } })).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
 });
-it('freezes owned plan and retains settled labels',async()=>{const f=fixture(),task=await f.create();const plan={concurrency:2,items:[{label:'sample',workingDir:'/answer',route:f.route}]};await f.service.setTeamPlan('p',task.taskId,plan);await f.service.setTeamPlan('p',task.taskId,plan);await expect(f.service.setTeamPlan('other',task.taskId,plan)).rejects.toThrow('Task not found');await expect(f.service.setTeamPlan('p',task.taskId,{...plan,concurrency:3})).rejects.toThrow('immutable');await f.service.settleWorkerLabel('p',task.taskId,'sample');expect(JSON.parse(f.rows.get(task.taskId)!.payload).settledLabels).toEqual(['sample']);});
+it('freezes the owned plan',async()=>{const f=fixture(),task=await f.create();const plan={concurrency:2,items:[{label:'sample',workingDir:'/answer',route:f.route}]};await f.service.setTeamPlan('p',task.taskId,plan);await f.service.setTeamPlan('p',task.taskId,plan);await expect(f.service.setTeamPlan('other',task.taskId,plan)).rejects.toThrow('Task not found');await expect(f.service.setTeamPlan('p',task.taskId,{...plan,concurrency:3})).rejects.toThrow('immutable');expect(JSON.parse(f.rows.get(task.taskId)!.payload).teamPlan).toEqual(plan);});
 
 
 it('rechecks permissions when queued input reaches native dispatch', async () => {
@@ -1059,7 +1583,50 @@ it.each(['send', 'cancel'] as const)('drain waits for the full %s operation incl
  f.switchOwner();
  expect(JSON.parse(f.rows.get(run.runId)!.payload).status).toBe(kind === 'send' ? 'running' : 'cancelled');
 });
-it.each(['validation', 'archive', 'settlement', 'alreadyArchived', 'failure'] as const)('drains the real releaseWorker branch through %s', async phase => {
+function releaseWorkerHandler(deps: Record<string, unknown>) {
+ const source = readFileSync(new URL('../register.ts',import.meta.url),'utf8');
+ const branch = source.slice(source.indexOf("      case 'releaseWorker': {"),source.indexOf("      case 'getTeam': {"));
+ const js = ts.transpileModule(`return async function(pluginId, request) { switch(request.kind) { ${branch} } }`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+ return new Function(...Object.keys(deps),js)(...Object.values(deps));
+}
+
+// PR #7824: exercise setTeamPlan -> public updateWorker -> releaseWorker.
+// Existing release coverage only used unchanged labels. A renamed Worker must
+// still archive by ID, including an archived retry, without rewriting old receipts (unit).
+it.each(['active', 'archived'])('releases a renamed planned Worker by ID from %s', async status => {
+ const f = fixture(), task = await f.create();
+ const plan = {concurrency: 1, items: [{label: 'w0', workingDir: '/answer', route: f.route}]};
+ await f.service.setTeamPlan('p', task.taskId, plan);
+ const receipt = f.rows.get(task.taskId)!;
+ receipt.payload = JSON.stringify({...JSON.parse(receipt.payload), settledLabels: ['previous']});
+ const before = structuredClone(receipt);
+ const record = {id: 'worker', teamId: 'team', leadSessionId: task.taskId, sessionId: 'child', role: 'Worker', label: 'w0', status};
+ const team = createOrcaTeamService({
+  listWorkersByLead: async () => [record],
+  updateWorkerIdentity: async ({label}: {label: string}) => { record.label = label; return {ok: true}; },
+  broadcastOrcaWorkerChanged: () => {},
+ } as unknown as OrcaTeamServiceDeps);
+ await expect(team.updateWorker({callerLeadSessionId: task.taskId, workerId: record.id, label: 'w1'})).resolves.toMatchObject({ok: true, label: 'w1'});
+ const query = {from: () => query, innerJoin: () => query, where: () => query, limit: async () => [record]};
+ const epoch = {client: {drizzle: {select: () => query}}};
+ const archiveWorker = vi.fn(async ({beforeArchive}: {beforeArchive: () => Promise<void>}) => {
+  await beforeArchive(); record.status = 'archived'; return {ok: true, workerId: record.id};
+ });
+ const run = releaseWorkerHandler({
+  service: f.service, getCurrentDbClientSnapshot: () => epoch, PluginTaskError, assertPluginTaskResult, readPluginTaskPlanReceipt,
+  orcaWorkers: {}, orcaTeams: {}, sessions: {}, eq: () => true, and: () => true,
+  createPluginTaskStore: () => f.deps.store, readPluginWorkerCompletion: async () => ({row: record, completedAt: 1}),
+  orcaTeamService: {archiveWorker},
+ });
+ const request = {kind: 'releaseWorker', taskId: task.taskId, workerId: record.id, completedAt: 1};
+ await expect(run('p', request)).resolves.toMatchObject({ok: true, workerId: record.id});
+ await expect(run('p', request)).resolves.toMatchObject({ok: true, workerId: record.id});
+ expect(record.status).toBe('archived');
+ expect(archiveWorker).toHaveBeenCalledTimes(status === 'archived' ? 0 : 1);
+ expect(f.rows.get(task.taskId)).toEqual(before);
+});
+
+it.each(['validation', 'archive', 'alreadyArchived', 'failure'] as const)('drains the real releaseWorker branch through %s', async phase => {
  const f = fixture();
  let release!: () => void, entered!: () => void;
  const barrier = new Promise<void>(resolve => { release = resolve; });
@@ -1067,31 +1634,26 @@ it.each(['validation', 'archive', 'settlement', 'alreadyArchived', 'failure'] as
  const pause = async () => { entered(); await barrier; };
  const service = {...f.service,
   get: vi.fn(async () => { if (phase === 'validation') await pause(); return {taskId:'lead'}; }),
-  settleWorkerLabel: vi.fn(async () => {
-   if (phase === 'settlement' || phase === 'alreadyArchived') await pause();
-   // Native completion enqueues work on the real receipt tail. Holding that
-   // tail across archive would deadlock this callback.
-   await f.create();
-  }),
  };
  const archiveWorker = vi.fn(async ({beforeArchive}: {beforeArchive: () => Promise<void>}) => {
   await beforeArchive();
   if (phase === 'archive' || phase === 'failure') await pause();
   if (phase === 'failure') throw new Error('archive failed');
+  // Native completion enqueues work on the real receipt tail. Holding that
+  // tail across archive would deadlock this callback.
   await f.create();
   return {ok:true};
  });
  const record = {id:'worker',sessionId:'child',label:'one',status:phase === 'alreadyArchived' ? 'archived' : 'done'};
  const query = {from:()=>query,innerJoin:()=>query,where:()=>query,limit:async()=>[record]};
  const epoch = {client:{drizzle:{select:()=>query}}};
- const deps = {service, getCurrentDbClientSnapshot:()=>epoch,PluginTaskError,assertPluginTaskResult,readPluginTaskPlanReceipt,
+ const deps = {service, getCurrentDbClientSnapshot:()=>epoch,PluginTaskError,assertPluginTaskResult,
   orcaWorkers:{},orcaTeams:{},sessions:{},eq:()=>true,and:()=>true,
-  createPluginTaskStore:()=>({get:async()=>({payload:JSON.stringify({teamPlan:{items:[{label:'one'}]}})})}),
-  readPluginWorkerCompletion:async()=>({row:record,completedAt:1}),orcaTeamService:{archiveWorker}};
- const source = readFileSync(new URL('../register.ts',import.meta.url),'utf8');
- const branch = source.slice(source.indexOf("      case 'releaseWorker': {"),source.indexOf("      case 'getTeam': {"));
- const js = ts.transpileModule(`return async function(pluginId, request) { switch(request.kind) { ${branch} } }`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
- const run = new Function(...Object.keys(deps),js)(...Object.values(deps));
+  readPluginWorkerCompletion:async()=>{
+   if (phase === 'alreadyArchived') { await pause(); await f.create(); }
+   return {row:record,completedAt:1};
+  },orcaTeamService:{archiveWorker}};
+ const run = releaseWorkerHandler(deps);
  const operation = run('p',{kind:'releaseWorker',taskId:'lead',workerId:'worker',completedAt:1});
  const result = phase === 'failure' ? expect(operation).rejects.toThrow('archive failed') : expect(operation).resolves.toMatchObject({ok:true});
  await started;
@@ -1100,7 +1662,6 @@ it.each(['validation', 'archive', 'settlement', 'alreadyArchived', 'failure'] as
  await new Promise(resolve=>setTimeout(resolve,0));
  expect(drained).toBe(false);
  release(); await Promise.all([result,drain]);
- expect(service.settleWorkerLabel).toHaveBeenCalledTimes(phase === 'failure' ? 0 : 1);
  expect(archiveWorker).toHaveBeenCalledTimes(phase === 'alreadyArchived' ? 0 : 1);
  await f.service.drain();
  f.switchOwner();
@@ -1399,6 +1960,110 @@ it('rechecks saved preferences at the runtime mutation boundary', async () => {
   expect(apply).not.toHaveBeenCalled();
 });
 
+it('an open plugin selection without a source session follows the auxiliary chain at low effort', async () => {
+  // Rule: a plugin's own persistent task must not borrow the new-task composer
+  // model; the settings copy says it follows the system auxiliary model. It runs
+  // on Pi when the provider offers the model there (2026-10-28). tier: unit.
+  const f = fixture();
+  const selected = { harness: 'codex' as const, model: 'next', providerId: f.route.providerId, effort: 'high' as const, fastMode: false };
+  const resolver = createSessionExecutionResolver({
+    captureOwner: () => () => {}, readCaller: async () => { throw Error('unexpected caller'); },
+    readDefault: () => ({ agentKind: selected.harness, model: selected.model, providerId: selected.providerId, effort: selected.effort, fastMode: selected.fastMode }),
+    availableAgents: () => ['codex', 'pi'],
+    availableModels: () => [{ id: 'next', efforts: ['high'] }, { id: 'cheap', efforts: ['low', 'high'] }, { id: 'nolow', efforts: ['high'] }, { id: 'onpi', efforts: ['medium', 'high'] }],
+    hasCindyAiApiKey: () => true,
+    readProviderRouting: async () => ({ availability: { 'claude-code': [],
+      pi: [{ id: f.route.providerId, name: 'provider', models: ['onpi'] }],
+      codex: [{ id: f.route.providerId, name: 'provider', models: ['next', 'cheap', 'nolow', 'onpi'] }] },
+      resolveDefaultProviderIdForModel: () => f.route.providerId }),
+  });
+  const reportFallback = vi.fn();
+  const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
+  const resolveStart = source.indexOf('    const resolveRoute = async');
+  const resolve = source.slice(resolveStart, source.indexOf('    const readExecution', resolveStart));
+  const run = (candidates: Array<{ agentKind: 'codex'; providerId: string; model: string }>, config = {}, sourceSessionId?: string, requested?: PluginTaskRoute) => {
+    const deps = { getPluginTaskDefaults: () => config, getSelectedNewMakerRoute: () => selected,
+      activeOwnerScopeKey: () => 'owner', assertPlugin: () => {}, getPluginTaskSourceSessionId: () => sourceSessionId,
+      resolveSessionExecution: resolver, PluginTaskError, routeUnavailable: () => { throw Error('unavailable'); },
+      getEffectiveAuxiliaryModelRefs: () => ['chain'], getEffectiveAuxiliaryModelChainSnapshot: () => 'chain',
+      auxiliaryChainSessionCandidates: () => candidates, pluginTaskRouteAttempts, pluginTaskSelectionIsOpen,
+      resolveLightestPluginTaskFallback, reportPluginTaskAuxiliaryFallback: reportFallback,
+      savedPluginTaskRemoteRoute, readPluginRouteProviders: async () => [],
+      // Remote catalog admission is covered by resolveRemotePluginTaskRoute's own tests; mark the path taken.
+      resolveRemotePluginTaskRoute: async (route: PluginTaskRoute) => ({ ...route, viaRemoteCatalog: true }) };
+    const js = ts.transpileModule(`${resolve}\nreturn resolveRoute;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+    return new Function(...Object.keys(deps), js)(...Object.values(deps))('p', requested) as Promise<{ model: string; effort: string }>;
+  };
+  // First usable candidate wins, at low effort; a model Pi does not offer stays on the chain's harness.
+  await expect(run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'missing' }, { agentKind: 'codex', providerId: f.route.providerId, model: 'cheap' }]))
+    .resolves.toMatchObject({ model: 'cheap', effort: 'low', agentKind: 'codex' });
+  // A model the provider offers on Pi runs on Pi, at its lightest level.
+  await expect(run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'onpi' }]))
+    .resolves.toMatchObject({ model: 'onpi', effort: 'medium', agentKind: 'pi' });
+  // A chain head without a light effort level yields to the next candidate that has one.
+  await expect(run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'nolow' }, { agentKind: 'codex', providerId: f.route.providerId, model: 'cheap' }]))
+    .resolves.toMatchObject({ model: 'cheap', effort: 'low' });
+  // Only when no candidate offers a light level does a model route at its default effort.
+  await expect(run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'nolow' }])).resolves.toMatchObject({ model: 'nolow' });
+  // No usable candidate: the new-task selection remains the last resort, at its
+  // lightest accepted effort, and the user is told (auxiliary-model-health.md, 2026-11-23).
+  await expect(run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'missing' }])).resolves.toMatchObject({ model: 'next', effort: 'high' });
+  expect(reportFallback).toHaveBeenLastCalledWith(expect.objectContaining({ model: 'next' }));
+  selected.model = 'cheap';
+  await expect(run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'missing' }])).resolves.toMatchObject({ model: 'cheap', effort: 'low' });
+  selected.model = 'next';
+  // A chain candidate that runs clears the fallback note.
+  await run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'cheap' }]);
+  expect(reportFallback).toHaveBeenLastCalledWith(null);
+  // An explicit plugin model never consults the chain.
+  await expect(run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'cheap' }], { model: 'next' })).resolves.toMatchObject({ model: 'next' });
+  // Rule (2026-11-16): a saved run location applies without an explicit route and is admitted
+  // by that location's catalog, never the local resolver or chain.
+  const savedRemote = { agentKind: 'codex' as const, providerId: 'only-remote', model: 'remote-model', agentDeviceId: 'share:abc' };
+  await expect(run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'cheap' }], savedRemote))
+    .resolves.toEqual({ ...savedRemote, effort: '', fastMode: false, viaRemoteCatalog: true });
+  // An explicit local route replaces the whole saved choice, including its location.
+  const explicitLocal = { agentKind: 'codex' as const, providerId: f.route.providerId, model: 'next', effort: 'high', fastMode: false };
+  const local = await run([], savedRemote, undefined, explicitLocal);
+  expect(local).toMatchObject({ model: 'next', providerId: f.route.providerId });
+  expect(local).not.toHaveProperty('agentDeviceId');
+  expect(local).not.toHaveProperty('viaRemoteCatalog');
+});
+
+it('archives only its own idle task through the host writer and treats archived tasks as done', async () => {
+  // Rule: plugins rotate per-video tasks and archive the previous one; a working task is never cut off. tier: unit.
+  const f = fixture(), task = await f.create();
+  f.deps.archive = vi.fn(async (taskId: string, assertAllowed: () => void) => {
+    assertAllowed();
+    f.tasks.set(taskId, { ...f.tasks.get(taskId)!, status: 'archived' });
+  });
+  (f.deps.inspect as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ execution: f.execution, pending: [] });
+  await expect(f.service.archive('p', { taskId: task.taskId })).rejects.toMatchObject({ code: 'TASK_BUSY' });
+  expect(f.deps.archive).not.toHaveBeenCalled();
+  expect((await f.service.archive('p', { taskId: task.taskId })).status).toBe('archived');
+  expect((await f.service.archive('p', { taskId: task.taskId })).status).toBe('archived');
+  expect(f.deps.archive).toHaveBeenCalledTimes(1);
+  await expect(f.service.archive('other', { taskId: task.taskId })).rejects.toMatchObject({ code: 'TASK_NOT_FOUND' });
+  await expect(f.service.send('p', { taskId: task.taskId, requestKey: 'late', expectedRevision: task.revision, text: 'x' })).rejects.toMatchObject({ code: 'TASK_BUSY' });
+  const bare = fixture(), plain = await bare.create();
+  await expect(bare.service.archive('p', { taskId: plain.taskId })).rejects.toMatchObject({ code: 'HOST_NOT_READY' });
+});
+
+// Review 2026-10-29 (Greptile P1): the idle check ran before the archive waited for the session
+// write lock, so input sent in between was archived out from under the user. tier: unit.
+it('does not archive a task that became busy while the archive waited for the session lock', async () => {
+  const f = fixture(), task = await f.create();
+  let busy = false;
+  f.deps.isBusy = () => busy;
+  f.deps.archive = vi.fn(async (taskId: string, assertAllowed: () => void) => {
+    busy = true; // the user sends input while the write waits for the lock
+    assertAllowed();
+    f.tasks.set(taskId, { ...f.tasks.get(taskId)!, status: 'archived' });
+  });
+  await expect(f.service.archive('p', { taskId: task.taskId })).rejects.toMatchObject({ code: 'TASK_BUSY' });
+  expect(f.tasks.get(task.taskId)!.status).toBe('active');
+});
+
 it.each([
   ['provider', 'reset'], ['provider', 'partial'],
   ['mutation', 'reset'], ['mutation', 'partial'],
@@ -1437,7 +2102,11 @@ it.each([
   const resolve = source.slice(resolveStart, source.indexOf('    const readExecution', resolveStart));
   const deps = { getPluginTaskDefaults: () => config, getSelectedNewMakerRoute: () => selected,
     activeOwnerScopeKey: () => 'owner', assertPlugin: () => {}, getPluginTaskSourceSessionId: () => undefined,
-    resolveSessionExecution: resolver, PluginTaskError, routeUnavailable: () => { throw Error('unavailable'); } };
+    resolveSessionExecution: resolver, PluginTaskError, routeUnavailable: () => { throw Error('unavailable'); },
+    // No auxiliary chain configured in this scenario: the new-task selection stays the inherited default.
+    getEffectiveAuxiliaryModelRefs: () => [], getEffectiveAuxiliaryModelChainSnapshot: () => '',
+    auxiliaryChainSessionCandidates: () => [], pluginTaskRouteAttempts, pluginTaskSelectionIsOpen, savedPluginTaskRemoteRoute,
+    resolveLightestPluginTaskFallback, reportPluginTaskAuxiliaryFallback: () => {} };
   const js = ts.transpileModule(`${resolve}\nreturn {${preference} resolveRoute};`, {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   }).outputText;

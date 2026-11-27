@@ -11,6 +11,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { FormField } from '@/components/ui/form-field';
 import { Textarea } from '@/components/ui/input';
+import { UnderlineTabs } from '@/components/ui/underline-tabs';
 import { useAuth } from '@/contexts/AuthContext';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import type { Session } from '@/lib/ccAgent.types';
@@ -18,6 +19,7 @@ import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { toast } from '@/lib/toast';
 import { bindSharedTaskPushOwner, resetRemoteDataOwnerPushFence } from '@/lib/remoteDataOwnerPushFence';
 import { remoteProjectsStore, isRemoteDeviceMarkedDisconnected } from './remoteProjectsStore';
+import { OwnRelayCrossAccountNotice } from './OwnRelayCrossAccountNotice';
 import { sharedTaskErrorKey } from './sharedTaskCompatibility';
 import { closeOwnedSharedTask } from './closeOwnedSharedTask';
 import { filterVisibleSharedTasks } from './sharedTaskVisibility';
@@ -343,6 +345,7 @@ export function SharedTaskDialog({ open, onOpenChange, session, returnFocus, ini
         {target.guestId && <Button variant="secondary" onClick={() => switchTab('join')}>{t('sharedTask.rejoin')}</Button>}</>
       : !detail ? <>
         <p className="mb-4 text-13 text-[var(--text-secondary)]">{t('sharedTask.startIntro')}</p>
+        <OwnRelayCrossAccountNotice feature="sharedTask" className="-mt-2 mb-4" />
         <div className="mb-5 flex items-center gap-3 rounded-xl border border-[var(--border-default)] p-3"><FileText size={18} aria-hidden />
           <div className="min-w-0"><h3 className="break-words text-14 font-medium">{target.title || t('sharedTask.title')}</h3>
             <p className="text-12 text-[var(--text-secondary)]">{t(target.deviceId ? 'sharedTask.runsOnHostDevice' : 'sharedTask.runsOnThisDevice')}</p></div></div>
@@ -402,8 +405,13 @@ export function SharedTaskDialog({ open, onOpenChange, session, returnFocus, ini
         {notice(t('sharedTask.joinNotice'))}<div className="flex justify-end pt-3"><Button type="submit" variant="cta" size="lg" loading={busy}>{t('sharedTask.join')}</Button></div>
       </form>);
   const tabKeys: Tab[] = embedded ? ['owned', 'joined'] : ['join', 'joined', 'owned'];
+  const tabLabel = (key: Tab) => t(key === 'join' ? 'sharedTask.joinTab' : key === 'joined' ? 'sharedTask.joinedTab' : 'sharedTask.tabOwned');
+  const tabCount = (key: Tab) => key === 'join' ? undefined : (key === 'owned' ? owned : joined)?.length;
   const hub = <>
-    <div role="tablist" aria-label={t('sharedTask.title')} className={`flex flex-wrap border-b border-[var(--border-default)] ${embedded ? 'mb-6 gap-7' : 'mb-5 gap-1 pb-4'}`}>
+    {/* 设置页里是页面级导航，用 UnderlineTabs；弹窗里仍是整行按钮。 */}
+    {embedded ? <UnderlineTabs aria-label={t('sharedTask.title')} className="mb-6" value={tab} onValueChange={switchTab} disabled={busy}
+      items={tabKeys.map(key => ({ value: key, label: tabLabel(key), count: tabCount(key), id: `shared-task-tab-${key}`, 'aria-controls': `shared-task-panel-${key}` }))} />
+    : <div role="tablist" aria-label={t('sharedTask.title')} className="mb-5 flex flex-wrap gap-1 border-b border-[var(--border-default)] pb-4">
       {tabKeys.map((key, index, keys) => {
         const props = {
           id: `shared-task-tab-${key}`, role: 'tab', 'aria-selected': tab === key,
@@ -415,16 +423,15 @@ export function SharedTaskDialog({ open, onOpenChange, session, returnFocus, ini
             switchTab(next); document.getElementById(`shared-task-tab-${next}`)?.focus();
           },
         };
-        const label = <>{t(key === 'join' ? 'sharedTask.joinTab' : key === 'joined' ? 'sharedTask.joinedTab' : 'sharedTask.tabOwned')}
-          {key !== 'join' && (key === 'owned' ? owned : joined) !== null && <span className="ml-2 text-11 text-[var(--text-secondary)]">{(key === 'owned' ? owned : joined)?.length}</span>}</>;
-        return embedded ? <button key={key} {...props} type="button"
-          className={`relative min-h-11 min-w-0 pb-3 text-13 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:opacity-50 ${tab === key ? 'text-[var(--text-primary)]' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}>
-          {label}{tab === key && <span aria-hidden className="absolute -bottom-px inset-x-0 h-0.5 bg-[var(--text-primary)]" />}
-        </button> : <Button key={key} {...props} variant={tab === key ? 'primary' : 'secondary'} tone={tab === key ? 'default' : 'quiet'} size="lg" className="min-w-0 flex-1 px-2 text-13">{label}</Button>;
+        const count = tabCount(key);
+        const label = <>{tabLabel(key)}
+          {count !== undefined && <span className="ml-2 text-11 text-[var(--text-secondary)]">{count}</span>}</>;
+        return <Button key={key} {...props} variant={tab === key ? 'primary' : 'secondary'} tone={tab === key ? 'default' : 'quiet'} size="lg" className="min-w-0 flex-1 px-2 text-13">{label}</Button>;
       })}
-    </div>
+    </div>}
     {!embedded && <div hidden={tab !== 'join'} role="tabpanel" id="shared-task-panel-join" aria-labelledby="shared-task-tab-join">
       <p className="mb-5 text-13 text-[var(--text-secondary)]">{t('sharedTask.joinIntro')}</p>
+      <OwnRelayCrossAccountNotice feature="sharedTask" className="-mt-3 mb-5" />
       {joinForm}
     </div>}
     <div hidden={tab !== 'joined'} role="tabpanel" id="shared-task-panel-joined" aria-labelledby="shared-task-tab-joined">{tab === 'joined' && listView('joined')}</div>
@@ -438,13 +445,14 @@ export function SharedTaskDialog({ open, onOpenChange, session, returnFocus, ini
   };
   return <>{embedded && <section>
     <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
-      <div><h2 className="text-20 font-medium">{t('sharedTask.title')}</h2><p className="mt-2 text-13 text-[var(--text-secondary)]">{t('sharedTask.managementIntro')}</p></div>
+      <div><h2 className="text-20 font-medium">{t('sharedTask.title')}</h2><p className="mt-2 text-13 text-[var(--text-secondary)]">{t('sharedTask.managementIntro')}</p>
+        <OwnRelayCrossAccountNotice feature="sharedTask" className="mt-1" /></div>
       <Button variant="secondary" size="lg" disabled={!isAuthenticated || busy} onClick={() => switchTab('join')}>{t('sharedTask.join')}</Button>
     </div>
     {isAuthenticated ? hub : <p className="text-13">{t('sharedTask.login')}</p>}
   </section>}<Dialog.Root open={open && (!embedded || !!target || !!confirm || manualOpen || !!success)} onOpenChange={value => { if (!value) dismiss(); }}><Dialog.Portal>
-    <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
-    <Dialog.Content ref={panel} aria-describedby={undefined} className="modal-panel fixed left-1/2 top-1/2 z-[10001] max-h-[calc(100dvh-32px)] w-[min(460px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto p-5 text-[var(--text-primary)]"
+    <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
+    <Dialog.Content ref={panel} aria-describedby={undefined} className="modal-panel fixed left-1/2 top-1/2 z-modal-raised max-h-[calc(100dvh-32px)] w-[min(460px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto p-5 text-[var(--text-primary)]"
       onOpenAutoFocus={event => { if (!target && !confirm) { event.preventDefault(); codeInput.current?.focus(); } }}
       onCloseAutoFocus={returnFocus ? event => { event.preventDefault(); returnFocus(); } : undefined}
       onEscapeKeyDown={event => { if (pending.current || confirm || target) { event.preventDefault(); if (confirm) cancel(); else if (target) back(); } }}

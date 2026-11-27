@@ -19,13 +19,18 @@ const h = vi.hoisted(() => ({
 }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('@/lib/toast', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
-vi.mock('@/features/device-link/remoteProjectsStore', () => ({
-  remoteProjectsStore: {
-    captureSessionRead: () => Object.assign(() => true, { mergeActivity: (row: unknown) => row }),
-    getDeviceName: () => 'Source Mac',
-    mergeDeviceSessions: h.merge,
-  },
-}));
+vi.mock('@/features/device-link/remoteProjectsStore', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/features/device-link/remoteProjectsStore')>();
+  return {
+    ...actual,
+    remoteProjectsStore: {
+      ...actual.remoteProjectsStore,
+      captureSessionRead: () => Object.assign(() => true, { mergeActivity: (row: unknown) => row }),
+      getDeviceName: () => 'Source Mac',
+      mergeDeviceSessions: h.merge,
+    },
+  };
+});
 const session = {
   id: 'task',
   title: 'Task',
@@ -118,6 +123,17 @@ it('moves a remote task to a project on its source computer using the host busin
     ]),
   );
 });
+// #7972: the current project must be disabled even when execution uses a checkout.
+// Real menu entry; old coverage used identical project/cwd, unit interaction tier.
+it('disables explicit membership rather than the execution directory', async () => {
+  await mount({ ...session, projectDir: '/source/current', workingDir: '/tmp/checkout' });
+  const current = screen.getByRole('menuitem', { name: /current\/source\/current/ });
+  expect(current.getAttribute('aria-disabled')).toBe('true');
+  fireEvent.click(current);
+  expect(h.request).not.toHaveBeenCalled();
+  expect(screen.getByRole('menuitem', { name: /another/ }).getAttribute('aria-disabled')).toBeNull();
+});
+
 it('opens the source folder picker and hides offline devices', async () => {
   await mount();
   expect(screen.queryByRole('menuitem', { name: 'A' })).toBeNull();

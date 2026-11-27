@@ -38,7 +38,7 @@ vi.mock('../../logger', () => ({
   }),
 }));
 
-import { searchChatHistoryHybrid } from '../chatHistorySearch';
+import { prepareChatHistorySearch, searchChatHistoryHybrid } from '../chatHistorySearch';
 import { setChatEmbeddingEnabled } from '../../embedders/chat-history-embedder';
 
 describe('searchChatHistoryHybrid', () => {
@@ -229,10 +229,7 @@ describe('searchChatHistoryHybrid', () => {
     ]);
   });
 
-  it('keeps the per-hit context window queries when radius is positive', async () => {
-    dbMocks.query.mockResolvedValue([
-      { messageId: 'm2', sessionId: 's1', role: 'assistant', createdAt: 2_000, snippet: 'anchor' },
-    ]);
+  it('hydrates a positive-radius context window through the production batch query', async () => {
     const rows = {
       before: {
         id: 'm1',
@@ -268,27 +265,27 @@ describe('searchChatHistoryHybrid', () => {
         rewindAt: null,
       },
     };
-    let messageSelectCount = 0;
-    dbMocks.select.mockImplementation((selection?: unknown) => {
-      if (selection) {
-        return { from: () => ({ where: () => Promise.resolve([]) }) };
+    dbMocks.query.mockImplementation(async (sql: string) => {
+      if (sql.includes('messages_fts')) {
+        return [
+          {
+            messageId: 'm2',
+            sessionId: 's1',
+            role: 'assistant',
+            createdAt: 2_000,
+            snippet: 'anchor',
+          },
+        ];
       }
-      messageSelectCount += 1;
-      const resultRows =
-        messageSelectCount === 1
-          ? [rows.anchor]
-          : messageSelectCount === 2
-            ? [rows.before]
-            : [rows.after];
-      return {
-        from: () => ({
-          where: () =>
-            messageSelectCount === 1
-              ? { limit: () => Promise.resolve(resultRows) }
-              : { orderBy: () => ({ limit: () => Promise.resolve(resultRows) }) },
-        }),
-      };
+      return [
+        { ...rows.before, _anchorOrder: 0, _side: 0 },
+        { ...rows.anchor, _anchorOrder: 0, _side: 1 },
+        { ...rows.after, _anchorOrder: 0, _side: 2 },
+      ];
     });
+    dbMocks.select.mockImplementation(() => ({
+      from: () => ({ where: () => Promise.resolve([]) }),
+    }));
 
     const result = await searchChatHistoryHybrid({
       query: 'anchor',
@@ -304,8 +301,69 @@ describe('searchChatHistoryHybrid', () => {
       skipVector: true,
     });
 
-    expect(messageSelectCount).toBe(3);
+    expect(dbMocks.query).toHaveBeenCalledTimes(2);
     expect(result.hits[0].context.map((item) => item.id)).toEqual(['m1', 'm2', 'm3']);
+  });
+
+  it('keeps another batched context intact when an anchor disappears before hydration', async () => {
+    dbMocks.query.mockImplementation(async (sql: string) => {
+      if (sql.includes('messages_fts')) {
+        return [
+          {
+            messageId: 'missing',
+            sessionId: 's1',
+            role: 'user',
+            createdAt: 1_000,
+            snippet: 'missing',
+          },
+          {
+            messageId: 'present',
+            sessionId: 's2',
+            role: 'assistant',
+            createdAt: 2_000,
+            snippet: 'present',
+          },
+        ];
+      }
+      return [
+        {
+          _anchorOrder: 1,
+          _side: 1,
+          id: 'present',
+          clientId: 'c-present',
+          sessionId: 's2',
+          role: 'assistant',
+          content: JSON.stringify('present'),
+          toolUseId: null,
+          agentMeta: null,
+          agentKind: null,
+          createdAt: 2_000,
+          rewindAt: null,
+        },
+      ];
+    });
+    dbMocks.select.mockImplementation(() => ({
+      from: () => ({ where: () => Promise.resolve([]) }),
+    }));
+
+    const result = await searchChatHistoryHybrid({
+      query: 'anchor',
+      sessionIds: null,
+      workdir: null,
+      fromMs: null,
+      toMs: null,
+      agentKind: null,
+      roles: null,
+      contextRadius: 2,
+      limit: 10,
+      offset: 0,
+      skipVector: true,
+    });
+
+    expect(result.hits.map((hit) => [hit.messageId, hit.context.map((row) => row.id)])).toEqual([
+      ['missing', []],
+      ['present', ['present']],
+    ]);
   });
 
   it('can page beyond the default FTS pool for conversation search', async () => {
@@ -487,5 +545,93 @@ describe('searchChatHistoryHybrid', () => {
 
     expect(embeddingMocks.embedSync).toHaveBeenCalledTimes(1);
     expect(dbMocks.query).toHaveBeenCalledTimes(4);
+  });
+
+  // Test value (unit): the production prepared search must preserve ordered hits,
+  // contexts, cursors and truncation while paging a concentrated task's matches.
+  // Existing tests only share embeddings, leaving FTS/KNN and fusion repeated.
+  // Minimal input: four hits, first two in one task, a three-hit pool and two pages;
+  // exercise both hybrid retrieval and embedding failure's keyword fallback.
+  it.each([false, true])('reuses retrieval without changing pages (embedding failure: %s)', async (embeddingFails) => {
+    const rows = Array.from({ length: 4 }, (_, index) => ({
+      messageId: `m${index + 1}`,
+      sessionId: index < 2 ? 's1' : 's2',
+      role: 'user',
+      createdAt: 1_000 + index,
+      content: `billing ${index + 1}`,
+      distance: index,
+    }));
+    dbMocks.query.mockResolvedValue(rows);
+    dbMocks.queryOne.mockResolvedValue({ rowid: 1 });
+    if (embeddingFails) embeddingMocks.embedSync.mockRejectedValue(new Error('offline'));
+    else embeddingMocks.embedSync.mockResolvedValue({ embeddings: [[0.1, 0.2]] });
+    dbMocks.select.mockImplementation((selection?: unknown) => ({
+      from: () => ({
+        where: () => Promise.resolve(selection ? [] : rows.map(row => ({
+          id: row.messageId,
+          clientId: `c-${row.messageId}`,
+          sessionId: row.sessionId,
+          role: row.role,
+          content: JSON.stringify(row.content),
+          toolUseId: null,
+          agentMeta: null,
+          createdAt: row.createdAt,
+          rewindAt: null,
+        }))),
+      }),
+    }));
+    const args = {
+      query: 'billing', sessionIds: null, workdir: null, fromMs: null, toMs: null,
+      agentKind: null, roles: null, contextRadius: 0,
+      ftsPoolLimit: 4, vectorPoolLimit: 4, fusePoolLimit: 3,
+    } as const;
+    const pages = [{ limit: 2, offset: 0 }, { limit: 2, offset: 2 }];
+    const independent = [];
+    for (const page of pages) independent.push(await searchChatHistoryHybrid({ ...args, ...page }));
+    dbMocks.query.mockClear();
+    dbMocks.queryOne.mockClear();
+    embeddingMocks.embedSync.mockClear();
+
+    const fetchPage = await prepareChatHistorySearch(args);
+    const prepared = [];
+    for (const page of pages) prepared.push(await fetchPage(page));
+
+    expect(prepared).toEqual(independent);
+    expect(prepared.map(page => page.hits.map(hit => hit.messageId))).toEqual([['m1', 'm2'], ['m3']]);
+    expect(prepared.map(page => page.nextOffset)).toEqual([2, null]);
+    expect(prepared.every(page => page.poolCapped && page.poolSize === 3)).toBe(true);
+    expect(prepared.every(page => page.vectorUsed === !embeddingFails)).toBe(true);
+    expect(prepared[0].hits[0].context[0].content).toBe('billing 1');
+    expect(dbMocks.query).toHaveBeenCalledTimes(embeddingFails ? 1 : 2);
+    expect(dbMocks.queryOne).toHaveBeenCalledTimes(1);
+    expect(embeddingMocks.embedSync).toHaveBeenCalledTimes(1);
+  });
+
+  // Test value (unit): request-local reuse must not retain results across a new
+  // search. No existing test changes stored hits or query between prepared calls.
+  // Minimal input: a single result replaced between requests, then another query.
+  it('refreshes retrieval for each prepared search, including the same query', async () => {
+    dbMocks.select.mockImplementation(() => ({
+      from: () => ({ where: () => Promise.resolve([]) }),
+    }));
+    const args = {
+      query: 'billing', sessionIds: null, workdir: null, fromMs: null, toMs: null,
+      agentKind: null, roles: null, contextRadius: 0, skipVector: true,
+    } as const;
+    const page = { limit: 2, offset: 0 };
+    const setHit = (messageId: string) => dbMocks.query.mockResolvedValue([
+      { messageId, sessionId: 's1', role: 'user', createdAt: 1_000, content: messageId },
+    ]);
+    setHit('old');
+    const oldSearch = await prepareChatHistorySearch(args);
+    setHit('new');
+    const refreshedSearch = await prepareChatHistorySearch(args);
+    setHit('other-query');
+    const otherSearch = await prepareChatHistorySearch({ ...args, query: 'other' });
+
+    expect((await oldSearch(page)).hits.map(hit => hit.messageId)).toEqual(['old']);
+    expect((await refreshedSearch(page)).hits.map(hit => hit.messageId)).toEqual(['new']);
+    expect((await otherSearch(page)).hits.map(hit => hit.messageId)).toEqual(['other-query']);
+    expect(dbMocks.query).toHaveBeenCalledTimes(3);
   });
 });

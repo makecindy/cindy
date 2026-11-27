@@ -1,5 +1,8 @@
-import { resolveCopilotAccountUrl } from './copilot-account-url.js';
-import { collectModelDiscoveryPages } from './model-discovery-pages.js';
+import { issueModelSourceSnapshot, modelSourceRequestSignature } from './model-source-snapshots.js';
+import { copilotModelsRequest, resolveCopilotAccountUrl } from './copilot-account-url.js';
+import { collectModelDiscoveryPagesWithStatus } from './model-discovery-pages.js';
+import { GLM_API_BASE, GLM_REALTIME_FLASH, isGlmApiBase, isGlmPresetRoute } from '../../shared/glmRealtimeDiscovery.js';
+import type { GlmFlashAccess } from '../voice-conversation/glmFlashProbe.js';
 import type { DiscoveredModel } from '@cindy/model-providers';
 /**
  * provider-model-fetch —— 供应商「获取模型列表」（自定义供应商表单消费）。
@@ -15,6 +18,7 @@ import type { DiscoveredModel } from '@cindy/model-providers';
  */
 
 import {
+  parseModelsListResponse,
   isLoopbackProviderUrl,
   isOpenRouterModelsUrl,
   type AgentKind,
@@ -22,19 +26,96 @@ import {
   type Provider,
 } from '@cindy/model-providers';
 
-import { classifyProviderError, type ProviderErrorCode } from '../../shared/providerErrors.js';
+import { classifyProviderError, providerNetworkErrorCode, type ProviderErrorCode } from '../../shared/providerErrors.js';
 import {
   deriveModelsDiscoveryUrl,
-  readCachedGenericOAuthAccessToken,
-  refreshGenericOAuthIfNeeded,
-} from './generic-oauth.js';
-import { outboundFetch } from './outbound-fetch.js';
+  readGenericOAuthAccessToken,
+} from './generic-oauth.desktop.js';
+import { outboundFetch } from './outbound-fetch.desktop.js';
+import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 
 /** 拉取超时（与 test-connection 探测同量级）。 */
 const FETCH_TIMEOUT_MS = 10_000;
 /** 失败响应体最多读取的字节数（分类只看前几 KB）。 */
 const MAX_ERROR_BODY_BYTES = 16 * 1024;
 const INVALID_DISCOVERY_URL = 'model discovery requires HTTP(S) URLs without embedded credentials';
+const CODEX_MODELS_CLIENT_VERSION = '0.147.0';
+const OPENAI_MODELS_URL = 'https://api.openai.com/v1/models';
+const OPENAI_MODEL_LIST_TTL_MS = 5 * 60_000;
+const openAiModelLists = new WeakMap<typeof fetch, Map<string, {
+  ids: ReadonlySet<string>; complete: boolean; expires: number;
+}>>();
+
+function officialOpenAiModelsKey(url: string, init: RequestInit): string | undefined {
+  if (url !== OPENAI_MODELS_URL && url !== `${OPENAI_MODELS_URL}?client_version=${CODEX_MODELS_CLIENT_VERSION}`) return;
+  if (!/^Bearer \S+$/i.test(new Headers(init.headers).get('authorization') ?? '')
+    || isAppSessionBoundaryPending()) return;
+  // The official generic and Codex catalog URLs are equivalent. All effective
+  // headers, including project and organization, still bind the memory entry.
+  return `${activeOwnerScopeKey()}:${modelSourceRequestSignature(OPENAI_MODELS_URL, init)}`;
+}
+
+export function openAiModelsRequestKey(spec: ProviderModelsFetchSpec): string | undefined {
+  const { url, init } = buildModelsFetchRequest(spec);
+  return officialOpenAiModelsKey(url, init);
+}
+
+export function recentOpenAiModelList(key: string, fetchImpl: typeof fetch = outboundFetch) {
+  const cache = openAiModelLists.get(fetchImpl);
+  const listing = cache?.get(key);
+  if (listing && listing.expires > Date.now()) return listing;
+  cache?.delete(key);
+}
+
+export function invalidateOpenAiModelList(key: string, fetchImpl: typeof fetch = outboundFetch): void {
+  openAiModelLists.get(fetchImpl)?.delete(key);
+}
+
+function isOfficialOpenAiModelList(value: unknown): boolean {
+  const list = value as { object?: unknown; data?: unknown; error?: unknown } | null;
+  return list?.object === 'list' && list.error == null && Array.isArray(list.data)
+    && list.data.every(entry => entry && typeof entry.id === 'string' && entry.id.trim() === entry.id && entry.id !== '');
+}
+
+const COMMAND_CODE_MODELS_URL = 'https://api.commandcode.ai/provider/v1/models';
+
+// Share only in-flight HTTP responses from these common catalogs, not agent-bound
+// provenance receipts. Every caller keeps its own parsing/error policy below.
+const sharedModelReads = new WeakMap<typeof fetch, Map<string, {
+  response: Promise<Response>;
+  consumers: number;
+}>>();
+
+async function fetchModelsResponse(url: string, init: RequestInit, fetchImpl: typeof fetch): Promise<Response> {
+  if (url !== 'https://inference.hinoki.security/v1/models'
+    && url !== 'https://tokenrhythm.studio/v1/models' && url !== COMMAND_CODE_MODELS_URL) return fetchImpl(url, init);
+  // Command Code's public view still belongs to the active application's
+  // request lifetime. Never adopt a prior owner's response after a switch.
+  const ownerKey = url === COMMAND_CODE_MODELS_URL ? activeOwnerScopeKey() : '';
+  if (ownerKey && isAppSessionBoundaryPending()) return fetchImpl(url, init);
+  let reads = sharedModelReads.get(fetchImpl);
+  if (!reads) { reads = new Map(); sharedModelReads.set(fetchImpl, reads); }
+  // The existing process-local HMAC includes all effective headers (including
+  // credentials) without retaining plaintext keys in the map key. Never share
+  // across redirect policies or injected transport/credential-owner closures.
+  const signature = `${ownerKey}:${modelSourceRequestSignature(url, init)}:${init.redirect ?? 'follow'}`;
+  let read = reads.get(signature);
+  if (!read) {
+    read = { response: Promise.resolve().then(() => fetchImpl(url, init)), consumers: 0 };
+    reads.set(signature, read);
+  }
+  read.consumers++;
+  try {
+    return (await read.response).clone();
+  } finally {
+    if (--read.consumers === 0) {
+      reads.delete(signature);
+      // Each consumer owns a clone. Release the unused original branch without
+      // awaiting stream tee cancellation, which waits for the clones to finish.
+      void read.response.then(response => response.body?.cancel().catch(() => undefined), () => undefined);
+    }
+  }
+}
 
 /** 一次「获取模型列表」的完整参数（表单值内存透传，不落盘）。 */
 export interface ProviderModelsFetchSpec {
@@ -58,9 +139,16 @@ export interface ProviderModelsFetchSpec {
    * isRendererAccessibleSafeStorageKey）。仅用于“刷新模型”复用已存请求头鉴权的端点。
    */
   savedProviderId?: string;
+  /** Per-gesture ID shared by the runtimes of one saved Settings refresh. */
+  refreshBatch?: string;
+  catalogPresetId?: string;
+  /** Main-only hook for interactive discovery on the normal GLM API. */
+  probeGlmFlash?: () => Promise<GlmFlashAccess>;
   /** Main-only import constraints; ordinary settings discovery keeps its existing policy. */
   redirect?: 'error';
   responseByteLimit?: number;
+  /** Main-only guard for reads that outlive a saved credential or owner. */
+  isCurrent?: () => boolean;
 }
 
 /** 结构化结果（查询型返回：renderer 需要 code 渲染分类文案，不走 throwIpcError）。 */
@@ -68,6 +156,15 @@ export interface ProviderModelsFetchResult {
   ok: boolean;
   /** 拉到的模型清单（ok=true 时给出；已按 id 去重;contextWindow 为端点声明的上下文长度,尽力提取）。 */
   models?: DiscoveredModel[];
+  /**
+   * true only when every advertised page was read (no failed, refused or capped page).
+   * Absent means unknown: callers must not infer that a missing model was withdrawn.
+   */
+  complete?: boolean;
+  /** A supplemental check is independent of ordinary HTTP pagination. */
+  glmFlashProbe?: Exclude<GlmFlashAccess, 'available'>;
+  /** Saved-provider fetches only: opaque receipt binding this listing to the credential generation. */
+  listingReceipt?: string;
   /** 失败分类码（ok=false 时给出）。 */
   code?: ProviderErrorCode;
   /** HTTP 状态码（网络层失败时缺省）。 */
@@ -90,15 +187,15 @@ export async function fetchSavedOAuthProviderModels(
   if (provider?.source !== 'user' || provider.auth.method !== 'oauth' || !oauth || !route || route.disabled || !isCurrent()) {
     return { ok: false, code: 'AUTH_INVALID' };
   }
+  let token: string | null;
   try {
-    await refreshGenericOAuthIfNeeded(storageProviderId, oauth);
+    token = await readGenericOAuthAccessToken(storageProviderId, oauth);
   } catch {
-    return { ok: false, code: 'UNKNOWN' };
+    return { ok: false, code: 'AUTH_INVALID' };
   }
   // A token refresh can outlive logout, account switching, or edits to this connection.
   // Never use the old endpoint snapshot with credentials from the new owner/configuration.
   if (!isCurrent()) return { ok: false, code: 'AUTH_INVALID' };
-  const token = readCachedGenericOAuthAccessToken(storageProviderId, oauth);
   if (!token) return { ok: false, code: 'AUTH_INVALID' };
   const modelsUrl = route.modelsUrl ?? oauth.modelsDiscoveryUrl;
   const result = await fetchProviderModels({
@@ -166,11 +263,22 @@ export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): {
   const googleCatalog = (!explicit || /^https:\/\/generativelanguage\.googleapis\.com\/v1(?:beta)?\/openai\/models\/?$/.test(explicit)) && baseUrl.origin === 'https://generativelanguage.googleapis.com'
     && /^\/v1(?:beta)?(?:\/openai)?\/?$/.test(baseUrl.pathname);
   const googleProtocol = googleCatalog || spec.wireProtocol === 'google-generative-ai';
-  const discoveryUrl = googleCatalog
+  const configuredDiscoveryUrl = googleCatalog
     ? `${baseUrl.origin}${baseUrl.pathname.replace(/\/openai\/?$/, '').replace(/\/+$/, '')}/models`
     : explicit && modelsUrl?.origin === baseUrl.origin
     ? explicit : spec.wireProtocol === 'google-generative-ai'
-      ? `${spec.baseUrl.replace(/\/+$/, '')}/models` : deriveModelsDiscoveryUrl(spec.baseUrl);
+      ? `${spec.baseUrl.replace(/\/+$/, '')}/models` : deriveModelsDiscoveryUrl(
+        spec.baseUrl,
+        !explicit && spec.agent === 'codex'
+          && (spec.wireProtocol ?? 'openai-responses') === 'openai-responses'
+          && !isLoopbackProviderUrl(spec.baseUrl)
+          && baseUrl.origin !== 'https://api.elevenlabs.io'
+          && !isOpenRouterModelsUrl(deriveModelsDiscoveryUrl(spec.baseUrl))
+          ? { clientVersion: CODEX_MODELS_CLIENT_VERSION }
+          : undefined,
+      );
+  const copilot = copilotModelsRequest(configuredDiscoveryUrl);
+  const discoveryUrl = copilot?.url ?? configuredDiscoveryUrl;
   const mustStripCredentialHeaders =
     !!spec.apiKey || spec.authMethod === 'none' || spec.authMethod === 'oauth';
   const headers: Record<string, string> = mustStripCredentialHeaders
@@ -182,7 +290,13 @@ export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): {
   const discoveryEndpoint = new URL(discoveryUrl);
   const longcatOpenAiCatalog = discoveryEndpoint.origin === 'https://api.longcat.chat'
     && discoveryEndpoint.pathname.replace(/\/+$/, '') === '/openai/v1/models';
-  if (discoveryEndpoint.origin === 'https://api.elevenlabs.io'
+  if (copilot) {
+    Object.assign(headers, copilot.headers);
+    delete headers['anthropic-version'];
+    delete headers['anthropic-beta'];
+    delete headers['x-api-key'];
+    if (spec.apiKey) headers.authorization = `Bearer ${spec.apiKey}`;
+  } else if (discoveryEndpoint.origin === 'https://api.elevenlabs.io'
     && discoveryEndpoint.pathname.replace(/\/+$/, '') === '/v1/models') {
     // ElevenLabs discovery uses xi-api-key, independently of the chat runtime slot.
     delete headers.authorization;
@@ -190,7 +304,7 @@ export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): {
     delete headers['anthropic-version'];
     delete headers['anthropic-beta'];
     if (spec.apiKey) headers['xi-api-key'] = spec.apiKey;
-  } else if (isOpenRouterModelsUrl(discoveryUrl) || longcatOpenAiCatalog) {
+  } else if (isOpenRouterModelsUrl(discoveryUrl) || longcatOpenAiCatalog || discoveryUrl === COMMAND_CODE_MODELS_URL) {
     // Discovery is provider-specific, not the generation harness's wire format.
     // OpenRouter's Anthropic view rewrites IDs and defaults to only 20 results.
     // LongCat explicitly shares its OpenAI catalog with the Messages runtime.
@@ -221,16 +335,6 @@ export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): {
   };
 }
 
-/** 从 Error（fetch 抛出）提取网络层错误码（同 provider-diagnostics）。 */
-function networkErrorCode(err: unknown): string {
-  if (err instanceof Error) {
-    if (err.name === 'TimeoutError' || err.name === 'AbortError') return err.name;
-    const cause = (err as { cause?: { code?: unknown } }).cause;
-    if (cause && typeof cause.code === 'string') return cause.code;
-    return err.name || 'UNKNOWN_NETWORK_ERROR';
-  }
-  return 'UNKNOWN_NETWORK_ERROR';
-}
 
 /** Count decoded stream bytes before buffering/parsing, including missing or false length headers. */
 async function readLimitedBody(res: Response, limit: number): Promise<string> {
@@ -258,10 +362,52 @@ async function readLimitedBody(res: Response, limit: number): Promise<string> {
 }
 
 /** 拉一次模型列表并分类结果。fetch 可注入（单测）。 */
+const commandCodeProtocolPaths: Partial<Record<ProviderWireProtocol, string>> = {
+  'anthropic-messages': '/messages',
+  'openai-responses': '/responses',
+  'openai-chat': '/chat/completions',
+};
+
+function commandCodeModelsForProtocol(payload: unknown, protocolPath: string): unknown {
+  if (!payload || typeof payload !== 'object' || !('data' in payload) || !Array.isArray(payload.data)
+    || ('error' in payload && payload.error != null)) return null;
+  if (payload.data.some(row => !row || typeof row !== 'object'
+    || typeof row.id !== 'string' || !row.id.trim()
+    || !Array.isArray(row.supported_endpoints)
+    || row.supported_endpoints.some((path: unknown) => typeof path !== 'string'))) return null;
+  return { ...payload, data: payload.data.filter(row => row.supported_endpoints.includes(protocolPath)) };
+}
+
 export async function fetchProviderModels(
   spec: ProviderModelsFetchSpec,
   fetchImpl: typeof fetch = outboundFetch,
 ): Promise<ProviderModelsFetchResult> {
+  if (!spec.probeGlmFlash || spec.authMethod !== 'apiKey' || !spec.apiKey?.trim()
+    || !isGlmPresetRoute(spec.baseUrl, spec.catalogPresetId)) return fetchCatalog(spec, fetchImpl);
+
+  let request: ReturnType<typeof buildModelsFetchRequest>;
+  try {
+    request = buildModelsFetchRequest(spec);
+  } catch {
+    return { ok: false, code: 'UNKNOWN', detail: INVALID_DISCOVERY_URL };
+  }
+  // This grant comes from the voice session, independently of the chat directory.
+  // A chat-only key may fail either request without invalidating the other one.
+  const [catalog, access] = await Promise.all([
+    fetchCatalog({ ...spec, probeGlmFlash: undefined }, fetchImpl),
+    Promise.resolve().then(spec.probeGlmFlash).catch(() => 'unknown' as const),
+  ]);
+  const models = (catalog.models ?? []).filter(model => model.id !== GLM_REALTIME_FLASH);
+  if (access !== 'available') return { ...catalog, ...(catalog.ok && { models }), glmFlashProbe: access };
+  const flash = parseModelsListResponse({ data: [{ id: GLM_REALTIME_FLASH }] }, GLM_API_BASE + '/models')!;
+  return {
+    ok: true,
+    complete: catalog.ok && catalog.complete === true,
+    models: [...models, ...issueModelSourceSnapshot(flash, spec.agent, modelSourceRequestSignature(request.url, request.init), true)],
+  };
+}
+
+async function fetchCatalog(spec: ProviderModelsFetchSpec, fetchImpl: typeof fetch): Promise<ProviderModelsFetchResult> {
   if (
     spec.authMethod === 'none' &&
     (!isLoopbackProviderUrl(spec.baseUrl) ||
@@ -280,11 +426,13 @@ export async function fetchProviderModels(
     return { ok: false, code: 'UNKNOWN', detail: INVALID_DISCOVERY_URL };
   }
   const { url, init } = request;
+  const openAiKey = officialOpenAiModelsKey(url, init);
+  if (spec.isCurrent?.() === false) return { ok: false, code: 'UNKNOWN' };
   let res: Response;
   try {
-    res = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+    res = await fetchModelsResponse(url, { ...init, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }, fetchImpl);
   } catch (err) {
-    const cls = classifyProviderError({ networkErrorCode: networkErrorCode(err) });
+    const cls = classifyProviderError({ networkErrorCode: providerNetworkErrorCode(err) });
     return { ok: false, code: cls.code, detail: cls.detail };
   }
   if (!res.ok) {
@@ -294,7 +442,7 @@ export async function fetchProviderModels(
     if ((res.status === 404 || res.status === 405) && ordinaryUrl.searchParams.has('client_version')) {
       await res.body?.cancel().catch(() => undefined);
       ordinaryUrl.searchParams.delete('client_version');
-      return fetchProviderModels({ ...spec, modelsUrl: ordinaryUrl.toString() }, fetchImpl);
+      return fetchCatalog({ ...spec, modelsUrl: ordinaryUrl.toString() }, fetchImpl);
     }
     let bodyText = '';
     try {
@@ -320,14 +468,51 @@ export async function fetchProviderModels(
       detail: 'models response is not JSON or exceeds the response limit',
     };
   }
+  const commandCode = url === COMMAND_CODE_MODELS_URL;
+  const wireProtocol = spec.wireProtocol ?? (spec.agent === 'claude-code' ? 'anthropic-messages'
+    : spec.agent === 'codex' ? 'openai-responses' : 'openai-chat');
+  const commandCodePath = commandCode ? commandCodeProtocolPaths[wireProtocol] : undefined;
+  const parsePage = (payload: unknown) => commandCode
+    ? commandCodePath ? commandCodeModelsForProtocol(payload, commandCodePath) : null
+    : payload;
   const pageDeadline = Date.now() + 30_000;
-  const models = await collectModelDiscoveryPages(json, url, async nextUrl => {
-    if (Date.now() >= pageDeadline) throw new Error('catalog deadline exceeded');
+  const { models, complete } = await collectModelDiscoveryPagesWithStatus(parsePage(json), url, async nextUrl => {
+    if (spec.isCurrent?.() === false || Date.now() >= pageDeadline) throw new Error('catalog read no longer current');
     const page = await fetchImpl(nextUrl, { ...init, redirect: 'error', signal: AbortSignal.timeout(Math.max(1, Math.min(FETCH_TIMEOUT_MS, pageDeadline - Date.now()))) });
     if (!page.ok) { await page.body?.cancel(); throw new Error('catalog page failed'); }
-    return JSON.parse(await readLimitedBody(page, spec.responseByteLimit ?? 8 * 1024 * 1024));
+    return parsePage(JSON.parse(await readLimitedBody(page, spec.responseByteLimit ?? 8 * 1024 * 1024)));
   });
-  if (!models || (models.length === 0 && !spec.allowEmpty)) {
+  // These exact OpenAI-compatible catalog views can legitimately be empty. Keep
+  // that success distinct in every consumer (wizard, edit and saved refresh),
+  // without treating an error envelope as an empty catalog or an account grant.
+  const emptyCatalogAllowed = url === 'https://ollama.com/v1/models'
+    || url === 'https://inference.hinoki.security/v1/models';
+  const catalogError = emptyCatalogAllowed && json !== null && typeof json === 'object'
+    && 'error' in json && json.error != null && json.error !== '';
+  // The parser can drop invalid members; only an originally empty data array is empty success.
+  const rawCatalogEmpty = emptyCatalogAllowed && json !== null && typeof json === 'object'
+    && 'data' in json && Array.isArray(json.data) && json.data.length === 0;
+  // Magpie's enabled-model catalog can be empty. Identify the gateway rather
+  // than guessing from a user-editable port/name; never send credentials to hello.
+  let magpieEmpty = false;
+  const endpoint = new URL(url);
+  if (models?.length === 0 && !spec.allowEmpty && !emptyCatalogAllowed
+    && endpoint.pathname === '/v1/models' && !endpoint.search
+    && json !== null && typeof json === 'object' && !Array.isArray(json)
+    && 'data' in json && Array.isArray(json.data) && json.data.length === 0
+    && (!('error' in json) || json.error == null || json.error === '')
+    && (!('error_code' in json) || json.error_code === 0)) {
+    try {
+      const hello = await fetchImpl(new URL('/api/hello', endpoint).toString(), {
+        method: 'GET', redirect: 'error', signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      });
+      if (hello.ok) {
+        const identity = JSON.parse(await readLimitedBody(hello, 16 * 1024));
+        magpieEmpty = identity?.name === 'magpie' && !identity.error;
+      } else await hello.body?.cancel();
+    } catch { /* An unconfirmed gateway keeps the existing conservative result. */ }
+  }
+  if (!models || catalogError || (models.length === 0 && !commandCode && (emptyCatalogAllowed ? !rawCatalogEmpty : !spec.allowEmpty && !magpieEmpty))) {
     // 端点 200 但响应不是可识别的模型列表（或为空）——按「模型不存在」类引导用户手填。
     return {
       ok: false,
@@ -336,5 +521,39 @@ export async function fetchProviderModels(
       detail: 'no models found in response',
     };
   }
-  return { ok: true, models };
+  let glmFlashProbe: ProviderModelsFetchResult['glmFlashProbe'];
+  const officialCatalog = GLM_API_BASE + '/models';
+  const isGlmCatalog = (address: string) => address.split('?')[0].replace(/\/$/, '') === officialCatalog;
+  const signature = modelSourceRequestSignature(url, init);
+  if (spec.probeGlmFlash && spec.authMethod === 'apiKey' && spec.apiKey?.trim()
+    && isGlmApiBase(spec.baseUrl) && isGlmCatalog(url) && (!spec.modelsUrl || isGlmCatalog(spec.modelsUrl))
+    && (!res.url || isGlmCatalog(res.url))) {
+    let flash = models.find(model => model.id === GLM_REALTIME_FLASH);
+    if (!flash) {
+      let access: GlmFlashAccess = 'unknown';
+      try {
+        access = await spec.probeGlmFlash();
+      } catch { /* The supplemental check must never invalidate the HTTP catalog. */ }
+      if (access === 'available') {
+        flash = parseModelsListResponse({ data: [{ id: GLM_REALTIME_FLASH }] }, officialCatalog)?.[0];
+        if (flash) models.push(flash);
+      } else glmFlashProbe = access;
+    }
+    // The same proof path works for both a listed model and a WS-confirmed one.
+    if (flash) models[models.indexOf(flash)] = issueModelSourceSnapshot([flash], spec.agent, signature, true)[0];
+  }
+  if (openAiKey && !res.redirected && isOfficialOpenAiModelList(json) && spec.isCurrent?.() !== false
+    && openAiKey === officialOpenAiModelsKey(url, init)) {
+    let cache = openAiModelLists.get(fetchImpl);
+    if (!cache) { cache = new Map(); openAiModelLists.set(fetchImpl, cache); }
+    cache.delete(openAiKey);
+    cache.set(openAiKey, { ids: new Set(models.map(model => model.id)), complete, expires: Date.now() + OPENAI_MODEL_LIST_TTL_MS });
+    if (cache.size > 32) cache.delete(cache.keys().next().value!);
+  }
+  return {
+    ok: true,
+    models: issueModelSourceSnapshot(models, spec.agent, signature),
+    ...(glmFlashProbe && { glmFlashProbe }),
+    complete: !commandCode && complete,
+  };
 }

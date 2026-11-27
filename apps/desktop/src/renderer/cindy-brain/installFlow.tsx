@@ -9,7 +9,7 @@ import {
 } from '../../shared/ghost';
 import {
   findInstalledGhostByInstanceId,
-  findInstalledRootGhostForFileImport,
+  findInstalledLocalGhostForFileImport,
   installedGhostStoragePart,
 } from '../../shared/pluginIdentity';
 import { ghostInstallErrorKey } from './installErrorKey';
@@ -47,11 +47,11 @@ function findInstalled(id: string): InstalledGhost | null {
   }
 }
 
-/** 拖入或双击只更新 root，不选中同名企业实例。 */
-function findInstalledRootForFile(ghostId: string): InstalledGhost | null {
+/** 拖入或双击只更新 local 开发副本，不选中市场或企业实例。 */
+function findInstalledLocalForFile(ghostId: string): InstalledGhost | null {
   try {
     const { ghosts } = window.electronAPI.ghosts.listSync();
-    return findInstalledRootGhostForFileImport(ghosts, ghostId);
+    return findInstalledLocalGhostForFileImport(ghosts, ghostId);
   } catch {
     return null;
   }
@@ -63,7 +63,7 @@ async function runUpdate(
   packageSha256: string,
   installed: InstalledGhost,
   deps: InstallFlowDeps,
-): Promise<void> {
+): Promise<boolean> {
   const { t } = deps;
   try {
     const { ghost } = await window.electronAPI.ghosts.update(lizFilePath, {
@@ -77,8 +77,10 @@ async function runUpdate(
         version: ghost.manifest.version,
       }),
     );
+    return true;
   } catch (err) {
     await showInstallError(err, deps);
+    return false;
   }
 }
 
@@ -86,8 +88,6 @@ export async function installGhostFromFile(
   lizFilePath: string,
   deps: InstallFlowDeps,
 ): Promise<void> {
-  const { t } = deps;
-
   // 1) 只验不装,拿身份卡;坏文件在这一步就被拒,不会产生安装副作用。
   let manifest: GhostManifest;
   let packageSha256: string;
@@ -100,12 +100,21 @@ export async function installGhostFromFile(
     return;
   }
 
+  await installInspectedGhostFromFile(lizFilePath, { manifest, packageSha256 }, deps);
+}
+
+/** The card passes the inspection it displayed; Main revalidates the digest before placement. */
+export async function installInspectedGhostFromFile(
+  lizFilePath: string,
+  { manifest, packageSha256 }: { manifest: GhostManifest; packageSha256: string },
+  deps: InstallFlowDeps,
+): Promise<boolean> {
+  const { t } = deps;
   // 1.5) 同 id 已装 → 转更新分支(拖入/双击/装入按钮选到新版包时不再报
   // "已经注入",直接原位更新)。
-  const installed = findInstalledRootForFile(manifest.id);
+  const installed = findInstalledLocalForFile(manifest.id);
   if (installed) {
-    await runUpdate(lizFilePath, packageSha256, installed, deps);
-    return;
+    return runUpdate(lizFilePath, packageSha256, installed, deps);
   }
 
   // 用户通过文件选择／拖入／双击发起安装，Main 会先弹确认框。安装后默认启用；
@@ -120,8 +129,10 @@ export async function installGhostFromFile(
     if (willOpenPanel) {
       deps.openPluginPanel?.(installedGhostStoragePart(ghost));
     }
+    return true;
   } catch (err) {
     await showInstallError(err, deps);
+    return false;
   }
 }
 

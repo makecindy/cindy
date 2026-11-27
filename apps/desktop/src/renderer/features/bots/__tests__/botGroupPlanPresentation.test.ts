@@ -138,7 +138,7 @@ describe('分工 presentation', () => {
     ).toEqual({ kind: 'proposed', organizerName: '小满' });
     expect(
       botGroupSidebarPlanPreview(
-        summary({ openPlan: openPlan({ status: 'running', currentStep: 1, currentBotName: '小满' }) }),
+        summary({ openPlan: openPlan({ status: 'running', currentStep: 1, currentBotName: '小满', currentStepStatus: 'running' }) }),
       ),
     ).toEqual({ kind: 'running', botName: '小满', step: 2, total: 3 });
     expect(botGroupSidebarPlanPreview(summary({ openPlan: openPlan() }))).toEqual({

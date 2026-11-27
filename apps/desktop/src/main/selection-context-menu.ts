@@ -4,7 +4,7 @@
  *
  * Electron does not expose Chromium's full native menu as a safe reusable
  * default, so we intentionally build the small platform set Cindy needs:
- * read-only selections get macOS Copy / Look Up or Windows Copy / web search,
+ * read-only selections get macOS Copy / Look Up or Windows/Linux Copy / web search,
  * and editable controls get the standard edit commands (undo … select all).
  * Browser-only actions such as reload, view source, and inspect are never
  * included.
@@ -34,7 +34,7 @@ const SEARCH_URL = 'https://www.bing.com/search?q=';
 const LABEL_PREVIEW_CHARS = 48;
 const SEARCH_QUERY_MAX_CHARS = 2000;
 
-type SupportedPlatform = 'darwin' | 'win32';
+type SupportedPlatform = 'darwin' | 'win32' | 'linux';
 let currentLocale: SupportedLocale | null = null;
 
 interface SelectionMenuActions {
@@ -74,8 +74,15 @@ function localizedActionLabel(
   if (action === 'addToChat') {
     if (resolvedLocale === 'zh-CN') return '添加到对话';
     if (resolvedLocale === 'zh-TW') return '新增到對話';
+    if (resolvedLocale === 'zh-Hant-x-lzh') return '引入言談';
+    if (resolvedLocale === 'zh-Hans-x-lzh') return '引入言谈';
     if (resolvedLocale === 'ja') return 'チャットに追加';
     if (resolvedLocale === 'ko') return '대화에 추가';
+    if (resolvedLocale === 'es') return "Añadir a la conversación";
+    if (resolvedLocale === 'fr') return "Ajouter à la conversation";
+    if (resolvedLocale === 'de') return "Zum Chat hinzufügen";
+    if (resolvedLocale === 'pt-PT') return "Adicionar à conversa";
+    if (resolvedLocale === 'pt-BR') return "Adicionar à conversa";
     return 'Add to chat';
   }
   // Copy 是两套菜单共用的同一条命令,标签只保留 catalog 一处正本。
@@ -83,14 +90,28 @@ function localizedActionLabel(
   if (action === 'lookUp') {
     if (resolvedLocale === 'zh-CN') return `查询“${preview}”`;
     if (resolvedLocale === 'zh-TW') return `查詢「${preview}」`;
+    if (resolvedLocale === 'zh-Hant-x-lzh') return `查「${preview}」`;
+    if (resolvedLocale === 'zh-Hans-x-lzh') return `查「${preview}」`;
     if (resolvedLocale === 'ja') return `「${preview}」を調べる`;
     if (resolvedLocale === 'ko') return `“${preview}” 찾아보기`;
+    if (resolvedLocale === 'es') return `Buscar «${preview}»`;
+    if (resolvedLocale === 'fr') return `Rechercher « ${preview} »`;
+    if (resolvedLocale === 'de') return `„${preview}“ nachschlagen`;
+    if (resolvedLocale === 'pt-PT') return `Pesquisar «${preview}»`;
+    if (resolvedLocale === 'pt-BR') return `Consultar “${preview}”`;
     return `Look Up “${preview}”`;
   }
   if (resolvedLocale === 'zh-CN') return `在网页中搜索“${preview}”`;
   if (resolvedLocale === 'zh-TW') return `在網頁中搜尋「${preview}」`;
+  if (resolvedLocale === 'zh-Hant-x-lzh') return `於網上尋「${preview}」`;
+  if (resolvedLocale === 'zh-Hans-x-lzh') return `于网上寻「${preview}」`;
   if (resolvedLocale === 'ja') return `「${preview}」をウェブで検索`;
   if (resolvedLocale === 'ko') return `웹에서 “${preview}” 검색`;
+  if (resolvedLocale === 'es') return `Buscar «${preview}» en la web`;
+  if (resolvedLocale === 'fr') return `Rechercher « ${preview} » sur le Web`;
+  if (resolvedLocale === 'de') return `Im Web nach „${preview}“ suchen`;
+  if (resolvedLocale === 'pt-PT') return `Pesquisar «${preview}» na Web`;
+  if (resolvedLocale === 'pt-BR') return `Pesquisar “${preview}” na Web`;
   return `Search the web for “${preview}”`;
 }
 
@@ -232,7 +253,11 @@ async function showSelectionContextMenu(
   win: BrowserWindow,
   params: ContextMenuParams,
 ): Promise<void> {
-  if (process.platform !== 'darwin' && process.platform !== 'win32') return;
+  if (
+    process.platform !== 'darwin'
+    && process.platform !== 'win32'
+    && process.platform !== 'linux'
+  ) return;
   if (params.isEditable) {
     // 可编辑目标不问 renderer:「添加到对话」只对只读引用区有意义,少一次
     // executeJavaScript 也让输入框右键即时弹出。

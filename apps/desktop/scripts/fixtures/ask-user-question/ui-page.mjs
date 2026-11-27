@@ -6,8 +6,8 @@ export default {
   viewport: { width: 800, height: 600 },
   real: 'AskUserQuestionPrompt, voice choice draft/confirmation, CompanionVoiceToolbar, question references, prompt shell and themes',
   notCovered: 'Actual microphone/ASR/TTS, task execution, host file contents, browser navigation and remote connectivity',
-  // The visual runner uses esbuild, which does not implement Vite ?url assets.
-  // Keep the real dictation hook/state UI; only the microphone and host are fake.
+  // Keep the real dictation hook/state UI; microphone capture and its worklet
+  // are outside this fixture, so only the microphone and host are fake.
   stubs: {
     'src/renderer/voice-input/workletUrl': 'export function getVoiceInputWorkletUrl() { return "/fixture-worklet.js"; }',
     'src/renderer/voice-input/captureSession': `export async function startVoiceInputCaptureSession(options) {
@@ -17,20 +17,118 @@ export default {
     }`,
   },
   cases: {
+    'input-free': { about: 'Free answer starts as one line beside voice and send, then wraps to full width', viewport: { width: 320, height: 620 }, data: { question: '请补充你看到的现象。', free: true } },
+    'input-custom': { about: 'Custom choice starts as one line, then wraps to full width with inset controls', viewport: { width: 320, height: 620 }, data: { question: '你希望怎样处理？' } },
+    'input-multi': { about: 'Multi-select custom answer uses one inset submit', viewport: { width: 320, height: 700 }, data: { question: '你希望保留哪些选项？', multi: true } },
+    'input-plan': { about: 'Plan feedback starts as one line, then wraps to a full-width input', viewport: { width: 320, height: 550 }, data: {} },
+    unanswered: { about: 'Expired unanswered question remains readable once in history at 320 px', viewport: { width: 320, height: 400 }, data: { question: '是否将测试包完整安装到 Duo？' } },
+    withdrawn: { about: 'Withdrawn question retains draft and offers supplemental sending at 320 px', viewport: { width: 320, height: 700 }, data: { question: '你是否已经手动重新登录？', withdrawn: true } },
+    'mcp-form-error': { about: 'MCP required/length error keeps draft at 320 px', viewport: { width: 320, height: 600 }, data: { question: 'Name', form: true } },
+    'mcp-form-enum': { about: 'MCP literal Other enum survives and both values reach receipt', data: { question: 'Name', form: true } },
     default: { about: 'Question with a bare HTML filename and URL', data: { question: '请查看 sidebar-layout-v1.html 后确认这版交互形态是否可以进入正式实现。也可以查看 https://example.com/prototype。' } },
     narrow: { about: 'Long references at 320 px', viewport: { width: 320, height: 600 }, data: { question: '请查看 sidebar-layout-v1.html 或 https://example.com/prototypes/a-very-long-prototype-name-before-approval 后确认。' } },
     'dictation-starting': { about: 'Answer microphone starting', data: { question: '请补充你的意见。' } },
     'dictation-listening': { about: 'Answer recording with stop action', data: { question: '请补充你的意见。' } },
     'dictation-processing': { about: 'Answer transcription pending at 320 px', viewport: { width: 320, height: 600 }, data: { question: '请补充你的意见。' } },
+    'dictation-speaker-filtered': { about: 'Answer recording explains that the voiceprint filter ignored someone else, at 320 px', viewport: { width: 320, height: 600 }, data: { question: '请补充你的意见。' } },
     unresolved: { about: 'Missing and ambiguous references remain plain text', data: { question: '请查看 missing.html 和 ambiguous.html，文件尚未找到或有重名时保持普通文字。' } },
     'voice-single': { about: 'Voice choice instructions with an active listening toolbar', data: { question: '你希望采用哪种方案？', voice: true } },
     'voice-multi': { about: 'Spoken multi-selection awaits confirmation in the existing card', viewport: { width: 800, height: 700 }, data: { question: '你希望保留哪些方案？', voice: true, multi: true } },
     'voice-narrow': { about: 'Voice confirmation and toolbar at 320 px', viewport: { width: 320, height: 800 }, data: { question: '你希望保留哪些方案？', voice: true, multi: true } },
+    'voice-speaker-filtered': { about: 'Call bar explains that the voiceprint filter ignored someone else', data: { question: '你希望采用哪种方案？', voice: true, speakerFiltered: true } },
+    'option-preview': { about: 'Option preview renders readable markdown outside the option button', viewport: { width: 760, height: 760 }, data: { question: '发出预览这条现状说明，要发吗？', preview: true } },
+    'option-preview-narrow': { about: 'Option preview remains readable and scrollable at 320 px', viewport: { width: 320, height: 640 }, data: { question: '发出预览这条现状说明，要发吗？', preview: true } },
   },
   async ready(page) {
-    await page.getByText('确认原型').waitFor();
+    await page.locator('main').waitFor();
   },
   async check(page, ui) {
+    const checkSingleLine = async () => {
+      const frame = page.getByTestId('interaction-answer-composer');
+      const fieldBox = await frame.locator('textarea').boundingBox();
+      const sendBox = await frame.getByRole('button').last().boundingBox();
+      assert.ok((await frame.boundingBox()).height <= 56, 'An empty answer takes a single line');
+      assert.ok(sendBox.x >= fieldBox.x + fieldBox.width, 'Actions sit beside a single-line answer');
+      assert.ok(Math.abs(sendBox.y + sendBox.height / 2 - (fieldBox.y + fieldBox.height / 2)) <= 2, 'The line is centred on the actions');
+    };
+    const checkComposer = async () => {
+      const frame = page.getByTestId('interaction-answer-composer');
+      const field = frame.locator('textarea');
+      const frameBox = await frame.boundingBox();
+      const fieldBox = await field.boundingBox();
+      assert.ok(fieldBox.width >= frameBox.width - 30, 'Text occupies the full input width');
+      const send = frame.getByRole('button').last();
+      const sendBox = await send.boundingBox();
+      assert.ok(sendBox.y >= fieldBox.y + fieldBox.height - 1, 'Actions sit below the text');
+      assert.ok(sendBox.x >= frameBox.x && sendBox.x + sendBox.width <= frameBox.x + frameBox.width, 'Send stays inside the frame');
+      assert.equal((await send.textContent()).trim(), '', 'Send uses an icon, not a long label');
+      assert.ok(await send.getAttribute('aria-label'), 'Icon keeps its accessible action name');
+    };
+    if (ui.case.startsWith('input-')) {
+      if (ui.case === 'input-plan') await page.getByRole('button', { name: await ui.t('newChat.planReview.feedbackPlaceholder'), exact: true }).click();
+      else if (ui.case !== 'input-free') {
+        if (ui.case === 'input-multi') await page.getByText('可以，按这版实现', { exact: true }).click();
+        await page.getByRole('button', { name: await ui.t('chat.askUserQuestion.customAnswer') }).click();
+      }
+      await checkSingleLine();
+      await page.locator('textarea').fill('已重新登录，另补充一个现象。\n这里应该有充足的文字输入空间。');
+      await checkComposer();
+      // Regression #10732 / review r4580889358: expanding at two rows used to
+      // leave plan feedback overflow hidden when later input exceeded its cap.
+      // Exercise the real fields in the browser; the old geometry-only checks
+      // never crossed the scroll threshold. UI/e2e tier, two rows -> twelve -> two.
+      const field = page.locator('textarea');
+      await field.fill(Array.from({ length: 12 }, (_, i) => `第 ${i + 1} 行反馈`).join('\n'));
+      await checkComposer();
+      const canScroll = await field.evaluate((el) =>
+        el.scrollHeight > el.clientHeight && getComputedStyle(el).overflowY === 'auto');
+      assert.ok(canScroll, 'Long answers remain scrollable after expanding from short text');
+      await field.evaluate((el) => { el.scrollTop = 0; });
+      await field.hover();
+      await page.mouse.wheel(0, 120);
+      await page.waitForFunction(() => document.querySelector('textarea').scrollTop > 0);
+      await field.fill('缩短后的反馈。\n第二行。');
+      assert.ok(await field.evaluate((el) => el.scrollHeight <= el.clientHeight), 'Shortened answers fit without scrolling');
+      return;
+    }
+    if (ui.case === 'unanswered') {
+      await page.getByText(await ui.t('chat.askUserQuestion.unanswered'), { exact: true }).waitFor();
+      assert.equal(await page.getByText('是否将测试包完整安装到 Duo？', { exact: true }).count(), 1);
+      assert.equal(await page.getByText('✓', { exact: true }).count(), 0);
+      return;
+    }
+    if (ui.case === 'withdrawn') {
+      await page.getByRole('status').waitFor();
+      assert.equal(await page.getByRole('button', { name: await ui.t('chat.askUserQuestion.skip'), exact: true }).count(), 0);
+      const input = page.getByPlaceholder(await ui.t('chat.askUserQuestion.answerPlaceholder'));
+      await checkSingleLine();
+      await input.fill('已重新登录，另补充一个现象。');
+      assert.equal(await input.inputValue(), '已重新登录，另补充一个现象。');
+      await page.getByRole('button', { name: await ui.t('chat.askUserQuestion.sendSupplement'), exact: true }).waitFor();
+      await input.fill('已重新登录，另补充一个现象。\n这里应该有充足的文字输入空间。');
+      await checkComposer();
+      return;
+    }
+    if (ui.case.startsWith('mcp-form-')) {
+      await page.getByRole('button', { name: await ui.t('chat.askUserQuestion.skip'), exact: true }).click();
+      await page.getByRole('alert').waitFor();
+      const input = page.getByPlaceholder(await ui.t('chat.askUserQuestion.answerPlaceholder'));
+      await input.fill('ab');
+      await input.press('Enter');
+      assert.equal(await input.inputValue(), 'ab');
+      assert.equal(await page.getByTestId('mcp-form-receipt').count(), 0);
+      if (ui.case === 'mcp-form-error') return;
+      await input.fill('Orbit');
+      await input.press('Enter');
+      await page.getByText('Other', { exact: true }).waitFor();
+      assert.equal(await page.getByText(await ui.t('chat.askUserQuestion.customAnswer'), { exact: true }).count(), 0);
+      await page.getByRole('button', { name: await ui.t('chat.askUserQuestion.skip'), exact: true }).click();
+      await page.getByRole('alert').waitFor();
+      await page.getByText('Other', { exact: true }).click();
+      await page.getByTestId('mcp-form-receipt').waitFor();
+      assert.deepEqual(JSON.parse(await page.getByTestId('mcp-form-receipt').textContent()), { name: 'Orbit', kind: 'Other' });
+      return;
+    }
     if (ui.case.startsWith('dictation-')) {
       const mic = page.getByTestId('ask-user-voice');
       await mic.click();
@@ -42,7 +140,12 @@ export default {
         }));
       }
       if (ui.case === 'dictation-processing') await mic.click();
-      assert.equal(await mic.getAttribute('aria-busy'), ui.case === 'dictation-listening' ? 'false' : 'true');
+      if (ui.case === 'dictation-speaker-filtered') {
+        await page.evaluate(() => window.__uiPage.emit('voice', { type: 'speaker-filtered', runId: 'fixture-voice' }));
+        await page.getByText(await ui.t('voiceInputOverlay.speakerFiltered')).waitFor();
+      }
+      const recording = ui.case === 'dictation-listening' || ui.case === 'dictation-speaker-filtered';
+      assert.equal(await mic.getAttribute('aria-busy'), recording ? 'false' : 'true');
       assert.equal(await mic.isDisabled(), ui.case === 'dictation-processing');
       return;
     }
@@ -50,8 +153,19 @@ export default {
       radius: parseFloat(getComputedStyle(node).borderTopLeftRadius),
       width: node.getBoundingClientRect().width, height: node.getBoundingClientRect().height,
     }));
+    if (ui.case.startsWith('option-preview')) {
+      const previewBox = page.getByTestId('ask-user-option-preview-1');
+      await previewBox.waitFor();
+      assert.ok((await previewBox.textContent()).includes('镜像与自动更新'), 'Option preview markdown renders visibly');
+      await previewBox.click();
+      assert.equal(await page.getByTestId('mcp-form-receipt').count(), 0, 'Clicking inside option preview must not submit the option');
+      assert.equal(await page.getByTestId('ask-user-option-preview-2').count(), 0, 'Options without preview do not render a preview frame');
+      return;
+    }
     if (ui.case.startsWith('voice-')) {
       assert.equal(await page.locator('.companion-voice-toolbar').count(), 1);
+      assert.equal(await page.getByText(await ui.t('voiceInputOverlay.speakerFiltered')).count(),
+        ui.case === 'voice-speaker-filtered' ? 1 : 0);
       assert.ok(await page.getByRole('status').count() >= 2);
       assert.equal(await page.getByTestId('ask-user-voice').count(), 0);
       return;
@@ -76,8 +190,8 @@ export default {
     }
     await page.getByRole('button', { name: await ui.t('chat.askUserQuestion.customAnswer') }).click();
     const expandedFrame = await readVoiceFrame();
-    assert.equal(expandedFrame.width, 32);
-    assert.equal(expandedFrame.height, 32);
-    assert.ok(expandedFrame.radius >= 16, 'Expanded microphone action frame follows the same pill tier');
+    assert.equal(expandedFrame.width, 30);
+    assert.equal(expandedFrame.height, 30);
+    assert.ok(expandedFrame.radius >= 15, 'Expanded microphone action frame follows the unified 30px pill spec');
   },
 };

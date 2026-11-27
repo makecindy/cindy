@@ -18,9 +18,11 @@ import { and, asc, desc, eq, gt, gte, lt, inArray, isNotNull, isNull, ne, or, sq
 import type { HistoryCompanion } from '@cindy/mcps';
 import { historyCompanionJson, parseHistoryCompanion, teammateHistoryFilter } from './historyCompanion';
 import { getDbClient } from './client/current';
+import { historyPageWithinBudget } from './historyPageBudget';
 import { sessions, messages } from './schema';
 import { messageToCamel } from './mapper';
 import { parseOrcaRemoteLead, type OrcaRemoteLead } from '../../shared/orcaRemoteWorker.js';
+import { parseSessionCreatedBy, type SessionCreatedBy } from '../../shared/sessionOrigin.js';
 import { remoteVisibleSessionSql } from './ipc/botRemoteVisibility.js';
 import {
   managedDialogueRootLikePatterns,
@@ -33,6 +35,11 @@ const messageRowid = sql<number>`"messages"."rowid"`;
 function remoteOrcaHistoryIdentity(raw: unknown): { orcaRemoteLead?: OrcaRemoteLead } {
   const lead = parseOrcaRemoteLead(raw);
   return lead ? { orcaRemoteLead: lead } : {};
+}
+
+function sessionCreatedByHistoryIdentity(raw: unknown): { createdBySession?: SessionCreatedBy } {
+  const origin = parseSessionCreatedBy(raw);
+  return origin ? { createdBySession: origin } : {};
 }
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -189,6 +196,8 @@ export interface ListSessionsParams {
 }
 
 export interface SessionSummary {
+  pinnedAt: number | null;
+  hiddenAt: number | null;
   lastActivityAt: number;
   companion: HistoryCompanion | null;
   id: string;
@@ -201,6 +210,7 @@ export interface SessionSummary {
   source: string;
   orcaRole: string | null;
   orcaRemoteLead?: OrcaRemoteLead;
+  createdBySession?: SessionCreatedBy;
   parentSessionId: string | null;
   createdAt: number; // unix ms
   updatedAt: number;
@@ -269,9 +279,12 @@ export async function listSessionsForHistory(
       workspaceKind: sessions.workspaceKind,
       model: sessions.model,
       status: sessions.status,
+      pinnedAt: sessions.pinnedAt,
+      hiddenAt: sessions.hiddenAt,
       source: sessions.source,
       orcaRole: sessions.orcaRole,
       orcaRemoteLead: sessions.orcaRemoteLead,
+      createdBySession: sessions.createdBySession,
       parentSessionId: sessions.parentSessionId,
       createdAt: sessions.createdAt,
       updatedAt: sessions.updatedAt,
@@ -282,8 +295,7 @@ export async function listSessionsForHistory(
     .orderBy(orderFn(time), orderFn(sessions.id))
     .limit(fetchLimit);
 
-  const hasMore = sessionRows.length > params.limit;
-  const sliced = hasMore ? sessionRows.slice(0, params.limit) : sessionRows;
+  const sliced = sessionRows.slice(0, params.limit);
 
   // 批量查 messageCount (已过滤 rewindAt 软删)
   const countMap = new Map<string, number>();
@@ -300,7 +312,7 @@ export async function listSessionsForHistory(
     for (const r of countRows) countMap.set(r.sessionId, Number(r.cnt));
   }
 
-  const items: SessionSummary[] = sliced.map((r) => ({
+  const items: SessionSummary[] = historyPageWithinBudget(sliced.map((r) => ({
     lastActivityAt: r.lastActivityAt,
     companion: parseHistoryCompanion(r.companionJson),
     id: r.id,
@@ -310,15 +322,19 @@ export async function listSessionsForHistory(
     workspaceKind: r.workspaceKind,
     model: r.model,
     status: r.status,
+    pinnedAt: r.pinnedAt,
+    hiddenAt: r.hiddenAt,
     source: r.source,
     orcaRole: r.orcaRole,
     ...remoteOrcaHistoryIdentity(r.orcaRemoteLead),
+    ...sessionCreatedByHistoryIdentity(r.createdBySession),
     parentSessionId: r.parentSessionId,
     createdAt: r.createdAt,
     updatedAt: r.updatedAt,
     userSendAt: r.userSendAt,
     messageCount: countMap.get(r.id) ?? 0,
-  }));
+  })));
+  const hasMore = sessionRows.length > items.length;
   const last = items[items.length - 1];
   const nextCursor: HistoryCursor | null = hasMore && last
     ? { createdAt: params.timeField === 'activity' ? last.lastActivityAt : last.createdAt, id: last.id }
@@ -328,6 +344,10 @@ export async function listSessionsForHistory(
 
 // ── get_chat_history ────────────────────────────────────────────────────────
 
+/**
+ * history reader 接受的 role 全集。'error' 为技术性 role: terminal error 诊断行
+ * (role: 'error', content 已脱敏) 只有调用方显式列出时才会被返回, 不进默认集。
+ */
 export type HistoryRole =
   | 'user'
   | 'assistant'
@@ -335,7 +355,8 @@ export type HistoryRole =
   | 'tool_result'
   | 'ask_user'
   | 'plan_review'
-  | 'thinking';
+  | 'thinking'
+  | 'error';
 
 export interface GetMessagesParams {
   sessionIds: string[] | null;
@@ -344,6 +365,7 @@ export interface GetMessagesParams {
   toMs: number | null;
   agentKind: HistoryAgentKind | null;
   roles: HistoryRole[] | null;
+  pluginProgressInputId?: string;
   includeRewound: boolean;
   limit: number;
   cursor: HistoryCursor | null; // (messages.createdAt(ms), messages.rowid); id remains for legacy cursors
@@ -437,6 +459,11 @@ export async function getMessagesForHistory(
   }
   if (params.fromMs !== null) conds.push(gte(messages.createdAt, params.fromMs));
   if (params.toMs !== null) conds.push(lt(messages.createdAt, params.toMs));
+  if (params.pluginProgressInputId !== undefined) {
+    conds.push(eq(messages.role, 'assistant'),
+      sql`json_extract(${messages.agentMeta}, '$.pluginProgressInputId') = ${params.pluginProgressInputId}`,
+      sql`json_extract(${messages.agentMeta}, '$.failedSamplingAttempt') IS NULL`);
+  }
   if (params.roles !== null && params.roles.length > 0) {
     conds.push(inArray(messages.role, params.roles));
   }
@@ -485,9 +512,8 @@ export async function getMessagesForHistory(
       : messages.id))
     .limit(fetchLimit);
 
-  const hasMore = rows.length > params.limit;
-  const sliced = hasMore ? rows.slice(0, params.limit) : rows;
-  const items: HistoryMessage[] = sliced.map((r) => {
+  const sliced = rows.slice(0, params.limit);
+  const items: HistoryMessage[] = historyPageWithinBudget(sliced.map((r) => {
     // 复用 messageToCamel 拿 content/agentMeta JSON 解析 + 错误兜底
     const camel = messageToCamel(r.m);
     return {
@@ -504,14 +530,15 @@ export async function getMessagesForHistory(
       createdAt: r.m.createdAt,
       rewindAt: r.m.rewindAt,
     };
-  });
+  }));
+  const hasMore = rows.length > items.length;
   const last = items[items.length - 1];
   const nextCursor: HistoryCursor | null = hasMore && last
     ? {
       createdAt: last.createdAt,
       id: last.id,
-      ...(typeof sliced[sliced.length - 1]?.rowid === 'number'
-        ? { rowid: sliced[sliced.length - 1].rowid }
+      ...(typeof sliced[items.length - 1]?.rowid === 'number'
+        ? { rowid: sliced[items.length - 1].rowid }
         : {}),
     }
     : null;

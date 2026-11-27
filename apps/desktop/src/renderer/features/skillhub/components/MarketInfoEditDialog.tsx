@@ -15,7 +15,7 @@ import { toast } from '@/lib/toast';
 import { marketActionErrorMessage } from '../lib/marketErrors';
 import { PlatformTagSelector } from './PlatformTagSelector';
 import type { MarketCategory } from '../../../../shared/skillhubCategory';
-import { SUPPORTED_LOCALES, type SupportedLocale } from '../../../../shared/locale';
+import { isClassicalLocale, modernLocaleOf, type SupportedLocale } from '../../../../shared/locale';
 
 const DESCRIPTION_LIMIT = 2_000;
 const DISPLAY_NAME_LIMIT = 100;
@@ -127,9 +127,13 @@ export function MarketInfoEditDialog({
           displayName: displayName.trim(),
           summary: description,
           description,
-          contentLocale: (SUPPORTED_LOCALES as readonly string[]).includes(i18n.resolvedLanguage ?? '')
-            ? i18n.resolvedLanguage as SupportedLocale
-            : 'en',
+          // The market only stores modern-language content; classical editions write their modern base.
+          contentLocale: (() => {
+            const language = isClassicalLocale(i18n.resolvedLanguage) ? modernLocaleOf(i18n.resolvedLanguage) : i18n.resolvedLanguage;
+            return (['zh-CN', 'zh-TW', 'en', 'ja', 'ko'] as readonly string[]).includes(language ?? '')
+              ? language as SupportedLocale
+              : 'en';
+          })(),
           tags: categorySlugs,
         },
       });
@@ -149,13 +153,13 @@ export function MarketInfoEditDialog({
     <Dialog.Root open={open && !loading} onOpenChange={(v) => { if (!saving) onOpenChange(v); }}>
       <Dialog.Portal>
         <Dialog.Overlay
-          className="modal-scrim fixed inset-0 z-[10000]"
+          className="modal-scrim fixed inset-0 z-modal"
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
           className={cn(
-            'modal-panel fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
+            'modal-panel fixed left-1/2 top-1/2 z-modal -translate-x-1/2 -translate-y-1/2',
             'w-full max-w-[480px]',
             'max-h-[85vh] overflow-y-auto',
           )}

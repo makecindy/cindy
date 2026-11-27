@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { render } from '@testing-library/react';
+import { fireEvent, render } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import { AnthropicMark } from '@/components/icons/AnthropicMark';
@@ -8,6 +8,7 @@ import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
 import { OpenAIMark } from '@/components/icons/OpenAIMark';
 import { ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
+import { XDIncMark } from '@/components/icons/XDIncMark';
 import { ModelIconMark, ProviderMark } from '@/components/new-chat/ModelSelector';
 
 function firstPath(ui: React.ReactNode): string | null {
@@ -15,6 +16,69 @@ function firstPath(ui: React.ReactNode): string | null {
 }
 
 describe('model mark semantics', () => {
+  // Unit: the picker should show server artwork and immediately restore its
+  // original mark when Chromium rejects the image or the catalog removes it.
+  it('renders the custom icon as an image and restores the original mark', () => {
+    const icon = '<svg xmlns="http://www.w3.org/2000/svg"><path d="M1 1h2v2z"/></svg>';
+    const mark = (customIcon?: string) => (
+      <ProviderMark providerId="byok-test" name="Enterprise Codex" logoKind="openai-spectrum" customIcon={customIcon} />
+    );
+    const view = render(mark(icon));
+    const image = view.container.querySelector('img')!;
+    expect(image.getAttribute('src')).toBe(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(icon)}`);
+    expect(view.container.querySelector('svg')).toBeNull();
+    fireEvent.error(image);
+    expect(view.container.querySelector('linearGradient')).toBeTruthy();
+    expect(view.container.querySelector('img')).toBeNull();
+    view.rerender(mark(icon.replace('M1', 'M2')));
+    expect(view.container.querySelector('img')).toBeTruthy();
+    view.rerender(mark());
+    expect(view.container.querySelector('linearGradient')).toBeTruthy();
+  });
+
+  // Unit: a catalog model icon must not make personal and work copies indistinguishable.
+  it('uses a connection mark in the model picker even when the model has its own brand', () => {
+    const model = (logoKind?: 'personal' | 'work' | 'mark-magpie') =>
+      firstPath(<ModelIconMark providerId="zhipu-glm-cn" icon="claude" logoKind={logoKind} />);
+    expect(model('work')).toBe(firstPath(<ProviderMark providerId="zhipu-glm-cn" logoKind="work" />));
+    expect(model('work')).not.toBe(model('personal'));
+    expect(model('mark-magpie')).toBe(firstPath(<ProviderMark providerId="magpie" />));
+    expect(model()).toBe(firstPath(<AnthropicMark />));
+  });
+
+  // Unit: two visible provider marks must own their paint servers. Removing a
+  // hidden selector must not remove the gradient referenced by the composer.
+  it('keeps spectrum marks independent when another instance is removed', () => {
+    const marks = (showFirst: boolean) => <>
+      {showFirst && <ProviderMark key="selector" providerId="byok-test" logoKind="openai-spectrum" />}
+      <ModelIconMark key="composer" providerId="byok-test" logoKind="openai-spectrum" />
+    </>;
+    const view = render(marks(true));
+    const ids = [...view.container.querySelectorAll('linearGradient')].map(node => node.id);
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(2);
+    for (const svg of view.container.querySelectorAll('svg')) {
+      expect(svg.querySelector('path[fill^="url"]')?.getAttribute('fill'))
+        .toBe(`url(#${svg.querySelector('linearGradient')?.id})`);
+    }
+    view.rerender(marks(false));
+    expect(view.container.querySelector('linearGradient')?.id).toBe(ids[1]);
+    expect(view.container.querySelector('path[fill^="url"]')?.getAttribute('fill')).toBe(`url(#${ids[1]})`);
+  });
+
+  // User decision: use the existing themeable XD glyph only for host XD membership.
+  // Unit: regression input is the same provider ID with personal vs XD presentation.
+  it('preserves the original XD glyph and theme color while other identities use Cindy', () => {
+    const xdPath = firstPath(<XDIncMark />);
+    expect(firstPath(<ProviderMark providerId="xd" logoKind="xd" />)).toBe(xdPath);
+    expect(firstPath(<ModelIconMark providerId="xd" logoKind="xd" />)).toBe(xdPath);
+    expect(firstPath(<ProviderMark providerId="xd" />)).not.toBe(xdPath);
+    expect(firstPath(<ModelIconMark providerId="xd" logoKind="xd" icon="claude" />)).toBe(firstPath(<AnthropicMark />));
+    const view = render(<ProviderMark providerId="xd" logoKind="xd" colorClass="text-white" />);
+    expect(view.container.querySelector('svg')?.classList.contains('text-white')).toBe(true);
+    expect([...view.container.querySelectorAll('path')].every(p => p.getAttribute('fill') === 'currentColor')).toBe(true);
+    expect(view.container.querySelector('img')).toBeNull();
+  });
   it('keeps the model-vendor marks monochrome and preserves the size/className API', () => {
     const anthropic = render(<AnthropicMark size={18} className="brand-mark" />);
     const anthropicSvg = anthropic.container.querySelector('svg');

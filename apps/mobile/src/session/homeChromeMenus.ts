@@ -1,3 +1,4 @@
+import { ListChecks } from "lucide-react-native";
 import type {
   ChromeActionMenuItem,
   NativePullDownAction,
@@ -10,6 +11,7 @@ import type { HomeProjectOrder } from "@/session/homeProjectOrder";
 import { canBrowseMobileHomeDevice, type MobileHomeDeviceFilterItem } from "@/session/mobileHome";
 import {
   activeContentFilterCount,
+  DEFAULT_HOME_FILTERS,
   HOME_DIALOGUE_FILTER_KEY,
   HOME_LAST_ACTIVITY_FILTERS,
   HOME_TASK_INFO_FIELDS,
@@ -134,13 +136,16 @@ export function buildHomeScopePullDownActions(
 
 /**
  * 显示菜单与桌面侧栏 SidebarFilterPopover 同结构:一级是「设置项 + 当前值」行,具体选项
- * 在子菜单里;三段依次是 分组 / 任务排序 / 项目排序,任务状态 / 筛选,显示 / 任务信息。
+ * 在子菜单里;三段依次是 分组 / 任务排序 / 项目排序,任务状态 / 筛选,显示 / 任务信息 / 伙伴。
  * 当前值放在一级行的 subtitle:Cindy 自绘菜单(安卓 / 旧 iOS 包)显示在标题下方;系统
  * UIMenu 的子菜单不显示 subtitle,选中项在子菜单内打勾。
  */
 export interface HomeDisplayMenuState {
   groupByProject: boolean;
+  groupDevice?: boolean;
+  hasDeviceGroups?: boolean;
   groupDialogue: boolean;
+  groupAutomation?: boolean;
   sortBy: HomeListSortBy;
   projectOrder: HomeProjectOrder;
   statusFilter: HomeStatusFilter;
@@ -148,8 +153,11 @@ export interface HomeDisplayMenuState {
   teammateFilter?: HomeTeammateFilter;
   vendorFilter: HomeVendorFilter;
   lastActivityFilter: HomeLastActivityFilter;
+  hideAutomations?: boolean;
+  taskListMode?: 'tasks' | 'inbox';
   viewMode: HomeListViewMode;
   taskInfoFields: readonly HomeTaskInfoField[];
+  showCollapsedTeammateAvatars?: boolean;
 }
 
 export type HomeDisplayPatch = Partial<Omit<HomeDisplayMenuState, "taskInfoFields">> & {
@@ -217,11 +225,15 @@ export function buildHomeDisplayPullDownActions(input: {
   t: Translate;
 }): NativePullDownAction[] {
   const { state, t } = input;
+  const inboxMode = state.taskListMode === 'inbox';
   const groupSummary = [
+    state.hasDeviceGroups && state.groupDevice ? t(`${MENU}.groupDevice`) : null,
     state.groupByProject ? t(`${MENU}.groupProject`) : null,
     state.groupDialogue ? t(`${MENU}.groupDialogue`) : null,
+    state.groupAutomation ? t(`${MENU}.groupAutomation`) : null,
   ].filter(Boolean).join(t(`${MENU}.summarySeparator`)) || t(`${MENU}.summaryNone`);
   const filterCount = activeContentFilterCount({
+    hideAutomations: state.hideAutomations,
     projects: state.projectFilter,
     teammates: state.teammateFilter,
     vendor: state.vendorFilter,
@@ -236,7 +248,9 @@ export function buildHomeDisplayPullDownActions(input: {
       // 「按项目分组」会增删下方「项目排序」整个子菜单,菜单结构变了 iOS 只能整份替换、
       // 打开中的菜单会退回根层,所以它选完收起;只改勾选 / 副标题 / 禁用的项才保持展开。
       checkable("group.project", t(`${MENU}.groupProject`), state.groupByProject),
+      ...(state.hasDeviceGroups ? [checkable("group.device", t(`${MENU}.groupDevice`), !!state.groupDevice, true)] : []),
       checkable("group.dialogue", t(`${MENU}.groupDialogue`), state.groupDialogue, true),
+      checkable("group.automation", t(`${MENU}.groupAutomation`), state.groupAutomation === true, true),
     ]),
     submenu("sort", t(`${MENU}.sortHeading`), t(sortLabelKey(state.sortBy)), "arrow.up.arrow.down",
       SORT_OPTIONS.map((sortBy) => ({
@@ -302,6 +316,7 @@ export function buildHomeDisplayPullDownActions(input: {
         HOME_LAST_ACTIVITY_FILTERS.map((range) =>
           checkable(`filter.lastActivity.${range}`, t(`${MENU}.filterLastActivity.${range}`),
             state.lastActivityFilter === range))),
+      checkable("filter.hideAutomations", t(`${MENU}.filterHideAutomations`), state.hideAutomations === true, true),
       section("filter.resetGroup", [{
         disabled: filterCount === 0,
         id: "filter.reset",
@@ -311,9 +326,16 @@ export function buildHomeDisplayPullDownActions(input: {
     ],
   );
 
+  const nextMode = state.taskListMode === 'inbox' ? 'tasks' : 'inbox';
   return [
-    section("organize", organize),
-    section("narrow", [
+    section("mode", [{
+      id: `taskListMode.${nextMode}`,
+      title: t(nextMode === 'inbox' ? `${MENU}.taskListMode.enterInbox` : `${MENU}.taskListMode.leaveInbox`),
+      image: "checklist",
+      icon: ListChecks,
+    }]),
+    ...(inboxMode ? [] : [section("organize", organize)]),
+    section("narrow", inboxMode ? [filter] : [
       {
         ...submenu("status", t(`${MENU}.statusHeading`), t(`${MENU}.status.${state.statusFilter}`), "checklist",
           STATUS_OPTIONS.map((status) => ({
@@ -332,6 +354,9 @@ export function buildHomeDisplayPullDownActions(input: {
       submenu("taskInfo", t(`${MENU}.taskInfoHeading`), homeTaskInfoSummary(state.taskInfoFields, t), "info.circle",
         HOME_TASK_INFO_FIELDS.map((field) =>
           checkable(`taskInfo.${field}`, t(`${MENU}.taskInfo.${field}`), state.taskInfoFields.includes(field), true))),
+      submenu("teammates", t("devices.companions.title"), "", "person.2", [
+        checkable("teammates.showCollapsedAvatars", t(`${MENU}.showCollapsedTeammateAvatars`), state.showCollapsedTeammateAvatars !== false),
+      ]),
     ]),
   ];
 }
@@ -341,9 +366,16 @@ export function homeDisplayActionPatch(
   id: string,
   state: HomeDisplayMenuState,
 ): HomeDisplayPatch | null {
+  if (id === "teammates.showCollapsedAvatars") return { showCollapsedTeammateAvatars: !(state.showCollapsedTeammateAvatars ?? true) };
+  if (id === "group.device") return { groupDevice: !state.groupDevice };
   if (id === "group.project") return { groupByProject: !state.groupByProject };
   if (id === "group.dialogue") return { groupDialogue: !state.groupDialogue };
-  if (id === "filter.reset") return { lastActivityFilter: "all", projectFilter: "all", teammateFilter: "all", vendorFilter: "all" };
+  if (id === "group.automation") return { groupAutomation: !state.groupAutomation };
+  if (id === "filter.hideAutomations") return { hideAutomations: !state.hideAutomations };
+  if (id === "filter.reset") return {
+    ...DEFAULT_HOME_FILTERS,
+    hideAutomations: false,
+  };
   if (id === "filter.teammates.none") return { teammateFilter: "none" };
   if (id === "filter.teammates.all") return { teammateFilter: "all" };
   if (id.startsWith("filter.teammate:")) {
@@ -373,6 +405,8 @@ export function homeDisplayActionPatch(
       return HOME_LAST_ACTIVITY_FILTERS.includes(value as HomeLastActivityFilter)
         ? { lastActivityFilter: value as HomeLastActivityFilter }
         : null;
+    case "taskListMode":
+      return value === 'tasks' || value === 'inbox' ? { taskListMode: value } : null;
     case "view":
       return VIEW_OPTIONS.includes(value as HomeListViewMode) ? { viewMode: value as HomeListViewMode } : null;
     case "taskInfo":

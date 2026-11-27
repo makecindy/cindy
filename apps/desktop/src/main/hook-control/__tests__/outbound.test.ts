@@ -12,6 +12,7 @@ import {
   collectOutboundAttachments,
   hasOutboundRefs,
   guessMime,
+  resolveRelativeImageRefs,
   xdtFileUrlToAbsPath,
 } from '../outbound';
 
@@ -69,8 +70,37 @@ describe('buildHookPromptNote', () => {
     expect(x).not.toContain('最后一条助手消息');
   });
 
-  it('两个平台都在开头声明「不是用户消息」,防止模型把渠道说明当成用户请求(2026-07 实踩)', () => {
-    for (const im of ['telegram', 'slack', 'x'] as const) {
+  it('官方飞书 / Lark 说明点名渠道与格式, 且不把个人飞书机器人当作当前对话的出口', () => {
+    // 回归依据: 未登记的 provider 会落到 Slack 文案, 模型被告知「本会话来自 Slack」
+    // 且「除非用户要求发到飞书」才用 cindy_feishu_bot —— 在飞书里这句话自相矛盾。
+    const feishu = buildHookPromptNote('feishu');
+    expect(feishu).toContain('本会话来自 飞书 / Lark。');
+    expect(feishu).toContain('作为 飞书 / Lark 附件发回');
+    expect(feishu).toContain('[飞书回复格式]');
+    expect(feishu).toContain('回复会自动发回当前飞书 / Lark 对话');
+    expect(feishu).toContain('那是用户另行配置的个人机器人');
+    expect(feishu).not.toContain('本会话来自 Slack');
+    expect(feishu).not.toContain('除非用户明确要求发到飞书');
+    expect(feishu).not.toContain('[Telegram 回复格式]');
+    expect(buildHookPromptNote('slack')).not.toContain('[飞书回复格式]');
+  });
+
+  it('官方 Discord 说明点名渠道与格式, 且不把个人 Discord 机器人(cindy_discord)当作当前对话的出口', () => {
+    // 回归依据: 未登记的 provider 会落到 Slack 文案(「本会话来自 Slack」), 模型会按 Slack 排版,
+    // 还可能去调用户另配的个人 Discord bot 工具回帖, 把同一结果发两遍或发到别的频道。
+    const discord = buildHookPromptNote('discord');
+    expect(discord).toContain('本会话来自 Discord。');
+    expect(discord).toContain('作为 Discord 附件发回');
+    expect(discord).toContain('[Discord 回复格式]');
+    expect(discord).toContain('回复会自动发回当前 Discord 对话');
+    expect(discord).toContain('不要用 cindy_discord 发送或读取这条对话');
+    expect(discord).not.toContain('本会话来自 Slack');
+    expect(discord).not.toContain('[Telegram 回复格式]');
+    expect(buildHookPromptNote('slack')).not.toContain('cindy_discord');
+  });
+
+  it('所有平台都在开头声明「不是用户消息」,防止模型把渠道说明当成用户请求(2026-07 实踩)', () => {
+    for (const im of ['telegram', 'slack', 'x', 'feishu', 'discord'] as const) {
       const note = buildHookPromptNote(im);
       // guard 必须在附件正文之前出现,才能在模型读到附件指令前先定性。
       expect(note).toContain('不是用户发来的消息');
@@ -395,6 +425,102 @@ describe('collectOutboundAttachments', () => {
   });
 });
 
+// 实踩(2026-11-17 官方飞书): 截图超过单图 5 MiB 上限时只提示「未能发送」, 用户不知道原因, 图也看不到。
+// 入口: collectOutboundAttachments; 可观察结果: 发出的附件字节 / 文件名 / MIME, 或正文里的提示。
+// 既有用例没有覆盖超限图片(unit, 压缩器注入, 不依赖 sharp)。
+describe('images over the per-image limit', () => {
+  const big = Buffer.alloc(5 * 1024 * 1024 + 1, 1);
+
+  it('sends a locally compressed copy instead of dropping the image', async () => {
+    const shrinkImage = vi.fn(async () => ({ buffer: Buffer.from('small'), mime: 'image/webp' }));
+    const r = await collectOutboundAttachments('![首页](xdt-image://big.png)', [], {
+      ...deps({ '/cache/big.png': big }), shrinkImage,
+    });
+    // 按引用比对: 对 5 MiB 的缓冲做深比较要好几秒。
+    const [bytes, mimeType, maxBytes] = shrinkImage.mock.calls[0]! as unknown as [Buffer, string, number];
+    expect(bytes).toBe(big);
+    expect([mimeType, maxBytes]).toEqual(['image/png', 5 * 1024 * 1024]);
+    expect(r.skipped).toBe(0);
+    expect(r.attachments).toEqual([
+      { name: 'big.webp', mimeType: 'image/webp', dataBase64: Buffer.from('small').toString('base64') },
+    ]);
+    expect(r.text).toBe('🖼️ _首页_');
+  });
+
+  it('names the image and the limit when it cannot be compressed far enough', async () => {
+    const r = await collectOutboundAttachments('![首页](xdt-image://big.png)', [], {
+      ...deps({ '/cache/big.png': big }),
+      shrinkImage: async () => null,
+      formatIncompleteNotice: (names) => `未发送：${names.join('、')}`,
+      formatOverLimitName: (name, limitMiB) => `${name}（超过 ${limitMiB} MB 上限）`,
+    });
+    expect(r.attachments).toEqual([]);
+    expect(r.text).toContain('未发送：首页（超过 5 MB 上限）');
+  });
+
+  // 评审 #11136: 回复里按本机路径引用的图片超过导入上限(20 MiB)时不会入库, 走不到压缩那一步,
+  // 提示里只有图片名。收集器自己不读没导入的本机路径, 由调用方告知是否超限。
+  it('names the import limit for a local image that was too large to import', async () => {
+    const r = await collectOutboundAttachments('![大图](/work/huge.png) ![丢了](/work/gone.png)', [], {
+      ...deps({}),
+      localImageOverLimitMiB: (absPath) => (absPath === '/work/huge.png' ? 20 : undefined),
+      formatIncompleteNotice: (names) => `未发送：${names.join('、')}`,
+      formatOverLimitName: (name, limitMiB) => `${name}（超过 ${limitMiB} MB 上限）`,
+    });
+    expect(r.attachments).toEqual([]);
+    expect(r.text).toContain('未发送：大图（超过 20 MB 上限）、丢了');
+  });
+
+  it('leaves animated formats alone and still reports them', async () => {
+    const shrinkImage = vi.fn(async () => ({ buffer: Buffer.from('small'), mime: 'image/webp' }));
+    const r = await collectOutboundAttachments('![动图](xdt-image://big.gif)', [], {
+      ...deps({ '/cache/big.gif': big }), shrinkImage,
+    });
+    expect(shrinkImage).not.toHaveBeenCalled();
+    expect(r.attachments).toEqual([]);
+    expect(r.text).toContain('动图 (over 5 MB)');
+  });
+});
+
+// 实踩(2026-11-17 官方飞书): 回复里写 `![加载态](evidence/loading-68.png)`, 图片没发出, 引用原样进了
+// 飞书卡片, 整张卡被平台拒绝, 答案没送达。入口: resolveRelativeImageRefs(正文, 工作目录); 可观察结果:
+// 哪些引用被补成工作目录内的绝对路径(之后与绝对路径的图片走同一条导入发送流程)。此前只认绝对路径(unit)。
+describe('relative image references', () => {
+  const root = path.resolve('/repo');
+  const inside = (rel: string) => path.resolve(root, rel);
+  const io = (files: string[], realpaths: Record<string, string> = {}) => ({
+    realpath: async (p: string) => {
+      const abs = path.resolve(p);
+      if (abs !== root && !files.includes(abs)) throw new Error('ENOENT');
+      return realpaths[abs] ?? abs;
+    },
+    isFile: async (p: string) => files.includes(path.resolve(p)) || Object.values(realpaths).includes(p),
+  });
+
+  it('resolves images inside the working directory, including percent-encoded names', async () => {
+    const text = '![加载态](evidence/loading-68.png) ![二](./shots/my%20shot.jpg) ![远程](https://example.com/a.png) ![绝对](/tmp/a.png)';
+    const resolved = await resolveRelativeImageRefs(text, [root], io([inside('evidence/loading-68.png'), inside('shots/my shot.jpg')]));
+    expect([...resolved]).toEqual([
+      ['evidence/loading-68.png', inside('evidence/loading-68.png')],
+      ['./shots/my%20shot.jpg', inside('shots/my shot.jpg')],
+    ]);
+  });
+
+  it('ignores missing files, non-images, code examples and anything outside the working directory', async () => {
+    const outside = path.resolve('/secret/key.png');
+    const text = [
+      '![缺失](evidence/missing.png)', '![文档](docs/readme.md)', '`![示例](evidence/loading-68.png)`',
+      '![越界](../secret/key.png)', '![链接](link.png)',
+    ].join('\n');
+    const resolved = await resolveRelativeImageRefs(text, [root], io(
+      [inside('docs/readme.md'), outside, inside('link.png')],
+      { [inside('link.png')]: outside }, // 符号链接指到工作目录之外
+    ));
+    expect([...resolved]).toEqual([]);
+    expect([...(await resolveRelativeImageRefs('![a](evidence/a.png)', [], io([inside('evidence/a.png')])))]).toEqual([]);
+  });
+});
+
 describe('辅助函数', () => {
   it('xdtFileUrlToAbsPath: Windows 盘符路径剥掉多余前导斜杠(2026-07-16 实踩:附件被判目录外静默丢弃)', () => {
     expect(xdtFileUrlToAbsPath('xdt-file:///C:\\Users\\x\\wd\\hello.txt')).toBe(
@@ -453,6 +579,62 @@ describe('X managed video delivery', () => {
     expect(Buffer.from(result.attachments[0]!.dataBase64, 'base64').equals(bytes)).toBe(true);
     expect(result.text.trim()).toBe('完成 视频');
     expect(result.skipped).toBe(0);
+  });
+
+  // 线上回归：Agent 中途导入的预览图经工具结果旁路带上，与 MP4 混发被服务端 X_MEDIA_COMBINATION 拒绝，
+  // 整条回帖连正文都没发出。相邻用例只测单个附件，未覆盖组合规则。unit，入口是出站收集器；
+  // 最小失败输入：一个正文视频 + 一张旁路图。
+  it.each([
+    ['旁路预览图让位给正文视频', '[视频](cindy-media://blobs/clip.mp4)', ['/blobs/preview.jpg'], ['clip.mp4'], []],
+    ['旁路视频不抢正文视频', '[视频](cindy-media://blobs/clip.mp4)', ['/blobs/other.mp4'], ['clip.mp4'], []],
+    ['旁路 GIF 不抢正文图片', '![封面](cindy-media://blobs/cover.jpg)', ['/blobs/a.gif'], ['cover.jpg'], []],
+    ['旁路视频不抢正文图片', '![封面](cindy-media://blobs/cover.jpg)', ['/blobs/other.mp4'], ['cover.jpg'], []],
+    ['正文图片与视频并存时点名没发出的图片', '![封面](cindy-media://blobs/cover.jpg)\n[视频](cindy-media://blobs/clip.mp4)', [], ['clip.mp4'], ['封面']],
+    ['GIF 不与图片混发', '![动图](cindy-media://blobs/a.gif)', ['/blobs/preview.jpg'], ['a.gif'], []],
+    ['第二个视频保留说明并点名', '[甲](xdt-file:///w/a.mp4) [乙](xdt-file:///w/b.mp4)', [], ['a.mp4'], ['乙']],
+    ['图片最多四张，旁路图先让位', '![1](cindy-media://blobs/1.png)![2](cindy-media://blobs/2.png)![3](cindy-media://blobs/3.png)![4](cindy-media://blobs/4.png)', ['/blobs/preview.jpg'], ['1.png', '2.png', '3.png', '4.png'], []],
+    ['第五张正文图片被点名', '![1](cindy-media://blobs/1.png)![2](cindy-media://blobs/2.png)![3](cindy-media://blobs/3.png)![4](cindy-media://blobs/4.png)![5](cindy-media://blobs/5.png)', [], ['1.png', '2.png', '3.png', '4.png'], ['5']],
+  ])('keeps a reply within X media combinations: %s', async (_name, reply, tools, sent, omitted) => {
+    const bytes = Buffer.from('media');
+    const files = Object.fromEntries(['clip.mp4', 'cover.jpg', 'a.gif', '1.png', '2.png', '3.png', '4.png', '5.png']
+      .map((name) => ['/blobs/blobs/' + name, bytes]));
+    const io = deps({ ...files, '/blobs/preview.jpg': bytes, '/blobs/a.gif': bytes, '/blobs/other.mp4': bytes, '/w/a.mp4': bytes, '/w/b.mp4': bytes }, { allowedFileRoots: ['/w'] });
+    const result = await collectOutboundAttachments(reply, tools, { ...io, provider: 'x' });
+    expect(result.attachments.map((item) => item.name)).toEqual(sent);
+    expect(result.skipped).toBe(omitted.length);
+    if (omitted.length) expect(result.text).toContain('Attachment delivery incomplete');
+    else expect(result.text).not.toContain('Attachment delivery incomplete');
+    for (const name of omitted) expect(result.text).toContain(name);
+  });
+
+  // 分块转传：视频不进内存、不受 10 MiB 限制；失败时正文照发并点名。unit，入口是出站收集器。
+  // 相邻用例都走内联。最小失败输入：一个超过内联上限的视频。
+  it('relays a video of any size without reading it', async () => {
+    const io = deps({ '/blobs/preview.jpg': Buffer.from('preview') });
+    const relayVideo = vi.fn(async () => '700');
+    const result = await collectOutboundAttachments('做好了\n\n[成片](cindy-media://blobs/clip.mp4)', ['/blobs/preview.jpg'], {
+      ...io, provider: 'x', relayVideo,
+    });
+    expect(relayVideo).toHaveBeenCalledExactlyOnceWith('/blobs/blobs/clip.mp4', 'video/mp4');
+    expect(io.readFile).toHaveBeenCalledTimes(1); // 只读了让位的预览图
+    expect(result).toMatchObject({ attachments: [], xMediaIds: ['700'], skipped: 0 });
+    expect(result.text.trim()).toBe('做好了\n\n成片');
+  });
+
+  it('keeps the caption and names the video when the relay fails', async () => {
+    const io = deps({ '/w/clip.mp4': Buffer.from('video') }, { allowedFileRoots: ['/w'] });
+    const relayVideo = vi.fn(async () => { throw Object.assign(new Error('no'), { code: 'X_MEDIA_REJECTED' }); });
+    const result = await collectOutboundAttachments('做好了 [成片](xdt-file:///w/clip.mp4)', [], { ...io, provider: 'x', relayVideo });
+    expect(result).toMatchObject({ attachments: [], xMediaIds: [], skipped: 1 });
+    expect(result.text).toContain('成片');
+    expect(result.text).toContain('Attachment delivery incomplete');
+    expect(result.text).not.toContain('xdt-file');
+  });
+
+  it('still rejects a video over the inline limit on a server without relay', async () => {
+    const io = deps({ '/blobs/blobs/clip.mp4': Buffer.alloc(10 * 1024 * 1024 + 1, 1) });
+    const result = await collectOutboundAttachments('[成片](cindy-media://blobs/clip.mp4)', [], { ...io, provider: 'x' });
+    expect(result).toMatchObject({ attachments: [], xMediaIds: [], skipped: 1 });
   });
 
   it('does not upload code examples and reports an unreadable managed video', async () => {

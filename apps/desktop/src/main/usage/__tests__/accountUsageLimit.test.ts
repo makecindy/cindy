@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  providers: [] as Array<{ id: string; auth: { native?: string } }>,
+  providers: [] as Array<{ id: string; auth: { native?: string }; subscriptionPool?: 'anthropic' | 'openai' }>,
   codex: vi.fn(),
   claude: vi.fn(),
   xai: vi.fn(),
@@ -29,6 +29,7 @@ import {
   readRemoteAccountUsageLimit,
   sessionUsesOtherMachineAccount,
   subscriptionFamilyOf,
+  subscriptionPoolAccountUsageLimit,
   xaiAccountUsageLimit,
 } from '../accountUsageLimit';
 import { CodexResetAutoUse, DEFAULT_CODEX_RESET_AUTO_USE } from '../codexResetAutoUse';
@@ -36,9 +37,50 @@ import { createCodexAccountUsageSnapshotReader } from '../codexAccountUsageRefre
 import { UsageLimitAutoResume } from '../../maker-ipc/usageLimitAutoResume';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 import type { CodexAccountUsagePayload } from '../../usageBroadcaster';
+import { readLegacySubscriptionQuota } from '../../subscription-accounts/legacyQuota';
 
 // 远程 Agent 的任务撞上限额时,本机订阅快照属于另一个账号(2026-10-09:与 SSH 同一边界)。
 describe('sessionUsesOtherMachineAccount', () => {
+  // Unit regression, PR #9295: a task reset lookup must retain its exhausted
+  // account's reset time when another account makes the provider pool usable.
+  // Existing remote tests returned a single snapshot without the real pool adapter.
+  it.each(['claude', 'codex'] as const)('keeps the exhausted task account reset time with a usable %s pool', async family => {
+    const reset = Date.now() / 1000 + 3600;
+    const now = Date.now();
+    const bucket = { limitId: 'codex', limitName: null, updatedAt: now,
+      primary: { usedPercent: 12, resetsAt: reset, windowMinutes: 300 }, secondary: null };
+    const pool = async () => ({
+      claudeUsage: { updatedAt: now, fiveHour: { utilization: 12, resetsAt: reset }, sevenDay: null, scoped: [] },
+      codexUsage: { appServerBuckets: { codex: bucket }, webSnapshot: bucket },
+    });
+    const invoke = async (_device: string, channel: string, args: unknown[]) => {
+      const projected = await readLegacySubscriptionQuota(pool, channel, args);
+      return { ok: true, result: projected === undefined
+        ? family === 'claude' ? { fiveHour: { utilization: 100, resetsAt: reset } }
+          : { primary: { usedPercent: 100, resetsAt: reset } }
+        : projected };
+    };
+    const limit = await readRemoteAccountUsageLimit({ deviceId: 'remote', family,
+      providerId: family === 'claude' ? 'anthropic' : 'openai', agentKind: family === 'claude' ? 'claude-code' : 'codex' }, invoke);
+    expect(limit).toEqual({ limited: true, resetAtMs: reset * 1000 });
+  });
+
+  it.each(['codex', 'claude-code', 'pi'])('reads the pinned native account reset time for remote %s', async agentKind => {
+    const now = Date.now();
+    const reset = now / 1000 + 3600;
+    const bucket = { limitId: 'codex', limitName: null, updatedAt: now,
+      primary: { usedPercent: 100, resetsAt: reset, windowMinutes: 300 }, secondary: null };
+    const pool = vi.fn(async () => null);
+    const session = vi.fn(async () => ({ codexUsage: { appServerBuckets: { codex: bucket }, webSnapshot: bucket } }));
+    const invoke = async (_device: string, channel: string, args: unknown[]) => ({ ok: true,
+      result: await readLegacySubscriptionQuota(pool, channel, args, session) });
+    const limit = await readRemoteAccountUsageLimit({ deviceId: 'remote', family: 'codex',
+      providerId: 'openai', agentKind, sdkSessionId: 'native-task', modelId: 'chatgpt/gpt-5.5' }, invoke);
+    expect(limit).toEqual({ limited: true, resetAtMs: reset * 1000 });
+    expect(session).toHaveBeenCalledExactlyOnceWith('openai', 'native-task');
+    expect(pool).not.toHaveBeenCalled();
+  });
+
   it('reads the executing computer and rejects an unverified named-account reply', async () => {
     const reset = Date.now() / 1000 + 86400;
     const invoke = vi.fn(async () => ({ ok: true, result: {
@@ -47,7 +89,7 @@ describe('sessionUsesOtherMachineAccount', () => {
     } }));
     const route = { deviceId: 'remote', providerId: 'anthropic', family: 'claude' as const, agentKind: 'claude-code' };
     expect(await readRemoteAccountUsageLimit(route, invoke)).toEqual({ limited: true, resetAtMs: reset * 1000 });
-    expect(invoke).toHaveBeenCalledWith('remote', 'maker:usage:claude-subscription', ['anthropic', true]);
+    expect(invoke).toHaveBeenCalledWith('remote', 'maker:usage:claude-subscription', ['anthropic', true, 'default-subscription-account']);
     expect(await readRemoteAccountUsageLimit({ ...route, providerId: 'named' }, invoke)).toBeNull();
     expect(mocks.claude).not.toHaveBeenCalled();
   });
@@ -101,7 +143,7 @@ describe('codexAccountUsageLimit', () => {
     mocks.codex.mockImplementation(async () => payload);
     let redeemed = false;
     const webReader = createCodexAccountUsageSnapshotReader({
-      readAccessToken: async () => 'token', readAccountId: async () => 'account-id',
+      readCredentials: async () => ({ accessToken: 'token', accountId: 'account-id' }),
       fetchWebUsageSnapshot: async () => ({ accountId: 'account-id', source: 'openai-web', secondary: { ...secondary, usedPercent: redeemed ? 0 : 100 } }),
       recordSnapshot: async webSnapshot => { payload = { ...payload, webSnapshot }; },
       clearSnapshot: async () => {}, readCachedSnapshot: async () => payload, now: () => now, onRefreshError: vi.fn(),
@@ -318,5 +360,92 @@ describe('subscriptionFamilyOf / readAccountUsageLimit', () => {
       resetAtMs: RESET_WEEK * 1000,
     });
     expect(mocks.xai).not.toHaveBeenCalled();
+  });
+
+  // Regression (unit): created subscription providers (`anthropic-sub-*` / `openai-sub-*`)
+  // identify their subscription family via `subscriptionPool` instead of `auth.native`.
+  // Earlier cases only tested built-ins and `auth.native`, leaving created providers unrecognized
+  // in both local/remote reset lookup and pool snapshot conversion.
+  it('recognizes created subscription providers and resolves remote/pool limits for them', async () => {
+    mocks.providers = [
+      { id: 'anthropic-sub-a1b2c3d4', auth: {}, subscriptionPool: 'anthropic' },
+      { id: 'openai-sub-12345678', auth: {}, subscriptionPool: 'openai' },
+    ];
+    expect(subscriptionFamilyOf('claude-code', 'anthropic-sub-a1b2c3d4')).toBe('claude');
+    expect(subscriptionFamilyOf('codex', 'openai-sub-12345678')).toBe('codex');
+    expect(subscriptionFamilyOf('pi', 'openai-sub-12345678')).toBe('codex');
+
+    expect(subscriptionPoolAccountUsageLimit('claude', {
+      claudeUsage: { fiveHour: { utilization: 100, resetsAt: RESET_5H }, updatedAt: Date.now() },
+    }, { agentKind: 'claude-code' })).toEqual({ limited: true, resetAtMs: RESET_5H * 1000 });
+    expect(subscriptionPoolAccountUsageLimit('codex', {
+      codexUsage: {
+        appServerBuckets: {
+          codex: {
+            limitId: 'codex',
+            limitName: null,
+            updatedAt: Date.now(),
+            primary: { usedPercent: 100, windowMinutes: 300, resetsAt: RESET_5H },
+            secondary: null,
+          },
+        },
+        webSnapshot: null,
+      },
+    }, { agentKind: 'pi', modelId: 'chatgpt/gpt-5.4' })).toEqual({ limited: true, resetAtMs: RESET_5H * 1000 });
+
+    const remoteClaude = await readRemoteAccountUsageLimit(
+      {
+        deviceId: 'host-1',
+        providerId: 'anthropic-sub-a1b2c3d4',
+        family: 'claude',
+        agentKind: 'claude-code',
+        sdkSessionId: 'sdk-created',
+      },
+      async (_deviceId, channel, args) => ({
+        ok: true,
+        result: await readLegacySubscriptionQuota(
+          async () => null,
+          channel,
+          args,
+          async () => ({ claudeUsage: { fiveHour: { utilization: 100, resetsAt: RESET_5H }, updatedAt: Date.now() } }),
+        ),
+      }),
+    );
+    expect(remoteClaude).toEqual({ limited: true, resetAtMs: RESET_5H * 1000 });
+
+    const remoteCodexFirstTurn = await readRemoteAccountUsageLimit(
+      {
+        deviceId: 'host-1',
+        providerId: 'openai-sub-12345678',
+        family: 'codex',
+        agentKind: 'pi',
+        modelId: 'chatgpt/gpt-5.4',
+        sdkSessionId: null,
+      },
+      async (_deviceId, channel, args) => ({
+        ok: true,
+        result: await readLegacySubscriptionQuota(
+          async (_provider, id) => id === 'openai-sub-12345678'
+            ? {
+                codexUsage: {
+                  appServerBuckets: {
+                    codex: {
+                      limitId: 'codex',
+                      limitName: null,
+                      updatedAt: Date.now(),
+                      primary: { usedPercent: 100, windowMinutes: 300, resetsAt: RESET_5H },
+                      secondary: null,
+                    },
+                  },
+                  webSnapshot: null,
+                },
+              }
+            : null,
+          channel,
+          args,
+        ),
+      }),
+    );
+    expect(remoteCodexFirstTurn).toEqual({ limited: true, resetAtMs: RESET_5H * 1000 });
   });
 });

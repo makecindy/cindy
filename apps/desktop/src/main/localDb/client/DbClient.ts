@@ -1,19 +1,16 @@
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
-import Database from 'better-sqlite3';
 
 import { createLogger } from '../../logger.js';
 import { ensureReady, getDrizzle, getRawDb } from '../index.js';
 import type * as schema from '../schema.js';
-import { isSqliteVecAvailable } from '../sqliteVecLoader.js';
 import { DbErrorBoundary } from './DbErrorBoundary.js';
 import type { DbTransport } from './DbTransport.js';
 import { UtilityProcessTransport } from './UtilityProcessTransport.js';
 import { WorkerThreadTransport } from './WorkerThreadTransport.js';
 import { createDrizzleProxy } from './drizzleProxy.js';
 import type { DbTxArgsByName, DbTxName, DbTxResultByName } from './tx/types.js';
-import { tx as runInprocTx } from '../worker/opHandlers/tx.js';
 import type { LocalWorktreeReference } from '../worker/worktreeReferences.js';
-import { readLocalWorktreeReferences } from '../worker/worktreeReferences.js';
+import { createDbClientForHandle } from './createDbClientForHandle.js';
 
 export interface DbClient {
   /** Optional only for legacy transports; callers must preserve on absence. */
@@ -32,6 +29,8 @@ export interface DbClient {
   tx<R = unknown>(name: string, args: unknown, transferList?: unknown[]): Promise<R>;
   drizzle: BetterSQLite3Database<typeof schema>;
   readonly vecAvailable: boolean;
+  /** Present after this instance has observed reliable SQLite corruption. */
+  readonly corruptionError?: Error | null;
   dispose(): Promise<void>;
 }
 
@@ -47,6 +46,7 @@ export interface CreateDbClientOptions {
   betterSqliteModulePath?: string;
   workerScriptPath?: string;
   useInlineWorker?: boolean;
+  onCorruption?: (error: Error) => void;
 }
 
 export async function createDbClient(opts: CreateDbClientOptions = {}): Promise<DbClient> {
@@ -55,8 +55,9 @@ export async function createDbClient(opts: CreateDbClientOptions = {}): Promise<
   }
 
   const kind = resolveTransportKind(opts.transport);
-  let transport = createTransport(kind, opts);
-  const boundary = new DbErrorBoundary();
+  const boundary = new DbErrorBoundary({ onCorruption: opts.onCorruption });
+  const transportOptions = { ...opts, onCorruption: (error: Error) => boundary.observeError(error) };
+  let transport = createTransport(kind, transportOptions);
   let disposed = false;
   let unavailableError: Error | null = null;
   const bindTransportEvents = (): void => {
@@ -70,11 +71,12 @@ export async function createDbClient(opts: CreateDbClientOptions = {}): Promise<
 
   const rebindTerminationHandler = (): void => {
     if (kind === 'utility-process') return;
+    const observedTransport = transport;
     transport.onTerminated((info) => {
-      if (disposed) return;
+      if (disposed || transport !== observedTransport) return;
       const { shouldRestart } = boundary.onWorkerTerminated(info);
       if (shouldRestart && kind === 'worker-thread') {
-        transport = createTransport(kind, opts);
+        transport = createTransport(kind, transportOptions);
         bindTransportEvents();
         rebindTerminationHandler();
       } else {
@@ -96,6 +98,7 @@ export async function createDbClient(opts: CreateDbClientOptions = {}): Promise<
     tx: (name: string, args: unknown, transferList?: unknown[]) =>
       withTransport('tx', () => transport.send('tx', { name, args }, transferList)),
     drizzle: createDrizzleProxy(() => transport) as BetterSQLite3Database<typeof schema>,
+    get corruptionError() { return boundary.failure; },
     get vecAvailable() {
       return (transport as DbTransport & { isVecAvailable?: boolean }).isVecAvailable ?? false;
     },
@@ -107,11 +110,24 @@ export async function createDbClient(opts: CreateDbClientOptions = {}): Promise<
   };
 
   async function withTransport<T>(opName: string, fn: () => Promise<T>): Promise<T> {
+    if (disposed) throw new Error('DbClient is disposed');
+    boundary.assertAvailable();
     if (unavailableError) throw unavailableError;
     return boundary.wrap(opName, fn);
   }
 
   return client;
+}
+
+/**
+ * Wrap the already-open Desktop connection. A Node host uses its own
+ * connection with `createDbClientForHandle` and never reaches into this
+ * module's singleton.
+ */
+export function createInprocDbClientAfterReady(
+  opts: Pick<CreateDbClientOptions, 'nativeBinding' | 'onCorruption'> = {},
+): DbClient {
+  return createInprocClient(opts);
 }
 
 export async function createInprocDbClient(opts: CreateDbClientOptions = {}): Promise<DbClient> {
@@ -122,26 +138,24 @@ export async function createInprocDbClient(opts: CreateDbClientOptions = {}): Pr
     }
   }
 
-  return {
-    readLocalWorktreeReferences: async () =>
-      readLocalWorktreeReferences(getRawDb(), Database, opts.nativeBinding),
-    query: async <T = unknown>(sql: string, params: unknown[] = []) =>
-      getRawDb().prepare(sql).all(...params) as T[],
-    queryOne: async <T = unknown>(sql: string, params: unknown[] = []) =>
-      getRawDb().prepare(sql).get(...params) as T | undefined,
-    exec: async (sql, params = []) => getRawDb().prepare(sql).run(...params),
-    tx: async (name: string, args: unknown) =>
-      runInprocTx(getRawDb(), { name, args }) as never,
+  return createInprocClient(opts);
+}
+
+function createInprocClient(
+  opts: Pick<CreateDbClientOptions, 'nativeBinding' | 'onCorruption'>,
+): DbClient {
+  // Lazy getters keep the legacy handle resolution (and its readiness error)
+  // identical to the previous inline implementation.
+  return createDbClientForHandle({
+    get db() {
+      return getRawDb();
+    },
     get drizzle() {
       return getDrizzle();
     },
-    get vecAvailable() {
-      return isSqliteVecAvailable();
-    },
-    dispose: async () => {
-      // The legacy in-proc handle is owned by the existing localDb lifecycle.
-    },
-  };
+    nativeBinding: opts.nativeBinding,
+    onCorruption: opts.onCorruption,
+  });
 }
 
 function resolveTransportKind(explicit?: DbTransportKind): DbTransportKind {
@@ -167,5 +181,6 @@ function createTransport(kind: DbTransportKind, opts: CreateDbClientOptions): Db
     betterSqliteModulePath: opts.betterSqliteModulePath,
     workerScriptPath: opts.workerScriptPath,
     useInlineWorker: opts.useInlineWorker,
+    onCorruption: opts.onCorruption,
   });
 }

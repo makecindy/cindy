@@ -1,6 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
+import { providerShareGuestPeer, sharedTaskGuestPeer } from '@cindy/device-link';
 import type { CatalogModel, ProviderView } from '@cindy/model-providers';
-import { applyScheduledModelSelection, assertScheduledHarnessSupported, createScheduledModelScope, createScheduledModelSelectionResolver, resolveScheduledModelSelection, ScheduledModelSelectionBusyError, type ScheduledModelSelection } from '../scheduledModelSelection';
+import {
+  applyScheduledModelSelection,
+  assertScheduledHarnessSupported,
+  createScheduledModelScope,
+  createScheduledModelSelectionResolver,
+  reconcileScheduledModelRouteBeforeBaseline,
+  resolveScheduledModelSelection,
+  resolveScheduledModelSelectionWithRefresh,
+  type ScheduledModelSelection,
+  ScheduledModelSelectionBusyError,
+} from '../scheduledModelSelection';
 
 const selection: ScheduledModelSelection = {
   agentKind: 'pi', model: 'test-model', providerId: 'custom', effort: null, fastMode: false,
@@ -52,6 +63,26 @@ describe('one-run automation model preferences', () => {
     const scope = createScheduledModelScope({ ...h.deps, write: async () => false });
     await expect(scope.restore('task')).rejects.toThrow('changed');
     expect(h.state().baseline).not.toBeNull();
+  });
+  // Unit regression: uncertainty must not invoke the recovery for a removed model
+  // and discard the owner's saved choice. Exercise real resolution through restore.
+  it.each(['owner-provider', null])('keeps the saved baseline with source %s when its catalog cannot be confirmed', async providerId => {
+    const h = scopeFixture();
+    await h.deps.apply('task', { ...h.original, providerId });
+    await h.scope.begin('task');
+    h.automate();
+    const before = h.state();
+    const recoverUnavailableBaseline = vi.fn(async () => true);
+    const scope = createScheduledModelScope({ ...h.deps, recoverUnavailableBaseline,
+      apply: async (_id, saved) => resolveScheduledModelSelection(saved, [{
+        ...provider('owner-provider'), agents: ['codex'],
+        routing: { codex: { upstream: 'https://example.test', authStrategy: 'oauth-passthrough' } },
+        subscriptionReadUnavailable: true, models: { codex: [] },
+      }]),
+    });
+    await expect(scope.restore('task')).rejects.toThrow('MODEL_CATALOG_UNCONFIRMED');
+    expect(h.state()).toEqual(before);
+    expect(recoverUnavailableBaseline).not.toHaveBeenCalled();
   });
   it.each(['same-process', 'restart'])('restores all owner settings after %s', async (mode) => {
     const h = scopeFixture();
@@ -125,6 +156,84 @@ describe('one-run automation model preferences', () => {
     // away from the automation just to capture it again.
     expect(await scope.begin('task')).toBe('scope-1');
     expect(prepareBaseline).toHaveBeenCalledTimes(1);
+  });
+  // #9642, PR #9680: unit coverage through begin/restore. Earlier preparation
+  // cases only injected errors; idle pending switches could still fail hard.
+  // Change both model and source to catch capturing the pre-switch profile.
+  it('captures and restores the applied pending route instead of the old model and source', async () => {
+    const h = scopeFixture();
+    const switched = { ...h.original, agentKind: 'pi' as const,
+      model: 'switched-owner-model', providerId: 'switched-owner-source' };
+    let pending = true;
+    let finishSwitch!: () => void;
+    const switching = new Promise<void>((resolve) => { finishSwitch = resolve; });
+    const applyPendingSwitch = vi.fn(async () => {
+      await switching;
+      await h.deps.apply('task', switched);
+      pending = false;
+      return 'applied' as const;
+    });
+    const scope = createScheduledModelScope({ ...h.deps,
+      prepareBaseline: () => reconcileScheduledModelRouteBeforeBaseline({
+        reconcile: async () => {}, hasPendingRoute: () => pending,
+        hasPendingSwitch: () => pending, isIdle: () => true, applyPendingSwitch,
+      }),
+    });
+    const beginning = scope.begin('task');
+    await vi.waitFor(() => expect(applyPendingSwitch).toHaveBeenCalledOnce());
+    expect(h.state().baseline).toBeNull();
+    finishSwitch();
+    const scopeId = await beginning;
+    expect(JSON.parse(h.state().baseline!)).toEqual({ ...switched, scopeId });
+    h.automate();
+    await scope.restore('task', scopeId);
+    expect(h.state()).toEqual({ profile: switched, baseline: null });
+  });
+  it.each([
+    { idle: false, pendingSwitch: true, label: 'busy switch' },
+    { idle: true, pendingSwitch: true, label: 'unsettled switch' },
+    { idle: true, pendingSwitch: false, label: 'pending runtime mutation' },
+  ])('defers $label without capturing the old baseline', async ({ idle, pendingSwitch }) => {
+    const h = scopeFixture();
+    const applyPendingSwitch = vi.fn(async () => 'staged' as const);
+    const scope = createScheduledModelScope({ ...h.deps,
+      prepareBaseline: () => reconcileScheduledModelRouteBeforeBaseline({
+        reconcile: async () => {}, hasPendingRoute: () => true,
+        hasPendingSwitch: () => pendingSwitch, isIdle: () => idle, applyPendingSwitch,
+      }),
+    });
+    await expect(scope.begin('task')).rejects.toBeInstanceOf(ScheduledModelSelectionBusyError);
+    expect(h.state().baseline).toBeNull();
+    expect(applyPendingSwitch).toHaveBeenCalledTimes(idle && pendingSwitch ? 1 : 0);
+  });
+  it('captures the reconciled route without reapplying a switch that already settled', async () => {
+    const h = scopeFixture();
+    const switched = { ...h.original, model: 'reconciled-model', providerId: 'reconciled-source' };
+    let pending = true;
+    const applyPendingSwitch = vi.fn(async () => 'applied' as const);
+    const scope = createScheduledModelScope({ ...h.deps,
+      prepareBaseline: () => reconcileScheduledModelRouteBeforeBaseline({
+        reconcile: async () => { await h.deps.apply('task', switched); pending = false; },
+        hasPendingRoute: () => pending, hasPendingSwitch: () => pending,
+        isIdle: () => true, applyPendingSwitch,
+      }),
+    });
+    const scopeId = await scope.begin('task');
+    expect(JSON.parse(h.state().baseline!)).toEqual({ ...switched, scopeId });
+    expect(applyPendingSwitch).not.toHaveBeenCalled();
+  });
+  it('preserves an actual switch failure instead of classifying every error as busy', async () => {
+    const h = scopeFixture();
+    const failure = new Error('route unavailable');
+    const scope = createScheduledModelScope({ ...h.deps,
+      prepareBaseline: () => reconcileScheduledModelRouteBeforeBaseline({
+        reconcile: async () => {}, hasPendingRoute: () => true,
+        hasPendingSwitch: () => true, isIdle: () => true,
+        applyPendingSwitch: async () => { throw failure; },
+      }),
+    });
+    await expect(scope.begin('task')).rejects.toBe(failure);
+    expect(h.state().baseline).toBeNull();
   });
   // #6895 unit regression: a lane outside the save's lock snapshot can see
   // Profile B after preparation applied A. Do not stamp A with B's revision.
@@ -389,6 +498,13 @@ function provider(id: string, model: Partial<CatalogModel> = {}): ProviderView {
 }
 
 describe('saved effort uses the selected provider and Harness catalog copy', () => {
+  // PR #9900, unit: upgrading a saved source adds a display-only alias marker.
+  // Previous dispatch coverage had no aliases; the original source must still resolve.
+  it('preserves an explicitly saved imported connection at dispatch', () => {
+    const imported = { ...provider('custom'), subscriptionPoolAlias: true as const };
+    expect(resolveScheduledModelSelection(selection, [provider('openai'), imported]))
+      .toMatchObject({ providerId: 'custom', model: 'test-model' });
+  });
   // Main now applies new-route admission to both local and remote restores.
   it('rejects a disabled local model during scheduled resolution', () => {
     expect(() => resolveScheduledModelSelection({ ...selection, agentDeviceId: null, effort: 'high' }, [
@@ -669,5 +785,263 @@ describe('automation restore uses the execution computer', () => {
     await expect(h.scope.restore('task')).rejects.toThrow('provider unavailable');
     expect(h.remote).not.toHaveBeenCalled();
     expect(h.state().baseline).not.toBeNull();
+  });
+});
+
+// Unit regression: a missing model in a stale subscription directory must recover
+// before automation dispatch, and uncertainty must not retire the owner's baseline.
+describe('scheduled model discovery recovery', () => {
+  const missing = (): ProviderView => ({ ...provider('custom'), subscriptionAccountPool: 'openai',
+    subscriptionReadUnavailable: true, models: { pi: [] } });
+  it.each(['custom', null])('recovers the same saved model with source %s before returning its route', async providerId => {
+    const readProviders = vi.fn().mockResolvedValueOnce([missing()]).mockResolvedValue([provider('custom')]);
+    const refreshProvider = vi.fn(async () => {});
+    expect(await resolveScheduledModelSelectionWithRefresh({ ...selection, providerId }, { readProviders, refreshProvider, assertCurrent: () => {} }))
+      .toMatchObject({ model: selection.model, providerId: selection.providerId });
+    expect(refreshProvider).toHaveBeenCalledExactlyOnceWith('custom');
+  });
+  it.each([true, false].flatMap(uncertain => ['custom', null].map(providerId => ({ uncertain, providerId }))))
+  ('classifies still missing membership with uncertain=$uncertain and source=$providerId', async ({ uncertain, providerId }) => {
+    const view: ProviderView = { ...missing(), subscriptionReadUnavailable: uncertain ? true : undefined };
+    const refreshProvider = vi.fn(async () => {});
+    await expect(resolveScheduledModelSelectionWithRefresh({ ...selection, providerId }, {
+      readProviders: async () => [view], refreshProvider, assertCurrent: () => {},
+    })).rejects.toThrow(uncertain ? 'MODEL_CATALOG_UNCONFIRMED' : 'MODEL_SELECTION_UNAVAILABLE');
+    expect(refreshProvider).toHaveBeenCalledOnce();
+  });
+  it('preserves an already resolvable implicit route and never refreshes an unrelated explicit source', async () => {
+    const views = [missing(), provider('available')];
+    const refreshProvider = vi.fn(async () => {});
+    const deps = { readProviders: async () => views, refreshProvider, assertCurrent: () => {} };
+    await expect(resolveScheduledModelSelectionWithRefresh({ ...selection, providerId: null }, deps))
+      .resolves.toMatchObject({ providerId: 'available', model: selection.model });
+    await expect(resolveScheduledModelSelectionWithRefresh({ ...selection, providerId: 'removed' }, deps))
+      .rejects.toThrow('MODEL_SELECTION_UNAVAILABLE');
+    expect(refreshProvider).not.toHaveBeenCalled();
+  });
+  it('keeps suspension authoritative and rejects an owner switch during refresh', async () => {
+    const refreshProvider = vi.fn(async () => {});
+    await expect(resolveScheduledModelSelectionWithRefresh(selection, {
+      readProviders: async () => [{ ...missing(), suspended: true }], refreshProvider, assertCurrent: () => {},
+    })).rejects.toThrow('MODEL_SELECTION_UNAVAILABLE');
+    expect(refreshProvider).not.toHaveBeenCalled();
+    let current = true;
+    await expect(resolveScheduledModelSelectionWithRefresh(selection, {
+      readProviders: async () => [missing()], refreshProvider: async () => { current = false; },
+      assertCurrent: () => { if (!current) throw new Error('owner changed'); },
+    })).rejects.toThrow('owner changed');
+  });
+});
+
+// Greptile P1 regression: a temporary switch to a plugin engine narrows permissionMode to a mode
+// that plugin supports (e.g. acceptEdits → default). The scheduled baseline must capture and
+// restore the owner's original permissionMode across both built-in and cross-plugin switches.
+describe('scheduled baseline permissionMode preservation', () => {
+  it('captures permissionMode once and restores it after temporary plugin switches narrow the row', async () => {
+    let profile: ScheduledModelSelection = {
+      agentKind: 'claude-code',
+      agentDeviceId: null,
+      model: 'claude-sonnet-4-6',
+      providerId: 'anthropic',
+      effort: 'high',
+      fastMode: false,
+      permissionMode: 'acceptEdits',
+    };
+    let baseline: string | null = null;
+    const switchHarness = vi.fn(async (route: ScheduledModelSelection) => {
+      profile = {
+        ...route,
+        permissionMode: route.agentKind === 'acp' ? 'default' : (route.permissionMode ?? profile.permissionMode),
+      };
+      return { engineReady: true };
+    });
+    const applyModel = vi.fn(async (route: ScheduledModelSelection) => {
+      profile = { ...profile, ...route };
+    });
+    const scope = createScheduledModelScope({
+      createId: () => 'scope-perm',
+      read: async () => ({ profile, baseline }),
+      write: async (_id, value) => { baseline = value ? JSON.stringify(value) : null; },
+      isBusy: () => false,
+      apply: async (_id, route) => applyScheduledModelSelection(route, {
+        getTarget: async () => ({
+          agentKind: profile.agentKind,
+          providerId: profile.providerId,
+          agentDeviceId: profile.agentDeviceId,
+          status: 'active',
+          source: 'desktop',
+        }),
+        isBusy: () => false,
+        resolveSelection: async (next) => next,
+        switchHarness,
+        applyModel,
+      }),
+    });
+
+    await scope.begin('task');
+    // Temporary switch to plugin engine narrows permissionMode to 'default'.
+    await applyScheduledModelSelection({
+      agentKind: 'acp',
+      agentDeviceId: null,
+      model: 'gemini-4',
+      providerId: 'acp-plugin:agy:agy',
+      effort: 'high',
+      fastMode: false,
+    }, {
+      getTarget: async () => ({ agentKind: profile.agentKind, providerId: profile.providerId, agentDeviceId: null, status: 'active', source: 'desktop' }),
+      isBusy: () => false,
+      resolveSelection: async (next) => next,
+      switchHarness,
+      applyModel,
+    });
+    expect(profile.permissionMode).toBe('default');
+    // A second automation reuses the original baseline without overwriting its saved permissionMode.
+    await scope.begin('task');
+    expect(JSON.parse(baseline!)).toMatchObject({ permissionMode: 'acceptEdits' });
+
+    // Restoring the original built-in engine passes permissionMode='acceptEdits' back through switchHarness.
+    await scope.restore('task');
+    expect(baseline).toBeNull();
+    expect(switchHarness).toHaveBeenLastCalledWith(expect.objectContaining({
+      agentKind: 'claude-code',
+      permissionMode: 'acceptEdits',
+    }));
+    expect(profile.permissionMode).toBe('acceptEdits');
+  });
+
+  // 2026-11-26: a bound task on a remote plugin engine (e.g. Antigravity on Mac Studio) must be
+  // able to switch temporarily to a local built-in model (PR auto-follow) and restore back to the
+  // remote plugin engine with its agentDeviceId and permissionMode intact; temporary remote
+  // unreachability must preserve the baseline for retry, while raw wire peers stay refused.
+  it('switches a remote plugin-engine task to local built-in and restores remote ACP with device and permissionMode', async () => {
+    const REMOTE_ENGINE = 'acp-plugin:antigravity:agy';
+    let profile: ScheduledModelSelection = {
+      agentKind: 'acp',
+      agentDeviceId: 'studio',
+      model: 'gemini-3-pro',
+      providerId: REMOTE_ENGINE,
+      effort: 'high',
+      fastMode: false,
+      permissionMode: 'bypassPermissions',
+    };
+    let baseline: string | null = null;
+    let studioOnline = true;
+    const resolveSelection = createScheduledModelSelectionResolver({
+      readRemoteProviders: async () => [],
+      readSshCodexProviders: async () => [],
+      resolveLocalSelection: async (route) => route,
+      resolvePluginEngineSelection: async (route) => {
+        if (route.agentDeviceId === 'studio' && !studioOnline) {
+          throw new Error('[REMOTE_AGENT_DEVICE_UNREACHABLE] studio offline');
+        }
+        return route;
+      },
+    });
+    const switchHarness = vi.fn(async (route: ScheduledModelSelection) => {
+      profile = {
+        ...route,
+        agentDeviceId: route.agentDeviceId ?? null,
+        permissionMode: route.permissionMode ?? 'default',
+      };
+      return { engineReady: true };
+    });
+    const applyModel = vi.fn(async (route: ScheduledModelSelection) => {
+      profile = { ...profile, ...route };
+    });
+    const apply = (route: ScheduledModelSelection) => applyScheduledModelSelection(route, {
+      getTarget: async () => ({
+        agentKind: profile.agentKind,
+        providerId: profile.providerId,
+        agentDeviceId: profile.agentDeviceId,
+        status: 'active',
+        source: 'desktop',
+      }),
+      isBusy: () => false,
+      resolveSelection,
+      switchHarness,
+      applyModel,
+    });
+    const recoverUnavailableBaseline = vi.fn(async () => true);
+    const scope = createScheduledModelScope({
+      createId: () => 'remote-acp-scope',
+      read: async () => ({ profile, baseline }),
+      write: async (_id, value) => { baseline = value ? JSON.stringify(value) : null; },
+      isBusy: () => false,
+      apply: async (_id, route) => apply(route),
+      recoverUnavailableBaseline,
+    });
+
+    await scope.begin('task');
+    expect(JSON.parse(baseline!)).toMatchObject({
+      agentKind: 'acp',
+      agentDeviceId: 'studio',
+      providerId: REMOTE_ENGINE,
+      permissionMode: 'bypassPermissions',
+    });
+
+    // Temporary switch to local Codex override succeeds.
+    await apply({
+      agentKind: 'codex',
+      agentDeviceId: null,
+      model: 'gpt-5.4',
+      providerId: 'openai',
+      effort: 'medium',
+      fastMode: false,
+    });
+    expect(profile).toMatchObject({ agentKind: 'codex', agentDeviceId: null, model: 'gpt-5.4' });
+
+    // If the remote computer is temporarily unreachable on restore, retain the saved baseline.
+    studioOnline = false;
+    await expect(scope.restore('task')).rejects.toThrow('REMOTE_AGENT_DEVICE_UNREACHABLE');
+    expect(baseline).not.toBeNull();
+    expect(recoverUnavailableBaseline).not.toHaveBeenCalled();
+
+    // Once reachable again, restore switches back to the remote plugin engine with its device and mode.
+    studioOnline = true;
+    await scope.restore('task');
+    expect(baseline).toBeNull();
+    expect(profile).toMatchObject({
+      agentKind: 'acp',
+      agentDeviceId: 'studio',
+      providerId: REMOTE_ENGINE,
+      model: 'gemini-3-pro',
+      permissionMode: 'bypassPermissions',
+    });
+
+    // Raw wire peers remain refused for both target and destination plugin-engine locations.
+    expect(() => assertScheduledHarnessSupported(
+      { agentKind: 'acp', status: 'active', source: 'desktop', agentDeviceId: sharedTaskGuestPeer('task-1', 'member-1', 'peer-1') },
+      'codex',
+      null,
+    )).toThrow('cannot be used for scheduled tasks');
+    expect(() => assertScheduledHarnessSupported(
+      { agentKind: 'codex', status: 'active', source: 'desktop' },
+      'acp',
+      providerShareGuestPeer('share-1', 'member-1', 'peer-2'),
+    )).toThrow('cannot be used for scheduled tasks');
+
+    // Scheduler, IM, collaboration, and teammate tasks can all switch to/from a plugin engine,
+    // while SSH targets remain refused.
+    for (const target of [
+      { agentKind: 'acp' as const, status: 'active', source: 'scheduler', providerId: REMOTE_ENGINE },
+      { agentKind: 'acp' as const, status: 'active', source: 'feishu', providerId: REMOTE_ENGINE },
+      { agentKind: 'acp' as const, status: 'active', source: 'telegram', providerId: REMOTE_ENGINE },
+      { agentKind: 'acp' as const, status: 'active', source: 'bot', providerId: REMOTE_ENGINE },
+      { agentKind: 'acp' as const, status: 'active', source: 'desktop', orcaRole: 'lead', providerId: REMOTE_ENGINE },
+    ]) {
+      expect(() => assertScheduledHarnessSupported(target, 'codex', null)).not.toThrow();
+    }
+    expect(() => assertScheduledHarnessSupported(
+      { agentKind: 'codex', status: 'active', source: 'scheduler' },
+      'acp',
+      'studio',
+      REMOTE_ENGINE,
+    )).not.toThrow();
+    expect(() => assertScheduledHarnessSupported(
+      { agentKind: 'codex', status: 'active', source: 'desktop', remoteHostId: 'ssh-box' },
+      'acp',
+      null,
+      REMOTE_ENGINE,
+    )).toThrow('SSH automation targets must keep their current Harness');
   });
 });

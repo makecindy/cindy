@@ -16,13 +16,14 @@ import {
   libraryAvailableRef,
   mintLibraryEpochIdentity,
   parseLibraryAssetRef,
+  registerLibraryQuit,
   resolveLibraryAssetPath,
   type GhostLibrarySlotDeps,
 } from '../librarySlot.js';
 import { createHash } from 'node:crypto';
 import { crc32 } from 'node:zlib';
 import { LibraryBindingStore, relocateLibraryMetaOwner } from '../libraryBinding.js';
-import { LibraryVault, type LibraryVaultDeps } from '../libraryVault.js';
+import { LibraryVault, readLibraryUsageSnapshot, type LibraryVaultDeps } from '../libraryVault.js';
 import { initCustomLibraryTree, openExistingCustomLibrary, parseExistingStdout } from '../libraryDirFd.js';
 import { createLibraryDbCore, type SqliteDatabaseConstructor } from '../libraryDbCore.js';
 import { LibrarySqlService } from '../librarySqlService.js';
@@ -138,6 +139,86 @@ describe('GhostLibrarySlot', () => {
     await fs.promises.rm(tmp, { recursive: true, force: true });
   });
 
+  it('Desktop 异步退出等待已打开的作品库收尾，不新建会话', async () => {
+    const root = path.join(defaultRootBase, GHOST_ID);
+    const register = vi.fn<(name: string, disposer: () => Promise<void>, phase: 'async') => void>();
+    registerLibraryQuit(register, () => slot);
+    const [name, dispose, phase] = register.mock.calls[0]!;
+    expect({ name, phase }).toEqual({ name: 'plugin-library', phase: 'async' });
+    expect(slot.getLiveUsageSnapshot(GHOST_ID, root)).toBeNull();
+    expect(createVault).not.toHaveBeenCalled();
+    expect(await slot.handleLibraryRequest(GHOST_ID, { op: 'write', path: 'asset.txt', content: 'abc' })).toMatchObject({ ok: true });
+    expect(slot.getLiveUsageSnapshot(GHOST_ID, root)).toEqual({ fileCount: 1, usedBytes: 3 });
+    expect(await readLibraryUsageSnapshot(root)).toBeNull();
+    await dispose();
+    expect(await readLibraryUsageSnapshot(root)).toMatchObject({ checkpoint: 'clean', files: 1, bytes: 3 });
+    expect(await slot.handleLibraryRequest(GHOST_ID, { op: 'write', path: 'late.txt', content: 'abc' })).toMatchObject({ ok: false });
+    expect(createVault).toHaveBeenCalledTimes(1);
+  });
+
+  it('文件用量重扫超限时仍可查询已有 SQLite 数据', async () => {
+    const root = path.join(defaultRootBase, GHOST_ID);
+    await fs.promises.mkdir(path.join(root, '.cindy-library'), { recursive: true });
+    const dbPath = 'library.sqlite';
+    const db = new Database(path.join(root, dbPath));
+    try {
+      db.exec("CREATE TABLE works (title TEXT); INSERT INTO works VALUES ('draft')");
+    } finally {
+      db.close();
+    }
+    const ledgerPath = path.join(root, '.cindy-library', 'usage.json');
+    const ledger = JSON.stringify({ files: 1, bytes: 8192, checkpoint: 'dirty' });
+    await fs.promises.writeFile(ledgerPath, ledger);
+    createVault.mockImplementationOnce((deps: LibraryVaultDeps) => new LibraryVault({
+      ...deps, limits: { usageScanFuse: 0 },
+    }));
+    expect(await slot.handleLibraryRequest(GHOST_ID, { op: 'open' })).toMatchObject({
+      ok: true, state: 'readonly', reason: 'usage-scan-limit',
+    });
+    expect(await slot.handleLibraryRequest(GHOST_ID, { op: 'write', path: 'blocked.txt', content: 'no' }))
+      .toMatchObject({ ok: false, errorCode: 'LIBRARY_UNAVAILABLE' });
+    expect(await slot.handleLibraryRequest(GHOST_ID, { op: 'db.open', dbPath })).toMatchObject({ ok: true });
+    expect(await slot.handleLibraryRequest(GHOST_ID, { op: 'db.check', dbPath }))
+      .toMatchObject({ ok: true, healthy: true });
+    expect(await slot.handleLibraryRequest(GHOST_ID, { op: 'db.exec', dbPath, sql: 'SELECT title FROM works' }))
+      .toMatchObject({ ok: true, rows: [{ title: 'draft' }] });
+    await slot.disposeAll();
+    expect(await fs.promises.readFile(ledgerPath, 'utf8')).toBe(ledger);
+  });
+
+  it('超限旧库正常关闭 SQLite 后仍可写，且账本计入数据库增长', async () => {
+    const root = path.join(defaultRootBase, GHOST_ID);
+    const metadata = path.join(root, '.cindy-library');
+    await fs.promises.mkdir(metadata, { recursive: true });
+    const dbPath = 'library.sqlite';
+    const filename = path.join(root, dbPath);
+    const db = new Database(filename);
+    try {
+      db.exec('CREATE TABLE works (data BLOB)');
+    } finally {
+      db.close();
+    }
+    await fs.promises.writeFile(path.join(metadata, 'usage.json'), JSON.stringify({
+      files: 1, bytes: (await fs.promises.stat(filename)).size, mutations: 1, updatedAt: 1,
+    }));
+    createVault.mockImplementation((deps: LibraryVaultDeps) => new LibraryVault({
+      ...deps, limits: { usageScanFuse: 0 },
+    }));
+    expect(await slot.handleLibraryRequest(GHOST_ID, { op: 'db.open', dbPath })).toMatchObject({ ok: true });
+    expect(await slot.handleLibraryRequest(GHOST_ID, {
+      op: 'db.exec', dbPath, sql: 'INSERT INTO works VALUES (zeroblob(16384))',
+    })).toMatchObject({ ok: true });
+    expect(await slot.handleLibraryRequest(GHOST_ID, { op: 'write', path: 'asset.txt', content: 'abc' }))
+      .toMatchObject({ ok: true });
+    await slot.disposeAll();
+    const usedBytes = (await fs.promises.stat(filename)).size + 3;
+    expect(await readLibraryUsageSnapshot(root)).toMatchObject({ checkpoint: 'clean', files: 2, bytes: usedBytes });
+    expect(await slot.handleLibraryRequest(GHOST_ID, { op: 'open' }))
+      .toMatchObject({ ok: true, state: 'ready', fileCount: 2, usedBytes });
+    expect(await slot.handleLibraryRequest(GHOST_ID, { op: 'write', path: 'asset.txt', content: 'abcd' }))
+      .toMatchObject({ ok: true });
+  });
+
   function pauseNextLibraryRootResolution() {
     let resume!: () => void;
     let entered!: () => void;
@@ -206,6 +287,15 @@ describe('GhostLibrarySlot', () => {
     expect(captureOwnerScope).not.toHaveBeenCalled();
     expect(resolveLibraryRoot).not.toHaveBeenCalled();
     ghosts.set(GHOST_ID, makeGhost(true));
+  });
+
+  // B2/B4 Host streaming must use the same owner/session epoch as public Library writes.
+  // Existing writeChunk cases do not call this entry. Minimum: owner changes between two chunks. Tier: unit.
+  it('does not publish a Host import after its owner changes', async () => {
+    async function* changed() { yield Buffer.from('a'); scopeKey = 'local:owner-b:1'; yield Buffer.from('b'); }
+    await expect(slot.importStream(GHOST_ID, { path: 'input.txt', source: changed(), assertCurrent() {} })).rejects.toThrow('Library 请求目标已变化');
+    await expect(fs.promises.stat(path.join(defaultRootBase, GHOST_ID, 'input.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await fs.promises.readdir(path.join(defaultRootBase, GHOST_ID, '.cindy-library', 'tmp'))).toEqual([]);
   });
 
   it('capabilities: 资格审后、会话创建前返回 v1 清单,首请求零副作用', async () => {
@@ -2419,7 +2509,9 @@ describe('GhostLibrarySlot', () => {
     expect(fs.existsSync(path.join(tmp, 'library-staging', GHOST_ID, 'tasks', begin.stagingId, 'blob.bin'))).toBe(true);
   });
 
-  it('staging.release 与并发 delete 互斥:核验结束前正本仍在,release 成功后再删', async () => {
+  // #7924 / 4420767919: host import must share the release lock; existing unit only
+  // covered delete. An overwrite during release must wait until the original is released.
+  it.each(['delete', 'import'] as const)('staging.release 与并发 %s 互斥', async (operation) => {
     const body = 'pixel-bytes';
     const sha = createHash('sha256').update(body).digest('hex');
     const rel = `assets/${sha.slice(0, 2)}/${sha}/blob.png`;
@@ -2463,7 +2555,10 @@ describe('GhostLibrarySlot', () => {
         libraryGeneration: archived.libraryGeneration,
       });
       await started;
-      const deleteP = slot.handleLibraryRequest(GHOST_ID, { op: 'delete', path: rel });
+      const mutation = operation === 'delete'
+        ? slot.handleLibraryRequest(GHOST_ID, { op: 'delete', path: rel })
+        : slot.importStream(GHOST_ID, { path: rel, totalBytes: 11, assertCurrent() {},
+            source: (async function* () { yield Buffer.from('replacement'); })() });
       await new Promise((resolve) => setTimeout(resolve, 30));
       expect(fs.existsSync(canonical)).toBe(true);
       resume();
@@ -2471,9 +2566,9 @@ describe('GhostLibrarySlot', () => {
       expect(released).toEqual({
         ok: true, op: 'staging.release', stagingId: begin.stagingId, released: true,
       });
-      const deleted = await deleteP;
-      expect(deleted).toMatchObject({ ok: true, op: 'delete' });
-      expect(fs.existsSync(canonical)).toBe(false);
+      expect(await mutation).toMatchObject({ ok: true });
+      if (operation === 'delete') expect(fs.existsSync(canonical)).toBe(false);
+      else expect(await fs.promises.readFile(canonical, 'utf8')).toBe('replacement');
       expect(fs.existsSync(path.join(tmp, 'library-staging', GHOST_ID, 'tasks', begin.stagingId, 'blob.bin'))).toBe(false);
     } finally {
       spy.mockRestore();

@@ -26,6 +26,11 @@ describe("project management MCP", () => {
         ],
         total: 1,
         nextOffset: null,
+        projectsRoot: {
+          path: "/home/me/Projects",
+          source: "inferred" as const,
+          exists: true,
+        },
       }));
       const rename = vi.fn(async () => ({
         ok: true as const,
@@ -37,9 +42,28 @@ describe("project management MCP", () => {
         workingDir: "/repo",
         removed: true,
       }));
+      const inspectIcon = vi.fn(async () => ({
+        ok: true as const,
+        icon: { image: null, source: "", kind: "none", candidate: false },
+      }));
+      const readInfo = vi.fn(async () => ({
+        ok: true as const,
+        project: { directories: [{ path: "/reference", access: "read" }] },
+      }));
+      const updateInfo = vi.fn(async () => ({
+        ok: true as const,
+        saved: true,
+      }));
       const server = createXdtHelperMcpServer(
         {
-          projectManagement: { list, rename, remove },
+          projectManagement: {
+            list,
+            rename,
+            remove,
+            updateInfo,
+            inspectIcon,
+            readInfo,
+          },
           resolveSurface: async () => surface,
         },
         {
@@ -64,6 +88,28 @@ describe("project management MCP", () => {
           }),
         );
       try {
+        expect(
+          await call("get_project_info", {
+            project_key: "local:/repo",
+            device: "other-computer",
+          }),
+        ).toMatchObject({
+          ok: true,
+          project: { directories: [{ path: "/reference", access: "read" }] },
+        });
+        expect(readInfo).toHaveBeenCalledWith({
+          callerSessionId: "caller",
+          device: "other-computer",
+          projectKey: "local:/repo",
+        });
+        expect(
+          await call("get_project_icon", { project_key: "local:/repo" }),
+        ).toMatchObject({ ok: true, icon: { image: null } });
+        expect(inspectIcon).toHaveBeenCalledWith({
+          callerSessionId: "caller",
+          device: undefined,
+          projectKey: "local:/repo",
+        });
         const discovery = parse(
           await client.callTool({
             name: "list_tools",
@@ -77,6 +123,9 @@ describe("project management MCP", () => {
             "list_projects",
             "rename_project",
             "remove_project",
+            "update_project_info",
+            "get_project_icon",
+            "get_project_info",
           ]),
         );
         expect(
@@ -92,6 +141,11 @@ describe("project management MCP", () => {
           ok: true,
           total: 1,
           next_offset: null,
+          projects_root: {
+            path: "/home/me/Projects",
+            source: "inferred",
+            exists: true,
+          },
           projects: [
             {
               working_dir: "/repo",
@@ -106,6 +160,16 @@ describe("project management MCP", () => {
           includeHidden: true,
           offset: 0,
           limit: 100,
+        });
+        expect(
+          await call("list_projects", { device: "other-computer", limit: 20 }),
+        ).toMatchObject({ ok: true });
+        expect(list).toHaveBeenLastCalledWith({
+          callerSessionId: "caller",
+          device: "other-computer",
+          includeHidden: true,
+          offset: 0,
+          limit: 20,
         });
         expect(
           await call("rename_project", { working_dir: "/repo", name: "" }),
@@ -136,6 +200,28 @@ describe("project management MCP", () => {
         expect(await call("list_projects", { limit: 501 })).toMatchObject({
           errorCode: "INVALID_ARGS",
         });
+        expect(
+          await call("update_project_info", {
+            device: "other-computer",
+            project_key: "local:/repo",
+            field: "icon",
+            value: "🚀",
+          }),
+        ).toMatchObject({ ok: true, saved: true });
+        expect(updateInfo).toHaveBeenCalledWith({
+          callerSessionId: "caller",
+          device: "other-computer",
+          projectKey: "local:/repo",
+          field: "icon",
+          value: "🚀",
+        });
+        expect(
+          await call("update_project_info", {
+            project_key: "local:/repo",
+            field: "icon",
+            value: null,
+          }),
+        ).toMatchObject({ ok: true, saved: true });
         remoteHostId = "ssh";
         expect(
           (
@@ -160,14 +246,16 @@ describe("project management MCP", () => {
           "list_projects",
           "rename_project",
           "remove_project",
+          "update_project_info",
         ]) {
           expect(await call(tool, {})).toMatchObject({
             errorCode: "CAPABILITY_NOT_AVAILABLE",
           });
         }
-        expect(list).toHaveBeenCalledTimes(2);
+        expect(list).toHaveBeenCalledTimes(3);
         expect(rename).toHaveBeenCalledTimes(2);
         expect(remove).toHaveBeenCalledTimes(2);
+        expect(updateInfo).toHaveBeenCalledTimes(2);
       } finally {
         await client.close();
         await server.close();

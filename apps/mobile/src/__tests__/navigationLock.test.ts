@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 const navigation = vi.hoisted(() => ({ focused: false, push: vi.fn() }));
 vi.mock('react', () => ({
+  createContext: () => ({}),
+  useContext: () => undefined,
   useCallback: (callback: unknown) => callback,
   useEffect: () => {},
   useMemo: (factory: () => unknown) => factory(),

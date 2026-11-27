@@ -29,6 +29,13 @@ it.each(['agent-request', 'delegated-continuation'] as const)('restores a verifi
   expect(restoreAutoReviewUserIntent([unverified])).toBe('');
 });
 
+it('marks partial authorization for scheduled replay and the next ordinary send', () => {
+  const page = { messages: [user('inspect')], complete: false };
+  expect(restoreAutoReviewUserIntent(page)).toMatchObject({ currentUserMessage: 'inspect', historyOmitted: true });
+  expect(restoreAutoReviewUserIntent(page, { clientId: 'next', content: 'continue' }))
+    .toMatchObject({ currentUserMessage: 'continue', historyOmitted: true });
+});
+
 describe('pasted authored text', () => {
   // #7424 / unit: production readText/resource projection must preserve exact owner authorization.
   // Existing negatives cover structured resources, not paste-only or mixed input; the minimal old
@@ -100,6 +107,7 @@ function user(text: string, clientId = text): AutoReviewHistoryMessage {
   };
 }
 const current = { clientId: 'latest', content: { text: '修吧，改完跑相关测试。' } };
+const MAX_INTENT = createAutoReviewIntentProjection().maxIntentChars;
 
 describe('steer authorization restoration', () => {
   it.each([undefined, { clientId: 'new', content: { text: 'Continue.' } },
@@ -356,7 +364,7 @@ describe('restored Auto authorization', () => {
 
   it('does not retain an approval while discarding an oversized intervening revocation', () => {
     const intent = restoreAutoReviewUserIntent(
-      [user('Send the report.'), user('x'.repeat(1000) + 'DO NOT SEND' + 'x'.repeat(1000))],
+      [user('Send the report.'), user('x'.repeat(MAX_INTENT / 2) + 'DO NOT SEND' + 'x'.repeat(MAX_INTENT / 2))],
       current,
     );
     expect(intentText(intent)).not.toContain('Send the report');

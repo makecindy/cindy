@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { MemoryRouter, RouterProvider, createMemoryRouter, useLocation } from 'react-router-dom';
 import { transferableAbortController } from 'node:util';
@@ -7,7 +7,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ChatGroupSettings } from '../ChatGroupSettings';
 import { BotSettingsDrawer } from '../BotSettingsDrawer';
 import type { BotGroupSummary } from '../../../../shared/botGroupChat';
-const mocks = vi.hoisted(() => ({ manage: vi.fn(), ownedBots: vi.fn(), refresh: vi.fn(), confirm: vi.fn() }));
+const mocks = vi.hoisted(() => ({ manage: vi.fn(), updateBotGroup: vi.fn(async () => ({ ok: true })), ownedBots: vi.fn(), refresh: vi.fn(), confirm: vi.fn(), toastSuccess: vi.fn(), toastError: vi.fn() }));
 const profiles = vi.hoisted(() => ({
   list: [{ id: 'bot', name: 'Partner', status: 'active', sessions: [] as Array<{ id: string }>, capabilities: {}, skills: [] as string[] }],
 }));
@@ -19,6 +19,7 @@ vi.mock('../botPronounContext', () => ({
   BotPronounProvider: ({ children }: { children: ReactNode }) => children,
 }));
 vi.mock('../useRemoteBots', () => ({ useRemoteBots: () => [] }));
+vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({ useDeviceLinkDeviceList: () => null }));
 vi.mock('../RemoteBotSettings', () => ({ RemoteBotSettings: () => null }));
 vi.mock('../companionCloudStore', () => ({ useCompanionCloud: () => ({ demotedBotIds: [] as string[] }) }));
 vi.mock('../BotsHomeView', () => ({
@@ -26,6 +27,8 @@ vi.mock('../BotsHomeView', () => ({
     <div data-testid="bot-settings" data-bot-id={bot.id} data-initial-page={initialPage}>{bot.name}</div>
   ),
 }));
+vi.mock('../ChatInviteDialog', () => ({ ChatInviteDialog: ({ groupId }: { groupId: string }) => <div data-testid="invite-link-dialog" data-group={groupId} /> }));
+vi.mock('@/lib/toast', () => ({ toast: { success: mocks.toastSuccess, error: mocks.toastError } }));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({ useConfirmDialog: () => ({ confirm: mocks.confirm }) }));
 vi.mock('@/components/settings/ProfileEditDialog', () => ({ ProfileEditDialog: ({ open, avatarEditor }: {
   open: boolean; avatarEditor?: { hint: string; save(avatar: { type: 'reset' }): Promise<void> };
@@ -35,29 +38,44 @@ vi.mock('../BotAvatar', () => ({ BotAvatar: () => null }));
 vi.mock('../botGroupStore', () => ({ refreshBotGroups: mocks.refresh }));
 vi.mock('@/contexts/dataOwnerGeneration', () => ({ getDataOwnerGeneration: () => 1, isDataOwnerGenerationCurrent: () => true }));
 const key = (name: string) => `bots.groupChat.server.settings.${name}`;
+const LEAVE = 'bots.groupChat.lifecycle.leave';
+/** A settings row's accessible name is its title followed by its one-line hint. */
+const row = (title: string) => screen.getByRole('button', { name: name => name.startsWith(title) });
+const queryRow = (title: string) => screen.queryByRole('button', { name: name => name.startsWith(title) });
+const field = (name: string) => screen.getByRole('textbox', { name: key(name) }) as HTMLInputElement;
+const openMenu = (trigger: HTMLElement) => fireEvent.keyDown(trigger, { key: 'Enter' });
+
+function renderAt(value: BotGroupSummary, page?: string) {
+  const entry = `/bots/groups/room?groupSettings=1${page ? `&groupSettingsPage=${encodeURIComponent(page)}` : ''}`;
+  const tree = (next: BotGroupSummary) => <MemoryRouter initialEntries={[entry]}><LocationProbe /><ChatGroupSettings group={next} /></MemoryRouter>;
+  const view = render(tree(value));
+  return { ...view, update: (next: BotGroupSummary) => view.rerender(tree(next)) };
+}
+
 it('keeps saved fields until a newer snapshot arrives and retries the read without repeating the write', async () => {
   const initial = { ...group(true), topic: 'Old topic', description: 'Old description' };
-  const { rerender } = render(<MemoryRouter><ChatGroupSettings group={initial} /></MemoryRouter>);
-  const name = screen.getByRole('textbox', { name: key('name') }) as HTMLInputElement;
-  const topic = screen.getByRole('textbox', { name: key('topic') }) as HTMLInputElement;
-  const description = screen.getByRole('textbox', { name: key('description') }) as HTMLInputElement;
-  fireEvent.change(name, { target: { value: 'Saved name' } });
-  fireEvent.change(topic, { target: { value: 'Saved topic' } });
-  fireEvent.change(description, { target: { value: 'Saved description' } });
-  fireEvent.submit(name.closest('form')!);
-  await waitFor(() => expect(mocks.refresh).toHaveBeenCalledOnce());
-  expect([name.value, topic.value, description.value]).toEqual(['Saved name', 'Saved topic', 'Saved description']);
-  expect(name.disabled).toBe(true);
+  const view = renderAt(initial, 'edit');
+  fireEvent.change(field('name'), { target: { value: 'Saved name' } });
+  fireEvent.change(field('topic'), { target: { value: 'Saved topic' } });
+  fireEvent.change(field('description'), { target: { value: 'Saved description' } });
+  fireEvent.submit(field('name').closest('form')!);
+  // Back on the main page, the saved values show while the server snapshot is on its way.
+  expect(await screen.findByText('Saved name')).toBeTruthy();
+  expect([screen.getByText('Saved topic'), screen.getByText('Saved description')]).toHaveLength(2);
+  expect(mocks.refresh).toHaveBeenCalledOnce();
+  fireEvent.click(screen.getByRole('button', { name: key('edit') }));
+  expect([field('name').value, field('topic').value, field('description').value]).toEqual(['Saved name', 'Saved topic', 'Saved description']);
+  expect(field('name').disabled).toBe(true);
   // A delayed/failed list read leaves the old projection; retry must not write with its stale CAS.
-  rerender(<MemoryRouter><ChatGroupSettings group={{ ...initial }} /></MemoryRouter>);
-  fireEvent.submit(name.closest('form')!);
+  view.update({ ...initial });
+  fireEvent.submit(field('name').closest('form')!);
   await waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(2));
   expect(mocks.manage).toHaveBeenCalledOnce();
-  expect(name.value).toBe('Saved name');
-  rerender(<MemoryRouter><ChatGroupSettings group={{ ...initial, name: 'Saved name', topic: 'Saved topic', description: 'Saved description', revision: 2 }} /></MemoryRouter>);
-  expect(name.disabled).toBe(false);
-  fireEvent.change(topic, { target: { value: 'Next draft' } });
-  fireEvent.submit(name.closest('form')!);
+  view.update({ ...initial, name: 'Saved name', topic: 'Saved topic', description: 'Saved description', revision: 2 });
+  fireEvent.click(await screen.findByRole('button', { name: key('edit') }));
+  expect(field('name').disabled).toBe(false);
+  fireEvent.change(field('topic'), { target: { value: 'Next draft' } });
+  fireEvent.submit(field('name').closest('form')!);
   await waitFor(() => expect(mocks.manage).toHaveBeenCalledTimes(2));
   expect(mocks.manage.mock.calls[1]![0].action).toMatchObject({ name: 'Saved name', topic: 'Next draft', description: 'Saved description', expectedRevision: 2 });
 });
@@ -65,49 +83,50 @@ it.each([false, true])('keeps fields paired with their revision when a remote up
   let completeSave!: (result: { ok: true }) => void;
   mocks.manage.mockImplementationOnce(() => new Promise(resolve => { completeSave = resolve; }));
   const initial = { ...group(true), topic: 'Initial topic', description: 'Initial description', replyMode: 'all' as const, speakingMode: 'auto' as const };
-  const { rerender } = render(<MemoryRouter><ChatGroupSettings group={initial} /></MemoryRouter>);
-  const name = screen.getByRole('textbox', { name: key('name') });
-  fireEvent.change(name, { target: { value: 'My saved name' } });
-  fireEvent.submit(name.closest('form')!);
+  const view = renderAt(initial, 'edit');
+  fireEvent.change(field('name'), { target: { value: 'My saved name' } });
+  fireEvent.submit(field('name').closest('form')!);
   await waitFor(() => expect(mocks.manage).toHaveBeenCalledOnce());
   const remote = { ...initial, revision: 3, name: 'Remote name', topic: 'Remote topic', description: 'Remote description', replyMode: 'mentioned' as const, speakingMode: 'sequential' as const };
-  rerender(<MemoryRouter><ChatGroupSettings group={remote} /></MemoryRouter>);
-  expect((name as HTMLInputElement).value).toBe('My saved name');
+  view.update(remote);
+  expect(field('name').value).toBe('My saved name');
   await act(async () => { completeSave({ ok: true }); });
-  expect((name as HTMLInputElement).value).toBe(remote.name);
-  expect((screen.getByRole('textbox', { name: key('topic') }) as HTMLInputElement).value).toBe(remote.topic);
-  expect((screen.getByRole('textbox', { name: key('description') }) as HTMLInputElement).value).toBe(remote.description);
-  if (editAgain) fireEvent.change(name, { target: { value: 'My next draft' } });
-  fireEvent.submit(name.closest('form')!);
+  expect(screen.getByText(remote.name)).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: key('edit') }));
+  expect([field('name').value, field('topic').value, field('description').value]).toEqual([remote.name, remote.topic, remote.description]);
+  if (editAgain) fireEvent.change(field('name'), { target: { value: 'My next draft' } });
+  fireEvent.submit(field('name').closest('form')!);
   await waitFor(() => expect(mocks.manage).toHaveBeenCalledTimes(2));
   expect(mocks.manage.mock.calls[1]![0].action).toEqual({ type: 'update', name: editAgain ? 'My next draft' : remote.name, topic: remote.topic, description: remote.description, responseMode: remote.replyMode, speakingMode: remote.speakingMode, expectedRevision: remote.revision });
 });
 // #6806: the update payload must follow refreshed data only when no draft is pending.
 it('uses the latest group revision when saving again after a successful save', async () => {
   const initial = { ...group(true), replyMode: 'mentioned' as const, speakingMode: 'sequential' as const };
-  const { rerender } = render(<MemoryRouter><ChatGroupSettings group={initial} /></MemoryRouter>);
-  fireEvent.change(screen.getByRole('textbox', { name: key('name') }), { target: { value: 'Renamed' } });
-  fireEvent.submit(screen.getByRole('textbox', { name: key('name') }).closest('form')!);
+  const view = renderAt(initial, 'edit');
+  fireEvent.change(field('name'), { target: { value: 'Renamed' } });
+  fireEvent.submit(field('name').closest('form')!);
   await waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(1));
-  rerender(<MemoryRouter><ChatGroupSettings group={{ ...initial, name: 'Renamed', revision: 2 }} /></MemoryRouter>);
-  fireEvent.submit(screen.getByRole('textbox', { name: key('name') }).closest('form')!);
+  view.update({ ...initial, name: 'Renamed', revision: 2 });
+  // Without a topic or description the 群介绍 card offers 添加 instead of 编辑.
+  fireEvent.click(await screen.findByRole('button', { name: key('add') }));
+  fireEvent.submit(field('name').closest('form')!);
   await waitFor(() => expect(mocks.manage).toHaveBeenCalledTimes(2));
   expect(mocks.manage.mock.calls[1]![0].action.expectedRevision).toBe(2);
 });
 it.each([false, true])('preserves optimistic conflict detection after a remote refresh, pending draft=%s', async dirty => {
   const initial = { ...group(true), replyMode: 'all' as const, speakingMode: 'auto' as const };
-  const { rerender } = render(<MemoryRouter><ChatGroupSettings group={initial} /></MemoryRouter>);
-  if (dirty) fireEvent.change(screen.getByRole('textbox', { name: key('name') }), { target: { value: 'My draft' } });
-  rerender(<MemoryRouter><ChatGroupSettings group={{ ...initial, name: 'Remote name', revision: 2 }} /></MemoryRouter>);
-  expect((screen.getByRole('textbox', { name: key('name') }) as HTMLInputElement).value).toBe(dirty ? 'My draft' : 'Remote name');
+  const view = renderAt(initial, 'edit');
+  if (dirty) fireEvent.change(field('name'), { target: { value: 'My draft' } });
+  view.update({ ...initial, name: 'Remote name', revision: 2 });
+  expect(field('name').value).toBe(dirty ? 'My draft' : 'Remote name');
   if (dirty) mocks.manage.mockResolvedValue({ ok: false, errorCode: 'REVISION_CONFLICT' });
-  fireEvent.submit(screen.getByRole('textbox', { name: key('name') }).closest('form')!);
+  fireEvent.submit(field('name').closest('form')!);
   await waitFor(() => expect(mocks.manage).toHaveBeenCalledOnce());
   expect(mocks.manage.mock.calls[0]![0].action).toMatchObject({ name: dirty ? 'My draft' : 'Remote name', expectedRevision: dirty ? 1 : 2 });
   if (dirty) {
     await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
-    expect((screen.getByRole('textbox', { name: key('name') }) as HTMLInputElement).value).toBe('My draft');
-    fireEvent.submit(screen.getByRole('textbox', { name: key('name') }).closest('form')!);
+    expect(field('name').value).toBe('My draft');
+    fireEvent.submit(field('name').closest('form')!);
     await waitFor(() => expect(mocks.manage).toHaveBeenCalledTimes(2));
     expect(mocks.manage.mock.calls[1]![0].action.expectedRevision).toBe(1);
   }
@@ -118,9 +137,141 @@ function group(owned = false): BotGroupSummary {
     { actorId: 'bot', botId: 'bot', actorKind: 'bot', name: 'Partner', role: 'owner', isOwned: owned, guestAccess: 'chat', accessRevision: 1 },
   ] } as BotGroupSummary;
 }
+
+// Unit regression: searching the members tab used to miss phonetic matches. Exercise the
+// displayed order when literal names, homophones and an existing department match compete.
+it('ranks member names ahead of pinyin and directory details and restores the roster on clear', () => {
+  const data = group();
+  const names = ['俞', 'Mayu', 'Yuna', 'Yu', 'Yuri', 'Other'];
+  data.members = names.map((name, index) => ({
+    ...data.members[0]!, botId: name, actorId: name, isSelf: index === 0,
+    name, displayName: name, department: name === 'Other' ? 'Yunnan' : undefined,
+  }));
+  renderAt(data);
+  fireEvent.click(screen.getByRole('tab', { name: /bots\.groupChat\.settings\.members/ }));
+  const rows = within(screen.getByTestId('chat-group-members'));
+  const visibleNames = () => rows.getAllByText(text => names.includes(text)).map(node => node.textContent);
+  fireEvent.change(field('searchMembers'), { target: { value: 'YU' } });
+  expect(visibleNames()).toEqual(['Yu', 'Yuna', 'Yuri', 'Mayu', '俞', 'Other']);
+  fireEvent.change(field('searchMembers'), { target: { value: '' } });
+  expect(visibleNames()).toEqual(names);
+});
+
+// Unit: the real management page must expose the permission only to managers;
+// invitation-menu tests previously covered read-only canInvite, not changing it.
+it.each(['owner', 'admin'] as const)('lets a %s change member invitations without changing other group rules', async role => {
+  const initial = { ...group(), supportsMemberInvites: true, allowMemberInvites: false,
+    members: group().members.map(member => member.actorId === 'me' ? { ...member, role } : member) };
+  const view = renderAt(initial, 'manage');
+  fireEvent.click(screen.getByRole('switch', { name: 'bots.groupChat.settings.allowMemberInvites' }));
+  await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: {
+    type: 'update', name: initial.name, topic: '', description: '', expectedRevision: 1, allowMemberInvites: true,
+  } }));
+  view.update({ ...initial, revision: 2, allowMemberInvites: true });
+  expect(screen.getByRole('switch', { name: 'bots.groupChat.settings.allowMemberInvites' }).getAttribute('aria-checked')).toBe('true');
+});
+
+it('hides member invitation controls from ordinary members and on older servers', () => {
+  const view = renderAt({ ...group(), supportsMemberInvites: true }, 'manage');
+  expect(screen.queryByRole('switch', { name: 'bots.groupChat.settings.allowMemberInvites' })).toBeNull();
+  view.update({ ...group(true), supportsMemberInvites: false });
+  expect(screen.queryByRole('switch', { name: 'bots.groupChat.settings.allowMemberInvites' })).toBeNull();
+});
+
+it.each(['owner', 'admin'] as const)('lets a %s toggle member @everyone permission from default off', async role => {
+  const initial = { ...group(), supportsMemberMentionAll: true, allowMemberMentionAll: false,
+    members: group().members.map(member => member.actorId === 'me' ? { ...member, role } : member) };
+  const view = renderAt(initial, 'manage');
+  const toggle = screen.getByRole('switch', { name: 'bots.groupChat.settings.allowMemberMentionAll' });
+  const section = toggle.closest('section');
+  expect(section?.textContent).toContain(key('memberPermissions'));
+  expect(section?.textContent).not.toContain(key('replies'));
+  expect(toggle.getAttribute('aria-checked')).toBe('false');
+  fireEvent.click(toggle);
+  await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: {
+    type: 'update', name: initial.name, topic: '', description: '', expectedRevision: 1, allowMemberMentionAll: true,
+  } }));
+  view.update({ ...initial, revision: 2, allowMemberMentionAll: true });
+  expect(screen.getByRole('switch', { name: 'bots.groupChat.settings.allowMemberMentionAll' }).getAttribute('aria-checked')).toBe('true');
+});
+
+it('hides @everyone permission toggle from ordinary members and on older servers', () => {
+  const view = renderAt({ ...group(), supportsMemberMentionAll: true, allowMemberMentionAll: true }, 'manage');
+  expect(screen.queryByRole('switch', { name: 'bots.groupChat.settings.allowMemberMentionAll' })).toBeNull();
+  view.update({ ...group(true), supportsMemberMentionAll: false });
+  expect(screen.queryByRole('switch', { name: 'bots.groupChat.settings.allowMemberMentionAll' })).toBeNull();
+});
 function activeProfile(id: string, name: string, status = 'active') {
   return { id, name, status, sessions: [] as Array<{ id: string }>, capabilities: {}, skills: [] as string[] };
 }
+// Component: a human member edits a personal preference, independently of the
+// manager form. Confirmed props win; failed/in-flight writes never pretend to save.
+it('lets an ordinary member move their group Cindy to a named computer', async () => {
+  const initial = { ...group(), assistantDeviceId: 'mac', assistantComputers: [{ id: 'mac', name: 'Studio' }, { id: 'win', name: 'Windows' }] };
+  const { rerender } = render(<MemoryRouter><ChatGroupSettings group={initial} /></MemoryRouter>);
+  const picker = () => screen.getByRole('combobox', { name: key('assistantComputer') });
+  expect(picker().textContent).toContain('Studio');
+  fireEvent.click(picker());
+  fireEvent.click(screen.getByRole('option', { name: 'Windows' }));
+  await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: { type: 'assistantDevice', deviceId: 'win' } }));
+  rerender(<MemoryRouter><ChatGroupSettings group={{ ...initial, assistantDeviceId: 'win' }} /></MemoryRouter>);
+  expect(picker().textContent).toContain('Windows');
+});
+
+it('lets an ordinary member choose notifications and follows the confirmed cross-device value', async () => {
+  const initial = { ...group(), supportsNotificationSettings: true, notificationMode: 'all' as const };
+  const { rerender } = render(<MemoryRouter><ChatGroupSettings group={initial} /></MemoryRouter>);
+  const label = key('notifications.title');
+  fireEvent.click(screen.getByRole('combobox', { name: label }));
+  fireEvent.click(screen.getByRole('option', { name: key('notifications.mentions') }));
+  await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: { type: 'notifications', mode: 'mentions' } }));
+  expect(mocks.refresh).toHaveBeenCalledOnce();
+  rerender(<MemoryRouter><ChatGroupSettings group={{ ...initial, notificationMode: 'mentions' }} /></MemoryRouter>);
+  expect(screen.getByRole('combobox', { name: label }).textContent).toContain(key('notifications.mentions'));
+});
+// Unit regression for #13029: the displayed group default is not a personal choice.
+it('saves the currently displayed inherited mode as an explicit preference', async () => {
+  const initial = { ...group(), supportsNotificationSettings: true, notificationMode: 'mentions' as const, notificationModeInherited: true };
+  const view = renderAt(initial);
+  const control = screen.getByRole('combobox', { name: key('notifications.title') });
+  expect(control.textContent).toContain(key('notifications.mentions'));
+  openMenu(control);
+  fireEvent.keyDown(screen.getByRole('option', { name: key('notifications.mentions') }), { key: 'Enter' });
+  await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: { type: 'notifications', mode: 'mentions' } }));
+  await waitFor(() => expect(control.hasAttribute('disabled')).toBe(false));
+  view.update({ ...initial, notificationModeInherited: false });
+  openMenu(control);
+  fireEvent.keyDown(screen.getByRole('option', { name: key('notifications.mentions') }), { key: 'Enter' });
+  expect(mocks.manage).toHaveBeenCalledTimes(1);
+});
+it('keeps the confirmed notification value during saving and after rejection', async () => {
+  let finish!: (value: { ok: false; errorCode: string }) => void;
+  mocks.manage.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  render(<MemoryRouter><ChatGroupSettings group={{ ...group(), supportsNotificationSettings: true, notificationMode: 'all' }} /></MemoryRouter>);
+  const control = screen.getByRole('combobox', { name: key('notifications.title') }) as HTMLButtonElement;
+  fireEvent.click(control);
+  fireEvent.click(screen.getByRole('option', { name: key('notifications.none') }));
+  expect(control.disabled).toBe(true);
+  expect(control.textContent).toContain(key('notifications.all'));
+  await act(async () => finish({ ok: false, errorCode: 'REQUEST_FAILED' }));
+  expect(control.disabled).toBe(false);
+  expect(control.textContent).toContain(key('notifications.all'));
+  expect(screen.getByRole('alert').textContent).toBe(key('notifications.saveFailed'));
+});
+it('hides the notification control on older servers', async () => {
+  await act(async () => { render(<MemoryRouter><ChatGroupSettings group={group()} /></MemoryRouter>); });
+  expect(screen.queryByRole('combobox', { name: key('notifications.title') })).toBeNull();
+});
+it('clears an uncertain save error when server readback confirms the choice', async () => {
+  mocks.manage.mockRejectedValueOnce(new Error('Lost acknowledgement'));
+  const initial = { ...group(), supportsNotificationSettings: true, notificationMode: 'all' as const };
+  const { rerender } = render(<MemoryRouter><ChatGroupSettings group={initial} /></MemoryRouter>);
+  fireEvent.click(screen.getByRole('combobox', { name: key('notifications.title') }));
+  fireEvent.click(screen.getByRole('option', { name: key('notifications.mentions') }));
+  await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
+  rerender(<MemoryRouter><ChatGroupSettings group={{ ...initial, notificationMode: 'mentions' }} /></MemoryRouter>);
+  expect(screen.queryByRole('alert')).toBeNull();
+});
 beforeEach(() => {
   const nativeAbortController = transferableAbortController();
   vi.stubGlobal('AbortController', nativeAbortController.constructor);
@@ -128,28 +279,30 @@ beforeEach(() => {
   profiles.list = [activeProfile('bot', 'Partner')];
   vi.clearAllMocks(); mocks.manage.mockResolvedValue({ ok: true }); mocks.ownedBots.mockResolvedValue({ ok: true, bots: [] });
   mocks.confirm.mockResolvedValue(true);
-  Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { chatServer: mocks } } });
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { chatServer: mocks, updateBotGroup: mocks.updateBotGroup } } });
 });
 function LocationProbe() {
   const location = useLocation();
   return <output data-testid="location">{`${location.pathname}${location.search}`}</output>;
 }
-function renderGroupEntry(groupValue: BotGroupSummary) {
+function renderGroupEntry(groupValue: BotGroupSummary, page: string) {
   return render(<RouterProvider router={createMemoryRouter([
     { path: '/bots/groups/:groupId', element: <><div data-testid="group-chat" /><LocationProbe /><ChatGroupSettings group={groupValue} /><BotSettingsDrawer /></> },
     { path: '/bots/list', element: <LocationProbe /> },
     { path: '/bots/:botId', element: <><LocationProbe /><BotSettingsDrawer /></> },
     { path: '*', element: <LocationProbe /> },
-  ], { initialEntries: ['/bots/groups/room?groupSettings=1'] })} />);
+  ], { initialEntries: [`/bots/groups/room?groupSettings=1&groupSettingsPage=${encodeURIComponent(page)}`] })} />);
 }
 
 it('guides a sole owner to archive instead of offering an impossible leave', async () => {
   const alone = group();
   alone.members = [{ ...alone.members[0]!, role: 'owner' }];
-  render(<MemoryRouter><ChatGroupSettings group={alone} /></MemoryRouter>);
-  expect(screen.queryByRole('button', { name: key('leave') })).toBeNull();
+  renderAt(alone);
+  expect(queryRow(LEAVE)).toBeNull();
+  expect(screen.queryByText(key('leaveBlocked'))).toBeNull();
   expect(screen.getByText(key('soleOwnerHint'))).toBeTruthy();
-  fireEvent.click(screen.getByRole('button', { name: key('archive') }));
+  fireEvent.click(row(key('manage')));
+  fireEvent.click(row(key('archive')));
   await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room',
     action: { type: 'archive', archived: true, expectedRevision: 1 },
   }));
@@ -163,10 +316,10 @@ it('keeps a sole archived owner in the group and offers restoring its history', 
   const alone = group();
   alone.archived = true;
   alone.members = [{ ...alone.members[0]!, role: 'owner' }];
-  render(<MemoryRouter><ChatGroupSettings group={alone} /></MemoryRouter>);
-  expect(screen.queryByRole('button', { name: key('leave') })).toBeNull();
+  renderAt(alone, 'manage');
+  expect(queryRow(LEAVE)).toBeNull();
   expect(screen.queryByText(key('soleOwnerHint'))).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: key('unarchive') }));
+  fireEvent.click(row(key('unarchive')));
   await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room',
     action: { type: 'archive', archived: false, expectedRevision: 1 },
   }));
@@ -175,10 +328,10 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 // The actual dialog is covered by ProfileEditDialog.avatarCrop.test.tsx.
 // Here the real group settings must supply a group destination, never account editing.
 it('edits only this member avatar and hides editing on older servers', async () => {
-  const view = render(<MemoryRouter><ChatGroupSettings group={group()} /></MemoryRouter>);
+  const view = renderAt(group(), 'profile');
   expect(screen.queryByRole('button', { name: key('editProfile') })).toBeNull();
   expect(screen.queryByRole('button', { name: key('groupAvatar') })).toBeNull();
-  view.rerender(<MemoryRouter><ChatGroupSettings group={{ ...group(), supportsMemberAvatar: true }} /></MemoryRouter>);
+  view.update({ ...group(), supportsMemberAvatar: true });
   fireEvent.click(screen.getByRole('button', { name: key('groupAvatar') }));
   fireEvent.click(screen.getByRole('button', { name: key('groupAvatarHint') }));
   await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({
@@ -186,25 +339,56 @@ it('edits only this member avatar and hides editing on older servers', async () 
   }));
   expect(mocks.refresh).toHaveBeenCalledOnce();
 });
-it('lets a member change their own nickname while keeping another owner’s grant read-only', async () => {
-  render(<MemoryRouter><ChatGroupSettings group={group()} /></MemoryRouter>);
-  expect((screen.getByRole('textbox', { name: key('name') }) as HTMLInputElement).disabled).toBe(true);
-  expect((screen.getByRole('combobox', { name: key('guestAccess') }) as HTMLButtonElement).disabled).toBe(true);
-  expect(screen.queryByRole('button', { name: key('configureCapabilities') })).toBeNull();
-  fireEvent.change(screen.getByRole('textbox', { name: key('nickname') }), { target: { value: 'Group name' } });
+// A member keeps their own profile, but group defaults and another owner's teammate are not theirs to change.
+it('lets a member change their own nickname while group management and another owner’s grant stay out of reach', async () => {
+  renderAt(group(), 'edit');
+  expect(screen.queryByRole('textbox', { name: key('name') })).toBeNull();
+  await waitFor(() => expect(screen.getByTestId('location').textContent).not.toContain('groupSettingsPage'));
+  expect(queryRow(key('manage'))).toBeNull();
+  expect(queryRow('Partner')).toBeNull();
+  fireEvent.click(screen.getByRole('tab', { name: /bots\.groupChat\.settings\.members/ }));
+  expect(screen.queryByRole('button', { name: 'Partner' })).toBeNull();
+  expect(screen.getByText(`${key('teammateTag')} · ${key('accessChat')}`)).toBeTruthy();
+  fireEvent.click(screen.getByRole('tab', { name: key('tabSettings') }));
+  fireEvent.click(row('My name'));
+  fireEvent.change(field('nickname'), { target: { value: 'Group name' } });
   fireEvent.click(screen.getByRole('button', { name: key('save') }));
   await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: { type: 'nickname', actorId: 'me', nickname: 'Group name' } }));
+  await waitFor(() => expect(screen.getByTestId('location').textContent).not.toContain('groupSettingsPage'));
 });
+// Unit: real companion page, ordinary member + owned companion. Existing tests covered grants
+// and manager removal only; this checks cancellation, failed retry, and active-request confirmation.
+it('lets an ordinary member withdraw their own companion, keeping failed removal retryable', async () => {
+  const value = group(true); value.members[1]!.role = 'member';
+  value.round = { status: 'running', speakers: [{ botId: 'bot', sessionId: 'lane', activity: 'reply' }], canContinue: false };
+  renderAt(value, 'companion:bot');
+  mocks.confirm.mockResolvedValueOnce(false);
+  fireEvent.click(row(key('removeOwn')));
+  await waitFor(() => expect(mocks.confirm).toHaveBeenCalledOnce());
+  expect(mocks.manage).not.toHaveBeenCalled();
+  mocks.manage.mockResolvedValueOnce({ ok: false, errorCode: 'REQUEST_FAILED' });
+  fireEvent.click(row(key('removeOwn')));
+  await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
+  expect(screen.getByTestId('location').textContent).toContain('companion');
+  expect(mocks.confirm).toHaveBeenLastCalledWith(expect.objectContaining({ confirmText: key('stopAndRemove'),
+    description: `${key('removeOwnHint')}:Partner\n\n${key('removeOwnActiveHint')}` }));
+  fireEvent.click(row(key('removeOwn')));
+  await waitFor(() => expect(screen.getByTestId('location').textContent).not.toContain('groupSettingsPage'));
+  expect(mocks.manage).toHaveBeenLastCalledWith({ groupId: 'room', action: { type: 'member', actorId: 'bot', action: 'remove' } });
+});
+
 it('lets a companion owner manage a group owned by their companion', async () => {
-  render(<MemoryRouter><ChatGroupSettings group={group(true)} /></MemoryRouter>);
-  expect((screen.getByRole('textbox', { name: key('name') }) as HTMLInputElement).disabled).toBe(false);
-  expect((screen.getByRole('combobox', { name: key('guestAccess') }) as HTMLButtonElement).disabled).toBe(false);
-  expect(screen.getByRole('button', { name: key('configureCapabilities') })).toBeTruthy();
-  fireEvent.click(screen.getByRole('button', { name: /My name/ }));
-  expect(screen.getByRole('button', { name: key('transfer') })).toBeTruthy();
-  fireEvent.click(screen.getByRole('button', { name: key('transfer') }));
+  const view = renderAt(group(true), 'companion:bot');
+  const radios = screen.getAllByRole('radio') as HTMLButtonElement[];
+  expect(radios.map(radio => [radio.getAttribute('aria-checked'), radio.disabled])).toEqual([['false', false], ['true', false], ['false', false]]);
+  expect(row(`${key('capabilitiesRow')}:Partner`)).toBeTruthy();
+  view.unmount();
+  renderAt(group(true));
+  expect(row(key('manage'))).toBeTruthy();
+  fireEvent.click(screen.getByRole('tab', { name: /bots\.groupChat\.settings\.members/ }));
+  openMenu(screen.getByRole('button', { name: 'My name' }));
+  fireEvent.click(await screen.findByRole('menuitem', { name: key('transfer') }));
   await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: { type: 'transfer', actorId: 'me' } }));
-  await waitFor(() => expect(mocks.ownedBots).toHaveBeenCalled());
 });
 // Unit: the real settings UI previously offered every non-owner as a recipient.
 // Human-owner rule (2026-10-28): a bot member must have no transfer action;
@@ -214,15 +398,19 @@ it('offers ownership transfer only to human members', async () => {
   value.members[0]!.role = 'owner';
   value.members[1]!.role = 'member';
   value.members.push({ ...value.members[0]!, actorId: 'peer', botId: 'peer', name: 'Peer', isSelf: false, isOwned: false, role: 'member' });
-  render(<MemoryRouter><ChatGroupSettings group={value} /></MemoryRouter>);
-  fireEvent.click(screen.getByRole('button', { name: /Partner/ }));
-  expect(screen.queryByRole('button', { name: key('transfer') })).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: /Peer/ }));
-  fireEvent.click(screen.getByRole('button', { name: key('transfer') }));
+  renderAt(value);
+  fireEvent.click(screen.getByRole('tab', { name: /bots\.groupChat\.settings\.members/ }));
+  openMenu(screen.getByRole('button', { name: 'Partner' }));
+  expect(await screen.findByRole('menuitem', { name: key('makeAdmin') })).toBeTruthy();
+  expect(screen.queryByRole('menuitem', { name: key('transfer') })).toBeNull();
+  fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+  await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+  openMenu(screen.getByRole('button', { name: 'Peer' }));
+  fireEvent.click(await screen.findByRole('menuitem', { name: key('transfer') }));
   await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: { type: 'transfer', actorId: 'peer' } }));
 });
 it('labels reply and speaking modes with the same words as the local group settings', () => {
-  render(<MemoryRouter><ChatGroupSettings group={{ ...group(true), replyMode: 'all', speakingMode: 'auto' }} /></MemoryRouter>);
+  renderAt({ ...group(true), replyMode: 'all', speakingMode: 'auto' }, 'manage');
   expect(screen.getByRole('combobox', { name: 'bots.groupChat.settings.replyMode' }).textContent).toContain('bots.groupChat.settings.replyModeAll');
   expect(screen.getByRole('combobox', { name: 'bots.groupChat.settings.speakingMode' }).textContent).toContain('bots.groupChat.settings.speakingModeAuto');
   expect(screen.queryByText(key('replyMode'))).toBeNull();
@@ -230,39 +418,95 @@ it('labels reply and speaking modes with the same words as the local group setti
 
 // bot-group-chat.md §4.0 (2026-10-23): single-speaker groups keep 「只有被 @ 的回答」 and the
 // 分工 settings (organizer, project folder); only the speaking mode no longer applies.
+// 群管理 applies a new reply mode at once with the live name and revision, not a separate save.
 it('keeps reply mode and 分工 settings for single-speaker groups and saves mention-only replies', async () => {
-  render(<MemoryRouter><ChatGroupSettings group={{ ...group(true), singleSpeaker: true, replyMode: 'all', speakingMode: 'auto' }} /></MemoryRouter>);
+  renderAt({ ...group(true), singleSpeaker: true, replyMode: 'all', speakingMode: 'auto', topic: 'Topic' }, 'manage');
   expect(screen.queryByRole('combobox', { name: 'bots.groupChat.settings.speakingMode' })).toBeNull();
-  expect(screen.getByRole('combobox', { name: 'bots.groupChat.organizer' })).toBeTruthy();
-  expect(screen.getByText('bots.groupChat.settings.projectDir')).toBeTruthy();
+  expect(screen.queryByRole('combobox', { name: 'bots.groupChat.organizer' })).toBeNull();
+  expect(screen.getByText(key('projectFolder'))).toBeTruthy();
   fireEvent.click(screen.getByRole('combobox', { name: 'bots.groupChat.settings.replyMode' }));
   fireEvent.click(screen.getByRole('option', { name: 'bots.groupChat.settings.replyModeMentioned' }));
-  fireEvent.submit(screen.getByRole('textbox', { name: key('name') }).closest('form')!);
-  await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: expect.objectContaining({
-    type: 'update', responseMode: 'mentioned', expectedRevision: 1,
-  }) }));
+  await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: {
+    type: 'update', name: 'Team', topic: 'Topic', description: '', responseMode: 'mentioned', speakingMode: 'auto', expectedRevision: 1,
+  } }));
   expect(mocks.refresh).toHaveBeenCalledOnce();
+  expect(screen.getByRole('combobox', { name: 'bots.groupChat.settings.replyMode' }).textContent).toContain('bots.groupChat.settings.replyModeMentioned');
 });
 
-it('does not offer leaving when this account owns every group owner, including its companion', async () => {
-  render(<MemoryRouter><ChatGroupSettings group={group(true)} /></MemoryRouter>);
-  expect(screen.queryByRole('button', { name: key('leave') })).toBeNull();
-  expect(screen.getByRole('button', { name: key('archive') })).toBeTruthy();
-  await waitFor(() => expect(mocks.ownedBots).toHaveBeenCalled());
+// bot-group-chat.md §7.5: the group's repository is saved with the group; a pasted URL is reduced to owner/name.
+it('saves the group repository from the project section', async () => {
+  renderAt({ ...group(true), supportsGroupProject: true, project: null }, 'manage');
+  const input = screen.getByRole('textbox', { name: key('githubRepo') });
+  fireEvent.focus(input);
+  fireEvent.change(input, { target: { value: 'https://github.com/makecindy/cindy.git' } });
+  fireEvent.blur(input);
+  await waitFor(() => expect(mocks.updateBotGroup).toHaveBeenCalledWith({ groupId: 'room', repository: 'makecindy/cindy' }));
+  // A GitLab link where the server keeps GitHub only, or no repository at all, is not saved.
+  for (const value of ['not a repo', 'https://gitlab.example.com/platform/cindy']) {
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value } });
+    fireEvent.blur(input);
+  }
+  expect(mocks.updateBotGroup).toHaveBeenCalledOnce();
+});
+
+// 2026-11-14 request: where the server keeps any git host, a GitLab (a company's own too) or CNB link
+// is saved in its plain host/path form.
+it('saves a GitLab or CNB repository link where the server keeps any git host', async () => {
+  renderAt({ ...group(true), supportsGroupProject: true, supportsGroupProjectGit: true, project: null }, 'manage');
+  const input = screen.getByRole('textbox', { name: key('repository') });
+  fireEvent.focus(input);
+  fireEvent.change(input, { target: { value: 'https://gitlab.example.com/platform/cindy.git' } });
+  fireEvent.blur(input);
+  await waitFor(() => expect(mocks.updateBotGroup).toHaveBeenCalledWith({ groupId: 'room', repository: 'gitlab.example.com/platform/cindy' }));
+  expect((input as HTMLInputElement).value).toBe('gitlab.example.com/platform/cindy');
+});
+
+// bot-group-chat.md「群里的 Cindy」(2026-11-12, replaces the 2026-11-11 「负责人回答」 layout): a server
+// with the group's own Cindy has its switch in group management, saved with the group; while it is on,
+// 「大家都可以接话」 means Cindy answers and says so. Switched off, or on an older server, the rows read as
+// before. The organizer stays under 分工 either way and never offers the group's Cindy.
+const SHARED = 'bots.groupChat.settings.';
+const sectionOf = (element: HTMLElement) => element.closest('section')!.querySelector('h2, h3')!.textContent;
+it.each([
+  ['an older server', undefined, `${SHARED}replyModeAll`, `${SHARED}replyModeNote`],
+  ['the group Cindy on', true, key('replyModeAssistant'), key('replyModeAssistantNote')],
+  ['the group Cindy off', false, `${SHARED}replyModeAll`, `${SHARED}replyModeNote`],
+] as const)('describes who answers unaddressed messages on %s', async (_case, enabled, allLabel, replyHint) => {
+  const cindy = { actorId: 'cindy', botId: 'cindy', actorKind: 'bot' as const, assistant: true, name: 'Cindy', avatar: '', avatarColor: 'violet', status: 'active' as const, role: 'member' as const };
+  const members = group(true).members.map(member => ({ ...member, status: 'active' as const }));
+  renderAt({ ...group(true), singleSpeaker: true, supportsGroupProject: true, project: { kind: 'github', repo: 'makecindy/cindy' },
+    replyMode: 'all', autoContinue: false, organizerBotId: 'bot',
+    members: enabled === undefined ? members : [...members, cindy], ...(enabled === undefined ? {} : { supportsGroupAssistant: true, assistantEnabled: enabled }) }, 'manage');
+  expect(screen.getByText(replyHint)).toBeTruthy();
+  fireEvent.click(screen.getByRole('combobox', { name: `${SHARED}replyMode` }));
+  expect(screen.getByRole('option', { name: allLabel })).toBeTruthy();
+  const toggle = screen.queryByTestId('bot-group-assistant');
+  if (enabled === undefined) { expect(toggle).toBeNull(); return; }
+  fireEvent.keyDown(screen.getAllByRole('option')[0]!, { key: 'Escape' });
+  fireEvent.click(toggle!);
+  await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: expect.objectContaining({ type: 'update', assistant: !enabled, expectedRevision: 1 }) }));
+});
+
+it('does not offer leaving when this account owns every group owner, including its companion', () => {
+  renderAt(group(true));
+  expect(queryRow(LEAVE)).toBeNull();
+  expect(screen.getByText(key('leaveBlocked'))).toBeTruthy();
+  expect(row(key('manage'))).toBeTruthy();
 });
 
 it('uses the existing member leave action without changing the group archive state', async () => {
-  render(<MemoryRouter><ChatGroupSettings group={group()} /></MemoryRouter>);
-  fireEvent.click(screen.getByRole('button', { name: key('leave') }));
+  renderAt(group());
+  fireEvent.click(row(LEAVE));
   await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: { type: 'member', actorId: 'me', action: 'leave' } }));
-  expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ presentation: 'standard', description: key('leaveHint'), confirmVariant: 'destructive' }));
+  expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ description: key('leaveHint'), confirmVariant: 'destructive' }));
   expect(mocks.refresh).toHaveBeenCalledOnce();
 });
 
 it('keeps membership untouched when the leave confirmation is cancelled', async () => {
   mocks.confirm.mockResolvedValue(false);
-  render(<MemoryRouter><ChatGroupSettings group={group()} /></MemoryRouter>);
-  fireEvent.click(screen.getByRole('button', { name: key('leave') }));
+  renderAt(group());
+  fireEvent.click(row(LEAVE));
   await waitFor(() => expect(mocks.confirm).toHaveBeenCalledOnce());
   expect(mocks.manage).not.toHaveBeenCalled();
   expect(mocks.refresh).not.toHaveBeenCalled();
@@ -270,35 +514,65 @@ it('keeps membership untouched when the leave confirmation is cancelled', async 
 
 it('keeps the group visible and reports a server rejection of leaving', async () => {
   mocks.manage.mockResolvedValue({ ok: false, errorCode: 'LAST_OWNER' });
-  render(<MemoryRouter><ChatGroupSettings group={group()} /></MemoryRouter>);
-  fireEvent.click(screen.getByRole('button', { name: key('leave') }));
+  renderAt(group());
+  fireEvent.click(row(LEAVE));
   await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
-  expect(screen.getByRole('button', { name: key('leave') })).toBeTruthy();
+  expect(row(LEAVE)).toBeTruthy();
   expect(mocks.refresh).not.toHaveBeenCalled();
 });
 
 it('confirms irreversible dissolution separately from archive and refreshes after success', async () => {
-  render(<MemoryRouter><ChatGroupSettings group={{ ...group(true), supportsDissolve: true, supportsListRemoval: true }} /></MemoryRouter>);
-  fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.lifecycle.dissolve' }));
+  renderAt({ ...group(true), supportsDissolve: true, supportsListRemoval: true }, 'manage');
+  fireEvent.click(row('bots.groupChat.lifecycle.dissolve'));
   await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: { type: 'dissolve', expectedRevision: 1 } }));
   expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ description: 'bots.groupChat.lifecycle.dissolveNote', confirmVariant: 'destructive' }));
 });
 it('disables unsupported lifecycle actions and terminal edits without offering unarchive', async () => {
-  const rendered = render(<MemoryRouter><ChatGroupSettings group={group(true)} /></MemoryRouter>);
-  expect((screen.getByRole('button', { name: 'bots.groupChat.lifecycle.dissolve' }) as HTMLButtonElement).disabled).toBe(true);
-  expect((screen.getByRole('button', { name: 'bots.groupChat.lifecycle.hide' }) as HTMLButtonElement).disabled).toBe(true);
-  rendered.rerender(<MemoryRouter><ChatGroupSettings group={{ ...group(true), archived: true, dissolvedAt: '2026-10-15', supportsListRemoval: true }} /></MemoryRouter>);
-  expect(screen.queryByRole('button', { name: key('unarchive') })).toBeNull();
-  expect((screen.getByRole('textbox', { name: key('nickname') }) as HTMLInputElement).disabled).toBe(true);
-  expect((screen.getByRole('button', { name: 'bots.groupChat.lifecycle.hide' }) as HTMLButtonElement).disabled).toBe(false);
-  await waitFor(() => expect(mocks.ownedBots).toHaveBeenCalled());
+  const view = renderAt(group(true), 'manage');
+  expect((row('bots.groupChat.lifecycle.dissolve') as HTMLButtonElement).disabled).toBe(true);
+  view.unmount();
+  const settled = renderAt(group(true));
+  expect((row('bots.groupChat.lifecycle.hide') as HTMLButtonElement).disabled).toBe(true);
+  settled.update({ ...group(true), archived: true, dissolvedAt: '2026-10-15', supportsListRemoval: true });
+  expect(queryRow(key('manage'))).toBeNull();
+  expect(queryRow(key('unarchive'))).toBeNull();
+  expect(queryRow('My name')).toBeNull();
+  expect((row('bots.groupChat.lifecycle.hide') as HTMLButtonElement).disabled).toBe(false);
 });
 it('does not refresh or remove the list on failed personal removal', async () => {
   mocks.manage.mockResolvedValue({ ok: false, errorCode: 'REVISION_CONFLICT' });
-  render(<MemoryRouter><ChatGroupSettings group={{ ...group(), supportsListRemoval: true }} /></MemoryRouter>);
-  fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.lifecycle.hide' }));
+  renderAt({ ...group(), supportsListRemoval: true });
+  fireEvent.click(row('bots.groupChat.lifecycle.hide'));
   await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
   expect(mocks.refresh).not.toHaveBeenCalled();
+});
+
+// 测试价值
+// - 生产入口与可观察结果：群设置首页的「邀请」下拉（与群头同一个组件）。成员看到同样两项；
+//   「邀请朋友」在没有 canInvite 时灰色并写明原因，「邀请伙伴」列出还没进群的自己的伙伴，
+//   点一下用服务端 invite 动作加入并提示。
+// - Bug／规则依据：2026-10-30 群设置重设计定稿——每个群一个通用、人人一样的邀请入口；
+//   旧版只有群主/管理员在群头看到链接按钮，成员带伙伴进群藏在成员列表底部的下拉里。
+// - 现有覆盖缺口：此前没有用例覆盖成员视角的邀请入口与带伙伴进群。
+// - 最小失败输入：普通成员，账号有一位已在群里的伙伴和一位不在群里的伙伴。
+// - tier：unit。真实组件加 Radix 菜单与虚拟列表，不启动 Electron。
+it('gives every member the same invite menu: a friends link only with permission, own teammates one click away', async () => {
+  mocks.ownedBots.mockResolvedValue({ ok: true, bots: [{ actorId: 'bot', botId: 'bot', name: 'Partner' }, { actorId: 'spare', botId: 'spare', name: 'Spare' }] });
+  const height = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+    return this.dataset.testid === 'chat-group-invite-bots' ? 296 : 0;
+  });
+  try {
+    renderAt({ ...group(true), members: [{ ...group().members[0]! }, { ...group(true).members[1]!, role: 'member' }] });
+    openMenu(screen.getByTestId('chat-group-invite'));
+    const friends = await screen.findByRole('menuitem', { name: name => name.startsWith(key('inviteFriendsItem')) });
+    expect([friends.getAttribute('aria-disabled'), friends.textContent?.includes(key('inviteFriendsLocked'))]).toEqual(['true', true]);
+    fireEvent.click(screen.getByRole('menuitem', { name: name => name.startsWith(key('inviteBotsItem')) }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Spare' }));
+    await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: { type: 'member', actorId: 'spare', action: 'invite' } }));
+    expect(mocks.toastSuccess).toHaveBeenCalledWith(`${key('inviteBotsAdded')}:Spare`);
+    expect(mocks.refresh).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('menuitem', { name: 'Partner' })).toBeNull();
+  } finally { height.mockRestore(); }
 });
 
 // 测试价值
@@ -306,7 +580,7 @@ it('does not refresh or remove the list on failed personal removal', async () =>
 //   打开后应看到所选伙伴的能力页，路由仍是原群；关闭后群聊页还在。
 // - Bug／规则依据：#6809。修前该按钮会进入 /bots/<id> 私聊，关闭只去掉设置参数。
 // - 现有覆盖缺口：本组用例只断言按钮是否出现；抽屉用例只覆盖私聊路由上的开关。
-// - 最小失败输入：群里两位已拥有且在本机名单中的伙伴，从 /bots/groups/room?groupSettings=1 打开后者。
+// - 最小失败输入：群里两位已拥有且在本机名单中的伙伴，从后者在本群的权限页打开。
 // - tier：unit。真实组件加 React Router，不启动 Electron。
 it('keeps the original group mounted when opening and closing another owned companion’s capability settings', async () => {
   profiles.list = [activeProfile('bot', 'Partner'), activeProfile('other', 'Other')];
@@ -315,10 +589,8 @@ it('keeps the original group mounted when opening and closing another owned comp
     actorId: 'other', botId: 'other', actorKind: 'bot', name: 'Other', role: 'member', isOwned: true, guestAccess: 'chat', accessRevision: 1,
     avatar: 'bot', avatarColor: 'blue', status: 'active',
   }];
-  renderGroupEntry(room);
-  const buttons = screen.getAllByRole('button', { name: key('configureCapabilities') });
-  expect(buttons).toHaveLength(2);
-  fireEvent.click(buttons[1]!);
+  renderGroupEntry(room, 'companion:other');
+  fireEvent.click(row(`${key('capabilitiesRow')}:Other`));
   const opened = screen.getByTestId('location').textContent ?? '';
   const settings = screen.queryByTestId('bot-settings');
   const dialog = screen.queryByRole('dialog');
@@ -343,8 +615,8 @@ it('keeps the original group mounted when opening and closing another owned comp
 
 it('returns a paused companion’s capability settings to the original group instead of the teammate list', async () => {
   profiles.list = [activeProfile('bot', 'Partner', 'paused')];
-  renderGroupEntry(group(true));
-  fireEvent.click(screen.getByRole('button', { name: key('configureCapabilities') }));
+  renderGroupEntry(group(true), 'companion:bot');
+  fireEvent.click(row(`${key('capabilitiesRow')}:Partner`));
   fireEvent.click(screen.getByRole('button', { name: 'bots.close' }));
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   expect(screen.getByTestId('location').textContent).toBe('/bots/groups/room');

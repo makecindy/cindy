@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
-import { Check, PenLine, Search } from 'lucide-react';
+import { Check, PenLine } from 'lucide-react';
 
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { Button } from '@/components/ui/button';
+import { SearchInput } from '@/components/ui/search-input';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Input, Textarea } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
@@ -11,15 +12,16 @@ import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
 import { extractIpcError } from '@/utils/ipcError';
 import {
-  BOT_MEMORY_BODY_MAX_BYTES,
   BOT_MEMORY_CHANGED,
   BOT_MEMORY_TITLE_MAX,
   BOT_MEMORY_TYPES,
+  BOT_PROJECT_MEMORY_BODY_MAX_BYTES,
   type BotMemoryDetail,
   type BotMemorySummary,
 } from '../../../shared/botMemory';
 import { useBotTranslation } from './botPronounContext';
 import { useBotSettingsTarget } from './useBotSettingsTarget';
+import { BotProfileSourceField } from './BotProfileSourceField';
 
 const SEARCH_DEBOUNCE_MS = 200;
 const SAVE_DEBOUNCE_MS = 800;
@@ -47,7 +49,7 @@ const isConflict = (error: unknown) => {
 };
 const normalizeTitle = (title: string) => title.replace(/\s+/g, ' ').trim();
 const bodyTooLong = (body: string) =>
-  new TextEncoder().encode(body.trim()).length > BOT_MEMORY_BODY_MAX_BYTES;
+  new TextEncoder().encode(body.trim()).length > BOT_PROJECT_MEMORY_BODY_MAX_BYTES;
 
 function useDateLabels() {
   const { t, i18n } = useBotTranslation();
@@ -236,7 +238,8 @@ function MemoryList({
         <h3 className="px-1 pb-2 text-12 font-medium text-[var(--text-secondary)]">
           {t('bots.memory.aboutMe')}
         </h3>
-        <Textarea
+        <BotProfileSourceField
+          label={t('bots.memory.aboutMe')}
           aria-label={t('bots.memory.aboutMe')}
           readOnly={aboutMe.readOnly}
           value={aboutMe.value}
@@ -244,7 +247,7 @@ function MemoryList({
           onBlur={aboutMe.onBlur}
           {...aboutMe.composition}
           rows={4}
-          className="min-h-24 resize-none p-3 leading-6 [field-sizing:content]"
+          className="min-h-24 max-h-96 resize-none overflow-y-auto p-3 leading-6 [field-sizing:content]"
         />
       </section>
       {failed ? (
@@ -267,21 +270,12 @@ function MemoryList({
         </p>
       ) : (
         <div className={cn('flex flex-col gap-4', !memoryEnabled && 'opacity-60')}>
-          <div className="relative">
-            <Search
-              size={14}
-              aria-hidden="true"
-              className="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 text-[var(--text-tertiary)]"
-            />
-            <Input
-              size="md"
-              value={query}
-              onChange={setQuery}
-              ariaLabel={t('bots.memory.search')}
-              placeholder={t('bots.memory.search')}
-              inputClassName="pl-8"
-            />
-          </div>
+          <SearchInput
+            value={query}
+            onChange={setQuery}
+            ariaLabel={t('bots.memory.search')}
+            placeholder={t('bots.memory.search')}
+          />
           {groups.length ? (
             groups.map((group) => (
               <section key={group.type} aria-label={t(`bots.memory.types.${group.type}`)}>
@@ -376,7 +370,6 @@ function MemoryDetail({
   const remove = async () => {
     if (!detail || busy) return;
     const ok = await confirm({
-      presentation: 'standard',
       title: t('bots.memory.deleteTitle'),
       description: t('bots.memory.deleteDescription', { name: botName, title: detail.title }),
       confirmText: t('bots.memory.delete'),
@@ -450,7 +443,7 @@ function MemoryDetail({
         <span className="flex-1" />
         <Button
           variant="secondary"
-          tone="quiet"
+          tone="danger"
           size="md"
           onClick={() => void remove()}
           loading={busy}
@@ -564,7 +557,6 @@ function MemoryEditor({
   const settle = useCallback(async (): Promise<boolean> => {
     if (await save()) return true;
     return confirm({
-      presentation: 'standard',
       title: t('bots.memory.unsavedTitle'),
       description: t('bots.memory.unsavedDescription'),
       confirmText: t('bots.memory.discard'),

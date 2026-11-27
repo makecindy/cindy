@@ -29,12 +29,12 @@ import { createPiKernelManager, type PiKernelManager } from './pi-kernel-manager
  */
 
 import path from 'node:path';
-import fs from 'node:fs';
 import { app, BrowserWindow } from 'electron';
 
 import { createBinaryProvisioner } from './factory.js';
 import { isBinaryVersionNotOlder, normalizeBinaryVersion, probeBinaryVersion } from './binary-version-probe.js';
 import { findDevBinary } from './dev-fallback.js';
+import { readCachedBinaryStatus } from './binaryStatus.js';
 import {
   findCachedLinuxRuntimeFallbackBinary,
   findUsableLinuxRuntimeFallbackBinary,
@@ -48,6 +48,7 @@ import {
   type Manifest,
 } from '../manifestService.js';
 import { ProgressNormalizer } from '../updateProgressNormalizer.js';
+import { createDownloadProgressReporter } from '../downloader/progressReporter.js';
 import { createLogger } from '../logger.js';
 import { consumeStartupBinaryUpdateMarker, type StartupBinaryUpdateScope } from './startup-update.js';
 import { clearPreparedBinaryDownloads, hasPreparedBinaryDownload } from './download-cache.js';
@@ -156,6 +157,7 @@ function linuxCdnBudgetForSignal(sharedSignal: AbortSignal | undefined): number 
 
 const log = createLogger('agent-binaries');
 
+import type { DownloadProgress } from '../../shared/downloadProgress.js';
 import type {
   BinaryProvisioner,
   BinaryDownloadProgressPayload,
@@ -315,52 +317,29 @@ function formatBytes(bytes: number): string {
 export function getCachedBinaryStatus(kind: AgentBinaryKind): CachedBinaryStatus {
   const cfg = CONFIG[kind];
   const cachedReadyPath = lastReadyPath.get(kind);
-  if (cachedReadyPath) {
-    try {
-      fs.accessSync(cachedReadyPath, fs.constants.X_OK);
-      return { binaryReady: true, binaryPath: cachedReadyPath };
-    } catch {
-      lastReadyPath.delete(kind);
-    }
-  }
-
   // dev:优先查仓库本地 runtime(apps/<devBinDir>/<platform>/<devBinaryName>)。
-  if (!app.isPackaged) {
-    const devPath = findDevBinary({
-      vendorBinDir: cfg.devBinDir,
-      binaryName: cfg.devBinaryName ?? cfg.binaryName,
-    });
-    if (devPath) return { binaryReady: true, binaryPath: devPath };
-  }
-
+  const devPath = app.isPackaged
+    ? null
+    : findDevBinary({
+        vendorBinDir: cfg.devBinDir,
+        binaryName: cfg.devBinaryName ?? cfg.binaryName,
+      });
   // packaged Linux 同步快查只看已知私有路径；不能在 renderer-facing 路径
   // 里执行 CLI --version 或 PATH shell lookup。系统 CLI 由 async prepare 发现。
   // pi 不走 Linux runtime fallback(那条链是 cc/codex 官方 CLI 专用),Linux 上的
   // pi 与其它平台一致:只使用 manifest 管理的 CDN 资产。
-  if (kind !== 'pi') {
-    const linuxFallbackPath = findCachedLinuxRuntimeFallbackBinary(kind);
-    if (linuxFallbackPath) return { binaryReady: true, binaryPath: linuxFallbackPath };
-  }
-
-  // prod / dev fallback miss: 扫 userData/<installSubdir>/<version>/<binary> + .verified
-  try {
-    const installRoot = path.join(app.getPath('userData'), cfg.installSubdir);
-    const versions = fs
-      .readdirSync(installRoot, { withFileTypes: true })
-      .filter((e) => e.isDirectory())
-      .map((e) => e.name);
-    for (const v of versions) {
-      const p = path.join(installRoot, v, cfg.binaryName);
-      const verified = path.join(installRoot, v, '.verified');
-      if (fs.existsSync(p) && fs.existsSync(verified)) {
-        return { binaryReady: true, binaryPath: p };
-      }
-    }
-  } catch {
-    // fs 错 (目录不存在等) → 降级 false
-  }
-
-  return { binaryReady: false };
+  const status = readCachedBinaryStatus({
+    kind,
+    isPackaged: app.isPackaged,
+    userDataDir: app.getPath('userData'),
+    devCandidates: devPath ? [devPath] : [],
+    cachedPath: cachedReadyPath,
+    extraCandidate: kind === 'pi'
+      ? undefined
+      : () => findCachedLinuxRuntimeFallbackBinary(kind),
+  });
+  if (!status.binaryReady && cachedReadyPath) lastReadyPath.delete(kind);
+  return status;
 }
 
 // ── 主入口: prepare ──────────────────────────────────────────────────────────
@@ -376,9 +355,9 @@ export async function prepare(
     try {
       const manager = getPiKernelManager();
       if (manager.hasSelection()) {
-        // Preserve the existing packaged offline policy; an explicit selection only
-        // changes version arbitration, not whether startup requires a manifest.
-        if (app.isPackaged && !await fetchManifest(undefined, opts.signal).catch(() => null)) {
+        // Local startup honors explicit version selection without contacting CDN.
+        // Normal installation keeps the existing manifest validation path.
+        if (!opts.localOnly && app.isPackaged && !await fetchManifest(undefined, opts.signal).catch(() => null)) {
           lastReadyPath.delete('pi');
           return { ready: false, error: 'manifest_failed', downloaded: false };
         }
@@ -408,6 +387,28 @@ export async function prepare(
       return { ready: true, path: devPath, downloaded: false };
     }
     return { ready: false, error: `${kind} dev binary not found for ${getPlatformKey()}`, downloaded: false };
+  }
+
+  if (opts.localOnly) {
+    const local = await getBase(kind).prepare({ localOnly: true, signal: opts.signal });
+    let localPath = local.ready ? local.binaryPath : null;
+    if (process.platform === 'linux' && kind !== 'pi') {
+      const fallback = await findUsableLinuxRuntimeFallbackBinary(kind, opts.signal);
+      if (fallback && fallback !== localPath) {
+        const fallbackVersion = await probeBinaryVersion(fallback, opts.signal);
+        const managedVersion = localPath && await probeBinaryVersion(localPath, opts.signal);
+        // A cached update must not downgrade a usable system/private runtime.
+        // Unknown versions preserve that runtime, as in the normal installer.
+        if (!managedVersion || !fallbackVersion || isBinaryVersionNotOlder(fallbackVersion, managedVersion)) {
+          localPath = fallback;
+        }
+      }
+    }
+    if (localPath) {
+      lastReadyPath.set(kind, localPath);
+      return { ready: true, path: localPath, downloaded: false };
+    }
+    return { ready: false, error: local.error ?? 'runtime_not_installed', downloaded: false };
   }
 
   opts = { ...opts, checkForUpdates: resolveUpdateCheck(kind, opts.checkForUpdates) };
@@ -499,21 +500,26 @@ export async function prepare(
       });
     }
     try {
-      const fallback = await prepareLinuxRuntimeFallback(kind, {
-        signal: opts.signal,
-        onProgress: broadcastProgress
-          ? (event) => {
+      const reporter = broadcastProgress
+        ? createDownloadProgressReporter({
+            initialPhase: 'downloading',
+            emit: (download) => {
               broadcastBinaryDownloadProgress({
-                progress: Math.max(0, Math.min(100, event.percent ?? 0)),
-                speed: event.speedBps > 0 ? `${formatBytes(event.speedBps)}/s` : undefined,
-                downloaded: event.loaded > 0 ? formatBytes(event.loaded) : undefined,
-                total: event.total && event.total > 0 ? formatBytes(event.total) : undefined,
+                progress: download.percent ?? 0,
+                speed: download.speedBps > 0 ? `${formatBytes(download.speedBps)}/s` : undefined,
+                downloaded: download.loaded > 0 ? formatBytes(download.loaded) : undefined,
+                total: download.total && download.total > 0 ? formatBytes(download.total) : undefined,
                 step,
                 totalSteps,
                 vendor: cfg.vendorTag,
+                download,
               });
-            }
-          : undefined,
+            },
+          })
+        : null;
+      const fallback = await prepareLinuxRuntimeFallback(kind, {
+        signal: opts.signal,
+        ...(reporter?.callbacks ?? {}),
       });
       if (fallback.ready) {
         if (broadcastProgress && fallback.installed) {
@@ -589,6 +595,8 @@ async function prepareViaCdn(
   let lastReceived = 0;
   let lastTotal = 0;
   let lastSpeed: string | undefined;
+  let lastDownload: DownloadProgress | undefined;
+  let lastBarProgress = 0;
   let didDownload = false;
 
   // CDN 腿预算(仅 packaged Linux)从「传输真正开始」计起,排队等待不计入:
@@ -627,6 +635,7 @@ async function prepareViaCdn(
 
   const normalizer = new ProgressNormalizer({
     onIpc: (progress) => {
+      lastBarProgress = progress;
       broadcastBinaryDownloadProgress({
         progress,
         speed: lastSpeed,
@@ -635,6 +644,7 @@ async function prepareViaCdn(
         step,
         totalSteps,
         vendor: cfg.vendorTag,
+        download: lastDownload,
       });
     },
   });
@@ -648,6 +658,23 @@ async function prepareViaCdn(
         if (p.status === 'downloading') {
           didDownload = true;
           startCdnBudget();
+        }
+        const phaseChanged = p.download !== undefined && p.download.phase !== lastDownload?.phase;
+        if (p.download) lastDownload = p.download;
+        // The throttled normalizer only speaks when the bar rises a whole percent, so phase
+        // changes (retrying, verifying, and back to downloading) are pushed at once with the
+        // bar where it already is; otherwise "Retrying…" lingers after bytes flow again.
+        if (phaseChanged && p.download) {
+          broadcastBinaryDownloadProgress({
+            progress: lastBarProgress,
+            speed: p.download.phase === 'downloading' ? lastSpeed : undefined,
+            downloaded: lastReceived > 0 ? formatBytes(lastReceived) : undefined,
+            total: lastTotal > 0 ? formatBytes(lastTotal) : undefined,
+            step,
+            totalSteps,
+            vendor: cfg.vendorTag,
+            download: p.download,
+          });
         }
         if (p.downloadProgress) {
           lastReceived = p.downloadProgress.received;
@@ -685,6 +712,19 @@ async function prepareViaCdn(
           step,
           totalSteps,
           vendor: cfg.vendorTag,
+          ...(lastDownload
+            ? {
+                download: {
+                  ...lastDownload,
+                  phase: 'completed' as const,
+                  loaded: lastDownload.total ?? lastDownload.loaded,
+                  percent: 100,
+                  speedBps: 0,
+                  etaSeconds: null,
+                  retryReason: undefined,
+                },
+              }
+            : {}),
         });
       }
       lastReadyPath.set(kind, result.binaryPath);

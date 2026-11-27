@@ -1,6 +1,6 @@
 import { readMessageSourceGroup } from '@cindy/maker-shared/message-source';
 import { queueItemVisibleText } from '@cindy/maker-shared/queue';
-import { projectMcpAppContent } from '@cindy/maker-shared/mcp-apps';
+import { projectMcpAppHistory } from '../mcp-apps/history.js';
 
 const HOOK_SCHEDULE_ID_PREFIX = 'hook:';
 
@@ -58,7 +58,7 @@ export function redactMessageRowForSharedGuest<T>(message: T): T {
   if (!message || typeof message !== 'object' || Array.isArray(message)) return message;
   const record = message as Record<string, unknown>;
   let agentMeta = redactMessageOriginForSharedGuest(record.agentMeta);
-  const content = projectMcpAppContent(record.content,
+  const content = projectMcpAppHistory(record.content,
     !!record.agentMeta && typeof record.agentMeta === 'object' &&
     (record.agentMeta as Record<string, unknown>).mcpApp === true);
   // Preserve independent reply visibility without disclosing source identity
@@ -70,12 +70,27 @@ export function redactMessageRowForSharedGuest<T>(message: T): T {
     ? message : ({ ...record, agentMeta, content } as T);
 }
 
+/** Orca 队列条目的访客可见正文：优先 origin.displayText（已去 worker_id），回退解析 {orcaSource,content} 信封。 */
+function orcaGuestVisibleText(entry: Record<string, unknown>, origin: Record<string, unknown>): string {
+  if (typeof origin.displayText === 'string') return origin.displayText;
+  const persisted = typeof entry.persistedContent === 'string' ? entry.persistedContent : '';
+  if (persisted) {
+    try {
+      const content = (JSON.parse(persisted) as { content?: unknown })?.content;
+      if (typeof content === 'string') return content;
+    } catch { /* persisted 本身就是可见正文 */ }
+    return persisted;
+  }
+  return typeof entry.text === 'string' ? entry.text : '';
+}
+
 /**
  * 排队条目的访客视图。任务来源条目里，发给 Agent 的 `text` 与 `origin.displayText`
  * 可能带来源身份，访客只能拿到落库可见正文（`persistedContent`，带附件时是
  * `{text, images, files}` 信封里的 text）；来源降级为不带 id / 标题 / 伙伴的任务来源。
  * 自动化来源只保留 kind（Hook 渠道只保留 `hook:` 前缀），`text` 换成可见正文；Orca 来源
- * 去掉发送方任务 id；房主的设备 / 插件来源不下发。
+ * 去掉发送方任务 id，`text` 也换成可见正文（批次 agent text 含 worker_id，不下发）；
+ * 房主的设备 / 插件来源不下发。
  * 无需改动时返回原引用。
  */
 export function redactQueueItemForSharedGuest<T>(item: T): T {
@@ -106,6 +121,13 @@ export function redactQueueItemForSharedGuest<T>(item: T): T {
     // 自动化条目的 `text` 是发给 Agent 的原文，带 `[Scheduled run context]`（含自动化名字与
     // schedule_id）等只给 Agent 的内容；访客只拿落库可见正文。
     const visible = queueItemVisibleText(entry);
+    if (visible !== entry.text || redactedOrigin) {
+      return { ...entry, text: visible, ...(redactedOrigin ? { origin: redactedOrigin } : {}) } as T;
+    }
+  }
+  if (typed.kind === 'orca') {
+    // Orca 的 text 是发给 Agent 的原文（批次保留 worker_id 供 Lead 路由）；访客只拿可见正文。
+    const visible = orcaGuestVisibleText(entry, typed);
     if (visible !== entry.text || redactedOrigin) {
       return { ...entry, text: visible, ...(redactedOrigin ? { origin: redactedOrigin } : {}) } as T;
     }
@@ -145,9 +167,40 @@ export function redactInputProjectionForSharedGuest<T>(projection: T): T {
   return changed ? (next as T) : projection;
 }
 
+/** Strip private session-level provenance (originating task / remote Orca Lead / smart routing) for shared-task guests. */
+export function redactSessionRowForSharedGuest<T>(session: T): T {
+  if (!session || typeof session !== 'object' || Array.isArray(session)) return session;
+  const record = session as Record<string, unknown>;
+  const hasOrigin = record.createdBySession != null;
+  const hasOrcaLead = record.orcaRemoteLead != null;
+  const hasModelGroupBinding = 'modelGroupBinding' in record;
+  if (!hasOrigin && !hasOrcaLead && !hasModelGroupBinding) return session;
+  const next: Record<string, unknown> = { ...record };
+  if (hasOrigin) next.createdBySession = null;
+  if (hasOrcaLead) next.orcaRemoteLead = null;
+  if (hasModelGroupBinding) delete next.modelGroupBinding;
+  return next as T;
+}
+
 /** 推往共享任务访客的单帧 payload：按 channel 套用对应的来源脱敏。 */
 export function redactSharedGuestPush(channel: string, payload: unknown): unknown {
   if (channel === 'maker:input:projection') return redactInputProjectionForSharedGuest(payload);
+  if (channel === 'local-db:sessions:created' && payload && typeof payload === 'object' && !Array.isArray(payload)) {
+    const record = payload as Record<string, unknown>;
+    if ('session' in record) {
+      const redacted = redactSessionRowForSharedGuest(record.session);
+      return redacted === record.session ? payload : { ...record, session: redacted };
+    }
+    return redactSessionRowForSharedGuest(payload);
+  }
+  if (channel === 'local-db:sessions:patched' && payload && typeof payload === 'object' && !Array.isArray(payload)) {
+    const record = payload as Record<string, unknown>;
+    if ('patch' in record) {
+      const redacted = redactSessionRowForSharedGuest(record.patch);
+      return redacted === record.patch ? payload : { ...record, patch: redacted };
+    }
+    return payload;
+  }
   if (
     channel !== 'local-db:messages:created' ||
     !payload ||

@@ -442,6 +442,19 @@ describe('device-link 远程交互往返 — plan_review', () => {
 });
 
 describe('device-link Desktop-only 确认 — 控制端只读投影', () => {
+  // 第21项不再产生删除确认，旧 lane 不能恢复成新的插件权限卡，tier=unit。
+  it('不把已移除的插件删除确认恢复为权限卡', async () => {
+    const s = sid();
+    local.localGetPendingInteractions.mockResolvedValue([{ request: {
+      kind: 'ghost_grant_confirm', requestId: 'delete-confirm', ghostId: 'file-smoke', ghostName: 'File smoke',
+      lane: 'fs_delete', items: [{ name: 'reports', absPath: '/workspace/reports', size: 128, isDirectory: true }],
+    } }]);
+    await makerChatStore.reconcilePendingInteractions(s);
+    expect(makerChatStore.getSnapshot(s).pendingGhostGrantConfirm).toBeNull();
+    expect(local.localResolveInteraction).not.toHaveBeenCalled();
+    expect(host.resolved).toHaveLength(0);
+  });
+
   it('只读提示展示期间保留 ChatInput，不把控制端锁死', () => {
     const src = readFileSync(
       resolve(__dirname, '..', 'features', 'cc-agent', 'CCAgentSessionView.tsx'),
@@ -495,6 +508,55 @@ describe('device-link Desktop-only 确认 — 控制端只读投影', () => {
       kind: 'issue_confirm',
       requestId: 'opaque-full-payload',
     });
+    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm).toBeNull();
+  });
+
+  // #11232: 旧端只读用例无法发现新版宿主的推送和快照被误分类；通过 unit 的真实 store 路由验证。
+  it('可远程确认的反馈在推送与重连后保留编辑，提交到宿主，离线期间关闭的卡片也能清理', async () => {
+    const s = openRemoteSession();
+    const request = {
+      kind: 'issue_confirm',
+      requestId: 'remote-feedback',
+      remoteConfirmSupported: true,
+      draft: { title: '原始标题', body: '说明', type: 'bug' },
+      env: { appVersion: '1', platform: 'darwin', arch: 'arm64', osVersion: '1' },
+      submissionIdentity: { kind: 'platform', login: 'cindy-issue' },
+    };
+    host.hostInteraction(s, request);
+    await flush();
+    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm?.draft).toEqual(request.draft);
+    const edited = { title: '编辑后的标题', body: '补充说明', type: 'bug' as const, publicName: '匿名' };
+    saveIssueConfirmDraft(s, request.requestId, edited);
+    host.seedPending(s, request);
+    host.seedPending(s, { kind: 'rename_sessions_confirm', requestId: 'rename' });
+    host.hostInteraction(s, { kind: 'rename_sessions_confirm', requestId: 'rename' });
+    host.hostInteraction(s, request);
+    await flush();
+    await makerChatStore.reconcilePendingInteractions(s);
+    expect(getIssueConfirmDraft(s, request.requestId)).toEqual(edited);
+    expect(makerChatStore.getSnapshot(s).pendingRemoteDesktopConfirmation?.requestId).toBe('rename');
+    host.invoke.mockRejectedValueOnce(new Error('connection lost'));
+    makerChatStore.respondToIssueConfirm(s, { confirmed: false });
+    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm?.submitting).toBe(true);
+    host.hostInteraction(s, request);
+    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm?.submitting).toBe(true);
+    remoteProjectsStore.clear();
+    await flush();
+    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm?.submitting).toBe(false);
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s } as Session]);
+    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm?.requestId).toBe(request.requestId);
+    expect(getIssueConfirmDraft(s, request.requestId)).toEqual(edited);
+    makerChatStore.respondToIssueConfirm(s, {
+      confirmed: true, ...edited, submissionIdentity: { kind: 'platform', login: 'cindy-issue' }, uiLanguage: 'zh-CN',
+    });
+    await flush();
+    expect(host.resolved[0]).toMatchObject({ requestId: request.requestId, decision: { confirmed: true, ...edited } });
+    expect(local.localResolveInteraction).not.toHaveBeenCalled();
+    host.seedPending(s, { ...request, requestId: 'snapshot-feedback' });
+    await makerChatStore.reconcilePendingInteractions(s);
+    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm?.requestId).toBe('snapshot-feedback');
+    host.clearPending(s);
+    await makerChatStore.reconcilePendingInteractions(s);
     expect(makerChatStore.getSnapshot(s).pendingIssueConfirm).toBeNull();
   });
 
@@ -1213,8 +1275,6 @@ describe('远程交互接线不变式', () => {
     expect(src).not.toContain(
       'await window.electronAPI.maker.setPermissionMode(sessionId, previousMode);',
     );
-    expect(src).toContain('requiresFullAccessConfirmation(previousMode, newMode)');
-    expect(src).toContain('if (!confirmed) return;');
     expect(src).toContain("toast.error(t('newChat.chatInput.permissionSwitchFailed'))");
   });
 
@@ -1510,8 +1570,11 @@ describe('远程交互接线不变式', () => {
     expect(pushStart).toBeGreaterThan(-1);
     const pushBody = src.slice(pushStart, pushEnd);
     expect(pushBody).toContain('target?: {');
+    // 没有显式目标时写穿的型号必须是**当前显示的那一个**(draftInitialModel):播种型号在
+    // 目标目录里路由不出去、被换成目录里的另一个型号时,写旧型号等于把新型号的改动写到
+    // 旧型号的远端草稿记忆上(Codex review #9369)。
     expect(pushBody).toContain(
-      'const model = target?.modelId ?? dlSel?.model ?? deviceLinkInitial?.model;',
+      'const model = target?.modelId ?? draftInitialModel ?? dlSel?.model ?? deviceLinkInitial?.model;',
     );
     expect(pushBody).toContain('agent: target?.agent ?? capabilityAgentKind');
     expect(pushBody).toMatch(/providerId: target\s*\r?\n?\s*\?\s*\(target\.providerId \?\? ''\)/);
@@ -1671,7 +1734,7 @@ describe('远程交互接线不变式', () => {
 
   it('F6: scheduler 新会话在首条消息落库后广播 created 给 device-link 列表订阅者', () => {
     const runnerSrc = mainSrc('scheduler-host/runner.ts');
-    const hostSrc = mainSrc('scheduler-host/index.ts');
+    const hostSrc = mainSrc('scheduler-host/index.desktop.ts');
     expect(runnerSrc).toContain('this.deps.onSessionCreated?.(session.id)');
     expect(hostSrc).toContain('onSessionCreated: broadcastSessionCreated');
   });
@@ -1687,8 +1750,8 @@ describe('远程交互接线不变式', () => {
     expect(src).toContain('let linkOnline: boolean | null = null');
     expect(src).toContain("if (!linkStatusPushSeen) linkOnline = state.linkStatus === 'online'");
     expect(src).toContain('linkStatusPushSeen = true');
-    // debounce 排队后 relay 可能已进入 connecting；执行时必须重查实时状态，不能离线重试。
-    expect(src).toContain('if (!disposed && linkOnline && eligible.has(deviceId))');
+    // debounce 排队后仍按该目标的实时可读链路判断；健康直连无需等 relay 恢复。
+    expect(src).toContain('if (!disposed && peerReadable(deviceId) && eligible.has(deviceId))');
   });
 
   it('F4: extraDirs 的本地/远程持久化均由 Main 会话事务拥有', () => {

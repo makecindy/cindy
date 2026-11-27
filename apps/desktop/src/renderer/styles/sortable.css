@@ -39,7 +39,7 @@
    把它框起来变成"突出占位"。 */
 .xdt-sortable-ghost {
   opacity: 0.3;
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 
 /* drag：跟手悬浮中的克隆（SortableJS 在 fallbackOnBody:true 模式下把原节点 clone
@@ -67,12 +67,9 @@
      "用户正抓在手里的那一行", 跟普通 hover/选中态同色更能传达"我是被选中的"
      的视觉语义, 也与 SessionItem 自己的 hover/active 背景一致, 视觉上连贯。 */
   background-color: hsl(var(--sidebar-item-hover));
-  border-radius: 8px;
+  border-radius: var(--radius);
   cursor: grabbing;
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
-}
-.dark .xdt-sortable-drag {
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-menu);
 }
 
 /* PendingQueuePanel 复用 SortableList 的 fallback 拖拽机制，但它不在 sidebar
@@ -80,14 +77,14 @@
    chip hover 层一致；否则队列行会突然变成 sidebar hover 色，跨区域语义错位。 */
 .pending-queue-sortable-row.xdt-sortable-drag {
   background-color: var(--chat-input-chip-bg);
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 
 /* 设置页供应商行的浮起 clone 脱离卡片后补回卡片背景；阴影只使用主题语义 token，
    Light / Dark 同源，不另写模式补丁。 */
 .provider-settings-sortable-row.xdt-sortable-drag {
   background-color: var(--settings-theme-card-bg);
-  border-radius: 8px;
+  border-radius: var(--radius);
   box-shadow: var(--shadow-menu);
 }
 

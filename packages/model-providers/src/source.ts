@@ -23,7 +23,7 @@ import type { AgentKind, Catalog, Provider, ProviderPreset } from "./types.js";
 
 /** 公共模型目录 API 路径。发布版由 model-access-server 匿名提供完整 Catalog。 */
 export const CATALOG_API_PATH =
-  "/api/model-catalog/catalog?registrySchemaVersion=6&registryMedia=1&registryLocalRuntimes=1";
+  "/api/model-catalog/catalog?registrySchemaVersion=6&registryMedia=1&registryLocalRuntimes=1&registryRecommendedAgents=1";
 /** 旧客户端目录的 OSS 相对路径。迁移期作为公共 API 失败后的兼容回退。 */
 export const CATALOG_CFG_PATH = "/cfg/providers.json";
 
@@ -128,6 +128,7 @@ export function resolveCatalogUrl(cfg: CatalogSourceConfig): string | null {
         url.searchParams.set("registrySchemaVersion", "6");
         url.searchParams.set("registryMedia", "1");
         url.searchParams.set("registryLocalRuntimes", "1");
+        url.searchParams.set("registryRecommendedAgents", "1");
         return url.toString();
       }
     } catch {
@@ -780,7 +781,11 @@ export async function loadCatalogWithSource(
         );
       }
       if (io.readCache) {
-        for (const cacheUrl of new Set([source.url, remoteUrl, source.url.replace('registrySchemaVersion=6', 'registrySchemaVersion=5')])) {
+        // A snapshot cached before the recommendation capability is still a valid V6 fallback.
+        const previousCapability = source.url.replace('&registryRecommendedAgents=1', '');
+        for (const cacheUrl of new Set([source.url, remoteUrl, previousCapability,
+          source.url.replace('registrySchemaVersion=6', 'registrySchemaVersion=5'),
+          previousCapability.replace('registrySchemaVersion=6', 'registrySchemaVersion=5')])) {
           try {
             const cached = await io.readCache(cacheUrl);
             if (cached !== null) {

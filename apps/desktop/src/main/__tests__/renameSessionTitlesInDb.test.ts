@@ -50,6 +50,7 @@ const h = vi.hoisted(() => {
   };
 
   return {
+    owner: { userId: 'account-a' },
     fakeDb,
     tx,
     selectRows,
@@ -73,7 +74,10 @@ vi.mock('electron', () => ({
 vi.mock('../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
-vi.mock('../localDb/client/current', () => ({ getDbClient: () => ({ drizzle: h.fakeDb, tx: h.tx }) }));
+vi.mock('../localDb/client/current', () => ({
+  getDbClient: () => ({ drizzle: h.fakeDb, tx: h.tx }),
+  getCurrentDbClientSnapshot: () => h.owner,
+}));
 vi.mock('../localDb/dialogueWorkspace', () => ({ ensureDialogueWorkspaceDir: vi.fn() }));
 vi.mock('../git-context/prRefsStore', () => ({ recomputePrRefsForSession: vi.fn() }));
 vi.mock('../localDb/ipc/recentWorkdirs', () => ({ upsertRecentWorkdir: vi.fn() }));
@@ -86,13 +90,14 @@ vi.mock('../device-link/broadcast-tap', () => ({
 vi.mock('../agent-island/service.js', () => ({
   getAgentIslandService: () => h.agentIslandService,
 }));
-vi.mock('../imageCacheStore', () => ({ removeSession: vi.fn() }));
+vi.mock('../imageCacheStore.desktop', () => ({ removeSession: vi.fn() }));
 
 import { renameSessionTitlesInDb } from '../localDb/ipc/sessions.js';
 import { admitTaskAction, assertTaskActionCurrent } from '../maker-ipc/taskActionAuthorization.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.owner = { userId: 'account-a' };
   h.selectRows.length = 0;
   h.returningQueue.length = 0;
   h.updateSetCalls.length = 0;
@@ -100,6 +105,15 @@ beforeEach(() => {
 });
 
 describe('renameSessionTitlesInDb', () => {
+  it('does not write or broadcast a batch selected under a previous account', async () => {
+    h.selectRows.push({ id: 'feishu_shared_id', title: 'Old', workingDir: null, updatedAt: 1_700_000_000_000 });
+    await expect(renameSessionTitlesInDb([{ sessionId: 'feishu_shared_id', title: 'Manual' }], false, async () => {
+      h.owner = { userId: 'account-b' };
+    })).rejects.toThrow('Account changed');
+    expect(h.tx).not.toHaveBeenCalled();
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+  });
+
   // #6399: admission alone misses revocation during SELECT. Unit boundary is the
   // production batch writer; the existing conditional-title test only covers DB races.
   it('does not rename after the admitted input is replaced during the read', async () => {

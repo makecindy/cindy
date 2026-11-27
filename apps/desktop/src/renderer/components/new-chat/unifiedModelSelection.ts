@@ -18,15 +18,19 @@
  */
 
 import type { ProviderView, UnifiedAgentCapability, UnifiedModelEntry } from '@cindy/model-providers';
-import { remoteInvocationModels } from '@cindy/model-providers';
+import { remoteInvocationModels, resolveStoredModelEntry, displayNameOfStoredModelId } from '@cindy/model-providers';
 
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import type { SelectableVendor } from '@/lib/agentVendors';
 import type { Effort } from '@/lib/userPreferences.types';
 import { applyProviderOrderIds } from '../../../shared/providerOrder';
+import { isSourceRouteProviderId } from '@/features/model-groups/sourceRouteProviders';
 import { modelConfigCopyIdentity, type ModelConfigCopy } from '@/state/modelConfigCopy';
 import type { ModelFavoriteItem } from '@/state/modelFavorites';
 import type { RecentModelItem } from '@/state/recentModels';
+import type { ResolvedPluginEngineFavorite } from '@/lib/pluginEngineFavorites';
+
+export { resolveStoredModelEntry };
 
 /** 引擎在**选择器 / 草稿链路**里的口径(vendor);catalog / capabilities 侧是 AgentKind。 */
 export type UnifiedEngine = SelectableVendor;
@@ -75,6 +79,23 @@ export function wireModelIdOf(entry: UnifiedModelEntry, agent: AgentKind): strin
   return entry.capabilities[agent]?.wireModelId ?? entry.modelId;
 }
 
+/** Every actual member key for one engine; existing bridge rows keep their old single-key path. */
+export function entryWireIds(entry: UnifiedModelEntry, agent: AgentKind): string[] {
+  return [...new Set((entry.aliasEntries ?? [entry]).flatMap((member) =>
+    member.capabilities[agent] ? [member.capabilities[agent]!.wireModelId] : []))];
+}
+
+export function entryModelIds(entry: UnifiedModelEntry): string[] {
+  return [...new Set((entry.aliasEntries ?? [entry]).map((member) => member.modelId))];
+}
+
+/** Single-sided preferences inherit without persisting defaults or choosing a conflict winner. */
+export function readEntryPreference<T>(entry: UnifiedModelEntry, ids: readonly string[],
+  read: (providerId: string, modelId: string) => T | undefined): T | undefined {
+  const values = [...new Set(ids.map((id) => read(entry.providerId, id)).filter((value) => value !== undefined))];
+  return values.length === 1 ? values[0] : undefined;
+}
+
 /**
  * 外部给的 model id 是不是**这一行**。
  *
@@ -87,7 +108,8 @@ export function entryMatchesModelId(
   modelId: string | null | undefined,
 ): boolean {
   if (!modelId) return false;
-  if (entry.modelId === modelId) return true;
+  if (entry.modelId === modelId || entry.enginePreferenceId === modelId) return true;
+  if (entry.aliasEntries?.some((member) => entryMatchesModelId(member, modelId))) return true;
   return Object.values(entry.capabilities).some(
     (capability) => capability?.wireModelId === modelId,
   );
@@ -122,6 +144,8 @@ export interface UnifiedRowConfig {
    * 调用方回落行 id。
    */
   wireModelId: string | null;
+  /** Exact gateway identity for stored configuration copies only; never a request ID. */
+  storedModelId?: string;
 }
 
 export interface ResolveRowConfigArgs {
@@ -229,6 +253,7 @@ export function resolveUnifiedRowConfig(args: ResolveRowConfigArgs): UnifiedRowC
     customized,
     capability,
     wireModelId: capability?.wireModelId ?? null,
+    ...(entry.enginePreferenceId ? { storedModelId: entry.enginePreferenceId } : {}),
   };
 }
 
@@ -244,7 +269,8 @@ export function resolveFavoriteRowConfig(args: {
   item: ModelConfigCopy;
   agentFastModeCapable?: (agent: AgentKind) => boolean;
 }): UnifiedRowConfig {
-  const { entry, item, agentFastModeCapable } = args;
+  const { item, agentFastModeCapable } = args;
+  const entry = args.entry.aliasEntries?.find((member) => entryMatchesModelId(member, item.modelId)) ?? args.entry;
   const candidateEngines = entry.candidates.map(engineOfAgentKind);
   const engine = candidateEngines.includes(item.agent)
     ? item.agent
@@ -266,6 +292,7 @@ export function resolveFavoriteRowConfig(args: {
     customized: false,
     capability,
     wireModelId: capability?.wireModelId ?? null,
+    ...(entry.enginePreferenceId ? { storedModelId: entry.enginePreferenceId } : {}),
   };
 }
 
@@ -322,6 +349,17 @@ export type UnifiedRailItem =
   | { kind: 'favorites' }
   | { kind: 'engine'; agent: AgentKind }
   | { kind: 'all' }
+  /**
+   * 用户建的模式与路线(模型组)。只在新任务草稿出现，列表内容由调用方提供，不按目录筛选。
+   * `deviceId` = 另一台电脑自己的模式(model-groups.md §6.3)，格位排进那台电脑那一段。
+   */
+  | { kind: 'model-groups'; deviceId?: string }
+  /**
+   * 一个插件提供的执行引擎(docs/plans/acp-plugin-bridge.md)，与供应商格一样每个引擎一格、用插件
+   * 自己的图标。只在新任务草稿出现；列表内容由调用方提供，不按目录筛选。`deviceId` = 引擎在自己的
+   * 另一台电脑上(那台开了「允许被远程调用」)：同一个插件可以装在几台电脑上，引擎标识相同，靠它区分。
+   */
+  | { kind: 'plugin-engine'; providerId: string; deviceId?: string }
   | { kind: 'provider'; providerId: string }
   /**
    * 另一台电脑上的供应商(远程 Agent)。选它 = 列那台电脑这个供应商的模型；选中模型后
@@ -331,6 +369,74 @@ export type UnifiedRailItem =
   | { kind: 'remote-provider'; deviceId: string; providerId: string };
 
 export type UnifiedRailFilter = UnifiedRailItem;
+
+/** 左侧栏一个插件引擎格的展示：引擎名、插件图标与用量读取元数据(没有图标时画通用拼图)。 */
+export interface PluginEngineRailTab {
+  providerId: string;
+  /** 引擎所在的另一台电脑；缺省 = 任务所在电脑。 */
+  deviceId?: string;
+  /** 悬停显示的名字；另一台电脑上的引擎已带上电脑名。 */
+  name: string;
+  iconDataUrl?: string;
+  /** `ghostId:harnessId`，读取账号用量时传给 `readPluginEngineUsage`。 */
+  key?: string;
+  /** 插件已声明上报账号额度时才读取，避免无意义的 IPC。 */
+  reportsUsage?: true;
+  /** 不可用引擎不读用量。 */
+  selectable?: boolean;
+}
+
+/** 这一格所属的另一台电脑(远程供应商格，或另一台电脑上的插件引擎格)；其余格为 null。 */
+export function railItemDeviceId(item: UnifiedRailItem): string | null {
+  if (item.kind === 'remote-provider') return item.deviceId;
+  return item.kind === 'plugin-engine' || item.kind === 'model-groups' ? (item.deviceId ?? null) : null;
+}
+
+/** 左侧栏一台电脑的「模型组」格：那台电脑的 id 与悬停显示的名字。 */
+export interface DeviceModelGroupsRailTab {
+  deviceId: string;
+  name: string;
+}
+
+/**
+ * 把另一台电脑的「模型组」格放进左侧栏：与本机「模型组」紧跟「全部」同理，排在那台电脑那一段的最前面；
+ * 那台没有别的格时在末尾单独成段。
+ */
+export function withRemoteModelGroupRailItems(
+  items: readonly UnifiedRailItem[],
+  tabs: readonly Pick<DeviceModelGroupsRailTab, 'deviceId'>[],
+): UnifiedRailItem[] {
+  const out = [...items];
+  for (const tab of tabs) {
+    const item: UnifiedRailItem = { kind: 'model-groups', deviceId: tab.deviceId };
+    const first = out.findIndex((entry) => railItemDeviceId(entry) === tab.deviceId);
+    if (first < 0) out.push(item);
+    else out.splice(first, 0, item);
+  }
+  return out;
+}
+
+/**
+ * 把另一台电脑上的插件引擎格放进左侧栏：排在那台电脑的供应商格之后；那台没有供应商格时
+ * 在末尾单独成段。本机的引擎格由面板排在「全部」之后，不经过这里。
+ */
+export function withRemotePluginEngineRailItems(
+  items: readonly UnifiedRailItem[],
+  tabs: readonly Pick<PluginEngineRailTab, 'providerId' | 'deviceId'>[],
+): UnifiedRailItem[] {
+  const out = [...items];
+  for (const tab of tabs) {
+    if (!tab.deviceId) continue;
+    const item: UnifiedRailItem = { kind: 'plugin-engine', providerId: tab.providerId, deviceId: tab.deviceId };
+    let last = -1;
+    for (let index = 0; index < out.length; index += 1) {
+      if (railItemDeviceId(out[index]) === tab.deviceId) last = index;
+    }
+    if (last < 0) out.push(item);
+    else out.splice(last + 1, 0, item);
+  }
+  return out;
+}
 
 /**
  * 远程 Agent 只能用那台电脑开了「允许被远程调用」的供应商。没有该标记(旧数据)按未开放处理；
@@ -349,6 +455,10 @@ export function railItemKey(item: UnifiedRailItem): string {
   if (item.kind === 'provider') return `provider:${item.providerId}`;
   if (item.kind === 'remote-provider') return `remote:${item.deviceId}:${item.providerId}`;
   if (item.kind === 'engine') return `engine:${item.agent}`;
+  if (item.kind === 'plugin-engine') {
+    return item.deviceId ? `plugin-engine:${item.deviceId}:${item.providerId}` : `plugin-engine:${item.providerId}`;
+  }
+  if (item.kind === 'model-groups' && item.deviceId) return `model-groups:${item.deviceId}`;
   return item.kind;
 }
 
@@ -386,7 +496,8 @@ export function buildUnifiedRail(
   }
   const ordered =
     providerOrder === undefined ? firstSeen : applyProviderOrderIds(firstSeen, providerOrder);
-  for (const providerId of ordered) {
+  // 合并了整个供应商的路由排在普通供应商前面：它们与「智能路由」那一格是一组(侧栏在这组后面画分隔线)。
+  for (const providerId of [...ordered.filter(isSourceRouteProviderId), ...ordered.filter((id) => !isSourceRouteProviderId(id))]) {
     items.push({ kind: 'provider', providerId });
   }
   return items;
@@ -406,6 +517,20 @@ export interface UnifiedListRow {
   agentDeviceId?: string;
   /** 那台电脑的目录此刻读不到:行照常列出但不可选(entry 只是按收藏拼出的占位)。 */
   unavailable?: true;
+  /** 收藏区里插件引擎模型的已解析信息;内置模型行没有。 */
+  pluginEngine?: ResolvedPluginEngineFavorite;
+}
+
+function pluginEngineFavoriteStubEntry(resolved: ResolvedPluginEngineFavorite): UnifiedModelEntry {
+  return {
+    providerId: resolved.engine.providerId,
+    modelId: resolved.row.id,
+    displayName: resolved.row.name ?? resolved.row.id,
+    candidates: ['claude-code'],
+    recommended: 'claude-code',
+    nativeAgent: null,
+    capabilities: {},
+  };
 }
 
 /** 收藏区里本目录之外的那一条:由调用方按那台电脑的目录解析(见 buildUnifiedListSections)。 */
@@ -425,7 +550,7 @@ export function unavailableFavoriteEntry(item: ModelFavoriteItem): UnifiedModelE
   return {
     providerId: item.providerId,
     modelId: item.modelId,
-    displayName: item.modelId,
+    displayName: displayNameOfStoredModelId(item.modelId),
     candidates: [agent],
     recommended: agent,
     nativeAgent: null,
@@ -443,6 +568,11 @@ export interface UnifiedListSection {
    * 合并组 —— 分组名必须直接回答"这是哪家的",不引入第二套口径)。
    */
   group?: { type: 'provider'; providerId: string };
+  /**
+   * 该小节属于「已隐藏」区:用户在设置里从选择器收起的供应商 / 模型。面板把它们排在
+   * 常规小节之后、默认折叠,搜索时自动展开 —— 隐藏只是收起,不是不能选。
+   */
+  hidden?: true;
   rows: UnifiedListRow[];
 }
 
@@ -453,15 +583,6 @@ function matchesQuery(entry: UnifiedModelEntry, q: string): boolean {
     entry.modelId.toLowerCase().includes(q) ||
     (entry.description?.toLowerCase().includes(q) ?? false)
   );
-}
-
-/**
- * 行查找的 map key。分隔符用空格而不是裸 NUL:源码里嵌一个 `\0` 会让整个文件被
- * git / rg / grep 判成二进制(diff 只显示 `Bin`、符号一个都搜不到),代价远大于它能防的
- * 那点分隔符冲突 —— provider id 与 model id 都是 slug 形态,不含空格。
- */
-function entryKeyOf(providerId: string, modelId: string): string {
-  return `${providerId} ${modelId}`;
 }
 
 /**
@@ -587,34 +708,72 @@ export function buildUnifiedListSections(args: {
    * 这些行只出现在 ★ / 全部视图,按本机供应商筛选的视图不列。
    */
   resolveForeignFavorite?: (item: ModelFavoriteItem) => ForeignFavoriteRow | null;
+  /**
+   * 收藏里属于插件引擎的条目由调用方按完整插件引擎目录(含已隐藏引擎)解析。
+   * 返回 null = 当前不可用 / 模型不存在或不是插件引擎条目;**不删条目**。
+   * 出现在 ★ / 全部视图，以及对应插件引擎的左侧栏格位里。
+   */
+  resolvePluginEngineFavorite?: (item: ModelFavoriteItem) => ResolvedPluginEngineFavorite | null;
+  matchesPluginEngineFavorite?: (resolved: ResolvedPluginEngineFavorite, query: string) => boolean;
+  /**
+   * 只从模型分组里收起的供应商(同一供应商「运行于」另一台电脑时只列那台的一项)。收藏与最近仍按完整目录解析，
+   * 不因收起而消失。
+   */
+  listHiddenProviderIds?: ReadonlySet<string>;
+  /**
+   * 收藏与最近的解析目录；缺省 = `entries`。`entries` 决定常规分组里列什么，这里决定
+   * 「用户存下来的东西还能不能解析回一行」：被隐藏的模型不进常规分组，但它仍然可调用，
+   * 存过的收藏和最近必须还在。调用方传入「常规清单 ∪ 被隐藏的模型」。
+   */
+  resolveEntries?: readonly UnifiedModelEntry[];
 }): UnifiedListSection[] {
   const { entries, favorites, effectiveEngineOf } = args;
   const q = args.query.trim().toLowerCase();
   const rail: UnifiedRailFilter = q ? { kind: 'all' } : args.rail;
   const matches = args.matchesQuery ?? matchesQuery;
-  const byKey = new Map<string, UnifiedModelEntry>();
-  for (const entry of entries) byKey.set(entryKeyOf(entry.providerId, entry.modelId), entry);
 
   /**
    * 把一份「存下来的模型身份」解析回本轮目录里的一行(收藏与最近共用)。
    *
-   * 老数据可能存的是某个引擎的 wire id(合并行之前行身份就是 wire id):先按归一化 id
-   * 精确命中,失配再按「任一引擎的 wire id」扫一遍 —— 否则升级后老收藏会整条消失。
+   * 旧 Magpie 归一化身份有歧义时不猜测；新记录使用已存在的独立路由身份。
+   * 其它连接继续接受归一化行身份或引擎 wire id。
    * 解析不到 = 该模型当前不可路由(来源断开 / 目录下架)→ 调用方跳过,**不删条目**:
    * 连回来就该回来,静默删掉用户存过的东西是不可逆的。
    */
-  const resolveStoredEntry = (providerId: string, modelId: string): UnifiedModelEntry | undefined =>
-    byKey.get(entryKeyOf(providerId, modelId)) ??
-    entries.find(
-      (candidate) =>
-        candidate.providerId === providerId && entryMatchesModelId(candidate, modelId),
-    );
+  const resolveStoredEntry = (providerId: string, modelId: string) =>
+    resolveStoredModelEntry(args.resolveEntries ?? entries, providerId, modelId);
 
   const sections: UnifiedListSection[] = [];
 
   // ── 收藏区 ── 恒置顶,在任何 rail 视图下都显示;按供应商筛选时只留该来源的收藏。
   const favRows: UnifiedListRow[] = [];
   for (const item of favorites) {
+    const pluginFavorite = args.resolvePluginEngineFavorite?.(item);
+    if (pluginFavorite) {
+      const matchesRail =
+        rail.kind === 'all' ||
+        rail.kind === 'favorites' ||
+        (rail.kind === 'plugin-engine' &&
+          pluginFavorite.engine.providerId === rail.providerId &&
+          (pluginFavorite.engine.deviceId ?? null) === (rail.deviceId ?? null));
+      if (!matchesRail) continue;
+      if (q && args.matchesPluginEngineFavorite && !args.matchesPluginEngineFavorite(pluginFavorite, q)) {
+        continue;
+      }
+      favRows.push({
+        anchor: {
+          kind: 'fav',
+          uid: item.uid,
+          providerId: pluginFavorite.engine.providerId,
+          modelId: pluginFavorite.row.id,
+        },
+        entry: pluginEngineFavoriteStubEntry(pluginFavorite),
+        favorite: item,
+        pluginEngine: pluginFavorite,
+      });
+      continue;
+    }
+    if (rail.kind === 'plugin-engine') continue;
     const foreign = args.resolveForeignFavorite?.(item);
     if (foreign) {
       if (railProviderFilterId(rail) !== null) continue;
@@ -631,7 +790,7 @@ export function buildUnifiedListSections(args: {
           kind: 'fav',
           uid: item.uid,
           providerId: foreign.favorite.providerId,
-          modelId: foreign.favorite.modelId,
+          modelId: foreign.entry.enginePreferenceId ? foreign.entry.modelId : foreign.favorite.modelId,
         },
         entry: foreign.entry,
         favorite: foreign.favorite,
@@ -641,7 +800,7 @@ export function buildUnifiedListSections(args: {
       continue;
     }
     // 老收藏可能存的是某个引擎的 wire id(合并行之前的行身份就是 wire id):解析口径与最近视图
-    // 共用 resolveStoredEntry(先按归一化 id 精确命中,失配再按「任一引擎的 wire id」扫一遍)——
+    // 共用 resolveStoredEntry（含旧 Magpie 身份的歧义保护）——
     // 否则升级后老收藏会整条消失。
     const entry = resolveStoredEntry(item.providerId, item.modelId);
     // 收藏指向的模型已不可路由(来源断开 / 目录下架)→ 本轮不显示;**不删条目**:
@@ -668,14 +827,14 @@ export function buildUnifiedListSections(args: {
         kind: 'fav',
         uid: item.uid,
         providerId: item.providerId,
-        modelId: item.modelId,
+        modelId: entry.enginePreferenceId ? entry.modelId : item.modelId,
       },
       entry,
       favorite: item,
     });
   }
   // ★ 视图只陈列收藏:提前返回,不进最近 / 推荐 / 分组。
-  if (rail.kind === 'favorites') {
+  if (rail.kind === 'favorites' || rail.kind === 'plugin-engine') {
     if (favRows.length > 0) {
       sections.push({ key: 'favorites', kind: 'favorites', rows: favRows });
     }
@@ -725,6 +884,7 @@ export function buildUnifiedListSections(args: {
   const visible = entries.filter(
     (entry) =>
       matches(entry, q) &&
+      !args.listHiddenProviderIds?.has(entry.providerId) &&
       (groupProviderId === null || entry.providerId === groupProviderId) &&
       (rail.kind !== 'engine' || entry.candidates.includes(rail.agent)),
   );
@@ -891,4 +1051,11 @@ export function priceTierOf(outputPerMtok: number, currency: string): 1 | 2 | 3 
   if (usd <= 3) return 1;
   if (usd <= 15) return 2;
   return 3;
+}
+
+/** A colliding legacy bridge key stays stored but is never guessed onto a gateway route. */
+export function enginePreferenceModelIds(entry: UnifiedModelEntry): string[] {
+  return entry.enginePreferenceId
+    ? [...new Set([entry.enginePreferenceId, ...(entry.legacyEnginePreferenceId ? [entry.legacyEnginePreferenceId] : [])])]
+    : [entry.modelId];
 }

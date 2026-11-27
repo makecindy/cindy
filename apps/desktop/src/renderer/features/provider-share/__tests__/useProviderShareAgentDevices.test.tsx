@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderShareReceived } from '@cindy/device-link';
 import { PROVIDER_SHARE_RECEIVED_CATALOGS_CHANNEL } from '@cindy/device-link';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { useDevicesPluginEngines } from '@/hooks/usePluginEngines';
 
 import { resetProviderShareStoreForTests } from '../providerShareStore';
 import { useProviderShareAgentDevices } from '../useProviderShareAgentDevices';
@@ -16,18 +17,21 @@ vi.mock('react-i18next', () => ({
         ? `from ${options?.name}`
         : key === 'providerShare.picker.numbered'
           ? `${options?.name} (${options?.index})`
-          : key,
+          : key === 'providerShare.picker.offline'
+            ? `${options?.name} · offline`
+            : key,
   }),
 }));
 
 const catalog = vi.hoisted(() => ({
-  refresh: vi.fn<(deviceId: string) => Promise<void>>(async () => undefined),
+  refresh: vi.fn<(deviceId: string, notification?: unknown) => Promise<void>>(async () => undefined),
   cached: new Set<string>(),
   subscriptions: new Set<string>(),
   stale: new Set<string>(),
 }));
 vi.mock('@/lib/remoteCatalogSnapshot', () => ({ refreshRemoteCatalogSnapshot: catalog.refresh }));
 vi.mock('@/hooks/useDeviceProviders', () => ({
+  hasDeviceProvidersInterest: (deviceId: string) => catalog.cached.has(deviceId),
   getCachedDeviceProviders: (deviceId: string) => (catalog.cached.has(deviceId) ? {
     providers: catalog.subscriptions.has(deviceId) ? [{ subscriptionFastPolicy: { allowFast: false } }] : [],
   } : null),
@@ -134,12 +138,32 @@ describe('useProviderShareAgentDevices', () => {
       catalogPush?.({ deviceId: 'share:unknown', channel: 'maker:provider:changed', payload: {} });
       catalogPush?.({ deviceId: 'share:subscription', channel: 'maker:event', payload: {} });
     });
-    expect(catalog.refresh.mock.calls).toEqual([['share:subscription']]);
+    expect(catalog.refresh.mock.calls).toEqual([['share:subscription', {}]]);
     // A failed soft refresh leaves no authoritative cache, but another push
     // must still retry the previously recognized subscription (never API peers).
     catalog.cached.delete('share:subscription');
     act(() => catalogPush?.({ deviceId: 'share:subscription', channel: 'maker:provider:changed', payload: {} }));
-    expect(catalog.refresh.mock.calls).toEqual([['share:subscription'], ['share:subscription']]);
+    expect(catalog.refresh.mock.calls).toEqual([['share:subscription', {}], ['share:subscription', {}]]);
+  });
+
+  // Unit: the real received-share push listener must propagate a late denial for
+  // API catalogs as well as subscriptions; ordinary soft refresh stays selective.
+  it('forwards an expired-directory notification for every active share, excluding paused and unknown shares', async () => {
+    initial = [share({ shareId: 'subscription' }), share({ shareId: 'api' }), share({ shareId: 'paused', status: 'paused' })];
+    const { result } = renderHook(() => useProviderShareAgentDevices());
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    catalog.refresh.mockClear(); catalog.subscriptions.add('share:subscription');
+    const payload = { providerContinuity: { stale: true, remainingMs: 0 } };
+    act(() => {
+      for (const id of ['subscription', 'api', 'paused', 'unknown'])
+        catalogPush?.({ deviceId: `share:${id}`, channel: 'maker:provider:changed', payload });
+    });
+    // A denial/expiry notification retires the display; it must not reopen the
+    // denied target. Ordinary provider-change pushes keep the soft refresh.
+    expect(catalog.refresh.mock.calls).toEqual([
+      ['share:subscription', payload, { retireOnly: true }],
+      ['share:api', payload, { retireOnly: true }],
+    ]);
   });
 
   it('refreshes stale subscription catalogs even when a membership snapshot has no changes', async () => {
@@ -150,8 +174,11 @@ describe('useProviderShareAgentDevices', () => {
     catalog.cached.add('share:subscription');
     catalog.subscriptions.add('share:subscription');
     catalog.stale.add('share:subscription');
-    act(() => push?.(initial));
-    expect(catalog.refresh.mock.calls).toEqual([['share:subscription']]);
+    await act(async () => { push?.(initial); await Promise.resolve(); await Promise.resolve(); });
+    expect(catalog.refresh.mock.calls).toEqual([
+      ['share:subscription'],
+      ['share:api', undefined, { retireOnly: true }],
+    ]);
   });
   it('only offers new shares that the controlled host has loaded, even if the controller has more cross-region shares', async () => {
     initial = [share({ shareId: 'both' }), share({ shareId: 'controller-only' })];
@@ -307,6 +334,24 @@ describe('useProviderShareAgentDevices', () => {
     invoke.mockResolvedValue(hostShares());
     act(() => push?.([...initial]));
     await waitFor(() => expect(result.current.devices).toEqual([]));
+  });
+
+  // Gap (2026-11-23): one timeout re-reading the controlled host's share list hid its shares until the
+  // next focus, so shares blinked in remote-control tasks. Minimal input: list, then a timeout refresh.
+  it.each([
+    ['[DEVICE_LINK_TIMEOUT] slow host', 1],
+    ['[DEVICE_LINK_CHANNEL_NOT_ALLOWED] old host', 0],
+  ] as const)('keeps the confirmed host list only through a temporary failure (%s)', async (failure, kept) => {
+    initial = [share({ shareId: 'both' })];
+    invoke.mockResolvedValue(hostShares({ shareId: 'both' }));
+    const { result } = renderHook(() => useProviderShareAgentDevices([], 'host-b'));
+    await waitFor(() => expect(result.current.devices).toHaveLength(1));
+    invoke.mockRejectedValueOnce(new Error(failure));
+    const calls = invoke.mock.calls.length;
+    act(() => window.dispatchEvent(new Event('focus')));
+    await waitFor(() => expect(invoke.mock.calls.length).toBe(calls + 1));
+    await act(async () => { await Promise.resolve(); });
+    expect(result.current.devices).toHaveLength(kept);
   });
 
   it('does not use another host’s result or a late disconnected response', async () => {
@@ -543,6 +588,21 @@ describe('useProviderShareAgentDevices', () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
+  // Gap (2026-11-23 field report, 用户裁决「保留并标注」): a share whose owner computer flapped
+  // offline disappeared from some entries and came back. Minimal input: online → offline → online.
+  it('keeps a share listed and marked while its owner computer is temporarily offline', async () => {
+    initial = [share({ shareId: 'a' })];
+    const { result } = renderHook(() => useProviderShareAgentDevices());
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    await act(async () => { push?.([share({ shareId: 'a', hostOnline: false, hostCapable: false })]); await Promise.resolve(); await Promise.resolve(); });
+    expect(result.current.devices).toEqual([{ deviceId: 'share:a', name: 'from Magi · offline' }]);
+    expect(result.current.nameFor('share:a')).toBe('from Magi · offline');
+    await act(async () => { push?.([share({ shareId: 'a', hostOnline: false, standbyOnline: true })]); await Promise.resolve(); await Promise.resolve(); });
+    expect(result.current.devices).toEqual([{ deviceId: 'share:a', name: 'from Magi' }]);
+    await act(async () => { push?.([share({ shareId: 'a' })]); await Promise.resolve(); await Promise.resolve(); });
+    expect(result.current.devices).toEqual([{ deviceId: 'share:a', name: 'from Magi' }]);
+  });
+
   it('keeps the current paused or removed share so the task can see and leave it', async () => {
     initial = [share({ shareId: 'paused', status: 'paused' })];
     const { result } = renderHook(() => useProviderShareAgentDevices(['share:paused', 'share:gone', 'device-1']));
@@ -565,7 +625,7 @@ describe('useProviderShareAgentDevices', () => {
     const { result } = renderHook(() => useProviderShareAgentDevices(['share:a']));
     await waitFor(() => expect(result.current.loaded).toBe(true));
     catalog.cached.add('share:a');
-    act(() => push?.([]));
+    await act(async () => { push?.([]); await Promise.resolve(); await Promise.resolve(); });
     expect(catalog.refresh).not.toHaveBeenCalled();
     expect(result.current.isKnown('share:a')).toBe(true);
   });
@@ -575,8 +635,76 @@ describe('useProviderShareAgentDevices', () => {
     const { result } = renderHook(() => useProviderShareAgentDevices());
     await waitFor(() => expect(result.current.loaded).toBe(true));
     catalog.cached.add('share:c');
-    act(() => push?.([share({ shareId: 'a' }), share({ shareId: 'b', hostOnline: false })]));
-    expect(catalog.refresh.mock.calls.map(([deviceId]) => deviceId).sort()).toEqual(['share:b', 'share:c']);
+    await act(async () => {
+      push?.([share({ shareId: 'a' }), share({ shareId: 'b', hostOnline: false })]);
+      await Promise.resolve(); await Promise.resolve();
+    });
+    expect(catalog.refresh.mock.calls.map(([deviceId]) => deviceId).sort()).toEqual(['share:a', 'share:b', 'share:c']);
+    expect(catalog.refresh.mock.calls.find(([deviceId]) => deviceId === 'share:a'))
+      .toEqual(['share:a', undefined, { retireOnly: true }]);
     expect(result.current.devices.map((device) => device.deviceId)).toEqual(['share:a', 'share:b']);
+  });
+
+  it('clears paused and removed share catalogs immediately', async () => {
+    initial = [share({ shareId: 'a' }), share({ shareId: 'b' }), share({ shareId: 'c' })];
+    const { result } = renderHook(() => useProviderShareAgentDevices());
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    await act(async () => {
+      push?.([share({ shareId: 'a' }), share({ shareId: 'b', status: 'paused' })]);
+      await Promise.resolve(); await Promise.resolve();
+    });
+    const revoked = { providerContinuity: { stale: true, remainingMs: 0 } };
+    expect(catalog.refresh).toHaveBeenCalledWith('share:b', revoked);
+    expect(catalog.refresh).toHaveBeenCalledWith('share:c', revoked, { retireOnly: true });
+    expect(catalog.refresh).not.toHaveBeenCalledWith('share:a', expect.anything());
+  });
+
+  it('separates plugin engine shares into pluginEngineDevices and refreshes a loaded picker when catalog push arrives', async () => {
+    initial = [
+      share({ shareId: 'builtin', providerId: 'anthropic', providerLabel: 'Anthropic' }),
+      share({ shareId: 'plugin', providerId: 'acp-plugin:dsh-acp:dsh', providerLabel: 'DeepSeek Harness' }),
+    ];
+    let offeredModels = [{ id: 'deepseek-v4', displayName: 'DeepSeek V4' }];
+    invoke.mockImplementation(async (deviceId: string, channel: string) => {
+      if (deviceId === 'share:plugin' && channel === 'maker:list-plugin-engines') {
+        return [{
+          key: 'dsh-acp:dsh',
+          providerId: 'acp-plugin:dsh-acp:dsh',
+          ghostId: 'dsh-acp',
+          harnessId: 'dsh',
+          name: 'DeepSeek Harness',
+          availability: { state: 'available' },
+          models: offeredModels,
+          permissionModes: [{ id: 'ask', displayName: 'Ask' }],
+          defaultPermissionMode: 'ask',
+          remoteUse: { supported: true, shareSupported: true, enabled: true },
+        }];
+      }
+      return null;
+    });
+    const { result } = renderHook(() => useProviderShareAgentDevices());
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    expect(result.current.devices).toEqual([{ deviceId: 'share:builtin', name: 'from Magi' }]);
+    expect(result.current.pluginEngineDevices).toEqual([{ deviceId: 'share:plugin', name: 'from Magi' }]);
+    expect(result.current.nameFor('share:plugin')).toBe('from Magi');
+    expect(result.current.isKnown('share:plugin')).toBe(true);
+    expect(result.current.isReceived('share:plugin')).toBe(true);
+
+    const picker = renderHook(() => useDevicesPluginEngines(['share:plugin']));
+    // Unread picker candidates stay idle on push until opened.
+    await act(async () => {
+      catalogPush?.({ deviceId: 'share:plugin', channel: 'maker:provider:changed', payload: {} });
+      await Promise.resolve();
+    });
+    expect(invoke).not.toHaveBeenCalled();
+
+    // Once opened (loaded), a share catalog invalidation push refreshes the open picker immediately.
+    await act(async () => { picker.result.current.read(); });
+    await waitFor(() => expect(picker.result.current.catalogues.get('share:plugin')?.[0]?.models).toEqual(offeredModels));
+    offeredModels = [{ id: 'deepseek-v4-lite', displayName: 'DeepSeek V4 Lite' }];
+    await act(async () => {
+      catalogPush?.({ deviceId: 'share:plugin', channel: 'maker:provider:changed', payload: {} });
+    });
+    await waitFor(() => expect(picker.result.current.catalogues.get('share:plugin')?.[0]?.models).toEqual(offeredModels));
   });
 });

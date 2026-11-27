@@ -10,16 +10,27 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock('react-i18next', async (original) => ({
   ...(await original<typeof import('react-i18next')>()),
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({ i18n: { language: 'en' }, t: (key: string, opts?: { count?: number; role?: string }) =>
+    opts?.count !== undefined ? `${key}:${opts.count}` : opts?.role ? `${key}:${opts.role}` : key }),
 }));
 vi.mock('@/features/right-sidebar/lib/openInSidebarBrowser', () => ({
   openUrlInSidebarBrowser: mocks.sidebar,
   pathToFileUrl: (path: string) => `file://${path}`,
 }));
 vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('../useForkAtMessage', () => ({
+  useForkAtMessage: () => async () => {},
+  textToTiptapDoc: () => null,
+}));
+vi.mock('../useDeleteMessage', () => ({ useDeleteMessage: () => async () => {} }));
 
+import { Tooltip } from '@/components/ui/tooltip';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { UserMessageImageLink } from '../UserMessageImageLink';
+import { UserMessage } from '../UserMessage';
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
+import { MemoryRouter } from 'react-router-dom';
+import { toMessageAutomationOrigin } from '@/lib/messageAutomationOrigin';
 import { _resetLinkOpenPreferenceForTests } from '@/hooks/useLinkOpenPreference';
 
 beforeEach(() => {
@@ -54,6 +65,42 @@ describe('message link entry points', () => {
     fireEvent.click(link, { shiftKey: true });
     await waitFor(() => expect(mocks.openExternal).toHaveBeenCalledWith('http://localhost:3000'));
     expect(mocks.sidebar).toHaveBeenCalledOnce();
+  });
+
+  // 回归：带首个 Worker 身份的合批必须显示数量并保留全部正文（unit）。
+  it.each([undefined, 2])('renders Orca history for %s workers without a misleading source link', async count => {
+    const body = 'Worker A (worker-1): done\nA full report\nWorker B (worker-2): error\nB full report';
+    const automationOrigin = toMessageAutomationOrigin({ kind: 'orca', senderLabel: 'A', senderSessionId: 'worker-1',
+      ...(count ? { autoBridge: true, autoBridgeBatchCount: count } : {}) });
+    render(<MemoryRouter><UserMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} content={JSON.stringify({ orcaSource: 'worker', content: body })}
+      workingDir="/workspace" automationOrigin={automationOrigin} /></MemoryRouter>);
+    fireEvent.click(screen.getByRole('button', { name: count
+      ? `chat.userMessage.orcaFromWorkerBatch:${count}` : 'chat.userMessage.orcaFromWorkerNamed:A' }));
+    // 正文现在走聊天 Markdown 渲染：仍要保住合并后的完整正文，而不是只剩首条摘要。
+    const bodyElement = await waitFor(() => {
+      const element = document.querySelector('[data-selection-quote-body]');
+      expect(element).toBeTruthy();
+      return element as HTMLElement;
+    });
+    expect(bodyElement.textContent).toContain('A full report');
+    expect(bodyElement.textContent).toContain('B full report');
+    if (count) expect(screen.queryByRole('button', { name: 'chat.userMessage.sessionSent' })).toBeNull();
+    else expect(screen.getByRole('button', { name: 'chat.userMessage.sessionSent' })).toBeTruthy();
+  });
+
+  // Unit, docs/plans/acp-plugin-bridge.md「分叉、侧聊与起名」: plugin engine tasks fork from Cindy's
+  // record, so the message keeps its Fork action; rewind still needs the agent's own history and stays
+  // hidden. Before, both actions were hidden for every plugin engine task (agentKind 'acp').
+  it('offers Fork but not Rewind on a plugin engine task message', () => {
+    // Renderer Session types list the built-in kinds only; a plugin engine task's 'acp' arrives as a
+    // runtime value through session.agentKind (docs/plans/acp-plugin-bridge.md「硬约束」).
+    const pluginEngineKind = 'acp' as unknown as 'cc';
+    render(<MemoryRouter><UserMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} content="continue"
+      workingDir="/workspace" sessionId="task" messageClientId="user-2" agentKind={pluginEngineKind} /></MemoryRouter>,
+    { wrapper: Tooltip.Provider });
+    expect(screen.getByRole('button', { name: 'chat.messageActionBar.fork' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'chat.messageActionBar.rewind' })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: 'chat.messageActionBar.rewind' })).toBeNull();
   });
 
   it('copies assistant URLs from a keyboard menu even without a task context', async () => {

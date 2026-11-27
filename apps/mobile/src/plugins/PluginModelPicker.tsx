@@ -11,7 +11,13 @@ import {
   getMobileAuthOwner,
   isMobileAuthOwnerCurrent,
 } from "@/auth/authOwnerGeneration";
+import { useRemoteAgentCatalogs } from '@/session/useRemoteAgentCatalogs';
 import { ModelPickerSheet } from "@/session/ModelPickerSheet";
+import {
+  resolveHostModelGroup,
+  useHostModelGroupPickerOptions,
+  useHostModelGroupsPayload,
+} from "@/session/hostModelGroups";
 import type { MobileModelMemoryAccessors } from "@/session/draftModelMemory";
 import type { MobileModelConfiguration } from "@/session/unifiedMobileModels";
 import {
@@ -46,6 +52,14 @@ export function PluginModelPicker({
       fast: request.initial.fastMode,
     } : null,
   );
+  const [agentDeviceId, setAgentDeviceId] = useState<string | null>(request.initial?.agentDeviceId ?? null);
+  const [selectedModelGroup, setSelectedModelGroup] = useState<string | null>(request.initial?.modelGroup ?? null);
+  const hostModelGroupsPayload = useHostModelGroupsPayload(deviceId, maker, true);
+  const remoteCatalogs = useRemoteAgentCatalogs({ enabled: request.allowRemote === true, controlledDeviceId: deviceId,
+    keepDeviceIds: agentDeviceId ? [agentDeviceId] : [] });
+  const remoteSupported = request.allowRemote
+    ? { catalogs: remoteCatalogs, selectedDeviceId: agentDeviceId, hostDeviceId: deviceId }
+    : undefined;
   const modelMemory = useRequestModelMemory();
   const owner = useRef(getMobileAuthOwner()).current,
     alive = useRef(true),
@@ -85,6 +99,48 @@ export function PluginModelPicker({
     }
     return false;
   };
+  const pickModelGroupRoute = async (
+    id: string,
+    overrides?: { effort?: string; fastMode?: boolean | "ultrafast" },
+  ): Promise<boolean> => {
+    const result = await resolveHostModelGroup(
+      maker,
+      id,
+      overrides ? { effort: overrides.effort || undefined, fastMode: overrides.fastMode } : undefined,
+      request.allowRemote ? undefined : { agentDeviceId: null },
+    );
+    if (!current()) return false;
+    if (!result || result.outcome !== "routed") {
+      Alert.alert(t("models.modelGroups.picker.chooseUnavailable", { name: result?.groupName ?? "" }));
+      return false;
+    }
+    const { route } = result;
+    if (route.agentKind === "acp") {
+      Alert.alert(t("models.modelGroups.picker.chooseUnavailable", { name: result.groupName }));
+      return false;
+    }
+    return answer({
+      ...(route.agentDeviceId && request.allowRemote ? { agentDeviceId: route.agentDeviceId } : {}),
+      agentKind: route.agentKind,
+      providerId: route.providerId,
+      model: route.model,
+      effort: route.effort ?? overrides?.effort ?? "",
+      fastMode: route.fastMode ?? overrides?.fastMode ?? false,
+      modelGroup: id,
+    });
+  };
+  const pickerModelGroupOptions = useHostModelGroupPickerOptions(
+    hostModelGroupsPayload?.groups ?? null,
+    selectedModelGroup,
+    (id) => pickModelGroupRoute(id),
+    t,
+    {
+      sourceRoutesPayload: hostModelGroupsPayload,
+      activeRouteId: selectedModelGroup,
+      onPickMerged: (routeId, config) =>
+        pickModelGroupRoute(routeId, { effort: config.effort, fastMode: config.fast }),
+    },
+  );
   return (
     <ModelPickerSheet
       visible
@@ -126,12 +182,17 @@ export function PluginModelPicker({
             throw new Error("CAPABILITIES_UNAVAILABLE");
           return result;
         },
-        onConfigure: async (value) => {
+        remote: remoteSupported,
+        ...(pickerModelGroupOptions ? { modelGroups: pickerModelGroupOptions } : {}),
+        onConfigure: async (value, source) => {
+          setSelectedModelGroup(null);
+          setAgentDeviceId(source?.deviceId ?? null);
           setSelection(value);
           return true;
         },
-        onSelect: (value) =>
+        onSelect: (value, source) =>
           answer({
+            ...(source?.deviceId ? { agentDeviceId: source.deviceId } : {}),
             agentKind: value.agent === "claude-code" ? "cc" : value.agent,
             providerId: value.providerId,
             model: value.modelId,

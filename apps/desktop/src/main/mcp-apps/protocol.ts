@@ -1,3 +1,5 @@
+import { isCanonicalBase64 } from '@cindy/maker-shared';
+import { validateCspDomains } from '@cindy/plugin-protocol';
 import { Buffer } from 'node:buffer';
 import type { ReadResourceResult, Tool } from '@modelcontextprotocol/sdk/types.js';
 import { RESOURCE_MIME_TYPE } from '@modelcontextprotocol/ext-apps/server';
@@ -50,24 +52,7 @@ export function toolVisibleTo(tool: Tool, audience: 'model' | 'app'): boolean {
   );
 }
 
-/** No schemes, directives, quotes, whitespace, credentials or paths from a CSP source. */
-export function validateCspDomains(domains: string[] | undefined): string[] {
-  if (domains && (!Array.isArray(domains) || domains.length > 100))
-    throw new Error('MCP_APP_INVALID_CSP_DOMAIN');
-  return (domains ?? []).map((source) => {
-    if (
-      !/^(https?|wss?):\/\/(?:\*\.)?(?:[a-zA-Z0-9.-]+|\[[a-fA-F0-9:]+\])(?::(?:[0-9]{1,5}|\*))?\/?$/.test(
-        source,
-      )
-    ) {
-      throw new Error('MCP_APP_INVALID_CSP_DOMAIN');
-    }
-    const url = new URL(source.replace('://*.', '://wildcard.').replace(/:\*(\/?)$/, ':443$1'));
-    if (!url.hostname || (url.port && Number(url.port) > 65535))
-      throw new Error('MCP_APP_INVALID_CSP_DOMAIN');
-    return source;
-  });
-}
+export { validateCspDomains } from '@cindy/plugin-protocol';
 
 export function appCsp(meta: McpUiResourceMeta = {}): {
   header: string;
@@ -101,7 +86,7 @@ export function readAppResource(
   result: ReadResourceResult,
   uri: string,
   fallbackMeta?: unknown,
-): { html: string; meta: McpUiResourceMeta } {
+): { html: string; meta: McpUiResourceMeta; hostFullscreenButton: boolean } {
   const item = result.contents.find(
     (content) => content.uri === uri && content.mimeType === RESOURCE_MIME_TYPE,
   );
@@ -109,7 +94,7 @@ export function readAppResource(
   if (
     'blob' in item &&
     (item.blob.length > Math.ceil(MCP_APPS_MAX_BYTES / 3) * 4 ||
-      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(item.blob))
+      !isCanonicalBase64(item.blob))
   )
     throw new Error('MCP_APP_INVALID_RESOURCE');
   const html = 'text' in item ? item.text : Buffer.from(item.blob, 'base64').toString('utf8');
@@ -117,7 +102,7 @@ export function readAppResource(
   const meta = McpUiResourceMetaSchema.parse(item._meta?.ui ?? fallbackMeta ?? {});
   // Validate before any document is supplied to a renderer.
   appCsp(meta);
-  return { html, meta };
+  return { html, meta, hostFullscreenButton: item._meta?.['cindy/host-fullscreen-button'] !== false };
 }
 
 export function safeAppLink(value: string): string {

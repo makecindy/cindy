@@ -1,11 +1,29 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import Database from 'better-sqlite3';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
+import type { Session } from '@cindy/maker-core';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { createEffortChangeCoordinator, enqueueEffortChange } from '../../renderer/components/new-chat/effortChangeQueue';
 import { supportsSubscriptionFastPolicy, type ProviderView } from '@cindy/model-providers';
 import { withFastModePolicy } from '../../../../../packages/maker-core/src/agents/shared/fast-mode-policy';
 import { commitRuntimeAxisAfterPersistence } from '../maker-ipc/runtimeSelectionAxes';
+import { createDbClientForHandle } from '../localDb/client/createDbClientForHandle';
+import { clearCurrentDbClient, setCurrentDbClient } from '../localDb/client/current';
+import * as schema from '../localDb/schema';
+import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue';
+import { AgentInputCoordinator, type AgentInputCoordinatorDeps } from '../maker-ipc/agent-input-coordinator';
+import {
+  createContextOverflowRollover, isContextOverflowErrorData, isOversizedHistoryErrorData,
+  isUnsupportedRequestOptionErrorData,
+} from '../maker-ipc/contextOverflowRollover';
+import {
+  claimContextRecoveryTerminal, deferContextRecoveryTerminal, settleContextRecoveryTerminal,
+  type ContextRecoveryTerminalPorts,
+} from '../maker-ipc/contextRecoveryTerminal';
+import { isTerminalTurnErrorEvent } from '../maker-ipc/sessionTurnActivityTracker';
+import { resolveAgentSendToSessionHint } from '@cindy/maker-shared/agent-input-projection';
 
 const mainRoot = resolve(__dirname, '..');
 const bootstrapSource = readFileSync(resolve(mainRoot, 'bootstrap-electron.ts'), 'utf8').replace(
@@ -16,16 +34,48 @@ const registerSource = readFileSync(resolve(mainRoot, 'maker-ipc/register.ts'), 
   /\r\n?/g,
   '\n',
 );
+const runtimePluginTaskBindingsSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/runtimePluginTaskBindings.ts'), 'utf8',
+).replace(/\r\n?/g, '\n');
+const runtimeWriterSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/sessionControlRuntimeWriter.ts'), 'utf8',
+).replace(/\r\n?/g, '\n');
+const runtimeControlSettlementSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/pendingSessionRuntimeControlSettlement.ts'), 'utf8',
+).replace(/\r\n?/g, '\n');
+const pendingCredentialSwitchAssemblySource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/pendingCredentialSwitchAssembly.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
 const coldPiRehydrationSource = readFileSync(
   resolve(mainRoot, 'maker-ipc/coldPiRehydration.ts'),
   'utf8',
 );
+// register.ts's binding of the cold Pi window check moved verbatim into coldPiRehydrationBinding.ts;
+// register.ts calls createColdPiRehydrationBinding where it bound it.
+const coldPiRehydrationBindingSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/coldPiRehydrationBinding.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
+// The agent switch deps' rememberThinkingIntent moved verbatim into agentSwitchDepsCore.ts;
+// register.ts passes createRememberThinkingIntent's result where it defined it.
+const agentSwitchDepsCoreSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/agentSwitchDepsCore.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
 const coldPiRehydrationFailureSource = readFileSync(
   resolve(mainRoot, 'maker-ipc/coldPiRehydrationFailure.ts'),
   'utf8',
 );
 const runtimeControlSource = readFileSync(
   resolve(mainRoot, 'maker-ipc/sessionRuntimeControl.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
+// The task read projector and the archive/delete cleanup register.ts passed to
+// setSessionRuntimeProjector and setSessionRuntimeCleanup moved verbatim into sessionRuntimeProjection.ts
+// (createSessionRuntimeProjector, createSessionRuntimeCleanup); register.ts passes their results.
+const runtimeProjectionSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/sessionRuntimeProjection.ts'),
   'utf8',
 ).replace(/\r\n?/g, '\n');
 const deviceLinkHostSource = readFileSync(
@@ -36,7 +86,68 @@ const makerSendSource = readFileSync(
   resolve(mainRoot, 'maker-ipc/makerSendTransaction.ts'),
   'utf8',
 ).replace(/\r\n?/g, '\n');
+const queuedInputOriginSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/queuedInputOrigin.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
+const runtimeFallbackSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/sessionRuntimeFallback.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
+const autoResumeHooksSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/interruptedTurnAutoResumeHooks.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
+const modelSwitchGateInputSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/modelSwitchGateInput.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
 
+// handleSetModel moved verbatim into sessionRuntimeSelectionApply.ts; register.ts keeps the binding
+// (createHandleSetModel) and the set-model IPC registration that follows it. The text these
+// assertions read is the moved function followed by that register.ts tail, in their former order.
+const runtimeSelectionApplySource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/sessionRuntimeSelectionApply.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
+// selectSameAgentModel and recoverRenamedSessionModelOnSend moved verbatim into
+// sessionRuntimeSelectionLanding.ts; register.ts calls their factories where it defined them.
+const runtimeSelectionLandingSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/sessionRuntimeSelectionLanding.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
+// SET_EFFORT, SET_FAST_MODE and SET_THINKING_ENABLED's bodies after their sender check moved verbatim into
+// sessionRuntimeAxisSettings.ts; register.ts keeps each registration and its sender check and calls the
+// moved body. Slices of those handlers read register.ts with each body put back in place of that call.
+const runtimeAxisSettingsSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/sessionRuntimeAxisSettings.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
+function movedHandlerBody(factory: string, params: string): string {
+  const start = runtimeAxisSettingsSource.indexOf(`export function ${factory}(`);
+  const head = `  return async (${params}) => {\n`;
+  const open = runtimeAxisSettingsSource.indexOf(head, start) + head.length;
+  const close = runtimeAxisSettingsSource.indexOf('\n  };\n}\n', open);
+  expect(start).toBeGreaterThan(-1);
+  expect(close).toBeGreaterThan(open);
+  return runtimeAxisSettingsSource.slice(open, close);
+}
+const registerWithAxisBodiesSource = registerSource
+  .replace('    return handleSetSessionEffort(sessionId, effort);',
+    movedHandlerBody('createSetSessionEffort', 'sessionId: unknown, effort: unknown'))
+  .replace('      return handleSetSessionFastMode(sessionId, requestedSpeed);',
+    movedHandlerBody('createSetSessionFastMode', 'sessionId: unknown, requestedSpeed: unknown'))
+  .replace('      return handleSetSessionThinkingEnabled(sessionId, enabled);',
+    movedHandlerBody('createSetSessionThinkingEnabled', 'sessionId: unknown, enabled: unknown'));
+// What register.ts held before handleSetModel moved out: the assertions that searched the whole of
+// register.ts for code of that function read this.
+const registerWithRuntimeSelectionSource = `${registerSource}\n${runtimeSelectionApplySource}\n${runtimeSelectionLandingSource}`;
+function setModelSource(): string {
+  return handlerBody(runtimeSelectionApplySource, 'const handleSetModel = async (', '  return handleSetModel;')
+    + handlerBody(registerSource, 'const handleSetModel = createHandleSetModel(', 'const recoverRemoteRuntimeAxisPersistence')
+    // recoverRenamedSessionModelOnSend, which register.ts assigned in that tail (its factory call).
+    + handlerBody(runtimeSelectionLandingSource, 'export function createRecoverRenamedSessionModelOnSend(', '\n}\n');
+}
 function handlerBody(source: string, channel: string, nextChannel: string): string {
   const start = source.indexOf(channel);
   const end = source.indexOf(nextChannel, start + channel.length);
@@ -61,17 +172,21 @@ const isUserPendingAgentSwitchIntent = new Function(ts.transpileModule(
   `return (intent) => ${userIntentPredicate.body!.getText(switchAst)};`,
   { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
 ).outputText)();
-function collectAxisHandlers(node: ts.Node): void {
+function collectAxisHandlers(node: ts.Node, ast: ts.SourceFile = registerAst): void {
   if (ts.isVariableDeclaration(node) && node.initializer &&
-      ['applyEffort', 'applyFastMode', 'persistEffort', 'persistFastMode', 'stagePendingUserRuntimeAxis'].includes(node.name.getText(registerAst))) {
-    axisHandlers.set(node.name.getText(registerAst), ts.transpileModule(
-      `return ${node.initializer.getText(registerAst)};`,
+      ['applyEffort', 'applyFastMode', 'persistEffort', 'persistFastMode', 'stagePendingUserRuntimeAxis'].includes(node.name.getText(ast))) {
+    axisHandlers.set(node.name.getText(ast), ts.transpileModule(
+      `return ${node.initializer.getText(ast)};`,
       { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
     ).outputText);
   }
-  ts.forEachChild(node, collectAxisHandlers);
+  ts.forEachChild(node, child => collectAxisHandlers(child, ast));
 }
 collectAxisHandlers(registerAst);
+// stagePendingUserRuntimeAxis, applyEffort and persistEffort are in sessionRuntimeAxisSettings.ts (register.ts
+// calls their factories); walking it after register.ts takes those declarations, with the same names.
+const runtimeAxisSettingsAst = ts.createSourceFile('sessionRuntimeAxisSettings.ts', runtimeAxisSettingsSource, ts.ScriptTarget.Latest, true);
+collectAxisHandlers(runtimeAxisSettingsAst, runtimeAxisSettingsAst);
 // Cross-file persistence contract: the real Renderer adapter must leave the
 // decision to Main even before its pending-intent projection reaches this UI.
 const rendererStoreAst = ts.createSourceFile('store.ts', readFileSync(
@@ -105,6 +220,7 @@ describe.each([
       remoteResponse: response, persistSessionFields: persist, agentSwitchPending: pending,
       readSessionRuntimeProfiles: async () => ({ effective: { providerId: 'next-provider', agentDeviceId: null } }),
       getSessionProvider: () => 'next-provider',
+      getPendingCredentialSwitchHolder: () => null,
       createSubscriptionFastPolicy: () => ({ isAllowed: () => true }),
       // These archived fixtures have no saved automation model scope.
       updateSavedScheduledAxis: vi.fn(async () => false),
@@ -147,7 +263,10 @@ describe.each([
     };
     h.pending.set('archived-task', intent);
     await h.run();
-    expect(h.pending.get('archived-task')).toEqual({ ...intent, [field]: value });
+    expect(h.pending.get('archived-task')).toEqual({
+      ...intent, [field]: value,
+      ...(kind === 'same-agent' ? { credentialSelectionAxes: { effort: true, fastMode: true } } : {}),
+    });
     if (kind !== 'same-agent') expect(h.changed).toHaveBeenCalledWith('archived-task',
       expect.objectContaining({ model: 'next-model', [field]: value }));
     expect(h.row).toMatchObject({ status: 'archived', effort: 'low', fastMode: false });
@@ -247,7 +366,8 @@ describe('active Claude subscription Fast setting', () => {
       resolvePendingRuntimeAxisPatch: async (_id: string, patch: object) => ({ ...patch }),
       recordUserSessionRuntimeAxisMutation: vi.fn(), setSessionFastMode: vi.fn(),
       maker: { getSession: () => ({ agentKind: 'claude-code', setFastMode: handle.setFastMode, getFastMode: handle.getFastMode }) },
-      persistFastMode, commitRuntimeAxisAfterPersistence, pendingCredentialSwitchHolder: null,
+      // The moved body reads the holder through its port (sessionRuntimeAxisSettings.ts); no switch is pending.
+      persistFastMode, commitRuntimeAxisAfterPersistence, getPendingCredentialSwitchHolder: () => null,
       remoteResponse: undefined, log: { debug: vi.fn() },
     };
     const run = new Function(...Object.keys(bindings), axisHandlers.get('applyFastMode')!)(...Object.values(bindings));
@@ -279,7 +399,7 @@ describe('session runtime control wiring', () => {
     const body = handlerBody(
       bootstrapSource,
       "mainWindow.once('ready-to-show'",
-      'void runComputerUseSmokeIfRequested();',
+      'void runComputerUseSmokeIfRequested(',
     );
     const shown = body.indexOf('showMainWindowAndRestoreFullscreen(');
     const badge = body.indexOf('refreshWindowsAppBadge();');
@@ -290,13 +410,17 @@ describe('session runtime control wiring', () => {
       /if \(!app.isPackaged \|\| isCindyVersionLaunchPending\(\)\)\s+markDesktopDevWindowReady\(mainWindow.webContents.getOSProcessId\(\)\);/,
     );
   });
-  it('advertises host-side model-window protection to remote controllers', () => {
+  it('advertises host-side model-window protection and Orca relocation to remote controllers', () => {
     const capabilities = handlerBody(
       registerSource,
       'ipcMain.handle(MAKER_INVOKE.GET_CAPABILITIES',
       'ipcMain.handle(MAKER_INVOKE.GET_NEW_MAKER_DEFAULTS',
     );
     expect(capabilities).toContain('supportsModelWindowSwitchGuard: true');
+    // Controllers only offer moving a controlled Orca Lead / local Worker's Agent when this is declared.
+    expect(capabilities).toContain('supportsOrcaAgentRelocation: true');
+    // Same for an execution-device Worker whose Lead is on another computer.
+    expect(capabilities).toContain('supportsOrcaRemoteWorkerAgentRelocation: true');
   });
 
   it('authenticates Desktop package-command entry points before minting Main context', () => {
@@ -311,11 +435,8 @@ describe('session runtime control wiring', () => {
     expect(registerSource).toContain('persisted?.autoResume === true');
     expect(registerSource).toContain('persisted?.origin !== undefined');
 
-    const steerDispatch = handlerBody(
-      registerSource,
-      'const steerToAgentAccepted = async (',
-      'registerMakerSessionSendHandler(',
-    );
+    const steerDispatch = readFileSync(resolve(mainRoot, 'maker-ipc/makerSteerTransaction.ts'), 'utf8');
+    expect(registerSource).toContain('const steerToAgentAccepted = createMakerSteerTransaction(');
     expect(steerDispatch).toContain('[MAIN_OWNED_SEND_CONTEXT]: so[MAIN_OWNED_SEND_CONTEXT]');
     expect(registerSource).toContain('trustedDesktopSteerText.run(queued.text, runSteer)');
     expect(registerSource).toContain(
@@ -330,13 +451,14 @@ describe('session runtime control wiring', () => {
       expect(body).toContain('if (!deviceLinkInvoke) assertTrustedAppRendererEvent(event);');
       expect(body).toContain('stampTrustedDesktopQueuedOrigin(');
     }
-    expect(makerSendSource).toContain('clientId: explicitUserItem.clientId');
-    expect(makerSendSource).toContain('persistedContent: explicitUserItem.persistedContent');
-    expect(makerSendSource).toContain(
+    expect(queuedInputOriginSource).toContain('clientId: explicitUserItem.clientId');
+    expect(queuedInputOriginSource).toContain('persistedContent: explicitUserItem.persistedContent');
+    expect(queuedInputOriginSource).toContain(
       'if (deviceLinkInvoke || !canTrustDesktopPiCommand(item)) return explicitUserItem',
     );
     expect(makerSendSource).toContain('TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT');
-    expect(registerSource).toContain(
+    expect(registerSource).toContain('broadcastGhostMessageBlocked, revokeTrustedDesktopQueueOrigin, broadcastGhostMessageRewritten,');
+    expect(runtimePluginTaskBindingsSource).toContain(
       'onUserMessageRewritten: (sessionId, item, info) => (revokeTrustedDesktopQueueOrigin(item)',
     );
     const updateText = handlerBody(
@@ -448,32 +570,40 @@ describe('session runtime control wiring', () => {
     expect(body.indexOf('clearAllSessionAttention();')).toBeLessThan(
       body.indexOf('authManager.setStableOwnerPostCommitTask('),
     );
-    expect(body).toContain('clearAllSessionProviders();');
-    expect(body).toContain('clearAllSessionRuntimeAxes();');
-    expect(body.indexOf('clearAllSessionProviders();')).toBeLessThan(
-      body.indexOf('clearAllSessionRuntimeControlStates();'),
-    );
-    expect(body.indexOf('clearAllSessionRuntimeAxes();')).toBeLessThan(
-      body.indexOf('clearAllSessionRuntimeControlStates();'),
-    );
-    expect(body.indexOf('clearAllSessionRuntimeControlStates();')).toBeLessThan(
+    // The owner-scoped runtime selection is cleared through the shared step (the Node Host's boundary
+    // hook calls the same one), before the post-commit task is registered.
+    expect(body).toContain('clearOwnerScopedSessionRuntimeSelection();');
+    expect(body.indexOf('clearOwnerScopedSessionRuntimeSelection();')).toBeLessThan(
       body.indexOf('authManager.setStableOwnerPostCommitTask('),
     );
-    expect(registerSource).toContain('effort: resolveRetainedRuntimeEffort({');
-    expect(registerSource).toContain('targetModelHasFixedEffort,');
-    expect(registerSource).toContain(
+    const sharedClear = handlerBody(
+      readFileSync(resolve(mainRoot, 'maker-ipc/sessionRuntimeControl.ts'), 'utf8').replace(/\r\n/g, '\n'),
+      'export function clearOwnerScopedSessionRuntimeSelection(): void {',
+      '\n}\n',
+    );
+    expect(sharedClear).toContain('clearAllSessionProviders();');
+    expect(sharedClear).toContain('clearAllSessionRuntimeAxes();');
+    expect(sharedClear.indexOf('clearAllSessionProviders();')).toBeLessThan(
+      sharedClear.indexOf('clearAllSessionRuntimeControlStates();'),
+    );
+    expect(sharedClear.indexOf('clearAllSessionRuntimeAxes();')).toBeLessThan(
+      sharedClear.indexOf('clearAllSessionRuntimeControlStates();'),
+    );
+    expect(registerWithRuntimeSelectionSource).toContain('effort: resolveRetainedRuntimeEffort({');
+    expect(registerWithRuntimeSelectionSource).toContain('targetModelHasFixedEffort,');
+    expect(registerWithRuntimeSelectionSource).toContain(
       'fastMode: retainedSession.getFastMode() ?? previousRuntime.fastMode',
     );
   });
 
   it('serializes user effort and Fast mutations with model route changes', () => {
     const effort = handlerBody(
-      registerSource,
+      registerWithAxisBodiesSource,
       'ipcMain.handle(MAKER_INVOKE.SET_EFFORT',
       'MAKER_INVOKE.SET_PERMISSION_MODE',
     );
     const fast = handlerBody(
-      registerSource,
+      registerWithAxisBodiesSource,
       'MAKER_INVOKE.SET_FAST_MODE',
       'MAKER_INVOKE.SET_THINKING_ENABLED',
     );
@@ -600,11 +730,7 @@ describe('session runtime control wiring', () => {
   });
 
   it('guards local user model changes before parsing input while preserving trusted internal paths', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     const ingress = setModel.indexOf('registerSessionSetModelHandler(makerSessionRegistry, {');
     expect(ingress).toBeGreaterThan(-1);
     expect(setModel.slice(0, ingress)).not.toContain('assertTrustedAppRendererEvent(');
@@ -621,15 +747,11 @@ describe('session runtime control wiring', () => {
     expect(setModel).not.toContain('ipcMain.handle(MAKER_INVOKE.SET_MODEL, handleSetModel)');
   });
 
-  it('accepts local user null effort at the selection gate; ranked models still fail in catalog', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+  it('passes user null effort through catalog normalization before model side effects', () => {
+    const setModel = setModelSource();
     const confirmation = setModel.indexOf('const confirmedContextWindow =');
     const selectionValidation = setModel.indexOf('!isSupportedRuntimeEffort(selectionEffort)');
-    const fixedEffortValidation = setModel.indexOf('atomicSelection.effort === null');
+    const axisResolution = setModel.indexOf('const axes = resolveSessionRuntimeAxes({');
     const prepare = setModel.indexOf('prepareModelWindowSwitch(');
     const apply = setModel.indexOf('applyRuntimeSetModelChange({');
 
@@ -641,12 +763,11 @@ describe('session runtime control wiring', () => {
     expect(setModel).not.toContain(
       "selectionEffort === null &&\n            (internalOptions.source !== 'user' ||\n              isDeviceLinkInvoke() ||\n              confirmedContextWindow !== undefined)",
     );
-    expect(setModel).toContain('catalogModel.efforts.length > 0');
-    expect(setModel).toContain(
-      "internalOptions.source === 'user' &&\n          atomicSelection.effort === null &&\n          catalogModel.efforts.length > 0",
-    );
-    expect(fixedEffortValidation).toBeGreaterThan(selectionValidation);
-    expect(fixedEffortValidation).toBeLessThan(prepare);
+    // #7449: a null wire axis must reach catalog normalization, otherwise the
+    // pending selection fails again on every queued-send retry.
+    expect(setModel).not.toContain('`effort "null" is unavailable for model "${model}"`');
+    expect(axisResolution).toBeGreaterThan(selectionValidation);
+    expect(axisResolution).toBeLessThan(prepare);
     expect(prepare).toBeLessThan(apply);
     expect(setModel).toContain(
       '!isDeviceLinkInvoke() && confirmedContextWindow === targetContextWindow',
@@ -654,11 +775,7 @@ describe('session runtime control wiring', () => {
   });
 
   it('validates atomic user axes against the selected catalog model before side effects', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     const axisValidation = setModel.indexOf('if (atomicSelection) {');
     expect(axisValidation).toBeGreaterThan(-1);
     expect(setModel).not.toContain("if (internalOptions.source !== 'user' && atomicSelection)");
@@ -673,18 +790,18 @@ describe('session runtime control wiring', () => {
     );
     expect(setModel).toContain("allowFixedEffortPlaceholder: internalOptions.source === 'user'");
     expect(axisValidation).toBeLessThan(setModel.indexOf('applyRuntimeSetModelChange({'));
-    expect(axisValidation).toBeLessThan(setModel.indexOf('persistSessionFields(sessionId'));
+    expect(axisValidation).toBeLessThan(setModel.indexOf('persistSessionFields(sessionId, patch)'));
   });
 
   it('reconciles deferred route axes before the pending gate can wake input', () => {
     const persistRoute = handlerBody(
-      registerSource,
+      pendingCredentialSwitchAssemblySource,
       'persistRoute: async (sessionId, route) => {',
       'logger: log,',
     );
     const resolveAxes = persistRoute.indexOf('const axes = resolveSessionRuntimeAxes({');
     const persist = persistRoute.indexOf(
-      'await pendingDb.drizzle.update(sessions).set(patch)',
+      'const result = ports.settlementPermit ? update.run() : await update.run();',
       resolveAxes,
     );
     const commitEffort = persistRoute.indexOf('setSessionEffort(sessionId, finalEffort);', persist);
@@ -694,7 +811,7 @@ describe('session runtime control wiring', () => {
     );
     const broadcast = persistRoute.indexOf('broadcastSessionPatched(sessionId, patch);', persist);
 
-    expect(persistRoute).toContain('const [desiredRow] = await pendingDb');
+    expect(persistRoute).toContain('const desiredRow = await readCredentialTaskSettings(pendingDb, sessionId);');
     expect(persistRoute).toContain('assertPendingOwner();');
     expect(persistRoute).toContain('const restoringPreviousRoute =');
     expect(persistRoute).toContain('let finalEffort = restoringPreviousRoute && route.effort');
@@ -711,11 +828,7 @@ describe('session runtime control wiring', () => {
   });
 
   it('commits device-link atomic axes before a rebuilt queue can wake', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     const selectionStart = setModel.indexOf('const selectionToCommit = atomicSelection;');
     const applyAxes = setModel.indexOf('await applyRuntimeSelectionAxesWithRecovery({');
     const patchEffort = setModel.indexOf('patch.effort = atomicSelection.effort;', applyAxes);
@@ -733,7 +846,6 @@ describe('session runtime control wiring', () => {
       normalWakeGuard,
     );
 
-    expect(setModel).toContain('atomicSelection.effort === null');
     expect(setModel).toContain('isDeviceLinkInvoke() ||');
     expect(setModel).toContain("(atomicSelection?.effort === null && runtimeAgentKind !== 'pi')");
     expect(setModel).toContain('!rebuildLiveOrcaWorker && !atomicSelection');
@@ -751,12 +863,17 @@ describe('session runtime control wiring', () => {
     expect(wakeQueue).toBeGreaterThan(normalWakeGuard);
   });
 
+  it('persists a send-time renamed model inside the shared route transaction', () => {
+    const setModel = setModelSource();
+    expect(setModel).toContain('persistRenamedSessionModel: true');
+    const persistGate = setModel.indexOf('internalOptions.persistRenamedSessionModel === true');
+    const persist = setModel.indexOf('await persistSessionFields(sessionId, patch);', persistGate);
+    expect(persistGate).toBeGreaterThan(-1);
+    expect(persist).toBeGreaterThan(persistGate);
+  });
+
   it('uses current runtime window facts but still requires a verified target before rebuilding', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     const verifiedWindowOnly = setModel.indexOf(
       'targetContextWindow = verifiedTargetWindow ?? undefined;',
     );
@@ -814,11 +931,7 @@ describe('session runtime control wiring', () => {
   });
 
   it('restores the cold-session source provider before window evaluation even when the switch names a target provider (#3996)', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     // 目标 provider(用户要切去的来源)与源会话 provider(窗口评估所需身份)是两个
     // 独立事实。冷会话内存未 hydrate 时,即使请求显式携带目标 provider,也必须先从
     // DB 恢复源 provider,否则 currentProviderId 为 null,源模型窗口按全局 modelId
@@ -831,15 +944,18 @@ describe('session runtime control wiring', () => {
     const restore = setModel.indexOf('if (!hasSessionProvider(sessionId)) {');
     const hydrate = setModel.indexOf('hydrateSessionProvider(sessionId, persistedProviderId);');
     const current = setModel.indexOf('const currentProviderId = internalOptions.previousPiRoute');
-    const catalogCurrent = setModel.indexOf('const catalogCurrentWindow =');
+    // The source window is resolved in modelSwitchGateInput.ts; handleSetModel calls it.
+    const catalogCurrent = setModel.indexOf('const switchWindows = resolveModelSwitchWindows({');
     expect(requested).toBeGreaterThan(-1);
     expect(restore).toBeGreaterThan(requested);
     expect(hydrate).toBeGreaterThan(restore);
     expect(current).toBeGreaterThan(hydrate);
     // 恢复出的源 provider 必须先于源窗口解析被消费;目标窗口仍由目标 provider 解析。
     expect(catalogCurrent).toBeGreaterThan(current);
-    expect(setModel).toContain(
-      'lookupVerifiedContextWindow(\n          resolveRouteWindow,\n          model,\n          targetRouteProviderId,',
+    expect(setModel).toContain('currentRuntimeModel, currentProviderId, piPreview, liveCurrentWindow,');
+    expect(modelSwitchGateInputSource).toContain('const catalogCurrentWindow =');
+    expect(modelSwitchGateInputSource).toContain(
+      'lookupVerifiedContextWindow(\n    resolveRouteWindow,\n    model,\n    targetRouteProviderId,',
     );
     expect(setModel).toContain('const targetProviderId =');
     // 停用轴准入只依赖目标路由,源 provider 的 DB 查询失败不能跳过准入
@@ -852,11 +968,13 @@ describe('session runtime control wiring', () => {
   });
 
   it('projects rebuilt zero usage and the verified window after the runtime is closed', () => {
-    const commitRebuild = handlerBody(
-      registerSource,
-      'commitRebuild: async (sessionId, handoff, meta, signal) => {',
-      'setPendingHandoff: (sessionId, handoff, expectedGeneration)',
-    );
+    const coreSource = readFileSync(resolve(mainRoot, 'maker-ipc/contextRecoveryAssembly.ts'), 'utf8').replace(/\r\n?/g, '\n');
+    const coreAst = ts.createSourceFile('contextRecoveryAssembly.ts', coreSource, ts.ScriptTarget.Latest, true);
+    const core = coreAst.statements.find((node): node is ts.FunctionDeclaration =>
+      ts.isFunctionDeclaration(node) && node.name?.text === 'commitContextRecoveryWithPorts');
+    if (!core) throw new Error('Shared context rebuild coordination is missing');
+    const commitRebuild = core.body!.getText(coreAst).replace(/\bports\./g, '');
+    expect(registerSource).toContain('commitContextRecoveryWithPorts({');
     const query = commitRebuild.indexOf('contextWindow: sessions.contextWindow,');
     const commit = commitRebuild.indexOf('commitContextRebuild(sessionId, handoff, meta)');
     const cancellation = commitRebuild.indexOf('signal?.throwIfAborted();');
@@ -875,13 +993,11 @@ describe('session runtime control wiring', () => {
     expect(commitRebuild).toContain("log.warn('context rebuild card creation failed after commit'");
     expect(commitRebuild).toContain('try {\n        await createDbMessage(\n          sessionId,');
 
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
-    expect(setModel).toContain("typeof runtimeStatus.contextTokens === 'number'");
-    expect(setModel).toContain('runtimeStatus.contextTokens >= 0');
+    const setModel = setModelSource();
+    // The usage reading is validated in modelSwitchGateInput.ts; handleSetModel calls it.
+    expect(setModel).toContain('resolveModelSwitchContextTokens(runtimeStatus, liveContextTokens)');
+    expect(modelSwitchGateInputSource).toContain("typeof runtimeStatus.contextTokens === 'number'");
+    expect(modelSwitchGateInputSource).toContain('runtimeStatus.contextTokens >= 0');
     const persistFinalRoute = setModel.indexOf('await persistSessionFields(sessionId, patch);');
     const projectFinalWindow = setModel.indexOf(
       '// commitRebuild first projects zero usage against the still-authoritative',
@@ -896,11 +1012,7 @@ describe('session runtime control wiring', () => {
   });
 
   it('omits effort from the DB patch for fixed-effort models (sessions.effort NOT NULL)', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     // 固定 effort 模型(efforts.length === 0)的运行时语义是 effort: null,但
     // sessions.effort 列是 NOT NULL——把 null 写进 DB patch 会让整个模型切换被
     // NOT NULL 约束炸掉(issue #3691)。持久化 patch 必须省略该字段,内存 store
@@ -928,12 +1040,12 @@ describe('session runtime control wiring', () => {
 
   it('commits user effort and Fast state only after the live runtime call succeeds', () => {
     const effort = handlerBody(
-      registerSource,
+      registerWithAxisBodiesSource,
       'ipcMain.handle(MAKER_INVOKE.SET_EFFORT',
       'MAKER_INVOKE.SET_PERMISSION_MODE',
     );
     const fast = handlerBody(
-      registerSource,
+      registerWithAxisBodiesSource,
       'MAKER_INVOKE.SET_FAST_MODE',
       'MAKER_INVOKE.SET_THINKING_ENABLED',
     );
@@ -958,9 +1070,9 @@ describe('session runtime control wiring', () => {
 
   it('cancels and publishes a deferred runtime mutation after settlement fails', () => {
     const settlement = handlerBody(
-      registerSource,
+      runtimeControlSettlementSource,
       'const settlePendingSessionRuntimeControl =',
-      'settlePendingSessionRuntimeControlHolder = settlePendingSessionRuntimeControl;',
+      'return settlePendingSessionRuntimeControl;',
     );
     const catchBlock = settlement.slice(settlement.indexOf('} catch (error) {'));
 
@@ -982,12 +1094,12 @@ describe('session runtime control wiring', () => {
 
   it('drops in-flight effort and Fast mutations after an owner boundary', () => {
     const effort = handlerBody(
-      registerSource,
+      registerWithAxisBodiesSource,
       'ipcMain.handle(MAKER_INVOKE.SET_EFFORT',
       'MAKER_INVOKE.SET_PERMISSION_MODE',
     );
     const fast = handlerBody(
-      registerSource,
+      registerWithAxisBodiesSource,
       'MAKER_INVOKE.SET_FAST_MODE',
       'MAKER_INVOKE.SET_THINKING_ENABLED',
     );
@@ -1000,7 +1112,8 @@ describe('session runtime control wiring', () => {
         body.indexOf('return await apply'),
       );
     }
-    expect(registerSource).toContain(
+    // recoverRemoteRuntimeAxisPersistence, which holds this fence, moved into sessionRuntimeAxisSettings.ts.
+    expect(`${registerSource}\n${runtimeAxisSettingsSource}`).toContain(
       'if (!sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) return;',
     );
   });
@@ -1009,11 +1122,7 @@ describe('session runtime control wiring', () => {
   // stage an archived task, but automatic changes and send-time application must
   // still stop before recreating runtime state. The old guard rejected all three.
   it('allows only user picker staging on archived tasks inside the shared route lock', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     const terminalGuard = setModel.indexOf("runtimeStatus.status !== 'active'");
     expect(terminalGuard).toBeGreaterThan(setModel.indexOf('const applyLocked = async () => {'));
     expect(terminalGuard).toBeLessThan(setModel.indexOf('acceptSessionRuntimeMutation({'));
@@ -1030,11 +1139,7 @@ describe('session runtime control wiring', () => {
   });
 
   it('stages user routes before every runtime mutation and prevents remote persistence of the source route', () => {
-    const body = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const body = setModelSource();
     const stage = body.indexOf('agentSwitchPending.set(sessionId, intent)');
     expect(stage).toBeGreaterThan(body.indexOf('assertModelRouteUsable('));
     expect(stage).toBeGreaterThan(body.indexOf('resolveSessionRuntimeAxes('));
@@ -1052,19 +1157,15 @@ describe('session runtime control wiring', () => {
   });
 
   it('carries the Pi thinking intent through every staged selection replay', () => {
-    const body = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const body = setModelSource();
     const early = body.slice(body.indexOf('// A picker click'), body.indexOf('const axisPatch:'));
     // 点选暂存：intent 必须带上思考意图，否则发送时回放会丢档位。
     expect(early).toContain('{ thinking: atomicSelection.thinking }');
     // 发送回放 / deferred 结算另两条重建链也不能丢。
-    expect(registerSource).toContain('{ thinking: intent.thinking }');
-    expect(registerSource).toContain('{ thinking: pending.thinking }');
+    expect(registerWithRuntimeSelectionSource).toContain('{ thinking: intent.thinking }');
+    expect(runtimeControlSettlementSource).toContain('{ thinking: pending.thinking }');
     expect(
-      registerSource.split('{ thinking: atomicSelection.thinking }').length,
+      registerWithRuntimeSelectionSource.split('{ thinking: atomicSelection.thinking }').length,
     ).toBeGreaterThanOrEqual(3);
     // 回合中延期（deferLockedSelection）的两条登记都要暂存思考意图：只靠结算侧回放
     // pending.thinking 不够，登记时不写就恒为 undefined，原症状会在「回合中切模」
@@ -1079,14 +1180,18 @@ describe('session runtime control wiring', () => {
       defer.split('{ thinking: atomicSelection.thinking }').length - 1,
     ).toBeGreaterThanOrEqual(2);
     // 非 Pi 引擎绝不能收到 thinkingEnabled（只有 Pi 的 set_model 会消费它）。
-    expect(registerSource).toContain(
+    expect(registerWithRuntimeSelectionSource).toContain(
       "runtimeAgentKind === 'pi' && atomicSelection?.thinking !== undefined",
     );
     // 提交写入镜像后同步本机 renderer 记忆：renderer 的全量快照才会带上该选择，
     // 镜像里的钉子得以撤销（否则会长期压住被控端后来的显式改动）。
-    const rememberThinking = registerSource.slice(
-      registerSource.indexOf('rememberThinkingIntent: ({'),
-      registerSource.indexOf('bootstrapSwitchedSession: async (sessionId, opts)'),
+    // register.ts passes the moved closure to the agent switch deps.
+    expect(handlerBody(registerSource, 'const agentSwitchDeps:', 'bootstrapSwitchedSession:'))
+      .toContain('rememberThinkingIntent: createRememberThinkingIntent({ broadcastToAllWindows }),');
+    const rememberThinking = handlerBody(
+      agentSwitchDepsCoreSource,
+      'export function createRememberThinkingIntent(',
+      '\n  };\n}',
     );
     expect(rememberThinking).toContain(
       'setThinkingEnabledInMemory(agentKind, providerId, model, thinking)',
@@ -1095,7 +1200,7 @@ describe('session runtime control wiring', () => {
   });
 
   it('only relinks retained cross-host writers without rewriting native history', () => {
-    const body = handlerBody(registerSource, 'const handleSetModel = async (', 'const recoverRemoteRuntimeAxisPersistence');
+    const body = setModelSource();
     expect(body).toContain('requiresCodexThreadRelink: () => maker.requiresCodexThreadHostTransfer(');
     expect(body).toContain('...(canTransferThread ? {');
     expect(body).toContain('relinkCodexProviderThread(');
@@ -1108,7 +1213,8 @@ describe('session runtime control wiring', () => {
     expect(body).toContain('confirmedTargetPressure:');
     expect(body).toContain('internalOptions.applyingUserSelectionOnSend === true');
     expect(body).toContain('if (atomicSelection.effort !== null)');
-    expect(registerSource).toContain(
+    // The agent switch deps' selectSameAgentModel (register.ts binds it from this file).
+    expect(runtimeSelectionLandingSource).toContain(
       'sessionLockHeld: true, applyingUserSelectionOnSend: applyNow',
     );
   });
@@ -1118,12 +1224,12 @@ describe('session runtime control wiring', () => {
   // without restoring the runtime stores cleared by archive cleanup.
   it('saves archived effort and Fast without recreating runtime state, and rejects deleted tasks', () => {
     const effort = handlerBody(
-      registerSource,
+      registerWithAxisBodiesSource,
       'ipcMain.handle(MAKER_INVOKE.SET_EFFORT',
       'MAKER_INVOKE.SET_PERMISSION_MODE',
     );
     const fast = handlerBody(
-      registerSource,
+      registerWithAxisBodiesSource,
       'MAKER_INVOKE.SET_FAST_MODE',
       'MAKER_INVOKE.SET_THINKING_ENABLED',
     );
@@ -1156,9 +1262,9 @@ describe('session runtime control wiring', () => {
       'export function wireSessionToIpc',
     );
     const terminalCleanup = handlerBody(
-      registerSource,
-      'setSessionRuntimeCleanup((sessionId) => {',
-      'disposePiPackagesChangedBroadcast?.();',
+      runtimeProjectionSource,
+      'export function createSessionRuntimeCleanup(',
+      '\n}\n',
     );
 
     expect(closeBoundary).not.toContain('clearSessionRuntimeControlState(session.id);');
@@ -1172,35 +1278,32 @@ describe('session runtime control wiring', () => {
     expect(registerSource).toContain(
       'const pendingSessionRuntimeFallbackRebuilds = new WeakMap<Session, number>();',
     );
-    expect(registerSource).toContain(
+    expect(runtimeFallbackSource).toContain(
       'pendingSessionRuntimeFallbackRebuilds.set(runtimeSession, attemptToken);',
     );
-    expect(registerSource).toContain(
+    expect(autoResumeHooksSource).toContain(
       'pendingSessionRuntimeFallbackRebuilds.delete(fallbackRebuildSession);',
     );
     expect(registerSource).toContain(
       'shouldPreserveSessionRuntimeFallbackAutoResume(session, closeReason)',
     );
     expect(registerSource).toContain('autoResumeBookkeeping.hasLiveSchedule(session.id, attemptToken)');
-    expect(registerSource).toContain(
-      'decision.episodeAttempt,\n                decision.attemptToken,',
+    expect(autoResumeHooksSource).toContain(
+      'decision.episodeAttempt,\n                  decision.attemptToken,',
     );
-    expect(registerSource).toContain('isRemoteModelSwitchRouteChangeError(error)');
-    expect(registerSource).toContain(
+    expect(runtimeFallbackSource).toContain('isRemoteModelSwitchRouteChangeError(error)');
+    expect(runtimeFallbackSource).toContain(
       'automatic session runtime fallback rebuilding frozen remote route',
     );
-    expect(registerSource).toContain(
+    expect(runtimeFallbackSource).toContain(
       'await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));',
     );
-    expect(registerSource).toContain('result = await applyCandidate();');
+    expect(runtimeFallbackSource).toContain('result = await applyCandidate();');
   });
 
   it('fails closed when non-UI runtime selection requires model-window confirmation', () => {
-    const setRuntime = handlerBody(
-      registerSource,
-      'setSessionRuntime: async ({ targetSessionId, expectedGeneration, patch, beforeMutation }) => {',
-      'assertExternalInputAllowed: assertReviewExternalInputAllowed,',
-    );
+    expect(registerSource).toContain('setSessionRuntime: createSessionControlRuntimeWriter({');
+    const setRuntime = runtimeWriterSource;
     const setRuntimeGuard = setRuntime.indexOf(
       'if (runtimeSelectionRequiresModelWindowConfirmation(response))',
     );
@@ -1217,10 +1320,12 @@ describe('session runtime control wiring', () => {
       'runtime selection was not changed',
     );
 
+    // The fallback is in sessionRuntimeFallback.ts; register.ts assembles it.
+    expect(registerSource).toContain('const maybeApplySessionRuntimeFallback = createSessionRuntimeFallback<Session>({');
     const fallback = handlerBody(
-      registerSource,
-      'const maybeApplySessionRuntimeFallback = async (',
-      'const sessionControlService = createSessionControlService({',
+      runtimeFallbackSource,
+      'export function createSessionRuntimeFallback',
+      '\n}\n',
     );
     const fallbackGuard = fallback.indexOf(
       'if (runtimeSelectionRequiresModelWindowConfirmation(result))',
@@ -1238,11 +1343,7 @@ describe('session runtime control wiring', () => {
   });
 
   it('fences atomic model axis settlement after an owner boundary', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     expect(setModel).toContain('const assertRuntimeOwnerCurrent = (): void => {');
     expect(setModel).toContain('assertCanCommit: assertRuntimeOwnerCurrent,');
 
@@ -1267,25 +1368,28 @@ describe('session runtime control wiring', () => {
   });
 
   it('clears fixed-effort overrides from lazy bootstrap and the bridge effort store', () => {
-    expect(registerSource).toContain('o.effort = runtimeOverride.effort ?? undefined;');
-    expect(registerSource).toContain('setSessionEffort(session.id, runtimeOverride.effort);');
-    expect(registerSource).toContain('setSessionEffort(sessionId, selectionToCommit.effort);');
+    // bootstrapSession starts on the override through the shared step in sessionRuntimeControl.ts.
+    expect(registerSource).toContain('const runtimeOverride = applySessionRuntimeOverrideForStart(o, groupDecidesSource);');
+    expect(runtimeControlSource).toContain('o.effort = runtimeOverride.effort ?? undefined;');
+    expect(registerWithRuntimeSelectionSource).toContain('setSessionEffort(session.id, runtimeOverride.effort);');
+    expect(registerWithRuntimeSelectionSource).toContain('setSessionEffort(sessionId, selectionToCommit.effort);');
   });
 
   it('keeps explicit provider null and fixed-effort null through runtime settlement', () => {
-    expect(registerSource).toMatch(
+    expect(registerWithRuntimeSelectionSource).toMatch(
       /effectiveProviderId === null\s*\? null\s*: \(normalizeSessionProviderId\(effectiveProviderId\) \?\? currentProviderId\)/,
     );
-    expect(registerSource).toContain('effort: pending.profile.effort,');
-    expect(registerSource).toContain('effort: selected.effort, fastMode: selected.fastMode');
-    expect(registerSource).toContain('effort: next.effort, fastMode: next.fastMode');
+    expect(runtimeControlSettlementSource).toContain('effort: pending.profile.effort,');
+    expect(registerWithRuntimeSelectionSource).toContain('effort: selected.effort, fastMode: selected.fastMode');
+    expect(runtimeWriterSource).toContain('effort: next.effort, fastMode: next.fastMode');
   });
 
   it('projects runtime state into shared session snapshots and patch notifications', () => {
-    expect(registerSource).toContain('setSessionRuntimeProjector((session) =>');
-    expect(registerSource).toContain('setSessionRuntimeCleanup((sessionId) =>');
+    expect(registerSource).toContain('setSessionRuntimeProjector(createSessionRuntimeProjector({');
+    expect(runtimeProjectionSource).toContain('  return (session) => {');
+    expect(registerSource).toContain('setSessionRuntimeCleanup(createSessionRuntimeCleanup({');
     expect(registerSource).toContain('broadcastSessionRuntimeProjection(sessionId');
-    expect(registerSource).toContain('projectSessionRuntimeControl(session.id');
+    expect(runtimeProjectionSource).toContain('projectSessionRuntimeControl(session.id');
     expect(runtimeControlSource).toContain('runtimeEffective: effective');
     expect(runtimeControlSource).toContain('runtimePending: control.pending');
     expect(runtimeControlSource).toContain("effort: effective.effort ?? '',");
@@ -1293,16 +1397,18 @@ describe('session runtime control wiring', () => {
   // persists Pi runtime-verified windows without catalog replacement: covered by the executable sessionEventPipeline tests.
 
   it('counts fallback eligibility across the whole interrupted-turn episode', () => {
-    expect(registerSource).toContain(
-      'decision.episodeAttempt,\n                decision.attemptToken,',
+    expect(autoResumeHooksSource).toContain(
+      'decision.episodeAttempt,\n                  decision.attemptToken,',
     );
   });
 
   it('records failed fallback routes without allowing stale owner work to mutate state', () => {
+    // The fallback is in sessionRuntimeFallback.ts; register.ts assembles it.
+    expect(registerSource).toContain('const maybeApplySessionRuntimeFallback = createSessionRuntimeFallback<Session>({');
     const fallback = handlerBody(
-      registerSource,
-      'const maybeApplySessionRuntimeFallback = async (',
-      'const sessionControlService = createSessionControlService({',
+      runtimeFallbackSource,
+      'export function createSessionRuntimeFallback',
+      '\n}\n',
     );
     expect(fallback).toContain(
       'const runtimeOwnerEpoch = captureSessionRuntimeControlOwnerEpoch();',
@@ -1317,15 +1423,22 @@ describe('session runtime control wiring', () => {
   });
 
   it('rehydrates a cold Pi runtime before model-window assessment', () => {
-    const rehydrate = handlerBody(
+    // register.ts still binds it before the agent switch deps; the binding's text is in the moved file.
+    expect(handlerBody(
       registerSource,
-      'const rehydrateColdPiRuntimeForWindowVerification = createColdPiRehydrationForWindowVerification({',
+      'const rehydrateColdPiRuntimeForWindowVerification = createColdPiRehydrationBinding({',
       'const agentSwitchDeps:',
+    )).toContain('readSessionExtraDirsFromDb, bootstrapSession,');
+    const rehydrate = handlerBody(
+      coldPiRehydrationBindingSource,
+      'const rehydrateColdPiRuntimeForWindowVerification = createColdPiRehydrationForWindowVerification({',
+      '  return rehydrateColdPiRuntimeForWindowVerification;',
     );
     const rolloverWiring = handlerBody(
       registerSource,
       'contextOverflowRolloverHolder = createContextOverflowRollover({',
-      'const pendingCredentialSwitchService = new PendingCredentialSwitchService({',
+      // The service is assembled through pendingCredentialSwitchAssembly.ts at the same place.
+      'const pendingCredentialSwitchService = createPendingCredentialSwitchService({',
     );
 
     // The flow itself lives in coldPiRehydration.ts so its failure paths can be executed
@@ -1337,11 +1450,7 @@ describe('session runtime control wiring', () => {
     expect(rehydrate).not.toContain('.send(');
     expect(rolloverWiring).toContain('rehydrateColdPiRuntimeForWindowVerification,');
 
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     const rehydrateCall = setModel.indexOf(
       'await rehydrateColdPiRuntimeForWindowVerification(sessionId)',
     );
@@ -1366,11 +1475,7 @@ describe('session runtime control wiring', () => {
     expect(coldPiRehydrationSource).not.toContain('throw new Error(');
     expect(coldPiRehydrationSource).toContain('{ cause: error }');
 
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     const rehydrateCall = setModel.indexOf('await rehydrateColdPiRuntimeForWindowVerification(sessionId)');
     const catchBlock = setModel.slice(rehydrateCall, setModel.indexOf('rehydratedColdPiRuntime = liveSessionBeforeRouteChange;'));
     expect(catchBlock).toContain('} catch (error) {');
@@ -1408,11 +1513,7 @@ describe('session runtime control wiring', () => {
   });
 
   it('keeps the model switch alive when cold Pi rehydration fails (dead stored route)', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     // 存量 BYOM 路由已死（provider 被删/不再提供该模型）时冷启动 bootstrap 必然
     // fail-closed 失败；恢复失败若拒绝切模，发送与切模互相锁死（会话永久卡死）。
     // catch 必须降级：只记日志，并与「跳过核实」同款语义置位，让目标路由由下一次
@@ -1433,11 +1534,7 @@ describe('session runtime control wiring', () => {
   });
 
   it('skips the cold Pi window rehydration when the live usage leaves the target headroom', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     // 冷启动核实(2~3s)必须经预检：目标窗口对**已知占用**有余量时不再拉起运行时，
     // 路由照常落定、下一次发送按目标窗口懒重建；danger/overflow 仍走原核实路径。
     const pressurePreflight = setModel.indexOf('shouldSkipColdPiWindowRehydration({');
@@ -1492,11 +1589,7 @@ describe('session runtime control wiring', () => {
   });
 
   it('closes a cold Pi runtime when route persistence fails after rehydrate', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     const rehydrate = setModel.indexOf(
       'await rehydrateColdPiRuntimeForWindowVerification(sessionId)',
     );
@@ -1541,11 +1634,7 @@ describe('session runtime control wiring', () => {
   });
 
   it('rejects only remote rebuild pressure before applying the runtime model', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
 
     expect(setModel).not.toContain('CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1');
     expect(deviceLinkHostSource).not.toContain(
@@ -1560,7 +1649,7 @@ describe('session runtime control wiring', () => {
     expect(gate).toBeGreaterThan(-1);
     expect(setModel).toContain("modelSwitchPlan.outcome === 'reject'");
     expect(setModel.replace(/\s+/g, ' ')).toContain(
-      'isRemote: !!runtimeStatus.remoteHostId || (!internalOptions.applyingUserSelectionOnSend && isDeviceLinkInvoke())',
+      "isRemote: !!runtimeStatus.remoteHostId || modelSelectionOrigin === 'scoped' || (!ownerWindowRebuild && !internalOptions.applyingUserSelectionOnSend && isDeviceLinkInvoke())",
     );
     expect(remotePressureRejection).toBeGreaterThan(gate);
     expect(remotePressureRejection).toBeLessThan(apply);
@@ -1575,11 +1664,7 @@ describe('session runtime control wiring', () => {
   });
 
   it('fails closed before switching a busy or unverifiable cold remote Pi runtime', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     const apply = setModel.indexOf('await applyRuntimeSetModelChange({');
 
     expect(setModel.indexOf('return deferLockedSelection()')).toBeLessThan(apply);
@@ -1595,12 +1680,26 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('coldPiRouteWithoutLiveWindowCheck = true');
   });
 
+  it('names the failing check when the remote owner window gate refuses a selection', () => {
+    const setModel = setModelSource();
+    const gate = setModel.indexOf('describeModelWindowGateFailure({');
+    const refusal = setModel.indexOf('model window gate refused the runtime selection');
+
+    expect(gate).toBeGreaterThan(-1);
+    expect(gate).toBeLessThan(setModel.indexOf('await applyRuntimeSetModelChange({'));
+    expect(refusal).toBeGreaterThan(gate);
+    // Guard-tier wiring contract: the gate lives in a closure too large to invoke in isolation.
+    // If the refusal stops going through describeModelWindowGateFailure, remote owners are back to
+    // an unactionable "could not be verified" with nothing in the log. Fixed prefixes: existing
+    // copy and log matching depend on them.
+    expect(setModel).toContain("'Pi final context window could not be verified'");
+    expect(setModel).toContain("'target context window or current usage could not be verified'");
+    expect(setModel).toContain('(${windowGateFailure.category}: ${windowGateFailure.detail}); runtime selection was not changed`');
+    expect(setModel).not.toMatch(/could not be verified; runtime selection was not changed'/);
+  });
+
   it('switches and verifies Pi before deciding whether the actual window needs rebuild', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     const apply = setModel.indexOf('await applyRuntimeSetModelChange({');
     const closeRecovery = setModel.indexOf('const closeRejectedPiRuntime =');
     const finalWindow = setModel.indexOf('const finalPiWindow =');
@@ -1665,11 +1764,7 @@ describe('session runtime control wiring', () => {
   });
 
   it('refreshes model-only context snapshots against the retained target provider route', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     const refreshStart = setModel.indexOf(
       'if (!response.deferred) {\n          try {\n            const currentAgentKind =',
     );
@@ -1687,11 +1782,7 @@ describe('session runtime control wiring', () => {
   });
 
   it('commits runtime control before best-effort context bookkeeping', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     const runtimeCommit = setModel.indexOf('let generation: number;');
     const contextSnapshot = setModel.indexOf('await recordSessionContextSnapshot(');
     expect(runtimeCommit).toBeGreaterThan(-1);
@@ -1715,9 +1806,9 @@ describe('session runtime control wiring', () => {
 
   it('retries deferred selection with the confirmed window instead of dropping it', () => {
     const settle = handlerBody(
-      registerSource,
+      runtimeControlSettlementSource,
       'const settlePendingSessionRuntimeControl =',
-      'settlePendingSessionRuntimeControlHolder = settlePendingSessionRuntimeControl;',
+      'return settlePendingSessionRuntimeControl;',
     );
 
     expect(settle).toContain('if (!pending) return;');
@@ -1729,26 +1820,22 @@ describe('session runtime control wiring', () => {
   });
 
   it('composes later partial runtime changes on the accepted pending profile', () => {
-    expect(registerSource).toContain(
+    expect(runtimeWriterSource).toContain(
       'const routeExplicit = patch.model !== undefined || patch.providerId !== undefined;',
     );
-    expect(registerSource).toContain(
-      'const mergeBase = routeExplicit\n        ? (profiles.control.pending?.profile ?? profiles.effective)\n        : profiles.effective;',
+    expect(runtimeWriterSource).toContain(
+      'const mergeBase = routeExplicit\n      ? (profiles.control.pending?.profile ?? profiles.effective)\n      : profiles.effective;',
     );
-    expect(registerSource).toContain('mergeSessionRuntimeProfilePatch(mergeBase, patch)');
-    expect(registerSource).toContain('routeExplicit,');
-    expect(registerSource).toContain('effectiveProfile: profiles.effective,');
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    expect(runtimeWriterSource).toContain('mergeSessionRuntimeProfilePatch(mergeBase, patch)');
+    expect(runtimeWriterSource).toContain('routeExplicit,');
+    expect(runtimeWriterSource).toContain('effectiveProfile: profiles.effective,');
+    const setModel = setModelSource();
     expect(setModel).toContain(
       'if (internalOptions.deferWhileRunning && isSessionInTurn(sessionId))',
     );
     expect(setModel).toContain('deferSessionRuntimeAxisMutation({');
     expect(setModel).toContain('pendingPatch: pendingAxisPatch');
-    expect(registerSource).toContain('routeExplicit: isPendingSessionRuntimeRouteExplicit(');
+    expect(runtimeControlSettlementSource).toContain('routeExplicit: isPendingSessionRuntimeRouteExplicit(');
     expect(setModel).toMatch(/const result(?::[^;\n]+)? = routeExplicit\s*\? await applyRuntimeSetModelChange\(/);
     expect(setModel).toContain('acceptSessionRuntimeAxisMutation({');
     expect(setModel).toContain("runtimeAgentKind !== 'pi' &&");
@@ -1759,27 +1846,405 @@ describe('session runtime control wiring', () => {
   });
 
   it('defers in-turn selections with the clicked effort/Fast snapshot', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     expect(setModel).toContain('buildDeferredRuntimeSelectionProfile({');
     expect(setModel).toContain('atomicSelection,');
-    expect(registerSource).toContain('nextDeferredModelWindowRetry(');
+    expect(runtimeControlSettlementSource).toContain('nextDeferredModelWindowRetry(');
   });
 
   it('rebuilds live Orca Workers for model routes while preserving effort-only hot updates', () => {
-    const setModel = handlerBody(
-      registerSource,
-      'const handleSetModel = async (',
-      'const recoverRemoteRuntimeAxisPersistence',
-    );
+    const setModel = setModelSource();
     expect(setModel).toContain("runtimeStatus.orcaRole === 'worker'");
     expect(setModel).toContain('forceSessionRebuild:');
     expect(setModel).toContain('rebuildLiveOrcaWorker ||');
     expect(setModel).toContain(
       'if (!internalOptions.applyingPiCredentialPending && (rebuildLiveOrcaWorker || modelWindowRebuilt || atomicSelection ||',
     );
+  });
+});
+
+// Guard tier: the scheduled startup owner assertion protects an asynchronous account switch.
+// Start before the automation preference holder: the buggy snapshot lived just
+// above the bootstrap holder assignment, so a block anchored on that assignment
+// would have skipped the exact line the guard is meant to catch.
+const WIRING_START = 'prepareScheduledModelPreferencesHolder = async';
+const WIRING_ANCHOR = 'scheduledSessionBootstrapHolder = createScheduledSessionBootstrap(';
+const WIRING_END = 'let recoverRenamedSessionModelOnSend';
+
+describe('scheduled session bootstrap wiring', () => {
+  function wiringBlock(): string {
+    const start = registerSource.indexOf(WIRING_START);
+    expect(start).toBeGreaterThan(-1);
+    const end = registerSource.indexOf(WIRING_END, start);
+    expect(end).toBeGreaterThan(start);
+    return registerSource.slice(start, end);
+  }
+
+  it('builds the automation bootstrap holder from the per-fire factory', () => {
+    expect(wiringBlock()).toContain(WIRING_ANCHOR);
+  });
+
+  it('forwards the owner assertion into the startup funnel', () => {
+    // Losing this forwarder would silently downgrade the guard to the single
+    // entry check, so an account switch inside the funnel could create the task
+    // under the new owner instead of aborting.
+    expect(wiringBlock()).toContain(
+      'bootstrapSession(options as MakerSessionCreateOpts, assertAccess)',
+    );
+  });
+
+  it('never snapshots the data owner for automations at registration time', () => {
+    // A snapshot evaluated once while the handlers register is the bug: the app
+    // session commit that restores the account can land later, so it stays stale
+    // and every automation fails until the app restarts. Assert on the wiring
+    // block, not on a variable name: any `const`/`let` shape that captures the
+    // scope here reintroduces the same failure.
+    expect(wiringBlock()).not.toContain('captureDataOwnerBroadcastScope');
+  });
+});
+
+
+// Recovery assembly guard: execute the actual Desktop callbacks, not a copy
+// of their bodies or a mock of the recovery deps. Covers owner/DB fences and
+// persistence-before-projection before these closures become host ports.
+// Minimal failures: changed owner across an await, or a card write failing
+// after context.rebuild committed. Ordinary factory tests replace these deps.
+async function recoveryAssembly<Result = Record<string, (...args: unknown[]) => unknown>>(bindings: Record<string, unknown>) {
+  let rowReader: ts.VariableStatement | undefined;
+  let assembly: ts.ExpressionStatement | undefined;
+  let hintReader: ts.FunctionDeclaration | undefined;
+  function visit(node: ts.Node): void {
+    if (ts.isVariableStatement(node) && node.declarationList.declarations.some(d => d.name.getText(registerAst) === 'readContextRecoverySession')) rowReader = node;
+    if (ts.isFunctionDeclaration(node) && node.name?.text === 'confirmedSendToSessionHint') hintReader = node;
+    if (ts.isExpressionStatement(node) && ts.isBinaryExpression(node.expression)
+      && node.expression.left.getText(registerAst) === 'contextOverflowRolloverHolder') assembly = node;
+    ts.forEachChild(node, visit);
+  }
+  visit(registerAst);
+  if (!rowReader || !assembly || !hintReader) throw new Error('Desktop recovery assembly is missing');
+  const code = ts.transpileModule(`let contextOverflowRolloverHolder;\n${rowReader.getText(registerAst)}\n${hintReader.getText(registerAst)}\n${assembly.getText(registerAst)}\nreturn contextOverflowRolloverHolder;`,
+    { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, removeComments: true } }).outputText;
+  // Load newly extracted production functions from their real imports. Existing
+  // Desktop IO remains injected. This same guard runs unchanged before/after
+  // extraction and never recreates the extracted implementation in the test.
+  for (const statement of registerAst.statements) {
+    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
+    const named = statement.importClause?.namedBindings;
+    if (!named || !ts.isNamedImports(named) || statement.importClause?.isTypeOnly) continue;
+    for (const spec of named.elements) {
+      const name = spec.name.text;
+      if (spec.isTypeOnly || name in bindings || !new RegExp(`\\b${name}\\b`).test(code)) continue;
+      const file = resolve(mainRoot, 'maker-ipc', statement.moduleSpecifier.text).replace(/\.js$/, '.ts');
+      const imported = await import(/* @vite-ignore */ file);
+      bindings[name] = imported[spec.propertyName?.text ?? name];
+    }
+  }
+  return new Function(...Object.keys(bindings), code)(...Object.values(bindings)) as Result;
+}
+
+function recoveryFixture() {
+  const order: string[] = [];
+  let current = true;
+  const row = { status: 'active', source: 'desktop', botRole: 'canonical', botStatus: 'active',
+    botHiddenAt: null, botLinkArchivedAt: null, agentKind: 'codex', workingDir: '/fixture',
+    model: 'm', providerId: 'p', clearedAt: null, contextWindow: 1000, remoteHostId: null };
+  const query = { from: () => query, leftJoin: () => query, where: () => query,
+    limit: vi.fn(async () => { order.push('read'); return [row]; }) };
+  const db = { clientEpoch: 1, client: { drizzle: { select: () => query } } };
+  const coordinator = { clearError: vi.fn(() => { order.push('clear'); return { status: 'idle' }; }),
+    hasPendingQueuedWork: vi.fn(() => false), getInputAbortSignal: () => new AbortController().signal };
+  const pendingSwitch = new Map<string, unknown>();
+  const bindings: Record<string, unknown> = {
+    agentSwitchPending: { get: (sessionId: string) => pendingSwitch.get(sessionId) },
+    createContextOverflowRollover: (deps: unknown) => deps,
+    getDbClient: () => db.client, getCurrentDbClientSnapshot: () => ({ ...db }),
+    captureDataOwnerBroadcastScope: () => 'owner', isDataOwnerBroadcastScopeCurrent: () => current,
+    sessions: new Proxy({}, { get: (_t, key) => key }), botSessionLinks: {}, botProfiles: {}, eq: vi.fn(),
+    maker: { getSession: vi.fn(), closeSession: vi.fn() },
+    log: { info: vi.fn(), warn: vi.fn(() => { order.push('warn'); }) },
+    isHeadlessGhostSetupTurn: () => false, bindingStore: { findByTarget: () => null },
+    needsSubscriptionAccountHandoff: vi.fn(), remoteBackgroundInvoke: vi.fn(),
+    // These ordering tests do not select an account. Keep the projection ports
+    // injected so source extraction cannot cold-load the subscription runtime
+    // inside a timed test; account handoff is exercised by runtime.test.ts.
+    dbToMakerEngineKind: (x: unknown) => x,
+    applySessionRuntimeOverrideForStart: vi.fn(), readProviderGroupBinding: vi.fn(),
+    readCodexThreadStorageReadOnly: vi.fn(async () => ({ rolloutPath: '/fixture/history' })),
+    classifyCodexHistoryOversized: vi.fn(async () => 'healthy'),
+    DEFAULT_MODEL_COMPACTION_PCT: 80, getActiveCatalog: vi.fn(), dbToMakerAgentKind: (x: unknown) => x,
+    // This fixture checks recovery ordering and ownership, independent of the
+    // device/provider catalogue used to size a replay.
+    resolveConfiguredContextWindow: vi.fn(), resolveDesktopHandoffWindow: vi.fn(async () => null),
+    listMessagesForAgentHandoff: vi.fn(),
+    listBotRecallSessionIds: vi.fn(), COMPANION_SESSION_IDS_LIMIT: 10,
+    findLatestUserMessageForRebuild: vi.fn(), findLatestContextRebuildMeta: vi.fn(),
+    rehydrateColdPiRuntimeForWindowVerification: vi.fn(), drainPersistQueue: vi.fn(),
+    commitContextRebuild: vi.fn(async () => { order.push('commit'); return { updatedAt: 123 }; }),
+    broadcastSessionPatched: vi.fn(() => { order.push('project'); }),
+    createDbMessage: vi.fn(async () => { order.push('card'); throw new Error('card unavailable'); }),
+    createId: () => 'id', agentHandoffPending: { set: vi.fn(), readGeneration: () => 1 },
+    enqueueDurableWrite: vi.fn(), broadcastMessageRow: vi.fn(),
+    agentInputCoordinatorHolder: coordinator, wireNoteMemory: { reset: vi.fn(() => { order.push('reset'); }) },
+    readPiNativeCompatOverride: vi.fn(), recordPiNativeCompatOverride: vi.fn(),
+    buildCreateOptsWithStderr: (x: unknown) => x,
+    readSessionExtraDirsFromDb: vi.fn(async () => []), directoryGrantsForRuntime: vi.fn(),
+    readSessionWritableDirsFromDb: vi.fn(async () => []), readAutoReviewHistory: vi.fn(async () => []),
+    restoreAutoReviewUserIntent: vi.fn(() => 'authored-intent'), canContinueContextRecovery: () => true,
+    persistedUserContentToWireMessage: (x: unknown) => x, readAutoReviewUserText: () => 'author',
+    sendToAgentAcceptedUnlocked: vi.fn(async () => { order.push('send'); return { accepted: true }; }),
+    PI_CACHE_RECOVERY_EXPECTATION: Symbol('compat'), INHERITED_CAPABILITY_SELECTION: Symbol('capabilities'),
+    AUTO_REVIEW_SOURCE_CONTENT: Symbol('source'), AUTO_REVIEW_USER_INTENT: Symbol('intent'),
+    app: { getPath: () => '/fixture/profile' },
+    withCindyMakeProjectUse: async (_profile: unknown, _dir: unknown, send: () => unknown) => {
+      order.push('project-use'); return send();
+    },
+    withSendToSessionLock: vi.fn(), withRehydrateCloseSuppressed: vi.fn(),
+  };
+  return { bindings, row, order, db, coordinator, pendingSwitch, setCurrent: (value: boolean) => { current = value; } };
+}
+
+describe('local-application visible task host', () => {
+  it('opens a local-application task without a send_to_session route', async () => {
+    let call: ts.ExpressionStatement | undefined;
+    const visit = (node: ts.Node): void => {
+      if (ts.isExpressionStatement(node) && ts.isCallExpression(node.expression)
+        && node.expression.expression.getText(registerAst) === 'installLocalAgentVisibleSessionHost') call = node;
+      ts.forEachChild(node, visit);
+    };
+    visit(registerAst);
+    if (!call) throw new Error('local-application host registration is missing');
+    const code = ts.transpileModule(call.getText(registerAst),
+      { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;
+    let factory: ((localMaker: unknown) => { open(opts: Record<string, unknown>): Promise<Record<string, unknown>> }) | undefined;
+    const query = { from: () => query, where: () => query, limit: async () => [{ status: 'active', sdkSessionId: null }] };
+    const bindings: Record<string, unknown> = {
+      installLocalAgentVisibleSessionHost: (f: typeof factory) => { factory = f; },
+      activeOwnerScopeKey: () => 'owner', throwIpcError: (code: string) => { throw new Error(code); }, t: (key: string) => key,
+      withSendToSessionLock: (_id: string, run: () => unknown) => run(),
+      getDbClient: () => ({ drizzle: { select: () => query } }), sessions: {}, eq: vi.fn(),
+      persistSessionFields: vi.fn(async () => {}), wireSessionToIpc: vi.fn(), broadcastSessionCreated: vi.fn(),
+      agentHandoffPending: { consume: vi.fn() },
+      // Real resolver and host capability: an ordinary claude-code task would get the cindy_helper route.
+      resolveAgentSendToSessionHint, options: { supportsRemoteSessionHandoff: true },
+    };
+    new Function(...Object.keys(bindings), code)(...Object.values(bindings));
+    const session: Record<string, unknown> = { id: 'local', close: vi.fn() };
+    const localMaker = { getSession: () => undefined, createSession: vi.fn(async () => session) };
+    const opened = await factory!(localMaker).open({ id: 'local', agentKind: 'claude-code', providerId: 'p' });
+    // PR #11894 review: LOCAL_AGENT_CLIENT replaces the MCP set with the application's endpoint,
+    // so cindy_helper is never mounted and no route may be projected for this task.
+    expect(opened).toBe(session);
+    expect(opened.sendToSessionHint).toBeUndefined();
+  });
+});
+
+describe('Desktop recovery assembly ordering and fences', () => {
+  // L343 / guard: run the register.ts binding and the real claim/settlement and
+  // queue. Adapter-only coverage cannot distinguish a removed Session binding
+  // from the same instance advancing after a terminal has been attributed.
+  it.each(['current', 'instance removed', 'generation advanced'] as const)(
+    'hands off a claimed oversized terminal without attributing a stale turn (%s)',
+    async (mode) => {
+      const h = recoveryFixture();
+      const sessionId = 'oversized-register-binding';
+      const sqlite = new Database(':memory:');
+      const client = createDbClientForHandle({ db: sqlite, drizzle: drizzle(sqlite, { schema }) });
+      const errorData = { message: 'prompt is too long', reason: 'context-overflow', isTerminal: true };
+      let generation = 3;
+      let running = false;
+      const binding = { id: sessionId, instanceId: 'fixture-instance', getTurnGeneration: () => generation };
+      let live: typeof binding | undefined = binding;
+      const readBinding = vi.fn(() => live);
+      const send = vi.fn<AgentInputCoordinatorDeps['sendToAgent']>(async (_id, _message, _opts, sendOpts) => {
+        sendOpts.onVendorTurnReserved?.(generation);
+        await sendOpts.persistUserMessage?.onPersisted?.();
+        running = true;
+        return { kind: 'session-dispatch', source: 'fixture', dispatched: true };
+      });
+      const coordinator = new AgentInputCoordinator({
+        sendToAgent: send, steerToAgent: vi.fn(), abortSession: vi.fn(),
+        isTurnRunning: () => running, getTurnGeneration: () => generation,
+        getTurnSessionIdentity: () => binding, hasPendingInteraction: () => false,
+        getAgentKind: () => 'claude-code', getSdkSessionId: async () => undefined,
+        createUserMessage: vi.fn(), touchUserSend: vi.fn(async () => {}), emitProjection: vi.fn(),
+      });
+      function queue(clientId: string, text: string) {
+        const item: AgentInputQueuedMessage = {
+          clientId, text, persistedContent: text, model: 'fixture', effort: 'medium',
+          permissionMode: 'default', workingDir: '/fixture',
+          chatMessage: { clientId, role: 'user', content: text, isStreaming: false, createdAt: '2026-01-01T00:00:00Z' },
+          createOpts: { agentKind: 'claude-code', workingDir: '/fixture', model: 'fixture', effort: 'medium',
+            permissionMode: 'default', userPrompt: '', makerMemoryEnabled: true, displayReasoning: 'summarized' },
+        };
+        coordinator.enqueue(sessionId, item);
+      }
+      sqlite.exec(`
+        CREATE TABLE sessions (id TEXT PRIMARY KEY, status TEXT, cleared_at INTEGER);
+        CREATE TABLE messages (id TEXT, session_id TEXT, client_id TEXT, role TEXT, content TEXT,
+          tool_use_id TEXT, agent_meta TEXT, agent_kind TEXT, rewind_at INTEGER, created_at INTEGER);
+        INSERT INTO sessions VALUES ('${sessionId}', 'active', NULL);
+        INSERT INTO messages VALUES ('original-row', '${sessionId}', 'original', 'user', '"first"',
+          NULL, '{}', NULL, NULL, 100);`);
+      const writes: Promise<unknown>[] = [];
+      const clearError = vi.spyOn(coordinator, 'clearError');
+      Object.assign(h.bindings, {
+        agentInputCoordinatorHolder: coordinator, createContextOverflowRollover,
+        sessionBindings: { getSession: readBinding },
+        enqueueDurableWrite: (_label: string, write: (scope: null) => Promise<unknown>) => {
+          const pending = Promise.resolve().then(() => write(null));
+          writes.push(pending);
+          return pending;
+        },
+        withSendToSessionLock: (_id: string, work: () => Promise<boolean>) => work(),
+      });
+      setCurrentDbClient(client, 'fixture-owner');
+      try {
+        const rollover = await recoveryAssembly<ReturnType<typeof createContextOverflowRollover>>(h.bindings);
+        const tryRecover = vi.spyOn(rollover, 'tryRecover');
+        queue('original', 'first');
+        await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+        queue('next', 'second');
+        expect(coordinator.hasPendingQueuedWork(sessionId)).toBe(true);
+        const event = { type: 'error' as const, data: errorData,
+          sessionInstanceId: binding.instanceId, sessionTurnGeneration: generation };
+        const activeInputId = coordinator.getActiveInputClientId(sessionId, generation);
+        expect(activeInputId).toBe('original');
+        running = false;
+        coordinator.onTurnEvent(sessionId, 'error', errorData.message, errorData, event);
+        expect(coordinator.getProjection(sessionId).recovery?.kind).toBe('active-turn');
+        const ports: ContextRecoveryTerminalPorts = {
+          getRollover: () => rollover, getSuppressedBroadcasts: () => new Map(),
+          isTerminalTurnErrorEvent, isContextOverflowErrorData, isOversizedHistoryErrorData,
+          isUnsupportedRequestOptionErrorData, reserveTurnErrorPersistId: vi.fn(),
+          releaseReservedTurnErrorPersistId: vi.fn(), onTurnErrorEvent: vi.fn(),
+          broadcastToAllWindows: vi.fn(), handleAgentIslandEventAfterBroadcast: vi.fn(),
+          eventChannel: () => 'maker:event', log: { warn: vi.fn() },
+        };
+        const input = {
+          session: binding as unknown as Session, event, attributedEvent: event, broadcastEvent: event,
+          isPlannedUpgradeClose: false, isRemoteAuthRetry: false, isGatewayProxyTokenRecovery: false,
+          autoResumeSuppressesPersist: false, inputClientId: activeInputId ?? undefined,
+          persistId: undefined, eventAgentMeta: null,
+        };
+        const claim = claimContextRecoveryTerminal(ports, input);
+        expect(claim).toBe('claimed');
+        // Model liveness changing before settlement of the already attributed
+        // terminal. The vendor and binding registry are fixture ports.
+        expect(deferContextRecoveryTerminal(ports, input, claim, () => {
+          if (mode === 'instance removed') live = undefined;
+          if (mode === 'generation advanced') generation += 1;
+        })).toBe(true);
+        expect(settleContextRecoveryTerminal(ports, input, claim, vi.fn())).toBe(true);
+        expect(tryRecover).toHaveBeenCalledExactlyOnceWith(sessionId, errorData,
+          { instanceId: binding.instanceId, generation: 3, inputClientId: 'original' });
+        expect(await tryRecover.mock.results[0].value).toBe(true);
+        expect(readBinding).toHaveBeenCalledExactlyOnceWith(sessionId);
+        expect(readBinding).toHaveBeenCalledBefore(clearError);
+        expect(coordinator.getProjection(sessionId).recovery).toBeNull();
+        expect(h.bindings.drainPersistQueue).not.toHaveBeenCalled();
+        await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+        expect(send.mock.calls.map(([, message]) => typeof message === 'string' ? message : message.content))
+          .toEqual(['first', 'second']);
+        await Promise.all(writes);
+        expect(sqlite.prepare("SELECT json_extract(agent_meta, '$.inputNotice') AS notice FROM messages").get())
+          .toEqual({ notice: mode === 'current' ? 'oversized-input-skipped' : null });
+        expect(h.bindings.broadcastMessageRow).toHaveBeenCalledTimes(mode === 'current' ? 1 : 0);
+        expect(ports.onTurnErrorEvent).not.toHaveBeenCalled();
+      } finally {
+        running = false;
+        coordinator.onTurnEvent(sessionId, 'done');
+        clearCurrentDbClient(client);
+        sqlite.close();
+      }
+    },
+  );
+
+  it('projects a send_to_session route only from the live session that will receive the message', async () => {
+    const h = recoveryFixture(); const deps = await recoveryAssembly(h.bindings);
+    const hint = { agentKind: 'claude-code', supportsRemote: true };
+    (h.bindings.maker as { getSession: ReturnType<typeof vi.fn> }).getSession.mockReturnValue({ sendToSessionHint: hint });
+    expect(deps.sendToSessionHint('s')).toBe(hint);
+    // PR #11894 review: the send transaction applies a pending engine switch before dispatch, so the
+    // old runtime's route would point the next engine (Pi, or a plugin engine without cindy_helper)
+    // at the wrong or a missing tool. Queued dispatch reads the same predicate.
+    h.pendingSwitch.set('s', { targetAgentKind: 'acp' });
+    expect(deps.sendToSessionHint('s')).toBeUndefined();
+    // A steer reaches the running runtime without the send transaction's switch, so it keeps the route.
+    expect(deps.sendToSessionHint('s', 'live')).toBe(hint);
+    h.pendingSwitch.set('s', { targetAgentKind: 'pi' });
+    expect(deps.sendToSessionHint('s')).toBeUndefined();
+    // A same-engine model/provider selection (SET_MODEL) keeps the identical helper route.
+    h.pendingSwitch.set('s', { targetAgentKind: 'claude-code', sameAgentSelection: true });
+    expect(deps.sendToSessionHint('s')).toBe(hint);
+    expect(registerSource).toMatch(/new AgentInputCoordinator\(\{\s*sendToSessionHint: confirmedSendToSessionHint,/);
+  });
+
+  it('reads an active companion role only while its link and profile are active', async () => {
+    const h = recoveryFixture(); const deps = await recoveryAssembly(h.bindings);
+    expect(await deps.getSessionRow('s')).toMatchObject({ botRole: 'canonical' });
+    h.row.botStatus = 'inactive';
+    expect(await deps.getSessionRow('s')).toMatchObject({ botRole: null });
+  });
+
+  it('classifies only the recorded history and refuses an owner change across inspection', async () => {
+    const h = recoveryFixture(); const deps = await recoveryAssembly(h.bindings);
+    expect(await deps.classifyCodexHistory('thread')).toBe('healthy');
+    h.setCurrent(false);
+    await expect(deps.classifyCodexHistory('thread')).rejects.toThrow('owner changed');
+    h.setCurrent(true);
+    (h.bindings.readCodexThreadStorageReadOnly as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
+    expect(await deps.classifyCodexHistory('thread')).toBe('unknown');
+  });
+
+  it('commits before zero-usage projection and tolerates a derived card failure', async () => {
+    const h = recoveryFixture(); const deps = await recoveryAssembly(h.bindings);
+    await deps.commitRebuild('s', 'handoff', { reason: 'context-overflow', sourceUserClientId: 'u' });
+    expect(h.order).toEqual(['read', 'commit', 'project', 'card', 'warn']);
+    expect(h.bindings.broadcastSessionPatched).toHaveBeenCalledWith('s', expect.objectContaining({
+      sdkSessionId: null, contextTokens: 0, contextWindow: 1000,
+    }), 'owner');
+    h.order.length = 0; h.setCurrent(false);
+    await expect(deps.commitRebuild('s', 'handoff', {})).rejects.toThrow('owner changed before commit');
+    expect(h.order).toEqual(['read']);
+    h.setCurrent(true);
+    (h.bindings.commitContextRebuild as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => {
+      h.order.push('commit'); h.db.clientEpoch++; return { updatedAt: 123 };
+    });
+    await expect(deps.commitRebuild('s', 'handoff', {})).rejects.toThrow('owner changed after commit');
+    expect(h.order).toEqual(['read', 'read', 'commit']);
+  });
+
+  // clearError returns a projection object in the real Desktop coordinator.
+  // The void callback contract must ignore it rather than treating it as a Promise.
+  it.each(['rebuild', 'queued-input'])('keeps %s synchronous when clearError returns a projection', async (entry) => {
+    const h = recoveryFixture(); const deps = await recoveryAssembly(h.bindings);
+    if (entry === 'rebuild') {
+      expect(deps.onRebuilt('s')).toBeUndefined();
+      expect(h.order).toEqual(['clear', 'reset']);
+    } else {
+      expect((deps.getRecoveryAbortSignal('s') as AbortSignal).aborted).toBe(false);
+      h.coordinator.hasPendingQueuedWork.mockReturnValue(true);
+      const signal = deps.getRecoveryAbortSignal('s');
+      expect(signal).toBeInstanceOf(AbortSignal);
+      expect((signal as AbortSignal).aborted).toBe(true);
+      expect(h.order).toEqual(['clear']);
+    }
+  });
+
+  it('rechecks continuation ownership before sending and preserves authored recovery intent', async () => {
+    const h = recoveryFixture(); const deps = await recoveryAssembly(h.bindings);
+    const recovery = { continueFromHistory: true, sourceUserContent: 'author', sourceUserClientId: 'u',
+      sourceCapabilitySelectionText: 'capability', signal: new AbortController().signal };
+    expect(await deps.replayUserMessage('s', 'continue', undefined, recovery)).toEqual({ accepted: true });
+    expect(h.order).toEqual(['read', 'read', 'project-use', 'send']);
+    const send = h.bindings.sendToAgentAcceptedUnlocked as ReturnType<typeof vi.fn>;
+    const opts = send.mock.calls[0][3];
+    expect(opts[h.bindings.AUTO_REVIEW_SOURCE_CONTENT as symbol]).toBe('author');
+    expect(opts[h.bindings.AUTO_REVIEW_USER_INTENT as symbol]).toBe('authored-intent');
+    h.row.status = 'archived';
+    expect(await deps.replayUserMessage('s', 'continue', undefined, recovery)).toEqual({ accepted: false });
+    expect(send).toHaveBeenCalledTimes(1);
+    const cancelled = new AbortController(); cancelled.abort();
+    expect(await deps.replayUserMessage('s', 'continue', undefined, { signal: cancelled.signal })).toEqual({ accepted: false });
   });
 });

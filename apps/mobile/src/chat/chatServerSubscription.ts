@@ -1,4 +1,4 @@
-import { chatCursor, chatHttpsUrl, chatId } from './chatServerClient';
+import { chatCursor, chatHttpsUrl, chatId, chatRetryWaitMs } from './chatServerClient';
 
 export interface ChatSocket {
   onopen: ((event: Event) => void) | null;
@@ -9,12 +9,26 @@ export interface ChatSocket {
   close(): void;
   readonly readyState: number;
 }
+// Owner work hints only wake companions on a computer; the phone runs none. Refreshing
+// for them would re-download every visible room, so acknowledge without a reload.
+const onlyWorkHints = (changes: unknown) => Array.isArray(changes) && changes.length > 0
+  && changes.every(change => (change as { type?: unknown } | null)?.type === 'work.available');
+export interface ChatChangesFrame {
+  scope: string;
+  cursor: string;
+  subscribedAfter?: string;
+  changes: Array<{ type: string; entityId?: string; data: unknown }>;
+}
+
 /** One focused view owns one socket. Reconnect re-reads state, never replays a write. */
 export function subscribeChatServer(options: {
   baseUrl: string; token(): Promise<string | null>; current(): boolean;
   socket(url: string): ChatSocket;
   ready(actorId: string): Promise<{ scope: string; cursor: string } | Array<{ scope: string; cursor: string }>>;
-  changed(changes?: Array<{ type: string; entityId?: string; data: unknown }>): void | Promise<void>; unavailable(): void; available?(): void;
+  changed(changes?: Array<{ type: string; entityId?: string; data: unknown }>): void | Promise<void>;
+  /** Frame-aware variant used to apply authorized conversation deltas directly without an extra HTTP round-trip. */
+  receive?(frame: ChatChangesFrame): void | Promise<void>;
+  unavailable(): void; available?(): void;
   reset?(): Promise<void>;
 }) {
   let stopped = false;
@@ -22,6 +36,15 @@ export function subscribeChatServer(options: {
   let retry: ReturnType<typeof setTimeout> | undefined;
   let deadline: ReturnType<typeof setTimeout> | undefined;
   let delay = 1000;
+  let nextRetryAt = 0;
+  const noteRetryAt = (error: unknown) => {
+    if (!error || typeof error !== 'object') return;
+    const now = Date.now();
+    const candidate = 'retryAt' in error && typeof (error as { retryAt?: unknown }).retryAt === 'number'
+      ? (error as { retryAt: number }).retryAt
+      : ('status' in error && (error as { status?: unknown }).status === 429 ? now + 5_000 : undefined);
+    nextRetryAt = Math.max(nextRetryAt, now + chatRetryWaitMs(candidate, now));
+  };
   const current = (candidate: ChatSocket) => !stopped && options.current() && socket === candidate;
   const connect = async () => {
     try {
@@ -34,6 +57,7 @@ export function subscribeChatServer(options: {
       deadline = setTimeout(() => ws.close(), 15000);
       ws.onopen = () => { if (current(ws)) ws.send(JSON.stringify({ type: 'auth', token })); else ws.close(); };
       const scopes = new Set<string>();
+      const cursors = new Map<string, string>();
       let frames = Promise.resolve();
       ws.onmessage = event => {
         if (!current(ws)) return;
@@ -44,38 +68,61 @@ export function subscribeChatServer(options: {
             clearTimeout(deadline);
             const subscription = await options.ready(chatId(value.actorId));
             if (current(ws) && ws.readyState === 1) {
-              delay = 1000;
+              delay = 1000; nextRetryAt = 0;
               for (const entry of Array.isArray(subscription) ? subscription : [subscription]) {
+                const cursor = chatCursor(entry.cursor);
                 scopes.add(entry.scope);
-                ws.send(JSON.stringify({ type: 'subscribe', scope: entry.scope, after: chatCursor(entry.cursor) }));
+                cursors.set(entry.scope, cursor);
+                ws.send(JSON.stringify({ type: 'subscribe', scope: entry.scope, after: cursor }));
               }
               options.available?.();
             }
           } else if (value.type === 'changes' && scopes.has(value.scope)) {
-            await options.changed(value.changes);
-            if (current(ws) && ws.readyState === 1) ws.send(JSON.stringify({ type: 'ack', scope: value.scope, cursor: chatCursor(value.cursor) }));
+            const cursor = chatCursor(value.cursor);
+            if (!onlyWorkHints(value.changes)) {
+              if (options.receive) {
+                await options.receive({
+                  scope: value.scope,
+                  cursor,
+                  subscribedAfter: cursors.get(value.scope),
+                  changes: Array.isArray(value.changes) ? value.changes : [],
+                });
+              } else {
+                await options.changed(value.changes);
+              }
+            }
+            cursors.set(value.scope, cursor);
+            if (current(ws) && ws.readyState === 1) ws.send(JSON.stringify({ type: 'ack', scope: value.scope, cursor }));
           } else if (value.type === 'scope_error' && scopes.has(value.scope)) {
             // A full authenticated reload clears removed membership and resets expired cursors.
             if (value.error?.code === 'RESET_REQUIRED' && value.error?.details?.head) {
               await options.changed(value.changes);
               const head = chatCursor(value.error.details.head);
               await options.reset?.();
+              cursors.set(value.scope, head);
               if (current(ws) && ws.readyState === 1) ws.send(JSON.stringify({ type: 'subscribe', scope: value.scope, after: head }));
             } else {
               try { await options.changed(value.changes); }
               finally { stopped = true; options.unavailable(); ws.close(); }
             }
           } else if (value.type === 'error') ws.close();
-        }).catch(() => { if (current(ws)) ws.close(); });
+        }).catch(error => {
+          noteRetryAt(error);
+          if (current(ws)) ws.close();
+        });
       };
       ws.onerror = () => { if (current(ws)) ws.close(); };
       ws.onclose = () => { if (current(ws)) { clearTimeout(deadline); schedule(); } };
-    } catch { if (!stopped && options.current()) schedule(); }
+    } catch (error) {
+      noteRetryAt(error);
+      if (!stopped && options.current()) schedule();
+    }
   };
   const schedule = () => {
     options.unavailable();
     clearTimeout(retry);
-    retry = setTimeout(() => { void connect(); }, delay);
+    const waitMs = Math.max(delay, chatRetryWaitMs(nextRetryAt));
+    retry = setTimeout(() => { void connect(); }, waitMs);
     delay = Math.min(delay * 2, 15000);
   };
   void connect();

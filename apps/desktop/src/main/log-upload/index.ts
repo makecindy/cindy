@@ -21,6 +21,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion';
+import { LEGAL_TERMS_VERSION } from '../../shared/legalTermsVersion';
 import {
   LOG_UPLOAD_SETTINGS_CHANGE_CHANNEL,
   type LogUploadReason,
@@ -30,12 +31,13 @@ import {
 import * as authManager from '../authManager';
 import {
   isAnalyticsConsentRecordReadable,
+  readAnalyticsConsentFromDisk,
   readAnalyticsSettings,
   refreshAnalyticsSettingsFromDisk,
 } from '../analytics-settings-store';
 import { isFatalShutdownReason, onFatalShutdown, onQuit } from '../lifecycle';
 import { createLogger, getLogDir } from '../logger';
-import { outboundFetch } from '../maker-host/outbound-fetch';
+import { outboundFetch } from '../maker-host/outbound-fetch.desktop';
 import { getPreviousRunReports } from '../startup-diagnostics';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
@@ -45,7 +47,7 @@ import {
   selectBackfillGrouping,
   shouldBackfillForReportKind,
 } from './crashTriggers';
-import type { ConsentGateDeps } from './consentGate';
+import type { ConsentGateDeps, GateVerdict } from './consentGate';
 import { evaluateGate } from './consentGate';
 import { sendLogs } from './logSink';
 import { resolveLogUploadTarget } from './logUploadTarget';
@@ -61,6 +63,9 @@ import { PendingMarkerStore, type MarkerFs } from './pendingMarkers';
 import type { LogUploadMeta, LogUploadTarget } from './types';
 import { generateUploadCode } from './uploadCode';
 import { runUpload, type UploadOutcome } from './uploadRunner';
+import { activeOwnerScopeKey } from '../appSessionState';
+import type { TraceReport } from '../performance-trace/report';
+import { submitPerformanceReport } from '../performance-trace/upload';
 
 const log = createLogger('log-upload');
 
@@ -145,6 +150,45 @@ const gateDeps: ConsentGateDeps = {
   },
 };
 
+function manualConsentPath(): string {
+  // Separate from crash overrides so another instance can change those without erasing the grant.
+  return path.join(app.getPath('userData'), 'manual-log-upload-consent.json');
+}
+
+function parseManualConsent(content: string): boolean {
+  const version: unknown = JSON.parse(content);
+  if (typeof version !== 'string' || !version) throw new Error('invalid manual log upload consent');
+  return version === LEGAL_TERMS_VERSION;
+}
+
+async function readManualConsent(): Promise<boolean | null> {
+  try {
+    return parseManualConsent(await fs.promises.readFile(manualConsentPath(), 'utf8'));
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT' ? false : null;
+  }
+}
+
+async function evaluateManualConsent(): Promise<GateVerdict> {
+  if (!currentTarget()) return { kind: 'denied', reason: 'not-configured' };
+  const globalConsent = await readAnalyticsConsentFromDisk();
+  const consent = globalConsent === false ? await readManualConsent() : globalConsent;
+  if (consent === null) return { kind: 'unknown' };
+  return consent ? { kind: 'allowed' } : { kind: 'denied', reason: 'no-consent' };
+}
+
+async function persistManualConsent(version: string): Promise<void> {
+  const file = manualConsentPath();
+  const temp = `${file}.${crypto.randomUUID()}.tmp`;
+  try {
+    await fs.promises.writeFile(temp, JSON.stringify(version), { flag: 'wx', mode: 0o600 });
+    await fs.promises.rename(temp, file);
+  } catch (err) {
+    await fs.promises.rm(temp, { force: true }).catch(() => undefined);
+    throw err;
+  }
+}
+
 function buildMeta(args: {
   uploadCode: string;
   reason: LogUploadReason;
@@ -168,16 +212,17 @@ function buildMeta(args: {
   };
 }
 
-function runnerDeps() {
+function runnerDeps(evaluateManualConsent?: () => Promise<GateVerdict>) {
   return {
     gate: gateDeps,
+    evaluateManualConsent,
     resolveTarget: currentTarget,
     collect: (request: { reason: LogUploadReason; anchors: number[] }) =>
       collectLogsFromDisk(request),
     send: (target: LogUploadTarget, meta: LogUploadMeta, records: Parameters<typeof sendLogs>[3]) =>
       sendLogs({ fetchImpl: outboundFetch }, target, meta, records),
     buildMeta,
-    generateUploadCode: () => generateUploadCode((size) => crypto.randomBytes(size)),
+    generateUploadCode: () => generateUploadCode((size) => crypto.randomBytes(size), CURRENT_CINDY_REGION),
     markers: ensureMarkerStore(),
     now: () => Date.now(),
     log: {
@@ -187,23 +232,48 @@ function runnerDeps() {
   };
 }
 
+/** Explicit full-file performance upload. Files are selected by the recording controller,
+ * redacted before compression, and sent separately from the ordinary log source allowlist. */
+export async function uploadPerformanceTraceReport(
+  report: TraceReport,
+  note: string,
+  artifacts: () => Promise<import('../performance-trace/artifacts').TraceArtifact[]>,
+): Promise<void> {
+  await submitPerformanceReport(
+    {
+      owner: activeOwnerScopeKey,
+      gate: () => evaluateGate(gateDeps, 'manual'),
+      target: currentTarget,
+      meta: (uploadCode) => buildMeta({ uploadCode, reason: 'manual' }),
+      fetch: outboundFetch,
+      artifacts,
+    },
+    report,
+    note,
+  );
+}
+
 // ── 设置 payload 与广播 ─────────────────────────────────────────────────────
 
-export function logUploadSettingsPayload(): LogUploadSettingsPayload {
+async function logUploadSettingsPayload(): Promise<LogUploadSettingsPayload> {
   const targetConfigured = currentTarget() !== null;
-  // 展示用的读取不强制现读盘:设置页由广播驱动,自己这一侧的写入会立刻广播。
   const privacyConsentAccepted = readAnalyticsSettings().privacyConsentAccepted;
+  const privacyConsent = targetConfigured && !privacyConsentAccepted
+    ? await readAnalyticsConsentFromDisk()
+    : null;
+  const manualConsent = privacyConsent === false ? await readManualConsent() : null;
   return {
     targetConfigured,
     privacyConsentAccepted,
     crashAutoUploadEnabled: isCrashAutoUploadEnabled(),
     crashAutoUploadCustomized: isCrashAutoUploadCustomized(),
-    manualUploadAvailable: targetConfigured && privacyConsentAccepted,
+    manualUploadAvailable: targetConfigured &&
+      (privacyConsentAccepted || privacyConsent === true || manualConsent === true),
+    manualUploadConsentRequired: manualConsent === false,
   };
 }
 
-function broadcastSettingsChange(): void {
-  const payload = logUploadSettingsPayload();
+function broadcastSettingsChange(payload: LogUploadSettingsPayload): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
     try {
@@ -356,7 +426,7 @@ export function initLogUploadService(): void {
     return logUploadSettingsPayload();
   });
 
-  ipcMain.handle('log-upload:set-crash-auto', (event, rawEnabled: unknown) => {
+  ipcMain.handle('log-upload:set-crash-auto', async (event, rawEnabled: unknown) => {
     assertTrustedAppRendererEvent(event);
     // 非布尔一律当关闭处理(fail closed)。
     const enabled = rawEnabled === true;
@@ -373,11 +443,12 @@ export function initLogUploadService(): void {
         log.info(`crash auto-upload disabled — cleared ${removed} pending marker(s)`);
       }
     }
-    broadcastSettingsChange();
-    return logUploadSettingsPayload();
+    const payload = await logUploadSettingsPayload();
+    broadcastSettingsChange(payload);
+    return payload;
   });
 
-  ipcMain.handle('log-upload:reset-crash-auto', (event) => {
+  ipcMain.handle('log-upload:reset-crash-auto', async (event) => {
     assertTrustedAppRendererEvent(event);
     try {
       clearCrashAutoUploadOverride();
@@ -387,8 +458,34 @@ export function initLogUploadService(): void {
     }
     // 恢复默认 = 回到默认关闭,同样要清标记(此刻自动上传已不再被授权)。
     if (!isCrashAutoUploadEnabled()) ensureMarkerStore().clearAll();
-    broadcastSettingsChange();
-    return logUploadSettingsPayload();
+    const payload = await logUploadSettingsPayload();
+    broadcastSettingsChange(payload);
+    return payload;
+  });
+
+  ipcMain.handle('log-upload:accept-manual-consent', async (event, policyVersion: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (policyVersion !== LEGAL_TERMS_VERSION) {
+      return throwIpcError('PRIVACY_CONSENT_REQUIRED', 'current privacy policy consent is required');
+    }
+    const verdict = await evaluateManualConsent();
+    if (verdict.kind === 'unknown') {
+      return throwIpcError('PRIVACY_CONSENT_REQUIRED', 'privacy consent could not be verified');
+    }
+    if (verdict.kind === 'denied') {
+      if (verdict.reason === 'not-configured') {
+        return throwIpcError('LOG_UPLOAD_UNAVAILABLE', 'log upload is unavailable');
+      }
+      try {
+        await persistManualConsent(policyVersion);
+      } catch (err) {
+        log.error('write manual log upload consent failed', err);
+        return throwIpcError('INTERNAL', 'failed to persist manual log upload consent');
+      }
+    }
+    const payload = await logUploadSettingsPayload();
+    broadcastSettingsChange(payload);
+    return payload;
   });
 
   ipcMain.handle('log-upload:upload-now', async (event): Promise<LogUploadResult> => {
@@ -398,7 +495,7 @@ export function initLogUploadService(): void {
     }
     manualUploadInFlight = true;
     try {
-      const outcome = await runUpload(runnerDeps(), {
+      const outcome = await runUpload(runnerDeps(evaluateManualConsent), {
         reason: 'manual',
         anchors: [],
         claimed: [],

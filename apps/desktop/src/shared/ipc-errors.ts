@@ -1,4 +1,6 @@
+import { CLOUD_CLIENT_ERRORS, type CloudClientErrorCode } from './cloudSettingsErrors';
 import { CONTRIBUTION_ERROR_CODES } from './pluginContributionContract';
+import { WRITABLE_DIRECTORY_GRANT_ERROR_CODES, type WritableDirectoryGrantErrorCode } from './writableDirectoryGrantError';
 import type { BrowserOpenForLoginErrorCode } from './browserBackend';
 
 /** main / preload / renderer 共用的 IPC 错误类型。 */
@@ -71,6 +73,21 @@ export const COMPANION_IMPORT_ERROR_CODES = [
 ] as const;
 
 export type IpcErrorCode =
+  | 'SUBSCRIPTION_LOGIN_CANCELLED'
+  | 'SUBSCRIPTION_ACCOUNT_FAILED'
+  /** The official CLI could not reach its account service, so the sign-in could not be confirmed. */
+  | 'SUBSCRIPTION_ACCOUNT_UNREACHABLE'
+  | 'SUBSCRIPTION_CODEX_PROVIDER_AUTH'
+  | 'SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH'
+  | 'SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN'
+  /** 2026-11-24 long-lived Claude token: the account needs its ordinary sign-in first. */
+  | 'SUBSCRIPTION_CLAUDE_TOKEN_NEEDS_LOGIN'
+  /** An organization policy forbids subscription tokens. */
+  | 'SUBSCRIPTION_CLAUDE_TOKEN_NOT_PERMITTED'
+  /** This account or computer cannot be moved onto a long-lived token. */
+  | 'SUBSCRIPTION_CLAUDE_TOKEN_UNSUPPORTED'
+  | WritableDirectoryGrantErrorCode
+  | CloudClientErrorCode
   | (typeof CONTRIBUTION_ERROR_CODES)[number]
   | (typeof COMPANION_IMPORT_ERROR_CODES)[number]
   // 通用错误
@@ -81,11 +98,15 @@ export type IpcErrorCode =
   | 'PRECONDITION_FAILED'
   | 'OFFICIAL_PLUGIN_GITHUB_REQUIRED' // 客户端提审限制，不扩展服务端 wire 错误
   | 'VOICE_SPEECH_TIMEOUT' // 本机语音合成等待响应或音频读取超时
+  | 'VOICE_CONVERSATION_BUSY' // 本机已有语音通话、朗读、试听或听写占用麦克风
   | 'PROVIDER_GROUP_CHANGED' // 编辑期间组设置已变化，拒绝覆盖，需重新读取
   | 'SHARE_NOT_CONFIGURED'
   | 'SHARE_UNAVAILABLE'
   | 'SHARE_READ_FAILED'
   | 'HTML_PREVIEW_TOO_LARGE'
+  | 'PROVIDER_IMPORT_FILE_TOO_LARGE'
+  | 'PROVIDER_IMPORT_FILE_INVALID'
+  | 'PROVIDER_IMPORT_FILE_READ_FAILED'
   | 'HTML_PREVIEW_UNSUPPORTED'
   // 本地模型切换窗口保护的可行动失败原因。device-link 继续降级为
   // PRECONDITION_FAILED，避免把新增 Electron IPC code 变成跨版本 wire 契约。
@@ -108,6 +129,7 @@ export type IpcErrorCode =
   | 'UNSUPPORTED_CAPABILITY'
   | 'SSH_HARNESS_SWITCH_UNSUPPORTED'
   | 'MODEL_SELECTION_UNAVAILABLE'
+  | 'MODEL_CATALOG_UNCONFIRMED'
   | 'HARNESS_SWITCH_NOT_READY'
   | 'SHARED_TASK_HOST_LIMIT'
   | 'SHARED_TASK_JOIN_LIMIT'
@@ -124,6 +146,7 @@ export type IpcErrorCode =
   | 'REMOTE_AGENT_SHARE_PAUSED'
   | 'REMOTE_AGENT_SHARE_REMOVED'
   | 'REMOTE_AGENT_SHARE_UNAVAILABLE'
+  | 'REMOTE_AGENT_SHARE_LEGACY_DISABLED'
   | 'APP_SHORTCUTS_WRITE_FAILED'
   | 'NO_ACTIVE_TURN'
   | 'SESSION_RUNNING'
@@ -137,6 +160,7 @@ export type IpcErrorCode =
   // 供应商凭证 mutation 窗口(稍后重试)/ 远端不可表达(换来源)/ 订阅未连接(连接 Claude.ai)。
   | 'REMOTE_PROVIDER_UPDATING'
   | 'REMOTE_PROVIDER_UNSUPPORTED'
+  | 'REMOTE_CODEX_SOURCE_UNSUPPORTED'
   | 'REMOTE_NATIVE_OAUTH_UNAVAILABLE'
   // 工作区 .claude 设置会改写 Claude 订阅会话的上游 / 鉴权 / TLS 信任(workspace-settings-guard),
   // 拒绝启动订阅会话。
@@ -161,8 +185,12 @@ export type IpcErrorCode =
   | 'REGION_MISMATCH'
   | 'CREDENTIAL_STORE_UNAVAILABLE'
   | 'AUTH_FLOW_SUPERSEDED'
-  // 智能通讯录: (platform, value) 身份已属于另一个联系人 — message 里带占用者 id
-  | 'IDENTITY_CONFLICT'
+  // 新电脑设置(docs/product-rules/new-device-setup-migration.md):那台电脑版本过旧 / 现在读不到 /
+  // 回包不合法 / 预览已过期(换号、超时或另一次预览)。
+  | 'SETUP_SOURCE_OUTDATED'
+  | 'SETUP_SOURCE_UNAVAILABLE'
+  | 'SETUP_SNAPSHOT_INVALID'
+  | 'SETUP_PLAN_EXPIRED'
   // domain-specific
   | 'STALE_DIFF'
   | 'PUSH_LEASE_EXPIRED'
@@ -197,6 +225,7 @@ export type IpcErrorCode =
   | 'LEARN_BUSY' // 已有 learn run 在进行(全局并发 1)
   | 'LEARN_INVALID_STATE' // run 状态不允许该操作(如对非 awaiting-review 调 apply)
   // remote-ssh：连接阶段
+  | 'SSH_HOST_UNVERIFIED'
   | 'SSH_HOST_KEY_MISMATCH'
   | 'SSH_CONNECT_FAILED'
   | 'SSH_AUTH_FAILED'
@@ -268,6 +297,7 @@ export type IpcErrorCode =
   | 'TERMINAL_ALREADY_DISPOSED' // 在已 dispose 的 session 上调 restart 等操作
   // 意识(.cindy 装入)
   | 'GHOST_FILE_INVALID' // 不是合法 zip / 缺 ghost.json / 清单不合格 / 超限
+  | 'GHOST_DOWNLOAD_AUTHORIZATION_EXPIRED' // 下载授权无效或已到期，未开始下载
   | 'GHOST_DOWNLOAD_TIMEOUT' // 市场包下载总时限或无进展超时
   | 'GHOST_DOWNLOAD_FAILED' // 市场包下载网络失败
   | 'GHOST_HOST_UNSUPPORTED' // 插件包使用了当前 Cindy 不认识的未来 schema
@@ -294,6 +324,8 @@ export type IpcErrorCode =
   | 'PLAN_CHANGE_RENEWAL_PREPAID' // 下一期已付未生效，等待本期结束后升级
   | 'PLAN_CHANGE_NOT_AVAILABLE' // 当前订阅不能切换到目标套餐，可返回候选列表重选
   | 'RESUME_NOT_AVAILABLE' // 当前订阅已到期、渠道协议失效或状态不可恢复
+  | 'GIFT_CARD_PURCHASE_LIMIT_REACHED' // 礼品卡购买已达上限（滚动 24 小时）
+  | 'GIFT_CARD_ORDER_AMOUNT_TOO_LARGE' // 礼品卡订单总额超过单笔上限（如支付宝）
   // 钉钉机器人连接
   | 'DINGTALK_AUTH_FAILED' // Client ID / Client Secret 被钉钉拒绝
   | 'DINGTALK_NETWORK_FAILED' // 钉钉凭证校验接口不可达
@@ -342,21 +374,35 @@ export interface IpcError {
 }
 
 const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
+  'SUBSCRIPTION_LOGIN_CANCELLED',
+  'SUBSCRIPTION_ACCOUNT_FAILED',
+  'SUBSCRIPTION_ACCOUNT_UNREACHABLE',
+  'SUBSCRIPTION_CODEX_PROVIDER_AUTH',
+  'SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH',
+  'SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN',
+  'SUBSCRIPTION_CLAUDE_TOKEN_NEEDS_LOGIN',
+  'SUBSCRIPTION_CLAUDE_TOKEN_NOT_PERMITTED',
+  'SUBSCRIPTION_CLAUDE_TOKEN_UNSUPPORTED',
+  ...WRITABLE_DIRECTORY_GRANT_ERROR_CODES,
   ...COMPANION_IMPORT_ERROR_CODES,
+  ...CLOUD_CLIENT_ERRORS,
   ...CONTRIBUTION_ERROR_CODES,
   'INVALID_PARAMS',
   'NOT_FOUND',
   'INTERNAL',
   'ALREADY_EXISTS',
-  'IDENTITY_CONFLICT',
   'PRECONDITION_FAILED',
   'OFFICIAL_PLUGIN_GITHUB_REQUIRED',
   'VOICE_SPEECH_TIMEOUT',
+  'VOICE_CONVERSATION_BUSY',
   'PROVIDER_GROUP_CHANGED',
   'SHARE_NOT_CONFIGURED',
   'SHARE_UNAVAILABLE',
   'SHARE_READ_FAILED',
   'HTML_PREVIEW_TOO_LARGE',
+  'PROVIDER_IMPORT_FILE_TOO_LARGE',
+  'PROVIDER_IMPORT_FILE_INVALID',
+  'PROVIDER_IMPORT_FILE_READ_FAILED',
   'HTML_PREVIEW_UNSUPPORTED',
   'MODEL_CONTEXT_USAGE_UNKNOWN',
   'MODEL_VISIBILITY_NOT_READY',
@@ -375,6 +421,7 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'UNSUPPORTED_CAPABILITY',
   'SSH_HARNESS_SWITCH_UNSUPPORTED',
   'MODEL_SELECTION_UNAVAILABLE',
+  'MODEL_CATALOG_UNCONFIRMED',
   'HARNESS_SWITCH_NOT_READY',
   'SHARED_TASK_HOST_LIMIT',
   'SHARED_TASK_JOIN_LIMIT',
@@ -390,6 +437,7 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'REMOTE_AGENT_SHARE_PAUSED',
   'REMOTE_AGENT_SHARE_REMOVED',
   'REMOTE_AGENT_SHARE_UNAVAILABLE',
+  'REMOTE_AGENT_SHARE_LEGACY_DISABLED',
   'APP_SHORTCUTS_WRITE_FAILED',
   'NO_ACTIVE_TURN',
   'SESSION_RUNNING',
@@ -397,6 +445,7 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'PI_CATALOG_RELOAD_UNCONFIRMED',
   'REMOTE_PROVIDER_UPDATING',
   'REMOTE_PROVIDER_UNSUPPORTED',
+  'REMOTE_CODEX_SOURCE_UNSUPPORTED',
   'REMOTE_NATIVE_OAUTH_UNAVAILABLE',
   'CLAUDE_SUBSCRIPTION_WORKSPACE_OVERRIDE',
   'REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE',
@@ -411,6 +460,10 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'REGION_MISMATCH',
   'CREDENTIAL_STORE_UNAVAILABLE',
   'AUTH_FLOW_SUPERSEDED',
+  'SETUP_SOURCE_OUTDATED',
+  'SETUP_SOURCE_UNAVAILABLE',
+  'SETUP_SNAPSHOT_INVALID',
+  'SETUP_PLAN_EXPIRED',
   'STALE_DIFF',
   'PUSH_LEASE_EXPIRED',
   'PUSH_NO_REMOTE',
@@ -439,6 +492,7 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'GOAL_NOT_FOUND',
   'LEARN_BUSY',
   'LEARN_INVALID_STATE',
+  'SSH_HOST_UNVERIFIED',
   'SSH_HOST_KEY_MISMATCH',
   'SSH_CONNECT_FAILED',
   'SSH_AUTH_FAILED',
@@ -494,6 +548,7 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'TERMINAL_SHELL_NOT_FOUND',
   'TERMINAL_ALREADY_DISPOSED',
   'GHOST_FILE_INVALID',
+  'GHOST_DOWNLOAD_AUTHORIZATION_EXPIRED',
   'GHOST_DOWNLOAD_TIMEOUT',
   'GHOST_DOWNLOAD_FAILED',
   'GHOST_HOST_UNSUPPORTED',
@@ -518,6 +573,8 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'PLAN_CHANGE_RENEWAL_PREPAID',
   'PLAN_CHANGE_NOT_AVAILABLE',
   'RESUME_NOT_AVAILABLE',
+  'GIFT_CARD_PURCHASE_LIMIT_REACHED',
+  'GIFT_CARD_ORDER_AMOUNT_TOO_LARGE',
   'DINGTALK_AUTH_FAILED',
   'DINGTALK_NETWORK_FAILED',
   'DINGTALK_STREAM_CONNECTION_FAILED',
@@ -581,4 +638,13 @@ export function createIpcError(
 
 export function isIpcError(err: unknown): err is Error & { code: IpcErrorCode } {
   return err instanceof Error && isIpcErrorCode((err as { code?: unknown }).code);
+}
+
+/** The profile has not finished recovering after desktop use (queue or plugins). Optional on structured precondition refusals. Electron invoke carries only the message. */
+export function isProfileReleaseFailure(value: unknown): value is {
+  code: 'PRECONDITION_FAILED'; reason: 'HOST_PROFILE_RELEASE_FAILED';
+} {
+  return typeof value === 'object' && value !== null
+    && 'code' in value && value.code === 'PRECONDITION_FAILED'
+    && 'reason' in value && value.reason === 'HOST_PROFILE_RELEASE_FAILED';
 }

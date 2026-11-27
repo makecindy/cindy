@@ -16,6 +16,7 @@ const nativeLogin = vi.hoisted(() => ({ connected: false }));
 vi.mock('../claude-native-auth.js', () => ({ hasClaudeNativeLogin: () => nativeLogin.connected }));
 
 import {
+  codexImportedThreadModelProviderId,
   isCodexThreadModelProviderIdentityMismatch,
   prepareLocalSessionCredentialModeSwitch,
   prepareLocalCodexCredentialModeSwitch,
@@ -64,6 +65,20 @@ describe('shouldCloseSessionForCredentialSwitch codex mode', () => {
       currentModel: 'codex/gpt-5.5',
       nextModel: 'codex/gpt-5.4',
       currentCodexProxyActive: true,
+    })).toBe(false);
+  });
+
+  // 导入的外部 Codex 线程记录的是 openai，Cindy 按路由身份恢复会被拒绝（会话导入 #新导入器）。
+  it.each([
+    ['xd', 'openai/gpt-6.1-sol', 'cindy_gateway'],
+    ['xd', 'codex/gpt-5.5', 'cindy_codex'],
+    ['openai', 'gpt-5.4', 'cindy_openai'],
+  ])('tags an imported thread with the identity Cindy resumes %s %s under', (providerId, model, expected) => {
+    const identity = codexImportedThreadModelProviderId({ providerId, model });
+    expect(identity).toBe(expected);
+    expect(isCodexThreadModelProviderIdentityMismatch({ agentKind: 'codex',
+      currentProviderId: providerId, nextProviderId: providerId, currentModel: model, nextModel: model,
+      currentCodexProxyActive: true, currentCodexThreadModelProviderId: identity,
     })).toBe(false);
   });
 
@@ -207,6 +222,36 @@ describe('shouldCloseSessionForCredentialSwitch codex mode', () => {
     } as const;
     expect(isCodexThreadModelProviderIdentityMismatch(input)).toBe(false);
     expect(shouldCloseSessionForCredentialSwitch(input)).toBe(false);
+  });
+
+  // #11639: a split OpenAI subscription copies builtin oauth auth and adds
+  // subscriptionPool, without auth.native. Its live thread is still cindy_openai.
+  it('keeps a split OpenAI subscription on the builtin OpenAI thread family', () => {
+    const openai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'openai');
+    expect(openai?.auth.native).toBeUndefined();
+    const splitId = 'openai-sub-12345678';
+    setActiveCatalog({
+      ...BUNDLED_CATALOG,
+      providers: [
+        ...BUNDLED_CATALOG.providers,
+        { ...openai!, id: splitId, name: 'Work', subscriptionPool: 'openai' },
+      ],
+    });
+    const input = {
+      agentKind: 'codex' as const,
+      currentProviderId: splitId,
+      nextProviderId: splitId,
+      currentModel: 'gpt-6.2-sol',
+      nextModel: 'gpt-6.2-sol',
+      currentCodexProxyActive: true,
+      currentCodexThreadModelProviderId: 'cindy_openai',
+    };
+    expect(isCodexThreadModelProviderIdentityMismatch(input)).toBe(false);
+    expect(shouldCloseSessionForCredentialSwitch(input)).toBe(false);
+    expect(isCodexThreadModelProviderIdentityMismatch({
+      ...input,
+      currentCodexThreadModelProviderId: 'cindy_gateway',
+    })).toBe(true);
   });
 
   it('keeps a raw OpenAI identity for the implicit OAuth route', () => {

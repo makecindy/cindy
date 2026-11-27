@@ -9,6 +9,22 @@ import type { Session } from '@/lib/ccAgent.types';
 import { useScheduleForm } from '../useScheduleForm';
 import { formToProjectConfig } from '../../lib/projectAutomationConfig';
 
+// Issue 8886 / unit: edit initialization, validation and clear must survive the real hook.
+it('restores the saved deadline and validates edits before saving', () => {
+  const expireAt = new Date(2027, 3, 5, 10, 30, 15).getTime();
+  const saved = { id: 'deadline', name: 'Deadline', prompt: 'check', cronExpr: '0 9 * * *',
+    timezone: 'UTC', recurring: true, agentKind: 'claude-code', notify: {}, expireAt } as Schedule;
+  const { result } = renderHook(() => useScheduleForm(saved));
+  expect(result.current.form.deadline).toBe('2027-04-05T10:30');
+  act(() => result.current.setField('name', 'Renamed'));
+  expect(result.current.toInput().expireAt).toBe(expireAt);
+  act(() => result.current.setField('deadline', '2027-02-30T10:00'));
+  expect(result.current.validate()).toEqual({ key: 'scheduler.deadline.invalid' });
+  act(() => result.current.setField('deadline', ''));
+  expect(result.current.toInput().expireAt).toBeNull();
+  expect(result.current.validate()).toBeNull();
+});
+
 it('keeps a blank reminder audible until the user opts into quiet checks', () => {
   const { result } = renderHook(() => useScheduleForm(null));
   expect(result.current.toInput().silentWhenIdle).toBe(false);
@@ -241,4 +257,27 @@ describe('saved automation model selection', () => {
     act(() => result.current.selectModelConfiguration(null));
     expect(result.current.toInput()).toMatchObject({ targetSessionId: 'new', agentKind: 'claude-code' });
   });
+});
+
+// Merge regression: a model-group choice must replace buddy inheritance without losing its
+// saved fallback route. Hook + real project serialization, unit; neither branch alone covers both modes.
+it('switches between buddy inheritance and a model group without retaining both choices', () => {
+  const { result } = renderHook(() => useScheduleForm(null));
+  act(() => {
+    result.current.setField('model', 'saved-fallback');
+    result.current.setField('providerId', 'saved-provider');
+    result.current.setField('followTeammateModel', true);
+    result.current.selectModelGroup('daily');
+  });
+  expect(formToProjectConfig(result.current.form, 'future-default-task')).toMatchObject({
+    modelGroup: 'daily', followTeammateModel: false, model: 'saved-fallback', providerId: 'saved-provider',
+  });
+  act(() => {
+    result.current.selectModelConfiguration(null);
+    result.current.setField('followTeammateModel', true);
+  });
+  const following = formToProjectConfig(result.current.form, 'future-default-task');
+  expect(following.followTeammateModel).toBe(true);
+  expect(following.modelGroup).toBeUndefined();
+  expect(following.model).toBeUndefined();
 });

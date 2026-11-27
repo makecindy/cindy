@@ -1,23 +1,32 @@
 import { createConversationListState } from '@cindy/maker-shared/chatConversationList';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { AppState } from 'react-native';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useIsFocused } from 'expo-router';
 import type { RemoteActionInvokeResponse } from '@cindy/device-link';
 import type { BotGroupAttachment, BotGroupRemoteActionId } from '@cindy/maker-shared/botGroupChat';
 import { useAuth } from '@/auth/AuthContext';
-import { mobileDebugLog } from '@/debug/mobileDebugLog';
+import { mobileDebugEnabled, mobileDebugLog } from '@/debug/mobileDebugLog';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import { mobileDurableOutbox } from '@/session/mobileDurableOutbox';
-import { enqueueChatMessage, settleChatOutbox } from './chatOutbox';
-import { getActiveMobileSessionRealm, getMobileEndpointForRealm, loadMobileEndpointsForRealm } from '@/config/env';
+import { enqueueChatMessage, enqueueChatShare, settleChatOutbox } from './chatOutbox';
+import { BUILD_AUTH_REGION, getActiveMobileSessionRealm, getMobileEndpointForRealm, loadMobileEndpointsForRealm } from '@/config/env';
+import { createChatInviteShares } from './chatInviteShare';
 import { cacheChatRoster, forgetRemoteResource, hideCachedChatRooms, markRemoteResourceRead, peekCachedChatRoster, readCachedChatRoster } from '@/device-link/remoteResourceCache';
 import { useRemoteSyncCoordinator } from '@/device-link/remoteSyncTask';
 import type { BotGroupChatState } from '@/session/useBotGroupChat';
-import { chatAccessLost, chatCursor, chatGroupView, chatHttpsUrl, chatRoomRow, chatReadAt, chatReadSequence, chatLastReplyAt, chatLastReplySequence, createChatServerClient, type ChatActor, type ChatPage, type ChatRequest, type ChatSnapshot } from './chatServerClient';
-import { subscribeChatServer } from './chatServerSubscription';
-import { createChatHistory } from '@cindy/maker-shared/chat-history';
-import { createMobileChatHistoryStore } from './chatHistoryStore';
-import { cacheChatMessages, forgetChatMessages, peekChatMessages, readChatMessages, subscribeChatInvalidation } from './chatMessageCache';
+import { chatAccessLost, chatCursor, chatGroupView, chatThreadMetadata, chatHttpsUrl, chatRateLimitDeadline, chatRetryWaitMs, chatRoomRow, chatReadAt, chatReadSequence, chatLastReplyAt, chatLastReplySequence, createChatServerClient, type ChatAccountIdentity, type ChatActor, type ChatMessage, type ThreadBackfill, type ChatPage, type ChatRequest, type ChatSnapshot } from './chatServerClient';
+import type { TeammateActivity } from '@cindy/maker-shared/teammate-status';
+import { subscribeChatServer, type ChatChangesFrame } from './chatServerSubscription';
+import { createChatHistory, type ChatHistory } from '@cindy/maker-shared/chat-history';
+import { createMobileChatHistoryStore, mobileChatHistoryStoreEpoch } from './chatHistoryStore';
+import { cacheChatMessages, flushChatMessageCache, forgetChatMessages, peekChatMessages, readChatMessages, subscribeChatInvalidation } from './chatMessageCache';
+import { clearChatServerMediaCache, forgetChatServerMediaRoom } from './chatServerMediaCache';
+import { useJsonSnapshotState } from '@/utils/useStableValue';
+import { createChatServerUpload } from './chatServerUpload';
+import { uploadPublicAvatar } from './publicAvatarUpload';
+import type { MobileLocalAttachmentUploadDeps } from '@/session/mobileLocalAttachmentUpload';
+import type { RemoteSerializedAttachment } from '@/session/types';
+import { useTranslation } from 'react-i18next';
 
 // Shared only within the current authenticated account generation and realm.
 let listOwner = '';
@@ -25,6 +34,111 @@ let accountList = createConversationListState();
 function listFor(owner: string) {
   if (listOwner !== owner) { listOwner = owner; accountList = createConversationListState(); }
   return accountList;
+}
+
+type ChatAuth = ReturnType<typeof useAuth>;
+/** Messages the shared history keeps in memory for rooms with nothing in flight. The list
+ * holds at most the newest 100 of each room, so dozens of rooms fit; a room scrolled far
+ * back is the first to be released once it is idle. */
+const IDLE_ROOM_MESSAGES = 4000;
+/**
+ * One Chat Server session per signed-in account. Who the account is, what its server supports
+ * and the local history projection belong to the account, not to a screen: the group a person
+ * opens was usually verified by the list a moment earlier, and must not be re-identified,
+ * re-read from disk and re-requested because a new screen mounted. Everything here is fenced
+ * to the account and realm only; each screen keeps its own fence on top (useChatClient).
+ */
+interface ChatAccountSession {
+  owner: string; realm: ReturnType<typeof getActiveMobileSessionRealm>; authOwner: ReturnType<typeof getMobileAuthOwner>; storeEpoch: number;
+  auth: ChatAuth; identity: ChatAccountIdentity;
+  current(): boolean; baseUrl(): string; endpoint(): Promise<string>; request: ChatRequest;
+  history(human: string): Promise<ChatHistory>;
+  peekHistory(human: string): ChatHistory | undefined;
+  noteRateLimit(error: unknown): number | undefined;
+  rateLimitRemainingMs(): number;
+}
+let accountSession: ChatAccountSession | undefined;
+function chatAccountSession(owner: string, auth: ChatAuth): ChatAccountSession {
+  const realm = getActiveMobileSessionRealm();
+  const authOwner = getMobileAuthOwner();
+  const existing = accountSession;
+  if (existing && existing.owner === owner && existing.realm === realm && existing.authOwner === authOwner
+    && existing.storeEpoch === mobileChatHistoryStoreEpoch()) { existing.auth = auth; return existing; }
+  const current = () => getActiveMobileSessionRealm() === realm && isMobileAuthOwnerCurrent(authOwner);
+  const check = () => { if (!current()) throw new Error('OWNER_CHANGED'); };
+  const baseUrl = () => {
+    try { return chatHttpsUrl(getMobileEndpointForRealm(realm, 'chatApiBaseUrl')).replace(/\/$/, ''); }
+    catch { throw new Error('CHAT_ENDPOINT_UNAVAILABLE'); }
+  };
+  let discovering: Promise<string> | undefined;
+  let readRetryAt = 0;
+  const noteRateLimit = (error: unknown): number | undefined => {
+    const deadline = chatRateLimitDeadline(error);
+    if (deadline !== undefined && deadline > readRetryAt) readRetryAt = deadline;
+    return deadline;
+  };
+  const rateLimitRemainingMs = () => chatRetryWaitMs(readRetryAt);
+  const endpoint = async () => {
+    check();
+    try { return baseUrl(); } catch { /* An older snapshot may predate the chat endpoint. */ }
+    discovering ??= loadMobileEndpointsForRealm(realm, { refresh: true })
+      .then(() => { check(); return baseUrl(); })
+      .catch(() => { check(); throw new Error('CHAT_ENDPOINT_UNAVAILABLE'); })
+      .finally(() => { discovering = undefined; });
+    return discovering;
+  };
+  const request: ChatRequest = async <T,>(path: string, method: 'GET' | 'POST' | 'PATCH' = 'GET', body?: unknown, actorId?: string, signal?: AbortSignal) => {
+    check();
+    const url = await endpoint(); check();
+    try {
+      const result = await session.auth.apiFetch<T>(`/v1${path}`, { baseUrl: url, method, cache: 'no-store', ...(body !== undefined ? { body } : {}),
+        ...(actorId ? { headers: { 'X-Chat-Actor': actorId } } : {}), ...(signal ? { signal } : {}), assertCurrent: check });
+      check();
+      return result;
+    } catch (error) {
+      noteRateLimit(error);
+      throw error;
+    }
+  };
+  const histories = new Map<string, Promise<ChatHistory>>();
+  const resolvedHistories = new Map<string, ChatHistory>();
+  const userId = auth.user?.id ?? '';
+  const peekHistory = (human: string) => resolvedHistories.get(human);
+  const session: ChatAccountSession = { owner, realm, authOwner, storeEpoch: mobileChatHistoryStoreEpoch(), auth,
+    identity: { request, peekHistory }, current, baseUrl, endpoint, request, peekHistory, noteRateLimit, rateLimitRemainingMs,
+    history(human) {
+      let opened = histories.get(human);
+      if (!opened) {
+        opened = (async () => {
+          const url = await endpoint(); check();
+          const { randomUUID } = await import('expo-crypto');
+          // The phone stores each room as one file: commit once per room operation. This
+          // history lives as long as the account session, so rooms nobody is using are held
+          // in memory only up to a budget and come back from their file when opened again.
+          const created = createChatHistory({ api: request, current, newGeneration: randomUUID, coalesceWrites: true,
+            maxIdleMessages: IDLE_ROOM_MESSAGES, store: createMobileChatHistoryStore(userId, realm, url, human, current) });
+          resolvedHistories.set(human, created);
+          return created;
+        })();
+        histories.set(human, opened);
+        const pending = opened;
+        void pending.catch(() => {
+          if (histories.get(human) === pending) {
+            histories.delete(human);
+            resolvedHistories.delete(human);
+          }
+        });
+      }
+      return opened;
+    } };
+  accountSession = session;
+  return session;
+}
+/** Only the reader's own position moves; follow, mute and notification writes are preferences. */
+function ordinaryRead(path: string, room: string, body: unknown): body is { threadRootId?: string } {
+  if (path !== `/conversations/${room}/read` || !body || typeof body !== 'object') return false;
+  const read = body as Record<string, unknown>;
+  return ['following', 'muted', 'markedUnread', 'notificationMode'].every(field => read[field] === undefined);
 }
 
 /** The account's Chat Server client, fenced to the current account, realm and mount. */
@@ -35,45 +149,59 @@ export function useChatClient() {
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const deps = useRef(auth); deps.current = auth;
+  // Every screen reads the same auth context; keep the shared session on its latest value.
+  if (accountSession?.owner === owner) accountSession.auth = auth;
   return useMemo(() => {
-    const realm = getActiveMobileSessionRealm();
-    const authOwner = getMobileAuthOwner();
-    const current = () => mounted.current && active.current === owner && getActiveMobileSessionRealm() === realm
-      && isMobileAuthOwnerCurrent(authOwner);
+    const session = chatAccountSession(owner, deps.current);
+    const realm = session.realm;
+    const current = () => mounted.current && active.current === owner && session.current();
     const check = () => { if (!current()) throw new Error('OWNER_CHANGED'); };
-    const baseUrl = () => {
-      try { return chatHttpsUrl(getMobileEndpointForRealm(realm, 'chatApiBaseUrl')).replace(/\/$/, ''); }
-      catch { throw new Error('CHAT_ENDPOINT_UNAVAILABLE'); }
-    };
-    let discovering: Promise<string> | undefined;
-    const endpoint = async () => {
-      check();
-      try { return baseUrl(); } catch { /* An older snapshot may predate the chat endpoint. */ }
-      discovering ??= loadMobileEndpointsForRealm(realm, { refresh: true })
-        .then(() => { check(); return baseUrl(); })
-        .catch(() => { check(); throw new Error('CHAT_ENDPOINT_UNAVAILABLE'); })
-        .finally(() => { discovering = undefined; });
-      return discovering;
-    };
+    const baseUrl = session.baseUrl;
+    const endpoint = async () => { check(); const url = await session.endpoint(); check(); return url; };
     const request: ChatRequest = async <T,>(path: string, method: 'GET' | 'POST' | 'PATCH' = 'GET', body?: unknown, actorId?: string, signal?: AbortSignal) => {
       check();
-      const url = await endpoint(); check();
-      const result = await deps.current.apiFetch<T>(`/v1${path}`, { baseUrl: url, method, cache: 'no-store', ...(body !== undefined ? { body } : {}),
-        ...(actorId ? { headers: { 'X-Chat-Actor': actorId } } : {}), ...(signal ? { signal } : {}), assertCurrent: check });
+      const result = await session.request<T>(path, method, body, actorId, signal);
       check();
       if (method !== 'GET') {
         const room = path.match(/^\/conversations\/([^/]+)/)?.[1];
-        if (room) client.invalidateHistory(room, path.endsWith('/read'));
+        // The receipt of an ordinary read already carries the new position; merge it instead
+        // of marking the room for a snapshot download.
+        if (room && ordinaryRead(path, room, body)) await client.acceptRead(room, result, body.threadRootId, true).catch(() => client.invalidateHistory(room, true));
+        else if (room) client.invalidateHistory(room, path.endsWith('/read'));
       }
       return result;
     };
-    const client = createChatServerClient(request, listFor(owner), async human => {
-      const url = await endpoint(); check();
-      const { randomUUID } = await import('expo-crypto');
-      return createChatHistory({ api: request, current, newGeneration: randomUUID,
-        store: createMobileChatHistoryStore(auth.user!.id, realm, url, human, current) });
+    const client = createChatServerClient(request, listFor(owner), human => session.history(human), createChatInviteShares({
+      baseUrl: () => getMobileEndpointForRealm(BUILD_AUTH_REGION, 'shareBaseUrl'), region: BUILD_AUTH_REGION, realm, current,
+      apiFetch: (path, options) => deps.current.apiFetch(path, options),
+    }), session.identity);
+    const upload = createChatServerUpload({ request, current,
+      operationId: () => `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      put: async (url, uri, type, signal) => {
+        const { putMobileAttachmentUploadFromFile } = await import('@/session/mobileAttachmentUpload');
+        check();
+        await putMobileAttachmentUploadFromFile(url, uri, type, {}, { signal, signedHeaders: { 'Content-Type': type } });
+      },
     });
-    return { owner, realm, userId: auth.user?.id ?? '', current, baseUrl, endpoint, request, client,
+    /** A group avatar file (already resized) to a public URL; see publicAvatarUpload.ts. */
+    const uploadAvatar = (file: { uri: string; size: number; mimeType: 'image/jpeg' | 'image/png' }) => uploadPublicAvatar({ current,
+      presign: async body => {
+        check();
+        let base: string;
+        try { base = chatHttpsUrl(getMobileEndpointForRealm(realm, 'ossApiBaseUrl')).replace(/\/$/, ''); }
+        catch { throw new Error('PROFILE_AVATAR_UPLOAD_FAILED'); }
+        return deps.current.apiFetch('/api/oss/presign-put', { baseUrl: base, method: 'POST', body, cache: 'no-store', assertCurrent: check });
+      },
+      put: async (url, uri, headers) => {
+        const { putMobileAttachmentUploadFromFile } = await import('@/session/mobileAttachmentUpload');
+        check();
+        await putMobileAttachmentUploadFromFile(url, uri, file.mimeType, {}, { signedHeaders: headers });
+      },
+    }, file);
+    return { owner, realm, userId: auth.user?.id ?? '', current, baseUrl, endpoint, request, client, upload, uploadAvatar,
+      knownSelfId: () => session.identity.known?.id,
+      rateLimitRemainingMs: session.rateLimitRemainingMs,
+      noteRateLimit: session.noteRateLimit,
       token: async () => { check(); await client.me(); const token = await deps.current.getAccessToken(); check(); return token; }, enabled: !!auth.user };
   }, [owner, !!auth.user]);
 }
@@ -86,7 +214,8 @@ export function useChatServerRoster(enabled: boolean) {
   if (known.current.owner !== api.owner) known.current = { owner: api.owner, ids: new Set(saved?.ids) };
   // A remounted roster must suppress already-known hidden rooms even if HTTP is offline.
   for (const id of api.client.personalList.ids()) known.current.ids.add(id);
-  const snapshots = useRef(new Map<string, { owner: string; head: string | undefined; value: ChatSnapshot }>());
+  const snapshots = useRef(new Map<string, { owner: string; head: string | undefined; value: ChatSnapshot; activity: TeammateActivity | undefined; at: number }>());
+  const lastFullSync = useRef({ owner: api.owner, at: 0 });
   const [state, setState] = useState(() => ({ owner: api.owner,
     rooms: saved?.items.filter(row => !api.client.personalList.hidden(row.item.ref.id)) ?? [] as ReturnType<typeof chatRoomRow>[],
     loading: !saved, refreshing: false, error: null as string | null }));
@@ -100,34 +229,71 @@ export function useChatServerRoster(enabled: boolean) {
     if (saved) setState(old => old.owner === api.owner && !old.loading ? old : { owner: api.owner,
       rooms: cached.items.filter(row => !api.client.personalList.hidden(row.item.ref.id)), loading: false, refreshing: false, error: null });
     try {
-      await api.client.syncListState(run.reasons.some(reason => ['focus', 'visible', 'connected'].includes(reason)));
+      const explicitRefresh = run.reasons.includes('visible');
+      const connectedOnly = run.reasons.every(reason => reason === 'connected')
+        && lastFullSync.current.owner === api.owner
+        && Date.now() - lastFullSync.current.at < FULL_READ_REUSE_MS;
+      await api.client.syncListState(!connectedOnly && run.reasons.some(reason => ['focus', 'visible', 'connected'].includes(reason)));
       const [rooms, self] = await Promise.all([api.client.list(), api.client.me()]);
       const rows: ReturnType<typeof chatRoomRow>[] = [];
-      const fresh = new Map<string, { owner: string; head: string | undefined; value: ChatSnapshot }>();
+      const fresh = new Map<string, { owner: string; head: string | undefined; value: ChatSnapshot; activity: TeammateActivity | undefined; at: number }>();
       // Keep archived IDs in `rooms` for computer-copy deduplication, but do not
       // download their histories or project them into the default teammate list.
       const visibleRooms = rooms.filter(room => !room.archived);
       let partial = false;
-      // List provides room heads, so unchanged rooms need no history download on polling.
+      const now = Date.now();
+      const fallbackRow = (room: (typeof visibleRooms)[number]) => {
+        const previous = cached.items.find(row => row.item.ref.id === room.id);
+        const row = chatRoomRow(room);
+        // Member links back the composite avatar and member search until a snapshot replaces them.
+        return previous ? { ...previous, item: { ...row.item,
+          display: { ...previous.item.display, title: row.item.display.title, badges: row.item.display.badges },
+          links: previous.item.links } } : row;
+      };
+      // List provides room heads, so unchanged rooms need no history download on polling
+      // or on the realtime handshake that immediately follows focus.
       for (let offset = 0; offset < visibleRooms.length; offset += 4) {
         await Promise.all(visibleRooms.slice(offset, offset + 4).map(async room => {
+          const prev = snapshots.current.get(room.id);
+          const sameOwner = prev?.owner === api.owner;
+          const headUnchanged = sameOwner && room.head !== undefined && prev.head === room.head;
+          const reuseRecentConnected = connectedOnly && sameOwner && now - prev.at < FULL_READ_REUSE_MS
+            && (room.head === undefined || prev.head === room.head);
+          if (!explicitRefresh && api.rateLimitRemainingMs() > 0 && (sameOwner || cached.items.some(row => row.item.ref.id === room.id))) {
+            partial = true;
+            if (sameOwner) {
+              fresh.set(room.id, prev);
+              if (!prev.value.room.archived) rows.push(chatRoomRow(room, prev.value, self, prev.activity));
+            } else {
+              rows.push(fallbackRow(room));
+            }
+            return;
+          }
           try {
-            const cached = snapshots.current.get(room.id);
-            const value = cached?.owner === api.owner && room.head !== undefined && cached.head === room.head
-              && !run.reasons.some(reason => ['focus', 'changed', 'connected', 'visible'].includes(reason))
-              ? cached.value : await api.client.snapshot(room.id, room.head === undefined
+            const reuseSnapshot = reuseRecentConnected
+              || (headUnchanged && !run.reasons.some(reason => ['focus', 'changed', 'connected', 'visible'].includes(reason)));
+            const value = reuseSnapshot
+              ? prev!.value
+              : await api.client.snapshot(room.id, room.head === undefined
                 || run.reasons.some(reason => ['focus', 'connected', 'visible'].includes(reason)));
-            fresh.set(room.id, { owner: api.owner, head: room.head, value });
             // An archive can land between the list and the newer snapshot.
-            if (!value.room.archived) rows.push(chatRoomRow(room, value, self));
+            let activity: TeammateActivity | undefined;
+            if (!value.room.archived) {
+              const reuseActivity = reuseRecentConnected
+                || (reuseSnapshot && !prev!.activity && now - prev!.at < FULL_READ_REUSE_MS)
+                || (!explicitRefresh && api.rateLimitRemainingMs() > 0 && sameOwner);
+              activity = reuseActivity ? prev?.activity : await api.client.rosterActivity(room.id, value);
+              if (activity === undefined && sameOwner && api.rateLimitRemainingMs() > 0) activity = prev.activity;
+              rows.push(chatRoomRow(room, value, self, activity));
+            }
+            fresh.set(room.id, { owner: api.owner, head: room.head, value, activity, at: reuseSnapshot ? prev!.at : Date.now() });
           } catch (error) {
-            if (!chatAccessLost(error)) {
+            if (chatAccessLost(error)) {
+              forgetChatServerMediaRoom(room.id);
+            } else {
               mobileDebugLog('warn', 'recovery', 'companion-roster-refresh', { source: 'group-detail', status: (error as { status?: number })?.status });
               partial = true;
-              const previous = cached.items.find(row => row.item.ref.id === room.id);
-              const row = chatRoomRow(room);
-              // Member links back the composite avatar and member search until a snapshot replaces them.
-              rows.push(previous ? { ...previous, item: { ...row.item, display: { ...previous.item.display, title: row.item.display.title }, links: previous.item.links } } : row);
+              rows.push(fallbackRow(room));
             }
           }
         }));
@@ -142,6 +308,7 @@ export function useChatServerRoster(enabled: boolean) {
         }
         if (run.isStale() || !api.current()) return;
         snapshots.current = fresh;
+        if (!partial) lastFullSync.current = { owner: api.owner, at: Date.now() };
         for (const room of rooms) known.current.ids.add(room.id);
         for (const id of api.client.personalList.ids()) known.current.ids.add(id);
         const visible = rows.filter(row => !api.client.personalList.hidden(row.item.ref.id));
@@ -152,7 +319,10 @@ export function useChatServerRoster(enabled: boolean) {
       if (!run.isStale() && api.current()) {
         mobileDebugLog('warn', 'recovery', 'companion-roster-refresh', { source: 'group-list', status: (error as { status?: number })?.status });
         setState(old => ({ owner: api.owner, rooms: old.owner === api.owner && !chatAccessLost(error) ? old.rooms.filter(row => !api.client.personalList.hidden(row.item.ref.id)) : [], loading: false, refreshing: false, error: error instanceof Error && error.message === 'CHAT_ENDPOINT_UNAVAILABLE' ? error.message : 'CHAT_LIST_FAILED' }));
-        if (chatAccessLost(error)) await cacheChatRoster(api.userId, api.realm, [], known.current.ids);
+        if (chatAccessLost(error)) {
+          clearChatServerMediaCache({ clearNativeImageCache: true });
+          await cacheChatRoster(api.userId, api.realm, [], known.current.ids);
+        }
       }
     }
   }, api.owner);
@@ -187,8 +357,8 @@ export function useChatServerRoster(enabled: boolean) {
         }, reset: async () => { await api.client.resyncListState(); await read({ reason: 'connected' }); }, changed: changes => {
           for (const change of changes ?? []) {
             if (change.type === 'conversation.list.changed') api.client.personalList.merge(change.data);
-            // Personal read positions live in actor scope and do not advance room.head.
-            if (change.type === 'read.changed' && typeof change.entityId === 'string') {
+            // Personal reads and membership preferences do not advance room.head.
+            if ((change.type === 'read.changed' || change.type === 'membership.changed') && typeof change.entityId === 'string') {
               api.client.invalidateHistory(change.entityId, true);
               snapshots.current.delete(change.entityId);
             }
@@ -201,44 +371,180 @@ export function useChatServerRoster(enabled: boolean) {
     const foreground = AppState.addEventListener('change', value => { if (value === 'active') start(); else { stop?.(); clearInterval(poll); } });
     return () => { stop?.(); clearInterval(poll); foreground.remove(); };
   }, [api, enabled, read]));
-  useEffect(() => api.client.personalList.subscribe(() => {
+  useEffect(() => api.client.personalList.subscribe(({ conversationId, hidden }) => {
     if (!api.current()) return;
-    for (const id of api.client.personalList.ids()) known.current.ids.add(id);
+    known.current.ids.add(conversationId);
+    if (hidden) forgetChatServerMediaRoom(conversationId);
     setState(old => old.owner !== api.owner ? old : { ...old, rooms: old.rooms.filter(row => !api.client.personalList.hidden(row.item.ref.id)) });
-    void hideCachedChatRooms(api.userId, api.realm, api.client.personalList.ids().filter(id => api.client.personalList.hidden(id)));
+    if (hidden) void hideCachedChatRooms(api.userId, api.realm, [conversationId]);
   }), [api]);
   const own = state.owner === api.owner;
   return { items: own ? state.rooms : [], serverIds: known.current.ids, loading: api.enabled && (!own || state.loading),
     refreshing: own && state.refreshing, error: own ? state.error : null, refresh };
 }
 
+/** How long a complete read of the room vouches for its executions, plans and failure notices
+ * when the realtime handshake that follows it finds the room's change cursor unmoved. */
+const FULL_READ_REUSE_MS = 30_000;
+/** Reads that can only have changed the reader's own metadata: the realtime handshake that
+ * follows a read, and the account's own read positions. Everything else re-reads the room. */
+const METADATA_READS = ['connected', 'reads'];
+/** Bounded foreground recovery backoff (clamped to server Retry-After when rate-limited). */
+const GROUP_RECOVERY_BACKOFF_MS = [2_000, 4_000, 8_000, 15_000, 30_000];
+
+function mergeTimelineMessages(
+  existing: readonly ChatMessage[] | undefined,
+  incoming: readonly ChatMessage[],
+  threadRootId?: string,
+): ChatMessage[] {
+  const byId = new Map<string, ChatMessage>();
+  for (const message of existing ?? []) byId.set(message.id, message);
+  for (const message of incoming) {
+    const matches = threadRootId
+      ? message.threadRootId === threadRootId || message.id === threadRootId
+      : !message.threadRootId;
+    if (!matches) continue;
+    const prev = byId.get(message.id);
+    if (!prev || (message.revision ?? 0) >= (prev.revision ?? 0)) {
+      byId.set(message.id, prev ? { ...prev, ...message } : message);
+    }
+  }
+  return [...byId.values()].sort((a, b) => {
+    const sa = BigInt(a.seq), sb = BigInt(b.seq);
+    return sa > sb ? -1 : sa < sb ? 1 : 0;
+  });
+}
+
+function hasLiveRoomWork(page: ChatPage | undefined): boolean {
+  if (!page) return false;
+  if ((page.executions ?? []).some(e => ['queued', 'running', 'needs_input', 'stopping'].includes(e.status))) return true;
+  if ((page.plans ?? []).some(p => ['proposed', 'running', 'waiting'].includes(p.status))) return true;
+  return false;
+}
+
+function changeContainsPlanCard(change: { type: string; data: unknown }): boolean {
+  const message = (change.data as { message?: ChatMessage } | null | undefined)?.message;
+  if (!message || !Array.isArray(message.content)) return false;
+  return message.content.some(block => block?.type === 'card' && block.namespace === 'cindy.plan');
+}
+
+function changeAffectsThreadAggregate(change: { type: string; data: unknown }, threadRootId?: string): boolean {
+  if (change.type === 'reaction.changed') return true;
+  const message = (change.data as { message?: ChatMessage } | null | undefined)?.message;
+  if (!message) return false;
+  if (!threadRootId && message.threadRootId) return true;
+  return Array.isArray(message.content) && message.content.some(block => block?.type === 'card' && block.namespace === 'cindy.thread-share');
+}
+
 /** Reads and sends use the account's Chat Server identity, never its computer identity. */
 export function useChatServerGroup(groupId: string, enabled: boolean, threadRootId?: string) {
   const api = useChatClient();
+  const focused = useIsFocused();
+  const { t } = useTranslation();
   const identity = `${api.owner}:${groupId}:${threadRootId ?? 'main'}`;
   const active = useRef(identity); active.current = identity;
+  const stopOwner = useMemo(() => ({}), [identity, enabled, focused]);
+  const stopOwnerRef = useRef(stopOwner); stopOwnerRef.current = stopOwner;
   const ledger = useSyncExternalStore(mobileDurableOutbox.subscribe, mobileDurableOutbox.getSnapshot);
-  const pending = ledger.filter(row => enabled && api.current() && row.accountId === getMobileAuthOwner().accountKey
-    && row.chat?.roomId === groupId && row.chat.input.threadRootId === threadRootId);
-  const cached = enabled && api.enabled && !api.client.personalList.hidden(groupId) ? peekChatMessages(groupId, threadRootId) : null;
-  const [state, setState] = useState<{ identity: string; value: BotGroupChatState; online: boolean; loadingOlder: boolean }>(() => ({ identity,
-    value: cached ? { kind: 'ready', group: chatGroupView(cached.page, cached.self, cached.actors) } : { kind: 'loading' },
-    online: true, loadingOlder: false }));
+  const pendingAccount = enabled && api.current() ? getMobileAuthOwner().accountKey : null;
+  const pending = useMemo(() => ledger.filter(row => pendingAccount !== null && row.accountId === pendingAccount
+    && row.chat?.roomId === groupId && row.chat.input.threadRootId === threadRootId), [ledger, pendingAccount, groupId, threadRootId]);
+  const cached = (() => {
+    if (!enabled || !api.enabled || !groupId || api.client.personalList.hidden(groupId)) return null;
+    const saved = peekChatMessages(groupId, threadRootId);
+    const liveSnap = api.client.peekSnapshot(groupId);
+    const selfId = saved?.self ?? api.knownSelfId();
+    if (liveSnap && liveSnap.room.id === groupId && selfId) {
+      const liveNewer = !saved || BigInt(liveSnap.cursor) > BigInt(saved.page.snapshot.cursor);
+      if (liveNewer) {
+        const merged = mergeTimelineMessages(saved?.page.messages, liveSnap.messages, threadRootId);
+        if (merged.length > 0 || saved) {
+          return {
+            version: 1 as const,
+            self: selfId,
+            actors: saved?.actors ?? [],
+            page: {
+              ...(saved?.page ?? { before: null }),
+              snapshot: liveSnap,
+              messages: merged,
+              historyRevision: liveSnap.cacheGeneration,
+              ...(threadRootId ? { threadRootId } : {}),
+            },
+          };
+        }
+      }
+    }
+    return saved;
+  })();
+  const [state, setState] = useJsonSnapshotState<{ identity: string; value: BotGroupChatState; online: boolean; verified: boolean; loadingOlder: boolean }>(() => ({ identity,
+    value: cached ? { kind: 'ready', group: chatGroupView(cached.page, cached.self, cached.actors, 'group') } : { kind: 'loading' },
+    online: true, verified: false, loadingOlder: false }));
   const page = useRef<{ identity: string; page: ChatPage; self: string; actors: ChatActor[] } | null>(cached ? { identity, ...cached } : null);
   const accessGeneration = useRef(0);
+  const deferredMetadataVersion = useRef(0);
   const freshRead = useRef(false);
-  const olderPending = useRef(false);
-  const valid = () => api.current() && active.current === identity;
-  const loseAccess = () => {
+  const fullRead = useRef({ identity, at: 0 });
+  const recoveryControl = useRef<{ identity: string; schedule: (retryAt?: number) => void; ensureScheduled: (retryAt?: number) => void; clear: () => void; reset: () => void } | null>(null);
+  // Whether the actor list on screen was actually read, not the empty stand-in for a failed read.
+  const actorsRead = useRef({ identity, ok: false });
+  // Phone-local timing of one opening: when something was first shown, and when it was verified.
+  const opening = useRef({ identity, at: Date.now(), shownMs: cached ? 0 : -1, source: cached ? 'memory' : '', fresh: false });
+  if (opening.current.identity !== identity) opening.current = { identity, at: Date.now(), shownMs: cached ? 0 : -1, source: cached ? 'memory' : '', fresh: false };
+  const olderPending = useRef<Promise<void> | null>(null);
+  const planAction = useRef<{ identity: string; key: string; operationId: string; pending: boolean; controller: AbortController } | null>(null);
+  if (!enabled || !focused || planAction.current?.identity !== identity) {
+    planAction.current?.controller.abort();
+    planAction.current = null;
+  }
+  useFocusEffect(useCallback(() => () => {
+    planAction.current?.controller.abort();
+    planAction.current = null;
+  }, [identity, enabled]));
+  // Keep the timeline's action/media props stable during viewport-only renders.
+  // Identity and focus changes still replace the callbacks and retain their fences.
+  const valid = useCallback(() => api.current() && active.current === identity, [api, identity]);
+  const loseAccess = useCallback(() => {
     accessGeneration.current++; freshRead.current = false; page.current = null;
-    if (valid()) { void forgetRemoteResource(api.userId, groupId); void forgetChatMessages(groupId); }
-    setState({ identity, value: { kind: 'missing' }, online: false, loadingOlder: false });
-  };
-  const view = (next: ChatPage, self: string, actors: ChatActor[]) => ({ ...chatGroupView(next, self, actors), ...api.client.lifecycleCapabilities() });
+    if (recoveryControl.current?.identity === identity) recoveryControl.current.clear();
+    forgetChatServerMediaRoom(groupId);
+    if (valid()) { void forgetRemoteResource(api.userId, groupId); void forgetChatMessages(groupId); void api.client.clearHistory(groupId).catch(() => undefined); }
+    setState({ identity, value: { kind: 'missing' }, online: false, verified: false, loadingOlder: false });
+  }, [valid, api, groupId, identity]);
+  const [threadsSyncing, setThreadsSyncing] = useState(false);
+  const index = useRef<{ identity: string; generation: number; revision?: string; result: ThreadBackfill; mentionVersion: string } | null>(null);
+  const backfillInFlight = useRef<AbortController | null>(null);
+  const retryAtRef = useRef(0);
+  useEffect(() => {
+    setThreadsSyncing(false);
+    return () => {
+      backfillInFlight.current?.abort();
+      backfillInFlight.current = null;
+      index.current = null;
+      retryAtRef.current = 0;
+    };
+  }, [identity]);
+  const currentIndex = useCallback((revision?: string) => {
+    const saved = index.current;
+    return saved?.identity === identity && saved.generation === accessGeneration.current && saved.revision === revision ? saved : null;
+  }, [identity]);
+  const view = useCallback((next: ChatPage, self: string, actors: ChatActor[]) => {
+    const history = currentIndex(next.historyRevision)?.result;
+    // Enrich only the displayed index. The timeline and its on-disk copy keep their original window.
+    const shown = history ? { ...next, cachedMessages: [...history.messages, ...(next.cachedMessages ?? [])],
+      threadRoots: { ...history.roots, ...next.threadRoots } } : next;
+    return { ...chatGroupView(shown, self, actors, 'group'), ...api.client.lifecycleCapabilities() };
+  }, [api, currentIndex]);
+  const hydrate = useCallback(async (previous: NonNullable<typeof page.current>) => {
+    const enriched = await api.client.hydrateThreads(groupId, previous.page);
+    if (!valid() || page.current !== previous || olderPending.current) return;
+    page.current = { ...previous, page: enriched };
+    setState(old => ({ ...old, value: { kind: 'ready', group: view(enriched, previous.self, previous.actors) } }));
+    void cacheChatMessages(groupId, { version: 1, page: enriched, self: previous.self, actors: previous.actors }, true);
+  }, [api, groupId, valid, view]);
   useEffect(() => subscribeChatInvalidation(roomId => {
     if (roomId !== groupId || !valid()) return;
     accessGeneration.current++; freshRead.current = false; page.current = null;
-    setState({ identity, value: { kind: 'missing' }, online: false, loadingOlder: false });
+    setState({ identity, value: { kind: 'missing' }, online: false, verified: false, loadingOlder: false });
   }), [api, identity, groupId]);
   useEffect(() => {
     if (!enabled || !api.enabled || api.client.personalList.hidden(groupId)) return;
@@ -250,35 +556,115 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
       if (cancelled || !saved || !valid() || generation !== accessGeneration.current
         || page.current !== before) return;
       page.current = { identity, ...saved };
+      if (opening.current.identity === identity && opening.current.shownMs < 0) { opening.current.shownMs = Date.now() - opening.current.at; opening.current.source = 'disk'; }
       setState(old => ({ identity, value: { kind: 'ready', group: view(saved.page, saved.self, saved.actors) },
-        online: old.identity === identity && old.online, loadingOlder: false }));
+        online: old.identity === identity && old.online, verified: false, loadingOlder: false }));
     });
     return () => { cancelled = true; };
   }, [api, identity, enabled, groupId, threadRootId]);
   const request = useRemoteSyncCoordinator(async run => {
     if (!enabled || !api.enabled) return;
     const generation = accessGeneration.current;
+    // A complete read moments ago still describes the room if its cursor has not moved.
+    // The account's own read position says nothing about the room; the handshake after a read
+    // is trusted only while that read is recent. Either way the cursor comparison decides.
+    const verified = freshRead.current && fullRead.current.identity === identity && page.current?.identity === identity
+      && (run.reasons.every(reason => reason === 'reads')
+        || run.reasons.every(reason => METADATA_READS.includes(reason)) && Date.now() - fullRead.current.at < FULL_READ_REUSE_MS) ? page.current : null;
+    const skipMetadata = run.reasons.every(reason => reason === 'push-message') && page.current?.identity === identity;
     freshRead.current = false;
+    const started = Date.now();
     try {
       await api.client.syncListState(run.reasons.some(reason => ['focus', 'visible', 'connected'].includes(reason)));
-      const previous = page.current?.identity === identity ? page.current.page : null;
+      if (run.isStale() || !valid() || generation !== accessGeneration.current) return;
+      if (api.client.personalList.hidden(groupId)) { loseAccess(); return; }
+      const previousEntry = page.current?.identity === identity ? page.current : null;
+      const previous = previousEntry?.page ?? null;
       const oldest = previous?.messages.filter(message => !threadRootId || message.threadRootId === threadRootId).reduce<string | undefined>((oldest, message) => !oldest || BigInt(message.seq) < BigInt(oldest) ? message.seq : oldest, undefined);
       // The account's actors say which computer runs each owned companion (live task cards);
       // the group still reads when that list is unavailable.
-      const [next, self, actors] = await Promise.all([api.client.load(groupId, oldest, threadRootId), api.client.me(), api.client.actors().catch((): ChatActor[] => [])]);
+      // A list that failed to load is asked for again; only a successful read is reused.
+      const knownActors = (verified || skipMetadata) && actorsRead.current.identity === identity && actorsRead.current.ok
+        ? (verified?.actors ?? previousEntry?.actors ?? null) : null;
+      const preserveNewerPush = (candidate: ChatPage): ChatPage => {
+        const liveSnap = api.client.peekSnapshot(groupId);
+        const current = page.current?.identity === identity ? page.current.page : null;
+        const sameRevision = (rev: string | undefined) => !candidate.historyRevision || !rev || rev === candidate.historyRevision;
+        const currentNewer = current && sameRevision(current.historyRevision)
+          && BigInt(current.snapshot.cursor) > BigInt(candidate.snapshot.cursor) ? current : null;
+        const liveNewer = liveSnap && sameRevision(liveSnap.cacheGeneration)
+          && BigInt(liveSnap.cursor) > BigInt(candidate.snapshot.cursor) ? liveSnap : null;
+        if (!currentNewer && !liveNewer) return candidate;
+        const newestSnapshot = liveNewer && (!currentNewer || BigInt(liveNewer.cursor) >= BigInt(currentNewer.snapshot.cursor))
+          ? liveNewer : currentNewer!.snapshot;
+        return {
+          ...candidate,
+          snapshot: newestSnapshot,
+          messages: mergeTimelineMessages(
+            candidate.messages,
+            [...(currentNewer?.messages ?? []), ...(liveNewer?.messages ?? [])],
+            threadRootId,
+          ),
+        };
+      };
+      const onMessages = (partial: ChatPage) => {
+        if (run.isStale() || !valid() || generation !== accessGeneration.current) return;
+        const selfId = previousEntry?.self ?? api.knownSelfId();
+        if (!selfId) return;
+        const actorsList = previousEntry?.actors ?? [];
+        const mergedPartial = preserveNewerPush(partial);
+        page.current = { identity, page: mergedPartial, self: selfId, actors: actorsList };
+        setState(old => ({ identity, value: { kind: 'ready', group: view(mergedPartial, selfId, actorsList) }, online: true, verified: old.identity === identity && old.verified, loadingOlder: false }));
+      };
+      const metadataVersionAtLoad = deferredMetadataVersion.current;
+      const [loadedNext, self, actors] = await Promise.all([
+        api.client.load(groupId, oldest, threadRootId, 0, verified?.page, { previous: previous ?? undefined, skipMetadata, onMessages }),
+        api.client.me(),
+        knownActors ?? api.client.actors().then(value => { actorsRead.current = { identity, ok: true }; return value; },
+          (): ChatActor[] => { actorsRead.current = { identity, ok: false }; return []; }),
+      ]);
       if (run.isStale() || !valid() || generation !== accessGeneration.current) return;
       // Replace the reauthorized window; no stale history survives changed access.
       if (api.client.personalList.hidden(groupId)) { loseAccess(); return; }
-      freshRead.current = true;
+      // A push deferred during this read still needs a metadata fetch after cooldown.
+      const deferredDuringLoad = deferredMetadataVersion.current !== metadataVersionAtLoad;
+      const next = preserveNewerPush(deferredDuringLoad ? { ...loadedNext, metadataIncomplete: true } : loadedNext);
+      const complete = !next.metadataIncomplete;
+      freshRead.current = complete;
+      const reused = !!verified && next.messages === verified.page.messages;
+      if (!reused && complete) fullRead.current = { identity, at: Date.now() };
+      if (complete && recoveryControl.current?.identity === identity) recoveryControl.current.reset();
+      if (opening.current.identity === identity && !opening.current.fresh) {
+        opening.current.fresh = true;
+        const verifiedMs = Date.now() - opening.current.at;
+        // Counts and durations only: no room, member or message content.
+        if (mobileDebugEnabled()) mobileDebugLog('info', 'performance', 'chat-group-open', {
+          shownFrom: opening.current.shownMs < 0 ? 'network' : opening.current.source, shownMs: opening.current.shownMs < 0 ? verifiedMs : opening.current.shownMs,
+          verifiedMs, readMs: Date.now() - started, messages: next.messages.length, thread: !!threadRootId });
+      }
       page.current = { identity, page: next, self, actors };
-      void cacheChatMessages(groupId, { version: 1, page: next, self, actors }).then(saved => {
-        if (saved && valid() && generation === accessGeneration.current) return settleChatOutbox(mobileDurableOutbox, groupId, new Set(next.messages.map(message => message.id)));
+      // A sent message waiting to be confirmed leaves the outbox only once this page is saved:
+      // save now for it. An ordinary refresh is saved after the screen has drawn it.
+      const confirming = mobileDurableOutbox.getSnapshot().some(row => row.chat?.roomId === groupId && !!row.chat.messageId);
+      void cacheChatMessages(groupId, { version: 1, page: next, self, actors }, !confirming).then(saved => {
+        if (saved && valid() && generation === accessGeneration.current) return settleChatOutbox(mobileDurableOutbox, groupId, new Set(next.messages.map(message => message.id)),
+          new Set(Object.entries(chatThreadMetadata(next, self).shares).filter(([, share]) => share.bySelf).map(([replyId]) => replyId)));
       }).catch(() => undefined);
-      setState({ identity, value: { kind: 'ready', group: view(next, self, actors) }, online: true, loadingOlder: false });
+      setState({ identity, value: { kind: 'ready', group: view(next, self, actors) }, online: true, verified: true, loadingOlder: false });
+      void hydrate(page.current).catch(() => undefined);
+      if (!complete && recoveryControl.current?.identity === identity) {
+        if (deferredDuringLoad && !loadedNext.metadataRetryAt) recoveryControl.current.ensureScheduled();
+        else recoveryControl.current.schedule(next.metadataRetryAt);
+      }
     } catch (error) {
       if (run.isStale() || !valid() || generation !== accessGeneration.current) return;
       if (chatAccessLost(error)) loseAccess();
-      else setState(old => ({ identity, value: old.identity === identity && old.value.kind === 'ready' ? old.value : { kind: 'error', message: error instanceof Error && error.message === 'CHAT_ENDPOINT_UNAVAILABLE' ? error.message : 'CHAT_READ_FAILED' }, online: false, loadingOlder: false }));
+      else {
+        setState(old => ({ identity, value: old.identity === identity && old.value.kind === 'ready' ? old.value : { kind: 'error', message: error instanceof Error && error.message === 'CHAT_ENDPOINT_UNAVAILABLE' ? error.message : 'CHAT_READ_FAILED' }, online: false, verified: old.identity === identity && old.verified, loadingOlder: false }));
+        if (recoveryControl.current?.identity === identity) {
+          recoveryControl.current.schedule(api.noteRateLimit(error));
+        }
+      }
     }
   }, identity);
   const reload = useCallback(() => { api.client.invalidateHistory(groupId, true); void request({ reason: 'changed' }); }, [api, groupId, request]);
@@ -287,12 +673,59 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
     let stop: (() => void) | undefined;
     let subscribed = false;
     let recovery: ReturnType<typeof setInterval> | undefined;
-    const start = () => {
-      stop?.(); subscribed = false; clearInterval(recovery);
+    let backoffTimer: ReturnType<typeof setTimeout> | undefined;
+    let backoffAttempts = 0;
+    const clearBackoff = () => { if (backoffTimer) { clearTimeout(backoffTimer); backoffTimer = undefined; } };
+    const control = {
+      identity,
+      clear: clearBackoff,
+      reset: () => { backoffAttempts = 0; clearBackoff(); },
+      schedule: (retryAt?: number) => {
+        if (AppState.currentState !== 'active' || active.current !== identity) return;
+        clearBackoff();
+        const step = GROUP_RECOVERY_BACKOFF_MS[Math.min(backoffAttempts, GROUP_RECOVERY_BACKOFF_MS.length - 1)]!;
+        backoffAttempts++;
+        const waitMs = Math.max(step, chatRetryWaitMs(retryAt), api.rateLimitRemainingMs());
+        const retry = () => {
+          backoffTimer = undefined;
+          if (active.current !== identity || AppState.currentState !== 'active' || freshRead.current) return;
+          const remaining = api.rateLimitRemainingMs();
+          if (remaining > 0) backoffTimer = setTimeout(retry, remaining);
+          else void request({ reason: 'changed' });
+        };
+        backoffTimer = setTimeout(retry, waitMs);
+      },
+      ensureScheduled: (retryAt?: number) => {
+        if (!backoffTimer) control.schedule(retryAt);
+      },
+    };
+    recoveryControl.current = control;
+    const invalidateThreadIndex = (change: ChatChangesFrame['changes'][number]) => {
+      if (change.type !== 'message.updated' && change.type !== 'message.deleted' && change.type !== 'membership.changed') return;
+      // A targeted edit or an access change can invalidate rows outside the current page.
+      backfillInFlight.current?.abort();
+      if (change.type === 'membership.changed') {
+        index.current = null;
+        return;
+      }
+      const saved = index.current?.result;
+      const id = change.entityId ?? (change.data as { message?: { id?: unknown } } | null)?.message?.id;
+      if (!saved || typeof id !== 'string') return;
+      const retained = saved.messages.findIndex(message => message.id === id);
+      if (change.type === 'message.deleted') saved.pendingEdits.delete(id);
+      else if (retained >= 0 || saved.roots[id]) saved.pendingEdits.add(id);
+      if (retained >= 0) saved.messages.splice(retained, 1);
+      delete saved.roots[id];
+    };
+    const start = (opened = false) => {
+      stop?.(); subscribed = false; clearInterval(recovery); control.reset();
       if (AppState.currentState !== 'active') return;
-      reload();
-      // A failed read after an acknowledged event must recover even without another event.
-      recovery = setInterval(() => { if (!subscribed) start(); else if (!freshRead.current) reload(); }, 30000);
+      // Opening the screen shows what the account already verified (the list reads every room
+      // it shows) and lets the handshake below bring the personal metadata up to date. A
+      // return to the foreground or a recovery has no such recent read: refresh in full.
+      if (opened) void request({ reason: 'changed' }); else reload();
+      // Safety net if the socket stays disconnected or a read failed without a backoff timer.
+      recovery = setInterval(() => { if (!subscribed) start(); else if (!freshRead.current && !backoffTimer) reload(); }, 30000);
       let cancelled = false;
       let disposeSocket: (() => void) | undefined;
       stop = () => { cancelled = true; disposeSocket?.(); };
@@ -307,59 +740,231 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
           api.client.invalidateHistory(groupId, true);
           await request({ reason: 'connected' });
           const latest = page.current;
-          if (!freshRead.current || !latest || latest.identity !== identity) throw new Error('CHAT_READ_FAILED');
+          // Allow subscribing when messages were verified even if secondary metadata degraded on 429.
+          if ((!freshRead.current && !latest?.page.metadataIncomplete) || !latest || latest.identity !== identity) throw new Error('CHAT_READ_FAILED');
           return head === null ? { scope: `conversation:${groupId}`, cursor: latest.page.snapshot.cursor }
             : [{ scope: `conversation:${groupId}`, cursor: latest.page.snapshot.cursor }, { scope: `actor:${actorId}`, cursor: head }];
-        }, reset: async () => { await api.client.resyncListState(); await api.client.refreshHistory(groupId, true); await request({ reason: 'connected' }); }, changed: async changes => {
-          for (const change of changes ?? []) if (change.type === 'conversation.list.changed') api.client.personalList.merge(change.data);
-          try { await api.client.refreshHistory(groupId, changes?.some(change => change.type === 'read.changed')); }
-          finally { void request({ reason: 'changed' }); }
+        }, reset: async () => { await api.client.resyncListState(); await api.client.refreshHistory(groupId, true); await request({ reason: 'connected' }); },
+        changed: async changes => {
+          let personalOnly = !!changes?.length, reads = true, membershipChanged = false;
+          for (const change of changes ?? []) {
+            invalidateThreadIndex(change);
+            if (change.type === 'conversation.list.changed') api.client.personalList.merge(change.data);
+            else if (change.type === 'read.changed' && typeof change.entityId === 'string') {
+              const applied = await api.client.acceptRead(change.entityId, change.data).catch(() => false);
+              if (change.entityId === groupId && !applied) reads = false;
+            } else {
+              personalOnly = false;
+              if (change.type === 'membership.changed' && change.entityId === groupId) membershipChanged = true;
+            }
+          }
+          if (personalOnly && reads) {
+            if (!api.client.personalList.hidden(groupId)) void request({ reason: 'reads' });
+            return;
+          }
+          try {
+            await api.client.refreshHistory(groupId, membershipChanged || !reads);
+          } catch (error) {
+            if (valid() && chatAccessLost(error)) loseAccess();
+            else if (recoveryControl.current?.identity === identity) recoveryControl.current.schedule(api.noteRateLimit(error));
+            throw error;
+          }
+          void request({ reason: 'changed' });
+        },
+        receive: async frame => {
+          const generation = accessGeneration.current;
+          const changes = frame.changes;
+          let personalOnly = changes.length > 0, reads = true, membershipChanged = false;
+          let needsExecutions = false, needsPlans = false, hasRoomMeta = false, hasPlanCard = false, hasAggregate = false;
+          for (const change of changes) {
+            invalidateThreadIndex(change);
+            if (change.type === 'conversation.list.changed') api.client.personalList.merge(change.data);
+            // The account's own read position (this phone's receipt, or another of its devices)
+            // carries its new value: merge it instead of downloading the room again.
+            else if (change.type === 'read.changed' && typeof change.entityId === 'string') {
+              const applied = await api.client.acceptRead(change.entityId, change.data).catch(() => false);
+              if (change.entityId === groupId && !applied) reads = false;
+            } else {
+              personalOnly = false;
+              if (change.type === 'execution.changed') needsExecutions = true;
+              else if (change.type === 'plan.changed') needsPlans = true;
+              else if (/^(message\.|reaction\.|pin\.)/.test(change.type)) {
+                if (changeContainsPlanCard(change)) hasPlanCard = true;
+                if (changeAffectsThreadAggregate(change, threadRootId)) hasAggregate = true;
+              } else {
+                hasRoomMeta = true;
+                if (change.type === 'membership.changed' && change.entityId === groupId) membershipChanged = true;
+              }
+            }
+          }
+          if (!valid() || generation !== accessGeneration.current) return;
+          if (personalOnly && reads) {
+            if (!api.client.personalList.hidden(groupId)) void request({ reason: 'reads' });
+            return;
+          }
+          if (frame.scope === `conversation:${groupId}` && changes.length > 0 && !hasRoomMeta) {
+            // Apply authorized message/execution/plan delta directly into ChatHistory (0 HTTP when contiguous).
+            // Membership changes and missing message bodies return undefined and fall back to full refresh below.
+            const appliedCursor = await api.client.receiveChanges(groupId, {
+              cursor: frame.cursor,
+              changes: changes as Parameters<typeof api.client.receiveChanges>[1]['changes'],
+            }, frame.subscribedAfter);
+            if (!valid() || generation !== accessGeneration.current) return;
+            if (appliedCursor !== undefined) {
+              const liveSnap = api.client.peekSnapshot(groupId);
+              const currentEntry = page.current?.identity === identity ? page.current : null;
+              let projectedDirectly = false;
+              if (liveSnap && currentEntry) {
+                const deltaMessages = changes
+                  .map(change => (change.data as { message?: ChatMessage } | null | undefined)?.message)
+                  .filter((message): message is ChatMessage => !!message && typeof message.id === 'string');
+                const merged = mergeTimelineMessages(
+                  currentEntry.page.messages,
+                  [...liveSnap.messages, ...deltaMessages],
+                  threadRootId,
+                );
+                const nextPage: ChatPage = {
+                  ...currentEntry.page,
+                  snapshot: liveSnap,
+                  messages: merged,
+                  historyRevision: liveSnap.cacheGeneration,
+                };
+                page.current = { ...currentEntry, page: nextPage };
+                const confirming = mobileDurableOutbox.getSnapshot().some(row => row.chat?.roomId === groupId && !!row.chat.messageId);
+                void cacheChatMessages(groupId, { version: 1, page: nextPage, self: currentEntry.self, actors: currentEntry.actors }, !confirming).then(saved => {
+                  if (saved && valid() && generation === accessGeneration.current) return settleChatOutbox(mobileDurableOutbox, groupId, new Set(nextPage.messages.map(message => message.id)),
+                    new Set(Object.entries(chatThreadMetadata(nextPage, currentEntry.self).shares).filter(([, share]) => share.bySelf).map(([replyId]) => replyId)));
+                }).catch(() => undefined);
+                setState(old => ({ identity, value: { kind: 'ready', group: view(nextPage, currentEntry.self, currentEntry.actors) }, online: true, verified: old.identity === identity && old.verified, loadingOlder: false }));
+                projectedDirectly = true;
+                if (hasAggregate) void hydrate(page.current).catch(() => undefined);
+              }
+              const metadataCoolingDown = api.rateLimitRemainingMs() > 0 || (page.current?.page.metadataRetryAt ?? 0) > Date.now();
+              const wantsMetadata = needsExecutions || needsPlans || hasPlanCard
+                || hasLiveRoomWork(page.current?.page) || !!page.current?.page.metadataIncomplete;
+              if (!projectedDirectly) {
+                void request({ reason: 'changed' });
+              } else if (wantsMetadata) {
+                if (metadataCoolingDown) {
+                  deferredMetadataVersion.current++;
+                  if (page.current?.identity === identity && !page.current.page.metadataIncomplete) {
+                    page.current = { ...page.current, page: { ...page.current.page, metadataIncomplete: true } };
+                  }
+                  freshRead.current = false;
+                  if (recoveryControl.current?.identity === identity) {
+                    recoveryControl.current.ensureScheduled(page.current?.page.metadataRetryAt);
+                  }
+                } else {
+                  void request({ reason: 'changed' });
+                }
+              } else if (hasAggregate) {
+                void request({ reason: 'push-message' });
+              }
+              return;
+            }
+          }
+          try {
+            await api.client.refreshHistory(groupId, membershipChanged || !reads);
+          } catch (error) {
+            if (valid() && chatAccessLost(error)) loseAccess();
+            else if (recoveryControl.current?.identity === identity) recoveryControl.current.schedule(api.noteRateLimit(error));
+            throw error;
+          }
+          void request({ reason: 'changed' });
         }, available: () => { subscribed = true; }, unavailable: () => { subscribed = false; freshRead.current = false; api.client.invalidateHistory(groupId); } });
       }).catch(() => {}); // Read presents endpoint errors.
     };
-    start();
-    const foreground = AppState.addEventListener('change', value => { if (value === 'active') start(); else { stop?.(); clearInterval(recovery); } });
-    return () => { stop?.(); clearInterval(recovery); foreground.remove(); };
-  }, [api, enabled, groupId, identity, reload, request]));
-  const receipts = pending.map(row => row.chat?.messageId ?? '').join('|');
-  useEffect(() => { if (receipts.replaceAll('|', '')) reload(); }, [receipts, reload]);
-  const pendingAction = async (clientId: string, action: 'retry' | 'cancel') => {
+    start(true);
+    // The page on screen is saved shortly after it is drawn; do not leave that pending when
+    // the app is put away or the screen is left.
+    const foreground = AppState.addEventListener('change', value => { if (value === 'active') start(); else { stop?.(); clearInterval(recovery); control.clear(); flushChatMessageCache(); } });
+    return () => { stop?.(); clearInterval(recovery); control.clear(); if (recoveryControl.current === control) recoveryControl.current = null; foreground.remove(); flushChatMessageCache(); };
+  }, [api, enabled, groupId, hydrate, identity, loseAccess, reload, request, threadRootId, valid, view]));
+  const receipts = pending.filter(row => row.chat?.messageId).map(row => `${row.chat!.messageId}:${row.chat!.shareToMain?.state ?? ''}`).join('|');
+  const previousReceipts = useRef('');
+  useEffect(() => { if (receipts || previousReceipts.current) reload(); previousReceipts.current = receipts; }, [receipts, reload]);
+  const pendingAction = useCallback(async (clientId: string, action: 'retry' | 'cancel' | 'dismiss-share') => {
     const row = pending.find(row => row.item.clientId === clientId);
     if (!row || !valid()) return;
+    if (action === 'dismiss-share' && row.chat?.messageId && row.chat.shareToMain && (row.chat.shareToMain.state === 'unavailable' || row.suspended)) { await mobileDurableOutbox.remove(row); return; }
+    if (action === 'retry' && row.chat?.shareToMain?.state === 'failed' && !row.suspended) {
+      await mobileDurableOutbox.update(row, { chat: { ...row.chat, shareToMain: { ...row.chat.shareToMain, state: 'pending', error: undefined } } }); return;
+    }
     if (action === 'cancel') {
       if (row.enqueueStarted || row.state === 'sending') throw new Error('MESSAGE_ALREADY_SENDING');
       await mobileDurableOutbox.remove(row);
     } else if (row.state === 'failed' && !row.suspended) {
       await mobileDurableOutbox.update(row, { state: 'queued', error: undefined });
     }
-  };
-  const loadOlder = async () => {
+  }, [pending, valid]);
+  const loadOlder = useCallback(() => {
     const previous = page.current;
-    if (!previous || previous.identity !== identity || olderPending.current) return;
-    olderPending.current = true;
+    if (!previous || previous.identity !== identity || olderPending.current) return Promise.resolve();
     setState(old => ({ ...old, loadingOlder: true }));
-    try {
-      const next = await api.client.older(groupId, previous.page);
-      if (!valid() || page.current !== previous) return;
-      page.current = { ...previous, page: next };
-      void cacheChatMessages(groupId, { version: 1, page: next, self: previous.self, actors: previous.actors });
-      setState({ identity, value: { kind: 'ready', group: view(next, previous.self, previous.actors) }, online: true, loadingOlder: false });
-    } catch (error) {
-      if (valid() && page.current === previous && chatAccessLost(error)) loseAccess();
-      throw error;
-    } finally { olderPending.current = false; if (valid()) setState(old => ({ ...old, loadingOlder: false })); }
-  };
-  const act = async (action: BotGroupRemoteActionId, input?: Record<string, unknown>): Promise<RemoteActionInvokeResponse> => {
+    olderPending.current = (async () => {
+      try {
+        const next = await api.client.older(groupId, previous.page);
+        if (!valid() || page.current !== previous) return;
+        page.current = { ...previous, page: next };
+        void cacheChatMessages(groupId, { version: 1, page: next, self: previous.self, actors: previous.actors }, true);
+        setState(old => ({ ...old, value: { kind: 'ready', group: view(next, previous.self, previous.actors) }, online: true, loadingOlder: false }));
+        void hydrate(page.current).catch(() => undefined);
+      } catch (error) {
+        if (valid() && page.current === previous && chatAccessLost(error)) loseAccess();
+        throw error;
+      } finally { olderPending.current = null; if (valid()) setState(old => ({ ...old, loadingOlder: false })); }
+    })();
+    return olderPending.current;
+  }, [identity, api, groupId, valid, view, hydrate, loseAccess]);
+  const act = useCallback(async (action: BotGroupRemoteActionId, input?: Record<string, unknown>): Promise<RemoteActionInvokeResponse> => {
+    if (['plan-start', 'plan-dismiss', 'plan-continue', 'plan-retry', 'plan-edit'].includes(action)) {
+      if (!enabled || !focused || !valid() || threadRootId) throw new Error('OWNER_CHANGED');
+      const latest = page.current;
+      const plan = latest?.identity === identity ? latest.page.plans?.find(plan => plan.id === input?.planId) : undefined;
+      if (!plan || !freshRead.current) throw new Error('CHAT_READ_FAILED');
+      if (input?.expectedRevision !== plan.revision) { reload(); throw new Error('REVISION_CONFLICT'); }
+      if (planAction.current?.identity === identity && planAction.current.pending) throw new Error('PLAN_OPEN');
+      const edit = action === 'plan-edit';
+      if (edit && (!['remove','reassign','skip'].includes(String(input?.action)) || !Number.isInteger(input?.position))) throw new Error('INVALID_PARAMS');
+      if (edit && input?.action === 'skip' && input.executionId !== undefined && typeof input.executionId !== 'string') throw new Error('INVALID_PARAMS');
+      const command: import('./chatServerClient').ChatPlanAction = edit
+        ? input!.action === 'skip'
+          ? { action: 'skip', position: input!.position as number, ...(typeof input!.executionId === 'string' ? { executionId: input!.executionId } : {}) }
+          : { action: input!.action as 'remove' | 'reassign', position: input!.position as number, ...(typeof input!.botId === 'string' ? { botId: input!.botId } : {}) }
+        : { action: action.slice(5) as 'start' | 'dismiss' | 'continue' | 'retry' };
+      const key = JSON.stringify([plan.id, plan.revision, command]);
+      const previous = planAction.current;
+      const attempt = { identity, key, pending: true, controller: new AbortController(),
+        operationId: previous?.identity === identity && previous.key === key ? previous.operationId : '' };
+      planAction.current = attempt;
+      const generation = accessGeneration.current;
+      const current = () => valid() && accessGeneration.current === generation && planAction.current === attempt;
+      try {
+        attempt.operationId ||= (await import('expo-crypto')).randomUUID();
+        await api.client.actPlan(groupId, plan, command, attempt.operationId, current, attempt.controller.signal);
+        if (!current()) throw new Error('OWNER_CHANGED');
+        return { effects: [] };
+      } finally {
+        attempt.pending = false;
+        // A rejection/conflict also needs a fresh role and plan, never an optimistic step advance.
+        if (current()) reload();
+      }
+    }
     if (action === 'stop') {
+      if (!enabled || !focused || !valid() || threadRootId) throw new Error('OWNER_CHANGED');
+      if (input?.scope !== undefined && input.scope !== 'all') throw new Error('INVALID_PARAMS');
+      const generation = accessGeneration.current;
+      const current = () => valid() && stopOwnerRef.current === stopOwner && accessGeneration.current === generation;
       const operationId = (await import('expo-crypto')).randomUUID();
-      try { await api.client.stop(groupId, operationId); } finally { if (valid()) reload(); }
+      try { await api.client.stop(groupId, operationId, input?.scope as 'all' | undefined, current); } finally { if (valid()) reload(); }
       return { effects: [] };
     }
     if (action === 'dissolve' || action === 'leave' || action === 'hide') {
       const operationId = (await import('expo-crypto')).randomUUID();
       if (action === 'hide') {
         await api.client.hide(groupId, operationId);
-        if (valid()) { accessGeneration.current++; page.current = null; setState({ identity, value: { kind: 'missing' }, online: true, loadingOlder: false });
+        forgetChatServerMediaRoom(groupId);
+        if (valid()) { accessGeneration.current++; page.current = null; setState({ identity, value: { kind: 'missing' }, online: true, verified: false, loadingOlder: false });
           await forgetRemoteResource(api.userId, groupId); await forgetChatMessages(groupId); }
       } else if (action === 'leave') {
         try { await api.client.leave(groupId, operationId); } catch (error) { if (valid()) reload(); throw error; }
@@ -369,27 +974,47 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
       }
       return { effects: [] };
     }
-    if (action !== 'send' || !input || input.division || (Array.isArray(input.attachments) && input.attachments.length)) throw new Error('UNSUPPORTED_CHAT_ACTION');
+    if (action !== 'send' || !input || input.division) throw new Error('UNSUPPORTED_CHAT_ACTION');
     const latest = page.current;
     if (!latest || latest.identity !== identity) throw new Error('CHAT_READ_FAILED');
     const owner = getMobileAuthOwner();
     if (!valid() || owner.accountId !== api.userId || mobileDurableOutbox.getAccountId() !== owner.accountKey) throw new Error('OWNER_CHANGED');
-    const mentions = input.mentions as { all: boolean; botIds: string[] };
-    const root = threadRootId ? latest.page.messages.find(message => message.id === threadRootId) : undefined;
+    const mentions = input.mentions as import('@cindy/maker-shared/botGroupChat').BotGroupMention;
+    const inferAuthor = threadRootId && !mentions.all && !mentions.allBots && !mentions.botIds.length;
+    const root = inferAuthor ? latest.page.messages.find(message => message.id === threadRootId) : undefined;
     const recipients = [...mentions.botIds];
     if (root && latest.page.snapshot.members.some(member => member.id === root.authorId && member.kind === 'bot' && member.state === 'joined')) recipients.push(root.authorId);
     await enqueueChatMessage(mobileDurableOutbox, owner.accountKey, groupId, {
       ...(latest.page.snapshot.room.kind === 'direct' ? { conversationKind: 'direct' as const } : {}),
       clientId: String(input.clientId), text: String(input.text), threadRootId,
+      ...(threadRootId && input.alsoSendToMain === true ? { alsoSendToMain: true as const } : {}),
+      attachments: input.attachments as RemoteSerializedAttachment[] | undefined,
       ...(input.quote && typeof input.quote === 'object' && 'messageId' in input.quote
         ? { quote: { messageId: String(input.quote.messageId) } } : {}),
-      mentions: { all: mentions.all, botIds: [...new Set(recipients)] },
+      mentions: { ...mentions, botIds: [...new Set(recipients)] },
     }, latest.page.messages.length, input.quote as import('@cindy/maker-shared/botGroupChat').BotGroupQuoteView | undefined,
     latest.page.messages.reduce<string | undefined>((seq, message) => !seq || BigInt(message.seq) > BigInt(seq) ? message.seq : seq, undefined));
     if (!isMobileAuthOwnerCurrent(owner)) throw new Error('OWNER_CHANGED');
     return { effects: [] };
-  };
-  const media = async (mediaId: string, signal?: AbortSignal): Promise<BotGroupAttachment> => {
+  }, [enabled, focused, valid, threadRootId, identity, reload, api, groupId, loseAccess]);
+  const uploadAttachment = useCallback<MobileLocalAttachmentUploadDeps['upload']>(async (candidate, uri, options) => {
+    const generation = accessGeneration.current;
+    if (!enabled || !valid() || page.current?.identity !== identity) throw new Error('OWNER_CHANGED');
+    try {
+      const attachment = await api.upload(groupId, candidate, uri, options.signal);
+      if (!valid() || generation !== accessGeneration.current) throw new Error('OWNER_CHANGED');
+      return attachment;
+    } catch (error) {
+      if (valid() && generation === accessGeneration.current && chatAccessLost(error)) loseAccess();
+      if (error instanceof Error && error.message === 'ATTACHMENT_TOO_LARGE') {
+        throw new Error(t('groupChat.server.attachmentTooLarge', { size: 100 }));
+      }
+      if (error instanceof Error && error.message === 'ATTACHMENT_UNAVAILABLE') throw new Error(t('composer.upload.noFileRead'));
+      if (error instanceof Error && error.message === 'UPLOAD_CANCELLED') throw new Error(t('composer.upload.cancelled'));
+      throw error;
+    }
+  }, [enabled, valid, identity, api, groupId, loseAccess, t]);
+  const media = useCallback(async (mediaId: string, signal?: AbortSignal): Promise<BotGroupAttachment> => {
     const generation = accessGeneration.current;
     try {
       const attachment = await api.client.media(groupId, mediaId, signal);
@@ -401,9 +1026,9 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
         && (error as { code?: string }).code !== 'MEDIA_NOT_FOUND') loseAccess();
       throw error;
     }
-  };
-  useEffect(() => api.client.personalList.subscribe(() => {
-    if (valid() && api.client.personalList.hidden(groupId)) {
+  }, [api, groupId, valid, loseAccess]);
+  useEffect(() => api.client.personalList.subscribe(({ conversationId, hidden }) => {
+    if (valid() && conversationId === groupId && hidden) {
       loseAccess();
       void forgetRemoteResource(api.userId, groupId);
     }
@@ -426,11 +1051,86 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
     if (!api.current()) throw new Error('OWNER_CHANGED');
     if ((value as { conversationId?: unknown } | null)?.conversationId !== groupId) throw new Error('INVALID_CHAT_LIST_STATE');
     api.client.personalList.merge(value);
-    if (api.current() && api.client.personalList.hidden(groupId)) await forgetRemoteResource(api.userId, groupId);
+    if (api.current() && api.client.personalList.hidden(groupId)) {
+      forgetChatServerMediaRoom(groupId);
+      await forgetRemoteResource(api.userId, groupId);
+    }
   }, [api, groupId]);
+  const followThread = useCallback(async (following: boolean) => {
+    if (!valid() || !enabled || !threadRootId) throw new Error('THREAD_FOLLOW_UNSUPPORTED');
+    const operationId = (await import('expo-crypto')).randomUUID();
+    const result = await api.client.followThread(groupId, threadRootId, following, operationId);
+    // Commit the page already being fetched before replacing it with follow metadata or a reload.
+    while (olderPending.current) await olderPending.current.catch(() => undefined);
+    if (valid()) {
+      const latest = page.current;
+      if (latest?.identity === identity && latest.page.snapshot.reads) {
+        const reads = latest.page.snapshot.reads;
+        const previous = reads.find(read => read.thread_key === threadRootId);
+        const next = { ...latest.page, snapshot: { ...latest.page.snapshot,
+          reads: [...reads.filter(read => read.thread_key !== threadRootId), { ...previous, thread_key: threadRootId, read_seq: previous?.read_seq ?? '0', following: result.following }] } };
+        page.current = { ...latest, page: next };
+        setState(old => ({ ...old, value: { kind: 'ready', group: view(next, latest.self, latest.actors) } }));
+      }
+      reload();
+    }
+    return result.following;
+  }, [valid, enabled, threadRootId, api, groupId, identity, view, reload]);
+  const shareToMain = useCallback(async (messageId: string) => {
+    const latest = page.current;
+    if (!valid() || !enabled || !latest || latest.identity !== identity) throw new Error('SHARE_UNAVAILABLE');
+    const message = view(latest.page, latest.self, latest.actors).messages.find(message => message.id === messageId);
+    if (!message || latest.page.snapshot.room.archived || latest.page.snapshot.room.dissolved_at) throw new Error('SHARE_UNAVAILABLE');
+    const owner = getMobileAuthOwner();
+    await enqueueChatShare(mobileDurableOutbox, owner.accountKey, groupId, message);
+  }, [valid, enabled, identity, view, groupId]);
+  const react = useCallback(async (messageId: string, emoji: string, present: boolean) => {
+    if (!valid() || !enabled) throw new Error('OWNER_CHANGED');
+    const operationId = (await import('expo-crypto')).randomUUID();
+    await api.client.react(groupId, messageId, emoji, present, operationId);
+    if (valid()) reload();
+  }, [valid, enabled, api, groupId, reload]);
+  const backfillThreads = useCallback((mentions: readonly ChatMessage[] = []) => {
+    const current = page.current;
+    if (!valid() || !enabled || threadRootId || !current || current.identity !== identity
+      || current.page.snapshot.room.kind === 'direct' || backfillInFlight.current) return;
+    const previous = currentIndex(current.page.historyRevision);
+    const mentionVersion = mentions.map(m => m.id + ':' + (m.revision ?? 0)).join(',');
+    if (previous && !previous.result.retryRoots.length && !previous.result.pendingEdits.size && previous.mentionVersion === mentionVersion) return;
+    if (Date.now() < retryAtRef.current) return;
+    const controller = new AbortController();
+    const generation = accessGeneration.current;
+    backfillInFlight.current = controller;
+    setThreadsSyncing(true);
+    void api.client.backfillThreads(groupId, current.page.snapshot, current.page.messages, controller.signal, mentions, previous?.result)
+      .then(result => {
+        const latest = page.current;
+        if (controller.signal.aborted || !valid() || generation !== accessGeneration.current || latest?.identity !== identity
+          || current.page.historyRevision !== latest.page.historyRevision) return;
+        index.current = { identity, generation, revision: latest.page.historyRevision, result, mentionVersion };
+        retryAtRef.current = result.retryRoots.length || result.pendingEdits.size ? Date.now() + 60_000 : 0;
+        setState(old => old.identity === identity ? { ...old, value: { kind: 'ready', group: view(latest.page, latest.self, latest.actors) } } : old);
+      })
+      .catch(() => { if (!controller.signal.aborted) retryAtRef.current = Date.now() + 60_000; })
+      .finally(() => {
+        if (backfillInFlight.current === controller) {
+          backfillInFlight.current = null;
+          if (valid()) setThreadsSyncing(false);
+        }
+      });
+  }, [valid, enabled, threadRootId, currentIndex, identity, api, groupId, view]);
+  const latest = page.current?.identity === identity ? page.current : null;
+  const retryAt = latest?.page.threadRetryAt;
+  useEffect(() => {
+    if (!enabled || !focused || retryAt === undefined || AppState.currentState !== 'active') return;
+    const timer = setTimeout(() => { if (valid() && AppState.currentState === 'active') void request({ reason: 'changed' }); }, Math.max(0, retryAt - Date.now()));
+    return () => clearTimeout(timer);
+  }, [identity, enabled, focused, retryAt, request]);
+  const threadMeta = useMemo(() => enabled && latest ? chatThreadMetadata(latest.page, latest.self) : undefined, [enabled, latest]);
   return { state: state.identity === identity ? state.value : { kind: 'loading' } as BotGroupChatState,
     listHidden: api.current() && api.client.personalList.hidden(groupId),
-    online: state.identity === identity && state.online, reload, act, pending, pendingAction,
+    online: state.identity === identity && state.online, verified: state.identity === identity && state.verified, reload, act, pending, pendingAction, threadMeta, followThread, shareToMain, react,
+    backfillThreads, threadsSyncing: state.identity === identity && threadsSyncing,
     canQueue: enabled && api.enabled && state.identity === identity && state.value.kind === 'ready' && !api.client.personalList.hidden(groupId),
-    acceptListState, isListHidden: () => api.client.personalList.hidden(groupId), loadOlder, loadingOlder: state.loadingOlder, media, markRead };
+    acceptListState, isListHidden: () => api.client.personalList.hidden(groupId), loadOlder, loadingOlder: state.loadingOlder, media, markRead, uploadAttachment };
 }

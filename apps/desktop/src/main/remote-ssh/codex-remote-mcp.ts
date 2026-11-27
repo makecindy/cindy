@@ -40,10 +40,10 @@ import {
   withMcpRouteIdentity,
   computeRemoteMcpFingerprint,
   selectRemoteInjectableServerNames,
-} from '../mcp-integrations/codexHttpBridge.js';
+} from '../mcp-integrations/codexHttpBridge.desktop.js';
 import { getRemoteMcpBridgeToken } from '../mcp-integrations/remoteMcpBridgeToken.js';
 import { appServerIds } from '../mcp-apps/runtime.js';
-import { isFrozenMcpServerAllowed } from '../mcp-integrations/codexBuiltinToolPolicy.js';
+import { isFrozenBuiltinPluginAllowed, isFrozenMcpServerAllowed } from '../mcp-integrations/codexBuiltinToolPolicy.js';
 
 const log = createLogger('codex-remote-mcp');
 
@@ -99,62 +99,87 @@ function portPrefsPath(): string {
 
 let portPrefsCache: PortPrefs | null = null;
 
-function readPortPrefs(): PortPrefs {
-  if (portPrefsCache) return portPrefsCache;
-  const file = portPrefsPath();
-  try {
-    if (fs.existsSync(file)) {
-      const raw = JSON.parse(fs.readFileSync(file, 'utf-8')) as unknown;
-      const out: PortPrefs = {};
-      if (raw && typeof raw === 'object') {
-        for (const [hostId, v] of Object.entries(raw as Record<string, unknown>)) {
-          const port = (v as { remotePort?: unknown })?.remotePort;
-          if (typeof port === 'number' && Number.isInteger(port) && port > 0 && port < 65536) {
-            out[hostId] = { remotePort: port };
-            const fp = (v as { appliedFingerprint?: unknown })?.appliedFingerprint;
-            if (typeof fp === 'string' && fp.length > 0) {
-              out[hostId].appliedFingerprint = fp;
-            }
-            const blp = (v as { bridgeLocalPort?: unknown })?.bridgeLocalPort;
-            if (typeof blp === 'number' && Number.isInteger(blp) && blp > 0 && blp < 65536) {
-              out[hostId].bridgeLocalPort = blp;
-            }
-          }
+function parsePortPrefs(raw: unknown): PortPrefs {
+  const out: PortPrefs = {};
+  if (raw && typeof raw === 'object') {
+    for (const [hostId, v] of Object.entries(raw as Record<string, unknown>)) {
+      const port = (v as { remotePort?: unknown })?.remotePort;
+      if (typeof port === 'number' && Number.isInteger(port) && port > 0 && port < 65536) {
+        out[hostId] = { remotePort: port };
+        const fp = (v as { appliedFingerprint?: unknown })?.appliedFingerprint;
+        if (typeof fp === 'string' && fp.length > 0) {
+          out[hostId].appliedFingerprint = fp;
+        }
+        const blp = (v as { bridgeLocalPort?: unknown })?.bridgeLocalPort;
+        if (typeof blp === 'number' && Number.isInteger(blp) && blp > 0 && blp < 65536) {
+          out[hostId].bridgeLocalPort = blp;
         }
       }
-      portPrefsCache = out;
-      return out;
     }
+  }
+  return out;
+}
+
+function readPortPrefs(): PortPrefs {
+  if (portPrefsCache) return portPrefsCache;
+  try {
+    const file = portPrefsPath();
+    portPrefsCache = fs.existsSync(file)
+      ? parsePortPrefs(JSON.parse(fs.readFileSync(file, 'utf-8')))
+      : {};
   } catch (err) {
     log.warn('remote-mcp-forwards.json read failed → falling back to empty', {
       error: err instanceof Error ? err.message : String(err),
     });
+    portPrefsCache = {};
   }
-  portPrefsCache = {};
   return portPrefsCache;
 }
 
-function writePortPrefs(next: PortPrefs): void {
-  const file = portPrefsPath();
-  const tmp = `${file}.tmp`;
-  // userData 在真实 app 里由 electron 保证存在; 测试 stub 只拼路径不建
-  // 目录, 全新环境直接 writeFileSync 会 ENOENT (CI 回归: 目录依赖测试
-  // 执行顺序)。recursive mkdir 对已有目录是 no-op。
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(tmp, JSON.stringify(next, null, 2), 'utf-8');
-  fs.renameSync(tmp, file);
-  portPrefsCache = next;
+async function readPortPrefsAsync(): Promise<PortPrefs> {
+  if (portPrefsCache) return portPrefsCache;
+  let loaded: PortPrefs = {};
+  try {
+    loaded = parsePortPrefs(JSON.parse(await fs.promises.readFile(portPrefsPath(), 'utf-8')));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      log.warn('remote-mcp-forwards.json read failed → falling back to empty', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  // Another reader/writer may have populated the cache during the disk read.
+  return portPrefsCache ??= loaded;
 }
 
-function writeHostRemotePort(hostId: string, remotePort: number): void {
-  writePortPrefs({ ...readPortPrefs(), [hostId]: { ...readPortPrefs()[hostId], remotePort } });
+// Every writer shares this queue: asynchronous invalidation must not rename an
+// older snapshot over a newer bootstrap, endpoint reset or host removal.
+let portPrefsWriteChain: Promise<void> = Promise.resolve();
+
+function writePortPrefs(next: PortPrefs): Promise<void> {
+  portPrefsCache = next;
+  const content = JSON.stringify(next, null, 2);
+  const file = portPrefsPath();
+  const write = portPrefsWriteChain.then(async () => {
+    const tmp = `${file}.tmp`;
+    await fs.promises.mkdir(path.dirname(file), { recursive: true });
+    await fs.promises.writeFile(tmp, content, 'utf-8');
+    await fs.promises.rename(tmp, file);
+  });
+  // Return the real failure to the caller, but let subsequent writes recover.
+  portPrefsWriteChain = write.catch(() => {});
+  return write;
+}
+
+async function writeHostRemotePort(hostId: string, remotePort: number): Promise<void> {
+  await writePortPrefs({ ...readPortPrefs(), [hostId]: { ...readPortPrefs()[hostId], remotePort } });
 }
 
 /** 记录本机 bridge 当前本地端口:bridge 重建换端口时识别并拆除旧 forward。 */
-function writeHostBridgeLocalPort(hostId: string, bridgeLocalPort: number): void {
+async function writeHostBridgeLocalPort(hostId: string, bridgeLocalPort: number): Promise<void> {
   const current = readPortPrefs()[hostId];
   if (!current) return;
-  writePortPrefs({ ...readPortPrefs(), [hostId]: { ...current, bridgeLocalPort } });
+  await writePortPrefs({ ...readPortPrefs(), [hostId]: { ...current, bridgeLocalPort } });
 }
 
 /**
@@ -164,28 +189,74 @@ function writeHostBridgeLocalPort(hostId: string, bridgeLocalPort: number): void
  * 比较「应有指纹 ≠ 已生效指纹」仍会强制 bootstrap,daemon 不会永远持旧
  * env 401 (Greptile P1: 重启丢失令牌更新状态)。
  */
-function writeHostAppliedFingerprint(hostId: string, fingerprint: string): void {
+async function writeHostAppliedFingerprint(hostId: string, fingerprint: string): Promise<void> {
   const current = readPortPrefs()[hostId];
   if (!current) return; // 无端口记录 = 未曾注入, 不写孤儿行
-  writePortPrefs({ ...readPortPrefs(), [hostId]: { ...current, appliedFingerprint: fingerprint } });
+  await writePortPrefs({ ...readPortPrefs(), [hostId]: { ...current, appliedFingerprint: fingerprint } });
 }
 
 /** 清理路径 (白名单为空) bootstrap 后调用:daemon env 已清, 摘除生效记录。 */
-function clearHostAppliedFingerprint(hostId: string): void {
+async function clearHostAppliedFingerprint(hostId: string): Promise<void> {
   const current = readPortPrefs()[hostId];
   if (!current?.appliedFingerprint) return;
   const next = { ...readPortPrefs() };
+  next[hostId] = { ...next[hostId] };
   delete next[hostId].appliedFingerprint;
-  writePortPrefs(next);
+  await writePortPrefs(next);
+}
+
+/**
+ * appliedFingerprint 的失效占位:与任何真实指纹都不相等 (→ ensure / live-send
+ * 判定为漂移, 强制带 token 重 bootstrap), 但仍为非空 (→ token 不可用时依旧
+ * 被视为「曾注入过」, 走清理路径剥受管段, 不丢清理证据)。
+ */
+const DAEMON_ENV_INVALIDATED = 'daemon-env-invalidated';
+
+/** per-host daemon 重启代次:进行中的 ensure 若跨越一次外部重启, 不得写回旧指纹。 */
+const daemonEnvGenerations = new Map<string, number>();
+
+function daemonEnvGeneration(hostId: string): number {
+  return daemonEnvGenerations.get(hostId) ?? 0;
+}
+
+/**
+ * 远端 daemon 在 MCP bootstrap 之外被停掉 (auth 同步 / agent-proxy 对账 /
+ * 安装前停 daemon)。接手重启的 transport startDaemon 不带 LIZI_MCP_TOKEN,
+ * 已生效指纹不再描述 daemon env:换成失效占位, 下次 session start / live
+ * send 识别漂移并带 token 重 bootstrap (#8781)。代次递增让并发中的 ensure
+ * 不会在之后写回旧指纹。杀 daemon 前后各调用一次:杀进程期间新开始的
+ * ensure 可能已 bootstrap 并落指纹, 随后被同一次 kill 杀掉。不抛错。
+ */
+export async function invalidateRemoteCodexMcpDaemonEnv(hostId: string): Promise<void> {
+  daemonEnvGenerations.set(hostId, daemonEnvGeneration(hostId) + 1);
+  const prefs = portPrefsCache ?? await readPortPrefsAsync();
+  const current = prefs[hostId];
+  if (!current?.appliedFingerprint) return;
+  if (current.appliedFingerprint === DAEMON_ENV_INVALIDATED) {
+    await portPrefsWriteChain;
+    return;
+  }
+  const next = { ...prefs, [hostId]: { ...current, appliedFingerprint: DAEMON_ENV_INVALIDATED } };
+  // 先改进程内缓存 (drift 判定 / ensure 都读它):落盘失败时本进程仍按
+  // 已失效处理, 不会信任被杀 daemon 的指纹;下次成功写 prefs 时一并落盘。
+  portPrefsCache = next;
+  try {
+    await writePortPrefs(next);
+  } catch (err) {
+    log.warn('failed to persist remote codex MCP daemon env invalidation', {
+      host: hostId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 /** host 被删时清理端口记录 (registerRemoteSshIpc 的 remove 路径调用)。 */
-export function removeRemoteMcpForwardPref(hostId: string): void {
+export async function removeRemoteMcpForwardPref(hostId: string): Promise<void> {
   const current = readPortPrefs();
   if (!(hostId in current)) return;
   const next = { ...current };
   delete next[hostId];
-  writePortPrefs(next);
+  await writePortPrefs(next);
 }
 
 /**
@@ -194,10 +265,10 @@ export function removeRemoteMcpForwardPref(hostId: string): void {
  * the old machine/connection. The next ensure must rebuild the forward and
  * bootstrap the new endpoint instead of trusting the old applied fingerprint.
  */
-export function invalidateRemoteCodexMcpEndpointState(hostId: string): void {
+export async function invalidateRemoteCodexMcpEndpointState(hostId: string): Promise<void> {
   const current = readPortPrefs()[hostId];
   if (!current || (!current.appliedFingerprint && !current.bridgeLocalPort)) return;
-  writePortPrefs({
+  await writePortPrefs({
     ...readPortPrefs(),
     [hostId]: { remotePort: current.remotePort },
   });
@@ -205,7 +276,8 @@ export function invalidateRemoteCodexMcpEndpointState(hostId: string): void {
 
 /** Bind the remote daemon's disabled helper and App transports to one concrete Session.
  * Read the port at use time: SSH forwarding is established after host construction.
- * Only Bot MCP policy enables the helper; Apps follow the thread's frozen mounts.
+ * Helper introspection is available to ordinary tasks too; both transports
+ * follow the thread's frozen policy and require its bound instance.
  */
 export function buildRemoteCodexSessionMcpConfig(
   hostId: string,
@@ -242,8 +314,9 @@ export function buildRemoteCodexSessionMcpConfig(
         `http://127.0.0.1:${prefs.remotePort}/mcp/${name}`, { sessionInstanceId },
       )],
       [`mcp_servers.${name}.bearer_token_env_var`, TOKEN_ENV],
-      [`mcp_servers.${name}.enabled`, name !== REMOTE_BOT_HELPER_SERVER_NAME &&
-        isFrozenMcpServerAllowed(opts.vendorOptions, name)],
+      [`mcp_servers.${name}.enabled`, name === REMOTE_BOT_HELPER_SERVER_NAME
+        ? isFrozenBuiltinPluginAllowed(opts.vendorOptions, 'xdt_helper')
+        : isFrozenMcpServerAllowed(opts.vendorOptions, name)],
     ]));
 }
 
@@ -601,7 +674,12 @@ async function ensureRemotePort(host: RemoteHost, localBridgePort: number): Prom
     onRearmed: (remotePort) => {
       // 重连后隧道口被重绑到新端口:持久化新值。旧 daemon config 仍指向旧
       // 端口,下一次 ensure 的漂移检测会重写 config 并重启 daemon 自愈。
-      writeHostRemotePort(host.id, remotePort);
+      void writeHostRemotePort(host.id, remotePort).catch((err) => {
+        log.warn('failed to persist re-armed remote MCP port', {
+          host: host.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
       log.info('remote MCP forward port re-armed to new port after reconnect', {
         host: host.id,
         remotePort,
@@ -612,11 +690,11 @@ async function ensureRemotePort(host: RemoteHost, localBridgePort: number): Prom
   if (fwd.remotePort !== preferred) {
     // 换了端口:持久化新值。旧 daemon config 指向旧端口,但接下来的
     // config 漂移检测会重写并重启 daemon,自洽恢复。
-    writeHostRemotePort(host.id, fwd.remotePort);
+    await writeHostRemotePort(host.id, fwd.remotePort);
     log.info('remote MCP forward port (re)assigned', { host: host.id, remotePort: fwd.remotePort });
   }
   if (staleBridgeLocalPort !== localBridgePort) {
-    writeHostBridgeLocalPort(host.id, localBridgePort);
+    await writeHostBridgeLocalPort(host.id, localBridgePort);
   }
   return fwd.remotePort;
 }
@@ -655,8 +733,9 @@ async function releaseRemoteMcpForwardIfAny(host: RemoteHost): Promise<void> {
   const current = readPortPrefs()[host.id];
   if (!current?.bridgeLocalPort) return;
   const next = { ...readPortPrefs() };
+  next[host.id] = { ...next[host.id] };
   delete next[host.id].bridgeLocalPort;
-  writePortPrefs(next);
+  await writePortPrefs(next);
 }
 
 // ── per-host 串行锁与共用 forward 入口 ───────────────────────────────────────
@@ -742,11 +821,11 @@ async function doStripRemoteCodexMcpConfig(
         log.info('remote codex daemon rebootstrapped with empty MCP env on bridge shutdown', {
           host: host.id,
         });
-        clearHostAppliedFingerprint(host.id);
+        await clearHostAppliedFingerprint(host.id);
         await releaseRemoteMcpForwardIfAny(host);
         return { daemonRebootstrapped: true };
       }
-      if (changed || applied) clearHostAppliedFingerprint(host.id);
+      if (changed || applied) await clearHostAppliedFingerprint(host.id);
       await releaseRemoteMcpForwardIfAny(host);
       return { daemonRebootstrapped: false };
     } catch (err) {
@@ -904,7 +983,7 @@ async function doEnsureRemoteCodexMcpBridge(
     let serverNames = selectRemoteInjectableServerNames(bridge.serverNames, {
       collabEnabled,
       memoryEnabled: deps.isMakerMemoryEnabled?.() ?? false,
-      // Shared transport stays disabled; the Bot policy enables it per thread.
+      // Shared transport stays disabled; the bound Session config enables it.
       botHelperEnabled: true,
     });
     if (
@@ -1016,6 +1095,7 @@ async function doEnsureRemoteCodexMcpBridge(
       return { ok: true, daemonRebootstrapped: false };
     }
     if (!daemonRunning || needApply) {
+      const generation = daemonEnvGeneration(host.id);
       await bootstrapDaemon(host, effectiveToken);
       daemonRebootstrapped = true;
       // 防御:bootstrap 若覆盖了 config.toml (managed_install 行为未文档化),
@@ -1031,8 +1111,14 @@ async function doEnsureRemoteCodexMcpBridge(
       }
       // bootstrap 确认完成才落已生效指纹;失败/中断不落 → 下次 ensure
       // driftUnapplied 仍成立, 强制重试 (跨 app 重启同样成立)。
-      if (desiredFingerprint) writeHostAppliedFingerprint(host.id, desiredFingerprint);
-      else clearHostAppliedFingerprint(host.id);
+      // 期间 daemon 若被外部杀掉重启 (代次变化), 存活 daemon 不持 token —
+      // 保留失效占位, 不写回指纹 (#8781)。
+      if (generation !== daemonEnvGeneration(host.id)) {
+        log.warn('remote codex daemon restarted during MCP bootstrap — keeping env invalidated', {
+          host: host.id,
+        });
+      } else if (desiredFingerprint) await writeHostAppliedFingerprint(host.id, desiredFingerprint);
+      else await clearHostAppliedFingerprint(host.id);
       if (serverNames.length === 0) {
         // 清理真正生效 (daemon 已持空 env 重启) 才拆 MCP forward — 见
         // ensureRemotePort 调用点注释 (R21 P2: live turn defer 期间不拆)。

@@ -4,7 +4,8 @@
  * Permission presentation intentionally consumes the shared Ghost permission items directly.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
-import { isUserInstallReservedGhostId, type InstalledGhost } from '../../../../shared/ghost';
+import { type InstalledGhost } from '../../../../shared/ghost';
+import { LOCAL_PLUGIN_NAMESPACE } from '../../../../shared/pluginIdentity';
 import type { PluginMarketItem } from '../../../../shared/pluginMarket';
 
 /** UI submissions use local installations; Host and server verify actual publishing permission. */
@@ -17,9 +18,9 @@ export function localPublishingUnavailableKey(
     (ghost.publishingSource?.kind === 'public-market' && ghost.trust?.level === 'cindy-official') ||
     (market?.scope === 'public' && market.sourceType === 'server' && market.publisherKind === 'official')
   )) return 'officialGithubRequired';
-  if (isUserInstallReservedGhostId(ghost.manifest.id) || ghost.builtin) return 'reservedId';
+  if (ghost.builtin) return 'reservedId';
   if (ghost.namespaceState !== 'confirmed') return 'identityPending';
-  if (ghost.namespace !== null || (market && (market.scope !== 'public' || market.organizationId !== null))) return 'privatePlugin';
+  if ((ghost.namespace !== null && ghost.namespace !== LOCAL_PLUGIN_NAMESPACE) || (market && (market.scope !== 'public' || market.organizationId !== null))) return 'privatePlugin';
   if (ghost.approval.state !== 'approved') return 'approvalRequired';
   if (!ghost.publishingSource || ghost.publishingSource.kind === 'unavailable') return 'sourceUnverified';
   if (ghost.publishingSource.kind === 'public-market') return 'publishingPermissionRequired';

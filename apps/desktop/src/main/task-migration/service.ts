@@ -22,19 +22,21 @@ import {
   type TaskMigrationView,
 } from '@cindy/device-link';
 import { getDbClient, tryGetDbClient } from '../localDb/client/current';
+import { isOrcaReportStopSnapshotMarker } from '../localDb/agentInputQueueSnapshots';
 import { dialogueWorkspaceDayKey } from '../localDb/dialogueWorkspace';
 import { upsertRecentWorkdir } from '../localDb/ipc/recentWorkdirs';
 import { readDialogueWorkspaceSettings } from '../dialogue-workspace-settings';
-import { collapseWorktreeDirForGrouping } from '@cindy/maker-shared/worktree-paths';
+import { collapseWorktreeDirForGrouping, sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
 import { emitSessionCreated } from '../localDb/ipc/sessionCreatedBroadcast';
 import { withSessionRouteLocks } from '../localDb/sessionRouteLock';
 import { getActiveTeamByLead } from '../localDb/orcaTeamStore';
 import { getSelfDeviceId, remoteInvoke } from '../device-link';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context';
-import { readDeviceLinkSettings } from '../device-link/settings-store';
+import { readDeviceLinkSettings } from '../device-link/settings-store.desktop';
 import { withCrossProcessLock } from '../device-link/crossProcessLock';
 import { tryUploadPeerAttachment } from '../device-link/filePeer';
-import { uploadLocalFile, removeRemote, MAX_MEDIA_BYTES } from '../device-link/mediaTransfer';
+import { uploadLocalFile, removeRemote, MAX_MEDIA_BYTES } from '../device-link/mediaTransfer.desktop';
+import { withAgentNetMediaTarget } from '../device-link/agentNetMediaRouting';
 import {
   materializeRemoteAttachment,
   parseRemoteAttachmentRef,
@@ -43,7 +45,7 @@ import { createLogger } from '../logger';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
 import { throwIpcError } from '../utils/ipcValidate';
 import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile';
-import { captureMediaRefCompensationScope } from '../cindy-media/refCompensationJournal';
+import { captureMediaRefCompensationScope } from '../cindy-media/refCompensationJournal.desktop';
 import { exportSessionShare } from '../session-share/sessionShareExport';
 import {
   commitShareImport,
@@ -51,12 +53,15 @@ import {
   cancelShareDraft,
   type ShareImportDraftPrefs,
 } from '../session-share/sessionShareImport';
+import type { XdtshareAgentKind, XdtshareFidelity } from '../session-share/xdtshareFormat.pure';
 import type { moveSessionProjectFromHost } from '../mcp-integrations/moveSession';
 import { physicalWorktreeKey, withWorktreeResourceLocks } from '../worktree/resourceLock';
 import { GitExecError } from '../worktree/gitExec';
 import { getMakerIfReady } from '../maker-host';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService';
 import { pickEnabledFallbackModel } from '../maker-host/model-route-guard';
+import { acpHarnessKeyFromProviderId, acpProviderIdForHarness } from '@cindy/maker-core';
+import { getPluginHarnessRegistry } from '../cindy-brain/pluginHarnesses';
 import { advanceHandoff, canCancelHandoff, type MigrationHandoff } from './handoff';
 import { migrationScope, type MigrationRecord, type IncomingMigration } from './journal';
 import {
@@ -116,7 +121,10 @@ const logTargetFailure =
   };
 const errorCode = (error: unknown): string => {
   if ((error as NodeJS.ErrnoException)?.code === 'ENOSPC') return 'MIGRATION_NO_SPACE';
+  // Preserve only the known transport reason, never arbitrary remote error text.
+  if (error instanceof DeviceLinkError && error.code === 'DEVICE_OFFLINE') return 'DEVICE_OFFLINE';
   const message = error instanceof Error ? error.message : '';
+  if (/\bDEVICE_LINK_DEVICE_OFFLINE\b/.test(message)) return 'DEVICE_LINK_DEVICE_OFFLINE';
   return /\bMIGRATION_[A-Z_]+\b/.exec(message)?.[0] ?? 'MIGRATION_FAILED';
 };
 function selfId(): string {
@@ -231,9 +239,26 @@ function view(scope: Scope, record: MigrationRecord | null): TaskMigrationView {
   };
 }
 
+function canonicalAcpProviderId(providerId: string | null | undefined): string | null {
+  const key = acpHarnessKeyFromProviderId(providerId);
+  return key ? acpProviderIdForHarness(key) : null;
+}
+
+function listAvailableAcpProviders(): string[] {
+  return [
+    ...new Set(
+      getPluginHarnessRegistry()
+        .list()
+        .filter((harness) => harness.availability.state !== 'unavailable')
+        .map((harness) => acpProviderIdForHarness(harness.key)),
+    ),
+  ];
+}
+
 interface SourceSession {
   id: string;
   workingDir: string;
+  projectDir: string | null;
   workspaceKind: string;
   remoteHostId: string | null;
   agentDeviceId: string | null;
@@ -241,7 +266,8 @@ interface SourceSession {
   status: string;
   source: string;
   orcaRole: string | null;
-  agentKind: 'cc' | 'codex' | 'pi';
+  agentKind: XdtshareAgentKind;
+  providerId: string | null;
   updatedAt: number;
 }
 async function assertSource(
@@ -250,7 +276,7 @@ async function assertSource(
   worker = false,
 ): Promise<SourceSession> {
   const row = await scope.db.queryOne<SourceSession>(
-    'SELECT id, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, agent_device_id AS agentDeviceId, orca_remote_lead AS orcaRemoteLead, status, source, orca_role AS orcaRole, agent_kind AS agentKind, updated_at AS updatedAt FROM sessions WHERE id = ?',
+    'SELECT id, working_dir AS workingDir, project_dir AS projectDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, agent_device_id AS agentDeviceId, orca_remote_lead AS orcaRemoteLead, status, source, orca_role AS orcaRole, agent_kind AS agentKind, provider_id AS providerId, updated_at AS updatedAt FROM sessions WHERE id = ?',
     [sessionId],
   );
   scope.assertCurrent();
@@ -280,7 +306,8 @@ async function assertSource(
     } catch {
       throw new Error('MIGRATION_TASK_QUEUED');
     }
-    if (!Array.isArray(messages) || messages.length) throw new Error('MIGRATION_TASK_QUEUED');
+    if (!Array.isArray(messages) || messages.some(item => !isOrcaReportStopSnapshotMarker(item)))
+      throw new Error('MIGRATION_TASK_QUEUED');
   }
   const live = getMakerIfReady()?.getSession(sessionId);
   if (!sourceBoundary) throw new Error('MIGRATION_HOST_NOT_READY');
@@ -326,8 +353,9 @@ interface WorkspaceBundle extends PortableWorkspace {
 }
 function copyDestination(lead: SourceSession): NonNullable<WorkspaceBundle['destination']> {
   if (lead.workspaceKind === 'dialogue') return { kind: 'dialogue' };
-  // A task in a worktree belongs to the project the sidebar groups it under.
-  const project = collapseWorktreeDirForGrouping(lead.workingDir);
+  // Preserve explicit identity exactly; only legacy tasks infer a project from cwd.
+  const directory = sessionProjectDirectory(lead) ?? lead.workingDir;
+  const project = lead.projectDir != null ? directory : collapseWorktreeDirForGrouping(directory);
   const relative = path.relative(app.getPath('home'), project);
   const segments = relative ? relative.split(path.sep) : [];
   return {
@@ -543,7 +571,19 @@ async function prepare(scope: Scope, record: MigrationHandoff) {
           throw new Error('MIGRATION_UNSUPPORTED');
         throw new MigrationSizeError('MIGRATION_NO_MEMORY', result.totalBytes, result.limitBytes);
       }
-      if (result.status !== 'ok' || result.fidelity !== 'full' || result.mediaDropped)
+      const hasAcpMember = members.some((member) => member.agentKind === 'acp');
+      const hasBuiltinMember = members.some((member) => member.agentKind !== 'acp');
+      const expectedFidelity: XdtshareFidelity = !hasAcpMember
+        ? 'full'
+        : hasBuiltinMember
+          ? 'partial'
+          : 'db-only';
+      if (
+        result.status !== 'ok' ||
+        result.fidelity !== expectedFidelity ||
+        (result.missingTranscripts?.length ?? 0) > 0 ||
+        result.mediaDropped
+      )
         throw new Error('MIGRATION_INCOMPLETE_CONTEXT');
       // The target rejects more transcripts than the protocol allows; stop before uploading them.
       if ((result.externalTranscripts?.length ?? 0) > TASK_MIGRATION_MAX_TRANSCRIPTS)
@@ -665,11 +705,12 @@ async function sendPart(
     return { ref: peer, size: result.size, sha256: result.sha256 };
   }
   onProgress?.(0); // OSS fallback starts this part again, not a second completed part.
-  const result = await uploadLocalFile(file, {
+  const result = await withAgentNetMediaTarget(device, async () => uploadLocalFile(file, {
     maxBytes: (await fs.stat(file)).size,
     onProgress,
     signal,
-  });
+    assertCurrent: scope.assertCurrent,
+  }));
   // Record the upload before the checkpoint so a cancelled copy still deletes it.
   const keysFile = path.join(artifacts, 'transfer-keys.json');
   const keys = JSON.parse(readAtomicFileSync(keysFile) ?? '[]') as string[];
@@ -1205,25 +1246,75 @@ async function receive(
           resourceBudgetBytes: memoryBudget(),
         });
         try {
-          if (
-            inspected.encrypted ||
-            inspected.preview.fidelity !== 'full' ||
-            inspected.preview.orcaWorkerCount !== (record.workers?.length ?? 0)
-          )
+          if (inspected.encrypted) throw new Error('MIGRATION_INCOMPLETE_CONTEXT');
+          const preview = inspected.preview;
+          const leadIsAcp = preview.agentKind === 'acp';
+          const expectedFidelity: XdtshareFidelity = leadIsAcp
+            ? 'db-only'
+            : preview.hasAcpWorker
+              ? 'partial'
+              : 'full';
+          const previewFidelityOk = leadIsAcp
+            ? preview.fidelity === 'db-only' ||
+              (preview.orcaWorkerCount > 0 && preview.fidelity === 'partial')
+            : preview.fidelity === expectedFidelity;
+          if (!previewFidelityOk || preview.orcaWorkerCount !== (record.workers?.length ?? 0))
             throw new Error('MIGRATION_INCOMPLETE_CONTEXT');
-          const agentKind =
-            inspected.preview.agentKind === 'cc' ? 'claude-code' : inspected.preview.agentKind;
           const providers = await getDesktopProviderService().listProviders({
             allowSideEffects: true,
           });
           scope.assertCurrent();
-          const route = pickEnabledFallbackModel(providers, agentKind);
-          if (!route) throw new Error('MIGRATION_TARGET_MODEL_UNAVAILABLE');
-          const effort =
-            getMakerIfReady()
-              ?.getCapabilities(agentKind)
-              .availableModels.find((m) => m.id === route.model)?.defaultEffort ?? 'high';
-          const agentPrefs: Partial<Record<'cc' | 'codex' | 'pi', ShareImportDraftPrefs>> = {};
+          const availableAcpProviders = new Set(listAvailableAcpProviders());
+          let leadDraftPrefs: ShareImportDraftPrefs;
+          if (preview.agentKind === 'acp') {
+            const requiredLeadAcpProvider = canonicalAcpProviderId(preview.providerId);
+            if (!requiredLeadAcpProvider || !availableAcpProviders.has(requiredLeadAcpProvider)) {
+              throw new Error('MIGRATION_TARGET_MODEL_UNAVAILABLE');
+            }
+            leadDraftPrefs = {
+              permissionMode: 'ask',
+              planMode: false,
+              fastMode: false,
+            };
+          } else {
+            const agentKind = preview.agentKind === 'cc' ? 'claude-code' : preview.agentKind;
+            const route = pickEnabledFallbackModel(providers, agentKind);
+            if (!route) throw new Error('MIGRATION_TARGET_MODEL_UNAVAILABLE');
+            const effort =
+              getMakerIfReady()
+                ?.getCapabilities(agentKind)
+                .availableModels.find((m) => m.id === route.model)?.defaultEffort ?? 'high';
+            leadDraftPrefs = {
+              ...route,
+              effort,
+              permissionMode: agentKind === 'claude-code' ? 'default' : 'ask',
+              planMode: false,
+              fastMode: false,
+            };
+          }
+          if (preview.hasAcpWorker) {
+            const workerProviders = preview.acpWorkerProviderIds ?? [];
+            if (
+              workerProviders.length === 0 ||
+              workerProviders.some((providerId) => {
+                const required = canonicalAcpProviderId(providerId);
+                return !required || !availableAcpProviders.has(required);
+              })
+            ) {
+              throw new Error('MIGRATION_TARGET_MODEL_UNAVAILABLE');
+            }
+          }
+          const agentPrefs: Partial<Record<XdtshareAgentKind, ShareImportDraftPrefs>> = {
+            ...(availableAcpProviders.size > 0
+              ? {
+                  acp: {
+                    permissionMode: 'ask',
+                    planMode: false,
+                    fastMode: false,
+                  },
+                }
+              : {}),
+          };
           for (const agent of ['cc', 'codex', 'pi'] as const) {
             const kind = agent === 'cc' ? 'claude-code' : agent;
             const selected = pickEnabledFallbackModel(providers, kind);
@@ -1243,13 +1334,7 @@ async function receive(
             {
               draftId: inspected.draftId,
               workingDir,
-              draftPrefs: {
-                ...route,
-                effort,
-                permissionMode: agentKind === 'claude-code' ? 'default' : 'ask',
-                planMode: false,
-                fastMode: false,
-              },
+              draftPrefs: leadDraftPrefs,
             },
             {
               dbClient: scope.db,
@@ -1260,11 +1345,16 @@ async function receive(
                 workingDir,
                 workers: record.workers,
                 agentPrefs,
+                availableAcpProviders,
                 externalTranscripts,
               },
             },
           );
-          if (result.fidelity !== 'full') throw new Error('MIGRATION_INCOMPLETE_CONTEXT');
+          const resultFidelityOk = leadIsAcp
+            ? result.fidelity === 'db-only' ||
+              (preview.orcaWorkerCount > 0 && result.fidelity === 'partial')
+            : result.fidelity === expectedFidelity;
+          if (!resultFidelityOk) throw new Error('MIGRATION_INCOMPLETE_CONTEXT');
         } finally {
           cancelShareDraft(inspected.draftId);
         }
@@ -1308,6 +1398,7 @@ export async function requestTaskMigration(raw: unknown): Promise<TaskMigrationV
       projectMove: {
         sessionId: result.sessionId,
         workingDir: result.workingDir,
+        projectDir: result.projectDir ?? null,
         workspaceKind: result.workspaceKind,
       },
     };
@@ -1350,15 +1441,20 @@ export async function requestTaskMigration(raw: unknown): Promise<TaskMigrationV
   if (request.action === 'caps') {
     const providers = await getDesktopProviderService().listProviders({ allowSideEffects: true });
     scope.assertCurrent();
+    const acpProviders = listAvailableAcpProviders();
     return {
       ...view(scope, null),
       projects: await projects(scope),
       teamMigration: true,
       externalTranscripts: true,
       copyEstimate: true,
-      agents: (['cc', 'codex', 'pi'] as const).filter(
-        (agent) => !!pickEnabledFallbackModel(providers, agent === 'cc' ? 'claude-code' : agent),
-      ),
+      agents: [
+        ...(['cc', 'codex', 'pi'] as const).filter(
+          (agent) => !!pickEnabledFallbackModel(providers, agent === 'cc' ? 'claude-code' : agent),
+        ),
+        ...(acpProviders.length > 0 ? (['acp'] as const) : []),
+      ],
+      acpProviders,
     };
   }
   if (request.action === 'receive' || request.action === 'receipt') {
@@ -1441,7 +1537,17 @@ export async function requestTaskMigration(raw: unknown): Promise<TaskMigrationV
             const source = members[0];
             if (source.orcaRole === 'lead' && target.teamMigration !== true)
               throw new Error('MIGRATION_UNSUPPORTED');
-            if (members.some((member) => !target.agents?.includes(member.agentKind)))
+            const targetAcpProviders = new Set(
+              Array.isArray(target.acpProviders) ? target.acpProviders : [],
+            );
+            if (
+              members.some((member) => {
+                if (!target.agents?.includes(member.agentKind)) return true;
+                if (member.agentKind !== 'acp') return false;
+                const required = canonicalAcpProviderId(member.providerId);
+                return !required || !targetAcpProviders.has(required);
+              })
+            )
               throw new Error('MIGRATION_TARGET_MODEL_UNAVAILABLE');
             const id = randomUUID();
             record = {

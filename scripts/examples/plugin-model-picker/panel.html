@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>模型选择器体验</title>
+  <link rel="stylesheet" href="panel.css">
+  <script src="panel.js" defer></script>
+</head>
+<body>
+  <main>
+    <p class="eyebrow">插件面板 · 宿主组件</p>
+    <h1>选择一个模型</h1>
+    <p class="description">点击按钮，打开 Cindy 的模型选择器。选好后，完整配置会显示在这里，不会调用模型。</p>
+    <div class="controls">
+      <button id="pick" type="button">选择模型</button>
+      <button id="dialog" type="button" class="secondary">对比旧弹窗</button>
+    </div>
+    <p id="status" role="status" aria-live="polite">尚未选择</p>
+    <dl id="summary" hidden></dl>
+    <details><summary>查看完整选择结果</summary><pre id="result">尚无结果</pre></details>
+    <p class="hint">可以在侧栏、主视图和弹出的独立窗口里分别体验。搜索、收藏、最近使用和模型详情均由宿主组件提供。</p>
+    <div class="bottom"><button id="bottom-pick" type="button" class="secondary">在页面底部选择</button></div>
+  </main>
+</body>
+</html>

@@ -1,14 +1,11 @@
-import { app } from 'electron';
 import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import { platform as hostPlatform } from 'node:os';
 import path from 'node:path';
 
-import {
-  getActiveAppSession,
-  isAppSessionBoundaryPending,
-  LOCAL_DATA_OWNER_ID,
-} from '../appSessionState.js';
+import { activeDataOwnerId, isOwnerBoundaryPending } from '../ownerContext.js';
+import { LOCAL_PROFILE_DATA_OWNER_ID as LOCAL_DATA_OWNER_ID } from '../profile/profileRegistryModel.js';
+import { userDataPath } from '../userDataPath.js';
 import { createBetterSqliteDatabase } from '../localDb/betterSqliteFactory.js';
 import {
   isConnectionSourceKind,
@@ -90,7 +87,7 @@ function instanceIsolatedCredentialOwners(
 }
 
 function bindingPath(): string {
-  return path.join(app.getPath('userData'), 'native-provider-auth.json');
+  return userDataPath('native-provider-auth.json');
 }
 
 function hasInvalidProviderOwnerSlot(value: unknown): boolean {
@@ -149,6 +146,10 @@ function readBindingsOrFail(): BindingRead {
     // EACCES / EIO / 无法恢复原子备份都说明归属不明，不能当成空。
     return { ok: false, reason: 'unreadable' };
   }
+  return parseBindings(raw);
+}
+
+function parseBindings(raw: string): BindingRead {
   try {
     const value = JSON.parse(raw) as unknown;
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -473,7 +474,7 @@ export function isNativeProviderAuthBound(provider: NativeProviderId): boolean {
   // remain authoritative during signed-out/bootstrap reads too; otherwise a residual local token
   // can be treated as bound before an owner session has committed.
   if (bindings.revoked && provider in bindings.revoked) return false;
-  const owner = getActiveAppSession().dataOwnerId;
+  const owner = activeDataOwnerId();
   // During unit/bootstrap code paths there may be no committed owner yet.
   // Owner-bound sessions are fail-closed; pre-session callers retain legacy
   // behavior until authentication commits an owner boundary.
@@ -518,7 +519,7 @@ export function bindNativeProviderAuth(
   provider: NativeProviderId,
   opts?: { instanceIsolated?: boolean; sharedSystem?: boolean },
 ): void {
-  const owner = getActiveAppSession().dataOwnerId;
+  const owner = activeDataOwnerId();
   if (!owner) throw new Error('cannot bind native provider auth without an active data owner');
   const written = withNativeBindingMutationLock(false, () => {
     const read = readBindingsOrFail();
@@ -715,6 +716,26 @@ export function isNativeProviderAuthSharedSystemCredential(provider: NativeProvi
   );
 }
 
+/** Read current shared-login authorization on async request paths without mutating the binding file. */
+export async function isNativeProviderAuthBoundToSharedSystemCredential(provider: NativeProviderId): Promise<boolean> {
+  const owner = activeDataOwnerId();
+  if (!owner || isOwnerBoundaryPending()) return false;
+  let raw: string;
+  try {
+    raw = await fs.promises.readFile(bindingPath(), 'utf8');
+  } catch {
+    // A missing live file during backup exchange cannot prove current authorization.
+    return false;
+  }
+  if (activeDataOwnerId() !== owner || isOwnerBoundaryPending()) return false;
+  const read = parseBindings(raw);
+  if (!read.ok) return false;
+  const { bindings } = read;
+  return !(bindings.revoked && provider in bindings.revoked)
+    && bindings[provider] === owner
+    && sharedSystemCredentialOwners(bindings)[provider]?.trim() === owner;
+}
+
 /** 返回当前 owner 绑定的授权来源；归属不明或旧文件未记录时返回 null。 */
 export function getNativeProviderAuthSource(
   provider: NativeProviderId,
@@ -779,7 +800,7 @@ export function unbindNativeProviderAuth(
     const read = readBindingsOrFail();
     if (!read.ok) return;
     const bindings = read.bindings;
-    const owner = getActiveAppSession().dataOwnerId;
+    const owner = activeDataOwnerId();
     const marking = opts?.revoked === true && !!owner;
     const hadSelfAuthorized = bindings.selfAuthorized?.[provider] !== undefined;
     const hadSource = bindings.sources?.[provider] !== undefined;
@@ -909,11 +930,11 @@ function needsLegacyNativeProviderAuthMigration(
 export function migrateLocalNativeProviderAuthBindings(ownerId: string): boolean {
   const normalizedOwnerId = ownerId.trim();
   if (!normalizedOwnerId || normalizedOwnerId === LOCAL_DATA_OWNER_ID) return false;
-  if (getActiveAppSession().dataOwnerId !== normalizedOwnerId) return false;
+  if (activeDataOwnerId() !== normalizedOwnerId) return false;
   // This helper is called after the durable cloud commit. Keep the same floor
   // as other binding writers for callers that accidentally invoke it during a
   // different owner transition.
-  if (isAppSessionBoundaryPending()) return false;
+  if (isOwnerBoundaryPending()) return false;
 
   // Stable-owner initialization commonly reaches this helper from ordinary
   // renderer setup. If the snapshot proves that no local-v1 slot can move and
@@ -988,13 +1009,13 @@ export function claimDetectedNativeProviderAuth(
   provider: NativeHarnessInheritedProviderId,
   hasCredential: () => boolean,
 ): boolean {
-  const owner = getActiveAppSession().dataOwnerId;
+  const owner = activeDataOwnerId();
   if (!owner) return false;
   // A session boundary in flight means `owner` is about to be replaced: writing
   // now would hand the outgoing account's credential to the incoming one.
   // Callers reached from an async settle (Codex reconcile) additionally pin an
   // owner+generation snapshot; this guard is the floor every caller gets.
-  if (isAppSessionBoundaryPending()) return false;
+  if (isOwnerBoundaryPending()) return false;
   const snapshot = readBindingsOrFail();
   if (!snapshot.ok) return false;
   if (provider in snapshot.bindings) return false;
@@ -1042,8 +1063,8 @@ export function restoreNativeProviderAuthForRecovery(
   expectedOwner: string,
   hasCredential: () => boolean,
 ): boolean {
-  const owner = getActiveAppSession().dataOwnerId;
-  if (!owner || owner !== expectedOwner || isAppSessionBoundaryPending()) return false;
+  const owner = activeDataOwnerId();
+  if (!owner || owner !== expectedOwner || isOwnerBoundaryPending()) return false;
   // Recovery runs on the Electron main thread after Codex reconciliation. Avoid
   // synchronously waiting on the cross-process writer lock when a read-only
   // snapshot already proves that no write is needed. Any potentially writable

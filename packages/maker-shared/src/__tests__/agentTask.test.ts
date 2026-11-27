@@ -32,10 +32,11 @@ const CLAUDE_2_1_280_ASYNC_RECEIPT = [
 ].join('\n');
 
 describe('isAgentTaskToolName', () => {
-  it('matches Task / Agent / collab:* and nothing else', () => {
+  it('matches spawn tools and nothing else', () => {
     expect(isAgentTaskToolName('Task')).toBe(true);
     expect(isAgentTaskToolName('Agent')).toBe(true);
     expect(isAgentTaskToolName('collab:spawn')).toBe(true);
+    expect(isAgentTaskToolName('collab:spawnAgent')).toBe(true);
     expect(isAgentTaskToolName('Read')).toBe(false);
     expect(isAgentTaskToolName('TodoWrite')).toBe(false);
     expect(isAgentTaskToolName('')).toBe(false);
@@ -56,13 +57,15 @@ describe('isAgentTaskToolName', () => {
 });
 
 describe('isSubagentSpawnToolName', () => {
-  it('separates real launches from Codex control cards', () => {
-    for (const name of ['Task', 'Agent', 'subagent', 'collab:spawn', 'collab:spawnAgent']) {
+  it('separates real launches from Codex control calls', () => {
+    for (const name of ['Task', 'Agent', 'subagent', 'collab:spawn', 'collab:spawnAgent', 'collab:spawn_agent']) {
       expect(isSubagentSpawnToolName(name)).toBe(true);
     }
+    // 控制调用不是子代理的诞生:既不能算 spawn,也不能走子代理卡(否则每轮 wait
+    // 都会长出一张 "Subagent wait" 卡和一条后台任务行)。
     for (const name of ['collab:wait', 'collab:sendInput', 'collab:resumeAgent', 'collab:closeAgent']) {
       expect(isSubagentSpawnToolName(name)).toBe(false);
-      expect(isAgentTaskToolName(name)).toBe(true);
+      expect(isAgentTaskToolName(name)).toBe(false);
     }
   });
 });
@@ -121,6 +124,64 @@ describe('normalizeAgentTaskUpdate', () => {
   it('falls back taskId to parentToolUseId when only the latter is present', () => {
     const update = normalizeAgentTaskUpdate({ parentToolUseId: 'tu-9', status: 'failed' });
     expect(update).toMatchObject({ taskId: 'tu-9', parentToolUseId: 'tu-9', status: 'failed' });
+  });
+
+  it('normalizes, bounds, and merges recentActivities and lastToolSummary cleanly', () => {
+    const rawActivities = Array.from({ length: 10 }, (_, idx) => ({
+      id: `item-${idx}`,
+      toolName: 'exec',
+      detail: `cmd-${idx}-${'x'.repeat(200)}`,
+      status: idx === 9 ? 'failed' : 'completed',
+      ...(idx === 9 ? { error: `err-${'y'.repeat(200)}` } : {}),
+    }));
+    const first = normalizeAgentTaskUpdate(
+      {
+        taskId: 'codex-1',
+        status: 'running',
+        lastToolName: 'exec',
+        lastToolSummary: `pnpm test ${'z'.repeat(200)}`,
+        recentActivities: [
+          { id: '', toolName: 'exec', status: 'running' },
+          { id: 'bad-status', toolName: 'exec', status: 'unknown' },
+          ...rawActivities,
+        ],
+      },
+      'codex',
+    )!;
+    expect(first.recentActivities).toHaveLength(6);
+    expect(first.recentActivities?.[0].id).toBe('item-0');
+    expect(first.recentActivities?.[0].detail?.length).toBeLessThanOrEqual(140);
+    expect(first.lastToolSummary?.length).toBeLessThanOrEqual(160);
+
+    // Token-only update preserves previous tool activity & summary.
+    const tokenOnly = mergeAgentTaskUpdate(
+      first,
+      normalizeAgentTaskUpdate({ taskId: 'codex-1', status: 'running', usage: { totalTokens: 900 } }, 'codex')!,
+    );
+    expect(tokenOnly.lastToolName).toBe('exec');
+    expect(tokenOnly.lastToolSummary).toBe(first.lastToolSummary);
+    expect(tokenOnly.recentActivities).toEqual(first.recentActivities);
+
+    // Newer tool without summary clears stale lastToolSummary rather than leaking the previous tool's command.
+    const nextTool = mergeAgentTaskUpdate(
+      tokenOnly,
+      normalizeAgentTaskUpdate(
+        {
+          taskId: 'codex-1',
+          status: 'running',
+          lastToolName: 'sleep',
+          recentActivities: [{ id: 'sleep-1', toolName: 'sleep', status: 'running' }],
+        },
+        'codex',
+      )!,
+    );
+    expect(nextTool.lastToolName).toBe('sleep');
+    expect(nextTool.lastToolSummary).toBeUndefined();
+    expect(nextTool.recentActivities).toEqual([{ id: 'sleep-1', toolName: 'sleep', status: 'running' }]);
+
+    const model = buildAgentTaskCardModel({ toolName: 'collab:spawn', update: first });
+    expect(model.lastToolSummary).toBe(first.lastToolSummary);
+    expect(model.recentActivities).toEqual(first.recentActivities);
   });
 });
 

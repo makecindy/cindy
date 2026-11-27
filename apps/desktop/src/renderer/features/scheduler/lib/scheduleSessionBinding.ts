@@ -17,14 +17,51 @@
  * 'changed' → schedulesStore.forceRefresh → cache 引用更新 → Map 重建。
  */
 
-import { useEffect } from 'react';
-import { useRemoteSessionScheduleBindings } from '@/features/device-link/remoteProjectsStore';
+import { useEffect, useMemo, useSyncExternalStore } from 'react';
+import {
+  getActiveOrcaWorkersForLead,
+  indexActiveOrcaWorkersByLead,
+  type OrcaBoundSessionRef,
+  type OrcaRetainedWorkerProjection,
+} from '@cindy/maker-shared/orca-team';
+import { useCurrentAuthDeviceId } from '@/lib/authDeviceIdStore';
+import {
+  listRetainedWorkerProjections,
+  subscribeAllWorkerProjections,
+} from '@/features/cc-agent/hooks/workerProjectionStore';
+import { remoteProjectsStore, useRemoteSessionScheduleBindings } from '@/features/device-link/remoteProjectsStore';
+import { sessionsStore } from '@/lib/sessionsStore';
 import { buildBindingMap, type ScheduleBinding } from './scheduleBindingIndex';
 import { schedulesStore, useSchedulesSnapshot } from './schedulesStore';
 
 export { buildBindingMap, __resetBindingMemoForTest } from './scheduleBindingIndex';
 
 const EMPTY: readonly ScheduleBinding[] = Object.freeze([]);
+
+function collectRetainedOrcaWorkerProjections(): OrcaRetainedWorkerProjection[] {
+  const projections: OrcaRetainedWorkerProjection[] = [];
+  for (const [leadSessionId, snapshot] of listRetainedWorkerProjections()) {
+    const leadDeviceId = remoteProjectsStore.getSessionDeviceId(leadSessionId) ?? null;
+    const workers: OrcaBoundSessionRef[] = snapshot.workers.map((worker) =>
+      worker.executionDevice
+        ? { sessionId: worker.executionDevice.remoteSessionId, deviceId: worker.executionDevice.deviceId }
+        : { sessionId: worker.sessionId, deviceId: leadDeviceId },
+    );
+    if (workers.length > 0) projections.push([leadSessionId, leadDeviceId, workers]);
+  }
+  return projections;
+}
+
+function subscribeFollowUpSources(listener: () => void): () => void {
+  const unsubRemote = remoteProjectsStore.subscribe(listener);
+  const unsubLocal = sessionsStore.subscribe(listener);
+  const unsubWorkers = subscribeAllWorkerProjections(listener);
+  return () => {
+    unsubRemote();
+    unsubLocal();
+    unsubWorkers();
+  };
+}
 
 /**
  * 跳到自动化页并 focus 指定任务的路由(与侧边栏自动化分组"编辑"同款 query
@@ -52,4 +89,60 @@ export function useSessionBoundSchedules(
   // 显式按任务所属设备取值；远端无绑定/尚未加载时绝不回退到本机同 ID。
   if (deviceLinkDeviceId) return remoteBindings;
   return buildBindingMap(snapshot).get(sessionId) ?? EMPTY;
+}
+
+/**
+ * Bulk subscription for inbox grouping: tasks bound to an active automation now
+ * (never historical runs), including active automations bound to an Orca Lead's
+ * active collaborative Workers (local or remote).
+ */
+export function useActiveFollowUpSessions<
+  T extends { id: string; deviceLinkDeviceId?: string | null; orcaRole?: string | null },
+>(
+  sessions: readonly T[],
+): ReadonlySet<T> {
+  const snapshot = useSchedulesSnapshot();
+  const selfDeviceId = useCurrentAuthDeviceId();
+  const hasLocalSessions = sessions.some(
+    (session) => !session.deviceLinkDeviceId || session.orcaRole === 'lead',
+  );
+  useEffect(() => {
+    if (hasLocalSessions) void schedulesStore.ensure().catch(() => {});
+  }, [hasLocalSessions]);
+  const getSnapshot = useMemo(() => {
+    const localBindings = buildBindingMap(snapshot);
+    let previous: ReadonlySet<T> = new Set();
+    return () => {
+      const hasAnyLead = sessions.some((session) => session.orcaRole === 'lead');
+      const workerIndex = hasAnyLead
+        ? indexActiveOrcaWorkersByLead(
+            [
+              ...(sessionsStore.getByFilter('active') ?? sessionsStore.getByFilter('all') ?? []),
+              ...(remoteProjectsStore.getVisibleMergedRemoteSessions?.() ?? []),
+            ],
+            {
+              selfDeviceId,
+              retainedProjections: collectRetainedOrcaWorkerProjections(),
+            },
+          )
+        : null;
+      const isBoundActive = (sessionId: string, deviceId: string | null | undefined): boolean => {
+        const bindings = deviceId
+          ? remoteProjectsStore.getSessionScheduleBindings(deviceId, sessionId)
+          : localBindings.get(sessionId) ?? EMPTY;
+        return bindings.some((binding) => binding.status === 'active');
+      };
+      const next = new Set(sessions.filter((session) => {
+        if (isBoundActive(session.id, session.deviceLinkDeviceId)) return true;
+        if (session.orcaRole !== 'lead' || !workerIndex) return false;
+        const workers = getActiveOrcaWorkersForLead(workerIndex, session, selfDeviceId);
+        return workers.some((worker) => isBoundActive(worker.sessionId, worker.deviceId));
+      }));
+      if (next.size !== previous.size || [...next].some((session) => !previous.has(session))) {
+        previous = next;
+      }
+      return previous;
+    };
+  }, [sessions, snapshot, selfDeviceId]);
+  return useSyncExternalStore(subscribeFollowUpSources, getSnapshot, getSnapshot);
 }

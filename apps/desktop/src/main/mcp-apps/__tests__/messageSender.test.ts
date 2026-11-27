@@ -38,6 +38,7 @@ function fixture(queue: boolean) {
     clearBoundary: () => boundary,
     shouldQueue: () => queue,
     getSessionMeta: vi.fn(async () => { await wait('meta'); return { title: 'Task' }; }),
+    buildCreateOpts: vi.fn(async () => { await wait('create'); return { agentKind: 'pi' as const, resumeSessionId: 'persisted-sdk-session' }; }),
     createClientId: () => 'input',
     buildQueueItem: vi.fn(async (params: unknown) => {
       await wait('build');
@@ -65,6 +66,23 @@ function fixture(queue: boolean) {
 }
 
 describe('MCP App message input and dispatch', () => {
+  // C06: only plugin cards used an opaque server hash as the visible sender.
+  // Unit, production sender: one Host-stamped card, direct and queued delivery.
+  it.each([false, true])('uses the card plugin name without changing external provenance (queue=%s)', async (queue) => {
+    const f = fixture(queue);
+    const pluginRecord = { ...record, serverId: 'plugin-ui_opaque', tool: {
+      ...record.tool, _meta: { 'cindy/plugin': { name: '原生协议交互页面', trust: 'unverified' } },
+    } };
+    await createAppMessageSender(f.deps)('task', pluginRecord, content, f.guard);
+    const sourcePlugin = { pluginId: 'mcp-app:plugin-ui_opaque', name: '原生协议交互页面' };
+    if (queue) expect(f.deps.buildQueueItem).toHaveBeenCalledWith(expect.objectContaining({
+      sourcePlugin, autoReviewUserText: { kind: 'delegated-continuation' },
+    }));
+    else expect(f.deps.sendToAgentAccepted).toHaveBeenCalledWith('task', expect.anything(), expect.anything(), expect.objectContaining({
+      sourcePlugin, [AUTO_REVIEW_DELEGATED_CONTINUATION]: true,
+      persistUserMessage: expect.objectContaining({ sourcePlugin }),
+    }));
+  });
   it.each(['/compact', '  /compact focus', '\n/plugin install', '/'])
   ('escapes App-authored native command %j while preserving its authored history', (text) => {
     const input = appMessageInput([{ type: 'text', text }]);
@@ -98,7 +116,7 @@ describe('MCP App message input and dispatch', () => {
       expect(f.deps.sendToAgentAccepted).not.toHaveBeenCalled();
     } else {
       expect(f.deps.sendToAgentAccepted).toHaveBeenCalledWith(
-        'task', { type: 'user', content: [{ type: 'text', text: '\\/compact' }] }, undefined,
+        'task', { type: 'user', content: [{ type: 'text', text: '\\/compact' }] }, { agentKind: 'pi', resumeSessionId: 'persisted-sdk-session' },
         expect.objectContaining({
           [MCP_APP_MESSAGE_GUARD]: expect.any(Function),
           [AUTO_REVIEW_DELEGATED_CONTINUATION]: true,
@@ -119,6 +137,17 @@ describe('MCP App message input and dispatch', () => {
     held.release();
     await rejected;
     expect(f.deps.enqueue).not.toHaveBeenCalled();
+    expect(f.deps.sendToAgentAccepted).not.toHaveBeenCalled();
+  });
+
+  it.each(['meta', 'create'])('rejects revocation during historical task recovery (%s)', async (stage) => {
+    const f = fixture(false);
+    const held = f.hold(stage);
+    const rejected = expect(f.send()).rejects.toThrow('MCP_APP_CARD_UNAVAILABLE');
+    await held.ready;
+    f.revokeCard();
+    held.release();
+    await rejected;
     expect(f.deps.sendToAgentAccepted).not.toHaveBeenCalled();
   });
 
@@ -178,4 +207,27 @@ describe('MCP App message input and dispatch', () => {
       clientId: 'legacy-input', sourcePlugin: { pluginId: 'mcp-app:example' },
     })!()).rejects.toThrow('MCP_APP_CARD_UNAVAILABLE');
   });
+});
+
+// B8: one Host-authorized image must follow the existing attachment projection in
+// both send paths, without turning the external app into owner-authored input. Tier: unit.
+it.each([false, true])('sends an authorized image as an attachment (queued=%s)', async queue => {
+  const f = fixture(queue);
+  const files = [{ id: 'picked', name: 'image.png', path: 'cindy-media://blobs/picked.png', url: 'cindy-media://blobs/picked.png', ext: '.png', size: 8, category: 'image' as const, mimeType: 'image/png' }];
+  f.deps.buildQueueItem.mockImplementation(async raw => {
+    const params = raw as { message: string; persistedContent: string; files: typeof files };
+    return { ...params, clientId: 'image-input', model: '', effort: '', permissionMode: 'ask', workingDir: '', createOpts: { agentKind: 'pi', workingDir: '', model: '' },
+      chatMessage: { clientId: 'image-input', role: 'user', content: params.message },
+      text: params.message, persistedContent: JSON.stringify({ text: params.persistedContent, images: [{ url: files[0]!.url }] }) } as AgentInputQueuedMessage;
+  });
+  await createAppMessageSender(f.deps)('task', record, content, f.guard, files);
+  expect(f.deps.buildQueueItem).toHaveBeenCalledWith(expect.objectContaining({ files, autoReviewUserText: { kind: 'delegated-continuation' } }));
+  if (queue) {
+    expect(f.deps.enqueue.mock.calls[0]![1]).toMatchObject({ files });
+    expect(f.deps.enqueue.mock.calls[0]![1][MCP_APP_MESSAGE_GUARD]).toBeTypeOf('function');
+  } else {
+    expect(f.deps.sendToAgentAccepted.mock.calls[0]![1].content).toContainEqual({ type: 'image', path: files[0]!.url, mimeType: 'image/png' });
+    expect(f.deps.sendToAgentAccepted.mock.calls[0]![3][AUTO_REVIEW_DELEGATED_CONTINUATION]).toBe(true);
+    expect(f.deps.sendToAgentAccepted.mock.calls[0]![3].persistUserMessage.content).toContain(files[0]!.url);
+  }
 });

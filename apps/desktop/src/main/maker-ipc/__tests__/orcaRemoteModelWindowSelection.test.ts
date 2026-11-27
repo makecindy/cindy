@@ -2,10 +2,13 @@ import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import type { ProviderView } from '@cindy/model-providers';
-import { resolveVerifiedContextWindow } from '../../../shared/sessionContextWindow';
+import { resolveDeviceHandoffWindow, type DeviceProviderCatalogRead } from '../../remote-agent/controller/deviceCatalog';
+import { estimateHandoffTokens } from '../agentHandoff';
 import { createContextOverflowRollover } from '../contextOverflowRollover';
 import { applyPendingAgentSwitchIfIdle, createPendingAgentSwitchRegistry, projectPendingAgentSwitchIntent,
   type MakerSessionAgentSwitchHandlerDeps, type PendingAgentSwitchIntent } from '../sessionAgentSwitchHandler';
+import { readDeviceLinkModelSelectionOrigin, runDeviceLinkInvokeContext } from '../../device-link/invoke-context';
+import type { createSharedTaskPendingSelectionGuard } from '../sharedTaskSetting';
 
 // Run the production remote-selection adapter, send boundary and window rollover
 // together. Only device I/O, native processes and persistent writes are replaced.
@@ -17,12 +20,27 @@ function visit(node: ts.Node) {
   if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'applyAgentDeviceRuntimeSelection') {
     remoteSelection = node.initializer!.getText(source);
   }
-  if (ts.isPropertyAssignment(node) && node.name.getText(source) === 'selectSameAgentModel') {
-    selectionAdapter = node.initializer.getText(source);
-  }
   ts.forEachChild(node, visit);
 }
 visit(source);
+
+// selectSameAgentModel moved verbatim into sessionRuntimeSelectionLanding.ts: the adapter is the function
+// createSelectSameAgentModel returns, with the same names (throwIpcError, applySessionRuntimeSelection).
+function landingSelectionAdapter(): string {
+  const landing = ts.createSourceFile('sessionRuntimeSelectionLanding.ts',
+    readFileSync(new URL('../sessionRuntimeSelectionLanding.ts', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true);
+  let adapter = '';
+  const find = (node: ts.Node) => {
+    if (ts.isFunctionDeclaration(node) && node.name?.text === 'createSelectSameAgentModel') {
+      const returned = node.body?.statements.find(ts.isReturnStatement);
+      adapter = returned?.expression?.getText(landing) ?? '';
+    }
+    ts.forEachChild(node, find);
+  };
+  find(landing);
+  return adapter;
+}
+selectionAdapter = landingSelectionAdapter();
 const compile = (expression: string, bindings: Record<string, unknown>) => {
   const js = ts.transpileModule(`return ${expression};`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   return new Function(...Object.keys(bindings), js)(...Object.values(bindings));
@@ -37,23 +55,28 @@ function setup(agent: 'cc' | 'codex' | 'pi' = 'codex', role: string | null = 'wo
     setModel: vi.fn(), setFastMode: vi.fn(), requiresModelSwitchRebuild: vi.fn(async () => false) };
   let live: typeof runtime | undefined = cold ? undefined : runtime;
   const close = vi.fn(async () => { live = undefined; });
-  const rebuild = vi.fn();
+  const rebuild = vi.fn<(id: string, handoff: string, meta: { handoffCoverage?: string }) => Promise<void>>();
+  const history = [{ role: 'user', content: 'history', clientId: 'u1', createdAt: 1 }];
   const pending = createPendingAgentSwitchRegistry();
   const log = { info: vi.fn(), warn: vi.fn(), debug: vi.fn() };
+  const drainPersistQueue = vi.fn(async () => {});
   const rollover = createContextOverflowRollover({
     getSessionRow: async () => ({ ...row, contextTokens: state.tokens, contextWindow: 1000000 }),
     getLiveSession: () => live, rehydrateColdPiRuntimeForWindowVerification: async () => { live = runtime; },
-    drainPersistQueue: async () => {}, closeSession: close, commitRebuild: rebuild,
-    listMessages: async () => [{ role: 'user', content: 'history', clientId: 'u1', createdAt: 1 }],
+    drainPersistQueue, closeSession: close, commitRebuild: rebuild,
+    listMessages: async () => history,
     findLatestRebuildMeta: async () => null, setPendingHandoff: vi.fn(),
     replayUserMessage: async () => ({ accepted: true }),
     withCloseSuppressed: async (_id, run) => run(), log,
   });
-  const readProviders = vi.fn(async (): Promise<ProviderView[]> => [{
-    id: 'provider', routing: { [agentKind]: {} }, models: { [agentKind]: [
-      { id: 'new', contextWindow: state.window, contextWindowVerified: state.verified },
-    ] },
-  } as unknown as ProviderView]);
+  const readProviders = vi.fn(async (): Promise<DeviceProviderCatalogRead> => ({
+    stale: false,
+    views: [{
+      id: 'provider', routing: { [agentKind]: {} }, models: { [agentKind]: [
+        { id: 'new', contextWindow: state.window, contextWindowVerified: state.verified },
+      ] },
+    } as unknown as ProviderView],
+  }));
   const persist = vi.fn(async () => {});
   const throwIpcError = (code: string, message: string): never => { throw new Error(`[${code}] ${message}`); };
   const accept = vi.fn(() => 1);
@@ -62,11 +85,14 @@ function setup(agent: 'cc' | 'codex' | 'pi' = 'codex', role: string | null = 'wo
     maker: { getSession: () => live, closeSession: close }, agentSwitchPending: pending,
     hasSessionProvider: () => false, getSessionProvider: () => 'provider', normalizeSessionProviderId: (id: unknown) => id,
     dbToMakerAgentKind: () => agentKind, isSessionInTurn: () => false,
-    assertAgentDeviceRouteUsable: vi.fn(async () => {}), readUsableAgentDeviceProviders: readProviders,
-    resolveVerifiedContextWindow, contextOverflowRolloverHolder: rollover,
+    assertAgentDeviceRouteUsable: vi.fn(async () => {}), readUsableAgentDeviceCatalog: readProviders,
+    resolveDeviceHandoffWindow, resolveDesktopHandoffWindow: async () => null, contextOverflowRolloverHolder: rollover,
+    readDeviceLinkModelSelectionOrigin, isProviderShareAgentDeviceId: () => false,
     agentSwitchDeps: { onPendingSwitchChanged: vi.fn() }, projectPendingAgentSwitchIntent,
     wakeSessionInputAfterCredentialSwitch: vi.fn(), persistSessionFields: persist,
     updateScheduledPreference: vi.fn(async () => {}),
+    reconcileBotModelRoute: { acceptTaskChoice: vi.fn(async () => {}) },
+    unbindModelGroupSession: vi.fn(),
     isDeviceLinkInvoke: () => false, markRemoteSettingPersistedInsideHandler: vi.fn(),
     setSessionProvider: vi.fn(), setSessionEffort: vi.fn(), setSessionFastMode: vi.fn(), getSessionEffort: () => 'high',
     recordUserSessionRuntimeMutation: () => 1, broadcastSessionRuntimeProjection: async () => {},
@@ -76,10 +102,13 @@ function setup(agent: 'cc' | 'codex' | 'pi' = 'codex', role: string | null = 'wo
   const assertRuntimeOwnerCurrent = vi.fn();
   const selectSameAgentModel = compile(selectionAdapter, { throwIpcError,
     applySessionRuntimeSelection: (sessionId: string, model: string, providerId: unknown,
-      selection: { effort: string; fastMode: boolean; confirmedContextWindow?: number }, internalOptions: unknown) => applyRemote({
+      selection: { effort: string; fastMode: boolean; confirmedContextWindow?: number },
+      internalOptions: { pendingSelectionAccess?: ReturnType<typeof createSharedTaskPendingSelectionGuard> }) => applyRemote({
       sessionId, model, providerId, atomicSelection: selection, internalOptions, runtimeStatus: row,
-      confirmedContextWindow: selection.confirmedContextWindow, assertRuntimeOwnerCurrent,
-      assertSharedTaskCurrent: { admit: vi.fn() }, supersededByOwnerBoundary: () => false,
+      confirmedContextWindow: selection.confirmedContextWindow,
+      assertRuntimeOwnerCurrent: () => { internalOptions.pendingSelectionAccess?.(); assertRuntimeOwnerCurrent(); },
+      assertSharedTaskCurrent: internalOptions.pendingSelectionAccess ?? { admit: vi.fn() },
+      supersededByOwnerBoundary: () => { internalOptions.pendingSelectionAccess?.(); return false; },
     }),
   });
   const deps = { pendingSwitches: pending, getLiveSession: () => live, selectSameAgentModel, log } as unknown as MakerSessionAgentSwitchHandlerDeps;
@@ -90,11 +119,41 @@ function setup(agent: 'cc' | 'codex' | 'pi' = 'codex', role: string | null = 'wo
   const fallback = () => applyRemote({ sessionId: 's1', model: 'new', providerId: 'other',
     atomicSelection: { effort: 'high', fastMode: true }, internalOptions: { source: 'fallback' }, runtimeStatus: row,
     assertRuntimeOwnerCurrent, assertSharedTaskCurrent: { admit: vi.fn() }, supersededByOwnerBoundary: () => false });
-  return { state, stage, fallback, accept, send: () => applyPendingAgentSwitchIfIdle(deps, 's1'),
-    readProviders, pending, runtime, close, rebuild, persist, rollover, assertRuntimeOwnerCurrent };
+  return { state, stage, fallback, accept, history,
+    send: (nextInputChars?: number) => applyPendingAgentSwitchIfIdle(deps, 's1', { nextInputChars }),
+    readProviders, pending, runtime, close, rebuild, persist, rollover, drainPersistQueue, assertRuntimeOwnerCurrent };
 }
 
 describe('Orca remote-Agent window protection at send', () => {
+  // 2026-11-18 owner Device Link decision. The production pending apply and rollover must
+  // accept a pressured 240k/200k owner intent without a numeric receipt, but still reject
+  // unverified windows before closing. This guard-tier fixture substitutes device and DB IO.
+  it('uses the owner intent, rechecks the executor window and rebuilds only on send', async () => {
+    const h = setup('cc', 'lead', true);
+    h.state.tokens = 240_000;
+    await runDeviceLinkInvokeContext({ controllerDeviceId: 'controller', channel: 'maker:switch-session-agent' }, () => h.stage());
+    expect(h.pending.get('s1')).toMatchObject({ deviceLinkModelSelectionOrigin: 'owner' });
+    expect(projectPendingAgentSwitchIntent(h.pending.get('s1')!)).not.toHaveProperty('deviceLinkModelSelectionOrigin');
+    expect(h.rebuild).not.toHaveBeenCalled();
+    h.state.verified = false;
+    await expect(h.send()).rejects.toThrow('target context window could not be verified');
+    expect(h.persist).not.toHaveBeenCalled();
+    expect(h.rebuild).not.toHaveBeenCalled();
+    h.state.verified = true;
+    // 105K input leaves a 25K-token replay at a verified 200K window. This
+    // catches losing the verified budget or losing the send's workspace reserve.
+    h.history.push({ role: 'assistant', content: 'Prior output '.repeat(8_000), clientId: 'a1', createdAt: 2 });
+    await h.send(105_000);
+    expect(h.rebuild).toHaveBeenCalledOnce();
+    const [, handoff, marker] = h.rebuild.mock.calls[0]!;
+    expect(marker.handoffCoverage).toBe('condensed');
+    expect(handoff).toContain('history');
+    expect(handoff.length).toBeGreaterThan(16_000);
+    expect(estimateHandoffTokens(handoff)).toBeLessThanOrEqual(25_000);
+    expect(h.persist).toHaveBeenCalledOnce();
+    expect(h.pending.get('s1')).toBeUndefined();
+  });
+
   const cases = (['cc', 'pi'] as const).flatMap(agent => ['lead', 'worker'].flatMap(role =>
     [false, true].map(cold => ({ agent, role, cold }))));
   it.each(cases)('rechecks pressure for $agent $role cold=$cold and retains an unconfirmed intent', async ({ agent, role, cold }) => {
@@ -207,6 +266,72 @@ describe('Orca remote-Agent window protection at send', () => {
     expect(h.pending.get('s1')).toBeDefined();
     expect(h.runtime.setModel).not.toHaveBeenCalled();
     expect(h.persist).not.toHaveBeenCalled();
+  });
+});
+
+function guestContext() {
+  let current = true;
+  return {
+    context: { controllerDeviceId: 'guest-device', channel: 'maker:input:enqueue', sharedTask: {
+      author: { sharedTaskId: 'shared', sessionId: 's1', memberId: 'guest', accountId: 'guest', displayName: 'Guest' },
+      isCurrent: () => current,
+      authorize: (operation: string) => current && operation === 'input.send',
+    } },
+    revoke: () => { current = false; },
+  };
+}
+
+// #7825 review regression, unit: the production remote adapter must reject
+// revoked guest sends before setModel/close/persistence and retain the owner choice.
+// The local runtime preflight tests do not exercise either remote admission site.
+// Standalone: 12.29s (11.88s collecting the existing adapter/rollover dependency
+// graph, 149ms executing tests); no module resets, real I/O or timed waits added.
+describe('shared-task remote selection admission', () => {
+  it.each([
+    { role: null, rebuild: false },
+    { role: null, rebuild: true },
+    { role: 'worker', rebuild: false },
+  ])('rejects removal during remote model preflight (role=$role rebuild=$rebuild)', async ({ role, rebuild }) => {
+    const h = setup('codex', role);
+    const guest = guestContext();
+    await h.stage();
+    h.runtime.requiresModelSwitchRebuild.mockImplementationOnce(async () => {
+      guest.revoke();
+      return rebuild;
+    });
+    await expect(runDeviceLinkInvokeContext(guest.context, h.send)).rejects.toThrow('PERMISSION_DENIED');
+    expect(h.pending.get('s1')?.model).toBe('new');
+    expect(h.runtime.setModel).not.toHaveBeenCalled();
+    expect(h.close).not.toHaveBeenCalled();
+    expect(h.persist).not.toHaveBeenCalled();
+    await h.send();
+    expect(h.pending.get('s1')).toBeUndefined();
+    expect(h.persist).toHaveBeenCalledOnce();
+  });
+
+  it('retains a cold pending choice when membership is revoked during window verification', async () => {
+    const h = setup('codex', 'worker', true);
+    const guest = guestContext();
+    await h.stage();
+    h.drainPersistQueue.mockImplementationOnce(async () => { guest.revoke(); });
+    await expect(runDeviceLinkInvokeContext(guest.context, h.send)).rejects.toThrow('PERMISSION_DENIED');
+    expect(h.pending.get('s1')?.model).toBe('new');
+    expect(h.close).not.toHaveBeenCalled();
+    expect(h.rebuild).not.toHaveBeenCalled();
+    expect(h.persist).not.toHaveBeenCalled();
+  });
+
+  it('finishes an admitted window rebuild when membership is revoked during close', async () => {
+    const h = setup('cc', null);
+    const guest = guestContext();
+    await h.stage(200000);
+    h.state.tokens = 190000;
+    const close = h.close.getMockImplementation()!;
+    h.close.mockImplementationOnce(async () => { await close(); guest.revoke(); });
+    await runDeviceLinkInvokeContext(guest.context, h.send);
+    expect(h.rebuild).toHaveBeenCalledOnce();
+    expect(h.persist).toHaveBeenCalledWith('s1', expect.objectContaining({ model: 'new' }));
+    expect(h.pending.get('s1')).toBeUndefined();
   });
 });
 

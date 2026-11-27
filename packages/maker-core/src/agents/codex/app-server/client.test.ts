@@ -1,9 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { AppServerClient, detectAuthInvalidationReason } from './client.js';
+import {
+  AppServerClient,
+  classifyStderrLine,
+  detectAuthInvalidationReason,
+  type OversizedNotification,
+} from './client.js';
 import type { Logger } from '../../../interfaces/logger.js';
 import type { Transport, LineHandler, StderrHandler, CloseHandler } from './transport.js';
 import { Method } from './protocol.js';
+import { readAccountRateLimitsWithRefresh } from './account-rate-limits.js';
 
 class FakeTransport implements Transport {
   readonly lines: string[] = [];
@@ -213,6 +219,39 @@ describe('detectAuthInvalidationReason', () => {
   });
 });
 
+// Log redaction: the timing trace line carries thread and response ids. It exists only for
+// the speed display and must never reach Cindy's logs, while other stderr stays logged as
+// before. Unit tier through the client's stderr entry point.
+describe('AppServerClient response timing', () => {
+  it('hands the timing line to the speed and keeps it out of the log', () => {
+    const transport = new FakeTransport();
+    const lines: string[] = [];
+    const recording: Logger = {
+      ...logger,
+      debug: (_m: string, d?: { line?: string }) => { if (d?.line) lines.push(d.line); },
+      warn: (_m: string, d?: { line?: string }) => { if (d?.line) lines.push(d.line); },
+      error: (_m: string, d?: { line?: string }) => { if (d?.line) lines.push(d.line); },
+      child: () => recording,
+    };
+    const onResponseTiming = vi.fn();
+    const client = new AppServerClient({ createTransport: () => transport, logger: recording, onResponseTiming });
+    client.start();
+    const payload = JSON.stringify({ type: 'responsesapi.websocket_timing', timing_metrics: {
+      response_id: 'resp_1', num_sampled_tokens_total: 51, critical_path: { sampling_and_stream_total_ms: 894 },
+    } });
+    transport.emitStderr(`TRACE codex_api::responses_websocket_timing: responses websocket timing thread_id="t" turn_id="u" warmup=false payload=${JSON.stringify(payload)}`);
+    // Unreadable timing lines are dropped too: they carry the same ids.
+    transport.emitStderr('TRACE codex_api::responses_websocket_timing: responses websocket timing thread_id="t" payload="{"');
+    transport.emitStderr('WARN codex_core: something else');
+
+    expect(onResponseTiming).toHaveBeenCalledTimes(1);
+    expect(onResponseTiming).toHaveBeenCalledWith({
+      threadId: 't', turnId: 'u', responseId: 'resp_1', sampledTokensTotal: 51, samplingMs: 894,
+    });
+    expect(lines).toEqual(['WARN codex_core: something else']);
+  });
+});
+
 describe('AppServerClient auth invalidation', () => {
   it('keeps stderr diagnostic-only even when it contains auth keywords', () => {
     const transport = new FakeTransport();
@@ -379,6 +418,43 @@ describe('AppServerClient close completion', () => {
 });
 
 describe('AppServerClient request timeout', () => {
+  // PR #9916: a renderer deadline cannot release a native request. Drive the
+  // quota reader through the real client with a transport that never replies.
+  it.each([false, true])('settles stalled quota RPCs and permits a fresh read (renewed=%s)', async renewed => {
+    vi.useFakeTimers();
+    const transport = new FakeTransport();
+    const client = new AppServerClient({ createTransport: () => transport, logger });
+    client.start();
+    try {
+      let outcome: unknown;
+      const pending = readAccountRateLimitsWithRefresh((method, params, options) => client.request(method, params, options));
+      void pending.then(value => { outcome = value; }, error => { outcome = error; });
+      if (renewed) {
+        const initial = JSON.parse(transport.lines.at(-1)!);
+        transport.emitLine({ id: initial.id, error: { code: -32603, message: '401 token_expired' } });
+        await vi.advanceTimersByTimeAsync(0);
+        const refresh = JSON.parse(transport.lines.at(-1)!);
+        expect(refresh.method).toBe('account/read');
+        transport.emitLine({ id: refresh.id, result: {} });
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      const stalled = JSON.parse(transport.lines.at(-1)!);
+      expect(stalled.method).toBe(Method.AccountRateLimitsRead);
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(outcome).toBeInstanceOf(Error);
+      expect((outcome as Error).message).toContain('timed out');
+      // A late old reply cannot fulfill the next caller's request.
+      const retry = readAccountRateLimitsWithRefresh((method, params, options) => client.request(method, params, options));
+      const fresh = JSON.parse(transport.lines.at(-1)!);
+      transport.emitLine({ id: stalled.id, result: { rateLimits: { planType: 'old' } } });
+      transport.emitLine({ id: fresh.id, result: { rateLimits: { planType: 'plus' } } });
+      await expect(retry).resolves.toEqual({ rateLimits: { planType: 'plus' } });
+    } finally {
+      await client.close();
+      vi.useRealTimers();
+    }
+  });
+
   it('rejects and removes a pending request when the server stays connected without responding', async () => {
     vi.useFakeTimers();
     try {
@@ -519,5 +595,284 @@ describe('AppServerClient server requests', () => {
       id: 'server-req-1',
       result: { answers: { q1: { answers: ['A'] } } },
     });
+  });
+});
+
+describe('AppServerClient oversized lines', () => {
+  const LIMIT = 256;
+  // 大字段要比信封读取窗口 (行首 / 行尾各 4 KiB) 更长, 才是真实超限行的形态。
+  const bulk = 'x'.repeat(8 * 1024);
+
+  function setup(onOversizedNotification?: (notification: OversizedNotification) => boolean) {
+    const transport = new FakeTransport();
+    const onTransportError = vi.fn();
+    const client = new AppServerClient({
+      createTransport: () => transport,
+      logger,
+      maxLineBytes: LIMIT,
+      onTransportError,
+      onOversizedNotification,
+    });
+    return { transport, client, onTransportError };
+  }
+
+  it('fails only the request whose response is oversized and keeps the connection usable', async () => {
+    const { transport, client, onTransportError } = setup();
+    client.start();
+
+    const oversized = client.request('thread/resume');
+    const normal = client.request('model/list');
+    transport.emitLine({ id: 1, result: { history: bulk } });
+    transport.emitLine({ id: 2, result: { data: [] } });
+
+    await expect(oversized).rejects.toMatchObject({
+      name: 'AppServerMessageTooLargeError',
+      method: 'thread/resume',
+      limit: LIMIT,
+    });
+    await expect(normal).resolves.toEqual({ data: [] });
+    expect(onTransportError).not.toHaveBeenCalled();
+  });
+
+  it('answers an oversized server request with an error instead of invoking its handler', async () => {
+    const { transport, client, onTransportError } = setup();
+    const handler = vi.fn(async () => ({ decision: 'accept' }));
+    client.setRequestHandler('item/fileChange/requestApproval', handler);
+    client.start();
+
+    transport.emitLine({ id: 'server-req-1', method: 'item/fileChange/requestApproval', params: { bulk } });
+
+    await vi.waitFor(() => expect(transport.lines).toHaveLength(1));
+    expect(JSON.parse(transport.lines[0] ?? '')).toMatchObject({
+      id: 'server-req-1',
+      error: { code: -32600 },
+    });
+    expect(handler).not.toHaveBeenCalled();
+    expect(onTransportError).not.toHaveBeenCalled();
+  });
+
+  it('drops an oversized notification nobody subscribed to without asking the host', () => {
+    const onOversizedNotification = vi.fn<(notification: OversizedNotification) => boolean>(() => false);
+    const { transport, client, onTransportError } = setup(onOversizedNotification);
+    client.start();
+
+    transport.emitLine({ method: 'item/commandExecution/outputDelta', params: { delta: bulk } });
+
+    expect(onOversizedNotification).not.toHaveBeenCalled();
+    expect(onTransportError).not.toHaveBeenCalled();
+  });
+
+  it('lets the host degrade a subscribed oversized notification and keeps delivering later ones', () => {
+    const onOversizedNotification = vi.fn<(notification: OversizedNotification) => boolean>(() => true);
+    const { transport, client, onTransportError } = setup(onOversizedNotification);
+    const turnDiffUpdated = vi.fn();
+    client.onNotification('turn/diff/updated', turnDiffUpdated);
+    client.start();
+
+    const line = JSON.stringify({
+      method: 'turn/diff/updated',
+      params: { threadId: 'thread-1', turnId: 'turn-1', diff: bulk },
+    });
+    transport.emitLine(line);
+    transport.emitLine({ method: 'turn/diff/updated', params: { threadId: 'thread-1', turnId: 'turn-1', diff: 'small' } });
+
+    expect(onOversizedNotification).toHaveBeenCalledWith({
+      method: 'turn/diff/updated',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      length: line.length,
+    });
+    expect(turnDiffUpdated).toHaveBeenCalledTimes(1);
+    expect(turnDiffUpdated).toHaveBeenCalledWith({ threadId: 'thread-1', turnId: 'turn-1', diff: 'small' });
+    expect(onTransportError).not.toHaveBeenCalled();
+  });
+
+  it('reads item identity before the bulky value and its routing after it', () => {
+    const onOversizedNotification = vi.fn<(notification: OversizedNotification) => boolean>(() => true);
+    const { transport, client } = setup(onOversizedNotification);
+    client.onNotification('item/completed', vi.fn());
+    client.start();
+
+    const line = JSON.stringify({
+      method: 'item/completed',
+      params: {
+        item: {
+          type: 'fileChange',
+          id: 'patch-1',
+          // 大字段之后、item 内部的同名字段不能被当成路由。
+          changes: [{ path: 'data.json', diff: bulk, meta: { kind: 'add', threadId: 'nested-thread' } }],
+          status: 'completed',
+        },
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        completedAtMs: 5,
+      },
+    });
+    transport.emitLine(line);
+
+    expect(onOversizedNotification).toHaveBeenCalledWith({
+      method: 'item/completed',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      itemId: 'patch-1',
+      itemType: 'fileChange',
+      length: line.length,
+    });
+  });
+
+  it('leaves routing empty when the trailing members are not at the params level', () => {
+    const onOversizedNotification = vi.fn<(notification: OversizedNotification) => boolean>(() => true);
+    const { transport, client } = setup(onOversizedNotification);
+    client.onNotification('item/completed', vi.fn());
+    client.start();
+
+    // params 后面还有顶层成员: 行尾的层级对不上, 宁可读不到也不猜。
+    transport.emitLine({
+      method: 'item/completed',
+      params: { item: { type: 'fileChange', content: bulk }, threadId: 'thread-1', turnId: 'turn-1' },
+      extra: 1,
+    });
+
+    expect(onOversizedNotification).toHaveBeenCalledWith(
+      expect.not.objectContaining({ threadId: expect.anything() }),
+    );
+    expect(onOversizedNotification.mock.calls[0]?.[0]).toMatchObject({ method: 'item/completed' });
+  });
+
+  it('recovers a terminal turn from both ends, including a nested error after the items', () => {
+    const onOversizedNotification = vi.fn<(notification: OversizedNotification) => boolean>(() => true);
+    const { transport, client } = setup(onOversizedNotification);
+    client.onNotification('turn/completed', vi.fn());
+    client.start();
+
+    // 与 Codex 0.159.2 的 Turn 字段顺序一致: id, items, itemsView, status, error, ...
+    const line = JSON.stringify({
+      method: 'turn/completed',
+      params: {
+        threadId: 'thread-1',
+        turn: {
+          id: 'turn-1',
+          items: [{ type: 'fileChange', id: 'patch-1', changes: [{ path: 'data.json', diff: bulk }] }],
+          itemsView: 'full',
+          status: 'failed',
+          error: { message: 'boom', codexErrorInfo: null, additionalDetails: null },
+          startedAt: 1,
+          completedAt: 2,
+          durationMs: 1000,
+        },
+      },
+    });
+    transport.emitLine(line);
+
+    expect(onOversizedNotification).toHaveBeenCalledWith({
+      method: 'turn/completed',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      turn: {
+        itemsView: 'full',
+        status: 'failed',
+        error: { message: 'boom', codexErrorInfo: null, additionalDetails: null },
+        startedAt: 1,
+        completedAt: 2,
+        durationMs: 1000,
+      },
+      length: line.length,
+    });
+  });
+
+  it.each([
+    ['the host cannot degrade the notification', { method: 'turn/completed', params: { bulk } }, () => false],
+    ['the envelope is unrecognizable', { params: { bulk }, method: 'turn/completed' }, () => true],
+  ])('retires the connection when %s', (_case, message, onOversizedNotification) => {
+    const { transport, client, onTransportError } = setup(onOversizedNotification);
+    client.onNotification('turn/completed', vi.fn());
+    client.start();
+
+    transport.emitLine(message);
+
+    expect(onTransportError).toHaveBeenCalledTimes(1);
+    expect(onTransportError.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+    expect((onTransportError.mock.calls[0]?.[0] as Error).message).toMatch(/exceeds maxLineBytes/);
+  });
+});
+
+// 测试价值：依据 Codex stderr 告警噪音审计（核实 orphan output 与 rmcp close 哪些是真错误）；此前 classifyStderrLine
+// 按 warn/error 关键字一刀切提升，导致 normalize 清理孤立输出与 MCP 会话收尾竞态刷满 WARN/ERROR；失效后果是正常会话噪音掩盖真实 MCP 故障、
+// 或反过来把握手/流异常吞进 debug；生产入口 classifyStderrLine / AppServerClient stderr 处理；最小失败输入为两类真实 Rust 日志行；tier: unit。
+describe('AppServerClient stderr classification', () => {
+  it.each([
+    '2026-11-25T02:00:00Z  WARN codex_core::context_manager::normalize: Orphan function call output for call id: call_abc123',
+    'WARN codex_core::context_manager::normalize: Orphan custom tool call output for call id: call_custom_1',
+    'WARN codex_core::context_manager::normalize: Orphan tool search output for call id: call_search_9',
+    'WARN rmcp::transport::streamable_http_client: fail to delete session: HTTP 404 Unknown session',
+    'WARN rmcp::transport::streamable_http_client: Server does not support delete session',
+    'WARN rmcp::transport::worker: worker quit with reason: ClientClosed',
+  ])('downgrades expected normalize and session-404/client-closed rmcp noise during active runs: %s', (line) => {
+    expect(classifyStderrLine(line, { closing: false })).toBe('debug');
+  });
+
+  it.each([
+    ['WARN Orphan function call output for call id: unprefixed_tool_output', 'warn'],
+    ['WARN rmcp::transport::streamable_http_client: fail to delete session: HTTP 500 Internal Server Error', 'warn'],
+    ['WARN rmcp::transport::streamable_http_client: fail to delete session: HTTP 401 Unauthorized', 'warn'],
+    ['WARN rmcp::transport::streamable_http_client: fail to delete session: request timed out', 'warn'],
+    ['WARN rmcp::transport::streamable_http_client: session cleanup timed out after 2s', 'warn'],
+    ['WARN rmcp::transport::worker: worker quit with reason: TransportClosed', 'warn'],
+    ['ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed', 'error'],
+    ['WARN rmcp::service: Failed to close session: channel closed', 'warn'],
+    ['WARN rmcp::service: fail to close sink: broken pipe', 'warn'],
+    ['WARN codex_rmcp_client: Could not schedule remote MCP server process termination on drop', 'warn'],
+    ['ERROR codex_mcp::mcp_connection_manager: MCP startup failed: connection refused', 'error'],
+    ['WARN codex_rmcp_client: handshaking with MCP server failed: 502 Bad Gateway', 'warn'],
+    ['ERROR rmcp::service: Protocol error on incoming message: invalid json', 'error'],
+    ['ERROR rmcp::transport::sse_client: sse client event stream terminated with error: EOF', 'error'],
+    ['ERROR rmcp::transport::worker: worker quit with join error: task panicked', 'error'],
+    ['ERROR rmcp::transport::worker: worker quit with fatal: I/O error: connection reset by peer', 'error'],
+  ] as const)('keeps mid-run transport closes, 401/5xx delete failures, and genuine MCP errors loud while running (%s -> %s)', (line, expected) => {
+    expect(classifyStderrLine(line, { closing: false })).toBe(expected);
+  });
+
+  it('downgrades rmcp teardown transport closes only after AppServerClient enters close(), while keeping 401/5xx and I/O fatals loud', async () => {
+    const transport = new FakeTransport();
+    const spyLogger: Logger = {
+      trace: vi.fn(),
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      fatal: vi.fn(),
+      child: () => spyLogger,
+    };
+    const client = new AppServerClient({ createTransport: () => transport, logger: spyLogger });
+    client.start();
+
+    transport.emitStderr('WARN rmcp::transport::worker: worker quit with reason: TransportClosed');
+    expect(spyLogger.warn).toHaveBeenCalledTimes(1);
+
+    await client.close();
+    vi.mocked(spyLogger.warn).mockClear();
+    vi.mocked(spyLogger.error).mockClear();
+    vi.mocked(spyLogger.debug).mockClear();
+
+    for (const closingNoise of [
+      'WARN rmcp::transport::worker: worker quit with reason: TransportClosed',
+      'ERROR rmcp::transport::worker: worker quit with fatal: Transport [StreamableHttp] channel closed',
+      'WARN rmcp::service: Failed to close session: channel closed',
+      'WARN rmcp::service: fail to close sink: broken pipe',
+      'WARN rmcp::transport::streamable_http_client: session cleanup timed out after 2s',
+      'WARN rmcp::transport::streamable_http_client: fail to delete session: connection refused',
+      'WARN codex_rmcp_client: Could not schedule remote MCP server process termination on drop',
+    ]) {
+      transport.emitStderr(closingNoise);
+    }
+    expect(spyLogger.warn).not.toHaveBeenCalled();
+    expect(spyLogger.error).not.toHaveBeenCalled();
+    expect(spyLogger.debug).toHaveBeenCalledTimes(7);
+
+    transport.emitStderr('WARN rmcp::transport::streamable_http_client: fail to delete session: HTTP 502 Bad Gateway');
+    transport.emitStderr('WARN rmcp::transport::streamable_http_client: fail to delete session: HTTP 401 Unauthorized');
+    transport.emitStderr('ERROR rmcp::transport::worker: worker quit with fatal: I/O error: connection reset by peer');
+    expect(spyLogger.warn).toHaveBeenCalledTimes(2);
+    expect(spyLogger.error).toHaveBeenCalledTimes(1);
   });
 });

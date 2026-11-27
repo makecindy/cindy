@@ -1,7 +1,34 @@
-import { ipcMain, shell } from 'electron';
+import { McpAppViewSlots } from '@cindy/maker-shared/mcp-app-controller';
+import { createMcpAppsService } from './service.js';
+import { extractIpcError } from '../../shared/ipcError.js';
+import { pagePermissionGrants, onPagePermissionSessionChanged } from './pagePermissions.js';
+import { supportsComposerDrag } from './composerDrag.js';
+import { createPluginFileAccess } from './pluginFileAccess.js';
+import { configurePluginAppearanceFiles } from './appearance.js';
+import { mediaTypeForLibraryPath } from '../cindy-brain/runtime/ghostFiles.js';
+import { ipcMain, shell, BrowserWindow, dialog, webContents } from 'electron';
+import { bindPluginUiResource, finishPluginUiAction, hasComposerAttachmentInWindow } from './hostUi.js';
+import { readPluginHostUi } from '../mcp-integrations/plugin-app-registry.js';
+import { nativePluginUi, parsePluginUiInterests } from './nativeRuntime.js';
+import { manageAppSettings } from '../app-settings/sections.js';
+import { matchesGhostHostUiAttachment, isDynamicComposerContribution, type GhostHostUiContribution } from '@cindy/plugin-protocol';
+import { preparePluginAttachmentResult } from './pluginAttachment.js';
+import { getActiveAppSession } from '../appSessionState.js';
+import { stageLocalFileToCache, cleanupOwnedUnpersistedStagedChatAttachments } from '../file-browser/remote-file-cache.js';
+import { ingestMedia } from '../cindy-media/ingest.js';
+import { ingestChatImageBuffer } from '../cindy-media/chatAttachments.js';
+import { resolveSafe } from '../cindy-media/blobStore.desktop.js';
+import { GHOST_HANDOFF_MAX_BYTES_PER_FILE } from '../../shared/ghost.js';
+import fs from 'node:fs/promises';
+import { saveAppDownload } from './downloadFile.js';
 import { randomUUID } from 'node:crypto';
+import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { and, eq, isNull, sql } from 'drizzle-orm';
-import type { InteractionRequest, InteractionDecision } from '@cindy/maker-core';
+import type {
+  InteractionRequest,
+  InteractionDecision,
+  AutoReviewDecision,
+} from '@cindy/maker-core';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { messages, sessions } from '../localDb/schema.js';
 import { createMessage, broadcastMessageRow } from '../localDb/ipc/messages.js';
@@ -12,11 +39,11 @@ import { createLogger } from '../logger.js';
 import { getMcpAppRevisionKey } from '../secrets/providerSecretStore.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
-import { getRemoteLinkCloseEpoch, remoteInvoke } from '../device-link/index.js';
+import { getRemoteLinkCloseEpoch, onRemoteLinkClosed, remoteInvoke } from '../device-link/index.js';
 import { getAppCapabilities } from '../appCapabilities.js';
-import { McpAppsHost, type McpAppsHostDeps } from './host.js';
+import { McpAppsHost, appServerRevision, validateComposerAttachment, type McpAppsHostDeps } from './host.js';
 import { readAppServer, setMcpAppsHost } from './runtime.js';
-import { MCP_APPS_INVOKE, parseMcpAppRecord } from '../../shared/mcpApps.js';
+import { MCP_APPS_INVOKE, MCP_APP_COMPOSER_ATTACHMENT_EVENT, parseMcpAppRecord, type McpAppComposerAttachment } from '../../shared/mcpApps.js';
 import { handleMcpAppOperation, handleMcpAppFrameOperation } from './operations.js';
 import { RemoteMcpAppViews } from './remoteViews.js';
 import {
@@ -24,6 +51,7 @@ import {
   removeMcpAppDocument,
   assertMcpAppDocumentCaller,
   setMcpAppCallerCleanup,
+  setMcpAppFileReader,
 } from './sandboxProtocol.js';
 
 export function registerMcpAppsIpc(
@@ -33,168 +61,353 @@ export function registerMcpAppsIpc(
     input: InteractionRequest,
     signal: AbortSignal,
   ) => Promise<InteractionDecision>,
+  review?: (
+    sessionId: string,
+    serverId: string,
+    tool: string,
+    args: Record<string, unknown>,
+    originDescription?: string,
+    toolDefinition?: Pick<Tool, 'name' | 'description' | 'inputSchema'>,
+  ) => Promise<AutoReviewDecision>,
+  allowPendingPage?: (sessionId: string, requestId: string) => void,
+  /** Windows that render a task composer. A detached sidebar has none of its own. */
+  isComposerWindow?: (window: BrowserWindow) => boolean,
 ): void {
+  let saving = false;
+  const slots = new McpAppViewSlots();
+  let assertSessionForComposer: ((sessionId: string) => Promise<{
+    owner: NonNullable<ReturnType<typeof getCurrentDbClientSnapshot>>;
+    session: { remoteHostId?: string | null };
+  }>) | undefined;
+  const providerCalls = new Map<string, Map<string, AbortController>>();
   const currentOwner = () => getCurrentDbClientSnapshot() ?? undefined;
-  const assertSession = async (sessionId: string) => {
-    const owner = currentOwner();
-    if (!owner) throw new Error('MCP_APP_OWNER_UNAVAILABLE');
-    const [session] = await owner.client.drizzle
-      .select()
-      .from(sessions)
-      .where(eq(sessions.id, sessionId))
-      .limit(1);
-    if (currentOwner() !== owner || !session || session.status !== 'active')
-      throw new Error('MCP_APP_SESSION_UNAVAILABLE');
-    return { owner, session };
-  };
-  const host = new McpAppsHost({
-    owner: currentOwner,
-    config: readAppServer,
-    revisionKey: getMcpAppRevisionKey,
-    readCard: async (sessionId, clientId) => {
-      const { owner } = await assertSession(sessionId);
-      const [row] = await owner.client.drizzle
-        .select({ content: messages.content, meta: messages.agentMeta })
-        .from(messages)
-        .where(
-          and(
-            eq(messages.sessionId, sessionId),
-            eq(messages.clientId, clientId),
-            eq(messages.role, 'assistant'),
-            isNull(messages.rewindAt),
-            sql`EXISTS (SELECT 1 FROM sessions WHERE sessions.id = ${sessionId} AND sessions.status = 'active' AND (sessions.cleared_at IS NULL OR ${messages.createdAt} > sessions.cleared_at))`,
-          ),
-        )
-        .limit(1);
-      if (currentOwner() !== owner || !row) throw new Error('MCP_APP_CARD_UNAVAILABLE');
-      const meta = row.meta ? JSON.parse(row.meta) : null;
-      const record = parseMcpAppRecord(row.content ? JSON.parse(row.content) : null);
-      if (!record || meta?.mcpApp !== true) throw new Error('MCP_APP_CARD_UNAVAILABLE');
-      return record;
+  const pluginFiles = configurePluginAppearanceFiles(createPluginFileAccess({
+    libraryPath: async (instance, relativePath) => {
+      const { getGhostLibrarySlot } = await import('../cindy-brain/index.js');
+      return getGhostLibrarySlot().resolvePanelFilePath(instance, relativePath);
     },
-    writeCard: async (sessionId, clientId, record) => {
-      const { owner, session } = await assertSession(sessionId);
-      const scope = captureDataOwnerBroadcastScope();
-      const [row] = await owner.client.drizzle
-        .select()
-        .from(messages)
-        .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId)))
-        .limit(1);
-      if (currentOwner() !== owner) throw new Error('MCP_APP_OWNER_CHANGED');
-      if (row) {
-        if (row.rewindAt || (session.clearedAt && row.createdAt <= session.clearedAt))
-          throw new Error('MCP_APP_CARD_UNAVAILABLE');
-        const existing = parseMcpAppRecord(row.content ? JSON.parse(row.content) : null);
-        const meta = row.agentMeta ? JSON.parse(row.agentMeta) : null;
-        if (
-          row.role !== 'assistant' ||
-          meta?.mcpApp !== true ||
-          !existing ||
-          existing.serverRevision !== record.serverRevision
-        )
-          throw new Error('MCP_APP_CARD_UNAVAILABLE');
-        const updated = await owner.client.drizzle
-          .update(messages)
-          .set({ content: JSON.stringify({ mcpApp: record }) })
-          .where(
-            and(
-              eq(messages.id, row.id),
-              isNull(messages.rewindAt),
-              sql`EXISTS (SELECT 1 FROM sessions WHERE sessions.id = ${sessionId} AND sessions.status = 'active' AND (sessions.cleared_at IS NULL OR ${messages.createdAt} > sessions.cleared_at))`,
-            ),
-          )
-          .returning();
-        if (currentOwner() !== owner || !updated[0]) throw new Error('MCP_APP_CARD_UNAVAILABLE');
-        broadcastMessageRow(sessionId, messageToCamel(updated[0]), scope);
-      } else {
-        // Only the pending card may be inserted. Completion cannot resurrect a deleted grant.
-        if (record.result !== undefined || record.cancelled !== undefined)
-          throw new Error('MCP_APP_CARD_UNAVAILABLE');
-        await createMessage(
-          sessionId,
-          { clientId, role: 'assistant', content: { mcpApp: record }, agentMeta: { mcpApp: true } },
-          {
-            broadcastOwnerScope: scope,
-            beforePublish: async () => {
-              const latest = await assertSession(sessionId);
-              if (latest.owner !== owner || latest.session.clearedAt !== session.clearedAt)
-                throw new Error('MCP_APP_CARD_UNAVAILABLE');
-            },
+    libraryMime: mediaTypeForLibraryPath,
+    openHandoff: async (instance, ref) => {
+      const { getGhostHandoffStore } = await import('../cindy-brain/index.js');
+      return getGhostHandoffStore().openForPage(instance, ref);
+    },
+  }));
+  const { host, assertSession } = createMcpAppsService({
+    currentOwner, readAppServer, getMcpAppRevisionKey, send, request, review, allowPendingPage,
+    writeMessage: (_owner, sessionId, input, options) => createMessage(sessionId, input, {
+      ...options, broadcastOwnerScope: captureDataOwnerBroadcastScope(),
+    }),
+    publishMessage: (_owner, sessionId, message) => broadcastMessageRow(sessionId, message, captureDataOwnerBroadcastScope()),
+    downloadFile: async (input) => {
+      if (saving) throw new Error('MCP_APP_DOWNLOAD_BUSY');
+      saving = true;
+      try {
+        return await saveAppDownload({
+          ...input,
+          showSaveDialog: async (name) => {
+            const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+            if (!win || win.isDestroyed()) throw new Error('MCP_APP_VIEW_UNAVAILABLE');
+            const result = await dialog.showSaveDialog(win, { defaultPath: name });
+            return result.canceled ? null : (result.filePath ?? null);
           },
-        );
+        });
+      } finally {
+        saving = false;
       }
     },
-    authorizeTool: async (sessionId, tool, args, signal) => {
-      const { session } = await assertSession(sessionId);
-      if (session.permissionMode === 'bypassPermissions') return;
-      const decision = await request(
-        sessionId,
-        {
-          kind: 'permission',
-          requestId: randomUUID(),
-          toolName: `MCP App: ${tool.name}`,
-          title: tool.title ?? tool.name,
-          description: tool.description,
-          input: args,
-        },
-        signal,
-      );
-      if (decision.kind !== 'permission' || decision.behavior !== 'allow')
-        throw new Error('MCP_APP_TOOL_DENIED');
+    composerDrag: supportsComposerDrag(process.platform, process.versions.electron),
+    composerCaller: (caller) => {
+      const match = /^renderer:(\d+)$/.exec(caller);
+      const contents = match ? webContents.fromId(Number(match[1])) : undefined;
+      const window = contents && !contents.isDestroyed() ? BrowserWindow.fromWebContents(contents) : null;
+      return !!window && !window.isDestroyed() && !!isComposerWindow?.(window);
     },
-    sendMessage: send,
+    hasComposerAttachment: hasComposerAttachmentInWindow,
+    sendComposerAttachment: async ({ caller, sessionId, viewId, resourceKey, name, mimeType, size, bytes, assertCurrent }) => {
+      if (!caller.startsWith('renderer:')) throw new Error('MCP_APP_OWNER_ONLY');
+      const scope = await assertSessionForComposer?.(sessionId);
+      if (!scope?.owner.userId || scope.session.remoteHostId) throw new Error('MCP_APP_OWNER_ONLY');
+      if (size !== bytes.byteLength || size < 1 || size > 64 * 1024 * 1024) throw new Error('MCP_APP_COMPOSER_ATTACHMENT_TOO_LARGE');
+      const validated = validateComposerAttachment(bytes, mimeType);
+      const { category, mimeType: normalizedMimeType } = validated;
+      // Images and PDFs take their extension from the validated bytes: sending
+      // treats `.gif` specially, so a display name must not decide the block type.
+      const ext = category === 'image' ? `.${normalizedMimeType === 'image/jpeg' ? 'jpg' : normalizedMimeType.slice('image/'.length)}`
+        : category === 'pdf' ? '.pdf' : (() => {
+          const base = name.split(/[\\/]/).pop() ?? name;
+          const dot = base.lastIndexOf('.');
+          return dot > 0 ? base.slice(dot).toLowerCase() : '.txt';
+        })();
+      await assertCurrent();
+      const stagedPath = await stageLocalFileToCache({
+        ownerId: scope.owner.userId,
+        suggestedName: name,
+        expectedSize: BigInt(size),
+        copyTo: target => fs.writeFile(target, bytes, { flag: 'wx' }),
+      });
+      try {
+        await assertCurrent();
+        // Prepare the preview before delivery so the tray can append synchronously.
+        let imageUrl: string | undefined;
+        if (category === 'image') {
+          try {
+            imageUrl = (await ingestChatImageBuffer({ buffer: bytes, mimeType: normalizedMimeType }, scope.owner.client.drizzle)).url;
+          } catch { /* The staged file can still be attached if preview preparation fails. */ }
+          await assertCurrent();
+        }
+        const senderId = Number(caller.slice('renderer:'.length));
+        const target = Number.isSafeInteger(senderId) ? webContents.fromId(senderId) : undefined;
+        if (!target || target.isDestroyed()) throw new Error('MCP_APP_VIEW_UNAVAILABLE');
+        const payload: McpAppComposerAttachment = {
+          sessionId, viewId,
+          attachment: { id: randomUUID(), mcpAppResourceKey: resourceKey, name, path: stagedPath, ext, size, category, mimeType: normalizedMimeType,
+            ...(imageUrl ? { url: imageUrl, originalName: name } : {}) },
+        };
+        target.send(MCP_APP_COMPOSER_ATTACHMENT_EVENT, payload);
+      } catch (error) {
+        await cleanupOwnedUnpersistedStagedChatAttachments({ ownerId: scope.owner.userId, filePaths: [stagedPath] });
+        throw error;
+      }
+    },
+    pluginFiles,
     disposeDocument: removeMcpAppDocument,
-    audit: (method) => createLogger('mcp-apps').debug('App request', { method }),
   });
+  assertSessionForComposer = assertSession;
   setMcpAppsHost(host);
+  setMcpAppFileReader((id, token, request) => host.readPluginFile(id, token, request));
   const remoteViews = new RemoteMcpAppViews({
+    released: (owner, caller, peer, window) => slots.released(owner, caller, peer, window),
     owner: currentOwner,
     closeEpoch: getRemoteLinkCloseEpoch,
-    invoke: async (deviceId, sessionId, input, preSend) => {
+    invoke: async (deviceId, sessionId, input, preSend, options) => {
       if (!getAppCapabilities().canUseDeviceLink) throw new Error('MCP_APP_OWNER_ONLY');
-      const result = await remoteInvoke(deviceId, MCP_APPS_INVOKE, [sessionId, input], { preSend });
+      const result = await remoteInvoke(deviceId, MCP_APPS_INVOKE, [sessionId, input], { ...options, preSend });
       if (result.ok) return result.result;
-      if (result.error.code === 'CHANNEL_NOT_ALLOWED') throw new Error('MCP_APP_CHANNEL_NOT_ALLOWED');
+      if (result.error.code === 'CHANNEL_NOT_ALLOWED')
+        throw new Error('MCP_APP_CHANNEL_NOT_ALLOWED');
       throw new Error(result.error.message);
     },
     openLink: (url) => shell.openExternal(url),
   });
   setMcpAppCallerCleanup(async (caller) => {
+    slots.cancelCaller(caller);
+    for (const call of providerCalls.get(caller)?.values() ?? []) call.abort();
+    providerCalls.delete(caller);
+    nativePluginUi.release(caller);
     await Promise.allSettled([host.releaseCaller(caller), remoteViews.releaseCaller(caller)]);
+  });
+  const redeemChannel = 'maker:redeem-composer-attachment-drag';
+  ipcMain.removeHandler(redeemChannel);
+  ipcMain.handle(redeemChannel, async (event, input: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (!input || typeof input !== 'object') throwIpcError('INVALID_PARAMS', 'MCP_APP_COMPOSER_DRAG_INVALID');
+    const { sessionId, ticket } = input as Record<string, unknown>;
+    if (typeof sessionId !== 'string' || !sessionId || typeof ticket !== 'string' || ticket.length !== 48)
+      throwIpcError('INVALID_PARAMS', 'MCP_APP_COMPOSER_DRAG_INVALID');
+    try {
+      await host.redeemComposerAttachmentDrag(`renderer:${event.sender.id}`, sessionId, ticket);
+    } catch (error) {
+      const code = error instanceof Error && /^MCP_APP_[A-Z_]+$/.test(error.message) ? error.message : 'MCP_APP_COMPOSER_DRAG_INVALID';
+      throwIpcError('PRECONDITION_FAILED', code);
+    }
   });
   ipcMain.removeHandler(MCP_APPS_INVOKE);
   ipcMain.handle(MCP_APPS_INVOKE, async (event, sessionId: unknown, raw: unknown) => {
     const remote = getDeviceLinkInvokeContext();
     if (remote?.sharedTask) throwIpcError('PRECONDITION_FAILED', 'MCP_APP_OWNER_ONLY');
     if (!remote) assertTrustedAppRendererEvent(event);
-    if (typeof sessionId !== 'string') throwIpcError('INVALID_PARAMS', 'MCP_APP_INVALID_REQUEST');
+    if (typeof sessionId !== 'string' && (sessionId !== null || remote)) throwIpcError('INVALID_PARAMS', 'MCP_APP_INVALID_REQUEST');
     const caller = remote ? `device:${remote.controllerDeviceId}` : `renderer:${event.sender.id}`;
     try {
-      if (raw && typeof raw === 'object' && 'deviceId' in raw) {
-        // Incoming device-link calls cannot use this local-only route to pivot to another computer.
-        if (remote) throw new Error('MCP_APP_INVALID_REQUEST');
-        return await remoteViews.control(caller, raw.deviceId, sessionId, raw);
+      if (!remote && raw && typeof raw === 'object' && 'op' in raw && raw.op === 'plugin-action-cancel') {
+        const requestId = 'requestId' in raw && raw.requestId;
+        if (typeof requestId !== 'string') throw new Error('MCP_APP_INVALID_REQUEST');
+        providerCalls.get(caller)?.get(requestId)?.abort();
+        return {};
       }
-      return await handleMcpAppOperation(
-        host,
-        caller,
-        sessionId,
-        raw,
-        remote
-          ? undefined
-          : {
-              supply: (document, boundCaller) => supplyMcpAppDocument(document, boundCaller, (input) =>
-                handleMcpAppFrameOperation(host, boundCaller, sessionId, document.viewId, input, async (url) => {
-                  assertMcpAppDocumentCaller(document.viewId, boundCaller);
-                  await shell.openExternal(url);
-                })),
-            },
-      );
+      if (!remote && raw && typeof raw === 'object' && 'op' in raw && raw.op === 'plugin-settings') {
+        const input = raw as { instanceId?: unknown; operation?: unknown; patch?: unknown };
+        if (typeof input.instanceId !== 'string' || !['get', 'update', 'reset'].includes(String(input.operation))) throw new Error('MCP_APP_INVALID_REQUEST');
+        const entry = readPluginHostUi(input.instanceId);
+        if (!entry?.host.settings?.length) throw new Error('MCP_APP_SOURCE_UNAVAILABLE');
+        const assertCurrent = async () => {
+          entry.config.plugin!.assertCurrent();
+          if (readPluginHostUi(input.instanceId as string) !== entry || event.sender.isDestroyed()) throw new Error('MCP_APP_SOURCE_UNAVAILABLE');
+        };
+        return await manageAppSettings({ operation: input.operation as 'get' | 'update' | 'reset',
+          section: `plugins.${input.instanceId}`, patch: input.patch as Record<string, unknown> | undefined }, assertCurrent);
+      }
+      if (!remote && raw && typeof raw === 'object' && 'op' in raw && raw.op === 'native-interest') {
+        const subscription = raw as { epoch?: unknown; entries?: unknown };
+        if (typeof subscription.epoch !== 'string' || subscription.epoch.length > 128) throw new Error('MCP_APP_INVALID_REQUEST');
+        return { updates: nativePluginUi.subscribe(caller, subscription.epoch, parsePluginUiInterests(subscription.entries)) };
+      }
+      if (!remote && raw && typeof raw === 'object' && 'op' in raw && raw.op === 'plugin-action') {
+        const action = raw as { instanceId?: unknown; id?: unknown; kind?: unknown; value?: unknown; input?: unknown; requestId?: unknown };
+        if (typeof action.instanceId !== 'string' || typeof action.id !== 'string') throw new Error('MCP_APP_INVALID_REQUEST');
+        const entry = readPluginHostUi(action.instanceId);
+        const declaration = action.kind === 'command' ? entry?.host.commands?.find(command => command.id === action.id)
+          : entry?.host.contributions?.find(contribution => contribution.id === action.id);
+        if (!entry || !declaration?.tool) throw new Error('MCP_APP_SOURCE_UNAVAILABLE');
+        const position = 'position' in declaration ? declaration.position : undefined;
+        const ownerId = position === 'composer.attachment' ? getActiveAppSession().dataOwnerId : null;
+        const cleanup = (paths: string[]) => ownerId
+          ? cleanupOwnedUnpersistedStagedChatAttachments({ ownerId, filePaths: paths }) : Promise.resolve();
+        let controller: AbortController | undefined;
+        if (position === 'composer.completion' || position === 'composer.attachment') {
+          if (typeof action.requestId !== 'string' || !action.requestId || action.requestId.length > 128) throw new Error('MCP_APP_INVALID_REQUEST');
+          let calls = providerCalls.get(caller);
+          if (!calls) { calls = new Map(); providerCalls.set(caller, calls); }
+          if (calls.has(action.requestId)) throw new Error('MCP_APP_INVALID_REQUEST');
+          controller = new AbortController(); calls.set(action.requestId, controller);
+        }
+        try {
+          const timeout = AbortSignal.timeout(position === 'composer.completion' ? 2000 : 30 * 60_000);
+          const signal = controller ? AbortSignal.any([controller.signal, timeout]) : timeout;
+          const owner = currentOwner();
+          const scope = sessionId === null ? undefined : await assertSession(sessionId);
+          const dynamic = action.kind !== 'command' && isDynamicComposerContribution(declaration as GhostHostUiContribution);
+          const assertCurrent = async () => {
+            signal.throwIfAborted();
+            if (owner !== currentOwner() || readPluginHostUi(action.instanceId as string) !== entry || event.sender.isDestroyed()) throw new Error('MCP_APP_SOURCE_UNAVAILABLE');
+            entry.config.plugin!.assertCurrent(sessionId ?? undefined);
+            if (scope && sessionId !== null) {
+              const latest = await assertSession(sessionId);
+              if (latest.owner !== scope.owner || latest.session.clearedAt !== scope.session.clearedAt || latest.session.remoteHostId ||
+                  dynamic && latest.session.agentDeviceId)
+                throw new Error('MCP_APP_SESSION_UNAVAILABLE');
+            }
+            if (dynamic) {
+              if (sessionId === null) throw new Error('MCP_APP_SESSION_UNAVAILABLE');
+              const state = nativePluginUi.snapshot(caller, { instanceId: action.instanceId as string, id: action.id as string, sessionId });
+              const item = state?.items?.find(item => item.id === action.value);
+              if (typeof action.value !== 'string' || (state?.visible ?? (declaration as GhostHostUiContribution).visible) !== true ||
+                  state?.disabled || !item || item.visible === false || item.disabled) throw new Error('MCP_APP_INVALID_REQUEST');
+            }
+            signal.throwIfAborted();
+          };
+          await assertCurrent();
+          if (sessionId !== null && (await assertSession(sessionId)).session.remoteHostId) throw new Error('MCP_APP_OWNER_ONLY');
+          let value: string | undefined;
+          if (action.value !== undefined) {
+            const allowed = dynamic || 'options' in declaration && Array.isArray(declaration.options) && declaration.options.some(option => option.value === action.value);
+            if (typeof action.value !== 'string' || !allowed) throw new Error('MCP_APP_INVALID_REQUEST');
+            value = action.value;
+          }
+          const args: Record<string, unknown> = { ...declaration.arguments, ...(value === undefined ? {} : { value }) };
+          let attachmentBytes: Uint8Array | undefined;
+          const stage = async (name: string, buffer: Buffer, mimeType: string) => {
+            await assertCurrent();
+            if (!ownerId || !owner) throw new Error('MCP_APP_OWNER_UNAVAILABLE');
+            if (/^(image|audio|video|model)\//.test(mimeType)) {
+              const media = await ingestMedia({ buffer, mimeType, refs: [] }, owner.client.drizzle);
+              return { path: resolveSafe(media.url).absPath, url: media.url };
+            }
+            return { path: await stageLocalFileToCache({ ownerId, suggestedName: name, expectedSize: BigInt(buffer.length),
+              copyTo: target => fs.writeFile(target, buffer, { flag: 'wx' }) }) };
+          };
+          if (position === 'session.menu') args.cindy_ui = { sessionId };
+          if (position === 'composer.completion') {
+            const input = action.input as { trigger?: unknown; query?: unknown } | undefined;
+            if (!input || input.trigger !== declaration.trigger || typeof input.query !== 'string' || input.query.length > 32768 ||
+                action.requestId === undefined) throw new Error('MCP_APP_INVALID_REQUEST');
+            args.trigger = input.trigger; args.query = input.query;
+          } else if (position === 'composer.attachment') {
+            const input = action.input as { attachment?: { name?: unknown; uri?: unknown; bytes?: unknown; size?: unknown; mimeType?: unknown } } | undefined;
+            const file = input?.attachment;
+            if (!file || typeof file.name !== 'string' || !file.name || file.name.length > 200 || file.uri !== undefined ||
+                !(file.bytes instanceof Uint8Array) ||
+                typeof file.mimeType !== 'string' || file.mimeType.length > 256 || !Number.isSafeInteger(file.size) ||
+                (file.size as number) < 1 || (file.size as number) > GHOST_HANDOFF_MAX_BYTES_PER_FILE ||
+                file.bytes.byteLength !== file.size || !matchesGhostHostUiAttachment((declaration as GhostHostUiContribution).accept,
+                  file as { name: string; mimeType: string })) throw new Error('MCP_APP_INVALID_REQUEST');
+            args.attachment = { name: file.name, size: file.size, mimeType: file.mimeType };
+            // Copy only supplied bytes; a renderer path/URL never authorizes a Main read.
+            attachmentBytes = Uint8Array.from(file.bytes);
+          } else if (action.input !== undefined || action.requestId !== undefined) throw new Error('MCP_APP_INVALID_REQUEST');
+          signal.throwIfAborted();
+          const result = await host.callPluginAction(caller, sessionId, { id: action.id, config: entry.config,
+            title: declaration.title, assertCurrent, ...(attachmentBytes ? { attachmentBytes } : {}) }, declaration.tool, args, signal);
+          return position === 'composer.attachment'
+            ? await preparePluginAttachmentResult(action.instanceId, result, { access: pluginFiles, stage, cleanup, assertCurrent, signal }) : result;
+        } finally {
+          if (controller) {
+            const calls = providerCalls.get(caller); calls?.delete(action.requestId as string);
+            if (!calls?.size) providerCalls.delete(caller);
+          }
+        }
+      }
+      if (!remote && raw && typeof raw === 'object' && 'op' in raw && raw.op === 'host-result') {
+        const reply = raw as { requestId?: unknown; result?: unknown; error?: unknown };
+        if (typeof reply.requestId !== 'string' || reply.error !== undefined && typeof reply.error !== 'string') throw new Error('MCP_APP_INVALID_REQUEST');
+        finishPluginUiAction(caller, reply.requestId, reply.result, reply.error as string | undefined);
+        return {};
+      }
+      const owner = currentOwner();
+      const dispatch = async (allocated?: (limit?: 'pending' | 'document') => void) => {
+        if (raw && typeof raw === 'object' && 'deviceId' in raw) {
+          // Incoming device-link calls cannot use this local-only route to pivot to another computer.
+          if (remote) throw new Error('MCP_APP_INVALID_REQUEST');
+          if (sessionId === null) throw new Error('MCP_APP_INVALID_SCOPE');
+          return await remoteViews.control(caller, raw.deviceId, sessionId, raw, allocated);
+        }
+        return await handleMcpAppOperation(
+          host,
+          caller,
+          sessionId,
+          raw,
+          remote
+            ? undefined
+            : {
+                resource: async (source, openId) => {
+                  const scope = sessionId === null ? undefined : await assertSession(sessionId);
+                  if (scope?.session.remoteHostId || source.composerAction && scope?.session.agentDeviceId)
+                    throw new Error('MCP_APP_OWNER_ONLY');
+                  return bindPluginUiResource(caller, sessionId, source.instanceId, source.viewId, config => host.serverRevision(config), async () => {
+                    if (!scope || sessionId === null) return;
+                    const latest = await assertSession(sessionId);
+                    if (latest.owner !== scope.owner || latest.session.clearedAt !== scope.session.clearedAt ||
+                        latest.session.remoteHostId || source.composerAction && latest.session.agentDeviceId)
+                      throw new Error('MCP_APP_SESSION_UNAVAILABLE');
+                  }, scope ? { title: scope.session.title, workingDir: scope.session.workingDir, model: scope.session.model } : undefined,
+                  source.composerAction && openId ? { ...source.composerAction, openId } : undefined);
+                },
+                supply: (document, boundCaller, hostContext) =>
+                  supplyMcpAppDocument(document, boundCaller, (input) =>
+                    handleMcpAppFrameOperation(
+                      host,
+                      boundCaller,
+                      sessionId,
+                      document.viewId,
+                      input,
+                      async (url) => {
+                        assertMcpAppDocumentCaller(document.viewId, boundCaller);
+                        await shell.openExternal(url);
+                      },
+                    ), () => slots.released(owner, boundCaller, boundCaller, 'document'), hostContext),
+              },
+        );
+      };
+      // Slot waits belong to the viewer's process, including detached windows.
+      // Remote callers only have access to the existing MCP Apps wire operations.
+      if (remote || !raw || typeof raw !== 'object') return await dispatch();
+      const input = raw as Record<string, unknown>;
+      const peer = typeof input.deviceId === 'string' ? input.deviceId : caller;
+      const remoteOpen = typeof input.deviceId === 'string' && typeof input.openId === 'string';
+      const linkEpoch = remoteOpen ? getRemoteLinkCloseEpoch(peer) : 0;
+      return await slots.control(owner, caller, peer, input, dispatch, linkEpoch,
+        remoteOpen ? closed => {
+          const unwatch = onRemoteLinkClosed(peer, closed);
+          if (getRemoteLinkCloseEpoch(peer) !== linkEpoch) closed();
+          return unwatch;
+        } : undefined);
     } catch (error) {
-      const code =
-        error instanceof Error && /^MCP_APP_[A-Z_]+$/.test(error.message)
-          ? error.message
-          : 'MCP_APP_REQUEST_FAILED';
+      // device-link serializes the execution Host's IPC prefix. Unwrap that
+      // envelope before applying the same public-code boundary on the viewer.
+      const message = error instanceof Error
+        ? (extractIpcError(new Error(error.message))?.message ?? error.message) : '';
+      const code = /^(?:MCP_APP_[A-Z_]+|MCP_PLUGIN_(?:UNAVAILABLE|CSP_DOMAIN_NOT_DECLARED))$/.test(message)
+        ? message : 'MCP_APP_REQUEST_FAILED';
       throwIpcError('PRECONDITION_FAILED', code);
     }
   });

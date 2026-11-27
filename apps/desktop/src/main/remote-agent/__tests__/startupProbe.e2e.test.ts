@@ -22,7 +22,8 @@ import { startRemoteAgentSession } from '../controller/startRemote';
 import { createRemoteAgentHost } from '../host/runHost';
 import { hostedStartOptions } from '../host/service';
 import * as shortcutModule from '../host/execServerShortcut';
-import { collectAncestorMarkers } from '../controller/projectFiles';
+import * as batchModule from '../host/execServerStartupBatch';
+import { collectProjectInstructionFiles as collectProjectFiles, collectAncestorMarkers } from '../controller/projectFiles';
 import type { StartupExecServerStats } from '../startupTiming';
 
 const REPO = path.resolve(__dirname, '../../../../../..');
@@ -164,10 +165,14 @@ describe.skipIf(!available)('remote agent with a real Codex', () => {
     ];
     const original = shortcutModule.createExecServerShortcut;
     const results = [];
-    for (const { optimized, delayMs } of [
-      { optimized: false, delayMs: 0 }, { optimized: true, delayMs: 0 },
-      { optimized: false, delayMs: 100 }, { optimized: true, delayMs: 100 },
+    const originalBatch = batchModule.createExecServerStartupBatch;
+    for (const { optimized, delayMs, batched } of [
+      { optimized: false, delayMs: 0, batched: false }, { optimized: true, delayMs: 0, batched: false },
+      { optimized: false, delayMs: 100, batched: false }, { optimized: true, delayMs: 100, batched: false },
+      { optimized: true, delayMs: 0, batched: true },
     ]) {
+      const batchSpy = vi.spyOn(batchModule, 'createExecServerStartupBatch').mockImplementation(deps =>
+        batched ? originalBatch(deps) : { request: () => false, response: () => false, finish() {} });
       bodies.length = 0;
       pluginCalls = 0;
       let shortcutHits = 0;
@@ -179,14 +184,14 @@ describe.skipIf(!available)('remote agent with a real Codex', () => {
           return reply;
         };
       });
-      const agent = new CodexAgent(codexDeps(path.join(root, `home-${optimized}-${delayMs}`)));
+      const agent = new CodexAgent(codexDeps(path.join(root, `home-${optimized}-${delayMs}-${batched}`)));
       const counts: Record<string, number> = {};
       let startupStats: StartupExecServerStats | undefined;
       const host = createRemoteAgentHost({
         isAgentAvailable: () => true,
         startHosted: input => agent.startSession(hostedStartOptions(input)),
         isControllerAuthorized: () => true, captureOwner: () => 'owner', isOwnerCurrent: () => true,
-        runsRoot: path.join(root, `host-${optimized}-${delayMs}`),
+        runsRoot: path.join(root, `host-${optimized}-${delayMs}-${batched}`),
         log: {
           info() {}, warn() {},
           debug(_message, fields) {
@@ -227,7 +232,8 @@ describe.skipIf(!available)('remote agent with a real Codex', () => {
         const durationMs = Math.round(performance.now() - before);
         const startupCounts = { ...counts };
         const startupHits = shortcutHits;
-        expect(startupStats).toMatchObject({ shortcutEnabled: true, connections: 1, answered: startupHits });
+        expect(startupStats).toMatchObject({ shortcutEnabled: true, connections: 1 });
+        if (!batched) expect(startupStats!.answered).toBe(startupHits);
         expect(startupStats!.ancestorLevels).toBeGreaterThan(0);
         const done = (async () => {
           for await (const event of handle!.events()) {
@@ -241,7 +247,7 @@ describe.skipIf(!available)('remote agent with a real Codex', () => {
         const skillBodyRead = bodies.at(-1)!.includes('QA_SKILL_BODY_SENTINEL');
         const pluginDiscovered = bodies.at(-1)!.includes('QA_PLUGIN_DISCOVERY_SENTINEL');
         const pluginCalled = bodies.at(-1)!.includes('QA_PLUGIN_CALL_SENTINEL') && pluginCalls === 1;
-        results.push({ optimized, delayMs, durationMs, counts: startupCounts, shortcutHits: startupHits, startupStats, skillPresent, skillBodyRead, pluginDiscovered, pluginCalled });
+        results.push({ optimized, batched, delayMs, durationMs, counts: startupCounts, shortcutHits: startupHits, startupStats, skillPresent, skillBodyRead, pluginDiscovered, pluginCalled });
         expect(skillPresent).toBe(true);
         expect(skillBodyRead).toBe(true);
         expect(pluginDiscovered).toBe(true);
@@ -249,11 +255,88 @@ describe.skipIf(!available)('remote agent with a real Codex', () => {
         expect(shortcutHits > 0).toBe(optimized);
       } finally {
         await handle?.close({ reason: 'navigation' });
-        await agent.dispose(); host.dispose(); spy.mockRestore();
+        await agent.dispose(); host.dispose(); spy.mockRestore(); batchSpy.mockRestore();
       }
     }
     expect(results[1].counts['fs/getMetadata']).toBeLessThan(results[0].counts['fs/getMetadata']);
     expect(results[3].counts['fs/getMetadata']).toBeLessThan(results[2].counts['fs/getMetadata']);
     console.log('STARTUP_AB_RESULT', JSON.stringify(results));
   });
+
+  // Production startup with the same eight-Skill/400ms fixture as the incident investigation.
+  // Unlike the causal probe, this uses real native metadata replies, including prefetch cost.
+  it('batches eight-Skill startup queries across a delayed transport', { timeout: 240_000 }, async () => {
+    const taskHome = path.join(root, 'isolated-task-home');
+    fs.mkdirSync(taskHome);
+    const homeSpy = vi.spyOn(os, 'homedir').mockReturnValue(taskHome);
+    vi.stubEnv('USERPROFILE', taskHome);
+    vi.stubEnv('HOME', taskHome);
+    const project = path.join(root, 'batch-project');
+    fs.mkdirSync(path.join(project, '.git'), { recursive: true });
+    for (const tier of ['.agents', '.claude']) for (let i = 0; i < 8; i += 1) {
+      const dir = path.join(project, tier, 'skills', `qa-${i}`);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'SKILL.md'), `---\nname: qa-${i}\ndescription: Project startup investigation ${i}\n---\nTest fixture only.\n`);
+    }
+    const originalShortcut = shortcutModule.createExecServerShortcut;
+    // Model the lack of raw absolute-path snapshots across Windows/POSIX; real RPCs still run on Windows.
+    const shortcutSpy = vi.spyOn(shortcutModule, 'createExecServerShortcut').mockImplementation(layout =>
+      originalShortcut({ ...layout, taskAncestorAbsence: [] }));
+    const originalBatch = batchModule.createExecServerStartupBatch;
+    const results: Array<{ batched: boolean; durationMs: number; pushes: number; startupStats?: StartupExecServerStats }> = [];
+    try {
+      for (const [index, batched] of [false, true, false, true].entries()) {
+        const batchSpy = vi.spyOn(batchModule, 'createExecServerStartupBatch').mockImplementation(deps =>
+          batched ? originalBatch(deps) : { request: () => false, response: () => false, finish() {} });
+        const agent = new CodexAgent(codexDeps(path.join(root, `batch-home-${index}`)));
+        let startupStats: StartupExecServerStats | undefined;
+        const host = createRemoteAgentHost({
+          isAgentAvailable: () => true,
+          startHosted: input => agent.startSession(hostedStartOptions(input)),
+          isControllerAuthorized: () => true, captureOwner: () => 'owner', isOwnerCurrent: () => true,
+          runsRoot: path.join(root, `batch-host-${index}`),
+          log: { info() {}, warn() {}, debug(_message, fields) {
+            if (fields?.side === 'host' && fields?.stage === 'total') startupStats = fields.execServer as StartupExecServerStats;
+          } },
+        });
+        let handle;
+        let pushes = 0;
+        const before = performance.now();
+        try {
+          handle = await startRemoteAgentSession('codex', {
+            sessionId: randomUUID(), workingDir: project, model: 'gpt-5.5', permissionMode: 'default',
+          }, {
+            invoke: async args => {
+              const req = JSON.parse(JSON.stringify(args[0]));
+              if (req.op === 'push') pushes += 1;
+              const result = JSON.parse(JSON.stringify(await host.handle('controller-1', req) ?? null));
+              // real-wait: manual e2e benchmark includes poll/push latency from the incident probe.
+              if (req.op === 'poll' || req.op === 'push') await new Promise(r => setTimeout(r, 400));
+              return result;
+            },
+            rgPath: RG, codexPath: () => CODEX,
+            prepareMcp: async () => ({ servers: new Map(), dispose() {} }),
+            collectProjectFiles, collectAncestorMarkers,
+            isGitRepo: async () => true, newId: randomUUID,
+          });
+          const result = { batched, durationMs: Math.round(performance.now() - before), pushes, startupStats };
+          results.push(result);
+          console.log('STARTUP_BATCH_RESULT', JSON.stringify(result));
+          expect(startupStats?.connections).toBe(1);
+        } finally {
+          await handle?.close({ reason: 'navigation' });
+          await agent.dispose(); host.dispose(); batchSpy.mockRestore();
+        }
+      }
+      for (const index of [0, 2]) {
+        // A regression to serial traversal must fail, even if all four startups succeed.
+        expect(results[index + 1].pushes).toBeLessThan(results[index].pushes / 2);
+        expect(results[index + 1].durationMs).toBeLessThan(results[index].durationMs * 0.7);
+      }
+    } finally {
+      console.log('STARTUP_BATCH_AB_RESULT', JSON.stringify(results));
+      shortcutSpy.mockRestore(); homeSpy.mockRestore(); vi.unstubAllEnvs();
+    }
+  });
+
 });

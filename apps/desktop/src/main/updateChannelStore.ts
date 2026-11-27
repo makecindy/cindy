@@ -26,10 +26,27 @@ import { supportsBetaUpdateChannel } from '../shared/updateChannelCapability';
 import { desktopMakerLogger } from './maker-host/logger-adapter.js';
 import {
   createOverrideSettingsFile,
+  portableOverrideSettings,
   type OverrideSettingsState,
 } from './maker-host/override-settings-file.js';
 
+import { inspectSettingsFile, isSettingBoolean, validateOptionalSettingsFields } from './maker-host/settings-inspection.js';
+
 const log = desktopMakerLogger.child('update-channel-settings');
+
+/** 只取保存的偏好，不检查 manifest、canary 或通道运行时可用性。 */
+export function inspectUpdateChannelSettings() {
+  const result = inspectSettingsFile({ filePath: settingsFilePath, defaults: DEFAULTS, normalize,
+    validate: (raw) => validateOptionalSettingsFields(raw, {
+      enableBeta: isSettingBoolean, orgDefaultEnableBeta: isSettingBoolean,
+    }),
+  });
+  if (result.status !== 'ready') return result;
+  const customizedKeys = result.sources.enableBeta === 'override' ? ['enableBeta'] : [];
+  const enableBeta = resolveEffectiveEnableBeta({ value: result.value, defaults: DEFAULTS,
+    isCustomized: customizedKeys.length > 0, customizedKeys });
+  return { ...result, value: { ...result.value, enableBeta } };
+}
 
 export interface UpdateChannelSettings {
   enableBeta: boolean;
@@ -149,10 +166,13 @@ export async function resetUpdateChannelSettings(): Promise<UpdateChannelSetting
 
 /** manifestService 消费的单一读取入口:返回是否启用 beta(设备级)。 */
 export function isBetaChannelEnabled(): boolean {
-  // Linux 目前仅 x64 发布 beta .deb。能力不支持时忽略落盘值，避免客户端被钉在
+  // Linux x64 / arm64 支持 beta .deb。能力不支持时忽略落盘值，避免客户端被钉在
   // 不可达渠道；同时保留值，用户回到支持的构建后仍沿用设备级选择。
   if (!supportsBetaUpdateChannel(process.platform, process.arch)) return false;
   return readUpdateChannelSettings().enableBeta;
 }
 
 export const __testing = { normalize };
+
+/** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
+export const updateChannelPortableSettings = portableOverrideSettings(store);

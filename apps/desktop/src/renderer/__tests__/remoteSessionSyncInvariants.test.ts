@@ -55,7 +55,10 @@ const chatInputSrc = readFileSync(
 describe('useRemoteSessionSync 接线不变式', () => {
   it('WS 重连(onStatusChanged online)重建重 topic 订阅 + 对账', () => {
     expect(syncSrc).toContain('onStatusChanged');
-    expect(syncSrc).toContain("p.status !== 'online'");
+    // 重连后恢复订阅；信令离线时仅该目标已保留的健康直连也可恢复。
+    expect(syncSrc).toContain("p.status === 'online' || p.directDataDeviceIds?.includes(deviceId) === true");
+    expect(syncSrc).toContain('if (p.dataPathChangedDeviceId && p.dataPathChangedDeviceId !== deviceId) return;');
+    expect(syncSrc).toContain('if (!online || (p.dataPathChangedDeviceId && !changed)) return;');
     expect(syncSrc).toContain('subscribeHeavy()');
     expect(syncSrc).toContain('reconcileRemoteMessages');
   });
@@ -76,7 +79,7 @@ describe('useRemoteSessionSync 接线不变式', () => {
 
 describe('CCAgentSessionView 接线不变式', () => {
   it('用 useRemoteSessionSync(替代 mount-once 重 topic effect)+ 渲染连接 banner', () => {
-    expect(sessionViewSrc).toContain('useRemoteSessionSync(sessionId, remoteDeviceId)');
+    expect(sessionViewSrc).toContain('useRemoteSessionSync(confirmedSessionId, remoteDeviceId)');
     expect(sessionViewSrc).toContain('useRemoteSessionConnection(remoteDeviceId)');
     expect(sessionViewSrc).toContain('<RemoteSessionBanner');
     // 旧的 mount-once 重 topic effect 已被 hook 取代(不再就地订阅 session: topic)。
@@ -88,7 +91,7 @@ describe('CCAgentSessionView 接线不变式', () => {
     );
     expect(sessionViewSrc).not.toContain('if (remoteSessionUnavailable) return false');
     expect(sessionViewSrc).not.toContain('remoteSessionUnavailableRef');
-    expect(sessionViewSrc).toContain('if (!remoteDeviceId && !recoveringBaseline) {');
+    expect(sessionViewSrc).toContain('if (!remoteDeviceId && !recoveringBaseline && !deferVendorAuthGate) {');
     expect(sessionViewSrc).not.toContain('beforeEnqueue: checkVendorReady');
     // device-link 远程交接期间仍要禁用(见 remoteHandoffPreparing):那几段 await
     // 可能数十秒,不禁用的话用户补发的消息会插到草稿提交的首条之前。

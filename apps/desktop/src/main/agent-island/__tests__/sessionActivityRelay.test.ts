@@ -25,6 +25,25 @@ function activity(
 }
 
 describe('SessionActivityRelay', () => {
+  // Unit: scoped replay must repair missing terminal history without clearing
+  // a live turn or exposing another task. Existing replay tests cover lists only.
+  it.each([
+    { phase: 'running' as const, attention: false },
+    { phase: 'needs-interaction' as const, attention: true },
+    { phase: 'completed' as const, attention: true },
+    { phase: 'error' as const, attention: true },
+  ])('replays the current scoped $phase state and clears absent tasks', patch => {
+    const relay = new SessionActivityRelay(vi.fn());
+    const emit = vi.fn();
+    const list = [activity('s1', 'Current', patch), activity('private', 'Private')];
+    relay.replay(list, emit, 's1');
+    expect(emit).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: 's1', ...patch }));
+    emit.mockClear();
+    relay.replay(list, emit, 'absent');
+    expect(emit).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: 'absent', phase: 'completed', attention: false }));
+    relay.dispose();
+  });
+
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
@@ -34,70 +53,16 @@ describe('SessionActivityRelay', () => {
     vi.useRealTimers();
   });
 
-  it('keeps a silent completion through replay and ignores a superseded ownership check', async () => {
-    let resolve!: (handled: boolean) => void;
-    const check = vi.fn(() => new Promise<boolean>(r => { resolve = r; }));
+  it('keeps a silent completion through replay', () => {
     const emit = vi.fn();
-    const relay = new SessionActivityRelay(emit, { isCompletionHandledByTeammate: check });
-    const done = activity('s1', 'Final result', { phase: 'completed', attention: true });
-    const silent = { ...done, completionNotification: 'silent' as const };
-    relay.publish([done]);
-    await Promise.resolve();
-    const decision = relay.waitForCompletionNotification('s1');
-    const replay = vi.fn();
-    relay.replay([silent], replay);
-    expect(replay).toHaveBeenLastCalledWith(expect.objectContaining({ completionNotification: 'silent' }));
+    const relay = new SessionActivityRelay(emit);
+    const silent = { ...activity('s1', 'Final result', { phase: 'completed', attention: true }), completionNotification: 'silent' as const };
     relay.publish([silent]);
-    expect(await decision).toBe(true);
-    resolve(false);
-    await vi.advanceTimersByTimeAsync(2000);
-    expect(check).toHaveBeenCalledOnce();
     expect(emit).toHaveBeenLastCalledWith(expect.objectContaining({ attention: true, completionNotification: 'silent' }));
+    const replay = vi.fn();
     relay.replay([silent], replay);
     expect(replay).toHaveBeenLastCalledWith(emit.mock.calls.at(-1)?.[0]);
     relay.dispose();
-  });
-
-  it.each([true, false])('publishes completion and unread immediately, then only resolves notification ownership (%s)', async handled => {
-    let resolve!: (handled: boolean) => void;
-    const check = vi.fn(() => new Promise<boolean>(r => { resolve = r; }));
-    const emit = vi.fn();
-    const relay = new SessionActivityRelay(emit, { isCompletionHandledByTeammate: check });
-    const done = activity('s1', 'Final result', { phase: 'completed', attention: true });
-    relay.publish([done]);
-    expect(emit).toHaveBeenLastCalledWith(expect.objectContaining({ phase: 'completed', attention: true, compactDetail: 'Final result', completionNotification: 'pending' }));
-    relay.publish([done]);
-    await Promise.resolve();
-    expect(check).toHaveBeenCalledOnce();
-    const replay = vi.fn();
-    relay.replay([done], replay);
-    expect(replay).toHaveBeenLastCalledWith(emit.mock.calls[0][0]);
-    resolve(handled);
-    await check.mock.results[0].value;
-    await vi.advanceTimersByTimeAsync(0);
-    expect(emit).toHaveBeenLastCalledWith(expect.objectContaining({ phase: 'completed', attention: true, completionNotification: handled ? 'teammate' : undefined }));
-    relay.publish([done]);
-    expect(emit).toHaveBeenCalledTimes(2);
-    relay.replay([done], replay);
-    expect(replay).toHaveBeenLastCalledWith(emit.mock.calls[1][0]);
-  });
-
-  it.each(['running', 'read', 'reset', 'dispose'])('discards an old completion decision after %s', async boundary => {
-    let resolve!: (handled: boolean) => void;
-    const emit = vi.fn();
-    const relay = new SessionActivityRelay(emit, { isCompletionHandledByTeammate: () => new Promise<boolean>(r => { resolve = r; }) });
-    relay.publish([activity('s1', 'Done', { phase: 'completed', attention: true })]);
-    await Promise.resolve();
-    const decision = relay.waitForCompletionNotification('s1');
-    if (boundary === 'running') relay.publish([activity('s1', 'New turn', { startedAtMs: 2 })]);
-    if (boundary === 'read') relay.publish([]);
-    if (boundary === 'reset') relay.reset();
-    if (boundary === 'dispose') relay.dispose();
-    await expect(decision).resolves.toBe(true);
-    const count = emit.mock.calls.length;
-    resolve(true);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(emit).toHaveBeenCalledTimes(count);
   });
 
   it('bypasses throttling for unread terminal states arriving inside the window', () => {

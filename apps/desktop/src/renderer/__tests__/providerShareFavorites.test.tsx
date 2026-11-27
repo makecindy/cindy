@@ -4,9 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseModelFavorites, providerShareParsers, type ProviderShareReceived } from '@cindy/device-link';
 import type { ModelFavoritesHostApi } from '../../shared/modelFavoritesSync';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { modelConfigCopyIdentity } from '@/state/modelConfigCopy';
 import {
-  __resetForTest, addModelFavorite, listModelFavorites, setModelFavoritesOwner, useModelFavorites,
+  __resetForTest, accessHostModelFavorites, addModelFavorite, listModelFavorites, setModelFavoritesOwner, useModelFavorites,
 } from '@/state/modelFavorites';
+import * as hostFavorites from '@/state/modelFavorites';
 import {
   parseProviderShareFavoriteSource, providerShareFavoriteSource, reconcileProviderShareFavorites,
   useProviderShareFavorites, useProviderShareFavoriteCleanupFailed,
@@ -20,8 +22,11 @@ const share = (shareId = 's1', memberId = 'm1'): ProviderShareReceived => ({
   owner: { displayName: 'Owner', avatarUrl: null, region: 'global' },
 });
 const config = { providerId: 'anthropic', modelId: 'opus', agent: 'cc' as const, effort: 'high' as const, fast: true as const };
-const publish = (received: ProviderShareReceived[], confirmed = true, dataOwnerId = 'recipient', ownerGeneration = 1) => {
-  reconcileProviderShareFavorites({ received, confirmedRegions: confirmed ? ['global', 'cn'] : [], ownerStamp: { dataOwnerId, ownerGeneration } });
+const publish = (received: ProviderShareReceived[], confirmed = true, dataOwnerId = 'recipient', ownerGeneration = 1, leftMemberIds?: string[]) => {
+  reconcileProviderShareFavorites({
+    received, confirmedRegions: confirmed ? ['global', 'cn'] : [], ownerStamp: { dataOwnerId, ownerGeneration },
+    leftMemberIds,
+  });
 };
 const mount = (deviceId = 'share:s1') => renderHook(() => useProviderShareFavorites(deviceId, useModelFavorites()));
 
@@ -35,11 +40,47 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('recipient-owned shared model favorites', () => {
+  // #8028 r4429989411 / unit: B's membership is absent/different on A.
+  // Exercise real projections and writes; never infer membership from an old favorite.
+  it.each(['missing', 'different'])('uses B membership when A membership is %s and rejects replaced grants', mode => {
+    publish(mode === 'missing' ? [] : [share('s1', 'a-member')], false);
+    const bShare = share('s1', 'b-member');
+    const item = { ...config, uid: 'b-favorite', providerId: providerShareFavoriteSource(bShare) };
+    const home = { items: [item], store: { get: vi.fn(() => item), add: vi.fn(), update: vi.fn(), remove: vi.fn() } };
+    const view = renderHook(({ sources }) => ({
+      favorites: useProviderShareFavorites('share:s1', useModelFavorites(), home, sources),
+      sources: useProviderShareFavoriteSources(sources),
+    }), { initialProps: { sources: new Map([['share:s1', bShare]]) } });
+    expect(view.result.current.sources.get(item.providerId)).toBe('share:s1');
+    expect(view.result.current.favorites.items).toEqual([{ ...config, uid: item.uid }]);
+    act(() => {
+      view.result.current.favorites.store.add(config);
+      view.result.current.favorites.store.update(item.uid, { effort: 'low' });
+      view.result.current.favorites.store.remove(item.uid);
+    });
+    expect(home.store.add).toHaveBeenCalledWith({ ...config, providerId: item.providerId });
+    expect(home.store.update).toHaveBeenCalledWith(item.uid, { effort: 'low' });
+    expect(home.store.remove).toHaveBeenCalledWith(item.uid);
+    expect(listModelFavorites()).toEqual([]);
+    const stale = view.result.current.favorites.store;
+    view.rerender({ sources: new Map([['share:s1', share('s1', 'replacement')]]) });
+    expect(view.result.current.favorites.items).toEqual([]);
+    expect(() => stale.add(config)).toThrow('Shared favorite source unavailable');
+    expect(() => stale.remove(item.uid)).toThrow('Shared favorite source unavailable');
+    view.rerender({ sources: new Map() });
+    expect(view.result.current.sources.size).toBe(0);
+    expect(() => view.result.current.favorites.store.add(config)).toThrow('Shared favorite source unavailable');
+  });
+
   it('aggregates only exact, available grants for the current account', () => {
     const sources = renderHook(() => useProviderShareFavoriteSources());
     expect([...sources.result.current.values()]).toEqual(['share:s1', 'share:s2']);
-    act(() => publish([{ ...share(), status: 'paused' }, { ...share('s2', 'm2'), hostOnline: false }]));
+    act(() => publish([{ ...share(), status: 'paused' }, { ...share('s2', 'm2'), hostCapable: false }]));
     expect(sources.result.current.size).toBe(0);
+    // 2026-11-23 用户裁决「保留并标注」: an owner computer that is only temporarily offline keeps its
+    // favorites resolvable (greyed with the catalog) instead of making them vanish and come back.
+    act(() => publish([share(), { ...share('s2', 'm2'), hostOnline: false, hostCapable: false }]));
+    expect([...sources.result.current.values()]).toEqual(['share:s1', 'share:s2']);
     act(() => publish([share('s1', 'replacement')]));
     expect(sources.result.current.has(providerShareFavoriteSource(share()))).toBe(false);
     expect(sources.result.current.get(providerShareFavoriteSource(share('s1', 'replacement')))).toBe('share:s1');
@@ -104,7 +145,7 @@ describe('recipient-owned shared model favorites', () => {
     act(() => publish([received]));
     expect(view.result.current.items).toHaveLength(1);
     const failed = renderHook(() => useProviderShareFavoriteCleanupFailed());
-    act(() => publish([]));
+    act(() => publish([], true, 'recipient', 1, [received.memberId]));
     expect(failed.result.current).toBe(false);
     expect(listModelFavorites()).toEqual([expect.objectContaining(config)]);
   });
@@ -117,8 +158,10 @@ describe('recipient-owned shared model favorites', () => {
     addModelFavorite({ ...config, providerId: providerShareFavoriteSource(peerShare) });
     publish([], false);
     const view = mount();
-    const update = (received: ProviderShareReceived[], confirmedRegions: Array<'cn' | 'global'>) => {
-      reconcileProviderShareFavorites({ received, confirmedRegions, ownerStamp: { dataOwnerId: 'recipient', ownerGeneration: 1 } });
+    const update = (received: ProviderShareReceived[], confirmedRegions: Array<'cn' | 'global'>, leftMemberIds?: string[]) => {
+      reconcileProviderShareFavorites({ received, confirmedRegions, ownerStamp: { dataOwnerId: 'recipient', ownerGeneration: 1 },
+        leftMemberIds,
+      });
     };
     act(() => update([localShare], [region]));
     act(() => view.result.current.store.add(config));
@@ -127,12 +170,12 @@ describe('recipient-owned shared model favorites', () => {
     const uid = view.result.current.items[0]!.uid;
     act(() => view.result.current.store.update(uid, { effort: 'low' }));
     expect(view.result.current.items[0]?.effort).toBe('low');
-    // 已确认区域撤权立即清理，未知区域继续保留。
-    act(() => update([], [region]));
+    // 只清理确认退出的成员，未知区域继续保留。
+    act(() => update([], [region], [localShare.memberId]));
     expect(view.result.current.items).toEqual([]);
     expect(listModelFavorites()).toEqual([expect.objectContaining({ providerId: providerShareFavoriteSource(peerShare) })]);
-    // 对方区域恢复并确认空名单后，才清掉它的最后一条收藏。
-    act(() => update([], [region, peerRegion]));
+    // 对方区域确认退出后清理它的最后一条收藏。
+    act(() => update([], [region, peerRegion], [peerShare.memberId]));
     expect(listModelFavorites()).toEqual([]);
   });
 
@@ -153,6 +196,29 @@ describe('recipient-owned shared model favorites', () => {
     act(() => { setModelFavoritesOwner('other'); setModelFavoritesOwner('recipient'); });
     expect(a.result.current.items[0]).toMatchObject(config);
     expect(b.result.current.items).toHaveLength(1);
+  });
+
+  // 回归：本机直写分享收藏时，改推理档不得把 ultrafast 收成普通 fast，否则星标对不上、再点会多一条。
+  it('keeps ultrafast when editing a locally stored shared favorite', () => {
+    const view = mount();
+    const ultra = { ...config, fast: 'ultrafast' as const };
+    act(() => view.result.current.store.add(ultra));
+    const uid = view.result.current.items[0]!.uid;
+    const writes = vi.spyOn(hostFavorites, 'accessHostModelFavorites');
+    act(() => view.result.current.store.update(uid, { effort: 'low' }));
+    const update = writes.mock.calls.find((call) => call[1]?.kind === 'update')?.[1];
+    expect(update).toMatchObject({
+      kind: 'update',
+      item: { effort: 'low', fast: 'ultrafast' },
+    });
+    const saved = view.result.current.items[0]!;
+    const current = { ...ultra, effort: 'low' as const };
+    expect(saved).toMatchObject(current);
+    expect(modelConfigCopyIdentity(saved)).toBe(modelConfigCopyIdentity(current));
+    act(() => view.result.current.store.add(current));
+    expect(view.result.current.items).toHaveLength(1);
+    expect(listModelFavorites()).toHaveLength(1);
+    expect(hostFavorites.accessHostModelFavorites('recipient').find((item) => item.uid === uid)?.fast).toBe('ultrafast');
   });
 
   it('edits and removes only the selected copy while preserving its share source', () => {
@@ -176,7 +242,30 @@ describe('recipient-owned shared model favorites', () => {
       publish([], true, 'recipient', 0);
     });
     expect(listModelFavorites()).toHaveLength(1);
-    expect(view.result.current.items).toHaveLength(1);
+    expect(view.result.current.items).toHaveLength(0);
+  });
+
+  // 测试价值（unit）：真实收藏 hook 添加配置，reconcileProviderShareFavorites 接收名单，
+  // 恢复后检查原 UID 和配置。依据：0.1.141 现场分享收藏失踪。已有用例覆盖未确认区域
+  // 和成员确定被替换；这里最小输入是一条收藏，原成员和供应商恢复前只收到一次缺行或旧别名。
+  // 单文件实测 3.09 秒。
+  it.each(['missing', 'provider alias'] as const)('restores the same favorite after transient %s in a confirmed list', (interruption) => {
+    const original = share();
+    const view = mount();
+    act(() => view.result.current.store.add(config));
+    const saved = view.result.current.items;
+    expect(saved).toHaveLength(1);
+    const stored = accessHostModelFavorites('recipient');
+    expect(stored).toHaveLength(1);
+
+    const next = interruption === 'missing' ? [] : [{ ...original, providerId: 'anthropic-sub-old' }];
+    act(() => publish([...next, share('s2', 'm2')]));
+    act(() => publish([original, share('s2', 'm2')]));
+
+    expect({
+      visible: view.result.current.items,
+      onDisk: accessHostModelFavorites('recipient'),
+    }).toEqual({ visible: saved, onDisk: stored });
   });
 
   it('clears revoked shares including the last share and a replaced membership, preserving unrelated favorites', () => {
@@ -189,7 +278,7 @@ describe('recipient-owned shared model favorites', () => {
     expect(a.result.current.items).toEqual([]);
     expect(() => staleStore.add(config)).toThrow('Shared favorite source unavailable');
     expect(b.result.current.items).toHaveLength(1);
-    act(() => publish([]));
+    act(() => publish([], true, 'recipient', 1, ['m1', 'm2']));
     expect(listModelFavorites()).toEqual([expect.objectContaining(config)]);
   });
 
@@ -206,7 +295,7 @@ describe('recipient-owned shared model favorites', () => {
     expect(listModelFavorites()).toEqual([]);
     act(() => { setDataOwnerGeneration('recipient', 3); setModelFavoritesOwner('recipient'); });
     expect(listModelFavorites()).toHaveLength(1);
-    act(() => publish([], true, 'recipient', 3));
+    act(() => publish([], true, 'recipient', 3, ['m1']));
     expect(listModelFavorites()).toEqual([]);
   });
 
@@ -220,11 +309,11 @@ describe('recipient-owned shared model favorites', () => {
     expect(() => view.result.current.store.remove(uid)).toThrow('quota');
     expect(view.result.current.items).toEqual([{ uid, ...config }]);
     const failed = renderHook(() => useProviderShareFavoriteCleanupFailed());
-    act(() => publish([]));
+    act(() => publish([], true, 'recipient', 1, ['m1', 'm2']));
     expect(failed.result.current).toBe(true);
     expect(listModelFavorites()).toHaveLength(1);
     writes.mockRestore();
-    act(() => publish([]));
+    act(() => publish([], true, 'recipient', 1, ['m1', 'm2']));
     expect(failed.result.current).toBe(false);
     expect(listModelFavorites()).toEqual([]);
   });

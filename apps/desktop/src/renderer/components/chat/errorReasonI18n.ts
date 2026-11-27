@@ -1,4 +1,12 @@
-import { GATEWAY_PROXY_TOKEN_INVALID_REASON } from '@cindy/maker-shared/error-redaction';
+import type { TFunction } from 'i18next';
+import type { ReconnectHandoff } from '../../../shared/agentInputQueue';
+import {
+  GATEWAY_PROXY_TOKEN_INVALID_REASON,
+  isProviderSafetyRefusalError,
+  isRemoteCompactEncryptedContentError,
+  PROVIDER_SAFETY_REFUSAL_REASON,
+  REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON,
+} from '@cindy/maker-shared/error-redaction';
 import {
   CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
   CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON,
@@ -18,6 +26,7 @@ export const ERROR_REASON_I18N_KEYS: Record<string, string> = {
   'empty-response': 'logic.errors.emptyResponse',
   'turn-failed': 'logic.errors.turnFailed',
   'silent-stop-exhausted': 'logic.errors.silentStopExhausted',
+  'unexecuted-tool-markup': 'logic.errors.unexecutedToolMarkup',
   'yield-continuation-incomplete': 'logic.errors.executionResultUnavailable',
   'output-limit': 'logic.errors.outputLimit',
   tool_use_loop_detected: 'logic.errors.toolUseLoopDetected',
@@ -27,7 +36,7 @@ export const ERROR_REASON_I18N_KEYS: Record<string, string> = {
   'host-shell-command-blocked': 'logic.errors.hostShellCommandBlocked',
   upstream_response_idle_timeout: 'logic.errors.upstreamResponseIdleTimeout',
   bridge_upstream_response_idle_timeout: 'logic.errors.upstreamResponseIdleTimeout',
-  codex_reconnect_stalled: 'logic.errors.upstreamResponseIdleTimeout',
+  codex_reconnect_stalled: 'logic.errors.codexReconnectStalled',
   codex_history_oversized: 'logic.errors.codexHistoryOversized',
   // Persisted error rows and the live reason both lack a reliable retirement
   // cause, so use copy that does not claim a location or authentication cause.
@@ -42,10 +51,43 @@ export const ERROR_REASON_I18N_KEYS: Record<string, string> = {
   turn_no_event_timeout: 'logic.errors.turnNoEventTimeout',
   bridge_turn_no_event_timeout: 'logic.errors.turnNoEventTimeout',
   'context-overflow': 'chat.errorBanner.contextOverflow',
+  [REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON]: 'chat.errorBanner.remoteCompactEncryptedContent',
   [UPSTREAM_OVERLOAD_REASON]: 'chat.errorBanner.overloadBusyNoRetry',
+  'UPSTREAM_OVERLOADED': 'chat.errorBanner.overloadBusyNoRetry',
+  'acp-usage-limit': 'chat.errorBanner.usageLimitReached',
+  'acp-overloaded': 'chat.errorBanner.overloadBusyNoRetry',
+  'acp-auth-required': 'chat.subscriptionAccountError.loginRequired',
   [UPSTREAM_STREAM_INTERRUPTED_REASON]: 'chat.errorBanner.streamInterruptedNoRetry',
   [CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON]: 'chat.errorBanner.claudeGatewayOpusPlanMismatch',
   [CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON]:
     'chat.errorBanner.claudeSubscriptionOpusPlanMismatch',
   [GATEWAY_PROXY_TOKEN_INVALID_REASON]: 'chat.errorBanner.gatewayProxyTokenInvalidNoRetry',
+  [PROVIDER_SAFETY_REFUSAL_REASON]: 'chat.errorBanner.providerSafetyRefusal',
 };
+
+export function localizeReconnectStall(t: TFunction, handoff?: ReconnectHandoff): string {
+  const summary = t('logic.errors.codexReconnectStalled');
+  if (handoff === 'disabled') return `${summary} ${t('logic.errors.reconnectAutoResumeDisabled')}`;
+  if (handoff === 'exhausted') return `${summary} ${t('logic.errors.reconnectAutoResumeExhausted')}`;
+  return summary;
+}
+
+/** Also correct persisted failures from hosts that used the old overflow reason or lacked the safety reason. */
+export function errorReasonI18nKey(reason: string | null | undefined, message: string): string | undefined {
+  if (message.startsWith('provider-rejected-before-dispatch: [PI_RETRY_HISTORY_FRAME_TOO_LARGE] ')) {
+    return 'chat.errorBanner.piRetryHistoryTooLarge';
+  }
+  if (message.startsWith('provider-rejected-before-dispatch: [PI_RETRY_HISTORY_UNAVAILABLE] ')) {
+    return 'chat.errorBanner.piRetryHistoryUnavailable';
+  }
+  if (message.startsWith('provider-rejected-before-dispatch: Provider rejected the Session send before dispatch: ')) {
+    return 'chat.errorBanner.messageNotSent';
+  }
+  if ((!reason || reason === 'context-overflow') && isRemoteCompactEncryptedContentError(message, reason)) {
+    return 'chat.errorBanner.remoteCompactEncryptedContent';
+  }
+  if (isProviderSafetyRefusalError(message, reason)) {
+    return 'chat.errorBanner.providerSafetyRefusal';
+  }
+  return reason ? ERROR_REASON_I18N_KEYS[reason] : undefined;
+}

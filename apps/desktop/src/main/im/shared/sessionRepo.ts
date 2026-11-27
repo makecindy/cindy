@@ -1,3 +1,4 @@
+import { mayRefineTaskTitle } from '../../maker-ipc/createdTaskTitles.js';
 /**
  * main/im/shared/sessionRepo.ts
  * ---------------------------------------------------------------------------
@@ -16,12 +17,12 @@ import { randomUUID } from 'node:crypto';
 
 import { and, desc, eq, sql } from 'drizzle-orm';
 import type { IdentityKey } from '@cindy/im';
-import type { AgentKind, Effort, PermissionMode } from '@cindy/maker-core';
+import type { AgentKind, Effort, EngineKind, PermissionMode } from '@cindy/maker-core';
 import type { ProviderView } from '@cindy/model-providers';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 
 import { getDbClient } from '../../localDb/client/current';
-import { normalizeDbAgentKind } from '../../../shared/agentKindConversion';
+import { makerToDbEngineKind } from '../../../shared/agentKindConversion';
 import { sessions } from '../../localDb/schema';
 import { withSessionRouteLock } from '../../localDb/sessionRouteLock';
 import { retireDeletedPiSubagentState } from '../../localDb/ipc/piSubagentDeletion';
@@ -35,6 +36,7 @@ import {
 import { buildImDefaultRouteRecord } from './channelDefaultRoute';
 import { broadcastSessionCreated, broadcastSessionPatched } from './sessionBroadcast';
 import { captureChannelAccount, openChannelSession } from './openChannelSession';
+import { getModelGroupStartBridge } from '../../model-groups/startBridge.js';
 import type { ImOrchestratorConfig, ImSessionNamespace } from './types';
 
 const log = createLogger('im:repo');
@@ -43,19 +45,31 @@ export function toCoreAgentKind(kind: string): AgentKind {
   return kind === 'codex' || kind === 'pi' ? kind : 'claude-code';
 }
 
-/** core AgentKind → sessions.agentKind 列的 legacy 存储值。 */
-function toDbAgentKind(kind: AgentKind): string {
-  return normalizeDbAgentKind(kind);
+/**
+ * Task row engine → Maker engine kind for every IM read of a task row. Plugin engines
+ * (docs/plans/acp-plugin-bridge.md) stay 'acp': mapping them to a built-in kind would send a
+ * plugin-engine task through built-in auth checks and restart it on Claude Code.
+ */
+export function toCoreEngineKind(kind: string): EngineKind {
+  return kind === 'acp' ? 'acp' : toCoreAgentKind(kind);
+}
+
+/** core engine kind → sessions.agentKind 列的存储值(插件引擎保持 'acp')。 */
+function toDbAgentKind(kind: EngineKind): string {
+  return makerToDbEngineKind(kind);
 }
 
 export interface ImSessionRow {
+  /** Title assigned by this creation, including a resolved group or topic name. */
+  initialTitle?: string;
   agentDeviceId?: string | null;
   id: string;
-  agentKind: AgentKind;
+  /** 'acp' = the task runs on a plugin engine (providerId names it, docs/plans/acp-plugin-bridge.md). */
+  agentKind: EngineKind;
   workingDir: string;
   model: string;
-  /** Latest persisted effort (may be changed by user via /model card later). */
-  effort: Effort;
+  /** Latest persisted effort (may be changed by user via /model card later; '' for acp default). */
+  effort: Effort | '';
   /** Latest persisted permission mode. */
   permissionMode: PermissionMode;
   fastMode: boolean | 'ultrafast';
@@ -81,12 +95,18 @@ export interface ImSessionRow {
    * 建任务 / `/new` 把它连同路由写进 `im_default_route`(跟随记录)。
    */
   defaultRouteFingerprint?: string;
+  /**
+   * 仅 prepareNewSession 产出的行带: `/new` 使用该路由键的项目或渠道对话目录。
+   */
+  laneWorkingDir?: boolean;
+  /** 仅 prepareNewSession 产出的行带: 智能路由启动凭据，建会话后 attach 绑定。 */
+  modelGroupStart?: string;
 }
 
 export interface SessionModelRouteSnapshot {
   agentDeviceId?: string | null;
   model: string;
-  effort: Effort;
+  effort: Effort | '';
   providerId: string | null;
 }
 
@@ -275,8 +295,8 @@ export function createImSessionRepo(
       if (!row) return null;
       return {
         id: row.id,
-        agentKind: toCoreAgentKind(row.agentKind),
-        workingDir: row.workingDir ?? ns.ensureWorkingDir(botContextId),
+        agentKind: toCoreEngineKind(row.agentKind),
+        workingDir: row.workingDir ?? ns.ensureWorkingDir(botContextId, userId),
         model: row.model,
         effort: row.effort,
         permissionMode: row.permissionMode,
@@ -354,8 +374,8 @@ export function createImSessionRepo(
       }
       return {
         id: row.id,
-        agentKind: toCoreAgentKind(row.agentKind),
-        workingDir: row.workingDir ?? ns.ensureWorkingDir(botContextId),
+        agentKind: toCoreEngineKind(row.agentKind),
+        workingDir: row.workingDir ?? ns.ensureWorkingDir(botContextId, userId),
         model: row.model,
         effort: row.effort,
         permissionMode: row.permissionMode,
@@ -377,7 +397,7 @@ export function createImSessionRepo(
       if (!row?.workingDir) return null;
       return {
         id: row.id,
-        agentKind: toCoreAgentKind(row.agentKind),
+        agentKind: toCoreEngineKind(row.agentKind),
         workingDir: row.workingDir,
         model: row.model,
         effort: row.effort,
@@ -394,15 +414,28 @@ export function createImSessionRepo(
     async prepareNewSession(botContextId, userId, scopeKey, providerSnapshot) {
       const assertAccount = captureChannelAccount();
       const id = ns.sessionIdFor(botContextId, userId, scopeKey);
-      const workingDir = ns.ensureWorkingDir(botContextId);
+      // 路由键自己的项目与模型(个人飞书 bot 的按群设置); 没有就用渠道的。
+      const laneWorkingDir = await ns.laneWorkingDirFor?.(botContextId, userId);
+      const workingDir = laneWorkingDir ?? ns.ensureWorkingDir(botContextId, userId);
+      // 模型路由的优先级: 路由键自己固定的 > 绑定项目的设置 > 渠道「新对话配置」。
+      const routeOverride = ns.routeOverrideFor?.(botContextId, userId) ?? null;
+      const laneProject = laneWorkingDir
+        ? ns.laneProjectDefaultsFor?.(botContextId, userId, laneWorkingDir) ?? null
+        : null;
       const row = rowFromDefaults(
         id,
         workingDir,
-        await resolveImSessionDefaults(config, providerSnapshot, ns.source),
+        !routeOverride && laneProject
+          ? await laneProject.resolve(providerSnapshot)
+          : await resolveImSessionDefaults(config, providerSnapshot, ns.source, routeOverride),
       );
+      if (laneWorkingDir !== undefined) {
+        row.workspaceKind = laneWorkingDir === null ? 'dialogue' : 'project';
+        row.laneWorkingDir = true;
+      }
       // 渠道可按 userId 覆写新会话权限档(telegram guest lane → 只读探索;
-      // feishu 群 lane → 渠道设置「群聊新建任务权限档」)。
-      const overridden = ns.permissionModeFor?.(userId) ?? null;
+      // feishu 群 lane → 这个群单独设置的 > 绑定项目的 > 渠道「群聊新建任务权限档」)。
+      const overridden = ns.permissionModeFor?.(userId, laneProject?.permissionMode ?? null) ?? null;
       if (overridden) row.permissionMode = overridden;
       preparedAccounts.set(row, assertAccount);
       return row;
@@ -424,6 +457,7 @@ export function createImSessionRepo(
       assertAccount();
       const db = getDbClient().drizzle;
       const now = Date.now();
+      const initialTitle = ns.defaultTitle(userId);
       // 新任务经公共入口 openSession(与桌面新建任务同一套模型准入 / Git 初始化 / 账号代次
       // 校验); 建行仍是下面这段确定性 id 的 upsert。准入可能规范化来源 / 推理强度 / Fast,
       // 新插入的行写准入后的路由; 冲突分支(并发建出 / 残留行)照旧不碰路由列。
@@ -440,7 +474,7 @@ export function createImSessionRepo(
         ...((defaults.workspaceKind ?? ns.workspaceKind)
           ? { workspaceKind: (defaults.workspaceKind ?? ns.workspaceKind) as 'project' | 'dialogue' }
           : {}),
-        title: ns.defaultTitle(userId),
+        title: initialTitle,
       }, (admitted, assertCurrent) => {
         row = { ...defaults, ...admitted };
         return withSessionRouteLock(row.id, async () => {
@@ -459,13 +493,13 @@ export function createImSessionRepo(
             .insert(sessions)
             .values({
               id: row.id,
-              title: ns.defaultTitle(userId),
+              title: initialTitle,
               ...(row.workspaceKind ?? ns.workspaceKind
                 ? { workspaceKind: row.workspaceKind ?? ns.workspaceKind }
                 : {}),
               workingDir: row.workingDir,
               model: row.model,
-              effort: row.effort,
+              effort: row.effort as Effort,
               permissionMode: row.permissionMode,
               fastMode: row.fastMode,
               status: 'active',
@@ -509,7 +543,7 @@ export function createImSessionRepo(
       const result: ImSessionRow = persistedRow
         ? {
             id: persistedRow.id,
-            agentKind: toCoreAgentKind(persistedRow.agentKind),
+            agentKind: toCoreEngineKind(persistedRow.agentKind),
             workingDir: persistedRow.workingDir ?? row.workingDir,
             model: persistedRow.model,
             effort: persistedRow.effort,
@@ -527,20 +561,26 @@ export function createImSessionRepo(
           `provider=${result.providerId ?? 'default'} permissionMode=${result.permissionMode}`,
       );
       // 通知 renderer sidebar / device-link 控制端有新会话行,否则要手动刷新才出现
+      if (persisted?.isFreshInsert && defaults.modelGroupStart) {
+        getModelGroupStartBridge()?.attach(result.id, defaults.modelGroupStart);
+      }
       broadcastSessionCreated(result.id);
-      // 渠道可异步解析正式标题(飞书群/话题 lane → 拉群名拼 [飞书·群/话题] {群名}),
-      // 只对**新建行**生效 — 复活行保留自己的历史标题(首条消息 oneshot 会把
-      // 话题会话升级成 [飞书·群名·简介] 格式, 不能回刷)。失败/无结果保持
-      // defaultTitle, 不阻塞建行。
+      // Native group/channel names are authoritative only while this fresh row still has its draft title.
       if (ns.resolveSessionTitle && persisted?.isFreshInsert) {
         try {
           const resolved = await ns.resolveSessionTitle(userId, scopeKey);
-          if (resolved) {
-            await db
+          assertAccount();
+          if (resolved && mayRefineTaskTitle(result.id)) {
+            const updated = await db
               .update(sessions)
               .set({ title: resolved })
-              .where(eq(sessions.id, result.id));
-            broadcastSessionPatched(result.id, { title: resolved });
+              .where(and(eq(sessions.id, result.id), eq(sessions.title, initialTitle)))
+              .returning({ id: sessions.id });
+            assertAccount();
+            if (updated.length) {
+              result.initialTitle = resolved;
+              broadcastSessionPatched(result.id, { title: resolved });
+            }
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -636,7 +676,10 @@ export function createImSessionRepo(
             },
             now,
           });
-          if (fresh.providerId) setSessionProvider(fresh.id, fresh.providerId);
+          if (fresh.providerId && fresh.agentKind !== 'acp') setSessionProvider(fresh.id, fresh.providerId);
+          if (defaults.modelGroupStart) {
+            getModelGroupStartBridge()?.attach(fresh.id, defaults.modelGroupStart);
+          }
           log.info(
             `created fresh ${ns.source} session id=${fresh.id} workingDir=${maskPath(fresh.workingDir)} ` +
               `agent=${fresh.agentKind} model=${fresh.model} effort=${fresh.effort} ` +
@@ -669,7 +712,8 @@ function rowFromDefaults(
     agentKind: defaults.agentKind,
     workingDir,
     model: defaults.model,
-    effort: defaults.effort,
+    // Plugin engines without effort modes use '' in storage (matching pluginEngineSessionAdmission).
+    effort: defaults.effort as Effort,
     permissionMode: defaults.permissionMode,
     fastMode: defaults.fastMode,
     sdkSessionId: null,
@@ -677,6 +721,7 @@ function rowFromDefaults(
     providerId: defaults.providerId,
     agentDeviceId: defaults.agentDeviceId ?? null,
     defaultRouteFingerprint: defaults.fingerprint,
+    ...(defaults.modelGroupStart ? { modelGroupStart: defaults.modelGroupStart } : {}),
   };
 }
 
@@ -745,12 +790,21 @@ export async function resetSessionToDefaults(
     prepared ??
     rowFromDefaults(sessionId, '', await resolveImSessionDefaults(config, undefined, channel));
   const db = getDbClient().drizzle;
+  const laneWorkspace = defaults.laneWorkingDir && defaults.workingDir && defaults.workspaceKind
+    ? { workingDir: defaults.workingDir, workspaceKind: defaults.workspaceKind }
+    : null;
+  const previousWorkspace = laneWorkspace
+    ? (await db.select({
+        workingDir: sessions.workingDir,
+        workspaceKind: sessions.workspaceKind,
+      }).from(sessions).where(eq(sessions.id, sessionId)).limit(1))[0]
+    : undefined;
   await db
     .update(sessions)
     .set({
       agentKind: toDbAgentKind(defaults.agentKind),
       model: defaults.model,
-      effort: defaults.effort,
+      effort: defaults.effort as Effort,
       providerId: defaults.providerId,
       agentDeviceId: defaults.agentDeviceId ?? null,
       permissionMode: defaults.permissionMode,
@@ -760,6 +814,8 @@ export async function resetSessionToDefaults(
       // It applies only at the explicit `/new` boundary; existing context is
       // never moved silently.
       ...(channel === 'wechat' && defaults.workingDir ? { workingDir: defaults.workingDir } : {}),
+      // 个人飞书群只在显式 `/new` 时切到群设置的项目或对话目录。
+      ...laneWorkspace,
       sdkSessionId: null,
       clearedAt: Date.now(),
       updatedAt: Date.now(),
@@ -767,7 +823,15 @@ export async function resetSessionToDefaults(
       listPreviewRole: null,
     })
     .where(eq(sessions.id, sessionId));
+  if (defaults.modelGroupStart) {
+    getModelGroupStartBridge()?.attach(sessionId, defaults.modelGroupStart);
+  }
   setSessionProvider(sessionId, defaults.providerId);
+  // 目录变动后侧栏要换分组，沿用 switchSessionWorkingDir 的刷新方式。
+  if (laneWorkspace && (
+    previousWorkspace?.workingDir !== laneWorkspace.workingDir ||
+    previousWorkspace?.workspaceKind !== laneWorkspace.workspaceKind
+  )) broadcastSessionCreated(sessionId);
 }
 
 /**
@@ -838,7 +902,7 @@ export async function readModelRouteSnapshot(
 export async function updateModelEffort(
   sessionId: string,
   model: string,
-  effort: Effort,
+  effort: Effort | '',
   providerId?: string | null,
 ): Promise<void> {
   const db = getDbClient().drizzle;
@@ -846,7 +910,7 @@ export async function updateModelEffort(
     .update(sessions)
     .set({
       model,
-      effort,
+      effort: effort as Effort,
       ...(providerId !== undefined ? { providerId } : {}),
       updatedAt: Date.now(),
     })

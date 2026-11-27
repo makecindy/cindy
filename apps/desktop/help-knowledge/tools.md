@@ -15,7 +15,7 @@ Two Settings tabs decide which tools the agents get: **Tools** (built-in tools a
   - **Feishu Bot** — send files and notifications to Feishu users through your bound bot.
   - **Personal WeChat** — send messages to known WeChat contacts.
   - **Browser** — browse and act on web pages. It's listed here only when the scope is **New session defaults**; per-project control is under **Settings > Automation**.
-- Core tools (memory, scheduling, and the helper that tells agents what's available) are always on and aren't listed. Smart Contacts has its own switch under **Settings > Personalization > Smart Contacts**.
+- Core tools (memory, scheduling, and the helper that tells agents what's available) are always on and aren't listed.
 - **Scope picker** (top right): **New session defaults** applies to sessions without a project override; choosing a recent project changes the setting for that project only. Project settings take priority. When you open Settings from a project session, that project is selected first.
 - A small label on each row shows where the current value comes from: **project**, **user default**, or **product default** (hover for details). After you change a row, it shows **Custom**; **Restore default** clears your change.
 
@@ -35,6 +35,7 @@ Two Settings tabs decide which tools the agents get: **Tools** (built-in tools a
   - This switch applies to the project of the session you came from (or to new-session defaults if there isn't one).
 - **Computer automation** (off by default) — lets agents see windows, read the UI, click, and type in local apps. It's powered by the open-source **CUA Driver**, which Cindy installs the first time you turn it on.
   - On macOS it needs **Accessibility** and **Screen Recording** for CuaDriver; Cindy walks you through granting them (**Grant**, **Recheck**). macOS may still ask for extra confirmation for a specific app or action later — approve those only when you've just started a computer-use task.
+    On macOS 27.3 and later, review **CuaDriver** in **System & App Protection Override** and grant Screen Recording separately. Review the access macOS describes before deciding. If you choose specific apps, the Agent can operate only those; for any other app it stops and tells you which one to allow. Apps set to **Ask First** show a macOS prompt the first time the Agent reaches them.
   - Windows needs no extra permission; keep the target app visible on the active desktop. On Linux, the desktop session must allow window inspection and input automation.
   - **Check for updates** / **Update** keeps the driver current (you may need to re-grant permissions after an update).
 - **Android automation** (off by default) — lets agents inspect and operate a connected Android phone over ADB. Cindy prepares ADB for you. To connect: use a data-capable USB cable, enable **Developer options** and **USB debugging** on the phone, keep it unlocked, allow the debugging prompt, then click **Recheck**. Pick a default **Device** (or **Auto**) and, if needed, a custom ADB path.

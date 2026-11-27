@@ -5,6 +5,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
+import { verifyPiResponsesCompletion } from '../responses-completion.js';
 import { rewriteContextModeDoctorPath } from '../context-mode-doctor-path.js';
 import {
   createPiTranslateContext,
@@ -42,6 +43,65 @@ function makeQueue(): { queue: AsyncQueue<AgentEvent>; events: AgentEvent[] } {
 const ev = (e: Record<string, unknown>): PiRpcEvent => e as unknown as PiRpcEvent;
 
 describe('pi translator', () => {
+  // Unit: the actual projected terminal is the one Desktop observes. Attaching
+  // proof to the earlier, unprojected event lost recovery even on a valid reply.
+  it.each([true, false])('only exposes proof on the usable projected terminal (aborted: %s)', aborted => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(ev({ type: 'message_end', message: {
+      role: 'assistant', model: 'model-a', stopReason: 'stop',
+      content: [{ type: 'text', text: 'Completed reply' }],
+    } }), queue, ctx);
+    if (aborted) markPiHostAbortRequested(ctx);
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx, (id, key) => id === 'a' && key === 'key-a');
+    const done = events.find(event => event.type === 'done')!;
+    expect(done.data).toMatchObject({ status: aborted ? 'cancelled' : 'completed' });
+    expect(verifyPiResponsesCompletion(done, 'a', 'key-a')).toBe(!aborted);
+    expect(verifyPiResponsesCompletion(done, 'b', 'key-a')).toBe(false);
+    expect(verifyPiResponsesCompletion(done, 'a', 'different-key')).toBe(false);
+    disposePiTranslateContext(ctx);
+  });
+
+  // #8887: prior retry tests omitted the second native agent_start. Each
+  // completed request must be observable before settlement (unit, no I/O).
+  it.each(['success', 'exhausted', 'stop'] as const)('accounts before settlement and preserves retry usage (%s)', outcome => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    const request = (input: number) => ev({ type: 'message_end', message: {
+      role: 'assistant', model: 'model-a', content: [],
+      usage: { input, output: 2, cacheRead: 3, cacheWrite: 1 },
+    } });
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(request(100), queue, ctx);
+    expect(events.filter(e => e.type === 'account_usage')).toHaveLength(1);
+    translatePiEvent(ev({ type: 'agent_end' }), queue, ctx);
+    translatePiEvent(ev({ type: 'auto_retry_start', attempt: 1, maxAttempts: 2 }), queue, ctx);
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(request(20), queue, ctx);
+    if (outcome === 'stop') markPiHostAbortRequested(ctx);
+    translatePiEvent(ev({ type: 'auto_retry_end', success: outcome === 'success', finalError: 'quota exceeded' }), queue, ctx);
+    // #10277: exhausted retry must release admission without a native settled
+    // frame; successful retry still waits for the remaining automatic work.
+    expect(ctx.isStreaming).toBe(outcome === 'success');
+    expect(ctx.turnSettled).toBe(outcome !== 'success');
+    expect(events.filter(e => e.type === 'done')).toHaveLength(outcome === 'success' ? 0 : 1);
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+    expect(events.filter(e => e.type === 'done')).toHaveLength(1);
+    expect(events.filter(e => e.type === 'error')).toHaveLength(outcome === 'exhausted' ? 1 : 0);
+    const done = events.find(e => e.type === 'done')!;
+    expect(done.data).toMatchObject({ status: outcome === 'success' ? 'completed' : outcome === 'stop' ? 'cancelled' : 'failed' });
+    expect(done.data).toMatchObject({ usage: { inputTokens: 120, outputTokens: 4, cacheReadTokens: 6, cacheCreationTokens: 2 } });
+    const receipts = events.filter(e => e.type === 'account_usage').map(e => (e.data as any).usage);
+    expect(receipts).toHaveLength(2);
+    expect(receipts[0].settlementId).toBe(receipts[1].settlementId);
+    expect(receipts.map(u => u.inputTokens)).toEqual([100, 20]);
+    expect(receipts[0].segments[0].id).not.toBe(receipts[1].segments[0].id);
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    expect(ctx.turnInput).toBe(0);
+    disposePiTranslateContext(ctx);
+  });
+
   it('projects MCP gateway calls into ordinary tools while keeping result pairing intact', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
@@ -66,7 +126,7 @@ describe('pi translator', () => {
     const { queue, events } = makeQueue();
 
     translatePiEvent(
-      ev({ type: 'tool_execution_start', toolCallId: 'sa-1', toolName: 'subagent', args: {} }),
+      ev({ type: 'tool_execution_start', toolCallId: 'sa-1', toolName: 'cindy_subagent', args: {} }),
       queue,
       ctx,
     );
@@ -80,6 +140,14 @@ describe('pi translator', () => {
       queue,
       ctx,
     );
+    // #11339: a user extension named subagent is not a Cindy durable run.
+    translatePiEvent(ev({ type: 'tool_execution_start', toolCallId: 'native-1', toolName: 'subagent', args: {} }), queue, ctx);
+    translatePiEvent(ev({ type: 'tool_execution_end', toolCallId: 'native-1', result: 'native result' }), queue, ctx);
+    expect(events.find(event => event.type === 'tool_use' && (event.data as { toolUseId?: string }).toolUseId === 'sa-1')?.data)
+      .toMatchObject({ toolName: 'subagent' });
+
+    expect(events.find(event => event.type === 'tool_use' && (event.data as { toolUseId?: string }).toolUseId === 'native-1')?.data)
+      .toMatchObject({ toolName: 'dynamic:subagent' });
 
     const updates = events.filter((event) => event.type === 'agent_task_update');
     expect(updates.map((event) => event.data)).toEqual([
@@ -100,7 +168,7 @@ describe('pi translator', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
     translatePiEvent(ev({
-      type: 'tool_execution_start', toolCallId: 'sa-title', toolName: 'subagent',
+      type: 'tool_execution_start', toolCallId: 'sa-title', toolName: 'cindy_subagent',
       args: { agent: 'scout', task: 'find the auth entry point' },
     }), queue, ctx);
     translatePiEvent(ev({
@@ -128,7 +196,7 @@ describe('pi translator', () => {
       ev({
         type: 'tool_execution_start',
         toolCallId: 'sa-list',
-        toolName: 'subagent',
+        toolName: 'cindy_subagent',
         args: { action: 'list' },
       }),
       queue,
@@ -149,7 +217,7 @@ describe('pi translator', () => {
       ev({
         type: 'tool_execution_start',
         toolCallId: 'sa-title',
-        toolName: 'subagent',
+        toolName: 'cindy_subagent',
         args: { title: 'Grok 连通性验证', agent: 'worker' },
       }),
       queue,
@@ -167,7 +235,7 @@ describe('pi translator', () => {
       ev({
         type: 'tool_execution_start',
         toolCallId: 'sa-batch-title',
-        toolName: 'subagent',
+        toolName: 'cindy_subagent',
         args: {
           tasks: [
             { agent: 'worker', task: 'Verify Grok routing and usage' },
@@ -188,7 +256,7 @@ describe('pi translator', () => {
     const { queue, events } = makeQueue();
 
     translatePiEvent(
-      ev({ type: 'tool_execution_start', toolCallId: 'sa-bg', toolName: 'subagent', args: { async: true } }),
+      ev({ type: 'tool_execution_start', toolCallId: 'sa-bg', toolName: 'cindy_subagent', args: { async: true } }),
       queue,
       ctx,
     );
@@ -229,7 +297,7 @@ describe('pi translator', () => {
       const { queue, events } = makeQueue();
 
       translatePiEvent(
-        ev({ type: 'tool_execution_start', toolCallId: 'sa-1', toolName: 'subagent', args: {} }),
+        ev({ type: 'tool_execution_start', toolCallId: 'sa-1', toolName: 'cindy_subagent', args: {} }),
         queue,
         ctx,
       );
@@ -441,6 +509,25 @@ describe('pi translator', () => {
     expect(events.filter((event) => event.type === 'text')).toEqual([]);
   });
 
+  // #9836: exercise the native assistant envelope and settlement, not a fabricated terminal event.
+  it('preserves provider 403 on the settled terminal error without leaking credentials', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(ev({ type: 'message_end', message: {
+      role: 'assistant', content: [], stopReason: 'error',
+      errorMessage: 'HTTP 403: The caller does not have permission; Authorization: Bearer secret-token',
+      usage: { input: 0, output: 0 },
+    } }), queue, ctx);
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+    const errors = events.filter(event => event.type === 'error');
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.data).toMatchObject({ errorStatus: 403, isTerminal: true });
+    expect(JSON.stringify(errors)).not.toContain('secret-token');
+    expect(events.find(event => event.type === 'done')?.data).toMatchObject({ status: 'failed' });
+    disposePiTranslateContext(ctx);
+  });
+
   it('surfaces a terminal provider error after Pi settles instead of staying in Working', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
@@ -555,6 +642,39 @@ describe('pi translator', () => {
         }),
       }),
     ]);
+  });
+
+  it.each([131064, 1000, undefined])('preserves normalized Pi reasoning usage (%s) without double counting', (reasoning) => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    // Earlier tool round must contribute to billing but not the final-request warning.
+    translatePiEvent(ev({ type: 'message_end', message: {
+      role: 'assistant', stopReason: 'toolUse', content: [],
+      usage: { input: 10, output: 100, reasoning: 50 },
+    } }), queue, ctx);
+    translatePiEvent(ev({ type: 'message_end', message: {
+      role: 'assistant', stopReason: 'length', content: [],
+      usage: { input: 657000, output: 131072, ...(reasoning === undefined ? {} : { reasoning }) },
+    } }), queue, ctx);
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+    const error = events.find((event) => event.type === 'error')?.data;
+    expect(error).toMatchObject({
+      reason: 'output-limit', isTerminal: true,
+      outputLimit: { outputTokens: 131072, ...(reasoning === undefined ? {} : { reasoningTokens: reasoning }) },
+      usage: { outputTokens: 131172, reasoningTokens: 50 + (reasoning ?? 0) },
+    });
+    expect(ctx.turnTokens).toBe(657010 + 131172);
+    expect(ctx.turnUsageSegments.at(-1)).toMatchObject({ outputTokens: 131072 });
+    if (reasoning === undefined) {
+      expect((error as { outputLimit: object }).outputLimit).not.toHaveProperty('reasoningTokens');
+    } else {
+      expect(ctx.turnUsageSegments.at(-1)).toHaveProperty('reasoningTokens', reasoning);
+    }
+    // Next turn must not reuse either the warning or the reasoning subtotal.
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    expect(ctx.turnReasoning).toBeUndefined();
+    expect(ctx.finalAssistantUsage).toBeUndefined();
   });
 
   it.each(['DeepSeek-V4-Flash-0731', 'claude-sonnet-4-6'])('preserves length-limited text and usage for %s', (model) => {
@@ -750,6 +870,26 @@ describe('pi translator', () => {
           errorStatus: 529,
         }),
       }),
+    ]);
+  });
+
+  // Unit: the SDK's 401 envelope needs to survive translation for group failover.
+  it('preserves the HTTP 401 from the OpenAI SDK error at terminal settlement', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(ev({
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [],
+        stopReason: 'error',
+        errorMessage: 'OpenAI API error (401): {"code":"invalid_api_key"}',
+      },
+    }), queue, ctx);
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+    expect(events.filter(event => event.type === 'error')).toEqual([
+      expect.objectContaining({ source: 'pi', data: expect.objectContaining({ errorStatus: 401, isTerminal: true }) }),
     ]);
   });
 
@@ -957,6 +1097,7 @@ describe('pi translator', () => {
 
     translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
     markPiHostAbortRequested(ctx);
+    markPiHostTurnStartPending(ctx); // A new Host prompt, not a native retry.
     translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
     translatePiEvent(
       ev({
@@ -1010,7 +1151,53 @@ describe('pi translator', () => {
     });
   });
 
-  it('notifies Pi network auto-retries with the shared Reconnecting progress line', () => {
+  it('keeps the last known context when a stopped request finalizes with zero usage', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'partial answer' }],
+          stopReason: 'stop',
+          usage: { input: 120, output: 30, cacheRead: 4_800, cacheWrite: 0 },
+        },
+      }),
+      queue,
+      ctx,
+    );
+    // Pi closes an aborted request with an all-zero usage message (Stop mid-turn).
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [],
+          stopReason: 'aborted',
+          errorMessage: 'Request aborted',
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+
+    const doneStatus = [...events].reverse().find((event) => event.type === 'status');
+    expect(doneStatus?.data).toMatchObject({
+      status: 'Done',
+      isRunning: false,
+      contextTokens: 4_920,
+    });
+  });
+
+  it.each([
+    'The operation timed out.',
+    'Stream ended without finish_reason',
+  ])('notifies Pi network auto-retries with the shared Reconnecting progress line: %s', errorMessage => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
 
@@ -1019,7 +1206,7 @@ describe('pi translator', () => {
         type: 'auto_retry_start',
         attempt: 1,
         maxAttempts: 6,
-        errorMessage: 'The operation timed out.',
+        errorMessage,
       }),
       queue,
       ctx,
@@ -1033,10 +1220,75 @@ describe('pi translator', () => {
           message: 'Reconnecting... 1/6',
           isTerminal: false,
           willRetry: true,
+          sdkError: errorMessage,
         }),
       }),
     ]);
   });
+
+  it('shows the first native retry of a concurrency-limited Responses request', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    const errorMessage = 'mock API error (429): {"code":"1302","message":"并发超限，请稍后重试"}';
+    translatePiEvent(ev({ type: 'auto_retry_start', attempt: 1, maxAttempts: 6, errorMessage }), queue, ctx);
+    expect(events.find(event => event.type === 'error')?.data).toMatchObject({
+      reason: 'terminal-rate-limit-retry', isTerminal: false, willRetry: true,
+      message: errorMessage + ' (rate-limit-retry 1/6)',
+    });
+  });
+
+  // #10948, unit: replay the terminal sequences from Pi's Responses endpoint.
+  it.each([
+    ['1302: 并发超限，请稍后重试', 'agent_settled', 'upstream-overload'],
+    ['1302: 并发超限，请稍后重试', 'auto_retry_end', undefined],
+    ['insufficient_quota: Monthly quota exceeded', 'agent_settled', undefined],
+  ] as const)('classifies Responses failure %s at %s', (errorMessage, terminal, reason) => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(ev({
+      type: 'message_end',
+      message: { role: 'assistant', api: 'openai-responses', stopReason: 'error', content: [], errorMessage },
+    }), queue, ctx);
+    translatePiEvent(ev({ type: terminal, success: false }), queue, ctx);
+    const errors = events.filter(event => event.type === 'error');
+    expect(errors).toHaveLength(1);
+    expect((errors[0].data as { reason?: string }).reason).toBe(reason);
+  });
+
+  it.each(['no retry', 'exhausted', 'stopped'] as const)(
+    'settles a Chat Completions stream truncation without inventing retry progress: %s',
+    outcome => {
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue, events } = makeQueue();
+      const errorMessage = 'Stream ended without finish_reason';
+      translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+      translatePiEvent(ev({
+        type: 'message_end',
+        message: { role: 'assistant', stopReason: 'error', content: [], errorMessage },
+      }), queue, ctx);
+      if (outcome === 'stopped') {
+        markPiHostAbortRequested(ctx);
+        translatePiEvent(ev({ type: 'auto_retry_start', attempt: 1, maxAttempts: 6, errorMessage }), queue, ctx);
+      }
+      translatePiEvent(outcome === 'no retry'
+        ? ev({ type: 'agent_settled' })
+        : ev({ type: 'auto_retry_end', success: false, finalError: errorMessage }), queue, ctx);
+
+      const errors = events.filter(event => event.type === 'error').map(event => event.data);
+      expect(errors).toEqual(outcome === 'stopped' ? [] : [expect.objectContaining({
+        message: errorMessage,
+        sdkError: errorMessage,
+        isTerminal: true,
+        usage: expect.any(Object),
+      })]);
+      expect(events.filter(event => event.type === 'done')).toEqual([
+        expect.objectContaining({ data: expect.objectContaining({
+          status: outcome === 'stopped' ? 'cancelled' : 'failed',
+        }) }),
+      ]);
+    },
+  );
 
   it('keeps unclassified Pi auto-retries silent instead of reusing the overload marker', () => {
     const ctx = createPiTranslateContext(noopLogger);
@@ -1368,6 +1620,7 @@ describe('pi translator', () => {
 
     translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
     expect(ctx.isStreaming).toBe(true);
+    ctx.contextTokens = 50_000;
 
     translatePiEvent(
       ev({
@@ -1380,6 +1633,8 @@ describe('pi translator', () => {
     );
     const boundary = events.find((e) => e.type === 'compact_boundary');
     expect(boundary?.turnScope).toBe('background');
+    expect(ctx.contextTokens).toBe(50_000);
+    expect(boundary?.data).not.toHaveProperty('postTokens');
     expect(
       events.filter(
         (e) => e.type === 'status' && (e.data as { status?: string }).status === 'Done',
@@ -1416,8 +1671,10 @@ describe('pi translator', () => {
       queue,
       ctx,
     );
-    // 只有 compact_boundary,没有 status 收口(turn 结束经 agent_settled 自然收口)。
-    expect(events.filter((e) => e.type === 'status')).toHaveLength(0);
+    // #10198: publish the lower watermark immediately without settling the turn.
+    expect(events.filter((e) => e.type === 'status')).toEqual([
+      expect.objectContaining({ data: expect.objectContaining({ isRunning: true, contextTokens: 32000 }) }),
+    ]);
     expect(events.some((e) => e.type === 'compact_boundary')).toBe(true);
     // 即便 manual 压缩期间用户已开始新 turn(isStreaming),也不收口。
     const ctx2 = createPiTranslateContext(noopLogger);
@@ -1428,7 +1685,45 @@ describe('pi translator', () => {
       q2,
       ctx2,
     );
-    expect(ev2.filter((e) => e.type === 'status')).toHaveLength(0);
+    expect(ev2.filter((e) => e.type === 'status')).toEqual([
+      expect.objectContaining({ data: expect.objectContaining({ isRunning: true, contextTokens: 20 }) }),
+    ]);
+  });
+
+  // #10198 (unit): existing compaction tests only checked the translator's memory.
+  // A running task must receive the new snapshot before its next tool or terminal.
+  it('publishes successful mid-turn compaction without interrupting subsequent tools', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    ctx.contextTokens = 579216;
+    ctx.contextWindow = 1_000_000;
+    ctx.workingContextWindow = 272000;
+    translatePiEvent(ev({ type: 'compaction_start', reason: 'threshold' }), queue, ctx);
+    events.length = 0;
+    translatePiEvent(ev({ type: 'compaction_end', reason: 'threshold', result: {
+      tokensBefore: 318394, estimatedTokensAfter: 46703,
+    } }), queue, ctx);
+    expect(events.map(event => event.type)).toEqual(['compact_boundary', 'status']);
+    expect(events[1].data).toMatchObject({ contextTokens: 46703, contextWindow: 272000, isRunning: true });
+    expect(ctx.isStreaming).toBe(true);
+    translatePiEvent(ev({ type: 'tool_execution_start', toolCallId: 'after-compact', toolName: 'read', args: { path: 'README.md' } }), queue, ctx);
+    expect(events.find(event => event.type === 'tool_use')?.data).toMatchObject({ toolUseId: 'after-compact' });
+    expect(events.some(event => event.type === 'done' || (event.type === 'status' && (event.data as { isRunning: boolean }).isRunning === false))).toBe(false);
+    disposePiTranslateContext(ctx);
+  });
+
+  it.each([undefined, NaN, Infinity, -1])('keeps the last known watermark for invalid postTokens %s', (postTokens) => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    ctx.contextTokens = 579216;
+    ctx.isStreaming = true;
+    translatePiEvent(ev({ type: 'compaction_start' }), queue, ctx);
+    events.length = 0;
+    translatePiEvent(ev({ type: 'compaction_end', reason: 'threshold', result: { estimatedTokensAfter: postTokens } }), queue, ctx);
+    expect(ctx.contextTokens).toBe(579216);
+    expect(events.find(event => event.type === 'compact_boundary')?.data).not.toHaveProperty('postTokens');
+    expect(events.some(event => event.type === 'status')).toBe(false);
   });
 
   it('does not emit compact_boundary for aborted or failed compaction_end', () => {
@@ -1782,6 +2077,34 @@ describe('pi translator', () => {
     const done2 = events2.events.find((e) => e.type === 'done');
     expect((done2!.data as { result?: unknown }).result).toBe('');
     expect(done2!.data).toMatchObject({ silentStop: true });
+  });
+
+  it.each([
+    ['resumed', true, undefined],
+    ['already-active', true, undefined],
+    ['queued', true, undefined],
+    ['queued', false, true],
+    ['unknown', true, true],
+  ])('settles a worker send with wake kind %s and ok=%s', (wakeKind, ok, expectedSilentStop) => {
+    // #13114, unit: a confirmed dispatch followed by an empty reply must not wake the Lead.
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    const tool = { toolCallId: 'dispatch', toolName: 'cindy_mcp_call_tool' };
+    const args = { server: 'cindy_orca', tool: 'send_to_worker', args: { target_session_id: 'worker', message: 'work' } };
+    const result = { content: [{ type: 'text', text: JSON.stringify({ ok, wake_kind: wakeKind }) }] };
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(ev({ type: 'tool_execution_start', ...tool, args }), queue, ctx);
+    translatePiEvent(ev({ type: 'tool_execution_end', ...tool, result, isError: false }), queue, ctx);
+    translatePiEvent(ev({ type: 'message_end', message: { role: 'assistant', stopReason: 'stop', content: [] } }), queue, ctx);
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+    const done = events.find((event) => event.type === 'done');
+    expect(done?.data).toMatchObject({ status: 'completed', result: '' });
+    expect((done?.data as { silentStop?: boolean }).silentStop).toBe(expectedSilentStop);
+    const next = makeQueue();
+    translatePiEvent(ev({ type: 'agent_start' }), next.queue, ctx);
+    translatePiEvent(ev({ type: 'tool_execution_end', ...tool, result }), next.queue, ctx);
+    translatePiEvent(ev({ type: 'agent_settled' }), next.queue, ctx);
+    expect(next.events.find((event) => event.type === 'done')?.data).toMatchObject({ silentStop: true });
   });
 
   it.each([
@@ -2271,11 +2594,31 @@ describe('pi translator', () => {
       translatePiEvent(progressEvent('sa-2', { input: 200, output: 30, cost: 0.02 }), queue, ctx);
       // 回退的累计值(理论上不该出现)不得产生负增量。
       translatePiEvent(progressEvent('sa-2', { input: 5, output: 1, cost: 0 }), queue, ctx);
+      // An old frame followed by the latest snapshot must not bill its delta again.
+      translatePiEvent(progressEvent('sa-2', { input: 200, output: 30, cost: 0.02 }), queue, ctx);
 
       expect(ctx.turnInput).toBe(300);
       expect(ctx.turnOutput).toBe(40);
       expect(ctx.costUsd).toBeCloseTo(0.03, 10);
     });
+
+    it.each(['cumulative-first', 'segments-first'] as const)(
+      'does not recount child requests when progress changes shape (%s)', (mode) => {
+        const ctx = createPiTranslateContext(noopLogger);
+        const { queue, events } = makeQueue();
+        const usage = { input: 100, output: 10, cacheRead: 5, cacheWrite: 0, cost: 0.01 };
+        const usageSegments = [{ id: 'r1', model: 'gpt-5.5', ...usage }];
+        translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+        translatePiEvent(progressEvent('child', usage, mode === 'segments-first'
+          ? { usage: undefined, usageSegments } : {}), queue, ctx);
+        translatePiEvent(progressEvent('child', usage), queue, ctx);
+        translatePiEvent(progressEvent('child', usage, { usageSegments }), queue, ctx);
+        translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+        const done = events.find(event => event.type === 'done')!;
+        expect((done.data as { usage: unknown }).usage).toMatchObject({ inputTokens: 100, outputTokens: 10, cacheReadTokens: 5 });
+        expect(ctx.usageReceipts).toHaveLength(1);
+      },
+    );
 
     it('does not pollute contextTokens with the subagent context', () => {
       // contextTokens = "最后一次 API 调用占了多少上下文"。子代理有自己独立的上下文窗口,
@@ -2355,14 +2698,14 @@ describe('pi translator live token speed', () => {
       update({ type: 'text_delta', contentIndex: 0, delta: 'one two three four five six' }, 1_500);
       const live = speedOf(events.filter((e) => e.type === 'status').at(-1));
       expect(live).toMatchObject({ streaming: true, tokens: 6, elapsedMs: 500 });
-      expect(live?.rate).toBeGreaterThan(0);
 
       // A bash call: count generated arguments, exclude execution time.
       update({ type: 'toolcall_start', contentIndex: 1, toolCall: { name: 'bash' } }, 1_600);
       update({ type: 'toolcall_delta', contentIndex: 1, delta: '{"command":"ls -la"}', toolCall: { name: 'bash' } }, 1_700);
       update({ type: 'toolcall_end', contentIndex: 1, toolCall: { name: 'bash' } }, 2_000);
-      expect(ctx.tokenSpeed.snapshot(10_000)).toMatchObject({ tokens: 17, elapsedMs: 1_000 });
-      update({ type: 'text_delta', contentIndex: 0, delta: 'seven eight' }, 12_000);
+      expect(ctx.tokenSpeed.snapshot(10_000)).toMatchObject({ tokens: 17, elapsedMs: 1_000, streaming: false });
+      update({ type: 'text_start', contentIndex: 0 }, 12_000);
+      update({ type: 'text_delta', contentIndex: 0, delta: 'seven eight' }, 12_400);
 
       vi.setSystemTime(12_500);
       translatePiEvent(ev({ type: 'message_end', message: {
@@ -2411,6 +2754,8 @@ describe('pi translator live token speed', () => {
       const { queue, events } = makeQueue();
       vi.setSystemTime(1_000);
       translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+      translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: { type: 'toolcall_start', contentIndex: 0 } }), queue, ctx);
+      vi.setSystemTime(1_500);
       translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: {
         type: 'toolcall_delta', contentIndex: 0, delta: 'a b c',
         partial: { content: [{ type: 'toolCall', name }] },
@@ -2424,6 +2769,441 @@ describe('pi translator live token speed', () => {
       events.length = 0;
       translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
       expect(usageSnapshotOf(ctx).tokenSpeed).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Also: the finished turn keeps the parent's speed chart. Child output makes the usage
+  // counters incomparable and clears their timing, which used to drop the chart as well.
+  it('keeps delegated subagent output out of the parent generation meter', () => {
+    vi.useFakeTimers();
+    try {
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue, events } = makeQueue();
+      vi.setSystemTime(1_000);
+      translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+      translatePiEvent(ev({ type: 'message_start', message: { role: 'assistant' } }), queue, ctx);
+      translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: { type: 'text_start', contentIndex: 0 } }), queue, ctx);
+      vi.setSystemTime(1_500);
+      translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: {
+        type: 'text_delta', contentIndex: 0, delta: 'one two three four five six',
+      } }), queue, ctx);
+
+      // A subagent runs during the tool window and reports its own output.
+      vi.setSystemTime(2_000);
+      translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: {
+        type: 'toolcall_end', toolCall: { name: 'cindy_subagent' },
+      } }), queue, ctx);
+      translatePiEvent(ev({
+        type: 'tool_execution_update',
+        toolCallId: 'sa-1',
+        partialResult: { details: { __cindySubagent: 1, taskId: 'sa-1', status: 'running',
+          usage: { input: 100, output: 900, cacheRead: 0, cacheWrite: 0, cost: 0 } } },
+      }), queue, ctx);
+      vi.setSystemTime(12_000);
+      expect(ctx.turnOutput).toBe(900);
+      // The child ran inside the tool pause: its tokens do not join the meter, and
+      // the 10s tool window is still excluded from the parent's generation time.
+      expect(ctx.tokenSpeed.snapshot()).toMatchObject({ tokens: 6, elapsedMs: 1_000 });
+
+      // The parent's own message_end calibrates the meter to its own output only.
+      vi.setSystemTime(12_500);
+      translatePiEvent(ev({ type: 'message_end', message: {
+        role: 'assistant', content: [{ type: 'text', text: 'one two three four five six' }],
+        stopReason: 'stop', usage: { input: 10, output: 4 },
+      } }), queue, ctx);
+      expect(ctx.turnOutput).toBe(904);
+      // Downwards calibration: the parent billed 4 output tokens, not the 6 estimated.
+      expect(ctx.tokenSpeed.snapshot()).toMatchObject({ tokens: 4 });
+      translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+      expect(ctx.tokenSpeed.snapshot()?.tokens).toBe(4);
+      const done = events.find((event) => event.type === 'done');
+      const usage = (done?.data as { usage?: { durationMs?: number; generationTrace?: { requests: number } } })?.usage;
+      expect(usage?.durationMs).toBeUndefined();
+      expect(usage?.generationTrace).toMatchObject({ requests: 1 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Recorded Pi sessions with Grok: the streamed thinking was a third of the real
+  // reasoning, so a reply in flight showed 45% of its output. Unit tier through translatePiEvent.
+  it('counts streamed thinking for what the last reply showed it to stand for', () => {
+    vi.useFakeTimers();
+    try {
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue } = makeQueue();
+      const send = (event: Record<string, unknown>, at: number) => {
+        vi.setSystemTime(at);
+        translatePiEvent(ev(event), queue, ctx);
+      };
+      const update = (assistantMessageEvent: Record<string, unknown>, at: number) =>
+        send({ type: 'message_update', assistantMessageEvent }, at);
+      const think = (from: number) => {
+        send({ type: 'message_start', message: { role: 'assistant' } }, from);
+        update({ type: 'thinking_start', contentIndex: 0 }, from);
+        update({ type: 'thinking_delta', contentIndex: 0, delta: 'w '.repeat(50) }, from + 500);
+        update({ type: 'thinking_delta', contentIndex: 0, delta: 'w '.repeat(50) }, from + 1_000);
+      };
+      send({ type: 'agent_start' }, 1_000);
+      think(1_000);
+      // 100 estimated tokens of thinking so far, as streamed.
+      expect(ctx.tokenSpeed.snapshot()).toMatchObject({ tokens: 100 });
+      send({ type: 'message_end', message: {
+        role: 'assistant', content: [], stopReason: 'toolUse', usage: { input: 10, output: 400, reasoning: 400 },
+      } }, 2_000);
+      expect(ctx.tokenSpeed.snapshot()).toMatchObject({ tokens: 400 });
+      // The same stream now counts for more than it shows: it stood for four times as much.
+      think(5_000);
+      expect(ctx.tokenSpeed.snapshot()!.tokens).toBeGreaterThan(400 + 150);
+      disposePiTranslateContext(ctx);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The clock used to start when the request was sent, so the wait for the first byte read
+  // as slow generation; starting at the first byte must not turn hidden reasoning into speed.
+  it('times a reply from its first byte and gives reasoning that never streamed the wait it took', () => {
+    vi.useFakeTimers();
+    try {
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue } = makeQueue();
+      const send = (event: Record<string, unknown>, at: number) => {
+        vi.setSystemTime(at);
+        translatePiEvent(ev(event), queue, ctx);
+      };
+      const text = (words: number, at: number) => send({ type: 'message_update', assistantMessageEvent: {
+        type: 'text_delta', contentIndex: 0, delta: 'w '.repeat(words),
+      } }, at);
+      send({ type: 'agent_start' }, 1_000);
+      // 5s until the first byte, then 200 tokens over 2s.
+      send({ type: 'message_start', message: { role: 'assistant', timestamp: 1_000 } }, 1_000);
+      send({ type: 'message_update', assistantMessageEvent: { type: 'text_start', contentIndex: 0 } }, 6_000);
+      text(100, 7_000);
+      text(100, 8_000);
+      send({ type: 'message_end', message: {
+        role: 'assistant', content: [], stopReason: 'toolUse', timestamp: 1_000, usage: { input: 10, output: 200 },
+      } }, 8_000);
+      expect(ctx.tokenSpeed.snapshot()).toMatchObject({ tokens: 200, elapsedMs: 2_000, average: 100 });
+      // 20s of reasoning that streams nothing, then 200 visible tokens over 2s.
+      send({ type: 'message_start', message: { role: 'assistant', timestamp: 10_000 } }, 10_000);
+      send({ type: 'message_update', assistantMessageEvent: { type: 'text_start', contentIndex: 0 } }, 30_000);
+      text(100, 31_000);
+      text(100, 32_000);
+      send({ type: 'message_end', message: {
+        role: 'assistant', content: [], stopReason: 'stop', timestamp: 10_000,
+        usage: { input: 10, output: 2_200, reasoning: 2_000 },
+      } }, 32_000);
+      // 2 400 tokens over 2s + 20s + 2s, not the 2 200 tokens over the 2s that streamed.
+      expect(ctx.tokenSpeed.snapshot()).toMatchObject({ tokens: 2_400, elapsedMs: 24_000, average: 100 });
+      disposePiTranslateContext(ctx);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Greptile review of PR 9597: a reply that streamed and then reported zero output left its
+  // estimate in the turn's total, and in the next try's calibration.
+  it('drops the streamed estimate when message_end explicitly reports zero output', () => {
+    vi.useFakeTimers();
+    try {
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue } = makeQueue();
+      const send = (event: Record<string, unknown>, at: number) => {
+        vi.setSystemTime(at);
+        translatePiEvent(ev(event), queue, ctx);
+      };
+      send({ type: 'agent_start' }, 1_000);
+      send({ type: 'message_start', message: { role: 'assistant' } }, 1_000);
+      send({ type: 'message_update', assistantMessageEvent: { type: 'text_start', contentIndex: 0 } }, 1_000);
+      send({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'one two three four five six' } }, 1_500);
+      expect(ctx.tokenSpeed.snapshot()).toMatchObject({ tokens: 6 });
+      send({ type: 'message_end', message: {
+        role: 'assistant', content: [], stopReason: 'error', errorMessage: 'HTTP status 500', usage: { input: 10, output: 0 },
+      } }, 2_000);
+      expect(ctx.tokenSpeed.snapshot()).toBeUndefined();
+      send({ type: 'agent_settled' }, 2_500);
+      expect(ctx.tokenSpeed.snapshot()).toBeUndefined();
+      disposePiTranslateContext(ctx);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the streamed estimate when message_end reports no output usage', () => {
+    vi.useFakeTimers();
+    try {
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue } = makeQueue();
+      vi.setSystemTime(1_000);
+      translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+      translatePiEvent(ev({ type: 'message_start', message: { role: 'assistant' } }), queue, ctx);
+      translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: { type: 'text_start', contentIndex: 0 } }), queue, ctx);
+      vi.setSystemTime(1_500);
+      translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: {
+        type: 'text_delta', contentIndex: 0, delta: 'one two three four five six',
+      } }), queue, ctx);
+      expect(ctx.tokenSpeed.snapshot()!.tokens).toBe(6);
+
+      // An error/billed-nothing response carries no usage: the estimate must survive
+      // instead of being erased by a turnMainOutput of 0.
+      vi.setSystemTime(2_000);
+      translatePiEvent(ev({ type: 'message_end', message: {
+        role: 'assistant', content: [{ type: 'text', text: 'one two three four five six' }],
+        stopReason: 'error', errorMessage: 'HTTP status 500',
+      } }), queue, ctx);
+      expect(ctx.tokenSpeed.snapshot()).toMatchObject({ tokens: 6, streaming: false });
+
+      // A usage object without a numeric output is not a report either.
+      vi.setSystemTime(2_500);
+      translatePiEvent(ev({ type: 'message_end', message: {
+        role: 'assistant', content: [{ type: 'text', text: 'one two three four five six' }],
+        stopReason: 'stop', usage: { input: 10 },
+      } }), queue, ctx);
+      expect(ctx.tokenSpeed.snapshot()!.tokens).toBe(6);
+      disposePiTranslateContext(ctx);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the late streamed estimate when a later call ends without output usage', () => {
+    vi.useFakeTimers();
+    try {
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue } = makeQueue();
+      const update = (assistantMessageEvent: Record<string, unknown>, at: number) => {
+        vi.setSystemTime(at);
+        translatePiEvent(ev({ type: 'message_update', assistantMessageEvent }), queue, ctx);
+      };
+
+      // First call reports its own usage (output 4), calibrating the meter to 4.
+      vi.setSystemTime(1_000);
+      translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+      translatePiEvent(ev({ type: 'message_start', message: { role: 'assistant' } }), queue, ctx);
+      update({ type: 'text_start', contentIndex: 0 }, 1_000);
+      update({ type: 'text_delta', contentIndex: 0, delta: 'one two three four five six' }, 1_500);
+      vi.setSystemTime(2_000);
+      translatePiEvent(ev({ type: 'message_end', message: {
+        role: 'assistant', content: [{ type: 'text', text: 'one two three four five six' }],
+        stopReason: 'stop', usage: { input: 10, output: 4 },
+      } }), queue, ctx);
+      expect(ctx.turnMainOutput).toBe(4);
+      expect(ctx.tokenSpeed.snapshot()).toMatchObject({ tokens: 4 });
+      expect(ctx.turnMainOutputUsageComplete).toBe(true);
+
+      // A tool runs, then the second call streams 6 more tokens but ends with an
+      // error and no usage: only the estimate accounts for them.
+      vi.setSystemTime(3_000);
+      translatePiEvent(ev({ type: 'tool_execution_start', toolCallId: 'bash-1', toolName: 'bash', args: { command: 'ls' } }), queue, ctx);
+      vi.setSystemTime(8_000);
+      translatePiEvent(ev({ type: 'tool_execution_end', toolCallId: 'bash-1', result: 'ok', isError: false }), queue, ctx);
+      translatePiEvent(ev({ type: 'message_start', message: { role: 'assistant' } }), queue, ctx);
+      update({ type: 'text_start', contentIndex: 0 }, 8_000);
+      update({ type: 'text_delta', contentIndex: 0, delta: 'seven eight nine ten five six' }, 8_500);
+      expect(ctx.tokenSpeed.snapshot()!.tokens).toBe(10);
+      vi.setSystemTime(9_000);
+      translatePiEvent(ev({ type: 'message_end', message: {
+        role: 'assistant', content: [{ type: 'text', text: 'seven eight nine ten five six' }],
+        stopReason: 'error', errorMessage: 'HTTP status 500',
+      } }), queue, ctx);
+      expect(ctx.turnMainOutputUsageComplete).toBe(false);
+      expect(ctx.tokenSpeed.snapshot()).toMatchObject({ tokens: 10, streaming: false });
+
+      // Settlement must not overwrite the estimate with the incomplete total (4).
+      vi.setSystemTime(9_500);
+      translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+      const settled = ctx.tokenSpeed.snapshot()!;
+      expect(settled.tokens).toBe(10);
+      // The paused window (2s→8s) stays out of generation time: 1s + 1s of generation.
+      expect(settled.elapsedMs).toBe(2_000);
+      expect(settled.average).toBe(5);
+      disposePiTranslateContext(ctx);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('carries estimates from usage-less calls across a later successful calibration', () => {
+    vi.useFakeTimers();
+    try {
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue } = makeQueue();
+      const update = (assistantMessageEvent: Record<string, unknown>, at: number) => {
+        vi.setSystemTime(at);
+        translatePiEvent(ev({ type: 'message_update', assistantMessageEvent }), queue, ctx);
+      };
+
+      // First call reports output 4: the meter calibrates down from the 6 estimated.
+      vi.setSystemTime(1_000);
+      translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+      translatePiEvent(ev({ type: 'message_start', message: { role: 'assistant' } }), queue, ctx);
+      update({ type: 'text_start', contentIndex: 0 }, 1_000);
+      update({ type: 'text_delta', contentIndex: 0, delta: 'one two three four five six' }, 1_500);
+      vi.setSystemTime(2_000);
+      translatePiEvent(ev({ type: 'message_end', message: {
+        role: 'assistant', content: [{ type: 'text', text: 'one two three four five six' }],
+        stopReason: 'stop', usage: { input: 10, output: 4 },
+      } }), queue, ctx);
+      expect(ctx.turnMainOutput).toBe(4);
+      expect(ctx.unreportedEstimatedOutput).toBe(0);
+      expect(ctx.tokenSpeed.snapshot()).toMatchObject({ tokens: 4 });
+
+      // Second call streams 6 tokens but reports no usage at all: its estimate is
+      // parked as real generation the provider did not bill.
+      vi.setSystemTime(3_000);
+      translatePiEvent(ev({ type: 'tool_execution_start', toolCallId: 'bash-1', toolName: 'bash', args: { command: 'ls' } }), queue, ctx);
+      vi.setSystemTime(8_000);
+      translatePiEvent(ev({ type: 'tool_execution_end', toolCallId: 'bash-1', result: 'ok', isError: false }), queue, ctx);
+      translatePiEvent(ev({ type: 'message_start', message: { role: 'assistant' } }), queue, ctx);
+      update({ type: 'text_start', contentIndex: 0 }, 8_000);
+      update({ type: 'text_delta', contentIndex: 0, delta: 'seven eight nine ten five six' }, 8_500);
+      expect(ctx.tokenSpeed.snapshot()!.tokens).toBe(10);
+      vi.setSystemTime(9_000);
+      translatePiEvent(ev({ type: 'message_end', message: {
+        role: 'assistant', content: [{ type: 'text', text: 'seven eight nine ten five six' }],
+        stopReason: 'error', errorMessage: 'HTTP status 500',
+      } }), queue, ctx);
+      expect(ctx.turnMainOutput).toBe(4);
+      expect(ctx.unreportedEstimatedOutput).toBe(6);
+      expect(ctx.tokenSpeed.snapshot()).toMatchObject({ tokens: 10, streaming: false });
+
+      // Third attempt succeeds and reports output 8. The calibration is the whole
+      // turn (4 reported + 6 estimated + 8 reported = 18), not 4 + 8 = 12: the
+      // usage-less call's tokens must not be overwritten by the retry.
+      vi.setSystemTime(9_500);
+      translatePiEvent(ev({ type: 'message_start', message: { role: 'assistant' } }), queue, ctx);
+      update({ type: 'text_start', contentIndex: 0 }, 9_500);
+      update({ type: 'text_delta', contentIndex: 0, delta: 'a b c d e f g h' }, 9_800);
+      vi.setSystemTime(10_000);
+      translatePiEvent(ev({ type: 'message_end', message: {
+        role: 'assistant', content: [{ type: 'text', text: 'a b c d e f g h' }],
+        stopReason: 'stop', usage: { input: 12, output: 8 },
+      } }), queue, ctx);
+      expect(ctx.turnMainOutput).toBe(12);
+      expect(ctx.unreportedEstimatedOutput).toBe(6);
+      expect(ctx.tokenSpeed.snapshot()).toMatchObject({ tokens: 18, streaming: false });
+
+      // Settlement keeps the same 18 instead of falling back to 12.
+      vi.setSystemTime(10_500);
+      translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+      const settled = ctx.tokenSpeed.snapshot()!;
+      expect(settled.tokens).toBe(18);
+      // Generation time excludes the tool window and inter-message gaps: 1s, 1s and 0.5s of generation.
+      expect(settled.elapsedMs).toBe(2_500);
+      // 18 tokens over 2.5s of generation.
+      expect(settled.average).toBeCloseTo(18_000 / 2_500, 6);
+      // The middle request had no report and the following retry lasted only 500 ms.
+      // Combining them would produce a spurious calibrated average.
+      expect(settled.measurement?.average).toBeNull();
+      expect(settled.rate).toBe(settled.average);
+      disposePiTranslateContext(ctx);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('publishes live thinking rate within 2.5s, resets stale rate on new request, and excludes TTFT from done.usage.durationMs', () => {
+    vi.useFakeTimers();
+    try {
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue, events } = makeQueue();
+      const send = (event: Record<string, unknown>, at: number) => {
+        vi.setSystemTime(at);
+        translatePiEvent(ev(event), queue, ctx);
+      };
+      const update = (assistantMessageEvent: Record<string, unknown>, at: number) =>
+        send({ type: 'message_update', assistantMessageEvent }, at);
+
+      send({ type: 'agent_start' }, 1_000);
+      // 5s TTFT wait before first byte arrives.
+      send({ type: 'message_start', message: { role: 'assistant', timestamp: 1_000 } }, 1_000);
+      update({ type: 'thinking_start', contentIndex: 0 }, 6_000);
+      for (let t = 6_250; t <= 8_500; t += 250) {
+        update({ type: 'thinking_delta', contentIndex: 0, delta: 'a '.repeat(25) }, t);
+      }
+      // Verbatim thinking should already produce a live reading well before 10s.
+      const thinkingSnap = ctx.tokenSpeed.snapshot(8_500);
+      expect(thinkingSnap?.streaming).toBe(true);
+      expect(thinkingSnap?.rate).toBeGreaterThan(80);
+
+      send({ type: 'message_end', message: {
+        role: 'assistant', content: [], stopReason: 'toolUse', timestamp: 1_000,
+        usage: { input: 10, output: 250, reasoning: 250 },
+      } }, 8_500);
+
+      // Next request after >500ms pause must not leak the previous request's rate while warming up.
+      send({ type: 'message_start', message: { role: 'assistant', timestamp: 15_000 } }, 15_000);
+      update({ type: 'text_start', contentIndex: 0 }, 15_000);
+      update({ type: 'text_delta', contentIndex: 0, delta: 'hello world' }, 15_100);
+      expect(ctx.tokenSpeed.snapshot(15_100)?.rate).toBe(0);
+
+      update({ type: 'text_delta', contentIndex: 0, delta: 'foo bar' }, 16_000);
+      send({ type: 'message_end', message: {
+        role: 'assistant', content: [{ type: 'text', text: 'hello world foo bar' }], stopReason: 'stop',
+        timestamp: 15_000, usage: { input: 10, output: 100 },
+      } }, 16_000);
+      send({ type: 'agent_settled' }, 16_000);
+
+      const done = events.find((e) => e.type === 'done')!;
+      const usage = (done.data as { usage: Record<string, unknown> }).usage;
+      // Excludes the 5s TTFT wait and 6.5s tool gap; matches the calibrated clock.
+      const calibratedMs = Math.round(ctx.tokenSpeed.snapshot(16_000)!.elapsedMs);
+      expect(usage.durationMs).toBe(calibratedMs);
+      expect(usage.durationMs).toBeLessThan(5_000);
+      disposePiTranslateContext(ctx);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Codex review P2 (#discussion_r4561674374): Pi summary models (e.g. Claude)
+  // stream bursts >5s apart; without explicit summarizedThinking mode on
+  // message_start, the 5s verbatim window resets on every burst and leaves the
+  // live rate stuck at an inflated initial reading instead of ~28.6 tok/s.
+  it('retains summary window sampling for Claude/summary models in Pi and switches back for verbatim models', () => {
+    vi.useFakeTimers();
+    try {
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue } = makeQueue();
+      const send = (event: Record<string, unknown>, at: number) => {
+        vi.setSystemTime(at);
+        translatePiEvent(ev(event), queue, ctx);
+      };
+      const update = (assistantMessageEvent: Record<string, unknown>, at: number) =>
+        send({ type: 'message_update', assistantMessageEvent }, at);
+
+      send({ type: 'agent_start' }, 1_000);
+      send({ type: 'message_start', message: { role: 'assistant', model: 'anthropic/claude-sonnet-4-5', timestamp: 1_000 } }, 1_000);
+      update({ type: 'thinking_start', contentIndex: 0 }, 1_000);
+      // Initial small burst that would read 100 tok/s if subsequent 7s bursts kept resetting a 5s window.
+      update({ type: 'thinking_delta', contentIndex: 0, delta: 'w '.repeat(10) }, 1_050);
+      update({ type: 'thinking_delta', contentIndex: 0, delta: 'w '.repeat(90) }, 1_950);
+      // 7s intervals with 200-word summaries (~28.6 tok/s).
+      update({ type: 'thinking_delta', contentIndex: 0, delta: 'w '.repeat(200) }, 8_950);
+      update({ type: 'thinking_delta', contentIndex: 0, delta: 'w '.repeat(200) }, 15_950);
+      const summarySnap = ctx.tokenSpeed.snapshot(15_950);
+      expect(summarySnap?.rate).toBeGreaterThan(25);
+      expect(summarySnap?.rate).toBeLessThan(35);
+      expect(summarySnap?.measurement?.latest).toBeNull();
+
+      send({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'stop', timestamp: 1_000, usage: { input: 10, output: 500 } } }, 16_000);
+      send({ type: 'agent_settled' }, 16_000);
+
+      // Switching to a verbatim-thinking model on the next turn restores the 5s/2s live window.
+      send({ type: 'agent_start' }, 20_000);
+      send({ type: 'message_start', message: { role: 'assistant', model: 'google/gemini-3.8-flash', timestamp: 20_000 } }, 20_000);
+      update({ type: 'thinking_start', contentIndex: 0 }, 20_000);
+      for (let t = 20_250; t <= 22_500; t += 250) {
+        update({ type: 'thinking_delta', contentIndex: 0, delta: 'a '.repeat(25) }, t);
+      }
+      const verbatimSnap = ctx.tokenSpeed.snapshot(22_500);
+      expect(verbatimSnap?.streaming).toBe(true);
+      expect(verbatimSnap?.rate).toBeGreaterThan(80);
+      expect(verbatimSnap?.measurement?.latest?.kind).toBe('stream');
+      disposePiTranslateContext(ctx);
     } finally {
       vi.useRealTimers();
     }
@@ -2462,4 +3242,136 @@ it('retains tool image bytes and a video resource alongside text', () => {
     ],
   });
   disposePiTranslateContext(ctx);
+});
+
+// A second 400 must remain terminal; Desktop may not add the old process replay.
+it('projects native cache recovery ownership onto the terminal error', () => {
+  const ctx = createPiTranslateContext(noopLogger);
+  const { queue, events } = makeQueue();
+  translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+  translatePiEvent(ev({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'error',
+    errorMessage: '400: {"message":"Unsupported parameter(s): prompt_cache_key"}', cindyCacheRecoveryHandled: true } }), queue, ctx);
+  translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+  expect(events.filter(event => event.type === 'error')).toHaveLength(1);
+  expect(events.find(event => event.type === 'error')?.data).toMatchObject({ piCacheRecoveryHandled: true, isTerminal: true });
+  disposePiTranslateContext(ctx);
+});
+
+// #10651 unit: production RPC translation previously leaked complete DSML and
+// reported completed with no tool/error. Existing tests only cover native calls.
+describe('#10651 DSML output', () => {
+  const command = `echo '===中文开始==='; printf '%s\\n' "nested 'quotes'" | cat; echo '===中文结束==='`;
+  const markup = (bar: string) => `<${bar}DSML${bar} calls><${bar}DSML${bar} invoke name="ssh"><${bar}DSML${bar} parameter name="args" string="true">${command}</${bar}DSML${bar} parameter></${bar}DSML${bar} invoke></${bar}DSML${bar} calls>`;
+  function emitMessage(ctx: ReturnType<typeof createPiTranslateContext>, queue: AsyncQueue<AgentEvent>, text: string, calls: unknown[] = [], reason = 'stop') {
+    translatePiEvent(ev({ type: 'message_start', message: { role: 'assistant' } }), queue, ctx);
+    translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: text } }), queue, ctx);
+    translatePiEvent(ev({ type: 'message_end', message: { role: 'assistant', stopReason: reason,
+      content: [{ type: 'text', text }, ...calls], usage: { input: 10, output: 5, cacheRead: 8 } } }), queue, ctx);
+  }
+  it.each(['structured', 'code', 'quote', 'incomplete', 'stop', 'length', 'error', 'retry', 'previous-call', 'other-session', 'thinking', 'thinking-final', 'thinking-and-text', 'list-code', 'batch-shortfall'])(
+    'preserves the output/terminal boundary for %s', mode => {
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue, events } = makeQueue();
+      const raw = markup('|');
+      const call = { type: 'toolCall', id: 'ssh-1', name: 'ssh', arguments: { args: command } };
+      try {
+        translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+        if (mode === 'other-session') {
+          const other = createPiTranslateContext(noopLogger);
+          try { emitMessage(other, makeQueue().queue, raw, [call]); } finally { disposePiTranslateContext(other); }
+        }
+        if (mode === 'previous-call') {
+          emitMessage(ctx, queue, raw, [call]);
+          translatePiEvent(ev({ type: 'tool_execution_start', toolCallId: 'ssh-1', toolName: 'ssh', args: { args: command } }), queue, ctx);
+          translatePiEvent(ev({ type: 'tool_execution_end', toolCallId: 'ssh-1', toolName: 'ssh', result: { content: [{ type: 'text', text: 'ok' }] } }), queue, ctx);
+        }
+        if (mode === 'retry') {
+          translatePiEvent(ev({ type: 'message_start', message: { role: 'assistant' } }), queue, ctx);
+          translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: raw } }), queue, ctx);
+          translatePiEvent(ev({ type: 'auto_retry_start', attempt: 1, maxAttempts: 3, errorMessage: 'HTTP status 529: overloaded' }), queue, ctx);
+          expect(events.filter(e => e.type === 'text').map(e => (e.data as { text: string }).text).join('')).toBe(raw);
+        }
+        if (mode === 'stop') markPiHostAbortRequested(ctx);
+        const literal = mode === 'list-code' ? '- ~~~xml\n  ' + raw + '\n  ~~~' : mode === 'code' ? '```xml\n' + raw + '\n```' : mode === 'quote' ? '> ' + raw : mode === 'incomplete' ? raw.slice(0, -10) : raw;
+        if (mode.startsWith('thinking')) {
+          translatePiEvent(ev({ type: 'message_start', message: { role: 'assistant' } }), queue, ctx);
+          if (mode !== 'thinking-final') translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', contentIndex: 0, delta: raw } }), queue, ctx);
+          translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: { type: 'thinking_end', contentIndex: 0, content: raw } }), queue, ctx);
+          translatePiEvent(ev({ type: 'message_end', message: { role: 'assistant', stopReason: 'stop', content: [{ type: 'thinking', thinking: raw }, { type: 'text', text: mode === 'thinking-and-text' ? raw : 'answer' }] } }), queue, ctx);
+        } else {
+          const duplicate = raw.replace('</|DSML| calls>', raw.slice('<|DSML| calls>'.length, -'</|DSML| calls>'.length) + '</|DSML| calls>');
+          emitMessage(ctx, queue, mode === 'batch-shortfall' ? duplicate : literal, mode === 'structured' || mode === 'batch-shortfall' ? [call] : [],
+            mode === 'length' || mode === 'error' ? mode : 'stop');
+        }
+        if (mode === 'structured') translatePiEvent(ev({ type: 'tool_execution_start', toolCallId: 'ssh-1', toolName: 'ssh', args: { args: command } }), queue, ctx);
+        translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+        const done = events.find(e => e.type === 'done')!.data as Record<string, unknown>;
+        const invalid = ['retry', 'previous-call', 'other-session', 'thinking-and-text', 'batch-shortfall'].includes(mode);
+        expect(done.status).toBe(mode === 'stop' ? 'cancelled' : invalid || mode === 'length' || mode === 'error' ? 'failed' : 'completed');
+        expect(events.filter(e => e.type === 'error' && (e.data as { reason?: string }).reason === 'unexecuted-tool-markup')).toHaveLength(invalid ? 1 : 0);
+        // #10651 review: speculative thinking is not an attempted action. Unit tier,
+        // production translator; previous coverage incorrectly required failed.
+        if (mode.startsWith('thinking')) {
+          expect(events.find(e => e.type === 'thinking' && (e.data as { stage?: string }).stage === 'final')?.data).toMatchObject({ text: raw });
+          expect(events.filter(e => e.type === 'tool_use')).toHaveLength(0);
+          if (mode !== 'thinking-and-text') expect(done.result).toBe('answer');
+        }
+        if (mode === 'structured') {
+          expect(events.filter(e => e.type === 'tool_use')).toHaveLength(1);
+          expect(events.find(e => e.type === 'tool_use')?.data).toMatchObject({ toolUseId: 'ssh-1', toolName: 'ssh', input: { args: command } });
+          expect(done.usage).toMatchObject({ inputTokens: 10, outputTokens: 5, cacheReadTokens: 8 });
+        }
+        if (['code', 'list-code', 'quote', 'incomplete', 'stop', 'length'].includes(mode)) expect(events.filter(e => e.type === 'text').some(e => (e.data as { text: string }).text === literal)).toBe(true);
+      } finally { disposePiTranslateContext(ctx); }
+    },
+  );
+  it.each(['|', '｜', '｜｜'])('rejects text-only long commands (%s)', bar => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    const text = 'before.' + markup(bar) + 'after.';
+    try {
+      translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+      translatePiEvent(ev({ type: 'message_start', message: { role: 'assistant' } }), queue, ctx);
+      for (const delta of text) translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta } }), queue, ctx);
+      translatePiEvent(ev({ type: 'message_end', message: { role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text }] } }), queue, ctx);
+      translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+      expect(events.find(e => e.type === 'done')?.data).toMatchObject({ status: 'failed', reason: 'unexecuted-tool-markup', silentStop: false });
+      expect(events.filter(e => e.type === 'error')).toHaveLength(1);
+      expect(events.filter(e => e.type === 'tool_use')).toHaveLength(0);
+      expect(events.filter(e => e.type === 'text').map(e => (e.data as { text: string }).text).join('')).not.toContain('DSML');
+    } finally { disposePiTranslateContext(ctx); }
+  });
+
+  // 测试价值：依据供应商安全拦截保留决定、不触发 silentStop 自动续跑或限流标记的契约；此前 Pi assistant 以 stopReason='refusal'/'content_filter'
+  // 零正文结束时会落入 silentStop:true 自动补发继续，errorMessage 安全拦截也缺少稳定 reason；生产入口 translatePiEvent；
+  // 最小失败输入为 stopReason='refusal'/'content_filter' 空正文与安全拦截 errorMessage；tier: unit。
+  it.each(['refusal', 'content_filter'] as const)(
+    'settles an empty %s stopReason as provider-safety-refusal instead of silentStop',
+    (stopReason) => {
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue, events } = makeQueue();
+      try {
+        translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+        translatePiEvent(ev({ type: 'message_start', message: { role: 'assistant' } }), queue, ctx);
+        translatePiEvent(
+          ev({
+            type: 'message_end',
+            message: { role: 'assistant', stopReason, content: [], usage: { input: 20, output: 0 } },
+          }),
+          queue,
+          ctx,
+        );
+        translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+        expect(events.find((e) => e.type === 'error')?.data).toMatchObject({
+          isTerminal: true,
+          reason: 'provider-safety-refusal',
+        });
+        const done = events.find((e) => e.type === 'done')?.data as Record<string, unknown>;
+        expect(done.status).toBe('failed');
+        expect(done.silentStop).toBeUndefined();
+      } finally {
+        disposePiTranslateContext(ctx);
+      }
+    },
+  );
 });

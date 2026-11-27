@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { publicProviderGroupConfig, withLocalProviderGroupAccounts } from '../../../shared/providerGroup';
 
 const scope = vi.hoisted(() => ({ boundaryPending: false }));
 
@@ -13,6 +14,7 @@ const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'provider-group-store-test-
 let activeOwner = 'owner-test';
 
 vi.mock('electron', () => ({ app: { getPath: () => tmpDir } }));
+vi.mock('../../device-link/providerShareAvailabilityTransport.js', () => ({ disableShareAvailability: vi.fn() }));
 vi.mock('../../maker-host/logger-adapter.js', () => ({
   desktopMakerLogger: { child: () => ({ info: () => {}, warn: () => {}, error: () => {} }) },
 }));
@@ -23,13 +25,59 @@ vi.mock('../../appSessionState.js', () => ({
 }));
 
 const store = await import('../store.js');
-const bindings = await import('../bindings.js');
+const bindings = await import('../bindings.desktop.js');
 const locks = await import('../../device-link/crossProcessLock.js');
 
 afterEach(() => { scope.boundaryPending = false; activeOwner = 'owner-test'; vi.restoreAllMocks(); });
 afterAll(async () => { await fs.promises.rm(tmpDir, { recursive: true, force: true }); });
 
 describe('provider group store', () => {
+  // File-backed unit: older files have only IDs. Private weights must survive
+  // reopening and a concurrent CAS conflict, without following a removed member.
+  it('persists mixed allocation across reload, keeps remote slots and prunes removed overrides', async () => {
+    const id = 'mixed-settings';
+    const initial = (await store.writeProviderGroup(id, {
+      members: [{ kind: 'local' }, { kind: 'device', agentDeviceId: 'mini', providerId: id, weight: 5 }],
+      localAccountIds: ['work-key', 'lab-key'],
+    }))!;
+    expect(withLocalProviderGroupAccounts(initial, id).members.map(member => member.weight)).toEqual([1, 5, 1, 1]);
+    const written = await store.writeProviderGroup(id, { ...initial, strategy: 'weight', localAccountSettings: {
+      order: ['work-key', id, 'lab-key'], weights: { [id]: 2, 'work-key': 3 },
+      limits: { [id]: 2, 'work-key': 1 }, paused: ['work-key'],
+    } }, initial);
+    await expect(store.writeProviderGroup(id, { ...initial, strategy: 'round' }, initial)).rejects.toThrow('PROVIDER_GROUP_CHANGED');
+    const disk = JSON.parse(fs.readFileSync(path.join(tmpDir, 'provider-group-prefs.json'), 'utf8'));
+    const reopened = store.__testing.normalize(disk).groups[id]!;
+    expect(reopened).toEqual(written);
+    expect(withLocalProviderGroupAccounts(reopened, id).members.map(member => [member.key, member.weight]))
+      .toEqual([['local:work-key', 3], [`device:mini:${id}`, 5], ['local', 2], ['local:lab-key', 1]]);
+    expect(withLocalProviderGroupAccounts(reopened, id).members
+      .filter(member => member.kind === 'local').map(({ paused, limit, limitSet }) => [paused, limit, limitSet]))
+      .toEqual([[true, 1, true], [false, 2, true], [false, 4, undefined]]);
+    // 旧名字「weight」读取时换成统一选法里的「weighted」。
+    expect(publicProviderGroupConfig(reopened)).toEqual({ ...publicProviderGroupConfig(initial), strategy: 'weighted' });
+    const removed = (await store.writeProviderGroup(id, { ...reopened, localAccountIds: ['lab-key'] }, reopened))!;
+    expect(removed.localAccountSettings).toEqual({ order: [id, 'lab-key'], weights: { [id]: 2 }, limits: { [id]: 2 } });
+    const rejoined = (await store.writeProviderGroup(id, { ...removed, localAccountIds: ['lab-key', 'work-key'] }, removed))!;
+    expect(withLocalProviderGroupAccounts(rejoined, id).members.at(-1)).toMatchObject({ providerId: 'work-key', weight: 1 });
+  });
+  // Unit persistence regression (provider-groups.md §3): the prior fixture only had
+  // one connection per device. Save both independent IDs and reload the actual file.
+  it('persists two independent subscription members on one device without merging their identities', async () => {
+    const a = { kind: 'device', agentDeviceId: 'one-host', providerId: 'openai-sub-12345678', providerName: 'Codex A' };
+    const b = { ...a, providerId: 'openai-sub-abcdef01', providerName: 'Codex B' };
+    const first = await store.writeProviderGroup('openai', { strategy: 'rotate', members: [a] });
+    await store.writeProviderGroup('openai', { strategy: 'rotate', members: [a, b] }, first);
+    const disk = JSON.parse(fs.readFileSync(path.join(tmpDir, 'provider-group-prefs.json'), 'utf8'));
+    const reloaded = store.__testing.normalize(disk).groups.openai;
+    expect(reloaded.members.map((m) => [m.key, m.providerId, m.providerName])).toEqual([
+      ['device:one-host:openai-sub-12345678', a.providerId, 'Codex A'],
+      ['device:one-host:openai-sub-abcdef01', b.providerId, 'Codex B'],
+    ]);
+    expect(store.readProviderGroup('openai')).toEqual(reloaded);
+    await store.writeProviderGroup('openai', null);
+  });
+
   it.each(['save', 'delete'])('does not %s when teardown starts before the file lock is acquired', async (action) => {
     const initial = (await store.writeProviderGroup('boundary', { members: [{ kind: 'local' }] }))!;
     const pending = store.writeProviderGroup('boundary', action === 'delete' ? null : { ...initial, autoSwitch: false }, initial);
@@ -70,7 +118,7 @@ describe('provider group store', () => {
       await store.writeProviderGroup(providerId, initial);
       // reset-modules: verify binding cleanup survives a fresh process after the account boundary.
       vi.resetModules();
-      const restarted = await import('../bindings.js');
+      const restarted = await import('../bindings.desktop.js');
       expect(restarted.readProviderGroupBinding(sessionId)).toBeNull();
       expect(restarted.isProviderGroupReleased(sessionId, { providerId })).toBe(true);
       expect(restarted.listProviderGroupBindings()[sessionId]).toBeUndefined();
@@ -88,14 +136,14 @@ describe('provider group store', () => {
   it('drops invalid groups and empty groups when reading', () => {
     expect(store.__testing.normalize({
       groups: {
-        anthropic: { strategy: 'least', members: [{ kind: 'local' }] },
+        anthropic: { strategy: 'expiring', members: [{ kind: 'local' }] },
         'bad id': { members: [{ kind: 'local' }] },
         empty: { members: [] },
       },
     })).toEqual({
       groups: {
         anthropic: {
-          strategy: 'least',
+          strategy: 'expiring',
           autoSwitch: true,
           members: [{ key: 'local', kind: 'local', agentDeviceId: null, providerId: 'anthropic', limit: 4, weight: 1, paused: false }],
         },
@@ -131,7 +179,7 @@ describe('provider group store', () => {
 
   it('compares under the file lock so only one of two concurrent edits can use the same snapshot', async () => {
     const initial = (await store.writeProviderGroup('concurrent', { members: [{ kind: 'local' }] }))!;
-    const edits = [{ ...initial, autoSwitch: false }, { ...initial, strategy: 'round' as const }];
+    const edits = [{ ...initial, autoSwitch: false }, { ...initial, strategy: 'rotate' as const }];
     const results = await Promise.allSettled(edits.map((config) => store.writeProviderGroup('concurrent', config, initial)));
     expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
     expect(results.filter((result) => result.status === 'rejected')).toEqual([
@@ -152,7 +200,7 @@ describe('provider group store', () => {
   });
 
   it('persists cleanup with group removal and retains it through restart, rejoin, and stale acknowledgements', async () => {
-    const config = { strategy: 'least', members: [{ kind: 'local' }, { kind: 'share', agentDeviceId: 'share:a1', providerId: 'anthropic' }] };
+    const config = { strategy: 'expiring', members: [{ kind: 'local' }, { kind: 'share', agentDeviceId: 'share:a1', providerId: 'anthropic' }] };
     await store.writeProviderGroup('anthropic', config);
     await store.writeProviderGroup('anthropic', null);
     const token = store.listProviderGroupReshareCleanups()['share:a1'];
@@ -271,7 +319,7 @@ describe('provider group store', () => {
     legacy.writePatch({ groups: { ...legacy.read().groups, [providerId]: config } });
     // reset-modules: reload bindings after a legacy writer changes the on-disk schema.
     vi.resetModules();
-    const restarted = await import('../bindings.js');
+    const restarted = await import('../bindings.desktop.js');
     expect(store.listProviderGroupBindingCleanups()[providerId]).toEqual(pending);
     expect(restarted.readProviderGroupBinding('legacy-pending-task')).toBeNull();
     expect(restarted.isProviderGroupReleased('legacy-pending-task', { providerId })).toBe(true);
@@ -428,7 +476,7 @@ describe('provider group bindings', () => {
     // 切回原账号并重建运行时，解除记录仍须保留，不能把任务重新自动纳入。
     // reset-modules: account switch must be observed by a newly loaded bindings runtime.
     vi.resetModules();
-    const restarted = await import('../bindings.js');
+    const restarted = await import('../bindings.desktop.js');
     expect(restarted.readProviderGroupBinding('scope-task')).toBeNull();
     expect(restarted.isProviderGroupReleased('scope-task', { providerId: 'anthropic' })).toBe(true);
   });
@@ -529,7 +577,7 @@ describe('provider group bindings', () => {
     legacy.writePatch({ sessions: { ...legacy.read().sessions, 'legacy-release': { providerId: 'legacy-group', memberKey: 'local', at: 20 } } });
     // reset-modules: reload bindings to exercise compatibility with the older writer's persisted shape.
     vi.resetModules();
-    const restarted = await import('../bindings.js');
+    const restarted = await import('../bindings.desktop.js');
     expect(restarted.readProviderGroupBinding('legacy-release')).toBeNull();
     expect(restarted.isProviderGroupReleased('legacy-release', { providerId: 'legacy-group' })).toBe(true);
     await restarted.writeProviderGroupBinding('legacy-release', { providerId: 'legacy-group', memberKey: 'local' }, 30);

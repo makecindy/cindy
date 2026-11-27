@@ -3,7 +3,7 @@
  * ---------------------------------------------------------------------------
  * 图片 lightbox 的三个媒体动作(main 侧业务体):
  *   - media:open-with-default-app —— 用系统默认应用打开图片
- *   - media:save-as               —— 另存为(本地图复制;http(s)/data: 先取字节)
+ *   - media:save-as               —— 另存为(本地复制;HTTP/远程流式导出;data: 解码)
  *   - media:cache-for-session     —— "发送到对话":把图片复制成目标会话的一份
  *                                    新 xdt-image:// 缓存,renderer 据此构造附件
  *
@@ -18,6 +18,11 @@
 
 import { createHash } from 'node:crypto';
 import * as path from 'node:path';
+
+import { parseBase64DataUrl } from '@cindy/maker-shared';
+
+import { isDangerousAttachmentName } from '../shared/attachmentSafety';
+import { parseRemoteMediaUrl } from '../shared/remoteMediaUrl';
 
 import { isIpcErrorCode } from '../shared/ipc-errors';
 import { throwIpcError } from './utils/ipcValidate';
@@ -69,8 +74,9 @@ const EXT_BY_MIME: Record<string, string> = {
  * - `http(s)://` / `data:image/...;base64,` 标记为需取字节的远程/内联源;
  * - 其余(cindy-remote-media:// / blob: / 相对路径等)一律 unsupported。
  */
-export function classifyLightboxMediaUrl(url: string): LightboxMediaSource {
+export function classifyLightboxMediaUrl(url: string, forSave = false): LightboxMediaSource {
   if (typeof url !== 'string' || url.length === 0) return { kind: 'unsupported' };
+  if (forSave && url.startsWith('xdt-video://')) return { kind: 'image-cache', url };
   if (url.startsWith('xdt-image://')) return { kind: 'image-cache', url };
   // cindy-media(媒体总仓 blob)与 xdt-image 同语义:本机缓存文件,可解析绝对
   // 路径;resolveImageCacheUrl 依赖按 scheme 分派到对应 store(bootstrap 接线)。
@@ -91,7 +97,9 @@ export function classifyLightboxMediaUrl(url: string): LightboxMediaSource {
           ? resolved.toLowerCase() === normalizedInput.toLowerCase()
           : resolved === normalizedInput;
       if (!eq) return { kind: 'unsupported' };
-      if (!IMAGE_EXTS.has(path.extname(resolved).toLowerCase())) {
+      if (
+        (!forSave && !IMAGE_EXTS.has(path.extname(resolved).toLowerCase())) ||
+        (forSave && isDangerousAttachmentName(resolved))) {
         return { kind: 'unsupported' };
       }
       return { kind: 'local-file', absPath: resolved };
@@ -107,9 +115,9 @@ export function classifyLightboxMediaUrl(url: string): LightboxMediaSource {
     return { kind: 'remote-media', url };
   }
   if (url.startsWith('data:')) {
-    const match = /^data:(image\/[a-z0-9+.-]+);base64,(.+)$/i.exec(url);
-    if (!match) return { kind: 'unsupported' };
-    return { kind: 'data', mimeType: match[1].toLowerCase(), base64: match[2] };
+    const parsed = parseBase64DataUrl(url, /^data:(image\/[a-z0-9+.-]+);base64$/i);
+    if (!parsed) return { kind: 'unsupported' };
+    return { kind: 'data', mimeType: parsed.header[1].toLowerCase(), base64: parsed.payload };
   }
   return { kind: 'unsupported' };
 }
@@ -241,6 +249,7 @@ export async function collectStreamWithLimit(
 export interface LightboxMediaDeps {
   /** bootstrap-electron 的路径白名单校验。 */
   isPathAllowed(absPath: string): boolean;
+  realpath(absPath: string): Promise<string>;
   /** imageCacheStore.resolveSafe:xdt-image:// URL → 缓存文件绝对路径(含安全校验,失败抛错)。 */
   resolveImageCacheUrl(url: string): { absPath: string; mimeType: string };
   /** imageCacheStore.copyFromPath(lifecycle 由调用处指定)。 */
@@ -260,8 +269,7 @@ export interface LightboxMediaDeps {
   }): Promise<{ url: string; filename: string }>;
   /** dialog.showSaveDialog(挂到聚焦窗口)。 */
   showSaveDialog(opts: {
-    defaultPath: string;
-  }): Promise<{ canceled: boolean; filePath?: string }>;
+    defaultPath: string }): Promise<{ canceled: boolean; filePath?: string }>;
   /** shell.openPath:成功返回 '',失败返回错误串。 */
   openPath(absPath: string): Promise<string>;
   /** fs.promises.readFile:readImageBytes 的 local-file 分支读字节。 */
@@ -270,6 +278,8 @@ export interface LightboxMediaDeps {
   fetchRemoteImage(url: string): Promise<{ buffer: Buffer; mimeType?: string }>;
   /** 取远程会话媒体字节(cindy-remote-media://,复用协议取件管线)。 */
   fetchRemoteMediaImage(url: string): Promise<{ buffer: Buffer; mimeType: string }>;
+  /** 保存专用流式出口；只在用户选定目标后调用，不复用图片内存读取。 */
+  saveRemoteMedia(source: { kind: 'http' | 'remote-media'; url: string }, destination: string): Promise<void>;
   /** 临时目录(远程图"用默认应用打开"落临时文件)。 */
   getTempDir(): string;
   fileExists(absPath: string): boolean;
@@ -293,8 +303,7 @@ export interface LightboxMediaHandlers {
   saveAs(params: { url: string }): Promise<{ canceled: boolean; savedPath?: string }>;
   cacheForSession(params: {
     url: string;
-    sessionId: string;
-  }): Promise<CacheForSessionResult>;
+    sessionId: string }): Promise<CacheForSessionResult>;
   /** renderer 字节层(标注烧录/位图复制)对 http / remote-media 源的取字节入口。 */
   readImageBytes(params: { url: string }): Promise<{ base64: string; mimeType: string }>;
 }
@@ -441,7 +450,8 @@ export function createLightboxMediaHandlers(deps: LightboxMediaDeps): LightboxMe
     // 另存为。先弹保存对话框(只需要建议文件名),确认后才取字节/复制,
     // 用户取消不浪费下载。
     async saveAs(params) {
-      const source = classifyLightboxMediaUrl(params?.url ?? '');
+      // Save supports files; image decoding / annotation keep their image-only classifier.
+      const source = classifyLightboxMediaUrl(params?.url ?? '', true);
       if (source.kind === 'unsupported') {
         throwIpcError('INVALID_PARAMS', 'unsupported media source');
       }
@@ -449,23 +459,39 @@ export function createLightboxMediaHandlers(deps: LightboxMediaDeps): LightboxMe
       let localAbsPath: string | null = null;
       if (source.kind === 'image-cache' || source.kind === 'local-file') {
         localAbsPath = resolveLocalSourceOrThrow(source, deps);
-      }
-
-      // remote-media 先取字节:正在 lightbox 显示的图协议缓存大概率命中(快),
-      // 且文件名扩展要从实际 mime 推(remote url 无路径语义)。
-      let remoteBytes: { buffer: Buffer; mimeType?: string } | null = null;
-      let suggested: string;
-      if (source.kind === 'remote-media') {
         try {
-          remoteBytes = await deps.fetchRemoteMediaImage(source.url);
+          localAbsPath = await deps.realpath(localAbsPath);
+          if (!deps.isPathAllowed(localAbsPath) || isDangerousAttachmentName(localAbsPath))
+            throwIpcError('PERMISSION_DENIED', '不允许访问该路径');
         } catch (err) {
           rethrowIfIpcError(err);
-          throwIpcError('INTERNAL', err instanceof Error ? err.message : String(err));
+          throwIpcError('NOT_FOUND', '文件不存在');
         }
-        const mime = sniffImageMime(remoteBytes.buffer) ?? remoteBytes.mimeType ?? 'image/png';
-        suggested = `image-${deps.now()}${extForMimeType(mime)}`;
-      } else {
-        suggested = suggestSaveFileName(source, localAbsPath, deps.now());
+      }
+
+      // URL 只用于建议名，不为命名取件。远程路径按来源格式解析，绝不读本机同名文件。
+      let suggested = suggestSaveFileName(source, localAbsPath, deps.now());
+      if (source.kind === 'http' || source.kind === 'remote-media') {
+        suggested = `media-${deps.now()}.bin`;
+        try {
+          const original = source.kind === 'remote-media'
+            ? parseRemoteMediaUrl(source.url)?.origUrl
+            : source.url;
+          if (original) {
+            const parsed = new URL(original);
+            const originalPath = parsed.searchParams.get('path');
+            const base = originalPath
+              ? originalPath.split(/[\\/]/).pop() ?? ''
+              : decodeURIComponent(parsed.pathname.split('/').pop() ?? '');
+            // Keep suggestions to one safe segment on both desktop platforms.
+            if (base && base !== '.' && base !== '..' && base.length <= 200 &&
+                !/[<>:"|?*\\/\x00-\x1f\x7f]/.test(base) && !/[. ]$/.test(base) &&
+                !/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(base) &&
+                !isDangerousAttachmentName(base)) suggested = base;
+          }
+        } catch {
+          // Malformed metadata keeps the inert fallback; the original fetch validates the source.
+        }
       }
 
       const { canceled, filePath } = await deps.showSaveDialog({
@@ -476,11 +502,8 @@ export function createLightboxMediaHandlers(deps: LightboxMediaDeps): LightboxMe
       try {
         if (localAbsPath) {
           await deps.copyFile(localAbsPath, filePath);
-        } else if (remoteBytes) {
-          await deps.writeFile(filePath, remoteBytes.buffer);
-        } else if (source.kind === 'http') {
-          const { buffer } = await deps.fetchRemoteImage(source.url);
-          await deps.writeFile(filePath, buffer);
+        } else if (source.kind === 'http' || source.kind === 'remote-media') {
+          await deps.saveRemoteMedia(source, filePath);
         } else if (source.kind === 'data') {
           await deps.writeFile(filePath, decodeDataImageOrThrow(source.base64));
         }

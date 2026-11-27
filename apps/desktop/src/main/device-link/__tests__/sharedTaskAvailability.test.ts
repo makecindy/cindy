@@ -8,8 +8,9 @@ const source = ts.createSourceFile('index.ts', readFileSync(resolve(process.cwd(
 const declaration = source.statements.find((node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === 'isSharedTaskAvailable');
 if (!declaration?.body) throw new Error('Shared task availability predicate not found');
 const compiled = ts.transpileModule('function available() ' + declaration.body.getText(source), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-const available = (status: string, capable = true, authenticated = true, tornDown = false) => {
-  const client = { getStatus: () => status, hasServerCapability: vi.fn(() => capable) };
+const available = (status: string, capable = true, authenticated = true, tornDown = false, crossAccountStatus = status) => {
+  const connection = { getStatus: () => crossAccountStatus, hasServerCapability: vi.fn(() => capable) };
+  const client = { getStatus: () => status, crossAccountConnection: () => connection };
   return new Function('client', 'linkTornDown', 'authManager', 'SHARED_TASK_CAPABILITY', compiled + '; return available();')(client, tornDown, { getAuthState: () => ({ isAuthenticated: authenticated }) }, 'shared-task-v2');
 };
 describe('desktop shared-task availability', () => {
@@ -20,6 +21,11 @@ describe('desktop shared-task availability', () => {
     expect(available('online')).toBe(true);
     expect(available('connecting')).toBe(false);
     expect(available('online')).toBe(true);
+  });
+  // docs/self-hosted-relay-plan.md §7: 主连接走自建中转时共享任务只看专用的官方连接。
+  it('follows the official connection, not the own relay', () => {
+    expect(available('connecting', true, true, false, 'online')).toBe(true);
+    expect(available('online', true, true, false, 'connecting')).toBe(false);
   });
   it('retains capability, login and teardown guards', () => {
     expect(available('online', false)).toBe(false);

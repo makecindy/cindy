@@ -1,11 +1,11 @@
 import { Button } from '@/components/ui/button';
+import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-import { Bot, Link2, Plus, Store, Users } from 'lucide-react';
+import { Bot, Link2, Plus, Users } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { BotRosterView } from './BotRosterView';
 import { BotGroupCreateDialog } from './BotGroupCreateDialog';
-import { BotMarketDialog } from './BotMarketDialog';
 import { ChatInviteDialog } from './ChatInviteDialog';
 import { useTranslation } from 'react-i18next';
 
@@ -16,7 +16,7 @@ export function BotCreateMenu({ variant, label }: {
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const [dialog, setDialog] = useState<'bot' | 'group' | 'market' | 'join' | null>(null);
+  const [dialog, setDialog] = useState<'bot' | 'group' | 'join' | null>(null);
   const trigger = useRef<HTMLButtonElement>(null);
 
   return (
@@ -50,10 +50,6 @@ export function BotCreateMenu({ variant, label }: {
           <DropdownMenuContent align="end" onCloseAutoFocus={event => {
             if (dialog) event.preventDefault();
           }}>
-            <DropdownMenuItem onSelect={() => setDialog('market')}>
-              <Store size={14} className="mr-2" />
-              {t('bots.market.heading')}
-            </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => setDialog('bot')}>
               <Bot size={14} className="mr-2" />
               {t('bots.list.createTeammate')}
@@ -78,17 +74,21 @@ export function BotCreateMenu({ variant, label }: {
           onClose={() => setDialog(null)}
         />
       ) : null}
-      {dialog === 'market' ? <BotMarketDialog onClose={() => { setDialog(null); trigger.current?.focus(); }} /> : null}
       {dialog === 'group' ? (
         <BotGroupCreateDialog
           onOpenChange={open => { if (!open) { setDialog(null); trigger.current?.focus(); } }}
-          onCreated={id => { setDialog(null); navigate(`/bots/groups/${encodeURIComponent(id)}`); }}
+          onCreated={(id, serverBacked) => {
+            setDialog(null);
+            navigate(`/bots/groups/${encodeURIComponent(id)}`, {
+              state: serverBacked ? { openGroupInviteMenu: { groupId: id, owner: getDataOwnerGeneration() } } : null,
+            });
+          }}
         />
       ) : null}
       {dialog === 'join' ? (
         <ChatInviteDialog
           onClose={() => { setDialog(null); trigger.current?.focus(); }}
-          onJoined={id => navigate(`/bots/groups/${encodeURIComponent(id)}`)}
+          onJoined={(id, configureMask) => navigate(`/bots/groups/${encodeURIComponent(id)}${configureMask ? '?groupSettings=1&groupMask=1' : ''}`)}
         />
       ) : null}
     </>

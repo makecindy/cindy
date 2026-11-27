@@ -119,6 +119,28 @@ export function deviceHostedPiMcpBridge(hosted: DeviceHostedSession): NonNullabl
   };
 }
 
+/**
+ * 设备托管的插件花名册：插件工具(ghost_*)经隧道回到任务所在电脑，花名册用那台打开任务时给的快照，
+ * 且那台确实经隧道提供了插件工具。Agent 所在电脑自己装了哪些插件与这个任务无关，也不能外露给受邀者。
+ * 旧控制端不带快照：受邀者照旧不注入；同账号照旧用本机花名册(`legacyLocal`)，升级前不比原来差。
+ */
+export function deviceHostedGhostRoster(
+  hosted: DeviceHostedSession,
+  snapshot: string | undefined,
+  legacyLocal: () => string,
+): string {
+  if (snapshot !== undefined) return snapshot && hosted.mcpServers.includes('cindy') ? snapshot : '';
+  return hosted.guest ? '' : legacyLocal();
+}
+
+/**
+ * 设备托管时 Claude Code 等 MCP 服务连上的上限(`MCP_TIMEOUT`)。这些服务都是经隧道回到任务所在电脑的
+ * HTTP MCP，每次握手都要跨机往返；Claude Code 默认只等 30s，到点即判连接失败，这一轮没有任何工具。
+ * 与远程 Agent 拉取的 2 分钟不可达窗口一致(2026-11-04：两台电脑间的直连掉回中转、请求要 4–12s，
+ * 一轮开始时 91 个工具全部被判断开，Agent 只能回复“工具连不上”)。
+ */
+export const DEVICE_HOSTED_MCP_TIMEOUT_MS = 120_000;
+
 /** 设备托管时顶替 Claude Code 自带文件与命令工具的 Cindy MCP 服务名。 */
 export const DEVICE_HOSTED_EXEC_MCP_SERVER = 'cindy_exec';
 /** 顶替的工具名(与自带工具同名)。 */
@@ -209,6 +231,22 @@ export function deviceHostedClaudeNote(hosted: DeviceHostedSession, localWorking
     deviceHostedEnvironmentNote(hosted, localWorkingDir),
     `File and shell tools are provided as ${tools}. Use them wherever these instructions mention Bash, Read, Write, Edit or NotebookEdit; search files with Bash (rg, find).`,
   ].join('\n');
+}
+
+/**
+ * 插件引擎(ACP Agent)版。它收不到 Cindy 的 system prompt，这段说明放在新会话第一条消息之前：
+ * 引擎自带的文件与命令工具已由插件关掉(项目不在这台电脑上)，文件与命令只能经 cindy_exec。
+ */
+export function deviceHostedPluginEngineNote(hosted: DeviceHostedSession, localWorkingDir: string): string {
+  return [
+    deviceHostedEnvironmentNote(hosted, localWorkingDir),
+    `The project is on another computer. Your own file and shell tools are turned off for this task; they could only reach this computer, not the project. Use the tools of the \`${DEVICE_HOSTED_EXEC_MCP_SERVER}\` MCP server for all file and command work: ${DEVICE_HOSTED_EXEC_TOOL_NAMES.join(', ')}. Search files with Bash (rg, find).`,
+  ].join('\n');
+}
+
+/** 插件引擎经隧道使用的 MCP 服务：任务所在电脑的 Cindy 工具，加上顶替文件与命令工具的 cindy_exec。 */
+export function deviceHostedPluginEngineMcpServers(hosted: DeviceHostedSession): string[] {
+  return [...new Set([DEVICE_HOSTED_EXEC_MCP_SERVER, ...hosted.mcpServers])];
 }
 
 /**

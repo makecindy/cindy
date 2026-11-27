@@ -12,6 +12,8 @@
  * relay 连接,也不会丢被控端保留的可靠 pending(它等到下一次 link-accept 续传)。
  */
 
+import { shortDeviceRef } from '@cindy/device-link';
+
 type Timer = ReturnType<typeof setTimeout>;
 
 export interface TransportTimeoutReopenDeps {
@@ -41,6 +43,8 @@ export interface TransportTimeoutReopenLoop {
   cancel(deviceId: string): void;
   /** 终止全部循环(relay 断开 / 停机)。 */
   dispose(): void;
+  /** 只终止匹配设备的循环:某条连接断开时,另一条连接上的 peer 不受影响。 */
+  disposeWhere(matches: (deviceId: string) => boolean): void;
   /** 测试观察点:该设备是否有循环在跑。 */
   isActive(deviceId: string): boolean;
 }
@@ -165,7 +169,7 @@ export function createTransportTimeoutReopenLoop(
         if (!isCurrent(deviceId, entry)) return; // 被 cancel/dispose 或已换代
         if (n >= maxAttempts) {
           deps.log?.warn(
-            `transport-timeout reopen gave up for ${deviceId.slice(0, 8)} after ${n} attempts: ${String(err)}`,
+            `transport-timeout reopen gave up for ${shortDeviceRef(deviceId)} after ${n} attempts: ${String(err)}`,
           );
           finishEntry(deviceId, entry);
           return;
@@ -189,6 +193,9 @@ export function createTransportTimeoutReopenLoop(
     },
     dispose(): void {
       for (const deviceId of [...entries.keys()]) removeCurrent(deviceId);
+    },
+    disposeWhere(matches: (deviceId: string) => boolean): void {
+      for (const deviceId of [...entries.keys()]) if (matches(deviceId)) removeCurrent(deviceId);
     },
     isActive(deviceId: string): boolean {
       return entries.has(deviceId);

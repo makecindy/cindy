@@ -1,15 +1,28 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { createPluginAppTransport } from '../pluginServer.js';
+import { callPluginAttachmentProvider } from '../pluginAttachment.js';
+import { GhostHandoffStore } from '../../cindy-brain/handoffStore.js';
+import * as blobs from '../../cindy-media/blobStore.desktop.js';
 import { SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
 import type { SQL } from 'drizzle-orm';
 import type { McpAppsHostDeps } from '../host.js';
+import type { AppServerConfig } from '../connection.js';
+import type { GhostHostUi } from '@cindy/plugin-protocol';
+import path from 'node:path';
+import { configurePluginSettings } from '../../app-settings/plugins.js';
 const state = vi.hoisted(() => ({
   owner: null as object | null,
+  userData: '',
   deps: undefined as McpAppsHostDeps | undefined,
   session: {
     id: 'task',
     status: 'active',
     clearedAt: null as number | null,
     permissionMode: 'default',
+    planModeEnabled: false,
   },
   row: null as Record<string, unknown> | null,
   updateResult: [] as Record<string, unknown>[],
@@ -19,33 +32,54 @@ const state = vi.hoisted(() => ({
   broadcast: vi.fn(),
   create: vi.fn(),
   trusted: vi.fn(),
+  redeem: vi.fn(),
+  handleDrop: undefined as undefined | ((event: unknown, payload: unknown) => Promise<void>),
   invoke: vi.fn(),
   open: vi.fn(),
   dispatch: vi.fn(),
+  action: vi.fn(),
+  plugin: undefined as { host: GhostHostUi; config: AppServerConfig } | undefined,
   revisionKey: vi.fn(() => 'a'.repeat(64)),
   remote: undefined as { controllerDeviceId: string; sharedTask?: object } | undefined,
   handle: undefined as
     ((event: unknown, session: unknown, input: unknown) => Promise<unknown>) | undefined,
 }));
 vi.mock('electron', () => ({
+  app: { getPath: () => state.userData },
+  webContents: { fromId: vi.fn() },
+  BrowserWindow: { fromWebContents: vi.fn() },
   ipcMain: {
     removeHandler: vi.fn(),
     handle: (_name: string, handler: typeof state.handle) => {
-      state.handle = handler;
+      if (_name === 'maker:redeem-composer-attachment-drag') state.handleDrop = handler as typeof state.handleDrop;
+      else state.handle = handler;
     },
   },
   shell: { openExternal: vi.fn() },
 }));
+// Native input uses explicit Host context, not roster rendering or MCP ALS.
+vi.mock('cindy-tools', () => ({ buildGhostRosterPrompt: vi.fn() }));
+vi.mock('@cindy/mcps', () => ({
+  getLiziMcpSessionContext: () => undefined,
+  resolveLiziMcpSessionContext: (context: unknown) => context,
+}));
 vi.mock('../host.js', () => ({
+  appServerRevision: (config: unknown) => JSON.stringify(config),
+  validateComposerAttachment: (_bytes: Uint8Array, mimeType: string) =>
+    ({ category: mimeType.startsWith('image/') ? 'image' : mimeType === 'application/pdf' ? 'pdf' : 'text', mimeType }),
   McpAppsHost: class {
+    redeemComposerAttachmentDrag = state.redeem;
     open = state.open;
     dispatch = state.dispatch;
+    callPluginAction = state.action;
     constructor(deps: McpAppsHostDeps) {
       state.deps = deps;
     }
   },
 }));
-vi.mock('../runtime.js', () => ({ setMcpAppsHost: vi.fn(), readAppServer: vi.fn() }));
+vi.mock('../../cindy-media/chatAttachments.js', () => ({ ingestChatImageBuffer: async () => ({ url: 'cindy-media://blobs/preview' }) }));
+vi.mock('../../mcp-integrations/plugin-app-registry.js', () => ({ readPluginHostUi: () => state.plugin }));
+vi.mock('../runtime.js', () => ({ setMcpAppsHost: vi.fn(), readAppServer: vi.fn(), replacePluginAppServers: vi.fn() }));
 vi.mock('../../secrets/providerSecretStore.js', () => ({ getMcpAppRevisionKey: state.revisionKey }));
 vi.mock('../sandboxProtocol.js', () => ({
   supplyMcpAppDocument: vi.fn(),
@@ -54,6 +88,7 @@ vi.mock('../sandboxProtocol.js', () => ({
   unmountRemoteAppDocument: vi.fn(),
   assertMcpAppDocumentCaller: vi.fn(),
   setMcpAppCallerCleanup: vi.fn(),
+  setMcpAppFileReader: vi.fn(),
 }));
 vi.mock('../../device-link/index.js', () => ({ remoteInvoke: state.invoke, getRemoteLinkCloseEpoch: () => 0 }));
 vi.mock('../../appCapabilities.js', () => ({ getAppCapabilities: () => ({ canUseDeviceLink: true }) }));
@@ -64,6 +99,9 @@ vi.mock('../../localDb/ipc/messages.js', () => ({
   broadcastMessageRow: state.broadcast,
   createMessage: (...args: unknown[]) => state.create(...args),
 }));
+vi.mock('../../git-context/prRefsStore.js', () => ({
+  recomputePrRefsForSession: vi.fn(async () => {}),
+}));
 vi.mock('../../device-link/broadcast-tap.js', () => ({
   captureDataOwnerBroadcastScope: () => ({ owner: state.owner }),
 }));
@@ -73,14 +111,13 @@ vi.mock('../../security/trustedAppRenderer.js', () => ({
 vi.mock('../../device-link/invoke-context.js', () => ({
   getDeviceLinkInvokeContext: () => state.remote,
 }));
-vi.mock('../../utils/ipcValidate.js', () => ({
-  throwIpcError: (code: string, message: string) => {
-    throw new Error('[' + code + '] ' + message);
-  },
-}));
 import { sessions } from '../../localDb/schema.js';
+import { readAppServer } from '../runtime.js';
+import { pagePermissionGrants, pagePermissionSessionChanged } from '../pagePermissions.js';
 import { registerMcpAppsIpc } from '../ipc.js';
+import { nativePluginUi } from '../nativeRuntime.js';
 import { mountRemoteAppDocument } from '../sandboxProtocol.js';
+const { McpAppsHost: NativeHost } = await vi.importActual<typeof import('../host.js')>('../host.js');
 const record = {
   version: 1 as const,
   serverId: 'example',
@@ -92,11 +129,15 @@ const record = {
 const request = vi.fn(async () => ({ kind: 'permission' as const, behavior: 'allow' as const }));
 beforeEach(() => {
   vi.clearAllMocks();
+  pagePermissionGrants.clearServers();
+  vi.mocked(readAppServer).mockReturnValue({ id: 'example', url: 'https://example.com/mcp', transport: 'http' });
   state.remote = undefined;
+  state.plugin = undefined;
+  state.action.mockReset();
   state.predicates = [];
   state.duringUpdate = () => {};
   state.beforePublish = () => {};
-  state.session = { id: 'task', status: 'active', clearedAt: null, permissionMode: 'default' };
+  state.session = { id: 'task', status: 'active', clearedAt: null, permissionMode: 'default', planModeEnabled: false };
   state.row = {
     id: 'row',
     sessionId: 'task',
@@ -109,6 +150,7 @@ beforeEach(() => {
   };
   state.updateResult = [state.row];
   state.owner = {
+    userId: 'owner-a',
     client: {
       drizzle: {
         select: () => ({
@@ -148,6 +190,273 @@ beforeEach(() => {
   registerMcpAppsIpc(async () => {}, request);
 });
 describe('MCP App persistence and IPC wiring', () => {
+  // Unit: dynamic labels never carry new authority. Main accepts only IDs in
+  // this caller's currently published collection and retains the declared tool.
+  it('dispatches only visible enabled items from a declared dynamic action', async () => {
+    state.plugin = { host: { contributions: [{ id: 'actions', title: 'Actions', position: 'composer.header',
+      dynamicItems: true, visible: true, tool: 'apply', arguments: { scope: 'fixed' } }] },
+      config: { id: 'plugin', url: 'in-process://plugin', transport: 'in-process', plugin: { assertCurrent() {} } as AppServerConfig['plugin'] } };
+    const snapshot = vi.spyOn(nativePluginUi, 'snapshot');
+    const event = { sender: { id: 1, isDestroyed: () => false } };
+    const input = { op: 'plugin-action', instanceId: 'local__demo', id: 'actions', value: 'two' };
+    try {
+      for (const current of [undefined, { visible: true, items: [] },
+        { visible: true, items: [{ id: 'two', title: 'Two', visible: false }] },
+        { visible: true, items: [{ id: 'two', title: 'Two', disabled: true }] }]) {
+        snapshot.mockReturnValue(current);
+        await expect(state.handle!(event, 'task', input)).rejects.toThrow('MCP_APP_INVALID_REQUEST');
+      }
+      expect(state.action).not.toHaveBeenCalled();
+      snapshot.mockReturnValue({ items: [{ id: 'two', title: 'Two' }] });
+      await expect(state.handle!(event, null, input)).rejects.toThrow('MCP_APP_SESSION_UNAVAILABLE');
+      await expect(state.handle!(event, null, { ...input, value: undefined })).rejects.toThrow('MCP_APP_SESSION_UNAVAILABLE');
+      await expect(state.handle!(event, 'task', { ...input, value: undefined })).rejects.toThrow('MCP_APP_INVALID_REQUEST');
+      expect(state.action).not.toHaveBeenCalled();
+      await state.handle!(event, 'task', input);
+      expect(snapshot).toHaveBeenLastCalledWith('renderer:1', { instanceId: 'local__demo', id: 'actions', sessionId: 'task' });
+      expect(state.action.mock.calls[0][3]).toBe('apply');
+      expect(state.action.mock.calls[0][4]).toEqual({ scope: 'fixed', value: 'two' });
+      snapshot.mockReturnValue({ visible: false, items: [{ id: 'two', title: 'Two' }] });
+      await expect(state.action.mock.calls[0][2].assertCurrent()).rejects.toThrow('MCP_APP_INVALID_REQUEST');
+    } finally { snapshot.mockRestore(); }
+  });
+
+  // Unit: the AppBridge tests bypass Electron. A subframe calling the drop IPC
+  // must fail before any ticket lookup, and only Electron supplies the window ID.
+  it('binds drag redemption to the trusted top-level IPC sender', async () => {
+    const payload = { sessionId: 'task', ticket: 'ab'.repeat(24), caller: 'renderer:9' };
+    const event = { sender: { id: 7 } };
+    state.trusted.mockImplementationOnce(() => { throw new Error('untrusted frame'); });
+    await expect(state.handleDrop!(event, payload)).rejects.toThrow('untrusted frame');
+    expect(state.redeem).not.toHaveBeenCalled();
+    await state.handleDrop!(event, payload);
+    expect(state.redeem).toHaveBeenCalledWith('renderer:7', 'task', payload.ticket);
+  });
+
+  // Unit at the Main IPC boundary. Only Main can map a renderer to its window.
+  // A card in the detached sidebar was offered the composer and staged files into
+  // a renderer without ChatInput. Minimal failing input: a sidebar window caller.
+  it('offers the composer only to renderers in a task composer window', async () => {
+    const { webContents, BrowserWindow } = await import('electron');
+    const main = { isDestroyed: () => false };
+    const sidebar = { isDestroyed: () => false };
+    vi.mocked(webContents.fromId).mockImplementation(id => ({ isDestroyed: () => false, id }) as never);
+    vi.mocked(BrowserWindow.fromWebContents).mockImplementation(contents =>
+      ((contents as unknown as { id: number }).id === 1 ? main : sidebar) as never);
+    registerMcpAppsIpc(async () => {}, vi.fn(), undefined, undefined, window => window === (main as never));
+    expect(state.deps!.composerCaller!('renderer:1')).toBe(true);
+    expect(state.deps!.composerCaller!('renderer:2')).toBe(false);
+    expect(state.deps!.composerCaller!('device:phone')).toBe(false);
+  });
+
+  // Tier: unit at the production Main IPC boundary. A local MCP App resource
+  // must be staged and delivered back to the renderer, using the same owner
+  // identity as the active DB snapshot. The previous code read a nonexistent
+  // `dataOwnerId` field and rejected every request with MCP_APP_OWNER_ONLY.
+  it('stages a local composer attachment with the DB snapshot user id', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mcp-composer-ipc-'));
+    state.userData = root;
+    const send = vi.fn();
+    const target = { isDestroyed: () => false, send };
+    const { webContents } = await import('electron');
+    vi.mocked(webContents.fromId).mockReturnValue(target as never);
+    try {
+      await state.deps!.sendComposerAttachment!({
+        caller: 'renderer:1', sessionId: 'task', viewId: 'view', resourceKey: 'card-resource', name: 'sample.txt',
+        mimeType: 'text/plain', size: 3, bytes: new Uint8Array([97, 98, 99]),
+        assertCurrent: async () => {},
+      });
+      expect(send).toHaveBeenCalledWith('maker:mcp-apps:composer-attachment', expect.objectContaining({
+        sessionId: 'task', viewId: 'view',
+        attachment: expect.objectContaining({ name: 'sample.txt', size: 3, mimeType: 'text/plain' }),
+      }));
+      const stagedPath = send.mock.calls[0]![1].attachment.path as string;
+      expect(await fs.readFile(stagedPath)).toEqual(Buffer.from('abc'));
+    } finally {
+      state.userData = '';
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // Unit at the Main IPC boundary. Sending treats `.gif` as a file, so the
+  // extension must follow the validated bytes, not the page-supplied name.
+  // Minimal failing inputs: a GIF without `.gif`, a PNG named `.gif`.
+  it.each([
+    { name: 'animation', mimeType: 'image/gif', ext: '.gif' },
+    { name: 'photo.gif', mimeType: 'image/png', ext: '.png' },
+    { name: 'scan', mimeType: 'image/jpeg', ext: '.jpg' },
+    { name: 'report.txt', mimeType: 'application/pdf', ext: '.pdf' },
+  ])('derives the staged extension from validated content: $name as $mimeType', async ({ name, mimeType, ext }) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mcp-composer-ext-'));
+    state.userData = root;
+    const send = vi.fn();
+    const { webContents } = await import('electron');
+    vi.mocked(webContents.fromId).mockReturnValue({ isDestroyed: () => false, send } as never);
+    try {
+      await state.deps!.sendComposerAttachment!({
+        caller: 'renderer:1', sessionId: 'task', viewId: 'view', resourceKey: `ext-${name}`, name,
+        mimeType, size: 3, bytes: new Uint8Array([1, 2, 3]), assertCurrent: async () => {},
+      });
+      expect(send.mock.calls[0]![1].attachment).toEqual(expect.objectContaining({ name, ext }));
+    } finally {
+      state.userData = '';
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // Security regression #10649, unit: a trusted renderer's path is not proof
+  // that the user supplied its bytes. Reject it before any provider dispatch.
+  it.each([false, true])('rejects a renderer-supplied absolute attachment path before dispatch (with bytes: %s)', async withBytes => {
+    state.plugin = { host: { contributions: [{ id: 'parse', title: 'Parse', position: 'composer.attachment',
+      tool: 'parse', accept: { extensions: ['.txt'] } }] }, config: { id: 'plugin-source', url: '', transport: 'in-process',
+      plugin: { assertCurrent() {} } as AppServerConfig['plugin'] } };
+    state.action.mockResolvedValue({ structuredContent: { handled: false } });
+    await expect(state.handle!({ sender: { id: 1, isDestroyed: () => false } }, null, {
+      op: 'plugin-action', instanceId: 'local__demo', id: 'parse', requestId: 'forged-path', input: {
+        attachment: { name: 'private.txt', uri: path.resolve('private.txt'), size: 5, mimeType: 'text/plain',
+          ...(withBytes ? { bytes: new Uint8Array(5) } : {}) },
+      },
+    })).rejects.toThrow('MCP_APP_INVALID_REQUEST');
+    expect(state.action).not.toHaveBeenCalled();
+  });
+  // Unit integration, #9987: real native IPC -> Host -> SDK -> attachment adapter.
+  // Old tests mocked a successful host; an unsent clipboard blob never reached
+  // the provider. Both input paths must deliver real bytes without Agent approval.
+  it.each(['disk', 'cached-paste'] as const)('directly delivers %s input through the native IPC', async kind => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'native-attachment-ipc-'));
+    state.userData = root;
+    const bytes = kind === 'disk' ? Buffer.from('selected file') :
+      Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jP1sAAAAASUVORK5CYII=', 'base64');
+    const image = kind === 'cached-paste' ? await blobs.writeBlob({ buffer: bytes, mimeType: 'image/png' }) : undefined;
+    const disk = path.join(root, 'picked.txt');
+    if (!image) await fs.writeFile(disk, bytes);
+    const handoff = new GhostHandoffStore({ root: () => path.join(root, 'handoff') });
+    const tool = { name: 'parse', description: 'Parse input', parameters: { type: 'object' as const,
+      properties: { cindy_handoff_files: { type: 'array' as const } } } };
+    const authorizeTool = vi.fn(async () => { throw new Error('must not ask Agent policy'); });
+    const delivered = vi.fn(async (args: Record<string, unknown>) => {
+      expect(JSON.stringify(args)).not.toContain(root);
+      if (image) expect(args.attachments).toEqual([image.hash]);
+      else {
+        const [file] = args.cindy_handoff_files as Array<{ ref: string }>;
+        expect(await handoff.read('local__parse', file!.ref)).toMatchObject({ bytes });
+      }
+      return { content: [{ type: 'text' as const, text: JSON.stringify({ handled: false }) }] };
+    });
+    const deposit = vi.fn(async (buffer: Buffer) => {
+      expect(buffer).toEqual(bytes);
+      return { hash: image!.hash, cleanup: async () => {} };
+    });
+    const client = new Client({ name: 'native-input', version: '1' });
+    try {
+      await client.connect(createPluginAppTransport({ instance: 'local__parse', revision: 'one', tools: [tool],
+        ui: { resources: [], tools: { parse: { visibility: ['app'] } } }, assertCurrent() {}, readHtml: () => '',
+        call: (grant, args, signal) => callPluginAttachmentProvider({ instance: grant.instance,
+          bytes: grant.attachmentBytes!, args, handoffDeclared: true,
+        }, { signal, assertCurrent: grant.assertCurrent, assertStillValid() {}, handoff,
+          ensureReady: async () => {}, assertReady() {},
+          supportsMedia: blobs.supportedMime, deposit, call: delivered }),
+      }));
+      const config: AppServerConfig = { id: 'parse', transport: 'in-process', url: '',
+        plugin: { instance: 'local__parse', revision: 'one', assertCurrent() {} } as AppServerConfig['plugin'] };
+      state.plugin = { host: { contributions: [{ id: 'parse', title: 'Parse', position: 'composer.attachment', tool: 'parse',
+        accept: { extensions: ['.txt', '.png'] } }] }, config };
+      const host = new NativeHost({ owner: () => state.owner ?? undefined, config: () => config,
+        connection: () => ({ tools: async () => (await client.listTools()).tools, getClient: async () => client }) as never,
+        authorizeTool, readCard: vi.fn(), writeCard: vi.fn(), sendMessage: vi.fn() });
+      state.action.mockImplementation(host.callPluginAction.bind(host));
+      expect(await state.handle!({ sender: { id: 1, isDestroyed: () => false } }, 'task', {
+        op: 'plugin-action', instanceId: 'local__parse', id: 'parse', requestId: 'input', input: { attachment: {
+          name: image ? 'clipboard.png' : 'picked.txt', bytes: new Uint8Array(await new Blob([bytes]).arrayBuffer()), size: bytes.length,
+          mimeType: image ? 'image/png' : 'text/plain',
+        } },
+      })).toEqual({ handled: false });
+      expect(delivered).toHaveBeenCalledOnce();
+      expect(authorizeTool).not.toHaveBeenCalled();
+      expect(deposit).toHaveBeenCalledTimes(image ? 1 : 0);
+      expect(await fs.readFile(image ? blobs.resolveSafe(image.url).absPath : disk)).toEqual(bytes);
+      await host.reset();
+    } finally { await client.close(); await fs.rm(root, { recursive: true, force: true }); state.userData = ''; }
+  });
+  // Unit: selected File bytes go through the Main-owned input, not tool JSON.
+  // Existing completion cases have no files; a MIME/extension mismatch must not call it.
+  it('matches added attachments and passes bytes only in the Main-owned call', async () => {
+    state.plugin = { host: { contributions: [{ id: 'parse', title: 'Parse', position: 'composer.attachment',
+      tool: 'parse', accept: { extensions: ['.pdf'] } }] }, config: { id: 'plugin-source', url: '', transport: 'in-process',
+      plugin: { assertCurrent() {} } as AppServerConfig['plugin'] } };
+    const event = { sender: { id: 1, isDestroyed: () => false } };
+    const input = { op: 'plugin-action', instanceId: 'local__demo', id: 'parse', requestId: 'file',
+      input: { attachment: { name: 'input.pdf', bytes: new Uint8Array(5), size: 5, mimeType: 'application/pdf' } } };
+    state.action.mockResolvedValue({ structuredContent: { handled: false } });
+    expect(await state.handle!(event, null, input)).toEqual({ handled: false });
+    expect(state.action.mock.calls[0].slice(0, 5)).toEqual(['renderer:1', null,
+      expect.objectContaining({ attachmentBytes: new Uint8Array(5) }), 'parse',
+      { attachment: { name: 'input.pdf', size: 5, mimeType: 'application/pdf' } }]);
+    state.action.mockClear();
+    await expect(state.handle!(event, null, { ...input, input: { attachment: { ...input.input.attachment,
+      name: 'input.exe', mimeType: 'application/octet-stream' } } })).rejects.toThrow('MCP_APP_INVALID_REQUEST');
+    expect(state.action).not.toHaveBeenCalled();
+  });
+  // New provider contract, unit: production Main handler must bind trigger/query,
+  // cancellation to the renderer and all settings writes to the physical instance.
+  // Existing card persistence/policy tests do not exercise native provider requests.
+  it('validates completion input and scopes cancellation to the requesting renderer', async () => {
+    state.plugin = { host: { contributions: [{ id: 'lookup', title: 'Lookup', position: 'composer.completion',
+      trigger: '@', tool: 'lookup', arguments: { scope: 'declared' } }] },
+      config: { id: 'plugin-source', url: '', transport: 'in-process', plugin: { assertCurrent() {} } as AppServerConfig['plugin'] } };
+    const event = { sender: { id: 1, isDestroyed: () => false } };
+    const action = { op: 'plugin-action', instanceId: 'local__demo', id: 'lookup', requestId: 'one', input: { trigger: '@', query: 'issue' } };
+    await expect(state.handle!(event, null, { ...action, input: { trigger: '/', query: 'issue' } })).rejects.toThrow('MCP_APP_INVALID_REQUEST');
+    expect(state.action).not.toHaveBeenCalled();
+    let signal: AbortSignal | undefined;
+    state.action.mockImplementation(async (_caller, _session, _source, _tool, _args, nextSignal: AbortSignal) => {
+      signal = nextSignal;
+      return new Promise((_resolve, reject) => nextSignal.addEventListener('abort', () => reject(new Error('cancelled')), { once: true }));
+    });
+    const pending = state.handle!(event, null, action);
+    // IPC intentionally hides arbitrary plugin errors behind its public code.
+    const rejected = expect(pending).rejects.toThrow('MCP_APP_REQUEST_FAILED');
+    await vi.waitFor(() => expect(state.action).toHaveBeenCalledOnce());
+    expect(state.action.mock.calls[0].slice(0, 5)).toEqual(['renderer:1', null,
+      expect.objectContaining({ id: 'lookup', config: state.plugin.config }), 'lookup', { scope: 'declared', trigger: '@', query: 'issue' }]);
+    await state.handle!({ sender: { id: 2 } }, null, { op: 'plugin-action-cancel', requestId: 'one' });
+    expect(signal!.aborted).toBe(false);
+    await state.handle!(event, null, { op: 'plugin-action-cancel', requestId: 'one' });
+    await rejected;
+    expect(signal!.aborted).toBe(true);
+  });
+  it('routes registered settings through the original service and refuses a revoked source', async () => {
+    const settings = [{ id: 'enabled', title: 'Enabled', type: 'boolean' as const, default: true }];
+    state.plugin = { host: { settings }, config: { id: 'plugin-source', url: '', transport: 'in-process',
+      plugin: { assertCurrent() {} } as AppServerConfig['plugin'] } };
+    let stored: Record<string, unknown> = { private: 'keep' };
+    configurePluginSettings({ entries: () => [{ instance: 'local__demo', title: 'Demo', settings, assertCurrent() {
+      if (!state.plugin) throw new Error('revoked');
+    } }], read: () => stored, write: (_instance, value) => { stored = value; } });
+    const event = { sender: { id: 1, isDestroyed: () => false } };
+    const input = { op: 'plugin-settings', instanceId: 'local__demo', operation: 'update', patch: { enabled: false } };
+    expect(await state.handle!(event, null, input)).toMatchObject({ section: 'plugins.local__demo', state: { value: { enabled: false } } });
+    expect(stored).toEqual({ private: 'keep', enabled: false });
+    state.plugin = undefined;
+    await expect(state.handle!(event, null, input)).rejects.toThrow('MCP_APP_SOURCE_UNAVAILABLE');
+    expect(stored).toEqual({ private: 'keep', enabled: false });
+  });
+  // Unit regression: cancel can arrive at the first await, before tool dispatch.
+  // The existing cancellation case waits for dispatch and misses this window.
+  it.each(['composer.completion', 'composer.attachment'] as const)('cancels %s before its first asynchronous source check finishes', async position => {
+    state.plugin = { host: { contributions: [{ id: 'provider', title: 'Provider', position, tool: 'provider',
+      ...(position === 'composer.completion' ? { trigger: '@' as const } : { accept: { extensions: ['.pdf'] } }) }] },
+      config: { id: 'plugin-source', url: '', transport: 'in-process', plugin: { assertCurrent() {} } as AppServerConfig['plugin'] } };
+    const event = { sender: { id: 1, isDestroyed: () => false } };
+    const input = position === 'composer.completion' ? { trigger: '@', query: 'record' }
+      : { attachment: { name: 'input.pdf', bytes: new Uint8Array(5), size: 5, mimeType: 'application/pdf' } };
+    state.action.mockResolvedValue({ structuredContent: { handled: false } });
+    const pending = state.handle!(event, null, { op: 'plugin-action', instanceId: 'local__demo', id: 'provider', requestId: 'early', input });
+    const rejected = expect(pending).rejects.toThrow('MCP_APP_REQUEST_FAILED');
+    await state.handle!(event, null, { op: 'plugin-action-cancel', requestId: 'early' });
+    await rejected;
+    expect(state.action).not.toHaveBeenCalled();
+  });
   it('injects the persistent vault key lazily instead of using a transient Host key', () => {
     expect(state.revisionKey).not.toHaveBeenCalled();
     expect(state.deps!.revisionKey!()).toBe('a'.repeat(64));
@@ -227,7 +536,7 @@ describe('MCP App persistence and IPC wiring', () => {
     state.updateResult = [state.row!];
     await state.deps!.writeCard('task', 'card', full);
     expect(state.broadcast.mock.calls[0]![1].content).toEqual({
-      mcpAppHistory: { version: 1, title: 'form', text: 'Saved result' },
+      mcpAppHistory: { version: 1, customMcp: true, title: 'form', text: 'Saved result' },
     });
     expect(await state.deps!.readCard('task', 'card')).toEqual(full);
     expect(JSON.parse(state.row!.content as string)).toEqual({ mcpApp: full });
@@ -308,15 +617,237 @@ describe('MCP App persistence and IPC wiring', () => {
       ['task', { op: 'message', viewId: 'remote-view', message }], { preSend: expect.any(Function) });
 
     state.open.mockResolvedValue(document);
-    expect(await state.handle!({ sender: { id: 1 } }, 'task', { op: 'open', clientId: 'card' }))
+    const sdkCacheHashes = ['0'.repeat(64)];
+    expect(await state.handle!({ sender: { id: 1 } }, 'task', { op: 'open', clientId: 'card', sdkCacheHashes }))
       .toEqual({ viewId: 'remote-view', transport: 'sandbox', prefersBorder: true });
+
+    expect(state.open).toHaveBeenLastCalledWith('renderer:1', 'task', 'card', {}, undefined, undefined);
 
     // Mobile still reaches the execution Host over the existing same-account channel.
     state.remote = { controllerDeviceId: 'phone' };
     state.open.mockResolvedValue(document);
     expect(await state.handle!({}, 'task', { op: 'open', clientId: 'card' })).toEqual(document);
-    expect(state.open).toHaveBeenCalledWith('device:phone', 'task', 'card', {}, undefined);
+    expect(state.open).toHaveBeenLastCalledWith('device:phone', 'task', 'card', {}, undefined, undefined);
+    expect(await state.handle!({}, 'task', { op: 'open', clientId: 'card', sdkCacheHashes })).toEqual(document);
+    expect(state.open).toHaveBeenLastCalledWith('device:phone', 'task', 'card', {}, undefined, expect.any(Function));
     await state.handle!({}, 'task', { op: 'message', viewId: 'remote-view', message });
     expect(state.dispatch).toHaveBeenCalledWith('device:phone', 'task', 'remote-view', message);
+  });
+});
+
+// unit: page tools must use existing Auto-review, not always prompt. Minimal input:
+// one custom MCP call in auto mode, with each possible reviewer decision.
+it.each(['allow', 'block', 'ask'] as const)('routes page approval through Auto (%s)', async verdict => {
+  state.session.permissionMode = 'auto';
+  const review = vi.fn(async () => ({ verdict }));
+  registerMcpAppsIpc(async () => {}, request, review);
+  const result = state.deps!.authorizeTool('task', record.tool, { value: 3 }, new AbortController().signal,
+    { clientId: 'card', serverId: 'custom', title: 'Planner' });
+  if (verdict === 'block') await expect(result).rejects.toThrow('MCP_APP_TOOL_DENIED');
+  else await result;
+  expect(review).toHaveBeenCalledWith('task', 'custom', 'form', { value: 3 }, undefined,
+    { name: record.tool.name, description: undefined, inputSchema: record.tool.inputSchema });
+  expect(request).toHaveBeenCalledTimes(verdict === 'ask' ? 1 : 0);
+  if (verdict === 'ask') expect(request).toHaveBeenCalledWith('task', expect.objectContaining({ metadata: expect.objectContaining({ mcpApp: { clientId: 'card', serverId: 'custom', title: 'Planner', scope: 'once' } }) }), expect.any(AbortSignal));
+});
+
+// #8706 unit: this page-specific approval path builds its own metadata.
+it('retains a safe quota cause while requiring page confirmation', async () => {
+  state.session.permissionMode = 'auto';
+  const review = vi.fn(async () => ({ verdict: 'ask' as const, unavailable: true,
+    unavailableReason: 'quota_exhausted' as const, reason: 'Safe host guidance' }));
+  registerMcpAppsIpc(async () => {}, request, review);
+  await state.deps!.authorizeTool('task', record.tool, {}, new AbortController().signal,
+    { clientId: 'card', serverId: 'custom', title: 'Planner' });
+  expect(request).toHaveBeenCalledExactlyOnceWith('task', expect.objectContaining({
+    metadata: expect.objectContaining({ autoReviewUnavailable: true, autoReviewUnavailableReason: 'quota_exhausted' }),
+  }), expect.any(AbortSignal));
+});
+
+// unit: page-only task grants were absent. Minimum input is two page calls with one
+// session-scoped answer, then change one authority boundary. Model stores are never involved.
+describe('page-only task permission lifetime', () => {
+  const source = { clientId: 'card', serverId: 'example', title: 'Planner' };
+  const tool = { name: 'read', inputSchema: { type: 'object' as const } };
+  const call = (id = 'task', target = tool) => state.deps!.authorizeTool(id, target, {}, new AbortController().signal, source);
+  it('remembers only this task/service/tool and clears on session clear, end, config and owner changes', async () => {
+    request.mockResolvedValue({ kind: 'permission', behavior: 'allow', permissionUpdates: [{ destination: 'session' }] } as never);
+    await call(); await call(); expect(request).toHaveBeenCalledTimes(1);
+    await call('other'); expect(request).toHaveBeenCalledTimes(2);
+    await call('task', { ...tool, name: 'another' }); expect(request).toHaveBeenCalledTimes(3);
+    pagePermissionSessionChanged('task', { clearedAt: 1 });
+    await call(); expect(request).toHaveBeenCalledTimes(4);
+    pagePermissionSessionChanged('task', { status: 'archived' });
+    await call(); expect(request).toHaveBeenCalledTimes(5);
+    vi.mocked(readAppServer).mockReturnValue({ id: 'example', url: 'https://example.com/new', transport: 'http' });
+    await call(); expect(request).toHaveBeenCalledTimes(6);
+    state.owner = { ...(state.owner as object) };
+    await call(); expect(request).toHaveBeenCalledTimes(7);
+    pagePermissionGrants.clearServers(new Set(['example']));
+    await call(); expect(request).toHaveBeenCalledTimes(8);
+  });
+  it('never remembers destructive, Auto or once-only answers', async () => {
+    request.mockResolvedValue({ kind: 'permission', behavior: 'allow', permissionUpdates: [{ destination: 'session' }] } as never);
+    const destructive = { ...tool, annotations: { destructiveHint: true } };
+    await call('task', destructive); await call('task', destructive);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenNthCalledWith(1, 'task', expect.objectContaining({ suggestions: undefined, metadata: { mcpApp: { ...source, scope: 'once' } } }), expect.any(AbortSignal));
+    state.session.permissionMode = 'auto';
+    const review = vi.fn(async () => ({ verdict: 'allow' as const }));
+    registerMcpAppsIpc(async () => {}, request, review);
+    await call(); await call(); expect(review).toHaveBeenCalledTimes(2);
+    state.session.permissionMode = 'default';
+    request.mockResolvedValue({ kind: 'permission', behavior: 'allow' });
+    await call(); await call(); expect(request).toHaveBeenCalledTimes(4);
+  });
+  it('settles only the waiting page request after committed Full Access, without another prompt', async () => {
+    let resolve!: (value: { kind: 'permission'; behavior: 'allow' }) => void;
+    const prompt = vi.fn(() => new Promise<{ kind: 'permission'; behavior: 'allow' }>(r => { resolve = r; }));
+    const allow = vi.fn(() => resolve({ kind: 'permission', behavior: 'allow' }));
+    registerMcpAppsIpc(async () => {}, prompt, undefined, allow);
+    const pending = call();
+    await vi.waitFor(() => expect(prompt).toHaveBeenCalledOnce());
+    state.session = { ...state.session, permissionMode: 'bypassPermissions' };
+    pagePermissionSessionChanged('other', { permissionMode: 'bypassPermissions' });
+    expect(allow).not.toHaveBeenCalled();
+    pagePermissionSessionChanged('task', { permissionMode: 'bypassPermissions' });
+    await pending; expect(allow).toHaveBeenCalledWith('task', expect.any(String));
+    await call(); expect(prompt).toHaveBeenCalledOnce();
+  });
+});
+
+// M05, unit: original Host tests bypassed the second IPC error envelope on the
+// viewer. Exercise the registered remote entry + RemoteMcpAppViews + real Host,
+// with only device-link transport substituted. One Library result is sufficient.
+it('preserves the local-files limitation across Desktop and phone remote entry points', async () => {
+  const { McpAppsHost: RealHost, appServerRevision: revision } = await vi.importActual<typeof import('../host.js')>('../host.js');
+  const { createPluginAppTransport, pluginAppTool } = await import('../pluginServer.js');
+  const tools = [{ name: 'open', description: 'Open' }];
+  const ui = { resources: [{
+            uri: "ui://page",
+            file: 'ui.html'
+        }], tools: { open: { resourceUri: "ui://page" } } };
+  const config: import('../connection.js').AppServerConfig = { id: 'remote-files', url: '', transport: 'in-process', plugin: {
+    instance: 'remote-files', revision: 'approved', packageSha256: 'hash', directory: '/fixture', title: 'Files', trust: 'unverified', domains: [], assertCurrent() {},
+    createTransport: () => createPluginAppTransport({ instance: 'remote-files', revision: 'approved', tools, ui, assertCurrent() {}, readHtml: () => '<p>Standard page</p>', call: async () => ({ content: [] }) }),
+  } };
+  const actual = new RealHost({ owner: () => state.owner!, config: () => config,
+    readCard: async (_task, card) => ({ version: 1, serverId: config.id, serverRevision: revision(config), resourceUri: 'ui://page', tool: pluginAppTool('remote-files', tools[0], ui), arguments: {},
+      result: { content: card === 'files' ? [{ type: 'resource_link', uri: 'library:report.png', name: 'report' }] : [] } }),
+    writeCard: async () => {}, authorizeTool: async () => {}, sendMessage: async () => {},
+  });
+  state.open.mockImplementation(actual.open.bind(actual));
+  // Model the actual IPC serialization, including its [PRECONDITION_FAILED] prefix.
+  state.invoke.mockImplementation(async (_device, _channel, args, options) => {
+    options.preSend();
+    const saved = state.remote;
+    state.remote = { controllerDeviceId: 'viewer' };
+    try { return { ok: true, result: await state.handle!({}, args[0], args[1]) }; }
+    catch (error) { return { ok: false, error: { code: 'PRECONDITION_FAILED', message: (error as Error).message } }; }
+    finally { state.remote = saved; }
+  });
+  try {
+    for (const viewer of ['desktop', 'phone']) {
+      state.remote = viewer === 'phone' ? { controllerDeviceId: 'phone' } : undefined;
+      const route = viewer === 'desktop' ? { deviceId: 'execution-computer' } : {};
+      await expect(state.handle!({ sender: { id: 1 } }, 'task', { ...route, op: 'open', clientId: 'files' }))
+        .rejects.toThrow('[PRECONDITION_FAILED] MCP_APP_FILES_LOCAL_ONLY');
+      vi.mocked(mountRemoteAppDocument).mockReturnValue('local-standard');
+      const doc = await state.handle!({ sender: { id: 1 } }, 'task', { ...route, op: 'open', clientId: 'standard' });
+      expect(doc).toMatchObject(viewer === 'desktop' ? { viewId: 'local-standard', transport: 'sandbox' } : { html: '<p>Standard page</p>' });
+    }
+  } finally { await actual.reset(); }
+});
+
+// Wrapped public codes survive, but upstream text/URLs/secrets must never leak.
+it.each([
+  ['MCP_APP_FILE_NOT_AUTHORIZED', 'MCP_APP_FILE_NOT_AUTHORIZED'],
+  ['MCP_APP_TOOL_DENIED', 'MCP_APP_TOOL_DENIED'],
+  ['MCP_APP_CALL_NOT_AUTHORIZED', 'MCP_APP_CALL_NOT_AUTHORIZED'],
+  ['MCP_PLUGIN_CSP_DOMAIN_NOT_DECLARED', 'MCP_PLUGIN_CSP_DOMAIN_NOT_DECLARED'],
+  ['MCP_PLUGIN_UNAVAILABLE', 'MCP_PLUGIN_UNAVAILABLE'],
+  ['MCP_APP_FILES_LOCAL_ONLY https://private.invalid/?token=secret', 'MCP_APP_REQUEST_FAILED'],
+])('preserves only public remote App errors: %s', async (message, expected) => {
+  state.invoke.mockResolvedValue({ ok: false, error: { code: 'PRECONDITION_FAILED', message: `[PRECONDITION_FAILED] ${message}` } });
+  await expect(state.handle!({ sender: { id: 1 } }, 'task', { deviceId: 'execution-computer', op: 'open', clientId: 'card' }))
+    .rejects.toThrow(`[PRECONDITION_FAILED] ${expected}`);
+});
+
+// Unit: real registerMcpAppsIpc authorizer + production ghost_call classifier.
+// Plugin pages formerly skipped this path; two ordinary page calls must share only
+// a page grant, while Full Access, media policy and Auto produce distinct outcomes.
+describe('plugin page ghost_call approval policy', () => {
+  const source = { clientId: 'card', serverId: 'plugin-example', title: 'Page' };
+  const tool = { name: 'save', description: 'Save a local draft; does not send messages.',
+    inputSchema: { type: 'object' as const, properties: { value: { type: 'number' } } } };
+  function bind(ghostId = 'notes', namespace?: string | null) {
+    vi.mocked(readAppServer).mockReturnValue({ id: source.serverId, url: '', transport: 'in-process', plugin: {
+      ghostId, ...(namespace !== undefined ? { namespace } : {}), instance: '_root__' + ghostId, revision: 'approved', packageSha256: 'hash', directory: '/fixture', title: 'Page',
+      trust: 'unverified', domains: [], assertCurrent() {}, createTransport() { throw new Error('unused'); },
+    } });
+  }
+  const call = (target = tool) => state.deps!.authorizeTool('task', target, { value: 3 }, new AbortController().signal, source);
+  it('asks through the page request and remembers only page calls in this task', async () => {
+    bind();
+    request.mockResolvedValue({ kind: 'permission', behavior: 'allow', permissionUpdates: [{ destination: 'session' }] } as never);
+    await call(); await call();
+    expect(request).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledWith('task', expect.objectContaining({ suggestions: expect.any(Array),
+      metadata: { mcpApp: { ...source, scope: 'session' } } }), expect.any(AbortSignal));
+  });
+  // 4420282600, unit: the real page authorizer must observe the independent plan toggle.
+  // Existing coverage only used permissionMode; a remembered grant and an in-flight approval missed it.
+  it.each(['default', 'auto', 'bypassPermissions', 'media'] as const)('denies a page call in plan mode before %s policy can allow it', async mode => {
+    bind(mode === 'media' ? 'cindy-art' : 'notes');
+    state.session.permissionMode = mode === 'media' ? 'default' : mode;
+    state.session.planModeEnabled = true;
+    await expect(call(mode === 'media' ? { ...tool, name: 'gen_image' } : tool)).rejects.toThrow('MCP_APP_TOOL_DENIED');
+    expect(request).not.toHaveBeenCalled();
+  });
+  it('discards remembered page approval after entering and leaving plan mode', async () => {
+    bind();
+    request.mockResolvedValue({ kind: 'permission', behavior: 'allow', permissionUpdates: [{ destination: 'session' }] } as never);
+    await call(); await call();
+    expect(request).toHaveBeenCalledOnce();
+    state.session = { ...state.session, planModeEnabled: true };
+    pagePermissionSessionChanged('task', { planModeEnabled: true });
+    state.session = { ...state.session, planModeEnabled: false };
+    pagePermissionSessionChanged('task', { planModeEnabled: false });
+    await call();
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+  it.each(['default', 'auto'] as const)('rechecks plan mode after a pending %s approval', async mode => {
+    bind();
+    state.session.permissionMode = mode;
+    const enterPlan = () => {
+      state.session = { ...state.session, planModeEnabled: true };
+      pagePermissionSessionChanged('task', { planModeEnabled: true });
+    };
+    const prompt = vi.fn(async () => { enterPlan(); return { kind: 'permission' as const, behavior: 'allow' as const }; });
+    const review = vi.fn(async () => { enterPlan(); return { verdict: 'allow' as const }; });
+    registerMcpAppsIpc(async () => {}, prompt, review);
+    await expect(call()).rejects.toThrow('MCP_APP_TOOL_DENIED');
+    expect(mode === 'auto' ? review : prompt).toHaveBeenCalledOnce();
+  });
+  it.each(['bypassPermissions', 'media', 'media-auto'] as const)('uses session approval for undeclared plugin tools (%s)', async mode => {
+    bind(mode === 'bypassPermissions' ? 'notes' : 'cindy-art');
+    state.session.permissionMode = mode === 'media-auto' ? 'auto' : mode === 'media' ? 'default' : mode;
+    const review = vi.fn(async () => ({ verdict: 'ask' as const }));
+    registerMcpAppsIpc(async () => {}, request, review);
+    await call(mode === 'bypassPermissions' ? tool : { ...tool, name: 'gen_image' });
+    expect(review).toHaveBeenCalledTimes(mode === 'media-auto' ? 1 : 0);
+    expect(request).toHaveBeenCalledTimes(mode === 'bypassPermissions' ? 0 : 1);
+  });
+  // Unit regression: the real page authorizer dropped plugin tool contracts, so
+  // Auto could not distinguish a draft from a send. A named tool with a description
+  // and schema must reach review with its original identity; prior coverage omitted both.
+  it.each([undefined, null, 'example'])('reviews the original ghost_call identity, page origin and tool definition in Auto: %s', async namespace => {
+    bind('notes', namespace); state.session.permissionMode = 'auto';
+    const review = vi.fn(async () => ({ verdict: 'allow' as const }));
+    registerMcpAppsIpc(async () => {}, request, review);
+    await call();
+    expect(review).toHaveBeenCalledWith('task', 'cindy', 'ghost_call',
+      { ghost_id: 'notes', ...(namespace !== undefined ? { namespace } : {}), tool: 'save', args: { value: 3 } }, expect.stringContaining('由插件交互页面发起'), tool);
+    expect(request).not.toHaveBeenCalled();
   });
 });

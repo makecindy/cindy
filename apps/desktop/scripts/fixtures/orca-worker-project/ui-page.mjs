@@ -81,6 +81,13 @@ export default {
         .getByText(await ui.t('orca.workerProject.direct', { project: 'cindy', branch: 'main' }))
         .waitFor();
       await ui.capture('explicit-main-checkout');
+      await page.getByText(await ui.t('orca.workerProject.newWorktree'), { exact: true }).click();
+      const sourceBranch = page.getByRole('button', {
+        name: await ui.t('newChat.branchChip.label'),
+        exact: true,
+      });
+      assert.equal(await sourceBranch.textContent(), 'main');
+      await ui.capture('same-repo-source-branch');
       await page.getByRole('button', { name: 'cindy', exact: true }).click();
       await page.getByRole('button', { name: 'cindy /projects/cindy', exact: true }).click();
       await page.getByRole('button', { name: current, exact: true }).waitFor();
@@ -184,5 +191,12 @@ export default {
         .waitFor();
     }
     await ui.capture('other-project');
+    await page.getByText(await ui.t('orca.workerProject.newWorktree'), { exact: true }).click();
+    const rememberedBranch = page.getByRole('button', {
+      name: await ui.t('newChat.branchChip.label'),
+      exact: true,
+    });
+    assert.equal(await rememberedBranch.textContent(), 'release/v2');
+    await ui.capture('remembered-source-branch');
   },
 };

@@ -12,6 +12,12 @@ import type { RegionCaptureBegin, RegionCaptureFrame, RegionCaptureMode } from '
 
 /** 框选浮层 preload (regionScreenshotPreload) 暴露的能力。 */
 export interface RegionScreenshotOverlayBridge {
+  startAudio(token: string, options: import('../../../shared/recordingAudio').RecordingAudioOptions): Promise<import('../../../shared/recordingAudio').RecordingAudioError | null>;
+  readAudio(token: string): Promise<Uint8Array>;
+  stopAudio(token: string): Promise<void>;
+  onLocaleChanged?(callback: (payload: { token: string; locale: string }) => void): () => void;
+  onTranslationLanguageChanged?(callback: (payload: { token: string; preference: import('../../../shared/screenshotTranslation').ScreenshotTranslationPreference }) => void): () => void;
+  setTranslationLanguage(token: string, value: import('../../../shared/screenshotTranslation').ScreenshotTranslationPreference): Promise<boolean>;
   recordingControls(token: string, expanded: boolean, point?: { x: number; y: number }, dragging?: boolean): Promise<RegionRect | null>;
   previewRecording(token: string, bytes: Uint8Array, format: 'webm' | 'gif'): Promise<boolean>;
   /** `'accessibility'`: macOS 缺少辅助功能权限, 系统已弹出授权询问。 */
@@ -53,7 +59,7 @@ export interface RegionScreenshotPinBridge {
 declare global {
   interface Window {
     regionScreenshot?: RegionScreenshotOverlayBridge;
-    regionScreenshotEditor?: Pick<RegionScreenshotOverlayBridge, 'shellReady' | 'onBegin' | 'onEnd' | 'painted' | 'cancel' | 'exportImage'> & { failed(): void; minimize(token: string): void };
+    regionScreenshotEditor?: Pick<RegionScreenshotOverlayBridge, 'shellReady' | 'onBegin' | 'onEnd' | 'painted' | 'cancel' | 'exportImage' | 'setTranslationLanguage' | 'onTranslationLanguageChanged' | 'onLocaleChanged'> & { failed(): void; minimize(token: string): void };
     regionScreenshotPin?: RegionScreenshotPinBridge;
   }
 }
@@ -88,6 +94,29 @@ export function bitmapToImageData(bitmap: RegionScreenshotBitmap, reuse?: ImageD
     : new ImageData(bitmap.width, bitmap.height);
   swapRedBlue(source, image.data);
   return image;
+}
+
+/** Wrap top-down BGRA in a BITMAPV5HEADER with an embedded monitor ICC profile.
+ * Chromium can then composite the frozen desktop in its source color space.
+ * Blob parts avoid a pixel shuffle or PNG compression on the first-paint path. */
+export function profiledDesktopBitmap(bitmap: RegionScreenshotBitmap, icc: Uint8Array<ArrayBuffer>): Blob {
+  const fileHeader = 14;
+  const dibHeader = 124;
+  const pixelsAt = fileHeader + dibHeader;
+  const header = new DataView(new ArrayBuffer(pixelsAt));
+  header.setUint16(0, 0x4d42, true); // BM
+  header.setUint32(2, pixelsAt + bitmap.data.byteLength + icc.byteLength, true);
+  header.setUint32(10, pixelsAt, true);
+  header.setUint32(fileHeader, dibHeader, true);
+  header.setInt32(fileHeader + 4, bitmap.width, true);
+  header.setInt32(fileHeader + 8, -bitmap.height, true);
+  header.setUint16(fileHeader + 12, 1, true);
+  header.setUint16(fileHeader + 14, 32, true);
+  header.setUint32(fileHeader + 56, 0x4d424544, true); // PROFILE_EMBEDDED
+  header.setUint32(fileHeader + 108, 4, true); // LCS_GM_IMAGES
+  header.setUint32(fileHeader + 112, dibHeader + bitmap.data.byteLength, true);
+  header.setUint32(fileHeader + 116, icc.byteLength, true);
+  return new Blob([header.buffer, bitmap.data, icc], { type: 'image/bmp' });
 }
 
 /** 画布像素 (RGBA) → Electron 位图 (BGRA), 原地交换后复用同一块内存。 */

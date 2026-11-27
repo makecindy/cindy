@@ -1,5 +1,6 @@
 import { FILE_PEER_MAX_BYTES } from '@cindy/device-link';
 import type { InvokeResultPayload, DeviceFileResult } from '@cindy/device-link';
+import type { FilePeerRange } from '@cindy/device-link';
 import type { PeerAttachment } from '@cindy/device-link';
 type PeerUpload = (device: string, uri: string, metadata: Omit<PeerAttachment, 'ticket'>, signal?: AbortSignal) => Promise<string | null>;
 let upload: PeerUpload | null = null;
@@ -9,6 +10,16 @@ export function installPeerReset(value: (device: string) => void) {
   return () => { if (reset === value) reset = null; };
 }
 export function resetMobilePeer(device: string) { reset?.(device); }
+/**
+ * Whether file bytes to this computer may go on its Agent-Net session instead of WebRTC (DeviceLinkContext: a same-account
+ * computer whose calls go on the session right now). The computer must also offer `streamTransport` in its `caps`.
+ */
+let streamTransport: ((device: string) => boolean) | null = null;
+export function installPeerStreamTransport(value: (device: string) => boolean) {
+  streamTransport = value;
+  return () => { if (streamTransport === value) streamTransport = null; };
+}
+export function peerStreamTransport(device: string): boolean { return streamTransport?.(device) === true; }
 export function installPeerUpload(value: PeerUpload) {
   upload = value;
   return () => { if (upload === value) upload = null; };
@@ -87,6 +98,8 @@ type Download = (
   trace?: number,
   metadata?: FileVersionMetadata,
   onProgress?: (loaded: number, total: number) => void,
+  range?: FilePeerRange,
+  onStart?: () => void,
 ) => Promise<LocalPeerMedia | null>;
 let download: Download | null = null;
 export function installPeerFileDownload(value: Download) {
@@ -115,3 +128,14 @@ export function canStagePeerMedia(size: number, availableBytes = Infinity): bool
 
 /** Keep the existing transfer reserve free even when keeping reusable disk copies. */
 export const PEER_FILE_DISK_RESERVE_BYTES = 256 * 1024 * 1024;
+
+/** A range is transient and must never enter the complete-file/version cache. */
+export async function tryMobilePeerFileRange(device: string, url: string, range: FilePeerRange, signal?: AbortSignal,
+  onProgress?: (loaded: number, total: number) => void, onStart?: () => void) {
+  return download?.(device, url, signal, undefined, undefined, onProgress, range, onStart) ?? null;
+}
+
+type PeerMediaPlayback = Pick<import('@cindy/agent-net/portable').NativeMediaStream, 'url' | 'isOpen' | 'close' | 'retain'>;
+const streamReceipts = new WeakMap<object, PeerMediaPlayback>();
+export function recordPeerMediaPlayback(result: object, stream: PeerMediaPlayback) { streamReceipts.set(result, stream); }
+export const peerMediaPlayback = (value: object) => streamReceipts.get(value);

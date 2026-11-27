@@ -12,10 +12,12 @@
  * 必须**先对原文扫 URL 挂账、再截断**(见 messagePersistBroadcaster 的
  * persistableToolResultContent),否则生成产物会被 recycler 判零引用回收。
  *
- * 纯函数、无依赖:main 侧 broadcaster、Claude 导入准备层与 DB worker importer
+ * 纯函数:main 侧 broadcaster、Claude 导入准备层与 DB worker importer
  * (tx.ts / inline worker fallback)共用同一份,保证所有写入口一个口径。
  * 导入路径的媒体挂账在 main 侧对原文执行(worker 碰不到 cindy-media ledger)。
  */
+
+import { extractToolResultDiagnostics, type ToolResultDiagnostics } from '@cindy/maker-shared/tool-result-compaction';
 
 export const TOOL_RESULT_PERSIST_CONTENT_LIMIT = 8 * 1024;
 
@@ -24,7 +26,7 @@ export const TOOL_RESULT_PERSIST_TRUNCATION_SUFFIX =
 
 /** Keep presentation references parseable; the full card lives in the card store.
  * Self-contained so the legacy inline DB worker can use the same implementation. */
-export function compactToolCardResult(text: string, limit: number): string | null {
+export function compactToolCardResult(text: string, limit: number, diagnostics?: ToolResultDiagnostics): string | null {
   if (!text.includes('"xdt_card_id"') && !text.includes('"xdt_anchor_card_id"')) return null;
   try {
     const payload = JSON.parse(text);
@@ -36,7 +38,7 @@ export function compactToolCardResult(text: string, limit: number): string | nul
     }
     if (!Object.keys(references).length) return null;
     if (typeof payload.ok === 'boolean') references.ok = payload.ok;
-    const summary = { ...references, truncated: true, preview: '' };
+    const summary = { ...references, truncated: true, ...(diagnostics ? { diagnostics } : {}), preview: '' };
     const overhead = new TextEncoder().encode(JSON.stringify(summary)).length;
     if (overhead > limit) return null;
     // Six bytes per code unit also covers JSON escaping and unpaired surrogates.
@@ -50,18 +52,27 @@ export function compactToolCardResult(text: string, limit: number): string | nul
  * 上限的意义是"有界",不追求与 device-link 的字节口径逐字节一致。切点回退一位
  * 避免劈开 surrogate pair。幂等:已截断的文本长度必然 <= 上限,不会二次截断。
  */
-export function capToolResultTextForPersist(
-  text: string,
-  limit = TOOL_RESULT_PERSIST_CONTENT_LIMIT,
-): string {
-  if (text.length <= limit) return text;
-  const cardSummary = compactToolCardResult(text, limit);
-  if (cardSummary !== null) return cardSummary;
-  let cut = Math.max(0, limit - TOOL_RESULT_PERSIST_TRUNCATION_SUFFIX.length);
-  const lastKept = text.charCodeAt(cut - 1);
-  if (cut > 0 && lastKept >= 0xd800 && lastKept <= 0xdbff) cut -= 1;
-  return `${text.slice(0, cut)}${TOOL_RESULT_PERSIST_TRUNCATION_SUFFIX}`;
+// Inject the extractor so the inline worker can reuse this function without module imports.
+export function createToolResultTextCap(extractDiagnostics: typeof extractToolResultDiagnostics) {
+  return function capToolResultTextForPersist(
+    text: string,
+    limit = TOOL_RESULT_PERSIST_CONTENT_LIMIT,
+  ): string {
+    if (text.length <= limit) return text;
+    const diagnostics = extractDiagnostics(text);
+    const cardSummary = compactToolCardResult(text, limit, diagnostics);
+    if (cardSummary !== null) return cardSummary;
+    const diagnosticFooter = diagnostics ? `\n\n[tool result diagnostics: ${JSON.stringify(diagnostics)}]` : '';
+    const suffix = (diagnosticFooter.length + TOOL_RESULT_PERSIST_TRUNCATION_SUFFIX.length <= limit
+      ? diagnosticFooter : '') + TOOL_RESULT_PERSIST_TRUNCATION_SUFFIX;
+    let cut = Math.max(0, limit - suffix.length);
+    const lastKept = text.charCodeAt(cut - 1);
+    if (cut > 0 && lastKept >= 0xd800 && lastKept <= 0xdbff) cut -= 1;
+    return `${text.slice(0, cut)}${suffix}`;
+  };
 }
+
+export const capToolResultTextForPersist = createToolResultTextCap(extractToolResultDiagnostics);
 
 /** 导入行与 live 落库同一上限:只有字符串 tool_result 会被截;其它 role 原样返回。 */
 export function capImportedToolResultContent(role: string, content: unknown): unknown {

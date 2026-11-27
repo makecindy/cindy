@@ -1,10 +1,14 @@
 // @vitest-environment jsdom
 
 import { useMemo, type ReactNode } from 'react';
-import { render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { FeatureSidebarSlotProvider, useRegisterSidebarUpper } from '@/features/feature-context';
+import {
+  FeatureSidebarSlotProvider,
+  useOwnTopNavScrollableRows,
+  useRegisterSidebarUpper,
+} from '@/features/feature-context';
 import type { SidebarPeekState } from '@/hooks/useSidebarPeek';
 import { Sidebar } from '../Sidebar';
 
@@ -42,13 +46,20 @@ vi.mock('../UserInfoSection', () => ({
   UserInfoSection: () => null,
 }));
 
+vi.mock('@/components/title-bar/ChromeIconButton', () => ({
+  ChromeIconButton: ({ tooltip: _tooltip, tooltipSide: _side, ...props }: Record<string, unknown>) => (
+    <button type="button" {...props} />
+  ),
+}));
+
 function UpperProbe() {
   return <div data-testid="sidebar-upper" />;
 }
 
-function RegisterUpper() {
+function RegisterUpper({ ownsTopNav = false }: { ownsTopNav?: boolean }) {
   const upper = useMemo(() => <UpperProbe />, []);
   useRegisterSidebarUpper(upper);
+  useOwnTopNavScrollableRows(ownsTopNav);
   return null;
 }
 
@@ -57,6 +68,7 @@ interface HarnessProps {
   isRail?: boolean;
   peekState?: SidebarPeekState | null;
   forceMountFeatureContent?: boolean;
+  ownsTopNav?: boolean;
 }
 
 function Harness({
@@ -64,10 +76,11 @@ function Harness({
   isRail = false,
   peekState = null,
   forceMountFeatureContent = false,
+  ownsTopNav = false,
 }: HarnessProps) {
   return (
     <FeatureSidebarSlotProvider isCollapsed={peekState != null ? false : isCollapsed || isRail}>
-      <RegisterUpper />
+      <RegisterUpper ownsTopNav={ownsTopNav} />
       <Sidebar
         isCollapsed={isCollapsed}
         isRail={isRail}
@@ -137,5 +150,75 @@ describe('Sidebar secondary-window lazy feature content', () => {
 
     expect(screen.getByTestId('conversation-search-provider')).toBeTruthy();
     expect(screen.getByTestId('sidebar-upper')).toBeTruthy();
+  });
+
+  // Unit integration: retained frost must follow the actual painted region,
+  // not the saved expanded width. Existing mounting cases never exercise the
+  // native bridge. Layout/animation pixels are checked in the desktop fixture.
+  it('sends visible sidebar width, deduplicates it and clears material on unmount', () => {
+    const previous = window.electronAPI;
+    const send = vi.fn();
+    let notify = () => {};
+    let rect = { left: 0, right: 260, height: 800 };
+    const bounds = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(() => rect as DOMRect);
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback: () => void) { notify = callback; }
+      observe() {}
+      disconnect() {}
+    });
+    window.electronAPI = { ...previous, platform: 'darwin',
+      theme: { ...previous?.theme, setSidebarWidth: send } } as typeof previous;
+    const view = render(<Harness isCollapsed={false} />);
+    try {
+      expect(send).toHaveBeenLastCalledWith(260);
+      expect(document.documentElement.style.getPropertyValue('--sidebar-visible-width')).toBe('260px');
+      act(() => notify());
+      expect(send).toHaveBeenCalledTimes(1);
+      rect = { left: 0, right: 78, height: 800 };
+      act(() => notify());
+      expect(send).toHaveBeenLastCalledWith(78);
+      rect = { left: -200, right: 60, height: 800 };
+      act(() => notify());
+      expect(send).toHaveBeenLastCalledWith(60);
+      rect = { left: -260, right: 0, height: 800 };
+      act(() => notify());
+      expect(send).toHaveBeenLastCalledWith(0);
+      expect(document.documentElement.style.getPropertyValue('--sidebar-visible-width')).toBe('0px');
+    } finally {
+      view.unmount();
+      window.electronAPI = previous;
+      bounds.mockRestore();
+      vi.unstubAllGlobals();
+    }
+    expect(send).toHaveBeenLastCalledWith(0);
+    expect(document.documentElement.style.getPropertyValue('--sidebar-visible-width')).toBe('');
+  });
+
+  // 2026-11-18 用户要求：收件箱开关放在侧边栏顶部前进／后退这一排的右端，只属于任务列表
+  // （接管顶部导航的 Feature），设置等页面与窄栏不出现；点击切换并按本机保存。这台电脑第一次
+  // 开启收件箱时弹出介绍，之后不再出现。
+  it('shows the inbox toggle in the top row only for the task list, outside the rail', () => {
+    mocks.isSecondaryWindow = false;
+    localStorage.removeItem('sidebar.taskListMode');
+    localStorage.removeItem('featureIntro.taskInbox.seen');
+    const intro = () => document.querySelector('[data-feature-intro]');
+    const toggle = () => document.querySelector<HTMLButtonElement>('[data-task-list-mode-toggle]');
+    const view = render(<Harness isCollapsed={false} />);
+    expect(toggle()).toBeNull();
+    view.rerender(<Harness isCollapsed={false} isRail ownsTopNav />);
+    expect(toggle()).toBeNull();
+    view.rerender(<Harness isCollapsed={false} ownsTopNav />);
+    expect(toggle()!.getAttribute('aria-pressed')).toBe('false');
+    act(() => { fireEvent.click(toggle()!); });
+    expect(localStorage.getItem('sidebar.taskListMode')).toBe('inbox');
+    expect(toggle()!.getAttribute('aria-pressed')).toBe('true');
+    expect(intro()).not.toBeNull();
+    act(() => { fireEvent.keyDown(intro()!, { key: 'Escape' }); });
+    expect(intro()).toBeNull();
+    act(() => { fireEvent.click(toggle()!); });
+    expect(localStorage.getItem('sidebar.taskListMode')).toBe('tasks');
+    act(() => { fireEvent.click(toggle()!); });
+    expect(intro()).toBeNull();
   });
 });

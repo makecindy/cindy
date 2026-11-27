@@ -3,7 +3,7 @@
 // providers and reports readiness. It never imports auth, stores, agent runtimes or IPC.
 import '@fontsource-variable/inter';
 import '@fontsource-variable/jetbrains-mono';
-import 'harmonyos-sans-sc-webfont-splitted';
+import '../../../src/renderer/styles/cjk-webfont.css';
 import '../../../src/renderer/themes/colors';
 import '../../../src/renderer/styles/sortable.css';
 import type { ReactNode } from 'react';
@@ -141,7 +141,7 @@ export function AppFrame({ sidebar, sidebarWidth = 260, header = true, children 
         ) : null}
         <main
           data-ui-frame="content"
-          className="relative flex min-w-[400px] flex-1 flex-col overflow-hidden bg-content-area"
+          className="relative flex min-w-[min(400px,100%)] flex-1 flex-col overflow-hidden bg-content-area"
         >
           {header ? (
             <ContentHeaderSlot

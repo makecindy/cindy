@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const outboundFetchMock = vi.hoisted(() => vi.fn());
-vi.mock('../../maker-host/outbound-fetch.js', () => ({
+vi.mock('../../maker-host/outbound-fetch.desktop.js', () => ({
   outboundFetch: (...args: unknown[]) => outboundFetchMock(...args),
 }));
 

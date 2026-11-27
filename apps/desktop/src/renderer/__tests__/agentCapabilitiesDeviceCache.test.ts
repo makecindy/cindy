@@ -39,7 +39,10 @@ function stubElectron() {
   const invoke = vi.fn(async (deviceId: string, _channel: string, args: unknown[]) =>
     caps(`${deviceId}:${String(args[0])}`),
   );
-  vi.stubGlobal('window', { electronAPI: { maker: { getCapabilities }, deviceLink: { invoke } } });
+  const listAvailableAgents = vi.fn(async () => ['claude-code', 'codex', 'pi']);
+  vi.stubGlobal('window', {
+    electronAPI: { maker: { getCapabilities, listAvailableAgents }, deviceLink: { invoke } },
+  });
   return { getCapabilities, invoke };
 }
 
@@ -48,6 +51,8 @@ function stubLocalCatalog() {
   let capabilityRevision = 'old';
   let unavailableAgent: string | null = null;
   let transientError: { agent: string; message: string } | null = null;
+  let registeredAgents = ['claude-code', 'codex', 'pi'];
+  const listAvailableAgents = vi.fn(async () => registeredAgents);
   const getCapabilities = vi.fn(async (agent: string) => {
     if (transientError?.agent === agent) throw new Error(transientError.message);
     if (agent === unavailableAgent) throw new Error(`Agent '${agent}' is not registered`);
@@ -59,9 +64,14 @@ function stubLocalCatalog() {
     providers: [{ id: providerId }],
     providerOrder: [providerId],
   }));
-  vi.stubGlobal('window', { electronAPI: { maker: { getCapabilities, listProviders } } });
+  vi.stubGlobal('window', {
+    electronAPI: { maker: { getCapabilities, listAvailableAgents, listProviders } },
+  });
   return {
     getCapabilities,
+    setRegisteredAgents(agents: string[]): void {
+      registeredAgents = agents;
+    },
     setSnapshot(nextProviderId: string, nextCapabilityRevision: string): void {
       providerId = nextProviderId;
       capabilityRevision = nextCapabilityRevision;
@@ -156,6 +166,27 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
       'initial:codex',
     );
     expect(capabilities.getCachedCapabilities('pi')).toBeNull();
+  });
+
+  // 独立 Host 可以只打包 Pi（#10418）。未打包的核心 agent 不在 runtime 注册列表里，
+  // 不能被当成核心 agent 的临时失败，让整个模型目录停在「模型列表暂时无法更新」。
+  it('runtime 只注册了 Pi 时只读取 Pi 能力，并提交 provider 目录', async () => {
+    const harness = stubLocalCatalog();
+    harness.setSnapshot('provider-host', 'host');
+    harness.setRegisteredAgents(['pi']);
+    const catalog = await import('@/lib/localCatalogSnapshot');
+    const providers = await import('@/lib/providersSnapshotStore');
+    const capabilities = await import('@/hooks/useAgentCapabilities');
+
+    await expect(catalog.refreshLocalCatalogSnapshot()).resolves.toBe(true);
+
+    expect(harness.getCapabilities.mock.calls).toEqual([['pi']]);
+    expect(providers.getCachedProvidersSnapshot()?.providers).toEqual([{ id: 'provider-host' }]);
+    expect(capabilities.getCachedCapabilities('pi')?.availableModels[0].displayName).toBe(
+      'host:pi',
+    );
+    expect(capabilities.getCachedCapabilities('claude-code')).toBeNull();
+    expect(capabilities.getCachedCapabilities('codex')).toBeNull();
   });
 
   it('Pi 变为不可用时清除旧能力，并用新 provider 快照替换核心能力', async () => {
@@ -676,4 +707,69 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
       'fresh:codex',
     );
   });
+});
+
+// Regression: object-form capability replies carry the same bounded metadata stamp
+// as provider lists; the renderer cache must not outlive the forwarded deadline.
+it('expires a remote capabilities snapshot at the forwarded host deadline', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+  try {
+    const invoke = vi.fn(async (deviceId: string, _channel: string, args: unknown[]) => ({
+      ...caps(`${deviceId}:${String(args[0])}`),
+      providerContinuity: { stale: true, remainingMs: 1000 },
+    }));
+    const getCapabilities = vi.fn(async (kind: string) => caps(`local:${kind}`));
+    vi.stubGlobal('window', { electronAPI: { maker: { getCapabilities }, deviceLink: { invoke } } });
+    const mod = await import('@/hooks/useAgentCapabilities');
+    await mod.prefetchDeviceCapabilities('dev-1');
+    expect(mod.getCachedCapabilities('codex', 'dev-1')).not.toBeNull();
+
+    invoke.mockRejectedValue(new Error('[DEVICE_LINK_NOT_CONNECTED] offline'));
+    await vi.advanceTimersByTimeAsync(1001);
+    expect(mod.getCachedCapabilities('codex', 'dev-1')).toBeNull();
+  } finally {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  }
+});
+
+// Regression: a retained capability refresh keeps the display payload while the
+// new read is in flight, but it must not clear the forwarded deadline. Otherwise
+// a hung refresh can leave the old capabilities on screen indefinitely.
+it('keeps the host deadline across a retained capability refresh', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+  try {
+    const invoke = vi.fn(async (deviceId: string, _channel: string, args: unknown[]) => ({
+      ...caps(`${deviceId}:${String(args[0])}`),
+      providerContinuity: { stale: true, remainingMs: 1000 },
+    }));
+    const getCapabilities = vi.fn(async (kind: string) => caps(`local:${kind}`));
+    vi.stubGlobal('window', { electronAPI: { maker: { getCapabilities }, deviceLink: { invoke } } });
+    const mod = await import('@/hooks/useAgentCapabilities');
+    await mod.prefetchDeviceCapabilities('dev-1');
+    const events = vi.fn();
+    const off = mod.subscribeDeviceCapabilities('dev-1', 'codex', events);
+    events.mockClear();
+
+    mod.evictDeviceCapabilities('dev-1', { retainDisplaySnapshot: true });
+    expect(events).toHaveBeenCalledWith({ status: 'loading', retainDisplaySnapshot: true });
+    const reads = invoke.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(1001);
+    // The deadline still ends the retained snapshot: consumers get a non-retaining `loading`
+    // (old capabilities leave the screen), then the host's new bounded answer from one re-read
+    // (2026-11-23, same as provider catalogs and Mobile) instead of a terminal error.
+    expect(events).toHaveBeenCalledWith({ status: 'loading' });
+    expect(events.mock.calls.at(-1)?.[0]).toMatchObject({ status: 'ready' });
+    expect(invoke.mock.calls.length).toBe(reads + 1);
+    expect(mod.getCachedCapabilities('codex', 'dev-1')).not.toBeNull();
+    // A second deadline inside 5s retires it with the terminal error.
+    await vi.advanceTimersByTimeAsync(1001);
+    expect(events).toHaveBeenCalledWith({ status: 'error',
+      error: '[MODEL_VISIBILITY_NOT_READY] Agent capabilities snapshot expired' });
+    expect(mod.getCachedCapabilities('codex', 'dev-1')).toBeNull();
+    off();
+  } finally {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  }
 });

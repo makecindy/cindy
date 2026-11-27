@@ -16,13 +16,22 @@ function outline(role: string, content: unknown, agentMeta: unknown = null, raw 
   } finally { db.close(); }
 }
 
-function stamp(content: string) {
+function stamp(content: string | null) {
   const db = new DatabaseSync(':memory:');
   try {
     db.exec('CREATE TABLE messages (content TEXT)');
     db.prepare('INSERT INTO messages VALUES (?)').run(content);
     const query = new SQLiteSyncDialect().sqlToQuery(historyOutlineContentStamp());
-    return db.prepare(`SELECT ${query.sql} AS stamp FROM messages`).get(...query.params as string[])!.stamp as string;
+    return db.prepare(`SELECT ${query.sql} AS stamp FROM messages`).get(...query.params as string[])!.stamp as string | null;
+  } finally { db.close(); }
+}
+
+function legacyStamp(content: string | null): string | null {
+  const db = new DatabaseSync(':memory:');
+  try {
+    db.exec('CREATE TABLE messages (content TEXT)');
+    db.prepare('INSERT INTO messages VALUES (?)').run(content);
+    return db.prepare("SELECT length(content) || ':' || substr(content, -24) AS stamp FROM messages").get()!.stamp as string | null;
   } finally { db.close(); }
 }
 
@@ -66,26 +75,39 @@ describe('SQLite history outline', () => {
     expect(source.agentMeta.usage.details).toHaveLength(20000);
   });
   it('projects only top-level bookkeeping from valid TEXT objects with mapper-equivalent fallbacks', () => {
+    const pad = 'x'.repeat(9000);
     const cases: Array<[string, string | Uint8Array | null]> = [
       ['object', '{"parentUuid":"agent","usage":{"details":"large"},"unknown":"é","number":9007199254740993,"nested":{"usage":1}}'],
       ['array', '[{"usage":1},"é",9007199254740993]'], ['scalar', '"é"'], ['null JSON', 'null'],
       ['invalid JSON', '{broken'], ['empty JSON', ''],
-      ['duplicate key', `{"usage":1,"usage":{"details":"${'x'.repeat(9000)}"},"unknown":2}`],
+      ['duplicate key', `{"usage":1,"usage":{"details":"${pad}"},"unknown":2}`],
       ['unicode escape', '{"usage":1,"unknown":"\\u0065\\u0301"}'],
       ['non-TEXT JSON', new TextEncoder().encode('{"usage":1,"unknown":"blob"}')], ['SQL NULL', null],
+      ['large object', `  \n\t{"parentUuid":"agent","usage":{"details":"${pad}"},"unknown":"\\u0065\\u0301","number":9007199254740993,"nested":{"usage":1}}`],
+      ['large array', `[{"usage":"${pad}"},"é",9007199254740993]`],
+      ['large invalid JSON', `{broken${pad}`],
+      ['large non-TEXT JSON', new TextEncoder().encode(`{"usage":"${pad}","unknown":"blob"}`)],
+      ['large recursion cap', `{${'"usage":1,'.repeat(64)}"usage":"${pad}","unknown":2}`],
     ];
+    const byLabel = new Map<string, unknown>();
     for (const [label, source] of cases) {
       const projected = projectAgentMeta(source);
+      byLabel.set(label, projected);
       expect(mappedAgentMeta(projected), label).toEqual(mappedAgentMeta(source));
-      if (label === 'non-TEXT JSON') expect(projected).toBeInstanceOf(Uint8Array);
+      if (label.includes('non-TEXT')) expect(projected).toBeInstanceOf(Uint8Array);
     }
-    const projected = projectAgentMeta(cases[0][1]);
+    const projected = byLabel.get('object');
     expect(projected).toBe(cases[0][1]);
     expect(mappedAgentMeta(projected)).toEqual({ parentUuid: 'agent', unknown: 'é',
       number: 9007199254740992, nested: { usage: 1 } });
-    const duplicate = projectAgentMeta(cases[6][1]);
-    expect(duplicate).not.toContain('large');
-    expect(JSON.parse(duplicate as string)).toEqual({ unknown: 2 });
+    const duplicate = byLabel.get('duplicate key') as string;
+    expect(duplicate).not.toContain('xxxx');
+    expect(JSON.parse(duplicate)).toEqual({ unknown: 2 });
+    const largeObject = byLabel.get('large object') as string;
+    expect(largeObject).not.toContain('xxxx');
+    expect(mappedAgentMeta(largeObject)).toEqual({ parentUuid: 'agent', unknown: 'e\u0301',
+      number: 9007199254740992, nested: { usage: 1 } });
+    expect(byLabel.get('large recursion cap')).toBe(cases[cases.length - 1][1]);
   });
   it('bypasses SQLite JSON parsing through 8KiB and projects values above the byte threshold', () => {
     const atThreshold = agentMetaAtByteLength(8192);
@@ -101,8 +123,31 @@ describe('SQLite history outline', () => {
     const summary = JSON.stringify('build summary');
     const full = JSON.stringify(`build summary\n${'full log line\n'.repeat(50000)}`);
     expect(stamp(summary)).not.toBe(stamp(full));
-    expect(stamp(full).length).toBeLessThan(64);
+    expect(stamp(full)?.length).toBeLessThan(256);
     expect(stamp(JSON.stringify('结果：完成'))).toBe(stamp(JSON.stringify('结果：完成')));
+  });
+  // The byte-length prototype missed the first pair: its character count changes
+  // while its UTF-8 byte count and suffix stay equal. Exercise the production SQL,
+  // including SQLite's embedded-NUL behavior, rather than duplicating it in JS.
+  it('does not weaken the character-based invalidation contract across UTF-8 and text boundaries', () => {
+    const tail = 'q'.repeat(120);
+    const pairs = [
+      [`ab${tail}`, `é${tail}`],
+      [`${tail}中文`, `${tail}中义`],
+      [`${'😀'.repeat(23)}a`, `${'😀'.repeat(24)}`],
+      [`${'😀'.repeat(24)}`, `${'😀'.repeat(23)}😁`],
+      [`${'e\u0301'.repeat(30)}${tail}`, `${'e\u0301'.repeat(29)}e${tail}`],
+      [JSON.stringify({ result: '完成😀', detail: `${tail}a` }), JSON.stringify({ result: '完成😀', detail: `${tail}b` })],
+      [`plain text ${tail}a`, `plain text ${tail}b`],
+    ];
+    for (const [before, after] of pairs) {
+      expect(legacyStamp(before)).not.toBe(legacyStamp(after));
+      expect(stamp(before)).not.toBe(stamp(after));
+    }
+    // SQLite's text functions stop at NUL, so these retain the exact legacy path.
+    for (const content of [null, '', `prefix\u0000${'😀'.repeat(30)}`]) {
+      expect(stamp(content)).toBe(legacyStamp(content));
+    }
   });
   it('does not return folded thinking, tool outputs or file bodies to the main thread', () => {
     const body = 'private heavy body '.repeat(100000);
@@ -157,6 +202,14 @@ describe('SQLite history outline', () => {
     const content = outline('tool_use', { toolName: 'file_change', input: { changes: [{ path: '/work/no.md', kind: { type: 'add' } }] } });
     expect(withHistoryArtifacts({ id: '1', clientId: '1', role: 'tool_use', content, createdAt: '2026-09-25T00:00:00Z' }).historyArtifacts).toBeUndefined();
   });
+  // The teammate chat lists the tasks a reply started from these receipts (2026-11-10); folded to ''
+  // here they never reached the projection that keeps them visible.
+  it('keeps a send_to_session receipt readable', () => {
+    const receipt = JSON.stringify({ ok: true, target_session_id: 's-1', wake_kind: 'created', target_title: 'Fix it' });
+    expect(outline('tool_result', receipt, null, true)).toEqual(JSON.parse(receipt));
+    expect(outline('tool_result', `"target_session_id" "wake_kind" ${'x'.repeat(17_000)}`, null, true)).toBe('');
+  });
+
   it('keeps document delivery metadata and file suppression without edit bodies', () => {
     const delivery = { toolName: 'cindy_mcp_call_tool', input: { server: 'documents', tool: 'render_pdf', args: { outPath: '/work/report.pdf', htmlPath: '/work/source.html' } } };
     expect(outline('tool_use', delivery)).toEqual(delivery);

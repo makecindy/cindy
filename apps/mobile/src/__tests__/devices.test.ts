@@ -4,6 +4,8 @@ import { i18n } from '@/i18n';
 import {
   deviceAccessState,
   isControllableDevice,
+  observeDirectoryBudgetExpiry,
+  scheduleDirectoryBudgetRetirement,
   platformLabel,
   toDeviceListItems,
   visibleDeviceListItems,
@@ -164,5 +166,39 @@ describe('mobile controllable device filter', () => {
       ['unavailable-a', false],
       ['unavailable-c', false],
     ]);
+  });
+});
+describe('directory display budget observation', () => {
+  // HomeSurface uses this production scheduler after render observes expiry.
+  // A new REST source or account can replace the budget before the microtask;
+  // the old callback must not clear that new directory. tier: unit, no real wait.
+  it('does not retire a replacement directory from an older render observation', async () => {
+    const budget = { token: 1, owner: 1, expired: true, retired: false, retireScheduled: false };
+    const retired: Array<[number, number]> = [];
+    const retire = (token: number, owner: number) => { retired.push([token, owner]); };
+    scheduleDirectoryBudgetRetirement(budget, retire);
+    Object.assign(budget, { token: 2, owner: 2, expired: false, retireScheduled: false });
+    await Promise.resolve();
+    expect(retired).toEqual([]);
+    budget.expired = true;
+    scheduleDirectoryBudgetRetirement(budget, retire);
+    await Promise.resolve();
+    expect(retired).toEqual([[2, 2]]);
+  });
+  // 测试价值：HomeSurface 的 render 投影用同一观察函数；墙钟/单调钟任一越过绝对
+  // deadline 即 sticky 到期，回拨不复活，旧端无 deadline 保持原生命周期。
+  // tier：unit（受控 clock，无计时器依赖）。
+  it('latches either absolute clock and survives a rollback', () => {
+    const wall = { wallUntil: 1_000, monoUntil: 999_999, expired: false };
+    expect(observeDirectoryBudgetExpiry(wall, 999, 0)).toBe(false);
+    expect(observeDirectoryBudgetExpiry(wall, 1_000, 0)).toBe(true);
+    expect(wall.expired).toBe(true);
+    expect(observeDirectoryBudgetExpiry(wall, 0, 0)).toBe(true);
+
+    const mono = { wallUntil: 999_999, monoUntil: 10, expired: false };
+    expect(observeDirectoryBudgetExpiry(mono, 0, 10)).toBe(true);
+
+    const legacy = { expired: false };
+    expect(observeDirectoryBudgetExpiry(legacy, 10, 10)).toBe(false);
   });
 });

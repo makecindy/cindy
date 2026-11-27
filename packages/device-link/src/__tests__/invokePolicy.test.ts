@@ -1,13 +1,40 @@
 import { describe, expect, it } from 'vitest';
 import {
   canCoalesceRemoteListing,
+  isControllerCoalescibleListingChannel,
   isPeerResetRetryableReadChannel,
   isCompletedInvokeRetryableReadChannel,
+  normalizeRemoteListingArgsKey,
   resolveRemoteInvokeTimeoutMs,
   TASK_MIGRATION_CHANNEL,
+  resolveInvokePriority,
 } from '../index.js';
 
 describe('remote invoke policy boundaries', () => {
+  // Group display hints cannot alter task/permission RPC priority or retry safety.
+  it('demotes only explicit group display reads without changing live routing and mutation semantics', () => {
+    for (const request of [
+      { action: 'view', display: 'roster' }, { action: 'view', display: { memberKey: 'member', details: true } },
+      { action: 'manage-share', command: { action: 'quota-account' } },
+    ]) {
+      expect(resolveInvokePriority('provider-group:remote', undefined, [request])).toBe('background');
+      expect(canCoalesceRemoteListing({ channel: 'provider-group:remote', args: [request] })).toBe(false);
+    }
+    for (const request of [
+      { action: 'view' }, { action: 'pick', display: 'roster' }, { action: 'leases' },
+      { action: 'manage-share', command: { action: 'set-visibility' } },
+    ]) expect(resolveInvokePriority('provider-group:remote', undefined, [request])).toBe('foreground');
+    expect(isPeerResetRetryableReadChannel('provider-share:insights:v1')).toBe(false);
+  });
+
+  it.each(['desktop', 'mobile'] as const)('allows a repository clone to finish on %s without replaying project creation', (platform) => {
+    const channel = 'sidebar-settings:set-project-info';
+    expect(resolveRemoteInvokeTimeoutMs(channel, [{ create: true, repositoryUrl: 'https://gitlab.com/a/b' }], platform)).toBe(360_000);
+    expect(resolveRemoteInvokeTimeoutMs(channel, [{ create: true }], platform)).toBeUndefined();
+    expect(resolveRemoteInvokeTimeoutMs(channel, [{ repositoryUrl: 'https://gitlab.com/a/b' }], platform)).toBeUndefined();
+    expect(isPeerResetRetryableReadChannel(channel)).toBe(false);
+    expect(isCompletedInvokeRetryableReadChannel(channel)).toBe(false);
+  });
   it.each(['desktop', 'mobile'] as const)('budgets MCP App loading on %s without replaying any operation', (platform) => {
     const channel = 'maker:mcp-apps:v1';
     expect(resolveRemoteInvokeTimeoutMs(channel, ['task', { op: 'open' }], platform)).toBe(120_000);
@@ -41,6 +68,14 @@ describe('remote invoke policy boundaries', () => {
     expect(resolveRemoteInvokeTimeoutMs('maker:predict-prompt', [], 'desktop')).toBe(45_000);
     expect(isPeerResetRetryableReadChannel('maker:predict-prompt')).toBe(false);
     expect(isCompletedInvokeRetryableReadChannel('maker:predict-prompt')).toBe(false);
+  });
+
+  // 2026-11-18: two Codex create-session calls took 41.6s/42.4s on the host and both
+  // controllers gave up at 30s while the host was still creating the task.
+  it('waits for a slow agent start on both controllers instead of timing out at 30s', () => {
+    expect(resolveRemoteInvokeTimeoutMs('maker:create-session', [{}], 'desktop')).toBe(120_000);
+    expect(resolveRemoteInvokeTimeoutMs('maker:create-session', [{}], 'mobile')).toBe(120_000);
+    expect(isPeerResetRetryableReadChannel('maker:create-session')).toBe(false);
   });
   it.each(['local-db:sessions:list', 'local-db:sessions:get', 'local-db:sessions:get-many', 'local-db:sessions:interrupted-pending', 'maker:list-active'])(
     'explicitly permits retrying completed %s reads', (channel) => {
@@ -96,5 +131,51 @@ describe('remote invoke policy boundaries', () => {
     expect(budget('receive')).toBe(30 * 60_000);
     expect(budget('status')).toBe(30_000);
     expect(budget('caps')).toBe(30_000);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：normalizeRemoteListingArgsKey / isControllerCoalescibleListingChannel / resolveMaxControllerInvokeWaitMs。
+  //   同义默认参数合并为同一键、fresh 标记单独提取而不拆裂缓存键，不同 limit / status / includePinned / tagCatalog / 未知选项严格隔离。
+  // - Bug／规则依据：64 帧可靠窗口积压事故（6 条重复 sessions:list 大结果占 1385 KiB）；protocol-compatibility.md 与参数语义隔离。
+  // - 现有覆盖缺口：旧测试只测布尔 canCoalesceRemoteListing，未覆盖参数规范化、wire 编码位隔离与跨平台最大等待上限。
+  // - 最小失败输入：等价默认参数 [20,'all',{includePinned:false}] vs []，以及仅差 includePinned / status / limit / tagCatalog 的参数对。
+  // - tier：unit（纯函数表驱动，<5ms）。
+  it('normalizes equivalent session listing args while isolating distinct filters and wire flags', () => {
+    expect(isControllerCoalescibleListingChannel('local-db:sessions:list')).toBe(true);
+    expect(isControllerCoalescibleListingChannel('maker:schedule:list-sidebar-index-runs')).toBe(true);
+    expect(isControllerCoalescibleListingChannel('maker:provider:list')).toBe(false);
+
+    const base = normalizeRemoteListingArgsKey('local-db:sessions:list', []);
+    expect(base).toEqual({ key: 'local-db:sessions:list\u0000[20,"all",false]', fresh: false });
+    expect(normalizeRemoteListingArgsKey('local-db:sessions:list', [20, 'all', { includePinned: false }])).toEqual(base);
+    expect(normalizeRemoteListingArgsKey('local-db:sessions:list', [null, null, { tagCatalog: 1 }])).toEqual(base);
+    expect(normalizeRemoteListingArgsKey('local-db:sessions:list', [20, 'all', { fresh: true }])).toEqual({
+      key: base!.key,
+      fresh: true,
+    });
+
+    const withWire = normalizeRemoteListingArgsKey(
+      'local-db:sessions:list',
+      [20, 'all', { tagCatalog: 1, fresh: true }],
+      { preserveWireEncodingFlags: true },
+    );
+    const withWireNonFresh = normalizeRemoteListingArgsKey(
+      'local-db:sessions:list',
+      [undefined, undefined, { tagCatalog: 1 }],
+      { preserveWireEncodingFlags: true },
+    );
+    expect(withWire).toEqual({ key: withWireNonFresh!.key, fresh: true });
+    expect(withWire!.key).not.toBe(base!.key);
+
+    const distinctCases: unknown[][] = [
+      [50, 'all', { includePinned: false }],
+      [20, 'active', { includePinned: false }],
+      [20, 'archived', { includePinned: false }],
+      [20, 'all', { includePinned: true }],
+      [20, 'all', { includePinned: false, workdir: '/repo-a' }],
+    ];
+    const keys = new Set(distinctCases.map((args) => normalizeRemoteListingArgsKey('local-db:sessions:list', args)?.key));
+    expect(keys.size).toBe(distinctCases.length);
+    expect(keys.has(base!.key)).toBe(false);
   });
 });

@@ -11,7 +11,7 @@ export interface ComposerSheetProps {
   preventDismiss?: boolean;
   nativeHeader?: ReactNode;
   /** Keep the native root list mounted while a secondary page is shown. */
-  nativeRoot?: { active: boolean; header?: ReactNode; content: ReactNode };
+  nativeRoot?: { active: boolean; header?: ReactNode; content: ReactNode; initialScrollTargetId?: string };
   visible: boolean;
   onClose(): void;
   onClosed?(): void;
@@ -20,6 +20,8 @@ export interface ComposerSheetProps {
   /** Dim the back arrow while its action would be ignored (for example a save in flight). */
   backDisabled?: boolean;
   backLabel?: string;
+  /** Native action beside the title, opposite the back button. */
+  headerTrailing?: ReactNode;
   children: ReactNode;
   aboveContent?: ReactNode;
   aboveContentTitle?: string;

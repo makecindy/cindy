@@ -1,4 +1,10 @@
-export type BrowserBackendKind = 'external' | 'rsb-webview';
+export const BROWSER_BACKEND_KINDS = ['external', 'rsb-webview', 'user-browser'] as const;
+
+export type BrowserBackendKind = (typeof BROWSER_BACKEND_KINDS)[number];
+
+export function isBrowserBackendKind(value: unknown): value is BrowserBackendKind {
+  return typeof value === 'string' && (BROWSER_BACKEND_KINDS as readonly string[]).includes(value);
+}
 
 /** Optional profile stores; warning payloads never carry paths or native errors. */
 export const OPTIONAL_BROWSER_PROFILE_DATABASES = [
@@ -76,7 +82,33 @@ export function browserOpenForLoginErrorCodeFromData(
 }
 
 export type BrowserBackendHealthReason =
-  'disposing' | 'host-unavailable' | 'start-failed' | 'status-failed' | 'recovery-failed';
+  | 'disposing'
+  | 'host-unavailable'
+  | 'start-failed'
+  | 'status-failed'
+  | 'recovery-failed'
+  /** user-browser:提供页面控制的插件已启用,但浏览器扩展尚未连接。 */
+  | 'extension-disconnected'
+  /** user-browser:没有已安装并启用的页面控制插件。 */
+  | 'plugin-missing'
+  /** user-browser:尚未连接,且这台电脑上找不到 Chrome / Edge 等可装扩展的浏览器。 */
+  | 'browser-missing'
+  | 'plugin-updating'
+  | 'plugin-selection-required';
+
+/**
+ * 「我的浏览器」推荐安装的页面控制插件(官方 Cindy Chrome)。任何声明
+ * browserExtension.pageControl 的插件都可以提供这个目标;这里只用于设置页引导用户去安装。
+ */
+export const RECOMMENDED_PAGE_CONTROL_PLUGIN_ID = 'my-browser';
+
+/** 官方 Cindy 浏览器扩展的 Chrome 网上应用店页面;设置页直接在用户浏览器里打开它安装扩展。 */
+export const RECOMMENDED_PAGE_CONTROL_EXTENSION_STORE_URL =
+  'https://chromewebstore.google.com/detail/cindy/dmbhhhdijpeaibfeocdcjhfefkgpkeef';
+
+export type BrowserExtensionStoreOpenResult =
+  | { ok: true }
+  | { ok: false; error: 'NO_CHROMIUM' | 'OPEN_FAILED' };
 
 export interface BrowserBackendHealth {
   active: BrowserBackendKind;

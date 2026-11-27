@@ -14,6 +14,7 @@
 
 import { NEW_MAKER_DRAFT_KEY } from '@/features/cc-agent/newMakerDraftKeys';
 import i18n from '@/i18n';
+import { resolveScreenshotTranslationLanguage, screenshotTranslationLanguageName } from '../../../shared/screenshotTranslation';
 import { requestComposerSubmit, takeComposerSubmitRequest } from '@/lib/composerActionsBus';
 import {
   getDataOwnerGeneration,
@@ -131,7 +132,14 @@ export function applyScreenshotComposeRequest(
     navigate('/cc-agent/new');
     return;
   }
-  const prompt = i18n.t(`regionScreenshot.prompt.${request.action}`);
+  const prompt = request.action === 'translate'
+    ? i18n.t('regionScreenshot.prompt.translate', {
+      language: screenshotTranslationLanguageName(
+        resolveScreenshotTranslationLanguage(request.translationLanguage, i18n.resolvedLanguage || i18n.language),
+        i18n.resolvedLanguage || i18n.language,
+      ),
+    })
+    : i18n.t(`regionScreenshot.prompt.${request.action}`);
   saveDraft(NEW_MAKER_DRAFT_KEY, {
     text: plainTextToTiptapDoc(prompt),
     attachments: [attachment],

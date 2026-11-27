@@ -1,6 +1,4 @@
 import { describe, expect, it, vi } from 'vitest';
-import { nextBotModelRoute } from '../../../shared/botModelChain';
-import { createBotSessionTaskRouteBridge } from '../botSessionTaskRouteBridge';
 import {
   applyPendingAgentSwitchIfIdle,
   createPendingAgentSwitchRegistry,
@@ -10,10 +8,10 @@ import {
 import {
   pendingHarnessRuntimeMutation,
   setSessionRuntimeHarness,
+  userStagedSelectionProjection,
   type HarnessRuntimeSelectionDeps,
 } from '../sessionRuntimeHarnessSelection';
 import type { SessionRuntimeProfile } from '../sessionRuntimeControl';
-import type { SessionRuntimeResult } from '../sessionControlService';
 
 function setup(running = false) {
   let generation = 4;
@@ -56,7 +54,7 @@ function setup(running = false) {
     pendingRevision: (id) => pending.revision!(id),
     read: vi.fn(async () => effective),
     resolve: vi.fn(async (profile) => ({ ...profile, providerId: profile.providerId ?? 'openai' })),
-    stage: (id, profile, assertCurrent, beforeMutation) =>
+    stage: (id, profile, assertCurrent, beforeMutation, source = 'agent') =>
       performSessionAgentSwitch(switchDeps, {
         sessionId: id,
         targetAgentKind: profile.agentKind,
@@ -64,7 +62,8 @@ function setup(running = false) {
         providerId: profile.providerId,
         effort: profile.effort,
         fastMode: profile.fastMode,
-        runtimeSource: 'agent',
+        ...(profile.agentDeviceId !== undefined ? { agentDeviceId: profile.agentDeviceId } : {}),
+        runtimeSource: source === 'agent' ? 'agent' : undefined,
         assertSelectionCurrent: assertCurrent,
         beforeMutation,
       }),
@@ -91,62 +90,25 @@ const request = {
 };
 
 describe('runtime harness selection', () => {
-  it('routes a configured cross-harness task choice through the runtime controller', async () => {
-    const h = setup();
-    const bridge = createBotSessionTaskRouteBridge({
-      getSessionRuntime: async ({ targetSessionId }) => {
-        expect(targetSessionId).toBe('s1');
-        return {
-          ok: true,
-          runtime: {
-            runtimeGeneration: h.deps.generation(targetSessionId),
-            effectiveProfile: h.effective,
-          },
-        } as SessionRuntimeResult;
-      },
-      setSessionRuntime: async ({ targetSessionId, expectedGeneration, patch }) => {
-        expect(patch.harness).toBe('codex');
-        return setSessionRuntimeHarness(h.deps, {
-          targetSessionId,
-          expectedGeneration,
-          patch: { ...patch, harness: patch.harness! },
-        });
-      },
-      readConfiguredCandidate: async (callerSessionId, current, childSessionId) => {
-        expect([callerSessionId, childSessionId]).toEqual(['bot-main', 's1']);
-        const route = nextBotModelRoute([
-          { harness: 'claude', model: 'claude-fable-5', providerId: 'old-provider', effort: 'high', fastMode: false },
-          { harness: 'codex', model: 'gpt-6-astra', providerId: 'openai', effort: '', fastMode: false },
-        ], { harness: current.agentKind === 'claude-code' ? 'claude' : current.agentKind,
-          model: current.model, providerId: current.providerId });
-        return { candidate: route ? {
-          agentKind: route.harness === 'claude' ? 'claude-code' : route.harness,
-          model: route.model,
-          providerId: route.providerId,
-          effort: null,
-          fastMode: route.fastMode,
-        } satisfies SessionRuntimeProfile : null };
-      },
+  // The plugin task API now stages remote selections through this same production
+  // controller. Previously its projection lost the source, hiding location-only changes.
+  // Minimal pending relocation, including an explicit return to local; tier: unit.
+  it.each(['other-computer', 'share:provider', null])('preserves location %s through staging and pending projection', async agentDeviceId => {
+    const h = setup(true);
+    if (agentDeviceId === null) {
+      h.effective.agentDeviceId = 'original-computer';
+      const row = await h.switchDeps.getSessionRow('s1');
+      h.switchDeps.getSessionRow = vi.fn(async () => ({ ...row!, agentDeviceId: 'original-computer' }));
+    }
+    Object.assign(h.switchDeps, { assertAgentDeviceRouteUsable: vi.fn(async () => {}) });
+    const result = await setSessionRuntimeHarness(h.deps, {
+      ...request, patch: { ...request.patch, agentDeviceId },
     });
-    const preview = await bridge.inspect('bot-main', 's1');
-    expect(preview).toMatchObject({
-      ok: true, generation: 4,
-      next: { agentKind: 'codex', model: 'gpt-6-astra', providerId: 'openai' },
-    });
-    if (!preview.ok || !preview.next) throw new Error('Expected configured cross-harness route');
-    expect(await bridge.advance('s1', preview.generation, preview.next)).toMatchObject({
-      ok: true, status: 'deferred', generation: 5,
-    });
-    expect(h.pending.get('s1')).toMatchObject({
-      targetAgentKind: 'codex', model: 'gpt-6-astra', providerId: 'openai',
-    });
-    expect(pendingHarnessRuntimeMutation(h.pending.get('s1'), 5))
-      .toMatchObject({ profile: { effort: null } });
+    expect(result).toMatchObject({ ok: true, status: 'deferred',
+      pendingMutation: { profile: { agentDeviceId, agentKind: 'codex' } } });
     expect(h.close).not.toHaveBeenCalled();
-    await expect(bridge.advance('s1', preview.generation, preview.next))
-      .resolves.toMatchObject({ ok: false, errorCode: 'CONFLICT' });
+    expect(h.persist).not.toHaveBeenCalled();
   });
-
   it('keeps a configured default effort instead of inheriting the previous harness effort', async () => {
     const h = setup();
     const result = await setSessionRuntimeHarness(h.deps, {
@@ -236,6 +198,81 @@ describe('runtime harness selection', () => {
       expect(h.switchDeps.supersedePendingCredentialSwitch).not.toHaveBeenCalled();
     },
   );
+
+  // 2026-11-17: after staging a Worker's new source, the Lead's follow-up without harness hit
+  // CONFLICT although its generation matched, because the turn-end path yields to any staged
+  // selection. Without harness the patch now revises the staged selection, as choosing again in
+  // the picker does; omitted fields keep the staged values. Tier: unit (real staging transaction).
+  it('revises a staged selection when harness is omitted, keeping its other fields', async () => {
+    const h = setup();
+    await setSessionRuntimeHarness(h.deps, {
+      ...request, patch: { ...request.patch, providerId: 'gateway', effort: 'low' },
+    });
+
+    expect(await setSessionRuntimeHarness(h.deps, {
+      targetSessionId: 's1', expectedGeneration: 5, patch: { fastMode: true },
+    })).toMatchObject({
+      ok: true,
+      status: 'deferred',
+      effectiveBoundary: 'next_send',
+      pendingMutation: {
+        profile: { agentKind: 'codex', model: 'gpt-6-astra', providerId: 'gateway', effort: 'low', fastMode: true },
+      },
+    });
+    expect(h.close).not.toHaveBeenCalled();
+    expect(h.persist).not.toHaveBeenCalled();
+  });
+
+  // PR #11071: axes-only Agent revisions lost picker provenance. Existing tests only
+  // revised Agent choices. Minimal input: reselect the current model, then enable Fast.
+  // Unit tier: real staging + send application must retain the IM manual-route marker.
+  it('keeps a user-staged choice manual after an Agent revises its axes and sends', async () => {
+    const h = setup();
+    h.pending.set('s1', {
+      targetAgentKind: 'claude-code', model: h.effective.model,
+      providerId: 'old-provider', sameAgentSelection: true,
+    });
+    h.switchDeps.selectSameAgentModel = vi.fn(async (id, intent, applyNow) => {
+      if (!applyNow) h.pending.set(id, { ...intent, sameAgentSelection: true });
+      return { deferred: !applyNow };
+    });
+    h.switchDeps.onUserRouteSelectionLanded = vi.fn(async () => {});
+
+    expect(await setSessionRuntimeHarness(h.deps, {
+      targetSessionId: 's1', expectedGeneration: 4, patch: { fastMode: true },
+    })).toMatchObject({
+      ok: true,
+      pendingMutation: { source: 'user', profile: { fastMode: true } },
+    });
+    await applyPendingAgentSwitchIfIdle(h.switchDeps, 's1');
+    expect(h.switchDeps.onUserRouteSelectionLanded).toHaveBeenCalledWith('s1');
+    expect(h.pending.get('s1')).toBeUndefined();
+  });
+
+  // Agent runtime reads showed pending=null for a picker choice, so a Lead could overwrite a
+  // choice it never saw. Picker choices project as source=user; system follow-ups and the
+  // agent's own staging (already projected) do not. Tier: unit (the projection Host reads use).
+  it.each([
+    [{ targetAgentKind: 'codex' as const, model: 'gpt-6-astra', providerId: 'openai', sameAgentSelection: true }, 'user'],
+    [{ targetAgentKind: 'codex' as const, model: 'gpt-6-astra', providerId: 'openai', runtimeSource: 'agent' as const }, null],
+    [{ targetAgentKind: 'codex' as const, model: 'gpt-6-astra', providerId: 'openai', configStaged: true }, null],
+  ])('projects only picker choices as user-staged: %j', (intent, source) => {
+    expect(userStagedSelectionProjection(intent, 7, null)?.source ?? null).toBe(source);
+    if (source) {
+      expect(userStagedSelectionProjection(intent, 7, null)).toEqual({
+        generation: 7, source: 'user',
+        profile: { agentDeviceId: null, agentKind: 'codex', model: 'gpt-6-astra', providerId: 'openai', effort: null, fastMode: false },
+      });
+    }
+  });
+
+  it('asks to re-read when the staged selection a revision targets is gone', async () => {
+    const h = setup();
+    expect(await setSessionRuntimeHarness(h.deps, {
+      ...request, patch: { model: 'gpt-6-astra' },
+    })).toMatchObject({ ok: false, errorCode: 'CONFLICT' });
+    expect(h.pending.get('s1')).toBeUndefined();
+  });
 
   it.each([
     { orcaRole: 'lead', running: false },

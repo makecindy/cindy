@@ -33,12 +33,14 @@ vi.mock("react-native", async () => {
       testID,
       onPress,
       disabled,
+      accessibilityLabel,
     }: {
       children?: ReactNode;
       style?: unknown;
       testID?: string;
       onPress?: () => void;
       disabled?: boolean;
+      accessibilityLabel?: string;
     }) =>
       createElement(
         tag,
@@ -46,6 +48,10 @@ vi.mock("react-native", async () => {
           "data-testid": testID,
           onClick: onPress,
           disabled,
+          "aria-label": accessibilityLabel,
+          "data-layout": JSON.stringify(flatten(
+            typeof style === "function" ? style({ pressed: false }) : style,
+          )),
           "data-color": flatten(
             typeof style === "function" ? style({ pressed: false }) : style,
           ).color,
@@ -58,6 +64,7 @@ vi.mock("react-native", async () => {
     Text: view("span"),
     ActivityIndicator: ({ color }: { color: string }) =>
       createElement("i", { "data-testid": "spinner", "data-color": color }),
+    PixelRatio: { roundToNearestPixel: (value: number) => value },
     StyleSheet: { create: (value: unknown) => value, hairlineWidth: 1 },
   };
 });
@@ -95,7 +102,7 @@ vi.mock("lucide-react-native", async () => {
     (name: string) =>
     ({ color }: { color: string }) =>
       createElement("i", { "data-testid": name, "data-color": color });
-  return { Pen: icon("pen"), RefreshCw: icon("retry-icon"), X: icon("x") };
+  return { Pen: icon("pen"), RefreshCw: icon("retry-icon"), X: icon("x"), Info: icon("info-icon") };
 });
 vi.mock("@/theme", async () => {
   const tokens = await import("@/theme/tokens");
@@ -147,6 +154,68 @@ const colorOf = (selector: string) =>
   host.querySelector(selector)?.getAttribute("data-color");
 
 describe("composer attachment tray overlay foreground", () => {
+  it.each(["light", "dark"])(
+    "preserves named file chips through upload completion in %s mode",
+    (mode) => {
+      theme.mode = mode;
+      const preview = vi.fn();
+      const remove = vi.fn();
+      const files: RemoteSerializedAttachment[] = [
+        ["movie.mp4", "file"], ["audio.m4a", "file"],
+        ["report.pdf", "pdf"], ["slides.pptx", "office"],
+        ["notes.txt", "text"], ["archive.zip", "file"],
+        ["missing-preview.jpg", "image"],
+        [`${"很长的附件名称".repeat(20)}.mp4`, "file"],
+      ].map(([name, category], index) => ({
+        ...attachment(String(index)), name,
+        category: category as RemoteSerializedAttachment["category"],
+      }));
+      const render = (uploaded: boolean) => act(() => root.render(
+        <ComposerAttachmentTray
+          attachments={uploaded ? files : []} previews={{}}
+          pendingUploads={uploaded ? [] : files.map((file) => ({
+            localId: file.id, kind: "file", name: file.name,
+            previewUri: `file:///${file.name}`, size: file.size,
+          }))}
+          onPreview={preview} onRemove={remove} onPreviewPending={() => {}}
+          testIDPrefix="t"
+        />,
+      ));
+      render(false);
+      const pendingChips = host.querySelectorAll('[data-testid="t.attachmentPendingChip"]');
+      expect(pendingChips).toHaveLength(files.length);
+      const pendingLayouts = Array.from(pendingChips, chip => JSON.parse(chip.getAttribute("data-layout")!));
+      for (const layout of pendingLayouts) {
+        expect(layout.minHeight).toBe(44);
+        expect(layout.paddingVertical ?? 0).toBe(0);
+      }
+      render(true);
+      expect(host.querySelector('[data-testid="t.attachmentPendingChip"]')).toBeNull();
+      const chips = host.querySelectorAll('[data-testid="t.attachmentChip"]');
+      expect(chips).toHaveLength(files.length);
+      chips.forEach((chip, index) => {
+        const button = chip.querySelector<HTMLButtonElement>("button")!;
+        expect(button.textContent).toContain(files[index].name);
+        expect(button.getAttribute("aria-label")).toContain(files[index].name);
+        const layout = JSON.parse(button.getAttribute("data-layout")!);
+        // flex: 1 gives Yoga a zero basis inside the intrinsic-width chip.
+        expect(layout.flex).toBeUndefined();
+        expect(layout.flexShrink).toBe(1);
+        expect(layout.minHeight).toBeUndefined();
+        expect(layout.alignSelf).toBe("stretch");
+        // The shared outer chip owns the touch height in both upload states.
+        expect(JSON.parse(chip.getAttribute("data-layout")!)).toEqual(pendingLayouts[index]);
+        expect(JSON.parse(chip.getAttribute("data-layout")!).maxWidth).toBe("100%");
+        act(() => button.click());
+        const removeButton = chip.querySelector<HTMLButtonElement>('[data-testid="t.attachmentRemoveButton"]')!;
+        expect(JSON.parse(removeButton.getAttribute("data-layout")!).flexShrink).toBe(0);
+        act(() => removeButton.click());
+      });
+      expect(preview.mock.calls).toEqual(files.map((file) => [file.id]));
+      expect(remove.mock.calls).toEqual(files.map((file) => [file.id]));
+    },
+  );
+
   // PR #6291: production expansion hook, with a button representing the card's
   // collapse gesture. Existing tray tests do not exercise new-task expansion.
   it("opens for new images but respects collapse through paste and upload completion", () => {
@@ -390,6 +459,63 @@ describe("composer attachment tray overlay foreground", () => {
       );
       expect(plusN?.getAttribute("data-color")).toBe(colors.swipeActionText);
       expect(colors.swipeActionText).not.toBe(darkColors.ctaText);
+    },
+  );
+
+  // 上传挂着任务页 / App 前台两条生命周期:在途时常驻一行提示,失败卡已结算就不再提示。
+  // 断言保护的是「用户在上传中能看到不要锁屏/切走」与「窄屏换行不溢出」两个可观察结果。
+  it.each(["light", "dark"])(
+    "shows the stay-in-place hint only while an upload is in flight in %s mode",
+    async (mode) => {
+      theme.mode = mode;
+      const { darkColors, lightColors } = await import("@/theme/tokens");
+      const colors = mode === "light" ? lightColors : darkColors;
+      const render = (pendingUploads: PendingLocalAttachmentUpload[]) =>
+        act(() =>
+          root.render(
+            <ComposerAttachmentTray
+              attachments={[]}
+              previews={{}}
+              onRemove={() => {}}
+              onPreview={() => {}}
+              onPreviewPending={() => {}}
+              pendingUploads={pendingUploads}
+              testIDPrefix="t"
+            />,
+          ),
+        );
+
+      render([pending("uploading")]);
+      const hint = host.querySelector('[data-testid="t.attachmentUploadHint"]')!;
+      expect(hint).not.toBeNull();
+      // 独占托盘第一行;文字可伸展换行,320pt 窄屏靠换行而不是截断/溢出。
+      expect(JSON.parse(hint.getAttribute("data-layout")!).width).toBe("100%");
+      const hintText = [...host.querySelectorAll("span")].find(
+        (node) =>
+          node.textContent ===
+          i18n.t("composer.attachments.uploadInProgressHint"),
+      )!;
+      expect(hintText.textContent).toBe(
+        i18n.t("composer.attachments.uploadInProgressHint"),
+      );
+      expect(hintText.getAttribute("data-color")).toBe(colors.textSecondary);
+      // 文字不设宽也不截断:在 320pt 窄屏上换行,而不是溢出或被保成一行。
+      const textLayout = JSON.parse(hintText.getAttribute("data-layout")!);
+      expect(textLayout.flexShrink).toBe(1);
+      expect(textLayout.width).toBeUndefined();
+      // 图标与文字同一档次色,不另造一次性灰。
+      expect(colorOf('[data-testid="info-icon"]')).toBe(colors.textSecondary);
+      render([pending("failed", true)]);
+      expect(
+        host.querySelector('[data-testid="t.attachmentUploadHint"]'),
+      ).toBeNull();
+      // 失败卡照旧保留重试与删除,提示收起但入口不丢。
+      expect(
+        host.querySelector('[data-testid="t.attachmentPendingRetryButton"]'),
+      ).not.toBeNull();
+      expect(
+        host.querySelector('[data-testid="t.attachmentPendingRemoveButton"]'),
+      ).not.toBeNull();
     },
   );
 });

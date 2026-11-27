@@ -227,7 +227,8 @@ export function installContentSecurityPolicy(session: Session, ctx: CspContext):
     const isAppDocument =
       (ctx.desktopCapture === true &&
         (url === 'cindy-desktop-capture://capture/index.html' ||
-          url === 'cindy-desktop-capture://capture/index.html?mode=files')) ||
+          url === 'cindy-desktop-capture://capture/index.html?mode=files' ||
+          url === 'cindy-desktop-capture://capture/index.html?mode=recording')) ||
       url.startsWith('file://') ||
       (ctx.devServerOrigin !== null && parseOrigin(url) === ctx.devServerOrigin);
     if (!isAppDocument) {

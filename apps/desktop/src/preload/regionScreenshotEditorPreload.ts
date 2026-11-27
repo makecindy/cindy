@@ -5,10 +5,14 @@ import { exposeScreenshotPageElectronApi, onPayload } from './screenshotPageBrid
 exposeScreenshotPageElectronApi();
 // An image editor has no screen-capture, automation or window-discovery privileges.
 contextBridge.exposeInMainWorld('regionScreenshotEditor', {
+  setTranslationLanguage: (token: string, value: import('../shared/screenshotTranslation').ScreenshotTranslationPreference): Promise<boolean> => ipcRenderer.invoke(C.SET_TRANSLATION_LANGUAGE, token, value),
   failed: () => ipcRenderer.send(C.FAILED),
   shellReady: () => ipcRenderer.send(C.READY),
   onBegin: (callback: (payload: RegionScreenshotBegin) => void) => onPayload(C.BEGIN, callback),
   onEnd: (callback: () => void) => onPayload(C.END, callback),
+  onLocaleChanged: (callback: (payload: { token: string; locale: string }) => void) => onPayload(C.LOCALE_CHANGED, callback),
+  onTranslationLanguageChanged: (callback: (payload: { token: string; preference: import('../shared/screenshotTranslation').ScreenshotTranslationPreference }) => void) =>
+    onPayload(C.TRANSLATION_LANGUAGE_CHANGED, callback),
   painted: (token: string) => ipcRenderer.send(C.PAINTED, token),
   cancel: (token: string) => ipcRenderer.send(C.CANCEL, token),
   minimize: (token: string) => ipcRenderer.send(C.MINIMIZE, token),

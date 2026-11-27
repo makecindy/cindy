@@ -1,0 +1,551 @@
+/**
+ * 生产入口：ensureOwnerAgentNetBootstrap/currentAgentNetClient；检验密钥只交现有 vault、Root 绑定和冷重启一致性。
+ * 规则：凭据与本地存储规则、V2 独立身份/无损 V1。原 relay config 测试没有 V2 私钥与多实例首次初始化。
+ * 最小失败输入：两个实例从同一旧 seed 初始化；错账号旧证书；损坏 V2 私钥。tier：unit，现有宿主边界注入。
+ */
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { generateKeyPairSync } from 'node:crypto';
+import fs from 'node:fs';
+import { EventEmitter } from 'node:events';
+import { AgentNetWorkerSocket } from '@cindy/agent-net';
+import { DeviceLinkRegistrationRemovedError } from '@cindy/device-link';
+import { generateIdentity, issueCertificate, publicBytes } from '@cindy/agent-net-relay';
+import { AgentNetClient } from '@cindy/agent-net-relay/client';
+import { outboundFetch } from '../../maker-host/outbound-fetch.desktop.js';
+const state = vi.hoisted(() => ({ owner: 'membership-a', pending: false, enabled: true, onlyEncrypted: false, secrets: null as any, writes: [] as any[],
+  official: false, officialBase: 'https://agent-net.example.test', officialApi: null as any, officialEnsure: vi.fn(), relayCredential: 'unit' }));
+vi.mock('electron', () => ({ app: { getAppPath: () => '/unit-only-app' } }));
+vi.mock('../../authManager.js', () => ({ getCurrentUserId: () => state.owner, getDeviceId: () => 'device-a' }));
+vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => state.owner, isAppSessionBoundaryPending: () => state.pending }));
+vi.mock('../settings-store.desktop.js', () => ({ readDeviceLinkSettings: () => ({ agentNetEnabled: state.enabled, agentNetOnlyEncrypted: state.onlyEncrypted }) }));
+vi.mock('../selfHostedRelayRouting.js', () => ({ activeSelfHostedRelay: () => state.official ? null : ({
+  relayId: '11111111-1111-4111-8111-111111111111', name: 'unit relay', baseUrl: 'http://127.0.0.1:1', role: 'owner',
+  credential: state.relayCredential, deviceId: 'device-a', ownerPublicKey: state.secrets?.agentNet?.rootPublicKey,
+}), isAgentNetOnlyRelay: (relay: { credential?: string } | null) => relay !== null && relay.credential === '' }));
+vi.mock('../selfHostedRelayConfig.js', () => ({
+  readRelaySecrets: () => state.secrets,
+  writeRelaySecrets: (_id: string, value: unknown) => { state.writes.push(value); state.secrets = value; },
+  relayDataPath: () => '/unit-only-never-written',
+}));
+vi.mock('../../maker-host/outbound-fetch.desktop.js', () => ({ createOutboundHttpAgent: vi.fn(), outboundFetch: vi.fn() }));
+vi.mock('../agentNetOfficial.js', () => ({ officialAgentNetBase: () => state.official ? state.officialBase : '',
+  currentOfficialAgentNetClient: () => state.officialApi, ensureOfficialAgentNetClient: state.officialEnsure, officialAgentNetSlot: () => 'unit-slot',
+  officialAgentNetStatementIdentity: () => null }));
+vi.mock('../deviceName.js', () => ({ deviceName: () => 'Unit device' }));
+import { ensureOwnerAgentNetBootstrap, currentAgentNetClient, agentNetAllowsLegacy, createAgentNetOrLegacySocket,
+  createAgentNetAppSocket, agentNetPeerSnapshot, agentNetDeviceAccepted, agentNetNoteDeviceLinkDevices, agentNetNoteDeviceRemoved,
+  isAgentNetActive, agentNetListedPhones, officialAgentNetRemoved, onAgentNetRemoved, rejoinOfficialAgentNet,
+  useDeviceLinkDeviceList } from '../agentNetRuntime.js';
+import { AGENT_NET_UDP_PORT_ENV, resetPeerOfficialStunCacheForTest } from '../agentNetStunDiscovery.js';
+import { projectAgentNetDevice, readCurrentDeviceDirectory } from '../agentNetDeviceDirectory.js';
+
+// App routing, unit: real directory projection; previous route/cache cases had
+// no foreign App metadata. One offline Friend must retain both app and platform.
+it('projects offline App labels without changing the device name or control flags', () => {
+  const peer = projectAgentNetDevice({ certificate: { deviceId: 'friend' } as any, name: 'Mac', platform: 'darwin',
+    app: 'cindy-friend', online: false, remoteControlEnabled: false, capabilities: [] }, 'self');
+  expect(peer).toMatchObject({ deviceId: 'friend', name: 'Mac', platform: 'darwin', app: 'cindy-friend', online: false, remoteControlEnabled: false });
+});
+// 2026-11-17 rebase: a Device Link deletion now also revokes the device on Agent-Net (deviceLinkApi.ts), permanently. Signed in again
+// with its Agent-Net switch on, Agent-Net refuses it and the main connection used to fail for good (nor did Device Link take over).
+// Production entry: the main connection's createWebSocket (createAgentNetOrLegacySocket). Unit tier, injected host boundaries.
+it('runs on Device Link once Agent-Net refuses this identity, per account, and not with 「仅使用 Agent-Net」', async () => {
+  state.official = true; state.enabled = true; state.onlyEncrypted = false; state.owner = 'refused-account';
+  state.officialEnsure.mockReset();
+  state.officialEnsure.mockRejectedValue(Object.assign(new Error('refused'), { code: 'DEVICE_REENROLLMENT_REQUIRES_APPROVAL' }));
+  const legacy = vi.fn(async () => 'device-link-socket');
+  expect(isAgentNetActive()).toBe(true);
+  // This attempt's credentials were for Agent-Net: it fails, and the next one is the Device Link socket.
+  await expect(createAgentNetOrLegacySocket(legacy)).rejects.toThrow('AGENT_NET_IDENTITY_REFUSED');
+  expect(isAgentNetActive()).toBe(false);
+  await expect(createAgentNetOrLegacySocket(legacy)).resolves.toBe('device-link-socket');
+  expect(state.officialEnsure).toHaveBeenCalledTimes(1);
+  // Another account on this computer is not refused.
+  state.owner = 'other-account';
+  expect(isAgentNetActive()).toBe(true);
+  // Another error is not a refusal; and with 「仅使用 Agent-Net」 there is no Device Link to fall back to.
+  state.officialEnsure.mockRejectedValueOnce(new Error('NETWORK_DOWN'));
+  await expect(createAgentNetOrLegacySocket(legacy)).rejects.toThrow('NETWORK_DOWN');
+  state.onlyEncrypted = true;
+  await expect(createAgentNetOrLegacySocket(legacy)).rejects.toThrow('refused');
+  // A cold renewal can confirm removal before there is a WebSocket to deliver 4410.
+  state.officialEnsure.mockRejectedValueOnce(Object.assign(new Error('revoked'), { code: 'DEVICE_REVOKED' }));
+  await expect(createAgentNetOrLegacySocket(legacy)).rejects.toBeInstanceOf(DeviceLinkRegistrationRemovedError);
+  expect(isAgentNetActive()).toBe(true);
+  expect(legacy).toHaveBeenCalledTimes(1);
+});
+// 2026-11-26 用户定「被删后要能重新加入」：本机打开开关前问一次官方服务这台是否被移除过（officialAgentNetRemoved）：账号设备列表里
+// 没有它（重新登录后 Device Link 照常，同账号电脑在 Agent-Net 上都拦它），或身份被撤销。缺口：新判断，selfHostedRelayRuntime.test.ts
+// 只用它的替身。最小输入：列表里没有自己、读不到列表、没入过网、/directory 回 DEVICE_REVOKED、断网。tier:unit。
+it('asks the official services whether this computer was removed: missing from the account list, or a revoked identity', async () => {
+  const previous = state.secrets;
+  const row = (deviceId: string) => ({ deviceId, name: deviceId, platform: null, appVersion: null, lastSeenAt: null,
+    online: true, busy: false, remoteControlEnabled: true, isSelf: deviceId === 'device-a' });
+  let listed: ReturnType<typeof row>[] | null = null;
+  useDeviceLinkDeviceList(async () => listed);
+  try {
+    state.official = true;
+    const directory = vi.fn();
+    state.officialEnsure.mockResolvedValue({ directory });
+    state.secrets = null;
+    // Signed in again after a removal: not on the account's list. Removed, whether or not it ever enrolled on Agent-Net.
+    listed = [row('desktop')];
+    await expect(officialAgentNetRemoved()).resolves.toBe(true);
+    listed = [row('desktop'), row('device-a')];
+    await expect(officialAgentNetRemoved()).resolves.toBe(false); // Never enrolled: nothing more to ask, so no request.
+    expect(state.officialEnsure).not.toHaveBeenCalled();
+    state.secrets = { credential: 'agent-net-only', seed: 'A'.repeat(43), agentNet: {} };
+    for (const [list, answer, removed] of [
+      [[row('device-a')], Object.assign(new Error('DEVICE_REVOKED'), { status: 401, code: 'DEVICE_REVOKED' }), true],
+      [null, Object.assign(new Error('DEVICE_REVOKED'), { status: 401, code: 'DEVICE_REVOKED' }), true],
+      [null, Object.assign(new Error('AGENT_NET_NETWORK_ERROR'), { status: 0, code: 'AGENT_NET_NETWORK_ERROR' }), false],
+      [[row('device-a')], null, false],
+    ] as const) {
+      listed = list ? [...list] : null;
+      directory.mockReset();
+      if (answer) directory.mockRejectedValueOnce(answer); else directory.mockResolvedValueOnce([]);
+      await expect(officialAgentNetRemoved()).resolves.toBe(removed);
+    }
+    // A self-hosted relay keeps its own re-pairing: not asked.
+    state.official = false; state.officialEnsure.mockClear(); listed = [row('desktop')];
+    await expect(officialAgentNetRemoved()).resolves.toBe(false);
+    expect(state.officialEnsure).not.toHaveBeenCalled();
+  } finally { state.secrets = previous; useDeviceLinkDeviceList(async () => null); }
+});
+
+// 2026-11-26 用户定「被删后默认关掉，再打开就重新加入」：主连接的 createWebSocket（createAgentNetOrLegacySocket）遇到「被移除」时
+// 通知 onAgentNetRemoved（selfHostedRelayRuntime.ts 据此关掉开关并提示），这次走 Device Link。缺口：被拒只按「这次关着」处理、不留提示；
+// 列表里没有自己时照样打开连接，同账号电脑都拦它。最小输入：身份准备回 DEVICE_REVOKED、列表里没有自己、开着「仅使用 Agent-Net」。tier:unit。
+it('reports a removal instead of opening a connection every computer of the account refuses', async () => {
+  const removed = vi.fn();
+  const off = onAgentNetRemoved(removed);
+  const legacy = vi.fn(async () => 'device-link-socket');
+  const row = (deviceId: string) => ({ deviceId, name: deviceId, platform: null, appVersion: null, lastSeenAt: null,
+    online: true, busy: false, remoteControlEnabled: true, isSelf: deviceId === 'device-a' });
+  try {
+    state.official = true; state.enabled = true; state.owner = 'removed-revoked';
+    state.officialEnsure.mockRejectedValue(Object.assign(new Error('revoked'), { code: 'DEVICE_REVOKED' }));
+    await expect(createAgentNetOrLegacySocket(legacy)).rejects.toThrow('AGENT_NET_IDENTITY_REFUSED');
+    expect(removed).toHaveBeenCalledTimes(1);
+
+    // Its identity is fine, but the account's device list no longer has it.
+    state.owner = 'removed-unlisted'; removed.mockClear();
+    useDeviceLinkDeviceList(async () => [row('desktop')]);
+    state.officialEnsure.mockResolvedValue({ base: 'https://agent-net.example.test', rootPublicKey: 'root',
+      identity: { deviceId: 'device-a' }, certificate: { deviceId: 'device-a', subject: 'removed-unlisted', expiresAt: Date.now() + 86_400_000 * 7 } });
+    vi.spyOn(fs.promises, 'stat').mockRejectedValue(Object.assign(new Error('absent'), { code: 'ENOENT' }));
+    vi.spyOn(fs.promises, 'readFile').mockResolvedValue(Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]));
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.mocked(outboundFetch).mockResolvedValue(Response.json({}));
+    const open = vi.spyOn(AgentNetWorkerSocket, 'open');
+    await expect(createAgentNetOrLegacySocket(legacy)).rejects.toThrow('AGENT_NET_IDENTITY_REFUSED');
+    expect(open).not.toHaveBeenCalled();
+    expect(removed).toHaveBeenCalledTimes(1);
+
+    // After rejoining (even while off with no stored secret), membership resets so the next connect re-reads the list
+    // instead of looping back into removal on the stale pre-rejoin list.
+    const previousSecrets = state.secrets;
+    state.secrets = null; state.enabled = false;
+    await expect(rejoinOfficialAgentNet({ force: true })).resolves.toBe('rejoined');
+    expect(state.officialEnsure).toHaveBeenLastCalledWith('Unit device', { rejoin: true });
+    state.secrets = previousSecrets; state.enabled = true; removed.mockClear();
+    useDeviceLinkDeviceList(async () => [row('desktop'), row('device-a')]);
+    const opened = { on: vi.fn(), once: vi.fn(), close: vi.fn(), relayConnected: () => true, restrictPeers: vi.fn() };
+    open.mockResolvedValueOnce(opened as never);
+    await expect(createAgentNetOrLegacySocket(legacy)).resolves.toBe(opened);
+    expect(removed).not.toHaveBeenCalled();
+    opened.close();
+
+    // 「仅使用 Agent-Net」: no Device Link to turn to, so not reported; a later background list missing this computer closes
+    // with 4410 so the existing "removed" (with 「重新加入」) entry appears instead of stranding the connection.
+    state.owner = 'removed-only-encrypted-live'; state.onlyEncrypted = true; removed.mockClear();
+    useDeviceLinkDeviceList(async () => [row('desktop'), row('device-a')]);
+    const encryptedSocket = { on: vi.fn(), once: vi.fn(), close: vi.fn(), relayConnected: () => true, restrictPeers: vi.fn() };
+    open.mockResolvedValueOnce(encryptedSocket as never);
+    await expect(createAgentNetOrLegacySocket(legacy)).resolves.toBe(encryptedSocket);
+    agentNetNoteDeviceLinkDevices([row('desktop')], Date.now() + 1);
+    expect(encryptedSocket.close).toHaveBeenCalledWith(4410);
+    expect(removed).not.toHaveBeenCalled();
+
+    state.owner = 'removed-only-encrypted'; state.onlyEncrypted = true; removed.mockClear();
+    state.officialEnsure.mockReset().mockRejectedValue(Object.assign(new Error('revoked'), { code: 'DEVICE_REVOKED' }));
+    await expect(createAgentNetOrLegacySocket(legacy)).rejects.toBeInstanceOf(DeviceLinkRegistrationRemovedError);
+    expect(removed).not.toHaveBeenCalled();
+    expect(legacy).not.toHaveBeenCalled();
+  } finally { off(); useDeviceLinkDeviceList(async () => null); }
+});
+const relayId = '11111111-1111-4111-8111-111111111111';
+beforeEach(() => { state.owner = 'membership-a'; state.pending = false; state.enabled = true; state.onlyEncrypted = false; state.writes = [];
+  state.official = false; state.officialBase = 'https://agent-net.example.test'; state.officialApi = null; state.officialEnsure.mockReset(); state.relayCredential = 'unit';
+  resetPeerOfficialStunCacheForTest(); delete process.env[AGENT_NET_UDP_PORT_ENV]; });
+afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); resetPeerOfficialStunCacheForTest(); delete process.env[AGENT_NET_UDP_PORT_ENV]; });
+// A still-valid cached certificate skips enrollment, so a failed first relay connection must also reveal confirmed removal.
+it.each([true, false])('routes confirmed removal on a cached desktop identity (encrypted only=%s)', async (onlyEncrypted) => {
+  state.official = true;
+  state.onlyEncrypted = onlyEncrypted;
+  state.owner = 'cached-removal-' + onlyEncrypted;
+  const root = generateKeyPairSync('ed25519').privateKey;
+  const identity = generateIdentity('device-a');
+  const certificate = issueCertificate(root, { networkId: 'account:unit', subject: state.owner, identity, role: 'owner' });
+  const api = new AgentNetClient('https://agent-net.example.test', identity, certificate, publicBytes(root));
+  state.officialEnsure.mockResolvedValue(api);
+  const directory = vi.spyOn(api, 'directory').mockRejectedValue(Object.assign(new Error('revoked'), { code: 'DEVICE_REVOKED' }));
+  vi.spyOn(fs.promises, 'stat').mockRejectedValue(Object.assign(new Error('unit-cache-absent'), { code: 'ENOENT' }));
+  vi.spyOn(fs.promises, 'readFile').mockResolvedValue(Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]));
+  vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+  const socket = Object.assign(new EventEmitter(), { close: vi.fn(), relayConnected: () => false });
+  vi.spyOn(AgentNetWorkerSocket, 'open').mockResolvedValue(socket as unknown as AgentNetWorkerSocket);
+  const legacy = vi.fn(() => 'device-link');
+  if (onlyEncrypted) await expect(createAgentNetOrLegacySocket(legacy)).rejects.toBeInstanceOf(DeviceLinkRegistrationRemovedError);
+  else {
+    await expect(createAgentNetOrLegacySocket(legacy)).rejects.toThrow('AGENT_NET_IDENTITY_REFUSED');
+    expect(await createAgentNetOrLegacySocket(legacy)).toBe('device-link');
+  }
+  expect(directory).toHaveBeenCalledOnce();
+  expect(socket.close).toHaveBeenCalledOnce();
+  expect(legacy).toHaveBeenCalledTimes(onlyEncrypted ? 0 : 1);
+});
+
+// Privacy failure: an unpaired V2 device previously looked inactive and could use the V1 factory despite encrypted-only.
+// Unit tier: call the real route factory with no V2 identity; the existing legacy factory must never open.
+it('fails closed when encrypted-only is selected before a V2 identity is available', async () => {
+  state.secrets = null; state.onlyEncrypted = true;
+  const legacy = vi.fn(() => ({ legacy: true }));
+  await expect(createAgentNetOrLegacySocket(legacy)).rejects.toThrow('AGENT_NET_ENCRYPTED_IDENTITY_REQUIRED');
+  expect(agentNetAllowsLegacy()).toBe(false); expect(legacy).not.toHaveBeenCalled();
+  state.enabled = false;
+  expect(await createAgentNetOrLegacySocket(legacy)).toEqual({ legacy: true });
+  state.onlyEncrypted = false;
+});
+it('keeps the V1 credential, stores private keys only through the existing vault and derives stable keys across first-start races', () => {
+  const root = generateKeyPairSync('ed25519').privateKey;
+  const original = { credential: 'unit-test-not-a-real-credential', seed: root.export({ format: 'jwk' }).d! };
+  state.secrets = original;
+  const first = ensureOwnerAgentNetBootstrap(relayId, 'Private network');
+  expect(first.rootPublicKey).toBe(publicBytes(root));
+  expect(JSON.stringify(first)).not.toContain('PRIVATE KEY'); expect(JSON.stringify(first)).not.toContain('PrivateKey');
+  expect(state.secrets.credential).toBe(original.credential); expect(state.secrets.seed).toBe(original.seed);
+  expect(state.secrets.agentNet.signingPrivateKey).toContain('PRIVATE KEY');
+  state.secrets = { ...original }; // Another process saw the old file before the first writer committed.
+  const second = ensureOwnerAgentNetBootstrap(relayId, 'Private network');
+  expect(second.ownerCertificate.signingKey).toBe(first.ownerCertificate.signingKey);
+  expect(second.ownerCertificate.transportKey).toBe(first.ownerCertificate.transportKey);
+  expect(currentAgentNetClient()?.identity.deviceId).toBe('device-a');
+  state.onlyEncrypted = true; expect(agentNetAllowsLegacy()).toBe(false);
+  state.enabled = false; expect(agentNetAllowsLegacy()).toBe(true);
+  state.onlyEncrypted = false;
+});
+it('rejects account-boundary changes and corrupted keys without replacing existing identity', () => {
+  const root = generateKeyPairSync('ed25519').privateKey;
+  state.secrets = { credential: 'unit-test-not-a-real-credential', seed: root.export({ format: 'jwk' }).d! };
+  ensureOwnerAgentNetBootstrap(relayId, 'Private network'); state.writes = [];
+  state.owner = 'another-membership';
+  expect(() => ensureOwnerAgentNetBootstrap(relayId, 'Private network')).toThrow('AGENT_NET_IDENTITY_MISMATCH');
+  state.owner = 'membership-a'; state.secrets.agentNet.signingPrivateKey = 'unit-only-invalid-pem';
+  expect(() => ensureOwnerAgentNetBootstrap(relayId, 'Private network')).toThrow();
+  expect(state.writes).toHaveLength(0);
+  state.enabled = false; expect(currentAgentNetClient()).toBeNull();
+});
+// Unit: two real route-factory attempts finish out of order. The old attempt
+// previously replaced the current transport before DeviceLinkClient discarded it.
+it('keeps the newest completed transport when an older factory finishes late', async () => {
+  state.secrets = { credential: 'unit', seed: generateKeyPairSync('ed25519').privateKey.export({ format: 'jwk' }).d! };
+  state.onlyEncrypted = false;
+  ensureOwnerAgentNetBootstrap(relayId, 'unit');
+  vi.spyOn(fs.promises, 'stat').mockRejectedValue(Object.assign(new Error('unit-cache-absent'), { code: 'ENOENT' }));
+  vi.spyOn(fs.promises, 'readFile').mockResolvedValue(Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]));
+  vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+  const make = (rttMs: number) => {
+    const socket = new EventEmitter() as any;
+    socket.peerSnapshot = () => ({ path: 'relay', rttMs });
+    socket.close = vi.fn(() => socket.emit('close', 1000));
+    return socket;
+  };
+  const old = make(1), newer = make(2);
+  let release!: (value: any) => void;
+  const open = vi.spyOn(AgentNetWorkerSocket, 'open')
+    .mockImplementationOnce(() => new Promise(resolve => { release = resolve; }))
+    .mockResolvedValueOnce(newer);
+  const first = createAgentNetAppSocket().catch(error => error);
+  await vi.waitFor(() => expect(open).toHaveBeenCalledOnce());
+  expect(await createAgentNetAppSocket()).toBe(newer);
+  release(old);
+  expect((await first).message).toBe('AGENT_NET_CONNECTION_SUPERSEDED');
+  expect(old.close).toHaveBeenCalledOnce();
+  expect(agentNetPeerSnapshot('peer')).toEqual({ path: 'relay', rttMs: 2 });
+  newer.close();
+});
+
+// Unit: production /info → transport wiring. HTTPS and UDP may be published on
+// separate load balancers; relays without a valid stunHost keep the API host.
+it.each([
+  [{ udpPort: 3479, stunHost: 'agent-net-stun.example.test' }, 'agent-net-stun.example.test:3479'],
+  [{ udpPort: 3479 }, 'api'],
+  [{ udpPort: 3479, stunHost: 'agent-net-stun.example.test:9' }, 'api'],
+  [{ stunHost: 'agent-net-stun.example.test' }, null],
+])('queries STUN at the host advertised by /info: %j', async (info, expected) => {
+  state.secrets = { credential: 'unit', seed: generateKeyPairSync('ed25519').privateKey.export({ format: 'jwk' }).d! };
+  ensureOwnerAgentNetBootstrap(relayId, 'unit');
+  const base = currentAgentNetClient()!.base;
+  vi.spyOn(fs.promises, 'stat').mockRejectedValue(Object.assign(new Error('unit-cache-absent'), { code: 'ENOENT' }));
+  vi.spyOn(fs.promises, 'readFile').mockResolvedValue(Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]));
+  vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+  vi.mocked(outboundFetch).mockImplementation(async (url) => Response.json(String(url) === base + '/api/agent-net/info' ? info : {}));
+  const socket = Object.assign(new EventEmitter(), { close: vi.fn() });
+  socket.close.mockImplementation(() => socket.emit('close', 1000));
+  const open = vi.spyOn(AgentNetWorkerSocket, 'open')
+    .mockResolvedValue(socket as unknown as Awaited<ReturnType<typeof AgentNetWorkerSocket.open>>);
+  try {
+    expect(await createAgentNetAppSocket()).toBe(socket);
+    const server = expected === 'api' ? new URL(base).hostname + ':3479' : expected;
+    expect(open.mock.calls[0][0].stunServers).toEqual(server ? [server] : []);
+  } finally { socket.close(); vi.mocked(outboundFetch).mockReset(); }
+});
+
+// 2026-11-17 审查：刚唤醒、刚换网时 /info 常常取不到，这条连接原来一直没有 STUN 和 UDP 中转（只走 443）；取不到时沿用上次的，
+// 服务明确回答没有 UDP 时不再沿用。
+it('keeps the last UDP server of the service when /info cannot be read, and drops it once the service says there is none', async () => {
+  state.secrets = { credential: 'unit', seed: generateKeyPairSync('ed25519').privateKey.export({ format: 'jwk' }).d! };
+  ensureOwnerAgentNetBootstrap(relayId, 'unit');
+  const base = currentAgentNetClient()!.base;
+  vi.spyOn(fs.promises, 'stat').mockRejectedValue(Object.assign(new Error('unit-cache-absent'), { code: 'ENOENT' }));
+  vi.spyOn(fs.promises, 'readFile').mockResolvedValue(Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]));
+  vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+  const open = vi.spyOn(AgentNetWorkerSocket, 'open');
+  const connect = async (info: () => Promise<Response>) => {
+    vi.mocked(outboundFetch).mockImplementation(async (url) => (String(url) === base + '/api/agent-net/info' ? info() : Response.json({})));
+    const socket = Object.assign(new EventEmitter(), { close: vi.fn() });
+    socket.close.mockImplementation(() => socket.emit('close', 1000));
+    open.mockResolvedValueOnce(socket as unknown as Awaited<ReturnType<typeof AgentNetWorkerSocket.open>>);
+    try { await createAgentNetAppSocket(); return open.mock.lastCall![0]; } finally { socket.close(); vi.mocked(outboundFetch).mockReset(); }
+  };
+  const udp = 'agent-net-stun.example.test:3479';
+  expect((await connect(async () => Response.json({ udpPort: 3479, stunHost: 'agent-net-stun.example.test' }))).stunServers).toEqual([udp]);
+  const afterWake = await connect(async () => { throw new TypeError('fetch failed'); });
+  expect([afterWake.stunServers, afterWake.relayUdpServer]).toEqual([[udp], udp]);
+  expect((await connect(async () => Response.json({}))).stunServers).toEqual([]);
+  expect((await connect(async () => { throw new TypeError('fetch failed'); })).stunServers).toEqual([]);
+});
+
+// Unit: real Node SDK Fetch boundary + production mixed-directory adapter.
+// Runtime identity tests did not exercise a raw network failure after V1 succeeds.
+it('retains the live V1 directory when Node Fetch fails, except in encrypted-only mode', async () => {
+  state.secrets = { credential: 'unit', seed: generateKeyPairSync('ed25519').privateKey.export({ format: 'jwk' }).d! };
+  ensureOwnerAgentNetBootstrap(relayId, 'unit');
+  const legacy = { devices: [{ deviceId: 'old', name: 'Old computer', platform: null, appVersion: null,
+    lastSeenAt: null, online: true, busy: false, remoteControlEnabled: true, isSelf: false }] };
+  vi.mocked(outboundFetch).mockRejectedValueOnce(new TypeError('fetch failed')).mockRejectedValueOnce(new TypeError('fetch failed'));
+  // 只有旧版那条腿答得上来:目录照旧保留,但必须标成 **partial** —— 它证明不了加密那条腿
+  // 上的设备已经不在了(Codex review #9360「Keep one-leg hybrid results non-authoritative」)。
+  expect(await readCurrentDeviceDirectory(async () => legacy, () => {})).toEqual({ ...legacy, partial: true });
+  state.onlyEncrypted = true;
+  await expect(readCurrentDeviceDirectory(async () => legacy, () => {})).rejects.toMatchObject({ status: 0 });
+});
+
+// Mixed directory, unit: retain V1 liveness without dropping persisted V2 App
+// metadata. The old fallback tests only varied connection state, never App.
+it('retains offline V2 App identity when V1 still reports the node online', async () => {
+  state.secrets = { credential: 'unit', seed: generateKeyPairSync('ed25519').privateKey.export({ format: 'jwk' }).d! };
+  ensureOwnerAgentNetBootstrap(relayId, 'unit');
+  vi.spyOn(AgentNetClient.prototype, 'directory').mockResolvedValueOnce([{ certificate: { deviceId: 'friend' } as any,
+    name: 'Mac', platform: 'darwin', app: 'cindy-friend', online: false, remoteControlEnabled: false, capabilities: [] }]);
+  const legacy = { devices: [{ deviceId: 'friend', name: 'Mac', platform: 'darwin', appVersion: '1',
+    lastSeenAt: null, online: true, busy: false, remoteControlEnabled: true, isSelf: false }] };
+  expect(await readCurrentDeviceDirectory(async () => legacy, () => {})).toMatchObject({ devices: [
+    { deviceId: 'friend', online: true, remoteControlEnabled: true, app: 'cindy-friend' },
+  ] });
+});
+
+it('keeps directory certificate denial and late owner changes terminal even with a live V1 result', async () => {
+  state.secrets = { credential: 'unit', seed: generateKeyPairSync('ed25519').privateKey.export({ format: 'jwk' }).d! };
+  ensureOwnerAgentNetBootstrap(relayId, 'unit');
+  vi.mocked(outboundFetch).mockResolvedValueOnce(Response.json({ error: { code: 'CERTIFICATE_INVALID' } }, { status: 403 }));
+  await expect(readCurrentDeviceDirectory(async () => ({ devices: [] }), () => {})).rejects.toMatchObject({ status: 403 });
+  vi.mocked(outboundFetch).mockImplementationOnce(async () => { state.owner = 'another-membership'; throw new TypeError('fetch failed'); });
+  await expect(readCurrentDeviceDirectory(async () => ({ devices: [] }), () => {})).rejects.toThrow('DEVICE_LINK_SCOPE_CHANGED');
+});
+
+// Unit: production directory adapter on the official network. A device removed in Device Link stayed in the Agent-Net
+// directory: the merged list showed it again right after the deletion and every computer kept accepting it on Agent-Net.
+// Minimal input: an Agent-Net member missing from the Device Link list, then a device removed here, then both listed again.
+it('neither lists nor accepts an official Agent-Net member missing from the Device Link list until the list has it again', async () => {
+  state.official = true;
+  const view = (deviceId: string) => ({ certificate: { deviceId }, name: deviceId, online: true, remoteControlEnabled: true, capabilities: [] });
+  state.officialApi = { certificate: { deviceId: 'device-a' }, directory: async () => [view('device-a'), view('kept'), view('removed')] };
+  const row = (deviceId: string) => ({ deviceId, name: deviceId, platform: null, appVersion: null, lastSeenAt: null,
+    online: true, busy: false, remoteControlEnabled: true, isSelf: deviceId === 'device-a' });
+  const ids = (value: { devices: Array<{ deviceId: string }> }) => value.devices.map(device => device.deviceId).sort();
+  expect(ids(await readCurrentDeviceDirectory(async () => ({ devices: [row('device-a'), row('kept')] }), () => {})))
+    .toEqual(['device-a', 'kept']);
+  expect(agentNetDeviceAccepted('removed')).toBe(false);
+  expect(agentNetDeviceAccepted('kept')).toBe(true);
+  agentNetNoteDeviceRemoved('kept');
+  expect(agentNetDeviceAccepted('kept')).toBe(false);
+  await new Promise(resolve => setTimeout(resolve, 5));
+  expect(ids(await readCurrentDeviceDirectory(async () => ({ devices: [row('device-a'), row('kept'), row('removed')] }), () => {})))
+    .toEqual(['device-a', 'kept', 'removed']);
+  expect(agentNetDeviceAccepted('removed')).toBe(true);
+  expect(agentNetDeviceAccepted('kept')).toBe(true);
+});
+
+// 2026-11-17 第二次 rebase：主干的部分目录（只读到一条腿）会并回上次完整目录里的设备；别的电脑上刚删掉的设备不能因此回到列表。
+it('keeps a device deleted elsewhere out of a partial directory that fills in the last complete one', async () => {
+  state.official = true;
+  const view = (deviceId: string) => ({ certificate: { deviceId }, name: deviceId, online: true, remoteControlEnabled: true, capabilities: [] });
+  const row = (deviceId: string) => ({ deviceId, name: deviceId, platform: null, appVersion: null, lastSeenAt: null,
+    online: true, busy: false, remoteControlEnabled: true, isSelf: deviceId === 'device-a' });
+  const ids = (value: { devices: Array<{ deviceId: string }> }) => value.devices.map(device => device.deviceId).sort();
+  state.officialApi = { certificate: { deviceId: 'device-a' }, directory: async () => [view('device-a'), view('gone')] };
+  expect(ids(await readCurrentDeviceDirectory(async () => ({ devices: [row('device-a'), row('gone')] }), () => {}))).toEqual(['device-a', 'gone']);
+  await new Promise(resolve => setTimeout(resolve, 5));
+  state.officialApi = { certificate: { deviceId: 'device-a' }, directory: async () => { throw Object.assign(new Error('relay busy'), { status: 503 }); } };
+  const partial = await readCurrentDeviceDirectory(async () => ({ devices: [row('device-a')] }), () => {});
+  expect([ids(partial), (partial as { partial?: boolean }).partial]).toEqual([['device-a'], true]);
+});
+
+// 2026-11-17 审查：Agent-Net 送不到的手机经 Device Link 补发推送（notifyFallback.ts）；只看 presence 时，此刻在后台（离线）的手机
+// 重连后不在名单里，一份也收不到。名单也取自账号的 Device Link 设备列表。
+it('knows the account phones from the Device Link list, offline ones too, for the push fallback', async () => {
+  state.official = true;
+  state.officialApi = { certificate: { deviceId: 'device-a' }, directory: async () => [] };
+  const row = (deviceId: string, platform: string, online: boolean) => ({ deviceId, name: deviceId, platform, appVersion: null,
+    lastSeenAt: null, online, busy: false, remoteControlEnabled: true, isSelf: deviceId === 'device-a' });
+  await readCurrentDeviceDirectory(async () => ({ devices: [row('device-a', 'darwin', true), row('phone-asleep', 'ios', false),
+    row('tablet', 'android', true)] }), () => {});
+  expect([...agentNetListedPhones()].sort()).toEqual(['phone-asleep', 'tablet']);
+});
+
+it('keeps a healthy socket when early renewal returns the unchanged valid certificate', async () => {
+  const root = generateKeyPairSync('ed25519').privateKey;
+  state.secrets = { credential: 'unit', seed: root.export({ format: 'jwk' }).d! };
+  ensureOwnerAgentNetBootstrap(relayId, 'unit');
+  const previous = currentAgentNetClient()!;
+  const certificate = issueCertificate(root, { networkId: 'account:unit-network', subject: previous.certificate.subject,
+    identity: previous.identity, role: 'owner', now: Date.now() - 13.5 * 24 * 60 * 60_000 });
+  state.officialApi = new AgentNetClient(previous.base, previous.identity, certificate, previous.rootPublicKey);
+  state.official = true; state.officialEnsure.mockResolvedValue(state.officialApi);
+  vi.spyOn(fs.promises, 'stat').mockRejectedValue(Object.assign(new Error('absent'), { code: 'ENOENT' }));
+  vi.spyOn(fs.promises, 'readFile').mockResolvedValue(Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]));
+  vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+  vi.mocked(outboundFetch).mockResolvedValue(Response.json({}));
+  const socket = new EventEmitter() as any;
+  socket.close = vi.fn(() => socket.emit('close', 1000)); socket.replaceClient = vi.fn(async () => {});
+  socket.relayConnected = () => true;
+  vi.spyOn(AgentNetWorkerSocket, 'open').mockResolvedValue(socket);
+  vi.useFakeTimers();
+  try {
+    expect(await createAgentNetAppSocket()).toBe(socket);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(state.officialEnsure).toHaveBeenCalledTimes(2);
+    expect(socket.replaceClient).not.toHaveBeenCalled();
+    expect(socket.close).not.toHaveBeenCalled();
+  } finally { socket.close(); }
+});
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：`createAgentNetAppSocket` 在官方网络下自动补充对向官方区域 STUN（`cn` ↔ `global`），
+ *   保持 `relayUdpServer` 仅指向本区主中转；对向 `/info` 慢返回时不阻塞启动并在返回后经 `setStunServers` 增量补齐；
+ *   自建中转（含仅 Agent-Net 自建中转）绝不向官方中转/STUN 发请求；同时透传可选 `CINDY_AGENT_NET_UDP_PORT`。
+ * - Bug／规则依据：分流网络下只问单区 STUN 导致跨区直连报出错误公网 IP；自建中转隐私边界禁止访问官方端点。
+ * - 现有覆盖缺口：此前 `/info` 测试仅测自建单中转，未覆盖双区官方 STUN、非阻塞异步补齐、自建负例与固定 UDP 端口 env。
+ * - 最小失败输入：官方 `cn` / `global` 两个基址、慢返回的 peer `/info`、自建中转与 `CINDY_AGENT_NET_UDP_PORT` 有效/非法值。
+ * - tier：unit（内存桩与 mock fetch，无真实网络或等待）。
+ */
+it.each([
+  ['https://agent-net.cindy.com.cn', 'agent-net-stun.cindy.com.cn', 'https://agent-net.cindy.app', 'agent-net-stun.cindy.app'],
+  ['https://agent-net.cindy.app', 'agent-net-stun.cindy.app', 'https://agent-net.cindy.com.cn', 'agent-net-stun.cindy.com.cn'],
+])('adds the peer official region STUN on official network (%s -> %s) while keeping relayUdpServer on primary', async (primaryBase, primaryHost, peerBase, peerHost) => {
+  state.official = true;
+  state.officialBase = primaryBase;
+  state.owner = 'dual-stun-' + primaryHost;
+  const root = generateKeyPairSync('ed25519').privateKey;
+  const identity = generateIdentity('device-a');
+  const certificate = issueCertificate(root, { networkId: 'account:dual', subject: state.owner, identity, role: 'owner' });
+  state.officialApi = new AgentNetClient(primaryBase, identity, certificate, publicBytes(root));
+  state.officialEnsure.mockResolvedValue(state.officialApi);
+  vi.spyOn(fs.promises, 'stat').mockRejectedValue(Object.assign(new Error('absent'), { code: 'ENOENT' }));
+  vi.spyOn(fs.promises, 'readFile').mockResolvedValue(Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]));
+  vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+  vi.mocked(outboundFetch).mockImplementation(async (url) => {
+    if (String(url) === primaryBase + '/api/agent-net/info') return Response.json({ protocolVersion: 2, mode: 'official', udpPort: 3479, stunHost: primaryHost, features: [] });
+    if (String(url) === peerBase + '/api/agent-net/info') return Response.json({ protocolVersion: 2, mode: 'official', udpPort: 3479, stunHost: peerHost, features: [] });
+    return Response.json({});
+  });
+  const socket = Object.assign(new EventEmitter(), { close: vi.fn(), relayConnected: () => true, setStunServers: vi.fn() });
+  socket.close.mockImplementation(() => socket.emit('close', 1000));
+  const open = vi.spyOn(AgentNetWorkerSocket, 'open').mockResolvedValue(socket as unknown as AgentNetWorkerSocket);
+  try {
+    await createAgentNetAppSocket();
+    const opts = open.mock.calls[0][0];
+    expect(opts.relayUdpServer).toBe(`${primaryHost}:3479`);
+    expect(opts.stunServers).toEqual([`${primaryHost}:3479`, `${peerHost}:3479`]);
+  } finally { socket.close(); vi.mocked(outboundFetch).mockReset(); }
+});
+
+it('does not block startup on slow peer official STUN discovery and updates the live socket once it resolves', async () => {
+  state.official = true;
+  state.officialBase = 'https://agent-net.cindy.com.cn';
+  state.owner = 'late-peer-stun';
+  const root = generateKeyPairSync('ed25519').privateKey;
+  const identity = generateIdentity('device-a');
+  const certificate = issueCertificate(root, { networkId: 'account:late', subject: state.owner, identity, role: 'owner' });
+  state.officialApi = new AgentNetClient('https://agent-net.cindy.com.cn', identity, certificate, publicBytes(root));
+  state.officialEnsure.mockResolvedValue(state.officialApi);
+  vi.spyOn(fs.promises, 'stat').mockRejectedValue(Object.assign(new Error('absent'), { code: 'ENOENT' }));
+  vi.spyOn(fs.promises, 'readFile').mockResolvedValue(Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]));
+  vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+  let resolvePeer!: (res: Response) => void;
+  vi.mocked(outboundFetch).mockImplementation(async (url) => {
+    if (String(url) === 'https://agent-net.cindy.com.cn/api/agent-net/info') {
+      return Response.json({ protocolVersion: 2, mode: 'official', udpPort: 3479, stunHost: 'agent-net-stun.cindy.com.cn', features: [] });
+    }
+    if (String(url) === 'https://agent-net.cindy.app/api/agent-net/info') {
+      return new Promise<Response>((resolve) => { resolvePeer = resolve; });
+    }
+    return Response.json({});
+  });
+  const socket = Object.assign(new EventEmitter(), { close: vi.fn(), relayConnected: () => true, setStunServers: vi.fn() });
+  socket.close.mockImplementation(() => socket.emit('close', 1000));
+  const open = vi.spyOn(AgentNetWorkerSocket, 'open').mockResolvedValue(socket as unknown as AgentNetWorkerSocket);
+  try {
+    expect(await createAgentNetAppSocket()).toBe(socket);
+    expect(open.mock.calls[0][0].stunServers).toEqual(['agent-net-stun.cindy.com.cn:3479']);
+    expect(socket.setStunServers).not.toHaveBeenCalled();
+    resolvePeer(Response.json({ protocolVersion: 2, mode: 'official', udpPort: 3479, stunHost: 'agent-net-stun.cindy.app', features: [] }));
+    await vi.waitFor(() => expect(socket.setStunServers).toHaveBeenCalledWith([
+      'agent-net-stun.cindy.com.cn:3479',
+      'agent-net-stun.cindy.app:3479',
+    ]));
+  } finally { socket.close(); vi.mocked(outboundFetch).mockReset(); }
+});
+
+it.each(['unit', ''])('never queries official STUN endpoints on a self-hosted relay (credential=%j) and forwards valid CINDY_AGENT_NET_UDP_PORT', async (credential) => {
+  state.official = false;
+  state.relayCredential = credential;
+  state.secrets = { credential, seed: generateKeyPairSync('ed25519').privateKey.export({ format: 'jwk' }).d! };
+  ensureOwnerAgentNetBootstrap(relayId, 'unit');
+  const base = currentAgentNetClient()!.base;
+  const requestedUrls: string[] = [];
+  vi.spyOn(fs.promises, 'stat').mockRejectedValue(Object.assign(new Error('absent'), { code: 'ENOENT' }));
+  vi.spyOn(fs.promises, 'readFile').mockResolvedValue(Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]));
+  vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+  vi.mocked(outboundFetch).mockImplementation(async (url) => {
+    requestedUrls.push(String(url));
+    if (String(url) === base + '/api/agent-net/info') {
+      return Response.json({ protocolVersion: 2, mode: 'self-hosted', udpPort: 3479, stunHost: 'self-hosted.example.test', features: [] });
+    }
+    return Response.json({});
+  });
+  process.env[AGENT_NET_UDP_PORT_ENV] = credential === 'unit' ? '41641' : '99999';
+  const socket = Object.assign(new EventEmitter(), { close: vi.fn() });
+  socket.close.mockImplementation(() => socket.emit('close', 1000));
+  const open = vi.spyOn(AgentNetWorkerSocket, 'open').mockResolvedValue(socket as unknown as AgentNetWorkerSocket);
+  try {
+    await createAgentNetAppSocket();
+    expect(requestedUrls).toEqual([base + '/api/agent-net/info']);
+    expect(requestedUrls.some((url) => url.includes('cindy.app') || url.includes('cindy.com.cn'))).toBe(false);
+    expect(open.mock.calls[0][0].stunServers).toEqual(['self-hosted.example.test:3479']);
+    expect(open.mock.calls[0][0].bindPort).toBe(credential === 'unit' ? 41641 : undefined);
+  } finally { socket.close(); vi.mocked(outboundFetch).mockReset(); }
+});

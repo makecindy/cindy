@@ -3,36 +3,97 @@
  * 再按一次才退出设置。各分区内容与本测试无关，统一替换为空壳。
  * @vitest-environment jsdom
  */
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DiffPanelShell } from '@/components/diff-panel/DiffPanelShell';
 import { SettingsView } from '../SettingsView';
+import type { useVoiceInputModelSelection } from '@/hooks/useVoiceInputModelSelection';
+import type { VoiceSpeakerFilterStatus } from '../../../../shared/voiceSpeakerFilter';
+import { getAgentIslandSoundSettings, setAgentIslandEnabled, setAgentIslandSoundSettings } from '@/hooks/useAgentIslandSettings';
+import { LocaleProvider, useLocale } from '@/hooks/useLocale';
+import { WallpaperSettingsProvider } from '@/hooks/useWallpaperSettings';
+import { DEFAULT_APPEARANCE_SETTINGS, type AppearanceSettings } from '../../../../shared/appearanceSettings';
+import { getDefaultVoiceInputSettings } from '../../../../shared/voiceInputData';
 
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+vi.mock('react-i18next', async (importOriginal) => ({
+  ...await importOriginal<typeof import('react-i18next')>(),
+  useTranslation: () => ({ t: (key: string) => ({
+    'settings.voiceInput.serviceSource.customAsr.websocketUrl.label': 'WebSocket URL',
+    'settings.voiceInput.refinement.instructions.label': 'Refinement instructions',
+    'settings.voiceInput.speakerFilter.hint': 'Recognize only your voice',
+    'settings.voiceInput.speakerFilter.unsupported': 'Speaker filter unavailable',
+    'settings.voiceInput.speakerFilter.strictness.label': 'Voice match strictness',
+    'settings.agentIsland.skins.whitesnow.name': 'Apple Girl',
+    'settings.agentIsland.soundOptions.startup-chime': 'Startup chime',
+    'settings.language.classical.label': 'Classical script and style',
+    'settings.appearance.wallpaper.motionDynamic': 'Dynamic wallpaper',
+  }[key] ?? key) }),
+}));
+const auth = vi.hoisted(() => ({
+  mode: 'local' as 'local' | 'cloud',
+  user: null as { name: string; membershipKind: 'personal' } | null,
+  cloudAccess: 'hidden',
+}));
+vi.mock('@/features/cloud-settings/CloudInstanceAccess', () => ({
+  useCloudInstanceAccess: () => auth.cloudAccess,
 }));
 vi.mock('@/contexts/AuthContext', () => ({
-  useAuth: () => ({ mode: 'local', dataOwnerId: null, user: null }),
+  useAuth: () => ({ mode: auth.mode, dataOwnerId: null, user: auth.user }),
+}));
+vi.mock('@/components/ui/confirm-dialog-provider', () => ({
+  useConfirmDialog: () => ({ confirm: vi.fn().mockResolvedValue(false) }),
+}));
+vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
+  useDeviceLinkDeviceList: () => [],
 }));
 vi.mock('@/lib/useCindyVersions', () => ({
   useCindyVersions: () => ({ state: 'idle' }),
 }));
 
-const { Stub } = vi.hoisted(() => ({ Stub: () => null }));
+const { Stub, voicePage, slowSection } = vi.hoisted(() => ({
+  Stub: () => null, voicePage: { real: false },
+  slowSection: { promise: null as Promise<void> | null, attempts: 0 },
+}));
+vi.mock('../VoiceSpeakerFilterCard', () => ({ VoiceSpeakerFilterCard: Stub }));
 vi.mock('../UserProfileCard', () => ({ UserProfileCard: Stub }));
-vi.mock('../VoiceInputSection', () => ({ VoiceInputSection: Stub }));
-vi.mock('../AppearanceSection', () => ({ AppearanceSection: Stub }));
+vi.mock('../VoiceInputSection', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../VoiceInputSection')>();
+  return {
+    VoiceInputSection: ({ modelSelection }: { modelSelection: ReturnType<typeof useVoiceInputModelSelection> }) => (
+      voicePage.real ? <actual.VoiceInputSection modelSelection={modelSelection} /> : (
+        <>
+          <button onClick={() => void modelSelection.setAsrProvider('openai')}>Use preset ASR</button>
+          <button onClick={() => void modelSelection.setAsrProvider('custom-realtime-asr')}>Use custom ASR</button>
+        </>
+      )
+    ),
+  };
+});
+vi.mock('../AppearanceSection', () => ({ AppearanceSection: () => {
+  if (slowSection.promise) { slowSection.attempts += 1; throw slowSection.promise; }
+  return null;
+} }));
 vi.mock('../SubagentModelSection', () => ({ SubagentModelSection: Stub }));
 vi.mock('../AuxiliaryModelSection', () => ({ AuxiliaryModelSection: Stub }));
-vi.mock('../VisionBridgeSection', () => ({ VisionBridgeSection: Stub }));
-vi.mock('../ProvidersSection', () => ({ ProvidersSection: Stub }));
+const providersStub = vi.hoisted(() => ({ mounts: 0 }));
+vi.mock('../ProvidersSection', async () => {
+  const { useEffect } = await import('react');
+  // 记下挂载次数，并像真实左栏那样在「智能路由」和供应商之间来回切换。
+  function ProvidersSection({ routing, onRoutingChange }: { routing?: boolean; onRoutingChange?: (next: boolean) => void }) {
+    useEffect(() => { providersStub.mounts += 1; }, []);
+    return <button type="button" data-testid="providers-stub" data-routing={String(!!routing)} onClick={() => onRoutingChange?.(!routing)} />;
+  }
+  return { ProvidersSection };
+});
 vi.mock('../McpServersSection', () => ({ McpServersSection: Stub }));
 vi.mock('../RemoteControlSection', () => ({ RemoteControlSection: Stub }));
+vi.mock('../LocalAgentSection', () => ({ LocalAgentSection: Stub }));
 vi.mock('@/features/device-link/SharedTaskDialog', () => ({ SharedTaskDialog: Stub }));
 vi.mock('../NotificationSection', () => ({ NotificationSection: Stub }));
 vi.mock('../WindowBehaviorSection', () => ({ WindowBehaviorSection: Stub }));
+vi.mock('../AwayFromComputerSection', () => ({ AwayFromComputerSection: Stub }));
 vi.mock('../ComposerSendShortcutSection', () => ({ ComposerSendShortcutSection: Stub }));
 vi.mock('../KeyboardShortcutsSection', () => ({ KeyboardShortcutsSection: Stub }));
 vi.mock('../AgentIslandSection', () => ({ AgentIslandSection: Stub }));
@@ -53,15 +114,20 @@ vi.mock('../GitSafetySection', () => ({ GitSafetySection: Stub }));
 vi.mock('../SessionImportSection', () => ({ SessionImportSection: Stub }));
 vi.mock('../AgentResourceSection', () => ({ AgentResourceSection: Stub }));
 vi.mock('../CollaborationSection', () => ({ CollaborationSection: Stub }));
+// Permission confirmation is covered in NewChatDefaultPermissionSection.test.tsx;
+// this page-level test isolates section contents and exercises only Escape routing.
+vi.mock('../NewChatDefaultPermissionSection', () => ({ NewChatDefaultPermissionSection: Stub }));
 vi.mock('../BuiltinToolsSection', () => ({ BuiltinToolsSection: Stub }));
-vi.mock('../contacts/ContactsSection', () => ({ ContactsSection: Stub }));
 vi.mock('../ComputerUseSection', () => ({ ComputerUseSection: Stub }));
 vi.mock('../CindyMakeSection', () => ({ CindyMakeSection: Stub }));
 vi.mock('../SettingsCatalogPanel', () => ({ SettingsCatalogPanel: Stub }));
-vi.mock('@/features/billing/BillingPage', () => ({ BillingSettingsSection: Stub }));
+vi.mock('@/features/billing/BillingPage', () => ({
+  BillingSettingsSection: ({ accountName }: { accountName?: string | null }) => (
+    <p data-testid="billing-account-name">{accountName ?? 'none'}</p>
+  ),
+}));
 vi.mock('@/features/bots/BotsGlobalSettingsSection', () => ({ BotsGlobalSettingsSection: Stub }));
 vi.mock('../usage/UsageHistorySection', () => ({ UsageHistorySection: Stub }));
-vi.mock('../SettingsSidebarNav', () => ({ SettingsSidebarNav: Stub }));
 vi.mock('../ImBotSection', () => ({
   ImBotSection: Stub,
   isImBotSettingsGroup: (value: unknown) => value === 'cindy' || value === 'personal',
@@ -92,13 +158,28 @@ function LocationProbe() {
 
 function renderSettings(entry: string) {
   return render(
-    <MemoryRouter initialEntries={[entry]}>
-      <Routes>
-        <Route path="/settings" element={<SettingsView />} />
-        <Route path="/" element={<p>Home</p>} />
-      </Routes>
-      <LocationProbe />
-    </MemoryRouter>,
+    <LocaleProvider>
+      <WallpaperSettingsProvider>
+        <MemoryRouter initialEntries={[entry]}>
+          <Routes>
+            <Route path="/settings" element={<SettingsView />} />
+            <Route path="/" element={<p>Home</p>} />
+          </Routes>
+          <LocationProbe />
+          <LocaleControls />
+        </MemoryRouter>
+      </WallpaperSettingsProvider>
+    </LocaleProvider>,
+  );
+}
+
+function LocaleControls() {
+  const { setLocale } = useLocale();
+  return (
+    <>
+      <button onClick={() => setLocale('zh-Hans-x-lzh')}>Use classical locale</button>
+      <button onClick={() => setLocale('en')}>Use English locale</button>
+    </>
   );
 }
 
@@ -113,19 +194,310 @@ function pressEscape() {
 const location = () => screen.getByTestId('location').textContent;
 
 beforeEach(() => {
-  vi.stubGlobal('electronAPI', { platform: 'darwin', appVersion: '1.0.0' });
+  voicePage.real = false;
+  auth.mode = 'local';
+  auth.user = null;
+  vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+  vi.stubGlobal('ResizeObserver', class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  });
+  vi.stubGlobal('electronAPI', { platform: 'darwin', osRelease: '23.0.0', appVersion: '1.0.0',
+    agentIsland: { setEnabled: vi.fn(async () => ({ ok: true })), setSoundSettings: vi.fn(async () => ({ ok: true })) }, voiceInput: {
+    getModelSelection: vi.fn(async () => ({ selection: { serviceMode: 'cindy', asrProvider: 'openai' } })),
+    onDataChanged: () => () => {},
+  } });
   // jsdom 没有元素滚动；设置页切分区时会把内容列滚回顶部。
-  Element.prototype.scrollTo = () => {};
+  Element.prototype.scrollTo = function (options?: ScrollToOptions | number, y?: number) {
+    this.scrollTop = typeof options === 'number' ? y ?? 0 : options?.top ?? 0;
+  };
 });
 
 afterEach(() => {
+  localStorage.clear();
   vi.unstubAllGlobals();
+  auth.mode = 'local';
+  auth.cloudAccess = 'hidden';
 });
 
 describe('SettingsView Escape', () => {
-  it('returns from the Pi extensions page to General before leaving Settings', () => {
+  // PR #8481/r4476577125, unit: earlier tests covered only initial loading and
+  // setters. Keep SettingsView, the selection hook and voice page real; change
+  // the IPC snapshot while away and verify both stale notices disappear on return.
+  it('refreshes voice credentials and refinement after returning from their settings tabs', async () => {
+    voicePage.real = true;
+    const snapshot = {
+      selection: { serviceMode: 'byok', asrProvider: 'openai',
+        refinerProviderChainSource: 'configured', refinerProviderChain: [] as string[] },
+      asrProfiles: [], refinerProfiles: [],
+      readiness: { ok: false, provider: 'openai', auth: 'api-key' },
+    };
+    const permissions = { microphone: { ok: true, status: 'granted' } };
+    Object.assign(window.electronAPI.voiceInput, {
+      getModelSelection: vi.fn(async () => structuredClone(snapshot)),
+      getDataSnapshot: () => ({ settings: getDefaultVoiceInputSettings('darwin') }),
+      getHistory: () => [],
+      setGlobalShortcut: vi.fn(async () => ({ ok: true })),
+      getSystemPermissionsCached: () => permissions,
+      getSystemPermissions: async () => permissions,
+    });
+    await act(async () => { renderSettings('/settings?tab=voice-input'); });
+    const missingCredential = 'settings.voiceInput.serviceSource.credentialError.gatewayMissing';
+    const cannotRefine = 'settings.voiceInput.serviceSource.refiner.cannotRefine';
+    // 语音页是懒加载分区，第一次等待包含它整棵依赖的冷加载；Windows CI 上会超过默认 1 秒。
+    expect(await screen.findByText(missingCredential, {}, { timeout: 5000 })).toBeTruthy();
+    expect(screen.getByText(cannotRefine)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'settings.voiceInput.serviceSource.manageProviders' }));
+    await waitFor(() => expect(location()).toContain('tab=providers'));
+    snapshot.readiness.ok = true;
+    fireEvent.click(screen.getByRole('tab', { name: 'settings.tabs.voiceInput' }));
+    await waitFor(() => expect(screen.queryByText(missingCredential)).toBeNull());
+    expect(screen.getByText(cannotRefine)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'settings.voiceInput.serviceSource.refiner.openAuxiliary' }));
+    await waitFor(() => expect(location()).toContain('tab=personalization'));
+    snapshot.selection.refinerProviderChain = ['configured-refiner'];
+    fireEvent.click(screen.getByRole('tab', { name: 'settings.tabs.voiceInput' }));
+    await waitFor(() => expect(screen.queryByText(cannotRefine)).toBeNull());
+    expect(screen.getByText('settings.voiceInput.serviceSource.refiner.followHint')).toBeTruthy();
+    expect(screen.queryByText(missingCredential)).toBeNull();
+  });
+  // Unit wiring regression (#8481): static context tests cannot prove status
+  // pushes update search before the voice page is mounted.
+  it('updates speaker-filter search after capability and enrollment status pushes', async () => {
+    let publish!: (status: VoiceSpeakerFilterStatus) => void;
+    const status: VoiceSpeakerFilterStatus = {
+      supported: false, enrolled: false, modelState: 'missing', downloadedBytes: 0, totalBytes: 0,
+    };
+    Object.assign(window.electronAPI.voiceInput, { speakerFilter: {
+      getStatus: vi.fn(async () => status),
+      onStatusChanged: (notify: typeof publish) => { publish = notify; return () => {}; },
+    } });
+    await act(async () => { renderSettings('/settings'); });
+    for (const [supported, enrolled] of [[false, false], [true, false], [true, true], [true, false]] as const) {
+      act(() => publish({ ...status, supported, enrolled }));
+      for (const [query, visible] of [
+        ['Recognize only your voice', supported],
+        ['Speaker filter unavailable', !supported],
+        ['Voice match strictness', supported && enrolled],
+      ] as const) {
+        fireEvent.change(screen.getByRole('combobox', { name: 'settings.search.ariaLabel' }), {
+          target: { value: query },
+        });
+        expect(screen.queryAllByRole('option'), query).toHaveLength(visible ? 1 : 0);
+      }
+    }
+  });
+  // Unit wiring regression (#8481): generic island visibility coverage misses
+  // sound-only toggles. Use the real preference setter to verify live search.
+  it('updates sound search results when the sound rows are enabled and disabled', async () => {
+    await act(async () => { expect(await setAgentIslandEnabled(true)).toBe(true); });
+    await act(async () => { renderSettings('/settings'); });
+    fireEvent.change(screen.getByRole('combobox', { name: 'settings.search.ariaLabel' }), {
+      target: { value: 'Startup chime' },
+    });
+    for (const enabled of [false, true, false]) {
+      await act(async () => {
+        expect(await setAgentIslandSoundSettings({ ...getAgentIslandSoundSettings(), enabled })).toBe(true);
+      });
+      expect(screen.queryAllByRole('option')).toHaveLength(enabled ? 1 : 0);
+    }
+  });
+  // Unit wiring regression (#8481): real provider broadcasts must update search
+  // before Appearance is mounted, including transitions between custom media types.
+  it('updates wallpaper motion search as the selected wallpaper changes', async () => {
+    let publish!: (settings: AppearanceSettings) => void;
+    Object.assign(window.electronAPI, { appearanceSettings: {
+      getSync: () => ({ ...DEFAULT_APPEARANCE_SETTINGS, wallpaperVisibility: 0 }),
+      onChanged: (notify: typeof publish) => { publish = notify; return () => {}; },
+    } });
+    await act(async () => { renderSettings('/settings'); });
+    fireEvent.change(screen.getByRole('combobox', { name: 'settings.search.ariaLabel' }), {
+      target: { value: 'Dynamic wallpaper' },
+    });
+    expect(screen.queryAllByRole('option')).toHaveLength(0);
+    for (const [wallpaperId, customWallpaperUrl, visible] of [
+      ['cindy-window', '', true],
+      ['night-launch', '', false],
+      ['custom', `cindy-media://client-wallpaper/${'a'.repeat(64)}.mp4`, true],
+      ['custom', `cindy-media://client-wallpaper/${'b'.repeat(64)}.webp`, false],
+      ['none', `cindy-media://client-wallpaper/${'a'.repeat(64)}.mp4`, false],
+    ] as const) {
+      act(() => publish({ ...DEFAULT_APPEARANCE_SETTINGS, wallpaperVisibility: 0, wallpaperId, customWallpaperUrl }));
+      expect(screen.queryAllByRole('option')).toHaveLength(visible ? 1 : 0);
+    }
+  });
+  // Unit wiring regression (#8481): use the real locale provider/setter so search
+  // follows the same live preference as LanguageSection without remounting settings.
+  it('updates classical search results after changing the display language', async () => {
+    await act(async () => { renderSettings('/settings'); });
+    fireEvent.change(screen.getByRole('combobox', { name: 'settings.search.ariaLabel' }), {
+      target: { value: 'Classical script and style' },
+    });
+    const result = () => screen.queryByRole('option', { name: /^Classical script and style/ });
+    expect(result()).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Use classical locale' }));
+    expect(result()).not.toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Use English locale' }));
+    expect(result()).toBeNull();
+  });
+  // Unit through the real provider: a single selection must leave the current
+  // language visible and the window interactive until the host confirms its write.
+  it('applies a language selection only after the profile store confirms it', async () => {
+    let finishSave!: (saved: boolean) => void;
+    window.electronAPI.saveDisplayLanguage = vi.fn(() => new Promise<boolean>(resolve => { finishSave = resolve; }));
+    await act(async () => { renderSettings('/settings'); });
+    fireEvent.click(screen.getByRole('button', { name: 'Use classical locale' }));
+    expect(window.electronAPI.saveDisplayLanguage).toHaveBeenCalledWith('zh-Hans-x-lzh', false);
+    expect(localStorage.getItem('language')).toBeNull();
+    expect(document.documentElement.lang).toBe('en');
+
+    await act(async () => finishSave(true));
+
+    expect(localStorage.getItem('language')).toBe('zh-Hans-x-lzh');
+    expect(document.documentElement.lang).toBe('zh-Hans-x-lzh');
+  });
+
+  // Unit regression (#8481): the real preference setter must update search before
+  // opening Agent Island, without a native side effect just from searching.
+  it('updates mascot search results when Agent Island is enabled and disabled', async () => {
+    await act(async () => { renderSettings('/settings'); });
+    fireEvent.change(screen.getByRole('combobox', { name: 'settings.search.ariaLabel' }), {
+      target: { value: 'Apple Girl' },
+    });
+    const results = () => screen.queryAllByRole('option');
+    expect(results()).toHaveLength(0);
+    expect(window.electronAPI.agentIsland.setEnabled).not.toHaveBeenCalled();
+    await act(async () => { expect(await setAgentIslandEnabled(true)).toBe(true); });
+    expect(results()).toHaveLength(1);
+    await act(async () => { expect(await setAgentIslandEnabled(false)).toBe(true); });
+    expect(results()).toHaveLength(0);
+  });
+
+  // Unit regression (#8481): search must follow the same main-owned refinement
+  // snapshot/broadcast as the voice controls, even before opening that page.
+  it('updates refinement search results when the saved toggle changes', async () => {
+    let refinementEnabled = false;
+    let notifySettings!: () => void;
+    Object.assign(window.electronAPI.voiceInput, {
+      getDataSnapshot: () => ({ settings: { refinementEnabled } }),
+      onDataChanged: (notify: () => void) => { notifySettings = notify; return () => {}; },
+    });
+    await act(async () => { renderSettings('/settings'); });
+    fireEvent.change(screen.getByRole('combobox', { name: 'settings.search.ariaLabel' }), {
+      target: { value: 'Refinement instructions' },
+    });
+    const result = () => screen.queryByRole('option', { name: /^Refinement instructions/ });
+    expect(result()).toBeNull();
+    act(() => { refinementEnabled = true; notifySettings(); });
+    expect(result()).not.toBeNull();
+    act(() => { refinementEnabled = false; notifySettings(); });
+    expect(result()).toBeNull();
+  });
+
+  // Unit wiring regression (#8481): search must load voice selection before the
+  // voice page mounts and immediately follow edits from that same page instance.
+  // Keep the real selection hook/search/router; only IPC and section controls are fixtures.
+  it('updates custom ASR search results after loading and changing the voice selection', async () => {
+    let resolveSelection!: (value: unknown) => void;
+    const getSelection = vi.fn(() => new Promise((resolve) => { resolveSelection = resolve; }));
+    const setSelection = vi.fn(async ({ asrProvider }: { asrProvider: string }) => ({
+      selection: { serviceMode: 'cindy', asrProvider },
+    }));
+    Object.assign(window.electronAPI.voiceInput, { getModelSelection: getSelection, setModelSelection: setSelection });
+    renderSettings('/settings');
+    const search = screen.getByRole('combobox', { name: 'settings.search.ariaLabel' });
+    const query = 'WebSocket URL';
+    const result = () => screen.queryByRole('option', { name: /^WebSocket URL/ });
+    fireEvent.change(search, { target: { value: query } });
+    expect(result()).toBeNull();
+    await act(async () => resolveSelection({ selection: { serviceMode: 'cindy', asrProvider: 'custom-realtime-asr' } }));
+    expect(result()).not.toBeNull();
+    fireEvent.click(result()!);
+    await waitFor(() => expect(location()).toContain('tab=voice-input'));
+    expect(location()).toContain('section=voiceInput.customAsrWebsocketUrl');
+    fireEvent.change(search, { target: { value: query } });
+    fireEvent.click(screen.getByRole('button', { name: 'Use preset ASR' }));
+    await waitFor(() => expect(result()).toBeNull());
+    // PR #8481/r4476725738: return-to-tab GET finishes after the user's SET.
+    // Its old custom-ASR snapshot must not restore the hidden search result.
+    await act(async () => resolveSelection({ selection: { serviceMode: 'cindy', asrProvider: 'custom-realtime-asr' } }));
+    expect(result()).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Use custom ASR' }));
+    await waitFor(() => expect(result()).not.toBeNull());
+    // One initial read plus one on entry; edits still share the same hook.
+    expect(getSelection).toHaveBeenCalledTimes(2);
+    expect(setSelection).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['escape', 'general'] as const)('cancels a pending section with %s without blanking the current page', async (action) => {
+    let release!: () => void;
+    slowSection.promise = new Promise<void>((resolve) => { release = resolve; });
+    slowSection.attempts = 0;
+    try {
+      await act(async () => { renderSettings('/settings'); });
+      fireEvent.click(screen.getByRole('tab', { name: 'settings.tabs.appearance' }));
+      await waitFor(() => expect(slowSection.attempts).toBeGreaterThan(0));
+      expect(screen.getByRole('tabpanel').id).toBe('settings-panel-general');
+      if (action === 'escape') pressEscape();
+      else fireEvent.click(screen.getByRole('tab', { name: 'settings.tabs.general' }));
+      const destination = action === 'escape' ? '/' : '/settings';
+      await waitFor(() => expect(location()).toBe(destination));
+      await act(async () => { slowSection.promise = null; release(); });
+      expect(location()).toBe(destination);
+      if (action === 'general') expect(screen.getByRole('tabpanel').id).toBe('settings-panel-general');
+      else expect(screen.getByText('Home')).toBeTruthy();
+    } finally {
+      slowSection.promise = null;
+      release();
+    }
+  });
+
+  // The instance's remote desktop must not offer keep-awake or quit.
+  it.each([false, true])('shows app behavior only outside a managed cloud instance (%s)', (hostOwned) => {
+    Object.assign(window.electronAPI, { platform: 'linux', hostSettings: { hostOwned } });
+    renderSettings('/settings');
+    expect(!!document.getElementById('settings-window-behavior')).toBe(!hostOwned);
+    expect(document.getElementById('settings-search-target-general-language')).toBeTruthy();
+  });
+  // Unit regression: the direct-link test cannot detect losing General's position after a round trip.
+  it.each(['back', 'escape'])('restores the scrolled General page after returning with %s', async (action) => {
+    renderSettings('/settings');
+    const entry = await screen.findByRole('button', { name: /settings.piPackages.manageLabel/ });
+    const viewport = entry.closest<HTMLElement>('.overflow-y-auto')!;
+    viewport.scrollTop = 640;
+    fireEvent.click(entry);
+    const back = await screen.findByRole('button', { name: 'settings.piPackages.backToGeneral' });
+    const detailViewport = back.closest<HTMLElement>('.overflow-y-auto')!;
+    expect(detailViewport).not.toBe(viewport);
+    expect(detailViewport.scrollTop).toBe(0);
+    detailViewport.scrollTop = 80;
+    if (action === 'escape') pressEscape();
+    else fireEvent.click(back);
+    expect(await screen.findByRole('button', { name: /settings.piPackages.manageLabel/ })).toBe(entry);
+    expect(viewport.scrollTop).toBe(640);
+  });
+
+  // 2026-11-26 用户反馈 / unit：从「智能路由」点下面的供应商，整页重新挂载——列表闪一下加载，刚点的供应商丢了，落回第一个。
+  // 两者是同一个页面里的两栏(tab=model-groups / providers)，切换不能换掉面板。最小输入：在两栏之间来回切一次。
+  it('keeps the providers page mounted when switching between smart routing and a provider', async () => {
+    renderSettings('/settings?tab=model-groups');
+    const stub = await screen.findByTestId('providers-stub');
+    const mounted = providersStub.mounts;
+    expect(stub.getAttribute('data-routing')).toBe('true');
+    fireEvent.click(stub);
+    await waitFor(() => expect(screen.getByTestId('providers-stub').getAttribute('data-routing')).toBe('false'));
+    fireEvent.click(screen.getByTestId('providers-stub'));
+    await waitFor(() => expect(screen.getByTestId('providers-stub').getAttribute('data-routing')).toBe('true'));
+    expect(providersStub.mounts).toBe(mounted);
+    expect(screen.getByTestId('providers-stub')).toBe(stub);
+  });
+
+  it('returns from the Pi extensions page to General before leaving Settings', async () => {
     renderSettings('/settings?openPanel=pi-extensions');
-    expect(screen.getByText('PI packages')).toBeTruthy();
+    expect(await screen.findByText('PI packages')).toBeTruthy();
 
     pressEscape();
     expect(location()).toBe('/settings');
@@ -136,9 +508,9 @@ describe('SettingsView Escape', () => {
     expect(screen.getByText('Home')).toBeTruthy();
   });
 
-  it('closes the Help panel before leaving Settings', () => {
+  it('closes the Help panel before leaving Settings', async () => {
     renderSettings('/settings?tab=help');
-    fireEvent.click(screen.getByRole('button', { name: 'Ask help' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Ask help' }));
     expect(
       screen.getByRole('complementary', { name: 'Help assistant' }).getAttribute('aria-hidden'),
     ).not.toBe('true');
@@ -149,4 +521,12 @@ describe('SettingsView Escape', () => {
     pressEscape();
     expect(location()).toBe('/');
   });
+});
+
+// 设置页「计费」是账单的主入口：要把账号昵称交给计费分区，购买礼品卡时署名才能默认填昵称。
+it('passes the account nickname into the billing section', async () => {
+  auth.mode = 'cloud';
+  auth.user = { name: '小鱼', membershipKind: 'personal' };
+  await act(async () => { renderSettings('/settings?tab=billing'); });
+  expect((await screen.findByTestId('billing-account-name')).textContent).toBe('小鱼');
 });

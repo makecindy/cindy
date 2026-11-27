@@ -117,6 +117,8 @@ export interface MailCardData {
   fromLabel: string;
   continueLabel?: string;
   deleteLabel?: string;
+  addQuoteLabel?: string;
+  cancelLabel?: string;
   supersededBy?: string;
   pendingSend?: { deadline: number; label: string; cancelLabel: string; sendNowLabel: string };
 }
@@ -136,6 +138,7 @@ export function parseMailCard(value: unknown): MailCardData | null {
       !Array.isArray(p.attachments) || p.attachments.length > 100 ||
       p.attachments.some(a => typeof a !== 'string' || a.length > 1024) ||
       (p.continueLabel !== undefined && (typeof p.continueLabel !== 'string' || p.continueLabel.length > 128)) ||
+      (p.addQuoteLabel !== undefined && (typeof p.addQuoteLabel !== 'string' || p.addQuoteLabel.length > 128)) ||
       (p.deleteLabel !== undefined && (typeof p.deleteLabel !== 'string' || p.deleteLabel.length > 128)) ||
       (p.supersededBy !== undefined && (typeof p.supersededBy !== 'string' || p.supersededBy.length > 128))) return null;
   const pending = p.pendingSend as MailCardData['pendingSend'];
@@ -144,13 +147,17 @@ export function parseMailCard(value: unknown): MailCardData | null {
   if (pending !== undefined && (!pending || p.state !== 'sending' ||
       !Number.isSafeInteger(pending.deadline) || pending.deadline <= 0 ||
       [pending.label, pending.cancelLabel, pending.sendNowLabel].some(v => typeof v !== 'string' || !v || v.length > 128))) return null;
+  if (p.cancelLabel !== undefined && (p.state !== 'sending' || pending !== undefined ||
+      typeof p.cancelLabel !== 'string' || !p.cancelLabel || p.cancelLabel.length > 128)) return null;
   return { accountId: p.accountId as string, draftId: p.draftId as string, key: p.key as string,
     from: p.from as string, fields, attachments: p.attachments as string[], state: p.state as MailCardData['state'],
     ...(baseValues ? { baseValues } : {}),
     status: p.status as string, sendLabel: p.sendLabel as string, fromLabel: p.fromLabel as string,
     ...(images ? { images: images.map(i => ({ cid: i.cid, url: i.url })) } : {}),
     ...(p.continueLabel ? { continueLabel: p.continueLabel as string } : {}),
+    ...(p.addQuoteLabel ? { addQuoteLabel: p.addQuoteLabel as string } : {}),
     ...(p.deleteLabel ? { deleteLabel: p.deleteLabel as string } : {}),
+    ...(p.cancelLabel ? { cancelLabel: p.cancelLabel as string } : {}),
     ...(pending ? { pendingSend: { deadline: pending.deadline, label: pending.label, cancelLabel: pending.cancelLabel, sendNowLabel: pending.sendNowLabel } } : {}),
     ...(p.supersededBy ? { supersededBy: p.supersededBy as string } : {}) };
 }
@@ -168,6 +175,16 @@ export function readMailCard(html: string): MailCardData | null {
   if (!value) return null;
   try { return parseMailCard(JSON.parse(value.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&'))); }
   catch { return null; }
+}
+/** Host-owned marker on a plugin card that a newer card of the same plugin in the same task replaced.
+ * The Host prepends it after sanitizing; plugin HTML cannot carry data-cindy-* attributes. */
+const SUPERSEDED_MARKER = /^<div data-cindy-superseded-by="([A-Za-z0-9_:.-]{1,128})" hidden><\/div>/;
+export function markGhostCardSuperseded(html: string, by: string): string {
+  return `<div data-cindy-superseded-by="${by}" hidden></div>${html}`;
+}
+/** The card that replaced this one (a generic plugin card or a mail view); views hide replaced cards. */
+export function readGhostCardSupersededBy(html: string): string | undefined {
+  return SUPERSEDED_MARKER.exec(html)?.[1] ?? readMailCard(html)?.supersededBy;
 }
 export function isLegacyMailCard(html: string): boolean {
   return !readMailCard(html) && !!readGhostCardFormChange(html)?.startsWith('mail:change:');
@@ -215,13 +232,17 @@ export function releaseGhostCardFormDelivery(scope: string, key: string): void {
 }
 export function pendingGhostCardFormDelivery(
   scope: string,
+  excludeKey?: string,
 ): Promise<boolean> | undefined {
   const entries = deliveries.get(scope);
   if (!entries?.size) return undefined;
-  const snapshot = [...entries.values()];
+  const snapshot = excludeKey
+    ? [...entries].filter(([key]) => key !== excludeKey).map(([, delivery]) => delivery)
+    : [...entries.values()];
+  if (!snapshot.length) return undefined;
   return Promise.all(snapshot).then(async (results) => {
     if (results.some((ok) => !ok)) return false;
-    return (await pendingGhostCardFormDelivery(scope)) ?? true;
+    return (await pendingGhostCardFormDelivery(scope, excludeKey)) ?? true;
   });
 }
 export function parseGhostCardForm(
@@ -426,4 +447,23 @@ export function omitGhostCardFormPreview(html: string): string {
   };
   visit(doc);
   return removed ? serialize(doc) : html;
+}
+
+/**
+ * Plugin card links open after a host confirmation that shows the real address. GitHub's own
+ * pages (the owner's choice, 2026-11-03) open directly; every other address still asks.
+ */
+export function ghostCardLinkOpensDirectly(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'https:' && !parsed.username && !parsed.password && !parsed.port
+      && (parsed.hostname === 'github.com' || parsed.hostname === 'www.github.com');
+  } catch {
+    return false;
+  }
+}
+
+/** Narrow navigation-only card links; never accept arbitrary Cindy commands or URL parameters. */
+export function ghostCardSessionLinkId(url: string): string | null {
+  return typeof url === 'string' ? /^cindy:\/\/session\/([A-Za-z0-9_-]{1,128})$/.exec(url)?.[1] ?? null : null;
 }

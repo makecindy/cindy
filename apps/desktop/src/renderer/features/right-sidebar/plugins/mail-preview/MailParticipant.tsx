@@ -53,6 +53,7 @@ function Avatar({ email, label, photo, compact }: { email?: string; label: strin
     return () => clearTimeout(timer);
   }, [src, loaded]);
   const initials = Array.from(label.replace(/^[\s"']+/, '')).slice(0, 1).join('').toUpperCase() || '?';
+  // 拿到域名 logo 时改用方形裁切，属图片内容裁切（DESIGN.md §5 图标裁切登记）
   return <span aria-hidden="true" className={`relative inline-flex shrink-0 items-center justify-center overflow-hidden bg-muted text-muted-foreground ${compact ? 'h-5 w-5 text-11' : 'h-8 w-8 text-13'} ${src === domain && domain ? 'rounded-md' : 'rounded-full'}`}>
     {initials}
     {src && <img key={src} src={src} alt="" referrerPolicy="no-referrer" draggable={false}

@@ -1,5 +1,5 @@
 /**
- * normalizeAttachments — desktop ↔ maker-core 边界的附件归一化层。
+ * normalizeAttachments — 宿主 ↔ maker-core 边界的附件归一化层。
  *
  * maker-core 的契约是「每个 image/file block 都给一个真实的 fs path」。
  * Renderer 那边因为 UI / 缓存 / 截图各种来源, 一个 attachment 可能是:
@@ -11,28 +11,23 @@
  * 这一层把上面所有花活归一成绝对 fs path:
  *   - xdt-image:// → 经 imageCacheStore.resolveSafe 反查到 userData 下的绝对路径
  *   - F6 base64    → 写一个 OS temp 文件, 用临时 path
- *   - clipboard:// → 跳过 (能走到这里说明既没 url 也没 base64, 真的没东西)
- *   - 绝对 path    → 原样透传
+ *   - clipboard:// → 整条拒绝 (能走到这里说明既没 url 也没 base64, 真的没东西)
+ *   - 绝对 path    → 本机附件检查可读性，SSH 路径留给目标电脑
  *
  * 临时文件按 sessionId 分目录, 在 session close 时整目录删除。
  */
 
-import { app } from 'electron';
+import { ACCEPTED_ATTACHMENT_REPLAY, acceptedAttachmentReplay } from './attachmentReplay.js';
+import { createSourceFileAccessError } from '../device-link/sourceFileError.js';
 import path from 'node:path';
 import { constants, type Stats } from 'node:fs';
 import fs from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 
-import * as imageCacheStore from '../imageCacheStore.js';
 import { CHAT_FOLDER_MIME } from '../../shared/chatFolderAttachment.js';
 import { extractChatFolder } from '../file-browser/chat-folder-transfer.js';
-import * as cindyMediaBlobStore from '../cindy-media/blobStore.js';
-import * as cindyMediaLedger from '../cindy-media/ledger.js';
-import { ingestMedia } from '../cindy-media/ingest.js';
 import { createLogger } from '../logger.js';
-import { isRemoteAttachmentRef, parseRemoteAttachmentRef, materializeRemoteAttachment } from '../device-link/remoteAttachment.js';
-import type { AttachmentIntegrity, AttachmentOssRef } from '../../shared/attachmentOssRef.js';
-import { removeRemote } from '../device-link/mediaTransfer.js';
+import { LEGACY_ATTACH_OSS_SCHEME, type AttachmentIntegrity, type AttachmentOssRef } from '../../shared/attachmentOssRef.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { isDangerousAttachmentName } from '../../shared/attachmentSafety.js';
 import { readReviewRunOwner, type ReviewRunOwner } from '../../shared/reviewRun.js';
@@ -42,6 +37,41 @@ import {
   type ReviewProcessAliveProbe,
 } from '../reviewer/reviewRunRecovery.js';
 
+type MaterializedCleanup = () => void | Promise<void>;
+/** One materialised attachment: its host-managed URL/path and the cleanup that releases only it. */
+export type MaterializedAttachmentPart = { refs: string[]; cleanup: MaterializedCleanup };
+
+export interface AttachmentNormalizerIO {
+  imageCacheStore: Pick<ReturnType<typeof import('../imageCacheStore.js').createImageCacheStore>,
+    'resolveSafe' | 'copyFromPath' | 'removeFile'>;
+  cindyMediaBlobStore: Pick<ReturnType<typeof import('../cindy-media/blobStore.js').createBlobStore>,
+    'resolveSafe' | 'deleteBlobFile' | 'mimeForExt' | 'supportedMime'>;
+  cindyMediaLedger: Pick<typeof import('../cindy-media/ledger.js'), 'removeRefById' | 'deleteZeroRefBlobRecord'>;
+  ingestMedia: ReturnType<typeof import('../cindy-media/ingestCore.js').createMediaIngest>['ingestMedia'];
+  materializeRemoteAttachment: typeof import('../device-link/remoteAttachment.js').materializeRemoteAttachment;
+  removeRemote: ReturnType<typeof import('../device-link/mediaTransfer.js').createMediaTransfer>['removeRemote'];
+}
+
+type TaskLocation = 'local' | 'ssh' | 'unknown';
+
+export interface AttachmentNormalizerPorts extends AttachmentNormalizerIO {
+  getTempDir(): string;
+  /** Desktop verifies paths in its filesystem namespace. Host performs its own admission checks. */
+  getTaskLocation?(sessionId: string): Promise<TaskLocation>;
+  /** Preserve the launcher's existing error contract after rolling back this materialization. */
+  rejectAttachment?(cause: unknown): never;
+  isRemoteAttachmentRef: typeof import('../device-link/remoteAttachment.js').isRemoteAttachmentRef;
+  parseRemoteAttachmentRef: typeof import('../device-link/remoteAttachment.js').parseRemoteAttachmentRef;
+  /** Freeze account-bound IO before preparation. Returned cleanup callbacks
+   * keep these bindings even after the active account changes. Desktop retains
+   * its existing dependencies when this optional port is absent. */
+  captureIO?(sessionId: string): AttachmentNormalizerIO;
+}
+
+/** One stateful normalizer per launcher; callers keep the existing lifecycle. */
+export function createAttachmentNormalizer(ports: AttachmentNormalizerPorts) {
+const { isRemoteAttachmentRef, parseRemoteAttachmentRef } = ports;
+const legacyIO: AttachmentNormalizerIO = ports;
 const log = createLogger('maker-ipc/normalize');
 
 const TEMP_DIRS_BY_SESSION = new Map<string, string>();
@@ -67,7 +97,7 @@ interface TempAttachmentOwnerRecord {
 }
 
 /** Share the exact Main-process identity used by Review lifecycle recovery. */
-export function configureTempAttachmentOwner(
+function configureTempAttachmentOwner(
   owner: ReviewRunOwner,
   ensureOwnerLiveness?: () => Promise<void>,
 ): void {
@@ -90,8 +120,20 @@ function assertSafeTempSessionId(sessionId: string): void {
   }
 }
 
+/**
+ * POSIX temp directories such as /tmp are shared by every OS account, and the
+ * root is created 0700. Scoping it by uid keeps one account's Desktop from
+ * locking every other account on the same machine out of attachments.
+ */
+function tempAttachmentRootPath(
+  tempDir: string,
+  uid: number | null = typeof process.getuid === 'function' ? process.getuid() : null,
+): string {
+  return path.join(tempDir, uid === null ? 'cindy-attachments' : `cindy-attachments-${uid}`);
+}
+
 function tempRoot(): string {
-  return path.join(app.getPath('temp'), 'cindy-attachments');
+  return tempAttachmentRootPath(ports.getTempDir());
 }
 
 function tempOwnerRoot(): string {
@@ -259,23 +301,28 @@ async function ensureTempPath(sessionId: string, mimeType: string | undefined): 
   return path.join(dir, `${randomUUID()}${ext}`);
 }
 
-export async function writeTempFile(
+async function writeTempFile(
   sessionId: string,
   bytes: Buffer,
   mimeType: string | undefined,
 ): Promise<string> {
   const file = await ensureTempPath(sessionId, mimeType);
-  await fs.writeFile(file, bytes, { flag: 'wx', mode: 0o600 });
-  await fs.chmod(file, 0o600);
-  return file;
+  try {
+    await fs.writeFile(file, bytes, { flag: 'wx', mode: 0o600 });
+    await fs.chmod(file, 0o600);
+    return file;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') await discardTempFile(file);
+    throw error;
+  }
 }
 
-async function materializeBase64(
-  sessionId: string,
-  base64: string,
-  mimeType: string | undefined,
-): Promise<string> {
-  return writeTempFile(sessionId, Buffer.from(base64, 'base64'), mimeType);
+async function discardTempFile(file: string): Promise<void> {
+  try {
+    await fs.rm(file, { force: true });
+  } catch (error) {
+    log.warn('rejected attachment cleanup failed', { error: String(error) });
+  }
 }
 
 type RawBlock = { type: string; [k: string]: unknown };
@@ -305,130 +352,167 @@ function isIntegrityMismatch(error: unknown): boolean {
   return error instanceof Error && error.name === 'AttachmentIntegrityError';
 }
 
-export async function normalizeUserMessage(
+function rejectAttachmentTransfer(cause?: unknown): never {
+  if (ports.rejectAttachment) return ports.rejectAttachment(cause);
+  if ((cause as { code?: string })?.code === 'DEVICE_LINK_MEDIA_ACCESS_DENIED') throw cause;
+  throwIpcError('DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'Attachment transfer failed');
+}
+
+// Call only around a read of the selected source. A denial writing a destination
+// or accessing the relay has different recovery instructions.
+async function readAttachmentSource<T>(read: () => Promise<T>): Promise<T> {
+  try { return await read(); }
+  catch (error) {
+    const code = (error as NodeJS.ErrnoException)?.code;
+    if (code === 'EACCES' || code === 'EPERM') {
+      log.warn('attachment source read denied', { error: String(error) });
+      throw createSourceFileAccessError();
+    }
+    throw error;
+  }
+}
+
+async function isAttachmentReadable(
+  source: string,
+  replay: typeof ACCEPTED_ATTACHMENT_REPLAY | undefined,
+  cachedImage: boolean,
+): Promise<boolean> {
+  try {
+    await readAttachmentSource(() => fs.access(source, constants.R_OK));
+    return true;
+  } catch (error) {
+    if (replay === ACCEPTED_ATTACHMENT_REPLAY && cachedImage && (error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+      return false;
+    }
+    throw error;
+  }
+}
+
+function isLegacyUncheckedFile(path: string, ref: AttachmentOssRef, mimeHint?: string): boolean {
+  return path.startsWith(`${LEGACY_ATTACH_OSS_SCHEME}://`) && ref.size === undefined
+    && ref.mimeType !== CHAT_FOLDER_MIME && mimeHint !== CHAT_FOLDER_MIME;
+}
+
+async function normalizeUserMessage(
   sessionId: string,
   msg: UserMessageShape,
+  replay?: typeof ACCEPTED_ATTACHMENT_REPLAY,
 ): Promise<UserMessageShape> {
   if (typeof msg === 'string') return msg;
   if (typeof msg.content === 'string') return msg;
+  const { imageCacheStore, cindyMediaBlobStore, materializeRemoteAttachment, removeRemote }
+    = ports.captureIO?.(sessionId) ?? legacyIO;
 
   const out: RawBlock[] = [];
-  for (const raw of msg.content) {
-    if (raw.type !== 'image' && raw.type !== 'file') {
-      out.push(raw);
-      continue;
-    }
-
-    const block = { ...raw } as AttachmentBlock & { type: 'image' | 'file' };
-    const managedUrl = block.type === 'image' ? trustedManagedImageUrl(block.path) : undefined;
-    // This IPC boundary does not trust a renderer-supplied identity field. Only
-    // derive it from a Host-managed path that is successfully resolved below.
-    delete block.managedUrl;
-    const isDesktopHostImage = block.type === 'image' && (
-      block.pathOrigin === 'desktop-host'
-      || Boolean(block.base64)
-      || (typeof block.path === 'string' && (
-        block.path.startsWith('xdt-image://')
-        || block.path.startsWith('cindy-media://')
-        || isRemoteAttachmentRef(block.path)
-      ))
-    );
-    if (isDesktopHostImage) block.pathOrigin = 'desktop-host';
-
-    // 0) device-link 出方向 OSS 引用(控制端发来的附件)→ presign-get 下载物化到临时文件,
-    //    用后删 OSS。新引用下载/校验失败 → 整条不发；旧引用保留历史的单附件降级语义。
-    if (typeof block.path === 'string' && isRemoteAttachmentRef(block.path)) {
-      const ref = parseRemoteAttachmentRef(block.path);
-      if (!ref) {
-        log.warn('malformed oss attach ref, rejecting message');
-        throwIpcError('DEVICE_LINK_MEDIA_TRANSFER_FAILED', '附件引用无效,请重新上传。');
+  const tempFiles: string[] = [];
+  const consumedKeys = new Set<string>();
+  let cleanedImages = 0;
+  // A DB read is task admission, not a transfer failure. Only bare local paths need it.
+  const checksLocalPaths = msg.content.some(block => (block.type === 'file' || block.type === 'image')
+    && !block.base64 && typeof block.path === 'string' && path.isAbsolute(block.path))
+    && await ports.getTaskLocation?.(sessionId) === 'local';
+  try {
+    for (const raw of msg.content) {
+      if (raw.type !== 'image' && raw.type !== 'file') {
+        out.push(raw);
+        continue;
       }
-      try {
-        // 流式下载到临时文件(不整 buffer 进内存,大附件也安全)。
-        const dest = await ensureTempPath(sessionId, ref.mimeType ?? block.mimeType);
-        const integrity = integrityForRef(ref);
-        await materializeRemoteAttachment(ref, dest, integrity);
-        block.path = dest;
-        if (!block.mimeType && ref.mimeType) block.mimeType = ref.mimeType;
-        if (ref.ossKey) void removeRemote(ref.ossKey); // 用后删(best-effort,不阻塞 turn)
-      } catch (e) {
-        log.warn('oss attach download failed', { error: String(e) });
-        if (ref.ossKey && isIntegrityMismatch(e)) void removeRemote(ref.ossKey);
-        // 新客户端声明了完整性时，任何下载/校验失败都必须阻止消息进入 agent；
-        // 旧引用继续保留历史降级语义，避免升级接收端破坏旧发送端行为。
-        if (ref.size !== undefined) {
-          throwIpcError(
-            'DEVICE_LINK_MEDIA_TRANSFER_FAILED',
-            e instanceof Error ? e.message : String(e),
-          );
+
+      const block = { ...raw } as AttachmentBlock & { type: 'image' | 'file' };
+      let cachedImage = false;
+      const managedUrl = block.type === 'image' ? trustedManagedImageUrl(block.path) : undefined;
+      // This IPC boundary does not trust a renderer-supplied identity field. Only
+      // derive it from a Host-managed path that is successfully resolved below.
+      delete block.managedUrl;
+      const isDesktopHostImage = block.type === 'image' && (
+        block.pathOrigin === 'desktop-host'
+        || Boolean(block.base64)
+        || (typeof block.path === 'string' && (
+          block.path.startsWith('xdt-image://')
+          || block.path.startsWith('cindy-media://')
+          || isRemoteAttachmentRef(block.path)
+        ))
+      );
+      if (isDesktopHostImage) block.pathOrigin = 'desktop-host';
+
+      // 0) device-link 出方向 OSS 引用(控制端发来的附件)→ presign-get 下载物化到临时文件,
+      //    整条消息归一化成功后释放 OSS 引用。
+      if (typeof block.path === 'string' && isRemoteAttachmentRef(block.path)) {
+        const refPath = block.path;
+        const ref = parseRemoteAttachmentRef(refPath);
+        if (!ref) {
+          log.warn('malformed oss attach ref, rejecting message');
+          rejectAttachmentTransfer();
         }
+        const dest = await ensureTempPath(sessionId, ref.mimeType ?? block.mimeType);
+        try {
+          // 流式下载到临时文件(不整 buffer 进内存,大附件也安全)。
+          const integrity = integrityForRef(ref);
+          await materializeRemoteAttachment(ref, dest, integrity);
+          tempFiles.push(dest);
+          block.path = dest;
+          if (!block.mimeType && ref.mimeType) block.mimeType = ref.mimeType;
+          if (ref.ossKey) consumedKeys.add(ref.ossKey);
+        } catch (e) {
+          log.warn('oss attach download failed', { error: String(e) });
+          if (ref.ossKey && isIntegrityMismatch(e)) void removeRemote(ref.ossKey);
+          await discardTempFile(dest);
+          if (isLegacyUncheckedFile(refPath, ref, block.mimeType) && !isIntegrityMismatch(e)) continue;
+          throw e;
+        }
+        delete block.base64;
+        out.push(block as unknown as RawBlock);
         continue;
       }
-      delete block.base64;
-      out.push(block as unknown as RawBlock);
-      continue;
-    }
 
-    // 1) F6 fallback: 内存 base64 → 临时文件
-    if (block.base64) {
-      try {
-        block.path = await materializeBase64(sessionId, block.base64, block.mimeType);
-      } catch (e) {
-        log.warn('materializeBase64 failed, dropping attachment', { error: String(e) });
-        continue;
+      // 1) F6 fallback: 内存 base64 → 临时文件
+      if (block.base64) {
+        block.path = await writeTempFile(sessionId, Buffer.from(block.base64, 'base64'), block.mimeType);
+        tempFiles.push(block.path);
+        delete block.base64;
       }
-      delete block.base64;
-    }
 
-    // 2) xdt-image:// → 缓存内绝对路径
-    if (typeof block.path === 'string' && block.path.startsWith('xdt-image://')) {
-      try {
+      // 2) xdt-image:// → 缓存内绝对路径
+      if (typeof block.path === 'string' && block.path.startsWith('xdt-image://')) {
         const { absPath, mimeType } = imageCacheStore.resolveSafe(block.path);
         block.path = absPath;
+        cachedImage = mimeType.startsWith('image/');
         if (!block.mimeType && mimeType !== 'application/octet-stream') {
           block.mimeType = mimeType;
         }
         if (managedUrl) block.managedUrl = managedUrl;
-      } catch (e) {
-        log.warn('xdt-image resolve failed, dropping attachment', {
-          url: block.path,
-          error: String(e),
-        });
-        continue;
       }
-    }
 
-    // 2') cindy-media:// 媒体总仓 blob(统一地址,规则 25)→ 字节仓内绝对路径;
-    //     mime 由扩展名白名单定死,resolveSafe 自带指纹校验与仓内前缀双保险。
-    if (typeof block.path === 'string' && block.path.startsWith('cindy-media://')) {
-      try {
+      // 2') cindy-media:// 媒体总仓 blob(统一地址,规则 25)→ 字节仓内绝对路径;
+      //     mime 由扩展名白名单定死,resolveSafe 自带指纹校验与仓内前缀双保险。
+      if (typeof block.path === 'string' && block.path.startsWith('cindy-media://')) {
         const { absPath, mimeType } = cindyMediaBlobStore.resolveSafe(block.path);
         block.path = absPath;
+        cachedImage = mimeType.startsWith('image/');
         if (!block.mimeType) block.mimeType = mimeType;
         if (managedUrl) block.managedUrl = managedUrl;
-      } catch (e) {
-        log.warn('cindy-media resolve failed, dropping attachment', {
-          url: block.path,
-          error: String(e),
-        });
-        continue;
       }
-    }
 
-    // 3) clipboard:// 占位 path —— 没有 base64 兜底就是真没东西, 不发出去
-    if (typeof block.path === 'string' && block.path.startsWith('clipboard://')) {
-      log.warn('attachment carried clipboard:// placeholder with no real source, dropping');
-      continue;
-    }
+      // 3) clipboard:// 占位 path —— 没有 base64 兜底就是真没东西, 不发出去
+      if (typeof block.path !== 'string' || !block.path || block.path.startsWith('clipboard://')) {
+        rejectAttachmentTransfer();
+      }
 
-    if (typeof block.path !== 'string' || block.path.length === 0) {
-      log.warn('attachment has no usable path after normalization, dropping');
-      continue;
+      if (!raw.base64 && path.isAbsolute(block.path) && (checksLocalPaths || (ports.getTaskLocation && isManagedImageUrl(raw.path)))) {
+        if (!await isAttachmentReadable(block.path, replay, cachedImage && !!managedUrl)) {
+          cleanedImages++;
+          continue;
+        }
+      }
+      out.push(block as unknown as RawBlock);
     }
-
-    out.push(block as unknown as RawBlock);
+  } catch (error) {
+    await Promise.all(tempFiles.map(discardTempFile));
+    log.warn('attachment normalization rejected', { error: String(error) });
+    rejectAttachmentTransfer(error);
   }
-
+  if (cleanedImages) log.warn('skipped cleaned cache images during accepted input replay', { sessionId, count: cleanedImages });
+  for (const key of consumedKeys) void removeRemote(key);
   return { type: 'user', content: out };
 }
 
@@ -496,7 +580,7 @@ function queuedFileMaterializeRef(file: SerializedFileLike): string | null {
   // url 是队列实际消费的图片；path 只是文件选择器保留的原始磁盘来源。
   if (isQueuedImageFile(file) && isManagedImageUrl(file.url)) return null;
   if (isOssRefField(file.path)) return file.path;
-  if (!isQueuedImageFile(file)) return null;
+  if (file.base64 || !isQueuedImageFile(file)) return null;
   if (isLocalImagePathField(file.url)) return file.url;
   if (isLocalImagePathField(file.path)) return file.path;
   return null;
@@ -525,9 +609,6 @@ function persistedContentNeedsMaterialize(json: string): boolean {
 
 /** 物化结果:被控端 image cache 里的 `xdt-image://` url(渲染用)+ 其绝对路径(file chip / agent 用)。 */
 type MaterializedRef = { url: string; absPath: string };
-type MaterializedCleanup = () => void | Promise<void>;
-/** One materialised attachment: its host-managed URL/path and the cleanup that releases only it. */
-export type MaterializedAttachmentPart = { refs: string[]; cleanup: MaterializedCleanup };
 
 /**
  * 用 materialize(OSS 引用串 → image cache 物化结果)改写 persistedContent JSON 串。
@@ -588,12 +669,13 @@ async function materializePersistedContent(
  * 文件——每个 OSS 对象只下载一次(files[] 与 persistedContent 共用同一引用串 → 共用下载),物化完统一删 OSS。
  * 这样喂 agent 的 files[] 与落库的 persistedContent 都指向本地路径,被控端 reload 历史不再裂图。
  *
- * 无 OSS 引用(本机会话)→ 原样返回,零额外 IO。旧引用物化失败维持历史降级；新引用失败直接阻止入队。
+ * 本地绝对路径附件须可读；纯文本不需要文件 IO。只有无完整性字段的旧手机普通附件下载失败时保留引用。
  * OSS 删除放在 files[] + persistedContent 都物化之后,避免删早了另一副身取不到。
  */
 async function materializeQueuedOssAttachmentsInternal(
   sessionId: string,
   item: unknown,
+  replay?: typeof ACCEPTED_ATTACHMENT_REPLAY,
 ): Promise<{
   item: unknown;
   cleanupAfterAcceptance?: () => void;
@@ -603,10 +685,41 @@ async function materializeQueuedOssAttachmentsInternal(
   materializedParts?: MaterializedAttachmentPart[];
 }> {
   if (!item || typeof item !== 'object') return { item };
-  const it = item as { files?: unknown; persistedContent?: unknown };
+  const it = item as { files?: unknown; contextFiles?: unknown; persistedContent?: unknown };
   const files = Array.isArray(it.files) ? it.files : null;
   const pcStr = typeof it.persistedContent === 'string' ? it.persistedContent : null;
 
+  let location: Promise<TaskLocation> | undefined;
+  const getLocation = () => location ??= ports.getTaskLocation?.(sessionId) ?? Promise.resolve('local');
+  const inlinePaths = new Set<string>();
+  if (ports.getTaskLocation) {
+    for (const file of [...(files ?? []), ...(Array.isArray(it.contextFiles) ? it.contextFiles : [])]) {
+      if (!file || typeof file !== 'object') continue;
+      const source = file.url || file.path;
+      if (!source || (typeof source === 'string' && source.startsWith('clipboard://'))) {
+        if (!file.base64) {
+          log.warn('queued attachment has no usable source');
+          rejectAttachmentTransfer();
+        }
+        continue;
+      }
+      if (typeof source !== 'string') continue;
+      if (file.base64 && path.isAbsolute(source)) { inlinePaths.add(source); continue; }
+      const managed = isManagedImageUrl(source);
+      if (!managed && (!path.isAbsolute(source) || await getLocation() !== 'local')) continue;
+      try {
+        const cached = !managed ? undefined : source.startsWith('xdt-image://')
+          ? ports.imageCacheStore.resolveSafe(source) : ports.cindyMediaBlobStore.resolveSafe(source);
+        const cachedImage = file.type === 'image' && !!trustedManagedImageUrl(source)
+          && cached?.mimeType.startsWith('image/') === true;
+        // Preflight keeps a cleaned image in place. Final normalization owns omission and logging.
+        await isAttachmentReadable(cached?.absPath ?? source, replay, cachedImage);
+      } catch (error) {
+        log.warn('queued attachment path unavailable', { error: String(error) });
+        rejectAttachmentTransfer(error);
+      }
+    }
+  }
   const filesNeedMaterialize =
     files?.some(
       (f) =>
@@ -615,6 +728,8 @@ async function materializeQueuedOssAttachmentsInternal(
         queuedFileMaterializeRef(f as SerializedFileLike) !== null,
     ) ?? false;
   if (!filesNeedMaterialize && !(pcStr && persistedContentNeedsMaterialize(pcStr))) return { item }; // 无需物化 → 原样
+  const { imageCacheStore, cindyMediaBlobStore, cindyMediaLedger, ingestMedia,
+    materializeRemoteAttachment, removeRemote } = ports.captureIO?.(sessionId) ?? legacyIO;
 
   const byRef = new Map<string, MaterializedRef>(); // 引用串 → 物化结果(同串只下载/拷贝+入库一次)
   const ossKeys = new Set<string>();
@@ -625,25 +740,28 @@ async function materializeQueuedOssAttachmentsInternal(
     for (const key of ossKeys) void removeRemote(key);
   };
   const localParts: MaterializedAttachmentPart[] = [];
-  const addLocalPart = (entry: MaterializedRef, cleanup: MaterializedCleanup): void => {
+  const addLocalPart = (refs: string[], cleanup: MaterializedCleanup): void => {
     // Each part runs at most once whether released alone (queue edit) or with the whole item.
     let run: Promise<void> | null = null;
     localParts.push({
-      refs: [entry.url, entry.absPath],
+      refs,
       cleanup: () => (run ??= Promise.resolve().then(cleanup)),
     });
   };
-  let localCleanedUp = false;
-  const cleanupLocalMaterializations = async (): Promise<void> => {
-    if (localCleanedUp) return;
-    localCleanedUp = true;
-    for (const { cleanup } of localParts) {
+  const cleanupParts = async (parts: MaterializedAttachmentPart[]): Promise<void> => {
+    for (const { cleanup } of parts) {
       try {
         await cleanup();
       } catch (e) {
         log.warn('local OSS materialization cleanup failed', { error: String(e) });
       }
     }
+  };
+  let localCleanedUp = false;
+  const cleanupLocalMaterializations = async (): Promise<void> => {
+    if (localCleanedUp) return;
+    localCleanedUp = true;
+    await cleanupParts(localParts);
   };
   const cleanupBeforeAcceptance = async (): Promise<void> => {
     // Keep the remote OSS object retryable until the direct send is accepted.
@@ -671,10 +789,10 @@ async function materializeQueuedOssAttachmentsInternal(
         },
       ],
     });
-    const entry = { url: written.url, absPath: cindyMediaBlobStore.resolveSafe(written.url).absPath };
+    const refs = [written.url];
     const refId = written.refIds[0];
     if (refId) {
-      addLocalPart(entry, async () => {
+      addLocalPart(refs, async () => {
         await cindyMediaLedger.removeRefById(refId);
         const removed = await cindyMediaLedger.deleteZeroRefBlobRecord(
           written.hash,
@@ -683,12 +801,14 @@ async function materializeQueuedOssAttachmentsInternal(
         if (removed) await cindyMediaBlobStore.deleteBlobFile(written.hash, written.ext);
       });
     }
-    return entry;
+    const absPath = cindyMediaBlobStore.resolveSafe(written.url).absPath;
+    refs.push(absPath);
+    return { url: written.url, absPath };
   };
   // 物化:被控端本机绝对路径图片(手机文件浏览器发送)读字节入总仓;OSS 引用走
   // 流式下载 → 临时文件 → 媒体 mime 入总仓 / 非媒体(pdf/doc/.bin 等)拷进老
   // image cache(规则 25 边界:非媒体不进字节仓,该落地面待 xdt-file 决策后迁)。
-  // 失败 → null(保留原引用,降级)。
+  // 无完整性声明的旧手机普通附件下载失败时保留引用。
   const materialize = async (
     refStr: string,
     mimeHint?: string,
@@ -696,26 +816,45 @@ async function materializeQueuedOssAttachmentsInternal(
     const cached = byRef.get(refStr);
     if (cached) return cached;
     if (isLocalImagePathField(refStr)) {
+      const taskLocation = await getLocation();
+      if (taskLocation === 'ssh') return null;
+      const firstPart = localParts.length;
       try {
         const ext = path.extname(refStr).toLowerCase();
         const mimeType = cindyMediaBlobStore.mimeForExt(ext);
         if (!mimeType) throw new Error(`unsupported image ext: ${ext}`);
-        const entry = await ingestIntoBlobStore({ buffer: await fs.readFile(refStr) }, mimeType);
+        const buffer = taskLocation === 'local' && ports.getTaskLocation
+          ? await readAttachmentSource(() => fs.readFile(refStr))
+          : await fs.readFile(refStr);
+        const entry = await ingestIntoBlobStore({ buffer }, mimeType);
         byRef.set(refStr, entry);
         return entry;
       } catch (e) {
-        log.warn('materialize local image path failed, leaving ref', { error: String(e) });
-        return null;
+        if (taskLocation === 'unknown') {
+          // Ingest may have registered this image before resolving its managed path.
+          // Materialization is sequential. Keep earlier successful parts in the transaction.
+          await cleanupParts(localParts.splice(firstPart));
+          log.warn('materialize local image path failed, leaving ref', { error: String(e) });
+          return null;
+        }
+        log.warn('materialize local image path failed', { error: String(e) });
+        rejectAttachmentTransfer(e);
       }
     }
     const ref = parseRemoteAttachmentRef(refStr);
     if (!ref) {
-      throwIpcError('DEVICE_LINK_MEDIA_TRANSFER_FAILED', '附件引用无效,请重新上传。');
+      rejectAttachmentTransfer();
     }
     let tmp: string | null = null;
     try {
       tmp = await ensureTempPath(sessionId, ref.mimeType ?? mimeHint);
-      await materializeRemoteAttachment(ref, tmp, integrityForRef(ref));
+      try {
+        await materializeRemoteAttachment(ref, tmp, integrityForRef(ref));
+      } catch (error) {
+        if (!isLegacyUncheckedFile(refStr, ref, mimeHint) || isIntegrityMismatch(error)) throw error;
+        log.warn('legacy attachment download failed, leaving ref', { error: String(error) });
+        return null;
+      }
       const mime = ref.mimeType ?? mimeHint;
       let entry: MaterializedRef;
       // 只收图片进总仓(下载的临时件按文件流式入仓,不整读进 main 内存);
@@ -737,28 +876,24 @@ async function materializeQueuedOssAttachmentsInternal(
           originalName,
           lifecycle: 'committed',
         });
+        const refs = [url];
+        addLocalPart(refs, () => imageCacheStore.removeFile(url));
         entry = { url, absPath: imageCacheStore.resolveSafe(url).absPath };
-        addLocalPart(entry, () => imageCacheStore.removeFile(url));
+        refs.push(entry.absPath);
         if (mime === CHAT_FOLDER_MIME) {
           entry.absPath = await extractChatFolder(entry.absPath);
           // Files are consumed by path; never hand the tar's managed URL to the agent.
           entry.url = entry.absPath;
-          localParts[localParts.length - 1]!.refs.push(entry.absPath);
+          refs.push(entry.absPath);
         }
       }
       byRef.set(refStr, entry);
       if (ref.ossKey) ossKeys.add(ref.ossKey);
       return entry;
     } catch (e) {
-      log.warn('materialize queued oss attachment failed, leaving ref', { error: String(e) });
+      log.warn('materialize queued oss attachment failed', { error: String(e) });
       if (ref.ossKey && isIntegrityMismatch(e)) void removeRemote(ref.ossKey);
-      if (ref.size !== undefined || ref.mimeType === CHAT_FOLDER_MIME || mimeHint === CHAT_FOLDER_MIME) {
-        throwIpcError(
-          'DEVICE_LINK_MEDIA_TRANSFER_FAILED',
-          e instanceof Error ? e.message : String(e),
-        );
-      }
-      return null;
+      rejectAttachmentTransfer(e);
     } finally {
       if (tmp) await fs.rm(tmp, { force: true }).catch(() => {}); // 持久副本已入仓/入缓存,临时件删掉
     }
@@ -797,8 +932,11 @@ async function materializeQueuedOssAttachmentsInternal(
       nextFiles = out;
     }
 
+    // An inline chip's old path is only a display fallback. If another chip
+    // actually consumed that path, retain the durable copy we just prepared.
     const nextPc: unknown = pcStr
-      ? await materializePersistedContent(pcStr, materialize)
+      ? await materializePersistedContent(pcStr, (ref, mime) =>
+          inlinePaths.has(ref) && !byRef.has(ref) ? Promise.resolve(null) : materialize(ref, mime))
       : it.persistedContent;
 
     // files[] 与 persistedContent 都物化完才删 OSS(每个 key 删一次,best-effort 不阻塞)。
@@ -837,7 +975,7 @@ async function materializeQueuedOssAttachmentsInternal(
  * preparation must run `cleanupBeforeAcceptance`, while an accepted input may
  * release the remote OSS object with `cleanupAfterAcceptance`.
  */
-export async function materializeQueuedOssAttachmentsDeferred(
+async function materializeQueuedOssAttachmentsDeferred(
   sessionId: string,
   item: unknown,
 ): Promise<{
@@ -856,7 +994,7 @@ export async function materializeQueuedOssAttachmentsDeferred(
  * compares these with each owned attachment's refs so unchanged attachments
  * keep their local copy.
  */
-export function collectQueuedAttachmentRefs(item: unknown): Set<string> {
+function collectQueuedAttachmentRefs(item: unknown): Set<string> {
   const refs = new Set<string>();
   const add = (value: unknown) => {
     if (typeof value === 'string' && value) refs.add(value);
@@ -896,7 +1034,7 @@ export function collectQueuedAttachmentRefs(item: unknown): Set<string> {
  * caller and must run only after maker:send reports accepted=true, so a
  * pre-accept rejection can retry the original OSS references.
  */
-export async function materializeDirectSendOssAttachments(
+async function materializeDirectSendOssAttachments(
   sessionId: string,
   message: unknown,
   sendOpts: unknown,
@@ -957,6 +1095,7 @@ export async function materializeDirectSendOssAttachments(
       files: projectedFiles,
       ...(typeof persistedContent === 'string' ? { persistedContent } : {}),
     },
+    acceptedAttachmentReplay(sendOpts),
   );
   const projected = materialized.item as { files?: unknown; persistedContent?: unknown };
   const materializedFiles = Array.isArray(projected.files) ? projected.files : projectedFiles;
@@ -1025,7 +1164,7 @@ export async function materializeDirectSendOssAttachments(
   };
 }
 
-export async function cleanupSessionTempAttachments(sessionId: string): Promise<void> {
+async function cleanupSessionTempAttachments(sessionId: string): Promise<void> {
   const dir = TEMP_DIRS_BY_SESSION.get(sessionId);
   if (!dir) return;
   TEMP_DIRS_BY_SESSION.delete(sessionId);
@@ -1054,7 +1193,7 @@ export async function cleanupSessionTempAttachments(sessionId: string): Promise<
  * PID-scoped roots with a same-user owner record enter this cleanup boundary;
  * ambiguous live owners survive until their persisted deadline.
  */
-export async function cleanupOrphanedTempAttachments(options: {
+async function cleanupOrphanedTempAttachments(options: {
   currentOwner: ReviewRunOwner;
   root?: string;
   processIsAlive?: ReviewProcessAliveProbe;
@@ -1108,4 +1247,11 @@ export async function cleanupOrphanedTempAttachments(options: {
     }
     await fs.rm(candidate, { recursive: true, force: true });
   }
+}
+
+return {
+  configureTempAttachmentOwner, tempAttachmentRootPath, writeTempFile, normalizeUserMessage,
+  materializeQueuedOssAttachmentsDeferred, collectQueuedAttachmentRefs, materializeDirectSendOssAttachments,
+  cleanupSessionTempAttachments, cleanupOrphanedTempAttachments,
+};
 }

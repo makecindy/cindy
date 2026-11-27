@@ -350,14 +350,16 @@ async function generateSummaryOnce(sessionId: string): Promise<void> {
     // 由 getUtilityModelChainProfiles 决定),配置缺失/不可用时再回退到 agent 自带的
     // oneShot 兜底——不再写死 haiku/mini。maxTokens 120:长档 30+ CJK 字可能超 80 token,留余量防截断。
     const utility = await requestUtilityText(getMaker(), prompt, {
+      source: 'task-summary', sessionId,
       maxTokens: 120,
       timeoutMs: 30_000,
       beforeDispatch: async () => isAuxiliaryOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot),
     });
     if (!isAuxiliaryOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot)) return;
-    const beforeSessionAgentDispatch = async () => {
+    // `route.model` 是 agent 实际选中的模型(Codex 默认模型在 thread/start 后才知道)。
+    const beforeSessionAgentDispatch = async (route?: { model?: string }) => {
       if (!isAuxiliaryOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot)) return false;
-      if (await isAgentOneShotRouteDisabled(agentKind)) return false;
+      if (await isAgentOneShotRouteDisabled(agentKind, route?.model)) return false;
       return isAuxiliaryOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot);
     };
     // 停用轴:agent one-shot 兜底是新的付费调用,该 agent 的默认路由被停用时不派发
@@ -372,6 +374,7 @@ async function generateSummaryOnce(sessionId: string): Promise<void> {
           !(await beforeSessionAgentDispatch())
         ? ''
         : await getMaker().oneShot(agentKind, prompt, {
+            source: 'task-summary', sessionId,
             maxTokens: 120,
             beforeDispatch: beforeSessionAgentDispatch,
           });
@@ -379,38 +382,17 @@ async function generateSummaryOnce(sessionId: string): Promise<void> {
     if (!summary) return;
     if (!isAuxiliaryOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot)) return;
 
-    // 写回前重查会话状态:oneShot 是异步的(数秒),in-flight 期间会话可能已变化,无条件写回
-    // 会写入一份已过时的摘要(codex review)。任一不符即跳过:
-    //   - clearedAt 变化 = 期间发生过 /clear(handler 已把 summary 置 null),旧摘要基于已隐藏内容;
-    //   - status / pinnedAt 变化 = 已归档 / 取消置顶,不该再有摘要;
-    //   - userSendAt 变化 = 期间用户又发了新一轮(touchUserSendInDb 已 bump),这份是"上一轮"的
-    //     摘要;且新一轮 turn-done 常被 inFlight / 20s 节流挡掉,若此处仍写回旧摘要会长期停在过时态。
-    const [cur] = await db
-      .select({
-        status: sessions.status,
-        pinnedAt: sessions.pinnedAt,
-        clearedAt: sessions.clearedAt,
-        userSendAt: sessions.userSendAt,
-      })
-      .from(sessions)
-      .where(eq(sessions.id, sessionId))
-      .limit(1);
-    if (!cur || cur.clearedAt !== session.clearedAt || cur.userSendAt !== session.userSendAt) {
-      return;
-    }
-    if (
-      !shouldGeneratePinnedCardSummary({
-        status: cur.status,
-        pinnedAt: cur.pinnedAt,
-        pinnedSectionIsCard,
-      })
-    ) {
-      return;
-    }
-    if (!isAuxiliaryOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot)) return;
-
-    // 直写 summary,不 bump updatedAt——摘要刷新不应引起 sidebar 重排
-    await db.update(sessions).set({ summary }).where(eq(sessions.id, sessionId));
+    // The model call may outlive an unpin, a new turn, or a /clear. Guard
+    // the write itself so an in-flight summary cannot repopulate a cleared card.
+    if (!pinnedSectionIsCard || session.pinnedAt == null) return;
+    const saved = await db.update(sessions).set({ summary }).where(and(
+      eq(sessions.id, sessionId),
+      eq(sessions.status, 'active'),
+      eq(sessions.pinnedAt, session.pinnedAt),
+      session.clearedAt == null ? isNull(sessions.clearedAt) : eq(sessions.clearedAt, session.clearedAt),
+      session.userSendAt == null ? isNull(sessions.userSendAt) : eq(sessions.userSendAt, session.userSendAt),
+    )).run();
+    if (!saved.changes || !isAuxiliaryOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot)) return;
     lastGeneratedAt.set(sessionId, Date.now());
     wroteFresh = true;
     broadcastPatched(sessionId, { summary });

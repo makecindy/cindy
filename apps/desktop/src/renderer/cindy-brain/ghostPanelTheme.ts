@@ -31,6 +31,9 @@ const GHOST_THEME_TOKENS = [
   '--error-bg',
   '--error-border',
   '--error-fg',
+  // 宿主填写插件卡片 PR 状态位时,与标题栏 PR 汇总同色(通过 / 未解决评论)。
+  '--status-success',
+  '--status-bar-accent',
   '--focus-ring',
   // 滚动条(globals.css 统一规范同源色):意识面板照主机同款画 thumb。
   '--msg-scrollbar',
@@ -104,7 +107,7 @@ export function isSafeGhostThemeValue(value: string): boolean {
  * 告诉了 guest,这里不含新信息),也无需过 isSafeGhostThemeValue —— 取值由本函数
  * 收敛成两个字面量,不透传 computed 原文。
  */
-function readHostColorScheme(): 'light' | 'dark' {
+export function readHostColorScheme(): 'light' | 'dark' {
   // computed 值可能是 'normal'(尚未 applyTheme)或未来的多值形态(如
   // 'light dark'),两者都不能直接下发;jsdom 下该属性可能整个缺失。一律
   // 回落到 root 的 dark class —— applyTheme 与它同步 toggle,是同源信号。
@@ -137,6 +140,10 @@ export function buildGhostThemeVarsBlock(): string {
 
 /** 读取 :root 现值,产出注入面板 webview 的 CSS 文本(变量块 + 面板基线外观)。 */
 export function buildGhostThemeCss(): string {
+  return buildGhostCanvasThemeCss('background');
+}
+
+function buildGhostCanvasThemeCss(backgroundProperty: 'background' | 'background-color'): string {
   return [
     buildGhostThemeVarsBlock(),
     // 沙箱页的基线外观:主机面板底色 + 主字色 + 同款字体;意识不写一行
@@ -145,8 +152,24 @@ export function buildGhostThemeCss(): string {
     // `var(--panel-bg, var(--surface))` 作纵深兜底——panel-bg 值缺失或被未来
     // 某主题置空时仍落到 --surface,不掉回 webview 默认白底(历史 2026-07-13
     // mivo 设置区实撞的根因,注册后双重保险)。
-    `body { margin: 0; background: var(--panel-bg, var(--surface)); color: var(--text-primary); font-family: ${GHOST_FONT_STACK}; font-size: 13px; }`,
+    `body { margin: 0; ${backgroundProperty}: var(--panel-bg, var(--surface)); color: var(--text-primary); font-family: ${GHOST_FONT_STACK}; font-size: 13px; }`,
   ].join('\n');
+}
+
+/** The window canvas shows a wallpaper or the desktop instead of its surface color. */
+export function isHostCanvasImageBacked(root: HTMLElement = document.documentElement): boolean {
+  return root.dataset.wallpaperActive === 'true' || root.dataset.desktopBackground === 'true';
+}
+
+/** Main views share the host background canvas; controls keep their theme surfaces. */
+export function buildGhostMainViewThemeCss(): string {
+  // A background shorthand would reset author images, sizing and repeat rules,
+  // even if the wallpaper override below only changes background-color.
+  const css = buildGhostCanvasThemeCss('background-color');
+  if (!isHostCanvasImageBacked()) return css;
+  // Only clear the document canvas, never surface tokens: plugins also use those
+  // tokens for inputs, cards and dialogs. Keep any author-provided background image.
+  return `${css}\nhtml, body { background-color: transparent !important; }`;
 }
 
 /**
@@ -172,14 +195,14 @@ export function buildGhostPluginSettingsThemeCss(): string {
 }
 
 /**
- * 订阅主机主题变化(root 上 class / style / data-theme 任一变动)。
+ * 订阅主机主题、壁纸和桌面背景状态变化。
  * 返回取消订阅函数。
  */
 export function observeHostTheme(onChange: () => void): () => void {
   const observer = new MutationObserver(onChange);
   observer.observe(document.documentElement, {
     attributes: true,
-    attributeFilter: ['class', 'style', 'data-theme'],
+    attributeFilter: ['class', 'style', 'data-theme', 'data-wallpaper-active', 'data-desktop-background'],
   });
   return () => observer.disconnect();
 }

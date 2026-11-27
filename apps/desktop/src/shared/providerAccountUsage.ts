@@ -9,7 +9,23 @@
  * `error`，renderer 按 code 渲染分类文案与重试入口。快照本身不含任何密钥材料。
  */
 
-import type { AgentKind } from '@cindy/model-providers';
+import type { KimiCodingUsageSnapshot } from './kimiCodingUsage';
+import type { OpenCodeGoUsageSnapshot } from './opencodeGoUsage';
+
+import type { AgentKind, Provider } from '@cindy/model-providers';
+
+export const ZHIPU_CODING_PLAN_ORIGINS = ['https://open.bigmodel.cn', 'https://api.z.ai'] as const;
+export function isZhipuCodingPlanPath(path: string): boolean {
+  return path === '/api/anthropic' || path.startsWith('/api/anthropic/') || path.startsWith('/api/coding/');
+}
+
+export function isZhipuCodingPlanRoute(route: Provider['routing'][AgentKind]): boolean {
+  if (!route?.upstream || route.disabled) return false;
+  const url = URL.parse(route.upstream);
+  return url !== null
+    && ZHIPU_CODING_PLAN_ORIGINS.some(origin => origin === url.origin)
+    && isZhipuCodingPlanPath(url.pathname);
+}
 
 export interface ProviderAccountUsageRequest {
   providerId: string;
@@ -41,7 +57,9 @@ export interface DeepSeekAccountUsageSnapshot {
 
 export type ProviderAccountUsageSnapshot =
   | DeepSeekAccountUsageSnapshot
-  | ZhipuCodingPlanQuotaSnapshot;
+  | ZhipuCodingPlanQuotaSnapshot
+  | KimiCodingUsageSnapshot
+  | OpenCodeGoUsageSnapshot;
 
 /** 智谱 GLM Coding Plan 一个计费窗口的已用比例与重置时间。 */
 export interface ZhipuCodingPlanWindow {
@@ -105,12 +123,18 @@ export const ZHIPU_CODING_PLAN_USAGE_URL = 'https://www.bigmodel.cn/coding-plan/
 export function getProviderAccountUsageDashboardUrl(upstream: string): string | undefined {
   try {
     switch (new URL(upstream).origin) {
+      case 'https://api.kimi.com':
+        return 'https://www.kimi.com/code/console';
+      case 'https://api.kimi.ai':
+        return 'https://www.kimi.ai/code/console';
       case 'https://api.deepseek.com':
         return 'https://platform.deepseek.com/usage';
       case 'https://open.bigmodel.cn':
         return ZHIPU_CODING_PLAN_USAGE_URL;
       case 'https://api.z.ai':
         return 'https://z.ai/manage-apikey/coding-plan/personal/my-plan';
+      case 'https://opencode.ai':
+        return 'https://opencode.ai/console';
     }
   } catch {
     // 未配置或非法地址没有对应的官方看板。
@@ -124,3 +148,83 @@ export const PROVIDER_ACCOUNT_USAGE_AGENTS: readonly AgentKind[] = [
   'codex',
   'pi',
 ];
+
+/** Sanitize the same-account remote result; never trust a remote dashboard URL or extra fields. */
+export function parseKimiAccountUsageResult(value: unknown): ProviderAccountUsageResult {
+  const invalid: ProviderAccountUsageResult = { status: 'unavailable', error: 'invalid-response' };
+  if (!value || typeof value !== 'object') return invalid;
+  const raw = value as Record<string, unknown>;
+  const errors: ProviderAccountUsageError[] = ['no-credentials', 'updating', 'auth', 'rate-limited', 'network', 'server', 'invalid-response', 'throttled', 'unknown'];
+  if (raw.status === 'unsupported') return { status: 'unsupported' };
+  if (raw.status === 'unavailable' && errors.includes(raw.error as ProviderAccountUsageError)) {
+    return { status: 'unavailable', error: raw.error as ProviderAccountUsageError };
+  }
+  const snapshot = raw.snapshot as KimiCodingUsageSnapshot | undefined;
+  if (raw.status !== 'ready' || typeof raw.stale !== 'boolean' || !snapshot
+    || snapshot.kind !== 'kimi-coding-quota' || !Number.isFinite(snapshot.fetchedAt)
+    || !Array.isArray(snapshot.windows) || snapshot.windows.length > 4) return invalid;
+  const ids = new Set<string>();
+  const windows: KimiCodingUsageSnapshot['windows'] = [];
+  for (const window of snapshot.windows) {
+    if (!window || !['limit_5h', 'limit_7d', 'limit_month_total', 'limit_month_code'].includes(window.id)
+      || ids.has(window.id) || !Number.isFinite(window.usedPercent) || window.usedPercent < 0 || window.usedPercent > 100
+      || (window.resetsAt !== null && (!Number.isFinite(window.resetsAt) || window.resetsAt <= 0))) return invalid;
+    ids.add(window.id);
+    windows.push({ id: window.id, usedPercent: window.usedPercent, resetsAt: window.resetsAt });
+  }
+  return { status: 'ready', stale: raw.stale, snapshot: { kind: 'kimi-coding-quota', windows, fetchedAt: snapshot.fetchedAt } };
+}
+
+/** Sanitize an OpenCode Go result received from another computer. */
+export function parseOpenCodeGoAccountUsageResult(value: unknown): ProviderAccountUsageResult {
+  const invalid: ProviderAccountUsageResult = { status: 'unavailable', error: 'invalid-response' };
+  if (!value || typeof value !== 'object') return invalid;
+  const raw = value as Record<string, unknown>;
+  const errors: ProviderAccountUsageError[] = ['no-credentials', 'updating', 'auth', 'rate-limited', 'network', 'server', 'invalid-response', 'throttled', 'unknown'];
+  if (raw.status === 'unsupported') return { status: 'unsupported' };
+  if (raw.status === 'unavailable' && errors.includes(raw.error as ProviderAccountUsageError)) {
+    return { status: 'unavailable', error: raw.error as ProviderAccountUsageError };
+  }
+  const snapshot = raw.snapshot as OpenCodeGoUsageSnapshot | undefined;
+  if (raw.status !== 'ready' || typeof raw.stale !== 'boolean' || !snapshot
+    || snapshot.kind !== 'opencode-go-quota' || !Number.isFinite(snapshot.fetchedAt)
+    || !Array.isArray(snapshot.windows) || snapshot.windows.length > 3) return invalid;
+  const ids = new Set<string>();
+  const windows: OpenCodeGoUsageSnapshot['windows'] = [];
+  for (const window of snapshot.windows) {
+    if (!window || !['rolling', 'weekly', 'monthly'].includes(window.id) || ids.has(window.id)
+      || typeof window.limited !== 'boolean' || !Number.isFinite(window.usedPercent)
+      || window.usedPercent < 0 || window.usedPercent > 100
+      || (window.resetsAt !== null && (!Number.isFinite(window.resetsAt) || window.resetsAt <= 0))) return invalid;
+    ids.add(window.id);
+    windows.push({ id: window.id, usedPercent: window.usedPercent, limited: window.limited, resetsAt: window.resetsAt });
+  }
+  return { status: 'ready', stale: raw.stale, snapshot: { kind: 'opencode-go-quota', windows, fetchedAt: snapshot.fetchedAt } };
+}
+
+/** Rebuild the GLM display payload on both sides of the same-account tunnel. */
+export function parseZhipuAccountUsageResult(value: unknown): ProviderAccountUsageResult {
+  const invalid = { status: 'unavailable', error: 'invalid-response' } as const;
+  if (!value || typeof value !== 'object') return invalid;
+  const raw = value as Record<string, unknown>;
+  if (raw.status === 'unsupported') return { status: 'unsupported' };
+  if (raw.status === 'unavailable') return { status: 'unavailable', error: 'unknown' };
+  const snapshot = raw.snapshot as ZhipuCodingPlanQuotaSnapshot | undefined;
+  if (raw.status !== 'ready' || typeof raw.stale !== 'boolean' || !snapshot
+    || snapshot.kind !== 'zhipu-coding-plan-quota' || typeof snapshot.noPlan !== 'boolean'
+    || !Number.isSafeInteger(snapshot.fetchedAt)) return invalid;
+  const window = (entry: ZhipuCodingPlanWindow | null) => {
+    if (entry === null) return null;
+    if (!entry || !Number.isFinite(entry.usedPercent) || entry.usedPercent < 0 || entry.usedPercent > 100
+      || (entry.resetsAt !== null && (!Number.isSafeInteger(entry.resetsAt) || entry.resetsAt <= 0))) return undefined;
+    return { usedPercent: entry.usedPercent, resetsAt: entry.resetsAt };
+  };
+  const fiveHour = window(snapshot.fiveHour);
+  const weekly = window(snapshot.weekly);
+  if (fiveHour === undefined || weekly === undefined) return invalid;
+  const level = typeof snapshot.level === 'string' && ['lite', 'pro', 'max'].includes(snapshot.level.toLowerCase())
+    ? snapshot.level.toLowerCase() : null;
+  return { status: 'ready', stale: raw.stale, snapshot: {
+    kind: 'zhipu-coding-plan-quota', noPlan: snapshot.noPlan, fetchedAt: snapshot.fetchedAt, fiveHour, weekly, level,
+  } };
+}

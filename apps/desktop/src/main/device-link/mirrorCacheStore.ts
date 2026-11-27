@@ -1,4 +1,7 @@
+import { cachedProjectAliases } from '@cindy/maker-shared/project-alias-sync';
 import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
+import { parseOrcaRemoteLead } from '../../shared/orcaRemoteWorker.js';
+import { parseSessionCreatedBy } from '../../shared/sessionOrigin.js';
 /**
  * mirrorCacheStore —— 控制端「远程会话镜像」的本地冷缓存(落盘)。
  * ---------------------------------------------------------------------------
@@ -53,6 +56,7 @@ import {
   CLEARED_ANY,
   type ClearCounter,
 } from './mirrorCacheBarrier';
+import { shortDeviceRef } from '@cindy/device-link';
 import { createLogger } from '../logger';
 
 const log = createLogger('device-link:mirror-cache');
@@ -87,6 +91,7 @@ const SESSION_LIST_FILE = 'session-list.json';
 export interface CachedDeviceSessions {
   deviceId: string;
   deviceName: string;
+  projectAliases?: import('@cindy/maker-shared/project-alias-sync').CachedProjectAliases;
   sessions: Record<string, unknown>[];
 }
 
@@ -226,7 +231,7 @@ function messageOrderKey(message: Record<string, unknown>): number {
 }
 
 /**
- * 会话列表瘦身:只留列表渲染(标题 / 预览 / 时间 / 图标)、分组(workingDir / workspaceKind)
+ * 会话列表瘦身:只留列表渲染(标题 / 预览 / 时间 / 图标)、分组(projectDir / workingDir / workspaceKind)
  * 与跳转(id)需要的字段白名单,长文本截断。
  * 刻意丢弃 live-only 字段(deviceLinkConnectionStatus / attached / 运行态)与大字段
  * (_count / extraDirs / token 统计):前者会画出假在线,后者列表行不消费。
@@ -236,6 +241,8 @@ const SESSION_FIELD_WHITELIST = [
   'userId',
   'title',
   'workingDir',
+  'projectDir',
+  'remoteHostId',
   'workspaceKind',
   'worktreePath',
   'model',
@@ -244,10 +251,14 @@ const SESSION_FIELD_WHITELIST = [
   'fastMode',
   'status',
   'agentKind',
+  'providerId',
+  'agentDeviceId',
   'source',
   'orcaRole',
   'parentSessionId',
   'pinnedAt',
+  'snoozedUntil',
+  'snoozedAt',
   'preview',
   'userSendAt',
   'lastActivityAt',
@@ -272,14 +283,22 @@ export function coerceCachedSession(input: unknown): Record<string, unknown> | n
   for (const key of SESSION_FIELD_WHITELIST) {
     const value = input[key];
     if (value === undefined) continue;
-    out[key] =
-      typeof value === 'string' && TRUNCATED_TEXT_FIELDS.has(key) ? truncateText(value) : value;
+    // Legacy rows use workingDir as their project identity during offline alias lookup.
+    const identityPath = key === 'workingDir' && input.projectDir == null;
+    out[key] = typeof value === 'string' && !identityPath && TRUNCATED_TEXT_FIELDS.has(key)
+      ? truncateText(value) : value;
   }
   const companion = input.companion;
   if (isRecord(companion) && typeof companion.id === 'string' && typeof companion.role === 'string') {
     out.companion = { id: companion.id, role: companion.role,
-      ...(typeof companion.channel === 'string' ? { channel: companion.channel } : {}) };
+      ...(typeof companion.taskProjectDir === 'string' ? { taskProjectDir: companion.taskProjectDir } : {}),
+      ...(typeof companion.channel === 'string' ? { channel: companion.channel } : {}),
+      ...(typeof companion.routineId === 'string' ? { routineId: companion.routineId } : {}) };
   }
+  const orcaRemoteLead = parseOrcaRemoteLead(input.orcaRemoteLead);
+  if (orcaRemoteLead) out.orcaRemoteLead = orcaRemoteLead;
+  const createdBySession = parseSessionCreatedBy(input.createdBySession);
+  if (createdBySession) out.createdBySession = createdBySession;
   return out;
 }
 
@@ -306,7 +325,7 @@ export function normalizeDeviceSessions(
       typeof item.deviceName === 'string' && item.deviceName.trim()
         ? truncateText(item.deviceName.trim())
         : deviceId;
-    devices.push({ deviceId, deviceName, sessions });
+    devices.push({ deviceId, deviceName, sessions, projectAliases: cachedProjectAliases(item.projectAliases) });
   }
   return devices
     .sort((a, b) => lastActivityTime(b.sessions[0]) - lastActivityTime(a.sessions[0]))
@@ -819,7 +838,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
     // 收尾的二次扫描兜住"扫完才冒出来"的文件。
     return withCacheLock(rootAtStart, async (lockHeld) => {
       if (!lockHeld) {
-        log.warn(`mirror cache: clearing ${id.slice(0, 8)} without cross-process lock`);
+        log.warn(`mirror cache: clearing ${shortDeviceRef(id)} without cross-process lock`);
       }
       const epochAll = purgeAllEpoch;
       const dir = path.join(rootAtStart, MESSAGES_DIR);
@@ -844,7 +863,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       try {
         await markClearPending(rootAtStart, deviceClearKey(id));
       } catch (err) {
-        log.error(`mirror cache: failed to mark clear pending for ${id.slice(0, 8)}`, err);
+        log.error(`mirror cache: failed to mark clear pending for ${shortDeviceRef(id)}`, err);
         throw new MirrorCachePurgeError(
           rootAtStart,
           [rootAtStart],
@@ -857,7 +876,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
         await bumpClearCounters(rootAtStart, id);
       } catch (err) {
         barrierPersisted = false;
-        log.error(`mirror cache: failed to persist clear intent for ${id.slice(0, 8)}`, err);
+        log.error(`mirror cache: failed to persist clear intent for ${shortDeviceRef(id)}`, err);
         stuck.push(rootAtStart);
         stuckBarriers.push(deviceClearKey(id), CLEARED_ANY);
       }
@@ -937,7 +956,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       try {
         await bumpClearCounters(rootAtStart, id);
       } catch (err) {
-        log.error(`mirror cache: failed to persist clear barrier for ${id.slice(0, 8)}`, err);
+        log.error(`mirror cache: failed to persist clear barrier for ${shortDeviceRef(id)}`, err);
         if (barrierPersisted) {
           stuck.push(rootAtStart);
           stuckBarriers.push(deviceClearKey(id), CLEARED_ANY);
@@ -969,7 +988,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       }
       // 确认清完了才撤墓碑。撤不掉不致命(只是这台设备的缓存读继续被挡)。
       await clearPendingMark(rootAtStart, deviceClearKey(id)).catch((err: unknown) => {
-        log.warn(`mirror cache: failed to drop pending clear mark for ${id.slice(0, 8)}`, err);
+        log.warn(`mirror cache: failed to drop pending clear mark for ${shortDeviceRef(id)}`, err);
       });
     });
   }

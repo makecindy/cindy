@@ -18,8 +18,13 @@ import { SELECTION_CONTEXT_MENU_ADD_TO_CHAT_CHANNEL } from '../shared/selectionC
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import { createRemoteReadBridge } from './remoteReadBridge';
 
 import { createAppearanceSnapshotBridge } from './appearanceSnapshot';
+import { PROVIDER_SHARE_IPC, type ProviderShareCommand } from '../shared/providerShare';
+import { PROVIDER_GROUP_IPC } from '../shared/providerGroup';
+import { MODEL_ACCESS_STATUS_CHANNEL } from '../shared/modelAccess';
+import { isModelVisibilityLegacyOwnerClaim, type ModelVisibilityLegacyOwnerClaim } from '../shared/modelVisibility';
 import { DEVICE_LINK_INVOKE, DEVICE_LINK_PUSH } from '../shared/deviceLinkIpc';
 import type { LocalThemesResult } from '../shared/local-themes';
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from '../shared/locale';
@@ -78,6 +83,14 @@ function onPayloadWithMetadata<T, M>(
   return () => ipcRenderer.removeListener(channel, listener);
 }
 
+function onProviderUsage(legacyChannel: string, defaultProvider: string, cb: (payload: unknown) => void, providerId = defaultProvider): () => void {
+  return providerId === defaultProvider ? onPayload(legacyChannel, cb)
+    : onPayload<{ providerId?: string; snapshot?: unknown }>(defaultProvider === 'openai'
+      ? 'usage:codex-provider-account-changed' : 'usage:subscription-provider-account-changed', payload => {
+        if (payload?.providerId === providerId) cb(payload.snapshot);
+      });
+}
+
 function readPreferredSystemLocale(): ApplicationMenuLocale {
   try {
     const value = ipcRenderer.sendSync('app-locale:get-preferred-system-locale-sync');
@@ -124,6 +137,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         return { success: false, error: String(error), themes: [], diagnostics: [] };
       }
     },
+    onChanged: (cb: (payload: LocalThemesResult) => void): (() => void) =>
+      onPayload('local-themes:changed', cb),
   },
   appShortcuts: {
     getState: (): { overrides: Record<string, unknown>; platform: string } =>
@@ -162,8 +177,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deviceLink: {
     getState: (): Promise<unknown> => ipcRenderer.invoke(DEVICE_LINK_INVOKE.GET_STATE),
     listDevices: (): Promise<unknown> => ipcRenderer.invoke(DEVICE_LINK_INVOKE.LIST_DEVICES),
-    invoke: (deviceId: string, channel: string, args: unknown[], scheduling?: { background?: boolean }): Promise<unknown> =>
-      ipcRenderer.invoke(DEVICE_LINK_INVOKE.INVOKE, { deviceId, channel, args, ...(scheduling ? { scheduling } : {}) }),
+    invoke: createRemoteReadBridge(ipcRenderer).invoke,
     subscribe: (deviceId: string, topics: string[]): Promise<{ ok: true }> =>
       ipcRenderer.invoke(DEVICE_LINK_INVOKE.SUBSCRIBE, { deviceId, topics }),
     unsubscribe: (deviceId: string, topics: string[]): Promise<{ ok: true }> =>
@@ -172,6 +186,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       onPayload(DEVICE_LINK_PUSH.PRESENCE_CHANGED, cb),
     onStatusChanged: (cb: (payload: unknown) => void): (() => void) =>
       onPayload(DEVICE_LINK_PUSH.STATUS_CHANGED, cb),
+    onDeviceDirectoryInvalidated: (cb: () => void): (() => void) =>
+      onPayload(DEVICE_LINK_PUSH.DEVICE_DIRECTORY_INVALIDATED, cb),
     onRemotePush: (cb: (payload: unknown, localOwnerStamp?: unknown) => void): (() => void) =>
       onPayloadWithMetadata(DEVICE_LINK_PUSH.REMOTE_PUSH, cb),
     onAccessRevoked: (cb: (payload: unknown) => void): (() => void) =>
@@ -225,6 +241,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
         }),
       clear: (deviceId: string): Promise<{ ok: true }> =>
         ipcRenderer.invoke(DEVICE_LINK_INVOKE.MIRROR_CACHE_CLEAR, { deviceId }),
+    },
+    offlineInboxIntents: {
+      list: (): Promise<unknown> =>
+        ipcRenderer.invoke(DEVICE_LINK_INVOKE.OFFLINE_INBOX_INTENTS_LIST),
+      upsert: (intent: unknown): Promise<unknown> =>
+        ipcRenderer.invoke(DEVICE_LINK_INVOKE.OFFLINE_INBOX_INTENTS_UPSERT, { intent }),
+      remove: (deviceId: string, sessionId: string): Promise<unknown> =>
+        ipcRenderer.invoke(DEVICE_LINK_INVOKE.OFFLINE_INBOX_INTENTS_REMOVE, { deviceId, sessionId }),
+      clearDevice: (deviceId: string): Promise<unknown> =>
+        ipcRenderer.invoke(DEVICE_LINK_INVOKE.OFFLINE_INBOX_INTENTS_CLEAR_DEVICE, { deviceId }),
+      onChanged: (cb: (payload: unknown) => void): (() => void) =>
+        onPayload(DEVICE_LINK_PUSH.OFFLINE_INBOX_INTENTS_CHANGED, cb),
     },
   },
 
@@ -280,6 +308,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openExternal: (url: string): Promise<unknown> => ipcRenderer.invoke('shell:open-external', url),
   openFileInBrowser: (pathOrUrl: string): Promise<unknown> => ipcRenderer.invoke('shell:open-file-in-browser', pathOrUrl),
   openPath: (pathOrUrl: string) => invokeOpenPath(ipcRenderer.invoke.bind(ipcRenderer), pathOrUrl),
+  openSystemPreview: (filePath: string): Promise<boolean> =>
+    ipcRenderer.invoke('file:system-preview', filePath),
+  getFileThumbnail: (params: { path: string; size: number; revalidate?: boolean }): Promise<{
+    dataUrl: string | null; byteSize: number;
+  } | null> => ipcRenderer.invoke('file:thumbnail', params),
   showItemInFolder: (params: unknown): Promise<unknown> => ipcRenderer.invoke('shell:show-item-in-folder', params),
   copyPngToClipboard: (params: CopyPngToClipboardParams): Promise<void> =>
     ipcRenderer.invoke(COPY_PNG_TO_CLIPBOARD_CHANNEL, params),
@@ -311,6 +344,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 意识面板注册与运行所需的最小 bridge。右侧栏独立窗口会复用
   // ghostPanels/GhostChipPanelBody，但不暴露安装、卸载、开发运行时或权限管理能力。
   ghosts: {
+    onModelPickerRequest: (cb: (request: import('../shared/pluginModelPicker').PluginModelPickerPresentation) => void) =>
+      onPayload('ghosts:model-picker:request', cb),
+    onModelPickerDismissed: (cb: (payload: { requestId: string }) => void) =>
+      onPayload('ghosts:model-picker:dismissed', cb),
+    resolveModelPicker: (requestId: string, route: import('../shared/pluginModelPicker').PluginModelPickerRoute | null) =>
+      ipcRenderer.invoke('ghosts:model-picker:resolve', { requestId, route }),
     listSync: (): { ghosts: unknown[] } => ipcRenderer.sendSync('ghosts:list'),
     reload: (id: string): Promise<{ state: string }> => ipcRenderer.invoke('ghosts:reload', id),
     openRetirement: (id: string): Promise<{ ok: true }> =>
@@ -458,6 +497,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 鈹€鈹€ RSB browser bridge(WebView 鎵胯浇) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
   rsbBrowserBridge: {
+    reportPreviewOpener: (input: import('../shared/rsbBrowserBridge').RsbFilePreviewReportPayload): Promise<unknown> =>
+      ipcRenderer.invoke('rsb-browser-bridge:report-file-preview-opener', input),
     report: (input: {
       sessionId: string;
       tabId: string;
@@ -492,12 +533,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // The renderer's durable-tab consumers use the canonical localDb namespace.
   // Keep the legacy top-level alias above for compatibility with older builds.
   localDb: {
-    bots: {
-      autonomy: {
-        glance: (botId: string): Promise<import('../shared/botAutonomy').BotGlance> =>
-          ipcRenderer.invoke('local-db:bots:autonomy:glance', botId),
-      },
-    },
     // Minimal read-only chat hydration bridge used by BackgroundTasks and the
     // shared makerChatStore. Do not expose the primary window's full DB API.
     sessions: {
@@ -620,14 +655,48 @@ contextBridge.exposeInMainWorld('electronAPI', {
     push: (params: unknown): Promise<unknown> => ipcRenderer.invoke('git-review:push', params),
   },
   maker: {
-    onBotAutonomyChanged: (cb: (payload: { botIds?: string[] }) => void): (() => void) =>
-      onPayload('maker:bot-autonomy:changed', cb),
-    allowBotWorkbenchPermission: (
-      botId: string,
-      sessionId: string,
-      requestId: string,
-    ): Promise<{ accepted: boolean }> =>
-      ipcRenderer.invoke('maker:rsb-window:allow-bot-workbench-permission', { botId, sessionId, requestId }),
+    mcpApps: (sessionId: string | null, input: unknown): Promise<unknown> => ipcRenderer.invoke('maker:mcp-apps:v1', sessionId, input),
+    onPluginUiAction: (cb: (input: unknown) => void) => onPayload('plugin-ui:action', cb),
+    onPluginUiState: (cb: (input: { epoch: string; updates: import('../shared/pluginUi').PluginUiStateChange[] }) => void) => onPayload('plugin-ui:state', cb),
+    // Read-only catalogs needed by the same model selector used in the main window.
+    listProviders: () => ipcRenderer.invoke('maker:provider:list'),
+    // The shared catalog reader needs the same owner lease even when legacy migration is deferred.
+    claimLegacyModelVisibilityOwner: (): ModelVisibilityLegacyOwnerClaim => {
+      const value: unknown = ipcRenderer.sendSync('maker:model-visibility:legacy-owner-claim-sync');
+      return isModelVisibilityLegacyOwnerClaim(value) ? value : {
+        dataOwnerId: null, ownerGeneration: 0, canWriteOwnerScoped: false,
+        claimed: false, claimedByOtherOwner: false, canInitialize: false,
+      };
+    },
+    syncModelVisibility: (dataOwnerId: string | null, ownerGeneration: number, map: Record<string, boolean>,
+      policy?: import('../shared/modelVisibility').ModelVisibilityPolicy): Promise<void> =>
+      ipcRenderer.invoke('maker:model-visibility:sync', dataOwnerId, ownerGeneration, map, policy),
+    listAvailableAgents: () => ipcRenderer.invoke('maker:list-available-agents'),
+    onAgentsChanged: (cb: (payload: unknown) => void) => onPayload('maker:agents:changed', cb),
+    onProvidersChanged: (cb: (payload: unknown, metadata?: unknown) => void) =>
+      onPayloadWithMetadata('maker:provider:changed', cb),
+    getCapabilities: (agentKind: string) => ipcRenderer.invoke('maker:get-capabilities', agentKind),
+    getModelContextLimit: (target: import('../shared/modelContextLimit').ModelContextLimitTarget) =>
+      ipcRenderer.invoke('maker:model-context-limit:get', target),
+    fetchProviderAccountUsage: (input: { providerId: string; forceRefresh?: boolean }) =>
+      ipcRenderer.invoke('maker:provider:account-usage', input),
+    requestProviderModelsAutoRefresh: (trigger: import('../shared/providerModelRefresh').ProviderModelAutoRefreshRendererTrigger) =>
+      ipcRenderer.invoke('maker:provider:models-auto-refresh', trigger),
+    usage: {
+      getModelPricing: () => ipcRenderer.invoke('maker:usage:model-pricing-v2'),
+      getReferenceModelPricing: () => ipcRenderer.invoke('maker:usage:reference-model-pricing'),
+      onModelPricingChanged: (cb: (payload: unknown) => void) => onPayload('usage:model-pricing-changed', cb),
+      onReferenceModelPricingChanged: (cb: (payload: unknown) => void) => onPayload('usage:reference-model-pricing-changed', cb),
+      getCodexRateLimits: (providerId?: string) => ipcRenderer.invoke('maker:usage:codex-rate-limits', providerId),
+      getClaudeSubscription: (providerId?: string) => ipcRenderer.invoke('maker:usage:claude-subscription', providerId),
+      getXaiSubscription: (providerId?: string) => ipcRenderer.invoke('maker:usage:xai-subscription', providerId),
+      onCodexAccountChanged: (cb: (payload: unknown) => void, providerId?: string) =>
+        onProviderUsage('usage:codex-account-changed', 'openai', cb, providerId),
+      onClaudeSubscriptionChanged: (cb: (payload: unknown) => void, providerId?: string) =>
+        onProviderUsage('usage:claude-subscription-changed', 'anthropic', cb, providerId),
+      onXaiSubscriptionChanged: (cb: (payload: unknown) => void, providerId?: string) =>
+        onProviderUsage('usage:xai-subscription-changed', 'xai', cb, providerId),
+    },
     // Live event subset consumed by makerChatStore in the detached renderer.
     onEvent: (cb: (payload: unknown) => void): (() => void) => onPayload('maker:event', cb),
     onStatusChanged: (cb: (payload: unknown) => void): (() => void) =>
@@ -656,6 +725,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
     start: (params: unknown): Promise<unknown> => ipcRenderer.invoke('maker:search:start', params),
     cancel: (params: unknown): Promise<unknown> => ipcRenderer.invoke('maker:search:cancel', params),
     onEvent: (cb: (event: unknown) => void): (() => void) => onPayload('maker:search:event', cb),
+  },
+  // Only read operations required by the model selector; sharing/group management stays in the main UI.
+  providerShare: {
+    command: (command: ProviderShareCommand) => {
+      if (!['received', 'received-snapshot', 'retry-model-catalog', 'quota-account'].includes(command.action) &&
+          !(command.action === 'insights' && command.includeUsage === false))
+        return Promise.reject(new Error('Unsupported model catalog operation'));
+      return ipcRenderer.invoke(PROVIDER_SHARE_IPC.COMMAND, command);
+    },
+    onReceivedChanged: (cb: (payload: unknown) => void) => onPayload(PROVIDER_SHARE_IPC.RECEIVED_CHANGED, cb),
+  },
+  providerGroup: {
+    command: (command: { action: 'list' }) => command?.action === 'list'
+      ? ipcRenderer.invoke(PROVIDER_GROUP_IPC.COMMAND, command)
+      : Promise.reject(new Error('Unsupported model catalog operation')),
+    onChanged: (cb: (payload: unknown) => void) => onPayload(PROVIDER_GROUP_IPC.CHANGED, cb),
+  },
+  modelAccess: {
+    getStatus: () => ipcRenderer.invoke('model-access:get-status'),
+    onStatusChange: (cb: (payload: unknown) => void) => onPayload(MODEL_ACCESS_STATUS_CHANNEL, cb),
   },
   /** 主窗推送 RSB 浏览器按键命令（⌘L / ⌘W 等）—— main 端常量见 webview-security RSB_BROWSER_COMMAND_CHANNEL。 */
   onRsbBrowserCommand: (

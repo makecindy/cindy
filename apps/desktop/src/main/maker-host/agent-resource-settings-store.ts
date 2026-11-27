@@ -1,3 +1,4 @@
+import { validateAdditionalSettingsOverrides } from '../../shared/settingsEditableCatalog.js';
 /**
  * agent-resource-settings-store —— agent 命令行资源占用治理的 main 端持久化设置。
  *
@@ -13,16 +14,29 @@
  * 后续 Settings UI 接入(IPC 写路径)复用同一 store。
  */
 
-import { app } from 'electron';
-import path from 'node:path';
+import { userDataPath } from '../userDataPath.js';
 
 import { desktopMakerLogger } from './logger-adapter.js';
 import {
   createOverrideSettingsFile,
+  portableOverrideSettings,
   type OverrideSettingsState,
 } from './override-settings-file.js';
 
+import { inspectSettingsFile, isSettingBoolean, isSettingNumber, validateOptionalSettingsFields } from './settings-inspection.js';
+
 const log = desktopMakerLogger.child('agent-resource-settings-store');
+
+/** 只读偏好，不探测进程或修改优先级、线程限制。 */
+export function inspectAgentResourceSettings() {
+  return inspectSettingsFile({ filePath: settingsFilePath, defaults: DEFAULTS, normalize,
+    validate: (raw) => validateOptionalSettingsFields(raw, {
+      maxConcurrentCommands: isSettingNumber,
+      processPriority: (value) => value === 'normal' || value === 'low' || value === 'lowest',
+      capToolchainThreads: isSettingBoolean,
+    }),
+  });
+}
 
 /**
  * agent 进程的 OS 调度优先级档位:
@@ -63,7 +77,7 @@ const DEFAULTS: AgentResourceSettings = {
 export const MAX_CONCURRENT_COMMANDS_CAP = 64;
 
 function settingsFilePath(): string {
-  return path.join(app.getPath('userData'), 'agent-resource-settings.json');
+  return userDataPath('agent-resource-settings.json');
 }
 
 function normalize(raw: unknown): AgentResourceSettings {
@@ -87,6 +101,8 @@ function clampInt(v: number, min: number, max: number): number {
 }
 
 const store = createOverrideSettingsFile<AgentResourceSettings>({
+  // Cloud settings reads only; ordinary writes are unchanged.
+  validateOverrides: raw => validateAdditionalSettingsOverrides('agentResource', raw),
   filePath: settingsFilePath,
   defaults: DEFAULTS,
   normalize,
@@ -122,3 +138,8 @@ export function resetAgentResourceSettings(): AgentResourceSettings {
 }
 
 export const __testing = { normalize };
+
+/** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
+export const agentResourcePortableSettings = portableOverrideSettings(store);
+/** Internal Host settings adapter; no new IPC or persistence location. */
+export function getAgentResourceSettingsStore() { return store; }

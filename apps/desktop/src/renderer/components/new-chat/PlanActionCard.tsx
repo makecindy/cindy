@@ -9,10 +9,11 @@
  *                   ⏎ hint hides while the feedback editor is active (Enter
  *                   then belongs to the editor — two identical hints were
  *                   confusing, see issue #475 review feedback).
- *   Feedback Row  — pencil icon + placeholder → becomes an inline editor.
- *                   Enter with text → onRespond(false, feedback). The ⏎ send
- *                   affordance only appears when there is text, and is a real
- *                   button (click submits).
+ *   Feedback Row  — pencil icon + placeholder + voice button → becomes an inline
+ *                   editor. Enter with text → onRespond(false, feedback). A
+ *                   full-width input contains the shared VoiceInputButton and
+ *                   SendButton; send stays disabled until there is feedback or
+ *                   dictation is active.
  *
  * Cancel(取消本次审阅)是次级动作,不与批准/反馈同级成行:可见入口收在
  * PlanViewerCard 工具条的 X;这里只保留全局 Esc 快捷键(onCancel)。
@@ -27,7 +28,13 @@ import { CornerDownLeft, Pencil } from 'lucide-react';
 
 import { shouldCardShortcutYield } from '@/lib/editableKeyboardTarget';
 import { cn } from '@/lib/utils';
+import { Tip } from '@/components/ui/tooltip';
+import { FieldVoiceInputNotice } from '@/voice-input/FieldVoiceInputNotice';
+import { useFieldVoiceInput } from '@/voice-input/useFieldVoiceInput';
+import { VoiceInputButton } from '@/voice-input/VoiceInputButton';
+import { SendButton } from './SendButton';
 import { ListComposerTextarea } from './ListComposerTextarea';
+import { sixAnswerRows, useAnswerComposerExpanded } from './useAnswerComposerExpanded';
 
 // ---------------------------------------------------------------------------
 // Props
@@ -54,25 +61,84 @@ export function PlanActionCard({ requestId, onRespond, onCancel }: PlanActionCar
   // Important #3: once the user triggers Approve or Feedback, freeze the card
   // so rapid double-clicks can't fire two IPC responses for the same requestId.
   const [submitted, setSubmitted] = useState(false);
+  const [voiceSubmitting, setVoiceSubmitting] = useState(false);
+  const [voiceReleaseToSendActive, setVoiceReleaseToSendActive] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const sendButtonRef = useRef<HTMLButtonElement>(null);
+  const feedbackRef = useRef(feedback);
+  feedbackRef.current = feedback;
+  const voiceSubmitRef = useRef(false);
+  const pendingVoiceFocusRef = useRef(false);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const voice = useFieldVoiceInput({
+    draftKey: requestId,
+    inputRef,
+    inputElementKey: isEditing,
+    value: feedback,
+    onChange: (next) => {
+      feedbackRef.current = next;
+      setFeedback(next);
+    },
+    disabled: submitted,
+    active: !submitted,
+    enableShortcut: isEditing,
+    enableLongPress: isEditing,
+  });
+  const voiceRef = useRef(voice);
+  voiceRef.current = voice;
+
+  const displayedFeedback = voice.displayText;
+  const composerExpanded = useAnswerComposerExpanded(inputRef, displayedFeedback, sixAnswerRows);
+  const voiceLocked = voice.isBusy || voiceSubmitting;
+
+  useEffect(() => {
+    if (!isEditing || !pendingVoiceFocusRef.current) return;
+    pendingVoiceFocusRef.current = false;
+    inputRef.current?.focus();
+  }, [isEditing]);
 
   const handleApprove = useCallback(() => {
-    if (submitted) return;
+    if (submitted || voiceSubmitRef.current) return;
+    if (voiceRef.current.isBusy) void voiceRef.current.cancel();
     setSubmitted(true);
     onRespond(requestId, true);
   }, [requestId, onRespond, submitted]);
 
-  const handleSubmitFeedback = useCallback(() => {
-    if (submitted) return;
-    const trimmed = feedback.trim();
+  const handleSubmitFeedback = useCallback(async () => {
+    if (submitted || voiceSubmitRef.current) return;
+    if (voiceRef.current.isBusy) {
+      voiceSubmitRef.current = true;
+      setVoiceSubmitting(true);
+      try {
+        const finalText = await voiceRef.current.stop();
+        if (!mountedRef.current || finalText === null) return;
+        const trimmed = finalText.trim();
+        if (!trimmed) return;
+        setSubmitted(true);
+        onRespond(requestId, false, trimmed);
+      } finally {
+        voiceSubmitRef.current = false;
+        if (mountedRef.current) setVoiceSubmitting(false);
+      }
+      return;
+    }
+    const trimmed = feedbackRef.current.trim();
     if (!trimmed) return;
     setSubmitted(true);
     onRespond(requestId, false, trimmed);
-  }, [feedback, requestId, onRespond, submitted]);
+  }, [requestId, onRespond, submitted]);
 
   const handleCancel = useCallback(() => {
-    if (submitted || !onCancel) return;
+    if (submitted || !onCancel || voiceSubmitRef.current) return;
+    if (voiceRef.current.isBusy) void voiceRef.current.cancel();
     setSubmitted(true);
     onCancel(requestId);
   }, [requestId, onCancel, submitted]);
@@ -82,8 +148,8 @@ export function PlanActionCard({ requestId, onRespond, onCancel }: PlanActionCar
    * clipped to a single line. Capped at ~6 rows to avoid eating the whole
    * viewport — beyond that the built-in overflow kicks in.
    */
-  const handleFeedbackInput = useCallback((e: React.FormEvent<HTMLTextAreaElement>) => {
-    const el = e.currentTarget;
+  const syncTextareaHeight = useCallback((el: HTMLTextAreaElement | null) => {
+    if (!el) return;
     el.style.height = 'auto';
     // 行高改成无单位比例后会随「外观 → UI 字号」缩放,6 行上限必须按实际计算值算:
     // 写死 6×22 会让放大字号时仍按 132px 截断,可见行数反而变少。取不到计算值
@@ -95,13 +161,37 @@ export function PlanActionCard({ requestId, onRespond, onCancel }: PlanActionCar
     el.style.height = `${Math.min(el.scrollHeight, maxHeight)}px`;
   }, []);
 
+  const handleFeedbackInput = useCallback(
+    (e: React.FormEvent<HTMLTextAreaElement>) => {
+      syncTextareaHeight(e.currentTarget);
+    },
+    [syncTextareaHeight],
+  );
+
+  // Voice draft/submitted text updates value programmatically without firing input.
+  useEffect(() => {
+    if (isEditing) syncTextareaHeight(inputRef.current);
+  }, [displayedFeedback, isEditing, syncTextareaHeight]);
+
   // Enable the feedback row by clicking it
   const handleFeedbackRowClick = useCallback(() => {
-    if (submitted) return;
+    if (submitted || voiceSubmitRef.current) return;
     setIsEditing(true);
     // Focus after the textarea mounts
     requestAnimationFrame(() => inputRef.current?.focus());
   }, [submitted]);
+
+  const handleVoiceStart = useCallback((): boolean => {
+    if (submitted || voiceSubmitRef.current) return false;
+    if (!isEditing) {
+      const started = voiceRef.current.start();
+      if (!started) return false;
+      pendingVoiceFocusRef.current = true;
+      setIsEditing(true);
+      return true;
+    }
+    return voiceRef.current.startFromButton();
+  }, [isEditing, submitted]);
 
   // Global Enter-to-approve / Escape-to-cancel (only when not in the feedback
   // editor — the editor owns both keys there).
@@ -127,13 +217,13 @@ export function PlanActionCard({ requestId, onRespond, onCancel }: PlanActionCar
     return () => window.removeEventListener('keydown', handler);
   }, [isEditing, submitted, handleApprove, handleCancel, onCancel]);
 
-  const hasFeedbackText = feedback.trim().length > 0;
+  const hasFeedbackText = displayedFeedback.trim().length > 0;
 
   return (
     <div
       ref={cardRef}
       className={cn(
-        'flex w-full max-w-[914px] flex-col overflow-hidden rounded-[12px] border',
+        'flex w-full max-w-[914px] flex-col overflow-hidden rounded-xl border',
         'border-[var(--plan-card-border)] bg-[var(--plan-card-bg)]',
       )}
     >
@@ -141,12 +231,12 @@ export function PlanActionCard({ requestId, onRespond, onCancel }: PlanActionCar
       <button
         type="button"
         onClick={handleApprove}
-        disabled={submitted}
+        disabled={submitted || voiceLocked}
         className={cn(
-          'flex w-full items-center gap-[10px] border-b px-[16px] py-[14px] text-left',
+          'flex w-full items-center gap-2.5 border-b px-4 py-3.5 text-left',
           'border-[var(--plan-action-row-divider)]',
           'transition-colors hover:bg-[var(--plan-action-row-hover-bg)]',
-          submitted && 'cursor-not-allowed opacity-60 hover:bg-transparent',
+          (submitted || voiceLocked) && 'cursor-not-allowed opacity-60 hover:bg-transparent',
         )}
       >
         {/* 20×20 circle with brand-orange fill + white check */}
@@ -183,80 +273,119 @@ export function PlanActionCard({ requestId, onRespond, onCancel }: PlanActionCar
         )}
       </button>
 
-      {/* Feedback Row */}
-      {isEditing ? (
-        <div className="flex items-start gap-[10px] px-[16px] py-[14px]">
-          <Pencil
-            size={16}
-            className="mt-[2px] shrink-0 text-[var(--plan-action-fb-icon)]"
-          />
-          <ListComposerTextarea
-            ref={inputRef}
-            value={feedback}
-            onChange={(e) => setFeedback(e.target.value)}
-            onInput={handleFeedbackInput}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-                e.preventDefault();
-                handleSubmitFeedback();
-              }
-              if (e.key === 'Escape') {
-                e.preventDefault();
-                setIsEditing(false);
-                setFeedback('');
-              }
-            }}
-            onBlur={() => {
-              // Keep editing state even on blur — users may click back in.
-              // Only collapse when there is no content at all.
-              if (!feedback) setIsEditing(false);
-            }}
-            placeholder={t('newChat.planReview.feedbackPlaceholder')}
-            rows={1}
-            disabled={submitted}
-            className={cn(
-              'flex-1 resize-none bg-transparent text-14 outline-none',
-              'text-[var(--plan-action-fb-text)]',
-              'placeholder:text-[var(--plan-action-fb-placeholder)]',
-              // 22 ÷ 14:与 text-14 等比,随 UI 字号缩放(auto-grow 上限按计算值取)
-              'leading-[1.571]',
-              submitted && 'cursor-not-allowed opacity-60',
-            )}
-          />
-          {/* 发送 ⏎:有文字才出现,且是真按钮(点击即发送)。textarea 的 onBlur 在
-               mousedown 后、click 前触发会把空文本行折叠掉,但有文字时行保持展开,
-               点击顺序安全。 */}
-          {hasFeedbackText && (
-            <button
-              type="button"
-              onClick={handleSubmitFeedback}
-              disabled={submitted}
-              aria-label={t('newChat.planReview.submitFeedbackAria')}
-              className="ml-auto mt-[2px] shrink-0 rounded p-0 transition-opacity hover:opacity-75"
-            >
-              <CornerDownLeft
-                size={16}
-                className="translate-y-[0.5px] text-[var(--plan-action-approve-text)]"
-              />
-            </button>
-          )}
-        </div>
-      ) : (
-        <button
-          type="button"
-          onClick={handleFeedbackRowClick}
+      {/* Feedback Row — keep a single VoiceInputButton mounted across collapsed/expanded
+          states so press-and-hold and drag-to-send gestures from the collapsed row survive
+          the transition into the inline editor. */}
+      <div className={isEditing ? 'p-3' : undefined}>
+        <div
+          data-testid={isEditing ? 'interaction-answer-composer' : undefined}
           className={cn(
-            'flex w-full items-center gap-[10px] px-[16px] py-[14px] text-left',
-            'transition-colors hover:bg-[var(--plan-action-row-hover-bg)]',
+            'flex w-full min-w-0',
+            isEditing
+              ? cn(
+                  'gap-2 rounded-lg border border-[var(--plan-card-border)] bg-[var(--chat-input-bg)] focus-within:border-[var(--chat-input-border-focus)]',
+                  composerExpanded ? 'flex-col p-3' : 'items-end py-2 pl-3 pr-2',
+                )
+              : 'items-center gap-2 pr-3',
           )}
         >
-          <Pencil size={16} className="shrink-0 text-[var(--plan-action-fb-icon)]" />
-          <span className="flex-1 text-14 font-normal text-[var(--plan-action-fb-placeholder)]">
-            {t('newChat.planReview.feedbackPlaceholder')}
-          </span>
-        </button>
-      )}
-
+          {isEditing ? (
+            <ListComposerTextarea
+              ref={inputRef}
+              value={displayedFeedback}
+              readOnly={voiceLocked}
+              onChange={(e) => {
+                feedbackRef.current = e.target.value;
+                setFeedback(e.target.value);
+              }}
+              onInput={handleFeedbackInput}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                  e.preventDefault();
+                  void handleSubmitFeedback();
+                }
+                if (e.key === 'Escape') {
+                  if (voiceRef.current.isBusy || voiceSubmitRef.current) return;
+                  e.preventDefault();
+                  setIsEditing(false);
+                  setFeedback('');
+                }
+              }}
+              onBlur={() => {
+                // Keep editing state even on blur — users may click back in.
+                // Only collapse when there is no content at all and dictation is idle.
+                if (!feedbackRef.current && !voiceRef.current.isBusy) setIsEditing(false);
+              }}
+              placeholder={t('newChat.planReview.feedbackPlaceholder')}
+              rows={1}
+              disabled={submitted}
+              className={cn(
+                'min-h-[22px] min-w-0 resize-none bg-transparent text-14 outline-none',
+                // One line beside the 30px actions; centred on them by the margin.
+                composerExpanded ? 'w-full' : 'my-[3px] flex-1',
+                'text-[var(--plan-action-fb-text)]',
+                'placeholder:text-[var(--plan-action-fb-placeholder)]',
+                // 22 ÷ 14:与 text-14 等比,随 UI 字号缩放(auto-grow 上限按计算值取)
+                'leading-[1.571]',
+                submitted && 'cursor-not-allowed opacity-60',
+              )}
+            />
+          ) : (
+            <button
+              type="button"
+              disabled={submitted}
+              onClick={handleFeedbackRowClick}
+              className={cn(
+                'flex min-w-0 flex-1 items-center gap-2.5 px-4 py-3.5 text-left',
+                'transition-colors hover:bg-[var(--plan-action-row-hover-bg)]',
+                submitted && 'cursor-not-allowed opacity-60 hover:bg-transparent',
+              )}
+            >
+              <Pencil size={16} className="shrink-0 text-[var(--plan-action-fb-icon)]" />
+              <span className="flex-1 text-14 font-normal text-[var(--plan-action-fb-placeholder)]">
+                {t('newChat.planReview.feedbackPlaceholder')}
+              </span>
+            </button>
+          )}
+          <div className={cn('flex items-center justify-end gap-2', isEditing && composerExpanded ? 'w-full' : 'shrink-0')}>
+            <VoiceInputButton
+              {...voice.buttonProps}
+              onStart={handleVoiceStart}
+              stopPropagation={!isEditing}
+              testId="plan-feedback-voice"
+              sendTargetRef={sendButtonRef}
+              canReleaseToSend={isEditing && !submitted && !voiceSubmitting}
+              releaseToSendActive={voiceReleaseToSendActive}
+              onReleaseToSendChange={setVoiceReleaseToSendActive}
+              onStopAndSend={handleSubmitFeedback}
+            />
+            {isEditing && (
+              <Tip
+                text={
+                  voiceReleaseToSendActive
+                    ? t('newChat.chatInput.voiceInput.releaseToSend')
+                    : t('newChat.planReview.submitFeedbackAria')
+                }
+              >
+                <SendButton
+                  ref={sendButtonRef}
+                  highlighted={voiceReleaseToSendActive}
+                  onClick={() => void handleSubmitFeedback()}
+                  disabled={submitted || voiceSubmitting || (!voice.isBusy && !hasFeedbackText)}
+                  ariaLabel={t('newChat.planReview.submitFeedbackAria')}
+                />
+              </Tip>
+            )}
+          </div>
+        </div>
+        {isEditing && (
+          <FieldVoiceInputNotice
+            error={voice.lastError}
+            speakerFiltered={voice.speakerFiltered}
+            className="mt-2"
+          />
+        )}
+      </div>
     </div>
   );
 }

@@ -10,10 +10,12 @@ import {
   clearDraft,
   clearDraftAndNotify,
   discardDraft,
+  discardDraftTree,
   draftHasContent,
   getAllDraftAttachmentUrls,
   getDraft,
   getDraftPresence,
+  getComposerDraftSessionIds,
   getOrCreateRemoteOptimisticTransitionCheckpoint,
   isDraftDiscardTokenCurrent,
   plainTextToTiptapDoc,
@@ -23,14 +25,43 @@ import {
   saveDraft,
   saveComposerTextAfterAsyncTransition,
   setComposerDraftOwner,
+  setBotGroupThreadAttachmentUrls,
   setRemoteOptimisticAttachmentUrls,
   subscribeDraft,
   subscribeDraftPresence,
+  subscribeAllDraftPresence,
   tiptapDocHasContent,
   type ComposerDraft,
 } from '@/lib/composerDraftStore';
+import { appendMcpAppComposerAttachment } from '@/lib/mcpAppComposerAttachment';
 
 const emptyDoc: JSONContent = { type: 'doc', content: [{ type: 'paragraph' }] };
+
+// Tier: unit at the renderer's production draft boundary. The minimum input
+// is one Main-delivered attachment, and the observable result is that the
+// existing unsent draft survives while a repeated receipt stays idempotent.
+it('appends a local MCP attachment without replacing the existing draft', () => {
+  const key = 'mcp-composer-attachment';
+  const existing = {
+    text: plainTextToTiptapDoc('/cindy:cindy-plugin-creator make a page'),
+    attachments: [attachment('existing')],
+    quotes: [],
+    browserComments: [],
+    builtInSkillIntent: { name: 'cindy-plugin-creator', commandName: 'cindy:cindy-plugin-creator' },
+    pendingGhostId: 'plugin-1',
+    focusAtEnd: true,
+  } satisfies ComposerDraft;
+  const added = {
+    id: 'mcp-1', name: 'notes.txt', path: '/cache/notes.txt', ext: '.txt', size: 5,
+    category: 'text' as const, mimeType: 'text/plain',
+  };
+  saveDraft(key, existing);
+  appendMcpAppComposerAttachment(key, added);
+  expect(getDraft(key)).toEqual({ ...existing, attachments: [...existing.attachments, added] });
+  appendMcpAppComposerAttachment(key, added);
+  expect(getDraft(key)?.attachments).toHaveLength(2);
+  clearDraft(key);
+});
 
 // Unit: a routed built-in must survive the editor/attachment snapshot saves, but
 // cease owning the draft when the user replaces its command (PR #6433).
@@ -202,6 +233,24 @@ describe('draftHasContent', () => {
 });
 
 describe('owner isolation', () => {
+  // #10310, unit: the archive bridge needs current-owner identifiers and one
+  // notification per presence change, never the draft content or every keystroke.
+  it('reports draft identifiers without leaking another owner or emitting per keystroke', () => {
+    setComposerDraftOwner('archive-owner');
+    const listener = vi.fn(); const unsubscribe = subscribeAllDraftPresence(listener);
+    try {
+      saveDraft('archive-draft', draft({ text: textDoc }));
+      saveDraft('archive-draft', draft({ text: plainTextToTiptapDoc('more text') }));
+      expect(getComposerDraftSessionIds()).toEqual(['archive-draft']);
+      expect(listener).toHaveBeenCalledTimes(1);
+      setComposerDraftOwner('archive-other-owner');
+      expect(getComposerDraftSessionIds()).toEqual([]);
+      setComposerDraftOwner('archive-owner');
+      clearDraft('archive-draft');
+      expect(getComposerDraftSessionIds()).toEqual([]);
+      expect(listener).toHaveBeenCalledTimes(2);
+    } finally { unsubscribe(); clearDraft('archive-draft'); setComposerDraftOwner(null); }
+  });
   it('does not expose a New Maker draft across data-owner switches', () => {
     const key = '__new_maker_draft__';
     setComposerDraftOwner('owner-a');
@@ -225,6 +274,7 @@ describe('owner isolation', () => {
     const commentUrl = 'cindy-media://blobs/comment.png';
     const commentSourceUrl = 'cindy-media://blobs/comment-source.png';
     const pendingUrl = 'cindy-media://blobs/pending.png';
+    const threadUrl = 'cindy-media://blobs/held-thread.png';
     const reportDraftUrls = vi.fn();
     const previousWindow = globalThis.window;
     Object.defineProperty(globalThis, 'window', {
@@ -257,10 +307,11 @@ describe('owner isolation', () => {
         }),
       );
       setRemoteOptimisticAttachmentUrls([pendingUrl, pendingUrl]);
+      setBotGroupThreadAttachmentUrls([threadUrl]);
 
       const expectedUrls = [pendingUrl, sharedUrl, sharedSourceUrl, commentUrl, commentSourceUrl];
-      expect(getAllDraftAttachmentUrls().sort()).toEqual(expectedUrls.sort());
-      expect(reportDraftUrls).toHaveBeenLastCalledWith(expect.arrayContaining(expectedUrls));
+      expect(getAllDraftAttachmentUrls().sort()).toEqual([...expectedUrls, threadUrl].sort());
+      expect(reportDraftUrls).toHaveBeenLastCalledWith(expect.arrayContaining([...expectedUrls, threadUrl]));
 
       setComposerDraftOwner('owner-b');
       saveDraft(otherOwnerKey, draft({ text: textDoc }));
@@ -268,6 +319,7 @@ describe('owner isolation', () => {
       expect(reportDraftUrls).toHaveBeenLastCalledWith(expect.arrayContaining(expectedUrls));
     } finally {
       setRemoteOptimisticAttachmentUrls([]);
+      setBotGroupThreadAttachmentUrls([]);
       setComposerDraftOwner('owner-b');
       clearDraft(otherOwnerKey);
       setComposerDraftOwner('owner-a');
@@ -286,6 +338,42 @@ describe('owner isolation', () => {
 });
 
 describe('draft discard lifecycle', () => {
+  // #8084: group deletion must release thread media and fence an unfinished first picker,
+  // while keeping similarly named groups and other owners. Unit: real draft store boundary.
+  it('discards a group draft tree without touching a sibling scope or another owner', () => {
+    const root = 'bot-group:discard-tree';
+    const child = `${root}:thread:root`;
+    const pending = `${root}:thread:empty-picker`;
+    const sibling = `${root}-other:thread:root`;
+    const url = 'cindy-media://blobs/discarded-thread.png';
+    setComposerDraftOwner('tree-owner-a');
+    saveDraft(root, draft({ text: textDoc }));
+    saveDraft(child, draft({ attachments: [{ ...attachment('tree-photo'), url }] }));
+    saveDraft(sibling, draft({ text: textDoc }));
+    const childToken = captureDraftDiscardToken(child);
+    const pendingToken = captureDraftDiscardToken(pending);
+    setComposerDraftOwner('tree-owner-b');
+    saveDraft(child, draft({ text: textDoc }));
+    setComposerDraftOwner('tree-owner-a');
+    try {
+      discardDraftTree(root);
+      expect(getDraft(root)).toBeUndefined();
+      expect(getDraft(child)).toBeUndefined();
+      expect(isDraftDiscardTokenCurrent(childToken)).toBe(false);
+      expect(isDraftDiscardTokenCurrent(pendingToken)).toBe(false);
+      expect(getAllDraftAttachmentUrls()).not.toContain(url);
+      expect(getDraft(sibling)?.text).toEqual(textDoc);
+      setComposerDraftOwner('tree-owner-b');
+      expect(getDraft(child)?.text).toEqual(textDoc);
+    } finally {
+      clearDraft(child);
+      setComposerDraftOwner('tree-owner-a');
+      discardDraftTree(root);
+      clearDraft(sibling);
+      setComposerDraftOwner(null);
+    }
+  });
+
   it('invalidates async work only for explicit discard and not an ordinary clear', () => {
     const key = 'session-draft-discard-generation';
     const beforeClear = captureDraftDiscardToken(key);

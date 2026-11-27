@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, renderHook } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 vi.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({
@@ -10,12 +10,16 @@ vi.mock('@/contexts/AuthContext', () => ({
   }),
 }));
 vi.mock('@/hooks/useAgentCapabilities', () => ({
+  getDeviceCapabilitiesGeneration: () => 0,
+  getInterestedDeviceCapabilityTargets: () => [],
   prefetchDeviceCapabilities: vi.fn(),
   evictDeviceCapabilities: vi.fn(),
 }));
 vi.mock('@/hooks/useDeviceProviders', () => ({
+  getInterestedDeviceProviderTargets: () => [],
   prefetchDeviceProviders: vi.fn(),
-  evictDeviceProviders: vi.fn(),
+  evictDeviceProviders: vi.fn(() => 1),
+  isDeviceProvidersGenerationCurrent: vi.fn(() => true),
 }));
 vi.mock('@/hooks/useGitSafetySettings', () => ({
   prefetchDeviceGitSafetySettings: vi.fn(),
@@ -36,7 +40,13 @@ vi.mock('@/lib/logger', () => ({
 import { useDeviceLinkRemoteProjects } from '@/features/device-link/useDeviceLinkRemoteProjects';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { revokedDevicesStore } from '@/features/device-link/revokedDevicesStore';
+import { prefetchDeviceProviders, evictDeviceProviders } from '@/hooks/useDeviceProviders';
+import { prefetchDeviceCapabilities } from '@/hooks/useAgentCapabilities';
 import { prefetchDeviceGitSafetySettings } from '@/hooks/useGitSafetySettings';
+import { readCachedSessionList } from '@/features/device-link/mirrorCacheClient';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { useSelectedMachinePlaceholder } from '@/features/device-link/useMachineSwitcher';
+import { MACHINE_ALL, setSelectedMachineIdTransient } from '@/features/device-link/selectedMachineStore';
 
 /** Real hook/store/refresh orchestration with independent controllable peer transports. */
 const peers = ['slow', 'healthy'].map((deviceId) => ({
@@ -91,6 +101,9 @@ beforeEach(() => {
       'onStatusChanged',
       'onAccessRevoked',
       'onControlTargetChanged',
+      'onPeerLinkReset',
+      'onPeerLinkReopened',
+      'onDeviceDirectoryInvalidated',
     ].map((name) => [
       name,
       (listener: Listener) => {
@@ -120,6 +133,115 @@ afterEach(() => {
 });
 
 describe('multi-device recovery lifecycle', () => {
+  // #5860 / unit: real listing, device directory and sidebar projection through fake IPC.
+  // Recovery-only cases missed a selected peer whose successful sessions list was empty.
+  it.each([
+    { taskCount: 0, offlinePlaceholder: 'offline' },
+    { taskCount: 1, offlinePlaceholder: null },
+  ])('projects a selected peer with $taskCount tasks across presence changes', async ({ taskCount, offlinePlaceholder }) => {
+    const api = window.electronAPI.deviceLink;
+    let online = true;
+    const tasks = taskCount === 0 ? [] : [{
+      id: 'synthetic-task',
+      title: 'Synthetic task',
+      workingDir: null,
+      model: 'gpt-x',
+      status: 'active',
+      agentKind: 'codex',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    }];
+    invoke.mockImplementation(async (peer, channel) => {
+      if (channel === 'maker:schedule:list-sidebar-index-runs') return { runs: [] };
+      return peer === 'slow' && channel === 'local-db:sessions:list' ? tasks : [];
+    });
+    const presence = new Set<Listener>();
+    vi.mocked(api.listDevices).mockImplementation(async () => ({
+      devices: peers.map((peer) => ({
+        ...peer,
+        online: peer.deviceId === 'slow' ? online : true,
+        platform: 'darwin',
+        appVersion: 'test',
+        lastSeenAt: null,
+        busy: false,
+        controlEnabled: true,
+      })),
+    }));
+    api.onPresenceChanged = (listener) => {
+      presence.add(listener);
+      return () => { presence.delete(listener); };
+    };
+
+    setSelectedMachineIdTransient(['slow']);
+    onTestFinished(() => setSelectedMachineIdTransient(MACHINE_ALL));
+    const { result } = renderHook(() => {
+      useDeviceLinkRemoteProjects();
+      return useSelectedMachinePlaceholder();
+    });
+    await settle();
+    const listRequests = () => invoke.mock.calls.filter(
+      ([peer, channel]) => peer === 'slow' && channel === 'local-db:sessions:list',
+    );
+    expect(listRequests()).toHaveLength(1);
+    expect(remoteProjectsStore.getDeviceList()).toContainEqual(expect.objectContaining({
+      deviceId: 'slow', sessionCount: taskCount, connected: true,
+    }));
+    expect(result.current).toBeNull();
+
+    const setPresence = (next: boolean) => act(() => {
+      online = next;
+      for (const listener of presence) {
+        listener({ deviceId: 'slow', deviceName: 'slow', online, remoteControlEnabled: true });
+      }
+    });
+    setPresence(false);
+    await settle();
+    expect(result.current).toBe(offlinePlaceholder);
+    expect(remoteProjectsStore.getDeviceSessions('slow').map((task) => task.id)).toEqual(
+      tasks.map((task) => task.id),
+    );
+    expect(listRequests()).toHaveLength(1);
+
+    const reopenedSidebar = renderHook(() => useSelectedMachinePlaceholder());
+    expect(reopenedSidebar.result.current).toBe(offlinePlaceholder);
+
+    setPresence(true);
+    await settle();
+    expect(listRequests()).toHaveLength(2);
+    expect(remoteProjectsStore.getDeviceList()).toContainEqual(expect.objectContaining({
+      deviceId: 'slow', sessionCount: taskCount, connected: true,
+    }));
+    expect(result.current).toBeNull();
+  });
+
+  // Unit regression: Main fences all three source-change events, but the renderer
+  // only refreshed providers on one of them, leaving failed in-flight reads stuck.
+  // Exercise the real push listener and refresh coordinator; transport reads are mocked.
+  it.each(['maker:agents:changed', 'provider-group:changed', 'maker:provider:changed'])(
+    'refreshes the affected catalog on %s without reopening a retired target', async (channel) => {
+      setDataOwnerGeneration('test-owner', 1);
+      onTestFinished(() => setDataOwnerGeneration(null));
+      renderHook(() => useDeviceLinkRemoteProjects());
+      await settle();
+      vi.mocked(prefetchDeviceProviders).mockClear();
+      vi.mocked(prefetchDeviceCapabilities).mockClear();
+      vi.mocked(evictDeviceProviders).mockClear();
+      act(() => listeners.onRemotePush({ deviceId: 'healthy', channel, payload: {} }));
+      await settle();
+      expect(prefetchDeviceProviders).toHaveBeenCalledExactlyOnceWith('healthy');
+      expect(prefetchDeviceCapabilities).toHaveBeenCalledExactlyOnceWith('healthy');
+
+      vi.mocked(prefetchDeviceProviders).mockClear();
+      vi.mocked(prefetchDeviceCapabilities).mockClear();
+      act(() => listeners.onRemotePush({ deviceId: 'healthy', channel,
+        payload: { providerContinuity: { stale: true, remainingMs: 0 } } }));
+      await settle();
+      expect(evictDeviceProviders).toHaveBeenLastCalledWith('healthy', { retainDisplaySnapshot: false });
+      expect(prefetchDeviceProviders).not.toHaveBeenCalled();
+      expect(prefetchDeviceCapabilities).not.toHaveBeenCalled();
+    },
+  );
+
   it('late catalog completion cannot clear a newer revocation', async () => {
     const old = deferred<void>();
     vi.mocked(prefetchDeviceGitSafetySettings).mockImplementation((peer) =>
@@ -292,4 +414,954 @@ describe('multi-device recovery lifecycle', () => {
     expect(remoteProjectsStore.hasDevice('slow')).toBe(true);
     expect(remoteProjectsStore.hasDevice('healthy')).toBe(true);
   });
+  // 2026-11-04: another computer's every-minute PR watchers sent fired + skipped pairs,
+  // and each event pulled the whole run index (~100 KB, 872 reads/day). A pair now costs
+  // one read after a quiet period, and a steady stream is still read within the max wait.
+  it('coalesces a remote schedule event burst into one index read after a quiet period', async () => {
+    setDataOwnerGeneration('test-owner', 1);
+    onTestFinished(() => setDataOwnerGeneration(null));
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    const indexReads = () =>
+      invoke.mock.calls.filter(([peer, channel]) => peer === 'healthy' && channel === 'maker:schedule:list-sidebar-index-runs');
+    invoke.mockClear();
+    const event = (type: string, runId: string) =>
+      act(() =>
+        listeners.onRemotePush({
+          deviceId: 'healthy',
+          channel: 'maker:schedule:event',
+          payload: { type, scheduleId: 's1', runId, sessionId: '' },
+        }),
+      );
+    event('fired', 'r1');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(8_000);
+    });
+    event('skipped', 'r1');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(9_000);
+    });
+    expect(indexReads()).toHaveLength(0);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(indexReads()).toHaveLength(1);
+
+    invoke.mockClear();
+    for (let i = 0; i < 6; i++) {
+      event(i % 2 ? 'skipped' : 'fired', `r${i}`);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+    }
+    expect(indexReads()).toHaveLength(1);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：useDeviceLinkRemoteProjects + remoteProjectsStore 跨 >=2 个 60s skip tick 对「现代端原位时间戳补丁 + 忽略同次 skippedRunId 兼容 changed」与「旧流有界对账」的真实 list-sidebar-index-runs 请求计数，以及掉帧 skipped 与失败恢复的兜底重拉。
+  // - 规则依据：docs/dev-rules/protocol-compatibility.md、docs/dev-rules/server-channel-review.md 与 docs/dev-rules/remote-and-mobile-adaptation.md。
+  // - 现有覆盖缺口：既有测试仅覆盖无时间戳旧 skipped 合并为 1 次重拉，未覆盖新主机完整 skipped 时间戳零索引重拉、+10s 兼容 changed 去重、掉帧恢复与失败恢复。
+  // - 最小失败输入：healthy 走 2 个 60s 新流 tick（fired→带时间戳 skipped→+10s changed(skippedRunId)），slow 走 2 个 60s 旧流对账 tick，随后验证掉帧与 failed→skipped(preRunCheckSucceeded:true)。
+  // - tier：unit（jsdom，假计时器）。
+  it('patches nextFireAt with zero index reads on modern peers across >=2 60s skip ticks while keeping bounded legacy reads, dropped-frame, and failure recovery', async () => {
+    setDataOwnerGeneration('test-owner', 1);
+    onTestFinished(() => setDataOwnerGeneration(null));
+    let healthyNextFireAt = 60_000;
+    let slowNextFireAt = 60_000;
+    let healthyFailed = false;
+    let pendingHealthyIndex: ReturnType<typeof deferred<unknown>> | undefined;
+    const sessionRow = (id: string) => ({
+      id,
+      title: `Task ${id}`,
+      workingDir: null,
+      model: 'gpt-x',
+      status: 'active',
+      agentKind: 'codex',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    invoke.mockImplementation(async (peer: string, channel: string) => {
+      if (channel === 'local-db:sessions:list') {
+        return peer === 'healthy'
+          ? [sessionRow('s-healthy'), sessionRow('s-other')]
+          : [sessionRow('s-slow')];
+      }
+      if (channel === 'maker:schedule:list-sidebar-index-runs') {
+        if (peer === 'healthy' && pendingHealthyIndex) return pendingHealthyIndex.promise;
+        const nextFireAt = peer === 'healthy' ? healthyNextFireAt : slowNextFireAt;
+        const runs: Array<Record<string, unknown>> = [
+          {
+            runId: 'r-seed',
+            scheduleId: 's1',
+            scheduleName: 'PR Watch',
+            scheduleStatus: 'active',
+            sessionId: peer === 'healthy' ? 's-healthy' : 's-slow',
+            status: 'success',
+            firedAt: 1_000,
+            finishedAt: 1_050,
+            readAt: 1_050,
+            nextFireAt,
+          },
+        ];
+        if (peer === 'healthy' && healthyFailed) {
+          runs.push({
+            runId: 'r-fail',
+            scheduleId: 's1',
+            scheduleName: 'PR Watch',
+            scheduleStatus: 'active',
+            sessionId: 's-healthy',
+            status: 'failed',
+            firedAt: 180_000,
+            finishedAt: 180_030,
+            errorMsg: 'check error',
+            nextFireAt,
+          });
+        }
+        return { runs };
+      }
+      return [];
+    });
+
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    expect(remoteProjectsStore.getSessionScheduleInfo('s-healthy')?.nextFireAt).toBe(60_000);
+    expect(remoteProjectsStore.getSessionScheduleInfo('s-slow')?.nextFireAt).toBe(60_000);
+
+    const indexReads = (peer: string) =>
+      invoke.mock.calls.filter(
+        ([p, ch]) => p === peer && ch === 'maker:schedule:list-sidebar-index-runs',
+      ).length;
+    invoke.mockClear();
+
+    // Run 2 × 60s steady-state skip ticks (120s total, keeping user presence active).
+    for (const [idx, firedAt] of [60_000, 120_000].entries()) {
+      const runId = `r-tick-${idx + 1}`;
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Shift' }));
+      healthyNextFireAt = firedAt + 60_000;
+      slowNextFireAt = firedAt + 60_000;
+
+      // Modern path on 'healthy': fired -> patchable skipped -> +10s compat changed(skippedRunId)
+      act(() => {
+        listeners.onRemotePush({
+          deviceId: 'healthy',
+          channel: 'maker:schedule:event',
+          payload: { type: 'fired', scheduleId: 's1', runId },
+        });
+        listeners.onRemotePush({
+          deviceId: 'healthy',
+          channel: 'maker:schedule:event',
+          payload: {
+            type: 'skipped',
+            scheduleId: 's1',
+            runId,
+            sessionId: '',
+            lastFiredAt: firedAt,
+            lastFinishedAt: firedAt + 20,
+            nextFireAt: healthyNextFireAt,
+            preRunCheckSucceeded: true,
+          },
+        });
+        // Legacy path on 'slow': fired + legacy skipped (without modern timing patch) + +10s changed
+        listeners.onRemotePush({
+          deviceId: 'slow',
+          channel: 'maker:schedule:event',
+          payload: { type: 'fired', scheduleId: 's1', runId },
+        });
+        listeners.onRemotePush({
+          deviceId: 'slow',
+          channel: 'maker:schedule:event',
+          payload: { type: 'skipped', scheduleId: 's1', runId, sessionId: '' },
+        });
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      act(() => {
+        listeners.onRemotePush({
+          deviceId: 'healthy',
+          channel: 'maker:schedule:event',
+          payload: { type: 'changed', scheduleId: 's1', skippedRunId: runId },
+        });
+        listeners.onRemotePush({
+          deviceId: 'slow',
+          channel: 'maker:schedule:event',
+          payload: { type: 'changed', scheduleId: 's1' },
+        });
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(50_000);
+      });
+    }
+
+    // Across 2 × 60s steady-state skip ticks:
+    // Modern peer ('healthy'): 0 schedule index reads, nextFireAt patched in-place to 180_000!
+    // Legacy peer ('slow'): bounded reconciliation reads index and updates nextFireAt to 180_000!
+    expect(indexReads('healthy')).toBe(0);
+    expect(remoteProjectsStore.getSessionScheduleInfo('s-healthy')?.nextFireAt).toBe(180_000);
+    expect(indexReads('slow')).toBeGreaterThanOrEqual(2);
+    expect(indexReads('slow')).toBeLessThanOrEqual(4);
+    expect(remoteProjectsStore.getSessionScheduleInfo('s-slow')?.nextFireAt).toBe(180_000);
+
+    // Dropped skipped frame on 'healthy': fired(r-drop) arrives, skipped(r-drop) is lost,
+    // +10s compat changed(skippedRunId='r-drop') arrives -> not ignored, triggers 1 index read!
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Shift' }));
+    healthyNextFireAt = 240_000;
+    act(() =>
+      listeners.onRemotePush({
+        deviceId: 'healthy',
+        channel: 'maker:schedule:event',
+        payload: { type: 'fired', scheduleId: 's1', runId: 'r-drop' },
+      }),
+    );
+    act(() =>
+      listeners.onRemotePush({
+        deviceId: 'healthy',
+        channel: 'maker:schedule:event',
+        payload: { type: 'changed', scheduleId: 's1', skippedRunId: 'r-drop' },
+      }),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(indexReads('healthy')).toBe(1);
+    expect(remoteProjectsStore.getSessionScheduleInfo('s-healthy')?.nextFireAt).toBe(240_000);
+
+    // Failure -> preRunCheckSucceeded recovery on 'healthy': forces index refresh to clear failure state!
+    healthyFailed = true;
+    healthyNextFireAt = 300_000;
+    act(() =>
+      listeners.onRemotePush({
+        deviceId: 'healthy',
+        channel: 'maker:schedule:event',
+        payload: { type: 'failed', scheduleId: 's1', runId: 'r-fail', sessionId: '' },
+      }),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(remoteProjectsStore.getSessionScheduleInfo('s-healthy')?.hasFailedRun).toBe(true);
+    const readsBeforeRecovery = indexReads('healthy');
+
+    healthyFailed = false;
+    healthyNextFireAt = 360_000;
+    act(() =>
+      listeners.onRemotePush({
+        deviceId: 'healthy',
+        channel: 'maker:schedule:event',
+        payload: {
+          type: 'skipped',
+          scheduleId: 's1',
+          runId: 'r-rec',
+          sessionId: '',
+          lastFiredAt: 300_000,
+          lastFinishedAt: 300_020,
+          nextFireAt: 360_000,
+          preRunCheckSucceeded: true,
+        },
+      }),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(indexReads('healthy')).toBe(readsBeforeRecovery + 1);
+    expect(remoteProjectsStore.getSessionScheduleInfo('s-healthy')?.hasFailedRun).toBe(false);
+    expect(remoteProjectsStore.getSessionScheduleInfo('s-healthy')?.nextFireAt).toBe(360_000);
+
+    // Let the fired-triggered read start, then deliver the terminal skip before
+    // that read returns its pre-skip timing. An unrelated new row must still land.
+    const beforeLateRead = indexReads('healthy');
+    const lateIndex = deferred<unknown>();
+    pendingHealthyIndex = lateIndex;
+    const pushHealthySchedule = (payload: object) =>
+      act(() => listeners.onRemotePush({ deviceId: 'healthy', channel: 'maker:schedule:event', payload }));
+    pushHealthySchedule({ type: 'fired', scheduleId: 's1', runId: 'r-late-index' });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(indexReads('healthy')).toBe(beforeLateRead + 1);
+    pushHealthySchedule({
+      type: 'skipped', scheduleId: 's1', runId: 'r-late-index', sessionId: '',
+      lastFinishedAt: 372_000, nextFireAt: 420_000, preRunCheckSucceeded: true,
+    });
+    expect(remoteProjectsStore.getSessionScheduleInfo('s-healthy')?.nextFireAt).toBe(420_000);
+    pendingHealthyIndex = undefined;
+    lateIndex.resolve({ runs: [
+      {
+        runId: 'r-seed', scheduleId: 's1', scheduleName: 'PR Watch', scheduleStatus: 'active',
+        sessionId: 's-healthy', status: 'success', firedAt: 1_000,
+      },
+      {
+        runId: 'r-other', scheduleId: 's2', scheduleName: 'Another watch', scheduleStatus: 'active',
+        sessionId: 's-other', status: 'success', firedAt: 2_000, nextFireAt: 500_000,
+      },
+    ] });
+    await settle();
+    expect(remoteProjectsStore.getSessionScheduleInfo('s-healthy')?.nextFireAt).toBe(420_000);
+    expect(remoteProjectsStore.getSessionScheduleInfo('s-other')?.nextFireAt).toBe(500_000);
+    pushHealthySchedule({ type: 'changed', scheduleId: 's1', skippedRunId: 'r-late-index' });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(indexReads('healthy')).toBe(beforeLateRead + 1);
+
+    // A newer run supersedes the pending skip overlay even before its own
+    // refresh starts. The response may already reflect that newer run.
+    const nextIndex = deferred<unknown>();
+    pendingHealthyIndex = nextIndex;
+    pushHealthySchedule({ type: 'changed', scheduleId: 's2' });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(indexReads('healthy')).toBe(beforeLateRead + 2);
+    pushHealthySchedule({
+      type: 'skipped', scheduleId: 's1', runId: 'r-follow-up', sessionId: '',
+      lastFinishedAt: 421_000, nextFireAt: 480_000, preRunCheckSucceeded: true,
+    });
+    expect(remoteProjectsStore.getSessionScheduleInfo('s-healthy')?.nextFireAt).toBe(480_000);
+    pushHealthySchedule({ type: 'fired', scheduleId: 's1', runId: 'r-newer' });
+    pendingHealthyIndex = undefined;
+    nextIndex.resolve({ runs: [{
+      runId: 'r-newer', scheduleId: 's1', scheduleName: 'PR Watch', scheduleStatus: 'active',
+      sessionId: 's-healthy', status: 'running', firedAt: 480_000,
+    }] });
+    await settle();
+    expect(remoteProjectsStore.getSessionScheduleInfo('s-healthy')?.nextFireAt).toBeUndefined();
+  });
+
+  // Same incident: the 60 s safety-net reconcile also re-read every peer's whole run
+  // index. Live events keep it current, so the reconcile reads it every 5 minutes, and
+  // at once when events were skipped while the window was idle.
+  it('re-reads the run index on the periodic reconcile only every 5 minutes or after skipped events', async () => {
+    // Read times are module state; earlier tests in this file advanced their own fake clocks.
+    vi.setSystemTime(Date.now() + 10 * 60_000);
+    setDataOwnerGeneration('test-owner', 1);
+    onTestFinished(() => setDataOwnerGeneration(null));
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    const reads = (channel: string) =>
+      invoke.mock.calls.filter(([peer, ch]) => peer === 'healthy' && ch === channel).length;
+    const minute = async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Shift' }));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+    };
+    invoke.mockClear();
+    for (let i = 0; i < 4; i++) await minute();
+    expect(reads('local-db:sessions:list')).toBeGreaterThanOrEqual(3);
+    expect(reads('maker:schedule:list-sidebar-index-runs')).toBe(0);
+    await minute();
+    await minute();
+    expect(reads('maker:schedule:list-sidebar-index-runs')).toBe(1);
+
+    // Hidden: events are skipped; showing the window again must catch the index up
+    // even though the last periodic read was under 5 minutes ago.
+    const visibility = (state: 'visible' | 'hidden') => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => state });
+      document.dispatchEvent(new Event('visibilitychange'));
+    };
+    onTestFinished(() => visibility('visible'));
+    act(() => visibility('hidden'));
+    act(() =>
+      listeners.onRemotePush({
+        deviceId: 'healthy',
+        channel: 'maker:schedule:event',
+        payload: { type: 'fired', scheduleId: 's1', runId: 'r9' },
+      }),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    invoke.mockClear();
+    act(() => visibility('visible'));
+    await settle();
+    expect(reads('maker:schedule:list-sidebar-index-runs')).toBe(1);
+  });
+
+  // PR #8806 review: a refresh returning ok does not prove the index was read (an index
+  // failure inside scope both; a weak tick reusing another refresh), and a read already
+  // in flight must not clear events skipped after it started.
+  it('counts only successful index reads and keeps events skipped during an in-flight read', async () => {
+    vi.setSystemTime(Date.now() + 20 * 60_000);
+    setDataOwnerGeneration('test-owner', 1);
+    onTestFinished(() => setDataOwnerGeneration(null));
+    const visibility = (state: 'visible' | 'hidden') => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => state });
+      document.dispatchEvent(new Event('visibilitychange'));
+    };
+    onTestFinished(() => visibility('visible'));
+    const missedEvent = (runId: string) =>
+      act(() =>
+        listeners.onRemotePush({
+          deviceId: 'healthy',
+          channel: 'maker:schedule:event',
+          payload: { type: 'fired', scheduleId: 's1', runId },
+        }),
+      );
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    const indexReads = () =>
+      invoke.mock.calls.filter(([peer, ch]) => peer === 'healthy' && ch === 'maker:schedule:list-sidebar-index-runs').length;
+
+    // An index failure during the catch-up keeps the skipped event pending.
+    act(() => visibility('hidden'));
+    missedEvent('r1');
+    invoke.mockImplementation(async (_peer, channel) => {
+      if (channel === 'maker:schedule:list-sidebar-index-runs') throw new Error('[DEVICE_LINK_TIMEOUT] index');
+      return [];
+    });
+    invoke.mockClear();
+    act(() => visibility('visible'));
+    await settle();
+    expect(indexReads()).toBe(1);
+    const index = deferred<unknown>();
+    invoke.mockImplementation(async (_peer, channel) =>
+      channel === 'maker:schedule:list-sidebar-index-runs' ? index.promise : []);
+    invoke.mockClear();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Shift' }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(70_000);
+    });
+    expect(indexReads()).toBe(1);
+
+    // An event skipped while that retry is still in flight survives its success.
+    act(() => visibility('hidden'));
+    missedEvent('r2');
+    index.resolve({ runs: [] });
+    await settle();
+    invoke.mockImplementation(async (_peer, channel) =>
+      channel === 'maker:schedule:list-sidebar-index-runs' ? { runs: [] } : []);
+    invoke.mockClear();
+    act(() => visibility('visible'));
+    await settle();
+    expect(indexReads()).toBe(1);
+  });
 });
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：真实 useDeviceLinkRemoteProjects + remoteProjectsStore + refreshRemoteDeviceSessions；
+ *   断言设备分片回到 connected（即任务横幅不再显示「远程设备已离线」、历史视图恢复读取）。
+ * - Bug 依据：2026-11-17 电脑合盖睡眠一夜后唤醒，Mac Studio 链路 1–3 秒可达，界面却 40+ 分钟显示离线：
+ *   唤醒时目录读取失败退回过期快照（数据通道尚未就绪 → online:false），设备被移出合格集；所有恢复途径
+ *   只看合格集，设备一直在线不再来上线通知，周期对账又受「5 分钟内有键鼠操作」限制 → 永久卡住。
+ * - 规则：remote-and-mobile-adaptation「设备列表读取失败后的未知不等于离线」「真实恢复不能被旧退避挡住」；
+ *   故障半径三问 —— 恢复只作用于该设备，健康设备请求数不变。
+ * - 现有覆盖缺口：已有用例只覆盖过期目录缺席设备、订阅繁忙补订，未覆盖过期目录把在线设备报成离线、
+ *   设备被移出合格集后的恢复，以及无用户操作时的首拉补齐。
+ * - 最小失败输入：connecting → 20s 宽限 → 过期目录 {slow online:false} → online → 数据通道上线。
+ * - tier：unit（jsdom，假定时器）。
+ */
+describe('wake-from-sleep recovery', () => {
+  const listDevices = () => window.electronAPI.deviceLink.listDevices as ReturnType<typeof vi.fn>;
+  const healthyCalls = () => ({
+    subscribe: subscribe.mock.calls.filter(([peer]) => peer === 'healthy').length,
+    list: invoke.mock.calls.filter(([peer, channel]) => peer === 'healthy' && channel === 'local-db:sessions:list').length,
+  });
+  const connected = () => remoteProjectsStore.getDeviceIds();
+  const advance = async (ms: number) => {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  };
+
+  it('a stale directory reporting a reachable device offline does not strand it after wake', async () => {
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    expect(connected()).toEqual(expect.arrayContaining(['slow', 'healthy']));
+
+    // Sleep: the relay drops, then the connecting grace expires.
+    act(() => listeners.onStatusChanged({ status: 'connecting' }));
+    await advance(20_000);
+    expect(connected()).toEqual([]);
+
+    // Wake: the directory request fails and Main answers with its bounded last-known
+    // snapshot, where slow's data path is not ready yet.
+    listDevices().mockResolvedValueOnce({
+      devices: [{ ...peers[0], online: false }, peers[1]],
+      stale: true,
+    });
+    act(() => listeners.onStatusChanged({ status: 'online' }));
+    await settle();
+    act(() => listeners.onStatusChanged({
+      status: 'online', directDataDeviceIds: ['slow'], dataPathChangedDeviceId: 'slow',
+    }));
+    await advance(30_000);
+
+    expect(connected()).toEqual(expect.arrayContaining(['slow', 'healthy']));
+  });
+
+  it('a reachable device dropped by an offline report recovers through a retried directory read', async () => {
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    const before = healthyCalls();
+
+    // The primary relay connection reports slow offline although its route still works.
+    act(() => listeners.onPresenceChanged({
+      deviceId: 'slow', deviceName: 'slow', online: false, remoteControlEnabled: false,
+    }));
+    await settle();
+    expect(connected()).not.toContain('slow');
+
+    // The link to slow is re-established; the first directory read fails at once,
+    // a later one returns a fresh answer.
+    listDevices().mockClear();
+    listDevices()
+      .mockRejectedValueOnce(new Error('[DEVICE_LINK_NOT_CONNECTED] directory unavailable'))
+      .mockResolvedValue({ devices: peers });
+    act(() => listeners.onPeerLinkReopened({ deviceId: 'slow' }));
+    await advance(10_000);
+
+    expect(connected()).toContain('slow');
+    // Recovery is bounded: no tight loop, and it stops once the answer is fresh.
+    const reads = listDevices().mock.calls.length;
+    expect(reads).toBeGreaterThanOrEqual(2);
+    expect(reads).toBeLessThanOrEqual(3);
+    await advance(120_000);
+    expect(listDevices().mock.calls.length).toBe(reads);
+    // The healthy peer is untouched by slow's recovery.
+    expect(healthyCalls().subscribe).toBe(before.subscribe);
+  });
+
+  // PR #11051 review: two dropped devices whose links come back seconds apart must
+  // share the directory read already in flight; Main only coalesces calls within 300ms.
+  it('recoveries of several dropped devices share one in-flight directory read', async () => {
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    for (const deviceId of ['slow', 'healthy']) {
+      act(() => listeners.onPresenceChanged({ deviceId, deviceName: deviceId, online: false, remoteControlEnabled: false }));
+    }
+    await settle();
+    expect(connected()).toEqual([]);
+
+    const directory = deferred<{ devices: typeof peers }>();
+    listDevices().mockClear();
+    listDevices().mockReturnValue(directory.promise);
+    act(() => listeners.onPeerLinkReopened({ deviceId: 'slow' }));
+    await advance(2_000);
+    act(() => listeners.onPeerLinkReopened({ deviceId: 'healthy' }));
+    await advance(2_000);
+    expect(listDevices()).toHaveBeenCalledTimes(1);
+
+    directory.resolve({ devices: peers });
+    await settle();
+    expect(connected()).toEqual(expect.arrayContaining(['slow', 'healthy']));
+  });
+
+  it('a failed bootstrap is completed without user activity, with bounded retries', async () => {
+    let slowAvailable = false;
+    invoke.mockImplementation(async (peer, channel) => {
+      if (peer === 'slow' && channel === 'local-db:sessions:list' && !slowAvailable) {
+        throw new Error('[DEVICE_LINK_CHANNEL_NOT_ALLOWED] not yet');
+      }
+      return channel === 'maker:schedule:list-sidebar-index-runs' ? { runs: [] } : [];
+    });
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    expect(connected()).toEqual(['healthy']);
+    const slowLists = () =>
+      invoke.mock.calls.filter(([peer, channel]) => peer === 'slow' && channel === 'local-db:sessions:list').length;
+
+    // Nobody touches the computer for longer than the periodic reconcile's idle gate.
+    await advance(6 * 60_000);
+    // Failure backoff caps attempts well below one per tick (36 ticks in 6 minutes).
+    expect(slowLists()).toBeLessThanOrEqual(10);
+
+    slowAvailable = true;
+    await advance(130_000);
+    expect(connected()).toEqual(expect.arrayContaining(['slow', 'healthy']));
+  });
+});
+
+// #9342: relay 重连后主进程清掉了 presence 视图,目录补齐又失败过一次 → listDevices 只
+// 返回有界旧快照,里面每台设备都是 offline。那不是 presence 证据:拿它当离线判据会把在线
+// 设备移出同步名单,而 presence 是增量流,一直在线的设备不会再发 presence —— 没有任何事件
+// 会把它加回来,只能重启 Cindy。
+describe('stale device directory', () => {
+  const stalePeers = () => peers.map((peer) => ({ ...peer, online: false }));
+
+  it('keeps an online peer in the sync list when the directory only has a stale snapshot', async () => {
+    const listDevices = window.electronAPI.deviceLink.listDevices as unknown as ReturnType<typeof vi.fn>;
+    let stale = false;
+    listDevices.mockImplementation(async () => (stale
+      ? { devices: stalePeers(), stale: true }
+      : { devices: peers }));
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    expect(remoteProjectsStore.hasDevice('healthy')).toBe(true);
+
+    // relay 掉线再上线:主进程的 presence 视图已被清空,目录补齐失败 → 只剩旧快照。
+    stale = true;
+    act(() => listeners.onStatusChanged({ status: 'connecting', directDataDeviceIds: [] }));
+    act(() => listeners.onStatusChanged({ status: 'online', directDataDeviceIds: [] }));
+    await settle();
+
+    // 设备仍在同步名单里:周期对账照常读它的会话列表(修复前它已被移出名单,不再有读取)。
+    invoke.mockClear();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    expect(
+      invoke.mock.calls.filter(([peer, channel]) => peer === 'healthy' && channel === 'local-db:sessions:list'),
+    ).not.toHaveLength(0);
+  });
+
+  // 旧快照最多 30 分钟有界,过期后连旧快照都没有。目录读不到时必须有有界重读,
+  // 否则重连后的视图永远停在「目录不可用」上,只能等重启。
+  it('re-reads the directory with backoff until a fresh directory arrives', async () => {
+    const listDevices = window.electronAPI.deviceLink.listDevices as unknown as ReturnType<typeof vi.fn>;
+    let stale = true;
+    listDevices.mockImplementation(async () => (stale
+      ? { devices: stalePeers(), stale: true }
+      : { devices: peers }));
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    const initial = listDevices.mock.calls.length;
+
+    // 5 秒后重读一次。
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(listDevices.mock.calls.length).toBe(initial + 1);
+    // 退避翻倍:下一次在 10 秒后,不是 5 秒后。
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(listDevices.mock.calls.length).toBe(initial + 1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(listDevices.mock.calls.length).toBe(initial + 2);
+
+    // 拿到新目录后不再重读。
+    stale = false;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    const afterFresh = listDevices.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    expect(listDevices.mock.calls.length).toBe(afterFresh);
+  });
+
+  // 目录被**权威作废**(main 侧确认 401/403 后广播)后不该再按 5–60 秒的节奏追问:
+  // 每问一次都被再拒一次、再广播一次,读永远拿不到结果,只是把请求放大 —— relay 明明
+  // 在线,用户看到的却是「一直在转」。
+  it('stops re-reading the directory once it is authoritatively invalidated', async () => {
+    const listDevices = window.electronAPI.deviceLink.listDevices as unknown as ReturnType<typeof vi.fn>;
+    listDevices.mockRejectedValue(new Error('forbidden'));
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    const initial = listDevices.mock.calls.length;
+    expect(initial).toBeGreaterThan(0);
+
+    // 权威作废事件 → 停掉目录重读。
+    act(() => listeners.onDeviceDirectoryInvalidated({}));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    expect(listDevices.mock.calls.length).toBe(initial);
+  });
+
+  // main 侧 `rethrowServerError` 把终态 4xx 映射成 IPC 码(404→NOT_FOUND、409→ALREADY_EXISTS、
+  // 400→INVALID_PARAMS)。这种失败重问不会变好:与作废推送同一档收口,不再按 5–60 秒追问。
+  // 测试价值
+  // - 生产入口与可观察结果:useDeviceLinkRemoteProjects 的 reseed(listDevices) catch 分支 ——
+  //   断言带终态 IPC 码的拒绝之后不再定时重读,relay 重连时仍会再读一轮。
+  // - Bug/规则依据:Codex review #9360「Stop retrying terminal directory responses」:400/404
+  //   没有作废推送(main 只对 401/403 广播),目录退避会对着它一直追问到进程结束。
+  // - 现有覆盖缺口:既有用例只覆盖「作废推送」收口与**无码**瞬时失败继续退避,没覆盖按 IPC
+  //   码可判的终态失败。
+  // - 最小失败输入:listDevices 以 `[NOT_FOUND]` 拒绝、relay 在线、无作废推送,推进 120 秒。
+  // - tier:unit(electronAPI 为进程内 fake,假计时器)。
+  it('stops re-reading the directory when listDevices fails with a terminal IPC error', async () => {
+    const listDevices = window.electronAPI.deviceLink.listDevices as unknown as ReturnType<typeof vi.fn>;
+    listDevices.mockRejectedValue(
+      new Error("Error invoking remote method 'deviceLink:listDevices': Error: [NOT_FOUND] directory gone"),
+    );
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    const initial = listDevices.mock.calls.length;
+    expect(initial).toBeGreaterThan(0);
+
+    // relay 在线、也没有作废推送:仍然不再按 5–60 秒追问。
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    expect(listDevices.mock.calls.length).toBe(initial);
+
+    // 收口只对当前这次连接有效:relay 重连(relay 侧动过了)必须再读一轮 ——
+    // 还是终态失败就再停,不是把目录永久摁死到重启。
+    act(() => listeners.onStatusChanged({ status: 'connecting', directDataDeviceIds: [] }));
+    act(() => listeners.onStatusChanged({ status: 'online', directDataDeviceIds: [] }));
+    await settle();
+    expect(listDevices.mock.calls.length).toBeGreaterThan(initial);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果:useDeviceLinkRemoteProjects 的目录退避 ——
+  //   `getState` 拒绝、状态仍未知时,`scheduleDirectoryRetry` 不起 5–60 秒的物理读循环;
+  //   状态 push 到 `online`(在线转换)后再读一轮。
+  // - Bug/规则依据:Codex review #9360「Pause directory retries until relay status is
+  //   known」—— 状态未知时退避只拦 `false`,一次失败的 /devices 就会在每个挂载窗口里
+  //   起循环,而 relay 可能已经停掉,且没有事件保证把它停掉。
+  // - 现有覆盖缺口:既有退避用例的 getState 都 resolve 成 `online`,没覆盖状态未知这条路径。
+  // - 最小失败输入:getState 拒绝、listDevices 拒绝,推进 120 秒后断言调用数不增长。
+  // - tier:unit(electronAPI 为进程内 fake,假计时器)。
+  it('does not arm the directory retry loop while the link status is still unknown', async () => {
+    const listDevices = window.electronAPI.deviceLink.listDevices as unknown as ReturnType<typeof vi.fn>;
+    listDevices.mockRejectedValue(new Error('directory unavailable'));
+    getState.mockRejectedValue(new Error('getState unavailable'));
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    const initial = listDevices.mock.calls.length;
+    expect(initial).toBeGreaterThan(0);
+
+    // 状态未知:推进 120 秒也不该起 5–60 秒的物理读循环。
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    expect(listDevices.mock.calls.length).toBe(initial);
+
+    // 恢复挂在状态转换上:push 到 online 必须再读一轮(之后退避照常,状态已知)。
+    act(() => listeners.onStatusChanged({ status: 'online', directDataDeviceIds: [] }));
+    await settle();
+    expect(listDevices.mock.calls.length).toBeGreaterThan(initial);
+  });
+
+  // 跳过旧快照的 offline 行不能把冷缓存设备永远留在「检测中」:缓存种入时标 connecting,
+  // 而宽限计时器只在 relay 不在线时才降级 —— relay 在线时没人收口,它会一直「检测中」。
+  // 旧快照的 offline 至少能证明此刻连不上,收成离线(与跳过之前的呈现一致)。
+  it('settles a cold-cache device the stale snapshot reports as offline', async () => {
+    vi.mocked(readCachedSessionList).mockImplementation(async () => ([
+      { deviceId: 'cached', deviceName: 'cached', sessions: [{ id: 's-cached' }] },
+    ]) as never);
+    onTestFinished(() => {
+      vi.mocked(readCachedSessionList).mockImplementation(async () => []);
+    });
+    const listDevices = window.electronAPI.deviceLink.listDevices as unknown as ReturnType<typeof vi.fn>;
+    listDevices.mockImplementation(async () => ({
+      devices: [{ deviceId: 'cached', name: 'cached', online: false, remoteControlEnabled: false, isSelf: false }],
+      stale: true,
+    }));
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    const status = () => remoteProjectsStore.getDeviceSessions('cached')[0]?.deviceLinkConnectionStatus;
+    expect(status()).toBe('disconnected');
+  });
+
+  // 服务端限流给了重试期限:退避要让过那个期限,否则每个挂载窗口都在限流窗口里继续追问。
+  it('waits for the server retry deadline before re-reading a rate-limited directory', async () => {
+    const listDevices = window.electronAPI.deviceLink.listDevices as unknown as ReturnType<typeof vi.fn>;
+    const deadline = Date.now() + 30_000;
+    listDevices.mockImplementation(async () => ({
+      devices: stalePeers(), stale: true, retryAtMs: deadline,
+    }));
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    const initial = listDevices.mock.calls.length;
+    // 自己的阶梯是 5 秒,但期限在 30 秒后:15 秒时不该重读。
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(listDevices.mock.calls.length).toBe(initial);
+    // 过了期限才重读。
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+    });
+    expect(listDevices.mock.calls.length).toBe(initial + 1);
+  });
+
+  // Chromium 计时器的延时是 32 位有符号毫秒:服务端给的 Retry-After 超过 ~24.8 天时,单次
+  // setTimeout 溢出成「立刻触发」,退避变成对目录读的紧追循环。超过上限的等待必须按上限
+  // 分片,每片到点按墙上时钟重新核对(Codex review #9360)。
+  it('chunks a retry deadline beyond the 32-bit timer limit instead of tight-looping', async () => {
+    // Advance the retry timeouts without simulating weeks of periodic reconciliation.
+    vi.useRealTimers();
+    vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+    const listDevices = window.electronAPI.deviceLink.listDevices as unknown as ReturnType<typeof vi.fn>;
+    const deadline = Date.now() + 3_000_000_000; // > 2^31 - 1(~24.8 天)
+    listDevices.mockImplementation(async () => ({
+      devices: stalePeers(), stale: true, retryAtMs: deadline,
+    }));
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    // 任何一片的延时都不该越过 32 位上限(溢出 = 立刻触发 = 紧追循环)。
+    const delays = setTimeoutSpy.mock.calls
+      .map((call) => call[1])
+      .filter((value): value is number => typeof value === 'number');
+    expect(delays.length).toBeGreaterThan(0);
+    expect(Math.max(...delays)).toBeLessThanOrEqual(2_147_483_647);
+    const initial = listDevices.mock.calls.length;
+    // 上限之内的推进不触发重读。
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000_000);
+    });
+    expect(listDevices.mock.calls.length).toBe(initial);
+    // 第一片走完仍需等到服务端期限。
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(deadline - Date.now() - 1);
+    });
+    expect(listDevices.mock.calls.length).toBe(initial);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(listDevices.mock.calls.length).toBe(initial + 1);
+  });
+
+  // 账号边界:main 侧按 owner 记限流期限,渲染侧也得跟着清 —— 否则新账号的目录读失败时,
+  // 退避会一直等到上一个账号留下的期限。
+  it('clears the server retry deadline when the relay stops', async () => {
+    const listDevices = window.electronAPI.deviceLink.listDevices as unknown as ReturnType<typeof vi.fn>;
+    const deadline = Date.now() + 60_000;
+    listDevices.mockImplementation(async () => ({
+      devices: stalePeers(), stale: true, retryAtMs: deadline,
+    }));
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+
+    // 登出 / relay 停止 = 账号边界。
+    act(() => listeners.onStatusChanged({ status: 'stopped', directDataDeviceIds: [] }));
+    // 新账号上线,目录读失败 → 退避按自己的阶梯(5 秒)走,不等旧期限(60 秒)。
+    listDevices.mockImplementation(async () => {
+      throw new Error('relay unavailable');
+    });
+    act(() => listeners.onStatusChanged({ status: 'online', directDataDeviceIds: [] }));
+    await settle();
+    const afterOnline = listDevices.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(listDevices.mock.calls.length).toBe(afterOnline + 1);
+  });
+
+  // 故障半径三问(第 3 问):触及断链/重试恢复路径的改动必须带多 peer 拓扑的用例 ——
+  // 一个 peer 静默 / 被限流时,其它 peer 的行、同步资格与在途请求零感知
+  // (docs/dev-rules/remote-and-mobile-adaptation.md「故障半径三问」;评审意见 4593345655)。
+  //
+  // 测试价值
+  // - 生产入口与可观察结果:useDeviceLinkRemoteProjects 的目录重读退避 + 周期对账 ——
+  //   relay 重连后目录只剩有界旧快照、且服务端给了限流期限时,断言 'healthy' 的行还在、
+  //   它仍在周期对账名单里(周期读 local-db:sessions:list),并且它那次在途的会话读完成后
+  //   结果照常落地;静默的那台('slow',subscribe 永不 settle)全程没牵动它。
+  // - Bug/规则依据:「故障半径三问」第 3 问(多 peer 拓扑下的零感知用例);本 PR 的恢复动作
+  //   (目录有界重读 + 退避 + 限流期限)必须证明作用半径不超过「目录读/信息新鲜度」这一层。
+  // - 现有覆盖缺口:既有用例各管一头 —— 「旧快照全员 offline」的单设备同步资格
+  //   (keeps an online peer in the sync list ...)、退避阶梯、限流期限各自单测;没有覆盖
+  //   「两台被控设备并存 + 一台静默 + 限流期限 + 另一台有在途请求」同时成立的情形。
+  // - 最小失败输入:listDevices 先给权威目录、之后恒返回 stale + retryAtMs;'slow' 的
+  //   subscribe 永不 settle;'healthy' 的会话读被 deferred 住;relay 掉线再上线。
+  // - 失败证据:去掉旧快照 offline 行的豁免(把已合格设备也按 offline 应用)→ 同步资格被
+  //   撤销,「周期对账仍读它」变红;去掉有界重读 → 「过了期限才重读一次」变红。
+  // - tier:unit(electronAPI 为进程内 fake,假计时器)。
+  it('keeps a healthy peer unaware of a silent peer and a throttled directory', async () => {
+    const listDevices = window.electronAPI.deviceLink.listDevices as unknown as ReturnType<typeof vi.fn>;
+    const deadline = Date.now() + 30_000;
+    let stale = false;
+    listDevices.mockImplementation(async () => (stale
+      ? { devices: stalePeers(), stale: true, retryAtMs: deadline }
+      : { devices: peers }));
+
+    // 'slow' 停止 ACK:subscribe 永不 settle。
+    subscribe.mockImplementation((peer: string) =>
+      peer === 'slow' ? new Promise(() => {}) : Promise.resolve({}));
+
+    const row = (id: string) => ({
+      id,
+      title: `t-${id}`,
+      workingDir: null,
+      model: 'gpt-x',
+      status: 'active',
+      agentKind: 'codex',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    // 'healthy' 的会话读:第一次落地;重连后的那次在途(等它落地)。
+    const inflight = deferred<unknown[]>();
+    let healthyReads = 0;
+    invoke.mockImplementation(async (peer: string, channel: string) => {
+      if (channel === 'maker:schedule:list-sidebar-index-runs') return { runs: [] };
+      if (peer !== 'healthy' || channel !== 'local-db:sessions:list') return [];
+      healthyReads += 1;
+      if (healthyReads === 1) return [row('s-healthy')];
+      return inflight.promise;
+    });
+
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    expect(remoteProjectsStore.getDeviceSessions('healthy').map((session) => session.id)).toEqual(['s-healthy']);
+
+    // relay 掉线再上线:presence 视图已清空,目录补齐失败 → 只剩有界旧快照,
+    // 而且服务端给了限流期限(429)。
+    stale = true;
+    act(() => listeners.onStatusChanged({ status: 'connecting', directDataDeviceIds: [] }));
+    act(() => listeners.onStatusChanged({ status: 'online', directDataDeviceIds: [] }));
+    await settle();
+
+    // 行还在:旧快照里的 offline 行不是 presence 证据,不能把已合格的设备踢掉。
+    expect(remoteProjectsStore.hasDevice('healthy')).toBe(true);
+    expect(remoteProjectsStore.getDeviceSessions('healthy').map((session) => session.id)).toEqual(['s-healthy']);
+
+    // 目录重读有界:限流期限(30 秒)没到之前不追问。
+    const readsAfterFlap = listDevices.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(listDevices.mock.calls.length).toBe(readsAfterFlap);
+    // 过了期限才重读一次(恢复动作不放大请求)。
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+    });
+    expect(listDevices.mock.calls.length).toBe(readsAfterFlap + 1);
+
+    // 在途请求零感知:重连后的那次读落地后,结果照常并进 store(没被恢复动作取消或顶掉)——
+    // 落地前是首次读的那一行,落地后换成在途读带回的那一行。
+    expect(remoteProjectsStore.getDeviceSessions('healthy').map((session) => session.id)).toEqual(['s-healthy']);
+    inflight.resolve([row('s-healthy-2')]);
+    await settle();
+    expect(
+      remoteProjectsStore.getDeviceSessions('healthy').map((session) => session.id),
+    ).toEqual(['s-healthy-2']);
+    expect(remoteProjectsStore.getDeviceSessions('healthy')[0].deviceLinkConnectionStatus).toBe('connected');
+
+    // 同步资格还在:周期对账照常读它(60 秒一拍),没被旧快照的 offline 行撤销。
+    invoke.mockClear();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    expect(
+      invoke.mock.calls.filter(([peer, channel]) => peer === 'healthy' && channel === 'local-db:sessions:list'),
+    ).not.toHaveLength(0);
+  });});
+
+// Review (#8381): a cache read that lands after getState() seeds `connecting` shards. They must
+// be settled against what the link will do: a standby instance (another Cindy owns the link)
+// shows them offline immediately; an instance that will connect gets the normal grace and then
+// falls back to offline if the link never comes up. Before the fix both stayed `connecting`.
+describe('late cold-start cache hydrate', () => {
+  it.each([
+    { standby: true, immediately: 'disconnected', afterGrace: 'disconnected' },
+    { standby: false, immediately: 'connecting', afterGrace: 'disconnected' },
+  ] as const)('settles cached shards when standby=$standby', async ({ standby, immediately, afterGrace }) => {
+    const cache = deferred<Array<{ deviceId: string; deviceName: string; sessions: never[] }>>();
+    // The hook reads the cache from more than one place; every read sees the late snapshot.
+    vi.mocked(readCachedSessionList).mockImplementation(() => cache.promise as never);
+    onTestFinished(() => { vi.mocked(readCachedSessionList).mockImplementation(async () => []); });
+    getState.mockResolvedValue({
+      linkStatus: 'stopped', remoteControlEnabled: true, standby, disabledControlDeviceIds: [],
+    });
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle(); // getState settles first
+    cache.resolve([{ deviceId: 'slow', deviceName: 'slow', sessions: [{ id: 's-1' }] as never[] }]);
+    await settle();
+    const status = () => remoteProjectsStore.getDeviceSessions('slow')[0]?.deviceLinkConnectionStatus;
+    expect(status()).toBe(immediately);
+    await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+    expect(status()).toBe(afterGrace);
+  });
+
+});
+

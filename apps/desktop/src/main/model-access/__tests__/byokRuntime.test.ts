@@ -24,7 +24,7 @@ vi.mock('../byokCredentials.js', () => ({
     state.managedProviderReader = reader;
   },
 }));
-vi.mock('../../serverApiClient.js', () => ({ serverApiFetch: state.fetch }));
+vi.mock('../../serverApiClient.desktop.js', () => ({ serverApiFetch: state.fetch }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ debug: state.debug, warn: vi.fn() }) }));
 vi.mock('../../clientEndpointsService.js', () => ({
   getClientEndpoint: () => 'https://api.example.invalid',
@@ -74,6 +74,26 @@ beforeEach(() => {
   state.gate.mockImplementation(() => Object.assign(vi.fn(), { commit: vi.fn() }));
 });
 describe('BYOK Main runtime', () => {
+  // Unit: a display-only update for an existing enterprise connection is visible
+  // to the provider registry without forcing a route generation change.
+  it('publishes artwork while pending and ready, then clears it on removal', async () => {
+    const runtime = createByokRuntime();
+    runtime.setOwner({ scope: 'a:cn:1', organizationId: 'org-a' });
+    const icon = '<svg/>';
+    const v2 = { ...directory, schemaVersion: 2 };
+    state.fetch.mockResolvedValueOnce({ ...v2, providers: [{ ...provider, icon }] })
+      .mockResolvedValueOnce(credentials)
+      .mockResolvedValueOnce(v2)
+      .mockResolvedValueOnce(credentials);
+    await runtime.sync();
+    const projected = state.publish.mock.calls.map(([providers]) => providers[0]).filter(Boolean);
+    expect(projected).toMatchObject([{ customIcon: icon, agents: [] }, { customIcon: icon, agents: ['pi'] }]);
+    state.gate.mockClear();
+    await runtime.sync();
+    expect(state.publish.mock.lastCall?.[0][0]).not.toHaveProperty('customIcon');
+    expect(state.gate).not.toHaveBeenCalled();
+  });
+
   it('labels both sync requests and logs success without credentials', async () => {
     const runtime = createByokRuntime();
     runtime.setOwner({ scope: 'a:cn:1', organizationId: 'org-a' });
@@ -81,7 +101,7 @@ describe('BYOK Main runtime', () => {
     await runtime.sync();
     for (const [index, endpoint] of ['providers', 'credentials'].entries()) {
       const path = `/api/model-access/byok/${endpoint}`;
-      expect(state.fetch).toHaveBeenNthCalledWith(index + 1, `${path}?schemaVersion=1`, expect.objectContaining({
+      expect(state.fetch).toHaveBeenNthCalledWith(index + 1, `${path}?schemaVersion=${endpoint === 'providers' ? 2 : 1}`, expect.objectContaining({
         logLabel: path,
         redactErrorDetails: true,
         allowedRedactedErrorCodes: expect.arrayContaining(['ORG_AI_GATEWAY_ERROR', 'BYOK_UNAVAILABLE']),

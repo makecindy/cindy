@@ -38,6 +38,10 @@ afterEach(() => {
 
 it('associates field errors and focuses the first invalid field without sending a request', async () => {
   render(<McpServerDialog onSaved={vi.fn()} onClose={vi.fn()} />);
+  const dialog = screen.getByRole('dialog');
+  expect(dialog.getAttribute('aria-describedby')).toBeTruthy();
+  expect(document.getElementById(dialog.getAttribute('aria-describedby')!)?.textContent).toBe('settings.mcp.dialog.desc');
+  expect(screen.queryByText('settings.mcp.dialog.embeddedGuide')).toBeNull();
   fireEvent.click(save());
   expect(document.activeElement).toBe(field('name'));
   for (const name of ['name', 'url']) {
@@ -147,15 +151,15 @@ it('raises secret eye and remove-row tooltips above the z-10000 modal overlay', 
   render(<McpServerDialog onSaved={vi.fn()} onClose={vi.fn()} />);
   await waitFor(() => expect(document.activeElement).toBe(field('name')));
 
-  // Tip 经 Portal 渲染到 body,默认 z-[60] 会被 z-[10000] 模态层盖住;
-  // 弹窗内必须把提示抬到 z-[10001](review P2)。Radix Tooltip 1.2 的
+  // Tip 经 Portal 渲染到 body;默认在 tooltip 层(10011),高于 modal 层(10000/10001),
+  // 弹窗内不需要再抬层级(DESIGN.md §6 层级刻度,review P2)。Radix Tooltip 1.2 的
   // role="tooltip" 挂在 Content 内的 sr-only 副本上,带 z class 的可见层
   // 是它的父节点(Popper.Content)。
   const eye = screen.getByRole('button', { name: 'settings.apiKey.showKey' });
   await user.hover(eye);
   const eyeTip = await screen.findByRole('tooltip');
   expect(eyeTip.textContent).toBe('settings.apiKey.showKey');
-  expect(eyeTip.parentElement!.className).toContain('z-[10001]');
+  expect(eyeTip.parentElement!.className).toContain('z-tooltip');
   // 模态 open 时 Radix 会把 body 置 pointer-events:none,userEvent.unhover 的
   // 交互前检查会拒绝;直接派发 pointerleave 关闭提示(Radix 监听 pointer 事件)。
   fireEvent.pointerLeave(eye);
@@ -165,5 +169,49 @@ it('raises secret eye and remove-row tooltips above the z-10000 modal overlay', 
   await user.hover(screen.getByRole('button', { name: 'settings.mcp.fields.removeRow 1' }));
   const removeTip = await screen.findByRole('tooltip');
   expect(removeTip.textContent).toBe('settings.mcp.fields.removeRow');
-  expect(removeTip.parentElement!.className).toContain('z-[10001]');
+  expect(removeTip.parentElement!.className).toContain('z-tooltip');
+});
+
+it('embeds the same Settings form and uses its existing save path with user-edited suggestions', async () => {
+  const onSaved = vi.fn();
+  render(<McpServerDialog embedded proposal={{ name: 'Suggestion', url: 'http://example.test/mcp?key=public', transport: 'sse' }}
+    existingIds={['custom_example']} onSaved={onSaved} onClose={vi.fn()} />);
+  expect(screen.queryByRole('dialog')).toBeNull();
+  expect(field('name').value).toBe('Suggestion');
+  change('name', 'Example');
+  change('token', 'test-invalid-token');
+  fireEvent.change(screen.getByPlaceholderText('settings.mcp.fields.headerNamePlaceholder'), { target: { value: 'X-Test' } });
+  fireEvent.change(screen.getByPlaceholderText('settings.mcp.fields.headerValuePlaceholder'), { target: { value: 'test-invalid-header' } });
+  fireEvent.click(save());
+  fireEvent.click(save());
+  await waitFor(() => expect(onSaved).toHaveBeenCalledWith('custom_example-2'));
+  expect(api.create).toHaveBeenCalledExactlyOnceWith({ id: 'custom_example-2', name: 'Example', transport: 'sse',
+    url: 'http://example.test/mcp?key=public', headers: { 'X-Test': 'test-invalid-header' } }, 'test-invalid-token');
+});
+
+it('saves through a supplied persistence without touching this computer or its credentials', async () => {
+  const persistence = { create: vi.fn(async () => {}), update: vi.fn(async () => {}) };
+  const onSaved = vi.fn();
+  render(
+    <McpServerDialog
+      initial={{ ...initial, url: '', headers: {} }}
+      persistence={{ ...persistence, credentialsNote: <p>Credentials are managed elsewhere</p> }}
+      onSaved={onSaved}
+      onClose={vi.fn()}
+    />,
+  );
+  expect(screen.getByText('Credentials are managed elsewhere')).toBeTruthy();
+  expect(screen.queryByLabelText('settings.mcp.fields.token')).toBeNull();
+  // An endpoint that is not shown back stays as stored when the field is left empty.
+  fireEvent.click(save());
+  await waitFor(() => expect(onSaved).toHaveBeenCalledWith('custom_original'));
+  expect(persistence.update).toHaveBeenCalledWith({
+    id: 'custom_original',
+    name: 'Example',
+    transport: 'sse',
+    url: '',
+    headers: {},
+  });
+  expect(persistence.create).not.toHaveBeenCalled();
+  for (const local of [api.read, api.create, api.update]) expect(local).not.toHaveBeenCalled();
 });

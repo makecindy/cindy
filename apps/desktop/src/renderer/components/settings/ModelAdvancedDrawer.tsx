@@ -1,5 +1,7 @@
+import { modelImageInputDefault } from '../../../shared/modelImageInputOverride';
 import { displayPricingComponent, isDisplayPricingTableRedundant } from '@/lib/displayPricingFormat';
 import { DisplayPricingDetails, DisplayPricingQuote } from '@/components/DisplayPricingDetails';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { localizedModelDescription } from '@/lib/modelDescriptions';
 import { providerDisplayName } from '@/lib/providerDisplayName';
@@ -23,13 +25,13 @@ import { localizedModelName, localizedBrandName } from '@/lib/modelDisplayNames'
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { AlertTriangle, Check, ChevronDown, CircleHelp, Minus, Trash2, X } from 'lucide-react';
+import { AlertTriangle, Check, CircleHelp, Minus, Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { cn } from '@/lib/utils';
 import { providerViewToCustomProviderConfig, updateCustomProvider } from '@/lib/customProviders';
-import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem } from '@/components/ui/dropdown-menu';
+import { Select, type SelectOption } from '@/components/ui/select';
 import { MODEL_HARNESS_COLOR } from '@/lib/modelHarnessPresentation';
 import { ModelCompatibilityNotice } from '@/components/new-chat/ModelCompatibilityNotice';
 import { MODEL_PROTOCOL_LABEL, MODEL_PROTOCOL_OPTIONS } from '@/lib/modelProtocolLabel';
@@ -40,27 +42,35 @@ import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
 import { PiMark } from '@/components/icons/PiMark';
 import { useModelContextLimit } from '@/hooks/useModelContextLimit';
+import { useModelImageInputOverride } from '@/hooks/useModelImageInputOverride';
+import { parseContextTokenInput } from '../../../shared/modelContextLimit';
 import { ModelCompactionSettings } from './ModelCompactionSettings';
+import {
+  modelAdvancedLayoutClasses, ModelAdvancedContent, ModelAdvancedFooter,
+  ModelAdvancedRow as Row, ModelAdvancedSection as Section,
+} from './ModelAdvancedLayout';
 import { modelPriceDetailRows, type ModelPricePresentation } from '@/lib/modelPriceFormat';
 import {
-  isModelEnabled,
-  setModelVisibility,
-  isModelVisibilityCustomized,
-  resetModelVisibilities,
+  isModelEnabled as localIsModelEnabled,
+  setModelVisibility as localSetModelVisibility,
+  setModelVisibilities as localSetModelVisibilities,
+  isModelVisibilityCustomized as localIsModelVisibilityCustomized,
+  resetModelVisibilities as localResetModelVisibilities,
   useModelVisibilityVersion,
 } from '@/state/modelVisibilityPrefs';
 import {
-  clearProviderModelEffort,
-  getProviderModelEffort,
-  setProviderModelEffort,
+  clearProviderModelEffort as localClearProviderModelEffort,
+  editProviderModelMemoryBatch as localEditProviderModelMemoryBatch,
+  getProviderModelEffort as localGetProviderModelEffort,
+  setProviderModelEffort as localSetProviderModelEffort,
   useProviderModelMemoryVersion,
 } from '@/state/providerModelMemory';
+import { applyCustomModelEdit, type CustomModelEdit } from '../../../shared/customModelEdit';
+import { useModelSettingsSource } from './modelSettingsSource';
 import { EFFORT_TIER_COLORS } from '@/themes/effortTierColors';
 
 import {
   classifyVisionCapability,
-  providerWireProtocolForApi,
-  providerBaseUrlForApi,
   clampEffortToSupported,
   EFFORT_VALUES,
   isAgentSelectableModel,
@@ -80,19 +90,15 @@ import { isLocalRuntimeBetaProviderId, isManagedSidecarProviderId, MANAGED_OLLAM
 import { MANAGED_LLAMACPP_PROVIDER_ID, supportsLlamaCppMillionContext, llamaCppMaxContextSize } from '../../../shared/llamaCpp';
 import { modelBrand } from './modelManagementPresentation';
 import { ModelPriceOverrideDialog } from './ModelPriceOverrideDialog';
+import { subscriptionPlanModelDetails } from './subscriptionPlanModelDetails';
 import type { UnionModelRow } from './UnifiedModelList';
+import { ResetGroupButton } from '@/components/ui/reset-buttons';
 
 const AGENT_LABEL: Record<AgentKind, string> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
   pi: 'Pi',
 };
-
-// Editing uses whole decimal K, rounded down to avoid suggesting a value above the upstream
-// maximum. Merely opening/blurring the field never writes this display approximation back.
-function editableContextK(tokens: number): string {
-  return String(Math.max(1, Math.floor(tokens / 1000)));
-}
 
 const AGENT_MARK: Record<AgentKind, (size: number) => ReactNode> = {
   'claude-code': (size) => <ClaudeMark size={size} />,
@@ -121,31 +127,16 @@ function approxTokens(tokens: number): string {
   return String(tokens);
 }
 
-/** 定义列表的一行:左标签右值 + 细分隔线。 */
-function Row({
-  label,
-  children,
-  muted,
-}: {
-  label: string;
-  children: React.ReactNode;
-  muted?: boolean;
-}) {
-  return (
-    <div className="flex min-h-[34px] items-center justify-between gap-4 border-b border-[var(--settings-theme-card-border)] py-2 last:border-b-0">
-      <span className="shrink-0 text-13 text-[var(--text-secondary)]">{label}</span>
-      <span
-        className={cn(
-          'min-w-0 break-words text-right text-13',
-          muted ? 'text-[var(--text-tertiary)]' : 'text-[var(--text-primary)]',
-        )}
-      >
-        {children}
-      </span>
-    </div>
-  );
+/** Select only shows a value through a matching option. A current state that is not one of
+ *  the choices (varies by engine, undeclared, an unlisted protocol) stays visible as one
+ *  disabled row, like other settings that keep an unavailable saved value. */
+function withCurrentOption(value: string | null | undefined, options: SelectOption[], currentLabel: string) {
+  if (value && options.some((option) => option.value === value)) return { value, options };
+  const current = value || '__current';
+  return { value: current, options: [{ value: current, label: currentLabel, disabled: true }, ...options] };
 }
 
+/** 定义列表的一行:左标签右值 + 细分隔线。 */
 function CapabilityValue({ state, label }: { state: boolean | undefined; label: string }) {
   const Icon = state === true ? Check : state === false ? Minus : CircleHelp;
   return (
@@ -156,37 +147,9 @@ function CapabilityValue({ state, label }: { state: boolean | undefined; label: 
   );
 }
 
-function Section({
-  title,
-  hint,
-  children,
-}: {
-  title: string;
-  hint?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="pt-5 first:pt-1">
-      <div className="flex items-center gap-1.5">
-        <h4 className="text-12 font-medium text-[var(--text-secondary)]">{title}</h4>
-        {hint && (
-          <Tip text={hint} contentClassName="z-[10002]">
-            <button
-              type="button"
-              aria-label={hint}
-              className="rounded-full p-1 text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
-            >
-              <CircleHelp size={12} aria-hidden />
-            </button>
-          </Tip>
-        )}
-      </div>
-      <div className="mt-1.5">{children}</div>
-    </section>
-  );
-}
-
 interface Props {
+  selectedMemberId?: string;
+  onSelectMember?: (row: UnionModelRow) => void;
   provider: ProviderView;
   row: UnionModelRow | null;
   open: boolean;
@@ -199,31 +162,83 @@ interface Props {
   onDeleteLocal?: (row: UnionModelRow) => void;
   /** 该行当前是否已被停用（用于底部动作区的方向）。 */
   disabled: boolean;
+  /**
+   * 已停用时能否恢复。由列表按行判定（功能型模型不看聊天登录，见 UnifiedModelList 的
+   * canReenableRow）；缺省沿用聊天连接。
+   */
+  canEnable?: boolean;
   /** 付费锁定行不给写入入口（与列表行同一判定）。 */
   paymentRequired: boolean;
 }
 
 export function ModelAdvancedDrawer({
   provider,
-  row,
+  row: groupRow,
+  selectedMemberId,
+  onSelectMember,
   open,
   onOpenChange,
   pricePresentationOf,
   onDisable,
   onDeleteLocal,
   disabled,
+  canEnable: canEnableProp,
   paymentRequired,
 }: Props) {
+  const row = groupRow?.aliasRows?.find((member) => member.id === selectedMemberId)
+    ?? groupRow?.aliasRows?.find((member) => member.id === groupRow.id) ?? groupRow;
+  const memberRows = groupRow?.aliasRows ?? (row ? [row] : []);
+  const memberTargets = memberRows.flatMap((member) => member.avail.flatMap((agent) => {
+    const model = member.byAgent[agent];
+    return model ? [{ agent, modelId: model.id, model }] : [];
+  }));
   const { t, i18n } = useTranslation();
   const selectionAvailable = provider.connected && !provider.suspended;
+  const canEnable = canEnableProp ?? selectionAvailable;
   const locale = i18n.resolvedLanguage ?? i18n.language ?? 'en';
-  const [priceDialogOpen, setPriceDialogOpen] = useState(false);
+  const pricePendingRef = useRef(false);
   const [protocolSaving, setProtocolSaving] = useState(false);
   const [imageCapabilitySaving, setImageCapabilitySaving] = useState(false);
-  const titleRef = useRef<HTMLHeadingElement>(null);
   // 开关/档位写的是 renderer 本地存储，订阅 version 才能在写后重渲染。
   useModelVisibilityVersion();
   useProviderModelMemoryVersion();
+  // Another device's settings (cloud instance page) stand in for this device's stores.
+  // Resolved at call time, like direct imports.
+  const source = useModelSettingsSource();
+  const isModelEnabled: typeof localIsModelEnabled = (...args) =>
+    source ? source.isModelEnabled(...args) : localIsModelEnabled(...args);
+  const isModelVisibilityCustomized: typeof localIsModelVisibilityCustomized = (...args) =>
+    source ? source.isModelVisibilityCustomized(...args) : localIsModelVisibilityCustomized(...args);
+  const resetModelVisibilities: typeof localResetModelVisibilities = (...args) =>
+    source ? source.resetModelVisibilities(...args) : localResetModelVisibilities(...args);
+  const setModelVisibility: typeof localSetModelVisibility = (agent, providerId, modelId, enabled) =>
+    source
+      ? source.setModelVisibilities(providerId, [{ agent, modelId }], enabled)
+      : localSetModelVisibility(agent, providerId, modelId, enabled);
+  const getProviderModelEffort: typeof localGetProviderModelEffort = (...args) =>
+    source ? source.getEffort(...args) : localGetProviderModelEffort(...args);
+  const setProviderModelEffort: typeof localSetProviderModelEffort = (agent, providerId, modelId, effort) =>
+    source
+      ? source.setEffort(agent, providerId, modelId, effort as Effort)
+      : localSetProviderModelEffort(agent, providerId, modelId, effort);
+  const clearProviderModelEffort: typeof localClearProviderModelEffort = (agent, providerId, modelId) =>
+    source
+      ? source.setEffort(agent, providerId, modelId, null)
+      : localClearProviderModelEffort(agent, providerId, modelId);
+  const setModelVisibilities: typeof localSetModelVisibilities = (providerId, targets, enabled) =>
+    source
+      ? source.setModelVisibilities(providerId, targets, enabled)
+      : localSetModelVisibilities(providerId, targets, enabled);
+  // Alias-group effort edits reach the same target as single-model edits.
+  const editProviderModelMemoryBatch: typeof localEditProviderModelMemoryBatch = (ops) => {
+    if (!source) return localEditProviderModelMemoryBatch(ops);
+    if (ops.some((op) => op.kind !== 'set-effort' && op.kind !== 'clear-effort')) return false;
+    // The batch carries a stored effort string; the panel only offers the model's own efforts.
+    type SourceEffort = Parameters<typeof source.setEffort>[3];
+    for (const op of ops)
+      source.setEffort(op.agent, op.providerId, op.model, op.kind === 'set-effort' ? (op.effort as SourceEffort) : null);
+    return true;
+  };
 
   /**
    * 主展示引擎:该模型可用引擎里的第一个。只读事实(上下文、报价、能力)按它取 ——
@@ -233,6 +248,10 @@ export function ModelAdvancedDrawer({
     const model = row?.byAgent[agent];
     return model && isAgentSelectableModel(model, { userProvider: provider.source === 'user' });
   }), [row, provider.source]);
+  const priceRow = useMemo<UnionModelRow | null>(() => row && chatAgents.length ? {
+    ...row, avail: chatAgents,
+    byAgent: Object.fromEntries(chatAgents.map(agent => [agent, row.byAgent[agent]])),
+  } : null, [row, chatAgents]);
   const primaryCandidates = chatAgents?.length ? chatAgents : row?.avail;
   const primaryAgent =
     primaryCandidates?.find((agent) =>
@@ -243,13 +262,16 @@ export function ModelAdvancedDrawer({
           : agent === 'pi',
     ) ?? primaryCandidates?.[0] ?? null;
   const primaryModel = row && primaryAgent ? (row.byAgent[primaryAgent] ?? null) : null;
+  const planDetails = primaryAgent && primaryModel
+    ? subscriptionPlanModelDetails(provider, primaryAgent, primaryModel)
+    : undefined;
   const [localModelRepo, setLocalModelRepo] = useState<{ id: string; repo: string } | null>(null);
   const [localConfigurationBlocked, setLocalConfigurationBlocked] = useState(false);
   useEffect(() => {
     let active = true;
     setLocalModelRepo(null);
     setLocalConfigurationBlocked(false);
-    if (open && provider.id === MANAGED_LLAMACPP_PROVIDER_ID && primaryModel) {
+    if (open && !source && provider.id === MANAGED_LLAMACPP_PROVIDER_ID && primaryModel) {
       const modelId = primaryModel.id;
       void window.electronAPI.maker.llamaCppStatus().then((snapshot) => {
         if (active) setLocalConfigurationBlocked(snapshot.canConfigure === false);
@@ -285,6 +307,7 @@ export function ModelAdvancedDrawer({
     [contextAgent, contextModel, provider.id, row, chatAgents],
   );
   const ctx = useModelContextLimit(open ? contextTarget : null);
+  const imageInputOverride = useModelImageInputOverride(open ? contextTarget : null);
   const canEditProtocol = provider.source === 'user' && !provider.auth?.native && !isManagedSidecarProviderId(provider.id);
   const imageAgents = canEditProtocol
     ? provider.agents.filter(agent => provider.routing?.[agent]?.imageApi === 'openai-images')
@@ -295,92 +318,81 @@ export function ModelAdvancedDrawer({
     ? imageModel.userModelConfig.modalities?.input.includes('image') ? 'edit' : 'generate'
     : 'default';
   const videoAgents = canEditProtocol
-    ? provider.agents.filter(agent => provider.routing?.[agent]?.videoApi === 'xai-videos') : [];
+    ? provider.agents.filter(agent => provider.routing?.[agent]?.videoApi !== undefined) : [];
   const videoAgent = videoAgents.length === 1 ? videoAgents[0] : undefined;
   const videoModel = videoAgent ? row?.byAgent[videoAgent] : undefined;
   const videoCapability = videoModel?.userModelConfig?.mode === 'video_generation'
     ? videoModel.userModelConfig.modalities?.input.includes('image') ? 'edit' : 'generate' : 'default';
+  /** One model edit: applied here to this device's config, or by the other device itself. */
+  const saveModelEdit = async (agent: AgentKind, modelId: string, edit: CustomModelEdit, setSaving: (saving: boolean) => void) => {
+    let save: () => Promise<boolean>;
+    if (source) save = () => source.editModel(provider, agent, modelId, edit);
+    else {
+      const config = providerViewToCustomProviderConfig(provider);
+      if (!applyCustomModelEdit(config, agent, modelId, edit)) return;
+      save = async () => (await updateCustomProvider(config, {}, { source: 'manual-settings' })).ok;
+    }
+    setSaving(true);
+    try {
+      if (!await save()) toast.error(t('settings.providers.custom.toast.saveFailed'));
+    } catch { toast.error(t('settings.providers.custom.toast.saveFailed')); }
+    finally { setSaving(false); }
+  };
   const setImageCapability = async (value: string, kind: 'image' | 'video' = 'image') => {
     const agent = kind === 'image' ? imageAgent : videoAgent;
     const sourceModel = kind === 'image' ? imageModel : videoModel;
-    if (imageCapabilitySaving || !agent || !sourceModel || !['default', 'generate', 'edit'].includes(value)) return;
-    const config = providerViewToCustomProviderConfig(provider);
-    const model = config.runtimes[agent]?.models.find(item => item.id === sourceModel.id);
-    if (!model) return;
-    if (value === 'default') {
-      delete model.mode;
-      delete model.modalities;
-    } else {
-      model.mode = kind === 'image' ? 'image_generation' : 'video_generation';
-      model.modalities = { input: value === 'edit' ? ['text', 'image'] : ['text'], output: [kind] };
-    }
-    setImageCapabilitySaving(true);
-    try {
-      const result = await updateCustomProvider(config, {}, { source: 'manual-settings' });
-      if (!result.ok) toast.error(t('settings.providers.custom.toast.saveFailed'));
-    } catch { toast.error(t('settings.providers.custom.toast.saveFailed')); }
-    finally { setImageCapabilitySaving(false); }
+    if (imageCapabilitySaving || !agent || !sourceModel || (value !== 'default' && value !== 'generate' && value !== 'edit')) return;
+    await saveModelEdit(agent, sourceModel.id, { kind: 'capability', media: kind, value }, setImageCapabilitySaving);
   };
   const setModelApi = async (agent: AgentKind, api: string) => {
     if (protocolSaving || !canEditProtocol || !row?.byAgent[agent]) return;
-    const config = providerViewToCustomProviderConfig(provider);
-    const runtime = config.runtimes[agent];
-    const model = runtime?.models.find(m => m.id === row.byAgent[agent]!.id);
-    if (!runtime || !model) return;
     const choice = row.byAgent[agent]?.availableInterfaces?.find(item => item.profileId === api);
-    if (api === 'auto' || choice) {
-      model.interfaceId = api;
-      delete model.api;
-      delete model.piApi;
-      delete model.route;
-    } else {
-      delete model.interfaceId;
-      model.api = api as PiModelApi;
-      if (agent === 'pi') model.piApi = api as PiModelApi;
-      const wire = providerWireProtocolForApi(api);
-      if (!wire) return;
-      model.route = {
-        baseUrl: providerBaseUrlForApi(model.route?.baseUrl ?? runtime.baseUrl, api),
-        wireProtocol: wire,
-      };
-    }
-    setProtocolSaving(true);
-    try {
-      const result = await updateCustomProvider(config, {}, { source: 'manual-settings' });
-      if (!result.ok) toast.error(t('settings.providers.custom.toast.saveFailed'));
-    }
-    catch { toast.error(t('settings.providers.custom.toast.saveFailed')); }
-    finally { setProtocolSaving(false); }
+    await saveModelEdit(agent, row.byAgent[agent]!.id, { kind: 'interface', api, profile: !!choice }, setProtocolSaving);
   };
-
 
   const [ctxDraft, setCtxDraft] = useState('');
   const ctxDirtyRef = useRef(false);
-  const defaultWindow = contextAgent === 'codex' && ctx.codexContext
-    ? ctx.codexContext.contextWindow : contextModel?.contextWindow ?? 0;
+  const defaultWindow =
+    contextAgent === 'codex' && ctx.codexContext
+      ? ctx.codexContext.contextWindow
+      : (planDetails ? planDetails.contextWindow ?? 0 : contextModel?.contextWindow ?? 0);
   // The editor guard is not a native request-capacity limit. Keep small/local
   // model windows selectable and never derive this floor from a saved override.
   // Local runtimes own their loaded window; their catalog maximum cannot set an editor floor.
-  const modelWindows = chatAgents.map((agent) => row?.byAgent[agent]?.contextWindow)
-    .filter((window): window is number => typeof window === 'number' && Number.isFinite(window) && window > 0);
+  const modelWindows = chatAgents
+    .map((agent) => row?.byAgent[agent]?.contextWindow)
+    .filter(
+      (window): window is number =>
+        typeof window === 'number' && Number.isFinite(window) && window > 0,
+    );
   const minimumContextK = isLocalRuntimeBetaProviderId(provider.id)
-    ? 1 : Math.max(1, Math.floor(Math.min(100_000, ...modelWindows) / 1000));
-  const routeWindow = supportsMillionContext ? 1_000_000 : primaryModel?.contextWindowMax ?? primaryModel?.contextWindow ?? 0;
+    ? 1
+    : Math.max(1, Math.floor(Math.min(100_000, ...modelWindows) / 1000));
+  // A working default (including a heuristic fallback) is not a declared capacity.
+  // Codex's native maximum may already contain the user's override, so it
+  // cannot establish the provider's declared capacity.
+  const routeWindow = supportsMillionContext ? 1_000_000
+    : planDetails ? planDetails.contextWindowMax ?? 0
+      : (contextModel ?? primaryModel)?.contextWindowMax
+      ?? (primaryModel?.contextWindowVerified === true ? primaryModel.contextWindow : 0);
+  // Without a declared capacity, compare working defaults across engines only.
+  const engineWindowReference = routeWindow > 0 ? routeWindow : defaultWindow;
   const effectiveLimit = ctx.limit ?? (defaultWindow > 0 ? defaultWindow : null);
   useEffect(() => {
     ctxDirtyRef.current = false;
     setCtxDraft('');
-    setPriceDialogOpen(false);
   }, [open, primaryAgent, primaryModel?.id, provider.id]);
   useEffect(() => {
     if (ctx.loading || ctxDirtyRef.current) return;
-    setCtxDraft(effectiveLimit === null ? '' : editableContextK(effectiveLimit));
+    setCtxDraft(effectiveLimit === null ? '' : String(effectiveLimit));
   }, [ctx.loading, effectiveLimit, open]);
-  const parsedK = Number(ctxDraft.trim());
-  const parsedTokens = parsedK * 1000;
+  const parsedTokens = parseContextTokenInput(ctxDraft);
   const ctxInvalid =
-    ctxDirtyRef.current && ctxDraft.trim() !== '' &&
-    (!Number.isSafeInteger(parsedK) || parsedK < minimumContextK || parsedTokens > maximumContext);
+    ctxDirtyRef.current &&
+    ctxDraft.trim() !== '' &&
+    (parsedTokens === null ||
+      parsedTokens < minimumContextK * 1000 ||
+      parsedTokens > maximumContext);
   const commitCtxDraft = useCallback(() => {
     if (!ctxDirtyRef.current || ctxInvalid || ctx.loading || localConfigurationBlocked) return;
     ctxDirtyRef.current = false;
@@ -389,7 +401,7 @@ export function ModelAdvancedDrawer({
   const resetCtx = useCallback(() => {
     if (localConfigurationBlocked) return;
     ctxDirtyRef.current = false;
-    setCtxDraft(defaultWindow > 0 ? editableContextK(defaultWindow) : '');
+    setCtxDraft(defaultWindow > 0 ? String(defaultWindow) : '');
     void ctx.reset();
   }, [ctx, defaultWindow, localConfigurationBlocked]);
 
@@ -402,7 +414,11 @@ export function ModelAdvancedDrawer({
   }
 
   const capabilityModel = primaryModel.mode === 'video_generation' ? videoModel ?? primaryModel : imageModel ?? videoModel ?? primaryModel;
-  const vision = imageModel?.modalities
+  const displayModalities = planDetails ? planDetails.modalities : capabilityModel.modalities;
+  const planImageInput = planDetails?.imageInput ?? planDetails?.modalities?.input.includes('image');
+  const vision = planDetails
+    ? planImageInput === true ? 'vision' : planImageInput === false ? 'no-vision' : 'unknown'
+    : imageModel?.modalities
     ? imageModel.modalities.input.includes('image') ? 'vision' : 'no-vision'
     : primaryModel.supportsImageInput !== undefined
       ? primaryModel.supportsImageInput
@@ -413,6 +429,32 @@ export function ModelAdvancedDrawer({
           ? 'vision'
           : 'no-vision'
         : classifyVisionCapability(primaryModel.id);
+  const imageDefaultFor = (candidate: CatalogModel, agent: AgentKind, ignoreOverride = false) => {
+    const details = subscriptionPlanModelDetails(provider, agent, candidate);
+    if (details) return details.imageInput ?? details.modalities?.input.includes('image') ?? null;
+    return modelImageInputDefault(ignoreOverride ? { ...candidate, imageInputDefault: undefined } : candidate, row.id);
+  };
+  const imageInputDefault = imageDefaultFor(primaryModel, primaryAgent);
+  // An undeclared catalog has no default option: both choices remain explicit overrides.
+  // A failed read retains the chat route's effective fields, independently of media routes.
+  const imageInputValue = imageInputOverride.value ?? (imageInputOverride.error || imageInputOverride.mixed
+    ? imageDefaultFor(primaryModel, primaryAgent, true)
+    : imageInputDefault);
+  const imageInputTargets = contextTarget ? [contextTarget, ...contextTarget.relatedTargets] : [];
+  const imageInputTargetDefaults = imageInputTargets.map(({ agent }) => {
+    const candidate = row.byAgent[agent];
+    return candidate ? imageDefaultFor(candidate, agent) : null;
+  });
+  const imageDefaultsMatch = (value: boolean) => imageInputTargetDefaults.length > 0 &&
+    imageInputTargetDefaults.every(defaultValue => defaultValue === value);
+  // Different override provenance can still resolve to the same effective capability.
+  const imageInputMixed = imageInputOverride.mixed
+    ? new Set(imageInputTargets.map(({ agent }) => {
+        const candidate = row.byAgent[agent];
+        return candidate ? imageDefaultFor(candidate, agent, true) : null;
+      })).size > 1
+    : !imageInputOverride.error && imageInputOverride.value === null && new Set(imageInputTargetDefaults).size > 1;
+
   const conversational = isAgentSelectableModel(primaryModel, {
     userProvider: provider.source === 'user',
   });
@@ -439,15 +481,11 @@ export function ModelAdvancedDrawer({
     const model = row.byAgent[agent];
     return model && isAgentSelectableModel(model, { userProvider: provider.source === 'user' }) ? [{ agent, modelId: model.id }] : [];
   });
+  if (groupRow?.aliasRows) visibilityTargets.splice(0, visibilityTargets.length, ...memberTargets.map(({ agent, modelId }) => ({ agent, modelId })));
   const visibilityCustomized = visibilityTargets.some(({ agent, modelId }) =>
     isModelVisibilityCustomized(agent, provider.id, modelId),
   );
   const description = localizedModelDescription(primaryModel, t);
-  const price = pricePresentationOf(primaryAgent, primaryModel);
-  // Ordinary Gateway chat models carry effective cost; keep their inferred discount.
-  const discount =
-    (!primaryModel.displayPricing && price?.kind === 'priced' ? price.discount : undefined) ??
-    primaryModel.costDiscount;
   const protocols = modelProtocolComparison(provider, row.byAgent);
   const protocolLabel = (api: PiModelApi | null) =>
     api ? MODEL_PROTOCOL_LABEL[api] ?? null : t('settings.providers.models.advanced.undeclared');
@@ -456,7 +494,7 @@ export function ModelAdvancedDrawer({
       ? defaultWindow
       : parsedTokens
     : effectiveLimit;
-  const editRouteWindow = contextModel?.contextWindowMax ?? defaultWindow;
+  const editRouteWindow = routeWindow;
   const overRouteWindow =
     editRouteWindow > 0 &&
     displayedLimit !== null &&
@@ -466,14 +504,22 @@ export function ModelAdvancedDrawer({
   const efforts = EFFORT_ORDER.filter((effort) =>
     chatAgents.some((a) => row.byAgent[a]?.efforts.includes(effort)),
   );
+  const rememberedEffort = (agent: AgentKind, modelId: string) => {
+    const ids = groupRow?.aliasRows
+      ? memberTargets.filter((target) => target.agent === agent).map((target) => target.modelId)
+      : [modelId];
+    const values = [...new Set(ids.map((id) => getProviderModelEffort(agent, provider.id, id))
+      .filter((value) => value !== undefined))];
+    return values.length === 1 ? values[0] : undefined;
+  };
   const commonEfforts = efforts.filter((intent) => chatAgents.every((agent) => {
     const model = row.byAgent[agent];
     return !model?.efforts.length ||
       clampEffortToSupported(intent, model.efforts) ===
-        (getProviderModelEffort(agent, provider.id, model.id) ?? model.defaultEffort);
+        (rememberedEffort(agent, model.id) ?? model.defaultEffort);
   }));
   const preferredEffort = conversational
-    ? getProviderModelEffort(primaryAgent, provider.id, primaryModel.id) ?? primaryModel.defaultEffort
+    ? rememberedEffort(primaryAgent, primaryModel.id) ?? primaryModel.defaultEffort
     : null;
   const effortMixed = efforts.length > 0 && commonEfforts.length === 0;
   const currentEffort = preferredEffort ?? commonEfforts[0] ?? null;
@@ -483,7 +529,8 @@ export function ModelAdvancedDrawer({
       return model?.efforts.includes(effort) || model?.displayEfforts?.includes(effort);
     }),
   );
-  const ultrafastSupport = chatAgents.includes('codex')
+  const fastSupport = planDetails ? planDetails.fast : primaryModel.supportsFastMode;
+  const ultrafastSupport = planDetails ? planDetails.ultrafast : chatAgents.includes('codex')
     ? row.byAgent.codex?.supportsUltrafastMode
     : false;
   /**
@@ -493,6 +540,14 @@ export function ModelAdvancedDrawer({
    */
   const applyEffort = (effort: Effort) => {
     if (!efforts.includes(effort)) return;
+    if (groupRow?.aliasRows) {
+      const ok = editProviderModelMemoryBatch(memberTargets.filter((target) => target.model.efforts.length).map((target) => ({
+        kind: 'set-effort' as const, agent: target.agent, providerId: provider.id, model: target.modelId,
+        effort: clampEffortToSupported(effort, target.model.efforts) as Effort,
+      })));
+      if (!ok) toast.error(t('settings.providers.models.visibilityWriteFailed'));
+      return;
+    }
     for (const agent of chatAgents) {
       const model = row.byAgent[agent];
       if (!model) continue;
@@ -504,53 +559,148 @@ export function ModelAdvancedDrawer({
 
   const isLocalOllama = provider.id === MANAGED_OLLAMA_PROVIDER_ID;
 
+  const referencePricing = (model: CatalogModel, agent: AgentKind) => {
+    if (subscriptionPlanModelDetails(provider, agent, model)) {
+      return (
+        <Section title={t('settings.providers.models.advanced.pricing')}>
+          <Row label={t('settings.providers.models.advanced.pricingLabel')} muted>
+            {t('settings.providers.models.subscription')}
+          </Row>
+        </Section>
+      );
+    }
+    const price = pricePresentationOf(agent, model);
+    // Ordinary Gateway chat models carry effective cost; keep their inferred discount.
+    const discount =
+      (!model.displayPricing && price?.kind === 'priced' ? price.discount : undefined) ??
+      model.costDiscount;
+    return (
+      <Section title={t('settings.providers.models.advanced.pricing')}>
+        {model.displayPricing && model.currency ? (
+          <>
+            {(['input', 'output', 'cacheRead', 'cacheWrite'] as const).map((role) => {
+              const quotes = model.displayPricing?.summary?.[role];
+              if (!quotes?.length) return null;
+              const components = quotes.map(quote => displayPricingComponent(quote.component));
+              const component = components.every(value => value === components[0]) ? components[0] : undefined;
+              return (
+                <Row
+                  key={role}
+                  label={component
+                    ? t(`newChat.modelSelector.displayPricing.roles.${component}.${role}`)
+                    : t(`settings.providers.models.advanced.price.${role === 'cacheWrite' ? 'cacheCreate' : role}`)}
+                >
+                  <span className="flex flex-col items-end gap-1">
+                    {quotes.map((quote, index) => (
+                      <DisplayPricingQuote
+                        key={index}
+                        quote={quote}
+                        currency={model.currency!}
+                        costDiscount={discount}
+                        componentLabel={!component && components[index]
+                          ? t(`newChat.modelSelector.displayPricing.components.${components[index]}`)
+                          : undefined}
+                      />
+                    ))}
+                  </span>
+                </Row>
+              );
+            })}
+          </>
+        ) : price === null ? (
+          <Row label={t('settings.providers.models.advanced.pricingLabel')} muted>
+            {t(
+              provider.access?.kind === 'subscription'
+                ? 'settings.providers.models.subscription'
+                : 'settings.providers.models.advanced.noPricing',
+            )}
+          </Row>
+        ) : price.kind === 'free' ? (
+          <Row label={t('settings.providers.models.advanced.pricingLabel')}>
+            {t('newChat.modelSelector.pricing.free')}
+          </Row>
+        ) : (
+          modelPriceDetailRows(price.current, price.original).map((detail) => (
+            <Row
+              key={detail.kind}
+              label={t(`settings.providers.models.advanced.price.${detail.kind}`)}
+            >
+              {/* 有折扣时给**实付价**，标准价划掉跟在后面：只写标准价再另起一行
+              「折扣 40%」等于让人自己乘一遍，而实付才是他要判断的数。 */}
+              {detail.value}
+              {detail.originalValue && (
+                <span className="ml-1.5 text-11 text-[var(--text-tertiary)] line-through">
+                  {detail.originalValue}
+                </span>
+              )}
+              <span className="ml-1 text-11 text-[var(--text-tertiary)]">
+                {t('settings.providers.models.advanced.perMtok')}
+              </span>
+            </Row>
+          ))
+        )}
+        {discount !== undefined && discount > 0 && discount <= 1 && (
+          <Row label={t('settings.providers.models.advanced.discount')}>
+            <span
+              className="inline-flex items-center rounded-full px-2 py-px text-10 font-medium"
+              style={{
+                color: EFFORT_TIER_COLORS.low,
+                backgroundColor: `color-mix(in srgb, ${EFFORT_TIER_COLORS.low} 14%, transparent)`,
+              }}
+            >
+              {`↓${Math.round(discount * 100)}%`}
+            </span>
+          </Row>
+        )}
+        {/* Keep conditions and notes after the primary quotes and their discount. */}
+        {model.displayPricing && model.currency &&
+          !isDisplayPricingTableRedundant(model.displayPricing) && (
+            <div className={model.displayPricing.summary ? 'pt-3' : undefined}>
+              <DisplayPricingDetails model={model} />
+            </div>
+          )}
+      </Section>
+    );
+  };
+
   return (
     <>
-      <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Root open={open} onOpenChange={(next) => {
+        if (!next && pricePendingRef.current) return;
+        onOpenChange(next);
+      }}>
         <Dialog.Portal>
-          <Dialog.Overlay
-            className={cn(
-              'modal-scrim fixed inset-0 z-[10001]',
-            )}
-          />
-          <Dialog.Content
-            onPointerDownOutside={(event) => event.preventDefault()}
-            className={cn(
-              'modal-panel fixed inset-0 z-[10001] m-auto flex h-fit max-h-[calc(100dvh-48px)] w-[800px] max-w-[calc(100vw-32px)] flex-col overflow-hidden',
-            )}
-            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-            aria-describedby={undefined}
-            onOpenAutoFocus={(event) => {
-              event.preventDefault();
-              titleRef.current?.focus();
+          <ModelAdvancedContent
+            title={localizedModelName(primaryModel.name, t)}
+            providerName={providerDisplayName(provider, t)}
+            onEscapeKeyDown={(event) => {
+              if (event.target instanceof HTMLElement && event.target.closest('[data-model-price-editor]')) {
+                event.preventDefault();
+              }
             }}
+            titleExtra={groupRow?.aliasRows && (
+              <Select data-settings-search-action="Choose which member model of this alias group the drawer shows"
+                label={t('settings.providers.models.advanced.modelId')}
+                size="compact"
+                width="sm"
+                className="mb-2"
+                truncateOptions
+                value={row.id}
+                disabled={ctx.loading || protocolSaving}
+                onValueChange={(id) => {
+                  if (ctx.loading || ctxDirtyRef.current || protocolSaving || pricePendingRef.current) return;
+                  const member = memberRows.find((candidate) => candidate.id === id);
+                  if (member) onSelectMember?.(member);
+                }}
+                options={memberRows.map((member) => ({ value: member.id, label: member.id }))}
+              />
+            )}
           >
-            <header className="flex shrink-0 items-start gap-3 border-b border-[var(--settings-theme-card-border)] px-5 pb-3 pt-4">
-              <div className="min-w-0 flex-1">
-                <Dialog.Title
-                  ref={titleRef}
-                  tabIndex={-1}
-                  className="break-words text-15 font-medium text-[var(--text-primary)] outline-none"
-                >
-                  {localizedModelName(primaryModel.name, t)}
-                </Dialog.Title>
-                <p className="mt-0.5 truncate text-12 text-[var(--text-tertiary)]">
-                  {providerDisplayName(provider, t)}
-                </p>
-              </div>
-              <Dialog.Close
-                className="-mr-1 -mt-1 shrink-0 rounded-full p-1.5 text-[var(--text-secondary)] transition-colors hover:bg-[var(--settings-menu-bg-hover)] hover:text-[var(--text-primary)]"
-                aria-label={t('settings.providers.models.advanced.close')}
-              >
-                <X size={16} aria-hidden />
-              </Dialog.Close>
-            </header>
-
             <div
               key={`${provider.id}:${primaryModel.id}`}
-              className="min-h-0 overflow-y-auto px-5 pb-5 pt-3"
+              className={modelAdvancedLayoutClasses.body}
             >
-              <div className="grid gap-5 min-[760px]:grid-cols-2 min-[760px]:gap-6">
+              <div className={modelAdvancedLayoutClasses.grid}>
                 <div className="min-w-0">
                   {conversational && (
                     <Section
@@ -562,12 +712,12 @@ export function ModelAdvancedDrawer({
                           {t('settings.providers.models.manage.connectionRequired')}
                         </p>
                       )}
-                      {protocols.reference && protocolLabel(protocols.reference) && <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1 text-11">
+                      {protocols.upstreamApis.length > 0 && <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1 text-11">
                         <span className="text-[var(--text-tertiary)]">
-                          {t('settings.providers.models.advanced.protocol.reference')}
+                          {t('settings.providers.models.advanced.protocol.upstream')}
                         </span>
                         <span className="text-[var(--text-secondary)]">
-                          {protocolLabel(protocols.reference)}
+                          {protocols.upstreamApis.map(api => MODEL_PROTOCOL_LABEL[api as PiModelApi] ?? api).join(' · ')}
                         </span>
                       </div>}
                       {provider.agents.map((agent) => {
@@ -575,18 +725,22 @@ export function ModelAdvancedDrawer({
                         // Missing catalog membership proves no configured route, not upstream incompatibility.
                         const supported = Boolean(model && isAgentSelectableModel(model, { userProvider: provider.source === 'user' }));
                         const protocol = protocols.forAgent(agent);
-                        const compatibility = protocol?.mode === 'compatibility';
+                        const compatibility = protocol?.path === 'local';
                         const protocolId = `model-protocol-${agent}`;
                         const notes: string[] = [];
                         if (model) {
+                          const details = subscriptionPlanModelDetails(provider, agent, model);
+                          const engineWindow = details ? details.contextWindow ?? 0 : model.contextWindow;
+                          const engineFast = details ? details.fast : model.supportsFastMode;
                           // 同一模型在不同引擎下的元数据差异如实标出来 —— 这些值来自目录的
                           // perAgent 覆盖，用户看到「Codex 下 272K / 6 档」才知道差异是真的。
-                          if (!supportsMillionContext && model.contextWindow > 0 && model.contextWindow !== routeWindow) {
-                            notes.push(approxTokens(model.contextWindow));
+                          // A shared saved budget overrides every engine's working default.
+                          if (!supportsMillionContext && (ctx.limit === null || ctx.mixed) &&
+                              engineWindow > 0 && engineWindow !== engineWindowReference) {
+                            notes.push(approxTokens(engineWindow));
                           }
                           if (
-                            model.supportsFastMode === false &&
-                            primaryModel.supportsFastMode === true
+                            engineFast === false && fastSupport === true
                           ) {
                             notes.push(t('settings.providers.models.advanced.engineNoFast'));
                           }
@@ -612,9 +766,9 @@ export function ModelAdvancedDrawer({
                                   {AGENT_LABEL[agent]}
                                 </span>
                                 {agent === recommendedAgent && (
-                                  <span className="rounded-full bg-[var(--surface-chip)] px-1.5 py-0.5 text-10 text-[var(--text-tertiary)]">
+                                  <Badge size="xs">
                                     {t('newChat.modelSelector.unified.recommended')}
-                                  </span>
+                                  </Badge>
                                 )}
                               </div>
                               {protocol && (
@@ -622,34 +776,41 @@ export function ModelAdvancedDrawer({
                                   id={protocolId}
                                   className="mt-0.5 text-11 leading-4 text-[var(--text-tertiary)]"
                                 >
-                                  {canEditProtocol && (!model?.catalogPresetId || !!model.availableInterfaces?.length) && supported ? (
-                                    <DropdownMenu>
-                                      <DropdownMenuTrigger asChild>
-                                        <button type="button" disabled={protocolSaving}
-                                          aria-label={`${AGENT_LABEL[agent]} · ${t('settings.providers.custom.fields.wireProtocol')}`}
-                                          className="rounded-full px-2 py-1 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]">
-                                          {protocolLabel(protocol.outbound)} <ChevronDown size={12} className="inline" aria-hidden />
-                                        </button>
-                                      </DropdownMenuTrigger>
-                                      <DropdownMenuContent className="z-[10003]" align="start">
-                                        <DropdownMenuRadioGroup value={model?.availableInterfaces?.length ? model.userModelConfig?.interfaceId ?? ((model.userModelConfig?.api || model.userModelConfig?.piApi || model.userModelConfig?.route) ? model.selectedInterface?.profileId : 'auto') : protocol.outbound ?? ''}
-                                          onValueChange={value => void setModelApi(agent, value)}>
-                                          {model?.availableInterfaces?.length ? <>
-                                            <DropdownMenuRadioItem value="auto">{t('settings.providers.models.advanced.protocol.automatic')}</DropdownMenuRadioItem>
-                                            {model.availableInterfaces.map(item => <DropdownMenuRadioItem key={item.profileId} value={item.profileId}>{protocolLabel(item.api)}</DropdownMenuRadioItem>)}
-                                          </> : MODEL_PROTOCOL_OPTIONS.map(([api, label]) => <DropdownMenuRadioItem key={api} value={api}>{label}</DropdownMenuRadioItem>)}
-                                        </DropdownMenuRadioGroup>
-                                      </DropdownMenuContent>
-                                    </DropdownMenu>
+                                  {/* Presets follow the catalog; any saved explicit choice, including older api/route-only
+                                      ones, keeps its way back to automatic. */}
+                                  {canEditProtocol && supported && (!model?.catalogPresetId || model.userModelConfig?.interfaceId ||
+                                    model.userModelConfig?.api || model.userModelConfig?.piApi || model.userModelConfig?.route?.wireProtocol) ? (
+                                    (() => {
+                                      const field = withCurrentOption(
+                                        model?.availableInterfaces?.length ? model.userModelConfig?.interfaceId ?? ((model.userModelConfig?.api || model.userModelConfig?.piApi || model.userModelConfig?.route) ? model.selectedInterface?.profileId : 'auto') : protocol.outbound,
+                                        model?.availableInterfaces?.length ? [
+                                          { value: 'auto', label: t('settings.providers.models.advanced.protocol.automatic') },
+                                          ...model.availableInterfaces.map(item => ({ value: item.profileId, label: protocolLabel(item.api) ?? item.api })),
+                                        ] : MODEL_PROTOCOL_OPTIONS.map(([api, label]) => ({ value: api, label })),
+                                        protocolLabel(protocol.outbound) ?? protocol.outbound ?? '',
+                                      );
+                                      return (
+                                        <Select data-settings-search-action="Choose the wire protocol this engine uses for the model"
+                                          label={`${AGENT_LABEL[agent]} · ${t('settings.providers.custom.fields.wireProtocol')}`}
+                                          size="compact"
+                                          width="sm"
+                                          className="mt-1"
+                                          value={field.value}
+                                          options={field.options}
+                                          disabled={protocolSaving}
+                                          // Automatic keeps showing the protocol it resolves to.
+                                          triggerAdornment={field.value === 'auto' ? (
+                                            <span className="shrink-0 text-[var(--text-tertiary)]">{protocolLabel(protocol.outbound)}</span>
+                                          ) : undefined}
+                                          onValueChange={value => void setModelApi(agent, value)}
+                                        />
+                                      );
+                                    })()
                                   ) : protocolLabel(protocol.outbound)}
-                                  {/* Missing manufacturer metadata does not make a configured
-                                      outbound protocol unconfirmed. Keep that distinction in
-                                      the manufacturer reference when one is declared. */}
-                                  {(protocol.mode !== 'unknown' || !protocol.outbound) && <>
-                                    {protocolLabel(protocol.outbound) && ' · '}
-                                    {compatibility ? <ModelCompatibilityNotice /> : t(
-                                      `settings.providers.models.advanced.protocol.${protocol.mode}`,
-                                    )}
+                                  {/* Only Cindy's local conversion is called out; phone widths put it on its own line. */}
+                                  {compatibility && <>
+                                    <span className="hidden min-[400px]:inline"> · </span>
+                                    <span className="block min-[400px]:inline"><ModelCompatibilityNotice /></span>
                                   </>}
                                 </p>
                               )}
@@ -662,7 +823,6 @@ export function ModelAdvancedDrawer({
                                 notes.join(' · ')
                               ) : (
                                 <Tip
-                                  contentClassName="z-[10002]"
                                   text={t('settings.providers.models.advanced.engineNotConfigured')}
                                 >
                                   <button
@@ -688,7 +848,9 @@ export function ModelAdvancedDrawer({
                                 onCheckedChange={async (next) => {
                                   if (!model || !selectionAvailable) return;
                                   if (
-                                    await setModelVisibility(agent, provider.id, model.id, next) === false
+                                    (groupRow?.aliasRows
+                                      ? await setModelVisibilities(provider.id, memberTargets.filter((m) => m.agent === agent), next)
+                                      : await setModelVisibility(agent, provider.id, model.id, next)) === false
                                   ) {
                                     toast.error(
                                       t('settings.providers.models.visibilityWriteFailed'),
@@ -702,20 +864,14 @@ export function ModelAdvancedDrawer({
                         );
                       })}
                       {visibilityCustomized && !paymentRequired && selectionAvailable && (
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          tone="quiet"
-                          compact
-                          type="button"
+                        <ResetGroupButton
                           onClick={async () => {
                             if (!await resetModelVisibilities(provider.id, visibilityTargets))
                               toast.error(t('settings.providers.models.visibilityWriteFailed'));
                           }}
                           className="mt-2"
-                        >
-                          {t('settings.providers.models.advanced.restoreDefault')}
-                        </Button>
+                          label={t('settings.providers.models.advanced.restoreDefault')}
+                        />
                       )}
                     </Section>
                   )}
@@ -755,23 +911,22 @@ export function ModelAdvancedDrawer({
                       )}
                       {chatAgents.some(
                         (a) =>
-                          getProviderModelEffort(a, provider.id, row.byAgent[a]!.id) !== undefined,
+                          rememberedEffort(a, row.byAgent[a]!.id) !== undefined,
                       ) && (
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          tone="quiet"
-                          compact
-                          type="button"
+                        <ResetGroupButton
                           disabled={paymentRequired}
                           onClick={() => {
+                            if (groupRow?.aliasRows) {
+                              if (!editProviderModelMemoryBatch(memberTargets.map((target) => ({ kind: 'clear-effort' as const,
+                                agent: target.agent, providerId: provider.id, model: target.modelId })))) toast.error(t('settings.providers.models.visibilityWriteFailed'));
+                              return;
+                            }
                             for (const a of chatAgents)
                               clearProviderModelEffort(a, provider.id, row.byAgent[a]!.id);
                           }}
                           className="mt-2"
-                        >
-                          {t('settings.providers.models.advanced.restoreDefault')}
-                        </Button>
+                          label={t('settings.providers.models.advanced.restoreDefault')}
+                        />
                       )}
                     </Section>
                   )}
@@ -794,7 +949,7 @@ export function ModelAdvancedDrawer({
                                   disabled={paymentRequired || ctx.loading || localConfigurationBlocked}
                                   onClick={() => {
                                     ctxDirtyRef.current = false;
-                                    setCtxDraft(editableContextK(preset.tokens));
+                                    setCtxDraft(String(preset.tokens));
                                     void ctx.setLimit(preset.tokens);
                                   }}
                                 >{preset.label}</Button>
@@ -824,17 +979,18 @@ export function ModelAdvancedDrawer({
                                   }
                                 }}
                                 aria-invalid={ctxInvalid || undefined}
-                                inputMode="numeric"
+                                inputMode="text"
+                                maxLength={32}
                                 disabled={paymentRequired || ctx.loading || localConfigurationBlocked}
                                 aria-label={t(
                                   'settings.providers.models.advanced.contextLimitAria',
                                 )}
-                                className="w-20 bg-transparent text-center text-13 tabular-nums text-[var(--text-primary)] outline-none"
+                                className="w-28 bg-transparent text-center text-13 tabular-nums text-[var(--text-primary)] outline-none"
                               />
-                              <span className="text-11 text-[var(--text-tertiary)]">K</span>
+                              <span className="text-11 text-[var(--text-tertiary)]">tokens</span>
                             </span>
                             <span className="min-w-0 flex-1 text-11 tabular-nums text-[var(--text-tertiary)]">
-                              {t('settings.providers.models.advanced.contextLimitRoute', {
+                              {planDetails && displayedLimit === null ? '-' : t('settings.providers.models.advanced.contextLimitRoute', {
                                 tokens: formatExactTokens(
                                   !ctxInvalid ? (displayedLimit ?? 0) : (effectiveLimit ?? 0),
                                   locale,
@@ -842,21 +998,19 @@ export function ModelAdvancedDrawer({
                               })}
                             </span>
                             {ctx.isCustomized && (
-                              <button
-                                type="button"
+                              <ResetGroupButton data-settings-search-action="Restore the default context limit for this model"
                                 onClick={resetCtx}
                                 disabled={paymentRequired || ctx.loading || localConfigurationBlocked}
-                                className="shrink-0 text-11 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)]"
-                              >
-                                {t('settings.providers.models.advanced.restoreDefault')}
-                              </button>
+                                className="shrink-0"
+                                label={t('settings.providers.models.advanced.restoreDefault')}
+                              />
                             )}
                           </div>
                           {(ctxInvalid || ctx.error || ctx.mixed) && (
                             <p role="status" className="mt-1.5 text-12 text-[var(--warning-fg)]">
                               {t(
                                 `settings.providers.models.advanced.${ctxInvalid ? 'contextInvalid' : ctx.error ? 'contextWriteFailed' : 'contextMixed'}`,
-                                { min: minimumContextK },
+                                { min: formatExactTokens(minimumContextK * 1000, locale), max: formatExactTokens(maximumContext, locale) },
                               )}
                             </p>
                           )}
@@ -870,7 +1024,9 @@ export function ModelAdvancedDrawer({
                       )}
                       {ctx.compaction && (
                         <ModelCompactionSettings policy={ctx.compaction}
-                          disabled={paymentRequired || ctx.loading || localConfigurationBlocked}
+                          // 不用 ctx.loading 禁用：Radix 在 disabled 时会吞掉方向键，
+                          // 键盘用户就只能一下一格地等写入完成。写入在 main 侧已串行。
+                          disabled={paymentRequired || localConfigurationBlocked}
                           onChange={ctx.setCompaction} />
                       )}
                     </Section>
@@ -889,18 +1045,20 @@ export function ModelAdvancedDrawer({
                         </>
                       ) : (
                         <span className="text-[var(--text-tertiary)]">
-                          {t('settings.providers.models.advanced.catalogMissing')}
+                          {planDetails ? '-' : t('settings.providers.models.advanced.catalogMissing')}
                         </span>
                       )}
                     </Row>
-                    {primaryModel.maxOutput !== undefined && (
+                    {(planDetails || primaryModel.maxOutput !== undefined) && (
                       <Row label={t('settings.providers.models.advanced.maxOutput')}>
-                        {formatExactTokens(primaryModel.maxOutput, locale)}
+                        {planDetails
+                          ? planDetails.maxOutput === undefined ? '-' : formatExactTokens(planDetails.maxOutput, locale)
+                          : formatExactTokens(primaryModel.maxOutput!, locale)}
                       </Row>
                     )}
                   </Section>
                 </div>
-                <div className="min-w-0 border-t border-[var(--settings-theme-card-border)] pt-4 min-[760px]:border-l min-[760px]:border-t-0 min-[760px]:pl-6 min-[760px]:pt-0">
+                <div className={modelAdvancedLayoutClasses.right}>
                   <Section
                     title={t('settings.providers.models.advanced.capability')}
                     hint={t('settings.providers.models.advanced.capabilityHint')}
@@ -908,22 +1066,17 @@ export function ModelAdvancedDrawer({
                     {imageModel && (
                       <>
                         <Row label={t('settings.providers.models.advanced.imageCapability.label')}>
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <button type="button" disabled={imageCapabilitySaving || !selectionAvailable || paymentRequired}
-                                aria-label={t('settings.providers.models.advanced.imageCapability.label')}
-                                className="rounded-full px-2 py-1 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]">
-                                {t(`settings.providers.models.advanced.imageCapability.${imageCapability}`)} <ChevronDown size={12} className="inline" aria-hidden />
-                              </button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent className="z-[10003]" align="start">
-                              <DropdownMenuRadioGroup value={imageCapability} onValueChange={value => void setImageCapability(value)}>
-                                {(['default', 'generate', 'edit'] as const).map(value => (
-                                  <DropdownMenuRadioItem key={value} value={value}>{t(`settings.providers.models.advanced.imageCapability.${value}`)}</DropdownMenuRadioItem>
-                                ))}
-                              </DropdownMenuRadioGroup>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
+                          <Select data-settings-search-action="Declare the image capability of the Images connection model"
+                            label={t('settings.providers.models.advanced.imageCapability.label')}
+                            size="compact"
+                            width="sm"
+                            value={imageCapability}
+                            disabled={imageCapabilitySaving || !selectionAvailable || paymentRequired}
+                            onValueChange={value => void setImageCapability(value)}
+                            options={(['default', 'generate', 'edit'] as const).map(value => ({
+                              value, label: t(`settings.providers.models.advanced.imageCapability.${value}`),
+                            }))}
+                          />
                         </Row>
                         <p className="text-12 leading-5 text-[var(--text-tertiary)]">
                           {t('settings.providers.models.advanced.imageCapability.hint', { agent: AGENT_LABEL[imageAgent!] })}
@@ -933,22 +1086,17 @@ export function ModelAdvancedDrawer({
                     {videoModel && (
                       <>
                         <Row label={t('settings.providers.models.advanced.videoCapability.label')}>
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <button type="button" disabled={imageCapabilitySaving || !selectionAvailable || paymentRequired}
-                                aria-label={t('settings.providers.models.advanced.videoCapability.label')}
-                                className="rounded-full px-2 py-1 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]">
-                                {t(`settings.providers.models.advanced.videoCapability.${videoCapability}`)} <ChevronDown size={12} className="inline" aria-hidden />
-                              </button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent className="z-[10003]" align="start">
-                              <DropdownMenuRadioGroup value={videoCapability} onValueChange={value => void setImageCapability(value, 'video')}>
-                                {(['default', 'generate', 'edit'] as const).map(value => (
-                                  <DropdownMenuRadioItem key={value} value={value}>{t(`settings.providers.models.advanced.videoCapability.${value}`)}</DropdownMenuRadioItem>
-                                ))}
-                              </DropdownMenuRadioGroup>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
+                          <Select data-settings-search-action="Declare the video capability of the video connection model"
+                            label={t('settings.providers.models.advanced.videoCapability.label')}
+                            size="compact"
+                            width="sm"
+                            value={videoCapability}
+                            disabled={imageCapabilitySaving || !selectionAvailable || paymentRequired}
+                            onValueChange={value => void setImageCapability(value, 'video')}
+                            options={(['default', 'generate', 'edit'] as const).map(value => ({
+                              value, label: t(`settings.providers.models.advanced.videoCapability.${value}`),
+                            }))}
+                          />
                         </Row>
                         <p className="text-12 leading-5 text-[var(--text-tertiary)]">
                           {t('settings.providers.models.advanced.videoCapability.hint', { agent: AGENT_LABEL[videoAgent!] })}
@@ -956,7 +1104,46 @@ export function ModelAdvancedDrawer({
                       </>
                     )}
                     <Row label={t('settings.providers.models.advanced.imageInput')}>
-                      <span
+                      {conversational && !isOrganizationManagedProvider(provider) ? (
+                        (() => {
+                          // 'default' clears the override; 'true' / 'false' save an explicit choice.
+                          // States that are not one of these choices — an older explicit override
+                          // equal to the default, or overrides that differ by engine even when their
+                          // values agree — show as the current row, so every choice stays selectable.
+                          const choiceValue = (supported: boolean) => imageDefaultsMatch(supported) ? 'default' : String(supported);
+                          const staleOverride = imageInputOverride.value !== null && imageDefaultsMatch(imageInputOverride.value);
+                          const field = withCurrentOption(
+                            imageInputMixed || imageInputOverride.mixed || imageInputValue === null || staleOverride
+                              ? null : choiceValue(imageInputValue),
+                            [true, false].map((supported) => {
+                              const label = t(`settings.providers.models.advanced.${supported ? 'supported' : 'unsupported'}`);
+                              return {
+                                value: choiceValue(supported),
+                                label: imageDefaultsMatch(supported)
+                                  ? t('settings.providers.models.advanced.imageInputDefault', { value: label }) : label,
+                              };
+                            }),
+                            imageInputMixed
+                              ? t('settings.providers.models.advanced.imageInputMixed')
+                              : imageInputValue === null
+                                ? t('settings.providers.models.advanced.undeclared')
+                                : t(`settings.providers.models.advanced.${imageInputValue ? 'supported' : 'unsupported'}`),
+                          );
+                          return (
+                            <Select data-settings-search-action="Override whether this model accepts image input"
+                              label={t('settings.providers.models.advanced.imageInput')}
+                              size="compact"
+                              width="sm"
+                              value={field.value}
+                              options={field.options}
+                              disabled={imageInputOverride.loading || imageInputOverride.unavailable || localConfigurationBlocked}
+                              onValueChange={(value) => void imageInputOverride.setValue(
+                                value === 'default' ? null : value === 'true',
+                              )}
+                            />
+                          );
+                        })()
+                      ) : <span
                         title={
                           capabilityModel.modalities || capabilityModel.supportsImageInput !== undefined
                             ? t('settings.providers.models.advanced.catalogCapabilities')
@@ -969,28 +1156,32 @@ export function ModelAdvancedDrawer({
                           }
                           label={t(`settings.providers.models.advanced.vision.${vision}`)}
                         />
-                      </span>
+                      </span>}
                     </Row>
-                    {capabilityModel.modalities &&
+                    {imageInputOverride.error && (
+                      <p role="alert" className="text-12 leading-5 text-[var(--error-fg)]">
+                        {t('settings.providers.custom.toast.saveFailed')}
+                      </p>
+                    )}
+                    {(planDetails || displayModalities) &&
                       (['input', 'output'] as const).map((direction) => (
                         <Row
                           key={direction}
                           label={t(`settings.providers.models.advanced.${direction}Modalities`)}
                         >
-                          {capabilityModel
-                            .modalities![direction].map((modality) =>
+                          {displayModalities?.[direction].map((modality) =>
                               ['text', 'image', 'audio', 'video', 'file'].includes(modality)
                                 ? t(`settings.providers.models.advanced.modalities.${modality}`)
                                 : modality,
                             )
-                            .join(' · ') || t('settings.providers.models.advanced.undeclared')}
+                            .join(' · ') || (planDetails ? '-' : t('settings.providers.models.advanced.undeclared'))}
                         </Row>
                       ))}
                     <Row label="Fast" muted>
                       <CapabilityValue
-                        state={primaryModel.supportsFastMode}
+                        state={fastSupport}
                         label={t(
-                          `settings.providers.models.advanced.${primaryModel.supportsFastMode === true ? 'supported' : primaryModel.supportsFastMode === false ? 'unsupported' : 'undeclared'}`,
+                          `settings.providers.models.advanced.${fastSupport === true ? 'supported' : fastSupport === false ? 'unsupported' : 'undeclared'}`,
                         )}
                       />
                     </Row>
@@ -1004,102 +1195,17 @@ export function ModelAdvancedDrawer({
                     </Row>
                   </Section>
 
-                  <Section title={t('settings.providers.models.advanced.pricing')}>
-                    {primaryModel.displayPricing && primaryModel.currency ? (
-                      <>
-                        {(['input', 'output', 'cacheRead', 'cacheWrite'] as const).map((role) => {
-                          const quotes = primaryModel.displayPricing?.summary?.[role];
-                          if (!quotes?.length) return null;
-                          const components = quotes.map(quote => displayPricingComponent(quote.component));
-                          const component = components.every(value => value === components[0]) ? components[0] : undefined;
-                          return (
-                            <Row
-                              key={role}
-                              label={component
-                                ? t(`newChat.modelSelector.displayPricing.roles.${component}.${role}`)
-                                : t(`settings.providers.models.advanced.price.${role === 'cacheWrite' ? 'cacheCreate' : role}`)}
-                            >
-                              <span className="flex flex-col items-end gap-1">
-                                {quotes.map((quote, index) => (
-                                  <DisplayPricingQuote
-                                    key={index}
-                                    quote={quote}
-                                    currency={primaryModel.currency!}
-                                    costDiscount={discount}
-                                    componentLabel={!component && components[index]
-                                      ? t(`newChat.modelSelector.displayPricing.components.${components[index]}`)
-                                      : undefined}
-                                  />
-                                ))}
-                              </span>
-                            </Row>
-                          );
-                        })}
-                      </>
-                    ) : price === null ? (
-                      <Row label={t('settings.providers.models.advanced.pricingLabel')} muted>
-                        {t(
-                          provider.access?.kind === 'subscription'
-                            ? 'settings.providers.models.subscription'
-                            : 'settings.providers.models.advanced.noPricing',
-                        )}
-                      </Row>
-                    ) : price.kind === 'free' ? (
-                      <Row label={t('settings.providers.models.advanced.pricingLabel')}>
-                        {t('newChat.modelSelector.pricing.free')}
-                      </Row>
-                    ) : (
-                      modelPriceDetailRows(price.current, price.original).map((detail) => (
-                        <Row
-                          key={detail.kind}
-                          label={t(`settings.providers.models.advanced.price.${detail.kind}`)}
-                        >
-                          {/* 有折扣时给**实付价**，标准价划掉跟在后面：只写标准价再另起一行
-                          「折扣 40%」等于让人自己乘一遍，而实付才是他要判断的数。 */}
-                          {detail.value}
-                          {detail.originalValue && (
-                            <span className="ml-1.5 text-11 text-[var(--text-tertiary)] line-through">
-                              {detail.originalValue}
-                            </span>
-                          )}
-                          <span className="ml-1 text-11 text-[var(--text-tertiary)]">
-                            {t('settings.providers.models.advanced.perMtok')}
-                          </span>
-                        </Row>
-                      ))
-                    )}
-                    {discount !== undefined && discount > 0 && discount <= 1 && (
-                      <Row label={t('settings.providers.models.advanced.discount')}>
-                        <span
-                          className="inline-flex items-center rounded-full px-2 py-[1px] text-10 font-medium"
-                          style={{
-                            color: EFFORT_TIER_COLORS.low,
-                            backgroundColor: `color-mix(in srgb, ${EFFORT_TIER_COLORS.low} 14%, transparent)`,
-                          }}
-                        >
-                          {`↓${Math.round(discount * 100)}%`}
-                        </span>
-                      </Row>
-                    )}
-                    {/* Keep conditions and notes after the primary quotes and their discount. */}
-                    {primaryModel.displayPricing && primaryModel.currency &&
-                      !isDisplayPricingTableRedundant(primaryModel.displayPricing) && (
-                        <div className={primaryModel.displayPricing.summary ? 'pt-3' : undefined}>
-                          <DisplayPricingDetails model={primaryModel} />
-                        </div>
-                      )}
-                    {/* 自定义报价:原「⋯」菜单的一项,搬到它真正相关的段落里。
-                    XD 网关的价格由服务端定,不给覆盖入口(与 IPC 侧的拒绝一致)。 */}
-                    {provider.id !== 'xd' && !isOrganizationManagedProvider(provider) && !paymentRequired && (
-                      <button
-                        type="button"
-                        onClick={() => setPriceDialogOpen(true)}
-                        className="mt-2 text-12 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
-                      >
-                        {t('settings.providers.models.priceOverride.menu')}
-                      </button>
-                    )}
-                  </Section>
+                  {provider.id !== 'xd' && !isOrganizationManagedProvider(provider) && !paymentRequired && priceRow ? (
+                    <ModelPriceOverrideDialog provider={provider} row={priceRow} open={open} onOpenChange={onOpenChange}
+                      presentation="inline" manualPriceOnly={(agent) => {
+                        const model = priceRow.byAgent[agent];
+                        return model ? !!subscriptionPlanModelDetails(provider, agent, model) : false;
+                      }} referenceDetails={(agent) => {
+                        const model = priceRow.byAgent[agent];
+                        return model ? referencePricing(model, agent) : null;
+                      }}
+                      onPendingChange={(pending) => { pricePendingRef.current = pending; }} />
+                  ) : referencePricing(primaryModel, primaryAgent)}
                   <Section title={t('settings.providers.models.advanced.identity')}>
                     {description && (
                       <p className="mb-2 text-12 leading-relaxed text-[var(--text-secondary)]">{description}</p>
@@ -1112,7 +1218,7 @@ export function ModelAdvancedDrawer({
                         {localizedBrandName(modelBrand(primaryModel)!, t)}
                       </Row>
                     )}
-                    {primaryModel.status && primaryModel.status !== 'active' && (
+                    {!planDetails && primaryModel.status && primaryModel.status !== 'active' && (
                       <Row label={t('settings.providers.models.advanced.status')} muted>
                         {t(`settings.providers.models.advanced.lifecycle.${primaryModel.status}`)}
                       </Row>
@@ -1126,14 +1232,15 @@ export function ModelAdvancedDrawer({
                 outbound protocol unconfirmed. Keep that distinction in
                 the manufacturer reference when one is declared. */}
             {!paymentRequired && (
-              <div className="flex shrink-0 flex-col gap-2 border-t border-[var(--settings-theme-card-border)] px-5 py-3">
+              <ModelAdvancedFooter>
                 <Button
                   variant="secondary"
                   size="md"
                   compact
                   type="button"
-                  disabled={disabled && !selectionAvailable}
-                  onClick={() => onDisable(row)}
+                  disabled={disabled && !canEnable}
+                  data-settings-search-action="Enable or disable the displayed model group"
+                  onClick={() => { if (!pricePendingRef.current) onDisable(groupRow ?? row); }}
                 >
                   {disabled
                     ? t('settings.providers.models.enableModel')
@@ -1146,26 +1253,18 @@ export function ModelAdvancedDrawer({
                     tone="danger"
                     compact
                     type="button"
-                    onClick={() => onDeleteLocal(row)}
+                    data-settings-search-action="Delete the displayed local model"
+                    onClick={() => { if (!pricePendingRef.current) onDeleteLocal(row); }}
                   >
                     <Trash2 size={13} />
                     {t('settings.providers.local.deleteModel')}
                   </Button>
                 )}
-              </div>
+              </ModelAdvancedFooter>
             )}
-          </Dialog.Content>
+          </ModelAdvancedContent>
         </Dialog.Portal>
       </Dialog.Root>
-
-      {priceDialogOpen && (
-        <ModelPriceOverrideDialog
-          provider={provider}
-          row={row}
-          open={priceDialogOpen}
-          onOpenChange={setPriceDialogOpen}
-        />
-      )}
     </>
   );
 }

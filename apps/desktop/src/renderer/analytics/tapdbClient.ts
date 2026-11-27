@@ -27,22 +27,21 @@
  * 生命周期:
  *   - import 触发 initTapdb(主视图启动时,见 renderer/index.tsx)——它只挂闸、
  *     订阅信号,不碰 SDK
- *   - main 回报 allowed=true 才 init SDK,并立即上报 page_view (#tag=app_start)
- *   - autoTrack 接管 page_show;page_hide 由本模块自己发(SDK 的 beacon 路径没有
- *     采集闸,详见 initTapdb 内 visibilitychange 处的注释)
+ *   - main 回报 allowed=true 才 init SDK,并立即上报桌面活跃事件（app_start）
+ *   - 可见性事件只带设备信息和停留时间，排除 SDK 自动提取的页面地址和标题
  *   - 运行期用户在设置里关掉统计 → optOutTracking():SDK 内部 _isCollectData()
  *     变 false,主动上报与 page_show 全部停止,且状态持久化在 localStorage;
  *     page_hide 由 reportPageHide 自行守闸
  *   - 重新打开 → optInTracking() 并补一次 app_start
  *
  * 活跃口径(2026-07-30 起,交互 + 工作驱动):
- *   活跃事件(page_view #tag=app_engaged)由两类真实使用信号触发:
+ *   活跃事件(app_engaged)由两类真实使用信号触发:
  *   - 用户对 Cindy 窗口的动作:窗口获得焦点 / 窗口内按键 / 窗口内按下指针;
  *   - Cindy 会话确实处于 makerChatStore 的 running 状态。
  *   两类信号共用 30 分钟节流。running 期间保留一条只在工作时存在的滚动 timer,
  *   避免长工具调用没有 renderer 事件时整小时缺数;工作停止或统计关闭即取消。
- *   TapDB 的活跃指标按天与小时去重,账号口径的 setUser(→ user_login,TapDB
- *   账号 DAU 的唯一触发源)跟随当天首条活跃事件发出。
+ *   TapDB 的活跃指标按天与小时去重,活跃事件使用设备口径。为满足充值对账，
+ *   每次登录后登记一次区域签发的充值假名，随后立即解绑。
  *
  *   刻意不做的事:
  *   - 不监听 mousemove(高频)与 wheel(高频且涉及滚动合成路径);纯滚动阅读
@@ -64,6 +63,7 @@ import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 import TapDBAPI from '@/vendor/tapdb/tapdb.esm.min.js';
 import { createLogger } from '@/lib/logger';
 import { makerChatStore } from '@/lib/makerChatStore';
+import type { AuthStateObserver } from '@/lib/authService';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion';
 import { TAPDB_EVENT_URL_BY_REGION } from '../../shared/endpoints';
 
@@ -115,8 +115,16 @@ let reportingAllowed = false;
 let sdkAppliedAllowed: boolean | null = null;
 /** 每收到一次广播 +1;用于丢弃 IPC 往返期间已经过期的初始快照。 */
 let settingsEpoch = 0;
-let currentUserId: string | null = null;
-let lastSetUserDate: string | null = null;
+function validChargeAlias(value: string | undefined): string | null {
+  return value && /^pay1_[a-f0-9]{48}$/.test(value) ? value : null;
+}
+function validUsageAlias(value: string | undefined): string | null {
+  return value && /^use1_[a-f0-9]{48}$/.test(value) ? value : null;
+}
+let currentUsageAlias: string | null = null;
+let lastUsageLoginDate: string | null = null;
+let currentChargeAlias: string | null = null;
+let registeredChargeAlias: string | null = null;
 
 // ── Engagement throttle ─────────────────────────────────────────────────────
 
@@ -143,7 +151,7 @@ let nextEngagedReportAt = 0;
 /**
  * 上次上报那天的本地午夜(epoch ms)。跨过它意味着换日:即便还在节流窗口内
  * (如 23:55 报过、00:03 再交互),也放行补报,否则新一天头 30 分钟的活跃
- * (连同当日 setUser)会被前一天的窗口整个吞掉。
+ * 会被前一天的窗口整个吞掉。
  */
 let engagedDayEndsAt = 0;
 /** 只在至少一个会话 running 时存在;不对齐整点,避免重造 0 点尖峰。 */
@@ -221,6 +229,10 @@ function reportEngagedIfDue(allowNewDay: boolean): void {
 
 /** 真人交互(focus / keydown / pointerdown)入口。 */
 function onEngagedSignal(): void {
+  // A background working heartbeat may already have consumed the shared page-view window.
+  if (sdkInitialized && reportingAllowed) {
+    try { reportUsageLogin(); } catch { log.warn('retention report deferred'); }
+  }
   reportEngagedIfDue(true);
 }
 
@@ -267,35 +279,44 @@ function syncWorkingReport(): void {
  *
  * 本函数**不碰 TapDB SDK** —— 是否初始化完全取决于 main 回报的 allowed。
  */
-export function initTapdb(): void {
+export function initTapdb(auth: AuthStateObserver): void {
   if (gateMounted) return;
   gateMounted = true;
 
+  // 晚开窗口只补种已有身份;读取不能启动认证,也不算一次真实登录。
+  const seed = auth.getSnapshot();
+  currentUsageAlias = seed?.isAuthenticated ? validUsageAlias(seed.user?.tapdbUsageAlias) : null;
+  currentChargeAlias = seed?.isAuthenticated ? validChargeAlias(seed.user?.tapdbChargeAlias) : null;
+
   // 登录态订阅必须先于 SDK 初始化:冷启动若已登录,auth:state-change 只广播一次,
-  // 而那一刻用户可能还没同意协议(SDK 未 init)。这里无论如何都记录 userId,
+  // SDK 可能尚未初始化。仅在内存中暂存区域签发的充值假名，
   // 等 SDK 真正 init 时再补一次 setUser,避免漏绑。
   try {
-    window.electronAPI.onAuthStateChange((state) => {
+    auth.onAuthStateChange((state, source) => {
       try {
-        const nextUserId = state.isAuthenticated && state.user ? state.user.id : null;
-        const previousUserId = currentUserId;
-        currentUserId = nextUserId;
+        const nextAlias = state.isAuthenticated ? validChargeAlias(state.user?.tapdbChargeAlias) : null;
+        const nextUsage = state.isAuthenticated ? validUsageAlias(state.user?.tapdbUsageAlias) : null;
+        const usageChanged = nextUsage !== currentUsageAlias;
+        currentUsageAlias = nextUsage;
+        if (usageChanged) lastUsageLoginDate = null;
+        const previousAlias = currentChargeAlias;
+        currentChargeAlias = nextAlias;
+        // 初始化和订阅回放只补种身份;真实登录与跨天活跃仍走推送/交互路径。
+        if (source !== 'push') return;
         if (!sdkInitialized || !reportingAllowed) return;
 
-        if (nextUserId === null) {
-          if (previousUserId === null) return;
+        if (usageChanged && document.visibilityState === 'visible') reportUsageLogin();
+        if (nextAlias === null) {
+          if (previousAlias === null) return;
 
           // README 推荐的退登接口。不传参时与 clearUser 等价(仅清本地 accountId,不
           // 发任何 HTTP);传 true 才会重置 distinctId,这里我们不需要切设备身份。
           TapDBAPI.logout();
           log.info('logout');
-          lastSetUserDate = null;
-        } else if (nextUserId !== previousUserId) {
-          // 仅在身份真正变化时绑定。auth:state-change 也会由**定时 token 刷新**
-          // 广播 —— 若这里按「跨天」补 setUser,挂机过夜的机器会在无人交互时
-          // 凭空产生当日账号活跃,正是本次「活跃改交互驱动」要消灭的假 DAU;
-          // 跨天重绑由交互路径(reportActive)负责,只在真实交互时发生。
-          reportSetUser(nextUserId, 'auth_state');
+          registeredChargeAlias = null;
+        } else if (nextAlias !== previousAlias) {
+          // 登记充值假名；定时刷新和跨日活跃都不需要重复登记。
+          reportSetUser(nextAlias, 'auth_state');
         }
       } catch (err) {
         log.error('auth state binding failed (non-fatal)', err);
@@ -303,26 +324,6 @@ export function initTapdb(): void {
     });
   } catch (err) {
     log.error('onAuthStateChange subscription failed (non-fatal)', err);
-  }
-
-  // 身份补种:登录**之后**才打开的二级窗口(独立侧栏等)错过了 auth:state-change
-  // 的初始广播,currentUserId 停在 null —— 半夜定时 token 刷新的广播会被误判成
-  // 「身份变化」触发非交互 setUser(假 DAU)。挂完订阅后主动读一次当前身份;
-  // 只在仍未从广播学到身份时写入,不与并发广播竞争,也不触发任何上报。
-  try {
-    const seed = window.electronAPI.authInitialize?.();
-    if (seed) {
-      void seed
-        .then((state) => {
-          if (currentUserId !== null) return;
-          if (state?.isAuthenticated && state.user?.id) currentUserId = state.user.id;
-        })
-        .catch(() => {
-          // 静默:读不到就维持广播驱动的原行为。
-        });
-    }
-  } catch (err) {
-    log.error('auth identity seed failed (non-fatal)', err);
   }
 
   // 交互驱动的活跃信号(见文件头「活跃口径」)。capture 挂在 window 捕获阶段,
@@ -351,8 +352,8 @@ export function initTapdb(): void {
   // 一条带 deviceId 的 beacon。这里改由 reportPageHide 统一把关。
   try {
     document.addEventListener('visibilitychange', () => {
-      if (!document.hidden) return;
-      reportPageHide();
+      if (document.hidden) reportPageHide();
+      else if (sdkInitialized && reportingAllowed) reportPageShow();
     });
   } catch (err) {
     log.error('page_hide subscription failed (non-fatal)', err);
@@ -389,14 +390,24 @@ export function initTapdb(): void {
     });
 }
 
-/**
- * page_hide 上报。SDK 的 beacon 路径绕过 _isCollectData(),所以闸必须由我们自己守:
- * 未初始化或未放行时一个字节都不发。
- */
+// Only new, manually collected events use these names. Legacy page_show could include URLs and titles.
+let visibleSinceMs: number | null = null;
+
+function reportPageShow(): void {
+  TapDBAPI.track('#cindy_desktop_page_show_v1');
+  visibleSinceMs = performance.now();
+}
+
 function reportPageHide(): void {
   if (!sdkInitialized || !reportingAllowed) return;
   try {
-    TapDBAPI.track('page_hide');
+    const start = visibleSinceMs;
+    visibleSinceMs = null;
+    // The SDK timer serializes fractional seconds; the registered duration field is an integer.
+    const properties = start === null
+      ? {}
+      : { '#duration': Math.min(86400, Math.floor((performance.now() - start) / 1000)) };
+    TapDBAPI.track('#cindy_desktop_page_hide_v1', properties);
   } catch (err) {
     log.error('page_hide report failed (non-fatal)', err);
   }
@@ -415,6 +426,7 @@ function applyReportingAllowed(next: boolean): void {
   // try 里,因为它不可能失败,也绝不该因为后面 SDK 抛异常而回退(fail closed)。
   if (!next) {
     reportingAllowed = false;
+    visibleSinceMs = null;
     clearWorkingReportTimer();
   }
 
@@ -432,7 +444,8 @@ function applyReportingAllowed(next: boolean): void {
       // autoTrack.pageHide,改由 reportPageHide 自己守闸(见 initTapdb)。
       TapDBAPI.optOutTracking();
       sdkAppliedAllowed = false;
-      lastSetUserDate = null;
+      registeredChargeAlias = null;
+      lastUsageLoginDate = null;
       log.info('reporting disabled (opt-out)');
       return;
     }
@@ -453,6 +466,7 @@ function applyReportingAllowed(next: boolean): void {
     applySuperProperties();
     reportingAllowed = true;
     sdkAppliedAllowed = true;
+    if (!document.hidden) reportPageShow();
     reportActive('app_start');
     syncWorkingReport();
     log.info('reporting re-enabled (opt-in)');
@@ -467,33 +481,32 @@ function initSdk(): void {
   try {
     TapDBAPI.init({
       appId: TAPDB_CONFIG.appId,
+      // Old device identities have already appeared alongside raw membership IDs.
+      persistencePrefix: 'cindy_tapdb_pseudonymous_v1_',
+      uuid: crypto.randomUUID(),
       serverUrl: TAPDB_CONFIG.serverUrl,
       // 数据发送方式:ajax 兼容性最好;beacon 在页面关闭场景更可靠但部分代理会丢
       send_method: 'ajax',
       // ajax 走 form 编码,与 tapdb 默认后端兼容
       textContent: 'form',
-      // init 时自动上报一个 device_login 事件。TapDB 后台用 device_login 认定
-      // "新增设备"指标 — pvEvent / page_view 都不算数,必须开这个。
-      isInitDeviceLogin: true,
-      // 自动采集页面展示,用于会话时长统计。
-      // pageHide 必须保持 false:SDK 的 trackPageHideEvent 走 trackWithBeacon,
-      // 那条路径没有 _isCollectData() 闸,opt-out 之后依然会发。我们自己监听
-      // visibilitychange 并在 reportPageHide 里守闸(时长仍由 SDK 在
-      // trackPageShowEvent 里打的 timeEvent(page_hide) 计算,口径不变)。
+      // 清除旧版本保存的账号 ID 后再发送 device_login。TapDB 以它认定
+      // 新增设备，因此在 init 内禁止自动发送。
+      isInitDeviceLogin: false,
+      // The automatic handlers include the full URL, referrer and document title.
       autoTrack: {
-        pageShow: true,
+        pageShow: false,
         pageHide: false,
       },
     });
 
-    // 曾经 opt-out 过的设备,localStorage 里的 opt_tracking=false 会在 init 时被读
-    // 回来,把上面那条 device_login 挡掉。这里补一次 optInTracking 扳回开关;被挡掉
-    // 的只是一条"新增设备"——而这类设备此前必然已经上报过 device_login,新增设备
-    // 口径不受影响。
+    // A previous release may have persisted a membership ID. Clear it before
+    // even the first device event, including on installations coming out of opt-out.
     TapDBAPI.optInTracking();
-
-    sdkInitialized = true;
+    TapDBAPI.logout();
     applySuperProperties();
+    TapDBAPI.track('device_login');
+    if (!document.hidden) reportPageShow();
+    sdkInitialized = true;
     reportActive('app_start');
     log.info(`initialized, region=${CURRENT_CINDY_REGION}, appId=${TAPDB_CONFIG.appId}`);
   } catch (err) {
@@ -516,13 +529,15 @@ function initSdk(): void {
  */
 function applySuperProperties(): void {
   TapDBAPI.setSuperProperties({
+    // The SDK otherwise extracts arbitrary campaign parameters from the current URL.
+    '#utm': '{}',
     '#app_version': window.electronAPI.appVersion,
     '#platform': window.electronAPI.platform,
   });
 }
 
 function reportActive(tag: 'app_start' | 'app_engaged'): void {
-  // 先推进节流窗口再上报:即便 pvEvent 抛异常,30 分钟内也不再重试(fire-and-forget,
+  // 先推进节流窗口再上报:即便 page_view 上报抛异常,30 分钟内也不再重试(fire-and-forget,
   // 防止持续输入在 SDK 故障时反复触发)。app_start 同样消耗窗口,避免启动瞬间双发。
   const now = Date.now();
   nextEngagedReportAt = now + ENGAGED_REPORT_INTERVAL_MS;
@@ -551,23 +566,53 @@ function reportActive(tag: 'app_start' | 'app_engaged'): void {
     }
   }
 
-  TapDBAPI.pvEvent({ '#tag': tag });
+  TapDBAPI.trackEvent('#cindy_desktop_page_view_v1', { '#cindy_activity_trigger': tag });
   log.info(`active ${tag}`);
 
-  const today = getLocalDateKey();
-  if (currentUserId !== null && lastSetUserDate !== today) {
-    reportSetUser(currentUserId, tag, today);
+  if (tag === 'app_start' && document.visibilityState === 'visible') reportUsageLogin();
+  if (currentChargeAlias !== null && registeredChargeAlias !== currentChargeAlias) {
+    reportSetUser(currentChargeAlias, tag);
   }
 }
 
-function reportSetUser(
-  userId: string,
-  reason: 'auth_state' | 'app_engaged' | 'app_start',
-  dateKey = getLocalDateKey(),
-): void {
-  TapDBAPI.setUser(userId);
-  lastSetUserDate = dateKey;
-  log.info(`setUser ${userId} (${reason})`);
+function reportUsageLogin(): void {
+  if (!currentUsageAlias) return;
+  const now = new Date();
+  // Keep both local-day retention and UTC-day model cohorts observable across time zones.
+  const today = getLocalDateKey(now) + '/' + now.toISOString().slice(0, 10);
+  if (lastUsageLoginDate === today) return;
+  try {
+    TapDBAPI.setUser(currentUsageAlias);
+  } finally {
+    TapDBAPI.logout();
+  }
+  lastUsageLoginDate = today;
+}
+
+// The bundled SDK exposes named instances on the master after initInstance().
+type RegistrationSdk = Pick<typeof TapDBAPI, 'setUser' | 'logout' | 'setSuperProperties'>;
+const sdkInstances = TapDBAPI as typeof TapDBAPI & { billingRegistration?: RegistrationSdk };
+
+function reportSetUser(chargeAlias: string, reason: 'auth_state' | 'app_engaged' | 'app_start'): void {
+  if (!sdkInstances.billingRegistration) {
+    TapDBAPI.initInstance('billingRegistration', {
+      uuid: crypto.randomUUID(),
+      persistenceEnabled: true,
+      persistencePrefix: 'cindy_tapdb_billing_v1_',
+      isInitDeviceLogin: false,
+      autoTrack: { pageShow: false, pageHide: false },
+    });
+  }
+  const billing = sdkInstances.billingRegistration;
+  if (!billing) return;
+  billing.setSuperProperties({ '#utm': '{}' });
+  try {
+    billing.setUser(chargeAlias);
+  } finally {
+    billing.logout();
+  }
+  registeredChargeAlias = chargeAlias;
+  log.info(`registered billing alias (${reason})`);
 }
 
 function getLocalDateKey(date = new Date()): string {
@@ -591,8 +636,11 @@ export const __testing = {
     reportingAllowed = false;
     sdkAppliedAllowed = null;
     settingsEpoch = 0;
-    currentUserId = null;
-    lastSetUserDate = null;
+    currentChargeAlias = null;
+    currentUsageAlias = null;
+    lastUsageLoginDate = null;
+    registeredChargeAlias = null;
+    visibleSinceMs = null;
     nextEngagedReportAt = 0;
     engagedDayEndsAt = 0;
     engagedReportLockPending = false;

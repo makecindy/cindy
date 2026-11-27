@@ -8,7 +8,9 @@ import { promisify } from 'node:util';
 import {
   checkDebianManagedInstallation,
   findLinuxUserInstallation,
+  hasLinuxPkexec,
   isDebianManagedInstallation,
+  isLinuxPkexecPreauthorized,
   missingLinuxUserInstallTools,
   linuxUserDesktopName,
 } from '../linuxInstallation';
@@ -66,6 +68,28 @@ describe('Linux install routing', () => {
     expect(missingLinuxUserInstallTools(() => true)).toEqual([]);
     expect(missingLinuxUserInstallTools((name) => name !== 'bsdtar')).toEqual(['bsdtar']);
   });
+
+  // Same lookup as the update script (/usr/bin/pkexec, then PATH); a cloud
+  // desktop without polkit has neither and must be refused before quitting.
+  it.each([
+    { name: '/usr/bin/pkexec', fixed: true, onPath: false, expected: true },
+    { name: 'pkexec on PATH', fixed: false, onPath: true, expected: true },
+    { name: 'no pkexec', fixed: false, onPath: false, expected: false },
+  ])('detects $name', ({ fixed, onPath, expected }) => {
+    expect(hasLinuxPkexec(
+      (file) => fixed && file === '/usr/bin/pkexec',
+      (command) => onPath && command === 'pkexec',
+    )).toBe(expected);
+  });
+
+  // Unattended .deb installs rely on polkit granting pkexec outright; a
+  // challenge (exit 2), denial or missing pkcheck must keep the explicit restart.
+  it('treats only a non-interactive pkcheck success as preauthorized', () => {
+    const calls: string[][] = [];
+    expect(isLinuxPkexecPreauthorized(42, (file, args) => { calls.push([file, ...args]); })).toBe(true);
+    expect(calls).toEqual([['/usr/bin/pkcheck', '--action-id', 'org.freedesktop.policykit.exec', '--process', '42']]);
+    expect(isLinuxPkexecPreauthorized(42, () => { throw Object.assign(new Error('challenge'), { status: 2 }); })).toBe(false);
+  });
 });
 
 // One shared, isolated filesystem fixture. No real app, credentials, network,
@@ -97,7 +121,10 @@ describe.skipIf(process.platform !== 'linux')('user installer transaction smoke 
       fs.writeFileSync(path.join(appDir, 'Cindy'), '#!/bin/sh\nprintf "%s\\n" "fixture"\n', { mode: 0o755 });
       if (version === '1.0.4' || version === '1.0.5') {
         fs.writeFileSync(path.join(appDir, 'Cindy'), [
-          '#!/bin/sh', 'printf "%s\\n" "$$" "$@" > "$CINDY_TEST_LAUNCH_LOG"', 'exec sleep 10', '',
+          '#!/bin/sh', 'printf "%s\\n" "$$" "$@" > "$CINDY_TEST_LAUNCH_LOG"',
+          // Like Electron without a usable Ozone backend: up briefly, then exit(1) with only stderr.
+          'if [ -n "${CINDY_TEST_FAKE_EXIT:-}" ]; then echo "fake: ozone init failed" >&2; sleep 1.5; exit 1; fi',
+          'echo "fake: started" >&2', 'exec sleep 10', '',
         ].join('\n'), { mode: 0o755 });
       }
       fs.writeFileSync(path.join(appDir, 'resources', 'app.asar'), 'fake archive');
@@ -277,8 +304,8 @@ describe.skipIf(process.platform !== 'linux')('user installer transaction smoke 
         debPath: pkg.file, sha256: valid ? pkg.digest : 'f'.repeat(64), sizeBytes: pkg.size,
         exePath: path.join(prefix, before, 'Cindy'), lockFilePath, logPath,
         userInstallation: { prefix, current: before, region: 'global', version },
-        relaunchArgs: ['--password-store=gnome-libsecret'],
-        timings: { lockHeartbeatSeconds: 1, verifyTimeoutSeconds: 3, verifyRetryAtSeconds: 2 },
+        relaunchArgs: ['--ozone-platform=wayland', '--password-store=gnome-libsecret'],
+        timings: { lockHeartbeatSeconds: 1, verifyTimeoutSeconds: 3, verifyRetryAtSeconds: 2, verifyStableSeconds: 1 },
       });
       fs.rmSync(launchLog, { force: true });
       const result = spawnSync('setsid', ['bash', '-c', script], {
@@ -293,12 +320,38 @@ describe.skipIf(process.platform !== 'linux')('user installer transaction smoke 
       try {
         expect(result.stderr).toBe('');
         expect(result.status).toBe(valid ? 0 : 1);
-        expect(args).toEqual(['--password-store=gnome-libsecret']);
+        expect(args).toEqual(['--ozone-platform=wayland', '--password-store=gnome-libsecret']);
         expect(fs.readlinkSync(path.join(prefix, 'current'))).toBe(valid ? 'releases/' + version + '-' + pkg.digest : before);
         expect(fs.existsSync(lockFilePath)).toBe(false);
+        if (valid) {
+          expect(fs.readFileSync(logPath, 'utf8')).toContain('PROCESS VERIFIED');
+          expect(fs.readFileSync(path.join(root, 'cindy-relaunch.log'), 'utf8')).toContain('fake: started');
+        }
       } finally {
         process.kill(Number(pid), 'SIGTERM'); // Only the fake app this test launched.
       }
     }
+
+    // #9723: the relaunched app is up for 1.5 s, then exits 1. A single kill -0
+    // one second after the retry reported it as running and dropped its stderr.
+    const current = fs.readlinkSync(path.join(prefix, 'current'));
+    const pkg = packages.get('1.0.4')!;
+    fs.rmSync(logPath, { force: true });
+    const result = spawnSync('setsid', ['bash', '-c', buildLinuxUpdateScript({
+      pid: 2147483647, debPath: pkg.file, sha256: pkg.digest, sizeBytes: pkg.size,
+      exePath: path.join(prefix, current, 'Cindy'), lockFilePath, logPath,
+      userInstallation: { prefix, current, region: 'global', version: '1.0.4' },
+      timings: { lockHeartbeatSeconds: 1, verifyTimeoutSeconds: 6, verifyRetryAtSeconds: 2, verifyStableSeconds: 3 },
+    })], {
+      env: { ...process.env, HOME: path.join(root, 'home'), CINDY_TEST_LAUNCH_LOG: launchLog, CINDY_TEST_FAKE_EXIT: '1' },
+      encoding: 'utf8', timeout: 15_000,
+    });
+    const log = fs.readFileSync(logPath, 'utf8');
+    expect(result.stderr).toBe('');
+    expect(log.match(/exited with code 1 /g)).toHaveLength(2);
+    expect(log).toContain('    app: fake: ozone init failed');
+    expect(log).toContain('retrying relaunch');
+    expect(log).toContain('WARNING: relaunch not verified');
+    expect(log).not.toContain('PROCESS VERIFIED');
   }, 30_000);
 });

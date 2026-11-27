@@ -13,7 +13,7 @@ describe('provider branding', () => {
   it.each([
     ['anthropic', 'anthropic'],
     ['openai', 'openai'],
-    ['xd', 'xd'],
+    ['xd', 'cindy'],
   ] as const)('maps built-in provider %s to its official mark', (providerId, logoKind) => {
     expect(resolveProviderLogoKind(providerId)).toBe(logoKind);
   });
@@ -44,6 +44,11 @@ describe('provider branding', () => {
     expect(resolveProviderLogoKind('xai')).toBe('xai');
     expect(PROVIDER_LOGO_PATHS.xai).not.toBe(PROVIDER_LOGO_PATHS.openrouter);
   });
+  it('keeps the OpenHubs mark on renamed official connections without matching lookalike domains', () => {
+    expect(resolveProviderLogoKind('openhubs')).toBe('openhubs');
+    expect(resolveProviderLogoKind('my-account', { pi: { upstream: 'https://openhubs.zhidemai.com/v1' } })).toBe('openhubs');
+    expect(resolveProviderLogoKind('my-account', { pi: { upstream: 'https://openhubs.zhidemai.com.evil.example/v1' } })).toBeNull();
+  });
 
   it.each([
     ['ollama', 'ollama'],
@@ -52,7 +57,8 @@ describe('provider branding', () => {
     ['cindy-local-lmstudio', 'lmstudio'],
     ['llamacpp', 'llamacpp'],
     ['vllm', 'vllm'],
-  ] as const)('maps local runtime %s to %s', (providerId, logoKind) => {
+    ['magpie', 'magpie'],
+  ] as const)('maps provider id %s to %s', (providerId, logoKind) => {
     expect(resolveProviderLogoKind(providerId)).toBe(logoKind);
     expect(hasProviderLogo(providerId)).toBe(true);
   });
@@ -70,6 +76,7 @@ describe('provider branding', () => {
   });
 
   it('guards runtime logo values before indexing shared paths', () => {
+    expect(isProviderLogoKind('cindy')).toBe(true);
     expect(isProviderLogoKind('vercel')).toBe(true);
     expect(isProviderLogoKind('future-brand')).toBe(false);
     expect(isProviderLogoKind(null)).toBe(false);

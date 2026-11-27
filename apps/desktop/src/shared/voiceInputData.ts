@@ -1,3 +1,4 @@
+import { normalizeRealtimeVoicePreferences, type RealtimeVoiceSelection } from './realtimeVoice.js';
 import { normalizeVoiceConversationPreferences, normalizeVoiceConversationSelection, normalizeSentencePlaybackOverrides, type VoiceConversationSelection } from './voiceConversation';
 import type {
   DictationDictionaryAdviceInput,
@@ -35,7 +36,14 @@ export type VoiceInputSyncErrorResult = {
   message: string;
 };
 
-export type VoiceInputLanguage = 'auto' | SupportedLocale;
+/**
+ * Dictation-only languages: speakable languages the recognition service can be
+ * hinted with, which are NOT client UI locales. Dictation language is decoupled
+ * from the UI language so a speaker is not limited to the UI locales.
+ */
+export const VOICE_INPUT_EXTRA_LANGUAGES = ['es'] as const;
+export type VoiceInputExtraLanguage = (typeof VOICE_INPUT_EXTRA_LANGUAGES)[number];
+export type VoiceInputLanguage = 'auto' | SupportedLocale | VoiceInputExtraLanguage;
 export type VoiceInputDictionaryEntrySource = 'manual' | 'automatic';
 export type VoiceInputShortcutTrigger = 'keyboard' | 'modifier';
 export type VoiceInputModifierShortcutCode =
@@ -89,6 +97,8 @@ export interface VoiceInputSettings {
   conversationSelection?: VoiceConversationSelection | null;
   /** Per-companion overrides; absence inherits the default without copying it. */
   conversationSelections?: Record<string, VoiceConversationSelection | null>;
+  realtimeSelections?: Record<string, RealtimeVoiceSelection>;
+  previousRealtimeSelections?: Record<string, RealtimeVoiceSelection>;
   /** Missing entries follow the enabled default; false waits for the complete reply. */
   conversationSentencePlayback?: Record<string, boolean>;
   language: VoiceInputLanguage;
@@ -547,6 +557,8 @@ export function normalizeVoiceInputSettings(
   if (!raw || typeof raw !== 'object') return defaults;
   const candidate = raw as Partial<VoiceInputSettings>;
   const conversationSelections = normalizeVoiceConversationPreferences(candidate.conversationSelections);
+  const realtimeSelections = normalizeRealtimeVoicePreferences(candidate.realtimeSelections);
+  const previousRealtimeSelections = normalizeRealtimeVoicePreferences(candidate.previousRealtimeSelections);
   const conversationSentencePlayback = normalizeSentencePlaybackOverrides(candidate.conversationSentencePlayback);
   const legacyPlayStartSound = (candidate as { playStartSound?: unknown }).playStartSound;
   const shortcut =
@@ -557,6 +569,8 @@ export function normalizeVoiceInputSettings(
     ...(normalizeVoiceConversationSelection(candidate.conversationSelection)
       ? { conversationSelection: normalizeVoiceConversationSelection(candidate.conversationSelection) } : {}),
     ...(Object.keys(conversationSelections).length ? { conversationSelections } : {}),
+    ...(Object.keys(realtimeSelections).length ? { realtimeSelections } : {}),
+    ...(Object.keys(previousRealtimeSelections).length ? { previousRealtimeSelections } : {}),
     ...(Object.keys(conversationSentencePlayback).length ? { conversationSentencePlayback } : {}),
     language: isVoiceInputLanguage(candidate.language) ? candidate.language : defaults.language,
     microphoneDeviceId:
@@ -1025,7 +1039,10 @@ function normalizeSpeakerFilterStrictnessOverride(
 
 function isVoiceInputLanguage(value: unknown): value is VoiceInputLanguage {
   if (value === 'auto') return true;
-  return typeof value === 'string' && (SUPPORTED_LOCALES as readonly string[]).includes(value);
+  return typeof value === 'string' && (
+    (SUPPORTED_LOCALES as readonly string[]).includes(value)
+    || (VOICE_INPUT_EXTRA_LANGUAGES as readonly string[]).includes(value)
+  );
 }
 
 function hasMacNativeModifierGroup(keySet: ReadonlySet<string>, left: string, right: string): boolean {

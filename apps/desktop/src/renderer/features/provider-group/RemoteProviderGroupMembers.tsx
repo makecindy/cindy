@@ -10,6 +10,7 @@ import { useTranslation } from 'react-i18next';
 
 import { useOptionalAuthDeviceId } from '@/contexts/AuthContext';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { isWindowHidden } from '@/lib/hiddenAnimationGate';
 import { cn } from '@/lib/utils';
 
 import { readProviderGroupAppVersion } from '../../../shared/providerGroup';
@@ -22,27 +23,164 @@ import type {
 import { providerShareComputerName, useProviderShareOwnerNameOf } from '../provider-share/providerShareNames';
 import { GroupMemberQuota, groupMemberQuotaTarget } from './GroupMemberQuota';
 import { GroupMemberDetailsButton, GroupMemberVersion } from './GroupMemberVersion';
-import { memberStatusText } from './ProviderGroupSection';
 import {
   groupProviderGroupItems,
+  memberStatusText,
   providerGroupAccountName,
   providerGroupDeviceVersion,
 } from './providerGroupPresentation';
 
 const REFRESH_INTERVAL_MS = 15_000;
 
+interface ViewRequestStart {
+  wall: number;
+  mono: number;
+}
+
+interface ViewBudget {
+  wallUntil: number;
+  monoUntil: number;
+}
+
+/**
+ * A view carries the optional host display budget. The fixed deadlines start
+ * at the request start; a missing stamp keeps the old-host lifecycle.
+ */
+function viewBudget(view: ProviderGroupView, startedAt: ViewRequestStart): ViewBudget | undefined {
+  const remaining = view.providerContinuity?.remainingMs;
+  if (typeof remaining !== 'number' || !Number.isFinite(remaining)) return undefined;
+  return {
+    wallUntil: startedAt.wall + remaining,
+    monoUntil: startedAt.mono + remaining,
+  };
+}
+
+function budgetRemainingMs(budget: ViewBudget): number {
+  return Math.max(0, Math.min(budget.wallUntil - Date.now(), budget.monoUntil - performance.now()));
+}
+
+function budgetExpired(budget: ViewBudget): boolean {
+  return Date.now() >= budget.wallUntil || performance.now() >= budget.monoUntil;
+}
+
+interface MemberSnapshot {
+  status: ProviderGroupMemberStatus;
+  budget?: ViewBudget;
+  expired: boolean;
+}
+
+function liveSnapshot(snapshot: MemberSnapshot | undefined) {
+  if (snapshot?.budget && budgetExpired(snapshot.budget)) snapshot.expired = true;
+  return snapshot && !snapshot.expired ? snapshot.status : undefined;
+}
+
+async function readMemberStatuses(
+  deviceId: string,
+  providerId: string,
+  members: ProviderGroupMember[],
+  snapshots: Map<string, MemberSnapshot>,
+  canApply: () => boolean,
+  changed: () => void,
+  onReadFailure: () => void,
+) {
+  const keys = new Set(members.map(member => member.key));
+  for (const key of snapshots.keys()) if (!keys.has(key)) snapshots.delete(key);
+  // Cold rows get a lightweight availability read first. Warm rows already have something
+  // to show. Put enrichment behind queued base reads and bound work on the shared link.
+  const queue = Array.from(keys, memberKey => ({ memberKey, details: !!liveSnapshot(snapshots.get(memberKey)) }));
+  queue.sort((a, b) => Number(a.details) - Number(b.details));
+  let nextJob = 0;
+  const worker = async () => {
+    while (canApply() && nextJob < queue.length) {
+      const job = queue[nextJob++]!;
+      const start = { wall: Date.now(), mono: performance.now() };
+      try {
+        const row = await window.electronAPI.providerGroup.command({
+          action: 'remote-view', deviceId, providerId,
+          display: { memberKey: job.memberKey, ...(job.details ? { details: true } : {}) },
+        });
+        if (!canApply()) return;
+        const status = row.members.find(member => member.key === job.memberKey);
+        if (status && !row.providerContinuity?.stale) {
+          snapshots.set(job.memberKey, { status, budget: viewBudget(row, start), expired: false });
+          if (!job.details) queue.push({ ...job, details: true });
+        } else {
+          snapshots.delete(job.memberKey);
+        }
+      } catch {
+        if (!canApply()) return;
+        snapshots.delete(job.memberKey);
+        onReadFailure();
+      }
+      changed();
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(4, queue.length) }, worker));
+}
+
 function useRemoteProviderGroupView(deviceId: string, providerId: string) {
   const [view, setView] = useState<ProviderGroupView | null>(null);
+  /** The last acknowledged view budget is over; never let it outlive it. */
+  const [retired, setRetired] = useState(false);
   const [versions, setVersions] = useState<ReadonlyMap<string, string>>(() => new Map());
   const [failed, setFailed] = useState(false);
+  const [memberFailed, setMemberFailed] = useState(false);
   const seq = useRef(0);
+  const inFlight = useRef(false);
+  const snapshots = useRef(new Map<string, MemberSnapshot>());
+  const [revision, setRevision] = useState(0);
+  const changed = useCallback(() => setRevision(value => value + 1), []);
+
+  // Retire each row at its own source deadline, even while a sibling is still loading.
+  useEffect(() => {
+    let remaining = Infinity;
+    for (const snapshot of snapshots.current.values()) {
+      if (snapshot.budget && !snapshot.expired) remaining = Math.min(remaining, budgetRemainingMs(snapshot.budget));
+    }
+    if (Number.isFinite(remaining)) {
+      const timer = setTimeout(() => {
+        for (const snapshot of snapshots.current.values()) liveSnapshot(snapshot);
+        changed();
+      }, remaining);
+      return () => clearTimeout(timer);
+    }
+  }, [revision, changed]);
+  const expiry = useRef<{
+    token: number;
+    timer: ReturnType<typeof setTimeout> | null;
+    wallUntil: number | null;
+    monoUntil: number | null;
+    expired: boolean;
+  }>({ token: 0, timer: null, wallUntil: null, monoUntil: null, expired: false });
+
+  const clearExpiry = useCallback(() => {
+    expiry.current.token += 1;
+    if (expiry.current.timer !== null) clearTimeout(expiry.current.timer);
+    expiry.current.timer = null;
+    expiry.current.wallUntil = null;
+    expiry.current.monoUntil = null;
+    expiry.current.expired = false;
+  }, []);
+
+  const viewExpired = () => {
+    const row = expiry.current;
+    if (row.expired) return true;
+    if (row.wallUntil === null || row.monoUntil === null) return false;
+    if (Date.now() < row.wallUntil && performance.now() < row.monoUntil) return false;
+    // Latch a boundary observed on either clock; a later wall rollback must not
+    // revive the same source. This is a ref latch, not React state or a read
+    // notification.
+    row.expired = true;
+    return true;
+  };
 
   const reload = useCallback(async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
     const current = ++seq.current;
     const owner = getDataOwnerGeneration();
+    const requestedAt = { wall: Date.now(), mono: performance.now() };
     const canApply = () => current === seq.current && isDataOwnerGenerationCurrent(owner);
-    // 旧组所在电脑不回 appVersion；查看端已有的同账号设备目录仍能提供版本。
-    // 与状态独立读取，设备目录慢或失败时不挡住组状态，也不为此增加一套轮询。
     const readVersions = async () => {
       try {
         const { devices } = await window.electronAPI.deviceLink.listDevices();
@@ -59,29 +197,92 @@ function useRemoteProviderGroupView(deviceId: string, providerId: string) {
     };
     void readVersions();
     try {
-      const next = await window.electronAPI.providerGroup.command({ action: 'remote-view', deviceId, providerId });
+      const next = await window.electronAPI.providerGroup.command({ action: 'remote-view', deviceId, providerId, display: 'roster' });
       if (!canApply()) return;
+      setMemberFailed(false);
       setView(next);
       setFailed(false);
+      clearExpiry();
+      const budget = viewBudget(next, requestedAt);
+      if (budget) {
+        expiry.current.wallUntil = budget.wallUntil;
+        expiry.current.monoUntil = budget.monoUntil;
+        expiry.current.expired = budgetExpired(budget);
+        setRetired(expiry.current.expired);
+        const remainingMs = budgetRemainingMs(budget);
+        if (!expiry.current.expired && remainingMs > 0) {
+          const token = expiry.current.token;
+          expiry.current.timer = setTimeout(() => {
+            if (expiry.current.token !== token || !isDataOwnerGenerationCurrent(owner)) return;
+            expiry.current.timer = null;
+            expiry.current.expired = true;
+            setRetired(true);
+          }, remainingMs);
+        }
+      } else {
+        setRetired(false);
+      }
+      if (!next.rosterOnly || !next.config || next.providerContinuity?.stale || (budget && budgetExpired(budget))) {
+        snapshots.current.clear();
+        return;
+      }
+      await readMemberStatuses(deviceId, providerId, next.config.members, snapshots.current,
+        () => canApply() && (!budget || !budgetExpired(budget)), changed, () => setMemberFailed(true));
     } catch {
       if (!canApply()) return;
+      // A failed re-read is not live status evidence. Mark the last snapshot
+      // stale so running/cooling/quota are not presented as current; a later
+      // successful live read replaces it with a fresh source. Keep the original
+      // deadline: repeated failures must not renew or shorten it, and an old
+      // host without a stamp keeps its original lifecycle.
       setFailed(true);
+      snapshots.current.clear();
+    } finally {
+      if (current === seq.current) inFlight.current = false;
     }
-  }, [deviceId, providerId]);
+  }, [deviceId, providerId, clearExpiry, changed]);
 
   useEffect(() => {
+    clearExpiry();
+    snapshots.current.clear();
+    inFlight.current = false;
+    setMemberFailed(false);
     setView(null);
+    setRetired(false);
     setVersions(new Map());
     setFailed(false);
-    void reload();
-    const timer = window.setInterval(() => void reload(), REFRESH_INTERVAL_MS);
+    let windowHidden = isWindowHidden();
+    let timer: number | undefined;
+    const syncVisibility = () => {
+      if (windowHidden || document.visibilityState === 'hidden') {
+        if (timer === undefined) return;
+        window.clearInterval(timer);
+        timer = undefined;
+        // Invalidate already dispatched reads before their workers can dequeue another member.
+        seq.current += 1;
+        inFlight.current = false;
+      } else if (timer === undefined) {
+        timer = window.setInterval(() => void reload(), REFRESH_INTERVAL_MS);
+        void reload();
+      }
+    };
+    const offHidden = window.electronAPI.onWindowHiddenChange?.(hidden => {
+      windowHidden = hidden;
+      syncVisibility();
+    });
+    document.addEventListener('visibilitychange', syncVisibility);
+    syncVisibility();
     return () => {
+      offHidden?.();
+      document.removeEventListener('visibilitychange', syncVisibility);
       window.clearInterval(timer);
+      clearExpiry();
       seq.current += 1;
     };
-  }, [reload]);
+  }, [reload, clearExpiry]);
 
-  return { view, versions, failed };
+  const expired = retired || viewExpired();
+  return { view, versions, failed, memberFailed, expired, snapshots: snapshots.current };
 }
 
 export function RemoteProviderGroupMembers({
@@ -95,9 +296,17 @@ export function RemoteProviderGroupMembers({
   config: ProviderGroupConfig;
 }) {
   const { t } = useTranslation();
-  const { view, versions, failed } = useRemoteProviderGroupView(deviceId, providerId);
-  const members = view?.config?.members ?? config.members;
-  const statusOf = (member: ProviderGroupMember) => view?.members.find((m) => m.key === member.key);
+  const { view, versions, failed, memberFailed, expired, snapshots } = useRemoteProviderGroupView(deviceId, providerId);
+  // While the view is still inside its own budget, its config is the last
+  // acknowledged group-owner snapshot. Once that budget ends, keep the
+  // navigation/config fallback from the current catalog prop instead.
+  const members = expired ? config.members : view?.config?.members ?? config.members;
+  // 目录续期快照只能证明上次读到的状态；下线/冷却/运行数可能已变化，
+  // 不能把它当成实时组状态展示。失败或自身预算到期都只保留加载态。
+  const staleView = failed || expired || view?.providerContinuity?.stale === true;
+  const statusOf = (member: ProviderGroupMember) => staleView
+    ? undefined
+    : view?.rosterOnly ? liveSnapshot(snapshots.get(member.key)) : view?.members.find((m) => m.key === member.key);
   // local 指组所在电脑，不是查看端；分享来源不能按同账号设备查版本。
   const appVersionOf = (member: ProviderGroupMember) => member.kind === 'local' ? versions.get(deviceId)
     : member.kind === 'device' && member.agentDeviceId ? versions.get(member.agentDeviceId) : undefined;
@@ -140,7 +349,7 @@ export function RemoteProviderGroupMembers({
           );
         })}
       </div>
-      {failed && (
+      {(failed || memberFailed) && (
         <p className="mt-2 text-12 leading-[1.5] text-[var(--text-tertiary)]">
           {t('settings.providers.remote.groupMembersFailed')}
         </p>
@@ -236,6 +445,7 @@ function MemberRow({
   // 组所在电脑看它能用，这台电脑却连不上(换电脑时会跳过它)：不显示成能用。
   const unreachableHere = status?.unreachableHere === true;
   const ready = !unreachableHere && (status?.state === 'available' || status?.state === 'full');
+  const quotaExhausted = !unreachableHere && status?.state === 'cooling' && status.usageLimit != null;
   const running = status?.running ?? 0;
   const appendRunning = running > 0 && status != null
     && (unreachableHere || (status.state !== 'available' && status.state !== 'full'));
@@ -270,15 +480,17 @@ function MemberRow({
           />
         </span>
         <span className="flex flex-wrap items-center gap-1.5 text-12 text-[var(--text-secondary)]">
-          <span
-            aria-hidden="true"
-            className="h-1.5 w-1.5 shrink-0 rounded-full"
-            style={{ background: ready ? 'var(--remote-status-ready)' : 'var(--remote-status-disconnected)' }}
-          />
-          <span>
-            {unreachableHere
-              ? t('providerGroup.member.status.unreachableHere')
-              : memberStatusText(t, status, i18n.language)}
+          <span className="inline-flex min-w-0 max-w-full items-center gap-1.5">
+            <span
+              aria-hidden="true"
+              className="h-1.5 w-1.5 shrink-0 rounded-full"
+              style={{ background: quotaExhausted ? 'var(--quota-bar-crit)' : ready ? 'var(--remote-status-ready)' : 'var(--remote-status-disconnected)' }}
+            />
+            <span className="min-w-0">
+              {unreachableHere
+                ? t('providerGroup.member.status.unreachableHere')
+                : memberStatusText(t, status, i18n.language)}
+            </span>
           </span>
           {appendRunning && (
             <>

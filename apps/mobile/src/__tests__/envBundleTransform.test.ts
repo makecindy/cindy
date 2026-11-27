@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module';
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import type { CustomResolutionContext } from '@expo/metro/metro-resolver';
@@ -73,6 +74,25 @@ function endpointResolutionContext(
 }
 
 afterEach(() => vi.unstubAllEnvs());
+
+// Unit regression: opening the current iOS app failed on plugin-protocol's
+// ./manifest.js export. Exercise Metro's real resolver against that TS source.
+it.each(['ios', 'android'])('resolves shared plugin protocol TS exports on %s', (platform) => {
+  const originModulePath = resolve(process.cwd(), '../../packages/plugin-protocol/src/index.ts');
+  const context = {
+    ...endpointResolutionContext(false, false),
+    originModulePath,
+    sourceExts: ['ts', 'js', 'json'],
+    fileSystemLookup: (filePath: string) => existsSync(filePath)
+      ? { exists: true as const, type: 'f' as const, realPath: filePath }
+      : { exists: false as const },
+    doesFileExist: existsSync,
+  };
+  expect(resolveMobileModule(context, './manifest.js', platform)).toEqual({
+    type: 'sourceFile',
+    filePath: resolve(process.cwd(), '../../packages/plugin-protocol/src/manifest.ts'),
+  });
+});
 
 describe('mobile endpoint overrides after Expo bundle transform', () => {
   it.each([false, true])(

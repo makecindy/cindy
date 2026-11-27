@@ -3,9 +3,10 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createElement } from 'react';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({ t: (key: string) => key, i18n: { exists: (key: string) => key.startsWith('chat.remoteError.'), language: 'en' } }),
   initReactI18next: { type: '3rdParty', init: () => undefined },
 }));
 
@@ -18,6 +19,41 @@ const STREAM_RAW =
 afterEach(cleanup);
 
 describe('ErrorMessageCard', () => {
+  // #10385, unit: recover a persisted no-model error via real settings navigation, only for the execution host.
+  it.each([
+    ['settings.tabs.providers', '/settings?tab=providers'],
+    ['settings.sections.auxiliaryModels', '/settings?tab=model-groups&section=personalization.auxiliaryModels'],
+  ])('opens %s from missing-model history', (label, destination) => {
+    function Location() { const location = useLocation(); return <output>{location.pathname + location.search}</output>; }
+    render(<MemoryRouter><ErrorMessageCard message="[AUTO_REVIEW_NO_AVAILABLE_MODEL] safe fallback" canConfigureAutoReview /><Location /></MemoryRouter>);
+    expect(screen.getByText('chat.remoteError.AUTO_REVIEW_NO_AVAILABLE_MODEL')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: label }));
+    expect(screen.getByText(destination)).toBeTruthy();
+  });
+
+  it('keeps local configuration actions out of remote or unknown execution hosts', () => {
+    render(<ErrorMessageCard message="[AUTO_REVIEW_NO_AVAILABLE_MODEL] safe fallback" />);
+    expect(screen.getByText('chat.remoteError.AUTO_REVIEW_NO_AVAILABLE_MODEL')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'settings.tabs.providers' })).toBeNull();
+  });
+  // #10187, unit: persisted failures need the same specific recovery as live errors.
+  it.each([
+    ['LAZY_CREATE_FAILED: [REMOTE_AGENT_INVALID] this conversation cannot be resumed on this computer', 'REMOTE_AGENT_RESUME_UNAVAILABLE'],
+    ['[REMOTE_AGENT_INVALID] invalid request', 'REMOTE_AGENT_INVALID'],
+    ['[REMOTE_AGENT_INVALID] This conversation cannot be resumed on this computer.', 'REMOTE_AGENT_RESUME_UNAVAILABLE'],
+  ])('preserves the cause of a persisted remote failure: %s', (message, code) => {
+    render(<ErrorMessageCard message={message} />);
+    expect(screen.getByText(`chat.remoteError.${code}`)).toBeTruthy();
+    expect(screen.queryByText('chat.errorBanner.retry')).toBeNull();
+  });
+
+  // Unit: a persisted startup failure must retain the same cause as the live banner.
+  it('shows the bound account limit with its reset time in history', () => {
+    render(<ErrorMessageCard message={"LAZY_CREATE_FAILED: [SUBSCRIPTION_ACCOUNT_LIMITED] diagnostic\nresetAtMs=1900000000000"} />);
+    expect(screen.getByText('chat.subscriptionAccountError.limitedUntil')).toBeTruthy();
+    expect(screen.queryByText('chat.errorBanner.replyFailed')).toBeNull();
+  });
+
   // Historical execution failures must offer the same diagnosis as live failures.
   it('offers diagnosis only after expanding a persisted execution error', () => {
     const onDiagnose = vi.fn();
@@ -95,6 +131,46 @@ describe('ErrorMessageCard', () => {
     expect(screen.getByText(raw)).toBeTruthy();
   });
 
+  // History rows of a subscription usage limit showed the same generic summary as the banner did.
+  it('names an account usage limit in history and still offers the original', () => {
+    const raw = "You've hit your session limit · resets 1:20am (Asia/Shanghai)";
+    render(createElement(ErrorMessageCard, { message: raw }));
+    expect(screen.getByText('chat.errorBanner.usageLimitReached')).toBeTruthy();
+    expect(screen.queryByText('chat.errorBanner.replyFailed')).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
+    expect(screen.getByText(raw)).toBeTruthy();
+  });
+
+  // Persisted plugin-engine account errors must stay localized instead of falling back to replyFailed.
+  it.each([
+    [
+      'Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 2h13m2s.',
+      'acp-usage-limit',
+      'chat.errorBanner.usageLimitReached',
+    ],
+    [
+      'Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 2h13m2s.',
+      undefined,
+      'chat.errorBanner.usageLimitReached',
+    ],
+    [
+      'The plugin engine service is temporarily busy.',
+      'acp-overloaded',
+      'chat.errorBanner.overloadBusyNoRetry',
+    ],
+    [
+      'Please sign in again.',
+      'acp-auth-required',
+      'chat.subscriptionAccountError.loginRequired',
+    ],
+  ])('localizes persisted plugin-engine error (%s, reason=%s)', (raw, reason, expectedKey) => {
+    render(createElement(ErrorMessageCard, { message: raw, reason }));
+    expect(screen.getByText(expectedKey)).toBeTruthy();
+    expect(screen.queryByText('chat.errorBanner.replyFailed')).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
+    expect(screen.getByText(raw)).toBeTruthy();
+  });
+
   it('localizes LiteLLM envelopes and still offers the original', () => {
     const raw =
       'OpenAI API error (400): {"message":"litellm.BadRequestError: XaiException - too long"}';
@@ -122,5 +198,14 @@ describe('ErrorMessageCard', () => {
     expect(screen.queryByText(raw)).toBeNull();
     fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
     expect(screen.getByText(raw)).toBeTruthy();
+  });
+});
+
+
+describe('output-limit guidance', () => {
+  it.each([131064, 1000])('renders reasoning-aware usage and guidance (%s)', (reasoningTokens) => {
+    render(createElement(ErrorMessageCard, { message: 'limit', reason: 'output-limit', outputLimit: { outputTokens: 131072, reasoningTokens } }));
+    const expected = reasoningTokens === 131064 ? 'logic.errors.outputLimitReasoning' : 'logic.errors.outputLimit';
+    expect(screen.getByText(`logic.errors.outputLimitUsage ${expected}`)).toBeTruthy();
   });
 });

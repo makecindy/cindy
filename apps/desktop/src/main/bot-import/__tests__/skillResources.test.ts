@@ -1,9 +1,15 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { projectImportedSkill, withImportedSkillResources } from '../skillResources.js';
+import { captureSkillArchive } from '../skillArchive.js';
 import type { CompanionEnvironment } from '../environment.js';
+
+const streamed = vi.hoisted(() => ({ records: [] as string[] }));
+vi.mock('../runtime.js', () => ({ companionEnvironmentStore: {
+  async *readResource() { yield* streamed.records; },
+} }));
 
 it.each([false, true])('redacts UTF-16 text resources (big endian: %s) without changing encoding or executable metadata', bigEndian => {
   const bytes = Buffer.from('\ufeff原文\r\nfake-selected-token', 'utf16le');
@@ -64,4 +70,25 @@ it('retains and materializes native interpreter aliases without copying them int
       expect(await fs.readlink(path.join(env.CINDY_IMPORTED_SKILLS!, 'native', interpreterName))).toBe(target);
     });
   } catch (error) { if ((error as NodeJS.ErrnoException).code === 'EPERM') { ctx.skip(); return; } throw error; }
+});
+
+// Unit: exercise the authorized runtime entry with an archive, not legacy inline
+// files. The private directory must disappear when the command rejects.
+it('materializes archived originals for a command and removes them after failure', async () => {
+  const source = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-runtime-archive-'));
+  let temporary = '';
+  try {
+    await fs.writeFile(path.join(source, 'SKILL.md'), '# Run');
+    await fs.writeFile(path.join(source, 'run.txt'), 'fixture-original-token');
+    const { ref } = await captureSkillArchive('bot', { view: { id: 'report', name: 'report', category: 'skills', selected: true }, sourceDirectory: source }, {
+      async writeResource(key, id, chunks) { streamed.records = []; for await (const chunk of chunks) streamed.records.push(chunk); return { key, id, digest: 'fixture' }; },
+      async *readResource() { yield* streamed.records; },
+    }, { TOKEN: 'fixture-original-token' }, () => {});
+    await expect(withImportedSkillResources({ version: 1, env: {}, mcp: [], credentials: [], skillArchives: { report: ref } }, () => {}, async env => {
+      temporary = env.CINDY_IMPORTED_SKILLS!;
+      expect(await fs.readFile(path.join(temporary, 'report', 'run.txt'), 'utf8')).toBe('fixture-original-token');
+      throw new Error('command failed');
+    })).rejects.toThrow('command failed');
+    await expect(fs.access(temporary)).rejects.toThrow();
+  } finally { await fs.rm(source, { recursive: true, force: true }); }
 });

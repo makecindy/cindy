@@ -8,27 +8,54 @@ type Decision = Awaited<ReturnType<ToolCallAuthorizer>>;
 
 /** These names describe effects, not tool visibility or an Agent permission mode. */
 export const TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
-  'send_to_agent',
-  'continue_workbench_task',
-  'set_workbench_task_responsibility',
   'set_teammate_project',
+  'configure_teammate_imessage_group',
+  'remove_teammate_personal_skill',
   'send_to_session',
   'steer_session',
   'stop_session_turn',
+  'control_session',
   'set_session_runtime',
+  'set_session_tool_catalog',
+  'set_app_default_model',
+  'update_app_settings',
+  'import_theme_package',
+  'set_model_configuration',
+  'configure_model_provider',
+  'set_provider_share_member_status',
+  'set_provider_share_model_access',
+  'configure_model_connection',
+  'manage_media_guide',
+  'reset_app_settings',
   'update_session_queued_message',
   'cancel_session_queued_message',
   'steer_session_queued_message',
   'move_session_queued_message',
-  'start_session_task',
-  'message_session_task',
-  'stop_session_task',
-  'advance_session_task_route',
   'archive_sessions',
   'unarchive_sessions',
+  'pin_sessions',
+  'unpin_sessions',
+  'snooze_sessions',
+  'delete_session',
+  'fork_session',
+  'rewind_session',
+  'export_session',
+  'import_session',
   'rename_sessions',
   'move_session',
+  'manage_session_prs',
+  'create_shared_task_invitation',
+  'request_remote_control',
 ]);
+
+/** Project access writes must never inherit the trusted helper server's silent approval. */
+export function isProjectAccessAction(tool: string | undefined, args: unknown): boolean {
+  if (tool === 'create_project') return true;
+  if (tool !== 'update_project_info') return false;
+  const input = args as { field?: unknown; value?: unknown } | null;
+  if (!input || input.field !== 'profile') return false;
+  return !!input.value && typeof input.value === 'object' && 'directories' in input.value;
+}
 
 export const ORCA_TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'start_team',
@@ -45,42 +72,38 @@ export const ORCA_TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'idle_worker',
   'end_team',
   'archive_worker',
+  'set_worker_runtime',
 ]);
-
-/** A confirmed new delegation may advance only its own live execution. */
-export const DELEGATED_TASK_ACTIONS = ['message_session_task', 'stop_session_task'] as const;
-
-/**
- * Who a teammate turn speaks for, decided by the Host before any permission mode applies.
- * - owner: the owner typed this turn (or a verified owner request in a group / IM lane);
- * - entrusted: a standing owner grant (an owner-created routine, the teammate's own Orca team);
- * - autonomous: anything else (follow-up wake-ups, teammate messages, non-owner speakers).
- * Ordinary (non-teammate) callers carry no principal and keep the normal permission flow.
- */
-export type TaskActionPrincipal = 'owner' | 'entrusted' | 'autonomous';
 
 export interface TaskActionScope {
   /** Host identity/active-input generation, captured before the confirmation. */
   key: string;
   ownerInput: boolean;
-  principal?: TaskActionPrincipal;
-  /** Existing, explicitly confirmed delegation; never inferred from creator/follower. */
+  /** Already confirmed upstream (an Orca team or delegate_task); never inferred from creator/follower. */
   delegated: boolean;
-  /** Rechecked at mutation/delivery; includes account, target and delegation revocation. */
+  /** Rechecked at mutation; includes account, target and team revocation. */
   assertCurrent(): Promise<void>;
   /** Host generation check for existing synchronous commit/pre-send callbacks. */
   assertCurrentSync?(): void;
+  /** Queued delivery outlives the admitting turn: real revocation only, no live turn facts. */
   assertDeliveryCurrent?(): Promise<void>;
+  /** Only the exact admitted self rewind may cross its own runtime transitions. */
+  rewindBoundary?<T>(sessionId: string, clientId: string, phase: 'stop' | 'native-close', operation: () => T | Promise<T>): Promise<T>;
+  rewindTarget?: { sessionId: string; clientId: string };
+  startRewind?(): void;
+  finishRewind?(): void;
 }
 
 interface ActionContext {
-  sessionId: string;
+  sessionId?: string;
+  caller?: Extract<NonNullable<Call['caller']>, { kind: 'plugin' }>;
   tool: string;
   fingerprint: string;
-  principal?: TaskActionPrincipal;
   assertCurrent(): Promise<void>;
   assertCurrentSync?(): void;
   assertDeliveryCurrent(): Promise<void>;
+  rewindBoundary?: TaskActionScope['rewindBoundary'];
+  rewindTarget?: TaskActionScope['rewindTarget'];
 }
 const actionContext = new AsyncLocalStorage<ActionContext>();
 export const TASK_ACTION_INPUT_GUARD = Symbol('task-action-input-guard');
@@ -100,13 +123,23 @@ const denied = (errorCode = 'TASK_ACTION_AUTHORIZATION_REQUIRED'): Decision => (
     'The host could not admit this action for the current turn. Prepare the target, action and content for the owner instead of retrying.',
 });
 
-/** A teammate acting on its own initiative must not act as the owner on the owner's tasks. */
-export const NEEDS_OWNER_REQUEST: Decision = {
-  ok: false,
-  errorCode: 'NEEDS_OWNER_REQUEST',
-  message:
-    'The owner did not ask for this in the current turn (host-verified). On your own initiative you may read, keep Todos, notify the owner, message teammates, manage background tasks you started and continue tasks already handed to you; changing the owner’s other tasks needs the owner’s request. Do not retry: record a Todo or notify the owner with the concrete task, action and reason so they can ask you to do it.',
-};
+
+export const HELPER_AUTOMATION_ACTION_TOOLS: ReadonlySet<string> = new Set([
+  'schedule_set_pre_run_hook',
+  // Re-enabling a feature the owner switched off is a resume (teammate-authority.md).
+  'set_teammate_capability', 'set_bot_capability',
+]);
+
+/** Side-effect coverage, not an allowlist of what autonomous teammates may do. */
+export const SCHEDULER_TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
+  'schedule_create', 'schedule_update', 'schedule_delete', 'schedule_run_now',
+  'schedule_pause', 'schedule_resume', 'schedule_set_pre_run_hook',
+  'schedule_webhook_release', 'schedule_webhook_restore',
+]);
+
+export interface TaskActionConfirmation {
+  server: string;
+}
 
 export function taskActionFingerprint(call: Pick<Call, 'tool' | 'args'>): string {
   return createHash('sha256')
@@ -122,9 +155,26 @@ export function createTaskActionAuthorizer(deps: {
   return async (call) => {
     const protectedAction =
       call.server === 'cindy_helper'
-        ? TASK_ACTION_TOOLS.has(call.tool)
-        : call.server === 'cindy_orca' && ORCA_TASK_ACTION_TOOLS.has(call.tool);
-    if (!protectedAction) return { ok: true };
+        ? TASK_ACTION_TOOLS.has(call.tool) ||
+          isProjectAccessAction(call.tool, call.args) ||
+          HELPER_AUTOMATION_ACTION_TOOLS.has(call.tool) ||
+          (call.tool === 'teammate_workspace_migration' &&
+            !['preview', 'status'].includes(String((call.args as Record<string, unknown>)?.action)))
+        : call.server === 'cindy_scheduler'
+          ? SCHEDULER_TASK_ACTION_TOOLS.has(call.tool)
+          : call.server === 'cindy_orca' && ORCA_TASK_ACTION_TOOLS.has(call.tool);
+    if (
+      !protectedAction ||
+      (call.tool === 'manage_session_prs' &&
+        (call.args as Record<string, unknown>)?.action === 'list') ||
+      (call.tool === 'manage_media_guide' &&
+        ['get', 'validate'].includes(
+          String(
+            ((call.args as Record<string, unknown>)?.change as Record<string, unknown>)?.action,
+          ),
+        ))
+    )
+      return { ok: true };
     const scope = await deps.capture(call);
     if (!scope) return { ok: true }; // ordinary user-delegated Agent task, unchanged
     if (!call.sessionId) return denied();
@@ -149,8 +199,13 @@ export async function admitTaskAction(
   if (!call.sessionId) return denied();
   try {
     await scope.assertCurrent();
-  } catch {
-    return denied('TASK_ACTION_AUTHORIZATION_EXPIRED');
+  } catch (error) {
+    if (error instanceof Error && error.message === 'HOST_NOT_READY') {
+      return { ok: false, errorCode: 'HOST_NOT_READY', message: 'The host is not ready to check this action yet.' };
+    }
+    return error instanceof TaskActionAuthorizationError && error.reason
+      ? { ok: false, errorCode: error.code, message: error.reason }
+      : denied('TASK_ACTION_AUTHORIZATION_EXPIRED');
   }
   let consumed = false;
   return {
@@ -159,41 +214,68 @@ export async function admitTaskAction(
       if (consumed || fingerprint !== taskActionFingerprint(call))
         throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
       consumed = true;
-      await scope.assertCurrent();
-      return actionContext.run(
-        {
-          sessionId: call.sessionId!,
-          tool: call.tool,
-          fingerprint,
-          principal: scope.principal,
-          assertCurrent: scope.assertCurrent,
-          assertCurrentSync: scope.assertCurrentSync,
-          assertDeliveryCurrent: scope.assertDeliveryCurrent ?? scope.assertCurrent,
-        },
-        operation,
-      );
+      try {
+        scope.startRewind?.();
+        await scope.assertCurrent();
+        const result = actionContext.run(
+          {
+            sessionId: call.sessionId!,
+            tool: call.tool,
+            fingerprint,
+            assertCurrent: scope.assertCurrent,
+            assertCurrentSync: scope.assertCurrentSync,
+            assertDeliveryCurrent: scope.assertDeliveryCurrent ?? scope.assertCurrent,
+            rewindBoundary: scope.rewindBoundary,
+            rewindTarget: scope.rewindTarget,
+          },
+          operation,
+        );
+        return scope.finishRewind ? await result : result;
+      } finally { scope.finishRewind?.(); }
     },
   };
 }
 
-/** Host-only creation evidence; no tool parameter can mint this snapshot. */
-export function approvedTaskDelegation(
-  callerSessionId: string,
-): { version: 1; actions: readonly string[] } | undefined {
-  const current = actionContext.getStore();
-  return current?.sessionId === callerSessionId && current.tool === 'start_session_task'
-    ? { version: 1, actions: DELEGATED_TASK_ACTIONS }
-    : undefined;
+/** The plugin gateway has checked the declared group and the shared per-call policy.
+ * Reuse mutation and queued-delivery guards without attributing the action to a task. */
+export function admitPluginTaskAction(call: Call, assertCurrent: () => void, assertDeliveryCurrent = assertCurrent): Decision {
+  if (call.caller?.kind !== 'plugin' || call.sessionId !== undefined) return denied();
+  const caller = call.caller;
+  const fingerprint = taskActionFingerprint(call);
+  let consumed = false;
+  return {
+    ok: true,
+    run: async operation => {
+      if (consumed || fingerprint !== taskActionFingerprint(call)) throw new TaskActionAuthorizationError();
+      consumed = true;
+      const assertActive = (guard = assertCurrent) => {
+        try { guard(); } catch { throw new TaskActionAuthorizationError(); }
+      };
+      assertActive();
+      return actionContext.run({ caller, tool: call.tool, fingerprint,
+        assertCurrent: async () => assertActive(), assertCurrentSync: () => assertActive(),
+        assertDeliveryCurrent: async () => assertActive(assertDeliveryCurrent),
+      }, operation);
+    },
+  };
 }
 
-/** Host-decided principal of the admitted call, for receipts. Tool arguments cannot set it. */
-export function taskActionPrincipal(callerSessionId: string): TaskActionPrincipal | undefined {
+export async function assertTaskActionCurrent(rewindSessionId?: string, rewindClientId?: string): Promise<void> {
   const current = actionContext.getStore();
-  return current?.sessionId === callerSessionId ? current.principal : undefined;
+  if (rewindSessionId !== undefined && current?.rewindTarget &&
+    (current.rewindTarget.sessionId !== rewindSessionId || current.rewindTarget.clientId !== rewindClientId))
+    throw new TaskActionAuthorizationError();
+  await current?.assertCurrent();
 }
 
-export async function assertTaskActionCurrent(): Promise<void> {
-  await actionContext.getStore()?.assertCurrent();
+/** No admission or ordinary/non-self action: keep the existing synchronous path. */
+export function runTaskActionRewindBoundary<T>(
+  sessionId: string, clientId: string | undefined, phase: 'stop' | 'native-close', operation: () => T | Promise<T>,
+): T | Promise<T> {
+  const current = actionContext.getStore();
+  return current?.rewindBoundary
+    ? current.rewindBoundary(sessionId, clientId ?? current.rewindTarget?.clientId ?? '', phase, operation)
+    : operation();
 }
 
 /** An independent inbound request must not inherit the action that lazily started
@@ -205,7 +287,7 @@ export function runTaskActionRequest<T>(operation: () => Promise<T>): Promise<T>
 
 /** Cover in-process callers too: authorize this invocation without ambient evidence,
  * then execute under only the returned admission. A bare allow intentionally keeps
- * ordinary-task semantics (no Bot delegation evidence or forced queue). */
+ * ordinary-task semantics (no confirmed-action evidence or forced queue). */
 export function isolateTaskActionAuthorizer(authorize: ToolCallAuthorizer): ToolCallAuthorizer {
   return (call) => runTaskActionRequest(async () => {
     const decision = await authorize(call);
@@ -218,13 +300,6 @@ export function isolateTaskActionAuthorizer(authorize: ToolCallAuthorizer): Tool
   });
 }
 
-/** Host lifecycle only: durable completion delivery is not another invocation
- * of the tool that started the task. Its caller must validate the persisted
- * delegation/run and recipient; this does not authorize any Agent task action. */
-export function runHostCompletionDelivery<T>(operation: () => Promise<T>): Promise<T> {
-  return actionContext.exit(operation);
-}
-
 /** Existing lifecycle callbacks can outlive the AsyncLocalStorage call itself. */
 export function captureTaskActionGuard(): (() => Promise<void>) | undefined {
   return actionContext.getStore()?.assertCurrent;
@@ -232,9 +307,32 @@ export function captureTaskActionGuard(): (() => Promise<void>) | undefined {
 
 export class TaskActionAuthorizationError extends Error {
   readonly code = 'TASK_ACTION_AUTHORIZATION_EXPIRED';
-  constructor() {
+  constructor(readonly reason?: string) {
     super('TASK_ACTION_AUTHORIZATION_EXPIRED');
   }
+}
+
+const REVOKED_MESSAGES: ReadonlySet<string> = new Set([
+  'TASK_ACTION_AUTHORIZATION_EXPIRED',
+  'TASK_ACTION_AUTHORIZATION_REQUIRED',
+  'OWNER_SCOPE_CHANGED',
+]);
+
+/**
+ * Whether a delivery-guard rejection proves the grant is gone. A check that merely failed
+ * (group transport outage, database not ready, anything unknown) is not a revocation: its
+ * message stays queued for retry instead of being destroyed. Group errors are matched by
+ * code (`GROUP_AUTHORIZATION_UNAVAILABLE` is the temporary one) to avoid importing the group module.
+ */
+export function taskActionRevocationCode(error: unknown): string | undefined {
+  if (error instanceof TaskActionAuthorizationError) return 'TASK_ACTION_AUTHORIZATION_EXPIRED';
+  if (typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'GROUP_AUTHORIZATION_REQUIRED')
+    return 'GROUP_AUTHORIZATION_REQUIRED';
+  return error instanceof Error && REVOKED_MESSAGES.has(error.message) ? error.message : undefined;
+}
+
+export function isTaskActionRevoked(error: unknown): boolean {
+  return taskActionRevocationCode(error) !== undefined;
 }
 
 /** Capture once; late callbacks must not pick up another invocation's authority. */
@@ -284,7 +382,7 @@ export async function settleTaskActionInput(item: AgentInputQueuedMessage): Prom
   await (item as GuardedInput)[TASK_ACTION_INPUT_GUARD]?.onSettled?.();
 }
 
-/** Restored legacy Bot input has attribution, not consent. Never infer a grant from that data. */
+/** Restored input that needed a live grant has attribution, not consent. Never infer a grant from that data. */
 export function taskActionInputGuard(
   target: string,
   item: AgentInputQueuedMessage,
@@ -295,14 +393,35 @@ export function taskActionInputGuard(
     item.taskActionRequiresAuthorization ||
     item.clientId.startsWith('remote-task-action:') ||
     (item.origin?.kind === 'session' &&
-      (item.origin.senderBotId || item.origin.senderSessionId.includes('::')) &&
-      !item.botTaskCoordination &&
-      !item.clientId.startsWith('bot-dm:'))
+      item.origin.senderSessionId.includes('::') &&
+      !item.botTaskCoordination)
   )
     return async () => {
       throw new Error('TASK_ACTION_AUTHORIZATION_REQUIRED');
     };
   return undefined;
+}
+
+/**
+ * A recovery copy (hidden "continue", manual retry, zero-output resend) of a turn the receiving
+ * task already accepted. The delivery guard is judged only before the first persist, and the copy
+ * has a new clientId and text: inheriting the original guard, its "requires authorization" mark or
+ * the remote-origin rule would discard it every time. The copy runs under the receiving task's
+ * own permissions; attribution (origin, requested owner words) stays on it. Items the guard never
+ * covered are returned unchanged.
+ */
+export function acceptTaskActionRecoveryCopy(
+  original: AgentInputQueuedMessage,
+  copy: AgentInputQueuedMessage,
+): AgentInputQueuedMessage {
+  if (!taskActionInputGuard('', original)) return copy;
+  delete copy.taskActionRequiresAuthorization;
+  // Only the authorization check is waived: the original's settle callback (releasing the receiver
+  // claim and sender receipt) still has to run once the copy is dispatched or discarded.
+  const accepted: NonNullable<GuardedInput[typeof TASK_ACTION_INPUT_GUARD]> = async () => {};
+  accepted.onSettled = (original as GuardedInput)[TASK_ACTION_INPUT_GUARD]?.onSettled;
+  (copy as GuardedInput)[TASK_ACTION_INPUT_GUARD] = accepted;
+  return copy;
 }
 
 /** Share the existing pre-persistence / pre-vendor guard lifecycle with App cards. */

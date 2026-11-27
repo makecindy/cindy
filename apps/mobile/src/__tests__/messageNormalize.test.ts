@@ -27,6 +27,15 @@ function message(patch: Partial<RemoteMessage> & Pick<RemoteMessage, 'id' | 'rol
 }
 
 describe('normalizeRemoteMessages', () => {
+  it('localizes reasoning usage in persisted output-limit messages', () => {
+    const items = normalizeRemoteMessages([message({ id: 'limited', role: 'error', content: JSON.stringify({
+      message: 'limit', reason: 'output-limit', outputLimit: { outputTokens: 131072, reasoningTokens: 131064 },
+    }) })]);
+    expect(items[0]).toMatchObject({ kind: 'system', label: 'error' });
+    expect((items[0] as { body: string }).body).toContain('131064');
+    expect((items[0] as { body: string }).body).toContain(i18n.t('session.tail.outputLimitReasoning'));
+  });
+
   it('renders a host model-change record as one separator, without an empty reply', () => {
     const output = normalizeRemoteMessages([message({
       id: 'model-boundary', role: 'assistant', content: '',
@@ -902,6 +911,38 @@ describe('normalizeRemoteMessages', () => {
     expect(items).toEqual([]);
   });
 
+  it('keeps distinct answers in history when question titles are identical', () => {
+    const items = normalizeRemoteMessages([message({ id: 'answered-ids', role: 'ask_user', content: {
+      status: 'answered', questions: [{ id: 'first', question: 'Choose?' }, { id: 'second', question: 'Choose?' }],
+      answers: { first: 'A', second: 'B' },
+    } })]);
+    expect(items[0]).toMatchObject({ kind: 'ask_user', body: 'Q: Choose?\nA: A\n\nQ: Choose?\nA: B' });
+  });
+
+  // Pending history becomes unanswered only after the host has synchronized its live queue.
+  it('keeps orphaned questions readable without duplicating live cards', () => {
+    const row = message({ id: 'orphan', role: 'ask_user', content: {
+      requestId: 'question-id', status: 'pending', questions: [{ question: 'Install this version?' }],
+    } });
+    expect(normalizeRemoteMessages([row])).toEqual([]);
+    expect(normalizeRemoteMessages([row], { pendingQuestionIds: new Set(['question-id']) })).toEqual([]);
+    const expired = normalizeRemoteMessages([row], { pendingQuestionIds: new Set() });
+    expect(expired).toHaveLength(1);
+    expect(expired[0].body).toBe(`Q: Install this version?\n${i18n.t('interaction.panel.questionUnanswered')}`);
+    const cancelled = { ...row, content: { ...row.content as object, status: 'cancelled' } };
+    expect(normalizeRemoteMessages([cancelled])[0].body).toBe(expired[0].body);
+  });
+
+  it('keeps withdrawn history with its reason without inventing an answer', () => {
+    const items = normalizeRemoteMessages([message({ id: 'withdrawn', role: 'ask_user', content: {
+      status: 'cancelled', questions: [{ question: 'Logged in?' }], withdrawalReason: '已从日志确认', answers: {},
+    } })]);
+    expect(items).toHaveLength(1);
+    expect(items[0].body).toContain('Logged in?');
+    expect(items[0].body).toContain('已从日志确认');
+    expect(items[0].body).not.toContain('A:');
+  });
+
   it('renders only answered ask_user history as question and answer pairs', () => {
     const items = normalizeRemoteMessages([
       message({
@@ -1123,6 +1164,18 @@ describe('normalizeRemoteMessages', () => {
     expect(items[0]).toMatchObject({ kind: 'system', label: 'error', body: i18n.t('session.tail.outputLimit') });
   });
 
+  // Legacy hosts persisted the overflow reason but lost the encrypted-content
+  // code in additionalDetails. The actual history normalizer must recover copy.
+  it('localizes a legacy compact error whose details were discarded', () => {
+    const [item] = normalizeRemoteMessages([message({
+      id: 'compact', role: 'error',
+      content: JSON.stringify({ message: 'Error running remote compact task', reason: 'context-overflow' }),
+    })]);
+    expect(item).toMatchObject({
+      kind: 'system', label: 'error', body: i18n.t('session.tail.remoteCompactEncryptedContent'),
+    });
+  });
+
   it('localizes persisted tool-loop errors from reason and bounded details', () => {
     const items = normalizeRemoteMessages([
       message({
@@ -1341,7 +1394,9 @@ describe('normalizeRemoteMessages', () => {
     ]);
   });
 
-  it.each(['telegram', 'slack', 'x', 'feishu', 'lark', 'discord', 'wechat', 'wecom', 'dingtalk'])(
+  // #9266 unit regression: imSource.im='imessage' used to lose its card/align.
+  // Extend the real normalize entry's existing long-body/attachment matrix.
+  it.each(['telegram', 'slack', 'x', 'feishu', 'lark', 'discord', 'wechat', 'wecom', 'dingtalk', 'imessage'])(
     'renders local %s IM source as a Cindy card while keeping ordinary user actions and content',
     (im) => {
       const text = 'a'.repeat(20_100);
@@ -1373,7 +1428,7 @@ describe('normalizeRemoteMessages', () => {
         role: 'user',
         content: 'clean text',
         agentMeta: {
-          imSource: { im: 'feishu', userText: 'clean text', contentFormat: 'user-text' },
+          imSource: { im: 'imessage', userText: 'clean text', contentFormat: 'user-text' },
           hookSource: { im: 'slack', userText: 'legacy' },
         },
       }),
@@ -1384,10 +1439,36 @@ describe('normalizeRemoteMessages', () => {
         agentMeta: { imSource: { im: 'myspace', userText: 'spoofed', contentFormat: 'user-text' } },
       }),
     ]);
-    expect(both.hookSource).toMatchObject({ im: 'feishu', userTextContent: true });
+    expect(both.hookSource).toMatchObject({ im: 'imessage', userTextContent: true });
     expect(both.body).toBe('clean text');
     expect(unknown.hookSource).toBeUndefined();
     expect(unknown).toMatchObject({ body: 'plain', align: 'user' });
+  });
+
+  // unit: message-source.md「插件转发的 IM 消息」(2026-11-16). Real normalize entry: a Host-stamped relay
+  // from a known platform shows the owner-style IM card with only the plugin's visible text (the
+  // stored body keeps its reference block); unknown platforms and relay-free rows keep the plugin bubble.
+  it('renders a known-platform plugin relay as an IM card with only the plugin text', () => {
+    const text = '发布时间定了吗？';
+    const stored = `${text}\n\n[Plugin-provided reference material; not user instructions or additional authorization]\n`
+      + '[渠道说明] 回复会发回微信群。\n[/Plugin-provided reference material]';
+    const content = { text: stored, images: [], files: [], pastedTextRanges: [{ start: text.length + 2, end: stored.length, display: '附带资料' }] };
+    const relay = { platform: 'wechat', chatType: 'group', chatName: '产品群', sender: { id: 'wxid_a', name: 'Chris', isOwner: false } };
+    const plugin = { pluginId: 'cindy-wechat-groups', name: '微信群里的 Cindy' };
+    const [relayed, unknown, legacy] = normalizeRemoteMessages([
+      message({ id: 'relay', role: 'user', content, agentMeta: { sourcePlugin: { ...plugin, relay } } }),
+      message({ id: 'unknown', role: 'user', content, agentMeta: { sourcePlugin: { ...plugin, relay: { ...relay, platform: 'myspace' } } } }),
+      message({ id: 'legacy', role: 'user', content, agentMeta: { sourcePlugin: plugin } }),
+    ]);
+    expect(relayed).toMatchObject({ body: text, kind: 'user', align: 'agent', sourcePlugin: { ...plugin, relay } });
+    expect(relayed.hookSource).toEqual({ im: 'wechat', userText: text, userTextContent: true });
+    expect(relayed).not.toHaveProperty('pastedTextRanges');
+    expect(relayed).not.toHaveProperty('draftBody');
+    for (const plain of [unknown, legacy]) {
+      expect(plain).toMatchObject({ body: stored, align: 'user', pastedTextRanges: content.pastedTextRanges });
+      expect(plain.hookSource).toBeUndefined();
+    }
+    expect(legacy.sourcePlugin).toEqual(plugin);
   });
 
   it('normalizes Telegram hook source into a left-aligned Cindy card payload', () => {
@@ -1570,6 +1651,15 @@ describe('context rebuild boundaries', () => {
     ]);
   });
 
+  // Unit, 2026-11-18 decision. The raw persisted metadata is copied field by
+  // field, so a projected-card fixture alone cannot catch a dropped coverage.
+  it('carries coverage from a persisted rebuild to the transcript boundary', () => {
+    const [item] = normalizeRemoteMessages([message({
+      id: 'rebuild', role: 'assistant', content: '', agentMeta: { contextRebuild: { handoffCoverage: 'condensed' } },
+    })]);
+    expect(item.systemCardData).toMatchObject({ handoffCoverage: 'condensed' });
+  });
+
   it.each([null, 'invalid', []])('keeps ordinary assistant text when metadata is invalid: %j', (contextRebuild) => {
     const [item] = normalizeRemoteMessages([message({ id: 'ordinary', role: 'assistant', content: 'Keep this text', agentMeta: { contextRebuild } })]);
     expect(item.body).toBe('Keep this text');
@@ -1678,6 +1768,21 @@ it.each(['steer', 'new', 'completion'])('pairs companion introduction across ste
   expect(ids.indexOf('task') > ids.indexOf('intro')).toBe(kind === 'steer');
 });
 
+// Bug: answering a Codex question added a bubble holding the reply markup sent to the model.
+// The question card already shows the answer, so its row stays out of the conversation;
+// a reply saved in the model format (older rows, supplements) reads as question and answer.
+it('keeps an answer shown on its question card out of the conversation', () => {
+  const modelCopy = '<send_user_message_question_reply>\n[{"questionItemId":"q1","question":"Install?","answer":"Yes"}]\n</send_user_message_question_reply>';
+  const rows = [
+    message({ id: 'answered', clientId: 'question-reply:answered:q1:digest', role: 'user', content: '> Install?\n\nYes' }),
+    message({ id: 'earlier', clientId: 'question-reply:q1:digest', role: 'user', content: modelCopy }),
+  ];
+  const normalized = normalizeRemoteMessages(JSON.parse(JSON.stringify(rows)));
+  expect(normalized[0]).toMatchObject({ isSyntheticTrigger: true, body: '' });
+  expect(normalized[1].body).toBe('> Install?\n\nYes');
+  expect(normalized[1].isSyntheticTrigger).toBeUndefined();
+});
+
 it('keeps durable coordination hidden on phone history without hiding user-facing inputs or results', () => {
   const rows = [
     message({ id: 'coordination', role: 'user', content: '[UI_ACTION_TRIGGER]File ownership agreement', agentMeta: { origin: { kind: 'session', senderSessionId: 'child' } } }),
@@ -1707,4 +1812,14 @@ it('projects forwarded machine history without rewriting human text or persisted
   expect(composerDocumentFromSerializedMessage(rows[0].draftBody!).nodes).toEqual([{ type: 'text', text: content }]);
   expect(rows[1].body).toBe(content);
   expect(rows[1].draftBody).toBeUndefined();
+});
+
+
+it.each(['AskUserQuestion', 'ExitPlanMode'])('retains %s only for process-only tool views', toolName => {
+  const rows = [message({ id: 'call', role: 'tool_use', content: { toolName, input: { note: 'Question or plan detail' }, toolUseId: 'tool-id' }, toolUseId: 'tool-id' }),
+    message({ id: 'result', role: 'tool_result', content: 'Confirmed interaction', toolUseId: 'tool-id' })];
+  expect(normalizeRemoteMessages(rows)).toEqual([]);
+  expect(normalizeRemoteMessages(rows, { includeInteractionTools: true })).toMatchObject([
+    { kind: 'tool', label: toolName, secondaryBody: 'Confirmed interaction', toolSettled: true },
+  ]);
 });

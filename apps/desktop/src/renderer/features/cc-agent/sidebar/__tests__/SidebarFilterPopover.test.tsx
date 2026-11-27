@@ -44,6 +44,10 @@ vi.mock('@cindy/maker-shared/project-order-sync', () => ({
 function makeFilter(overrides: Partial<UseSidebarFilterReturn> = {}): UseSidebarFilterReturn {
   return {
     creators: 'all',
+    hideAutomations: false,
+    setHideAutomations: vi.fn(),
+    hideTaskCreated: false,
+    setHideTaskCreated: vi.fn(),
     creatorOptions: [],
     toggleCreator: vi.fn(),
     setCreatorsAll: vi.fn(),
@@ -162,6 +166,8 @@ describe('sidebar display settings menu', () => {
     expect(
       within(submenu).getByRole('menuitem', { name: '重置筛选' }).getAttribute('data-disabled'),
     ).not.toBeNull();
+    fireEvent.click(within(submenu).getByRole('menuitemcheckbox', { name: '隐藏由其他任务创建的任务' }));
+    expect(filter.setHideTaskCreated).toHaveBeenCalledWith(true);
     const harness = await openSubmenu(/^Harness/);
     expect(
       within(harness)
@@ -196,9 +202,9 @@ describe('sidebar display settings menu', () => {
     const group = await openSubmenu(/^分组/);
     expect(
       within(group)
-        .getAllByRole('menuitem')
+        .getAllByRole('menuitemcheckbox')
         .map((row) => row.textContent),
-    ).toEqual(['项目', '对话']);
+    ).toEqual(['项目', '对话', '自动化']);
     expect(filter.groupDevice).toBe(true);
   });
 });

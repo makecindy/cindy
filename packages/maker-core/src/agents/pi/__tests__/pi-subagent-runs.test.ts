@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   canHostControlPiSubagentRun,
   controlPiSubagentRuns,
+  hasActivePiSubagentRuns,
   hasActivePiSubagentRunsSync,
   killVerifiedPiSubagentRunner,
   verifyPiSubagentRunnerIdentity,
@@ -23,6 +24,7 @@ import {
   clearPiSubagentDeletedTombstone,
   isPiSubagentRunStale,
   piSubagentControlOwnership,
+  piSubagentApprovalScope,
   piSubagentLaunchFencePath,
   piSubagentOwnerHostPid,
   piSubagentOwnerIdentity,
@@ -66,6 +68,7 @@ const childProcess = vi.hoisted(() => ({
    */
   /** Delay every async probe by this much; tests raise it to expose ordering. */
   probeDelayMs: 0,
+  asyncProbe: undefined as undefined | ((file: string, args: string[]) => Promise<{ stdout: string; stderr: string }>),
   execFile: Object.assign(
     vi.fn(),
     {
@@ -74,6 +77,7 @@ const childProcess = vi.hoisted(() => ({
       // rather than a bare string. So the shape has to be right here, and any
       // per-case behaviour has to come from state this closure reads later.
       [Symbol.for('nodejs.util.promisify.custom')]: async (file: string, args: string[]) => {
+        if (childProcess.asyncProbe) return childProcess.asyncProbe(file, args);
         if (childProcess.probeDelayMs > 0) {
           await new Promise((resolve) => { setTimeout(resolve, childProcess.probeDelayMs); });
         }
@@ -106,9 +110,21 @@ const fsKnobs = vi.hoisted(() => ({
   /** Fails the next `remaining` unlinks with `code`, the shape of a file lock. */
   rmFailures: null as null | { remaining: number; code: string },
   rmAttempts: 0,
+  /** Receipt tests stub OS inventory; never mix it with the CI host's procfs. */
+  isolateProcfs: false,
 }));
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
+  const readFile = ((...args: Parameters<typeof actual.readFile>) => {
+    if (fsKnobs.isolateProcfs && String(args[0]).startsWith('/proc/')) {
+      return Promise.reject(Object.assign(new Error('fixture process is absent'), { code: 'ENOENT' }));
+    }
+    return actual.readFile(...args);
+  }) as typeof actual.readFile;
+  const readdir = ((...args: Parameters<typeof actual.readdir>) => {
+    if (fsKnobs.isolateProcfs && String(args[0]) === '/proc') return Promise.resolve([]);
+    return actual.readdir(...args);
+  }) as typeof actual.readdir;
   const writeFile: typeof actual.writeFile = async (...args) => {
     if (fsKnobs.failWriteFileOnce) {
       fsKnobs.failWriteFileOnce = false;
@@ -133,7 +149,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     }
     return actual.rm(...args);
   };
-  return { ...actual, default: { ...actual, writeFile, rm }, writeFile, rm };
+  return { ...actual, default: { ...actual, readFile, readdir, writeFile, rm }, readFile, readdir, writeFile, rm };
 });
 
 const roots: string[] = [];
@@ -182,6 +198,7 @@ async function readControls(root: string, runId: string): Promise<Array<Record<s
 }
 
 afterEach(async () => {
+  childProcess.asyncProbe = undefined;
   // Disarm the fs injections, so an assertion that failed mid-scenario cannot
   // leave the next case holding a suspended unlink.
   fsKnobs.failWriteFileOnce = false;
@@ -189,6 +206,7 @@ afterEach(async () => {
   fsKnobs.onRmHeld = null;
   fsKnobs.rmFailures = null;
   fsKnobs.rmAttempts = 0;
+  fsKnobs.isolateProcfs = false;
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -204,8 +222,10 @@ describe('PI durable subagent run store', () => {
     await writeStatus(root, older);
     await writeStatus(root, newer);
     const discovered = [];
-    for await (const run of scanPiSubagentRuns(root, { latestPerTask: true })) discovered.push(run);
+    const observed: string[] = [];
+    for await (const run of scanPiSubagentRuns(root, { latestPerTask: true, onRead: run => { observed.push(run.runId); } })) discovered.push(run);
     expect(discovered.map((run) => run.runId)).toEqual([newer.runId]);
+    expect(observed.sort()).toEqual([older.runId, newer.runId].sort());
   });
 
   it('streams historical status files lazily and closes the directory after early cancellation', async () => {
@@ -442,6 +462,27 @@ describe('PI durable subagent run store', () => {
     expect(control.action).toBe('stop');
   });
 
+  it('polls completed history without inspecting its owner process', async () => {
+    const agentHome = await makeRoot();
+    const root = piSubagentRunRoot(agentHome, 'session-1');
+    const runId = '123e4567-e89b-42d3-a456-426614174005';
+    const scope = { hostPid: process.pid };
+    await writeStatus(root, status(runId, {
+      state: 'completed',
+      runtimeOwnerId: `${process.ppid}.100:other-window`,
+    }));
+
+    childProcess.spawnSync.mockClear();
+    expect(hasActivePiSubagentRunsSync(agentHome, scope)).toBe(false);
+    expect(childProcess.spawnSync).not.toHaveBeenCalled();
+    await expect(hasActivePiSubagentRuns(agentHome, scope)).resolves.toBe(false);
+    expect(childProcess.spawnSync).not.toHaveBeenCalled();
+
+    // A run directory can exist before the launcher finishes publishing its status.
+    await rm(path.join(root, runId, 'status.json'));
+    await expect(hasActivePiSubagentRuns(agentHome, scope)).resolves.toBe(true);
+  });
+
   it('only treats a missing runs directory as idle; other scan failures stay active', () => {
     expect(hasActivePiSubagentRunsSync(path.join(os.tmpdir(), 'cindy-pi-no-such-home'))).toBe(false);
     const source = readFileSync(new URL('../pi-subagent-runs.ts', import.meta.url), 'utf8')
@@ -667,6 +708,49 @@ describe('PI durable subagent run store', () => {
         .resolves.toBe(true);
     });
 
+    // #10849 review: async discovery must retain the existing runner-query
+    // budget across both latest-generation passes and diagnostics. Unit tier;
+    // unlike owner start times, runner presence already has bounded reuse.
+    it('reuses asynchronous runner identity across scans but checks exit before the cache', async () => {
+      const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+      Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
+      restores.push(() => Object.defineProperty(process, 'platform', platform));
+      let now = Date.now();
+      const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+      restores.push(() => clock.mockRestore());
+      let alive = true;
+      const realKill = process.kill.bind(process);
+      const kill = vi.spyOn(process, 'kill').mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
+        if (pid !== runnerPid || signal !== 0) return realKill(pid, signal);
+        if (!alive) throw Object.assign(new Error('gone'), { code: 'ESRCH' });
+        return true;
+      }) as typeof process.kill);
+      restores.push(() => kill.mockRestore());
+      const probe = vi.fn(async () => ({ stdout: `node ${runnerScript} config.json`, stderr: '' }));
+      childProcess.asyncProbe = probe;
+      const root = await makeRoot();
+      const run = expired();
+      await writeStatus(root, run);
+      const collect = async () => {
+        const found = [];
+        for await (const item of scanPiSubagentRuns(root, { latestPerTask: true })) found.push(item.runId);
+        return found;
+      };
+      await expect(collect()).resolves.toEqual([run.runId]);
+      await expect(collect()).resolves.toEqual([run.runId]);
+      await expect(listPiSubagentRunDiagnostics(root)).resolves.toEqual([]);
+      expect(probe).toHaveBeenCalledTimes(1);
+      now += 10_001;
+      await expect(collect()).resolves.toEqual([run.runId]);
+      expect(probe).toHaveBeenCalledTimes(2);
+      alive = false;
+      await expect(collect()).resolves.toEqual([]);
+      await expect(listPiSubagentRunDiagnostics(root)).resolves.toEqual([
+        expect.objectContaining({ kind: 'stale', runId: run.runId }),
+      ]);
+      expect(probe).toHaveBeenCalledTimes(2);
+    });
+
     it('reports a reclaim when the recorded pid now runs something else', async () => {
       // Nothing of ours is left at that pid, and the replacement is not ours to
       // signal — refusing forever would wedge every boundary behind it.
@@ -750,6 +834,77 @@ describe('PI durable subagent run store', () => {
       restores.splice(0).forEach((restore) => restore());
       childProcess.spawnSync.mockReset();
       childProcess.spawnSync.mockImplementation((..._args: unknown[]) => ({ status: 0, stdout: '' }));
+    });
+
+    // #10787: a live foreign owner used to synchronously spawn PowerShell on
+    // every approval poll. Deferred OS replies must leave the event loop free,
+    // share only in-flight queries, and never cache away PID reuse. Unit tier.
+    it.each(['win32', 'darwin', 'linux'] as const)('checks approval identity without blocking on %s', async (platform) => {
+      const original = Object.getOwnPropertyDescriptor(process, 'platform')!;
+      Object.defineProperty(process, 'platform', { ...original, value: platform });
+      restores.push(() => Object.defineProperty(process, 'platform', original));
+      const ownerPid = nextOwnerPid++;
+      stubAliveOwner(ownerPid);
+      const started = nowSec() - 600;
+      const foreign = run(foreignOwnerId(ownerPid, started));
+      const scope = () => piSubagentApprovalScope(foreign, 'current-handle', process.pid, 'session-1');
+      let answer!: (value: { stdout: string; stderr: string }) => void;
+      const probe = vi.fn((_file: string, _args: string[]) => new Promise<{ stdout: string; stderr: string }>((resolve) => { answer = resolve; }));
+      childProcess.asyncProbe = probe;
+      childProcess.spawnSync.mockClear();
+      const first = scope();
+      const second = scope();
+      // A real event-loop turn can run before either OS query resolves.
+      await new Promise<void>((resolve) => { setImmediate(resolve); });
+      expect(childProcess.spawnSync).not.toHaveBeenCalled();
+      expect(probe).toHaveBeenCalledTimes(1);
+      expect(probe.mock.calls[0]?.[0]).toBe(platform === 'win32' ? 'powershell.exe' : 'ps');
+      answer({ stdout: platform === 'win32' ? String(started) : '10:00', stderr: '' });
+      await expect(first).resolves.toBe('refused');
+      await expect(second).resolves.toBe('refused');
+
+      // A new query sees the replacement incarnation immediately, without TTL.
+      const recycled = scope();
+      expect(probe).toHaveBeenCalledTimes(2);
+      answer({ stdout: platform === 'win32' ? String(nowSec() - 5) : '00:05', stderr: '' });
+      await expect(recycled).resolves.toBe('adopted');
+      childProcess.asyncProbe = async () => { throw new Error('unreadable'); };
+      await expect(scope()).resolves.toBe('refused');
+      await expect(piSubagentApprovalScope(foreign, 'current-handle', process.pid, 'other-session'))
+        .resolves.toBe('refused');
+    });
+
+    it('keeps polling a queued foreign launch active while querying its owner asynchronously', async () => {
+      const original = Object.getOwnPropertyDescriptor(process, 'platform')!;
+      Object.defineProperty(process, 'platform', { ...original, value: 'win32' });
+      restores.push(() => Object.defineProperty(process, 'platform', original));
+      const ownerPid = nextOwnerPid++;
+      stubAliveOwner(ownerPid);
+      const started = nowSec() - 600;
+      const root = await makeRoot();
+      const launch = status('123e4567-e89b-42d3-a456-4266141740e1', {
+        state: 'queued', runnerInstanceId: 'launch-pending-fixture', runnerPid: undefined,
+        runtimeOwnerId: foreignOwnerId(ownerPid, started),
+      });
+      await writeStatus(root, launch);
+      childProcess.asyncProbe = async () => ({ stdout: String(started), stderr: '' });
+      childProcess.spawnSync.mockClear();
+      const collect = async () => {
+        const found = [];
+        for await (const item of scanPiSubagentRuns(root, { latestPerTask: true })) found.push(item.runId);
+        return found;
+      };
+      await expect(collect()).resolves.toEqual([launch.runId]);
+      // refresh's missing-record fallback and the Desktop durable reconciler
+      // also scan diagnostics; neither may restore the synchronous probe.
+      await expect(listPiSubagentRunDiagnostics(root)).resolves.toEqual([]);
+      expect(childProcess.spawnSync).not.toHaveBeenCalled();
+      // Recycled owner, no runner ever launched: the abandoned record disappears.
+      childProcess.asyncProbe = async () => ({ stdout: String(nowSec() - 5), stderr: '' });
+      await expect(collect()).resolves.toEqual([]);
+      await expect(listPiSubagentRunDiagnostics(root)).resolves.toEqual([
+        expect.objectContaining({ runId: launch.runId, kind: 'stale' }),
+      ]);
     });
 
     it('round-trips the minted id and still parses the legacy two-part form', () => {
@@ -858,6 +1013,33 @@ describe('PI durable subagent run store', () => {
       // Three runs, one owner pid, one spawn. Without the memo this is a `ps`
       // per run per pass, which shows up as logout latency.
       expect(childProcess.spawnSync).toHaveBeenCalledTimes(1);
+    });
+
+    it('checks a shared live owner asynchronously once per update poll and notices PID reuse', async () => {
+      const ownerPid = nextOwnerPid++;
+      stubAliveOwner(ownerPid);
+      const started = nowSec() - 600;
+      const agentHome = await makeRoot();
+      const root = piSubagentRunRoot(agentHome, 'session-1');
+      for (const runId of ['123e4567-e89b-42d3-a456-4266141740a5', '123e4567-e89b-42d3-a456-4266141740a6']) {
+        await writeStatus(root, status(runId, {
+          runtimeOwnerId: foreignOwnerId(ownerPid, started),
+          updatedAt: Date.now(),
+        }));
+      }
+      let startTimeOutput = process.platform === 'win32' ? String(started) : '10:00';
+      const probe = vi.fn(async () => ({
+        stdout: startTimeOutput,
+        stderr: '',
+      }));
+      childProcess.asyncProbe = probe;
+      const scope = { hostPid: process.pid };
+      await expect(hasActivePiSubagentRuns(agentHome, scope)).resolves.toBe(false);
+      expect(probe).toHaveBeenCalledTimes(1);
+      startTimeOutput = process.platform === 'win32' ? String(nowSec() - 5) : '00:05';
+      await expect(hasActivePiSubagentRuns(agentHome, scope)).resolves.toBe(true);
+      expect(probe).toHaveBeenCalledTimes(2);
+      expect(childProcess.spawnSync).not.toHaveBeenCalled();
     });
 
     it('re-probes on the next sweep, so a recycled pid cannot hide behind a memo', async () => {
@@ -1426,6 +1608,10 @@ describe('PI durable subagent run store', () => {
       async function terminalReceiptHome(write: (dir: string) => Promise<void>) {
         // An independently successful OS inventory, with unrelated processes.
         // Empty stdout is deliberately not evidence that the run has exited.
+        // Linux CI #41055150440 mixed mocked ps with real /proc. A transient
+        // unknown probe could emit a stop control before a later probe succeeded.
+        // Keep both sources in the same fixture; run artifacts still use real I/O.
+        fsKnobs.isolateProcfs = true;
         childProcess.spawnSync.mockImplementation(() => ({ status: 0, stdout: inventory(['node unrelated.js']) }));
         const agentHome = await homeWithUnreadableRun(write);
         const root = piSubagentRunRoot(agentHome, 'session-1');
@@ -1531,10 +1717,20 @@ describe('PI durable subagent run store', () => {
         await expect(stopPiSubagentRunsForAccountBoundary(root, { timeoutMs: 0 })).resolves.toBe(false);
       });
 
-      it.each([
+      const terminalReceiptCases = [
         ...cases,
         ['contains zero bytes', async (dir: string) => writeFile(path.join(dir, 'status.json'), Buffer.alloc(72_506))],
-      ] satisfies typeof cases)('accepts a matching terminal receipt when status %s, without changing history', async (_label, write) => {
+      ] satisfies typeof cases;
+      // Exercise Linux procfs and Windows inventory parsing on either host OS.
+      // Unit regression: both sweeps must preserve history and create no controls.
+      it.each(terminalReceiptCases.flatMap(([label, write]) =>
+        (['linux', 'win32'] as const).map(platform => [platform, label, write] as const),
+      ))('on %s accepts a matching terminal receipt when status %s, without changing history', async (platform, _label, write) => {
+        usePlatform(platform);
+        if (platform === 'linux' && process.geteuid === undefined) {
+          Object.defineProperty(process, 'geteuid', { configurable: true, value: () => 1000 });
+          restores.push(() => { Reflect.deleteProperty(process, 'geteuid'); });
+        }
         const { agentHome, root, dir } = await terminalReceiptHome(write);
         const files = ['config.json', 'status.json', 'result.json', 'transcript.jsonl'];
         const before = await Promise.all(files.map(file => readFile(path.join(dir, file)).catch(() => null)));

@@ -18,6 +18,8 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { inspectSettingsJson, isSettingsRecord, type SettingsJsonInspection } from '../maker-host/inspect-settings-json.js';
+import { validateOptionalSettingsFields } from '../maker-host/settings-inspection.js';
 
 import { HOOK_CHAT_WORKSPACE_ALIAS, HOOK_WORKSPACE_ALIAS_RE } from '../../shared/hookControlIpc.js';
 
@@ -39,11 +41,12 @@ export interface HookBindingCacheEntry {
  * 稳定展示(字段与 provider.bind.* 协议词汇对齐; Telegram / X 存储槽使用)。
  */
 export interface ProviderBindingCacheEntry {
+  tenantKey?: string | null;
   bindingId: string;
   principalId: string;
   principalName: string | null;
   scopeId: string;
-  scopeName: string;
+  scopeName: string | null;
 }
 
 /** 持久化的单配置(不含任何凭证)。 */
@@ -54,12 +57,23 @@ export interface SlackHookConfigState {
   telegramEnabled: boolean;
   /** X (Twitter) provider 独立开关。 */
   xEnabled: boolean;
+  /** 官方飞书 / Lark provider 独立开关。 */
+  feishuEnabled: boolean;
+  /** 官方 Discord provider 独立开关(与个人 Discord bot 无关)。 */
+  discordEnabled: boolean;
   /** Explicit companion assignment; absent preserves ordinary X tasks. */
   xCompanionBotId?: string | null;
   /** 服务器地址覆写(高级/调试用, 无 UI 入口); null = 跟随内置默认。 */
   urlOverride: string | null;
-  /** 别名 -> 本地绝对路径。 */
+  /** 项目名称 -> 本地绝对路径; 由侧栏项目列表投影而来(projectWorkspaces.ts)。 */
   workspaces: Record<string, string>;
+  /**
+   * 改名前的旧名称 -> 本地绝对路径。只用于查找: 服务端的会话选择与偏好可能还按旧名称
+   * 存着。不进 hello, 也不出现在选择卡里。缺省视为空。
+   */
+  retiredWorkspaces?: Record<string, string>;
+  /** 升级前手动配置的目录是否已经登记进项目列表(一次性)。缺省视为未做。 */
+  projectCatalogMigrated?: boolean;
   /** (multi-team)本地绑定缓存; 老 server / 从未多绑定时恒空数组。 */
   bindingsCache: HookBindingCacheEntry[];
   /**
@@ -69,6 +83,9 @@ export interface SlackHookConfigState {
   lifecycleAnnouncementOverride: boolean | null;
   telegramBindingCache: ProviderBindingCacheEntry | null;
   xBindingCache: ProviderBindingCacheEntry | null;
+  feishuBindingCache: ProviderBindingCacheEntry | null;
+  feishuBindingsCache?: ProviderBindingCacheEntry[];
+  discordBindingCache: ProviderBindingCacheEntry | null;
   /**
    * 该 provider 派发任务时使用的默认工作目录别名; null = 用内置「对话」伪目录。
    * 生效顺序恒为 **会话显式映射 > 默认工作目录 > 「对话」**(判定在 hook server)。
@@ -83,6 +100,10 @@ export interface SlackHookConfigState {
   xDefaultWorkspace: string | null;
   /** 同上, Telegram 侧(私聊 / 群 / 话题一律适用)。 */
   telegramDefaultWorkspace: string | null;
+  /** 同上, 官方飞书 / Lark 侧(私聊 / 群话题一律适用)。 */
+  feishuDefaultWorkspace: string | null;
+  /** 同上, 官方 Discord 侧(私信 / 服务器频道一律适用)。 */
+  discordDefaultWorkspace: string | null;
 }
 
 export const DEFAULT_SLACK_LIFECYCLE_ANNOUNCEMENT = false;
@@ -114,10 +135,20 @@ export interface HookConnectionConfig {
   enabled: boolean;
   companionBotId?: string | null;
   workspaces: Record<string, string>;
+  /**
+   * workspaces 里只供查找的旧名称(项目改名前的名称)。按目录反查名称时它们排在现用名称
+   * 之后; 缺省视为没有。
+   */
+  retiredWorkspaceNames?: readonly string[];
   createdAt: number;
 }
 
-const MAX_WORKSPACES = 32;
+/**
+ * 清单与旧名称表的条数上限只防坏文件撑爆内存, 不是业务上限: 清单就是全部侧栏项目;
+ * 丢掉一条旧名称, 它就可能被分给别的项目(见 projectWorkspaces.ts)。正常数据到不了这个数。
+ */
+const MAX_WORKSPACES = 4096;
+const MAX_RETIRED_WORKSPACES = 4096;
 const OBJECT_META_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 const ACCOUNT_FINGERPRINT_RE = /^[A-Za-z0-9_-]{8,64}$/;
 
@@ -168,20 +199,46 @@ export function validateWorkspaces(input: Record<string, string>): Record<string
 }
 
 /** Slack Hook 配置仓库(写操作同步落盘, 返回写后最新状态)。 */
+export type OfficialHookInspection = SettingsJsonInspection<Pick<SlackHookConfigState,
+  'enabled' | 'telegramEnabled' | 'xEnabled' | 'lifecycleAnnouncementOverride' |
+  'telegramDefaultWorkspace' | 'xDefaultWorkspace' | 'urlOverride'>> |
+  { status: 'unavailable' | 'migrationPending' };
+
+/** No manager construction, authentication reads, migration or endpoint lookup. */
+export function inspectOfficialHookSettings(filePath: string, fingerprint: string | null, legacyFilePath?: string): OfficialHookInspection {
+  return createSlackHookStore({ filePath, legacyFilePath, defaultUrl: () => '', log: { info() {}, warn() {} } }).inspect(fingerprint);
+}
+
 export interface SlackHookStore {
+  /** One native mutation for the editable preferences; never changes binding/authentication. */
+  commitPreferences?(patch: Partial<Pick<SlackHookConfigState, 'lifecycleAnnouncementOverride' | 'telegramDefaultWorkspace' | 'xDefaultWorkspace'>>): SlackHookConfigState;
   get(): SlackHookConfigState;
   /** 实际生效的服务器地址(覆写优先, 否则内置默认)。 */
   effectiveUrl(): string;
   setEnabled(enabled: boolean): SlackHookConfigState;
-  setProviderEnabled(provider: 'slack' | 'telegram' | 'x', enabled: boolean): SlackHookConfigState;
+  setProviderEnabled(
+    provider: 'slack' | 'telegram' | 'x' | 'feishu' | 'discord',
+    enabled: boolean,
+  ): SlackHookConfigState;
   anyProviderEnabled(): boolean;
   setWorkspaces(workspaces: Record<string, string>): SlackHookConfigState;
+  /**
+   * 按侧栏项目列表落一份新的清单: 名称变了的项目, 各 provider 的默认项目跟着改名,
+   * 旧名称记进 retired。清单外的默认项目照旧清掉。
+   */
+  applyProjectWorkspaces(plan: {
+    workspaces: Record<string, string>;
+    retired: Record<string, string>;
+    renames: ReadonlyArray<{ from: string; to: string }>;
+  }): SlackHookConfigState;
+  markProjectCatalogMigrated(): SlackHookConfigState;
   /** (multi-team)覆写本地绑定缓存(bind.state / 绑定行变化后由 manager 调用)。 */
   setBindingsCache(entries: HookBindingCacheEntry[]): SlackHookConfigState;
   setLifecycleAnnouncementOverride(enabled: boolean | null): SlackHookConfigState;
-  /** provider-neutral(Telegram / X)confirmed 绑定的本地影子写入。 */
+  setFeishuBindingsCache(entries: ProviderBindingCacheEntry[]): SlackHookConfigState;
+  /** provider-neutral(Telegram / X / 飞书 / Discord)confirmed 绑定的本地影子写入。 */
   setProviderBindingCache(
-    provider: 'telegram' | 'x',
+    provider: 'telegram' | 'x' | 'feishu' | 'discord',
     entry: ProviderBindingCacheEntry | null,
   ): SlackHookConfigState;
   /**
@@ -190,13 +247,13 @@ export interface SlackHookStore {
    * 写进去的非法值会在下次握手时被协议拒收, 那时已经离用户操作很远了。
    */
   setProviderDefaultWorkspace(
-    provider: 'telegram' | 'x',
+    provider: 'telegram' | 'x' | 'feishu' | 'discord',
     alias: string | null,
   ): SlackHookConfigState;
   setXCompanionBotId(botId: string | null): SlackHookConfigState;
 }
 
-export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
+export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore & { inspect(fingerprint: string | null): OfficialHookInspection } {
   const { filePath, legacyFilePath, cleanupLegacySecrets, log } = deps;
 
   interface AccountState {
@@ -216,12 +273,27 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
       bindingCache: ProviderBindingCacheEntry | null;
       defaultWorkspace: string | null;
     };
+    /** 官方飞书 / Lark; 旧配置文件没有这个键, 解析为全默认(关闭、无缓存)。 */
+    feishu: {
+      enabled: boolean;
+      bindingCache: ProviderBindingCacheEntry | null;
+      bindingsCache?: ProviderBindingCacheEntry[];
+      defaultWorkspace: string | null;
+    };
+    /** 官方 Discord; 旧配置文件没有这个键, 解析为全默认(关闭、无缓存)。 */
+    discord: {
+      enabled: boolean;
+      bindingCache: ProviderBindingCacheEntry | null;
+      defaultWorkspace: string | null;
+    };
   }
 
   interface StoredDocument {
     version: 2;
     urlOverride: string | null;
     workspaces: Record<string, string>;
+    retiredAliases?: Record<string, string>;
+    projectCatalogMigrated?: boolean;
     accounts: Record<string, AccountState>;
     /** v1 配置在首次拿到账号指纹前暂存于此，防登出期写配置丢迁移源。 */
     legacyAccount?: AccountState;
@@ -253,14 +325,20 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
         enabled: source?.enabled === true,
         telegramEnabled: false,
         xEnabled: false,
+        feishuEnabled: false,
+        discordEnabled: false,
         urlOverride: null, // 旧 url 是自部署地址, 不迁移 —— 新形态用内置中心服务器
         workspaces,
         bindingsCache: [], // 旧多连接时代没有绑定缓存概念
         lifecycleAnnouncementOverride: null,
         telegramBindingCache: null,
         xBindingCache: null,
+        feishuBindingCache: null,
+        discordBindingCache: null,
         xDefaultWorkspace: null,
         telegramDefaultWorkspace: null,
+        feishuDefaultWorkspace: null,
+        discordDefaultWorkspace: null,
       };
       // 清理旧文件与旧 secret(best-effort, 失败只记日志)
       const legacyIds = rows.map((r) => (typeof r.id === 'string' ? r.id : '')).filter(Boolean);
@@ -292,6 +370,8 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
     },
     telegram: { enabled: false, bindingCache: null, defaultWorkspace: null },
     x: { enabled: false, bindingCache: null, defaultWorkspace: null },
+    feishu: { enabled: false, bindingCache: null, defaultWorkspace: null },
+    discord: { enabled: false, bindingCache: null, defaultWorkspace: null },
   });
 
   /** 绑定缓存条目形状校验(坏条目静默丢弃 —— 缓存是可再生数据, 不值得报错)。 */
@@ -323,12 +403,12 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
       !row.principalId ||
       typeof row.scopeId !== 'string' ||
       !row.scopeId ||
-      typeof row.scopeName !== 'string' ||
-      !row.scopeName
+      (row.scopeName !== null && (typeof row.scopeName !== 'string' || !row.scopeName))
     ) {
       return null;
     }
     return {
+      ...(typeof row.tenantKey === 'string' ? { tenantKey: row.tenantKey } : {}),
       bindingId: row.bindingId,
       principalId: row.principalId,
       principalName: typeof row.principalName === 'string' ? row.principalName : null,
@@ -351,6 +431,14 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
     const x =
       row.x && typeof row.x === 'object' && !Array.isArray(row.x)
         ? (row.x as Record<string, unknown>)
+        : {};
+    const feishu =
+      row.feishu && typeof row.feishu === 'object' && !Array.isArray(row.feishu)
+        ? (row.feishu as Record<string, unknown>)
+        : {};
+    const discord =
+      row.discord && typeof row.discord === 'object' && !Array.isArray(row.discord)
+        ? (row.discord as Record<string, unknown>)
         : {};
     return {
       slack: {
@@ -378,14 +466,30 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
         // 那里才同时握有两者。
         defaultWorkspace: typeof x.defaultWorkspace === 'string' ? x.defaultWorkspace : null,
       },
+      feishu: {
+        enabled: feishu.enabled === true,
+        bindingCache: parseProviderBindingCache(feishu.bindingCache),
+        ...(Array.isArray(feishu.bindingsCache) ? { bindingsCache: feishu.bindingsCache.map(parseProviderBindingCache)
+          .filter((row): row is ProviderBindingCacheEntry => row !== null) } : {}),
+        // 同 x: 成员关系留给 viewOf 复核。
+        defaultWorkspace:
+          typeof feishu.defaultWorkspace === 'string' ? feishu.defaultWorkspace : null,
+      },
+      discord: {
+        enabled: discord.enabled === true,
+        bindingCache: parseProviderBindingCache(discord.bindingCache),
+        // 同 x: 成员关系留给 viewOf 复核。
+        defaultWorkspace:
+          typeof discord.defaultWorkspace === 'string' ? discord.defaultWorkspace : null,
+      },
     };
   }
 
-  function parseWorkspaces(raw: unknown): Record<string, string> {
+  function parseWorkspaces(raw: unknown, max: number = MAX_WORKSPACES): Record<string, string> {
     const workspaces: Record<string, string> = {};
     if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
       for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
-        if (Object.keys(workspaces).length === MAX_WORKSPACES) break;
+        if (Object.keys(workspaces).length === max) break;
         if (!isSafeWorkspaceAlias(k) || typeof v !== 'string') continue;
         const trimmed = v.trim();
         if (trimmed && path.isAbsolute(trimmed)) workspaces[k] = trimmed;
@@ -408,6 +512,8 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
         },
         telegram: { enabled: false, bindingCache: null, defaultWorkspace: null },
         x: { enabled: false, bindingCache: null, defaultWorkspace: null },
+        feishu: { enabled: false, bindingCache: null, defaultWorkspace: null },
+        discord: { enabled: false, bindingCache: null, defaultWorkspace: null },
       },
     };
   }
@@ -443,10 +549,13 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
               accounts[fingerprint] = parseAccount(account);
           }
         }
+        const retiredAliases = parseWorkspaces(row.retiredAliases, MAX_RETIRED_WORKSPACES);
         return {
           version: 2,
           urlOverride,
           workspaces,
+          ...(Object.keys(retiredAliases).length > 0 ? { retiredAliases } : {}),
+          ...(row.projectCatalogMigrated === true ? { projectCatalogMigrated: true } : {}),
           accounts,
           ...(row.legacyAccount !== undefined
             ? { legacyAccount: parseAccount(row.legacyAccount) }
@@ -458,14 +567,20 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
         enabled: row.enabled === true,
         telegramEnabled: false,
         xEnabled: false,
+        feishuEnabled: false,
+        discordEnabled: false,
         urlOverride,
         workspaces,
         bindingsCache: parseBindingsCache(row.bindingsCache),
         lifecycleAnnouncementOverride: null,
         telegramBindingCache: null,
         xBindingCache: null,
+        feishuBindingCache: null,
+        discordBindingCache: null,
         xDefaultWorkspace: null,
         telegramDefaultWorkspace: null,
+        feishuDefaultWorkspace: null,
+        discordDefaultWorkspace: null,
       });
     } catch (err) {
       log.warn(
@@ -518,9 +633,9 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
     const accounts = [...Object.values(document.accounts), document.legacyAccount];
     for (const account of accounts) {
       if (account === undefined) continue;
-      // 两个 provider 都要清: 只清一个会让另一个的失效别名留在盘上, 用户之后
+      // 每个 provider 都要清: 漏清一个会让它的失效别名留在盘上, 用户之后
       // 重新添加同名别名(哪怕指向另一个目录)就把它无声复活。
-      for (const provider of ['telegram', 'x'] as const) {
+      for (const provider of ['telegram', 'x', 'feishu', 'discord'] as const) {
         const alias = account[provider].defaultWorkspace;
         if (alias === null || alias === undefined) continue;
         if (isSelectableWorkspace(document, alias)) continue;
@@ -543,28 +658,44 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
     const account = fingerprint
       ? (document.accounts[fingerprint] ?? EMPTY_ACCOUNT())
       : EMPTY_ACCOUNT();
+    // 默认项目所有官方机器人共用一个。升级前各渠道分别存过的, 按 飞书 -> Telegram -> X
+    // 取第一个仍然可选的; 之后任何一处修改都会把各处写成同一个值(setProviderDefaultWorkspace)。
+    // Discord 上线时默认项目已经共用, 它那一份只会被同时写入, 排在最后兜底。
+    const defaultWorkspace =
+      selectableDefaultWorkspace(document, account.feishu.defaultWorkspace) ??
+      selectableDefaultWorkspace(document, account.telegram.defaultWorkspace) ??
+      selectableDefaultWorkspace(document, account.x.defaultWorkspace) ??
+      selectableDefaultWorkspace(document, account.discord.defaultWorkspace);
     return {
       enabled: account.slack.enabled,
       telegramEnabled: account.telegram.enabled,
       xEnabled: account.x.enabled,
+      feishuEnabled: account.feishu.enabled,
+      discordEnabled: account.discord.enabled,
       xCompanionBotId: account.x.companionBotId ?? null,
       urlOverride: document.urlOverride,
       workspaces: { ...document.workspaces },
+      retiredWorkspaces: { ...(document.retiredAliases ?? {}) },
+      projectCatalogMigrated: document.projectCatalogMigrated === true,
       bindingsCache: account.slack.bindingsCache.map((entry) => ({ ...entry })),
       lifecycleAnnouncementOverride: account.slack.lifecycleAnnouncementOverride,
       telegramBindingCache: account.telegram.bindingCache
         ? { ...account.telegram.bindingCache }
         : null,
       xBindingCache: account.x.bindingCache ? { ...account.x.bindingCache } : null,
+      feishuBindingCache: account.feishu.bindingCache
+        ? { ...account.feishu.bindingCache }
+        : null,
+      ...(account.feishu.bindingsCache === undefined ? {} : { feishuBindingsCache: account.feishu.bindingsCache.map((row) => ({ ...row })) }),
+      discordBindingCache: account.discord.bindingCache ? { ...account.discord.bindingCache } : null,
       // 读侧兜底: 正常路径上 setWorkspaces 已把失效别名从存档里删了, 这里只兜
       // 手改配置文件、或将来新增了别的清单写入口的情况。代价不对称 —— 漏兜的
       // 后果是 hello 带上清单外别名被协议拒收, **该 provider 的连接**断在握手上
       // 且没有任何用户可见线索(Telegram / X 两条线同样适用), 所以这层留着。
-      xDefaultWorkspace: selectableDefaultWorkspace(document, account.x.defaultWorkspace),
-      telegramDefaultWorkspace: selectableDefaultWorkspace(
-        document,
-        account.telegram.defaultWorkspace,
-      ),
+      xDefaultWorkspace: defaultWorkspace,
+      telegramDefaultWorkspace: defaultWorkspace,
+      feishuDefaultWorkspace: defaultWorkspace,
+      discordDefaultWorkspace: defaultWorkspace,
     };
   }
 
@@ -584,6 +715,59 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
   }
 
   return {
+    commitPreferences(patch) {
+      const current = read();
+      const fingerprint = parseAccountFingerprint(deps.getAccountFingerprint?.());
+      if (!fingerprint) throw new HookConnectionValidationError('account is not available');
+      for (const key of ['telegramDefaultWorkspace', 'xDefaultWorkspace'] as const) {
+        const alias = patch[key];
+        if (alias !== undefined && alias !== null && !Object.hasOwn(current.workspaces, alias)) throw new HookConnectionValidationError('workspace is not configured');
+      }
+      const inspected = inspectSettingsJson(filePath, raw => raw);
+      if (inspected.status !== 'ready' || !inspected.missing && inspected.raw.version !== 2) throw new HookConnectionValidationError('configuration is not readable');
+      const document = structuredClone(inspected.missing ? { version: 2, workspaces: {}, accounts: {} } : inspected.raw);
+      const accounts = (document.accounts ??= {}) as Record<string, Record<string, unknown>>;
+      const account = accounts[fingerprint] ??= {};
+      if (patch.lifecycleAnnouncementOverride !== undefined) ((account.slack ??= {}) as Record<string, unknown>).lifecycleAnnouncementOverride = patch.lifecycleAnnouncementOverride;
+      if (patch.telegramDefaultWorkspace !== undefined) ((account.telegram ??= {}) as Record<string, unknown>).defaultWorkspace = patch.telegramDefaultWorkspace;
+      if (patch.xDefaultWorkspace !== undefined) ((account.x ??= {}) as Record<string, unknown>).defaultWorkspace = patch.xDefaultWorkspace;
+      writeDocument(document as unknown as StoredDocument);
+      return { ...current, ...patch };
+    },
+    inspect(fingerprint) {
+      if (!parseAccountFingerprint(fingerprint)) return { status: 'unavailable' };
+      const inspection = inspectSettingsJson(filePath, (raw) => raw);
+      if (inspection.status !== 'ready') return inspection;
+      if (inspection.missing && legacyFilePath) {
+        try { fs.lstatSync(legacyFilePath); return { status: 'migrationPending' }; }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return { status: 'unreadable' }; }
+      }
+      const raw = inspection.raw;
+      if (raw.version !== undefined && raw.version !== 1 && raw.version !== 2) return { status: 'unreadable' };
+      if (!inspection.missing && (raw.version !== 2 || raw.legacyAccount !== undefined)) return { status: 'migrationPending' };
+      if (raw.accounts !== undefined && !isSettingsRecord(raw.accounts)) return { status: 'unreadable' };
+      const accountRaw = isSettingsRecord(raw.accounts) ? raw.accounts[fingerprint!] : undefined;
+      if (accountRaw !== undefined && !isSettingsRecord(accountRaw)) return { status: 'unreadable' };
+      try {
+        validateOptionalSettingsFields(raw, { workspaces: isSettingsRecord, urlOverride: value => value === null || (typeof value === 'string' && /^wss?:\/\/.+/.test(value)) });
+        if (isSettingsRecord(accountRaw)) for (const provider of ['slack', 'telegram', 'x']) {
+          const value = accountRaw[provider];
+          if (value === undefined) continue;
+          if (!isSettingsRecord(value)) return { status: 'unreadable' };
+          validateOptionalSettingsFields(value, { enabled: value => typeof value === 'boolean', lifecycleAnnouncementOverride: value => value === null || typeof value === 'boolean', defaultWorkspace: value => value === null || typeof value === 'string' });
+        }
+      } catch { return { status: 'unreadable' }; }
+      const document: StoredDocument = {
+        version: 2, urlOverride: typeof raw.urlOverride === 'string' && /^wss?:\/\/.+/.test(raw.urlOverride) ? raw.urlOverride : null,
+        workspaces: parseWorkspaces(raw.workspaces), accounts: { [fingerprint!]: parseAccount(accountRaw) },
+      };
+      const view = viewOf(document, fingerprint);
+      return { ...inspection, raw: { account: accountRaw ?? {}, ...(raw.urlOverride !== undefined ? { urlOverride: raw.urlOverride } : {}) }, value: {
+        enabled: view.enabled, telegramEnabled: view.telegramEnabled, xEnabled: view.xEnabled,
+        lifecycleAnnouncementOverride: view.lifecycleAnnouncementOverride,
+        telegramDefaultWorkspace: view.telegramDefaultWorkspace, xDefaultWorkspace: view.xDefaultWorkspace, urlOverride: view.urlOverride,
+      } };
+    },
     get: () => read(),
     effectiveUrl() {
       return read().urlOverride ?? deps.defaultUrl();
@@ -600,13 +784,47 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
     },
     anyProviderEnabled() {
       const state = read();
-      return state.enabled || state.telegramEnabled || state.xEnabled;
+      return (
+        state.enabled || state.telegramEnabled || state.xEnabled || state.feishuEnabled || state.discordEnabled
+      );
     },
     setWorkspaces(workspaces) {
       const current = currentDocument();
       current.document.workspaces = validateWorkspaces(workspaces);
       pruneStaleDefaultWorkspaces(current.document);
       writeDocument(current.document);
+      return viewOf(current.document, current.fingerprint);
+    },
+    applyProjectWorkspaces(plan) {
+      const current = currentDocument();
+      const workspaces = validateWorkspaces(plan.workspaces);
+      const renamed = new Map(plan.renames.map((rename) => [rename.from, rename.to] as const));
+      // 默认项目跟着项目改名, 而不是被当成「清单外」清掉 —— 否则侧栏里改个名字,
+      // X / Telegram / 飞书的默认项目就悄悄退回「对话」。
+      for (const account of [...Object.values(current.document.accounts), current.document.legacyAccount]) {
+        if (account === undefined) continue;
+        for (const provider of ['telegram', 'x', 'feishu', 'discord'] as const) {
+          const alias = account[provider].defaultWorkspace;
+          const next = alias === null || alias === undefined ? undefined : renamed.get(alias);
+          if (next !== undefined && Object.hasOwn(workspaces, next)) {
+            account[provider].defaultWorkspace = next;
+          }
+        }
+      }
+      current.document.workspaces = workspaces;
+      const retired = parseWorkspaces(plan.retired, MAX_RETIRED_WORKSPACES);
+      if (Object.keys(retired).length > 0) current.document.retiredAliases = retired;
+      else delete current.document.retiredAliases;
+      pruneStaleDefaultWorkspaces(current.document);
+      writeDocument(current.document);
+      return viewOf(current.document, current.fingerprint);
+    },
+    markProjectCatalogMigrated() {
+      const current = currentDocument();
+      if (current.document.projectCatalogMigrated !== true) {
+        current.document.projectCatalogMigrated = true;
+        writeDocument(current.document);
+      }
       return viewOf(current.document, current.fingerprint);
     },
     setBindingsCache(entries) {
@@ -620,9 +838,16 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
         account.slack.lifecycleAnnouncementOverride = enabled;
       });
     },
+    setFeishuBindingsCache(entries) {
+      return mutateAccount((account) => {
+        account.feishu.bindingsCache = entries.map((row) => ({ ...row }));
+        account.feishu.bindingCache = entries[0] ? { ...entries[0] } : null;
+      });
+    },
     setProviderBindingCache(provider, entry) {
       return mutateAccount((account) => {
         account[provider].bindingCache = entry ? { ...entry } : null;
+        if (provider === 'feishu') delete account.feishu.bindingsCache;
       });
     },
     setProviderDefaultWorkspace(provider, alias) {
@@ -637,8 +862,13 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
           );
         }
       }
+      // 默认项目是共用的: 从哪个机器人的入口改, 都把各处写成同一个值。
+      void provider;
       return mutateAccount((account) => {
-        account[provider].defaultWorkspace = normalized;
+        account.feishu.defaultWorkspace = normalized;
+        account.telegram.defaultWorkspace = normalized;
+        account.x.defaultWorkspace = normalized;
+        account.discord.defaultWorkspace = normalized;
       });
     },
     setXCompanionBotId(botId) {

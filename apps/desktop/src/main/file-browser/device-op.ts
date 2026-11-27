@@ -59,7 +59,7 @@ import {
   type PushOwnerStamp,
 } from '@cindy/device-link';
 import { REVEALABLE_IGNORE_DIR_NAMES } from '../../shared/ignoreNames';
-import { WorkdirWatchManager } from '@cindy/remote-file-service';
+import { FileServiceRpcError, WorkdirWatchManager } from '@cindy/remote-file-service';
 import type { FsRpcMethods } from '@cindy/remote-file-service/protocol';
 
 import { createLogger } from '../logger.js';
@@ -72,8 +72,8 @@ import {
   type RemoteWorkingDirCheckResult,
 } from '../device-link/remote-workdir-guard.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
-import { uploadLocalFile } from '../device-link/mediaTransfer.js';
-import { pushToTopicSubscribers } from '../device-link/dispatch.js';
+import { uploadLocalFile } from '../device-link/mediaTransfer.desktop.js';
+import { pushToTopicSubscribers } from '../device-link/dispatch.desktop.js';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { sharedTaskFileOperation } from '../device-link/sharedTaskDispatch.js';
 import { assertSharedTaskWorkdir } from '../device-link/sharedTaskFileAccess.js';
@@ -155,6 +155,7 @@ const SEARCH_COLLECT_MAX_MATCHES = 500;
 const SEARCH_COLLECT_TIMEOUT_MS = 20_000;
 
 interface RemoteOpArgs {
+  expectedResolvedPath?: string;
   op: string;
   workdir: string;
   relPath?: string;
@@ -562,12 +563,26 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
       case 'stat':
         return request('stat', { workdir, relPath: args.relPath ?? '' });
       case 'writeFile': {
-        const r = await request('writeFile', {
-          workdir,
-          relPath: args.relPath ?? '',
-          content: writeContent ?? '',
-        });
-        return { ok: true as const, ...r };
+        try {
+          const r = await request('writeFile', {
+            workdir,
+            relPath: args.relPath ?? '',
+            content: writeContent ?? '',
+            expectedResolvedPath: args.expectedResolvedPath,
+          });
+          return { ok: true as const, ...r };
+        } catch (err) {
+          // Preserve the existing save-result contract so the editor can explain
+          // how to keep the draft. Authorization and transport errors still reject.
+          if (
+            err instanceof FileServiceRpcError &&
+            err.code === 'OPERATION_FAILED' &&
+            err.message.startsWith('FILE_TARGET_CHANGED:')
+          ) {
+            return bad('FILE_TARGET_CHANGED');
+          }
+          throw err;
+        }
       }
       case 'createFile':
         return {
@@ -671,7 +686,7 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
       return statEntry(workdir, args.relPath ?? '');
     case 'writeFile': {
       try {
-        const r = await writeFile(workdir, args.relPath ?? '', writeContent ?? '');
+        const r = await writeFile(workdir, args.relPath ?? '', writeContent ?? '', args.expectedResolvedPath);
         return { ok: true as const, ...r };
       } catch (err) {
         return bad(String(err));

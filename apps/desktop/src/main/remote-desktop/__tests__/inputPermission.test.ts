@@ -1,6 +1,8 @@
 import path from 'node:path';
+import fs from 'node:fs/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { readDesktopInputPermission } from '../inputHost';
+import { readDesktopInputAccess, readDesktopInputPermission, requestDesktopInputPermission, resolveDesktopInputBinary } from '../inputHost';
+import { readLinuxDesktopInputSupport } from '../linuxInput';
 
 const mocks = vi.hoisted(() => ({
   exec: vi.fn(),
@@ -28,6 +30,7 @@ vi.mock('node:fs/promises', () => ({
     mkdtemp: vi.fn(async () => '/fixture/compile'),
     writeFile: vi.fn(),
     rm: vi.fn(),
+    copyFile: vi.fn(),
     rename: vi.fn(),
   },
 }));
@@ -37,12 +40,14 @@ describe('desktop input permission detection', () => {
     vi.clearAllMocks();
     vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin');
     mocks.app.isPackaged = false;
+    vi.spyOn(fs, 'readFile').mockResolvedValue('fixture source');
     mocks.access.mockResolvedValue(undefined);
     mocks.exec.mockResolvedValue({ stdout: 'ready\n' });
   });
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it('bounds a slow cold build and lets later polls reuse it without prompting', async () => {
@@ -99,9 +104,124 @@ describe('desktop input permission detection', () => {
     expect(await readDesktopInputPermission()).toBe('unknown');
   });
 
+  // macOS 27.3 beta 2 (26C5047e): with control allowed for chosen apps only, the
+  // helper answers `chosen-apps`. It stays not-ready (macOS drops system-wide input);
+  // only local settings learn why. A helper older than --scope answers as before.
+  it.each([
+    ['chosen-apps\n', { status: 'missing', chosenAppsOnly: true }],
+    ['permission\n', { status: 'missing' }],
+    ['ready\n', { status: 'granted' }],
+  ])('reads remote input helper answer %j as %j', async (stdout, expected) => {
+    mocks.exec.mockResolvedValue({ stdout });
+    expect(await readDesktopInputAccess('postEvents')).toEqual(expected);
+    expect(await readDesktopInputPermission('postEvents')).toBe(expected.status);
+  });
+
+  // Remote keyboard/mouse control needs event posting. Other users of the same
+  // helper (window inspection and the away guard) request only their AX access.
+  it('checks event posting passively for remote control and requests it only on explicit action', async () => {
+    mocks.exec.mockResolvedValue({ stdout: 'permission\n' });
+    expect(await readDesktopInputPermission('postEvents')).toBe('missing');
+    expect(mocks.exec.mock.calls[0][1]).toEqual(['--check', '--post-events', '--scope']);
+    const signal = new AbortController().signal;
+    expect(await requestDesktopInputPermission(() => true, signal, 'postEvents')).toBe(false);
+    expect(mocks.exec.mock.calls[1][1]).toEqual(['--request-permission', '--post-events']);
+    mocks.exec.mockResolvedValue({ stdout: 'ready\n' });
+    expect(await requestDesktopInputPermission(() => true, signal)).toBe(true);
+    expect(mocks.exec.mock.calls[2][1]).toEqual(['--request-permission']);
+  });
+
+  // Regression: a signed personal shell was probing an ad-hoc helper outside
+  // its app, so the visible app grant did not describe the input executable.
+  // Unit: actual resolver/probe, in-memory receipt/files; no existing case covered
+  // source-mode runtimes with shipped helpers. Missing promised helpers must fail.
+  it.each([true, false])(
+    'uses only the sealed personal input helper (present=%s)',
+    async (present) => {
+      const resources = path.resolve('/fixture/Cindy.app/Contents/Resources');
+      const previous = process.resourcesPath;
+      Object.defineProperty(process, 'resourcesPath', { value: resources, configurable: true });
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({ capabilities: { desktopInput: true } }),
+      );
+      if (!present) mocks.access.mockRejectedValue(new Error('ENOENT'));
+      try {
+        expect(await readDesktopInputPermission()).toBe(present ? 'granted' : 'unknown');
+        if (present)
+          expect(mocks.exec).toHaveBeenCalledExactlyOnceWith(
+            path.join(resources, 'tools', 'remote-desktop', 'cindy-macos-desktop-input'),
+            ['--check'],
+            { timeout: 5000, maxBuffer: 1024 },
+          );
+        else expect(mocks.exec).not.toHaveBeenCalled();
+      } finally {
+        Object.defineProperty(process, 'resourcesPath', { value: previous, configurable: true });
+      }
+    },
+  );
+
   it('does not probe Accessibility on Windows', async () => {
     vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
     expect(await readDesktopInputPermission()).toBe('notRequired');
+    expect(mocks.exec).not.toHaveBeenCalled();
+  });
+
+  // #8571: resolveDesktopInputBinary must rebuild a cached Windows helper when
+  // CRT settings change and pass those settings to Cargo. Existing permission
+  // probes never enter the Windows source build. Minimal input: unchanged Rust
+  // sources and an existing binary, with only config.toml changed. Unit tier:
+  // in-memory filesystem/compiler; real native loading has explicit integration coverage.
+  it('reuses a Windows input build only while its CRT configuration is unchanged', async () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+    const config = path.join(
+      mocks.app.getAppPath(),
+      'native',
+      'remote-desktop',
+      '.cargo',
+      'config.toml',
+    );
+    let settings = 'first CRT configuration';
+    const cached = new Set<string>();
+    vi.spyOn(fs, 'readFile').mockImplementation(async (file) =>
+      String(file) === config ? settings : 'fixture source',
+    );
+    mocks.access.mockImplementation(async (file) => {
+      if (!cached.has(String(file))) throw new Error('ENOENT');
+    });
+    vi.spyOn(fs, 'rename').mockImplementation(async (_source, destination) => {
+      cached.add(String(destination));
+    });
+
+    const first = await resolveDesktopInputBinary();
+    expect(await resolveDesktopInputBinary()).toBe(first);
+    expect(mocks.exec).toHaveBeenCalledTimes(1);
+
+    settings = 'updated CRT configuration';
+    expect(await resolveDesktopInputBinary()).not.toBe(first);
+    expect(mocks.exec).toHaveBeenCalledTimes(2);
+    expect(mocks.exec).toHaveBeenLastCalledWith(
+      'cargo',
+      expect.arrayContaining(['--config', config]),
+      { timeout: 180_000 },
+    );
+  });
+  // Capability must come from the authenticated helper, not just a DISPLAY variable.
+  it('probes XTest without granting control to missing helpers or XWayland', async () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
+    vi.stubEnv('DISPLAY', ':9');
+    vi.stubEnv('XDG_SESSION_TYPE', 'x11');
+    vi.stubEnv('WAYLAND_DISPLAY', '');
+    vi.stubEnv('HYPRLAND_INSTANCE_SIGNATURE', '');
+    expect(await readLinuxDesktopInputSupport()).toBe(true);
+    expect(mocks.exec).toHaveBeenLastCalledWith(expect.any(String), ['--x11', '--check'], {
+      timeout: 3000,
+      maxBuffer: 1024,
+    });
+    mocks.exec.mockRejectedValue(new Error('helper unavailable'));
+    expect(await readLinuxDesktopInputSupport()).toBe(false);
+    mocks.exec.mockClear();
+    vi.stubEnv('XDG_SESSION_TYPE', 'wayland');
+    expect(await readLinuxDesktopInputSupport()).toBe(false);
     expect(mocks.exec).not.toHaveBeenCalled();
   });
 });

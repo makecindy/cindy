@@ -1,3 +1,4 @@
+import { prNumberLabel } from '@cindy/maker-shared';
 /**
  * SessionInfoMeta — 任务行右侧信息槽的内容(sidebar-redesign C / C' 期)。
  * ---------------------------------------------------------------------------
@@ -192,10 +193,11 @@ function PrNumberPiece({ prRef, isActive }: { prRef: SessionPrRef; isActive?: bo
       isActive: Boolean(isActive),
       backgroundLightness,
     }),
+    status?.ok ? status.conflicts : null,
   );
   const baseTitle = kind
-    ? `${prRef.owner}/${prRef.repo}#${prRef.prNumber} · ${t(`ccAgent.gitContext.pr.status.${kind}`)}`
-    : `${prRef.owner}/${prRef.repo}#${prRef.prNumber}`;
+    ? `${prRef.owner}/${prRef.repo}${prNumberLabel(prRef)} · ${t(`ccAgent.gitContext.pr.status.${kind}`)}`
+    : `${prRef.owner}/${prRef.repo}${prNumberLabel(prRef)}`;
   const title =
     showDot && unresolvedCount
       ? `${baseTitle} · ${t('ccAgent.gitContext.pr.unresolved', { count: unresolvedCount })}`
@@ -221,7 +223,7 @@ function PrNumberPiece({ prRef, isActive }: { prRef: SessionPrRef; isActive?: bo
           />
         ) : null}
       </span>
-      #{prRef.prNumber}
+      {prNumberLabel(prRef)}
     </span>
   );
 }

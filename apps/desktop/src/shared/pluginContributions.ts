@@ -17,6 +17,7 @@ export interface PreparedPluginContribution {
   sha256: string;
   sizeBytes: number;
   releaseNotes?: string;
+  permissionLabels?: string[];
   preflight?: import('./pluginContributionContract').ContributionPreflight;
   expiresAt: string;
 }
@@ -49,12 +50,20 @@ export interface ContributionReleaseView {
     manifestView: Record<string, unknown>;
   } | null;
 }
+export interface MyPluginLocalInstance {
+  instanceId: string;
+  version: string;
+  origin: 'local' | 'public';
+  enabled: boolean;
+}
 export type MyPluginLocalInstallation =
-  | { state: 'installed'; instanceId: string; version: string; origin: 'local' | 'public'; enabled: boolean }
-  | { state: 'missing' | 'unavailable' };
+  | ({ state: 'installed' } & MyPluginLocalInstance)
+  // Older readers retain their unavailable fallback until an instance is selected.
+  | { state: 'missing' | 'unavailable'; candidates?: MyPluginLocalInstance[] };
 export interface MyPluginView {
   pluginId: string;
   name: string;
+  description?: string | null;
   displayAuthor?: string | null;
   authorSettings?: { anonymous: boolean; canEdit: boolean } | null;
   publisherKind?: 'official' | 'personal' | null;
@@ -103,11 +112,11 @@ export interface ContributionTransferView {
 export interface PluginReviewUpdate {
   pluginId: string;
   key: string;
-  releaseId: string;
-  version: string;
-  sha256: string;
-  revision: string;
-  status: 'approved' | 'rejected';
+  releaseId: string | null;
+  version: string | null;
+  sha256: string | null;
+  revision: string | null;
+  status: 'approved' | 'rejected' | 'disabled' | 'archived' | 'revoked' | 'enabled';
   decidedAt: string;
   unread: boolean;
 }

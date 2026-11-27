@@ -27,6 +27,10 @@
         {
           "id": "xai/grok-imagine-video",
           "name": "Grok Imagine Video"
+        },
+        {
+          "id": "xai/grok-imagine-video-1.5",
+          "name": "Grok Imagine Video 1.5"
         }
       ],
       "routing": {
@@ -1476,6 +1480,31 @@
       "regionHint": "global",
       "models": [
         {
+          "id": "gemini-4-neon",
+          "name": "Gemini 4 Neon",
+          "contextWindow": 1048576
+        },
+        {
+          "id": "gemini-4-carbon",
+          "name": "Gemini 4 Carbon",
+          "contextWindow": 1048576
+        },
+        {
+          "id": "gemini-4-argon",
+          "name": "Gemini 4 Argon",
+          "contextWindow": 1048576
+        },
+        {
+          "id": "gemini-4-hydrogen",
+          "name": "Gemini 4 Hydrogen",
+          "contextWindow": 1048576
+        },
+        {
+          "id": "gemini-3.8-flash",
+          "name": "Gemini 3.8 Flash",
+          "contextWindow": 1048576
+        },
+        {
           "id": "gemini-3.6-flash",
           "name": "Gemini 3.6 Flash",
           "contextWindow": 1000000
@@ -1483,7 +1512,8 @@
         {
           "id": "gemini-3.5-flash",
           "name": "Gemini 3.5 Flash",
-          "contextWindow": 1000000
+          "contextWindow": 1000000,
+          "defaultEnabled": false
         },
         {
           "id": "gemini-3.5-flash-lite",
@@ -1620,6 +1650,30 @@
       "regionHint": "cn",
       "models": [
         {
+          "id": "glm-5.4[1m]",
+          "name": "GLM-5.4 (1M)",
+          "contextWindow": 1000000,
+          "supportsImageInput": true,
+          "engines": ["claude-code"]
+        },
+        {
+          "id": "glm-5.4",
+          "name": "GLM-5.4",
+          "contextWindow": 1000000,
+          "supportsImageInput": true,
+          "engines": ["codex", "pi"],
+          "engineOverrides": {
+            "pi": {
+              "reasoning": true,
+              "reasoningEfforts": ["low", "high", "max"],
+              "reasoningDefaultEffort": "max"
+            },
+            "codex": {
+              "supportsImageInput": false
+            }
+          }
+        },
+        {
           "id": "glm-5.3[1m]",
           "name": "GLM-5.3 (1M)",
           "contextWindow": 1000000,
@@ -1693,6 +1747,30 @@
       "docsUrl": "https://docs.z.ai/devpack/overview",
       "regionHint": "global",
       "models": [
+        {
+          "id": "glm-5.4[1m]",
+          "name": "GLM-5.4 (1M)",
+          "contextWindow": 1000000,
+          "supportsImageInput": true,
+          "engines": ["claude-code"]
+        },
+        {
+          "id": "glm-5.4",
+          "name": "GLM-5.4",
+          "contextWindow": 1000000,
+          "supportsImageInput": true,
+          "engines": ["codex", "pi"],
+          "engineOverrides": {
+            "pi": {
+              "reasoning": true,
+              "reasoningEfforts": ["low", "high", "max"],
+              "reasoningDefaultEffort": "max"
+            },
+            "codex": {
+              "supportsImageInput": false
+            }
+          }
+        },
         {
           "id": "glm-5.3[1m]",
           "name": "GLM-5.3 (1M)",
@@ -2210,7 +2288,7 @@
           "maxOutput": 65536,
           "engineOverrides": {
             "pi": {
-              "piApi": "anthropic-messages",
+              "piApi": "openai-completions",
               "reasoning": true,
               "reasoningEfforts": [
                 "low",
@@ -2229,7 +2307,7 @@
           "maxOutput": 65536,
           "engineOverrides": {
             "pi": {
-              "piApi": "anthropic-messages",
+              "piApi": "openai-completions",
               "reasoning": true,
               "reasoningEfforts": [
                 "low",
@@ -2248,7 +2326,7 @@
           "maxOutput": 65536,
           "engineOverrides": {
             "pi": {
-              "piApi": "anthropic-messages",
+              "piApi": "openai-completions",
               "reasoning": true,
               "reasoningEfforts": [
                 "low",
@@ -2267,7 +2345,7 @@
           "maxOutput": 65536,
           "engineOverrides": {
             "pi": {
-              "piApi": "anthropic-messages",
+              "piApi": "openai-completions",
               "reasoning": true,
               "reasoningEfforts": [
                 "low",
@@ -2291,9 +2369,211 @@
           "wireProtocol": "openai-responses"
         },
         "pi": {
-          "baseUrl": "https://apihub.agnes-ai.com",
+          "baseUrl": "https://apihub.agnes-ai.com/v1",
           "modelsUrl": "https://apihub.agnes-ai.com/v1/models",
+          "wireProtocol": "openai-chat"
+        }
+      }
+    },
+    {
+      "id": "openhubs",
+      "name": "OpenHubs",
+      "docsUrl": "https://openhubs.zhidemai.com/docs",
+      "models": [
+        {
+          "id": "deepseek-v4-flash",
+          "name": "DeepSeek V4 Flash",
+          "engineOverrides": {
+            "pi": {
+              "piApi": "openai-completions"
+            }
+          },
+          "contextWindow": 1048576,
+          "maxOutput": 384000
+        },
+        {
+          "id": "kimi-k3.1-pro",
+          "name": "Kimi K3.1 Pro",
+          "engineOverrides": {
+            "pi": {
+              "piApi": "openai-completions"
+            }
+          }
+        },
+        {
+          "id": "glm-5.3",
+          "name": "GLM 5.3",
+          "engineOverrides": {
+            "pi": {
+              "piApi": "openai-completions"
+            }
+          }
+        }
+      ],
+      "runtimes": {
+        "claude-code": {
+          "baseUrl": "https://openhubs.zhidemai.com",
+          "modelsUrl": "https://openhubs.zhidemai.com/v1/models",
           "wireProtocol": "anthropic-messages"
+        },
+        "codex": {
+          "baseUrl": "https://openhubs.zhidemai.com/v1",
+          "modelsUrl": "https://openhubs.zhidemai.com/v1/models",
+          "wireProtocol": "openai-responses"
+        },
+        "pi": {
+          "baseUrl": "https://openhubs.zhidemai.com/v1",
+          "modelsUrl": "https://openhubs.zhidemai.com/v1/models",
+          "wireProtocol": "openai-chat"
+        }
+      }
+    },
+    {
+      "id": "hinoki",
+      "name": "Hinoki",
+      "docsUrl": "https://hinoki.security",
+      "models": [{ "id": "hinoki-offensive", "name": "Hinoki Offensive One" }],
+      "runtimes": {
+        "codex": {
+          "baseUrl": "https://inference.hinoki.security/v1",
+          "modelsUrl": "https://inference.hinoki.security/v1/models",
+          "wireProtocol": "openai-chat"
+        },
+        "pi": {
+          "baseUrl": "https://inference.hinoki.security/v1",
+          "modelsUrl": "https://inference.hinoki.security/v1/models",
+          "wireProtocol": "openai-chat"
+        }
+      }
+    },
+    {
+      "id": "ollama-cloud",
+      "name": "Ollama Cloud",
+      "docsUrl": "https://docs.ollama.com/cloud",
+      "models": [],
+      "runtimes": {
+        "claude-code": {
+          "baseUrl": "https://ollama.com",
+          "modelsUrl": "https://ollama.com/v1/models",
+          "wireProtocol": "anthropic-messages"
+        },
+        "codex": {
+          "baseUrl": "https://ollama.com/v1",
+          "modelsUrl": "https://ollama.com/v1/models",
+          "wireProtocol": "openai-chat"
+        },
+        "pi": {
+          "baseUrl": "https://ollama.com/v1",
+          "modelsUrl": "https://ollama.com/v1/models",
+          "wireProtocol": "openai-chat"
+        }
+      }
+    },
+    {
+      "id": "magpie",
+      "name": "Magpie",
+      "docsUrl": "https://usemagpie.ai/docs/integrate",
+      "models": [],
+      "runtimes": {
+        "claude-code": {
+          "baseUrl": "http://127.0.0.1:3425",
+          "baseUrlEditable": true,
+          "wireProtocol": "anthropic-messages"
+        },
+        "codex": {
+          "baseUrl": "http://127.0.0.1:3425/v1",
+          "baseUrlEditable": true,
+          "wireProtocol": "openai-responses"
+        },
+        "pi": {
+          "baseUrl": "http://127.0.0.1:3425/v1",
+          "baseUrlEditable": true,
+          "wireProtocol": "openai-chat"
+        }
+      }
+    },
+    {
+      "id": "iflytek-maas",
+      "name": "iFLYTEK Astron MaaS",
+      "docsUrl": "https://maas.xfyun.cn/doc/guide/index.html",
+      "models": [
+        {
+          "id": "spark-x2.6",
+          "name": "Spark X2.6"
+        }
+      ],
+      "runtimes": {
+        "codex": {
+          "baseUrl": "https://maas-api.cn-huabei-1.xf-yun.com/v2",
+          "wireProtocol": "openai-chat"
+        },
+        "pi": {
+          "baseUrl": "https://maas-api.cn-huabei-1.xf-yun.com/v2",
+          "wireProtocol": "openai-chat"
+        }
+      }
+    },
+    {
+      "id": "open-design",
+      "name": "Open Design",
+      "docsUrl": "https://open-design.ai",
+      "models": [],
+      "runtimes": {
+        "codex": {
+          "baseUrl": "https://amr-link.open-design.ai/v1",
+          "modelsUrl": "https://amr-link.open-design.ai/v1/models",
+          "wireProtocol": "openai-chat"
+        },
+        "pi": {
+          "baseUrl": "https://amr-link.open-design.ai/v1",
+          "modelsUrl": "https://amr-link.open-design.ai/v1/models",
+          "wireProtocol": "openai-chat"
+        }
+      }
+    },
+    {
+      "id": "command-code",
+      "name": "Command Code",
+      "docsUrl": "https://commandcode.ai/docs/provider",
+      "models": [],
+      "runtimes": {
+        "claude-code": {
+          "baseUrl": "https://api.commandcode.ai/provider",
+          "modelsUrl": "https://api.commandcode.ai/provider/v1/models",
+          "wireProtocol": "anthropic-messages"
+        },
+        "codex": {
+          "baseUrl": "https://api.commandcode.ai/provider/v1",
+          "modelsUrl": "https://api.commandcode.ai/provider/v1/models",
+          "wireProtocol": "openai-responses"
+        },
+        "pi": {
+          "baseUrl": "https://api.commandcode.ai/provider/v1",
+          "modelsUrl": "https://api.commandcode.ai/provider/v1/models",
+          "wireProtocol": "openai-chat"
+        }
+      }
+    },
+    {
+      "id": "tokenrhythm",
+      "name": "基元律动 · Token Rhythm",
+      "docsUrl": "https://tokenrhythm.studio/docs/api-integration",
+      "models": [],
+      "runtimes": {
+        "claude-code": {
+          "baseUrl": "https://tokenrhythm.studio",
+          "modelsUrl": "https://tokenrhythm.studio/v1/models",
+          "wireProtocol": "anthropic-messages"
+        },
+        "codex": {
+          "baseUrl": "https://tokenrhythm.studio/v1",
+          "modelsUrl": "https://tokenrhythm.studio/v1/models",
+          "wireProtocol": "openai-responses"
+        },
+        "pi": {
+          "baseUrl": "https://tokenrhythm.studio/v1",
+          "modelsUrl": "https://tokenrhythm.studio/v1/models",
+          "wireProtocol": "openai-chat"
         }
       }
     }

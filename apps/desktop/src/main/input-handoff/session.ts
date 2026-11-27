@@ -15,11 +15,13 @@ import {
 import { HumanDesktopInput } from '../remote-desktop/inputOwnership.js';
 import type { HandoffDriver } from './macDriver.js';
 import { qrContent } from './qrCode.js';
-import { extractStep, type ExtractedStep } from './stepExtractor.js';
+import { isBrowserBundle } from './originPolicy.js';
+import { applyFieldPlan, extractStep, IncompleteFormError, type ExtractedStep } from './stepExtractor.js';
 import type {
   ControlBinding,
   FoundQr,
   HandoffTarget,
+  HandoffFieldPlan,
   NativeActKind,
   NativeActResult,
   NativeAxSnapshot,
@@ -68,7 +70,7 @@ export interface HandoffCompletionHints {
   urlContains?: string;
 }
 
-export type HandoffEndReason = 'owner' | 'detected' | 'cancelled' | 'timeout' | 'failure' | 'session_closed';
+export type HandoffEndReason = 'owner' | 'owner_message' | 'detected' | 'cancelled' | 'timeout' | 'failure' | 'session_closed';
 
 export interface HandoffResult {
   status: 'succeeded' | 'cancelled' | 'failed' | 'expired';
@@ -80,6 +82,10 @@ export interface HandoffResult {
   finalOrigin?: string;
   /** Device that answered the last applied step; absent when no values were applied. */
   answeredOn?: InputHandoffHolder;
+  /** The program had several windows and the request named none: their titles, for asking again. */
+  ambiguousTitles?: string[];
+  /** A QR code from the agent's own screenshot: the owner reports the scan, Cindy cannot see it. */
+  scanned?: true;
 }
 
 /** The window a live view shows, located by the host when the owner opens it. */
@@ -97,6 +103,7 @@ export interface HandoffSessionOptions {
   purpose: string;
   note?: string;
   requester?: string;
+  fields?: HandoffFieldPlan[];
   target: HandoffTargetSpec;
   completeWhen?: HandoffCompletionHints;
   timeoutMs: number;
@@ -114,6 +121,7 @@ export interface HandoffSessionOptions {
   sleep?: (ms: number) => Promise<void>;
   finishingDelayMs?: number;
   settleTimeoutMs?: number;
+  windowWatchMs?: number;
 }
 
 const realSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -147,6 +155,117 @@ function sameHolder(a: InputHandoffHolder, b: InputHandoffHolder): boolean {
 
 const AUTOMATION_FLAGS = /--(remote-debugging-(port|pipe)|enable-automation|headless)\b/;
 
+const bundleTail = (bundleId: string): string => bundleId.slice(bundleId.lastIndexOf('.') + 1).toLowerCase();
+
+/**
+ * The window a handoff works on: by pid, else by app name or bundle id, else
+ * the frontmost app; never Cindy itself. Shared with the request-time check so
+ * a bad target is reported to the agent at once instead of minutes later.
+ *
+ * Minimized windows stay reachable (Cindy's browser window opens minimized), but
+ * only when named or when the app has nothing else: a shown window answers first.
+ */
+export function resolveHandoffTarget(list: NativeWindowList, spec: HandoffTargetSpec, hostPid: number): HandoffTarget | 'permission' | null {
+  const others = list.apps.filter((app) => app.pid !== hostPid && (app.windows.length > 0 || app.controlDenied));
+  const showing = (app: NativeWindowList['apps'][number]) => app.windows.some((w) => !w.minimized);
+  const candidates = [...others.filter(showing), ...others.filter((app) => !showing(app))];
+  let app = spec.pid !== undefined ? candidates.find((entry) => entry.pid === spec.pid) : undefined;
+  if (!app && spec.app) {
+    const wanted = spec.app.trim().toLowerCase();
+    app = candidates.find((entry) => entry.app.toLowerCase() === wanted || entry.bundleId.toLowerCase() === wanted)
+      ?? candidates.find((entry) => entry.app.toLowerCase().includes(wanted))
+      // Agents name apps in English while a localized desktop lists 访达 for
+      // Finder; the bundle id's last part (com.apple.finder) still says it.
+      ?? candidates.find((entry) => bundleTail(entry.bundleId) === wanted)
+      ?? (wanted.length >= 3 ? candidates.find((entry) => bundleTail(entry.bundleId).includes(wanted)) : undefined);
+  }
+  if (!app && spec.pid === undefined && !spec.app) app = candidates.find((entry) => entry.pid === list.frontmost);
+  if (!app) return null;
+  if (app.controlDenied) return 'permission';
+  const title = spec.windowTitle?.toLowerCase();
+  const named = (w: { title: string }) => !!title && w.title.toLowerCase().includes(title);
+  // The same browser can run as several processes (profiles, an automation copy): the named window may be in any of them.
+  if (title && spec.pid === undefined && !app.windows.some(named)) {
+    const sameApp = candidates.filter((entry) => entry.bundleId === app!.bundleId && entry.windows.some(named));
+    app = sameApp.find((entry) => entry.windows.some((w) => named(w) && !w.minimized)) ?? sameApp[0] ?? app;
+  }
+  // A title that matches nothing is not "the focused window": the owner would be sent, and type, in the wrong one.
+  if (title && !app.windows.some(named)) return null;
+  const visibleWindows = app.windows.filter((window) => !window.minimized);
+  const window = visibleWindows.find(named)
+    ?? app.windows.find(named)
+    ?? visibleWindows.find((w) => w.focused)
+    ?? visibleWindows[0]
+    ?? app.windows[0];
+  if (!window) return null;
+  return {
+    pid: app.pid, app: app.app, bundleId: app.bundleId, window: { index: window.index, title: window.title },
+    ...(window.minimized ? { minimized: true } : {}),
+  };
+}
+
+/** A password or a one-time code still on the screen is a sign-in step, whether or not its page address could be read. */
+const hasSecretField = (step: ExtractedStep): boolean =>
+  step.shown.some((control) => control.kind === 'text' && (control.contentType === 'password' || control.contentType === 'one-time-code'));
+
+/** How long a window just brought back may take to draw its form (a sign-in page loads frames). */
+const RESTORED_PAGE_WAIT_MS = 6000;
+/** How long a browser may take to expose its page to accessibility on the first read. */
+const BROWSER_PAGE_WAIT_MS = 3000;
+/** How often a waiting card looks at its window; reading does not bring it forward. */
+const WINDOW_WATCH_MS = 2000;
+/** Reads in a row before concluding: pages clear their forms for a moment while they load. */
+const FIELDS_GONE_READS = 3;
+const WINDOW_GONE_READS = 2;
+
+/** Which page a step is on: its window title and address (a page can keep its address and change its title). */
+const pageOf = (step: ExtractedStep): string => JSON.stringify([step.source.window ?? '', step.url ?? '']);
+
+/**
+ * A form the flow moved on to whose ordinary fields all have content already (a settings page after a
+ * passkey or a key was accepted): nothing there waits for the owner. The page the agent pointed at, and
+ * the form the owner is answering, are never judged this way: a field with content can still be replaced.
+ */
+const settledForm = (step: ExtractedStep, current: ExtractedStep | null): boolean =>
+  !!current && formFields(step) !== formFields(current) && !step.signIn && !step.deviceCode && step.shown.length > 0 &&
+  step.shown.every((control) => control.kind === 'text' && control.filled && control.contentType !== 'password' &&
+    control.contentType !== 'one-time-code');
+// Generated ids bind actions to the latest snapshot; they are not form identity. Navigation,
+// headings and field order can change without moving on from the form being answered.
+const formFields = (step: ExtractedStep): string => JSON.stringify(step.shown
+  .filter((control) => control.kind === 'text')
+  .map((control) => JSON.stringify([control.label, control.contentType]))
+  .sort());
+const askingNothing = (step: ExtractedStep): ExtractedStep => ({ ...step, shown: [] });
+
+/** What the owner would be asked, ignoring what they typed; the ids bind an open form to its fields. */
+const fieldShape = (step: ExtractedStep): string =>
+  JSON.stringify(step.shown.map((control) => (control.kind === 'text'
+    ? [control.id, control.label, control.contentType]
+    : [control.id, control.kind === 'note' ? control.text : ''])));
+
+/**
+ * The windows of one program when the agent named neither a window nor a process, so that guessing
+ * which one the owner means could send them to the wrong browser profile; null when there is no doubt.
+ * Shared by the request-time check and the session, so a check that was skipped cannot be bypassed.
+ */
+export function ambiguousWindowTitles(
+  list: NativeWindowList,
+  spec: HandoffTargetSpec,
+  resolved: HandoffTarget,
+  hostPid: number,
+): string[] | null {
+  if (spec.pid === undefined && !spec.app && !spec.windowTitle) return null;
+  const sameApp = spec.pid !== undefined
+    ? list.apps.filter((app) => app.pid === resolved.pid)
+    : list.apps.filter((app) => app.pid !== hostPid && app.bundleId === resolved.bundleId);
+  const windows = sameApp.flatMap((app) => app.windows).filter((w) => w.title);
+  // A named window must be the only one that name fits: a broad title ("Sign in") may fit another profile's too.
+  const title = spec.windowTitle?.toLowerCase();
+  const candidates = title ? windows.filter((w) => w.title.toLowerCase().includes(title)) : windows;
+  return candidates.length < 2 ? null : candidates.map((w) => w.title);
+}
+
 /**
  * One 代输入 request: a loop of read step → owner answers → act → wait for
  * the screen to settle → read the next step, until the flow ends.
@@ -161,6 +280,12 @@ export class InputHandoffSession {
   private target: HandoffTarget | null = null;
   private initial: HandoffTarget | null = null;
   private step: ExtractedStep | null = null;
+  private unreadablePage: IncompleteFormError['page'] | null = null;
+  /**
+   * A read that is the card's step except for its hidden code fields, on the same page that still lays out hidden
+   * ones: whose they are can no longer be told, which is no evidence the owner finished or moved on.
+   */
+  private unsureRead: ExtractedStep | null = null;
   private stepNumber = 0;
   private submissions = 0;
   private finishingUntil: number | undefined;
@@ -180,6 +305,27 @@ export class InputHandoffSession {
   private qrBaseline: QrBaseline | null = null;
   private qrTimer: ReturnType<typeof setTimeout> | undefined;
   private qrChecking = false;
+  /** A step of this request asked for a sign-in: the owner signs in on the window itself. */
+  private signInMode = false;
+  private fieldPlanSurface: string | undefined;
+  private fieldPlanRetired = false;
+  /** The owner has been asked something, so a screen with nothing to ask means they finished it. */
+  private asked = false;
+  /** The last step that asked the owner for something: shown again while the agent's completion hint is pending. */
+  private askedStep: ExtractedStep | null = null;
+  /** The page lost its fields before the agent's completion hint showed: the card keeps the asked step and waits. */
+  private awaitingHint = false;
+  /** The asked fields went away without an answer through the card: the owner did it on the window. */
+  private doneOutside = false;
+  private ambiguousTitles: string[] | undefined;
+  /** The page last covered for a sign-in on the window, renewed while the card waits. */
+  private guardedPage: { pid: number; url?: string } | undefined;
+  /** The process this request switched page accessibility on for, to switch it back off. */
+  private pageExposedOn: number | undefined;
+  private watchTimer: ReturnType<typeof setTimeout> | undefined;
+  private watchList: NativeWindowList | null = null;
+  private fieldsGoneReads = 0;
+  private windowGoneReads = 0;
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
 
@@ -251,6 +397,9 @@ export class InputHandoffSession {
       ...(this.ended ? { terminal: true as const } : {}),
       ...(picture ? { picture: true as const } : {}),
       ...(this.liveViewOffered() ? { liveView: true as const } : {}),
+      ...(this.directSignInOffered() ? { directSignIn: true as const } : {}),
+      ...(this.directSignInOffered() && this.options.fields && !this.fieldPlanRetired
+        ? { preferRemoteForm: true as const } : {}),
       ...(!picture && !qr && this.phase === 'ready' && step?.deviceCode ? { deviceCode: { ...step.deviceCode } } : {}),
       ...(qr ? { qr } : {}),
     };
@@ -262,6 +411,24 @@ export class InputHandoffSession {
   }
 
   /**
+   * The owner does this on the window: a sign-in whose page could be read.
+   */
+  private directSignInOffered(): boolean {
+    if (this.ended || this.phase !== 'ready' || this.qrState || this.picture || !this.options.driver.raise) return false;
+    return this.signInMode && !!this.step?.signIn && !this.step.deviceCode;
+  }
+
+  /** The owner chose to sign in on the window: show it to them. */
+  async bringToFront(): Promise<boolean> {
+    const driver = this.options.driver;
+    const target = this.target;
+    if (!target || !driver.raise || this.ended || this.busy) return false;
+    const raised = await withDesktopTurn(() => driver.raise!(target)).catch(() => null);
+    // The window came up only if macOS let the app take the front: a refused activation is a failure to show.
+    return !!raised && !('error' in raised) && raised.activated !== false;
+  }
+
+  /**
    * The owner opened a live view of the window: bring it to the front and say
    * where it is. Only while this request is waiting for the owner.
    */
@@ -270,7 +437,8 @@ export class InputHandoffSession {
     const target = this.target;
     if (!target || !driver.raise || !this.liveViewOffered() || this.busy) return null;
     const raised = await withDesktopTurn(() => driver.raise!(target)).catch(() => null);
-    if (!raised || 'error' in raised || this.ended || this.target !== target) return null;
+    // A window macOS would not bring forward can be watched but not worked in: no live view of it.
+    if (!raised || 'error' in raised || raised.activated === false || this.ended || this.target !== target) return null;
     return {
       pid: target.pid,
       app: target.app,
@@ -312,6 +480,7 @@ export class InputHandoffSession {
     this.publish('reading');
     this.expiryTimer = setTimeout(() => this.end('expired', 'timeout', 'timeout'), this.options.timeoutMs);
     this.expiryTimer.unref?.();
+    this.armWindowWatch();
     try {
       const permission = await this.options.driver.permission();
       if (permission !== 'granted') {
@@ -321,15 +490,33 @@ export class InputHandoffSession {
           return;
         }
       }
-      const target = this.resolveTarget(await this.options.driver.windows());
-      if (!target) {
+      const windows = await this.options.driver.windows({ background: true });
+      const target = resolveHandoffTarget(windows, this.options.target, this.options.hostPid);
+      if (target === 'permission') {
+        this.end('failed', 'failure', 'permission');
+        return;
+      }
+      // What the window watch compares against, so a page renaming its window from here on is not a closed window.
+      this.watchList = windows;
+      const ambiguous = target ? ambiguousWindowTitles(windows, this.options.target, target, this.options.hostPid) : null;
+      if (!target || ambiguous) {
+        // Several windows and no title: say so, with their titles, so the agent can ask again naming one.
+        if (ambiguous) this.ambiguousTitles = [...new Set(ambiguous)].slice(0, 8);
         this.end('failed', 'failure', 'target_gone');
         return;
       }
       await this.useTarget(target);
       this.initial = target;
-      const step = await this.read().catch(() => null);
+      if (target.minimized) await this.coverBeforeRestoring();
+      // Reading while minimized may have updated the window's title: restore the window by what it is called now.
+      const restored = await this.restoreTarget(this.target ?? target);
+      const step = await this.readFirstStep(restored);
       if (step && actionable(step)) {
+        // A sign-in happens on the window itself, wherever the owner answers from.
+        if (step.signIn && !restored) {
+          this.guardSignInPage(step);
+          await this.bringToFront();
+        }
         this.present(step);
         return;
       }
@@ -352,6 +539,10 @@ export class InputHandoffSession {
       // Neither its structure nor a picture of it can reach the owner.
       this.end('failed', 'failure', 'unreadable');
     } catch (error) {
+      if (error instanceof Error && error.message === 'Incomplete form' && await this.showPicture().catch(() => false)) {
+        this.publish('ready');
+        return;
+      }
       // A locked screen is not read at all: say so, rather than blame the window.
       this.end('failed', 'failure', error instanceof Error && error.message === 'locked' ? 'screen_locked' : 'unreadable');
     }
@@ -386,12 +577,20 @@ export class InputHandoffSession {
     if (outcome !== 'origin_changed') this.submissions++;
     if (ok) this.answeredOn = actor ?? this.answeredOn;
     try {
-      const next = await this.awaitSettled(before.signature, before.windows);
+      const settled = await this.awaitSettled(before.signature, before.windows);
       if (this.ended) return true;
-      if (next === 'ended') {
+      if (settled === 'ended') {
         this.end('succeeded', 'detected');
         return true;
       }
+      // The page kept the step (a code error, say) but whose its hidden code field is can no longer be told: the card
+      // stays on it rather than taking the step as done. Answering it again stops before typing into a guess.
+      if (settled === this.unsureRead && this.step) {
+        if (!ok) this.failure = outcome === 'origin_changed' ? 'origin_changed' : 'action_failed';
+        this.publish('ready');
+        return true;
+      }
+      const next = settledForm(settled, current) ? askingNothing(settled) : settled;
       if (outcome !== 'origin_changed') this.stepNumber++;
       if (!ok) this.failure = outcome === 'origin_changed' ? 'origin_changed' : 'action_failed';
       if (outcome === 'origin_changed' && !actionable(next)) {
@@ -476,6 +675,10 @@ export class InputHandoffSession {
     try {
       const windows = await this.options.driver.windows().catch(() => null);
       const follow = windows ? this.followTarget(windows, null) : null;
+      if (follow === 'permission') {
+        this.end('failed', 'failure', 'permission');
+        return true;
+      }
       if (follow === 'ended') {
         this.end('succeeded', 'detected');
         return true;
@@ -493,7 +696,7 @@ export class InputHandoffSession {
         this.publish('ready');
         return true;
       }
-      if (step && !this.picture) {
+      if (step && !step.pageMissing && !this.picture) {
         this.failure = undefined;
         this.present(step, true);
         return true;
@@ -522,17 +725,45 @@ export class InputHandoffSession {
     this.options.publish(this.snapshot());
   }
 
-  private present(step: ExtractedStep, suppressAutoFinish = false): void {
+  /** The owner types a password straight into this page: the agent's page reads pause there, as after a form. */
+  private guardSignInPage(step: Pick<ExtractedStep, 'signIn' | 'url'>): void {
+    // Every direct sign-in field counts, not only a password: a one-time code or an account typed in the window is as readable.
+    if (step.signIn && this.target) {
+      this.guardedPage = { pid: this.target.pid, ...(step.url ? { url: step.url } : {}) };
+      this.options.onSecretEntered?.(this.guardedPage);
+    }
+  }
+
+  private present(read: ExtractedStep, suppressAutoFinish = false): void {
     this.stopQr();
     this.dropPicture();
+    this.fieldsGoneReads = 0;
+    if (read.signIn) this.signInMode = true;
+    // Past a sign-in, a page's own fields (a reply box) are not its next step.
+    const step = this.shownStep(read);
+    // The owner has not answered through the card and the agent's completion hint is not met: a page that swapped
+    // its fields away (a slider check, a scan tab) is mid-way. Whoever read it, the window watch or a refresh after
+    // the live view closed, keeps the asked step instead of handing back as done outside.
+    if (this.asked && this.submissions === 0 && this.askedStep && !actionable(step) && !step.pageMissing && this.hintsPending(step)) {
+      this.step = this.askedStep;
+      this.fieldsGoneReads = 0;
+      this.awaitingHint = true;
+      this.publish('ready');
+      return;
+    }
+    this.awaitingHint = false;
     this.step = step;
-    if (this.submissions === 0 && !actionable(step)) {
+    this.guardSignInPage(step);
+    this.doneOutside = this.asked && this.submissions === 0 && !actionable(step) && !step.pageMissing;
+    if (this.submissions === 0 && !actionable(step) && !this.doneOutside) {
       // Nothing was asked of the owner yet and there is nothing to type: hand the screen back to the agent.
       this.end('cancelled', 'detected', 'nothing_to_fill');
       return;
     }
+    this.asked = true;
+    if (actionable(step)) this.askedStep = step;
     if (this.stepNumber === 0) this.stepNumber = 1;
-    if (!suppressAutoFinish && this.shouldFinish(step)) {
+    if ((!suppressAutoFinish || this.doneOutside) && this.shouldFinish(step)) {
       this.finishingUntil = this.now() + (this.options.finishingDelayMs ?? 3000);
       this.publish('finishing');
       this.finishingTimer = setTimeout(() => {
@@ -544,6 +775,12 @@ export class InputHandoffSession {
     this.publish('ready');
   }
 
+  /** What the card would show for a read: past a sign-in, a page's own fields (a reply box) are not its next step. */
+  private shownStep(read: ExtractedStep): ExtractedStep {
+    const signInOver = this.signInMode && !read.signIn && !this.pageUnknown(read) && !read.deviceCode && !hasSecretField(read);
+    return signInOver ? { ...read, shown: [] } : read;
+  }
+
   /** The agent said what the end looks like, and this screen shows it. */
   private hintsMet(step: ExtractedStep): boolean {
     const hints = this.options.completeWhen;
@@ -551,9 +788,15 @@ export class InputHandoffSession {
     return !!hints?.urlContains && !!step.url?.includes(hints.urlContains);
   }
 
+  /** The agent named a page text or address that marks the end, and this screen does not show it yet. */
+  private hintsPending(step: ExtractedStep): boolean {
+    const hints = this.options.completeWhen;
+    return !!(hints?.textAppears || hints?.urlContains) && !this.hintsMet(step);
+  }
+
   private shouldFinish(step: ExtractedStep): boolean {
     if (this.stayedOn !== undefined && this.stayedOn === step.signature) return false;
-    if (this.hintsMet(step)) return true;
+    if (this.hintsMet(step) || this.doneOutside) return true;
     // A sign-in code is still waiting to be used on the owner's device; they say when they are done.
     if (step.deviceCode) return false;
     // Generic end: after the owner answered, nothing is left to type. Buttons from here on are the agent's.
@@ -562,6 +805,7 @@ export class InputHandoffSession {
 
   /** What the card says it shows: the page when it can be read, otherwise the window. */
   private source(): InputHandoffSource {
+    if (this.unreadablePage) return this.unreadablePage.source;
     if (this.step) return this.step.source;
     const app = this.target?.app ?? this.options.target.app ?? '';
     return this.target?.window.title ? { app, window: this.target.window.title } : { app };
@@ -591,14 +835,28 @@ export class InputHandoffSession {
    * Scan-to-sign-in: looks for a QR code in the target window and, when there
    * is one, makes it this step. Works on any app or page; nothing product-specific.
    */
-  private async showQr(): Promise<boolean> {
+  /**
+   * `frame`: the target's place from a window list, read while it is the focused window in front. Looking there
+   * neither brings it forward nor takes the desktop from other tasks, as `checkQr` does; a card that keeps watching
+   * must do neither. Without a frame the window is raised once, under the desktop turn, to be looked at.
+   * `read`: the screen the code is looked for on, when the card keeps showing an earlier step meanwhile.
+   */
+  private async showQr(frame: number[] | null = null, read: ExtractedStep | null = this.step): Promise<boolean> {
     const driver = this.options.driver;
     const target = this.target;
     if (!target || !driver.qr || this.pictureChosen) return false;
-    const found = await withDesktopTurn(() => driver.qr!(target, null)).catch(() => null);
+    const look = () => driver.qr!(target, frame);
+    // A passive look runs while the card stays open: the owner may move on through it before the look returns.
+    const step = this.step;
+    const submissions = this.submissions;
+    const picture = this.picture;
+    const found = await (frame ? look() : withDesktopTurn(look)).catch(() => null);
     if (!found || 'error' in found) return false;
     const qr = qrContent(found.text);
-    if (!qr || this.ended) {
+    // Whoever looked, an owner who chose the window picture (or got another view) meanwhile keeps it.
+    const moved = this.pictureChosen || this.picture !== picture ||
+      (!!frame && (this.step !== step || this.submissions !== submissions || this.busy || this.phase !== 'ready'));
+    if (!qr || this.ended || moved) {
       found.capture.jpeg.fill(0);
       return false;
     }
@@ -610,7 +868,7 @@ export class InputHandoffSession {
       pid: current.pid,
       windowIndex: current.window.index,
       windowTitle: current.window.title,
-      ...(this.step?.url ? { url: this.step.url } : {}),
+      ...(read?.url ? { url: read.url } : {}),
     };
     if (this.stepNumber === 0) this.stepNumber = 1;
     this.watchQr();
@@ -664,6 +922,10 @@ export class InputHandoffSession {
         // The window closed, changed its title, or a new one of the same app took over. Whatever
         // other app happens to be in front is not followed: it says nothing about this sign-in.
         const follow = this.followTarget({ ...windows, frontmost: target.pid }, null);
+        if (follow === 'permission') {
+          this.end('failed', 'failure', 'permission');
+          return;
+        }
         if (follow === 'ended') {
           this.submissions++;
           this.end('succeeded', 'detected');
@@ -796,6 +1058,10 @@ export class InputHandoffSession {
       const windows = await this.options.driver.windows().catch(() => null);
       if (windows) {
         const follow = this.followTarget(windows, before);
+        if (follow === 'permission') {
+          this.end('failed', 'failure', 'permission');
+          return true;
+        }
         if (follow === 'ended') {
           this.end('succeeded', 'detected');
           return true;
@@ -857,7 +1123,8 @@ export class InputHandoffSession {
       const secure = picture.field === 'password';
       result = await driver.pointer({ kind: 'type', ...base, value, submit: action.kind === 'submit', secure });
       if ('ok' in result && result.ok && secure && value && this.agentControlled) {
-        this.options.onSecretEntered?.({ pid: target.pid, ...(this.step?.url ? { url: this.step.url } : {}) });
+        const url = (this.unreadablePage ?? this.step)?.url;
+        this.options.onSecretEntered?.({ pid: target.pid, ...(url ? { url } : {}) });
       }
     }
     if ('error' in result && result.error === 'moved') return 'origin_changed';
@@ -870,9 +1137,165 @@ export class InputHandoffSession {
     this.finishingUntil = undefined;
   }
 
+  private armWindowWatch(): void {
+    if (this.ended) return;
+    this.watchTimer = setTimeout(() => {
+      void this.checkWindow().catch(() => undefined).finally(() => this.armWindowWatch());
+    }, this.options.windowWatchMs ?? WINDOW_WATCH_MS);
+    this.watchTimer.unref?.();
+  }
+
+  /** Waiting on a form nobody has started answering through the card, so the window is the only news. */
+  private watching(): boolean {
+    if (this.ended || this.busy || this.phase !== 'ready' || this.qrState || !this.target) return false;
+    // Another device holding the card is answering a form, whose fields must not change under it; a sign-in on
+    // the window has no form to protect, so taking it over does not stop the watching.
+    // Holding the card while it only waits for the agent's completion hint is no form being typed: keep watching.
+    if (this.holder && !this.directSignInOffered() && !this.awaitingHint) return false;
+    if (this.picture) return !this.pictureChosen;
+    return !!this.step && actionable(this.step) && !this.step.deviceCode;
+  }
+
+  /**
+   * The owner may finish on the window itself, or close it, without touching
+   * the card. Nothing is concluded from what cannot be seen: a window that is
+   * minimized, on another desktop or behind another app may just be out of reach.
+   */
+  private async checkWindow(): Promise<void> {
+    if (!this.watching()) {
+      this.watchList = null;
+      this.fieldsGoneReads = 0;
+      this.windowGoneReads = 0;
+      return;
+    }
+    const driver = this.options.driver;
+    const target = this.target!;
+    // The protection expires; a card can wait longer, and a page that cannot be read now renews nothing below.
+    if (this.guardedPage) this.options.onSecretEntered?.(this.guardedPage);
+    const list = await driver.windows().catch(() => null);
+    if (!list || !this.watching() || this.target !== target) return;
+    const mine = list.apps.find((app) => app.pid === target.pid);
+    if (mine?.controlDenied) {
+      this.end('failed', 'failure', 'permission');
+      return;
+    }
+    const previous = this.watchList;
+    this.watchList = list;
+    // Coming back from answering or a picture: this read is only the new baseline.
+    if (!previous) return;
+    if (!mine) {
+      // Nothing of it on screen: minimized or on another desktop is still there; no window at all, or no program, is gone.
+      const all = await driver.windows({ background: true }).catch(() => null);
+      if (!this.watching() || this.target !== target) return;
+      const entry = all?.apps.find((app) => app.pid === target.pid);
+      if (entry?.controlDenied) this.end('failed', 'failure', 'permission');
+      else if (all ? !entry || entry.windows.length === 0 : !(await driver.commandLine(target.pid).catch(() => 'unknown'))) this.noteWindowGone();
+      return;
+    }
+    const known = mine.windows.find((w) => w.index === target.window.index && w.title === target.window.title)
+      ?? mine.windows.find((w) => w.title === target.window.title);
+    const window = known ?? this.renamedWindow(mine.windows, previous.apps.find((app) => app.pid === target.pid)?.windows);
+    if (!window) {
+      if (list.frontmost === target.pid) this.noteWindowGone();
+      return;
+    }
+    this.windowGoneReads = 0;
+    if (window.minimized) return;
+    if (!known) this.target = { ...target, window: { index: window.index, title: window.title } };
+    const read = await this.read().catch(() => null);
+    if (!read || read.pageMissing || !this.watching()) return;
+    // Not telling whose a hidden code field is now is no evidence of anything: the card stays as it is.
+    if (read === this.unsureRead) return;
+    const step = settledForm(read, this.step) ? askingNothing(read) : read;
+    // Answering on a picture because nothing could be read: now something can.
+    if (this.picture) {
+      if (actionable(step)) this.present(step, true);
+      return;
+    }
+    if (!this.step) return;
+    // Which page this is cannot be told: it is no evidence the sign-in is over.
+    if (this.signInMode && this.pageUnknown(step) && !hasSecretField(step)) return;
+    if (this.signInMode ? step.signIn || hasSecretField(step) : actionable(step)) {
+      this.fieldsGoneReads = 0;
+      // The fields are back: a holder may be typing in the form again, so stop watching on its behalf.
+      this.awaitingHint = false;
+      // Whatever page the owner is on is covered, whoever is typing where.
+      this.guardSignInPage(step);
+      if (fieldShape(step) === fieldShape(this.step)) {
+        // Same question: keep the card as it is (a form may be open), but act on the fresh screen.
+        this.step = step;
+      } else if (!this.holder || !step.signIn) {
+        this.present(step, true);
+      }
+      // Held: the holder may be typing in this card's form (the way back from the window); swapping its
+      // fields for the new ones would throw the draft away, and the window needs no card update to be used.
+      // A step that can no longer be a sign-in on the window (its page address went missing) is shown anyway.
+      return;
+    }
+    if (++this.fieldsGoneReads < FIELDS_GONE_READS) return;
+    // The fields went away: before calling it done, the next step may be a code to scan (a second factor).
+    if (!this.hintsMet(step)) {
+      // Waiting for the agent's hint repeats this look: only a passive one, and only at the target while it is the
+      // focused window in front (another window of the same app may sit at the same place). Otherwise the one look
+      // before handing back raises the window, as before.
+      // A step the card can show by itself (a device code) is presented, not waited over.
+      // Judged on what the card would show, as present() does: a reply box on a page past the sign-in is no step.
+      const waiting = this.hintsPending(step) && !actionable(this.shownStep(step));
+      // While waiting the card keeps its step during the look: an owner claiming it meanwhile gets that step.
+      if (!waiting) this.step = step;
+      const shown = this.step;
+      const submissions = this.submissions;
+      const scanning = !waiting
+        ? await this.showQr()
+        : list.frontmost === target.pid && window.focused && window.frame?.length === 4
+          ? await this.showQr(window.frame, step)
+          : false;
+      // The owner may have ended it or started answering meanwhile, or already moved on through the card: what this
+      // look found, or did not, is about a step that is gone.
+      if (this.ended || this.busy || this.phase !== 'ready') return;
+      if (this.step !== shown || this.submissions !== submissions) {
+        // A code a raising look set up for the gone step is not this one's (a passive look already dropped it).
+        if (scanning) { this.stopQr(); this.dropPicture(); }
+        return;
+      }
+      if (scanning) {
+        this.step = step;
+        this.publish('ready');
+        return;
+      }
+      // The agent said what the end looks like and this is not it: a sign-in page that swapped its fields for a
+      // slider check or a scan tab is still mid-way. Keep the card as it was and keep watching the window.
+      if (waiting) {
+        this.fieldsGoneReads = 0;
+        this.awaitingHint = true;
+        return;
+      }
+    }
+    this.present(step, true);
+  }
+
+  /**
+   * The target's title went away and exactly one new one came, with as many windows as
+   * before: a page changed its title, the window is the same. (Another window's title
+   * can change as the target closes, say an unread count.)
+   */
+  private renamedWindow<W extends { title: string }>(windows: W[], before: Array<{ title: string }> | undefined): W | undefined {
+    if (before?.length !== windows.length || !before.some((w) => w.title === this.target?.window.title)) return undefined;
+    const fresh = windows.filter((w) => !before.some((old) => old.title === w.title));
+    return fresh.length === 1 ? fresh[0] : undefined;
+  }
+
+  private noteWindowGone(): void {
+    if (++this.windowGoneReads < WINDOW_GONE_READS) return;
+    if (this.options.completeWhen?.windowClosed) this.end('succeeded', 'detected');
+    else this.end('failed', 'failure', 'target_gone');
+  }
+
   private end(status: HandoffResult['status'], reason: HandoffEndReason, failure?: InputHandoffFailure): void {
     if (this.ended) return;
     this.ended = true;
+    if (this.watchTimer) clearTimeout(this.watchTimer);
+    this.releasePage();
     this.clearFinishing();
     this.stopQr();
     this.dropPicture();
@@ -890,34 +1313,66 @@ export class InputHandoffSession {
       ...(this.target?.window.title ? { finalWindow: this.target.window.title.slice(0, 200) } : {}),
       ...(this.step?.source.origin ? { finalOrigin: this.step.source.origin } : {}),
       ...(this.answeredOn ? { answeredOn: { ...this.answeredOn } } : {}),
+      ...(this.ambiguousTitles ? { ambiguousTitles: this.ambiguousTitles } : {}),
     });
   }
 
-  private resolveTarget(list: NativeWindowList): HandoffTarget | null {
-    const spec = this.options.target;
-    const candidates = list.apps.filter((app) => app.pid !== this.options.hostPid && app.windows.some((w) => !w.minimized));
-    let app = spec.pid !== undefined ? candidates.find((entry) => entry.pid === spec.pid) : undefined;
-    if (!app && spec.app) {
-      const wanted = spec.app.trim().toLowerCase();
-      app = candidates.find((entry) => entry.app.toLowerCase() === wanted || entry.bundleId.toLowerCase() === wanted)
-        ?? candidates.find((entry) => entry.app.toLowerCase().includes(wanted));
-    }
-    if (!app && spec.pid === undefined && !spec.app) app = candidates.find((entry) => entry.pid === list.frontmost);
-    if (!app) return null;
-    const visibleWindows = app.windows.filter((window) => !window.minimized);
-    const title = spec.windowTitle?.toLowerCase();
-    const window = (title ? visibleWindows.find((w) => w.title.toLowerCase().includes(title)) : undefined)
-      ?? visibleWindows.find((w) => w.focused)
-      ?? visibleWindows[0];
-    if (!window) return null;
-    return { pid: app.pid, app: app.app, bundleId: app.bundleId, window: { index: window.index, title: window.title } };
-  }
-
   private async useTarget(target: HandoffTarget): Promise<void> {
+    this.unreadablePage = null;
     if (this.target?.pid !== target.pid) {
       this.agentControlled = AUTOMATION_FLAGS.test(await this.options.driver.commandLine(target.pid));
     }
     this.target = target;
+  }
+
+  /**
+   * The window is about to come back where the owner can type in it. Read it first while it is still
+   * minimized (accessibility sees it), and cover a sign-in page before it shows.
+   */
+  private async coverBeforeRestoring(): Promise<void> {
+    // A browser may only now be building its page: wait for it here, not after the owner can already type.
+    const before = await this.readFirstStep(false);
+    if (before && !before.pageMissing) this.guardSignInPage(before);
+  }
+
+  /** A minimized window draws nothing and the owner cannot see it: bring it back before asking anything. */
+  private async restoreTarget(target: HandoffTarget): Promise<boolean> {
+    const driver = this.options.driver;
+    if (!target.minimized || !driver.raise) return false;
+    const raised = await withDesktopTurn(() => driver.raise!(target)).catch(() => null);
+    // Restored only if it came back and macOS let its app take the front: a window that could not be found
+    // (it was renamed) is still minimized, and one that stayed behind other apps still has to be brought forward.
+    return !!raised && !('error' in raised) && raised.activated !== false;
+  }
+
+  /**
+   * The first read, given a page time to appear: a browser builds its page for
+   * accessibility on demand, and a window just restored is still loading. Other
+   * windows answer on the first read.
+   */
+  private async readFirstStep(restored: boolean): Promise<ExtractedStep | null> {
+    const deadline = this.now() + (restored ? RESTORED_PAGE_WAIT_MS : BROWSER_PAGE_WAIT_MS);
+    /** The page the agent pointed at, once it read the same twice (drawn, not still loading). */
+    let shown: ExtractedStep | null = null;
+    let previous: ExtractedStep | null = null;
+    for (;;) {
+      const step = await this.read().catch(() => null);
+      // The wait is for that page to draw, not for the next one: a page that moved on meanwhile
+      // (a passkey accepted, a redirect) is the agent's to read again, not the owner's step.
+      if (restored && shown && step && !step.pageMissing && pageOf(step) !== pageOf(shown)) return shown;
+      if (restored && step && !step.pageMissing && readable(step) && step.signature === previous?.signature) shown = step;
+      previous = step;
+      const waiting = restored ? !step || !actionable(step) : !!step?.pageMissing;
+      if (!waiting || this.ended || this.now() >= deadline) return step;
+      await this.sleep(350);
+      // The page's title is the window's: it may have changed while loading, so find the raised window again.
+      if (restored && !step && this.target) {
+        const pid = this.target.pid;
+        const list = await this.options.driver.windows().catch(() => null);
+        const window = list?.apps.find((app) => app.pid === pid)?.windows.find((w) => w.focused && !w.minimized);
+        if (window) this.target = { ...this.target, window: { index: window.index, title: window.title } };
+      }
+    }
   }
 
   private async read(): Promise<ExtractedStep | null> {
@@ -925,20 +1380,145 @@ export class InputHandoffSession {
     const raw = await this.options.driver.snapshot(this.target.pid, this.target.window);
     if ('error' in raw) return null;
     this.target = { ...this.target, window: { index: raw.window.index, title: raw.window.title } };
-    return extractStep(raw as NativeAxSnapshot);
+    this.unreadablePage = null;
+    let step: ExtractedStep;
+    this.unsureRead = null;
+    try {
+      step = extractStep(raw as NativeAxSnapshot);
+      // The owner clicking another field moves the focus off a hidden code field of the step on the card; it is
+      // still that step's while the page still shows the step's fields. Another form never inherits it.
+      const kept = this.keptHidden(raw as NativeAxSnapshot);
+      if (!kept && this.lostHiddenOnly(step)) this.unsureRead = step;
+      step = kept ?? step;
+    } catch (error) {
+      if (error instanceof IncompleteFormError) {
+        this.unreadablePage = error.page;
+        this.guardSignInPage(error.page);
+      }
+      throw error;
+    }
+    if (this.options.fields && !this.fieldPlanRetired && step.shown.length) {
+      const surface = JSON.stringify([raw.pid, raw.window.title, step.url]);
+      this.fieldPlanSurface ??= surface;
+      if (surface === this.fieldPlanSurface && applyFieldPlan(step, this.options.fields)) {
+        // Keep the same logical fields through validation errors and repeated reads.
+      } else if (this.submissions === 0 && !this.directSignInOffered()) {
+        // Rejecting the plan must not discard the page's verified source or
+        // leave picture input unprotected while later AX reads are unavailable.
+        this.unreadablePage = { source: step.source, url: step.url, signIn: step.signIn };
+        this.guardSignInPage(this.unreadablePage);
+        throw new Error('Field plan no longer matches the screen');
+      } else {
+        // The owner can advance on the original window without submitting our form.
+        this.fieldPlanRetired = true;
+      }
+    }
+    // A browser builds its page for accessibility only when asked, and the next read sees it.
+    // Asked on every miss: another request on the same browser may have ended and taken it back.
+    if (step.pageMissing && !this.ended) {
+      const pid = this.target.pid;
+      if (await this.options.driver.exposePage?.(pid, true).catch(() => false)) {
+        // The flow moved to another process: the previous one no longer needs it.
+        if (this.pageExposedOn !== pid) this.releasePage();
+        this.pageExposedOn = pid;
+      }
+      // The request may have ended while asking, with nothing left to take it back.
+      if (this.ended) this.releasePage();
+    }
+    return step;
   }
 
-  private async act(binding: ControlBinding, kind: NativeActKind, value?: string): Promise<boolean> {
+  /**
+   * The read with the hidden code fields of the step on the card, when it is still that step: same page, and exactly
+   * the same fields. Both reads take in the same fields, so each field's identity is worked out among the same
+   * others. A different form, even one that adds a field, starts without any.
+   */
+  private keptHidden(raw: NativeAxSnapshot): ExtractedStep | undefined {
+    const current = this.step;
+    if (!current?.hiddenFields?.length) return undefined;
+    const fresh = extractStep(raw, new Set(current.hiddenFields));
+    const page = (url: string | undefined) => url?.split('#')[0];
+    if (page(fresh.url) !== page(current.url)) return undefined;
+    // A field plan joins several of the page's fields into one: compare the page's own fields, as `sameFields` does.
+    // Their names are left out: an error the page shows right above a field renames it without replacing it.
+    const unnamed = (identity: string) => {
+      const [domId, fp, , place, frameOrigin] = JSON.parse(identity) as unknown[];
+      return JSON.stringify([domId, fp, place, frameOrigin]);
+    };
+    const fields = (step: ExtractedStep) => [...step.bindings.values()]
+      .flatMap<{ identity: string }>((binding) => binding.kind !== 'text' ? [] : (binding.segments ?? [binding]))
+      .map((field) => unnamed(field.identity))
+      .sort();
+    return JSON.stringify(fields(fresh)) === JSON.stringify(fields(current)) ? fresh : undefined;
+  }
+
+  /**
+   * A fresh read that is the card's step without its hidden code fields: the same page, still laying out hidden
+   * fields, with every other field the same. A form with any other field is another step, shown as usual.
+   */
+  private lostHiddenOnly(fresh: ExtractedStep): boolean {
+    const current = this.step;
+    const hidden = current?.hiddenTaken ?? 0;
+    if (!current || !hidden || !fresh.hiddenCandidates || fresh.url?.split('#')[0] !== current.url?.split('#')[0]) return false;
+    // The agent's own sign of the end is no unsure read (product rules §2.5).
+    if (this.hintsMet(fresh)) return false;
+    // Names and tree places change with the hidden fields gone (an error above a field, a fingerprint now unique).
+    const plain = (step: ExtractedStep) => [...step.bindings.values()]
+      .flatMap<{ identity: string }>((binding) => binding.kind !== 'text' ? [] : (binding.segments ?? [binding]))
+      .map((field) => JSON.parse(field.identity) as unknown[]);
+    const key = ([domId, fp, , , frameOrigin]: unknown[]) => JSON.stringify([domId, fp, frameOrigin]);
+    const left = plain(current);
+    for (const field of plain(fresh)) {
+      const at = left.findIndex((candidate) => key(candidate) === key(field));
+      if (at < 0) return false;
+      left.splice(at, 1);
+    }
+    if (left.length !== hidden) return false;
+    // Each field gone must still be on the page as a hidden one: a field the page turned into text is simply gone.
+    const candidates = [...fresh.hiddenCandidates];
+    return left.every(([domId, fp]) => {
+      const at = candidates.indexOf(JSON.stringify([domId ?? null, fp]));
+      if (at < 0) return false;
+      candidates.splice(at, 1);
+      return true;
+    });
+  }
+
+  /** A browser showing no page, or a page whose address went missing for now. */
+  private pageUnknown(step: ExtractedStep): boolean {
+    return !!step.pageMissing || (!step.url && isBrowserBundle(this.target?.bundleId ?? ''));
+  }
+
+  /** Keeping a page built costs the browser: only for as long as this request needs it. */
+  private releasePage(): void {
+    if (this.pageExposedOn === undefined) return;
+    const pid = this.pageExposedOn;
+    this.pageExposedOn = undefined;
+    void this.options.driver.exposePage?.(pid, false).catch(() => false);
+  }
+
+  private async act(binding: ControlBinding, kind: NativeActKind, value?: string, allowFocusAdvance = false): Promise<boolean> {
     // Checked before every fill and press: an ended request never touches the window again.
     if (this.ended || !this.target) return false;
-    const request = { pid: this.target.pid, window: this.target.window, ref: binding.ref, fp: binding.fp, kind, ...(value !== undefined ? { value } : {}) };
+    const request = { pid: this.target.pid, window: this.target.window, ref: binding.ref, fp: binding.fp, kind, ...(value !== undefined ? { value } : {}), ...(allowFocusAdvance ? { allowFocusAdvance: true } : {}) };
     let result: NativeActResult = await this.options.driver.act(request);
     if (!('ok' in result && result.ok) && 'error' in result && result.error === 'stale') {
       // The screen re-rendered; find the same element by identity and retry once.
       const fresh = await this.options.driver.snapshot(this.target.pid, this.target.window);
       if ('error' in fresh) return false;
-      const matches = fresh.nodes.filter((node) => node.fp === binding.fp);
+      // The same hidden code fields stay part of the step here as on every other read of it.
+      const again = binding.kind === 'text' ? extractStep(fresh, new Set(this.step?.hiddenFields ?? [])) : null;
+      const matches = binding.kind === 'text' && again
+        ? [...again.bindings.values()].filter(candidate => candidate.kind === 'text' &&
+          candidate.identity === binding.identity && candidate.secure === (binding.nativeSecure ?? binding.secure))
+        : fresh.nodes.filter((node) => node.fp === binding.fp);
       if (matches.length !== 1 || this.ended) return false;
+      // As after the submit check: a key this read found ambiguous no longer vouches for any field of the step.
+      if (again && this.step) {
+        const valid = new Set(again.hiddenFields ?? []);
+        const kept = (this.step.hiddenFields ?? []).filter((key) => valid.has(key));
+        this.step.hiddenFields = kept.length ? kept : undefined;
+      }
       result = await this.options.driver.act({ ...request, ref: matches[0].ref, window: { index: fresh.window.index, title: fresh.window.title } });
     }
     return 'ok' in result && result.ok === true;
@@ -961,31 +1541,86 @@ export class InputHandoffSession {
     return extractStep(raw).source.origin === step.source.origin;
   }
 
+  /** Ignore scrolling and values; require the same complete field-to-target mapping. */
+  private async sameFields(step: ExtractedStep): Promise<boolean | 'origin_changed'> {
+    if (!this.target) return false;
+    const raw = await this.options.driver.snapshot(this.target.pid, this.target.window);
+    if ('error' in raw) return false;
+    type FieldTarget = { ref: string; identity: string; secure: boolean; nativeSecure?: boolean };
+    const fields = (candidate: ExtractedStep) => [...candidate.bindings.values()].flatMap<FieldTarget>(binding =>
+      binding.kind !== 'text' ? [] : (binding.segments ?? [binding]),
+    );
+    const identity = (field: FieldTarget) =>
+      JSON.stringify([field.identity, field.nativeSecure ?? field.secure]);
+    const expected = fields(step);
+    // Typing into an earlier field moves the focus off a hidden code field found focused: it is still this step's.
+    const current = extractStep(raw, new Set(step.hiddenFields ?? []));
+    if (raw.window.title !== this.target.window.title || current.source.origin !== step.source.origin || current.url !== step.url) return 'origin_changed';
+    const actual = fields(current);
+    const byIdentity = new Map(actual.map(field => [identity(field), field]));
+    if (expected.length !== actual.length || byIdentity.size !== actual.length ||
+      new Set(expected.map(identity)).size !== expected.length || expected.some(field => !byIdentity.has(identity(field)))) return false;
+    // Rebind only after the entire form matches. In particular, a reused old
+    // index may now point at a different field with the same native fingerprint.
+    for (const field of expected) field.ref = byIdentity.get(identity(field))!.ref;
+    // The keys follow this read, which took in the same fields: one that turned ambiguous meanwhile (another field
+    // now reads with it) is dropped, so it cannot vouch for that other field once this one goes.
+    step.hiddenFields = current.hiddenFields;
+    step.hiddenTaken = current.hiddenTaken;
+    return true;
+  }
+
   private async perform(step: ExtractedStep, submission: InputHandoffSubmission): Promise<boolean | 'origin_changed'> {
     // Waiting for the desktop may outlast the request (cancelled, timed out, task closed): then nothing is typed.
     if (this.ended) return false;
     let lastText: (ControlBinding & { kind: 'text' }) | undefined;
+    let lastTextWasSplitCode = false;
     let secretEntered = false;
-    // Secrets are bound to the page the owner saw: re-check it before typing anything in this step.
-    const carriesSecret = step.controls.some((control) => {
-      const binding = step.bindings.get(control.id);
-      return binding?.kind === 'text' && binding.secure && typeof submission.values[control.id] === 'string';
-    });
-    if (carriesSecret && !(await this.sameSurface(step))) return 'origin_changed';
+    const initialCheck = await this.sameFields(step);
+    if (initialCheck !== true) return initialCheck;
+    // Reject a malformed split code before touching any field, including preceding account fields.
+    for (const [id, binding] of step.bindings) {
+      if (binding.kind !== 'text' || !binding.segments || !Object.hasOwn(submission.values, id)) continue;
+      const value = submission.values[id];
+      if (typeof value !== 'string' || Array.from(value).length !== binding.segments.reduce((sum, segment) => sum + segment.length, 0)) return false;
+    }
     for (const control of step.shown) {
       if (!Object.hasOwn(submission.values, control.id)) continue;
       const value = submission.values[control.id];
       const binding = step.bindings.get(control.id);
       if (binding?.kind !== 'text' || typeof value !== 'string') return false;
-      if (!(await this.act(binding, 'text', value))) return false;
+      const check = await this.sameFields(step);
+      if (check !== true) return check;
+      if (binding.segments) {
+        const characters = Array.from(value);
+        let offset = 0;
+        for (const segment of binding.segments) {
+          const check = await this.sameFields(step);
+          if (check !== true) return check;
+          if (!(await this.act({ ...segment, kind: 'text' }, 'text', characters.slice(offset, offset + segment.length).join(''), segment.length === 1))) return false;
+          offset += segment.length;
+        }
+      } else if (!(await this.act(binding, 'text', value))) return false;
       if (binding.secure && !secretEntered) {
         secretEntered = true;
         if (this.agentControlled && this.target) {
           this.options.onSecretEntered?.({ pid: this.target.pid, ...(step.url ? { url: step.url } : {}) });
         }
       }
-      lastText = binding;
+      lastText = binding.segments?.length ? { ...binding.segments[binding.segments.length - 1], kind: 'text' } : binding;
+      lastTextWasSplitCode = !!binding.segments?.length;
       await this.sleep(60);
+    }
+    // Some code widgets submit on their last character. Never press an old button on the next page.
+    if (this.options.fields && !(await this.sameSurface(step))) return true;
+    if (await this.sameFields(step) !== true) {
+      // Every value was delivered and the final code cell may have submitted.
+      // Let submit() retire the old plan and settle the next page normally,
+      // including another private field or a signed-in page with a reply box.
+      if (lastTextWasSplitCode) return true;
+      // Auto-submit may remove the form after its last value; never click its stale action.
+      const next = await this.read();
+      return !!next && !actionable(next) && !this.pageUnknown(next);
     }
     // The owner only typed; confirm with the page's own main button, as they would, else Return.
     const primary = step.controls.find((control) => control.kind === 'button' && control.primary);
@@ -1010,6 +1645,10 @@ export class InputHandoffSession {
       if (windows) {
         const asks = last ? actionable(last) : !!this.step && actionable(this.step);
         const follow = this.followTarget(windows, before, asks);
+        if (follow === 'permission') {
+          this.end('failed', 'failure', 'permission');
+          return 'ended';
+        }
         if (follow === 'ended') return 'ended';
         if (follow && (follow.pid !== this.target?.pid || follow.window.index !== this.target?.window.index ||
             follow.window.title !== this.target?.window.title)) {
@@ -1024,7 +1663,7 @@ export class InputHandoffSession {
         else stableReads = 0;
         last = step;
         const changed = step.signature !== previous;
-        if (stableReads >= 1 && (changed || this.now() - start >= 4000)) return step;
+        if (stableReads >= 1 && !step.pageMissing && (changed || this.now() - start >= 4000)) return step;
       }
       if (this.now() >= deadline) {
         if (last) return last;
@@ -1036,11 +1675,13 @@ export class InputHandoffSession {
   }
 
   /** Decide which window the flow now lives in. `'ended'` when nothing remains to follow. */
-  private followTarget(list: NativeWindowList, before: NativeWindowList | null, currentAsks = false): HandoffTarget | 'ended' | null {
+  private followTarget(list: NativeWindowList, before: NativeWindowList | null, currentAsks = false): HandoffTarget | 'ended' | 'permission' | null {
     const current = this.target;
     if (!current) return null;
     const hints = this.options.completeWhen;
     const app = (pid: number) => list.apps.find((entry) => entry.pid === pid);
+    const mine = app(current.pid);
+    if (mine?.controlDenied) return 'permission';
     const toTarget = (entry: NativeWindowList['apps'][number], window: NativeWindowList['apps'][number]['windows'][number]): HandoffTarget => ({
       pid: entry.pid, app: entry.app, bundleId: entry.bundleId, window: { index: window.index, title: window.title },
     });
@@ -1054,7 +1695,6 @@ export class InputHandoffSession {
         .some((w) => w.index === window.index && w.title === window.title);
       if (front && window && !(currentAsks && unchanged)) return toTarget(front, window);
     }
-    const mine = app(current.pid);
     const sameWindow = mine?.windows.find((w) => w.index === current.window.index && w.title === current.window.title)
       ?? mine?.windows.find((w) => w.title === current.window.title);
     // A new window in the same app took focus (dialogs, popups, sign-in windows).

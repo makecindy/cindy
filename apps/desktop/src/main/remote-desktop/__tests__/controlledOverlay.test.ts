@@ -1,4 +1,6 @@
+// @vitest-environment jsdom
 import { EventEmitter } from 'node:events';
+import { createHash } from 'node:crypto';
 import { beforeEach, expect, it, vi, type Mock } from 'vitest';
 
 interface Bounds {
@@ -33,7 +35,7 @@ const state = vi.hoisted(() => ({
   confirm: vi.fn(),
   themeMode: 'system' as 'system' | 'light' | 'dark',
 }));
-vi.mock('../../i18n', () => ({
+vi.mock('../../i18n.desktop', () => ({
   t: (key: string) => (key.endsWith('ByDevice') ? `${key}:{{name}}` : key),
 }));
 vi.mock('../../window-theme-mode-store', () => ({
@@ -164,13 +166,15 @@ const navigate = (window: FakeWindow, url: string) => {
   return event;
 };
 /** Answers the disconnect confirmation as its form / Cancel link would navigate. */
-const answer = (window: FakeWindow, choice: 'disconnect' | 'revoke' | 'cancel') =>
-  navigate(
+const answer = (window: FakeWindow, choice: 'disconnect' | 'revoke' | 'cancel') => {
+  if (choice === 'revoke') navigate(window, 'https://cindy-overlay.invalid/choose/toggle-revoke');
+  return navigate(
     window,
     choice === 'cancel'
       ? 'https://cindy-overlay.invalid/choose/cancel'
       : `https://cindy-overlay.invalid/choose/disconnect?${choice === 'revoke' ? 'revoke=1' : ''}`,
   );
+};
 /** Clicks the Disconnect link of the page the window currently shows. */
 const clickDisconnect = (window: FakeWindow) => {
   const href = /<a href="([^"]+)"/.exec(window.html)?.[1].replaceAll('&amp;', '&');
@@ -445,6 +449,158 @@ it("lets the viewer's pointer pass through for each batch's whole injection", as
     vi.runAllTimers();
     expect(next.setIgnoreMouseEvents.mock.calls.length).toBe(calls);
     expect(window.destroyed).toBe(true);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+// 2026-11-22 user report: the viewer, who cannot see the overlay, still hit its Disconnect.
+// Pass-through can lose the race with a click injected as it turns on, and a following batch
+// clear of the overlay turns it off before that click's navigation reaches Main.
+it("ignores Disconnect clicks that may be the viewer's own", async () => {
+  vi.useFakeTimers();
+  try {
+    const { overlay, disconnect } = fixture();
+    overlay.update(phone);
+    await settle();
+    // Centred pill: x 600–839, y 37–72; the confirmation covers x 520–919, y 388–537.
+    const window = state.windows[0];
+    const over = { x: 700, y: 50 };
+    const clear = { x: 100, y: 200 };
+
+    // Clicked while a batch over it is injecting, or just after it moved clear: no confirmation.
+    const batch = overlay.viewerPointer([over]);
+    clickDisconnect(window);
+    batch();
+    overlay.viewerPointer([clear])();
+    clickDisconnect(window);
+    await settle();
+    expect(state.windows).toHaveLength(1);
+
+    // Once the viewer's pointer has been away for the rest delay, the local click works.
+    vi.advanceTimersByTime(1000);
+    clickDisconnect(window);
+    await settle();
+    const confirmation = state.windows[1];
+    expect(confirmation.destroyed).toBe(false);
+
+    // The confirmation's Disconnect is guarded the same way and stays open.
+    overlay.viewerPointer([{ x: 800, y: 500 }])();
+    answer(confirmation, 'disconnect');
+    await settle();
+    expect(confirmation.destroyed).toBe(false);
+    expect(disconnect).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1000);
+    answer(confirmation, 'disconnect');
+    await settle();
+    expect(disconnect).toHaveBeenCalledWith('phone');
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+// Review #11939: existing tests had every window visible before injection and trusted
+// form state. Exercise update/viewerPointer/navigation through real public handlers;
+// minimum unit inputs: one unfinished batch across show, or a stale revoke=1 submission.
+it.each(['overlay', 'confirmation'] as const)(
+  'protects a %s that appears during an unfinished pointer batch',
+  async (surface) => {
+    vi.useFakeTimers();
+    try {
+      const { overlay, disconnect } = fixture();
+      overlay.update(phone);
+      if (surface === 'confirmation') await settle();
+      const batch = overlay.viewerPointer([{ x: 800, y: 500 }]);
+      if (surface === 'confirmation') clickDisconnect(state.windows[0]);
+      await settle();
+      const window = state.windows[surface === 'overlay' ? 0 : 1];
+      expect(window.setIgnoreMouseEvents).toHaveBeenLastCalledWith(true);
+      vi.advanceTimersByTime(5000);
+      if (surface === 'overlay') clickDisconnect(window);
+      else answer(window, 'disconnect');
+      await settle();
+      expect(disconnect).not.toHaveBeenCalled();
+      expect(state.windows).toHaveLength(surface === 'overlay' ? 1 : 2);
+      batch();
+      vi.advanceTimersByTime(999);
+      if (surface === 'overlay') clickDisconnect(window);
+      else answer(window, 'disconnect');
+      await settle();
+      expect(disconnect).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      if (surface === 'overlay') clickDisconnect(window);
+      else answer(window, 'disconnect');
+      await settle();
+      if (surface === 'overlay') expect(state.windows).toHaveLength(2);
+      else expect(disconnect).toHaveBeenCalledWith('phone');
+      overlay.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
+
+it.each(['viewer', 'local'] as const)(
+  'authorizes a %s checkbox click including its native default action',
+  async (source) => {
+    vi.useFakeTimers();
+    const { overlay, revoke } = fixture();
+    try {
+      overlay.update(phone);
+      await settle();
+      clickDisconnect(state.windows[0]);
+      await settle();
+      const confirmation = state.windows[1];
+      const doc = new DOMParser().parseFromString(confirmation.html, 'text/html');
+      const script = doc.querySelector('script')!.textContent!;
+      // Security contract: only the shipped constant script is permitted, never
+      // arbitrary inline script or interpolated device/label data.
+      expect(
+        doc.querySelector('meta[http-equiv="Content-Security-Policy"]')!.getAttribute('content'),
+      ).toContain(`script-src 'sha256-${createHash('sha256').update(script).digest('base64')}'`);
+      new Function('document', 'location', script)(doc, {
+        set href(url: string) {
+          navigate(confirmation, url);
+        },
+      });
+      confirmation.webContents.executeJavaScript.mockImplementation(async (code: string) => {
+        await Promise.resolve(); // Like Electron IPC: after the native click default action.
+        return new Function('document', code)(doc);
+      });
+      if (source === 'viewer') overlay.viewerPointer([{ x: 700, y: 450 }])();
+      // Clicking label text also dispatches the input's cancellable click.
+      doc.querySelector('label')!.click();
+      await settle();
+      expect(doc.querySelector('input')!.checked).toBe(source === 'local');
+      vi.advanceTimersByTime(1000);
+      navigate(confirmation, 'https://cindy-overlay.invalid/choose/disconnect?revoke=1');
+      await settle();
+      expect(revoke).toHaveBeenCalledTimes(source === 'local' ? 1 : 0);
+    } finally {
+      overlay.stop();
+      vi.useRealTimers();
+    }
+  },
+);
+
+it('does not trust a revoke checkbox changed by a racing viewer click', async () => {
+  vi.useFakeTimers();
+  try {
+    const { overlay, disconnect, revoke } = fixture();
+    overlay.update(phone);
+    await settle();
+    clickDisconnect(state.windows[0]);
+    await settle();
+    const confirmation = state.windows[1];
+    overlay.viewerPointer([{ x: 700, y: 450 }])();
+    navigate(confirmation, 'https://cindy-overlay.invalid/choose/toggle-revoke');
+    vi.advanceTimersByTime(1000);
+    // A renderer-local checkbox toggle must never upgrade the later local action.
+    navigate(confirmation, 'https://cindy-overlay.invalid/choose/disconnect?revoke=1');
+    await settle();
+    expect(disconnect).toHaveBeenCalledWith('phone');
+    expect(revoke).not.toHaveBeenCalled();
+    overlay.stop();
   } finally {
     vi.useRealTimers();
   }

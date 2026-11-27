@@ -1,4 +1,5 @@
-import { codexAccountState } from '../maker-host/codex-account-auth.js';
+import { codexAccountState } from '../maker-host/codex-account-auth.desktop.js';
+import { hasConnectedSubscriptionPool, readSubscriptionPoolCodexModels } from '../subscription-accounts/runtime.js';
 /**
  * oneshotProviderUsability.ts — 快问快答钉档的「已配置凭证」同步探测。
  *
@@ -7,12 +8,12 @@ import { codexAccountState } from '../maker-host/codex-account-auth.js';
  * 选项是清单的失职。这里全部走同步缓存态(读 handler 是 sendSync,
  * 不能 async);它是展示层过滤,不是安全边界——执行侧仍逐候选现查现验。
  */
-import { storedCustomProviderId, type AgentKind, type Provider } from '@cindy/model-providers';
+import { isOpenAiSubscriptionProvider, storedCustomProviderId, type AgentKind, type Provider } from '@cindy/model-providers';
 
 import { readClaudeApiKey } from '../maker-host/auth-adapters.js';
 import { hasChatgptOneshotReadiness } from '../maker-host/codex-oauth-readiness.js';
-import { readCachedGenericOAuthAccessToken } from '../maker-host/generic-oauth.js';
-import { hasGrokOAuthLogin } from '../maker-host/grok-oauth-login.js';
+import { readCachedGenericOAuthAccessToken } from '../maker-host/generic-oauth.desktop.js';
+import { hasGrokOAuthLogin } from '../maker-host/grok-oauth-login.desktop.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
 import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
 
@@ -21,6 +22,9 @@ import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
  * 自定义供应商分支)的凭证判读逐一对应;内置只认执行侧可执行的四家。
  */
 export function hasOneshotProviderCredential(provider: Provider, agentKind: AgentKind): boolean {
+  if (isOpenAiSubscriptionProvider(provider) && readSubscriptionPoolCodexModels(provider.id) !== null) {
+    return hasConnectedSubscriptionPool(provider.id);
+  }
   // Claude 订阅只供内置 Claude Code CLI 用它自己的登录;快问快答等 Cindy 直连调用不可用。
   if (provider.source !== 'builtin') {
     if (provider.auth.native === 'claude') return false;

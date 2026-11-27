@@ -11,10 +11,12 @@ import { Button } from '@/components/ui/button';
 import { useLocalProviderGroupsState } from '@/features/provider-group/useLocalProviderGroups';
 import { providerManagementErrorKey, providerShareManagementCommand } from '@/features/provider-group/providerManagement';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
+import { usePluginEngines, useRemotePluginEngines } from '@/hooks/usePluginEngines';
 import { useProviders } from '@/hooks/useProviders';
 import { toast } from '@/lib/toast';
 import { remoteProviderGroupOf } from '@/lib/remoteProviderGroups';
 import { extractIpcError } from '@/utils/ipcError';
+import { pluginEngineKeyFromProviderId } from '../../../shared/pluginEngines';
 
 import {
   ProviderShareDialog,
@@ -43,23 +45,35 @@ export function ProviderShareApproveDialog({
   const { request, share, hostDeviceId } = item;
   const name = request.displayName;
   const provider = share.providerLabel;
+  const isPluginEngine = pluginEngineKeyFromProviderId(share.providerId) !== null;
   const { providers } = useProviders();
-  const remote = useDeviceProviders(hostDeviceId);
-  const providerForApproval = (hostDeviceId ? remote.providers : providers).find((view) => view.id === share.providerId);
-  const claudeEmail = sharesClaudeLoginEmail(providerForApproval);
-  // 本机的组读本机组设置；另一台电脑上的分享读那台目录里带的组摘要。
+  const remote = useDeviceProviders(isPluginEngine ? undefined : hostDeviceId);
+  const localPluginEngines = usePluginEngines(isPluginEngine && !hostDeviceId);
+  const remotePluginEngines = useRemotePluginEngines(isPluginEngine && hostDeviceId ? hostDeviceId : undefined, 'once');
+  const providerForApproval = isPluginEngine
+    ? undefined
+    : (hostDeviceId ? remote.providers : providers).find((view) => view.id === share.providerId);
+  const claudeEmail = !isPluginEngine && sharesClaudeLoginEmail(providerForApproval);
+  // 本机的组读本机组设置；另一台电脑上的分享读那台目录里带的组摘要。插件引擎没有供应商组。
   const localGroups = useLocalProviderGroupsState();
-  const grouped = hostDeviceId
-    ? providerForApproval !== undefined && remoteProviderGroupOf(providerForApproval) !== null
-    : localGroups.groups[share.providerId] !== undefined;
+  const grouped = isPluginEngine
+    ? false
+    : hostDeviceId
+      ? providerForApproval !== undefined && remoteProviderGroupOf(providerForApproval) !== null
+      : localGroups.groups[share.providerId] !== undefined;
   const calloutKey = grouped
     ? 'providerShare.approve.calloutGroup'
     : hostDeviceId ? 'providerShare.approve.calloutRemote' : 'providerShare.approve.callout';
   // 请求成功不代表目录里有目标供应商；找到它并确认类型、有没有组后才能同意，避免漏掉 Claude 邮箱告知或说错 Agent 在哪运行。
-  const providerClassificationReady = providerForApproval !== undefined
-    && (hostDeviceId
-      ? !remote.loading && remote.error === null
-      : localGroups.ready && !localGroups.loading && !localGroups.failed);
+  const providerClassificationReady = isPluginEngine
+    ? (hostDeviceId
+        ? remotePluginEngines.engines !== null
+          && remotePluginEngines.engines.some((engine) => engine.providerId === share.providerId && engine.remoteUse?.shareSupported === true)
+        : localPluginEngines.some((engine) => engine.providerId === share.providerId && engine.remoteUse?.shareSupported === true))
+    : providerForApproval !== undefined
+      && (hostDeviceId
+        ? !remote.loading && remote.error === null
+        : localGroups.ready && !localGroups.loading && !localGroups.failed);
 
   const decide = async (action: 'approve' | 'reject') => {
     if (busy) return;
@@ -117,23 +131,14 @@ export function ProviderShareApproveDialog({
         </p>
       </div>
       <div className="mt-3.5 flex flex-col gap-1 rounded-lg bg-[var(--surface)] px-3 py-2.5 text-12 leading-[1.5] text-[var(--text-secondary)]">
-        {!hostDeviceId && localGroups.failed
+        {!isPluginEngine && !hostDeviceId && localGroups.failed
           ? <p role="status">{t('providerGroup.section.loadFailed')}</p>
           : <p>{t(calloutKey, { name, provider })}</p>}
+        {isPluginEngine ? <p>{t('providerShare.approve.calloutPluginEngine', { name })}</p> : null}
         {claudeEmail ? <p>{t('providerShare.approve.calloutClaudeEmail', { name })}</p> : null}
         <p>{t('providerShare.approve.calloutUnknown')}</p>
       </div>
       <ProviderShareDialogFooter>
-        <Button
-          variant="cta"
-          palette="confirmation"
-          size="lg"
-          loading={busy === 'approve'}
-          disabled={busy !== null || !providerClassificationReady}
-          onClick={() => void decide('approve')}
-        >
-          {t('providerShare.approve.approve')}
-        </Button>
         <Button
           variant="secondary"
           palette="confirmation"
@@ -143,6 +148,16 @@ export function ProviderShareApproveDialog({
           onClick={() => void decide('reject')}
         >
           {t('providerShare.approve.reject')}
+        </Button>
+        <Button
+          variant="cta"
+          palette="confirmation"
+          size="lg"
+          loading={busy === 'approve'}
+          disabled={busy !== null || !providerClassificationReady}
+          onClick={() => void decide('approve')}
+        >
+          {t('providerShare.approve.approve')}
         </Button>
       </ProviderShareDialogFooter>
     </ProviderShareDialog>

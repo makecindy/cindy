@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   SlidersHorizontal,
@@ -50,6 +57,19 @@ import {
 // pointer-driven and only collapses once the pointer moves back into the stage.
 const TOOLBAR_REVEAL_EDGE = 8;
 const TOOLBAR_HIDE_MARGIN = 16;
+// The same top-edge reveal also slides the macOS menu bar and this window's
+// titlebar (32pt on macOS 26+) over the page, so the revealed toolbar sits below
+// both. On notched displays fullscreen content already starts below the menu bar.
+const MAC_FULLSCREEN_TITLEBAR = 32;
+
+/** CSS px that the revealed macOS menu bar and titlebar cover at the window top. */
+function macFullscreenSystemInset(): number {
+  // Screen geometry is in DIPs; the page is laid out in zoomed CSS px.
+  const { width, availTop } = window.screen as Screen & { availTop?: number };
+  const zoom = width > 0 && window.innerWidth > 0 ? width / window.innerWidth : 1;
+  const menuBar = Math.max(0, (availTop ?? 0) - window.screenY);
+  return Math.ceil((menuBar + MAC_FULLSCREEN_TITLEBAR) / zoom);
+}
 
 const QUALITY_LABELS = {
   auto: 'remoteDesktop.viewer.automatic',
@@ -85,6 +105,7 @@ export function RemoteDesktopViewerWindow() {
     [notice, setNotice] = useState<string | null>(null),
     [closeGeneration, setCloseGeneration] = useState<number | null>(null);
   const [toolbarRevealed, setToolbarRevealed] = useState(false);
+  const [systemInset, setSystemInset] = useState(0);
   const [modes, setModes] = useState<RemoteDesktopDisplayMode[]>([]);
   const [modesStatus, setModesStatus] = useState<'idle' | 'loading' | 'failed'>('idle');
   const generation = useRef(-1);
@@ -119,14 +140,22 @@ export function RemoteDesktopViewerWindow() {
   }, []);
   useEffect(() => {
     setToolbarRevealed(false);
+    setSystemInset(0);
     if (!isFullscreen) return;
     const move = (event: PointerEvent) => {
       if (event.clientY <= TOOLBAR_REVEAL_EDGE) setToolbarRevealed(true);
       else if (event.clientY > (toolbar.current?.offsetHeight ?? 0) + TOOLBAR_HIDE_MARGIN)
         setToolbarRevealed(false);
     };
+    // Zoom and display changes both resize the page.
+    const measure = () => setSystemInset(macFullscreenSystemInset());
+    measure();
     window.addEventListener('pointermove', move, true);
-    return () => window.removeEventListener('pointermove', move, true);
+    window.addEventListener('resize', measure);
+    return () => {
+      window.removeEventListener('pointermove', move, true);
+      window.removeEventListener('resize', measure);
+    };
   }, [isFullscreen]);
   useEffect(() => {
     if (!root.current) return;
@@ -317,6 +346,11 @@ export function RemoteDesktopViewerWindow() {
       )}
     </span>
   );
+  // How the host protects itself on exit decides the wording (docs/product-rules/privacy-screen.md).
+  const coversOnExit = state?.caps?.exitProtection === 'privacy-screen';
+  const exitHintKey = coversOnExit
+    ? 'remoteDesktop.lockOnExitHintPrivacy'
+    : 'remoteDesktop.lockOnExitHint';
   const preference = (key: 'privacyScreen' | 'hostMute' | 'clipboardSync' | 'lockOnExit') =>
     state && (
       <div className="remote-viewer-preference" key={key}>
@@ -342,9 +376,15 @@ export function RemoteDesktopViewerWindow() {
                 ? 'remoteDesktop.settingUnsupported'
                 : key === 'privacyScreen' && state.safety.privacyActive
                   ? 'remoteDesktop.privacyActive'
-                  : `remoteDesktop.${key}Hint`,
+                  : key === 'lockOnExit'
+                    ? exitHintKey
+                    : `remoteDesktop.${key}Hint`,
           )}
         </p>
+        {key === 'lockOnExit' && state.caps?.lockOnExit && state.caps.exitProtection === 'lock' && (
+          // The host offers a privacy screen but it is off: say where to turn it on.
+          <p>{t('remoteDesktop.lockedEnablePrivacyHint')}</p>
+        )}
       </div>
     );
   return (
@@ -364,7 +404,12 @@ export function RemoteDesktopViewerWindow() {
         data-revealed={toolbarRevealed || undefined}
         data-settings-open={!!settings || undefined}
         data-select-open={selectOpen || undefined}
-        style={{ paddingLeft: isMac && !isFullscreen ? 82 : 12 }}
+        style={
+          {
+            paddingLeft: isMac && !isFullscreen ? 82 : 12,
+            '--remote-viewer-system-inset': `${systemInset}px`,
+          } as CSSProperties
+        }
       >
         <Monitor size={16} />
         <div className="remote-viewer-heading">
@@ -381,7 +426,7 @@ export function RemoteDesktopViewerWindow() {
             <span>
               {state?.closing
                 ? t(
-                    state.preferences.lockOnExit && state.caps?.lockOnExit
+                    state.preferences.lockOnExit && state.caps?.lockOnExit && !coversOnExit
                       ? 'remoteDesktop.lockingOnExit'
                       : 'remoteDesktop.disconnecting',
                   )
@@ -734,37 +779,40 @@ export function RemoteDesktopViewerWindow() {
           >
             {preference('privacyScreen')}
             {preference('lockOnExit')}
-            <FormField
-              label={t('remoteDesktop.idleLock')}
-              className="remote-viewer-field"
-              hint={
-                state?.caps && !state.caps.idleLock
-                  ? t('remoteDesktop.settingUnsupported')
-                  : undefined
-              }
-            >
-              {(field) => (
-                <Select
-                  {...field}
-                  label={t('remoteDesktop.idleLock')}
-                  value={String(
-                    state?.preferences.idleTimeoutMinutes ?? REMOTE_DESKTOP_DEFAULT_IDLE_MINUTES,
-                  )}
-                  disabled={!state?.ready || state.closing || !state.caps?.idleLock}
-                  options={REMOTE_DESKTOP_IDLE_MINUTES.map((minutes) => ({
-                    value: String(minutes),
-                    label:
-                      minutes === 0
-                        ? t('remoteDesktop.idleNever')
-                        : t('remoteDesktop.idleMinutes', { count: minutes }),
-                  }))}
-                  onValueChange={(value) =>
-                    void controller.current?.preference({ idleTimeoutMinutes: Number(value) })
-                  }
-                  onOpenChange={onSelectOpenChange}
-                />
-              )}
-            </FormField>
+            {/* Hosts with their own away time decide idle protection themselves. */}
+            {!state?.caps?.hostIdle && (
+              <FormField
+                label={t('remoteDesktop.idleLock')}
+                className="remote-viewer-field"
+                hint={
+                  state?.caps && !state.caps.idleLock
+                    ? t('remoteDesktop.settingUnsupported')
+                    : undefined
+                }
+              >
+                {(field) => (
+                  <Select
+                    {...field}
+                    label={t('remoteDesktop.idleLock')}
+                    value={String(
+                      state?.preferences.idleTimeoutMinutes ?? REMOTE_DESKTOP_DEFAULT_IDLE_MINUTES,
+                    )}
+                    disabled={!state?.ready || state.closing || !state.caps?.idleLock}
+                    options={REMOTE_DESKTOP_IDLE_MINUTES.map((minutes) => ({
+                      value: String(minutes),
+                      label:
+                        minutes === 0
+                          ? t('remoteDesktop.idleNever')
+                          : t('remoteDesktop.idleMinutes', { count: minutes }),
+                    }))}
+                    onValueChange={(value) =>
+                      void controller.current?.preference({ idleTimeoutMinutes: Number(value) })
+                    }
+                    onOpenChange={onSelectOpenChange}
+                  />
+                )}
+              </FormField>
+            )}
             <div className="remote-viewer-panel-section">
               {state && (
                 <>
@@ -929,7 +977,6 @@ export function RemoteDesktopViewerWindow() {
       </div>
       <ToastContainer />
       <ConfirmDialog
-        presentation="standard"
         open={closeGeneration !== null}
         onOpenChange={(open) => {
           if (!open) setCloseGeneration(null);
@@ -938,7 +985,7 @@ export function RemoteDesktopViewerWindow() {
         description={
           t('remoteDesktop.viewer.confirmDisconnectHint') +
           (state?.preferences.lockOnExit && state.caps?.lockOnExit
-            ? ` ${t('remoteDesktop.lockOnExitHint')}`
+            ? ` ${t(exitHintKey)}`
             : '')
         }
         confirmText={t('remoteDesktop.disconnect')}

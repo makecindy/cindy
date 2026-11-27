@@ -3,8 +3,27 @@
  * 覆盖:参数校验、ServerApiError → IpcError 映射、settings normalize。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { ProviderView } from '@cindy/model-providers';
+import { createProviderGroupDirectory } from '../provider-group/directory';
+import { onProviderDirectoryDenied } from '../device-link/providerMetadataContinuity.js';
 
 const capabilities = vi.hoisted(() => ({ canUseDeviceLink: true }));
+const metadataOwner = vi.hoisted(() => ({ key: 'directory-owner-a', generation: 0 }));
+const dataPath = vi.hoisted(() => ({ available: vi.fn<(deviceId: string) => boolean>(() => false) }));
+vi.mock('../appSessionState.js', async importOriginal => ({
+  ...await importOriginal<typeof import('../appSessionState.js')>(), activeOwnerScopeKey: () => `${metadataOwner.key}:${metadataOwner.generation}`,
+}));
+vi.mock('../clientEndpointsService.js', async importOriginal => ({
+  ...await importOriginal<typeof import('../clientEndpointsService.js')>(),
+  getClientEndpoint: () => 'https://continuity.test.invalid',
+}));
+
+// 中转身份:限流期限按它分桶(官方中转与自建中转是各自独立的限流桶)。
+const relayScope = vi.hoisted(() => ({ baseUrl: 'https://relay-a.test.invalid' }));
+vi.mock('../device-link/deviceLinkApi.desktop.js', () => ({
+  deviceLinkApiFetch: vi.fn(),
+  resolveDeviceLinkApiBase: () => relayScope.baseUrl,
+}));
 
 // Transport windows are outside this in-memory IPC handler harness.
 vi.mock('../device-link/filePeer', () => ({
@@ -17,12 +36,15 @@ vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn() },
   app: { getPath: () => '/tmp' },
 }));
-vi.mock('../serverApiClient', () => {
+vi.mock('../serverApiClient.desktop', () => {
   class ServerApiError extends Error {
     constructor(
       public readonly code: string,
       public readonly statusCode: number,
       message: string,
+      public readonly retryAt?: number,
+      // 与真身一致:真正服务了这次响应的 base URL(见 serverApiClient)。
+      public readonly servedBaseUrl?: string,
     ) {
       super(message);
     }
@@ -31,6 +53,26 @@ vi.mock('../serverApiClient', () => {
 });
 vi.mock('./index', () => ({
   getDeviceLinkStatus: () => 'online',
+  getDeviceLinkPeerLinks: () => ({ links: [], relayRttMs: null }),
+  hasOfflineDirectPath: () => false,
+  isDeviceDataPathAvailable: dataPath.available,
+  getDirectDataDeviceIds: () => [],
+  getDeviceLinkConnectionIssue: () => null,
+  isDeviceLinkStandby: () => false,
+  getDeviceIdentityConflict: () => null,
+  getUnresponsiveDeviceIds: () => [],
+  setKeepAwakeEnabled: vi.fn(),
+  rejoinThisDevice: vi.fn(),
+  providerShareHostInvoke: vi.fn(),
+  revokeController: vi.fn(),
+  restoreController: vi.fn(),
+  beginControllerDisplayNameDirectoryRefresh: () => 1,
+  isLatestControllerDisplayNameDirectoryRefresh: () => true,
+  waitForNewerControllerDisplayNameDirectoryRefresh: vi.fn(async () => {}),
+  isPeerControlAvailable: () => true,
+  getPeerControlState: () => ({ online: true, available: true, disabled: false }),
+  isPresenceFreshAfterRequest: () => false,
+  forgetPeerControlState: () => {},
   clearDeviceResponsiveness: vi.fn(),
   setRemoteControlEnabled: vi.fn(),
   openRemoteLink: vi.fn(),
@@ -50,6 +92,27 @@ vi.mock('./index', () => ({
 }));
 vi.mock('../device-link/index', () => ({
   getDeviceLinkStatus: () => 'online',
+  getDeviceLinkPeerLinks: () => ({ links: [], relayRttMs: null }),
+  hasOfflineDirectPath: () => false,
+  isDeviceDataPathAvailable: dataPath.available,
+  clearDeviceResponsiveness: vi.fn(),
+  getDirectDataDeviceIds: () => [],
+  getDeviceLinkConnectionIssue: () => null,
+  isDeviceLinkStandby: () => false,
+  getDeviceIdentityConflict: () => null,
+  getUnresponsiveDeviceIds: () => [],
+  setKeepAwakeEnabled: vi.fn(),
+  rejoinThisDevice: vi.fn(),
+  providerShareHostInvoke: vi.fn(),
+  revokeController: vi.fn(),
+  restoreController: vi.fn(),
+  beginControllerDisplayNameDirectoryRefresh: () => 1,
+  isLatestControllerDisplayNameDirectoryRefresh: () => true,
+  waitForNewerControllerDisplayNameDirectoryRefresh: vi.fn(async () => {}),
+  isPeerControlAvailable: () => true,
+  getPeerControlState: () => ({ online: true, available: true, disabled: false }),
+  isPresenceFreshAfterRequest: () => false,
+  forgetPeerControlState: () => {},
   setRemoteControlEnabled: vi.fn(),
   openRemoteLink: vi.fn(),
   closeRemoteLink: vi.fn(),
@@ -59,6 +122,7 @@ vi.mock('../device-link/index', () => ({
   disconnectAllControllers: vi.fn(),
   broadcast: vi.fn(),
   applyControllerPresenceListSnapshot: vi.fn(),
+  applyControllerDisplayNameListSnapshot: vi.fn(),
   captureControllerDisplayNameRequestEpoch: () => 0,
   captureControllerPresenceRequestEpoch: () => 0,
   readControllerDisplayNameFreshnessSince: () => ({
@@ -66,11 +130,11 @@ vi.mock('../device-link/index', () => ({
     authoritativeName: null,
   }),
 }));
-vi.mock('../device-link/dispatch', () => ({
+vi.mock('../device-link/dispatch.desktop', () => ({
   getActiveControllers: () => [],
 }));
-vi.mock('../device-link/settings-store', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../device-link/settings-store')>();
+vi.mock('../device-link/settings-store.desktop', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../device-link/settings-store.desktop')>();
   return {
     ...actual,
     readDeviceLinkSettings: () => ({
@@ -95,8 +159,11 @@ import {
   handleGetState,
   handleSetEnabled,
   handleSetKeepAwake,
+  handleRejoin,
   handleSetDeviceControlEnabled,
   handleListDevices,
+  defaultDeps,
+  __resetDeviceListCoalescingForTests,
   handleRenameDevice,
   handleDeleteDevice,
   handleOpenLink,
@@ -112,13 +179,15 @@ import {
 import { DeviceLinkError, PLUGIN_OAUTH_CHANNEL, PLUGIN_SECRET_LOCAL_CHANNEL } from '@cindy/device-link';
 import { MCP_APPS_INVOKE } from '../../shared/mcpApps.js';
 import { invokeWithClosedLinkRecovery } from '../device-link/linkRecovery';
-import { ServerApiError } from '../serverApiClient';
+import { ServerApiError } from '../serverApiClient.desktop';
+import { directoryRetryDeadline } from '../device-link/directoryThrottle';
+
 import { createIpcError } from '../../shared/ipc-errors';
 import { ReviewArtifactAuthorizationError } from '../reviewer/reviewArtifactAuthorization';
 import {
   __testing as settingsTesting,
   normalizeCachedDeviceName,
-} from '../device-link/settings-store';
+} from '../device-link/settings-store.desktop';
 import { __testing as refcountTesting } from '../device-link/subscriptionRefcount';
 import {
   applyControllerDisplayNamePresence,
@@ -140,6 +209,7 @@ function makeDeps(overrides?: Partial<DeviceLinkIpcDeps>): DeviceLinkIpcDeps {
       disabledControlDeviceIds: [],
       unresponsiveDeviceIds: [],
     }),
+    getPeerLinks: vi.fn(() => ({ links: [], relayRttMs: null })),
     setEnabled: vi.fn(),
     setKeepAwake: vi.fn(),
     apiFetch: vi.fn().mockResolvedValue({ devices: [] }),
@@ -181,6 +251,11 @@ describe('device-link IPC handlers', () => {
   beforeEach(() => {
     refcountTesting.reset(); // 多窗口订阅引用计数:每个用例独立
     capabilities.canUseDeviceLink = true;
+    metadataOwner.key = 'directory-owner-a';
+    metadataOwner.generation = 0;
+    __resetDeviceListCoalescingForTests(); // /devices 合并窗口:不让上一用例的在途请求漏到下一个
+    vi.restoreAllMocks();
+    dataPath.available.mockReset().mockReturnValue(false);
   });
 
   it('getState 透传 deps 状态', () => {
@@ -270,6 +345,17 @@ describe('device-link IPC handlers', () => {
     await expect(handleSetKeepAwake(deps, undefined)).rejects.toThrowError(/\[INVALID_PARAMS\]/);
   });
 
+  // 「重新加入」(2026-11-23):设置页只凭 IPC code 告诉用户为什么没能回来(旧服务端 → 退出后重新登录;
+  // 「仅使用 Agent-Net」而 Agent-Net 没回来 → 先关掉它),其余失败不把内部原因带给界面。
+  it.each([
+    ['DEVICE_REJOIN_UNSUPPORTED', 'NOT_FOUND'],
+    ['AGENT_NET_REJOIN_FAILED', 'PRECONDITION_FAILED'],
+    ['socket hang up', 'INTERNAL'],
+  ])('rejoin:失败 %s 映射为 [%s]', async (message, code) => {
+    const deps = makeDeps({ rejoin: vi.fn(async () => { throw new Error(message); }) });
+    await expect(handleRejoin(deps)).rejects.toThrowError(new RegExp(`^\\[${code}\\]`));
+  });
+
   it('setDeviceControlEnabled:维护本机控制偏好,关闭时断开该设备 link 并广播', async () => {
     const deps = makeDeps({
       setDeviceControlEnabled: vi.fn(async () => ['dev-1']),
@@ -302,6 +388,715 @@ describe('device-link IPC handlers', () => {
     await expect(handleSetDeviceControlEnabled(deps, 'dev-1', 'yes')).rejects.toThrowError(/\[INVALID_PARAMS\]/);
   });
 
+  // 启动 / 重连时侧栏、切换栏、设置页、main 在同一拍里各发一次 /devices。同一在途请求
+  // 300ms 内的后来者共用它(目录快照是同一时刻的);请求结束后的新调用才再次发请求。
+  it('listDevices:同一拍里的并发调用共用一个在途请求,结束后再调才重新发', async () => {
+    __resetDeviceListCoalescingForTests();
+    let resolveFirst: ((value: { devices: unknown[] }) => void) | undefined;
+    const apiFetch = vi.fn()
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }))
+      .mockResolvedValue({ devices: [] });
+    const deps = makeDeps({ apiFetch });
+    const first = handleListDevices(deps);
+    const second = handleListDevices(deps);
+    expect(apiFetch).toHaveBeenCalledTimes(1);
+    resolveFirst?.({ devices: [] });
+    await expect(first).resolves.toEqual({ devices: [],
+      displayBudget: { remainingMs: expect.any(Number) } });
+    await expect(second).resolves.toEqual({ devices: [],
+      displayBudget: { remainingMs: expect.any(Number) } });
+    await handleListDevices(deps);
+    expect(apiFetch).toHaveBeenCalledTimes(2);
+  });
+
+  // A directory read that consumes its whole display window (sleep / clock jump
+  // / one clock crossing) returns remainingMs 0. That is an expired source, not
+  // an old endpoint without a stamp: the field must survive so the consumer can
+  // retire the rows instead of showing them as an unlimited legacy directory.
+  it('listDevices:零剩余预算按已过期下发，不退化成旧端无字段', async () => {
+    __resetDeviceListCoalescingForTests();
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] });
+    try {
+      let resolveFetch!: (value: { devices: unknown[] }) => void;
+      const response = new Promise<{ devices: unknown[] }>((resolve) => { resolveFetch = resolve; });
+      const apiFetch: DeviceLinkIpcDeps['apiFetch'] = async <T>() => (await response) as T;
+      const deps = makeDeps({ apiFetch });
+      const pending = handleListDevices(deps);
+      vi.setSystemTime(Date.now() + 30 * 60_000 + 1);
+      resolveFetch({ devices: [] });
+      await expect(pending).resolves.toMatchObject({ displayBudget: { remainingMs: 0 } });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Review (#8381): a refresh issued right after a rename / delete must not join a list
+  it('listDevices:短断沿用目录但不伪造在线状态，直连仍可用，明确撤权不得回退', async () => {
+    const device = { deviceId: 'dev-1', name: 'Member', online: true, remoteControlEnabled: true };
+    const apiFetch = vi.fn().mockResolvedValueOnce({ devices: [device] })
+      .mockRejectedValueOnce(new ServerApiError('UNAVAILABLE', 503, 'temporarily unavailable'))
+      .mockRejectedValueOnce(new ServerApiError('PERMISSION_DENIED', 403, 'denied'))
+      .mockRejectedValueOnce(new ServerApiError('UNAVAILABLE', 503, 'temporarily unavailable'));
+    const deps = makeDeps({ apiFetch, hasOfflineDirectPath: () => true });
+    await expect(handleListDevices(deps)).resolves.not.toHaveProperty('stale');
+    const stale = await handleListDevices(deps);
+    expect(stale).toMatchObject({
+      devices: [{ deviceId: 'dev-1', online: true }], stale: true,
+    });
+    expect(stale.displayBudget?.remainingMs).toBeGreaterThan(0);
+    await expect(handleListDevices(deps)).rejects.toThrow('denied');
+    await expect(handleListDevices(deps)).rejects.toThrow('temporarily unavailable');
+  });
+
+  // 目录读要有期限:serverApiFetch 默认不超时,挂死的一条读会让每次重读都再开一条。
+  // 限流期限要带给调用方:否则渲染进程的退避会在限流窗口里继续追问,延长限流。
+  it('listDevices:目录读带期限，限流时把服务端的重试期限带给调用方', async () => {
+    __resetDeviceListCoalescingForTests();
+    const retryAt = Date.now() + 60_000;
+    const apiFetch = vi.fn()
+      .mockResolvedValueOnce({ devices: [{ deviceId: 'dev-1', name: 'Member', online: true }] })
+      .mockRejectedValueOnce(new ServerApiError('UNAVAILABLE', 429, 'rate limited', retryAt));
+    const deps = makeDeps({ apiFetch });
+    await expect(handleListDevices(deps)).resolves.not.toHaveProperty('stale');
+    expect(apiFetch).toHaveBeenCalledWith('/api/device-link/devices', {
+      timeoutMs: expect.any(Number),
+      // 调用方的期限信号:把「fetch + 401 之后的共享登录刷新 + 重试」一起框住。
+      signal: expect.any(AbortSignal),
+    });
+    const limited = await handleListDevices(deps);
+    expect(limited).toMatchObject({ stale: true });
+    expect(limited.retryAtMs).toBe(retryAt);
+  });
+
+  // 冷启动(没有旧快照可沿用)时,限流窗口里的每次追问都会让服务端把窗口重新推后。
+  // 期限按 owner 记在 main 侧:窗口内的物理读一律不发,只回一个暂时性失败。
+  it('listDevices:限流窗口内不再发物理读,冷启动也不一路追问', async () => {
+    __resetDeviceListCoalescingForTests();
+    const retryAt = Date.now() + 60_000;
+    const apiFetch = vi.fn()
+      .mockRejectedValueOnce(new ServerApiError('UNAVAILABLE', 429, 'rate limited', retryAt));
+    const deps = makeDeps({ apiFetch });
+    try {
+      // 第一次读撞上限流:没有旧快照可沿用,这次读以失败告终,期限记进共享账本。
+      await expect(handleListDevices(deps)).rejects.toThrow(/rate limited/);
+      expect(apiFetch).toHaveBeenCalledTimes(1);
+      // 「窗口内不再发物理读」由路由层的共享闸门负责(deviceLinkApi.test.ts 的
+      // directory cooldown gate),不在 IPC 预检里拦:预检挡在路由之前会把 V2 那一腿
+      // 一起挡掉(Codex review #9360)。这里的 apiFetch 是路由层的替身,所以第二次读
+      // 仍然到达它 —— 判据是「IPC 不再自己短路」。
+      await expect(handleListDevices(deps)).rejects.toThrow();
+      expect(apiFetch).toHaveBeenCalledTimes(2);
+    } finally {
+      // 限流期限是模块级状态:留给下一个用例就等于替它限流。
+      __resetDeviceListCoalescingForTests();
+    }
+  });
+
+  // 限流期限按**中转**分桶:官方中转与自建中转是各自独立的限流桶。同一账号换中转
+  // 之后,上一个中转给的期限不该拦住新中转上的第一次读 —— 否则换中转之后目录一直读
+  // 不出去,恢复被一个已经无关的期限拖住(Codex review #9360)。
+  it('listDevices:换中转后不继承上一个中转的限流期限', async () => {
+    __resetDeviceListCoalescingForTests();
+    relayScope.baseUrl = 'https://relay-a.test.invalid';
+    const retryAt = Date.now() + 60_000;
+    const apiFetch = vi.fn()
+      .mockRejectedValueOnce(new ServerApiError('UNAVAILABLE', 429, 'rate limited', retryAt))
+      .mockResolvedValue({ devices: [] });
+    const deps = makeDeps({ apiFetch });
+    try {
+      await expect(handleListDevices(deps)).rejects.toThrow(/rate limited/);
+      expect(apiFetch).toHaveBeenCalledTimes(1);
+      // 换中转:新的限流桶,期限记在旧中转上,新中转立刻发物理读。
+      relayScope.baseUrl = 'https://relay-b.test.invalid';
+      await expect(handleListDevices(deps)).resolves.toMatchObject({ devices: [] });
+      expect(apiFetch).toHaveBeenCalledTimes(2);
+    } finally {
+      relayScope.baseUrl = 'https://relay-a.test.invalid';
+      __resetDeviceListCoalescingForTests();
+    }
+  });
+
+  // 每个中转桶的期限要**各自留着**:中转 A → B → A 来回切时,只留最后一个桶的话,A 的
+  // 期限会被 B 覆盖,切回 A 之后就在 A 仍然有效的限流窗口里又发了一次物理读
+  // (Codex review #9360)。
+  it('listDevices:中转来回切后回到原中转,原中转的限流期限仍然有效', async () => {
+    __resetDeviceListCoalescingForTests();
+    relayScope.baseUrl = 'https://relay-a.test.invalid';
+    const retryAtA = Date.now() + 60_000;
+    const retryAtB = Date.now() + 90_000;
+    const retryAtA2 = Date.now() + 120_000;
+    const apiFetch = vi.fn()
+      .mockRejectedValueOnce(new ServerApiError('UNAVAILABLE', 429, 'rate limited', retryAtA))
+      .mockRejectedValueOnce(new ServerApiError('UNAVAILABLE', 429, 'rate limited', retryAtB))
+      .mockRejectedValueOnce(new ServerApiError('UNAVAILABLE', 429, 'rate limited', retryAtA2));
+    const deps = makeDeps({ apiFetch });
+    try {
+      await expect(handleListDevices(deps)).rejects.toThrow(/rate limited/);
+      expect(apiFetch).toHaveBeenCalledTimes(1);
+      // 换到中转 B:B 是另一个限流桶,立刻发物理读,并记下 B 自己的期限。
+      relayScope.baseUrl = 'https://relay-b.test.invalid';
+      await expect(handleListDevices(deps)).rejects.toThrow(/rate limited/);
+      expect(apiFetch).toHaveBeenCalledTimes(2);
+      // 切回中转 A 再撞一次更新的期限:A 的桶必须还在(没有被 B 覆盖),新期限落在 A 上。
+      relayScope.baseUrl = 'https://relay-a.test.invalid';
+      await expect(handleListDevices(deps)).rejects.toThrow(/rate limited/);
+      expect(apiFetch).toHaveBeenCalledTimes(3);
+      expect(directoryRetryDeadline('directory-owner-a', 'https://relay-a.test.invalid')).toBe(retryAtA2);
+      expect(directoryRetryDeadline('directory-owner-a', 'https://relay-b.test.invalid')).toBe(retryAtB);
+    } finally {
+      relayScope.baseUrl = 'https://relay-a.test.invalid';
+      __resetDeviceListCoalescingForTests();
+    }
+  });
+
+  // 限流期限要记在**真正服务了这次响应**的身份上:401 之后的共享刷新可能把会话换到
+  // 另一个区域 / 中转,那条重试是往新的端点发的。记在进请求时的身份上,新端点那个桶里
+  // 就没有冷却,下一次读直接撞进同一个限流窗口(Codex review #9360)。
+  it('listDevices:限流期限记在真正服务了这次响应的那个中转上', async () => {
+    __resetDeviceListCoalescingForTests();
+    relayScope.baseUrl = 'https://relay-a.test.invalid';
+    const retryAt = Date.now() + 60_000;
+    const apiFetch = vi.fn(async () => {
+      // 401 之后的共享刷新把这次重试送到了另一个中转:服务这次响应的是新中转。
+      relayScope.baseUrl = 'https://relay-b.test.invalid';
+      throw new ServerApiError('UNAVAILABLE', 429, 'rate limited', retryAt, 'https://relay-b.test.invalid');
+    });
+    const deps = makeDeps({ apiFetch });
+    try {
+      await expect(handleListDevices(deps)).rejects.toThrow(/rate limited/);
+      expect(apiFetch).toHaveBeenCalledTimes(1);
+      // 期限记在真正服务了这次响应的新中转上,发起时的旧中转桶是干净的。
+      // (窗口内不再发物理读由路由层闸门负责,见 deviceLinkApi.test.ts。)
+      expect(directoryRetryDeadline('directory-owner-a', 'https://relay-b.test.invalid')).toBe(retryAt);
+      expect(directoryRetryDeadline('directory-owner-a', 'https://relay-a.test.invalid')).toBe(0);
+    } finally {
+      relayScope.baseUrl = 'https://relay-a.test.invalid';
+      __resetDeviceListCoalescingForTests();
+    }
+  });
+
+  // 反过来:用户**换了中转**之后,在途的那条请求仍然是旧线路发出去的(自建中转的 baseUrl
+  // 在发起时就定住了)。它迟到的 429 期限属于旧线路 —— 读全局会把期限记到新线路上,把
+  // 没限流的新中转也限住;两个中转是各自独立的限流桶(Codex review #9360)。
+  it('listDevices:换中转后在途请求的限流期限仍记在发起它的那个中转上', async () => {
+    __resetDeviceListCoalescingForTests();
+    relayScope.baseUrl = 'https://relay-a.test.invalid';
+    const retryAt = Date.now() + 60_000;
+    const apiFetch = vi.fn()
+      .mockImplementationOnce(async () => {
+        // 请求发出去之后用户切了中转;在途请求的响应(错误没携带服务方身份时)只能
+        // 退回发起它时的线路,不能读全局。
+        relayScope.baseUrl = 'https://relay-b.test.invalid';
+        throw new ServerApiError('UNAVAILABLE', 429, 'rate limited', retryAt);
+      })
+      .mockResolvedValue({ devices: [] });
+    const deps = makeDeps({ apiFetch });
+    try {
+      await expect(handleListDevices(deps)).rejects.toThrow(/rate limited/);
+      expect(apiFetch).toHaveBeenCalledTimes(1);
+      // 期限记在发起它的旧中转 A 上,当前中转 B 的桶是干净的。
+      expect(directoryRetryDeadline('directory-owner-a', 'https://relay-a.test.invalid')).toBe(retryAt);
+      expect(directoryRetryDeadline('directory-owner-a', 'https://relay-b.test.invalid')).toBe(0);
+      // B 的桶干净:立刻发物理读。
+      await expect(handleListDevices(deps)).resolves.toMatchObject({ devices: [] });
+      expect(apiFetch).toHaveBeenCalledTimes(2);
+    } finally {
+      relayScope.baseUrl = 'https://relay-a.test.invalid';
+      __resetDeviceListCoalescingForTests();
+    }
+  });
+
+  // 两条目录读同时在途:先发的那条先撞上限流记下期限,后发的那条随后才成功。成功只证明
+  // 「服务端处理**我这次**请求时没在限流」,不证明它之后没有 —— 无条件清掉会把并发请求
+  // 刚记下的期限一起抹掉,下一次读直接撞进限流窗口,把窗口越推越远
+  // (Codex review #9360「Preserve cooldowns newer than the completing request」)。
+  it('listDevices:在途请求的成功不清掉并发请求刚记下的限流期限', async () => {
+    __resetDeviceListCoalescingForTests();
+    const retryAt = Date.now() + 60_000;
+    const settles: Array<{ resolve: (value: unknown) => void; reject: (error: unknown) => void }> = [];
+    const apiFetch: DeviceLinkIpcDeps['apiFetch'] = <T>() =>
+      new Promise<T>((resolve, reject) => {
+        settles.push({ resolve: (value) => resolve(value as T), reject: (error) => reject(error) });
+      });
+    const deps = makeDeps({ apiFetch });
+    try {
+      // 两次调用间隔要超过合并窗口(否则会共用同一在途请求):前两拍 Date.now 分别是
+      // 第一次的 startedAt 与第二次的合并检查。
+      vi.spyOn(Date, 'now').mockReturnValueOnce(0).mockReturnValueOnce(1_000);
+      const older = handleListDevices(deps);
+      const newer = handleListDevices(deps);
+      expect(settles).toHaveLength(2);
+
+      // 先发的那条先撞上限流:期限在后发那条**已经发出之后**才被记下。
+      settles[0].reject(new ServerApiError('UNAVAILABLE', 429, 'rate limited', retryAt));
+      settles[1].resolve({ devices: [{ deviceId: 'dev-1', name: 'Host.local', online: true }] });
+      await expect(newer).resolves.toMatchObject({ devices: [{ name: 'Host.local' }] });
+      // 旧响应跟随新结果(既有的让位规则),不会自己再走一遍收尾。
+      await expect(older).resolves.toMatchObject({ devices: [{ name: 'Host.local' }] });
+
+      // 期限还在:后发那条的成功只清掉它发起之前的期限,并发请求刚记下的不动。
+      // (窗口内不再发物理读由路由层闸门负责;这里 apiFetch 是替身,判据直接看账本。)
+      expect(directoryRetryDeadline('directory-owner-a', 'https://relay-a.test.invalid')).toBe(retryAt);
+    } finally {
+      vi.restoreAllMocks();
+      __resetDeviceListCoalescingForTests();
+    }
+  });
+
+  // 账号在请求在途时换过:那次响应已经不算数(then 分支也会拒),它的限流期限**整个丢弃**
+  // —— 记到新账号头上会让新账号的第一次目录读被一个它从没见过的期限拦住
+  // (Codex review #9360)。
+  it('listDevices:在途请求返回时账号已换,限流期限整个丢弃', async () => {
+    __resetDeviceListCoalescingForTests();
+    const retryAt = Date.now() + 60_000;
+    const apiFetch = vi.fn()
+      .mockImplementationOnce(async () => {
+        // 请求发出去之后换了账号。
+        metadataOwner.key = 'directory-owner-b';
+        throw new ServerApiError('UNAVAILABLE', 429, 'rate limited', retryAt);
+      })
+      .mockResolvedValue({ devices: [] });
+    const deps = makeDeps({ apiFetch });
+    try {
+      // 在途期间账号已换:这次响应不算数,读以「账号已换」收口。
+      await expect(handleListDevices(deps)).rejects.toThrow(/account changed/);
+      expect(apiFetch).toHaveBeenCalledTimes(1);
+      // 新账号的桶里不该有任何冷却:第一次读立刻发物理读。
+      await expect(handleListDevices(deps)).resolves.toMatchObject({ devices: [] });
+      expect(apiFetch).toHaveBeenCalledTimes(2);
+    } finally {
+      metadataOwner.key = 'directory-owner-a';
+      __resetDeviceListCoalescingForTests();
+    }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果:`handleListDevices` 的限流预检(窗口内不发物理读)——
+  //   同账号只 bump 会话代次(projection 修复 / 同账号重登)之后,未过期的期限必须
+  //   仍然拦得住,`apiFetch` 不再被调用。
+  // - Bug/规则依据:Codex review #9360「Keep cooldown keys stable across same-owner
+  //   generations」—— 桶键按 `activeOwnerScopeKey()`(含代次)记时,同 owner 的
+  //   generation bump 会让旧期限不可达,另一个 `/devices` 读者直接撞进同一个服务端
+  //   限流窗口,把窗口越推越远。
+  // - 现有覆盖缺口:既有用例只覆盖换账号(整个身份换掉)与换中转,没覆盖「同账号、
+  //   只 bump 代次」这条 recovery 路径。
+  // - 最小失败输入:先撞一次 429 记下期限,再把 `metadataOwner.generation` +1(账号不变)。
+  // - tier:unit(内存 harness + 假计时无关的墙钟期限)。
+  it('listDevices:同账号只 bump 代次后,限流期限仍然拦得住', async () => {
+    __resetDeviceListCoalescingForTests();
+    const retryAt = Date.now() + 60_000;
+    const apiFetch = vi.fn()
+      .mockRejectedValueOnce(new ServerApiError('UNAVAILABLE', 429, 'rate limited', retryAt))
+      .mockResolvedValue({ devices: [] });
+    const deps = makeDeps({ apiFetch });
+    try {
+      // 第一次读撞上限流:期限记进共享账本。
+      await expect(handleListDevices(deps)).rejects.toThrow(/rate limited/);
+      expect(apiFetch).toHaveBeenCalledTimes(1);
+      // 同账号只 bump 代次:服务端的限流桶没变,期限仍按账号成员记在同一个桶里。
+      metadataOwner.generation += 1;
+      expect(directoryRetryDeadline('directory-owner-a', relayScope.baseUrl)).toBe(retryAt);
+    } finally {
+      metadataOwner.generation = 0;
+      metadataOwner.key = 'directory-owner-a';
+      __resetDeviceListCoalescingForTests();
+    }
+  });
+
+  // 目录读要有**总期限**:timeoutMs 只管单次 fetch,401 之后的共享登录刷新不在它里面
+  // (官方端点的刷新端点是轮换的,timeoutMs: 0 = 不超时)—— 一次目录读可以无限期挂着,
+  // 渲染侧的退避每轮都再开一条等待,越挂越多。调用方的期限信号把整条链路框住。
+  it('listDevices:整条目录读有总期限,挂死的读按暂时性失败收口', async () => {
+    __resetDeviceListCoalescingForTests();
+    vi.useFakeTimers();
+    try {
+      const apiFetch = vi.fn((_path: string, opts?: { signal?: AbortSignal }) => new Promise((_yes, no) => {
+        opts?.signal?.addEventListener('abort', () => no(opts.signal?.reason), { once: true });
+      }));
+      const deps = makeDeps({ apiFetch: apiFetch as unknown as DeviceLinkIpcDeps['apiFetch'] });
+      const pending = handleListDevices(deps);
+      expect(apiFetch).toHaveBeenCalledTimes(1);
+      // 8 秒期限到点:整条读(含 401 之后的共享登录刷新等待)一起收口。
+      await vi.advanceTimersByTimeAsync(9_000);
+      // 超时是**暂时性**失败:statusCode 0 = 连不上,不是权威拒绝(旧快照仍可用)。
+      await expect(pending).rejects.toThrow(/设备目录读取超时/);
+    } finally {
+      vi.useRealTimers();
+      __resetDeviceListCoalescingForTests();
+    }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果:`handleListDevices` 在「响应头已到、正文卡到总期限」时,
+  //   已知的非 OK 状态必须原样进到目录失效广播(`onProviderDirectoryDenied`)——
+  //   401 必须触发,200 卡住只按暂时性失败走、不触发。
+  // - Bug/规则依据:Codex review #9360「Preserve terminal status across response-body
+  //   timeouts」—— 状态被归一成 0 后 `MetadataContinuityReader.onDenied` 看不到 401/403,
+  //   缓存目录不失效,渲染侧新加的退避带着旧快照每 5–60 秒重试那个端点。
+  // - 现有覆盖缺口:上面的超时用例的 apiFetch 直接 reject,从未走到「fetch 已 resolve 出
+  //   响应、只有 json() 挂着」这条中止路径,所以没有任何用例覆盖状态保留。
+  // - 最小失败输入:apiFetch 在调用方期限到点时 reject 一个带着 httpStatus:401 的中止原因。
+  // - tier:unit(fake timers + 进程内假响应)。
+  it('listDevices:响应头已表态但正文卡到总期限,已知的 401 状态不丢', async () => {
+    __resetDeviceListCoalescingForTests();
+    vi.useFakeTimers();
+    const denials: number[] = [];
+    const off = onProviderDirectoryDenied(() => { denials.push(Date.now()); });
+    try {
+      // 模拟 fetch 层的行为:响应头到了(401)、正文挂着,调用方期限到点时它重新抛出
+      // 中止原因,并把已知的非 OK 状态贴上去(由 serverApiClient 的测试覆盖这里怎么贴)。
+      const apiFetch = vi.fn((_path: string, opts?: { signal?: AbortSignal }) => new Promise((_yes, no) => {
+        opts?.signal?.addEventListener('abort', () => {
+          no(Object.assign(opts.signal?.reason, { httpStatus: 401 }));
+        }, { once: true });
+      }));
+      const deps = makeDeps({ apiFetch: apiFetch as unknown as DeviceLinkIpcDeps['apiFetch'] });
+      const pending = handleListDevices(deps);
+      expect(apiFetch).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(9_000);
+      // 401 没有专门的 IPC code,照旧落 INTERNAL。
+      await expect(pending).rejects.toThrow();
+      // 真正的可观察结果:401 是权威拒绝,目录失效广播必须触发,渲染侧才会清掉旧快照
+      // 重读,而不是带着旧快照一直重试那个被拒的端点。
+      expect(denials).toHaveLength(1);
+    } finally {
+      off();
+      vi.useRealTimers();
+      __resetDeviceListCoalescingForTests();
+    }
+  });
+
+  // 测试价值(#9360 review)
+  // - 生产入口与可观察结果:`handleListDevices` 在「响应头已表态 404、正文卡到总期限」时
+  //   抛出的是调用方自造的 TimeoutError,必须映射成 `[NOT_FOUND]` 而不是 `[INTERNAL]`。
+  // - Bug/规则依据:Codex review #9360「Preserve terminal status across response-body
+  //   timeouts」—— 只贴 statusCode 过不了 rethrowServerError 的 instanceof ServerApiError,
+  //   渲染侧不把 [INTERNAL] 当终态,按 5–60 秒一直追问一个已经不存在的端点。
+  // - 现有覆盖缺口:上面的 401 用例只断言目录失效广播,404/400/409 不走广播、只靠 IPC code,
+  //   没有任何用例覆盖这条映射。
+  // - 最小失败输入:apiFetch 在期限到点 reject 一个带 httpStatus:404 的中止原因。
+  // - 反向验证:把 ServerApiError 包装撤掉,这条用例变红。
+  // - tier:unit(fake timers + 进程内假响应)。
+  it('listDevices:响应头已表态 404 但正文卡到总期限,按 NOT_FOUND 收口而不是 INTERNAL', async () => {
+    __resetDeviceListCoalescingForTests();
+    vi.useFakeTimers();
+    try {
+      const apiFetch = vi.fn((_path: string, opts?: { signal?: AbortSignal }) => new Promise((_yes, no) => {
+        opts?.signal?.addEventListener('abort', () => {
+          no(Object.assign(opts.signal?.reason, { httpStatus: 404 }));
+        }, { once: true });
+      }));
+      const deps = makeDeps({ apiFetch: apiFetch as unknown as DeviceLinkIpcDeps['apiFetch'] });
+      const pending = handleListDevices(deps);
+      await vi.advanceTimersByTimeAsync(9_000);
+      await expect(pending).rejects.toThrow('[NOT_FOUND]');
+    } finally {
+      vi.useRealTimers();
+      __resetDeviceListCoalescingForTests();
+    }
+  });
+
+  // 反例:200 + 卡住的正文仍旧是暂时性失败。带了状态上去会把一次超时当成权威响应,
+  // 有界旧快照会被一起丢掉(Codex review #9360 同一处)。
+  it('listDevices:200 响应正文卡到总期限,仍按暂时性失败收口', async () => {
+    __resetDeviceListCoalescingForTests();
+    vi.useFakeTimers();
+    const denials: number[] = [];
+    const off = onProviderDirectoryDenied(() => { denials.push(Date.now()); });
+    try {
+      const apiFetch = vi.fn((_path: string, opts?: { signal?: AbortSignal }) => new Promise((_yes, no) => {
+        opts?.signal?.addEventListener('abort', () => {
+          // 200 不贴状态:fetch 层只带非 OK 的响应状态。
+          no(opts.signal?.reason);
+        }, { once: true });
+      }));
+      const deps = makeDeps({ apiFetch: apiFetch as unknown as DeviceLinkIpcDeps['apiFetch'] });
+      const pending = handleListDevices(deps);
+      expect(apiFetch).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(9_000);
+      await expect(pending).rejects.toThrow();
+      // 暂时性失败不广播失效:旧快照仍可用,不必清掉重来。
+      expect(denials).toHaveLength(0);
+    } finally {
+      off();
+      vi.useRealTimers();
+      __resetDeviceListCoalescingForTests();
+    }
+  });
+
+
+  // Integration: a stale REST directory row is marked online only through the
+  // target's current verified data path; the real provider-group directory
+  // consumer then sees that M as controllable while the neighbour stays offline.
+  it('listDevices: verified target data path survives a transient REST failure into the group directory', async () => {
+    const member = {
+      deviceId: 'member', name: 'Member', platform: 'darwin', appVersion: '1.0.0',
+      lastSeenAt: null, online: true, busy: false, remoteControlEnabled: true,
+      controlEnabled: true, isSelf: false,
+    };
+    const neighbour = { ...member, deviceId: 'neighbour', name: 'Neighbour' };
+    const apiFetch = vi.fn()
+      .mockResolvedValueOnce({ devices: [member, neighbour] })
+      .mockRejectedValueOnce(new ServerApiError('SERVICE_UNAVAILABLE', 503, 'temporarily unavailable'));
+    const deps = makeDeps({ apiFetch, isDeviceDataPathAvailable: deviceId => deviceId === 'member' });
+    await handleListDevices(deps);
+    const listed = await handleListDevices(deps);
+    expect(listed.devices).toMatchObject([
+      { deviceId: 'member', online: true },
+      { deviceId: 'neighbour', online: false },
+    ]);
+    const provider = {
+      id: 'provider', name: 'Provider', agents: ['claude-code'], connected: true,
+      models: { 'claude-code': [] }, routing: { 'claude-code': {} },
+    } as unknown as ProviderView;
+    const directory = createProviderGroupDirectory({
+      listLocalProviders: async () => [],
+      localDeviceName: () => 'Local',
+      listDevices: async () => listed.devices,
+      readDeviceProviders: async () => [provider],
+      listReceivedShares: () => [],
+      isMobilePlatform: platform => platform === 'ios' || platform === 'android',
+      now: () => 0,
+    });
+    const config = { strategy: 'expiring' as const, autoSwitch: true,
+      members: [{ key: 'device:member:provider', kind: 'device' as const,
+        agentDeviceId: 'member', providerId: 'provider', limit: 1, weight: 1, paused: false }] };
+    const resolved = await directory.resolveMembers('provider', config);
+    expect(resolved[0]).toMatchObject({ member: { agentDeviceId: 'member' }, state: 'ok' });
+  });
+
+  // A fresh REST answer is the directory authority. The verified-path helper
+  // only rescues a bounded stale row; it must not turn a current offline row
+  // into an available member.
+  it('listDevices: a fresh server row keeps online=false even when a data path is verified', async () => {
+    const member = {
+      deviceId: 'member', name: 'Member', platform: 'darwin', appVersion: '1.0.0',
+      lastSeenAt: null, online: false, busy: false, remoteControlEnabled: true,
+      controlEnabled: true, isSelf: false,
+    };
+    const deps = makeDeps({
+      apiFetch: vi.fn().mockResolvedValue({ devices: [member] }),
+      isDeviceDataPathAvailable: () => true,
+    });
+    const listed = await handleListDevices(deps);
+    expect(listed.devices).toMatchObject([{ deviceId: 'member', online: false }]);
+  });
+  // R1: bootstrap-electron.ts constructs registerDeviceLinkIpc() with
+  // defaultDeps(); the stale projection must use the imported production helper.
+  it('listDevices: defaultDeps binds the index data-path helper into the stale projection', async () => {
+    const member = {
+      deviceId: 'member', name: 'Member', platform: 'darwin', appVersion: '1.0.0',
+      lastSeenAt: null, online: true, busy: false, remoteControlEnabled: true,
+      controlEnabled: true, isSelf: false,
+    };
+    const neighbour = { ...member, deviceId: 'neighbour', name: 'Neighbour' };
+    dataPath.available.mockImplementation(deviceId => deviceId === 'member');
+    const production = defaultDeps();
+    expect(production.isDeviceDataPathAvailable).toBe(dataPath.available);
+    const apiFetch = vi.fn()
+      .mockResolvedValueOnce({ devices: [member, neighbour] })
+      .mockRejectedValueOnce(new ServerApiError('SERVICE_UNAVAILABLE', 503, 'temporarily unavailable'));
+    const deps: DeviceLinkIpcDeps = {
+      ...production,
+      apiFetch,
+      readLastKnownDeviceNames: vi.fn(() => ({})),
+      rememberLastKnownDeviceName: vi.fn(async () => false),
+      forgetLastKnownDeviceName: vi.fn(async () => false),
+    };
+    await handleListDevices(deps);
+    const listed = await handleListDevices(deps);
+    expect(listed.devices).toMatchObject([
+      { deviceId: 'member', online: true },
+      { deviceId: 'neighbour', online: false },
+    ]);
+  });
+  it.each(['success', 'failure'])('listDevices:账号切换后旧请求的 %s 不得跟随新账号结果', async outcome => {
+    let resolve!: (value: unknown) => void, reject!: (error: unknown) => void;
+    const apiFetch = vi.fn().mockImplementationOnce(() => new Promise((yes, no) => { resolve = yes; reject = no; }))
+      .mockResolvedValue({ devices: [{ deviceId: 'owner-b-only', name: 'B', online: true, remoteControlEnabled: true }] });
+    const deps = makeDeps({ apiFetch });
+    const old = handleListDevices(deps); void old.catch(() => undefined);
+    metadataOwner.key = 'directory-owner-b';
+    expect(await handleListDevices(deps)).toMatchObject({ devices: [{ deviceId: 'owner-b-only' }] });
+    if (outcome === 'success') resolve({ devices: [] }); else reject(new ServerApiError('UNAVAILABLE', 503, 'network down'));
+    await expect(old).rejects.toThrow('account changed');
+    expect(apiFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('删除设备成功后终止其保留链路，目录里的手机或单纯离线不会被误关闭', async () => {
+    const apiFetch = vi.fn().mockResolvedValueOnce({ devices: [
+      { deviceId: 'phone', name: 'Phone', online: true, remoteControlEnabled: false, platform: 'ios' },
+      { deviceId: 'signaling-offline', name: 'Member', online: false, remoteControlEnabled: true },
+    ] }).mockResolvedValueOnce({ deviceId: 'removed', deleted: true });
+    const closeLink = vi.fn();
+    const deps = makeDeps({ apiFetch, closeLink, hasOfflineDirectPath: () => true });
+    await handleListDevices(deps); expect(closeLink).not.toHaveBeenCalled();
+    await handleDeleteDevice(deps, 'removed');
+    expect(closeLink.mock.calls.map(([deviceId]) => deviceId)).toEqual(['removed']);
+  });
+
+  // Review (#8381): a refresh issued right after a rename / delete must not join a list
+  // request sent before it, or the removed device / old name comes back until the next poll.
+  it.each(['rename', 'delete'] as const)('listDevices:%s 成功后的刷新不复用改动前的在途请求', async (op) => {
+    let resolveFirst: ((value: { devices: unknown[] }) => void) | undefined;
+    const apiFetch = vi.fn()
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }))
+      .mockResolvedValue({ deviceId: 'dev-1', name: 'New', deleted: true, devices: [] });
+    const deps = makeDeps({ apiFetch });
+    const before = handleListDevices(deps);
+    if (op === 'rename') await handleRenameDevice(deps, 'dev-1', 'New');
+    else await handleDeleteDevice(deps, 'dev-1');
+    const after = handleListDevices(deps);
+    expect(apiFetch).toHaveBeenCalledTimes(3);
+    resolveFirst?.({ devices: [] });
+    await Promise.all([before, after]);
+  });
+
+  // #10671: V2 may commit before V1 rejects. A failed mutation must also
+  // invalidate a pre-write list, without claiming deletion or closing a link.
+  it.each(['rename', 'delete'] as const)('listDevices:%s 失败后补拉不复用旧在途目录', async op => {
+    let resolveOld!: (value: { devices: unknown[] }) => void;
+    const fresh = { deviceId: 'dev-1', name: 'New', online: true, remoteControlEnabled: true };
+    const apiFetch = vi.fn()
+      .mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; }))
+      .mockRejectedValueOnce(new ServerApiError('UNAVAILABLE', 503, 'legacy write failed'))
+      .mockResolvedValue({ devices: [fresh] });
+    const closeLink = vi.fn();
+    const deps = makeDeps({ apiFetch, closeLink });
+    const old = handleListDevices(deps);
+    const mutation = op === 'rename' ? handleRenameDevice(deps, 'dev-1', 'New') : handleDeleteDevice(deps, 'dev-1');
+    await expect(mutation).rejects.toThrow();
+    const after = handleListDevices(deps);
+    expect(apiFetch).toHaveBeenCalledTimes(3);
+    resolveOld({ devices: [{ ...fresh, name: 'Old' }] });
+    await expect(after).resolves.toMatchObject({ devices: [{ name: 'New' }] });
+    await expect(old).resolves.toMatchObject({ devices: [{ name: 'New' }] });
+    expect(closeLink).not.toHaveBeenCalled();
+    expect(deps.applyControllerDisplayNameListSnapshot).not.toHaveBeenCalledWith(
+      [expect.objectContaining({ name: 'Old' })], expect.anything());
+  });
+
+  it.each(['rename', 'delete'] as const)('listDevices:%s 会使变更前发出的在途响应失效且不安装旧目录', async (op) => {
+    let resolveOld: ((value: { devices: unknown[] }) => void) | undefined;
+    const fresh = { deviceId: 'dev-1', name: 'New', online: true, remoteControlEnabled: true };
+    const apiFetch = vi.fn()
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }))
+      .mockResolvedValueOnce(op === 'rename' ? { deviceId: 'dev-1', name: 'New' } : { deviceId: 'dev-1', deleted: true })
+      .mockResolvedValue({ devices: [fresh] });
+    const deps = makeDeps({ apiFetch });
+    const old = handleListDevices(deps);
+    if (op === 'rename') await handleRenameDevice(deps, 'dev-1', 'New');
+    else await handleDeleteDevice(deps, 'dev-1');
+    resolveOld?.({ devices: [{ ...fresh, name: 'Old' }] });
+    await expect(old).resolves.toMatchObject({ devices: [{ name: 'New' }] });
+    expect(deps.applyControllerDisplayNameListSnapshot).toHaveBeenCalledWith(
+      [expect.objectContaining({ name: 'New' })], expect.anything());
+    expect(deps.applyControllerDisplayNameListSnapshot).not.toHaveBeenCalledWith(
+      [expect.objectContaining({ name: 'Old' })], expect.anything());
+  });
+
+  // Unit: relay presence is not the group data-path state. Projection may keep
+  // an authenticated path online and control-ready, but must not grant local control.
+  // 只有一条腿读到的目录(混合发现):行是新鲜的,但「缺席」证明不了另一条腿上的设备已经
+  // 不在了(配对的设备可以关掉 V2 只走 V1)。权威动作一概不做:不按缺席剪 presence 视图、
+  // 不把名字当成持久真相(Codex review #9360「Keep one-leg hybrid results
+  // non-authoritative」)。
+  // 最小失败输入:apiFetch 返回 { devices:[...], partial:true }。tier:unit(同一 harness)。
+  it('listDevices: 只有一条腿读到的目录不按权威目录处理', async () => {
+    const device = {
+      deviceId: 'dev-1', name: 'Peer', selfName: 'Host.local', platform: 'darwin', lastSeenAt: null,
+      online: true, busy: false, remoteControlEnabled: true, controlEnabled: true, isSelf: false,
+    };
+    const apiFetch: DeviceLinkIpcDeps['apiFetch'] = async <T>() => ({ devices: [device], partial: true }) as T;
+    const deps = makeDeps({
+      apiFetch,
+      rememberLastKnownDeviceName: vi.fn(async () => true),
+      applyControllerPresenceListSnapshot: vi.fn(),
+    });
+    await expect(handleListDevices(deps)).resolves.toMatchObject({
+      partial: true,
+      devices: [{ deviceId: 'dev-1', name: 'Peer' }],
+    });
+    expect(deps.applyControllerPresenceListSnapshot).not.toHaveBeenCalled();
+    expect(deps.applyControllerDisplayNameListSnapshot).not.toHaveBeenCalled();
+    expect(deps.rememberLastKnownDeviceName).not.toHaveBeenCalled();
+  });
+
+  // 部分目录并进来的**旧行**只在上一次完整目录的 30 分钟预算内可信。连续性缓存必须按
+  // 这份旧期限算预算:按「刚读到的」算,就是「完整目录 29 分钟前 → 部分读 → 两条腿都
+  // 失败」之后旧设备还能再显示约 30 分钟(Greptile review #9360「旧目录被重新计时」)。
+  // 最小失败输入:apiFetch 返回 { devices:[...], partial:true, rememberedUntilMs: 60 秒后 }。
+  // tier:unit(同一 harness + 真实连续性读取层)。
+  it('listDevices: 部分目录的显示预算按并进来的旧行算,不重新给满 30 分钟', async () => {
+    const device = {
+      deviceId: 'dev-1', name: 'Peer', selfName: 'Host.local', platform: 'darwin', lastSeenAt: null,
+      online: true, busy: false, remoteControlEnabled: true, controlEnabled: true, isSelf: false,
+    };
+    const apiFetch: DeviceLinkIpcDeps['apiFetch'] = async <T>() => ({
+      devices: [device], partial: true, rememberedUntilMs: Date.now() + 60_000,
+    }) as T;
+    const partial = await handleListDevices(makeDeps({ apiFetch }));
+    // 旧行只剩 1 分钟预算 → 下发的显示预算就是 1 分钟,不是重新给满 30 分钟。
+    expect(partial.displayBudget?.remainingMs).toBeLessThanOrEqual(60_000);
+    expect(partial.displayBudget?.remainingMs).toBeGreaterThan(30_000);
+    // 对照:完整目录的每一行都是刚读到的 → 满额 30 分钟。
+    __resetDeviceListCoalescingForTests();
+    const complete = await handleListDevices(makeDeps({
+      apiFetch: async <T>() => ({ devices: [device] }) as T,
+    }));
+    expect(complete.displayBudget?.remainingMs).toBeGreaterThan(29 * 60_000);
+  });
+
+  it('listDevices: projects a retained group path as control-ready without granting local control or reviving other devices', async () => {
+    const deps = makeDeps({
+      apiFetch: vi.fn().mockResolvedValue({ devices: ['executor', 'explicitly-off', 'fresh-off', 'phone', 'other'].map(deviceId => ({
+        deviceId, name: deviceId, online: deviceId === 'fresh-off', remoteControlEnabled: false, isSelf: false,
+        platform: deviceId === 'phone' ? 'ios' : 'darwin',
+      })) }),
+      hasOfflineDirectPath: id => id !== 'other',
+      isPeerControlAvailable: id => id !== 'explicitly-off',
+      getState: () => ({ ...makeDeps().getState(), disabledControlDeviceIds: ['executor'] }),
+    });
+    await expect(handleListDevices(deps)).resolves.toMatchObject({ devices: [
+      { deviceId: 'executor', online: true, remoteControlEnabled: true, controlEnabled: false },
+      { deviceId: 'explicitly-off', online: true, remoteControlEnabled: false, controlEnabled: true },
+      // A fresh online row's false is explicit, even while a direct path is retained.
+      { deviceId: 'fresh-off', online: true, remoteControlEnabled: false, controlEnabled: true },
+      { deviceId: 'phone', online: true, remoteControlEnabled: false, controlEnabled: true },
+      { deviceId: 'other', online: false, remoteControlEnabled: false, controlEnabled: true },
+    ] });
+  });
+
+
+  it('retained list projection keeps a same-account group member routable through the production directory', async () => {
+    const deps = makeDeps({
+      apiFetch: vi.fn().mockResolvedValue({ devices: [{
+        deviceId: 'executor', name: 'Executor', platform: 'darwin', appVersion: '1',
+        online: false, remoteControlEnabled: false, busy: false, isSelf: false,
+      }] }),
+      hasOfflineDirectPath: id => id === 'executor',
+      isPeerControlAvailable: () => true,
+    });
+    const { devices } = await handleListDevices(deps);
+    const provider = { id: 'anthropic', name: 'Anthropic', agents: ['claude-code'], connected: true,
+      models: { 'claude-code': [] }, routing: { 'claude-code': {} } } as unknown as ProviderView;
+    const readDeviceProviders = vi.fn(async () => [provider]);
+    const directory = createProviderGroupDirectory({
+      listLocalProviders: async () => [provider],
+      localDeviceName: () => 'Owner',
+      listDevices: async () => devices,
+      readDeviceProviders,
+      listReceivedShares: () => [],
+      isMobilePlatform: platform => platform === 'ios' || platform === 'android',
+      now: () => 0,
+    });
+    const resolved = await directory.resolveMembers('anthropic', { strategy: 'expiring', autoSwitch: true,
+      members: [{ key: 'member', kind: 'device', agentDeviceId: 'executor', providerId: 'anthropic',
+        limit: 1, weight: 1, paused: false }] });
+    expect(resolved[0].state).toBe('ok');
+    expect(readDeviceProviders).toHaveBeenCalledWith('executor', undefined);
+  });
+
   it('listDevices:503 → DEVICE_LINK_UNAVAILABLE,网络错(status 0)同样', async () => {
     const deps503 = makeDeps({
       apiFetch: vi.fn().mockRejectedValue(new ServerApiError('SERVICE_UNAVAILABLE', 503, 'off')),
@@ -312,6 +1107,61 @@ describe('device-link IPC handlers', () => {
       apiFetch: vi.fn().mockRejectedValue(new ServerApiError('NETWORK_ERROR', 0, 'net down')),
     });
     await expect(handleListDevices(depsNet)).rejects.toThrowError(/\[DEVICE_LINK_UNAVAILABLE\]/);
+  });
+
+  // Test value
+  // - Production entry/observable result: handleListDevices; a directory outage must not
+  //   turn an old snapshot into a fresh last-known-name write for the next cold start.
+  // - Rule: bounded read continuity may serve the stale directory, but stale online/name
+  //   fields are not authoritative (provider-groups short-outage section).
+  // - Coverage gap: existing name tests cover fresh responses and superseded in-flight
+  //   responses, but not the 30-minute stale continuation.
+  // - Minimal failing input: a fresh read caches "旧目录名", then a 503 returns that stale row.
+  // - Tier: unit (in-memory IPC harness), same file as the other listDevices cases.
+  it('listDevices: stale directory does not rewrite the last-known name cache', async () => {
+    const device = (name: string) => ({
+      deviceId: 'dev-1',
+      name,
+      selfName: 'Host.local',
+      platform: 'darwin',
+      lastSeenAt: '2026-06-23T00:00:00.000Z',
+      online: true,
+      busy: false,
+      remoteControlEnabled: true,
+      controlEnabled: true,
+      isSelf: false,
+    });
+    const rememberLastKnownDeviceName = vi.fn(async () => true);
+    const forgetLastKnownDeviceName = vi.fn(async () => true);
+    const applyControllerPresenceListSnapshot = vi.fn();
+    let offline = false;
+    let lastKnownNames: Record<string, string> = { 'dev-1': '旧名字' };
+    const apiFetch: DeviceLinkIpcDeps['apiFetch'] = async <T>() => {
+      if (offline) throw new ServerApiError('SERVICE_UNAVAILABLE', 503, 'off');
+      return { devices: [device('旧目录名')] } as T;
+    };
+    const deps = makeDeps({
+      apiFetch,
+      readLastKnownDeviceNames: vi.fn(() => lastKnownNames),
+      rememberLastKnownDeviceName,
+      forgetLastKnownDeviceName,
+      applyControllerPresenceListSnapshot,
+    });
+    await expect(handleListDevices(deps)).resolves.toMatchObject({ devices: [{ name: '旧目录名' }] });
+    expect(rememberLastKnownDeviceName).toHaveBeenCalledWith('dev-1', '旧目录名');
+    expect(applyControllerPresenceListSnapshot).toHaveBeenCalledTimes(1);
+    rememberLastKnownDeviceName.mockClear();
+    forgetLastKnownDeviceName.mockClear();
+    applyControllerPresenceListSnapshot.mockClear();
+    // Simulate a newer last-known name arriving after the fresh directory read.
+    lastKnownNames = { 'dev-1': '新名字' };
+    offline = true;
+    await expect(handleListDevices(deps)).resolves.toMatchObject({ devices: [{ name: '旧目录名' }] });
+    expect(rememberLastKnownDeviceName).not.toHaveBeenCalled();
+    expect(forgetLastKnownDeviceName).not.toHaveBeenCalled();
+    // The bounded stale projection is display-only; it must not feed the
+    // presence/control-enabled adapter or clear a newer explicit control gate.
+    expect(applyControllerPresenceListSnapshot).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -400,6 +1250,8 @@ describe('device-link IPC handlers', () => {
         isSelf: false,
       });
 
+      // 两次调用间隔超过合并窗口(否则会共用同一在途请求,见上面的合并用例)。
+      vi.spyOn(Date, 'now').mockReturnValueOnce(0).mockReturnValueOnce(1_000);
       const oldRequest = handleListDevices(deps);
       const newRequest = handleListDevices(deps);
       resolvers[1]?.({ devices: [device('新数据库名')] });
@@ -469,6 +1321,7 @@ describe('device-link IPC handlers', () => {
           isSelf: false,
         },
       ],
+      displayBudget: { remainingMs: expect.any(Number) },
     });
     expect(rememberLastKnownDeviceName).toHaveBeenCalledWith('dev-1', 'MacBook Pro');
   });
@@ -508,6 +1361,7 @@ describe('device-link IPC handlers', () => {
           isSelf: false,
         },
       ],
+      displayBudget: { remainingMs: expect.any(Number) },
     });
   });
 
@@ -777,6 +1631,7 @@ describe('device-link IPC handlers', () => {
           isSelf: false,
         },
       ],
+      displayBudget: { remainingMs: expect.any(Number) },
     });
   });
 
@@ -1198,6 +2053,31 @@ describe('device-link controller handlers', () => {
     expect(refcountTesting.refCount('dev-2', 'sessions')).toBe(0);
   });
 
+  // #8979 r4523117284 / unit: renderer ACK reuse depends on Main retaining the
+  // newer registration. Existing single-request failures miss this ordering.
+  it.each(['throw', 'result'])('旧 subscribe 迟到失败不撤销恢复后的新订阅 (%s)', async failure => {
+    let failOld!: () => void;
+    const old = new Promise<Awaited<ReturnType<DeviceLinkIpcDeps['subscribe']>>>((resolve, reject) => {
+      failOld = () => failure === 'throw'
+        ? reject(new DeviceLinkError('INVOKE_TIMEOUT', 'old request'))
+        : resolve({ ok: false, error: { code: 'INVOKE_TIMEOUT', message: 'old request' } });
+    });
+    const deps = makeDeps({ subscribe: vi.fn().mockReturnValueOnce(old)
+      .mockResolvedValue({ ok: true, result: { ok: true } }) });
+    const oldResult = handleSubscribe(deps, 'dev-2', ['session:s1'], 1).catch(error => error);
+    handleCloseLink(deps, 'dev-2');
+    await handleSubscribe(deps, 'dev-2', ['session:s1'], 1);
+    await handleSubscribe(deps, 'dev-2', ['session:s1'], 2);
+    failOld();
+    expect(await oldResult).toBeInstanceOf(Error);
+    expect(refcountTesting.refCount('dev-2', 'session:s1')).toBe(2);
+    expect(refcountTesting.snapshotSubscriptions('dev-2')).toEqual([{ deviceId: 'dev-2', topics: ['session:s1'] }]);
+    await handleUnsubscribe(deps, 'dev-2', ['session:s1'], 2);
+    expect(deps.unsubscribe).not.toHaveBeenCalled();
+    await handleUnsubscribe(deps, 'dev-2', ['session:s1'], 1);
+    expect(deps.unsubscribe).toHaveBeenCalledExactlyOnceWith('dev-2', ['session:s1']);
+  });
+
   it('订阅失败不留残留 ref:失败窗口不计数,后续成功窗口 unsubscribe 仍正常转发', async () => {
     // 窗口 1 订阅失败(ACCESS_REVOKED):handler 抛错,且**不应**记引用计数。
     const deps = makeDeps({
@@ -1273,6 +2153,8 @@ describe('device-link revoke / restore handlers', () => {
 describe('device-link settings normalize', () => {
   it('非法输入回落默认值,布尔严格校验', () => {
     expect(settingsTesting.normalize(null)).toEqual({
+      agentNetEnabled: false,
+      agentNetOnlyEncrypted: false,
       remoteDesktopEnabled: false,
       remoteControlEnabled: false,
       keepAwake: false,
@@ -1281,6 +2163,8 @@ describe('device-link settings normalize', () => {
       lastKnownDeviceNames: {},
     });
     expect(settingsTesting.normalize({})).toEqual({
+      agentNetEnabled: false,
+      agentNetOnlyEncrypted: false,
       remoteDesktopEnabled: false,
       remoteControlEnabled: false,
       keepAwake: false,
@@ -1289,6 +2173,8 @@ describe('device-link settings normalize', () => {
       lastKnownDeviceNames: {},
     });
     expect(settingsTesting.normalize({ remoteControlEnabled: 'true' })).toEqual({
+      agentNetEnabled: false,
+      agentNetOnlyEncrypted: false,
       remoteDesktopEnabled: false,
       remoteControlEnabled: false,
       keepAwake: false,
@@ -1297,6 +2183,8 @@ describe('device-link settings normalize', () => {
       lastKnownDeviceNames: {},
     });
     expect(settingsTesting.normalize({ remoteControlEnabled: true })).toEqual({
+      agentNetEnabled: false,
+      agentNetOnlyEncrypted: false,
       remoteDesktopEnabled: false,
       remoteControlEnabled: true,
       keepAwake: false,
@@ -1312,6 +2200,8 @@ describe('device-link settings normalize', () => {
         disabledControlDeviceIds: [' dev-1 ', 'dev-1', '', 42, 'dev-2'],
       }),
     ).toEqual({
+      agentNetEnabled: false,
+      agentNetOnlyEncrypted: false,
       remoteDesktopEnabled: false,
       remoteControlEnabled: false,
       keepAwake: false,
@@ -1332,6 +2222,8 @@ describe('device-link settings normalize', () => {
         },
       }),
     ).toEqual({
+      agentNetEnabled: false,
+      agentNetOnlyEncrypted: false,
       remoteDesktopEnabled: false,
       remoteControlEnabled: false,
       keepAwake: false,

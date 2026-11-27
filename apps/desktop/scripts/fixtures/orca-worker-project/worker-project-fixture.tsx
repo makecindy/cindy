@@ -191,8 +191,32 @@ void mountPage({
         },
       },
     },
-    worktreeBranchSyncStatus: async ({ branch }: { branch: string }) => ({ branch, remote: 'origin', remoteBranch: branch, remoteOnly: false, ahead: 0, behind: 3, dirtyFiles: 2, checkoutPath: inherited.directory }),
-    worktreeSyncBranch: async ({ branch }: { branch: string }) => ({ updated: 3, status: { branch, remote: 'origin', remoteBranch: branch, remoteOnly: false, ahead: 0, behind: 0, dirtyFiles: 2 } }),
+    worktreeBranchSyncStatus: async ({ branch }: { branch: string }) => ({
+      branch,
+      remote: 'origin',
+      remoteBranch: branch,
+      remoteOnly: false,
+      ahead: 0,
+      behind: 3,
+      dirtyFiles: 2,
+      checkoutPath: inherited.directory,
+    }),
+    worktreeSyncBranch: async ({ branch }: { branch: string }) => ({
+      updated: 3,
+      status: {
+        branch,
+        remote: 'origin',
+        remoteBranch: branch,
+        remoteOnly: false,
+        ahead: 0,
+        behind: 0,
+        dirtyFiles: 2,
+      },
+    }),
+    getNewMakerWorktreeBranchPreference: async (baseRepo: string) =>
+      ['/projects/design-system', '/projects/cindy'].includes(baseRepo)
+        ? { baseRepo, sourceBranch: 'release/v2', revision: 1 }
+        : null,
     worktreeListBranches: async () => ({
       remoteDefaultBranch: 'refs/remotes/origin/main',
       branches: ['main', 'feat/worker-project-picker', 'release/v2'],

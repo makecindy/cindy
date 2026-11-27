@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { keyboardControlRegion, controlRegion, sharedStatusRowDrawerTop, windowDivision, type WindowGeometry } from '@/platform/windowGeometry';
+import { keyboardControlRegion, controlRegion, floatingTopRow, sharedStatusRowDrawerTop, sharedStatusRowTrailingReserve, windowDivision, type WindowGeometry } from '@/platform/windowGeometry';
+import { sessionNavigationTitleMaxWidth } from '@/platform/chrome/navigationTitleWidth';
+import { navigationChrome } from '@/theme/tokens';
 import { foldDesktopLayout } from '@/remote-desktop/foldDesktopLayout';
 import { sessionPaneLayout } from '@/session/sessionPaneLayout';
 
@@ -8,6 +10,30 @@ const window = (patch: Partial<WindowGeometry> = {}): WindowGeometry => ({
   regularWidth: true, regularHeight: true, barEdge: 'right', regions: [], reservedRegionsSupported: true, ...patch,
 });
 describe('adaptive window regions', () => {
+  // Android FoldingFeature reports a crease as a zero-width/height line.
+  // Existing Duo cases only cover positive-area hinges. Exercise the production
+  // pane/control layouts so Android cannot silently fall back to one pane.
+  it('splits at zero-thickness Android folds without inventing a hinge gap', () => {
+    const g = window({ width: 700, height: 900, insets: { top: 24, bottom: 24, left: 0, right: 0 },
+      regions: [{ kind: 'division', x: 340, y: 0, width: 0, height: 900 }] });
+    const panes = sessionPaneLayout(g);
+    expect(panes.persistent).toBe(true);
+    expect(panes.sidebarWidth).toBe(340);
+    expect(panes.sidebarGap).toBe(0);
+    expect(panes.detail).toEqual({ x: 340, y: 24, width: 360, height: 852 });
+    const tabletop = { ...g, regions: [{ kind: 'division' as const, x: 0, y: 450, width: 700, height: 0 }] };
+    expect(foldDesktopLayout(tabletop, 0, 240, false)?.media).toEqual({ x: 0, y: 24, width: 700, height: 426 });
+    expect(controlRegion(tabletop)).toEqual({ x: 0, y: 450, width: 700, height: 426 });
+  });
+  it('rejects empty points, negative dimensions and folds that do not cross the window', () => {
+    for (const region of [
+      { x: 300, y: 300, width: 0, height: 0 },
+      { x: 300, y: 0, width: -1, height: 700 },
+      { x: 0, y: 300, width: 900, height: -1 },
+      { x: 300, y: 800, width: 0, height: 700 },
+      { x: 1000, y: 300, width: 900, height: 0 },
+    ]) expect(windowDivision(window({ regions: [{ ...region, kind: 'division' }] }))).toBeNull();
+  });
   it('reserves independent safe edges and room for both navigation and content', () => {
     const p = sessionPaneLayout(window());
     expect(p.persistent).toBe(true);
@@ -17,7 +43,7 @@ describe('adaptive window regions', () => {
   // Unit: Duo resize request (2026-10-23). Existing tests cover fixed panes only;
   // dragging beyond either edge must not squeeze the list or message composer away.
   it('clamps manual column widths and reserves at least 400pt for the conversation', () => {
-    for (const [requested, expected] of [[100, 240], [360, 360], [900, 420]]) {
+    for (const [requested, expected] of [[100, 300], [360, 360], [900, 420]]) {
       const p = sessionPaneLayout(window(), requested);
       expect(p.sidebarWidth).toBe(expected);
       expect(p.detail.x + p.detail.width).toBe(840);
@@ -113,4 +139,75 @@ describe('task-list drawer top when the system bar shares the status row', () =>
     expect(sharedStatusRowDrawerTop(103, 59)).toBeUndefined();
     expect(sharedStatusRowDrawerTop(0, 82)).toBeUndefined();
   });
+});
+
+// Regression: Duo file preview (2026-10-29). Its floating close/title/menu row sat under the whole
+// status area in portrait, and against the top screen edge (clipped) beside the landscape rail.
+describe('floating top row beside the Duo status area', () => {
+  const portrait = (patch: Partial<WindowGeometry> = {}) => window({ width: 662, height: 942, barEdge: 'none',
+    insets: { top: 82, left: 0, right: 0, bottom: 20 },
+    regions: [{ kind: 'occlusion', x: 520, y: 0, width: 142, height: 82 }], ...patch });
+  it('shares the status row in portrait, ending before the status area', () => {
+    expect(floatingTopRow(portrait(), 44)).toEqual({ top: 26, left: 12, right: 150, sharedStatusRow: true });
+  });
+  it('keeps the row below the status area for ordinary bars, other reservations and narrow rows', () => {
+    const below = { top: 82, left: 12, right: 12, sharedStatusRow: false };
+    expect(floatingTopRow(portrait({ regions: [] }), 44)).toEqual(below);
+    expect(floatingTopRow(portrait({ reservedRegionsSupported: false }), 44)).toEqual(below);
+    expect(floatingTopRow(portrait({ regions: [...portrait().regions, { kind: 'occlusion', x: 280, y: 20, width: 100, height: 40 }] }), 44)).toEqual(below);
+    expect(floatingTopRow(portrait({ width: 300, regularWidth: false, regions: [{ kind: 'occlusion', x: 160, y: 0, width: 140, height: 82 }] }), 44)).toMatchObject({ sharedStatusRow: false });
+  });
+  it('keeps a margin from the top edge beside a vertical system bar', () => {
+    expect(floatingTopRow(window(), 44)).toEqual({ top: 12, left: 12, right: 72, sharedStatusRow: false });
+  });
+});
+
+// Regression: Duo portrait home (2026-11-03). The native bar moved its trailing items left of the
+// status area (wider with a Live Activity), but the title view kept the full-bar width and the
+// device name ran under the remote-desktop / display pill.
+describe('native bar trailing reserve beside the Duo status area', () => {
+  const portrait = (statusX: number, patch: Partial<WindowGeometry> = {}) => window({ width: 662, height: 942, barEdge: 'none',
+    insets: { top: 82, left: 0, right: 0, bottom: 20 },
+    regions: [{ kind: 'occlusion', x: statusX, y: 0, width: 662 - statusX, height: 82 }], ...patch });
+  it('follows the reported status area plus the bar item spacing', () => {
+    expect(sharedStatusRowTrailingReserve(portrait(520), 82)).toBe(158);
+    expect(sharedStatusRowTrailingReserve(portrait(440), 82)).toBe(238);
+  });
+  it('reserves nothing for ordinary bars, a centered island or a vertical rail', () => {
+    expect(sharedStatusRowTrailingReserve(portrait(520, { regions: [] }), 82)).toBe(0);
+    expect(sharedStatusRowTrailingReserve(portrait(520, { reservedRegionsSupported: false }), 82)).toBe(0);
+    expect(sharedStatusRowTrailingReserve(portrait(520, { regions: [{ kind: 'occlusion', x: 270, y: 0, width: 120, height: 37 }] }), 82)).toBe(0);
+    expect(sharedStatusRowTrailingReserve(window(), 44)).toBe(0);
+  });
+  // Unit regression for the A. title: existing cases omit full-width top occlusions.
+  // A 402pt phone with a bar below its 62pt status area must keep its title width.
+  it('does not subtract the status area from a native bar below it or before measurement', () => {
+    const phone = portrait(0, { width: 402, regularWidth: false,
+      insets: { top: 62, left: 0, right: 0, bottom: 34 },
+      regions: [{ kind: 'occlusion', x: 0, y: 0, width: 402, height: 62 }] });
+    expect(sharedStatusRowTrailingReserve(phone, 116)).toBe(0);
+    expect(sharedStatusRowTrailingReserve(portrait(520), 0)).toBe(0);
+  });
+  // Regression: Duo portrait task page (2026-11-16). Only Home subtracted the status area; the
+  // task title kept its 240pt budget and ran under the remote-desktop / files / more capsule once
+  // a Live Activity widened the status area. Measured on the iPhone Duo simulator (iOS 27.1):
+  // bar 669pt, status area from 443pt with a Live Activity and from 535pt without.
+  // Minimal failing input: status area at 443pt with the task-list button shown.
+  it('keeps the task title between its toolbars and the status area as that area resizes', () => {
+    const duo = (statusX: number) => window({ width: 669, height: 951, barEdge: 'none',
+      insets: { top: 82, left: 0, right: 0, bottom: 34 },
+      regions: [{ kind: 'occlusion', x: statusX, y: 0, width: 669 - statusX, height: 82 }] });
+    const title = (statusX: number, detailsOnly = false) => sessionNavigationTitleMaxWidth({ barWidth: 669,
+      additionalListButton: false, detailsOnly, statusRowReserve: sharedStatusRowTrailingReserve(duo(statusX), 82) });
+    // The single leading task-list button ends 64pt in; the capsule is three 44pt targets ending at the status area.
+    const gap = (statusX: number, actions = 3) => statusX - 64 - navigationChrome.target * actions;
+    expect(title(443)).toBeGreaterThan(navigationChrome.target * 2);
+    expect(title(443)).toBeLessThanOrEqual(gap(443));
+    expect(title(535)).toBeGreaterThan(title(443));
+    expect(title(535)).toBeLessThanOrEqual(gap(535));
+    expect(title(443, true)).toBeLessThanOrEqual(gap(443, 1));
+    // An ordinary phone bar sits below the status area and keeps its previous budget.
+    expect(sessionNavigationTitleMaxWidth({ barWidth: 402, additionalListButton: false, detailsOnly: false })).toBe(170);
+  });
+
 });

@@ -35,8 +35,10 @@ import { FileTypeIcon } from '@/components/ui/file-type-icon';
  * 用远端消息时间窗判定，不使用控制端时钟，也不复用普通链接的存在性缓存；SSH 保持仅工具产物。
  */
 
+import { GeneratedPluginPackage } from './GeneratedPluginPackage';
+import { useSessionQuickSend } from './SessionQuickSendContext';
 import { CHAT_FOCUS_CLASS, CHAT_COLOR_TRANSITION_CLASS } from './chatChrome';
-import { memo, useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState, type ReactNode } from 'react';
 import { ChevronDown, ChevronUp, Globe2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -64,9 +66,9 @@ import { useChatSessionFile } from './ChatSessionFileContext';
 import { useFileChipContextMenu } from './useFileChipContextMenu';
 import { activateInlineLinkFromKeyboard } from './linkInteraction';
 import { ImageLightbox } from './ImageLightbox';
-import { TextLightbox } from './TextLightbox';
+import { TextLightbox } from './lazyPreviewLightboxes';
 import { ModelLightbox } from './ModelLightbox';
-import { isHtmlFilePath, openHtmlFileByPreference } from './useOpenWithMenu';
+import { isHtmlFilePath, openHtmlFileByPreference } from './messageLinkActions';
 
 function formatArtifactSummaryValue(summary: DocumentArtifactMetadata['summary']): number | string {
   if (!summary || summary.kind !== 'bytes') return summary?.value ?? '';
@@ -354,6 +356,7 @@ function GeneratedFileChip({
   return (
     <>
       <button
+        data-chat-copy-content
         type="button"
         title={file.path}
         disabled={pending}
@@ -588,6 +591,7 @@ export function generatedFileVisibleSignature(file: GeneratedFileRef): string {
     file.source,
     file.artifactConfirmed ? '1' : '0',
     artifactVisibleSignature(file.artifact),
+    file.packageToolUseId ?? '',
   ].join('\t');
 }
 
@@ -738,6 +742,7 @@ function generatedFilesCardPropsEqual(
     turnEndMs: number | null;
     turnSealed?: boolean;
     botArtifacts?: boolean;
+    renderBotArtifacts?: (content: ReactNode, renderItemKey?: string) => ReactNode;
     onVisibilityChange?: (checkKey: string, visible: boolean) => void;
   },
   next: {
@@ -747,12 +752,14 @@ function generatedFilesCardPropsEqual(
     turnEndMs: number | null;
     turnSealed?: boolean;
     botArtifacts?: boolean;
+    renderBotArtifacts?: (content: ReactNode, renderItemKey?: string) => ReactNode;
     onVisibilityChange?: (checkKey: string, visible: boolean) => void;
   },
 ): boolean {
   return (
     prev.renderItemKey === next.renderItemKey &&
     prev.botArtifacts === next.botArtifacts &&
+    prev.renderBotArtifacts === next.renderBotArtifacts &&
     prev.onVisibilityChange === next.onVisibilityChange &&
     generatedFilesCheckKey(prev.files, prev.turnStartMs, prev.turnEndMs, prev.turnSealed) ===
       generatedFilesCheckKey(next.files, next.turnStartMs, next.turnEndMs, next.turnSealed)
@@ -766,6 +773,7 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
   turnEndMs,
   turnSealed = false,
   botArtifacts = false,
+  renderBotArtifacts,
   onVisibilityChange,
 }: {
   renderItemKey?: string;
@@ -775,11 +783,14 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
   turnSealed?: boolean;
   /** 伙伴会话专属：成果优先、辅助文件默认收起。 */
   botArtifacts?: boolean;
+  /** Wrap nonempty Bot content, including disabled cache seeds awaiting stat. */
+  renderBotArtifacts?: (content: ReactNode, renderItemKey?: string) => ReactNode;
   /** Report the same checked visibility used by the card, never candidate paths. */
   onVisibilityChange?: (checkKey: string, visible: boolean) => void;
 }) {
   const { t } = useTranslation();
   const fileCtx = useChatSessionFile();
+  const writableSession = useSessionQuickSend();
   const remoteOrigin = isRemoteFileOrigin(fileCtx.origin) ? fileCtx.origin : null;
   // 首屏保持 null(本机已 stat 过的路径例外,见 seedLocalGeneratedFilesFromStatCache)。
   // 之后按内容指纹增量 stat:未完成的 tool_use 不查,已确认的路径不重复 IPC,
@@ -986,9 +997,9 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
     const visiblePrimary = expanded ? primary : primary.slice(0, MAX_VISIBLE_BOT_ARTIFACTS);
     const hiddenPrimaryCount = primary.length - visiblePrimary.length;
 
-    return (
+    const card = (
       <div
-        data-render-item-key={renderItemKey}
+        data-render-item-key={renderBotArtifacts ? undefined : renderItemKey}
         className="my-1 flex max-w-[680px] flex-col gap-2"
         data-testid="bot-generated-artifacts"
       >
@@ -1060,18 +1071,31 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
         ) : null}
       </div>
     );
+    return renderBotArtifacts ? renderBotArtifacts(card, renderItemKey) : card;
   }
 
   // 折叠(对标 Codex 的可展开产物列表):超过 MAX_VISIBLE_FILES 时只显示前
   // MAX_VISIBLE_FILES 个 + 「再显示 N 个文件」;展开后提供「收起」回折。
-  const visible = expanded ? existing : existing.slice(0, MAX_VISIBLE_FILES);
-  const hiddenCount = existing.length - visible.length;
+  const installSessionId =
+    fileCtx.localConfirmed && fileCtx.origin.kind === 'local' && writableSession ? fileCtx.sessionId : null;
+  const candidates = installSessionId
+    ? existing.filter((file) => /\.cindy$/i.test(file.name) && !pendingPaths.has(file.path))
+    : [];
+  const candidateSet = new Set(candidates);
+  const filesForList = candidates.length ? existing.filter(file => !candidateSet.has(file)) : existing;
+  const visible = expanded ? filesForList : filesForList.slice(0, MAX_VISIBLE_FILES);
+  const hiddenCount = filesForList.length - visible.length;
 
-  const hasArtifacts = existing.some((file) => file.artifact);
-  const hasOnlyArtifacts = existing.every((file) => file.artifact);
+  const hasArtifacts = filesForList.some((file) => file.artifact);
+  const hasOnlyArtifacts = filesForList.every((file) => file.artifact);
 
   return (
     <div data-render-item-key={renderItemKey} className="my-1 flex flex-col gap-2">
+      {installSessionId && candidates.map((file) => (
+        <GeneratedPluginPackage key={JSON.stringify([file.path, file.packageToolUseId])} path={file.path} sessionId={installSessionId}>
+          <GeneratedFileChip file={file} />
+        </GeneratedPluginPackage>
+      ))}
       {!hasOnlyArtifacts && (
         <span className="text-12 font-medium text-[var(--text-secondary)]">
           {t('chat.generatedFiles.title')}
@@ -1099,7 +1123,7 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
             <ChevronDown size={14} className="shrink-0" />
           </button>
         )}
-        {expanded && existing.length > MAX_VISIBLE_FILES && (
+        {expanded && filesForList.length > MAX_VISIBLE_FILES && (
           <button
             type="button"
             onClick={() => setExpanded(false)}

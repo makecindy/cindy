@@ -4,6 +4,7 @@
  * Main owns discovery and filesystem access. Renderer batches visible requests, keeps bytes in a
  * bounded shared LRU, and treats customIconKey as a snapshot cache generation rather than a byte
  * content hash. Main verifies every materialized read; a refreshed projection gets a new key.
+ * Historical scaffold assets resolve to the same presentation as missing icons.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -14,6 +15,7 @@ import type {
   PluginMarketLocalIconRequest,
   PluginMarketLocalIconResult,
 } from '../../../../shared/pluginMarket';
+import { ghostPluginIconSource } from './ghostPluginViewModel';
 import {
   isPluginMarketCustomIconKey,
   pluginMarketCustomIconSourceToken,
@@ -408,9 +410,11 @@ export function usePluginMarketIcon(
   const [nearViewport, setNearViewport] = useState(
     () => !deferUntilVisible || typeof IntersectionObserver === 'undefined',
   );
+  const [seenRemoteIcon, setSeenRemoteIcon] = useState(false);
+  const observeCard = deferUntilVisible && Boolean(request || item.icon?.url);
 
   useEffect(() => {
-    if (!request || !deferUntilVisible) {
+    if (!observeCard) {
       setNearViewport(true);
       return;
     }
@@ -420,12 +424,19 @@ export function usePluginMarketIcon(
     }
     setNearViewport(false);
     const observer = new IntersectionObserver(
-      (entries) => setNearViewport(entries.some((entry) => entry.isIntersecting)),
+      (entries) => {
+        const isNear = entries.some((entry) => entry.isIntersecting);
+        if (request) setNearViewport(isNear);
+        else if (isNear) {
+          setSeenRemoteIcon(true);
+          observer.disconnect();
+        }
+      },
       { rootMargin: '240px' },
     );
     observer.observe(target);
     return () => observer.disconnect();
-  }, [deferUntilVisible, request, target]);
+  }, [observeCard, request, target]);
 
   const subscribeToRequest = useCallback(
     (listener: () => void) => subscribe(request, listener),
@@ -439,12 +450,17 @@ export function usePluginMarketIcon(
     return pin(request);
   }, [nearViewport, request]);
 
+  const [failedThumbnail, setFailedThumbnail] = useState<string>();
+  const thumbnail = deferUntilVisible && !request ? item.icon?.thumbnailUrl : undefined;
+  const activeThumbnail = thumbnail === failedThumbnail ? undefined : thumbnail;
+  const remoteReady = !deferUntilVisible || seenRemoteIcon || typeof IntersectionObserver === 'undefined';
   const onIconLoadError = useCallback(
     (fallback?: () => void) => {
       if (request) reportDecodeFailure(request);
+      else if (activeThumbnail) setFailedThumbnail(activeThumbnail);
       else fallback?.();
     },
-    [request],
+    [request, activeThumbnail],
   );
   const onIconLoad = useCallback(() => {
     if (request) reportDecodeSuccess(request);
@@ -452,12 +468,14 @@ export function usePluginMarketIcon(
 
   return {
     containerRef: setTarget,
-    iconDataUrl:
+    iconDataUrl: ghostPluginIconSource(
       request && current.status === 'loaded'
         ? current.dataUrl
         : request
           ? undefined
-          : item.icon?.url,
+          : remoteReady ? activeThumbnail ?? item.icon?.url : undefined,
+      request ? undefined : item.icon?.sha256,
+    ),
     onIconLoad,
     onIconLoadError,
   };

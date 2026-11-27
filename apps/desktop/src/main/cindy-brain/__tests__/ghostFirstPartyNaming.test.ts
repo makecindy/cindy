@@ -2,11 +2,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { isUserInstallReservedGhostId, validateGhostManifest } from '../../../shared/ghost.js';
+import { validateGhostManifest } from '../../../shared/ghost.js';
 import { loadGhostFirstPartyFactsLoader } from '../ghostFirstPartyFacts.js';
 import {
   captureLegacyFirstPartyEligibility,
-  authorizeGhostHostPrimitive,
+  authorizeGhostTokenBroker,
   resolveGhostFirstPartyPrivilege,
   type GhostFirstPartyFacts,
   type GhostFirstPartyMarketRecord,
@@ -43,9 +43,8 @@ describe('first-party naming and approved source eligibility', () => {
         brokerEligible: false, hostPrimitiveEligible: false,
       });
     }
-    expect(isUserInstallReservedGhostId(ghostId)).toBe(ghostId === 'cindy-helper');
-    expect(resolveGhostFirstPartyPrivilege(facts({ ghostId, marketRecord: PUBLIC_RECORD })).hostPrimitiveEligible)
-      .toBe(ghostId === 'cindy-helper');
+    expect(resolveGhostFirstPartyPrivilege(facts({ ghostId, marketRecord: PUBLIC_RECORD })).brokerEligible)
+      .toBe(false);
   });
 
   it.each(['helper', 'xd-helper', 'filo-helper'])('grants trusted XD organization %s without a naming or phase gate', (ghostId) => {
@@ -54,34 +53,34 @@ describe('first-party naming and approved source eligibility', () => {
       marketRecord: { ...PUBLIC_RECORD, scope: 'organization', organizationId: XD.organizationId },
     });
     expect(resolveGhostFirstPartyPrivilege(trusted)).toEqual({
-      brokerEligible: true, hostPrimitiveEligible: true, basis: 'market-organization-current',
+      brokerEligible: true, hostPrimitiveEligible: false, basis: 'market-organization-current',
     });
     for (const source of ['legacy-adopted', 'local-market', 'git-market'] as const) {
-      expect(resolveGhostFirstPartyPrivilege({ ...trusted, marketRecord: { ...trusted.marketRecord!, source } }).hostPrimitiveEligible).toBe(false);
+      expect(resolveGhostFirstPartyPrivilege({ ...trusted, marketRecord: { ...trusted.marketRecord!, source } }).brokerEligible).toBe(false);
     }
-    expect(resolveGhostFirstPartyPrivilege({ ...trusted, marketRecord: null }).hostPrimitiveEligible).toBe(false);
-    expect(resolveGhostFirstPartyPrivilege({ ...trusted, namespace: null }).hostPrimitiveEligible).toBe(false);
-    expect(resolveGhostFirstPartyPrivilege({ ...trusted, currentOrganization: { ...XD, organizationId: 'other' } }).hostPrimitiveEligible).toBe(false);
-    expect(resolveGhostFirstPartyPrivilege({ ...trusted, marketRecord: { ...trusted.marketRecord!, approvedPackageSha256: 'b'.repeat(64) } }).hostPrimitiveEligible).toBe(false);
+    expect(resolveGhostFirstPartyPrivilege({ ...trusted, marketRecord: null }).brokerEligible).toBe(false);
+    expect(resolveGhostFirstPartyPrivilege({ ...trusted, namespace: null }).brokerEligible).toBe(false);
+    expect(resolveGhostFirstPartyPrivilege({ ...trusted, currentOrganization: { ...XD, organizationId: 'other' } }).brokerEligible).toBe(false);
+    expect(resolveGhostFirstPartyPrivilege({ ...trusted, marketRecord: { ...trusted.marketRecord!, approvedPackageSha256: 'b'.repeat(64) } }).brokerEligible).toBe(false);
   });
 
-  it.each(['helper', 'cindy-helper'])('binds official %s to exact approved identity and hash, not a prefix', (ghostId) => {
+  it.each(['helper', 'cindy-helper'])('does not grant enterprise Broker to public or bundled %s', (ghostId) => {
     const trusted = facts({
       ghostId, builtin: true, approvedPackageSha256: PACKAGE_SHA256,
       trustedSource: { kind: 'builtin-official', ghostId, namespace: null, packageSha256: PACKAGE_SHA256 },
     });
-    expect(resolveGhostFirstPartyPrivilege(trusted).hostPrimitiveEligible).toBe(true);
+    expect(resolveGhostFirstPartyPrivilege(trusted).brokerEligible).toBe(false);
     for (const changed of [
       { ...trusted, ghostId: 'different' },
       { ...trusted, namespace: 'xd' },
       { ...trusted, approvedPackageSha256: null },
       { ...trusted, approvedPackageSha256: 'b'.repeat(64) },
       { ...trusted, trustedSource: { ...trusted.trustedSource!, packageSha256: 'invalid' }, approvedPackageSha256: 'invalid' },
-    ]) expect(resolveGhostFirstPartyPrivilege(changed).hostPrimitiveEligible).toBe(false);
+    ]) expect(resolveGhostFirstPartyPrivilege(changed).brokerEligible).toBe(false);
     const publicInstall = { ...trusted, builtin: false, marketRecord: PUBLIC_RECORD, trustedSource: null };
-    expect(resolveGhostFirstPartyPrivilege(publicInstall).hostPrimitiveEligible).toBe(ghostId === 'cindy-helper');
-    expect(resolveGhostFirstPartyPrivilege({ ...publicInstall, marketRecord: null }).hostPrimitiveEligible).toBe(false);
-    expect(resolveGhostFirstPartyPrivilege({ ...publicInstall, marketRecord: { ...PUBLIC_RECORD, sha256: 'b'.repeat(64) } }).hostPrimitiveEligible).toBe(false);
+    expect(resolveGhostFirstPartyPrivilege(publicInstall).brokerEligible).toBe(false);
+    expect(resolveGhostFirstPartyPrivilege({ ...publicInstall, marketRecord: null }).brokerEligible).toBe(false);
+    expect(resolveGhostFirstPartyPrivilege({ ...publicInstall, marketRecord: { ...PUBLIC_RECORD, sha256: 'b'.repeat(64) } }).brokerEligible).toBe(false);
   });
 
   it('keeps an exact Cindy public resource usable without builtin facts or an organization prefix cache', () => {
@@ -100,20 +99,20 @@ describe('first-party naming and approved source eligibility', () => {
     expect(loaded.kind).toBe('ready');
     if (loaded.kind !== 'ready') throw new Error('public resource facts unavailable');
     expect(loaded.facts.trustedSource).toBeUndefined();
-    expect(resolveGhostFirstPartyPrivilege(loaded.facts).basis).toBe('market-public');
+    expect(resolveGhostFirstPartyPrivilege(loaded.facts).basis).toBe('denied-unknown-origin');
   });
 
-  it('allows an exact official Cindy web-search market update before alias denial but never public XD Mivo', () => {
+  it('denies Broker to public web-search and Mivo irrespective of old alias names', () => {
     const official = facts({ ghostId: 'cindy-web-search', marketRecord: PUBLIC_RECORD });
     expect(resolveGhostFirstPartyPrivilege(official)).toEqual({
-      brokerEligible: true, hostPrimitiveEligible: true, basis: 'market-public',
+      brokerEligible: false, hostPrimitiveEligible: false, basis: 'denied-unknown-origin',
     });
     for (const changed of [
       { ...official, namespace: 'xd' },
       { ...official, marketRecord: { ...PUBLIC_RECORD, approvedPackageSha256: 'b'.repeat(64) } },
       { ...official, marketRecord: { ...PUBLIC_RECORD, source: 'local-market' as const } },
       { ...official, ghostId: 'xd-mivo' },
-    ]) expect(resolveGhostFirstPartyPrivilege(changed).basis).toBe('denied-alias');
+    ]) expect(resolveGhostFirstPartyPrivilege(changed).basis).toBe('denied-unknown-origin');
   });
 
   it('captures only a real census installation with approved trusted public package evidence', () => {
@@ -141,17 +140,17 @@ describe('first-party naming and approved source eligibility', () => {
 
   it('does not let a legacy flag bypass alias, namespace, organization or changed-source gates', () => {
     for (const ghostId of ['xd-mivo', 'cindy-web-search']) {
-      expect(resolveGhostFirstPartyPrivilege(facts({ ghostId, legacyFirstPartyEligible: true })).basis).toBe('denied-alias');
+      expect(resolveGhostFirstPartyPrivilege(facts({ ghostId, legacyFirstPartyEligible: true })).basis).toBe('denied-unknown-origin');
     }
-    const legacy = facts({ ghostId: 'xd-helper', legacyFirstPartyEligible: true });
-    expect(resolveGhostFirstPartyPrivilege(legacy).hostPrimitiveEligible).toBe(true);
+    const legacy = facts({ ghostId: 'xd-helper', currentOrganization: XD, legacyFirstPartyEligible: true });
+    expect(resolveGhostFirstPartyPrivilege(legacy).brokerEligible).toBe(true);
     for (const changed of [
       { ...legacy, namespace: 'xd' },
       { ...legacy, installOrigin: 'agent-forge' as const },
       { ...legacy, marketRecord: { ...PUBLIC_RECORD, installed: false } },
       { ...legacy, marketRecord: { ...PUBLIC_RECORD, source: 'local-market' as const } },
       { ...legacy, marketRecord: { ...PUBLIC_RECORD, scope: 'organization' as const, organizationId: 'foreign' }, currentOrganization: XD },
-    ]) expect(resolveGhostFirstPartyPrivilege(changed).hostPrimitiveEligible).toBe(false);
+    ]) expect(resolveGhostFirstPartyPrivilege(changed).brokerEligible).toBe(false);
     expect(resolveGhostFirstPartyPrivilege({
       ...legacy, namespace: 'xd', currentOrganization: XD,
       marketRecord: { ...PUBLIC_RECORD, scope: 'organization', organizationId: 'foreign' },
@@ -180,7 +179,7 @@ describe('first-party naming and approved source eligibility', () => {
     expect(loaded.kind).toBe('ready');
     if (loaded.kind === 'ready') {
       expect(loaded.facts.currentOrganization).toEqual({ organizationId: XD.organizationId, orgSlug: 'xd' });
-      expect(resolveGhostFirstPartyPrivilege(loaded.facts).hostPrimitiveEligible).toBe(true);
+      expect(resolveGhostFirstPartyPrivilege(loaded.facts).brokerEligible).toBe(true);
     }
     expect(prefixReads).toBe(0);
     const legacyForge = loader.load('xd-helper', 'runtime', identity, { installOrigin: 'agent-forge' });
@@ -209,22 +208,22 @@ describe('first-party naming and approved source eligibility', () => {
     if (oldPending.kind !== 'ready') throw new Error('pending facts unavailable');
     expect(oldPending.facts.legacyPendingNamespace).toBe(true);
     expect(oldPending.facts.installOrigin).toBe('manual');
-    expect(resolveGhostFirstPartyPrivilege(oldPending.facts).hostPrimitiveEligible).toBe(true);
-    expect(resolveGhostFirstPartyPrivilege({ ...oldPending.facts, legacyPendingNamespace: false }).hostPrimitiveEligible).toBe(false);
+    expect(resolveGhostFirstPartyPrivilege(oldPending.facts).brokerEligible).toBe(true);
+    expect(resolveGhostFirstPartyPrivilege({ ...oldPending.facts, legacyPendingNamespace: false }).brokerEligible).toBe(false);
     for (const denied of [
       createLoader(null, true).load('xd-helper', 'runtime', identity),
       createLoader(undefined, false).load('xd-helper', 'runtime', identity),
       createLoader(undefined, true).load('xd-helper', 'install', identity),
       createLoader(undefined, true).load('xd-helper', 'runtime', { ...identity, orgId: 'foreign' }),
       createLoader(undefined, true).load('xd-helper', 'runtime', identity, { installOrigin: 'agent-forge' }),
-    ]) expect(authorizeGhostHostPrimitive('xd-helper', denied)).toBe(false);
+    ]) expect(authorizeGhostTokenBroker('xd-helper', denied)).toBe(false);
     expect(resolveGhostFirstPartyPrivilege({
       ...oldPending.facts, marketRecord: { ...oldPending.facts.marketRecord!, approvedPackageSha256: null },
-    }).hostPrimitiveEligible).toBe(false);
+    }).brokerEligible).toBe(false);
     const committed = createLoader('xd', true).load('xd-helper', 'runtime', identity);
     if (committed.kind !== 'ready') throw new Error('committed facts unavailable');
     expect(committed.facts.legacyPendingNamespace).toBeUndefined();
-    expect(resolveGhostFirstPartyPrivilege(committed.facts).hostPrimitiveEligible).toBe(true);
+    expect(resolveGhostFirstPartyPrivilege(committed.facts).brokerEligible).toBe(true);
   });
 
   it('loads captured receipt eligibility offline after census pending entries disappear, but never for a new install', () => {
@@ -240,13 +239,13 @@ describe('first-party naming and approved source eligibility', () => {
     const runtime = loader.load('filo-google', 'runtime', identity);
     expect(runtime.kind).toBe('ready');
     if (runtime.kind === 'ready') expect(resolveGhostFirstPartyPrivilege(runtime.facts)).toEqual({
-      brokerEligible: true, hostPrimitiveEligible: true, basis: 'legacy-existing-install',
+      brokerEligible: false, hostPrimitiveEligible: false, basis: 'denied-unknown-origin',
     });
     expect(loader.load('filo-google', 'install', identity).kind).toBe('unavailable');
     expect(legacyFirstPartyEligibilityAfterUpdate({ legacyFirstPartyEligible: true }, false)).toBe(true);
     expect(legacyFirstPartyEligibilityAfterUpdate({ legacyFirstPartyEligible: true }, true)).toBe(false);
     expect(legacyFirstPartyEligibilityAfterUpdate({}, false)).toBe(false);
-    expect(resolveGhostFirstPartyPrivilege(facts({ ghostId: 'filo-google', legacyFirstPartyEligible: false })).hostPrimitiveEligible).toBe(false);
+    expect(resolveGhostFirstPartyPrivilege(facts({ ghostId: 'filo-google', legacyFirstPartyEligible: false })).brokerEligible).toBe(false);
   });
 
   it('persists the Host legacy qualification and rejects damaged receipt fields', async () => {
@@ -277,13 +276,13 @@ describe('first-party naming and approved source eligibility', () => {
     const identity = { membershipKind: 'personal' as const, orgId: null };
     const approved = loader.load('filo-google', 'runtime', identity);
     if (approved.kind !== 'ready') throw new Error('approved facts unavailable');
-    expect(resolveGhostFirstPartyPrivilege(approved.facts).hostPrimitiveEligible).toBe(true);
+    expect(resolveGhostFirstPartyPrivilege(approved.facts).brokerEligible).toBe(false);
     for (const legacyFirstPartyEligible of ['true', 1, {}, null]) {
       fs.writeFileSync(path.join(root, 'filo-google.json'), JSON.stringify({ ...receipt, legacyFirstPartyEligible }));
       expect(store.readForRecovery('filo-google').state).not.toBe('approved');
       const damaged = loader.load('filo-google', 'runtime', identity);
       if (damaged.kind !== 'ready') throw new Error('damaged facts unavailable');
-      expect(resolveGhostFirstPartyPrivilege(damaged.facts).hostPrimitiveEligible).toBe(false);
+      expect(resolveGhostFirstPartyPrivilege(damaged.facts).brokerEligible).toBe(false);
     }
     fs.writeFileSync(path.join(root, 'filo-google.json'), JSON.stringify({ ...receipt, revision: 'damaged' }));
     expect(store.readForRecovery('filo-google').state).not.toBe('approved');

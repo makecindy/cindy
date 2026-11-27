@@ -1,0 +1,674 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Cindy 官方飞书机器人：产品体验方案</title>
+<style>
+  :root {
+    --bg: #f7f8fa;
+    --surface: #ffffff;
+    --surface-2: #f1f3f6;
+    --text: #1d2129;
+    --text-2: #4e5969;
+    --text-3: #86909c;
+    --line: #e5e8ef;
+    --accent: #2f6feb;
+    --accent-soft: #e8f0fe;
+    --ok: #1f9d55;
+    --ok-soft: #e6f6ec;
+    --warn: #c27c0e;
+    --warn-soft: #fdf3e2;
+    --danger: #d4380d;
+    --me-bubble: #dcebff;
+    --bot-bubble: #ffffff;
+    --chat-bg: #eef1f5;
+    --lifeline: #c9ced8;
+    --radius: 12px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141518;
+      --surface: #1d1f23;
+      --surface-2: #25282d;
+      --text: #e6e8eb;
+      --text-2: #b4bac3;
+      --text-3: #7d848f;
+      --line: #2f333a;
+      --accent: #6ea2ff;
+      --accent-soft: #1f2a3d;
+      --ok: #4cc38a;
+      --ok-soft: #1b2e25;
+      --warn: #e2a33b;
+      --warn-soft: #33291a;
+      --danger: #ff7a59;
+      --me-bubble: #24395a;
+      --bot-bubble: #2a2d33;
+      --chat-bg: #18191c;
+      --lifeline: #3d424a;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.7 -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB",
+      "Microsoft YaHei", "Segoe UI", sans-serif;
+  }
+  .page { max-width: 960px; margin: 0 auto; padding: 40px 20px 72px; }
+  header.hero { padding: 8px 0 28px; border-bottom: 1px solid var(--line); margin-bottom: 32px; }
+  .eyebrow { font-size: 13px; color: var(--accent); font-weight: 600; letter-spacing: .04em; }
+  h1 { font-size: 30px; line-height: 1.3; margin: 6px 0 12px; letter-spacing: -.01em; }
+  .lead { font-size: 16px; color: var(--text-2); margin: 0 0 16px; max-width: 760px; }
+  .meta { font-size: 12.5px; color: var(--text-3); }
+  nav.toc { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+  nav.toc a {
+    font-size: 13px; color: var(--text-2); text-decoration: none;
+    padding: 4px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface);
+  }
+  nav.toc a:hover { color: var(--accent); border-color: var(--accent); }
+
+  section { margin: 0 0 48px; }
+  h2 { font-size: 22px; line-height: 1.35; margin: 0 0 6px; }
+  h2 .num { color: var(--accent); margin-right: 8px; }
+  .section-intro { color: var(--text-2); margin: 0 0 20px; }
+  h3 { font-size: 17px; margin: 0 0 4px; }
+  h4 { font-size: 14px; margin: 16px 0 6px; color: var(--text-2); }
+  p { margin: 0 0 10px; }
+  code {
+    font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: var(--surface-2); padding: 1px 5px; border-radius: 5px; color: var(--text);
+  }
+  .muted { color: var(--text-3); }
+  ul.clean { margin: 0; padding-left: 1.2em; }
+  ul.clean li { margin: 3px 0; }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 20px 22px;
+  }
+  .card + .card { margin-top: 16px; }
+  .grid { display: grid; gap: 16px; }
+  .grid > .card + .card { margin-top: 0; }
+  .g2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .g3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .g4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  @media (max-width: 720px) {
+    .g2, .g3 { grid-template-columns: minmax(0, 1fr); }
+    .g4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    h1 { font-size: 25px; }
+    .card { padding: 16px; }
+  }
+
+  /* 关键事实 */
+  .fact { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
+  .fact .big { font-size: 22px; font-weight: 700; line-height: 1.25; color: var(--accent); }
+  .fact .sub { font-size: 13px; color: var(--text-2); margin-top: 6px; line-height: 1.55; }
+  @media (max-width: 480px) {
+    .g4 { grid-template-columns: minmax(0, 1fr); }
+    .fact .big { font-size: 20px; }
+  }
+
+  /* 架构图 */
+  .arch { display: flex; align-items: stretch; gap: 0; }
+  .node {
+    flex: 1 1 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 16px; min-width: 0;
+  }
+  .node .icon { font-size: 22px; }
+  .node .name { font-weight: 700; margin: 2px 0 6px; }
+  .node ul { margin: 0; padding-left: 1.1em; font-size: 13px; color: var(--text-2); line-height: 1.6; }
+  .link {
+    flex: 0 0 150px; display: flex; flex-direction: column; justify-content: center;
+    align-items: center; text-align: center; padding: 0 8px; font-size: 12.5px; color: var(--text-2);
+  }
+  .link .bar { width: 100%; height: 2px; background: var(--accent); position: relative; margin: 8px 0; }
+  .link .bar::before, .link .bar::after {
+    content: ""; position: absolute; top: -4px; border: 5px solid transparent;
+  }
+  .link .bar::before { left: -2px; border-right-color: var(--accent); border-left: 0; }
+  .link .bar::after { right: -2px; border-left-color: var(--accent); border-right: 0; }
+  .link b { color: var(--text); font-size: 13px; }
+  @media (max-width: 720px) {
+    .arch { flex-direction: column; }
+    .link { flex: 0 0 auto; padding: 10px 0; }
+    .link .bar { width: 2px; height: 26px; margin: 6px 0; }
+    .link .bar::before { left: -4px; top: -2px; border: 5px solid transparent; border-bottom-color: var(--accent); border-top: 0; }
+    .link .bar::after { left: -4px; right: auto; top: auto; bottom: -2px; border: 5px solid transparent; border-top-color: var(--accent); border-bottom: 0; }
+  }
+
+  /* 场景卡 */
+  .scene { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 22px; margin-bottom: 20px; }
+  .scene-head { display: flex; gap: 12px; align-items: baseline; margin-bottom: 4px; }
+  .tag {
+    flex: none; font-size: 12px; font-weight: 700; color: var(--accent); background: var(--accent-soft);
+    border-radius: 6px; padding: 1px 8px;
+  }
+  .scene .goal { color: var(--text-2); margin-bottom: 16px; }
+  .split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+  @media (max-width: 720px) { .split { grid-template-columns: minmax(0, 1fr); } .scene { padding: 16px; } }
+  ol.steps { margin: 0; padding: 0; list-style: none; counter-reset: s; }
+  ol.steps li { counter-increment: s; position: relative; padding: 0 0 12px 34px; font-size: 14px; }
+  ol.steps li::before {
+    content: counter(s); position: absolute; left: 0; top: 1px; width: 22px; height: 22px; border-radius: 50%;
+    background: var(--surface-2); border: 1px solid var(--line); font-size: 12px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center; color: var(--text-2);
+  }
+  .where {
+    display: inline-block; font-size: 11.5px; font-weight: 600; border-radius: 4px; padding: 0 6px;
+    margin-right: 6px; vertical-align: 1px;
+  }
+  .w-cindy { background: var(--accent-soft); color: var(--accent); }
+  .w-tg { background: var(--ok-soft); color: var(--ok); }
+  .note {
+    font-size: 13px; color: var(--text-2); background: var(--surface-2); border-radius: 8px;
+    padding: 10px 12px; margin-top: 12px;
+  }
+  .note b { color: var(--text); }
+  .callout {
+    border-left: 3px solid var(--warn); background: var(--warn-soft); border-radius: 0 8px 8px 0;
+    padding: 10px 14px; font-size: 13.5px; margin-top: 12px;
+  }
+
+  /* 聊天模拟 */
+  .chat { background: var(--chat-bg); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; }
+  .chat-title { font-size: 12px; color: var(--text-3); text-align: center; margin-bottom: 6px; }
+  .b {
+    position: relative; max-width: 88%; padding: 8px 11px; border-radius: 12px; margin: 8px 0;
+    font-size: 13.5px; line-height: 1.55; word-break: break-word;
+  }
+  .b.me { margin-left: auto; background: var(--me-bubble); border-bottom-right-radius: 4px; }
+  .b.bot { background: var(--bot-bubble); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+  .b .who { display: block; font-size: 11.5px; font-weight: 700; color: var(--accent); margin-bottom: 2px; }
+  .b .who.o { color: var(--ok); }
+  .b .who.w { color: var(--warn); }
+  .b .react {
+    position: absolute; right: 8px; bottom: -11px; background: var(--surface); border: 1px solid var(--line);
+    border-radius: 999px; font-size: 12px; padding: 0 6px; line-height: 20px;
+  }
+  .b .quote { border-left: 2px solid var(--text-3); padding-left: 8px; color: var(--text-2); margin: 4px 0 0; font-size: 12.5px; }
+  .b .btns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-top: 8px; }
+  .b .btns span {
+    text-align: center; font-size: 12.5px; border: 1px solid var(--line); border-radius: 8px; padding: 4px 6px;
+    background: var(--surface-2);
+  }
+  .b .btns span.wide { grid-column: 1 / -1; }
+  .b .reply {
+    font-size: 12px; color: var(--text-3); border-left: 2px solid var(--accent); padding-left: 6px; margin-bottom: 4px;
+  }
+  .sys { text-align: center; font-size: 11.5px; color: var(--text-3); margin: 10px 0; }
+  .strike { text-decoration: line-through; opacity: .55; }
+
+  /* 表格 */
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { background: var(--surface-2); font-weight: 600; color: var(--text-2); font-size: 12.5px; white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
+  td.nowrap { white-space: nowrap; }
+
+  /* 时序图 */
+  .seq { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 0 0 14px; }
+  .seq-title { padding: 14px 16px 2px; font-weight: 700; }
+  .seq-sub { padding: 0 16px 10px; font-size: 13px; color: var(--text-2); }
+  .lanes, .row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .lanes {
+    border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--surface-2);
+    text-align: center; font-size: 12.5px; font-weight: 700; padding: 8px 0;
+  }
+  .rows {
+    position: relative; padding-top: 8px;
+    background:
+      linear-gradient(var(--lifeline), var(--lifeline)) 16.666% 0 / 1px 100% no-repeat,
+      linear-gradient(var(--lifeline), var(--lifeline)) 50% 0 / 1px 100% no-repeat,
+      linear-gradient(var(--lifeline), var(--lifeline)) 83.333% 0 / 1px 100% no-repeat;
+  }
+  .row { min-height: 30px; }
+  .msg { position: relative; text-align: center; font-size: 12.5px; color: var(--text); padding: 4px 0 14px; }
+  .msg .lbl { display: block; padding: 0 10%; line-height: 1.45; }
+  .msg .lbl code { font-size: 11.5px; }
+  .msg::after { content: ""; position: absolute; bottom: 6px; border-top: 1.5px solid var(--accent); }
+  .msg::before { content: ""; position: absolute; bottom: 2px; border: 4.5px solid transparent; }
+  .msg.s2::after { left: 25%; right: 25%; }
+  .msg.s3::after { left: 16.666%; right: 16.666%; }
+  .msg.r.s2::before { right: calc(25% - 1px); border-left: 8px solid var(--accent); border-right: 0; }
+  .msg.l.s2::before { left: calc(25% - 1px); border-right: 8px solid var(--accent); border-left: 0; }
+  .msg.r.s3::before { right: calc(16.666% - 1px); border-left: 8px solid var(--accent); border-right: 0; }
+  .msg.l.s3::before { left: calc(16.666% - 1px); border-right: 8px solid var(--accent); border-left: 0; }
+  .msg.dash::after { border-top-style: dashed; border-top-color: var(--text-3); }
+  .msg.dash.r::before { border-left-color: var(--text-3); }
+  .msg.dash.l::before { border-right-color: var(--text-3); }
+  .self {
+    position: relative; z-index: 1; margin: 3px 6px 9px; padding: 6px 8px; border-radius: 8px;
+    background: var(--surface-2); border: 1px solid var(--line); font-size: 12.5px; text-align: center; line-height: 1.45;
+  }
+  .self.user { background: var(--ok-soft); border-color: transparent; }
+  .loop {
+    grid-column: 1 / -1; margin: 2px 10px 10px; padding: 2px 10px; font-size: 11.5px; color: var(--text-3);
+    border-top: 1px dashed var(--line); text-align: left;
+  }
+  .c1 { grid-column: 1 / 2; } .c2 { grid-column: 2 / 3; } .c3 { grid-column: 3 / 4; }
+  .c12 { grid-column: 1 / 3; } .c23 { grid-column: 2 / 4; } .c13 { grid-column: 1 / 4; }
+  @media (max-width: 520px) {
+    .msg, .self { font-size: 11.5px; }
+    .msg .lbl { padding: 0 4%; }
+    .self { margin: 3px 3px 9px; padding: 5px 4px; }
+  }
+
+  /* 连接步骤 */
+  .flow { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+  @media (max-width: 720px) { .flow { grid-template-columns: minmax(0, 1fr); } }
+  .flow .step { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; }
+  .flow .k { font-size: 12px; font-weight: 700; color: var(--accent); }
+  .flow .t { font-weight: 700; margin: 2px 0 4px; }
+  .flow .d { font-size: 13px; color: var(--text-2); line-height: 1.6; }
+
+  .check { list-style: none; padding: 0; margin: 0; }
+  .check li { padding: 8px 0 8px 28px; position: relative; border-bottom: 1px solid var(--line); font-size: 14px; }
+  .check li:last-child { border-bottom: 0; }
+  .check li::before { content: "✓"; position: absolute; left: 4px; top: 8px; color: var(--ok); font-weight: 700; }
+  .check li b { display: block; }
+  .check li span { color: var(--text-2); font-size: 13px; }
+
+  .col-h { font-weight: 700; margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
+  .pill { font-size: 11.5px; padding: 0 8px; border-radius: 999px; font-weight: 600; }
+  .p-ok { background: var(--ok-soft); color: var(--ok); }
+  .p-acc { background: var(--accent-soft); color: var(--accent); }
+  .p-warn { background: var(--warn-soft); color: var(--warn); }
+
+  footer { border-top: 1px solid var(--line); padding-top: 18px; font-size: 12.5px; color: var(--text-3); }
+  footer code { font-size: 11.5px; }
+</style>
+<style>
+  .q {
+    display: inline-block; font-size: 11.5px; font-weight: 700; color: var(--warn); background: var(--warn-soft);
+    border-radius: 4px; padding: 0 6px; margin-left: 6px; vertical-align: 2px;
+  }
+  .yes { color: var(--ok); font-weight: 700; }
+  .no { color: var(--danger); font-weight: 700; }
+  .later { color: var(--text-3); font-weight: 600; }
+  .opt { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; background: var(--surface); }
+  .opt.rec { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+  .opt .h { font-weight: 700; margin-bottom: 4px; }
+  .opt .rec-tag { font-size: 11px; color: var(--accent); background: var(--accent-soft); border-radius: 4px; padding: 0 6px; margin-left: 6px; }
+  .opt p { font-size: 13px; color: var(--text-2); margin: 0; }
+  .decision { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px; margin-bottom: 16px; }
+  .decision .dq { font-weight: 700; margin-bottom: 4px; }
+  .decision .why { font-size: 13px; color: var(--text-2); margin-bottom: 12px; }
+  .kbd-code {
+    font: 600 15px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .08em;
+    background: var(--surface-2); border: 1px dashed var(--text-3); border-radius: 8px; padding: 6px 10px; display: inline-block;
+  }
+  .mock-card { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; background: var(--surface); font-size: 13px; }
+  .mock-card .row-h { display: flex; justify-content: space-between; align-items: center; font-weight: 700; margin-bottom: 6px; }
+  .mock-card .btnrow { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .mock-card .btnrow span { border: 1px solid var(--line); border-radius: 7px; padding: 3px 10px; background: var(--surface-2); font-size: 12.5px; }
+  .mock-card .btnrow span.pri { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .switch { width: 30px; height: 18px; border-radius: 999px; background: var(--accent); position: relative; display: inline-block; }
+  .switch::after { content: ""; position: absolute; right: 2px; top: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; }
+  .thread { border-left: 2px solid var(--line); margin: 4px 0 4px 14px; padding-left: 10px; }
+  .thread-h { font-size: 11.5px; color: var(--text-3); margin: 6px 0 0 14px; }
+</style>
+<style>
+  .ok-badge { font-size: 11.5px; font-weight: 700; color: var(--ok); background: var(--ok-soft); border-radius: 4px; padding: 0 6px; margin-left: 6px; vertical-align: 2px; }
+  .console { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); overflow: hidden; }
+  .console-top { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--surface-2); font-size: 12.5px; color: var(--text-2); }
+  .console-body { padding: 14px; font-size: 13px; }
+  .console-body .field { margin-bottom: 10px; }
+  .console-body .field label { display: block; font-size: 12px; color: var(--text-2); margin-bottom: 3px; }
+  .console-body .input { border: 1px solid var(--line); border-radius: 7px; padding: 5px 9px; background: var(--surface-2); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .checklist { list-style: none; padding: 0; margin: 0; font-size: 12.5px; }
+  .checklist li { padding: 3px 0 3px 20px; position: relative; }
+  .checklist li::before { position: absolute; left: 0; top: 3px; font-weight: 700; }
+  .checklist li.ok::before { content: "✓"; color: var(--ok); }
+  .checklist li.bad::before { content: "!"; color: var(--warn); left: 4px; }
+</style>
+</head>
+<body>
+<div class="page">
+
+<header class="hero">
+  <div class="eyebrow">产品体验方案 · 第三版（已合入你的选择）</div>
+  <h1>Cindy 官方飞书机器人：产品体验方案</h1>
+  <p class="lead">
+    在飞书和 Lark 里提供「Cindy」机器人。<b>第一期由企业管理员在 Cindy 组织后台配置本企业自己的飞书或 Lark 应用</b>，组织成员关联一次飞书账号后，
+    私聊或在群里 @Cindy，任务就会送到<b>发言人自己的电脑</b>上执行。等 Cindy 的全局飞书应用审批通过后，可以把组织切换过去，Cindy 这边不需要改代码。
+  </p>
+  <div class="meta">
+    2026-11-04 · 已确认：
+    <span class="ok-badge" style="margin-left:2px">授权页一键关联 + 关联码兜底</span>
+    <span class="ok-badge">组织应用先行，全局应用可替换</span>
+    <span class="ok-badge">带群聊上下文</span>
+    <span class="ok-badge">群里话题回复</span>
+    <span class="ok-badge">飞书与 Lark 一起做</span>
+  </div>
+  <nav class="toc">
+    <a href="#scope">定位与范围</a>
+    <a href="#admin">管理员配置</a>
+    <a href="#scenes">成员使用场景</a>
+    <a href="#switch">切换到全局应用</a>
+    <a href="#comm">通讯方案</a>
+    <a href="#later">第一期不做</a>
+    <a href="#confirm">请你确认</a>
+  </nav>
+</header>
+
+<!-- 01 定位与范围 -->
+<section id="scope">
+  <h2><span class="num">01</span>定位与范围</h2>
+  <p class="section-intro">同一个「官方飞书」入口背后可以是两种飞书应用，对成员来说用法完全一样，区别只在于应用由谁提供。</p>
+
+  <div class="grid g2" style="margin-bottom:16px">
+    <div class="card">
+      <div class="col-h"><span class="pill p-acc">第一期</span>组织应用</div>
+      <ul class="clean" style="font-size:13.5px">
+        <li>企业在自己的飞书里建一个企业自建应用（如「Cindy」），由<b>组织所有者或管理员</b>在 Cindy 组织后台填入</li>
+        <li>该组织的成员在 Cindy 设置里看到「飞书 · 组织名」入口</li>
+        <li>机器人名字、头像、可用范围、是否对外共享，都由企业在飞书后台自己决定</li>
+        <li>第一个用户就是我们自己公司：先在公司的飞书企业里配置</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="col-h"><span class="pill p-ok">审批通过后</span>Cindy 全局应用</div>
+      <ul class="clean" style="font-size:13.5px">
+        <li>Cindy 自己申请的飞书应用，由 Cindy 平台统一配置</li>
+        <li>没有配置组织应用的组织、个人账号都可以使用</li>
+        <li>已有组织应用的企业，管理员可在后台一键改用全局应用（见第 04 节）</li>
+        <li>上线前个人账号看不到飞书入口</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="table-wrap" style="margin-bottom:12px">
+    <table>
+      <tr><th>成员当前登录的 Cindy 账号</th><th>官方栏里的飞书入口</th></tr>
+      <tr><td>组织账号，组织已配置并启用飞书机器人</td><td class="yes">「飞书 · 组织名」，可关联使用</td></tr>
+      <tr><td>组织账号，组织还没配置</td><td>显示「组织管理员还没有配置飞书机器人」（全局应用上线后改为直接使用全局应用）</td></tr>
+      <tr><td>个人账号</td><td class="muted">全局应用上线前不显示</td></tr>
+    </table>
+  </div>
+
+  <div class="grid g3" style="margin-bottom:12px">
+    <div class="fact"><div class="big">飞书 + Lark</div><div class="sub">两边开放平台的接口、长连接、卡片几乎一样，只是域名和开发者后台不同；管理员配置时选平台即可</div></div>
+    <div class="fact"><div class="big">按账号关联</div><div class="sub">飞书关联跟随当前登录的 Cindy 账号；切到另一个组织需要在那个组织下单独关联</div></div>
+    <div class="fact"><div class="big">1 飞书账号 ↔ 1 台电脑</div><div class="sub">与 Telegram 一致；换电脑需要本人在飞书里确认</div></div>
+  </div>
+
+  <div class="note">
+    <b>关于你问的「对外共享」资质：</b>飞书要求应用所在的企业完成<b>飞书认证</b>（法人认证、公章授权认证、团队认证任选其一）；
+    企业未认证时，应用创建者也可以用<b>个人实名认证</b>（人脸或银行卡，仅中国大陆）开启。开启后还需要该企业的飞书管理员审批应用版本。
+    已认证的企业通常可以直接开。对外共享由企业在自己的飞书应用里决定，Cindy 这边只要保证：外部用户拿不到飞书网页授权，自动改走关联码。
+  </div>
+</section>
+
+<!-- 02 管理员配置 -->
+<section id="admin">
+  <h2><span class="num">02</span>企业管理员配置（组织后台）</h2>
+  <p class="section-intro">
+    组织后台侧栏新增「集成 → IM 机器人」入口，里面是「飞书机器人」卡片；样式沿用现有的飞书接入向导。
+    它和「插件 → 三方应用集成」里的「飞书应用」（插件授权用）是两套独立配置，互不影响。
+  </p>
+  <div class="card" style="margin-bottom:16px">
+    <div class="col-h">为什么要给机器人单独建一个应用</div>
+    <p style="font-size:13.5px">在飞书里，「机器人」不是独立的东西，而是某个<b>应用</b>（在飞书开放平台创建、有自己的 App ID / App Secret）打开的一项能力。
+    很多企业为了接入 Cindy 已经建过应用，比如通讯录同步用的、飞书登录用的。「单独建」是指：给 Cindy 机器人<b>再新建一个专用应用</b>（比如就叫「Cindy」），而不是在已有的那个应用上顺手打开机器人能力。原因有三个：</p>
+    <ul class="clean" style="font-size:13.5px">
+      <li><b>事件接收方式会冲突：</b>一个应用只能选一种接收方式（推送到某个网址，或长连接）。通讯录实时同步已经让飞书把通讯录变更推到 Cindy 的另一个服务；机器人要用长连接收消息，两者不能共存。</li>
+      <li><b>群里显示的是应用的名字和头像：</b>复用「通讯录同步」应用，群里看到的机器人就叫那个名字。</li>
+      <li><b>权限和停用互不影响：</b>机器人需要收发消息、读群消息等权限，单独一个应用更容易让飞书管理员审批，也可以单独停用、换凭证，不影响登录和通讯录。</li>
+    </ul>
+    <p class="muted" style="font-size:13px;margin:0">对管理员来说只是在飞书开放平台多点一次「创建应用」，向导会带着做完。</p>
+  </div>
+  <div class="split">
+    <ol class="steps">
+      <li><b>选平台、建应用。</b>先选「飞书」或「Lark」，向导给出对应开放平台的直达链接和截图：创建企业自建应用，开启「机器人」能力，设置名称和头像（如「Cindy」）。</li>
+      <li><b>一次性配好权限和事件。</b>向导列出所需权限（可一键复制批量导入），事件接收方式选「长连接」，并列出要订阅的事件；安全设置里加入 Cindy 提供的重定向地址（点击复制）。需要群聊上下文时，权限里会包含需要企业管理员审批的「获取群组中所有消息」。</li>
+      <li><b>填写 App ID / App Secret。</b>Cindy 立即检查：凭证是否正确、机器人能力是否开启、长连接能否连上、缺哪些权限，逐项给出结果和修复指引。</li>
+      <li><b>发布版本。</b>提醒在飞书后台发布版本并等飞书管理员审批；可选开启对外共享、配置私聊菜单。</li>
+      <li><b>启用。</b>检查全部通过后打开「对组织成员启用」，成员的 Cindy 里随即出现飞书入口。</li>
+    </ol>
+    <div class="console">
+      <div class="console-top"><span>组织后台 · 集成 · IM 机器人 · 飞书机器人</span><span class="pill p-ok">已连接</span></div>
+      <div class="console-body">
+        <div class="field"><label>平台</label><div class="input" style="font-family:inherit">● 飞书　○ Lark</div></div>
+        <div class="field"><label>App ID</label><div class="input">cli_a7f3••••••••92d1</div></div>
+        <div class="field"><label>App Secret</label><div class="input">••••••••••••••••（已加密保存）</div></div>
+        <div class="field"><label>重定向地址（填到飞书「安全设置」）</label><div class="input">https://feishu-hook.cindy…/feishu/oauth/callback</div></div>
+        <div class="field"><label>检查结果</label>
+          <ul class="checklist">
+            <li class="ok">凭证有效 · 机器人「Cindy」</li>
+            <li class="ok">长连接已连上</li>
+            <li class="ok">收发消息、卡片、表情权限已开通</li>
+            <li class="bad">「获取群组中所有消息」未开通：群里将只看到 @ 的那条消息</li>
+          </ul>
+        </div>
+        <div class="btnrow" style="display:flex;gap:6px;flex-wrap:wrap">
+          <span class="pill p-acc" style="font-size:12.5px;padding:3px 10px">对组织成员启用 ●</span>
+          <span class="pill" style="font-size:12.5px;padding:3px 10px;border:1px solid var(--line)">重新检查</span>
+          <span class="pill" style="font-size:12.5px;padding:3px 10px;border:1px solid var(--line)">更换凭证</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="note" style="margin-top:14px"><b>谁能配置：</b>组织所有者和管理员。App Secret 只写不读、加密保存；更换凭证时会提示「成员需要重新关联、群里需要重新添加机器人」（如果换成了另一个应用）。</div>
+</section>
+
+<!-- 03 成员使用场景 -->
+<section id="scenes">
+  <h2><span class="num">03</span>成员使用场景</h2>
+  <p class="section-intro">
+    <span class="where w-cindy">Cindy</span>表示在 Cindy 桌面端的操作，<span class="where w-tg">飞书</span>表示在飞书里看到的内容。文案是草稿，实现时按术语表定稿。
+  </p>
+
+  <!-- 场景 1 -->
+  <div class="scene">
+    <div class="scene-head"><span class="tag">场景 1</span><h3>第一次关联</h3><span class="ok-badge">已确认</span></div>
+    <div class="goal">本企业成员走<b>飞书授权页一键关联</b>；外部用户（飞书不给授权）或授权失败时，用<b>关联码</b>兜底。</div>
+    <div class="split">
+      <ol class="steps">
+        <li><span class="where w-cindy">Cindy</span>设置 → IM 机器人 →「官方」→「飞书 · 心动网络」，打开开关。</li>
+        <li><span class="where w-cindy">Cindy</span>自动用系统浏览器打开飞书授权页（显示组织的机器人名称和头像），点<b>「授权」</b>。浏览器显示「已关联，可以回到 Cindy」。</li>
+        <li><span class="where w-tg">飞书</span>机器人主动发来私聊：「已关联到『张三的 MacBook Pro』，直接发消息就能开始」，附一张使用说明卡片。</li>
+        <li><span class="where w-cindy">Cindy</span>卡片变为「张三 已关联」，可「打开机器人」「解绑」，下方设置工作目录映射。</li>
+        <li><span class="where w-cindy">Cindy</span><b>兜底：</b>卡片上始终有「改用关联码」。点开后显示关联码并自动复制，点「打开飞书」跳到机器人私聊，粘贴发送即可（外部用户第一次会看到飞书的「开启单聊」确认）。</li>
+      </ol>
+      <div>
+        <div class="mock-card" style="margin-bottom:12px">
+          <div class="row-h"><span>飞书 · 心动网络</span><span class="switch"></span></div>
+          <div class="muted" style="margin-bottom:8px">请在浏览器里完成飞书授权…</div>
+          <div class="btnrow"><span class="pri">重新打开授权页</span><span>复制链接</span><span>改用关联码</span></div>
+        </div>
+        <div class="mock-card">
+          <div class="row-h"><span>关联码</span></div>
+          <div class="muted" style="margin-bottom:8px">把下面这句发给 Cindy 机器人（已复制，10 分钟内有效）</div>
+          <div class="kbd-code">关联 7KQ4-M2XD</div>
+          <div class="btnrow"><span class="pri">打开飞书</span><span>复制</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="note"><b>安全规则：</b>授权页和关联码都是一次性的，10 分钟内有效；关联码只在私聊里有效，多次输错会暂时锁定；授权页返回的飞书账号必须属于该组织配置的应用。</div>
+  </div>
+
+  <!-- 场景 2 -->
+  <div class="scene">
+    <div class="scene-head"><span class="tag">场景 2</span><h3>私聊派活</h3></div>
+    <div class="split">
+      <ol class="steps">
+        <li><span class="where w-tg">飞书</span>直接发消息（可带图片、文件）。消息上出现「处理中」表情回应。</li>
+        <li><span class="where w-tg">飞书</span>机器人发一张<b>进度卡片</b>并原地更新：用时、已完成几项、最近 5 个步骤、正在写的正文。</li>
+        <li><span class="where w-tg">飞书</span>完成后进度卡片原地变成<b>最终回答</b>（与现有个人飞书 bot 一致），图片嵌在卡片里，文件单独发；表情撤掉。失败时卡片显示原因。</li>
+        <li><span class="where w-cindy">Cindy</span>本机任务列表里能看到完整过程，可在 Cindy 里接着做。</li>
+        <li><span class="where w-tg">飞书</span>同一个私聊里继续发消息会接着同一个任务；发 <code>/new</code> 或点菜单「新任务」开新任务。</li>
+      </ol>
+      <div class="chat">
+        <div class="chat-title">飞书 · Cindy（私聊）</div>
+        <div class="b me">帮我把上周的崩溃日志按模块汇总一下<div class="react">⌨️</div></div>
+        <div class="b bot"><span class="who">Cindy · 进度卡片（原地更新）</span>
+          ⚙️ 工作中 · 3 项 · 21s
+          <div class="quote">✓ 读取 logs/crash-1028.txt<br>✓ ✦ 归类调用栈<br>▸ 生成汇总表</div>
+        </div>
+        <div class="sys">— 完成后同一张卡片变成最终回答 —</div>
+        <div class="b bot"><span class="who o">Cindy · 最终回答</span>上周共 37 次崩溃，按模块：渲染 18、网络 11、存档 8……</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 场景 3 -->
+  <div class="scene">
+    <div class="scene-head"><span class="tag">场景 3</span><h3>群里 @Cindy（多人共用）</h3><span class="ok-badge">已确认 · 话题回复 · 带群上下文</span></div>
+    <div class="split">
+      <ol class="steps">
+        <li><span class="where w-tg">飞书</span>群设置 → 群机器人 → 添加「Cindy」（外部群只有应用所在企业的成员能添加）。</li>
+        <li><span class="where w-tg">飞书</span>张三 @Cindy → 任务送到<b>张三的电脑</b>，进度和回答都放在<b>触发消息下的话题</b>里，群主界面只多一个话题入口。</li>
+        <li><span class="where w-tg">飞书</span>李四也 @Cindy → 送到<b>李四的电脑</b>，各自一个话题、一个任务。在话题里继续 @Cindy 接着同一个任务。</li>
+        <li><span class="where w-tg">飞书</span>@Cindy 时自动带上最近的群聊记录（服务端按需从飞书读取、不保存），Cindy 能理解前面在聊什么。管理员没开「获取群组中所有消息」时，只带 @ 的那条和它引用的消息。</li>
+        <li><span class="where w-tg">飞书</span>没关联的王五 @Cindy → 普通群里收到一张<b>只有他自己能看到</b>的提示卡片；话题群里改为普通回复。同一个人 60 秒内最多提示一次。</li>
+        <li><span class="where w-cindy">Cindy</span>可以把某个群设成「全响应」：你本人在该群的每条发言都发给你的电脑，Cindy 判断不需要回时保持安静。</li>
+      </ol>
+      <div class="chat">
+        <div class="chat-title">飞书 · 发布小组</div>
+        <div class="b me" style="margin-left:0;background:var(--bot-bubble);border:1px solid var(--line)"><span class="who">张三</span>@Cindy 对比一下 1.8 和 1.9 的包体大小变化</div>
+        <div class="thread-h">💬 话题 · 1 条回复</div>
+        <div class="thread"><div class="b bot" style="max-width:100%"><span class="who o">Cindy</span>（在张三的电脑上完成）1.9 比 1.8 大 46 MB，主要来自……</div></div>
+        <div class="b me" style="margin-left:0;background:var(--bot-bubble);border:1px solid var(--line)"><span class="who w">王五（未关联）</span>@Cindy 我也想用</div>
+        <div class="b bot" style="opacity:.85"><span class="who">Cindy · 仅你可见</span>想在群里用 Cindy，先安装 Cindy 桌面端并登录心动网络的组织账号，在「设置 → IM 机器人」里关联飞书，之后再 @我 就行。</div>
+      </div>
+    </div>
+    <div class="callout">群里触发的任务一律更谨慎：即使是你自己发起的，高风险操作也必须你确认。</div>
+  </div>
+
+  <!-- 场景 4 -->
+  <div class="scene">
+    <div class="scene-head"><span class="tag">场景 4</span><h3>需要你确认的时候</h3></div>
+    <div class="split">
+      <ol class="steps">
+        <li><span class="where w-tg">飞书</span>私聊任务：确认卡片直接出现在私聊里，带「允许一次 / 本对话总是允许 / 拒绝」。</li>
+        <li><span class="where w-tg">飞书</span>群里的任务：确认卡片发到<b>你和机器人的私聊</b>，附群里触发消息的链接（有消息提醒，不会错过）。</li>
+        <li><span class="where w-cindy">Cindy</span>同一个确认也出现在 Cindy 桌面和手机上，任一处先回答即生效，其他地方自动更新为结果。</li>
+      </ol>
+      <div class="chat">
+        <div class="chat-title">飞书 · Cindy（私聊）</div>
+        <div class="b bot"><span class="who w">Cindy · 需要你确认</span>「发布小组」里的任务想执行：<br><code>git push origin release/1.9</code><br><span class="muted">触发消息：查看原消息</span>
+          <div class="btns"><span>允许一次</span><span>本对话总是允许</span><span class="wide">拒绝</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 场景 5-7 合并 -->
+  <div class="scene">
+    <div class="scene-head"><span class="tag">场景 5–7</span><h3>离线、换电脑、命令与菜单</h3></div>
+    <div class="grid g3">
+      <div class="card" style="background:var(--surface-2)">
+        <div class="col-h">电脑离线 / 断网 / 重启</div>
+        <p style="font-size:13px;margin:0">与官方 Telegram 相同：离线时排队 30 分钟并告知；断网后结果补发；重启后继续且先核对已做的操作；30 分钟无进度才自动停止。</p>
+      </div>
+      <div class="card" style="background:var(--surface-2)">
+        <div class="col-h">换电脑、解除关联</div>
+        <p style="font-size:13px;margin:0">在新电脑上关联时，机器人在私聊里请本人确认改绑；旧电脑卡片显示「已关联到另一台设备」。解绑：Cindy 卡片「解绑飞书」，或私聊发 <code>/unlink</code>。</p>
+      </div>
+      <div class="card" style="background:var(--surface-2)">
+        <div class="col-h">命令与私聊菜单</div>
+        <p style="font-size:13px;margin:0">文字命令与官方 Telegram 同一套（<code>/new</code> <code>/stop</code> <code>/project</code> <code>/ctr</code> <code>/model</code> <code>/status</code> <code>/unlink</code>）。管理员可按向导给私聊加底部菜单：新任务、停止、选择项目、设置、帮助。</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 场景 8 -->
+  <div class="scene">
+    <div class="scene-head"><span class="tag">场景 8</span><h3>个人设置（Cindy 里飞书卡片展开区）</h3></div>
+    <div class="table-wrap">
+      <table>
+        <tr><th>设置</th><th>选项</th><th>说明</th></tr>
+        <tr><td>表情回应</td><td>关闭 / 开启</td><td>是否在你的消息上显示「处理中」「失败」表情</td></tr>
+        <tr><td>群聊参与模式</td><td>仅 @ / 全响应</td><td>逐个群设置；全响应只对你本人的发言生效</td></tr>
+        <tr><td>工作目录映射</td><td>添加目录、改别名、设默认</td><td>飞书能驱动的本机目录白名单，与其他官方渠道共用目录；默认 Agent / 模型按渠道各自设置</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- 04 切换到全局应用 -->
+<section id="switch">
+  <h2><span class="num">04</span>切换到 Cindy 全局应用</h2>
+  <p class="section-intro">「方便替换」的含义：Cindy 把飞书应用当作配置，换应用不需要发版；但飞书里换应用就是<b>换了一个机器人</b>，这一点对成员可见。</p>
+  <div class="split">
+    <ol class="steps">
+      <li><b>Cindy 平台</b>配置好全局应用后，组织后台的飞书机器人卡片出现选项「使用 Cindy 官方飞书应用」。</li>
+      <li><b>管理员</b>切换并确认。确认框说明影响：成员需要重新关联一次、群里需要添加新的 Cindy 机器人。</li>
+      <li><span class="where w-cindy">Cindy</span>成员的飞书卡片显示「机器人已更换，请重新关联」，一键走授权页即可。工作目录映射、偏好设置保留。</li>
+      <li><span class="where w-tg">飞书</span>旧机器人停止响应。切换后 7 天内，旧机器人对 @ 和私聊回复一句「已更换为新的 Cindy 机器人」并附添加方式（前提是组织保留旧应用凭证）。</li>
+      <li>需要时可切回组织应用，旧的关联记录仍然有效，不必再关联。</li>
+    </ol>
+    <div class="card">
+      <div class="col-h">为什么不能无感切换</div>
+      <ul class="clean" style="font-size:13px">
+        <li>飞书用户 ID（open_id）按应用区分，换应用后同一个人的 ID 会变，必须重新确认身份。</li>
+        <li>群里的机器人是按应用添加的，新应用需要群成员重新添加。</li>
+        <li>Cindy 能做的是把这两步做到最短：一键重新关联、群里给出明确提示。</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 05 通讯方案 -->
+<section id="comm">
+  <h2><span class="num">05</span>通讯方案（简）</h2>
+  <p class="section-intro">沿用官方 Telegram 的结构。新增的飞书中继服务可以<b>同时运行多个飞书应用</b>：每个已启用的组织应用一条长连接，将来再加上全局应用。</p>
+  <div class="arch" style="margin-bottom:16px">
+    <div class="node"><div class="icon">💬</div><div class="name">飞书 / Lark</div><ul><li>各企业自己的 Cindy 机器人（飞书或 Lark）</li><li>（后续）Cindy 全局机器人</li></ul></div>
+    <div class="link"><b>每个应用一条飞书长连接</b><div class="bar"></div><span>服务端主动连飞书，不需要对外开回调地址</span></div>
+    <div class="node"><div class="icon">☁️</div><div class="name">飞书中继服务（新增）</div><ul><li>管理多个飞书应用的凭证与连接</li><li>按「应用 + 飞书账号」找到绑定的电脑</li><li>代发消息、更新卡片</li></ul></div>
+    <div class="link"><b>加密长连接（WSS）</b><div class="bar"></div><span>与 Telegram 同一套协议；按登录账号所属组织选应用</span></div>
+    <div class="node"><div class="icon">💻</div><div class="name">你的电脑</div><ul><li>本机跑 Agent</li><li>进度卡片、最终回答、确认卡片在本机排版，交给服务端代发</li></ul></div>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <tr><th>环节</th><th>与官方 Telegram 相同</th><th>飞书的不同</th></tr>
+      <tr><td>电脑连接</td><td>登录令牌、能力协商、心跳重连、离线排队、断线补发</td><td>服务端从登录令牌读出所属组织，决定用哪个飞书应用</td></tr>
+      <tr><td>关联账号</td><td>一次性凭证、10 分钟、换绑需本人确认</td><td>授权页一键关联 + 私聊关联码兜底</td></tr>
+      <tr><td>消息排版</td><td>电脑排版、服务端核对归属后代发</td><td>直接复用个人飞书 bot 的卡片代码；进度与最终回答是同一张可更新卡片</td></tr>
+      <tr><td>群上下文</td><td>按发言人路由、群任务更谨慎</td><td>触发时服务端从飞书拉最近群记录随任务带给电脑，不保存</td></tr>
+      <tr><td>凭证</td><td>机器人密钥只在服务端</td><td>组织应用的 App Secret 加密保存在飞书中继服务，组织后台只写不读</td></tr>
+    </table>
+  </div>
+</section>
+
+<!-- 06 第一期不做 -->
+<section id="later">
+  <h2><span class="num">06</span>第一期不做</h2>
+  <div class="grid g2">
+    <div class="card"><div class="col-h"><span class="later">后续</span>Cindy 全局应用上线</div><p class="muted" style="font-size:13.5px;margin:0">第一期把「多应用」和「组织切换」的能力做好，全局应用审批通过后只需在 Cindy 平台配置凭证并开放。</p></div>
+    <div class="card"><div class="col-h"><span class="later">后续</span>免关联</div><p class="muted" style="font-size:13.5px;margin:0">组织已用同一个飞书应用做登录或通讯录时，可直接认出成员身份、省掉关联这一步；第一期先用授权页一键关联。</p></div>
+    <div class="card"><div class="col-h"><span class="later">后续</span>Agent 操作飞书文档、日历</div><p class="muted" style="font-size:13.5px;margin:0">第一期机器人只负责聊天和派活。</p></div>
+  </div>
+</section>
+
+<!-- 07 请你确认 -->
+<section id="confirm">
+  <h2><span class="num">07</span>请你确认</h2>
+  <p class="section-intro">下面是这一版新增的默认做法。没有异议我就按这份方案出实现计划。</p>
+  <div class="card">
+    <ul class="check">
+      <li><b>机器人单独建一个应用</b><span>管理员在飞书 / Lark 开放平台给 Cindy 机器人新建一个专用应用，不在通讯录同步或登录用的应用上开机器人（原因见第 02 节）。</span></li>
+      <li><b>组织应用优先</b><span>组织配置了就用组织应用；全局应用上线后，由管理员决定是否切换。</span></li>
+      <li><b>组织所有者和管理员可配置</b><span>入口在组织后台「集成 → IM 机器人」，App Secret 只写不读。</span></li>
+      <li><b>组织没配置时给提示</b><span>组织成员看到「管理员还没有配置飞书机器人」；个人账号在全局应用上线前看不到入口。</span></li>
+      <li><b>换应用 = 换机器人</b><span>成员一键重新关联，群里重新添加；旧机器人在 7 天内回复更换提示。</span></li>
+      <li><b>飞书和 Lark 一起做</b><span>管理员配置时选平台；全局应用上线放到后续。</span></li>
+    </ul>
+  </div>
+</section>
+
+<footer>
+  依据：飞书 / Lark 开放平台文档（企业自建应用、长连接事件、机器人对外共享、群消息权限、网页授权、仅特定人可见卡片、机器人菜单、打开机器人会话 AppLink）；
+  Cindy 现有实现：官方 Telegram（<code>apps/desktop/src/main/hook-control/</code>、服务端 <code>telegram-hook-server/</code>）、
+  个人飞书 bot（<code>packages/lizi-im/src/feishu/</code>）、组织后台飞书接入（<code>auth-server/console/src/pages/org/</code>、<code>oauth-broker-server</code>）。
+</footer>
+
+</div>
+</body>
+</html>

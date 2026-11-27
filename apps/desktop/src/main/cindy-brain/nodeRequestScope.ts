@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 interface RequestScope {
   rpcId: string;
   active: boolean;
+  control: AbortController;
 }
 
 /** Keeps async child spawns attached to the exact call-bound stdin request. */
@@ -25,18 +26,18 @@ export class NodeRequestScopes {
       this.current.exit(() => deliver(chunk));
       return;
     }
-    const scope = { rpcId: value.id, active: true };
+    const scope = { rpcId: value.id, active: true, control: new AbortController() };
     this.scopes.set(scope.rpcId, scope);
     this.current.run(scope, () => deliver(chunk));
   }
 
   finish(rpcId: string): void {
     const scope = this.scopes.get(rpcId);
-    if (scope) scope.active = false;
+    if (scope) { scope.active = false; scope.control.abort(); }
     this.scopes.delete(rpcId);
   }
 
-  capture(): { rpcId: string; assertCurrent(): void } | undefined {
+  capture(): { rpcId: string; signal: AbortSignal; assertCurrent(): void } | undefined {
     const scope = this.current.getStore();
     if (!scope) return undefined;
     const assertCurrent = () => {
@@ -44,7 +45,7 @@ export class NodeRequestScopes {
         throw new Error('The originating Node request has ended');
     };
     assertCurrent();
-    return { rpcId: scope.rpcId, assertCurrent };
+    return { rpcId: scope.rpcId, signal: scope.control.signal, assertCurrent };
   }
 
   currentRpcId(): string | undefined {

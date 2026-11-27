@@ -1,10 +1,24 @@
-import { AddSpeechModelsDialog } from './AddSpeechModelsDialog';
-import { providerSpeechSetup } from '../../../shared/speechProviderSetup';
+import type { ProviderErrorCode } from '../../../shared/providerErrors';
+import { useRemoteProviderDisable } from '@/lib/remoteProviderDisable';
+import { Select } from '@/components/ui/select';
+import { duplicateSubscriptionProviders, listedSourceFolds } from '@cindy/model-providers';
+import { isProviderConnectionIcon, isProviderLogoKind } from '@cindy/model-providers/branding';
+import { useSettingsSubpageBack } from './useSettingsEscape';
+import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
+import { providersSettings } from './ProvidersSection.settings-search';
+import {
+  BorrowedProviderModels,
+  borrowedProviderModelCount,
+  ProviderOwnComputersStatus,
+  ProviderRunLocationSubtitle,
+} from './ProviderRunLocationRow';
+import { useProviderBorrow } from '@/hooks/useProviderBorrow';
+import { providerSpeechSetup, providerRealtimeSetup } from '../../../shared/speechProviderSetup';
 import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
 import { SubscriptionFastSetting } from '@/features/provider-share/SubscriptionFastSetting';
 import { useCodexRateLimitReset } from '@/hooks/useCodexRateLimitReset';
 import { CodexResetCredits } from '../status/CodexResetCredits';
-import { providerWeeklyQuotaSource } from '../new-chat/useProviderWeeklyQuota';
+import { providerUsageReaderSource } from '../new-chat/useProviderWeeklyQuota';
 /**
  * ProvidersSection —— 设置 → 模型供应商页(2026-07 重构:双栏管理)。
  *
@@ -24,25 +38,28 @@ import { providerWeeklyQuotaSource } from '../new-chat/useProviderWeeklyQuota';
  *     fetchProviderModels,additions-only 合并进配置(与 OAuth 动态发现同语义)。
  */
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Activity, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { useRemoteControlEnabled } from '@/hooks/useRemoteControlEnabled';
 import {
-  Check,
   Copy,
   Gift,
   GripVertical,
   KeyRound,
   LogOut,
+  ChevronRight,
   MoreHorizontal,
   Pencil,
   Plus,
   RefreshCw,
+  Sparkles,
   Trash2,
 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { useProviders } from '@/hooks/useProviders';
+import { withSubscriptionDisplayModels } from '@/lib/localCatalogSnapshot';
 import { LocalModelCatalogNotice } from '@/components/new-chat/LocalModelCatalogNotice';
 import { isChatGptConnectionConnected, useCodexAuth } from '@/hooks/useCodexAuth';
 import { codexRecoveryActionKey, codexRecoveryDescriptionKey } from '@/hooks/codexAuthRecovery';
@@ -53,6 +70,7 @@ import { useModelAccessCreditUsageResult } from '@/hooks/useModelAccessCreditUsa
 import { useClaudeAccountUsageResult } from '@/hooks/useClaudeAccountUsage';
 import { useXdAssetPrimaryAction } from '@/hooks/useXdAssetPrimaryAction';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Tip } from '@/components/ui/tooltip';
@@ -64,12 +82,19 @@ import { toast } from '@/lib/toast';
 import {
   appendDiscoveredCustomProviderModels,
   deleteCustomProvider,
+  fetchCustomProviderModelsForRefresh,
+  findWithdrawnCustomProviderModels,
   providerViewToCustomProviderConfig,
   readCustomProviderKey,
   updateCustomProvider,
 } from '@/lib/customProviders';
+import { resetModelVisibilities } from '@/state/modelVisibilityPrefs';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { WithdrawnModelsDialog, type WithdrawnModelsReview } from './WithdrawnModelsDialog';
+import { createLogger } from '@/lib/logger';
 import { providerDisplayName } from '@/lib/providerDisplayName';
 import { providerMonogram } from '@/lib/providerModels';
+import { clearGlmFlashDiscovery, hasGlmFlashDiscovery, GLM_REALTIME_FLASH, isGlmApiBase, isGlmPresetRoute } from '../../../shared/glmRealtimeDiscovery';
 import { isBuiltinApiKeyProviderId } from '../../../shared/providerSecrets';
 import type {
   CustomProviderUpdateOptions,
@@ -91,10 +116,18 @@ import { BILLING_CURRENCY, formatBillingAmount } from '@/features/billing/money'
 import { canAccessBillingSettings } from './billingVisibility';
 import { resolveXdAssetModuleState } from './providerAssetModule';
 import { useProviderSubscriptionCard } from './useProviderSubscriptionCard';
+import { OpenSmartRoutingContext } from './RouteStrategyNote';
+import { SubscriptionAccountsSection, SubscriptionPoolViewCache } from './SubscriptionAccountsSection';
+import { OpenAiAccountGroupSection, useOpenAiAccountGroup } from './OpenAiAccountGroupSection';
+import { MergeProviderButton } from './SubscriptionPlacement';
+import { openAiAccountGroupKind } from '../../../shared/openAiAccountGroup';
+import { subscriptionAccountErrorKey } from './subscriptionAccountErrors';
+import { placementErrorKey } from './SubscriptionPlacement';
+import { isSubscriptionProvider, type SubscriptionPoolView } from '../../../shared/subscriptionAccounts';
+import type { SubscriptionProvider } from '../../../shared/subscriptionAccounts';
 import { ProviderAccountUsageModule } from './ProviderAccountUsageModule';
 import { QuotaHoverCard } from '../status/QuotaHoverCard';
-import { ProviderConnectionDialog } from './ProviderConnectionDialog';
-import { AddProviderWizard, type WizardEntry } from './AddProviderWizard';
+import type { WizardEntry } from './AddProviderWizard';
 import type { DetectedProviderDraft } from '../../../shared/providerDetection';
 import { OllamaProviderDetail } from './OllamaProviderDetail';
 import {
@@ -103,28 +136,44 @@ import {
   useOwnRemoteProviderList,
   type OwnRemoteProvider,
 } from './OwnRemoteProviders';
+import {
+  OwnRemotePluginEngineDetail,
+  OwnRemotePluginEngineRows,
+  useOwnRemotePluginEngines,
+} from './OwnRemotePluginEngines';
 import { LlamaCppProviderDetail } from './LlamaCppProviderDetail';
+import {
+  PluginEngineProviderDetail,
+  PluginEngineProviderRows,
+  pluginEngineRailGroup,
+} from './PluginEngineProviders';
 import { MANAGED_LLAMACPP_PROVIDER_ID } from '../../../shared/llamaCpp';
 import {
   isLocalRuntimeBetaProviderId,
   MANAGED_LMSTUDIO_PROVIDER_ID,
   MANAGED_OLLAMA_PROVIDER_ID,
 } from '../../../shared/localModelRuntime';
+import { ProviderListEntry } from './ProviderListEntry';
+import { ProviderAccountHeader, ConnectedPill } from './ProviderAccountHeader';
 import { OAuthBrowserLink, OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
-import { ProviderImportDialog } from './ProviderImportDialog';
+import { ProviderImportDialog, ProviderImportBatchDialog, ProviderImportFileButton } from './ProviderImportDialog';
+import { ProviderAppearanceDialog } from './ProviderAppearanceDialog';
 import { SettingsTextInput } from './SettingsTextInput';
 import { buildUnionRows, UnifiedModelList } from './UnifiedModelList';
 import { AnthropicMark } from '@/components/icons/AnthropicMark';
 import { OpenAIMark } from '@/components/icons/OpenAIMark';
-import { XDIncMark } from '@/components/icons/XDIncMark';
+import { CindyMark } from '@/components/icons/CindyMark';
+import { CustomProviderIcon } from '@/components/icons/CustomProviderIcon';
+import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
+import { usePluginEngines } from '@/hooks/usePluginEngines';
+import { pluginEngineKeyFromProviderId, type PluginEngineView } from '../../../shared/pluginEngines';
 import { SortableList } from '@/components/sidebar/SortableList';
 import { ProviderShareEntryButton } from '@/features/provider-share/ProviderShareEntryButton';
 import { useLocalProviderGroupsState } from '@/features/provider-group/useLocalProviderGroups';
-import { ProviderShareManagePage } from '@/features/provider-share/ProviderShareManagePage';
 import { ProviderSharePasteButton } from '@/features/provider-share/ProviderSharePasteDialog';
-import { useOwnedProviderShares } from '@/features/provider-share/useOwnedProviderShares';
 import {
+  ProviderShareReceivedCatalogRetry,
   ProviderShareReceivedDetail,
   ProviderShareReceivedRailGroup,
 } from '@/features/provider-share/ProviderShareReceivedRail';
@@ -144,10 +193,38 @@ import {
 
 import { localCliDisplayName, type LocalCliDetection } from '../../../shared/localCliDetect';
 import { isBuiltinRefreshableProviderId } from '../../../shared/providerModelRefresh';
+import { SettingsPageHeader } from '@/components/ui/settings-rows';
+import { LocalProviderImportButton } from './LocalProviderImportButton';
 import { providerGroupDeviceCount } from '../../../shared/providerGroup';
 import { applyProviderOrder } from '../../../shared/providerOrder';
 import type { AgentKind, CustomProviderConfig, ProviderView } from '@cindy/model-providers';
 import { isCustomRoutedProvider, isOrganizationManagedProvider, storedCustomProviderId } from '@cindy/model-providers';
+
+// 「智能路由」那一页点开才加载(与它还是单独一个设置页时一样)：它带着关系图、路由编辑和选模型面板一大串代码，
+// 跟着模型供应商页一起加载的话，打开模型供应商页要先等这些代码，「加载中」会多停一两秒。
+const loadModelGroupsSection = () => import('./ModelGroupsSection');
+const ModelGroupsSection = lazy(() => loadModelGroupsSection().then(module => ({ default: module.ModelGroupsSection })));
+// 智能路由页下方的 Subagent、辅助模型、伙伴几块(ModelGroupsAutoRoutes 里按需加载的同一个模块)。
+const loadOtherModelSettings = () => import('./OtherModelSettings');
+
+// 点了按钮才出现的几块(添加供应商向导、连接弹窗、语音模型弹窗、分享管理页)用到时再加载：它们和各自依赖的代码加起来
+// 比页面本身还大，跟着页面一起加载时，第一次打开要先等它们(2026-11-25 实测占第一次打开耗时的大头)。
+// 页面画出来之后趁空闲把它们预先取回(preloadProviderDialogs)，所以点按钮时通常已经在了。
+const loadAddProviderWizard = () => import('./AddProviderWizard');
+const loadProviderConnectionDialog = () => import('./ProviderConnectionDialog');
+const loadAddSpeechModelsDialog = () => import('./AddSpeechModelsDialog');
+const loadProviderShareManagePage = () => import('@/features/provider-share/ProviderShareManagePage');
+const AddProviderWizard = lazy(() => loadAddProviderWizard().then(module => ({ default: module.AddProviderWizard })));
+const ProviderConnectionDialog = lazy(() => loadProviderConnectionDialog().then(module => ({ default: module.ProviderConnectionDialog })));
+const AddSpeechModelsDialog = lazy(() => loadAddSpeechModelsDialog().then(module => ({ default: module.AddSpeechModelsDialog })));
+const ProviderShareManagePage = lazy(() => loadProviderShareManagePage().then(module => ({ default: module.ProviderShareManagePage })));
+function preloadProviderDialogs(): void {
+  // 智能路由页也一起预取：第一次点开时右栏不再先闪一下「加载中」、下面几块不再一块块冒出来(2026-11-26 排查)。
+  for (const load of [loadModelGroupsSection, loadOtherModelSettings, loadAddProviderWizard, loadProviderConnectionDialog, loadAddSpeechModelsDialog, loadProviderShareManagePage]) {
+    // 取不回来不要紧：真要用时 lazy 会再取一次并走它自己的错误处理。
+    void load().catch(() => undefined);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // 工具
@@ -163,6 +240,7 @@ function providerHasModels(provider: ProviderView): boolean {
     (provider.imageModels?.length ?? 0) > 0 ||
     (provider.videoModels?.length ?? 0) > 0 ||
     (provider.audioModels?.length ?? 0) > 0 ||
+    (provider.evaluationModels?.length ?? 0) > 0 ||
     (provider.embeddingModels?.length ?? 0) > 0
   );
 }
@@ -174,6 +252,16 @@ function providerHasModels(provider: ProviderView): boolean {
 function writeProviderDisabled(providerId: string, disabled: boolean, errorText: string): void {
   void window.electronAPI.maker
     .setModelDisable({ kind: 'provider', providerId, disabled })
+    .catch(() => toast.error(errorText));
+}
+
+/**
+ * 写供应商级「在模型选择器中隐藏」(model-disable-store 的 hiddenProviders)。只改陈列:
+ * 已在用它的任务、辅助模型链和后台功能照常调用;刷新同样由 PROVIDER_CHANGED 驱动。
+ */
+function writeProviderHidden(providerId: string, hidden: boolean, errorText: string): void {
+  void window.electronAPI.maker
+    .setModelDisable({ kind: 'provider-hidden', providerId, hidden })
     .catch(() => toast.error(errorText));
 }
 
@@ -191,11 +279,14 @@ function RemoteProviderAccessRow({
   remoteControlEnabled,
   pendingShareRequests,
   onManageShare,
+  poolName,
 }: {
   provider: ProviderView;
   remoteControlEnabled: boolean;
   pendingShareRequests: number;
   onManageShare: () => void;
+  /** Set for a connection merged into an account pool: its switch follows that pool and is changed there. */
+  poolName?: string;
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -210,6 +301,7 @@ function RemoteProviderAccessRow({
   const gate = providerShareGate({ remoteControlEnabled, invocationEnabled: enabled });
   return (
     <div
+      id={providersSettings.sharing.targetId}
       data-testid="provider-remote-access"
       data-share-gate={gate}
       className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-t px-5 py-3"
@@ -220,10 +312,12 @@ function RemoteProviderAccessRow({
           {t('settings.providers.detail.remoteAccess.label')}
         </span>
         <span className="text-12 leading-[1.4] text-[var(--text-tertiary)]">
-          {gate === 'remote-off' ? (
+          {poolName !== undefined && gate !== 'remote-off' ? (
+            t('settings.providers.detail.remoteAccess.followsPool', { pool: poolName })
+          ) : gate === 'remote-off' ? (
             <>
               {t('providerShare.entry.remoteControlOff')}{' '}
-              <button
+              <button data-setting-id={providersSettings.sharing.id}
                 type="button"
                 onClick={() => navigate('/settings?tab=remote-control')}
                 className="text-[var(--text-secondary)] underline underline-offset-2 transition-colors hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
@@ -247,9 +341,9 @@ function RemoteProviderAccessRow({
           pendingCount={pendingShareRequests}
           onOpen={onManageShare}
         />
-        <Switch
+        <Switch data-setting-id={providersSettings.sharing.id}
           checked={enabled}
-          disabled={busy || !remoteControlEnabled}
+          disabled={busy || !remoteControlEnabled || poolName !== undefined}
           aria-label={t('settings.providers.detail.remoteAccess.ariaLabel')}
           onCheckedChange={(next) => {
             const previous = enabled;
@@ -269,76 +363,22 @@ function RemoteProviderAccessRow({
   );
 }
 
-/**
- * 本机是否允许同账号设备远程控制(「允许被远程调用」与分享的第一级)。设备互联没有单独的
- * 开关变更事件：relay 状态、持有权变化以及窗口回到前台时重读一次，保持与「远程连接」页一致。
- */
-function useRemoteControlEnabled(): boolean | null {
-  // null = 还没读到：整行先不出现，避免「未开远程控制」的说明闪一下。
-  const [enabled, setEnabled] = useState<boolean | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    let seq = 0;
-    const read = () => {
-      const current = ++seq;
-      // 读不到(设备互联未就绪等)按未开启处理：开关不可用，不影响供应商页其余部分。
-      void Promise.resolve()
-        .then(() => window.electronAPI.deviceLink.getState())
-        .then((state) => {
-          if (!cancelled && current === seq) setEnabled(state.remoteControlEnabled);
-        })
-        .catch(() => {
-          if (!cancelled && current === seq) setEnabled(false);
-        });
-    };
-    read();
-    // 设备互联预加载不可用(旧窗口 / 测试)时只读一次，不订阅。
-    const deviceLink = (window as Partial<Window>).electronAPI?.deviceLink;
-    const offStatus = deviceLink?.onStatusChanged?.(() => read());
-    const offOwnership = deviceLink?.onOwnershipChanged?.(() => read());
-    const onVisible = () => {
-      if (document.visibilityState === 'visible') read();
-    };
-    document.addEventListener('visibilitychange', onVisible);
-    window.addEventListener('focus', read);
-    return () => {
-      cancelled = true;
-      offStatus?.();
-      offOwnership?.();
-      document.removeEventListener('visibilitychange', onVisible);
-      window.removeEventListener('focus', read);
-    };
-  }, []);
-  return enabled;
-}
-
 /** 供应商行图标(内置品牌 mark / 首字母 monogram)。 */
 function providerIcon(p: ProviderView, size: number): ReactNode {
-  if (hasProviderLogo(p.id, p.routing)) {
-    return <ProviderLogoMark providerId={p.id} routing={p.routing} size={size} />;
-  }
-  return <span className="text-15 font-medium leading-none">{providerMonogram(p.name)}</span>;
+  return (
+    <CustomProviderIcon svg={p.customIcon} size={size}>
+      {isProviderLogoKind(p.logoKind) || hasProviderLogo(p.id, p.routing) ? (
+        <ProviderLogoMark providerId={p.id} routing={p.routing} logoKind={p.logoKind} size={size} />
+      ) : (
+        <span className="text-15 font-medium leading-none">{providerMonogram(p.name)}</span>
+      )}
+    </CustomProviderIcon>
+  );
 }
 
 // ---------------------------------------------------------------------------
 // 通用小件(与重构前一致)
 // ---------------------------------------------------------------------------
-
-function ConnectedPill() {
-  const { t } = useTranslation();
-  return (
-    <span
-      className="flex h-[22px] shrink-0 items-center gap-1 rounded-full px-2.5 text-11 font-medium"
-      style={{
-        backgroundColor: 'var(--settings-btn-secondary-bg)',
-        color: 'var(--settings-section-desc)',
-      }}
-    >
-      <Check size={12} strokeWidth={2.5} />
-      {t('settings.providers.pill.connected')}
-    </span>
-  );
-}
 
 /** OpenAI OAuth 仍可恢复但需要用户重新连接；使用中性 chip，避免表现成全局故障。 */
 function ReconnectRequiredPill() {
@@ -367,7 +407,7 @@ function PillButton({
   disabled?: boolean;
 }) {
   return (
-    <Button variant="secondary" size="md" onClick={onClick} disabled={disabled}>
+    <Button data-settings-search-action="Open the labeled provider setup or account action" variant="secondary" size="md" onClick={onClick} disabled={disabled}>
       {label}
     </Button>
   );
@@ -390,32 +430,18 @@ function CtaPillButton({
   className?: string;
 }) {
   return (
-    <Button variant="cta" size={size} onClick={onClick} className={className}>
+    <Button data-settings-search-action="Open the labeled provider setup or account action" variant="cta" size={size} onClick={onClick} className={className}>
       {label}
     </Button>
   );
 }
 
 function CustomTag({ label }: { label: string }) {
-  return (
-    <span
-      className="flex h-[18px] shrink-0 items-center rounded-full px-2 text-11 font-medium"
-      style={{
-        border: '1px solid var(--settings-integration-avatar-border)',
-        color: 'var(--text-tertiary)',
-      }}
-    >
-      {label}
-    </span>
-  );
+  return <Badge tone="outline">{label}</Badge>;
 }
 
 function BetaTag({ label }: { label: string }) {
-  return (
-    <span className="shrink-0 rounded-full border border-[var(--settings-badge-border)] bg-[var(--settings-badge-bg)] px-2 py-[1px] text-10 font-medium uppercase leading-[1.5] tracking-wide text-[var(--text-secondary)]">
-      {label}
-    </span>
-  );
+  return <Badge tone="outline" size="xs" className="bg-[var(--settings-badge-bg)]">{label}</Badge>;
 }
 
 // ---------------------------------------------------------------------------
@@ -423,11 +449,20 @@ function BetaTag({ label }: { label: string }) {
 // (重构前的 ProviderCell 去掉展开逻辑;模型列表由详情容器统一渲染。)
 // ---------------------------------------------------------------------------
 
+const withdrawnLog = createLogger('ProvidersWithdrawnModels');
+/** A withdrawn-model review belongs to the account snapshot that produced it. */
+type WithdrawnModelsOwnedReview = WithdrawnModelsReview & {
+  dataOwnerId: string | null;
+  ownerGeneration: number | null;
+};
+
 type ProviderOwnerScope = { dataOwnerId: string | null; ownerGeneration: number };
 function supportsBuiltinConnectionManagement(provider: ProviderView): boolean {
   return (
     provider.source === 'builtin' &&
     provider.id !== 'xd' &&
+    // A provider created for subscription accounts is managed through its accounts (2026-11-13).
+    !provider.subscriptionPool &&
     (['openai', 'anthropic', 'xai'].includes(provider.id) ||
       (provider.auth.method === 'oauth' && !!provider.auth.oauth) ||
       (provider.auth.method === 'apiKey' && isBuiltinApiKeyProviderId(provider.id)))
@@ -492,10 +527,19 @@ function useProviderManagement(provider?: ProviderView) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
   const confirmProviderChange = useProviderChangeConfirmation();
-  const { refetch } = useProviders();
+  const { refetch, ownerGeneration } = useProviders();
+  const { dataOwnerId } = getDataOwnerGeneration();
   const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState<(ProviderOwnerScope & { providerId: string }) | null>(null);
+  const editor = editing && provider && editing.providerId === provider.id && editing.dataOwnerId === dataOwnerId && editing.ownerGeneration === ownerGeneration
+    ? <ProviderAppearanceDialog key={provider.id} provider={provider} scope={editing} onClose={() => setEditing(null)} />
+    : null;
   const rename = async () => {
     if (!provider || busy) return;
+    if (provider.source === 'user') {
+      if (ownerGeneration !== null) setEditing({ dataOwnerId, ownerGeneration, providerId: provider.id });
+      return;
+    }
     try {
       const scope = await window.electronAPI.maker.listProviders();
       let name = provider.name;
@@ -567,7 +611,7 @@ function useProviderManagement(provider?: ProviderView) {
       refetch();
     }
   };
-  return { busy, rename, removeBuiltin };
+  return { busy, rename, removeBuiltin, editor };
 }
 
 function ManagedProviderHeader({
@@ -689,6 +733,8 @@ function DetailHeader({
 }) {
   const { t } = useTranslation();
   const management = useProviderManagement(provider);
+  // Model execution can be remote while account management still belongs to this computer.
+  const borrowing = useProviderBorrow(provider).borrowed !== null;
   const canRename = !!provider && provider.id !== 'xd' && !isOrganizationManagedProvider(provider);
   const resolvedDelete =
     deleteAction ??
@@ -699,14 +745,17 @@ function DetailHeader({
         }
       : undefined);
   const subscription = useProviderSubscriptionCard(provider);
-  const resetEnabled = Boolean(provider && providerWeeklyQuotaSource({ ...provider, suspended: false }) === 'codex');
+  // A created subscription provider reads usage per account in its account list instead.
+  const resetEnabled = Boolean(provider && providerUsageReaderSource({ ...provider, suspended: false }) === 'codex');
   const { snapshot: resetSnapshot, refresh: refreshResets } = useCodexRateLimits(resetEnabled, provider?.id ?? 'openai');
   const manualReset = useCodexRateLimitReset(resetSnapshot, refreshResets, provider?.id ?? 'openai');
   const detailScrollRef = useRef<HTMLDivElement>(null);
   const hasDetail = Boolean(detail);
+  const detailWasOpen = useRef(false);
   useLayoutEffect(() => {
-    // Reveal newly opened authentication content without resetting on typing or quota refresh.
-    if (hasDetail && detailScrollRef.current) detailScrollRef.current.scrollTop = 0;
+    // Returning from sharing reconnects layout effects without opening new authentication content.
+    if (hasDetail && !detailWasOpen.current && detailScrollRef.current) detailScrollRef.current.scrollTop = 0;
+    detailWasOpen.current = hasDetail;
   }, [hasDetail]);
   const subscriptionProduct =
     provider?.access?.kind === 'subscription' ? provider.access.product : null;
@@ -723,38 +772,63 @@ function DetailHeader({
         })
       : null;
 
+  // Account pool kind behind this provider: the built-in one, or (2026-11-13) a provider whose
+  // accounts the host manages in that pool (created, or a legacy Codex connection with accounts).
+  const subscriptionKind = !provider ? null
+    : isSubscriptionProvider(provider.id) ? provider.id
+      : provider.subscriptionAccountPool ?? provider.subscriptionPool ?? null;
+  const subscriptionPool = subscriptionKind && provider ? provider.id : null;
+  const openAiGroupKind = provider && !provider.subscriptionPoolAlias ? openAiAccountGroupKind(provider) : undefined;
+  const openAiGroup = useOpenAiAccountGroup(openAiGroupKind ? provider?.id : undefined);
+  const dashboard =
+    subscriptionKind === 'anthropic' || provider?.auth.native === 'claude'
+      ? {
+          label: t('settings.providers.usage.openClaudeUsage'),
+          onOpen: () => void window.electronAPI.openExternal('https://claude.ai/settings/usage'),
+        }
+      : provider?.id === 'xai' || provider?.auth.native === 'xai'
+        ? {
+            label: t('settings.providers.xai.asset.openUsage'),
+            onOpen: () => void window.electronAPI.openExternal('https://grok.com'),
+          }
+        : null;
+  // The usage page is the provider's, not the default account's: pooled accounts show it once in their header.
+  const cardDashboard = subscriptionPool ? null : dashboard;
+  const usageCard = subscription ? (
+    <QuotaHoverCard
+      key={JSON.stringify([
+        provider?.id,
+        provider?.connected,
+        provider?.subscriptionAccount?.source,
+        provider?.subscriptionAccount?.identity,
+        provider?.openAiAccount?.source,
+        provider?.openAiAccount?.identity,
+      ])}
+      variant="embedded"
+      hideIdentity={Boolean(subscriptionProduct)}
+      account={subscription}
+      dashboardLabel={cardDashboard?.label}
+      onOpenDashboard={cardDashboard?.onOpen}
+    >
+      {resetEnabled ? (
+        <CodexResetCredits providerId={provider?.id} onChanged={refreshResets} key={provider?.id} variant="embedded" snapshot={resetSnapshot} busy={manualReset.busy} canReset={manualReset.canReset} canRetry={manualReset.canRetry} onReset={(credit) => void manualReset.reset(credit)} />
+      ) : null}
+    </QuotaHoverCard>
+  ) : null;
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="shrink-0 px-5 py-4">
-        {/* 可折行:最小窗口(右栏 ~275px)放不下「状态 + 操作」时整组换行,
-            不被卡片 overflow-hidden 裁掉(PR #1102 review 第三轮)。 */}
-        <div className="flex flex-wrap items-center gap-3 gap-y-2">
-          <div
-            data-testid="provider-detail-identity"
-            className="flex min-w-0 flex-auto basis-[220px] items-center gap-3"
-          >
-            <div
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
-              style={{
-                backgroundColor: 'var(--settings-integration-avatar-bg)',
-                border: '1px solid var(--settings-integration-avatar-border)',
-                color: 'var(--settings-integration-avatar-icon)',
-              }}
-            >
-              {icon}
-            </div>
-
-            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-              <div
-                data-testid="provider-detail-metadata"
-                className="flex min-w-0 flex-wrap items-center gap-2"
-              >
-                <span
-                  className="min-w-0 truncate text-14 font-medium leading-tight"
-                  style={{ color: 'var(--settings-section-title)' }}
-                >
-                  {provider ? providerDisplayName(provider, t) : title}
-                </span>
+      <ProviderAccountHeader
+        icon={provider && (isProviderConnectionIcon(provider.logoKind) || provider.customIcon) ? providerIcon(provider, 18) : icon}
+        title={provider ? providerDisplayName(provider, t) : title}
+        subtitle={provider ? (
+          <ProviderRunLocationSubtitle
+            provider={provider}
+            subtitle={`${subtitle}${singleAgentNote ? ` · ${singleAgentNote}` : ''}`}
+          />
+        ) : `${subtitle}${singleAgentNote ? ` · ${singleAgentNote}` : ''}`}
+        status={provider ? <ProviderOwnComputersStatus provider={provider} /> : undefined}
+        badges={<>
                 {identityBadge}
                 {subscriptionProduct && (
                   <CustomTag
@@ -771,26 +845,19 @@ function DetailHeader({
                     }
                   />
                 )}
-                {provider?.suspended && (
+                {provider?.suspended ? (
                   <CustomTag label={t('settings.providers.pill.suspended')} />
-                )}
+                ) : provider?.hidden ? (
+                  <CustomTag label={t('settings.providers.pill.hidden')} />
+                ) : null}
                 {badge}
-              </div>
-              <span
-                className="truncate text-13 leading-tight"
-                style={{ color: 'var(--settings-integration-subtitle)' }}
-              >
-                {subtitle}
-                {singleAgentNote ? ` · ${singleAgentNote}` : ''}
-              </span>
-            </div>
-          </div>
-
-          <div className="flex shrink-0 items-center gap-2.5">
-            <div
-              data-testid="provider-detail-actions"
-              className="flex shrink-0 items-center gap-2.5"
-            >
+        </>}
+        actions={<>
+              {borrowing && (status || primaryAction) && (
+                <span className="text-12 text-[var(--text-secondary)]">
+                  {t('settings.providers.detail.runLocation.optionLocal')}
+                </span>
+              )}
               {status?.kind === 'connected' ? (
                 <ConnectedPill />
               ) : status?.kind === 'reconnect-required' ? (
@@ -801,14 +868,15 @@ function DetailHeader({
                 </span>
               ) : null}
               {primaryAction && <PillButton {...primaryAction} />}
-            </div>
+        </>}
+        menu={<>
             {/* 供应商级低频动作(停用/启用):所有供应商详情头统一入口。停用 = 保留凭证、
               整体不可路由(model-disable-store);恢复入口在菜单与下方的已停用条带都有。 */}
             {provider && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Tip text={t('settings.providers.detail.moreActionsAria')}>
-                    <button
+                    <button data-settings-search-action="Open the provider action menu"
                       type="button"
                       aria-label={t('settings.providers.detail.moreActionsAria')}
                       className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-[var(--surface-hover)]"
@@ -825,7 +893,7 @@ function DetailHeader({
                       disabled={management.busy}
                     >
                       <Pencil size={18} className="mr-2.5" />
-                      {t('settings.providers.pill.rename')}
+                      {t(provider.source === 'user' ? 'settings.providers.menu.appearance' : 'settings.providers.pill.rename')}
                     </DropdownMenuItem>
                   )}
                   {editAction && !provider?.auth.native && (
@@ -835,7 +903,24 @@ function DetailHeader({
                     </DropdownMenuItem>
                   )}
                   {menuItems}
+                  {/* 隐藏与停用是两件事,并排放才分得清:隐藏只让它不出现在模型选择器里,
+                    停用是不再让任何新任务和后台功能用它。 */}
                   <DropdownMenuItem
+                    onClick={() =>
+                      writeProviderHidden(
+                        provider.id,
+                        !provider.hidden,
+                        t('settings.providers.models.visibilityWriteFailed'),
+                      )
+                    }
+                  >
+                    {t(
+                      provider.hidden
+                        ? 'settings.providers.menu.showProvider'
+                        : 'settings.providers.menu.hideProvider',
+                    )}
+                  </DropdownMenuItem>
+                  {provider.geminiImageSettingsConnectionId === undefined && <DropdownMenuItem
                     onClick={() =>
                       writeProviderDisabled(
                         provider.id,
@@ -849,12 +934,12 @@ function DetailHeader({
                         ? 'settings.providers.menu.enableProvider'
                         : 'settings.providers.menu.disableProvider',
                     )}
-                  </DropdownMenuItem>
+                  </DropdownMenuItem>}
                   {menuFooter}
                   {resolvedDelete && (
                     <>
                       <DropdownMenuSeparator />
-                      <DropdownMenuItem onClick={resolvedDelete.onClick} disabled={management.busy}>
+                      <DropdownMenuItem variant="danger" onClick={resolvedDelete.onClick} disabled={management.busy}>
                         <Trash2 size={18} className="mr-2.5" />
                         {resolvedDelete.label}
                       </DropdownMenuItem>
@@ -863,9 +948,9 @@ function DetailHeader({
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
-          </div>
-        </div>
-      </div>
+        </>}
+      />
+      {management.editor}
       <div
         data-testid="provider-detail-scroll"
         ref={detailScrollRef}
@@ -873,44 +958,33 @@ function DetailHeader({
       >
         {detail && <div className="px-5 pb-4">{detail}</div>}
         {provider?.subscriptionFastPolicy && <div className="px-5 pb-4"><SubscriptionFastSetting key={provider.id} provider={provider} /></div>}
+        {/* Pooled subscription accounts show the provider card in the default account's row. */}
+        {subscriptionPool && subscriptionKind && (
+          <SubscriptionAccountsSection
+            key={subscriptionPool}
+            providerId={subscriptionPool}
+            kind={subscriptionKind}
+            providerName={provider?.name}
+            locationLabel={borrowing ? t('settings.providers.detail.runLocation.optionLocal') : undefined}
+            defaultUsage={usageCard}
+            dashboard={dashboard ?? undefined}
+            expectAccounts={provider?.connected === true}
+            openAiAccounts={openAiGroup.accounts}
+          />
+        )}
+        {provider && openAiGroupKind && (openAiGroup.allocation || (!subscriptionPool && openAiGroupKind === 'apiKey')) && (
+          <OpenAiAccountGroupSection key={`openai-account-group:${provider.id}`} providerId={provider.id} group={openAiGroup}
+            settingsAnchor={!subscriptionPool} mergeAction={openAiGroupKind === 'apiKey' ? <MergeProviderButton kind={null} providerId={provider.id}
+              providerName={provider.name} openAiAccounts={openAiGroup.accounts} onDone={openAiGroup.refresh} /> : undefined} />
+        )}
         {assetModule ??
-          (subscription ? (
+          (subscriptionPool ? null : usageCard ? (
             <div
               data-testid="provider-usage-module"
               className="border-t px-1 py-2"
               style={{ borderColor: 'var(--settings-theme-card-border)' }}
             >
-              <QuotaHoverCard
-                key={JSON.stringify([
-                  provider?.id,
-                  provider?.connected,
-                  provider?.subscriptionAccount?.source,
-                  provider?.subscriptionAccount?.identity,
-                  provider?.openAiAccount?.source,
-                  provider?.openAiAccount?.identity,
-                ])}
-                variant="embedded"
-                hideIdentity={Boolean(subscriptionProduct)}
-                account={subscription}
-                dashboardLabel={
-                  provider?.id === 'anthropic' || provider?.auth.native === 'claude'
-                    ? t('settings.providers.usage.openClaudeUsage')
-                    : provider?.id === 'xai' || provider?.auth.native === 'xai'
-                      ? t('settings.providers.xai.asset.openUsage')
-                      : undefined
-                }
-                onOpenDashboard={
-                  provider?.id === 'anthropic' || provider?.auth.native === 'claude'
-                    ? () => void window.electronAPI.openExternal('https://claude.ai/settings/usage')
-                    : provider?.id === 'xai' || provider?.auth.native === 'xai'
-                      ? () => void window.electronAPI.openExternal('https://grok.com')
-                      : undefined
-                }
-              >
-                {resetEnabled ? (
-                  <CodexResetCredits providerId={provider?.id} onChanged={refreshResets} key={provider?.id} variant="embedded" snapshot={resetSnapshot} busy={manualReset.busy} canReset={manualReset.canReset} canRetry={manualReset.canRetry} onReset={(credit) => void manualReset.reset(credit)} />
-                ) : null}
-              </QuotaHoverCard>
+              {usageCard}
             </div>
           ) : (
             <ProviderAccountUsageModule provider={provider} />
@@ -924,6 +998,148 @@ function DetailHeader({
 // ---------------------------------------------------------------------------
 // Anthropic —— OAuth(Claude.ai 订阅),复用 maker.claudeOAuth*。
 // ---------------------------------------------------------------------------
+
+function NativeSubscriptionHeader({ provider, onChanged, children, providerId, onPoolConnectionChange }: {
+  provider?: ProviderView; onChanged: () => void; children?: ReactNode; providerId: SubscriptionProvider;
+  onPoolConnectionChange?: (connected: boolean | null) => void;
+}) {
+  const { t } = useTranslation();
+  const { confirm } = useConfirmDialog();
+  const [pool, setPool] = useState<SubscriptionPoolView>();
+  const [connected, setConnected] = useState(provider?.connected === true);
+  const [readUnknown, setReadUnknown] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const login = useRef<string | null>(null);
+  const refreshRef = useRef<() => Promise<void>>(async () => {});
+  useEffect(() => {
+    let revision = 0;
+    const refresh = async () => {
+      const request = ++revision;
+      try {
+        const view = await window.electronAPI.subscriptionAccounts.command({ action: 'read', providerId });
+        if (request !== revision) return;
+        const connected = view.accounts.some(account => account.status === 'ready' || account.status === 'limited');
+        // Accounts that could not be read are unknown, not signed out (2026-11-18): offering
+        // sign-in here made a network problem look like a lost login.
+        const unknown = !connected && view.accounts.some(account => account.status === 'unavailable');
+        setPool(view);
+        setConnected(connected);
+        setReadUnknown(unknown);
+        onPoolConnectionChange?.(view.configured && !unknown ? connected : null);
+      } catch {
+        if (request === revision) setReadUnknown(true);
+      }
+    };
+    refreshRef.current = refresh;
+    void refresh();
+    const off = window.electronAPI.subscriptionAccounts.onChanged(event => { if (event.providerId === providerId) void refresh(); });
+    return () => {
+      ++revision;
+      off();
+      onPoolConnectionChange?.(null);
+      if (login.current) void window.electronAPI.subscriptionAccounts.command({ action: 'cancel', providerId, loginKey: login.current }).catch(() => {});
+    };
+  }, [providerId, onPoolConnectionChange]);
+  // The catalog already identifies saved pools. Match that layout while refreshing its accounts.
+  const pooled = pool?.configured ?? (provider?.subscriptionAccountPool === providerId);
+  if (!pooled) return providerId === 'anthropic'
+    ? <AnthropicHeader provider={provider} onChanged={onChanged}>{children}</AnthropicHeader>
+    : <OpenAiHeader provider={provider} onChanged={onChanged}>{children}</OpenAiHeader>;
+  const poolUnknown = !connected && readUnknown;
+  const accounts = pool?.accounts;
+  // Without a default or a single account to reconnect, the user chooses the account in its row.
+  const account = accounts?.length === 1 ? accounts[0] : accounts?.find(account => account.id === 'default');
+  const signIn = account ? { action: 'login' as const, accountId: account.id }
+    : accounts?.length === 0 ? { action: 'add' as const } : undefined;
+  const actionLabel = login.current ? 'settings.providers.button.cancel'
+    : connected ? 'settings.providers.button.disconnect'
+    : poolUnknown ? 'subscriptionAccounts.signIn.retry'
+    : signIn ? 'subscriptionAccounts.login' : undefined;
+  const act = async () => {
+    if (poolUnknown && !login.current) {
+      // Re-read only; a recovered account announces itself to the account list as well.
+      setBusy(true);
+      try { await refreshRef.current(); } finally { setBusy(false); }
+      return;
+    }
+    if (login.current) {
+      await window.electronAPI.subscriptionAccounts.command({ action: 'cancel', providerId, loginKey: login.current }).catch(() => {});
+      return;
+    }
+    const prefix = providerId === 'anthropic' ? 'claude' : 'codex';
+    if (connected && !(await confirm({ title: t(`settings.connections.${prefix}.logoutConfirm.title`), description: t(`settings.connections.${prefix}.logoutConfirm.description`), confirmText: t(`settings.connections.${prefix}.logoutConfirm.confirm`) }))) return;
+    setBusy(true);
+    try {
+      if (connected && provider) await disconnectProvider(provider, await window.electronAPI.maker.listProviders());
+      else if (signIn) {
+        login.current = crypto.randomUUID();
+        await window.electronAPI.subscriptionAccounts.command({ ...signIn, providerId, loginKey: login.current });
+      }
+      onChanged();
+    } catch (error) {
+      const key = subscriptionAccountErrorKey(error);
+      if (key) toast.error(t(key));
+    } finally { login.current = null; setBusy(false); }
+  };
+  return <DetailHeader provider={provider ? { ...provider, connected } : provider} children={children}
+    icon={providerId === 'anthropic' ? <AnthropicMark size={18} /> : <OpenAIMark size={18} />}
+    title={provider?.name ?? (providerId === 'anthropic' ? 'Anthropic' : 'OpenAI')}
+    subtitle={t('subscriptionAccounts.title')}
+    status={{ kind: connected ? 'connected' : 'neutral', label: t(busy ? 'settings.providers.pill.connecting'
+      : poolUnknown ? 'subscriptionAccounts.unavailable' : pool ? 'settings.providers.pill.disconnected' : 'subscriptionAccounts.signIn.checking') }}
+    primaryAction={actionLabel ? { label: t(actionLabel), onClick: () => void act(), disabled: busy && !login.current } : undefined} />;
+}
+
+/**
+ * A provider Cindy created for subscription accounts (2026-11-13). It mirrors its built-in
+ * subscription's routes but is never that connection: signing in and out happens per account in
+ * the account list, and deleting it only stops using its accounts (their CLI logins stay).
+ */
+function CreatedSubscriptionHeader({ provider, kind, onChanged, children }: {
+  provider: ProviderView; kind: SubscriptionProvider; onChanged: () => void; children?: ReactNode;
+}) {
+  const { t } = useTranslation();
+  const { confirm } = useConfirmDialog();
+  const [connected, setConnected] = useState(provider.connected);
+  const [unknown, setUnknown] = useState(false);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let current = true;
+    const refresh = () => void window.electronAPI.subscriptionAccounts.command({ action: 'read', providerId: provider.id })
+      .then((view) => {
+        if (!current) return;
+        const ready = view.accounts.some((account) => account.status === 'ready' || account.status === 'limited');
+        setConnected(ready);
+        setUnknown(!ready && view.accounts.some((account) => account.status === 'unavailable'));
+      }).catch(() => {});
+    refresh();
+    const off = window.electronAPI.subscriptionAccounts.onChanged((event) => { if (event.providerId === kind) refresh(); });
+    return () => { current = false; off(); };
+  }, [provider.id, kind]);
+  const remove = async () => {
+    if (!(await confirm({
+      title: t('subscriptionAccounts.placement.deleteTitle', { name: provider.name }),
+      description: t('subscriptionAccounts.placement.deleteDescription'),
+      confirmText: t('subscriptionAccounts.placement.deleteConfirm'),
+      confirmVariant: 'destructive',
+    }))) return;
+    setBusy(true);
+    try {
+      await window.electronAPI.subscriptionAccounts.command({ action: 'remove-provider', providerId: provider.id });
+      onChanged();
+    } catch (error) {
+      toast.error(t(error instanceof Error && error.message.includes('Account is in use')
+        ? 'subscriptionAccounts.placement.deleteInUse'
+        : placementErrorKey(error)));
+    } finally { setBusy(false); }
+  };
+  return <DetailHeader provider={{ ...provider, connected }} children={children}
+    icon={kind === 'anthropic' ? <AnthropicMark size={18} /> : <OpenAIMark size={18} />}
+    title={provider.name}
+    subtitle={t('subscriptionAccounts.title')}
+    status={{ kind: connected ? 'connected' : 'neutral', label: t(unknown ? 'subscriptionAccounts.unavailable' : 'settings.providers.pill.disconnected') }}
+    deleteAction={busy ? undefined : { label: t('settings.providers.custom.deleteAria'), onClick: () => void remove() }} />;
+}
 
 function AnthropicHeader({
   children,
@@ -1056,7 +1272,7 @@ function LocalProviderNameInput({
   const { t } = useTranslation();
   const [name, setName] = useState(initialName);
   return (
-    <SettingsTextInput
+    <SettingsTextInput data-setting-id={providersSettings.providers.id}
       aria-label={t('settings.providers.pill.rename')}
       value={name}
       maxLength={128}
@@ -1339,7 +1555,7 @@ function XaiHeader({
           deviceLogin ? (
             <OAuthDeviceCodeCard deviceCode={deviceCode} />
           ) : (
-            <Button variant="secondary" size="md" onClick={() => void handleLogin('device')}>
+            <Button data-settings-search-action="Start device-code sign-in for this provider" variant="secondary" size="md" onClick={() => void handleLogin('device')}>
               {t('settings.connections.xai.deviceLogin')}
             </Button>
           )
@@ -1500,7 +1716,7 @@ function GenericOAuthHeader({
     ) : loggingIn && browserUrl ? (
       <OAuthBrowserLink url={browserUrl} />
     ) : !connected && !loggingIn && xaiDeviceFlow ? (
-      <Button variant="secondary" size="md" onClick={() => void handleLogin('device')}>
+      <Button data-settings-search-action="Start device-code sign-in for this provider" variant="secondary" size="md" onClick={() => void handleLogin('device')}>
         {t('settings.connections.xai.deviceLogin')}
       </Button>
     ) : undefined;
@@ -1649,7 +1865,7 @@ function BuiltinApiKeyHeader({
       : editAction;
   const detail = editing ? (
     <div className="flex items-center gap-2 pt-2">
-      <SettingsTextInput
+      <SettingsTextInput data-setting-id={providersSettings.providers.id}
         value={draftKey}
         onChange={setDraftKey}
         placeholder={t('settings.providers.builtinApiKey.keyPlaceholder')}
@@ -1859,8 +2075,8 @@ function XdGatewayHeader({
         </DropdownMenuItem>
       )}
       {connected && (
-        <DropdownMenuItem onClick={() => void handleDisconnect()}>
-          <LogOut size={14} className="mr-2.5 text-[var(--text-tertiary)]" />
+        <DropdownMenuItem variant="danger" onClick={() => void handleDisconnect()}>
+          <LogOut size={14} className="mr-2.5" />
           {t('settings.providers.button.disconnect')}
         </DropdownMenuItem>
       )}
@@ -1924,7 +2140,7 @@ function XdGatewayHeader({
                 )}
               </p>
             </div>
-            <Button
+            <Button data-settings-search-action="Refresh this provider account balance"
               variant="secondary"
               size="sm"
               tone="quiet"
@@ -2020,16 +2236,13 @@ function XdGatewayHeader({
   return (
     <DetailHeader
       children={children}
-      icon={<XDIncMark size={18} />}
+      icon={<ProviderLogoMark providerId="xd" logoKind={provider?.logoKind} size={18} />}
       title={provider ? providerDisplayName(provider, t) : t('settings.providers.xd.title')}
       identityBadge={
         syncStatus.accountTier === 'free' ? (
-          <span
-            data-testid="cindy-ai-free-tier-badge"
-            className="inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-2 py-[1px] text-11 font-medium leading-[1.45] text-[var(--text-secondary)]"
-          >
+          <Badge data-testid="cindy-ai-free-tier-badge">
             {t('settings.providers.xd.accountTier.free')}
-          </span>
+          </Badge>
         ) : undefined
       }
       subtitle={t('settings.providers.xd.simpleSubtitle')}
@@ -2215,7 +2428,7 @@ const CINDY_SIGNIN_ID = 'xd-signin';
 function CindySigninRow({ selected, onSelect }: { selected: boolean; onSelect: () => void }) {
   const { t } = useTranslation();
   return (
-    <button
+    <button data-settings-search-action="Select the provider whose details are displayed"
       type="button"
       onClick={onSelect}
       aria-current={selected}
@@ -2234,7 +2447,7 @@ function CindySigninRow({ selected, onSelect }: { selected: boolean; onSelect: (
           color: 'var(--settings-integration-avatar-icon)',
         }}
       >
-        <XDIncMark size={14} />
+        <CindyMark size={14} />
       </div>
       <span
         className="min-w-0 flex-1 truncate text-13 font-medium"
@@ -2243,12 +2456,9 @@ function CindySigninRow({ selected, onSelect }: { selected: boolean; onSelect: (
         {t('settings.providers.xd.title')}
       </span>
       {/* 徽标不大写不加字距:224px 窄栏里 en「RECOMMENDED」会把行名挤成「Cin…」。 */}
-      <span
-        className="shrink-0 rounded-full border px-1.5 py-px text-10 font-medium"
-        style={{ borderColor: 'var(--border-default)', color: 'var(--text-tertiary)' }}
-      >
+      <Badge size="xs" tone="outline">
         {t('settings.providers.xdSignin.badge')}
-      </span>
+      </Badge>
     </button>
   );
 }
@@ -2262,6 +2472,7 @@ function ListRow({
   total,
   onMove,
   sortable,
+  stateNote = true,
 }: {
   provider: ProviderView;
   selected: boolean;
@@ -2271,17 +2482,26 @@ function ListRow({
   total: number;
   onMove: (delta: -1 | 1) => void;
   sortable: boolean;
+  /** 「已隐藏 / 已停用」注记。行已经收在同名分组里时不再重复，改回显示模型数。 */
+  stateNote?: boolean;
 }) {
   const { t } = useTranslation();
   const management = useProviderManagement(provider);
+  const { borrowed, borrowedCatalog } = useProviderBorrow(provider);
+  const borrowing = borrowed !== null;
   const localLive = useManagedLocalRuntimeLive(provider.id);
+  // 借用另一台电脑时数那台开放的模型；本机目录此时可能是空的(本机没登录)。
   const modelCount = useMemo(
-    () => (providerHasModels(provider) ? buildUnionRows(provider).length : null),
-    [provider],
+    () => borrowedCatalog
+      ? borrowedProviderModelCount(borrowedCatalog)
+      : providerHasModels(provider) ? buildUnionRows(provider).length : null,
+    [provider, borrowedCatalog],
   );
   const title = providerDisplayName(provider, t);
   return (
     <div
+      // Listed-source identity shared with the model picker rail (`local:<providerId>`).
+      data-listed-source={`local:${provider.id}`}
       className={cn(
         'relative flex w-full items-center rounded-lg text-left transition-colors',
         selected
@@ -2289,10 +2509,11 @@ function ListRow({
           : 'hover:bg-[var(--settings-menu-bg-hover)]',
       )}
     >
+      {management.editor}
       {sortable && (
-        <button
+        <button data-setting-id={providersSettings.providers.id}
           type="button"
-          className="provider-order-handle absolute inset-y-0 left-0 z-[1] my-auto flex h-9 w-3 cursor-grab items-center justify-center rounded-md outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring-soft)]"
+          className="provider-order-handle absolute inset-y-0 left-0 z-[1] my-auto flex h-9 w-3 cursor-grab items-center justify-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring-soft)]"
           aria-label={t('settings.providers.order.handle', {
             provider: title,
             position,
@@ -2310,31 +2531,11 @@ function ListRow({
         </button>
       )}
       <Tip text={title} side="right" contentClassName="max-w-[360px] break-words">
-        <button
-          type="button"
-          onClick={onSelect}
+        <ProviderListEntry data-settings-search-action="Select the provider whose details are displayed"
+          title={title} icon={providerIcon(provider, 14)} selected={selected} onSelect={onSelect}
           onDoubleClick={provider.id === 'xd' ? undefined : () => void management.rename()}
-          aria-current={selected}
-          className="flex min-w-0 flex-1 items-center gap-2.5 py-2 pl-3 pr-2.5 text-left"
-        >
-          <div
-            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
-            style={{
-              backgroundColor: 'var(--settings-integration-avatar-bg)',
-              border: '1px solid var(--settings-integration-avatar-border)',
-              color: 'var(--settings-integration-avatar-icon)',
-            }}
-          >
-            {providerIcon(provider, 14)}
-          </div>
-          <span
-            className="min-w-0 flex-1 truncate text-13 font-medium"
-            style={{
-              color: provider.suspended ? 'var(--text-tertiary)' : 'var(--settings-section-title)',
-            }}
-          >
-            {title}
-          </span>
+          muted={provider.suspended}
+          annotation={<>
           {reconnectRequired ? (
             <span
               className="shrink-0 select-none text-11"
@@ -2342,13 +2543,21 @@ function ListRow({
             >
               {t('settings.providers.openai.reconnectRequired')}
             </span>
-          ) : provider.suspended ? (
+          ) : stateNote && provider.suspended ? (
             // 已停用比模型数更要紧:窄栏(224px)只放得下一个注记,停用时以状态取代计数。
             <span
               className="shrink-0 select-none text-11"
               style={{ color: 'var(--text-tertiary)' }}
             >
               {t('settings.providers.pill.suspended')}
+            </span>
+          ) : stateNote && provider.hidden ? (
+            // 同理:已隐藏时窄栏以状态取代计数,回答「它为什么不在选择器里」。
+            <span
+              className="shrink-0 select-none text-11"
+              style={{ color: 'var(--text-tertiary)' }}
+            >
+              {t('settings.providers.pill.hidden')}
             </span>
           ) : (
             // Keep the account suffix visible in the narrow rail; the detail lists the count.
@@ -2361,21 +2570,17 @@ function ListRow({
               </span>
             )
           )}
-          <span
-            className="h-1.5 w-1.5 shrink-0 rounded-full"
-            style={{
-              backgroundColor: reconnectRequired
+          </>}
+          statusColor={reconnectRequired
                 ? 'var(--remote-status-failed)'
                 : isManagedLocalProvider(provider.id)
                   ? localLive
                     ? 'var(--remote-status-ready)'
                     : 'var(--border-default)'
-                  : provider.connected && !provider.suspended
+                  : (provider.connected || borrowing) && !provider.suspended
                     ? 'var(--remote-status-ready)'
-                    : 'var(--border-default)',
-            }}
-          />
-        </button>
+                    : 'var(--border-default)'}
+        />
       </Tip>
     </div>
   );
@@ -2395,7 +2600,7 @@ function SuggestionRow({
   const cliName = localCliDisplayName(detection.cli);
   const title = providerDisplayName(provider, t);
   return (
-    <button
+    <button data-provider-suggestion data-settings-search-action="Open the labeled provider setup or account action"
       type="button"
       onClick={onClick}
       title={t(
@@ -2436,17 +2641,46 @@ function SuggestionRow({
 // Section
 // ---------------------------------------------------------------------------
 
-export function ProvidersSection() {
+export function ProvidersSection({ routing = false, onRoutingChange }: {
+  /** 右栏显示「智能路由」（原模型组设置）而不是某个供应商；地址是 `?tab=model-groups`。 */
+  routing?: boolean;
+  onRoutingChange?: (routing: boolean) => void;
+} = {}) {
   const { t } = useTranslation();
+  // 从供应商页的「调整」过来：带着是哪个供应商，智能路由页落到它的账号或电脑那一行。
+  const [routingFocus, setRoutingFocus] = useState<{ providerId: string; at: number } | null>(null);
+  const openSmartRouting = useCallback((providerId?: string) => {
+    if (providerId) setRoutingFocus({ providerId, at: Date.now() });
+    onRoutingChange?.(true);
+  }, [onRoutingChange]);
+  const routingPaneRef = useRef<HTMLDivElement | null>(null);
+  // 进过一次智能路由就一直留着那一格(见右栏)；没进过时不加载它。
+  const [routingVisited, setRoutingVisited] = useState(routing);
+  if (routing && !routingVisited) setRoutingVisited(true);
+  useEffect(() => {
+    if (typeof requestIdleCallback === 'function') {
+      const id = requestIdleCallback(preloadProviderDialogs, { timeout: 4_000 });
+      return () => cancelIdleCallback(id);
+    }
+    const timer = setTimeout(preloadProviderDialogs, 1_500);
+    return () => clearTimeout(timer);
+  }, []);
   const reducedMotion = useReducedMotion();
   const signInToCindy = useSignInToCindy();
   const { dataOwnerId } = useAuth();
   const { confirm } = useConfirmDialog();
   const confirmProviderChange = useProviderChangeConfirmation();
-  const { providers, providerOrder, ownerGeneration, loading, error: catalogError, refetch } = useProviders();
+  const { providers: currentProviders, providerOrder, ownerGeneration, loading, error: catalogError, refetch } = useProviders();
+  const providers = useMemo(() => currentProviders.map(withSubscriptionDisplayModels), [currentProviders]);
   // OpenAI 的 reconnect-required 是 useCodexAuth 独有状态(目录 connected 此时为 false):
   // 该状态下 OpenAI 行必须留在左栏,否则「重新连接」入口不可达,用户被迫从向导重发现。
   const codexAuth = useCodexAuth();
+  const [openaiPoolState, setOpenaiPoolState] = useState<{ dataOwnerId: string | null; connected: boolean } | null>(null);
+  const onOpenaiPoolConnectionChange = useCallback((connected: boolean | null) => {
+    setOpenaiPoolState(connected === null ? null : { dataOwnerId, connected });
+  }, [dataOwnerId]);
+  // Memory only, while this page is open. A new owner starts empty, never seeing these accounts.
+  const subscriptionPoolViews = useMemo(() => new Map<string, SubscriptionPoolView>(), [dataOwnerId]);
   const remoteControlEnabled = useRemoteControlEnabled();
   // 供应商分享：入口提示点读待审批申请与待处理的转分享请求；管理页是本页的子页面(返回回到供应商详情)。
   // 带 hostDeviceId 的申请在另一台电脑的分享里(那台的供应商 id 可能与本机重名)，只计入那台的组入口。
@@ -2461,6 +2695,13 @@ export function ProvidersSection() {
   );
   const [shareManageProviderId, setShareManageProviderId] = useState<string | null>(null);
   const [shareManageRemote, setShareManageRemote] = useState<OwnRemoteProvider | null>(null);
+  const { entry: searchEntry, activation: searchActivation } = useSettingsSearchNavigation();
+  useEffect(() => {
+    if (searchEntry?.tab === 'providers') {
+      setShareManageProviderId(null);
+      setShareManageRemote(null);
+    }
+  }, [searchEntry, searchActivation]);
   const openaiReconnectRequired = codexAuth.state.kind === 'reconnect-required';
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -2468,29 +2709,61 @@ export function ProvidersSection() {
   // 选中本机供应商或登录引导时清空。
   const [selectedShareId, setSelectedShareId] = useState<string | null>(null);
   const [selectedRemoteKey, setSelectedRemoteKey] = useState<string | null>(null);
-  const { received: receivedShares, loaded: receivedSharesLoaded } = useProviderShareReceived();
+  const { received: receivedShares, loaded: receivedSharesLoaded, retryCatalogShareIds } = useProviderShareReceived();
+  const retryCatalogShareId = selectedShareId && retryCatalogShareIds?.has(selectedShareId) ? selectedShareId : null;
   const selectedShare = selectedShareId
     ? receivedShares.find((share) => share.shareId === selectedShareId) ?? null
     : null;
-  const { entries: ownRemoteProviders, hiddenShareIds: groupedShareIds } = useOwnRemoteProviderList();
-  const ownedShares = useOwnedProviderShares(ownRemoteProviders.map(entry => entry.deviceId));
+  const providerGroups = useLocalProviderGroupsState();
+  const {
+    entries: offeredRemoteProviders,
+    hiddenShareIds: groupedShareIds,
+    ownedShares,
+    devices: controllableDevices,
+  } = useOwnRemoteProviderList();
+  const remoteDisable = useRemoteProviderDisable();
+  const ownRemoteProviders = useMemo(() => offeredRemoteProviders.map(entry => remoteDisable.isDisabled(entry.deviceId, entry.provider.id)
+    ? { ...entry, provider: { ...entry.provider, suspended: true } } : entry), [offeredRemoteProviders, remoteDisable]);
   const selectedRemote = selectedRemoteKey
     ? ownRemoteProviders.find((entry) => entry.key === selectedRemoteKey) ?? null
     : null;
-  const otherDeviceSelected = selectedShare !== null || selectedRemote !== null;
+  // 由插件提供的供应商(插件引擎)：这台电脑上已启用并批准的插件声明的引擎，各占左栏一行。插件停用或
+  // 卸载后引擎从列表里消失，选中的那一行随之落回普通供应商，不留空详情。
+  const pluginEngines = usePluginEngines();
+  const [selectedEngineKey, setSelectedEngineKey] = useState<string | null>(null);
+  const selectedEngine = selectedEngineKey
+    ? pluginEngines.find((engine) => engine.key === selectedEngineKey) ?? null
+    : null;
+  // 自己其他电脑开放的插件引擎：与本机引擎共用选中态，键带前缀不会撞上；那台电脑离线或关掉开放后
+  // 从列表里消失，选中的那一行同样落回普通供应商。
+  const remotePluginEngines = useOwnRemotePluginEngines(controllableDevices, shareManageProviderId === null);
+  const selectedRemoteEngine = selectedEngineKey
+    ? remotePluginEngines.find((entry) => entry.key === selectedEngineKey) ?? null
+    : null;
+  // 右栏正在显示的不是本机普通供应商：分享给我的、另一台电脑上的，或由插件提供的(互斥)。
+  const otherDeviceSelected = selectedShare !== null || retryCatalogShareId !== null || selectedRemote !== null || selectedEngine !== null
+    || selectedRemoteEngine !== null;
   // 用户或深链、向导完成、导入完成等「打开某个供应商」时，右栏回到那个供应商(即使它就是当前选中项)。
   const selectProvider = useCallback((providerId: string) => {
     setSelectedShareId(null);
     setSelectedRemoteKey(null);
+    setSelectedEngineKey(null);
     setSelectedId(providerId);
   }, []);
   const selectShare = useCallback((shareId: string) => {
     setSelectedRemoteKey(null);
+    setSelectedEngineKey(null);
     setSelectedShareId(shareId);
   }, []);
   const selectRemote = useCallback((key: string) => {
     setSelectedShareId(null);
+    setSelectedEngineKey(null);
     setSelectedRemoteKey(key);
+  }, []);
+  const selectEngine = useCallback((key: string) => {
+    setSelectedShareId(null);
+    setSelectedRemoteKey(null);
+    setSelectedEngineKey(key);
   }, []);
   const [pendingProviderOrder, setPendingProviderOrder] = useState<{
     dataOwnerId: string | null;
@@ -2506,7 +2779,7 @@ export function ProvidersSection() {
     ids: Set<string>;
   }>({ dataOwnerId, ids: new Set<string>() });
   // 向导:null = 关;{ entry } = 打开(entry 指定直达的供应商,来自检测建议)。
-  const [speechProvider, setSpeechProvider] = useState<{ provider: ProviderView; owner: string | null; generation: number | null } | null>(null);
+  const [speechProvider, setSpeechProvider] = useState<{ provider: ProviderView; owner: string | null; generation: number | null; mode?: 'realtime' } | null>(null);
   const [wizard, setWizard] = useState<null | { entry?: WizardEntry; detected?: DetectedProviderDraft }>(null);
   // 自定义供应商完整表单(编辑,或从向导「自定义端点」进入新建)。
   const [dialog, setDialog] = useState<
@@ -2523,7 +2796,7 @@ export function ProvidersSection() {
     modelId: string;
     agent?: AgentKind;
   } | null>(null);
-  const [providerImportId, setProviderImportId] = useState<string | null>(null);
+  const [providerImportId, setProviderImportId] = useState<string | string[] | null>(null);
   const closeProviderImport = useCallback(() => setProviderImportId(null), []);
   const finishProviderImport = useCallback(
     (providerId: string) => {
@@ -2551,6 +2824,11 @@ export function ProvidersSection() {
     refreshingProviderIdRef.current = null;
     setRefreshingProviderId(null);
   }, []);
+  // #11298: models a complete refresh no longer found upstream, awaiting the user's choice.
+  const [withdrawnReview, setWithdrawnReview] = useState<WithdrawnModelsOwnedReview | null>(null);
+  const [removingWithdrawn, setRemovingWithdrawn] = useState(false);
+  // A newer refresh supersedes the previous prompt; its list may already be stale.
+  const withdrawnToastIdRef = useRef<string | null>(null);
 
   // 进入「模型供应商」页时只上报一个静默刷新提示。是否真正访问上游由 Main
   // 根据连接状态、30 分钟冷却和全局 in-flight 决定，失败不打扰用户。
@@ -2586,14 +2864,22 @@ export function ProvidersSection() {
     providers.forEach((p) => map.set(p.id, p));
     return map;
   }, [providers]);
+  const geminiImages = byId.get('gemini');
+  const geminiImageConnectionId = geminiImages?.geminiImageSettingsConnectionId;
 
   // 共享 provider 快照保持目录原序，避免显示偏好影响模型来源推导；只有设置页左栏
   // 应用 Main 并列下发的 owner-scoped 显示顺序。Cindy 登录引导与检测建议是伪行，
   // 不进入持久化顺序。
+  // 自己另一台电脑已登录并开放的内置供应商：本机没登录过也列出，按「运行于」那台显示为可用。
+  const borrowableIds = useMemo(
+    () => new Set(ownRemoteProviders.filter(entry => !entry.group).map(entry => entry.provider.id)),
+    [ownRemoteProviders],
+  );
   const visibleProviders = useMemo(() => {
     const rows: ProviderView[] = [];
     for (const p of providers) {
-      if (p.removed) continue;
+      // Existing shares still need their original, selectively revocable management entry.
+      if (p.removed || (p.subscriptionPoolAlias && !ownedShares.get(null)?.has(p.id))) continue;
       if (p.source === 'builtin') {
         // reconnect-required 视同占行:凭证失效 ≠ 用户断开,重连入口必须保留。
         // OpenAI 图像 key 与 ChatGPT OAuth 两套凭证解耦:imageModels 已声明时,
@@ -2602,9 +2888,13 @@ export function ProvidersSection() {
         if (
           p.id === 'xd' ||
           p.connected ||
+          // A provider created for subscription accounts stays listed while signed out, so its
+          // accounts can be signed in again or the provider deleted (2026-11-13).
+          !!p.subscriptionPool ||
           p.removed === false ||
           (p.id === 'openai' && openaiReconnectRequired) ||
-          openaiHasImageCap
+          openaiHasImageCap ||
+          (borrowableIds.has(p.id) && p.agents.length > 0 && !p.suspended)
         ) {
           rows.push(p);
         }
@@ -2619,6 +2909,7 @@ export function ProvidersSection() {
         (p.id === MANAGED_OLLAMA_PROVIDER_ID ||
           p.id === MANAGED_LLAMACPP_PROVIDER_ID ||
           p.id === MANAGED_LMSTUDIO_PROVIDER_ID ||
+          p.id === geminiImageConnectionId ||
           providerHasModels(p) ||
           // Suspension gates actions, not the empty connection's enable entry.
           !!providerSpeechSetup({ ...p, suspended: false }) ||
@@ -2628,7 +2919,7 @@ export function ProvidersSection() {
       }
     }
     return rows;
-  }, [providers, openaiReconnectRequired]);
+  }, [providers, openaiReconnectRequired, borrowableIds, ownedShares, geminiImageConnectionId]);
 
   const orderedVisibleProviders = useMemo(
     () => applyProviderOrder(visibleProviders, providerOrder),
@@ -2643,9 +2934,22 @@ export function ProvidersSection() {
     [orderedVisibleProviders, pendingProviderOrderIds],
   );
   const sharedLocalProviders = listProviders.filter(provider => ownedShares.get(null)?.has(provider.id));
-  const ordinaryLocalProviders = listProviders.filter(provider => !ownedShares.get(null)?.has(provider.id));
+  const localBase = listProviders.filter(provider => !ownedShares.get(null)?.has(provider.id));
+  const localExempt = (providerId: string) => !providerGroups.ready || !!providerGroups.groups[providerId];
+  // Which equal account connection a folded row opens (its account list lives on the root row).
+  const localDuplicates = duplicateSubscriptionProviders(localBase.filter(provider => !localExempt(provider.id)));
   const sharedRemoteProviders = ownRemoteProviders.filter(entry => ownedShares.get(entry.deviceId)?.has(entry.provider.id));
-  const ordinaryRemoteProviders = ownRemoteProviders.filter(entry => !ownedShares.get(entry.deviceId)?.has(entry.provider.id));
+  const unsharedRemoteProviders = ownRemoteProviders.filter(entry => !ownedShares.get(entry.deviceId)?.has(entry.provider.id));
+  // Same rule as both model pickers: an equal source is listed once; this computer's entry represents it.
+  const listedFolds = listedSourceFolds({
+    base: localBase,
+    baseExempt: localExempt,
+    others: [...new Set(unsharedRemoteProviders.map(entry => entry.deviceId))].map(deviceId => ({
+      deviceId, providers: unsharedRemoteProviders.filter(entry => entry.deviceId === deviceId).map(entry => entry.provider),
+    })),
+  });
+  const ordinaryLocalProviders = localBase.filter(provider => !listedFolds.hiddenBase.has(provider.id));
+  const ordinaryRemoteProviders = unsharedRemoteProviders.filter(entry => !listedFolds.hiddenOther.get(entry.deviceId)?.has(entry.provider.id));
 
   useEffect(() => {
     if (pendingProviderOrder && pendingProviderOrder.dataOwnerId !== dataOwnerId) {
@@ -2738,11 +3042,8 @@ export function ProvidersSection() {
   );
 
   const moveProviderWithKeyboard = useCallback(
-    (providerId: string, delta: -1 | 1): void => {
-      const shared = ownedShares.get(null)?.has(providerId) === true;
-      const currentIds = listProviders
-        .filter(provider => (ownedShares.get(null)?.has(provider.id) === true) === shared)
-        .map(provider => provider.id);
+    (providerId: string, delta: -1 | 1, currentIds: readonly string[]): void => {
+      // 在**所在的那一段**里移动(常规 / 我分享的 / 已隐藏 / 已停用):相邻的是屏幕上相邻的那一行。
       const index = currentIds.indexOf(providerId);
       const nextIndex = index + delta;
       if (index < 0 || nextIndex < 0 || nextIndex >= currentIds.length) return;
@@ -2761,7 +3062,7 @@ export function ProvidersSection() {
         }),
       );
     },
-    [byId, listProviders, ownedShares, persistVisibleProviderOrder, t],
+    [byId, listProviders, persistVisibleProviderOrder, t],
   );
 
   // 检测建议:CLI 已安装 + 对应渠道存在于目录 + 未连接,且**未以任何形态占行**
@@ -2800,7 +3101,7 @@ export function ProvidersSection() {
   // 并从 URL 摘除；这条分享已不在列表里(刚被撤销或退出)时只停在供应商页。设备互联断开或换账号时 main
   // 会先推一份空列表表示「暂时读不到」(providerShareStore 同一口径)，这时保留参数，等列表回来再选中；
   // 等待期间用户自己改选了别的，就放弃这次跳转，不在列表回来时把右栏切走。
-  const selectionKey = `${selectedId ?? ''}\n${selectedShareId ?? ''}\n${selectedRemoteKey ?? ''}`;
+  const selectionKey = `${selectedId ?? ''}\n${selectedShareId ?? ''}\n${selectedRemoteKey ?? ''}\n${selectedEngineKey ?? ''}`;
   const receivedShareWaitRef = useRef<string | null>(null);
   useEffect(() => {
     const target = searchParams.get(PROVIDER_SHARE_RECEIVED_PARAM);
@@ -2880,23 +3181,46 @@ export function ProvidersSection() {
     (selectedId === CINDY_SIGNIN_ID || (selectedId == null && listProviders.length === 0));
 
   // 选中项:默认第一行;所选供应商被删除/消失时回退第一行(不留空详情)。
+  const defaultSelectedIdRef = useRef<string | null>(null);
   const effectiveSelected = useMemo(() => {
-    const selected = listProviders.find((p) => p.id === selectedId) ?? listProviders[0] ?? null;
-    // Match the connection header immediately, including auth invalidation before catalog refresh.
+    // 默认落在还在用的供应商上:已隐藏 / 已停用的收在折叠分组里,默认选中它们会一打开就把分组撑开。
+    // 但正在看的那一个被隐藏 / 停用时不能跳走(详情里的说明条和恢复入口就在它身上),
+    // 所以默认选中是粘住的:先认上一次显示的那一个。
+    const selected = listProviders.find((p) => p.id === selectedId)
+      ?? listProviders.find((p) => p.id === defaultSelectedIdRef.current)
+      ?? listProviders.find((p) => !p.suspended && !p.hidden)
+      ?? listProviders[0] ?? null;
+    defaultSelectedIdRef.current = selected?.id ?? null;
+    // Pool connection state covers all its accounts; native auth only describes the legacy default login.
     return selected?.id === 'openai'
       ? {
           ...selected,
-          connected: isChatGptConnectionConnected(codexAuth.state, selected.connected),
+          connected: openaiPoolState && openaiPoolState.dataOwnerId === dataOwnerId
+            ? openaiPoolState.connected
+            : selected.subscriptionAccountPool === 'openai'
+              ? selected.connected
+              : isChatGptConnectionConnected(codexAuth.state, selected.connected),
         }
       : selected;
-  }, [selectedId, listProviders, codexAuth.state]);
+  }, [selectedId, listProviders, codexAuth.state, openaiPoolState, dataOwnerId]);
+  const managesGeminiImages = effectiveSelected?.source === 'user' &&
+    effectiveSelected.id === geminiImageConnectionId && (geminiImages?.imageModels?.length ?? 0) > 0;
+  const modelsProvider = effectiveSelected?.id === 'gemini' && geminiImageConnectionId !== undefined
+    ? { ...effectiveSelected, imageModels: undefined }
+    : effectiveSelected;
+  const selectedAccountRoot = effectiveSelected ? localDuplicates.get(effectiveSelected.id) ?? effectiveSelected.id : null;
+  const selectedAccountConnections = listProviders.filter(provider => provider.id === selectedAccountRoot || localDuplicates.get(provider.id) === selectedAccountRoot);
+  const selectedBorrow = useProviderBorrow(effectiveSelected);
+  // 借用时模型区整块换成「运行于」那台电脑的清单；本机目录、发现失败与刷新都不适用。
+  const selectedBorrowedModels = selectedBorrow.borrowed && selectedBorrow.borrowedCatalog
+    ? { device: selectedBorrow.borrowed, catalog: selectedBorrow.borrowedCatalog }
+    : null;
 
   const handleDelete = useCallback(
     async (p: ProviderView) => {
       try {
         const scope = await window.electronAPI.maker.listProviders();
         const ok = await confirm({
-          presentation: 'standard',
           title: t('settings.providers.custom.deleteConfirm.title'),
           description: t('settings.providers.custom.deleteConfirm.description', { name: p.name }),
           confirmText: t('settings.providers.custom.deleteConfirm.confirm'),
@@ -2938,19 +3262,34 @@ export function ProvidersSection() {
   const handleRefreshModels = useCallback(
     async (p: ProviderView) => {
       if (!beginProviderRefresh(p.id)) return;
+      if (withdrawnToastIdRef.current) toast.dismiss(withdrawnToastIdRef.current);
+      withdrawnToastIdRef.current = null;
+      setWithdrawnReview(null);
       try {
         const config = providerViewToCustomProviderConfig(p);
         let added = 0;
+        let failureCode: ProviderErrorCode | undefined;
+        let flashAccessRevoked = false;
         const refreshedAgents = new Set<AgentKind>();
+        // Withdrawal is only judged for API key connections when every configured runtime
+        // returned a complete catalog; OAuth discovery stays additions-only.
+        let catalogsComplete = p.auth.method === 'apiKey';
+        let withdrawnSuspicious = false;
+        const withdrawn = new Map<string, { id: string; name: string; agents: AgentKind[] }>();
+        const absentByAgent = new Map<AgentKind, Set<string>>();
+        // Main accepts new listing markers only with a receipt still matching this connection.
+        const listingReceipts: Partial<Record<AgentKind, string>> = {};
+        const refreshBatch = crypto.randomUUID();
+        const batch = await fetchCustomProviderModelsForRefresh(p, config);
         for (const agent of p.agents) {
           const rt = config.runtimes[agent];
           if (!rt?.baseUrl) continue;
           const authMethod =
             p.auth.method === 'none' ? 'none' : p.auth.method === 'oauth' ? 'oauth' : 'apiKey';
-          const apiKey = authMethod === 'apiKey' ? await readCustomProviderKey(p.id, agent) : null;
+          const apiKey = !batch && authMethod === 'apiKey' ? await readCustomProviderKey(p.id, agent) : null;
           // 鉴权请求头是 main-only 密文,renderer 不回读;交由 main 按 savedProviderId
           // 注入已存请求头(否则仅靠请求头鉴权的端点刷新会因缺头 401,codex review)。
-          const r = await window.electronAPI.maker.fetchProviderModels({
+          const r = batch?.find(entry => entry.agent === agent)?.result ?? await window.electronAPI.maker.fetchProviderModels({
             agent,
             baseUrl: rt.baseUrl,
             authMethod,
@@ -2958,14 +3297,26 @@ export function ProvidersSection() {
             modelsUrl: rt.modelsUrl ?? null,
             apiKey,
             savedProviderId: p.id,
+            ...((isGlmApiBase(rt.baseUrl) || isGlmPresetRoute(rt.baseUrl, rt.catalogPresetId)) && { refreshBatch }),
           });
-          if (!r.ok || !r.models) continue;
+          if (r.glmFlashProbe === 'unavailable' && rt.models.some(hasGlmFlashDiscovery)) {
+            rt.models = rt.models.map(clearGlmFlashDiscovery);
+            flashAccessRevoked = true;
+          }
+          if (!r.ok || !r.models) {
+            // Prefer actionable authentication recovery when every runtime fails.
+            // Partial success still follows the existing merge/save path below.
+            if (!failureCode || failureCode === 'UNKNOWN' || r.code === 'AUTH_INVALID') failureCode = r.code;
+            catalogsComplete = false;
+            continue;
+          }
           if (p.auth.native) {
             toast.success(t('settings.providers.models.refreshDone'));
             refetch();
             return;
           }
           refreshedAgents.add(agent);
+          if (r.listingReceipt) listingReceipts[agent] = r.listingReceipt;
           const openRouterCatalog = /^https:\/\/openrouter\.ai\/api(?:\/v1)?\/?$/.test(rt.baseUrl)
             ? (rt.modelsUrl ?? 'https://openrouter.ai/api/v1/models')
             : undefined;
@@ -2976,9 +3327,43 @@ export function ProvidersSection() {
           );
           rt.models = merged.models;
           added += merged.addedIds.length;
+          if (r.complete !== true) {
+            catalogsComplete = false;
+          } else {
+            const result = findWithdrawnCustomProviderModels(
+              r.glmFlashProbe === 'unknown' ? merged.models.filter(model => model.id !== GLM_REALTIME_FLASH) : merged.models,
+              r.models,
+            );
+            withdrawnSuspicious ||= result.suspicious;
+            absentByAgent.set(agent, new Set(result.withdrawn.map((model) => model.id)));
+            for (const model of result.withdrawn) {
+              const entry = withdrawn.get(model.id);
+              if (entry) entry.agents.push(agent);
+              else withdrawn.set(model.id, { id: model.id, name: model.name || model.id, agents: [agent] });
+            }
+          }
+        }
+        // Absence receipts (#11298): Main removes only rows still carrying one. Write them
+        // only when every runtime returned a complete catalog; any failed or partial
+        // runtime voids all existing receipts, since a model may sit on an unread page.
+        for (const agent of Object.keys(config.runtimes) as AgentKind[]) {
+          const runtime = config.runtimes[agent];
+          if (!runtime) continue;
+          const absent = catalogsComplete ? absentByAgent.get(agent) : undefined;
+          runtime.models = runtime.models.map(({ missingUpstream: _missing, ...model }) =>
+            absent?.has(model.id) ? { ...model, missingUpstream: true as const } : model);
         }
         if (!refreshedAgents.size) {
-          toast.error(t('settings.providers.models.refreshFailed'));
+          if (flashAccessRevoked) {
+            const saved = await confirmProviderChange(options => updateCustomProvider(config, {}, options));
+            if (!saved) return;
+            refetch();
+          }
+          toast.error(t(failureCode === 'AUTH_INVALID' && p.auth.method === 'oauth'
+            ? 'settings.providers.models.refreshReconnect'
+            : failureCode && failureCode !== 'UNKNOWN'
+              ? `providerError.${failureCode}`
+              : 'settings.providers.models.refreshFailed'));
           return;
         }
         // Main owns the active Registry and classifies the complete discovery
@@ -2988,12 +3373,39 @@ export function ProvidersSection() {
           const result = await updateCustomProvider(config, {}, {
             ...options,
             ...(providerSpeechSetup(p) ? { speechReferenceRefreshAgents: [...refreshedAgents] } : {}),
+            ...(Object.keys(listingReceipts).length ? { listingReceipts } : {}),
           });
           speechReferenceAdded = result.ok && result.speechReferenceAdded === true;
           return result;
         });
         if (!saved) return;
-        if (speechReferenceAdded) {
+        if (catalogsComplete && withdrawn.size > 0) {
+          const review: WithdrawnModelsOwnedReview = {
+            providerId: p.id,
+            providerName: providerDisplayName(p, t),
+            models: [...withdrawn.values()],
+            suspicious: withdrawnSuspicious,
+            dataOwnerId,
+            ownerGeneration,
+          };
+          if (speechReferenceAdded) toast.success(t('settings.providers.models.refreshSpeechAdded'));
+          withdrawnToastIdRef.current = toast.info(
+            withdrawnSuspicious
+              ? added > 0
+                ? t('settings.providers.models.withdrawn.refreshAddedSuspicious', { added, count: withdrawn.size })
+                : t('settings.providers.models.withdrawn.refreshSuspicious', { count: withdrawn.size })
+              : added > 0
+                ? t('settings.providers.models.withdrawn.refreshAdded', { added, count: withdrawn.size })
+                : t('settings.providers.models.withdrawn.refreshFound', { count: withdrawn.size }),
+            {
+              duration: 10_000,
+              action: {
+                label: t('settings.providers.models.withdrawn.review'),
+                onClick: () => setWithdrawnReview(review),
+              },
+            },
+          );
+        } else if (speechReferenceAdded) {
           toast.success(t('settings.providers.models.refreshSpeechAdded'));
         } else if (added > 0) {
           toast.success(t('settings.providers.models.refreshAdded', { count: added }));
@@ -3007,7 +3419,85 @@ export function ProvidersSection() {
         finishProviderRefresh(p.id);
       }
     },
-    [beginProviderRefresh, confirmProviderChange, finishProviderRefresh, refetch, t],
+    [beginProviderRefresh, confirmProviderChange, dataOwnerId, finishProviderRefresh, ownerGeneration, refetch, t],
+  );
+
+  /**
+   * Remove the user-confirmed withdrawn models from every runtime in one save, then
+   * clear their per-model visibility and disable choices so a model that returns
+   * later follows defaults instead of a stale hidden/disabled state.
+   */
+  const removeWithdrawnModels = useCallback(
+    async (modelIds: string[]) => {
+      const review = withdrawnReview;
+      // A refresh in flight will save a newer model list; never race it with this snapshot.
+      if (!review || removingWithdrawn || refreshingProviderIdRef.current === review.providerId) return;
+      const provider = providers.find((candidate) => candidate.id === review.providerId);
+      if (!provider || review.dataOwnerId !== dataOwnerId || review.ownerGeneration !== ownerGeneration) {
+        setWithdrawnReview(null);
+        toast.error(t('settings.providers.models.withdrawn.removeFailed'));
+        return;
+      }
+      setRemovingWithdrawn(true);
+      // Preference cleanup must stay with the account that performed the removal.
+      const owner = getDataOwnerGeneration();
+      try {
+        const chosen = new Set(modelIds);
+        const targets = review.models.filter((model) => chosen.has(model.id))
+          .flatMap((model) => model.agents.map((agent) => ({ agent, modelId: model.id })));
+        // Main applies the review to the latest saved connection (PR #11550 review): a
+        // page snapshot taken before this refresh's refetch, or edits from another window,
+        // must not be overwritten, and rows no longer marked are kept.
+        let removed: { agent: AgentKind; modelId: string }[] = [];
+        let goneIds: string[] = [];
+        const saved = await confirmProviderChange(async (options) => {
+          const result = await updateCustomProvider(providerViewToCustomProviderConfig(provider), {},
+            { ...options, removeWithdrawnModels: targets });
+          if (result.ok) {
+            removed = result.withdrawnRemoved ?? [];
+            goneIds = result.withdrawnGoneIds ?? [];
+          }
+          return result;
+        });
+        if (!saved) return;
+        setWithdrawnReview(null);
+        if (!isDataOwnerGenerationCurrent(owner)) {
+          withdrawnLog.warn('withdrawn model cleanup skipped after account change', { count: removed.length });
+          return;
+        }
+        refetch();
+        if (removed.length === 0) {
+          toast.info(t('settings.providers.models.withdrawn.stale'));
+          return;
+        }
+        const removedIds = [...new Set(removed.map(({ modelId }) => modelId))];
+        // Visibility is per runtime; the disable choice is provider-wide, so only clear
+        // it for models no runtime still offers. The disable IPC accepts 512 IDs per call.
+        const disableBatches: string[][] = [];
+        // IDs longer than the disable IPC accepts (256) can never carry a disable choice.
+        const disableIds = goneIds.filter((id) => id.length <= 256);
+        for (let index = 0; index < disableIds.length; index += 512) disableBatches.push(disableIds.slice(index, index + 512));
+        const cleanup = await Promise.allSettled([
+          resetModelVisibilities(provider.id, removed),
+          ...disableBatches.map((modelIds) => window.electronAPI.maker.setModelDisable({
+            kind: 'model', providerId: provider.id, modelIds, disabled: false,
+          })),
+        ]);
+        const cleanupIncomplete = cleanup.some((result) => result.status === 'rejected' || result.value === false);
+        if (cleanupIncomplete) {
+          withdrawnLog.warn('withdrawn model settings cleanup incomplete', { count: removedIds.length });
+          toast.warning(t('settings.providers.models.withdrawn.cleanupIncomplete', { count: removedIds.length }));
+        } else {
+          toast.success(t('settings.providers.models.withdrawn.removed', { count: removedIds.length }));
+        }
+      } catch (error) {
+        withdrawnLog.warn('withdrawn model removal failed', { error: error instanceof Error ? error.name : 'unknown' });
+        toast.error(t('settings.providers.models.withdrawn.removeFailed'));
+      } finally {
+        setRemovingWithdrawn(false);
+      }
+    },
+    [confirmProviderChange, dataOwnerId, ownerGeneration, providers, refetch, removingWithdrawn, t, withdrawnReview],
   );
 
   /** 内置四家复用 main 已有的 provider-specific 真源刷新，不在 Renderer 复制网络逻辑。 */
@@ -3070,10 +3560,13 @@ export function ProvidersSection() {
     if (p.id === 'xd')
       return <XdGatewayHeader children={children} provider={p} onChanged={refetch} />;
     if (p.id === 'anthropic')
-      return <AnthropicHeader children={children} provider={p} onChanged={refetch} />;
+      return <NativeSubscriptionHeader key={p.id} children={children} provider={p} providerId="anthropic" onChanged={refetch} />;
     if (p.id === 'openai')
-      return <OpenAiHeader children={children} provider={p} onChanged={refetch} />;
+      return <NativeSubscriptionHeader key={p.id} children={children} provider={p} providerId="openai" onChanged={refetch} onPoolConnectionChange={onOpenaiPoolConnectionChange} />;
     if (p.id === 'xai') return <XaiHeader children={children} provider={p} onChanged={refetch} />;
+    // Created subscription providers copy their built-in's fields; never treat them as that connection.
+    if (p.subscriptionPool)
+      return <CreatedSubscriptionHeader key={p.id} children={children} provider={p} kind={p.subscriptionPool} onChanged={refetch} />;
     if (p.source === 'builtin' && p.auth.method === 'apiKey' && isBuiltinApiKeyProviderId(p.id)) {
       return (
         <BuiltinApiKeyHeader children={children} key={p.id} provider={p} onChanged={refetch} />
@@ -3113,13 +3606,34 @@ export function ProvidersSection() {
 
   // 「分享 {供应商}」管理页：设置内的子页面，返回回到该供应商的详情。只替换主体内容，
   // 下方的添加 / 编辑 / 导入弹窗层保持挂载，不会因打开管理页而丢失正在填写的内容。
+  const shareManageIsPluginEngine = Boolean(shareManageProviderId && pluginEngineKeyFromProviderId(shareManageProviderId));
+  const shareManagePluginEngine = shareManageIsPluginEngine && shareManageProviderId
+    ? pluginEngines.find((engine) => engine.providerId === shareManageProviderId) ?? null
+    : null;
   const shareManageProvider = shareManageRemote?.provider ?? (shareManageProviderId ? byId.get(shareManageProviderId) ?? null : null);
+  const backFromSharing = () => {
+    if (shareManageRemote) setSelectedRemoteKey(shareManageRemote.key);
+    else if (shareManagePluginEngine) selectEngine(shareManagePluginEngine.key);
+    else if (!shareManageIsPluginEngine) setSelectedId(shareManageProviderId);
+    setShareManageProviderId(null);
+    setShareManageRemote(null);
+  };
+  useSettingsSubpageBack(shareManageProviderId ? backFromSharing : null);
   const shareManagePage = shareManageProviderId ? (
+    <Suspense fallback={<div role="status" className="px-4 py-6 text-13 leading-[1.5] text-[var(--text-secondary)]">{t('ccAgent.common.loading')}</div>}>
     <ProviderShareManagePage
       key={`${shareManageRemote?.deviceId ?? 'local'}:${shareManageProviderId}`}
       providerId={shareManageProviderId}
-      providerName={shareManageProvider ? providerDisplayName(shareManageProvider, t) : shareManageProviderId}
-      providerIcon={shareManageProvider ? providerIcon(shareManageProvider, 18) : null}
+      providerName={
+        shareManageIsPluginEngine
+          ? (shareManagePluginEngine?.name ?? shareManageProviderId)
+          : (shareManageProvider ? providerDisplayName(shareManageProvider, t) : shareManageProviderId)
+      }
+      providerIcon={
+        shareManageIsPluginEngine
+          ? <PluginEngineIcon size={18} iconDataUrl={shareManagePluginEngine?.iconDataUrl} />
+          : (shareManageProvider ? providerIcon(shareManageProvider, 18) : null)
+      }
       deviceId={shareManageRemote?.deviceId}
       deviceName={shareManageRemote?.deviceName}
       initialGroup={shareManageRemote?.group}
@@ -3127,18 +3641,58 @@ export function ProvidersSection() {
       // 供应商还没加载出来时不判「未开放」；生成链接时 main 会再校验。
       gate={providerShareGate({
         remoteControlEnabled: shareManageRemote ? true : remoteControlEnabled,
-        invocationEnabled: !shareManageProvider || shareManageProvider.remoteInvocationEnabled === true,
+        invocationEnabled: shareManageIsPluginEngine
+          ? (!shareManagePluginEngine || shareManagePluginEngine.remoteUse?.enabled === true)
+          : (!shareManageProvider || shareManageProvider.remoteInvocationEnabled === true),
       })}
-      onBack={() => {
-        if (shareManageRemote) setSelectedRemoteKey(shareManageRemote.key);
-        else setSelectedId(shareManageProviderId);
-        setShareManageProviderId(null);
-        setShareManageRemote(null);
-      }}
+      onBack={backFromSharing}
     />
+    </Suspense>
   ) : null;
 
-  const renderLocalProviderList = (sectionProviders: ProviderView[]) => (
+  // ── 左栏分组:已隐藏 / 已停用各自收进一个默认折叠的分组 ─────────────────────
+  // 常规列表只留还在模型选择器里出现的供应商;「我分享的供应商」保持原样(那是管理分享的入口)。
+  const remoteHidden = (entry: OwnRemoteProvider) =>
+    !entry.provider.suspended && remoteDisable.isHidden(entry.deviceId, entry.provider.id);
+  const activeLocalProviders = ordinaryLocalProviders.filter(provider => !provider.suspended && !provider.hidden);
+  const hiddenLocalProviders = ordinaryLocalProviders.filter(provider => !provider.suspended && provider.hidden);
+  const suspendedLocalProviders = ordinaryLocalProviders.filter(provider => provider.suspended);
+  const activeRemoteProviders = ordinaryRemoteProviders.filter(entry => !entry.provider.suspended && !remoteHidden(entry));
+  const hiddenRemoteProviders = ordinaryRemoteProviders.filter(remoteHidden);
+  const suspendedRemoteProviders = ordinaryRemoteProviders.filter(entry => entry.provider.suspended);
+  // 插件供应商的分享与本机供应商同一口径：已有人加入的放进「我分享的供应商」，不再留在常规列表或隐藏／停用分组。
+  const sharedEngines = pluginEngines.filter(engine => ownedShares.get(null)?.has(engine.providerId));
+  const ordinaryEngines = pluginEngines.filter(engine => !ownedShares.get(null)?.has(engine.providerId));
+  const activeEngines = ordinaryEngines.filter(engine => pluginEngineRailGroup(engine) === 'active');
+  const hiddenEngines = ordinaryEngines.filter(engine => pluginEngineRailGroup(engine) === 'hidden');
+  const suspendedEngines = ordinaryEngines.filter(engine => pluginEngineRailGroup(engine) === 'suspended');
+  const [railGroupOpen, setRailGroupOpen] = useState<{ hidden: boolean; suspended: boolean }>(
+    { hidden: false, suspended: false },
+  );
+  // 选中的供应商落进某个分组时(刚把它隐藏 / 停用,或从深链、搜索进来)把那一组打开一次;
+  // 之后用户可以再收起,不反复弹开。
+  const selectedLocalId = !otherDeviceSelected && !cindySigninActive ? effectiveSelected?.id ?? null : null;
+  const selectedEngineRailGroup = selectedEngine && !sharedEngines.some(engine => engine.key === selectedEngine.key)
+    ? pluginEngineRailGroup(selectedEngine)
+    : null;
+  const selectedRailGroup: 'hidden' | 'suspended' | null =
+    selectedEngineRailGroup === 'hidden' ||
+    hiddenLocalProviders.some(provider => provider.id === selectedLocalId) ||
+    hiddenRemoteProviders.some(entry => entry.key === selectedRemote?.key)
+      ? 'hidden'
+      : selectedEngineRailGroup === 'suspended' ||
+          suspendedLocalProviders.some(provider => provider.id === selectedLocalId) ||
+          suspendedRemoteProviders.some(entry => entry.key === selectedRemote?.key)
+        ? 'suspended'
+        : null;
+  const selectedRailKey = selectedRemote?.key ?? selectedEngine?.key ?? selectedLocalId;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: selectedRailKey 让「换了一个同组的供应商」也触发一次展开。
+  useEffect(() => {
+    if (!selectedRailGroup) return;
+    setRailGroupOpen(open => (open[selectedRailGroup] ? open : { ...open, [selectedRailGroup]: true }));
+  }, [selectedRailGroup, selectedRailKey]);
+
+  const renderLocalProviderList = (sectionProviders: ProviderView[], stateNote = true) => (
     <SortableList
       items={sectionProviders}
       getId={provider => provider.id}
@@ -3150,7 +3704,7 @@ export function ProvidersSection() {
       renderItem={(provider, index) => (
         <ListRow
           provider={provider}
-          selected={!otherDeviceSelected && !cindySigninActive && effectiveSelected?.id === provider.id}
+          selected={!routing && !otherDeviceSelected && !cindySigninActive && (effectiveSelected?.id === provider.id || localDuplicates.get(effectiveSelected?.id ?? '') === provider.id)}
           reconnectRequired={
             (provider.id === 'openai' && openaiReconnectRequired) ||
             provider.openAiAccount?.reconnectRequired === true
@@ -3161,8 +3715,9 @@ export function ProvidersSection() {
           }}
           position={index + 1}
           total={sectionProviders.length}
-          onMove={delta => moveProviderWithKeyboard(provider.id, delta)}
+          onMove={delta => moveProviderWithKeyboard(provider.id, delta, sectionProviders.map(item => item.id))}
           sortable={sectionProviders.length > 1}
+          stateNote={stateNote}
         />
       )}
       disabled={sectionProviders.length < 2}
@@ -3176,7 +3731,7 @@ export function ProvidersSection() {
   const renderRemoteProviderRows = (entries: readonly OwnRemoteProvider[]) => (
     <OwnRemoteProviderRows
       entries={entries}
-      selectedKey={selectedRemote?.key ?? null}
+      selectedKey={routing ? null : selectedRemote?.key ?? null}
       onSelect={key => {
         setFocusedModel(null);
         selectRemote(key);
@@ -3184,23 +3739,65 @@ export function ProvidersSection() {
     />
   );
 
+  const renderEngineRows = (engines: readonly PluginEngineView[]) => (
+    <PluginEngineProviderRows
+      engines={engines}
+      selectedKey={routing ? null : selectedEngine?.key ?? null}
+      onSelect={key => {
+        setFocusedModel(null);
+        selectEngine(key);
+      }}
+    />
+  );
+
+  /** 「已隐藏 / 已停用」折叠分组:标题即开关,带数量;没有成员时整组不出现。 */
+  const renderRailStateGroup = (
+    group: 'hidden' | 'suspended',
+    locals: ProviderView[],
+    remotes: readonly OwnRemoteProvider[],
+    engines: readonly PluginEngineView[],
+  ) => {
+    const count = locals.length + remotes.length + engines.length;
+    if (count === 0) return null;
+    const open = railGroupOpen[group];
+    const label = t(group === 'hidden' ? 'settings.providers.pill.hidden' : 'settings.providers.pill.suspended');
+    return (
+      <div data-provider-rail-group={group} role="group" aria-label={label} className="flex flex-col gap-0.5">
+        <button
+          data-settings-search-action="Expand or collapse the hidden or suspended provider navigation group"
+          type="button"
+          aria-expanded={open}
+          onClick={() => setRailGroupOpen(current => ({ ...current, [group]: !current[group] }))}
+          className="mt-2 flex w-full items-center gap-1 rounded-lg px-2.5 py-1 text-left text-11 font-medium text-[var(--text-tertiary)] transition-colors hover:bg-[var(--settings-menu-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring-soft)]"
+        >
+          <ChevronRight
+            size={12}
+            aria-hidden
+            className={cn('shrink-0 transition-transform motion-reduce:transition-none', open && 'rotate-90')}
+          />
+          <span className="min-w-0 truncate">{label}</span>
+          <span className="tabular-nums opacity-60">{count}</span>
+        </button>
+        {open && renderLocalProviderList(locals, false)}
+        {open && renderEngineRows(engines)}
+        {open && renderRemoteProviderRows(remotes)}
+      </div>
+    );
+  };
+
   return (
-    <div className="flex h-full min-h-0 flex-col gap-[14px]">
-      {shareManagePage ?? (<>
-      <div className="flex shrink-0 items-start justify-between gap-3">
-        <div className="flex min-w-0 flex-col gap-1">
-          <h2
-            className="text-16 font-medium leading-[1.2]"
-            style={{ color: 'var(--settings-section-title)' }}
-          >
-            {t('settings.providers.title')}
-          </h2>
-          <p className="text-13 leading-[1.5]" style={{ color: 'var(--settings-section-desc)' }}>
-            {t('settings.providers.subtitle')}
-          </p>
-        </div>
-        {/* 收到别人的供应商分享链接时从这里输入(加入网页唤起 Cindy 失败时也指引到这里)。 */}
-        <ProviderSharePasteButton />
+    <SubscriptionPoolViewCache.Provider value={subscriptionPoolViews}>
+    <div className="flex h-full min-h-0 flex-col gap-6">
+      {shareManagePage}
+      {/* Preserve both scroll panes and their filters while their subscriptions are paused. */}
+      <Activity mode={shareManagePage ? 'hidden' : 'visible'}>
+      <div className="shrink-0">
+        <SettingsPageHeader
+          title={t('settings.providers.title')}
+          description={t('settings.providers.subtitle')}
+          // 收到别人的供应商分享链接时从这里输入(加入网页唤起 Cindy 失败时也指引到这里)。
+          action={<ProviderSharePasteButton />}
+        />
       </div>
 
       {/* 先取数据再渲染卡片(规则 7:首帧即终态高度,不出现连接态翻转的跳变帧)。
@@ -3212,40 +3809,84 @@ export function ProvidersSection() {
       {catalogError && <LocalModelCatalogNotice failure={catalogError} onRetry={refetch} />}
       {!loading && (
         <div
-          className="flex min-h-0 flex-1 overflow-hidden rounded-xl border"
-          style={{
-            backgroundColor: 'var(--settings-theme-card-bg)',
-            borderColor: 'var(--settings-theme-card-border)',
-          }}
+          className="flex min-h-0 flex-1 overflow-hidden rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]"
         >
           {/* 左栏 */}
           <div
             className="flex w-[224px] shrink-0 flex-col border-r"
             style={{ borderColor: 'var(--settings-theme-card-border)' }}
           >
-            <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-2">
+            <div
+              data-testid="provider-list-scroll"
+              className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-2"
+              // 点左栏里的一个供应商时，右栏从智能路由回到供应商。展开/收起分组、行上的菜单、检测到的本机 CLI
+              // (它打开添加向导)不算选中供应商，留在智能路由。
+              onClickCapture={(event) => {
+                if (routing && !(event.target as HTMLElement).closest(
+                  '[data-provider-routing-entry],[aria-expanded],[aria-haspopup],[data-provider-suggestion]',
+                )) onRoutingChange?.(false);
+              }}
+            >
+              <button
+                data-provider-routing-entry
+                data-settings-search-action="Open smart routing inside the model providers page"
+                type="button"
+                // 只在选中时标 current：没选中时它不是「供应商列表里的一行」，不带这个属性。
+                aria-current={routing ? 'true' : undefined}
+                onClick={() => onRoutingChange?.(true)}
+                className={cn(
+                  'flex w-full shrink-0 items-center gap-2.5 rounded-lg py-2 pl-3 pr-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring-soft)]',
+                  routing ? 'bg-[var(--settings-menu-bg-selected)]' : 'hover:bg-[var(--settings-menu-bg-hover)]',
+                )}
+              >
+                <span
+                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
+                  style={{
+                    backgroundColor: 'var(--settings-integration-avatar-bg)',
+                    border: '1px solid var(--settings-integration-avatar-border)',
+                    color: 'var(--settings-integration-avatar-icon)',
+                  }}
+                >
+                  <Sparkles size={14} aria-hidden />
+                </span>
+                <span className="min-w-0 flex-1 truncate text-13 font-medium" style={{ color: 'var(--settings-section-title)' }}>
+                  {t('modelGroups.title')}
+                </span>
+              </button>
+              <div aria-hidden className="mx-2.5 my-1.5 h-px shrink-0 bg-[var(--settings-theme-card-border)]" />
               {showCindySignin && (
                 <CindySigninRow
-                  selected={cindySigninActive && !otherDeviceSelected}
+                  selected={!routing && cindySigninActive && !otherDeviceSelected}
                   onSelect={() => {
                     selectProvider(CINDY_SIGNIN_ID);
                   }}
                 />
               )}
-              {(ordinaryLocalProviders.length > 1 || sharedLocalProviders.length > 1) && (
+              {(activeLocalProviders.length > 1 || sharedLocalProviders.length > 1) && (
                 <div className="select-none px-1.5 pb-1 pt-1">
                   <span className="text-11" style={{ color: 'var(--text-tertiary)' }}>
                     {t('settings.providers.order.hint')}
                   </span>
                 </div>
               )}
-              {renderLocalProviderList(ordinaryLocalProviders)}
+              {renderLocalProviderList(activeLocalProviders)}
               <span className="sr-only" aria-live="polite" aria-atomic="true">
                 {orderAnnouncement}
               </span>
+              {/* 由插件提供的供应商：接在本机供应商后面，名字后带「插件」标识。 */}
+              {renderEngineRows(activeEngines)}
               {/* 自己其他电脑上能用的供应商：接在本机供应商后面，图标带远程角标。 */}
-              {renderRemoteProviderRows(ordinaryRemoteProviders)}
-              {(sharedLocalProviders.length > 0 || sharedRemoteProviders.length > 0) && (
+              {renderRemoteProviderRows(activeRemoteProviders)}
+              {/* 自己其他电脑开放的插件引擎：接在远程供应商后面，图标带远程角标、名字后带「插件」标识。 */}
+              <OwnRemotePluginEngineRows
+                entries={remotePluginEngines}
+                selectedKey={routing ? null : selectedRemoteEngine?.key ?? null}
+                onSelect={key => {
+                  setFocusedModel(null);
+                  selectEngine(key);
+                }}
+              />
+              {(sharedLocalProviders.length > 0 || sharedEngines.length > 0 || sharedRemoteProviders.length > 0) && (
                 <div
                   data-testid="provider-share-owned"
                   role="group"
@@ -3256,18 +3897,22 @@ export function ProvidersSection() {
                     {t('providerShare.owned.title')}
                   </span>
                   {renderLocalProviderList(sharedLocalProviders)}
+                  {renderEngineRows(sharedEngines)}
                   {renderRemoteProviderRows(sharedRemoteProviders)}
                 </div>
               )}
               {/* 分享给我的供应商(受邀者)：单独成组，没有分享时不显示。 */}
               <ProviderShareReceivedRailGroup
-                selectedShareId={selectedShare?.shareId ?? null}
+                selectedShareId={routing ? null : selectedShare?.shareId ?? null}
                 hiddenShareIds={groupedShareIds}
                 onSelect={(shareId) => {
                   setFocusedModel(null);
                   selectShare(shareId);
                 }}
               />
+              {/* 不在模型选择器里出现的供应商收在列表末尾:先是只隐藏的,再是停用的。 */}
+              {renderRailStateGroup('hidden', hiddenLocalProviders, hiddenRemoteProviders, hiddenEngines)}
+              {renderRailStateGroup('suspended', suspendedLocalProviders, suspendedRemoteProviders, suspendedEngines)}
               {suggestions.length > 0 && (
                 <>
                   <span
@@ -3289,11 +3934,11 @@ export function ProvidersSection() {
                 </>
               )}
             </div>
-            <div id="settings-search-settings-providers-addProvider"
-              className="border-t p-2"
+            <div id={providersSettings.addProvider.targetId}
+              className="flex flex-col gap-2 border-t p-2"
               style={{ borderColor: 'var(--settings-theme-card-border)' }}
             >
-              <Button
+              <Button data-setting-id={providersSettings.addProvider.id}
                 variant="secondary"
                 size="lg"
                 ref={addProviderButtonRef}
@@ -3302,24 +3947,49 @@ export function ProvidersSection() {
                 className="w-full"
               >
                 <Plus size={15} />
-                {t('settings.providers.addProvider')}
+                {t(providersSettings.addProvider.titleKey)}
               </Button>
+              <ProviderImportFileButton
+                key={`${dataOwnerId}:${ownerGeneration}`}
+                onImported={setProviderImportId}
+              />
+              <LocalProviderImportButton key={`local:${dataOwnerId}:${ownerGeneration}`} onImported={setProviderImportId} />
             </div>
           </div>
 
           {/* 右栏身份固定；说明、资产和模型共用 DetailHeader 的滚动区。 */}
+          <OpenSmartRoutingContext.Provider value={onRoutingChange ? openSmartRouting : null}>
+          {/* 智能路由与供应商详情各自一格，进过一次就留着(隐藏时不显示、效果暂停)：来回切换不重建，
+              路由页里打开的详情、草稿、试一下的结果、展开的「最近的选择」都还在(2026-11-26 用户反馈)。 */}
+          {routingVisited && (
+            <Activity mode={routing ? 'visible' : 'hidden'}>
+              <div ref={routingPaneRef} id="settings-panel-model-groups" data-testid="provider-routing-pane" className="min-h-0 min-w-0 flex-1 overflow-y-auto px-5 py-5">
+                <Suspense fallback={<div role="status" className="py-1 text-13 leading-[1.5] text-[var(--text-secondary)]">{t('ccAgent.common.loading')}</div>}>
+                  {/* 滚动的是这一格：进出某条路由的详情时，回到列表要落在原来的位置。 */}
+                  <ModelGroupsSection scrollRef={routingPaneRef} focusProvider={routingFocus} />
+                </Suspense>
+              </div>
+            </Activity>
+          )}
+          <Activity mode={routing ? 'hidden' : 'visible'}>
           <div
             key={
-              selectedShare
-                ? `share:${selectedShare.shareId}`
+              selectedShare || retryCatalogShareId
+                ? `share:${selectedShare?.shareId ?? retryCatalogShareId}`
                 : selectedRemote
                   ? `remote:${selectedRemote.key}`
-                  : effectiveSelected?.id
+                  : selectedEngine
+                    ? `engine:${selectedEngine.key}`
+                    : selectedRemoteEngine
+                      ? `engine:${selectedRemoteEngine.key}`
+                      : effectiveSelected?.id
             }
             className="flex min-h-0 min-w-0 flex-1 flex-col"
           >
             {selectedShare ? (
               <ProviderShareReceivedDetail share={selectedShare} />
+            ) : retryCatalogShareId ? (
+              <ProviderShareReceivedCatalogRetry shareId={retryCatalogShareId} />
             ) : selectedRemote ? (
               <OwnRemoteProviderDetail
                 entry={selectedRemote}
@@ -3330,6 +4000,15 @@ export function ProvidersSection() {
                   setShareManageProviderId(selectedRemote.provider.id);
                 }}
               />
+            ) : selectedEngine ? (
+              <PluginEngineProviderDetail
+                engine={selectedEngine}
+                remoteControlEnabled={remoteControlEnabled}
+                pendingShareRequests={pendingShareCounts.get(selectedEngine.providerId) ?? 0}
+                onManageShare={() => { setShareManageRemote(null); setShareManageProviderId(selectedEngine.providerId); }}
+              />
+            ) : selectedRemoteEngine ? (
+              <OwnRemotePluginEngineDetail entry={selectedRemoteEngine} />
             ) : cindySigninActive ? (
               /* 登录引导是 brand-scale surface(DESIGN §3):48px 标识 → 24px 名字 →
                  一行价值主张 → 赠送余额徽标 → 黑 CTA,间距走 8px 系统。底部留白比
@@ -3343,7 +4022,7 @@ export function ProvidersSection() {
                     color: 'var(--settings-integration-avatar-icon)',
                   }}
                 >
-                  <XDIncMark size={24} />
+                  <CindyMark size={24} />
                 </div>
                 <span
                   className="mt-4 text-24 font-medium leading-[1.2]"
@@ -3380,10 +4059,22 @@ export function ProvidersSection() {
               renderDetailHeader(
                 effectiveSelected,
                 <>
+                  {selectedAccountConnections.length > 1 && (
+                    <div className="flex shrink-0 flex-wrap items-center gap-3 border-t px-5 py-3 text-13" style={{ borderColor: 'var(--settings-theme-card-border)' }}>
+                      <div className="min-w-0 flex-1">
+                        <p>{t('settings.providers.detail.sameAccountConnections')}</p>
+                        <p className="text-12 text-[var(--text-secondary)]">{t('settings.providers.detail.sameAccountConnectionsHint')}</p>
+                      </div>
+                      <Select label={t('settings.providers.detail.sameAccountConnections')} value={effectiveSelected.id}
+                        data-settings-search-action="Select which connection for this account is displayed"
+                        groups={[{ options: selectedAccountConnections.map(provider => ({ value: provider.id, label: providerDisplayName(provider, t) })) }]}
+                        onValueChange={selectProvider} />
+                    </div>
+                  )}
                   {/* 供应商已停用:条带讲清「发生了什么 + 下一步」并就地给恢复入口。整个
                     模型区随之收起(2026-07-28 用户反馈:停用了就别再列模型)——停用是
                     盖在上面的一层,凭证与逐模型配置不丢,启用即原样回来。 */}
-                  {effectiveSelected.suspended && (
+                  {effectiveSelected.suspended && effectiveSelected.geminiImageSettingsConnectionId === undefined && (
                     <div
                       className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t px-5 py-3 text-13"
                       style={{ borderColor: 'var(--settings-theme-card-border)' }}
@@ -3391,13 +4082,52 @@ export function ProvidersSection() {
                       <span style={{ color: 'var(--text-tertiary)' }}>
                         {t('settings.providers.detail.suspendedBanner')}
                       </span>
+                      <div className="flex shrink-0 items-center gap-2">
+                        {/* 很多人停用只是不想在选择器里看到它:就地给「改为隐藏」,一步换成
+                          想要的状态(显示关掉 + 恢复调用)。已经隐藏过的不再重复给。 */}
+                        {!effectiveSelected.hidden && (
+                          <PillButton
+                            label={t('settings.providers.button.hideInstead')}
+                            onClick={() => {
+                              void window.electronAPI.maker
+                                .setModelDisable({ kind: 'provider-hidden', providerId: effectiveSelected.id, hidden: true })
+                                .then(() => window.electronAPI.maker.setModelDisable({
+                                  kind: 'provider', providerId: effectiveSelected.id, disabled: false,
+                                }))
+                                .catch(() => toast.error(t('settings.providers.models.accessWriteFailed')));
+                            }}
+                          />
+                        )}
+                        <PillButton
+                          label={t('settings.providers.button.enableProvider')}
+                          onClick={() =>
+                            writeProviderDisabled(
+                              effectiveSelected.id,
+                              false,
+                              t('settings.providers.models.accessWriteFailed'),
+                            )
+                          }
+                        />
+                      </div>
+                    </div>
+                  )}
+                  {/* 已隐藏(未停用):说清它还在工作、去哪里还能选到,并就地给恢复入口。
+                    模型区照常显示 —— 隐藏不影响逐模型设置。 */}
+                  {!effectiveSelected.suspended && effectiveSelected.hidden && (
+                    <div
+                      className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t px-5 py-3 text-13"
+                      style={{ borderColor: 'var(--settings-theme-card-border)' }}
+                    >
+                      <span className="min-w-0 flex-1" style={{ color: 'var(--text-tertiary)' }}>
+                        {t('settings.providers.detail.hiddenBanner')}
+                      </span>
                       <PillButton
-                        label={t('settings.providers.button.enableProvider')}
+                        label={t('settings.providers.button.showProvider')}
                         onClick={() =>
-                          writeProviderDisabled(
+                          writeProviderHidden(
                             effectiveSelected.id,
                             false,
-                            t('settings.providers.models.accessWriteFailed'),
+                            t('settings.providers.models.visibilityWriteFailed'),
                           )
                         }
                       />
@@ -3409,6 +4139,7 @@ export function ProvidersSection() {
                     (DESIGN.md「Errors = what happened + what to do」)。有清单时以条带形式
                     置于列表上方,无清单时走下面的空态居中版。 */}
                   {!effectiveSelected.suspended &&
+                    !selectedBorrowedModels &&
                     effectiveSelected.modelDiscoveryFailure &&
                     providerHasModels(effectiveSelected) && (
                       <div
@@ -3439,20 +4170,35 @@ export function ProvidersSection() {
                       本机未允许远程控制时整行仍显示，但开关不可用(provider-sharing.md §3)；入口始终可用，
                       只给本机用时也可以建组(provider-groups.md §10)。 */}
                   {remoteControlEnabled !== null &&
-                    !effectiveSelected.suspended &&
+                    ((!effectiveSelected.suspended &&
                     effectiveSelected.connected &&
                     effectiveSelected.agents.length > 0 &&
-                    effectiveSelected.remoteInvocationEnabled !== undefined && (
+                    effectiveSelected.remoteInvocationEnabled !== undefined) ||
+                    (effectiveSelected.subscriptionPoolAlias && ownedShares.get(null)?.has(effectiveSelected.id))) && (
                       <RemoteProviderAccessRow
                         key={effectiveSelected.id}
                         provider={effectiveSelected}
                         remoteControlEnabled={remoteControlEnabled}
                         pendingShareRequests={pendingShareCounts.get(effectiveSelected.id) ?? 0}
-                        onManageShare={() => { setShareManageRemote(null); setShareManageProviderId(effectiveSelected.id); }}
+                        onManageShare={() => {
+                          setFocusedModel(null);
+                          setShareManageRemote(null);
+                          setShareManageProviderId(effectiveSelected.id);
+                        }}
+                        {...(effectiveSelected.subscriptionPoolAlias ? { poolName: providers.find(p => p.id === (effectiveSelected.subscriptionPoolTarget ?? 'openai'))?.name ?? 'OpenAI' } : {})}
                       />
                     )}
+                  {!effectiveSelected.suspended && selectedBorrowedModels && (
+                    <BorrowedProviderModels
+                      key={selectedBorrowedModels.device.deviceId}
+                      device={selectedBorrowedModels.device}
+                      catalog={selectedBorrowedModels.catalog}
+                    />
+                  )}
                   {!effectiveSelected.suspended &&
-                    (providerHasModels(effectiveSelected) ||
+                    !selectedBorrowedModels &&
+                    modelsProvider &&
+                    (providerHasModels(modelsProvider) ||
                       isCustomRoutedProvider(effectiveSelected) ||
                       (isBuiltinRefreshableProviderId(effectiveSelected.id) &&
                         !effectiveSelected.modelDiscoveryFailure) ||
@@ -3466,9 +4212,12 @@ export function ProvidersSection() {
                           />
                         )}
                         <UnifiedModelList
-                          provider={effectiveSelected}
+                          provider={selectedBorrow.borrowed ? { ...modelsProvider, connected: true } : modelsProvider}
                           onAddSpeechModels={providerSpeechSetup(effectiveSelected) ? () => {
                             setSpeechProvider({ provider: effectiveSelected, owner: dataOwnerId, generation: ownerGeneration });
+                          } : undefined}
+                          onAddRealtimeModels={providerRealtimeSetup(effectiveSelected) ? () => {
+                            setSpeechProvider({ provider: effectiveSelected, owner: dataOwnerId, generation: ownerGeneration, mode: 'realtime' });
                           } : undefined}
                           focusModelId={
                             focusedModel?.providerId === effectiveSelected.id
@@ -3514,6 +4263,41 @@ export function ProvidersSection() {
                       </>
                     )}
                   {!effectiveSelected.suspended &&
+                    !selectedBorrowedModels &&
+                    managesGeminiImages && geminiImages && (
+                      <>
+                        {geminiImages.suspended && (
+                          <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t px-5 py-3 text-13"
+                            style={{ borderColor: 'var(--settings-theme-card-border)' }}>
+                            <span style={{ color: 'var(--text-tertiary)' }}>
+                              {t('newChat.modelSelector.category.image')} · {t('settings.providers.pill.suspended')}
+                            </span>
+                            <PillButton
+                              label={t('settings.providers.button.enableProvider')}
+                              onClick={() => writeProviderDisabled(
+                                geminiImages.id, false, t('settings.providers.models.accessWriteFailed'),
+                              )}
+                            />
+                          </div>
+                        )}
+                        <UnifiedModelList
+                          key={effectiveSelected.id + ':gemini-images'}
+                          provider={{
+                            ...geminiImages,
+                            // Visibility and disable preferences belong to the existing image route.
+                            connected: effectiveSelected.connected,
+                            availableMediaModelIds: effectiveSelected.connected ? geminiImages.availableMediaModelIds : [],
+                            models: {},
+                            videoModels: undefined,
+                            audioModels: undefined,
+                            embeddingModels: undefined,
+                          }}
+                        />
+                      </>
+                    )}
+                  {!effectiveSelected.suspended &&
+                    !selectedBorrowedModels &&
+                    !managesGeminiImages &&
                     !providerHasModels(effectiveSelected) &&
                     !isCustomRoutedProvider(effectiveSelected) &&
                     !isManagedLocalProvider(effectiveSelected.id) &&
@@ -3566,39 +4350,65 @@ export function ProvidersSection() {
               </div>
             )}
           </div>
+          </Activity>
+          </OpenSmartRoutingContext.Provider>
         </div>
       )}
 
-      </>)}
+      </Activity>
 
+      <WithdrawnModelsDialog
+        review={withdrawnReview && withdrawnReview.dataOwnerId === dataOwnerId
+          && withdrawnReview.ownerGeneration === ownerGeneration ? withdrawnReview : null}
+        removing={removingWithdrawn}
+        onCancel={() => setWithdrawnReview(null)}
+        onRemove={(modelIds) => void removeWithdrawnModels(modelIds)}
+      />
       {speechProvider && speechProvider.owner === dataOwnerId && speechProvider.generation === ownerGeneration && (
+        <Suspense fallback={null}>
         <AddSpeechModelsDialog key={`${dataOwnerId}:${ownerGeneration}:${speechProvider.provider.id}`}
+          mode={speechProvider.mode}
           provider={speechProvider.provider} onClose={() => setSpeechProvider(null)}
           onSaved={() => { setSpeechProvider(null); void refetch(); }} />
+        </Suspense>
       )}
       {wizard && (
+        <Suspense fallback={null}>
         <AddProviderWizard
           providers={providers}
           entry={wizard.entry}
           detected={wizard.detected}
           onReturnCustom={(draft) => { setWizard(null); setDialog({ mode: 'create', draft }); }}
+          onEntryUnavailable={dialog?.mode === 'create' ? (reason) => {
+            setWizard(null);
+            if (reason !== 'connection-failed') toast.error(t('settings.providers.custom.nameSearchUnavailable'));
+          } : undefined}
+          showOfficialModelPlugins
           onOpenCustomForm={() => {
             setWizard(null);
             setDialog({ mode: 'create' });
           }}
           onClose={() => setWizard(null)}
           onDone={async (providerId) => {
-            await refetch();
-            setWizard(null);
+            // 退出已完成；先卸载本实例，让刷新期间的新入口挂载全新向导。
+            setWizard(current => current === wizard ? null : current);
+            // 只清理本次搜索挂起的草稿；刷新期间用户可以打开另一个编辑框。
+            setDialog(current => current?.mode === 'create' && current === dialog ? null : current);
             if (providerId) selectProvider(providerId);
+            await refetch();
           }}
         />
+        </Suspense>
       )}
 
       {dialog && (
+        <Suspense fallback={null}>
         <ProviderConnectionDialog
           draft={dialog.mode === 'create' ? dialog.draft : undefined}
           onDetected={(detected) => { setDialog(null); setWizard({ detected }); }}
+          providers={providers}
+          suspended={dialog.mode === 'create' && !!wizard}
+          onSelectProvider={dialog.mode === 'create' ? entry => setWizard({ entry }) : undefined}
           initial={dialog.mode === 'edit' ? dialog.config : undefined}
           catalogModels={dialog.mode === 'edit' ? providers.find(p =>
             p.source === 'user' && storedCustomProviderId(p.id) === dialog.config.id)?.models : undefined}
@@ -3611,9 +4421,17 @@ export function ProvidersSection() {
             refetch();
           }}
         />
+        </Suspense>
       )}
 
-      {providerImportId && (
+      {Array.isArray(providerImportId) ? (
+        <ProviderImportBatchDialog
+          key={`${dataOwnerId}:${ownerGeneration}:${providerImportId.join(',')}`}
+          importIds={providerImportId}
+          onClose={closeProviderImport}
+          onDone={finishProviderImport}
+        />
+      ) : providerImportId && (
         <ProviderImportDialog
           key={`${dataOwnerId}:${ownerGeneration}:${providerImportId}`}
           importId={providerImportId}
@@ -3622,5 +4440,6 @@ export function ProvidersSection() {
         />
       )}
     </div>
+    </SubscriptionPoolViewCache.Provider>
   );
 }

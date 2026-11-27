@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 /**
  * custom-provider-store —— 校验纯函数 + localDb CRUD（per-runtime，in-memory db 注入）+ 账号隔离。
  */
@@ -22,7 +25,7 @@ import {
   validateCustomProviderConfig,
 } from '../custom-provider-store.js';
 import { buildUserProvider, mergeDiscoveredRuntimeModels, parseModelsListResponse,
-  type CustomProviderConfig } from '@cindy/model-providers';
+  BUNDLED_CATALOG, type CustomProviderConfig } from '@cindy/model-providers';
 import { mapCodexAppServerModelsToCatalog } from '../codex-model-discovery.js';
 
 const CREATE_SQL = `
@@ -52,9 +55,9 @@ const valid: CustomProviderConfig = {
 let raw: Database.Database | null = null;
 let client: DbClient | null = null;
 
-function mountDb(): void {
-  const dbHandle = new Database(':memory:');
-  dbHandle.exec(CREATE_SQL);
+function mountDb(filename = ':memory:', initialize = true): void {
+  const dbHandle = new Database(filename);
+  if (initialize) dbHandle.exec(CREATE_SQL);
   raw = dbHandle;
   client = {
     query: async <T = unknown>(sql: string, params: unknown[] = []) =>
@@ -80,6 +83,37 @@ afterEach(() => {
 });
 
 describe('custom provider updates through the runtime database proxy', () => {
+  it('restores Token Rhythm configuration and explicit model overrides after closing and reopening SQLite', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'cindy-tokenrhythm-'));
+    const file = join(directory, 'fixture.db');
+    try {
+      mountDb(file);
+      const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'tokenrhythm')!;
+      const config: CustomProviderConfig = { id: 'tokenrhythm-fixture', name: 'Fake Key / Simulated Data', runtimes:
+        Object.fromEntries(Object.entries(preset.runtimes).map(([agent, runtime]) => [agent, {
+          ...runtime, catalogPresetId: preset.id, models: [
+            { id: 'account-model', name: 'User name', contextWindow: 8192, maxOutputTokens: 512, defaultEnabled: false },
+            { id: 'manual-model', name: 'Manual model' },
+          ],
+        }])) };
+      await createCustomProvider(config);
+      clearCurrentDbClient(client!);
+      raw!.close(); raw = null; client = null;
+      mountDb(file, false);
+      const restored = (await getCustomProvider(config.id))!;
+      expect(restored).toMatchObject(config);
+      const provider = buildUserProvider(restored, { presets: BUNDLED_CATALOG.presets, modelRegistry: BUNDLED_CATALOG.modelRegistry });
+      for (const agent of provider.agents) {
+        expect(provider.models[agent]![0]).toMatchObject({ id: 'account-model', contextWindow: 8192, maxOutput: 512, defaultEnabled: false });
+        expect(provider.models[agent]![1].id).toBe('manual-model');
+      }
+    } finally {
+      if (client) clearCurrentDbClient(client);
+      raw?.close(); raw = null; client = null;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   // Regression: account model/list -> storage normalization -> reload used to drop
   // Ultrafast. Exercise real CRUD/CAS and catalog projection, including revocation.
   it('persists native account speed discovery without granting another account or engine access', async () => {
@@ -615,13 +649,13 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     await updateCustomProvider(config.id, { ...config, runtimes: { pi: runtime } });
     expect((await getCustomProvider(config.id))?.runtimes.pi?.imageApi).toBeUndefined();
   });
-  it('round-trips an explicit standalone Videos API independently of chat wire and hosted tools', async () => {
+  it.each(['xai-videos', 'minimax-videos', 'openai-videos'] as const)('round-trips %s independently of chat wire and hosted tools', async videoApi => {
     mountDb();
     const config = {
       id: 'standalone-videos', name: 'Standalone videos',
       runtimes: { pi: {
         baseUrl: 'http://127.0.0.1:8080/v1', wireProtocol: 'openai-chat' as const,
-        videoApi: 'xai-videos' as const,
+        videoApi,
         models: [{ id: 'private-video', name: 'Video', mode: 'video_generation' }],
       } },
     };
@@ -631,7 +665,7 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     }).ok).toBe(false);
     await createCustomProvider(config);
     const stored = await getCustomProvider(config.id);
-    expect(stored?.runtimes.pi?.videoApi).toBe('xai-videos');
+    expect(stored?.runtimes.pi?.videoApi).toBe(videoApi);
     expect(stored?.runtimes.pi?.supportsImageGeneration).toBeUndefined();
     const { videoApi: _removed, ...runtime } = config.runtimes.pi;
     await updateCustomProvider(config.id, { ...config, runtimes: { pi: runtime } });
@@ -902,6 +936,22 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     ]);
   });
 
+  // #11298: only rows a Settings refresh saw upstream carry this marker; losing it on
+  // save would silently disable withdrawal review, a non-true value must not persist.
+  it('round-trips the upstream listing marker and rejects non-true values', async () => {
+    mountDb();
+    const runtime = (listedUpstream?: unknown) => ({ codex: { baseUrl: 'https://gw.example/v1', models: [
+      { id: 'listed', name: 'Listed', discoveredMetadata: {}, listedUpstream },
+      { id: 'manual', name: 'Manual' },
+    ] } });
+    expect(validateCustomProviderConfig({ id: 'gw', name: 'Gateway', runtimes: runtime(false) } as never).ok).toBe(false);
+    await createCustomProvider({ id: 'gw', name: 'Gateway', runtimes: runtime(true) as never });
+    expect((await getCustomProvider('gw'))?.runtimes.codex?.models).toEqual([
+      { id: 'listed', name: 'Listed', discoveredMetadata: {}, listedUpstream: true },
+      { id: 'manual', name: 'Manual' },
+    ]);
+  });
+
   it('round-trips only an explicitly enabled Codex image-generation capability', async () => {
     mountDb();
     await createCustomProvider({
@@ -957,6 +1007,27 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
         },
       }).ok,
     ).toBe(false);
+  });
+
+  // #11298 review P2: confirmed withdrawal removes Pi models; the remaining rows are
+  // unchanged and official metadata is looked up per remaining ID, so the marker stays.
+  it('keeps the Pi catalog marker when models are only removed', async () => {
+    mountDb();
+    const model = (id: string) => ({ id, name: id, contextWindow: 1_000_000 });
+    const original = await createCustomProvider({
+      id: 'official-pi-removed', name: 'Official Pi', runtimes: { pi: {
+        baseUrl: 'https://api.deepseek.com', wireProtocol: 'openai-chat', piCatalogProviderId: 'deepseek',
+        models: [model('deepseek-v4-pro'), model('deepseek-v4-flash')],
+      } },
+    });
+    const removed = await updateCustomProvider('official-pi-removed', { ...original, runtimes: { pi: {
+      ...original.runtimes.pi!, models: [original.runtimes.pi!.models[0]!],
+    } } });
+    expect(removed?.runtimes.pi?.piCatalogProviderId).toBe('deepseek');
+    const edited = await updateCustomProvider('official-pi-removed', { ...original, runtimes: { pi: {
+      ...original.runtimes.pi!, models: [{ ...original.runtimes.pi!.models[0]!, contextWindow: 64_000 }],
+    } } });
+    expect(edited?.runtimes.pi).not.toHaveProperty('piCatalogProviderId');
   });
 
   it('clears the Pi catalog marker when any write path changes saved model metadata', async () => {
@@ -1826,5 +1897,42 @@ describe('imported capability persistence', () => {
     const stored = await getCustomProvider('all-fields');
     for (const agent of ['claude-code', 'codex', 'pi'] as const)
       expect(stored?.runtimes[agent]?.models[0]).toEqual(model);
+  });
+});
+
+describe('Magpie source snapshot persistence and endpoint invalidation', () => {
+  const magpieConfig = (): CustomProviderConfig => ({ id: 'magpie-source', name: 'Magpie', auth: { method: 'none' },
+    runtimes: { pi: { wireProtocol: 'openai-chat', baseUrl: 'http://127.0.0.1:3425/v1', modelsUrl: 'http://127.0.0.1:3425/v1/models',
+      models: [{ id: 'a/gpt-5.5', name: 'GPT', discoveredSource: { kind: 'magpie', providerId: 'A', label: 'GPT · Supplier A', discoveredName: 'GPT' } }] } } });
+  it('retains connection-local sources through real normalization, DB reload and catalog projection', async () => {
+    mountDb();
+    const config = magpieConfig();
+    expect(validateCustomProviderConfig(config).ok).toBe(true);
+    await createCustomProvider(config);
+    const restored = (await getCustomProvider(config.id))!;
+    expect(restored.runtimes.pi!.models[0].discoveredSource).toEqual(config.runtimes.pi!.models[0].discoveredSource);
+    expect(buildUserProvider(restored).models.pi![0].discoveredSource).toEqual(config.runtimes.pi!.models[0].discoveredSource);
+    await updateCustomProvider(config.id, { ...restored, name: 'Renamed connection' });
+    expect((await getCustomProvider(config.id))!.runtimes.pi!.models[0].discoveredSource?.providerId).toBe('A');
+  });
+  it.each(['baseUrl', 'modelsUrl'] as const)('invalidates the source on a %s edit before any new discovery succeeds', async field => {
+    mountDb();
+    const config = magpieConfig();
+    await createCustomProvider(config);
+    const runtime = { ...config.runtimes.pi!, [field]: 'http://127.0.0.1:9999/v1/models' };
+    await updateCustomProvider(config.id, { ...config, runtimes: { pi: runtime } });
+    expect((await getCustomProvider(config.id))!.runtimes.pi!.models[0].discoveredSource).toBeUndefined();
+  });
+  it('invalidates the source when a single model is routed to another endpoint', async () => {
+    mountDb();
+    const config = magpieConfig();
+    await createCustomProvider(config);
+    const runtime = config.runtimes.pi!;
+    await updateCustomProvider(config.id, { ...config, runtimes: { pi: {
+      ...runtime, models: runtime.models.map(model => ({ ...model, route: {
+        baseUrl: 'http://127.0.0.1:9999/v1', wireProtocol: 'openai-chat' as const,
+      } })),
+    } } });
+    expect((await getCustomProvider(config.id))!.runtimes.pi!.models[0].discoveredSource).toBeUndefined();
   });
 });

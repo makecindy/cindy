@@ -3,7 +3,9 @@
  * 测试价值
  * - 生产入口与可观察结果:useTabGroupPanes(主窗口挂载的边组在场维护);可观察的是
  *   某组第一次有可见页签时 `tab-group:<边>` 进入面板注册表且布局树经 layout.set 多出
- *   它的 pane;页签移走后 kind 注销(树不动);路由离开聊天视图(enabled=false)时全部注销。
+ *   它的 pane;页签移走后 kind 注销(树不动);窗口不能承载边组(enabled=false)时全部注销;
+ *   路由离开聊天视图(onChatRoute=false)时在聊天页出现过的组「停放」而不注销(#8081),
+ *   从未出现过的组不挂载,且停放不改变组空了 / 页签弹出 / 整栏分离时的注销。
  * - Bug / 规则依据:页签组模型——组的 pane 只在有页签时在场,树数据保留
  *   (architecture-invariants §3「未注册的面板允许保留在存档中但不渲染」)。
  * - 现有覆盖缺口:新 hook。
@@ -25,9 +27,16 @@ vi.mock('../TabGroupPanel', () => ({
 
 import { createDefaultLayout, type Layout } from '../../../../shared/layoutTree';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
-import { __resetSidebarTabWindowsStateForTest } from '@/lib/sidebarTabWindowState';
-import { __resetPanelRegistryForTest, hasPanelKind } from '@/panels/registry';
-import { __resetGlobalTabsForTest, addGlobalPluginTab } from '../globalTabs';
+import {
+  __resetSidebarTabWindowsStateForTest,
+  __setSidebarTabWindowsStateForTest,
+} from '@/lib/sidebarTabWindowState';
+import {
+  __resetPanelRegistryForTest,
+  hasPanelKind,
+  isPanelKindParked,
+} from '@/panels/registry';
+import { __resetGlobalTabsForTest, addGlobalPluginTab, removeGlobalTab } from '../globalTabs';
 import { _resetStore } from '../store';
 import { useTabGroupPanes } from '../tabGroupPanes';
 import { __resetTabGroupsForTest, setTabGroup } from '../tabGroups';
@@ -72,6 +81,59 @@ afterEach(() => {
 });
 
 describe('useTabGroupPanes', () => {
+  // #9496/#9987 regression, unit: named global pages can be opened from /plugins.
+  // Existing cases only cover legacy tabs parked after leaving a task. A named
+  // page must make its actual group present without granting a task or changing layout.
+  it.each(['right', 'left', 'top', 'bottom'] as const)(
+    'shows an explicitly opened global resource on a non-task route in the %s group', group => {
+      installedGhostsMock.list = [{ enabled: true, approval: { state: 'approved', revision: 'one' },
+        manifest: { id: 'alpha', name: 'Alpha', mcpApps: {
+          ui: { resources: [{ uri: 'ui://board', file: 'board.html' }], tools: {} },
+          host: { views: [{ id: 'board', title: 'Board', resourceUri: 'ui://board', scope: 'global' }] },
+        } } }];
+      const { result } = renderHook(() => useTabGroupPanes({
+        sessionId: null, enabled: true, onChatRoute: false, remoteHostId: null,
+      }));
+      const layoutBefore = currentLayout;
+      let tabId = '';
+      act(() => { tabId = addGlobalPluginTab('alpha', { resourceViewId: 'board', groupId: group })!.id; });
+      if (group === 'right') {
+        expect(result.current).toBe(true);
+        expect(currentLayout).toBe(layoutBefore);
+      } else {
+        expect(hasPanelKind(`tab-group:${group}`)).toBe(true);
+        expect(isPanelKindParked(`tab-group:${group}`)).toBe(false);
+      }
+      act(() => removeGlobalTab(tabId));
+      expect(result.current).toBe(false);
+      if (group !== 'right') expect(hasPanelKind(`tab-group:${group}`)).toBe(false);
+    },
+  );
+
+  it('does not keep a non-task global page present after disabling, detaching or popping it out', () => {
+    const ghost = { enabled: true, approval: { state: 'approved', revision: 'one' },
+      manifest: { id: 'alpha', mcpApps: {
+        ui: { resources: [{ uri: 'ui://board', file: 'board.html' }], tools: {} },
+        host: { views: [{ id: 'board', title: 'Board', resourceUri: 'ui://board', scope: 'global' }] },
+      } } };
+    installedGhostsMock.list = [ghost];
+    const tab = addGlobalPluginTab('alpha', { resourceViewId: 'board' })!;
+    const { result, rerender } = renderHook(({ enabled }) => useTabGroupPanes({
+      sessionId: null, enabled, onChatRoute: false, remoteHostId: null,
+    }), { initialProps: { enabled: true } });
+    expect(result.current).toBe(true);
+    installedGhostsMock.list = [{ ...ghost, enabled: false }];
+    rerender({ enabled: true });
+    expect(result.current).toBe(false);
+    installedGhostsMock.list = [ghost];
+    rerender({ enabled: false });
+    expect(result.current).toBe(false);
+    rerender({ enabled: true });
+    expect(result.current).toBe(true);
+    act(() => __setSidebarTabWindowsStateForTest({ [tab.id]: { windowId: 'w1', sessionId: null, open: true } }));
+    expect(result.current).toBe(false);
+  });
+
   it('registers an edge group and inserts its pane when a visible tab lands there; unregisters when it leaves', () => {
     const tab = addGlobalPluginTab('alpha')!;
     const { rerender } = renderHook(
@@ -102,5 +164,91 @@ describe('useTabGroupPanes', () => {
     // 离开聊天视图:全部注销。
     rerender({ enabled: false });
     expect(hasPanelKind('tab-group:left')).toBe(false);
+  });
+
+  describe('离开聊天路由(onChatRoute=false)', () => {
+    const renderPanes = (initial: { enabled?: boolean; onChatRoute: boolean }) =>
+      renderHook(
+        (props: { enabled?: boolean; onChatRoute: boolean }) =>
+          useTabGroupPanes({
+            sessionId: null,
+            enabled: props.enabled ?? true,
+            onChatRoute: props.onChatRoute,
+            remoteHostId: null,
+          }),
+        { initialProps: initial },
+      );
+
+    it('在聊天页出现过的组停放:kind 保留并标记停放,回到聊天页解除;期间不写树', () => {
+      const tab = addGlobalPluginTab('alpha')!;
+      act(() => setTabGroup(tab.id, 'left'));
+      const { rerender } = renderPanes({ onChatRoute: true });
+      expect(setLayout).toHaveBeenCalledTimes(1);
+
+      rerender({ onChatRoute: false });
+      expect(hasPanelKind('tab-group:left')).toBe(true);
+      expect(isPanelKindParked('tab-group:left')).toBe(true);
+
+      rerender({ onChatRoute: true });
+      expect(hasPanelKind('tab-group:left')).toBe(true);
+      expect(isPanelKindParked('tab-group:left')).toBe(false);
+      expect(setLayout).toHaveBeenCalledTimes(1);
+    });
+
+    it('从未在聊天页出现过的组不挂载:启动直接停在非聊天路由', () => {
+      const tab = addGlobalPluginTab('alpha')!;
+      act(() => setTabGroup(tab.id, 'left'));
+      const { rerender } = renderPanes({ onChatRoute: false });
+      expect(hasPanelKind('tab-group:left')).toBe(false);
+      expect(setLayout).not.toHaveBeenCalled();
+
+      rerender({ onChatRoute: true });
+      expect(hasPanelKind('tab-group:left')).toBe(true);
+      expect(isPanelKindParked('tab-group:left')).toBe(false);
+    });
+
+    it('停放期间组里没有页签了:注销;页签再回来也不凭空挂载', () => {
+      const tab = addGlobalPluginTab('alpha')!;
+      act(() => setTabGroup(tab.id, 'left'));
+      const { rerender } = renderPanes({ onChatRoute: true });
+      rerender({ onChatRoute: false });
+
+      act(() => setTabGroup(tab.id, 'right'));
+      expect(hasPanelKind('tab-group:left')).toBe(false);
+      expect(isPanelKindParked('tab-group:left')).toBe(false);
+
+      act(() => setTabGroup(tab.id, 'left'));
+      expect(hasPanelKind('tab-group:left')).toBe(false);
+    });
+
+    it('停放期间页签弹到独立窗口:注销', () => {
+      const tab = addGlobalPluginTab('alpha')!;
+      act(() => setTabGroup(tab.id, 'left'));
+      const { rerender } = renderPanes({ onChatRoute: true });
+      rerender({ onChatRoute: false });
+
+      act(() =>
+        __setSidebarTabWindowsStateForTest({
+          [tab.id]: { windowId: 'w1', sessionId: null, open: true },
+        }),
+      );
+      expect(hasPanelKind('tab-group:left')).toBe(false);
+    });
+
+    it('整栏分离或右栏窗口状态未加载(enabled=false):聊天页上和停放中都注销', () => {
+      const tab = addGlobalPluginTab('alpha')!;
+      act(() => setTabGroup(tab.id, 'left'));
+      const { rerender } = renderPanes({ onChatRoute: true });
+
+      rerender({ onChatRoute: true, enabled: false });
+      expect(hasPanelKind('tab-group:left')).toBe(false);
+
+      rerender({ onChatRoute: true });
+      rerender({ onChatRoute: false });
+      expect(isPanelKindParked('tab-group:left')).toBe(true);
+      rerender({ onChatRoute: false, enabled: false });
+      expect(hasPanelKind('tab-group:left')).toBe(false);
+      expect(isPanelKindParked('tab-group:left')).toBe(false);
+    });
   });
 });

@@ -65,6 +65,27 @@ describe('cardActionDispatch owner boundary', () => {
     expect(await dispatcher.dispatch('call', 'save', undefined, undefined, { body: 'x'.repeat(16001) })).toEqual({ ok: false, reason: 'bad-form-values' });
     expect(sendToGhost).toHaveBeenCalledTimes(1);
   });
+  it('delivers a model choice only for a declared dropdown and an available model', async () => {
+    const route = { agentKind: 'cc', providerId: 'anthropic', model: 'm', effort: 'low', fastMode: false };
+    const html = '<button data-ghost-action="pick" data-ghost-model-select="" type="button">x</button>';
+    const isModelRouteAvailable = vi.fn(async () => true);
+    const { dispatcher, sendToGhost } = makeDispatcher({
+      resolvePersistedCard: async () => ({ ghostId: 'cindy-mivo', sessionId: null, html }), isModelRouteAvailable,
+    });
+    expect(await dispatcher.dispatch('c', 'pick', undefined, undefined, undefined, false, undefined, route)).toEqual({ ok: true });
+    expect(sendToGhost.mock.calls[0][1].modelSelection).toEqual(route);
+    // A plain button cannot be fed a model, and an unavailable model is not handed over.
+    expect(await dispatcher.dispatch('c', 'other', undefined, undefined, undefined, false, undefined, route)).toEqual({ ok: false, reason: 'no-model-select' });
+    isModelRouteAvailable.mockResolvedValueOnce(false);
+    expect(await dispatcher.dispatch('c', 'pick', undefined, undefined, undefined, false, undefined, route)).toEqual({ ok: false, reason: 'model-unavailable' });
+    expect(await dispatcher.dispatch('c', 'pick', undefined, undefined, undefined, false, undefined, { ...route, x: 1 })).toEqual({ ok: false, reason: 'bad-model-selection' });
+    expect(sendToGhost).toHaveBeenCalledTimes(1);
+    // A desktop controlling this computer makes the same choice through its interaction page.
+    expect(await dispatcher.dispatch('c', 'pick', undefined, 'page', undefined, false, undefined, route)).toEqual({ ok: true });
+    expect(sendToGhost.mock.calls[1][1].modelSelection).toEqual(route);
+    isModelRouteAvailable.mockResolvedValueOnce(false);
+    expect(await dispatcher.dispatch('c', 'pick', undefined, 'page', undefined, false, undefined, route)).toEqual({ ok: false, reason: 'model-unavailable' });
+  });
   it('rechecks the owner after wake and never sends to a stale Ghost', async () => {
     let releaseWake!: () => void;
     let ownerValid = true;
@@ -310,6 +331,17 @@ it('mail sends need the current host-owned view and complete fields, without a g
   expect(f.sendToGhost.mock.calls[0][1].spawnCallId).toBe('call');
   expect((await f.dispatcher.dispatch('call', `mail:send:${mail.key}`)).ok).toBe(false);
   expect((await f.dispatcher.dispatch('call', `mail:now:${mail.key}`)).ok).toBe(false);
+  const addQuote = () => f.dispatcher.dispatch('call', `mail:quote:${mail.key}`, undefined, undefined, values);
+  expect((await addQuote()).ok).toBe(false);
+  html = renderMailCard({ ...mail, addQuoteLabel: 'Add quote' });
+  expect((await addQuote()).ok).toBe(true);
+  expect(f.sendToGhost.mock.calls.at(-1)?.[1].actionId).toBe(`mail:quote:${mail.key}`);
+  html = renderMailCard({ ...mail, addQuoteLabel: 'Add quote', state: 'sent', continueLabel: 'Continue' });
+  expect((await addQuote()).ok).toBe(false);
+  html = renderMailCard({ ...mail, state: 'sending', cancelLabel: 'Undo' });
+  expect((await send()).ok).toBe(false);
+  expect((await f.dispatcher.dispatch('call', `mail:cancel:${mail.key}`)).ok).toBe(true);
+  expect((await f.dispatcher.dispatch('call', `mail:now:${mail.key}`)).ok).toBe(false);
   html = renderMailCard({ ...mail, state: 'sending', pendingSend: { deadline: Date.now() + 10000, label: '{seconds}s', cancelLabel: 'Undo', sendNowLabel: 'Send now' } });
   expect((await send()).ok).toBe(false);
   expect((await f.dispatcher.dispatch('call', `mail:cancel:${mail.key}`)).ok).toBe(true);
@@ -322,7 +354,7 @@ it('mail sends need the current host-owned view and complete fields, without a g
   expect(await send()).toEqual({ ok: false, reason: 'mail-view-readonly' });
   html = '<p>Legacy card</p>';
   expect(await send()).toEqual({ ok: false, reason: 'mail-view-expired' });
-  expect(f.sendToGhost).toHaveBeenCalledTimes(3);
+  expect(f.sendToGhost).toHaveBeenCalledTimes(5);
 });
 
 it('deletion requires an active host draft with provider support and rejects all terminal edits', async () => {

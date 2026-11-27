@@ -175,12 +175,13 @@ export function pageVisibilityUnverified(
   textChars: number,
   drawOps: number | null,
   imageOps: number | null,
+  textFailed = false,
 ): boolean {
   // This flag denotes an incomplete structural read, not every page that
   // legitimately contains content. A successful operator parse must still
   // allow the normal structural verdict to be `ok`.
   void textChars;
-  return drawOps === null || imageOps === null;
+  return textFailed || drawOps === null || imageOps === null;
 }
 
 export function selectPdfPageNumbers(
@@ -212,6 +213,12 @@ export function selectPdfPageNumbers(
  * 算子表单独 try/catch:损坏页或超预算时降级成 null 而不是让整次检查失败 ——
  * 半份结构信息也比"检查工具自己挂了"有用。null 时 blank 恒为 false,并标记
  * visibilityUnverified,不把未完成的结构检查当成通过。
+ *
+ * 文字提取同样逐页 try/catch。pdf.js 对部分合法文件会在 getTextContent 里抛错
+ * (例如内容流开头先以字号 0 显示文字、此前未设字体时的
+ * "Cannot read properties of null (reading 'name')",常见于隐形水印),此时
+ * 文件本身可正常渲染。该页记为 textError + visibilityUnverified,blank 恒为 false,
+ * 其余页照常检查;整份文件打不开(InvalidPDFException 等)仍然整体抛错。
  */
 export async function inspectPdfPages(
   data: Uint8Array,
@@ -248,14 +255,20 @@ export async function inspectPdfPages(
       const page = await document.getPage(pageNumber);
       const viewport = page.getViewport({ scale: 1 });
 
-      const textContent = await page.getTextContent();
-      const parts: string[] = [];
-      for (const item of textContent.items) {
-        if (!item || typeof item !== 'object' || !('str' in item)) continue;
-        if (typeof item.str !== 'string') continue;
-        parts.push(item.str, item.hasEOL ? '\n' : ' ');
+      let text = '';
+      let textError: string | undefined;
+      try {
+        const textContent = await page.getTextContent();
+        const parts: string[] = [];
+        for (const item of textContent.items) {
+          if (!item || typeof item !== 'object' || !('str' in item)) continue;
+          if (typeof item.str !== 'string') continue;
+          parts.push(item.str, item.hasEOL ? '\n' : ' ');
+        }
+        text = parts.join('').replace(/\s+/g, ' ').trim();
+      } catch (error) {
+        textError = (error instanceof Error ? error.message : String(error)).slice(0, 300);
       }
-      const text = parts.join('').replace(/\s+/g, ' ').trim();
 
       let drawOps: number | null = null;
       let imageOps: number | null = null;
@@ -284,8 +297,14 @@ export async function inspectPdfPages(
         textPreview: previewChars > 0 ? text.slice(0, previewChars) : '',
         drawOps,
         imageOps,
-        blank: text.length === 0 && drawOps === 0 && imageOps === 0,
-        visibilityUnverified: pageVisibilityUnverified(text.length, drawOps, imageOps),
+        blank: textError === undefined && text.length === 0 && drawOps === 0 && imageOps === 0,
+        visibilityUnverified: pageVisibilityUnverified(
+          text.length,
+          drawOps,
+          imageOps,
+          textError !== undefined,
+        ),
+        ...(textError !== undefined ? { textError } : {}),
       });
     }
     return { numPages, pagesInspected: pages.length, pages };

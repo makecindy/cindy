@@ -2,6 +2,7 @@
 // Tier 1: the production message player must expose inline transport controls,
 // recover from a failed source patch, and stop when its message leaves view.
 // Markdown renderer tests mock this component, so they cannot catch these bugs.
+import { StrictMode } from 'react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render } from '@testing-library/react';
 import { Tooltip } from '@/components/ui/tooltip';
@@ -14,6 +15,7 @@ vi.mock('@/lib/toast', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 let visibility: IntersectionObserverCallback;
 let observe: ReturnType<typeof vi.fn>;
 let pause: ReturnType<typeof vi.spyOn>;
+let load: ReturnType<typeof vi.spyOn>;
 const showModalDescriptor = Object.getOwnPropertyDescriptor(
   HTMLDialogElement.prototype,
   'showModal',
@@ -32,6 +34,8 @@ beforeEach(() => {
     },
   );
   pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+  // jsdom 未实现 load();改成空实现,同时让用例能断言「源被摘掉后跑了加载算法」。
+  load = vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
 });
 afterEach(() => {
   cleanup();
@@ -157,6 +161,25 @@ it('reports a playback failure without claiming the file is missing and lets the
   fireEvent.click(view.getByRole('button', { name: 'chat.errorBanner.retry' }));
   expect(view.container.querySelector('video')?.src).toBe(props.src);
 });
+// Regression: Seedance 2.5 1080p is HEVC-only; where Chromium cannot decode it the placeholder
+// used to be a dead end (retry only) for a file the user already paid for.
+// Tier 1, minimum input: one media error on a local cindy-media source.
+it('offers reveal-in-folder on the failure placeholder for local media', async () => {
+  const reveal = vi.fn().mockResolvedValue({ success: true });
+  vi.stubGlobal('electronAPI', { showItemInFolder: reveal });
+  const src = 'cindy-media://blobs/hevc.mp4';
+  const view = render(<ChatVideoView {...props} src={src} />, { wrapper: Tooltip.Provider });
+  fireEvent.error(view.container.querySelector('video')!);
+  fireEvent.click(view.getByRole('button', { name: 'chat.media.revealVideo' }));
+  await vi.waitFor(() => expect(reveal).toHaveBeenCalledWith({ url: src }));
+});
+it('does not offer reveal-in-folder for remote sources that failed', () => {
+  const view = render(<ChatVideoView {...props} src="https://media.test/x.mp4" />, {
+    wrapper: Tooltip.Provider,
+  });
+  fireEvent.error(view.container.querySelector('video')!);
+  expect(view.queryByRole('button', { name: 'chat.media.revealVideo' })).toBeNull();
+});
 it('pauses video when its message leaves view', () => {
   const view = render(<ChatVideoView {...props} />, { wrapper: Tooltip.Provider });
   const video = view.container.querySelector('video')!;
@@ -233,4 +256,128 @@ it('coordinates inline videos and audio through playback and retry', () => {
   expect(pause.mock.contexts).toContain(retried);
   expect(pause.mock.contexts).not.toContain(second);
   unregister();
+});
+// Regression #8735: a local audio preview looped and kept playing after the
+// preview closed. Collection previews close by unmounting the player without its
+// own close handler; the cases above only cover video menus and inline players.
+// Tier 1, minimum input: open one audio preview, then unmount it.
+it('audio previews play once and stop when the preview unmounts', () => {
+  const view = render(
+    <VideoLightbox src="xdt-audio://local/?path=%2Fsong.mp3" kind="audio" onClose={vi.fn()} />,
+    { wrapper: Tooltip.Provider },
+  );
+  const audio = document.querySelector('audio')!;
+  expect(audio.loop).toBe(false);
+  view.unmount();
+  expect(pause.mock.contexts).toContain(audio);
+});
+
+// Tier 1: Chromium's native download cannot save custom media URLs. The inline
+// action must use the same host save operation as the viewer, without opening it.
+it('saves the inline media through the host without opening the viewer', async () => {
+  const saveMediaAs = vi.fn().mockResolvedValue({ canceled: false, savedPath: '/clip.mp4' });
+  vi.stubGlobal('electronAPI', { saveMediaAs });
+  const view = render(<ChatVideoView {...props} />, { wrapper: Tooltip.Provider });
+  fireEvent.click(view.getByRole('button', { name: 'chat.media.saveAs' }));
+  await vi.waitFor(() => expect(saveMediaAs).toHaveBeenCalledWith({ url: props.src }));
+  expect(view.container.querySelectorAll('video')).toHaveLength(1);
+});
+
+// Regression #10062: a local video's audio kept playing on Windows after its
+// preview closed, so only the system mixer could stop it. Pausing is not
+// releasing — the element kept its source, and the pipeline outlived the DOM
+// node. Tier 1, minimum input: open one local video preview, click Close.
+it('releases the video source when the preview closes', () => {
+  const view = render(<VideoLightbox {...props} onClose={vi.fn()} />, {
+    wrapper: Tooltip.Provider,
+  });
+  const video = document.querySelector('video')!;
+  fireEvent.click(view.getByRole('button', { name: 'chat.lightbox.close' }));
+  expect(pause.mock.contexts).toContain(video);
+  expect(video.getAttribute('src')).toBeNull();
+  expect(load).toHaveBeenCalledOnce();
+});
+
+// Tier 1, #12416: Chromium can autoplay a detached media element as soon as it
+// receives a source. An abandoned React render never runs effects or cleanups.
+// Mount one preview and observe the source assignment at the DOM boundary.
+it.each(['video', 'audio'] as const)('loads preview %s only after the element is mounted', (kind) => {
+  const sourceAssignments: boolean[] = [];
+  const setAttribute = Element.prototype.setAttribute;
+  vi.spyOn(HTMLMediaElement.prototype, 'setAttribute').mockImplementation(function (
+    this: HTMLMediaElement,
+    name: string,
+    value: string,
+  ) {
+    if (name === 'src') sourceAssignments.push(this.isConnected);
+    setAttribute.call(this, name, value);
+  });
+  const view = render(<VideoLightbox {...props} kind={kind} onClose={vi.fn()} />, {
+    wrapper: Tooltip.Provider,
+  });
+
+  expect(sourceAssignments).toEqual([true]);
+  expect(document.querySelector(kind)?.getAttribute('src')).toBe(props.src);
+  view.unmount();
+});
+
+// Same defect, second exit path: a collection preview swaps or closes by
+// unmounting this component, which never runs its own close handler. Tier 1,
+// minimum input: one mounted preview, then unmount.
+it('releases the video source when a collection preview swaps it out', () => {
+  const view = render(<VideoLightbox {...props} onClose={vi.fn()} />, {
+    wrapper: Tooltip.Provider,
+  });
+  const video = document.querySelector('video')!;
+  view.unmount();
+  expect(video.getAttribute('src')).toBeNull();
+  expect(load).toHaveBeenCalledOnce();
+});
+// Releasing runs the load algorithm, which resets currentTime; the close
+// handler still owes the caller the position it closed at. Tier 1, minimum
+// input: play to 42s, close, let the fade timer fire.
+it('keeps the resume position when the source is released', () => {
+  vi.useFakeTimers();
+  try {
+    const onClose = vi.fn();
+    const view = render(<VideoLightbox {...props} onClose={onClose} />, {
+      wrapper: Tooltip.Provider,
+    });
+    const video = document.querySelector('video')!;
+    const played = { current: 42 };
+    Object.defineProperty(video, 'currentTime', {
+      configurable: true,
+      get: () => played.current,
+      set: (value: number) => {
+        played.current = value;
+      },
+    });
+    // The spec resets the clock during the load algorithm a release triggers.
+    load.mockImplementation(() => {
+      played.current = 0;
+    });
+    fireEvent.click(view.getByRole('button', { name: 'chat.lightbox.close' }));
+    vi.advanceTimersByTime(200);
+    expect(onClose).toHaveBeenCalledWith(42);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+// Effect replay (StrictMode in dev, Fast Refresh in the app) runs the release
+// cleanup on the same DOM node without a remount. React does not write the
+// unchanged JSX src back, so the preview used to render an empty player.
+// Tier 1, minimum input: mount one preview under StrictMode.
+it('restores the source when React replays the release effect', () => {
+  const view = render(
+    <StrictMode>
+      <VideoLightbox {...props} onClose={vi.fn()} />
+    </StrictMode>,
+  );
+  const video = document.querySelector('video')!;
+  // The replay really ran the release, and the source came back with it.
+  expect(load).toHaveBeenCalledOnce();
+  expect(video.getAttribute('src')).toBe(props.src);
+  view.unmount();
+  expect(video.getAttribute('src')).toBeNull();
 });

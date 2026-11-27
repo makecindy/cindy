@@ -20,9 +20,15 @@ import {
 } from "@/auth/authOwnerGeneration";
 import { ModelPickerSheet } from "@/session/ModelPickerSheet";
 import {
+  resolveHostModelGroup,
+  useHostModelGroupPickerOptions,
+  useHostModelGroupsPayload,
+} from "@/session/hostModelGroups";
+import {
   normalizeMobileAgentCapabilities,
   type MobileAgentCapabilities,
 } from "@/session/agentCapabilities";
+import { useRemoteAgentCatalogs } from "@/session/useRemoteAgentCatalogs";
 import { permissionPresentation } from "@/session/permissionPresentation";
 import {
   iconSize,
@@ -174,14 +180,84 @@ export function PluginTaskSettings({
       { text: t("plugins.cancel"), style: "cancel" },
     ]);
   };
-  const name =
-    providers.providers
+  const agentDeviceId = config?.agentDeviceId ?? null;
+  const activeModelGroup = config?.modelGroup ?? null;
+  const hostModelGroupsPayload = useHostModelGroupsPayload(
+    deviceId,
+    maker,
+    picker || activeModelGroup !== null,
+  );
+  // Same sources as an ordinary task on that computer. Older Hosts do not save a run
+  // location, so they keep listing only their own models.
+  const remoteSupported = preferences?.remoteRoutes === true;
+  const remoteCatalogs = useRemoteAgentCatalogs({
+    enabled: remoteSupported && (picker || agentDeviceId !== null),
+    controlledDeviceId: deviceId,
+    keepDeviceIds: agentDeviceId ? [agentDeviceId] : [],
+    keepOnly: !picker,
+  });
+  const location = agentDeviceId
+    ? remoteCatalogs.find((catalog) => catalog.deviceId === agentDeviceId)
+    : undefined;
+  const modelName =
+    (agentDeviceId ? (location?.providers ?? []) : providers.providers)
       .find((p) => p.id === config?.providerId)
       ?.models[agent]?.find((m) => m.id === config?.model)?.name ??
     config?.model;
+  const activeRouteLabel = activeModelGroup
+    ? (hostModelGroupsPayload?.groups.find((g) => g.id === activeModelGroup)?.name
+      ?? hostModelGroupsPayload?.expandedRoutes.find((r) => r.id === activeModelGroup)?.parent.name
+      ?? null)
+    : null;
+  const concreteName = modelName && location ? `${modelName} · ${location.name}` : modelName;
+  const name = activeRouteLabel
+    ? (concreteName ? `${activeRouteLabel} (${concreteName})` : activeRouteLabel)
+    : concreteName;
+  const selectModelGroupForTask = async (
+    id: string,
+    overrides?: { effort?: string; fastMode?: boolean | "ultrafast" },
+  ): Promise<boolean> => {
+    const resolved = await resolveHostModelGroup(
+      maker,
+      id,
+      overrides ? { effort: overrides.effort || undefined, fastMode: overrides.fastMode } : undefined,
+      remoteSupported ? undefined : { agentDeviceId: null },
+    );
+    if (!current()) return false;
+    if (!resolved || resolved.outcome !== "routed") {
+      Alert.alert(t("models.modelGroups.picker.chooseUnavailable", { name: resolved?.groupName ?? "" }));
+      return false;
+    }
+    const { route } = resolved;
+    const ok = await save({
+      model: {
+        agentKind: route.agentKind,
+        model: route.model,
+        providerId: route.providerId,
+        ...(remoteSupported ? { agentDeviceId: route.agentDeviceId ?? null } : {}),
+        ...(route.effort || overrides?.effort ? { effort: route.effort ?? overrides?.effort } : {}),
+        fastMode: route.fastMode ?? overrides?.fastMode ?? false,
+        modelGroup: id,
+      },
+    });
+    if (ok && current()) setPicker(false);
+    return ok;
+  };
+  const taskModelGroupOptions = useHostModelGroupPickerOptions(
+    hostModelGroupsPayload?.groups ?? null,
+    activeModelGroup,
+    (id) => selectModelGroupForTask(id),
+    t,
+    {
+      sourceRoutesPayload: hostModelGroupsPayload,
+      activeRouteId: activeModelGroup,
+      onPickMerged: (routeId, value) =>
+        selectModelGroupForTask(routeId, { effort: value.effort, fastMode: value.fast }),
+    },
+  );
   return (
     <View>
-      <Text style={styles.label}>{t("plugins.taskSettings")}</Text>
+      <Text style={styles.sectionLabel}>{t("plugins.taskSettings")}</Text>
       <View style={styles.card}>
         <Pressable
           accessibilityRole="button"
@@ -229,6 +305,9 @@ export function PluginTaskSettings({
         ) : null}
       </View>
       <Text style={styles.hint}>{t("plugins.taskSettingsHint")}</Text>
+      {agentDeviceId ? (
+        <Text style={styles.hint}>{t("plugins.remoteQuickAnswerHint")}</Text>
+      ) : null}
       {busy || (!preferences && !error) ? (
         <ActivityIndicator color={colors.textSecondary} />
       ) : null}
@@ -270,8 +349,16 @@ export function PluginTaskSettings({
         keyboardAvoidingBehavior={Platform.OS === "ios" ? "padding" : "height"}
         emptyHint={t("plugins.modelsUnavailable")}
         unified={{
+          remote: remoteSupported
+            ? {
+                catalogs: remoteCatalogs,
+                selectedDeviceId: agentDeviceId,
+                hostDeviceId: deviceId,
+              }
+            : undefined,
           scope: JSON.stringify([owner.accountKey, deviceId]),
           agents: ["claude-code", "codex", "pi"],
+          ...(taskModelGroupOptions ? { modelGroups: taskModelGroupOptions } : {}),
           loadCapabilities: async (kind) => {
             const caps = normalizeMobileAgentCapabilities(
               await maker.getCapabilities(kind),
@@ -279,12 +366,14 @@ export function PluginTaskSettings({
             if (!caps) throw new Error("CAPABILITIES_UNAVAILABLE");
             return caps;
           },
-          onSelect: async (value) => {
+          onSelect: async (value, source) => {
             const result = await save({
               model: {
                 agentKind: value.agent === "claude-code" ? "cc" : value.agent,
                 model: value.modelId,
                 providerId: value.providerId,
+                // Null explicitly selects the Host, including a same-named local model.
+                ...(remoteSupported ? { agentDeviceId: source?.deviceId ?? null } : {}),
                 ...(value.effort ? { effort: value.effort } : {}),
                 fastMode: value.fast,
               },
@@ -300,10 +389,10 @@ export function PluginTaskSettings({
 const makeStyles = (colors: ThemeColors) =>
   StyleSheet.create({
     fill: { flex: 1 },
-    label: {
+    sectionLabel: {
       fontSize: typeScale.footnote,
-      lineHeight: lineHeight.bodySmall,
-      fontWeight: fontWeight.regular,
+      lineHeight: lineHeight.caption,
+      fontWeight: fontWeight.semibold,
       color: colors.textTertiary,
       marginBottom: spacing.sm,
     },
@@ -336,9 +425,9 @@ const makeStyles = (colors: ThemeColors) =>
     },
     hint: {
       fontSize: typeScale.footnote,
-      lineHeight: lineHeight.bodySmall,
+      lineHeight: lineHeight.caption,
       fontWeight: fontWeight.regular,
-      color: colors.textTertiary,
+      color: colors.textSecondary,
       marginVertical: spacing.sm,
     },
   });

@@ -6,19 +6,21 @@ import {
   PROVIDER_SHARE_GROUP_STATUS_REQUEST,
   readProviderShareGroupSize,
   readProviderShareGroupStatus,
+  readProviderMetadataContinuity,
   type ProviderShareGroupState,
 } from '@cindy/device-link';
 
 import { Button } from '@/components/ui/button';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerIdCurrent } from '@/contexts/dataOwnerGeneration';
+import { invokeModelCatalog } from '@/lib/invokeModelCatalog';
 
 const REFRESH_MS = 15_000;
 const COPY = 'providerShare.received.groupStatus';
 const isVisible = () => document.visibilityState !== 'hidden';
 
 export function SharedProviderGroupStatus({
-  deviceId, providerId, initialSize,
-}: { deviceId: string; providerId: string; initialSize: number }) {
+  deviceId, providerId, initialSize, compact = false,
+}: { deviceId: string; providerId: string; initialSize: number; compact?: boolean }) {
   const { t } = useTranslation();
   const [snapshot, setSnapshot] = useState<{ size: number | null; states: ProviderShareGroupState[] | null }>({
     size: initialSize, states: null,
@@ -41,13 +43,15 @@ export function SharedProviderGroupStatus({
       pending = true;
       setLoading(true);
       try {
-        const raw = await window.electronAPI.deviceLink.invoke(deviceId, 'maker:provider:list', [
+        const raw = await invokeModelCatalog(window.electronAPI.deviceLink, deviceId, 'maker:provider:list', [
           { [PROVIDER_SHARE_GROUP_STATUS_REQUEST]: true },
         ]) as { providers?: Array<{ id?: string }> };
         if (!canApply()) return;
         const provider = Array.isArray(raw?.providers) ? raw.providers.find((entry) => entry?.id === providerId) : null;
         if (!provider) throw new Error('Shared provider missing');
-        setSnapshot({ size: readProviderShareGroupSize(provider), states: readProviderShareGroupStatus(provider) });
+        const states = readProviderShareGroupStatus(provider);
+        setSnapshot({ size: readProviderShareGroupSize(provider),
+          states: readProviderMetadataContinuity(raw)?.stale ? states?.map(() => 'unknown') ?? null : states });
         setFailed(false);
       } catch {
         if (!canApply()) return;
@@ -57,7 +61,7 @@ export function SharedProviderGroupStatus({
         pending = false;
         if (current()) {
           setLoading(false);
-          if (isVisible()) timer = setTimeout(() => void reload(), REFRESH_MS);
+          if (!compact && isVisible()) timer = setTimeout(() => void reload(), REFRESH_MS);
         }
       }
     };
@@ -72,16 +76,24 @@ export function SharedProviderGroupStatus({
       clearTimeout(timer);
       document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, [deviceId, providerId, refresh]);
+  }, [deviceId, providerId, refresh, compact]);
 
   if (snapshot.size === null && !failed) return null;
   const states = snapshot.states;
-  const ready = states?.filter((state) => state === 'available' || state === 'busy').length ?? 0;
-  const unknown = !states || states.includes('unknown');
+  // The anonymous share catalog also uses "busy" for full computers.
+  const ready = states?.filter((state) => state === 'available' || (!compact && state === 'busy')).length ?? 0;
+  const unknown = !states || states.includes('unknown') || (compact && states.includes('busy'));
   const summary = failed ? t(`${COPY}.failed`)
     : !states ? t(`${COPY}.${loading ? 'loading' : 'unsupported'}`)
       : ready > 0 ? t(`${COPY}.summary`, { ready, total: states.length })
         : unknown ? t(`${COPY}.unconfirmed`) : t(`${COPY}.noneReady`);
+  if (compact) {
+    return (
+      <p role="status" title={t(`${COPY}.note`)} className="w-0 min-w-full px-3 py-1.5 text-12 text-[var(--text-secondary)]">
+        {summary}
+      </p>
+    );
+  }
   return (
     <section data-testid="shared-provider-group-status" className="shrink-0 border-t border-[var(--settings-theme-card-border)] px-5 py-3">
       <div className="mb-2 flex items-center justify-between gap-3">

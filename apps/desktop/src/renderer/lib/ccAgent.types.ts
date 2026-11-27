@@ -1,23 +1,32 @@
+import { type OutputLimitDetails } from '@cindy/maker-shared';
 import type { AgentRequestReceipt } from '../../shared/forwardedRequest.js';
 import type { ImMessageSource } from '../../shared/imMessageSource';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import type { SessionSource } from '../../shared/sessionSource';
+import type { ModelGroupSessionBindingView } from '../../shared/modelGroups';
 import type { TurnUsageDetails } from '../../shared/turnUsageDetails';
 import type { RegionalMoney } from '../../shared/regionalMoney';
 import type { AutoResumeInfo, RecoveryCheckpoint } from '../../shared/agentInputQueue';
 import type { ReviewRunMeta } from '../../shared/reviewRun';
 import type { OrcaRemoteLead } from '../../shared/orcaRemoteWorker';
+import type { SessionCreatedBy } from '../../shared/sessionOrigin';
 import type { AgentTaskTerminalStatus } from '@cindy/maker-shared/agent-task';
 import type {
   MessageSourceDevice,
   MessageSourceGroup,
+  MessageSourceGroupRequest,
+  MessageSourceGroupThread,
   MessageSourcePlugin,
 } from '@cindy/maker-shared/message-source';
 import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 
 export type SessionStatus = 'active' | 'archived' | 'deleted';
 export type WorkspaceKind = 'project' | 'dialogue';
-export type DeviceLinkConnectionStatus = 'connected' | 'disconnected';
+/**
+ * 远端设备在本窗口侧栏里的连接态。`connecting` = 还没拿到权威快照(冷启动的缓存种入、
+ * relay 瞬时重连):画成「检测中」而不是离线,但写操作与 `disconnected` 一样被挡住。
+ */
+export type DeviceLinkConnectionStatus = 'connected' | 'connecting' | 'disconnected';
 
 /**
  * 当前 session 接的是哪个 agent。决定 message.agentMeta 的 JSON 形态。
@@ -69,11 +78,17 @@ export interface MessageSessionOrigin {
   /** 来源任务属于某个伙伴时：标签显示伙伴名与头像（名字优先取实时资料，其次用快照）。 */
   senderBotId?: string;
   senderBotName?: string;
+  /** 群成员在伙伴任务卡的话题里说的话，由伙伴转进这件任务：标签写出是谁、在哪个群聊。 */
+  groupThread?: MessageSourceGroupThread;
+  /** 本机主人在群里交给「群里的 Cindy」的请求：标签写出来自哪个群、是谁。 */
+  groupRequest?: MessageSourceGroupRequest;
   /**
    * Orca Lead / Worker 互发的消息：发送方角色名（Worker 为其 role）。卡片标题据此写
    * 「来自 Worker「role」的消息」；来源标签仍只在有 senderSessionId 时出现。
    */
   orcaSenderLabel?: string;
+  /** 系统合批总条数；不把整批归到首个 Worker。 */
+  orcaAutoBridgeBatchCount?: number;
   /** true = 由 Orca 落库来源（kind:'orca'）投影而来。 */
   orca?: true;
 }
@@ -88,7 +103,20 @@ export type MessageAutomationOrigin = MessageSchedulerOrigin | MessageSessionOri
 export type StoredMessageOrigin =
   | MessageSchedulerOrigin
   | (MessageSessionOrigin & { displayText?: string })
-  | { kind: 'orca'; senderLabel?: string; displayText?: string; senderSessionId?: string };
+  | { kind: 'orca'; senderLabel?: string; displayText?: string; senderSessionId?: string; autoBridge?: true; autoBridgeBatchCount?: number };
+
+/** 新任务「让插件选」的结果记录(第一条消息下方的一行说明)。 */
+export interface PluginModelRouteNote {
+  pluginName: string;
+  outcome: 'routed' | 'kept';
+  /** routed：插件选的模型显示名与推理强度；kept：实际沿用的模型显示名。 */
+  modelName: string;
+  effort?: string;
+  reason?: string;
+  why?: 'no-opinion' | 'failed' | 'unavailable-route';
+  /** 这行说明来自用户的模型组而不是插件(pluginName 是路线的名字)；缺省 = 插件。 */
+  source?: 'model-group';
+}
 
 /**
  * Claude Code SDK 元信息——按消息类型不同填不同子集。
@@ -101,6 +129,10 @@ export type StoredMessageOrigin =
  * 只接受 SDK 自己分配的 uuid，所以这是 fork 的唯一主键。
  */
 export interface CcMeta {
+  /** This input yielded to already queued messages after a context overflow. */
+  inputNotice?: 'oversized-input-skipped';
+  /** 新任务「让插件选」的结果(宿主写入，非模型回复)。 */
+  pluginModelRoute?: PluginModelRouteNote;
   /** Model boundary recorded by the host when the next input is dispatched. */
   modelChange?: { fromModel: string; toModel: string; modelOnly: true };
   /** Host-authored official MCP App snapshot; not an assistant prose reply. */
@@ -108,6 +140,12 @@ export interface CcMeta {
   botLearning?: import('@cindy/maker-shared/bot-learning').BotLearningReceipt[];
   /** Provider text phase, retained to exclude commentary from notification previews. */
   assistantPhase?: string;
+  /** Set only on finished user-visible progress for a foreground plugin task input. */
+  pluginProgressInputId?: string;
+  /** Native text item identity, used to reconcile streamed and imported history. */
+  agentMessageId?: string;
+  /** Codex item text is durable but its sampling request has not yet been accepted. */
+  samplingAttemptPending?: false | { runtimeId: string };
   /** Exact native sampling attempt that failed before response completion. Original text is retained. */
   failedSamplingAttempt?: { threadId: string; turnId: string; attempt: number; itemId: string; error?: string };
   uuid?: string;
@@ -262,6 +300,9 @@ export interface CcMeta {
    */
   goalNotice?: 'usage-resumed' | 'capacity-resumed';
 
+  /** Context rebuilt in-place. Older hosts may omit the coverage marker. */
+  contextRebuild?: ContextRebuildMeta;
+
   /**
    * Host-side marker:个人版制作任务里 Agent 调用 cindy_make.report_complete 后落的
    * 完成记录(role:'assistant' + 空 content)。renderer 渲成完成卡片,不进 prompt。
@@ -343,9 +384,11 @@ export interface Session {
   userId: string;
   title: string;
   workingDir: string | null;
+  /** Explicit project membership; old hosts/tasks fall back to workingDir. */
+  projectDir?: string | null;
   /**
    * 侧边栏/产品归属语义。
-   * - project: workingDir 是项目目录, 参与 Projects 分组。
+   * - project: projectDir 决定 Projects 分组，旧任务回落 workingDir。
    * - dialogue: workingDir 只是对话运行/文件目录, 不参与 Projects 分组。
    */
   workspaceKind: WorkspaceKind;
@@ -357,6 +400,7 @@ export interface Session {
   sdkSessionId: string | null;
   totalTokenUsage: number;
   totalCostUsd: number;
+  totalCostUsdIsApproximate?: boolean;
   /** 新版区域累计金额；旧会话仍只带 totalCostUsd。 */
   totalMoney?: RegionalMoney;
   contextTokens: number;
@@ -369,6 +413,10 @@ export interface Session {
   runtimePending?: SessionRuntimePendingProjection | null;
   /** Allows a companion input to reach host baseline recovery; does not assert model availability. */
   runtimeBaselineRecoveryPending?: boolean;
+  /** Host projection of existing task plugin choices, including uninstalled providers. */
+  runtimePluginsSelected?: boolean;
+  /** Host projection of the active smart-routing binding for this task; absent on older hosts or unbound tasks. */
+  modelGroupBinding?: ModelGroupSessionBindingView | null;
   /**
    * 计划模式一级开关(与 permissionMode 正交):开启时 agent 先产出计划、经审批后再执行。
    * 计划批准后 agent 自动退出并经 plan_mode_changed → sessions:patched 回流为 false。
@@ -388,6 +436,11 @@ export interface Session {
    * 任务内的未读与角标照常。老 payload 缺失按未静音处理。
    */
   notificationsMuted?: boolean;
+  /** Inbox deferral, saved by the task host. Missing on older hosts. */
+  snoozedUntil?: string | null;
+  /** Host-authoritative IM attachment flag returned by `local-db:sessions:get`. */
+  imAttached?: boolean;
+  snoozedAt?: string | null;
   /**
    * 用户最近一次"按下发送"的时刻（ISO 8601，null = 从未发过）。
    * Sidebar 排序唯一时间轴：null ⟺ 草稿（归未分类），非 null 即按倒序上浮。
@@ -400,9 +453,15 @@ export interface Session {
   agentKind: AgentKind;
   /** 会话来源。scheduler 表示由自动化任务创建；缺失时按 desktop 兼容旧 payload。 */
   source?: SessionSource;
+  /** This follow-up is also visible as an independent task. */
+  sideChatPromoted?: true;
   /** Host-owned teammate link, also used by the existing history API. Display only. */
-  companion?: { id: string; role: string; channel?: string } | null;
+  companion?: { id: string; role: string; taskProjectDir?: string; channel?: string; routineId?: string } | null;
   /** Orca split-session role marker. null/undefined means a regular Maker session. */
+  /** Owning Lead on this device, when the active team is known. */
+  orcaLeadSessionId?: string;
+  /** Live Worker question state, independent of Agent Island visibility. */
+  orcaHasPendingQuestion?: boolean;
   orcaRole?: OrcaRole | null;
   /** fork-session：派生来源会话 id（self-FK，源被删 → SET NULL）。null = 顶层会话。 */
   parentSessionId?: string | null;
@@ -454,6 +513,11 @@ export interface Session {
    * null/undefined = 普通任务；旧版本 payload 没有该字段。
    */
   orcaRemoteLead?: OrcaRemoteLead | null;
+  /**
+   * 由另一个任务通过 send_to_session（create 模式）新建时的来源任务元数据。
+   * 独立于 parentSessionId（仅用于 fork / 侧边追问）。null/undefined = 非任务新建或旧版 payload。
+   */
+  createdBySession?: SessionCreatedBy | null;
   /**
    * device-link 跨设备远程控制:本 session 实际归属的**被控设备 deviceId**。
    * 仅存在于控制端**内存**里(由 remoteProjectsStore 注入),**永不落本地 DB**——
@@ -526,12 +590,16 @@ export type MessageRole =
 
 /**
  * role='agent_switch' 行的 content 结构(JSON 存于 messages.content)。
- * handoff 是发给新引擎的交接摘要全文——只用于 UI 展开查看与 debug,
+ * handoff 是发给新引擎的交接内容——只用于 UI 展开查看与 debug,
  * 不作为对话正文渲染,也绝不回发给 agent(注入走 main 的 wire 前缀通道)。
  */
 export interface AgentSwitchContent {
-  fromAgentKind: 'cc' | 'codex' | 'pi';
-  toAgentKind: 'cc' | 'codex' | 'pi';
+  /** 'acp' = 插件引擎；名称见 fromEngineName / toEngineName。 */
+  fromAgentKind: 'cc' | 'codex' | 'pi' | 'acp';
+  toAgentKind: 'cc' | 'codex' | 'pi' | 'acp';
+  /** 插件引擎那一侧在切换时的名称快照。 */
+  fromEngineName?: string;
+  toEngineName?: string;
   fromModel: string | null;
   toModel: string | null;
   /** Agent 切换时的来源快照；缺失表示旧版边界数据。 */
@@ -542,9 +610,18 @@ export interface AgentSwitchContent {
   resumed?: boolean;
   /** Same-Harness cross-computer restoration result; omitted for legacy switches. */
   nativeHistory?: 'restored' | 'fallback';
+  handoffCoverage?: HandoffCoverage;
   toAgentDeviceId?: string | null;
   toAgentDeviceName?: string | null;
   switchReason?: 'quota-rebalance';
+}
+
+export type HandoffCoverage = 'complete' | 'condensed';
+
+export interface ContextRebuildMeta {
+  reason: string;
+  handoff?: string;
+  handoffCoverage?: HandoffCoverage;
 }
 
 export interface Message {
@@ -574,5 +651,6 @@ export interface Message {
   agentKind?: 'cc' | 'codex' | 'pi' | null;
   /** Structured guard details for a persisted tool-loop terminal error. */
   toolLoop?: ToolLoopErrorDetails;
+  outputLimit?: OutputLimitDetails;
   createdAt: string; // ISO 8601
 }

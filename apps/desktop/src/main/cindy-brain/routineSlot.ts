@@ -1,13 +1,31 @@
 import type { InstalledGhost } from '../../shared/ghost.js';
 import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
-import { parseRoutineEvent, type RoutineEngine } from '@cindy/maker-scheduler';
+import { parseRoutineEvent, RoutineEventAdmission } from '@cindy/maker-scheduler';
 import { createLogger } from '../logger.js';
 import { Buffer } from 'node:buffer';
+import type { PluginEventSubscription } from '@cindy/maker-scheduler';
+import {
+  pluginEventSubscriptionsFor,
+  publishPluginEvent,
+  reportPluginEventStatus,
+  type PluginEventListenState,
+} from '../scheduler-host/webhook/pluginEvents.js';
 
 const log = createLogger('routines:plugin');
 
-// Host-wide, across engine startup/replacement: status and publish share these slots.
-// Engine-local rate and persistence quotas remain independent of this outer concurrency bound.
+/*
+ * Plugin events (`routineEvents` declaration, `routine-request` pipe). Teammate routines were removed;
+ * since 2026-11-23 published events wake the automations whose trigger chose this plugin
+ * (docs/product-rules/plugin-event-triggers.md). Validation and bounds are unchanged, so plugins built
+ * for routines keep working without reinstalling or re-approving.
+ */
+
+// Publishing and status reports have separate per-plugin and host-wide rate budgets;
+// reading subscriptions shares the status budget.
+const publishAdmission = new RoutineEventAdmission();
+const statusAdmission = new RoutineEventAdmission();
+
+// Host-wide: status and publish share these slots.
 const pendingByPlugin = new Map<string, number>();
 let totalPending = 0;
 
@@ -64,17 +82,11 @@ function reserveRequest(pluginId: string): () => void {
   };
 }
 
-// Exact host-authored rejections only. Never echo arbitrary storage errors across the plugin boundary.
+// Exact host-authored rejections only. Never echo arbitrary errors across the plugin boundary.
 const PUBLIC_REJECTIONS = [
   'Routine request is too large or invalid',
-  'Routine request rate limit reached; retry after 60 seconds',
   'Routine request intake is busy; retry later',
-  'Routine receipt storage is full; retry after receipts expire (24 hours)',
-  'Routine queue is full; retry this event later',
-  'Routine service is stopped',
-  'Event source is not listening',
-  'Event type is undeclared',
-  'Event publisher is no longer active',
+  'Routine request rate limit reached; retry after 60 seconds',
   'Expected an object',
   'Too many event fields',
   'Event fields must be strings, finite numbers or booleans',
@@ -87,42 +99,58 @@ const PUBLIC_REJECTIONS = [
   'Expected nonempty text of at most 1000 characters',
 ] as const;
 
-/** Host-authenticated publisher: a plugin may only publish its own declared event types. */
+/** A plugin may only report or publish its own declared events; the host derives the source from its identity. */
 export async function handleRoutineRequest(
   ghost: InstalledGhost | undefined,
   payload: unknown,
-  getEngine: () => Promise<RoutineEngine>,
   isCurrent: () => boolean,
-): Promise<{ ok: boolean; accepted?: number; duplicate?: boolean; message?: string }> {
+): Promise<{
+  ok: boolean;
+  accepted?: number;
+  duplicate?: boolean;
+  subscriptions?: PluginEventSubscription[];
+  message?: string;
+}> {
   if (!ghost?.enabled || !ghost.manifest.routineEvents)
     return { ok: false, message: 'Routine events are not declared or the plugin is disabled' };
   if (!payload || typeof payload !== 'object' || Array.isArray(payload))
     return { ok: false, message: 'Invalid routine request' };
   const request = payload as Record<string, unknown>;
+  const plugin = installedGhostStoragePart(ghost);
   let release: (() => void) | undefined;
+  let releaseRate: (() => void) | undefined;
   try {
-    const instanceId = installedGhostStoragePart(ghost);
-    release = reserveRequest(instanceId);
+    release = reserveRequest(plugin);
     validateRequestSize(request);
-    if (request.action !== 'status' && request.action !== 'publish')
+    if (request.action !== 'status' && request.action !== 'publish' && request.action !== 'subscriptions')
       return { ok: false, message: 'Unknown routine operation' };
     if (request.action === 'status' && (typeof request.status !== 'string' || !['listening', 'disconnected', 'error'].includes(request.status)))
       return { ok: false, message: 'Invalid source status' };
-    // Reject malformed/oversized events before any startup wait, using the engine's validator.
-    const event = request.action === 'publish' ? parseRoutineEvent(request.event) : undefined;
-    const engine = await getEngine();
-    if (!isCurrent()) return { ok: false, message: 'Plugin owner or installation changed' };
-    const sourceId = `plugin:${instanceId}`;
+    // Rate limits apply before parsing the event and before durable writes; repeated status counts too.
+    releaseRate = (request.action === 'publish' ? publishAdmission : statusAdmission).acquire(plugin, Date.now());
+    if (request.action === 'subscriptions') {
+      if (!isCurrent()) return { ok: false, message: 'Plugin owner or installation changed' };
+      // Only the event types and conditions automations chose for this plugin; no automation identity or prompt.
+      return { ok: true, subscriptions: pluginEventSubscriptionsFor(plugin) };
+    }
     if (request.action === 'status') {
-      engine.registerSource({
-        id: sourceId,
-        name: ghost.manifest.name,
-        events: ghost.manifest.routineEvents.events,
-        status: request.status as 'listening' | 'disconnected' | 'error',
-      });
+      if (!isCurrent()) return { ok: false, message: 'Plugin owner or installation changed' };
+      reportPluginEventStatus(plugin, request.status as PluginEventListenState);
       return { ok: true };
     }
-    return { ok: true, ...(await engine.publish(sourceId, event, isCurrent)) };
+    const event = parseRoutineEvent(request.event);
+    if (!ghost.manifest.routineEvents.events.some((declared) => declared.type === event.type))
+      return { ok: false, message: 'Event type is undeclared' };
+    if (!isCurrent()) return { ok: false, message: 'Plugin owner or installation changed' };
+    // accepted counts automations that durably queued it; it does not mean a run succeeded.
+    const { accepted, duplicate } = await publishPluginEvent(plugin, {
+      id: event.id,
+      type: event.type,
+      occurredAt: event.occurredAt,
+      ...(event.subject !== undefined ? { subject: event.subject } : {}),
+      data: event.data,
+    });
+    return { ok: true, accepted, duplicate };
   } catch (error) {
     const publicMessage = error instanceof Error
       ? PUBLIC_REJECTIONS.find((message) => message === error.message)
@@ -132,11 +160,9 @@ export async function handleRoutineRequest(
       ghostId: ghost.manifest.id,
       error: error instanceof Error ? error.message : String(error),
     });
-    return {
-      ok: false,
-      message: 'Routine request failed; please retry later',
-    };
+    return { ok: false, message: 'Routine request failed; please retry later' };
   } finally {
+    releaseRate?.();
     release?.();
   }
 }

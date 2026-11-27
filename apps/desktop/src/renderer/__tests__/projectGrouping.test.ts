@@ -50,6 +50,7 @@ function s(partial: Partial<Session>): Session {
     userId: 'u',
     title: partial.title ?? `t${id}`,
     workingDir: partial.workingDir ?? null,
+    projectDir: partial.projectDir,
     workspaceKind: partial.workspaceKind ?? 'project',
     model: 'm',
     effort: 'medium' as Session['effort'],
@@ -80,6 +81,21 @@ function s(partial: Partial<Session>): Session {
 /* ============================== normalizeWorkingDir ============================== */
 
 describe('host project alias display', () => {
+  // Unit: arbitrary sibling worktrees used to grow separate sidebar projects.
+  // Membership must also drive aliases and remote controller grouping.
+  it.each([undefined, 'remote-device'])('keeps execution directories under the selected project (%s)', deviceLinkDeviceId => {
+    const sessions = [
+      s({ id: 'one', projectDir: '/product', workingDir: '/tmp/checkout-one', deviceLinkDeviceId }),
+      s({ id: 'two', projectDir: '/product', workingDir: '/repo/.cindy-worktrees/two', deviceLinkDeviceId }),
+      s({ id: 'legacy', workingDir: '/product', deviceLinkDeviceId }),
+    ];
+    const key = deviceLinkDeviceId ? `device:${deviceLinkDeviceId}:/product` : 'local:/product';
+    const groups = groupSessions(sessions, { projectAliases: new Map([[key, 'Product']]) });
+    expect(groups.projects).toHaveLength(1);
+    expect(groups.projects[0]).toMatchObject({ workingDir: '/product', displayName: 'Product' });
+    expect(groups.projects[0].sessions.map(item => item.id).sort()).toEqual(['legacy', 'one', 'two']);
+    expect(sessions[0].workingDir).toBe('/tmp/checkout-one');
+  });
   it('mirrors each host independently and keeps controller-local overrides first', () => {
     const sessions = [
       s({ workingDir: '/repo', deviceLinkDeviceId: 'a' }),
@@ -295,7 +311,6 @@ describe('groupSessions', () => {
     expect(groupSessions([])).toEqual({
       pinned: [],
       dialogues: [],
-      bots: [],
       unclassified: [],
       projects: [],
     });
@@ -1285,4 +1300,16 @@ describe('pinnedSessionIdsInDisplayOrder（拖拽 baseline:与置顶段同序 st
   it('无置顶 → 空数组', () => {
     expect(pinnedSessionIdsInDisplayOrder([s({ pinnedAt: null })])).toEqual([]);
   });
+});
+
+// Group-lane visibility: zero-message failures must stay in the owner's project (unit).
+// Existing cases only cover tasks whose execution directory also defines membership.
+it('groups a group lane under its buddy before the first message without changing its cwd', () => {
+  const lane = { ...s({ workingDir: '/group/repo', projectDir: '/group/repo', workspaceKind: 'dialogue', userSendAt: null }),
+    source: 'bot' as const, companion: { id: 'buddy', role: 'group', taskProjectDir: '/buddy/workspace' }, _count: { messages: 0 } };
+  const result = groupSessions([lane]);
+  expect(result.dialogues).toHaveLength(0);
+  expect(result.unclassified).toHaveLength(0);
+  expect(result.projects[0].workingDir).toBe('/buddy/workspace');
+  expect(result.projects[0].sessions[0].workingDir).toBe('/group/repo');
 });

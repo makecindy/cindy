@@ -28,6 +28,8 @@ export function registerGrokLoginTools(
     const context = getContext();
     if (!context.sessionId || !context.sessionInstanceId)
       return errorPayload('NO_SESSION_CONTEXT', '当前调用没有可验证的 Cindy 任务身份。');
+    if (action === 'start' && context.mcpCallerKind === 'descendant')
+      return errorPayload('ROOT_REQUIRED', 'Ask the parent agent to manage the account connection.');
     try {
       return okPayload(await callbacks[action](context));
     } catch {

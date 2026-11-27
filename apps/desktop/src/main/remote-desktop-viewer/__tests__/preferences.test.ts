@@ -48,3 +48,28 @@ it('preserves never and rejects invalid durations before writing', async () => {
   );
   expect(readViewerPreferences('computer').idleTimeoutMinutes).toBe(0);
 });
+// Unit: default-on protection must not become a frozen override when another field is saved,
+// while an explicit toggle choice is kept even when it equals today's default. The old writer
+// dropped values equal to the default, so a later default flip silently overrode them.
+it.each([false, true])(
+  'defaults protection on and persists explicit toggle choices, including %s',
+  async (enabled) => {
+    const file = join(fixture.directory, 'remote-desktop-viewer.json');
+    expect(readViewerPreferences('computer')).toMatchObject({
+      privacyScreen: true,
+      lockOnExit: true,
+    });
+    await writeViewerPreferences('computer', { audio: false });
+    expect(Object.values(JSON.parse(readFileSync(file, 'utf8')))).toEqual([{ audio: false }]);
+    await writeViewerPreferences('computer', { privacyScreen: enabled, lockOnExit: enabled });
+    await writeViewerPreferences('computer', { audio: true });
+    expect(Object.values(JSON.parse(readFileSync(file, 'utf8')))).toEqual([
+      { audio: true, privacyScreen: enabled, lockOnExit: enabled },
+    ]);
+    expect(readViewerPreferences('computer')).toMatchObject({
+      privacyScreen: enabled,
+      lockOnExit: enabled,
+    });
+    expect(readViewerPreferences('other')).toMatchObject({ privacyScreen: true, lockOnExit: true });
+  },
+);

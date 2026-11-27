@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { withRemoteOauthContext, type RemoteOauthContext } from '../../plugin-oauth/context.js';
 import type { InstalledGhost } from '../../../shared/ghost.js';
+import { canUseGithubHostCredentials, canUseGitlabHostCredentials } from '../GhostManager.js';
 import { GhostConnectionManager } from '../ghostConnections.js';
 import { GhostOauthAccountManager } from '../ghostOauthAccounts.js';
 import { handleGhostConnectionsRequest } from '../runtime/ghostConnectionsEndpoint.js';
@@ -23,7 +24,7 @@ const routes = [
   { setter: 'setGhostOauthHandler', method: 'PUT', pathname: '/oauth/oauth_key/client', body: '{"clientId":"fake-old-client"}', status: 204 },
   { setter: 'setGhostConnectionsHandler', method: 'POST', pathname: '/connections/api', body: '{"host":"api.example.com","token":"fake-old-token"}', status: 200 },
 ] as const;
-type Route = typeof routes[number];
+type Route = Omit<typeof routes[number], 'method' | 'pathname'> & { method: string; pathname: string };
 
 function loadCallback(setter: string, deps: Record<string, unknown>, omitGuard = false): Callback {
   return createGhostProductionCallbacks<{ handler: Callback }>({
@@ -38,14 +39,15 @@ function deferred<Value>() {
   return { promise, resolve };
 }
 
-function harness(route: Route, opts: { omitGuard?: boolean; githubProbe?: boolean; storagePart?: string } = {}) {
-  const ghostId = opts.storagePart ?? (opts.githubProbe ? 'cindy-github' : 'helper');
+function harness(route: Route, opts: { omitGuard?: boolean; githubProbe?: boolean; gitlabProbe?: boolean; storagePart?: string } = {}) {
+  const manifestId = opts.githubProbe ? 'cindy-github' : opts.gitlabProbe ? 'cindy-gitlab' : 'helper';
+  const ghostId = opts.storagePart ?? manifestId;
   const inject = { header: 'Authorization', format: 'Bearer {value}', hosts: ['api.example.com'] };
   let installed: InstalledGhost = {
     dir: '/plugins/helper', enabled: true,
     approval: { state: 'approved', revision: 'original-receipt' },
     manifest: {
-      schemaVersion: 2, id: opts.githubProbe ? 'cindy-github' : 'helper', name: 'Helper',
+      schemaVersion: 2, id: manifestId, name: 'Helper',
       version: '1.0.0', kind: 'chip', entry: 'main.js', slots: ['network'],
       network: {
         hosts: ['api.example.com'],
@@ -54,7 +56,11 @@ function harness(route: Route, opts: { omitGuard?: boolean; githubProbe?: boolea
           { key: 'oauth_key', source: 'oauth', label: 'OAuth', inject, oauth: { authorizeUrl: 'https://api.example.com/auth', tokenUrl: 'https://api.example.com/token', scopes: [] } },
           ...(opts.githubProbe ? [{ key: 'host_cli', source: 'gh-cli' as const, label: 'Host CLI', inject }] : []),
         ],
-        connections: [{ key: 'api', label: 'API', maxConnections: 2, inject: { header: inject.header, format: inject.format } }],
+        connections: [{
+          key: 'api', label: 'API', maxConnections: 2,
+          ...(opts.gitlabProbe ? { source: 'glab-cli' as const } : {}),
+          inject: { header: inject.header, format: inject.format },
+        }],
       },
     },
   };
@@ -75,6 +81,7 @@ function harness(route: Route, opts: { omitGuard?: boolean; githubProbe?: boolea
   const lock = vi.fn(async (_ghostId: string, task: () => unknown) => task());
   const showMessageBox = vi.fn(async () => ({ response: 0 }));
   const probeAvailability = vi.fn(async () => true);
+  const listLoggedInHosts = vi.fn(async () => ['gitlab.com']);
   const handler = loadCallback(route.setter, {
     findGhostForInstanceId: (targetId: string) => targetId === ghostId ? installed : null,
     handleGhostSecretsRequest, handleGhostOauthRequest, handleGhostConnectionsRequest,
@@ -90,7 +97,10 @@ function harness(route: Route, opts: { omitGuard?: boolean; githubProbe?: boolea
     getAuthState: () => ({ user: null }),
     resolveConnectionAudienceForGhost: () => null, isConnectionSecretReady: () => false,
     isCindyOfficialTrustInfo: () => true,
+    canUseGithubHostCredentials,
+    canUseGitlabHostCredentials,
     getSharedGhCliTokenSource: () => ({ probeAvailability }),
+    glabCliTokenSource: { listLoggedInHosts },
     GHOST_NETWORK_MAX_CONNECTIONS_PER_DECL: 2,
     dialog: { showMessageBox }, t: (key: string) => key,
     log: { warn: vi.fn() },
@@ -103,7 +113,7 @@ function harness(route: Route, opts: { omitGuard?: boolean; githubProbe?: boolea
     installed = { ...installed, approval: state === 'invalid'
       ? { state: 'invalid' } : { state: 'approved', revision: 'replacement-receipt' } };
   };
-  return { ghostId, request, change, isCurrent, data, store, remove, emit, notice, broadcast, lock, showMessageBox, probeAvailability };
+  return { ghostId, request, change, isCurrent, data, store, remove, emit, notice, broadcast, lock, showMessageBox, probeAvailability, listLoggedInHosts };
 }
 
 describe('Credential protocol wiring through actual index callbacks', () => {
@@ -184,7 +194,7 @@ describe('Credential protocol wiring through actual index callbacks', () => {
   });
 
   it('forwards the original guard after the Secrets callback awaits its host credential probe', async () => {
-    const target = harness(routes[0], { githubProbe: true });
+    const target = harness({ ...routes[0], method: 'GET', pathname: '/secrets' }, { githubProbe: true });
     const probe = deferred<boolean>();
     target.probeAvailability.mockReturnValueOnce(probe.promise);
     const readBodyText = vi.fn(async () => routes[0].body);
@@ -196,6 +206,19 @@ describe('Credential protocol wiring through actual index callbacks', () => {
     expect(target.store).not.toHaveBeenCalled();
     expect(target.emit).not.toHaveBeenCalled();
     expect(target.notice).not.toHaveBeenCalled();
+  });
+
+  it('forwards the original guard after the Connections callback awaits its glab host probe', async () => {
+    const target = harness({ ...routes[2], method: 'GET', pathname: '/connections' }, { gitlabProbe: true });
+    const probe = deferred<string[]>();
+    target.listLoggedInHosts.mockReturnValueOnce(probe.promise);
+    const readBodyText = vi.fn(async () => '');
+    const pending = target.request(readBodyText);
+    target.change('replacement');
+    probe.resolve(['gitlab.com']);
+    expect(await pending).toEqual({ status: 403 });
+    expect(readBodyText).not.toHaveBeenCalled();
+    expect(target.store).not.toHaveBeenCalled();
   });
 });
 

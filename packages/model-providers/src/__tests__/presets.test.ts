@@ -864,16 +864,19 @@ describe('BUNDLED_CATALOG 首批预设自检', () => {
     expect(sanitizePresets(presets)).toHaveLength(presets.length);
   });
 
-  it('内置预设仅允许 https；明确无鉴权且可编辑的回环代理可使用 http', () => {
+  it('内置预设仅允许 https；明确无鉴权或 Magpie 官方可编辑回环代理可使用 http', () => {
     for (const p of BUNDLED_CATALOG.presets ?? []) {
       for (const rt of Object.values(p.runtimes)) {
         const url = new URL(rt.baseUrl);
-        const secureLocal =
-          p.authMethod === 'none'
-          && rt.baseUrlEditable === true
+        const isLoopbackHttp =
+          rt.baseUrlEditable === true
           && url.protocol === 'http:'
           && (url.hostname === '127.0.0.1' || url.hostname === 'localhost');
-        expect(url.protocol === 'https:' || secureLocal, `${p.id}: ${rt.baseUrl}`).toBe(true);
+        const noAuthLocal = p.authMethod === 'none' && isLoopbackHttp;
+        // Magpie deliberately uses API-key auth on its documented local gateway so
+        // Usage can attribute calls to Cindy. Remote connections require a real key.
+        const magpieLocal = p.id === 'magpie' && p.authMethod !== 'none' && isLoopbackHttp;
+        expect(url.protocol === 'https:' || noAuthLocal || magpieLocal, `${p.id}: ${rt.baseUrl}`).toBe(true);
       }
     }
   });
@@ -994,7 +997,7 @@ describe('官方渠道预设契约', () => {
       codex: {
         baseUrl: 'https://api.longcat.chat/openai/v1',
         modelsUrl: 'https://api.longcat.chat/openai/v1/models',
-        models: [{ id: 'LongCat-2.0', name: 'LongCat 2.0', contextWindow: 1_000_000, api: 'openai-completions', route: { baseUrl: 'https://api.longcat.chat/openai/v1', wireProtocol: 'openai-chat' } }],
+        models: [{ id: 'LongCat-2.0', name: 'LongCat 2.0', contextWindow: 1_000_000, api: 'openai-responses', route: { baseUrl: 'https://api.longcat.chat/openai/v1', wireProtocol: 'openai-responses' } }],
       },
       pi: {
         baseUrl: 'https://api.longcat.chat/openai/v1',
@@ -1180,15 +1183,15 @@ describe('官方渠道预设契约', () => {
   });
 
   it.each(['zhipu-coding-plan-cn', 'zai-coding-plan-global'])(
-    '%s 只推荐官方支持的 GLM-5.3 / GLM-5.3-Flash（5.2、5.1 已路由到 5.3）',
+    '%s 的 Coding Plan 按引擎推荐 GLM-5.4 和已有的 5.3 系列',
     (id) => {
       const recommended = (agent: 'claude-code' | 'codex' | 'pi') =>
         preset(id)?.runtimes[agent]?.models
           .filter((model) => model.defaultEnabled !== false)
           .map((model) => model.id);
-      expect(recommended('claude-code')).toEqual(['glm-5.3[1m]', 'glm-5.3-flash[1m]']);
-      expect(recommended('codex')).toEqual(['glm-5.3', 'glm-5.3-flash']);
-      expect(recommended('pi')).toEqual(['glm-5.3', 'glm-5.3-flash']);
+      expect(recommended('claude-code')).toEqual(['glm-5.4[1m]', 'glm-5.3[1m]', 'glm-5.3-flash[1m]']);
+      expect(recommended('codex')).toEqual(['glm-5.4', 'glm-5.3', 'glm-5.3-flash']);
+      expect(recommended('pi')).toEqual(['glm-5.4', 'glm-5.3', 'glm-5.3-flash']);
     },
   );
 
@@ -1282,7 +1285,20 @@ describe('官方渠道预设契约', () => {
       modelsUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/models',
     }));
     expect(gemini?.runtimes.codex?.models.map((model) => model.id))
-      .toContain('gemini-3.6-flash');
+      .toEqual(expect.arrayContaining([
+        'gemini-4-neon',
+        'gemini-4-carbon',
+        'gemini-4-argon',
+        'gemini-4-hydrogen',
+        'gemini-3.8-flash',
+        'gemini-3.6-flash',
+      ]));
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      const models = gemini?.runtimes[agent]?.models;
+      expect(models?.find(model => model.id === 'gemini-3.5-flash')?.defaultEnabled).toBe(false);
+      expect(models?.filter(model => model.defaultEnabled !== false).map(model => model.id))
+        .toContain('gemini-3.6-flash');
+    }
     expect(gemini?.runtimes.pi).toEqual(expect.objectContaining({
       baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
       wireProtocol: 'openai-chat',

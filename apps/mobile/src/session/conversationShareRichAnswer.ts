@@ -20,6 +20,7 @@ import {
 } from "@cindy/maker-shared/rich-answer";
 import { redactSensitiveText } from "@cindy/maker-shared/error-redaction";
 import type {
+  ConversationShareImage,
   ConversationShareMessage,
   ConversationShareWebViewColors,
 } from "./conversationShareWebViewHtml";
@@ -32,6 +33,7 @@ import { typeScale, spacing } from "@/theme/tokens";
 import { i18n } from "@/i18n";
 
 export interface ShareVector {
+  overlay?: boolean;
   x: number;
   y: number;
   width: number;
@@ -136,6 +138,81 @@ export function conversationShareReadableBody(
     .join("\n\n");
 }
 
+/** Same visible tree as export, so collapsed details and inactive tabs do no IO. */
+export function conversationShareVideoSources(
+  message: ConversationShareMessage,
+  source: string,
+): string[] {
+  const sources: string[] = [];
+  if (message.kind !== "assistant") return sources;
+  for (const part of splitRichAnswer(source)) {
+    if (part.kind !== "rich") continue;
+    const { doc, children } = shareRichDocument(
+      part.source,
+      message.richValues?.[part.key],
+    );
+    const visit = (id: string) => {
+      const node = doc.nodes.get(id);
+      if (!node) return;
+      if (node.kind === "video") sources.push(richString(node, "src"));
+      children(node).forEach(visit);
+    };
+    doc.roots.forEach(visit);
+  }
+  return sources;
+}
+
+function layoutShareVideo(
+  image: ConversationShareImage | undefined,
+  colors: ConversationShareWebViewColors,
+  x: number,
+  y: number,
+  width: number,
+): ShareRichLayout {
+  const ratio = image ? image.width / image.height : 16 / 9;
+  const height = Math.min(width / ratio, (width * 4) / 3);
+  const frameWidth = Math.min(width, height * ratio);
+  const size = Math.min(56, frameWidth, height);
+  return {
+    height,
+    textBlocks: [],
+    images: image ? [{ uri: image.uri, x, y, width: frameWidth, height }] : [],
+    rectangles: image
+      ? []
+      : [{ x, y, width: frameWidth, height, fill: colors.surfaceChip, rx: 12 }],
+    vectors: [
+      {
+        overlay: true,
+        x: x + (frameWidth - size) / 2,
+        y: y + (height - size) / 2,
+        width: size,
+        height: size,
+        color: colors.textPrimary,
+        vector: {
+          viewBox: "0 0 56 56",
+          shapes: [
+            // Media-overlay contrast matches the live video cover in either theme.
+            {
+              type: "circle",
+              props: {
+                cx: 28,
+                cy: 28,
+                r: 28,
+                fill: "#000000",
+                fillOpacity: 0.55,
+              },
+            },
+            {
+              type: "path",
+              props: { d: "M23 18 L38 28 L23 38 Z", fill: "#ffffff" },
+            },
+          ],
+        },
+      },
+    ],
+  };
+}
+
 function sharePalette(colors?: ConversationShareWebViewColors): RichPalette {
   return {
     primary: colors?.textPrimary ?? "currentColor",
@@ -157,6 +234,7 @@ export function layoutConversationShareRichAnswer(
   y: number,
   width: number,
   markdown: ShareMarkdownLayout,
+  images?: ConversationShareMessage["images"],
 ): ShareRichLayout {
   const { doc, values, children } = shareRichDocument(source, edited);
   const palette = sharePalette(colors);
@@ -502,7 +580,17 @@ export function layoutConversationShareRichAnswer(
         `${label}  ${richOptions(node).find((option) => option.value === current)?.label ?? current ?? ""}`,
       );
     else if (node.kind === "input") prose(`${label}\n${current ?? ""}`);
-    else if (node.kind === "video" || node.kind === "audio")
+    else if (node.kind === "video")
+      height = add(
+        layoutShareVideo(
+          images?.get(richString(node, "src")),
+          colors,
+          innerX,
+          innerY,
+          innerWidth,
+        ),
+      );
+    else if (node.kind === "audio")
       prose(
         richString(node, "alt", i18n.t("message.renderer.imageFallbackTitle")),
       );
@@ -606,6 +694,7 @@ export function conversationShareRichHtml(
   width: number,
   markdown: (source: string) => string,
   layoutMarkdown: ShareMarkdownLayout,
+  images?: ConversationShareMessage["images"],
 ): string {
   const { doc, values, children } = shareRichDocument(source, edited);
   const palette = sharePalette(colors);
@@ -739,7 +828,18 @@ export function conversationShareRichHtml(
       content = escape(
         `${label}  ${richOptions(node).find((option) => option.value === current)?.label ?? current ?? ""}`,
       );
-    else if (node.kind === "video" || node.kind === "audio")
+    else if (node.kind === "video") {
+      const layout = layoutShareVideo(
+        images?.get(richString(node, "src")),
+        colors,
+        0,
+        0,
+        available,
+      );
+      // Keep the frame as an HTML image so the existing decode barrier waits for
+      // it before WKWebView capture. The SVG contains only the play overlay.
+      content = `<div style="position:relative;width:100%">${layout.images.map((image) => `<img src="${escape(image.uri)}" alt="${escape(richString(node, "alt"))}" style="position:absolute;left:0;top:0;width:${(image.width / available) * 100}%;height:100%;object-fit:contain">`).join("")}<div style="position:relative">${shareRichLayoutMarkup({ ...layout, images: [] }, available)}</div></div>`;
+    } else if (node.kind === "audio")
       content = escape(richString(node, "alt", node.kind));
     else {
       const md = richMarkdown(node);

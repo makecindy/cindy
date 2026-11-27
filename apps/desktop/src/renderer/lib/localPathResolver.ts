@@ -21,7 +21,9 @@
  *     cwd's separator style.
  */
 
-import { stripTrailingPathSeparators } from '../../shared/pathText';
+import { stripTrailingPathSeparators, stripWindowsDriveUriSlash } from '../../shared/pathText';
+import { isWindowsPathLike } from '../../shared/workingDir';
+import { isSshRewritableMediaUrl, type RemoteMediaOrigin } from '../../shared/remoteMediaUrl';
 
 /** Image extension whitelist. Case-insensitive. Allows `?v=2`-style suffix. */
 const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|svg|bmp|ico)(\?.*)?$/i;
@@ -232,10 +234,54 @@ export function resolveKnownLocalFileHref(
 }
 
 /**
+ * The filesystem path a `file://` URL names, as literal path text.
+ *
+ *   - `file:///abs`, `file://localhost/abs` → `/abs`; `/C:/x` → `C:/x`
+ *   - `file://C:/x` (common malformed drive spelling)  → `C:/x`
+ *   - `file://host/share/x` → `\\host\share\x` — the host names another
+ *     machine (RFC 8089 UNC form). Never a path relative to the task folder:
+ *     joining `host/share/x` onto it and suffix-searching the workspace opens
+ *     an unrelated local file.
+ *   - host `.`, `..` or `?` (also percent-encoded) → the decoded text after
+ *     `file://`, as before UNC support: `file://./docs/a.md` is a misspelled
+ *     relative link, and `\\.\` / `\\?\` would name the Windows device
+ *     namespace, not a share.
+ *
+ * The URL path is percent-decoded once; filenames with a literal `%`
+ * ("100%完成.md") form invalid escapes, so decoding falls back to the raw
+ * text instead of throwing — remote sessions call this synchronously during
+ * render and a URIError took down the whole route.
+ */
+function fileUrlToPath(href: string): string {
+  const rest = href.slice('file://'.length);
+  // URL parsers treat `\` like `/` in file URLs, so either ends the authority.
+  const authorityEnd = rest.search(/[\\/]/);
+  const host = authorityEnd >= 0 ? rest.slice(0, authorityEnd) : rest;
+  // Decode the host on its own so an escaped separator cannot move the share
+  // boundary (`file://a%2Fb/share` names host `a%2Fb`, not host `a`).
+  const decodedHost = safeDecodeURIComponent(host);
+  if (!host || /^(?:\.\.?|\?)$/.test(decodedHost)) {
+    return stripWindowsDriveUriSlash(safeDecodeURIComponent(rest));
+  }
+  if (/^[A-Za-z]:$/.test(host)) return safeDecodeURIComponent(rest);
+  if (host.toLowerCase() === 'localhost') {
+    // localhost names this machine, never a share: `file://localhost//nas/x`
+    // is the local `/nas/x`, not `//nas/x`.
+    const localPath = safeDecodeURIComponent(rest.slice(host.length) || '/').replace(/^[\\/]+/, '/');
+    return stripWindowsDriveUriSlash(localPath);
+  }
+  const uncHost = /[\\/]/.test(decodedHost) ? host : decodedHost;
+  const sharePath = safeDecodeURIComponent(rest.slice(host.length)).replace(/\//g, '\\');
+  return `\\\\${uncHost}${sharePath}`;
+}
+
+/**
  * Resolve a markdown href / @-chip ref to an absolute filesystem path.
  *
  * Behavior:
- *   - `file://...`                    → decode + strip leading slash on Win
+ *   - `file:///...`, `file://localhost/...` → decode + strip leading slash on Win
+ *   - `file://host/share/...`         → UNC `\\host\share\...` (see fileUrlToPath)
+ *   - `/C:/...` + Windows cwd         → strip the extra leading slash
  *   - POSIX absolute (`^/`)           → return as-is
  *   - Windows absolute (`^[A-Za-z]:`) → return as-is
  *   - relative                        → joinPath(cwd, href)
@@ -250,16 +296,13 @@ export function resolveKnownLocalFileHref(
  */
 export function resolveLocalPath(href: string, cwd: string): string {
   if (href.startsWith('file://')) {
-    // safeDecode: filenames with a literal `%` ("100%完成.md") form invalid
-    // escape sequences — a bare decodeURIComponent throws URIError and, since
-    // remote sessions call this synchronously during render, took down the
-    // whole route with react-router's error page. Fall back to the raw path.
-    let p = safeDecodeURIComponent(href.slice(7));
-    // Windows file URL: 'file:///C:/x.png' → after slice(7): '/C:/x.png'
-    // → strip leading '/' → 'C:/x.png'
-    if (/^\/[A-Za-z]:[\\/]/.test(p)) p = p.slice(1);
-    return p;
+    const localPath = fileUrlToPath(href);
+    // Windows accepts slash-form UNC, but local media protocols reject the
+    // canonical backslash form. Preserve that refusal before an automatic load.
+    return /^(?:[A-Za-z]:[\\/]|[\\/]{2})/.test(cwd) && /^[\\/]{2}/.test(localPath)
+      ? localPath.replace(/\//g, '\\') : localPath;
   }
+  href = normalizeWindowsDriveHref(href, cwd);
   if (href.startsWith('/')) return href;
   if (WIN_ABS_RE.test(href)) return href;
   // UNC share (`\\server\share\...`) is already absolute on Windows — joining
@@ -294,6 +337,8 @@ export function resolveLocalPath(href: string, cwd: string): string {
  */
 export function resolveToolFilePath(rawPath: string, workingDir: string): string {
   if (!rawPath || !workingDir) return rawPath;
+  // Tool paths are literal runtime results, not model-authored Markdown hrefs.
+  if (rawPath.startsWith('/')) return rawPath;
   return resolveLocalPath(rawPath, workingDir);
 }
 
@@ -323,8 +368,18 @@ export type SmartResolveResult =
   | { status: 'multiple'; candidates: string[] }
   | { status: 'none'; fallbackAbsPath: string };
 
+/** Model-authored /C:/ links name a drive only for a Windows file owner.
+ * Use the task's cwd, never the viewing device's OS: /C: is legal on POSIX. */
+function normalizeWindowsDriveHref(href: string, workingDir: string): string {
+  if (!isWindowsPathLike(workingDir)) return href;
+  // Directory classification strips /C:/ to /C:. Keep the drive-root slash:
+  // C: alone names the drive's current directory, not its root. The shared
+  // recognizer also maps bare /C: to C:/ for the same reason.
+  return stripWindowsDriveUriSlash(href);
+}
+
 function toMainLookupHref(href: string, workingDir: string): string {
-  if (!href.startsWith('file://')) return href;
+  if (!href.startsWith('file://')) return normalizeWindowsDriveHref(href, workingDir);
   // File URL conversion yields literal text; main still decodes its href input.
   return resolveLocalPath(href, workingDir).replace(/%/g, '%25');
 }
@@ -378,6 +433,14 @@ export async function resolveLocalPathSmart(
 const SMART_RESOLVE_CACHE_CAP = 500;
 const smartResolveCache = new Map<string, SmartResolveResult>();
 const smartResolveInflight = new Map<string, Promise<SmartResolveResult>>();
+// When each cached entry was last answered, and re-checks in flight; see
+// `revalidateNegativeLocalPathSmart`.
+const smartResolveCheckedAt = new Map<string, number>();
+const smartRevalidateInflight = new Map<string, Promise<SmartResolveResult>>();
+// When an in-flight lookup was sent to the main process (absent while queued).
+const smartLookupSentAt = new Map<string, number>();
+/** A negative answer younger than this is not re-checked (remount bursts reuse it). */
+const NEGATIVE_RECHECK_MIN_MS = 2_000;
 
 function smartResolveCacheKey(workingDir: string, href: string): string {
   return `${workingDir}::${href}`;
@@ -407,7 +470,29 @@ interface PendingBatchEntry {
 }
 // workingDir → (href → waiters). Swapped for a fresh Map on each flush.
 let pendingBatch = new Map<string, Map<string, PendingBatchEntry>>();
+// Same shape for re-checks of cached negative answers; flushed in the same
+// microtask as one `revalidateNegative` IPC per workingDir.
+let pendingRevalidateBatch = new Map<string, Map<string, PendingBatchEntry>>();
 let flushScheduled = false;
+
+function enqueueBatch(
+  batches: Map<string, Map<string, PendingBatchEntry>>,
+  workingDir: string,
+  href: string,
+  resolve: (result: SmartResolveResult) => void,
+): void {
+  let hrefMap = batches.get(workingDir);
+  if (!hrefMap) {
+    hrefMap = new Map();
+    batches.set(workingDir, hrefMap);
+  }
+  let entry = hrefMap.get(href);
+  if (!entry) {
+    entry = { resolvers: [] };
+    hrefMap.set(href, entry);
+  }
+  entry.resolvers.push(resolve);
+}
 
 /** Convert one main-process batch entry into a SmartResolveResult. */
 function smartResultFromBatch(
@@ -426,6 +511,19 @@ function smartResultFromBatch(
   return { status: 'none', fallbackAbsPath: resolveLocalPath(href, workingDir) };
 }
 
+function storeSmartResult(key: string, result: SmartResolveResult): void {
+  // Capacity eviction: drop oldest insertion (Map preserves order).
+  if (!smartResolveCache.has(key) && smartResolveCache.size >= SMART_RESOLVE_CACHE_CAP) {
+    const oldest = smartResolveCache.keys().next().value;
+    if (oldest !== undefined) {
+      smartResolveCache.delete(oldest);
+      smartResolveCheckedAt.delete(oldest);
+    }
+  }
+  smartResolveCache.set(key, result);
+  smartResolveCheckedAt.set(key, Date.now());
+}
+
 /** Cache a resolved result, evict if over capacity, and wake every waiter. */
 function settleSmartResult(
   workingDir: string,
@@ -434,22 +532,46 @@ function settleSmartResult(
   result: SmartResolveResult,
 ): void {
   const key = smartResolveCacheKey(workingDir, href);
-  // Capacity eviction: drop oldest insertion (Map preserves order).
-  if (smartResolveCache.size >= SMART_RESOLVE_CACHE_CAP) {
-    const oldest = smartResolveCache.keys().next().value;
-    if (oldest !== undefined) smartResolveCache.delete(oldest);
-  }
-  smartResolveCache.set(key, result);
+  storeSmartResult(key, result);
   smartResolveInflight.delete(key);
+  smartRevalidateInflight.delete(key);
+  smartLookupSentAt.delete(key);
   const entry = hrefMap.get(href);
   if (entry) for (const resolve of entry.resolvers) resolve(result);
+}
+
+/**
+ * `file://nas/share/x` names a share on another machine. Rendering must not
+ * contact a host named in message content (on Windows a stat opens an SMB
+ * connection and offers NTLM credentials), so render-time lookups, remote
+ * pre-checks and media loads skip it; only an explicit open asks for it.
+ */
+export function isFileUrlHostHref(href: string, workingDir = ''): boolean {
+  if (!href.startsWith('file://') || !/^[\\/]{2}/.test(fileUrlToPath(href))) return false;
+  // file:////host/share and mixed separators also name a share on Windows.
+  // Keep POSIX // paths local when the file owner has a POSIX workdir.
+  return /^file:\/\/[^\\/]/.test(href) || /^(?:[A-Za-z]:[\\/]|[\\/]{2})/.test(workingDir);
 }
 
 async function runBatchForDir(
   workingDir: string,
   hrefMap: Map<string, PendingBatchEntry>,
+  revalidateNegative = false,
 ): Promise<void> {
-  const hrefs = [...hrefMap.keys()];
+  const hrefs: string[] = [];
+  for (const href of hrefMap.keys()) {
+    if (!isFileUrlHostHref(href, workingDir)) {
+      hrefs.push(href);
+      continue;
+    }
+    settleSmartResult(workingDir, href, hrefMap, {
+      status: 'none',
+      fallbackAbsPath: resolveLocalPath(href, workingDir),
+    });
+  }
+  if (hrefs.length === 0) return;
+  const sentAt = Date.now();
+  for (const href of hrefs) smartLookupSentAt.set(smartResolveCacheKey(workingDir, href), sentAt);
   const api = (typeof window !== 'undefined' ? window.electronAPI : undefined) as
     | { resolvePathBatch?: typeof window.electronAPI.resolvePathBatch }
     | undefined;
@@ -472,18 +594,28 @@ async function runBatchForDir(
   const lookups = [...new Set(lookupOf.values())];
 
   try {
-    const raw = await api.resolvePathBatch({ hrefs: lookups, workingDir });
+    const raw = await api.resolvePathBatch({
+      hrefs: lookups,
+      workingDir,
+      ...(revalidateNegative ? { revalidateNegative: true } : {}),
+    });
     for (const href of hrefs) {
       const result = smartResultFromBatch(href, workingDir, raw[lookupOf.get(href)!]);
       settleSmartResult(workingDir, href, hrefMap, result);
     }
   } catch {
-    // IPC failure shouldn't break clicks — every href falls back to legacy.
+    // IPC failure shouldn't break clicks — every href falls back to legacy. A
+    // failed re-check keeps the answer it was re-checking.
     for (const href of hrefs) {
-      settleSmartResult(workingDir, href, hrefMap, {
-        status: 'none',
-        fallbackAbsPath: resolveLocalPath(href, workingDir),
-      });
+      const kept = revalidateNegative
+        ? smartResolveCache.get(smartResolveCacheKey(workingDir, href))
+        : undefined;
+      settleSmartResult(
+        workingDir,
+        href,
+        hrefMap,
+        kept ?? { status: 'none', fallbackAbsPath: resolveLocalPath(href, workingDir) },
+      );
     }
   }
 }
@@ -491,9 +623,14 @@ async function runBatchForDir(
 function flushSmartResolveBatch(): void {
   flushScheduled = false;
   const batches = pendingBatch;
+  const rechecks = pendingRevalidateBatch;
   pendingBatch = new Map();
+  pendingRevalidateBatch = new Map();
   for (const [workingDir, hrefMap] of batches) {
     void runBatchForDir(workingDir, hrefMap);
+  }
+  for (const [workingDir, hrefMap] of rechecks) {
+    void runBatchForDir(workingDir, hrefMap, true);
   }
 }
 
@@ -517,23 +654,85 @@ export async function resolveLocalPathSmartCached(
   const key = smartResolveCacheKey(workingDir, href);
   const cached = smartResolveCache.get(key);
   if (cached) return cached;
-  const inflight = smartResolveInflight.get(key);
+  // A negative re-check still in flight answers this lookup too: the cache may have
+  // dropped the entry meanwhile, and a second plain lookup would race it.
+  const inflight = smartResolveInflight.get(key) ?? smartRevalidateInflight.get(key);
   if (inflight) return inflight;
 
   const promise = new Promise<SmartResolveResult>((resolve) => {
-    let hrefMap = pendingBatch.get(workingDir);
-    if (!hrefMap) {
-      hrefMap = new Map();
-      pendingBatch.set(workingDir, hrefMap);
-    }
-    let entry = hrefMap.get(href);
-    if (!entry) {
-      entry = { resolvers: [] };
-      hrefMap.set(href, entry);
-    }
-    entry.resolvers.push(resolve);
+    enqueueBatch(pendingBatch, workingDir, href, resolve);
   });
   smartResolveInflight.set(key, promise);
+  scheduleSmartResolveFlush();
+  return promise;
+}
+
+/**
+ * Re-check a cached `none` / `multiple` answer. A reply can cite an output file
+ * before it is written, so negative answers are not final for embedded media:
+ * callers re-check at their own boundaries (new mount, stream end, window
+ * focus). The main process skips its TTL cache for these hrefs too, otherwise
+ * it would hand back the same stale answer for 30s. Re-checks registered within
+ * one microtask share one IPC (and one workspace walk) per workingDir, like the
+ * initial batch.
+ *
+ * Without `boundaryAt` (a new mount) a negative answer from the last
+ * `NEGATIVE_RECHECK_MIN_MS` is reused, so a burst of remounts walks once. With
+ * `boundaryAt` (stream end, window focus — the moment files may have appeared)
+ * the answer is always re-checked, and a lookup already sent before that moment
+ * is followed by one more pass if it settles negative: its walk may have passed
+ * the output directory before the file was written. A lookup still queued, or
+ * sent after the boundary, already covers it.
+ *
+ * Returns null when there is nothing to re-check: no cached answer and nothing
+ * in flight, a unique match, or a recent negative answer on a plain mount.
+ */
+export function revalidateNegativeLocalPathSmart(
+  href: string,
+  workingDir: string,
+  boundaryAt?: number,
+): Promise<SmartResolveResult> | null {
+  const key = smartResolveCacheKey(workingDir, href);
+  if (boundaryAt !== undefined) {
+    const inflight = smartRevalidateInflight.get(key) ?? smartResolveInflight.get(key);
+    if (inflight) {
+      const sentAt = smartLookupSentAt.get(key);
+      // Same millisecond: the order is unknown, so treat it as sent before the boundary.
+      if (sentAt === undefined || sentAt > boundaryAt) return inflight;
+      return inflight.then((result) =>
+        result.status === 'unique' ? result : (queueNegativeRevalidation(key, href, workingDir) ?? result),
+      );
+    }
+  }
+  const cached = smartResolveCache.get(key);
+  if (!cached || cached.status === 'unique') return null;
+  const inflight = smartRevalidateInflight.get(key);
+  if (inflight) return inflight;
+  if (
+    boundaryAt === undefined &&
+    Date.now() - (smartResolveCheckedAt.get(key) ?? 0) < NEGATIVE_RECHECK_MIN_MS
+  ) {
+    return null;
+  }
+  return queueNegativeRevalidation(key, href, workingDir);
+}
+
+function queueNegativeRevalidation(
+  key: string,
+  href: string,
+  workingDir: string,
+): Promise<SmartResolveResult> | null {
+  const queued = smartRevalidateInflight.get(key);
+  if (queued) return queued;
+  const api = (typeof window !== 'undefined' ? window.electronAPI : undefined) as
+    | { resolvePathBatch?: typeof window.electronAPI.resolvePathBatch }
+    | undefined;
+  if (!api?.resolvePathBatch) return null;
+
+  const promise = new Promise<SmartResolveResult>((resolve) => {
+    enqueueBatch(pendingRevalidateBatch, workingDir, href, resolve);
+  });
+  smartRevalidateInflight.set(key, promise);
   scheduleSmartResolveFlush();
   return promise;
 }
@@ -542,7 +741,11 @@ export async function resolveLocalPathSmartCached(
 export function _clearSmartResolveCache(): void {
   smartResolveCache.clear();
   smartResolveInflight.clear();
+  smartResolveCheckedAt.clear();
+  smartRevalidateInflight.clear();
+  smartLookupSentAt.clear();
   pendingBatch = new Map();
+  pendingRevalidateBatch = new Map();
   flushScheduled = false;
 }
 
@@ -601,7 +804,7 @@ export function normalizeXdtFileUrlForRenderer(url: string): string {
   const rawPath = url.slice('xdt-file://'.length, queryOrHash >= 0 ? queryOrHash : undefined);
   let absPath = safeDecodeURIComponent(rawPath);
   // URL syntax adds a leading slash before a Windows drive letter.
-  if (/^\/[A-Za-z]:[\\/]/.test(absPath)) absPath = absPath.slice(1);
+  absPath = stripWindowsDriveUriSlash(absPath);
   if (!(absPath.startsWith('/') || WIN_ABS_RE.test(absPath))) return url;
 
   // Preserve the optional cache-busting revision used by renderer-created
@@ -628,14 +831,65 @@ export function normalizeXdtFileUrlForRenderer(url: string): string {
  * xdt-file query strings and remote URLs, whose existing escapes belong to
  * their own protocol rather than to a local filesystem path.
  */
+/**
+ * Collapse `.` and `..` segments in a resolved absolute path while keeping
+ * separator style and UNC paths untouched. Ensures `docs/guide.md` referencing
+ * `../assets/pic.png` resolves cleanly inside SSH workdir checks.
+ */
+export function normalizeResolvedPathSegments(absPath: string): string {
+  if (!/(?:^|[\\/])\.\.?(?:[\\/]|$)/.test(absPath)) return absPath;
+  if (absPath.startsWith('\\\\')) return absPath;
+  const winDrive = /^([A-Za-z]:)([\\/])/.exec(absPath);
+  const sep = winDrive ? winDrive[2] : '/';
+  const prefix = winDrive ? `${winDrive[1]}${sep}` : absPath.startsWith('/') ? '/' : '';
+  if (!prefix) return absPath;
+  const rest = absPath.slice(prefix.length);
+  const parts = rest.split(/[\\/]/);
+  const stack: string[] = [];
+  for (const part of parts) {
+    if (!part || part === '.') continue;
+    if (part === '..') {
+      stack.pop();
+      continue;
+    }
+    stack.push(part);
+  }
+  return `${prefix}${stack.join(sep)}`;
+}
+
 export function normalizeMarkdownImageSrc(
   src: string | undefined,
   workingDir: string,
   allowPrivilegedLinks: boolean,
+  // null = session ownership is pending; undefined = confirmed local/non-session.
+  origin?: RemoteMediaOrigin | null,
 ): string | undefined {
   if (!src) return src;
   if (!allowPrivilegedLinks) {
     return /^https?:\/\//i.test(src) ? src : undefined;
+  }
+  // Direct audio uses its own local-file reader, but has the same source
+  // ownership boundary as bridged images. Preserve its encoded query verbatim.
+  if (src.startsWith('xdt-audio://')) {
+    if (origin === null) return undefined;
+    if (origin?.kind === 'ssh' && !isSshRewritableMediaUrl(src, origin.workdir)) return undefined;
+    return src;
+  }
+  // Both legacy path-shaped schemes use the local-file bridge. Their raw
+  // Markdown destinations must retain the same source-ownership checks.
+  const hostlessImage = src.startsWith('xdt-image:///');
+  if (hostlessImage || src.startsWith('xdt-file:///')) {
+    // A missing remote identity is not proof that this path belongs locally.
+    if (origin === null) return undefined;
+    const normalized = normalizeXdtFileUrlForRenderer(src.replace(/^xdt-image:/, 'xdt-file:'));
+    const localPath = new URL(normalized).searchParams.get('path') ?? '';
+    // Decode before checking: encoded slashes must not turn this compatibility
+    // bridge into a Windows SMB/WebDAV or device-namespace read.
+    if (hostlessImage && /^[\\/]{2}|^[\\/]\?\?[\\/]/.test(localPath)) return undefined;
+    // Neither compatibility bridge may grant SSH messages access to controller-local files
+    // when file-service refuses a path outside the remote task workdir.
+    if (origin?.kind === 'ssh' && !isSshRewritableMediaUrl(normalized, origin.workdir)) return undefined;
+    return normalized;
   }
   if (
     src.startsWith('data:') ||
@@ -648,14 +902,21 @@ export function normalizeMarkdownImageSrc(
   ) {
     return src;
   }
-  if (src.startsWith('xdt-file://')) return normalizeXdtFileUrlForRenderer(src);
-
-  let localPath = src;
-  if (localPath.startsWith('file://')) {
-    localPath = safeDecodeURIComponent(localPath.slice(7));
+  if (src.startsWith('xdt-file://')) {
+    const normalized = normalizeXdtFileUrlForRenderer(src);
+    if (origin?.kind === 'ssh' && !isSshRewritableMediaUrl(normalized, origin.workdir)) {
+      return undefined;
+    }
+    return normalized;
   }
-  // file:///C:/x.png -> /C:/x.png after stripping the scheme. Drop the
-  // URL-only leading slash before handing the native Windows path onward.
-  if (/^\/[A-Za-z]:[\\/]/.test(localPath)) localPath = localPath.slice(1);
-  return toLocalFileUrl(resolveLocalPath(localPath, workingDir));
+
+  // A file URL is decoded exactly once (file:///C:/x.png → C:/x.png,
+  // file://host/share/a.png → \\host\share\a.png). A raw /C:/x.png path drops
+  // its URL-only leading slash before the native Windows path goes onward.
+  const localPath = src.startsWith('file://') ? resolveLocalPath(src, workingDir) : stripWindowsDriveUriSlash(src);
+  const resolvedAbs = normalizeResolvedPathSegments(resolveLocalPath(localPath, workingDir));
+  if (origin?.kind === 'ssh' && !isSshRewritableMediaUrl(toLocalFileUrl(resolvedAbs), origin.workdir)) {
+    return undefined;
+  }
+  return toLocalFileUrl(resolvedAbs);
 }

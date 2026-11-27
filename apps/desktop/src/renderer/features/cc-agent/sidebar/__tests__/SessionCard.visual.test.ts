@@ -12,6 +12,7 @@ import {
   within,
 } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import userEvent from '@testing-library/user-event';
 import { cindyMakeState } from '@/lib/cindyMakeState';
 import en from '@/i18n/locales/en/common.json';
 import zhCN from '@/i18n/locales/zh-CN/common.json';
@@ -24,6 +25,7 @@ import {
   clearRemoteSessionActivity,
 } from '@/features/device-link/remoteSessionActivityStore';
 
+import { TASK_INFO_KEY } from '../../hooks/helpers/sidebarFilterCore';
 import { SessionCard } from '../SessionCard';
 import type { Session } from '@/lib/ccAgent.types';
 import { SessionItem } from '../SessionItem';
@@ -108,9 +110,11 @@ vi.mock('@/components/ui/dropdown-menu', () => ({
   DropdownMenuTrigger: ({ children }: { children: ReactNode }) => children,
   DropdownMenuContent: ({ children }: { children: ReactNode }) =>
     mocks.dropdownMenuOpen ? createElement('div', { role: 'menu' }, children) : null,
-  DropdownMenuItem: ({ children, disabled }: { children: ReactNode; disabled?: boolean }) =>
-    createElement('div', { role: 'menuitem', 'aria-disabled': disabled || undefined }, children),
+  DropdownMenuItem: ({ children, disabled, onSelect }: { children: ReactNode; disabled?: boolean; onSelect?: () => void }) =>
+    createElement('div', { role: 'menuitem', 'aria-disabled': disabled || undefined, onClick: disabled ? undefined : onSelect }, children),
   DropdownMenuSeparator: () => null,
+  DropdownMenuShortcut: ({ children }: { children: ReactNode }) =>
+    createElement('span', { 'aria-hidden': true }, children),
   DropdownMenuSub: ({ children }: { children: ReactNode }) => children,
   DropdownMenuSubContent: () => null,
   DropdownMenuSubTrigger: ({ children }: { children: ReactNode }) => children,
@@ -121,6 +125,16 @@ vi.mock('@/components/sidebar/WorktreeBadge', () => ({
     mocks.worktreeSessionIds.has(sessionId)
       ? createElement('span', { 'data-testid': 'worktree-badge' }, 'WT')
       : null,
+}));
+
+vi.mock('@/lib/worktreeRemovalWarning', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/worktreeRemovalWarning')>(),
+  prefetchDirtyWorktreeForRemoval: vi.fn(),
+}));
+
+vi.mock('@/features/device-link/useDeviceLinkDeviceList', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/features/device-link/useDeviceLinkDeviceList')>(),
+  useDeviceLinkDeviceList: () => [],
 }));
 
 vi.mock('@/contexts/WorktreeContext', () => {
@@ -145,6 +159,7 @@ vi.mock('@/lib/makerChatStore', () => ({
   makerChatStore: {
     ensureInitialMessages: mocks.ensureInitialMessages,
     subscribeAll: () => () => {},
+    hasPendingIssueConfirm: () => false,
     getRunningSnapshot: () =>
       new Map(
         [...mocks.pendingPluginSetupSessionIds].map((sessionId) => [
@@ -362,14 +377,38 @@ describe('SessionCard visual cases', () => {
     expect(screen.getByText('等待插件设置')).toBeTruthy();
   });
 
-  it.each(['list', 'text'] as const)('shows only leave sharing on a guest %s row', (variant) => {
+  // Regression: remote-supplier tasks have local messages, but agentDeviceId hid export.
+  // The existing shared-task menu cases cover guests, not owner tasks using a remote agent.
+  // Unit tier: render the production rows and inspect the menu opened by a context click.
+  // Standalone file: 5.28s on Windows; existing imports take 3.50s, test bodies 0.76s.
+  it.each(['list', 'text'] as const)('offers history export for a remote supplier in the %s row', async (variant) => {
+    const session = { ...sessionCardVisualCases[0].session, agentDeviceId: 'remote-device' };
+    const props = {
+      session, isActive: false, isRunning: false, hasAttentionNotification: false,
+      onClick: vi.fn(), onRename: vi.fn(), onAction: vi.fn(), onTogglePin: vi.fn(),
+    };
+    const view = render(variant === 'list'
+      ? createElement(SessionCard, { ...props, variant: 'list' })
+      : createElement(SessionItem, props));
+    await act(async () => {
+      fireEvent.contextMenu(view.container.querySelector<HTMLElement>('[data-sidebar-session-row="true"]')!);
+    });
+    expect(screen.getByRole('menuitem', { name: 'ccAgent.sidebar.sessionMenu.exportShare' })).toBeTruthy();
+  });
+
+  it.each(['list', 'text'] as const)('copies the guest task link from a %s row while keeping leave available', async (variant) => {
+    const user = userEvent.setup();
     const session = { ...sessionCardVisualCases[0].session, status: 'active' as const, deviceLinkDeviceId: sharedTaskHostPeer('share', 'host') };
     const onClick = vi.fn();
     const onAction = vi.fn();
     const props = { session, isActive: false, isRunning: false, hasAttentionNotification: false, navigationOnly: true, onClick, onRename: vi.fn(), onAction, onTogglePin: vi.fn() };
     const view = render(variant === 'list' ? createElement(SessionCard, { ...props, variant: 'list' }) : createElement(SessionItem, props));
     fireEvent.contextMenu(view.container.querySelector<HTMLElement>('[data-sidebar-navigation-row="true"]')!);
-    expect(screen.getAllByRole('menuitem').map(item => item.textContent)).toEqual(['sharedTask.leaveShort']);
+    expect(screen.getAllByRole('menuitem').map(item => item.textContent)).toEqual(['复制任务链接', 'sharedTask.leaveShort']);
+    await user.click(screen.getByRole('menuitem', { name: '复制任务链接' }));
+    const url = new URL(await navigator.clipboard.readText());
+    expect(url.protocol + '//' + url.host + url.pathname).toBe(`cindy://session/${session.id}`);
+    expect(url.searchParams.get('device')).toBe(session.deviceLinkDeviceId);
     expect(screen.queryByRole('group', { name: '标签' })).toBeNull();
     expect(onClick).not.toHaveBeenCalled();
     expect(onAction).not.toHaveBeenCalled();
@@ -620,7 +659,7 @@ describe('SessionCard visual cases', () => {
 
       const card = container.querySelector<HTMLElement>('[data-sidebar-session-row="true"]');
       const title = within(card!).getByText(visualCase.session.title, {
-        selector: variant === 'list' ? '.sidebar-title-marquee__ellipsis' : undefined,
+        selector: '.sidebar-title-marquee__ellipsis',
       });
       const actionButton = card?.querySelector<HTMLButtonElement>(
         'button[aria-label="ccAgent.sidebar.sessionMenu.moreActions"]',
@@ -683,16 +722,64 @@ describe('SessionCard visual cases', () => {
     },
   );
 
-  it('keeps single-line cards naturally shorter than long summary cards', () => {
-    renderCase('short-idle-cc');
-    const shortCard = screen
-      .getByTestId('visual-case')
-      .querySelector('[data-sidebar-session-row="true"]');
-    expect(shortCard?.className).not.toContain('h-full');
-    cleanup();
+  // 2026-11-08 用户定稿:置顶卡片统一高度(标题 1 行 + 正文固定 2 行位 + meta 行)。
+  // 旧版无正文时不渲染正文区、summary 正文放宽到 3 行,同列卡片高度不一、两列底边错开。
+  it('keeps pinned cards on one height budget whether the body is empty, short or a long summary', () => {
+    const shortCase = sessionCardVisualCases.find((item) => item.id === 'short-idle-cc')!;
+    const summaryCase = sessionCardVisualCases.find((item) => item.id === 'summary-long-body')!;
+    const cases = [
+      { caseId: 'short-idle-cc', overrides: { session: { ...shortCase.session, preview: null } } },
+      { caseId: 'short-idle-cc', overrides: {} },
+      { caseId: 'summary-long-body', overrides: {} },
+    ];
+    const budgets = cases.map(({ caseId, overrides }) => {
+      const view = renderCase(caseId, overrides);
+      const card = sessionRowEl();
+      expect(card.className).not.toContain('h-full');
+      const bodies = card.querySelectorAll('p');
+      expect(bodies).toHaveLength(1);
+      const budget = {
+        body: bodies[0].textContent,
+        bodyBox: `${bodies[0].className}|${bodies[0].getAttribute('style') ?? ''}`,
+      };
+      view.unmount();
+      return budget;
+    });
 
-    renderCase('summary-long-body');
-    expect(screen.getByText(/汇总玩家/)).toBeTruthy();
+    expect(budgets.map((item) => item.body)).toEqual([
+      '',
+      shortCase.session.preview,
+      summaryCase.session.summary,
+    ]);
+    expect(new Set(budgets.map((item) => item.bodyBox)).size).toBe(1);
+  });
+
+  // 2026-11-09 用户定:置顶卡片标题单行但不能只截断,悬停卡片时与列表行一样用跑马灯带过全名。
+  it('plays the shared title marquee when hovering a pinned card with an overflowing title', () => {
+    const widths = [
+      vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockImplementation(function (this: HTMLElement) {
+        return this.classList.contains('sidebar-title-marquee__track') ? 300 : 0;
+      }),
+      vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(function (this: HTMLElement) {
+        return this.classList.contains('sidebar-title-marquee') ? 100 : 0;
+      }),
+    ];
+    try {
+      renderCase('very-long-title');
+      const card = sessionRowEl();
+      const marquee = card.querySelector<HTMLElement>('.sidebar-title-marquee')!;
+      expect(marquee.title).toBe(sessionCardVisualCases.find((item) => item.id === 'very-long-title')!.session.title);
+      expect(marquee.dataset.titleOverflowing).toBeUndefined();
+
+      fireEvent.mouseEnter(card);
+      expect(marquee.dataset.titleOverflowing).toBe('true');
+      expect(marquee.style.getPropertyValue('--sidebar-title-marquee-shift')).toBe('-200px');
+
+      fireEvent.mouseLeave(card);
+      expect(marquee.dataset.titleOverflowing).toBeUndefined();
+    } finally {
+      widths.forEach((spy) => spy.mockRestore());
+    }
   });
 
   it('shows plugin setup as a needs-interaction preview', () => {
@@ -794,9 +881,7 @@ describe('SessionCard visual cases', () => {
 
     // card 变体(评审定稿):标题纯文字,自动化标志下沉到底部 meta 行。
     const { container: cardContainer } = render(createElement(SessionCard, commonProps));
-    const cardTitle = Array.from(cardContainer.querySelectorAll('div')).find((node) =>
-      node.className.includes('[-webkit-line-clamp:2]'),
-    );
+    const cardTitle = cardContainer.querySelector('.sidebar-title-marquee');
     expect(cardTitle?.textContent).toContain('自动化日报巡检');
     // 标题里不再有自动化图标……
     expect(cardTitle?.querySelector('[aria-label="查看自动化任务"]')).toBeNull();
@@ -886,9 +971,7 @@ describe('SessionCard visual cases', () => {
     );
 
     const card = container.querySelector<HTMLElement>('[data-sidebar-session-row="true"]')!;
-    const title = Array.from(card.querySelectorAll<HTMLElement>('div')).find((node) =>
-      node.className.includes('[-webkit-line-clamp:2]'),
-    )!;
+    const title = card.querySelector<HTMLElement>('.sidebar-title-marquee')!.parentElement!;
     expect(title.classList.contains('invisible')).toBe(false);
 
     fireEvent.doubleClick(card);
@@ -898,6 +981,8 @@ describe('SessionCard visual cases', () => {
     const titleSlot = title.parentElement!;
     expect(card.contains(title)).toBe(true);
     expect(title.classList.contains('invisible')).toBe(true);
+    // 编辑时不渲染跑马灯轨道:轨道自带 visibility:visible,会穿透 invisible 从透明输入框下透出旧标题。
+    expect(title.querySelector('.sidebar-title-marquee__track')).toBeNull();
     expect(titleSlot).toBe(overlay.parentElement);
     expect(titleSlot.classList.contains('relative')).toBe(true);
     expect(overlay.classList.contains('absolute')).toBe(true);
@@ -911,7 +996,9 @@ describe('SessionCard visual cases', () => {
 
   it('keeps archived sessions on the archive visual branch', () => {
     renderCase('archived');
-    expect(screen.getByText('已归档的历史分析任务')).toBeTruthy();
+    expect(
+      screen.getByText('已归档的历史分析任务', { selector: '.sidebar-title-marquee__ellipsis' }),
+    ).toBeTruthy();
   });
 
   it('matches text-mode action chrome in list mode while preserving card buttons', () => {
@@ -941,8 +1028,9 @@ describe('SessionCard visual cases', () => {
     });
     const listArchive = within(listContainer).getByRole('button', { name: '归档' });
     for (const action of [listMore, listArchive]) {
+      expect(action.className).toContain('cindy-button-frame');
       expect(action.className).toContain('size-5');
-      expect(action.className).toContain('rounded-md');
+      expect(action.className).toContain('rounded-full');
       expect(action.className).toContain('text-sidebar-action-icon');
       expect(action.className).not.toMatch(/(?:^|\s)bg-sidebar(?:\s|$)/);
       expect(action.className).not.toContain('size-6');
@@ -966,7 +1054,7 @@ describe('SessionCard visual cases', () => {
     expect(activeListMore.className).toContain('text-sidebar-item-active-foreground');
     expect(activeListMore.className).not.toContain('bg-sidebar-item-active');
     expect(activeListMore.className).toContain(
-      'hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]',
+      'hover:[--button-face-bg:color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]',
     );
     cleanup();
 
@@ -975,8 +1063,8 @@ describe('SessionCard visual cases', () => {
       name: moreActionsName,
     });
     expect(cardMore.className).toContain('size-6');
-    expect(cardMore.className).toContain('bg-[var(--cmd-palette-bg)]');
-    expect(cardMore.className).toContain('border-sidebar-border');
+    expect(cardMore.className).toContain('[--button-face-bg:var(--cmd-palette-bg)]');
+    expect(cardMore.className).toContain('[--button-face-border:hsl(var(--sidebar-border))]');
     expect(cardMore.className).not.toContain('size-5');
     expect(cardMore.querySelector('svg')?.getAttribute('width')).toBe('13');
   });
@@ -1032,6 +1120,26 @@ describe('SessionCard visual cases', () => {
       }
     },
   );
+
+  it('shows a single running indicator with Harness hidden in pinned cards and list rows', () => {
+    const previous = localStorage.getItem(TASK_INFO_KEY);
+    try {
+      localStorage.setItem(TASK_INFO_KEY, JSON.stringify({ version: 2, fields: [] }));
+      act(() => window.dispatchEvent(new StorageEvent('storage', { key: TASK_INFO_KEY })));
+      for (const variant of ['card', 'list']) {
+        for (const isRunning of [true, false]) {
+          const view = renderCase('running-loading', { variant, isRunning });
+          expect(view.container.querySelectorAll('[data-sidebar-right-status="running"]'))
+            .toHaveLength(isRunning ? 1 : 0);
+          view.unmount();
+        }
+      }
+    } finally {
+      if (previous === null) localStorage.removeItem(TASK_INFO_KEY);
+      else localStorage.setItem(TASK_INFO_KEY, previous);
+      act(() => window.dispatchEvent(new StorageEvent('storage', { key: TASK_INFO_KEY })));
+    }
+  });
 
   it('keeps running card mode on the stable preview while list mode can show live detail', () => {
     const visualCase = sessionCardVisualCases.find((item) => item.id === 'running-loading');
@@ -1093,9 +1201,7 @@ describe('SessionCard visual cases', () => {
                   node.className.includes('truncate') &&
                   node.textContent?.includes(visualCase.session.title),
               )
-            : Array.from(container.querySelectorAll('div')).find((node) =>
-                node.className.includes('[-webkit-line-clamp:2]'),
-              );
+            : container.querySelector('.sidebar-title-marquee__ellipsis');
         const preview = Array.from(container.querySelectorAll('p')).find((node) =>
           node.textContent?.includes('正在分析本周项目数据与异常波动。'),
         );
@@ -1330,8 +1436,9 @@ describe('SessionCard visual cases', () => {
       expect(actions.compareDocumentPosition(titleRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
       expect(actions.parentElement).toBe(titleRow.parentElement);
       cleanup();
+      // 无标签时同样让位:悬停跑马灯要在操作钮左侧带完全名(2026-11-09)。
       const { container: untagged } = renderVariant('card', { ...baseSession, tags: [] });
-      expect(untagged.querySelector('[class*="group-hover/card:pr-14"]')).toBeNull();
+      expect(untagged.querySelector('[class*="group-hover/card:pr-14"]')).not.toBeNull();
     });
 
     it('card: 归档确认胶囊按实际宽度让位(同文案同样式的隐形占位)', () => {
@@ -1360,5 +1467,127 @@ describe('SessionCard visual cases', () => {
       expect(titleRow.className).not.toMatch(/(?:^|\s)pr-14(?:\s|$)/);
       expect(titleRow.className).not.toContain('group-hover/card:pr-14');
     });
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：真实渲染 SessionItem / SessionCard（text / list / card 三种置顶形态），
+  //   验证收件箱模式下置顶项显示项目图标、隐藏项目名与自动化标识，且不显示稍后处理／完成／更多／归档按钮，
+  //   右键菜单仍可用且不含稍后处理；已归档项保留取消归档。
+  // - Bug／规则依据：docs/product-rules/task-inbox.md「收件箱项目图标」（2026-11-26 用户决定）。
+  // - 现有覆盖缺口：此前用例只测普通模式与 TaskInbox，未覆盖 inboxMode + hideInboxActions 的三形态。
+  // - 最小失败输入：带 workingDir、sourceLabel 和已绑定自动化的置顶任务在 inboxMode + hideInboxActions 下渲染。
+  // - tier：unit（jsdom 组件渲染，复用本文件现有测试环境，无网络或磁盘 I/O）。
+  describe('收件箱模式下的置顶项显示规则', () => {
+    let electronApiDescriptor: PropertyDescriptor | undefined;
+    beforeEach(() => {
+      electronApiDescriptor = Object.getOwnPropertyDescriptor(window, 'electronAPI');
+      Object.defineProperty(window, 'electronAPI', {
+        configurable: true,
+        value: {
+          localDb: {
+            projectAliases: {
+              snapshot: vi.fn().mockResolvedValue({
+                aliases: [],
+                icons: {},
+                platform: 'darwin',
+                settingsVersion: 3,
+              }),
+              onChanged: vi.fn(() => () => {}),
+            },
+          },
+        },
+      });
+    });
+    afterEach(() => {
+      if (electronApiDescriptor) {
+        Object.defineProperty(window, 'electronAPI', electronApiDescriptor);
+      } else {
+        Reflect.deleteProperty(window, 'electronAPI');
+      }
+    });
+
+    const baseSession = sessionCardVisualCases.find((item) => item.id === 'short-idle-cc')!.session;
+    const pinnedProjectTask: Session = {
+      ...baseSession,
+      id: 'pinned-inbox-task',
+      title: '置顶项目任务',
+      pinnedAt: '2026-11-26T00:00:00.000Z',
+      workspaceKind: 'project',
+      workingDir: '/workspace/Cindy',
+      source: 'scheduler',
+    };
+    const baseProps = {
+      isActive: false,
+      isRunning: false,
+      isAttached: false,
+      hasAttentionNotification: false,
+      isSelected: false,
+      sourceLabel: 'Cindy',
+      onClick: vi.fn(),
+      onAction: vi.fn(),
+      onRename: vi.fn(),
+      onTogglePin: vi.fn(),
+      projectOptions: [],
+    };
+    const renderVariant = (
+      variant: 'text' | 'list' | 'card',
+      overrides: Record<string, unknown> = {},
+    ) =>
+      render(
+        variant === 'text'
+          ? createElement(SessionItem, { ...baseProps, session: pinnedProjectTask, ...overrides })
+          : createElement(SessionCard, { ...baseProps, session: pinnedProjectTask, variant, ...overrides }),
+      );
+
+    it.each(['text', 'list', 'card'] as const)(
+      '%s: 沿用收件箱显示（项目图标、无项目名与自动化标识）且不显示稍后处理／完成按钮',
+      (variant) => {
+        mocks.boundSchedulesBySession.set(pinnedProjectTask.id, [
+          scheduleForCase(pinnedProjectTask.id, 'active'),
+        ]);
+        const { container } = renderVariant(variant, { inboxMode: true, hideInboxActions: true });
+
+        // 行首 / 卡片底栏显示项目图标，不显示内联项目名与自动化标识。
+        expect(container.querySelector('[data-project-monogram]')).not.toBeNull();
+        expect(container.querySelector('[data-project-source]')).toBeNull();
+        expect(container.querySelector('.lucide-timer')).toBeNull();
+        expect(screen.queryByRole('button', { name: '查看自动化任务' })).toBeNull();
+        expect(screen.queryByRole('button', { name: '绑定自动化任务' })).toBeNull();
+
+        // 不显示稍后处理、完成、更多、归档按钮；悬停不把时间槽隐藏。
+        expect(container.querySelectorAll('button')).toHaveLength(0);
+        if (variant === 'card') {
+          expect(container.querySelector('.peer\\/card-actions')).toBeNull();
+          expect(container.querySelector('[class*="group-hover/card:pr-"]')).toBeNull();
+        } else {
+          const infoSlot = container.querySelector<HTMLElement>('.group\\/slot')!;
+          expect(infoSlot.querySelector('[class*="group-hover:opacity-0"]')).toBeNull();
+          expect(infoSlot.querySelector('[class*="group-hover/card:opacity-0"]')).toBeNull();
+        }
+
+        // 右键菜单仍可用，且不包含稍后处理。
+        const row = container.querySelector<HTMLElement>('[data-sidebar-session-row="true"]')!;
+        fireEvent.contextMenu(row);
+        const menu = screen.getByRole('menu');
+        expect(within(menu).getByRole('menuitem', { name: '取消置顶' })).toBeTruthy();
+        expect(within(menu).queryByText('ccAgent.sidebar.inbox.snooze')).toBeNull();
+      },
+    );
+
+    it.each(['text', 'list', 'card'] as const)(
+      '%s: 已归档置顶项在收件箱模式下保留取消归档按钮',
+      (variant) => {
+        const archivedPinned: Session = { ...pinnedProjectTask, status: 'archived' };
+        const { container } = renderVariant(variant, {
+          session: archivedPinned,
+          inboxMode: true,
+          hideInboxActions: true,
+        });
+        expect(within(container).getByRole('button', { name: '取消归档' })).toBeTruthy();
+        expect(within(container).queryByRole('button', { name: 'ccAgent.sidebar.inbox.complete' })).toBeNull();
+        expect(within(container).queryByRole('button', { name: 'ccAgent.sidebar.inbox.snooze' })).toBeNull();
+        expect(within(container).queryByRole('button', { name: 'ccAgent.sidebar.sessionMenu.moreActions' })).toBeNull();
+      },
+    );
   });
 });

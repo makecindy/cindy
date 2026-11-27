@@ -1,8 +1,9 @@
 ## 4.11 发起 Agent 新回合(agent 能力)
 
-这个能力让你的 `main.js` 把一段文字作为**普通用户消息**交给 Cindy Agent，适合
-“用户在插件卡片上点继续，然后 Agent 接着做”的流程。它不是系统提示词，也不会
-修改该会话里其它插件或 Agent 的长期规则。
+新建与管理普通任务见独立章节 §4.11.3，可调用 `ghost_forge_guide({section:"4.11.3"})` 读取。
+
+`main.js` 可把文字作为**普通用户消息**交给 Cindy Agent，支持用户点卡片后让 Agent 继续。
+消息不进入系统提示词，也不修改该会话里其它插件或 Agent 的长期规则。
 
 最安全、也是默认的用法，是消费 `card-action` 事件里的真实用户点击票：
 
@@ -56,7 +57,7 @@ await cindy.agent.run({
 一条 Agent 请求，后台请求之间至少间隔 10 秒。这个能力可能自动产生模型费用，只在
 产品确实需要时申请，不要把 `sessionId` 当作任意跨会话控制口。
 
-### 4.11.1 旧版任务接口:让 Agent 替你干活并取回结果(errand)
+## 4.11.1 旧版任务接口:让 Agent 替你干活并取回结果(errand)
 
 `agent.run` 用于用户已关联任务的交互；旧版 `errand` 接口提供结果查询适配：
 任务在宿主按 sessionKey 关联的普通任务里运行,Agent 的最终回复文字交回**你**手里继续用。
@@ -119,7 +120,7 @@ const q = await cindy.agent.queryErrand({ jobId: r.jobId });
   超时有 `'TIMEOUT'`(任务可能仍在会话里继续,提示用户打开会话查看)。
 - 这个能力必然产生模型费用且耗时分钟级:能用快问快答(§4.0.2)解决的,不要派活。
 
-### 4.11.2 请用户新建一条自动化(agent.schedule 加档)
+## 4.11.2 请用户新建一条自动化(agent.schedule 加档)
 
 **这是"让插件里的内容自己保持新鲜"的正路。** 你的插件自己跑不了业务逻辑——沙箱只在
 被唤起时活着,也没有定时器。要做出「每小时帮我看一眼,有事就点亮插件入口」这种效果,
@@ -171,11 +172,7 @@ const r = await cindy.agent.requestSchedule({
   另一个自动化表单在编辑,那种情况下本次草稿会被**丢弃**(保护他没保存的输入),他看到
   一句提示、面板不换内容。即使面板正常打开,任务也要他亲手点保存才落库。所以你的 UI
   **不要**显示"已开启"这类完成态,写"已为你打开创建面板,请确认"才准确;
-  想确认用户是否照做了,当前唯一可信的信号是任务真的跑起来调了你的 tool。
-  **后续版本会补上**:任务与发起插件的**绑定关系**,以及你查询 / 管理**自己绑定的那条
-  任务**(是否有效、下次运行时间、频率,以及改时间 / 暂停 / 关掉)。届时你就能在自己面板
-  上显示"已开启 · 每小时 · 下次 15:00"并让用户就地改。绑定本身即授权边界:你只能看和改
-  自己请求创建的那条,看不到用户的其它自动化;
+  普通草稿的保存状态不提供查询。若插件需要同账号只在一台电脑执行，见下方的主机绑定用法。
 - `prompt` 里要**自己说清楚该调你哪个工具**(见上面示例第 3 行)。AI 不会自动猜到
   "跑完要更新哪个插件";
 - 预填内容会**净化 + 截断**(去控制字符,名称 60 字 / prompt 2000 字);净化后为空一律
@@ -193,7 +190,22 @@ const r = await cindy.agent.requestSchedule({
 什么时候**不该**用它:一次性的事，用快问快答(§4.0.2)或普通任务接口
 (§4.11.3)。这个加档是给"长期定期刷新"用的,每条任务都会反复产生模型费用。
 
-### 4.11.3 新建任务与继续任务（普通 Session）
+### 只在用户指定的电脑执行
+
+对同时声明 `deviceSync: true` 和 `agent.schedule: true` 的插件，先读取账号主机，再响应用户的创建操作。
+
+```js
+const role = await cindy.deviceSync({ op: 'automationHost' });
+if (role.ok && role.isPrimary && role.localSchedule === 'none') {
+  await cindy.agent.requestSchedule({
+    name: '整理资料', prompt: '调用本插件的整理工具。', primaryDeviceOnly: true
+  });
+}
+```
+
+`primaryDeviceOnly` 默认关闭。开启后，首次保存必须在选中的执行电脑桌面窗口完成，从手机或另一台电脑发起也会打开执行电脑的桌面编辑器。用户在该电脑选择模型并保存。宿主按已安装插件的身份绑定草稿；修改标题或暂停任务会保留绑定。选主本身不会新建或启用自动化。已有任务的实际启停状态可从 `localSchedule` 获取。主机暂停、离线或无法确认账号归属时，其它电脑继续等待。选主及错误状态见 [同账号电脑间的插件资料同步](./plugin-files-and-library.md#4102-同账号电脑间的插件资料同步)。
+
+## 4.11.3 新建任务与继续任务（普通 Session）
 
 先按业务选择：
 - 当前 Agent 已在处理你的工具：返回数据让它继续，不新建任务。
@@ -214,11 +226,15 @@ const r = await cindy.agent.requestSchedule({
 
 - `list({targetKind:'project'|'task'|'bot'})`：返回 `{targets:[{kind,id,label,detail}]}`，只含本机可用目标的名称和目录/说明，不含消息历史。插件可自行搜索和展示列表，最近活动只用于排序。
 - `resolve({target:{kind,id}})`：复核已保存或本次选择的目标，返回最新 `{kind,id,label,detail}`。只查询，不创建任务、不打开 UI、不保存绑定；固定目标失效返回 TARGET_UNAVAILABLE，不自动替换。插件可将 `{kind,id}` 存入自己的配置。project 的 id 是 Cindy 已有项目目录，task/bot 的 id 是任务/伙伴标识。
+- `resolve({session:sessionId})`：按会话查询同样的目标元数据。普通可用任务返回 `kind:'task'`，伙伴主对话返回 `kind:'bot'` 且 `id` 为伙伴 ID；伙伴的其他会话、失效或不可用会话返回 `TARGET_UNAVAILABLE`。`session` 与 `target` 必须二选一，同时传入返回 `INVALID_PARAMS`；只查询，不创建或切换会话。
 - `send({target:{kind,id},requestKey,text,context?,title?,autoTitle?,route?,permissionMode?,delivery?,attachments?})`：直接指定目标，Host 当次复核。project 在目录中新建普通任务，可传统一模型目录的 route 和已授权范围内的 permissionMode；task/bot 沿用接收方模型、权限、目录，不接受 route 或 permissionMode。`delivery` 为 `queue | steer`，缺省 queue；project 不接受 steer。steer 尝试同轮注入，不停止当前轮，空闲或插话暂不可用时入队。返回 `{taskId,accepted:true,delivery:"queue"|"steer"}` 表示实际接受路径，不表示执行完成。筛查拒绝返回 DELIVERY_REJECTED，不入队重试；ACK 未知返回 DELIVERY_UNCERTAIN，不得换键重发。不开放读取任意任务历史或改模。
-- 同一次 send 重试沿用相同 requestKey、target、内容和 delivery（缺省与 queue 等价）；同键参数变化返回 REQUEST_KEY_CONFLICT。Host 在执行前持久保留投递回执，重启后已接受的请求返回原结果，未确定结果的请求返回 DELIVERY_UNCERTAIN，不再次创建或投递。回执不保存正文或附件字节。不要通过更换 requestKey 绕过未知结果，应先让用户在 Cindy 检查。
+- 同一次 send 重试沿用相同 requestKey、target、内容和 delivery（缺省与 queue 等价）；同键参数变化返回 REQUEST_KEY_CONFLICT。Host 在执行前持久保留投递回执，重启后已接受的请求返回原结果，未确定结果的请求返回 DELIVERY_UNCERTAIN，不再次创建或投递。普通投递回执不保存正文或附件字节；显式委派另保存下述有界执行范围。不要通过更换 requestKey 绕过未知结果，应先让用户在 Cindy 检查。
 - `cancel({requestKey})`：使本次请求及迟到的发送失效，仅撤回本插件该请求尚未执行的输入；不会停止接收方其他输入，也不保证撤销已经开始的工作。新操作使用新的 requestKey。
-- `tasks.send` 和 `targets.send` 均支持可选 `attachments:[{base64,name?}]`：只接收插件提供的图片字节，不接受本机路径、URL、媒体 URI 或自报 MIME。Host 检测 PNG/JPEG/WebP，最多 4 张、合计 20 MiB。先检查 `tasks.capabilities().messageAttachments.kinds` 包含 image；旧客户端不支持时停止，不静默丢图或改投临时路径。截图进既有 cindy-media，作为消息附件展示并进入模型输入；不需要额外声明 media.deposit。附件内容及名称参与幂等签名，更换附件不能复用同键。
-- 所有插件的两种发送入口共用 40 MiB 在途附件额度；超额在解码和写回执前返回可重试的 `TASK_BUSY`。等待已有请求结束后沿用原 requestKey 重试，不自动改投或丢图。
+- `tasks.send` 和 `targets.send` 均支持可选 `attachments:[{base64,name?}]`：只接收插件提供的字节，不接受本机路径、URL、媒体 URI 或自报 MIME。去处由 Host 按真实字节判定，与 Cindy 自己的 IM 渠道一致：图片（PNG/JPEG/GIF/WebP）和音视频（MP4/MOV/WebM、MP3/WAV/M4A/OGG）进既有 cindy-media；其余字节（PDF、文档、压缩包、Host 不认识的音视频格式等）按普通文件放进该任务自己的附件目录，`name` 决定显示名和扩展名，请务必传。都作为消息附件展示并交给 Agent；不需要额外声明 media.deposit。附件内容及名称参与幂等签名，更换附件不能复用同键。
+- 能力与上限看 `tasks.capabilities().messageAttachments`：`kinds` 列出可收的种类（旧客户端只有 `['image']`，只收 PNG/JPEG/WebP、最多 4 张、合计 20 MiB；此时只发图片，其余如实告诉用户未转交，不静默丢弃或改投临时路径），`maxCount` 条、单个不超过 `maxItemBytes`、一次发送合计不超过 `maxBytes`（当前 10 个、单个 30 MiB、合计 50 MiB）。
+- `attachmentOnly === true` 时，`tasks.send` 的 `text` 可传空字符串 `''`，前提是带了 `attachments`（例如转发一张没有配文的照片）；不带附件时仍需非空 text。
+- `contextMaxCount` 存在时，`tasks.send` 另可传 `contextAttachments:[{base64,name?}]`（最多 `contextMaxCount` 个，与 attachments 共用 `maxBytes`）：只给 Agent 参考、不显示也不随消息保存的附件，用于转发群聊记录或被引用消息里的图片和文件，相当于 Cindy 频道机器人的「群历史附件」。媒体以可回收缓存保存、文件留在会按时清理的暂存区，任务长时间排队后可能已被回收。它参与幂等签名；不传时签名与旧版相同。`targets.send` 不接受该字段。
+- 所有插件的两种发送入口共用 100 MiB 在途附件额度；超额在解码和写回执前返回可重试的 `TASK_BUSY`。等待已有请求结束后沿用原 requestKey 重试，不自动改投或丢图。
 - 目标只包含本机可见、可用的项目、普通任务或有唯一 canonical 对话的活跃伙伴；不提供 Mobile/device-link 透传。投递仍受当前插件启用、批准、账号和目标权限约束；插件内容不构成新真人授权。
 
 调用统计由 Host 统一确认，不提供插件自报次数或定义计次规则的接口。独立的 `tasks.send` / `targets.send`
@@ -248,12 +264,63 @@ text 与 context 合计不超过 64000；tasks.send 的 text 上限仍为 32768�
 `tasks.capabilities().autoTitle === true` 时，可用 `tasks.create({requestKey, autoTitle:true, route?})`
 新建任务，省略 title；首次消息受理后，Host 复用普通任务自动命名。`targets.send` 仅在
 `target.kind === 'project'` 时可传 `autoTitle:true` 并省略 title。生成期间先显示用户指令的简短占位，
-随后结合指令和附带资料生成标题；不会覆盖人工重命名。autoTitle 与 title 互斥，task/bot
+随后根据用户指令生成标题，不会覆盖人工重命名；附带资料仍交给任务 Agent，不参与自动命名。
+autoTitle 与 title 互斥，task/bot
 目标不接受 autoTitle:true，也不更改已有目标标题。
 
 默认不传 autoTitle 的存量插件保持原有命名：tasks.create 仍须传 title；项目投递缺省采用
 项目名称。新模式参与幂等摘要；旧字段组合的摘要及重放行为保持，不需要重新批准或配置。
 旧 Host 未宣告支持时，应明确提示所需客户端能力，不能静默丢弃资料或假称已经自动命名。
+
+### 转发 IM 消息的出处（可选）
+
+插件把它代管的 IM 消息（如微信群里的提问）转进任务时，先检查 `tasks.capabilities().messageRelay === true`，
+再给 `tasks.send` 另传 `relay`，Cindy 会把这条消息显示成与自带 IM 渠道相同的卡片：
+
+```js
+await cindy.tasks.send({ taskId, requestKey, expectedRevision, text, context, relay: {
+  platform: 'wechat',            // 1–32 字符（去首尾空白后），不含换行等控制字符
+  chatType: 'group',             // 'group' | 'direct'
+  chatName: '产品群',            // 可选，≤100 字符
+  sender: { id: 'wxid_xxx', name: 'Chris', isOwner: false }, // id ≤128，name ≤64，isOwner 必须是布尔值
+} });
+```
+
+- 各层只接受上面这些键，多一个、类型或长度不对都返回 `INVALID_REQUEST`。`targets.send` 不接受 `relay`。
+- `text` 只放发言人的原话，卡片正文只显示它。群聊背景放进 `context`：Cindy 只把其中第一个
+  `<group_chat_context>\n[群里最近的消息]（或 [自你上次请求后群里新增的消息]）\n…\n</group_chat_context>` 块显示为
+  「群聊背景」，块外的说明（例如给 Agent 的回复方式说明）照常交给 Agent，但不显示。
+- 平台 id 用 Cindy 已知的写法（`wechat`、`wecom`、`dingtalk`、`feishu`、`lark`、`slack`、`telegram`、`discord`、
+  `imessage`、`x`）才显示平台名和手机端卡片；其它值在电脑端原样显示、手机端保持普通插件消息。
+- `isOwner: true` 时卡头为「Cindy · 来自 微信」，否则写出发言人与群名。手机端对所有 IM 都只显示「Cindy · 来自 X」。
+- **来源标签不变**：卡片上方仍显示「由插件「你的插件名」发送」，Agent 收到的 `[消息来源]` 写明是本插件转发、
+  发言人是谁、是否由插件标明为主人本人。`relay` 只是展示上下文：不改变权限、Auto 审阅或任务归属，也不让消息变成
+  用户本人在 Cindy 里的输入。共享任务的访客看不到 `relay`。
+- 宿主会清洗这些字符串（去换行、限长、替换书名号）后保存；`relay` 参与幂等摘要，同键重试必须带相同的 `relay`。
+  不带 `relay` 的请求与旧版完全一样，已有 requestKey 照常重放。
+- 旧 Host 没有 `messageRelay` 时不要传 `relay`（会被当作未知字段拒绝）；照旧只发 `text` 和 `context`，消息显示为普通插件消息。
+
+### 后续轮次：它开出的任务发回结果（可选）
+
+IM 里的一个提问，Agent 常常用 `send_to_session` 开一件任务去做，自己先简短回一句；那件任务做完把结果发回来时，
+任务里会再起一轮，但这一轮不是插件发的，插件原本读不到它，结果就停在 Cindy 里。
+`tasks.capabilities().followUps === true` 时，`tasks.send` 可以另传 `followUps: true`（只接受 `true`）：
+
+- 这一轮里用 `send_to_session` **新开**的任务会被记下。它之后发回本任务的每条消息，宿主都排成单独的一轮，
+  并为本插件记一条**后续轮次**：`getRun` / `listRuns` 照常能读到，带 `followUpOf`（开出那件任务的 runId），
+  进展（`progressForRun`）和最终回答（`outputMessageId`）的读法与普通 run 相同。
+- 只认那件任务的来信：用户在 Cindy 里对本任务说的话、别的任务发来的消息、这一轮之外开的任务都不会变成后续轮次。
+  记录 7 天有效（从开出那件任务算起）；插件卸载、停用或不再拥有本任务时不再产生。
+- 开出了任务的 run 在 `getRun` 里带 `followUps: { tasks, until }`：`tasks` 是这一轮开出的任务数，`until` 之后不会再有
+  新的后续轮次。插件据此用 `listRuns({taskId, after})` 低频查看新的 run（例如 10 秒一次），`followUpOf` 有值的才是后续轮次；
+  后续轮次自己也带 `followUps`，它再开的任务同样会回来。
+- Agent 在这一轮开始时就从 `[消息来源]` 得知：这一轮最后的回答会由本插件发回原提问所在的地方；不需要发的话，
+  整条回答只写 `NO_REPLY`。插件读到 `NO_REPLY` 时什么都不发。
+- 后续轮次的输入是别的任务的话，不由插件决定：插件不能 `cancel` 它（返回 `INVALID_REQUEST`），插件自己的派发检查
+  （权限上限、配置变化）也不会拦下这条消息。它跑在任务当时的设置下，插件要不要为某类提问开启，按提问者的权限自己判断
+  （例如只为主人本人的提问开启）。
+- `followUps` 只在为 `true` 时参与幂等摘要，不带它的请求与旧版一样。旧 Host 没有该能力时不要传（会被当作未知字段拒绝），
+  这时结果仍只留在 Cindy。
 
 ### 新建任务的权限选择（可选）
 
@@ -270,35 +337,81 @@ text 与 context 合计不超过 64000；tasks.send 的 text 上限仍为 32768�
 不接受自报 confirmed。权限参与幂等摘要，同键修改返回冲突；缺省旧请求可重放，旧 Host 未声明支持时不发新参数。
 
 原有 `cindy.tasks` 的归属限制不变。先调用 `capabilities()` 获取实际支持操作。当前仅支持本插件创建的本机普通任务：
-`models`、`create`、`get`、`setModel`、`list`、`send`、`getRun`、`listRuns`、`readMessages`、`cancel`、`setHidden`。
-可对自有任务调用 `startTeam({taskId})` 启用 Orca 主任务，并用 `getTeam({taskId})` 读取实际协同状态。协调主任务需经用户授权 Auto，Worker 自动沿用 Auto。
-这些任务及其 Worker 不提供 `cindy_helper` 的账号级历史或跨任务控制能力，`cindy_memory.session_search` 也拒绝历史检索；协调使用独立 Orca 工具，结果由插件通过 `readMessages/getTeam` 读取。旧 errand/workspace 不因来源标记受到限制；明确卸载撤销归属后，调用方已无正在执行的输入或已接受新真人输入时，保留的用户任务恢复普通 helper 与历史检索能力；仍执行旧插件输入时继续受限，自动回报和插件输入重试不构成真人接管。这不恢复插件控制权，也不保证停止已接受执行，不构成通用执行沙箱。
-在首次派发前调用 `setTeamPlan({taskId,plan:{concurrency,task,items}})`，每项包含
-`label, workingDir, route, task`。可选 `task` 是插件提供的工作范围（每段最多 8000 字符），
-不是用户原话。Host 核对已批准启用的插件、自有主任务、真实 Worker 归属、模型和目录后，
-将范围单独交给 Auto 审阅。进入 Host 审批的动作逐次核验用户限制、撤权和只读设置。
-首版保留 Codex 原生 Auto；其常规工作区动作可能直接执行，不保证每个动作都经过 Host 范围审批。
-卸载会撤销插件后续 API 控制，但不保证停止已派发的原生工作；需要停止时请使用任务停止入口。
-计划须在首次派发或创建 Worker 前登记，之后不可改写（包括补填 task）；需要不同范围时创建新任务。
-缺少该字段的存量计划继续可读，但 Host 不允许插件任务自动授权或普通 MCP 快捷放行，不会从 Agent 消息推导额外授权；进入 Host 的 Ask/acceptEdits 动作仍可沿原流程逐次确认。
-计划不授予目录权限。Worker 仅可使用宿主任务目录及解析后仍在其中的子目录、启用卡片时的插件配置目录或用户亲选的确切目录；Library 绑定不自动变成 Agent 工作根。宿主在登记和创建时均复核。
-插件自有主任务不支持用 `execution_device_id` 新建跨设备 Worker；本机目录授权不代表已授权另一台电脑的同名目录，登记团队计划也不改变此限制。
-这描述准入检查，不是持续的 OS 目录隔离保证。首版用于可信本地工作区；同权限进程在检查后恶意置换目录对象仍可能改变实际 cwd，不提供此类对抗性沙箱。
+`models`、`create`、`get`、`setModel`、`list`、`send`、`getRun`、`listRuns`、`readMessages`、`cancel`、`setHidden`、`archive`。
+`archive({taskId})` 归档自有的空闲任务（忙时 `TASK_BUSY`），用户可恢复，没有删除接口；按视频等开新任务的插件，切换时归档上一条。
+可对自有任务调用 `startTeam({taskId})` 启用 Orca 主任务，并用 `getTeam({taskId})` 读取实际协同状态。通过此插件 API 启用团队需经用户授权 Auto；开启团队不创建 Worker，也不改写全局 Worker 权限偏好，后续 Worker 使用普通 Orca 创建权限流程。
+插件直接调用的 `cindy.tasks` 仍只能管理本插件创建的任务；这些任务及其 Worker 中的 Agent 则按普通任务权限使用 `cindy_helper`、`cindy_memory` 等已连接工具，包括账号级历史、跨任务操作和个人插件投稿。协调仍可使用独立 Orca 工具，插件通过 `readMessages/getTeam` 读取自己的结果。任务创建来源不参与 Agent 工具授权；插件消息标签不额外收窄任务权限，原本要求用户当场输入的操作仍按通用规则判断。卸载撤销归属后，插件不能继续管理旧任务；保留任务中的 Agent 仍按任务权限工作。撤销不保证停止已接受执行，也不构成通用执行沙箱。
+若插件需要记录批次，可在首次派发前调用 `setTeamPlan({taskId,plan:{concurrency,task,items}})`；每项包含 `label, workingDir, route, task`。`task` 是插件自己的说明，不是用户原话，也不会改变 Agent 的 Auto 审阅或工具权限。计划登记后不可改写。`releaseWorker({taskId,workerId,completedAt})` 按 Worker ID 和成功完成凭据归档自有团队中的空闲 Worker，改名不影响释放；插件按 Worker ID 保存自己的结果和批次进度。没有计划的任务及 Worker 照常使用普通任务权限。
+
+插件直接调用 `cindy.tasks` 时仍需当前插件批准和自有任务归属。Agent 使用公共 Orca 工具创建、调度或管理 Worker 时，按普通任务的账号、权限档、团队成员关系和操作凭证检查；任务创建来源、插件输入标签、插件计划与卸载状态不额外设限。Worker 目录、模型和运行位置沿普通 Orca 规则，目录不是持续的 OS 隔离保证。
 
 `models()` 返回统一目录可选项的完整 route、efforts 和 supportsFastMode。用户明确选择后将 route 原样传给 create，或用 `setModel({taskId, expectedRevision, route})` 修改已有自有任务。运行中按普通任务的安全边界切换，不修改应用默认。两方法使用前检查 capabilities.operations。
+
+**IM 共用项目与模型**：检查 `capabilities().imProjects === true`，并声明、获批
+`agent.tasks` 与 `agent.targets`。`imProjects()` 返回 `{projects:[{id,label,directory?}]}`，包含
+内置 `chat` 与宿主电脑侧栏项目；id 原样使用，不构造路径。项目选择与聊天绑定由插件保存。
+`create({requestKey,title,imProject:id})` 同时读取该项目的模型、来源、推理档与权限；不能再带
+route、permissionMode、callId、isolatedWorkspace。共用配置的插件可声明 `showTaskPreferences:false`
+隐藏重复的任务设置卡，历史偏好保留。
+
+接续前用 `followImProject({taskId,expectedRevision,imProject:id})`，返回 `{status,task}`，然后以
+返回的 revision 发送新输入。只适用于插件自己空闲的任务，TASK_BUSY 时等待，STALE_REVISION 时重新读取；
+PROJECT_MISMATCH 表示换了项目或任务被移动，应新建任务并保留旧任务。归档后同样新建。
+发送已受理或结果不确定时，先按原请求键查回执，不重新选项目或改写原输入。旧 Host 缺能力时提示升级，
+不能改投插件默认模型。权限收紧与项目移除会在派发时再检查，插件不能绕过。项目属于插件宿主电脑，
+远程模型来源不把项目搬到另一台电脑。
+
+IM 入口插件在 ghost.json 顶层声明 `imEntrance: true`，「设置 → IM 机器人」会列出它，并在用户没开官方
+机器人时也显示「项目与模型」，让用户能改这份共用配置。声明只影响展示，不授予能力。
+
+**按群聊/私聊单独设置**：`capabilities().imProjectOverrides === true` 时，插件可以让某个群聊或私聊
+不跟随项目的模型与权限，目录始终跟随项目。`imProjectConfig({imProject})` 返回此刻「跟随 IM」的
+`{imProject, route, permissionMode}`，用来在页面上显示。`create` 和 `followImProject` 可带
+`imOverride: {route?, permissionMode?, permissionGrant?}`，省略的字段跟随项目；route 用统一选择器
+（`cindy.pickModel`）返回的整份 route，原样保存与回传。权限与项目一样或更严时直接生效；比项目更宽时
+先在用户点选后调用 `confirmImPermission({imProject, permissionMode, conversation:{label, kind:'group'|'direct'}})`，
+Host 弹出 Cindy 自己的确认框（页面画不出、点不到）；允许后返回 `{granted:true, grant}`，把 `grant`
+与该群聊/私聊的覆盖一起保存并放进 `imOverride.permissionGrant`；拒绝返回 `{granted:false}`。不更宽时直接
+返回 `{granted:true}`。授权只对本插件、本项目有效，卸载后失效，更新插件保留；没有有效授权时
+`create` / `followImProject` 返回 `CONFIRMATION_REQUIRED`，提示用户在插件页重新确认，不要自动改用别的权限。
+改回跟随项目时去掉 `imOverride` 即可。创建键不含覆盖，改了覆盖后重试同一键返回原任务，再用
+`followImProject` 应用新覆盖。在消息到来时（后台）不要调用 `confirmImPermission`，它只用于用户正在操作的页面。
+
+**远程模型执行**：`capabilities().remoteRoutes === true` 时，
+`create` 和 `setModel` 的完整 route 可带 `agentDeviceId`（同账号其他电脑或 `share:<shareId>`）。
+省略表示插件运行电脑；它选择 Agent 执行来源，任务记录、文件、权限和结果仍归插件运行电脑。
+先读取该能力再给统一选择器传 `allowRemote:true`，将返回的整份 route 原样保存与回传。
+旧 Host 缺少标记时只提供本机选项，不得删除 `agentDeviceId` 后重试，也不得回落本机同名供应商。
+这不支持远程 SSH 工作区或控制其他电脑上的任意任务，不增加插件的目录或工具权限。
+
+Host 在创建、改模、发送及执行接受边界按精确来源重新校验授权目录、引擎、模型、强度和 Fast。
+来源不可用或配置不再支持时返回 `ROUTE_UNAVAILABLE`，不自动换来源。
+运行中的改模按普通任务的下一次发送边界生效；`get().resolvedConfig` 与 run 的 `acceptedConfig`
+保留来源，来源变更参与 revision、配置比较及请求幂等。供应商组分配沿用宿主核验过的组绑定，
+任务配置保留所选组，不把组内正常选电脑误认为用户改了来源。
+`send / getRun / listRuns / readMessages / cancel` 沿用相同 taskId / runId，不在执行电脑另建插件任务；
+取消按该输入绑定的执行实例与轮次停止，迟到的旧执行回执不能完成新输入。
+
+```js
+const caps = await cindy.tasks.capabilities();
+const selection = await cindy.pickModel({ allowRemote: caps.remoteRoutes === true });
+if (!selection.ok) return;
+const task = await cindy.tasks.create({ requestKey, title, route: selection.route });
+// 同一 task 的发送、查结果和取消仍走 cindy.tasks，保留 taskId / runId / requestKey。
+```
 当 `capabilities().pluginDefaultModel === true` 时，持续复用任务的插件可在每次新输入前调用
 `setModel({taskId, expectedRevision, route:'plugin-default'})`。Host 当次读取本插件有效的任务模型设置（隐藏卡片时忽略旧值），
-复用 create 的模型解析规则（未指定时采用当前新任务选择），只同步模型、来源、引擎、强度和 Fast，
+复用 create 的模型解析规则（未指定时跟随系统辅助模型，优先 Pi 引擎与较低推理强度，最后才是当前新任务选择），只同步模型、来源、引擎、强度和 Fast，
 不改权限、目录或其它任务。返回 `{status,task}`；配置相同返回 unchanged，不反复切换。
 后续 send 使用返回 task.revision。须先处理已接受/结果不确定的旧请求，再同步下一次输入，
 不得修改旧请求的回执或为模型变化重发。旧 Host 未声明此能力时保留原任务行为，不传入该 route。
-暂不支持接管任意现有任务、远程/伙伴任务、其它配置修改、归档、队列暂停或事件订阅。
+暂不支持接管任意现有任务、其他电脑上的任务/SSH 工作区/伙伴任务、其它配置修改、队列暂停或事件订阅。
 旧 `agent.errand` 接口不变。
 
 **后台任务（可选，需声明 `hiddenTasks`）**。任务默认可见。只有身份卡写了
 `"agent": { "tasks": true, "hiddenTasks": true }`（详情页与安装/更新确认中单列一项权限），
 插件才能把**自己创建的**任务放到后台：不进任务列表、会话搜索、未结束提示、新任务通知与灵动岛，
-手机任务列表同样不显示。它不改变任务权限、模型或执行方式，也不授予其它任务的访问权。
+手机任务列表同样不显示。它不改变任务权限、模型或执行方式，也不扩大插件直接调用 `cindy.tasks` 的任务范围。
 未声明时 `create({hidden:true})` 与 `setHidden` 返回 `PERMISSION_DENIED`；
 `capabilities().hiddenTasks` 表示当前插件是否已声明。用户始终可以在插件详情页「后台任务」
 看到这些任务、打开查看，或「显示到任务列表」接手；插件被卸载时它们会自动恢复显示。
@@ -319,7 +432,7 @@ await cindy.tasks.setHidden({ taskId: bg.taskId, hidden: false });
 // requestWriteAccess({taskId, mode: 'auto'}) 请求宿主原生确认，不能替用户确认。
 // 拒绝或失败后，同一账号代际/安装修订/任务在当前宿主进程不再自动弹窗（更换 mode 也不重置）。
 // 用户可从本机任务权限菜单“重新确认插件写权限”恢复原请求；插件不能清除拒绝记录。
-// 省略 mode 保留 acceptEdits；Auto 插件主任务的 Worker 使用 Auto，不改全局权限。
+// 省略 mode 保留 acceptEdits；通过 cindy.tasks.startTeam 创建的 Worker 使用 Auto，不改全局权限。
 
 const task = await cindy.tasks.create({ requestKey: 'experiment-1-create', title: 'My evaluation' });
 const run = await cindy.tasks.send({ taskId: task.taskId, expectedRevision: task.revision,
@@ -327,6 +440,27 @@ const run = await cindy.tasks.send({ taskId: task.taskId, expectedRevision: task
 const status = await cindy.tasks.getRun({ runId: run.runId });
 const page = await cindy.tasks.readMessages({ taskId: task.taskId, limit: 50 });
 // 保存 nextCursor；下一页传 after，不以最后一条 assistant 推断 run 已完成。
+```
+
+**转发本轮进展**：当 `capabilities().runProgress === true` 时，调用
+`readMessages({taskId, progressForRun: runId, after?, limit?})`。结果带有相同的
+`progressForRun`，按时间返回这次输入已落库的用户可见进展。使用消息 ID 去重。
+Codex 使用已结束的 commentary，Claude 和 Pi 使用明确以调用工具结束的助手文本。
+没有明确进展的轮次可以只发最终答复。旧宿主继续按原有的 outputMessageId 读取最终答复。
+
+**边生成边显示（新增接口，尚未发布）**：`capabilities().runPreview === true` 时，`getRun` 在
+`status === 'running'` 且任务当前执行的正是这次输入时，可额外返回 `preview: { text }`：
+Agent 正在输出的那一段回答（最多 32768 个 UTF-16 字符，超出只保留开头），已去掉内部引用标记。
+它只是过程中的草稿：一次工具调用后会从新的一段重新开始，不是完整回答，也不是最终结果；
+没有正在输出的文字、run 已结束或任务正在执行别的输入时不带此字段。最终回答仍在 run 结束后
+按 `outputMessageId` 用 `readMessages` 读取，不要把最后一次 preview 当结果保存。
+无需新声明，归属检查与 `getRun` 相同，只能看到本插件这次 run 的内容。旧 Host 没有该标记，
+插件照常只显示阶段，不要为了取草稿而缩短轮询间隔（约 700 ms 足够）。
+
+```js
+const caps = await cindy.tasks.capabilities();
+const state = await cindy.tasks.getRun({ runId: run.runId });
+if (caps.runPreview === true && state.preview) showDraft(state.preview.text); // 可能变短或重置
 ```
 
 SDK 成功返回 data，失败抛出带 code 的错误。原始管子响应为 `{ok:true,data}` 或
@@ -355,3 +489,129 @@ run 的 acceptedConfig 是接收配置，execution 是观测到的原生 instanc
 没有足够证据的重启/恢复窗口返回 reconciling，不能当 completed、failed 或零分；
 不要自动重发可能已经产生副作用的输入。费用目前 unavailable，绝不以耗时推算。
 实验性接口尚未提供全部恢复路径的最终对账和事件补拉，因此暂不用于无人值守正式评测。
+
+
+## 4.11.7 伙伴委派协议与回执
+
+此增量在插件系统实现，不创建普通任务代替伙伴，不更改伙伴身份、模型、目录或权限档。
+插件声明 `agent: { tasks: true, targets: true, delegation: true }`；`agent:delegation`
+为独立权限，需 Host 显式批准。既有 tasks/targets 批准和历史未知字段不授予委派执行。
+存量插件、凭证、设置和普通消息投递不受影响。
+
+先检查 `typeof cindy.targets?.capabilities === 'function'`，再调用 `await cindy.targets.capabilities({})`。
+返回 `{delegation:{version:1,execution:boolean,targetKinds:['bot'],delivery:['queue']}}`。
+version 只表示本 Host 理解协议；execution 才表示审核接线可用，不表示该插件已获批准。
+审核接线安装完成后 execution 为 true；缺少接线时显式委派返回 UNSUPPORTED_CAPABILITY，且不会预留回执或投递。
+旧 Host 缺少入口或返回 INVALID_PARAMS 时停止，不去掉 delegation 重发或改用 tasks.create。
+
+审核接线可用时，通过原 `targets.send` 增加 `delegation:{task:string}`。
+只支持 bot + queue，task 为非空、最多 8000 字符、不含 NUL 的执行范围；不接受其它委派字段。
+插件应写明目标及允许的结果交付，外部业务正文仍为输入数据；该字段不成为主人原话。
+Host 沿用投递回执，持久化版本 1 的范围、插件实例、目标伙伴/Session、requestKey 与批准版本。
+范围参与幂等摘要：同键变更范围或去掉范围返回 REQUEST_KEY_CONFLICT；未知结果不得换键重投。
+取消保留原请求身份，不恢复已取消回执；撤权、换安装版本或审核接线失效后拒绝排队派发。
+审核消费者核对当前已接受输入、持久回执、原伙伴关联、安装批准与主人指令投影。输入切换、插话、重试、撤权或更换账号后不会借用旧回执。sourcePlugin 只是来源标签，不授予权限。
+Auto 使用回执的任务范围并保留主人的限制；Ask、Full Access 沿用原权限档，插件不能提升伙伴权限。
+`targets.cancel` 仍不停止伙伴。仅当 Host 已撤回原输入、当前无运行工作且无残留队列时，可额外返回
+`{settled:true,requestKey,clientId}`。缺少 settled 或请求不匹配时不得解除未确认的执行占位；旧 Host 的回执行为不变。
+执行能力声明及单元测试通过不代表某个业务插件已通过真实端到端验收。
+
+### 委派收据查询
+
+先检查 targets.capabilities().delegation 的 execution、receiptQuery 和 settled 均为 true。
+显式 delegation 的 send 成功响应新增 executionId、requestKey、target；同键同内容仍返回原收据。
+targets.get({requestKey}) 只读本插件原收据，未知键返回 {found:false}；已知键返回
+{found:true,executionId,requestKey,target,taskId,status,delivery,settled,result?}。
+status 是 pending/accepted/cancelled 投递状态，不能当作任务完成；result 含原输入的
+instanceId、generation、outcome（completed/failed/cancelled/interrupted）及可选 outputMessageId。
+自然终态持久记录，重启后仍可查询；崩溃而没有终态证据时 settled=false，不自动重发。
+恢复尚未结束时保持 settled=false；恢复最终失败后记录原输入的 failed 终态，即使运行时已重建也保留原 instanceId/generation，不结算后来排队的请求。
+取消只撤回该插件输入，只有原队列和执行确已结束时 settled=true。不读取伙伴历史。
+
+## 4.11.8 只读查看项目任务
+
+插件需要按项目展示任务列表和状态（例如看板）时，声明 `"agent": { "observe": true }`，在本机 Desktop 逻辑页使用 `cindy.observe`。
+它不依赖、也不授予 `agent.tasks` / `agent.targets`；`agent:observe` 单列为独立权限，安装/更新时已确认的不重复询问，否则首次调用复用既有宿主确认。
+旧 tasks/targets 批准和历史未知字段不授予查看权限；拒绝或确认界面不可用时返回 `PERMISSION_DENIED`，不得自动循环重试。
+先检查 `typeof cindy.observe?.projectTasks === 'function'`；旧客户端没有此入口时隐藏相关界面，不调用私有 IPC。Mobile 插件页面返回 `UNSUPPORTED_CAPABILITY`。
+
+- `projectTasks({project})`：project 为 Cindy 已登记、目录仍存在的本机项目路径（可用 `cindy.targets.list({targetKind:'project'})` 或用户选择获得）。
+  返回 `{tasks:[{id,title,agentKind,archived,status,lastActivityAt}]}`，按最近活动倒序，最多 200 条；包含已归档任务和该项目 worktree 下的任务。
+  `status` 为 `running | awaiting | error | done | idle`，与侧边栏右侧状态同源（团队主任务同样带上本机 Worker 的出错/待处理）；`lastActivityAt` 为毫秒时间戳。
+  用户拒绝首次确认后，可在插件详情页点「确认任务查看权限」重新允许；插件不要反复调用来触发确认。
+  不含消息、计划、文件或费用；不含对话、伙伴、Worker、隐藏、远程及其他电脑上的任务。未登记或已删除的项目返回 `TARGET_UNAVAILABLE`。
+- `openTask({taskId})`：在主窗口打开该任务；Cindy 未在前台时不抢焦点。只接受 `projectTasks` 能列出的任务，否则返回 `TARGET_UNAVAILABLE`。返回 `{opened:true}`。
+- 只读，不能发送消息、修改、归档或停止任务；需要这些操作请改用 `cindy.tasks` / `cindy.targets` 并声明对应权限。状态变化不推送，插件自行按需刷新。
+
+`openSession({sessionId, deviceId?})` 可在桌面主窗口打开本机或同账号其他电脑上的可见普通会话，包括独立对话。除 `agent.observe` 外，还需声明并获批 `agent.hostTools: ['history']`。先检测 `typeof cindy.observe?.openSession === 'function'`。远程目标传设备 ID 和原始会话 ID 两个字段。如 `list_sessions` 返回 `deviceId::sessionId`，取该设备组的 ID 并移除会话 ID 的设备前缀。省略设备或传 `local` 表示本机。宿主按指定设备核验目标，返回 `{opened:true}` 表示已交给原生导航；不可见或不存在返回 `TARGET_UNAVAILABLE`，远程连接不可用返回 `REMOTE_UNAVAILABLE`。本方法只导航，不返回会话数据。
+
+## 4.11.9 查看伙伴和状态
+
+插件要把伙伴画成角色、头像墙或状态面板时，声明 `"agent": { "companions": true }`，在本机 Desktop 逻辑页使用 `cindy.companions`。
+它是一项独立权限（`agent:companions`），覆盖伙伴名单、实时状态、待处理请求（内容与对话卡片上看到的一致）、最新一条回复与最近对话；安装/更新时已确认的不重复询问，否则首次调用复用既有宿主确认。
+同时声明并获准 `agent.targets`（及其依赖的 `agent.tasks`）时，还可以用 `answer` 把主人在插件页面里给的回答交给伙伴；允许伙伴执行仍由 Cindy 自己的确认框确认。
+它不依赖、也不授予 `agent.tasks` / `targets` / `delegation` / `observe`；旧批准和历史未知字段不授予查看伙伴。拒绝或确认界面不可用时返回 `PERMISSION_DENIED`，不得自动循环重试；用户可在插件详情页点「确认伙伴查看权限」重新允许。
+先检查 `typeof cindy.companions?.list === 'function'`；旧客户端没有此入口时隐藏相关界面，不调用私有 IPC。Mobile 插件页面和没有逻辑页的 mainView 页面拿不到 `cindy.companions`（mainView 经 BroadcastChannel 向本插件逻辑页要数据）。
+
+- `capabilities()`：返回 `{version:1}`。
+- `list()`：返回 `{companions:[...], observedAt}`，包含账号下的全部伙伴，也包括在主人其他电脑上运行的伙伴。每位伙伴 `{id, name, description, home:{isSelf, online, deviceName}, status, activity, interactions, lastReplyAt}`：
+  - `status` 为 `awaiting | error | running | done | unread | idle`，与侧边栏和手机同源。在其他电脑运行的伙伴（`home.isSelf=false`，`deviceName` 为那台电脑）从它的主力电脑读取，内容与在那台电脑上看到的一致；那台电脑离线、关闭远程控制或在本机被禁用时 `home.online=false`、`status='offline'`，只有名字。
+  - 主力电脑是旧版 Cindy 时仍有状态与工作阶段，但没有当前步骤说明、待处理请求与回复。
+  - `activity` 为 `{phase, workingPhase, summary, startedAt, lastActivityAt}`。`phase` 为 `running | needs-interaction | completed | error | idle`（其他电脑连不上时为 `unknown`）。
+    `workingPhase` 只在工作中出现，是公开类别：`thinking` 思考、`replying` 写回复、`reading-file` / `saving-file` / `searching` / `searching-files` / `reading-web` / `testing` / `checking` 等执行工具，`compacting` 整理上下文，`processing` 其他；不含命令、参数、网址或思考原文。`summary` 是宿主写的粗粒度说明。
+  - `interactions` 是伙伴正在等主人处理的请求 `[{ref, kind, title}]`。`kind` 为 `question`（提问）、`permission`（工具确认）、`plan`（计划审阅）或 `other`（Cindy 自己的确认，如安装插件、更新、任务操作、代输入，只能用 `open` 去 Cindy 里处理）。`title` 为问题或待确认的工具名，其他为 null；名单里不含工具输入、计划正文，主人在宿主步骤里输入的值任何时候都不给插件。`ref` 不透明，只能传回 `interaction` / `answer` / `open`。伙伴的主对话和它委派的任务同时等主人时，两边的请求都在这里。
+  - `lastReplyAt` 是最新一条完成回复的持久化时间。一轮工作结束（`phase` 由 `running` 变为 `completed` 或 `lastReplyAt` 变化）时读一次 `reply`，即可拿到这一轮的最后一条消息。
+  - 可选的 `unread` 是当前桌面侧栏的伙伴未读标记。读取快照只返回布尔值。旧客户端或状态不可用时该字段缺省。状态灯可优先显示运行状态，闲时用 `unread === true` 点亮绿灯。
+- `avatar({companionId})`：返回 `{src, fallback}`。`src` 为 `data:image/jpeg` 头像或 null（伙伴用表情做头像时）；`fallback` 是可直接画的单个字形。
+- `reply({companionId})`：返回 `{reply:null | {text, createdAt, truncated}}`：伙伴主对话里最新一条可见回复的文字（其他电脑上的伙伴从它的主力电脑读取），最多 8000 字，超出时 `truncated=true`；不含更早的消息、附件、私密内容或子 Agent 输出。回复可能含个人或工作信息，插件不得外传或长期保存。
+- `history({companionId, limit?})`：返回 `{history:null | {messages, more}}`：伙伴主对话里最近的 `limit` 条消息（默认 20，最多 50），从旧到新，每条 `{role:'user'|'assistant', text, createdAt, truncated}`，单条最多 2000 字。
+  只含对话里看得到的主人消息与伙伴回复（附件写成 `[附件: 名称]`），与其他电脑上看到的同一份；不含工具过程、进度说明、思考、子 Agent 输出和隐藏的系统输入，清空对话前的消息不返回。`more=true` 表示还有更早的消息，请用 `open` 让主人去 Cindy 里看完整历史。
+  其他电脑上的伙伴从它的主力电脑读取；那台电脑是旧版、读不到对话时 `history:null`。对话可能含个人或工作信息，插件不得外传或长期保存。
+- `open({companionId, interactionRef?})`：在主窗口打开伙伴的对话；带 `interactionRef` 时打开该请求所在的任务；其他电脑上的伙伴打开为远程对话。Cindy 未在前台时不抢焦点。返回 `{opened:true}`。
+- `interaction({companionId, interactionRef})`：返回 `{interaction}`，即这条请求在对话卡片上显示的内容（工具输入与手机上一样已脱敏）：
+  - `{kind:'question', questions:[{question, header, options:[{label, description}], multiSelect}]}`；
+  - `{kind:'permission', action, tool, subject, preview, allowHere}`：`action` 为 `command | file-read | file-write | browser | plugin | tool`，`preview` 是要确认的命令、路径或参数（≤4000 字）；
+  - `{kind:'plan', plan, truncated, allowHere}`：计划正文最多 20000 字；
+  - `allowHere`：插件能否代主人「允许」。Cindy 自己的确认框能完整显示它时为 true：整条命令（含工作目录）、读取的路径或 ≤1200 字的计划，且不超过 1200 字；浏览器步骤、插件或工具调用要参数短到不被摘要截断。写文件（框里只有位置、没有内容）和更长的请求为 false，界面上请改成「去 Cindy 里允许」（`open`）。拒绝不受影响；
+  - `{kind:'other', title}`：只能 `open`。
+- `answer({companionId, interactionRef, answer})`（另需 `agent.targets`）：把主人在插件页面里给的回答交给伙伴，返回 `{answered}`。
+  - 提问：`{kind:'question', answers:[{choices:[...], text?}]}`，按问题顺序一一对应；`choices` 只能取该问题的选项 `label`（单选最多一个），`text` 是主人自己写的回答；每题至少答一项。
+  - 拒绝工具：`{kind:'permission', decision:'deny'}`；对计划提意见或拒绝：`{kind:'plan', decision:'deny', feedback?}`（有 `feedback` 时伙伴按意见修改计划）。这些直接生效。
+  - 允许：`{kind:'permission', decision:'allow'}` / `{kind:'plan', decision:'allow'}` 只用于 `allowHere` 为 true 的请求，会弹出 Cindy 自己的确认框，完整显示真实请求；主人在框里点允许才生效，取消时返回 `{answered:false}`。`allowHere` 为 false 时返回 `ALLOW_IN_CINDY`，请用 `open` 让主人在 Cindy 里允许。插件页面画不出、也点不到这个框，不要自己再做一层「确认允许」。同一时间只开一个框，再请求返回 `TASK_BUSY`；框打开期间请求变了或已在别处处理，返回 `TARGET_UNAVAILABLE`。
+  - 只能回答 `interaction` 给出的内容，不能改写工具输入，也不能「本会话一直允许」。其他电脑上的伙伴经它的主力电脑作答（需那台电脑在线并开启远程控制）。
+  - 回答后请求会从 `interactions` 里消失；主人在 Cindy、手机或其他插件里先处理了，同样消失，插件据此关掉自己的界面。
+- `watch()` / `unwatch({subscriptionId})`：每插件一个订阅，再次 `watch` 会替换旧订阅。伙伴活动、新回复和用户阅读后提交的已读变化沿用 `cindy.onHostMessage` 的 `{type:'companions-changed', subscriptionId, seq}` 通知。插件收到后重新 `list` 即可读取 `unread`。其他电脑上伙伴的变化也会通知。每插件最快 1 秒一次，订阅期间另有约 5 秒一次的心跳。逻辑页关闭、撤权或卸载后订阅自动结束。
+- 不存在、已归档、不可见、请求已不在等待，或主力电脑当前连不上的伙伴返回 `TARGET_UNAVAILABLE`；参数或回答不对返回 `INVALID_PARAMS`；要允许确认框显示不全的请求返回 `ALLOW_IN_CINDY`；宿主未就绪返回 `HOST_NOT_READY`。不能发消息、改伙伴设置或停止伙伴；派活请改用 `cindy.targets` 并声明对应权限。
+
+```js
+if (typeof cindy.companions?.list === 'function') {
+  const seen = new Map();
+  const render = async () => {
+    const { companions } = await cindy.companions.list();
+    for (const c of companions) {
+      // A run just finished: fetch its last message once.
+      if (c.lastReplyAt && seen.get(c.id) !== c.lastReplyAt) {
+        seen.set(c.id, c.lastReplyAt);
+        const { reply } = await cindy.companions.reply({ companionId: c.id });
+        if (reply) report(c, reply.text);
+      }
+    }
+    draw(companions);
+  };
+  const { subscriptionId } = await cindy.companions.watch();
+  cindy.onHostMessage(msg => { if (msg?.type === 'companions-changed' && msg.subscriptionId === subscriptionId) render(); });
+  await render();
+}
+
+// The owner answers a companion's question in the plugin's page (agent.targets as well).
+async function answerFirst(c) {
+  const [request] = c.interactions;
+  if (!request || request.kind === 'other') return cindy.companions.open({ companionId: c.id, interactionRef: request?.ref });
+  const { interaction } = await cindy.companions.interaction({ companionId: c.id, interactionRef: request.ref });
+  const answer = interaction.kind === 'question'
+    ? { kind: 'question', answers: await askOwner(interaction.questions) }   // your own UI
+    : { kind: interaction.kind, decision: await ownerAllows(interaction) ? 'allow' : 'deny' }; // allow opens Cindy's dialog
+  const { answered } = await cindy.companions.answer({ companionId: c.id, interactionRef: request.ref, answer });
+  return answered;
+}
+```

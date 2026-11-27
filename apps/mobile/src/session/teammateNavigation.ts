@@ -21,7 +21,8 @@ export function teammateIdentity(hosted: HostedRemoteCollectionItem): LastTeamma
     resourceKind: 'bot', resourceId: hosted.item.ref.id,
   } : null;
 }
-export function teammateResourceRoute(hosted: HostedRemoteCollectionItem, locale: string) {
+/** `settings` opens the teammate's own settings on that page once its conversation is shown. */
+export function teammateResourceRoute(hosted: HostedRemoteCollectionItem, locale: string, settings?: 'capabilities') {
   const conversation = hosted.item.links.find(link => link.rel === 'conversation')?.target;
   // The link is a display/navigation hint only. The destination revalidates the
   // permanent resource before allowing sends, controls or read receipts.
@@ -32,6 +33,7 @@ export function teammateResourceRoute(hosted: HostedRemoteCollectionItem, locale
       deviceId: hosted.host.deviceId, deviceName: hosted.host.deviceName,
       resourceCollectionId: hosted.item.ref.collectionId,
       resourceId: hosted.item.ref.id, resourceKind: hosted.item.ref.kind,
+      ...(settings ? { companionSettings: settings } : {}),
     },
   };
   return {

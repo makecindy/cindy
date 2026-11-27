@@ -1,4 +1,5 @@
 import { Button } from '@/components/ui/button';
+import { Select } from '@/components/ui/select';
 /**
  * RemoteHostDetail — Phase B per-host expandable detail.
  *
@@ -478,13 +479,13 @@ export function StartRemoteSessionPanel({ hostId }: StartRemoteSessionPanelProps
         </p>
       </div>
       <div className="flex items-center gap-2">
-        <input
+        <input data-settings-search-action="Enter the remote working directory for this run"
           type="text"
           value={workdir}
           onChange={(e) => setWorkdir(e.target.value)}
           disabled={busy}
           placeholder="~/projects/my-repo"
-          className="flex-1 h-8 rounded-md border bg-transparent px-2 text-12 outline-none"
+          className="flex-1 h-8 rounded-full border bg-transparent px-3 text-12 outline-none"
           style={{
             borderColor: 'var(--settings-theme-card-border)',
             color: 'var(--settings-section-title)',
@@ -641,7 +642,7 @@ function AgentInstallRow({
           时发的 event 不补 (Phase D 的取舍, 不引 main 端 log buffer)。 */}
       {(installing || installLog.length > 0) && (
         <pre
-          className="max-h-32 overflow-auto rounded-md border p-2 text-11 leading-tight"
+          className="max-h-32 overflow-auto rounded-lg border p-2 text-11 leading-tight"
           style={{
             backgroundColor: 'var(--settings-input-bg, #faf9f5)',
             borderColor: 'var(--settings-input-border, #d7d7d4)',
@@ -711,27 +712,22 @@ function QuickTestPanel({ hostId, availableKinds }: QuickTestPanelProps) {
         style={{ border: '1px solid var(--settings-theme-card-border)' }}
       >
         <div className="flex items-center gap-2">
-          <select
+          <Select data-settings-search-action="Choose the agent for the one-shot quick test"
+            size="compact"
+            width="sm"
             value={pickedKind}
-            onChange={(e) => setPickedKind(e.target.value as AgentKind)}
+            onValueChange={(value) => setPickedKind(value as AgentKind)}
             disabled={running}
-            className="h-8 rounded-lg border bg-transparent px-2 text-13 outline-none"
-            style={{
-              borderColor: 'var(--settings-theme-card-border)',
-              color: 'var(--settings-section-title)',
-            }}
-          >
-            {availableKinds.map((k) => (
-              <option key={k} value={k}>{agentDisplayName(k, t)}</option>
-            ))}
-          </select>
-          <input
+            label={t('settings.auxiliaryModels.chooseAgent')}
+            options={availableKinds.map((k) => ({ value: k, label: agentDisplayName(k, t) }))}
+          />
+          <input data-settings-search-action="Enter the one-shot quick test prompt"
             type="text"
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             disabled={running}
             placeholder={t('settings.remote.detail.quickTestPromptPlaceholder')}
-            className="h-8 flex-1 rounded-lg border bg-transparent px-3 text-13 outline-none"
+            className="h-8 flex-1 rounded-full border bg-transparent px-3 text-13 outline-none"
             style={{
               borderColor: 'var(--settings-theme-card-border)',
               color: 'var(--settings-section-title)',
@@ -782,7 +778,7 @@ function QuickTestResult({ result }: { result: RemoteAgentOneShotResult }) {
         </span>
       </div>
       <pre
-        className="max-h-64 overflow-auto rounded-md border p-2 text-12 leading-snug whitespace-pre-wrap"
+        className="max-h-64 overflow-auto rounded-lg border p-2 text-12 leading-snug whitespace-pre-wrap"
         style={{
           backgroundColor: 'var(--settings-input-bg, #faf9f5)',
           borderColor: 'var(--settings-input-border, #d7d7d4)',
@@ -802,7 +798,7 @@ function QuickTestResult({ result }: { result: RemoteAgentOneShotResult }) {
             {t('settings.remote.detail.quickTestStderr')}
           </summary>
           <pre
-            className="mt-1 max-h-32 overflow-auto rounded-md border p-2 text-11 whitespace-pre-wrap"
+            className="mt-1 max-h-32 overflow-auto rounded-lg border p-2 text-11 whitespace-pre-wrap"
             style={{
               backgroundColor: 'var(--settings-input-bg, #faf9f5)',
               borderColor: 'var(--settings-input-border, #d7d7d4)',

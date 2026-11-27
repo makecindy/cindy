@@ -12,8 +12,11 @@
  * 调用方(ModelSelector)回退到基于 capabilities 的扁平列表(`selectVisibleModels`)。
  */
 import { useEffect, useState } from 'react';
+import { invokeModelCatalog } from '@/lib/invokeModelCatalog';
+import { parseModelCatalogKey } from '../../shared/controlledModelCatalog';
 
-import { CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2 } from '@cindy/device-link';
+import { CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2, MetadataSnapshotExpiry, readProviderMetadataContinuity, isProviderAccessDeniedError,
+  type ProviderMetadataContinuity } from '@cindy/device-link';
 import type { ProviderView } from '@cindy/model-providers';
 import { defaultEffortForCapabilities } from '@cindy/model-providers';
 import { isTransientRemoteError, isDeviceUnresponsiveRemoteError } from '@cindy/maker-shared/device-link-contract';
@@ -40,17 +43,26 @@ function getDeviceLink(): DeviceLinkShape | null {
 // 缓存按被控设备隔离;代际同 useAgentCapabilities(evict 时自增,作废在途 fetch 的回写)。
 export interface DeviceProvidersPayload {
   providers: ProviderView[];
+  providerContinuity?: ProviderMetadataContinuity;
   /** 被控端「模型显示/隐藏」override 快照；undefined = 旧被控端，不过滤。 */
   modelVisibilityOverrides?: Record<string, boolean>;
 }
 
 const EMPTY_PAYLOAD: DeviceProvidersPayload = { providers: [] };
 const cache = new Map<string, DeviceProvidersPayload>();
+const expiry = new MetadataSnapshotExpiry();
 // Retained across a policy refresh failure; discarded on disconnect/owner
 // eviction. Otherwise a failed refresh loses the identity needed to retry it.
 const subscriptionFetchedAt = new Map<string, number>();
 const inflight = new Map<string, Promise<DeviceProvidersPayload>>();
 const deviceGen = new Map<string, number>();
+/**
+ * When a mounted catalog's trust budget ends, read it once more (as Mobile does) instead of leaving
+ * the picker empty until the window is focused again. The host forwards its own remaining budget,
+ * so a re-read can never extend trust; this bound only stops a near-zero budget from looping.
+ */
+const EXPIRY_REREAD_MIN_INTERVAL_MS = 5_000;
+const expiryRereadAt = new Map<string, number>();
 export type DeviceProvidersEvent =
   | { status: 'loading'; retainDisplaySnapshot?: boolean }
   | ({ status: 'ready' } & DeviceProvidersPayload)
@@ -174,6 +186,7 @@ export function parseDeviceProvidersPayload(value: unknown): DeviceProvidersPayl
   });
   return {
     providers,
+    ...(readProviderMetadataContinuity(value) ? { providerContinuity: readProviderMetadataContinuity(value) } : {}),
     ...(overrides !== undefined
       ? { modelVisibilityOverrides: overrides as Record<string, boolean> }
       : {}),
@@ -204,7 +217,7 @@ export function subscribeDeviceProviders(
 }
 
 async function fetchDeviceProviders(deviceId: string): Promise<DeviceProvidersPayload> {
-  const cached = cache.get(deviceId);
+  const cached = getCachedDeviceProviders(deviceId);
   if (cached) return cached;
   const ip = inflight.get(deviceId);
   if (ip) return ip;
@@ -218,7 +231,7 @@ async function fetchDeviceProviders(deviceId: string): Promise<DeviceProvidersPa
   const request = async (): Promise<DeviceProvidersPayload> => {
     for (let attempt = 0; ; attempt++) {
       try {
-        return await dl.invoke(deviceId, 'maker:provider:list', [
+        return await invokeModelCatalog(dl, deviceId, 'maker:provider:list', [
           { capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2] },
         ]) as DeviceProvidersPayload;
       } catch (error) {
@@ -228,10 +241,37 @@ async function fetchDeviceProviders(deviceId: string): Promise<DeviceProvidersPa
       }
     }
   };
+  const requestedAt = { wall: Date.now(), mono: performance.now() };
   const p = request()
     .then((res) => {
       const payload = parseDeviceProvidersPayload(res);
       if (isCurrent()) {
+        if (!expiry.remember(deviceId, payload, requestedAt, () => {
+          // The budget is over: retire the display and end this read instead of
+          // prefetching the expired target (a prefetch would renew the view).
+          // Only this direct snapshot expired. Routed aliases keep their own
+          // independently measured budgets; do not cascade into a healthy host neighbor.
+          evictDeviceProviders(deviceId, { directOnly: true, deferNotify: true });
+          queueMicrotask(() => {
+            if (cache.has(deviceId)) return;
+            const now = performance.now();
+            const last = expiryRereadAt.get(deviceId);
+            if ((listeners.get(deviceId)?.size ?? 0) > 0
+              && (last === undefined || now - last >= EXPIRY_REREAD_MIN_INTERVAL_MS)) {
+              if (expiryRereadAt.size >= 256) expiryRereadAt.clear();
+              expiryRereadAt.set(deviceId, now);
+              // evictDeviceProviders above already announced `loading` to the mounted consumers.
+              void fetchDeviceProviders(deviceId).catch(() => undefined);
+              return;
+            }
+            notifyDeviceProviders(deviceId, { status: 'error',
+              error: '[MODEL_VISIBILITY_NOT_READY] Provider directory snapshot expired',
+              unsupported: false });
+          });
+        })) {
+          cache.delete(deviceId);
+          throw new Error('[MODEL_VISIBILITY_NOT_READY] Provider directory snapshot expired');
+        }
         cache.set(deviceId, payload);
         if (deviceId.startsWith('share:') && payload.providers.some(provider => !!provider.subscriptionFastPolicy))
           subscriptionFetchedAt.set(deviceId, Date.now());
@@ -244,6 +284,7 @@ async function fetchDeviceProviders(deviceId: string): Promise<DeviceProvidersPa
     .catch((e) => {
       if (isCurrent()) {
         inflight.delete(deviceId);
+        if (isProviderAccessDeniedError(e)) { cache.delete(deviceId); expiry.forget(deviceId); }
         notifyDeviceProviders(deviceId, {
           status: 'error',
           error: e instanceof Error ? e.message : String(e),
@@ -268,7 +309,7 @@ export interface UseDeviceProvidersResult {
 }
 
 export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult {
-  const initialPayload = deviceId ? cache.get(deviceId) : undefined;
+  const initialPayload = deviceId ? getCachedDeviceProviders(deviceId) ?? undefined : undefined;
   const [ownerDeviceId, setOwnerDeviceId] = useState<string | null>(
     initialPayload ? (deviceId ?? null) : null,
   );
@@ -314,12 +355,16 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
       }
       if (event.status === 'error') {
         retryOwner = getDataOwnerGeneration();
-        retryGeneration = !event.unsupported && (
+        const errorCode = extractIpcError(new Error(event.error))?.code;
+        const recoverable = !event.unsupported && (
           isTransientRemoteError(event.error) || isDeviceUnresponsiveRemoteError(event.error)
-          || extractIpcError(new Error(event.error))?.code === 'MODEL_VISIBILITY_NOT_READY'
-        ) ? (deviceGen.get(deviceId) ?? 0) : undefined;
+          || errorCode === 'MODEL_VISIBILITY_NOT_READY'
+        );
+        retryGeneration = recoverable ? (deviceGen.get(deviceId) ?? 0) : undefined;
         setOwnerDeviceId(deviceId);
-        if (event.unsupported) setPayload(EMPTY_PAYLOAD);
+        // 只有可重试的瞬时故障可以继续显示有界快照；明确拒绝、移除或
+        // 无效目录等永久失败必须立刻清掉旧模型，不能让界面停在旧结果。
+        if (!recoverable || errorCode === 'MODEL_VISIBILITY_NOT_READY') setPayload(EMPTY_PAYLOAD);
         setLoading(false);
         setError(event.error);
         setUnsupported(event.unsupported);
@@ -342,7 +387,7 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
       document.removeEventListener('visibilitychange', onVisibility);
       unsubscribe();
     };
-    const cached = cache.get(deviceId);
+    const cached = getCachedDeviceProviders(deviceId);
     if (cached) {
       setOwnerDeviceId(deviceId);
       setPayload(cached);
@@ -392,21 +437,50 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
 }
 
 /** device-link:订阅某被控设备时预取其供应商目录(与 prefetchDeviceCapabilities 并列调用)。 */
-export async function prefetchDeviceProviders(deviceId: string): Promise<void> {
+export async function prefetchDeviceProviders(deviceId: string): Promise<DeviceProvidersPayload | null> {
   try {
-    await fetchDeviceProviders(deviceId);
+    return await fetchDeviceProviders(deviceId);
   } catch (err) {
     // swallow:打开会话时 hook 会再取一次(旧版被控端不支持时回退扁平列表)。
     log.debug('prefetchDeviceProviders failed (non-fatal)', {
       deviceId,
       error: err instanceof Error ? err.message : String(err),
     });
+    return null;
   }
+}
+
+/** Refresh mounted task-host catalogs after that host's discovery has recovered. */
+export function evictControlledDeviceProviders(taskDeviceId: string, recovered?: ReadonlySet<string>): void {
+  for (const key of new Set([...cache.keys(), ...inflight.keys(), ...listeners.keys()])) {
+    if (parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId && !recovered?.has(key)) evictDeviceProviders(key);
+  }
+}
+
+export function getMountedControlledDeviceProviderTargets(taskDeviceId: string): string[] {
+  return [...listeners.keys()].filter(key => parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId);
+}
+
+export function getCachedControlledDeviceProviderTargets(taskDeviceId: string): string[] {
+  return [...cache.keys()].filter(key => parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId && expiry.valid(key));
 }
 
 /** device-link:被控设备下线 / 断链时驱逐其供应商缓存(只清该设备的 key + 代际自增)。 */
 export function getCachedDeviceProviders(deviceId: string): DeviceProvidersPayload | null {
-  return cache.get(deviceId) ?? null;
+  return expiry.valid(deviceId) ? cache.get(deviceId) ?? null : null;
+}
+
+/** Mounted consumers (including empty/error states) and reads still in flight. */
+export function hasDeviceProvidersInterest(deviceId: string): boolean {
+  return getInterestedDeviceProviderTargets(deviceId).length > 0;
+}
+
+/** Include task-host routes that eviction of this source would also invalidate. */
+export function getInterestedDeviceProviderTargets(deviceId: string): string[] {
+  return [...new Set([...inflight.keys(), ...listeners.keys()])].filter(key => {
+    const route = parseModelCatalogKey(key);
+    return key === deviceId || route?.taskDeviceId === deviceId || route?.agentDeviceId === deviceId;
+  });
 }
 
 /** Only subscription shares opt into freshness polling; custom API catalogs keep their existing lifetime. */
@@ -420,26 +494,80 @@ export function isSubscriptionShareCatalogStale(deviceId: string, now = Date.now
 }
 
 export function isDeviceProvidersGenerationCurrent(deviceId: string, generation: number): boolean {
-  return (deviceGen.get(deviceId) ?? 0) === generation;
+  return getDeviceProvidersGeneration(deviceId) === generation;
+}
+
+export function getDeviceProvidersGeneration(deviceId: string): number {
+  return deviceGen.get(deviceId) ?? 0;
+}
+
+let allEvictGen = 0;
+const routedProviderGenerations = new Map<string, number>();
+type RoutedProviderInvalidationListener = (
+  deviceId: string | null,
+  options?: { retainDisplaySnapshot?: boolean },
+) => void;
+const routedProviderInvalidationListeners = new Set<RoutedProviderInvalidationListener>();
+
+export function getRoutedProviderGeneration(deviceId: string): number {
+  return allEvictGen + (routedProviderGenerations.get(deviceId) ?? 0);
+}
+
+export function subscribeRoutedProviderInvalidation(
+  listener: RoutedProviderInvalidationListener,
+): () => void {
+  routedProviderInvalidationListeners.add(listener);
+  return () => { routedProviderInvalidationListeners.delete(listener); };
+}
+
+function notifyRoutedProviderInvalidation(
+  deviceId: string | null,
+  options?: { retainDisplaySnapshot?: boolean },
+): void {
+  for (const listener of [...routedProviderInvalidationListeners]) listener(deviceId, options);
 }
 
 export function evictDeviceProviders(
   deviceId: string,
-  options?: { retainDisplaySnapshot?: boolean },
+  options?: { retainDisplaySnapshot?: boolean; directOnly?: boolean; deferNotify?: boolean },
 ): number {
+  // A provisional direct target must not evict the host's healthy routed aliases.
+  const routedInvalidated = !options?.directOnly && !parseModelCatalogKey(deviceId);
+  if (!options?.directOnly) {
+    if (!parseModelCatalogKey(deviceId)) {
+      routedProviderGenerations.set(deviceId, getRoutedProviderGeneration(deviceId) + 1);
+    }
+    for (const key of new Set([...cache.keys(), ...inflight.keys(), ...listeners.keys()])) {
+      const route = parseModelCatalogKey(key);
+      if (route && (route.taskDeviceId === deviceId || route.agentDeviceId === deviceId)) {
+        evictDeviceProviders(key, options);
+      }
+    }
+  }
   cache.delete(deviceId);
+  if (!options?.retainDisplaySnapshot) expiry.forget(deviceId);
   if (!options?.retainDisplaySnapshot) subscriptionFetchedAt.delete(deviceId);
   inflight.delete(deviceId);
   deviceGen.set(deviceId, (deviceGen.get(deviceId) ?? 0) + 1);
-  notifyDeviceProviders(deviceId, {
+  const event: DeviceProvidersEvent = {
     status: 'loading',
     ...(options?.retainDisplaySnapshot ? { retainDisplaySnapshot: true } : {}),
-  });
+  };
+  // A synchronous getter may discover expiry during React render. Retire the
+  // cache immediately but defer listener notifications to a microtask.
+  if (options?.deferNotify) {
+    queueMicrotask(() => {
+      if (!cache.has(deviceId)) notifyDeviceProviders(deviceId, event);
+    });
+  } else notifyDeviceProviders(deviceId, event);
+  if (routedInvalidated) notifyRoutedProviderInvalidation(deviceId, options);
   return deviceGen.get(deviceId)!;
 }
 
 /** 账号边界：缓存、在途读取及挂载中的旧账号目录一起失效。 */
 export function evictAllDeviceProviders(): void {
+  allEvictGen += 1;
   const devices = new Set([...cache.keys(), ...inflight.keys(), ...listeners.keys(), ...deviceGen.keys()]);
   for (const deviceId of devices) evictDeviceProviders(deviceId);
+  notifyRoutedProviderInvalidation(null);
 }

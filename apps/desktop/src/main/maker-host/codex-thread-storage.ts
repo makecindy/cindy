@@ -1,22 +1,42 @@
-import path from 'node:path';
-import { getActiveAppSession } from '../appSessionState.js';
-import { codexAccountHome } from './codex-account-auth.js';
-import { readCodexThreadStorageForArchive, prepareCodexRolloutForResume } from './codex-local-sessions.js';
+import { activeOwnerScopeKey, getActiveAppSession } from '../appSessionState.js';
+import { codexAccountHome } from './codex-account-auth.desktop.js';
+import { getCodexHome } from './codex-home-path.js';
+import { readCodexThreadStorageForArchiveAsync, prepareCodexRolloutForResume, prepareExternalCodexSessionForResume } from './codex-local-sessions.js';
 import { CodexThreadLocations } from './codex-thread-locations.js';
+import { createCodexThreadStorage } from './codexThreadStorageCore.js';
 
-/** Thread locations of the active owner. Multi-account history lives outside the desktop Codex home. */
+// Keep imported functions live across module cycles and late export replacements.
+const storage = createCodexThreadStorage({
+  activeOwnerScopeKey: (...args) => activeOwnerScopeKey(...args),
+  getActiveAppSession: (...args) => getActiveAppSession(...args),
+  codexAccountHome: (...args) => codexAccountHome(...args),
+  getCodexHome: (...args) => getCodexHome(...args),
+  CodexThreadLocations,
+  readCodexThreadStorageForArchiveAsync: (...args) => readCodexThreadStorageForArchiveAsync(...args),
+  prepareCodexRolloutForResume: (...args) => prepareCodexRolloutForResume(...args),
+  prepareExternalCodexSessionForResume: (...args) => prepareExternalCodexSessionForResume(...args),
+});
+
+/** Thread locations of the active owner, with the existing account-home layout. */
 export function ownerCodexThreadLocations(): CodexThreadLocations {
-  return new CodexThreadLocations(path.join(codexAccountHome('thread-index'), 'locations'), prepareCodexRolloutForResume);
+  return storage.ownerCodexThreadLocations();
 }
 
-/**
- * Locate a thread's existing history without adopting, copying or recording it.
- * Indexed (account) storage wins; unindexed threads resolve their original storage.
- */
+/** Read existing canonical history without adopting, copying or recording it. */
 export async function readCodexThreadStorageReadOnly(threadId: string): Promise<
   { historyHome: string; sqliteHome: string; rolloutPath?: string } | undefined
 > {
-  if (!getActiveAppSession().dataOwnerId) return readCodexThreadStorageForArchive(threadId);
-  return await ownerCodexThreadLocations().readStorage(threadId)
-    ?? readCodexThreadStorageForArchive(threadId);
+  return storage.readCodexThreadStorageReadOnly(threadId);
+}
+
+export async function prepareCodexResumeSession(threadId: string): Promise<string | undefined> {
+  return storage.prepareCodexResumeSession(threadId);
+}
+
+export async function resolveCodexThreadStorage(threadId: string, options?: { readOnly?: boolean }) {
+  return storage.resolveCodexThreadStorage(threadId, options);
+}
+
+export async function recordCodexThreadLocation(threadId: string, storageHome: string, rolloutPath?: string): Promise<void> {
+  return storage.recordCodexThreadLocation(threadId, storageHome, rolloutPath);
 }

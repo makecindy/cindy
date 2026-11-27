@@ -299,6 +299,8 @@ describe('shouldPrependMobileClientPromptNote(内置命令旁路)', () => {
 
   it('不把相似文本、带附件消息或其他 Agent 的输入误判成 Claude 命令', () => {
     expect(shouldPrependMobileClientPromptNote('/compactness', 'claude-code')).toBe(true);
+    expect(shouldPrependMobileClientPromptNote('/learner', 'claude-code')).toBe(true);
+    expect(shouldPrependMobileClientPromptNote('/other:learn', 'claude-code')).toBe(true);
     expect(shouldPrependMobileClientPromptNote(' /compact', 'claude-code')).toBe(true);
     expect(shouldPrependMobileClientPromptNote(
       {
@@ -312,6 +314,30 @@ describe('shouldPrependMobileClientPromptNote(内置命令旁路)', () => {
     )).toBe(true);
     expect(shouldPrependMobileClientPromptNote('/compact', 'pi')).toBe(false);
     expect(shouldPrependMobileClientPromptNote('/compact', 'codex')).toBe(true);
+  });
+
+  it('ACP 插件引擎的句首斜杠指令保持在消息开头，多段文件路径不受影响', () => {
+    expect(shouldPrependMobileClientPromptNote('/plan', 'acp')).toBe(false);
+    expect(shouldPrependMobileClientPromptNote('/plan 重构登录流程', 'acp')).toBe(false);
+    expect(shouldPrependMobileClientPromptNote('/skill:learn', 'acp')).toBe(false);
+    expect(shouldPrependMobileClientPromptNote(
+      { type: 'user', content: [{ type: 'text', text: '/compact\n保留接口契约' }] },
+      'acp',
+    )).toBe(false);
+    expect(shouldPrependMobileClientPromptNote('/tmp/build.log 为什么失败', 'acp')).toBe(true);
+    expect(shouldPrependMobileClientPromptNote('排查一下 /learn 为什么自动触发', 'acp')).toBe(true);
+  });
+
+  // Review (#12732, Greptile P1)：插件引擎的 `/<skill>` 由 maker-core 在发给引擎前展开，只认消息开头的文字。
+  // 此前这里只放过 Pi，手机首发、切换引擎后首条或插话的 `/pr` 被说明顶到后面，引擎收到的是没展开的一行字。
+  // 覆盖缺口：maker-core 测试直接调 handle.send，不经过这道说明判定。最小失败输入：acp 的 '/pr'（unit）。
+  it('插件引擎的 slash 输入同 Pi 一样不带说明，普通消息照常带', () => {
+    expect(shouldPrependMobileClientPromptNote('/pr fix the build', 'acp')).toBe(false);
+    expect(shouldPrependMobileClientPromptNote(
+      { type: 'user', content: [{ type: 'image', path: '/tmp/a.png' }, { type: 'text', text: ' /pr' }] },
+      'acp',
+    )).toBe(false);
+    expect(shouldPrependMobileClientPromptNote('open /pr', 'acp')).toBe(true);
   });
 });
 

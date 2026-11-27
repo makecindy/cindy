@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 3,
+  "id": "runtime-context-example",
+  "name": "Runtime Context Example",
+  "description": "Local reference fixture for task prompts, context, memory and Pi request processing.",
+  "whenToUse": "Testing task-selected runtime context providers during plugin development.",
+  "version": "0.0.1",
+  "minCindyVersion": "0.0.0",
+  "entry": "main.js",
+  "subscribe": {
+    "hooks": ["will-start-turn", "will-model-request", "will-compose-context", "will-search-memory"]
+  },
+  "systemPrompt": [
+    { "id": "style", "text": "RUNTIME_EXAMPLE_SYSTEM: explain the verification result clearly.", "order": 100, "scope": "selected-task" }
+  ]
+}

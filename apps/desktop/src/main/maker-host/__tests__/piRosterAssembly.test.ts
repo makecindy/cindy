@@ -1,3 +1,4 @@
+import { configureUserDataDir } from '../../userDataPath.js';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os, { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -10,6 +11,11 @@ const state = vi.hoisted(() => ({
   binaryPath: '',
   ripgrepPath: '',
   userDataPath: '',
+  remoteByom: false,
+}));
+
+vi.mock('../cli-proxy-bridge.js', () => ({
+  ensureCliProxyBridge: async () => 'http://127.0.0.1:9876',
 }));
 
 // Skill discovery is covered by managed-skills.test.ts, not this runtime/auth fixture.
@@ -34,9 +40,11 @@ vi.mock('../../agent-binaries/index.js', () => ({
 
 vi.mock('../runtime-configs.js', () => ({
   getRipgrepBinaryPath: () => state.ripgrepPath,
+  // Cache route identities now resolve the real upstream even for local Pi.
+  claudeUpstreamEndpoint: () => 'https://upstream.test/v1',
 }));
 
-vi.mock('../../mcp-integrations/piEnvironment.js', () => ({
+vi.mock('../../mcp-integrations/piEnvironment.desktop.js', () => ({
   getPiExtraSpawnConfig: async () => ({ mcpBridge: null, mcpEnv: {} }),
 }));
 
@@ -48,6 +56,8 @@ vi.mock('../auth-adapters.js', () => ({
 
 vi.mock('../anthropic-compat-proxy-host.js', () => ({
   getClaudeEndpoint: () => 'http://127.0.0.1:9',
+  // This prompt-assembly fixture represents an already-running local proxy.
+  isAnthropicCompatProxyHandleReady: () => true,
 }));
 
 vi.mock('../claude-native-auth.js', () => ({
@@ -55,12 +65,15 @@ vi.mock('../claude-native-auth.js', () => ({
   hasClaudeNativeLoginUnbound: () => false,
 }));
 
-vi.mock('../grok-oauth-login.js', () => ({
+vi.mock('../grok-oauth-login.desktop.js', () => ({
   hasGrokOAuthLogin: () => false,
 }));
 
 vi.mock('../custom-provider-header-secrets.js', () => ({
-  listCustomProvidersWithSecureHeaders: async () => [],
+  listCustomProvidersWithSecureHeaders: async () => state.remoteByom ? [{
+    id: 'shared-loopback', name: 'Shared loopback', auth: { method: 'none' },
+    runtimes: { pi: { baseUrl: 'http://127.0.0.1:23425/v1', wireProtocol: 'openai-chat', models: [{ id: 'local-model' }] } },
+  }] : [],
 }));
 
 vi.mock('../../secrets/providerSecretStore.js', () => ({
@@ -154,6 +167,7 @@ describe('buildPiAgent roster prompt assembly', () => {
   let workingDir = '';
 
   beforeEach(() => {
+    state.remoteByom = false;
     state.args = [];
     root = mkdtempSync(path.join(tmpdir(), 'pi-roster-assembly-'));
     vi.spyOn(os, 'homedir').mockReturnValue(root);
@@ -162,6 +176,7 @@ describe('buildPiAgent roster prompt assembly', () => {
     writeFileSync(path.join(process.env.PI_CODING_AGENT_DIR!, 'AGENTS.md'), 'host global context canary');
     workingDir = path.join(root, 'workspace');
     state.userDataPath = path.join(root, 'user-data');
+    configureUserDataDir(state.userDataPath);
     state.binaryPath = path.join(root, 'pi');
     state.ripgrepPath = path.join(root, 'rg');
     mkdirSync(workingDir, { recursive: true });
@@ -181,6 +196,62 @@ describe('buildPiAgent roster prompt assembly', () => {
     vi.restoreAllMocks();
     setXdGatewayModels([]);
     rmSync(root, { recursive: true, force: true });
+  });
+
+  // #9148, unit: real Desktop factory -> native provider resolver -> PiAgent
+  // must carry the SSH probe. Previously only xAI forwarding was wired; absent
+  // hooks would keep reachable BYOM statically blocked. No native RPC/SSH claimed.
+  it('passes the selected remote BYOM to the execution-host reachability probe', async () => {
+    state.remoteByom = true;
+    const probe = vi.fn(async () => false);
+    const transport = vi.fn();
+    const agent = buildPiAgent({ logger, probeRemotePiProviderEndpoint: probe, getRemotePiTransport: transport,
+      capabilityAdditions: { availableModels: [{ id: 'local-model', displayName: 'Local', contextWindow: 200_000,
+        efforts: [], defaultEffort: null }] } });
+    try {
+      await expect(agent!.startSession({ sessionId: 'remote-probe-wiring', workingDir,
+        model: 'local-model', providerId: 'shared-loopback', remoteHostId: 'shared-network-host' }))
+        .rejects.toThrow('[REMOTE_LOCAL_ONLY_PROVIDER]');
+      expect(probe).toHaveBeenCalledExactlyOnceWith('shared-network-host', 'http://127.0.0.1:23425/v1');
+      expect(transport).not.toHaveBeenCalled();
+    } finally { await agent!.dispose(); }
+  });
+
+  // GUI launch has no shell proxy. The bridge transport tests cover PAC/CONNECT;
+  // this unit test checks the environment that actually reaches the Pi executable.
+  it.each([undefined, 'http://explicit.example:3128'])('starts Pi with the system or explicit HTTPS proxy (%s)', async explicit => {
+    for (const key of ['HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy']) {
+      vi.stubEnv(key, undefined);
+    }
+    vi.stubEnv('HTTPS_PROXY', explicit);
+    vi.stubEnv('NO_PROXY', 'intranet.example');
+    const agent = buildPiAgent({ logger });
+    const handle = await agent!.startSession({ sessionId: 'proxy-session', workingDir, model: 'm' });
+    try {
+      expect(state.env.HTTPS_PROXY).toBe(explicit ?? 'http://127.0.0.1:9876');
+      if (!explicit) expect(state.env.https_proxy).toBe(state.env.HTTPS_PROXY);
+      expect(state.env.NO_PROXY?.split(',')).toEqual(expect.arrayContaining(['intranet.example', 'localhost', '127.0.0.1', '::1']));
+      expect(state.env.HTTP_PROXY).toBeUndefined();
+      expect(process.env.HTTPS_PROXY).toBe(explicit);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('respects the host casing rules for the proxy and bypass list passed to Pi', async () => {
+    for (const key of ['HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy']) {
+      vi.stubEnv(key, undefined);
+    }
+    vi.stubEnv('Https_Proxy', 'https://explicit.example:443');
+    vi.stubEnv('No_Proxy', 'intranet.example');
+    const isWindows = process.platform === 'win32';
+    const handle = await buildPiAgent({ logger })!.startSession({ sessionId: 'proxy-casing', workingDir, model: 'm' });
+    try {
+      expect(state.env.HTTPS_PROXY).toBe(isWindows ? 'https://explicit.example:443' : 'http://127.0.0.1:9876');
+      expect(state.env.NO_PROXY?.split(',').includes('intranet.example')).toBe(isWindows);
+    } finally {
+      await handle.close();
+    }
   });
 
   it.each(['default', 'override', 'tilde'])('forwards roster and %s user context through real PiAgent startup', async (source) => {
@@ -219,9 +290,17 @@ describe('buildPiAgent roster prompt assembly', () => {
     });
     const promptIndex = state.args.indexOf('--append-system-prompt');
     expect(promptIndex).toBeGreaterThan(-1);
-    expect(readFileSync(state.args[promptIndex + 1]!, 'utf8')).toContain(
+    const prompt = readFileSync(state.args[promptIndex + 1]!, 'utf8');
+    expect(prompt).toContain(
       '<ghost-roster>\n{"id":"art"}\n</ghost-roster>',
     );
+    // Production startup must carry the shared plan guidance once, while keeping
+    // Pi's MCP gateway instructions and native prompt. Previously Pi missed plans.
+    expect(prompt.match(/## User-facing plans/gu)).toHaveLength(1);
+    expect(prompt).toContain('Name the real action and visible result instead.');
+    expect(prompt).toContain('cindy_mcp_list_tools');
+    expect(prompt).not.toContain('## Skill source precedence');
+    expect(state.args).not.toContain('--system-prompt');
     expect(getGhostRosterPrompt).toHaveBeenCalledWith({ workingDir });
     expect(readFileSync(path.join(state.env.PI_CODING_AGENT_DIR!, 'AGENTS.md'), 'utf8'))
       .toBe('host global context canary');

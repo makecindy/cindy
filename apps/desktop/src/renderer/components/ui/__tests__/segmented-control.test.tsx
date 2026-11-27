@@ -12,6 +12,12 @@ import { SegmentedControl } from '../segmented-control';
 
 afterEach(cleanup);
 
+it('associates the rendered options with the caller setting for search inspection', () => {
+  render(<SegmentedControl data-setting-id="appearance.theme" aria-label="Theme" value="light"
+    options={[{ value: 'light', label: 'Light' }]} onValueChange={() => {}} />);
+  expect(screen.getByRole('radio').closest('[data-setting-id]')?.getAttribute('data-setting-id')).toBe('appearance.theme');
+});
+
 const options = [
   { value: 'sidebar', label: 'Sidebar' },
   { value: 'external', label: 'External' },
@@ -178,5 +184,31 @@ describe('Segmented edge cases', () => {
     fireEvent.click(screen.getByRole('radio'));
     expect(document.activeElement).toBe(composer);
     expect(change).toHaveBeenCalledWith('a');
+  });
+});
+
+// Owner decision #8 (2026-11-23): four density presets drive the track and option heights;
+// a caller's explicit height still wins for the scenes not yet assigned to a preset.
+describe('Segmented density', () => {
+  it.each([
+    [{}, '32px', '28px'],
+    [{ density: 'xs' as const }, '24px', '18px'],
+    [{ density: 'sm' as const }, '28px', '24px'],
+    [{ density: 'md' as const }, '32px', '28px'],
+    [{ density: 'lg' as const }, '38px', '32px'],
+    [{ density: 'sm' as const, height: 34, optionHeight: 30 }, '34px', '30px'],
+  ])('%o renders a %s track with %s options', (sizing, track, option) => {
+    render(
+      <SegmentedControl
+        aria-label="Density"
+        value="a"
+        options={[{ value: 'a', label: 'A' }]}
+        onValueChange={() => {}}
+        {...sizing}
+      />,
+    );
+    const root = screen.getByRole('radiogroup');
+    expect(root.style.getPropertyValue('--segmented-height')).toBe(track);
+    expect(root.style.getPropertyValue('--segmented-option-height')).toBe(option);
   });
 });

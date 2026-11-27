@@ -23,6 +23,9 @@ import {
   GHOST_CARD_ACTION_ID_RE,
   GHOST_CARD_ACTION_PROMPT_MAX_LEN,
   GHOST_CARD_SPAWN_SEP,
+  ghostCardDeclaresModelSelect,
+  isGhostCardModelSelection,
+  type GhostCardModelSelection,
   ghostCardRootCallId,
   type GhostPipeEventPush,
   type InstalledGhost,
@@ -61,6 +64,8 @@ export interface CardActionDispatchDeps {
   onActivityStart?(key: string, sessionId: string): void;
   ownerScope?: GhostOwnerScope;
   now?(): number;
+  /** 卡内模型下拉框选中的模型当前是否可用(本机按 cindy.pickModel 同一判据,远程按那里的目录)。 */
+  isModelRouteAvailable?(route: GhostCardModelSelection): Promise<boolean>;
   pickMailAttachment?(inline: boolean, sessionId: string): Promise<PreparedMailAttachment | null>;
   prepareMailUpload?: typeof prepareMailAttachmentUpload;
   log?: {
@@ -88,7 +93,11 @@ export class GhostCardActionDispatcher {
    * (IPC 层对 renderer 恒可回,reason 仅诊断)。prompt 仅 data-ghost-prompt
    * 类动作有(宿主输入框收集的用户文字),可选;非法形状整次拒。
    */
-  async dispatch(callId: unknown, actionId: unknown, prompt?: unknown, mobilePageId?: string, formValues?: unknown, change = false, upload?: MailAttachmentUpload): Promise<CardActionResult> {
+  async dispatch(callId: unknown, actionId: unknown, prompt?: unknown, mobilePageId?: string, formValues?: unknown, change = false, upload?: MailAttachmentUpload, modelSelection?: unknown): Promise<CardActionResult> {
+    // A remote controller's choice arrives with its page and is relative to this computer, like a local one.
+    if (modelSelection !== undefined && (change || upload || !isGhostCardModelSelection(modelSelection))) {
+      return { ok: false, reason: 'bad-model-selection' };
+    }
     const fields = formValues === undefined ? undefined : parseGhostCardFormValues(formValues);
     if (fields === null || (change && !fields)) return { ok: false, reason: 'bad-form-values' };
     if (typeof callId !== 'string' || callId.length === 0 || callId.length > MAX_CALL_ID_LEN) {
@@ -157,15 +166,18 @@ export class GhostCardActionDispatcher {
       if (!mail || mail.supersededBy || stored?.ghostId !== ghostId) return { ok: false, reason: 'mail-view-expired' };
       const countdownAction = !change && !!mail.pendingSend &&
         (actionId === `mail:cancel:${mail.key}` || actionId === `mail:now:${mail.key}`);
+      const cancelPreparingAction = !change && !mail.pendingSend && mail.state === 'sending' && !!mail.cancelLabel &&
+        actionId === `mail:cancel:${mail.key}`;
       const expected = change ? 'change' : mail.state === 'sent' && mail.continueLabel ? 'continue' : 'send';
       const attachmentAction = !change && mail.fields.some(f => f.kind === 'mail-attachments') &&
         (actionId === `mail:attach:${mail.key}` || actionId === `mail:image:${mail.key}`);
+      const quoteAction = !change && !!mail.addQuoteLabel && ['draft', 'syncing', 'error'].includes(mail.state) && actionId === `mail:quote:${mail.key}`;
       const deleteAction = !change && !!mail.deleteLabel && actionId === `mail:delete:${mail.key}`;
       if (deleteAction && !['draft', 'syncing', 'error'].includes(mail.state)) return { ok: false, reason: 'mail-view-readonly' };
       if (attachmentAction && !['draft', 'syncing', 'error'].includes(mail.state)) return { ok: false, reason: 'mail-view-readonly' };
-      if (!countdownAction && ((!attachmentAction && !deleteAction && actionId !== `mail:${expected}:${mail.key}`) || ['sending', 'unconfirmed', 'deleting', 'deleted'].includes(mail.state) ||
+      if (!countdownAction && !cancelPreparingAction && ((!attachmentAction && !deleteAction && !quoteAction && actionId !== `mail:${expected}:${mail.key}`) || ['sending', 'unconfirmed', 'deleting', 'deleted'].includes(mail.state) ||
           (mail.state === 'sent' && expected !== 'continue'))) return { ok: false, reason: 'mail-view-readonly' };
-      if (!countdownAction && !deleteAction && expected !== 'continue' && (!fields || Object.keys(fields).length !== mail.fields.length || mail.fields.some(f => !(f.name in fields)))) return { ok: false, reason: 'bad-mail-fields' };
+      if (!countdownAction && !cancelPreparingAction && !deleteAction && expected !== 'continue' && (!fields || Object.keys(fields).length !== mail.fields.length || mail.fields.some(f => !(f.name in fields)))) return { ok: false, reason: 'bad-mail-fields' };
       if (attachmentAction) {
         attachmentView = mail;
         if (!sessionId || (mobilePageId ? (!upload || !this.deps.prepareMailUpload) : !this.deps.pickMailAttachment)) return { ok: false, reason: 'mail-attachment-picker-unavailable' };
@@ -185,6 +197,21 @@ export class GhostCardActionDispatcher {
       // 卡片是它发的却没声明 card 能力 = 不该发生;保险起见拒。
       this.deps.log?.warn('card-action rejected: no card capability', { ghostId, callId });
       return { ok: false, reason: 'no-card-slot' };
+    }
+    let selectedModel: GhostCardModelSelection | undefined;
+    if (modelSelection !== undefined) {
+      // 只有声明了模型下拉框的按钮才收模型;模型须当前可用(同 cindy.pickModel 的确认判据)。
+      const stored = await this.deps.resolvePersistedCard(callId);
+      if (!ownerUsable()) return rejectStaleOwner(ghostId);
+      if (stored?.ghostId !== ghostId || !stored.html || !ghostCardDeclaresModelSelect(stored.html, actionId)) {
+        return { ok: false, reason: 'no-model-select' };
+      }
+      const route = { ...(modelSelection as GhostCardModelSelection) };
+      let available = false;
+      try { available = await this.deps.isModelRouteAvailable?.(route) ?? false; } catch { /* 视为不可用 */ }
+      if (!ownerUsable()) return rejectStaleOwner(ghostId);
+      if (!available) return { ok: false, reason: 'model-unavailable' };
+      selectedModel = route;
     }
 
     // 重开被点卡的更新窗口(意识仍可原地换它,向后兼容),并铸一个衍生卡位:
@@ -244,6 +271,7 @@ export class GhostCardActionDispatcher {
         ...(promptText !== undefined ? { prompt: promptText } : {}),
         ...(deliveryFields ? { formValues: deliveryFields } : {}),
         ...(mailAttachment ? { mailAttachment } : {}),
+        ...(selectedModel ? { modelSelection: selectedModel } : {}),
         spawnCallId,
         ts: this.now(),
       });

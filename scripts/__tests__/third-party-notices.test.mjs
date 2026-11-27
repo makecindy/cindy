@@ -26,6 +26,31 @@ function read(relativePath) {
   return fs.readFileSync(path.join(repoRoot, relativePath), "utf8");
 }
 
+test("Solidity preview dependencies are disclosed at their locked versions in desktop distributions", () => {
+  const dependencies = [
+    ["@replit/codemirror-lang-solidity", "6.0.2"],
+    ["highlightjs-solidity", "2.0.6"],
+  ];
+  for (const artifact of ["desktop-win", "desktop-macos", "desktop-linux"]) {
+    const notice = read(`docs/legal/notices/${artifact}.txt`);
+    const sbom = JSON.parse(read(`docs/legal/notices/sbom/${artifact}.spdx.json`));
+    for (const [name, version] of dependencies) {
+      assert.ok(notice.includes(`${name}@${version}`), `${artifact} discloses ${name}`);
+      const component = sbom.packages.find(pkg => pkg.name === name);
+      assert.ok(component, `${artifact} inventories ${name}`);
+      assert.equal(component.versionInfo, version);
+      assert.equal(component.licenseDeclared, "MIT");
+    }
+    assert.ok(notice.includes("JetBrains Mono fonts"));
+    assert.ok(notice.includes("Cindy agent-net WebAssembly core"));
+  }
+  for (const file of ["apps/desktop/resources/THIRD-PARTY-NOTICES.txt", "docs/legal/notices/THIRD-PARTY-NOTICES.txt"]) {
+    for (const [name, version] of dependencies) {
+      assert.ok(read(file).includes(`${name}@${version}`), `${file} discloses ${name}`);
+    }
+  }
+});
+
 test("speaker models and native inference libraries are disclosed on both clients", () => {
   for (const artifact of artifactNames) {
     const notices = read(`docs/legal/notices/${artifact}.txt`);
@@ -225,10 +250,12 @@ test("desktop resources include both open-source and restricted disclosures", ()
     const notice = read(noticePath);
     const liteLlmIndex = notice.indexOf("LiteLLM mascot SVG path (adapted)");
     const lobeIndex = notice.indexOf("Lobe Icons SVG paths (vendored)");
+    const magpieIndex = notice.indexOf("Magpie SVG mark (adapted)");
     assert.notEqual(liteLlmIndex, -1, `${noticePath} includes the LiteLLM notice`);
     assert.notEqual(lobeIndex, -1, `${noticePath} includes the Lobe Icons notice`);
+    assert.notEqual(magpieIndex, -1, `${noticePath} includes the Magpie notice`);
     assert.ok(
-      liteLlmIndex < lobeIndex,
+      liteLlmIndex < lobeIndex && lobeIndex < magpieIndex,
       `${noticePath} keeps provider branding notices in canonical name order`,
     );
   };

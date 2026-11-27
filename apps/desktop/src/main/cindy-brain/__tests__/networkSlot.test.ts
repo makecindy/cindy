@@ -5,9 +5,17 @@
  * 重定向逐跳守门、响应文本化与截断、错误折叠、在途并发闸、callId 归因。
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { createHash } from 'node:crypto';
+import { WebSocketServer } from 'ws';
+
+import { afterAll, describe, it, expect, vi } from 'vitest';
 
 import { GhostNetworkSlot, type NetworkSlotDeps } from '../networkSlot';
+import { HostNetworkConnections } from '../networkConnections';
+import { GhostConnectionManager } from '../ghostConnections';
+import { GhostSavedCredentialManager } from '../ghostSavedCredentials';
+import { createMcpAppsManualResolver } from '../mcpAppsManualHeaders';
+import { GHOST_SAVED_CREDENTIAL_MARKER } from '../../../shared/pluginAccountReuse';
 import {
   GHOST_FETCH_DIR_UPLOAD_MAX_BYTES_PER_FILE,
   GHOST_FETCH_DIR_UPLOAD_MAX_TOTAL_BYTES,
@@ -55,6 +63,7 @@ function fakeGhost(
       ...(overrides.network === null ? {} : { network: overrides.network ?? defaultNetwork }),
     },
     dir: '/fake/brain/web-search',
+    approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
     enabled: overrides.enabled ?? true,
     ...(overrides.trust ? { trust: overrides.trust } : {}),
   } as InstalledGhost;
@@ -136,6 +145,450 @@ function makeSlot(overrides: Partial<NetworkSlotDeps> = {}): {
 }
 
 const BRAVE_URL = 'https://api.search.brave.com/res/v1/web/search?q=hi';
+
+// #10130 / 4559022319, unit: declared direct targets previously skipped public
+// SSRF checks. Synthetic transports prove no metadata hop or WS is dispatched;
+// the same Host policy is used by Desktop and Node, without external requests.
+describe('plugin cloud metadata boundary', () => {
+  it.each(['http://169.254.169.254', 'http://100.100.100.200', 'http://[fd00:ec2::254]',
+    'https://169.254.169.254', 'https://[::ffff:6464:64c8]', 'https://[64:ff9b::6464:64c8]',
+    // #10130 / 4581724529: Tencent's documented metadata endpoint was not
+    // covered by the three existing literals. Same unit entry/hop matrix.
+    'http://169.254.0.23', 'https://169.254.0.23', 'http://[::ffff:a9fe:17]'])
+    ('rejects initial, redirected and WebSocket metadata origin %s', async origin => {
+      const start = 'https://start.example.test';
+      const wsOrigin = origin.replace(/^http/, 'ws');
+      const socket = vi.spyOn(HostNetworkConnections.prototype, 'openWebSocket').mockResolvedValue('never-open');
+      const fetch = vi.fn(async (url: string) => new Response('{}', { status: new URL(url).origin === start ? 302 : 200,
+        headers: new URL(url).origin === start ? { location: origin } : { 'content-type': 'application/json' } }));
+      const h = makeSlot({ getGhost: () => fakeGhost({ network: { hosts: [start, origin, wsOrigin] } }),
+        fetchImpl: fetch,
+      });
+      try {
+        expect(await h.slot.handleFetchRequest('web-search', { url: origin })).toMatchObject({ ok: false, errorCode: 'NETWORK_INSECURE_ORIGIN' });
+        expect(fetch).not.toHaveBeenCalled();
+        expect(await h.slot.handleFetchRequest('web-search', { url: start })).toMatchObject({ ok: false, errorCode: 'NETWORK_INSECURE_ORIGIN' });
+        expect(fetch).toHaveBeenCalledTimes(1);
+        expect(await h.slot.handleNetworkRequest('web-search', { op: 'open', url: wsOrigin })).toMatchObject({ ok: false, errorCode: 'NETWORK_INSECURE_ORIGIN' });
+        expect(socket).not.toHaveBeenCalled();
+      } finally { socket.mockRestore(); await h.slot.disposeAll(); }
+    });
+
+  it.each(['http://10.0.0.5', 'http://169.254.1.1', 'http://100.100.100.201', 'http://[fd00:ec2::255]'])
+    ('keeps ordinary private/link-local origin %s usable', async origin => {
+      const h = makeSlot({ getGhost: () => fakeGhost({ network: { hosts: [origin] } }) });
+      try {
+        expect(await h.slot.handleFetchRequest('web-search', { url: origin })).toMatchObject({ ok: true });
+        expect(h.fetchImpl).toHaveBeenCalledOnce();
+      } finally { await h.slot.disposeAll(); }
+    });
+});
+
+// §4: saved credentials may only be injected by the Host; the existing direct
+// key cases cannot observe reference revocation or the unused-path IO budget.
+describe('saved credential Host injection', () => {
+  // Unit, #9825 / 4546557311: exact-origin consent did not prevent ordinary
+  // keys from crossing public cleartext links. Exercise the injection entry;
+  // mock only the final WS socket transport, never send a real credential.
+  it.each([
+    ['http://8.8.8.8:8080', false], ['ws://8.8.8.8:8080', false],
+    ['http://10.0.0.5:8080', false], ['ws://127.0.0.1:8080', false],
+    ['http://gitlab.internal:8080', false], ['http://127.attacker.example:8080', false],
+    ['http://localhost:8080', false], ['http://api.localhost:8080', false],
+    ['http://[fd00::1]:8080', false], ['https://api.example.com:8443', true], ['wss://api.example.com:8443', true],
+  ] as const)('injects a user key into %s only when the origin transport is allowed (%s)', async (origin, allowed) => {
+    const open = vi.spyOn(HostNetworkConnections.prototype, 'openWebSocket').mockResolvedValue('opaque');
+    const h = makeSlot({
+      getGhost: () => fakeGhost({ network: { hosts: [origin], secrets: [{ key: 'key', label: 'Own',
+        inject: { header: 'Authorization', format: 'Bearer {value}', hosts: [origin] } }] } }),
+      readSecret: vi.fn(() => 'synthetic-host-only-key'),
+    });
+    try {
+      const webSocket = origin.startsWith('ws');
+      const result = webSocket ? await h.slot.handleNetworkRequest('web-search', { op: 'open', url: origin + '/api' })
+        : await h.slot.handleFetchRequest('web-search', { url: origin + '/api' });
+      expect(result).toMatchObject({ ok: allowed });
+      if (allowed) {
+        const init = webSocket ? open.mock.calls[0]?.[1] : h.fetchImpl.mock.calls[0]?.[1];
+        expect(init).toMatchObject({ headers: { Authorization: 'Bearer synthetic-host-only-key' } });
+      } else {
+        expect(open).not.toHaveBeenCalled();
+        expect(h.fetchImpl).not.toHaveBeenCalled();
+        expect(h.readSecret).not.toHaveBeenCalled();
+      }
+    } finally { open.mockRestore(); await h.slot.disposeAll(); }
+  });
+
+  it('resolves a reference inside the Host and rechecks it before returning', async () => {
+    let valid = true;
+    const assertCurrent = () => { if (!valid) throw new Error('CREDENTIAL_REFERENCE_CHANGED'); };
+    const resolveSavedCredential = vi.fn(() => ({ value: 'source-private-token', assertCurrent }));
+    const h = makeSlot({ readSecret: () => GHOST_SAVED_CREDENTIAL_MARKER, resolveSavedCredential });
+    expect(await h.slot.handleFetchRequest('web-search', { url: BRAVE_URL })).toMatchObject({ ok: true });
+    expect(h.fetchImpl.mock.calls[0]?.[1]).toMatchObject({ headers: { 'X-Subscription-Token': 'source-private-token' } });
+    expect(resolveSavedCredential).toHaveBeenCalledWith('web-search', 'brave_api_key');
+    h.fetchImpl.mockImplementationOnce(async () => { valid = false; return fakeResponse(); });
+    const revoked = await h.slot.handleFetchRequest('web-search', { url: BRAVE_URL });
+    expect(revoked).toMatchObject({ ok: false });
+    expect(JSON.stringify(revoked)).not.toContain('source-private-token');
+  });
+
+  it('rejects a marker without an approved reference and does no reference lookup for an ordinary key', async () => {
+    const resolveSavedCredential = vi.fn(() => null);
+    const unused = makeSlot({ resolveSavedCredential });
+    expect(await unused.slot.handleFetchRequest('web-search', { url: BRAVE_URL })).toMatchObject({ ok: true });
+    expect(unused.readSecret).toHaveBeenCalledTimes(1);
+    expect(resolveSavedCredential).not.toHaveBeenCalled();
+    const forged = makeSlot({ readSecret: () => GHOST_SAVED_CREDENTIAL_MARKER, resolveSavedCredential });
+    expect(await forged.slot.handleFetchRequest('web-search', { url: BRAVE_URL })).toMatchObject({ ok: false });
+    expect(forged.fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+// Tier 1: the public network entry must return before a stream ends, preserve
+// reconnect cursors, and revoke live sockets on an installation/owner boundary.
+// Existing buffered-fetch cases cannot observe these lifetime differences.
+describe('host network connections', () => {
+  // #10130 / 4547237937, unit: prior cases opened sockets serially and
+  // missed WS credential awaits racing three active HTTP requests for slot 4.
+  async function holdThreeHttp(overrides: Partial<NetworkSlotDeps> = {}) {
+    let finish!: (response: Response) => void;
+    const response = new Promise<Response>(resolve => { finish = resolve; });
+    let started!: () => void;
+    const allStarted = new Promise<void>(resolve => { started = resolve; });
+    let count = 0;
+    const h = makeSlot({
+      getGhost: () => fakeGhost({ network: { hosts: ['api.search.brave.com', 'wss://socket.example.test'],
+        secrets: [{ key: 'key', label: 'Socket key', inject: {
+          header: 'Authorization', format: 'Bearer {value}', hosts: ['wss://socket.example.test'],
+        } }] } }),
+      readSecret: () => 'synthetic-key',
+      fetchImpl: async () => { if (++count === 3) started(); return response; },
+      ...overrides,
+    });
+    const pending = Array.from({ length: 3 }, () => h.slot.handleFetchRequest('web-search', { url: BRAVE_URL }));
+    await allStarted;
+    return { slot: h.slot, async close() {
+      finish(fakeResponse());
+      await Promise.all(pending);
+      await h.slot.disposeAll();
+    } };
+  }
+
+  it('reserves the shared fourth slot before parallel WS credential awaits', async () => {
+    const open = vi.spyOn(HostNetworkConnections.prototype, 'openWebSocket').mockResolvedValue('opaque');
+    const h = await holdThreeHttp();
+    try {
+      const results = await Promise.all(Array.from({ length: 4 }, () => h.slot.handleNetworkRequest('web-search', {
+        op: 'open', url: 'wss://socket.example.test/events',
+      })));
+      expect(results.filter(result => result.ok)).toHaveLength(1);
+      expect(results.filter(result => !result.ok)).toHaveLength(3);
+      expect(open).toHaveBeenCalledOnce();
+    } finally { open.mockRestore(); await h.close(); }
+    expect(h.slot.hasInFlightRequests('web-search')).toBe(false);
+  });
+
+  it.each(['missing', 'credential-revoked', 'plugin-cancelled', 'owner-cancelled', 'handshake-failed'] as const)(
+    'releases the WS reservation after %s so a fresh request fits', async failure => {
+      let epoch = 0;
+      let missing = failure === 'missing';
+      const openWebSocket = HostNetworkConnections.prototype.openWebSocket;
+      const open = vi.spyOn(HostNetworkConnections.prototype, 'openWebSocket').mockResolvedValue('opaque');
+      if (failure === 'handshake-failed') open.mockImplementationOnce(function (this: HostNetworkConnections, owner, input) {
+        return openWebSocket.call(this, owner, { ...input, agent: async () => { throw new Error('NETWORK_WEBSOCKET_FAILED'); } });
+      });
+      const h = await holdThreeHttp({ readSecret: () => GHOST_SAVED_CREDENTIAL_MARKER,
+        resolveSavedCredential: () => {
+          const captured = epoch;
+          return missing ? null : { value: 'synthetic-key', assertCurrent: () => {
+            if (captured !== epoch) throw new Error('CREDENTIAL_REFERENCE_CHANGED');
+          } };
+        },
+      });
+      try {
+        const pending = h.slot.handleNetworkRequest('web-search', { op: 'open', url: 'wss://socket.example.test/events' });
+        if (failure === 'credential-revoked') epoch++;
+        if (failure === 'plugin-cancelled') h.slot.disposeGhost('web-search');
+        if (failure === 'owner-cancelled') await h.slot.disposeAll();
+        expect(await pending).toMatchObject({ ok: false });
+        expect(open).toHaveBeenCalledTimes(failure === 'handshake-failed' ? 1 : 0);
+        missing = false;
+        expect(await h.slot.handleNetworkRequest('web-search', { op: 'open', url: 'wss://socket.example.test/events' }))
+          .toMatchObject({ ok: true, connectionId: 'opaque' });
+      } finally { open.mockRestore(); await h.close(); }
+      expect(h.slot.hasInFlightRequests('web-search')).toBe(false);
+    },
+  );
+
+  it('returns headers before EOF, reads UTF-8 incrementally, and retains cursors', async () => {
+    let source!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({ start(controller) { source = controller; } });
+    const { slot } = makeSlot({ fetchImpl: async () => new Response(body, { headers: { 'content-type': 'text/event-stream' } }) });
+    const opened = await slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'stream' });
+    expect(opened).toMatchObject({ ok: true, status: 200, connectionId: expect.any(String) });
+    if (!opened.ok || !('connectionId' in opened)) return;
+    try {
+      const bytes = new TextEncoder().encode('你好');
+      source.enqueue(bytes.slice(0, 2));
+      source.enqueue(bytes.slice(2));
+      const first = await slot.handleNetworkRequest('web-search', { op: 'read', connectionId: opened.connectionId, cursor: 0, waitMs: 1000 });
+      expect(first).toMatchObject({ ok: true, events: [{ type: 'text', data: '你好', sequence: 1 }], nextCursor: 1, resetRequired: false });
+      expect(await slot.handleNetworkRequest('other-plugin', { op: 'read', connectionId: opened.connectionId })).toMatchObject({ ok: false });
+      expect(await slot.handleNetworkRequest('web-search', { op: 'read', connectionId: opened.connectionId, cursor: 0 })).toMatchObject({ events: [{ data: '你好' }] });
+      source.close();
+      expect(await slot.handleNetworkRequest('web-search', { op: 'read', connectionId: opened.connectionId, cursor: 1, waitMs: 1000 })).toMatchObject({ ok: true, closed: true, events: [{ type: 'end' }] });
+    } finally { slot.disposeAll(); }
+  });
+
+  // #10130 / 4558948515, unit: the author contract promises NDJSON streams,
+  // but existing SSE cases did not cover application/x-ndjson. Exercise fetch
+  // and connection read, keeping buffered and binary response rules unchanged.
+  it.each([
+    ['application/x-ndjson; charset=utf-8', 'stream', true],
+    ['application/x-ndjson', 'text', false],
+    ['application/octet-stream', 'stream', false],
+  ] as const)('handles %s as %s without widening other response modes (%s)', async (contentType, as, accepted) => {
+    const data = '{"ok":true}\n';
+    const { slot } = makeSlot({ fetchImpl: async () => new Response(data, { headers: { 'content-type': contentType } }) });
+    try {
+      const opened = await slot.handleFetchRequest('web-search', { url: BRAVE_URL, as });
+      expect(opened).toMatchObject({ ok: accepted });
+      if (!accepted || !opened.ok || !('connectionId' in opened)) return;
+      expect(opened.connectionId).toEqual(expect.any(String));
+      expect(await slot.handleNetworkRequest('web-search', { op: 'read', connectionId: opened.connectionId, cursor: 0, waitMs: 1000 }))
+        .toMatchObject({ ok: true, events: expect.arrayContaining([expect.objectContaining({ type: 'text', data })]) });
+    } finally { await slot.disposeAll(); }
+  });
+
+  it('cancels a pending stream read when its call ends and releases the guarded transport', async () => {
+    const signal = new AbortController();
+    const release = vi.fn(async () => {});
+    const cancel = vi.fn();
+    const { slot } = makeSlot({
+      getGhost: () => fakeGhost({ network: null }),
+      inFlightCallInfo: () => ({ ghostId: 'web-search', channel: 'session', sessionId: 's', remoteHostId: null }),
+      getCallSignal: () => signal.signal,
+      fetchPublicImpl: async () => ({ response: new Response(new ReadableStream({ cancel }), { headers: { 'content-type': 'text/plain' } }), release }),
+    });
+    const opened = await slot.handleFetchRequest('web-search', { url: 'https://public.example.com/events', as: 'stream', callId: 'c1' });
+    expect(opened).toMatchObject({ ok: true, connectionId: expect.any(String) });
+    if (!opened.ok || !('connectionId' in opened)) return;
+    const reading = slot.handleNetworkRequest('web-search', { op: 'read', connectionId: opened.connectionId, waitMs: 1000 });
+    signal.abort();
+    expect(await reading).toMatchObject({ ok: false });
+    await slot.disposeAll();
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  // §4: the existing installation guard did not cover source-credential
+  // revocation after a WebSocket handshake. Both must stop later sends.
+  // #10130 / 4577903614, unit: the existing socket covered referenced keys
+  // only. Removing a directly stored key must also reject the next real send.
+  it.each(['installation', 'credential', 'direct-key'] as const)('requires an exact WS origin, exchanges real frames, and closes on %s revocation', async boundary => {
+    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+    await new Promise<void>(resolve => server.once('listening', resolve));
+    const address = server.address();
+    if (typeof address !== 'object' || !address) throw new Error('missing loopback address');
+    const origin = 'wss://socket.example.test';
+    // Only replace the TLS transport: policy, injection, source guards and the
+    // connection lifetime remain real. Synthetic keys never leave loopback.
+    const open = HostNetworkConnections.prototype.openWebSocket;
+    const transport = vi.spyOn(HostNetworkConnections.prototype, 'openWebSocket')
+      .mockImplementation(function (this: HostNetworkConnections, owner, input) {
+        return open.call(this, owner, { ...input, url: `ws://127.0.0.1:${address.port}/echo` });
+      });
+    let current = true;
+    let authorization: string | undefined;
+    server.on('connection', (socket, request) => {
+      authorization = request.headers.authorization;
+      socket.on('message', (data, binary) => socket.send(data, { binary }));
+    });
+    const { slot } = makeSlot({
+      getGhost: () => fakeGhost({ network: { hosts: [origin], secrets: [{ key: 'own', label: 'Own key', inject: { header: 'Authorization', format: 'Bearer {value}', hosts: [origin] } }] } }),
+      readSecret: () => boundary === 'credential' ? GHOST_SAVED_CREDENTIAL_MARKER
+        : boundary === 'direct-key' && !current ? null : 'host-only-key',
+      resolveSavedCredential: () => ({ value: 'host-only-key', assertCurrent: () => {
+        if (!current) throw new Error('CREDENTIAL_REFERENCE_CHANGED');
+      } }),
+      captureRequestGuard: () => () => { if (boundary === 'installation' && !current) throw new Error('installation changed'); },
+    });
+    try {
+      expect(await slot.handleNetworkRequest('web-search', { op: 'open', url: 'ws://127.0.0.1:1/forbidden' })).toMatchObject({ ok: false });
+      const opened = await slot.handleNetworkRequest('web-search', { op: 'open', url: `${origin}/echo`, headers: { Authorization: 'forged' } });
+      expect(opened).toMatchObject({ ok: true, connectionId: expect.any(String) });
+      if (!opened.ok || !('connectionId' in opened)) return;
+      expect(authorization).toBe('Bearer host-only-key');
+      expect(await slot.handleNetworkRequest('web-search', { op: 'send', connectionId: opened.connectionId, data: 'hello' })).toMatchObject({ ok: true });
+      const received = await slot.handleNetworkRequest('web-search', { op: 'read', connectionId: opened.connectionId, cursor: 0, waitMs: 1000 });
+      expect(received).toMatchObject({ ok: true, events: [{ type: 'text', data: 'hello' }] });
+      expect(JSON.stringify(received)).not.toContain('host-only-key');
+      expect(await slot.handleNetworkRequest('web-search', { op: 'send', connectionId: opened.connectionId, data: 'AQID', binary: true })).toMatchObject({ ok: true });
+      expect(await slot.handleNetworkRequest('web-search', { op: 'read', connectionId: opened.connectionId, cursor: 1, waitMs: 1000 })).toMatchObject({ events: [{ type: 'binary', data: 'AQID' }] });
+      current = false;
+      expect(await slot.handleNetworkRequest('web-search', { op: 'send', connectionId: opened.connectionId, data: 'late' })).toMatchObject({ ok: false });
+      expect(await slot.handleNetworkRequest('web-search', { op: 'close', connectionId: opened.connectionId })).toMatchObject({ ok: false });
+    } finally {
+      transport.mockRestore();
+      await slot.disposeAll();
+      for (const client of server.clients) client.terminate();
+      await new Promise<void>(resolve => server.close(() => resolve()));
+    }
+  });
+
+  // #10130 / 4577903614, unit: buffered fetches and reference guards do not
+  // cover a direct key deleted after an HTTP stream has been handed off.
+  it.each([
+    ['user', 'removed'], ['user', 'replaced'], ['gh-cli', 'removed'], ['gh-cli', 'replaced'],
+  ] as const)('closes a stream on the next read after its directly stored %s key is %s', async (source, change) => {
+    const keys = new Map([['brave_api_key', 'synthetic-direct-key']]);
+    const ghost = fakeGhost();
+    ghost.manifest.network!.secrets![0]!.source = source;
+    const cancel = vi.fn();
+    const { slot } = makeSlot({
+      getGhost: () => ghost,
+      readSecret: (_id, key) => keys.get(key) ?? null,
+      fetchImpl: async () => new Response(new ReadableStream({ cancel }), { headers: { 'content-type': 'text/event-stream' } }),
+    });
+    try {
+      const opened = await slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'stream' });
+      expect(opened).toMatchObject({ ok: true, connectionId: expect.any(String) });
+      if (!opened.ok || !('connectionId' in opened)) return;
+      if (change === 'removed') keys.delete('brave_api_key');
+      else keys.set('brave_api_key', 'synthetic-replacement-key');
+      expect(await slot.handleNetworkRequest('web-search', { op: 'read', connectionId: opened.connectionId }))
+        .toMatchObject({ ok: false, errorCode: 'NETWORK_CONNECTION_UNAVAILABLE' });
+      expect(slot.hasInFlightRequests('web-search')).toBe(false);
+    } finally {
+      await slot.disposeAll();
+    }
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  // #10130 / 4581530111, unit: deletion-only guards missed rotation to a
+  // nonempty value. Real source managers must close the old stream, while a
+  // fresh request through the same selected reference uses the replacement.
+  it.each(['secret', 'connection'] as const)('closes a stream when a reused %s rotates without invalidating its reference', async kind => {
+    const data = new Map<string, string>();
+    const vault = {
+      read: (id: string, key: string) => data.get(`${id}\0${key}`) ?? null,
+      store: (id: string, key: string, value: string) => { data.set(`${id}\0${key}`, value); return true; },
+      remove: (id: string, key: string) => { data.delete(`${id}\0${key}`); }, readTail: () => null,
+    };
+    const target = fakeGhost({ network: { hosts: ['api.search.brave.com'], secrets: [{ key: 'token', label: 'PAT',
+      inject: { header: 'Authorization', format: 'Bearer {value}' } }] } });
+    const source = fakeGhost({ id: 'source', network: kind === 'secret' ? target.manifest.network : {
+      hosts: [], connections: [{ key: 'token', label: 'PAT', inject: { header: 'Authorization', format: 'Bearer {value}' } }],
+    } });
+    const sources = [target, source].map(ghost => ({ instanceKey: ghost.manifest.id, name: ghost.manifest.name, manifest: ghost.manifest }));
+    const connections = new GhostConnectionManager({ vault });
+    const manager = new GhostSavedCredentialManager({ vault, connections, connectionSources: () => sources,
+      connectionSource: id => sources.find(item => item.instanceKey === id) ?? null,
+      captureTarget: id => id, withMutationLock: async (_id, task) => task(),
+    });
+    let accountId = 'saved';
+    if (kind === 'secret') vault.store('source', 'token', 'synthetic-original');
+    else {
+      const added = connections.upsert('source', 'token', { host: 'api.search.brave.com', token: 'synthetic-original', max: 5 });
+      if (!added.ok) throw new Error('fixture connection');
+      accountId = added.connection.id;
+    }
+    expect(await manager.reuse('web-search', 'token', { kind, instanceKey: 'source', secretKey: 'token', accountId })).toEqual({ ok: true });
+    const cancel = vi.fn();
+    const fetchImpl = vi.fn().mockResolvedValueOnce(new Response(new ReadableStream({ cancel }), { headers: { 'content-type': 'text/plain' } }))
+      .mockImplementation(async () => new Response('fresh', { headers: { 'content-type': 'text/plain' } }));
+    const { slot } = makeSlot({ getGhost: () => target, readSecret: vault.read,
+      resolveSavedCredential: (id, key) => manager.resolve(id, key), fetchImpl });
+    try {
+      const opened = await slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'stream' });
+      expect(opened).toMatchObject({ ok: true, connectionId: expect.any(String) });
+      if (!opened.ok || !('connectionId' in opened)) return;
+      if (kind === 'secret') vault.store('source', 'token', 'synthetic-replacement');
+      else connections.upsert('source', 'token', { host: 'api.search.brave.com', token: 'synthetic-replacement', max: 5 });
+      expect(await slot.handleNetworkRequest('web-search', { op: 'read', connectionId: opened.connectionId }))
+        .toMatchObject({ ok: false, errorCode: 'NETWORK_CONNECTION_UNAVAILABLE' });
+      expect(slot.hasInFlightRequests('web-search')).toBe(false);
+      expect(await slot.handleFetchRequest('web-search', { url: BRAVE_URL })).toMatchObject({ ok: true, body: 'fresh' });
+      expect(fetchImpl.mock.calls[1]![1].headers.Authorization).toBe('Bearer synthetic-replacement');
+      expect(manager.list('web-search', 'token').accounts).toMatchObject([{ status: 'connected' }]);
+    } finally { await slot.disposeAll(); }
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  // Same lifetime invariant for existing synchronous Host identity sources:
+  // a changed membership/audience/host or email must reject the next read.
+  it.each(['membership', 'audience', 'host', 'login-email'] as const)('closes an identity stream after its %s changes', async change => {
+    const resolution = { membershipId: 'original', audience: 'service', allowedHosts: ['api.search.brave.com'] };
+    let email = 'original@example.test';
+    const cancel = vi.fn();
+    const { slot } = makeSlot({
+      getGhost: () => fakeGhost({ network: { hosts: ['api.search.brave.com'], secrets: [{ key: 'token', label: 'Identity',
+        source: change === 'login-email' ? 'login-email' : 'oidc-token',
+        inject: { header: 'Authorization', format: 'Bearer {value}' } }] } }),
+      getLoginEmail: () => email,
+      connectionTokens: { resolve: () => ({ ...resolution }), getToken: async () => 'synthetic-identity', invalidate: vi.fn() },
+      fetchImpl: async () => new Response(new ReadableStream({ cancel }), { headers: { 'content-type': 'text/plain' } }),
+    });
+    try {
+      const opened = await slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'stream' });
+      expect(opened).toMatchObject({ ok: true, connectionId: expect.any(String) });
+      if (!opened.ok || !('connectionId' in opened)) return;
+      if (change === 'membership') resolution.membershipId = 'replacement';
+      if (change === 'audience') resolution.audience = 'replacement';
+      if (change === 'host') resolution.allowedHosts = [];
+      if (change === 'login-email') email = 'replacement@example.test';
+      expect(await slot.handleNetworkRequest('web-search', { op: 'read', connectionId: opened.connectionId }))
+        .toMatchObject({ ok: false, errorCode: 'NETWORK_CONNECTION_UNAVAILABLE' });
+      expect(slot.hasInFlightRequests('web-search')).toBe(false);
+    } finally { await slot.disposeAll(); }
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it('bounds stream history, reports a cursor gap, and expires abandoned connections', async () => {
+    vi.useFakeTimers();
+    let source!: ReadableStreamDefaultController<Uint8Array>;
+    const cancel = vi.fn();
+    const body = new ReadableStream<Uint8Array>({ start(controller) { source = controller; }, cancel });
+    const { slot } = makeSlot({ fetchImpl: async () => new Response(body, { headers: { 'content-type': 'text/plain' } }) });
+    try {
+      const opened = await slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'stream' });
+      expect(opened).toMatchObject({ ok: true, connectionId: expect.any(String) });
+      if (!opened.ok || !('connectionId' in opened)) return;
+      source.enqueue(new Uint8Array(1024 * 1024 + 64 * 1024).fill(97));
+      const result = await slot.handleNetworkRequest('web-search', { op: 'read', connectionId: opened.connectionId, cursor: 0, waitMs: 1000 });
+      expect(result).toMatchObject({ ok: true, resetRequired: true, nextCursor: 3 });
+      expect(JSON.stringify(result).length).toBeLessThan(200_000);
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      expect(await slot.handleNetworkRequest('web-search', { op: 'read', connectionId: opened.connectionId })).toMatchObject({ ok: false });
+      await slot.disposeAll();
+      expect(cancel).toHaveBeenCalledOnce();
+    } finally { await slot.disposeAll(); vi.useRealTimers(); }
+  });
+
+  it('fences a connection still preparing credentials when the plugin stops', async () => {
+    let finish!: (value: string) => void;
+    const token = new Promise<string>(resolve => { finish = resolve; });
+    let started!: () => void;
+    const exchanging = new Promise<void>(resolve => { started = resolve; });
+    const calls: string[] = [];
+    const { slot } = makeSlot({
+      getGhost: () => fakeGhost({ network: { hosts: ['https://api.example.com:8443'], secrets: [{ key: 'own', label: 'Own key',
+        inject: { header: 'Authorization', format: 'Bearer {value}', hosts: ['https://api.example.com:8443'] },
+        exchange: { url: 'https://auth.example.com/token', bodyFormat: '{"key":"{value}"}', tokenPath: 'token' },
+      }] } }),
+      readSecret: () => 'synthetic-key',
+      fetchImpl: async url => { calls.push(url); started(); return new Response(JSON.stringify({ token: await token }), { headers: { 'content-type': 'application/json' } }); },
+    });
+    const pending = slot.handleFetchRequest('web-search', { url: 'https://api.example.com:8443/events', as: 'stream' });
+    await exchanging;
+    slot.disposeGhost('web-search');
+    finish('temporary');
+    expect(await pending).toMatchObject({ ok: false });
+    expect(calls).toEqual(['https://auth.example.com/token']);
+    await slot.disposeAll();
+  });
+});
 
 describe('network request installation binding', () => {
   it.each(['redirect-credential', '401-response'] as const)('does not dispatch or invalidate after replacement during %s', async (phase) => {
@@ -230,6 +683,83 @@ describe('network request installation binding', () => {
 });
 
 describe('networkSlot · 载荷与 URL 校验', () => {
+  // Unit, follow-up to #9825 / 4546786057: declared origins must not bypass
+  // the runtime transport boundary, even for old/unvalidated manifests.
+  it.each([
+    ['http://public.example:8080', false], ['http://8.8.8.8:8080', false],
+    ['http://gitlab.internal:8080', false], ['http://127.attacker.example:8080', false],
+    ['http://10.0.0.5:8080', true], ['http://localhost:8080', true],
+    ['http://127.0.0.1:8080', true], ['http://[::1]:8080', true],
+  ] as const)('checks plaintext %s before both initial and redirected dispatch (%s)', async (origin, allowed) => {
+    for (const redirected of [false, true]) {
+      const { slot, fetchImpl } = makeSlot({ getGhost: () => fakeGhost({
+        network: { hosts: ['https://start.example', origin] },
+      }) });
+      if (redirected) fetchImpl.mockResolvedValueOnce(new Response(null, { status: 302, headers: { location: origin + '/data' } }));
+      try {
+        const result = await slot.handleFetchRequest('web-search', { url: redirected ? 'https://start.example/data' : origin + '/data' });
+        expect(result).toMatchObject(allowed ? { ok: true } : { ok: false, errorCode: 'NETWORK_INSECURE_ORIGIN' });
+        expect(fetchImpl).toHaveBeenCalledTimes((redirected ? 1 : 0) + (allowed ? 1 : 0));
+      } finally { await slot.disposeAll(); }
+    }
+  });
+
+  it.each([
+    ['ws://public.example:8080', false], ['ws://gitlab.internal:8080', false],
+    ['ws://10.0.0.5:8080', true], ['ws://127.0.0.1:8080', true], ['ws://localhost:8080', true],
+  ] as const)('checks plaintext WebSocket %s without reading credentials or opening a blocked socket (%s)', async (origin, allowed) => {
+    const open = vi.spyOn(HostNetworkConnections.prototype, 'openWebSocket').mockResolvedValue('opaque');
+    const { slot, readSecret } = makeSlot({ getGhost: () => fakeGhost({ network: { hosts: [origin] } }) });
+    try {
+      expect(await slot.handleNetworkRequest('web-search', { op: 'open', url: origin + '/echo' }))
+        .toMatchObject(allowed ? { ok: true } : { ok: false, errorCode: 'NETWORK_INSECURE_ORIGIN' });
+      expect(open).toHaveBeenCalledTimes(allowed ? 1 : 0);
+      expect(readSecret).not.toHaveBeenCalled();
+    } finally { open.mockRestore(); await slot.disposeAll(); }
+  });
+
+  it('never forwards or resolves a TLS credential after a redirect to a private plaintext origin', async () => {
+    const hosts = ['https://secure.example', 'http://127.0.0.1:8080'];
+    const { slot, fetchImpl, readSecret } = makeSlot({ getGhost: () => fakeGhost({ network: { hosts,
+      secrets: [{ key: 'brave_api_key', label: 'Private', inject: { header: 'Authorization', format: 'Bearer {value}', hosts } }],
+    } }) });
+    fetchImpl.mockResolvedValueOnce(new Response(null, { status: 302, headers: { location: hosts[1] + '/data' } }));
+    try {
+      expect(await slot.handleFetchRequest('web-search', { url: hosts[0] + '/data' })).toMatchObject({ ok: false });
+      expect(fetchImpl).toHaveBeenCalledOnce();
+      expect(readSecret).toHaveBeenCalledOnce();
+      expect(fetchImpl.mock.calls[0]?.[1].headers.Authorization).toBe('Bearer BSA-secret');
+    } finally { await slot.disposeAll(); }
+  });
+
+  // 第23项经生产网络入口验证 origin 批准与凭证隔离；旧覆盖只测试所有非443目标被拒，tier=unit。
+  it('allows declared local origins and custom ports, with credentials scoped to that exact origin', async () => {
+    const network = { hosts: ['api.search.brave.com', 'https://api.search.brave.com:8443', 'http://127.0.0.1:8080'], secrets: [
+      { key: 'brave_api_key', label: 'Default TLS key', inject: { header: 'X-Default-Key', format: '{value}' } },
+      { key: 'tavily_api_key', label: 'Custom origin key', inject: { header: 'X-Custom-Key', format: '{value}', hosts: ['https://api.search.brave.com:8443'] } },
+    ] };
+    const { slot, fetchImpl } = makeSlot({ getGhost: () => fakeGhost({ network }) });
+    expect(await slot.handleFetchRequest('web-search', { url: 'https://api.search.brave.com:8443/data' })).toMatchObject({ ok: true });
+    expect(fetchImpl.mock.calls[0]?.[1].headers).toMatchObject({ 'X-Custom-Key': 'tvly-secret' });
+    expect(fetchImpl.mock.calls[0]?.[1].headers['X-Default-Key']).toBeUndefined();
+    expect(await slot.handleFetchRequest('web-search', { url: 'http://127.0.0.1:8080/data' })).toMatchObject({ ok: true });
+    expect(fetchImpl.mock.calls[1]?.[1].headers['X-Default-Key']).toBeUndefined();
+    expect(fetchImpl.mock.calls[1]?.[1].headers['X-Custom-Key']).toBeUndefined();
+    expect(await slot.handleFetchRequest('web-search', { url: 'http://127.0.0.1:8081/data' })).toMatchObject({ ok: false });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not let an Agent call expand an old domain approval to HTTP or a custom port', async () => {
+    const { slot, fetchImpl, fetchPublicImpl } = makeSlot({
+      inFlightCallInfo: () => ({ ghostId: 'web-search', sessionId: 's', remoteHostId: null, channel: 'session' }),
+    });
+    for (const url of ['http://api.search.brave.com/data', 'https://api.search.brave.com:8443/data']) {
+      expect(await slot.handleFetchRequest('web-search', { url, callId: 'call-agent' })).toMatchObject({ ok: false });
+    }
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(fetchPublicImpl).not.toHaveBeenCalled();
+  });
+
   it('url 缺失/非 https/带端口/内嵌凭证/不是绝对地址一律拒', async () => {
     const { slot } = makeSlot();
     for (const url of [
@@ -755,15 +1285,46 @@ describe('networkSlot · 响应收敛', () => {
     }
   });
 
-  it('fetch 抛错折叠为结构化失败,不异常穿透', async () => {
-    const { slot } = makeSlot({
-      fetchImpl: async () => {
-        throw new Error('ECONNRESET');
-      },
-    });
+  // 插件协议:网络层失败给稳定 errorCode,原因码进 message。undici 只抛 `fetch failed`,
+  // 真实原因在 cause(可能再套 AggregateError);2026-10-31 证书过期时插件只拿到
+  // 「请求失败:fetch failed」无法定位。识别不出的异常保持原文、不打码,避免误标网络错误。
+  const coded = (code: string, message = '') => Object.assign(new Error(message), { code });
+  const undiciFailure = (cause?: unknown) => new TypeError('fetch failed', cause === undefined ? undefined : { cause });
+  it.each([
+    ['证书过期', undiciFailure(coded('CERT_HAS_EXPIRED', 'certificate has expired')),
+      'TLS_ERROR', '请求失败:HTTPS 证书或加密连接校验失败(CERT_HAS_EXPIRED: certificate has expired)'],
+    ['DNS 失败', undiciFailure(coded('ENOTFOUND', 'getaddrinfo ENOTFOUND api.search.brave.com')),
+      'DNS_FAILED', '请求失败:域名解析失败(getaddrinfo ENOTFOUND api.search.brave.com)'],
+    // 外层 AggregateError 不带 code,只有子错误带:验证会遍历 errors。
+    ['多地址连接全被拒(AggregateError)', undiciFailure(
+      new AggregateError([coded('ECONNREFUSED', 'connect ECONNREFUSED 10.0.0.1:443')], '')),
+    'CONNECTION_REFUSED', '请求失败:连接被拒绝(connect ECONNREFUSED 10.0.0.1:443)'],
+    ['读响应时连接断开', new TypeError('terminated', { cause: coded('UND_ERR_SOCKET', 'other side closed') }),
+      'CONNECTION_RESET', '请求失败:连接被中断(UND_ERR_SOCKET: other side closed)'],
+    ['连接阶段超时', undiciFailure(coded('UND_ERR_CONNECT_TIMEOUT', 'Connect Timeout Error')),
+      'NETWORK_TIMEOUT', '请求失败:请求超时(UND_ERR_CONNECT_TIMEOUT: Connect Timeout Error)'],
+    ['只有 fetch failed', undiciFailure(), 'NETWORK_ERROR', '请求失败:网络错误(fetch failed)'],
+    ['非网络异常', new Error('installation changed'), undefined, '请求失败:installation changed'],
+  ])('fetch 抛错折叠为结构化失败:%s', async (_name, thrown, errorCode, message) => {
+    const { slot } = makeSlot({ fetchImpl: async () => { throw thrown; } });
     const r = await slot.handleFetchRequest('web-search', { url: BRAVE_URL });
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.message).toContain('ECONNRESET');
+    expect(r).toEqual({ ok: false, message, ...(errorCode ? { errorCode } : {}) });
+  });
+
+  it('主机超时中断保留「请求超时(Nms)」文案并标 NETWORK_TIMEOUT', async () => {
+    vi.useFakeTimers();
+    try {
+      const { slot } = makeSlot({
+        fetchImpl: (_url, init) => new Promise((_resolve, reject) => {
+          init.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+        }),
+      });
+      const pending = slot.handleFetchRequest('web-search', { url: BRAVE_URL, timeoutMs: 1000 });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(await pending).toEqual({ ok: false, errorCode: 'NETWORK_TIMEOUT', message: '请求失败:请求超时(1000ms)' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -1527,6 +2088,16 @@ describe('networkSlot · GitHub CLI 优先凭证(source:gh-cli)', () => {
     });
   }
 
+  it('uses App authorization for approved GitHub requests without returning its token to the plugin', async () => {
+    const readApp = vi.fn(async () => 'synthetic-app-access');
+    const { slot, fetchImpl } = makeGithubSlot({ readGhCliToken: async () => null, readSecret: () => null, readGithubAppToken: readApp });
+    const result = await slot.handleFetchRequest('web-search', { url: GITHUB_URL });
+    expect(result.ok).toBe(true);
+    expect(fetchImpl.mock.calls[0][1].headers).toMatchObject({ Authorization: 'Bearer synthetic-app-access' });
+    expect(JSON.stringify(result)).not.toContain('synthetic-app-access');
+    expect(readApp).toHaveBeenCalledOnce();
+  });
+
   it('本机 gh token 优先于保险库 PAT，且令牌不回流沙箱', async () => {
     const readSecret = vi.fn(() => 'github_pat_fallback');
     const { slot, fetchImpl } = makeGithubSlot({
@@ -1574,95 +2145,44 @@ describe('networkSlot · GitHub CLI 优先凭证(source:gh-cli)', () => {
     expect(unavailable.fetchImpl).not.toHaveBeenCalled();
   });
 
-  it('仅自报 cindy-github 但没有 Host 官方 trust 时 fail-closed，不读取 gh token 也不发请求', async () => {
-    const readGhCliToken = vi.fn(async () => 'gho_should_not_be_read');
-    const readSecret = vi.fn(() => 'github_pat_fallback');
+  // Contract: shared gh eligibility comes from approval + declaration, not name/trust.
+  it.each([null, 'local', 'acme'])('approved ordinary instance in %s can use gh without official trust', async namespace => {
+    const readGhCliToken = vi.fn(async () => 'synthetic-gh-token');
     const { slot, fetchImpl } = makeGithubSlot({
-      getGhost: () => fakeGhost({ id: 'cindy-github', network: githubNetwork }),
+      getGhost: () => ({ ...fakeGhost({ id: 'github-helper', network: githubNetwork }), namespace,
+        approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' } }),
       readGhCliToken,
-      readSecret,
     });
-    const result = await slot.handleFetchRequest('web-search', { url: GITHUB_URL });
-    expect(result.ok).toBe(false);
-    expect(readGhCliToken).not.toHaveBeenCalled();
-    expect(readSecret).not.toHaveBeenCalled();
-    expect(fetchImpl).not.toHaveBeenCalled();
+    expect((await slot.handleFetchRequest('web-search', { url: GITHUB_URL })).ok).toBe(true);
+    expect(readGhCliToken).toHaveBeenCalledOnce();
+    expect((fetchImpl.mock.calls[0][1].headers as Record<string, string>).Authorization).toBe('Bearer synthetic-gh-token');
   });
 
-  it('官方 trust receipt 缺少 publisherName 时 fail-closed，不读取 gh token 也不发请求', async () => {
-    const readGhCliToken = vi.fn(async () => 'gho_should_not_be_read');
-    const readSecret = vi.fn(() => 'github_pat_fallback');
+  it('an unapproved instance cannot read shared gh credentials', async () => {
+    const readGhCliToken = vi.fn(async () => 'synthetic-gh-token');
     const { slot, fetchImpl } = makeGithubSlot({
-      getGhost: () => fakeGhost({
-        id: 'cindy-github',
-        network: githubNetwork,
-        trust: {
-          level: 'cindy-official',
-          publisherSigned: true,
-          publisherVerified: true,
-          reviewed: true,
-        },
-      }),
-      readGhCliToken,
-      readSecret,
+      getGhost: () => ({ ...fakeGhost({ id: 'github-helper', network: githubNetwork }),
+        approval: { state: 'legacy-unapproved' } }), readGhCliToken,
     });
-    const result = await slot.handleFetchRequest('web-search', { url: GITHUB_URL });
-    expect(result.ok).toBe(false);
-    expect(readGhCliToken).not.toHaveBeenCalled();
-    expect(readSecret).not.toHaveBeenCalled();
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ['publisherSigned', { publisherSigned: false }],
-    ['publisherVerified', { publisherVerified: false }],
-    ['reviewed', { reviewed: false }],
-  ])('官方 trust receipt 的 %s 被篡改时 fail-closed', async (_field, override) => {
-    const readGhCliToken = vi.fn(async () => 'gho_should_not_be_read');
-    const { slot, fetchImpl } = makeGithubSlot({
-      getGhost: () => fakeGhost({
-        id: 'cindy-github',
-        network: githubNetwork,
-        trust: {
-          level: 'cindy-official',
-          publisherSigned: true,
-          publisherVerified: true,
-          reviewed: true,
-          publisherName: 'Cindy Plugin Market',
-          ...override,
-        },
-      }),
-      readGhCliToken,
-    });
-    const result = await slot.handleFetchRequest('web-search', { url: GITHUB_URL });
-    expect(result.ok).toBe(false);
+    expect((await slot.handleFetchRequest('web-search', { url: GITHUB_URL })).ok).toBe(false);
     expect(readGhCliToken).not.toHaveBeenCalled();
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it('保留 ID 检查之外，非 cindy-github 也不能借 gh-cli trust', async () => {
-    const readGhCliToken = vi.fn(async () => 'gho_should_not_be_read');
-    const { slot, fetchImpl } = makeGithubSlot({
-      getGhost: () => fakeGhost({ id: 'third-party', network: githubNetwork }),
-      readGhCliToken,
-    });
-    const result = await slot.handleFetchRequest('web-search', { url: GITHUB_URL });
-    expect(result.ok).toBe(false);
-    expect(readGhCliToken).not.toHaveBeenCalled();
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
-
-  it('组织同名或尚未确认 root 的 cindy-github 不能借用 gh-cli token', async () => {
-    for (const identity of [{ namespace: 'acme' }, { namespaceState: 'pending' }] as const) {
+  it('身份尚未确认的插件不能借用 gh-cli token', async () => {
+    for (const identity of [{ namespaceState: 'pending' }, { namespaceState: 'unconfirmed' }] as const) {
       const readGhCliToken = vi.fn(async () => 'gho_should_not_be_read');
+      const readSecret = vi.fn(() => 'github_pat_fallback');
       const { slot, fetchImpl } = makeGithubSlot({
         getGhost: () => ({ ...fakeGhost({ id: 'cindy-github', network: githubNetwork,
           trust: { level: 'cindy-official', publisherSigned: true, publisherVerified: true,
             reviewed: true, publisherName: 'Cindy Plugin Market' } }), ...identity }),
         readGhCliToken,
+        readSecret,
       });
       expect((await slot.handleFetchRequest('web-search', { url: GITHUB_URL })).ok).toBe(false);
       expect(readGhCliToken).not.toHaveBeenCalled();
+      expect(readSecret).not.toHaveBeenCalled();
       expect(fetchImpl).not.toHaveBeenCalled();
     }
   });
@@ -2245,6 +2765,36 @@ describe('networkSlot · 多连接(connections,动态白名单 + 按 host 注入
     },
   });
 
+  // #10130 / 4581505306, unit: the buffered connection tests cannot observe
+  // a PAT removed/replaced after stream handoff. Next read must cancel the
+  // original response; a replacement remains usable by a fresh request.
+  it.each(['removed', 'replaced'] as const)('closes a dynamic PAT stream when its connection is %s', async change => {
+    const tokens: Record<string, string | null> = { 'gitlab.example.com': 'synthetic-original' };
+    const connections = connDeps(tokens, CONN_ONLY_NETWORK.connections![0]!.inject);
+    const tokenFor = vi.spyOn(connections, 'tokenFor');
+    const cancel = vi.fn();
+    const fetchImpl = vi.fn().mockResolvedValueOnce(new Response(new ReadableStream({ cancel }), { headers: { 'content-type': 'text/plain' } }))
+      .mockImplementation(async () => new Response('fresh', { headers: { 'content-type': 'text/plain' } }));
+    const { slot } = makeSlot({ getGhost: () => fakeGhost({ network: CONN_ONLY_NETWORK }), connections, fetchImpl });
+    try {
+      const opened = await slot.handleFetchRequest('web-search', { url: 'https://gitlab.example.com/events', as: 'stream' });
+      expect(opened).toMatchObject({ ok: true, connectionId: expect.any(String) });
+      if (!opened.ok || !('connectionId' in opened)) return;
+      if (change === 'removed') delete tokens['gitlab.example.com'];
+      else tokens['gitlab.example.com'] = 'synthetic-replacement';
+      expect(await slot.handleNetworkRequest('web-search', { op: 'read', connectionId: opened.connectionId }))
+        .toMatchObject({ ok: false, errorCode: 'NETWORK_CONNECTION_UNAVAILABLE' });
+      expect(slot.hasInFlightRequests('web-search')).toBe(false);
+      if (change === 'replaced') {
+        tokenFor.mockClear();
+        expect(await slot.handleFetchRequest('web-search', { url: 'https://gitlab.example.com/events' })).toMatchObject({ ok: true, body: 'fresh' });
+        expect(fetchImpl.mock.calls[1]![1].headers['Private-Token']).toBe('Bearer synthetic-replacement');
+        expect(tokenFor).toHaveBeenCalledOnce();
+      }
+    } finally { await slot.disposeAll(); }
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
   it('用户添加的连接地址放行并注入该地址自己的 token;意识伪造的同名头被覆盖', async () => {
     const { slot, fetchImpl } = makeSlot({
       getGhost: () => fakeGhost({ network: CONN_NETWORK }),
@@ -2309,6 +2859,71 @@ describe('networkSlot · 多连接(connections,动态白名单 + 按 host 注入
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it('glab-cli 连接声明:阻断未批准实例;异步注入 Bearer 令牌并在重定向跳剥除 Authorization', async () => {
+    const glabNet: GhostNetworkNeeds = {
+      hosts: ['cdn.example.com'],
+      connections: [
+        { key: 'gitlab_conn', label: 'GitLab 实例', source: 'glab-cli', inject: { header: 'PRIVATE-TOKEN', format: '{value}' } },
+      ],
+    };
+    const asyncConns: NonNullable<NetworkSlotDeps['connections']> = {
+      hostsFor: async () => ['git.example.com'],
+      tokenFor: async (_id, host) =>
+        host === 'git.example.com'
+          ? { value: 'glab-oauth-tok', header: 'Authorization', format: 'Bearer {value}', hostManaged: true }
+          : null,
+    };
+    const unapproved = makeSlot({
+      getGhost: () => ({ ...fakeGhost({ network: glabNet }), approval: { state: 'invalid' as const } }),
+      connections: asyncConns,
+    });
+    const blocked = await unapproved.slot.handleFetchRequest('web-search', { url: 'https://git.example.com/api/v4/user' });
+    expect(blocked).toMatchObject({ ok: false, message: expect.stringContaining('glab-cli') });
+
+    const fetchImpl: ReturnType<typeof vi.fn> = vi.fn()
+      .mockImplementationOnce(async () => fakeResponse({ status: 302, headers: { location: 'https://cdn.example.com/asset' } }))
+      .mockImplementationOnce(async () => fakeResponse());
+    const { slot } = makeSlot({
+      getGhost: () => fakeGhost({ network: glabNet }),
+      fetchImpl: fetchImpl as unknown as NetworkSlotDeps['fetchImpl'],
+      connections: asyncConns,
+    });
+    const ok = await slot.handleFetchRequest('web-search', {
+      url: 'https://git.example.com/api/v4/projects',
+      headers: { Authorization: 'Bearer forged', 'PRIVATE-TOKEN': 'forged' },
+    });
+    expect(ok.ok).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const hop1 = fetchImpl.mock.calls[0][1].headers as Record<string, string>;
+    const hop2 = fetchImpl.mock.calls[1][1].headers as Record<string, string>;
+    expect(hop1['Authorization']).toBe('Bearer glab-oauth-tok');
+    expect(hop1['PRIVATE-TOKEN']).toBeUndefined();
+    expect(hop2['Authorization']).toBeUndefined();
+    expect(hop2['PRIVATE-TOKEN']).toBeUndefined();
+
+    // 若 hostsFor 异步探测 glab 期间插件实例更新或账号切换，必须在读取新凭证与发网前中止。
+    let releaseHosts!: (hosts: string[]) => void;
+    const pendingHosts = new Promise<string[]>((resolve) => { releaseHosts = resolve; });
+    const tokenFor = vi.fn(async () => ({
+      value: 'new-owner-token', header: 'Authorization', format: 'Bearer {value}', hostManaged: true,
+    }));
+    let revision = 'rev-1';
+    const raceSlot = makeSlot({
+      getGhost: () => fakeGhost({ network: glabNet }),
+      captureRequestGuard: () => {
+        const expected = revision;
+        return () => { if (revision !== expected) throw new Error('PLUGIN_REPLACED'); };
+      },
+      connections: { hostsFor: () => pendingHosts, tokenFor },
+    });
+    const inFlight = raceSlot.slot.handleFetchRequest('web-search', { url: 'https://git.example.com/api/v4/projects' });
+    revision = 'rev-2';
+    releaseHosts(['git.example.com']);
+    expect(await inFlight).toEqual({ ok: false, message: '请求失败:PLUGIN_REPLACED' });
+    expect(tokenFor).not.toHaveBeenCalled();
+    expect(raceSlot.fetchImpl).not.toHaveBeenCalled();
+  });
+
   it('跨连接地址重定向:逐跳重验放行域,并换注目标地址自己的 token', async () => {
     // 与 makeSlot 内部同款宽类型(mock.calls 才能按 [url, init] 下标取参)。
     const fetchImpl: ReturnType<typeof vi.fn> = vi.fn(
@@ -2346,5 +2961,272 @@ describe('networkSlot · 多连接(connections,动态白名单 + 按 host 注入
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.message).toContain('重定向');
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Handoff copies leave only through upload.handoff, scoped to the receiving instance.
+// Rule: plugin-security-and-authoring.md §4 handoff. Gap: third upload source.
+// Tier: unit with the real store; minimum inputs are one copy and a foreign instance.
+describe('Handoff file upload', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { GhostHandoffStore } = await import('../handoffStore');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ghost-handoff-upload-'));
+  const store = new GhostHandoffStore({ root: () => root });
+  afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
+  const readHandoffFile: NetworkSlotDeps['readHandoffFile'] = (id, ref) => store.read(id, ref);
+  const [copy] = await store.import('web-search', [{ name: '销售.csv', bytes: new TextEncoder().encode('a,b') }], () => {});
+  const upload = (value: Record<string, unknown>) => ({ url: 'https://api.search.brave.com/upload', method: 'POST', upload: value });
+
+  it('uploads the copy with its type and original name', async () => {
+    const { slot, fetchImpl } = makeSlot({ readHandoffFile });
+    expect(await slot.handleFetchRequest('web-search', upload({ handoff: [copy!.ref] }))).toMatchObject({ ok: true });
+    const body = new TextDecoder().decode((fetchImpl.mock.calls as unknown as [string, { body: Uint8Array }][])[0]![1].body);
+    expect(body).toContain(`filename="__.csv"; filename*=UTF-8''${encodeURIComponent('销售.csv')}`);
+    expect(body).toContain('Content-Type: text/csv; charset=utf-8\r\n\r\na,b\r\n');
+  });
+  it('treats another instance reference as unavailable without dispatching', async () => {
+    const { slot, fetchImpl } = makeSlot({ readHandoffFile });
+    expect(await slot.handleFetchRequest('other', upload({ handoff: [copy!.ref] }))).toMatchObject({ ok: false, errorCode: 'HANDOFF_UNAVAILABLE' });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+  // Codex 4431420859: the copy folder is user-visible, so its file can change after
+  // opening. Uploads read at most the stored size and refuse a grown or shortened copy.
+  it('refuses a copy that grows or shrinks after it was opened', async () => {
+    for (const change of ['grow', 'shrink'] as const) {
+      const [changed] = await store.import('web-search', [{ name: `${change}.csv`, bytes: new TextEncoder().encode('1,2') }], () => {});
+      const file = path.join(root, 'web-search', changed!.ref.slice('handoff:'.length), `${change}.csv`);
+      const editing = new (class extends GhostHandoffStore {
+        override async open(instance: string, ref: string) {
+          const opened = await super.open(instance, ref);
+          if (change === 'grow') fs.appendFileSync(file, 'x'.repeat(4096));
+          else fs.truncateSync(file, 1);
+          return opened;
+        }
+      })({ root: () => root });
+      const { slot, fetchImpl } = makeSlot({ readHandoffFile: (id, ref) => editing.read(id, ref) });
+      expect(await slot.handleFetchRequest('web-search', upload({ handoff: [changed!.ref] })))
+        .toMatchObject({ ok: false, errorCode: 'HANDOFF_UNAVAILABLE' });
+      expect(fetchImpl).not.toHaveBeenCalled();
+    }
+  });
+  // Sliding expiry: a successful upload is a use and renews the copy for 7 days.
+  it('renews the copy after a successful upload', async () => {
+    const day = 24 * 60 * 60_000;
+    const clock = { now: 0 };
+    const timed = new GhostHandoffStore({ root: () => root, now: () => clock.now });
+    const [renewed] = await timed.import('web-search', [{ name: 'renew.csv', bytes: new TextEncoder().encode('1') }], () => {});
+    clock.now = 6 * day;
+    const { slot } = makeSlot({
+      readHandoffFile: (id, ref) => timed.read(id, ref),
+      touchHandoffFiles: (id, refs) => timed.touch(id, refs),
+    });
+    expect(await slot.handleFetchRequest('web-search', upload({ handoff: [renewed!.ref] }))).toMatchObject({ ok: true });
+    expect((await timed.list('web-search')).find((file) => file.ref === renewed!.ref)?.expiresAt).toBe(13 * day);
+  });
+  it('accepts exactly one upload source', async () => {
+    const { slot, fetchImpl } = makeSlot({ readHandoffFile });
+    expect(await slot.handleFetchRequest('web-search', upload({ handoff: [copy!.ref], hashes: ['a'.repeat(64)] }))).toMatchObject({ ok: false });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+// B4/B6 production slot: the missing cases are Library streams and transport reuse.
+// tier: unit; minimum failure inputs are a two-chunk response and an over-limit header.
+describe('Library file transfer', () => {
+  const libraryGhost = () => { const ghost = fakeGhost(); ghost.manifest.library = true; return ghost; };
+  it('uses the normal authenticated POST for Library multipart and reports separate phases', async () => {
+    const progress = vi.fn();
+    const { slot, fetchImpl } = makeSlot({ getGhost: libraryGhost,
+      createTransferProgress: () => progress,
+      readLibraryFile: async () => new Response('abc', { headers: { 'content-length': '3' } }),
+    });
+    expect(await slot.handleFetchRequest('web-search', { url: 'https://api.search.brave.com/upload', method: 'POST', upload: { library: ['exports/result.txt'], fields: { size: '{bytes}' } } })).toMatchObject({ ok: true });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const request = (fetchImpl.mock.calls as unknown as [string, { headers: Record<string, string>; body: Uint8Array }][]) [0]![1];
+    expect(request.headers['X-Subscription-Token']).toBe('BSA-secret');
+    expect(new TextDecoder().decode(request.body as Uint8Array)).toContain('filename="result.txt"');
+    expect(progress).toHaveBeenCalledWith(3, undefined, '正在读取文件');
+    expect(progress).toHaveBeenCalledWith(undefined, undefined, '正在上传');
+    expect(progress).toHaveBeenLastCalledWith(undefined, undefined, '文件处理结束');
+  });
+  it('rejects a Library upload above the cap without reading or dispatching', async () => {
+    const cancel = vi.fn();
+    const { slot, fetchImpl } = makeSlot({ getGhost: libraryGhost,
+      readLibraryFile: async () => new Response(new ReadableStream({ cancel }), { headers: { 'content-length': String(GHOST_FETCH_UPLOAD_MAX_BYTES_PER_FILE + 1) } }),
+    });
+    expect(await slot.handleFetchRequest('web-search', { url: 'https://api.search.brave.com/upload', method: 'POST', upload: { library: ['big.bin'] } })).toMatchObject({ ok: false, errorCode: 'TOO_LARGE', limitBytes: GHOST_FETCH_UPLOAD_MAX_BYTES_PER_FILE });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(cancel).toHaveBeenCalled();
+  });
+  it('passes response chunks to Library storage and reports actual received bytes', async () => {
+    const progress = vi.fn();
+    const saveLibraryStream = vi.fn<NonNullable<NetworkSlotDeps['saveLibraryStream']>>(async (_id, input) => {
+      let bytes = 0;
+      for await (const chunk of input.source) { input.assertCurrent(); bytes += chunk.length; input.onProgress?.(bytes, input.totalBytes); }
+      return { ok: true, path: input.path, ref: `library:${input.path}`, bytes, sha256: 'hash' };
+    });
+    const { slot } = makeSlot({ getGhost: libraryGhost, createTransferProgress: () => progress, saveLibraryStream,
+      fetchImpl: async () => new Response(new ReadableStream({ start(c) { c.enqueue(new Uint8Array([1, 2])); c.enqueue(new Uint8Array([3])); c.close(); } })),
+    });
+    expect(await slot.handleFetchRequest('web-search', { url: 'https://api.search.brave.com/file', as: 'library', path: 'downloads/a.bin' })).toMatchObject({ ok: true, library: { bytes: 3, ref: 'library:downloads/a.bin' } });
+    expect(progress).toHaveBeenCalledWith(2, undefined, '正在保存文件');
+    expect(progress).toHaveBeenCalledWith(3, undefined, '正在保存文件');
+  });
+});
+
+// Regression for Node-held bearer + Host-granted multipart (unit/DI). Existing
+// upload tests use vault headers and do not exercise the private Node boundary.
+describe('private Node authenticated uploads', () => {
+  const url = 'https://api.search.brave.com/upload';
+  const token = '11111111-2222-4333-8444-555555555555';
+  it('uploads granted bytes with the private bearer and strips browser-supplied credentials', async () => {
+    const h = makeSlot({ getGhost: () => fakeGhost({ network: { hosts: ['api.search.brave.com'] } }),
+      takeDirDeposit: (_id, ticket) => ticket === token ? { totalBytes: 2,
+        files: [{ relPath: 'proof.txt', size: 2, read: async () => new TextEncoder().encode('ok') }] } : null });
+    const request = { url, method: 'POST', uploadDir: { token, fileField: 'file' } };
+    const result = await h.slot.handleAuthenticatedNodeFetch('web-search', request, 'Bearer synthetic', () => {}, new AbortController().signal);
+    expect(result.ok).toBe(true);
+    const init = h.fetchImpl.mock.calls[0]![1] as RequestInit;
+    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer synthetic');
+    expect(new TextDecoder().decode(init.body as Uint8Array)).toContain('filename="proof.txt"');
+    await h.slot.handleFetchRequest('web-search', { url, headers: { Authorization: 'Bearer injected' }, authorization: 'Bearer forged' });
+    expect((h.fetchImpl.mock.calls[1]![1] as RequestInit).headers).not.toHaveProperty('Authorization');
+  });
+  it('rejects unknown hosts and missing tickets; never forwards the bearer through redirects', async () => {
+    const h = makeSlot({ getGhost: () => fakeGhost({ network: { hosts: ['api.search.brave.com'] } }),
+      takeDirDeposit: (_id, ticket) => ticket === token ? { totalBytes: 2, files: [{relPath:'proof.txt',size:2,read:async()=>new TextEncoder().encode('ok')}] } : null });
+    const signal = new AbortController().signal;
+    expect((await h.slot.handleAuthenticatedNodeFetch('web-search', { url: 'https://other.example/u', method: 'POST', uploadDir: { token } }, 'Bearer synthetic', () => {}, signal)).ok).toBe(false);
+    expect((await h.slot.handleAuthenticatedNodeFetch('web-search', { url, method: 'POST', uploadDir: { token: '00000000-2222-4333-8444-555555555555' } }, 'Bearer synthetic', () => {}, signal)).ok).toBe(false);
+    expect(h.fetchImpl).not.toHaveBeenCalled();
+    expect(await h.slot.handleAuthenticatedNodeFetch('web-search', { url }, 'Bearer synthetic', () => {}, signal)).toMatchObject({ ok:false, message:'NODE_AUTH_UPLOAD_REQUIRED' });
+    h.fetchImpl.mockResolvedValueOnce(fakeResponse({ status: 302, headers: { location: 'https://other.example/u' } }));
+    expect(await h.slot.handleAuthenticatedNodeFetch('web-search', { url, method: 'POST', uploadDir: { token } }, 'Bearer synthetic', () => {}, signal)).toMatchObject({ ok: false, message: 'NODE_AUTH_REDIRECT_BLOCKED' });
+    expect(h.fetchImpl).toHaveBeenCalledTimes(1);
+  });
+  it('does not replay an authenticated upload after 401', async () => {
+    const h=makeSlot({getGhost:()=>fakeGhost({network:{hosts:['api.search.brave.com']}}),
+      takeDirDeposit:()=>({totalBytes:2,files:[{relPath:'proof.txt',size:2,read:async()=>new TextEncoder().encode('ok')}]})});
+    h.fetchImpl.mockResolvedValueOnce(fakeResponse({status:401}));
+    await h.slot.handleAuthenticatedNodeFetch('web-search',{url,method:'POST',uploadDir:{token}},'Bearer synthetic',()=>{},new AbortController().signal);
+    expect(h.fetchImpl).toHaveBeenCalledTimes(1);
+  });
+  it('does not send after the call or installation guard is revoked', async () => {
+    const h = makeSlot();
+    const result = await h.slot.handleAuthenticatedNodeFetch('web-search', { url, method: 'POST', uploadDir: { token } }, 'Bearer synthetic', () => { throw Error('revoked'); }, new AbortController().signal);
+    expect(result.ok).toBe(false); expect(h.fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+// 测试价值(MCP Apps 手册头)
+// - 生产入口与可观察结果：handleFetchRequest 实际发给 fetchImpl / fetchPublicImpl 的请求头；
+//   resolver 用 createMcpAppsManualResolver 的生产实现(版本号 + sha256 拼 CDN 地址)。
+// - 规则依据：plugin-network.md「MCP Apps 手册头」——按 mcpApps.ui 的模型可见工具默认带、
+//   mcpAppsManual 显式覆盖、插件自带同名头剥除、只发往 network 已声明主机(逐跳重判)、
+//   开发版 0.0.0 不带。
+// - 现有覆盖缺口：此前没有任何 Host 自动附加的非凭证请求头。
+// - 最小失败输入：app-only 工具调用、mcpAppsManual:false、插件伪造的小写同名头、
+//   302 跳到未声明主机、appVersion 0.0.0。
+// - tier：unit(纯 DI 假 fetch，无 Electron)。
+describe('networkSlot · MCP Apps 手册头', () => {
+  const MANUAL = new TextEncoder().encode('# manual\n');
+  const SHA = 'f'.repeat(64);
+  const resolver = (appVersion: string) => createMcpAppsManualResolver({
+    appVersion: () => appVersion,
+    readManual: () => MANUAL,
+    cdnBaseUrl: () => 'https://cdn.test/cindy/',
+  });
+  const pagesGhost = (): InstalledGhost => ({
+    manifest: {
+      schemaVersion: 3, id: 'pages', name: 'Pages', version: '1.0.0', kind: 'chip', entry: 'main.js',
+      tools: [{ name: 'open_view', description: 'open' }, { name: 'load_view', description: 'load' }, { name: 'plain', description: 'plain' }],
+      network: { hosts: ['api.example.com'] },
+      mcpApps: { ui: {
+        resources: [{ uri: 'ui://pages/view', file: 'ui/page.html' }],
+        tools: { open_view: { resourceUri: 'ui://pages/view', visibility: ['model'] }, load_view: { visibility: ['app'] } },
+      } },
+    },
+    dir: '/fake/brain/pages',
+    enabled: true,
+  }) as unknown as InstalledGhost;
+  const setup = (appVersion = '0.1.122-beta', overrides: Partial<NetworkSlotDeps> = {}) => makeSlot({
+    getGhost: () => pagesGhost(),
+    inFlightCallInfo: (callId) => ({ ghostId: 'pages', sessionId: 's1', remoteHostId: null, channel: 'session', tool: callId.replace('call-', '') }),
+    mcpAppsManual: resolver(appVersion),
+    ...overrides,
+  });
+  const sentHeaders = (fn: { mock: { calls: unknown[][] } }, index = 0) =>
+    (fn.mock.calls[index]![1] as { headers: Record<string, string> }).headers;
+  const manualSha = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
+
+  it('按工具声明默认带上，mcpAppsManual 显式覆盖', async () => {
+    const expected = {
+      'Cindy-MCP-Apps-Manual': `https://cdn.test/cindy/mcp-apps/manual/0.1.122-beta/${manualSha(MANUAL)}.md`,
+      'Cindy-MCP-Apps-Manual-Sha256': manualSha(MANUAL),
+    };
+    for (const [name, payload, carries] of [
+      ['模型可见、会打开页面的工具', { callId: 'call-open_view' }, true],
+      ['只给页面调用的工具默认不带', { callId: 'call-load_view' }, false],
+      ['只给页面调用的工具传 true 时带上', { callId: 'call-load_view', mcpAppsManual: true }, true],
+      ['会打开页面的工具传 false 时不带', { callId: 'call-open_view', mcpAppsManual: false }, false],
+      ['未在 mcpApps.ui 声明的工具不带', { callId: 'call-plain' }, false],
+    ] as const) {
+      const { slot, fetchImpl } = setup();
+      expect(await slot.handleFetchRequest('pages', { url: 'https://api.example.com/view', ...payload }), name).toMatchObject({ ok: true });
+      const headers = sentHeaders(fetchImpl);
+      if (carries) expect(headers, name).toMatchObject(expected);
+      else expect(Object.keys(headers).filter((key) => key.toLowerCase().startsWith('cindy-mcp-apps-manual')), name).toEqual([]);
+    }
+  });
+
+  it('剥除插件伪造的同名头(不区分大小写)，由 Host 的值替换', async () => {
+    const forged = { 'cindy-mcp-apps-manual': 'https://evil.example/m.md', 'CINDY-MCP-APPS-MANUAL-SHA256': SHA };
+    const off = setup();
+    await off.slot.handleFetchRequest('pages', { url: 'https://api.example.com/view', callId: 'call-load_view', headers: forged });
+    expect(sentHeaders(off.fetchImpl)).toEqual({});
+    const on = setup();
+    await on.slot.handleFetchRequest('pages', { url: 'https://api.example.com/view', callId: 'call-open_view', headers: forged });
+    expect(sentHeaders(on.fetchImpl)).toEqual({
+      'Cindy-MCP-Apps-Manual': `https://cdn.test/cindy/mcp-apps/manual/0.1.122-beta/${manualSha(MANUAL)}.md`,
+      'Cindy-MCP-Apps-Manual-Sha256': manualSha(MANUAL),
+    });
+  });
+
+  it('开发版 0.0.0 不带手册头', async () => {
+    const { slot, fetchImpl } = setup('0.0.0');
+    await slot.handleFetchRequest('pages', { url: 'https://api.example.com/view', callId: 'call-open_view', mcpAppsManual: true });
+    expect(sentHeaders(fetchImpl)).toEqual({});
+  });
+
+  it('读取手册的意外错误不缓存，下次请求重试；构建里没有手册则不带', () => {
+    let reads = 0;
+    const flaky = createMcpAppsManualResolver({
+      appVersion: () => '0.1.122-beta',
+      readManual: () => { reads += 1; if (reads === 1) throw new Error('EMFILE'); return MANUAL; },
+      cdnBaseUrl: () => 'https://cdn.test/cindy',
+    });
+    expect(flaky()).toBeNull();
+    expect(flaky()?.sha256).toBe(manualSha(MANUAL));
+    const missing = createMcpAppsManualResolver({ appVersion: () => '0.1.122-beta', readManual: () => null, cdnBaseUrl: () => 'https://cdn.test/cindy' });
+    expect(missing()).toBeNull();
+  });
+
+  it('跳转到未声明主机时不带手册头', async () => {
+    const fetchPublicImpl = vi.fn<NetworkSlotDeps['fetchPublicImpl']>(async () => ({ response: fakeResponse(), release: async () => undefined }));
+    const { slot, fetchImpl } = setup('0.1.122-beta', { fetchPublicImpl });
+    fetchImpl.mockResolvedValueOnce(fakeResponse({ status: 302, headers: { location: 'https://other.example.com/next' } }));
+    const result = await slot.handleFetchRequest('pages', { url: 'https://api.example.com/view', callId: 'call-open_view' });
+    expect(result).toMatchObject({ ok: true });
+    expect(sentHeaders(fetchImpl)).toHaveProperty('Cindy-MCP-Apps-Manual');
+    expect(fetchPublicImpl.mock.calls[0]![0]).toBe('https://other.example.com/next');
+    expect(sentHeaders(fetchPublicImpl)).toEqual({});
+  });
+
+  it('mcpAppsManual 不是布尔值时拒绝', async () => {
+    const { slot, fetchImpl } = setup();
+    expect(await slot.handleFetchRequest('pages', { url: 'https://api.example.com/view', mcpAppsManual: 'yes' })).toMatchObject({ ok: false });
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });

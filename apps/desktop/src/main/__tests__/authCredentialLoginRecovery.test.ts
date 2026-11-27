@@ -3,7 +3,11 @@ import { ScriptTarget, transpileModule } from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { AuthApiError as ClientAuthApiError } from '@cindy/auth-client';
 import { loginPreparingErrorState } from '../../shared/authIpc';
+import { AUTH_ACCOUNT_VAULT_KEY } from '../authCredentialKeys';
+import { probeSafeStorageRoundTrip } from '../authSafeStorageHealth';
+import { linuxCredentialFailureFields } from '../linuxPasswordStore.js';
 import { mapLoginProvidersLoadFailure } from '../authStartupGate';
+import { buildSafeStorageIssueMeta } from '../safeStorageIssueLog';
 
 // Execute the production login action and eligibility predicate without loading
 // Electron or opening a real credential store (same boundary as the wiring tests).
@@ -19,32 +23,67 @@ const eligibilitySource = source.slice(
 
 function setup({
   backendUnavailable = true,
+  roundTripFails = false,
   authenticated = false,
   passive = false,
   code = 'CREDENTIAL_STORE_UNAVAILABLE',
   retryAt = undefined as number | undefined,
+  serverCode = undefined as string | undefined,
+  requestId = undefined as string | undefined,
   initialError = false,
+  passwordStoreSwitchPresent = false,
 } = {}) {
   class AuthApiError extends Error {
     statusCode = 503;
     retryAt = retryAt;
+    serverCode = serverCode;
+    requestId = requestId;
     constructor(public code: string) {
       super(code);
     }
   }
   const previous = { step: 'verification-code', kind: 'email', identifier: 'user@example.invalid' };
-  const backend = { available: !backendUnavailable };
+  const backend = { available: !backendUnavailable, roundTripFails };
+  const verifyCode = vi.fn(async () => ({ status: 'ok' }));
+  const requestCode = vi.fn(async () => undefined);
+  const log = { warn: vi.fn() };
   const deps = {
     AuthApiError,
+    AUTH_ACCOUNT_VAULT_KEY,
     loginPreparingErrorState,
-    createAuthClient: () => ({ verifyCode: vi.fn(async () => ({ status: 'ok' })) }),
+    linuxCredentialFailureFields,
+    probeSafeStorageRoundTrip,
+    buildSafeStorageIssueMeta,
+    createAuthClient: () => ({ verifyCode, requestCode }),
     acceptLoginOutcome: vi.fn(async () => {
       throw new AuthApiError(code);
     }),
-    log: { warn: vi.fn() },
+    log,
+    process: { platform: 'linux', argv: [], env: {}, versions: { electron: 'test' } },
     credentialEncryptionUnavailable: false,
-    safeStorage: { isEncryptionAvailable: () => backend.available },
-    app: { isReady: () => true },
+    credentialBackendProbeFailed: false,
+    safeStorage: {
+      isEncryptionAvailable: () => backend.available,
+      encryptString: (plainText: string) => {
+        if (backend.roundTripFails) {
+          throw new Error('Error while encrypting the text provided to safeStorage.encryptString.');
+        }
+        return Buffer.from(plainText, 'utf8');
+      },
+      decryptString: (cipher: Buffer) => {
+        if (backend.roundTripFails) {
+          throw new Error('Error while decrypting the ciphertext provided to safeStorage.decryptString.');
+        }
+        return cipher.toString('utf8');
+      },
+    },
+    app: {
+      isReady: () => true,
+      commandLine: {
+        hasSwitch: () => passwordStoreSwitchPresent,
+        getSwitchValue: () => '',
+      },
+    },
     powerMonitor: { getSystemIdleState: () => 'active' },
     code,
     credentialStoreHealth: { unavailable: false },
@@ -65,12 +104,24 @@ function setup({
     let pendingAuthRealm = null;
     const providerConfig = {};
     let credentialEncryptionFailureLogged = false;
-    ${source.slice(source.indexOf('function isCredentialEncryptionAvailable('), source.indexOf('/** Main-process recovery signal'))}
+    const safeStorageIssueLogged = new Set();
+    function logSafeStorageIssueOnce(reason, key, err, extra) {
+      const issueKey = reason + ':' + key + ':' + (extra?.stage ?? '');
+      if (safeStorageIssueLogged.has(issueKey)) return;
+      safeStorageIssueLogged.add(issueKey);
+      log.warn('safeStorage ' + reason, buildSafeStorageIssueMeta(key, err, extra));
+    }
+    ${source.slice(source.indexOf('function noteCredentialBackendOperational('), source.indexOf('/** Main-process recovery signal'))}
     const originalAccept = acceptLoginOutcome;
     acceptLoginOutcome = async (...args) => {
       if (code === 'CREDENTIAL_STORE_UNAVAILABLE') isCredentialEncryptionAvailable();
       return originalAccept(...args);
     };
+    function assertLoginFlowCurrent() {}
+    let discoveredMethods = [];
+    function reduceAuthFlow(state, event) {
+      return Object.assign({ step: 'code-requested' }, event);
+    }
     async function loadLoginProviders() {
       loginFlowState = { step: 'identifier', providers: {} };
       return loginFlowState;
@@ -78,7 +129,8 @@ function setup({
     ${actionSource}
     ${eligibilitySource.replace('export function', 'function')}
     return { run: runLoginAction, needsRecovery: needsCredentialProcessRecovery,
-      observeBackend: isCredentialEncryptionAvailable };
+      observeBackend: isCredentialEncryptionAvailable,
+      probeBackend: probeCredentialEncryptionBackend };
   `,
     { compilerOptions: { target: ScriptTarget.ES2022 } },
   ).outputText;
@@ -86,10 +138,32 @@ function setup({
     ...new Function(...Object.keys(deps), compiled)(...Object.values(deps)),
     previous,
     backend,
+    verifyCode,
+    requestCode,
+    log,
   };
 }
 
 describe('credential failure during fresh sign-in', () => {
+  // 测试价值：真实凭证失败诊断入口应区分未传开关与显式空值；原有 helper 测试
+  // 只覆盖脱敏函数，未覆盖 Electron getSwitchValue 在两种情形都返回空串的接线。
+  // 最小输入为不可用的凭证后端 + 空 getSwitchValue；unit 不读真实凭证。
+  // 本文件单独运行实测 0.573s。
+  it.each([
+    { passwordStoreSwitchPresent: false, expected: 'unset' },
+    { passwordStoreSwitchPresent: true, expected: 'empty' },
+  ])('logs password-store as $expected when switch presence is $passwordStoreSwitchPresent', ({
+    passwordStoreSwitchPresent,
+    expected,
+  }) => {
+    const harness = setup({ passwordStoreSwitchPresent });
+    harness.observeBackend();
+    expect(harness.log.warn).toHaveBeenCalledWith(
+      'credential encryption backend unavailable',
+      expect.objectContaining({ passwordStore: expected }),
+    );
+  });
+
   it('retains an observed backend failure across reset and clears it on backend recovery', async () => {
     const harness = setup();
     expect(harness.needsRecovery()).toBe(false);
@@ -145,7 +219,12 @@ describe('credential failure during fresh sign-in', () => {
   });
 
   it('keeps the deadline in a terminal action error state for renderer reload', async () => {
-    const harness = setup({ code: 'RATE_LIMITED', retryAt: 1_800_000_000_000, initialError: true });
+    const harness = setup({
+      code: 'RATE_LIMITED',
+      retryAt: 1_800_000_000_000,
+      initialError: true,
+      backendUnavailable: false,
+    });
     const result = await harness.run({
       type: 'verify-code',
       kind: 'email',
@@ -156,7 +235,11 @@ describe('credential failure during fresh sign-in', () => {
   });
 
   it('passes the server cooldown without triggering credential recovery or dropping the form', async () => {
-    const harness = setup({ code: 'RATE_LIMITED', retryAt: 1_800_000_000_000 });
+    const harness = setup({
+      code: 'RATE_LIMITED',
+      retryAt: 1_800_000_000_000,
+      backendUnavailable: false,
+    });
     const result = await harness.run({
       type: 'verify-code',
       kind: 'email',
@@ -171,6 +254,44 @@ describe('credential failure during fresh sign-in', () => {
     });
     expect(harness.needsRecovery()).toBe(false);
   });
+
+  // #9356: the failure line must say whether the server named its own code, gave a
+  // wait, and a correlation id. The old line only had action/status/code, so two
+  // different 429s looked identical. Missing fields stay the literal "none"/"no".
+  it.each([
+    {
+      label: 'names the server code, the wait and the request id',
+      serverCode: 'SMS_DAILY_LIMIT',
+      requestId: 'req-9356',
+      retryAt: 1_800_000_000_000,
+      expected: 'serverCode=SMS_DAILY_LIMIT retryKnown=yes requestId=req-9356',
+    },
+    {
+      label: 'marks every diagnostic as absent instead of guessing',
+      serverCode: undefined,
+      requestId: undefined,
+      retryAt: undefined,
+      expected: 'serverCode=none retryKnown=no requestId=none',
+    },
+  ])('logs rate-limit diagnostics when $label', async (row) => {
+    const harness = setup({
+      code: 'RATE_LIMITED',
+      retryAt: row.retryAt,
+      serverCode: row.serverCode,
+      requestId: row.requestId,
+      backendUnavailable: false,
+    });
+    await harness.run({
+      type: 'verify-code',
+      kind: 'email',
+      identifier: 'user@example.invalid',
+      code: '123456',
+    });
+    expect(harness.log.warn).toHaveBeenCalledWith(
+      expect.stringContaining(`login action failed action=verify-code status=503 code=RATE_LIMITED ${row.expected}`),
+    );
+  });
+
   it.each([
     { backendUnavailable: true, authenticated: false, passive: false, recovery: true },
     { backendUnavailable: false, authenticated: false, passive: false, recovery: false },
@@ -199,7 +320,7 @@ describe('credential failure during fresh sign-in', () => {
   it.each(['INVALID_CODE', 'NETWORK_ERROR'])(
     'keeps the form for %s without requesting process recovery',
     async (code) => {
-      const harness = setup({ code });
+      const harness = setup({ code, backendUnavailable: false });
       const result = await harness.run({
         type: 'verify-code',
         kind: 'email',
@@ -210,4 +331,93 @@ describe('credential failure during fresh sign-in', () => {
       expect(harness.needsRecovery()).toBe(false);
     },
   );
+
+  it('does not consume a verification code when encryption is unavailable', async () => {
+    const harness = setup();
+    const result = await harness.run({
+      type: 'verify-code',
+      kind: 'email',
+      identifier: 'user@example.invalid',
+      code: '123456',
+    });
+    expect(harness.verifyCode).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      success: false,
+      code: 'CREDENTIAL_STORE_UNAVAILABLE',
+      state: { step: 'error', code: 'CREDENTIAL_STORE_UNAVAILABLE', recoverTo: 'identifier' },
+    });
+  });
+
+  it('does not open the browser when encryption is unavailable', async () => {
+    const harness = setup();
+    const result = await harness.run({
+      type: 'start-browser',
+      kind: 'social',
+      providerOrConnectionId: 'google',
+      label: 'Google',
+    });
+    expect(result.code).toBe('CREDENTIAL_STORE_UNAVAILABLE');
+    expect(result.state).toEqual({
+      step: 'error',
+      code: 'CREDENTIAL_STORE_UNAVAILABLE',
+      recoverTo: 'identifier',
+    });
+  });
+
+  it('does not request a code when encryption is unavailable, but still does when it is available', async () => {
+    const blocked = setup();
+    const blockedResult = await blocked.run({
+      type: 'request-code',
+      kind: 'email',
+      identifier: 'user@example.invalid',
+    });
+    expect(blocked.requestCode).not.toHaveBeenCalled();
+    expect(blockedResult.code).toBe('CREDENTIAL_STORE_UNAVAILABLE');
+
+    const ready = setup({ backendUnavailable: false });
+    const readyResult = await ready.run({
+      type: 'request-code',
+      kind: 'email',
+      identifier: 'user@example.invalid',
+    });
+    expect(ready.requestCode).toHaveBeenCalledOnce();
+    expect(readyResult.success).toBe(true);
+  });
+
+  it('blocks login before requesting or verifying codes when isEncryptionAvailable is true but round-trip fails (macOS keychain denied)', async () => {
+    const harness = setup({ backendUnavailable: false, roundTripFails: true });
+    expect(harness.needsRecovery()).toBe(false);
+
+    const requestResult = await harness.run({
+      type: 'request-code',
+      kind: 'email',
+      identifier: 'user@example.invalid',
+    });
+    expect(harness.requestCode).not.toHaveBeenCalled();
+    expect(requestResult.code).toBe('CREDENTIAL_STORE_UNAVAILABLE');
+    expect(harness.needsRecovery()).toBe(true);
+    expect(harness.log.warn).toHaveBeenCalledWith(
+      'safeStorage encryption probe failed',
+      { key: AUTH_ACCOUNT_VAULT_KEY, error: 'Error', stage: 'backend', probeOk: false },
+    );
+
+    // Calling isCredentialEncryptionAvailable() (e.g. during reset) must not
+    // erase an observed round-trip failure while isEncryptionAvailable() stays true.
+    expect(harness.observeBackend()).toBe(true);
+    expect(harness.needsRecovery()).toBe(true);
+
+    const verifyResult = await harness.run({
+      type: 'verify-code',
+      kind: 'email',
+      identifier: 'user@example.invalid',
+      code: '123456',
+    });
+    expect(harness.verifyCode).not.toHaveBeenCalled();
+    expect(verifyResult.code).toBe('CREDENTIAL_STORE_UNAVAILABLE');
+
+    // Once the backend can encrypt/decrypt again, recovery eligibility clears.
+    harness.backend.roundTripFails = false;
+    expect(harness.probeBackend()).toEqual({ ok: true });
+    expect(harness.needsRecovery()).toBe(false);
+  });
 });

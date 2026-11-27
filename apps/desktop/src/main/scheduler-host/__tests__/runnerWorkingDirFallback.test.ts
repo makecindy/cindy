@@ -51,7 +51,7 @@ vi.mock('../runners/_shared', () => ({
   backfillSessionMeta: mocks.backfillSessionMeta,
 }));
 
-import { MakerScheduleRunner } from '../runner';
+import { MakerScheduleRunner } from '../runner.desktop';
 
 type SessionSendOptions = Parameters<Session['send']>[1];
 type SendImpl = (
@@ -129,6 +129,7 @@ function createFireContext(): FireContext {
 function createRunnerHarness(
   session: Session,
   opts: {
+    projectForNewTask?: ConstructorParameters<typeof MakerScheduleRunner>[0]['projectForNewTask'];
     resolveDefaultModelRoute?: ConstructorParameters<
       typeof MakerScheduleRunner
     >[0]['resolveDefaultModelRoute'];
@@ -142,6 +143,7 @@ function createRunnerHarness(
     getSessionMeta: vi.fn(async () => null),
     isSessionAlive: vi.fn(() => false),
     closeSession: vi.fn(async () => undefined),
+    recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
   } as unknown as Maker;
   const runner = new MakerScheduleRunner({
     maker,
@@ -149,6 +151,7 @@ function createRunnerHarness(
     notifier,
     logger,
     resolveDefaultModelRoute: opts.resolveDefaultModelRoute,
+    projectForNewTask: opts.projectForNewTask,
   });
   // 回退分支会把存量 project 形态任务的分类自愈写回 dialogue —— 用 fake
   // scheduler 捕获 update 调用
@@ -197,14 +200,7 @@ describe('MakerScheduleRunner workingDir fallback(未指定目录回退 dialogue
 
     expect(mocks.ensureDialogueWorkspaceDir).toHaveBeenCalledTimes(1);
     expect(createSession).toHaveBeenCalledWith(
-      expect.objectContaining({ workingDir: '/managed/dialogue/dir' }),
-    );
-    // 回退的会话按 dialogue 落库 → 侧边栏归入"对话"分组
-    expect(mocks.backfillSessionMeta).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.any(String),
-      expect.objectContaining({ workspaceKind: 'dialogue' }),
-      expect.anything(),
+      expect.objectContaining({ workingDir: '/managed/dialogue/dir', workspaceKind: 'dialogue', projectDir: null }),
     );
   });
 
@@ -216,27 +212,22 @@ describe('MakerScheduleRunner workingDir fallback(未指定目录回退 dialogue
 
     expect(mocks.ensureDialogueWorkspaceDir).toHaveBeenCalledTimes(1);
     expect(createSession).toHaveBeenCalledWith(
-      expect.objectContaining({ workingDir: '/managed/dialogue/dir' }),
+      expect.objectContaining({ workingDir: '/managed/dialogue/dir', workspaceKind: 'dialogue', projectDir: null }),
     );
   });
 
-  it('显式 workingDir 不受影响,不走 dialogue 分配', async () => {
+  // Unit: a fresh PR follow-up runs in a checkout independent of its visible project.
+  it.each(['/projects/cindy', null])('keeps checkout cwd and persists catalog membership %s', async projectDir => {
     const h = createSessionHarness();
-    const { runner, createSession } = createRunnerHarness(h.session);
+    const workspaceKind = projectDir ? 'project' as const : 'dialogue' as const;
+    const lookup = vi.fn(async () => ({ projectDir, workspaceKind }));
+    const { runner, createSession } = createRunnerHarness(h.session, { projectForNewTask: lookup });
+    const workingDir = '/checkouts/pr';
+    await fireToCompletion(runner, baseSchedule({ workingDir, inheritedProjectDir: projectDir ?? undefined }), h);
 
-    await fireToCompletion(runner, baseSchedule({ workingDir: '/repo/project' }), h);
-
+    expect(lookup).toHaveBeenCalledWith(projectDir ?? workingDir);
     expect(mocks.ensureDialogueWorkspaceDir).not.toHaveBeenCalled();
-    expect(createSession).toHaveBeenCalledWith(
-      expect.objectContaining({ workingDir: '/repo/project' }),
-    );
-    // 显式项目目录的会话保持 project 归组
-    expect(mocks.backfillSessionMeta).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.any(String),
-      expect.objectContaining({ workspaceKind: 'project' }),
-      expect.anything(),
-    );
+    expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ workingDir, projectDir, workspaceKind }));
   });
 
   it('creates unattended Pi schedules with a connected model/provider pair and non-blocking permission mode', async () => {

@@ -35,6 +35,7 @@ export function NativeVideoPlayer({
   url,
   visible,
   autoPlay = false,
+  nativeControls = true,
   onVideoSize,
 }: {
   onError(detail: string): void;
@@ -45,15 +46,33 @@ export function NativeVideoPlayer({
   visible: boolean;
   /** Only true after an explicit play action in the message stream. */
   autoPlay?: boolean;
+  /** A message cover hides controls until the user starts inline playback. */
+  nativeControls?: boolean;
   /** Intrinsic display size, available once the native track renders. */
   onVideoSize?: (size: { width: number; height: number }) => void;
 }) {
   const { t } = useTranslation();
   const liquidGlass = useLiquidGlassAvailable();
-  const player = useVideoPlayer(url, instance => { if (autoPlay && visible) instance.play(); });
+  const player = useVideoPlayer(url, player => {
+    // Local seekable bridges fetch remote bytes on demand. Avoid the system's
+    // whole-short-clip read-ahead competing with a later seek over the file lane.
+    if (/^http:\/\/127\.0\.0\.1:\d+\/[A-Za-z0-9_-]{43}$/.test(url))
+      player.bufferOptions = { preferredForwardBufferDuration: 5 };
+  });
+  const pendingPlay = useRef(false);
+  useEffect(() => { pendingPlay.current = autoPlay; }, [autoPlay, player]);
   const { status, error } = useEvent(player, "statusChange", {
     status: player.status,
   });
+  useEffect(() => {
+    if (!visible) pendingPlay.current = false;
+    // A network source may not accept play() before it is ready. Consume the
+    // explicit play intent once; buffering or returning onscreen never resumes it.
+    if (pendingPlay.current && visible && status === 'readyToPlay') {
+      pendingPlay.current = false;
+      player.play();
+    }
+  }, [autoPlay, player, status, visible]);
   const [buffering, setBuffering] = useState(false);
   const [bufferedPercent, setBufferedPercent] = useState<number | null>(null);
 
@@ -116,8 +135,8 @@ export function NativeVideoPlayer({
       <VideoView
         allowsPictureInPicture={false}
         contentFit="contain"
-        fullscreenOptions={{ enable: true, orientation: "default" }}
-        nativeControls
+        fullscreenOptions={{ enable: nativeControls, orientation: "default" }}
+        nativeControls={nativeControls}
         onFirstFrameRender={() => {
           const size = player.videoTrack?.size;
           if (size && Number.isFinite(size.width) && Number.isFinite(size.height)

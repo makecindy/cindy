@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { PiTransport } from '../transport.js';
 import type { AgentEvent } from '../../../types/events.js';
@@ -57,6 +57,7 @@ vi.mock('../transport.js', async (importOriginal) => {
         const result = { content: [{ type: 'text', text: 'fixture build complete' }] };
         let rpcLost = false;
         let eofOnAbort = false;
+        let retryEndOnAbort = false;
         let loseNextPrompt = false;
         const finish = (omit) => {
           if (omit !== 'tool_execution_end') output({ type: 'tool_execution_end', toolCallId: 'build-1', toolName: 'bash', result });
@@ -67,6 +68,20 @@ vi.mock('../transport.js', async (importOriginal) => {
         readline.createInterface({ input: process.stdin }).on('line', line => {
           const cmd = JSON.parse(line);
           if (rpcLost) return process.exit(23);
+          if (cmd.type === 'fixture_frames') {
+            for (const frame of cmd.frames) output(frame);
+            return;
+          }
+          if (cmd.type === 'fixture_usage_retry') {
+            const message = input => ({ type: 'message_end', message: { role: 'assistant', model: 'm',
+              content: [], usage: { input, output: 2, cacheRead: 3, cacheWrite: 1 } } });
+            output(message(100));
+            output({ type: 'agent_end' });
+            output({ type: 'auto_retry_start', attempt: 1, maxAttempts: 2 });
+            output({ type: 'agent_start' });
+            output(message(20));
+            return;
+          }
           if (cmd.type === 'fixture_finish') {
             finish(cmd.omit);
             if (cmd.eof) endOutput();
@@ -74,6 +89,7 @@ vi.mock('../transport.js', async (importOriginal) => {
           }
           if (cmd.type === 'fixture_eof_tail') return endOutput(JSON.stringify(cmd.frame));
           if (cmd.type === 'fixture_eof_on_abort') { eofOnAbort = true; return; }
+          if (cmd.type === 'fixture_retry_end_on_abort') { retryEndOnAbort = true; return; }
           if (cmd.type === 'fixture_retry_exhausted_eof') {
             output({ type: 'auto_retry_end', success: false, finalError: 'The operation timed out.' });
             return endOutput();
@@ -118,6 +134,7 @@ vi.mock('../transport.js', async (importOriginal) => {
           }
           if (cmd.type === 'abort') {
             if (eofOnAbort) endOutput();
+            else if (retryEndOnAbort) output({ type: 'auto_retry_end', success: false });
             else output({ type: 'agent_settled' });
           }
         });
@@ -212,6 +229,109 @@ describe('Pi long tool lifecycle through real stdio RPC', () => {
     await vi.waitFor(() => expect(events.some(event => event.type === 'tool_use')).toBe(true));
     return { events, transport, handle, nativeFrames };
   }
+
+  // #10651: cover host-only termination as well as translator completion using
+  // the production queue/Session. The fixture never executes markup as a tool.
+  it.each(['completed', 'compaction-close', 'rpc', 'exit', 'stop'] as const)('handles pending DSML through %s', async outcome => {
+    const { events, transport, nativeFrames } = await start();
+    const raw = '<|DSML|function_calls><|DSML|invoke name="bash"><|DSML|parameter name="command" string="true">echo fixture</|DSML|parameter></|DSML|invoke></|DSML|function_calls>';
+    const write = vi.spyOn(transport, 'writeLine');
+    await transport.writeLine(JSON.stringify({ type: 'fixture_frames', frames: [
+      { type: 'message_start', message: { role: 'assistant', content: [] } },
+      { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: raw } },
+    ] }));
+    await vi.waitFor(() => expect(nativeFrames).toContain('message_update'));
+    if (outcome === 'completed' || outcome === 'compaction-close') {
+      await transport.writeLine(JSON.stringify({ type: 'fixture_frames', frames: [
+        { type: 'tool_execution_end', toolCallId: 'build-1', toolName: 'bash', result: { content: [] } },
+        { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: raw }],
+          stopReason: 'stop', usage: { input: 10, output: 3, cacheRead: 2, cacheWrite: 1 } } },
+        ...(outcome === 'completed' ? [{ type: 'agent_settled' }] : [
+          { type: 'agent_end' }, { type: 'compaction_start', reason: 'threshold' },
+        ]),
+      ] }));
+      if (outcome === 'compaction-close') {
+        await vi.waitFor(() => expect(nativeFrames).toContain('compaction_start'));
+        await session!.close();
+      }
+    } else if (outcome === 'stop') await session!.abort();
+    else await transport.writeLine(JSON.stringify({ type: outcome === 'rpc' ? 'fixture_lose_rpc' : 'fixture_exit' }));
+    await vi.waitFor(() => expect(events.some(e => e.type === 'done' || e.type === 'error')).toBe(true));
+    const text = events.filter(e => e.type === 'text').map(e => (e.data as { text: string }).text).join('');
+    if (outcome === 'completed') {
+      expect(text).not.toContain('DSML');
+      expect(events.find(e => e.type === 'error')?.data).toMatchObject({ reason: 'unexecuted-tool-markup' });
+      expect(events.find(e => e.type === 'done')?.data).toMatchObject({ status: 'failed', silentStop: false,
+        usage: { inputTokens: 10, outputTokens: 3, cacheReadTokens: 2, cacheCreationTokens: 1 } });
+    } else if (outcome === 'compaction-close') {
+      expect(text).not.toContain('DSML');
+      expect(events.filter(e => e.type === 'done' || e.type === 'error')).toMatchObject([
+        { type: 'error', data: { isTerminal: true } },
+      ]);
+    } else {
+      expect(text).toContain(raw);
+      expect(events.some(e => (e.data as { reason?: string })?.reason === 'unexecuted-tool-markup')).toBe(false);
+    }
+    expect(events.filter(e => e.type === 'tool_use')).toHaveLength(1); // Only the fixture's pre-existing build.
+    expect(write.mock.calls.map(([line]) => JSON.parse(line).type)).not.toContain('prompt');
+  });
+
+  // #12516: the existing mid-generation close misses a delivered reply whose
+  // threshold compaction is interrupted. Exercise the same isolated stdio fixture.
+  it('cancels once on close during threshold compaction after reply delivery', async () => {
+    const { events, transport } = await start();
+    const write = vi.spyOn(transport, 'writeLine');
+    await transport.writeLine(JSON.stringify({ type: 'fixture_finish', omit: 'agent_settled' }));
+    await transport.writeLine(JSON.stringify({ type: 'fixture_frames', frames: [
+      { type: 'agent_end' }, { type: 'compaction_start', reason: 'threshold' },
+    ] }));
+    await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({
+      type: 'status', data: expect.objectContaining({ status: 'Compacting context…' }),
+    })));
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'text', data: expect.objectContaining({ text: 'Build finished.', isFinal: true }),
+    }));
+    const terminals = () => events.filter(event => event.type === 'done' || event.type === 'error');
+    expect(terminals()).toEqual([]);
+    await session!.close();
+    expect(terminals()).toMatchObject([{ type: 'done', data: {
+      status: 'cancelled', usage: { inputTokens: 10, outputTokens: 3 },
+    } }]);
+    expect(write.mock.calls.map(([line]) => JSON.parse(line).type)).not.toContain('prompt');
+  });
+
+  // #8887: real PiAgent/Session and stdio, fake executable only. Two completed
+  // requests followed by each lifecycle termination must retain 120 input tokens.
+  // #11735: app-quit must additionally cancel once, without a crash error or replay.
+  it.each(['rpc', 'exit', 'exhausted', 'close', 'detach', 'stop'] as const)(
+    'retains request receipts through retry and %s', async cause => {
+      const { events, transport } = await start(false);
+      const write = vi.spyOn(transport, 'writeLine');
+      await transport.writeLine(JSON.stringify({ type: 'fixture_usage_retry' }));
+      await vi.waitFor(() => expect(events.filter(e => e.type === 'account_usage')).toHaveLength(2));
+      expect(events.some(e => e.type === 'done')).toBe(false);
+      if (cause === 'close') await session!.close();
+      else if (cause === 'detach') await session!.detach({ reason: 'app-quit' });
+      else if (cause === 'stop') await session!.abort();
+      else await transport.writeLine(JSON.stringify({ type: cause === 'rpc' ? 'fixture_lose_rpc'
+        : cause === 'exit' ? 'fixture_exit' : 'fixture_retry_exhausted_eof' }));
+      await vi.waitFor(() => expect(events.some(e => e.type === 'done' || e.type === 'error')).toBe(true));
+      const terminal = events.find(e => e.type === 'done' || e.type === 'error')!;
+      expect(terminal.data).toMatchObject({ usage: { inputTokens: 120, outputTokens: 4,
+        cacheReadTokens: 6, cacheCreationTokens: 2, receipts: [
+          expect.objectContaining({ inputTokens: 100 }), expect.objectContaining({ inputTokens: 20 }),
+        ] } });
+      if (cause === 'exhausted') {
+        expect(events.filter(e => e.type === 'done')).toHaveLength(1);
+        expect(events.find(e => e.type === 'done')?.data).toMatchObject({ status: 'failed' });
+      } else if (cause === 'detach') {
+        expect(events.filter(e => e.type === 'error')).toEqual([]);
+        expect(events.filter(e => e.type === 'done')).toHaveLength(1);
+        expect(terminal.data).toMatchObject({ status: 'cancelled' });
+        expect(write.mock.calls.map(([line]) => JSON.parse(line).type)).not.toContain('prompt');
+      } else if (cause !== 'stop') expect(events.filter(e => e.type === 'done')).toEqual([]);
+    },
+  );
 
   it('keeps a quiet live tool running and delivers its result, usage and terminal without another send', async () => {
     const { events, transport, handle } = await start(true);
@@ -318,16 +438,27 @@ describe('Pi long tool lifecycle through real stdio RPC', () => {
     expect(write.mock.calls.map(([line]) => JSON.parse(line).type)).toEqual(['fixture_lose_rpc']);
   });
 
-  it('preserves the completed result when settled is followed by RPC EOF', async () => {
-    const { events, transport } = await start();
-    await transport.writeLine(JSON.stringify({ type: 'fixture_finish', eof: true }));
-    await vi.waitFor(() => expect(session!.getStatus()).toBe('closed'));
-    expect(events.filter(event => event.type === 'done')).toHaveLength(1);
-    expect(events.find(event => event.type === 'done')?.data).toMatchObject({
-      status: 'completed', result: 'Build finished.', usage: { outputTokens: 3 },
+  describe('completed result followed by RPC EOF', () => {
+    let running: Awaited<ReturnType<typeof start>>;
+
+    // Real subprocess startup belongs to fixture preparation, not the EOF
+    // lifecycle deadline. Keep the test and waitFor deadlines unchanged so a
+    // lost result or slow EOF settlement still fails on Windows and macOS.
+    beforeEach(async () => {
+      running = await start();
     });
-    expect(events.some(event => event.type === 'error')).toBe(false);
-    expect(events.find(event => event.type === 'tool_result_full')?.data).toMatchObject({ fullText: 'fixture build complete' });
+
+    it('preserves the completed result when settled is followed by RPC EOF', async () => {
+      const { events, transport } = running;
+      await transport.writeLine(JSON.stringify({ type: 'fixture_finish', eof: true }));
+      await vi.waitFor(() => expect(session!.getStatus()).toBe('closed'));
+      expect(events.filter(event => event.type === 'done')).toHaveLength(1);
+      expect(events.find(event => event.type === 'done')?.data).toMatchObject({
+        status: 'completed', result: 'Build finished.', usage: { outputTokens: 3 },
+      });
+      expect(events.some(event => event.type === 'error')).toBe(false);
+      expect(events.find(event => event.type === 'tool_result_full')?.data).toMatchObject({ fullText: 'fixture build complete' });
+    });
   });
 
   it('preserves tool result, final answer and usage drained after stdin EPIPE', async () => {
@@ -576,6 +707,97 @@ describe('Pi long tool lifecycle through real stdio RPC', () => {
     await vi.waitFor(() => expect(session!.getStatus()).toBe('closed'));
     expect(events.some(event => event.type === 'error')).toBe(false);
     expect(events.find(event => event.type === 'done')?.data).toMatchObject({ status: 'cancelled' });
+  });
+
+  // #10277: the existing retry tests always supplied settled or disconnected
+  // RPC. A live executor can omit settled after retry exhaustion. Exercise the
+  // real PiAgent/Session admission path, not just the translator's error text.
+  it('admits the next message after exhausted retry without agent_settled', async () => {
+    const { events, transport, handle, nativeFrames } = await start();
+    await transport.writeLine(JSON.stringify({ type: 'fixture_frames', frames: [
+      { type: 'auto_retry_end', success: false, finalError: '429 预算超额' },
+    ] }));
+    await vi.waitFor(() => expect(events.some(event => event.type === 'error')).toBe(true));
+    expect(handle.isTurnRunning?.()).toBe(false);
+    expect(session!.isTurnRunning()).toBe(false);
+    expect(events.filter(event => event.type === 'error')).toHaveLength(1);
+    expect(events.some(event => event.type === 'status' &&
+      (event.data as { isRunning?: boolean }).isRunning === false)).toBe(true);
+
+    const boundary = events.length;
+    // Deliver the old native tail while the next prompt is being prepared.
+    // It must not clear the next turn's running state or complete it early.
+    const writeLine = transport.writeLine.bind(transport);
+    let releasePrompt!: () => void;
+    const promptGate = new Promise<void>(resolve => { releasePrompt = resolve; });
+    let promptPending = false;
+    const write = vi.spyOn(transport, 'writeLine').mockImplementation(async line => {
+      if (JSON.parse(line).type === 'prompt') {
+        promptPending = true;
+        await promptGate;
+      }
+      await writeLine(line);
+    });
+    const send = session!.send('Continue the same task after restoring quota');
+    try {
+      await vi.waitFor(() => expect(promptPending).toBe(true));
+      await transport.writeLine(JSON.stringify({ type: 'fixture_frames', frames: [
+        { type: 'agent_settled' },
+      ] }));
+      await vi.waitFor(() => expect(nativeFrames).toContain('agent_settled'));
+      expect(session!.isTurnRunning()).toBe(true);
+      expect(events.slice(boundary).some(event => event.type === 'done' || event.type === 'error')).toBe(false);
+    } finally {
+      releasePrompt();
+      await send;
+      write.mockRestore();
+    }
+    await vi.waitFor(() => expect(events.slice(boundary).some(event => event.type === 'tool_use')).toBe(true));
+    expect(session!.isTurnRunning()).toBe(true);
+    expect(events.slice(boundary).some(event => event.type === 'done' || event.type === 'error')).toBe(false);
+    await transport.writeLine(JSON.stringify({ type: 'fixture_finish' }));
+    await vi.waitFor(() => expect(events.slice(boundary).some(event => event.type === 'done')).toBe(true));
+    expect(events.slice(boundary).find(event => event.type === 'done')?.data).toMatchObject({
+      status: 'completed', result: 'Build finished.',
+    });
+    expect(session!.isTurnRunning()).toBe(false);
+  });
+
+  it.each([
+    ['failed', 'done'], ['cancelled', 'done'], ['cancelled', 'status'],
+  ] as const)('keeps the %s turn tail on its generation when the user immediately sends again at %s', async (outcome, boundary) => {
+    const { events, transport } = await start();
+    let nextSend: ReturnType<Session['send']> | undefined;
+    session!.onEvent(event => {
+      // Exercise reentrant admission at both boundaries of Stop's terminal
+      // batch; a failure deliberately holds admission until the paired done.
+      const atBoundary = boundary === 'done'
+        ? event.type === 'done' && (event.data as { status?: string }).status === outcome
+        : event.type === 'status' && (event.data as { isRunning?: boolean }).isRunning === false;
+      if (atBoundary && !nextSend) {
+        nextSend = session!.send('Continue after restoring quota');
+        void nextSend.catch(() => {}); // Assert dispatch below, without an unhandled rejection.
+      }
+    });
+    if (outcome === 'cancelled') {
+      await transport.writeLine(JSON.stringify({ type: 'fixture_retry_end_on_abort' }));
+      await session!.abort();
+    } else {
+      await transport.writeLine(JSON.stringify({ type: 'fixture_frames', frames: [
+        { type: 'auto_retry_end', success: false, finalError: '429 预算超额' },
+      ] }));
+    }
+    await vi.waitFor(() => expect(nextSend).toBeDefined());
+    await nextSend;
+    const generation = session!.getTurnGeneration();
+    const currentEvents = () => events.filter(event => event.sessionTurnGeneration === generation);
+    await vi.waitFor(() => expect(currentEvents().some(event => event.type === 'tool_use')).toBe(true));
+    expect(session!.isTurnRunning()).toBe(true);
+    expect(currentEvents().some(event => event.type === 'done' || event.type === 'error' ||
+      (event.type === 'status' && (event.data as { isRunning?: boolean }).isRunning === false))).toBe(false);
+    await transport.writeLine(JSON.stringify({ type: 'fixture_finish' }));
+    await vi.waitFor(() => expect(currentEvents().some(event => event.type === 'done')).toBe(true));
+    expect(currentEvents().find(event => event.type === 'done')?.data).toMatchObject({ status: 'completed' });
   });
 
   it.each([false, true])('does not inherit the previous retry failure before a new prompt agent_start (Stop: %s)', async (stop) => {

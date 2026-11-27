@@ -328,6 +328,40 @@ describe('Claude Code translator silent-stop observation (log only)', () => {
     expect(doneSilentStopFlag(events)).toBeUndefined();
   });
 
+  /**
+   * #8240 regression / unit: exercise the production Claude translator. Existing visible-text
+   * coverage used a zero-tool turn, while the `toolUses > 0` exception still marked this shape
+   * silent. The minimal failure input is a tool call, visible assistant text, then only a
+   * redacted_thinking block before end_turn; already-delivered text must prevent auto-resume.
+   */
+  it('does NOT mark a tool turn silent after visible text and trailing redacted thinking', async () => {
+    const tracker = new UsageTracker();
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(tracker);
+
+    pushToolUseMessage(queue, ctx);
+    translateSdkMessage(
+      { type: 'assistant', message: { content: [{ type: 'text', text: '已经完成并给出结果。' }] } },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      { type: 'assistant', message: { content: [{ type: 'redacted_thinking', data: 'opaque' }] } },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      { type: 'result', stop_reason: 'end_turn', total_cost_usd: 0.1, usage: NON_EMPTY_USAGE },
+      queue,
+      ctx,
+    );
+
+    const events = await drain(queue);
+    expect(silentStopWarned(ctx)).toBe(false);
+    expect(doneSilentStopFlag(events)).toBeUndefined();
+    expect(events.some((event) => event.type === 'text' && (event.data as { text?: string }).text === '已经完成并给出结果。')).toBe(true);
+  });
+
   it('treats unknown assistant blocks as substance instead of auto-resuming them', async () => {
     const tracker = new UsageTracker();
     const queue = createAsyncQueue<AgentEvent>();
@@ -396,5 +430,39 @@ describe('Claude Code translator silent-stop observation (log only)', () => {
     const events = await drain(queue);
     expect(events.some((e) => e.type === 'error' && (e.data as { reason?: string }).reason === 'empty-response')).toBe(true);
     expect(silentStopWarned(ctx)).toBe(false);
+  });
+
+  // 测试价值：依据供应商安全拦截应保留决定、不自动续跑的契约；此前 Anthropic 返回 stop_reason='refusal' 且正文为空时，
+  // 用量非零会标成 silentStop:true 触发自动发「继续」，用量为零会标成 empty-response 触发自动重发；
+  // 生产入口 translateSdkMessage；最小失败输入为 stop_reason:'refusal' 的零用量与非零用量 result；tier: unit。
+  it.each([
+    ['non-zero usage refusal', NON_EMPTY_USAGE],
+    ['zero-usage refusal', { input_tokens: 0, output_tokens: 0 }],
+  ] as const)('surfaces %s as provider-safety-refusal without silentStop or empty-response retry', async (_case, usage) => {
+    const tracker = new UsageTracker();
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(tracker);
+
+    translateSdkMessage(
+      { type: 'stream_event', event: { type: 'message_start', message: { model: 'claude-fable-5', usage: { input_tokens: usage.input_tokens } } } },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      { type: 'result', stop_reason: 'refusal', total_cost_usd: 0.01, usage },
+      queue,
+      ctx,
+    );
+
+    const events = await drain(queue);
+    expect(silentStopWarned(ctx)).toBe(false);
+    expect(doneSilentStopFlag(events)).toBeUndefined();
+    expect(events.filter((e) => e.type === 'error').map((e) => e.data)).toEqual([
+      expect.objectContaining({
+        isTerminal: true,
+        reason: 'provider-safety-refusal',
+      }),
+    ]);
+    expect(events.some((e) => e.type === 'done')).toBe(true);
   });
 });

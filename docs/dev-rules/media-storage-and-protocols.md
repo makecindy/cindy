@@ -3,6 +3,20 @@
 > **状态**：权威开发规则（authoritative）
 > **读取时机**：新增或修改图片、视频、音频、3D 模型的生成、导入、附件、缓存、
 > 持久化、协议解析、远程传递或回收逻辑之前
+> **适用路径**：`apps/desktop/src/main/cindy-media/**`、
+> `apps/desktop/src/main/cindy-proxy-media/**`、
+> `apps/desktop/src/main/{image,video,model,audioFile,localFile}Protocol.ts`、
+> `apps/desktop/src/main/cindy-brain/ghostMedia*.ts`、
+> `apps/desktop/src/main/device-link/*{M,m}edia*.ts`、
+> `apps/desktop/src/main/im/**/*{M,m}edia*.ts`、
+> `apps/desktop/src/main/maker-ipc/chatServerMedia.ts`、
+> `apps/desktop/src/main/mcp-integrations/{cindyProxyMedia,mediaToolResultFallback}.ts`、
+> `apps/desktop/src/main/{lightboxMediaActions,projectIconMedia}.ts`、
+> `apps/desktop/src/main/bot-import/memoryMedia.ts`、
+> `apps/desktop/src/main/session-share/mediaUrlRewrite.pure.ts`、
+> `apps/desktop/src/shared/{remoteMediaUrl,mediaInvocation}.ts`、
+> `apps/desktop/src/main/maker-host/{attachmentPreservation,oversized-attachment-recovery,oversizedAttachmentRecoveryCore}.ts`、
+> `apps/desktop/src/main/remote-agent/attachmentPreservation.ts`
 
 本文治理 Desktop 中由 Cindy 管理副本的媒体字节。Electron 协议与进程安全另见
 [`electron-security-and-process-boundaries.md`](electron-security-and-process-boundaries.md)，
@@ -31,7 +45,7 @@
 - 用户磁盘上的原始文件如果只需就地读取，可以继续走已有受控本地文件通道；不要仅为
   预览就复制一份。远程设备或 SSH 文件必须保留真实来源，不能把远程绝对路径当成本机路径。
 - docx、PDF、zip 等非媒体文件不进入媒体字节仓，继续使用已有 `xdt-file` 等受控文件
-  通道。`xdt-audio` 只保留播放用户本地散文件的直读职责，不作为新的托管媒体写入口。
+  通道。交给插件的非媒体文件同样不入仓，由插件交接副本（`ghost-handoff`，7 天未使用即删除）承接。`xdt-audio` 只保留播放用户本地散文件的直读职责，不作为新的托管媒体写入口。
 - 飞书、Discord、Telegram、企业微信四个个人 IM 渠道的入站附件，去处只由 `@cindy/im` 的
   `classifyInboundAttachment` 判定（MIME 或扩展名任一命中即可）：
   - 图片与音视频经 `IMHost.media` 进总仓（`cacheImage` 一律带 `staging: true`，另有
@@ -48,6 +62,11 @@
     `im-attachments/wechat/sessions/<任务ID>/`。
   - 任务删除时，两者与上述四个渠道统一由 `removeImSessionAttachmentDirs` 清理。迁移这两个渠道前，
     先对齐本条规则。
+- 插件经 `cindy.tasks.send` / `cindy.targets.send` 转进任务的附件（例如微信群插件转发的照片、视频、文件）
+  按同一判据分流（`cindy-media/pluginMessageAttachments.ts`）：Host 按真实字节识别，总仓白名单内的图片与音视频
+  进总仓，其余按非媒体文件放进同一棵 `im-attachments/plugin/`（消息本身的文件领养进 `sessions/<任务ID>/`，
+  只给模型的参考文件留在 `staging/` 按龄回收）。细则见
+  [插件任务接口实现](plugin-task-api-implementation.md#消息附件)。
 
 ## 写入与记账
 
@@ -81,7 +100,7 @@
   自动清理只接受该命名空间独占且仍为 `isCache` 的字节；扫描和条件删除都检查其他
   引用与 pin，不能清理聊天附件或其他集成的共享字节。其他媒体清理维持原手动流程。
   普通 HTML 等非媒体仍走 `remote-file-cache`。完整身份、复验与平台清理策略见
-  [`protocol-compatibility.md`](protocol-compatibility.md)「远程文件连接复用与版本缓存」。
+  [`protocol-compatibility/image-delivery-and-missing-source.md`](protocol-compatibility/image-delivery-and-missing-source.md#远程文件连接复用与版本缓存)「远程文件连接复用与版本缓存」。
 - 桌面聊天的不可变远程图片通过 `device-link/remoteMediaPersistentCache.ts` 复用媒体总仓，
   `remote-media` 索引包含账号、来源设备和原始地址。先查内存、再查磁盘，缓存命中不取件；
   重启和断连不清理，不增加自动到期或容量淘汰。设置中的「远程图片缓存」复用账本扫描和
@@ -123,7 +142,9 @@
   窗边陪伴、未来工作室、梦境漫游从选择器下架（`RETIRED_WALLPAPER_IDS`），清单条目与 CDN 对象保留，
   已选用户的静态与动态照常可用，并在其设置中临时显示为选中项；
   静态条目不暴露动态选项、不下载视频。默认无壁纸和浏览设置列表不下载，
-  选中且可见时下载对应高清图，动态模式且未启用减少动态效果时再下载视频；下载或解码失败保留可用背景。
+  选中且可见时下载对应高清图，动态模式且未启用减少动态效果时再下载视频。
+  官方壁纸切换时立即显示所选项的内置预览图，原图解码成功后替换；下载或解码失败保留该预览图，
+  不保留上一张壁纸（2026-11-03 用户裁决，#8591）。已有解码缓存时直接复用原图。
   传输复用统一下载器并保留 guardedOutboundFetch 的来源校验，清单大小及 SHA-256 校验后入仓。
   缓存位于既有 `userData/cindy-media/client-wallpaper/`，仅以内容哈希和扩展名寻址，
   **不含应用版本或账号**；启动与升级先核对本地文件，有效即返回，不请求 CDN。
@@ -144,6 +165,27 @@
   `node scripts/prepare-wallpaper-previews.mjs` 从原始图片重建，该组三张图的总预算为 300 KiB。
   静态缩略图复用现有 `thumbnails/`，当前随包预览资源合计约 0.55 MiB。
   清单见 Desktop 的 `src/shared/wallpaper-video-manifest.json`。
+- 《Cindy MCP Apps 页面生成手册》（内置 Skill 的 `cindy-plugin-creator/references/examples/interactive-pages/PAGE-GENERATION.md`）
+  按「版本号 + 内容」寻址发布：对象名为 `mcp-apps/manual/<版本号>/<sha256>.md`，客户端用 `app.getVersion()`
+  与内置手册的 sha256 拼 `{cdnBaseUrl}/mcp-apps/manual/<版本号>/<sha256>.md` 交给业务后端。版本号便于排查
+  对应哪个客户端；sha256 保证同一版本号打出不同手册（重新出包、各区域从不同提交出包）时不会悄悄对错文件。
+  路径约定只在 `apps/desktop/src/shared/pluginPageManual.mjs` 定义；手册在 `.gitattributes` 固定 LF，保证各平台
+  打包出同一份字节、同一个 sha256。仓库 `apps/desktop/package.json` 的版本是占位的 0.0.0，打包时才临时写入真实
+  版本，所以脚本三种模式都从 `package-desktop.mjs` 产出的 `build-info.json`（`--build-info=<路径>`，必填）读取版本号、
+  区域与发版提交：版本无关包（version 为 null）、0.0.0 及带路径字符的版本号直接报错，开发版（0.0.0）没有发布的手册；
+  `commitSha` 必须等于当前检出的 HEAD 且手册没有未提交改动，否则报错，由此自动保证在这个包的发版提交上执行。
+  打包侧（`package-desktop.mjs`）在有版本打包时拒绝带未提交改动的手册，并把安装包里实际打进去的手册写入
+  `build-info.json` 的 `mcpAppsManual: { sha256, size }`（版本无关包或没有内置手册时为 `null`）；发布脚本要求
+  检出里手册的 sha256 与 size 与它一致，缺这个字段（旧打包脚本产出）也拒绝，需重新打包。
+  对应客户端上线前，对每个区域的 `build-info.json`（`apps/desktop/release/artifacts/<region>/<version>/<platform-arch>/`）
+  各执行一次 `node --env-file=<发布配置> scripts/publish-page-manual.mjs --build-info=<路径>`（发版提交里没有手册时
+  跳过）；`--dry-run` 不连 OSS、不联网，只打印 key、sha256 与 CDN 地址。**发版前检查项**：global 与 cn 两份
+  `build-info.json` 的 `node scripts/publish-page-manual.mjs --build-info=<路径> --check-cdn` 都通过，即本版本的手册已在
+  两个区域线上；只读校验的 CDN 地址取法同壁纸。同一 key 只有一种内容，远端已有相同内容时
+  不再上传，上传仍带 `x-oss-forbid-overwrite`；该检查不进 CI，避免 CI 依赖外网。客户端开始在 `cindy.fetch` 中自动
+  带手册地址（`Cindy-MCP-Apps-Manual` / `-Sha256` 请求头，`apps/desktop/src/main/cindy-brain/mcpAppsManualHeaders.ts`）
+  后，**每个发版版本、每个区域都必须发布手册**，否则该版本带出去的地址会 404；因此带地址的客户端上线前，必须先把
+  这一步接进发版流程。
 - 伙伴头像的本机副本（2026-10-17 用户裁决：读过的头像在本机缓存一份，显示前先读缓存）：另一台电脑上
   伙伴的 `cindy-media://blobs/…` 头像与云端伙伴身份的 `https://` 公开头像，经 `companion-cloud/avatarCache.ts`
   复用集成缓存的索引（`integration-cache` 引用行，键 `companion-avatar:…`，`isCache: true`）入仓，由回收器按
@@ -170,6 +212,11 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
 
 ## 读取、协议与边界
 
+- 宿主选择的 `userData` 根目录允许通过符号链接或 Windows Junction 重定向。
+  `blobStore` 仅解析这一可信根的真实路径，入仓与受检读取使用相同的物理路径基线；
+  `cindy-media`、作用域、分桶和目标文件内部的链接仍然拒绝，不得对完整 blob 路径
+  直接 `realpath` 后跳过这些检查。回归见 `clientWallpaperMedia.test.ts` 的普通目录／
+  重定向根对照与内部链接拒绝矩阵。
 - 持久地址统一使用 `cindy-media://blobs/<sha256>.<ext>`。路径解析必须走
   `blobStore.resolveSafe` 或现有上层适配器，不根据 URL 字符串手工拼磁盘路径。
 - 客户端壁纸地址为 `cindy-media://client-wallpaper/<sha256>.webp` 或 `.mp4`，
@@ -183,27 +230,115 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
   路径校验和 Renderer 暴露面。
 - 默认不把媒体仓绝对路径直接暴露给 Renderer、插件或远端。跨边界传递使用托管 URL、
   受控 grant／deposit／ledger，或已有上传与远程媒体服务。
-- 唯一的路径揭示例外是：用户明确询问某个受管媒体地址在本机的存储位置时，Host 先用
-  安全解析器核验为现存普通文件。Auto 档沿用实时审批负责人：原生审批已审核受管 URL
+- Core 媒体生成的同步结果与异步 poll 结果只返回受管地址和元数据，不自动附图给模型，
+  也不提供独立的 `inspect` 动作。图片和视频均由 Agent 按任务需要决定是否查看：通过
+  下述路径解析能力取得文件，再使用已有的文件查看、抽帧或分析工具，不在 Core 重做
+  查看机制。用户端继续使用受管地址展示成果；生成成功不代表 Agent 已经看过内容。
+  不引入 ffmpeg 依赖、隐藏解码窗或并发调度机制；只查看视频帧不代表声音、对白或
+  音画同步已经验收。实现与回归见 `mcp-integrations/ghost.ts`、
+  `mcp-integrations/__tests__/ghostWorkdirGate.test.ts` 与
+  `packages/cindy-tools/src/__tests__/ghostMcp.test.ts`。
+- Agent 为完成当前任务而查看、抽帧或分析已有媒体，或回答用户的存储位置查询时，可主动
+  调用 `media(action: "resolve_local_path", url)`；不要求用户先问本地路径或另行口头同意检查。
+  Host 用安全解析器核验为现存普通文件，沿用已有路径揭示权限，不因分析用途绕过审批。
+  Auto 档沿用实时审批负责人：原生审批已审核受管 URL
   及“向 Agent 返回该媒体的本机绝对路径并写入任务记录”这一效果时，不因安全解析而再调
   Cindy 复审；这里仍是同一受管资源，不是符号链接暴露出的新文件目标。由 Cindy 负责时，
   对精确单文件路径和用户请求进行 AI 审阅。工具说明必须写明真实效果和当前权限流程，
   不得以“之后一定弹确认卡”误导审批。Cindy 审阅 allow 可返回当前 Agent，block 返回原因，
   ask 或服务故障才使用 Host-owned 确认卡。本地活跃 Full Access 自动允许，
   其它档位仍须用户点击允许；远程任务不能借此自动取得控制端文件路径。
-  路径进入会话记录，因此也可能同步到用户的配对设备。
+  确认卡目前只在运行 Cindy 的电脑上可点，手机只显示「只能在电脑上处理」，飞书只收到文字提醒。
+  无人确认的超时返回 `LOCAL_PATH_REVEAL_TIMEOUT`，与用户拒绝的 `LOCAL_PATH_REVEAL_DENIED`
+  区分。超时后旧卡已撤下，所以提示要求 Agent 不要自动重试，而是等用户表示已在那台电脑旁后
+  再重新调用、确认新弹出的卡，或换用不需要本机路径的办法。
+  路径进入会话记录，因此也可能同步到用户的配对设备。返回的是 Cindy Host 所在电脑的
+  路径，不保证在 SSH 工作区可用；不新增跨主机复制或文件读取授权。手机与桌面远控仍
+  通过任务所在电脑执行。向用户展示或交给插件时继续使用受管地址，不以本机路径替代。
   Agent 自报“用户已同意”不是授权证据，也不能借路径揭示给插件或远端开放文件读取。
 - `xdt-image://`、`xdt-video://`、`xdt-model://` 和 `userData/cc-agent/` 是冻结的历史兼容层。
   可以读取已有地址，不得新增写入路径、扩展生命周期或把新功能接回旧仓。
 - 删除或清理历史目录必须走已有的显式名单、复验和用户确认流程；不得新增任意
   `cc-agent` 子目录删除能力。
 
+## 媒体调用说明与执行绑定
+
+- 图片、视频的公开调用说明从 Server 读取；除 Cindy AI（`xd`）只使用官方说明外，用户自带连接和
+  内置媒体来源均可保存账号隔离的自定义 Guide。内置来源沿用原执行器和托管登录，覆盖调用说明与输入参数，
+  不把图片适配器的输入说明当作可直发的 HTTP 协议，也不要求重新配置连接。原生媒体按 provider/model 保存，
+  复用现有存储的规范化 target（`agent=pi`），与调用任务使用的 Harness 无关；自带 HTTP 连接仍按实际 runtime 隔离。
+  每次需要时获取，自定义优先、官方后备，没有加载或重载步骤。Guide 只描述请求、参数、响应与轮询协议；
+  provider、实际地址、Key、连接摘要、模型可见性和额度归连接与执行上下文。
+- 客户端按完整 `modelId` 及连接已有的接口格式读取公开资料，不发送账号 token、Key、
+  base URL 或连接摘要。缺少说明时，当前 Agent 根据用户提供的文档、cURL、示例或提示生成
+  候选，通过 `manage_media_guide` 的 get/validate/save 获取、校验和保存；Host 不隐藏调用 LLM。
+  目录呈现用户声明的媒体模型，prepare 时才按需获取说明，不逐模型预判接口是否适配。
+  客户端根据本地来源绑定现有图片适配器、视频执行器或网关，不按 Server 的 `guideId` 分派。
+- `prepare` 在既有 `guide_json` 中保存选定 operation 及独立的 `binding`；`revision` 表示
+  协议版本，自定义 HTTP 绑定同时保存 Guide 来源与 sourceAgent；视频/HTTP 的
+  `binding.connectionRevision` 表示本地连接摘要。地址、Key 或来源
+  变化继续按原摘要校验，已付费任务的查询与下载不要求重新读取 Server Guide。
+  官方视频执行器同样保存已选 `sourceAgent`，提交、轮询和内容读取均沿用该来源；
+  不再从同型号的聚合目录重新选择凭据。既有视频协议的路径规则保持，旧无此字段的快照仍可读。
+- HTTP Guide 提错任务编号、状态或结果字段时，补齐 Guide 并重新 `prepare`，传入
+  `source_invocation_id` 将原付费调用的回执绑定新快照；原 `guide_json` 不变。要求同账号、
+  provider、模型、能力、sourceAgent 与连接摘要，且原 request/poll 当前不在执行。
+  prepare 原子保存为已有结果/任务的 pending，不能再次生成；不访问上游，返回后直接
+  依 `next_action` 走现有 request/poll、权限和入仓流程，没有独立恢复动作。
+  重新提取的任务编号变化时只保留提交回执，不复用旧编号的轮询响应或结果；编号相同才可复用。
+  原回执缺失时说明无法恢复，不自动重提。Guide 不能提供凭证；Google/Anthropic 鉴权头复用实际连接
+  （含型号覆盖）的协议与所选 runtime 的托管 Key。
+- 声明式 HTTP 的提交回执和最近轮询回执保存在账号数据库已有的 `response_json`，以
+  `__cindyMediaReceipt` 区分未完成回执与已生成结果；旧的直接结果 JSON 继续可读，不改物理 schema。
+  未完成回执仍占在途名额并按原 TTL 清理；待交付结果沿用原恢复保留规则。
+  复制回执的 prepare 在既有 128 条名额检查中计入本账号所有 pending 记录，避免带结果的
+  回执副本绕过限制；回执内的上游响应沿用原字节上限，普通生成仍按原在途规则统计。
+  回执不进入 Guide、日志或 Agent 输出。每次 poll 至多更新一份回执，内容未变不重复写入。
+- 升级时只解码旧快照的 `connection` 和旧视频 revision，不请求时重写历史记录，不改数据库
+  物理 schema。旧 Guide ID 仅用于解码既有记录，不参与新调用选择。复用 Server 已有的公开协议读取接口，
+  不新增服务端协议或要求配套发布。
+- 自定义 Guide 的唯一写入者是模型配置域，按账号及实际 provider/runtime/model 保存；
+  保存需核对旧 revision 和当前任务权限，失败保留原定义。官方默认不复制进本地覆盖。
+  Guide 可不注入 body model，URL 用 `{model}` 引用型号；资料来源只以 `evidence.kind` 记录
+  `documentation/curl/prompt` 类型，不保存资料原文或凭据，不伪造 `officialDocs`。
+- 原生 HTTP 执行复用现有提交、轮询、结果保存及下载入仓流程。请求 path 相对实际连接基址，
+  原样拼接；标准 URL 归一化后的 origin 与路径段范围仍须位于该连接基址内，
+  生成、轮询与原任务内容读取共用范围检查。不得自动删除前缀、去重路径或转换参数；
+  不适配时由 Agent 根据资料补本地 Guide。
+  Guide 不能改 host 或凭证。
+  公开来源只决定说明，不改变 provider、runtime、账号或计费。新说明只影响新的 prepare。
+- xAI `grok-imagine-video-1.5` 的图生视频支持 `image` 首帧、`last_frame` 尾帧、最多 4 个
+  `{image, timestamp_s}` 中间关键帧和最多 14 张 `reference_images`。有图片时 prompt 可省略；
+  尾帧、关键帧及参考图模式最高 720p；关键帧须在视频内部，不能落在同一个 1/3 秒格。
+  旧插件入口仍按既有协议最多接收 9 张参考图，适配器能力声明与入口保持一致。
+  经典与 1.5 型号按既有 provider 能力边界分别注册，避免共享能力声明放宽经典型号的入口校验。
+  旧 `grok-imagine-video` 仍仅接收单张起始图片，不因共享适配器开放 1.5 参数。
+- Core 返回 HTTP 状态、脱敏上游错误及提交/任务状态等事实；Agent 通过工具提示判断是否
+  调整参数、处理连接、尝试官方或请用户补资料。错误文本在截断前按本次实际发出的连接
+  `apiKey` 和全部托管 header 值精确脱敏，不按 header 名猜测；使用出站快照，不读取
+  刷新后的值替代原值。生成的公开协议头不属托管来源，保留非敏感的上游说明。
+  不新增业务错误分类和自动后备重试。
+  所有调用继续走 Ask/Auto/完全访问权限；结果未知、pending 或已生成未交付时恢复原任务，
+  不能靠换 Guide、新 invocation、脚本或原始 HTTP 重复生成或绕过权限。
+- 存量插件的 `cindy-request` 图片、视频接口保留原参数与返回格式。Host 完成原有权限、配额、
+  参考图归属与账号校验后，把旧参数转换为 Server operation 的输入，直接调用已有
+  `callCindyMedia` 的 `prepare/request/poll`，不另起 Agent 或媒体执行链，也不按 Guide ID 筛选。
+  Core 统一生成并入仓，兼容入口只给同一媒体挂插件引用；旧 `jobId/query_job` 只投影调用结果。
+
+实现与回归证据见 [`invocationService.ts`](../../apps/desktop/src/main/cindy-media/invocationService.ts)、
+[`mediaInvocation.ts`](../../apps/desktop/src/shared/mediaInvocation.ts) 和
+[`mediaInvocationStore.test.ts`](../../apps/desktop/src/main/cindy-media/__tests__/mediaInvocationStore.test.ts)。
+
 ## 已授权生成任务的结果下载
 
 - 下载是生成流程内部的一步，不新增“领取”状态、列表或用户操作。上游返回后，客户端
   下载并通过 `ingestMedia` 返回受管媒体；需要确认时暂停同一次操作，批准后自动继续。
-- Guide 的 `allowedUrlHosts` 保留为已确认来源名单。名单内正常目标自动下载；名单外
-  来源、HTTP、特殊端口、地址内登录信息、受限网络等权限要求通过
+- 官方 Guide 的 `allowedUrlHosts` 保留为已确认来源名单。账号本地自定义 Guide 的域名声明
+  不构成来源授权，URL 结果沿用名单外来源的既有确认；保存或 prepare 通过不免除此确认。
+  使用 `openai-videos` 的自定义视频连接还将
+  绑定中转站的域名及其子域名视作已确认结果来源（排除 IP、无点域名和 `.local`）。
+  名单内的正常结果 URL 自动通过隔离下载读取，仅允许 GET，不携带生成接口凭证；
+  名单外来源、HTTP、特殊端口、地址内登录信息、受限网络等权限要求通过
   Cindy 普通 `permission` 交互确认。卡片只说明实际地址、原因和本次范围，不出现
   Guide、“模型说明”等内部概念，不使用仅限本机的 `ghost_grant_confirm`。
 - 用户拒绝后结束本次下载，不自动重试或再次审批。网络失败由客户端最多自动尝试
@@ -223,6 +358,9 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
   不因原内存大小上限拒绝下载或追加大小审批；完成、失败、取消后尽力清理临时文件。
   文件源仍走 `ingestMedia` 和现有字节仓的原子发布、去重与记账，不另建媒体存储。
   base64 响应沿用原大小限制。
+- 下载等待响应与重试共用 120 秒预算；响应到达后以字节为进度，只有断流 30 秒或累计 9 分钟才
+  结束，避免慢线路截断已付费成片。累计上限须低于 Agent 工具调用的 10 分钟超时。失败日志只记
+  错误名、已收字节和耗时，不记错误正文或签名地址。
 - 下载失败保留原调用的成功响应。异步签名地址失效时只查询原上游任务刷新地址，不重新
   付费生成；刷新结果成功入库前不覆盖原成功响应。本地入库失败由客户端对同一份已下载
   字节最多尝试三次，期间复核账号和任务，不再次下载、生成或审批。
@@ -233,37 +371,109 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
 
 ## 模型请求超限时的附件恢复
 
-- 只在本地代理收到的请求实际超过既有字节上限，或上游明确返回 HTTP 413 后恢复；正常请求不因图片数量、预估
-  token 或接近上限而丢弃附件。上限本身保持不变。
-- 超限请求先分块落 Host 私有临时文件，base64 字符串不论单个大小都参与恢复，并分块解码。
-  临时写入按实际可用磁盘共享预算，预留 256 MiB，并为解析、解码和保存预留副本空间；
-  不另设固定附件体积门槛。磁盘不足返回明确的 507，可清理空间后重试，原始历史不变。按历史顺序保留
-  足够数量的旧附件为本地文件，使请求重新小于上限；无需移出全部附件。
-- 上游 413 不提供可靠的字节上限：保全全部可识别的内联附件，请求确实缩小后最多重发一次，
-  重发前重新验证原 dispatch gate。不猜测供应商上限，不把字节换算成 token；纯文本、
-  保全失败或不能缩小时原样返回该 413，客户端停止则取消保全与重发。
+以下是 Codex、Claude Code、Pi 经本机代理发送 JSON 请求的规则，Desktop 与 Node Host 共用
+`packages/anthropic-compat-proxy`，媒体归属由 `oversizedAttachmentRecoveryCore.ts` 装配。
+这套控制按实际请求字节工作，不把字节换算成 token，也不根据历史体积推断断连原因。
+
+### 发送前的预算与历史重放
+
+- 按模型可见的顺序扫描 Responses `input`、Anthropic `messages`（含嵌套 `tool_result`）和
+  Chat Completions `messages`（含 Pi 后置到 user 消息的工具图片）。整个请求的文字、工具定义、
+  JSON 开销和内嵌附件都计入字节预算；只能外置附件，不能删除文字或工具定义来凑预算。
+- 图片先经过可注入的预处理接口（未注入时无操作），然后按处理后的实际字节重放。每次从头累计，
+  越过触发线时从最早仍内嵌的图片开始外置到目标，再继续处理后面的内容：
+
+  | 约束 | 严格超过才触发 | 本次外置的目标 |
+  | --- | --- | --- |
+  | 整个 HTTP 请求 | 32 MiB | 14 MiB |
+  | GPT／OpenAI 家族的图片张数 | 50 张 | 22 张 |
+  | Claude 家族的图片张数 | 100 张 | 44 张 |
+
+  其他模型不设默认张数上限。字节和张数在同一次重放里独立判断；后续尾段仍可增长到触发线，
+  不是把每个最终请求都截成目标大小。例如仅触发张数规则时，GPT 的 51 张历史留下 22 张，
+  52 张留下 23 张。相同输入前缀在相同策略、预处理结果下必须产生相同字节；只替换对应范围，
+  不对整包重新 `JSON.stringify`，以免反复打断提示缓存。
+- 纯文字或所有可外置附件移出后仍超过当前触发线时，本地返回明确的 HTTP 413
+  （`REQUEST_TEXT_TOO_LARGE`）；线路学到更紧的触发线时同样适用。本地 413 不进入上游恢复循环。
+  无媒体标记且未超过触发线的请求原字节放行，不查询任务 DB、不创建／删除临时目录、不调用图片
+  预处理、不写 `unchanged` INFO。含图但只预处理或没有变化时也不创建外置目录；首次 preserve 才创建。
+- JSON 请求超过宿主入口内存阈值（`maxRequestBodyBytes`）时，先由 `collectRecoverableBody` 分块落 Host 私有临时文件，
+  再恢复，不因固定的 128 MiB 内存门槛提前拒绝仍可恢复的历史。Codex 的 HTTP 入口／回退上限
+  从 128 MiB 降为 42 MiB，Claude Code／Pi 保持 32 MiB；这些是新控制器无法完成恢复时的边界，
+  不是默认的主动控制触发线。托管运行若已绑定控制端附件保存能力，预算计算留在模型运行端，
+  被移出的附件保存到任务所在电脑并返回可读的虚拟路径，无需在运行端伪造任务 DB 行。
+  兼容与故障处理见[远程 Agent 协议](protocol-compatibility/remote-agent.md#托管请求的附件预算与保存2026-11-17)。
+  没有该绑定且缺少 DB、有效任务绑定、任务已删除或属于 SSH 远端时，只运行已注入的
+  预处理，不写本机附件路径；仍超宿主上限且无法恢复则本地拒绝。
+- 旧恢复链继续用 `tokenizeStrings`、`recoverInlineAttachments` 分块扫描和解码，不另设固定的
+  单附件体积门槛。临时写入按实际可用磁盘共享预算，预留 256 MiB，并为解析、解码和保存预留副本
+  空间；磁盘不足返回明确的 507，可清理空间后重试，原始历史不变。**当前新控制器落盘后会整包
+  读回内存再按位置重写，并非全流式处理**，不能把落盘接收能力当作恒定内存保证。
+
+### 上游拒收后的单次恢复
+
+- 上游 HTTP 413，或解码后的 400 错误明确表示请求太大、图片太多、单张图太大时，最多恢复并
+  重发一次；重发前重新验证原 dispatch gate。确认 413 状态就开始恢复，不等待错误正文结束，
+  主动关闭旧上传连接，忽略迟到的连接错误和多余响应；只使用已收到的限额信息。
+- 请求字节与张数分别推导新规则：明确上限只有小于这次被拒的实际量才有效，触发线取该上限与
+  当前触发线的较小者；没有上限或上限大于等于实际量时，触发线取实际量的 44%，再与当前值取小。
+  目标取新触发线的 44%（取整），且不能超过当前目标。重试和后续请求都用新规则从原历史重放，
+  不额外做一次“强制截到目标”；如 60 张历史收到上限 50，按 50→22 重放后留下 31 张。
+- 只有重发成功完成后才在代理内存记录规则，按账号、供应商、地址、模型及传输方式／协议区分；
+  并发或连续恢复只能收紧，不能放松，重启清空。单张图太大时只处理仍超限的图片，先让预处理
+  接口从原图进一步压缩或缩小，做不到再外置；不把单图上限当成整个请求的上限。
+- “模型不支持图片”“上下文太长”错误原样返回，不当成字节／张数恢复。没有可恢复附件、
+  保全失败或无法得到有效恢复请求时保留上游错误；客户端停止则取消保全与重发。
+
+### 文件、归属与 WebSocket 边界
+
 - 已识别媒体经 `ingestMedia` 挂 `session-attachment` 持久引用；其他文件复用
-  `hook-attachments/<sessionId>` 生命周期。必须保存成功后才用真实绝对路径替换内容，
-  并明确告诉模型当前消息不再包含该附件内容，需要时重新读取。
+  `hook-attachments/<sessionId>` 生命周期。必须保存成功后才用真实绝对路径替换内容。
+  固定英文占位说明图片之后、被移出之前是否已有 assistant 回复（Responses 的 reasoning、
+  function_call、custom_tool_call 同样算回复）、需要时单独读取、不要把旧图全部读回。
+  路径沿用 `Preserved local file: ${JSON.stringify(localPath)}` 的 JSON 字符串字面量格式，
+  包括 Windows 反斜杠的转义；读取该字面量时先解码，不能拿它直接与未编码路径比对。
 - 仅修改此次发给模型的请求，不改原生历史文件，不重新执行生成或其他工具操作。
   先计算真实路径及替换后的请求大小，确认可恢复后才提交附件。保存失败、取消或归属变化时
   不转发部分结果；整批新增媒体引用经补偿日志回滚，仅删除本次新建的非媒体文件，
   不删除已有文件或共享 blob；无引用 blob 仍由统一媒体回收。临时请求与解码文件在结束时清理。
-- Codex、Claude、Pi 的本机 HTTP JSON 代理共用恢复；Pi 必须验证原有 session token。
-  缺少有效任务绑定、SSH 任务、压缩/不透明请求不套用本机路径恢复。
-- WebSocket 例外：ChatGPT 订阅直连的 Codex WebSocket 单条消息上限约 16 MiB（超限回 1009，
-  HTTP 无此限制），所以只有该链路的出站消息超过 15 MiB（实测阈值，常量在 `codex-proxy-host.ts`）
-  才复用上述外置，压到 12 MiB 再发；未超限的消息逐字节不变。它没有 507 语义：外置不可用、
-  无任务绑定或压不下来时原样转发，由上游 1009 与 Codex 的 HTTPS 回退兜底。
+- Pi 必须验证原有 session token。SSH 任务、压缩／不透明请求不套用本机路径恢复；代理未启动
+  而直连上游的出口也不在本规则覆盖范围。控制日志只记线路、字节数、外置张数及原因，不记内容、
+  文件路径或凭据；有图但无法确定归属时保留 `no-db`、`no-session`、`session-missing`、
+  `remote-session` 等原因，异常只记错误类型。
+- ChatGPT 订阅 WebSocket 单条消息上限约 16 MiB（超限回 1009，HTTP 不套用此单帧限制）。Codex 只对
+  **缺少 `previous_response_id` 字段的整段重发帧**按 12 MiB→8 MiB 重放，成功恢复的完整帧留在
+  15 MiB 安全边界内；增量帧不挪图，已注入的预处理仍可运行。阈值与判定在 `codex-proxy-host.ts`。
+  WebSocket 没有 507 语义：外置不可用、无任务绑定或降不下来时仍保留原样转发，由上游 1009 与
+  Codex 的 HTTPS 回退兜底，不能据此声称所有不可恢复帧也有本地大小保证。
+- 运行时回退开关见[配置契约的“请求体积控制”](configuration-and-overrides.md#请求体积控制)。
+  关闭后 HTTP 入口溢出及上游 413 沿用旧恢复链，后者保全全部可识别内联附件且请求确实缩小后最多重发一次；
+  不应用新规则学习，Codex 回退上限仍为 42 MiB，不恢复成旧的 128 MiB。
 
 ## 图像参数与最终结果
 
 - Art 返回的画幅、成品尺寸、分辨率和质量意图不得在客户端适配层静默丢弃。
   第三方图像通道声明自己的协议，`cindy-media/imageParameters.ts` 同时生成调用指南和
   验证实际请求；账号 ID 不参与协议推断。旧调用省略新增参数仍然可用。
+- 图片参数是开放的：`prepare.input_schema` 中的命名字段是便捷参数，不是上游参数白名单。
+  已声明协议的通道允许在 `body` 直接传入该协议的其他原生字段，并按官方文档保留字段名、
+  值与嵌套结构；Core 用 `nativeParameters` 在内部传递，生成和编辑的执行器都必须序列化。
+  Gemini 的 `generationConfig` / `imageConfig` 与便捷参数合并，显式原生字段优先。
+  模型、请求端点、鉴权、取消信号和主参考图仍走宿主原有路径，原生字段不能改写这些对象。
+  当前交付合同只接收一张最终图片，改变结果形态的批量或流式选项在付费提交前明确拒绝。
+- 参数开放不等于替上游声明支持情况：新增模型参数不需要逐项修改客户端白名单，由实际
+  执行通道的上游校验并保留错误原因。公开 Images API 与 Codex 订阅接口分别执行，不能
+  依据公开 API 文档宣称订阅接口支持同一字段。未指定参数时保持各通道既有默认；例如订阅
+  图片的 `opaque` 默认仅在调用方没有明确背景选项时生效，不再覆盖显式原生参数。
+- 原生参数内的受管媒体引用沿用已有取件、数量和字节预算；multipart 编辑将展开后的媒体
+  字节作为文件字段提交，普通对象按 JSON 序列化，不把对象变成 `[object Object]`。
+  图片结果仍按真实 MIME 原样入库；透明背景、格式、压缩等都是原生参数的使用场景，
+  不另建透明生图流程，也不在通用透传层替上游追加背景或格式默认。
 - `size` 表示生成像素尺寸，`resolution` 表示供应商的分辨率档，`quality` 是原生质量。
   不把不同来源的枚举互相套用，不强制 `medium` 或 `1k`。明确参数优先，省略时由上游决定。
-  已知 GPT Image 尺寸约束在付费提交前检查；不合法时保留 prepared 调用供更正。
+  Gateway/Guide 驱动的图像调用以服务端 Guide 和实际模型为准，客户端不再按型号代际预检
+  `size`/`quality`；不合法参数由上游拒绝，调用按已提交失败处理，不保留 prepared 供更正。
+  直连供应商通道仍由 `imageParameters.ts` 在付费提交前校验其已知约束，不合法时保留 prepared。
   目标成品尺寸不满足模型约束时，由 Agent 选择合法生成尺寸并单独完成成品缩放，不能谎报
   请求尺寸就是实际输出尺寸。没有自动缩放或偷偷裁切。
 - Codex SSE 的 partial image 仅为预览，不能在失败、未完成或只有预览的断流中当成成品。
@@ -302,9 +512,25 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
   清空若发生在引用写入期间，释放会按同一任务的可见消息条件补偿；其它任务或清空后
   新消息仍引用同一图片时保留引用。释放日志保留受管地址，重启可继续未完成的引用清理。
   同一任务并发交付/恢复合并，重复 native 完成事件复用消息 ID 与附件引用。
+- 实时交付在回合结束前送达所有会话订阅方（2026-11-03 Telegram 群的设计稿只发出文字）：
+  wire listener 处理 `image` 事件时调用 `Session.holdEventStream`，交付把 tool_use /
+  tool_result_full / tool_result 推给界面后，Session 再把这三条作为 `hostProjection`
+  事件发给全部监听方，然后才读下一条 provider 事件（通常就是 `done`）。官方 hook、个人
+  IM、伙伴 bot 与插件 tap 因此和普通工具结果一样拿到 `cindy-media://` 地址，消费方不另写
+  分支；wire pipeline 遇到 `hostProjection` 直接跳过，不重复落库或广播。暂停至多
+  `EVENT_STREAM_HOLD_MS`（20 秒）；超时、停止、关闭或拆离立即放行，图片仍在后台交付到
+  界面与恢复流程，但本轮 IM 回复不再带上它。静默定时任务不交付、不暂停；恢复、对账与
+  “重试交付”仍只推界面。
 
 ## 多端与远程
 
+- `cindy-remote-media://` 的每个 OSS 流式响应由 `remoteMediaProtocol.ts` 持有独立
+  `AbortController`。读完、上游出错、消费者取消或调用方中止时，必须同时中止上游请求、
+  解除中止监听并成对释放缓存的 in-flight 计数；迟到的响应体不能再交给已取消的消费者。
+  Electron 42 的 `reader.cancel()` 不保证关闭原生 HTTP 连接，协议 `request.signal`
+  也不保证随下游取消而中止，不能只依赖二者释放连接。否则旧媒体流会占住同站连接池，
+  连带阻塞插件等其它 OSS 下载。回归入口为 `remoteMediaProtocol.test.ts`；同一视频的
+  并发 Range 请求独立取消，不重启共享网络进程，也不删除仍被其它消费者使用的 OSS 对象。
 - 将已有截图或本地图片保存为持久受管附件时，Agent 使用 Core `media(action: "import_image", path)`：Host
   按当前任务文件权限读取，在当前媒体仓入库并登记任务引用，再返回 `xdt_image_urls`。
   工作目录外路径复用现有授权，SSH 任务不得回退读取控制端同名文件。返回成功仅表示
@@ -334,7 +560,12 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
   与图片共用目标的普通链接也指向保存后的同一图片；外发时这些本地链接降为显示文字，
   并清除对应引用定义，不能把原始路径留在 definition 中。网页链接和代码示例不改写。
   兼容仅限 hostless `xdt-image:///绝对路径` / `xdt-file:///绝对路径` 图片引用；协议读取器
-  不放宽。本机任务归属、账号、清空、编辑及 rewind 在提交时复核，不扫描其它任务目录。
+  不放宽。目标含裸空格的本机图片（如 `![说明](/Users/me/Library/Application Support/a.png)`，
+  CommonMark 不认）由 `shared/bareSpaceLocalImages.ts` 从行内**原文片段**补认。文件名被拆成强调节点时仍识别完整引用，
+  邻近的 `&amp;` 照常渲染，转义的 `\![` 保持字面。只认 POSIX／Windows 盘符绝对路径或
+  hostless `xdt-image:///`、以图片扩展名结尾，不解码、不碰代码、HTML 与链接；
+  主进程 `taskImageReferences` 与桌面渲染 `remarkBareSpaceLocalImages` 共用，手机端
+  `parseLocalMarkdownDestination` 早已支持。改写回 Markdown 时含空格的地址用 `<…>` 包住。本机任务归属、账号、清空、编辑及 rewind 在提交时复核，不扫描其它任务目录。
   自动导入在首次文件系统访问前拒绝 UNC、WebDAV 和 Windows 设备命名空间；先解码兼容
   图片 URL，再检查路径，不能等 `realpath` 触发网络解析后才判断目录范围。
   确认消息未发布时，新建引用的回滚复用原账号的补偿日志；旧数据库已关闭时保留待补偿 ID，
@@ -348,6 +579,25 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
   是否仍被消息引用，不能在正文尚未替换地址时删除导入正在复用的引用。
   无可信 SDK session、原生长目录 hash 布局、SSH 或已删除源文件不能靠此恢复；未成功
   导入的直接路径仍依赖源文件存在，不得声称已持久入库。
+- Desktop 本机任务的消息里，嵌入的图片、视频、音频若写的是相对路径，直接拼到任务工作
+  目录找不到时，复用正文路径 chip 的同一套解析（`fs:resolve-path`：任务工作目录内按后缀
+  搜索，唯一命中才采用）换成真实文件；没有命中或命中多个时保持原拼接。Agent 常先进入
+  子文件夹工作再交付相对该子文件夹的路径，这一兜底让播放器与正文路径的结论一致。搜索
+  默认跳过 `out`、`build`、`dist` 等目录，但路径自己点名经过的那一层会进入（`renders/out/
+  clip.mp4` 只进入父目录为 `renders` 的 `out`，首段就是被跳过目录时仍跳过；批量解析时
+  这一放行只对点名它的那条路径生效）。解析
+  完成前不加载媒体，避免播放器先用拼接地址进入失败态；含 `%` 的路径不搜索（主进程查找前
+  会解码，可能换成另一个文件）；查找前把 `./`、重复分隔符、`..` 规范掉（越出任务目录的路径不搜索），
+  没有命中时仍按原始写法加载。本地音频统一走 `xdt-audio://`，`xdt-file://` 只放行图片和
+  视频。只在会话视图已确认任务在本机执行时搜索（`ChatSessionFileContext` 的
+  `localConfirmed`）：远程任务仍按拼接结果经远程媒体通道取件；设备归属可能晚于首次渲染
+  才注入，归属未确认前同样不搜索。伙伴协作卡展开的子任务结果按子任务自己的归属判定（父任务
+  是本机不代表子任务是本机）；右栏 Cindy Make 页签按宿主给出的归属判定。没有命中 / 命中多个
+  不是最终结论（回复可能先引用产物、文件后写出）：新挂载、流式结束、窗口重新聚焦时重查，
+  主进程同时跳过它对否定结论的 30 秒缓存；流式结束 / 聚焦时若有更早发出的查找还没回来，
+  它回来仍未命中就再补查一次；流式结束随渲染方式切换而重挂载时，由新实例接上这一时机；
+  从未命中变成找到时重建媒体元素（文件恰好写在直接拼接位置时地址不变，失败态不会自行重试）；
+  唯一命中不重查。实现见 `useWorkspaceMediaPath.tsx`。
 - Desktop 的图片加载失败默认显示暂不可用，通过现有 preload 图片读取接口确认源文件
   `ENOENT`（IPC `NOT_FOUND`）才显示缺失；不使用被受管协议 CORS 策略禁止的 renderer fetch。
   流式输出时保留加载状态，流式结束、地址更新、窗口重新聚焦或网络恢复时自然重试，

@@ -27,6 +27,18 @@ it('allows the embedded home to render without a navigation header and reads the
       root.render(createElement(HeaderHeightContext.Provider, { value: 82 }, createElement(Probe))),
     );
     expect(height).toBe(82);
+
+    // Duo outer screen: UIKit reports 24 while laying out the shared status row and may never
+    // report 82 again after returning from a task, which left the home blur too short.
+    const report = (value: number) =>
+      act(async () => root.render(createElement(HeaderHeightContext.Provider, { value }, createElement(Probe))));
+    await report(24);
+    expect(height).toBe(82);
+    // A landscape iPhone's compact bar is a real height, and 0 still means no visible bar.
+    await report(32);
+    expect(height).toBe(32);
+    await report(0);
+    expect(height).toBe(0);
   } finally {
     await act(async () => root.unmount());
   }

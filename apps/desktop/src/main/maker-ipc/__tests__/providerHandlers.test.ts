@@ -1,9 +1,22 @@
+import { streamSimple as streamPiChat } from '@earendil-works/pi-ai/api/openai-completions';
+import { remoteProviderDisableKey } from '@cindy/model-providers';
+import * as customProviderStore from '../../maker-host/custom-provider-store.js';
+import { configureModelSettingsActions, manageAppModels } from '../../app-settings/models';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { createXdtHelperMcpServer } from '@cindy/mcps';
+import { resolveCustomMediaConnection } from '../../cindy-brain/customMediaConnection.js';
 import Database from 'better-sqlite3';
+import { readFileSync } from 'node:fs';
+import ts from 'typescript';
+import { mkdtemp, mkdir, writeFile, rm, truncate } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { afterEach, describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, onTestFinished, vi } from 'vitest';
 
 import type { AgentKind, CustomProviderConfig, DiscoveredModel, ModelRegistry, ProviderPreset, ProviderView } from '@cindy/model-providers';
-import { BUNDLED_CATALOG, buildUserProvider, mergeDiscoveredRuntimeModels } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, buildUserProvider, mergeDiscoveredRuntimeModels, storedCustomProviderId } from '@cindy/model-providers';
 import { providerViewToCustomProviderConfig } from '../../../renderer/lib/customProviders.js';
 
 import type { ProviderImportPreview } from '../../../shared/providerImport.js';
@@ -11,7 +24,11 @@ import { BUILTIN_REFRESHABLE_PROVIDER_IDS } from '../../../shared/providerModelR
 import type { DbClient } from '../../localDb/client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
 import * as schema from '../../localDb/schema.js';
-import { createCustomProvider, getCustomProvider, listCustomProviders, revokeCodexAccountUltrafast } from '../../maker-host/custom-provider-store.js';
+import { createCustomProvider, getCustomProvider, listCustomProviders, mergeDiscoveredModelsIntoConfig, updateCustomProviderIfUnchanged, revokeCodexAccountUltrafast } from '../../maker-host/custom-provider-store.js';
+import { issueModelSourceSnapshot } from '../../maker-host/model-source-snapshots.js';
+import { buildPiNativeProvidersFromConfigs } from '../../maker-host/pi-native-catalog.js';
+import { fetchProviderModels } from '../../maker-host/provider-model-fetch.js';
+import { deriveModelsDiscoveryUrl } from '../../maker-host/generic-oauth.desktop.js';
 import { codexCustomProviderConfigSignature } from '../../maker-host/codex-custom-provider-route.js';
 import {
   beginProviderRouteMutation,
@@ -29,7 +46,8 @@ import {
 import { throwIpcError } from '../../utils/ipcValidate.js';
 import { MAKER_INVOKE, MAKER_PUSH } from '../channels.js';
 import { registerProviderHandlers, type ProviderHandlerDeps } from '../providerHandlers.js';
-import { clearModelVisibilityMirror, waitForModelVisibilityMirror, getModelVisibilityMirrorSnapshot } from '../../maker-host/model-visibility-mirror.js';
+import { clearModelVisibilityMirror, waitForModelVisibilityMirror, getModelVisibilityMirrorSnapshot, setModelVisibilityMirror } from '../../maker-host/model-visibility-mirror.js';
+import { runDeviceLinkInvokeContext, readDeviceLinkModelSelectionOrigin } from '../../device-link/invoke-context.js';
 import { extractIpcError } from '../../../renderer/utils/ipcError';
 import * as providerPresentation from '../../maker-host/provider-presentation-store.js';
 import * as llamaCppService from '../../local-model-runtime/llamaCppService.js';
@@ -181,13 +199,295 @@ function createProviderImportId(payload: unknown): string {
   return importId;
 }
 
-afterEach(() => {
+let importDirectory: string | undefined;
+async function importFile(contents: string): Promise<string> {
+  importDirectory ??= await mkdtemp(join(tmpdir(), 'cindy-provider-import-'));
+  const path = join(importDirectory, 'provider.json');
+  await writeFile(path, contents, 'utf8');
+  return path;
+}
+
+afterEach(async () => {
   vi.restoreAllMocks();
   clearProviderImportDraftsForTest();
   if (client) clearCurrentDbClient(client);
   raw?.close();
   client = null;
   raw = null;
+  if (importDirectory) await rm(importDirectory, { recursive: true, force: true });
+  importDirectory = undefined;
+});
+
+// #7760, unit: invoke the real file IPC, reader, preview and confirmation handlers.
+// Existing import tests start from URL drafts and miss file I/O, owner races and
+// secret-safe parse errors. Minimal inputs: a >24 KiB catalog or one invalid file.
+// Measured standalone on Windows: 8.68s (244 tests, 2026-10-29); existing provider
+// integration setup collects in 4.59s, tests run in 3.84s. No per-case module resets.
+describe('provider file import IPC', () => {
+  const payload = (models: unknown[]) => ({ kind: 'custom', name: 'File provider',
+    auth: { method: 'apiKey', apiKey: 'FAKE-FILE-KEY' }, endpoints: [{
+      protocol: 'openai-chat', baseUrl: 'https://import.example.test/v1', targets: ['pi'], models,
+      headers: { 'X-Secret': 'FAKE-FILE-HEADER' },
+    }],
+  });
+
+    it('previews a batch without writes and confirms only the selected provider through the existing handler', async () => {
+      mountDb();
+      const first = { ...payload(['model-a']), name: 'Batch A' };
+      const second = { ...payload(['model-b']), name: 'Batch B' };
+      const path = await importFile(JSON.stringify({ providers: [first, second] }));
+      const deps = makeDeps({ selectProviderImportFile: async () => path });
+      const harness = new IpcHarness();
+      registerProviderHandlers(harness, deps);
+      const ids = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_FILE) as string[];
+      expect(ids).toHaveLength(2);
+      const previews = await Promise.all(ids.map(id => harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, id))) as ProviderImportPreview[];
+      expect(previews.map(p => p.name)).toEqual(['Batch A', 'Batch B']);
+      expect(JSON.stringify(previews)).not.toContain('FAKE-FILE');
+      expect(await listCustomProviders()).toEqual([]);
+      expect(deps.storeCustomProviderKey).not.toHaveBeenCalled();
+      await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, ids[1]);
+      expect((await listCustomProviders()).map(p => p.name)).toEqual(['Batch B']);
+      expect(await getCustomProvider(previews[0].providerId)).toBeNull();
+      await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CANCEL, ids[0]);
+      await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, ids[0])).rejects.toThrow(/INVALID_PARAMS/);
+    });
+
+    it('previews a large file without writes, then saves every model and credential only on confirmation', async () => {
+    mountDb();
+    const models = Array.from({ length: 257 }, (_, i) => ({ id: `model-${i}`, name: `模型 ${i}`,
+      group: 'custom:file', maxOutputTokens: 32000, contextWindow: 200000 }));
+    const path = await importFile(JSON.stringify(payload(models)));
+    const deps = makeDeps({ selectProviderImportFile: async () => path });
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, deps);
+    const id = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_FILE) as string;
+    expect(typeof id).toBe('string');
+    const preview = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, id) as ProviderImportPreview;
+    expect(preview.runtimes).toMatchObject([{ modelCount: 257, hasApiKey: true }]);
+    expect(JSON.stringify(preview)).not.toContain('FAKE-FILE');
+    expect(await listCustomProviders()).toEqual([]);
+    expect(deps.storeCustomProviderKey).not.toHaveBeenCalled();
+    expect(deps.fetchModels).not.toHaveBeenCalled();
+    expect(await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, id)).toMatchObject({ ok: true });
+    const saved = await getCustomProvider(preview.providerId);
+    expect(saved?.runtimes.pi?.models).toEqual(models);
+    expect(JSON.stringify(saved)).not.toContain('FAKE-FILE');
+    expect(deps.storeCustomProviderKey).toHaveBeenCalledWith(preview.providerId, 'pi', 'FAKE-FILE-KEY');
+    expect(deps.storeCustomProviderHeaders).toHaveBeenCalledWith(preview.providerId, 'pi', { 'X-Secret': 'FAKE-FILE-HEADER' });
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, id)).rejects.toThrow(/INVALID_PARAMS/);
+  });
+
+  it.each(['syntax', 'schema', 'too-large', 'missing'] as const)(
+    'returns a safe actionable error for a %s file', async (scenario) => {
+      const path = await importFile(scenario === 'syntax' ? '{"FAKE-PRIVATE-SECRET":' :
+        JSON.stringify({ ...payload(['model']), 'FAKE-PRIVATE-SECRET': true }));
+      if (scenario === 'too-large') await truncate(path, 4 * 1024 * 1024 + 1);
+      if (scenario === 'missing') await rm(path);
+      const deps = makeDeps({ selectProviderImportFile: async () => path });
+      const harness = new IpcHarness();
+      registerProviderHandlers(harness, deps);
+      const error = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_FILE).catch(value => value);
+      expect(extractIpcError(error)?.code).toBe(scenario === 'too-large' ? 'PROVIDER_IMPORT_FILE_TOO_LARGE'
+        : scenario === 'missing' ? 'PROVIDER_IMPORT_FILE_READ_FAILED' : 'PROVIDER_IMPORT_FILE_INVALID');
+      expect(String(error)).not.toContain('FAKE-PRIVATE-SECRET');
+      expect(String(error)).not.toContain(path);
+      expect(deps.storeCustomProviderKey).not.toHaveBeenCalled();
+    },
+  );
+
+  it('cancels cleanly and rejects caller-supplied paths or untrusted senders before opening the picker', async () => {
+    const select = vi.fn(async () => null);
+    let trusted = true;
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({ selectProviderImportFile: select,
+      assertTrustedSender: () => { if (!trusted) throwIpcError('PERMISSION_DENIED', 'untrusted sender'); },
+    }));
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_FILE)).resolves.toBeNull();
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_FILE, 'arbitrary-path')).rejects.toThrow(/INVALID_PARAMS/);
+    trusted = false;
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_FILE)).rejects.toThrow(/PERMISSION_DENIED/);
+    expect(select).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a file selected after the account generation changed', async () => {
+    let finish!: (path: string) => void;
+    let generation = 1;
+    const harness = new IpcHarness();
+    const deps = makeDeps({
+      selectProviderImportFile: () => new Promise(resolve => { finish = resolve; }),
+      currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation }),
+    });
+    registerProviderHandlers(harness, deps);
+    const pending = harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_FILE);
+    generation = 3; // A -> B -> A must still reject the earlier selection.
+    finish(join(tmpdir(), 'must-not-be-read.json'));
+    await expect(pending).rejects.toThrow(/active account changed/);
+    expect(deps.storeCustomProviderKey).not.toHaveBeenCalled();
+  });
+});
+
+describe('local API configuration import IPC', () => {
+  async function setup(source: { env: Record<string, string> } = { env: { ANTHROPIC_BASE_URL: 'https://relay.test/prefix', ANTHROPIC_API_KEY: 'FAKE-LOCAL-KEY' } }) {
+    mountDb();
+    importDirectory = await mkdtemp(join(tmpdir(), 'cindy-local-provider-ipc-'));
+    await mkdir(join(importDirectory, '.claude'));
+    const path = join(importDirectory, '.claude', 'settings.json');
+    await writeFile(path, JSON.stringify(source));
+    const keys = new Map<string, string>();
+    const deps = makeDeps({
+      localProviderSourceContext: () => ({ home: importDirectory!, platform: 'linux', env: {} }),
+      readCustomProviderKeyForMutation: vi.fn((id, agent) => keys.get(`${id}:${agent}`) ?? null),
+      storeCustomProviderKey: vi.fn((id, agent, key) => { keys.set(`${id}:${agent}`, key); return true; }),
+      removeCustomProviderKey: vi.fn((id, agent) => { keys.delete(`${id}:${agent}`); return { success: true }; }),
+    });
+    const harness = new IpcHarness(); registerProviderHandlers(harness, deps);
+    return { harness, deps, path, keys };
+  }
+  async function scan(harness: IpcHarness) {
+    return harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_LOCAL_SCAN) as Promise<import('../../../shared/localProviderImport.js').LocalProviderImportScan>;
+  }
+  it('scans fake source configs and saves through the ordinary provider CRUD and model discovery', async () => {
+    const { harness, deps } = await setup();
+    const result = await scan(harness);
+    expect(result.items).toHaveLength(1);
+    expect(JSON.stringify(result)).not.toContain('FAKE-LOCAL-KEY');
+    expect(deps.fetchModels).not.toHaveBeenCalled();
+    const item = result.items[0];
+    const preview = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, item.importId) as ProviderImportPreview;
+    expect(preview.updateTargets).toEqual([]);
+    const saved = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, item.importId);
+    expect(saved).toMatchObject({ ok: true, providerId: preview.providerId });
+    expect(deps.fetchModels).toHaveBeenCalledWith(expect.objectContaining({ agent: 'claude-code', apiKey: 'FAKE-LOCAL-KEY', redirect: 'error' }));
+    const stored = await getCustomProvider(preview.providerId);
+    expect(stored?.runtimes['claude-code']?.baseUrl).toBe('https://relay.test/prefix');
+    expect(stored?.runtimes.codex).toBeUndefined();
+    expect(deps.broadcastChanged).toHaveBeenCalled();
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, item.importId)).resolves.toEqual(saved);
+    expect(await listCustomProviders()).toHaveLength(1);
+  });
+  it.each([undefined, 'FAKE-REPLACEMENT'])('imports saved Claude headers after destination consent (replacement: %s)', async (replacement) => {
+    const now = vi.spyOn(performance, 'now').mockReturnValue(10_000);
+    onTestFinished(() => { now.mockRestore(); });
+    const { harness, deps } = await setup({
+      env: {
+        ANTHROPIC_CUSTOM_HEADERS: 'Authorization: Bearer FAKE-STATIC-TOKEN\nX-Tenant: FAKE-TENANT',
+      },
+    });
+    const approveDestination = vi.fn(async () => false);
+    deps.confirmLocalProviderDestination = approveDestination;
+    const item = (await scan(harness)).items[0];
+    expect(item).toMatchObject({
+      issue: 'needsInput',
+      endpoints: [{ baseUrl: '', hasCredential: true }],
+    });
+    const baseUrl = 'https://relay.test/prefix';
+    const edit = {
+      name: item.name,
+      endpoints: [{ baseUrl, protocol: 'anthropic-messages' }],
+    };
+    const edited = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_LOCAL_EDIT, item.importId, edit);
+    expect(edited).toMatchObject({ endpoints: [{ baseUrl, hasCredential: true }] });
+    expect(edited).not.toHaveProperty('issue');
+    let preview = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, item.importId) as ProviderImportPreview;
+    expect(JSON.stringify([item, edited, preview])).not.toContain('FAKE-STATIC-TOKEN');
+    expect(JSON.stringify([item, edited, preview])).not.toContain('FAKE-TENANT');
+    const opened = Promise.withResolvers<void>();
+    const decision = Promise.withResolvers<boolean>();
+    approveDestination.mockImplementationOnce(() => {
+      opened.resolve();
+      return decision.promise;
+    });
+    const first = expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, item.importId)).rejects.toThrow(/MUTATION_CANCELLED/);
+    await opened.promise;
+    const overlapping = expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, item.importId)).rejects.toThrow(/MUTATION_CANCELLED/);
+    decision.resolve(false);
+    await Promise.all([first, overlapping]);
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, item.importId)).rejects.toThrow(/MUTATION_CANCELLED/);
+    expect(approveDestination).toHaveBeenCalledTimes(1);
+    expect(approveDestination).toHaveBeenCalledWith(expect.anything(), baseUrl);
+    expect(deps.fetchModels).not.toHaveBeenCalled();
+    expect(deps.storeCustomProviderHeaders).not.toHaveBeenCalled();
+    expect(await listCustomProviders()).toHaveLength(0);
+    now.mockReturnValue(15_000);
+    if (replacement) {
+      await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_LOCAL_EDIT, item.importId, {
+        ...edit,
+        endpoints: [{ ...edit.endpoints[0], apiKey: replacement }],
+      });
+      preview = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, item.importId) as ProviderImportPreview;
+      await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, item.importId)).rejects.toThrow(/MUTATION_CANCELLED/);
+      expect(deps.fetchModels).not.toHaveBeenCalled();
+      expect(deps.storeCustomProviderHeaders).not.toHaveBeenCalled();
+      now.mockReturnValue(20_000);
+    }
+    approveDestination.mockResolvedValueOnce(true);
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, item.importId)).resolves.toMatchObject({
+      ok: true,
+      providerId: preview.providerId,
+    });
+    const headers = {
+      Authorization: `Bearer ${replacement ?? 'FAKE-STATIC-TOKEN'}`,
+      'X-Tenant': 'FAKE-TENANT',
+    };
+    expect(deps.fetchModels).toHaveBeenCalledWith(expect.objectContaining({ baseUrl, headers }));
+    expect(deps.storeCustomProviderHeaders).toHaveBeenCalledWith(preview.providerId, 'claude-code', headers);
+    expect((await getCustomProvider(preview.providerId))?.runtimes['claude-code']?.baseUrl).toBe(baseUrl);
+  });
+  it.each([
+    { sourceUrl: 'https://original.test', protocol: 'anthropic-messages' },
+    { sourceUrl: 'invalid-url', protocol: 'anthropic-messages' },
+    { sourceUrl: '', protocol: 'openai-chat' },
+  ])('does not carry saved headers to a changed destination or protocol ($sourceUrl, $protocol)', async ({ sourceUrl, protocol }) => {
+    const { harness, deps } = await setup({
+      env: {
+        ANTHROPIC_BASE_URL: sourceUrl,
+        ANTHROPIC_CUSTOM_HEADERS: 'x-api-key: FAKE-STATIC-KEY',
+      },
+    });
+    const item = (await scan(harness)).items[0];
+    const edited = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_LOCAL_EDIT, item.importId, {
+      name: item.name,
+      endpoints: [{ baseUrl: 'https://relay.test/prefix', protocol }],
+    });
+    expect(edited).toMatchObject({ issue: 'needsInput', endpoints: [{ hasCredential: false }] });
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, item.importId)).rejects.toThrow(/INVALID_PARAMS/);
+    expect(deps.fetchModels).not.toHaveBeenCalled();
+  });
+  it('repeated scans/parallel confirmations do not create equivalent accounts twice', async () => {
+    const { harness } = await setup();
+    const a = (await scan(harness)).items[0], b = (await scan(harness)).items[0];
+    await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, a.importId);
+    await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, b.importId);
+    const [one, two] = await Promise.all([harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, a.importId), harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, b.importId)]);
+    expect(one).toMatchObject({ ok: true }); expect(two).toEqual(one);
+    expect(await listCustomProviders()).toHaveLength(1);
+    expect((await scan(harness)).items[0].issue).toBe('duplicate');
+  });
+  it('source key rotation requires a fresh scan instead of saving an unseen credential', async () => {
+    const { harness, path, deps } = await setup();
+    const item = (await scan(harness)).items[0];
+    await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, item.importId);
+    await writeFile(path, JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'https://relay.test/prefix', ANTHROPIC_API_KEY: 'FAKE-ROTATED' } }));
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, item.importId)).rejects.toThrow(/PRECONDITION_FAILED/);
+    expect(deps.storeCustomProviderKey).not.toHaveBeenCalled();
+    expect(await listCustomProviders()).toHaveLength(0);
+  });
+  it('trusted local sender is required and paths cannot be supplied by renderer', async () => {
+    const { harness, deps } = await setup();
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_LOCAL_SCAN, '/fake/path')).rejects.toThrow(/INVALID_PARAMS/);
+    vi.mocked(deps.assertTrustedSender!).mockImplementation(() => { throwIpcError('PERMISSION_DENIED', 'untrusted'); });
+    await expect(scan(harness)).rejects.toThrow(/PERMISSION_DENIED/);
+  });
+  it('keeps a saved connection if post-commit refresh fails, and retries remain idempotent', async () => {
+    const { harness, deps } = await setup();
+    vi.mocked(deps.broadcastChanged).mockImplementationOnce(() => { throw new Error('broadcast failed'); });
+    const item = (await scan(harness)).items[0];
+    await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, item.importId);
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, item.importId)).rejects.toThrow();
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, item.importId)).resolves.toMatchObject({ ok: true });
+    expect(await listCustomProviders()).toHaveLength(1);
+  });
 });
 
 describe('provider:list IPC handler', () => {
@@ -259,6 +559,52 @@ describe('provider:list IPC handler', () => {
     expect(listProviders).toHaveBeenCalledWith({
       allowSideEffects: false,
     });
+  });
+
+  // Unit: provider:list serves both local display and remote automatic routing.
+  it('requests offline display models only for the local renderer', async () => {
+    const harness = new IpcHarness();
+    const current = { ...fakeView('openai', false), models: { codex: [] } };
+    const retained = { id: 'gpt-retained', name: 'Retained', contextWindow: 128_000, efforts: [], defaultEffort: null };
+    registerProviderHandlers(harness, makeDeps({
+      isTrustedSender: () => true,
+      listProviders: async opts => [opts?.includeSubscriptionDisplayModels
+        ? { ...current, subscriptionDisplayModels: { codex: [retained] } }
+        : current],
+    }));
+    const invoke = () => harness.invoke(MAKER_INVOKE.PROVIDER_LIST);
+    expect(await invoke()).toMatchObject({ providers: [{
+      connected: false, models: { codex: [] }, subscriptionDisplayModels: { codex: [retained] },
+    }] });
+    for (const providerPicker of [undefined, 'available'] as const) {
+      const result = await runDeviceLinkInvokeContext({
+        controllerDeviceId: 'paired-device', channel: MAKER_INVOKE.PROVIDER_LIST, providerPicker,
+      }, invoke) as { providers: ProviderView[] };
+      expect(result.providers).toEqual([current]);
+    }
+  });
+
+  // #11693: a missing discovered model can still have an explicit hidden preference.
+  // Exercise the actual provider:list handler and visibility mirror with an empty service result.
+  it('returns the hidden preference for a removed model without publishing sibling preferences', async () => {
+    const harness = new IpcHarness();
+    const route = { agent: 'codex' as const, providerId: 'off', modelId: 'gone' };
+    setModelVisibilityMirror({ 'codex:off:gone': false, 'codex:off:sibling': false, 'codex:on:gone': true });
+    try {
+      registerProviderHandlers(harness, makeDeps({
+        listProviders: async opts => {
+          opts?.picker?.describe?.([], ['off']);
+          return [];
+        },
+        getModelVisibilityOverrides: getModelVisibilityMirrorSnapshot,
+      }));
+      const result = await runDeviceLinkInvokeContext({ controllerDeviceId: 'mobile', channel: MAKER_INVOKE.PROVIDER_LIST, providerPicker: route },
+        () => harness.invoke(MAKER_INVOKE.PROVIDER_LIST));
+      expect(result).toMatchObject({ providers: [] });
+      expect(result).toHaveProperty('modelVisibilityOverrides', { 'codex:off:gone': false });
+    } finally {
+      clearModelVisibilityMirror();
+    }
   });
 
   it('encodes a real visibility timeout at the IPC boundary for message-only remote transport', async () => {
@@ -368,6 +714,34 @@ describe('provider:list IPC handler', () => {
     expect(result.providers[0].routing.pi?.headerOverride).toBeUndefined();
     expect(result.providers[0].routing.pi?.headerOverrideState).toBe('configured');
     expect(result.providers[0].routing.pi?.upstream).toBe('https://custom.example/v1');
+  });
+
+  // IPC unit: the settings page can locate the active image connection without
+  // changing the legacy key status or disclosing the binding to remote readers.
+  it('projects the Gemini image binding only to local settings', async () => {
+    const binding = await import('../../maker-host/gemini-image-connection.js');
+    const readBinding = vi.spyOn(binding, 'geminiImageConnectionId').mockReturnValue(null);
+    let trusted = true;
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({
+      listProviders: async () => [fakeView('gemini', false), fakeView('new-google', true)],
+      isTrustedSender: () => trusted,
+    }));
+    try {
+      const list = async () => (await harness.invoke(MAKER_INVOKE.PROVIDER_LIST) as {
+        providers: ProviderView[];
+      }).providers;
+      expect((await list())[0].geminiImageSettingsConnectionId).toBeUndefined();
+      readBinding.mockReturnValue('new-google');
+      expect(await list()).toMatchObject([
+        { id: 'gemini', connected: false, geminiImageSettingsConnectionId: 'new-google' },
+        { id: 'new-google', connected: true },
+      ]);
+      trusted = false;
+      expect((await list())[0].geminiImageSettingsConnectionId).toBeUndefined();
+    } finally {
+      readBinding.mockRestore();
+    }
   });
 
   it('strips runtime header credentials even for the trusted local settings editor', async () => {
@@ -540,7 +914,7 @@ describe('model-disable:set handler', () => {
     expect(deps.setModelsDisabled).toHaveBeenCalledWith('xd', ['seedream-5', 'seedance-2'], true);
   });
 
-  it.each(['audioModels', 'embeddingModels'] as const)(
+  it.each(['audioModels', 'embeddingModels', 'evaluationModels'] as const)(
     'accepts media-only members in %s and rejects unknown IDs',
     async (field) => {
       const harness = new IpcHarness();
@@ -792,6 +1166,33 @@ describe('model-disable:set handler', () => {
 });
 
 describe('provider:models-rediscover handler', () => {
+  it('helper rediscovery waits for SDK discovery and returns the new subscription models', async () => {
+    const harness = new IpcHarness();
+    let models = ['claude-fable-5-1'];
+    let finish!: () => void;
+    const discovery = new Promise<void>((resolve) => { finish = resolve; });
+    const deps = makeDeps({
+      listProviders: async () => [catalogView('anthropic', { 'claude-code': models })],
+      currentOwnerSession: () => ({ dataOwnerId: 'test-user', generation: 1 }),
+      refreshBuiltinModels: vi.fn(async () => {
+        await discovery;
+        models = ['claude-fable-5-2'];
+      }),
+    });
+    configureModelSettingsActions(registerProviderHandlers(harness, deps));
+    let settled = false;
+    const result = manageAppModels({ operation: 'provider', change: {
+      action: 'rediscover', providerId: 'anthropic',
+    } }, async () => {}).then((value) => { settled = true; return value; });
+    await vi.waitFor(() => expect(deps.refreshBuiltinModels).toHaveBeenCalledWith('anthropic'));
+    expect(settled).toBe(false);
+    finish();
+    expect(await result).toMatchObject({ providers: [{ models: {
+      'claude-code': [{ id: 'claude-fable-5-2' }],
+    } }] });
+    expect(deps.rediscoverModels).not.toHaveBeenCalled();
+  });
+
   it('校验 sender 后才发起重新发现;不可信 sender 直接拒绝', async () => {
     const harness = new IpcHarness();
     const assertTrustedSender = vi.fn(() => {
@@ -805,6 +1206,7 @@ describe('provider:models-rediscover handler', () => {
     ).rejects.toThrow(/PERMISSION_DENIED/);
     // 拒绝发生在任何上游动作之前:绝不让不可信 sender 触发带凭证的请求。
     expect(deps.rediscoverModels).not.toHaveBeenCalled();
+    expect(deps.refreshBuiltinModels).not.toHaveBeenCalled();
   });
 
   it('守卫未接线时 fail-closed,不靠可选链静默放行', async () => {
@@ -818,17 +1220,19 @@ describe('provider:models-rediscover handler', () => {
       harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_REDISCOVER, 'anthropic'),
     ).rejects.toThrow(/PERMISSION_DENIED/);
     expect(deps.rediscoverModels).not.toHaveBeenCalled();
+    expect(deps.refreshBuiltinModels).not.toHaveBeenCalled();
   });
 
-  it('成功时返回 ok 且不重复广播(发现流程自己收口)', async () => {
+  it.each(['anthropic', 'openai', 'xai', 'xd'])('refreshes %s from its live source without duplicate broadcasts', async (providerId) => {
     const harness = new IpcHarness();
     const deps = makeDeps();
     registerProviderHandlers(harness, deps);
 
-    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_REDISCOVER, 'anthropic')).resolves.toEqual({
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_REDISCOVER, providerId)).resolves.toEqual({
       ok: true,
     });
-    expect(deps.rediscoverModels).toHaveBeenCalledWith('anthropic');
+    expect(deps.refreshBuiltinModels).toHaveBeenCalledWith(providerId);
+    expect(deps.rediscoverModels).not.toHaveBeenCalled();
     expect(deps.broadcastChanged).not.toHaveBeenCalled();
   });
 
@@ -843,7 +1247,7 @@ describe('provider:models-rediscover handler', () => {
     };
     registerProviderHandlers(harness, makeDeps({ rediscoverModels: vi.fn(async () => failure) }));
 
-    const res = (await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_REDISCOVER, 'anthropic')) as {
+    const res = (await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_REDISCOVER, 'custom')) as {
       ok: boolean;
       failure?: Record<string, unknown>;
     };
@@ -856,8 +1260,8 @@ describe('provider:models-rediscover handler', () => {
     registerProviderHandlers(
       harness,
       makeDeps({
-        rediscoverModels: vi.fn(async () => {
-          throw new Error('disk full');
+        refreshBuiltinModels: vi.fn(async () => {
+          throw new Error('upstream error with private details');
         }),
       }),
     );
@@ -1434,6 +1838,48 @@ describe('provider:custom:* CRUD handlers', () => {
     expect(deps.broadcastChanged).toHaveBeenCalledOnce();
   });
 
+  it('preserves legacy Gemini keys until an explicit save, then rotates and disconnects only the selected connection', async () => {
+    mountDb();
+    const binding = await import('../../maker-host/gemini-image-connection.js');
+    let selected: string | null = null;
+    const readBinding = vi.spyOn(binding, 'geminiImageConnectionId').mockImplementation(() => selected);
+    const bind = vi.spyOn(binding, 'bindGeminiImageConnection').mockImplementation(async id => { selected = id; });
+    const keys = new Map<string, string>();
+    const harness = new IpcHarness();
+    const deps = makeDeps({
+      readCustomProviderKeyForMutation: (id, agent) => keys.get(id + agent) ?? null,
+      storeCustomProviderKey: (id, agent, key) => { keys.set(id + agent, key); return true; },
+      removeCustomProviderKey: (id, agent) => { keys.delete(id + agent); return { success: true }; },
+    });
+    registerProviderHandlers(harness, deps);
+    const rt = { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', wireProtocol: 'openai-chat' as const, models: [] };
+    const old = { id: 'google-gemini-api', name: 'Google Gemini API', runtimes: { codex: rt, pi: rt } };
+    const fresh = { ...old, id: 'new-google' };
+    const imageKey = () => binding.resolveGeminiImageKey(selected,
+      id => buildUserProvider(id === old.id ? old : fresh),
+      (id, agent) => keys.get(id + agent) ?? null, () => 'fake-legacy-image');
+    try {
+      await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, old, { codex: 'fake-legacy-chat' });
+      expect(imageKey()).toBe('fake-legacy-image');
+      const both = { codex: 'fake-new-key', pi: 'fake-new-key' };
+      bind.mockRejectedValueOnce(new Error('disk unavailable'));
+      await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, fresh, both, { bindGeminiImages: true })).rejects.toThrow();
+      expect(await getCustomProvider(fresh.id)).toBeNull();
+      expect(keys.get(fresh.id + 'pi')).toBeUndefined();
+      expect(imageKey()).toBe('fake-legacy-image');
+      await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, fresh, both, { bindGeminiImages: true });
+      expect(imageKey()).toBe('fake-new-key');
+      await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, fresh, { pi: 'fake-rotated' });
+      expect(imageKey()).toBe('fake-rotated');
+      expect(keys.get(old.id + 'codex')).toBe('fake-legacy-chat');
+      await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DISCONNECT, fresh.id);
+      expect(imageKey()).toBeNull();
+    } finally {
+      readBinding.mockRestore();
+      bind.mockRestore();
+    }
+  });
+
   it('requires confirmation before a busy manual create and persists nothing when cancelled', async () => {
     mountDb();
     const harness = new IpcHarness();
@@ -1569,6 +2015,83 @@ describe('provider:custom:* CRUD handlers', () => {
     ).resolves.toEqual({ ok: true });
     expect(prepare).toHaveBeenCalledTimes(2);
     expect(finalize).toHaveBeenCalledTimes(2);
+  });
+
+  // #11298 review P1: editors that rebuild model rows field by field dropped the
+  // upstream-listing marker, silently disabling withdrawal review. Main inherits it
+  // for an unchanged route/credential and drops it when the key or endpoint changes.
+  it('keeps the upstream listing marker across saves and drops it on a key or endpoint change', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({
+      readCustomProviderKeyForMutation: vi.fn(() => 'old-key'),
+      storeCustomProviderKey: vi.fn(() => true),
+    }));
+    const config = (listed: boolean, baseUrl = 'https://gw.example.test/v1'): CustomProviderConfig => ({
+      id: 'listed-gw', name: 'Gateway', runtimes: { codex: { baseUrl, models: [
+        { id: 'listed', name: 'Listed', discoveredMetadata: {}, ...(listed ? { listedUpstream: true as const } : {}) },
+        { id: 'manual', name: 'Manual' },
+      ] } },
+    });
+    const marked = async () => (await getCustomProvider('listed-gw'))?.runtimes.codex?.models
+      .filter(model => model.listedUpstream).map(model => model.id);
+    const receipt = async () => ({ listingReceipts: { codex: (await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
+      agent: 'codex', baseUrl: 'https://gw.example.test/v1', authMethod: 'apiKey', savedProviderId: 'listed-gw',
+    }) as { listingReceipt: string }).listingReceipt } });
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, config(false), { codex: 'old-key' });
+    // Without a listing receipt a save cannot introduce markers.
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, config(true));
+    expect(await marked()).toEqual([]);
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, config(true), {}, await receipt());
+    expect(await marked()).toEqual(['listed']);
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, config(false));
+    expect(await marked()).toEqual(['listed']);
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, config(false), { codex: 'new-key' });
+    expect(await marked()).toEqual([]);
+    // PR #11550 review P1: window A fetched with the old key; window B saves a new key
+    // before A's refresh save, so A's receipt no longer proves its listing.
+    const stale = await receipt();
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, config(false), { codex: 'newer-key' });
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, config(true), {}, stale);
+    expect(await marked()).toEqual([]);
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, config(true, 'https://other.example.test/v1'), {}, await receipt());
+    expect(await marked()).toEqual([]);
+  });
+
+  // PR #11550 review P1: a confirmed review must be applied to the latest saved
+  // connection, never to the page snapshot: models added since are kept, rows that
+  // lost the marker (another window changed the key/endpoint) are not removed, and a
+  // row relisted by a newer refresh (no current absence receipt) is not removed.
+  it('applies confirmed withdrawals to the latest saved connection only', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({ readCustomProviderKeyForMutation: vi.fn(() => 'key') }));
+    const row = (id: string, listed = true, missing = false) => ({ id, name: id, discoveredMetadata: {},
+      ...(listed ? { listedUpstream: true as const } : {}), ...(missing ? { missingUpstream: true as const } : {}) });
+    const base = (models: ReturnType<typeof row>[]): CustomProviderConfig => ({ id: 'withdraw-gw', name: 'Gateway',
+      runtimes: { codex: { baseUrl: 'https://gw.example.test/v1', models } } });
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, base([row('gone', false)]), { codex: 'key' });
+    const fetched = await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
+      agent: 'codex', baseUrl: 'https://gw.example.test/v1', authMethod: 'apiKey', savedProviderId: 'withdraw-gw',
+    }) as { listingReceipt: string };
+    // Latest saved: 'gone' is still absent, 'old' was relisted by a newer refresh,
+    // 'fresh' was just added, 'kept' lost its marker.
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, base([row('gone', true, true), row('old'), row('fresh'), row('kept', false)]),
+      {}, { listingReceipts: { codex: fetched.listingReceipt } });
+    const stalePage = base([row('gone', true, true), row('old', true, true), row('kept')]);
+    const result = await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, stalePage, {}, {
+      removeWithdrawnModels: ['gone', 'old', 'kept'].map(modelId => ({ agent: 'codex' as const, modelId })),
+    });
+    expect(result).toEqual({ ok: true, withdrawnRemoved: [{ agent: 'codex', modelId: 'gone' }], withdrawnGoneIds: ['gone'] });
+    expect((await getCustomProvider('withdraw-gw'))?.runtimes.codex?.models.map(model => model.id))
+      .toEqual(['old', 'fresh', 'kept']);
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, stalePage, { codex: 'other' }, {
+      removeWithdrawnModels: [{ agent: 'codex', modelId: 'old' }],
+    })).rejects.toThrow(/INVALID_PARAMS/);
+    // PR #11550 review P2: any persisted ID (the store has no length cap) stays removable.
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, stalePage, {}, {
+      removeWithdrawnModels: [{ agent: 'codex', modelId: 'x'.repeat(600) }],
+    })).resolves.toMatchObject({ ok: true, withdrawnRemoved: [] });
   });
 
   it('hard-cuts config and credential changes, but skips display-only edits', async () => {
@@ -2305,6 +2828,25 @@ describe('provider:custom:* CRUD handlers', () => {
     );
   });
 
+  it.each([
+    ['zhipu-coding-plan-cn', 'https://open.bigmodel.cn/api/coding/paas/v4'],
+    ['zhipu-glm-global', 'https://api.z.ai/api/paas/v4'],
+    ['zhipu-glm-cn', 'https://proxy.example/v4'],
+  ])('uses saved preset identity and endpoint to exclude %s at %s from the voice probe', async (catalogPresetId, baseUrl) => {
+    mountDb();
+    const harness = new IpcHarness();
+    const fetchModels = vi.fn(async () => ({ ok: true, models: [{ id: 'chat', name: 'Chat' }] }));
+    registerProviderHandlers(harness, makeDeps({
+      fetchModels, readSavedProviderRoute: () => ({ catalogPresetId, baseUrl, modelsUrl: null }),
+    }));
+    await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
+      savedProviderId: 'saved-1', agent: 'pi', apiKey: 'fixture', authMethod: 'apiKey',
+      catalogPresetId: 'zhipu-glm-cn', baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+    });
+    expect(fetchModels).toHaveBeenCalledWith(expect.objectContaining({ catalogPresetId, baseUrl }));
+    expect(fetchModels).not.toHaveBeenCalledWith(expect.objectContaining({ probeGlmFlash: expect.any(Function) }));
+  });
+
   it('pins the request target to the saved endpoint so a spoofed baseUrl cannot exfiltrate the secret header', async () => {
     // 安全边界在 main:renderer 传的 baseUrl 不可信。带 savedProviderId 时,请求目标必须
     // 被钉回已存 baseUrl/modelsUrl,密文头只可能发往该供应商自己的端点,而非攻击者地址。
@@ -2871,6 +3413,31 @@ describe('provider:custom:* CRUD handlers', () => {
     expect((await listCustomProviders())[0]?.auth).toEqual(oauthConfig.auth);
   });
 
+  it('cloud credential replacement keeps newer configuration committed by the native queue', async () => {
+    mountDb(); const harness = new IpcHarness();
+    const config = imageProviderConfig('cloud-fixture');
+    await createCustomProvider(config);
+    let replace!: import('../ipcHandlerRegistry.js').IpcHandler;
+    let release!: () => void; const blocked = new Promise<void>(resolve => { release = resolve; });
+    let entered!: () => void; const preparing = new Promise<void>(resolve => { entered = resolve; });
+    let preparations = 0;
+    const storeKey = vi.fn(() => true);
+    registerProviderHandlers(harness, makeDeps({
+      registerCloudCredentialReplacement: handler => { replace = handler; },
+      prepareCodexCustomProviderHostChange: vi.fn(async () => { if (++preparations === 1) { entered(); await blocked; } }),
+      storeCustomProviderKey: storeKey,
+    }));
+    const newer = { ...config, name: 'Native edit', runtimes: { ...config.runtimes, codex: { ...config.runtimes.codex!, baseUrl: 'https://new.example.test/v1' } } };
+    const update = harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, newer);
+    await preparing;
+    const replacement = replace({}, config.id, { codex: 'fixture-key' });
+    await new Promise(resolve => setTimeout(resolve, 0)); release();
+    await expect(update).resolves.toMatchObject({ok:true});
+    await expect(replacement).resolves.toMatchObject({ok:true});
+    expect(await getCustomProvider(config.id)).toMatchObject({name:'Native edit',runtimes:{codex:{baseUrl:'https://new.example.test/v1'}}});
+    expect(storeKey).toHaveBeenCalledWith(config.id, 'codex', 'fixture-key');
+  });
+
   it('serializes provider updates so a failed write restores credentials before the next edit', async () => {
     mountDb();
     const harness = new IpcHarness();
@@ -3226,6 +3793,249 @@ describe('provider:custom:* CRUD handlers', () => {
     expect(removeCustomProviderHeaders).not.toHaveBeenCalled();
   });
 
+  // 回归:旧密文对当前 safeStorage 主密钥解不开时,用户仍能正常删除/断开供应商;
+  // 不可解密的旧 blob 推迟到 DB 删除提交后清理,避免删除中途失败回滚时误删旧密文。
+  it('deletes a custom provider with undecryptable API keys and headers, removing them after DB deletion', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const keys = new Map<AgentKind, string | UnrecoverableProviderCredential>();
+    const headers = new Map<AgentKind, Record<string, string> | UnrecoverableProviderCredential>();
+    const events: string[] = [];
+    const removeCustomProviderKey = vi.fn((_providerId, agent: AgentKind) => {
+      events.push(`remove-key:${agent}`);
+      keys.delete(agent);
+      return { success: true };
+    });
+    const removeCustomProviderHeaders = vi.fn((_providerId, agent: AgentKind) => {
+      events.push(`remove-headers:${agent}`);
+      headers.delete(agent);
+      return { success: true };
+    });
+    const deps = makeDeps({
+      readCustomProviderKeyForMutation: vi.fn((_providerId, agent: AgentKind) => keys.get(agent) ?? null),
+      storeCustomProviderKey: vi.fn((_providerId, agent: AgentKind, value: string) => {
+        keys.set(agent, value);
+        return true;
+      }),
+      removeCustomProviderKey,
+      readCustomProviderHeadersForMutation: vi.fn(
+        (_providerId, agent: AgentKind) => headers.get(agent) ?? null,
+      ),
+      storeCustomProviderHeaders: vi.fn(
+        (_providerId, agent: AgentKind, value: Record<string, string>) => {
+          headers.set(agent, { ...value });
+          return true;
+        },
+      ),
+      removeCustomProviderHeaders,
+      refreshCatalog: vi.fn(async () => {
+        events.push('refresh-catalog');
+      }),
+    });
+    registerProviderHandlers(harness, deps);
+    const config: CustomProviderConfig = {
+      ...validConfig,
+      id: 'delete-undecryptable',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://api.example/v1',
+          models: [{ id: 'codex-model', name: 'Codex model' }],
+        },
+        'claude-code': {
+          baseUrl: 'https://api.example/v1',
+          headers: { 'x-token': 'old-token' },
+          models: [{ id: 'claude-model', name: 'Claude model' }],
+        },
+      },
+    };
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, config, {
+      codex: 'valid-codex-key',
+      'claude-code': 'old-claude-key',
+    });
+    keys.set('claude-code', UNRECOVERABLE_PROVIDER_CREDENTIAL);
+    headers.set('claude-code', UNRECOVERABLE_PROVIDER_CREDENTIAL);
+    events.length = 0;
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, config.id),
+    ).resolves.toEqual({ ok: true });
+
+    expect(await listCustomProviders()).toEqual([]);
+    expect(keys.size).toBe(0);
+    expect(headers.size).toBe(0);
+    // 可恢复凭据在删除前清理,不可恢复密文在 DB 删除后、刷新目录前清理。
+    expect(events.indexOf('remove-key:claude-code')).toBeGreaterThan(events.indexOf('remove-key:codex'));
+    expect(events.indexOf('remove-key:claude-code')).toBeLessThan(events.indexOf('refresh-catalog'));
+    expect(events.indexOf('remove-headers:claude-code')).toBeLessThan(events.indexOf('refresh-catalog'));
+  });
+
+  it('preserves undecryptable credentials when provider deletion fails before commit', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const keys = new Map<AgentKind, string | UnrecoverableProviderCredential>();
+    const headers = new Map<AgentKind, Record<string, string> | UnrecoverableProviderCredential>();
+    const deps = makeDeps({
+      removeOAuthCredentials: vi.fn(() => null),
+      readCustomProviderKeyForMutation: vi.fn((_providerId, agent: AgentKind) => keys.get(agent) ?? null),
+      storeCustomProviderKey: vi.fn((_providerId, agent: AgentKind, value: string) => {
+        keys.set(agent, value);
+        return true;
+      }),
+      removeCustomProviderKey: vi.fn((_providerId, agent: AgentKind) => {
+        keys.delete(agent);
+        return { success: true };
+      }),
+      readCustomProviderHeadersForMutation: vi.fn(
+        (_providerId, agent: AgentKind) => headers.get(agent) ?? null,
+      ),
+      storeCustomProviderHeaders: vi.fn(
+        (_providerId, agent: AgentKind, value: Record<string, string>) => {
+          headers.set(agent, { ...value });
+          return true;
+        },
+      ),
+      removeCustomProviderHeaders: vi.fn((_providerId, agent: AgentKind) => {
+        headers.delete(agent);
+        return { success: true };
+      }),
+    });
+    registerProviderHandlers(harness, deps);
+    const config: CustomProviderConfig = {
+      ...validConfig,
+      id: 'delete-undecryptable-rollback',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://api.example/v1',
+          models: [{ id: 'codex-model', name: 'Codex model' }],
+        },
+        'claude-code': {
+          baseUrl: 'https://api.example/v1',
+          headers: { 'x-token': 'old-token' },
+          models: [{ id: 'claude-model', name: 'Claude model' }],
+        },
+      },
+    };
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, config, {
+      codex: 'must-survive',
+      'claude-code': 'old-claude-key',
+    });
+    keys.set('claude-code', UNRECOVERABLE_PROVIDER_CREDENTIAL);
+    headers.set('claude-code', UNRECOVERABLE_PROVIDER_CREDENTIAL);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, config.id),
+    ).rejects.toThrow(/INTERNAL.*failed to remove existing OAuth credentials/);
+
+    expect(await listCustomProviders()).toHaveLength(1);
+    expect(keys.get('codex')).toBe('must-survive');
+    expect(keys.get('claude-code')).toBe(UNRECOVERABLE_PROVIDER_CREDENTIAL);
+    expect(headers.get('claude-code')).toBe(UNRECOVERABLE_PROVIDER_CREDENTIAL);
+  });
+
+  it('still refreshes catalog after deletion if post-commit cleanup of an undecryptable blob fails', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const keys = new Map<AgentKind, string | UnrecoverableProviderCredential>();
+    const deps = makeDeps({
+      readCustomProviderKeyForMutation: vi.fn((_providerId, agent: AgentKind) => keys.get(agent) ?? null),
+      storeCustomProviderKey: vi.fn((_providerId, agent: AgentKind, value: string) => {
+        keys.set(agent, value);
+        return true;
+      }),
+      removeCustomProviderKey: vi.fn((_providerId, agent: AgentKind) => {
+        if (agent === 'claude-code') return { success: false, error: 'remove_failed' };
+        keys.delete(agent);
+        return { success: true };
+      }),
+    });
+    registerProviderHandlers(harness, deps);
+    const config: CustomProviderConfig = {
+      ...validConfig,
+      id: 'delete-undecryptable-post-cleanup-fail',
+      runtimes: {
+        'claude-code': {
+          baseUrl: 'https://api.example/v1',
+          models: [{ id: 'claude-model', name: 'Claude model' }],
+        },
+      },
+    };
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, config, {
+      'claude-code': 'old-claude-key',
+    });
+    keys.set('claude-code', UNRECOVERABLE_PROVIDER_CREDENTIAL);
+    vi.mocked(deps.refreshCatalog).mockClear();
+    vi.mocked(deps.broadcastChanged).mockClear();
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, config.id),
+    ).resolves.toEqual({ ok: true });
+
+    expect(await listCustomProviders()).toEqual([]);
+    expect(deps.refreshCatalog).toHaveBeenCalledOnce();
+    expect(deps.broadcastChanged).toHaveBeenCalledOnce();
+  });
+
+  it('disconnects a custom provider even when one runtime has undecryptable credentials', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const keys = new Map<AgentKind, string | UnrecoverableProviderCredential>();
+    const headers = new Map<AgentKind, Record<string, string> | UnrecoverableProviderCredential>();
+    const deps = makeDeps({
+      readCustomProviderKeyForMutation: vi.fn((_providerId, agent: AgentKind) => keys.get(agent) ?? null),
+      storeCustomProviderKey: vi.fn((_providerId, agent: AgentKind, value: string) => {
+        keys.set(agent, value);
+        return true;
+      }),
+      removeCustomProviderKey: vi.fn((_providerId, agent: AgentKind) => {
+        keys.delete(agent);
+        return { success: true };
+      }),
+      readCustomProviderHeadersForMutation: vi.fn(
+        (_providerId, agent: AgentKind) => headers.get(agent) ?? null,
+      ),
+      storeCustomProviderHeaders: vi.fn(
+        (_providerId, agent: AgentKind, value: Record<string, string>) => {
+          headers.set(agent, { ...value });
+          return true;
+        },
+      ),
+      removeCustomProviderHeaders: vi.fn((_providerId, agent: AgentKind) => {
+        headers.delete(agent);
+        return { success: true };
+      }),
+    });
+    registerProviderHandlers(harness, deps);
+    const config: CustomProviderConfig = {
+      ...validConfig,
+      id: 'disconnect-undecryptable',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://api.example/v1',
+          models: [{ id: 'codex-model', name: 'Codex model' }],
+        },
+        'claude-code': {
+          baseUrl: 'https://api.example/v1',
+          headers: { 'x-token': 'old-token' },
+          models: [{ id: 'claude-model', name: 'Claude model' }],
+        },
+      },
+    };
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, config, {
+      codex: 'valid-codex-key',
+      'claude-code': 'old-claude-key',
+    });
+    keys.set('claude-code', UNRECOVERABLE_PROVIDER_CREDENTIAL);
+    headers.set('claude-code', UNRECOVERABLE_PROVIDER_CREDENTIAL);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DISCONNECT, config.id),
+    ).resolves.toEqual({ ok: true });
+
+    expect(await getCustomProvider(config.id)).not.toBeNull();
+    expect(keys.size).toBe(0);
+    expect(headers.size).toBe(0);
+  });
+
   it('serializes create key staging with a later cross-window update', async () => {
     mountDb();
     const harness = new IpcHarness();
@@ -3388,6 +4198,34 @@ describe('provider:custom:* CRUD handlers', () => {
       }
     },
   );
+
+  it('serializes deletion before model disable without reversing the availability lock order', async () => {
+    mountDb();
+    await createCustomProvider(validConfig);
+    const harness = new IpcHarness();
+    const deps = makeDeps({ listProviders: async () => [catalogView('openrouter', { codex: ['meta/llama-4'] })] });
+    registerProviderHandlers(harness, deps);
+    let release!: () => void;
+    let entered!: () => void;
+    const reached = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const original = customProviderStore.getCustomProvider;
+    vi.spyOn(customProviderStore, 'getCustomProvider').mockImplementationOnce(async id => {
+      entered(); await gate; return original(id);
+    });
+    const deletion = harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, 'openrouter');
+    await reached;
+    const disable = harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, {
+      kind: 'model', providerId: 'openrouter', modelIds: ['meta/llama-4'], disabled: true,
+    });
+    // Let the disable request enter its queues while deletion holds the policy lock.
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    release();
+    await expect(deletion).resolves.toEqual({ ok: true });
+    await expect(disable).resolves.toEqual({ ok: true });
+    expect(await getCustomProvider('openrouter')).toBeNull();
+    expect(deps.setModelsDisabled).toHaveBeenCalled();
+  });
 
   it('deletes (idempotent) + broadcasts; bad providerId → INVALID_PARAMS', async () => {
     mountDb();
@@ -3700,7 +4538,7 @@ describe('model price override handlers', () => {
 });
 
 describe('provider:presets handler', () => {
-  it('returns injected presets as { presets }', async () => {
+  it('returns injected presets with the current registry snapshot', async () => {
     const harness = new IpcHarness();
     const presets = [
       {
@@ -3709,8 +4547,11 @@ describe('provider:presets handler', () => {
         runtimes: { codex: { baseUrl: 'https://openrouter.ai/api/v1', models: [{ id: 'a', name: 'A' }] } },
       },
     ];
-    registerProviderHandlers(harness, makeDeps({ listPresets: () => presets }));
-    expect(await harness.invoke(MAKER_INVOKE.PROVIDER_PRESETS_LIST)).toEqual({ presets });
+    const modelRegistry = { ...BUNDLED_CATALOG.modelRegistry!, updatedAt: '2026-11-02T00:00:00Z' };
+    registerProviderHandlers(harness, makeDeps({ listPresets: () => presets,
+      getModelCatalog: () => ({ ...BUNDLED_CATALOG, modelRegistry }),
+    }));
+    expect(await harness.invoke(MAKER_INVOKE.PROVIDER_PRESETS_LIST)).toEqual({ presets, modelRegistry });
   });
 });
 
@@ -3842,7 +4683,62 @@ describe('provider:test-connection handler', () => {
   });
 });
 
+// #9619: exercise the real IPC + fetch classification. Existing cases did not inspect
+// failure diagnostics. Synthetic upstream text contains secrets to catch accidental
+// logging of detail, headers, connection IDs, or URL parameters. Unit tier, no socket.
+const modelRefreshDiagnostics = vi.hoisted(() => vi.fn());
+vi.mock('../../logger.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../logger.js')>();
+  return { ...actual, createLogger: (scope: string) => ({
+    ...actual.createLogger(scope), warn: (...args: unknown[]) => modelRefreshDiagnostics(scope, ...args),
+  }) };
+});
+
 describe('provider:models-fetch handler', () => {
+  it.each([401, 503])('records safe saved-refresh diagnostics for HTTP %s', async status => {
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({
+      fetchModels: spec => fetchProviderModels(spec, async () => new Response(
+        'synthetic-secret-response', { status })),
+    }));
+    modelRefreshDiagnostics.mockClear();
+    const result = await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
+      agent: 'codex', savedProviderId: 'synthetic-secret-connection',
+      baseUrl: 'https://provider.example/v1?key=synthetic-secret-query',
+      modelsUrl: 'https://provider.example/models?key=synthetic-secret-query',
+      authMethod: 'oauth', apiKey: 'synthetic-secret-token',
+      headers: { 'X-Secret': 'synthetic-secret-header' },
+    });
+    expect(result).toMatchObject({ ok: false, status, code: status === 401 ? 'AUTH_INVALID' : 'UPSTREAM_ERROR' });
+    expect(modelRefreshDiagnostics.mock.calls).toEqual([[
+      'maker-ipc:provider', 'saved provider model refresh failed',
+      { agent: 'codex', code: status === 401 ? 'AUTH_INVALID' : 'UPSTREAM_ERROR', status },
+    ]]);
+    expect(JSON.stringify(modelRefreshDiagnostics.mock.calls)).not.toContain('synthetic-secret');
+  });
+
+  it('records a local authentication failure without inventing an HTTP status', async () => {
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({ fetchModels: async () => ({ ok: false, code: 'AUTH_INVALID' }) }));
+    modelRefreshDiagnostics.mockClear();
+    await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
+      agent: 'pi', savedProviderId: 'saved', baseUrl: 'https://provider.example/v1', authMethod: 'oauth',
+    });
+    expect(modelRefreshDiagnostics.mock.calls).toEqual([[
+      'maker-ipc:provider', 'saved provider model refresh failed', { agent: 'pi', code: 'AUTH_INVALID' },
+    ]]);
+  });
+
+  it('does not report successful discovery as a failure', async () => {
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps());
+    modelRefreshDiagnostics.mockClear();
+    expect(await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
+      agent: 'codex', savedProviderId: 'saved', baseUrl: 'https://provider.example/v1', authMethod: 'apiKey',
+    })).toMatchObject({ ok: true, models: [{ id: 'm1' }] });
+    expect(modelRefreshDiagnostics).not.toHaveBeenCalled();
+  });
+
   it('rejects an untrusted sender before issuing a credentialed model request', async () => {
     const harness = new IpcHarness();
     const assertTrustedSender = vi.fn(() => {
@@ -3967,6 +4863,91 @@ describe('provider:models-fetch handler', () => {
 });
 
 describe('provider:oauth mutation ordering', () => {
+  // Unit regression for #8485: run register.ts's actual login closure plus the
+  // real IPC transaction and in-memory DB. Mocking oauthLogin with afterCommit
+  // missed generic discovery saving new sources before credential cleanup.
+  // Minimal failure: persisted A -> OAuth login discovers B -> cleanup erased B.
+  // Compile the production closure once, without booting the Electron host.
+  const registerSource = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
+  const registerAst = ts.createSourceFile('register.ts', registerSource, ts.ScriptTarget.Latest, true);
+  let loginClosure = '';
+  const findLogin = (node: ts.Node): void => {
+    if (ts.isPropertyAssignment(node) && node.name.getText(registerAst) === 'oauthLogin') {
+      loginClosure = ts.transpileModule(`return ${node.initializer.getText(registerAst)};`, {
+        compilerOptions: { target: ts.ScriptTarget.ES2022 },
+      }).outputText;
+    }
+    ts.forEachChild(node, findLogin);
+  };
+  findLogin(registerAst);
+
+  async function genericLoginSetup(discoveryFails = false, waitForLogin?: Promise<void>) {
+    mountDb();
+    const config: CustomProviderConfig = { id: 'generic-source-order', name: 'Gateway',
+      auth: { method: 'oauth', oauth: { authorizeUrl: 'https://auth.example.test/authorize',
+        tokenUrl: 'https://auth.example.test/token', clientId: 'fixture-client', scopes: 'openid' } },
+      runtimes: { pi: { baseUrl: 'https://gateway.example.test/v1', wireProtocol: 'openai-chat',
+        models: [{ id: 'chatgpt/foo', name: 'Foo', opaqueModelId: true,
+          discoveredSource: { kind: 'magpie', providerId: 'Old account' } }] } } };
+    await createCustomProvider(config);
+    let catalog = { ...BUNDLED_CATALOG, providers: [buildUserProvider(config)] };
+    const refreshCatalog = async () => {
+      catalog = { ...BUNDLED_CATALOG, providers: [buildUserProvider((await getCustomProvider(config.id))!)] };
+    };
+    const rollbackCredentials = vi.fn(() => true);
+    const runGenericOAuthLogin = vi.fn(async (_provider: unknown, _oauth: unknown, callbacks: { onCredentialPersisted(rollback: () => boolean): void }) => {
+      callbacks.onCredentialPersisted(rollbackCredentials);
+      await waitForLogin;
+      return { ok: true };
+    });
+    const sourceAtDiscovery: (string | undefined)[] = [];
+    const discoverGenericOAuthModels = vi.fn(async () => {
+      sourceAtDiscovery.push((await getCustomProvider(config.id))!.runtimes.pi!.models[0].discoveredSource?.providerId);
+      if (discoveryFails) throw new Error('fixture discovery unavailable');
+      return issueModelSourceSnapshot([{ id: 'chatgpt/foo', name: 'Foo', opaqueModelId: true,
+        discoveredSource: { kind: 'magpie', providerId: 'New account' } }], 'pi', 'fixture-request');
+    });
+    const broadcastToAllWindows = vi.fn();
+    // The closure first checks for a cloud settings call; none is running here.
+    const bindings = { cloudManagementExecution: () => null, subscriptionAccountKind: () => null, isCodexAccountProvider: () => false,
+      getActiveCatalog: () => catalog, storedCustomProviderId, runGenericOAuthLogin,
+      broadcastToAllWindows, MAKER_PUSH, deriveModelsDiscoveryUrl, discoverGenericOAuthModels,
+      getCustomProvider, mergeDiscoveredModelsIntoConfig, updateCustomProviderIfUnchanged,
+      refreshCustomProvidersIntoCatalog: refreshCatalog };
+    const oauthLogin = new Function(...Object.keys(bindings), loginClosure)(...Object.values(bindings)) as ProviderHandlerDeps['oauthLogin'];
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({ oauthLogin, beginRouteMutation: beginProviderRouteMutation,
+      getModelCatalog: () => catalog, refreshCatalog }));
+    return { config, harness, runGenericOAuthLogin, discoverGenericOAuthModels, rollbackCredentials,
+      sourceAtDiscovery, broadcastToAllWindows };
+  }
+
+  it.each([false, true])('generic OAuth clears the old source before discovery and retains its result (discoveryFails=%s)', async discoveryFails => {
+    const setup = await genericLoginSetup(discoveryFails);
+    await expect(setup.harness.invoke(MAKER_INVOKE.PROVIDER_OAUTH_LOGIN, setup.config.id)).resolves.toEqual({ ok: true });
+    expect(setup.sourceAtDiscovery).toEqual([undefined]);
+    const model = (await getCustomProvider(setup.config.id))!.runtimes.pi!.models[0];
+    expect(model.discoveredSource?.providerId).toBe(discoveryFails ? undefined : 'New account');
+    expect(model.id).toBe('chatgpt/foo');
+    expect(model.opaqueModelId).toBe(true);
+    expect(setup.rollbackCredentials).not.toHaveBeenCalled();
+    expect(setup.broadcastToAllWindows).toHaveBeenCalledWith(MAKER_PUSH.PROVIDER_CHANGED, {});
+  });
+
+  it('generic OAuth cancellation before acceptance rolls back without discovery or source cleanup', async () => {
+    let finish!: () => void;
+    const setup = await genericLoginSetup(false, new Promise<void>(resolve => { finish = resolve; }));
+    const login = setup.harness.invoke(MAKER_INVOKE.PROVIDER_OAUTH_LOGIN, setup.config.id);
+    await vi.waitFor(() => expect(setup.runGenericOAuthLogin).toHaveBeenCalledOnce());
+    await setup.harness.invoke(MAKER_INVOKE.PROVIDER_OAUTH_CANCEL, setup.config.id);
+    finish();
+    await expect(login).resolves.toEqual({ ok: false, reason: 'login_cancelled' });
+    expect(setup.rollbackCredentials).toHaveBeenCalledOnce();
+    expect(setup.discoverGenericOAuthModels).not.toHaveBeenCalled();
+    expect(setup.broadcastToAllWindows).not.toHaveBeenCalled();
+    expect((await getCustomProvider(setup.config.id))!.runtimes.pi!.models[0].discoveredSource?.providerId).toBe('Old account');
+  });
+
   // PR #6900 unit: the login discovery callback must lose its authority on an
   // owner switch too. Existing cancellation tests only invalidated the login ID.
   it('invalidates login discovery and rolls credentials back after an owner change', async () => {
@@ -4637,6 +5618,30 @@ describe('model context limit IPC', () => {
   const related = { providerId: 'openai', agent: 'claude-code' as const, modelId: 'chatgpt/gpt-6' };
   const stamp = { dataOwnerId: 'owner-a', ownerGeneration: 1 };
 
+  // Unit: capability writes use the real IPC handler; no prior coverage of its owner/membership gate.
+  // A stale owner or unknown alias must not reach the persistent writer.
+  it('writes explicit false for all aliases and rejects stale owners, missing models and invalid values', async () => {
+    const harness = new IpcHarness();
+    const write = vi.fn(async () => {});
+    registerProviderHandlers(harness, makeDeps({
+      currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation: 1 }),
+      listProviders: async () => [catalogView('openai', { codex: ['gpt-6'], 'claude-code': ['chatgpt/gpt-6'] })],
+      readModelImageInputOverride: () => false,
+      writeModelImageInputOverride: write,
+    }));
+    const target = { ...primary, relatedTargets: [related] };
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_IMAGE_INPUT_SET, target, false, stamp))
+      .resolves.toEqual({ value: false, mixed: false });
+    expect(write).toHaveBeenCalledExactlyOnceWith([primary, related], false);
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_IMAGE_INPUT_SET, target, true, { ...stamp, ownerGeneration: 0 })).rejects.toThrow();
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_IMAGE_INPUT_SET, { ...target, modelId: 'missing' }, true, stamp)).rejects.toThrow();
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_IMAGE_INPUT_SET, target, 'false', stamp)).rejects.toThrow();
+    expect(write).toHaveBeenCalledTimes(1);
+    // Reset remains possible after a model disappears from discovery.
+    await harness.invoke(MAKER_INVOKE.MODEL_IMAGE_INPUT_SET, { ...primary, modelId: 'missing' }, null, stamp);
+    expect(write).toHaveBeenLastCalledWith([{ ...primary, modelId: 'missing' }], null);
+  });
+
   it('saves model compaction for all aliases with owner and range validation', async () => {
     const harness = new IpcHarness();
     const writeModelCompaction = vi.fn(async () => {});
@@ -4653,11 +5658,17 @@ describe('model context limit IPC', () => {
     });
     await harness.invoke(MAKER_INVOKE.MODEL_COMPACTION_SET, target, 80, stamp);
     expect(writeModelCompaction).toHaveBeenCalledExactlyOnceWith([primary, related], 80);
-    for (const invalid of [49, 91, 80.5, '80', NaN]) {
+    // Owner ruling 2026-10-29: the ratio range is back to 50–95 with 1% granularity.
+    await harness.invoke(MAKER_INVOKE.MODEL_COMPACTION_SET, target, 95, stamp);
+    expect(writeModelCompaction).toHaveBeenLastCalledWith([primary, related], 95);
+    await harness.invoke(MAKER_INVOKE.MODEL_COMPACTION_SET, target, 91, stamp);
+    expect(writeModelCompaction).toHaveBeenLastCalledWith([primary, related], 91);
+    expect(writeModelCompaction).toHaveBeenCalledTimes(3);
+    for (const invalid of [49, 96, 80.5, '80', NaN]) {
       await expect(harness.invoke(MAKER_INVOKE.MODEL_COMPACTION_SET, target, invalid, stamp)).rejects.toThrow();
     }
     await expect(harness.invoke(MAKER_INVOKE.MODEL_COMPACTION_SET, target, 70, { ...stamp, ownerGeneration: 0 })).rejects.toThrow();
-    expect(writeModelCompaction).toHaveBeenCalledTimes(1);
+    expect(writeModelCompaction).toHaveBeenCalledTimes(3);
   });
 
   it('returns native facts separately from model preferences without writing or launching a task', async () => {
@@ -4678,6 +5689,48 @@ describe('model context limit IPC', () => {
       .rejects.toThrow();
   });
 
+  // #11716/#4477 unit: synthetic remote senders may read fixed numeric metadata,
+  // but scoped callers and all preference writes must retain their sender gate.
+  it('allows only the authorized same-account native read while preserving local and mutation trust gates', async () => {
+    const harness = new IpcHarness();
+    const native = { contextWindow: 100_000, usableContextWindow: 95_000, autoCompactTokenLimit: 90_000,
+      modelMaxContextWindow: 100_000, source: 'runtime' as const, fallbackModel: false };
+    const readNative = vi.fn(async () => native);
+    registerProviderHandlers(harness, makeDeps({
+      assertTrustedSender: () => { throwIpcError('PERMISSION_DENIED', 'untrusted sender'); },
+      isRemoteContextRead: () => readDeviceLinkModelSelectionOrigin() === 'owner',
+      readModelContextLimit: () => ({ limit: 800_000, isCustomized: true }),
+      writeModelContextLimit: vi.fn(),
+      readCodexContextWindowInfo: readNative,
+    }));
+    const target = { ...primary, sessionId: 'remote-task' };
+    const channel = MAKER_INVOKE.MODEL_CONTEXT_LIMIT_GET;
+    await expect(harness.invoke(channel, target)).rejects.toThrow('PERMISSION_DENIED');
+    await expect(runDeviceLinkInvokeContext({ controllerDeviceId: 'device-a', channel }, () => harness.invoke(channel, target)))
+      .resolves.toMatchObject({ codexContext: native });
+    await expect(runDeviceLinkInvokeContext({ controllerDeviceId: '', channel }, () => harness.invoke(channel, target)))
+      .rejects.toThrow('PERMISSION_DENIED');
+    await expect(runDeviceLinkInvokeContext({ controllerDeviceId: 'device-a', channel },
+      () => harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, target, 50_000, stamp)))
+      .rejects.toThrow('PERMISSION_DENIED');
+    expect(readNative).toHaveBeenCalledExactlyOnceWith(primary, 'remote-task');
+  });
+  it('rejects a native context read that finishes after an account switch', async () => {
+    let finish!: (value: null) => void;
+    let generation = 1;
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({
+      currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation }),
+      readModelContextLimit: () => ({ limit: null, isCustomized: false }),
+      readCodexContextWindowInfo: () => new Promise(resolve => { finish = resolve; }),
+      writeModelContextLimit: vi.fn(),
+    }));
+    const request = harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_GET, primary);
+    generation++;
+    finish(null);
+    await expect(request).rejects.toThrow('active account changed during context read');
+  });
+
   it('validates every alias then writes one atomic edit with the current owner', async () => {
     const harness = new IpcHarness();
     const deps = makeDeps({
@@ -4690,11 +5743,33 @@ describe('model context limit IPC', () => {
     const target = { ...primary, relatedTargets: [related] };
     await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, target, 500_000, stamp)).resolves.toMatchObject({ limit: 500_000, isCustomized: true, mixed: false });
     expect(deps.writeModelContextLimit).toHaveBeenCalledExactlyOnceWith([primary, related], 500_000);
+    expect(deps.broadcastChanged).toHaveBeenCalledTimes(1);
     await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, target, 400_000, { ...stamp, ownerGeneration: 0 })).rejects.toThrow();
     await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, { ...primary, relatedTargets: [primary] }, 400_000, stamp)).rejects.toThrow();
     await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, { ...primary, relatedTargets: [{ ...related, providerId: 'other' }] }, 400_000, stamp)).rejects.toThrow();
     expect(deps.writeModelContextLimit).toHaveBeenCalledTimes(1);
+    expect(deps.broadcastChanged).toHaveBeenCalledTimes(1);
+    await harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_RESET, target, stamp);
+    expect(deps.writeModelContextLimit).toHaveBeenLastCalledWith([primary, related], null);
+    expect(deps.broadcastChanged).toHaveBeenCalledTimes(2);
   });
+
+  it.each([MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, MAKER_INVOKE.MODEL_CONTEXT_LIMIT_RESET])(
+    'does not publish a changed projection after a failed context write: %s', async (channel) => {
+      const harness = new IpcHarness();
+      const deps = makeDeps({
+        currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation: 1 }),
+        listProviders: async () => [catalogView('openai', { codex: ['gpt-6'] })],
+        readModelContextLimit: () => ({ limit: null, isCustomized: false }),
+        writeModelContextLimit: vi.fn().mockRejectedValue(new Error('write failed')),
+      });
+      registerProviderHandlers(harness, deps);
+      const args = channel === MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET
+        ? [primary, 500_000, stamp] : [primary, stamp];
+      await expect(harness.invoke(channel, ...args)).rejects.toThrow();
+      expect(deps.broadcastChanged).not.toHaveBeenCalled();
+    },
+  );
 
   it('does not save a window when native catalog preparation fails', async () => {
     const harness = new IpcHarness();
@@ -4760,6 +5835,34 @@ describe('provider connection management', () => {
     expect(deps.removeCustomProviderKey).not.toHaveBeenCalled();
     expect(deps.prepareCodexCustomProviderHostChange).not.toHaveBeenCalled();
     expect(deps.finalizeCodexCustomProviderHostChange).not.toHaveBeenCalled();
+  });
+  // Unit: one appearance save changes the selected connection; a failed rename restores its old icon.
+  it('applies the name and icon together and restores the icon if the name cannot be saved', async () => {
+    mountDb();
+    const config = { ...validConfig, id: 'glm-team' };
+    await createCustomProvider(config);
+    const artwork: Record<string, 'work' | 'mark-glm'> = { [config.id]: 'work' };
+    vi.spyOn(providerPresentation, 'readProviderConnectionIcons').mockReturnValue(artwork);
+    vi.spyOn(providerPresentation, 'setProviderConnectionIcon').mockImplementation(async (id, icon) => {
+      if (icon === null) delete artwork[id];
+      else if (icon === 'work' || icon === 'mark-glm') artwork[id] = icon;
+    });
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({
+      listProviders: async () => [{ id: config.id, source: 'user' } as ProviderView],
+      currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation: 1 }),
+    }));
+    const save = (icon: string) => harness.invoke(MAKER_INVOKE.PROVIDER_PRESENTATION_SET, {
+      providerId: config.id, action: 'appearance', name: 'Team', icon, dataOwnerId: 'owner-a', ownerGeneration: 1,
+    });
+    await expect(save('https://invalid.example/logo')).rejects.toThrow();
+    const update = vi.spyOn(customProviderStore, 'updateCustomProvider').mockRejectedValueOnce(new Error('write failed'));
+    await expect(save('mark-glm')).rejects.toThrow();
+    expect(artwork[config.id]).toBe('work');
+    update.mockRestore();
+    await save('mark-glm');
+    expect(await getCustomProvider(config.id)).toMatchObject({ name: 'Team' });
+    expect(artwork[config.id]).toBe('mark-glm');
   });
   it('stores managed Ollama rename with its configuration and drops it when deleting and readding', async () => {
     mountDb();
@@ -5226,6 +6329,23 @@ describe('speech additions through the real provider update handler', () => {
 });
 
 // A saved explicit default becomes omitted in ProviderView; opening Settings must not make it stale.
+it('appends realtime through the production model mutation queue without changing chat models, keys or other options', async () => {
+  mountDb();
+  const harness = new IpcHarness();
+  const deps = makeDeps();
+  registerProviderHandlers(harness, deps);
+  await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, validConfig);
+  const realtime = { id: 'my-native-model', name: 'Realtime', mode: 'realtime' as const, modalities: { input: ['audio', 'text'], output: ['audio', 'text'] } };
+  const request = { ...validConfig, runtimes: { codex: { ...validConfig.runtimes.codex!, models: [realtime] } } };
+  await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, request, {}, { appendRealtimeModelsOnly: true })).resolves.toEqual({ ok: true });
+  expect((await getCustomProvider(validConfig.id))?.runtimes.codex?.models).toEqual([...validConfig.runtimes.codex!.models, realtime]);
+  await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, request, {}, { appendRealtimeModelsOnly: true, appendSpeechModelsOnly: true })).rejects.toThrow(/INVALID_PARAMS/);
+  await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, request, {}, {
+    appendRealtimeModelsOnly: true, removeWithdrawnModels: [{ agent: 'codex', modelId: 'existing' }],
+  })).rejects.toThrow(/INVALID_PARAMS/);
+  await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, request, { codex: 'replacement' }, { appendRealtimeModelsOnly: true })).rejects.toThrow(/INVALID_PARAMS/);
+});
+
 it('speech additions accept an unchanged projected default protocol and preserve its declaration', async () => {
   mountDb();
   const harness = new IpcHarness();
@@ -5275,3 +6395,776 @@ it.each([undefined, 'https://api.minimax.io/v1/old-models'])(
     });
   },
 );
+
+describe('Magpie discovery source lifecycle through real IPC and persistence', () => {
+  const configFor = (): CustomProviderConfig => ({ id: 'magpie-ipc', name: 'Magpie', auth: { method: 'none' },
+    runtimes: { pi: { baseUrl: 'http://127.0.0.1:3425/v1', wireProtocol: 'openai-chat',
+      models: [{ id: 'a/gpt-5.5', name: 'GPT', opaqueModelId: true,
+        discoveredSource: { kind: 'magpie', providerId: 'Old' } }] } } });
+  const inputFor = (config: CustomProviderConfig) => ({ agent: 'pi', savedProviderId: config.id,
+    baseUrl: config.runtimes.pi!.baseUrl, authMethod: 'none', wireProtocol: 'openai-chat' });
+
+  // #8485 unit: a discovery receipt authenticates the submitted replacement
+  // credentials, not the previous saved credentials. Earlier tests covered
+  // unsaved-key rejection but skipped fetching and saving the same new identity.
+  async function credentialDiscovery(kind: 'key' | 'header', extraHeader = false) {
+    mountDb();
+    const config = { ...configFor(), auth: { method: 'apiKey' as const } };
+    await createCustomProvider(config);
+    const { fetchProviderModels } = await import('../../maker-host/provider-model-fetch');
+    let savedKey: string | null = kind === 'key' ? 'fixture-old-key' : null;
+    let savedHeaders: Record<string, string> | null = kind === 'header'
+      ? { 'X-Account': 'Old', ...(extraHeader ? { 'X-Old-Tenant': 'old-tenant' } : {}) } : null;
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({ beginRouteMutation: beginProviderRouteMutation,
+      readCustomProviderKeyForMutation: () => savedKey,
+      storeCustomProviderKey: (_id, _agent, value) => { savedKey = value; return true; },
+      removeCustomProviderKey: () => { savedKey = null; return { success: true }; },
+      readCustomProviderHeadersForMutation: () => savedHeaders,
+      storeCustomProviderHeaders: (_id, _agent, value) => { savedHeaders = { ...value }; return true; },
+      removeCustomProviderHeaders: () => { savedHeaders = null; return { success: true }; },
+      readSavedProviderRoute: () => ({ baseUrl: config.runtimes.pi!.baseUrl, modelsUrl: null }),
+      fetchModels: spec => fetchProviderModels(spec, async (_url, init) => {
+        const headers = new Headers(init?.headers);
+        const source = kind === 'key' ? (headers.get('authorization') === 'Bearer fixture-new-key' ? 'New' : 'Old')
+          : headers.has('x-old-tenant') ? 'Old tenant' : headers.get('x-account')!;
+        return new Response(JSON.stringify({ data: [{ id: 'a/gpt-5.5', display_name: 'GPT',
+          owned_by: source, magpie_label: `GPT · ${source}` }] }));
+      }),
+    }));
+    const keys = (identity: 'Old' | 'New') => kind === 'key' ? { pi: identity === 'New' ? 'fixture-new-key' : 'fixture-old-key' } : {};
+    const configWith = (identity: 'Old' | 'New', models = config.runtimes.pi!.models): CustomProviderConfig => ({
+      ...config, runtimes: { pi: { ...config.runtimes.pi!, models,
+        ...(kind === 'header' ? { headers: { 'X-Account': identity } } : {}) } },
+    });
+    const fetchNew = () => harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
+      ...inputFor(config), authMethod: 'apiKey', ...(kind === 'key'
+        ? { apiKey: 'fixture-new-key' } : { headers: { 'X-Account': 'New' } }),
+    }) as Promise<{ ok: boolean; models: DiscoveredModel[] }>;
+    const save = (identity: 'Old' | 'New', models = config.runtimes.pi!.models) =>
+      harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, configWith(identity, models), keys(identity));
+    return { config, fetchNew, save, credentials: () => ({ key: savedKey, headers: savedHeaders }) };
+  }
+
+  it.each(['key', 'header'] as const)('accepts current discovery and its replacement %s credentials in the same save', async kind => {
+    const setup = await credentialDiscovery(kind);
+    const fetched = await setup.fetchNew();
+    expect(fetched.ok).toBe(true);
+    expect(fetched.models[0].discoveredSource?.providerId).toBe('New');
+    const models = mergeDiscoveredRuntimeModels(setup.config.runtimes.pi!.models, fetched.models);
+    await setup.save('New', models);
+    expect((await getCustomProvider(setup.config.id))!.runtimes.pi!.models[0].discoveredSource?.providerId).toBe('New');
+    expect(setup.credentials()).toEqual(kind === 'key'
+      ? { key: 'fixture-new-key', headers: null } : { key: null, headers: { 'X-Account': 'New' } });
+  });
+
+  it.each(['key', 'header'] as const)('rejects a once-matching %s receipt after credential edits including ABA', async kind => {
+    const setup = await credentialDiscovery(kind);
+    const fetched = await setup.fetchNew();
+    const models = mergeDiscoveredRuntimeModels(setup.config.runtimes.pi!.models, fetched.models);
+    await setup.save('New');
+    expect((await getCustomProvider(setup.config.id))!.runtimes.pi!.models[0].discoveredSource).toBeUndefined();
+    await setup.save('Old');
+    await setup.save('New', models);
+    expect((await getCustomProvider(setup.config.id))!.runtimes.pi!.models[0].discoveredSource).toBeUndefined();
+  });
+
+  it('rejects a receipt whose old merged header is absent from the replacement header map', async () => {
+    const setup = await credentialDiscovery('header', true);
+    const fetched = await setup.fetchNew();
+    expect(fetched.models[0].discoveredSource?.providerId).toBe('Old tenant');
+    await setup.save('New', mergeDiscoveredRuntimeModels(setup.config.runtimes.pi!.models, fetched.models));
+    expect(setup.credentials().headers).toEqual({ 'X-Account': 'New' });
+    expect((await getCustomProvider(setup.config.id))!.runtimes.pi!.models[0].discoveredSource).toBeUndefined();
+  });
+
+  it('keeps a source on unchanged-context failure but clears it on a key replacement', async () => {
+    mountDb();
+    const config = { ...configFor(), auth: { method: 'apiKey' as const } };
+    await createCustomProvider(config);
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({
+      readCustomProviderKeyForMutation: () => 'fixture-original-key',
+      readSavedProviderRoute: () => ({ baseUrl: config.runtimes.pi!.baseUrl, modelsUrl: null }),
+      fetchModels: async () => ({ ok: false, code: 'UNKNOWN' }),
+    }));
+    expect(await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, { ...inputFor(config), authMethod: 'apiKey' })).toMatchObject({ ok: false });
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, config);
+    expect((await getCustomProvider(config.id))!.runtimes.pi!.models[0].discoveredSource?.providerId).toBe('Old');
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, config, { pi: 'fixture-replacement-key' });
+    expect((await getCustomProvider(config.id))!.runtimes.pi!.models[0].discoveredSource).toBeUndefined();
+  });
+
+  it('does not attach discovery under an unsaved API key to the saved connection', async () => {
+    mountDb();
+    const config = { ...configFor(), auth: { method: 'apiKey' as const } };
+    await createCustomProvider(config);
+    const { fetchProviderModels } = await import('../../maker-host/provider-model-fetch');
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({
+      readCustomProviderKeyForMutation: () => 'fixture-original-key',
+      readSavedProviderRoute: () => ({ baseUrl: config.runtimes.pi!.baseUrl, modelsUrl: null }),
+      fetchModels: spec => fetchProviderModels(spec, async () => new Response(JSON.stringify({ data: [{
+        id: 'a/gpt-5.5', display_name: 'GPT', owned_by: 'WrongAccount', magpie_label: 'GPT · Wrong account',
+      }] }))),
+    }));
+    const fetched = await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
+      ...inputFor(config), authMethod: 'apiKey', apiKey: 'fixture-unsaved-key',
+    }) as { models: DiscoveredModel[] };
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, { ...config, runtimes: { pi: {
+      ...config.runtimes.pi!, models: mergeDiscoveredRuntimeModels(config.runtimes.pi!.models, fetched.models),
+    } } });
+    expect((await getCustomProvider(config.id))!.runtimes.pi!.models[0].discoveredSource?.providerId).toBe('Old');
+  });
+
+  it.each([undefined, 'https://relay.example/v1/models?client_version=0.147.0'])
+  ('keeps the discovered source when a Codex manifest falls back (%s)', async modelsUrl => {
+    mountDb();
+    const config: CustomProviderConfig = { id: 'codex-fallback-source', name: 'Gateway',
+      auth: { method: 'apiKey' },
+      runtimes: { codex: { baseUrl: 'https://relay.example/v1', wireProtocol: 'openai-responses',
+        modelsUrl,
+        models: [{ id: 'vendor/gpt-6.1-sol-oneai', name: 'GPT', opaqueModelId: true }] } } };
+    await createCustomProvider(config);
+    const { fetchProviderModels } = await import('../../maker-host/provider-model-fetch');
+    let calls = 0;
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({
+      readCustomProviderKeyForMutation: () => 'fixture-key',
+      readSavedProviderRoute: () => ({ baseUrl: config.runtimes.codex!.baseUrl, modelsUrl: config.runtimes.codex!.modelsUrl ?? null }),
+      fetchModels: spec => fetchProviderModels(spec, async () => {
+        calls++;
+        if (calls === 1) return new Response('{}', { status: 404 });
+        return new Response(JSON.stringify({ data: [{ id: 'vendor/gpt-6.1-sol-oneai',
+          display_name: 'GPT', owned_by: 'New account', magpie_label: 'GPT · New account' }] }));
+      }),
+    }));
+    const fetched = await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
+      agent: 'codex', savedProviderId: config.id, baseUrl: config.runtimes.codex!.baseUrl,
+      authMethod: 'apiKey', apiKey: 'fixture-key', wireProtocol: 'openai-responses', modelsUrl,
+    }) as { ok: boolean; models: DiscoveredModel[] };
+    expect(fetched.ok).toBe(true);
+    expect(calls).toBe(2);
+    expect(fetched.models[0].discoveredSource?.providerId).toBe('New account');
+    const updated = structuredClone(config);
+    updated.runtimes.codex!.models = mergeDiscoveredRuntimeModels(config.runtimes.codex!.models, fetched.models);
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, updated, { codex: 'fixture-key' });
+    expect((await getCustomProvider(config.id))!.runtimes.codex!.models[0].discoveredSource?.providerId)
+      .toBe('New account');
+  });
+
+  it('rejects an OAuth source without a live discovery receipt', async () => {
+    mountDb();
+    const config: CustomProviderConfig = { id: 'oauth-forged-source', name: 'OAuth Gateway',
+      auth: { method: 'oauth', oauth: { authorizeUrl: 'https://oauth.example/authorize',
+        tokenUrl: 'https://oauth.example/token', clientId: 'fixture-client', scopes: 'openid' } },
+      runtimes: { pi: { baseUrl: 'https://oauth.example/v1', wireProtocol: 'openai-chat',
+        models: [{ id: 'vendor/gpt-6.1', name: 'GPT', opaqueModelId: true }] } } };
+    await createCustomProvider(config);
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps());
+    const forged = structuredClone(config);
+    forged.runtimes.pi!.models[0].discoveredSource = {
+      kind: 'magpie', providerId: 'Forged', label: 'Forged', snapshotId: 'deadbeef:deadbeef',
+    };
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, forged);
+    expect((await getCustomProvider(config.id))!.runtimes.pi!.models[0].discoveredSource).toBeUndefined();
+  });
+
+  it('commits a current source and clears it on a successful response that omits source fields', async () => {
+    mountDb();
+    const config = configFor(); await createCustomProvider(config);
+    const { fetchProviderModels } = await import('../../maker-host/provider-model-fetch');
+    let withSource = true;
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({ beginRouteMutation: beginProviderRouteMutation,
+      getModelCatalog: () => ({ ...BUNDLED_CATALOG, providers: [buildUserProvider(config)] }),
+      readSavedProviderRoute: () => ({ baseUrl: config.runtimes.pi!.baseUrl, modelsUrl: null }),
+      fetchModels: spec => fetchProviderModels(spec, async () => new Response(JSON.stringify({ data: [{
+        id: 'a/gpt-5.5', display_name: 'GPT', ...(withSource ? { owned_by: 'A', magpie_label: 'GPT · Supplier A' } : {}),
+      }] }))),
+    }));
+    const fetched = await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, inputFor(config)) as { models: DiscoveredModel[] };
+    let current = (await getCustomProvider(config.id))!;
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, { ...current, runtimes: { pi: {
+      ...current.runtimes.pi!, models: mergeDiscoveredRuntimeModels(current.runtimes.pi!.models, fetched.models),
+    } } });
+    current = (await getCustomProvider(config.id))!;
+    expect(current.runtimes.pi!.models[0].discoveredSource?.providerId).toBe('A');
+    withSource = false;
+    const refreshed = await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, inputFor(config)) as { models: DiscoveredModel[] };
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, { ...current, runtimes: { pi: {
+      ...current.runtimes.pi!, models: mergeDiscoveredRuntimeModels(current.runtimes.pi!.models, refreshed.models),
+    } } });
+    const restored = (await getCustomProvider(config.id))!.runtimes.pi!.models[0];
+    expect(restored.discoveredSource).toBeUndefined();
+    expect(restored.opaqueModelId).toBe(true);
+  });
+
+  it('rejects an older request after a newer request completes', async () => {
+    mountDb();
+    const config = configFor(); await createCustomProvider(config);
+    let resolveOld!: (value: { ok: boolean; models: DiscoveredModel[] }) => void;
+    const old = new Promise<{ ok: boolean; models: DiscoveredModel[] }>(resolve => { resolveOld = resolve; });
+    let request = 0;
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({ beginRouteMutation: beginProviderRouteMutation,
+      readSavedProviderRoute: () => ({ baseUrl: config.runtimes.pi!.baseUrl, modelsUrl: null }),
+      fetchModels: () => ++request === 1 ? old : Promise.resolve({ ok: true, models: [] }),
+    }));
+    const earlier = harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, inputFor(config));
+    expect(await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, inputFor(config))).toMatchObject({ ok: true });
+    resolveOld({ ok: true, models: [] });
+    expect(await earlier).toMatchObject({ ok: false, detail: 'model discovery context changed' });
+  });
+
+  it('does not revive a prior source after an endpoint edit and an ABA edit back', async () => {
+    mountDb();
+    const config = configFor(); await createCustomProvider(config);
+    const { fetchProviderModels } = await import('../../maker-host/provider-model-fetch');
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({ beginRouteMutation: beginProviderRouteMutation,
+      readSavedProviderRoute: () => ({ baseUrl: config.runtimes.pi!.baseUrl, modelsUrl: null }),
+      fetchModels: spec => fetchProviderModels(spec, async () => new Response(JSON.stringify({ data: [
+        { id: 'a/gpt-5.5', display_name: 'GPT', owned_by: 'Stale', magpie_label: 'GPT · Stale' },
+      ] }))),
+    }));
+    const stale = await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, inputFor(config)) as { models: DiscoveredModel[] };
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, { ...config, runtimes: { pi: {
+      ...config.runtimes.pi!, baseUrl: 'http://127.0.0.1:9999/v1',
+    } } });
+    expect((await getCustomProvider(config.id))!.runtimes.pi!.models[0].discoveredSource).toBeUndefined();
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, config);
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, { ...config, runtimes: { pi: {
+      ...config.runtimes.pi!, models: mergeDiscoveredRuntimeModels(config.runtimes.pi!.models, stale.models),
+    } } });
+    expect((await getCustomProvider(config.id))!.runtimes.pi!.models[0].discoveredSource).toBeUndefined();
+  });
+});
+
+// Unit: AI and Settings use the same domain action, while the renderer retains
+// its sender fence. The minimal regression is a valid context override via AI
+// followed by an untrusted IPC attempt on the same handler instance.
+it('shares model actions with AI without making untrusted renderer writes valid', async () => {
+  const harness = new IpcHarness();
+  let contextLimit: number | null = null;
+  const deps = makeDeps({
+    assertTrustedSender: () => { throwIpcError('PERMISSION_DENIED', 'untrusted'); },
+    listProviders: async () => [catalogView('custom', { pi: ['model'] })],
+    currentOwnerSession: () => ({ dataOwnerId: 'test-user', generation: 1 }),
+    readModelContextLimit: () => ({ limit: contextLimit, isCustomized: contextLimit !== null }),
+    writeModelContextLimit: async (_targets, value) => { contextLimit = value; },
+  });
+  const actions = registerProviderHandlers(harness, deps);
+  const target = { providerId: 'custom', agent: 'pi', modelId: 'model' };
+  const owner = actions.owner();
+  configureModelSettingsActions(actions);
+  await manageAppModels({ operation: 'set', target: { ...target, agent: 'pi' }, change: { setting: 'contextLimit', value: 16000 } }, async () => {});
+  expect(await actions.getContext(target)).toMatchObject({ limit: 16000, isCustomized: true });
+  await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, target, 32000, owner)).rejects.toThrow('untrusted');
+  expect(contextLimit).toBe(16000);
+  await actions.resetContext(target, owner);
+  expect(contextLimit).toBe(null);
+});
+
+// Unit, production manageAppModels -> Settings mutation -> isolated SQLite.
+// agent-user-parity/input-handoff: prior tests only covered UI/import creation.
+// Minimal input: one API runtime; exercise stored configuration, secret isolation,
+// cancelled/revoked input, stale endpoint, and discovery preserving user overrides.
+describe('Agent API connection configuration', () => {
+  const runtime = { baseUrl: 'https://example.test/v1', wireProtocol: 'openai-chat' as const,
+    models: [{ id: 'm1', name: 'My model' }] };
+  const create = { operation: 'connection' as const, change: { action: 'create' as const,
+    name: 'Example', authMethod: 'apiKey' as const, runtimes: { pi: runtime } } };
+  function setup(overrides: Partial<ProviderHandlerDeps> = {}) {
+    mountDb();
+    const deps = makeDeps({ currentOwnerSession: () => ({ dataOwnerId: 'test-user', generation: 1 }), ...overrides });
+    configureModelSettingsActions(registerProviderHandlers(new IpcHarness(), deps));
+    return deps;
+  }
+  // #10147, unit: real MCP -> Settings transaction -> in-memory SQLite -> media route.
+  // Existing tests bypassed the MCP schema and never read imageApi/mode back or
+  // selected a Guide connection. One image ID shared by Codex/Pi is sufficient.
+  it('configures Images through MCP without losing other connections or borrowing their credentials', async () => {
+    let active: ReturnType<typeof buildUserProvider> | undefined;
+    const deps = setup({ refreshCatalog: async () => {
+      const [saved] = await listCustomProviders();
+      active = saved ? buildUserProvider(saved) : undefined;
+    } });
+    const ask = vi.fn(async () => 'synthetic-key');
+    const server = createXdtHelperMcpServer({ modelSettings: { call: (input, signal) =>
+      manageAppModels(input, async () => {}, ask, signal) } },
+    { agentKind: 'pi', workingDir: '/fixture', sessionId: 'media-settings-owner' });
+    const client = new Client({ name: 'media-settings-test', version: '1' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    const call = async (change: Record<string, unknown>) => {
+      const result = await client.callTool({ name: 'call_tool', arguments: {
+        name: 'configure_model_connection', args: { change },
+      } });
+      return JSON.parse((result.content as Array<{ text: string }>)[0]!.text);
+    };
+    try {
+      const imageRuntime = { ...runtime, imageApi: 'openai-images',
+        models: [{ id: 'image-model', mode: 'image_generation' }] };
+      const created = await call({ action: 'create', name: 'Images', runtimes: {
+        codex: { ...imageRuntime, wireProtocol: 'openai-responses', supportsImageGeneration: true },
+        pi: { ...runtime, baseUrl: 'https://pi.example.test/v1', models: [{ id: 'image-model' }] },
+      } });
+      expect(created).toMatchObject({ ok: true, saved: true });
+      const providerId = created.providerId as string;
+      expect(await call({ action: 'read', providerId })).toMatchObject({ runtimes: {
+        codex: { imageApi: 'openai-images', supportsImageGeneration: true,
+          models: [{ id: 'image-model', mode: 'image_generation' }] },
+      } });
+      expect(active?.imageModels?.[0]?.sourceAgent).toBe('codex');
+      expect(await call({ action: 'setModels', providerId, agent: 'pi',
+        models: [{ id: 'image-model', mode: 'image_generation' }] })).toMatchObject({ saved: true });
+      // Declaring a media mode alone must not borrow a different runtime's Images API.
+      expect(active?.imageModels?.[0]?.sourceAgent).toBe('codex');
+      ask.mockClear();
+      vi.mocked(deps.storeCustomProviderKey).mockClear();
+      expect(await call({ action: 'setRuntime', providerId, agent: 'pi',
+        runtime: { ...imageRuntime, baseUrl: 'https://pi.example.test/v1' } })).toMatchObject({ saved: true });
+      expect(ask).not.toHaveBeenCalled();
+      expect(deps.storeCustomProviderKey).not.toHaveBeenCalled();
+      const readback = await call({ action: 'read', providerId });
+      expect(readback.runtimes.codex.imageApi).toBe('openai-images');
+      expect(readback.runtimes.codex.supportsImageGeneration).toBe(true);
+      expect(readback.runtimes.pi).toMatchObject({ imageApi: 'openai-images',
+        models: [{ id: 'image-model', mode: 'image_generation' }] });
+      const saved = await getCustomProvider(storedCustomProviderId(providerId));
+      expect(saved?.runtimes.pi?.imageApi).toBe('openai-images');
+      expect(saved?.runtimes.codex?.imageApi).toBe('openai-images');
+      expect(active?.imageModels?.[0]?.sourceAgents).toEqual(['codex', 'pi']);
+      const readApiKey = vi.fn((agent: AgentKind) => agent === 'pi' ? 'invalid-pi-key' : 'invalid-codex-key');
+      expect(resolveCustomMediaConnection({ getProvider: () => active, readApiKey,
+        isOwnerBoundaryPending: () => false }, 'image-model', 'image', { guideDriven: true, agent: 'pi' })).toMatchObject({
+        agent: 'pi', baseUrl: 'https://pi.example.test/v1', headers: { authorization: 'Bearer invalid-pi-key' },
+      });
+      expect(readApiKey).toHaveBeenCalledExactlyOnceWith('pi');
+      expect(JSON.stringify(readback)).not.toContain('synthetic-key');
+    } finally { await client.close(); await server.close(); }
+  });
+  it.each(['https://open.bigmodel.cn/api/anthropic', 'https://open.bigmodel.cn/api/coding/paas/v4', 'https://open.bigmodel.cn/api/paas/v4'])(
+    'refreshes ordinary preset Flash at %s and invalidates it on key rotation', async baseUrl => {
+    const flash = 'glm-realtime-flash';
+    let catalogDenied = false;
+    let key = 'fixture-key';
+    let access: 'available' | 'unavailable' | 'unknown' = 'available';
+    setup({
+      readSavedProviderRoute: () => ({ baseUrl, modelsUrl: null, catalogPresetId: 'zhipu-glm-cn' }),
+      readCustomProviderKeyForMutation: () => key,
+      storeCustomProviderKey: (_id, _agent, value) => { key = value; return true; },
+      fetchModels: spec => {
+        expect(spec.probeGlmFlash).toBeTypeOf('function');
+        return fetchProviderModels({ ...spec, probeGlmFlash: async () => access },
+          async () => catalogDenied ? new Response('', { status: 403 }) : Response.json({ data: [{ id: 'glm-5' }] }));
+      },
+    });
+    await createCustomProvider({ id: 'glm-test', name: 'GLM', auth: { method: 'apiKey' },
+      runtimes: { pi: { baseUrl, catalogPresetId: 'zhipu-glm-cn', wireProtocol: 'openai-chat', models: [] } } });
+    const refresh = async (saved = true) => {
+      expect(await manageAppModels({ operation: 'connection', change: { action: 'refreshModels',
+        providerId: 'glm-test', agent: 'pi' } }, async () => {})).toMatchObject({ saved, ...(catalogDenied && { ok: false, status: 403 }) });
+      const config = (await getCustomProvider('glm-test'))!;
+      const rows = config.runtimes.pi!.models;
+      expect(rows.map(row => row.id)).toEqual(['glm-5', flash]);
+      expect(rows.find(row => row.id === flash)?.discoveredMetadata?.mode).toBe('realtime');
+      const { realtimeModels } = await import('../../voice-conversation/realtimeModels.js');
+      const provider = buildUserProvider(config, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+      return realtimeModels({ catalog: { ...BUNDLED_CATALOG, providers: [provider] },
+        disabled: () => false, gatewayAllowed: false, readKey: () => key,
+        gatewayConnection: () => { throw Error('unexpected gateway'); } }).map(model => model.id);
+    };
+    expect(await refresh()).toEqual([flash]);
+    access = 'unknown';
+    expect(await refresh()).toEqual([flash]);
+    access = 'unavailable';
+    expect(await refresh()).toEqual([]);
+    access = 'unknown';
+    expect(await refresh()).toEqual([]);
+    access = 'available';
+    expect(await refresh()).toEqual([flash]);
+    catalogDenied = true;
+    access = 'unknown';
+    expect(await refresh(false)).toEqual([flash]);
+    access = 'unavailable';
+    expect(await refresh()).toEqual([]);
+    expect(await refresh(false)).toEqual([]);
+    catalogDenied = false;
+    access = 'available';
+    expect(await refresh()).toEqual([flash]);
+    expect(await manageAppModels({ operation: 'connection', change: { action: 'setKey',
+      providerId: 'glm-test', agent: 'pi' } }, async () => {}, async () => 'fixture-replacement'))
+      .toMatchObject({ saved: true });
+    access = 'unknown';
+    expect(await refresh()).toEqual([]);
+  });
+  it('creates, discovers, edits and tests through Settings without returning credentials or upstream bodies', async () => {
+    const deps = setup({ testConnection: vi.fn(async () => ({ ok: false, code: 'AUTH_INVALID' as const, latencyMs: 1, detail: 'synthetic-key' })) });
+    const ask = vi.fn(async () => 'synthetic-key');
+    const result = await manageAppModels(create, async () => {}, ask);
+    expect(result).toMatchObject({ saved: true, verified: false });
+    const [saved] = await listCustomProviders();
+    expect(saved.name).toBe('Example');
+    expect(deps.storeCustomProviderKey).toHaveBeenCalledWith(saved.id, 'pi', 'synthetic-key');
+    expect(JSON.stringify([saved, result])).not.toContain('synthetic-key');
+    expect(ask).toHaveBeenCalledWith('Example', ['https://example.test/v1'], expect.objectContaining({ deadline: expect.any(Number) }));
+    const providerId = saved.id;
+    await manageAppModels({ operation: 'connection', change: { action: 'refreshModels', providerId, agent: 'pi' } }, async () => {});
+    expect((await getCustomProvider(saved.id))?.runtimes.pi?.models[0].name).toBe('My model');
+    await manageAppModels({ operation: 'connection', change: { action: 'setModels', providerId, agent: 'pi', models: [{ id: 'manual' }] } }, async () => {});
+    expect((await getCustomProvider(saved.id))?.runtimes.pi?.models.map(model => model.id)).toEqual(['manual']);
+    const tested = await manageAppModels({ operation: 'connection', change: { action: 'test', providerId, agent: 'pi' } }, async () => {});
+    expect(tested).toMatchObject({ verification: { ok: false, code: 'AUTH_INVALID' } });
+    expect(JSON.stringify(tested)).not.toContain('synthetic-key');
+    const changedRuntime = { ...runtime, baseUrl: 'https://replacement.test/v1' };
+    const edit = { operation: 'connection' as const, change: { action: 'setRuntime' as const, providerId, agent: 'pi' as const, runtime: changedRuntime } };
+    expect(await manageAppModels(edit, async () => {}, async () => null)).toMatchObject({ saved: false });
+    expect((await getCustomProvider(providerId))?.runtimes.pi?.baseUrl).toBe(runtime.baseUrl);
+    expect(await manageAppModels(edit, async () => {}, ask)).toMatchObject({ saved: true });
+    expect(ask).toHaveBeenLastCalledWith('Example', [changedRuntime.baseUrl], expect.objectContaining({ deadline: expect.any(Number) }));
+    expect(await manageAppModels({ operation: 'connection', change: { action: 'read', providerId } }, async () => {}))
+      .toMatchObject({ runtimes: { pi: { baseUrl: changedRuntime.baseUrl } } });
+    expect(await manageAppModels({ operation: 'connection', change: { action: 'remove', providerId } }, async () => {}))
+      .toMatchObject({ removed: true });
+    expect(await getCustomProvider(providerId)).toBeNull();
+    expect(deps.removeCustomProviderKey).toHaveBeenCalledWith(providerId, 'pi');
+  });
+  it('uses a preset and one secure answer for runtimes with identical endpoints', async () => {
+    const deps = setup({ listPresets: () => [{ id: 'example', name: 'Example', runtimes: { pi: runtime, 'claude-code': { ...runtime, wireProtocol: 'anthropic-messages' } } }] });
+    const ask = vi.fn(async () => 'synthetic-key');
+    expect(await manageAppModels({ operation: 'connection', change: { action: 'create', name: 'Preset', authMethod: 'apiKey', presetId: 'example' } }, async () => {}, ask)).toMatchObject({ saved: true });
+    expect(ask).toHaveBeenCalledTimes(1);
+    expect(deps.storeCustomProviderKey).toHaveBeenCalledTimes(2);
+    expect((await listCustomProviders())[0].runtimes.pi?.catalogPresetId).toBe('example');
+  });
+  it('reports a busy Codex host before requesting credentials and only interrupts with an explicit policy', async () => {
+    const deps = setup({ listBusyLocalCodexSessionIds: () => ['busy-task'] });
+    const ask = vi.fn(async () => 'synthetic-key');
+    const input = { ...create, change: { ...create.change, runtimes: { codex: { ...runtime, wireProtocol: 'openai-responses' as const, supportsImageGeneration: true } } } };
+    expect(await manageAppModels(input, async () => {}, ask)).toMatchObject({ saved: false, errorCode: 'CODEX_RELOAD_CONFIRMATION_REQUIRED', busyCount: 1 });
+    expect(ask).not.toHaveBeenCalled();
+    expect(deps.prepareCodexCustomProviderHostChange).not.toHaveBeenCalled();
+    expect(await manageAppModels({ ...input, change: { ...input.change, interruptCodex: true } }, async () => {}, ask)).toMatchObject({ saved: true });
+    expect(deps.prepareCodexCustomProviderHostChange).toHaveBeenCalledTimes(1);
+  });
+  it('rechecks queued Agent permission before retiring Codex or writing credentials', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const config = imageProviderConfig('queued');
+    await createCustomProvider(config);
+    let release!: () => void;
+    let entered!: () => void;
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    const waiting = new Promise<void>(resolve => { entered = resolve; });
+    const deps = makeDeps({
+      currentOwnerSession: () => ({ dataOwnerId: 'test-user', generation: 1 }),
+      refreshCatalog: vi.fn(async () => { entered(); await blocked; }),
+    });
+    const actions = registerProviderHandlers(harness, deps);
+    const first = harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, { ...config, name: 'Renamed' });
+    await waiting;
+    let current = true;
+    const second = actions.connections.update(config, { codex: 'synthetic-key' },
+      async () => { if (!current) throw new Error('revoked'); }, previous => previous, true);
+    const rejected = expect(second).rejects.toThrow('revoked');
+    current = false;
+    release();
+    await first;
+    await rejected;
+    expect(deps.prepareCodexCustomProviderHostChange).not.toHaveBeenCalled();
+    expect(deps.storeCustomProviderKey).not.toHaveBeenCalled();
+  });
+  it.each(['cancel', 'revoke', 'abort'] as const)('does not create a connection after %s during secret entry', async mode => {
+    const deps = setup();
+    let current = true;
+    const controller = new AbortController();
+    const pending = manageAppModels(create, async () => { if (!current) throw new Error('revoked'); }, async () => {
+      if (mode === 'revoke') current = false;
+      if (mode === 'abort') controller.abort(new Error('caller cancelled'));
+      return mode === 'cancel' ? null : 'synthetic-key';
+    }, controller.signal);
+    if (mode === 'revoke') await expect(pending).rejects.toThrow('revoked');
+    else if (mode === 'abort') await expect(pending).rejects.toThrow('caller cancelled');
+    else expect(await pending).toMatchObject({ status: 'cancelled', saved: false });
+    expect(await listCustomProviders()).toEqual([]);
+    expect(deps.storeCustomProviderKey).not.toHaveBeenCalled();
+  });
+  it('adds an unauthenticated loopback connection without asking for a key and rejects public unauthenticated endpoints', async () => {
+    const deps = setup();
+    const ask = vi.fn(async () => null);
+    const local = { ...create, change: { ...create.change, authMethod: 'none' as const,
+      runtimes: { pi: { ...runtime, baseUrl: 'http://127.0.0.1:11434/v1' } } } };
+    expect(await manageAppModels(local, async () => {}, ask)).toMatchObject({ saved: true });
+    await expect(manageAppModels({ ...create, change: { ...create.change, authMethod: 'none' } }, async () => {}, ask)).rejects.toThrow();
+    expect(await listCustomProviders()).toHaveLength(1);
+    expect(ask).not.toHaveBeenCalled();
+    expect(deps.storeCustomProviderKey).not.toHaveBeenCalled();
+  });
+  it('rejects a key answer if the saved endpoint changed while the owner was typing', async () => {
+    const deps = setup();
+    await createCustomProvider({ id: 'example', name: 'Example', runtimes: { pi: runtime } });
+    await expect(manageAppModels({ operation: 'connection', change: { action: 'setKey', providerId: 'example', agent: 'pi' } }, async () => {}, async () => {
+      const previous = (await getCustomProvider('example'))!;
+      await updateCustomProviderIfUnchanged('example', previous, { ...previous, runtimes: { pi: { ...runtime, baseUrl: 'https://changed.test/v1' } } });
+      return 'synthetic-key';
+    })).rejects.toThrow('Connection changed');
+    expect(deps.storeCustomProviderKey).not.toHaveBeenCalled();
+  });
+  // #12603, unit: Settings refresh persists a Go /models response and feeds Pi's
+  // launch config. The flat discovery fixtures miss nested reasoning declarations.
+  it('refreshes OpenCode Go reasoning capabilities without inventing selectable levels', async () => {
+    const preset = BUNDLED_CATALOG.presets!.find(entry => entry.id === 'opencode-go')!;
+    const data = [
+      { id: 'hy4-flash-free', capabilities: { reasoning: { supported: true, effort: ['none', 'high'] } } },
+      { id: 'hungerg-free', capabilities: { reasoning: { supported: true } } },
+      { id: 'fixture-disabled', capabilities: { reasoning: { supported: false, effort: ['high'] } } },
+      { id: 'fixture-unspecified' },
+      { id: 'fixture-overridden', capabilities: { reasoning: { supported: true, effort: ['high'] } } },
+    ];
+    let discovery: typeof data = data;
+    setup({
+      listPresets: () => [preset],
+      readCustomProviderKeyForMutation: () => 'synthetic-key',
+      fetchModels: spec => fetchProviderModels(spec, async url => {
+        expect(String(url)).toBe('https://opencode.ai/zen/go/v1/models');
+        return Response.json({ data: discovery });
+      }),
+    });
+    const config = {
+      id: 'fixture-opencode-go', name: preset.name, auth: { method: 'apiKey' as const },
+      runtimes: { pi: { ...preset.runtimes.pi!, catalogPresetId: preset.id, models: [
+        { id: 'fixture-overridden', name: 'Override', reasoning: true, reasoningEfforts: ['low' as const] },
+      ] } },
+    };
+    await createCustomProvider(config);
+    const refresh = () => manageAppModels({ operation: 'connection', change: {
+      action: 'refreshModels', providerId: config.id, agent: 'pi',
+    } }, async () => {});
+    expect(await refresh()).toMatchObject({ saved: true, discoveredModelCount: data.length });
+    const saved = (await getCustomProvider(config.id))!;
+    const catalog = buildUserProvider(saved, { presets: BUNDLED_CATALOG.presets, modelRegistry: BUNDLED_CATALOG.modelRegistry });
+    const projected = catalog.models.pi!;
+    expect(projected.map(model => [model.id, model.efforts])).toEqual([
+      ['hy4-flash-free', ['high']], ['hungerg-free', []], ['fixture-disabled', []],
+      ['fixture-unspecified', []], ['fixture-overridden', ['low']],
+    ]);
+    expect(projected.map(model => model.supportsReasoning)).toEqual([true, true, false, undefined, true]);
+    const launch = buildPiNativeProvidersFromConfigs([saved], () => 'synthetic-key', undefined, undefined,
+      { ...BUNDLED_CATALOG, providers: [catalog] }).providers[0]!;
+    expect(launch.models).toMatchObject([
+      { id: 'hy4-flash-free', reasoning: true, thinkingLevelMap: { off: 'none', high: 'high', low: null } },
+      { id: 'hungerg-free', reasoning: true, thinkingLevelMap: { high: null, low: null } },
+      { id: 'fixture-disabled', reasoning: false },
+      { id: 'fixture-unspecified', reasoning: false },
+      { id: 'fixture-overridden', reasoning: true, thinkingLevelMap: { high: null, low: 'low' } },
+    ]);
+    const capture = async (id: string, reasoning?: 'high') => {
+      const model = launch.models.find(candidate => candidate.id === id)!;
+      const fetch = vi.fn<typeof globalThis.fetch>(async (_url, _init) =>
+        new Response('data: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } }));
+      await streamPiChat({
+        id: model.id, name: model.name!, api: 'openai-completions', provider: launch.id,
+        baseUrl: launch.baseUrl!, reasoning: model.reasoning!, thinkingLevelMap: model.thinkingLevelMap,
+        input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 100_000, maxTokens: 1024, compat: model.compat,
+      }, { messages: [{ role: 'user', content: 'fixture', timestamp: 0 }] },
+      { apiKey: 'synthetic-key', reasoning, fetch }).result();
+      expect(fetch).toHaveBeenCalledTimes(1);
+      const [url, init] = fetch.mock.calls[0];
+      expect(String(url)).toBe('https://opencode.ai/zen/go/v1/chat/completions');
+      return JSON.parse(String(init?.body));
+    };
+    expect(await capture('hy4-flash-free', 'high')).toMatchObject({ reasoning_effort: 'high' });
+    expect(await capture('hy4-flash-free')).toMatchObject({ reasoning_effort: 'none' });
+    expect(await capture('hungerg-free')).not.toHaveProperty('reasoning_effort');
+
+    discovery = [
+      { id: 'hy4-flash-free', capabilities: { reasoning: { supported: true } } },
+      { id: 'hungerg-free' },
+    ];
+    expect(await refresh()).toMatchObject({ saved: true, discoveredModelCount: discovery.length });
+    const refreshed = buildUserProvider((await getCustomProvider(config.id))!).models.pi!;
+    expect(refreshed.find(model => model.id === 'hy4-flash-free')).toMatchObject({ supportsReasoning: true, efforts: [] });
+    expect(refreshed.find(model => model.id === 'hy4-flash-free')?.reasoningOffEffort).toBeUndefined();
+    expect(refreshed.find(model => model.id === 'hungerg-free')?.supportsReasoning).toBeUndefined();
+
+  });
+
+  // #9276 review, unit: prior discovery coverage retained a manually named model,
+  // missing a newly discovered model's rename in the final selector projection.
+  it('keeps an explicit name over discovery metadata, including after another refresh', async () => {
+    setup({ fetchModels: vi.fn(async () => ({ ok: true, models: [{ id: 'm2', name: 'Discovered' }] })) });
+    await manageAppModels(create, async () => {}, async () => 'synthetic-key');
+    const providerId = (await listCustomProviders())[0].id;
+    const refresh = () => manageAppModels({ operation: 'connection', change: { action: 'refreshModels', providerId, agent: 'pi' } }, async () => {});
+    await refresh();
+    await manageAppModels({ operation: 'connection', change: { action: 'setModels', providerId, agent: 'pi',
+      models: [{ id: 'm1' }, { id: 'm2', name: 'My renamed model' }] } }, async () => {});
+    const names = async () => buildUserProvider((await getCustomProvider(providerId))!).models.pi?.map(model => model.name);
+    expect(await names()).toEqual(['My model', 'My renamed model']);
+    await refresh();
+    expect(await names()).toEqual(['My model', 'My renamed model']);
+  });
+  // #9276 review, unit: a second endpoint must not reset the tool's lifetime;
+  // a late host answer is rejected before SQLite or credential writes.
+  it('rejects multi-endpoint input that exceeds the original call budget', async () => {
+    const deps = setup();
+    const now = Date.now();
+    let elapsed = 0;
+    vi.spyOn(Date, 'now').mockImplementation(() => now + elapsed);
+    const deadlines: number[] = [];
+    const input = { ...create, change: { ...create.change, runtimes: { pi: runtime,
+      'claude-code': { ...runtime, baseUrl: 'https://other.test', wireProtocol: 'anthropic-messages' as const } } } };
+    await expect(manageAppModels(input, async () => {}, async (_name, _endpoints, lifetime) => {
+      deadlines.push(lifetime.deadline);
+      elapsed += 5 * 60_000;
+      return 'synthetic-key';
+    })).rejects.toThrow('MODEL_CONNECTION_EXPIRED');
+    expect(deadlines).toEqual([now + 9 * 60_000, now + 9 * 60_000]);
+    expect(await listCustomProviders()).toEqual([]);
+    expect(deps.storeCustomProviderKey).not.toHaveBeenCalled();
+  });
+  // #9276 security review, unit: existing route pinning tests lacked the interval
+  // after staging new secrets and before publishing the new catalog route.
+  it('blocks discovery and probes before credential reads during a Settings update', async () => {
+    mountDb();
+    const config = { id: 'example', name: 'Example', runtimes: { pi: runtime } };
+    await createCustomProvider(config);
+    let release!: () => void;
+    let entered!: () => void;
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    const waiting = new Promise<void>(resolve => { entered = resolve; });
+    let key = 'old-key';
+    let activeBaseUrl = runtime.baseUrl;
+    const deps = makeDeps({
+      readSavedProviderRoute: () => ({ baseUrl: activeBaseUrl, modelsUrl: null }),
+      readCustomProviderKeyForMutation: vi.fn(() => key),
+      storeCustomProviderKey: vi.fn((_id, _agent, next) => { key = next; return true; }),
+      refreshCatalog: async () => { entered(); await blocked; activeBaseUrl = 'https://new.test/v1'; },
+    });
+    const harness = new IpcHarness();
+    const actions = registerProviderHandlers(harness, deps);
+    const updating = harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, { ...config, runtimes: {
+      pi: { ...runtime, baseUrl: 'https://new.test/v1' },
+    } }, { pi: 'new-key' });
+    await waiting;
+    try {
+      expect(key).toBe('new-key');
+      vi.mocked(deps.readCustomProviderKeyForMutation).mockClear();
+      vi.mocked(deps.readCustomProviderHeadersForMutation).mockClear();
+      await expect(actions.connections.fetch(config, 'pi')).rejects.toThrow('Connection is changing');
+      await expect(harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, { ...runtime, authMethod: 'apiKey', agent: 'pi', savedProviderId: config.id })).rejects.toThrow('Connection is changing');
+      expect(() => actions.connections.test(config.id, 'pi')).toThrow('Connection is changing');
+      await expect(harness.invoke(MAKER_INVOKE.PROVIDER_TEST_CONNECTION, { kind: 'saved', providerId: config.id, agent: 'pi' })).rejects.toThrow('Connection is changing');
+      expect(deps.readCustomProviderKeyForMutation).not.toHaveBeenCalled();
+      expect(deps.readCustomProviderHeadersForMutation).not.toHaveBeenCalled();
+      expect(deps.fetchModels).not.toHaveBeenCalled();
+      expect(deps.testConnection).not.toHaveBeenCalled();
+    } finally { release(); await updating; }
+    await actions.connections.fetch(config, 'pi');
+    expect(deps.fetchModels).toHaveBeenCalledTimes(1);
+    expect(deps.fetchModels).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: 'https://new.test/v1', apiKey: 'new-key' }));
+  });
+});
+
+// Orca review 2026-11-18: a merged connection follows its pool's switch, so a write to its own hidden key
+// from a page opened before the merge must fail visibly instead of reporting success with no effect.
+describe('remote provider access writes', () => {
+  it('refuses a merged connection and accepts the pool', async () => {
+    const harness = new IpcHarness();
+    const setRemoteProviderInvocationEnabled = vi.fn();
+    const deps = makeDeps({
+      listProviders: async () => [catalogView('openai', {}), { ...catalogView('old-openai', {}), subscriptionPoolAlias: true }],
+      getRemoteProviderInvocationEnabled: () => false,
+      setRemoteProviderInvocationEnabled,
+    });
+    registerProviderHandlers(harness, deps);
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_REMOTE_ACCESS_SET, { providerId: 'old-openai', enabled: false }))
+      .rejects.toThrow('PRECONDITION_FAILED');
+    expect(setRemoteProviderInvocationEnabled).not.toHaveBeenCalled();
+    await harness.invoke(MAKER_INVOKE.PROVIDER_REMOTE_ACCESS_SET, { providerId: 'openai', enabled: true });
+    expect(setRemoteProviderInvocationEnabled).toHaveBeenCalledExactlyOnceWith('openai', true);
+  });
+});
+
+// Observes entry into the share-revocation step without replacing it: every other case in this
+// file keeps the real policy.
+const availabilityPolicyEntered = vi.hoisted(() => vi.fn());
+vi.mock('../../device-link/providerShareAvailabilityPolicy.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../device-link/providerShareAvailabilityPolicy.js')>();
+  return { ...actual, withAvailabilityPolicyMutation: <T,>(providerId: string | undefined, work: () => Promise<T>) => {
+    availabilityPolicyEntered(providerId);
+    return actual.withAvailabilityPolicyMutation(providerId, work);
+  } };
+});
+
+describe('receiving-client remote provider disable', () => {
+  it('reuses provider overrides with a device-scoped key and never changes host sharing', async () => {
+    const harness = new IpcHarness();
+    const deps = makeDeps({ listRemoteProviders: vi.fn(async () => [catalogView('openai', {})]), setRemoteProviderInvocationEnabled: vi.fn() });
+    registerProviderHandlers(harness, deps);
+    const command = { kind: 'provider', providerId: 'openai', remoteDeviceId: 'peer', disabled: true };
+    await harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, command);
+    expect(deps.setProviderDisabled).toHaveBeenCalledWith(remoteProviderDisableKey('peer', 'openai'), true);
+    expect(deps.setRemoteProviderInvocationEnabled).not.toHaveBeenCalled();
+    await harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { ...command, disabled: false });
+    expect(deps.setProviderDisabled).toHaveBeenLastCalledWith(remoteProviderDisableKey('peer', 'openai'), false);
+    expect(deps.listRemoteProviders).toHaveBeenCalledOnce();
+  });
+  // Rule (disableOverrides.ts): hiding a provider is presentation, disabling is access. The two
+  // share one channel, so the regression to guard is a hide that also stops the provider (or the
+  // reverse). Minimal input: one hide command for a local provider and one for a peer's.
+  // Tier: unit over the real handler; persistence is covered by model-disable-store.test.ts.
+  it('hides a provider from the picker without touching access, locally and per peer', async () => {
+    const harness = new IpcHarness();
+    const setProviderHidden = vi.fn();
+    const deps = makeDeps({ listProviders: vi.fn(async () => [catalogView('xd', {})]),
+      listRemoteProviders: vi.fn(async () => [catalogView('openai', {})]), setProviderHidden });
+    registerProviderHandlers(harness, deps);
+    await harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { kind: 'provider-hidden', providerId: 'xd', hidden: true });
+    expect(setProviderHidden).toHaveBeenLastCalledWith('xd', true);
+    await harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET,
+      { kind: 'provider-hidden', providerId: 'openai', remoteDeviceId: 'peer', hidden: true });
+    expect(setProviderHidden).toHaveBeenLastCalledWith(remoteProviderDisableKey('peer', 'openai'), true);
+    // Un-hiding clears a stale entry even when the provider is gone from the catalog.
+    await harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { kind: 'provider-hidden', providerId: 'gone', hidden: false });
+    expect(setProviderHidden).toHaveBeenLastCalledWith('gone', false);
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { kind: 'provider-hidden', providerId: 'gone', hidden: true }))
+      .rejects.toThrow(/INVALID_PARAMS/);
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { kind: 'provider-hidden', providerId: 'xd' }))
+      .rejects.toThrow(/INVALID_PARAMS/);
+    expect(deps.setProviderDisabled).not.toHaveBeenCalled();
+    expect(deps.setModelsDisabled).not.toHaveBeenCalled();
+  });
+  // PR #11565 review: a hide went through withAvailabilityPolicyMutation, which revokes the
+  // provider's registered standby shares on the server before the local write and fails when the
+  // server is unreachable. Hiding narrows no permission, so it must not enter that step; disabling
+  // still must. Minimal input: one hide and one disable of the same provider. Tier: unit over the
+  // real handler; the policy itself is covered by providerShareAvailability tests.
+  it('hiding does not enter the share-revocation step that disabling requires', async () => {
+    const harness = new IpcHarness();
+    const setProviderHidden = vi.fn();
+    const deps = makeDeps({ listProviders: vi.fn(async () => [catalogView('xd', {})]), setProviderHidden });
+    registerProviderHandlers(harness, deps);
+    availabilityPolicyEntered.mockClear();
+    await harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { kind: 'provider-hidden', providerId: 'xd', hidden: true });
+    await harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { kind: 'provider-hidden', providerId: 'xd', hidden: false });
+    expect(setProviderHidden).toHaveBeenCalledTimes(2);
+    expect(availabilityPolicyEntered).not.toHaveBeenCalled();
+    await harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { kind: 'provider', providerId: 'xd', disabled: true });
+    expect(availabilityPolicyEntered).toHaveBeenCalledExactlyOnceWith('xd');
+  });
+  it('rejects unknown remote providers but permits clearing a stale stop while offline', async () => {
+    const harness = new IpcHarness();
+    const deps = makeDeps({ listRemoteProviders: async () => [] });
+    registerProviderHandlers(harness, deps);
+    const command = { kind: 'provider', providerId: 'missing', remoteDeviceId: 'peer', disabled: true };
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, command)).rejects.toThrow(/INVALID_PARAMS/);
+    expect(deps.setProviderDisabled).not.toHaveBeenCalled();
+    await harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { ...command, disabled: false });
+    expect(deps.setProviderDisabled).toHaveBeenCalledWith(remoteProviderDisableKey('peer', 'missing'), false);
+  });
+});

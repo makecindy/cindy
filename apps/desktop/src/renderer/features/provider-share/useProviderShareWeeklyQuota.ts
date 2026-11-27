@@ -23,7 +23,6 @@ function shareIdentity(share: ProviderShareReceived | undefined): string {
         share.shareId,
         share.memberId,
         share.status,
-        share.hostOnline,
         share.hostCapable,
       ])
     : '';
@@ -55,6 +54,8 @@ const RECHECK_MS = 5_000;
 type Entry = {
   owner: ReturnType<typeof getDataOwnerGeneration>;
   identity: string;
+  hostOnline: boolean;
+  readNotBefore: number;
   quota: ProviderWeeklyQuota | null;
   lastRead: number;
   revision: number;
@@ -72,7 +73,7 @@ function clear(entry: Entry): void {
   for (const notify of entry.listeners) notify();
 }
 
-function entryFor(shareId: string, identity: string): Entry {
+function entryFor(shareId: string, identity: string, hostOnline: boolean): Entry {
   if (!isDataOwnerGenerationCurrent(cacheOwner)) {
     for (const entry of entries.values()) if (entry.expiry) clearTimeout(entry.expiry);
     entries.clear();
@@ -83,10 +84,17 @@ function entryFor(shareId: string, identity: string): Entry {
   if (!entry || entry.identity !== identity) {
     if (entry?.expiry) clearTimeout(entry.expiry);
     entry = {
-      owner: cacheOwner, identity, quota: null, lastRead: -Infinity, revision: 0,
+      owner: cacheOwner, identity, hostOnline, readNotBefore: 0, quota: null, lastRead: -Infinity, revision: 0,
       pending: null, listeners: new Set(), expiry: null,
     };
     entries.set(key, entry);
+  } else if (entry.hostOnline !== hostOnline) {
+    entry.hostOnline = hostOnline;
+    // A healthy direct path keeps rechecking permissions on schedule. Only
+    // an empty quota view can wait for a staggered retry after relay recovery.
+    entry.readNotBefore = hostOnline && !entry.quota && !entry.pending
+      ? Math.max(Date.now(), entry.lastRead + RECHECK_MS) + 500 + Math.floor(Math.random() * 1_500)
+      : 0;
   }
   return entry;
 }
@@ -118,8 +126,8 @@ export function useProviderShareWeeklyQuota(deviceId: string): ProviderWeeklyQuo
   const shareId = providerShareIdOfAgentDeviceId(deviceId);
   const share = received.find((item) => item.shareId === shareId);
   const identity = shareIdentity(share);
-  const available = share?.status === 'active' && share.hostOnline && share.hostCapable;
-  const entry = shareId ? entryFor(shareId, identity) : null;
+  const available = share?.status === 'active' && share.hostCapable;
+  const entry = shareId ? entryFor(shareId, identity, share?.hostOnline === true) : null;
   const [, rerender] = useState(0);
 
   useEffect(() => {
@@ -140,7 +148,7 @@ export function useProviderShareWeeklyQuota(deviceId: string): ProviderWeeklyQuo
       if (timer) clearTimeout(timer);
       if (!current()) return;
       if (document.visibilityState === 'hidden') { clear(entry); return; }
-      const remaining = RECHECK_MS - (Date.now() - entry.lastRead);
+      const remaining = Math.max(entry.readNotBefore, entry.lastRead + RECHECK_MS) - Date.now();
       if (remaining > 0) {
         timer = setTimeout(load, remaining);
         return;

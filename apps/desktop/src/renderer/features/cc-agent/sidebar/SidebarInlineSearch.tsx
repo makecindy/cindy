@@ -97,11 +97,12 @@ export function SidebarInlineSearch({
     onSearchActiveRef.current = onSearchActive;
   });
   useEffect(() => {
-    if (search.query.length > 0) onSearchActiveRef.current?.();
-  }, [search.query]);
+    if (search.trimmed) onSearchActiveRef.current?.();
+  }, [search.trimmed]);
 
   // 静息态行:点击 / 键盘聚焦时展开并把焦点交给真正的输入框(鼠标 hover 时其实已提前展开)。
   const activate = () => {
+    search.resume();
     setForceOpen(true);
     window.setTimeout(() => inputRef.current?.focus(), 0);
   };
@@ -162,6 +163,8 @@ export function SidebarInlineSearch({
           )}
           <input
             ref={inputRef}
+            onFocus={search.resume}
+            onClick={search.resume}
             value={search.query}
             onChange={(event) => search.setQuery(event.target.value)}
             placeholder={t('ccAgent.search.placeholder')}
@@ -195,6 +198,8 @@ export function SidebarInlineSearch({
                紧凑纯图标形态,与搜索框合为一体(无分隔线、无文字提示)。
                菜单开合上报 → 打开期间保持展开,不因鼠标移到菜单而收起。 */}
           <SearchFilterMenu
+            matchAll={search.matchAll}
+            onMatchAllChange={search.setMatchAll}
             status={search.statusFilter}
             agentKind={search.agentFilter}
             lastActivity={search.lastActivityFilter}

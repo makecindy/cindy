@@ -1,4 +1,8 @@
+import { supportsManagedX11Clipboard } from './linuxX11Clipboard';
+import { readLinuxInputSupport } from './linuxInputHost';
+import { getInstanceConfig } from '../instance-runtime/config.js';
 import {
+  app,
   desktopCapturer,
   ipcMain,
   nativeImage,
@@ -11,8 +15,13 @@ import {
   type WebContents,
   type DesktopCapturerSource,
 } from 'electron';
+import { macPermissionAppPath } from '../../shared/macControlPermission.js';
 import { randomUUID } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { readdirSync } from 'node:fs';
 import { release as osRelease } from 'node:os';
+import { createLogger } from '../logger';
 import { loadDesktopIceServers } from './iceConfig';
 import { remoteCredentialHost } from './credentialHost';
 import {
@@ -38,7 +47,7 @@ import {
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
 import { DesktopCaptureWindow } from './captureWindow';
 import { denyAppDesktopCapture } from './capturePermissions';
-import { readDeviceLinkSettings, writeDeviceLinkSetting } from '../device-link/settings-store';
+import { readDeviceLinkSettings, writeDeviceLinkSetting } from '../device-link/settings-store.desktop';
 import { throwIpcError } from '../utils/ipcValidate';
 import { RemoteDesktopController, type DesktopControllerDeps } from './controller';
 import { getInputHandoffService } from '../input-handoff/service';
@@ -55,12 +64,13 @@ import {
   WAYLAND_DISPLAY_ID,
   selectPortalSource,
   waylandDesktopSize,
+  xwaylandSessionEvidence,
 } from './waylandCapture';
 import { encodeDesktopFrame, encodeNativeRelayFrame } from './frame';
 import { transferDesktopClipboard, transferDesktopClipboardContent } from './clipboard';
-import { NativeDesktopCapture } from './nativeCapture';
+import { NativeDesktopCapture, x11CaptureDisplay } from './nativeCapture';
 import { HyprlandCapture, supportsHyprlandCapture } from './hyprlandCapture';
-import { readLinuxDesktopInputSupport } from './linuxInput';
+import { readLinuxDesktopInputSupport, isX11Desktop } from './linuxInput';
 import { LinuxDesktopAudio, supportsLinuxAudio } from './linuxAudio';
 import { isLinuxDesktopUnlocked } from './linuxSessionLock';
 import { supportsLinuxClipboard, stopLinuxClipboardWriter } from './linuxClipboardNative';
@@ -72,11 +82,40 @@ import {
   linuxDisplay,
   linuxMonitor,
 } from './linuxDesktop';
-import { readLinuxCursorSupport } from './linuxCapture';
+import {
+  readLinuxCursorSupport,
+  readLinuxX11CaptureSupport,
+  readLinuxX11LocalOnlySupport,
+} from './linuxCapture';
+import {
+  gnomeDesktopReady,
+  gnomeDisplay,
+  gnomeMonitor,
+  gnomeMonitors,
+  isGnomeWaylandSession,
+  readGnomeDesktopSupport,
+} from './gnomeDesktop';
 import { LinuxDesktopMute, supportsLinuxMute } from './linuxMute';
 import { PrivacyScreen } from './privacyScreen';
+import {
+  coverDesktopLockFailure,
+  coverRemoteDesktopExit,
+  displayNeededForWork,
+  hostAwayAfterMs,
+  isAwayCoverUp,
+  privacyScreenAvailable,
+  privacyScreenEnabled,
+  setLinuxPrivacyAvailable,
+  supportsRemoteExitPrivacy,
+  WINDOWS_PRIVACY_SCREEN_ENABLED,
+} from './awayGuardService';
 import { ControlledOverlay } from './controlledOverlay';
-import { LinuxPrivacyScreen, supportsLinuxPrivacy, prepareLinuxPrivacy } from './linuxPrivacy';
+import {
+  LinuxPrivacyScreen,
+  prepareLinuxPrivacy,
+  readLinuxPhysicalIdleMs,
+  supportsLinuxPrivacy,
+} from './linuxPrivacy';
 import { LinuxWindowActions, supportsOmarchyMenu } from './linuxWindowActions';
 import { systemAudioMuteGuard } from '../voice-input/SystemAudioMuteGuard.js';
 import {
@@ -87,8 +126,9 @@ import {
 import {
   DesktopInputHost,
   readDesktopDisplayModes,
+  isEditableDesktopPoint,
   setDesktopDisplayMode,
-  readDesktopInputPermission,
+  readDesktopInputAccess,
   resolveDesktopInputBinary,
   readDesktopLockState,
   lockDesktopScreen,
@@ -96,36 +136,51 @@ import {
 } from './inputHost';
 import { getDeepLinkMainWindow } from '../deepLink';
 import { RemoteDesktopPermissionsService } from './permissions';
+import { LiveScreenRetirement, LiveScreenSession, type LiveScreenProvider } from './liveScreen';
 import {
   MAC_ACCESSIBILITY_SETTINGS_URL,
   MAC_SCREEN_RECORDING_SETTINGS_URL,
 } from '../computer-permission-guide/request';
 
+const log = createLogger('remote-desktop');
+const runMacOpen = promisify(execFile);
+
+// Local settings only: why remote keyboard and mouse are still missing on
+// macOS 27.3 when the person allowed Cindy to control chosen apps only.
+let inputChosenAppsOnly = false;
 const permissions = new RemoteDesktopPermissionsService({
   required: process.platform === 'darwin',
   screen: () => {
     const status = systemPreferences.getMediaAccessStatus('screen');
     return status === 'granted' ? 'granted' : status === 'unknown' ? 'unknown' : 'missing';
   },
-  accessibility: readDesktopInputPermission,
-  request: async (permission, isCurrent, signal) => {
-    if (permission === 'accessibility') await requestDesktopInputPermission(isCurrent, signal);
-    else
-      await enumerateDesktopSources(
-        () =>
-          desktopCapturer.getSources({
-            types: ['screen'],
-            thumbnailSize: { width: 0, height: 0 },
-          }),
-        REMOTE_DESKTOP_OFFER_BUDGET.sourcesMs,
-      );
+  accessibility: async () => {
+    const access = await readDesktopInputAccess('postEvents');
+    inputChosenAppsOnly = access.chosenAppsOnly === true;
+    return access.status;
   },
-  openSettings: (permission) =>
-    shell.openExternal(
-      permission === 'screenRecording'
-        ? MAC_SCREEN_RECORDING_SETTINGS_URL
-        : MAC_ACCESSIBILITY_SETTINGS_URL,
-    ),
+  request: async (permission, isCurrent, signal) => {
+    if (permission === 'accessibility') return requestDesktopInputPermission(isCurrent, signal, 'postEvents');
+    await enumerateDesktopSources(
+      () =>
+        desktopCapturer.getSources({
+          types: ['screen'],
+          thumbnailSize: { width: 0, height: 0 },
+        }),
+      REMOTE_DESKTOP_OFFER_BUDGET.sourcesMs,
+    );
+    return systemPreferences.getMediaAccessStatus('screen') === 'granted';
+  },
+  openSettings: async (permission, separateWindow) => {
+    const url = permission === 'screenRecording' ? MAC_SCREEN_RECORDING_SETTINGS_URL : MAC_ACCESSIBILITY_SETTINGS_URL;
+    if (separateWindow) {
+      // Open a separate system-owned settings window without interacting with
+      // another pane's pending edits. Fixed app and URL, no shell interpolation.
+      await runMacOpen('/usr/bin/open', ['-n', '-b', 'com.apple.systempreferences', url], { timeout: 5000 });
+      return;
+    }
+    await shell.openExternal(url);
+  },
   showGuide: () => {
     const window = getDeepLinkMainWindow();
     if (window && !window.isDestroyed()) {
@@ -174,12 +229,60 @@ const linuxAudio = new LinuxDesktopAudio();
 const linuxMute = new LinuxDesktopMute();
 const linuxWindows = new LinuxWindowActions();
 const nativeWayland = () => wayland() && supportsHyprlandCapture();
-const portalWayland = () => wayland() && !nativeWayland();
+/** X11 sessions show the remote pointer as the viewer's own cursor when the
+ * native root capture is ready and the display's geometry is unambiguous. */
+const x11CursorCapture = async (displayId?: string) =>
+  isX11Desktop() &&
+  (await readLinuxX11CaptureSupport()) &&
+  (displayId === undefined || x11CaptureDisplay(displayId) !== null);
+/** GNOME Shell's own screen-cast/remote-desktop APIs replace the portal picker
+ * once their probe succeeds (gnomeDesktop.ts). */
+const gnomeWayland = () => wayland() && !nativeWayland() && gnomeDesktopReady();
+const portalWayland = () => wayland() && !nativeWayland() && !gnomeWayland();
+// #9712: diagnostics only. The logged facts are fixed labels and wayland-N socket names.
+const displayBackendLog = createLogger('remote-desktop:display-backend');
+let xwaylandChecked = false;
+function warnIfXWaylandCapture(): void {
+  // Hyprland's native screencopy talks to the compositor, not to XWayland's root window.
+  if (xwaylandChecked || process.platform !== 'linux' || nativeWayland()) return;
+  xwaylandChecked = true;
+  let entries: string[] = [];
+  try {
+    entries = readdirSync(process.env.XDG_RUNTIME_DIR || `/run/user/${process.getuid?.()}`);
+  } catch {
+    // No runtime dir: rely on the environment signals alone.
+  }
+  // Electron resolves the Ozone platform at startup and writes it back to its own switches.
+  const evidence = xwaylandSessionEvidence(
+    app.commandLine.getSwitchValue('ozone-platform'),
+    process.env,
+    entries,
+  );
+  if (!evidence.length) return;
+  displayBackendLog.warn(
+    `Electron is running on X11 (XWayland) inside a Wayland session (${evidence.join(', ')}). ` +
+      'Remote desktop capture will likely show a black screen with only the pointer. ' +
+      'Start Cindy from the Wayland session environment (XDG_SESSION_TYPE=wayland and ' +
+      'WAYLAND_DISPLAY set) or with --ozone-platform=wayland.',
+  );
+}
 // Privacy masks and the controlled-desktop overlay share one capture filter.
 let privacyExcluded: number[] = [];
 let overlayExcluded: number[] = [];
+let awayExcluded: number[] = [];
 const applyExcludedWindows = () =>
-  nativeCapture.setExcludedWindows([...privacyExcluded, ...overlayExcluded]);
+  nativeCapture.setExcludedWindows([...privacyExcluded, ...overlayExcluded, ...awayExcluded]);
+export function setAwayCaptureExcludedWindows(ids: number[]): void {
+  awayExcluded = ids;
+  applyExcludedWindows();
+}
+async function linuxInputSupported(): Promise<boolean> {
+  // The managed cloud X11 desktop keeps its guarded X11 input adapter.
+  if (!wayland() && getInstanceConfig()) return readLinuxInputSupport();
+  // Portal-selected Wayland surfaces must remain view-only.
+  if (gnomeWayland()) return readLinuxDesktopInputSupport(true);
+  return (nativeWayland() || isX11Desktop()) && (await readLinuxDesktopInputSupport());
+}
 // While the phone shows picture-in-picture the input helper is stopped on purpose;
 // the local exit confirmation then has nothing to pause, and cancelling it must not
 // bring remote control back.
@@ -197,20 +300,42 @@ const privacyScreen = new PrivacyScreen(
   },
   pauseInputForPrivacy,
 );
+let linuxAwayAwake: number | null = null;
+const setLinuxAwayAwake = (awake: boolean) => {
+  if (awake && linuxAwayAwake === null)
+    linuxAwayAwake = powerSaveBlocker.start('prevent-display-sleep');
+  else if (!awake && linuxAwayAwake !== null) {
+    powerSaveBlocker.stop(linuxAwayAwake);
+    linuxAwayAwake = null;
+  }
+};
 const linuxPrivacy = new LinuxPrivacyScreen(
   () => remoteDesktop.stopPrivacyByUser(),
   pauseInputForPrivacy,
+  undefined,
+  setLinuxAwayAwake,
+  displayNeededForWork,
 );
+export function isLinuxAwayCoverUp(): boolean {
+  return linuxPrivacy.inputShielded;
+}
+
 const supportsPrivacyScreen =
   (process.platform === 'darwin' &&
     typeof process.getSystemVersion === 'function' &&
     Number(process.getSystemVersion().split('.')[0]) >= 14) ||
   (process.platform === 'win32' && Number(osRelease().split('.')[2]) >= 19041);
 // Windows honours content protection in capture; modern macOS capture needs the
-// explicit filter. Same platform floor as the privacy masks.
+// explicit filter. Same platform floor as the privacy masks. X11 shows it only
+// while the native helper rebuilds its area from the windows beneath (x11.h).
+/** The current offer's video is X11 native capture that keeps local-only
+ * windows out. Every other Linux capture contains whatever is on screen, so
+ * the overlay stays off there; GNOME and portal desktops show their own
+ * screen-sharing indicators. */
+let x11LocalCapture = false;
 const controlledOverlay = new ControlledOverlay(
   (ids) => {
-    if (process.platform !== 'darwin') return;
+    if (process.platform === 'win32') return;
     overlayExcluded = ids;
     applyExcludedWindows();
   },
@@ -234,8 +359,15 @@ let privacyRequested = false;
 function syncControlledOverlay(): void {
   const state = remoteDesktop.state;
   const displayId = remoteDesktop.displayId;
+  // A new lease decides again in its own offer.
+  if (!state) x11LocalCapture = false;
+  // A phone using a plugin screen controls nothing on this desktop.
   controlledOverlay.update(
-    supportsPrivacyScreen && state && displayId && !privacyRequested
+    (supportsPrivacyScreen || x11LocalCapture) &&
+      state &&
+      displayId &&
+      !liveSession &&
+      !privacyRequested
       ? {
           displayId,
           controlling: state.controlling,
@@ -265,6 +397,9 @@ const supportsSystemAudio = () =>
       return major > 14 || (major === 14 && minor >= 2);
     })());
 let videoLease: string | null = null;
+/** The plugin screen the current live screen lease shows; null for desktop leases. */
+let liveSession: LiveScreenSession | null = null;
+const liveRetirement = new LiveScreenRetirement();
 function setVideoLease(lease: string | null): void {
   videoLease = lease;
 }
@@ -355,6 +490,7 @@ function stopVideo(): void {
   setVideoLease(null);
   host = null;
   preparingOffer = false;
+  liveSession?.disconnect();
   captureWindow.dispose();
   if (pending) {
     clearTimeout(pending.timer);
@@ -386,6 +522,9 @@ async function offer(
   attemptId?: string,
 ): Promise<string> {
   if (pending || preparingOffer) throw new Error('DESKTOP_VIDEO_BUSY');
+  if (remoteDesktop.liveScreen(lease.lease))
+    return liveScreenOffer(lease, sdp, settings, attemptId);
+  warnIfXWaylandCapture();
   if (portalWayland()) {
     if (lease.display.id !== WAYLAND_DISPLAY_ID) throw new Error('DESKTOP_DISPLAY_MISSING');
     await ensurePortalCapture(lease.lease);
@@ -443,8 +582,17 @@ async function offer(
     let source: DesktopCapturerSource | null = null;
     const hyprland = nativeWayland();
     if (hyprland && lease.display.id !== WAYLAND_DISPLAY_ID) await linuxMonitor(lease.display.id);
-    let nativeAvailable = process.platform === 'darwin' || hyprland;
-    if (!hyprland && !handoff) {
+    // GNOME records the selected monitor itself; never enumerate (and so never
+    // open) the portal picker for it.
+    const gnome = gnomeWayland();
+    if (gnome) await gnomeMonitor(lease.display.id);
+    // Only a cursor-overlay viewer moves X11 off Chromium's capture; older
+    // viewers keep the embedded pointer and their existing timing.
+    const x11Native =
+      !hyprland && !handoff && cursorOverlay === true && (await x11CursorCapture(lease.display.id));
+    const x11Local = x11Native && (await readLinuxX11LocalOnlySupport());
+    let nativeAvailable = process.platform === 'darwin' || hyprland || gnome || x11Native;
+    if (!hyprland && !gnome && !handoff) {
       nativeAvailable ||=
         process.platform === 'win32' && (await readWindowsDesktopSupport()) === 'ready';
       try {
@@ -488,9 +636,16 @@ async function offer(
       (cursorOverlay === true &&
         (process.platform === 'darwin' ||
           (process.platform === 'win32' && nativeAvailable) ||
+          x11Native ||
+          gnome ||
           (hyprland && (await readLinuxCursorSupport()))));
     if (!current() || host !== currentHost || currentHost.isDestroyed())
       throw new Error('DESKTOP_LEASE_EXPIRED');
+    if (process.platform === 'linux') {
+      // Before capture starts: a Chromium-captured offer removes the overlay first.
+      x11LocalCapture = x11Local;
+      syncControlledOverlay();
+    }
     nativeSettings = settings;
     setVideoLease(lease.lease);
     if (hyprland && settings?.audio) {
@@ -507,7 +662,7 @@ async function offer(
         op: 'offer',
         sourceId: source?.id,
         nativeCapture: nativeAvailable,
-        continuousNativeCapture: hyprland,
+        continuousNativeCapture: hyprland || gnome,
         nativeAudio: hyprland && settings?.audio === true,
         cursorOverlay: nativeOverlay,
         lease: lease.lease,
@@ -527,6 +682,126 @@ async function offer(
   } finally {
     if (generation === offerGeneration) preparingOffer = false;
   }
+}
+
+/**
+ * A live screen lease's video: the plugin's frame stream decoded in the capture
+ * page. No screen source, no native capture and no audio are involved.
+ */
+async function liveScreenOffer(
+  lease: RemoteDesktopLease,
+  sdp: string,
+  settings?: RemoteDesktopVideoSettings,
+  attemptId?: string,
+): Promise<string> {
+  if (settings?.audio) throw new Error('DESKTOP_AUDIO_UNAVAILABLE');
+  const session = liveSession;
+  if (!session) throw new Error('DESKTOP_SCREEN_ENDED');
+  stopVideo();
+  preparingOffer = true;
+  const generation = offerGeneration;
+  const current = () =>
+    generation === offerGeneration &&
+    remoteDesktop.hasLease(lease.lease) &&
+    liveSession === session;
+  try {
+    const ready = captureWindow.start();
+    host = captureWindow.contents;
+    const currentHost = host;
+    const [, iceServers] = await Promise.all([ready, loadDesktopIceServers(), session.connect()]);
+    if (!current() || host !== currentHost || !currentHost || currentHost.isDestroyed())
+      throw new Error('DESKTOP_LEASE_EXPIRED');
+    setVideoLease(lease.lease);
+    videoAttempt = attemptId;
+    const result = await requestHost(
+      {
+        id: randomUUID(),
+        op: 'offer',
+        liveScreen: true,
+        lease: lease.lease,
+        sdp,
+        settings,
+        background: remoteDesktop.isBackgroundViewing(lease.lease),
+        attemptId,
+        iceServers,
+      },
+      REMOTE_DESKTOP_OFFER_BUDGET.hostMs,
+    );
+    if (typeof result !== 'string') throw new Error('DESKTOP_VIDEO_UNAVAILABLE');
+    return result;
+  } catch (error) {
+    if (generation === offerGeneration) stopVideo();
+    throw error;
+  } finally {
+    if (generation === offerGeneration) preparingOffer = false;
+  }
+}
+
+/** Plugin live screens, injected by registration so remote desktop never loads the plugin host. */
+let liveScreenProvider: (() => LiveScreenProvider) | null = null;
+function liveScreenSource(): LiveScreenProvider {
+  if (!liveScreenProvider) throw new Error('DESKTOP_SCREEN_UNAVAILABLE');
+  return liveScreenProvider();
+}
+
+/** Plugin screens for remote desktop; one session at a time, owned by the lease. */
+function liveScreenDeps(): Pick<DesktopControllerDeps, 'liveScreens'> {
+  return {
+    liveScreens: {
+      list: () => liveScreenSource().list(),
+      open: async (plugin, id, ended, identity) => {
+        const provider = liveScreenSource();
+        // Keep the expected logical source on every operation, including reconnect/cleanup.
+        const source = identity === undefined ? provider : {
+          list: () => provider.list(),
+          open: (p: string, key: string) => provider.open(p, key, identity),
+          input: (p: string, key: string, events: Parameters<typeof provider.input>[2]) => provider.input(p, key, events, identity),
+          control: (p: string, key: string, options: Parameters<typeof provider.control>[2]) => provider.control(p, key, options, identity),
+          close: (p: string, key: string) => provider.close(p, key, identity),
+        };
+        const listed = (await source.list()).find(
+          (item) => item.plugin === plugin && item.id === id && (identity === undefined || item.pluginIdentity === identity),
+        );
+        if (!listed) throw new Error('DESKTOP_SCREEN_NOT_FOUND');
+        if (listed.state !== 'running') throw new Error('DESKTOP_SCREEN_NOT_RUNNING');
+        const previous = liveSession;
+        liveSession = null;
+        liveRetirement.retire(previous);
+        await liveRetirement.settled();
+        const opened = await source.open(plugin, id);
+        const { width, height, ...descriptor } = opened.screen;
+        const screen = { plugin, id, ...(identity === undefined ? {} : {pluginIdentity:identity}), name: listed.name, ...descriptor };
+        const session = new LiveScreenSession(
+          plugin,
+          id,
+          screen,
+          { width, height },
+          opened,
+          source,
+          () => {
+            if (liveSession === session) liveSession = null;
+            // The session closed itself: it still has to finish before a reopen.
+            liveRetirement.retire(session);
+            ended();
+          },
+        );
+        liveSession = session;
+        return {
+          screen,
+          width,
+          height,
+          shape: () => session.shape,
+          watchShape: (listener) => session.onShape(listener),
+        };
+      },
+      close: () => {
+        const session = liveSession;
+        liveSession = null;
+        liveRetirement.retire(session);
+        syncControlledOverlay();
+      },
+    },
+  };
 }
 
 /** One bounded command to the existing capture owner; never reset the shared device link. */
@@ -584,7 +859,11 @@ async function ice(request: RemoteDesktopIceRequest): Promise<RemoteDesktopIceRe
   return parseDesktopIceReply(result);
 }
 
-export async function requestRemoteDesktop(peer: string, value: unknown): Promise<unknown> {
+export async function requestRemoteDesktop(
+  peer: string,
+  value: unknown,
+  source: 'relay' | 'media' = 'relay',
+): Promise<unknown> {
   const settings = readDeviceLinkSettings();
   if (
     !settings.remoteControlEnabled ||
@@ -620,8 +899,8 @@ export async function requestRemoteDesktop(peer: string, value: unknown): Promis
     typeof value === 'object' &&
     'op' in value &&
     value.op === 'credential'
-    ? remoteCredentialHost.request(peer, value, (body) => remoteDesktop.request(peer, body))
-    : remoteDesktop.request(peer, value);
+    ? remoteCredentialHost.request(peer, value, (body) => remoteDesktop.request(peer, body, source))
+    : remoteDesktop.request(peer, value, source);
 }
 
 /**
@@ -706,9 +985,16 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
     const settings = readDeviceLinkSettings();
     const enabled = settings.remoteDesktopEnabled && settings.remoteControlEnabled;
     const viewerDisplay = enabled && (await viewerDisplaySupported());
+    const x11Clipboard = enabled && await supportsManagedX11Clipboard();
     const linuxDisplays =
       enabled && nativeWayland() && supportsLinuxDisplay()
         ? (await linuxMonitors()).map(linuxDisplay)
+        : null;
+    if (enabled && isGnomeWaylandSession()) await readGnomeDesktopSupport();
+    // Hyprland-only extras (window actions, workspaces, modes) stay keyed to linuxDisplays.
+    const gnomeDisplays =
+      enabled && gnomeWayland()
+        ? (await gnomeMonitors().catch(() => [])).map(gnomeDisplay)
         : null;
     return {
       version: 1,
@@ -718,20 +1004,25 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
       cursorOverlay:
         process.platform === 'darwin' ||
         (process.platform === 'win32' && windowsAvailable) ||
-        Boolean(enabled && nativeWayland() && (await readLinuxCursorSupport())),
-      lockOnExit: process.platform === 'darwin' || supportsLinuxLock(),
+        Boolean(enabled && nativeWayland() && (await readLinuxCursorSupport())) ||
+        Boolean(enabled && gnomeWayland()) ||
+        Boolean(enabled && (await x11CursorCapture())),
+      lockOnExit:
+        process.platform === 'darwin' ||
+        (process.platform === 'win32' && WINDOWS_PRIVACY_SCREEN_ENABLED) ||
+        supportsLinuxLock(),
       clipboardContent:
         process.platform === 'darwin' ||
         process.platform === 'win32' ||
-        (supportsLinuxLock() && supportsLinuxClipboard()),
+        (supportsLinuxLock() && supportsLinuxClipboard()) || x11Clipboard,
       clipboardSync:
         process.platform === 'darwin' ||
         process.platform === 'win32' ||
-        (supportsLinuxLock() && supportsLinuxClipboard()),
+        (supportsLinuxLock() && supportsLinuxClipboard()) || x11Clipboard,
       clipboardInline:
         process.platform === 'darwin' ||
         process.platform === 'win32' ||
-        (supportsLinuxLock() && supportsLinuxClipboard()),
+        (supportsLinuxLock() && supportsLinuxClipboard()) || x11Clipboard,
       privacyScreen:
         supportsPrivacyScreen || (enabled && nativeWayland() && (await supportsLinuxPrivacy())),
       hostMute:
@@ -739,7 +1030,7 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
       clipboardText:
         process.platform === 'darwin' ||
         process.platform === 'win32' ||
-        (supportsLinuxLock() && supportsLinuxClipboard()),
+        (supportsLinuxLock() && supportsLinuxClipboard()) || x11Clipboard,
       videoSettings: true,
       trickleIce: true,
       backgroundViewing: true,
@@ -747,22 +1038,24 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
       viewerDisplay,
       viewerDisplayRestore: viewerDisplay,
       channelRequests: true,
+      signalingContinuity: true,
       viewerHidden: true,
       // Native canvas capture can follow a display change without a new offer.
       liveDisplaySwitch:
         process.platform === 'darwin' ||
         (process.platform === 'win32' && windowsAvailable) ||
-        Boolean(enabled && nativeWayland()),
+        Boolean(enabled && (nativeWayland() || gnomeWayland())),
       displayModes: process.platform === 'darwin' || Boolean(linuxDisplays?.length),
       enabled,
       canControl:
         process.platform === 'darwin' ||
         process.platform === 'win32' ||
-        (enabled && nativeWayland() && (await readLinuxDesktopInputSupport())),
+        (enabled && (await linuxInputSupported())),
       platform: process.platform,
       ...(enabled ? { permissions: await permissions.read() } : {}),
       displays:
         linuxDisplays ??
+        gnomeDisplays ??
         (enabled && wayland()
           ? // PipeWire exposes the user's selection, not a mapping to Electron's
             // physical display IDs. Never label an arbitrary selected screen as monitor 1.
@@ -798,13 +1091,22 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
       if (!remoteDesktop.hasLease(lease)) return null;
       return encodeNativeRelayFrame(frame, (jpeg) => nativeImage.createFromBuffer(jpeg));
     }
+    if (gnomeWayland()) {
+      if (!lease || !remoteDesktop.hasLease(lease)) throw new Error('DESKTOP_LEASE_EXPIRED');
+      if (preparingOffer) return null;
+      const frame = await nativeCapture.frame(displayId, cursorOverlay === true, nativeSettings);
+      if (!remoteDesktop.hasLease(lease)) return null;
+      return encodeNativeRelayFrame(frame, (jpeg) => nativeImage.createFromBuffer(jpeg));
+    }
     if (portalWayland()) {
       if (displayId !== WAYLAND_DISPLAY_ID || !lease) throw new Error('DESKTOP_DISPLAY_MISSING');
       if (pending || preparingOffer) return null;
       await ensurePortalCapture(lease);
       if (pending || preparingOffer) return null;
       const result = await requestHost({ id: randomUUID(), op: 'frame', lease }, 2000);
-      return typeof result === 'string' ? result : null;
+      return encodeNativeRelayFrame(typeof result === 'string' ? result : null, (jpeg) =>
+        nativeImage.createFromBuffer(jpeg),
+      );
     }
     // offer() cancels the previous read before acquiring the capture owner.
     // Leave its required first frame uncontested; relay polling resumes afterwards.
@@ -822,6 +1124,17 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
         nativeSettings,
       );
       return encodeNativeRelayFrame(frame, (jpeg) => nativeImage.createFromBuffer(jpeg));
+    }
+    if (cursorOverlay === true && (await x11CursorCapture(displayId))) {
+      const frame = await nativeCapture.frame(displayId, true, nativeSettings);
+      // A failed helper falls back to the screenshot below, pointer included.
+      if (frame) return encodeNativeRelayFrame(frame, (jpeg) => nativeImage.createFromBuffer(jpeg));
+    }
+    if (process.platform === 'linux' && overlayExcluded.length) {
+      // The screenshot would contain the local-only overlay: remove it first.
+      x11LocalCapture = false;
+      syncControlledOverlay();
+      return null;
     }
     const available = await sources(true).catch((error) => {
       if (error instanceof Error && error.message === 'DESKTOP_VIDEO_TIMEOUT') return [];
@@ -868,7 +1181,7 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
   },
   stopPrivacyScreen: () => {
     privacyScreen.stop();
-    linuxPrivacy.stop();
+    linuxPrivacy.stopSession();
     privacyRequested = false;
     // Called from inside lease teardown; read controller state afterwards.
     queueMicrotask(syncControlledOverlay);
@@ -889,8 +1202,11 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
       : systemAudioMuteGuard.restore('remote-desktop'),
   viewerHidden: setViewerHidden,
   videoBackground: setVideoBackground,
+  editableAt: process.platform === 'darwin' ? isEditableDesktopPoint : undefined,
   displayModes: readDesktopDisplayModes,
   displayPresent: async (displayId) => {
+    if (gnomeWayland())
+      return (await gnomeMonitors()).some((m) => gnomeDisplay(m).id === displayId);
     if (nativeWayland()) {
       const monitors = await linuxMonitors();
       return displayId === WAYLAND_DISPLAY_ID
@@ -916,20 +1232,23 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
   },
   createViewerDisplay,
   ...(process.platform === 'darwin' ? handoffWindowDeps() : {}),
+  ...liveScreenDeps(),
   startInput: async (displayId, window) => {
     // A portal-selected window is not the whole compositor coordinate space.
     // Never allow a forged control request to drive that view-only fallback.
-    if (
-      process.platform === 'linux' &&
-      (!nativeWayland() || !(await readLinuxDesktopInputSupport()))
-    )
+    if (process.platform === 'linux' && !(await linuxInputSupported()))
       throw new Error('DESKTOP_INPUT_UNSUPPORTED');
     if (window) await input.start(displayId, { windowId: window.windowId, pid: window.pid });
     else await input.start(displayId);
   },
   input: (events) => {
+    // The controller admits touches and buttons only on a live screen lease.
+    if (liveSession) {
+      liveSession.input(events);
+      return;
+    }
     try {
-      input.input(events);
+      return input.input(events);
     } catch (error) {
       // The input host refused before injecting anything (helper gone, or this
       // lease's display is unavailable). Release control so the host and the
@@ -939,15 +1258,54 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
       throw error;
     }
   },
-  stopInput: () => input.stop(),
+  stopInput: () => {
+    input.stop();
+    liveSession?.release();
+  },
   releaseInput: () => input.release(),
   pauseVideo,
   resumeVideo,
-  ...(process.platform === 'darwin' || supportsLinuxLock()
+  // Windows locking is implemented but off until verified on Windows hardware.
+  ...(process.platform === 'darwin' ||
+  (process.platform === 'win32' && WINDOWS_PRIVACY_SCREEN_ENABLED) ||
+  supportsLinuxLock()
     ? {
         lockScreen: async (isCurrent: () => boolean, signal: AbortSignal) => {
           await input.release();
           await lockDesktopScreen(isCurrent, signal);
+        },
+      }
+    : {}),
+  ...(supportsRemoteExitPrivacy() ? { coverLockFailure: coverDesktopLockFailure } : {}),
+  // Idle viewers follow this computer's own away time (docs/product-rules/privacy-screen.md).
+  ...(supportsRemoteExitPrivacy() || nativeWayland()
+    ? {
+        // Checked per call: Hyprland's backend becomes available asynchronously.
+        hostIdle: () => (!privacyScreenAvailable() ? null : {
+            // Before the away guard reads the system times, use its own fallback.
+            awayAfterMs: hostAwayAfterMs() ?? 10 * 60_000,
+            keepWhileWorking: privacyScreenEnabled() && displayNeededForWork(),
+          }),
+        exitCoverUp: () => isAwayCoverUp() || linuxPrivacy.inputShielded,
+        exitProtection: (): 'privacy-screen' | 'lock' | undefined =>
+          !privacyScreenAvailable() ? undefined : privacyScreenEnabled() ? 'privacy-screen' : 'lock',
+      }
+    : {}),
+  ...(supportsRemoteExitPrivacy() || nativeWayland()
+    ? {
+        protectOnExit: async (isCurrent: () => boolean, signal: AbortSignal) => {
+          await input.release();
+          if (!isCurrent() || signal.aborted) throw new Error('DESKTOP_LEASE_EXPIRED');
+          try {
+            // 「用隐私屏代替锁屏」 off on this computer: a protected exit is a real lock.
+            if (!privacyScreenEnabled()) return await lockDesktopScreen(isCurrent, signal);
+            if (process.platform === 'linux') await linuxPrivacy.coverOnExit(isCurrent);
+            else await coverRemoteDesktopExit();
+            return 'covered';
+          } catch (error) {
+            log.warn('Exit privacy cover unavailable; falling back to screen lock', error);
+            await lockDesktopScreen(isCurrent, signal);
+          }
         },
       }
     : {}),
@@ -970,8 +1328,10 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
 export function registerRemoteDesktopIpc(
   isVoiceInputOwner?: Parameters<typeof denyAppDesktopCapture>[1],
   controllers?: RemoteDesktopControllerDirectory,
+  liveScreens?: () => LiveScreenProvider,
 ): void {
   controllerDirectory = controllers ?? null;
+  liveScreenProvider = liveScreens ?? null;
   denyAppDesktopCapture(session.defaultSession, isVoiceInputOwner);
   const timer = setInterval(() => {
     remoteDesktop.tick();
@@ -985,9 +1345,37 @@ export function registerRemoteDesktopIpc(
     permissions.dismiss();
     remoteDesktop.stop(undefined, undefined, 'shutdown');
   });
+  onQuit('linux-privacy-lock', () => linuxPrivacy.lockOnExit(), 'async');
   onQuit('remote-desktop-restore', () => remoteDesktop.stopAndRestore(), 'async');
   const linuxLayoutChanged = () => {
-    if (!nativeWayland() || remoteDesktop.changingDisplay || !remoteDesktop.displayId) return;
+    if (remoteDesktop.changingDisplay || !remoteDesktop.displayId || liveSession) return;
+    if (isX11Desktop()) {
+      // Another monitor moving changes the X root origin too. Drop queued input,
+      // and restart root capture so its next frame uses the new rectangle.
+      void remoteDesktop.releaseControl();
+      nativeCapture.stop();
+      return;
+    }
+    if (gnomeWayland()) {
+      const generation = offerGeneration,
+        id = remoteDesktop.displayId;
+      // The input stream and capture size are bound at start; rebuild both.
+      void remoteDesktop.releaseControl();
+      nativeCapture.stop();
+      void gnomeMonitor(id)
+        .then((monitor) => {
+          if (generation !== offerGeneration || remoteDesktop.changingDisplay) return;
+          const display = gnomeDisplay(monitor);
+          if (!remoteDesktop.displayGeometryMatches(id, display.width, display.height))
+            remoteDesktop.stop(undefined, undefined, 'display-changed');
+        })
+        .catch(() => {
+          if (generation === offerGeneration && !remoteDesktop.changingDisplay)
+            remoteDesktop.stop(undefined, undefined, 'display-failed');
+        });
+      return;
+    }
+    if (!nativeWayland()) return;
     const generation = offerGeneration,
       id = remoteDesktop.displayId;
     // The virtual pointer covers the entire layout: even another output moving
@@ -1055,7 +1443,9 @@ export function registerRemoteDesktopIpc(
     linuxAudio.stop(); // Clear buffered PCM as well as pixels across lock transitions.
     if (remoteDesktop.state?.controlling) {
       try {
-        input.input([{ kind: 'release' }]);
+        // A live screen lease never starts the desktop input helper.
+        if (liveSession) liveSession.release();
+        else input.input([{ kind: 'release' }]);
       } catch {
         remoteDesktop.stop(undefined, undefined, 'input-failed');
       }
@@ -1146,6 +1536,25 @@ export function registerRemoteDesktopIpc(
       throwIpcError('PERMISSION_DENIED', 'Desktop audio unavailable');
     }
   });
+  ipcMain.handle(
+    DESKTOP_LOCAL.LIVE_SCREEN_FRAMES,
+    async (event, lease: unknown, keyframe: unknown) => {
+      captureWindow.assertSender(event);
+      const session = liveSession;
+      if (
+        event.sender !== host ||
+        typeof lease !== 'string' ||
+        lease !== videoLease ||
+        typeof keyframe !== 'boolean' ||
+        !session ||
+        !remoteDesktop.liveScreen(lease)
+      )
+        throwIpcError('PERMISSION_DENIED', 'Invalid live screen lease');
+      const messages = await session.pull(1000, keyframe);
+      if (liveSession !== session || lease !== videoLease) return null;
+      return messages;
+    },
+  );
   ipcMain.handle(DESKTOP_LOCAL.VIEW_HEARTBEAT, (event, lease: unknown) => {
     captureWindow.assertSender(event);
     if (event.sender !== host || typeof lease !== 'string' || lease !== videoLease)
@@ -1156,12 +1565,11 @@ export function registerRemoteDesktopIpc(
     assertTrustedAppRendererEvent(event);
     if (checkWindowsSupport !== undefined && typeof checkWindowsSupport !== 'boolean')
       throwIpcError('INVALID_PARAMS', 'Invalid Windows support status request');
+    const enabled = readDeviceLinkSettings().remoteDesktopEnabled;
     return {
-      enabled: readDeviceLinkSettings().remoteDesktopEnabled,
-      active: remoteDesktop.state,
-      overlay: controlledOverlay.visible,
+      enabled,
       permissionGuide: permissions.guideOpen,
-      ...(checkWindowsSupport === true
+      ...(enabled && checkWindowsSupport === true
         ? { windowsSupport: await readWindowsDesktopSupport() }
         : {}),
     };
@@ -1198,9 +1606,18 @@ export function registerRemoteDesktopIpc(
       await permissions.showIfNeeded(() => readDeviceLinkSettings().remoteDesktopEnabled);
     }
   });
-  ipcMain.handle(DESKTOP_LOCAL.PERMISSIONS, (event) => {
+  ipcMain.handle(DESKTOP_LOCAL.PERMISSIONS, async (event) => {
     assertTrustedAppRendererEvent(event);
-    return permissions.read();
+    const status = await permissions.read();
+    // Finder can distinguish identically named official and personal installs.
+    // Never attach this local path to device-link permission replies.
+    const bundle = macPermissionAppPath(process.platform, process.execPath);
+    return {
+      ...status,
+      ...(bundle ? { appBundlePath: bundle } : {}),
+      ...(status.accessibility === 'missing' && inputChosenAppsOnly ? { accessibilityChosenAppsOnly: true } : {}),
+      separateWindowRetries: permissions.separateWindowRetries,
+    };
   });
   ipcMain.handle(DESKTOP_LOCAL.OPEN_PERMISSION, (event, permission: unknown) => {
     assertTrustedAppRendererEvent(event);
@@ -1382,7 +1799,7 @@ export function registerRemoteDesktopIpc(
           throw new Error('INVALID_REQUEST');
         const owner = remoteDesktop.state;
         if (!owner || !remoteDesktop.hasLease(lease)) throw new Error('DESKTOP_LEASE_EXPIRED');
-        return { ok: true, result: await requestRemoteDesktop(owner.peer, request) };
+        return { ok: true, result: await requestRemoteDesktop(owner.peer, request, 'media') };
       } catch (error) {
         // Business refusals are replies, not IPC failures: no error log per tap.
         return { ok: false, error: desktopErrorCode(error) };
@@ -1399,4 +1816,47 @@ function desktopErrorCode(error: unknown): string {
     message.match(/\b(?:DESKTOP|CREDENTIAL|REMOTE|ACCESS)_[A-Z_]{1,56}\b/)?.[0] ??
     'DESKTOP_REQUEST_FAILED'
   );
+}
+
+/**
+ * Hyprland's automatic privacy screen (docs/product-rules/privacy-screen.md): with
+ * 「用隐私屏代替锁屏」 on and work needing the screen, keep it awake and, once nobody has
+ * touched this computer for its away time (the compositor's idle time), adopt the same
+ * persistent compositor cover a remote exit uses. Touching it locks through the
+ * compositor. Without work, nothing is held and the system idles and locks by itself.
+ * Not verified on a real Hyprland session yet.
+ */
+export function startLinuxAwayCover(): void {
+  if (process.platform !== 'linux' || !nativeWayland()) return;
+  let loaded = false;
+  let busy = false;
+  const tick = async () => {
+    // A live session owns the compositor masks; its end decides the protection.
+    if (busy || linuxPrivacy.active || remoteDesktop.state) return;
+    const working = privacyScreenEnabled() && displayNeededForWork();
+    setLinuxAwayAwake(working);
+    if (!working) return;
+    busy = true;
+    try {
+      if (!loaded) {
+        await prepareLinuxPrivacy(() => true, true);
+        loaded = true;
+      }
+      const idle = await readLinuxPhysicalIdleMs();
+      if (idle === null || idle < (hostAwayAfterMs() ?? 10 * 60_000)) return;
+      await linuxPrivacy.coverOnExit(() => true);
+    } catch (error) {
+      log.warn('Hyprland away cover unavailable', error);
+      loaded = false;
+    } finally {
+      busy = false;
+    }
+  };
+  void supportsLinuxPrivacy().then((available) => {
+    setLinuxPrivacyAvailable(available);
+    if (!available) return;
+    const timer = setInterval(() => void tick(), 2000);
+    timer.unref();
+    onQuit('linux-away-cover', () => clearInterval(timer));
+  });
 }

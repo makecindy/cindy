@@ -16,13 +16,13 @@ export function botGroupAttachmentScope(groupId: string): string {
   return `bot-group:${groupId}`;
 }
 
-/** Draft key of a 话题's reply box; text only (thread replies carry no attachments). */
+/** Separate attachment scope and draft key for each 话题's reply box. */
 export function botGroupThreadDraftKey(groupId: string, rootId: string): string {
   return `${botGroupAttachmentScope(groupId)}:thread:${rootId}`;
 }
 
 /**
- * The group composer is a plain textarea, so its draft text is stored in the shared draft
+ * The group composer sends plain text even when long pastes are collapsed. Draft text is stored in the shared draft
  * store as one paragraph per line — a document the store understands (draft presence, owner
  * scoping) and that reads back to exactly the same text.
  */

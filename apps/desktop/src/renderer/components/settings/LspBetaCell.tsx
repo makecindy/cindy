@@ -15,13 +15,17 @@
  * 时已 evaluate, 工具列表已固化, 不会动态变化 — toast 文案明示。
  */
 
+import { additionalSettings } from './AdditionalSettings.settings-search';
+import { useSettingDefinition } from './useSettingDefinition';
 import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { Switch } from '@/components/ui/switch';
+import { SettingsRow } from '@/components/ui/settings-rows';
 import { toast } from '@/lib/toast';
 import { createLogger } from '@/lib/logger';
 import { useLspMode } from '@/hooks/useLspMode';
+import { withDefaultOverride, type DefaultOverrideReset } from './DefaultOverrideControls';
 
 const log = createLogger('LspBetaCell');
 
@@ -44,11 +48,7 @@ export function LspBetaCell() {
         );
       } catch (err) {
         log.warn('lspModeSet failed', err);
-        toast.error(
-          err instanceof Error
-            ? err.message
-            : t('settings.lspMode.toast.toggleFailed'),
-        );
+        toast.error(err instanceof Error ? err.message : t('settings.lspMode.toast.toggleFailed'));
         setEnabled(prev);
       } finally {
         setPending(false);
@@ -57,31 +57,42 @@ export function LspBetaCell() {
     [enabled, setEnabled, t],
   );
 
-  const title = t('settings.lspMode.cell.title');
-  const description = t('settings.lspMode.cell.description');
+  return <LspBetaCellView enabled={enabled} pending={pending} handleToggle={handleToggle} />;
+}
+
+/** Shared native view. Local and cloud controllers provide the same state/actions. */
+export function LspBetaCellView({
+  enabled,
+  pending,
+  handleToggle,
+  reset,
+}: {
+  enabled: boolean;
+  pending: boolean;
+  handleToggle: (next: boolean) => Promise<void>;
+  /** Optional: a saved override and how to clear it (the cloud page). */
+  reset?: DefaultOverrideReset;
+}) {
+  const { t } = useTranslation();
+  const setting = useSettingDefinition(additionalSettings.lsp);
+  const title = setting.title;
+  const description = setting.description;
 
   return (
-    <div className="flex flex-col gap-3 px-4 py-4">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex min-w-0 flex-col gap-1">
-          <p
-            className="text-13 font-medium text-[var(--settings-section-sublabel)]"
-            style={{ letterSpacing: '0.12px' }}
-          >
-            {title}
-          </p>
-          <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-            {description}
-          </p>
-        </div>
-
+    <SettingsRow
+      {...setting.anchorProps}
+      title={title}
+      hint={description}
+      trailing={withDefaultOverride(
         <Switch
+          {...setting.controlProps}
           checked={enabled}
           disabled={pending}
           onCheckedChange={(v) => void handleToggle(v)}
           aria-label={t('settings.lspMode.toggleAria')}
-        />
-      </div>
-    </div>
+        />,
+        reset,
+      )}
+    />
   );
 }

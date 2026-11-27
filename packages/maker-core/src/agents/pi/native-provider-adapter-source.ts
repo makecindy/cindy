@@ -87,13 +87,15 @@ function parseCindyProviderRefreshSnapshot(raw: unknown, nonce: string): CindyPr
   return { nonce, env, aliases };
 }
 
-async function registerCindyNativeProviderAdapters(pi: any) {
+async function registerCindyNativeProviderAdapters(pi: any, cacheRecovery?: any) {
   let aliases: CindyAdapterAlias[] = [];
   try {
     const initial = JSON.parse(process.env.CINDY_PI_NATIVE_PROVIDER_ADAPTERS ?? '[]');
     if (Array.isArray(initial)) aliases = initial;
   } catch { /* A malformed startup hint cannot affect other Pi extensions. */ }
   const registered = new Set<string>();
+  let cacheRuntime: any;
+  let wrappedPrepare: any;
   let apis: { lazyStream: any; envApiKeyAuth: any; getApiProvider: any } | undefined;
   async function loadApis() {
     if (!apis) {
@@ -105,7 +107,7 @@ async function registerCindyNativeProviderAdapters(pi: any) {
     }
     return apis;
   }
-  function registerAliases(models: any[], currentAliases: CindyAdapterAlias[]) {
+  function registerAliases(models: any[], currentAliases: CindyAdapterAlias[], ctx: any) {
     if (!apis) throw new Error('Native provider adapter is unavailable');
     const { lazyStream, envApiKeyAuth, getApiProvider } = apis;
     for (const alias of currentAliases) {
@@ -153,7 +155,8 @@ async function registerCindyNativeProviderAdapters(pi: any) {
             },
           };
         }
-        const events = simple ? api.streamSimple(nativeModel, nativeContext, nativeOptions) : api.stream(nativeModel, nativeContext, nativeOptions);
+        const invoke = (requestOptions: any) => simple ? api.streamSimple(nativeModel, nativeContext, requestOptions) : api.stream(nativeModel, nativeContext, requestOptions);
+        const events = cacheRecovery ? cacheRecovery.wrap(model, nativeOptions, invoke, nativeModel.provider) : invoke(nativeOptions);
         return (async function* () {
           for await (const event of events) yield { ...event,
             ...(event.partial ? { partial: { ...event.partial, provider: alias.id } } : {}),
@@ -172,9 +175,91 @@ async function registerCindyNativeProviderAdapters(pi: any) {
       registered.add(alias.id);
     }
   }
+  function observeResponsesRequest(model: any, options: any, invoke: (next: any) => any, ctx: any) {
+    const token = process.env.CINDY_PI_TURN_TOOL_POLICY;
+    if (!token || CINDY_HOSTED || process.env.CINDY_PI_REVIEW_ONLY === '1' || model.api !== 'openai-responses'
+      || !/^https:\/\/api\.openai\.com\/v1\/?$/.test(model.baseUrl)
+      || !options?.sessionId || options.sessionId !== ctx.sessionManager?.getSessionId?.()) return invoke(options);
+    let fingerprint: string | undefined;
+    const originalFetch = options.fetch ?? globalThis.fetch;
+    const stream = invoke({ ...options, fetch: async (input: any, init: any) => {
+      // Preserve the native transport and its retries. Observe the actual SDK
+      // request, after all auth/header overrides, without reading either body.
+      fingerprint = undefined;
+      const response = await originalFetch(input, init);
+      try {
+        const url = typeof input === 'string' || input instanceof URL ? String(input) : input.url;
+        if (url !== 'https://api.openai.com/v1/responses' || response.url !== url
+          || response.redirected || !response.ok || (init?.method ?? input.method) !== 'POST') return response;
+        const headers = new Headers(init?.headers ?? input.headers);
+        const bearer = headers.get('authorization');
+        if (!bearer?.startsWith('Bearer ') || bearer.length <= 7) return response;
+        const key = createHash('sha256').update(bearer.slice(7)).digest('hex');
+        const project = headers.get('openai-project');
+        const organization = headers.get('openai-organization');
+        fingerprint = project || organization
+          ? createHash('sha256').update(JSON.stringify([key, project, organization])).digest('hex') : key;
+      } catch { /* An unverifiable request is not recovery evidence. */ }
+      return response;
+    }});
+    if (typeof stream?.result !== 'function') return stream;
+    void stream.result().then((message: any) => {
+      if (!fingerprint || options.signal?.aborted || !completedPiResponsesMessage(message)) return;
+      const proof = createHmac('sha256', token)
+        .update(JSON.stringify([model.provider, model.id, message.responseId, fingerprint])).digest('hex');
+      // Only an instance-bound, per-response proof crosses local stdio. The
+      // host consumes it before generic extension UI or event forwarding.
+      ctx.ui.notify(CINDY_PI_RESPONSES_COMPLETION_PREFIX + token + ':' + proof, 'info');
+    }).catch(() => {});
+    return stream;
+  }
+  function installCacheRequests(ctx: any) {
+    // Pi 1.x exposes a registry facade, while its own requests use this runtime.
+    // Wrap only the prepared request: registering a composed Provider would
+    // erase config registrations and their request-time model headers.
+    const registry = ctx.modelRegistry;
+    const runtime = registry?.runtime;
+    if (!cacheRecovery || typeof runtime?.prepareRequest !== 'function'
+      || typeof registry.getProvider !== 'function' || typeof registry.getRegisteredNativeProvider !== 'function') return;
+    if (cacheRuntime === runtime && runtime.prepareRequest === wrappedPrepare) return;
+    const prepare = runtime.prepareRequest;
+    wrappedPrepare = async function(this: any, ...args: any[]) {
+      const prepared = await prepare.apply(this, args);
+      const wrapCache = cacheRecovery.accepts(prepared.model)
+        && !aliases.some(alias => alias.id === prepared.model.provider);
+      const observeResponses = process.env.CINDY_PI_TURN_TOOL_POLICY && !CINDY_HOSTED
+        && prepared.model.api === 'openai-responses'
+        && /^https:\/\/api\.openai\.com\/v1\/?$/.test(prepared.model.baseUrl);
+      if (!wrapCache && !observeResponses) return prepared;
+      const original = prepared.provider;
+      if (typeof original?.stream !== 'function' || typeof original.streamSimple !== 'function') return prepared;
+      const provider = new Proxy({}, { get(_target, property) {
+        if (property === 'stream' || property === 'streamSimple') {
+          return (model: any, context: any, options: any) => {
+            const invoke = (next: any) => original[property].call(original, model, context, next);
+            const request = (next: any) => observeResponses ? observeResponsesRequest(model, next, invoke, ctx) : invoke(next);
+            return wrapCache ? apis!.lazyStream(model, async () =>
+              cacheRecovery.wrap(model, options, request, original.id)) : request(options);
+          };
+        }
+        const value = Reflect.get(original, property, original);
+        return typeof value === 'function' ? value.bind(original) : value;
+      } });
+      return { ...prepared, provider };
+    };
+    runtime.prepareRequest = wrappedPrepare;
+    cacheRuntime = runtime;
+    cacheRecovery.ownRegistry(registry);
+  }
   if (aliases.length) await loadApis();
-  pi.on('session_start', (_event: any, ctx: any) => {
-    if (aliases.length) registerAliases(ctx.modelRegistry.getAll(), aliases);
+  pi.on('session_start', async (_event: any, ctx: any) => {
+    const models = ctx.modelRegistry.getAll();
+    if (aliases.length || cacheRecovery && models.some((model: any) => cacheRecovery.accepts(model)
+      || (model.api === 'openai-responses' && /^https:\/\/api\.openai\.com\/v1\/?$/.test(model.baseUrl)))) {
+      if (!apis) await loadApis();
+      registerAliases(models, aliases, ctx);
+      installCacheRequests(ctx);
+    }
   });
   return {
     async refresh(snapshot: CindyProviderRefreshSnapshot, ctx: any, secretEnvNames: Set<string>) {
@@ -196,11 +281,16 @@ async function registerCindyNativeProviderAdapters(pi: any) {
       const result = await ctx.modelRegistry.refresh({ allowNetwork: false });
       if (result?.aborted || result?.errors?.size) throw new Error('Native provider catalog refresh failed');
       aliases = snapshot.aliases;
-      if (aliases.length) registerAliases(ctx.modelRegistry.getAll(), aliases);
+      cacheRecovery?.refreshRules?.();
+      if (aliases.length || cacheRecovery) {
+        await loadApis();
+        registerAliases(ctx.modelRegistry.getAll(), aliases, ctx);
+      }
       // Registering providers schedules an internal refresh in Pi. Await one
       // public refresh so the receipt reflects the final provider snapshot.
       const final = await ctx.modelRegistry.refresh({ allowNetwork: false });
       if (final?.aborted || final?.errors?.size) throw new Error('Native provider adapter refresh failed');
+      installCacheRequests(ctx);
     },
   };
 }

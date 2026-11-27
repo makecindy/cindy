@@ -121,6 +121,27 @@ describe('usage limit recovery detection', () => {
         NOW,
       ),
     ).toEqual({ resetAtMs: null });
+    // 测试价值：依据 Codex 0.156 rateLimitExceeded 与安全拦截边界；rateLimitExceeded 应保留临时限流提示而不误判账号限额，
+    // 安全拦截即使含 usage policy 也绝不能触发额度恢复等待；生产入口 extractUsageLimitRecoveryHint；
+    // 最小失败输入为 codexErrorInfo:'rateLimitExceeded' 与 usage policy 拦截文本；tier: unit。
+    expect(
+      extractUsageLimitRecoveryHint(
+        {
+          codexErrorInfo: 'rateLimitExceeded',
+          message: 'Too many requests',
+        },
+        NOW,
+      ),
+    ).toEqual({ resetAtMs: null });
+    expect(
+      extractUsageLimitRecoveryHint(
+        {
+          errorStatus: 429,
+          message: 'Your prompt was flagged as potentially violating our usage policy.',
+        },
+        NOW,
+      ),
+    ).toBeNull();
   });
 
   it('parses the real Claude session-limit wording with a named timezone', () => {
@@ -133,6 +154,18 @@ describe('usage limit recovery detection', () => {
       ),
     ).toEqual({ resetAtMs: Date.parse('2026-01-24T13:10:00.000Z') });
   });
+
+  // Unit regression: the screenshot's text-only five-hour error was not recognized,
+  // so its explicit timezone/reset was lost. Existing cases only covered session/weekly.
+  it.each(["You've hit your 5-hour limit", 'You’ve hit your 5-hour limit'])(
+    'parses the five-hour deadline without SDK metadata: %s', (message) => {
+      expect(extractUsageLimitRecoveryHint(
+        { message: `${message} · resets 2:30am (Pacific/Auckland)` },
+        Date.parse('2026-11-11T10:00:00Z'),
+        { localTimeZoneTrusted: false },
+      )).toEqual({ resetAtMs: Date.parse('2026-11-11T13:30:00Z') });
+    },
+  );
 
   it('normalizes Intl midnight hour 24 while parsing a time-of-day reset', () => {
     const originalFormatToParts = Intl.DateTimeFormat.prototype.formatToParts;
@@ -197,6 +230,61 @@ describe('usage limit recovery detection', () => {
     ).toBeNull();
     expect(
       extractUsageLimitRecoveryHint({ message: 'insufficient_quota: add billing credits' }, NOW),
+    ).toBeNull();
+    expect(
+      extractUsageLimitRecoveryHint({ message: 'HTTP 402: Usage limit reached' }, NOW),
+    ).toBeNull();
+  });
+
+  it('keeps an upstream overload that also says "rate limit exceeded" out of the limit path', () => {
+    // 实录文案同时命中限额正则与过载短语，过载短语必须优先(否则会按限额的周期
+    // 重置去安排自动续跑，issue #7897)。
+    expect(
+      extractUsageLimitRecoveryHint(
+        { message: 'rate limit exceeded: The engine is currently overloaded, please try again later' },
+        NOW,
+      ),
+    ).toBeNull();
+  });
+
+  it('uses structured OpenAI codes before rate, billing or overload wording', () => {
+    expect(extractUsageLimitRecoveryHint({
+      errorStatus: 429, message: '{"error":{"code":"credit_balance_exhausted","message":"upstream overloaded"}}',
+    }, NOW)).toBeNull();
+    expect(extractUsageLimitRecoveryHint({
+      errorStatus: 429, message: '{"error":{"code":"rate_limit_exceeded","type":"insufficient_quota"}}',
+    }, NOW)).toEqual({ resetAtMs: null });
+  });
+
+  // Plugin-engine usage limits carry `reason: 'acp-usage-limit'` or quota-reached text with relative reset countdowns;
+  // `acp-overloaded` must stay out of the periodic usage-limit recovery path.
+  it('recognizes plugin-engine quota limits and excludes plugin overload', () => {
+    const expectedReset = NOW + (2 * 3600 + 13 * 60 + 2) * 1000;
+    expect(
+      extractUsageLimitRecoveryHint(
+        {
+          message:
+            'Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 2h13m2s.',
+        },
+        NOW,
+      ),
+    ).toEqual({ resetAtMs: expectedReset });
+    expect(
+      extractUsageLimitRecoveryHint(
+        {
+          reason: 'acp-usage-limit',
+          usageLimit: true,
+          usageResetAt: expectedReset,
+          message: 'Individual quota reached.',
+        },
+        NOW,
+      ),
+    ).toEqual({ resetAtMs: expectedReset, isAccountUsageLimit: true });
+    expect(
+      extractUsageLimitRecoveryHint(
+        { reason: 'acp-overloaded', message: 'The plugin engine service is temporarily busy.' },
+        NOW,
+      ),
     ).toBeNull();
   });
 });

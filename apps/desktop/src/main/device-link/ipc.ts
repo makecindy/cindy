@@ -5,6 +5,7 @@
  * ipcMain.handle 只做 adapter),__tests__ 用内存 harness 直接调 handler body。
  */
 
+import { cachedProjectAliases } from '@cindy/maker-shared/project-alias-sync';
 import { promises as pluginFileFs } from 'node:fs';
 import { PLUGIN_MEMBER_UPLOAD_MAX_ARCHIVE_BYTES } from '@cindy/plugin-protocol';
 import { capturePluginOauthPeer } from '../plugin-oauth/runtime.js';
@@ -18,15 +19,17 @@ import {
   isProviderSharePeer,
 } from '@cindy/device-link';
 import { confirmRemoteSkillMutation, isRemoteSkillApproval } from './remoteSkillConfirmation';
-import { t } from '../i18n';
+import { t } from '../i18n.desktop';
 import { createHash, randomBytes } from 'node:crypto';
 import { ipcMain, shell, clipboard, dialog, BrowserWindow } from 'electron';
 import { MCP_APPS_INVOKE } from '../../shared/mcpApps.js';
+import { PLUGIN_ENGINES_INVOKE, parseOfferedPluginEngines } from '../../shared/pluginEngines.js';
 import { currentOauthIdentityScope, trustOauthPeer } from '../plugin-oauth/desktopIdentity.js';
 import { RemotePluginOauthUnsupportedError, resolveOauthPeerIdentity } from '../plugin-oauth/identityResolver.js';
 import { getDeviceId } from '../authManager.js';
+import { markStartupMilestone } from '../startupTimeline.js';
 import { copyPrivateDeviceCode } from '../plugin-oauth/deviceCodeClipboard.js';
-import { PLUGIN_OAUTH_CHANNEL, PLUGIN_OAUTH_LOCAL_CHANNEL, PLUGIN_SECRET_LOCAL_CHANNEL, PLUGIN_CONNECTION_LOCAL_CHANNEL, INPUT_HANDOFF_LOCAL_CHANNEL, INPUT_HANDOFF_REMOTE_LOCAL_CHANNEL, INPUT_HANDOFF_LOCAL_PICTURE_CHANNEL, INPUT_HANDOFF_REMOTE_PICTURE_CHANNEL, INPUT_HANDOFF_REMOTE_PICTURE_ANSWER_CHANNEL } from '@cindy/device-link';
+import { PLUGIN_OAUTH_CHANNEL, PLUGIN_OAUTH_LOCAL_CHANNEL, PLUGIN_SECRET_LOCAL_CHANNEL, PLUGIN_CONNECTION_LOCAL_CHANNEL, INPUT_HANDOFF_LOCAL_CHANNEL, INPUT_HANDOFF_REMOTE_LOCAL_CHANNEL, INPUT_HANDOFF_LOCAL_PICTURE_CHANNEL, INPUT_HANDOFF_LOCAL_RAISE_CHANNEL, INPUT_HANDOFF_REMOTE_PICTURE_CHANNEL, INPUT_HANDOFF_REMOTE_PICTURE_ANSWER_CHANNEL } from '@cindy/device-link';
 import { handleAssistPluginOauth, handleSubmitPluginSecret, handleSubmitPluginConnection, handleSubmitInputHandoff, handleOpenInputHandoffPicture, handleAnswerInputHandoffPicture, type LocalOauthDeps } from '../plugin-oauth/localIpc.js';
 import { LocalDeviceCodeSessions } from '../plugin-oauth/deviceCodeSessions.js';
 import { PLUGIN_OAUTH_DEVICE_CODE_CHANNEL } from '../../shared/pluginOauthDeviceCode.js';
@@ -34,30 +37,54 @@ import { getActiveAppSession, isAppSessionBoundaryPending, onAppSessionInvalidat
 import {
   DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
   DeviceLinkError,
+  readProviderMetadataContinuity,
   type InvokeResultPayload,
   type LinkAcceptPayload,
 } from '@cindy/device-link';
-import { ServerApiError } from '../serverApiClient';
-import { deviceLinkApiFetch } from './deviceLinkApi.js';
+import { isMobilePlatform } from '@cindy/maker-shared/device-list';
+import { ServerApiError, serverApiFetch } from '../serverApiClient.desktop';
+import { getClientEndpoint } from '../clientEndpointsService.js';
+import { deviceLinkApiFetch, resolveDeviceLinkApiBase } from './deviceLinkApi.desktop.js';
+import {
+  __resetDirectoryThrottleForTests,
+  clearDirectoryRetryDeadline,
+  currentDirectoryRetrySequence,
+  currentDirectoryThrottleOwner,
+  directoryRetryDeadline,
+  recordDirectoryRetryDeadline,
+} from './directoryThrottle.js';
 import { requireString, throwIpcError } from '../utils/ipcValidate';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
-import { isIpcError, type IpcErrorCode } from '../../shared/ipc-errors';
+import { createIpcError, isIpcError, type IpcErrorCode } from '../../shared/ipc-errors';
 import { ReviewArtifactAuthorizationError } from '../reviewer/reviewArtifactAuthorization.js';
 import { decodeRemoteHistory } from '../../shared/remoteHistoryCache';
 import {
   DEVICE_LINK_INVOKE,
   DEVICE_LINK_PUSH,
   type DeviceLinkDeviceView,
+  type DeviceLinkPeerPathPreference,
   type DeviceLinkState,
+  type DeviceLinkPeerLinksSnapshot,
 } from '../../shared/deviceLinkIpc';
+import type { AgentNetRejoinOutcome } from './deviceRejoin.js';
 import {
   getDeviceLinkStatus,
+  getDirectDataDeviceIds,
+  hasOfflineDirectPath,
+  isDeviceDataPathAvailable,
+  isPeerControlAvailable,
+  getPeerControlState,
+  isPresenceFreshAfterRequest,
+  forgetPeerControlState,
   getDeviceLinkConnectionIssue,
   isDeviceLinkStandby,
+  getDeviceIdentityConflict,
+  replaceDeviceIdentityAndRestart,
   getUnresponsiveDeviceIds,
   clearDeviceResponsiveness,
   setRemoteControlEnabled,
   setKeepAwakeEnabled,
+  rejoinThisDevice,
   openRemoteLink,
   closeRemoteLink,
   remoteInvoke,
@@ -76,14 +103,17 @@ import {
   isLatestControllerDisplayNameDirectoryRefresh,
   readControllerDisplayNameFreshnessSince,
   waitForNewerControllerDisplayNameDirectoryRefresh,
+  getDeviceLinkPeerLinks,
 } from './index';
-import { getActiveControllers } from './dispatch';
+import { getActiveControllers } from './dispatch.desktop';
 import { rewriteOutboundMedia, withPeerAttachmentUpload } from './outboundMedia';
 import { createSentImageRetainer } from './remoteMediaPersistentCache';
 import { withOutboundReviewConfirmation } from '../maker-ipc/reviewOutboundInput.js';
 import { confirmReviewArtifacts } from '../reviewer/confirmReviewArtifacts.js';
 import { tryUploadPeerAttachment } from './filePeer';
+import { withAgentNetMediaTarget } from './agentNetMediaRouting.js';
 import { withSourceFileAccessRecovery, releaseSourceFileAccessUploads } from './sourceFileAccessRecovery';
+import { resolveSendScopeReason, sendScopeReasonI18nKey } from './sendScopeGuard';
 import { parseSharedTaskPeer, scrubSharedProviderCatalog } from '@cindy/device-link';
 import { withSharedTaskMedia } from './sharedTaskMediaContext.js';
 import {
@@ -93,6 +123,8 @@ import {
   resolveRemoteAgentTargetWhenReady,
 } from './providerShareGuest.js';
 import { crossRegionInvoke, isCrossRegionProviderShareTarget } from './providerShareCrossRegion.js';
+import { readProviderDirectoryContinuity, invalidateProviderDirectoryContinuity,
+  providerDirectoryGeneration } from './providerMetadataContinuity.js';
 import {
   outboundSessionReferencesRequested,
   rewriteOutboundSessionReferences,
@@ -106,8 +138,16 @@ import {
   readLastKnownDeviceNames,
   rememberLastKnownDeviceName,
   setDeviceControlEnabled,
-} from './settings-store';
+  setPeerPathPreference,
+} from './settings-store.desktop';
+import { setAgentNetPeerPathPreference } from './agentNetRuntime.js';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState';
+import { setDirectoryThrottleOwnerSource } from './directoryThrottle.js';
+
+// 目录限流账本按桶身份分桶:登记 scope key 来源(桶身份 = 账号成员,见
+// directoryThrottleMembershipOf),让 deviceLinkApiFetch 的检查与 handleListDevices
+// 的记账落在同一个桶里(Codex review #9360)。
+setDirectoryThrottleOwnerSource(activeOwnerScopeKey);
 import {
   coerceCachedSession,
   getMirrorCache,
@@ -116,6 +156,7 @@ import {
   type CachedDeviceSessions,
   type MirrorCache,
 } from './mirrorCacheStore';
+import { getOfflineInboxIntentStore } from './offlineInboxIntentStore';
 import { enqueuePurge, hasPendingPurgeRecords } from './mirrorCachePurgeQueue';
 import {
   recordSubscribe,
@@ -143,13 +184,32 @@ type DeviceLinkServerDeviceView = Omit<DeviceLinkDeviceView, 'controlEnabled'> &
 
 /** handler 依赖注入面(测试替身用) */
 export interface DeviceLinkIpcDeps {
+  /** Authenticated, already-established data path retained through signaling loss. */
+  hasOfflineDirectPath?(deviceId: string): boolean;
+  /** A current authenticated data path for this target, not a stale directory row. */
+  isDeviceDataPathAvailable?(deviceId: string): boolean;
+  /** Last verified control availability for a retained target; unknown stays permissive. */
+  isPeerControlAvailable?(deviceId: string): boolean;
+  /** Current presence authority, separate from the UI display projection. */
+  getPeerControlState?(deviceId: string): { online?: boolean; available?: boolean; disabled: boolean };
+  /** Whether a presence delta is newer than this directory request. */
+  isPresenceFreshAfterRequest?(deviceId: string, requestEpoch: number): boolean;
   getState(): DeviceLinkState;
+  /** 远程连接拓扑:本机链路快照(只读) */
+  getPeerLinks(): DeviceLinkPeerLinksSnapshot;
+  /** 远程连接拓扑:持久化并立即应用单台设备的 Agent-Net 选路偏好 */
+  setPeerPathPreference?(deviceId: string, preference: DeviceLinkPeerPathPreference): Promise<void>;
   setEnabled(enabled: boolean): Promise<void>;
   setKeepAwake(enabled: boolean): Promise<void>;
-  apiFetch<T>(path: string, opts?: { method?: string; body?: unknown }): Promise<T>;
+  /** 本机被移除后「重新加入」(deviceRejoin.ts)。 */
+  rejoin?(): Promise<{ agentNet: AgentNetRejoinOutcome }>;
+  /** `signal` 是调用方的期限信号:目录读用它把「fetch + 刷新等待 + 重试」一起框住。 */
+  apiFetch<T>(path: string, opts?: { method?: string; body?: unknown; timeoutMs?: number; signal?: AbortSignal }): Promise<T>;
   openLink(deviceId: string): Promise<LinkAcceptPayload>;
   closeLink(deviceId: string): void;
-  invoke(deviceId: string, channel: string, args: unknown[], options?: { background?: boolean }): Promise<InvokeResultPayload>;
+  /** 设备身份冲突时用户确认换身份；只在已确认冲突时成功，随后应用重启。 */
+  replaceDeviceIdentity?(): { restarting: true };
+  invoke(deviceId: string, channel: string, args: unknown[], options?: { background?: boolean; diagnosticSource?: 'renderer' }): Promise<InvokeResultPayload>;
   /** 分享者电脑的只读请求：先建后台链路再发(relay 只在建链时登记受邀者的电脑)。缺省时用 invoke。 */
   invokeProviderShareHost?(target: string, channel: string, args: unknown[]): Promise<InvokeResultPayload>;
   subscribe(deviceId: string, topics: string[]): Promise<InvokeResultPayload>;
@@ -171,7 +231,7 @@ export interface DeviceLinkIpcDeps {
   applyControllerPresenceListSnapshot(
     devices: readonly DeviceLinkServerDeviceView[],
     requestEpoch: number,
-  ): void;
+  ): Map<string, { online: boolean; enabled?: boolean }>;
   beginControllerDisplayNameDirectoryRefresh(): number;
   isLatestControllerDisplayNameDirectoryRefresh(sequence: number): boolean;
   waitForNewerControllerDisplayNameDirectoryRefresh(sequence: number): Promise<void>;
@@ -192,26 +252,40 @@ export interface DeviceLinkIpcDeps {
 
 export function defaultDeps(): DeviceLinkIpcDeps {
   return {
+    hasOfflineDirectPath,
+    isDeviceDataPathAvailable,
+    isPeerControlAvailable,
+    getPeerControlState,
+    isPresenceFreshAfterRequest,
     getState: () => {
       const s = readDeviceLinkSettings();
       return {
         remoteControlEnabled: s.remoteControlEnabled,
         keepAwake: s.keepAwake,
         linkStatus: getDeviceLinkStatus(),
+        directDataDeviceIds: getDirectDataDeviceIds(),
         connectionIssue: getDeviceLinkConnectionIssue(),
         standby: isDeviceLinkStandby(),
+        identityConflict: getDeviceIdentityConflict(),
         controlledBy: getActiveControllers(),
         revokedControllers: s.revokedControllers,
         disabledControlDeviceIds: s.disabledControlDeviceIds,
         unresponsiveDeviceIds: getUnresponsiveDeviceIds(),
       };
     },
+    getPeerLinks: () => getDeviceLinkPeerLinks(true),
+    setPeerPathPreference: async (deviceId: string, preference: DeviceLinkPeerPathPreference) => {
+      await setPeerPathPreference(deviceId, preference);
+      setAgentNetPeerPathPreference(deviceId, preference);
+    },
     setEnabled: setRemoteControlEnabled,
     setKeepAwake: setKeepAwakeEnabled,
+    rejoin: rejoinThisDevice,
     // 官方中转或自建中转(凭证与 401 语义不同,见 deviceLinkApi.ts)。
     apiFetch: (path, opts) => deviceLinkApiFetch(path, opts),
     openLink: (deviceId: string) => openRemoteLink(deviceId),
     closeLink: closeRemoteLink,
+    replaceDeviceIdentity: () => replaceDeviceIdentityAndRestart(),
     invoke: (...args) => {
       requireDeviceLinkCapability();
       return remoteInvoke(...args);
@@ -308,6 +382,24 @@ function rethrowServerError(err: unknown): never {
 
 // ─── handler bodies(纯函数,可注入依赖)──────────────────────────────────────
 
+/** 远程连接拓扑快照:纯转发,门禁在注册处(trusted renderer + 账号能力)。 */
+export function handleGetPeerLinks(deps: DeviceLinkIpcDeps): DeviceLinkPeerLinksSnapshot {
+  return deps.getPeerLinks();
+}
+
+export async function handleSetPeerPathPreference(
+  deps: DeviceLinkIpcDeps,
+  deviceId: unknown,
+  preference: unknown,
+): Promise<{ deviceId: string; preference: DeviceLinkPeerPathPreference }> {
+  const id = requireString(deviceId, 'deviceId');
+  if (preference !== 'auto' && preference !== 'direct' && preference !== 'relay') {
+    throwIpcError('INVALID_PARAMS', 'preference must be auto, direct, or relay');
+  }
+  await deps.setPeerPathPreference?.(id, preference);
+  return { deviceId: id, preference };
+}
+
 export function handleGetState(deps: DeviceLinkIpcDeps): DeviceLinkState {
   const state = deps.getState();
   if (getAppCapabilities().canUseDeviceLink) return state;
@@ -350,6 +442,22 @@ export async function handleSetKeepAwake(
   return { keepAwake: enabled };
 }
 
+/** 本机被移除后「重新加入」(deviceRejoin.ts):失败按界面要告诉用户的情况归类。 */
+export async function handleRejoin(deps: DeviceLinkIpcDeps): Promise<{ agentNet: AgentNetRejoinOutcome }> {
+  if (!deps.rejoin) throwIpcError('INTERNAL', 'rejoin unavailable');
+  try {
+    return await deps.rejoin();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '';
+    // 服务端还没有这个接口:界面改为提示在本设备退出后重新登录。
+    if (message === 'DEVICE_REJOIN_UNSUPPORTED') throwIpcError('NOT_FOUND', message);
+    // 「仅使用 Agent-Net」而 Agent-Net 没能回来;Device Link 的登记已经恢复。
+    if (message === 'AGENT_NET_REJOIN_FAILED') throwIpcError('PRECONDITION_FAILED', message);
+    log.warn('rejoin failed', error);
+    throwIpcError('INTERNAL', 'rejoin failed');
+  }
+}
+
 export async function handleSetDeviceControlEnabled(
   deps: DeviceLinkIpcDeps,
   deviceId: unknown,
@@ -376,7 +484,28 @@ export async function handleSetDeviceControlEnabled(
   return { deviceId: normalizedDeviceId, enabled, disabledControlDeviceIds };
 }
 
-type DeviceListResult = { devices: DeviceLinkDeviceView[] };
+type DeviceListResult = {
+  devices: DeviceLinkDeviceView[];
+  /** True only when this is the bounded last-known directory, not a fresh REST answer. */
+  stale?: true;
+  /**
+   * Only one hybrid leg (V1 REST / V2 encrypted) answered this read. The rows it
+   * carries are fresh, but its absence proves nothing: a device that lives only on
+   * the other leg would look gone. Absence is not an authoritative removal.
+   */
+  partial?: true;
+  /**
+   * Local display budget measured from the request start; never a wire
+   * authorization. A missing field is an old endpoint (legacy lifecycle);
+   * an explicit 0 means the source budget has already ended.
+   */
+  displayBudget?: { remainingMs: number };
+  /**
+   * Server-side rate-limit deadline (wall-clock ms) for the next directory read.
+   * Present only while the server is throttling this account's directory.
+   */
+  retryAtMs?: number;
+};
 
 /**
  * 所有 renderer 的设备列表入口最终都汇到本 handler。代次刻意跨状态变化与 teardown
@@ -384,47 +513,261 @@ type DeviceListResult = { devices: DeviceLinkDeviceView[] };
  * 不能进入 reconcile 写回旧名称/空值，也不能把旧列表重新交给 UI。
  */
 let deviceListRequestSequence = 0;
-let latestDeviceListRequest: { sequence: number; promise: Promise<DeviceListResult> } | null = null;
+let latestDeviceListRequest: {
+  owner: string;
+  sequence: number;
+  promise: Promise<DeviceListResult>;
+  startedAt: number;
+  /** false once settled or once a directory mutation succeeded after it was sent. */
+  joinable: boolean;
+} | null = null;
+
+/** A rename / delete changes the directory: later reads must not join a request sent before it. */
+function invalidateDeviceListCoalescing(): void {
+  invalidateProviderDirectoryContinuity();
+  if (latestDeviceListRequest) latestDeviceListRequest.joinable = false;
+}
+/**
+ * 启动与重连时 3–4 个 renderer 入口(侧栏、切换栏、设置页、main 自身)在同一拍里各发一次
+ * /devices。在途请求在这个窗口内的后来者直接共用它:目录快照本来就是同一时刻的,
+ * 多发只是多占一次往返和服务端查询。窗口外(或已结束)的请求仍代表新的目录意图,照常新发。
+ */
+const DEVICE_LIST_COALESCE_WINDOW_MS = 300;
+
+/**
+ * 目录 REST 读取的上限。一次目录读挂死不能无限期占住连接:重试会叠加,而
+ * `serverApiFetch` 默认没有期限(0 = 不超时),挂死的读会让后续每次重读都再开一条。
+ * 超时按暂时性失败处理(见 handleListDevices),读者仍能沿用有界旧快照。
+ */
+const DIRECTORY_READ_TIMEOUT_MS = 8_000;
+
+
+/** 当前中转身份(官方端点或自建中转地址):限流期限按它分桶。 */
+function directoryRelayScope(): string {
+  try {
+    return resolveDeviceLinkApiBase();
+  } catch {
+    return '';
+  }
+}
+
+/** fetch 被中止时抛出的错误:目录读取超时走这条(而不是当成权威拒绝)。 */
+function isAbortError(error: unknown): boolean {
+  const name = (error as { name?: unknown } | null | undefined)?.name;
+  return name === 'AbortError' || name === 'TimeoutError';
+}
+
+/** 仅测试:重置合并窗口状态,避免跨用例共用在途 promise。 */
+export function __resetDeviceListCoalescingForTests(): void {
+  latestDeviceListRequest = null;
+  __resetDirectoryThrottleForTests();
+  invalidateProviderDirectoryContinuity();
+}
 
 export function handleListDevices(
   deps: DeviceLinkIpcDeps,
 ): Promise<DeviceListResult> {
+  const owner = activeOwnerScopeKey();
+  // 限流桶的身份是**账号成员**(scope key 去掉代次),不是完整 scope key:同账号的
+  // projection 修复只 bump 代次,服务端的限流窗口没变,桶键跟着变会让未过期的期限
+  // 变得不可达(Codex review #9360「Keep cooldown keys stable across same-owner
+  // generations」)。`owner` 仍按完整 scope key 圈住在途结果(换账号 / 换代次都作废)。
+  const throttleOwner = currentDirectoryThrottleOwner();
+  const relay = directoryRelayScope();
+  const inFlight = latestDeviceListRequest;
+  if (inFlight && inFlight.owner === owner && inFlight.joinable && Date.now() - inFlight.startedAt < DEVICE_LIST_COALESCE_WINDOW_MS) {
+    return inFlight.promise;
+  }
   const sequence = ++deviceListRequestSequence;
   const directoryRequestSequence = deps.beginControllerDisplayNameDirectoryRefresh();
   const requestEpoch = deps.captureControllerDisplayNameRequestEpoch();
   const presenceRequestEpoch = deps.captureControllerPresenceRequestEpoch();
-  const request = deps.apiFetch<{ devices: DeviceLinkServerDeviceView[] }>(
-    '/api/device-link/devices',
-  ).then(
-    async (result) => {
+  const directoryEpoch = providerDirectoryGeneration();
+  /** 这一轮物理读**发起**时的账本序号:成功只清掉序号不晚于它的限流期限(见 directoryThrottle)。 */
+  let issuedSeq = 0;
+    const request = readProviderDirectoryContinuity(() => {
+      // 限流窗口内的「不再发物理读」不在这里拦:这条预检在路由之前抛,会把整条目录读
+      // (含 V2 / agent-net 那一腿)一起挡掉,而冷却只约束旧版 REST 那一腿 ——
+      // readCurrentDeviceDirectory 的 allSettled 兜底根本没机会跑(Codex review #9360)。
+      // REST 腿的窗口内短路由 deviceLinkApi.ts 的 throttledDirectoryRead 负责,它在
+      // 发任何物理请求之前就以带期限的 429 拒绝,并且只拒 REST 那一腿。
+      // 整条目录读有**总期限**:timeoutMs 只管单次 fetch,401 之后的共享登录刷新不在它
+      // 里面(官方端点的刷新端点是轮换的,timeoutMs: 0 = 不超时),于是一次目录读可以
+      // 无限期挂着 —— 渲染侧的退避每轮都再开一条这样的等待,越挂越多。用调用方的期限
+      // 信号把「fetch + 刷新等待 + 重试」一起框住:超时的按 status 0 的暂时性失败走。
+      const controller = new AbortController();
+      const deadline = setTimeout(() => {
+        controller.abort(Object.assign(new Error('设备目录读取超时'), { name: 'TimeoutError' }));
+      }, DIRECTORY_READ_TIMEOUT_MS);
+      issuedSeq = currentDirectoryRetrySequence();
+      return deps.apiFetch<{ devices: DeviceLinkServerDeviceView[]; partial?: boolean }>(
+        '/api/device-link/devices',
+        { timeoutMs: DIRECTORY_READ_TIMEOUT_MS, signal: controller.signal },
+      ).catch((error: unknown) => {
+        // 429 的 Retry-After:服务端明确说了多久之后再问。把期限带给调用方(渲染进程的目录
+        // 退避要让过它),否则限流窗口里每个挂载的窗口都会继续追问,延长限流并放大共享
+        // 目录压力。期限按桶身份(账号成员) + 中转记:换账号不该继承上一个账号的限流期限,
+        // 换中转(两个中转是各自独立的限流桶)也不该继承。
+        const retryAt = (error as { retryAt?: unknown } | null | undefined)?.retryAt;
+        const servedBaseUrl = (error as { servedBaseUrl?: unknown } | null | undefined)?.servedBaseUrl;
+        if (typeof retryAt === 'number' && Number.isFinite(retryAt)) {
+          // 期限要记在**真正服务了这次响应**的线路的桶里 —— fetch 层把它带出来
+          // (servedBaseUrl), 不在这里读全局:
+          //  - 401 之后的共享刷新可能把请求换到另一个区域 / 中转,那条重试是往新端点
+          //    发的,期限必须记在新端点那个桶,否则下一次读直接撞进同一个限流窗口;
+          //  - 线路被换掉时(用户切了中转),在途请求仍然是**旧线路**发出去的(自建中转
+          //    的 baseUrl 在发起时就定住了):它的限流期限属于旧线路,记到新线路头上
+          //    会把新线路也限住 —— 两个中转是各自独立的限流桶(Codex review #9360)。
+          // 拿不到服务方(非本层的错误)时退回发起这条请求的线路。
+          // 换账号(成员身份变了)就整个丢弃:那次的响应已经不算数了(下面 then 也会拒)。
+          // 同账号只 bump 代次不算换 —— 服务端的窗口没变,期限照记,否则 recovery 之后
+          // 这条 429 就丢了(Codex review #9360「Keep cooldown keys stable across
+          // same-owner generations」)。
+          if (currentDirectoryThrottleOwner() === throttleOwner) {
+            const scope =
+              typeof servedBaseUrl === 'string' && servedBaseUrl !== '' ? servedBaseUrl : relay;
+            recordDirectoryRetryDeadline(throttleOwner, scope, retryAt);
+          }
+        }
+        // 读取超时是**暂时性**失败:让 continuity reader 沿用有界旧快照,而不是把快照一起
+        // 丢掉(丢掉的话渲染进程连旧设备都看不到)。statusCode 0 = 连不上,不是权威拒绝。
+        // 但响应头已经到了、服务端已经表态(401/403/404/429...)时,正文卡住**不代表**
+        // 服务端没拒绝:fetch 层把已知的非 OK 状态贴在中止原因上,这里要把它带出去 ——
+        // 否则拒绝被归一成「连不上」,目录失效广播不触发、终态也不停重读,渲染侧的退避
+        // 会带着旧快照每 5–60 秒重试那个端点(Codex review #9360「Preserve terminal
+        // status across response-body timeouts」)。200 + 卡住的正文仍然是暂时性失败。
+        if (isAbortError(error)) {
+          // 响应头已表态(400/404/409)、正文卡到总期限:抛出的是调用方自造的 TimeoutError,
+          // 只贴 statusCode 过不了 rethrowServerError 的 instanceof ServerApiError ——
+          // 终态会被报成 [INTERNAL],渲染侧把终态当暂时性失败按 5–60 秒一直追问
+          // (Codex review #9360)。包成真正的 ServerApiError,让既有映射生效
+          // (404→NOT_FOUND / 400→INVALID_PARAMS / 409→ALREADY_EXISTS / 503→UNAVAILABLE)。
+          const knownStatus = (error as { httpStatus?: unknown } | null | undefined)?.httpStatus;
+          if (typeof knownStatus === 'number' && knownStatus >= 400) {
+            const cause = error as { message?: unknown; retryAt?: unknown; servedBaseUrl?: unknown };
+            throw new ServerApiError(
+              'HTTP_' + knownStatus,
+              knownStatus,
+              typeof cause.message === 'string' ? cause.message : '设备目录读取超时',
+              typeof cause.retryAt === 'number' ? cause.retryAt : undefined,
+              typeof cause.servedBaseUrl === 'string' ? cause.servedBaseUrl : undefined,
+            );
+          }
+          throw Object.assign(new Error('设备目录读取超时'), { statusCode: 0 });
+        }
+        throw error;
+      }).finally(() => clearTimeout(deadline));
+    }).then(
+    async ({ value: result, stale, remainingMs }) => {
+      if (activeOwnerScopeKey() !== owner) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device directory account changed');
+      // A rename/delete supersedes a request that started before it, even when
+      // no newer list caller has joined yet. Never install that old snapshot.
+      if (directoryEpoch !== providerDirectoryGeneration()) return handleListDevices(deps);
       let latest = latestDeviceListRequest;
       if (latest && latest.sequence > sequence) return latest.promise;
+      // 只有一条腿读到时,这份目录**证明不了缺席**:另一条腿上的设备(配对后关掉 V2 只走
+      // V1 的,或反过来)会被当成已经不在了。它也不是「服务端没在限流」的证据。
+      // (Codex review #9360「Keep one-leg hybrid results non-authoritative」)
+      const partial = result.partial === true;
+      /** 权威 = 完整且新鲜:只有这样的目录能证明缺席、能清掉限流期限。 */
+      const authoritative = !stale && !partial;
       const isLatestDirectorySnapshot = deps.isLatestControllerDisplayNameDirectoryRefresh(
         directoryRequestSequence,
       );
-      if (isLatestDirectorySnapshot) {
+      let appliedEvidence = new Map<string, { online: boolean; enabled?: boolean }>();
+      if (isLatestDirectorySnapshot && authoritative) {
         deps.applyControllerDisplayNameListSnapshot(result.devices, requestEpoch);
-        deps.applyControllerPresenceListSnapshot(result.devices, presenceRequestEpoch);
-      } else {
+        appliedEvidence = deps.applyControllerPresenceListSnapshot(result.devices, presenceRequestEpoch) ?? appliedEvidence;
+      } else if (!stale && !partial) {
         await deps.waitForNewerControllerDisplayNameDirectoryRefresh(directoryRequestSequence);
         latest = latestDeviceListRequest;
         if (latest && latest.sequence > sequence) return latest.promise;
       }
-      return reconcileDeviceNames(
+      // 拿到权威目录 = 服务端没有在限流:这一轮那个桶的限流期限作废。按**当前**中转算:
+      // 这次响应可能是 401 刷新之后由另一个中转服务的(见上面的 catch 分支)。
+      const currentRelay = directoryRelayScope();
+      if (authoritative) {
+        // 只清掉**这次读发起之前**就已记下的期限:在途期间(issuedSeq 之后)另一次 429
+        // 记下的期限比这次成功更新,抹掉它会让下一次读直接撞进限流窗口,把窗口越推越远
+        // (Codex review #9360「Preserve cooldowns newer than the completing request」)。
+        clearDirectoryRetryDeadline(throttleOwner, currentRelay, issuedSeq);
+      }
+      // 服务端限流给出的重试期限:调用方的退避要让过它(见 handleListDevices)。按当前
+      // 中转取 —— 下一次读用的就是这个身份。
+      const retryDeadlineMs = directoryRetryDeadline(throttleOwner, currentRelay);
+      const reconciled = reconcileDeviceNames(
         result,
         deps,
         requestEpoch,
-        isLatestDirectorySnapshot,
+        // A stale snapshot may be shown within its bounded budget, but its names
+        // must not become new persistent truth for later cold starts. A partial
+        // directory is not persistent truth either: part of it is the last
+        // complete read's rows.
+        authoritative && isLatestDirectorySnapshot,
         !isLatestDirectorySnapshot,
       );
+      return {
+        devices: reconciled.devices.map(device => {
+          const deviceId = device.deviceId;
+          const nonMobile = !isMobilePlatform(device.platform);
+          const retained = deps.hasOfflineDirectPath?.(deviceId) === true;
+          const current = deps.getPeerControlState?.(deviceId);
+          const controlAvailable = deps.isPeerControlAvailable?.(deviceId) !== false;
+          const presenceFresh = deps.isPresenceFreshAfterRequest?.(deviceId, presenceRequestEpoch) === true;
+          const evidence = appliedEvidence.get(deviceId);
+          if (presenceFresh) {
+            const online = current?.online === true || (current?.online !== false && retained);
+            const available = current?.available === true && current.disabled !== true && nonMobile;
+            return { ...device, online, remoteControlEnabled: available };
+          }
+          if (evidence) {
+            if (!evidence.online) {
+              return { ...device, ...(retained ? { online: true,
+                remoteControlEnabled: nonMobile && controlAvailable && current?.disabled !== true } : { remoteControlEnabled: false }) };
+            }
+            return { ...device, online: true, remoteControlEnabled: nonMobile && evidence.enabled === true };
+          }
+          // A bounded cached REST row is not new presence/control evidence.
+          // Keep only the target whose current authenticated data path is verified.
+          // Fresh REST rows still use raw evidence above and retained direct below.
+          if (stale) {
+            const online = deps.isDeviceDataPathAvailable?.(deviceId) ?? retained;
+            return { ...device, online, remoteControlEnabled: nonMobile && controlAvailable && current?.disabled !== true };
+          }
+          if (current?.disabled === true) {
+            return { ...device, online: device.online === true || retained, remoteControlEnabled: false };
+          }
+          if (device.online === true) {
+            const enabled = device.remoteControlEnabled === true && controlAvailable;
+            return { ...device, ...(nonMobile && enabled ? { remoteControlEnabled: true } : { remoteControlEnabled: false }) };
+          }
+          if (retained) return { ...device, online: true, remoteControlEnabled: nonMobile && controlAvailable };
+          return stale ? { ...device, online: false } : device;
+        }),
+        ...(stale ? { stale: true as const } : {}),
+        // 一条腿读到的目录:行是新鲜的,但缺席不算数 —— 渲染侧据此不剪枝、继续追问。
+        ...(partial ? { partial: true as const } : {}),
+        // Never drop an exhausted budget: absent means an old endpoint with no
+        // stamp, while zero means this read is already outside its source window.
+        displayBudget: { remainingMs: Math.max(0, remainingMs) },
+        // 服务端限流给出的重试期限:调用方的退避要让过它(见 handleListDevices)。
+        ...(retryDeadlineMs > 0 ? { retryAtMs: retryDeadlineMs } : {}),
+      };
     },
     (err: unknown) => {
+      if (activeOwnerScopeKey() !== owner) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device directory account changed');
+      if (directoryEpoch !== providerDirectoryGeneration()) return handleListDevices(deps);
       const latest = latestDeviceListRequest;
       if (latest && latest.sequence > sequence) return latest.promise;
       rethrowServerError(err);
     },
   );
-  latestDeviceListRequest = { sequence, promise: request };
+  const entry = { owner, sequence, promise: request, startedAt: Date.now(), joinable: true };
+  latestDeviceListRequest = entry;
+  void request.then(
+    () => { entry.joinable = false; markStartupMilestone('device-directory-first-result'); },
+    () => { entry.joinable = false; },
+  );
   return request;
 }
 
@@ -513,12 +856,17 @@ export async function handleRenameDevice(
     throwIpcError('INVALID_PARAMS', 'name is required');
   }
   try {
-    return await deps.apiFetch<{ deviceId: string; name: string; manualName?: string | null }>(
+    const renamed = await deps.apiFetch<{ deviceId: string; name: string; manualName?: string | null }>(
       `/api/device-link/devices/${encodeURIComponent(deviceId)}`,
       { method: 'PATCH', body: { name: nextName } },
     );
+    return renamed;
   } catch (err) {
     rethrowServerError(err);
+  } finally {
+    // A failed dual write may already have changed one directory. Never reuse
+    // a list sent before this attempt when the caller reconciles the result.
+    invalidateDeviceListCoalescing();
   }
 }
 
@@ -530,12 +878,18 @@ export async function handleDeleteDevice(
     throwIpcError('INVALID_PARAMS', 'deviceId is required');
   }
   try {
-    return await deps.apiFetch<{ deviceId: string; deleted: boolean }>(
+    const deleted = await deps.apiFetch<{ deviceId: string; deleted: boolean }>(
       `/api/device-link/devices/${encodeURIComponent(deviceId)}`,
       { method: 'DELETE' },
     );
+    if (deleted.deleted) { forgetPeerControlState(deviceId); handleCloseLink(deps, deviceId); }
+    return deleted;
   } catch (err) {
     rethrowServerError(err);
+  } finally {
+    // A failed dual write may already have changed one directory. Never reuse
+    // a list sent before this attempt when the caller reconciles the result.
+    invalidateDeviceListCoalescing();
   }
 }
 
@@ -625,7 +979,7 @@ export async function handleInvoke(
   if (channel === MCP_APPS_INVOKE) throwIpcError('PERMISSION_DENIED', 'MCP_APP_FRAME_REQUIRED');
   if (channel === PLUGIN_OAUTH_CHANNEL || channel === PLUGIN_SECRET_LOCAL_CHANNEL || channel === PLUGIN_CONNECTION_LOCAL_CHANNEL
     || channel === INPUT_HANDOFF_LOCAL_CHANNEL || channel === INPUT_HANDOFF_REMOTE_LOCAL_CHANNEL
-    || channel === INPUT_HANDOFF_LOCAL_PICTURE_CHANNEL || channel === INPUT_HANDOFF_REMOTE_PICTURE_CHANNEL
+    || channel === INPUT_HANDOFF_LOCAL_PICTURE_CHANNEL || channel === INPUT_HANDOFF_LOCAL_RAISE_CHANNEL || channel === INPUT_HANDOFF_REMOTE_PICTURE_CHANNEL
     || channel === INPUT_HANDOFF_REMOTE_PICTURE_ANSWER_CHANNEL)
     throwIpcError('PERMISSION_DENIED', 'Authorization transport is Host-only');
   let callArgs = Array.isArray(args) ? args : [];
@@ -724,8 +1078,8 @@ export async function handleInvoke(
         throwIpcError('DEVICE_LINK_CHANNEL_NOT_ALLOWED', 'Queued content editing is not supported by the target device');
       }
       callArgs = await withPeerAttachmentUpload((source, mime, signal) => peer ? Promise.resolve(null) : tryUploadPeerAttachment(normalizedDeviceId, source, mime, deps.invoke, undefined, signal), () =>
-        withSharedTaskMedia(peer?.role === 'host' ? peer.sharedTaskId : undefined,
-          () => existing ? deps.rewriteOutboundMedia!(channel, callArgs, existing) : deps.rewriteOutboundMedia!(channel, callArgs)),
+        withAgentNetMediaTarget(normalizedDeviceId, () => withSharedTaskMedia(peer?.role === 'host' ? peer.sharedTaskId : undefined,
+          () => existing ? deps.rewriteOutboundMedia!(channel, callArgs, existing) : deps.rewriteOutboundMedia!(channel, callArgs))),
         createSentImageRetainer(normalizedDeviceId));
      } catch (err) {
        if (isIpcError(err) && (err.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED'
@@ -743,10 +1097,15 @@ export async function handleInvoke(
        if (err instanceof ReviewArtifactAuthorizationError) {
          throwIpcError('PERMISSION_DENIED', err.message);
        }
-       throwIpcError(
+       // 包装会丢掉中止的 name/code(#10906 review P2):作用域作废掐断在途传输时,
+       // readFile 的 signal 中止被包成这层之后消息里一个标记都不剩。原错误挂到 cause,
+       // 让「这是不是作用域拆坏的症状」能按结构化判据认出来,而不是猜文案。
+       const transferFailure = createIpcError(
          'DEVICE_LINK_MEDIA_TRANSFER_FAILED',
          err instanceof Error ? err.message : String(err),
-      );
+       );
+       transferFailure.cause = err;
+       throw transferFailure;
     }
     assertControlTargetEnabled(deps, normalizedDeviceId);
   }
@@ -782,15 +1141,22 @@ const PROVIDER_SHARE_RENDERER_CHANNELS: ReadonlySet<string> = new Set([
   'maker:get-capabilities',
   'maker:list-available-agents',
   'maker:agent:status',
+  PLUGIN_ENGINES_INVOKE.LIST,
+  PLUGIN_ENGINES_INVOKE.REFRESH,
 ]);
 
 function projectProviderShareResult(channel: string, value: unknown): unknown {
   // 分享者电脑已去掉账号身份；受邀者这边再过一遍，旧版本分享者也不会把登录邮箱带进界面。
   if (channel === 'maker:provider:list') return scrubSharedProviderCatalog(value);
+  if (channel === PLUGIN_ENGINES_INVOKE.LIST) {
+    return parseOfferedPluginEngines(value).map(({ reportsUsage: _reportsUsage, ...rest }) => rest);
+  }
   if (channel === 'maker:agent:status') {
     // 只认 Agent 是否装好：就绪以分享的模型目录为准，不带对方的登录状态、本机路径与身份。
     const status = value && typeof value === 'object' ? value as { binaryReady?: unknown } : {};
-    return { binaryReady: status.binaryReady === true };
+    const continuity = readProviderMetadataContinuity(value);
+    return { binaryReady: status.binaryReady === true,
+      ...(continuity ? { providerContinuity: continuity } : {}) };
   }
   return value;
 }
@@ -829,9 +1195,11 @@ export async function handleProviderShareInvoke(
   const callArgs = Array.isArray(args) ? args : [];
   let result: InvokeResultPayload;
   try {
-    result = isCrossRegionProviderShareTarget(target)
-      ? await crossRegionInvoke(target, channel, callArgs)
-      : await (deps.invokeProviderShareHost ?? deps.invoke)(target, channel, callArgs);
+    result = deps.invokeProviderShareHost
+      ? await deps.invokeProviderShareHost(target, channel, callArgs)
+      : isCrossRegionProviderShareTarget(target)
+        ? await crossRegionInvoke(target, channel, callArgs)
+        : await deps.invoke(target, channel, callArgs);
   } catch (err) {
     logProviderShareReadFailure(
       agentDeviceId,
@@ -839,19 +1207,19 @@ export async function handleProviderShareInvoke(
       err instanceof DeviceLinkError ? err.code : 'THROWN',
       err instanceof Error ? err.message : String(err),
     );
-    if (err instanceof DeviceLinkError && isProviderShareRefusal(err.code, err.message)) refuseProviderShare();
+    if (err instanceof DeviceLinkError && isProviderShareRefusal(err.code, err.message)) refuseProviderShare(parseProviderShareAgentDeviceId(agentDeviceId) ?? undefined);
     rethrowDeviceLinkError(err);
   }
   if (result.ok) return projectProviderShareResult(channel, result.result);
   logProviderShareReadFailure(agentDeviceId, channel, result.error.code, result.error.message);
   // 分享者电脑拒绝了(暂停、关了远程控制或这个供应商的「允许被远程调用」)：分享专属原因。
-  if (isProviderShareRefusal(result.error.code, result.error.message)) refuseProviderShare();
+  if (isProviderShareRefusal(result.error.code, result.error.message)) refuseProviderShare(parseProviderShareAgentDeviceId(agentDeviceId) ?? undefined);
   if (result.error.code === 'IPC_ERROR') throw new Error(result.error.message);
   throwIpcError(DEVICE_LINK_CODE_MAP[result.error.code] ?? 'INTERNAL', result.error.message);
 }
 
-function refuseProviderShare(): never {
-  noteProviderShareAccessFailure();
+function refuseProviderShare(shareId?: string): never {
+  noteProviderShareAccessFailure(shareId);
   throwIpcError('REMOTE_AGENT_SHARE_UNAVAILABLE', 'The shared provider is not available right now');
 }
 
@@ -892,18 +1260,19 @@ export async function handleSubscribe(
   // unsubscribe 先跑见不到 ref → no-op,subscribe 回来后才记下一个**永不被释放的 phantom ref**
   // (后续其它窗口对同 (deviceId, topic) 的 unsubscribe 因计数非零而不向 relay 转发 → 被控端
   // 持续推送 → 推送泄漏,直到窗口销毁)。
-  recordSubscribe(windowId, normalizedDeviceId, topicList);
+  const registration = Symbol();
+  recordSubscribe(windowId, normalizedDeviceId, topicList, registration);
   let result: InvokeResultPayload;
   try {
     result = await deps.subscribe(normalizedDeviceId, topicList);
   } catch (err) {
-    // 订阅失败 → 撤掉刚记的本窗口 ref(满足「失败不留 ref」);并发 unsubscribe 已移除则为幂等
-    // no-op。失败时本就没订上,忽略 recordUnsubscribe 的降零返回(不向 relay 转发 unsubscribe)。
-    recordUnsubscribe(windowId, normalizedDeviceId, topicList);
+    // 失败只撤掉本次登记；并发退订或更新的 subscribe 已替换它时不动当前 ref。
+    // 失败时本就没订上,忽略降零返回(不向 relay 转发 unsubscribe)。
+    recordUnsubscribe(windowId, normalizedDeviceId, topicList, registration);
     rethrowDeviceLinkError(err);
   }
   // 错误结果(非异常,如 ACCESS_REVOKED / REMOTE_DISABLED / CHANNEL_NOT_ALLOWED)同样视作未订上 → 撤 ref。
-  if (!result.ok) recordUnsubscribe(windowId, normalizedDeviceId, topicList);
+  if (!result.ok) recordUnsubscribe(windowId, normalizedDeviceId, topicList, registration);
   return unwrapSubscribeResult(result);
 }
 
@@ -1302,7 +1671,7 @@ export async function handleMirrorCachePutSessionList(
   // 字段会在投影前触发预算,把本可缓存的会话误判成 oversized(review: codex P1)。
   const trimmed = devices.slice(0, MIRROR_CACHE_MAX_INBOUND_DEVICES).map((device) => {
     if (!device || typeof device !== 'object') return device;
-    const source = device as { deviceId?: unknown; deviceName?: unknown; sessions?: unknown };
+    const source = device as { deviceId?: unknown; deviceName?: unknown; projectAliases?: unknown; sessions?: unknown };
     const sessions: Record<string, unknown>[] = [];
     if (Array.isArray(source.sessions)) {
       for (
@@ -1320,6 +1689,8 @@ export async function handleMirrorCachePutSessionList(
       deviceName: typeof source.deviceName === 'string'
         ? source.deviceName.slice(0, MAX_CACHED_TEXT_CHARS)
         : undefined,
+      ...(source.projectAliases && withinStructuralBudget(source.projectAliases)
+        ? { projectAliases: cachedProjectAliases(source.projectAliases) } : {}),
       sessions,
     };
   });
@@ -1658,19 +2029,50 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
     const p = (payload ?? {}) as { deviceId?: unknown; enabled?: unknown };
     return handleSetDeviceControlEnabled(deps, p.deviceId, p.enabled);
   });
+  ipcMain.handle(DEVICE_LINK_INVOKE.CLOUD_COMPUTER_ENTRY, async event => {
+    assertTrustedAppRendererEvent(event);
+    return serverApiFetch<unknown>('/api/model-access/personal/cloud-computer/entry', {
+      baseUrl:() => getClientEndpoint('modelAccessApiBaseUrl'), cache:'no-store',
+      timeoutMs:5000, redactErrorDetails:true, expectedErrors:[{status:403},{status:404}],
+    });
+  });
   ipcMain.handle(
     DEVICE_LINK_INVOKE.LIST_DEVICES,
     gated(() => handleListDevices(deps)),
   );
+  ipcMain.handle(DEVICE_LINK_INVOKE.GET_PEER_LINKS, (e) => {
+    // 新增的特权只读(本账号设备的链路拓扑):先拒外来 frame,再看账号能力。
+    assertTrustedAppRendererEvent(e);
+    return gated(() => handleGetPeerLinks(deps))();
+  });
+  ipcMain.handle(DEVICE_LINK_INVOKE.SET_PEER_PATH_PREFERENCE, (e, payload: unknown) => {
+    assertTrustedAppRendererEvent(e);
+    requireDeviceLinkCapability();
+    const p = (payload ?? {}) as { deviceId?: unknown; preference?: unknown };
+    return handleSetPeerPathPreference(deps, p.deviceId, p.preference);
+  });
   ipcMain.handle(DEVICE_LINK_INVOKE.RENAME_DEVICE, (_e, payload: unknown) => {
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown; name?: unknown };
     return handleRenameDevice(deps, p.deviceId, p.name);
   });
+  ipcMain.handle(DEVICE_LINK_INVOKE.REJOIN, (e) => {
+    // Brings this device back into the account's network: only the local app page may ask.
+    assertTrustedAppRendererEvent(e);
+    requireDeviceLinkCapability();
+    return handleRejoin(deps);
+  });
   ipcMain.handle(DEVICE_LINK_INVOKE.DELETE_DEVICE, (_e, payload: unknown) => {
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown };
     return handleDeleteDevice(deps, p.deviceId);
+  });
+  ipcMain.handle(DEVICE_LINK_INVOKE.REPLACE_DEVICE_IDENTITY, (e) => {
+    // 改的是本机身份并重启应用：只接受应用自己的页面，且只在已确认冲突时生效(由 deps 校验)。
+    assertTrustedAppRendererEvent(e);
+    requireDeviceLinkCapability();
+    if (!deps.replaceDeviceIdentity) throwIpcError('PRECONDITION_FAILED', 'Device identity replacement is unavailable');
+    return deps.replaceDeviceIdentity();
   });
   ipcMain.handle(DEVICE_LINK_INVOKE.OPEN_LINK, (e, payload: unknown) => {
     requireDeviceLinkCapability();
@@ -1708,11 +2110,35 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
       const targetWindow = BrowserWindow.fromWebContents(e.sender);
       const assertCurrent = () => {
         const current = getActiveAppSession();
-        if (transfer.signal.aborted || isAppSessionBoundaryPending() || !owner.dataOwnerId
-          || current.dataOwnerId !== owner.dataOwnerId || current.generation !== owner.generation
-          || e.sender.isDestroyed() || !frame || frame.detached || e.sender.mainFrame !== frame
-          || !targetWindow || targetWindow.isDestroyed()) {
-          throwIpcError('PERMISSION_DENIED', 'Attachment confirmation is no longer current');
+        // 命中条件要能从日志反推(#10852 P1):守卫覆盖所有前台发送通道,
+        // 不能再说「附件确认」——没有附件确认的发送也会走到这里。
+        // sender 已销毁就不再读 frame / window:原来的 `||` 链在 isDestroyed()
+        // 处就停住,销毁后再读 detached / mainFrame / isDestroyed() 可能直接抛
+        // Electron 的「对象已失效」,把一次中止变成莫名失败(#10906 review)。
+        // 这些条件在 resolveSendScopeReason 里都排在上面的项目之后,跳过不改变命中项。
+        const senderDestroyed = e.sender.isDestroyed();
+        const reason = resolveSendScopeReason({
+          aborted: transfer.signal.aborted,
+          boundaryPending: isAppSessionBoundaryPending(),
+          ownerDataOwnerId: owner.dataOwnerId,
+          ownerGeneration: owner.generation,
+          currentDataOwnerId: current.dataOwnerId,
+          currentGeneration: current.generation,
+          senderDestroyed,
+          frameMissing: !frame,
+          frameDetached: senderDestroyed ? false : frame?.detached ?? false,
+          frameIsMainFrame: senderDestroyed || !frame ? false : e.sender.mainFrame === frame,
+          windowMissing: !targetWindow,
+          windowDestroyed: senderDestroyed ? false : targetWindow?.isDestroyed() ?? false,
+        });
+        if (reason) {
+          log.warn('device-link send scope is no longer current', {
+            reason,
+            channel: String(p.channel),
+          });
+          // 文案走 i18n(#10906 review P1):渲染层对未登记的码只能回落原文,硬编码英文
+          // 会让所有语言都看到英文。命中条件仍只进上面的日志。
+          throwIpcError('PERMISSION_DENIED', t(sendScopeReasonI18nKey(reason)));
         }
         assertTrustedAppRendererEvent(e);
       };
@@ -1728,8 +2154,11 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
       };
       const unsubscribe = onAppSessionInvalidated(cancel);
       e.sender.on('destroyed', cancel);
-      const onNavigation = (_event: unknown, _url: string, _inPlace: boolean, isMainFrame: boolean) => {
-        if (isMainFrame) cancel();
+      const onNavigation = (_event: unknown, _url: string, inPlace: boolean, isMainFrame: boolean) => {
+        // HashRouter task switches keep the same trusted document and must not
+        // cancel its in-flight sends. Replacing that document still revokes the
+        // transfer, alongside the owner/window/frame checks in assertCurrent.
+        if (isMainFrame && !inPlace) cancel();
       };
       e.sender.on('did-start-navigation', onNavigation);
       return withSourceFileAccessRecovery({
@@ -1875,5 +2304,37 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
     assertTrustedAppRendererEvent(e);
     const p = (payload ?? {}) as { deviceId?: unknown };
     return handleMirrorCacheClear(getMirrorCache(), p.deviceId);
+  });
+
+  ipcMain.handle(DEVICE_LINK_INVOKE.OFFLINE_INBOX_INTENTS_LIST, (e) => {
+    assertTrustedAppRendererEvent(e);
+    requireDeviceLinkCapability();
+    return getOfflineInboxIntentStore().list();
+  });
+  ipcMain.handle(DEVICE_LINK_INVOKE.OFFLINE_INBOX_INTENTS_UPSERT, async (e, payload: unknown) => {
+    assertTrustedAppRendererEvent(e);
+    requireDeviceLinkCapability();
+    const p = (payload ?? {}) as { intent?: unknown };
+    const intents = await getOfflineInboxIntentStore().upsert(p.intent);
+    deps.broadcast(DEVICE_LINK_PUSH.OFFLINE_INBOX_INTENTS_CHANGED, { intents });
+    return intents;
+  });
+  ipcMain.handle(DEVICE_LINK_INVOKE.OFFLINE_INBOX_INTENTS_REMOVE, async (e, payload: unknown) => {
+    assertTrustedAppRendererEvent(e);
+    requireDeviceLinkCapability();
+    const p = (payload ?? {}) as { deviceId?: unknown; sessionId?: unknown };
+    const deviceId = requireString(p.deviceId, 'deviceId');
+    const sessionId = requireString(p.sessionId, 'sessionId');
+    const intents = await getOfflineInboxIntentStore().remove(deviceId, sessionId);
+    deps.broadcast(DEVICE_LINK_PUSH.OFFLINE_INBOX_INTENTS_CHANGED, { intents });
+    return intents;
+  });
+  ipcMain.handle(DEVICE_LINK_INVOKE.OFFLINE_INBOX_INTENTS_CLEAR_DEVICE, async (e, payload: unknown) => {
+    assertTrustedAppRendererEvent(e);
+    const p = (payload ?? {}) as { deviceId?: unknown };
+    const deviceId = requireString(p.deviceId, 'deviceId');
+    const intents = await getOfflineInboxIntentStore().clearDevice(deviceId);
+    deps.broadcast(DEVICE_LINK_PUSH.OFFLINE_INBOX_INTENTS_CHANGED, { intents });
+    return intents;
   });
 }

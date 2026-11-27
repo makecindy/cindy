@@ -26,6 +26,7 @@ export interface MenubarSettings {
   lowAlert: boolean;
   privacy: boolean;
   scope: MenubarUsageScope;
+  currency?: 'USD' | 'CNY' | 'auto';
 }
 
 export const DEFAULT_MENUBAR_SETTINGS: MenubarSettings = {
@@ -37,6 +38,7 @@ export const DEFAULT_MENUBAR_SETTINGS: MenubarSettings = {
   lowAlert: true,
   privacy: false,
   scope: 'all',
+  currency: 'auto',
 };
 
 export type MenubarSettingsPatch = Partial<MenubarSettings>;
@@ -81,6 +83,12 @@ export interface MenubarSourceCell {
   active: boolean;
   when: string;
   whenLevel: MenubarLevel;
+  /** Reset of the window the tube shows; consumers that outlive the build keep `when` current. */
+  resetsAtMs?: number | null;
+  /** The reading is the last one from a computer that cannot be reached now; `when` says its age. */
+  stale?: boolean;
+  /** A long window will reset with quota unused at the current pace; `whenLevel` colors the time. */
+  unusedAtReset?: boolean;
   accessibilityLabel: string;
 }
 
@@ -126,7 +134,7 @@ export interface MenubarDetail {
 export interface MenubarTask {
   sessionId: string;
   title: string;
-  harness: 'claude-code' | 'codex' | 'pi';
+  harness: 'claude-code' | 'codex' | 'pi' | 'acp';
   logoSvg: string;
   /** Estimated value today, in the ledger currency. */
   value: number;
@@ -142,7 +150,7 @@ export interface MenubarTask {
 
 export interface MenubarModelUsage {
   name: string;
-  harness: 'claude-code' | 'codex' | 'pi';
+  harness: MenubarTask['harness'];
   money: number;
   tokens: number;
 }
@@ -168,7 +176,7 @@ export interface MenubarUsageScopeData {
     money: [number, number, number];
     /** Actually paid (API) part of `money`, summed across harnesses. */
     paid: number;
-    tokens: [number, number, number];
+    tokens: [number, number, number, ...number[]];
   }[];
   /** Model totals for the last 7, 30 and 90 days. */
   models: { '7': MenubarModelUsage[]; '30': MenubarModelUsage[]; '90': MenubarModelUsage[] };
@@ -196,10 +204,13 @@ export interface MenubarStrings {
 }
 
 export interface MenubarView {
+  /** Optional for old helper fixtures; current presenters receive the shared design. */
+  presentation?: import('./quotaPanelDesign.js').QuotaPanelDesign;
   /** BCP 47 locale for dates and numbers. */
   locale: string;
-  /** Symbol of the usage ledger currency: "$" on Global, "¥" in mainland China. */
+  /** Symbol of the selected native usage currency. */
   moneySymbol: string;
+  taskMoneySymbol?: string;
   strings: MenubarStrings;
   /** Text after the menu bar icon for each mode; the active one is `settings.statusText`. */
   statusTextByMode: Record<MenubarStatusTextMode, string | null>;

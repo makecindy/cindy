@@ -1,15 +1,54 @@
-import { BadgeCheck } from 'lucide-react';
+import { BadgeCheck, Building2, Folder, Monitor, Users } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { PluginMarketItem } from '../../../shared/pluginMarket';
+import type { PluginPresentationOrigin } from './lib/pluginMarketPresentation';
 
-/** A display of verified public provenance; it never grants runtime privileges. */
-export function PluginPublisherBadge({ kind }: { kind?: PluginMarketItem['publisherKind'] }) {
+type PluginPublisherProps = {
+  kind?: PluginMarketItem['publisherKind'];
+  origin?: PluginPresentationOrigin;
+};
+
+function publisherIdentity({ kind, origin }: PluginPublisherProps) {
+  return origin === 'organization' ? 'team'
+    : origin === 'custom' ? 'custom'
+      : origin === 'local' ? 'local'
+        : kind === 'official' ? 'official'
+          : origin === 'public' && kind === 'personal' ? 'community' : null;
+}
+
+/** Display provenance only; package trust and runtime privileges remain separate. */
+export function PluginPublisherBadge({ sourceLabel, ...props }: PluginPublisherProps & { sourceLabel?: string }) {
   const { t } = useTranslation();
-  if (kind !== 'official') return null;
+  if (sourceLabel) {
+    return (
+      <span className="inline-flex h-5 max-w-full shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-1.5 text-11 font-medium leading-none text-[var(--text-secondary)]">
+        <span className="truncate">{sourceLabel}</span>
+      </span>
+    );
+  }
+  const identity = publisherIdentity(props);
+  if (!identity) return null;
+  const Icon = { official: BadgeCheck, community: Users, team: Building2, custom: Folder, local: Monitor }[identity];
+  const label = identity === 'official' || identity === 'community' ? t(`settings.ghosts.market.publisherKind.${identity}`)
+    : t(`settings.ghosts.page.origin.${identity === 'team' ? 'organization' : identity}`);
+  const neutral = identity === 'local';
   return (
-    <span className="inline-flex h-5 shrink-0 items-center gap-1 rounded-full bg-[var(--surface-chip)] px-2 text-11 font-medium leading-none text-[var(--text-primary)]">
-      <BadgeCheck size={12} strokeWidth={2} aria-hidden="true" />
-      {t('settings.ghosts.market.publisherKind.official')}
+    <span
+      // design: intrinsic-geometry — owner-approved provenance mark, DESIGN §10: 20px high with 5px corners.
+      className="inline-flex h-5 max-w-full shrink-0 items-center gap-1 whitespace-nowrap rounded-[5px] px-1.5 text-11 font-medium leading-none"
+      style={{ color: neutral ? 'var(--text-secondary)' : `var(--plugin-identity-${identity}-text)`,
+        backgroundColor: neutral ? 'var(--surface-chip)' : `var(--plugin-identity-${identity}-bg)` }}
+    >
+      <Icon className="shrink-0" size={12} strokeWidth={2} aria-hidden="true" />
+      <span className="truncate">{label}</span>
     </span>
   );
+}
+
+export function PluginPublisherDescription(props: PluginPublisherProps) {
+  const { t } = useTranslation();
+  const identity = publisherIdentity(props);
+  return identity ? <p className="mt-3 text-12 leading-5 text-[var(--text-tertiary)]">
+    {t(`settings.ghosts.market.publisherDescription.${identity}`)}
+  </p> : null;
 }

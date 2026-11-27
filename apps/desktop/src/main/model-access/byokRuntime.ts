@@ -1,5 +1,5 @@
 import type { ByokCache } from './byokCache.js';
-import { BYOK_PROVIDERS_PATH, BYOK_CREDENTIALS_PATH, isByokImageMode, type ByokProvider, type Provider } from '@cindy/model-providers';
+import { BYOK_PROVIDERS_PATH, BYOK_PROVIDERS_V1_PATH, BYOK_CREDENTIALS_PATH, isByokImageMode, type ByokProvider, type Provider } from '@cindy/model-providers';
 import {
   setByokCredentialReader,
   setByokEndpointReader,
@@ -8,10 +8,10 @@ import {
 import { isDeepStrictEqual } from 'node:util';
 import { setManagedProviders } from '../maker-host/active-catalog.js';
 import { beginProviderRouteMutation } from '../maker-host/provider-route.js';
-import { serverApiFetch } from '../serverApiClient.js';
+import { serverApiFetch } from '../serverApiClient.desktop.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { createByokSync, type ByokConnection } from './byokSync.js';
-import { buildByokProvider } from './byokProvider.js';
+import { buildByokProvider, byokProviderPresentation } from './byokProvider.js';
 import { buildByokPricing, setByokPricing } from './byokPricing.js';
 import { cindyAutoModelIdsChanged } from './modelsSyncRefresh.js';
 import { createLogger } from '../logger.js';
@@ -134,8 +134,7 @@ export function createByokRuntime(
       return connection
         ? buildByokProvider(connection)
         : {
-            id: provider.id,
-            name: provider.name,
+            ...byokProviderPresentation(provider),
             source: 'organization',
             auth: { method: 'managed' },
             access: { kind: 'managed' },
@@ -162,7 +161,7 @@ export function createByokRuntime(
   return createByokSync({
     cache,
     fetch: async (path, options) => {
-      const logLabel = path === BYOK_PROVIDERS_PATH
+      const logLabel = path === BYOK_PROVIDERS_PATH || path === BYOK_PROVIDERS_V1_PATH
         ? '/api/model-access/byok/providers'
         : path === BYOK_CREDENTIALS_PATH
           ? '/api/model-access/byok/credentials'

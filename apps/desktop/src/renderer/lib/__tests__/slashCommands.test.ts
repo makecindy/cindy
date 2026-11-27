@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CINDY_LEARN_SOURCE_DESCRIPTION } from '../../../shared/cindyBuiltInSkills';
 
 import {
+  addPluginSkillSetupCommands,
   commandsForHelpCard,
   filterSlashCommands,
   firstAvailableSlashCommandIndex,
@@ -12,6 +13,7 @@ import {
   loadAllCommands,
   mergeCommands,
   nextAvailableSlashCommandIndex,
+  pluginSkillSetupName,
   rebaseInlineRangesAfterSlashCommandRewrite,
   reconcilePiRuntimeCommandForDispatch,
   reconcilePiRuntimeCommandForDispatchWithRetry,
@@ -49,6 +51,20 @@ function stubCommandLists(skillResult: { success: boolean; skills?: UnifiedComma
   });
 }
 
+// Unit: repeated palette consumers previously logged each identical conflict.
+// Existing merge tests checked precedence but not repeated renderer log IPC.
+it('warns once per conflict while preserving command precedence across rebuilds', () => {
+  const logToMain = vi.fn();
+  vi.stubGlobal('window', { electronAPI: { logToMain } });
+  const preferred = skill({ name: 'conflict-diagnostic-test' });
+  const desktop: UnifiedCommand = { kind: 'desktop', name: preferred.name, description: 'fallback' };
+  for (let i = 0; i < 3; i++) expect(mergeCommands([desktop], [], [preferred])).toEqual([preferred]);
+  const warnings = () => logToMain.mock.calls.filter(([level]) => level === 'warn');
+  expect(warnings()).toHaveLength(1);
+  expect(mergeCommands([], [{ kind: 'agent-builtin', name: preferred.name, description: 'builtin' }], [preferred])).toEqual([preferred]);
+  expect(warnings()).toHaveLength(2);
+});
+
 describe('loadAllCommands Learn fallback', () => {
   it.each([
     ['the Skill query fails', { success: false }],
@@ -66,6 +82,26 @@ describe('loadAllCommands Learn fallback', () => {
     stubCommandLists({ success: true, skills: [learnSkill] });
 
     await expect(loadAllCommands('claude-code', null)).resolves.toEqual([learnSkill]);
+  });
+});
+
+// 用户要求（2026-11-25）：插件引擎任务的 `/` 也列出 Cindy Skill，由执行电脑上的引擎按人名展开
+// （maker-core acp/skill-invocation.ts）。覆盖缺口：此前插件引擎直接跳过 Skill 清单。
+// Review (#12732, Codex P2)：清单向插件引擎自己要（`acp`），不借 Pi 的清单；本机 Pi 不可用时 Pi 那份会失败而菜单为空。
+// 最小失败输入：草稿仍是 Claude 身份的插件引擎，引擎返回一个项目 Skill（unit）。
+describe('plugin engine Skills', () => {
+  it('asks the plugin engine for its Skills and lists them by their human name, ready to send', async () => {
+    const path = '/repo/.agents/skills/deploy/SKILL.md';
+    stubCommandLists({ success: true, skills: [skill({ name: 'deploy', scope: 'repo', path })] });
+
+    const commands = await loadAllCommands('claude-code', '/repo', { skipAgentCommands: true, pluginEngineSkills: true });
+
+    expect(vi.mocked(window.electronAPI.maker.listAgentSkills)).toHaveBeenCalledWith('acp', { workingDir: '/repo' });
+    expect(vi.mocked(window.electronAPI.maker.listAgentCommands)).not.toHaveBeenCalled();
+    const deploy = commands.find((command) => command.name === 'deploy');
+    expect(deploy).toEqual({ kind: 'agent-skill', name: 'deploy', source: 'skill', scope: 'repo', path });
+    expect(isSlashCommandUnavailable(deploy!)).toBe(false);
+    expect(rewriteAgentSkillInvocationForDispatch('/deploy now', deploy)).toBe('/deploy now');
   });
 });
 
@@ -224,6 +260,12 @@ describe('rewriteAgentSkillInvocationForDispatch', () => {
 });
 
 describe('filterSlashCommands', () => {
+  it('matches a Pi invocation alias while preserving the short selection name', () => {
+    const command = { kind: 'agent-skill' as const, name: 'poteto-mode', source: 'skill' as const,
+      runtimeCommandName: 'skill:poteto-mode' };
+    expect(filterSlashCommands([command], 'skill:poteto')).toEqual([command]);
+  });
+
   it('ranks a plugin command by its display label so hidden qualifiers keep exact matches on top', () => {
     const prefixed = Array.from({ length: 30 }, (_, i) => ({
       kind: 'desktop' as const, name: `draw-${i}`, description: '',
@@ -704,5 +746,46 @@ describe('Claude managed skill dispatch', () => {
   it('rewrites the short Cindy command to its native plugin command, preserving arguments', () => {
     const command = skill({ name: 'learn', runtimeCommandName: 'cindy:learn', builtIn: true });
     expect(rewriteAgentSkillInvocationForDispatch('/learn keep this workflow', command)).toBe('/cindy:learn keep this workflow');
+  });
+});
+
+describe('plugin Skill setup rows', () => {
+  const entry = { skillName: 'pr', description: 'Needs the GitHub plugin', meta: 'Not installed' };
+
+  it('appends a selectable setup row after every real command when the Skill is absent', () => {
+    const commands = mergeCommands(
+      [{ kind: 'desktop', name: 'help', description: 'Help' }],
+      [],
+      [skill({ name: 'zeta' }), skill({ name: 'repo', scope: 'repo', runtimeStatus: 'discovered' })],
+    );
+    const result = addPluginSkillSetupCommands(commands, [entry]);
+    expect(result.map((command) => command.name)).toEqual(['zeta', 'help', 'repo', 'pr']);
+    const row = result[3];
+    expect(row).toMatchObject({ kind: 'desktop', description: entry.description, meta: entry.meta });
+    expect(isSlashCommandUnavailable(row)).toBe(false);
+    expect(pluginSkillSetupName(row)).toBe('pr');
+    expect(pluginSkillSetupName(result[0])).toBeUndefined();
+    // Filtering keeps the same row object, so selection still recognizes it.
+    expect(pluginSkillSetupName(filterSlashCommands(result, 'pr')[0])).toBe('pr');
+  });
+
+  it('never shadows a command of the same name, available or not', () => {
+    const real = [skill({ name: 'PR' })];
+    expect(addPluginSkillSetupCommands(real, [entry])).toBe(real);
+    const unavailable = [skill({ name: 'pr', scope: 'repo', runtimeStatus: 'discovered' })];
+    expect(addPluginSkillSetupCommands(unavailable, [entry])).toBe(unavailable);
+    const none: UnifiedCommand[] = [];
+    expect(addPluginSkillSetupCommands(none, [])).toBe(none);
+  });
+
+  it('lets an enable row replace the Skill linked from an install the project has switched off', () => {
+    const linked = [skill({ name: 'pr' }), skill({ name: 'zeta' })];
+    const result = addPluginSkillSetupCommands(linked, [{ ...entry, replacesInstalled: true }]);
+    expect(result.map((command) => command.name)).toEqual(['zeta', 'pr']);
+    expect(pluginSkillSetupName(result[1])).toBe('pr');
+  });
+
+  it('does not mark an ordinary desktop command of the same shape', () => {
+    expect(pluginSkillSetupName({ kind: 'desktop', name: 'pr', description: 'x' })).toBeUndefined();
   });
 });

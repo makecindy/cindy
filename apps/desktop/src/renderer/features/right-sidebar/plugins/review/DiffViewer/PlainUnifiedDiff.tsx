@@ -89,12 +89,12 @@ function HunkActionPill({
   return (
     <span
       data-review-hunk-action-anchor="true"
-      className="pointer-events-none absolute bottom-[3px] left-0 right-0 z-20 flex justify-end"
+      className="pointer-events-none absolute bottom-[3px] left-0 right-0 z-page-float flex justify-end"
     >
       <span
         data-review-action-reveal="hunk"
         className={cn(
-          'pointer-events-auto sticky right-2 flex shrink-0 items-center gap-1 rounded-full border border-[var(--border-default)] bg-[color-mix(in_srgb,var(--surface-elevated)_90%,transparent)] p-1 text-[var(--text-primary)] shadow-[var(--shadow-menu)] backdrop-blur-sm',
+          'pointer-events-auto sticky right-2 flex shrink-0 items-center gap-1 rounded-full border border-[var(--border-default)] bg-[color-mix(in_srgb,var(--surface-elevated)_90%,transparent)] p-1 text-[var(--text-primary)] shadow-[shadow:var(--shadow-menu)] backdrop-blur-sm',
           hunkActionRevealClass(hasPendingAction),
         )}
       >
@@ -263,6 +263,14 @@ function CodeContent({
       side: line.type === 'add' ? 'add' : 'delete',
     })
     : null;
+  const renderedHtml = inlineHtml || html;
+  // React can rewrite innerHTML when this prop object changes, even if its
+  // content is identical. Keep highlighted nodes (and selection) stable across
+  // review refreshes to avoid flooding Windows with accessibility hide events.
+  const htmlContent = useMemo(
+    () => renderedHtml ? { __html: renderedHtml } : undefined,
+    [renderedHtml],
+  );
 
   return (
     <span className={cn(
@@ -270,10 +278,10 @@ function CodeContent({
       wordWrap ? 'flex-1 whitespace-pre-wrap break-words' : !splitScrollable && 'whitespace-pre',
       compact ? 'pr-3' : 'pr-4',
     )}>
-      {inlineHtml ? (
-        <span dangerouslySetInnerHTML={{ __html: inlineHtml }} />
-      ) : html ? (
-        <span dangerouslySetInnerHTML={{ __html: html }} />
+      {/* Keep code semantics in the AX tree: an ignored span promotes every
+          syntax token to the row and fans out Windows node-show events. */}
+      {htmlContent ? (
+        <code className="font-mono" dangerouslySetInnerHTML={htmlContent} />
       ) : (
         line.content
       )}
@@ -401,7 +409,7 @@ export function PlainUnifiedDiff({
       ? diff.error ?? t('rightSidebar.review.kindNotice.unrenderable')
       : t(`rightSidebar.review.kindNotice.${diff.kind}`, { defaultValue: status });
     return (
-      <div className="flex min-w-0 items-center gap-2 rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] px-3 py-2 text-12 text-[var(--text-secondary)]">
+      <div className="flex min-w-0 items-center gap-2 rounded-lg border border-[var(--border-default)] bg-[var(--surface)] px-3 py-2 text-12 text-[var(--text-secondary)]">
         <span className="min-w-0 flex-1">
           <span className="font-medium text-[var(--text-primary)]">{status}</span>
           <span className="ml-2">{notice}</span>
@@ -417,7 +425,7 @@ export function PlainUnifiedDiff({
   }
   if (diff.hunks.length === 0) {
     return (
-      <div className="rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] px-3 py-2 text-12 text-[var(--text-tertiary)]">
+      <div className="rounded-lg border border-[var(--border-default)] bg-[var(--surface)] px-3 py-2 text-12 text-[var(--text-tertiary)]">
         {t('rightSidebar.review.noRenderableDiff')}
       </div>
     );
@@ -429,7 +437,7 @@ export function PlainUnifiedDiff({
         ref={parentRef}
         data-virtualized-diff="true"
         className={cn(
-          'max-h-[70vh] max-w-full min-w-0 select-text rounded-[8px] border border-[var(--border-default)] bg-[var(--surface-elevated)]',
+          'max-h-[70vh] max-w-full min-w-0 select-text rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)]',
           wordWrap || viewMode === 'split' ? 'overflow-y-auto overflow-x-hidden' : 'overflow-auto',
         )}
       >
@@ -460,7 +468,7 @@ export function PlainUnifiedDiff({
     <div
       ref={parentRef}
       className={cn(
-        'max-w-full min-w-0 select-text rounded-[8px] border border-[var(--border-default)] bg-[var(--surface-elevated)]',
+        'max-w-full min-w-0 select-text rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)]',
         wordWrap || viewMode === 'split' ? 'overflow-x-hidden' : 'overflow-x-auto',
       )}
     >

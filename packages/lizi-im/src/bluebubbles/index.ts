@@ -1,0 +1,1245 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { lookup } from 'node:dns/promises';
+import { BaseIM } from '../BaseIM.js';
+import type { TextChannelIM, ImFinalOutput } from '../channelIM.js';
+import type { IMHost, IMMessageEvent, IMStatus, SendFileResult } from '../types.js';
+import { classifyInboundAttachment, UnsupportedInboundMediaError } from '../inboundKind.js';
+import { isPrivateListener, LocalWebhookReceiver } from '../localWebhook.js';
+import { AUTOMATION_DENIED, BlueBubblesApi, BlueBubblesApiError, blueBubblesOrigin, BLUEBUBBLES_MAX_BYTES, type BlueBubblesAttachment, type BlueBubblesChat, type BlueBubblesMessage } from './api.js';
+import { isHeicPhoto, localHeicPreview } from './heic.js';
+import { BlueBubblesReceipts, type BlueBubblesStateStorage } from './state.js';
+
+/**
+ * The on-disk name of a fetched original, kept within one 255-byte file name together with the
+ * `<digest16>-preview-` prefix (25 bytes); downloads stage under their own short names. Keeps the extension and
+ * replaces characters Windows refuses in file names.
+ */
+function attachmentFileName(raw: string): string {
+  const cleaned = path.basename(raw.replace(/\\/g, '/')).replace(/[\u0000-\u001f<>:"/\\|?*]/g, '_')
+    .replace(/^\.+/, '').replace(/[. ]+$/, '');
+  const limit = 190;
+  if (Buffer.byteLength(cleaned, 'utf8') <= limit) return cleaned;
+  const rawExt = path.extname(cleaned);
+  const ext = Buffer.byteLength(rawExt, 'utf8') <= 16 ? rawExt : '';
+  let stem = '';
+  let bytes = Buffer.byteLength(ext, 'utf8');
+  for (const ch of cleaned.slice(0, cleaned.length - rawExt.length)) {
+    bytes += Buffer.byteLength(ch, 'utf8');
+    if (bytes > limit) break;
+    stem += ch;
+  }
+  return stem + ext;
+}
+
+/** BlueBubbles can answer before Messages has the full file; its record states the real size. */
+function isShortCopy(attachment: BlueBubblesAttachment, bytes: Uint8Array): boolean {
+  return (attachment.totalBytes ?? 0) > 0 && bytes.byteLength < attachment.totalBytes!;
+}
+/** A converted complete photo is reusable by history; a short transfer must be retried. */
+function heicPreviewToken(token: string, attachment: BlueBubblesAttachment): string {
+  return `${token}:heic-preview:${attachment.totalBytes || 0}`;
+}
+/** Human-readable size for attachment notes the model reads. */
+function formatBytes(bytes: number): string {
+  return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+/** Where the original is and how to get it; shown inside the untrusted attachment data block. */
+function originalPointer(messageId: string, attachmentGuid: string): string {
+  return `message_id=${messageId}，attachment_guid=${attachmentGuid}；可用 cindy_imessage.fetch_attachment 取原件`;
+}
+
+export interface BlueBubblesConfig {
+  serverUrl: string;
+  ownerAddress: string;
+  /** Explicit receiving address for native group mentions on this connection. */
+  mentionAddress?: string;
+  chatGuids: string[];
+  listenHost: string;
+  listenPort: number;
+  groupAliases?: string[];
+  /** Explicit per-chat iMessage identity for manual messages from the local Apple account. */
+  selfAccountAddresses?: Record<string, string>;
+}
+
+export function parseBlueBubblesConfig(raw: unknown): BlueBubblesConfig {
+  if (!raw || typeof raw !== 'object') throw new Error('BLUEBUBBLES_INVALID_CONFIG');
+  const r = raw as Record<string, unknown>;
+  if (typeof r.serverUrl !== 'string' || typeof r.ownerAddress !== 'string' || !r.ownerAddress.trim()
+    || r.ownerAddress.length > 320 || typeof r.listenHost !== 'string' || !isPrivateListener(r.listenHost)
+    || !Number.isInteger(r.listenPort) || (r.listenPort as number) < 1024 || (r.listenPort as number) > 65535
+    || (r.groupAliases !== undefined && (!Array.isArray(r.groupAliases) || r.groupAliases.length > 20
+      || r.groupAliases.some(alias => typeof alias !== 'string' || !alias.trim() || alias.length > 100)))
+    || !Array.isArray(r.chatGuids) || !r.chatGuids.length || r.chatGuids.length > 100
+    || r.chatGuids.some(guid => typeof guid !== 'string' || !/^(?:iMessage|any);[-+];[^\r\n]{1,480}$/.test(guid))) {
+    throw new Error('BLUEBUBBLES_INVALID_CONFIG');
+  }
+  let selfAccountAddresses: Record<string, string> | undefined;
+  if (r.selfAccountAddresses !== undefined) {
+    if (!r.selfAccountAddresses || typeof r.selfAccountAddresses !== 'object' || Array.isArray(r.selfAccountAddresses)) throw new Error('BLUEBUBBLES_INVALID_CONFIG');
+    selfAccountAddresses = {};
+    for (const [chat, address] of Object.entries(r.selfAccountAddresses)) {
+      if (!r.chatGuids.includes(chat) || typeof address !== 'string' || !address.trim() || address.length > 320) throw new Error('BLUEBUBBLES_INVALID_CONFIG');
+      selfAccountAddresses[chat] = address.trim().toLowerCase();
+    }
+  }
+  const mentionAddress = iMessageAddress(r.mentionAddress);
+  if (r.mentionAddress !== undefined && r.mentionAddress !== '' && !mentionAddress) {
+    throw new Error('BLUEBUBBLES_INVALID_CONFIG');
+  }
+  return { ...(mentionAddress ? { mentionAddress } : {}), serverUrl: blueBubblesOrigin(r.serverUrl), ownerAddress: r.ownerAddress.trim().toLowerCase(),
+    ...(selfAccountAddresses && { selfAccountAddresses }),
+    groupAliases: (r.groupAliases as string[] | undefined) ?? ['Cindy'],
+    chatGuids: [...new Set(r.chatGuids as string[])], listenHost: r.listenHost, listenPort: r.listenPort as number };
+}
+
+export interface BlueBubblesOptions {
+  secretPrefix: string;
+  /** Host-persisted route identity survives a server address edit. */
+  contextId?(): string | null;
+  delegatedGroupAlias?(chatId: string, authorization: string): Promise<string | undefined>;
+  storage: BlueBubblesStateStorage;
+  receiver(host: string, port: number): LocalWebhookReceiver;
+  api?(origin: string, password: string): BlueBubblesApi;
+  resolvePeers?(hostname: string): Promise<string[]>;
+  now?(): number;
+}
+
+type Handler = (event: IMMessageEvent) => void | Promise<void>;
+class BlueBubblesReceiveError extends Error {
+  constructor() { super('BLUEBUBBLES_RECEIVE_FAILED'); }
+}
+export const BLUEBUBBLES_SECRET_KEYS = ['bluebubbles-origin', 'bluebubbles-config', 'bluebubbles-password', 'bluebubbles-webhook-token', 'bluebubbles-echo-key'] as const;
+
+function iMessageAddress(value: unknown): string | undefined {
+  if (typeof value !== 'string' || value.length > 320) return;
+  if (/^\+[1-9]\d{1,14}$/.test(value)) return value;
+  if (/^[^@\s:]+@[^@\s:]+$/.test(value)) return value.toLowerCase();
+}
+
+function mentionsSelf(body: unknown, selfAddress: string | undefined): boolean {
+  if (!selfAddress || !Array.isArray(body)) return false;
+  return body.some(part => Array.isArray(part?.runs) && part.runs.some((run: unknown) => {
+    const attribute = (run as { attributes?: Record<string, unknown> } | null)?.attributes?.__kIMMentionConfirmedMention;
+    const address = iMessageAddress(attribute);
+    return address === selfAddress;
+  }));
+}
+
+export class BlueBubblesIM extends BaseIM implements TextChannelIM {
+  private status: IMStatus = { kind: 'idle' };
+  /** Wait between re-downloads while Messages finishes an incoming original. */
+  shortCopyRetryMs = 5_000;
+  private readonly messages = new Set<Handler>();
+  private readonly statuses = new Set<(status: IMStatus) => void>();
+  private config: BlueBubblesConfig | null = null;
+  private api: BlueBubblesApi | null = null;
+  private verifiedMentionAddress?: string;
+  private receipts: BlueBubblesReceipts | null = null;
+  private pendingEdit: object | null = null;
+  private readonly chats = new Map<string, BlueBubblesChat>();
+  private generation = 0;
+  private account: unknown | null = null;
+  private webhookUrl: string | null = null;
+  private listener: { close(): Promise<void> } | null = null;
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private deferredTimer: ReturnType<typeof setTimeout> | null = null;
+  private deferredDueAt: number | null = null;
+  private pumping: Promise<void> | null = null;
+  private pumpRequested = false;
+  private readonly preparations = new Map<string, Promise<void>>();
+  private readonly lookups = new Map<string, Promise<void>>();
+  private readonly metadata = new Map<string, BlueBubblesMessage | null>();
+  private recovering = false;
+  private recovery: Promise<void> | null = null;
+  private receiveFailure: 'input' | 'other' | null = null;
+  // Park ambiguous same-account input until an outgoing receipt changes, a new
+  // callback adds correlation, or history reconciliation refreshes the message.
+  private readonly awaitingSend = new Map<string, string[]>();
+  private readonly retryAt = new Map<string, number>();
+  private partialCleanup = new Map<string, Array<() => Promise<void>>>();
+  private lastCatchUpAt: number | null = null;
+  private lastWebhookAt: number | null = null;
+  private readonly activeDispatches = new Set<string>();
+  private readonly activeSends = new Set<string>();
+  // Prepared inputs retain chat order until actual acceptance, including the
+  // asynchronous interval before a handler reports busy or persists the message.
+  private readonly deferredEvents = new Map<string, IMMessageEvent>();
+  // Verified inputs enter in queue order before downloading/staging. Failed
+  // preparation remains cancellable even though it is not ready for dispatch.
+  private readonly pendingInputs = new Map<string, IMMessageEvent>();
+  private readonly cancelledEvents = new WeakSet<IMMessageEvent>();
+  private readonly eventSentAt = new WeakMap<IMMessageEvent, number>();
+  private readonly pendingReplies = new Map<string, { requestId?: string; ownerOnly: boolean; createdAt: number; accept(text: string): boolean; cancel(): void }>();
+
+  constructor(host: IMHost, private readonly options: BlueBubblesOptions) { super('imessage', host); }
+  registerIpc(): void { /* Partner connection IPC is owned by the host. */ }
+  private key(key: string): string { return this.options.secretPrefix + key; }
+  private now(): number { return this.options.now?.() ?? Date.now(); }
+  private live(generation: number): boolean {
+    return this.generation === generation && (!this.host.accountScope || (this.account !== null && this.host.accountScope.isCurrent(this.account)));
+  }
+  private assertLive(generation: number): void { if (!this.live(generation)) throw new Error('BLUEBUBBLES_CONNECTION_CHANGED'); }
+  private setStatus(status: IMStatus): void { this.status = status; for (const callback of this.statuses) callback(status); }
+  getStatus(): IMStatus { return this.status; }
+  onStatusChange(callback: (status: IMStatus) => void): () => void { this.statuses.add(callback); return () => this.statuses.delete(callback); }
+  onMessage(callback: Handler): () => void { this.messages.add(callback); return () => this.messages.delete(callback); }
+  acknowledgeIncoming(guid: string): void {
+    // Called only by the host's persisted-user-message hook during this dispatch.
+    if (this.activeDispatches.has(guid)) {
+      this.receipts?.mark(guid, 'accepted');
+      this.deferredEvents.delete(guid);
+      this.pendingInputs.delete(guid);
+      this.retryAt.delete(guid);
+    }
+  }
+  get connectedOrigin(): string | undefined { return this.api?.origin; }
+  get botContextId(): string { return this.options.contextId?.() || (this.config ? createHash('sha256').update(this.config.serverUrl).digest('hex').slice(0, 24) : ''); }
+  getOwnerUserId(): string | null {
+    return [...this.chats.values()].find(chat => /^(?:iMessage|any);-;/.test(chat.guid) && (chat.participants?.length ?? 0) === 1
+      && chat.participants![0]!.address.toLowerCase() === this.config?.ownerAddress)?.guid ?? null;
+  }
+  isGroup(chatGuid: string): boolean { return /^(?:iMessage|any);\+;/.test(chatGuid) || (this.chats.get(chatGuid)?.participants?.length ?? 0) > 1; }
+  /** Identifies this chat's continuous grant on the current bridge without disclosing its address. */
+  groupAuthorization(chat: string): string | null {
+    if (!this.config || !this.receipts || !this.chats.has(chat) || !this.isGroup(chat)) return null;
+    return createHash('sha256').update(JSON.stringify([this.config.serverUrl, this.config.ownerAddress,
+      chat, this.receipts.activatedAtFor(chat)])).digest('hex');
+  }
+  isGroupInvocation(text: string, aliases = this.config?.groupAliases ?? []): boolean {
+    const current = text.split('\n').filter(line => !line.trimStart().startsWith('>')).join('\n')
+      .replace(/"[^"\n]*"|“[^”\n]*”|「[^」\n]*」|`[^`\n]*`/g, '');
+    return aliases.some(alias => {
+      const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return new RegExp(`(^|[^\\p{L}\\p{N}_@])@${escaped}(?![\\p{L}\\p{N}_])`, 'u').test(current);
+    });
+  }
+  getChat(chatGuid: string): BlueBubblesChat | undefined { return this.chats.get(chatGuid); }
+  health(): { lastCatchUpAt: number | null; lastWebhookAt: number | null; uncertainInputs: number; uncertainSends: number; automationDenied?: boolean } {
+    return { lastCatchUpAt: this.lastCatchUpAt, lastWebhookAt: this.lastWebhookAt,
+      ...(this.receipts?.uncertainCounts(this.activeDispatches, this.activeSends)
+        ?? { uncertainInputs: 0, uncertainSends: 0 }) };
+  }
+
+  async saveCredentials(input: BlueBubblesConfig & { password: string }): Promise<void> {
+    const config = parseBlueBubblesConfig(input);
+    if (!input.password || input.password.length > 4096 || !this.host.secrets.isAvailable()) throw new Error('BLUEBUBBLES_SECRET_UNAVAILABLE');
+    // The host creates a fresh connection and rolls it back on failure.
+    for (const [key, value] of [['bluebubbles-origin', config.serverUrl], ['bluebubbles-config', JSON.stringify(config)],
+      ['bluebubbles-password', input.password], ['bluebubbles-webhook-token', randomBytes(32).toString('base64url')]]) {
+      if (!this.host.secrets.write(this.key(key!), value!)) throw new Error('BLUEBUBBLES_SECRET_UNAVAILABLE');
+    }
+    new BlueBubblesReceipts(this.options.storage, this.now());
+    await this.init();
+    // Registration succeeded; a retryable input fault must not make the host
+    // delete this connection, its credentials and its already-durable inbox.
+    if (this.status.kind !== 'connected'
+      && !(this.listener && this.api && this.config && this.receiveFailure === 'input')) throw new Error('BLUEBUBBLES_CONNECT_FAILED');
+  }
+
+  /** Public settings omit secrets; edits never reset the durable receipt journal. */
+  getEditableConfig(): BlueBubblesConfig {
+    const raw = this.host.secrets.read(this.key('bluebubbles-config'));
+    if (!raw) throw new Error('BLUEBUBBLES_CONFIG_MISSING');
+    return parseBlueBubblesConfig(JSON.parse(raw));
+  }
+
+  async updateCredentials(input: BlueBubblesConfig & { password?: string }): Promise<void> {
+    const config = parseBlueBubblesConfig(input);
+    const previous = BLUEBUBBLES_SECRET_KEYS.map(key => {
+      const result = this.host.secrets.readResult?.(this.key(key)) ?? { kind: 'error' as const };
+      if (result.kind === 'error') throw new Error('BLUEBUBBLES_SECRET_UNAVAILABLE');
+      return [key, result.kind === 'value' ? result.value : null] as const;
+    });
+    const password = input.password || previous.find(([key]) => key === 'bluebubbles-password')?.[1];
+    if (!password || password.length > 4096 || !this.host.secrets.isAvailable()) throw new Error('BLUEBUBBLES_SECRET_UNAVAILABLE');
+    const previousConfig = parseBlueBubblesConfig(JSON.parse(previous.find(([key]) => key === 'bluebubbles-config')?.[1] ?? 'null'));
+    const addedChats = config.chatGuids.filter(chat => !previousConfig.chatGuids.includes(chat));
+    const account = this.host.accountScope?.capture();
+    let expectedGeneration = this.generation;
+    const current = () => this.generation === expectedGeneration
+      && (!this.host.accountScope || this.host.accountScope.isCurrent(account));
+    const cleanup = async () => {
+      const api = this.api, url = this.webhookUrl;
+      const disposedGeneration = this.generation + 1;
+      await this.dispose();
+      if (api && url) await api.unregisterWebhook(url).catch(() => this.log.warn('iMessage callback cleanup failed; local receiver is stopped'));
+      this.webhookUrl = null;
+      return disposedGeneration;
+    };
+    expectedGeneration = await cleanup();
+    if (!current()) throw new Error('BLUEBUBBLES_CONNECTION_CHANGED');
+    const edit = {};
+    this.pendingEdit = edit;
+    try {
+      new BlueBubblesReceipts(this.options.storage, this.now()).activateChats(addedChats, this.now());
+      // init disposes the previous generation, then starts a new one.
+      const beforeSave = this.generation;
+      try { await this.saveCredentials({ ...config, password }); }
+      finally {
+        // A synchronous storage failure has not entered init yet.
+        expectedGeneration = beforeSave + (this.generation === beforeSave ? 0 : 2);
+      }
+    } catch {
+      if (!current()) throw new Error('BLUEBUBBLES_CONNECTION_CHANGED');
+      this.pendingEdit = null;
+      expectedGeneration = await cleanup();
+      if (current()) {
+        for (const [key, value] of previous) {
+          if (value === null) this.host.secrets.remove(this.key(key));
+          else if (!this.host.secrets.write(this.key(key), value)) throw new Error('BLUEBUBBLES_SECRET_UNAVAILABLE');
+        }
+        await this.init();
+      }
+      throw new Error('BLUEBUBBLES_UPDATE_FAILED');
+    } finally {
+      if (this.pendingEdit === edit) this.pendingEdit = null;
+    }
+    // Only a committed configuration may classify or dispatch pending inputs.
+    // Later ingress faults do not roll back an already saved edit.
+    if (current()) {
+      const generation = this.generation;
+      await this.pump(generation).catch(error => this.fail(generation, error));
+    }
+  }
+
+  async clearCredentials(): Promise<void> {
+    const api = this.api, url = this.webhookUrl, account = this.account;
+    await this.dispose();
+    if (api && url) await api.unregisterWebhook(url).catch(() => this.log.warn('iMessage callback cleanup failed; local receiver is stopped'));
+    if (this.host.accountScope && (account === null || !this.host.accountScope.isCurrent(account))) return;
+    this.webhookUrl = null;
+    for (const key of BLUEBUBBLES_SECRET_KEYS) this.host.secrets.remove(this.key(key));
+  }
+
+  async init(): Promise<void> {
+    await this.dispose();
+    const generation = ++this.generation;
+    this.recovering = true;
+    this.account = this.host.accountScope?.capture() ?? null;
+    this.setStatus({ kind: 'connecting' });
+    try {
+      const raw = this.host.secrets.read(this.key('bluebubbles-config'));
+      const password = this.host.secrets.read(this.key('bluebubbles-password'));
+      const token = this.host.secrets.read(this.key('bluebubbles-webhook-token'));
+      if (!raw || !password || !token) throw new Error('BLUEBUBBLES_CONFIG_MISSING');
+      const config = parseBlueBubblesConfig(JSON.parse(raw));
+      const api = this.options.api?.(config.serverUrl, password) ?? new BlueBubblesApi(config.serverUrl, password);
+      await api.info();
+      this.assertLive(generation);
+      for (const guid of config.chatGuids) {
+        const chat = await api.chat(guid);
+        this.assertLive(generation);
+        if (chat.guid !== guid || !Array.isArray(chat.participants) || !chat.participants.length) throw new Error('BLUEBUBBLES_INVALID_CHAT');
+        this.chats.set(guid, chat);
+      }
+      this.config = config;
+      this.api = api;
+      // The webhook URL rotates on settings edits. Keep the private comparison
+      // key scoped to the connection so the existing journal remains usable.
+      const keyName = this.key('bluebubbles-echo-key');
+      const savedKey = this.host.secrets.readResult?.(keyName);
+      let echoKey = savedKey?.kind === 'value' ? savedKey.value : undefined;
+      if (!savedKey) echoKey = this.host.secrets.read(keyName) ?? undefined;
+      if (!echoKey && savedKey?.kind !== 'error') {
+        const freshKey = randomBytes(32).toString('base64url');
+        if (this.host.secrets.write(keyName, freshKey)) echoKey = freshKey;
+      }
+      this.receipts = new BlueBubblesReceipts(this.options.storage, this.now(), echoKey);
+      const hostname = new URL(config.serverUrl).hostname.replace(/^\[|\]$/g, '');
+      const peers = this.options.resolvePeers ? await this.options.resolvePeers(hostname)
+        : (await lookup(hostname, { all: true })).map(row => row.address);
+      this.assertLive(generation);
+      const listener = await this.options.receiver(config.listenHost, config.listenPort).add(token, peers, async body => {
+        this.assertLive(generation);
+        if (!body || typeof body !== 'object') return;
+        const event = body as { type?: unknown; data?: { guid?: unknown; tempGuid?: unknown; error?: unknown } };
+        if (event.type !== 'new-message' || typeof event.data?.guid !== 'string'
+          || !/^[A-Za-z0-9_-]{1,256}$/.test(event.data.guid)) return;
+        if (this.receipts!.receive(event.data.guid, this.now(), event.data.tempGuid, event.data.error)) {
+          this.retryAt.delete(event.data.guid);
+          this.awaitingSend.delete(event.data.guid);
+        }
+        this.lastWebhookAt = this.now();
+        void this.pump(generation).catch(error => this.fail(generation, error));
+      });
+      if (!this.live(generation)) { await listener.close(); return; }
+      this.listener = listener;
+      this.webhookUrl = listener.url;
+      await api.registerWebhook(listener.url);
+      this.assertLive(generation);
+      this.setStatus({ kind: 'connected', appId: this.botContextId });
+      await this.catchUp(generation, false);
+      this.schedule(generation);
+    } catch (error) {
+      if (this.live(generation)) {
+        // A registered listener is still healthy when only individual inputs
+        // failed preparation. Their local retry must not disconnect other chats.
+        if (error instanceof BlueBubblesReceiveError) {
+          this.fail(generation, error);
+          this.schedule(generation);
+          return;
+        }
+        await this.listener?.close(); this.listener = null;
+        this.setStatus({ kind: 'error', reason: 'BLUEBUBBLES_CONNECT_FAILED' });
+        this.timer = setTimeout(() => { if (this.live(generation)) void this.init(); }, 30_000);
+        this.timer.unref?.();
+      }
+    }
+  }
+
+  async dispose(): Promise<void> {
+    ++this.generation;
+    this.verifiedMentionAddress = undefined;
+    if (this.timer) clearTimeout(this.timer);
+    if (this.deferredTimer) clearTimeout(this.deferredTimer);
+    this.timer = null;
+    this.deferredTimer = null;
+    this.deferredDueAt = null;
+    this.pumping = null;
+    this.pumpRequested = false;
+    this.preparations.clear();
+    this.lookups.clear();
+    this.metadata.clear();
+    this.recovering = false;
+    this.recovery = null;
+    this.receiveFailure = null;
+    this.retryAt.clear();
+    this.awaitingSend.clear();
+    const cleanup = this.partialCleanup;
+    this.partialCleanup = new Map();
+    await Promise.allSettled([...cleanup.keys()].map(guid => this.discardPartial(cleanup, guid)));
+    this.activeDispatches.clear(); this.activeSends.clear();
+    this.deferredEvents.clear();
+    this.pendingInputs.clear();
+    for (const pending of this.pendingReplies.values()) pending.cancel();
+    this.pendingReplies.clear();
+    const listener = this.listener;
+    this.listener = null;
+    await listener?.close();
+    // Old async operations check generation before writing or dispatching.
+    this.api = null; this.config = null; this.receipts = null; this.chats.clear();
+    this.setStatus({ kind: 'idle' });
+  }
+
+  private fail(generation: number, error: unknown): void {
+    if (!this.live(generation)) return;
+    // A successful local retry cannot clear a history, persistence or handler fault.
+    this.receiveFailure = error instanceof BlueBubblesReceiveError && this.receiveFailure !== 'other' ? 'input' : 'other';
+    this.setStatus({ kind: 'error', reason: 'BLUEBUBBLES_RECEIVE_FAILED' });
+  }
+  private schedule(generation: number): void {
+    if (!this.live(generation)) return;
+    this.timer = setTimeout(() => {
+      void this.catchUp(generation).catch(error => this.fail(generation, error)).finally(() => this.schedule(generation));
+    }, 300_000);
+    this.timer.unref?.();
+  }
+  private retryDeferred(generation: number, delay = 1000): void {
+    if (!this.live(generation)) return;
+    const dueAt = this.now() + delay;
+    if (this.deferredTimer && this.deferredDueAt !== null && this.deferredDueAt <= dueAt) return;
+    if (this.deferredTimer) clearTimeout(this.deferredTimer);
+    this.deferredDueAt = dueAt;
+    this.deferredTimer = setTimeout(() => {
+      this.deferredTimer = null;
+      this.deferredDueAt = null;
+      if (this.live(generation)) void this.pump(generation).catch(error => this.fail(generation, error));
+    }, delay);
+    this.deferredTimer.unref?.();
+  }
+  async reconcile(): Promise<void> { await this.catchUp(this.generation); }
+  private catchUp(generation: number, resumeOnFailure = true): Promise<void> {
+    if (this.recovery) return this.recovery;
+    this.recovering = true;
+    const operation = this.recover(generation).catch(error => {
+      if (resumeOnFailure) this.fail(generation, error);
+      throw error;
+    }).finally(() => {
+      if (this.recovery !== operation) return;
+      const interrupted = this.recovering;
+      this.recovery = null;
+      this.recovering = false;
+      // Keep the history error visible, but release already-durable live ingress.
+      // Startup failures retain init's existing listener teardown/reconnect path.
+      if (interrupted && resumeOnFailure && this.live(generation)) {
+        void this.pump(generation).catch(error => this.fail(generation, error));
+      }
+    });
+    this.recovery = operation;
+    return operation;
+  }
+  private async recover(generation: number): Promise<void> {
+    const api = this.api, config = this.config, receipts = this.receipts;
+    if (!api || !config || !receipts) return;
+    // Finish or park preparation already in progress before enumerating history.
+    await this.pumping?.catch(error => { if (!(error instanceof BlueBubblesReceiveError)) throw error; });
+    this.assertLive(generation);
+    this.verifiedMentionAddress = undefined;
+    const info = await api.info(); this.assertLive(generation);
+    // This endpoint reports the signed-in Apple account on this BlueBubbles
+    // server. The configured ownerAddress instead identifies a remote sender.
+    const mentionAddress = config.mentionAddress;
+    const account = mentionAddress && info.private_api === true && info.helper_connected === true
+      && config.chatGuids.some(chat => this.isGroup(chat))
+      ? await api.iMessageAccount().catch(() => null) : null;
+    this.assertLive(generation);
+    if (mentionAddress && Array.isArray(account?.vetted_aliases)
+      && account.vetted_aliases.some(entry => iMessageAddress(entry?.Alias) === mentionAddress)) {
+      this.verifiedMentionAddress = mentionAddress;
+    }
+    const before = this.now();
+    // All chats share this scan's upper watermark. A later POST must await its own scan.
+    const inactive = receipts.inactiveCorrelationsByChat(this.activeSends);
+    for (const chat of config.chatGuids) {
+      const after = Math.max(receipts.activatedAtFor(chat), receipts.cursor(chat) - 300_000);
+      let previousPage = '';
+      for (let offset = 0; ; offset += 100) {
+        const messages = await api.history(chat, after, before, offset);
+        this.assertLive(generation);
+        if (!Array.isArray(messages) || messages.length > 100 || offset >= 100_000) throw new Error('BLUEBUBBLES_INVALID_HISTORY');
+        const fingerprint = messages.map(message => message.guid).join(',');
+        if (messages.length && fingerprint === previousPage) throw new Error('BLUEBUBBLES_HISTORY_NOT_ADVANCING');
+        previousPage = fingerprint;
+        for (const message of messages) {
+          if (typeof message.guid !== 'string' || !/^[A-Za-z0-9_-]{1,256}$/.test(message.guid)) throw new Error('BLUEBUBBLES_INVALID_MESSAGE');
+          if ((!message.isFromMe || config.selfAccountAddresses?.[chat] || receipts.isOutgoing(chat, message.guid, message.tempGuid)) && message.dateCreated >= receipts.activatedAtFor(chat)) {
+            receipts.receive(message.guid, before, message.isFromMe ? message.tempGuid : undefined, message.error);
+          }
+        }
+        if (messages.length < 100) break;
+      }
+      receipts.setCursor(chat, before);
+      const checked = inactive.get(chat);
+      if (checked) {
+        receipts.finishHistoryCheck(checked);
+        this.wakeSendWaiters(chat, generation);
+      }
+    }
+    const prefetched = new Map<string, BlueBubblesMessage | null>();
+    // A fixed watermark includes history and live receipts observed so far.
+    // Later webhooks remain durable but cannot extend this recovery gate forever.
+    const watermark = new Set(receipts.pendingGuids());
+    this.awaitingSend.clear();
+    for (const guid of watermark) {
+      if ((this.retryAt.get(guid) ?? 0) > this.now() || this.deferredEvents.has(guid)
+        || this.lookups.has(guid) || this.metadata.has(guid)) continue;
+      try {
+        const message = await api.message(guid);
+        this.assertLive(generation);
+        prefetched.set(guid, message);
+      } catch {
+        this.assertLive(generation);
+        prefetched.set(guid, null);
+      }
+    }
+    const sentAt = (guid: string) => prefetched.get(guid)?.dateCreated ?? this.metadata.get(guid)?.dateCreated
+      ?? this.eventSentAt.get(this.deferredEvents.get(guid)!) ?? Infinity;
+    receipts.orderPending(receipts.pendingGuids().sort((a, b) => sentAt(a) - sentAt(b)));
+    this.recovering = false;
+    if (this.pendingEdit) {
+      // Retain verified metadata for dispatch after the configuration commits.
+      for (const [guid, message] of prefetched) this.metadata.set(guid, message);
+      this.lastCatchUpAt = before;
+      return;
+    }
+    // Reconciliation still waits for its inputs, while the ingress scanner stays
+    // available to live controls and other chats during attachment I/O.
+    for (;;) {
+      await this.pump(generation, prefetched).catch(error => {
+        if (!(error instanceof BlueBubblesReceiveError)) throw error;
+      });
+      const waiting = [...this.lookups, ...this.preparations].filter(([guid]) => watermark.has(guid));
+      if (!waiting.length) break;
+      await Promise.all(waiting.map(([, operation]) => operation));
+      this.assertLive(generation);
+    }
+    if (this.retryAt.size) throw new BlueBubblesReceiveError();
+    this.assertLive(generation);
+    this.lastCatchUpAt = before;
+    this.receiveFailure = null;
+    this.setStatus({ kind: 'connected', appId: this.botContextId });
+  }
+
+  private pump(generation: number, prefetched?: ReadonlyMap<string, BlueBubblesMessage | null>): Promise<void> {
+    if (this.recovering) return Promise.resolve();
+    if (this.pumping) { this.pumpRequested = true; return this.pumping; }
+    const operation = (async () => {
+      let inputFailure: BlueBubblesReceiveError | undefined;
+      do {
+        this.pumpRequested = false;
+        await this.drain(generation, prefetched).catch(error => {
+          if (!(error instanceof BlueBubblesReceiveError)) throw error;
+          inputFailure = error;
+        });
+      } while (this.pumpRequested && this.live(generation) && !this.recovering);
+      if (inputFailure && this.retryAt.size) throw inputFailure;
+    })().finally(() => { if (this.pumping === operation) this.pumping = null; });
+    this.pumping = operation;
+    return operation;
+  }
+  private async drain(generation: number, prefetched?: ReadonlyMap<string, BlueBubblesMessage | null>): Promise<void> {
+    const api = this.api, config = this.config, receipts = this.receipts;
+    if (!api || !config || !receipts || !this.messages.size || this.pendingEdit) return;
+    const attempted = new Set<string>();
+    for (const [guid, dueAt] of this.retryAt) if (dueAt > this.now()) attempted.add(guid);
+    for (;;) {
+      this.assertLive(generation);
+      for (const id of this.retryAt.keys()) if (!receipts.isPending(id)) this.retryAt.delete(id);
+      if (this.recovering) return;
+      const guid = receipts.nextPending(attempted, new Set([...this.activeDispatches, ...this.preparations.keys(), ...this.lookups.keys(), ...this.awaitingSend.keys()]));
+      if (!guid) {
+        if (this.retryAt.size) {
+          let delay = Infinity;
+          for (const [id, dueAt] of this.retryAt) {
+            // In-flight or slot-waiting retries wake on completion; their old
+            // deadline must not install a new 1 ms timer throughout slow I/O.
+            if (this.lookups.has(id) || this.preparations.has(id) || this.activeDispatches.has(id)
+              || this.metadata.has(id)) continue;
+            delay = Math.min(delay, Math.max(1, dueAt - this.now()));
+          }
+          if (Number.isFinite(delay)) this.retryDeferred(generation, delay);
+          throw new BlueBubblesReceiveError();
+        }
+        if (this.receiveFailure === 'input') {
+          this.receiveFailure = null;
+          this.setStatus({ kind: 'connected', appId: this.botContextId });
+        }
+        return;
+      }
+      attempted.add(guid);
+      let preparing = true;
+      try {
+        // Give the preceding host persistence/deferral callbacks a turn before
+        // consulting the same-chat barrier, without waiting for a model turn.
+        await Promise.resolve();
+        this.assertLive(generation);
+        if (this.recovering) return;
+        let event = this.deferredEvents.get(guid);
+        if (!event) {
+          const cached = prefetched?.get(guid) ?? this.metadata.get(guid);
+          if (!prefetched?.has(guid) && !this.metadata.has(guid)) {
+            // Bound requests to the configured local server, while one stalled
+            // GUID leaves independent slots for incoming controls. Never trust
+            // webhook text/chat identity in place of this API verification.
+            if (this.lookups.size < 4) {
+              const operation = this.lookupMessage(generation, guid, api, receipts).finally(() => {
+                if (!this.live(generation) || this.lookups.get(guid) !== operation) return;
+                this.lookups.delete(guid);
+                void this.pump(generation).catch(error => this.fail(generation, error));
+              });
+              this.lookups.set(guid, operation);
+            }
+            continue;
+          }
+          this.metadata.delete(guid);
+          if (!cached) throw new BlueBubblesReceiveError();
+          const message = cached;
+          this.assertLive(generation);
+          preparing = false;
+          const associations = message.chats ?? [];
+          const hint = receipts.echoHintFor(guid);
+          const tempGuid = message.tempGuid ?? hint?.id;
+          // An outgoing message can be listed under multiple BlueBubbles chat GUIDs.
+          // Correlate against the verified associations before choosing an inbound route.
+          const echoChat = message.isFromMe && associations.find(item => receipts.isOutgoing(item.guid, message.guid, tempGuid));
+          if (echoChat && message.guid === guid) {
+            const failed = (hint?.id === tempGuid && hint?.failed === true) || (!!message.error && message.error !== '0');
+            if (receipts.recordEcho(echoChat.guid, guid, tempGuid, failed)) this.wakeSendWaiters(echoChat.guid, generation);
+          }
+          const chat = associations.find(item => config.chatGuids.includes(item.guid));
+          const selfAddress = chat && message.isFromMe ? config.selfAccountAddresses?.[chat.guid] : undefined;
+          const sender = message.handle?.address?.toLowerCase() || selfAddress;
+          const participants = chat?.participants ?? (chat && this.chats.get(chat.guid)?.participants);
+          const verifiedSelfService = !message.handle && selfAddress && participants?.length
+            && participants.every(person => person.service === 'iMessage');
+          const service = message.handle?.service ?? (verifiedSelfService ? 'iMessage' : undefined);
+          if (message.guid !== guid || echoChat || (message.isFromMe && (!selfAddress || sender !== selfAddress)) || !chat || !sender || service !== 'iMessage'
+            || (message.service != null && message.service !== 'iMessage')
+            || !Number.isFinite(message.dateCreated) || message.dateCreated < receipts.activatedAtFor(chat.guid)
+            || (message.associatedMessageType !== undefined && message.associatedMessageType >= 2000)) {
+            receipts.mark(guid, 'ignored'); this.pendingInputs.delete(guid); this.retryAt.delete(guid); continue;
+          }
+          // A callback may precede the send response and omit tempGuid. It cannot
+          // establish a human sender while this chat still awaits correlation.
+          if (selfAddress && !message.tempGuid && associations.some(item => receipts.mayBeUnconfirmedEcho(item.guid, message))) {
+            this.retryAt.delete(guid);
+            this.awaitingSend.set(guid, associations.map(item => item.guid));
+            continue;
+          }
+          if (receipts.wasStopped(guid, chat.guid, message.dateCreated)) {
+            receipts.mark(guid, 'ignored'); this.pendingInputs.delete(guid); this.retryAt.delete(guid); continue;
+          }
+          const group = this.isGroup(chat.guid);
+          // The Apple thread root can point to our message even when the direct
+          // reply targets someone else. Leave it to context, never activation.
+          const grant = group && this.groupAuthorization(chat.guid);
+          const alias = grant && await this.options.delegatedGroupAlias?.(chat.guid, grant);
+          this.assertLive(generation);
+          const invoked = group && (this.isGroupInvocation(message.text ?? '', alias ? [alias] : undefined)
+            || (typeof message.replyToGuid === 'string' && receipts.hasSentMessage(chat.guid, message.replyToGuid))
+            || mentionsSelf(message.attributedBody, this.verifiedMentionAddress));
+          event = { channelName: 'imessage', senderId: chat.guid, chatId: chat.guid,
+            contextId: this.botContextId, messageId: guid, text: message.text ?? '', attachments: [], unsupported: [],
+            speaker: { id: sender, name: sender, isOwner: sender === config.ownerAddress && (!message.isFromMe || chat.guid === this.getOwnerUserId()) },
+            ...(typeof message.threadOriginatorGuid === 'string' && message.threadOriginatorGuid !== guid ? { imessageReplyGuid: message.threadOriginatorGuid } : {}),
+            interactionSource: { chatName: chat.displayName, senderName: sender },
+            ...(group ? { ambient: !invoked, invoked } : {}) };
+          this.eventSentAt.set(event, message.dateCreated);
+          this.pendingInputs.set(guid, event);
+          preparing = true;
+          if (message.attachments?.length || this.partialCleanup.has(guid)) {
+            // One attachment preparation per chat; controls have no attachments
+            // and never wait for this slot. Other chats use independent slots.
+            if ([...this.preparations.keys()].some(id => this.pendingInputs.get(id)?.chatId === event!.chatId)) {
+              // The verified response remains reusable until this chat's slot
+              // completes and wakes ingress; queued peers must not refetch it.
+              this.metadata.set(guid, message);
+              continue;
+            }
+            const ready = event;
+            const operation = this.prepareAttachments(generation, guid, ready, message, api, receipts, this.partialCleanup)
+              .finally(() => {
+                if (!this.live(generation) || this.preparations.get(guid) !== operation) return;
+                this.preparations.delete(guid);
+                void this.pump(generation).catch(error => this.fail(generation, error));
+              });
+            this.preparations.set(guid, operation);
+            continue;
+          }
+        }
+        preparing = false;
+        this.retryAt.delete(guid);
+        if (this.recovering) { this.deferredEvents.set(guid, event); return; }
+        if (this.cancelledEvents.has(event)) continue;
+        const pending = this.pendingReplies.get(event.chatId);
+        const command = event.text.trim().toLowerCase();
+        const stop = event.attachments.length === 0 && event.unsupported.length === 0
+          && ['/stop', '!stop', '！stop'].includes(command);
+        if (pending && stop && event.speaker?.isOwner) {
+          this.pendingReplies.delete(event.chatId);
+          pending.cancel();
+        }
+        // Both the first observation and the verified send time must follow this request.
+        // Deferred retries and delayed historical delivery are never confirmation answers.
+        if (!stop && pending && (!pending.ownerOnly || (event.speaker?.isOwner === true && event.chatId === this.getOwnerUserId()))
+          && !/^\s*\[?Q[0-9a-f]{8}\]?\s+/i.test(event.text) && receipts.receivedAfter(guid, pending.createdAt)
+          && (this.eventSentAt.get(event) ?? 0) > pending.createdAt) {
+          receipts.mark(guid, 'dispatching');
+          if (pending.accept(event.text)) {
+            receipts.mark(guid, 'accepted'); this.pendingInputs.delete(guid); this.retryAt.delete(guid); continue;
+          }
+          receipts.mark(guid, 'pending');
+        }
+        // An unresolved earlier identity might belong to this chat. Keep
+        // ordinary work ordered until it settles; controls above bypass it.
+        let blocked = false;
+        for (const id of this.lookups.keys()) {
+          if (receipts.receivedBefore(id, guid)) { blocked = true; break; }
+        }
+        // A lookup may settle after recovery sorts its unknown time to the tail.
+        // Include the ready metadata until it becomes a verified event barrier.
+        for (const [id, message] of this.metadata) {
+          if (id !== guid && message?.chats?.some(chat => chat.guid === event.chatId)
+            && (message.dateCreated < this.eventSentAt.get(event)!
+              || (message.dateCreated === this.eventSentAt.get(event)! && receipts.receivedBefore(id, guid)))) {
+            blocked = true; break;
+          }
+        }
+        const sentAt = this.eventSentAt.get(event)!;
+        for (const [id, earlier] of this.pendingInputs) {
+          if (id === guid) continue;
+          if (!this.deferredEvents.has(id) && !this.preparations.has(id)) continue;
+          const earlierSentAt = this.eventSentAt.get(earlier)!;
+          if (earlier.chatId === event.chatId && (earlierSentAt < sentAt
+            || (earlierSentAt === sentAt && receipts.receivedBefore(id, guid)))) { blocked = true; break; }
+        }
+        this.deferredEvents.set(guid, event);
+        if (!stop && blocked) {
+          // Replies above and stop commands bypass ordinary work; another chat
+          // can still progress while this chat waits for its oldest input.
+          this.retryDeferred(generation);
+          continue;
+        }
+        // An interrupted dispatch is visible as uncertain; never blindly repeat model side effects.
+        receipts.mark(guid, 'dispatching');
+        this.activeDispatches.add(guid);
+        let awaitPersistence = false, deferred = false;
+        event.delivery = {
+          isCancelled: () => this.cancelledEvents.has(event!),
+          cancelPending: () => {
+            this.assertLive(generation);
+            if (stop && event!.speaker?.isOwner) receipts.rememberStop(guid, event!.chatId, this.eventSentAt.get(event!)!);
+            let count = 0;
+            for (const [id, queued] of this.pendingInputs) {
+              if (id === guid || queued.chatId !== event!.chatId
+                || !receipts.wasStopped(id, queued.chatId, this.eventSentAt.get(queued)!)) continue;
+              receipts.mark(id, 'ignored');
+              this.cancelledEvents.add(queued);
+              this.deferredEvents.delete(id);
+              this.pendingInputs.delete(id);
+              this.retryAt.delete(id);
+              this.metadata.delete(id);
+              count++;
+            }
+            return count;
+          },
+          awaitPersistence: () => { this.assertLive(generation); awaitPersistence = true; },
+          defer: () => {
+            this.assertLive(generation);
+            if (this.cancelledEvents.has(event!)) return;
+            receipts.mark(guid, 'pending');
+            this.deferredEvents.set(guid, event!);
+            deferred = true;
+          },
+          accept: () => {
+            this.assertLive(generation);
+            if (!this.cancelledEvents.has(event!)) {
+              receipts.mark(guid, 'accepted');
+              this.deferredEvents.delete(guid);
+              this.pendingInputs.delete(guid);
+            }
+          },
+        };
+        // Do not block ingress on a model turn: its confirmation reply arrives on this same receiver.
+        void Promise.all([...this.messages].map(callback => Promise.resolve().then(() => {
+          this.assertLive(generation);
+          return callback(event!);
+        }))).then(() => {
+          if (this.live(generation) && !awaitPersistence && !deferred && !this.cancelledEvents.has(event!)) {
+            receipts.mark(guid, 'accepted');
+            this.deferredEvents.delete(guid);
+            this.pendingInputs.delete(guid);
+          }
+        }).catch(error => this.fail(generation, error)).finally(() => {
+          if (this.live(generation)) {
+            this.activeDispatches.delete(guid);
+            if (!deferred) { this.deferredEvents.delete(guid); this.pendingInputs.delete(guid); }
+            if (deferred) this.retryDeferred(generation);
+            this.setStatus(this.status);
+          }
+        });
+      } catch (error) {
+        this.assertLive(generation);
+        // Receipt persistence failures still require connection-level recovery;
+        // only message lookup/download/staging failures use the local retry.
+        if (!preparing) throw error;
+        if (!receipts.isPending(guid)) { this.retryAt.delete(guid); continue; }
+        // Keep the receipt pending for recovery, but let other chats/messages proceed.
+        this.retryAt.set(guid, this.now() + 30_000);
+      }
+    }
+  }
+
+  private async lookupMessage(generation: number, guid: string, api: BlueBubblesApi,
+    receipts: BlueBubblesReceipts): Promise<void> {
+    let message: BlueBubblesMessage | null;
+    try { message = await api.message(guid); }
+    catch { message = null; }
+    if (this.live(generation) && receipts.isPending(guid)) this.metadata.set(guid, message);
+  }
+
+  private async stageAttachment(attachment: BlueBubblesAttachment, bytes: Uint8Array, api: BlueBubblesApi, generation: number) {
+    const name = attachment.transferName || attachment.guid;
+    const kind = classifyInboundAttachment(attachment.mimeType, name);
+    const token = `${this.botContextId}:${attachment.guid}`;
+    if (kind.kind === 'image' && isHeicPhoto(bytes)) {
+      // Keep the original retrievable by GUID even if the bridge has no working decoder.
+      const previewToken = isShortCopy(attachment, bytes) ? token + ':preview' : heicPreviewToken(token, attachment);
+      const cachePreview = async (preview: Uint8Array | null, mimeType: string) => {
+        this.assertLive(generation);
+        if (!preview?.byteLength) return null;
+        try {
+          return await this.host.media?.cacheImage({ integration: 'imessage', token: previewToken,
+            buffer: preview, mimeType, staging: true });
+        } catch (error) {
+          if (!(error instanceof UnsupportedInboundMediaError)) throw error;
+          return null;
+        }
+      };
+      // Prefer the local decoder so mislabeled files do not depend on bridge-side MIME detection.
+      const stored = await cachePreview(await localHeicPreview(bytes), 'image/jpeg')
+        ?? await cachePreview(await api.downloadImagePreview(attachment.guid).catch(() => null), 'image/png');
+      return { stored, heic: true };
+    }
+    if (kind.kind === 'file') return { stored: await this.host.files?.stage({ integration: 'imessage', buffer: bytes, fileName: name }) };
+    // A short copy is never cached as the attachment itself, so a later read downloads it again.
+    const params = { integration: 'imessage' as const, token: token + (isShortCopy(attachment, bytes) ? ':preview' : ''), buffer: bytes, mimeType: kind.mimeType };
+    return { stored: kind.kind === 'image' ? await this.host.media?.cacheImage({ ...params, staging: true }) : await this.host.media?.cacheMedia?.(params) };
+  }
+
+  /** Only read the explicit reply and selected background from this connected chat. */
+  async contextMedia(event: IMMessageEvent, historyIds: readonly string[]) {
+    const attachments: IMMessageEvent['attachments'] = [];
+    const unavailable: string[] = [];
+    let reply: IMMessageEvent['replyContext'];
+    const providedBy: Array<{ originalName: string; author: string }> = [];
+    const ids = new Set([...(event.imessageReplyGuid ? [event.imessageReplyGuid] : []), ...historyIds.slice().reverse()]);
+    if (!ids.size) return { attachments, unavailable, reply, providedBy };
+    const { api, generation, receipts } = this.target(event.chatId);
+    const seen = new Set<string>();
+    const provided = new Set(event.attachments.map(file => file.url ?? file.absPath));
+    let images = Math.max(0, 6 - event.attachments.filter(file => file.kind === 'image').length);
+    let files = Math.max(0, 4 - event.attachments.filter(file => file.kind !== 'image').length);
+    for (const guid of ids) {
+      if (guid === event.messageId) continue;
+      const original = await api.message(guid).catch(() => null);
+      this.assertLive(generation);
+      if (original?.guid !== guid || !original.chats?.some(chat => chat.guid === event.chatId)
+        || !Number.isFinite(original.dateCreated) || original.dateCreated < receipts.activatedAtFor(event.chatId)
+        || (original.service && original.service !== 'iMessage') || (original.handle?.service && original.handle.service !== 'iMessage')) {
+        unavailable.push('原消息不可用');
+        continue;
+      }
+      if (guid === event.imessageReplyGuid) reply = { messageId: guid, author: original.handle?.address || 'iMessage',
+        text: original.text ?? '', sentAt: original.dateCreated };
+      for (const item of original.attachments ?? []) {
+        if (seen.has(item.guid)) continue;
+        seen.add(item.guid);
+        const name = item.transferName || item.guid;
+        const kind = classifyInboundAttachment(item.mimeType, name);
+        const image = kind.kind === 'image';
+        if ((item.totalBytes ?? 0) > BLUEBUBBLES_MAX_BYTES) {
+          unavailable.push(`${name}（${formatBytes(item.totalBytes!)}，超过直接读取上限；${originalPointer(guid, item.guid)}）`);
+          continue;
+        }
+        if ((image ? images : files) === 0) {
+          unavailable.push(name);
+          continue;
+        }
+        try {
+          const token = `${this.botContextId}:${item.guid}`;
+          const cacheOptions = { staging: true, shouldReuse: () => this.live(generation) };
+          const cached = image ? await this.host.media?.getCachedImage('imessage', token, cacheOptions) : null;
+          this.assertLive(generation);
+          // An earlier short copy cached under this attachment is not the attachment.
+          const cachedSize = cached && item.totalBytes ? await fs.stat(cached.absPath).then(stat => stat.size, () => 0) : 0;
+          let stored: { absPath: string; url?: string; mimeType?: string; discard?: () => Promise<void> } | null | undefined =
+            cached && !(item.totalBytes && cachedSize < item.totalBytes) ? cached : null;
+          if (!stored && image) {
+            this.assertLive(generation);
+            stored = await this.host.media?.getCachedImage('imessage', heicPreviewToken(token, item), cacheOptions);
+            this.assertLive(generation);
+          }
+          if (!stored) {
+            const bytes = await api.download(item.guid);
+            this.assertLive(generation);
+            const result = await this.stageAttachment(item, bytes, api, generation);
+            stored = result.stored;
+            if (result.heic && !stored) {
+              unavailable.push(`${name}（${originalPointer(guid, item.guid)}）`);
+              continue;
+            }
+            if (isShortCopy(item, bytes)) unavailable.push(`${name}（只拿到 ${formatBytes(bytes.byteLength)} 的预览，原件 ${formatBytes(item.totalBytes!)}；${originalPointer(guid, item.guid)}）`);
+          }
+          if (!this.live(generation)) await stored?.discard?.();
+          this.assertLive(generation);
+          if (!stored) { unavailable.push(name); continue; }
+          const url = 'url' in stored ? stored.url : undefined;
+          const key = url ?? stored.absPath;
+          if (provided.has(key)) { await stored.discard?.(); continue; }
+          if (image) images--; else files--;
+          providedBy.push({ originalName: name, author: original.handle?.address || 'iMessage' });
+          provided.add(key);
+          attachments.push({ absPath: stored.absPath, originalName: name, mimeType: ('mimeType' in stored && stored.mimeType) || kind.mimeType,
+            kind: image ? 'image' : 'file', ...(url ? { url } : {}) });
+        } catch {
+          this.assertLive(generation);
+          unavailable.push(name);
+        }
+      }
+    }
+    return { attachments, unavailable, reply, providedBy };
+  }
+
+  private async prepareAttachments(generation: number, guid: string, event: IMMessageEvent,
+    message: BlueBubblesMessage, api: BlueBubblesApi, receipts: BlueBubblesReceipts,
+    cleanup: Map<string, Array<() => Promise<void>>>): Promise<void> {
+    const staged: Array<() => Promise<void>> = [];
+    try {
+      await this.discardPartial(cleanup, guid);
+      this.assertLive(generation);
+      for (const attachment of message.attachments ?? []) {
+        const name = attachment.transferName || attachment.guid;
+        const oversize = () => event.unsupported.push({ type: 'oversize', retrievable: true, label:
+          `${name}（${attachment.totalBytes ? formatBytes(attachment.totalBytes) : '超过 64 MB'}，超过直接读取上限；${originalPointer(guid, attachment.guid)}）` });
+        if ((attachment.totalBytes ?? 0) > BLUEBUBBLES_MAX_BYTES) { oversize(); continue; }
+        let bytes: Uint8Array;
+        try {
+          bytes = await api.download(attachment.guid);
+          // Messages may still be transferring the original; wait briefly for the full file.
+          for (let attempt = 0; attempt < 2 && isShortCopy(attachment, bytes); attempt++) {
+            await new Promise(resolve => setTimeout(resolve, this.shortCopyRetryMs));
+            this.assertLive(generation);
+            if (this.cancelledEvents.has(event)) return;
+            bytes = await api.download(attachment.guid);
+          }
+        } catch (error) {
+          this.assertLive(generation);
+          if (error instanceof BlueBubblesApiError && error.code === 'BLUEBUBBLES_HTTP_404') {
+            event.unsupported.push({ type: 'unavailable', label: name });
+            continue;
+          }
+          if (!(error instanceof BlueBubblesApiError) || error.code !== 'BLUEBUBBLES_RESPONSE_TOO_LARGE') throw error;
+          oversize();
+          continue;
+        }
+        this.assertLive(generation);
+        if (isShortCopy(attachment, bytes)) {
+          event.unsupported.push({ type: 'preview', retrievable: true, label:
+            `${name}（本轮附件只有 ${formatBytes(bytes.byteLength)}，原件 ${formatBytes(attachment.totalBytes!)}；${originalPointer(guid, attachment.guid)}）` });
+        }
+        if (this.cancelledEvents.has(event)) return;
+        const kind = classifyInboundAttachment(attachment.mimeType, name);
+        let stored: { absPath: string; url?: string; mimeType?: string; discard?: () => Promise<void> } | null | undefined;
+        try {
+          const result = await this.stageAttachment(attachment, bytes, api, generation);
+          stored = result.stored;
+          if (result.heic) {
+            if (!isShortCopy(attachment, bytes)) event.unsupported.push({ type: 'original', retrievable: true,
+              label: `${name}（HEIC 原件；${originalPointer(guid, attachment.guid)}）` });
+            if (!stored) continue;
+          }
+        } catch (error) {
+          if (!(error instanceof UnsupportedInboundMediaError)) throw error;
+          event.unsupported.push({ type: 'unsupported', label: name });
+          continue;
+        }
+        if (stored?.discard) staged.push(() => stored!.discard!());
+        if (!this.live(generation)) return;
+        if (this.cancelledEvents.has(event)) return;
+        if (!stored) { event.unsupported.push({ type: 'unsupported', label: name }); continue; }
+        event.attachments.push({ kind: kind.kind === 'image' ? 'image' : 'file', absPath: stored.absPath,
+          originalName: name, mimeType: 'mimeType' in stored && stored.mimeType ? stored.mimeType : kind.mimeType,
+          ...(stored.url ? { url: stored.url } : {}) });
+      }
+      if (!this.live(generation) || this.cancelledEvents.has(event) || !receipts.isPending(guid)) return;
+      // Transfer ownership only once preparation is complete. The scanner handles
+      // ordering, confirmation matching and durable dispatch as before.
+      this.deferredEvents.set(guid, event);
+      this.retryAt.delete(guid);
+      staged.length = 0;
+    } catch {
+      if (!this.live(generation)) return;
+      if (receipts.isPending(guid)) {
+        this.retryAt.set(guid, this.now() + 30_000);
+        this.fail(generation, new BlueBubblesReceiveError());
+      } else this.retryAt.delete(guid);
+    } finally {
+      if (staged.length) {
+        cleanup.set(guid, [...(cleanup.get(guid) ?? []), ...staged]);
+        // Retain failed cleanup for the next attempt instead of leaking a prefix.
+        await this.discardPartial(cleanup, guid).catch(() => {});
+      }
+    }
+  }
+
+  private async discardPartial(cleanup: Map<string, Array<() => Promise<void>>>, guid: string): Promise<void> {
+    const remaining = cleanup.get(guid);
+    while (remaining?.length) { await remaining[0]!(); remaining.shift(); }
+    cleanup.delete(guid);
+  }
+
+  private target(chatId: string): { api: BlueBubblesApi; receipts: BlueBubblesReceipts; generation: number } {
+    const generation = this.generation;
+    this.assertLive(generation);
+    if (!this.api || !this.receipts || !this.config?.chatGuids.includes(chatId)) throw new Error('BLUEBUBBLES_CHAT_NOT_CONNECTED');
+    return { api: this.api, receipts: this.receipts, generation };
+  }
+  private wakeSendWaiters(chatId: string, generation: number): void {
+    let changed = false;
+    for (const [guid, associatedChats] of this.awaitingSend) {
+      if (associatedChats.includes(chatId)) {
+        this.awaitingSend.delete(guid);
+        changed = true;
+      }
+    }
+    if (changed) void this.pump(generation).catch(error => this.fail(generation, error));
+  }
+  private async send(chatId: string, text: string | null, operation: (api: BlueBubblesApi, id: string) => Promise<{ guid: string }>, requestId?: string): Promise<{ messageId: string }> {
+    const { api, receipts, generation } = this.target(chatId);
+    const id = requestId ?? randomUUID();
+    if (requestId && receipts.hasOutgoing(requestId)) {
+      const messageId = receipts.confirmedSend(requestId, chatId);
+      if (!messageId) throw new Error('BLUEBUBBLES_SEND_UNKNOWN');
+      return { messageId };
+    }
+    const echoSignature = text === null ? 'file' : receipts.textSignature(text);
+    receipts.outgoing(id, { chatId, state: 'sending', echoSignature });
+    let sent = false;
+    this.activeSends.add(id);
+    try {
+      const result = await operation(api, id);
+      if (!result || typeof result.guid !== 'string' || !result.guid) throw new Error('BLUEBUBBLES_SEND_UNKNOWN');
+      // This captured ledger belongs to the original account even after disconnect.
+      receipts.outgoing(id, { chatId, state: 'sent', messageId: result.guid });
+      if (!receipts.confirmedSend(id)) throw new Error('BLUEBUBBLES_SEND_UNKNOWN');
+      sent = true;
+      this.assertLive(generation);
+      this.wakeSendWaiters(chatId, generation);
+      return { messageId: result.guid };
+    } catch (error) {
+      const confirmed = receipts.confirmedSend(id);
+      if (confirmed && this.live(generation)) return { messageId: confirmed };
+      // The server reports only the final AppleScript attempt. A prior attempt
+      // may have succeeded, so retain the correlation and never replay here.
+      const denied = error instanceof BlueBubblesApiError && error.code === AUTOMATION_DENIED;
+      if (!sent) receipts.outgoing(id, { chatId, state: 'unknown', echoSignature, ...(denied && { automationDenied: true }) });
+      if (denied) throw error;
+      throw new Error('BLUEBUBBLES_SEND_UNKNOWN');
+    } finally {
+      if (this.live(generation)) { this.activeSends.delete(id); this.setStatus(this.status); }
+    }
+  }
+  async readHistory(chatId: string, after: number, before: number, offset = 0) {
+    const { api, generation } = this.target(chatId);
+    const rows = await api.history(chatId, after, before, offset);
+    this.assertLive(generation);
+    return rows.filter(row => row.chats?.some(chat => chat.guid === chatId));
+  }
+  /**
+   * Download one attachment's stored original into `destDir`. The message must be in this connected
+   * chat and carry that attachment; credentials and the BlueBubbles origin never reach the caller.
+   */
+  async fetchAttachment(chatId: string, messageId: string, attachmentGuid: string, destDir: string) {
+    const { api, generation } = this.target(chatId);
+    const message = await api.message(messageId);
+    this.assertLive(generation);
+    const attachment = message?.guid === messageId && message.chats?.some(chat => chat.guid === chatId)
+      ? message.attachments?.find(item => item.guid === attachmentGuid) : undefined;
+    if (!attachment) throw new Error('BLUEBUBBLES_ATTACHMENT_NOT_IN_CHAT');
+    const name = attachmentFileName(attachment.transferName || attachment.guid) || attachment.guid.slice(0, 8);
+    await fs.mkdir(destDir, { recursive: true });
+    // The full attachment identity tells apart originals whose GUIDs share a prefix and whose names match.
+    const id = createHash('sha256').update(attachment.guid).digest('hex').slice(0, 16);
+    // Each download lands in its own staging file first. Only a complete original is published under the
+    // original's name; an incomplete copy gets its own preview name, so it never replaces a verified original.
+    const staged = path.join(destDir, `.${randomUUID()}.download`);
+    const bytes = await api.downloadToFile(attachment.guid, staged);
+    const totalBytes = attachment.totalBytes ?? null;
+    const complete = totalBytes === null || totalBytes === 0 || bytes >= totalBytes;
+    const dest = path.join(destDir, `${id}-${complete ? '' : 'preview-'}${name}`);
+    try {
+      this.assertLive(generation);
+      await fs.rename(staged, dest);
+    } catch (error) {
+      await fs.rm(staged, { force: true }).catch(() => {});
+      throw error;
+    }
+    return { path: dest, name, bytes, totalBytes, complete };
+  }
+  /** Reuse the already-authorized receiver. No dispose, credential write or second listener. */
+  async verifyGroupHandoff(chatId: string): Promise<() => void> {
+    const { api, generation } = this.target(chatId);
+    const url = this.webhookUrl;
+    if (!url || !this.isGroup(chatId)) throw new Error('BLUEBUBBLES_INVALID_GROUP');
+    let step = 'SERVER';
+    try {
+      await api.info();
+      this.assertLive(generation);
+      step = 'CHAT';
+      const chat = await api.chat(chatId);
+      if (chat.guid !== chatId || !chat.participants?.length) throw new Error('BLUEBUBBLES_INVALID_GROUP');
+      this.assertLive(generation);
+      step = 'CALLBACK';
+      await api.registerWebhook(url);
+      this.assertLive(generation);
+    } catch (error) {
+      const reason = error instanceof BlueBubblesApiError ? error.code : 'UNAVAILABLE';
+      throw new Error(`BLUEBUBBLES_${step}_${reason}`);
+    }
+    return () => {
+      this.assertLive(generation);
+      if ([...this.activeDispatches].some(id => this.pendingInputs.get(id)?.chatId === chatId))
+        throw new Error('GROUP_BUSY');
+    };
+  }
+  listChats(): BlueBubblesChat[] { return [...this.chats.values()].map(chat => structuredClone(chat)); }
+  sendText(chatId: string, text: string): Promise<{ messageId: string }> { return this.send(chatId, text, (api, id) => api.sendText(chatId, text, id)); }
+  sendDirectDelivery(chatId: string, text: string, requestId: string): Promise<{ messageId: string }> {
+    if (!/^(?:iMessage|any);-;/.test(chatId) || this.isGroup(chatId)) {
+      return Promise.reject(new Error('BLUEBUBBLES_DIRECT_CHAT_REQUIRED'));
+    }
+    return this.send(chatId, text, (api, id) => api.sendText(chatId, text, id), requestId);
+  }
+  sendMarkdownText(chatId: string, text: string): Promise<{ messageId: string }> { return this.sendText(chatId, text); }
+  async sendFile(chatId: string, absPath: string, displayName?: string): Promise<SendFileResult & { deliveryError?: typeof AUTOMATION_DENIED | 'BLUEBUBBLES_SEND_UNKNOWN' }> {
+    const { generation } = this.target(chatId);
+    let bytes: Buffer;
+    try {
+      const stat = await fs.stat(absPath);
+      if (!stat.isFile()) return { ok: false, reason: 'NOT_FOUND' };
+      if (!stat.size) return { ok: false, reason: 'EMPTY' };
+      if (stat.size > BLUEBUBBLES_MAX_BYTES) return { ok: false, reason: 'TOO_LARGE' };
+      bytes = await fs.readFile(absPath);
+    } catch { return { ok: false, reason: 'NOT_FOUND' }; }
+    this.assertLive(generation);
+    if (bytes.length > BLUEBUBBLES_MAX_BYTES) return { ok: false, reason: 'TOO_LARGE' };
+    const name = path.basename(displayName ?? absPath);
+    try { return { ok: true, ...await this.send(chatId, null, (api, id) => api.sendFile(chatId, bytes, name, id)) }; }
+    catch (error) {
+      const deliveryError = error instanceof BlueBubblesApiError && error.code === AUTOMATION_DENIED
+        ? AUTOMATION_DENIED : 'BLUEBUBBLES_SEND_UNKNOWN';
+      return { ok: false, reason: 'SEND_FAIL', deliveryError };
+    }
+  }
+  async commitFinal(output: ImFinalOutput): Promise<void> {
+    if (output.text.trim() && output.text.trim() !== 'NO_REPLY') await this.sendText(output.userId, output.text);
+    for (const file of new Set(output.mediaAbsPaths ?? [])) {
+      const result = await this.sendFile(output.userId, file);
+      if (!result.ok) throw new Error(result.deliveryError ?? 'BLUEBUBBLES_FILE_SEND_FAILED');
+    }
+  }
+  cancelTextReply(requestId: string): boolean {
+    for (const [chatId, pending] of this.pendingReplies) {
+      if (pending.requestId !== requestId) continue;
+      this.pendingReplies.delete(chatId);
+      pending.cancel();
+      return true;
+    }
+    return false;
+  }
+  async requestTextReply<T>(chatId: string, prompt: string, parse: (text: string) => T | null, timeoutMs = 30 * 60_000,
+    shared?: { result: Promise<T>; decide(value: T): boolean }, requestId?: string,
+    audience: 'owner' | 'chat' = shared ? 'owner' : 'chat'): Promise<T> {
+    if (this.pendingReplies.has(chatId)) {
+      if (shared) return shared.result;
+      throw new Error('BLUEBUBBLES_INTERACTION_PENDING');
+    }
+    let resolve!: (value: T) => void;
+    let reject!: (error: Error) => void;
+    let answered = false;
+    const result = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+    // Attach a rejection consumer before sending (disconnect may race the send).
+    void result.catch(() => {});
+    const retire = () => {
+      clearTimeout(timer);
+      if (this.pendingReplies.get(chatId) === pending) this.pendingReplies.delete(chatId);
+    };
+    const pending = { requestId, ownerOnly: audience === 'owner', createdAt: this.now(), accept: (text: string) => {
+      const value = parse(text); if (value === null) return false;
+      if (shared) shared.decide(value);
+      else { answered = true; retire(); resolve(value); }
+      return true;
+    }, cancel: () => { retire(); reject(new Error('BLUEBUBBLES_INTERACTION_CANCELLED')); } };
+    const timer = setTimeout(pending.cancel, timeoutMs);
+    this.pendingReplies.set(chatId, pending);
+    if (shared) void shared.result.then(value => { retire(); resolve(value); }, error => { retire(); reject(error); });
+    try {
+      try { await this.sendText(chatId, prompt); }
+      catch (error) {
+        if (!shared && !answered) throw error;
+        // A reply can arrive after prompt delivery but before its HTTP response.
+        // Keep that accepted answer even if the presentation request fails late.
+        // Shared Desktop/Mobile permissions also keep their own lifecycle;
+        // a failed presentation is not a denial. Remove only this waiter.
+        retire();
+      }
+      return await result;
+    }
+    finally {
+      retire();
+    }
+  }
+}

@@ -16,7 +16,9 @@ const io = vi.hoisted(() => ({
     shareId: string;
     status: 'active' | 'paused';
     providerLabel: string;
-    owner: { displayName: string };
+    memberId?: string;
+    providerId?: string;
+    owner: { displayName: string; region?: 'global' | 'cn' };
   }>),
   providerShareAgentDeviceId: vi.fn((id: string) => `share:${id}`),
 }));
@@ -56,6 +58,20 @@ describe('listWorkerAgentLocations', () => {
     io.providerShareAgentDeviceId.mockClear();
     io.handleListDevices.mockResolvedValue({ devices: [] });
     io.getReceivedShares.mockReturnValue([]);
+  });
+
+  // #8028 / unit: only the same-account controlled picker requests favorite identity.
+  // Existing plugin/model-list callers must not receive extra membership metadata.
+  it('projects minimal favorite identity only when explicitly requested', async () => {
+    io.getReceivedShares.mockReturnValue([{ shareId: 's1', memberId: 'm1', providerId: 'p1',
+      status: 'active', providerLabel: 'Provider', owner: { displayName: 'Owner', region: 'global' } }]);
+    const identity = { shareId: 's1', memberId: 'm1', providerId: 'p1', owner: { region: 'global' } };
+    expect((await readWorkerAgentLocations({ favoriteSources: true })).locations).toEqual([
+      { agentDeviceId: 'share:s1', name: 'Provider · Owner', favoriteSource: identity },
+    ]);
+    expect((await readWorkerAgentLocations()).locations).toEqual([
+      { agentDeviceId: 'share:s1', name: 'Provider · Owner' },
+    ]);
   });
 
   it('lists online remote-control computers and active shares, excluding this computer', async () => {

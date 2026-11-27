@@ -1,5 +1,8 @@
 import { formatCompactionDuration, formatSessionDuration, formatShellDuration } from '@/lib/sessionDurationFormat';
+import { IMPORT_SOURCE_NAMES, ImportSourceMark } from '@/components/icons/ImportSourceMark';
+import { isImportSourceId } from '../../../shared/sessionImport';
 import { InputHandoffRecordRow, readInputHandoffRecordData } from '@/features/input-handoff/InputHandoffRecordRow';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { BotSessionTaskResultCard } from '@/features/bots/BotSessionTaskResultCard';
 /**
@@ -11,18 +14,23 @@ import { BotSessionTaskResultCard } from '@/features/bots/BotSessionTaskResultCa
 
 import { BotAuthorizationCardView } from '@/features/bots/BotAuthorizationCard';
 import { useState, type ReactNode } from 'react';
+import type { PluginModelRouteNote } from '@/lib/ccAgent.types';
 import {
   ArrowLeftRight,
   ArrowRight,
   Check,
   ChevronDown,
   ChevronRight,
+  Info,
   Layers,
+  Plug,
   RefreshCw,
+  Sparkles,
   Target,
   X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { summarizeContextTextEstimate } from '@cindy/maker-shared/session-controls';
 import { useNavigate } from 'react-router-dom';
 
 import {
@@ -54,11 +62,13 @@ import {
   ACTIVITY_ROW_RADIUS_CLASS,
 } from './activityRowChrome';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { PLUGIN_ENGINE_DEFAULT_MODEL } from '@/../shared/pluginEngines';
 import { builtInSkillDescriptionKey } from '@/features/skillhub/lib/builtInSkillPresentation';
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
 
 interface SystemCardProps {
   cardType:
+    | 'plugin-model-route'
     | 'voice-call'
     | 'voice-call-task'
     | 'mcp-app'
@@ -85,7 +95,8 @@ interface SystemCardProps {
     | 'bot-session-task-result'
     | 'bot-direct-message'
     | 'bot-authorization'
-    | 'context-rebuild';
+    | 'context-rebuild'
+    | 'session-import';
   data?: Record<string, unknown>;
   /**
    * 这条自愈记录此刻是否真的在飞（会话有在跑的 turn，且它就是那个 turn 的发起者）。
@@ -109,13 +120,13 @@ const cardClass = cn(
   'select-text',
 );
 
-const titleClass = 'text-15 font-semibold mb-2';
+const titleClass = 'text-15 font-medium mb-2';
 const labelClass = 'text-[var(--msg-tool-text)]';
 const valueClass = 'font-medium';
-const rowClass = 'flex items-baseline justify-between gap-3 py-[2px]';
+const rowClass = 'flex items-baseline justify-between gap-3 py-0.5';
 const descClass = cn(labelClass, 'text-right flex-1');
 const codeClass = cn(
-  'inline shrink-0 px-[5px] py-[1px] rounded-[4px] font-mono text-13',
+  'inline shrink-0 px-1 py-px rounded-[4px] font-mono text-13',
   'bg-[var(--status-bar-accent)]/15',
   'text-[var(--status-bar-accent)]',
 );
@@ -141,7 +152,7 @@ function HelpCard({ data }: { data?: Record<string, unknown> }) {
       builtIn?: boolean;
     }>,
   ) => (
-    <div className="flex flex-col gap-[2px]">
+    <div className="flex flex-col gap-0.5">
       {items.map((c) => {
         const descriptionKey = builtInSkillDescriptionKey(c);
         return (
@@ -194,7 +205,7 @@ function CostCard({ data }: { data?: Record<string, unknown> }) {
   return (
     <div className={cardClass}>
       <div className={titleClass}>{t('chat.systemCard.cost.title')}</div>
-      <div className="flex flex-col gap-[2px]">
+      <div className="flex flex-col gap-0.5">
         <div className={rowClass}>
           <span className={labelClass}>{t('chat.systemCard.cost.tokensUsed')}</span>
           <span className={valueClass}>{tokenText}</span>
@@ -233,6 +244,9 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
   }
 
   const categories = Array.isArray(usage.categories) ? usage.categories : [];
+  const estimateRows = summarizeContextTextEstimate(usage.textEstimate, {
+    translate: (key, fallback, params) => t(key.replace('session.presentation.controls.context.', 'chat.systemCard.context.'), { defaultValue: fallback, ...params }),
+  });
   const mcpTools = Array.isArray(usage.mcpTools) ? usage.mcpTools : [];
   const memoryFiles = Array.isArray(usage.memoryFiles) ? usage.memoryFiles : [];
   const agents = Array.isArray(usage.agents) ? usage.agents : [];
@@ -367,6 +381,7 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
       )}
     >
       <button
+        data-chat-copy-content
         type="button"
         className="flex w-full items-center gap-2 text-left"
         onClick={() => setExpanded((prev) => !prev)}
@@ -400,6 +415,9 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
         className="mt-2 flex h-[7px] w-full overflow-hidden rounded-full bg-[var(--msg-tool-card-bg)]"
         aria-label={t('chat.systemCard.context.barAria')}
       >
+        {visibleCategories.length === 0 && totalTokens > 0 && (
+          <div className="h-full bg-[var(--msg-tool-text)]" style={{ width: `${pct}%` }} />
+        )}
         {visibleCategories
           .filter((cat) => !cat.isDeferred)
           .map((cat) => (
@@ -423,7 +441,7 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
             </div>
           )}
 
-          <div className="flex flex-col gap-[5px]">
+          <div className="flex flex-col gap-1">
             {visibleCategories.map((cat) => (
               <div
                 key={cat.name}
@@ -486,10 +504,28 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
                       <span className="shrink-0 tabular-nums">{fmtContextTokens(row.tokens)}</span>
                       <span className="w-[42px] shrink-0 text-right tabular-nums">{row.count}</span>
                     </button>
-                    {isDetailExpanded && <div className="mt-1 pl-[18px]">{row.content}</div>}
+                    {isDetailExpanded && <div className="mt-1 pl-4">{row.content}</div>}
                   </div>
                 );
               })}
+            </div>
+          )}
+
+          {estimateRows.length > 0 && (
+            <div className="mt-3 space-y-1.5 border-t border-[var(--msg-tool-card-border)] pt-3">
+              {estimateRows.map((row, index) => (
+                index === 0 ? (
+                  <div key={row.label} className="space-y-1">
+                    <div className={labelClass}>{row.label}</div>
+                    <p className="text-12 text-[var(--msg-tool-text)]">{row.value}</p>
+                  </div>
+                ) : (
+                  <div key={row.label} className="flex items-start justify-between gap-3 text-12 text-[var(--msg-tool-text)]">
+                    <span className="min-w-0 break-words">{row.label}</span>
+                    <span className="shrink-0 tabular-nums">{row.value}</span>
+                  </div>
+                )
+              ))}
             </div>
           )}
 
@@ -555,6 +591,7 @@ interface ContextDetailRow {
 }
 
 interface ContextUsageData {
+  textEstimate?: unknown;
   categories: Array<{ name: string; tokens: number; color: string; isDeferred?: boolean }>;
   totalTokens: number;
   maxTokens: number;
@@ -610,7 +647,7 @@ function ContextDetailSection({
   return (
     <div>
       {title && <div className="mb-1 text-12 font-medium text-[var(--msg-user-text)]">{title}</div>}
-      <div className="flex flex-col gap-[2px]">
+      <div className="flex flex-col gap-0.5">
         {visibleRows.map(([label, tokens]) => (
           <div key={label} className="flex items-baseline justify-between gap-3 text-12">
             <span className="min-w-0 flex-1 truncate text-[var(--msg-tool-text)]">{label}</span>
@@ -728,7 +765,7 @@ function StatusCard({ data }: { data?: Record<string, unknown> }) {
   return (
     <div className={cardClass}>
       <div className={titleClass}>{t('chat.systemCard.status.title')}</div>
-      <div className="flex flex-col gap-[2px]">
+      <div className="flex flex-col gap-0.5">
         <div className={rowClass}>
           <span className={labelClass}>{t('chat.systemCard.status.agent')}</span>
           <span className={valueClass}>
@@ -838,6 +875,38 @@ function GoalCompleteCard({ data }: { data?: Record<string, unknown> }) {
 }
 
 /**
+ * 新任务「让插件选」的结果：第一条消息下方一行，左对齐、次级小字(设计稿 2026-10-31 r1)。
+ * routed 说插件为这个任务选了什么；kept 说明插件没给可用结果、沿用了原来的模型。
+ */
+function PluginModelRouteCard({ data }: { data?: Partial<PluginModelRouteNote> }) {
+  const { t } = useTranslation();
+  if (!data?.pluginName || !data.modelName) return null;
+  const model = data.effort
+    ? `${data.modelName} · ${t(`effortLevels.${data.effort}`, { defaultValue: data.effort })}`
+    : data.modelName;
+  const strong = (text: string) => <span className="font-medium text-[var(--text-secondary)]">{text}</span>;
+  return (
+    <div className="flex items-start gap-2 py-0.5 text-12 leading-[1.5] text-[var(--text-tertiary)]">
+      {data.outcome !== 'routed' ? <Info size={13} className="mt-[3px] shrink-0" aria-hidden />
+        : data.source === 'model-group' ? <Sparkles size={13} className="mt-[3px] shrink-0" aria-hidden />
+        : <Plug size={13} className="mt-[3px] shrink-0" aria-hidden />}
+      <span className="min-w-0">
+        {data.outcome === 'routed' ? (
+          <>
+            {strong(data.pluginName)} {t('chat.pluginModelRoute.routed')} {strong(model)}
+            {data.reason ? ` · ${data.reason}` : ''}
+          </>
+        ) : (
+          <>
+            {t(`chat.pluginModelRoute.kept.${data.why ?? 'no-opinion'}`, { plugin: data.pluginName })} {strong(model)}
+          </>
+        )}
+      </span>
+    </div>
+  );
+}
+
+/**
  * /goal 提示分隔条(目前:usageLimited 到点自动续跑的"用量已恢复,继续目标")。
  * 同 GoalCompleteCard 复用 CompactBoundaryCard 的分隔条语言。
  */
@@ -887,16 +956,7 @@ function summarizeInterruption(detail?: string): string | undefined {
   return firstSentence.length > 72 ? `${firstSentence.slice(0, 71)}…` : firstSentence;
 }
 
-/**
- * silent-stop 自动续跑的分隔条（上游用空回复静默收尾后自动续跑）。形态与文案保持
- * 本 PR 之前的原样：居中 pill + 「连接中断，已自动继续」。它不是重连，没有原因也没有
- * 次数，套用重连行只会给出错误的语义。
- *
- * **文案 key 必须是它自己的 `autoResumeSeparator.label`。** 本 PR 把
- * `autoResume.label` 的**值**改成了「已重新连接」（那是重连成功态），复用它等于让
- * silent-stop 行显示「已重新连接」—— 恢复了组件形态却仍然改错文案，只是把回归从
- * 组件层搬到了 i18n 层（copilot review）。
- */
+/** 上游回复为空时，使用独立分隔条说明已自动继续。 */
 function AutoResumeSeparator() {
   const { t } = useTranslation();
   const label = t('chat.systemCard.autoResumeSeparator.label');
@@ -981,11 +1041,13 @@ function AutoResumeActionRow({
       : t('chat.systemCard.autoResume.agentReconnect.unnamed')
     : info.groupSwitch
     ? t('chat.systemCard.autoResume.groupSwitch')
+    : info.geminiInputRetry
+    ? t('chat.geminiRateLimit.retried')
     : usageLimitReset
     ? t('chat.systemCard.autoResume.labelUsageReset')
     : live
     ? hasProgress
-      ? t('chat.systemCard.autoResumePending.labelWithProgress', {
+      ? t(info.reconnectStalled ? 'chat.systemCard.autoResumePending.continuingWithProgress' : 'chat.systemCard.autoResumePending.labelWithProgress', {
           attempt: info.attempt,
           total: info.maxAttempts,
         })
@@ -997,7 +1059,9 @@ function AutoResumeActionRow({
         : t('chat.systemCard.autoResume.labelNeutral');
   // 供应商组正在换电脑时错误先不呈现：行内不带原始错误(它只用来认出终态 event 的回声)。
   const shownError = info.groupSwitchPending ? undefined : info.error;
-  const summary = summarizeInterruption(shownError);
+  const summary = info.reconnectStalled && !info.groupSwitchPending
+    ? t('logic.errors.codexReconnectStalled')
+    : summarizeInterruption(shownError);
   const canExpand = Boolean(shownError) || hasProgress || showSessionTotal;
   return (
     <div className="flex flex-col">
@@ -1012,7 +1076,7 @@ function AutoResumeActionRow({
         className={cn(
           'flex w-full items-center gap-1.5',
           ACTIVITY_ROW_RADIUS_CLASS,
-          'px-2 py-[3px]',
+          'px-2 py-0.5',
           'text-left outline-none',
           canExpand
             ? cn(
@@ -1059,7 +1123,7 @@ function AutoResumeActionRow({
       {canExpand && expanded && (
         <div
           className={cn(
-            'mx-2 mt-1 mb-1 rounded-[6px] px-[10px] py-2',
+            'mx-2 mt-1 mb-1 rounded-lg px-[10px] py-2',
             'bg-[var(--msg-user-bg)]',
             'border border-[var(--msg-user-border)]',
             'text-[var(--msg-tool-card-chevron)]',
@@ -1071,13 +1135,13 @@ function AutoResumeActionRow({
               <div className="text-12 text-[var(--text-secondary)]">
                 {t('chat.systemCard.autoResume.detail.reason')}
               </div>
-              <pre className="m-0 mt-[2px] whitespace-pre-wrap break-words font-mono text-[length:calc(var(--app-code-font-size)_-_1px)] leading-[calc(var(--app-code-font-size)_+_4px)]">
+              <pre className="m-0 mt-0.5 whitespace-pre-wrap break-words font-mono text-[length:calc(var(--app-code-font-size)_-_1px)] leading-[calc(var(--app-code-font-size)_+_4px)]">
                 {info.error}
               </pre>
             </>
           )}
           {(hasProgress || showSessionTotal) && (
-            <div className={cn('flex flex-wrap gap-x-4 gap-y-[2px] text-12', info.error && 'mt-2')}>
+            <div className={cn('flex flex-wrap gap-x-4 gap-y-0.5 text-12', info.error && 'mt-2')}>
               {hasProgress && (
                 <span>
                   {t('chat.systemCard.autoResume.detail.attempt', {
@@ -1156,14 +1220,29 @@ function agentRelocationPlace(
     : t('chat.systemCard.agentSwitch.relocatedElsewhere');
 }
 
+function handoffCoverageKey(data: Record<string, unknown> | undefined) {
+  if (data?.handoffCoverage === 'complete') return 'chat.systemCard.handoffCoverage.complete';
+  if (data?.handoffCoverage === 'condensed') return 'chat.systemCard.handoffCoverage.condensed';
+  return null;
+}
+
 function AgentSwitchCard({ data, sessionId }: { data?: Record<string, unknown>; sessionId?: string }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
-  const engineLabel = (kind: unknown): string =>
-    kind === 'codex' ? 'Codex' : kind === 'pi' ? 'Pi' : 'Claude Code';
-  const fromLabel = engineLabel(data?.fromAgentKind);
-  const toLabel = engineLabel(data?.toAgentKind);
-  const toModel = typeof data?.toModel === 'string' ? data.toModel : '';
+  // 'acp' = 插件引擎(docs/plans/acp-plugin-bridge.md)：用切换时记下的引擎名，缺名称时用通用名称。
+  const engineLabel = (kind: unknown, name: unknown): string =>
+    kind === 'acp'
+      ? (typeof name === 'string' && name ? name : t('newChat.pluginEngines.genericName'))
+      : kind === 'codex' ? 'Codex' : kind === 'pi' ? 'Pi' : 'Claude Code';
+  const fromLabel = engineLabel(data?.fromAgentKind, data?.fromEngineName);
+  const toLabel = engineLabel(data?.toAgentKind, data?.toEngineName);
+  const rawToModel = typeof data?.toModel === 'string' ? data.toModel : '';
+  // 插件引擎的 'default' 是「让引擎自己选」，不把内部取值当模型名显示。
+  const toModel = data?.toAgentKind === 'acp' && rawToModel === PLUGIN_ENGINE_DEFAULT_MODEL
+    ? t('newChat.pluginEngines.defaultModel')
+    : rawToModel;
+  const coverageKey = handoffCoverageKey(data);
+  const coverage = coverageKey ? t(coverageKey) : null;
   const handoff = typeof data?.handoff === 'string' ? data.handoff : '';
   const modelOnly = data?.modelOnly === true;
   const label = modelOnly ? `${data?.fromModel ?? ''} → ${toModel}` :
@@ -1171,7 +1250,7 @@ function AgentSwitchCard({ data, sessionId }: { data?: Record<string, unknown>; 
     t('chat.systemCard.agentSwitch.label', { from: fromLabel, to: toLabel });
 
   return (
-    <div className="w-full select-none py-2" role="separator" aria-label={label}>
+    <div className="w-full select-none py-2" role="separator" aria-label={coverage ? `${label} · ${coverage}` : label}>
       <div className="flex w-full items-center gap-3">
         <div className="h-px flex-1 bg-[var(--msg-tool-card-border)]" />
         <button
@@ -1197,7 +1276,13 @@ function AgentSwitchCard({ data, sessionId }: { data?: Record<string, unknown>; 
               </span>
             </>
           )}
-          {(Boolean(data?.resumed) || data?.nativeHistory === 'fallback') && (
+          {coverage && (
+            <>
+              <span className="opacity-50">·</span>
+              <span className="min-w-0 break-words">{coverage}</span>
+            </>
+          )}
+          {!coverage && (Boolean(data?.resumed) || data?.nativeHistory === 'fallback') && (
             <>
               <span className="opacity-50">·</span>
               <span className="shrink-0 whitespace-nowrap">{t(data?.nativeHistory === 'fallback' ? 'chat.systemCard.agentSwitch.fallbackBadge' : 'chat.systemCard.agentSwitch.resumedBadge')}</span>
@@ -1216,15 +1301,17 @@ function AgentSwitchCard({ data, sessionId }: { data?: Record<string, unknown>; 
         {handoff ? (
           <div
             className={cn(
-              'mx-auto mt-2 max-w-full rounded-[10px] border border-[var(--msg-tool-card-border)]',
+              'mx-auto mt-2 max-w-full rounded-xl border border-[var(--msg-tool-card-border)]',
               'bg-[var(--msg-tool-card-bg)] px-4 py-3 select-text',
             )}
           >
             <div className="mb-1.5 text-11 font-medium text-muted-foreground">
               {t(
-                isEnglishSourceHandoff(handoff)
-                  ? 'chat.systemCard.agentSwitch.handoffTitleEnglishSource'
-                  : 'chat.systemCard.agentSwitch.handoffTitle',
+                coverage
+                  ? 'chat.systemCard.handoffCoverage.details'
+                  : isEnglishSourceHandoff(handoff)
+                    ? 'chat.systemCard.agentSwitch.handoffTitleEnglishSource'
+                    : 'chat.systemCard.agentSwitch.handoffTitle',
               )}
             </div>
             <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words font-mono text-12 leading-[1.55] text-[var(--msg-tool-text)]">
@@ -1240,6 +1327,8 @@ function AgentSwitchCard({ data, sessionId }: { data?: Record<string, unknown>; 
 function ContextRebuildCard({ data }: { data?: Record<string, unknown> }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
+  const coverageKey = handoffCoverageKey(data);
+  const coverage = coverageKey ? t(coverageKey) : null;
   const handoff = typeof data?.handoff === 'string' ? data.handoff : '';
   const reason =
     data?.reason === 'pi-prompt-timeout'
@@ -1260,7 +1349,7 @@ function ContextRebuildCard({ data }: { data?: Record<string, unknown> }) {
   );
 
   return (
-    <div className="w-full select-none py-2" role="separator" aria-label={label}>
+    <div className="w-full select-none py-2" role="separator" aria-label={coverage ? `${label} · ${coverage}` : label}>
       <div className="flex w-full items-center gap-3">
         <div className="h-px flex-1 bg-[var(--msg-tool-card-border)]" />
         <button
@@ -1276,6 +1365,12 @@ function ContextRebuildCard({ data }: { data?: Record<string, unknown> }) {
         >
           <RefreshCw size={12} className="shrink-0" />
           <span>{label}</span>
+          {coverage && (
+            <>
+              <span className="opacity-50">·</span>
+              <span className="min-w-0 break-words">{coverage}</span>
+            </>
+          )}
           {handoff && (
             <ChevronRight
               size={12}
@@ -1289,15 +1384,17 @@ function ContextRebuildCard({ data }: { data?: Record<string, unknown> }) {
         {handoff ? (
           <div
             className={cn(
-              'mx-auto mt-2 max-w-full rounded-[10px] border border-[var(--msg-tool-card-border)]',
+              'mx-auto mt-2 max-w-full rounded-xl border border-[var(--msg-tool-card-border)]',
               'bg-[var(--msg-tool-card-bg)] px-4 py-3 select-text',
             )}
           >
             <div className="mb-1.5 text-11 font-medium text-muted-foreground">
               {t(
-                isEnglishSourceHandoff(handoff)
-                  ? 'chat.systemCard.contextRebuild.handoffTitleEnglishSource'
-                  : 'chat.systemCard.contextRebuild.handoffTitle',
+                coverage
+                  ? 'chat.systemCard.handoffCoverage.details'
+                  : isEnglishSourceHandoff(handoff)
+                    ? 'chat.systemCard.contextRebuild.handoffTitleEnglishSource'
+                    : 'chat.systemCard.contextRebuild.handoffTitle',
               )}
             </div>
             <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words font-mono text-12 leading-[1.55] text-[var(--msg-tool-text)]">
@@ -1306,6 +1403,48 @@ function ContextRebuildCard({ data }: { data?: Record<string, unknown> }) {
           </div>
         ) : null}
       </Collapse>
+    </div>
+  );
+}
+
+const IMPORT_HARNESS_LABEL: Record<string, string> = { cc: 'Claude Code', codex: 'Codex', pi: 'Pi' };
+
+/** 任务导入的时间线标记：开头说明来源与原文件夹，结尾一条分隔说明之后由谁接着做。 */
+function SessionImportCard({ data }: { data?: Record<string, unknown> }) {
+  const { t, i18n } = useTranslation();
+  const source = typeof data?.source === 'string' && isImportSourceId(data.source) ? data.source : null;
+  const sourceLabel = source ? IMPORT_SOURCE_NAMES[source] : typeof data?.sourceLabel === 'string' ? data.sourceLabel : '';
+  if (data?.phase === 'end') {
+    const harness = typeof data.harness === 'string' ? IMPORT_HARNESS_LABEL[data.harness] : undefined;
+    const label = data.mode === 'handoff' && harness
+      ? t('settings.sessionImport.marker.endHandoff', { source: sourceLabel, harness })
+      : t('settings.sessionImport.marker.end', { source: sourceLabel });
+    return (
+      <div className="flex w-full select-none items-center gap-3 py-2 text-12 leading-[1.33] text-[var(--text-tertiary)]" role="separator" aria-label={label}>
+        <div className="h-px flex-1 bg-[var(--msg-tool-card-border)]" />
+        <span className="max-w-[78%] text-center">{label}</span>
+        <div className="h-px flex-1 bg-[var(--msg-tool-card-border)]" />
+      </div>
+    );
+  }
+  const importedAt = typeof data?.importedAt === 'number' ? data.importedAt : 0;
+  const date = importedAt > 0
+    ? new Intl.DateTimeFormat(i18n.language, { month: 'short', day: 'numeric' }).format(new Date(importedAt))
+    : '';
+  const folder = typeof data?.originalCwd === 'string' && data.originalCwd ? data.originalCwd : null;
+  return (
+    <div className="flex w-full select-none flex-col items-center gap-1 py-2 text-center">
+      <span className="inline-flex items-center gap-2 text-13 font-medium leading-[1.38] text-[var(--text-secondary)]">
+        {source && <ImportSourceMark source={source} size={16} />}
+        {date
+          ? t('settings.sessionImport.marker.from', { source: sourceLabel, date })
+          : sourceLabel}
+      </span>
+      {folder && (
+        <span className="max-w-full truncate text-12 leading-[1.33] text-[var(--text-tertiary)] select-text" title={folder}>
+          {t('settings.sessionImport.marker.folder', { path: folder })}
+        </span>
+      )}
     </div>
   );
 }
@@ -1455,6 +1594,8 @@ export function SystemCard({
       return <GoalCompleteCard data={data} />;
     case 'goal-resumed':
       return <GoalResumedCard data={data as { kind?: string } | undefined} />;
+    case 'plugin-model-route':
+      return <PluginModelRouteCard data={data as Partial<PluginModelRouteNote> | undefined} />;
     case 'auto-resume': {
       // 同一个卡类型承载两套自愈:带中断上下文的是本份的「重连」记录,没有的是 silent-stop
       // 的「已自动继续」分隔条 —— 后者保持原形态原文案,不被重连三态改写(copilot review)。
@@ -1471,6 +1612,8 @@ export function SystemCard({
       return <AgentSwitchCard data={data} sessionId={sessionId} />;
     case 'context-rebuild':
       return <ContextRebuildCard data={data} />;
+    case 'session-import':
+      return <SessionImportCard data={data} />;
     case 'learn':
       return <LearnStatusCard data={data} contextSessionId={sessionId} />;
     case 'review':
@@ -1523,15 +1666,9 @@ function CmdCard({ data }: { data?: Record<string, unknown> }) {
   // 文案区分 ok / timeout / spawn-err / exit code。
   const statusText = timedOut ? 'timeout' : spawnError ? 'spawn err' : `exit ${exitCode}`;
   const statusChip = (
-    <span
-      className={cn(
-        'shrink-0 px-[8px] py-[1px] rounded-full font-mono text-11',
-        'bg-[var(--msg-tool-card-bg)] text-[var(--msg-tool-text)]',
-        'border border-[var(--msg-tool-card-border)]',
-      )}
-    >
+    <Badge tone="outline" mono className="bg-[var(--msg-tool-card-bg)] text-[var(--msg-tool-text)]">
       {statusText}
-    </span>
+    </Badge>
   );
 
   // cmdLine + 各种输出块共用同一个等宽 + 灰度 Card-tone block (12px radius 是
@@ -1539,13 +1676,13 @@ function CmdCard({ data }: { data?: Record<string, unknown> }) {
   // 不用红色 (违反 §2 grayscale 硬规则)。
   const blockClass = cn(
     'mt-1 max-h-[320px] overflow-auto whitespace-pre-wrap break-words',
-    'rounded-xl px-[12px] py-[10px]',
+    'rounded-xl px-3 py-2.5',
     'font-mono text-[length:calc(var(--app-code-font-size)_-_1.5px)] leading-[1.55]',
     'bg-[var(--msg-code-block-bg)] text-[var(--msg-user-text)]',
     'border border-[var(--msg-code-block-border)]',
   );
   const cmdLineClass = cn(
-    'mt-2 px-[12px] py-[8px] rounded-xl overflow-x-auto',
+    'mt-2 px-3 py-2 rounded-xl overflow-x-auto',
     'font-mono text-[length:calc(var(--app-code-font-size)_-_1px)] leading-[1.5]',
     'bg-[var(--msg-code-block-bg)] text-[var(--msg-user-text)]',
     'border border-[var(--msg-code-block-border)]',

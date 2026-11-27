@@ -5,15 +5,13 @@ import { Button } from '@/components/ui/button';
  * edit-last-message: 最后一条 user 消息的 inline 编辑态(Codex 同款交互)。
  *
  * UserMessage 点铅笔后原地把文本气泡替换成本组件:textarea 预填原文 +
- * 右下 [取消][发送]。运行中点铅笔时 UserMessage 已立即中断当前 turn(产品
- * 决策,对齐 Codex 调研:点编辑的意图就是"停下来我要改";取消编辑 AI 不会
- * 继续工作——interrupt 终止性、无恢复原语,Codex 同语义)。rewind + 重发只在
- * 点「发送」时执行,取消对**对话历史**零副作用(原样恢复),比 Codex 的
- * "确认瞬间就裁历史"更安全。
+ * 右下 [取消][发送]。运行中点铅笔不中断当前 turn(interrupt 终止性、无恢复
+ * 原语):中断、rewind 与重发都只在点「发送」时执行,取消对运行中的 turn 与
+ * 对话历史都零副作用(原样恢复)。
  *
- * 发送时序:若 renderer 仍观察到 sessionRunning(点铅笔的 stop 还在收尾),
- * 先经 onRequestStop 再补一次中断(幂等保险),挂起等 idle(spinner 常亮),
- * 翻 false 后由 effect 接力提交,15s 超时兜底报错退回编辑态。main 侧
+ * 发送时序:若 renderer 观察到 sessionRunning,先经 onRequestStop 中断,
+ * 挂起等 idle(spinner 常亮),翻 false 后由 effect 接力提交,15s 超时兜底
+ * 报错退回编辑态。main 侧
  * isTurnRunning 与 renderer 状态的毫秒级尾差由
  * commitEditAndResendWithRunningRetry 的有限重试消化。
  *
@@ -31,6 +29,7 @@ import { useTranslation } from 'react-i18next';
 
 import {
   findSlashCommandToken,
+  isSlashCommandRuntimeAlias,
   leadingSlashCommandRange,
   restoreSlashCommandRuntimeAlias,
   slashCommandRangeCoversToken,
@@ -48,6 +47,9 @@ import { commitEditAndResendWithRunningRetry } from '@/lib/editLastUserMessage';
 import type { RewindDraftImage } from '@/lib/rewindDraftAttachments';
 import type { FileRef, PastedTextRange, SlashCommandRange } from '@/lib/imageRef';
 import type { AgentInputReference } from '../../../shared/agentInputQueue';
+import { FieldVoiceInputNotice } from '@/voice-input/FieldVoiceInputNotice';
+import { useFieldVoiceInput } from '@/voice-input/useFieldVoiceInput';
+import { VoiceInputButton } from '@/voice-input/VoiceInputButton';
 
 // 运行中发送的等待兜底:stop 发出后 renderer 迟迟观察不到 idle(远端断链、
 // stop 丢失等)时,超过该时长报错退回编辑态,不让 spinner 永转。
@@ -123,17 +125,27 @@ export function UserMessageEditBox({
   const { t } = useTranslation();
   const [text, setText] = useState(initialText);
   const [submitting, setSubmitting] = useState(false);
+  const [stoppingVoice, setStoppingVoice] = useState(false);
   // state 版本驱动 UI(按钮 disable / spinner);ref 版本是同步防重入守卫——
   // rewindCommit 不幂等(第二次会打在已软删的消息上),不能赌 state 更新时序。
   const submittingRef = useRef(false);
   // 运行中发送的挂起标记:等 sessionRunning 翻 false 后由 effect 接力提交。
   const pendingSendRef = useRef(false);
+  const pendingCommitTextRef = useRef<string | null>(null);
   const waitTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // null = preview 未返回/失败(不显示提示)。
   const [rollbackHint, setRollbackHint] = useState<
     { kind: 'files'; count: number } | { kind: 'conversation-only' } | null
   >(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const voice = useFieldVoiceInput({
+    draftKey: `user-msg-edit:${sessionId}:${messageClientId}`,
+    inputRef: textareaRef,
+    value: text,
+    onChange: (next) => setText(next),
+    disabled: submitting,
+  });
 
   // 静默 preview 文件回滚影响。失败/软拒绝都归 null(不提示、不阻塞)。
   // 依赖里带 sessionRunning:用户可以在 turn 运行中先进编辑态(发送才被拦),
@@ -174,16 +186,18 @@ export function UserMessageEditBox({
     if (!el) return;
     el.style.height = 'auto';
     el.style.height = `${el.scrollHeight}px`;
-  }, [text]);
+  }, [voice.displayText]);
 
   const hasAttachments = (images?.length ?? 0) > 0 || (files?.length ?? 0) > 0;
-  const canSend = (text.trim().length > 0 || hasAttachments) && !submitting;
+  const busy = submitting || stoppingVoice;
+  const canSend = (voice.displayText.trim().length > 0 || hasAttachments) && !busy;
 
   // 真正执行 rewind + 重发。前提:renderer 已观察到会话 idle(main 侧守卫的
   // 毫秒级尾差由 WithRunningRetry 内部有限重试消化)。
-  const doCommit = useCallback(async () => {
+  const doCommit = useCallback(async (overrideText?: string) => {
+    const commitText = overrideText ?? text;
     try {
-      const visibleTextUnchanged = text === initialText;
+      const visibleTextUnchanged = commitText === initialText;
       const originalWireText = initialSubmitText ?? initialText;
       const originalHadConfirmedRange = slashCommandRangeCoversToken(
         slashCommandRanges,
@@ -191,7 +205,7 @@ export function UserMessageEditBox({
       );
       const submitText = visibleTextUnchanged
         ? originalWireText
-        : restoreSlashCommandRuntimeAlias(originalWireText, text, slashCommandRanges);
+        : restoreSlashCommandRuntimeAlias(originalWireText, commitText, slashCommandRanges);
       const preserveQuoteMetadata = quotesEncoded && visibleTextUnchanged;
       const preservedAgentReferences =
         visibleTextUnchanged && agentReferences && agentReferences.length > 0
@@ -203,7 +217,7 @@ export function UserMessageEditBox({
           : undefined;
       const rebuiltSlashRange = leadingSlashCommandRange(submitText);
       const submitTokenIsRuntimeAlias = rebuiltSlashRange
-        ? submitText.slice(rebuiltSlashRange.start, rebuiltSlashRange.end).toLowerCase().startsWith('/skill:')
+        ? isSlashCommandRuntimeAlias(submitText.slice(rebuiltSlashRange.start, rebuiltSlashRange.end))
         : false;
       const preservedSlashCommandRanges = visibleTextUnchanged && slashCommandRanges !== undefined
         ? [...slashCommandRanges]
@@ -265,38 +279,59 @@ export function UserMessageEditBox({
     }
   }, [sessionId, messageClientId, text, initialText, initialSubmitText, images, files, workingDir, quotesEncoded, agentReferences, pastedTextRanges, slashCommandRanges, rollbackHint, onSent, onCommitOverride, t]);
 
-  const handleSend = useCallback(() => {
+  const handleSend = useCallback(async () => {
     if (!canSend || submittingRef.current) return;
     submittingRef.current = true;
+    let finalText = text;
+    if (voice.isBusy) {
+      setStoppingVoice(true);
+      try {
+        const stoppedText = await voice.stop();
+        if (stoppedText === null) {
+          submittingRef.current = false;
+          return;
+        }
+        finalText = stoppedText;
+      } finally {
+        setStoppingVoice(false);
+      }
+      if (!finalText.trim() && !hasAttachments) {
+        submittingRef.current = false;
+        return;
+      }
+    }
     setSubmitting(true);
     if (sessionRunning) {
-      // 点铅笔时 UserMessage 已发出中断;走到这里说明 stop 还在收尾(或极端
-      // 情况下丢失),再补一次(幂等保险),挂起等 renderer 观察到 idle
-      // (sessionRunning 翻 false → 下方 effect 接力提交)。15s 兜底:stop
-      // 一直没生效(远端断链等)则报错退回编辑态,文本不丢。
+      // 运行中发送:此刻才中断当前 turn(点铅笔不中断),挂起等 renderer
+      // 观察到 idle(sessionRunning 翻 false → 下方 effect 接力提交)。15s 兜底:
+      // stop 一直没生效(远端断链等)则报错退回编辑态,文本不丢。
       onRequestStop();
+      pendingCommitTextRef.current = finalText;
       pendingSendRef.current = true;
       waitTimeoutRef.current = setTimeout(() => {
         if (!pendingSendRef.current) return;
         pendingSendRef.current = false;
+        pendingCommitTextRef.current = null;
         submittingRef.current = false;
         setSubmitting(false);
         toast.error(t('chat.userMessage.editStopTimeout'));
       }, STOP_WAIT_TIMEOUT_MS);
       return;
     }
-    void doCommit();
-  }, [canSend, sessionRunning, onRequestStop, doCommit, t]);
+    void doCommit(finalText);
+  }, [canSend, text, voice.isBusy, voice.stop, hasAttachments, sessionRunning, onRequestStop, doCommit, t]);
 
   // 等待停止的接力:sessionRunning 翻 false 且有挂起发送 → 提交。
   useEffect(() => {
     if (sessionRunning || !pendingSendRef.current) return;
     pendingSendRef.current = false;
+    const queuedText = pendingCommitTextRef.current ?? undefined;
+    pendingCommitTextRef.current = null;
     if (waitTimeoutRef.current) {
       clearTimeout(waitTimeoutRef.current);
       waitTimeoutRef.current = null;
     }
-    void doCommit();
+    void doCommit(queuedText);
   }, [sessionRunning, doCommit]);
 
   // 卸载时清理等待定时器(挂起的发送随组件一起消亡,不落孤儿 toast)。
@@ -310,24 +345,25 @@ export function UserMessageEditBox({
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if (e.key === 'Escape') {
+        if (voice.isBusy) return;
         e.preventDefault();
-        if (!submitting) onCancel();
+        if (!busy) onCancel();
         return;
       }
       // Enter 发送 / Shift+Enter 换行 — 与主 composer 的提交习惯一致。
       // IME 组合中的 Enter(选字)不触发发送。
       if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
         e.preventDefault();
-        handleSend();
+        void handleSend();
       }
     },
-    [submitting, onCancel, handleSend],
+    [voice.isBusy, busy, onCancel, handleSend],
   );
 
   return (
     <div
       className={cn(
-        'w-full rounded-[12px]',
+        'w-full rounded-xl',
         'border border-[var(--msg-user-border)]',
         'bg-[var(--msg-user-bg)]',
         'px-4 pt-3 pb-2.5',
@@ -335,19 +371,21 @@ export function UserMessageEditBox({
     >
       <ListComposerTextarea
         ref={textareaRef}
-        value={text}
+        value={voice.displayText}
+        readOnly={voice.isBusy}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={handleKeyDown}
         disabled={submitting}
         spellCheck={false}
         rows={1}
         className={cn(
-          'block w-full resize-none outline-none border-none bg-transparent p-0',
+          'chat-content-text block w-full resize-none outline-none border-none bg-transparent p-0',
           'max-h-[40vh] overflow-y-auto',
           'text-15 font-normal leading-[1.6] text-[var(--msg-user-text)]',
           'disabled:opacity-60',
         )}
       />
+      <FieldVoiceInputNotice error={voice.lastError} speakerFiltered={voice.speakerFiltered} className="mt-1.5" />
       <div className="mt-2 flex items-center justify-end gap-2">
         {rollbackHint?.kind === 'files' && (
           <span className="min-w-0 flex-1 truncate text-left text-11 text-[var(--text-tertiary)]">
@@ -359,13 +397,14 @@ export function UserMessageEditBox({
             {t('chat.userMessage.editConversationOnlyHint')}
           </span>
         )}
+        <VoiceInputButton {...voice.buttonProps} testId="user-message-edit-voice" tipSide="top" />
         <Button
           variant="secondary"
           size="sm"
           compact
           type="button"
           onClick={onCancel}
-          disabled={submitting}
+          disabled={busy}
           className="shrink-0"
         >
           {t('chat.userMessage.editCancel')}
@@ -374,9 +413,9 @@ export function UserMessageEditBox({
           variant="cta"
           size="sm"
           compact
-          loading={submitting}
+          loading={busy}
           type="button"
-          onClick={handleSend}
+          onClick={() => void handleSend()}
           disabled={!canSend}
           className="shrink-0"
         >

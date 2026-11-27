@@ -20,6 +20,7 @@ import type {
   InteractionRequest,
   AgentKind,
   Effort,
+  EngineKind,
   PermissionModeDescriptor,
 } from '@cindy/maker-core';
 import type { ProviderSection } from '@cindy/model-providers';
@@ -31,15 +32,19 @@ import { autoReviewUnavailablePromptLine, permissionPromptDescription } from './
 import type { ImUiTextPack } from './types';
 import {
   composeInteractionModel,
+  formatAskOptionPreviewLines,
+  isOneTimePermission,
   needsAskMultiCard,
   truncateBlock,
   truncateInline,
   BTN_LABEL_MAX,
+  IM_ASK_TOTAL_PREVIEW_MAX_BYTES,
   IM_PERMISSION_INPUT_PREVIEW_MAX,
   MAX_OPTIONS,
   MAX_PLAN_LEN,
 } from './interactionCardModel';
 import type { ControlProject, ControlSession, RecentControlSession } from './controlProjects';
+import { projectToken } from './projectToken';
 
 /** IM 卡片文本截断(实现见 interactionCardModel.truncateBlock)。 */
 const truncate = truncateBlock;
@@ -51,6 +56,20 @@ function previewInput(input: Record<string, unknown>): string {
   } catch {
     return '<unserializable>';
   }
+}
+
+/** 选项预览拼成 Markdown 引用块，保留首行缩进并共用整卡字节预算，不撑爆 IM 卡片上限。 */
+function formatAskOptionPreviews(
+  options: ReadonlyArray<{ label: string; preview?: string }>,
+  budget: { remainingBytes: number },
+  prefixFor?: (optionIndex: number) => string,
+): string[] {
+  return options.flatMap((opt, oi) => {
+    const lines = formatAskOptionPreviewLines(opt.preview, budget);
+    if (lines.length === 0) return [];
+    const heading = prefixFor ? `**${prefixFor(oi)}${opt.label}**` : `**${opt.label}**`;
+    return [`${heading}\n${lines.join('\n')}`];
+  });
 }
 
 export interface ImCardBuilders {
@@ -75,7 +94,7 @@ export interface ImCardBuilders {
   buildModelPickerCard(args: {
     sessionId: string;
     /** 当前 IM session 的 agent;用于按 agent 派生 model 默认 effort。 */
-    agentKind: AgentKind;
+    agentKind: EngineKind;
     /** 按供应商分段的模型列表(与应用内选择器同源,每行 = (供应商, 模型))。 */
     sections: ProviderSection[];
     currentModelId: string;
@@ -86,7 +105,8 @@ export interface ImCardBuilders {
   }): InteractiveCardSpec;
   buildPermissionModePickerCard(args: {
     sessionId: string;
-    agentKind: AgentKind;
+    /** 'acp' = plugin-engine task: the pick validates against that engine's own modes. */
+    agentKind: EngineKind;
     modes: PermissionModeDescriptor[];
     currentMode: string;
   }): InteractiveCardSpec;
@@ -123,7 +143,7 @@ export interface ImCardBuilders {
   /** 「群会话不能用完全访问」失败时的私聊修复卡(仅提供 permissionModeFix 文案的渠道)。 */
   buildPermissionModeFixCard(args: {
     sessionId: string;
-    agentKind: AgentKind;
+    agentKind: EngineKind;
     sessionTitle: string;
   }): InteractiveCardSpec;
   /** 授权卡收口: 保留原始正文 + 追加决策结果, 去掉按钮。 */
@@ -151,6 +171,7 @@ export function createCardBuilders(
     const m = ui.cards.ask.multi!;
     const bodyLines: string[] = [];
     const buttons: InteractiveCardSpec['buttons'] = [];
+    const previewBudget = { remainingBytes: IM_ASK_TOTAL_PREVIEW_MAX_BYTES };
     // 单独一道多选题沿用单问卡标题观感; 多道题才用「确认几件事」总标题。
     const title =
       args.questions.length === 1
@@ -171,6 +192,7 @@ export function createCardBuilders(
         return;
       }
       const selected = args.selections.get(qi);
+      bodyLines.push(...formatAskOptionPreviews(options, previewBudget, (oi) => `${qi + 1}·${oi + 1}. `));
       options.forEach((opt, oi) => {
         // 勾选前缀也占按钮文案预算; 按钮是单行, 用单行省略号截断
         // (块级截断的换行后缀会掉进按钮文案)。
@@ -191,7 +213,7 @@ export function createCardBuilders(
       type: 'primary',
       payload: { requestId: args.requestId },
     });
-    return { title, body: bodyLines.join('\n\n'), buttons };
+    return { title, body: bodyLines.join('\n\n'), buttons, buttonLayout: 'list' };
   }
 
   return {
@@ -217,7 +239,7 @@ export function createCardBuilders(
           },
           // Auto 故障降级会标 forcePrompt：Claude 丢 permissionUpdates，
           // Codex 把 acceptForSession 收成单次 allow。展示「总是允许」等于说谎。
-          ...(!unavailable ? [{
+          ...(!unavailable && !isOneTimePermission(req) && (!req.metadata?.mcpApp || (req.metadata.mcpApp as { scope?: string }).scope === 'session') ? [{
             id: 'permission:allow:always',
             label: ui.cards.permission.btnAllowAlways,
             type: 'default' as const,
@@ -278,9 +300,18 @@ export function createCardBuilders(
         };
       }
 
+      const optionPreviews = formatAskOptionPreviews(
+        (question.options ?? []).slice(0, MAX_OPTIONS),
+        { remainingBytes: IM_ASK_TOTAL_PREVIEW_MAX_BYTES },
+      );
+      const bodyParts = [
+        ...(model.questionBody ? [model.questionBody] : []),
+        ...optionPreviews,
+      ];
       return {
         title: ui.cards.ask.title(headerText),
-        body: bodyExtra || ' ',
+        body: bodyParts.length > 0 ? (model.questionBody && optionPreviews.length === 0 ? bodyExtra : bodyParts.join('\n\n')) : ' ',
+        buttonLayout: 'list',
         buttons: model.choices.map((choice) => ({
           id: 'ask:pick',
           label: truncate(choice.label ?? '', BTN_LABEL_MAX),
@@ -327,12 +358,22 @@ export function createCardBuilders(
       const { sessionId, agentKind, sections, currentModelId, currentProviderId, currentEffort, defaultEffortByModel } =
         args;
       // 当前选中模型展示名:跨所有分段按 id 找;IM 卡片当前仍保持描述留空。
-      const currentLabel =
-        sections.flatMap((s) => s.models).find((m) => m.id === currentModelId)?.displayName ??
-        currentModelId;
+      // 会话锁定了来源、且该来源就在清单里时,「当前」一行与按钮同一写法带上供应商名 ——
+      // 多家都有同名模型时,只写模型名看不出现在用的是哪一家。来源未锁定(跟随默认)时
+      // 不替用户猜是哪一家,只写模型名。
+      const currentSection = sections.find(
+        (s) => s.provider.id === currentProviderId && s.models.some((m) => m.id === currentModelId),
+      );
+      const currentName =
+        (currentSection?.models ?? sections.flatMap((s) => s.models)).find((m) => m.id === currentModelId)
+          ?.displayName ?? currentModelId;
+      const currentLabel = currentSection
+        ? ui.cards.model.optionLabel(currentSection.provider.name, currentName, null)
+        : currentName;
 
       return {
         title: ui.cards.model.title,
+        buttonLayout: 'list',
         body:
           ui.cards.model.currentLine(currentLabel, currentEffort, '') +
           `\n\n${ui.cards.model.hint}`,
@@ -340,7 +381,9 @@ export function createCardBuilders(
         // model:pick 据此 setSessionProvider 锁定路由源。同模型多供应商时各自成行、互不冲突。
         buttons: sections.flatMap((sec) =>
           sec.models.map((m) => {
-            const effort = defaultEffortByModel?.[m.id] ?? getDefaultEffortFor(m.id, agentKind);
+            const effort =
+              defaultEffortByModel?.[m.id] ??
+              (agentKind === 'acp' ? '' : getDefaultEffortFor(m.id, agentKind));
             const isCurrent = m.id === currentModelId && sec.provider.id === currentProviderId;
             return {
               id: 'model:pick',
@@ -353,7 +396,8 @@ export function createCardBuilders(
                 requestId: `model-pick:${sessionId}`,
                 sessionId,
                 modelId: m.id,
-                modelLabel: m.displayName,
+                // 选中后的回执文案(model.resolved)原样用它:带上供应商名,回执才说得清切到了哪一家。
+                modelLabel: ui.cards.model.optionLabel(sec.provider.name, m.displayName, null),
                 providerId: sec.provider.id,
                 effort,
               },
@@ -429,6 +473,7 @@ export function createCardBuilders(
       return {
         title: ui.cards.control.title,
         body: bodyPrefix + ui.cards.control.hint,
+        buttonLayout: 'list',
         buttons: [
           ...projects.map((p) => ({
             id: 'control:pick',
@@ -501,6 +546,7 @@ export function createCardBuilders(
       return {
         title: ui.cards.control.sessionPickerTitle(displayName),
         body: ui.cards.control.sessionPickerHint,
+        buttonLayout: 'list',
         buttons: [
           ...sessions.map((s) => ({
             id: 'control:session-pick',
@@ -546,6 +592,7 @@ export function createCardBuilders(
       return {
         title: recentUi.title,
         body: recentUi.hint,
+        buttonLayout: 'list',
         buttons: [
           ...sessions.map((s) => ({
             id: 'control:session-pick',
@@ -599,15 +646,17 @@ export function createCardBuilders(
       return {
         title: projectUi.title,
         body: projectUi.hint(currentName),
+        buttonLayout: 'list',
         buttons: [
           ...projects.map((p) => ({
             id: 'project:pick',
             label: truncate(p.displayName, 30),
             type: 'default' as const,
+            // 只带不透明标记, 不带本机路径(见 projectToken.ts); 回调时按当前项目清单找回目录。
             payload: {
-              requestId: `project-pick:${p.workingDir}`,
+              requestId: `project-pick:${projectToken(p.workingDir)}`,
               botAppId,
-              workingDir: p.workingDir,
+              projectToken: projectToken(p.workingDir),
               displayName: p.displayName,
             },
           })),
@@ -631,7 +680,7 @@ export function createCardBuilders(
      */
     buildPermissionModeFixCard(args: {
       sessionId: string;
-      agentKind: AgentKind;
+      agentKind: EngineKind;
       sessionTitle: string;
     }): InteractiveCardSpec {
       const fixUi = ui.cards.permissionModeFix;

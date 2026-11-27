@@ -14,10 +14,12 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('../chatHistorySearch.js', () => ({
-  searchChatHistoryHybrid: mocks.searchChatHistoryHybrid,
+  prepareChatHistorySearch: async (args: unknown) => (page: unknown) =>
+    mocks.searchChatHistoryHybrid({ ...(args as object), ...(page as object) }),
 }));
 
 import { searchConversations } from '../conversationSearch.js';
+import { cjkSeg } from '../cjkSeg.js';
 
 const conversationSearchSource = readFileSync(
   resolve(__dirname, '..', 'conversationSearch.ts'),
@@ -72,6 +74,7 @@ function createSearchDb(): Database.Database {
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL DEFAULT 'New Maker',
       working_dir TEXT,
+      project_dir TEXT,
       workspace_kind TEXT NOT NULL DEFAULT 'project',
       model TEXT NOT NULL DEFAULT 'claude-sonnet-4-6',
       scheduled_model_baseline TEXT,
@@ -81,6 +84,7 @@ function createSearchDb(): Database.Database {
       sdk_session_id TEXT,
       total_token_usage INTEGER NOT NULL DEFAULT 0,
       total_cost_usd REAL NOT NULL DEFAULT 0,
+      total_cost_usd_is_approximate INTEGER DEFAULT 0,
       total_cost_amount REAL NOT NULL DEFAULT 0,
       total_cost_currency TEXT,
       total_cost_is_approximate INTEGER NOT NULL DEFAULT 0,
@@ -90,7 +94,7 @@ function createSearchDb(): Database.Database {
       fast_mode INTEGER NOT NULL DEFAULT 0,
       plan_mode_enabled INTEGER NOT NULL DEFAULT 0,
       cleared_at INTEGER,
-      pinned_at INTEGER,
+      pinned_at INTEGER, snoozed_until INTEGER, snoozed_at INTEGER,
       hidden_at INTEGER,
       notifications_muted INTEGER NOT NULL DEFAULT 0,
       summary TEXT,
@@ -116,6 +120,7 @@ function createSearchDb(): Database.Database {
       remote_host_id TEXT,
       agent_device_id TEXT,
       orca_remote_lead TEXT,
+      created_by_session TEXT,
       active_turn_started_at INTEGER,
       active_turn_pid INTEGER,
       last_turn_ended_at INTEGER,
@@ -141,8 +146,13 @@ function createSearchDb(): Database.Database {
       id TEXT PRIMARY KEY, display_name TEXT NOT NULL, status TEXT NOT NULL, hidden_at INTEGER
     );
     CREATE TABLE bot_session_links (
-      session_id TEXT PRIMARY KEY, bot_id TEXT NOT NULL, role TEXT NOT NULL
+      session_id TEXT PRIMARY KEY, bot_id TEXT NOT NULL, role TEXT NOT NULL, route_key TEXT
     );
+    CREATE TABLE task_tags (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, name_customized INTEGER NOT NULL DEFAULT 0,
+      color TEXT NOT NULL, favorite_order INTEGER, sort_order INTEGER, revision INTEGER NOT NULL DEFAULT 1
+    );
+    CREATE TABLE session_task_tags (session_id TEXT NOT NULL, tag_id TEXT NOT NULL);
     CREATE TABLE project_aliases (
       project_key TEXT PRIMARY KEY, alias TEXT NOT NULL, updated_at INTEGER NOT NULL
     );
@@ -153,6 +163,7 @@ function createSearchDb(): Database.Database {
 function makeSearchDbClient(db: Database.Database): DbClient {
   return {
     drizzle: drizzle(db, { schema }),
+    query: async (sql: string, params: unknown[] = []) => db.prepare(sql).all(...params),
   } as unknown as DbClient;
 }
 
@@ -172,6 +183,81 @@ afterEach(() => {
   clearCurrentDbClient();
   vi.useRealTimers();
   mocks.searchChatHistoryHybrid.mockReset();
+});
+
+// Explicit search must narrow by visible phrase and by message before limiting.
+// Existing OR-pool tests cannot detect cross-message false positives or token-only
+// false positives. Unit: real in-memory SQLite through searchConversations.
+describe('explicit task search', () => {
+  it('requires all keywords in one visible message and never combines title or other messages', async () => {
+    const db = createSearchDb();
+    const client = makeSearchDbClient(db);
+    setCurrentDbClient(client, 'test-user');
+    db.exec('CREATE VIRTUAL TABLE messages_fts USING fts5(message_id UNINDEXED, content)');
+    const add = (id: string, sessionId: string, content: string, rewindAt: number | null = null) => {
+      db.prepare('INSERT INTO messages(id,client_id,session_id,role,content,created_at,rewind_at) VALUES(?,?,?,?,?,?,?)')
+        .run(id, id, sessionId, 'user', content, 100, rewindAt);
+      db.prepare('INSERT INTO messages_fts(message_id,content) VALUES(?,?)').run(id, cjkSeg(content));
+    };
+    try {
+      for (const id of ['both', 'one', 'gapped', 'hidden', 'same']) insertSearchSession(db, id, 100, null);
+      for (let index = 0; index < 205; index++) {
+        add(`noise-${index}`, 'one', JSON.stringify({ text: '登录', attachments: [{ filename: '缓存' }] }));
+      }
+      add('a', 'both', '登录失败');
+      add('b', 'both', '缓存');
+      add('c', 'gapped', '登录，失败');
+      add('d', 'hidden', JSON.stringify({ text: '登录', attachments: [{ filename: '缓存' }] }));
+      add('e', 'hidden', '缓存', 101);
+      add('same-message', 'same', '登录后清除缓存');
+      // Chinese is still indexed character by character. Search a substring
+      // in the middle of a longer sentence, through the actual FTS + verifier.
+      add('middle-chinese', 'one', '这里的构建目录太大了，清理一下旧缓存再继续。');
+      const middlePhrase = await searchConversations({ query: '"目录太大了，清理一下"' });
+      expect(middlePhrase.results.map((item) => item.session.id)).toEqual(['one']);
+      const middleAll = await searchConversations({ query: '+ 目录太大 清理一下' });
+      expect(middleAll.results[0]?.contentHits.map((hit) => hit.messageId)).toEqual(['middle-chinese']);
+      const separatedCharacters = await searchConversations({ query: '+ 目录太大 清下' });
+      expect(separatedCharacters.results).toEqual([]);
+      const exact = await searchConversations({ query: '"登录失败"' });
+      expect(exact.results.map((item) => item.session.id)).toEqual(['both']);
+      const all = await searchConversations({ query: '登录 + 缓存' });
+      expect(all.results.map((item) => item.session.id)).toEqual(['same']);
+      expect(all.results[0].contentHits.map((hit) => hit.messageId)).toEqual(['same-message']);
+      expect(all.vectorUsed).toBe(false);
+      const titleAndContent = await searchConversations({ query: '+ both 缓存' });
+      expect(titleAndContent.results).toEqual([]);
+      const titleOnly = await searchConversations({ query: '+ needle both' });
+      expect(titleOnly.results.map((item) => item.session.id)).toEqual(['both']);
+      const scoped = await searchConversations({ query: '+ 登录 缓存', filters: { sessionIds: ['one'] } });
+      expect(scoped.results).toEqual([]);
+      db.prepare('UPDATE messages SET created_at = 1000 WHERE id = ?').run('same-message');
+      const newest = await searchConversations({ query: '+ 登录', limit: 1 });
+      expect(newest.results.map((item) => item.session.id)).toEqual(['same']);
+      // #13173: adding an indexed OR alternative must not discard an
+      // unindexed emoji/punctuation term before visible-message verification.
+      // Unit: the same production SQLite entry; earlier tests used CJK words only.
+      add('emoji-only', 'one', '🔥 build failed');
+      add('punctuation-only', 'gapped', '!!!');
+      add('indexed-only', 'both', 'cache');
+      add('emoji-and-cache', 'same', '🔥 cache');
+      for (const query of ['"🔥" cache', '"!!!" cache']) {
+        const mixed = await searchConversations({ query });
+        const messageIds = mixed.results.flatMap((item) => item.contentHits.map((hit) => hit.messageId));
+        expect(messageIds.sort()).toEqual([
+          query.includes('🔥') ? 'emoji-only' : 'punctuation-only',
+          'indexed-only', 'emoji-and-cache',
+        ].sort());
+      }
+      const mixedAll = await searchConversations({ query: '+ "🔥" cache' });
+      expect(mixedAll.results.flatMap((item) => item.contentHits.map((hit) => hit.messageId))).toEqual(['emoji-and-cache']);
+      for (let index = 0; index < 1001; index++) add(`wide-${index}`, 'one', 'wide');
+      const querySpy = vi.spyOn(client, 'query');
+      const capped = await searchConversations({ query: '+ wide' });
+      expect(capped.poolCapped).toBe(true);
+      expect(querySpy).toHaveBeenCalledTimes(5);
+    } finally { clearCurrentDbClient(client); db.close(); }
+  });
 });
 
 // #7026 / #6916: the mobile cache only contains the first 200 tasks. The existing
@@ -195,6 +281,7 @@ describe('conversationSearch remote project aliases', () => {
         db.prepare('UPDATE sessions SET working_dir = ? WHERE id = ?').run(root, id);
       }
       db.prepare('UPDATE sessions SET working_dir = ? WHERE id = ?').run(worktree, 'worktree');
+      db.prepare('UPDATE sessions SET working_dir = ?, project_dir = ? WHERE id = ?').run('/tmp/arbitrary-checkout', root, 'older');
       db.exec("UPDATE sessions SET status = 'archived' WHERE id = 'archived'");
       db.exec("UPDATE sessions SET hidden_at = 1 WHERE id = 'hidden'");
       db.exec("UPDATE sessions SET orca_role = 'worker' WHERE id = 'worker'");
@@ -204,6 +291,10 @@ describe('conversationSearch remote project aliases', () => {
       const request = { query: 'CUSTOMER', limit: 2, semanticMode: 'keyword' as const, filters: { status: 'active' as const } };
       const result = await searchConversations(request, { remoteVisibleOnly: true });
       expect(result.results.map(item => item.session.id).sort()).toEqual(['older', 'worktree']);
+      expect(result.results.find(item => item.session.id === 'older')?.session)
+        .toMatchObject({ workingDir: '/tmp/arbitrary-checkout', projectDir: root });
+      expect((await searchConversations({ ...request, filters: { workingDirs: [root], status: 'active' } }, { remoteVisibleOnly: true })).results.map(item => item.session.id).sort())
+        .toEqual(['older', 'worktree']);
       expect(result.results.every(item => item.titleMatchIndices.length === 0)).toBe(true);
       expect(result.results.every(item => item.session.title.startsWith('needle '))).toBe(true);
       expect((await searchConversations(request)).results).toEqual([]);
@@ -372,7 +463,7 @@ describe('conversationSearch personal companion chats', () => {
       ]) {
         insertSearchSession(db, id!, 10, null);
         db.prepare('UPDATE sessions SET source = ?, status = ? WHERE id = ?').run(source, status, id);
-        if (role) db.prepare('INSERT INTO bot_session_links VALUES (?, ?, ?)').run(id, 'bot', role);
+        if (role) db.prepare('INSERT INTO bot_session_links (session_id, bot_id, role) VALUES (?, ?, ?)').run(id, 'bot', role);
       }
       const result = await searchConversations({ query: 'needle', semanticMode: 'keyword' });
       const localIds = ['channel', 'feishu-channel', 'group', 'imported', 'main', 'old', 'old-channel', 'review', 'task'];
@@ -394,6 +485,25 @@ describe('conversationSearch personal companion chats', () => {
       db.exec("UPDATE bot_profiles SET hidden_at = NULL");
       const visibleRemote = await searchConversations({ query: 'needle', filters: { status: 'archived' } }, { remoteVisibleOnly: true });
       expect(visibleRemote.results.map(item => item.session.id).sort()).toEqual(['imported', 'old', 'old-channel']);
+
+      // Old group rows retain their execution directory. Project search and remote
+      // alias matching must use the same Buddy ownership projection as the list.
+      db.exec("UPDATE sessions SET working_dir = '/buddy', project_dir = '/buddy' WHERE id = 'main'");
+      db.exec("UPDATE sessions SET working_dir = '/group-repo', project_dir = '/group-repo', workspace_kind = 'dialogue' WHERE id = 'group'");
+      db.prepare('INSERT INTO project_aliases VALUES (?, ?, ?)').run('local:/group-repo', 'Group Melody', 10);
+      for (const remoteVisibleOnly of [false, true]) {
+        const scoped = await searchConversations({ query: 'needle', filters: { workingDirs: ['/group-repo'] } }, { remoteVisibleOnly });
+        expect(scoped.results.map(item => item.session.id).sort()).toEqual(['group']);
+        expect(scoped.results.find(item => item.session.id === 'group')?.session).toMatchObject({
+          workingDir: '/group-repo', projectDir: '/group-repo',
+        });
+      }
+      const alias = await searchConversations({ query: 'Melody' }, { remoteVisibleOnly: true });
+      expect(alias.results.map(item => item.session.id).sort()).toEqual(['group']);
+      db.exec("UPDATE bot_session_links SET route_key = 'group:qa:personal-digest' WHERE session_id = 'group'");
+      const privateScoped = await searchConversations({ query: 'needle', filters: { workingDirs: ['/group-repo'] } });
+      expect(privateScoped.results.map(item => item.session.id).sort()).toEqual(['group']);
+      db.exec("UPDATE bot_session_links SET route_key = NULL WHERE session_id = 'group'");
 
       // A content-only hit must retain its client id and read-only owner so the
       // existing result handler can open history at the exact message.
@@ -456,6 +566,36 @@ it('projects forwarded search hits only with their persisted session origin', as
     }
     expect(db.prepare('SELECT content FROM messages WHERE id = ?').get('forwarded')).toEqual({ content });
     expect(mocks.searchChatHistoryHybrid.mock.calls[0][0].query).toBe('needle');
+  } finally {
+    clearCurrentDbClient(client);
+    db.close();
+  }
+});
+
+// Search dropped labels even though the ordinary task list showed them. Existing
+// fixtures had no tags. Unit: real search + in-memory SQLite, two tagged hits and
+// one untagged hit verify association and display order without touching user data.
+it('returns each search hit with its own ordered task tags', async () => {
+  const db = createSearchDb();
+  const client = makeSearchDbClient(db);
+  setCurrentDbClient(client, 'test-user');
+  mocks.searchChatHistoryHybrid.mockResolvedValue({
+    hits: [], sessions: {}, vectorUsed: false, vectorSkipReason: null,
+    nextOffset: null, hasMore: false, poolSize: 0, poolCapped: false,
+  });
+  try {
+    for (const id of ['a', 'b', 'untagged']) insertSearchSession(db, id, 1000, null);
+    db.exec(`INSERT INTO task_tags (id,name,color,sort_order,name_customized) VALUES
+      ('red','Important','red',1,1), ('blue','Later','blue',0,1);
+      INSERT INTO session_task_tags VALUES ('a','red'),('a','blue'),('b','red');`);
+    const response = await searchConversations({ query: 'needle', semanticMode: 'keyword' });
+    const tags = Object.fromEntries(response.results.map(item => [item.session.id, item.session.tags]));
+    expect(tags.a).toMatchObject([
+      { id: 'blue', name: 'Later', color: 'blue', nameCustomized: true },
+      { id: 'red', name: 'Important', color: 'red', nameCustomized: true },
+    ]);
+    expect(tags.b).toMatchObject([{ id: 'red' }]);
+    expect(tags.untagged).toEqual([]);
   } finally {
     clearCurrentDbClient(client);
     db.close();

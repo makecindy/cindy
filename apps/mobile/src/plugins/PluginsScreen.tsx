@@ -1,3 +1,4 @@
+import { pluginUiApprovalNotice } from "./pluginUiApprovalNotice";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -68,6 +69,8 @@ import {
   isMobileAuthOwnerCurrent,
 } from "@/auth/authOwnerGeneration";
 import { PluginOriginalSettings } from "./PluginOriginalSettings";
+import { PluginTaskSettings } from "./PluginTaskSettings";
+import { PluginReadmePage } from "./PluginReadmePage";
 import { usePluginManagement } from "./usePluginManagement";
 import { PluginManagementMenu } from "./PluginManagementMenu";
 import { PluginManagementConfirmation } from "./PluginManagementConfirmation";
@@ -81,6 +84,7 @@ import { pluginDetailModel } from "./pluginDetailModel";
 import { PluginDirectoryView } from "./PluginDirectoryView";
 import { PluginDetailView } from "./PluginDetailView";
 import { PluginTaskPicker } from "./PluginTaskPicker";
+import { PluginComputerPicker } from "./PluginComputerPicker";
 import { PluginPage } from "./PluginPage";
 import { invokePlugin } from "./pluginClient";
 import { sortPluginItems } from "./pluginListOrder";
@@ -143,6 +147,7 @@ function PluginDirectory() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailFailed, setDetailFailed] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [readmeOpen, setReadmeOpen] = useState(false);
   const [recent, setRecent] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const enableLock = useRef(false);
@@ -254,14 +259,17 @@ function PluginDirectory() {
     pageBack.current = handler;
   }, []);
   const goBack = useCallback(() => {
-    if (settingsOpen) setSettingsOpen(false);
+    if (readmeOpen) setReadmeOpen(false);
+    else if (settingsOpen) setSettingsOpen(false);
     else if (detailOpen && selected?.surface) setDetailOpen(false);
     else if (selected?.surface && pageBack.current) pageBack.current();
     else if (selected && !wide) {
       detailGeneration.current += 1;
       setSelected(undefined);
     } else goBackGuarded(router);
-  }, [detailOpen, settingsOpen, selected, wide, router]);
+  }, [detailOpen, readmeOpen, settingsOpen, selected, wide, router]);
+  // The introduction belongs to one plugin's detail page.
+  useEffect(() => setReadmeOpen(false), [selected?.row.key, detailOpen]);
   useEffect(() => {
     if (!focused || !selected || wide) return;
     const listener = BackHandler.addEventListener("hardwareBackPress", () => {
@@ -320,6 +328,17 @@ function PluginDirectory() {
   const scopedItems = list.items.filter(
     ({ host }) => !deviceId || host.deviceId === deviceId,
   );
+  // A device can remain in the picker without having returned a plugin list.
+  const androidDirectoryUnconfirmed =
+    Platform.OS === "android" &&
+    !scopedItems.length &&
+    targets.some(
+      (host) => (!deviceId || host.deviceId === deviceId) && !list.isOnline(host),
+    );
+  const androidDirectoryLoading =
+    directoryLoading || (androidDirectoryUnconfirmed && list.syncing);
+  const androidListFailed =
+    listFailed || (androidDirectoryUnconfirmed && !androidDirectoryLoading);
   const items = sortPluginItems(
     scopedItems.filter(({ item }) =>
       `${text(item.display.title)} ${item.display.subtitle ? text(item.display.subtitle) : ""}`
@@ -472,25 +491,20 @@ function PluginDirectory() {
     }
     setDeviceId(id);
   };
-  const selectDevice = () => {
-    const generation = detailGeneration.current;
-    const select = (id: string) => {
-      if (
-        generation !== detailGeneration.current ||
-        !liveSelection.current.focused ||
-        !isMobileAuthOwnerCurrent(recentOwner)
-      )
-        return;
-      selectDirectoryDevice(id);
-    };
-    Alert.alert(t("plugins.computer"), undefined, [
-      { text: t("plugins.allComputers"), onPress: () => select("") },
-      ...targets.map((host) => ({
-        text: host.deviceName,
-        onPress: () => select(host.deviceId),
-      })),
-      { text: t("plugins.cancel"), style: "cancel" },
-    ]);
+  // Android only (iOS uses PluginDirectoryView's native menu). Holds the detail generation seen
+  // when the sheet opened; a choice made after the selection changed is ignored.
+  const [devicePicker, setDevicePicker] = useState<number | null>(null);
+  const selectDevice = () => setDevicePicker(detailGeneration.current);
+  const closeDevicePicker = () => setDevicePicker(null);
+  const chooseDevice = (id: string) => {
+    setDevicePicker(null);
+    if (
+      devicePicker !== detailGeneration.current ||
+      !liveSelection.current.focused ||
+      !isMobileAuthOwnerCurrent(recentOwner)
+    )
+      return;
+    selectDirectoryDevice(id);
   };
   const icon = (row: HostedRemoteCollectionItem) => {
     const uri = row.item.display.avatar?.value;
@@ -623,7 +637,7 @@ function PluginDirectory() {
               />
             </View>
           </View>
-          {directoryLoading && !items.length ? (
+          {androidDirectoryLoading && !items.length ? (
             <ActivityIndicator color={colors.textSecondary} />
           ) : null}
           <View style={styles.inline}>
@@ -632,7 +646,7 @@ function PluginDirectory() {
             </Text>
           </View>
           <View style={styles.groupCard}>{items.map(renderRow)}</View>
-          {!directoryLoading && !listFailed && !items.length ? (
+          {!androidDirectoryLoading && !androidListFailed && !items.length ? (
             <View style={styles.empty}>
               <Puzzle size={iconSize.xl} color={colors.textTertiary} />
               <Text style={styles.preview}>
@@ -656,7 +670,7 @@ function PluginDirectory() {
               ) : null}
             </View>
           ) : null}
-          {listFailed ? (
+          {androidListFailed ? (
             <View>
               <Text style={styles.note}>
                 {t(
@@ -665,7 +679,7 @@ function PluginDirectory() {
                     : "plugins.listLoadFailed",
                 )}
               </Text>
-              {!items.length && !directoryLoading ? (
+              {!items.length && !androidDirectoryLoading ? (
                 <Pressable
                   accessibilityRole="button"
                   style={styles.button}
@@ -682,6 +696,13 @@ function PluginDirectory() {
             </View>
           ) : null}
         </ScrollView>
+        <PluginComputerPicker
+          visible={devicePicker !== null}
+          targets={targets}
+          deviceId={deviceId}
+          onSelect={chooseDevice}
+          onClose={closeDevicePicker}
+        />
       </View>
     );
   const enable = async (enabled: boolean) => {
@@ -941,6 +962,29 @@ function PluginDirectory() {
     }
   };
   const noticeOwner = getMobileAuthOwner();
+  const originalSettingsContent = selected && originalSettings && managed ? (
+    <PluginOriginalSettings
+      key={JSON.stringify([selected.row.host.deviceId, managed.instanceKey, pluginApprovalToken(managed), connectionEpoch])}
+      identity={{
+        deviceId: selected.row.host.deviceId,
+        instanceId: managed.instanceKey,
+        expectedInstalledApproval: pluginApprovalToken(managed),
+      }}
+      active={focused && online && detailOpen && !managementPending}
+      onNotice={(notice) => {
+        if (
+          renderedGeneration === detailGeneration.current &&
+          liveSelection.current.key === selected.row.key &&
+          liveSelection.current.focused &&
+          isMobileAuthOwnerCurrent(noticeOwner)
+        )
+          showSettingsNotice(notice);
+      }}
+    />
+  ) : undefined;
+  const taskSettingsAvailable = model?.taskPreferences && managed?.approval.state === "approved" &&
+    managed.enabled && enabled && online && focused && detailOpen && !busy &&
+    managementAvailable && !detailLoading && !detailFailed;
   const detailView =
     selected && model ? (
       <PluginDetailView
@@ -948,6 +992,7 @@ function PluginDirectory() {
         enabled={enabled}
         busy={busy || detailLoading || managementPending}
         statusRecoveryBusy={busy || detailLoading}
+        uiApprovalNotice={pluginUiApprovalNotice(managed, management.state, management.controller, t)}
         managementNotice={management.state?.outcome === "unknown" ? {
           testID: "plugins.managementUnknown",
           title: t("plugins.notice.title.resultUnknown"),
@@ -967,30 +1012,17 @@ function PluginDirectory() {
             : undefined
         }
         settingsContent={
-          originalSettings && managed ? (
-            <PluginOriginalSettings
-              key={JSON.stringify([
-                selected.row.host.deviceId,
-                managed.instanceKey,
-                pluginApprovalToken(managed),
-                connectionEpoch,
-              ])}
-              identity={{
-                deviceId: selected.row.host.deviceId,
-                instanceId: managed.instanceKey,
-                expectedInstalledApproval: pluginApprovalToken(managed),
-              }}
-              active={focused && online && detailOpen && !managementPending}
-              onNotice={(notice) => {
-                if (
-                  renderedGeneration === detailGeneration.current &&
-                  liveSelection.current.key === selected.row.key &&
-                  liveSelection.current.focused &&
-                  isMobileAuthOwnerCurrent(noticeOwner)
-                )
-                  showSettingsNotice(notice);
-              }}
-            />
+          originalSettingsContent || (taskSettingsAvailable && managed) ? (
+            <View style={{ gap: spacing.lg }}>
+              {taskSettingsAvailable && managed ? (
+                <PluginTaskSettings
+                  key={JSON.stringify(["tasks", selected.row.host.deviceId, managed.instanceKey, pluginApprovalToken(managed), connectionEpoch])}
+                  deviceId={selected.row.host.deviceId}
+                  pluginId={managed.instanceKey}
+                />
+              ) : null}
+              {originalSettingsContent}
+            </View>
           ) : undefined
         }
         settingsOpen={settingsOpen}
@@ -998,6 +1030,7 @@ function PluginDirectory() {
           if (model.canToggle) void enable(value);
         }}
         onOpen={(surface) => open(selected.row, surface)}
+        onOpenReadme={model.readme ? () => setReadmeOpen(true) : undefined}
         onNewTask={() => newTask()}
         onChooseTask={() => {
           if (model.canUseTasks && !busy) setTaskPicker(true);
@@ -1015,7 +1048,8 @@ function PluginDirectory() {
       <SimpleStackHeader
         title={
           selected && !wide
-            ? (settingsOpen && t("plugins.settings")) ||
+            ? (readmeOpen && t("plugins.detail.readme")) ||
+              (settingsOpen && t("plugins.settings")) ||
               (!detailOpen && selected.surface && pageTitle) ||
               text(selected.row.item.display.title)
             : t("plugins.title")
@@ -1110,7 +1144,17 @@ function PluginDirectory() {
                 />
               </View>
             ) : null}
-            {!selected?.surface || detailOpen ? detailView : null}
+            {!selected?.surface || detailOpen
+              ? readmeOpen && selected
+                ? (
+                    <PluginReadmePage
+                      key={selected.row.key}
+                      deviceId={selected.row.host.deviceId}
+                      pluginId={selected.row.item.ref.id}
+                    />
+                  )
+                : detailView
+              : null}
             {settingsNotice && transientScope.current === noticeScope ? (
               <View pointerEvents="none" style={styles.toast}>
                 <PluginNotice

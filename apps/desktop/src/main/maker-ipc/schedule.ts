@@ -40,7 +40,7 @@ import path from 'node:path';
 
 import { ipcMain, BrowserWindow, app } from 'electron';
 
-import type { AgentKind, Maker } from '@cindy/maker-core';
+import type { AgentKind, EngineKind, Maker } from '@cindy/maker-core';
 import type {
   Scheduler,
   Schedule,
@@ -57,8 +57,9 @@ import {
   stabilizePreRunHookForUpdate,
 } from '@cindy/maker-scheduler';
 
+import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { createLogger } from '../logger.js';
-import type { DrizzleScheduleStorage } from '../scheduler-host/storage.js';
+import type { DrizzleScheduleStorage } from '../scheduler-host/storage.desktop.js';
 import {
   assertPreRunHookCommandSyntax,
   executePreRunHook,
@@ -71,12 +72,21 @@ import {
 import { resolveScriptCapabilityStatuses } from '../scheduler-host/script-capability-status.js';
 import { getGhostManager } from '../cindy-brain/index.js';
 import { throwIpcError, requireString, requireObject } from '../utils/ipcValidate.js';
-import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
+import {
+  captureDataOwnerBroadcastScope,
+  isDataOwnerBroadcastScopeCurrent,
+  tapWindowBroadcast,
+  type DataOwnerBroadcastScope,
+} from '../device-link/broadcast-tap.js';
 import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
+import { getScheduleWebhookHost, scheduleWebhookReceiver } from '../scheduler-host/webhook/runtime.js';
+import type { ScheduleWebhookHost } from '../scheduler-host/webhook/index.js';
+import { remoteCreateWorkingDirError } from './remoteScheduleWorkingDir.js';
 import { isTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { getAgentIslandService } from '../agent-island/service.js';
 import { getSessionProvider } from '../maker-host/session-provider-store.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
+import { isPluginEngineTask } from '../maker-host/engineKind.js';
 import { MAKER_INVOKE, MAKER_PUSH } from './channels.js';
 import {
   resolveBoundSessionGenerationRoute,
@@ -84,6 +94,11 @@ import {
 } from './scheduleGenerationRoute.js';
 
 const log = createLogger('maker-ipc:schedule');
+
+/** Refuses only plugin-engine tasks; every other engine keeps its existing path unchanged. */
+function runsOnBuiltinEngine<T extends { agentKind: EngineKind }>(value: T): value is T & { agentKind: AgentKind } {
+  return !isPluginEngineTask(value);
+}
 
 function broadcast(channel: string, payload: unknown): void {
   // device-link tap:schedule:event 在 PUSH_FORWARD_ALLOWLIST,补 tap 才会真正转发给控制端,
@@ -99,8 +114,69 @@ function broadcast(channel: string, payload: unknown): void {
   }
 }
 
+/**
+ * 旧版远端桌面 / 旧版手机在周期任务 skipped 时不读 skipped 事件上的排期时间戳,只认 changed 刷新列表下次时间。
+ * 在源端按 scheduleId 做有界合并(10s 静默 / 30s 封顶),只向 device-link tap 发一条合并后的 changed,
+ * 不广播给本机 BrowserWindow、也不触发本机 ScheduleWebhookHost / 用量对账;若期间已有真实 changed 或切账号则取消。
+ */
+const REMOTE_SKIPPED_CHANGED_QUIET_MS = 10_000;
+const REMOTE_SKIPPED_CHANGED_MAX_WAIT_MS = 30_000;
+const pendingRemoteSkippedChanged = new Map<
+  string,
+  {
+    firstAt: number;
+    lastRunId: string;
+    ownerScope: DataOwnerBroadcastScope;
+    timer: ReturnType<typeof setTimeout>;
+  }
+>();
+
+function cancelRemoteSkippedChanged(scheduleId: string): void {
+  const existing = pendingRemoteSkippedChanged.get(scheduleId);
+  if (!existing) return;
+  clearTimeout(existing.timer);
+  pendingRemoteSkippedChanged.delete(scheduleId);
+}
+
+export function clearCoalescedRemoteSkippedChanges(): void {
+  for (const { timer } of pendingRemoteSkippedChanged.values()) clearTimeout(timer);
+  pendingRemoteSkippedChanged.clear();
+}
+
+function scheduleCoalescedRemoteSkippedChanged(scheduleId: string, runId: string): void {
+  if (!scheduleId || !runId) return;
+  const now = Date.now();
+  const ownerScope = captureDataOwnerBroadcastScope();
+  const existing = pendingRemoteSkippedChanged.get(scheduleId);
+  if (existing) clearTimeout(existing.timer);
+  const firstAt = existing?.firstAt ?? now;
+  const delay = Math.min(
+    REMOTE_SKIPPED_CHANGED_QUIET_MS,
+    Math.max(0, firstAt + REMOTE_SKIPPED_CHANGED_MAX_WAIT_MS - now),
+  );
+  const timer = setTimeout(() => {
+    pendingRemoteSkippedChanged.delete(scheduleId);
+    if (!isDataOwnerBroadcastScopeCurrent(ownerScope)) return;
+    tapWindowBroadcast(
+      MAKER_PUSH.SCHEDULE_EVENT,
+      { type: 'changed', scheduleId, skippedRunId: runId },
+      ownerScope.ownerStamp,
+    );
+  }, delay);
+  timer.unref?.();
+  pendingRemoteSkippedChanged.set(scheduleId, { firstAt, lastRunId: runId, ownerScope, timer });
+}
+
 function broadcastSchedulerEvent(event: SchedulerEvent): void {
+  if (event.type === 'changed') {
+    cancelRemoteSkippedChanged(event.scheduleId);
+  } else if (event.type === 'ready') {
+    clearCoalescedRemoteSkippedChanges();
+  }
   broadcast(MAKER_PUSH.SCHEDULE_EVENT, event);
+  if (event.type === 'skipped') {
+    scheduleCoalescedRemoteSkippedChanged(event.scheduleId, event.runId);
+  }
   try {
     getAgentIslandService()?.handleScheduleEvent(event);
   } catch (err) {
@@ -164,6 +240,7 @@ export function setSchedulerReady(scheduler: Scheduler, storage: DrizzleSchedule
  */
 export function resetSchedulerReady(): void {
   _current = null;
+  clearCoalescedRemoteSkippedChanges();
 }
 
 function awaitReady(): Promise<SchedulerDeps> {
@@ -179,6 +256,7 @@ function awaitReady(): Promise<SchedulerDeps> {
 export function __resetReadinessForTest(): void {
   _current = null;
   _pending = [];
+  clearCoalescedRemoteSkippedChanges();
 }
 
 export async function awaitReadyWithTimeout(): Promise<SchedulerDeps> {
@@ -197,6 +275,20 @@ export async function awaitReadyWithTimeout(): Promise<SchedulerDeps> {
     // 防 timer 堆积:scheduler 已 resolve 时若不 clear,setTimeout 仍会 30s 后 fire,
     // reject 被 race 忽略但 timer 句柄不释放,高频 IPC 下 N 个并发 = N 个 timer。
     if (timer) clearTimeout(timer);
+  }
+}
+
+/** Join the existing bounded scheduler gate without carrying a call into another owner. */
+export async function awaitAccountSchedulerReady(): Promise<void> {
+  const scope = activeOwnerScopeKey();
+  if (isAppSessionBoundaryPending()) throwIpcError('PRECONDITION_FAILED', 'account is changing');
+  try {
+    await awaitReadyWithTimeout();
+  } catch {
+    throwIpcError('INTERNAL', 'scheduler readiness timeout');
+  }
+  if (scope !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) {
+    throwIpcError('PRECONDITION_FAILED', 'account changed while waiting for startup');
   }
 }
 
@@ -221,6 +313,34 @@ async function withScheduler<T>(cb: (deps: SchedulerDeps) => Promise<T>): Promis
     rewrapSchedulerError(err);
   }
 }
+
+/**
+ * Pause as the Automations page does. Also clears the automation's unread results: pausing
+ * means the owner no longer cares about the current batch. Shared with the teammate settings pages.
+ */
+export async function pauseScheduleClearingUnread(scheduleId: string): Promise<Schedule> {
+  return withScheduler(async ({ scheduler, storage }) => {
+    const result = await scheduler.pause(scheduleId);
+    // pause 后顺手清掉这条 schedule 名下的未读历史 —— 用户主动暂停就视为
+    // 已不再关心当前一批结果,badge 一并消化。失败仅记日志,不影响 pause 本身。
+    try {
+      const updated = await storage.markAllRunsRead(scheduleId);
+      if (updated > 0) {
+        broadcast(MAKER_PUSH.SCHEDULE_EVENT, { type: 'read', scheduleId });
+      }
+    } catch (readErr) {
+      log.warn(`[pause] mark-all-runs-read failed (non-fatal): ${String(readErr)}`);
+    }
+    return result;
+  });
+}
+
+/** The scheduler calls of the teammate settings pages; the same instance the Automations page uses. */
+export const scheduleHostAccess = {
+  list: () => withScheduler(({ scheduler }) => scheduler.list()),
+  inflight: (scheduleId: string) => withScheduler(({ scheduler }) => Promise.resolve(scheduler.getInflightCount(scheduleId))),
+  resume: (scheduleId: string) => withScheduler(({ scheduler }) => scheduler.resume(scheduleId)),
+};
 
 /**
  * Device-link JSON 边界翻译:mobile 清空 intervalMs 用可序列化的 null 表达
@@ -374,6 +494,10 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
 
   ipcMain.handle(MAKER_INVOKE.SCHEDULE_CREATE, async (_e, input: unknown) => {
     requireObject(input, 'input');
+    if (isDeviceLinkInvoke()) {
+      const workingDirError = await remoteCreateWorkingDirError((input as { workingDir?: unknown }).workingDir);
+      if (workingDirError) throwIpcError('INVALID_PARAMS', workingDirError);
+    }
     return withScheduler(async ({ scheduler }) => {
       const normalized = await stabilizePreRunHookForCreate(
         normalizeNullableIntervalMs(input as CreateScheduleInput & { intervalMs?: number | null }),
@@ -383,18 +507,20 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
     });
   });
 
-  ipcMain.handle(MAKER_INVOKE.SCHEDULE_UPDATE, async (_e, id: unknown, patch: unknown) => {
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_UPDATE, async (_e, id: unknown, patch: unknown, expectedRaw?: unknown) => {
     const scheduleId = requireString(id, 'id');
     requireObject(patch, 'patch');
+    const expected = expectedRaw === undefined ? undefined : requireObject(expectedRaw, 'expected') as unknown as Schedule;
     // JSON must keep null until this receiving boundary; undefined keys disappear
     // in transit. Only model-selection axes gain explicit clearing semantics.
     const normalizedPatch = { ...patch as Record<string, unknown> };
-    for (const key of ['modelAgentDeviceId', 'modelAgentKind', 'model', 'providerId', 'effort']) {
+    for (const key of ['modelAgentDeviceId', 'modelAgentKind', 'model', 'providerId', 'effort', 'modelGroup']) {
       if (normalizedPatch[key] === null) normalizedPatch[key] = undefined;
     }
     return withScheduler(({ scheduler }) =>
-      scheduler.updateFromCurrent(scheduleId, (existing) =>
-        stabilizePreRunHookForUpdate(
+      scheduler.updateFromCurrent(
+        scheduleId,
+        (existing) => stabilizePreRunHookForUpdate(
           existing,
           normalizeLegacyDeviceLinkModelSelection(
             existing,
@@ -408,6 +534,7 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
           ),
           hookPathDeps,
         ),
+        expected,
       ),
     );
   });
@@ -431,32 +558,21 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
     });
   });
 
-  ipcMain.handle(MAKER_INVOKE.SCHEDULE_PAUSE, async (_e, id: unknown) => {
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_PAUSE, async (_e, id: unknown) =>
+    pauseScheduleClearingUnread(requireString(id, 'id')));
+
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_RESUME, async (_e, id: unknown, expectedRaw?: unknown) => {
     const scheduleId = requireString(id, 'id');
-    return withScheduler(async ({ scheduler, storage }) => {
-      const result = await scheduler.pause(scheduleId);
-      // pause 后顺手清掉这条 schedule 名下的未读历史 —— 用户主动暂停就视为
-      // 已不再关心当前一批结果,badge 一并消化。失败仅记日志,不影响 pause 本身。
-      try {
-        const updated = await storage.markAllRunsRead(scheduleId);
-        if (updated > 0) {
-          broadcast(MAKER_PUSH.SCHEDULE_EVENT, { type: 'read', scheduleId });
-        }
-      } catch (readErr) {
-        log.warn(`[pause] mark-all-runs-read failed (non-fatal): ${String(readErr)}`);
-      }
-      return result;
-    });
+    const expected = expectedRaw === undefined ? undefined : requireObject(expectedRaw, 'expected') as unknown as Schedule;
+    return withScheduler(({ scheduler }) => scheduler.resume(scheduleId, expected));
   });
 
-  ipcMain.handle(MAKER_INVOKE.SCHEDULE_RESUME, async (_e, id: unknown) => {
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_RUN_NOW, async (_e, id: unknown, optionsRaw?: unknown) => {
     const scheduleId = requireString(id, 'id');
-    return withScheduler(({ scheduler }) => scheduler.resume(scheduleId));
-  });
-
-  ipcMain.handle(MAKER_INVOKE.SCHEDULE_RUN_NOW, async (_e, id: unknown) => {
-    const scheduleId = requireString(id, 'id');
-    return withScheduler(({ scheduler }) => scheduler.runNow(scheduleId));
+    const options = optionsRaw && typeof optionsRaw === 'object' && !Array.isArray(optionsRaw)
+      ? optionsRaw as { expectedSchedule?: Schedule } : undefined;
+    return withScheduler(({ scheduler }) => scheduler.runNow(scheduleId,
+      options?.expectedSchedule ? { expectedSchedule: options.expectedSchedule } : undefined));
   });
 
   // 表单「AI 生成」:按用户自然语言描述生成前置检查脚本(utility model 单次生成,
@@ -522,6 +638,10 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
         ? requestedAgentKind ? { agentKind: requestedAgentKind, model: model ?? '', agentDeviceId: null } : null
         : await maker.getSessionMeta(targetSessionId).catch(() => null);
       if (session?.agentDeviceId) return unsupportedRemoteGeneration(providerId, model ?? session.model, session.agentKind);
+      // A plugin-engine task has no catalog route for utility generation, and
+      // schedules do not run on plugin engines (docs/plans/acp-plugin-bridge.md).
+      // Fail closed with no candidate instead of guessing a built-in transport.
+      if (session && !runsOnBuiltinEngine(session)) return { ok: false as const, reason: 'no_candidate' as const, attempts: [] };
       // Bound-session fallback must use the same live connection snapshot as
       // the provider picker. Never turn an unconnected built-in provider into
       // a routable candidate just because it exists in the catalog.
@@ -725,6 +845,74 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
       return scheduler.create(normalized);
     });
   });
+
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_WEBHOOK_STATUS, async (_e, id: unknown) => {
+    const scheduleId = requireString(id, 'id');
+    return withScheduler(async ({ scheduler }) => {
+      const schedule = await scheduler.get(scheduleId);
+      await getScheduleWebhookHost()?.refreshStatus();
+      return schedule ? getScheduleWebhookHost()?.status(schedule) ?? null : null;
+    });
+  });
+
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_WEBHOOK_RECEIVER, async () => scheduleWebhookReceiver());
+
+  const manageWebhooks = async <T>(run: (host: ScheduleWebhookHost) => Promise<T>): Promise<T> => {
+    const host = getScheduleWebhookHost();
+    if (!host) throwIpcError('INTERNAL', 'WEBHOOK_MANAGEMENT_UNAVAILABLE');
+    try {
+      return await run(host);
+    } catch (error) {
+      const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+      const message = error instanceof Error ? error.message : '';
+      const known = ['WEBHOOK_ENDPOINT_LIMIT', 'WEBHOOK_ENDPOINT_RELEASED', 'WEBHOOK_ACCOUNT_REQUIRED',
+        'WEBHOOK_MANAGEMENT_UNAVAILABLE', 'WEBHOOK_ACCOUNT_CHANGED'];
+      throwIpcError('INTERNAL', typeof code === 'string' && known.includes(code) ? code
+        : known.includes(message) ? message : 'WEBHOOK_MANAGEMENT_FAILED');
+    }
+  };
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_WEBHOOK_ACCOUNT, () => manageWebhooks((host) => host.accountOverview()));
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_WEBHOOK_RELEASE, (_e, id: unknown) => {
+    const endpointId = requireString(id, 'id');
+    if (!/^whk_[A-Za-z0-9_-]{1,128}$/.test(endpointId)) throwIpcError('INVALID_PARAMS', 'Invalid endpoint id');
+    return manageWebhooks((host) => host.releaseEndpoint(endpointId));
+  });
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_WEBHOOK_RESTORE, (_e, id: unknown) => {
+    const scheduleId = requireString(id, 'id');
+    return withScheduler(async ({ scheduler }) => {
+      const schedule = await scheduler.get(scheduleId);
+      if (!schedule) throwIpcError('NOT_FOUND', 'Schedule not found');
+      return manageWebhooks((host) => host.restoreEndpoint(schedule));
+    });
+  });
+
+  /** 地址和密钥只在任务所在电脑管理；两个通道都不在 Device Link 白名单内。 */
+  const withWebhookHost = <T>(id: unknown, run: (host: ScheduleWebhookHost, schedule: Schedule) => Promise<T>) => {
+    const scheduleId = requireString(id, 'id');
+    if (isDeviceLinkInvoke()) throwIpcError('INVALID_PARAMS', 'Webhook endpoints can only be managed on the computer running this schedule');
+    return withScheduler(async ({ scheduler }) => {
+      const schedule = await scheduler.get(scheduleId);
+      if (!schedule) throwIpcError('NOT_FOUND', `Schedule not found: ${scheduleId}`);
+      const host = getScheduleWebhookHost();
+      if (!host) throwIpcError('INTERNAL', 'Schedule webhooks are not running');
+      try {
+        return await run(host, schedule);
+      } catch (error) {
+        // 用户能修正的错误带上稳定的错误码，界面据此提示。
+        const message = error instanceof Error ? error.message : String(error);
+        if (message === 'WEBHOOK_SECRET_INVALID' || message === 'WEBHOOK_UNSIGNED') throwIpcError('INVALID_PARAMS', message);
+        throw error;
+      }
+    });
+  };
+
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_WEBHOOK_SET_SECRET, async (_e, id: unknown, secret: unknown) => {
+    if (secret !== undefined && typeof secret !== 'string') throwIpcError('INVALID_PARAMS', 'secret must be a string');
+    return withWebhookHost(id, (host, schedule) => host.setSecret(schedule, secret === undefined ? undefined : secret.trim()));
+  });
+
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_WEBHOOK_ROTATE_URL, async (_e, id: unknown) =>
+    withWebhookHost(id, (host, schedule) => host.rotateUrl(schedule)));
 
   ipcMain.handle(MAKER_INVOKE.SCHEDULE_SCRIPT_CAPABILITY_STATUS, async () => {
     // 查询型 handler(规则 13 例外):探测失败不该挡住表单——返回空列表,

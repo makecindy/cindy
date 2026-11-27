@@ -4,6 +4,7 @@
  * 与任务输入框同一条本机附件管线：`useMobileLocalAttachments` 负责相册 / 拍照 / 文件 /
  * 粘贴的拉起与乐观上传（传 deviceId，能直传时直传给这台电脑），这里只持有已上传的附件、
  * 托盘缩略图与「最近照片」的勾选映射，写法对照会话页与新建页。
+ * 服务器直连群注入 upload，复用选择/预处理/托盘而不创建电脑中转对象。
  *
  * - 附件只在发出成功后才离开托盘（电脑取走上传后自己回收中转对象）；发失败原样保留，
  *   重发沿用同一条消息。
@@ -14,17 +15,18 @@ import { useTranslation } from 'react-i18next';
 import * as FileSystem from 'expo-file-system/legacy';
 import { useAuth } from '@/auth/AuthContext';
 import { MOBILE_MAX_ATTACHMENTS } from './attachments';
+import { contextSheetMediaUploadCandidates } from './contextSheetMediaUpload';
 import type { MobileMessageGalleryImage } from './messageGallery';
 import { buildMediaPayload } from './messagePayload';
 import { discardMobileUploadedAttachment } from './mobileAttachmentUpload';
-import { buildMobileImageAttachmentCandidate } from './mobileImageAttachment';
 import { isComposerPastedImageUri } from './pastedImageAttachment';
 import type { RemoteSerializedAttachment } from './types';
-import { resolveContextSheetMediaAssetForUpload, type ContextSheetMediaAsset } from './useContextSheetMediaAssets';
-import { useMobileLocalAttachments } from './useMobileLocalAttachments';
+import type { ContextSheetMediaAsset } from './useContextSheetMediaAssets';
+import { useMobileLocalAttachments, type UseMobileLocalAttachmentsOptions } from './useMobileLocalAttachments';
 
-export function useBotGroupComposerAttachments({ deviceId, onPicked }: {
+export function useBotGroupComposerAttachments({ deviceId, upload, onPicked }: {
   deviceId: string;
+  upload?: UseMobileLocalAttachmentsOptions['upload'];
   /** A picker returned (or a recent photo was tapped): close the sheet and go back to typing. */
   onPicked(): void;
 }) {
@@ -47,10 +49,13 @@ export function useBotGroupComposerAttachments({ deviceId, onPicked }: {
 
   const local = useMobileLocalAttachments({
     deviceId,
+    upload,
     getAccessToken: () => getAccessTokenRef.current(),
     getAttachmentCount: () => attachmentsRef.current.length,
     onUploaded: (attachment, candidate) => {
-      attachmentsRef.current = [...attachmentsRef.current, attachment];
+      // Uploads run two at a time: photos added together go back to the order they were picked in,
+      // not the order they finished uploading; everything else is appended.
+      attachmentsRef.current = local.insertUploadedAttachment(attachmentsRef.current, attachment);
       if (candidate.kind === 'image') setPreviews((current) => ({ ...current, [attachment.id]: candidate.uri }));
       const sourceId = candidate.sourceId;
       if (sourceId) setMediaAssetAttachments((current) => ({ ...current, [sourceId]: attachment.id }));
@@ -120,37 +125,35 @@ export function useBotGroupComposerAttachments({ deviceId, onPicked }: {
       .map(([assetId]) => assetId));
   }, [attachments, mediaAssetAttachments]);
 
-  /** A tap in the recent-photo strip adds that photo at once (same as the task composer). */
-  const toggleMediaAsset = useCallback((asset: ContextSheetMediaAsset) => {
-    if (mediaTapAcceptedRef.current || mediaAssetAttachments[asset.id] || busyAssetIds.has(asset.id)) return;
-    if (attachmentsRef.current.length + getPendingUploadCount() >= MOBILE_MAX_ATTACHMENTS) {
-      setError(t('session.common.maxAttachments', { max: MOBILE_MAX_ATTACHMENTS }));
+  /** How many more attachments fit: attached and uploading ones both hold a slot. */
+  const getRemainingSlots = useCallback(
+    () => MOBILE_MAX_ATTACHMENTS - attachmentsRef.current.length - getPendingUploadCount(),
+    [getPendingUploadCount],
+  );
+  const reportLimit = useCallback(
+    () => setError(t('session.common.maxAttachments', { max: MOBILE_MAX_ATTACHMENTS })),
+    [t],
+  );
+
+  /**
+   * Recent photos are added at once (same as the task composer): one for a tap on a photo,
+   * several for the photos picked with their selection circles.
+   */
+  const addMediaAssets = useCallback((assets: readonly ContextSheetMediaAsset[]) => {
+    if (mediaTapAcceptedRef.current) return;
+    const fresh = assets.filter((asset) => !mediaAssetAttachments[asset.id] && !busyAssetIds.has(asset.id));
+    if (fresh.length === 0) return;
+    if (fresh.length > getRemainingSlots()) {
+      reportLimit();
       return;
     }
     mediaTapAcceptedRef.current = true;
     setError(null);
-    enqueueUploads([{
-      kind: 'image',
-      uri: asset.uri,
-      name: asset.filename,
-      size: 0,
-      sourceId: asset.id,
-      resolve: async () => {
-        const resolved = await resolveContextSheetMediaAssetForUpload(asset);
-        const candidate = buildMobileImageAttachmentCandidate({ fileName: resolved.filename, uri: resolved.uri }, 0);
-        return {
-          uri: candidate.uri,
-          name: candidate.name,
-          mimeType: candidate.mimeType,
-          width: resolved.width,
-          height: resolved.height,
-          // HEIC was already converted and resized while resolving.
-          skipPreprocess: resolved.optimized === true,
-        };
-      },
-    }], { token: getAccessTokenRef.current() });
+    // The candidates carry the order the photos were picked in (see onUploaded above).
+    enqueueUploads(contextSheetMediaUploadCandidates(fresh), { token: getAccessTokenRef.current() });
     onPickedRef.current();
-  }, [busyAssetIds, enqueueUploads, getPendingUploadCount, mediaAssetAttachments, t]);
+  }, [busyAssetIds, enqueueUploads, getRemainingSlots, mediaAssetAttachments, reportLimit]);
+  const toggleMediaAsset = useCallback((asset: ContextSheetMediaAsset) => addMediaAssets([asset]), [addMediaAssets]);
 
   /** The computer cannot take attachments: a pasted image is dropped like before, its copy deleted. */
   const dropPastedImages = useCallback((uris: readonly string[]) => {
@@ -193,6 +196,9 @@ export function useBotGroupComposerAttachments({ deviceId, onPicked }: {
     holdForSend,
     armMediaTap,
     toggleMediaAsset,
+    addMediaAssets,
+    getRemainingSlots,
+    reportLimit,
     busyAssetIds,
     selectedAssetIds,
     galleryImages,

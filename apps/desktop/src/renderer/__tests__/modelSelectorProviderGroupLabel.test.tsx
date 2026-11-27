@@ -12,7 +12,7 @@ import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The shared-quota rail observes auth; this component fixture has no auth host.
-vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null }));
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null, useOptionalAuthDeviceId: () => null }));
 
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-i18next')>()),
@@ -91,7 +91,7 @@ const catalogs = vi.hoisted(() => {
     ] as unknown[],
     localGroups: {
       'a-local': {
-        strategy: 'least',
+        strategy: 'expiring',
         autoSwitch: true,
         members: [member('local', 'local', null, 'a-local'), member('device:device-d:d-open', 'device', 'device-d', 'd-open', 'Laptop')],
       },
@@ -102,7 +102,7 @@ const catalogs = vi.hoisted(() => {
         provider('c-open', 'C Open', [['c-model', 'C Model']], {
           remoteInvocationEnabled: true,
           group: {
-            strategy: 'least',
+            strategy: 'expiring',
             autoSwitch: true,
             members: [
               member('local', 'local', null, 'c-open'),

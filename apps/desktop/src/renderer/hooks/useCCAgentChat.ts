@@ -1,3 +1,4 @@
+import { type OutputLimitDetails } from '@cindy/maker-shared';
 /**
  * useCCAgentChat — thin subscription layer over `makerChatStore`.
  * ---------------------------------------------------------------------------
@@ -101,8 +102,13 @@ interface UseCCAgentChatReturn {
   pendingQueue: QueuedMessage[];
   /** 正在尝试插话投递的队列项 clientId。 */
   steeringQueueClientIds: string[];
+  /** 当前引擎不能同轮插话：不提供插话入口，消息等这一轮结束再发。 */
+  steerUnsupported: boolean;
   /** Queue was paused by Stop and resumes only after the user clicks Continue. */
   queuePaused: boolean;
+  queueEditLocks: string[];
+  queueInteractionLocks: string[];
+  queueAbortPending: boolean;
   /** F-QUEUE-DEFER: 队列面板是否显示三条以后的尾部，仅影响展示。 */
   queueExpanded: boolean;
   /** F-QUEUE-DEFER: 切换队列面板的展开 / 折叠态，仅影响展示。 */
@@ -134,6 +140,7 @@ interface UseCCAgentChatReturn {
       pastedTextRanges?: PastedTextRange[];
       slashCommandRanges?: SlashCommandRange[];
       replyQuote?: import('../../shared/chatReplyQuote').ChatReplyQuote;
+      firstMessageIdentity?: { clientId: string; createdAt: string };
       beforeEnqueue?: () => Promise<boolean>;
       onInputCreated?: (clientId: string) => void;
       onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
@@ -196,13 +203,16 @@ interface UseCCAgentChatReturn {
   /** 当前 terminal error 的稳定 reason key(如 'silent-stop-exhausted');ErrorBanner
    *  据此渲染专用 action。仅 error 非空时有意义。 */
   errorReason: string | null;
+  reconnectHandoff?: ChatMessage['reconnectHandoff'];
   /** Structured details for a tool-loop terminal error, when available. */
   toolLoop: ToolLoopErrorDetails | null;
+  outputLimit: OutputLimitDetails | null;
   /** error 是非终止 recoverableError(turn 在跑,daemon 自动重试中):ErrorBanner
    *  网络分支据此显示「正在自动重试…」而非「可点击重试」。 */
   errorIsRecoverable: boolean;
   /** Explicit retry target for ErrorBanner; null means retry is unsafe or unavailable. */
   errorRetryText: string | null;
+  queueHeadRetry: boolean;
   errorCanContinue?: boolean;
   /** live 终态错误绑定的持久化 error 行 clientId;无则没有 persist 续跑依据。 */
   errorPersistId: string | null;
@@ -229,6 +239,8 @@ interface UseCCAgentChatReturn {
   respondToPermission: (result: CCAgentPermissionResult) => void;
   /** F7.2: Currently pending ask-user-question */
   pendingAskUser: PendingAskUser | null;
+  pendingAskUserQueue?: PendingAskUser[];
+  selectAskUserQuestion: (requestId: string) => void;
   /** Host-owned plugin setup snapshot. */
   pendingPluginSetup: PendingPluginSetup | null;
   pluginSetupViewerState: PluginSetupViewerState;
@@ -435,6 +447,7 @@ export function useCCAgentChat(
         pastedTextRanges?: PastedTextRange[];
         slashCommandRanges?: SlashCommandRange[];
         replyQuote?: import('../../shared/chatReplyQuote').ChatReplyQuote;
+        firstMessageIdentity?: { clientId: string; createdAt: string };
         beforeEnqueue?: () => Promise<boolean>;
         onInputCreated?: (clientId: string) => void;
         onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
@@ -699,6 +712,10 @@ export function useCCAgentChat(
     [sessionId],
   );
 
+  const selectAskUserQuestion = useCallback((requestId: string) => {
+    if (sessionId) makerChatStore.selectAskUserQuestion(sessionId, requestId);
+  }, [sessionId]);
+
   const setAskUserDraft = useCallback(
     (next: AskUserDraft | null) => {
       if (!sessionId) return;
@@ -862,7 +879,11 @@ export function useCCAgentChat(
     pendingQueueLength,
     pendingQueue: lightState.pendingQueue,
     steeringQueueClientIds: lightState.steeringQueueClientIds,
+    steerUnsupported: lightState.steerUnsupported,
     queuePaused: lightState.queuePaused,
+    queueEditLocks: lightState.queueEditLocks,
+    queueInteractionLocks: lightState.queueInteractionLocks,
+    queueAbortPending: lightState.queueAbortPending,
     queueExpanded: lightState.queueExpanded,
     setQueueExpanded,
     resumeQueue,
@@ -896,11 +917,14 @@ export function useCCAgentChat(
         : lightState.recoverableError != null
           ? (lightState.errorReason ?? null)
           : null,
+    reconnectHandoff: lightState.error ? lightState.reconnectHandoff : undefined,
     toolLoop: lightState.error ? (lightState.toolLoop ?? null) : null,
+    outputLimit: lightState.error ? (lightState.outputLimit ?? null) : null,
     // 当前 error 是非终止 recoverableError(turn 在跑,daemon 自动重试中):
     // ErrorBanner 网络分支据此显示「正在自动重试…」而非「可点击重试」。
     errorIsRecoverable: !lightState.error && lightState.recoverableError != null,
     errorRetryText: lightState.errorRetryText,
+    queueHeadRetry: lightState.queueHeadRetry,
     errorCanContinue: lightState.errorCanContinue,
     errorPersistId: lightState.errorPersistId,
     disposedErrorPersistId: lightState.disposedErrorPersistId,
@@ -916,6 +940,8 @@ export function useCCAgentChat(
     pendingPermission: lightState.pendingPermission,
     respondToPermission,
     pendingAskUser: lightState.pendingAskUser,
+    pendingAskUserQueue: lightState.pendingAskUserQueue,
+    selectAskUserQuestion,
     pendingPluginSetup: lightState.pendingPluginSetup,
     pluginSetupViewerState: lightState.pluginSetupViewerState,
     pluginSetupCommandInFlight: lightState.pluginSetupCommandInFlight,

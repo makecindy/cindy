@@ -5,6 +5,7 @@ import {
   BOT_MODEL_CHAIN_MAX,
   nextBotModelRoute,
   normalizeBotModelChain,
+  normalizeBotProfileModelChain,
   primaryBotModelRoute,
 } from '../botModelChain';
 
@@ -29,8 +30,10 @@ describe('Bot model chain', () => {
     ]);
   });
 
-  it('preserves order, removes duplicate routes, and caps the chain at five', () => {
-    const routes = Array.from({ length: BOT_MODEL_CHAIN_MAX + 2 }, (_, index) => ({
+  // 2026-11-26 user decision: a buddy uses one model (or one smart route); backup models are gone. Older peers may still
+  // send up to five routes: the first valid one is kept.
+  it('keeps only the first route of an older multi-route chain', () => {
+    const routes = Array.from({ length: 7 }, (_, index) => ({
       harness: index % 2 === 0 ? 'pi' : 'codex',
       model: `model-${index}`,
       providerId: `provider-${index}`,
@@ -41,14 +44,8 @@ describe('Bot model chain', () => {
 
     const normalized = normalizeBotModelChain(routes);
 
-    expect(normalized).toHaveLength(BOT_MODEL_CHAIN_MAX);
-    expect(normalized.map((route) => route.model)).toEqual([
-      'model-0',
-      'model-1',
-      'model-2',
-      'model-3',
-      'model-4',
-    ]);
+    expect(BOT_MODEL_CHAIN_MAX).toBe(1);
+    expect(normalized.map((route) => route.model)).toEqual(['model-0']);
   });
 
   it('drops invalid entries without replacing a valid ordered chain from legacy fields', () => {
@@ -152,11 +149,23 @@ it('preserves locations through persistence and ordered fallback', () => {
   const local = { harness: 'codex' as const, model: 'same-model', providerId: 'openai', effort: 'medium', fastMode: false };
   const shared = { ...local, agentDeviceId: 'share:one' };
   const other = { ...local, agentDeviceId: 'device-two' };
-  const chain = normalizeBotModelChain(JSON.parse(JSON.stringify([shared, local, other, shared])));
-  expect(chain).toEqual([shared, local, other]);
+  for (const route of [shared, local, other]) expect(normalizeBotModelChain(JSON.parse(JSON.stringify([route])))).toEqual([route]);
+  // A smart route expands into routes at several locations; failover walks them in order.
+  const chain = [shared, local, other];
   expect(nextBotModelRoute(chain, shared)).toEqual(local);
   expect(nextBotModelRoute(chain, local)).toEqual(other);
   expect(nextBotModelRoute(chain, other)).toBeNull();
+});
+
+// Unit regression: chain-only coverage missed a stale top-level location after returning home.
+it('mirrors the primary location on save and clears it when only the fallback is remote', () => {
+  const local = { harness: 'codex' as const, model: 'same-model', providerId: 'openai', effort: '', fastMode: false };
+  const remote = { ...local, agentDeviceId: 'share:one' };
+  const saved = normalizeBotProfileModelChain({ modelChain: [remote, local] });
+  expect(saved.agentDeviceId).toBe('share:one');
+  const restored = normalizeBotProfileModelChain({ ...saved, modelChain: [local, remote] });
+  expect(restored.agentDeviceId).toBeNull();
+  expect(normalizeBotModelChain(JSON.parse(JSON.stringify(restored)).modelChain)).toEqual([local]);
 });
 
 it('round trips remote forms without exposing a same-named local source to older peers', () => {
@@ -165,4 +174,22 @@ it('round trips remote forms without exposing a same-named local source to older
   expect(wire[0].providerId).not.toBe('openai');
   delete wire[0].agentDeviceId; // old editors keep providerId but strip unknown fields
   expect(normalizeBotModelChain(wire)).toEqual([route]);
+});
+
+// Companion settings round-trip local, remote and shared plugin routes without losing location; damaged sources are dropped.
+it('round-trips host, remote and shared plugin models and rejects damaged sources', () => {
+  const plugin = { harness: 'acp' as const, model: 'sample-model', providerId: 'acp-plugin:sample:engine', effort: 'high', fastMode: false };
+  const remotePlugin = { ...plugin, agentDeviceId: 'other-device' };
+  const sharedPlugin = { ...plugin, agentDeviceId: 'share:friend' };
+  const fallback = { harness: 'pi' as const, model: 'other', providerId: 'source', effort: '', fastMode: false };
+  const wire = JSON.parse(serializeModelRoutes([plugin, remotePlugin, sharedPlugin, fallback]));
+  expect(wire[1].providerId).not.toBe(plugin.providerId);
+  expect(wire[2].providerId).not.toBe(plugin.providerId);
+  expect(wire.map((route: unknown) => normalizeBotModelChain([route])[0])).toEqual([plugin, remotePlugin, sharedPlugin, fallback]);
+  expect(nextBotModelRoute(wire, plugin)).toEqual(remotePlugin);
+  expect(nextBotModelRoute(wire, remotePlugin)).toEqual(sharedPlugin);
+  expect(nextBotModelRoute(wire, sharedPlugin)).toEqual(fallback);
+  expect(normalizeBotModelChain([
+    { ...plugin, harness: 'claude' }, { ...plugin, providerId: 'source' },
+  ])).toEqual([]);
 });

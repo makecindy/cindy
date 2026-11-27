@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Generated from assets/usage-widgets/text.json (the picker reads these). -->
+<resources>
+  <string name="cindy_widget_quota_label">Quota das subscrições</string>
+  <string name="cindy_widget_quota_description">Quanto resta em cada subscrição e quando volta a encher.</string>
+  <string name="cindy_widget_usage_label">Utilização diária</string>
+  <string name="cindy_widget_usage_description">A utilização de hoje e a tendência dos últimos dias.</string>
+</resources>

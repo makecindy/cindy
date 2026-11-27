@@ -16,6 +16,7 @@
  *     + backfillSessionMeta 落库；schedule.model 留空才沿用 meta.model，且不触发 setModel。
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { providerShareGuestPeer, sharedTaskGuestPeer } from '@cindy/device-link';
 
 vi.mock('electron', () => ({ app: { getPath: () => '/tmp/cindy-scheduler-test' } }));
 vi.mock('electron-store', () => ({ default: class {
@@ -93,10 +94,19 @@ vi.mock('../runners/_shared', () => ({
   backfillSessionMeta: mocks.backfillSessionMeta,
 }));
 
-import { MakerScheduleRunner } from '../runner';
-import { applyScheduledModelSelection, createScheduledModelScope, resolveScheduledModelSelection } from '../../maker-ipc/scheduledModelSelection';
+import { MakerScheduleRunner } from '../runner.desktop';
+import { resolveTeammateScheduleModel } from '../teammateScheduleModel';
+import { __testing as projectAutomation } from '../project-automation-loader';
+import { scheduleCreateToRow, schedulePatchToRow, scheduleToCamel } from '../../localDb/mapper';
+import {
+  applyScheduledModelSelection,
+  assertScheduledHarnessSupported,
+  createScheduledModelScope,
+  createScheduledModelSelectionResolver,
+  resolveScheduledModelSelection,
+} from '../../maker-ipc/scheduledModelSelection';
 import type { ProviderView } from '@cindy/model-providers';
-import type { Scheduler } from '@cindy/maker-scheduler';
+import { Scheduler, type ScheduleStorage } from '@cindy/maker-scheduler';
 
 type SessionSendOptions = Parameters<Session['send']>[1];
 type SendImpl = (
@@ -252,7 +262,11 @@ function createRunnerHarness(
     sdkSessionId?: string;
   } | null = null,
   opts: {
+    resolveInheritedModel?: ConstructorParameters<typeof MakerScheduleRunner>[0]['resolveInheritedModel'];
+    bootstrapSession?: ConstructorParameters<typeof MakerScheduleRunner>[0]['bootstrapSession'];
     sessionAlive?: boolean;
+    getSession?: () => Session | undefined;
+    closeSessionIfCurrent?: Maker['closeSessionIfCurrent'];
     acquirePendingAgentSwitch?: ConstructorParameters<typeof MakerScheduleRunner>[0]['acquirePendingAgentSwitch'];
     prepareModelPreferences?: ConstructorParameters<typeof MakerScheduleRunner>[0]['prepareModelPreferences'];
     onModelDispatched?: ConstructorParameters<typeof MakerScheduleRunner>[0]['onModelDispatched'];
@@ -275,6 +289,8 @@ function createRunnerHarness(
       typeof MakerScheduleRunner
     >[0]['resolveDefaultModelRoute'];
     getSessionMeta?: () => Promise<typeof meta>;
+    admitPluginEngine?: ConstructorParameters<typeof MakerScheduleRunner>[0]['admitPluginEngine'];
+    modelGroupStart?: ConstructorParameters<typeof MakerScheduleRunner>[0]['modelGroupStart'];
   } = {},
 ): RunnerHarness {
   const createSession = vi.fn(async () => h.session);
@@ -282,7 +298,8 @@ function createRunnerHarness(
   const maker = {
     createSession,
     getSessionMeta: vi.fn(opts.getSessionMeta ?? (async () => meta)),
-    getSession: vi.fn(() => h.session),
+    getSession: vi.fn(opts.getSession ?? (() => h.session)),
+    closeSessionIfCurrent: opts.closeSessionIfCurrent,
     listActiveSessions: vi.fn(() => opts.activeSessions ?? [h.session]),
     closeSession,
     // issue #456:runner fire 时按所选模型 efforts reconcile effort;测试经 availableModels 注入能力。
@@ -290,10 +307,13 @@ function createRunnerHarness(
     // 默认 false = fresh spawn（opts.model/effort 已生效）；true 模拟进程内
     // 复用 active session 的路径（createSession 忽略 opts, setModel/setEffort 是唯一通道）。
     isSessionAlive: vi.fn(() => opts.sessionAlive ?? false),
+    recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
   } as unknown as Maker;
   const notifier: Notifier = { notify: vi.fn(async () => undefined) };
   const runner = new MakerScheduleRunner({
     maker,
+    bootstrapSession: opts.bootstrapSession,
+    resolveInheritedModel: opts.resolveInheritedModel,
     getDb: () => ({}) as never,
     notifier,
     logger: createLogger(),
@@ -311,6 +331,8 @@ function createRunnerHarness(
     resolveModelSelection: opts.resolveModelSelection,
     resolveRouteCopyCapabilities: opts.resolveRouteCopyCapabilities,
     resolveDefaultModelRoute: opts.resolveDefaultModelRoute,
+    ...(opts.admitPluginEngine ? { admitPluginEngine: opts.admitPluginEngine } : {}),
+    ...(opts.modelGroupStart ? { modelGroupStart: opts.modelGroupStart } : {}),
   });
   return { runner, createSession, closeSession };
 }
@@ -341,6 +363,561 @@ describe('MakerScheduleRunner model selection', () => {
     mocks.isSessionInTurn.mockReturnValue(false);
     mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active' });
     mocks.getSessionFsSnapshot.mockResolvedValue({ permissionMode: 'ask', planModeEnabled: false });
+  });
+
+  // #11134 / unit: project update + persisted row -> actual runner.fire. Existing
+  // fresh/heartbeat tests start with correct bindings and miss a retained Codex
+  // target after switching a persistent project automation to fresh Claude runs.
+  // Plugin engines (docs/plans/acp-plugin-bridge.md, 2026-11-19), unit through runner.fire. A fresh
+  // run on a plugin engine must start that engine with its own model and level, never be checked
+  // against or rerouted through the built-in catalog, and fail plainly when the plugin is turned off.
+  // model-groups.md §6.3 (2026-11-22: a mode belongs to the task), unit through runner.fire: a run that creates a
+  // new task picks its source from the mode and hands the token to the ordinary task startup, which settles the
+  // pick on the first dispatched turn; a run sent to an existing task does not pick (that task follows its own
+  // mode). Gap: scheduled runs only knew the saved model. Minimal input: a fresh Codex schedule saved on one model
+  // whose mode picks another, and the same schedule bound to a live task. Failure: the new task starts on the saved
+  // model or without the token, or a bound run re-picks.
+  describe('model group schedules', () => {
+    const picked = (token = 'tok-1') => ({
+      prepare: vi.fn(async () => ({
+        route: { agentKind: 'codex' as const, model: 'gpt-picked', providerId: 'openai-work', agentDeviceId: null },
+        token,
+      })),
+      canRoute: vi.fn(async () => true),
+      exists: vi.fn(async () => true),
+    });
+
+    it('starts the new task on the model the mode picked and hands the token to task startup', async () => {
+      const h = createSessionHarness();
+      const modelGroupStart = picked();
+      const harness = createRunnerHarness(h, { agentKind: 'codex', model: 'gpt-saved', workDir: '/work' }, {
+        modelGroupStart, resolveModelSelection: async (choice) => choice,
+      });
+      const opts = await fireToCompletion(harness, h, baseSchedule({
+        agentKind: 'codex', modelAgentKind: 'codex', model: 'gpt-saved', modelGroup: 'daily',
+      })) as { model: string; modelGroupStart?: string };
+      expect(modelGroupStart.prepare).toHaveBeenCalledWith('daily', { keptModelName: 'gpt-saved', localOnly: false });
+      expect(opts.model).toBe('gpt-picked');
+      expect(opts.modelGroupStart).toBe('tok-1');
+    });
+
+    it('keeps the saved model when the mode has nothing to pick, and still hands the token over for the note', async () => {
+      const h = createSessionHarness();
+      const modelGroupStart = { prepare: vi.fn(async () => ({ token: 'tok-kept' })), canRoute: vi.fn(async () => false), exists: vi.fn(async () => true) };
+      const harness = createRunnerHarness(h, { agentKind: 'codex', model: 'gpt-saved', workDir: '/work' }, {
+        modelGroupStart, resolveModelSelection: async (choice) => choice,
+      });
+      const opts = await fireToCompletion(harness, h, baseSchedule({
+        agentKind: 'codex', modelAgentKind: 'codex', model: 'gpt-saved', modelGroup: 'daily',
+      })) as { model: string; modelGroupStart?: string };
+      expect(opts.model).toBe('gpt-saved');
+      expect(opts.modelGroupStart).toBe('tok-kept');
+    });
+
+    // PR #11881 review r4661455493: a run sent to a task that still exists re-applied the saved fallback model
+    // as an explicit choice, switching the task off the source its mode picked (and failing if the fallback is
+    // gone). Minimal input: a mode schedule bound to a live task whose saved model differs from the task's.
+    // Failure: the run resolves or switches to the saved model; with the mode deleted it must still use it.
+    async function fireBound(exists: boolean) {
+      const h = createSessionHarness();
+      const modelGroupStart = { ...picked(), exists: vi.fn(async () => exists) };
+      const selections: unknown[] = [];
+      const harness = createRunnerHarness(h, { agentKind: 'codex', model: 'gpt-current', workDir: '/work' }, {
+        modelGroupStart,
+        sessionAlive: true,
+        resolveModelSelection: async (choice) => choice,
+        acquirePendingAgentSwitch: async (_id, _signal, selection) => {
+          selections.push(selection);
+          const release = () => {};
+          return selection ? { release, selection } : release;
+        },
+      });
+      await fireToCompletion(harness, h, baseSchedule({
+        agentKind: 'codex', modelAgentKind: 'codex', model: 'gpt-fallback', modelGroup: 'daily', targetSessionId: h.session.id,
+      }));
+      return { modelGroupStart, selections };
+    }
+
+    it('keeps the task on its own source when the run goes to a task that still exists', async () => {
+      const { modelGroupStart, selections } = await fireBound(true);
+      expect(modelGroupStart.prepare).not.toHaveBeenCalled();
+      expect(selections).not.toContainEqual(expect.objectContaining({ model: 'gpt-fallback' }));
+    });
+
+    it('runs the saved model on an existing task once the mode is deleted', async () => {
+      const { modelGroupStart, selections } = await fireBound(false);
+      expect(modelGroupStart.prepare).not.toHaveBeenCalled();
+      expect(selections).toContainEqual(expect.objectContaining({ model: 'gpt-fallback' }));
+    });
+  });
+
+  describe('plugin engine schedules', () => {
+    const ENGINE = 'acp-plugin:_ns__local__dsh-acp:dsh';
+    const pluginSchedule = () => baseSchedule({ agentKind: 'acp', modelAgentKind: 'acp', providerId: ENGINE,
+      model: 'deepseek-v4', effort: 'max', fastMode: true });
+
+    it('starts the plugin engine without consulting the built-in catalog', async () => {
+      const h = createSessionHarness();
+      const checkModelRoute = vi.fn(async () => ({ kind: 'pass' as const }));
+      const resolveModelSelection = vi.fn();
+      const resolveDefaultModelRoute = vi.fn(async () => null);
+      const admitPluginEngine = vi.fn((route: { model: string; effort?: string | null }) => ({
+        model: route.model, effort: route.effort === 'max' ? 'max' : '' }));
+      const harness = createRunnerHarness(h, null, { checkModelRoute, resolveModelSelection, resolveDefaultModelRoute, admitPluginEngine });
+      const opts = await fireToCompletion(harness, h, pluginSchedule());
+      expect(opts).toMatchObject({ agentKind: 'acp', providerId: ENGINE, model: 'deepseek-v4', effort: 'max',
+        permissionMode: 'bypassPermissions' });
+      expect((opts as { fastMode?: unknown }).fastMode).toBeUndefined();
+      expect(checkModelRoute).not.toHaveBeenCalled();
+      expect(resolveModelSelection).not.toHaveBeenCalled();
+      expect(resolveDefaultModelRoute).not.toHaveBeenCalled();
+      // Admitted at fire entry and again right before the prompt is dispatched.
+      expect(admitPluginEngine).toHaveBeenCalledTimes(2);
+    });
+
+    // 2026-11-25 用户要求插件引擎与内置引擎一样能用 worktree：本次运行先检出，再在检出目录里启动插件引擎。
+    // 最小失败输入：useWorktree=true 的插件引擎自动任务被准入拒绝，或在基础仓库 /repo 里启动。
+    it('runs a worktree plugin engine schedule inside the checked-out worktree', async () => {
+      const h = createSessionHarness();
+      mocks.resolveWorkingDir.mockResolvedValue({ ok: true, path: '/repo/.cindy-worktrees/daily' });
+      const admitPluginEngine = vi.fn((route: { model: string }) => ({ model: route.model, effort: '' }));
+      const harness = createRunnerHarness(h, null, { admitPluginEngine });
+      const opts = await fireToCompletion(harness, h, { ...pluginSchedule(), workspaceKind: 'project',
+        workingDir: '/repo', useWorktree: true });
+      expect(mocks.resolveWorkingDir).toHaveBeenCalled();
+      expect(opts).toMatchObject({ agentKind: 'acp', providerId: ENGINE, workingDir: '/repo/.cindy-worktrees/daily' });
+    });
+
+    it('fails the run when the plugin was turned off instead of falling back to a built-in model', async () => {
+      const h = createSessionHarness();
+      const harness = createRunnerHarness(h, null, {
+        admitPluginEngine: () => { throw new Error('提供这个引擎的插件已停用或卸载。请重新选择模型。'); },
+      });
+      await expect(harness.runner.fire(pluginSchedule(), createFireContext())).rejects.toThrow(
+        'schedule route unavailable: 提供这个引擎的插件已停用或卸载');
+      expect(harness.createSession).not.toHaveBeenCalled();
+      expect(h.send).not.toHaveBeenCalled();
+    });
+
+    it('refuses to save a plugin engine schedule when the engine is not offered', async () => {
+      const h = createSessionHarness();
+      const harness = createRunnerHarness(h, null, {
+        admitPluginEngine: () => { throw new Error('DeepSeek Harness 当前不可用。'); },
+      });
+      await expect(harness.runner.validateModelSelection(pluginSchedule())).rejects.toThrow('当前不可用');
+      await expect(harness.runner.validateModelSelection({ ...pluginSchedule(), targetSessionId: 'bound-task' }))
+        .rejects.toThrow('当前不可用');
+    });
+
+    // 2026-11-26 (方案 B): bound ordinary desktop tasks can temporarily switch between plugin
+    // engines and built-in harnesses via scheduledModelScope + applyScheduledModelSelection and
+    // restore the original engine before the next user message. Minimal failing inputs: an ACP
+    // task rejecting a built-in PR follow-up model, or a restore failing to switch back to ACP.
+    it('temporarily switches a bound plugin-engine task to a built-in model and restores ACP afterwards', async () => {
+      const h = createSessionHarness();
+      type RouteState = Parameters<typeof applyScheduledModelSelection>[0] & { agentDeviceId: string | null };
+      let current: RouteState = {
+        agentKind: 'acp',
+        providerId: ENGINE,
+        model: 'deepseek-v4',
+        effort: 'high',
+        fastMode: false,
+        agentDeviceId: null,
+      };
+      const meta: {
+        agentKind: Session['agentKind'];
+        model: string;
+        effort?: string;
+        workDir: string;
+      } = {
+        agentKind: 'acp',
+        model: 'deepseek-v4',
+        effort: 'high',
+        workDir: '/work',
+      };
+      let baseline: string | null = null;
+      const switchHarness = vi.fn(async (route: Parameters<typeof applyScheduledModelSelection>[0]) => {
+        current = {
+          agentKind: route.agentKind,
+          providerId: route.providerId,
+          model: route.model,
+          effort: route.effort,
+          fastMode: route.fastMode,
+          agentDeviceId: route.agentDeviceId ?? null,
+        };
+        meta.agentKind = route.agentKind;
+        meta.model = route.model;
+        meta.effort = route.effort ?? undefined;
+        Object.assign(h.session, { agentKind: route.agentKind, model: route.model });
+        return { engineReady: true };
+      });
+      const applyModel = vi.fn(async (route: Parameters<typeof applyScheduledModelSelection>[0]) => {
+        current = { ...current, model: route.model, providerId: route.providerId, effort: route.effort, fastMode: route.fastMode };
+        meta.model = route.model;
+        meta.effort = route.effort ?? undefined;
+        await h.session.setModel(route.model);
+      });
+      const resolveSelection = createScheduledModelSelectionResolver({
+        readRemoteProviders: async () => [],
+        readSshCodexProviders: async () => [],
+        resolveLocalSelection: async (route) => route,
+        resolvePluginEngineSelection: async (route) => ({ ...route, agentKind: 'acp', agentDeviceId: null, fastMode: false }),
+      });
+      const applyProfile = (route: Parameters<typeof applyScheduledModelSelection>[0]) =>
+        applyScheduledModelSelection(route, {
+          getTarget: async () => ({ ...current, status: 'active', source: 'desktop' }),
+          isBusy: () => false,
+          resolveSelection,
+          switchHarness,
+          applyModel,
+        });
+      const scope = createScheduledModelScope({
+        createId: () => 'acp-owner-scope',
+        read: async () => ({ baseline, profile: current }),
+        write: async (_id, saved, _rev, _expected, restored) => {
+          baseline = saved ? JSON.stringify(saved) : null;
+          if (!saved && restored) {
+            current = {
+              agentKind: restored.agentKind,
+              providerId: restored.providerId,
+              model: restored.model,
+              effort: restored.effort,
+              fastMode: restored.fastMode,
+              agentDeviceId: restored.agentDeviceId ?? null,
+            };
+          }
+        },
+        isBusy: () => false,
+        apply: async (_id, profile) => applyProfile(profile),
+      });
+      mocks.getSessionRowSnapshot.mockImplementation(async () => ({
+        status: 'active',
+        source: 'desktop',
+        agentKind: current.agentKind,
+        providerId: current.providerId,
+        userSendAt: null,
+        agentDeviceId: null,
+        remoteHostId: null,
+      }));
+      const harness = createRunnerHarness(h, meta, {
+        acquirePendingAgentSwitch: async (_id, _signal, selection) => {
+          if (!selection) return () => {};
+          await scope.begin(h.session.id);
+          const resolved = await applyProfile(selection);
+          return { release: () => {}, selection: resolved };
+        },
+      });
+      const schedule = baseSchedule({
+        targetSessionId: h.session.id,
+        agentKind: 'codex',
+        modelAgentKind: 'codex',
+        model: 'gpt-5.4',
+        providerId: 'openai',
+        effort: 'medium',
+        fastMode: false,
+      });
+      const opts = await fireToCompletion(harness, h, schedule);
+      expect(opts).toMatchObject({ agentKind: 'codex', model: 'gpt-5.4', providerId: 'openai' });
+      expect(switchHarness).toHaveBeenCalledTimes(1);
+      expect(applyModel).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(baseline!)).toMatchObject({
+        agentKind: 'acp',
+        providerId: ENGINE,
+        model: 'deepseek-v4',
+        effort: 'high',
+        fastMode: false,
+      });
+      // Next ordinary user send restores the task back to its ACP plugin engine without calling built-in applyModel.
+      await scope.restore(h.session.id);
+      expect(baseline).toBeNull();
+      expect(current).toMatchObject({ agentKind: 'acp', providerId: ENGINE, model: 'deepseek-v4', effort: 'high', fastMode: false });
+      expect(switchHarness).toHaveBeenCalledTimes(2);
+      expect(applyModel).toHaveBeenCalledTimes(1);
+    });
+
+    // 2026-11-26: fresh schedules on a remote plugin engine admit against that computer's catalog
+    // and forward agentDeviceId to createSession (both entry and pre-dispatch re-admission).
+    it('starts a fresh remote plugin-engine schedule and passes agentDeviceId to admission and createSession', async () => {
+      const h = createSessionHarness();
+      const admitPluginEngine = vi.fn(async (route: { model: string; effort?: string | null; agentDeviceId?: string | null }) => ({
+        model: route.model,
+        effort: route.effort ?? '',
+      }));
+      const harness = createRunnerHarness(h, null, { admitPluginEngine });
+      const remoteSchedule = {
+        ...pluginSchedule(),
+        agentDeviceId: 'studio',
+        modelAgentDeviceId: 'studio',
+      };
+      await harness.runner.validateModelSelection(remoteSchedule);
+      expect(admitPluginEngine).toHaveBeenCalledWith(expect.objectContaining({
+        providerId: ENGINE,
+        model: 'deepseek-v4',
+        agentDeviceId: 'studio',
+      }));
+      admitPluginEngine.mockClear();
+      const opts = await fireToCompletion(harness, h, remoteSchedule);
+      expect(opts).toMatchObject({
+        agentKind: 'acp',
+        agentDeviceId: 'studio',
+        providerId: ENGINE,
+        model: 'deepseek-v4',
+        effort: 'max',
+      });
+      expect(admitPluginEngine).toHaveBeenCalledTimes(2);
+      expect(admitPluginEngine).toHaveBeenNthCalledWith(1, expect.objectContaining({ agentDeviceId: 'studio' }));
+      expect(admitPluginEngine).toHaveBeenNthCalledWith(2, expect.objectContaining({ agentDeviceId: 'studio' }));
+    });
+
+    it('switches same-plugin-engine models in place and rejects unsupported plugin-engine bound targets', async () => {
+      const switchHarness = vi.fn(async () => ({ engineReady: true }));
+      const applyModel = vi.fn(async () => undefined);
+      const resolveSelection = createScheduledModelSelectionResolver({
+        readRemoteProviders: async () => [],
+        readSshCodexProviders: async () => [],
+        resolveLocalSelection: async (route) => route,
+        resolvePluginEngineSelection: async (route) => ({ ...route, agentKind: 'acp', fastMode: false }),
+      });
+      await applyScheduledModelSelection({
+        agentKind: 'acp', providerId: ENGINE, model: 'deepseek-v5', effort: 'low', fastMode: false, agentDeviceId: null,
+      }, {
+        getTarget: async () => ({ agentKind: 'acp', providerId: ENGINE, status: 'active', source: 'desktop', agentDeviceId: null }),
+        isBusy: () => false,
+        resolveSelection,
+        switchHarness,
+        applyModel,
+      });
+      expect(switchHarness).not.toHaveBeenCalled();
+      expect(applyModel).toHaveBeenCalledOnce();
+
+      // Same-account remote plugin engines are allowed for bound switches (both from and to remote).
+      expect(() => assertScheduledHarnessSupported(
+        { agentKind: 'acp', status: 'active', source: 'desktop', agentDeviceId: 'other-mac' }, 'codex', null,
+      )).not.toThrow();
+      expect(() => assertScheduledHarnessSupported(
+        { agentKind: 'codex', status: 'active', source: 'desktop' }, 'acp', 'other-mac',
+      )).not.toThrow();
+
+      const allowedCases: Array<[Parameters<typeof assertScheduledHarnessSupported>[0], Parameters<typeof assertScheduledHarnessSupported>[1], string | null]> = [
+        [{ agentKind: 'acp', status: 'active', source: 'bot' }, 'codex', null],
+        [{ agentKind: 'codex', status: 'active', source: 'bot' }, 'acp', null],
+        [{ agentKind: 'acp', status: 'active', source: 'desktop', orcaRole: 'worker' }, 'codex', null],
+        [{ agentKind: 'codex', status: 'active', source: 'desktop', orcaRole: 'lead' }, 'acp', null],
+        [{ agentKind: 'codex', status: 'active', source: 'im' }, 'acp', null],
+      ];
+      for (const [target, nextKind, nextDevice] of allowedCases) {
+        expect(() => assertScheduledHarnessSupported(target, nextKind, nextDevice)).not.toThrow();
+      }
+
+      const refusedCases: Array<[Parameters<typeof assertScheduledHarnessSupported>[0], Parameters<typeof assertScheduledHarnessSupported>[1], string | null]> = [
+        [{ agentKind: 'codex', status: 'active', source: 'desktop', remoteHostId: 'ssh-1' }, 'acp', null],
+        [{ agentKind: 'acp', status: 'active', source: 'desktop', agentDeviceId: sharedTaskGuestPeer('task-1', 'member-1', 'peer-1') }, 'codex', null],
+        [{ agentKind: 'codex', status: 'active', source: 'desktop' }, 'acp', providerShareGuestPeer('share-1', 'member-1', 'peer-2')],
+      ];
+      for (const [target, nextKind, nextDevice] of refusedCases) {
+        expect(() => assertScheduledHarnessSupported(target, nextKind, nextDevice)).toThrow();
+      }
+    });
+  });
+
+
+  // #12397, unit through runner.fire. A previous run's manual ACP route must
+  // never become the route or session id of a new per-round automation task.
+  it('starts the next independent run on the rule model after a previous task switched to ACP', async () => {
+    const h = createSessionHarness();
+    const previous = createSessionHarness().session;
+    Object.defineProperties(previous, {
+      id: { value: 'previous-run-task' },
+      agentKind: { value: 'acp' },
+      model: { value: 'gemini-scheduled-followup' },
+    });
+    const harness = createRunnerHarness(h, null, {
+      activeSessions: [previous],
+      resolveModelSelection: async (choice) => choice,
+    });
+    const opts = await fireToCompletion(harness, h, baseSchedule({
+      agentKind: 'codex', modelAgentKind: 'codex', model: 'gpt-automation', providerId: 'openai-work',
+    }));
+    expect(opts).toMatchObject({ agentKind: 'codex', model: 'gpt-automation', providerId: 'openai-work' });
+    expect(harness.createSession.mock.calls[0][0].id).not.toBe(previous.id);
+  });
+  it('starts a fresh Claude task after a persisted project binding is cleared', async () => {
+    const h = createSessionHarness();
+    const harness = createRunnerHarness(h, { agentKind: 'codex', model: 'gpt-5.5', workDir: '/work' });
+    const previous = baseSchedule({ source: 'project', projectConfigId: 'daily',
+      agentKind: 'codex', model: 'gpt-5.5', persistentSession: true, targetSessionId: 'old-codex-task' });
+    const patch = projectAutomation.scheduleConfigToUpdateInput({ id: 'daily', name: 'Daily',
+      prompt: 'Check', cronExpr: '0 9 * * *', agentKind: 'claude-code',
+      model: 'claude-opus-5-5', providerId: 'anthropic', persistentSession: false }, '/work');
+    let row = scheduleCreateToRow(previous) as Parameters<typeof scheduleToCamel>[0];
+    const scheduler = new Scheduler({ runner: harness.runner, storage: {
+      get: async () => scheduleToCamel(row),
+      update: async (_id: string, update: Partial<Schedule>) => {
+        row = { ...row, ...schedulePatchToRow(update) };
+        return scheduleToCamel(row);
+      },
+    } as unknown as ScheduleStorage });
+    const saved = await scheduler.update(previous.id, patch);
+    await fireToCompletion(harness, h, saved);
+    expect(harness.createSession).toHaveBeenCalledWith(expect.objectContaining({
+      agentKind: 'claude-code', model: 'claude-opus-5-5', providerId: 'anthropic',
+      title: '[Schedule] Daily',
+    }));
+    expect(harness.createSession.mock.calls[0][0].id).not.toBe('old-codex-task');
+    expect(harness.closeSession).toHaveBeenCalled();
+  });
+
+  // #11134 review / unit: the first persistent fire holds an old snapshot while
+  // createSession yields to an edit. Existing tests edit before fire and cannot
+  // catch the late binding overwriting fresh mode or a newer explicit target.
+  it.each([
+    { persistentSession: false, targetSessionId: undefined, expectedTarget: undefined },
+    { persistentSession: true, targetSessionId: 'newer-task', expectedTarget: 'newer-task' },
+    { persistentSession: true, targetSessionId: undefined, expectedTarget: 'scheduler-session' },
+  ])('preserves the latest binding choice during first creation: %j', async (edit) => {
+    const h = createSessionHarness();
+    const harness = createRunnerHarness(h);
+    const previous = baseSchedule({ source: 'project', projectConfigId: 'daily',
+      persistentSession: true, model: 'claude-opus-5-5', providerId: 'anthropic' });
+    let row = scheduleCreateToRow(previous) as Parameters<typeof scheduleToCamel>[0];
+    const scheduler = new Scheduler({ runner: harness.runner, storage: {
+      get: async () => scheduleToCamel(row),
+      update: async (_id: string, update: Partial<Schedule>) => {
+        row = { ...row, ...schedulePatchToRow(update) };
+        return scheduleToCamel(row);
+      },
+    } as unknown as ScheduleStorage });
+    harness.runner.attachScheduler(scheduler);
+    harness.createSession.mockImplementationOnce(async () => {
+      await scheduler.update(previous.id, {
+        persistentSession: edit.persistentSession, targetSessionId: edit.targetSessionId,
+      });
+      return h.session;
+    });
+    await fireToCompletion(harness, h, previous);
+    const saved = (await scheduler.get(previous.id))!;
+    expect(saved.persistentSession).toBe(edit.persistentSession);
+    expect(saved.targetSessionId).toBe(edit.expectedTarget);
+    if (!edit.persistentSession) {
+      h.send.mockClear();
+      harness.createSession.mockClear();
+      await fireToCompletion(harness, h, saved);
+      expect(harness.createSession.mock.calls[0][0].id).not.toBe(h.session.id);
+      expect(harness.closeSession).toHaveBeenCalled();
+    }
+  });
+
+  // Unit regression: a bound task runs on another computer, but an explicit
+  // automation model belongs to the host. Saving must use the inherited catalog
+  // and reject before starting/switching the task; explicit local must succeed.
+  it('validates the bound execution location before saving an explicit model', async () => {
+    const h = createSessionHarness();
+    mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', agentDeviceId: 'other-computer' });
+    const resolveModelSelection = vi.fn(async (choice: Parameters<typeof resolveScheduledModelSelection>[0]) => {
+      if (choice.agentDeviceId) throw new Error('[MODEL_SELECTION_UNAVAILABLE] not offered');
+      return choice;
+    });
+    const harness = createRunnerHarness(h, null, { resolveModelSelection });
+    const schedule = baseSchedule({ targetSessionId: 'bound', modelAgentKind: 'codex',
+      model: 'local-model', providerId: 'local-account' });
+    await expect(harness.runner.validateModelSelection(schedule)).rejects.toThrow('modelAgentDeviceId');
+    expect(resolveModelSelection).toHaveBeenLastCalledWith(expect.objectContaining({
+      agentDeviceId: 'other-computer', model: 'local-model', providerId: 'local-account',
+    }));
+    await expect(harness.runner.validateModelSelection({ ...schedule, modelAgentDeviceId: '' })).resolves.toBeUndefined();
+    expect(resolveModelSelection).toHaveBeenLastCalledWith(expect.objectContaining({ agentDeviceId: null }));
+    expect(harness.createSession).not.toHaveBeenCalled();
+    expect(h.setModel).not.toHaveBeenCalled();
+    expect(h.send).not.toHaveBeenCalled();
+  });
+
+  // PR #11881 review r4653462645: saving (create, promote to project, import) required the saved fallback model
+  // even when the mode itself picks a usable source. Minimal input: a mode schedule whose saved model no longer
+  // resolves. Failure: save rejected although runs would use the mode; or a mode with nothing usable admitted.
+  it('admits a mode that picks a usable source even when the saved fallback model is gone', async () => {
+    const resolveModelSelection = vi.fn(async () => { throw new Error('[MODEL_SELECTION_UNAVAILABLE] removed'); });
+    const modelGroupStart = { prepare: vi.fn(), canRoute: vi.fn(async () => true), exists: vi.fn(async () => true) };
+    const harness = createRunnerHarness(createSessionHarness(), null, { resolveModelSelection, modelGroupStart });
+    const schedule = baseSchedule({ agentKind: 'codex', modelAgentKind: 'codex', model: 'gone', providerId: 'removed', modelGroup: 'daily' });
+    await expect(harness.runner.validateModelSelection(schedule)).resolves.toBeUndefined();
+    expect(resolveModelSelection).not.toHaveBeenCalled();
+    modelGroupStart.canRoute.mockResolvedValueOnce(false);
+    await expect(harness.runner.validateModelSelection(schedule)).rejects.toThrow('modelAgentDeviceId');
+  });
+
+  it('does not require a live catalog for unrelated edits or legacy followed models', async () => {
+    const resolveModelSelection = vi.fn(async () => { throw new Error('offline'); });
+    const harness = createRunnerHarness(createSessionHarness(), null, { resolveModelSelection });
+    const saved = baseSchedule({ targetSessionId: 'bound', modelAgentKind: 'codex', model: 'saved' });
+    await harness.runner.validateModelSelection({ ...saved, name: 'renamed' }, saved);
+    await harness.runner.validateModelSelection({ ...saved, modelAgentKind: undefined });
+    await harness.runner.validateModelSelection({ ...saved, executionMode: 'script' });
+    expect(resolveModelSelection).not.toHaveBeenCalled();
+    expect(mocks.getSessionRowSnapshot).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { target: { status: 'archived', agentDeviceId: 'bound-computer' }, location: undefined, expected: 'bound-computer' },
+    { target: { status: 'deleted', agentDeviceId: 'old-computer' }, location: undefined, expected: 'fresh-computer' },
+    { target: { status: 'archived', source: 'bot', agentDeviceId: 'old-computer' }, location: undefined, expected: 'fresh-computer' },
+    { target: null, location: undefined, expected: 'fresh-computer' },
+    { target: { status: 'active', agentDeviceId: 'bound-computer' }, location: 'chosen-computer', expected: 'chosen-computer' },
+  ])('preserves dispatch location semantics during save: %j', async ({ target, location, expected }) => {
+    mocks.getSessionRowSnapshot.mockResolvedValue(target);
+    const resolveModelSelection = vi.fn(async (choice: Parameters<typeof resolveScheduledModelSelection>[0]) => choice);
+    const harness = createRunnerHarness(createSessionHarness(), null, { resolveModelSelection });
+    const saved = baseSchedule({ targetSessionId: 'bound', persistentSession: true,
+      agentDeviceId: 'fresh-computer', modelAgentKind: 'codex', model: 'saved-model' });
+    await harness.runner.validateModelSelection({ ...saved, modelAgentDeviceId: location });
+    expect(resolveModelSelection).toHaveBeenCalledWith(expect.objectContaining({ agentDeviceId: expected }));
+  });
+
+  it('does not validate SSH models against the controller catalog', async () => {
+    mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', remoteHostId: 'ssh-host' });
+    const resolveModelSelection = vi.fn();
+    const harness = createRunnerHarness(createSessionHarness(), null, { resolveModelSelection });
+    await harness.runner.validateModelSelection(baseSchedule({ targetSessionId: 'bound',
+      modelAgentKind: 'codex', model: 'ssh-only-model' }));
+    expect(resolveModelSelection).not.toHaveBeenCalled();
+  });
+
+  it('lets the ordinary startup funnel allocate a remote group and persists the selected member provider', async () => {
+    const h = createSessionHarness();
+    const bootstrapSession = vi.fn(async (options: Parameters<Maker['createSession']>[0], signal?: AbortSignal) => {
+      expect(signal?.aborted).toBe(false);
+      expect(options).toMatchObject({ agentDeviceId: 'group-owner', providerId: 'group-source', workingDir: '/work' });
+      // The owner selects a different provider/computer while tools stay here.
+      options.agentDeviceId = 'selected-member';
+      options.providerId = 'member-source';
+      Object.assign(h.session, { agentDeviceId: 'selected-member' });
+      return h.session;
+    });
+    const harness = createRunnerHarness(h, null, { bootstrapSession, resolveModelSelection: async choice => choice });
+    const schedule = baseSchedule({ modelAgentKind: 'claude-code', modelAgentDeviceId: 'group-owner',
+      model: h.session.model, providerId: 'group-source' });
+    const saved = structuredClone(schedule);
+    const fire = harness.runner.fire(schedule, createFireContext());
+    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(1));
+    h.emit({ type: 'done', data: {} });
+    await fire;
+    expect(bootstrapSession).toHaveBeenCalledTimes(1);
+    expect(harness.createSession).not.toHaveBeenCalled();
+    expect(mocks.backfillSessionMeta).toHaveBeenCalledWith(expect.anything(), h.session.id,
+      expect.objectContaining({ providerId: 'member-source' }), expect.anything());
+    expect(schedule).toEqual(saved);
+  });
+
+  it('does not bypass a group allocation denial by starting the configured computer directly', async () => {
+    const h = createSessionHarness();
+    const denied = new Error('[PROVIDER_GROUP_UNAVAILABLE] no eligible computer');
+    const bootstrapSession = vi.fn(async () => { throw denied; });
+    const harness = createRunnerHarness(h, null, { bootstrapSession, resolveModelSelection: async choice => choice });
+    const schedule = baseSchedule({ modelAgentKind: 'claude-code', modelAgentDeviceId: 'group-owner',
+      model: h.session.model, providerId: 'group-source' });
+    await expect(harness.runner.fire(schedule, createFireContext())).rejects.toBe(denied);
+    expect(bootstrapSession).toHaveBeenCalledTimes(1);
+    expect(harness.createSession).not.toHaveBeenCalled();
+    expect(h.send).not.toHaveBeenCalled();
   });
 
   // Integration: a new automation must pass the remote route to createSession,
@@ -475,7 +1052,7 @@ describe('MakerScheduleRunner model selection', () => {
       const acceptedClientId = mocks.createMessage.mock.calls[0][1].clientId;
       expect(acceptedClientId).toEqual(expect.any(String));
       expect(mocks.rewindPersistedUserMessageAfterClear)
-        .toHaveBeenCalledExactlyOnceWith(h.session.id, acceptedClientId);
+        .toHaveBeenCalledExactlyOnceWith(h.session.id, acceptedClientId, { discard: true });
     });
 
     // Merge regression, unit: a legacy remote default must not mask an explicit
@@ -617,10 +1194,18 @@ describe('MakerScheduleRunner model selection', () => {
           }),
         }),
       });
-      const update = vi.fn(async () => undefined);
-      harness.runner.attachScheduler({ update, isRunSilenced: () => false } as unknown as Scheduler);
       const schedule = baseSchedule({ agentKind: 'codex', modelAgentKind: 'pi', model: 'shared-model',
         targetSessionId: h.session.id, persistentSession: true, effort: 'ultra', fastMode: true });
+      let row = scheduleCreateToRow(schedule) as Parameters<typeof scheduleToCamel>[0];
+      const scheduler = new Scheduler({ runner: harness.runner, storage: {
+        get: async () => scheduleToCamel(row),
+        update: async (_id: string, patch: Partial<Schedule>) => {
+          row = { ...row, ...schedulePatchToRow(patch) };
+          return scheduleToCamel(row);
+        },
+      } as unknown as ScheduleStorage });
+      const update = vi.spyOn(scheduler, 'update');
+      harness.runner.attachScheduler(scheduler);
       const saved = structuredClone(schedule);
       const opts = await fireToCompletion(harness, h, schedule);
       expect(opts).toMatchObject({ agentKind: 'pi', model: 'shared-model', providerId: 'selected', effort: 'high', fastMode: false });
@@ -634,7 +1219,7 @@ describe('MakerScheduleRunner model selection', () => {
       expect(release).toHaveBeenCalledTimes(1);
       if (status !== 'active') {
         expect(update).toHaveBeenCalledWith(schedule.id, { targetSessionId: undefined });
-        expect(update).toHaveBeenCalledWith(schedule.id, { targetSessionId: h.session.id });
+        expect((await scheduler.get(schedule.id))?.targetSessionId).toBe(h.session.id);
         expect(harness.createSession.mock.calls[0][0].id).not.toBe(schedule.targetSessionId);
       }
     });
@@ -1023,6 +1608,20 @@ describe('MakerScheduleRunner model selection', () => {
       sdkSessionId: 'sdk-1',
     };
 
+    it('continues a primary persistent task locally and skips it after transfer to another execution host', async () => {
+      const h = createSessionHarness();
+      const harness = createRunnerHarness(h, HEARTBEAT_META);
+      const task = baseSchedule({ persistentSession: true, targetSessionId: 'scheduler-session', primaryHostKey: 'public/cindy-contacts' });
+      await fireToCompletion(harness, h, task);
+      const calls = h.send.mock.calls.length;
+      expect(calls).toBe(1);
+      for (const location of [{ agentDeviceId: 'other' }, { remoteHostId: 'ssh' }]) {
+        mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', ...location });
+        expect(await harness.runner.fire(task, createFireContext())).toMatchObject({ skipped: true, sessionId: 'scheduler-session' });
+      }
+      expect(h.send).toHaveBeenCalledTimes(calls);
+    });
+
     it('schedule.model 显式设置时优先于绑定 session 的 meta.model，并同步给运行时 + 落库', async () => {
       const h = createSessionHarness();
       const harness = createRunnerHarness(h, HEARTBEAT_META);
@@ -1079,6 +1678,49 @@ describe('MakerScheduleRunner model selection', () => {
       expect(h.setModel).not.toHaveBeenCalled();
     });
 
+    // 2026-11-16 regression, unit: a bound drift check saved as Claude Code + a Claude
+    // subscription model without modelAgentKind fired after its task had moved to Codex.
+    // The model-only override kept Codex and was refused with 403. Minimal input: legacy
+    // schedule (agentKind=claude-code, model set) and a task whose current Harness is
+    // Codex. Same-Harness tasks keep the follow-task override path.
+    it.each([
+      { current: 'codex' as const, switches: true },
+      { current: 'claude-code' as const, switches: false },
+    ])('legacy model-only override on a $current task (switches=$switches)', async ({ current, switches }) => {
+      const h = createSessionHarness();
+      Object.assign(h.session, { agentKind: current, model: current === 'codex' ? 'gpt-6.1-sol' : 'claude-opus-5-5' });
+      const switchHarness = vi.fn(async () => ({ engineReady: true }));
+      const acquirePendingAgentSwitch = vi.fn(async (
+        _id: string, _signal?: AbortSignal, selection?: Parameters<typeof applyScheduledModelSelection>[0],
+      ) => selection ? {
+        release: vi.fn(),
+        selection: await applyScheduledModelSelection(selection, {
+          getTarget: async () => ({ agentKind: current, status: 'active' }),
+          isBusy: () => false,
+          resolveSelection: async (choice) => choice,
+          switchHarness,
+          applyModel: async () => {},
+        }),
+      } : vi.fn());
+      const harness = createRunnerHarness(h, {
+        agentKind: current, model: h.session.model, workDir: '/work', sdkSessionId: 'sdk-1',
+      }, { acquirePendingAgentSwitch });
+      const opts = await fireToCompletion(harness, h, baseSchedule({
+        targetSessionId: h.session.id, agentKind: 'claude-code',
+        model: 'claude-sonnet-5-5', providerId: 'anthropic',
+      })) as { agentKind?: string; model: string };
+      expect(opts).toMatchObject({ agentKind: 'claude-code', model: 'claude-sonnet-5-5' });
+      if (switches) {
+        expect(acquirePendingAgentSwitch.mock.calls[0][2]).toMatchObject({
+          agentKind: 'claude-code', model: 'claude-sonnet-5-5', providerId: 'anthropic',
+        });
+        expect(switchHarness).toHaveBeenCalledOnce();
+      } else {
+        expect(acquirePendingAgentSwitch.mock.calls[0][2]).toBeUndefined();
+        expect(switchHarness).not.toHaveBeenCalled();
+      }
+    });
+
     it('复用 Codex 的 context Host 身份变化时先关闭旧 handle，再 cold resume', async () => {
       mocks.getSessionProvider.mockReturnValue('mygpt');
       const h = createSessionHarness();
@@ -1118,40 +1760,155 @@ describe('MakerScheduleRunner model selection', () => {
       expect(h.setModel).not.toHaveBeenCalled();
     });
 
-    it('Codex context Host 身份在 preflight 后变化时不沿用旧模型派发', async () => {
+    // #12714, unit: only a verified cold resume may receive the one-shot prompt.
+    it.each(['resume', 'cancel', 'cancel during resume', 'owner changed during resume', 'missing checkpoint', 'replacement', 'wrong model', 'source mismatch', 'busy once', 'busy recurring'] as const)(
+      'late Codex rebuild before dispatch: %s',
+      async (scenario) => {
+        mocks.getSessionProvider.mockReturnValue('mygpt');
+        const h = createSessionHarness();
+        Object.assign(h.session as unknown as Record<string, unknown>, {
+          agentKind: 'codex',
+          model: 'gpt-5.4',
+          requiresModelSwitchRebuild: vi.fn(async () => false),
+          sdkSessionId: 'sdk-codex-1',
+        });
+        const rebuildError = Object.assign(
+          new Error('Codex model switch requires rebuilding the current session handle'),
+          { code: 'CODEX_MODEL_SWITCH_REQUIRES_REBUILD' },
+        );
+        const controller = new AbortController();
+        h.setModel.mockImplementation(async () => {
+          if (scenario === 'cancel') controller.abort();
+          if (scenario === 'replacement') active = resumed.session;
+          if (scenario.startsWith('busy')) Object.assign(h.session, { isTurnRunning: () => true });
+          throw rebuildError;
+        });
+        const resumed = createSessionHarness();
+        Object.assign(resumed.session, {
+          agentKind: 'codex',
+          sdkSessionId: 'sdk-codex-1',
+          model: scenario === 'wrong model' ? 'gpt-5.4' : 'gpt-5.6-sol',
+        });
+        let active: Session | undefined = h.session;
+        const harness = createRunnerHarness(
+          h,
+          {
+            model: 'gpt-5.4',
+            effort: 'high',
+            workDir: '/work',
+            sdkSessionId: scenario === 'missing checkpoint' ? undefined : 'sdk-codex-1',
+          },
+          {
+            sessionAlive: true,
+            getSession: () => active,
+            closeSessionIfCurrent: async (candidate) => {
+              if (active === candidate) active = undefined;
+            },
+            acquirePendingAgentSwitch: async () => () => {},
+          },
+        );
+
+        harness.closeSession.mockImplementation(async () => {
+          active = undefined;
+        });
+        harness.createSession
+          .mockResolvedValueOnce(h.session)
+          .mockImplementationOnce(async () => {
+            active = resumed.session;
+            if (scenario === 'cancel during resume') controller.abort();
+            return active;
+          });
+        const run = harness.runner.fire(
+          baseSchedule({
+            agentKind: 'codex',
+            recurring: scenario === 'busy recurring',
+            model: 'gpt-5.6-sol',
+            providerId: scenario === 'source mismatch' ? undefined : 'mygpt',
+            targetSessionId: 'scheduler-session',
+          }),
+          {
+            ...createFireContext(),
+            signal: controller.signal,
+            assertFireContext: () => {
+              if (scenario === 'owner changed during resume' && active === resumed.session)
+                throw new Error('owner changed');
+            },
+          },
+        );
+        if (scenario === 'resume') {
+          await vi.waitFor(() => expect(resumed.send).toHaveBeenCalledOnce());
+          resumed.emit({ type: 'done', data: {} });
+          expect(await run).toMatchObject({ sessionId: h.session.id });
+          expect(harness.createSession.mock.calls[1][0]).toMatchObject({
+            id: h.session.id,
+            resumeSessionId: 'sdk-codex-1',
+            model: 'gpt-5.6-sol',
+            providerId: 'mygpt',
+          });
+        } else {
+          if (scenario === 'busy recurring') {
+            await expect(run).resolves.toMatchObject({ sessionId: h.session.id, deferred: true });
+          } else {
+            const reason = scenario.startsWith('cancel') ? /abort/i : scenario === 'owner changed during resume' ? /owner changed/ : scenario === 'busy once' ? /SESSION_RUNNING/ : /prompt was not sent.*Run now/i;
+            await expect(run).rejects.toThrow(reason);
+          }
+          expect(resumed.send).not.toHaveBeenCalled();
+          expect(mocks.backfillSessionMeta).not.toHaveBeenCalled();
+          if (scenario === 'wrong model' || scenario.endsWith('during resume')) {
+            expect(active).toBeUndefined();
+          } else {
+            expect(harness.closeSession).not.toHaveBeenCalled();
+          }
+        }
+        expect(h.setModel).toHaveBeenCalledWith('gpt-5.6-sol');
+        expect(h.send).not.toHaveBeenCalled();
+      },
+    );
+    it('一次性 Codex 任务在最后检查要求重建时不投递，重新运行后仅投递一次', async () => {
       mocks.getSessionProvider.mockReturnValue('mygpt');
       const h = createSessionHarness();
       Object.assign(h.session as unknown as Record<string, unknown>, {
         agentKind: 'codex',
         model: 'gpt-5.4',
-        requiresModelSwitchRebuild: vi.fn(async () => false),
+        requiresModelSwitchRebuild: vi.fn(async () => true).mockResolvedValueOnce(false),
       });
       const rebuildError = Object.assign(
         new Error('Codex model switch requires rebuilding the current session handle'),
         { code: 'CODEX_MODEL_SWITCH_REQUIRES_REBUILD' },
       );
-      h.setModel.mockRejectedValue(rebuildError);
+      h.setModel.mockRejectedValueOnce(rebuildError);
       const harness = createRunnerHarness(
         h,
         { model: 'gpt-5.4', effort: 'high', workDir: '/work', sdkSessionId: 'sdk-codex-1' },
         { sessionAlive: true },
       );
 
-      await expect(
-        harness.runner.fire(
-          baseSchedule({
-            agentKind: 'codex',
-            model: 'gpt-5.6-sol',
-            providerId: 'mygpt',
-            targetSessionId: 'scheduler-session',
-          }),
-          createFireContext(),
-        ),
-      ).rejects.toThrow('schedule model switch requires rebuilding the session before dispatch');
+      const schedule = baseSchedule({
+        agentKind: 'codex',
+        recurring: false,
+        model: 'gpt-5.6-sol',
+        providerId: 'mygpt',
+        targetSessionId: h.session.id,
+      });
+      await expect(harness.runner.fire(schedule, createFireContext())).rejects.toThrow(
+        /prompt was not sent.*Run Now/i,
+      );
 
       expect(h.setModel).toHaveBeenCalledWith('gpt-5.6-sol');
       expect(h.send).not.toHaveBeenCalled();
       expect(mocks.backfillSessionMeta).not.toHaveBeenCalled();
+      expect(harness.closeSession).not.toHaveBeenCalled();
+
+      const rebuilt = createSessionHarness();
+      Object.assign(rebuilt.session, { agentKind: 'codex', model: schedule.model });
+      harness.createSession.mockResolvedValueOnce(rebuilt.session);
+      await fireToCompletion(harness, rebuilt, { ...schedule, status: 'expired' });
+      expect(harness.closeSession).toHaveBeenCalledWith(h.session.id, 'runtime-refresh');
+      expect(harness.createSession).toHaveBeenLastCalledWith(expect.objectContaining({
+        id: h.session.id, model: schedule.model, resumeSessionId: 'sdk-codex-1',
+      }));
+      expect(h.send).not.toHaveBeenCalled();
+      expect(rebuilt.send).toHaveBeenCalledTimes(1);
     });
 
     it('setModel 失败不阻断 fire（非致命，fresh spawn 路径 opts.model 已生效）', async () => {
@@ -2133,6 +2890,7 @@ describe('MakerScheduleRunner model selection', () => {
         sessionId: 'scheduler-session',
         deferred: true,
         deferRetryMs: 90_000,
+        deferReason: 'session-running',
       });
       expect(harness.closeSession).not.toHaveBeenCalled();
       expect(harness.createSession).not.toHaveBeenCalled();
@@ -2207,6 +2965,7 @@ describe('MakerScheduleRunner model selection', () => {
         sessionId: 'scheduler-session',
         deferred: true,
         deferRetryMs: 90_000,
+        deferReason: 'session-running',
       });
       expect(harness.closeSession).not.toHaveBeenCalled();
       expect(harness.createSession).not.toHaveBeenCalled();
@@ -2288,4 +3047,81 @@ describe('MakerScheduleRunner model selection', () => {
       expect(mocks.setSessionFastMode).not.toHaveBeenCalled();
     });
   });
+
+// User decision 2026-11-16 / unit: previous model tests only covered saved snapshots.
+// Minimum failure: opt-in review with an old persistent task after the buddy changes model.
+describe('Bot project schedule model inheritance', () => {
+  const review = (overrides: Partial<Schedule> = {}) => baseSchedule({ source: 'project',
+    projectConfigId: 'teammate-memory-review', model: undefined, ...overrides });
+  it.each(['teammate-memory-review', 'future-default-task'])('reads A then B for %s, and respects explicit C', async (projectConfigId) => {
+    let model = 'model-a';
+    const primaryModel = vi.fn(async () => ({ harness: 'codex' as const, model, providerId: 'openai', effort: '', fastMode: false }));
+    const resolve = (schedule: Schedule) => resolveTeammateScheduleModel(schedule, {
+      isOwnProject: async () => true, follows: async () => true, primaryModel,
+    });
+    const h = createSessionHarness();
+    const harness = createRunnerHarness(h, null, { resolveInheritedModel: resolve, resolveModelSelection: async choice => choice });
+    for (const next of ['model-a', 'model-b']) {
+      model = next;
+      h.send.mockClear();
+      await fireToCompletion(harness, h, review({ projectConfigId }));
+      expect(harness.createSession).toHaveBeenLastCalledWith(expect.objectContaining({ model: next, providerId: 'openai', agentKind: 'codex' }));
+    }
+    h.send.mockClear();
+    await fireToCompletion(harness, h, review({ projectConfigId, model: 'model-c', agentKind: 'codex', providerId: 'openai' }));
+    expect(harness.createSession).toHaveBeenLastCalledWith(expect.objectContaining({ model: 'model-c' }));
+    expect(primaryModel).toHaveBeenCalledTimes(2);
+  });
+
+  it('resolves the full current route before acquiring a persistent task switch', async () => {
+    mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', providerId: 'openai' });
+    const h = createSessionHarness();
+    const acquire = vi.fn(async (_id, _signal, selection) => ({ selection, release: vi.fn() }));
+    const harness = createRunnerHarness(h, { model: 'old-model', workDir: '/work', agentKind: 'codex' }, {
+      acquirePendingAgentSwitch: acquire,
+      resolveModelSelection: async choice => choice,
+      resolveInheritedModel: schedule => resolveTeammateScheduleModel(schedule, {
+        isOwnProject: async () => true, follows: async () => true,
+        primaryModel: async () => ({ harness: 'codex', model: 'new-model', providerId: 'openai', effort: 'high', fastMode: false, agentDeviceId: 'remote' }),
+      }),
+    });
+    await fireToCompletion(harness, h, review({ persistentSession: true, targetSessionId: 'scheduler-session' }));
+    expect(acquire).toHaveBeenCalledWith('scheduler-session', expect.any(AbortSignal), expect.objectContaining({
+      agentKind: 'codex', model: 'new-model', providerId: 'openai', agentDeviceId: 'remote', effort: 'high',
+    }));
+  });
+
+  // An ordinary project may use the same ID. Missing project files must keep its old defaults.
+  it('does not read buddy model metadata for an ordinary project with the same config ID', async () => {
+    const follows = vi.fn(async () => { throw new Error('project config was removed'); });
+    const primaryModel = vi.fn(async () => { throw new Error('not a buddy'); });
+    await expect(resolveTeammateScheduleModel(review(), {
+      isOwnProject: async () => false, follows, primaryModel,
+    })).resolves.toBeNull();
+    expect(follows).not.toHaveBeenCalled();
+    expect(primaryModel).not.toHaveBeenCalled();
+  });
+
+  it('keeps an unmarked Bot project task on its existing model defaults', async () => {
+    const primaryModel = vi.fn(async () => { throw new Error('must not read the Bot model'); });
+    await expect(resolveTeammateScheduleModel(review({ projectConfigId: 'custom-task' }), {
+      isOwnProject: async () => true, follows: async () => false, primaryModel,
+    })).resolves.toBeNull();
+    expect(primaryModel).not.toHaveBeenCalled();
+  });
+
+  it('fails before creating or sending when the primary route is missing or disabled', async () => {
+    const h = createSessionHarness();
+    const missing = createRunnerHarness(h, null, { resolveInheritedModel: async () => { throw new Error('buddy has no primary model'); } });
+    await expect(missing.runner.fire(review(), createFireContext())).rejects.toThrow('no primary model');
+    expect(missing.createSession).not.toHaveBeenCalled();
+    const disabled = createRunnerHarness(h, null, {
+      resolveInheritedModel: async () => ({ agentKind: 'codex', model: 'disabled', providerId: 'openai' }),
+      checkModelRoute: () => ({ kind: 'reject', reason: 'model-disabled' }) as never,
+    });
+    await expect(disabled.runner.fire(review(), createFireContext())).rejects.toThrow('schedule route unavailable');
+    expect(h.send).not.toHaveBeenCalled();
+  });
+});
+
 });

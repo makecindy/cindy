@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HistoryViewController } from '../historyViewController.js';
 import type { HistoryDetailPage, HistoryMessageSource, HistoryViewPage, HistoryWorkPatch, HistoryWorkSummary } from '../historyView.js';
 import { renderHistoryView } from '../historyViewRender.js';
-import { HISTORY_WORK_LINE_MAX_BYTES, HISTORY_WORK_LINES_MAX_BYTES, projectHistoryWorkLines } from '../historyWorkLines.js';
+import { HISTORY_WORK_LINE_LIMIT, HISTORY_WORK_LINE_MAX_BYTES, HISTORY_WORK_LINES_MAX_BYTES, projectHistoryWorkLines } from '../historyWorkLines.js';
 
 let n = 0;
 function row(role: string, content: unknown, extra: Partial<HistoryMessageSource> = {}): HistoryMessageSource {
@@ -81,6 +81,86 @@ describe('projectHistoryWorkLines', () => {
     if (newest.kind !== 'tool') throw new Error('expected a tool line');
     // The count a multi-file row shows survives the reduction.
     expect(newest.descriptor.kind === 'fileChange' ? newest.descriptor.changes.length : newest.descriptor.kind).toBe(15);
+  });
+
+  it('lets a line spend its whole byte share without dropping the oldest of five', () => {
+    // The id length is the 1-byte knob: a path character costs 4 bytes, so sweeping only
+    // the path cannot land on the budget and the fixture would miss the failing byte.
+    const id = (length: number) => `cw${'0'.repeat(length)}`;
+    const wideRow = (pathLength: number, idLength: number, index = 1) => tool('file_change', {
+      changes: [{ path: 'a'.repeat(pathLength), kind: { type: 'update', move_path: 'b'.repeat(pathLength) }, diff: '+x\n'.repeat(400) }],
+    }, { clientId: id(idLength) + String(index) });
+    const lineBytes = (pathLength: number, idLength: number) =>
+      Buffer.byteLength(JSON.stringify(projectHistoryWorkLines([wideRow(pathLength, idLength)], true)[0]), 'utf8');
+    // Sweep for a line that spends its whole share: only the cut form of a long path fills
+    // it, so a shorter input cannot stand in for a maximal line.
+    let widest = { pathLength: 1, idLength: 1, bytes: 0 };
+    for (let pathLength = 1; pathLength <= 400; pathLength += 1) {
+      for (let idLength = 1; idLength <= 8; idLength += 1) {
+        const bytes = lineBytes(pathLength, idLength);
+        if (bytes <= HISTORY_WORK_LINE_MAX_BYTES && bytes > widest.bytes) widest = { pathLength, idLength, bytes };
+      }
+    }
+    // The fixture spends the share exactly, so the old share (one byte more) overflows the
+    // window and the guard drops the oldest line.
+    expect(widest.bytes).toBe(HISTORY_WORK_LINE_MAX_BYTES);
+    const rows = Array.from({ length: HISTORY_WORK_LINE_LIMIT }, (_entry, index) => wideRow(widest.pathLength, widest.idLength, index + 1));
+    const lines = projectHistoryWorkLines(rows, true);
+    // Five lines that each spend the whole share still fit the window, so none is dropped.
+    expect(lines).toHaveLength(HISTORY_WORK_LINE_LIMIT);
+    expect(Buffer.byteLength(JSON.stringify(lines), 'utf8')).toBeLessThanOrEqual(HISTORY_WORK_LINES_MAX_BYTES);
+    expect(lines.at(-1)?.key).toBe(rows.at(-1)?.clientId);
+  });
+
+  it('collapses contiguous non-error collab:wait polls with repeatCount without hiding errors or other steps', () => {
+    const read = tool('Read', { file_path: '/repo/a.ts' });
+    const wait1 = tool('collab:wait', { targets: ['scout'], targetCount: 1 });
+    const wait2 = tool('collab:wait', { targets: ['scout'], targetCount: 1 });
+    const wait3 = tool('collab:wait', { targets: ['scout'], targetCount: 1 });
+    const lines = projectHistoryWorkLines(
+      [read, result(read, 'ok'), wait1, result(wait1, ''), wait2, result(wait2, ''), wait3],
+      true,
+    );
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatchObject({ kind: 'tool', key: read.clientId, status: 'done' });
+    expect(lines[1]).toMatchObject({
+      kind: 'tool',
+      key: wait3.clientId,
+      status: 'running',
+      repeatCount: 3,
+    });
+
+    // A failed wait breaks collapsing so failures stay visible.
+    const failedWait = tool('collab:wait', { targets: ['scout'], targetCount: 1 });
+    const afterFailure = tool('collab:wait', { targets: ['scout'], targetCount: 1 });
+    const withFailure = projectHistoryWorkLines(
+      [wait1, result(wait1, ''), failedWait, result(failedWait, 'failed'), afterFailure, result(afterFailure, '')],
+      false,
+    );
+    expect(withFailure.map((line) => line.key)).toEqual([
+      wait1.clientId,
+      failedWait.clientId,
+      afterFailure.clientId,
+    ]);
+    expect(withFailure[1]).toMatchObject({ kind: 'tool', hasError: true });
+
+    // Consecutive waits targeting different subagents (named or legacy raw thread IDs) never merge.
+    const waitReviewer = tool('collab:wait', { targets: ['reviewer'], targetCount: 1 });
+    const distinctTargets = projectHistoryWorkLines(
+      [wait1, result(wait1, 'scout: completed'), waitReviewer, result(waitReviewer, 'reviewer: completed')],
+      false,
+    );
+    expect(distinctTargets.map((line) => line.key)).toEqual([wait1.clientId, waitReviewer.clientId]);
+    expect(distinctTargets[0]).not.toHaveProperty('repeatCount');
+    expect(distinctTargets[1]).not.toHaveProperty('repeatCount');
+
+    const legacyA = tool('collab:wait', { receiverThreadIds: ['019d8f44-1111-7222-8333-444444444444'] });
+    const legacyB = tool('collab:wait', { receiverThreadIds: ['019d8f44-2222-7222-8333-444444444444'] });
+    const distinctLegacy = projectHistoryWorkLines(
+      [legacyA, result(legacyA, ''), legacyB, result(legacyB, '')],
+      false,
+    );
+    expect(distinctLegacy.map((line) => line.key)).toEqual([legacyA.clientId, legacyB.clientId]);
   });
 });
 
@@ -199,3 +279,4 @@ describe('HistoryViewController.applyWorkPatch', () => {
     await vi.waitFor(() => expect(awaiting()).toBe(false));
   });
 });
+

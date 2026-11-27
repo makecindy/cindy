@@ -3,5 +3,5 @@
  * visibility choice. Keep every caller on the same platform/architecture rule.
  */
 export function supportsBetaUpdateChannel(platform: string, arch: string): boolean {
-  return platform !== 'linux' || arch === 'x64';
+  return platform !== 'linux' || arch === 'x64' || arch === 'arm64';
 }

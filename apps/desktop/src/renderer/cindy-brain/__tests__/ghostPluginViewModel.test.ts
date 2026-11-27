@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { GhostManifest, InstalledGhost } from '../../../shared/ghost';
 import type { PluginMarketItem } from '../../../shared/pluginMarket';
+import { LEGACY_SCAFFOLD_ICON_SHA256 } from '../../features/plugin/__tests__/fixtures/legacyScaffoldIcon';
 import {
   filterGhostPluginItems,
   ghostFallbackIconKind,
@@ -287,7 +288,7 @@ describe('ghostPluginViewModel', () => {
       canUse: true,
     });
     const detail = toGhostPluginDetail(ghost, presentation);
-    expect(detail.author).toBe('Xindong Design');
+    expect(detail.author).toBeNull();
     expect(detail.permissions.map((item) => item.kind)).toEqual([
       'network',
       'network',
@@ -307,12 +308,27 @@ describe('ghostPluginViewModel', () => {
     expect(toGhostPluginListItem(ghost, presentation)).not.toHaveProperty('iconDataUrl');
   });
 
-  it('uses the installed package icon for an exact Git market mapping', () => {
+  // 已装版本也会采用市场 URL；旧占位 PNG 必须与缺图走同一显示分支。Tier: unit。
+  it('treats the historical scaffold icon hash as an absent installed market icon', () => {
+    const ghost = installed({ iconDataUrl: 'data:image/png;base64,LOCAL' });
+    const item = marketItem();
+    const presentation = marketPresentationForInstalledGhost(
+      ghost,
+      { ...item, icon: { ...item.icon!, sha256: LEGACY_SCAFFOLD_ICON_SHA256 } },
+    );
+
+    expect(presentation).not.toBeNull();
+    expect(toGhostPluginListItem(ghost, presentation)).not.toHaveProperty('iconDataUrl');
+    expect(toGhostPluginDetail(ghost, presentation)).not.toHaveProperty('iconDataUrl');
+  });
+
+  // #12824: local folder markets also omit the catalog icon. Tier: unit.
+  it.each(['git-market', 'local-market'] as const)('uses the installed package icon for an exact %s mapping', (sourceType) => {
     const ghost = installed({ iconDataUrl: 'data:image/png;base64,LOCAL' });
     const presentation = marketPresentationForInstalledGhost(
       ghost,
       marketItem({
-        sourceType: 'git-market',
+        sourceType,
         sourceMarketName: 'community-plugins',
         icon: null,
       }),

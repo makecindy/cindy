@@ -3,19 +3,19 @@ id: sessions-and-chat
 title: Sessions and the chat thread
 summary: Create sessions, pick model / engine / project, send / stop / queue / steer messages, compact or clear context, rewind, edit, fork, and switch between sessions.
 ---
-Each **session** is a persistent chat thread run by an agent engine (Claude Code, Codex, or Pi). All your sessions live in the left sidebar.
+Each **session** is a persistent chat thread run by a built-in agent engine (Claude Code, Codex, or Pi) or an installed plugin engine (ACP). All your sessions live in the left sidebar.
 
 **Starting a session:**
 
 - Click **New** at the top of the left sidebar (or press ⌘N / Ctrl+N).
 - Choose a project folder for code work, or stay in **Chat** for plain Q&A. If you have other computers or SSH hosts, the **Device** picker and **Add remote project** choose where it runs (see the Remote topic).
-- Pick a model in the composer's model selector. There's no separate agent picker: the engine (Claude Code, Codex, or Pi) follows the model and is shown next to it; to run a model on a different engine, use that model's **Customize** options (see the Choosing a model topic). You can also set the permission mode in the composer toolbar.
+- Pick a model in the composer's model selector. There's no separate agent picker: for built-in providers the engine (Claude Code, Codex, or Pi) follows the model and is shown next to it, and installed plugin engines appear directly as model sources; to run a built-in model on a different engine, use that model's **Customize** options (see the Choosing a model topic). You can also set the permission mode in the composer toolbar.
 - Type your first message and send. **Enter** sends and **Shift+Enter** adds a new line; to send with ⌘↵ / Ctrl+Enter instead, use **Settings > General > Message input**.
 
 **During a turn:**
 
 - While the agent is replying, the composer shows a separate **Stop** button (labeled **Stop generating**) — click it to interrupt the current turn.
-- You can keep typing: the send button becomes **Queue message**, and follow-ups are **queued** and sent one after another when each turn finishes. With the default Enter-to-send setting, press ⌘↵ / Ctrl+Enter instead to **steer** — deliver the message into the running turn without interrupting it.
+- You can keep typing: the send button becomes **Queue message**, and follow-ups are **queued** and sent one after another when each turn finishes. With the default Enter-to-send setting, press ⌘↵ / Ctrl+Enter instead to **steer** — deliver the message into the running turn without interrupting it. Rest the pointer on the send button (or right-click it) to see both ways: click **Queue** or **Steer** to send this one message that way, or use the swap icon on the left to make the other way the default. The default can also be changed in Settings; with Steer as the default, ⌘↵ / Ctrl+Enter queues instead. If the active plugin engine does not support same-turn steering, Cindy hides the Steer controls and queues your follow-up for the next turn automatically.
 - Queued messages appear above the composer, where you can **Steer**, **Edit**, **Delete**, or drag to reorder them. If you stop the turn, the queue pauses until you click **Continue sending**.
 
 **Context:**
@@ -35,7 +35,7 @@ Each **session** is a persistent chat thread run by an agent engine (Claude Code
 **Switching between sessions:**
 
 - Click any session in the sidebar, or press ⌘1–⌘9 / Ctrl+1–Ctrl+9 to jump to the first nine visible sessions. Each session remembers its engine, model, working directory, attachments, and draft.
-- Picking a model that runs on a different engine mid-session switches the engine after you confirm **Switch Agent?** (see the Choosing a model topic).
+- Picking a model that runs on a different engine mid-session switches seamlessly on your next message (with conversation handoff) and records a switch card in the thread (see the Choosing a model topic).
 - Keep **unrelated tasks in separate sessions** — sharing one session for everything dilutes the agent's context.
 
 **Notes:**

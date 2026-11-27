@@ -135,6 +135,14 @@ function deferred<T>() {
 }
 
 describe('permission interaction IPC', () => {
+  // #8706 unit: the actual interaction listener and pending store must not discard the safe cause.
+  it('projects quota metadata from main into the pending permission', () => {
+    makerChatStore.initGlobalListeners();
+    listeners.interaction?.({ sessionId: SESSION_ID, request: { kind: 'permission', requestId: 'quota', toolName: 'Bash', input: {},
+      metadata: { autoReviewUnavailable: true, autoReviewUnavailableReason: 'quota_exhausted' } } });
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingPermission).toMatchObject({ autoReviewUnavailable: true, autoReviewQuotaExhausted: true });
+  });
+
   it('rehydrates a running turn from main after renderer listener init', async () => {
     listActive.mockResolvedValueOnce([
       {
@@ -177,6 +185,31 @@ describe('permission interaction IPC', () => {
     expect(snap.agentKind).toBe('pi');
     expect(snap.isStreaming).toBe(true);
     expect(snap.agentStatus.isRunning).toBe(true);
+  });
+
+  // 回归依据：远程/本机插件引擎(acp)任务在窗口刷新后经 maker:list-active 回水，
+  // 此前 isActiveSessionSnapshot 漏了 'acp'，导致 running 状态丢失、远程供应商拓扑为空。
+  it('rehydrates a running ACP plugin-engine turn instead of dropping the active snapshot', async () => {
+    listActive.mockResolvedValueOnce([
+      {
+        sessionId: SESSION_ID,
+        agentKind: 'acp',
+        workDir: '/tmp/project',
+        capabilities: {},
+        isTurnRunning: true,
+      },
+    ]);
+
+    makerChatStore.initGlobalListeners();
+    makerChatStore.syncActiveTurnsFromMain();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const snap = makerChatStore.getSnapshot(SESSION_ID);
+    expect(snap.agentKind).toBe('claude-code');
+    expect(snap.isStreaming).toBe(true);
+    expect(snap.agentStatus.isRunning).toBe(true);
+    expect(makerChatStore.getRunningSnapshot().get(SESSION_ID)?.isRunning).toBe(true);
   });
 
   it('preserves title, description, and suggestions from main to pendingPermission', () => {
@@ -384,4 +417,23 @@ describe('PermissionPrompt source contract', () => {
     expect(source).toMatch(/destination\s*===\s*'session'/);
     expect(source).not.toContain("...suggestion, destination: 'session'");
   });
+});
+
+// unit: page approvals must not replace the composer/model prompt. Smallest failure:
+// two page tools plus one model permission; answering/cancelling one leaves the others.
+it('keeps concurrent page approvals separate and answers the exact Host request', async () => {
+  makerChatStore.initGlobalListeners();
+  showPermission('model');
+  for (const id of ['page-a', 'page-b']) listeners.interaction?.({ sessionId: SESSION_ID, request: {
+    kind: 'permission', requestId: id, toolName: 'MCP App: save', input: { id },
+    metadata: { mcpApp: { clientId: id, serverId: 'custom', title: 'Planner', scope: 'once' } },
+  } });
+  expect(makerChatStore.getSnapshot(SESSION_ID).pendingPermission?.requestId).toBe('model');
+  expect(makerChatStore.getSnapshot(SESSION_ID).pendingAppPermissions?.map(p => p.requestId)).toEqual(['page-a', 'page-b']);
+  makerChatStore.respondToPermission(SESSION_ID, { behavior: 'allow' }, 'page-b');
+  await vi.waitFor(() => expect(resolveInteraction).toHaveBeenCalledWith('page-b', expect.objectContaining({ behavior: 'allow' })));
+  await vi.waitFor(() => expect(makerChatStore.getSnapshot(SESSION_ID).pendingAppPermissions?.map(p => p.requestId)).toEqual(['page-a']));
+  listeners.dismissed?.({ sessionId: SESSION_ID, requestId: 'page-a', reason: 'cancelled' });
+  expect(makerChatStore.getSnapshot(SESSION_ID).pendingAppPermissions).toEqual([]);
+  expect(makerChatStore.getSnapshot(SESSION_ID).pendingPermission?.requestId).toBe('model');
 });

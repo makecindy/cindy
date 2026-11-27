@@ -50,7 +50,7 @@ describe('shared runtime capability discovery', () => {
       android: {} as never, browser: {} as never, computer: {} as never,
       feishuBot: {} as never, wechatBot: {} as never, slackHook: {} as never,
       scheduler: {} as never, ssh: {} as never, memory: {} as never,
-      contacts: {} as never, docs: {} as never, xdtHelper: {} as never,
+      docs: {} as never, xdtHelper: {} as never,
       orca: {} as never, lsp: {} as never,
     });
     const runtime = { ...context, agentKind };
@@ -59,7 +59,6 @@ describe('shared runtime capability discovery', () => {
     expect(result).toMatchObject({ capabilities: expect.arrayContaining([
       expect.objectContaining({ server: 'cindy_android' }),
       expect.objectContaining({ server: 'cindy_browser' }),
-      expect.objectContaining({ server: 'cindy_contacts' }),
     ]) });
     expect(await readAgentCapabilityCatalog(providers, runtime, { server: 'cindy_ios_simulator' }))
       .toMatchObject({ ok: false, errorCode: 'UNKNOWN_CAPABILITY' });
@@ -139,6 +138,25 @@ describe('shared runtime capability discovery', () => {
       expect.objectContaining({ name: 'write_file', inputSchema: expect.objectContaining({ type: 'object', properties: { path: { type: 'string' } }, required: ['path'] }) }),
     ]), discovery: { content: [{ type: 'text', text: JSON.stringify({ category: 'files', tools: ['write_file'] }) }] } });
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  // Unit: the host forwards schema-only queries through the real SSH registry,
+  // without executing its update callback or treating custom servers as builtins.
+  it('reads a nested native tool schema without dispatching a write', async () => {
+    const updateHost = vi.fn();
+    const providers = createLiziMcpProviders({
+      android: {} as never, browser: {} as never, computer: {} as never,
+      feishuBot: {} as never, wechatBot: {} as never, slackHook: {} as never,
+      scheduler: {} as never, ssh: { updateHost } as never, memory: {} as never,
+      docs: {} as never, xdtHelper: {} as never, orca: {} as never, lsp: {} as never,
+    });
+    const result = await readAgentCapabilityCatalog(providers.map(provider => ({ ...provider, capability: { title: provider.name, description: '', source: 'builtin' as const } })), context, { server: 'cindy_ssh', toolName: 'ssh_update_host' });
+    expect(result).toMatchObject({ ok: true });
+    const discovery = (result as { discovery: { content: Array<{ text: string }> } }).discovery;
+    expect(JSON.parse(discovery.content[0].text)).toMatchObject({ ok: true, tool: {
+      name: 'ssh_update_host', inputSchema: { properties: { displayName: { type: 'string' } }, required: ['id'] },
+    } });
+    expect(updateHost).not.toHaveBeenCalled();
   });
 
   it('reports an explicitly unmounted capability and never starts custom transports', async () => {

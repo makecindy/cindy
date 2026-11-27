@@ -1,14 +1,6 @@
-import type { AgentKind, PreRunHookConfig, Schedule } from "./types.js";
+import type { AgentKind, PreRunHookConfig, PreRunPluginConfig, Schedule } from "./types.js";
+import { normalizePreRunPlugin } from "./types.js";
 import { nextRun } from "./engine/cron.js";
-
-/** Sources describe events, independently of the connector transporting them. */
-export interface RoutineSource {
-  id: string;
-  name: string;
-  events: Array<{ type: string; name: string; fields: string[] }>;
-  status: "listening" | "disconnected" | "error";
-  lastEventAt?: number;
-}
 
 /** The host supplies source identity; publishers cannot choose a target Bot or prompt. */
 export interface RoutineEvent {
@@ -36,11 +28,8 @@ export type RoutineTrigger =
       }>;
     };
 
-/** Host-owned rules: per-teammate follow-up, the owner-enabled daily todo check, and nightly learning. */
-export type RoutineBuiltin = "follow-up" | "todo-check" | "nightly-learning";
-
-/** Stable error prefix for attempts to delete or rewrite a host-owned routine. */
-export const BUILTIN_ROUTINE_ERROR = "BUILTIN_ROUTINE";
+/** Host-owned rules: per-teammate follow-up and nightly learning. */
+export type RoutineBuiltin = "follow-up" | "nightly-learning";
 
 /** A routine's explicit choice; null/absence follows its companion's choice. */
 export interface RoutineModel {
@@ -54,6 +43,12 @@ export interface RoutineModel {
 
 /** How a routine carries context from one trigger to the next. */
 export type RoutineSessionMode = "persistent" | "fresh";
+
+/** Delivery is separate from execution: no second model call unless explicitly selected. */
+export type RoutineDelivery =
+  | { kind: 'companion'; mode: 'direct' | 'process' }
+  | { kind: 'im'; targetId: string }
+  | { kind: 'none' };
 
 /** A single standing instruction, with OR-combined time and event triggers. */
 export interface Routine {
@@ -69,12 +64,16 @@ export interface Routine {
   silentWhenIdle?: boolean;
   /** null explicitly removes the check; omission preserves it on older clients. */
   preRunHook?: PreRunHookConfig | null;
+  /** Plugin pre-run check; null removes it, omission preserves it on older clients. */
+  preRunPlugin?: PreRunPluginConfig | null;
   /** Omission preserves saved settings when an older client edits a rule. */
   modelOverride?: RoutineModel | null;
   /** Omission keeps the legacy persistent routine lane. */
   sessionMode?: RoutineSessionMode;
+  /** Omission preserves saved choices; ordinary routines default to their initiating companion. */
+  delivery?: RoutineDelivery;
   /**
-   * 宿主内置规则（每个伙伴一条的「跟进」与「夜间学习」，以及主人在近况里打开的「每天查待办」）。由宿主模板生成，不接受用户/模型
+   * 宿主内置规则（每个伙伴一条的「跟进」与「夜间学习」）。由宿主模板生成，不接受用户/模型
    * 改写指令与触发条件、不能删除；可暂停（enabled），普通 Agent 规则可单独选模型。可选字段：旧数据与旧客户端缺省即普通规则，
    * state 版本不变。
    */
@@ -91,9 +90,40 @@ export interface Routine {
 
 export type RoutineInput = Pick<
   Routine,
-  "name" | "prompt" | "enabled" | "triggers" | "silentWhenIdle" | "preRunHook" | "modelOverride"
-  | "sessionMode"
+  "name" | "prompt" | "enabled" | "triggers" | "silentWhenIdle" | "preRunHook" | "preRunPlugin" | "modelOverride"
+  | "sessionMode" | "delivery"
 >;
+
+/**
+ * One run of a routine in the retired V1 engine's state file. Kept only so the
+ * migration can read that file; nothing creates runs any more.
+ */
+export interface RoutineRun {
+  id: string;
+  routineId: string;
+  revision: number;
+  triggerIds: string[];
+  events: Array<{ sourceId: string; event: RoutineEvent }>;
+  status:
+    "queued" | "running" | "success" | "failed" | "interrupted" | "cancelled" | "skipped";
+  createdAt: number;
+  finishedAt?: number;
+  error?: string;
+  scheduleRunId?: string;
+  sessionId?: string;
+  resultText?: string;
+  delivery?: { status: 'delivered' | 'failed' | 'suppressed'; error?: string };
+}
+
+/** The retired V1 engine's per-account state file, read only by the migration. */
+export interface RoutineState {
+  version: 1;
+  routines: Routine[];
+  runs: RoutineRun[];
+  receipts: Record<string, number>;
+  next: Record<string, number>;
+  pausedBotIds?: string[];
+}
 
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value))
@@ -189,6 +219,7 @@ export function parseRoutineInput(value: unknown): RoutineInput {
     preRunHook = { command: string(hook.command, 32_000),
       ...(hook.timeoutMs === undefined ? {} : { timeoutMs: Number(hook.timeoutMs) }) };
   }
+  const preRunPlugin = normalizePreRunPlugin(input.preRunPlugin);
   let modelOverride: RoutineModel | null | undefined;
   if (input.modelOverride === null) modelOverride = null;
   else if (input.modelOverride !== undefined) {
@@ -199,7 +230,7 @@ export function parseRoutineInput(value: unknown): RoutineInput {
     modelOverride = {
       agentKind: model.agentKind as AgentKind,
       model: string(model.model, 512),
-      ...(model.agentDeviceId === undefined ? {} : { agentDeviceId: model.agentDeviceId === null ? null : string(model.agentDeviceId, 512) }),
+      ...(model.agentDeviceId === undefined ? {} : { agentDeviceId: model.agentDeviceId === null || model.agentDeviceId === 'local' ? null : string(model.agentDeviceId, 512) }),
       ...(model.providerId === undefined ? {} : { providerId: model.providerId === null ? null : string(model.providerId, 512) }),
       ...(model.effort === undefined ? {} : { effort: model.effort as RoutineModel['effort'] }),
       ...(model.fastMode === undefined ? {} : { fastMode: model.fastMode as RoutineModel['fastMode'] }),
@@ -211,10 +242,21 @@ export function parseRoutineInput(value: unknown): RoutineInput {
       throw new Error("Invalid routine session mode");
     sessionMode = input.sessionMode;
   }
+  let delivery: RoutineDelivery | undefined;
+  if (input.delivery !== undefined) {
+    const value = record(input.delivery);
+    if (value.kind === 'none') delivery = { kind: 'none' };
+    else if (value.kind === 'companion' && (value.mode === 'direct' || value.mode === 'process'))
+      delivery = { kind: 'companion', mode: value.mode };
+    else if (value.kind === 'im') delivery = { kind: 'im', targetId: string(value.targetId, 4096) };
+    else throw new Error('Invalid routine delivery');
+  }
   return {
+    ...(delivery === undefined ? {} : { delivery }),
     ...(modelOverride === undefined ? {} : { modelOverride }),
     ...(input.silentWhenIdle === undefined ? {} : { silentWhenIdle: input.silentWhenIdle as boolean }),
     ...(preRunHook === undefined ? {} : { preRunHook }),
+    ...(preRunPlugin === undefined ? {} : { preRunPlugin }),
     ...(sessionMode === undefined ? {} : { sessionMode }),
     name: string(input.name, 200),
     prompt: string(input.prompt, 100_000),
@@ -275,53 +317,4 @@ export function parseRoutineEvent(value: unknown): RoutineEvent {
       ? {}
       : { originRoutineId: string(event.originRoutineId, 128) }),
   };
-}
-
-/** Exact source/type/scope filtering happens before any model execution. */
-export function matchesRoutineEvent(
-  routine: Routine,
-  sourceId: string,
-  event: RoutineEvent,
-): string[] {
-  if (!routine.enabled || event.originRoutineId === routine.id) return [];
-  return routine.triggers
-    .filter((trigger) => {
-      if (
-        trigger.kind !== "event" ||
-        trigger.sourceId !== sourceId ||
-        trigger.eventType !== event.type
-      )
-        return false;
-      return trigger.filters.every((filter) => {
-        const actual =
-          filter.field === "subject"
-            ? event.subject
-            : Object.hasOwn(event.data, filter.field)
-              ? event.data[filter.field]
-              : undefined;
-        if (actual === undefined) return false;
-        switch (filter.operator) {
-          case "equals":
-            return String(actual) === filter.value;
-          case "not-equals":
-            return String(actual) !== filter.value;
-          case "contains":
-            return String(actual).includes(filter.value);
-        }
-      });
-    })
-    .map((trigger) => trigger.id);
-}
-
-export function nextRoutineTriggerAt(
-  trigger: RoutineTrigger,
-  from: number,
-): number | undefined {
-  if (trigger.kind === "event") return undefined;
-  if (trigger.kind === "once") return trigger.at > from ? trigger.at : undefined;
-  return trigger.kind === "interval"
-    ? trigger.anchorMs === undefined ? from + trigger.intervalMs
-      : trigger.anchorMs > from ? trigger.anchorMs
-        : trigger.anchorMs + (Math.floor((from - trigger.anchorMs) / trigger.intervalMs) + 1) * trigger.intervalMs
-    : nextRun(trigger.expression, from, trigger.timezone);
 }

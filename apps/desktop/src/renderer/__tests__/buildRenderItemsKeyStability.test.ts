@@ -18,8 +18,10 @@
 
 import { describe, it, expect } from 'vitest';
 import { join } from 'node:path';
+import { attachBotStartedTasks } from '../components/chat/BotStartedTasks';
 import {
   assistantHasFollowingUserBoundary,
+  botProcessItems,
   buildRenderItems,
   collectDeleteAnchorClientIds,
   collectStableLocalFileRefs,
@@ -27,6 +29,9 @@ import {
   isGeneratedFilesTurnSealed,
   findRestorableViewportItemIdx,
   renderItemContainsClientId,
+  renderWindowFloorClientId,
+  resolveViewportRestoreMessage,
+  restoreClientIdForItem,
   groupWorkRuns,
   insertForkOriginItem,
   isScrollNavigationKey,
@@ -55,6 +60,68 @@ const mkAssistant = (id: string, content = 'ok'): ChatMessage => ({
   clientId: id,
   role: 'assistant',
   content,
+});
+
+// Unit regression for #7594: the production companion projection used to show
+// one separator per legacy row. Existing anchor tests never folded this card type.
+describe('legacy companion context rebuild cards', () => {
+  const card = (
+    id: string,
+    handoff = 'Same handoff',
+    reason = 'idle-gap',
+    minute = 0,
+  ): ChatMessage => ({
+    ...mkAssistant(id, ''),
+    createdAt: new Date(Date.UTC(2026, 9, 28, 0, minute)).toISOString(),
+    systemCardType: 'context-rebuild',
+    systemCardData: { reason, handoff },
+  });
+
+  const project = (messages: ChatMessage[]) =>
+    botProcessItems(groupWorkRuns(buildRenderItems(messages).items, false), false);
+
+  it('coalesces repeated history while retaining every original scroll target after a prepend', () => {
+    const rows = Array.from({ length: 15 }, (_, index) => card(`old-${index}`));
+    const tail = project(rows.slice(-1));
+    const full = project(rows);
+    expect(collectDeleteAnchorClientIds(full)).toEqual(['old-14']);
+    expect(collectDeleteAnchorClientIds(full, true)).toEqual(rows.map((row) => row.clientId));
+    expect(restoreClientIdForItem(full[0]!)).toBe('old-14');
+    expect(renderWindowFloorClientId(full)).toBe('old-0');
+    expect(findRestorableViewportItemIdx(full, tail[0]!.key)).toBe(0);
+    expect(findRestorableViewportItemIdx(full, 'work-journal-old-0')).toBe(0);
+    for (const row of rows) {
+      expect(findRestorableViewportItemIdx(full, `msg-${row.clientId}`)).toBe(0);
+      expect(renderItemContainsClientId(full[0]!, row.clientId)).toBe(true);
+    }
+    expect(rows[0]?.systemCardType).toBe('context-rebuild');
+  });
+
+  it('reopens a saved duplicate-card position at its representative or the journal header', () => {
+    const [journal] = project([card('old-first'), card('old-last')]);
+    const saved = { viewportTopKey: journal!.key, offset: 350, messageOffset: 6 };
+    expect(resolveViewportRestoreMessage(journal!, { ...saved, messageClientId: 'old-first' }, 80))
+      .toEqual({ clientId: 'old-last', itemOffset: 0, messageOffset: 0 });
+    expect(resolveViewportRestoreMessage(journal!, saved, 80))
+      .toEqual({ clientId: undefined, itemOffset: 0, messageOffset: 6 });
+    expect(resolveViewportRestoreMessage(journal!, { ...saved, messageClientId: 'old-last' }, 80))
+      .toEqual({ clientId: 'old-last', itemOffset: 0, messageOffset: 6 });
+    expect(resolveViewportRestoreMessage(journal!, { ...saved, offset: -6 }, 80))
+      .toEqual({ clientId: undefined, itemOffset: -6, messageOffset: 6 });
+  });
+
+  it('retains prose, distinct handoffs, other recovery cards and unloaded history boundaries', () => {
+    const rows = [
+      card('before'),
+      mkUser('real-message'),
+      card('after'),
+      card('different', 'Different handoff'),
+      card('overflow', 'Different handoff', 'context-overflow'),
+      card('last-loaded'),
+      card('separate-window', 'Same handoff', 'idle-gap', 60),
+    ];
+    expect(collectDeleteAnchorClientIds(project(rows))).toEqual(rows.map((row) => row.clientId));
+  });
 });
 
 it('keeps persistent Cindy Make progress visible in the message timeline', () => {
@@ -827,6 +894,41 @@ describe('buildRenderItems — key stability', () => {
   // 真机验收:伙伴对话里只看到工程 diff 卡「已更改 1 个文件 +137 −0 撤销/审查」,
   // 交付物卡一次都没出现。根因就在这里 —— changeSet 把本轮文件从产出候选里排它
   // 剔除,再自己渲染成 turn_changes。伙伴会话的方向是反的。
+  // Tier: behavior. A teammate's started tasks were reachable only through its reply text; the
+  // chat now lists them from the send_to_session receipts of the turn (2026-11-10).
+  it('lists the tasks a teammate turn started or handed work to, once each, in teammate chats only', () => {
+    const receipt = (id: string, wake: string, title: string) => JSON.stringify({ ok: true, target_session_id: id, wake_kind: wake, target_title: title });
+    const messages = [
+      mkUser('u1'),
+      mkTool('send-1', 'mcp__cindy_helper__call_tool', { name: 'send_to_session', args: { title: 'Fix login' } }),
+      mkResult('send-1-r', 'tu-send-1', receipt('s-a', 'created', 'Fix login')),
+      mkTool('send-2', 'mcp:cindy_helper:call_tool', JSON.stringify({ name: 'send_to_session', args: {} })),
+      mkResult('send-2-r', 'tu-send-2', receipt('s-b', 'resumed', 'Release notes')),
+      mkTool('send-3', 'mcp__cindy_helper__call_tool', { name: 'send_to_session', args: {} }),
+      mkResult('send-3-r', 'tu-send-3', receipt('s-a', 'already-active', 'Fix login · running')),
+      mkTool('other', 'mcp__cindy_helper__call_tool', { name: 'list_sessions', args: {} }),
+      mkResult('other-r', 'tu-other', receipt('s-c', 'created', 'Not a hand-off')),
+      mkUser('u2'),
+    ];
+    const started = (botSessionId?: string) => buildRenderItems(messages, undefined, undefined, { botSessionId })
+      .items.filter((item) => item.type === 'bot_started_tasks');
+    expect(started('bot-chat')).toEqual([{ type: 'bot_started_tasks', key: 'started-tasks-u1', tasks: [
+      { sessionId: 's-a', title: 'Fix login · running', created: true },
+      { sessionId: 's-b', title: 'Release notes', created: false },
+    ] }]);
+    expect(started(undefined)).toEqual([]);
+
+    // The owner reads them at the foot of the reply that announced them; a turn with no
+    // reply yet keeps them as a row of their own.
+    const withReply = [...messages.slice(0, -1), mkAssistant('reply', 'Started it.'), mkUser('u2')];
+    const attached = attachBotStartedTasks(buildRenderItems(withReply, undefined, undefined, { botSessionId: 'bot-chat' }).items);
+    expect(attached.some((item) => item.type === 'bot_started_tasks')).toBe(false);
+    const reply = attached.find((item) => item.type === 'message' && item.message.clientId === 'reply');
+    expect(reply?.type === 'message' ? reply.message.botStartedTasks?.map((task) => task.sessionId) : null).toEqual(['s-a', 's-b']);
+    expect(attachBotStartedTasks(buildRenderItems(messages, undefined, undefined, { botSessionId: 'bot-chat' }).items)
+      .filter((item) => item.type === 'bot_started_tasks')).toHaveLength(1);
+  });
+
   describe('bot sessions hand the turn over to deliverables', () => {
     const messages = [
       mkUser('u1'),

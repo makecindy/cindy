@@ -148,6 +148,18 @@ describe('buildTurnUsageTooltipLines — 建议行 (只在真正有价值时出�
     expect(out[0]).toContain('usageDetails.suggestion.lowCache');
   });
 
+  it('任务第一轮没有可复用的缓存 → 不提示 lowCache', () => {
+    // 新任务说「hi」: 108k 上下文全部首次写入缓存, 命中 0% 是必然。
+    const details = buildTurnUsageDetails({
+      inputTokens: 1_400,
+      outputTokens: 501,
+      cacheCreateTokens: 106_846,
+      firstUserRound: true,
+    })!;
+    const out = buildTurnUsageTooltipLines({ details, t, costUsd: 1 });
+    expect(out.some((l) => l.startsWith('usageDetails.suggestionLine'))).toBe(false);
+  });
+
   it('缓存未命中但输入量不足 50k → 无建议 (小额浪费不打扰)', () => {
     const out = suggestionLines({ inputTokens: 20_000, cacheReadTokens: 1_000 });
     expect(out).toEqual([]);
@@ -247,6 +259,18 @@ describe('buildTurnUsageTooltipLines — 输出速度', () => {
     expect(out).toContain('usageDetails.performanceLine|{"rate":"50","duration":"12.3秒"}');
   });
 
+  it('caps the TPS denominator at the wall-clock shown beside it', () => {
+    // 并行请求让累计 API 时长 (6.4s) 超过整轮耗时 (5.17s): 速率不能低于 501/5.17。
+    const details = buildTurnUsageDetails({
+      outputTokens: 501,
+      durationMs: 6_423,
+      turnDurationMs: 5_170,
+    })!;
+    expect(buildTurnUsageTooltipLines({ details, t })).toContain(
+      'usageDetails.performanceLine|{"rate":"96.9","duration":"5.17秒"}',
+    );
+  });
+
   it('shows wall-clock alone without a fake missing-speed placeholder', () => {
     const details = buildTurnUsageDetails({
       inputTokens: 100,
@@ -332,5 +356,53 @@ describe('normalizeTurnUsageDetails — perModelCost 往返 / 清洗', () => {
     const d = normalizeTurnUsageDetails({ inputTokens: 10, outputTokens: 20 });
     expect(d!.perModelCost).toBeUndefined();
     expect(d!.totalTokens).toBe(30);
+  });
+});
+
+describe('buildTurnUsageTooltipLines — 回合请求数', () => {
+  it('多步回合显示请求数与每次上下文, 且排在速度行上面', () => {
+    const details = buildTurnUsageDetails({
+      inputTokens: 192_000,
+      outputTokens: 1_200,
+      steps: 3,
+      stepContextTokens: 96_000,
+      turnDurationMs: 60_000,
+    })!;
+    const out = buildTurnUsageTooltipLines({ details, t });
+    expect(out).toContain('usageDetails.stepsLine|{"steps":3,"context":"96.0k"}');
+    const stepsIndex = out.findIndex((line) => line.startsWith('usageDetails.stepsLine'));
+    const speedIndex = out.findIndex((line) =>
+      /^usageDetails\.(performanceRateLine|performanceLine|timeLine)/.test(line),
+    );
+    expect(speedIndex).toBeGreaterThan(stepsIndex);
+  });
+
+  it('单步回合与没有步数记法的旧消息都不显示', () => {
+    const single = buildTurnUsageDetails({
+      outputTokens: 10,
+      steps: 1,
+      stepContextTokens: 4_096,
+    })!;
+    const legacy = buildTurnUsageDetails({ outputTokens: 10 })!;
+    for (const details of [single, legacy]) {
+      expect(
+        buildTurnUsageTooltipLines({ details, t }).some((line) =>
+          line.startsWith('usageDetails.stepsLine'),
+        ),
+      ).toBe(false);
+    }
+  });
+});
+
+describe('normalizeTurnUsageDetails — 步数', () => {
+  it('步数与每次上下文往返保留, 缺字段时不补默认值', () => {
+    const d = normalizeTurnUsageDetails({
+      inputTokens: 10,
+      outputTokens: 20,
+      steps: 4,
+      stepContextTokens: 12_345,
+    });
+    expect(d).toMatchObject({ steps: 4, stepContextTokens: 12_345 });
+    expect(normalizeTurnUsageDetails({ inputTokens: 10, outputTokens: 20 })!.steps).toBeUndefined();
   });
 });

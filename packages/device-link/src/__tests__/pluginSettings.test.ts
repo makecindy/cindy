@@ -44,6 +44,17 @@ describe("sealed original settings commands", () => {
     );
     expect(parsePluginOauthRequest(request(command))).toEqual(request(command));
   });
+  // Bug: strict picker replies rejected agentDeviceId. A shared route must survive the
+  // existing remote-settings envelope; malformed locations must never turn local. Tier: unit.
+  it('preserves an exact share selection and rejects invalid locations', () => {
+    const route = { agentKind: 'codex', providerId: 'account', model: 'model', effort: '', fastMode: false,
+      agentDeviceId: 'share:fixture' };
+    const command = { kind: 'answer-model-picker', requestId: 'picker', route };
+    expect(parsePluginSettingsRequest(request(command))).toEqual(request(command));
+    for (const agentDeviceId of [null, '', 'x'.repeat(129)]) {
+      expect(parsePluginSettingsRequest(request({ ...command, route: { ...route, agentDeviceId } }))).toBeNull();
+    }
+  });
   it("bounds UTF-8 request bodies and serialized channel data before dispatch", () => {
     const command = {
       kind: "fetch",

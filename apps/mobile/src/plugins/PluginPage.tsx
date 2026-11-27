@@ -211,7 +211,7 @@ export function PluginPage({
     };
     void (async () => {
       try {
-        page = await call<PluginPageDocument>(`open:${surface}`);
+        page = await call<PluginPageDocument>(`open:${surface}`, { modelPickerRemoteSources: true });
         if (!current()) return;
         const assets = await loadPluginPageAssets(
           page,

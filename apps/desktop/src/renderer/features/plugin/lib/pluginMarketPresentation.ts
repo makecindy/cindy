@@ -5,7 +5,8 @@
  * public Plugin is installed by default is an installation policy, not a source.
  * An installed Ghost without a matching market record remains local.
  */
-import { isCindyAccountGhostId, type GhostInstallApproval } from '../../../../shared/ghost';
+import { pluginCatalogPublisherGroup } from '@cindy/plugin-protocol';
+import type { GhostInstallApproval } from '../../../../shared/ghost';
 import {
   createPluginLogicalIdentity,
   findInstalledGhostByIdentity,
@@ -13,8 +14,23 @@ import {
   installedGhostStoragePart,
 } from '../../../../shared/pluginIdentity';
 import type { PluginMarketItem } from '../../../../shared/pluginMarket';
+import { isLegacySimulatorListing, isSimulatorMigrationTarget, LEGACY_SIMULATOR_ID, SIMULATOR_ID } from '../../../../shared/simulatorIdentityMigration';
 
 export type PluginPresentationOrigin = 'public' | 'organization' | 'local' | 'custom';
+export type PublicPublisherFilter = 'official' | 'community';
+export type PluginCatalogFilter = 'all' | PublicPublisherFilter | 'organization' | 'custom';
+
+export function publicPublisherFilter(item: Pick<PluginMarketItem, 'scope' | 'sourceType' | 'publisherKind'>): PublicPublisherFilter | null {
+  return item.sourceType === 'server' ? pluginCatalogPublisherGroup(item.scope, item.publisherKind) : null;
+}
+
+/** Public contributors stay anonymous even when an older payload includes an author. */
+export function pluginPresentationAuthor(
+  item: Pick<PluginMarketItem, 'scope' | 'sourceType' | 'publisherKind' | 'author'>,
+): string | null {
+  return item.sourceType === 'server' && item.scope === 'public' && item.publisherKind !== 'official'
+    ? null : item.author;
+}
 
 export type PluginCatalogPresentationItem<TInstalled> =
   { kind: 'installed'; item: TInstalled } | { kind: 'market'; item: PluginMarketItem };
@@ -120,6 +136,14 @@ export function marketItemMatchesInstalledGhost(
   return installedGhostStoragePart(ghost) === item.ghostId;
 }
 
+/** An official public simulator listing may represent the install under its previous ID. */
+export function simulatorMigrationCounterpart(item: Pick<PluginMarketItem, 'sourceType' | 'ghostId' | 'namespace' | 'scope'>): string | undefined {
+  if (item.sourceType !== 'server') return undefined;
+  if (isSimulatorMigrationTarget(item)) return LEGACY_SIMULATOR_ID;
+  if (isLegacySimulatorListing(item)) return SIMULATOR_ID;
+  return undefined;
+}
+
 export function marketItemForInstalledGhost(
   items: readonly PluginMarketItem[],
   ghost: { manifest: { id: string }; dir?: string; namespace?: string | null },
@@ -172,11 +196,11 @@ export function orderPluginCatalogItems<TInstalled extends { id: string }>(
   return ordered;
 }
 
-/** 浏览可看公开目录；安装只在当前会话真能跑这个插件时露出。 */
+/** 目录不按名字推测账号依赖；包确认和运行时根据真实声明处理。 */
 export function canOfferMarketInstall(
   mode: 'signed-out' | 'local' | 'cloud',
-  ghostId: string,
+  _ghostId: string,
 ): boolean {
   if (mode === 'signed-out') return false;
-  return mode === 'cloud' || !isCindyAccountGhostId(ghostId);
+  return true;
 }

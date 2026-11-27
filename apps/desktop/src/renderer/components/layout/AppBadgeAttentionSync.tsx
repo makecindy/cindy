@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
 
 import { makerChatStore } from '@/lib/makerChatStore';
@@ -17,9 +17,8 @@ import { useOrcaLeadWorkerAttention } from '@/features/cc-agent/lib/orcaLeadWork
 import { useBotProfiles, useBotUnreadCounts } from '@/features/bots/botStore';
 import { useBotGroupList } from '@/features/bots/botGroupStore';
 import { isBotGroupUnread, subscribeBotReadState, getBotLastReadAtMap } from '@/features/bots/botReadState';
-import { useBotUnreadSync } from '@/features/bots/useBotUnreadSync';
 import { useCompanionIslandChats } from '@/features/bots/useCompanionIslandChats';
-import { useRemoteBotSync, useRemoteBots } from '@/features/bots/useRemoteBots';
+import { useRemoteBots } from '@/features/bots/useRemoteBots';
 import { isRemoteBotUnread } from '@/features/bots/remoteBotRoster';
 import { useCompanionCloud } from '@/features/bots/companionCloudStore';
 import { cloudRemoteBots, withoutShadowedBots } from '@/features/bots/companionCloudPresentation';
@@ -30,8 +29,6 @@ const log = createLogger('AppBadgeAttentionSync');
 /** 主窗口常驻：设置/伙伴页也持续更新，独立订阅避免带动布局重渲染。 */
 export function AppBadgeAttentionSync() {
   useAuth();
-  useBotUnreadSync();
-  useRemoteBotSync();
   const cloud = useCompanionCloud();
   // Count each companion once, where it runs (same rows as the teammate list).
   const allBots = useBotProfiles();
@@ -41,11 +38,23 @@ export function AppBadgeAttentionSync() {
   const rosterRemoteBots = useRemoteBots();
   const remoteBots = useMemo(() => cloudRemoteBots(cloud, rosterRemoteBots), [cloud, rosterRemoteBots]);
   useCompanionIslandChats(allBots, bots, unread, remoteBots);
-  useSyncExternalStore(subscribeBotReadState, readRevision, readRevision);
-  const localTeammates = bots.filter(bot => bot.status !== 'archived' && bot.status !== 'deleting' && !bot.hiddenAt && (unread[bot.id] ?? 0) > 0).length
-    + groups.filter(group => !group.archived && isBotGroupUnread(group)).length;
-  const teammates = localTeammates + remoteBots.filter(isRemoteBotUnread).length;
+  const groupReadRevision = useSyncExternalStore(subscribeBotReadState, readRevision, readRevision);
+  const unreadLocalBots = bots.filter(bot => bot.status !== 'archived' && bot.status !== 'deleting' && !bot.hiddenAt && (unread[bot.id] ?? 0) > 0).length;
+  const unreadGroups = useMemo(
+    () => groups.filter(group => !group.archived && isBotGroupUnread(group)),
+    [groups, groupReadRevision],
+  );
+  const teammates = unreadLocalBots + unreadGroups.length + remoteBots.filter(isRemoteBotUnread).length;
+  const isWindows = window.electronAPI?.platform === 'win32';
   const owner = getDataOwnerGeneration();
+  const previousBadge = useRef<{
+    owner: typeof owner;
+    count: number;
+    sessionIds: string[];
+    mutedGroupIds: Set<string>;
+    unreadBadgeGroupIds: Set<string>;
+    nonGroupCount: number;
+  } | null>(null);
   const { sessions, isLoading, error } = useCCSessions({ includeArchived: 'active' });
   // all 桶保留已归档目录 ID 用于通知去重；不能让它的历史上限挤掉 active 桶。
   const history = useCCSessions({ includeArchived: 'all' });
@@ -93,17 +102,37 @@ export function AppBadgeAttentionSync() {
     // 历史桶(includeArchived:'all')只用于补齐目录 ID 做去重，它的加载/失败不影响
     // 本桶的计数；用它 gate 整次推送会让角标永久停在旧值上(投影响应一次永不再发)。
     if (isLoading || error) return;
+    const previous = previousBadge.current?.owner === owner ? previousBadge.current : null;
+    const mutedGroupIds = new Set(
+      isWindows ? groups.filter(group => group.notificationMode === 'none').map(group => group.id) : [],
+    );
+    const unreadBadgeGroupIds = new Set(
+      unreadGroups.filter(group => !mutedGroupIds.has(group.id)).map(group => group.id),
+    );
+    const nonGroupCount = count + unreadLocalBots;
+    const badgeCount = nonGroupCount + unreadBadgeGroupIds.size;
+    // Batch refreshes can restore muted unread and remove old attention while new unread arrives.
+    const windowsHasNewAttention = isWindows && previous
+      ? nonGroupCount > previous.nonGroupCount || [...unreadBadgeGroupIds].some(
+          id => !previous.unreadBadgeGroupIds.has(id) && !previous.mutedGroupIds.has(id),
+        )
+      : undefined;
+    const next = { owner, count: badgeCount, sessionIds: catalogSessionIds, mutedGroupIds, unreadBadgeGroupIds, nonGroupCount };
+    previousBadge.current = next;
+    if (previous?.count === badgeCount && previous.sessionIds === catalogSessionIds && !windowsHasNewAttention) return;
     void window.electronAPI
       .notificationSetAppAttentionCount({
-        count: count + localTeammates,
+        count: badgeCount,
         sessionIds: catalogSessionIds,
         dataOwnerId: owner.dataOwnerId,
         ownerGeneration: owner.generation,
+        ...(windowsHasNewAttention !== undefined ? { windowsHasNewAttention } : {}),
       })
       .catch((err: unknown) => {
+        if (previousBadge.current === next) previousBadge.current = previous;
         log.warn('failed to update app attention count', err);
       });
     // 卸载/切路由不是已读，不清图标；下次挂载会重新提交完整投影。
-  }, [count, localTeammates, isLoading, error, catalogSessionIds, owner]);
+  }, [count, unreadLocalBots, groups, unreadGroups, isWindows, isLoading, error, catalogSessionIds, owner]);
   return null;
 }

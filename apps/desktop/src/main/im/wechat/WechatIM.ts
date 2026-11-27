@@ -1,3 +1,4 @@
+import { findImQuestionReply } from '../shared/questionPresentation';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -26,7 +27,7 @@ import {
 } from '@cindy/wechat-ilink';
 import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core';
 import type { SharedPermission } from '../../maker-ipc/sharedPermission';
-import { INTERACTION_CHOICE_RECEIVED_TEXT, permissionOutcomeText } from '../shared/permissionPresentation';
+import { interactionChoiceReceivedText, permissionOutcomeText } from '../shared/permissionPresentation';
 
 import { autoReviewUnavailablePromptLine, permissionOperationPreview, permissionPromptDescription } from '../shared/autoReviewUnavailablePrompt';
 import { buildImReplyContextBlock } from '../shared/replyContext';
@@ -36,6 +37,7 @@ import type { ImSessionRepo } from '../shared/sessionRepo';
 import type { ImOrchestratorConfig } from '../shared/types';
 import type { ImFinalOutput } from '@cindy/im';
 import type { ImTurnRunner } from '../shared/turnRunner';
+import { PluginEngineUnsupportedError } from '../../maker-host/engineKind';
 import {
   createWechatTurnPermissionPolicy,
   WECHAT_INTERACTION_CONFIRM_TIMEOUT_MS,
@@ -47,6 +49,10 @@ import {
   renderTextPermissionModeResult,
   resolvePermissionMode,
 } from '../shared/permissionModeControl';
+import { imText } from '../shared/imText';
+import { getResolvedMainLocale } from '../../i18n.desktop';
+import { modernLocaleOf } from '../../../shared/locale';
+import { localizedReplyWords, matchesReplyWord, type ReplyWords } from '../shared/replyWords';
 import { ui } from './uiText';
 import { countQueuedWechatTasks, WechatTaskStore, type WechatActiveBinding, type WechatTask } from './taskStore';
 import type { DbClient } from '../../localDb/client/DbClient';
@@ -59,6 +65,8 @@ import {
 
 const CREDENTIAL_PREFIX = 'wechat_credentials_';
 const DATA_KEY_NAME = 'wechat_data_key_v1';
+// This is an attribution threshold for queued output, not an inbound task TTL.
+const DELAYED_REPLY_NOTICE_AFTER_MS = 30 * 60_000;
 const AUTH_BASE_URL = 'https://ilinkai.weixin.qq.com';
 const EMPTY_POLL_DELAY_MS = 100;
 const IDLE_PUMP_DELAY_MS = 200;
@@ -119,6 +127,7 @@ function activePeerIdForSession<
 
 interface PendingWechatInteraction {
   request: InteractionRequest;
+  words: ReplyWords;
   resolve: (decision: InteractionDecision) => void;
   timer: NodeJS.Timeout;
 }
@@ -353,7 +362,8 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     // Registered in Desktop Main with a trusted-renderer sender check.
   }
 
-  async authorize(): Promise<{ started: true }> {
+  async authorize(signal?: AbortSignal): Promise<{ started: true }> {
+    signal?.throwIfAborted();
     if (this.#deps.isCompatibilityDisabled() && !this.#compatibilityDisabled) {
       await this.setCompatibilityDisabled(true);
     }
@@ -373,6 +383,9 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     this.cancelAuthorization();
     const abort = new AbortController();
     this.#authorizationAbort = abort;
+    const cancelOwn = () => { if (this.#authorizationAbort === abort) this.cancelAuthorization(); };
+    signal?.addEventListener('abort', cancelOwn, { once: true });
+    if (signal?.aborted) { cancelOwn(); signal.throwIfAborted(); }
     this.#setState({ ...this.#state, phase: 'authorizing', errorCode: undefined });
     const transport = this.#deps.createTransport({
       credentials: null,
@@ -428,6 +441,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
           });
         }
       } finally {
+        signal?.removeEventListener('abort', cancelOwn);
         if (this.#authorizationAbort === abort) this.#authorizationAbort = null;
       }
     })();
@@ -546,6 +560,27 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     return this.#requireStore().getMostRecentPeer(epoch.binding.bindingEpoch);
   }
 
+  /** Main-only delivery snapshot; credentials and reply context never leave the transport. */
+  async getOwnerDeliveryTarget(): Promise<{
+    receiver: string; bindingEpoch: string; isCurrent: () => boolean;
+  } | null> {
+    const epoch = this.#epoch;
+    const isCurrent = () => !!epoch && this.#epoch === epoch
+      && !this.#compatibilityDisabled && !epoch.abort.signal.aborted
+      && this.#state.phase === 'connected';
+    if (!epoch || !isCurrent() || !epoch.credentials.userId) return null;
+    const receiver = epoch.credentials.userId;
+    const context = await this.#requireStore().getLatestPeerContext({
+      bindingEpoch: epoch.binding.bindingEpoch, peerId: receiver,
+    }).catch(error => {
+      // Teardown clears the store's key while an in-flight read may still finish.
+      if (!isCurrent()) return null;
+      throw error;
+    });
+    if (!isCurrent() || !context?.contextToken) return null;
+    return { receiver, bindingEpoch: epoch.binding.bindingEpoch, isCurrent };
+  }
+
   getActivePeerIdForSession(sessionId: string | undefined): string | null {
     return activePeerIdForSession(this.#activeTasks, sessionId);
   }
@@ -582,7 +617,8 @@ export class WechatIM extends BaseIM implements RichChannelIM {
       settle(defaultWechatInteractionDecision(request, 'wechat_interaction_timeout'));
     }, options?.timeoutMs ?? WECHAT_INTERACTION_CONFIRM_TIMEOUT_MS);
     timer.unref?.();
-    const entry = { request, resolve: settle, timer };
+    const words = localizedReplyWords();
+    const entry = { request, words, resolve: settle, timer };
     this.#pendingInteractions.set(userId, entry);
     if (shared) void shared.result.then((decision) => {
       if (this.#pendingInteractions.get(userId) === entry) this.#pendingInteractions.delete(userId);
@@ -590,7 +626,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
       resolvePending(decision);
     });
     try {
-      await this.sendText(userId, formatWechatInteractionPrompt(request));
+      await this.sendText(userId, formatWechatInteractionPrompt(request, words));
       if (shared) void shared.result.then((decision) => this.sendText(userId,
         permissionOutcomeText(decision, request.kind === 'permission' ? request.toolName : undefined),
       )).catch(() => {});
@@ -674,6 +710,13 @@ export class WechatIM extends BaseIM implements RichChannelIM {
       );
       return { ok: true, messageId: clientId };
     } catch (error) {
+      const safe = asWechatIlinkError(error);
+      if (safe.code === 'SEND_REJECTED') {
+        return {
+          ok: false,
+          reason: safe.ret === undefined ? 'SEND_REJECTED' : `SEND_REJECTED:${safe.ret}`,
+        };
+      }
       const code =
         error instanceof Error && 'code' in error
           ? String((error as NodeJS.ErrnoException).code)
@@ -931,7 +974,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
         const interactionIndexes = new Set(
           result.messages
             .map((message, index) =>
-              this.#pendingInteractions.has(message.senderId) &&
+              (this.#pendingInteractions.has(message.senderId) || findImQuestionReply(this, message)) &&
               message.text.trim() !== '/stop' &&
               message.text.trim() !== '/stop all'
                 ? index
@@ -1014,6 +1057,8 @@ export class WechatIM extends BaseIM implements RichChannelIM {
           for (const index of interactionIndexes) {
             const message = result.messages[index];
             if (message) {
+              const answer = committed.committed && findImQuestionReply(this, message);
+              if (answer) { await answer(); continue; }
               await this.#handleInteractionReplyMessage(message, transport, signal);
             }
           }
@@ -1137,7 +1182,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
       return;
     }
     if (!hasWechatTaskContent(payload.text, payload.attachments) && !payload.replyContext) {
-      await this.#commitSimpleReply(task, '当前版本暂不支持处理这类微信媒体。');
+      await this.#commitSimpleReply(task, imText('imBot.text.wechat.reply.unsupportedMedia'));
       return;
     }
     const turnInput = prepareWechatTaskTurn(payload);
@@ -1165,6 +1210,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
         botContextId,
         groupHistoryAccess,
         userId: task.peerId,
+        questionRespondentId: task.peerId,
         userMessageId: task.id,
         // 个人微信只有私聊；渠道说明、引用与投递事实只进模型，落库保留原文。
         channelNoteSource: {
@@ -1214,8 +1260,12 @@ export class WechatIM extends BaseIM implements RichChannelIM {
         }),
       });
     } catch (error) {
-      await stopTyping();
-      throw error;
+      if (error instanceof PluginEngineUnsupportedError) {
+        dispatch = { kind: 'rejected' as const, reason: error.code };
+      } else {
+        await stopTyping();
+        throw error;
+      }
     }
 
     if (dispatch.kind !== 'accepted') {
@@ -1225,7 +1275,8 @@ export class WechatIM extends BaseIM implements RichChannelIM {
         await this.#requireStore().releaseDispatch(task.bindingEpoch, task.id);
         await delay(IDLE_PUMP_DELAY_MS);
       } else {
-        await this.#commitPreDispatchFailure(task, dispatch.reason);
+        // 伙伴不可用时 runner 已拼好「伙伴现在接不了消息：原因」, 优先发它而不是通用的「请稍后重试」。
+        await this.#commitPreDispatchFailure(task, dispatch.reason, dispatch.notice);
       }
       return;
     }
@@ -1252,11 +1303,11 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     if (!pending) return;
     const accepted = await this.#requireStore().markAccepted(task.bindingEpoch, task.id);
     if (!accepted) throw new Error('WECHAT_ACCEPT_CAS_REJECTED');
-    const decision = parseWechatInteractionReply(pending.request, text);
+    const decision = parseWechatInteractionReply(pending.request, text, pending.words);
     if (!decision) {
       await this.#commitInteractionReply(
         task,
-        '回复格式不正确。请按上一条消息提示回复；权限确认只支持“允许”或“拒绝”。',
+        imText('imBot.text.wechat.interaction.invalidReply', pending.words),
       );
       await this.#flushCurrentOutbox(task.bindingEpoch);
       return;
@@ -1264,7 +1315,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     clearTimeout(pending.timer);
     this.#pendingInteractions.delete(task.peerId);
     pending.resolve(decision);
-    await this.#commitAcceptedReply(task, INTERACTION_CHOICE_RECEIVED_TEXT);
+    await this.#commitAcceptedReply(task, interactionChoiceReceivedText());
     await this.#flushCurrentOutbox(task.bindingEpoch);
   }
 
@@ -1275,7 +1326,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
   ): Promise<void> {
     const pending = this.#pendingInteractions.get(message.senderId);
     if (!pending) return;
-    const decision = parseWechatInteractionReply(pending.request, message.text);
+    const decision = parseWechatInteractionReply(pending.request, message.text, pending.words);
     if (decision) {
       clearTimeout(pending.timer);
       this.#pendingInteractions.delete(message.senderId);
@@ -1286,8 +1337,8 @@ export class WechatIM extends BaseIM implements RichChannelIM {
         {
           peerId: message.senderId,
           text: decision
-            ? INTERACTION_CHOICE_RECEIVED_TEXT
-            : '回复格式不正确。请按上一条消息提示回复；权限确认只支持“允许”或“拒绝”。',
+            ? interactionChoiceReceivedText()
+            : imText('imBot.text.wechat.interaction.invalidReply', pending.words),
           contextToken: message.contextToken,
           clientId: randomUUID(),
         },
@@ -1346,7 +1397,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
             await epoch.transport.sendMessage(
               {
                 peerId: task.peerId,
-                text: '任务仍在处理中…',
+                text: imText('imBot.text.wechat.reply.stillProcessing'),
                 contextToken: task.contextToken,
                 clientId: randomUUID(),
               },
@@ -1381,11 +1432,11 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     const botContextId = this.#epoch?.credentials.ilinkBotId ?? '';
     const companion = runtime.runner.companionBotIdFor?.(botContextId);
     if (companion && !this.isOwner(task.peerId)) {
-      await this.#commitSimpleReply(task, '只有主人可以使用机器人命令。');
+      await this.#commitSimpleReply(task, imText('imBot.text.wechat.reply.ownerOnlyCommands'));
       return;
     }
     if (companion && /^\/(?:permission|model|project)(?:\s|$)/.test(command)) {
-      await this.#commitSimpleReply(task, '请在 Cindy 中打开这位伙伴：模型在伙伴设置中调整，权限在对话输入框下方切换。');
+      await this.#commitSimpleReply(task, imText('imBot.text.wechat.reply.companionManagedCommand'));
       return;
     }
     if (/^\/permission(?:\s|$)/.test(command)) {
@@ -1394,26 +1445,28 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     }
     switch (command) {
       case '/help':
-        await this.#commitSimpleReply(
-          task,
-          '可用命令：/new 新对话；/stop 中止当前执行；/stop all 中止全部执行；/status 查看状态；/help 查看帮助。',
-        );
+        await this.#commitSimpleReply(task, imText('imBot.text.wechat.reply.help'));
         return;
       case '/status':
         await this.#commitSimpleReply(
           task,
-          `Cindy 微信连接正常，当前队列 ${this.#state.queuedTasks} 条。`,
+          imText('imBot.text.wechat.reply.status', { count: this.#state.queuedTasks }),
         );
         return;
       case '/stop':
       case '/stop all':
-        await this.#commitSimpleReply(task, '已停止任务。');
+        await this.#commitSimpleReply(task, imText('imBot.text.wechat.reply.stopped'));
         return;
       case '/new': {
         if (companion) {
           const result = await runtime.runner.rotateCompanionLane?.(botContextId, task.peerId);
           if (result === 'owner-dm') {
-            await this.#commitSimpleReply(task, '这里与伙伴共用同一条长期任务，记录和记忆会保留。需要整理上下文时，请在 Cindy 中重启伙伴。');
+            await this.#commitSimpleReply(task, imText('imBot.text.wechat.reply.companionDmNew'));
+            return;
+          }
+          // 伙伴解析不出: 不新建微信自己的任务(另一个身份), 回「伙伴暂时不可用」。
+          if (typeof result === 'object') {
+            await this.#commitSimpleReply(task, result.unavailable);
             return;
           }
         }
@@ -1448,7 +1501,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
         this.#activeTasks.set(task.peerId, active);
         await this.commitFinal({
           userId: task.peerId,
-          text: '已开始一段新对话。',
+          text: imText('imBot.text.wechat.reply.newConversation'),
           terminal: 'done',
         });
         this.#activeTasks.delete(task.peerId);
@@ -1456,7 +1509,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
         return;
       }
       default:
-        await this.#commitSimpleReply(task, '未知命令。发送 /help 查看可用命令。');
+        await this.#commitSimpleReply(task, imText('imBot.text.wechat.reply.unknownCommand'));
     }
   }
 
@@ -1474,10 +1527,13 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     if (!target) {
       reply = ui.agent.apiKeyMissing;
     } else {
+      const { row } = target;
       const context = permissionModeCommandContext(
-        target.row.id,
-        target.row.permissionMode,
-        runtime.runner.getPermissionModes(target.row.agentKind),
+        row.id,
+        row.permissionMode,
+        await runtime.runner.getPermissionModes(row.agentKind, {
+          sessionId: row.id, providerId: row.providerId, agentDeviceId: row.agentDeviceId,
+        }),
       );
       const [, rawMode, rawConfirmation] = command.split(/\s+/);
       if (!rawMode) {
@@ -1488,7 +1544,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
           reply = renderTextPermissionModePicker(ui, context);
         } else {
           const result = await runtime.runner.changePermissionMode({
-            sessionId: target.row.id,
+            sessionId: row.id,
             mode: mode.id,
             modes: context.modes,
             confirmedFullAccess: ['confirm', '确认'].includes(rawConfirmation?.toLowerCase()),
@@ -1524,9 +1580,9 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     }
   }
 
-  async #commitPreDispatchFailure(task: WechatTask, reason: string): Promise<void> {
+  async #commitPreDispatchFailure(task: WechatTask, reason: string, notice?: string): Promise<void> {
     const companion = this.#turnRuntime?.runner.companionBotIdFor?.(this.#epoch?.credentials.ilinkBotId ?? '');
-    const text = wechatPreDispatchFailureText(reason, Boolean(companion));
+    const text = notice ?? wechatPreDispatchFailureText(reason, Boolean(companion));
     const chunks = chunkWechatText(text);
     await this.#requireStore().commitPreDispatchFailure({
       bindingEpoch: task.bindingEpoch,
@@ -1569,6 +1625,8 @@ export class WechatIM extends BaseIM implements RichChannelIM {
   ): Promise<void> {
     if (!this.#isSendEpochCurrent(bindingEpoch, signal)) return;
     const store = this.#requireStore();
+    // Bounded to this flush batch; never retain across epochs.
+    const sentNotices = new Set<string>();
     for (const item of await store.listDueOutbox(bindingEpoch, this.#now())) {
       if (!this.#isSendEpochCurrent(bindingEpoch, signal)) return;
       for (let immediateAttempt = 0; immediateAttempt < 3; immediateAttempt += 1) {
@@ -1585,7 +1643,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
           return;
         }
         try {
-          await this.#sendOutboxItem(transport, bindingEpoch, item, signal);
+          await this.#sendOutboxItem(transport, bindingEpoch, item, signal, sentNotices);
           await store.markOutboxDelivered(bindingEpoch, item.id, this.#now());
           break;
         } catch (error) {
@@ -1621,11 +1679,60 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     bindingEpoch: string,
     item: Awaited<ReturnType<WechatTaskStore['listDueOutbox']>>[number],
     signal: AbortSignal,
+    sentNotices: Set<string>,
   ): Promise<void> {
     this.#assertSendEpochCurrent(bindingEpoch, signal);
     const peerId = await this.#peerIdForTask(bindingEpoch, item.taskId);
     this.#assertSendEpochCurrent(bindingEpoch, signal);
+    const mediaItems = parseOutboxMedia(item.mediaJson);
+    const delayed = (item.text || mediaItems.length > 0) &&
+      this.#now() - item.createdAt >= DELAYED_REPLY_NOTICE_AFTER_MS;
+    const sendDelayedNotice = async (): Promise<void> => {
+      if (!delayed) return;
+      const noticeId = createHash('sha256').update(JSON.stringify([
+        'wechat-delayed-reply', bindingEpoch, item.taskId, item.kind, item.createdAt,
+        item.contextToken, Math.floor(this.#now() / DELAYED_REPLY_NOTICE_AFTER_MS),
+      ])).digest('hex').slice(0, 32);
+      // Keep the original chunk and its idempotency key intact (including full-
+      // size chunks and media-only output). Retries/restarts reuse a separate,
+      // deterministic notice ID within this persisted context and delivery window.
+      // A notice can succeed while the body fails: fresh inbound context or a
+      // later window must show attribution again instead of deduplicating it away.
+      // All chunks of one output share the notice. Never send stale content if it fails.
+      const timestamp = new Intl.DateTimeFormat(modernLocaleOf(getResolvedMainLocale()), {
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        timeZoneName: 'shortOffset',
+      });
+      const notice = imText('imBot.text.wechat.reply.delayedReply', {
+        createdAt: timestamp.format(item.createdAt),
+        receivedAt: timestamp.format(item.receivedAt),
+      });
+      // Old/partial payloads can still be attributed by their receive time.
+      let question = '';
+      try {
+        const payload: unknown = JSON.parse(item.taskPayloadJson);
+        if (payload && typeof payload === 'object' && 'text' in payload && typeof payload.text === 'string') {
+          question = Array.from(payload.text.replace(/\s+/g, ' ').trim()).slice(0, 120).join('');
+        }
+      } catch { /* Attribution must not make an old reply undeliverable. */ }
+      if (!sentNotices.has(noticeId)) {
+        await transport.sendMessage({
+          peerId,
+          text: question ? `${notice}\n${imText('imBot.text.wechat.reply.delayedReplyQuestion', { question })}` : notice,
+          contextToken: item.contextToken,
+          clientId: noticeId,
+        }, signal);
+        this.#assertSendEpochCurrent(bindingEpoch, signal);
+        // Share one confirmed notice across this reply's chunks. Unknown sends
+        // still retry; later batches/restarts reuse the same receiver dedup key.
+        sentNotices.add(noticeId);
+      }
+    };
     if (item.text) {
+      await sendDelayedNotice();
+      this.#assertSendEpochCurrent(bindingEpoch, signal);
       await transport.sendMessage(
         {
           peerId,
@@ -1636,9 +1743,13 @@ export class WechatIM extends BaseIM implements RichChannelIM {
         signal,
       );
     }
-    for (const media of parseOutboxMedia(item.mediaJson)) {
+    for (const media of mediaItems) {
       this.#assertSendEpochCurrent(bindingEpoch, signal);
+      // Keep the existing partial-delivery order: text and valid media before a
+      // later bad file still send, but a bad first file cannot leave only a notice.
       const local = await readOutboundWechatFile(media.absPath);
+      this.#assertSendEpochCurrent(bindingEpoch, signal);
+      await sendDelayedNotice();
       this.#assertSendEpochCurrent(bindingEpoch, signal);
       const uploaded = await transport.uploadMedia(
         {
@@ -1726,7 +1837,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
         overloadReply: {
           outboxId: randomUUID(),
           clientId: randomUUID(),
-          text: '当前微信任务较多，请稍后再试。',
+          text: imText('imBot.text.wechat.reply.overloaded'),
         },
       },
       mediaBlobs: staged.mediaBlobs,
@@ -1868,7 +1979,7 @@ function parseTaskPayload(raw: string): WechatTaskPayload {
 
 function prepareWechatTaskTurn(payload: WechatTaskPayload) {
   const replyPrefix = payload.replyContext
-    ? buildImReplyContextBlock({ author: '引用消息', text: payload.replyContext })
+    ? buildImReplyContextBlock({ author: '引用消息', text: payload.replyContext }, payload.text)
     : '';
   return {
     text: payload.text,
@@ -2094,8 +2205,7 @@ export function wechatPreDispatchFailureText(reason: string, companion = false):
     reason.includes(WECHAT_TURN_PERMISSION_POLICY_UNSUPPORTED)
     || reason.includes('unsupported_turn_permission')
   )) {
-    return '这条消息需要逐次权限确认，但伙伴当前的模型或权限模式不支持，消息无法启动。\n'
-      + '请主人在 Cindy 中打开这位伙伴，检查伙伴设置中的模型，并在对话输入框下方选择默认权限或自动审批。';
+    return imText('imBot.text.wechat.preDispatch.companionPermissionUnsupported');
   }
   if (reason.includes(`${WECHAT_TURN_PERMISSION_POLICY_UNSUPPORTED}:agent`)) {
     // 当前权限模式若是换 Agent 后仍不兼容的档位(bypassPermissions / acceptEdits),
@@ -2113,9 +2223,9 @@ export function wechatPreDispatchFailureText(reason: string, companion = false):
     return ui.error.permissionModeUnsupported;
   }
   if (reason === 'missing_auth') {
-    return '当前 Agent 尚未完成授权，请先在 Cindy 中连接模型服务。';
+    return imText('imBot.text.wechat.preDispatch.missingAuth');
   }
-  return '这条消息暂时无法启动，请稍后重试。';
+  return imText('imBot.text.wechat.preDispatch.generic');
 }
 
 function normalizeFinalOutputText(text: string): string {
@@ -2126,31 +2236,31 @@ function hasWechatTaskContent(text: string, attachments: readonly WechatTaskAtta
   return text.trim().length > 0 || attachments.length > 0;
 }
 
-function formatWechatInteractionPrompt(request: InteractionRequest): string {
+function formatWechatInteractionPrompt(request: InteractionRequest, words = localizedReplyWords()): string {
   if (request.kind === 'permission') {
     const unavailable = autoReviewUnavailablePromptLine(request);
-    return `需要确认工具“${request.displayName ?? request.toolName}”。
+    const preview = permissionOperationPreview(request);
+    const title = imText('imBot.text.wechat.interaction.permissionTitle', {
+      tool: request.displayName ?? request.toolName,
+    });
+    return `${title}
 ${permissionPromptDescription(request) ?? ''}
-${unavailable ? `${unavailable}\n` : ''}${permissionOperationPreview(request) ? `操作：\n${permissionOperationPreview(request)}\n` : ''}回复“允许”执行一次，或回复“拒绝”取消本次操作。微信内不支持永久授权。`;
+${unavailable ? `${unavailable}\n` : ''}${preview ? `${imText('imBot.text.wechat.interaction.operationPreview', { preview })}\n` : ''}${imText('imBot.text.wechat.interaction.permissionReplyHint', words)}`;
   }
   if (request.kind === 'plan_review') {
     const plan = request.plan.length > 6_000 ? `${request.plan.slice(0, 6_000)}…` : request.plan;
-    return `Agent 提交了一份执行计划：
-
-${plan}
-
-回复“批准”继续，或回复“拒绝”取消。`;
+    return imText('imBot.text.wechat.interaction.planReview', { plan, ...words });
   }
   const question = request.questions[0];
-  if (!question) return 'Agent 正在等待你的回答，但没有可显示的问题。请回复“继续”。';
+  if (!question) return imText('imBot.text.wechat.interaction.askNoQuestion');
   const options = (question.options ?? [])
     .slice(0, 9)
     .map((option, index) => `${index + 1}. ${option.label}`)
     .join('\n');
-  return `Agent 需要你的回答：
-${question.question}
-${options ? `\n${options}\n` : ''}
-请回复选项序号，或直接输入你的回答。`;
+  return imText('imBot.text.wechat.interaction.askQuestion', {
+    question: question.question,
+    options: options ? `\n${options}\n` : '',
+  });
 }
 
 function defaultWechatInteractionDecision(
@@ -2169,24 +2279,26 @@ function defaultWechatInteractionDecision(
 function parseWechatInteractionReply(
   request: InteractionRequest,
   rawText: string,
+  words: ReplyWords = localizedReplyWords(),
 ): InteractionDecision | null {
   const text = rawText.trim();
   if (!text) return null;
   const normalized = text.toLowerCase();
+  const is = (fixed: string[], localized: string) => matchesReplyWord(normalized, fixed, localized);
   if (request.kind === 'permission') {
-    if (['允许', '同意', '确认', 'allow', 'yes', 'y'].includes(normalized)) {
+    if (is(['允许', '同意', '确认', 'allow', 'yes', 'y'], words.allow)) {
       return { kind: 'permission', behavior: 'allow' };
     }
-    if (['拒绝', '不允许', '取消', 'deny', 'no', 'n'].includes(normalized)) {
+    if (is(['拒绝', '不允许', '取消', 'deny', 'no', 'n'], words.deny)) {
       return { kind: 'permission', behavior: 'deny', reason: 'wechat_user_denied' };
     }
     return null;
   }
   if (request.kind === 'plan_review') {
-    if (['批准', '同意', '确认', '继续', 'approve', 'allow', 'yes', 'y'].includes(normalized)) {
+    if (is(['批准', '同意', '确认', '继续', 'approve', 'allow', 'yes', 'y'], words.approve)) {
       return { kind: 'plan_review', behavior: 'allow' };
     }
-    if (['拒绝', '取消', 'deny', 'no', 'n'].includes(normalized)) {
+    if (is(['拒绝', '取消', 'deny', 'no', 'n'], words.deny)) {
       return { kind: 'plan_review', behavior: 'deny', reason: 'wechat_user_denied' };
     }
     return null;
@@ -2229,14 +2341,14 @@ export const __testing = {
 function delay(ms: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return Promise.resolve();
   return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener(
-      'abort',
-      () => {
-        clearTimeout(timer);
-        resolve();
-      },
-      { once: true },
-    );
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    function onAbort() {
+      clearTimeout(timer);
+      resolve();
+    }
+    signal?.addEventListener('abort', onAbort, { once: true });
   });
 }

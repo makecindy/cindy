@@ -16,7 +16,7 @@ import {
 import { AppConnection } from '../connection.js';
 import { handleMcpAppOperation } from '../operations.js';
 import { McpAppsHost, appServerRevision } from '../host.js';
-import { createAppServerProxy } from '../serverProxy.js';
+import { createAppServerProxy } from '../serverProxy.desktop.js';
 import { registerAppServer, setMcpAppsHost, clearAppServerConfigs } from '../runtime.js';
 import type { McpAppRecord, McpAppDocument } from '../../../shared/mcpApps.js';
 
@@ -359,7 +359,8 @@ describe('2026-01-26 MCP Apps conformance against an independent local server', 
         appInfo: { name: 'Raw', version: '1' },
         appCapabilities: {},
       }),
-    ).rejects.toThrow('MCP_APP_ALREADY_INITIALIZED');
+    ).resolves.toMatchObject({ protocolVersion: '2026-01-26' });
+    await f.peer.notify('ui/notifications/initialized');
     expect(await f.peer.request('ping')).toEqual({});
   });
   it('negotiates an unknown requested version to the actual supported stable version', async () => {
@@ -455,6 +456,7 @@ describe('2026-01-26 MCP Apps conformance against an independent local server', 
       expect.objectContaining({ name: 'refresh_metrics' }),
       { threshold: 99 },
       expect.any(AbortSignal),
+      expect.objectContaining({ clientId: expect.any(String), serverId: expect.any(String) }),
     );
     expect(
       await f.peer.request('tools/call', { name: 'error_metrics', arguments: {} }),
@@ -519,6 +521,26 @@ describe('2026-01-26 MCP Apps conformance against an independent local server', 
     );
     expect(f.peer.links).toEqual(['https://example.org/metrics', 'https://example.org/denied']);
   });
+  // #10625
+  it('always returns to inline when the user exits fullscreen', async () => {
+    const f = await fixture('http', true, ['fullscreen']);
+    expect(await f.peer.request('ui/request-display-mode', { mode: 'fullscreen' })).toEqual({
+      mode: 'fullscreen',
+    });
+    expect(await f.peer.request('ui/request-display-mode', { mode: 'inline' })).toEqual({
+      mode: 'inline',
+    });
+    await f.peer.request('ui/request-display-mode', { mode: 'fullscreen' });
+    f.host.displayMode('renderer:conformance', 'task', f.document.viewId, 'inline');
+    await vi.waitFor(() =>
+      expect(f.peer.notifications.at(-1)).toEqual(
+        expect.objectContaining({
+          method: 'ui/notifications/host-context-changed',
+          params: expect.objectContaining({ displayMode: 'inline' }),
+        }),
+      ),
+    );
+  });
   it('honors App mode restrictions and sends updated environment as partial Host context', async () => {
     const f = await fixture('http', true, ['inline']);
     expect(await f.peer.request('ui/request-display-mode', { mode: 'fullscreen' })).toEqual({
@@ -548,7 +570,7 @@ describe('2026-01-26 MCP Apps conformance against an independent local server', 
     });
     expect(f.audit.mock.calls.flat()).not.toContain('Fixture content should never be logged');
   });
-  it('does not advertise unsupported capabilities and returns standard unknown-method errors', async () => {
+  it('keeps download unavailable on a Host without a local file handler and rejects unknown methods', async () => {
     const f = await fixture();
     for (const capability of ['sampling', 'downloadFile'])
       expect(f.init!.hostCapabilities).not.toHaveProperty(capability);

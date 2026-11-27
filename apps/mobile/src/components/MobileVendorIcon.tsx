@@ -1,7 +1,9 @@
 import { useEffect, useRef } from 'react';
+import { ANTIGRAVITY_MARK_DATA_URL } from '@cindy/maker-shared/branding';
 import { Animated, Easing } from 'react-native';
-import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
+import { useLoopingAnimation } from '@/hooks/useLoopingAnimation';
 import { RemoteSourceMark } from '@/session/RemoteSourceMark';
+import { PluginEngineMark } from '@/session/PluginEngineMark';
 import { useTheme } from '@/theme';
 
 import { MobileAgentMark } from './MobileAgentMark';
@@ -36,6 +38,11 @@ interface MobileVendorIconProps {
    * 图标本身大小与位置不变(与桌面侧栏同一种做法)。
    */
   remote?: boolean;
+  /**
+   * vendor = 'acp'(插件引擎任务)时：插件图标(运行闪烁时保留插件自身配色，非运行时按灰阶着色，
+   * 与 Desktop 侧栏一致)与引擎名。缺省 = 通用引擎标识。
+   */
+  pluginEngine?: { iconDataUrl?: string | null; name: string } | null;
 }
 
 export function MobileVendorIcon({
@@ -44,10 +51,10 @@ export function MobileVendorIcon({
   size = 12,
   vendor,
   remote = false,
+  pluginEngine = null,
 }: MobileVendorIconProps) {
   const { colors } = useTheme();
-  const reduceMotion = useReduceMotionEnabled();
-  const animate = running && reduceMotion === false;
+  const animate = useLoopingAnimation(running);
   const opacity = useRef(new Animated.Value(animate ? RUNNING_BREATH_MIN_OPACITY : 1)).current;
   const color = colorOverride ?? (running ? colors.statusAccent : colors.textTertiary);
 
@@ -81,12 +88,25 @@ export function MobileVendorIcon({
   }, [animate, opacity]);
 
   const agentKind: AgentMarkKind = vendor === 'codex' || vendor === 'pi' ? vendor : 'claude-code';
-  const mark = <MobileAgentMark agentKind={agentKind} color={color} size={size} />;
+  const pluginEngineTask = vendor === 'acp';
+  const pluginIcon = pluginEngine?.iconDataUrl;
+  const keepArtworkColor = running && pluginIcon && pluginIcon !== ANTIGRAVITY_MARK_DATA_URL;
+  const mark = pluginEngineTask
+    ? (
+      <PluginEngineMark
+        iconDataUrl={pluginIcon}
+        size={size}
+        tint={keepArtworkColor ? undefined : color}
+      />
+    )
+    : <MobileAgentMark agentKind={agentKind} color={color} size={size} />;
   const anchor = REMOTE_SIGNAL_ANCHOR[agentKind];
   return (
     <Animated.View
       accessible
-      accessibilityLabel={vendor === 'codex' ? 'Codex' : vendor === 'pi' ? 'Pi' : 'Claude Code'}
+      accessibilityLabel={pluginEngineTask
+        ? pluginEngine?.name
+        : vendor === 'codex' ? 'Codex' : vendor === 'pi' ? 'Pi' : 'Claude Code'}
       accessibilityRole="image"
       style={{ alignItems: 'center', height: size, justifyContent: 'center', opacity, width: size }}
     >

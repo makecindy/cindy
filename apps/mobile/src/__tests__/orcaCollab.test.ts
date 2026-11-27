@@ -6,12 +6,14 @@ import { createRoot } from 'react-dom/client';
 import ts from 'typescript';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { i18n } from '@/i18n';
+import { applyRemoteScheduleTimingsToIndex } from '@/scheduler/remoteScheduleEvents';
 import {
   buildOrcaDispatchCard,
   classifyOrcaDispatchTool,
   parseOrcaPersistedMessage,
   readOrcaPersistedSource,
 } from '@/session/orcaCollab';
+import { projectOrcaQuestionRows } from '@/session/orcaQuestionRows';
 import { excludeOrcaWorkerSessions, selectVisibleDeviceSessions } from '@/session/mobileHome';
 import { normalizeRemoteMessages } from '@/session/messageNormalize';
 import type { RemoteMessage, RemoteSession } from '@/session/types';
@@ -184,6 +186,19 @@ describe('normalizeRemoteMessages with orca collaboration', () => {
     expect(report?.orcaCard).toEqual({ variant: 'report', title: '来自 Worker「api」的消息', body: '接口完成' });
   });
 
+  // 回归：合批仍带首个 Worker 身份，历史归一化必须用总数覆盖卡头且不跳转它（unit）。
+  it('renders a system batch with its total and every original Worker report', () => {
+    const body = 'Worker A (worker-1): done\nA full report\nWorker B (worker-2): error\nB full report';
+    const [item] = normalizeRemoteMessages([message({ id: 'batch', role: 'user',
+      content: JSON.stringify({ orcaSource: 'worker', content: body }),
+      agentMeta: { origin: { kind: 'orca', senderLabel: 'A', senderSessionId: 'worker-1', autoBridge: true, autoBridgeBatchCount: 2 } },
+    })]);
+    expect(item).toMatchObject({ kind: 'user', body, orcaCard: {
+      variant: 'report', title: '系统回传的 2 条 Worker 结果', body,
+    } });
+    expect(item.sessionOrigin).toBeUndefined();
+  });
+
   it('renders a persisted Lead → Worker message in the worker session as a lead card', () => {
     const [item] = normalizeRemoteMessages([
       message({
@@ -248,6 +263,35 @@ describe('normalizeRemoteMessages with orca collaboration', () => {
   });
 });
 
+it('routes a waiting Lead row to the unanswered Worker and restores its own destination after the reply', () => {
+  const lead = session({ id: 'lead', orcaRole: 'lead', deviceLinkDeviceId: 'mac' });
+  const worker = session({ id: 'w', orcaRole: 'worker', orcaLeadSessionId: lead.id, deviceLinkDeviceId: 'mac' });
+  const waiting = new Set([worker.id]);
+  const signals = {
+    getSessionLiveActivity: () => null,
+    getPendingInteractions: (id: string) => waiting.has(id) ? [{ request: { kind: 'ask_user_question' } }] : [],
+  };
+  const project = () => projectOrcaQuestionRows([worker, lead], signals);
+  expect(project().pendingCounts.get(lead.id)).toBe(1);
+  expect(project().workerTargets.get(lead.id)).toBe(worker);
+  waiting.add(lead.id);
+  expect(project().pendingCounts.get(lead.id)).toBe(2);
+  expect(project().workerTargets.has(lead.id)).toBe(false);
+  waiting.clear();
+  expect(project().pendingCounts.size).toBe(0);
+  expect(project().workerTargets.size).toBe(0);
+
+  const background = { ...worker, orcaHasPendingQuestion: true };
+  expect(projectOrcaQuestionRows([lead, background], signals).workerTargets.get(lead.id)).toBe(background);
+  const legacy = { ...worker, orcaLeadSessionId: undefined };
+  const recovered = projectOrcaQuestionRows([lead, legacy], {
+    getPendingInteractions: () => [],
+    getSessionLiveActivity: id => id === worker.id ? { sessionId: id, phase: 'needs-interaction', compactDetail: '' } : null,
+  });
+  expect(excludeOrcaWorkerSessions([lead, legacy], recovered.visibleWorkers)).toEqual([lead, legacy]);
+  expect(recovered.pendingCounts.get(worker.id)).toBe(1);
+});
+
 describe('excludeOrcaWorkerSessions', () => {
   it('hides worker sub-sessions but keeps lead and normal sessions', () => {
     const kept = excludeOrcaWorkerSessions([
@@ -308,7 +352,7 @@ describe('selectVisibleDeviceSessions', () => {
 
   it('feeds the derived rows into the device/project list sections', () => {
     const detail = ts.createSourceFile('device.tsx', readFileSync(resolve(process.cwd(), 'app/devices/[deviceId].tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-    const names = new Set(['sessions', 'filterCounts', 'sections']);
+    const names = new Set(['sessions', 'filterCounts', 'effectiveScheduleIndex', 'sections']);
     const declarations: string[] = [];
     // Only the component's derived rows feed its sections. A nested sync read
     // also calls its response `sessions`; it must not enter this lexical scope.
@@ -319,7 +363,7 @@ describe('selectVisibleDeviceSessions', () => {
       if (!ts.isVariableStatement(statement)) continue;
       for (const node of statement.declarationList.declarations) {
         if (ts.isIdentifier(node.name) && names.has(node.name.text) && node.initializer) {
-          declarations.push('const ' + node.getText(detail) + ';');
+          declarations.push(`const ${node.getText(detail)};`);
         }
       }
     }
@@ -334,8 +378,9 @@ describe('selectVisibleDeviceSessions', () => {
         useMemo: (compute: () => unknown) => compute(), selectVisibleDeviceSessions,
         buildRemoteSessionSections, summarizeRemoteSessionOverview,
         // The real detail sections now also consume alias metadata; worker filtering remains unchanged.
-        projectAliases: new Map(), allSessions, deviceId: 'dev-a', projectWorkingDir: '/repo/cindy',
+        visibleWorkerIds: new Set(), projectAliases: new Map(), allSessions, deviceId: 'dev-a', projectWorkingDir: '/repo/cindy',
         messagePreviewIndex: new Map(), pendingInteractionIndex: new Map(), scheduleIndex: new Map(),
+        applyRemoteScheduleTimingsToIndex, scheduleEventSnapshot: { scheduleTimings: new Map() },
         searchQuery: '', statusFilter: 'all', automationScopeKey: null,
         i18nInstance: i18n, t: i18n.t.bind(i18n),
       });

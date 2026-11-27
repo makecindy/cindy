@@ -1,6 +1,7 @@
 import {
   DL_HISTORY_MESSAGES_CHANNEL,
   DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
+  isSharedTaskPeer,
 } from '@cindy/device-link';
 import type { RemoteInvoke } from '@/device-link/mobileMakerTransport';
 import {
@@ -163,6 +164,8 @@ export function extractMobileSessionReferences(
   while ((match = pattern.exec(text)) !== null) {
     const target = parseSessionDeepLinkUrl(trimSessionLinkMatch(match[0]));
     if (!target) continue;
+    // Keep the complete guest link for get_shared_task_progress on the task host.
+    if (!target.messageClientId && isSharedTaskPeer(target.deviceId)) continue;
     const key = mobileSessionReferenceMetadataKey(target.sessionId, target.messageClientId);
     if (seen.has(key)) continue;
     seen.add(key);
@@ -259,6 +262,19 @@ function toReferenceMessage(row: Record<string, unknown>): MobileSessionReferenc
   };
 }
 
+function sliceFromCodePointBoundary(text: string, start: number): string {
+  const code = text.charCodeAt(start);
+  const previous = text.charCodeAt(start - 1);
+  // 截点落在低代理项时连同高代理项一起丢弃；向后包含它可能超出预算，
+  // 还会让已带省略号的内容在序列化预算循环中不再缩短。
+  const safeStart = start > 0 &&
+    code >= 0xdc00 && code <= 0xdfff &&
+    previous >= 0xd800 && previous <= 0xdbff
+    ? start + 1
+    : start;
+  return text.slice(safeStart);
+}
+
 function sliceTailToTokenBudget(text: string, budget: number): string {
   if (budget <= 0) return '';
   if (estimateMobileReferenceTokens(text) <= budget) return text;
@@ -271,6 +287,8 @@ function sliceTailToTokenBudget(text: string, budget: number): string {
     if (estimateMobileReferenceTokens(text.slice(text.length - middle)) <= payloadBudget) low = middle;
     else high = middle - 1;
   }
+  // 估算按 code point 计数，补上低代理项前的高代理项不增加 token，
+  // 二分得到的最长后缀因此不会从代理对中间开始。
   return `…${text.slice(text.length - low)}`;
 }
 
@@ -412,7 +430,7 @@ function fitSerializedPayloadBudget(
     if (targetMessage) {
       const excess = tokens - FINAL_REFERENCE_PAYLOAD_TOKENS;
       const drop = Math.min(targetMessage.content.length - 1, Math.max(1, excess));
-      targetMessage.content = `…${targetMessage.content.slice(drop + 1)}`;
+      targetMessage.content = `…${sliceFromCodePointBoundary(targetMessage.content, drop + 1)}`;
       if (targetContext) targetContext.truncated = true;
     } else {
       const titled = contexts.find((context) => context.title);

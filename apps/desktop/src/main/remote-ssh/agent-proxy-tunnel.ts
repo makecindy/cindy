@@ -12,8 +12,8 @@
  *   - 只在「主连接 ready + pref 开启 (mode=tunnel)」时保活 — 主连接断开时
  *     挂起重试 (不空转), 主连接恢复 ready 由 applyAgentProxyForHost 重新
  *     ensure。存活的隧道不因主连接断开而被拆 (它还在服务 LLM 流量)。
- *   - RemoteHost 自带 5 次退避重连; 耗尽进 'failed' 后由本模块以无上限
- *     退避 (3s→60s cap) 继续拉起, 用户无需任何手动操作。
+ *   - RemoteHost 自带 5 次退避重连; 网络故障耗尽后由本模块继续退避
+ *     (3s→60s cap)。主机密钥被拒绝时停止重试，下一次 ensure 才重新校验。
  *
  * 固定端口 (exactRemotePort):
  *   远端 daemon env 写死 http://127.0.0.1:<remotePort>, 端口漂移 = env 失效
@@ -87,6 +87,7 @@ interface Entry {
   desired: boolean;
   paused: boolean;
   cycleRunning: boolean;
+  hostKeyRejected: boolean;
   /** cycle 进行中收到的 kick — 收尾后立即补跑一轮, 不丢事件。 */
   kickPending: boolean;
   retryTimer: NodeJS.Timeout | null;
@@ -202,7 +203,7 @@ export function ensureTunnelForHost(
       // 自洽), reconcile 会在安全时机完成迁移。
       entry.desired = true;
       entry.paused = false;
-      kick(entry);
+      kick(entry, true);
       return;
     }
     void stopTunnelForHost(mainHost.id);
@@ -221,6 +222,7 @@ export function ensureTunnelForHost(
       desired: true,
       paused: false,
       cycleRunning: false,
+      hostKeyRejected: false,
       kickPending: false,
       retryTimer: null,
       backoffIdx: 0,
@@ -229,13 +231,14 @@ export function ensureTunnelForHost(
       waiters: [],
       state: { phase: 'connecting', remotePort: pref.remotePort },
     };
-    created.offStatus = conn.onStatus((snap) => handleConnStatus(created, snap.status, snap.lastError));
+    created.offStatus = conn.onStatus((snap, hostKeyRejection) =>
+      handleConnStatus(created, snap.status, snap.lastError, hostKeyRejection));
     entries.set(mainHost.id, created);
     entry = created;
   }
   entry.desired = true;
   entry.paused = false;
-  kick(entry);
+  kick(entry, true);
 }
 
 /** 主连接断开: 挂起重试 (存活隧道不拆 — 它可能还在正常服务)。 */
@@ -325,7 +328,7 @@ function clearRetry(entry: Entry): void {
 }
 
 function scheduleRetry(entry: Entry): void {
-  if (!isCurrent(entry) || !entry.desired || entry.paused) return;
+  if (!isCurrent(entry) || !entry.desired || entry.paused || entry.hostKeyRejected) return;
   clearRetry(entry);
   const delay = RETRY_BACKOFF_MS[Math.min(entry.backoffIdx, RETRY_BACKOFF_MS.length - 1)];
   entry.backoffIdx += 1;
@@ -336,7 +339,16 @@ function scheduleRetry(entry: Entry): void {
   entry.retryTimer.unref?.();
 }
 
-function handleConnStatus(entry: Entry, status: string, lastError?: string): void {
+function rejectHostKey(entry: Entry, error: Error): void {
+  if (!isCurrent(entry) || !entry.desired || entry.hostKeyRejected) return;
+  entry.hostKeyRejected = true;
+  entry.kickPending = false;
+  clearRetry(entry);
+  setState(entry, { phase: 'error', remotePort: entry.remotePort, lastError: error.message });
+  settleWaiters(entry, error);
+}
+
+function handleConnStatus(entry: Entry, status: string, lastError?: string, hostKeyRejection?: Error): void {
   if (!entry.desired) return;
   if (status === 'ready') {
     // RemoteHost 自己的 rearmForwards 会尝试重挂; kick 里的 ensure 幂等对齐。
@@ -345,6 +357,10 @@ function handleConnStatus(entry: Entry, status: string, lastError?: string): voi
     return;
   }
   if (status === 'failed') {
+    if (hostKeyRejection) {
+      rejectHostKey(entry, hostKeyRejection);
+      return;
+    }
     // RemoteHost 内部 5 次重连耗尽 — 本模块接管无上限退避。
     setState(entry, { phase: 'error', remotePort: entry.remotePort, lastError });
     scheduleRetry(entry);
@@ -355,8 +371,9 @@ function handleConnStatus(entry: Entry, status: string, lastError?: string): voi
   }
 }
 
-function kick(entry: Entry): void {
+function kick(entry: Entry, recheckTrust = false): void {
   if (!isCurrent(entry) || !entry.desired || entry.paused) return;
+  if (entry.hostKeyRejected && !recheckTrust) return;
   if (entry.cycleRunning) {
     // cycle 正在跑 (或在收尾的微任务窗口里): 不能丢 kick — resume/ready
     // 事件撞上收尾窗口被静默吞掉的话, 隧道会停在旧状态等下一个事件才动。
@@ -364,6 +381,7 @@ function kick(entry: Entry): void {
     entry.kickPending = true;
     return;
   }
+  entry.hostKeyRejected = false;
   entry.cycleRunning = true;
   void runCycle(entry)
     .catch(() => {
@@ -373,7 +391,7 @@ function kick(entry: Entry): void {
       entry.cycleRunning = false;
       if (entry.kickPending) {
         entry.kickPending = false;
-        kick(entry);
+        kick(entry, true);
       }
     });
 }
@@ -392,8 +410,17 @@ async function runCycle(entry: Entry): Promise<void> {
   if (entry.conn.getStatus() !== 'ready') {
     setState(entry, { phase: 'connecting', remotePort: entry.remotePort });
     try {
-      await entry.conn.connect();
+      // The main connection already verified this host. A ready hook or a
+      // background retry must never create trust for this auxiliary channel
+      // if the record disappeared in between (#8403).
+      await entry.conn.connect({ allowFirstTrust: false });
     } catch (err) {
+      if (entry.hostKeyRejected) return;
+      const code = (err as { code?: unknown } | null)?.code;
+      if (err instanceof Error && (code === 'SSH_HOST_UNVERIFIED' || code === 'SSH_HOST_KEY_MISMATCH')) {
+        rejectHostKey(entry, err);
+        return;
+      }
       const msg = err instanceof Error ? err.message : String(err);
       setState(entry, { phase: 'error', remotePort: entry.remotePort, lastError: msg });
       scheduleRetry(entry);
@@ -414,7 +441,7 @@ async function runCycle(entry: Entry): Promise<void> {
     // stop/rebuild 后的孤儿 cycle 不得继续 — 尤其不能再跑残留监听清理
     // (远端 kill 副作用): 用户可能已关闭 proxy / 切走端口, 授权已收回
     // (R2 review P2)。
-    if (!isCurrent(entry) || !entry.desired) return;
+    if (!isCurrent(entry) || !entry.desired || entry.hostKeyRejected) return;
     const msg = err instanceof Error ? err.message : String(err);
     entry.armFailStreak += 1;
     deps.logger.warn('agent-proxy tunnel arm failed', {
@@ -438,7 +465,7 @@ async function runCycle(entry: Entry): Promise<void> {
     scheduleRetry(entry);
     return;
   }
-  if (!isCurrent(entry) || !entry.desired) return; // arm 在飞期间被 stop/rebuild
+  if (!isCurrent(entry) || !entry.desired || entry.hostKeyRejected) return;
   entry.backoffIdx = 0;
   entry.armFailStreak = 0;
   entry.staleCleanupTried = false;

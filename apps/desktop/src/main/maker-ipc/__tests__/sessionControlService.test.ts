@@ -1,14 +1,18 @@
 import { formatForwardedRequest } from '../../../shared/forwardedRequest.js';
 import { describe, expect, it, vi } from 'vitest';
+import { createXdtHelperMcpServer } from '@cindy/mcps';
+import { handlePluginHostToolRequest } from '../../cindy-brain/hostToolSlot.js';
+import { authorizePluginHostToolCall, getPluginHostToolCaller } from '../../mcp-integrations/hostToolCaller.js';
 import type { SessionActivitySnapshot } from '@cindy/maker-shared/session-activity';
 
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
-import { admitTaskAction } from '../taskActionAuthorization.js';
+import { admitPluginTaskAction, admitTaskAction } from '../taskActionAuthorization.js';
 import {
   authorizeSessionQueueReorder,
   createSessionControlService,
   rebuildSessionQueueItem,
   sessionQueueOriginForDispatcher,
+  type SessionControlServiceDeps,
   type SessionSteerTurnIdentity,
 } from '../sessionControlService.js';
 
@@ -71,7 +75,11 @@ function setup(opts?: {
   };
   const live = {
     agentKind: 'codex' as const,
-    capabilities: { sameTurnSteer: { supported: opts?.steerSupported ?? true } },
+    capabilities: {
+      sameTurnSteer: { supported: opts?.steerSupported ?? true },
+      permissionModes: [{ id: 'ask' as const }, { id: 'auto' as const }, { id: 'bypassPermissions' as const }],
+      setPermissionModeMidSession: { supported: true },
+    },
     isTurnRunning: vi.fn(() => opts?.running ?? true),
     getTurnGeneration: vi.fn(() => 3),
     requestGracefulStop: vi.fn(async () => ({
@@ -91,9 +99,12 @@ function setup(opts?: {
       displayText: 'before',
     });
   const deps = {
+    getPluginCaller: vi.fn<() => { source: { pluginId: string }; assertCurrent(): void } | undefined>(() => undefined),
+    runSessionAction: vi.fn<NonNullable<SessionControlServiceDeps['runSessionAction']>>(async () => ({ ok: true, result: { executionPaused: true } })),
     sessionExists: vi.fn(async () => opts?.exists ?? true),
     getLiveSession,
     getSessionActivitySnapshot: vi.fn(async () => activity),
+    setSessionPermissionMode: vi.fn(async ({ beforeMutation }: { sessionId: string; mode: string; beforeMutation?: () => Promise<void> }) => { await beforeMutation?.(); return true; }),
     getSessionRuntimeDetails: vi.fn(async () => ({
       ...activity,
       runtimeGeneration: 0,
@@ -135,10 +146,10 @@ function setup(opts?: {
         message,
       }: {
         queuedMessageId: string;
-        callerSessionId: string;
+        callerSessionId?: string;
         message: string;
       }) => ({
-        ...item({ kind: 'session', senderSessionId: callerSessionId, displayText: message }),
+        ...item(callerSessionId ? { kind: 'session', senderSessionId: callerSessionId, displayText: message } : undefined),
         clientId: queuedMessageId,
         chatMessage: { clientId: queuedMessageId, role: 'user' as const, content: message },
       }),
@@ -146,8 +157,10 @@ function setup(opts?: {
     steerQueuedMessage: vi.fn(async (
       _sessionId: string, _item: AgentInputQueuedMessage, _turn: SessionSteerTurnIdentity,
     ) => opts?.steerAccepted ?? true),
-    getQueueSnapshot: vi.fn(async () => ({ pendingQueue: [queueItem], consumingClientIds: [] })),
-    replaceQueuedMessage: vi.fn(() => true),
+    getQueueSnapshot: vi.fn(async (): Promise<{ pendingQueue: AgentInputQueuedMessage[]; consumingClientIds: string[] }> => ({ pendingQueue: [queueItem], consumingClientIds: [] })),
+    replaceQueuedMessage: vi.fn((_sessionId: string, _clientId: string, _next: AgentInputQueuedMessage, _expected?: AgentInputQueuedMessage) => true),
+    updateQueuedMessageText: vi.fn((_sessionId: string, _expected: AgentInputQueuedMessage, _text: string,
+      _finalize: (updated: AgentInputQueuedMessage) => AgentInputQueuedMessage) => true),
     removeQueuedMessage: vi.fn(() => true),
     steerStoredQueuedMessage: vi.fn(async () => ({ kind: 'steered' as const })),
     moveQueuedMessage: vi.fn(() => 0),
@@ -157,6 +170,148 @@ function setup(opts?: {
 }
 
 describe('session control domain service', () => {
+  // Unit / #11043: a queued retry/compact callback can outlive the action scope.
+  // Existing revocation tests stayed inside admission.run; retain the actual grant.
+  it('retains control admission authority after the action scope has ended', async () => {
+    const { deps, service } = setup();
+    let current = true, delayed: (() => Promise<void>) | undefined;
+    deps.runSessionAction.mockImplementationOnce(async params => { delayed = params.beforeMutation; return { ok: true as const, result: { executionPaused: true } }; });
+    const decision = await admitTaskAction(
+      { server: 'cindy_helper', sessionId: 'caller', tool: 'control_session', args: {} },
+      { key: 'input', ownerInput: true, delegated: false, assertCurrent: async () => {
+        if (!current) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+      } },
+    );
+    if (!decision.ok || !decision.run) throw new Error('missing action scope');
+    await decision.run(() => service.controlSession({ targetSessionId: 'target', action: 'retry' }));
+    current = false;
+    await expect(delayed!()).rejects.toThrow('TASK_ACTION_AUTHORIZATION_EXPIRED');
+  });
+
+  // Unit / A1: the previous patch used the weaker delivery grant before commit.
+  it.each(['target-read', 'action-commit'] as const)('rechecks full admission at %s before accepting control', async boundary => {
+    const { deps, service } = setup({ live: false });
+    let current = true;
+    const decision = await admitTaskAction(
+      { server: 'cindy_helper', sessionId: 'caller', tool: 'control_session', args: {} },
+      { key: 'input', ownerInput: true, delegated: false,
+        assertCurrent: async () => { if (!current) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED'); },
+        assertDeliveryCurrent: async () => {}, },
+    );
+    if (!decision.ok || !decision.run) throw new Error('missing action scope');
+    if (boundary === 'target-read') deps.sessionExists.mockImplementationOnce(async () => { current = false; return true; });
+    else deps.runSessionAction.mockImplementationOnce(async params => {
+      current = false; await params.beforeMutation(); return { ok: true as const, result: { executionPaused: true } };
+    });
+    await expect(decision.run(() => service.controlSession({ targetSessionId: 'target', action: 'pause' })))
+      .rejects.toThrow('TASK_ACTION_AUTHORIZATION_EXPIRED');
+  });
+
+  it('returns the native unsupported compact error rather than an internal failure', async () => {
+    const { deps, service } = setup();
+    deps.runSessionAction.mockRejectedValue(Object.assign(new Error('Native compact is unavailable'), { code: 'UNSUPPORTED_CAPABILITY' }));
+    expect(await service.controlSession({ targetSessionId: 'target', action: 'compact' }))
+      .toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Native compact is unavailable' });
+  });
+
+  // Unit / #11043 compact contract: exercise the plugin gateway and real
+  // helper registry. Service-only tests did not cover the MCP result shape.
+  it.each([
+    ['compacted', { status: 'requested', tokensBefore: 200, estimatedTokensAfter: 100 }],
+    ['noop', { status: 'requested', noop: true }],
+    ['failed', null],
+  ] as const)('returns %s compact result to an approved plugin', async (outcome, result) => {
+    const { service, deps } = setup();
+    deps.getPluginCaller.mockImplementation(() => {
+      const caller = getPluginHostToolCaller();
+      return caller && { source: { pluginId: caller.caller.pluginId }, assertCurrent: caller.assertCurrent };
+    });
+    deps.runSessionAction.mockImplementationOnce(async ({ beforeMutation }) => {
+      await beforeMutation();
+      if (outcome === 'failed') {
+        throw Object.assign(new Error('Pi native context compaction failed'), { code: 'COMPACT_FAILED' });
+      }
+      return { ok: true, result };
+    });
+    const data = await handlePluginHostToolRequest('plugin', {
+      type: 'host-tool-request', server: 'cindy_helper', tool: 'control_session',
+      args: { session_id: 'pi-task', action: 'compact', instructions: 'Keep decisions' },
+    }, () => true, {
+      owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }),
+      getGhost: () => ({
+        enabled: true, dir: '/plugin', approval: { state: 'approved', revision: 'r1' },
+        manifest: { schemaVersion: 3, id: 'plugin', name: 'Plugin', version: '1.0.0',
+          kind: 'chip', entry: 'main.js', agent: { hostTools: ['control'] } },
+      }),
+      createRuntime: (_server, caller) => {
+        const server = createXdtHelperMcpServer({ sessionControl: service, authorizeCall: authorizePluginHostToolCall },
+          { agentKind: 'pi', workingDir: '', hostCaller: caller });
+        return { ...server.hostTools, close: () => server.close() };
+      },
+    });
+    expect(data.isError ?? false).toBe(outcome === 'failed');
+    const payload = data.content[0];
+    expect(JSON.parse(payload.type === 'text' ? payload.text : '{}')).toMatchObject(outcome === 'failed'
+      ? { ok: false, errorCode: 'COMPACT_FAILED' }
+      : { ok: true, action: 'compact', session_id: 'pi-task', result });
+    expect(deps.runSessionAction).toHaveBeenCalledWith(expect.objectContaining({
+      targetSessionId: 'pi-task', action: 'compact', instructions: 'Keep decisions',
+    }));
+  });
+
+  // UI parity: machine-generated rows are not editable, even with plugin control.
+  it.each([
+    { kind: 'session' as const, senderSessionId: 'other', displayText: 'before' },
+    { kind: 'orca' as const, senderLabel: 'worker', displayText: 'before' },
+    { kind: 'scheduler' as const, scheduleId: 'schedule', scheduleName: 'automation', runId: 'run' },
+  ])('rejects plugin edits of UI-ineligible rows (%j)', async origin => {
+    const { deps, service } = setup({ queueItem: item(origin) });
+    deps.getPluginCaller.mockReturnValue({ source: { pluginId: 'editor' }, assertCurrent: () => {} });
+    const params = { targetSessionId: 'target', queuedMessageId: 'queued-1', message: 'edited' };
+    expect(await service.updateQueuedMessage(params)).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+    expect(deps.replaceQueuedMessage).not.toHaveBeenCalled();
+    expect(deps.updateQueuedMessageText).not.toHaveBeenCalled();
+    expect(await service.moveQueuedMessage({ ...params, position: 0 })).toMatchObject({ ok: true });
+    expect(await service.steerQueuedMessage(params)).toMatchObject({ ok: true });
+    expect(await service.cancelQueuedMessage(params)).toMatchObject({ ok: true });
+  });
+
+  it('uses the native text edit and replaces the original authorization with plugin attribution', async () => {
+    const original = item();
+    original.autoReviewUserText = 'original owner request';
+    const { deps, service } = setup({ queueItem: original });
+    deps.getPluginCaller.mockReturnValue({ source: { pluginId: 'editor' }, assertCurrent: () => {} });
+    expect(await service.updateQueuedMessage({ targetSessionId: 'target', queuedMessageId: 'queued-1', message: 'edited' }))
+      .toMatchObject({ ok: true });
+    expect(deps.replaceQueuedMessage).not.toHaveBeenCalled();
+    const [session, expected, text, finalize] = deps.updateQueuedMessageText.mock.calls[0]!;
+    expect([session, expected, text]).toEqual(['target', original, 'edited']);
+    expect(finalize({ ...original, text })).toMatchObject({
+      sourcePlugin: { pluginId: 'editor' },
+      autoReviewUserText: { kind: 'agent-request' },
+    });
+  });
+
+  it.each(['cancelQueuedMessage', 'steerQueuedMessage', 'moveQueuedMessage'] as const)(
+    'allows plugin %s on a user row and still rejects a consuming row', async operation => {
+      const { deps, service } = setup({ queueItem: item() });
+      deps.getPluginCaller.mockReturnValue({ source: { pluginId: 'editor' }, assertCurrent: () => {} });
+      const params = { targetSessionId: 'target', queuedMessageId: 'queued-1', position: 0 };
+      expect(await service[operation](params)).toMatchObject({ ok: true });
+      deps.getQueueSnapshot.mockResolvedValue({ pendingQueue: [item()], consumingClientIds: ['queued-1'] });
+      expect(await service[operation](params)).toMatchObject({ ok: false, errorCode: 'MESSAGE_CONSUMING' });
+    },
+  );
+
+  it('rechecks plugin installation after the queue read and before mutation', async () => {
+    const { deps, service } = setup({ queueItem: item() });
+    const assertCurrent = vi.fn(() => { throw new Error('plugin revoked'); });
+    deps.getPluginCaller.mockReturnValue({ source: { pluginId: 'editor' }, assertCurrent });
+    await expect(service.cancelQueuedMessage({ targetSessionId: 'target', queuedMessageId: 'queued-1' }))
+      .rejects.toThrow('plugin revoked');
+    expect(deps.removeQueuedMessage).not.toHaveBeenCalled();
+  });
+
   it('marks ordinary send_to_session queue rows with the dispatcher identity', () => {
     expect(
       sessionQueueOriginForDispatcher({
@@ -258,7 +413,7 @@ describe('session control domain service', () => {
     expect(own({ kind: 'orca', senderLabel: 'reviewer', displayText: 'r' })).toBe(true);
     expect(own({ kind: 'session', senderSessionId: 'other', displayText: 'r' })).toBe(true);
     expect(own(undefined)).toBe(false);
-    expect(own({ kind: 'session', senderSessionId: 'other', senderBotId: 'bot-1', displayText: 'r' })).toBe(false);
+    expect(own({ kind: 'session', senderSessionId: 'other', senderBotId: 'bot-1', displayText: 'r' })).toBe(true);
     expect(own({ kind: 'session', senderSessionId: 'other', displayText: 'r' }, {
       sourcePlugin: { pluginId: 'plugin-1', name: 'Plugin' },
     } as Partial<AgentInputQueuedMessage>)).toBe(false);
@@ -335,6 +490,34 @@ describe('session control domain service', () => {
     expect(updated.autoReviewUserText).toEqual(queued.autoReviewUserText);
   });
 
+  // 2026-11-05: edited text is a new hand-off. It speaks for the owner only when the editor's
+  // own request checked exactly that text; otherwise the item keeps its provenance only.
+  it('re-checks an edited plain hand-off instead of carrying the old authority', () => {
+    const queued = item({ kind: 'session', senderSessionId: 'caller', displayText: 'before' });
+    const provenance = { sessionId: 'owner', clientId: 'human' };
+    queued.autoReviewUserText = { kind: 'agent-request', request: { ...provenance,
+      plainBody: true, delegatedText: 'before' } };
+    const unchecked = rebuildSessionQueueItem(queued, 'Also deploy it.');
+    expect(unchecked.persistedContent).toBe('Also deploy it.');
+    expect(unchecked.autoReviewUserText).toEqual({ kind: 'agent-request', request: { ...provenance, plainBody: true } });
+    const recheck = { ...provenance, plainBody: true as const, delegatedText: 'Merge it after checks.' };
+    const checked = rebuildSessionQueueItem(queued, 'Merge it after checks.', { kind: 'agent-request', request: recheck });
+    expect(checked.persistedContent).toBe('Merge it after checks.');
+    expect(checked.autoReviewUserText).toEqual({ kind: 'agent-request', request: recheck });
+  });
+
+  // Review feedback on #9023: an ordinary queued message (no authority) later edited at the
+  // user's request must adopt the editor's freshly checked receipt, not keep the empty one.
+  it('adopts a freshly checked receipt when editing an ordinary queued message', () => {
+    const queued = item({ kind: 'session', senderSessionId: 'caller', displayText: 'before' });
+    queued.autoReviewUserText = { kind: 'agent-request' };
+    const recheck = { sessionId: 'owner', clientId: 'human', plainBody: true as const, delegatedText: 'Merge it after checks.' };
+    const checked = rebuildSessionQueueItem(queued, 'Merge it after checks.', { kind: 'agent-request', request: recheck });
+    expect(checked.autoReviewUserText).toEqual({ kind: 'agent-request', request: recheck });
+    const unchecked = rebuildSessionQueueItem(queued, 'Merge it after checks.');
+    expect(unchecked.autoReviewUserText).toEqual({ kind: 'agent-request', request: { userText: null } });
+  });
+
   it('keeps renderer composer envelopes intact when rebuilding a non-session queue item', () => {
     const queued = item();
     queued.persistedContent = JSON.stringify({
@@ -351,6 +534,96 @@ describe('session control domain service', () => {
       files: [{ name: 'notes.txt', path: '/repo/notes.txt' }],
       slashCommandRanges: [],
     });
+  });
+
+  // Unit parity #16: permission-only changes must use the UI commit service, preserving
+  // the model profile/pending mutation; previous runtime tests only exercised model axes.
+  it.each([0, 99])('changes permission without replacing the model profile (generation=%s)', async generation => {
+    const { deps, service } = setup();
+    const result = await service.setSessionRuntime({ targetSessionId: 'target', expectedGeneration: generation, patch: { permissionMode: 'bypassPermissions' } });
+    expect(result).toMatchObject(generation === 0 ? { ok: true, permissionMode: 'bypassPermissions', generation: 0 } : { ok: false, errorCode: 'CONFLICT' });
+    expect(deps.setSessionRuntime).not.toHaveBeenCalled();
+    expect(deps.setSessionPermissionMode).toHaveBeenCalledTimes(generation === 0 ? 1 : 0);
+  });
+
+  // Unit, #9801 / 4537184245: an admitted caller's own permission generation is
+  // part of its authority. Existing permission cases had no admission. Reject a
+  // permission-only or mixed patch before either runtime or permission is written.
+  it.each([false, true])('rejects admitted self permission changes without partial writes (mixed=%s)', async mixed => {
+    const { deps, service } = setup();
+    const patch = { permissionMode: 'bypassPermissions' as const, ...(mixed ? { model: 'next' } : {}) };
+    const decision = await admitTaskAction(
+      { server: 'cindy_helper', sessionId: 'target', tool: 'set_session_runtime', args: {} },
+      { key: 'input', ownerInput: true, delegated: false, assertCurrent: async () => {} },
+    );
+    if (!decision.ok || !decision.run) throw new Error('missing action scope');
+    await expect(decision.run(() => service.setSessionRuntime({ targetSessionId: 'target', patch })))
+      .resolves.toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+    expect(deps.setSessionRuntime).not.toHaveBeenCalled();
+    expect(deps.setSessionPermissionMode).not.toHaveBeenCalled();
+  });
+
+  it.each(['other-task', 'plugin'] as const)('preserves permission changes from an admitted %s caller', async caller => {
+    const { deps, service } = setup();
+    const call = { server: 'cindy_helper' as const, tool: 'set_session_runtime', args: {} };
+    const decision = caller === 'plugin'
+      ? admitPluginTaskAction({ ...call, sessionId: undefined, caller: { kind: 'plugin', pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1 } }, () => {})
+      : await admitTaskAction({ ...call, sessionId: 'caller' },
+        { key: 'input', ownerInput: true, delegated: false, assertCurrent: async () => {} });
+    if (!decision.ok || !decision.run) throw new Error('missing action scope');
+    await expect(decision.run(() => service.setSessionRuntime({ targetSessionId: 'target', patch: { permissionMode: 'auto' } })))
+      .resolves.toMatchObject({ ok: true, permissionMode: 'auto' });
+    expect(deps.setSessionPermissionMode).toHaveBeenCalledOnce();
+  });
+
+  // Unit #9801/uKm_: the real service previously wrote a model before a Codex
+  // permission rejection. Existing cases only checked permission-only or self admission.
+  it.each(['mode', 'mid-session'] as const)('rejects unsupported permission %s before a mixed model write', async unsupported => {
+    const { deps, live, service } = setup();
+    if (unsupported === 'mid-session') live.capabilities.setPermissionModeMidSession.supported = false;
+    const result = await service.setSessionRuntime({ targetSessionId: 'target', expectedGeneration: 0,
+      patch: { model: 'next', permissionMode: unsupported === 'mode' ? 'acceptEdits' : 'auto' } });
+    expect(result).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+    expect(deps.setSessionRuntime).not.toHaveBeenCalled();
+    expect(deps.setSessionPermissionMode).not.toHaveBeenCalled();
+  });
+
+  it.each(['applied', 'deferred'] as const)('reports the actual %s model result when the later permission commit fails', async status => {
+    const { deps, service } = setup();
+    const runtime = { ...await deps.setSessionRuntime(), status, generation: 7 };
+    deps.setSessionRuntime.mockClear().mockResolvedValueOnce(runtime as Awaited<ReturnType<typeof deps.setSessionRuntime>>);
+    deps.setSessionPermissionMode.mockRejectedValueOnce(Object.assign(new Error('permission persistence failed'), { code: 'WRITE_FAILED' }));
+    const result = await service.setSessionRuntime({ targetSessionId: 'target', expectedGeneration: 0,
+      patch: { model: 'next', permissionMode: 'auto' } });
+    expect(result).toMatchObject({ ok: false, errorCode: 'INTERNAL', data: {
+      runtime: { status, generation: 7, fields: ['model'] },
+      failed: 'permission_mode', original_error: { code: 'WRITE_FAILED', message: 'permission persistence failed' },
+    } });
+    expect(deps.setSessionRuntime).toHaveBeenCalledOnce();
+    expect(deps.setSessionPermissionMode).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a supported model and permission change in one successful call', async () => {
+    const { deps, service } = setup();
+    await expect(service.setSessionRuntime({ targetSessionId: 'target', expectedGeneration: 0,
+      patch: { model: 'next', permissionMode: 'auto' } }))
+      .resolves.toMatchObject({ ok: true, status: 'applied', generation: 1, permissionMode: 'auto',
+        effectiveProfile: { model: 'next' } });
+    expect(deps.setSessionRuntime).toHaveBeenCalledOnce();
+    expect(deps.setSessionPermissionMode).toHaveBeenCalledOnce();
+  });
+
+  it('preserves model-only changes by an admitted caller to itself', async () => {
+    const { deps, service } = setup();
+    const decision = await admitTaskAction(
+      { server: 'cindy_helper', sessionId: 'target', tool: 'set_session_runtime', args: {} },
+      { key: 'input', ownerInput: true, delegated: false, assertCurrent: async () => {} },
+    );
+    if (!decision.ok || !decision.run) throw new Error('missing action scope');
+    await expect(decision.run(() => service.setSessionRuntime({ targetSessionId: 'target', patch: { model: 'next' } })))
+      .resolves.toMatchObject({ ok: true, generation: 1 });
+    expect(deps.setSessionRuntime).toHaveBeenCalledOnce();
+    expect(deps.setSessionPermissionMode).not.toHaveBeenCalled();
   });
 
   it('steers only a live supported turn and never falls back after a terminal race', async () => {

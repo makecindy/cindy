@@ -139,6 +139,7 @@ describe('provider shares in the remote Agent catalogs', () => {
     keepDeviceIds: input.keepDeviceIds ?? [],
     keepOnly: input.keepOnly,
     deviceName: (item) => `来自 ${item.ownerName} 的分享`,
+    offlineName: (name) => `${name} · 暂时离线`,
     unavailableName: '已不可用的分享',
   });
 
@@ -149,24 +150,39 @@ describe('provider shares in the remote Agent catalogs', () => {
     expect(isProviderShareAgentDeviceId(null)).toBe(false);
   });
 
+  it('carries the share and member identity used to favorite the shared provider', () => {
+    const favoriteSource = {
+      shareId: 'one', memberId: 'member-1', providerId: 'anthropic', owner: { region: 'global' as const },
+    };
+    const [catalog] = build({ shares: [share('one', { favoriteSource })] });
+    expect(catalog.favoriteSource).toEqual(favoriteSource);
+    expect(build({ shares: [share('one')] })[0].favoriteSource).toBeUndefined();
+  });
+
   it('lists each reachable share as one more computer with only the shared provider', () => {
     const [catalog] = build({ shares: [share('one')] });
     expect(catalog).toEqual({
       deviceId: 'share:one',
       name: "来自 Magi 的分享",
       status: 'ready',
+      shareSource: { providerId: 'anthropic', providerLabel: 'Anthropic', offline: false },
       providers: [providers[0]],
       modelVisibilityOverrides: { 'claude-code:anthropic:claude-x': true },
     });
   });
 
-  it('omits paused shares and offline owners like unreachable computers, unless the task uses them', () => {
+  // Gap (2026-11-23 用户裁决「保留并标注」): an owner whose computer flapped offline vanished from the
+  // picker and came back, so the share blinked. Same rule as Desktop (providerSharePickerState).
+  it('omits paused shares unless the task uses them, and keeps offline owners listed and marked', () => {
     const shares = [
       share('paused', { status: 'paused' }),
       share('offline', { hostOnline: false, payload: null }),
       share('ready'),
     ];
-    expect(build({ shares }).map((item) => item.deviceId)).toEqual(['share:ready']);
+    expect(build({ shares }).map((item) => [item.deviceId, item.name, item.offline ?? false])).toEqual([
+      ['share:offline', '来自 Magi 的分享 · 暂时离线', true],
+      ['share:ready', '来自 Magi 的分享', false],
+    ]);
     // 留下来的不可用分享标 offline:恢复出来的新建任务选择据此退回被控电脑默认，收藏也先不显示。
     expect(build({ shares, keepDeviceIds: ['share:paused', 'share:offline'] })
       .map((item) => [item.deviceId, item.status, item.offline ?? false]))
@@ -177,6 +193,17 @@ describe('provider shares in the remote Agent catalogs', () => {
     expect(build({ shares: [share('one'), share('two')], keepOnly: true, keepDeviceIds: ['share:two', 'studio'] })
       .map((item) => item.deviceId)).toEqual(['share:two']);
     expect(build({ shares: [share('one')], keepOnly: true })).toEqual([]);
+  });
+  it('keeps an active share with a host-verified bounded catalog selectable while signaling is offline, but never a paused share', () => {
+    const cached = { providers, providerContinuity: { stale: true, remainingMs: 60_000 } };
+    const catalogs = build({ shares: [share('cached', { hostOnline: false, payload: cached }),
+      share('paused', { status: 'paused', hostOnline: false, payload: cached })] });
+    expect(catalogs.map(row => row.deviceId)).toEqual(['share:cached']);
+    expect(catalogs[0].offline).not.toBe(true);
+    expect(catalogs[0].name).toBe('来自 Magi 的分享 · 暂时离线');
+    // Without a trusted catalog the row stays listed but cannot be picked.
+    expect(build({ shares: [share('expired', { hostOnline: false, payload: null })] })
+      .map(row => [row.deviceId, row.offline])).toEqual([['share:expired', true]]);
   });
 
   it('keeps a removed share the task still points at, once the list is authoritative', () => {

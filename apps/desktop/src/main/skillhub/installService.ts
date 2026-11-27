@@ -9,7 +9,8 @@
  *
  * 安装目标：
  *   - 未传 installPath → 默认 `~/.agents/skills/<name>/`（双引擎共享）
- *     + 额外创建 `~/.claude/skills/<name>` symlink
+ *     + 额外创建 `~/.claude/skills/<name>` symlink（#9282：仅当允许 Claude 投影，
+ *       即 opt-in 或本地已有 `~/.claude`）
  *   - 传入项目级 `.agents/skills/<name>` → 直接使用，并创建 Claude 兼容链接
  *   - 其它自定义 installPath（完整路径）→ 直接使用，main 不做语义拼接
  *
@@ -27,7 +28,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { app, shell } from 'electron';
-import { download, DownloadError } from '../downloader/index.js';
+import { createDownloadProgressReporter, download, DownloadError } from '../downloader/index.js';
 import { isLocalSkillTargetCurrent, type LocalSkillTarget } from './localSkillTarget';
 import {
   isCindySkillEnabled,
@@ -68,6 +69,7 @@ import {
   prepareSharedGlobalSkillLinks,
   prepareSharedProjectSkillLinks,
   projectWorkingDirFromSkillPath,
+  shouldProjectToClaudeSkills,
 } from '../maker-host/shared-global-skills.js';
 import {
   clearIgnoredAutoSyncSkill,
@@ -76,6 +78,7 @@ import {
   isKnownAutoSyncCandidateSkill,
 } from './autoSyncPreferences';
 import { withSkillhubCatalogScope, type SkillhubCatalogScope } from '../../shared/skillhubCatalog';
+import type { DownloadProgress } from '../../shared/downloadProgress';
 
 import { createLogger } from '../logger';
 
@@ -124,7 +127,8 @@ export type InstallErrorCode =
 
 export type InstallProgressEvent =
   | { phase: 'fetching-info'; name: string }
-  | { phase: 'downloading'; name: string }
+  /** `download` (local IPC only) drives the shared DownloadMeter; remote receipts ignore it. */
+  | { phase: 'downloading'; name: string; download?: DownloadProgress }
   | { phase: 'verifying'; name: string }
   | { phase: 'extracting'; name: string }
   | { phase: 'registering'; name: string }
@@ -627,7 +631,16 @@ export async function install(p: InstallParams, onProgress: ProgressCb, remoteGu
       onProgress({ phase: 'failed', name: p.name, errorCode: 'DOWNLOAD_FAILED', message });
       return { success: false, errorCode: 'DOWNLOAD_FAILED', message };
     }
-    onProgress({ phase: 'downloading', name: p.name });
+    const reporter = createDownloadProgressReporter({
+      initialPhase: 'downloading',
+      total: info.fileSize,
+      emit: (download) => {
+        // Verifying and later phases keep their existing events.
+        if (download.phase === 'downloading' || download.phase === 'retrying')
+          onProgress({ phase: 'downloading', name: p.name, download });
+      },
+    });
+    onProgress({ phase: 'downloading', name: p.name, download: reporter.snapshot() });
     let zipBuf: Uint8Array;
     let downloadDir: string | undefined;
     try {
@@ -641,7 +654,10 @@ export async function install(p: InstallParams, onProgress: ProgressCb, remoteGu
         maxBytes: MAX_SKILL_ZIP,
         signal,
         resume: false,
-        retry: { maxAttempts: 1 },
+        // Up to 3 tries (user decision 2026-11-17); the signed URL is reused within its expiry.
+        retry: { maxAttempts: 3 },
+        onProgress: reporter.callbacks.onProgress,
+        onRetry: reporter.callbacks.onRetry,
       });
       zipBuf = await fs.promises.readFile(archive);
     } catch (error) {
@@ -945,7 +961,8 @@ export async function install(p: InstallParams, onProgress: ProgressCb, remoteGu
     }
 
     // best-effort:让同一份 Skill 同时出现在两个 Agent 的 discovery root。
-    if (!p.installPath) {
+    // #9282:未 opt-in 且本地没有 ~/.claude 时不主动创建 Claude 侧链接。
+    if (!p.installPath && await shouldProjectToClaudeSkills()) {
       const claudeLink = path.join(os.homedir(), '.claude', 'skills', p.name);
       try {
         await ensureSymlinkToShared(claudeLink, finalDir);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { contentTypeFor, extractStep } from '../stepExtractor.js';
+import { applyFieldPlan, contentTypeFor, extractStep } from '../stepExtractor.js';
 import { classifyOrigin } from '../originPolicy.js';
 import type { NativeAxNode, NativeAxSnapshot } from '../types.js';
 
@@ -24,6 +24,156 @@ const snapshot = (nodes: NativeAxNode[], extra: Partial<NativeAxSnapshot> = {}):
 });
 
 describe('extractStep', () => {
+  // 2026-11-25 real run: a payment page's SMS code (six drawn boxes over one input shrunk to a pixel)
+  // ended a handoff as nothing_to_fill. Entry: extractStep, the step the card shows. Unit tier.
+  // Existing coverage kept zero-size fields only when clipped at the page edge. Minimal failing input:
+  // a focused 1x1 AXTextField inside the page under the code prompt. An unfocused one (a bot trap) stays out.
+  // PR #12780 review (codex r4692473266): remembered hidden fields matched by page id across the whole tree, and a
+  // zero-height field kept for the viewport edge was remembered too. Re-reading the step then took in a frame's
+  // never-focused 1x1 field with the same id, and the submit check failed on the extra field. Entry: extractStep
+  // read twice as sameFields does. Unit tier. Minimal failing input: edge field id=code + frame field id=code.
+  it('remembers only fields the hidden rule took in, each within its own document', () => {
+    const snap = snapshot([
+      node('0', 'AXWebArea', { url: 'https://example.test/form', frame: [0, 60, 1200, 840] }),
+      node('0.1', 'AXTextField', { title: '', domId: 'code', frame: [100, 900, 200, 0] }),
+      node('0.2', 'AXWebArea', { url: 'https://example.test/frame', frame: [100, 200, 400, 300] }),
+      node('0.2.1', 'AXTextField', { title: '', domId: 'code', frame: [150, 250, 1, 1] }),
+    ]);
+    const first = extractStep(snap);
+    expect(first.shown.filter(c => c.kind === 'text')).toHaveLength(1);
+    expect(first.hiddenFields).toBeUndefined();
+    const again = extractStep(snap, new Set(first.hiddenFields ?? []));
+    expect(again.shown.filter(c => c.kind === 'text')).toHaveLength(1);
+  });
+
+  it('keeps the focused one-pixel input behind drawn code boxes, and leaves unfocused hidden fields out', () => {
+    const step = extractStep(snapshot([
+      node('0', 'AXWebArea', { url: 'https://secure.example.test/pay', frame: [0, 60, 1200, 840] }),
+      node('0.1', 'AXStaticText', { value: '请输入短信验证码', frame: [460, 380, 200, 20] }),
+      node('0.2', 'AXStaticText', { value: '验证码已发送至186****0000', frame: [460, 410, 260, 18] }),
+      node('0.3', 'AXTextField', { focused: true, frame: [460, 440, 1, 1] }),
+      node('0.4', 'AXTextField', { title: 'website', frame: [10, 70, 1, 1] }),
+      node('0.5', 'AXButton', { title: '确定', frame: [460, 500, 290, 36] }),
+    ]));
+    const fields = step.shown.filter(c => c.kind === 'text');
+    expect(fields).toHaveLength(1);
+    expect(fields[0]).toMatchObject({ contentType: 'one-time-code' });
+  });
+
+  // Long-form regression: extractStep must retain fields below the viewport (unit).
+  // Existing crowded-screen coverage only used links, never an offscreen input or >40 inputs.
+  it('keeps the complete scrollable web form and its submit action', () => {
+    const step = extractStep(snapshot([
+      node('0', 'AXWebArea', { url: 'https://example.test/keys', frame: [0, 60, 1200, 840] }),
+      node('0.1', 'AXTextField', { title: 'First key' }),
+      // Chrome clips offscreen AX rectangles to zero height at the page edge.
+      node('0.2', 'AXTextField', { title: 'Last key', frame: [100, 900, 200, 0] }),
+      node('0.3', 'AXButton', { title: 'Continue', frame: [100, 900, 200, 0] }),
+    ]));
+    expect(step.shown.map(c => c.kind === 'text' && c.label)).toEqual(['First key', 'Last key']);
+    expect(step.controls.find(c => c.kind === 'button')).toMatchObject({ primary: true });
+  });
+
+  // Unit/security regression: offscreen fields are included, so their ancestor
+  // origins must be too. A preceding top-level password must not mask the iframe.
+  it.each([
+    { url: 'https://other.example/login', frame: [100, 1000, 400, 100], warning: 'embedded-frame' },
+    { url: 'https://other.example/login', frame: [100, 900, 400, 0], warning: 'embedded-frame' },
+    { url: 'https://example.test/nested', frame: [100, 900, 400, 0], warning: undefined },
+  ])('retains the origin warning for an offscreen frame: %j', ({ url, frame, warning }) => {
+    const step = extractStep(snapshot([
+      node('0', 'AXWebArea', { url: 'https://example.test/login', frame: [0, 60, 1200, 840] }),
+      node('0.1', 'AXTextField', { title: 'Main password', secure: true }),
+      node('0.2', 'AXWebArea', { url, frame }),
+      node('0.2.0', 'AXTextField', { title: 'Embedded password', secure: true, frame }),
+    ]));
+    expect(step.shown.map(c => c.kind === 'text' && c.label)).toEqual(['Main password', 'Embedded password']);
+    expect(step.source.origin).toBe('https://example.test');
+    expect(step.source.warning).toBe(warning);
+  });
+
+  it('never exposes a silently truncated form as a complete step', () => {
+    const nodes = Array.from({ length: 41 }, (_, i) => node(String(i), 'AXTextField', { title: `Key ${i}` }));
+    for (const input of [snapshot(nodes, { bundleId: 'x' }), snapshot(nodes.slice(0, 2), { bundleId: 'x', truncated: true })]) {
+      expect(() => extractStep(input)).toThrow('Incomplete form');
+    }
+  });
+
+  // Unit/security: an accepted plan can make a plain field a logical password.
+  // The final warning must describe that target's frame, including clipped frames.
+  it.each([
+    { url: 'https://other.example/login', height: 100, warning: 'embedded-frame' },
+    { url: 'https://other.example/login', height: 0, warning: 'embedded-frame' },
+    { url: 'https://example.test/nested', height: 100, warning: undefined },
+  ])('checks a planned password frame origin: %j', ({ url, height, warning }) => {
+    const frame = [100, height ? 200 : 900, 400, height];
+    const step = extractStep(snapshot([
+      node('0', 'AXWebArea', { url: 'https://example.test/login', frame: [0, 60, 1200, 840] }),
+      node('0.1', 'AXWebArea', { url, frame }),
+      node('0.1.0', 'AXTextField', { title: 'Entry', frame }),
+    ]));
+    expect(step.source.warning).toBeUndefined();
+    expect(applyFieldPlan(step, [{ label: 'Password', contentType: 'password', targets: [{ label: 'Entry' }] }])).toBe(true);
+    expect(step.shown[0]).toMatchObject({ contentType: 'password' });
+    expect(step.source.origin).toBe('https://example.test');
+    expect(step.source.warning).toBe(warning);
+  });
+
+  it('never asks for a browser\'s address bar when its page cannot be read', () => {
+    for (const [desc, placeholder] of [['地址和搜索栏', '问问 Google 或输入网址'], ['Address and search bar', 'Search Google or type a URL']]) {
+      const step = extractStep(snapshot([node('0', 'AXTextField', { desc, placeholder, hasValue: true, frame: [40, 10, 600, 20] })]));
+      expect(step).toMatchObject({ shown: [], controls: [], pageMissing: true });
+    }
+  });
+
+  describe('which steps are a sign-in', () => {
+    const page = (url: string, fields: NativeAxNode[], extra: NativeAxNode[] = []) =>
+      snapshot([node('0', 'AXWebArea', { url, frame: [0, 60, 1200, 840] }), ...fields, ...extra]);
+    const field = (label: string, extra: Partial<NativeAxNode> = {}) => node('0.1', 'AXTextField', { title: label, ...extra });
+
+    it('counts a password or a one-time code on any page, and an account only where the page says it is a sign-in', () => {
+      expect(extractStep(page('https://shop.example.com/pay', [field('Password', { secure: true })])).signIn).toBe(true);
+      expect(extractStep(page('https://shop.example.com/pay', [field('Verification code')])).signIn).toBe(true);
+      expect(extractStep(page('https://appstoreconnect.apple.com/login', [field('Email')])).signIn).toBe(true);
+      // Read protection covers web addresses only: no sign-in on the window without it.
+      expect(extractStep(page('file:///tmp/login.html', [field('Password', { secure: true })])).signIn).toBeUndefined();
+      expect(extractStep(page('https://shop.example.com/pay', [field('Email')], [node('0.0', 'AXHeading', { title: 'Sign in to continue' })])).signIn).toBe(true);
+    });
+
+    it('leaves checkout and account-opening forms as forms', () => {
+      for (const label of ['Email for receipt', 'Bank account number', 'Accounting code']) {
+        expect(extractStep(page('https://shop.example.com/checkout', [field(label)])).signIn).toBeUndefined();
+      }
+    });
+
+    it('reads login words and addresses as whole words, not pieces of other words', () => {
+      const heading = (title: string) => [node('0.0', 'AXHeading', { title })];
+      for (const text of ['Design inspiration', 'Catalog information', 'Plugin settings']) {
+        expect(extractStep(page('https://shop.example.com/pay', [field('Email')], heading(text))).signIn).toBeUndefined();
+      }
+      for (const url of ['https://shop.example.com/authors/jane', 'https://shop.example.com/authorize-card', 'https://shop.example.com/accountability']) {
+        expect(extractStep(page(url, [field('Email')])).signIn).toBeUndefined();
+      }
+      for (const url of ['https://login.example.com/', 'https://accounts.example.com/x', 'https://example.com/oauth2/start', 'https://example.com/user/sign-in']) {
+        expect(extractStep(page(url, [field('Email')])).signIn).toBe(true);
+      }
+      expect(extractStep(page('https://shop.example.com/pay', [field('Email')], heading('请先登录'))).signIn).toBe(true);
+    });
+
+    it('keeps a browser page whose address is unknown as an ordinary form', () => {
+      const noAddress = snapshot([node('0', 'AXWebArea', { frame: [0, 60, 1200, 840] }), field('Password', { secure: true })]);
+      expect(extractStep(noAddress).signIn).toBeUndefined();
+      // A native window has no page address to cover and no browser read tools to guard.
+      expect(extractStep(snapshot([field('Password', { secure: true })], { app: 'Notes', bundleId: 'com.example.notes' })).signIn).toBe(true);
+    });
+  });
+
+  it('keeps every control of a native window, which has no page to wait for', () => {
+    const step = extractStep(snapshot([node('0', 'AXTextField', { title: 'Email' })], { app: 'Notes', bundleId: 'com.example.notes' }));
+    expect(step.shown).toHaveLength(1);
+    expect(step.pageMissing).toBeUndefined();
+  });
+
   it('scopes a browser window to the page and maps a login form to standard fields', () => {
     const step = extractStep(snapshot([
       node('0', 'AXButton', { desc: 'Reload', frame: [10, 10, 20, 20] }),
@@ -51,7 +201,7 @@ describe('extractStep', () => {
     expect(next.primary).toBe(true);
     expect(step.controls[0]).toEqual({ id: expect.any(String), kind: 'note', tone: 'heading', text: 'Sign in' });
     expect(step.hasSecure).toBe(true);
-    expect(step.bindings.get(password.id)).toEqual({ kind: 'text', ref: '2.3', fp: expect.any(String), secure: true });
+    expect(step.bindings.get(password.id)).toMatchObject({ kind: 'text', ref: '2.3', fp: expect.any(String), secure: true });
     expect(JSON.stringify(step.controls)).not.toContain('Address and search bar');
     // The owner sees only the fields to type.
     expect(step.shown.map((control) => control.kind === 'text' && control.label)).toEqual(['Email', 'Password']);
@@ -123,6 +273,9 @@ describe('contentTypeFor', () => {
   it.each([
     ['验证码', 'one-time-code'],
     ['Enter the 6-digit verification code', 'one-time-code'],
+    ['Enter your 6-digit code', 'one-time-code'],
+    ['Enter the 5-digit ZIP code', 'text'],
+    ['Last 4 digits of your card', 'text'],
     ['邮箱', 'email'],
     ['手机号', 'tel'],
     ['用户名', 'username'],
@@ -145,5 +298,41 @@ describe('classifyOrigin', () => {
     ['app://index.html', false, {}],
   ])('%s', (url, browser, expected) => {
     expect(classifyOrigin(url, browser)).toEqual(expected);
+  });
+});
+
+// Unit regression: GitHub-like split code labels previously became eight owner fields.
+// Existing extraction tests cover individual inputs, not logical grouping or ambiguous plans.
+describe('logical field plans', () => {
+  const codeStep = () => extractStep(snapshot([
+    node('0', 'AXWebArea', { url: 'https://example.com/device' }),
+    ...[0, 1, 2, 3, 5, 6, 7, 8].map((n) => node(`0.${n}`, 'AXTextField', { title: `User code ${n}` })),
+  ]));
+  const plan = [{ label: '授权码', contentType: 'one-time-code' as const,
+    targets: [0, 1, 2, 3, 5, 6, 7, 8].map((n) => ({ label: `User code ${n}`, length: 1 })) }];
+  it('shows one code and keeps all eight host bindings in the declared order', () => {
+    const step = codeStep();
+    expect(applyFieldPlan(step, plan)).toBe(true);
+    expect(step.shown).toMatchObject([{ label: '授权码', contentType: 'one-time-code' }]);
+    const binding = step.bindings.get(step.shown[0].id);
+    expect(binding?.kind === 'text' && binding.segments?.map((s) => s.ref)).toEqual(['0.0','0.1','0.2','0.3','0.5','0.6','0.7','0.8']);
+  });
+  it('rejects incomplete, duplicate and ambiguous matches without changing the form', () => {
+    for (const targets of [plan[0].targets.slice(1), [...plan[0].targets, plan[0].targets[0]], [{ label: 'missing', length: 8 }], plan[0].targets.map(({ label }) => ({ label }))]) {
+      const step = codeStep();
+      const before = JSON.stringify(step.shown);
+      expect(applyFieldPlan(step, [{ ...plan[0], targets }])).toBe(false);
+      expect(JSON.stringify(step.shown)).toBe(before);
+    }
+    const ambiguous = extractStep(snapshot([
+      node('0', 'AXTextField', { title: 'Code' }), node('1', 'AXTextField', { title: 'Code' }),
+    ], { bundleId: 'com.example.native' }));
+    expect(applyFieldPlan(ambiguous, [{ label: 'Code', contentType: 'one-time-code', targets: [{ label: 'Code' }] }])).toBe(false);
+    expect(ambiguous.shown).toHaveLength(2);
+  });
+  it('never downgrades a native password field to ordinary text', () => {
+    const step = extractStep(snapshot([node('0', 'AXTextField', { title: 'Password', secure: true })], { bundleId: 'com.example.native' }));
+    expect(applyFieldPlan(step, [{ label: '系统密码', contentType: 'text', targets: [{ label: 'Password' }] }])).toBe(true);
+    expect(step.shown[0]).toMatchObject({ contentType: 'password' });
   });
 });

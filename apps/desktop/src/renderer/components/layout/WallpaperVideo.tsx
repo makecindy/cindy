@@ -8,6 +8,9 @@ import {
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { HIDDEN_ANIMATION_ATTR } from '@/lib/hiddenAnimationGate';
 import { isSceneWallpaper } from '@/lib/wallpaper';
+import { createLogger } from '@/lib/logger';
+
+const log = createLogger('wallpaper-video');
 
 /** One decoder and one viewport canvas. Custom videos retain a paused frame in static mode. */
 export function WallpaperVideo({
@@ -69,7 +72,9 @@ function PlayingWallpaper({
   playing?: boolean;
   onReady?: () => void;
 }) {
+  const renderOnCanvas = window.electronAPI?.platform === 'darwin';
   const ref = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const layerRef = useRef<HTMLDivElement>(null);
   const onFailureRef = useRef(onFailure);
   onFailureRef.current = onFailure;
@@ -110,10 +115,107 @@ function PlayingWallpaper({
 
   useEffect(() => {
     const video = ref.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas || failed) return;
+    const context = canvas.getContext('2d', { alpha: false, colorSpace: 'display-p3' });
+    if (!context) {
+      log.warn('Wallpaper canvas is unavailable');
+      setFailed(true);
+      onFailureRef.current?.();
+      return;
+    }
+
+    const paintFrame = () => {
+      const { videoWidth, videoHeight } = video;
+      if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || !videoWidth || !videoHeight)
+        return;
+      if (canvas.width !== videoWidth) canvas.width = videoWidth;
+      if (canvas.height !== videoHeight) canvas.height = videoHeight;
+      context.drawImage(video, 0, 0);
+    };
+    const onFrame = () => {
+      paintFrame();
+      frameRequest = video.requestVideoFrameCallback(onFrame);
+    };
+    let frameRequest = video.requestVideoFrameCallback(onFrame);
+    // A custom video in static mode needs its first decoded frame even without playback.
+    video.addEventListener('loadeddata', paintFrame);
+    video.addEventListener('playing', paintFrame);
+    return () => {
+      video.cancelVideoFrameCallback(frameRequest);
+      video.removeEventListener('loadeddata', paintFrame);
+      video.removeEventListener('playing', paintFrame);
+    };
+  }, [failed]);
+
+  useEffect(() => {
+    const video = ref.current;
     if (!video || failed) return;
     // Effect replay (StrictMode/HMR) may follow a cleanup on the same element.
     video.src = src;
     let generation = 0;
+    let recoveryTimer: ReturnType<typeof setTimeout> | undefined;
+    let waitingTimer: ReturnType<typeof setTimeout> | undefined;
+    let recoveryAttempts = 0;
+    let interrupted = false;
+    const hidden = () =>
+      document.hidden || document.documentElement.hasAttribute(HIDDEN_ANIMATION_ATTR);
+    const cancelWaiting = () => {
+      clearTimeout(waitingTimer);
+      waitingTimer = undefined;
+    };
+    const cancelRecovery = () => {
+      clearTimeout(recoveryTimer);
+      recoveryTimer = undefined;
+    };
+    const recover = () => {
+      if (recoveryTimer !== undefined || hidden() || !playingRef.current || recoveryAttempts >= 2)
+        return;
+      // Only interrupted playback owns a timer. No polling/decoder work while
+      // hidden, and a broken source cannot cause an unbounded reload loop.
+      recoveryTimer = setTimeout(() => {
+        recoveryTimer = undefined;
+        if (hidden() || !playingRef.current) return;
+        recoveryAttempts++;
+        log.warn('Reloading interrupted wallpaper playback', {
+          attempt: recoveryAttempts,
+          readyState: video.readyState,
+          networkState: video.networkState,
+          mediaError: video.error?.code ?? null,
+        });
+        video.src = src;
+        video.load();
+        sync();
+        recover();
+      }, 5_000);
+    };
+    const onInterrupted = (event: Event) => {
+      // A stalled download can still have a valid paused/current frame. Keep it
+      // unless the decoder is actually waiting or has discarded its data.
+      if (event.type === 'stalled' && video.readyState >= 2) return;
+      if (!playingRef.current && video.readyState >= 2) return;
+      interrupted = true;
+      // Native loop seeks can wait for just one frame. Keep the last canvas and
+      // its composer CSS marker until waiting persists; repeated events must not
+      // extend the grace period. Discarded data still falls back immediately.
+      if (event.type === 'waiting' && playingRef.current && !hidden()) {
+        if (waitingTimer === undefined) {
+          waitingTimer = setTimeout(() => {
+            waitingTimer = undefined;
+            setReady(false);
+          }, 500);
+        }
+      } else {
+        cancelWaiting();
+        setReady(false);
+      }
+      recover();
+    };
+    const onPlaying = () => {
+      interrupted = false;
+      cancelWaiting();
+      cancelRecovery();
+    };
     const sync = () => {
       const current = ++generation;
       // The shared gate also covers Electron minimize/hide with throttling disabled.
@@ -122,10 +224,18 @@ function PlayingWallpaper({
         document.hidden ||
         document.documentElement.hasAttribute(HIDDEN_ANIMATION_ATTR)
       ) {
+        cancelWaiting();
+        cancelRecovery();
+        // Static/reduced-motion custom video keeps its decoded frame. A prior
+        // playback wait no longer applies, including on later hide/show syncs.
+        if (!playingRef.current && video.readyState >= 2) interrupted = false;
+        if (interrupted) setReady(false);
         video.pause();
       } else {
+        if (interrupted) recover();
         void video.play().catch(() => {
           if (generation === current) {
+            log.warn('Wallpaper playback rejected', { mediaError: video.error?.code ?? null });
             setFailed(true);
             onFailureRef.current?.();
           }
@@ -133,6 +243,9 @@ function PlayingWallpaper({
       }
     };
     syncPlaybackRef.current = sync;
+    for (const event of ['waiting', 'emptied', 'stalled'])
+      video.addEventListener(event, onInterrupted);
+    video.addEventListener('playing', onPlaying);
     const observer = new MutationObserver(sync);
     observer.observe(document.documentElement, {
       attributes: true,
@@ -142,6 +255,11 @@ function PlayingWallpaper({
     sync();
     return () => {
       generation++;
+      cancelWaiting();
+      cancelRecovery();
+      for (const event of ['waiting', 'emptied', 'stalled'])
+        video.removeEventListener(event, onInterrupted);
+      video.removeEventListener('playing', onPlaying);
       syncPlaybackRef.current = () => {};
       observer.disconnect();
       document.removeEventListener('visibilitychange', sync);
@@ -163,8 +281,12 @@ function PlayingWallpaper({
           onExited?.();
       }}
     >
+      {/* A visible wallpaper video can keep the macOS display awake through Chromium.
+          Keep the decoder out of layout and present its frames on the wallpaper layer. */}
+      {renderOnCanvas && <canvas ref={canvasRef} />}
       <video
         ref={ref}
+        hidden={renderOnCanvas}
         src={src}
         muted
         loop
@@ -180,6 +302,7 @@ function PlayingWallpaper({
           onReady?.();
         }}
         onError={() => {
+          log.warn('Wallpaper media failed', { mediaError: ref.current?.error?.code ?? null });
           setFailed(true);
           onFailureRef.current?.();
         }}

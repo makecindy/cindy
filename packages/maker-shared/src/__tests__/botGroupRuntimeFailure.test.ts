@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readImportedBotGroupRuntimeFailureCode } from '../botGroupChat.js';
+import { buildBotGroupCapabilityNotice, readBotGroupCapabilityNotice, readImportedBotGroupRuntimeFailureCode } from '../botGroupChat.js';
 
 const card = { type: 'card', namespace: 'cindy.local-history', schemaRevision: 1,
   fallback: 'group activity', data: { kind: 'notice', authorKind: 'system', runtimeFailureCode: 'AUTH_REQUIRED' } };
@@ -34,5 +34,22 @@ describe('imported group runtime notices', () => {
     for (const text of ['cindy-runtime-error:AUTH_REQUIRED private diagnostic', 'cindy-runtime-error:private diagnostic']) {
       expect(readImportedBotGroupRuntimeFailureCode({ ...imported, content: [oldCard, { type: 'text', text }] })).toBeUndefined();
     }
+  });
+});
+
+// Unit: host capability notices share the timeline but must not let human cards
+// impersonate a host result or transport unknown/raw diagnostics.
+describe('non-terminal group capability notices', () => {
+  const content = [buildBotGroupCapabilityNotice('ATTACHMENTS_UNAVAILABLE', 'public fallback')];
+  it('round-trips only a public category from one companion-authored card', () => {
+    expect(readBotGroupCapabilityNotice({ author: { kind: 'bot' }, content })).toBe('ATTACHMENTS_UNAVAILABLE');
+  });
+  it.each([
+    { author: { kind: 'human' }, content }, { author: { kind: 'bot' }, content, deleted: true },
+    { author: { kind: 'bot' }, content: [...content, { type: 'text', text: 'unrelated' }] },
+    { author: { kind: 'bot' }, content: [{ ...content[0], schemaRevision: 2 }] },
+    { author: { kind: 'bot' }, content: [{ ...content[0], data: { code: 'private diagnostic' } }] },
+  ])('leaves forged, deleted, mixed or unknown messages as ordinary content: %j', message => {
+    expect(readBotGroupCapabilityNotice(message)).toBeUndefined();
   });
 });

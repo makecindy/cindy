@@ -1,0 +1,119 @@
+import { expect, it, vi } from 'vitest';
+import { NodeHostServicesClient } from '../nodeHostServicesClient.js';
+import { NodeRequestScopes } from '../nodeRequestScope.js';
+
+// Standard unit: private-channel binding and cancellation had no coverage.
+// A stale async continuation must never upload files after its RPC ends.
+it('binds only within the exact live RPC and rejects pending work on completion', async () => {
+  const scopes = new NodeRequestScopes();
+  const sent: any[] = [];
+  const client = new NodeHostServicesClient(scopes, (value) => sent.push(value));
+  expect(client.bind()).toBeUndefined();
+  let bound!: NonNullable<ReturnType<typeof client.bind>>;
+  scopes.feed(JSON.stringify({ id: '1', cindy: { cancelWithCall: true } }), () => {
+    bound = client.bind()!;
+  });
+  const saved = bound.authenticatedFetch({ url: 'https://example.test', method: 'POST', uploadDir: { token: 'ticket' } }, 'Bearer synthetic');
+  expect(sent[0]).toMatchObject({
+    type: 'authenticated-fetch',
+    rpcId: '1',
+    authorization: 'Bearer synthetic',
+  });
+  client.reply({ reqId: sent[0].reqId, ok: true, result: { saved: true, identity: 'app-test' } });
+  expect(await saved).toEqual({ saved: true, identity: 'app-test' });
+  const pending = bound.authenticatedFetch({ url: 'https://example.test' }, 'Bearer synthetic');
+  const rejected = expect(pending).rejects.toThrow('NODE_HOST_OPERATION_FAILED');
+  scopes.finish('1');
+  client.finish('1');
+  expect(bound.signal.aborted).toBe(true);
+  await rejected;
+  expect(() => bound.authenticatedFetch({ url: 'https://example.test' }, 'Bearer synthetic')).toThrow();
+  expect(sent).toHaveLength(2);
+});
+it('releases bounded pending requests on timeout', async () => {
+  vi.useFakeTimers();
+  try {
+    const scopes = new NodeRequestScopes();
+    const sent: any[] = [];
+    const client = new NodeHostServicesClient(scopes, (value) => sent.push(value));
+    let bound!: NonNullable<ReturnType<typeof client.bind>>;
+    scopes.feed(JSON.stringify({ id: '2', cindy: { cancelWithCall: true } }), () => {
+      bound = client.bind()!;
+    });
+    const pending = Array.from({ length: 8 }, () =>
+      bound.authenticatedFetch({ url: 'https://example.test' }, 'Bearer synthetic').catch((e) => e.message),
+    );
+    await expect(bound.authenticatedFetch({ url: 'https://example.test' }, 'Bearer synthetic')).rejects.toThrow('NODE_HOST_BUSY');
+    await vi.advanceTimersByTimeAsync(120000);
+    expect(await Promise.all(pending)).toEqual(Array(8).fill('NODE_HOST_OPERATION_FAILED'));
+    const retry = bound.authenticatedFetch({ url: 'https://example.test' }, 'Bearer synthetic');
+    client.reply({ reqId: sent.at(-1).reqId, ok: true, result: { saved: true } });
+    await expect(retry).resolves.toEqual({ saved: true });
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+// Host tools are autonomous capabilities: no task or active Agent RPC is attributed to them.
+it('sends Host tool requests without an RPC identity and preserves the raw result', async () => {
+  const sent: any[] = [];
+  const client = new NodeHostServicesClient(new NodeRequestScopes(), value => sent.push(value));
+  const call = client.hostCall('cindy_helper', 'list_sessions');
+  expect(sent[0]).toEqual({ type: 'host-tool-request', reqId: 'host1', server: 'cindy_helper', tool: 'list_sessions', args: {} });
+  client.finish('unrelated-rpc');
+  const result = { content: [{ type: 'text', text: '{"ok":true}' }] };
+  client.reply({ reqId: 'host1', ok: true, result });
+  await expect(call).resolves.toBe(result);
+});
+
+// Tier 1: network frames use the private install-bound channel without granting
+// a worker a task identity or delivering the Host-injected request headers.
+it('sends autonomous network requests through the private Host channel', async () => {
+  const sent: any[] = [];
+  const client = new NodeHostServicesClient(new NodeRequestScopes(), value => sent.push(value));
+  const call = client.network({ op: 'open', url: 'wss://stream.example.com/events' });
+  expect(sent[0]).toEqual({ type: 'network-request', reqId: 'host1', request: { op: 'open', url: 'wss://stream.example.com/events' } });
+  client.reply({ reqId: 'host1', ok: true, result: { ok: true, connectionId: 'opaque' } });
+  await expect(call).resolves.toEqual({ ok: true, connectionId: 'opaque' });
+});
+
+// Unit, #9825 / networkSlot's media timeout contract: the new private bridge
+// capped every request at 60s even though Host media requests allow 120–300s.
+// Existing immediate network replies missed a valid receipt arriving at 90s.
+it('allows the Host media deadline to finish while retaining a bounded bridge timeout', async () => {
+  vi.useFakeTimers();
+  try {
+    const sent: any[] = [];
+    const client = new NodeHostServicesClient(new NodeRequestScopes(), value => sent.push(value));
+    let settled = false;
+    const pending = client.network({ op: 'fetch', url: 'https://example.test/video', as: 'media' });
+    void pending.then(() => { settled = true; }, () => { settled = true; });
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(settled).toBe(false);
+    const result = { ok: true, media: { url: 'cindy-media:fixture' } };
+    client.reply({ reqId: sent[0].reqId, ok: true, result });
+    await expect(pending).resolves.toEqual(result);
+    const missing = client.network({ op: 'fetch', url: 'https://example.test/video', as: 'media' }).catch(error => error.message);
+    await vi.advanceTimersByTimeAsync(360_000);
+    expect(await missing).toBe('NODE_HOST_OPERATION_FAILED');
+  } finally { vi.useRealTimers(); }
+});
+
+// Unit, #9825 / 4546519914: malformed private frames were silently dropped by
+// the broker. Reject over-budget frames before IPC or pending-slot allocation.
+it('rejects an oversized network frame immediately without sending or retaining a request', async () => {
+  vi.useFakeTimers();
+  try {
+    const sent: any[] = [];
+    const client = new NodeHostServicesClient(new NodeRequestScopes(), value => sent.push(value));
+    const rejected = client.network({ op: 'fetch', url: 'https://example.test', body: 'x'.repeat(3 * 1024 * 1024) }).catch(error => error.message);
+    expect(sent).toHaveLength(0);
+    await expect(rejected).resolves.toBe('NETWORK_INVALID_REQUEST');
+    for (let i = 0; i < 8; i++) {
+      const pending = client.network({ op: 'close', connectionId: 'closed' });
+      client.reply({ reqId: sent.at(-1).reqId, ok: true, result: { ok: true } });
+      await expect(pending).resolves.toEqual({ ok: true });
+    }
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+});

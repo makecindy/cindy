@@ -6,7 +6,7 @@
  *   indent = depth * 16 px
  *
  * 视觉对齐 cc-agent 侧栏的 ProjectNode + SessionItem：
- *   - h 7 (28 px) rounded-md
+ *   - h 7 (28 px) rounded-lg
  *   - 选中 text-sm font-medium，其余 normal
  *   - hover bg sidebar-item-hover / selected bg sidebar-item-active
  *
@@ -142,6 +142,7 @@ export interface FileTreeViewProps {
   selectedPath: string | null;
   /** Click on a file row → caller updates URL search param. */
   onSelectFile: (relPath: string) => void;
+  onSelectFolder?: (relPath: string) => void;
   /** 图片文件行的小眼睛操作；仅传入该能力的宿主显示。 */
   onPreviewImage?: (entry: DirEntry) => void;
   /** Right-click 文件夹 → 新建文件。parentRel 是被点中文件夹的 relPath。 */
@@ -262,6 +263,7 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
     active = true,
     selectedPath,
     onSelectFile,
+    onSelectFolder,
     onPreviewImage,
     onNewFile,
     onNewFolder,
@@ -298,7 +300,9 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
     entry.type === 'file' && Boolean(onOpenInBrowser) && isBrowserOpenablePath(entry.relPath);
   const hasContextActions = (entry: DirEntry): boolean => {
     if (entry.type === 'directory') {
-      return Boolean(onNewFile || onNewFolder || onRename || onRevealInFolder);
+      return Boolean(
+        onNewFile || onNewFolder || onCopyFilePath || onRename || onRevealInFolder,
+      );
     }
     return Boolean(
       onOpenInFileBrowser ||
@@ -506,12 +510,25 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
           },
         });
       }
+      // 文件夹也能复制路径：与文件的「复制文件路径」同走 onCopyFilePath，
+      // 宿主 handler 只拼 workdir + relPath，对目录同样成立。
+      if (onCopyFilePath) {
+        actions.push({
+          key: 'copy-folder-path',
+          icon: Clipboard,
+          label: t('ccAgent.workdirBrowse.treeMenu.copyFolderPath'),
+          onSelect: () => {
+            close();
+            onCopyFilePath(entry);
+          },
+        });
+      }
     } else {
       if (onOpenInFileBrowser) {
         actions.push({
           key: 'open-in-file-browser',
           icon: FolderTree,
-          label: t('ccAgent.workdirBrowse.treeMenu.openInFileBrowser'),
+          label: t(isHtmlPath(entry.relPath) ? 'chat.markdownRenderer.viewSourceFile' : 'ccAgent.workdirBrowse.treeMenu.openInFileBrowser'),
           onSelect: () => {
             close();
             onOpenInFileBrowser(entry);
@@ -681,11 +698,12 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
                 <FileTreeRow
                   entry={entry}
                   depth={depth}
-                  selected={entry.type === 'file' && entry.relPath === selectedPath}
+                  selected={entry.relPath === selectedPath}
                   expanded={tree.expanded.has(entry.relPath)}
                   loading={tree.loadingPaths.has(entry.relPath)}
                   onToggleFolder={tree.toggleFolder}
                   onSelectFile={onSelectFile}
+                  onSelectFolder={onSelectFolder}
                   onPreviewImage={onPreviewImage}
                   onContextMenu={handleRowContextMenu}
                 />
@@ -762,6 +780,7 @@ interface FileTreeRowProps {
   loading?: boolean;
   onToggleFolder: (relPath: string) => void;
   onSelectFile: (relPath: string) => void;
+  onSelectFolder?: (relPath: string) => void;
   onPreviewImage?: (entry: DirEntry) => void;
   /** 稳定回调（entry 由行内回传）。行组件已 memo，父组件传内联箭头会让 memo
    *  全部失效 —— node_modules 展开时每次 store 更新都会重渲染全部行。 */
@@ -775,6 +794,7 @@ const FileTreeRow = memo(function FileTreeRow({
   expanded,
   loading = false,
   onToggleFolder,
+  onSelectFolder,
   onSelectFile,
   onPreviewImage,
   onContextMenu,
@@ -788,6 +808,10 @@ const FileTreeRow = memo(function FileTreeRow({
   const Chev = expanded ? ChevronDown : ChevronRight;
   const Icon = isFolder ? pickFolderIcon(expanded) : pickFileIcon(entry.name);
 
+  const disclosure = showLoadingChevron
+    ? <Spinner size={12} strokeWidth={2} className="text-[var(--cmd-palette-item-meta)]" />
+    : <Chev size={12} strokeWidth={2} className="shrink-0 text-[var(--cmd-palette-item-meta)]" />;
+
   // Indent: 16 px per depth + 8 px base padding.
   const paddingLeft = depth * 16 + 8;
   const rowStyle = {
@@ -797,7 +821,7 @@ const FileTreeRow = memo(function FileTreeRow({
   };
 
   const handleClick = () => {
-    if (isFolder) onToggleFolder(entry.relPath);
+    if (isFolder) (onSelectFolder ?? onToggleFolder)(entry.relPath);
     else onSelectFile(entry.relPath);
   };
 
@@ -830,32 +854,34 @@ const FileTreeRow = memo(function FileTreeRow({
       className={cn(
         // min-w-max:行宽由内容决定(缩进 + 完整名字),深层级/长名字撑出横向滚动区,
         // 而不是把名字 truncate 到 0 宽;内容比容器窄时 w-full 仍撑满整行。
-        'group/file-row flex h-7 w-full min-w-max shrink-0 items-center rounded-md pr-2',
+        'group/file-row flex h-7 w-full min-w-max shrink-0 items-center rounded-lg pr-2',
         'cursor-pointer text-13 transition-colors',
         selected
           ? 'bg-sidebar-item-active font-medium text-sidebar-item-active-foreground'
           : 'text-foreground hover:bg-sidebar-item-hover',
       )}
     >
+      {isFolder && onSelectFolder && (
+        <button type="button" aria-label={entry.name} aria-expanded={expanded}
+          style={{ marginLeft: paddingLeft }} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full hover:bg-sidebar-item-hover focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]"
+          onClick={(event) => {
+            event.stopPropagation();
+            onToggleFolder(entry.relPath);
+          }}>
+          {disclosure}
+        </button>
+      )}
       <button
         type="button"
         onClick={(event) => {
           event.stopPropagation();
           handleClick();
         }}
-        style={{ paddingLeft }}
+        style={{ paddingLeft: isFolder && onSelectFolder ? 0 : paddingLeft }}
         className="flex h-full min-w-0 flex-1 items-center gap-1.5 bg-transparent p-0 text-left text-inherit focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]"
       >
         {isFolder ? (
-          showLoadingChevron ? (
-            <Spinner size={12} strokeWidth={2} className="text-[var(--cmd-palette-item-meta)]" />
-          ) : (
-            <Chev
-              size={12}
-              strokeWidth={2}
-              className="shrink-0 text-[var(--cmd-palette-item-meta)]"
-            />
-          )
+          !onSelectFolder && disclosure
         ) : (
           // Phantom 12 px slot so file icons line up with folder icons at the
           // same depth. Same trick as VSCode.
@@ -989,7 +1015,7 @@ function InlineTreeRow({
       style={{ paddingLeft: depth * 16 + 8 }}
       className={cn(
         // 同 FileTreeRow:深层重命名输入框不能被缩进挤没,行宽跟随输入框自身宽度。
-        'flex h-7 w-full min-w-max shrink-0 items-center gap-1.5 rounded-md pr-2',
+        'flex h-7 w-full min-w-max shrink-0 items-center gap-1.5 rounded-lg pr-2',
         'bg-sidebar-item-active text-sidebar-item-active-foreground',
       )}
     >
@@ -1009,7 +1035,7 @@ function InlineTreeRow({
         placeholder={placeholder}
         className={cn(
           'min-w-0 flex-1 bg-transparent text-13 leading-none outline-none',
-          'border border-[var(--cmd-palette-item-meta)] rounded-sm px-1 py-0.5',
+          'border border-[var(--cmd-palette-item-meta)] rounded-full px-1 py-0.5',
           'text-sidebar-item-active-foreground placeholder:text-[var(--text-placeholder)]',
         )}
       />

@@ -1,18 +1,45 @@
-import { collapseWorktreeDirForGrouping } from './worktreePaths.js';
+export * from './projectCreation.js';
+import {
+  parseProjectDirectories,
+  type ProjectDirectory,
+} from "./projectDirectories.js";
+export * from "./projectDirectories.js";
+import {
+  collapseWorktreeDirForGrouping,
+  sessionTaskProjectDirectory,
+} from "./worktreePaths.js";
 import {
   normalizeProjectOrderPath,
   parseSyncedProjectOrderOwnerStamp,
   type SyncedProjectOrderOwnerStamp,
 } from './projectOrderSync.js';
 
+export const PROJECT_SETTINGS_SET_CHANNEL = 'sidebar-settings:set-project-info';
+import { validProjectIcon } from './projectIcons.js';
+export * from './projectIcons.js';
 export const PROJECT_ALIASES_GET_CHANNEL = 'sidebar-settings:get-project-aliases';
 export const PROJECT_ALIASES_CHANGED_CHANNEL = 'local-db:project-aliases:changed';
 
 export interface HostProjectAliasesSnapshot {
   /** Host identities only: a controller's device: overrides stay on that controller. */
   aliases: readonly { projectKey: string; alias: string }[];
+  icons?: Readonly<Record<string, string>>;
+  directories?: Readonly<Record<string, readonly ProjectDirectory[]>>;
+  settingsSupported?: boolean;
+  settingsVersion?: number;
+  creationRoot?: string;
+  createdProjectKey?: string;
   platform: string;
   ownerStamp?: SyncedProjectOrderOwnerStamp;
+}
+
+/** Only names and their comparison platform belong in a session-list cold cache. */
+export type CachedProjectAliases = Pick<HostProjectAliasesSnapshot, 'aliases' | 'platform'>;
+
+export function cachedProjectAliases(raw: unknown): CachedProjectAliases | undefined {
+  if (!raw || typeof raw !== 'object' || !('aliases' in raw) || !('platform' in raw)) return undefined;
+  const snapshot = parseHostProjectAliasesSnapshot({ aliases: raw.aliases, platform: raw.platform });
+  return snapshot?.aliases.length ? { aliases: snapshot.aliases, platform: snapshot.platform } : undefined;
 }
 
 export type ProjectAliasesByDevice = ReadonlyMap<string, HostProjectAliasesSnapshot>;
@@ -21,9 +48,33 @@ export type ProjectAliasDisplayIndex = ProjectAliasesByDevice | ReadonlyMap<stri
 
 export interface ProjectAliasSessionLike {
   workingDir: string | null;
+  projectDir?: string | null;
+  companion?: { taskProjectDir?: string | null } | null;
   remoteHostId?: string | null;
   /** Physical source, never canonicalDeviceId (which is only a display identity). */
   deviceLinkDeviceId?: string | null;
+}
+
+/** Limit each device shard to names referenced by its session rows. */
+export function projectAliasesForSessionList(
+  snapshot: HostProjectAliasesSnapshot | undefined,
+  sessions: readonly ProjectAliasSessionLike[],
+): CachedProjectAliases | undefined {
+  if (!snapshot?.aliases.length) return undefined;
+  const aliases = new Map<string, string>();
+  const index = aliasIndex(snapshot);
+  for (const session of sessions) {
+    const dir = sessionTaskProjectDirectory(session);
+    if (!dir) continue;
+    const projectKey = session.remoteHostId ? `remote:${encodeURIComponent(session.remoteHostId)}:${dir}` : `local:${dir}`;
+    const key = projectAliasComparisonKey(projectKey, snapshot.platform);
+    const name = key && index.get(key);
+    if (key && name) aliases.set(key, name);
+  }
+  return aliases.size ? {
+    platform: snapshot.platform,
+    aliases: Array.from(aliases, ([projectKey, alias]) => ({ projectKey, alias })),
+  } : undefined;
 }
 
 function normalizeAliasPath(raw: string): string | null {
@@ -79,7 +130,49 @@ export function parseHostProjectAliasesSnapshot(raw: unknown): HostProjectAliase
     seen.add(comparison);
     aliases.push({ projectKey, alias: trimmed });
   }
-  return { aliases, platform: value.platform, ...(ownerStamp ? { ownerStamp } : {}) };
+  const icons: Record<string, string> = {};
+  if (value.icons && typeof value.icons === 'object' && !Array.isArray(value.icons)) {
+    for (const [key, icon] of Object.entries(value.icons)) {
+      if (projectAliasComparisonKey(key, value.platform) && validProjectIcon(icon)) icons[key] = icon;
+    }
+  }
+  const directories: Record<string, ProjectDirectory[]> = {};
+  if (
+    value.directories &&
+    typeof value.directories === "object" &&
+    !Array.isArray(value.directories)
+  ) {
+    for (const [key, raw] of Object.entries(value.directories)) {
+      const parsed = parseProjectDirectories(raw);
+      if (projectAliasComparisonKey(key, value.platform) && parsed)
+        directories[key] = parsed;
+    }
+  }
+  return {
+    aliases,
+    ...(typeof value.creationRoot === 'string' ? { creationRoot: value.creationRoot } : {}),
+    ...(typeof value.createdProjectKey === 'string' && projectAliasComparisonKey(value.createdProjectKey, value.platform) ? { createdProjectKey: value.createdProjectKey } : {}),
+    ...(value.directories !== undefined ? { directories } : {}),
+    platform: value.platform,
+    ...(ownerStamp ? { ownerStamp } : {}),
+    ...(value.settingsSupported === true
+      ? {
+          settingsSupported: true,
+          settingsVersion:
+            typeof value.settingsVersion === "number"
+              ? value.settingsVersion
+              : 1,
+          icons,
+        }
+      : {}),
+  };
+}
+
+export function resolveProjectIcon(snapshot: HostProjectAliasesSnapshot | undefined, projectKey: string): string | null {
+  if (!snapshot?.icons) return null;
+  const key = projectAliasComparisonKey(projectKey, snapshot.platform);
+  if (!key) return null;
+  return Object.entries(snapshot.icons).find(([candidate]) => projectAliasComparisonKey(candidate, snapshot.platform) === key)?.[1] ?? null;
 }
 
 const aliasIndexes = new WeakMap<HostProjectAliasesSnapshot, ReadonlyMap<string, string>>();
@@ -107,12 +200,13 @@ export function resolveProjectAliasForSessions(
   let alias: string | null = null;
   for (const session of sessions) {
     const deviceId = session.deviceLinkDeviceId || defaultDeviceId;
-    if (!deviceId || !session.workingDir) return null;
+    const projectDir = sessionTaskProjectDirectory(session);
+    if (!deviceId || !projectDir) return null;
     const snapshot = snapshots.get(deviceId);
     if (!snapshot || typeof snapshot === 'string') {
       // The legacy projection carries only local aliases, never SSH identity.
       if (session.remoteHostId) return null;
-      const key = `device:${encodeURIComponent(deviceId)}:${normalizeProjectOrderPath(session.workingDir)}`;
+      const key = `device:${encodeURIComponent(deviceId)}:${normalizeProjectOrderPath(projectDir)}`;
       const value = snapshots.get(key);
       const current = JSON.stringify([deviceId, key]);
       if (identity !== undefined && identity !== current) return null;
@@ -122,8 +216,8 @@ export function resolveProjectAliasForSessions(
     }
     const key = projectAliasComparisonKey(
       session.remoteHostId
-        ? `remote:${encodeURIComponent(session.remoteHostId)}:${session.workingDir}`
-        : `local:${session.workingDir}`,
+        ? `remote:${encodeURIComponent(session.remoteHostId)}:${projectDir}`
+        : `local:${projectDir}`,
       snapshot.platform,
     );
     if (!key) return null;
@@ -152,12 +246,28 @@ function missingChannel(error: unknown): boolean {
   return resolved === 'CHANNEL_NOT_ALLOWED' || resolved === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED';
 }
 
-function snapshotsEqual(a: HostProjectAliasesSnapshot | undefined, b: HostProjectAliasesSnapshot): boolean {
-  return !!a && a.platform === b.platform
-    && a.ownerStamp?.dataOwnerId === b.ownerStamp?.dataOwnerId
-    && a.ownerStamp?.ownerGeneration === b.ownerStamp?.ownerGeneration
-    && a.aliases.length === b.aliases.length
-    && a.aliases.every((row, index) => row.projectKey === b.aliases[index].projectKey && row.alias === b.aliases[index].alias);
+function snapshotsEqual(
+  a: HostProjectAliasesSnapshot | undefined,
+  b: HostProjectAliasesSnapshot,
+): boolean {
+  return (
+    !!a &&
+    a.platform === b.platform &&
+    a.ownerStamp?.dataOwnerId === b.ownerStamp?.dataOwnerId &&
+    a.ownerStamp?.ownerGeneration === b.ownerStamp?.ownerGeneration &&
+    a.settingsSupported === b.settingsSupported &&
+    a.settingsVersion === b.settingsVersion &&
+    a.creationRoot === b.creationRoot &&
+    JSON.stringify(a.directories ?? {}) ===
+      JSON.stringify(b.directories ?? {}) &&
+    JSON.stringify(a.icons ?? {}) === JSON.stringify(b.icons ?? {}) &&
+    a.aliases.length === b.aliases.length &&
+    a.aliases.every(
+      (row, index) =>
+        row.projectKey === b.aliases[index].projectKey &&
+        row.alias === b.aliases[index].alias,
+    )
+  );
 }
 
 /** In-memory read model. Hosts own persistence; adapters own authorization and connection recovery. */
@@ -235,6 +345,9 @@ export function createProjectAliasMirror() {
   }
 
   return {
+    hydrate(deviceId: string, cached: CachedProjectAliases): void {
+      if (!snapshots.has(deviceId)) apply(deviceId, cached);
+    },
     getSnapshot: (): ProjectAliasesByDevice => snapshots,
     subscribe(listener: () => void): () => void {
       listeners.add(listener);
@@ -258,4 +371,17 @@ export function createProjectAliasMirror() {
       notify();
     },
   };
+}
+
+export function resolveProjectDirectories(
+  snapshot: HostProjectAliasesSnapshot | undefined,
+  projectKey: string,
+): readonly ProjectDirectory[] | undefined {
+  if (!snapshot?.directories) return undefined;
+  const key = projectAliasComparisonKey(projectKey, snapshot.platform);
+  if (!key) return undefined;
+  return Object.entries(snapshot.directories).find(
+    ([candidate]) =>
+      projectAliasComparisonKey(candidate, snapshot.platform) === key,
+  )?.[1];
 }

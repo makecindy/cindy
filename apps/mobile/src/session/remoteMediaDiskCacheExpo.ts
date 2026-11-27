@@ -7,6 +7,7 @@
  * JS 层引用,不影响 fingerprint(以 mobile:release:check 实测为准)。
  */
 import { Directory, File, Paths } from "expo-file-system";
+import { isCanonicalBase64, isLooseBase64Chars, parseBase64DataUrl } from "@cindy/maker-shared";
 import { releasePeerMedia } from '@/device-link/peerFileRegistry';
 
 import {
@@ -29,6 +30,7 @@ async function downloadCancellable(
   target: File,
   signal: AbortSignal,
   maxBytes?: number,
+  onProgress?: (loaded: number, total: number) => void,
 ): Promise<File> {
   const FileSystem = await import("expo-file-system/legacy");
   let rejectStopped: (reason: Error) => void = () => undefined;
@@ -36,7 +38,11 @@ async function downloadCancellable(
     rejectStopped = reject;
   });
   const task = FileSystem.createDownloadResumable(url, target.uri, {}, (progress) => {
-    if (maxBytes !== undefined && progress.totalBytesWritten > maxBytes) {
+    if (!signal.aborted) onProgress?.(progress.totalBytesWritten, progress.totalBytesExpectedToWrite);
+    if (
+      maxBytes !== undefined &&
+      (progress.totalBytesWritten > maxBytes || progress.totalBytesExpectedToWrite > maxBytes)
+    ) {
       rejectStopped(new Error('PREVIEW_TOO_LARGE'));
       void task.cancelAsync().catch(() => undefined);
     }
@@ -64,11 +70,12 @@ async function downloadCancellable(
   }
 }
 
-async function copyRemoteFile(
+export async function copyRemoteFile(
   url: string,
   target: File,
   signal?: AbortSignal,
   maxBytes?: number,
+  onProgress?: (loaded: number, total: number) => void,
 ): Promise<File> {
   if (url.startsWith("file://")) {
     const source = new File(url);
@@ -77,15 +84,35 @@ async function copyRemoteFile(
     return target;
   }
   if (url.startsWith("data:")) {
-    const match = /^data:[\w.+-]+\/[\w.+-]+;base64,([A-Za-z0-9+/=]*)$/.exec(
-      url,
-    );
-    if (!match || match[1].length > 1024 * 1024)
+    // Video data URLs are already playable. Decode their bounded payload in
+    // native IO instead of building another full binary string and JS array.
+    const videoData = parseBase64DataUrl(url, /^data:video\/[\w.+-]+;base64$/i, {
+      allowEmpty: true,
+      allowLineTerminators: true,
+    });
+    if (videoData) {
+      const base64 = videoData.payload;
+      const bytes = Math.floor(base64.length * 3 / 4) - (base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0);
+      if (bytes > Math.min(maxBytes ?? Infinity, 64 * 1024 * 1024)
+        || !isCanonicalBase64(base64)) throw new Error("INVALID_INLINE_FILE");
+      if (signal?.aborted) throw new Error("DOWNLOAD_CANCELLED");
+      const FileSystem = await import("expo-file-system/legacy");
+      await FileSystem.writeAsStringAsync(target.uri, base64, { encoding: FileSystem.EncodingType.Base64 });
+      return target;
+    }
+    const parsed = parseBase64DataUrl(url, /^data:[\w.+-]+\/[\w.+-]+;base64$/, {
+      allowEmpty: true,
+    });
+    if (
+      !parsed
+      || parsed.payload.length > 1024 * 1024
+      || !isLooseBase64Chars(parsed.payload, { allowEmpty: true })
+    )
       throw new Error("INVALID_INLINE_FILE");
-    target.write(Uint8Array.from(atob(match[1]), (char) => char.charCodeAt(0)));
+    target.writeSync(Uint8Array.from(atob(parsed.payload), (char) => char.charCodeAt(0)));
     return target;
   }
-  if (signal || maxBytes !== undefined) return downloadCancellable(url, target, signal ?? new AbortController().signal, maxBytes);
+  if (signal || maxBytes !== undefined || onProgress) return downloadCancellable(url, target, signal ?? new AbortController().signal, maxBytes, onProgress);
   return File.downloadFileAsync(url, target, { idempotent: true });
 }
 
@@ -114,6 +141,7 @@ export async function downloadRemoteMediaShareTemp(
   mimeType: string,
   fileName?: string,
   signal?: AbortSignal,
+  onProgress?: (loaded: number, total: number) => void,
 ): Promise<string | null> {
   try {
     if (signal?.aborted) return null;
@@ -132,7 +160,7 @@ export async function downloadRemoteMediaShareTemp(
     } else {
       target = new File(dir, `share-${unique}.${extOfMime(mimeType)}`);
     }
-    const file = await copyRemoteFile(url, target, signal);
+    const file = await copyRemoteFile(url, target, signal, undefined, onProgress);
     // 直连 file:// 复制与 data: 写入无法中途停止:结束后已取消就删掉这份副本。
     if (signal?.aborted) {
       if (file.exists) file.delete();
@@ -162,6 +190,7 @@ export async function downloadRemoteMediaAsDataUri(
   url: string,
   mimeType: string,
   maxBytes: number,
+  signal?: AbortSignal,
 ): Promise<string | null> {
   return withDownloadedRemoteMediaFile(
     url,
@@ -171,6 +200,7 @@ export async function downloadRemoteMediaAsDataUri(
       const base64 = await file.base64();
       return base64 ? `data:${mimeType};base64,${base64}` : null;
     },
+    signal,
   );
 }
 
@@ -191,7 +221,7 @@ export async function withDownloadedRemoteMediaFile<T>(
     dir.create({ intermediates: true, idempotent: true });
     const unique = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     target = new File(dir, `res-${unique}.${extOfMime(mimeType)}`);
-    const file = await copyRemoteFile(url, target, signal, signal ? maxBytes : undefined);
+    const file = await copyRemoteFile(url, target, signal, maxBytes);
     const size = file.size ?? 0;
     if (signal?.aborted || size < 0 || (size === 0 && !options?.allowEmpty)) return null;
     if (size > maxBytes) {
@@ -231,7 +261,7 @@ export function createExpoRemoteMediaDiskCacheIO(namespace?: string): RemoteMedi
       // 原子写:先写临时文件,再 overwrite move 顶替正式 index——覆盖写中途
       // App 被杀不会留下截断 JSON(损坏索引会让全部落盘文件变成不可回收孤儿)。
       const tmp = new File(dir, INDEX_TMP_NAME);
-      tmp.write(text);
+      tmp.writeSync(text);
       tmp.moveSync(new File(dir, INDEX_FILE_NAME), { overwrite: true });
     },
     fileExists(name) {

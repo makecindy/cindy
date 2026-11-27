@@ -1,0 +1,226 @@
+import { useLayoutEffect, useState } from 'react';
+import { sampleVideo } from './sample-video';
+import { mountPage, subscription } from '../../ui-page/harness';
+import { TextLightbox } from '../../../src/renderer/components/chat/TextLightbox';
+import { FindInPageBar } from '../../../src/renderer/components/find-in-page/FindInPageBar';
+import { FileBodyView } from '../../../src/renderer/features/cc-agent/workdir-browse/FileBodyView';
+import { WorkdirBrowseSidebar } from '../../../src/renderer/features/cc-agent/workdir-browse/WorkdirBrowseSidebar';
+import type { AskUserDraft } from '../../../src/renderer/lib/makerChatStore';
+import { AskUserQuestionPrompt } from '../../../src/renderer/components/new-chat/AskUserQuestionPrompt';
+import { ChatInput } from '../../../src/renderer/components/new-chat/ChatInput';
+import { useAttachments } from '../../../src/renderer/hooks/useAttachments';
+import { getDefaultVoiceInputSettings } from '../../../src/shared/voiceInputData';
+
+// The isolated HTTP fixture lacks secure-context randomUUID. These IDs only
+// identify composer drafts in memory; production keeps its native crypto API.
+if (!crypto.randomUUID) {
+  let sequence = 0;
+  crypto.randomUUID = () => `00000000-0000-4000-8000-${String(++sequence).padStart(12, '0')}`;
+}
+
+const markdown = [
+  '# Markdown 查找验证',
+  '正文中的苹果。',
+  ...Array.from({ length: 25 }, (_, index) => `第 ${index + 1} 段：用于验证查找能够滚动到文档末尾。`),
+  '| 内容 | 数量 |\n| --- | --- |\n| 苹果 | 2 |',
+].join('\n\n');
+
+function VoiceComposer() {
+  const attachments = useAttachments('fixture-voice');
+  return <ChatInput sessionId="fixture-voice" initialWorkingDir="/fixture"
+    runtimeAgentKind="codex" vendorKey="codex" deviceLinkDeviceId={null}
+    initialModel="fixture-chat" initialProviderId="openai" attachmentState={attachments}
+    hideRuntimeControls showFolderPicker={false} disableAutofocus onSend={async () => true} />;
+}
+
+const voiceQuestion = { requestId: 'fixture-ask', questions: [{ question: '请阅读文档后补充意见。' }] };
+function VoiceQuestion() {
+  const [draft, setDraft] = useState<AskUserDraft | null>(null);
+  return <AskUserQuestionPrompt sessionId="fixture-ask" workingDir="/fixture"
+    pending={voiceQuestion}
+    onAnswer={() => { throw new Error('The fixture must not submit the answer'); }}
+    draft={draft} onDraftChange={setDraft} viewerState="expanded" onViewerStateChange={() => {}} />;
+}
+
+const json = '{\n  "fruit": "苹果",\n  "count": 1\n}';
+const solidity = 'pragma solidity ^0.8.20;\n\n/** @notice Example contract */\ncontract Example {\n    string public message = "hello";\n\n    function check() public {\n        require(true, "safe");\n        // Keep the original source readable.\n        revert("example");\n    }\n}';
+
+function svgMockDataUri(title: string, subtitle: string, bg: string, fg: string, accent: string): string {
+  const svg = [
+    '<svg xmlns="http://www.w3.org/2000/svg" width="720" height="360" viewBox="0 0 720 360">',
+    `<rect width="720" height="360" rx="16" fill="${bg}"/>`,
+    `<rect x="28" y="28" width="664" height="304" rx="12" fill="none" stroke="${accent}" stroke-width="2"/>`,
+    `<rect x="52" y="64" width="220" height="24" rx="6" fill="${accent}"/>`,
+    `<text x="52" y="148" fill="${fg}" font-family="system-ui, sans-serif" font-size="30" font-weight="600">${title}</text>`,
+    `<text x="52" y="196" fill="${fg}" opacity="0.72" font-family="system-ui, sans-serif" font-size="18">${subtitle}</text>`,
+    '</svg>',
+  ].join('');
+  return `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`;
+}
+
+const sampleDarkSlide = svgMockDataUri('Voice Input — Dark', 'Carousel Slide 1 (Dark Mode)', 'rgb(24,24,27)', 'rgb(244,244,245)', 'rgb(63,63,70)');
+const sampleLightSlide = svgMockDataUri('Voice Input — Light', 'Carousel Slide 2 (Light Mode)', 'rgb(250,250,250)', 'rgb(24,24,27)', 'rgb(212,212,216)');
+const sampleBannerImg = svgMockDataUri('Architecture Overview', 'Inline Markdown Image Preview', 'rgb(30,41,59)', 'rgb(248,250,252)', 'rgb(71,85,105)');
+
+const imagesMarkdown = [
+  '# Voice Input Screenshots',
+  '',
+  'Dark / Light screenshots embedded in a carousel and standard image block:',
+  '',
+  '````carousel',
+  `![Dark Mode](${sampleDarkSlide})`,
+  '<!-- slide -->',
+  `![Light Mode](${sampleLightSlide})`,
+  '````',
+  '',
+  '## Standalone Image',
+  '',
+  `![Architecture Overview](${sampleBannerImg})`,
+].join('\n');
+
+function Fixture({
+  editor,
+  projectSearch,
+  voice,
+  video,
+  askVoice,
+  jsonPreview,
+  solidityPreview,
+  solidityFileBody,
+  imagesPreview,
+  imagesFileBody,
+}: {
+  editor: boolean;
+  projectSearch: boolean;
+  voice: boolean;
+  video: boolean;
+  askVoice: boolean;
+  jsonPreview: boolean;
+  solidityPreview: boolean;
+  solidityFileBody: boolean;
+  imagesPreview: boolean;
+  imagesFileBody: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  useLayoutEffect(() => {
+    if (!video) return;
+    // Preserve the managed-media identity used by the real video menu, while
+    // supplying harmless bytes without the full app's protocol handler.
+    const observer = new MutationObserver(() => {
+      const player = document.querySelector('video');
+      if (player?.getAttribute('src')?.startsWith('cindy-media:')) player.src = sampleVideo;
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, [video]);
+  return (
+    <>
+      <main className="flex h-screen flex-col gap-4 p-6">
+        <p>背景聊天中的苹果不应计入文档搜索。</p>
+        <button data-testid="open-preview" data-ui-page-control onClick={() => setOpen(true)}>{solidityPreview ? '打开 Solidity 示例' : '打开 Markdown 示例'}</button>
+        {solidityFileBody && <div className="min-h-0 flex-1" data-solidity-file-body>
+          <FileBodyView workdir="/fixture" relPath="Contract.sol" allowEdit={false}
+            content={{ kind: 'text', relPath: 'Contract.sol', content: solidity, size: solidity.length, mtimeMs: 0, truncated: false }} />
+        </div>}
+        {imagesFileBody && <div className="min-h-0 flex-1" data-images-file-body>
+          <FileBodyView workdir="/fixture" relPath="voice-input-screenshots.md" allowEdit={false}
+            content={{ kind: 'text', relPath: 'voice-input-screenshots.md', content: imagesMarkdown, size: imagesMarkdown.length, mtimeMs: 0, truncated: false }} />
+        </div>}
+        {voice && <VoiceComposer />}
+        {askVoice && <VoiceQuestion />}
+        {projectSearch && <div className="h-64 w-64"><WorkdirBrowseSidebar
+          sessionId="fixture-session"
+          workdir="/fixture"
+          displayName="示例项目"
+          projectKey={null}
+          switchProjects={[]}
+        /></div>}
+        {editor && <FileBodyView
+          workdir="/fixture"
+          relPath="background.md"
+          allowEdit={false}
+          content={{ kind: 'text', relPath: 'background.md', content: '# 背景文档\n\n苹果', size: 24, mtimeMs: 0, truncated: false }}
+        />}
+      </main>
+      <FindInPageBar />
+      {open && <TextLightbox filePath={solidityPreview ? '/fixture/Contract.sol' : jsonPreview ? '/fixture/preview.json' : imagesPreview ? '/fixture/voice-input-screenshots.md' : '/fixture/preview.md'} onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
+mountPage({
+  route: '/',
+  host: ctx => ({
+    fileBrowser: {
+      // The baseline routes .sol through FileLightbox. Supply its real read
+      // contract too, so the before image shows plain text, not a missing-host error.
+      readFile: async ({ relPath }: { relPath: string }) => {
+        if (ctx.case !== 'solidity-preview' || relPath !== 'Contract.sol') throw new Error('Unexpected fixture file read');
+        return { ok: true, data: { relPath, content: solidity, size: solidity.length, mtimeMs: 0, truncated: false } };
+      },
+      listDir: async () => [],
+      startWatch: async () => undefined,
+      stopWatch: async () => undefined,
+      onEvent: subscription('file-tree'),
+    },
+    search: {
+      onEvent: subscription('project-search'),
+      start: async () => ({ ok: true, searchId: 'fixture-search', replay: [{ type: 'end', searchId: 'fixture-search', truncated: false }] }),
+      cancel: async () => undefined,
+    },
+    readTextFilePreview: async () => {
+      if (ctx.case === 'solidity-preview') return { success: true, data: solidity, size: solidity.length };
+      if (ctx.case === 'json-preview') return { success: true, data: json, size: json.length };
+      if (ctx.case === 'markdown-images-preview') return { success: true, data: imagesMarkdown, size: imagesMarkdown.length };
+      if (ctx.case === 'loading-editor') {
+        await new Promise<void>(resolve => {
+          window.addEventListener('fixture-preview-ready', () => resolve(), { once: true });
+        });
+      }
+      return {
+        success: true,
+        data: ctx.case === 'nested-mermaid'
+          ? markdown.replace('正文中的苹果。', '正文中的苹果。\n\n```mermaid\nflowchart LR\n  A[开始] --> B[结束]\n```')
+          : ctx.case === 'fullscreen-video'
+            ? markdown.replace('正文中的苹果。', '正文中的苹果。\n\n![示例视频](cindy-media://blobs/ui-video.webm)')
+            : ctx.case === 'loading-editor'
+              ? markdown.replace('正文中的苹果。', '').replace('| 内容 |', '正文中的苹果。\n\n| 内容 |')
+              : markdown,
+        size: markdown.length,
+      };
+    },
+    appShortcuts: {
+      getState: () => ({ platform: ctx.platform, overrides: {}, globalFailures: [] }),
+      onChanged: subscription('shortcuts'),
+    },
+    voiceInput: {
+      getDataSnapshot: () => ({ settings: { ...getDefaultVoiceInputSettings(ctx.platform), playInteractionSound: false } }),
+      onDataChanged: subscription('voice'),
+      getMicrophonePermissionCached: () => ({ ok: true, status: 'granted' }),
+      onGlobalShortcutTrigger: subscription('voice-shortcut'),
+      getSystemPermissionsCached: () => ({ microphone: { ok: true }, accessibility: { ok: true } }),
+      getReadinessCached: () => ({ ok: true }),
+      getHistoryForRefinement: () => [],
+      onEvent: subscription('voice-dictation'),
+      start: async () => ({ ok: true, runId: 'fixture-ask-voice' }),
+      stop: async () => ({ ok: true }),
+      cancel: async () => {
+        const body = document.body;
+        body.dataset.askVoiceCancels = String(Number(body.dataset.askVoiceCancels ?? 0) + 1);
+        return { ok: true };
+      },
+      drainAudioQueue: async () => ({ ok: true }),
+    },
+    maker: {
+      onDesktopCommandTriggered: subscription('desktop-command'),
+      onSessionCredentialSwitchApplied: subscription('credential-applied'),
+      onSessionCredentialSwitchFailed: subscription('credential-failed'),
+      onPiPackagesChanged: subscription('pi-packages'),
+      listAgentSkills: async () => ({ success: true, skills: [] }),
+      getSessionAgentSwitchIntent: async () => null,
+    },
+    deviceLink: { onRemotePush: subscription('remote-push') },
+    ghosts: { listSync: () => ({ ghosts: [] }) },
+  }),
+  render: ctx => <Fixture editor={['background-editor', 'loading-editor', 'source-background-editor'].includes(ctx.case)} projectSearch={ctx.case === 'background-project-search'} voice={ctx.case === 'background-voice'} video={ctx.case === 'fullscreen-video'} askVoice={ctx.case === 'background-ask-voice'} jsonPreview={ctx.case === 'json-preview'} solidityPreview={ctx.case === 'solidity-preview'} solidityFileBody={ctx.case === 'solidity-file-body'} imagesPreview={ctx.case === 'markdown-images-preview'} imagesFileBody={ctx.case === 'markdown-images-file-body'} />,
+});

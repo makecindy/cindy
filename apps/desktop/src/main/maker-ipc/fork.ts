@@ -21,6 +21,7 @@ import { requireString, throwIpcError } from '../utils/ipcValidate.js';
 import { emitSessionCreated } from '../localDb/ipc/sessionCreatedBroadcast.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
+import { assertTaskActionCurrent } from './taskActionAuthorization.js';
 
 import { MAKER_INVOKE } from './channels.js';
 
@@ -32,6 +33,14 @@ const log = createLogger('maker-ipc/fork');
  */
 function broadcastSessionCreated(sessionId: string): void {
   emitSessionCreated(sessionId);
+}
+
+/** UI and Host tools share the completed fork, including task-list notification. */
+export async function forkTaskAtMessage(sessionId: string, messageClientId: string) {
+  const session = await forkSessionAtMessage(sessionId, messageClientId);
+  await assertTaskActionCurrent();
+  broadcastSessionCreated(session.id);
+  return session;
 }
 
 function assertSideChatCaller(event: Electron.IpcMainInvokeEvent, channel: string): void {
@@ -52,11 +61,18 @@ export function registerMakerForkIpc(): void {
     assertSideChatCaller(event, MAKER_INVOKE.SIDE_CHAT_LIST);
     return listSideChats(requireString(sourceSessionId, 'sourceSessionId'));
   });
-  ipcMain.handle(MAKER_INVOKE.SIDE_CHAT, async (event, sourceSessionId: unknown) => {
+  ipcMain.handle(MAKER_INVOKE.SIDE_CHAT, async (event, input: unknown) => {
     assertSideChatCaller(event, MAKER_INVOKE.SIDE_CHAT);
-    const sid = requireString(sourceSessionId, 'sourceSessionId');
+    // Older hosts require a string. An object fails closed if a cached capability
+    // outlives a host downgrade, instead of creating a branch with a different ID.
+    const request = typeof input === 'object' && input !== null ? input as Record<string, unknown> : null;
+    const sid = requireString(request ? request.parentSessionId : input, 'sourceSessionId');
+    const childId = request ? requireString(request.childId, 'childId') : undefined;
+    if (childId !== undefined && !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(childId)) {
+      throwIpcError('INVALID_PARAMS', 'Invalid side chat ID');
+    }
     try {
-      const session = await createSideChat(sid);
+      const session = await createSideChat(sid, childId);
       broadcastSessionCreated(session.id);
       return session;
     } catch (error) {
@@ -85,9 +101,7 @@ export function registerMakerForkIpc(): void {
       const sid = requireString(sourceSessionId, 'sourceSessionId');
       const mid = requireString(messageClientId, 'messageClientId');
       try {
-        const session = await forkSessionAtMessage(sid, mid);
-        broadcastSessionCreated(session.id);
-        return session;
+        return await forkTaskAtMessage(sid, mid);
       } catch (err) {
         const code = (err as { code?: string }).code;
         const msg = err instanceof Error ? err.message : String(err);

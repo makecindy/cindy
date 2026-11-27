@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createThreadProjection, isShareableThreadReply, threadPreviewAttachments, threadPreviewText, type ThreadMessage } from '../chatServerThreads.js';
-import { buildBotGroupThreadShareCard } from '../../../shared/botGroupChat.js';
+import { buildBotGroupQuoteCard, buildBotGroupThreadShareCard } from '../../../shared/botGroupChat.js';
 
 const room = '10000000-0000-4000-8000-000000000001';
 const rootA = '20000000-0000-4000-8000-00000000000a';
@@ -307,6 +307,12 @@ describe('reply summaries', () => {
     expect(threadPreviewText(files)).toBe('第一行 第二行');
     expect(threadPreviewAttachments(files, block => block.caption!)).toEqual([{ name: 'shot.PNG', category: 'image' }, { name: 'notes.pdf', category: 'file' }]);
     expect(threadPreviewText(reply('long', rootA, { content: [{ type: 'text', text: 'x'.repeat(400) }] }))).toHaveLength(280);
+    // The 280-unit cut must not split an emoji (a UTF-16 surrogate pair).
+    const emoji = reply('emoji', rootA, { content: [{ type: 'text', text: `${'x'.repeat(279)}😀 tail` }] });
+    expect(threadPreviewText(emoji)).toBe('x'.repeat(279));
+    // Sharing feeds this preview into the card fallback, which must stay well-formed too.
+    expect(buildBotGroupThreadShareCard({ messageId: 'm', threadRootId: rootA, authorName: 'A', text: threadPreviewText(emoji) }).fallback)
+      .not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
     expect(isShareableThreadReply(files)).toBe(true);
     expect(isShareableThreadReply(message({ id: 'root' }))).toBe(false);
     expect(isShareableThreadReply(reply('d', rootA, { deleted: true }))).toBe(false);
@@ -476,5 +482,24 @@ describe('one wake-up per room with several failed reads', () => {
     projection[stop]();
     await vi.advanceTimersByTimeAsync(60 * 60_000);
     expect(io.filled).not.toHaveBeenCalled();
+  });
+
+  it('strips quote cards and Markdown link URLs from threadPreviewText', () => {
+    const quoted = message({
+      id: 'quoted-root',
+      content: [
+        buildBotGroupQuoteCard({
+          messageId: rootA,
+          authorName: 'Alice',
+          authorKind: 'user',
+          excerpt: 'Original long quote',
+          attachmentCount: 0,
+          attachmentName: null,
+          sequence: 1,
+        }),
+        { type: 'text', text: '已提交 [PR #13080](https://github.com/makecindy/cindy/pull/13080) 供验收' },
+      ],
+    });
+    expect(threadPreviewText(quoted)).toBe('已提交 PR #13080 供验收');
   });
 });

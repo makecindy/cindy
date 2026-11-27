@@ -1,6 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { runInNewContext } from 'node:vm';
+import ts from 'typescript';
+import { describe, expect, it, vi } from 'vitest';
+import { WORKLOUDER_CREATOR_LIT_TASK_KEY_COUNT } from '../../shared/workLouderCodex';
+import { createSidebarTaskPublisher } from '../features/cc-agent/lib/sidebarTaskPublication';
 
 const chatInputSource = readFileSync(
   resolve(__dirname, '..', 'components', 'new-chat', 'ChatInput.tsx'),
@@ -77,9 +81,33 @@ describe('ChatInput session switch focus contract', () => {
     expect(firstMountHydrationBlock).toContain("editor.commands.focus('end');");
   });
 
+  // Guard tier, #11517 security regression: background companion approvals and composer
+  // commands must not be consumed. Evaluate the production ownership predicate,
+  // shared by approval/text/voice/scroll subscribers, rather than a copied formula.
+  // Existing focus guards covered only header ownership. Smallest failure input
+  // is an unfocused visible companion with navigationMode='route-owner'.
+  it.each([
+    [false, false, 'route-owner', true, false],
+    [false, true, 'route-owner', true, false],
+    [true, false, 'route-owner', true, true],
+    [true, true, 'route-owner', true, true],
+    [true, false, 'sidebar-embedded', true, false],
+    [true, false, 'split-pane', true, false],
+    [true, false, 'route-owner', false, false],
+  ])('hardware ownership with focus=%s route=%s mode=%s visible=%s is %s',
+    (paneFocused, ownsRoute, navigationMode, viewVisible, expected) => {
+      const predicate = extractBetween(sessionViewSource,
+        'const ownsHardwareTaskActions =', 'const showComposerControlledBanner');
+      expect(runInNewContext(
+        '(function () { ' + predicate + '; return ownsHardwareTaskActions; })()',
+        { paneFocused, ownsRoute, navigationMode, viewVisible, sessionId: 'companion-chat' },
+      )).toBe(expected);
+    },
+  );
+
   it('enables storageKey refocus for routed session and new-draft views', () => {
     expect(sessionViewSource).toContain(
-      'const ownsRoute = routeOwner ?? (!sessionIdProp && !isCompactRail && !isOrcaMode);',
+      'const ownsRoute = paneFocused && (routeOwner ?? (!sessionIdProp && !isCompactRail && !isOrcaMode));',
     );
     expect(sessionViewSource).toContain('focusOnStorageKeyChange={ownsRoute || focusComposerOnOpen}');
     expect(sessionViewSource).toContain(
@@ -105,15 +133,12 @@ describe('ChatInput session switch focus contract', () => {
     );
     expect(newMakerDraftRouteSource).toContain('readNewMakerFolderPickerRequest(location.state)');
     expect(newMakerDraftRouteSource).toContain('setFolderPickerOpen(true)');
-    expect(sidebarUpperSource).toContain(
-      "const catalogSessions = sessionsWithRemote.filter((session) => session.status === 'active');",
-    );
     expect(sidebarUpperSource).toContain('catalogEligible: false');
     expect(sidebarUpperSource).toContain(
       'const remainingCatalogSlots = Math.max(0, 100 - visibleProjection.length);',
     );
-    expect(sidebarUpperSource).toContain('WORKLOUDER_CODEX_AGENT_SLOT_COUNT');
-    expect(sidebarUpperSource).toContain('.slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT)');
+    expect(sidebarUpperSource).toContain('WORKLOUDER_CREATOR_LIT_TASK_KEY_COUNT');
+    expect(sidebarUpperSource).toContain('.slice(0, WORKLOUDER_CREATOR_LIT_TASK_KEY_COUNT)');
     expect(sidebarUpperSource).not.toContain(
       '[...visibleSessionsWithRemote, ...remoteProjectSessions]',
     );
@@ -204,7 +229,7 @@ describe('ChatInput session switch focus contract', () => {
       'finishAgentSendDispatch();',
     );
     const worktreeSendBlock = extractBetween(
-      newMakerDraftRouteSource,
+      newMakerDraftRouteSource.slice(newMakerDraftRouteSource.indexOf('if (!isRemoteProjectDraft && wt.enabled && wt.baseRepo)')),
       'const accepted = await makerChatStore.sendMessage(',
       'worktreeCreationStore.clear(newSession.id);',
     );
@@ -212,8 +237,13 @@ describe('ChatInput session switch focus contract', () => {
     expect(chatInputSource).toContain('findGhostByCommand(eligibleGhosts, ghostCommandToken.word, ghostCommandToken.namespace)');
     expect(chatInputSource).toContain('onAccepted: markRecentPluginUsage');
     expect(successfulSendBlock).toContain('markRecentPluginUsage();');
-    // 本机首条 / worktree 首条 / 远程普通首条直接发送 / 远程视图交接 四处受理点。
-    expect(newMakerDraftRouteSource.match(/opts\?\.onAccepted\?\.\(\);/g)).toHaveLength(4);
+    // 本机首条 / worktree 首条 / 远程普通首条直接发送 / 远程普通视图交接 /
+    // 本机插件引擎（普通 / 独立工作区）/ 远程插件引擎直接发送 / 远程视图交接 八处受理点。
+    expect(newMakerDraftRouteSource.match(/opts\?\.onAccepted\?\.\(\);/g)).toHaveLength(8);
+    expect(newMakerDraftRouteSource).toContain('if (accepted) opts?.onAccepted?.();\n              else restoreEngineFirstMessageDraft();');
+    expect(newMakerDraftRouteSource).toContain(
+      'if (accepted) {\n                remoteProjectsStore.clearCreationPreview(remoteSessionId);\n                opts?.onAccepted?.();\n                return;\n              }',
+    );
     expect(worktreeSendBlock).toContain('if (accepted) {');
     expect(worktreeSendBlock).toContain('opts?.onAccepted?.();');
     expect(worktreeSendBlock).toContain(
@@ -414,6 +444,74 @@ describe('ChatInput session switch focus contract', () => {
     expect(pluginPageSource).not.toContain('sortInstalledForDisplay(installedItems');
   });
 });
+
+it.each([
+  [100, 36, 0, '', 64, 36],
+  [100, 10, 0, '', 90, 10],
+  [10, 100, 0, '', 10, 90],
+  [120, 0, 0, '', 100, 0],
+  [0, 120, 0, '', 0, 100],
+  [100, 36, 13, '', 51, 36],
+  [100, 36, 0, 'local-70', 64, 36],
+  [100, 37, 0, 'duplicate-id', 64, 36],
+  [100, 36, 0, 'duplicate-first', 65, 35],
+] as const)(
+  'publishes keyboard candidates for %i local / %i remote / %i archived / %s',
+  (local, remote, archived, special, expectedLocal, expectedRemote) => {
+    const makeRows = (count: number, prefix: string, status = 'active') =>
+      Array.from({ length: count }, (_, index) => ({
+        id: `${prefix}-${index}`,
+        title: `${prefix}-${index}`,
+        status,
+        deviceLinkDeviceId: prefix === 'remote' ? 'other-device' : undefined,
+      }));
+    const remoteRows = makeRows(remote, 'remote');
+    if (special === 'duplicate-id') remoteRows[remoteRows.length - 1].id = 'local-0';
+    if (special === 'duplicate-first') remoteRows[0].id = 'local-0';
+    const visible = makeRows(archived, 'archived', 'archived');
+    const publishTasks = vi.fn().mockResolvedValue(undefined);
+    // 编译并执行真实发布回调，隔离侧栏组件依赖，检查实际传给 publishTasks 的载荷。
+    const callback = extractBetween(
+      sidebarUpperSource,
+      'const publishSidebarTasks = useCallback(',
+      '  useEffect(() => {',
+    );
+    runInNewContext(
+      ts.transpileModule(`${callback}\npublishSidebarTasks();`, {
+        compilerOptions: { target: ts.ScriptTarget.ES2022 },
+      }).outputText,
+      {
+        sessionsWithRemote: [...makeRows(local, 'local'), ...remoteRows, ...visible],
+        visibleSessionsWithRemote: visible,
+        getVisibleSidebarSessionIds: () =>
+          special === 'duplicate-first'
+            ? makeRows(13, 'local').map((row) => row.id)
+            : special.startsWith('local-')
+              ? [special]
+              : visible.map((row) => row.id),
+        isSecondaryWindow: () => false,
+        useCallback: (publish: () => void) => publish,
+        // 发布器用真实的实现，这样载荷的截断与去重都在沙箱里同样生效。
+        taskPublisherRef: { current: null },
+        createSidebarTaskPublisher,
+        WORKLOUDER_CREATOR_LIT_TASK_KEY_COUNT,
+        window: { electronAPI: { workLouderCodex: { publishTasks } } },
+      },
+    );
+    const rows = publishTasks.mock.calls[0][0] as Array<{
+      id: string;
+      title: string;
+      sidebarOrder?: number;
+    }>;
+    expect(rows).toHaveLength(100);
+    expect(new Set(rows.map((row) => row.id)).size).toBe(rows.length);
+    expect(rows.filter((row) => row.title.startsWith('local-'))).toHaveLength(expectedLocal);
+    expect(rows.filter((row) => row.title.startsWith('remote-'))).toHaveLength(expectedRemote);
+    if (special.startsWith('local-')) {
+      expect(rows.find((row) => row.id === special)?.sidebarOrder).toBe(0);
+    }
+  },
+);
 
 function extractBetween(sourceBlock: string, startNeedle: string, endNeedle: string): string {
   const start = sourceBlock.indexOf(startNeedle);

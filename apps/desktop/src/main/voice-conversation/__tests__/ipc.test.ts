@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
   boundary: false,
   catalog: undefined as Catalog | undefined,
   oauthToken: vi.fn<() => string | null>(),
+  oauthRequestToken: vi.fn<() => Promise<string | null>>(),
   readKey: vi.fn<() => string | null>(),
 }));
 vi.mock('electron', () => ({
@@ -40,13 +41,14 @@ vi.mock('../../secrets/providerSecretStore.js', () => ({
   readCustomProviderKey: h.readKey,
   getProviderSecretStore: () => ({ get: () => 'test-key' }),
 }));
-vi.mock('../../maker-host/generic-oauth.js', () => ({
+vi.mock('../../maker-host/generic-oauth.desktop.js', () => ({
   readCachedGenericOAuthAccessToken: h.oauthToken,
+  readGenericOAuthAccessToken: h.oauthRequestToken,
 }));
 vi.mock('../../model-access/effectiveEndpoint.js', () => ({
   effectiveXdGatewayBaseUrl: () => 'https://gateway.test/v1',
 }));
-vi.mock('../../maker-host/outbound-fetch.js', () => ({ outboundFetch: vi.fn() }));
+vi.mock('../../maker-host/outbound-fetch.desktop.js', () => ({ outboundFetch: vi.fn() }));
 vi.mock('../../appCapabilities.js', () => ({
   getAppCapabilities: () => ({ canUseCindyGateway: true }),
 }));
@@ -69,11 +71,12 @@ vi.mock('../dialogue.js', () => ({ CompanionCallDialogue: class {
   async promote() { return true; }
 } }));
 
+import { createGenericOAuthService } from '../../maker-host/generic-oauth.js';
 import { normalizeVoiceInputSettings } from '../../../shared/voiceInputData.js';
-import { registerVoiceConversationIpc } from '../index.js';
-import { outboundFetch } from '../../maker-host/outbound-fetch.js';
+import { getVoiceSettingsHostApi, registerVoiceConversationIpc } from '../index.js';
+import { outboundFetch } from '../../maker-host/outbound-fetch.desktop.js';
 import { clearModelVisibilityMirror, setModelVisibilityMirror } from '../../maker-host/model-visibility-mirror.js';
-const sender = (id = 1) => ({ sender: { id, once: vi.fn() } });
+const sender = (id = 1) => ({ sender: { id, once: vi.fn(), on: vi.fn() } });
 const call = (name: string, ...args: unknown[]) =>
   h.handlers.get(`voice-conversation:${name}`)!(sender(), ...args);
 beforeEach(() => {
@@ -84,6 +87,7 @@ beforeEach(() => {
   h.boundary = false;
   h.catalog = undefined;
   h.oauthToken.mockReset().mockReturnValue(null);
+  h.oauthRequestToken.mockReset().mockImplementation(async () => h.oauthToken());
   h.readKey.mockReset().mockReturnValue(null);
   setModelVisibilityMirror({});
   vi.mocked(outboundFetch).mockReset();
@@ -112,14 +116,46 @@ afterEach(async () => {
   await call('end', 'call');
   await call('stop-preview', 'preview');
 });
-const start = () =>
-  call('start', {
-    callId: 'call',
-    botId: 'bot',
-    sessionId: 'canonical',
-    modelId: 'voice-test',
-    voice: 'alloy',
-  });
+const startInput = () => ({
+  callId: 'call',
+  botId: 'bot',
+  sessionId: 'canonical',
+  modelId: 'voice-test',
+  voice: 'alloy',
+});
+const start = () => call('start', startInput());
+
+it('cancels only the matching window and realtime catalog request before fetching private voice details', async () => {
+  const modelId = 'qwen-audio-3.1-realtime-flash';
+  const provider = buildUserProvider({
+    id: 'byok', name: 'Bailian',
+    runtimes: { codex: { baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      wireProtocol: 'openai-chat', models: [{ id: modelId, name: modelId, mode: 'realtime' }] } },
+  }, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+  h.catalog = { ...BUNDLED_CATALOG, providers: [provider] };
+  h.readKey.mockReturnValue('test-key');
+  const route = { providerId: provider.id, modelId, agent: 'codex' };
+  const requests: { signal: AbortSignal; complete(): void }[] = [];
+  vi.mocked(outboundFetch).mockImplementation((_url, init) => new Promise(resolve => {
+    requests.push({ signal: init!.signal!, complete: () => resolve(Response.json({
+      output: { voice_list: [{ voice_id: 'needs-details' }] },
+    })) });
+  }));
+  const first = call('realtime-custom-voices', route, 'first');
+  expect(requests).toHaveLength(1);
+  const second = call('realtime-custom-voices', route, 'second');
+  expect(requests[0].signal.aborted).toBe(true);
+  requests[0].complete();
+  await first;
+  await call('cancel-realtime-custom-voices', 'first');
+  await h.handlers.get('voice-conversation:cancel-realtime-custom-voices')!(sender(2), 'second');
+  expect(requests[1].signal.aborted).toBe(false);
+  await call('cancel-realtime-custom-voices', 'second');
+  expect(requests[1].signal.aborted).toBe(true);
+  requests[1].complete();
+  await second;
+  expect(outboundFetch).toHaveBeenCalledTimes(2);
+});
 
 // PR #6900 unit: injected model tests missed production credential-store wiring.
 // Exercise real IPC -> catalog -> voice query/synthesis with a legacy display ID,
@@ -156,6 +192,7 @@ it('uses the saved OpenRouter OAuth connection without exposing its credential t
   for (const [, init] of vi.mocked(outboundFetch).mock.calls)
     expect(new Headers(init?.headers).get('authorization')).toBe('Bearer fake-saved-oauth-key');
   expect(h.readKey).not.toHaveBeenCalled();
+  expect(h.oauthRequestToken).toHaveBeenCalledWith('xai', oauth);
   h.oauthToken.mockReturnValue(null);
   expect(await call('models')).toEqual([]);
   await expect(call('voices', selection)).rejects.toThrow('Voice conversation is unavailable');
@@ -237,8 +274,13 @@ it('keeps untrusted upstream errors generic rather than forwarding their text or
 
 it('patches playback without replacing the saved route and validates boolean overrides', async () => {
   const choice = { modelId: 'voice-test', voice: 'alloy', speed: 1.15 };
-  await call('set-preference', 'bot-a', choice);
+  const host = getVoiceSettingsHostApi()!;
+  const initial = await host.selfPreference('bot-a');
+  expect(initial.sources).toEqual({ selection: 'device', sentencePlayback: 'device' });
+  await host.setPreference('bot-a', choice, undefined, initial.revision);
   await call('set-preference', 'bot-a', undefined, false);
+  await expect(host.setPreference('bot-a', null, null, initial.revision)).rejects.toThrow('VOICE_PREFERENCE_CHANGED');
+  expect((await host.selfPreference('bot-a')).sources).toEqual({ selection: 'teammate', sentencePlayback: 'teammate' });
   expect(await call('preference', 'bot-a')).toEqual({
     selection: choice,
     customized: true,
@@ -258,6 +300,27 @@ it('patches playback without replacing the saved route and validates boolean ove
   ).rejects.toThrow();
 });
 
+it('keeps realtime preferences behind the trusted owner and separate from TTS settings', async () => {
+  const provider = buildUserProvider({ id: 'native-api', name: 'OpenAI API', runtimes: { codex: {
+    baseUrl: 'https://api.openai.com/v1', models: [{ id: 'gpt-realtime-2', name: 'Realtime', mode: 'realtime' }],
+  } } }, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+  h.catalog = { ...BUNDLED_CATALOG, providers: [provider] };
+  h.readKey.mockReturnValue('fixture-native-key');
+  const selection = { mode: 'realtime', providerId: 'native-api', agent: 'codex', modelId: 'gpt-realtime-2', protocol: 'openai-realtime', voice: 'marin' };
+  expect(JSON.stringify(await call('realtime-models'))).not.toContain('fixture-native-key');
+  await call('set-realtime-preference', 'buddy', selection);
+  expect(await call('preference', 'buddy')).toMatchObject({ selection: null, realtimeSelection: selection });
+  await expect(call('set-realtime-preference', 'buddy', { ...selection, modelId: 'unknown' })).rejects.toThrow();
+  expect(await call('preference', 'buddy')).toMatchObject({ realtimeSelection: selection });
+  h.boundary = true;
+  await expect(call('set-realtime-preference', 'buddy', null)).rejects.toThrow();
+  h.boundary = false;
+  h.trusted.mockImplementationOnce(() => { throw new Error('untrusted'); });
+  await expect(call('realtime-models')).rejects.toThrow('untrusted');
+  await call('set-realtime-preference', 'buddy', null);
+  expect(await call('preference', 'buddy')).not.toHaveProperty('realtimeSelection');
+});
+
 it.each([NaN, Infinity, '1.2', 0.1, 4.1])('rejects invalid speed %s without replacing the saved preference', async (speed) => {
   const choice = { modelId: 'voice-test', voice: 'alloy', speed: 1.15 };
   await call('set-preference', 'bot', choice);
@@ -271,7 +334,7 @@ it('rejects an untrusted sender before returning models or opening a connection'
   });
   await expect(call('models')).rejects.toThrow('untrusted frame');
   await expect(start()).rejects.toThrow('untrusted frame');
-  for (const name of ['voices', 'preview', 'read-preview', 'stop-preview', 'start-playback']) {
+  for (const name of ['voices', 'realtime-custom-voices', 'cancel-realtime-custom-voices', 'preview', 'read-preview', 'stop-preview', 'start-playback']) {
     await expect(call(name, {})).rejects.toThrow('untrusted frame');
   }
 });
@@ -326,6 +389,27 @@ it('validates preview boundaries before synthesis and cleans up when its sender 
     h.handlers.get('voice-conversation:read-preview')!(event, 'preview'),
   ).rejects.toThrow();
   await expect(start()).resolves.toEqual({ callId: 'call' });
+});
+
+// The call now outlives every route, so only a real reload may release it. A lease
+// left behind would refuse all later calls. Unit, real IPC wiring; under 1s with the file.
+it('reports a held voice lease distinctly and releases it when the owner window reloads', async () => {
+  const event = sender();
+  const input = await h.handlers.get('voice-conversation:start')!(event, startInput());
+  expect(input).toEqual({ callId: 'call' });
+  await expect(h.handlers.get('voice-conversation:start')!(sender(2), startInput())).rejects.toThrow(
+    '[VOICE_CONVERSATION_BUSY]',
+  );
+  const reloaded = event.sender.on.mock.calls.find(([name]) => name === 'did-navigate')?.[1] as
+    | (() => void)
+    | undefined;
+  reloaded!();
+  await vi.waitFor(async () => {
+    await expect(h.handlers.get('voice-conversation:start')!(sender(2), startInput())).resolves.toEqual({
+      callId: 'call',
+    });
+  });
+  await h.handlers.get('voice-conversation:end')!(sender(2), 'call');
 });
 
 it('enforces sender ownership and PCM size/alignment on the non-awaitable capture channel', async () => {
@@ -428,4 +512,71 @@ it('bounds semantic exit IPC to trusted local call/final/generation references',
     throw new Error('untrusted frame');
   });
   await expect(call('classify-exit', 'call', '1', 0)).rejects.toThrow('untrusted frame');
+});
+
+// #7942 / review 4555210017. Unit: real IPC -> service -> speech/catalog transport
+// plus the production OAuth runner with an expired in-memory blob. Cache-only
+// wiring used to send the old Bearer; fake fetches observe every outbound header.
+it.each([
+  ...(['voices', 'preview', 'speak'] as const).flatMap(entry =>
+    (['refresh-success', 'refresh-failed', 'logout'] as const).map(outcome => ({ entry, outcome }))),
+  { entry: 'speak' as const, outcome: 'cancel' as const },
+  { entry: 'speak' as const, outcome: 'route-changed' as const },
+])('waits for OAuth before voice dispatch: $entry / $outcome', async ({ entry, outcome }) => {
+  const oauth = providerPresetOAuth('openrouter')!;
+  const modelId = 'elevenlabs/eleven-v3';
+  const provider = buildUserProvider({ id: 'voice-router', name: 'Router', auth: { method: 'oauth', oauth },
+    runtimes: { codex: { baseUrl: 'https://openrouter.ai/api/v1', models: [{ id: modelId, name: 'Speech', mode: 'audio_speech' }] } },
+  });
+  h.catalog = { ...BUNDLED_CATALOG, providers: [provider] };
+  let now = 1_000_000;
+  let blob: string | null = JSON.stringify({ access_token: 'fake-expired-voice', refresh_token: 'fake-refresh', expires_at: now - 1 });
+  let entered!: () => void;
+  const refreshing = new Promise<void>(resolve => { entered = resolve; });
+  let release!: (response: Response) => void;
+  const response = new Promise<Response>(resolve => { release = resolve; });
+  const refreshFetch = vi.fn<typeof fetch>(async () => { entered(); return response; });
+  const runner = createGenericOAuthService({ fetchImpl: refreshFetch });
+  runner.configureGenericOAuth({ now: () => now, storage: {
+    read: () => blob, readStrict: () => blob, write: (_id, value) => { blob = value; return true; },
+    remove: () => { blob = null; return true; },
+  } });
+  h.oauthToken.mockImplementation(() => runner.readCachedGenericOAuthAccessToken(provider.id, oauth));
+  h.oauthRequestToken.mockImplementation(() => runner.readGenericOAuthAccessToken(provider.id, oauth));
+  const selection = { providerId: provider.id, agent: 'codex', modelId, voice: 'sarah' };
+  vi.mocked(outboundFetch).mockImplementation(async () => entry === 'voices'
+    ? new Response(JSON.stringify({ data: [{ id: modelId, supported_voices: ['sarah'] }] }))
+    : new Response(new Uint8Array([1, 0]), { headers: { 'content-type': 'audio/pcm' } }));
+  expect(await call('models')).toHaveLength(1);
+  expect(refreshFetch).not.toHaveBeenCalled();
+  if (entry === 'speak') await call('start', { ...selection, callId: 'call', botId: 'bot', sessionId: 'canonical' });
+  const pending = Promise.resolve(entry === 'voices' ? call('voices', selection)
+    : entry === 'preview' ? call('preview', { ...selection, previewId: 'preview', botId: 'bot', sessionId: 'canonical', text: 'Hello' })
+    : call('speak', { callId: 'call', requestId: 'speech-1', text: 'Hello' }))
+    .then(value => ({ value, failed: false }), () => ({ failed: true }));
+  try {
+    expect(await Promise.race([refreshing.then(() => true), pending.then(() => false)])).toBe(true);
+    expect(outboundFetch).not.toHaveBeenCalled();
+    if (outcome === 'logout') runner.logoutGenericOAuth(provider.id);
+    if (outcome === 'cancel') await call('end', 'call');
+    if (outcome === 'route-changed') h.catalog = { ...h.catalog!, providers: [] };
+    release(outcome === 'refresh-failed' ? new Response('{}', { status: 503 })
+      : new Response(JSON.stringify({ access_token: 'fake-fresh-voice', expires_in: 3600 })));
+    expect((await pending).failed).toBe(outcome !== 'refresh-success');
+    expect(outboundFetch).toHaveBeenCalledTimes(outcome === 'refresh-success' ? 1 : 0);
+    if (outcome === 'refresh-success' && entry === 'speak') {
+      // A call can outlive a token; each subsequent utterance must prepare again.
+      now += 3_600_000;
+      refreshFetch.mockResolvedValueOnce(new Response(JSON.stringify({ access_token: 'fake-next-voice', expires_in: 3600 })));
+      await call('speak', { callId: 'call', requestId: 'speech-2', text: 'Again' });
+      expect(refreshFetch).toHaveBeenCalledTimes(2);
+      expect(new Headers(vi.mocked(outboundFetch).mock.calls.at(-1)![1]?.headers).get('authorization')).toBe('Bearer fake-next-voice');
+    }
+    for (const [, init] of vi.mocked(outboundFetch).mock.calls) {
+      expect(new Headers(init?.headers).get('authorization')).not.toBe('Bearer fake-expired-voice');
+    }
+  } finally {
+    release(new Response('{}', { status: 503 }));
+    await pending;
+  }
 });

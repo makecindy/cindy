@@ -23,7 +23,9 @@ import {
   type UsageWindow,
 } from '../../shared/accountUsageLimit.js';
 export { claudeAccountUsageLimit, type AccountUsageLimit } from '../../shared/accountUsageLimit.js';
+import type { ClaudeSubscriptionUsageSnapshot } from '../../shared/claudeSubscriptionUsage.js';
 import type { XaiSubscriptionUsageSnapshot } from '../../shared/xaiSubscriptionUsage.js';
+import type { ProviderGroupCodexUsageSnapshot } from '../provider-group/usage.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import {
   readClaudeSubscriptionUsageSnapshot,
@@ -33,6 +35,7 @@ import {
   type RateLimitSnapshot,
 } from '../usageBroadcaster.js';
 import { readSubscriptionAccountUsage } from './subscriptionAccountUsage.js';
+import { DEFAULT_ACCOUNT_USAGE_SCOPE } from '../../shared/subscriptionAccounts.js';
 
 function codexWindows(snapshot: RateLimitSnapshot | null | undefined): UsageWindow[] {
   if (!snapshot) return [];
@@ -44,7 +47,8 @@ function codexWindows(snapshot: RateLimitSnapshot | null | undefined): UsageWind
 /**
  * ChatGPT 订阅：只看当前会话实际消耗的那一份额度，别的模型桶用满不影响本会话。
  *  - Codex 原生会话：按模型匹配 app-server 桶（没有桶表时退回顶层兼容位）；
- *  - Claude Code bridge / Pi：走 ChatGPT web 额度（WHAM 槽）。
+ *  - 绑定了原生池账号的任务：所有引擎按该账号的原生模型桶；
+ *  - 其它 Claude Code bridge / Pi：走 ChatGPT web 额度（WHAM 槽）。
  */
 export function codexAccountUsageLimit(
   payload: CodexAccountUsagePayload | null,
@@ -53,11 +57,11 @@ export function codexAccountUsageLimit(
 ): AccountUsageLimit | null {
   if (!payload) return null;
   let snapshot: RateLimitSnapshot | null;
-  if (session.agentKind === 'codex') {
+  if (session.agentKind === 'codex' || payload.nativeAccountPool) {
     const buckets = payload.appServerBuckets;
     snapshot =
       buckets && Object.keys(buckets).length > 0
-        ? matchCodexBucketForModel(buckets, session.modelId, nowMs)
+        ? matchCodexBucketForModel(buckets, payload.nativeAccountPool ? session.modelId?.replace(/^chatgpt\//, '') : session.modelId, nowMs)
         : payload;
   } else {
     snapshot = payload.webSnapshot ?? null;
@@ -96,7 +100,32 @@ export function subscriptionFamilyOf(
     if (id === providerId) return family as NativeSubscriptionAuth;
   }
   const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
-  return provider?.auth.native ?? null;
+  if (provider?.auth.native) return provider.auth.native;
+  // Providers Cindy creates for subscription accounts (`anthropic-sub-*` / `openai-sub-*`)
+  // carry `subscriptionPool` instead of `auth.native`.
+  if (provider?.subscriptionPool === 'anthropic') return 'claude';
+  if (provider?.subscriptionPool === 'openai') return 'codex';
+  return null;
+}
+
+/** Convert a subscription account pool usage snapshot into an AccountUsageLimit. */
+export function subscriptionPoolAccountUsageLimit(
+  family: 'claude' | 'codex',
+  usage: {
+    claudeUsage?: ClaudeSubscriptionUsageSnapshot | null;
+    codexUsage?: ProviderGroupCodexUsageSnapshot | null;
+  } | null,
+  session: { agentKind: string; modelId?: string | null },
+  nowMs = Date.now(),
+): AccountUsageLimit | null {
+  if (!usage) return null;
+  if (family === 'claude') return claudeAccountUsageLimit(usage.claudeUsage ?? null, session.modelId, nowMs);
+  if (!usage.codexUsage) return null;
+  return codexAccountUsageLimit(
+    { ...usage.codexUsage, nativeAccountPool: true } as unknown as CodexAccountUsagePayload,
+    session,
+    nowMs,
+  );
 }
 
 /**
@@ -145,13 +174,17 @@ export async function readAccountUsageLimit(
 
 /** Query the actual execution computer; never substitute this computer's account. */
 export async function readRemoteAccountUsageLimit(
-  route: { deviceId: string; providerId: string; family: NativeSubscriptionAuth; agentKind: string; modelId?: string | null },
+  route: { deviceId: string; providerId: string; family: NativeSubscriptionAuth; agentKind: string; modelId?: string | null; sdkSessionId?: string | null },
   invoke: (deviceId: string, channel: string, args: unknown[]) => Promise<{ ok: boolean; result?: unknown }>,
 ): Promise<AccountUsageLimit | null> {
   const channel = route.family === 'claude' ? 'maker:usage:claude-subscription'
     : route.family === 'codex' ? 'maker:usage:account' : 'maker:usage:xai-subscription';
-  const reply = await invoke(route.deviceId, channel,
-    route.family === 'codex' ? ['codex', route.providerId] : [route.providerId, true]);
+  const scope = route.sdkSessionId ? { subscriptionSessionId: route.sdkSessionId } : DEFAULT_ACCOUNT_USAGE_SCOPE;
+  // Old hosts ignore the appended scope and keep their original single-account
+  // read. New hosts resolve the native session's binding, never the next pool member.
+  const args = route.family === 'codex' ? ['codex', route.providerId, scope]
+    : route.family === 'claude' ? [route.providerId, true, scope] : [route.providerId, true];
+  const reply = await invoke(route.deviceId, channel, args);
   if (!reply.ok || !reply.result || typeof reply.result !== 'object') return null;
   const data = reply.result as { providerId?: unknown };
   const defaultId = NATIVE_SUBSCRIPTION_DEFAULT_PROVIDER_IDS[route.family];

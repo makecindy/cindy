@@ -19,7 +19,7 @@
  *  不宣称保护外部编辑器或其它进程直接修改文件。
  */
 
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import matter from 'gray-matter';
@@ -29,6 +29,7 @@ import {
   DEFAULT_MEMORY_CONFIG,
   isMemoryType,
   MemoryError,
+  PROJECT_MEMORY_HARD_BYTES,
   type MemoryConfig,
   type MemoryFrontmatter,
   type MemoryRecord,
@@ -42,9 +43,70 @@ const INDEX_FILENAME = 'MEMORY.md';
 const META_FILENAME = 'meta.json';
 const SHARD_EXT = '.md';
 const SLUG_REGEX = /^[a-z0-9_-]+$/;
+const EXCLUDED_FREEFORM_FILES = new Set(['README.md', 'USER.md']);
+const LEGACY_EMPTY_INDEX_MARKER = '_(empty — no memories saved yet for this workdir)_';
+
+/** Safe single-level Markdown filename for native file-first project memories. */
+export function isSafeMemoryMarkdownFilename(filename: string, opts: { allowIndex?: boolean } = {}): boolean {
+  if (!filename || filename.length > 128) return false;
+  if (
+    filename.startsWith('.')
+    || filename.includes('..')
+    || filename.includes('/')
+    || filename.includes('\\')
+    || /[\x00-\x1f\x7f]/.test(filename)
+  ) {
+    return false;
+  }
+  if (!filename.endsWith(SHARD_EXT)) return false;
+  if (EXCLUDED_FREEFORM_FILES.has(filename)) return false;
+  if (filename === INDEX_FILENAME) return opts.allowIndex === true;
+  return filename.slice(0, -SHARD_EXT.length).trim().length > 0;
+}
 
 // Multiple store instances for the same directory must share the mutation queue.
 const mutationQueues = new Map<string, Promise<unknown>>();
+
+/*
+ * Windows refuses to replace a file that an antivirus scanner, the search indexer, a sync client
+ * or another rename briefly holds (EPERM / EACCES / EBUSY). The lock clears within milliseconds,
+ * so a short backoff turns it into a successful write instead of a failed memory save.
+ */
+const BRIEF_LOCK_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
+const BRIEF_LOCK_BACKOFF_MS = [10, 20, 40, 80, 160];
+
+async function renameRetryingBriefLocks(from: string, to: string, beforeReplace?: () => void): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    // Rechecked before every attempt: the owner may switch accounts during a backoff, and a
+    // replacement made after that cannot be undone by the checks that run after the write.
+    beforeReplace?.();
+    try {
+      await fs.rename(from, to);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException)?.code;
+      const delay = BRIEF_LOCK_BACKOFF_MS[attempt];
+      if (delay === undefined || !code || !BRIEF_LOCK_CODES.has(code)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+}
+
+/**
+ * Writes `content` to `target` without following a link there: a fresh temp file (never an
+ * existing path) is renamed over it. A memory folder can sit inside a project its tasks edit
+ * (a teammate's project), so a link planted in it must not redirect the host's writes.
+ */
+async function writeFileNoFollow(target: string, content: string, beforeReplace?: () => void): Promise<void> {
+  const tmp = `${target}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+  await fs.writeFile(tmp, content, { encoding: 'utf8', flag: 'wx' });
+  try {
+    await renameRetryingBriefLocks(tmp, target, beforeReplace);
+  } catch (error) {
+    await fs.unlink(tmp).catch(() => {});
+    throw error;
+  }
+}
 
 /**
  * 把 workdir 绝对路径转成 sanitize 后的目录名 (Claude Code 风格)。
@@ -135,43 +197,52 @@ export function memoryScopeDirName(scopeKey: string): string {
   return `ssh-${sanitizeWorkdir(hostSegment).slice(0, 24)}-${digest}`;
 }
 
-/** filename = `<type>_<slug>.md`; slug 误带 `<type>_` 前缀会被拒绝 (见 validateNoTypePrefix) */
+/** 调用方的 name 允许直接粘贴 MEMORY.md 索引里的文件名 */
+function normalizeShardName(raw: string): string {
+  return raw.trim().replace(/\.md$/i, '');
+}
+
+/**
+ * 逻辑地址: MEMORY.md 文件名 / 带 type 前缀的 slug / 纯 slug 归一成同一个 key。
+ * 存量双前缀分片 (`feedback_feedback_foo.md`) 的 slug 是 `feedback_foo`, 三种写法
+ * 必须落到它 — 只按正则猜一个 slug 会定位到不存在的文件。
+ */
+function addressKey(type: MemoryType, raw: string): string {
+  return normalizeShardName(raw).replace(new RegExp(`^(?:${type}[_-])+`), '');
+}
+
+/** filename = `<type>_<slug>.md`; slug 误带 `<type>_` / `<type>-` 前缀会被拒绝 (见 validateNoTypePrefix) */
 export function buildFilename(type: MemoryType, slug: string): string {
   validateNoTypePrefix(type, slug);
   return `${type}_${slug}${SHARD_EXT}`;
 }
 
 /**
- * 拒绝 slug 上误带的 `<type>_` 前缀 — memory_write 的调用方 (LLM) 常把 type
- * 写进 name, 造成 `feedback_feedback_foo.md` 双前缀分片 (#1652 附带 bug, #205 审计亦命中)。
- * **只报错不剥离**: 剥离会让存量双前缀分片在 update/append/consolidate 时定位错位 —
- * parseFilename 把 `feedback_feedback_foo.md` 的 slug 解析为 `feedback_foo`, 剥离后
- * 定位到 `feedback_foo.md`, 造成 not-found 或静默修改错误分片。报错让调用方传纯 slug,
- * 存量双前缀分片由一次性改名/去重迁移清理 (另行处理)。
+ * 拒绝新建分片时 slug 上误带的 `<type>_` / `<type>-` 前缀 — memory_write 的调用方
+ * (LLM) 常把 type 写进 name, 造成 `feedback_feedback_foo.md` 双前缀分片 (#1652 附带
+ * bug, #205 审计亦命中)。
+ * **存量分片先按逻辑地址解析 (见 resolveFilename)**: 命中已有分片就写到它, 不剥离、
+ * 也不新建; 只有没有存量分片时才拒绝, 避免再增生双前缀。
  */
 function validateNoTypePrefix(type: MemoryType, slug: string): void {
+  // 提示里的示例必须自己也能过本校验, 否则调用方照着重试还是 invalid-slug (#10274 review P1)
+  const example = `brief-${type}`;
   if (slug === type) {
     throw new MemoryError(
       'invalid-slug',
-      `slug 不能等于 type 名 "${type}", 请传纯 slug (如 "${type}-brief")`,
+      `slug 不能等于 type 名 "${type}", 请传纯 slug (如 "${example}")`,
     );
   }
-  if (slug.startsWith(`${type}_`)) {
+  if (slug.startsWith(`${type}_`) || slug.startsWith(`${type}-`)) {
+    const stripped = addressKey(type, slug);
+    const suggestion = SLUG_REGEX.test(stripped) && stripped !== type ? stripped : example;
     throw new MemoryError(
       'invalid-slug',
-      `slug "${slug}" 已带 type 前缀 "${type}_", 请传纯 slug (如 "${stripAllTypePrefixes(type, slug) || type + '-brief'}")`,
+      `slug "${slug}" 已带 type 前缀 "${type}${slug[type.length]}", 请传纯 slug (如 "${suggestion}")`,
     );
   }
 }
 
-/** 剥掉 slug 上所有重复的 `<type>_` 前缀 — 错误信息示例必须本身可通过校验 */
-function stripAllTypePrefixes(type: MemoryType, slug: string): string {
-  let out = slug;
-  while (out.startsWith(`${type}_`)) {
-    out = out.slice(type.length + 1);
-  }
-  return out;
-}
 /** 解析 filename 反推 type + slug, 不匹配返 null */
 export function parseFilename(filename: string): { type: MemoryType; slug: string } | null {
   if (!filename.endsWith(SHARD_EXT)) return null;
@@ -226,25 +297,69 @@ export class MemoryStorage {
      * owner 根后报成功。由 store 透传 manager 注入的 scopeCheck。
      */
     private readonly beforeFileWrite?: () => void,
+    /** Project-local file-first memory: accepts freeform .md files and never overwrites MEMORY.md. */
+    private readonly nativeFileEdits = false,
   ) {}
 
-  /** mkdir -p + 写 meta.json (如缺失). 幂等。 */
+  /**
+   * mkdir -p + 写 meta.json (如缺失). 幂等。
+   * 同目录的多个 store 可能同时首次打开 (并发 getStore), meta.json 写入走同一互斥队列,
+   * 不让两次替换同一文件的 rename 重叠 (Windows 上重叠的 rename 报 EPERM)。
+   */
   async init(absWorkdir: string): Promise<void> {
+    return this.mutate(() => this.initLocked(absWorkdir));
+  }
+
+  private async initLocked(absWorkdir: string): Promise<void> {
     await fs.mkdir(this.dir, { recursive: true });
     const metaPath = path.join(this.dir, META_FILENAME);
+    if (await fs.access(metaPath).then(() => true, () => false)) return;
+    // 首次打开副作用也 fail-closed (review #2388 Codex 16th P1): 异步初始化
+    // 期间边界发生, 不得在旧 owner 下创建 meta.json。
+    this.beforeFileWrite?.();
+    const meta: MemoryStorageMeta = {
+      absPath: absWorkdir,
+      createdAt: new Date().toISOString(),
+      lastUsedAt: new Date().toISOString(),
+    };
+    await writeFileNoFollow(metaPath, JSON.stringify(meta, null, 2), this.beforeFileWrite);
+  }
+
+  /** Keep metadata, derived indexes and FTS initialization in the mutation queue.
+   * The supplied initializer already owns that queue: never enqueue it again. */
+  async serializeInitialization(run: (initializeStorage: (absWorkdir: string) => Promise<void>) => Promise<void>): Promise<void> {
+    return this.mutate(() => run(async (absWorkdir) => {
+      await this.initLocked(absWorkdir);
+      // Native file-first project memory treats MEMORY.md as a curated core entry, not a derived overwrite.
+      if (!this.nativeFileEdits) {
+        await this.rebuildIndexLocked();
+      }
+    }));
+  }
+
+  /** Fast stat snapshot for incremental FTS sync without reading unchanged file bodies. */
+  async statEntries(): Promise<Map<string, { mtimeMs: number; size: number }>> {
+    const stats = new Map<string, { mtimeMs: number; size: number }>();
+    let entries: string[];
     try {
-      await fs.access(metaPath);
-    } catch {
-      // 首次打开副作用也 fail-closed (review #2388 Codex 16th P1): 异步初始化
-      // 期间边界发生, 不得在旧 owner 下创建 meta.json。
-      this.beforeFileWrite?.();
-      const meta: MemoryStorageMeta = {
-        absPath: absWorkdir,
-        createdAt: new Date().toISOString(),
-        lastUsedAt: new Date().toISOString(),
-      };
-      await fs.writeFile(metaPath, JSON.stringify(meta, null, 2), 'utf8');
+      entries = await fs.readdir(this.dir);
+    } catch (e) {
+      if (isENOENT(e)) return stats;
+      throw new MemoryError('io-error', `readdir failed: ${(e as Error).message}`);
     }
+    for (const entry of entries) {
+      if (entry === INDEX_FILENAME || entry === META_FILENAME) continue;
+      if (!entry.endsWith(SHARD_EXT)) continue;
+      if (this.nativeFileEdits ? !isSafeMemoryMarkdownFilename(entry) : !parseFilename(entry)) continue;
+      try {
+        const st = await fs.lstat(path.join(this.dir, entry));
+        if (!st.isFile() || st.isSymbolicLink()) continue;
+        stats.set(entry, { mtimeMs: st.mtimeMs, size: st.size });
+      } catch {
+        // Vanished between readdir and lstat
+      }
+    }
+    return stats;
   }
 
   /**
@@ -263,8 +378,7 @@ export class MemoryStorage {
     for (const entry of entries) {
       if (entry === INDEX_FILENAME || entry === META_FILENAME) continue;
       if (!entry.endsWith(SHARD_EXT)) continue;
-      const parsed = parseFilename(entry);
-      if (!parsed) continue;
+      if (this.nativeFileEdits ? !isSafeMemoryMarkdownFilename(entry) : !parseFilename(entry)) continue;
       try {
         const rec = await this.readRecord(entry);
         if (rec) records.push(rec);
@@ -303,11 +417,61 @@ export class MemoryStorage {
    * 调用方据此判断超了多少再决定不动 / 微剪 / consolidate。
    */
   async write(opts: WriteOptions): Promise<WriteResult> {
-    this.validateOpts(opts);
-    return this.mutate(() => this.writeFile(opts, buildFilename(opts.type, opts.name)));
+    const normalized: WriteOptions = { ...opts, name: normalizeShardName(opts.name) };
+    this.validateOpts(normalized);
+    return this.mutate(async () => {
+      const filename = await this.resolveFilename(normalized.type, opts.name);
+      return this.writeFile(normalized, filename);
+    });
   }
 
-  /** Edit a known file in place, including legacy names rejected for new shards. */
+  /**
+   * 把调用方的 name 解析成落盘文件名, 三种写法指向同一分片:
+   *  - `project-x` / `project_x` / `project_x.md` (索引原样) 都命中 `project_project-x.md`
+   *  - 没有同 key 的存量分片时才按规范文件名新建 (并拒绝带 type 前缀的新 slug)
+   * 同 key 命中多个存量分片时报 ambiguous-address, 不猜; 传完整文件名可指定其中一个。
+   * 带 `.md` 的完整文件名是显式目标: 原样落盘 (已存在就写它, 不存在就建它), 不重定向到别名。
+   */
+  async resolveFilename(type: MemoryType, rawName: string): Promise<string> {
+    if (!isMemoryType(type)) {
+      throw new MemoryError('invalid-type', `type 必须是 user/feedback/project/reference, 收到 "${type}"`);
+    }
+    // 后缀大小写统一成 .md: parseFilename 只认小写, 否则 .MD 会绕过内嵌 type 检查
+    const supplied = rawName.trim().replace(/\.md$/i, '.md');
+    // 完整文件名 = 显式目标: 云端恢复存量分片时必须能原样重建 (含旧的双前缀名)
+    const explicit = supplied.endsWith('.md') ? parseFilename(supplied) : null;
+    if (explicit && explicit.type !== type) {
+      throw new MemoryError(
+        'invalid-type',
+        `文件名 "${supplied}" 属于 type "${explicit.type}", 与传入的 type "${type}" 不符`,
+      );
+    }
+    const name = supplied.replace(/\.md$/, '');
+    // 只剥一次 .md 后的名字不能带第二个后缀 (note.md.md), 长度按去掉 type 前缀的 slug 算
+    if (!SLUG_REGEX.test(name)) {
+      throw new MemoryError('invalid-slug', `slug 只允许 [a-z0-9_-], 收到 "${name}"`);
+    }
+    const key = addressKey(type, name);
+    validateSlug(key, this.config.maxSlugLen);
+    // 只读文件名, 不解析正文: 地址由 filename 决定 (#10274 review)
+    const matches = (await fs.readdir(this.dir))
+      .filter((filename) => parseFilename(filename)?.type === type)
+      .filter((filename) => addressKey(type, filename) === key);
+    // 显式文件名就是目标: 已存在写它, 不存在按原名新建 — 云端恢复旧双前缀分片靠这条。
+    // 不重定向到同 key 的别名, 否则 create 会撞 already-exists, 恢复永久失败 (#10274 review)
+    if (explicit) return supplied;
+    if (matches.length > 1) {
+      throw new MemoryError(
+        'ambiguous-address',
+        `多个分片都指向 "${key}": ${matches.join(', ')}; ` +
+          '请传完整文件名（含 .md），或先重命名其中一个',
+      );
+    }
+    if (matches.length === 1) return matches[0];
+    return buildFilename(type, name);
+  }
+
+  /** Edit a known file in place, including legacy names and project freeform Markdown files. */
   async update(
     filename: string,
     expectedUpdatedAt: string,
@@ -315,11 +479,76 @@ export class MemoryStorage {
   ): Promise<MemoryRecord> {
     return this.mutate(async () => {
       const current = await this.checkVersion(filename, expectedUpdatedAt);
+      if (this.nativeFileEdits && (filename === INDEX_FILENAME || !current.hasFrontmatter || current.freeform)) {
+        const maxBytes = Math.max(this.config.hardShardBytes, PROJECT_MEMORY_HARD_BYTES);
+        if (Buffer.byteLength(changes.body, 'utf8') > maxBytes) {
+          throw new MemoryError('shard-too-large', `body ${Buffer.byteLength(changes.body, 'utf8')} bytes > 上限 ${maxBytes}`);
+        }
+        const fullPath = path.join(this.dir, filename);
+        let fileText: string;
+        if (filename === INDEX_FILENAME) {
+          fileText = `${changes.body.trimEnd()}\n`;
+        } else if (!current.hasFrontmatter) {
+          const trimmedBody = changes.body.trim();
+          const cleanTitle = changes.title.replace(/\r?\n/g, ' ').trim();
+          const hasH1 = /^#\s+[^\r\n]*/.test(trimmedBody);
+          fileText = hasH1
+            ? `${trimmedBody.replace(/^#\s+[^\r\n]*/, () => `# ${cleanTitle}`)}\n`
+            : `# ${cleanTitle}\n\n${trimmedBody}\n`;
+        } else {
+          // Preserve arbitrary custom YAML fields (e.g. tags, source, date) on freeform notes.
+          let existingData: Record<string, unknown> = {};
+          try {
+            const rawExisting = await fs.readFile(fullPath, 'utf8');
+            const parsedExisting = matter(rawExisting);
+            if (parsedExisting.data && typeof parsedExisting.data === 'object') {
+              existingData = { ...(parsedExisting.data as Record<string, unknown>) };
+            }
+          } catch {
+            // Fall back to parsed frontmatter if raw re-read fails.
+          }
+          const nextUpdatedAt = new Date(Math.max(Date.now(), (Date.parse(current.frontmatter.updatedAt) || 0) + 1)).toISOString();
+          const nextFrontmatter: Record<string, unknown> = {
+            ...existingData,
+            title: changes.title,
+            description: changes.description,
+            ...(existingData.type !== undefined || !current.freeform ? { type: existingData.type ?? current.frontmatter.type } : {}),
+            updatedAt: nextUpdatedAt,
+            ...(existingData.bodyLength !== undefined ? { bodyLength: changes.body.length } : {}),
+          };
+          fileText = matter.stringify({ content: changes.body }, nextFrontmatter);
+        }
+        this.beforeFileWrite?.();
+        await writeFileNoFollow(fullPath, fileText, this.beforeFileWrite);
+        this.beforeFileWrite?.();
+        return this.read(filename);
+      }
       await this.writeFile({
         ...changes, type: current.frontmatter.type, name: current.slug, mode: 'update',
       }, filename);
       // Return the revision this edit wrote, never a subsequent tool write.
       return this.read(filename);
+    });
+  }
+
+  /** Write a raw Markdown file verbatim (used by cloud restore and core MEMORY.md edits). */
+  async writeRaw(filename: string, raw: string): Promise<void> {
+    this.assertSafeFilename(filename);
+    const maxBytes = Math.max(this.config.hardShardBytes, PROJECT_MEMORY_HARD_BYTES);
+    if (Buffer.byteLength(raw, 'utf8') > maxBytes) {
+      throw new MemoryError('shard-too-large', `raw ${Buffer.byteLength(raw, 'utf8')} bytes > 上限 ${maxBytes}`);
+    }
+    return this.mutate(async () => {
+      await fs.mkdir(this.dir, { recursive: true });
+      this.beforeFileWrite?.();
+      await writeFileNoFollow(path.join(this.dir, filename), raw, this.beforeFileWrite);
+      if (filename === INDEX_FILENAME) {
+        this.indexCache = raw;
+      } else if (!this.nativeFileEdits) {
+        this.guardAfterMutation();
+        await this.rebuildIndexLocked();
+      }
+      this.beforeFileWrite?.();
     });
   }
 
@@ -387,10 +616,13 @@ export class MemoryStorage {
     }
 
     // size 硬上限校验 (写之前)
-    if (Buffer.byteLength(nextBody, 'utf8') > this.config.hardShardBytes) {
+    const hardLimit = this.nativeFileEdits
+      ? Math.max(this.config.hardShardBytes, PROJECT_MEMORY_HARD_BYTES)
+      : this.config.hardShardBytes;
+    if (Buffer.byteLength(nextBody, 'utf8') > hardLimit) {
       throw new MemoryError(
         'shard-too-large',
-        `body ${Buffer.byteLength(nextBody, 'utf8')} bytes > 硬上限 ${this.config.hardShardBytes}`,
+        `body ${Buffer.byteLength(nextBody, 'utf8')} bytes > 硬上限 ${hardLimit}`,
       );
     }
 
@@ -399,12 +631,14 @@ export class MemoryStorage {
     // tryReadRaw 的 await 窗口后、真正写盘前复核 owner scope (review #2388
     // Codex 8th P1): 边界不得把 shard 写入旧 owner 根。
     this.beforeFileWrite?.();
-    await fs.writeFile(fullPath, fileText, 'utf8');
+    await writeFileNoFollow(fullPath, fileText, this.beforeFileWrite);
     // shard write 后、索引重建前复核 (review #2388 Codex 12th P1): writeFile
     // await 期间边界可能发生, 不得继续在旧 owner 下 rebuildIndex / 返回成功。
     // not-ready 时文件已落盘但 MEMORY.md 未更新 → 标记派生索引 dirty (Codex 23rd)。
-    this.guardAfterMutation();
-    await this.rebuildIndex();
+    if (!this.nativeFileEdits) {
+      this.guardAfterMutation();
+      await this.rebuildIndexLocked();
+    }
     // rebuildIndex 自身多次 await 后、返回前复核 (review #2388 Codex 13th P1)。
     this.beforeFileWrite?.();
 
@@ -438,8 +672,12 @@ export class MemoryStorage {
     }
     // unlink 后复核 — await 窗口后边界可能发生, 不得继续在旧 owner 下重建索引。
     // not-ready 时文件已删但 MEMORY.md 仍列出 → 标记派生索引 dirty (Codex 23rd)。
-    this.guardAfterMutation();
-    await this.rebuildIndex();
+    if (!this.nativeFileEdits) {
+      this.guardAfterMutation();
+      await this.rebuildIndexLocked();
+    } else if (filename === INDEX_FILENAME) {
+      this.indexCache = '';
+    }
     // rebuildIndex 内部多次 await 后、返回前复核。
     this.beforeFileWrite?.();
   }
@@ -481,6 +719,12 @@ export class MemoryStorage {
 
   /** 当前 MEMORY.md 内容 (索引文本, 给 system prompt 拼). 不存在返空串 */
   async getIndex(): Promise<string> {
+    if (this.nativeFileEdits) {
+      const raw = await this.tryReadRaw(path.join(this.dir, INDEX_FILENAME));
+      if (!raw) return '';
+      const trimmed = raw.trim();
+      return !trimmed || trimmed.includes(LEGACY_EMPTY_INDEX_MARKER) ? '' : raw;
+    }
     if (this.indexCache !== null) return this.indexCache;
     try {
       this.indexCache = await fs.readFile(path.join(this.dir, INDEX_FILENAME), 'utf8');
@@ -505,8 +749,15 @@ export class MemoryStorage {
    *
    *   ## feedback
    *   ...
+   *
+   * 在同目录互斥队列内执行 (store 打开时的重建可能与另一个 store 的打开或写入并发);
+   * 已持有队列的写/删内部改用 rebuildIndexLocked。
    */
   async rebuildIndex(): Promise<void> {
+    return this.mutate(() => this.rebuildIndexLocked());
+  }
+
+  private async rebuildIndexLocked(): Promise<void> {
     try {
       await this.rebuildIndexInner();
     } catch (e) {
@@ -548,7 +799,7 @@ export class MemoryStorage {
     // 索引写盘前复核 (review #2388 Codex 13th P1): rebuildIndex 自身有多次
     // awaited shard reads, 边界不得在旧 owner 下重写 MEMORY.md。
     this.beforeFileWrite?.();
-    await fs.writeFile(path.join(this.dir, INDEX_FILENAME), content, 'utf8');
+    await writeFileNoFollow(path.join(this.dir, INDEX_FILENAME), content, this.beforeFileWrite);
     this.indexCache = content;
   }
 
@@ -564,7 +815,8 @@ export class MemoryStorage {
     if (!isMemoryType(opts.type)) {
       throw new MemoryError('invalid-type', `type 必须是 user/feedback/project/reference, 收到 "${opts.type}"`);
     }
-    validateSlug(opts.name, this.config.maxSlugLen);
+    // name 可以是索引里的完整文件名, 长度与字符集按逻辑 slug 校验
+    validateSlug(addressKey(opts.type, opts.name), this.config.maxSlugLen);
     if (!opts.title || opts.title.length === 0) {
       throw new MemoryError('invalid-frontmatter', 'title 必填');
     }
@@ -589,8 +841,14 @@ export class MemoryStorage {
   }
 
   private assertSafeFilename(filename: string): void {
-    if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+    if (filename.includes('..') || filename.includes('/') || filename.includes('\\') || filename.includes('\0')) {
       throw new MemoryError('path-traversal', `非法文件名: "${filename}"`);
+    }
+    if (this.nativeFileEdits) {
+      if (!isSafeMemoryMarkdownFilename(filename, { allowIndex: true })) {
+        throw new MemoryError('invalid-filename', `非法记忆文件名: "${filename}"`);
+      }
+      return;
     }
     const parsed = parseFilename(filename);
     if (!parsed) {
@@ -600,24 +858,51 @@ export class MemoryStorage {
 
   private async readRecord(filename: string): Promise<MemoryRecord | null> {
     const parsed = parseFilename(filename);
-    if (!parsed) return null;
+    const allowFreeform = this.nativeFileEdits && isSafeMemoryMarkdownFilename(filename, { allowIndex: true });
+    if (!parsed && !allowFreeform) return null;
     const fullPath = path.join(this.dir, filename);
-    const raw = await this.tryReadRaw(fullPath);
-    if (!raw) return null;
-    const shard = parseRawShard(raw, filename);
-    if (!shard) return null;
+    const loaded = await this.tryReadRawWithStat(fullPath);
+    if (!loaded) return null;
+    const { raw, mtimeMs } = loaded;
+    if (parsed) {
+      try {
+        const shard = parseRawShard(raw, filename);
+        return {
+          filename,
+          slug: parsed.slug,
+          frontmatter: shard.frontmatter,
+          body: shard.body,
+          sizeBytes: Buffer.byteLength(raw, 'utf8'),
+          freeform: false,
+          hasFrontmatter: true,
+        };
+      } catch (error) {
+        if (!allowFreeform) throw error;
+      }
+    }
+    const fallback = parseFreeformShard(raw, filename, mtimeMs, this.config);
     return {
       filename,
-      slug: parsed.slug,
-      frontmatter: shard.frontmatter,
-      body: shard.body,
+      slug: parsed ? parsed.slug : filename.slice(0, -SHARD_EXT.length),
+      frontmatter: fallback.frontmatter,
+      body: fallback.body,
       sizeBytes: Buffer.byteLength(raw, 'utf8'),
+      freeform: true,
+      hasFrontmatter: fallback.hasFrontmatter,
     };
   }
 
   private async tryReadRaw(fullPath: string): Promise<string | null> {
+    return (await this.tryReadRawWithStat(fullPath))?.raw ?? null;
+  }
+
+  private async tryReadRawWithStat(fullPath: string): Promise<{ raw: string; mtimeMs: number } | null> {
     try {
-      return await fs.readFile(fullPath, 'utf8');
+      // A link is not a memory: reading through it would bring in a file from elsewhere.
+      const st = await fs.lstat(fullPath);
+      if (st.isSymbolicLink() || !st.isFile()) return null;
+      const raw = await fs.readFile(fullPath, 'utf8');
+      return { raw, mtimeMs: st.mtimeMs };
     } catch (e) {
       if (isENOENT(e)) return null;
       throw new MemoryError('io-error', `read failed: ${(e as Error).message}`);
@@ -690,6 +975,73 @@ function parseRawShard(raw: string, filenameForErr: string): ParsedShard {
       ? (parsed.content.length === data.bodyLength! + 1 && parsed.content.endsWith('\n')
         ? parsed.content.slice(0, -1) : parsed.content)
       : parsed.content.trim(),
+  };
+}
+
+function inferFreeformType(filename: string, rawType: unknown): MemoryType {
+  if (isMemoryType(rawType)) return rawType;
+  const stem = filename.replace(/\.md$/i, '').toLowerCase();
+  const prefix = /^(user|feedback|project|reference)(?:[_-]|$)/.exec(stem)?.[1];
+  if (prefix && isMemoryType(prefix)) return prefix;
+  return 'project';
+}
+
+function parseFreeformShard(
+  raw: string,
+  filename: string,
+  mtimeMs: number,
+  config: MemoryConfig,
+): ParsedShard & { hasFrontmatter: boolean } {
+  let data: Partial<MemoryFrontmatter> = {};
+  let content = raw;
+  let hasFrontmatter = false;
+  if (/^---\r?\n/.test(raw)) {
+    try {
+      const parsed = matter(raw);
+      if (parsed.data && typeof parsed.data === 'object' && Object.keys(parsed.data).length > 0) {
+        hasFrontmatter = true;
+        data = parsed.data as Partial<MemoryFrontmatter>;
+        content = parsed.content;
+      }
+    } catch {
+      // Malformed YAML frontmatter: keep raw Markdown readable instead of dropping the file.
+      hasFrontmatter = false;
+      content = raw;
+    }
+  }
+  const trimmedBody = content.trim();
+  const headingMatch = /^#\s+(.+?)\s*$/m.exec(trimmedBody);
+  const stemTitle = filename.replace(/\.md$/i, '').replace(/[_-]+/g, ' ').trim() || filename;
+  const rawTitle = typeof data.title === 'string' && data.title.trim()
+    ? data.title.trim()
+    : headingMatch?.[1]?.trim() || stemTitle;
+  const title = rawTitle.replace(/\s+/g, ' ').slice(0, config.maxTitleLen).trim() || stemTitle;
+  const firstLine = trimmedBody
+    .replace(/^#+\s+/gm, '')
+    .replace(/^\s*(?:[-*+]|\d+[.)])\s+/gm, '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean) ?? title;
+  const rawDescription = typeof data.description === 'string' && data.description.trim()
+    ? data.description.replace(/[\r\n]+/g, ' ').trim()
+    : firstLine.replace(/[\r\n]+/g, ' ').trim();
+  const description = rawDescription.slice(0, config.maxDescriptionLen).trim() || title;
+  const updatedAt = typeof data.updatedAt === 'string' && data.updatedAt.trim()
+    ? data.updatedAt.trim()
+    : new Date(Number.isFinite(mtimeMs) ? mtimeMs : Date.now()).toISOString();
+  return {
+    hasFrontmatter,
+    frontmatter: {
+      title,
+      description,
+      type: inferFreeformType(filename, data.type),
+      updatedAt,
+      ...(Number.isSafeInteger(data.bodyLength) && data.bodyLength! >= 0 ? { bodyLength: data.bodyLength } : {}),
+    },
+    body: Number.isSafeInteger(data.bodyLength) && data.bodyLength! >= 0
+      ? (content.length === data.bodyLength! + 1 && content.endsWith('\n')
+        ? content.slice(0, -1) : content)
+      : trimmedBody,
   };
 }
 

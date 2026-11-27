@@ -7,12 +7,12 @@ import { REMOTE_RESOURCE_STARTUP_TIMEOUT_MS } from '@/device-link/remoteResource
 const h = vi.hoisted(() => ({
   auth: { user: { id: 'owner' }, accountGeneration: 1 }, focused: true,
   link: { connectionEpoch: 1, status: 'online', presenceVersion: 1, getPresenceAvailability: vi.fn((_deviceId: string) => true as boolean | null),
-    invoke: vi.fn(), openLink: vi.fn(), onRemoteResourceChanged: vi.fn((_listener: (deviceId: string, payload: { collectionId: string }) => void) => () => {}), subscribe: vi.fn(), unsubscribe: vi.fn() },
-  app: { currentState: 'active', listener: null as null | ((state: string) => void) },
+    getSubscriptionIdentity: vi.fn(() => 1 as number | null), invoke: vi.fn(), openLink: vi.fn(), onRemoteResourceChanged: vi.fn((_listener: (deviceId: string, payload: { collectionId: string }) => void) => () => {}), subscribe: vi.fn(), unsubscribe: vi.fn() },
+  app: { currentState: 'active', listeners: new Set<(state: string) => void>() },
   translation: { t: (key: string) => key, i18n: { language: 'en' } },
   list: vi.fn(), cached: [] as HostedRemoteCollectionItem[], persist: vi.fn(), snapshot: vi.fn(),
 }));
-vi.mock('react-native', () => ({ AppState: { get currentState() { return h.app.currentState; }, addEventListener: (_event: string, listener: (state: string) => void) => { h.app.listener = listener; return { remove() { h.app.listener = null; } }; } } }));
+vi.mock('react-native', () => ({ AppState: { get currentState() { return h.app.currentState; }, addEventListener: (_event: string, listener: (state: string) => void) => { h.app.listeners.add(listener); return { remove() { h.app.listeners.delete(listener); } }; } } }));
 vi.mock('expo-router', async () => { const { useEffect } = await import('react'); return { useFocusEffect: (effect: () => void | (() => void)) => useEffect(() => h.focused ? effect() : undefined, [effect, h.focused]) }; });
 vi.mock('@/i18n', () => ({ i18n: { t: (key: string) => key } }));
 vi.mock('react-i18next', () => ({ useTranslation: () => h.translation }));
@@ -41,8 +41,8 @@ let result: ReturnType<typeof useRemoteResourceList>;
 function Probe({ enabled = true }: { enabled?: boolean }) { result = useRemoteResourceList('teammates', targets, enabled); return null; }
 async function render(enabled = true) { root ??= createRoot(document.createElement('div')); await act(async () => root!.render(createElement(Probe, { enabled }))); }
 beforeEach(() => {
-  vi.clearAllMocks(); h.app.currentState = 'active'; h.app.listener = null; h.auth.accountGeneration = 1; h.auth.user.id = 'owner'; h.cached = []; h.focused = true;
-  h.link.status = 'online'; h.link.connectionEpoch = 1; h.link.getPresenceAvailability.mockReturnValue(true);
+  vi.clearAllMocks(); h.app.currentState = 'active'; h.app.listeners.clear(); h.auth.accountGeneration = 1; h.auth.user.id = 'owner'; h.cached = []; h.focused = true;
+  h.link.getSubscriptionIdentity.mockReturnValue(1); h.link.status = 'online'; h.link.connectionEpoch = 1; h.link.getPresenceAvailability.mockReturnValue(true);
   h.list.mockResolvedValue({ items: [] }); h.link.openLink.mockResolvedValue(undefined);
   h.snapshot.mockImplementation(async () => ({ home: [], items: { teammates: h.cached }, read: {} }));
 });
@@ -186,13 +186,20 @@ it('drops queued invalidations when the picker closes', async () => {
   expect(result.items).toEqual([]);
 });
 
-it('retains loaded rows and an empty result on return while refreshing in the background', async () => {
+it('reuses unchanged rows on return, refreshes a hidden invalidation, and retains an empty result', async () => {
   h.list.mockResolvedValue({ items: [item('visible')] });
   await render();
   const previous = result.items;
   h.focused = false; await render();
   let finish!: (value: unknown) => void;
   h.list.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+  h.focused = true; await render();
+  expect(h.list).toHaveBeenCalledTimes(2);
+  expect(result.syncing).toBe(false);
+  h.focused = false; await render();
+  const notify = h.link.onRemoteResourceChanged.mock.calls.at(-1)![0];
+  await act(async () => notify('mac', { collectionId: 'teammates' }));
+  expect(h.list).toHaveBeenCalledTimes(2);
   h.focused = true; await render();
   expect(result.items).toBe(previous); expect(result.loading).toBe(false); expect(result.syncing).toBe(true);
   expect(result.refreshing).toBe(false);
@@ -201,7 +208,8 @@ it('retains loaded rows and an empty result on return while refreshing in the ba
   h.focused = false; await render();
   h.list.mockReturnValue(new Promise(() => {}));
   h.focused = true; await render();
-  expect(result.items).toEqual([]); expect(result.loading).toBe(false); expect(result.syncing).toBe(true);
+  expect(result.items).toEqual([]); expect(result.loading).toBe(false); expect(result.syncing).toBe(false);
+  expect(h.list).toHaveBeenCalledTimes(4);
 });
 it('shows disk-cached rows during the first slow network read without claiming authority', async () => {
   h.cached = [cached(targets[0], 'cached-visible')];
@@ -282,7 +290,7 @@ it('cancels foreground retries and late replies in the background and resumes on
   h.list.mockReturnValue(new Promise(resolve => { finish = resolve; }));
   await render();
   h.app.currentState = 'background';
-  await act(async () => h.app.listener!('background'));
+  await act(async () => h.app.listeners.forEach(listener => listener('background')));
   await act(async () => finish({ items: [item('background-late')] }));
   expect(result.items).toEqual([]);
   const before = h.list.mock.calls.length;
@@ -290,6 +298,25 @@ it('cancels foreground retries and late replies in the background and resumes on
   expect(h.list).toHaveBeenCalledTimes(before);
   h.list.mockResolvedValue({ items: [item('foreground-fresh')] });
   h.app.currentState = 'active';
-  await act(async () => h.app.listener!('active'));
+  await act(async () => h.app.listeners.forEach(listener => listener('active')));
   expect(result.items.map(row => row.item.ref.id)).toEqual(['foreground-fresh', 'foreground-fresh']);
+});
+
+// Real hook regression: repeated switches reuse only validated, unexpired reads.
+it('does no roster RPC for 20 quick returns, but refreshes an expired hidden subscription gap', async () => {
+  vi.useFakeTimers(); await render();
+  for (let n = 0; n < 20; n++) { await render(false); await render(true); }
+  expect(h.list).toHaveBeenCalledTimes(2);
+  await render(false);
+  await act(async () => vi.advanceTimersByTimeAsync(30001));
+  await render(true);
+  expect(h.list).toHaveBeenCalledTimes(4);
+});
+
+it('refreshes immediately after a hidden subscription gap even inside the reuse window', async () => {
+  await render(); await render(false);
+  h.link.getSubscriptionIdentity.mockReturnValue(null);
+  await render(); expect(h.list).toHaveBeenCalledTimes(4);
+  await render(false); h.link.getSubscriptionIdentity.mockReturnValue(2);
+  await render(); expect(h.list).toHaveBeenCalledTimes(6);
 });

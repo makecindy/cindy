@@ -21,7 +21,11 @@ export function registerScheduleResumeTool(
       id: z.string().min(1).describe('要恢复的 schedule id'),
       ...writeDeviceShape,
     },
-    handler: async ({ id, device }) =>
-      runOnDevice(deps, device, (scheduler) => scheduler.resume(id), { op: 'resume', args: [id] }),
+    handler: async ({ id, device }) => {
+      const expected = deps.getApprovedScheduleGuard?.();
+      return runOnDevice(deps, device,
+        (scheduler) => scheduler.resume(id, expected),
+        { op: 'resume', args: expected ? [id, expected] : [id] });
+    },
   });
 }

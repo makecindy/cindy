@@ -41,6 +41,15 @@ const MAX_OUT_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_OUT_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_OUT_ATTACHMENTS = 8;
 const MAX_OUT_TOTAL_BYTES = 30 * 1024 * 1024;
+const MAX_X_IMAGES = 4;
+/** 超过单图上限时值得尝试压缩的格式(静态图; GIF 可能是动图, 压了会丢动画)。 */
+const SHRINKABLE_IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp']);
+/**
+ * 压缩输入的体量上限: 更大的图不整读进内存去压, 直接按超限处理。回复里按本机路径引用的图片先经
+ * 任务图片导入(上限更小, 见 TASK_IMAGE_MAX_BYTES), 能走到这里的不会超过那个上限; 这个上限约束的是
+ * 已在媒体仓里的图和工具结果旁路带来的图。
+ */
+const MAX_SHRINK_INPUT_BYTES = 48 * 1024 * 1024;
 
 /**
  * hook 派发 turn 时附在用户消息末尾的渠道说明(session-runner 消费)。
@@ -58,25 +67,46 @@ const MAX_OUT_TOTAL_BYTES = 30 * 1024 * 1024;
  * 请求或加以引用/臆测。删改这句 guard 会让该误读复发。
  */
 export function buildHookPromptNote(im: string | undefined): string {
-  const platform = im === 'telegram' ? 'Telegram' : im === 'x' ? 'X' : 'Slack';
+  // 飞书与 Lark 是同一 provider('feishu'), 品牌跟随组织的应用, 说明里两个名字并列。
+  const platform =
+    im === 'telegram'
+      ? 'Telegram'
+      : im === 'x'
+        ? 'X'
+        : im === 'feishu'
+          ? '飞书 / Lark'
+          : im === 'discord'
+            ? 'Discord'
+            : 'Slack';
+  // 官方飞书会话里 cindy_feishu_bot 是用户另配的个人机器人, 不是当前对话的出口;
+  // 沿用「除非用户明确要求发到飞书」会让模型以为当前对话之外还要再发一次。
+  // 官方 Discord 同理: cindy_discord 是用户另配的个人 Discord bot, 不是这条官方对话的出口。
+  const feishuToolNote =
+    im === 'feishu'
+      ? '回复会自动发回当前飞书 / Lark 对话;不要用 cindy_feishu_bot 发送(那是用户另行配置的个人机器人),除非用户明确要求通过它发送。'
+      : im === 'discord'
+        ? '回复会自动发回当前 Discord 对话;不要用 cindy_discord 发送或读取这条对话(那是用户另行配置的个人 Discord 机器人,与当前对话无关),' +
+          '也不要用 cindy_feishu_bot 发送,除非用户明确要求通过它们发送。'
+        : '不要用 cindy_feishu_bot 发送,除非用户明确要求发到飞书。';
   const attachmentNote =
     '[渠道说明] 以下为系统每轮自动追加的投递与格式规范,不是用户发来的消息;' +
     '回复时不要把它当作用户的请求,也不要引用、复述或据此臆测用户意图。' +
     `本会话来自 ${platform}。要把文件发给用户:在最终回复文本里写 ` +
     '`[文件名](xdt-file:///绝对路径)`;图片写 ' +
-    '`![说明](工具返回的媒体地址或本机图片的绝对路径)`。' +
+    '`![说明](工具返回的媒体地址)`,工具已返回 cindy-media:// 等媒体地址时原样使用;' +
+    '本机图片写绝对路径,路径含空格时写成 `![说明](<绝对路径>)`。' +
     '不要给本地路径拼接 xdt-image:// 或 cindy-media://。' +
     `PNG/JPEG/GIF/WebP 图片会在回复结束后自动作为 ${platform} 附件发回,无需另调导入工具;` +
     'SVG 等其它格式先转成 PNG。' +
     'xdt-file 文件必须位于当前工作目录内;无法读取、超限或目录外的附件不会发送,' +
     '最终回复会明确显示附件发送不完整。' +
-    '不要用 cindy_feishu_bot 发送,除非用户明确要求发到飞书。';
+    feishuToolNote;
   if (im === 'x') {
     return (
       `${attachmentNote}\n` +
       'X 附件只支持最多四张图片,或一个 GIF/视频,不能混发;不支持普通文件。' +
       '视频写 `[说明](工具返回的 cindy-media:// 地址)` 或 `[说明](xdt-file:///工作目录内视频路径)`;' +
-      '图片每张至多 5MiB,GIF 至多 15MiB,MP4/MOV 视频至多 10MiB。\n' +
+      '图片每张至多 5MiB,GIF 至多 15MiB;MP4/MOV 视频无需压缩,发送失败时最终回复会提示。\n' +
       // session-runner 会先用 observer.finalText() 按桌面消息流规则拼出正式正文,
       // 再由服务端 X 发送层收口成一条回复。不要退回旧的“只取最后一条消息”描述。
       // 标题、列表、表格等结构仍参与正式正文判定,发布时才转换为纯文本。
@@ -85,6 +115,27 @@ export function buildHookPromptNote(im: string | undefined): string {
       '再以一条回复发回 X。正文可以使用标题、列表、表格、普通段落或代码块组织内容,' +
       '发布时会转换为纯文本;上述附件引用除外。在 X 中除上述附件引用外,尽量避免输出其他 URL 链接。' +
       '不要解释或复述这些格式要求。'
+    );
+  }
+  if (im === 'feishu') {
+    // 第一里程碑由服务端把终稿渲染成飞书 / Lark 卡片的 Markdown(行内代码会去掉反引号),
+    // 与 Telegram 平行地给出常用结构, 不承诺卡片不支持的原始 HTML。
+    return (
+      `${attachmentNote}\n` +
+      '[飞书回复格式] 最终回复使用常用 Markdown 结构' +
+      '(短段落、标题、列表、引用、链接和 fenced code block)。' +
+      '不要输出原始 HTML;工具调用和思考进度由系统单独呈现,' +
+      '不要在最终正文中复述过程。'
+    );
+  }
+  if (im === 'discord') {
+    // 服务端把终稿按 Discord 消息上限分段发出(代码块成对闭合); Discord 不渲染 Markdown 表格。
+    return (
+      `${attachmentNote}\n` +
+      '[Discord 回复格式] 最终回复使用 Discord 支持的常用 Markdown 结构' +
+      '(短段落、标题、列表、引用、链接和 fenced code block);Discord 不渲染表格,需要对比时改用列表。' +
+      '不要输出原始 HTML;工具调用和思考进度由系统单独呈现,' +
+      '不要在最终正文中复述过程。'
     );
   }
   if (im !== 'telegram') return attachmentNote;
@@ -173,8 +224,22 @@ export interface OutboundDeps {
    * 正文变换仍然只作用于 finalText —— 这里扩大的只是"哪些引用要被收集成附件"。
    */
   refScanText?: string;
+  /** server 支持分块转传时提供: 把视频传到 X 并返回 media id, 失败抛错。省略 = 只内联 10 MiB 以内的视频。 */
+  relayVideo?: (absPath: string, mimeType: string) => Promise<string>;
   /** 附件未全部发出时附加在正文末尾的提示; 省略 = 英文默认提示。 */
   formatIncompleteNotice?: (skippedNames: string[]) => string;
+  /**
+   * 超过单图上限的静态图片先在本机压到上限以内再发(缩小边长、转 WebP); 返回 null = 压不到上限以内。
+   * 省略 = 不压缩, 超限的图片直接跳过并提示。只影响发给渠道的副本, 不改本机原图。
+   */
+  shrinkImage?: (bytes: Buffer, mimeType: string, maxBytes: number) => Promise<{ buffer: Buffer; mime: string } | null>;
+  /**
+   * 没能导入的本机图片是否因为超过导入上限: 返回上限(MiB), 不是这个原因返回 undefined。提示里据此
+   * 写明上限。由能读本机文件的调用方提供; 收集器自己不读没导入的本机路径(它可能属于另一台电脑)。
+   */
+  localImageOverLimitMiB?: (absPath: string) => number | undefined;
+  /** 因超过大小上限没发出的附件在提示里的写法(点名并说明上限); 省略 = 英文默认写法。 */
+  formatOverLimitName?: (name: string, limitMiB: number) => string;
   /** realpath 校验(生产: fs.promises.realpath; 测试注入)。 */
   realpath?: (absPath: string) => Promise<string>;
   /** 读文件字节(生产: fs.promises.readFile)。 */
@@ -186,6 +251,8 @@ export interface OutboundResult {
   /** 引用已剥离/替换后的正文。 */
   text: string;
   attachments: TaskAttachment[];
+  /** 已分块转传到 X 的媒体。 */
+  xMediaIds: string[];
   /** 因限额 / 读盘失败被跳过的数量(调用方记日志用)。 */
   skipped: number;
 }
@@ -194,6 +261,27 @@ export interface OutboundResult {
 function attachmentDisplayName(label: string, fallbackPath?: string): string {
   const name = label.replace(/\s+/g, ' ').trim() || (fallbackPath ? path.win32.basename(fallbackPath) : '');
   return name.length > 40 ? `${name.slice(0, 39)}…` : name;
+}
+
+interface OutboundItem {
+  /** 转传的视频没有: 字节不进内存, 选中后才分块上传。 */
+  attachment?: TaskAttachment;
+  mimeType: string;
+  absPath: string;
+  name: string;
+}
+
+/**
+ * X 一条帖子最多四张图片，或一个 GIF/视频。其它组合会被服务端拒绝，整条回帖连正文都发不出去，
+ * 所以发送前就选定：回复里引用的优先，同组内视频和 GIF 优先于图片。
+ */
+function selectXMedia(items: OutboundItem[], implicitPaths: ReadonlySet<string>): OutboundItem[] {
+  const ranked = [...items].sort((a, b) =>
+    Number(implicitPaths.has(a.absPath)) - Number(implicitPaths.has(b.absPath)));
+  const explicit = ranked.filter((item) => !implicitPaths.has(item.absPath));
+  const isMotion = ({ mimeType }: OutboundItem) => mimeType === 'image/gif' || mimeType.startsWith('video/');
+  const motion = (explicit.length ? explicit : ranked).find(isMotion);
+  return motion ? [motion] : ranked.filter((item) => !isMotion(item)).slice(0, MAX_X_IMAGES);
 }
 
 function defaultIncompleteNotice(skippedNames: string[]): string {
@@ -207,6 +295,57 @@ function defaultIncompleteNotice(skippedNames: string[]): string {
 // only; this does not grant the local importer access to that path.
 function isLocalImage(url: string): boolean {
   return Boolean(localTaskImagePath(url)) || path.win32.isAbsolute(url);
+}
+
+const RELATIVE_IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp']);
+
+/** 既不是网址 / 协议地址、也不是绝对路径的图片目标: 模型按工作目录写的相对路径(如 evidence/a.png)。 */
+function isRelativeImageTarget(url: string): boolean {
+  if (!url || url.includes('\0') || /^[a-z][a-z0-9+.-]*:/i.test(url) || /^(\/\/|[#?])/.test(url)) return false;
+  if (path.isAbsolute(url) || path.win32.isAbsolute(url)) return false;
+  return RELATIVE_IMAGE_EXTENSIONS.has(path.extname(url.split(/[?#]/)[0]!).toLowerCase());
+}
+
+/**
+ * 相对路径的本机图片引用按工作目录补成绝对路径, 返回「原目标 → 绝对路径」。之后与绝对路径的图片走同一条
+ * 导入与发送流程。只认落在 roots 内(解析符号链接后仍在内)、确实存在的常见图片文件; 找不到的原样留在
+ * 正文里, 不猜测别的位置。实踩(2026-11-17): 回复里写 `![加载态](evidence/loading-68.png)`, 图片没发出,
+ * 这段引用原样进了飞书卡片, 整张卡被平台拒绝, 这一轮的答案没送达。
+ */
+export async function resolveRelativeImageRefs(
+  text: string,
+  roots: readonly string[],
+  io: { realpath?: (p: string) => Promise<string>; isFile?: (p: string) => Promise<boolean> } = {},
+): Promise<Map<string, string>> {
+  const resolved = new Map<string, string>();
+  const bases = roots.map((root) => root.trim()).filter((root) => root.length > 0);
+  if (bases.length === 0 || !text.includes('![')) return resolved;
+  const realpath = io.realpath ?? ((p: string) => fsp.realpath(p));
+  const isFile = io.isFile ?? (async (p: string) => (await fsp.stat(p)).isFile());
+  for (const ref of taskImageReferences(text)) {
+    if (resolved.has(ref.url) || !isRelativeImageTarget(ref.url)) continue;
+    const bare = ref.url.split(/[?#]/)[0]!;
+    const candidates = [bare];
+    try {
+      const decoded = decodeURIComponent(bare);
+      if (decoded !== bare && !decoded.includes('\0')) candidates.push(decoded);
+    } catch { /* 不是合法的百分号编码: 只按原样找 */ }
+    search: for (const base of bases) {
+      for (const candidate of candidates) {
+        const absPath = path.resolve(base, candidate);
+        if (!isPathWithin(base, absPath)) continue;
+        try {
+          const [baseReal, targetReal] = await Promise.all([realpath(path.resolve(base)), realpath(absPath)]);
+          if (!isPathWithin(baseReal, targetReal) || !(await isFile(targetReal))) continue;
+        } catch {
+          continue;
+        }
+        resolved.set(ref.url, absPath);
+        break search;
+      }
+    }
+  }
+  return resolved;
 }
 
 /** 文本里是否存在任何托管媒体出站引用(快速前置判断, 避免无谓的收集开销)。 */
@@ -260,7 +399,9 @@ export async function collectOutboundAttachments(
 ): Promise<OutboundResult> {
   const readFile = deps.readFile ?? ((p: string) => fsp.readFile(p));
   const realpath = deps.realpath ?? ((p: string) => fsp.realpath(p));
-  const attachments: TaskAttachment[] = [];
+  const items: OutboundItem[] = [];
+  /** 工具结果旁路带来、回复里没有引用的媒体。 */
+  const implicitPaths = new Set<string>();
   const sentFileAbsPaths = new Set<string>();
   const sentMediaPaths = new Set<string>();
   const mediaLimit = (p: string): number => deps.provider === 'x'
@@ -273,6 +414,7 @@ export async function collectOutboundAttachments(
   const skip = (name: string): void => {
     skippedNames.push(name);
   };
+  const overLimitName = deps.formatOverLimitName ?? ((name: string, limitMiB: number) => `${name} (over ${limitMiB} MB)`);
 
   const isAllowedFilePath = async (absPath: string): Promise<boolean> => {
     const roots =
@@ -314,9 +456,15 @@ export async function collectOutboundAttachments(
       skip(name);
       return false;
     }
-    if (attachments.length >= MAX_OUT_ATTACHMENTS) {
+    if (items.length >= MAX_OUT_ATTACHMENTS) {
       skip(name);
       return false;
+    }
+    const mimeType = mimeOverride ?? guessMime(absPath);
+    if (deps.provider === 'x' && deps.relayVideo && mimeType.startsWith('video/')) {
+      sentMediaPaths.add(absPath);
+      items.push({ absPath, name, mimeType });
+      return true;
     }
     let bytes: Buffer;
     try {
@@ -328,21 +476,41 @@ export async function collectOutboundAttachments(
       );
       return false;
     }
+    let sentMimeType = mimeType;
+    let sentFileName = path.basename(absPath);
+    if (
+      bytes.length > maxBytes && bytes.length <= MAX_SHRINK_INPUT_BYTES
+      && deps.shrinkImage && SHRINKABLE_IMAGE_MIMES.has(mimeType)
+    ) {
+      // 图片超过上限: 先压一份能发出去的副本。压不下来或压缩出错都按原来的超限处理, 不影响正文。
+      const original = bytes.length;
+      const smaller = await deps.shrinkImage(bytes, mimeType, maxBytes).catch(() => null);
+      if (smaller && smaller.buffer.length > 0 && smaller.buffer.length <= maxBytes) {
+        bytes = smaller.buffer;
+        sentMimeType = smaller.mime;
+        const ext = Object.entries(MIME_BY_EXT).find(([, mime]) => mime === smaller.mime)?.[0];
+        if (ext && path.extname(sentFileName).toLowerCase() !== ext) sentFileName = `${path.parse(sentFileName).name}${ext}`;
+        deps.log.warn(`outbound image compressed to fit the limit (${absPath}: ${original} -> ${bytes.length} bytes)`);
+      }
+    }
     if (
       bytes.length === 0 ||
       bytes.length > maxBytes ||
       totalBytes + bytes.length > MAX_OUT_TOTAL_BYTES
     ) {
-      skip(name);
+      // 超过大小上限的在提示里写明上限: 只说「未能发送」用户不知道该压缩还是该重试。
+      const limitBytes = bytes.length > maxBytes ? maxBytes : MAX_OUT_TOTAL_BYTES;
+      skip(bytes.length === 0 ? name : overLimitName(name || path.basename(absPath), Math.floor(limitBytes / (1024 * 1024))));
       deps.log.warn(`outbound attachment skipped by size (${absPath}: ${bytes.length} bytes)`);
       return false;
     }
     totalBytes += bytes.length;
     sentMediaPaths.add(absPath);
-    attachments.push({
-      name: path.basename(absPath),
-      mimeType: mimeOverride ?? guessMime(absPath),
-      dataBase64: bytes.toString('base64'),
+    items.push({
+      absPath,
+      name,
+      mimeType: sentMimeType,
+      attachment: { name: sentFileName, mimeType: sentMimeType, dataBase64: bytes.toString('base64') },
     });
     return true;
   };
@@ -363,7 +531,10 @@ export async function collectOutboundAttachments(
     visitedImageUrls.add(ref.url);
     // Local images must already have been imported by the task-scoped adapter.
     if (isLocalImage(ref.url)) {
-      skip(attachmentDisplayName(ref.alt, localTaskImagePath(ref.url) ?? ref.url));
+      const localPath = localTaskImagePath(ref.url);
+      const name = attachmentDisplayName(ref.alt, localPath ?? ref.url);
+      const limitMiB = localPath ? deps.localImageOverLimitMiB?.(localPath) : undefined;
+      skip(limitMiB === undefined ? name : overLimitName(name, limitMiB));
       continue;
     }
     try {
@@ -384,6 +555,7 @@ export async function collectOutboundAttachments(
     if (!seenImage.has(absPath)) {
       seenImage.add(absPath);
       imageAbsPaths.push(absPath);
+      implicitPaths.add(absPath);
     }
   }
   for (const absPath of imageAbsPaths) {
@@ -397,6 +569,7 @@ export async function collectOutboundAttachments(
       seenLinks.add(ref.url);
       try {
         const { absPath } = deps.resolveImageUrl(ref.url);
+        implicitPaths.delete(absPath);
         await push(absPath, mediaLimit(absPath), attachmentDisplayName(ref.label, absPath));
       } catch {
         skip(attachmentDisplayName(ref.label));
@@ -427,7 +600,28 @@ export async function collectOutboundAttachments(
       skip(name);
       continue;
     }
+    implicitPaths.delete(absPath);
     if (await push(absPath, deps.provider === 'x' ? mediaLimit(absPath) : MAX_OUT_FILE_BYTES, name)) sentFileAbsPaths.add(absPath);
+  }
+
+  const selected = deps.provider === 'x' ? selectXMedia(items, implicitPaths) : items;
+  for (const item of items) {
+    if (selected.includes(item)) continue;
+    sentFileAbsPaths.delete(item.absPath);
+    // 旁路带来的预览图回复里没提过，让位不算发送失败，不写进公开回帖。
+    if (!implicitPaths.has(item.absPath)) skip(item.name);
+    deps.log.warn(`outbound attachment omitted by X media limits (${item.absPath})`);
+  }
+  const xMediaIds: string[] = [];
+  for (const item of selected) {
+    if (item.attachment || !deps.relayVideo) continue;
+    try {
+      xMediaIds.push(await deps.relayVideo(item.absPath, item.mimeType));
+    } catch (err) {
+      sentFileAbsPaths.delete(item.absPath);
+      skip(item.name);
+      deps.log.warn(`outbound video relay failed: ${(err as { code?: string }).code ?? (err instanceof Error ? err.name : 'unknown')}`);
+    }
   }
 
   // Collection is not a delivery receipt. Keep captions without claiming the channel sent them.
@@ -465,5 +659,6 @@ export async function collectOutboundAttachments(
     ? `${transformed.trimEnd()}${transformed.trim().length > 0 ? '\n\n' : ''}${warning}`
     : transformed;
 
-  return { text, attachments, skipped };
+  const attachments = selected.flatMap((item) => (item.attachment ? [item.attachment] : []));
+  return { text, attachments, xMediaIds, skipped };
 }

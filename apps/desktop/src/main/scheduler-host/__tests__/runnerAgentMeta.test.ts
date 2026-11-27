@@ -52,7 +52,7 @@ vi.mock('../runners/_shared', () => ({
   backfillSessionMeta: mocks.backfillSessionMeta,
 }));
 
-import { MakerScheduleRunner } from '../runner';
+import { MakerScheduleRunner } from '../runner.desktop';
 
 type SessionSendOptions = Parameters<Session['send']>[1];
 type SendImpl = (
@@ -146,6 +146,7 @@ function createRunnerHarness(
     getSessionMeta: vi.fn(async () => opts.sessionMeta ?? null),
     isSessionAlive: vi.fn(() => false),
     closeSession: vi.fn(async () => undefined),
+    recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
   } as unknown as Maker;
   const runner = new MakerScheduleRunner({
     maker,
@@ -247,7 +248,7 @@ describe('MakerScheduleRunner agentMeta automation origin', () => {
     });
   });
 
-  it('heartbeat fire 绑定既有会话时把 userSendAt bump 到本次 firedAt(侧栏 userSendAt 排序据此冒头)', async () => {
+  it('heartbeat fire 绑定既有会话非静默结束时把 userSendAt 推进到本轮时间(侧栏排序据此冒头)', async () => {
     const h = createSessionHarness(acceptingSend());
     const { runner } = createRunnerHarness(h.session, {
       sessionMeta: { sdkSessionId: 'sdk-1', workDir: '/repo/project' },
@@ -256,12 +257,14 @@ describe('MakerScheduleRunner agentMeta automation origin', () => {
 
     await fireToCompletion(runner, schedule, h);
 
-    // 绑定既有会话每次 fire 都刷成本次 firedAt —— userSendAt 排序据此让它冒到列表顶。
+    // 绑定既有会话在非静默收尾时推进 userSendAt（>= firedAt）—— 既让它冒头，又不误伤轮内静默。
     expect(mocks.touchUserSendInDb).toHaveBeenCalledTimes(1);
-    expect(mocks.touchUserSendInDb).toHaveBeenCalledWith('scheduler-session', 1_700_000_000_100);
+    const [sid, atMs] = mocks.touchUserSendInDb.mock.calls[0];
+    expect(sid).toBe('scheduler-session');
+    expect(atMs).toBeGreaterThanOrEqual(1_700_000_000_100);
   });
 
-  it('非 heartbeat 新建 session 路径同样 bump userSendAt 到 firedAt', async () => {
+  it('非 heartbeat 新建 session 路径非静默结束同样推进 userSendAt', async () => {
     const h = createSessionHarness(acceptingSend());
     const { runner } = createRunnerHarness(h.session);
     const schedule = baseSchedule();
@@ -270,6 +273,6 @@ describe('MakerScheduleRunner agentMeta automation origin', () => {
 
     expect(mocks.touchUserSendInDb).toHaveBeenCalledTimes(1);
     const [, atMs] = mocks.touchUserSendInDb.mock.calls[0];
-    expect(atMs).toBe(1_700_000_000_100);
+    expect(atMs).toBeGreaterThanOrEqual(1_700_000_000_100);
   });
 });

@@ -1,0 +1,110 @@
+export default {
+  name: 'plugin-engines',
+  entry: './fixture.tsx',
+  viewport: { width: 560, height: 640 },
+  real: 'ModelSelectorContent, ModelSelector trigger, PluginEnginesSection (available and unknown engines, with unavailable candidates hidden) and the plugin-engine task panel',
+  notCovered:
+    'Engine processes, ACP sessions, task creation and sending, and the full composer and sidebar',
+  cases: {
+    default: { about: 'New-task picker shows available and unknown engines and hides an unavailable candidate' },
+    'antigravity-quota': { about: 'Antigravity engine shows one rail quota bar, inline Gemini vs Claude & GPT header summary, per-model L2 pool quota, and grouped details tooltip alongside a single-group plugin engine' },
+    'draft-selected': { about: 'An engine model is the draft choice: its row carries the selected fill, no built-in model row is selected' },
+    'effort-config': { about: 'A plugin engine model with reasoning levels: level at the row end and its configuration flyout with the level slider' },
+    'agent-modes': { about: 'Permission menu of an engine whose agent publishes its own modes: the agent modes in its order, then Full access', viewport: { width: 560, height: 640 } },
+    'task-icons': { about: 'Sidebar task identity: grey while idle and original colours while breathing', viewport: { width: 320, height: 200 } },
+    task: { about: 'Task running on a plugin engine: trigger shows engine · model · level; the panel lists only that engine' },
+    'task-engine-gone': { about: 'The plugin providing the task engine was removed: generic engine label and built-in models for switching' },
+  },
+  async check(page, ui) {
+    if (ui.case === 'antigravity-quota') {
+      const agyQuota = page.locator('[data-plugin-engine-quota="acp-plugin:_root__cindy-antigravity-acp:agy"]');
+      await agyQuota.waitFor();
+      const groupParts = agyQuota.locator('[data-plugin-engine-quota-group]');
+      if ((await groupParts.count()) !== 2) {
+        throw new Error(`expected 2 Antigravity quota groups in header, found ${await groupParts.count()}`);
+      }
+      const agyTab = page.getByRole('button', { name: 'Antigravity', exact: true });
+      const railBars = agyTab.locator('[data-weekly-remaining]');
+      if ((await railBars.count()) !== 1) {
+        throw new Error(`expected 1 single rail quota bar for Antigravity, found ${await railBars.count()}`);
+      }
+      await page.locator('[data-plugin-model-quota="label:gemini models"]').first().waitFor();
+      await page.locator('[data-plugin-model-quota="label:claude and gpt models"]').first().waitFor();
+      await ui.capture('antigravity-all');
+      await agyTab.click();
+      if ((await agyTab.getAttribute('aria-pressed')) !== 'true') {
+        throw new Error('Antigravity rail tab did not activate');
+      }
+      await ui.capture('antigravity-tab');
+      await agyQuota.click();
+      await page.getByRole('tooltip').filter({ hasText: 'Gemini Models' }).waitFor();
+      await ui.capture('antigravity-details');
+      return;
+    }
+    if (ui.case === 'agent-modes') {
+      // 2026-11-19:Agent 公布了自己的模式时，权限菜单列出这些模式并在末尾保留「全部允许」。
+      await page.getByRole('button').first().click();
+      const labels = ['default', 'acceptEdits', 'auto', 'plan', 'bypassPermissions'];
+      for (const id of labels) await page.getByText(await ui.t(`newChat.permissionSelector.modes.acp.${id}.label`), { exact: true }).last().waitFor();
+      await ui.capture('menu');
+      return;
+    }
+    if (ui.case === 'task-icons') {
+      const icons = page.locator('[data-task-icons]');
+      await icons.locator('[data-plugin-icon="silhouette"]').nth(1).waitFor();
+      await icons.locator('.session-status-breathing [data-plugin-icon="original"]').waitFor();
+      if ((await icons.locator('img').count()) !== 1) {
+        throw new Error('only the running plugin task should show the original icon');
+      }
+      await ui.capture('icons');
+      return;
+    }
+    if (ui.case.startsWith('task')) {
+      const trigger = page.locator('[data-plugin-engine-trigger]').locator('xpath=..');
+      await trigger.waitFor();
+      const text = await trigger.textContent();
+      if (/Claude|Codex/.test(text ?? '')) throw new Error(`plugin engine task trigger names a built-in Harness: ${text}`);
+      await ui.capture('trigger');
+      await trigger.click();
+      if (ui.case === 'task-engine-gone') {
+        await page.getByText('Opus 5', { exact: true }).first().waitFor();
+      } else {
+        await page.getByRole('listbox', { name: await ui.t('newChat.modelSelector.modelListAria') }).waitFor();
+        await page.getByText('OpenCode Small').waitFor();
+      }
+      await ui.capture('panel');
+      return;
+    }
+    const group = page.getByRole('group', { name: await ui.t('newChat.pluginEngines.group') });
+    await group.waitFor();
+    if (ui.case === 'effort-config') {
+      // 2026-11-19:插件引擎模型的思考深度与内置模型同一位置、同一配置浮层。
+      const row = page.locator('[data-plugin-engine-model="acp-plugin:opencode-plugin:opencode#oc-large"]').first();
+      await row.scrollIntoViewIfNeeded();
+      if ((await row.locator('[data-plugin-engine-effort]').getAttribute('data-plugin-engine-effort')) !== 'max') {
+        throw new Error('plugin engine row does not show the chosen level');
+      }
+      await row.hover();
+      await row.locator('[data-row-customize]').click();
+      await page.locator('[data-plugin-engine-config] [role="slider"]').waitFor();
+      await ui.capture('effort-flyout');
+      return;
+    }
+    const unavailable = page.locator('[data-plugin-engine="acp-plugin:gemini-plugin:gemini"]');
+    const unavailableTab = page.getByRole('button', { name: 'Gemini CLI', exact: true });
+    if (await unavailable.count() || await unavailableTab.count()) {
+      throw new Error('unavailable plugin engine remains in the model list or source rail');
+    }
+    await group.scrollIntoViewIfNeeded();
+    await ui.capture('engines');
+    // 每个引擎在左侧栏单独一格(插件图标)：停在供应商格时也能直达，只列这个引擎。
+    const tab = page.getByRole('button', { name: 'DeepSeek Harness', exact: true });
+    if ((await tab.locator('img').count()) !== 1) throw new Error('engine rail tab does not show the plugin icon');
+    await tab.click();
+    if ((await tab.getAttribute('aria-pressed')) !== 'true') throw new Error('engine rail tab did not activate');
+    const list = page.getByRole('listbox', { name: await ui.t('newChat.modelSelector.modelListAria') });
+    if ((await list.getByText('Opus 5').count()) !== 0) throw new Error('engine tab still lists built-in models');
+    if ((await list.getByText('OpenCode Large').count()) !== 0) throw new Error('engine tab lists another engine');
+    await ui.capture('engines-tab');
+  },
+};

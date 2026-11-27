@@ -3,7 +3,9 @@ import { act, createElement, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SwipeableProjectHeader } from "@/session/SwipeableProjectHeader";
+import { SwipeableSectionHeader } from "@/session/SwipeableSectionHeader";
 import { createSwipeRowRegistry } from "@/session/swipeRowRegistry";
+import { PaneEdgeInsetProvider } from "@/session/SessionPaneDivider";
 
 const native = vi.hoisted(() => ({
   width: 400,
@@ -23,7 +25,7 @@ vi.mock("react-native", async () => {
         children,
       ),
     StyleSheet: { create: (value: unknown) => value },
-    useWindowDimensions: () => ({ width: native.width }),
+    Dimensions: { get: () => ({ width: native.width }), addEventListener: () => ({ remove() {} }) },
   };
 });
 vi.mock("react-native-reanimated", async () => {
@@ -52,24 +54,30 @@ vi.mock("@/platform/gestureHandler", async () => {
       return el(
         Fragment,
         null,
-        el(
-          "div",
-          { "data-side": "left" },
-          props.renderLeftActions({}, native.offset),
-        ),
-        el(
-          "div",
-          { "data-side": "right" },
-          props.renderRightActions({}, native.offset),
-        ),
+        props.renderLeftActions
+          ? el(
+              "div",
+              { "data-side": "left" },
+              props.renderLeftActions({}, native.offset),
+            )
+          : null,
+        props.renderRightActions
+          ? el(
+              "div",
+              { "data-side": "right" },
+              props.renderRightActions({}, native.offset),
+            )
+          : null,
         props.children,
       );
     }),
   };
 });
 vi.mock("lucide-react-native", () => ({
+  Ellipsis: () => null,
   List: () => null,
   Search: () => null,
+  Settings: () => null,
   SquarePen: () => null,
 }));
 vi.mock("react-i18next", async (importOriginal) => ({
@@ -88,10 +96,10 @@ let root: Root;
 let host: HTMLDivElement;
 let registry: ReturnType<typeof createSwipeRowRegistry>;
 let destination: string;
-function render(projectKey = "project-a") {
+function render(projectKey = "project-a", edgeInset = 0) {
   act(() =>
     root.render(
-      createElement(SwipeableProjectHeader, {
+      createElement(PaneEdgeInsetProvider, { value: edgeInset }, createElement(SwipeableProjectHeader, {
         projectKey,
         registry,
         onNewTask: () => {
@@ -103,8 +111,11 @@ function render(projectKey = "project-a") {
         onSearch: () => {
           destination = "search";
         },
+        onSettings: () => {
+          destination = "settings";
+        },
         children: "Project",
-      }),
+      })),
     ),
   );
 }
@@ -136,6 +147,10 @@ describe("project header navigation and swipe lifecycle", () => {
     for (const key of ["onSwipeableOpenStartDrag", "onSwipeableClose", "onSwipeableWillOpen", "hitSlop"]) {
       expect(native.props[key]).toBe(initial[key]);
     }
+    // User decision 2026-11-12: beside a resizable pane edge the row leaves the
+    // edge's 24pt drag band to resizing; a coarse drag there opened row actions.
+    render("project-b", 24);
+    expect(native.props.hitSlop).toEqual({ left: -24, right: -24 });
     native.offset.value = -260;
     act(() => native.props.onSwipeableWillOpen("left"));
     expect(destination).toBe("home");
@@ -166,16 +181,17 @@ describe("project header navigation and swipe lifecycle", () => {
   );
 
   it.each([
-    ["newTask", "new", "right"],
-    ["allTasks", "tasks", "left"],
-    ["search", "search", "left"],
-  ])("closes the revealed header before opening %s", (action, target, side) => {
+    ["newTask", "new", "right", "devices.list.projectActions.newTask"],
+    ["allTasks", "tasks", "left", "devices.list.projectActions.allTasks"],
+    ["search", "search", "left", "devices.list.projectActions.search"],
+    ["settings", "settings", "right", "settings.projectInfo.title"],
+  ])("closes the revealed header before opening %s", (action, target, side, label) => {
     render();
     act(() => native.props.onSwipeableOpenStartDrag());
     act(() =>
       host
         .querySelector<HTMLButtonElement>(
-          `[data-side="${side}"] [aria-label="devices.list.projectActions.${action}"]`,
+          `[data-side="${side}"] [aria-label="${label}"]`,
         )!
         .click(),
     );
@@ -208,5 +224,72 @@ describe("project header navigation and swipe lifecycle", () => {
     act(() => native.props.onSwipeableOpenStartDrag());
     expect(registry.closeOpenRow()).toBe(true);
     expect(native.close).toHaveBeenCalledOnce();
+  });
+});
+
+// Unit: SwipeableSectionHeader reveals the options button on left swipe for
+// pinned, teammates, and device headers and shares the home swipe registry.
+describe("section header swipe lifecycle", () => {
+  function renderSection(
+    onOptions: () => void,
+    options: { rowKey?: string; edgeInset?: number; enabled?: boolean; withRegistry?: boolean } = {},
+  ) {
+    const { rowKey = "pinned:header", edgeInset = 0, enabled = true, withRegistry = true } = options;
+    act(() =>
+      root.render(
+        createElement(
+          PaneEdgeInsetProvider,
+          { value: edgeInset },
+          createElement(SwipeableSectionHeader, {
+            rowKey,
+            registry: withRegistry ? registry : undefined,
+            enabled,
+            onOptions,
+            testID: "home.section.swipe",
+            actionTestID: "home.section.options",
+            children: "Section",
+          }),
+        ),
+      ),
+    );
+  }
+
+  it("reveals only the trailing options action, closes before opening options, and respects pane edge hitSlop", () => {
+    const onOptions = vi.fn();
+    renderSection(onOptions, { rowKey: "teammates:header", edgeInset: 24 });
+    expect(native.props.renderLeftActions).toBeUndefined();
+    expect(native.props.overshootRight).toBe(false);
+    expect(native.props.hitSlop).toEqual({ left: -24, right: -24 });
+
+    const closeOther = vi.fn();
+    registry.onRowOpen("task-a", closeOther);
+    act(() => native.props.onSwipeableOpenStartDrag());
+    expect(closeOther).toHaveBeenCalledOnce();
+
+    act(() =>
+      host
+        .querySelector<HTMLButtonElement>(
+          '[data-side="right"] [aria-label="session.row.moreOptions"]',
+        )!
+        .click(),
+    );
+    expect(onOptions).toHaveBeenCalledOnce();
+    expect(native.close).toHaveBeenCalledOnce();
+    expect(registry.closeOpenRow()).toBe(false);
+  });
+
+  it("resets when recycled to a different section key and renders plain children when disabled", () => {
+    const onOptions = vi.fn();
+    renderSection(onOptions, { rowKey: "device:mac-1" });
+    act(() => native.props.onSwipeableOpenStartDrag());
+    native.reset.mockClear();
+    renderSection(onOptions, { rowKey: "device:mac-2" });
+    expect(native.reset).toHaveBeenCalledOnce();
+    expect(registry.closeOpenRow()).toBe(false);
+
+    native.props = null;
+    renderSection(onOptions, { rowKey: "teammates:header", enabled: false });
+    expect(native.props).toBeNull();
+    expect(host.textContent).toBe("Section");
   });
 });

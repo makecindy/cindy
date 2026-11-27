@@ -442,6 +442,35 @@ describe("bounded Computer Use recovery", () => {
     );
   });
 
+  // Review (#8227 round 13): launch-app discovery carried every window's full process
+  // command line, burying the error and exposing arguments to the model.
+  it.each([1, 2])(
+    "keeps process command lines out of launch_app window discovery (%s matching processes)",
+    async (processes) => {
+      const windows = Array.from({ length: processes }, (_, i) => ({
+        pid: i + 1,
+        window_id: i,
+        app_name: "Simulator",
+        title: "iPhone",
+        process: { pid: i + 1, command: "/bin/Simulator --token=hunter2-secret" },
+        identity: { kind: "unknown", confidence: 0, labels: [] },
+      }));
+      const dispatch = vi.fn(async (name: string) => {
+        if (name === "list_apps") return { apps: [] };
+        if (name === "list_windows") return { windows };
+        throw new Error('No installed macOS app found for name "Simulator"');
+      });
+      const call = await harness(dispatch);
+      const result = await call("launch_app", { name: "Simulator" });
+      expect(JSON.stringify(result)).not.toContain("hunter2-secret");
+      expect(JSON.stringify(result)).not.toContain("--token");
+      const discovery = (result.recovery as { discovery: { data: { windows: Array<Record<string, unknown>> } } })
+        .discovery.data.windows;
+      expect(discovery).toHaveLength(processes);
+      expect(discovery[0]).toEqual({ pid: 1, window_id: 0, app_name: "Simulator", title: "iPhone", identity: { kind: "unknown" } });
+    },
+  );
+
   it.each([1, 2])(
     "locates only an unambiguous running app (%s matching processes)",
     async (processes) => {

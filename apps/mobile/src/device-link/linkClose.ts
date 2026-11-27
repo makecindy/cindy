@@ -40,8 +40,13 @@ export function updateRehydrateSuppressionOnLinkClose(
 
 /** 新 relay 连接代际 = 世界重置:断线期间对方状态未知,新代按乐观补齐;
  * 若对方仍拒绝,入站永久 link-close 会重新建立抑制。 */
-export function liftRehydrateSuppressionForNewConnection(suppressed: Set<string>): void {
-  suppressed.clear();
+export function liftRehydrateSuppressionForNewConnection(
+  suppressed: Set<string>,
+  belongsToConnection: (deviceId: string) => boolean = () => true,
+): void {
+  for (const deviceId of suppressed) {
+    if (belongsToConnection(deviceId)) suppressed.delete(deviceId);
+  }
 }
 
 /** 显式 openLink 成功 = 用户/页面主动重建意图已落地,解除该设备抑制。 */

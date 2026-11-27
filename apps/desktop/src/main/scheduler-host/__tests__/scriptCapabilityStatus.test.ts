@@ -9,10 +9,13 @@ describe('resolveScriptCapabilityStatuses', () => {
       { id: 'xd-feishu', name: 'XD Feishu', enabled: true },
     ]);
     expect(statuses).toEqual([
+      { capability: 'github.read', state: 'ok' },
       { capability: 'jira.read', state: 'ok' },
       { capability: 'jira.comment', state: 'ok' },
       { capability: 'sessions.dispatch', state: 'ok' },
       { capability: 'feishu.read', state: 'ok' },
+      { capability: 'settings.read', state: 'ok' },
+      { capability: 'usage.read', state: 'ok' },
     ]);
   });
 

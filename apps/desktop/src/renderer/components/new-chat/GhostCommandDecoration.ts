@@ -24,6 +24,7 @@ import { Plugin, PluginKey, type EditorState, type Transaction } from '@tiptap/p
 import { Decoration, DecorationSet, type EditorView } from '@tiptap/pm/view';
 import type { Node as PMNode } from '@tiptap/pm/model';
 
+import { isLooseBase64Chars, parseBase64DataUrl } from '@cindy/maker-shared';
 import {
   findGhostByCommand,
   findGhostByCommandIncludingDisabled,
@@ -48,7 +49,7 @@ interface GhostCommandPluginState {
   decorations: DecorationSet;
 }
 
-/** 触发符字符集——与 ChatInput 的 GHOST_SIGIL_CHARS / COMMAND_RE 同一套。 */
+/** 触发符字符集——与 composerTrigger 的 GHOST_SIGIL_CHARS / ghostCommand.ts 的 COMMAND_RE 同一套。 */
 const SIGILS = new Set(['$', '＄', '¥', '￥']);
 
 /**
@@ -56,7 +57,10 @@ const SIGILS = new Set(['$', '＄', '¥', '￥']);
  * 值要进内联 style 的 `url("...")`,这里顺带排除了引号/括号/空白等能破坏
  * CSS 声明的字符(base64 字符集本身就不含它们)。
  */
-const SAFE_ICON_DATA_URL_RE = /^data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=]+$/i;
+function isSafeIconDataUrl(value: string): boolean {
+  const parsed = parseBase64DataUrl(value, /^data:image\/[a-z0-9.+-]+;base64$/i);
+  return parsed !== null && isLooseBase64Chars(parsed.payload);
+}
 
 export interface GhostCommandMatch {
   /** 触发符字符的 doc 位置。 */
@@ -158,7 +162,7 @@ export function ghostPillAttrs(ghost: GhostCommandSource): Record<string, string
     title: ghost.manifest.name,
   };
   const icon = ghost.iconDataUrl;
-  if (icon && SAFE_ICON_DATA_URL_RE.test(icon)) {
+  if (icon && isSafeIconDataUrl(icon)) {
     attrs['data-ghost-cmd-icon'] = '';
     attrs.style = `--ghost-cmd-icon:url("${icon}")`;
   }

@@ -46,7 +46,17 @@ export interface NginxPlan {
 
 /** 解析语法与位置，不用正则改写任意 Nginx 配置；引号、注释、变量与嵌套块分别处理。 */
 function parse(file: string, source: string): Directive[] {
-  const tokens: Array<{ value: string; start: number; end: number }> = [];
+  const tokens: Array<{ kind: 'word' | '{' | '}' | ';'; value: string; start: number; end: number }> = [];
+  // Diagnostics contain coordinates and a plain directive name, never arguments
+  // (which may contain authorization headers or other private configuration).
+  const fail = (reason: string, offset: number, directive?: string): never => {
+    const prefix = source.slice(0, offset);
+    const line = prefix.split('\n').length;
+    const column = offset - prefix.lastIndexOf('\n');
+    const name = directive && /^[a-z_][a-z0-9_]{0,63}$/i.test(directive)
+      ? ` (directive: ${directive})` : '';
+    throw new Error(`${reason} at ${JSON.stringify(file)}:${line}:${column}${name}`);
+  };
   let i = 0;
   while (i < source.length) {
     if (/\s/.test(source[i])) {
@@ -58,8 +68,9 @@ function parse(file: string, source: string): Directive[] {
       continue;
     }
     const start = i;
-    if ('{};'.includes(source[i])) {
-      tokens.push({ value: source[i++], start, end: i });
+    const char = source[i];
+    if (char === '{' || char === '}' || char === ';') {
+      tokens.push({ kind: char, value: char, start, end: ++i });
       continue;
     }
     let value = '';
@@ -84,7 +95,7 @@ function parse(file: string, source: string): Directive[] {
       }
       if (c === '$' && source[i + 1] === '{') {
         const end = source.indexOf('}', i + 2);
-        if (end < 0) throw new Error('Unclosed Nginx variable');
+        if (end < 0) fail('Unclosed Nginx variable', i);
         value += source.slice(i, end + 1);
         i = end + 1;
         continue;
@@ -93,18 +104,18 @@ function parse(file: string, source: string): Directive[] {
       value += c;
       i++;
     }
-    if (quote || i === start) throw new Error('Invalid Nginx token');
-    tokens.push({ value, start, end: i });
+    if (quote || i === start) fail('Invalid Nginx token', start);
+    tokens.push({ kind: 'word', value, start, end: i });
   }
   let cursor = 0;
-  function block(nested: boolean): Directive[] {
+  function block(nested: boolean, opening?: { start: number; value: string }): Directive[] {
     const nodes: Directive[] = [];
-    while (cursor < tokens.length && tokens[cursor].value !== '}') {
+    while (cursor < tokens.length && tokens[cursor].kind !== '}') {
       const first = tokens[cursor++];
       const args: string[] = [];
-      while (cursor < tokens.length && ![';', '{', '}'].includes(tokens[cursor].value)) args.push(tokens[cursor++].value);
+      while (cursor < tokens.length && tokens[cursor].kind === 'word') args.push(tokens[cursor++].value);
       const delimiter = tokens[cursor++];
-      if (!delimiter || delimiter.value === '}') throw new Error('Invalid Nginx directive');
+      if (!delimiter || delimiter.kind === '}') fail('Invalid Nginx directive', first.start, first.value);
       const node: Directive = {
         file,
         name: first.value,
@@ -112,14 +123,14 @@ function parse(file: string, source: string): Directive[] {
         start: first.start,
         end: delimiter.end,
       };
-      if (delimiter.value === '{') {
+      if (delimiter.kind === '{') {
         node.open = delimiter.end;
-        node.children = block(true);
+        node.children = block(true, first);
         node.end = tokens[cursor - 1].end;
       }
       nodes.push(node);
     }
-    if (nested && tokens[cursor++]?.value !== '}') throw new Error('Unclosed Nginx block');
+    if (nested && tokens[cursor++]?.kind !== '}') fail('Unclosed Nginx block', opening?.start ?? source.length, opening?.value);
     return nodes;
   }
   return block(false);
@@ -249,8 +260,8 @@ function marked(text: string): string {
 }
 
 function location(port: number, tls: boolean): string {
-  return `location ^~ ${API} {
-    proxy_pass ${tls ? 'https' : 'http'}://127.0.0.1:${port};
+  const routes = [API, '/api/agent-net/'].map((prefix) => `location ^~ ${prefix} {
+    proxy_pass ${prefix === API && tls ? 'https' : 'http'}://127.0.0.1:${prefix === API ? port : 3348};
     proxy_http_version 1.1;
     proxy_set_header Host $http_host;
     proxy_set_header X-Forwarded-Host $http_host;
@@ -270,8 +281,8 @@ function location(port: number, tls: boolean): string {
     auth_basic off;
     access_log off;
     error_log /dev/null;
-}
-location @cindy_relay_unavailable {
+}`).join('\n');
+  return `${routes}\nlocation @cindy_relay_unavailable {
     access_log off;
     error_log /dev/null;
     recursive_error_pages off;
@@ -344,14 +355,14 @@ export function planNginx(options: {
     });
   };
   const routeApi = (body: string, tls: boolean): string => {
-    body = body.replaceAll(`if ($uri !~ "^${CHALLENGE}")`, 'if ($uri !~ "^/(?:api/device-link/|[.]well-known/acme-challenge/)")');
+    body = body.replaceAll(`if ($uri !~ "^${CHALLENGE}")`, 'if ($uri !~ "^/(?:api/(?:device-link|agent-net)/|[.]well-known/acme-challenge/)")');
     const directives = parse('body', body);
-    if (directives.some((d) => d.name === 'location' && d.args.some((a) => a.startsWith(API) || a === '/api/device-link'))) {
+    if (directives.some((d) => d.name === 'location' && d.args.some((a) => a.startsWith(API) || a === '/api/device-link' || a.startsWith('/api/agent-net')))) {
       throw new Error('The existing site already serves the Cindy relay API path');
     }
     for (const d of [...directives].reverse()) {
       if (d.name === 'return')
-        body = body.slice(0, d.start) + `if ($uri !~ "^${API}") { ${body.slice(d.start, d.end)} }` + body.slice(d.end);
+        body = body.slice(0, d.start) + `if ($uri !~ "^/api/(?:device-link|agent-net)/") { ${body.slice(d.start, d.end)} }` + body.slice(d.end);
     }
     return `${body}\n${marked(location(port, tls))}\n`;
   };
@@ -410,8 +421,8 @@ export function planNginx(options: {
         ) {
           body = body.slice(0, d.start) + body.slice(d.end);
         } else if (relay && d.name === 'return') {
-          body = body.slice(0, d.start) + `if ($uri !~ "^${API}") { ${body.slice(d.start, d.end)} }` + body.slice(d.end);
-        } else if (relay && d.name === 'location' && d.args.some((a) => a.startsWith(API)))
+          body = body.slice(0, d.start) + `if ($uri !~ "^/api/(?:device-link|agent-net)/") { ${body.slice(d.start, d.end)} }` + body.slice(d.end);
+        } else if (relay && d.name === 'location' && d.args.some((a) => a.startsWith(API) || a.startsWith('/api/agent-net')))
           throw new Error('The default site already serves the relay API path');
       }
       return body;

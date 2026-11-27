@@ -1,3 +1,8 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { configureUserDataDir } from '../../userDataPath.js';
+import { configureOwnerContext } from '../../ownerContext.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 /**
@@ -14,10 +19,10 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
  * getPiExtraSpawnConfig 内部起真 codexHttpBridge,故这里做真 HTTP 往返。
  */
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { PluginRegistry } from '../../maker-host/plugins/plugin-registry';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { createLiziMcpProviders, getLiziMcpSessionContext } from '@cindy/mcps';
+import { createLiziMcpProviders, getLiziMcpSessionContext, type LiziMcpProvider } from '@cindy/mcps';
 import { createOrcaWorkerBridgeMcpProvider } from '@cindy/orca-workflow';
 
 vi.mock('electron', () => ({
@@ -25,6 +30,12 @@ vi.mock('electron', () => ({
 }));
 
 import type { Logger, McpProvider } from '@cindy/maker-core';
+import { createPluginRegistry } from '../../maker-host/plugins/index.js';
+import { gateBuiltinMcpProviders } from '../provider-gate.js';
+import { registerPluginEnableHandlers } from '../../maker-ipc/pluginEnableHandlers.js';
+import { refreshCodexMcpEnvironment } from '../../maker-ipc/codexMcpRefresh.js';
+import { MAKER_INVOKE } from '../../maker-ipc/channels.js';
+import { IpcHarness } from '../../maker-ipc/__tests__/helpers/ipcHarness.js';
 import { CustomMcpProvider } from '../custom-mcp-provider.js';
 import { buildBotMcpCatalog } from '../../maker-host/botMcpCatalog.js';
 import { readAgentCapabilityCatalog, RUNTIME_MCP_NAMES_KEY } from '../../maker-host/agentCapabilityCatalog.js';
@@ -38,7 +49,8 @@ import {
   getPiExtraSpawnConfig,
   invalidatePiEnvironment,
   shutdownPiEnvironment,
-} from '../piEnvironment.js';
+} from '../piEnvironment.desktop.js';
+import { countLiveBridgeMcpSessions } from '../codexHttpBridge.desktop.js';
 
 function noopLogger(): Logger {
   const logger: Logger = {
@@ -99,6 +111,19 @@ function createTestServer(name: string): McpServer {
     }),
   );
   server.tool(
+    'current_remote_host',
+    'Return the SSH host of the active Session, or local.',
+    {},
+    async () => ({
+      content: [
+        {
+          type: 'text' as const,
+          text: getLiziMcpSessionContext()?.remoteHostId ?? 'local',
+        },
+      ],
+    }),
+  );
+  server.tool(
     'current_memory_scope',
     'Return the active Maker Memory scope key.',
     {},
@@ -132,9 +157,10 @@ function createTestServer(name: string): McpServer {
  * name 默认 'cindy_orca'(→ collab,首方内置且被策略 gate 覆盖);传非内置名(如
  * 'custom_probe')可绕过 gate,单测 ctx 流通本身不受策略阻断干扰。
  */
-function makeProvider(name = 'cindy_orca'): McpProvider {
+function makeProvider(name = 'cindy_orca', displayName?: string): LiziMcpProvider {
   return {
     name,
+    ...(displayName ? { displayName } : {}),
     toClaudeSdkConfig: () => ({ type: 'sdk', instance: createTestServer(name) }),
   };
 }
@@ -161,8 +187,81 @@ async function readRpcText(resp: Response): Promise<unknown> {
 }
 
 describe('piEnvironment per-session identity', () => {
+  let profile: string;
+  beforeEach(() => {
+    profile = mkdtempSync(path.join(os.tmpdir(), 'cindy-pi-env-'));
+    configureUserDataDir(profile);
+    configureOwnerContext({
+      read: () => ({ dataOwnerId: null, generation: 0, boundaryPending: false }),
+      fallbackBaseDir: () => profile,
+    });
+  });
   afterEach(async () => {
     await shutdownPiEnvironment();
+    rmSync(profile, { recursive: true, force: true });
+  });
+
+  // #10409: settings IPC must refresh an already cached disabled generation, not just
+  // persist the toggle. Existing lease tests call invalidate directly and missed this wire.
+  // Real registry/gate/HTTP bridge; synthetic tools avoid native input and user data.
+  it.each([
+    ['computer', 'cindy_computer'],
+    ['android', 'cindy_android'],
+  ])('applies %s settings to new Pi generations while old HTTP leases survive', async (id, serverName) => {
+    const pluginRegistry = createPluginRegistry();
+    const providers = gateBuiltinMcpProviders([
+      makeProvider('custom_probe'), makeProvider(serverName),
+    ], () => pluginRegistry);
+    const harness = new IpcHarness();
+    registerPluginEnableHandlers(harness, {
+      getPluginRegistry: () => pluginRegistry,
+      invalidatePiEnvironment,
+      // Busy Codex must not stop Pi's independent generation change.
+      refreshCodexMcpEnvironment: () => refreshCodexMcpEnvironment({
+        restartCodex: async () => { throw new Error('busy turn'); },
+        shutdownCodexEnvironment: vi.fn(),
+      }),
+    });
+    const configs: Array<NonNullable<Awaited<ReturnType<typeof getPiExtraSpawnConfig>>>> = [];
+    const start = async (label: string) => {
+      const config = await getPiExtraSpawnConfig(providers, noopLogger(), {
+        sessionId: `${id}-${label}`, workingDir: profile, vendorOptions: {},
+      });
+      expect(config).not.toBeNull();
+      configs.push(config!);
+      return config!;
+    };
+    const names = (config: (typeof configs)[number]) => config.mcpBridge!.servers.map((server) => server.name);
+    const client = new Client({ name: 'machine-toggle', version: '1' });
+    try {
+      const disabled = await start('disabled');
+      expect(names(disabled)).toEqual(['custom_probe']);
+      await expect(harness.invoke(MAKER_INVOKE.PLUGINS_SET_ENABLED, id, true))
+        .resolves.toEqual({ codexMcpRefreshed: false });
+      expect(pluginRegistry.isEnabled(id)).toBe(true);
+      const enabled = await start('enabled');
+      expect(names(enabled)).toEqual(['custom_probe', serverName]);
+      expect(names(disabled)).toEqual(['custom_probe']);
+      const server = enabled.mcpBridge!.servers.find((entry) => entry.name === serverName)!;
+      await client.connect(new StreamableHTTPClientTransport(new URL(server.url), {
+        requestInit: { headers: { Authorization: `Bearer ${enabled.mcpBridge!.token}` } },
+      }));
+      expect(await client.callTool({ name: 'current_session', arguments: {} }))
+        .toMatchObject({ content: [{ text: `${id}-enabled` }] });
+      await harness.invoke(MAKER_INVOKE.PLUGINS_SET_ENABLED, id, false);
+      expect(names(await start('disabled-again'))).toEqual(['custom_probe']);
+      await harness.invoke(MAKER_INVOKE.PLUGINS_SET_ENABLED, id, true);
+      expect(names(await start('enabled-again'))).toContain(serverName);
+      await harness.invoke(MAKER_INVOKE.PLUGINS_CLEAR_ENABLED, id);
+      expect((await pluginRegistry.getEnableState(id)).globalOverride).toBeNull();
+      expect(names(await start('default'))).toEqual(['custom_probe']);
+      // The enabled generation is retired, but its held session still answers HTTP.
+      expect(await client.callTool({ name: 'current_session', arguments: {} }))
+        .toMatchObject({ content: [{ text: `${id}-enabled` }] });
+    } finally {
+      await client.close();
+      for (const config of configs) config.disposeSessionCtx?.();
+    }
   });
 
   it('recovers Slack binding in the existing Pi bridge while another session holds its lease', async () => {
@@ -192,7 +291,8 @@ describe('piEnvironment per-session identity', () => {
   });
 
   it('registers a pi session ctx and routes it through session + instance identity', async () => {
-    const config = await getPiExtraSpawnConfig([makeProvider()], noopLogger(), {
+    const baseline = countLiveBridgeMcpSessions();
+    const config = await getPiExtraSpawnConfig([makeProvider('cindy_orca', 'Readable Orca')], noopLogger(), {
       sessionId: 'pi-lead-1',
       sessionInstanceId: 'pi-instance-1',
       workingDir: '/repo',
@@ -202,6 +302,7 @@ describe('piEnvironment per-session identity', () => {
     });
     expect(config?.mcpBridge).toBeTruthy();
     const server = config!.mcpBridge!.servers[0]!;
+    expect(server.displayName).toBe('Readable Orca');
     const token = config!.mcpBridge!.token;
     const routeUrl = new URL(server.url);
     expect(routeUrl.searchParams.get('session')).toBe('pi-lead-1');
@@ -217,6 +318,19 @@ describe('piEnvironment per-session identity', () => {
     const mcpSessionId = initResp.headers.get('mcp-session-id');
     expect(mcpSessionId).toBeTruthy();
     await initResp.text();
+    const secondConfig = await getPiExtraSpawnConfig([makeProvider('cindy_orca', 'Readable Orca')], noopLogger(), {
+      sessionId: 'pi-lead-2', sessionInstanceId: 'pi-instance-2', workingDir: '/repo', vendorOptions: {},
+      mcpCallerKind: 'root', mcpCallerAttested: true,
+    });
+    const secondServer = secondConfig!.mcpBridge!.servers[0]!;
+    const secondInit = await fetch(secondServer.url, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${secondConfig!.mcpBridge!.token}`, accept: 'application/json, text/event-stream', 'content-type': 'application/json' },
+      body: INIT_BODY(10),
+    });
+    expect(secondInit.status).toBe(200);
+    await secondInit.text();
+    expect(countLiveBridgeMcpSessions() - baseline).toBe(2);
 
     // 工具 handler 经 getLiziMcpSessionContext() 应拿到本 pi 会话身份。
     const callResp = await fetch(server.url, {
@@ -248,10 +362,14 @@ describe('piEnvironment per-session identity', () => {
     expect(await readRpcText(instanceResp)).toMatchObject({
       result: { content: [{ type: 'text', text: 'pi-instance-1' }] },
     });
+    expect(config!.closeSessionInstance).toBeTypeOf('function');
+    config!.closeSessionInstance!();
+    expect(countLiveBridgeMcpSessions() - baseline).toBe(1);
 
     // close 语义:注销后 ?session=pi-lead-1 未命中 → 401 fail-closed。
     expect(config!.disposeSessionCtx).toBeTypeOf('function');
     config!.disposeSessionCtx!();
+    secondConfig!.disposeSessionCtx!();
     const after = await fetch(server.url, { method: 'POST', headers, body: INIT_BODY(4) });
     expect(after.status).toBe(401);
     await after.text();
@@ -293,6 +411,47 @@ describe('piEnvironment per-session identity', () => {
     });
     expect(await readRpcText(scopeResp)).toMatchObject({
       result: { content: [{ type: 'text', text: 'bot:bot-release-helper' }] },
+    });
+    config!.disposeSessionCtx!();
+  });
+
+  /**
+   * Ghost reads ctx.remoteHostId to refuse a remote task local image reads and
+   * local network egress. A Pi task running over SSH must reach tools as remote.
+   */
+  it.each([
+    ['ssh-host-1', 'ssh-host-1'],
+    [null, 'local'],
+  ] as const)('keeps the SSH host %s in the tool-side session ctx', async (remoteHostId, expected) => {
+    const config = await getPiExtraSpawnConfig([makeProvider('custom_probe')], noopLogger(), {
+      sessionId: `pi-remote-host-${expected}`,
+      workingDir: '/home/dev/project',
+      remoteHostId,
+      vendorOptions: {},
+      mcpCallerKind: 'root',
+      mcpCallerAttested: true,
+    });
+    const server = config!.mcpBridge!.servers[0]!;
+    const headers = {
+      authorization: `Bearer ${config!.mcpBridge!.token}`,
+      accept: 'application/json, text/event-stream',
+      'content-type': 'application/json',
+    };
+    const initResp = await fetch(server.url, { method: 'POST', headers, body: INIT_BODY(1) });
+    const mcpSessionId = initResp.headers.get('mcp-session-id');
+    await initResp.text();
+    const hostResp = await fetch(server.url, {
+      method: 'POST',
+      headers: { ...headers, 'mcp-session-id': mcpSessionId ?? '' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'tools/call',
+        params: { name: 'current_remote_host', arguments: {} },
+      }),
+    });
+    expect(await readRpcText(hostResp)).toMatchObject({
+      result: { content: [{ type: 'text', text: expected }] },
     });
     config!.disposeSessionCtx!();
   });
@@ -1079,7 +1238,7 @@ describe('piEnvironment per-session identity', () => {
       { id: 'other-loopback', transport: 'http' as const, url: 'http://127.0.0.2:4321/mcp' },
       { id: 'credentials', transport: 'http' as const, url: 'https://user:canary@example.test/mcp' },
       { id: 'invalid-url', transport: 'http' as const, url: 'not a url' },
-    ].map((config) => ({ ...config, name: config.id, headers: {}, updatedAt: 1 }));
+    ].map((config) => ({ ...config, name: config.id === 'https' ? 'Readable HTTPS' : config.id, headers: {}, updatedAt: 1 }));
     const builtin = makeProvider('cindy_memory');
     const sdkFactory = vi.spyOn(builtin, 'toClaudeSdkConfig');
     const providers = [builtin, ...configs.map((config) => new CustomMcpProvider(config, () => 'TOKEN_CANARY'))];
@@ -1093,6 +1252,8 @@ describe('piEnvironment per-session identity', () => {
     const config = await getPiExtraSpawnConfig(providers, noopLogger(), { workingDir: '', memoryEnabled: true });
     try {
       expect(config?.mcpBridge?.servers.map((server) => server.name)).toEqual(available);
+      expect(config?.mcpBridge?.servers.find((server) => server.name === 'https')?.displayName)
+        .toBe('Readable HTTPS');
     } finally {
       config?.disposeSessionCtx?.();
     }
@@ -1260,6 +1421,89 @@ describe('piEnvironment per-session identity', () => {
       );
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：getPiExtraSpawnConfig 在 recordMcpToolResults: true（ACP 引擎）时返回
+  //   takeMcpToolResult，真实 MCP 调用完成后可取回带 xdt_card_id 的原文，disposeSessionCtx 后清空；
+  //   普通 Pi 会话未声明该开关时不启用录制（takeMcpToolResult 为 undefined）。
+  // - Bug／规则依据：Antigravity 等 ACP 引擎不回传 MCP tool_call_update 输出，导致 PR 卡片丢失；
+  //   同时避免给原生 Pi 会话增加额外内存开销。
+  // - 现有覆盖缺口：现有 piEnvironment 用例未验证 recordMcpToolResults 开关与生命周期释放。
+  // - 最小失败输入：带 recordMcpToolResults: true 的会话调用 cindy.ghost_call 后经 takeMcpToolResult 取回。
+  // - tier：unit（本地回环 HTTP 桥）。
+  it('enables Host MCP tool-result recording only when recordMcpToolResults is requested and disposes it with the session', async () => {
+    const provider: McpProvider = {
+      name: 'cindy',
+      toClaudeSdkConfig: () => ({
+        type: 'sdk',
+        name: 'cindy',
+        instance: (() => {
+          const server = new McpServer({ name: 'cindy', version: '1.0.0' });
+          server.registerTool(
+            'ghost_call',
+            { description: 'probe' },
+            async () => ({ content: [{ type: 'text' as const, text: '{"ok":true,"xdt_card_id":"card-pi-env"}' }] }),
+          );
+          return server;
+        })(),
+      }),
+    };
+
+    const plainPi = await getPiExtraSpawnConfig([provider], noopLogger(), {
+      sessionId: 'pi-plain',
+      sessionInstanceId: 'pi-plain-inst',
+      workingDir: '/repo',
+    });
+    expect(plainPi?.takeMcpToolResult).toBeUndefined();
+    plainPi?.disposeSessionCtx?.();
+
+    const acp = await getPiExtraSpawnConfig([provider], noopLogger(), {
+      sessionId: 'acp-rec',
+      sessionInstanceId: 'acp-rec-inst',
+      workingDir: '/repo',
+      recordMcpToolResults: true,
+    });
+    expect(acp?.takeMcpToolResult).toBeTypeOf('function');
+    const serverUrl = acp?.mcpBridge?.servers.find((s) => s.name === 'cindy')?.url;
+    expect(serverUrl).toBeTruthy();
+
+    const client = new Client({ name: 'antigravity-client', version: '1' });
+    let reconnectedClient: Client | null = null;
+    await client.connect(new StreamableHTTPClientTransport(new URL(serverUrl!), {
+      requestInit: { headers: { Authorization: `Bearer ${acp!.mcpBridge!.token}` } },
+    }));
+    try {
+      await client.callTool({ name: 'ghost_call', arguments: {} });
+      expect(acp!.takeMcpToolResult!({ serverName: 'cindy', toolName: 'ghost_call', input: {} })).toEqual({
+        fullText: '{"ok":true,"xdt_card_id":"card-pi-env"}',
+        isError: false,
+      });
+
+      // Simulate remote-agent idle reclaim / slot yield: closeSessionInstance clears stale
+      // receipts and closes old transports, while keeping recording enabled on reconnect.
+      await client.callTool({ name: 'ghost_call', arguments: {} });
+      acp!.closeSessionInstance?.();
+      expect(acp!.takeMcpToolResult!({ serverName: 'cindy', toolName: 'ghost_call', input: {} })).toBeNull();
+
+      reconnectedClient = new Client({ name: 'antigravity-client', version: '1' });
+      await reconnectedClient.connect(new StreamableHTTPClientTransport(new URL(serverUrl!), {
+        requestInit: { headers: { Authorization: `Bearer ${acp!.mcpBridge!.token}` } },
+      }));
+      await reconnectedClient.callTool({ name: 'ghost_call', arguments: {} });
+      expect(acp!.takeMcpToolResult!({ serverName: 'cindy', toolName: 'ghost_call', input: {} })).toEqual({
+        fullText: '{"ok":true,"xdt_card_id":"card-pi-env"}',
+        isError: false,
+      });
+
+      await reconnectedClient.callTool({ name: 'ghost_call', arguments: {} });
+      acp!.disposeSessionCtx?.();
+      expect(acp!.takeMcpToolResult!({ serverName: 'cindy', toolName: 'ghost_call', input: {} })).toBeNull();
+    } finally {
+      acp?.disposeSessionCtx?.();
+      await reconnectedClient?.close().catch(() => {});
+      await client.close().catch(() => {});
     }
   });
 });

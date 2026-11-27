@@ -1,9 +1,89 @@
 import { describe, expect, it } from 'vitest';
 import { buildUserProvider } from '../user-provider.js';
 import { alignModelApiRoute, providerInterfaceModelRoute } from '../providerInterfaceRoutes.js';
+import { bindDetectedProvider } from '../providerDetection.js';
 import { BUNDLED_CATALOG, parseCatalog } from '../catalog.js';
 
 describe('documented supplier interfaces', () => {
+  it('retains the public Magpie preset only while its actual runtime endpoint matches', () => {
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'magpie')!;
+    const runtime = { ...preset.runtimes.pi!, catalogPresetId: preset.id, models: [] };
+    const route = (baseUrl: string) => buildUserProvider({
+      id: 'local-connection', name: 'Private connection label', runtimes: { pi: { ...runtime, baseUrl } },
+    }, { presets: [preset] }).routing.pi!;
+    expect(route(runtime.baseUrl).usagePresetId).toBe('magpie');
+    expect(route('https://my-proxy.example/v1').usagePresetId).toBeUndefined();
+  });
+
+  // #8164: the same key can have Coding Plan quota but no pay-as-you-go balance.
+  // Exercise both saved connections and the URL-first connection setup path.
+  describe('Zhipu Pi automatic endpoint selection', () => {
+    const presetId = 'zhipu-glm-cn';
+    const cases = [
+      ['anthropic', 'anthropic-messages'],
+      ['coding/paas/v4', 'openai-completions'],
+      ['paas/v4', 'openai-completions'],
+    ] as const;
+    it.each(cases)('keeps the saved %s endpoint for automatic and legacy ID-only models', (path, api) => {
+      const baseUrl = `https://open.bigmodel.cn/api/${path}`;
+      for (const interfaceId of [undefined, 'auto']) {
+        const config = { id: 'glm', name: 'GLM', runtimes: { pi: {
+          catalogPresetId: presetId, baseUrl: `${baseUrl}/`,
+          wireProtocol: path === 'anthropic' ? 'anthropic-messages' as const : 'openai-chat' as const,
+          models: ['glm-4.7', 'glm-5.3-flash'].map(id => ({ id, name: id, interfaceId, contextWindow: 64000, defaultEnabled: false })),
+        } } };
+        const before = structuredClone(config);
+        const provider = buildUserProvider(config, { presets: BUNDLED_CATALOG.presets, modelRegistry: BUNDLED_CATALOG.modelRegistry });
+        for (const model of provider.models.pi!) {
+          expect(model).toMatchObject({ api, contextWindow: 64000, defaultEnabled: false,
+            route: { baseUrl }, selectedInterface: { api, route: { baseUrl } } });
+        }
+        expect(config).toEqual(before);
+      }
+    });
+    it.each(cases)('keeps the %s endpoint during URL-first setup and subsequent projection', (path, api) => {
+      const baseUrl = `https://open.bigmodel.cn/api/${path}`;
+      const preset = BUNDLED_CATALOG.presets!.find(p => p.id === presetId)!;
+      const bound = bindDetectedProvider(preset, 'pi', `${baseUrl}/`)!;
+      expect(bound.runtimes.pi!.baseUrl).toBe(baseUrl);
+      const provider = buildUserProvider({ id: 'glm', name: 'GLM', runtimes: { pi: {
+        ...bound.runtimes.pi!, catalogPresetId: presetId, models: [{ id: 'glm-4.7', name: 'GLM', interfaceId: 'auto' }],
+      } } }, { presets: BUNDLED_CATALOG.presets, modelRegistry: BUNDLED_CATALOG.modelRegistry });
+      expect(provider.models.pi![0]).toMatchObject({ api, route: { baseUrl } });
+    });
+    it('retains explicit interface and API selections, including intentional endpoint changes', () => {
+      const baseUrl = 'https://open.bigmodel.cn/api/anthropic';
+      for (const selection of [
+        { interfaceId: 'zhipu-glm-cn-openai-completions' },
+        { api: 'openai-completions' as const },
+        { piApi: 'openai-completions' as const },
+      ]) {
+        const model = providerInterfaceModelRoute({ id: 'glm-4.7', name: 'GLM', ...selection }, 'pi', presetId, baseUrl);
+        expect(model).toMatchObject({ api: 'openai-completions', route: { baseUrl: 'https://open.bigmodel.cn/api/paas/v4' } });
+      }
+    });
+    it('leaves the dedicated Coding Plan default, custom URLs and custom model paths intact', () => {
+      const baseUrl = 'https://open.bigmodel.cn/api/anthropic';
+      expect(providerInterfaceModelRoute({ id: 'glm-4.7', name: 'GLM', interfaceId: 'auto' }, 'pi', 'zhipu-coding-plan-cn', baseUrl))
+        .toMatchObject({ api: 'openai-completions', route: { baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4' } });
+      const model = { id: 'glm-4.7', name: 'GLM', interfaceId: 'auto' };
+      expect(providerInterfaceModelRoute(model, 'pi', presetId, 'https://proxy.example/api/anthropic')).toBe(model);
+      const custom = { ...model, route: { baseUrl, wireProtocol: 'anthropic-messages' as const, requestPath: '/custom/messages' } };
+      expect(providerInterfaceModelRoute(custom, 'pi', presetId, baseUrl)).toBe(custom);
+    });
+  });
+  // Server #1376: the old bundled profile omitted this discovered model. Unit
+  // regression through the saved-connection consumer, preserving user choices.
+  it('resolves OpenCode Fable 5.2 through the existing Messages profile', () => {
+    const provider = buildUserProvider({ id: 'zen', name: 'Zen', runtimes: { pi: {
+      catalogPresetId: 'opencode', baseUrl: 'https://opencode.ai/zen/v1', wireProtocol: 'anthropic-messages',
+      models: [{ id: 'claude-fable-5-2', name: 'Fable', contextWindow: 64000, defaultEnabled: false }],
+    } } }, { modelRegistry: BUNDLED_CATALOG.modelRegistry, presets: BUNDLED_CATALOG.presets });
+    expect(provider.models.pi?.[0]).toMatchObject({
+      contextWindow: 64000, defaultEnabled: false,
+      selectedInterface: { profileId: 'opencode-anthropic-messages', api: 'anthropic-messages' },
+    });
+  });
   // Agnes previously fell back to 200K. Exercise saved connections and preset
   // import through the production resolver, including an explicit user budget.
   it('resolves Agnes capacity and interfaces without overwriting saved choices', () => {
@@ -16,7 +96,7 @@ describe('documented supplier interfaces', () => {
     for (const agent of provider.agents) {
       expect(provider.models[agent]?.[0]).toMatchObject({
         contextWindow: 512000, maxOutput: 65536, supportsImageInput: true,
-        selectedInterface: { api: agent === 'codex' ? 'openai-responses' : 'anthropic-messages' },
+        selectedInterface: { api: agent === 'pi' ? 'openai-completions' : agent === 'codex' ? 'openai-responses' : 'anthropic-messages' },
       });
     }
     for (const contextWindow of [undefined, 510000]) {
@@ -26,6 +106,20 @@ describe('documented supplier interfaces', () => {
       } } }, { modelRegistry: catalog.modelRegistry });
       expect(saved.models.pi?.[0]).toMatchObject({ contextWindow: contextWindow ?? 512000, defaultEnabled: false });
       expect(saved.routing.pi?.upstream).toBe('https://apihub.agnes-ai.com/v1');
+    }
+    // Pi auto follows the Chat default even on an old Messages connection;
+    // explicit V6 selections and legacy per-model API choices remain intact.
+    for (const [selection, api] of [
+      [{ interfaceId: 'auto' }, 'openai-completions'],
+      [{ interfaceId: 'agnes-anthropic-messages' }, 'anthropic-messages'],
+      [{ interfaceId: 'agnes-openai-responses' }, 'openai-responses'],
+      [{ piApi: 'anthropic-messages' }, 'anthropic-messages'],
+    ] as const) {
+      const saved = buildUserProvider({ id: 'saved-agnes', name: 'Agnes', runtimes: { pi: {
+        catalogPresetId: 'agnes', baseUrl: 'https://apihub.agnes-ai.com', wireProtocol: 'anthropic-messages',
+        models: [{ id: 'agnes-3.0-flash', name: 'Agnes', ...selection }],
+      } } }, { presets: catalog.presets, modelRegistry: catalog.modelRegistry });
+      expect(saved.models.pi?.[0]).toMatchObject({ api, selectedInterface: { api }, userModelConfig: selection });
     }
   });
   // r4365890304 (unit): import saved Model Studio connections through the
@@ -42,7 +136,8 @@ describe('documented supplier interfaces', () => {
         models: [{ id: 'qwen3.7-flash', contextWindow: 64000, defaultEnabled: false }],
       }])) });
     for (const agent of provider.agents) {
-      const api = agent === 'codex' ? 'openai-completions' : 'anthropic-messages';
+      // Codex uses Model Studio's official Responses API for the documented models.
+      const api = agent === 'codex' ? 'openai-responses' : 'anthropic-messages';
       expect(provider.models[agent]![0]).toMatchObject({
         api, contextWindow: 64000, defaultEnabled: false,
         selectedInterface: { profileId: `${presetId}-${api}`, route: {
@@ -51,10 +146,9 @@ describe('documented supplier interfaces', () => {
       });
     }
   });
-  it.each([
-    ['zhipu-glm-cn', 'https://open.bigmodel.cn/api/coding/paas/v4'],
-    ['zhipu-glm-global', 'https://api.z.ai/api/coding/paas/v4'],
-  ])('declares the server %s Coding endpoint without redirecting public API connections', (presetId, codingBase) => {
+  it('declares the server zhipu-glm-cn Coding endpoint without redirecting public API connections', () => {
+    const presetId = 'zhipu-glm-cn';
+    const codingBase = 'https://open.bigmodel.cn/api/coding/paas/v4';
     const preset = BUNDLED_CATALOG.presets!.find(p => p.id === presetId)!;
     for (const [baseUrl, profileId] of [
       [codingBase, `${presetId}-coding-openai-completions`],
@@ -67,6 +161,21 @@ describe('documented supplier interfaces', () => {
       expect(provider.models.codex![0]).toMatchObject({
         api: 'openai-completions', contextWindow: 64000, defaultEnabled: false,
         selectedInterface: { profileId, route: { baseUrl, wireProtocol: 'openai-chat' } },
+      });
+    }
+  });
+  // Z.ai documents a dedicated Responses endpoint for Codex; both saved bases share its credential origin.
+  it('moves saved zhipu-glm-global Codex connections to the official Responses endpoint', () => {
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'zhipu-glm-global')!;
+    for (const baseUrl of ['https://api.z.ai/api/coding/paas/v4', 'https://api.z.ai/api/paas/v4']) {
+      const provider = buildUserProvider({ id: 'glm', name: 'GLM', runtimes: { codex: {
+        ...preset.runtimes.codex!, baseUrl, catalogPresetId: 'zhipu-glm-global',
+        models: [{ id: 'glm-5.3-flash', name: 'GLM', contextWindow: 64000, defaultEnabled: false }],
+      } } }, { presets: BUNDLED_CATALOG.presets });
+      expect(provider.models.codex![0]).toMatchObject({
+        api: 'openai-responses', contextWindow: 64000, defaultEnabled: false,
+        selectedInterface: { profileId: 'zhipu-glm-global-openai-responses',
+          route: { baseUrl: 'https://api.z.ai/api/v1', wireProtocol: 'openai-responses' } },
       });
     }
   });
@@ -123,7 +232,7 @@ describe('documented supplier interfaces', () => {
     ['huggingface', 'codex', 'https://router.huggingface.co/v1', 'https://router.huggingface.co/v1', 'openai-responses'],
     ['lmstudio', 'codex', 'http://127.0.0.1:1234/v1', 'http://127.0.0.1:1234/v1', 'openai-responses'],
     ['litellm', 'claude-code', 'http://127.0.0.1:4000/v1', 'http://127.0.0.1:4000', 'anthropic-messages'],
-    ['longcat', 'codex', 'https://api.longcat.chat/openai/v1', 'https://api.longcat.chat/openai/v1', 'openai-completions'],
+    ['longcat', 'codex', 'https://api.longcat.chat/openai/v1', 'https://api.longcat.chat/openai/v1', 'openai-responses'],
   ] as const)('imports newly discovered %s models using the declared %s interface', (preset, agent, base, target, api) => {
     const provider = buildUserProvider({ id: 'account', name: 'Account', runtimes: {
       [agent]: { catalogPresetId: preset, baseUrl: base, wireProtocol: 'openai-chat', models: [{ id: 'new-model', name: 'New', contextWindow: 64000, defaultEnabled: false }] },
@@ -212,13 +321,19 @@ describe('V6 remote interface bindings', () => {
   it('follows new defaults, keeps explicit selections and preserves the Coding limit', () => {
     const registry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
     const options = { modelRegistry: registry, presets: BUNDLED_CATALOG.presets };
-    const automatic = buildUserProvider(connection(), options).models.codex![0];
+    const savedAutomatic = JSON.parse(JSON.stringify(connection()));
+    const savedExplicit = JSON.parse(JSON.stringify(connection({ interfaceId: 'moonshot-kimi-code-openai-completions' })));
+    const before = JSON.stringify({ savedAutomatic, savedExplicit });
+    expect(buildUserProvider(savedExplicit, options).models.codex![0].api).toBe('openai-completions');
+    const automatic = buildUserProvider(savedAutomatic, options).models.codex![0];
     expect(automatic).toMatchObject({ api: 'openai-responses', contextWindow: 262144, maxOutput: 262144 });
     expect(automatic.availableInterfaces).toHaveLength(3);
     expect(automatic.userModelConfig).not.toHaveProperty('api');
     const route = registry.models.flatMap(e => e.routes).find(r => r.providerId === 'moonshot-kimi-code' && r.modelId === 'k3.1-pro')!;
     route.preferredInterfaces!.codex = ['moonshot-kimi-code-anthropic-messages'];
-    expect(buildUserProvider(connection(), options).models.codex![0].api).toBe('anthropic-messages');
+    expect(buildUserProvider(savedAutomatic, options).models.codex![0].api).toBe('anthropic-messages');
+    expect(buildUserProvider(savedExplicit, options).models.codex![0].api).toBe('openai-completions');
+    expect(JSON.stringify({ savedAutomatic, savedExplicit })).toBe(before);
     expect(buildUserProvider(connection({ interfaceId: 'moonshot-kimi-code-openai-completions' }), options).models.codex![0].api).toBe('openai-completions');
     expect(buildUserProvider(connection({ route: { baseUrl: 'https://api.kimi.com/coding/v1', wireProtocol: 'openai-chat' } }), options).models.codex![0].api).toBe('openai-completions');
     expect(buildUserProvider(connection({ api: 'openai-completions', contextWindow: 64000 }), options).models.codex![0])

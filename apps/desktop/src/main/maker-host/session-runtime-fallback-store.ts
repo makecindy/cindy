@@ -1,32 +1,17 @@
 import { app } from 'electron';
-import path from 'node:path';
 
-import { desktopMakerLogger } from './logger-adapter.js';
 import {
-  createOverrideSettingsFile,
+  portableOverrideSettings,
   type OverrideSettingsState,
 } from './override-settings-file.js';
+import {
+  createSessionRuntimeFallbackSettingsFile,
+  type SessionRuntimeFallbackSettings,
+} from './sessionRuntimeFallbackSettingsCore.js';
 
-const log = desktopMakerLogger.child('session-runtime-fallback-store');
+export type { SessionRuntimeFallbackSettings } from './sessionRuntimeFallbackSettingsCore.js';
 
-export interface SessionRuntimeFallbackSettings {
-  enabled: boolean;
-}
-
-const DEFAULTS: SessionRuntimeFallbackSettings = { enabled: false };
-
-const store = createOverrideSettingsFile<SessionRuntimeFallbackSettings>({
-  filePath: () => path.join(app.getPath('userData'), 'session-runtime-fallback-settings.json'),
-  defaults: DEFAULTS,
-  normalize: (raw) => ({
-    enabled:
-      raw && typeof raw === 'object' && typeof (raw as { enabled?: unknown }).enabled === 'boolean'
-        ? (raw as { enabled: boolean }).enabled
-        : DEFAULTS.enabled,
-  }),
-  log,
-  label: 'session runtime fallback',
-});
+const store = createSessionRuntimeFallbackSettingsFile(() => app.getPath('userData'));
 
 export function readSessionRuntimeFallbackSettings(): SessionRuntimeFallbackSettings {
   return store.read();
@@ -43,3 +28,6 @@ export function writeSessionRuntimeFallbackEnabled(enabled: boolean): void {
 export function resetSessionRuntimeFallbackSettings(): SessionRuntimeFallbackSettings {
   return store.reset();
 }
+
+/** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
+export const sessionRuntimeFallbackPortableSettings = portableOverrideSettings(store);

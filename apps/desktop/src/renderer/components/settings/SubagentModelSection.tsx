@@ -1,6 +1,8 @@
+import { subagentModelSettings } from './SubagentModelSection.settings-search';
+import { useAppSettingsRevision } from '@/hooks/useAppSettingsRevision';
 /** Settings -> Personalization: Claude Code default Subagent model + Codex smart routing. */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -13,6 +15,10 @@ import {
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
+import type { ModelGroupsPickerProps } from '@/components/new-chat/ModelGroupsPickerSection';
+import { useModelGroups } from '@/features/model-groups/modelGroupsClient';
+import { auxiliaryRouteRefId, encodeAuxiliaryRouteRef } from '../../../shared/auxiliaryModelChain';
+import { SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { Switch } from '@/components/ui/switch';
 import { useProviders } from '@/hooks/useProviders';
 import { createLogger } from '@/lib/logger';
@@ -39,10 +45,26 @@ function defaultsPatchFor(
 }
 
 export function SubagentModelSection() {
+  const settingsRevision = useAppSettingsRevision('subagent-models');
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { providers, loading: providersLoading } = useProviders();
+  // Subagent 也能选一条智能路由(2026-11-26 用户裁决)：只列自己排的、含本机 Claude Code 来源的路由。子代理跑在主任务的
+  // 来源上，用的是路由里与主任务同一个供应商的那个模型；合并整个供应商的路由对它等于直接选模型，不另列。
+  const { config: groupsConfig } = useModelGroups();
   const [settings, setSettings] = useState<SubagentModelSettingsState | null>(null);
+  // 选着的路由删掉了、或者里面不再有本机 Claude Code 来源：仍列在那里并写明，不让按钮变成空白(与辅助模型同一种写法)。
+  const activeRouteId = auxiliaryRouteRefId(settings?.claudeCode ?? '');
+  const missingRouteName = t('settings.auxiliaryModels.missingRoute');
+  const subagentRoutes = useMemo(() => {
+    const routes = groupsConfig.routes.filter((route) => !route.parent
+      && route.candidates.some((candidate) => candidate.agentKind === 'cc' && !candidate.agentDeviceId && !candidate.off));
+    if (activeRouteId && !routes.some((route) => route.id === activeRouteId)) {
+      const kept = groupsConfig.routes.find((route) => route.id === activeRouteId && !route.parent);
+      routes.push(kept ?? { id: activeRouteId, name: missingRouteName, strategy: 'expiring', candidates: [] });
+    }
+    return { ...groupsConfig, routes };
+  }, [groupsConfig, activeRouteId, missingRouteName]);
   const [pending, setPending] = useState(false);
   const pendingRef = useRef(false);
   const settingsRef = useRef<SubagentModelSettingsState | null>(null);
@@ -59,7 +81,7 @@ export function SubagentModelSection() {
     return () => {
       disposed = true;
     };
-  }, []);
+  }, [settingsRevision]);
 
   const persistPatch = useCallback(
     async (
@@ -158,106 +180,169 @@ export function SubagentModelSection() {
   );
 
   return (
-    <div className="flex flex-col gap-[14px]">
-      <div className="flex flex-col gap-1">
-        <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-          {t('settings.subagentModels.title')}
-        </h2>
-        <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">
-          {t('settings.subagentModels.description')}
-        </p>
-      </div>
+    <SubagentModelSectionView
+      claudeCode={settings.claudeCode}
+      claudeCodeProviderId={settings.claudeCodeProviderId}
+      codexSmartSubagentRouting={settings.codexSmartSubagentRouting}
+      claudeCustomized={claudeCustomized}
+      smartRoutingCustomized={smartRoutingCustomized}
+      pending={pending}
+      providersLoading={providersLoading}
+      claudeSourceDisconnected={claudeSourceDisconnected}
+      onNavigateToProviders={
+        providersLoading || hasCatalogClaudeModel
+          ? undefined
+          : () => navigate('/settings?tab=providers')
+      }
+      setClaudeModel={setClaudeModel}
+      {...(subagentRoutes.routes.length > 0 || auxiliaryRouteRefId(settings.claudeCode ?? '') ? {
+        modelGroups: {
+          config: subagentRoutes,
+          active: auxiliaryRouteRefId(settings.claudeCode ?? '') ? { type: 'route' as const, id: auxiliaryRouteRefId(settings.claudeCode!)! } : null,
+          onSelect: (selection) => { void setClaudeModel(encodeAuxiliaryRouteRef(selection.id), null); },
+          onManage: () => navigate('/settings?tab=model-groups'),
+        } satisfies ModelGroupsPickerProps,
+      } : {})}
+      resolveClaudeProviderId={resolveClaudeProviderId}
+      resetClaude={() => void resetKeys(CLAUDE_SUBAGENT_MODEL_KEYS)}
+      resetSmartRouting={() => void resetKeys(CODEX_SUBAGENT_MODEL_KEYS)}
+      setSmartRouting={(next) => void persistPatch({ codexSmartSubagentRouting: next })}
+    />
+  );
+}
 
-      <div className="flex flex-col rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]">
-        <div className="flex items-center gap-4 px-4 py-4">
-          <div className="flex w-[150px] shrink-0 items-center gap-2">
-            <ClaudeMark size={16} className="text-[var(--text-secondary)]" />
-            <span className="text-14 font-medium text-[var(--text-primary)]">Claude Code</span>
-          </div>
-          <div className="flex min-w-0 flex-1 items-center gap-2">
-            <div className="min-w-0 flex-1">
-              <ModelSelector
-                modelId={settings.claudeCode ?? ''}
-                effort=""
-                onModelChange={(modelId) => {
-                  return setClaudeModel(modelId, settings.claudeCodeProviderId);
-                }}
-                onEffortChange={() => undefined}
-                vendorKey="cc"
-                currentProviderId={settings.claudeCodeProviderId}
-                sourceDisconnected={claudeSourceDisconnected}
-                onNavigateToProviders={
-                  providersLoading || hasCatalogClaudeModel
-                    ? undefined
-                    : () => navigate('/settings?tab=providers')
-                }
-                reselectEmitsChange
-                onProviderChange={(providerId, modelId) => {
-                  const nextModel = modelId ?? settings.claudeCode;
-                  if (!nextModel) return false;
-                  return setClaudeModel(nextModel, resolveClaudeProviderId(nextModel, providerId));
-                }}
-                switching={pending}
-                disabled={providersLoading}
-                triggerVariant="field"
-                popoverSide="bottom"
-                configurationEnabled={false}
-                unknownModelLabel={(id) => id}
-                fallbackOption={{
-                  active: settings.claudeCode === null,
-                  label: t('settings.subagentModels.unspecified'),
-                  onSelect: () => {
-                    return setClaudeModel(null, null);
-                  },
-                }}
+/** Subagent 卡片的展示部分;云实例设置传入目标实例的值与 deviceId(模型目录所在设备)。 */
+export function SubagentModelSectionView({
+  claudeCode,
+  claudeCodeProviderId,
+  codexSmartSubagentRouting,
+  claudeCustomized,
+  smartRoutingCustomized,
+  pending,
+  providersLoading,
+  claudeSourceDisconnected,
+  onNavigateToProviders,
+  deviceId,
+  setClaudeModel,
+  modelGroups,
+  resolveClaudeProviderId,
+  resetClaude,
+  resetSmartRouting,
+  setSmartRouting,
+  headingStatus,
+}: {
+  claudeCode: string | null;
+  claudeCodeProviderId: string | null;
+  codexSmartSubagentRouting: boolean;
+  claudeCustomized: boolean;
+  smartRoutingCustomized: boolean;
+  pending: boolean;
+  providersLoading: boolean;
+  claudeSourceDisconnected: boolean;
+  onNavigateToProviders?: () => void;
+  deviceId?: string;
+  setClaudeModel: (model: string | null, providerId: string | null) => Promise<boolean | undefined>;
+  /** 本机设置才传：Subagent 能选的智能路由；选中时 claudeCode 存为 route:<路由 id>。 */
+  modelGroups?: ModelGroupsPickerProps;
+  resolveClaudeProviderId: (modelId: string, providerId: string | null) => string | null;
+  resetClaude: () => void;
+  resetSmartRouting: () => void;
+  setSmartRouting: (next: boolean) => void;
+  /** Cloud settings: a group that could not be read says so here, in place of the heading's action. */
+  headingStatus?: React.ReactNode;
+}) {
+  const { t } = useTranslation();
+  const settings = { claudeCode, claudeCodeProviderId, codexSmartSubagentRouting };
+
+  return (
+    <SettingsSection
+      title={t('settings.subagentModels.title')}
+      description={t('settings.subagentModels.description')}
+      caption={t('settings.subagentModels.hint')}
+      action={headingStatus}
+    >
+      <SettingsCard>
+        <SettingsRow
+          lead={<ClaudeMark size={16} className="text-[var(--text-secondary)]" />}
+          title="Claude Code"
+          trailing={
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              {/* Per-setting reset: left of the control, only while customized. */}
+              <DefaultOverrideControls
+                isCustomized={claudeCustomized}
+                disabled={pending}
+                onReset={resetClaude}
+              />
+              <div className="min-w-0 flex-1">
+                <ModelSelector
+                  {...(deviceId
+                    ? { deviceId, remoteAgent: undefined }
+                    : { localOnlyReason: 'subagent-in-parent-task' as const })}
+                  modelId={auxiliaryRouteRefId(settings.claudeCode ?? '') ? '' : (settings.claudeCode ?? '')}
+                  {...(modelGroups ? { modelGroups } : {})}
+                  effort=""
+                  onModelChange={(modelId) => {
+                    return setClaudeModel(modelId, settings.claudeCodeProviderId);
+                  }}
+                  onEffortChange={() => undefined}
+                  vendorKey="cc"
+                  currentProviderId={settings.claudeCodeProviderId}
+                  sourceDisconnected={claudeSourceDisconnected}
+                  onNavigateToProviders={onNavigateToProviders}
+                  reselectEmitsChange
+                  onProviderChange={(providerId, modelId) => {
+                    const nextModel = modelId ?? settings.claudeCode;
+                    if (!nextModel) return false;
+                    return setClaudeModel(nextModel, resolveClaudeProviderId(nextModel, providerId));
+                  }}
+                  switching={pending}
+                  disabled={providersLoading}
+                  triggerVariant="field"
+                  popoverSide="bottom"
+                  configurationEnabled={false}
+                  unknownModelLabel={(id) => id}
+                  fallbackOption={{
+                    active: settings.claudeCode === null,
+                    label: t('settings.subagentModels.unspecified'),
+                    onSelect: () => {
+                      return setClaudeModel(null, null);
+                    },
+                  }}
+                />
+              </div>
+            </div>
+          }
+        />
+
+        <SettingsRow
+          lead={<CodexMark size={16} className="shrink-0 text-[var(--text-secondary)]" />}
+          title={
+            <span id={subagentModelSettings.subagentModelsSmartRoutingLabel.targetId}>
+              {t(subagentModelSettings.subagentModelsSmartRoutingLabel.titleKey)}
+            </span>
+          }
+          hint={
+            settings.codexSmartSubagentRouting
+              ? t('settings.subagentModels.smartRouting.enabledHint')
+              : t('settings.subagentModels.smartRouting.nativeHint')
+          }
+          trailing={
+            <div className="flex shrink-0 items-center gap-3">
+              <DefaultOverrideControls
+                isCustomized={smartRoutingCustomized}
+                disabled={pending}
+                onReset={resetSmartRouting}
+              />
+              <Switch data-setting-id={subagentModelSettings.subagentModelsSmartRoutingLabel.id}
+                checked={settings.codexSmartSubagentRouting}
+                disabled={pending}
+                onCheckedChange={setSmartRouting}
+                aria-label={t('settings.subagentModels.smartRouting.aria')}
               />
             </div>
-            <DefaultOverrideControls
-              isCustomized={claudeCustomized}
-              disabled={pending}
-              alwaysVisible
-              onReset={() => void resetKeys(CLAUDE_SUBAGENT_MODEL_KEYS)}
-            />
-          </div>
-        </div>
-
-        <div className="mx-4 h-px bg-[var(--settings-theme-card-border)]" />
-
-        <div className="flex items-center justify-between gap-4 px-4 py-4">
-          <div className="flex min-w-0 items-start gap-2">
-            <CodexMark size={16} className="mt-0.5 shrink-0 text-[var(--text-secondary)]" />
-            <div className="flex min-w-0 flex-col gap-1">
-              <span id="settings-search-settings-subagentModels-smartRouting-label" className="text-14 font-medium text-[var(--text-primary)]">
-                {t('settings.subagentModels.smartRouting.label')}
-              </span>
-              <span className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-                {settings.codexSmartSubagentRouting
-                  ? t('settings.subagentModels.smartRouting.enabledHint')
-                  : t('settings.subagentModels.smartRouting.nativeHint')}
-              </span>
-            </div>
-          </div>
-          <div className="flex shrink-0 items-center gap-3">
-            <DefaultOverrideControls
-              isCustomized={smartRoutingCustomized}
-              disabled={pending}
-              onReset={() => void resetKeys(CODEX_SUBAGENT_MODEL_KEYS)}
-            />
-            <Switch
-              checked={settings.codexSmartSubagentRouting}
-              disabled={pending}
-              onCheckedChange={(next) => {
-                void persistPatch({ codexSmartSubagentRouting: next });
-              }}
-              aria-label={t('settings.subagentModels.smartRouting.aria')}
-            />
-          </div>
-        </div>
-      </div>
-
-      <p className="text-12 leading-[1.5] text-[var(--text-secondary)]">
-        {t('settings.subagentModels.hint')}
-      </p>
-    </div>
+          }
+        />
+      </SettingsCard>
+    </SettingsSection>
   );
 }

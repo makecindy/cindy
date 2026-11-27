@@ -1,3 +1,4 @@
+import { computerUseSettings } from './ComputerUseSection.settings-search';
 /**
  * Independent Computer Use permission coach attached to macOS System Settings.
  *
@@ -93,7 +94,7 @@ function DragCoach() {
   return (
     <span
       aria-hidden="true"
-      className="computer-permission-drag-guide pointer-events-none absolute -top-3 right-8 z-10 inline-flex items-center gap-2 text-[var(--text-primary)]"
+      className="computer-permission-drag-guide pointer-events-none absolute -top-3 right-8 z-raised inline-flex items-center gap-2 text-[var(--text-primary)]"
     >
       <span className="inline-flex size-10 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)]">
         <MousePointer2 size={19} strokeWidth={1.8} aria-hidden="true" />
@@ -189,8 +190,8 @@ export function ComputerPermissionGuideWindow() {
 
   const isAccessibility = step === 'accessibility';
   const label = isAccessibility
-    ? t('settings.computerUse.directControl.permissions.accessibilityLabel')
-    : t('settings.computerUse.directControl.permissions.screenRecordingLabel');
+    ? t(computerUseSettings.directControlPermissionsAccessibilityLabel.titleKey)
+    : t(computerUseSettings.directControlPermissionsScreenRecordingLabel.titleKey);
 
   const handleDragStart = (event: React.DragEvent<HTMLButtonElement>) => {
     const iconDataUrl = dragIconDataUrl(iconRef.current);
@@ -257,7 +258,7 @@ export function ComputerPermissionGuideWindow() {
                 ? t('settings.computerUse.directControl.permissionGuide.completeEyebrow')
                 : t('settings.computerUse.directControl.permissionGuide.step')}
             </span>
-            <button
+            <button data-settings-search-action="Cancel or drag the application into system permission settings"
               type="button"
               onClick={() => void cancel()}
               aria-label={t('commonUi.confirmDialog.cancel')}
@@ -289,7 +290,7 @@ export function ComputerPermissionGuideWindow() {
                   { permission: label },
                 )}
               </h1>
-              <button
+              <button data-settings-search-action="Cancel or drag the application into system permission settings"
                 type="button"
                 draggable
                 onDragStart={handleDragStart}

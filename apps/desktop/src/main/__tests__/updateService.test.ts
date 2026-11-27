@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { TEST_CDN_BASE_URL as CDN_EXTERNAL_BASE_URL } from '../../test/vitest/clientEndpointsFixture';
+import { CURRENT_CINDY_REGION } from '../../shared/brandRegion';
 
 const originalPlatform = process.platform;
 const originalArch = process.arch;
@@ -41,7 +42,11 @@ const spawnProcess = vi.fn(() => ({
   unref: vi.fn(),
   on: vi.fn(),
 }));
-const findLinuxUserInstallation = vi.fn(() => null);
+type TestLinuxInstallation = { prefix: string; current: string; region: 'global' | 'cn' };
+const findLinuxUserInstallation = vi.fn<() => TestLinuxInstallation | null>(() => null);
+const recognizeLinuxUserInstallation = vi.fn<() => TestLinuxInstallation | null>(() => null);
+const hasLinuxPkexec = vi.fn(() => true);
+const isLinuxPkexecPreauthorized = vi.fn(() => false);
 const checkDebianManagedInstallation = vi.fn<() =>
   | { status: 'managed' }
   | { status: 'not-managed' }
@@ -50,6 +55,7 @@ const checkDebianManagedInstallation = vi.fn<() =>
 const missingLinuxUserInstallTools = vi.fn(() => [] as string[]);
 vi.mock('../linuxInstallation', () => ({
   findLinuxUserInstallation, checkDebianManagedInstallation, missingLinuxUserInstallTools,
+  recognizeLinuxUserInstallation, hasLinuxPkexec, isLinuxPkexecPreauthorized,
 }));
 const checkWindowsUpdaterPrerequisites = vi.fn<
   () => { satisfied: boolean; missingFiles: string[] }
@@ -111,8 +117,16 @@ const readUpdateChannelSettings = vi.fn(() => ({
   orgDefaultEnableBeta: false,
 }));
 
+const nativeArmManifests = new WeakSet<object>();
+const runningTranslated = vi.fn(() => false);
+vi.mock('../arm64Translation', () => ({ isRunningUnderArm64Translation: runningTranslated }));
+
 vi.mock('../manifestService', () => ({
   fetchManifest,
+  // 生产实现先读本进程架构清单再按需读 arm64 清单；测试直接用 fetchManifest 的结果，
+  // 用 nativeArmManifests 标记「来自 arm64 清单」。
+  fetchAppUpdateManifest: (...args: unknown[]) => fetchManifest(...args),
+  getAppUpdateTargetArch: (manifest: object) => (nativeArmManifests.has(manifest) ? 'arm64' : undefined),
   getBaseUrl,
   isDev,
   clearCachedManifest: vi.fn(),
@@ -255,6 +269,8 @@ beforeEach(() => {
     return TEST_ROOT;
   });
   fetchManifest.mockReset();
+  runningTranslated.mockReset();
+  runningTranslated.mockReturnValue(false);
   getBaseUrl.mockReset();
   getBaseUrl.mockReturnValue(CDN_EXTERNAL_BASE_URL);
   isDev.mockReset();
@@ -274,6 +290,12 @@ beforeEach(() => {
   spawnProcess.mockClear();
   findLinuxUserInstallation.mockReset();
   findLinuxUserInstallation.mockReturnValue(null);
+  recognizeLinuxUserInstallation.mockReset();
+  recognizeLinuxUserInstallation.mockReturnValue(null);
+  hasLinuxPkexec.mockReset();
+  hasLinuxPkexec.mockReturnValue(true);
+  isLinuxPkexecPreauthorized.mockReset();
+  isLinuxPkexecPreauthorized.mockReturnValue(false);
   checkDebianManagedInstallation.mockReset();
   checkDebianManagedInstallation.mockReturnValue({ status: 'not-managed' });
   missingLinuxUserInstallTools.mockReset();
@@ -1122,7 +1144,16 @@ describe('checkForUpdate Linux installer flow', () => {
     }
   });
 
-  it('does not quit or increment attempts for an unmanaged Linux installation', async () => {
+  // Regression (2026-11-25, cloud desktop without polkit): a system .deb on a
+  // computer without pkexec quit Cindy, the script logged "pkexec not found"
+  // and relaunched the same version on every click. Both layouts must be
+  // refused before quitting. Mocked Electron, temporary files; unit.
+  it.each([
+    { name: 'an unmanaged Linux installation', debian: 'not-managed' as const, pkexec: true },
+    { name: 'a system .deb without pkexec', debian: 'managed' as const, pkexec: false },
+  ])('does not quit or increment attempts for $name', async ({ debian, pkexec }) => {
+    checkDebianManagedInstallation.mockReturnValue({ status: debian });
+    hasLinuxPkexec.mockReturnValue(pkexec);
     download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
       fs.mkdirSync(path.dirname(targetPath), { recursive: true });
       fs.writeFileSync(targetPath, 'deb');
@@ -1188,33 +1219,99 @@ describe('checkForUpdate Linux installer flow', () => {
     expect(download).not.toHaveBeenCalled();
   });
 
-  it('does not auto-apply a staged Linux .deb at startup', async () => {
+  // Only installs that need no pkexec password get the macOS-style startup
+  // apply and the Settings switch: Cindy's user-directory install, or a system
+  // .deb whose pkexec polkit already authorizes (cloud desktop images).
+  // Mocked Electron and layout probes; unit.
+  // A user install only carries the global/cn markers; the test build runs as one of them.
+  const currentRegion: TestLinuxInstallation['region'] = CURRENT_CINDY_REGION === 'cn' ? 'cn' : 'global';
+  const otherRegion: TestLinuxInstallation['region'] = currentRegion === 'cn' ? 'global' : 'cn';
+  const userInstall: TestLinuxInstallation = {
+    prefix: '/home/u/.local/opt/cindy', current: 'releases/0.0.64', region: currentRegion,
+  };
+  it('does not defer IM startup when a user install cannot apply unattended', async () => {
+    checkDebianManagedInstallation.mockReturnValue({ status: 'not-managed' });
+    recognizeLinuxUserInstallation.mockReturnValue(userInstall);
+    findLinuxUserInstallation.mockReturnValue(userInstall);
+    missingLinuxUserInstallTools.mockReturnValue(['bsdtar']);
+    download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      fs.writeFileSync(targetPath, 'deb');
+      return { path: targetPath, size: 123 };
+    });
+    const service = await freshUpdateService('linux', 'x64');
+    service.initUpdateService();
+    try {
+      await expect(service.checkForUpdate(linuxInstallerManifest())).resolves.toBe('ready');
+      expect(service.isUpdateRelaunchImminent()).toBe(false);
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  it.each([
+    { name: 'a system .deb', recognized: null, strict: null, missingTools: [], action: 'none' },
+    { name: 'a passwordless system .deb', recognized: null, strict: null, missingTools: [], preauthorized: true, action: 'relaunch' },
+    { name: 'a user install', recognized: userInstall, strict: userInstall, missingTools: [], action: 'relaunch' },
+    // The splash waits once a relaunch is accepted, so a preflight that would
+    // fail after acceptance must keep startup on the normal path instead.
+    { name: 'a user install missing bsdtar', recognized: userInstall, strict: userInstall, missingTools: ['bsdtar'], action: 'none' },
+  ])('applies a staged Linux update at startup only for $name', async ({ recognized, strict, missingTools, preauthorized, action }) => {
+    checkDebianManagedInstallation.mockReturnValue({ status: 'managed' });
+    isLinuxPkexecPreauthorized.mockReturnValue(preauthorized ?? false);
+    recognizeLinuxUserInstallation.mockReturnValue(recognized);
+    findLinuxUserInstallation.mockReturnValue(strict);
+    missingLinuxUserInstallTools.mockReturnValue(missingTools);
     await expect(runStartupUpdate({ platform: 'linux' })).resolves.toMatchObject({
       hasUpdate: true,
-      action: 'none',
+      action,
       version: '0.0.65',
     });
   });
 
-  it('allows the xd org beta default on Linux x64', async () => {
+  it.each([
+    { name: 'a system .deb', recognized: null, expected: false },
+    { name: 'a passwordless system .deb', recognized: null, preauthorized: true, expected: true },
+    { name: 'a passwordless system .deb without pkexec', recognized: null, preauthorized: true, pkexec: false, expected: false },
+    { name: 'a user install', recognized: userInstall, expected: true },
+    { name: 'a user install of another region', recognized: { ...userInstall, region: otherRegion }, expected: false },
+  ])('tells Settings whether idle install can work for $name', async ({ recognized, preauthorized, pkexec, expected }) => {
+    checkDebianManagedInstallation.mockReturnValue({ status: 'managed' });
+    isLinuxPkexecPreauthorized.mockReturnValue(preauthorized ?? false);
+    hasLinuxPkexec.mockReturnValue(pkexec ?? true);
+    recognizeLinuxUserInstallation.mockReturnValue(recognized);
+    const service = await freshUpdateService('linux', 'x64');
+    service.initUpdateService();
+    try {
+      expect(ipcHandlers.get('update-auto-settings-get')?.()).toMatchObject({
+        unattendedInstallSupported: expected,
+      });
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  // Regression: ARM64 must use the existing org-default and trusted IPC paths;
+  // earlier cases explicitly rejected it. Mocked Electron, temporary files; unit.
+  it.each(['x64', 'arm64'])('allows the xd org beta default on Linux %s', async (arch) => {
     tryEnableUncustomizedBetaAtomic.mockReset();
     tryEnableUncustomizedBetaAtomic.mockResolvedValue(true);
-    const { enableUncustomizedBetaChannel } = await freshUpdateService('linux', 'x64');
+    const { enableUncustomizedBetaChannel } = await freshUpdateService('linux', arch);
 
     await expect(enableUncustomizedBetaChannel()).resolves.toBe(true);
     expect(tryEnableUncustomizedBetaAtomic).toHaveBeenCalledOnce();
   });
 
-  it('refuses the xd org beta default on Linux arm64 without writing to disk', async () => {
+  it('refuses the xd org beta default on unsupported Linux architectures without writing to disk', async () => {
     tryEnableUncustomizedBetaAtomic.mockReset();
-    const { enableUncustomizedBetaChannel } = await freshUpdateService('linux', 'arm64');
+    const { enableUncustomizedBetaChannel } = await freshUpdateService('linux', 'ia32');
 
     await expect(enableUncustomizedBetaChannel()).resolves.toBe(false);
     expect(tryEnableUncustomizedBetaAtomic).not.toHaveBeenCalled();
   });
 
-  it('allows the beta channel setting to be written on Linux x64', async () => {
-    const service = await freshUpdateService('linux', 'x64');
+  it.each(['x64', 'arm64'])('allows the beta channel setting to be written on Linux %s', async (arch) => {
+    const service = await freshUpdateService('linux', arch);
     service.initUpdateService();
     try {
       const setHandler = ipcHandlers.get('update-channel-settings-set');
@@ -1229,8 +1326,8 @@ describe('checkForUpdate Linux installer flow', () => {
     }
   });
 
-  it('rejects beta channel setting writes on Linux arm64', async () => {
-    const service = await freshUpdateService('linux', 'arm64');
+  it('rejects beta channel setting writes on unsupported Linux architectures', async () => {
+    const service = await freshUpdateService('linux', 'ia32');
     service.initUpdateService();
     try {
       const setHandler = ipcHandlers.get('update-channel-settings-set');
@@ -1247,7 +1344,8 @@ describe('checkForUpdate Linux installer flow', () => {
 
   it.each([
     { arch: 'x64', expected: true },
-    { arch: 'arm64', expected: false },
+    { arch: 'arm64', expected: true },
+    { arch: 'ia32', expected: false },
   ])('reports a persisted beta setting correctly on Linux $arch', async ({ arch, expected }) => {
     readUpdateChannelSettings.mockReturnValue({
       enableBeta: true,
@@ -1344,6 +1442,119 @@ describe('personal version app update policy', () => {
   });
 });
 
+
+// NZWG-9FC9：Apple 芯片上经 Rosetta 运行的 darwin-x64 包只能靠同版本的 arm64 包换装原生架构。
+describe('native architecture switch for Rosetta-translated macOS builds', () => {
+  function armManifest(version = '0.0.64') {
+    const manifest = updateManifest(version, `app/darwin-arm64/xdt-maker-${version}-arm64.zip`);
+    nativeArmManifests.add(manifest);
+    return manifest;
+  }
+
+  function stagePatch(patch: Record<string, unknown>) {
+    const updatesDir = path.join(TEST_USER_DATA, 'updates');
+    const patchPath = path.join(updatesDir, 'staged.zip');
+    fs.mkdirSync(updatesDir, { recursive: true });
+    fs.writeFileSync(patchPath, 'update');
+    fs.writeFileSync(path.join(updatesDir, 'patch-info.json'), JSON.stringify({
+      version: '0.0.64', fileName: 'staged.zip', sha256: 'abc', enableBeta: false, ...patch,
+    }));
+    return patchPath;
+  }
+
+  beforeEach(() => {
+    download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      fs.writeFileSync(targetPath, 'update');
+      return { path: targetPath, size: 123 };
+    });
+  });
+
+  it('stages and applies the same-version arm64 package when translated', async () => {
+    runningTranslated.mockReturnValue(true);
+    const service = await freshUpdateService('darwin', 'x64');
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    service.initUpdateService();
+    try {
+      await expect(service.checkForUpdate(armManifest())).resolves.toBe('ready');
+      expect(download).toHaveBeenCalledOnce();
+      const info = JSON.parse(fs.readFileSync(path.join(TEST_USER_DATA, 'updates', 'patch-info.json'), 'utf8'));
+      expect(info).toMatchObject({ version: '0.0.64', targetArch: 'arm64' });
+
+      ipcListeners.get('update-relaunch')?.({}, 'dark');
+      await vi.waitFor(() => { expect(spawnProcess).toHaveBeenCalledOnce(); });
+    } finally {
+      service.stopUpdateService();
+      exitSpy.mockRestore();
+    }
+  });
+
+  // 重新授权标记按版本生效：同版本换装若写入，会在冷启动清掉已完成迁移用户的账号登录。
+  it('does not write a relogin flag for a same-version switch', async () => {
+    runningTranslated.mockReturnValue(true);
+    const service = await freshUpdateService('darwin', 'x64');
+    const manifest = armManifest();
+    Object.assign(manifest.app, { requireRelogin: true });
+
+    await expect(service.checkForUpdate(manifest)).resolves.toBe('ready');
+
+    expect(fs.existsSync(path.join(TEST_USER_DATA, 'relogin-required.flag'))).toBe(false);
+    const info = JSON.parse(fs.readFileSync(path.join(TEST_USER_DATA, 'updates', 'patch-info.json'), 'utf8'));
+    expect(info.requireRelogin).toBe(false);
+  });
+
+  // Agent 按「重启后版本前进」判定成功；同版本换装交给它会在换装成功后报失败。
+  it('does not offer a staged same-version switch to the Agent update flow', async () => {
+    runningTranslated.mockReturnValue(true);
+    const service = await freshUpdateService('darwin', 'x64');
+    const manifest = armManifest();
+    fetchManifest.mockResolvedValue(manifest);
+
+    await expect(service.checkForUpdate(manifest)).resolves.toBe('ready');
+
+    expect(await service.checkAppUpdateForAgent()).toMatchObject({
+      status: 'no_installable_update', currentVersion: '0.0.64',
+    });
+  });
+
+  it.each([
+    ['a native Intel Mac', false, true],
+    ['an x64 manifest under translation', true, false],
+  ])('keeps rejecting same-version packages on %s', async (_label, translated, fromArmManifest) => {
+    runningTranslated.mockReturnValue(translated);
+    const service = await freshUpdateService('darwin', 'x64');
+    const manifest = fromArmManifest ? armManifest() : updateManifest('0.0.64');
+
+    await expect(service.checkForUpdate(manifest)).resolves.toBe('idle');
+
+    expect(download).not.toHaveBeenCalled();
+  });
+
+  it('keeps a staged arm64 switch across an offline restart and clears it once native', async () => {
+    fetchManifest.mockResolvedValue(null);
+    runningTranslated.mockReturnValue(true);
+    const patchPath = stagePatch({ targetArch: 'arm64' });
+    let service = await freshUpdateService('darwin', 'x64');
+    service.initUpdateService();
+    try {
+      await expect(ipcHandlers.get('update-check-startup')?.()).resolves.toMatchObject({
+        hasUpdate: true, action: 'relaunch', version: '0.0.64',
+      });
+    } finally {
+      service.stopUpdateService();
+    }
+
+    runningTranslated.mockReturnValue(false);
+    service = await freshUpdateService('darwin', 'arm64');
+    service.initUpdateService();
+    try {
+      await expect(ipcHandlers.get('update-check-startup')?.()).resolves.toMatchObject({ hasUpdate: false });
+      expect(fs.existsSync(patchPath)).toBe(false);
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+});
 
 describe('app update forward-only policy', () => {
   it('does not download a manifest version lower than the running app', async () => {
@@ -2720,6 +2931,43 @@ describe('splash 启动下载 0% 显式广播', () => {
     const payloads = progressSends().map((s) => s.payload);
     expect(payloads[0]).toMatchObject({ progress: 0, received: 0, total: 123 });
     expect(payloads[payloads.length - 1]).toMatchObject({ progress: 100 });
+  });
+
+  // Regression (2026-11-17): retries were only logged, so the splash bar sat still with no
+  // reason. They now reach the splash channel at once as standard `download` progress.
+  it('announces a retry and verification on the splash channel before the next byte', async () => {
+    const { progressSends } = makeProgressCollector();
+    download.mockImplementation(
+      async (opts: {
+        targetPath: string;
+        onProgress: (e: object) => void;
+        onRetry: (e: object) => void;
+        onVerifying: () => void;
+      }) => {
+        opts.onProgress({ loaded: 40, total: 123, percent: 32.5, speedBps: 10 });
+        opts.onRetry({ attempt: 2, delayMs: 1000, cause: new Error('connection reset') });
+        // Bytes flow again without the bar rising a whole percent: "Retrying…" must clear now.
+        opts.onProgress({ loaded: 40, total: 123, percent: 32.5, speedBps: 10 });
+        opts.onVerifying();
+        fs.mkdirSync(path.join(TEST_USER_DATA, 'updates'), { recursive: true });
+        fs.writeFileSync(opts.targetPath, 'update');
+        return { path: opts.targetPath, size: 123 };
+      },
+    );
+
+    const { checkForUpdate } = await freshUpdateService('darwin');
+    expect(await checkForUpdate(updateManifest())).toBe('ready');
+
+    const phases = progressSends().map(
+      (s) => (s.payload as { download?: { phase: string } }).download?.phase,
+    );
+    expect(progressSends().map((s) => s.payload)).toContainEqual(
+      expect.objectContaining({
+        download: expect.objectContaining({ phase: 'retrying', attempt: 2, retryReason: 'network' }),
+      }),
+    );
+    const announced = phases.filter((phase, i) => phase && phase !== phases[i - 1]);
+    expect(announced).toEqual(['downloading', 'retrying', 'downloading', 'verifying', 'completed']);
   });
 
   it('superseding(wasReady)路径:下载前不向 splash 通道广播 0%', async () => {

@@ -24,10 +24,11 @@ import type {
   BotGroupThreadSummary,
 } from '../../../shared/botGroupChat';
 import type { BotGroupOutboxEntry } from './botGroupOutbox';
+import { chatGroupHumanDisplayName } from '@cindy/maker-shared/botGroupPresentation';
 import { mergeBotGroupMessages, mergeBotGroupPlans } from './botGroupPresentation';
 
-/** A timeline row; `pending` marks the optimistic copy of a message still on its way. */
-export type BotGroupTimelineMessage = BotGroupMessageView & { pending?: true; outbox?: BotGroupOutboxEntry };
+/** `pending` retains the local row until its authorized echo; `sendConfirmed` ends sending on receipt. */
+export type BotGroupTimelineMessage = BotGroupMessageView & { pending?: true; sendConfirmed?: true; outbox?: BotGroupOutboxEntry };
 
 /** Consecutive messages by one author within this window share one header. */
 export const BOT_GROUP_MERGE_WINDOW_MS = 5 * 60 * 1_000;
@@ -38,6 +39,8 @@ export interface BotGroupLoadedTimeline {
   older: BotGroupMessageView[];
   olderPlans: BotGroupPlanView[];
   olderHasMore: boolean;
+  /** Latest complete page's upper bound, retained while isolated deltas are displayed. */
+  latestPageCeiling?: number;
 }
 
 const signatures = new WeakMap<object, string>();
@@ -106,7 +109,8 @@ export function mergeBotGroupLatestPage(
   }
   const page = next.messages;
   const floor = page.reduce((min, message) => Math.min(min, message.sequence), Number.POSITIVE_INFINITY);
-  const ceiling = previous.group.messages.reduce((max, message) => Math.max(max, message.sequence), Number.NEGATIVE_INFINITY);
+  const ceiling = previous.latestPageCeiling
+    ?? previous.group.messages.reduce((max, message) => Math.max(max, message.sequence), Number.NEGATIVE_INFINITY);
   // More than a page arrived at once (e.g. while the window was in the background): the new page
   // neither overlaps nor directly adjoins the one on screen. Keeping the old rows
   // would hide that gap for good, so start over from the new page, as on first load; 「查看更早」
@@ -141,6 +145,7 @@ export function mergeBotGroupLatestPage(
     : previous.olderPlans;
   // Nothing moved: hand back the same object so the page skips the render entirely.
   if (messages === previous.group.messages && plans === previous.group.plans && older === previous.older
+    && previous.latestPageCeiling === undefined
     && olderPlans === previous.olderPlans
     && olderHasMore === previous.olderHasMore
     && signature({ ...next, messages: null, plans: null }) === signature({ ...previous.group, messages: null, plans: null })) {
@@ -193,6 +198,7 @@ export function pendingBotGroupMessage(send: BotGroupPendingSend): BotGroupTimel
     ...(send.quote ? { quote: send.quote } : {}),
     createdAt: send.createdAt,
     pending: true,
+    ...(send.messageId ? { sendConfirmed: true } : {}),
   };
 }
 
@@ -285,7 +291,7 @@ export function layoutBotGroupTimeline(
 
 // ---- Names -----------------------------------------------------------------------------
 
-type NamedMember = Pick<BotGroupMemberView, 'name' | 'ownerName' | 'isOwned' | 'actorKind'>;
+type NamedMember = Pick<BotGroupMemberView, 'name' | 'ownerName' | 'isOwned' | 'actorKind' | 'nickname' | 'orgName' | 'showOrgName'>;
 
 function ownerSuffix(member: NamedMember): string | null {
   const owner = member.ownerName?.trim();
@@ -300,12 +306,14 @@ export function botGroupMemberBaseName(member: NamedMember): string {
 }
 
 /**
- * 多人群里别人带来的伙伴显示为 `伙伴名 (主人昵称)`（bot-group-chat.md §10）；自己的伙伴、
- * 人类成员与本地群照常显示名字。只用于展示，点名与身份仍按 id。
+ * 多人群里别人带来的伙伴显示为 `伙伴名 (主人昵称)`（bot-group-chat.md §10）；
+ * 外部/跨组织企业真人未改群昵称时显示为 `姓名 · 企业名`；自己的伙伴、同组织成员与本地群照常显示名字。
+ * 只用于展示，点名与身份仍按 id。
  */
 export function botGroupMemberDisplayName(member: NamedMember): string {
+  if (member.actorKind === 'human') return chatGroupHumanDisplayName(member);
   const suffix = ownerSuffix(member);
-  if (suffix && member.isOwned === false && member.actorKind !== 'human') return `${botGroupMemberBaseName(member)}${suffix}`;
+  if (suffix && member.isOwned === false) return `${botGroupMemberBaseName(member)}${suffix}`;
   return member.name.trim();
 }
 

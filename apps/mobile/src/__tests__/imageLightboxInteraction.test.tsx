@@ -15,6 +15,7 @@ import { createDurableOutbox, observeDurableOutboxSending, type DurableOutboxRec
 import type { QueuedRemoteMessage, RemoteSerializedAttachment } from '@/session/types';
 import { createRemoteMediaResolveQueue } from '@/session/remoteMediaResolveQueue';
 import type { MobileResolvedRemoteMedia } from '@/session/remoteMedia';
+import { openNativeByteStream } from '../../../../packages/agent-net/src/nativeMediaStream';
 import {
   ImageLightbox,
   type ImageLightboxProps,
@@ -30,7 +31,8 @@ type GestureNode = {
 type Animation = {
   target: number;
   done?: (finished: boolean) => void;
-  decay?: { velocity: number; clamp: [number, number]; rubberBandEffect?: boolean };
+  decay?: { velocity: number; clamp: [number, number]; rubberBandEffect?: boolean;
+  };
 };
 type Value = { value: number; animation?: Animation };
 const runtime = vi.hoisted(() => ({
@@ -41,27 +43,56 @@ const runtime = vi.hoisted(() => ({
   insets: { top: 40, bottom: 20, left: 0, right: 0 },
   gesture: null as GestureNode | null,
   alerts: [] as Array<[string, string, Array<{ text: string; style?: string; onPress?: () => void }>]>,
+  savePreviewImage: vi.fn(),
   scrollToOffset: vi.fn(),
   renderPageIndex: 0,
+}));
+
+// 预览外壳的液态玻璃与系统菜单:测试环境没有原生模块,走实色底与底部面板回退。
+// Keep the real preview layout hook so rotation assertions exercise production geometry.
+vi.mock('@/platform/AdaptiveWindowContext', () => ({ useAdaptiveWindow: () => ({
+  ...runtime.dimensions, insets: runtime.insets, regularWidth: false, regularHeight: true,
+  barEdge: 'none', reservedRegionsSupported: false, regions: [],
+}) }));
+vi.mock('expo-glass-effect', () => ({ GlassView: ({ children }: any) => children }));
+vi.mock('@/session/useLiquidGlassAvailable', () => ({ useLiquidGlassAvailable: () => false }));
+vi.mock('@/platform/chrome', () => ({
+  NativePullDownMenu: ({ children }: any) => children,
+  usesNativePullDownMenu: () => false,
+}));
+vi.mock('@/session/savePreviewImage', () => ({ savePreviewImage: runtime.savePreviewImage }));
+vi.mock("@/session/SheetModal", () => ({
+  SheetModal: ({ visible, children }: any) => (visible ? children : null),
 }));
 
 vi.mock("expo-router", () => ({
   useNavigation: () => ({ setOptions: () => undefined }),
 }));
+vi.mock('@/session/VideoDownloadButton', () => ({ VideoDownloadButton: (props: any) => {
+  runtime.nodes.set('message.videoDownload', props); return null;
+} }));
 vi.mock("react-i18next", async (importOriginal) => ({
-  ...await importOriginal<typeof import('react-i18next')>(),
+  ...(await importOriginal<typeof import('react-i18next')>()),
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 vi.mock("react-native-safe-area-context", () => ({
   useSafeAreaInsets: () => runtime.insets,
 }));
 vi.mock("lucide-react-native", () => ({
+  Download: () => null,
   MessageSquarePlus: () => null,
   Pen: () => null,
   Share: () => null,
   Undo2: () => null,
   X: () => null,
   CircleAlert: () => null,
+  ChevronLeft: () => null,
+  ChevronRight: () => null,
+  Ellipsis: () => null,
+  Minus: () => null,
+  Plus: () => null,
+  Maximize: () => null,
+  Redo2: () => null,
 }));
 vi.mock("react-native-svg", () => ({ default: () => null, Path: () => null }));
 vi.mock("@/theme", async () => {
@@ -77,6 +108,7 @@ vi.mock("react-native", async () => {
   };
   return {
     View: view("View"),
+    ScrollView: view("ScrollView"),
     Pressable: view("Pressable"),
     Modal: view("Modal"),
     Text: view("Text"),
@@ -90,6 +122,7 @@ vi.mock("react-native", async () => {
       absoluteFill: {},
       hairlineWidth: 1,
     },
+    // 图片页铺满整屏,浮动 chrome 盖在图上:手势画布就是整个窗口。
     useWindowDimensions: () => runtime.dimensions,
     FlatList: (props: any) => {
       runtime.nodes.set("FlatList", props);
@@ -226,6 +259,12 @@ vi.mock("react-native-reanimated", async () => {
 let root: Root;
 let container: HTMLDivElement;
 const isMounted = (id: string) => !!container.querySelector(`[data-testid="${id}"]`);
+/** 当前显示的是第几张(手机不再显示「2 / 7」计数,从各页的 active 读出)。 */
+const activePosition = () => {
+  const list = runtime.nodes.get('FlatList');
+  const index = list.data.findIndex((item: any, i: number) => list.renderItem({ item, index: i }).props.active);
+  return `${index + 1} / ${list.data.length}`;
+};
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   runtime.nodes.clear();
@@ -236,7 +275,7 @@ beforeEach(() => {
   runtime.alerts = [];
   runtime.scrollToOffset.mockClear();
   runtime.renderPageIndex = 0;
-  root = createRoot(container = document.createElement("div"));
+  root = createRoot((container = document.createElement("div")));
 });
 afterEach(() => act(() => root.unmount()));
 
@@ -261,7 +300,9 @@ function mount(overrides: Partial<ImageLightboxProps> = {}) {
     onClose: vi.fn(),
     ...overrides,
   };
-  const render = () => act(() => root.render(<ImageLightbox {...props} />));
+  const render = () => {
+    act(() => root.render(<ImageLightbox {...props} />));
+  };
   render();
   return { props, render };
 }
@@ -388,7 +429,7 @@ describe('pending image gallery updates', () => {
     render();
     // Production's synchronous dispatch observer captures the slot identity before queue materialization.
     rememberSentMessageImagePreviews(previews, 's', item.clientId, outboxItemAttachments(item),
-      () => phase === 'remote-only' ? null : 'file:///durable.jpg', (attachment) => {
+      () => (phase === 'remote-only' ? null : 'file:///durable.jpg'), (attachment) => {
         const slot = item.attachmentSlots.findIndex((entry) => entry?.id === attachment.id);
         return `${item.clientId}-slot-${slot}`;
       });
@@ -497,7 +538,7 @@ describe('pending image gallery updates', () => {
     })));
     props.images = lightboxImagesForPayload(updated, clicked, 'pending', props.images);
     render();
-    expect(runtime.nodes.get('message.imageLightboxPageLabel').children).toBe('2 / 2');
+    expect(activePosition()).toBe('2 / 2');
     await act(async () => runtime.nodes.get('message.imageLightboxShareButton').onPress());
     expect(onShareImage.mock.lastCall?.[0].url).toBe(updated[1].url);
     // Paging away from the originally clicked page must also survive a row handoff.
@@ -505,7 +546,7 @@ describe('pending image gallery updates', () => {
     props.images = lightboxImagesForPayload([], clicked, 'pending', props.images, false, true);
     render();
     expect(runtime.nodes.get('FlatList').data).toHaveLength(2);
-    expect(runtime.nodes.get('message.imageLightboxPageLabel').children).toBe('1 / 2');
+    expect(activePosition()).toBe('1 / 2');
     await act(async () => runtime.nodes.get('message.imageLightboxShareButton').onPress());
     expect(onShareImage.mock.lastCall?.[0].url).toBe(updated[0].url);
   });
@@ -538,7 +579,7 @@ describe('pending image gallery updates', () => {
     for (const file of files) item = outboxItemWithUpload(item, file.id, file);
     const previews: SentMessageImagePreviews = new Map();
     rememberSentMessageImagePreviews(previews, 's', item.clientId, outboxItemAttachments(item),
-      (file) => file.id === files[1].id ? 'file:///durable-1.jpg' : null,
+      (file) => (file.id === files[1].id ? 'file:///durable-1.jpg' : null),
       (file) => `${item.clientId}-slot-${item.attachmentSlots.findIndex((entry) => entry?.id === file.id)}`);
     const getPreview: GetSentMessageImagePreview = (...args) => getSentMessageImagePreview(previews, 's', ...args);
     if (proof === 'materialized queue') {
@@ -689,7 +730,7 @@ describe('pending image gallery updates', () => {
       path: 'https://example.invalid/target.jpg' };
     const previews: SentMessageImagePreviews = new Map();
     if (local) rememberSentMessageImagePreviews(previews, 's', 'pending', [first, target],
-      (file) => file.id === target.id ? 'file:///target.jpg' : null,
+      (file) => (file.id === target.id ? 'file:///target.jpg' : null),
       (file) => `pending-slot-${file.id === target.id ? 1 : 0}`);
     const getPreview: GetSentMessageImagePreview = (...args) => getSentMessageImagePreview(previews, 's', ...args);
     const queued = (files: RemoteSerializedAttachment[]) => collectMobileMessageGalleryImages(buildPendingSendItems({
@@ -728,7 +769,7 @@ describe('pending image gallery updates', () => {
     const { props, render } = mount({ images: initial, initialUrl: initial[0].url });
     props.images = collect(thumbs);
     render();
-    expect(runtime.nodes.get('message.imageLightboxPageLabel').children).toBe('2 / 2');
+    expect(activePosition()).toBe('2 / 2');
     expect(runtime.scrollToOffset).toHaveBeenLastCalledWith({ animated: false, offset: 400 });
   });
 
@@ -755,7 +796,7 @@ describe('pending image gallery updates', () => {
       render();
       const index = props.images.findIndex((image) => image.key === initial[1].key);
       expect(index).toBe(attachments.indexOf(files[1]));
-      expect(runtime.nodes.get('message.imageLightboxPageLabel').children).toBe(`${index + 1} / 2`);
+      expect(activePosition()).toBe(`${index + 1} / 2`);
       await act(async () => runtime.nodes.get('message.imageLightboxShareButton').onPress());
       expect(onShareImage.mock.lastCall?.[0].url).toBe(files[1].path);
     }
@@ -768,9 +809,9 @@ describe('pending image gallery updates', () => {
     const { props, render } = mount({ images: initial, initialUrl: initial[0].url, onShareImage });
     act(() => runtime.nodes.get('FlatList').onMomentumScrollEnd({ nativeEvent: { contentOffset: { x: index * 400 } } }));
     const replacement = { ...original[index], key: `${original[index].key}:replaced`, uri: 'https://example.invalid/replacement.jpg' };
-    props.images = collect(original.map((thumb, slot) => slot === index ? replacement : thumb));
+    props.images = collect(original.map((thumb, slot) => (slot === index ? replacement : thumb)));
     render();
-    expect(runtime.nodes.get('message.imageLightboxPageLabel').children).toBe(`${index + 1} / 2`);
+    expect(activePosition()).toBe(`${index + 1} / 2`);
     await act(async () => runtime.nodes.get('message.imageLightboxShareButton').onPress());
     expect(onShareImage.mock.lastCall?.[0].url).toBe(replacement.uri);
   });
@@ -781,7 +822,7 @@ describe('pending image gallery updates', () => {
     const list = runtime.nodes.get('FlatList');
     expect(list.initialScrollIndex).toBe(index);
     expect(list.renderItem({ item: images[index], index }).props.active).toBe(true);
-    expect(runtime.nodes.get('message.imageLightboxPageLabel').children).toBe(`${index + 1} / 2`);
+    expect(activePosition()).toBe(`${index + 1} / 2`);
   });
 
   it('keeps the replacement and its annotation when an earlier image becomes readable', async () => {
@@ -829,7 +870,7 @@ describe('pending image gallery updates', () => {
     render();
     const page = runtime.nodes.get('FlatList').renderItem({ item: props.images[1], index: 1 }).props;
     expect(page.active).toBe(true);
-    expect(runtime.nodes.get('message.imageLightboxPageLabel').children).toBe('2 / 2');
+    expect(activePosition()).toBe('2 / 2');
     expect(runtime.scrollToOffset).toHaveBeenLastCalledWith({ animated: false, offset: 400 });
     await act(async () => runtime.nodes.get('message.imageLightboxShareButton').onPress());
     expect(onShareImage.mock.lastCall?.[0]).toBe(props.images[1].payload.media);
@@ -880,7 +921,7 @@ describe('pending image gallery updates', () => {
     const replacement = { ...thumbs[1], key: 'replacement', uri: 'file:///replacement.jpg' };
     props.images = collect([{ ...waiting[1], uri: 'file:///earlier.jpg' }, replacement]);
     render();
-    expect(runtime.nodes.get('message.imageLightboxPageLabel').children).toBe('2 / 2');
+    expect(activePosition()).toBe('2 / 2');
     await act(async () => runtime.nodes.get('message.imageLightboxShareButton').onPress());
     expect(onShareImage.mock.lastCall?.[0]).toBe(props.images[1].payload.media);
   });
@@ -894,7 +935,7 @@ describe('pending image gallery updates', () => {
     render();
     props.images = collect([replacement, thumbs[1], thumbs[0]]);
     render();
-    expect(runtime.nodes.get('message.imageLightboxPageLabel').children).toBe('1 / 3');
+    expect(activePosition()).toBe('1 / 3');
     await act(async () => runtime.nodes.get('message.imageLightboxShareButton').onPress());
     expect(onShareImage.mock.lastCall?.[0].url).toBe(replacement.uri);
   });
@@ -907,10 +948,10 @@ describe('pending image gallery updates', () => {
     const { props, render } = mount({ images: initial, initialUrl: last.uri, onShareImage });
     props.images = collect([thumbs[1], last]);
     render();
-    expect(runtime.nodes.get('message.imageLightboxPageLabel').children).toBe('2 / 2');
+    expect(activePosition()).toBe('2 / 2');
     props.images = collect([thumbs[1], replacement, thumbs[0]]);
     render();
-    expect(runtime.nodes.get('message.imageLightboxPageLabel').children).toBe('2 / 3');
+    expect(activePosition()).toBe('2 / 3');
     await act(async () => runtime.nodes.get('message.imageLightboxShareButton').onPress());
     expect(onShareImage.mock.lastCall?.[0].url).toBe(replacement.uri);
   });
@@ -972,7 +1013,7 @@ describe('pending image gallery updates', () => {
     const images = lightboxImagesForPayload(updated, clicked, 'pending');
     mount({ images, initialUrl: images[galleryImageIndexForPayload(images, clicked)]?.url ?? clicked.media.url });
     expect(runtime.nodes.get('FlatList').initialScrollIndex).toBe(1);
-    expect(runtime.nodes.get('message.imageLightboxPageLabel').children).toBe('2 / 2');
+    expect(activePosition()).toBe('2 / 2');
   });
 
   it.each([false, true])('opens the clicked second slot after replacement before mounting (duplicate URL: %s)', async (duplicate) => {
@@ -988,7 +1029,7 @@ describe('pending image gallery updates', () => {
       initialImageKey: initialImage?.key ?? clicked.galleryImageKey,
       initialUrl: initialImage?.url ?? clicked.media.url, onShareImage });
     expect(runtime.nodes.get('FlatList').initialScrollIndex).toBe(1);
-    expect(runtime.nodes.get('message.imageLightboxPageLabel').children).toBe('2 / 2');
+    expect(activePosition()).toBe('2 / 2');
     await act(async () => runtime.nodes.get('message.imageLightboxShareButton').onPress());
     expect(onShareImage.mock.lastCall?.[0]).toBe(images[1].payload.media);
 
@@ -996,7 +1037,7 @@ describe('pending image gallery updates', () => {
     props.images = [{ ...images[0], key: 'inserted',
       payload: { ...images[0].payload, galleryImageKey: 'inserted' } }, ...images];
     render();
-    expect(runtime.nodes.get('message.imageLightboxPageLabel').children).toBe('3 / 3');
+    expect(activePosition()).toBe('3 / 3');
     await act(async () => runtime.nodes.get('message.imageLightboxShareButton').onPress());
     expect(onShareImage.mock.lastCall?.[0]).toBe(images[1].payload.media);
   });
@@ -1039,7 +1080,7 @@ describe('pending image gallery updates', () => {
     expect(page().annotationStrokes).toEqual([]);
     expect(page().annotationDraftStroke).toBeNull();
     expect(page().naturalSize).toBeNull();
-    expect(runtime.nodes.get('message.imageLightboxPageLabel').children).toBe('1 / 2');
+    expect(activePosition()).toBe('1 / 2');
     act(() => runtime.nodes.get('Image').onLoad({ source: { width: 800, height: 400 } }));
     fire(draw(), 'onStart', { x: 200, y: 400 });
     fire(draw(), 'onFinalize', {}, true);
@@ -1058,14 +1099,14 @@ describe('pending image gallery updates', () => {
     const { props, render } = mount({ images: initial, initialUrl: initial[1].url, onShareImage });
     props.images = initial.map((image) => ({ ...image, key: `completed:${image.key}` }));
     render();
-    expect(runtime.nodes.get('message.imageLightboxPageLabel').children).toBe('2 / 2');
+    expect(activePosition()).toBe('2 / 2');
     await act(async () => runtime.nodes.get('message.imageLightboxShareButton').onPress());
     expect(onShareImage.mock.lastCall?.[0].url).toBe(initial[1].url);
     // After rebuilding the keys, moving this page must follow its adopted key.
     const updated = collect([{ ...thumbs[1], uri: 'https://example.invalid/current.jpg' }])[0];
     props.images = [{ ...updated, key: props.images[1].key }, props.images[0]];
     render();
-    expect(runtime.nodes.get('message.imageLightboxPageLabel').children).toBe('1 / 2');
+    expect(activePosition()).toBe('1 / 2');
     await act(async () => runtime.nodes.get('message.imageLightboxShareButton').onPress());
     expect(onShareImage.mock.lastCall?.[0].url).toBe('https://example.invalid/current.jpg');
   });
@@ -1102,12 +1143,12 @@ describe('gallery prefetch boundaries', () => {
       page(0);
       if (selected === 1) page(1);
       const image = images[selected];
-      expect(runtime.nodes.get('message.imageLightboxShareButton').disabled).toBe(true);
+      expect(isMounted('message.imageLightboxLoadingBar')).toBe(true);
       await act(async () => { pending.get('block-1')!(result('block-1')); });
       expect(download.mock.calls.map(([media]) => media.url)).toEqual(['block-1', 'block-2', image.url]);
       await act(async () => { pending.get(image.url)!(result(image.key)); });
       expect(runtime.nodes.get('Image').source.uri).toBe(`file:///${image.key}.png`);
-      expect(runtime.nodes.get('message.imageLightboxShareButton').disabled).toBe(true);
+      expect(isMounted('message.imageLightboxShareButton')).toBe(false);
       act(() => runtime.nodes.get('Image').onLoad({ source: { width: 1600, height: 900 } }));
       await act(async () => { press('message.imageLightboxShareButton'); });
       expect(onShareImage).toHaveBeenCalledWith(image.payload.media, `file:///${image.key}.png`, 'image/png', 1);
@@ -1610,10 +1651,9 @@ describe("image viewer actions", () => {
     // The native dimensions hook schedules its own render; this mock uses a changed prop.
     harness.props.onClose = vi.fn();
     harness.render();
-    const chromeBounds = () => Object.assign({}, ...runtime.nodes.get('message.imageLightboxChrome').style);
-    const closeBounds = Object.assign({}, ...runtime.nodes.get('message.imageLightboxCloseButton').style);
-    expect(chromeBounds().left + closeBounds.left).toBe(75);
-    expect(chromeBounds().right).toBe(0);
+    const chromeBounds = () => Object.assign({}, ...runtime.nodes.get("preview.header").style);
+    expect(chromeBounds().paddingLeft).toBeGreaterThanOrEqual(59);
+    expect(chromeBounds().paddingRight).toBeLessThan(59);
     expect(transform().x).toBeCloseTo(0);
     expect(transform().y).toBe(-300);
     expect(transform().scale).toBe(2.5);
@@ -1622,8 +1662,8 @@ describe("image viewer actions", () => {
     runtime.insets = { top: 0, bottom: 20, left: 0, right: 59 };
     harness.props.onClose = vi.fn();
     harness.render();
-    expect(chromeBounds().left).toBe(0);
-    expect(chromeBounds().right).toBe(59);
+    expect(chromeBounds().paddingLeft).toBeLessThan(59);
+    expect(chromeBounds().paddingRight).toBeGreaterThanOrEqual(59);
   });
 
   it('includes the visible unfinished stroke and ignores drawing delivered after submit', async () => {
@@ -1632,7 +1672,8 @@ describe("image viewer actions", () => {
     mount({ annotation: { submitLabel: 'Send', onSubmit } });
     act(() => runtime.nodes.get('Image').onLoad({ source: { width: 400, height: 800 } }));
     press('message.imageLightboxAnnotateButton');
-    const draw = gestures().find(g => g.kind === 'Pan' && g.options.minDistance === 0)!;
+    const draw = gestures().find(
+      (g) => g.kind === 'Pan' && g.options.minDistance === 0)!;
     fire(draw, 'onStart', { x: 100, y: 200 });
     press('message.imageLightboxAnnotationSubmit');
     fire(draw, 'onUpdate', { x: 300, y: 600 });
@@ -1650,7 +1691,7 @@ describe("image viewer actions", () => {
     mount({ annotation: { submitLabel: 'Send', onSubmit } });
     act(() => runtime.nodes.get('Image').onLoad({ source: { width: 400, height: 800 } }));
     press('message.imageLightboxAnnotateButton');
-    const draw = () => gestures().find(g => g.kind === 'Pan' && g.options.minDistance === 0)!;
+    const draw = () => gestures().find((g) => g.kind === 'Pan' && g.options.minDistance === 0)!;
     fire(draw(), 'onStart', { x: 100, y: 200 });
     press('message.imageLightboxAnnotationSubmit');
     fire(draw(), 'onFinalize');
@@ -1692,6 +1733,15 @@ describe("image viewer actions", () => {
     );
     expect(props.onClose).not.toHaveBeenCalled();
     expect(runtime.nodes.get("Image").source.uri).toBe(props.initialUrl);
+  });
+
+  // Android regression: one decoded image must be exportable even without a host share action.
+  it("saves the original directly from the toolbar without a share handler", async () => {
+    const { props } = mount();
+    expect(runtime.nodes.get("message.imageLightboxSave").disabled).toBe(true);
+    act(() => runtime.nodes.get("Image").onLoad({ source: { width: 400, height: 800 } }));
+    await act(async () => { await runtime.nodes.get("message.imageLightboxSave").onPress(); });
+    expect(runtime.savePreviewImage).toHaveBeenCalledWith(props.initialUrl, undefined, "Image");
   });
 
   it("deduplicates sharing and restores its button after rejection", async () => {
@@ -1960,28 +2010,28 @@ describe("chrome toggle, loading and video pages", () => {
     fire(singleTap(), "onEnd", {}, true);
     finishAnimations();
     expect(props.onClose).not.toHaveBeenCalled();
-    expect(chrome().pointerEvents).toBe("none");
-    expect(chromeOpacity()).toBe(0);
+    // 单击收起顶栏与底栏,再点一下出来(用户定稿 2026-11-06)。
+    expect(isMounted("message.imageLightboxCloseButton")).toBe(false);
 
     doubleTapAtCorner();
     finishAnimations();
     fire(singleTap(), "onEnd", {}, true);
     finishAnimations();
     expect(props.onClose).not.toHaveBeenCalled();
-    expect(chrome().pointerEvents).toBe("box-none");
-    expect(chromeOpacity()).toBe(1);
+    expect(isMounted("message.imageLightboxCloseButton")).toBe(true);
   });
 
-  it("lets the placeholder zoom and shows the tools disabled while the original is loading", async () => {
+  it("lets the placeholder zoom and shows a loading bar instead of the tools while the original is loading", async () => {
     const url = "xdt-image://cache/photo.png";
     const image = {
       key: "remote", title: "Photo", url,
       payload: { kind: "media", media: { kind: "image", url, previewable: false } },
     } as ImageLightboxProps["images"][number];
     let finish!: (media: unknown) => void;
-    const resolver = vi.fn((media: { thumbnail?: boolean }) => (media.thumbnail
+    const resolver = vi.fn((media: { thumbnail?: boolean }) =>
+      media.thumbnail
       ? Promise.resolve({ url: "file:///thumb.png", previewable: true })
-      : new Promise((resolve) => { finish = resolve; })));
+      : new Promise((resolve) => { finish = resolve; }));
     runtime.gesture = null;
     await act(async () => {
       mount({
@@ -1993,9 +2043,14 @@ describe("chrome toggle, loading and video pages", () => {
     expect(runtime.gesture).not.toBeNull();
     const preview = () => runtime.nodes.get("message.imageLightboxPreviewLayer");
     expect(preview().source.uri).toBe("file:///thumb.png");
-    expect(runtime.nodes.get("message.imageLightboxShareButton").disabled).toBe(true);
-    expect(runtime.nodes.get("message.imageLightboxSendToChatButton").disabled).toBe(true);
-    expect(runtime.nodes.get("message.imageLightboxAnnotateButton").disabled).toBe(true);
+    expect(isMounted("message.imageLightboxLoadingBar")).toBe(true);
+    expect(
+      runtime.nodes.get("message.imageLightboxLoadingBar").accessibilityLabel,
+    ).toBe("message.lightbox.loadingOriginal");
+    // 载入中整条底栏只有载入提示,不摆一排点不动的按钮。
+    expect(isMounted("message.imageLightboxShareButton")).toBe(false);
+    expect(isMounted("message.imageLightboxSendToChatButton")).toBe(false);
+    expect(isMounted("message.imageLightboxAnnotateButton")).toBe(false);
 
     act(() => preview().onLoad({ source: { width: 160, height: 90 } }));
     doubleTapAtCorner();
@@ -2005,7 +2060,10 @@ describe("chrome toggle, loading and video pages", () => {
     await act(async () => {
       finish({ url: "file:///full.png", previewable: true, mimeType: "image/png" });
     });
+    // 取件完成但原图还在解码:仍是载入提示。
+    expect(isMounted("message.imageLightboxLoadingBar")).toBe(true);
     act(() => runtime.nodes.get("Image").onLoad({ source: { width: 1600, height: 900 } }));
+    expect(isMounted("message.imageLightboxLoadingBar")).toBe(false);
     expect(runtime.nodes.get("message.imageLightboxShareButton").disabled).toBe(false);
     expect(runtime.nodes.get("message.imageLightboxSendToChatButton").disabled).toBe(false);
     expect(runtime.nodes.get("message.imageLightboxAnnotateButton").disabled).toBe(false);
@@ -2018,9 +2076,10 @@ describe("chrome toggle, loading and video pages", () => {
       payload: { kind: "media", media: { kind: "image", url, previewable: false } },
     } as ImageLightboxProps["images"][number];
     // 气泡用的是本地图,从没取过远程缩略图:缓存查询必然落空,原图仍在路上。
-    const resolver = vi.fn((media: { thumbnail?: boolean }) => (media.thumbnail
+    const resolver = vi.fn((media: { thumbnail?: boolean }) =>
+      media.thumbnail
       ? Promise.reject(new Error("not cached"))
-      : new Promise(() => undefined)));
+      : new Promise(() => undefined));
     await act(async () => {
       mount({ images: [image], initialUrl: url, onResolveRemoteMedia: resolver as never });
     });
@@ -2040,9 +2099,10 @@ describe("chrome toggle, loading and video pages", () => {
     } as ImageLightboxProps["images"][number];
     const failures = new Map<string, (error: Error) => void>();
     let finish!: (media: unknown) => void;
-    const resolver = vi.fn((media: { url: string; thumbnail?: boolean }) => (media.thumbnail
+    const resolver = vi.fn((media: { url: string; thumbnail?: boolean }) =>
+      media.thumbnail
       ? Promise.resolve({ url: "file:///thumb.png", previewable: true })
-      : new Promise((resolve, reject) => { finish = resolve; failures.set(media.url, reject); })));
+      : new Promise((resolve, reject) => { finish = resolve; failures.set(media.url, reject); }));
     const fail = (error: Error) => failures.get(url)!(error);
     await act(async () => {
       const nextUrl = "xdt-image://cache/next.png";
@@ -2067,6 +2127,8 @@ describe("chrome toggle, loading and video pages", () => {
     expect(container.textContent).toContain('message.lightbox.deviceOffline');
     expect(runtime.nodes.has("message.imageLightboxRetryButton")).toBe(true);
     expect(runtime.nodes.get("FlatList").scrollEnabled).toBe(false);
+    // 失败不算载入:不留永远转圈的提示,按钮置灰、由页内重试接手。
+    expect(isMounted('message.imageLightboxLoadingBar')).toBe(false);
     expect(runtime.nodes.get('message.imageLightboxShareButton').disabled).toBe(true);
     expect(runtime.nodes.get('message.imageLightboxSendToChatButton').disabled).toBe(true);
 
@@ -2089,8 +2151,7 @@ describe("chrome toggle, loading and video pages", () => {
     await act(async () => { finish({ url: 'file:///full.png', previewable: true, mimeType: 'image/png' }); });
     expect(preview()).toBeDefined();
     expect(runtime.nodes.get('message.imageLightboxRetryButton').disabled).toBe(true);
-    expect(runtime.nodes.get('message.imageLightboxShareButton').disabled).toBe(true);
-    expect(runtime.nodes.get('message.imageLightboxSendToChatButton').disabled).toBe(true);
+    expect(isMounted('message.imageLightboxLoadingBar')).toBe(true);
     act(() => runtime.nodes.get('Image').onLoad({ source: { width: 1600, height: 900 } }));
     expect(isMounted('message.imageLightboxPreviewLayer')).toBe(false);
     expect(isMounted('message.imageLightboxOriginalNotice')).toBe(false);
@@ -2152,7 +2213,9 @@ describe("chrome toggle, loading and video pages", () => {
       key: "video", title: "clip.mp4", url,
       payload: { kind: "media", media: { kind: "video", url, previewable: false } },
     } as ImageLightboxProps["images"][number];
-    const resolved = { url: "https://cdn.invalid/clip.mp4", previewable: true, mimeType: "video/mp4" };
+    let consumers = 0;
+    const resolved = { url: "https://cdn.invalid/clip.mp4", previewable: true, mimeType: "video/mp4",
+      protectLocalFile: () => { consumers++; return () => { consumers--; }; } };
     const resolver = vi.fn(async (media: { thumbnail?: boolean }) => {
       if (media.thumbnail) throw new Error("no thumb");
       return resolved;
@@ -2166,28 +2229,200 @@ describe("chrome toggle, loading and video pages", () => {
       });
     });
     const player = runtime.nodes.get("message.imageLightboxVideoPlayer");
+    expect(runtime.nodes.get('message.videoDownload')).toMatchObject({ source: resolved.url, mimeType: 'video/mp4',
+    });
+    // 视频页 chrome 常驻:页面铺满整屏,但让出顶栏和底栏,系统播放控件不被底栏压住。
+    expect(runtime.nodes.get('message.imageLightboxVideoPage').style).toMatchObject({
+      height: runtime.dimensions.height,
+      paddingTop: runtime.insets.top + 64,
+      paddingBottom: runtime.insets.bottom + 56,
+    });
     expect(player.url).toBe(resolved.url);
     expect(player.visible).toBe(true);
+    expect(consumers).toBe(1);
     expect(runtime.nodes.has("message.imageLightboxShareButton")).toBe(false);
     expect(runtime.nodes.get("message.imageLightboxCloseButton")).toBeTruthy();
 
     act(() => player.onError("decode failed"));
     const web = runtime.nodes.get("message.imageLightboxVideoWebPlayer");
     expect(web.url).toBe(resolved.url);
+    expect(consumers).toBe(1);
 
     // WebView 兜底也播不了:落失败态给重试,重试经 forceRefresh 重新取件后回到原生播放器。
     runtime.nodes.delete("message.imageLightboxVideoPlayer");
     act(() => web.onStatusChange({ type: "xdt-media-player/status", state: "error", error: "decode" }));
     expect(runtime.nodes.has("message.imageLightboxRetryButton")).toBe(true);
+    // Playback failure must not invalidate the footer's export source.
+    expect(runtime.nodes.get('message.videoDownload').source).toBe(resolved.url);
+    expect(consumers).toBe(1);
     await act(async () => press("message.imageLightboxRetryButton"));
     expect(resolver).toHaveBeenLastCalledWith(
       expect.objectContaining({ url }),
       expect.objectContaining({ forceRefresh: true }),
     );
     expect(runtime.nodes.get("message.imageLightboxVideoPlayer").url).toBe(resolved.url);
+    expect(consumers).toBe(1);
 
     act(() => root.unmount());
     expect(onReleaseRemoteMedia).toHaveBeenCalledWith(url, resolved);
+    expect(consumers).toBe(0);
     root = createRoot(document.createElement("div"));
+  });
+
+  // Playback refresh does not prove the original unavailable. Real React unit
+  // regression for #10136: leased file/Range and unleased OSS HTTPS, plus expiry.
+  it.each([
+    ['file:///cache/clip.mp4', true, false],
+    ['http://127.0.0.1:12345/clip', true, false],
+    ['https://cdn.invalid/clip.mp4', false, false],
+    ['https://cdn.invalid/clip.mp4', false, true],
+  ] as const)('preserves available exports across failed video refresh (%s, lease=%s, expired=%s)', async (source, leased, expired) => {
+    const url = 'xdt-video://cache/retry.mp4';
+    const video = { key: 'retry', title: 'retry.mp4', url,
+      payload: { kind: 'media', media: { kind: 'video', url, previewable: false } } } as ImageLightboxProps['images'][number];
+    let consumers = 0;
+    const resolved: MobileResolvedRemoteMedia = { url: source, previewable: true, mimeType: 'video/mp4',
+      ossKey: '', size: 16, expiresAt: expired ? '2000-01-01T00:00:00Z' : '2099-01-01T00:00:00Z',
+      ...(leased ? { protectLocalFile: () => { consumers++; return () => { consumers--; }; } } : {}) };
+    const resolver = vi.fn(async () => resolved);
+    await act(async () => { mount({ images: [video], initialUrl: url, resolveOpaqueSource: true,
+      onResolveRemoteMedia: resolver }); });
+    expect(consumers).toBe(leased ? 1 : 0);
+    act(() => runtime.nodes.get('message.imageLightboxVideoPlayer').onError('unsupported codec'));
+    act(() => runtime.nodes.get('message.imageLightboxVideoWebPlayer').onStatusChange({ state: 'error' }));
+    let reject!: (error: Error) => void;
+    resolver.mockImplementation(() => new Promise((_resolve, fail) => { reject = fail; }));
+    await act(async () => press('message.imageLightboxRetryButton'));
+    expect(runtime.nodes.get('message.videoDownload').source).toBe(expired ? null : source);
+    expect(consumers).toBe(leased ? 1 : 0);
+    await act(async () => reject(new Error('REMOTE_OFFLINE')));
+    expect(isMounted('message.imageLightboxRetryButton')).toBe(true);
+    expect(runtime.nodes.get('message.videoDownload').source).toBe(expired ? null : source);
+    expect(consumers).toBe(leased ? 1 : 0);
+    resolver.mockResolvedValue({ ...resolved, expiresAt: '2099-01-01T00:00:00Z' });
+    await act(async () => press('message.imageLightboxRetryButton'));
+    expect(runtime.nodes.get('message.imageLightboxVideoPlayer').url).toBe(source);
+    expect(runtime.nodes.get('message.videoDownload').source).toBe(source);
+    expect(consumers).toBe(leased ? 1 : 0);
+    act(() => root.unmount());
+    root = createRoot(document.createElement('div'));
+    expect(consumers).toBe(0);
+  });
+
+  // #10136: the existing player test covered rendering/cache eviction, not stream
+  // survival. Real React + production stream idle/retain logic, unit tier; only
+  // native commands/reader are in-memory. A paused active page is the minimum
+  // failure input; paging and close must restore the original idle reclamation.
+  it('keeps an active gallery stream past idle expiry and releases it on paging and close', async () => {
+    vi.useFakeTimers();
+    const stream = await openNativeByteStream({
+      command: async <T,>(command: Record<string, unknown>) =>
+        (command.op === 'httpMediaStart' ? { url: `http://127.0.0.1:12345/${'a'.repeat(43)}` } : []) as T,
+      destroy: async () => undefined,
+    }, 'video/mp4', async () => ({ size: 16, read: async () => undefined, close: async () => undefined }));
+    const url = 'xdt-video://cache/lease.mp4';
+    const video = { key: 'lease', title: 'lease.mp4', url,
+      payload: { kind: 'media', media: { kind: 'video', url, previewable: false } } } as ImageLightboxProps['images'][number];
+    const resolved: MobileResolvedRemoteMedia = { url: stream.url, previewable: true, mimeType: 'video/mp4',
+      ossKey: '', size: 16, expiresAt: '2099-01-01T00:00:00Z', protectLocalFile: stream.retain };
+    try {
+      await act(async () => { mount({ images: [video, { ...video, key: 'next', url: 'https://example.invalid/next.png',
+        payload: { ...video.payload, media: { kind: 'image', url: 'https://example.invalid/next.png', previewable: true } } }],
+        initialUrl: url, onResolveRemoteMedia: async () => resolved }); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(308_000); });
+      expect(stream.isOpen()).toBe(true);
+      act(() => runtime.nodes.get('message.imageLightboxVideoPlayer').onError('decode'));
+      act(() => runtime.nodes.get('message.imageLightboxVideoWebPlayer').onStatusChange({ state: 'error' }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(308_000); });
+      expect(isMounted('message.imageLightboxRetryButton')).toBe(true);
+      expect(runtime.nodes.get('message.videoDownload').source).toBe(stream.url);
+      expect(stream.isOpen()).toBe(true);
+      // Keep the first page mounted but inactive, as a virtualized list can.
+      act(() => runtime.nodes.get('FlatList').onMomentumScrollEnd({ nativeEvent: { contentOffset: { x: 400 } } }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+      expect(stream.isOpen()).toBe(true);
+      act(() => runtime.nodes.get('FlatList').onMomentumScrollEnd({ nativeEvent: { contentOffset: { x: 0 } } }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(308_000); });
+      expect(stream.isOpen()).toBe(true);
+      // Unmount/close relinquishes this consumer without closing other leases.
+      const releaseOther = stream.retain!();
+      act(() => root.unmount());
+      root = createRoot(document.createElement('div'));
+      await vi.advanceTimersByTimeAsync(308_000);
+      expect(stream.isOpen()).toBe(true);
+      releaseOther();
+      await vi.advanceTimersByTimeAsync(308_000);
+      expect(stream.isOpen()).toBe(false);
+    } finally { await stream.close(); vi.useRealTimers(); }
+  });
+
+  it.each(['success', 'stale', 'rejected'] as const)('ignores late inactive results and refreshes an expired stream (%s)', async (refreshResult) => {
+    const url = 'xdt-video://cache/late.mp4';
+    const video = { key: 'late', title: 'late.mp4', url,
+      payload: { kind: 'media', media: { kind: 'video', url, previewable: false } } } as ImageLightboxProps['images'][number];
+    let finish!: (media: MobileResolvedRemoteMedia) => void;
+    let reject!: (error: Error) => void;
+    let consumers = 0;
+    let expired = false;
+    const protectLocalFile = vi.fn(() => {
+      if (expired) throw new Error('MEDIA_CLOSED');
+      consumers++;
+      return () => { consumers--; };
+    });
+    const resolved: MobileResolvedRemoteMedia = { url: 'http://127.0.0.1:12345/late', previewable: true, mimeType: 'video/mp4',
+      ossKey: '', size: 16, expiresAt: '2099-01-01T00:00:00Z', protectLocalFile };
+    const resolver = vi.fn(() => new Promise<MobileResolvedRemoteMedia>((resolve, rejectPromise) => {
+      finish = resolve;
+      reject = rejectPromise;
+    }));
+    await act(async () => { mount({ images: [video, { ...video, key: 'next', url: 'https://example.invalid/next.mp4',
+      payload: { ...video.payload, media: { kind: 'video', url: 'https://example.invalid/next.mp4', previewable: true } } }],
+      initialUrl: url, resolveOpaqueSource: true, onResolveRemoteMedia: resolver }); });
+    act(() => runtime.nodes.get('FlatList').onMomentumScrollEnd({ nativeEvent: { contentOffset: { x: 400 } } }));
+    await act(async () => { finish(resolved); });
+    expect(protectLocalFile).not.toHaveBeenCalled();
+    act(() => runtime.nodes.get('FlatList').onMomentumScrollEnd({ nativeEvent: { contentOffset: { x: 0 } } }));
+    expect(consumers).toBe(1);
+    act(() => runtime.nodes.get('FlatList').onMomentumScrollEnd({ nativeEvent: { contentOffset: { x: 400 } } }));
+    expect(consumers).toBe(0);
+    expired = true;
+    act(() => runtime.nodes.get('FlatList').onMomentumScrollEnd({ nativeEvent: { contentOffset: { x: 0 } } }));
+    expect(resolver).toHaveBeenLastCalledWith(expect.objectContaining({ url }), expect.objectContaining({ forceRefresh: true }));
+    const freshProtect = vi.fn(() => { consumers++; return () => { consumers--; }; });
+    const fresh = { ...resolved, protectLocalFile: freshProtect };
+    // A refreshed source can keep its URL; its lease identity still changes.
+    await act(async () => {
+      if (refreshResult === 'rejected') reject(new Error('REMOTE_OFFLINE'));
+      else finish(refreshResult === 'stale' ? resolved : fresh);
+    });
+    if (refreshResult !== 'success') {
+      // Both an unavailable cached result and a rejected refresh offer manual
+      // retry immediately, without waiting for the stale players to error.
+      expect(isMounted('message.imageLightboxRetryButton')).toBe(true);
+      expect(isMounted('message.imageLightboxVideoPlayer')).toBe(false);
+      expect(isMounted('message.imageLightboxVideoWebPlayer')).toBe(false);
+      expect(resolver).toHaveBeenCalledTimes(2);
+      expect(consumers).toBe(0);
+      expect(runtime.nodes.get('message.videoDownload').source).toBe(null);
+      if (refreshResult === 'rejected') {
+        act(() => runtime.nodes.get('FlatList').onMomentumScrollEnd({ nativeEvent: { contentOffset: { x: 400 } } }));
+        act(() => runtime.nodes.get('FlatList').onMomentumScrollEnd({ nativeEvent: { contentOffset: { x: 0 } } }));
+        await act(async () => { reject(new Error('REMOTE_OFFLINE')); });
+        expect(isMounted('message.imageLightboxRetryButton')).toBe(true);
+        expect(isMounted('message.imageLightboxVideoPlayer')).toBe(false);
+        expect(isMounted('message.imageLightboxVideoWebPlayer')).toBe(false);
+        expect(resolver).toHaveBeenCalledTimes(3);
+        expect(consumers).toBe(0);
+        expect(runtime.nodes.get('message.videoDownload').source).toBe(null);
+      }
+      resolver.mockResolvedValue(fresh);
+      await act(async () => press('message.imageLightboxRetryButton'));
+    }
+    expect(runtime.nodes.get('message.imageLightboxVideoPlayer').url).toBe(resolved.url);
+    expect(runtime.nodes.get('message.videoDownload').source).toBe(resolved.url);
+    expect(consumers).toBe(1);
+    act(() => root.unmount());
+    root = createRoot(document.createElement('div'));
+    expect(consumers).toBe(0);
   });
 });

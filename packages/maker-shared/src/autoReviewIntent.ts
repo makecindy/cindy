@@ -22,6 +22,11 @@ export interface AutoReviewUserReferences {
   /** Everything delivered with this message, including attachments a channel merged in from the quote. */
   readonly attachments?: { readonly images: number; readonly files: number };
   readonly quotedMessages?: readonly AutoReviewQuotedMessage[];
+  /**
+   * Exact Host-delivered managed attachment file paths for this turn only (never
+   * directory roots, never accepted from remote wire, never persisted across turns).
+   */
+  readonly readOnlyAttachmentPaths?: readonly string[];
 }
 
 export interface AutoReviewQuotedMessage {
@@ -32,6 +37,11 @@ export interface AutoReviewQuotedMessage {
   readonly attachmentCount?: number;
 }
 
+export interface ProjectAutoReviewReferencesOptions {
+  /** Set false when decoding untrusted/remote wire payloads so peers cannot inject local paths. */
+  readonly allowAttachmentPaths?: boolean;
+}
+
 /**
  * The single projection for review references. Channels map their Host-owned
  * reply/attachment facts into this shape; anything malformed is dropped and all
@@ -40,8 +50,9 @@ export interface AutoReviewQuotedMessage {
  */
 export function projectAutoReviewUserReferences(
   value: unknown,
+  options?: ProjectAutoReviewReferencesOptions,
 ): AutoReviewUserReferences | undefined {
-  return sharedProjection().projectReferences(value);
+  return sharedProjection().projectReferences(value, options);
 }
 
 /**
@@ -75,7 +86,8 @@ export interface AutoReviewHistoryMessage {
 
 /** Dependency-free factory shared by harnesses and both database worker transports. */
 export function createAutoReviewIntentProjection() {
-  const MAX_USER_INTENT_CHARS = 2_000;
+  // Large enough for long requests and delegations; the action itself may be far larger.
+  const MAX_USER_INTENT_CHARS = 30_000;
   const OMITTED_USER_INTENT =
     "User message omitted because it exceeds the review budget; it cannot establish authorization.";
 
@@ -84,11 +96,19 @@ export function createAutoReviewIntentProjection() {
     if (!receipt || typeof receipt !== "object" || !("kind" in receipt) ||
       !["agent-request", "delegated-continuation"].includes(String(receipt.kind)) || !("request" in receipt)) return undefined;
     const source = receipt.request;
-    if (!source || typeof source !== "object" || !("ownerVerified" in source) || source.ownerVerified !== true ||
+    if (!source || typeof source !== "object" ||
       !("sessionId" in source) || typeof source.sessionId !== "string" || !source.sessionId ||
-      !("clientId" in source) || typeof source.clientId !== "string" || !source.clientId ||
-      !("userText" in source) || typeof source.userText !== "string" || !source.userText.trim()) return undefined;
-    return source.userText;
+      !("clientId" in source) || typeof source.clientId !== "string" || !source.clientId) return undefined;
+    // A host-checked hand-off (2026-11-05) is reviewed by the delegated work itself; only the
+    // sending host writes it, and only in a turn that spoke for the owner.
+    if ("plainBody" in source && source.plainBody === true) {
+      return "delegatedText" in source && typeof source.delegatedText === "string" && source.delegatedText.trim()
+        ? source.delegatedText : undefined;
+    }
+    // Older receipts carry the owner's words, marked when the sending host verified them.
+    return "ownerVerified" in source && source.ownerVerified === true &&
+      "userText" in source && typeof source.userText === "string" && source.userText.trim()
+      ? source.userText : undefined;
   }
 
   function compactCurrentUserIntent(
@@ -106,7 +126,71 @@ export function createAutoReviewIntentProjection() {
   const MAX_REFERENCED_QUOTE_CHARS = 600;
   const MAX_REFERENCED_QUOTES_TOTAL_CHARS = 1_200;
   const MAX_REFERENCED_COUNT = 99;
+  const MAX_READ_ONLY_ATTACHMENT_PATHS = 10;
+  const MAX_READ_ONLY_ATTACHMENT_PATH_CHARS = 512;
+  // eslint-disable-next-line no-control-regex
+  const ATTACHMENT_PATH_CONTROL_RE = /[\u0000-\u001f\u007f]/;
+  const ATTACHMENT_PATH_WINDOWS_DRIVE_RE = /^[A-Za-z]:[\\/]/;
+  const ATTACHMENT_PATH_SAFE_SEGMENT_RE = /^[A-Za-z0-9._-]+$/;
   const REFERENCE_TRUNCATED = "…[truncated]";
+
+  /**
+   * Strict managed attachment file validator (pure JS, no Node imports: evaluated in DB worker).
+   * Accepts ONLY exact file paths under Host-managed attachment trees, never directory roots
+   * or traversal segments:
+   *   - .../cindy-media/blobs/<file.ext>
+   *   - .../im-attachments/<channel>/staging/<file>
+   *   - .../im-attachments/<channel>/sessions/<sessionId>/<file>
+   *   - .../hook-attachments/<sessionId>/<file>
+   */
+  function isManagedReadOnlyAttachmentPath(value: unknown): value is string {
+    if (typeof value !== "string") return false;
+    if (value.length === 0 || value.length > MAX_READ_ONLY_ATTACHMENT_PATH_CHARS) return false;
+    if (ATTACHMENT_PATH_CONTROL_RE.test(value)) return false;
+    const isPosix = value.startsWith("/");
+    const isWin = ATTACHMENT_PATH_WINDOWS_DRIVE_RE.test(value);
+    if (!isPosix && !isWin) return false;
+    if (value.endsWith("/") || value.endsWith("\\")) return false;
+    const body = isWin ? value.slice(3) : value.slice(1);
+    if (!body) return false;
+    const segments = body.split(/[\\/]/);
+    if (segments.some((seg) => seg === "" || seg === "." || seg === "..")) return false;
+    const len = segments.length;
+    if (
+      len >= 3 &&
+      segments[len - 3] === "cindy-media" &&
+      segments[len - 2] === "blobs" &&
+      ATTACHMENT_PATH_SAFE_SEGMENT_RE.test(segments[len - 1]!) &&
+      segments[len - 1]!.includes(".")
+    ) {
+      return true;
+    }
+    if (
+      len >= 4 &&
+      segments[len - 4] === "im-attachments" &&
+      ATTACHMENT_PATH_SAFE_SEGMENT_RE.test(segments[len - 3]!) &&
+      segments[len - 2] === "staging"
+    ) {
+      return true;
+    }
+    if (
+      len >= 5 &&
+      segments[len - 5] === "im-attachments" &&
+      ATTACHMENT_PATH_SAFE_SEGMENT_RE.test(segments[len - 4]!) &&
+      segments[len - 3] === "sessions" &&
+      ATTACHMENT_PATH_SAFE_SEGMENT_RE.test(segments[len - 2]!)
+    ) {
+      return true;
+    }
+    if (
+      len >= 3 &&
+      segments[len - 3] === "hook-attachments" &&
+      ATTACHMENT_PATH_SAFE_SEGMENT_RE.test(segments[len - 2]!)
+    ) {
+      return true;
+    }
+    return false;
+  }
 
   function boundedReferenceText(value: string, maxChars: number): string {
     const text = value.trim();
@@ -123,6 +207,7 @@ export function createAutoReviewIntentProjection() {
 
   function projectAutoReviewUserReferences(
     value: unknown,
+    options?: ProjectAutoReviewReferencesOptions,
   ): AutoReviewUserReferences | undefined {
     if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
     const input = value as Record<string, unknown>;
@@ -155,10 +240,28 @@ export function createAutoReviewIntentProjection() {
         ...(attachmentCount > 0 ? { attachmentCount } : {}),
       });
     }
-    if (images === 0 && files === 0 && quotedMessages.length === 0) return undefined;
+    const readOnlyAttachmentPaths: string[] = [];
+    if (options?.allowAttachmentPaths !== false && Array.isArray(input.readOnlyAttachmentPaths)) {
+      const seenPaths = new Set<string>();
+      for (const rawPath of input.readOnlyAttachmentPaths) {
+        if (readOnlyAttachmentPaths.length >= MAX_READ_ONLY_ATTACHMENT_PATHS) break;
+        if (!isManagedReadOnlyAttachmentPath(rawPath) || seenPaths.has(rawPath)) continue;
+        seenPaths.add(rawPath);
+        readOnlyAttachmentPaths.push(rawPath);
+      }
+    }
+    if (
+      images === 0 &&
+      files === 0 &&
+      quotedMessages.length === 0 &&
+      readOnlyAttachmentPaths.length === 0
+    ) {
+      return undefined;
+    }
     return {
       ...(images > 0 || files > 0 ? { attachments: { images, files } } : {}),
       ...(quotedMessages.length > 0 ? { quotedMessages } : {}),
+      ...(readOnlyAttachmentPaths.length > 0 ? { readOnlyAttachmentPaths } : {}),
     };
   }
 
@@ -226,15 +329,25 @@ export function createAutoReviewIntentProjection() {
       JSON.stringify(candidate).length <= MAX_USER_INTENT_CHARS
     )
       return candidate;
-    // Drop all earlier grants together, flag the missing restrictions, and never sample the latest text.
+    // Keep only the newest contiguous messages so a kept grant never outlives a dropped later
+    // restriction; flag the gap and never sample the latest text. Trimming down to half the
+    // budget leaves later appends prefix-stable, which lets a provider that caches prefixes reuse them.
     const omitted = {
-      earlierUserMessages: [],
+      earlierUserMessages: [] as string[],
       currentUserMessage,
       historyOmitted: true as const,
     };
-    return JSON.stringify(omitted).length <= MAX_USER_INTENT_CHARS
-      ? omitted
-      : { ...omitted, currentUserMessage: OMITTED_USER_INTENT };
+    let size = JSON.stringify(omitted).length;
+    if (currentUserMessage === OMITTED_USER_INTENT || size > MAX_USER_INTENT_CHARS)
+      return { ...omitted, currentUserMessage: OMITTED_USER_INTENT };
+    const kept: string[] = [];
+    for (let index = intent.earlierUserMessages.length - 1; index >= 0; index--) {
+      const added = JSON.stringify(intent.earlierUserMessages[index]).length + (kept.length > 0 ? 1 : 0);
+      if (size + added > MAX_USER_INTENT_CHARS / 2) break;
+      size += added;
+      kept.push(intent.earlierUserMessages[index]!);
+    }
+    return { ...omitted, earlierUserMessages: kept.reverse() };
   }
 
   function appendAutoReviewUserIntent(
@@ -478,6 +591,7 @@ export function createAutoReviewIntentProjection() {
   }
 
   return {
+    maxIntentChars: MAX_USER_INTENT_CHARS,
     compact: compactCurrentUserIntent,
     normalize: normalizeAutoReviewUserIntent,
     withReferences: withAutoReviewUserReferences,

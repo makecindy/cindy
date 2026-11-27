@@ -57,6 +57,29 @@ export const WORKLOUDER_CODEX_SET_LAYOUT_PREVIEW_CHANNEL = 'worklouder-codex:set
 
 /** One sidebar task, as the renderer reports it for the agent keys. */
 export type WorkLouderCodexPublishedTask = InputDevicePublishedTask;
+
+/**
+ * 任务标题的长度上限（按 UTF-16 code unit 计，与主进程校验同口径）。
+ *
+ * 设备侧按这个长度收标题：超长标题不是「丢这一条」，而是让**整份**任务列表被主进程
+ * 拒收 —— 一条超长标题就会连带其余任务都发不上去，设备键位全空。渲染端发布前按
+ * 同一上限截断，主进程继续按它校验。
+ */
+export const WORKLOUDER_CODEX_TASK_TITLE_MAX_LENGTH = 512;
+
+/**
+ * 按设备上限截断标题。
+ *
+ * 计数口径与主进程校验一致，所以截断后的标题一定不会再被拒收。切断处可能落在代理对
+ * 中间：留下半个代理对会让设备端显示成乱码，所以整对丢掉。
+ */
+export function capWorkLouderTaskTitle(title: string): string {
+  if (title.length <= WORKLOUDER_CODEX_TASK_TITLE_MAX_LENGTH) return title;
+  const capped = title.slice(0, WORKLOUDER_CODEX_TASK_TITLE_MAX_LENGTH);
+  const last = capped.charCodeAt(capped.length - 1);
+  return last >= 0xd800 && last <= 0xdbff ? capped.slice(0, -1) : capped;
+}
+
 export const WORKLOUDER_CODEX_STATE_CHANGED_CHANNEL = 'worklouder-codex:state-changed';
 export const WORKLOUDER_CODEX_ACTION_CHANNEL = 'worklouder-codex:action';
 export const WORKLOUDER_CODEX_PREVIEW_INPUT_CHANNEL = 'worklouder-codex:preview-input';
@@ -263,7 +286,10 @@ export function removeWorkLouderMerge(
   return merges.filter((merge) => merge.origin !== key && merge.cover !== key);
 }
 
-/** Firmware thread id N lights KV_OAI_AG0N. Extra task keys have no AG thread. */
+/**
+ * Firmware thread id N lights the key bound to KV_OAI_AG{N}. Cindy rewrites both
+ * boards' keymaps so every task key carries its own AG code.
+ */
 export const WORKLOUDER_HID_AG_CODES = [
   'AG00',
   'AG01',
@@ -465,6 +491,11 @@ export interface WorkLouderCodexDeviceState {
   batteryPercentage: number | null;
   isCharging: boolean | null;
   inputMonitoringPermission: 'granted' | 'denied' | 'unknown' | 'not-required';
+  /**
+   * The host could not rewrite this board's keymap (no file RPC), so it keeps its
+   * factory codes: the HID key name is the physical key, and only AG00–AG05 light.
+   */
+  factoryKeymap?: boolean;
 }
 
 export interface WorkLouderCodexTaskOption {
@@ -801,14 +832,13 @@ export function assignCreatorHidCodes(
   const taskSet = new Set(task);
   const command = WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS.filter((key) => !taskSet.has(key));
   const assigned = new Map<WorkLouderCreatorProgrammableKey, string>();
-  // Firmware only emits AG00–AG05. Extra task keys keep ACT codes; Cindy maps
-  // those HID reports onto the remaining task slots in software.
-  const firmwareAg = WORKLOUDER_HID_AG_CODES.slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT);
-  const litCount = Math.min(task.length, firmwareAg.length);
+  // Task key N gets AG{N}, so firmware thread N lights it. Command keys take
+  // ACT codes first, then any AG codes no task key uses.
+  const litCount = Math.min(task.length, WORKLOUDER_HID_AG_CODES.length);
   for (let index = 0; index < litCount; index += 1) {
-    assigned.set(task[index]!, firmwareAg[index]!);
+    assigned.set(task[index]!, WORKLOUDER_HID_AG_CODES[index]!);
   }
-  const leftoverAg = firmwareAg.slice(litCount);
+  const leftoverAg = WORKLOUDER_HID_AG_CODES.slice(litCount);
   const restCodes = [...WORKLOUDER_HID_ACT_CODES, ...leftoverAg];
   const rest = [...task.slice(litCount), ...command];
   rest.forEach((key, index) => {
@@ -823,9 +853,9 @@ const WORKLOUDER_FIRMWARE_AGENT_KEYS = WORKLOUDER_HID_AG_CODES.slice(
 ) as WorkLouderCreatorProgrammableKey[];
 
 /**
- * The shared `keys` zone paints every keycap. Mute it unless the six firmware
- * AG keys are exactly the task-key set — otherwise a demoted AG key still
- * washes green, and extra ACT task keys inherit the same wash.
+ * The shared `keys` zone paints every keycap. Mute it unless the task keys are
+ * exactly the factory top six — otherwise a demoted top key still washes green
+ * like a task key.
  */
 export function workLouderShouldMuteKeyZone(
   taskKeys: readonly WorkLouderCreatorProgrammableKey[] | undefined,
@@ -862,7 +892,7 @@ export function resolveCreatorHidRole(
     if (slot >= 0) return { role: 'task', slot, physical };
     return { role: 'command', physical };
   }
-  // Older keymaps wrote AG06–AG12 onto extra keys. Firmware may still emit those.
+  // Until a rebind lands, the board may still emit AG codes from an earlier task-key set.
   const leftoverAg = /^AG(0[0-9]|1[0-2])$/.exec(hidKey);
   if (leftoverAg) {
     const slot = Number(leftoverAg[1]);
@@ -872,25 +902,32 @@ export function resolveCreatorHidRole(
   return null;
 }
 
-/** Codex keeps factory AG/ACT codes. HID key name is the physical key. */
+export function workLouderUsesFactoryKeymap(
+  device: Pick<WorkLouderCodexDeviceState, 'factoryKeymap'> | null | undefined,
+): boolean {
+  return device?.factoryKeymap === true;
+}
+
+/** Factory keymap: the HID key name is the physical key. */
 export function resolveFactoryHidRole(
   hidKey: string,
   taskKeys: readonly WorkLouderCreatorProgrammableKey[],
 ): CreatorHidRole | null {
   if (!isWorkLouderCreatorProgrammableKey(hidKey)) return null;
-  const normalized = normalizeWorkLouderCreatorTaskKeys(taskKeys);
-  const slot = normalized.indexOf(hidKey);
+  const slot = normalizeWorkLouderCreatorTaskKeys(taskKeys).indexOf(hidKey);
   if (slot >= 0) return { role: 'task', slot, physical: hidKey };
   return { role: 'command', physical: hidKey };
 }
 
+/** Routes a HID report by whichever keymap is actually on the board. */
 export function resolveWorkLouderHidRole(
   hidKey: string,
   taskKeys: readonly WorkLouderCreatorProgrammableKey[],
-  deviceType?: string | null,
+  device?: Pick<WorkLouderCodexDeviceState, 'factoryKeymap'> | null,
 ): CreatorHidRole | null {
-  if (deviceType === 'codex-micro') return resolveFactoryHidRole(hidKey, taskKeys);
-  return resolveCreatorHidRole(hidKey, taskKeys);
+  return workLouderUsesFactoryKeymap(device)
+    ? resolveFactoryHidRole(hidKey, taskKeys)
+    : resolveCreatorHidRole(hidKey, taskKeys);
 }
 
 const DEFAULT_CREATOR_COMMAND_ASSIGNMENT: WorkLouderCodexKeyAssignment = {

@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
   getNewTaskDraftSelection,
+  setWorkerCreationPrefsCache,
+  getWorkerCreationSelection,
   getSelectedNewMakerRoute,
   getRemoteNewMakerDefaults,
   getRemoteNewMakerDefaultsByVendor,
@@ -82,6 +84,18 @@ describe('getRemoteNewMakerDefaults (device-link 远程草稿镜像)', () => {
     seed({ lastByVendor: {}, fastModeByModel: {}, effortByModel: {}, worktreeEnabled: true });
     expect(getRemoteNewMakerDefaults('claude-code')).toEqual({ worktreeEnabled: true });
     expect(getRemoteNewMakerDefaults('codex')).toEqual({ worktreeEnabled: true });
+  });
+
+  it('每个 vendor 槽都带被控端新建任务当前的引擎，控制端据此跟随', () => {
+    // 控制端按自己的引擎(Pi)来问时，也要告诉它被控端自己用的是 Claude。
+    seed({
+      selectedRoute: { harness: 'claude', providerId: 'anthropic', model: 'claude-opus-4-8', effort: 'high', fastMode: false },
+      lastByVendor: { cc: { model: 'claude-opus-4-8' }, pi: { model: 'qwen3' } },
+      fastModeByModel: {},
+      effortByModel: {},
+    });
+    expect(getRemoteNewMakerDefaults('pi').selectedAgentKind).toBe('claude-code');
+    expect(getRemoteNewMakerDefaultsByVendor().codex.selectedAgentKind).toBe('claude-code');
   });
 
   it('镜像每个 vendor 的显式模型选择状态，供控制端决定是否应用区域默认', () => {
@@ -301,4 +315,15 @@ it('reads remembered tuning only from the matching owner snapshot, with preset-f
   expect(getNewMakerModelTuning('B:4', 'codex', 'provider', 'target')).toEqual({});
   expect(syncNewMakerDraftCache(payload, { dataOwnerId: 'B', ownerGeneration: 4 }, 'B:4', false)).toBe(false);
   expect(getNewMakerModelTuning('B:4', 'codex', 'provider', 'target')).toEqual({});
+});
+
+// Unit: route mirrors must not cross owner boundaries or disappear on permission-only writes.
+it('retains a submitted worker route across permission updates and fences old owners', () => {
+  const ownerStamp = { dataOwnerId: 'worker-owner', ownerGeneration: 4 };
+  const selection = { agent: 'pi' as const, model: 'test', providerId: 'provider', agentDeviceId: null, effort: 'high', fast: false };
+  setWorkerCreationPrefsCache({ workerPermissionMode: 'auto', ownerStamp, selection });
+  setWorkerCreationPrefsCache({ workerPermissionMode: 'bypassPermissions' });
+  expect(getWorkerCreationSelection(ownerStamp)).toEqual(selection);
+  expect(getWorkerCreationSelection({ ...ownerStamp, ownerGeneration: 5 })).toBeNull();
+  expect(getWorkerCreationSelection({ ...ownerStamp, dataOwnerId: 'other' })).toBeNull();
 });

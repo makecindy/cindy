@@ -1,3 +1,4 @@
+import { entryModelIds, entryWireIds, readEntryPreference } from '@/components/new-chat/unifiedModelSelection';
 /**
  * 统一模型选择器(模型优先)M3 / M4 的**纯逻辑锁**:行生效配置合成、收藏副本语义、
  * 收藏 / 最近置顶 + 分组陈列、rail 派生、浮层定位、档位绝对色。
@@ -23,6 +24,7 @@ import {
   entryMatchesModelId,
   favoriteMatchesSelection,
   wireModelIdOf,
+  unavailableFavoriteEntry,
   buildUnifiedRail,
   computeFlyoutPlacement,
   computeSelectedRowScrollTop,
@@ -285,6 +287,29 @@ describe('buildUnifiedListSections', () => {
     });
     const modelRows = sections.slice(1).flatMap((section) => section.rows);
     expect(modelRows.map((row) => row.entry.modelId)).toEqual(['claude-opus-5', 'gpt-5.5']);
+  });
+
+  // PR #11565 评审:被隐藏的模型不进常规分组,但仍可调用。新增的「已隐藏」区允许给它点星,
+  // 而收藏 / 最近只从常规清单解析 —— 点星显示成功,切到收藏却找不到。规则:常规分组列什么
+  // 由 entries 决定,存下来的东西能不能解析回一行由 resolveEntries 决定。最小失败输入:
+  // 一条指向不在 entries 里的模型的收藏与最近。tier: unit(纯函数)。
+  it('收藏与最近按 resolveEntries 解析:被隐藏的模型不进常规分组,但存过的仍然在', () => {
+    const args = {
+      entries: [gpt],
+      resolveEntries: [gpt, opus],
+      favorites: [favoriteOf()],
+      recentModels: [recentOf()],
+      query: '',
+    };
+    const all = buildUnifiedListSections({ ...args, rail: { kind: 'all' } });
+    expect(all.map((section) => [section.kind, section.rows.map((row) => row.entry.modelId)])).toEqual([
+      ['favorites', ['claude-opus-5']],
+      ['group', ['gpt-5.5']],
+    ]);
+    expect(buildUnifiedListSections({ ...args, rail: { kind: 'recent' } })
+      .flatMap((section) => section.rows.map((row) => row.entry.modelId))).toEqual(['claude-opus-5']);
+    // 不传 resolveEntries = 旧口径:解析不到就不显示(不删条目)。
+    expect(buildUnifiedListSections({ ...args, resolveEntries: undefined, rail: { kind: 'favorites' } })).toEqual([]);
   });
 
   it('分组按供应商:每家各自成组,组名 = providerLabel(2026-08-16 裁决,废除「授权登录」合并组)', () => {
@@ -1305,5 +1330,87 @@ describe('收藏锚点只代表当前完整配置', () => {
     const aliased = { ...entry, modelId: 'normalized-gpt-6' };
     expect(favoriteMatchesSelection({ ...base, entry: aliased })).toBe(true);
     expect(favoriteMatchesSelection({ ...base, agentFastModeCapable: () => false })).toBe(false);
+  });
+});
+
+// #8485: legacy normalized favorites/recents must not resolve to a different
+// supplier after opaque gateway routes split. Keep records, resolve only proof.
+describe('Magpie stored model identity', () => {
+  function gateway(id: string, legacyEnginePreferenceId?: string) {
+    return entryOf({ providerId: 'magpie', modelId: id,
+      enginePreferenceId: JSON.stringify(['magpie-route', id]), legacyEnginePreferenceId,
+      candidates: ['codex'], recommended: 'codex', nativeAgent: 'codex',
+      capabilities: { codex: capability('codex', { wireModelId: id }) } });
+  }
+  it.each(['favorites', 'recent'] as const)('withholds ambiguous legacy %s without changing stored records', kind => {
+    const entries = [gateway('chatgpt/foo'), gateway('foo'), gateway('xai/foo')];
+    const favorite = favoriteOf({ providerId: 'magpie', modelId: 'foo', agent: 'codex' });
+    const recent = { ...favorite, usedAt: 1 };
+    const before = JSON.stringify({ favorite, recent });
+    expect(buildUnifiedListSections({ entries, favorites: [favorite], recentModels: [recent], query: '', rail: { kind } })).toEqual([]);
+    // A hidden collision still must not let the remaining exact bare row steal it.
+    expect(buildUnifiedListSections({ entries: [entries[1]], favorites: [favorite], recentModels: [recent], query: '', rail: { kind } })).toEqual([]);
+    expect(JSON.stringify({ favorite, recent })).toBe(before);
+  });
+  it('resolves an unambiguous old alias and explicit full prefixed IDs', () => {
+    const favorite = favoriteOf({ providerId: 'magpie', modelId: 'foo', agent: 'codex' });
+    const prefixed = gateway('chatgpt/foo', 'foo');
+    expect(buildUnifiedListSections({ entries: [prefixed], favorites: [favorite], query: '', rail: { kind: 'favorites' } })[0].rows[0].entry).toBe(prefixed);
+    expect(buildUnifiedListSections({ entries: [gateway('chatgpt/foo'), gateway('foo')], favorites: [{ ...favorite, modelId: 'chatgpt/foo' }], query: '', rail: { kind: 'favorites' } })[0].rows[0].entry.modelId).toBe('chatgpt/foo');
+  });
+  it.each(['favorites', 'recent'] as const)('resolves newly saved exact %s identities to the correct wire route', kind => {
+    const entries = [gateway('chatgpt/foo'), gateway('foo'), gateway('xai/foo')];
+    const favorites = entries.map((entry, i) => favoriteOf({ uid: `fav-${i}`, providerId: 'magpie', modelId: entry.enginePreferenceId!, agent: 'codex' }));
+    const recentModels = favorites.map(item => ({ ...item, usedAt: 1 }));
+    const rows = buildUnifiedListSections({ entries, favorites, recentModels, query: '', rail: { kind } })[0].rows;
+    expect(rows.map(row => resolveFavoriteRowConfig({ entry: row.entry, item: row.favorite ?? row.recent! }).wireModelId)).toEqual(entries.map(entry => entry.modelId));
+    for (const entry of entries) {
+      expect(resolveUnifiedRowConfig({ entry }).storedModelId).toBe(entry.enginePreferenceId);
+    }
+  });
+});
+
+// Offline remote favorites have no catalog name; storage encoding is never UI copy.
+it('shows the wire ID for an unavailable gateway shortcut without rewriting its stored identity', () => {
+  const stored = favoriteOf({ modelId: JSON.stringify(['magpie-route', 'chatgpt/foo']) });
+  const placeholder = unavailableFavoriteEntry(stored);
+  expect(placeholder.displayName).toBe('chatgpt/foo');
+  expect(placeholder.modelId).toBe(stored.modelId);
+  expect(placeholder.capabilities).toEqual({});
+  expect(unavailableFavoriteEntry(favoriteOf({ modelId: 'ordinary' })).displayName).toBe('ordinary');
+});
+
+describe('alias identity and saved preferences', () => {
+  const original = (id: string) => entryOf({ modelId: id, candidates: ['codex'], recommended: 'codex',
+    capabilities: { codex: capability('codex', { wireModelId: id }) } });
+  const merged = () => ({ ...original('flash'), aliasEntries: [original('flash'), original('flash-old')] });
+  it('reads one-sided legacy values and retains explicit false', () => {
+    const row = merged();
+    expect(entryModelIds(row)).toEqual(['flash', 'flash-old']);
+    expect(entryWireIds(row, 'codex')).toEqual(['flash', 'flash-old']);
+    expect(readEntryPreference(row, entryWireIds(row, 'codex'), (_, id) => id === 'flash-old' ? 'high' : undefined)).toBe('high');
+    expect(readEntryPreference(row, entryWireIds(row, 'codex'), (_, id) => id === 'flash-old' ? false : undefined)).toBe(false);
+    expect(readEntryPreference(row, entryWireIds(row, 'codex'), (_, id) => id === 'flash-old' ? false : true)).toBeUndefined();
+  });
+  it('matches old IDs and resolves old favorites with their original route', () => {
+    const row = merged();
+    expect(entryMatchesModelId(row, 'flash-old')).toBe(true);
+    const config = resolveFavoriteRowConfig({ entry: row, item: favoriteOf({ modelId: 'flash-old', agent: 'codex', effort: 'high' }) });
+    expect(config.wireModelId).toBe('flash-old');
+    expect(config.effort).toBe('high');
+  });
+  it.each(['favorites', 'recent'] as const)('keeps old-ID %s visible through the real list resolver', (kind) => {
+    const entry = merged();
+    const favorite = favoriteOf({ providerId: entry.providerId, modelId: 'flash-old', agent: 'codex', effort: 'high' });
+    const recent = { ...favorite, usedAt: 1 };
+    const before = JSON.stringify({ favorite, recent });
+    const rows = buildUnifiedListSections({ entries: [entry], favorites: [favorite], recentModels: [recent],
+      query: '', rail: { kind } }).flatMap((section) => section.rows);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].entry).toBe(entry);
+    const config = resolveFavoriteRowConfig({ entry: rows[0].entry, item: rows[0].favorite ?? rows[0].recent! });
+    expect(config.wireModelId).toBe('flash-old');
+    expect(config.effort).toBe('high');
+    expect(JSON.stringify({ favorite, recent })).toBe(before);
   });
 });

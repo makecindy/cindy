@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom';
+import { createContext, useContext, useState, type ReactNode } from 'react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { createMemoryRouter, Outlet, RouterProvider, useLocation, useNavigate } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MainViewHistoryProvider } from '@/contexts/MainViewHistoryContext';
 import { SidebarRailNavigation, SidebarTopNav, type SidebarRailSearchOptions } from '../SidebarTopNav';
@@ -19,10 +20,15 @@ const mainViewsMock = vi.hoisted(() => ({
   sidebarVisible: [] as MainViewMock[],
 }));
 const authMock = vi.hoisted(() => ({ owner: 'owner-1' as string | null }));
+const toastError = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/toast', () => ({ toast: { error: toastError } }));
+const preloadPluginPage = vi.hoisted(() => vi.fn());
+vi.mock('@/features/plugin/GhostPluginRoute', () => ({ preloadPluginPage }));
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: authMock.owner }) }));
 // A non-empty installed roster marks the plugin list as loaded (Main sends none mid-switch).
 const installedMock = vi.hoisted(() => ({ ghosts: [{ manifest: { id: 'bundled' } }] as unknown[] }));
-vi.mock('@/cindy-brain/useInstalledGhosts', () => ({ useInstalledGhosts: () => installedMock.ghosts }));
+vi.mock('@/cindy-brain/useInstalledGhosts', () => ({ useInstalledGhosts: () => installedMock.ghosts,
+  readInstalledGhostsSnapshot: () => installedMock.ghosts }));
 const SITES: MainViewMock = {
   ghostId: 'xd-sites', instanceId: 'xd-sites', title: '站点', icon: 'globe', manifest: { name: 'XD Sites' },
 };
@@ -33,6 +39,8 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 const unreadMock = vi.hoisted(() => ({ ordinary: false }));
+const reviewMock = vi.hoisted(() => ({ updates: [] as Array<{ unread: boolean; status: string }> }));
+vi.mock('@/contexts/PluginReviewUpdatesContext', () => ({ usePluginReviewUpdates: () => reviewMock }));
 vi.mock('@/cindy-brain/ghostUnreadStore', () => ({ useAnyGhostUnread: () => unreadMock.ordinary }));
 vi.mock('@/cindy-brain/ghostMainViews', () => ({
   useGhostMainViews: () => ({
@@ -57,7 +65,7 @@ vi.mock('@/features/cc-agent/sidebar/conversationSearchContext', () => ({
   useConversationSearchContext: () => ({ search: searchMock, allKnownProjects: [], openSignal: 0 }),
 }));
 
-afterEach(() => { cleanup(); });
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 /** Pretend the owner's first run already happened, so plugins keep their default (More). */
 function seedKnownPlugins(ids: string[]) {
@@ -65,6 +73,9 @@ function seedKnownPlugins(ids: string[]) {
   navigationTesting.resetArrivals();
 }
 beforeEach(() => {
+  toastError.mockClear();
+  preloadPluginPage.mockClear();
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
   searchMock.query = '';
   searchMock.lockedProjectKey = null;
   mainViewsMock.routeCapable = [];
@@ -72,6 +83,7 @@ beforeEach(() => {
   authMock.owner = 'owner-1';
   installedMock.ghosts = [{ manifest: { id: 'bundled' } }];
   unreadMock.ordinary = false;
+  reviewMock.updates = [];
   localStorage.removeItem('sidebar-navigation:apps:v1');
   navigationTesting.resetArrivals();
   setSidebarNavigationPrefs(OWNER, {
@@ -96,15 +108,73 @@ function NavigationHarness() {
   );
 }
 
+const RouteFixtureContext = createContext<ReactNode>(null);
+
+function RouteFixture() {
+  return useContext(RouteFixtureContext);
+}
+
+function SidebarTestRouter({ initialEntries, children }: { initialEntries: string[]; children: ReactNode }) {
+  const [router] = useState(() => createMemoryRouter(
+    [{ path: '*', element: <RouteFixture /> }],
+    { initialEntries },
+  ));
+  return (
+    <RouteFixtureContext.Provider value={children}>
+      <RouterProvider router={router} />
+    </RouteFixtureContext.Provider>
+  );
+}
+
 function Harness({ initialPath, owner = 'one' }: { initialPath: string; owner?: string }) {
   return (
     <MainViewHistoryProvider key={owner}>
-      <MemoryRouter initialEntries={[initialPath]}>
+      <SidebarTestRouter initialEntries={[initialPath]}>
         <NavigationHarness />
-      </MemoryRouter>
+      </SidebarTestRouter>
     </MainViewHistoryProvider>
   );
 }
+
+it('requests an early plugin load only on intent at the sidebar entry', () => {
+  render(<Harness initialPath="/cc-agent/session-1" />);
+  const plugins = screen.getByRole('button', { name: 'sidebar.tabs.plugins' });
+  expect(preloadPluginPage).not.toHaveBeenCalled();
+  fireEvent.focus(screen.getByRole('button', { name: 'ccAgent.layout.automations' }));
+  expect(preloadPluginPage).not.toHaveBeenCalled();
+  fireEvent.mouseEnter(plugins);
+  expect(preloadPluginPage).toHaveBeenCalledTimes(1);
+  fireEvent.focus(plugins);
+  expect(preloadPluginPage).toHaveBeenCalledTimes(2);
+});
+
+// Unit / 工程约定 §7: a pending plugin route should highlight the real
+// sidebar row while keeping the mounted task. Immediate MemoryRouter routes
+// cannot reproduce the pending module that used to leave the row unselected.
+it('selects Plugins while keeping the task visible until the plugin module is ready', async () => {
+  const module = Promise.withResolvers<{ Component: () => React.JSX.Element }>();
+  const router = createMemoryRouter([{
+    element: <><SidebarTopNav /><Outlet /></>,
+    children: [
+      { path: '/cc-agent/session-1', element: <main>Current task</main> },
+      { path: '/plugins', lazy: () => module.promise },
+    ],
+  }], { initialEntries: ['/cc-agent/session-1'] });
+  render(<MainViewHistoryProvider><RouterProvider router={router} /></MainViewHistoryProvider>);
+  const plugins = screen.getByRole('button', { name: 'sidebar.tabs.plugins' });
+  const task = screen.getByRole('main');
+  expect(plugins.getAttribute('aria-current')).toBeNull();
+
+  await act(async () => { fireEvent.click(plugins); });
+  expect(plugins.getAttribute('aria-current')).toBe('page');
+  expect(screen.getByRole('main')).toBe(task);
+  expect(screen.queryByRole('status')).toBeNull();
+
+  await act(async () => { module.resolve({ Component: () => <main>Installed plugins</main> }); });
+  expect(screen.getByRole('main').textContent).toBe('Installed plugins');
+  expect(plugins.getAttribute('aria-current')).toBe('page');
+  expect(screen.queryByRole('status')).toBeNull();
+});
 
 describe('Retirement attention across sidebar navigation placements', () => {
   it.each(['row', 'more', 'rail', 'rail-more'] as const)(
@@ -120,11 +190,11 @@ describe('Retirement attention across sidebar navigation placements', () => {
       }
       const ui = () => (
         <MainViewHistoryProvider>
-          <MemoryRouter initialEntries={['/cc-agent/session-1']}>
+          <SidebarTestRouter initialEntries={['/cc-agent/session-1']}>
             {placement.startsWith('rail')
               ? <SidebarRailNavigation renderSearch={() => null} />
               : <SidebarTopNav />}
-          </MemoryRouter>
+          </SidebarTestRouter>
         </MainViewHistoryProvider>
       );
       const view = render(ui());
@@ -138,7 +208,6 @@ describe('Retirement attention across sidebar navigation placements', () => {
         span.className.includes(`--card-status-${tone}`),
       );
       expect(dot('awaiting')).toBeTruthy();
-      expect(dot('awaiting')?.className).not.toContain('session-card-dot');
 
       // Acknowledging retirement must preserve another plugin's ordinary unread dot.
       installedMock.ghosts = [{ manifest: { id: 'ios-simulator' }, retirement: { unread: false } }];
@@ -409,9 +478,9 @@ describe('Sidebar navigation rows and More', () => {
   it('renders nothing in the rail slot other features borrow', () => {
     // Teammates used to lend other features' rails a tile here; the task rail's
     // CollapsedView owns that entry now.
-    const view = render(<MainViewHistoryProvider><MemoryRouter initialEntries={['/plugins']}>
+    const view = render(<MainViewHistoryProvider><SidebarTestRouter initialEntries={['/plugins']}>
       <SidebarTopNav section="rail" />
-    </MemoryRouter></MainViewHistoryProvider>);
+    </SidebarTestRouter></MainViewHistoryProvider>);
     expect(view.container.childElementCount).toBe(0);
   });
 
@@ -460,7 +529,7 @@ describe('Sidebar navigation rows and More', () => {
       );
     }
     function PersistentRouter({ owner }: { owner: string }) {
-      return <MemoryRouter initialEntries={[oldPath]}><OwnerRouter owner={owner} /></MemoryRouter>;
+      return <SidebarTestRouter initialEntries={[oldPath]}><OwnerRouter owner={owner} /></SidebarTestRouter>;
     }
     const view = render(<PersistentRouter owner="one" />);
     view.rerender(<PersistentRouter owner="two" />);
@@ -507,9 +576,9 @@ describe('Narrow rail navigation', () => {
   }
   const renderRail = (props: { forceSearch?: boolean } = {}) => render(
     <MainViewHistoryProvider>
-      <MemoryRouter initialEntries={['/cc-agent/session-1']}>
+      <SidebarTestRouter initialEntries={['/cc-agent/session-1']}>
         <RailHarness {...props} />
-      </MemoryRouter>
+      </SidebarTestRouter>
     </MainViewHistoryProvider>,
   );
   const openMore = () => {
@@ -617,9 +686,9 @@ describe('Plugins joining the sidebar', () => {
   const NEWCOMER: MainViewMock = { ghostId: 'newcomer', instanceId: 'newcomer', title: 'Newcomer', icon: 'globe', manifest: { name: 'Newcomer' } };
   const renderNav = () => render(
     <MainViewHistoryProvider>
-      <MemoryRouter initialEntries={['/cc-agent']}>
+      <SidebarTestRouter initialEntries={['/cc-agent']}>
         <SidebarTopNav section="all" />
-      </MemoryRouter>
+      </SidebarTestRouter>
     </MainViewHistoryProvider>,
   );
   const openMore = (name: string | RegExp = /sidebar\.navigation\.more/) => {
@@ -643,9 +712,9 @@ describe('Plugins joining the sidebar', () => {
     mainViewsMock.sidebarVisible = [SITES, NEWCOMER];
     view.rerender(
       <MainViewHistoryProvider>
-        <MemoryRouter initialEntries={['/cc-agent']}>
+        <SidebarTestRouter initialEntries={['/cc-agent']}>
           <SidebarTopNav section="all" />
-        </MemoryRouter>
+        </SidebarTestRouter>
       </MainViewHistoryProvider>,
     );
     expect(screen.queryByRole('button', { name: 'Newcomer' })).toBeNull();
@@ -671,9 +740,9 @@ describe('Plugins joining the sidebar', () => {
     authMock.owner = 'owner-1';
     view.rerender(
       <MainViewHistoryProvider>
-        <MemoryRouter initialEntries={['/cc-agent']}>
+        <SidebarTestRouter initialEntries={['/cc-agent']}>
           <SidebarTopNav section="all" />
-        </MemoryRouter>
+        </SidebarTestRouter>
       </MainViewHistoryProvider>,
     );
     expect(screen.getByRole('button', { name: '站点' })).toBeTruthy();
@@ -687,9 +756,9 @@ describe('Plugins joining the sidebar', () => {
     mainViewsMock.sidebarVisible = [NEWCOMER];
     render(
       <MainViewHistoryProvider>
-        <MemoryRouter initialEntries={['/cc-agent']}>
+        <SidebarTestRouter initialEntries={['/cc-agent']}>
           <SidebarRailNavigation renderSearch={() => null} />
-        </MemoryRouter>
+        </SidebarTestRouter>
       </MainViewHistoryProvider>,
     );
     expect(screen.queryByRole('button', { name: 'Newcomer' })).toBeNull();
@@ -706,9 +775,9 @@ describe('Plugins joining the sidebar', () => {
     authMock.owner = 'owner-2';
     view.rerender(
       <MainViewHistoryProvider>
-        <MemoryRouter initialEntries={['/cc-agent']}>
+        <SidebarTestRouter initialEntries={['/cc-agent']}>
           <SidebarTopNav section="all" />
-        </MemoryRouter>
+        </SidebarTestRouter>
       </MainViewHistoryProvider>,
     );
     expect(screen.queryByRole('button', { name: 'sidebar.tabs.plugins' })).toBeNull();
@@ -738,15 +807,115 @@ describe('Plugins joining the sidebar', () => {
     authMock.owner = 'owner-2';
     view.rerender(
       <MainViewHistoryProvider>
-        <MemoryRouter initialEntries={['/cc-agent']}>
+        <SidebarTestRouter initialEntries={['/cc-agent']}>
           <SidebarTopNav section="all" />
-        </MemoryRouter>
+        </SidebarTestRouter>
       </MainViewHistoryProvider>,
     );
-    expect(screen.getByRole('checkbox', { name: 'sidebar.navigation.items.search' }).getAttribute('aria-checked'))
-      .toBe('false');
+    expect((screen.getByRole('checkbox', { name: 'sidebar.navigation.items.search' }) as HTMLInputElement).checked)
+      .toBe(false);
     fireEvent.click(screen.getByRole('button', { name: 'sidebar.navigation.customize.done' }));
     expect(getSidebarNavigationPrefs('owner-2').visible).toEqual(['automations']);
     expect(getSidebarNavigationPrefs(OWNER).visible).toEqual(['automations', 'plugins', 'search']);
   });
+});
+
+// Sidebar/rail must show the same result semantics as the author's detail, using
+// existing AttentionDot tokens. Previously only rejection selected error (unit).
+it.each(['disabled', 'archived', 'revoked', 'enabled', 'approved'])('uses the result tone for an unread %s event', status => {
+  reviewMock.updates = [{ status, unread: true }];
+  render(<Harness initialPath="/cc-agent/session-1" />);
+  const entry = screen.getByRole('button', { name: 'sidebar.tabs.plugins' });
+  const tone = status === 'enabled' || status === 'approved' ? 'done' : 'error';
+  expect([...entry.querySelectorAll('span')].some(span => span.className.includes(`--card-status-${tone}`))).toBe(true);
+});
+
+// 测试价值:
+// - 生产入口与可观察结果: SidebarTopNav 左侧导航「新建」按钮；验证 macOS Command+点击、Windows Ctrl+点击、
+//   右键 / 键盘菜单「在新窗口打开」执行行为与平台对应快捷键提示（复用 sidebarNewWindowActivation 的
+//   openInNewWindowShortcutMac / openInNewWindowShortcutOther，且快捷键标为 aria-hidden 不污染菜单项可访问名称），
+//   普通点击仍原地跳转。
+// - Bug／规则依据: 左侧导航新建按钮需支持按住 Command 点击在新窗口打开、右键菜单在新窗口打开并与侧栏任务右键菜单
+//   共用同一套右侧快捷键提示逻辑；跨平台遵循工程约定 §4，菜单样式遵循 DESIGN.md §4 Select & Dropdown。
+// - 现有覆盖缺口: 此前未覆盖「新建」按钮右键菜单右侧快捷键提示在 macOS / Windows / Linux 下的展示与无障碍隔离。
+// - 最小失败输入: 在 macOS / Windows / Linux 下右键点击「新建」按钮，检查「在新窗口打开」菜单项内的快捷键提示文本与 aria-hidden。
+// - tier: unit（jsdom）。
+describe('left navigation New button open-in-new-window', () => {
+  const stubDesktopApi = (
+    platform: 'darwin' | 'win32' | 'linux',
+    openSessionInNewWindow = vi.fn(async () => undefined),
+  ) => {
+    vi.stubGlobal('electronAPI', {
+      platform,
+      maker: { openSessionInNewWindow },
+    });
+    return openSessionInNewWindow;
+  };
+
+  it('opens a new window on Command+Click on macOS while keeping plain click and Ctrl+Click in-window', async () => {
+    const openSessionInNewWindow = stubDesktopApi('darwin');
+    render(<Harness initialPath="/cc-agent/session-1" />);
+    const newButton = screen.getByRole('button', { name: 'ccAgent.layout.new' });
+
+    fireEvent.click(newButton, { metaKey: true });
+    await waitFor(() => expect(openSessionInNewWindow).toHaveBeenCalledWith('/cc-agent/new', undefined));
+    expect(screen.getByTestId('location').textContent).toBe('/cc-agent/session-1');
+
+    // Ctrl+Click on macOS must not hijack the native context-menu modifier as a new-window click.
+    openSessionInNewWindow.mockClear();
+    fireEvent.click(newButton, { ctrlKey: true });
+    expect(openSessionInNewWindow).not.toHaveBeenCalled();
+    expect(screen.getByTestId('location').textContent).toBe('/cc-agent/new');
+  });
+
+  it('opens a new window on Ctrl+Click on Windows while keeping Meta+Click in-window', async () => {
+    const openSessionInNewWindow = stubDesktopApi('win32');
+    render(<Harness initialPath="/cc-agent/session-1" />);
+    const newButton = screen.getByRole('button', { name: 'ccAgent.layout.new' });
+
+    fireEvent.click(newButton, { ctrlKey: true });
+    await waitFor(() => expect(openSessionInNewWindow).toHaveBeenCalledWith('/cc-agent/new', undefined));
+    expect(screen.getByTestId('location').textContent).toBe('/cc-agent/session-1');
+
+    openSessionInNewWindow.mockClear();
+    fireEvent.click(newButton, { metaKey: true });
+    expect(openSessionInNewWindow).not.toHaveBeenCalled();
+    expect(screen.getByTestId('location').textContent).toBe('/cc-agent/new');
+  });
+
+  it('opens a new window from the right-click and keyboard context menu and reports failures', async () => {
+    const openSessionInNewWindow = stubDesktopApi('darwin');
+    render(<Harness initialPath="/cc-agent/session-1" />);
+    const newButton = screen.getByRole('button', { name: 'ccAgent.layout.new' });
+
+    fireEvent.contextMenu(newButton, { clientX: 48, clientY: 88 });
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'ccAgent.sidebar.sessionMenu.openInNewWindow' }));
+    await waitFor(() => expect(openSessionInNewWindow).toHaveBeenCalledWith('/cc-agent/new', undefined));
+    expect(screen.getByTestId('location').textContent).toBe('/cc-agent/session-1');
+
+    openSessionInNewWindow.mockRejectedValueOnce(new Error('window failed'));
+    fireEvent.keyDown(newButton, { key: 'F10', shiftKey: true });
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'ccAgent.sidebar.sessionMenu.openInNewWindow' }));
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith('ccAgent.common.openFailed'));
+  });
+
+  it.each([
+    ['darwin', 'ccAgent.sidebar.sessionMenu.openInNewWindowShortcutMac'],
+    ['win32', 'ccAgent.sidebar.sessionMenu.openInNewWindowShortcutOther'],
+    ['linux', 'ccAgent.sidebar.sessionMenu.openInNewWindowShortcutOther'],
+  ] as const)(
+    'displays the %s modifier-click shortcut hint beside Open in new window',
+    async (platform, expectedShortcutKey) => {
+      stubDesktopApi(platform);
+      render(<Harness initialPath="/cc-agent/session-1" />);
+      const newButton = screen.getByRole('button', { name: 'ccAgent.layout.new' });
+
+      fireEvent.contextMenu(newButton, { clientX: 48, clientY: 88 });
+      const menuItem = await screen.findByRole('menuitem', {
+        name: 'ccAgent.sidebar.sessionMenu.openInNewWindow',
+      });
+      const shortcut = within(menuItem).getByText(expectedShortcutKey);
+      expect(shortcut.getAttribute('aria-hidden')).toBe('true');
+    },
+  );
 });

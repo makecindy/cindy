@@ -105,7 +105,7 @@ describe("menu usage refresh lifecycle", () => {
     });
     expect(r.getCodexRateLimits).toHaveBeenCalledTimes(2);
     await h.render();
-    expect(h.value.account?.plan).toBe("pro");
+    expect(h.value.account?.plan).toBe("Pro");
   });
   it("refreshes on the reset snapshot and rejects a late pre-reset response", async () => {
     const r = reader();
@@ -142,7 +142,7 @@ describe("menu usage refresh lifecycle", () => {
     expect(h.value.account).toBeNull();
     expect(r.getCodexRateLimits).toHaveBeenCalledTimes(1);
     await h.render(session("a"), true, account);
-    expect(h.value.account?.plan).toBe("pro");
+    expect(h.value.account?.plan).toBe("Pro");
     expect(r.getCodexRateLimits).toHaveBeenCalledTimes(2);
   });
   it("drops late responses from the previous task and does not show its values in the next task", async () => {
@@ -160,7 +160,7 @@ describe("menu usage refresh lifecycle", () => {
         account: { ...account.account, planType: "old-account" },
       }),
     );
-    expect(h.value.account?.plan).toBe("pro");
+    expect(h.value.account?.plan).toBe("Pro");
   });
   it("clears account data when the same task switches provider and rejects its old in-flight result", async () => {
     const pending = deferred<MobileCodexRateLimitsResult>();
@@ -226,7 +226,7 @@ describe("menu usage refresh lifecycle", () => {
       new Error("DEVICE_OFFLINE"),
     );
     await act(async () => h.value.refresh());
-    expect(h.value.account?.plan).toBe("pro");
+    expect(h.value.account?.plan).toBe("Pro");
     expect(h.value.estimate?.amount).toBe(12);
     expect(h.value.accountFailed).toBe(true);
     expect(h.value.estimateFailed).toBe(true);
@@ -284,7 +284,7 @@ describe("menu usage with a remote Agent account", () => {
     expect(value().estimate?.amount).toBe(12);
     expect(agent.getSubscriptionUsage).toHaveBeenCalledWith("claude", "anthropic");
     expect(host.getSubscriptionUsage).not.toHaveBeenCalled();
-    expect(host.getSessionEstimatedValue).toHaveBeenCalledWith("a");
+    expect(host.getSessionEstimatedValue).toHaveBeenCalledWith("a", { includeBreakdown: true });
     expect(agent.getSessionEstimatedValue).not.toHaveBeenCalled();
   });
 

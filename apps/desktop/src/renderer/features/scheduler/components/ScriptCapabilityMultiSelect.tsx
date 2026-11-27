@@ -10,11 +10,12 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle, Check, ChevronDown, Search } from 'lucide-react';
+import { AlertTriangle, ChevronDown, Search } from 'lucide-react';
 
 // ⚠ 必须走 /types 子路径:主入口("@cindy/maker-scheduler")会连带导出 engine
 // (node:events 的 EventEmitter),renderer 侧 Vite externalize 后模块求值即白屏。
 import { SCRIPT_CAPABILITIES, type ScriptCapability } from '@cindy/maker-scheduler/types';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
 
@@ -114,9 +115,8 @@ export function ScriptCapabilityMultiSelect({ value, onChange }: Props) {
         align="start"
         sideOffset={6}
         className={cn(
-          // z-[10010]:宿主弹窗(ScheduleFormDialog)整体在 z-[10000],默认 z-50 会被盖住
-          'z-[10010] w-[var(--radix-popover-trigger-width)] rounded-xl border border-[var(--cmd-palette-border)] bg-popover p-0 text-popover-foreground',
-          'shadow-[var(--shadow-menu)]',
+          'w-[var(--radix-popover-trigger-width)] rounded-xl border border-[var(--cmd-palette-border)] bg-popover p-0 text-popover-foreground',
+          'shadow-[shadow:var(--shadow-menu)]',
         )}
       >
         <div className="flex items-center gap-2 border-b border-[var(--cmd-palette-border)] px-3 py-2">
@@ -139,26 +139,18 @@ export function ScriptCapabilityMultiSelect({ value, onChange }: Props) {
             const status = runtimeStatuses[option.id];
             const warn = status && status.state !== 'ok' ? status : null;
             return (
-              <button
+              <label
                 key={option.id}
-                type="button"
-                aria-pressed={selected}
-                onClick={() => toggle(option.id)}
                 className={cn(
-                  'flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors',
+                  'flex w-full cursor-pointer items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors',
                   'hover:bg-[var(--confirm-btn-secondary-hover)]',
                 )}
               >
-                <span
-                  className={cn(
-                    'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border',
-                    selected
-                      ? 'border-transparent bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)]'
-                      : 'border-[var(--cmd-palette-border)] text-transparent',
-                  )}
-                >
-                  <Check size={11} strokeWidth={3} />
-                </span>
+                <Checkbox
+                  className="mt-0.5"
+                  checked={selected}
+                  onChange={() => toggle(option.id)}
+                />
                 <span className="flex min-w-0 flex-col gap-0.5">
                   <span className="text-xs font-medium text-[var(--msg-assistant-text)]">{option.label}</span>
                   {option.desc && (
@@ -173,7 +165,7 @@ export function ScriptCapabilityMultiSelect({ value, onChange }: Props) {
                     </span>
                   )}
                 </span>
-              </button>
+              </label>
             );
           })}
         </div>

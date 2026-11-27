@@ -1,5 +1,6 @@
-import { useRef } from "react";
-import { View, type TextInput as NativeTextInput } from "react-native";
+import type { TextInputInstance } from 'react-native';
+import { useRef, useState } from "react";
+import { View } from "react-native";
 import { useTranslation } from "react-i18next";
 import type { InputHandoffSnapshot, InputHandoffValues } from "@cindy/device-link";
 import { Text, TextInput } from "@/components/AppText";
@@ -19,22 +20,27 @@ export function InputHandoffStepFields({
   disabled,
   onChange,
   onSubmit,
+  onFieldFocus,
 }: {
   snapshot: InputHandoffSnapshot;
   draft: InputHandoffValues;
   disabled: boolean;
   onChange(id: string, value: string): void;
   onSubmit(): void;
+  onFieldFocus?(top: number | null): void;
 }) {
   const { t } = useTranslation();
   const styles = useThemedStyles(makeInputHandoffStyles);
   const { colors } = useTheme();
-  const inputs = useRef(new Map<string, NativeTextInput>());
+  const [focused, setFocused] = useState<string | null>(null);
+  const inputs = useRef(new Map<string, TextInputInstance>());
+  const fieldTops = useRef(new Map<string, number>());
+  const contentTop = useRef(0);
   const fields = inputHandoffTextFields(snapshot);
   const nextField = (id: string) => fields[fields.findIndex((f) => f.id === id) + 1];
 
   return (
-    <View style={styles.stack}>
+    <View style={styles.stack} onLayout={event => { contentTop.current = event.nativeEvent.layout.y; }}>
       {snapshot.controls.map((control) => {
         if (control.kind === "note")
           return (
@@ -45,7 +51,7 @@ export function InputHandoffStepFields({
         const label = inputHandoffFieldLabel(control, t);
         const next = nextField(control.id);
         return (
-          <View key={control.id} style={styles.field}>
+          <View key={control.id} style={styles.field} onLayout={event => { fieldTops.current.set(control.id, event.nativeEvent.layout.y); }}>
             <Text style={styles.fieldLabel}>{label}</Text>
             <TextInput
               ref={(input) => {
@@ -53,6 +59,8 @@ export function InputHandoffStepFields({
                 else inputs.current.delete(control.id);
               }}
               accessibilityLabel={label}
+              onFocus={() => { setFocused(control.id); onFieldFocus?.(contentTop.current + (fieldTops.current.get(control.id) ?? 0)); }}
+              onBlur={() => { setFocused(null); onFieldFocus?.(null); }}
               value={draft[control.id] ?? ""}
               onChangeText={(v) => onChange(control.id, v)}
               placeholder={control.placeholder}
@@ -66,7 +74,8 @@ export function InputHandoffStepFields({
               returnKeyType={next ? "next" : "go"}
               submitBehavior={next ? "submit" : "blurAndSubmit"}
               onSubmitEditing={() => (next ? inputs.current.get(next.id)?.focus() : !disabled && onSubmit())}
-              style={styles.input}
+              underlineColorAndroid="transparent"
+              style={[styles.input, focused === control.id && styles.inputFocused]}
               {...nativeTextInputProps(control.contentType)}
             />
             {control.filled ? <Text style={styles.note}>{t("interaction.inputHandoff.filledHint")}</Text> : null}

@@ -4,7 +4,12 @@ import { raiseAgentBrowserWindow } from '../raise-agent-browser-window.js';
 import type { BrowserControlRequest, BrowserControlResult } from '@cindy/browser-control-runtime';
 
 function tabsResult(
-  tabs: Array<{ targetId?: string; suggestedTargetId?: string }> | undefined,
+  tabs: Array<{
+    targetId?: string;
+    suggestedTargetId?: string;
+    type?: string;
+    url?: string;
+  }> | undefined,
   running = true,
 ): BrowserControlResult {
   return { ok: true, action: 'tabs', data: tabs === undefined ? { running } : { running, tabs } };
@@ -120,5 +125,71 @@ describe('raiseAgentBrowserWindow', () => {
     expect(call.mock.calls.every(([request]) => request.action === 'tabs')).toBe(true);
     expect(call).toHaveBeenCalledTimes(10);
     expect(sleep).toHaveBeenCalledTimes(9);
+  });
+
+  it('focuses the page tab and skips an extension service worker listed first', async () => {
+    // The managed browser starts with --no-startup-window, so a fresh tab list
+    // is often led by an extension's service worker. Focusing it succeeds but
+    // raises no window, which is what made the login button look dead.
+    const call = vi.fn(async (request: BrowserControlRequest): Promise<BrowserControlResult> => {
+      if (request.action === 'tabs') {
+        return tabsResult([
+          { targetId: 'sw', type: 'service_worker', url: 'chrome-extension://abc/x-background.js' },
+          { targetId: 'page-1', suggestedTargetId: 't2', type: 'page', url: 'https://example.com' },
+        ]);
+      }
+      return { ok: true, action: request.action };
+    });
+    const sleep = vi.fn(async () => {});
+
+    await raiseAgentBrowserWindow({ call }, { sleep });
+
+    expect(call.mock.calls.map(([request]) => request)).toEqual([
+      { action: 'tabs' },
+      { action: 'focus', targetId: 't2' },
+    ]);
+  });
+
+  it('opens a foreground tab when the list holds only background targets', async () => {
+    const call = vi.fn(async (request: BrowserControlRequest): Promise<BrowserControlResult> => {
+      if (request.action === 'tabs') {
+        return tabsResult([
+          { targetId: 'sw', type: 'service_worker', url: 'chrome-extension://abc/x-background.js' },
+        ]);
+      }
+      if (request.action === 'open') {
+        return {
+          ok: true,
+          action: 'open',
+          data: { targetId: 'opened', suggestedTargetId: 't3', type: 'page' },
+        };
+      }
+      return { ok: true, action: request.action };
+    });
+    const sleep = vi.fn(async () => {});
+
+    await raiseAgentBrowserWindow({ call }, { sleep });
+
+    expect(call.mock.calls.map(([request]) => request)).toEqual([
+      { action: 'tabs' },
+      { action: 'open', url: 'about:blank', background: false },
+      { action: 'focus', targetId: 't3' },
+    ]);
+  });
+
+  it('reports a failed focus instead of claiming the window was raised', async () => {
+    const call = vi.fn(async (request: BrowserControlRequest): Promise<BrowserControlResult> => {
+      if (request.action === 'tabs') {
+        return tabsResult([{ targetId: 'page-1', type: 'page', url: 'https://example.com' }]);
+      }
+      return {
+        ok: false,
+        action: request.action,
+        errorCode: 'BROWSER_RUNTIME_ACTION_FAILED',
+        message: 'focus failed',
+      };
+    });
+
+    await expect(raiseAgentBrowserWindow({ call })).rejects.toThrow('focus failed');
   });
 });

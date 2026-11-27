@@ -2,10 +2,12 @@ import { useEffect, useRef, type ReactNode } from 'react';
 import { Animated, Easing, StyleSheet, View } from 'react-native';
 import { Archive, UsersRound, RadioTower, Pencil } from 'lucide-react-native';
 import { MobileVendorIcon } from '@/components/MobileVendorIcon';
-import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
+import { useLoopingAnimation } from '@/hooks/useLoopingAnimation';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { spacing, typeScale, lineHeight, fontWeight, iconSize, iconStroke } from '@/theme/tokens';
 import { sessionAgentRunsOnOtherComputer } from './sessionAgentSwitch';
+import { useTranslation } from 'react-i18next';
+import { isPluginEngineSessionKind, usePluginEngineFor } from './pluginEngines';
 import type { RemoteSessionListItem } from './sessionList';
 const HOME_SESSION_ROW_HEIGHT = 78;
 const HOME_SESSION_SINGLE_LINE_ROW_HEIGHT = 60;
@@ -16,10 +18,16 @@ const HOME_SESSION_SINGLE_LINE_ROW_HEIGHT = 60;
 export const SESSION_ROW_LONG_PRESS_MS = 400;
 /** Shared by the full home list and its persistent, narrow task pane. */
 export function SessionStatusMark({
+  identityIcon,
+  hideIdentity = false,
+  singleLine = false,
   item,
   running,
   showDraftIndicator,
 }: {
+  identityIcon?: ReactNode;
+  hideIdentity?: boolean;
+  singleLine?: boolean;
   item: RemoteSessionListItem;
   running: boolean;
   showDraftIndicator: boolean;
@@ -31,36 +39,51 @@ export function SessionStatusMark({
   const attached = readBooleanField(item.session, 'attached') || readBooleanField(item.session, 'deviceLinkAttached');
   // 用户拍板 2026-07-20(对齐桌面):running 一律 Thinking Orange(statusAccent)。
   const glyphColor = running ? colors.statusAccent : colors.textTertiary;
+  // 插件引擎任务：用引擎插件的图标(读到过那台电脑的引擎列表时)，否则通用引擎标识。
+  const { t } = useTranslation();
+  const pluginEngineTask = isPluginEngineSessionKind(item.session.agentKind);
+  const pluginEngine = usePluginEngineFor(
+    pluginEngineTask ? item.session.deviceLinkDeviceId : null,
+    // 列表行的共享类型只声明展示字段；任务行实际是完整的 RemoteSession。
+    pluginEngineTask ? (item.session as { providerId?: string | null }).providerId : null,
+    pluginEngineTask ? item.session.agentDeviceId : null,
+  );
+  if (hideIdentity && !identityIcon && !archived && !orcaLead && !attached && !showDraftIndicator) return null;
   return (
-    <View style={styles.sessionStatusMark}>
-      {archived ? (
-        <Archive color={colors.textTertiary} size={iconSize.lg} strokeWidth={iconStroke.thin} />
-      ) : orcaLead ? (
-        // 与桌面 SessionStatusIcon /「+」菜单协同项同款 UsersRound，不再用旧 Puzzle。
-        <SessionStatusPulse running={running}>
-          <UsersRound color={glyphColor} size={iconSize.action} strokeWidth={iconStroke.thin} />
-        </SessionStatusPulse>
-      ) : attached ? (
-        <SessionStatusPulse running={running}>
-          <RadioTower color={glyphColor} size={iconSize.lg} strokeWidth={iconStroke.thin} />
-        </SessionStatusPulse>
-      ) : (
-        <MobileVendorIcon
-          color={glyphColor}
-          running={running}
-          // Claude 星标 logo 视觉重量偏小,+1px 光学补偿对齐 Codex 标(刻意非阶梯值)。
-          size={isClaudeCodeAgentKind(item.session.agentKind) ? 19 : iconSize.lg}
-          vendor={item.session.agentKind}
-          // Agent 在被控电脑之外的另一台电脑运行(远程供应商):与桌面侧栏同一个波纹标识。
-          remote={sessionAgentRunsOnOtherComputer(item.session)}
-        />
-      )}
-      {!archived && showDraftIndicator ? (
-        <View style={styles.sessionDraftIndicator}>
-          {/* 9px:Pencil 微徽标,徽标容器几何依赖(designTokenDiscipline ALLOWLIST 登记豁免)。 */}
-          <Pencil color={colors.textSecondary} size={9} strokeWidth={iconStroke.medium} />
-        </View>
-      ) : null}
+    <View style={[styles.sessionIconCell, singleLine && styles.sessionIconCellSingleLine]}>
+      <View style={styles.sessionStatusMark}>
+        {identityIcon ?? (archived ? (
+          <Archive color={colors.textTertiary} size={iconSize.lg} strokeWidth={iconStroke.thin} />
+        ) : orcaLead ? (
+          // 与桌面 SessionStatusIcon /「+」菜单协同项同款 UsersRound，不再用旧 Puzzle。
+          <SessionStatusPulse running={running}>
+            <UsersRound color={glyphColor} size={iconSize.action} strokeWidth={iconStroke.thin} />
+          </SessionStatusPulse>
+        ) : attached ? (
+          <SessionStatusPulse running={running}>
+            <RadioTower color={glyphColor} size={iconSize.lg} strokeWidth={iconStroke.thin} />
+          </SessionStatusPulse>
+        ) : hideIdentity ? null : (
+          <MobileVendorIcon
+            color={glyphColor}
+            running={running}
+            // Claude 星标 logo 视觉重量偏小,+1px 光学补偿对齐 Codex 标(刻意非阶梯值)。
+            size={isClaudeCodeAgentKind(item.session.agentKind) ? 19 : iconSize.lg}
+            vendor={item.session.agentKind}
+            pluginEngine={pluginEngineTask
+              ? { iconDataUrl: pluginEngine?.iconDataUrl, name: pluginEngine?.name ?? t('models.pluginEngines.genericName') }
+              : null}
+            // Agent 在被控电脑之外的另一台电脑运行(远程供应商):与桌面侧栏同一个波纹标识。
+            remote={sessionAgentRunsOnOtherComputer(item.session)}
+          />
+        ))}
+        {!archived && showDraftIndicator ? (
+          <View style={styles.sessionDraftIndicator}>
+            {/* 9px:Pencil 微徽标,徽标容器几何依赖(designTokenDiscipline ALLOWLIST 登记豁免)。 */}
+            <Pencil color={colors.textSecondary} size={9} strokeWidth={iconStroke.medium} />
+          </View>
+        ) : null}
+      </View>
     </View>
   );
 }
@@ -74,8 +97,7 @@ const RUNNING_BREATH_HALF_CYCLE_MS = 750;
 const RUNNING_BREATH_MIN_OPACITY = 0.3;
 
 export function SessionStatusPulse({ children, running }: { children: ReactNode; running: boolean }) {
-  const reduceMotion = useReduceMotionEnabled();
-  const animate = running && reduceMotion === false;
+  const animate = useLoopingAnimation(running);
   const opacity = useRef(new Animated.Value(animate ? RUNNING_BREATH_MIN_OPACITY : 1)).current;
   useEffect(() => {
     opacity.stopAnimation();
@@ -117,10 +139,10 @@ function isClaudeCodeAgentKind(agentKind: string): boolean {
   return agentKind === 'cc' || agentKind === 'claude-code';
 }
 
-export const homeListStyles = (colors: ThemeColors) => StyleSheet.create({
+export const homeListStyles = (colors: ThemeColors, listSurface: string = colors.surface) => StyleSheet.create({
   sessionListRow: {
     alignItems: 'stretch',
-    backgroundColor: colors.surface,
+    backgroundColor: listSurface,
     flexDirection: 'row',
     gap: spacing.md,
     height: HOME_SESSION_ROW_HEIGHT,
@@ -128,16 +150,6 @@ export const homeListStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   sessionListRowSingleLine: {
     height: HOME_SESSION_SINGLE_LINE_ROW_HEIGHT,
-  },
-  sessionListRowIndented: {
-    // 项目下属会话向右多缩进一档,让"隶属于该项目"在视觉上更明显
-    // (连同行内分割线一起右移,形成嵌套层级感)。
-    paddingLeft: spacing.md + spacing.lg,
-  },
-  sessionListRowDeepIndented: {
-    // 自动化组子行:比 indented 再深一档(缩进全部收在行内,滑动包装全宽才能贴屏边),
-    // 保证子行始终比组行(无论组行在 chats 还是项目组内)更深一层。
-    paddingLeft: spacing.md + spacing.lg * 2,
   },
   sessionIconCell: {
     alignItems: 'center',
@@ -242,7 +254,7 @@ export const homeListStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   projectRow: {
     alignItems: 'center',
-    backgroundColor: colors.surface,
+    backgroundColor: listSurface,
     flexDirection: 'row',
     gap: spacing.sm,
     minHeight: 56,

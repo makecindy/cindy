@@ -371,9 +371,34 @@ export function clearModelEngineOverride(providerId: string, modelId: string): v
   commitOp({ kind: 'clear', key: keyOf(providerId, modelId) });
 }
 
+/** Alias edits are one storage write; a failed write must not leave half a group in memory. */
+export function editModelEngineOverrides(
+  providerId: string,
+  changes: readonly { modelId: string; agent?: ModelEngine }[],
+): boolean {
+  if (!isUsableProviderId(providerId) || changes.some((c) => !c.modelId ||
+    (c.agent !== undefined && !isSelectableVendor(c.agent)))) return false;
+  const ops: EnginePrefsOp[] = changes.map((change) => change.agent === undefined
+    ? { kind: 'clear', key: keyOf(providerId, change.modelId) }
+    : { kind: 'set', key: keyOf(providerId, change.modelId), agent: change.agent });
+  const next = ops.reduce(applyOp, freshMap());
+  const key = storageKey();
+  try { window.localStorage.setItem(key, JSON.stringify(next)); } catch { return false; }
+  cache = next;
+  for (const op of ops) reconciler.record(key, op);
+  reconciler.schedule(key);
+  emit();
+  return true;
+}
+
 /** 该 (来源, 模型) 是否被用户自定义过 —— 行内三元组提亮 / 底栏「已自定义 · 恢复推荐」用。 */
 export function hasModelEngineOverride(providerId: string, modelId: string): boolean {
   return getModelEngineOverride(providerId, modelId) !== undefined;
+}
+
+/** Every remembered engine of the current account, by `providerId:modelId`. */
+export function listModelEngineOverrides(): Record<string, ModelEngine> {
+  return Object.fromEntries(Object.entries(load()).map(([key, value]) => [key, value.agent]));
 }
 
 /** 当前账号是否存在任一显式 Harness 选择；用于旧草稿迁移时保护用户意图。 */
@@ -390,9 +415,12 @@ export function subscribeModelEnginePrefs(listener: () => void): () => void {
  * useSyncExternalStore 包装 —— 返回递增 version。组件把它当 useMemo 依赖,
  * override 变更(含其它窗口写入触发的 storage 事件)后自动重算。
  */
-export function useModelEnginePrefsVersion(): number {
-  return useSyncExternalStore(subscribe, getVersion, getVersion);
+export function useModelEnginePrefsVersion(enabled = true): number {
+  // Another computer's settings page keeps the hook order but never subscribes to this computer's store.
+  return useSyncExternalStore(enabled ? subscribe : subscribeNowhere, enabled ? getVersion : noVersion, enabled ? getVersion : noVersion);
 }
+const subscribeNowhere = (): (() => void) => () => undefined;
+const noVersion = (): number => 0;
 
 /**
  * 随当前数据归属账号切换持久化命名空间(与 setNewMakerDraftOwner 同形)。
@@ -425,3 +453,6 @@ export function __resetForTest(): void {
 }
 
 export const __STORAGE_KEY = STORAGE_KEY;
+
+/** Owner token for async alias edits; never carry a pending write into another account. */
+export function getModelEnginePrefsOwner(): string | null { return activeDataOwnerId; }

@@ -3,18 +3,22 @@ import { DirectLinkTransport } from './DirectLinkTransport';
 import { tryMobilePeerInvoke, resetMobilePeer } from './peerFileRegistry';
 import { isHistoryViewUnavailable, type HistoryWorkPatch } from '@cindy/maker-shared/message-window';
 import { findRemoteHistoryView } from '@/session/remoteHistoryView';
-import { createBackgroundConnection } from './backgroundConnection';
+import { BACKGROUND_STOP_GRACE_MS, createBackgroundConnection } from './backgroundConnection';
 import { invokeWithHistoryViewCapability } from './historyViewCapability';
 import { createRecoveryDiagnostics, settleMeasuredSnapshot, type RecoveryPhase } from './recoveryDiagnostics';
-import { confirmTrackedSubscription, SubscriptionAcknowledgements } from './subscriptionAcknowledgements';
+import { confirmTrackedSubscription, releaseTrackedSubscription, SubscriptionAcknowledgements } from './subscriptionAcknowledgements';
+import { TASK_ACTIVITY_CAPABILITY, TASK_ACTIVITY_SNAPSHOT } from '@cindy/device-link';
+import { receiveHostTaskActivity } from '../widgets/foregroundTaskActivity';
 import { AppState, Platform } from 'react-native';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { dispatchCredentialSwitchOutcome } from '@/session/credentialSwitchOutcome';
 import { mobileRuntimeIdentity } from '@/debug/mobileRuntimeIdentity';
 import {
-  DeviceLinkClient,
+  RoutedDeviceLinkClient,
+  type DeviceLinkClientOptions,
   createDirectRuntimeBridge,
   isSharedTaskPeer,
+  isScopedPeer,
   probeSharedTaskHost,
   sharedTaskTopics,
   SHARED_TASK_CAPABILITY,
@@ -23,10 +27,16 @@ import {
   CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
   CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+  providerPickerListArgs,
   DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1,
+  CONTROLLER_CAPABILITY_TOOL_RESULT_EVENT_TEXT_OPTIONAL_V1,
+  CONTROLLER_CAPABILITY_TOOL_USE_EVENT_INPUT_OPTIONAL_V1,
+  CONTROLLER_CAPABILITY_HISTORY_RELINK_FOLDED_V1,
+  CONTROLLER_CAPABILITY_PLUGIN_ENGINE_SWITCH_INTENT_V1,
   DL_SUBSCRIBE_CHANNEL,
   DL_UNSUBSCRIBE_CHANNEL,
   FILE_BROWSER_EVENT_CHANNEL,
+  FILE_PEER_CHANNEL,
   PROTOCOL_VERSION,
   REMOTE_RESOURCE_CHANGED_CHANNEL,
   parseRemoteResourceChangedPayload,
@@ -41,8 +51,11 @@ import {
   type RemoteResourceChangedPayload,
   type Topic,
   decodeModelSpeedPayload,
+  MetadataContinuityReader,
+  isProviderAccessDeniedError,
 } from '@cindy/device-link';
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { isMobilePlatform } from '@cindy/maker-shared/device-list';
 import { PROJECT_ALIASES_GET_CHANNEL, PROJECT_ALIASES_CHANGED_CHANNEL } from '@cindy/maker-shared/project-alias-sync';
 import {
   acceptRemoteProjectAliasesChanged,
@@ -52,10 +65,24 @@ import {
   suspendRemoteProjectAliases,
   suspendRemoteProjectAliasesForReleasedTopics,
 } from '@/session/remoteProjectAliases';
-import { deviceLinkWsUrl, DEVICE_LINK_API_BASE_URL } from '@/config/env';
+import { deviceLinkWsUrl, DEVICE_LINK_API_BASE_URL, getOfficialAgentNetApiBaseUrl, getOfficialDeviceLinkApiBaseUrl } from '@/config/env';
 import { MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';
 import { useAuth } from '@/auth/AuthContext';
 import { useSelfHostedRelayRouteGeneration } from './selfHostedRelay';
+import { getMobileAgentNetPreferences, useMobileAgentNetPreferences, waitForMobileAgentNetPreferences,
+  mobileAgentNetAllowsLegacy, mobileAgentNetRequiresEncryption } from './agentNetPreferences';
+import { isMobileAgentNetActive, openMobileAgentNetSocket, mobileAgentNetShouldUseLegacyPeer,
+  mobileAgentNetShouldProbeLegacyPeer, mobileAgentNetPrefersPrimary, verifyMobileAgentNetTransportProof,
+  connectMobileAgentNetSessionPeer, mobileAgentNetPeerConnectedAt, mobileAgentNetPeerRoute, mobileAgentNetPeerState, mobileAgentNetRelayStalled,
+  mobileAgentNetSession, notifyMobileAgentNetNetworkChanged, useMobileAgentNetSessions,
+  clearMobileAgentNetIdentityRefusal } from './agentNetRuntime';
+import { AgentNetSessionLinks, agentNetSessionLane, outboundOnSession, routeSessionPeers, type PeerLinks } from '@cindy/agent-net/portable';
+import { installPeerStreamTransport } from './peerFileRegistry';
+import { mobileAgentNetTransportProof } from './agentNetMode';
+import { ensureMobileAgentNetIdentity, hasStoredMobileOfficialAgentNetIdentity,
+  loadExistingMobileAgentNetModeIdentity } from './agentNetIdentity';
+import { MobileAgentNetEngine } from './agentNetNative';
+import { registerMobileDeviceRejoin, rejoinRemovedMobileDevice } from './deviceRejoin';
 import { currentSelfHostedRelayFrameAuth } from './selfHostedRelayFrameAuth';
 import {
   getActiveSelfHostedRelay,
@@ -64,6 +91,7 @@ import {
 } from './selfHostedRelayRouting';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import { useSharedTaskApi } from './useSharedTaskApi';
+import { bindMobileAgentNetSharing, mobileAgentNetSharingEnabled } from './agentNetSharing';
 import {
   applyAccessRevokedFrame,
   withAccessRevokedHandling,
@@ -189,12 +217,28 @@ import {
 import type { InputProjection, PendingInteraction, RemoteMessage } from '@/session/types';
 import { prepareVisualMockDeviceLinkContext } from '@/debug/visualMock';
 import { meterDeviceLinkInvokes, recordDeviceLinkPush } from '@/debug/deviceLinkTraffic';
-import { decodeGzipBase64TextBounded } from '@/utils/gzipBase64';
-import { jankMetricsEnabled, recordInvokeSent, recordInvokeTransfer, recordPushHandled } from '@/debug/jankMetrics';
+import { decodeDeflateRawBase64TextBounded, decodeGzipBase64TextBounded } from '@/utils/gzipBase64';
+import { gunzipBase64OffThread } from '@/utils/gunzipOffThread';
+import { createLowPriorityReadGate, isLowPriorityRead, type LowPriorityReadGate } from './lowPriorityReadGate';
+import { invokeMetricLabel, jankMetricsEnabled, recordInvokeSent, recordInvokeTransfer, recordPresenceUpdate, recordPushHandled } from '@/debug/jankMetrics';
 import { localNetworkStore, type NetworkState } from '@/device-link/localNetworkStatus';
+
+export interface DeviceLinkConnectionState {
+  status: DeviceLinkStatus;
+  /** Per-device status describes the usable data path; signaling remains separately observable. */
+  signalingStatus?: DeviceLinkStatus;
+  usingRetainedDirect?: boolean;
+  connectionEpoch: number;
+  connectionIssue: DeviceLinkConnectionIssue | null;
+}
 
 export interface DeviceLinkContextValue {
   status: DeviceLinkStatus;
+  signalingStatus?: DeviceLinkStatus;
+  usingRetainedDirect?: boolean;
+  /** The official connection used by shared tasks; the primary connection in official mode. */
+  sharedTaskConnection?: DeviceLinkConnectionState;
+  getConnectionState?(deviceId: string): DeviceLinkConnectionState;
   /** Current online relay capability; undefined while not connected. */
   sharedTaskAvailable?: boolean;
   /** Peers with queued, running, or retrying recovery work. Read-only UI projection. */
@@ -203,6 +247,10 @@ export interface DeviceLinkContextValue {
   connectionIssue: DeviceLinkConnectionIssue | null;
   presenceVersion: number;
   connectionEpoch: number;
+  /** Incremented when an authoritative roster denial retires mounted directory views. */
+  rosterVersion: number;
+  /** Per-device invalidation for received provider-share catalogs. */
+  providerShareCatalogVersions?: Readonly<Record<string, number>>;
   /** Current remote ACK identity; null until every requested topic is confirmed. */
   getSubscriptionIdentity?(deviceId: string, topics: readonly Topic[]): number | null;
   lastPresenceSnapshot: PresenceSnapshot | null;
@@ -212,13 +260,22 @@ export interface DeviceLinkContextValue {
    * Read the account device roster. `fresh` starts a new REST snapshot instead of
    * joining a request that may have started before the caller's reconciliation fence.
    */
-  readDeviceList(options?: { fresh?: boolean }): Promise<{ devices: DeviceView[] }>;
+  readDeviceList(options?: { fresh?: boolean }): Promise<{ devices: DeviceView[]; stale?: boolean;
+    displayBudget?: { remainingMs: number } }>;
   openLink(deviceId: string): Promise<LinkAcceptPayload>;
   /** 丢弃已结算的开链缓存并真正重开；并发重开仍按设备单飞。 */
   reopenLink(deviceId: string): Promise<LinkAcceptPayload>;
+  recoverWaitingPeer(deviceId: string): Promise<boolean>;
   closeLink(deviceId: string): void;
+  getUserCloseEpoch?(deviceId: string): number;
+  onUserClose?(deviceId: string, listener: () => void): () => void;
   /** Acquire before background grace ends; always release on settlement/cancellation. Hard deadline enforced by lifecycle. */
   beginBackgroundTransition?(): () => void;
+  /**
+   * Keep (or bring back) the relay connection while the app is in the background, for one
+   * bounded action the person took from a notification. Returns the release; always call it.
+   */
+  holdBackgroundConnection?(): () => void;
   /**
    * opts.preSend:在连接就绪并从 invoke 队列出队后、实际发送前的同步检查点。抛错即
    * 中止本次发送(错误原样上抛)。供写序敏感的调用方(patchHomeSession 的 isLatest
@@ -229,7 +286,7 @@ export interface DeviceLinkContextValue {
     deviceId: string,
     channel: string,
     args?: unknown[],
-    opts?: { preSend?: () => void; background?: boolean },
+    opts?: { preSend?: () => void; noResultCache?: boolean; background?: boolean },
   ): Promise<T>;
   // `owner` is a stable id for the mounted consumer (e.g. `session:<id>`, `device:<id>`),
   // so repeated subscribes from resync/retry are idempotent and a topic is only released
@@ -245,13 +302,24 @@ export interface DeviceLinkContextValue {
 }
 
 const DeviceLinkContext = createContext<DeviceLinkContextValue | null>(null);
-const recoveryDiagnostics = new WeakMap<DeviceLinkClient, ReturnType<typeof createRecoveryDiagnostics>>();
+const recoveryDiagnostics = new WeakMap<PeerLinks, ReturnType<typeof createRecoveryDiagnostics>>();
+/** Per client, so a queued read can never join across an account or transport change. */
+const lowPriorityReadGates = new WeakMap<PeerLinks, LowPriorityReadGate>();
+function lowPriorityReadGateFor(client: PeerLinks): LowPriorityReadGate {
+  let gate = lowPriorityReadGates.get(client);
+  if (!gate) {
+    gate = createLowPriorityReadGate();
+    lowPriorityReadGates.set(client, gate);
+  }
+  return gate;
+}
 
 /**
  * 本控制端声明的端到端可选能力(link-open 与 subscribe 两处共用同一份,漏一处会让
  * 被控端按能力缺失降级)。被控端只在看到对应能力后才发送新 wire 形状。
  */
 const CONTROLLER_CAPABILITIES = [
+  ...(Platform.OS === 'ios' ? [TASK_ACTIVITY_CAPABILITY] : []),
   CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1,
   SHARED_TASK_CAPABILITY,
   CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
@@ -260,6 +328,15 @@ const CONTROLLER_CAPABILITIES = [
   // (见 remoteSessionStore 的 MAKER_EVENT_BATCH_CHANNEL 分支)。
   CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
   DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1,
+  // 工具行只从 messages:created 建;tool_result 事件不读正文,tool_use 事件只当边界
+  // (update_plan 例外,被控端照发 input)。见 remoteSessionStore.applyMakerEvent。
+  CONTROLLER_CAPABILITY_TOOL_RESULT_EVENT_TEXT_OPTIONAL_V1,
+  CONTROLLER_CAPABILITY_TOOL_USE_EVENT_INPUT_OPTIONAL_V1,
+  // 重连后 rebuildSessionSnapshot 重读打开中的任务页;被控端因此把重连前已读且折叠的任务
+  // 保持折叠到重读完成,离线积压不留历史详情。
+  CONTROLLER_CAPABILITY_HISTORY_RELINK_FOLDED_V1,
+  // 认识「待切到插件引擎」的意图(sessionAgentSwitch 把它单独交给插件引擎的展示)。
+  CONTROLLER_CAPABILITY_PLUGIN_ENGINE_SWITCH_INTENT_V1,
 ];
 
 // 任意目标端真实应答的独立时序证据。它不等同于 presence verdict,也不参与 IPC/DB
@@ -275,6 +352,11 @@ export function subscribeRemoteTaskTagsChanged(
   return () => {
     remoteTaskTagsChangedListeners.delete(listener);
   };
+}
+const remoteSubscriptionAccountsChangedListeners = new Set<(deviceId: string) => void>();
+export function subscribeRemoteSubscriptionAccountsChanged(listener: (deviceId: string) => void): () => void {
+  remoteSubscriptionAccountsChangedListeners.add(listener);
+  return () => { remoteSubscriptionAccountsChangedListeners.delete(listener); };
 }
 const remoteFavoritesChangedListeners = new Set<(deviceId: string) => void>();
 const remoteProjectAliasesChangedListeners = new Set<(deviceId: string) => void>();
@@ -344,7 +426,6 @@ function subscribeRemoteResourceChanged(
  * 退后台断开连接前的宽限:几秒内切回前台的快速 App 切换不触发整套
  * 断连 → 重连 → 补齐,弱网下这套循环的代价远高于让 socket 多活两秒。
  */
-const BACKGROUND_STOP_GRACE_MS = 2_500;
 /** 断开前最多等最后一轮 heavy unsubscribe 应答;超时仍停止,避免后台 socket 久留。 */
 const BACKGROUND_FINAL_UNSUBSCRIBE_WAIT_MS = 1_000;
 /**
@@ -369,7 +450,7 @@ const RECONNECT_MIN_WIPE_GRACE_MS = 3_000;
  */
 const RECONNECT_MESSAGE_WINDOW_LIMIT = 80;
 // Provider remount / account switch must not reuse an in-flight snapshot key
-// from an older DeviceLinkClient instance. Keep epochs process-monotonic.
+// from an older PeerLinks instance. Keep epochs process-monotonic.
 let nextDeviceLinkConnectionEpoch = 0;
 
 const SESSION_TOPIC_PREFIX = 'session:';
@@ -377,8 +458,8 @@ const SESSION_TOPIC_PREFIX = 'session:';
 /**
  * `session:<id>` 订阅停了 = 该会话的实时行从此不再送到本端(退后台释放重量级订阅、离开会话
  * 取消订阅)。窗口「已验证连续」区间的上界因此不能再被之后到达的 push 续算 —— 与它之间可能漏了
- * 任意多行(见 remoteSessionStore 的 sessionWindowCoverage)。socket 掉线走不带 sessionId 的整体
- * 失效:那影响所有订阅。
+ * 任意多行(见 remoteSessionStore 的 sessionWindowCoverage)。socket 掉线只失效所属连接上的
+ * 对端订阅，另一条仍在线的连接不受影响。
  */
 function noteSessionLiveStreamsInterrupted(topics: readonly string[]): void {
   for (const topic of topics) {
@@ -410,6 +491,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   const auth = useAuth();
   // 官方中转 ↔ 自建中转切换时,与换账号走同一条重建连接的路径(见下方 client effect 依赖)。
   const relayRouteGeneration = useSelfHostedRelayRouteGeneration();
+  const agentNetPreferences = useMobileAgentNetPreferences();
   const [directBridge] = useState(() => createDirectRuntimeBridge());
   const sharedTaskApi = useSharedTaskApi();
   const currentDataOwnerIdRef = useRef<string | null>(auth.user?.id ?? null);
@@ -417,7 +499,13 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   useLayoutEffect(() => {
     setRemoteProjectAliasesAccount(auth.isAuthenticated ? auth.user?.id ?? null : null, auth.accountGeneration);
   }, [auth.accountGeneration, auth.isAuthenticated, auth.user?.id]);
-  const clientRef = useRef<DeviceLinkClient | null>(null);
+  const clientRef = useRef<PeerLinks | null>(null);
+  /**
+   * The routed Device Link client under `clientRef`'s session layer (Agent-Net sessions, @cindy/agent-net routeSessionPeers).
+   * Which connection carries a peer is its: a shared task's own connection, by identity. The session layer hands out a view
+   * of that connection for a peer on its session, so identity checks and per-connection epochs use this one.
+   */
+  const routedRef = useRef<RoutedDeviceLinkClient | null>(null);
   const registryRef = useRef(new DeviceLinkTopicRegistry());
   const [subscriptionVersion, setSubscriptionVersion] = useState(0);
   const remoteSubscribedTopicsRef = useRef(new SubscriptionAcknowledgements(
@@ -463,6 +551,22 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   const openLinkInFlightRef = useRef(
     new Map<string, PresenceTrackedRequest<LinkAcceptPayload>>(),
   );
+  // Counts user closes per device; only closeLink bumps it. Handshake cache entries
+  // are also dropped by presence, peer resets and path changes, so an entry's
+  // identity cannot tell whether the user closed the link (same as Desktop's
+  // openLinkCloseEpochs).
+  const userCloseEpochsRef = useRef(new Map<string, number>());
+  // A settled handshake replaced by a refresh (refreshSettled) -> its replacement.
+  // A read still awaiting the old entry may finish; real invalidations delete
+  // entries instead and break the chain.
+  const refreshedOpenLinksRef = useRef(new WeakMap<object, object>());
+  // Requests waiting on a device's pre-send recovery, each with its own liveness
+  // check. The handshake is shared, so it is sent only while one of them still
+  // wants to send.
+  const presendRecoveryWaitersRef = useRef(new Map<string, Set<() => boolean>>());
+  // Handshakes that an explicit caller (openLink, reopenLink, history reads, reply
+  // recovery) created or joined; they are always wanted.
+  const explicitOpenLinksRef = useRef(new WeakSet<object>());
   const presenceWipeTimerDeps = useMemo(() => ({
     ...basePresenceWipeTimerDeps,
     wipe: offlineMirrorWipeQueue.enqueue,
@@ -472,8 +576,10 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   }), [offlineMirrorWipeQueue]);
   const presenceAvailableByDeviceRef = useRef(new Map<string, boolean>());
   const rosterConsumerRef = useRef<(() => (devices: DeviceView[]) => void) | null>(null);
-  const rosterRequestRef = useRef<{ client: DeviceLinkClient | null; epoch: number; promise: Promise<{ devices: DeviceView[] }> } | null>(null);
+  const rosterRequestRef = useRef<{ client: PeerLinks | null; epoch: number; promise: Promise<{ devices: DeviceView[] }> } | null>(null);
   const rosterRequestGenerationRef = useRef(0);
+  const rosterGenerationRef = useRef(0);
+  const rosterDeniedRef = useRef(false);
   const presenceAvailabilityEpochsRef = useRef(createPresenceAvailabilityEpochs());
   const presencePendingRecoveryDeviceIdsRef = useRef(new Set<string>());
   const presenceUnavailableVerdictsRef = useRef(
@@ -492,6 +598,21 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       settle();
     };
   }, []);
+  const backgroundConnectionRef = useRef<ReturnType<typeof createBackgroundConnection> | null>(null);
+  // Counted here, not on one connection: a press can arrive before sign-in has restored the
+  // client, and the client can be replaced while the press is being carried out.
+  const backgroundHoldsRef = useRef(0);
+  const holdBackgroundConnection = useCallback(() => {
+    backgroundHoldsRef.current += 1;
+    backgroundConnectionRef.current?.held();
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      backgroundHoldsRef.current -= 1;
+      if (backgroundHoldsRef.current === 0) backgroundConnectionRef.current?.unheld();
+    };
+  }, []);
   // 每次后台释放都翻代。subscribe 即使跨 background→active 才收到 ACK,也只能在
   // 发起代仍为当前代时登记远端 ACK,避免迟到成功覆盖较新的 unsubscribe。
   const backgroundReleaseGenerationRef = useRef(0);
@@ -503,34 +624,115 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   // status callback 中先同步推进 ref，再触发 rehydrate；React state 的下一次 render
   // 才会把同一代暴露给页面。这样全局补齐与页面首开使用完全相同的 single-flight key。
   const connectionEpochRef = useRef(0);
+  const crossAccountEpochRef = useRef(0);
+  const scopedEpochsRef = useRef(new WeakMap<PeerLinks, number>());
+  const [crossAccountState, setCrossAccountState] = useState<DeviceLinkConnectionState>({
+    status: 'stopped', connectionEpoch: 0, connectionIssue: null,
+  });
+  const connectionEpochFor = useCallback((deviceId: string) => {
+    const client = routedRef.current, source = client?.connectionFor(deviceId);
+    return source && source !== client ? scopedEpochsRef.current.get(source)
+      ?? (source === client?.crossAccountConnection() ? crossAccountEpochRef.current : 0) : connectionEpochRef.current;
+  }, []);
   const [lastPresenceSnapshot, setLastPresenceSnapshot] = useState<PresenceSnapshot | null>(null);
   const accountGenerationRef = useRef<number | null>(null);
+  const [rosterVersion, setRosterVersion] = useState(0);
+  const [providerShareCatalogVersions, setProviderShareCatalogVersions] = useState<Record<string, number>>({});
+  const [rosterContinuity] = useState(() => new MetadataContinuityReader({ retryable(error) {
+    if (isProviderAccessDeniedError(error)) return false;
+    const row = error && typeof error === 'object' ? error as { status?: unknown; statusCode?: unknown; code?: unknown; message?: unknown } : {};
+    const status = row.statusCode ?? row.status;
+    return status === 0 || status === 429 || (typeof status === 'number' && status >= 500 && status < 600)
+      || row.code === 'NOT_CONNECTED' || row.code === 'NETWORK_ERROR'
+      || (status === undefined && /^(Network request failed|Failed to fetch)$/.test(String(row.message)));
+  }, onDenied: () => {
+    rosterGenerationRef.current += 1;
+    rosterRequestGenerationRef.current += 1;
+    rosterRequestRef.current = null;
+    // A persistent denial must not turn the published version into a render ->
+    // read -> deny feedback loop. Invalidate in-flight scopes on every denial,
+    // but publish one version bump per denial episode; a fresh authoritative
+    // success re-arms the next notification.
+    if (!rosterDeniedRef.current) {
+      rosterDeniedRef.current = true;
+      setRosterVersion((version) => version + 1);
+    }
+  } }));
 
   // Home and direct task entry share the same in-flight roster read. Evidence
   // belongs to the connection that started it, not whichever one finishes it.
-  const readDeviceList = useCallback((options: { fresh?: boolean } = {}): Promise<{ devices: DeviceView[] }> => {
+  const readDeviceList = useCallback((options: { fresh?: boolean } = {}): Promise<{ devices: DeviceView[];
+    stale?: boolean; displayBudget?: { remainingMs: number } }> => {
     const client = clientRef.current;
     const epoch = connectionEpochRef.current;
     const pending = rosterRequestRef.current;
     if (!options.fresh && pending?.client === client && pending.epoch === epoch) return pending.promise;
     const generation = ++rosterRequestGenerationRef.current;
+    const presenceEpochAtStart = presenceAvailabilityEpochsRef.current.next;
     const apply = rosterConsumerRef.current?.();
-    const promise = auth.apiFetch<{ devices: DeviceView[] }>('/api/device-link/devices', {
+    const owner = auth.accountGeneration;
+    const rosterGeneration = rosterGenerationRef.current;
+    const promise = rosterContinuity.read({ key: JSON.stringify([owner, DEVICE_LINK_API_BASE_URL, rosterGeneration]), joinPending: false,
+      current: () => clientRef.current === client && accountGenerationRef.current === owner
+        && rosterGenerationRef.current === rosterGeneration,
+      signalingAvailable: () => true,
+    }, 'device-directory', () => auth.apiFetch<{ devices: DeviceView[] }>('/api/device-link/devices', {
       baseUrl: DEVICE_LINK_API_BASE_URL, timeoutMs: 12_000,
-    }).then((result) => {
+    })).then((snapshot) => {
+      const rawDevices = snapshot.value.devices;
+      const result = { devices: rawDevices.map(device => {
+        const deviceId = device.deviceId;
+        const connection = client?.connectionFor(deviceId);
+        const retained = connection?.peekOfflineDirectPath(deviceId) === true;
+        // A presence delta that landed after this request started is newer than
+        // the REST row and must decide control, in either direction.
+        const freshPresence = (presenceAvailabilityEpochsRef.current.byDevice.get(deviceId) ?? 0) > presenceEpochAtStart;
+        const currentlyAvailable = presenceAvailableByDeviceRef.current.get(deviceId) === true;
+        const stickyDisabled = presenceUnavailableVerdictsRef.current.get(deviceId)?.kind === 'disabled';
+        const nonMobile = !isMobilePlatform(device.platform);
+        if (freshPresence) {
+          return { ...device, online: currentlyAvailable || retained,
+            remoteControlEnabled: currentlyAvailable && nonMobile };
+        }
+        if (device.online === true) {
+          // online:true + false is the target's explicit control-off. A stale
+          // positive row must not clear a known disabled verdict.
+          const enabled = device.remoteControlEnabled === true && !(snapshot.stale && stickyDisabled);
+          return { ...device, online: snapshot.stale ? connection?.isLinkReady(deviceId) === true : true,
+            remoteControlEnabled: nonMobile && enabled };
+        }
+        if (!retained) {
+          return snapshot.stale ? { ...device, online: connection?.isLinkReady(deviceId) === true } : device;
+        }
+        // Offline presence is masked by the relay; only the retained data path
+        // may supply online, never control while a disabled verdict is sticky.
+        return { ...device, online: true, remoteControlEnabled: nonMobile && !stickyDisabled };
+      }) };
       // A fresh read supersedes every older roster consumer, even when the older
       // response arrives first and would otherwise outrank the new snapshot.
-      if (rosterRequestGenerationRef.current === generation) apply?.(result.devices);
-      return result;
+      if (!snapshot.stale) {
+        rosterDeniedRef.current = false;
+        // The consumer uses raw rows as authority; the projected row is display
+        // data only and must not become noteRemoteControlEnabled evidence.
+        if (rosterRequestGenerationRef.current === generation) apply?.(rawDevices);
+      }
+      // A zero remainder is an already-expired source, not a legacy row without
+      // a stamp. Only a missing field keeps the old-endpoint lifecycle.
+      return { ...result, ...(snapshot.stale ? { stale: true as const } : {}),
+        displayBudget: { remainingMs: Math.max(0, snapshot.remainingMs) } };
     });
     rosterRequestRef.current = { client, epoch, promise };
     void promise.finally(() => {
       if (rosterRequestRef.current?.promise === promise) rosterRequestRef.current = null;
     }).catch(() => undefined);
     return promise;
-  }, [auth.apiFetch, auth.accountGeneration]);
+  }, [auth.apiFetch, auth.accountGeneration, rosterContinuity]);
 
   const clearPerAccountDeviceLinkState = useCallback(() => {
+    rosterGenerationRef.current += 1;
+    rosterDeniedRef.current = false;
+    rosterRequestRef.current = null;
+    rosterContinuity.clear();
     remoteSessionStore.clear();
     clearSessionScheduleIndexCache();
     remoteScheduleEventStore.clearAll();
@@ -543,8 +745,10 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     resetComposerPaletteCache();
     resetTaskTagCatalogCache();
     setLastPresenceSnapshot(null);
+    setProviderShareCatalogVersions({});
     setPresenceVersion((version) => version + 1);
-  }, []);
+    setRosterVersion((version) => version + 1);
+  }, [rosterContinuity]);
 
   /**
    * availability 放在 ref 里供 transport 同步读取；每次真实的三态变化也必须发布给
@@ -564,22 +768,41 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const sendOpenLinkOnce = useCallback((
-    client: DeviceLinkClient,
+    client: PeerLinks,
     deviceId: string,
     allowProbe = false,
     refreshSettled = false,
     pendingReplyRecovery = false,
+    presendRecovery = false,
   ) => {
-    const connectionEpoch = connectionEpochRef.current;
+    const connectionEpoch = connectionEpochFor(deviceId);
     const releaseGeneration = backgroundReleaseGenerationRef.current;
+    const userCloseEpoch = userCloseEpochsRef.current.get(deviceId) ?? 0;
+    let ownRequest: object | undefined;
     const checkAvailability = () => {
+      // A pre-send recovery may wait for the relay first. openLink clears a user
+      // close, so recheck right before the handshake.
+      if (presendRecovery) {
+        if (clientRef.current !== client) {
+          throw new DeviceLinkError('NOT_CONNECTED', 'pre-send recovery is no longer current');
+        }
+        if ((userCloseEpochsRef.current.get(deviceId) ?? 0) !== userCloseEpoch
+          || client.isOutboundExplicitlyClosed(deviceId)) {
+          throw new DeviceLinkError('LINK_NOT_OPEN', 'link closed during pre-send recovery');
+        }
+        const waiters = presendRecoveryWaitersRef.current.get(deviceId);
+        const explicit = ownRequest !== undefined && explicitOpenLinksRef.current.has(ownRequest);
+        if (!explicit && waiters && waiters.size > 0 && ![...waiters].some((stillWanted) => stillWanted())) {
+          throw new DeviceLinkError('NOT_CONNECTED', 'no request still waits for this recovery');
+        }
+      }
       if (pendingReplyRecovery && (
         clientRef.current !== client
-        || connectionEpochRef.current !== connectionEpoch
+        || connectionEpochFor(deviceId) !== connectionEpoch
         || backgroundReleaseGenerationRef.current !== releaseGeneration
         || backgroundReleaseInFlightRef.current
         || AppState.currentState !== 'active'
-        || client.getStatus() !== 'online'
+        || !canUsePeerData(client, deviceId)
         || revokedDevicesStore.has(deviceId)
         || client.isOutboundExplicitlyClosed(deviceId)
         || rehydrateSuppressedDeviceIds.has(deviceId)
@@ -592,7 +815,8 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         throw new DeviceLinkError(disabled ? 'REMOTE_DISABLED' : 'DEVICE_OFFLINE', 'remote device is unavailable');
       }
     };
-    return getOrCreatePresenceTrackedRequest(
+    const previous = refreshSettled ? openLinkInFlightRef.current.get(deviceId) : undefined;
+    const tracked = getOrCreatePresenceTrackedRequest(
       openLinkInFlightRef.current,
       presenceAvailabilityEpochsRef.current,
       remoteResponseEvidenceEpochs,
@@ -600,30 +824,78 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       () => sendOpenLinkWithAccessHandling(client, deviceId, allowProbe, checkAvailability, pendingReplyRecovery),
       { retainSuccessful: true, refreshSettled },
     );
+    if (previous && previous !== tracked) refreshedOpenLinksRef.current.set(previous, tracked);
+    ownRequest = tracked;
+    if (!presendRecovery) explicitOpenLinksRef.current.add(tracked);
+    return tracked;
+  }, [connectionEpochFor]);
+
+  /** The device's current handshake is this one, or only a refresh of it. */
+  const isCurrentOpenLink = useCallback((deviceId: string, tracked: object) => {
+    const current = openLinkInFlightRef.current.get(deviceId);
+    for (let entry: object | undefined = tracked; entry; entry = refreshedOpenLinksRef.current.get(entry)) {
+      if (entry === current) return true;
+    }
+    return false;
   }, []);
 
-  const restorePendingReplyLinks = useCallback((client: DeviceLinkClient, refreshSettled = false) => {
+  const recoverLinkBeforeSend = useCallback(async (
+    client: PeerLinks, deviceId: string, preSend: () => void,
+  ) => {
+    preSend();
+    if (clientRef.current !== client) throw new DeviceLinkError('NOT_CONNECTED', 'link changed');
+    if (!client.needsLinkRecovery(deviceId)) return;
+    const userCloseEpoch = userCloseEpochsRef.current.get(deviceId) ?? 0;
+    const stillWanted = () => {
+      try { preSend(); return true; } catch { return false; }
+    };
+    const waitersByDevice = presendRecoveryWaitersRef.current;
+    const waiters = waitersByDevice.get(deviceId) ?? new Set<() => boolean>();
+    waitersByDevice.set(deviceId, waiters);
+    waiters.add(stillWanted);
+    try {
+      // Reuse the peer's handshake single flight, but not a settled pre-fault ACK.
+      // This sends no business request and does not restart the shared relay.
+      await sendOpenLinkOnce(client, deviceId, false, true, false, true).request;
+    } catch (err) {
+      // A request that no longer wants to send reports its own reason first.
+      preSend();
+      throw err;
+    } finally {
+      waiters.delete(stillWanted);
+      if (waiters.size === 0 && waitersByDevice.get(deviceId) === waiters) waitersByDevice.delete(deviceId);
+    }
+    preSend();
+    if (clientRef.current !== client) throw new DeviceLinkError('NOT_CONNECTED', 'link changed');
+    if ((userCloseEpochsRef.current.get(deviceId) ?? 0) !== userCloseEpoch
+      || client.isOutboundExplicitlyClosed(deviceId)) {
+      throw new DeviceLinkError('LINK_NOT_OPEN', 'link closed during pre-send recovery');
+    }
+  }, [sendOpenLinkOnce]);
+
+  const restorePendingReplyLinks = useCallback((client: PeerLinks, refreshSettled = false, connection?: PeerLinks) => {
     // A running business probe owns the breaker/scheduler slot until its reply
     // arrives. Restore only its transport: queuing this handshake behind that
     // probe would make each wait for the other until timeout + backoff.
     // Reuse the connection's single-flight cache; send no new business request
     // and neither consume nor settle the existing probe's slot.
     for (const deviceId of unresponsiveDevicesStore.getSnapshot()) {
+      if (connection && (routedRef.current ?? client).connectionFor(deviceId) !== connection) continue;
       if (!client.hasPendingRequestsTo(deviceId)) continue;
       void sendOpenLinkOnce(client, deviceId, false, refreshSettled, true).request.catch(() => undefined);
     }
   }, [sendOpenLinkOnce]);
 
   const refreshProjectAliasesForClient = useCallback((
-    client: DeviceLinkClient,
+    client: PeerLinks,
     deviceId: string,
     invalidated = false,
     ownerStamp?: unknown,
   ): void => {
-    const epoch = connectionEpochRef.current;
+    const epoch = connectionEpochFor(deviceId);
     const isCurrent = () => clientRef.current === client
-      && client.getStatus() === 'online'
-      && connectionEpochRef.current === epoch
+      && canUsePeerData(client, deviceId)
+      && connectionEpochFor(deviceId) === epoch
       && remoteSubscribedTopicsRef.current.get(deviceId)?.has('sessions') === true
       && registryRef.current.hasTopic(deviceId, 'sessions')
       && !backgroundReleaseInFlightRef.current
@@ -638,49 +910,59 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         },
       },
     ), isCurrent, invalidated);
-  }, []);
+  }, [connectionEpochFor]);
 
   const sendTrackedSubscribe = useCallback(async (
-    client: DeviceLinkClient,
+    client: PeerLinks,
     deviceId: string,
     topics: readonly Topic[],
   ) => {
     const releaseGeneration = backgroundReleaseGenerationRef.current;
     topics = sharedTaskTopics(deviceId, topics);
-    const record = recoveryDiagnostics.get(client)?.capture(deviceId, connectionEpochRef.current);
+    const record = recoveryDiagnostics.get(client)?.capture(deviceId, connectionEpochFor(deviceId));
     await confirmTrackedSubscription({
+      share: { scope: client, deviceId },
       isCurrent: () => presenceAvailableByDeviceRef.current.get(deviceId) !== false && !backgroundReleaseInFlightRef.current
         && backgroundReleaseGenerationRef.current === releaseGeneration && clientRef.current === client,
-      generation: () => `${connectionEpochRef.current}:${remoteSubscribedTopicsRef.current.generation(deviceId)}`,
+      generation: () => `${releaseGeneration}:${connectionEpochFor(deviceId)}:${remoteSubscribedTopicsRef.current.generation(deviceId, topics)}`,
       missing: () => topicsMissingRemoteAck(remoteSubscribedTopicsRef.current, deviceId, topics)
         .filter((topic) => registryRef.current.hasTopic(deviceId, topic)),
-      send: (toSend) => sendSubscribeWithAccessHandling(
-        client,
-        deviceId,
-        toSend,
-        () => (
-          presenceAvailableByDeviceRef.current.get(deviceId) !== false
+      send: async (toSend) => {
+        const current = () => clientRef.current === client
+          && presenceAvailableByDeviceRef.current.get(deviceId) !== false
           && !backgroundReleaseInFlightRef.current
-          && toSend.every((topic) => registryRef.current.hasTopic(deviceId, topic))
-        ),
-      ),
+          && backgroundReleaseGenerationRef.current === releaseGeneration
+          && toSend.every((topic) => registryRef.current.hasTopic(deviceId, topic));
+        // A topic released during recovery returns false like the send itself, so
+        // the confirmation recomputes and still subscribes the topics others hold.
+        const superseded = Symbol('subscription superseded');
+        try {
+          await recoverLinkBeforeSend(client, deviceId, () => {
+            if (!current()) throw superseded;
+          });
+        } catch (err) {
+          if (err === superseded) return false;
+          throw err;
+        }
+        return sendSubscribeWithAccessHandling(client, deviceId, toSend, current);
+      },
       acknowledge: (toSend) => {
         // 只有仍被持有、真正记进 ACK 表的 topic 才算订阅生效(中途被释放的那些不算)。
         const held = markHeldRemoteTopicsSubscribed(remoteSubscribedTopicsRef.current, registryRef.current, deviceId, toSend);
         noteSessionLiveStreamsAcked(held);
         if (held.length > 0) record?.('subscription', 'applied', held.length);
         mobileDebugLog('debug', 'recovery', 'subscription acknowledged', { topicCount: held.length });
+        if (held.includes('sessions')) refreshProjectAliasesForClient(client, deviceId);
       },
     });
-    if (topics.includes('sessions')) refreshProjectAliasesForClient(client, deviceId);
-  }, [refreshProjectAliasesForClient]);
+  }, [connectionEpochFor, refreshProjectAliasesForClient, recoverLinkBeforeSend]);
 
   // 熔断 open 设备的显式代表性探测:openLink 建链(成功按不定论,不关熔断),
   // 再发一条真正穿过被控端 runInvoke → dispatchLocalInvoke → local-db 的最小读,
   // 由 sendInvoke 内部的熔断收尾决定开合(真实回包 → 关;超时 → 加深退避)。
   // 错误全吞:结果已在 send 层按熔断语义上报,这里不需要二次处理。
   const probeUnresponsiveDevice = useCallback(
-    async (client: DeviceLinkClient, deviceId: string): Promise<void> => {
+    async (client: PeerLinks, deviceId: string): Promise<void> => {
       try {
         if (isSharedTaskPeer(deviceId)) {
           const owner = getMobileAuthOwner();
@@ -708,7 +990,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   );
 
   const hasOutboundPeerRecoveryIntent = useCallback((
-    client: DeviceLinkClient,
+    client: PeerLinks,
     deviceId: string,
   ) => (
     !client.isOutboundExplicitlyClosed(deviceId)
@@ -719,7 +1001,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   ), []);
 
   const requestForcedPeerRecovery = useCallback((
-    client: DeviceLinkClient,
+    client: PeerLinks,
     deviceId: string,
   ): boolean => {
     if (!hasOutboundPeerRecoveryIntent(client, deviceId)) {
@@ -731,12 +1013,12 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   }, [hasOutboundPeerRecoveryIntent]);
 
   const runPeerRecovery = useCallback(async (
-    client: DeviceLinkClient,
+    client: PeerLinks,
     targetDeviceId: string,
   ): Promise<PeerRecoveryResult> => {
     if (
       client !== clientRef.current
-      || client.getStatus() !== 'online'
+      || !canUsePeerData(client, targetDeviceId)
       || backgroundReleaseInFlightRef.current
     ) {
       return { retry: false };
@@ -783,7 +1065,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       isCancelled: () => (
         backgroundReleaseInFlightRef.current
         || client !== clientRef.current
-        || client.getStatus() !== 'online'
+        || !canUsePeerData(client, targetDeviceId)
         || revokedDevicesStore.has(targetDeviceId)
         || client.isOutboundExplicitlyClosed(targetDeviceId)
         || !isPresenceEligibleForRemoteRequest(
@@ -877,14 +1159,14 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         );
       },
       rebuildSessionSnapshot: (deviceId, sessionId, opts) => {
-        const epoch = connectionEpochRef.current;
+        const epoch = connectionEpochFor(deviceId);
         const releaseGeneration = backgroundReleaseGenerationRef.current;
         return rebuildSessionSnapshot(client, deviceId, sessionId, epoch, {
           ...opts,
           subscriptionIdentity: remoteSubscribedTopicsRef.current.identity(deviceId, sharedTaskTopics(deviceId, ['sessions', `session:${sessionId}`])),
         }, () => client === clientRef.current
-          && client.getStatus() === 'online'
-          && connectionEpochRef.current === epoch
+          && canUsePeerData(client, deviceId)
+          && connectionEpochFor(deviceId) === epoch
           && backgroundReleaseGenerationRef.current === releaseGeneration
           && !backgroundReleaseInFlightRef.current
           && !revokedDevicesStore.has(deviceId)
@@ -902,7 +1184,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     }
     const forcedOpenStillPending = forcedPeerRecoveryIntentRef.current.has(targetDeviceId)
       && client === clientRef.current
-      && client.getStatus() === 'online'
+      && canUsePeerData(client, targetDeviceId)
       && !revokedDevicesStore.has(targetDeviceId)
       && hasOutboundPeerRecoveryIntent(client, targetDeviceId)
       && isPresenceEligibleForRemoteRequest(
@@ -916,6 +1198,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         || forcedOpenStillPending,
     };
   }, [
+    connectionEpochFor,
     probeUnresponsiveDevice,
     clearOnePresenceWipeTimer,
     presenceWipeTimerDeps,
@@ -926,12 +1209,14 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   ]);
 
   const rehydrateWithClient = useCallback((
-    client: DeviceLinkClient,
+    client: PeerLinks,
     targetDeviceId?: string,
   ): Promise<void> => {
     if (
       client !== clientRef.current
-      || client.getStatus() !== 'online'
+      || (targetDeviceId
+        ? !canUsePeerData(client, targetDeviceId)
+        : !client.hasOnlineConnection())
       || backgroundReleaseInFlightRef.current
     ) {
       return Promise.resolve();
@@ -963,6 +1248,38 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       return runPeerRecovery(client, deviceId);
     };
   }, [runPeerRecovery]);
+
+  // 「重新加入」 for this phone after it was removed on the official network (deviceRejoin.ts): one tap runs one attempt.
+  // Turning the Agent-Net switch on runs it too (`agentNet`), when the service says this phone's identity was revoked.
+  useEffect(() => {
+    if (!auth.isAuthenticated || !auth.deviceId) return;
+    const deviceId = auth.deviceId, getAccessToken = auth.getAccessToken, apiFetch = auth.apiFetch;
+    return registerMobileDeviceRejoin((options) => {
+      const owner = getMobileAuthOwner();
+      const assertCurrent = () => {
+        if (!isMobileAuthOwnerCurrent(owner) || getActiveSelfHostedRelay()) throw new Error('DEVICE_REJOIN_SCOPE_CHANGED');
+      };
+      assertCurrent();
+      return rejoinRemovedMobileDevice({
+        rejoinDeviceLink: async () => {
+          await apiFetch('/api/device-link/rejoin', { baseUrl: getOfficialDeviceLinkApiBaseUrl(), method: 'POST', body: {},
+            timeoutMs: 15_000, cache: 'no-store', assertCurrent });
+        },
+        agentNetInvolved: async () => MobileAgentNetEngine.available() && !!getOfficialAgentNetApiBaseUrl()
+          && (options?.agentNet === true || getMobileAgentNetPreferences().enabled || await hasStoredMobileOfficialAgentNetIdentity()),
+        agentNetRequired: mobileAgentNetRequiresEncryption,
+        rejoinAgentNet: async () => {
+          assertCurrent();
+          await ensureMobileAgentNetIdentity({ deviceId, deviceName: mobileDeviceName(), getAccessToken, rejoin: true });
+        },
+        clearAgentNetRefusal: clearMobileAgentNetIdentityRefusal,
+        // A 4410 stopped only the main connection (connectNow ignores it while 'device-removed'). start() brings that one
+        // back and is a no-op for the connections of tasks shared from other accounts, which keep running (2026-11-23 review:
+        // rebuilding the whole provider effect would close them too).
+        restartConnection: () => { if (isMobileAuthOwnerCurrent(owner)) routedRef.current?.start(); },
+      });
+    });
+  }, [auth.isAuthenticated, auth.deviceId, auth.getAccessToken, auth.apiFetch]);
 
   useEffect(() => {
     const accountGenerationChanged =
@@ -1012,44 +1329,45 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     // 旧 client 的连接问题(如被自建中转移除的 4410)属于旧连接;cleanup 先退订再 stop,
     // 新 client 不会替它清掉,这里显式清空。
     setConnectionIssue(null);
+    crossAccountEpochRef.current = 0;
+    setCrossAccountState({ status: 'stopped', connectionEpoch: 0, connectionIssue: null });
     // 这个 client 只服务创建时的那一代路由;路由一变 effect 会重建 client。
     const clientRelayRoute = getSelfHostedRelayRouteGeneration();
+    const clientOwner = getMobileAuthOwner();
+    const clientAgentNetGeneration = agentNetPreferences.generation;
+    const scopeCurrent = () => isMobileAuthOwnerCurrent(clientOwner)
+      && getSelfHostedRelayRouteGeneration() === clientRelayRoute
+      && getMobileAgentNetPreferences().generation === clientAgentNetGeneration;
+    const assertScope = () => { if (!scopeCurrent()) throw new Error('AGENT_NET_OWNER_CHANGED'); };
+    let primaryEncrypted = false, primaryAttempt = 0;
     const getAccessToken = auth.getAccessToken;
-    const client = new DeviceLinkClient({
-      directRuntime: directBridge.runtime,
-      getWsUrl: () => deviceLinkWsUrl(),
-      // 自建中转用中转凭证 + CindyRelay,账号 token 绝不发往中转(docs/self-hosted-relay-plan.md §5.2)。
-      // 先等本账号的中转设置读完,避免冷启动先连上官方再切走;取 token 期间路由变了就放弃这一轮,
-      // 不让官方 token 与 CindyRelay 方案、中转地址拼到同一次握手里。
-      getToken: async () => {
-        await waitForSelfHostedRelayRoute();
-        if (getSelfHostedRelayRouteGeneration() !== clientRelayRoute) return null;
-        const relay = getActiveSelfHostedRelay();
-        if (relay) return relay.credential;
-        const token = await getAccessToken();
-        return getSelfHostedRelayRouteGeneration() === clientRelayRoute ? token : null;
-      },
-      authorizationScheme: () => (getActiveSelfHostedRelay() ? 'CindyRelay' : 'Bearer'),
-      // 自建中转的设备签名(docs/self-hosted-relay-plan.md §16);官方中转返回 null。
-      // 收到的消息在分发前核对主人签发的设备证书与帧签名，防止中转替换权限请求的展示内容。
-      frameAuth: currentSelfHostedRelayFrameAuth,
+    const connectionOptions: Omit<DeviceLinkClientOptions, 'getWsUrl' | 'getToken'> = {
       getHello: () => ({
         capabilities: [SHARED_TASK_CAPABILITY],
         deviceName: mobileDeviceName(),
         platform: Platform.OS,
+        app: 'cindy',
         appVersion: Constants.expoConfig?.version ?? '0.0.0',
         remoteControlEnabled: false,
         busy: false,
       }),
-      createWebSocket: createRnWebSocket,
+      createWebSocket: (url, headers) => { assertScope(); return createRnWebSocket(url, headers); },
+      transportAllowed: () => scopeCurrent() && mobileAgentNetAllowsLegacy(),
       logger: mobileDeviceLinkLogger,
       // 弱网减流量：声明可解 gzip，大结果压缩、内容未变的结果只回标记（被控端支持时）。
-      transferCodec: { gunzipBase64: decodeGzipBase64TextBounded },
-      invokeMetrics: { enabled: jankMetricsEnabled, record: recordInvokeTransfer },
+      // 大结果在后台 runtime 解压，不占 JS 线程；不可用时内部回落 pako。
+      // inflateRawBase64 让建链时声明 push-deflate：推送按序在 JS 线程同步解开（单条推送有界）。
+      transferCodec: {
+        gunzipBase64: decodeGzipBase64TextBounded,
+        gunzipBase64Async: gunzipBase64OffThread,
+        inflateRawBase64: decodeDeflateRawBase64TextBounded,
+      },
+      invokeMetrics: { enabled: jankMetricsEnabled, record: recordInvokeTransfer, label: invokeMetricLabel },
       // Mobile 具备按 deviceId 独立 openLink/订阅/快照恢复能力。可靠 ACK
       // 耗尽时只复位该 peer，共享 WSS 和其它远端继续工作；恢复仍只使用所有
       // Desktop 版本都支持的 link-open，不增加 wire/capability 要求。
       peerFailurePolicy: 'isolate-peer',
+      backoffOfflineLinkOpen: true,
       // 手机弱网(切基站 / 弱 WiFi)下 TCP 半开假活远比桌面常见,收紧心跳把
       // 半开检测从默认 ~60s(20s×3 tick)压到 ~20s(10s×2 tick);检测到即
       // fail 全部 pending invoke,不让用户操作干等 30s 请求超时。仅手机端
@@ -1065,20 +1383,139 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         // 与桌面控制端同一张协议契约表,不受此默认值影响。
         requestTimeoutMs: 15_000,
       },
+    };
+    const legacyOptions: DeviceLinkClientOptions = {
+      ...connectionOptions,
+      directRuntime: directBridge.runtime,
+      // Existing authenticated foreground paths only; stop/background still releases them.
+      retainDirectPathsOnRelayLoss: true,
+      getWsUrl: () => deviceLinkWsUrl(),
+      // 自建中转用中转凭证 + CindyRelay,账号 token 绝不发往中转(docs/self-hosted-relay-plan.md §5.2)。
+      // 先等本账号的中转设置读完,避免冷启动先连上官方再切走;取 token 期间路由变了就放弃这一轮,
+      // 不让官方 token 与 CindyRelay 方案、中转地址拼到同一次握手里。
+      getToken: async () => {
+        await waitForMobileAgentNetPreferences();
+        await waitForSelfHostedRelayRoute();
+        if (!scopeCurrent()) return null;
+        const relay = getActiveSelfHostedRelay();
+        if (relay) return relay.credential;
+        if (auth.deviceId) {
+          try { await loadExistingMobileAgentNetModeIdentity(auth.deviceId); }
+          catch { /* No unverified mode assertion is sent if the stored key is unreadable. */ }
+        }
+        if (!scopeCurrent()) return null;
+        const token = await getAccessToken();
+        return scopeCurrent() ? token : null;
+      },
+      authorizationScheme: () => (getActiveSelfHostedRelay() ? 'CindyRelay' : 'Bearer'),
+      // 自建中转的设备签名(docs/self-hosted-relay-plan.md §16);官方中转返回 null。
+      // 收到的消息在分发前核对主人签发的设备证书与帧签名，防止中转替换权限请求的展示内容。
+      frameAuth: currentSelfHostedRelayFrameAuth,
+      transportCapabilities: () => isMobileAgentNetActive() ? ['agent-net-node-v2'] : [],
+      transportAttestation: mobileAgentNetTransportProof,
+      verifyTransportAttestation: verifyMobileAgentNetTransportProof,
+    };
+    // V2-only routes keep their existing connection when the switch is off.
+    // Session routing is enabled only by the explicit preference.
+    const agentNetEnabled = agentNetPreferences.ready && agentNetPreferences.enabled;
+    const routed: RoutedDeviceLinkClient = new RoutedDeviceLinkClient({
+      ...legacyOptions,
+      // As the Desktop: on this phone's Agent-Net connection a peer that is still delivering is not reset for a slow confirmation.
+      ...(agentNetEnabled ? { reliablePeerTransport: () => primaryEncrypted } : {}),
+      transportAllowed: () => scopeCurrent() && (primaryEncrypted || mobileAgentNetAllowsLegacy()),
+      directRuntimeEnabled: () => !primaryEncrypted && mobileAgentNetAllowsLegacy(),
+      frameAuth: () => primaryEncrypted ? null : currentSelfHostedRelayFrameAuth(),
+      verifyTransportAttestation: (peer, requestId, proof) => primaryEncrypted || verifyMobileAgentNetTransportProof(peer, requestId, proof),
+      getToken: async () => {
+        await waitForMobileAgentNetPreferences();
+        await waitForSelfHostedRelayRoute();
+        if (!scopeCurrent()) return null;
+        if (isMobileAgentNetActive() || mobileAgentNetRequiresEncryption()) return 'agent-net-local-native';
+        return legacyOptions.getToken();
+      },
+      createWebSocket: async (url, headers) => {
+        assertScope();
+        const attempt = ++primaryAttempt;
+        primaryEncrypted = false;
+        if (isMobileAgentNetActive()) {
+          if (!auth.deviceId) throw new Error('AGENT_NET_DEVICE_ID_REQUIRED');
+          const socket = await openMobileAgentNetSocket({ deviceId: auth.deviceId,
+            deviceName: mobileDeviceName(), getAccessToken });
+          if (!scopeCurrent() || attempt !== primaryAttempt) { socket?.close(); throw new Error('AGENT_NET_OWNER_CHANGED'); }
+          if (socket) { primaryEncrypted = true; return socket; }
+        }
+        if (mobileAgentNetRequiresEncryption()) throw new Error('AGENT_NET_ENCRYPTED_IDENTITY_REQUIRED');
+        assertScope();
+        return createRnWebSocket(url, headers);
+      },
+    }, {
+      // 自建中转不转发跨账号帧:共享任务改走这条官方连接,见 @cindy/device-link 的 routedClient。
+      active: () => (getActiveSelfHostedRelay() !== null || isMobileAgentNetActive()) && mobileAgentNetAllowsLegacy(),
+      useLegacyConnection: () => isMobileAgentNetActive() && getActiveSelfHostedRelay() === null,
+      options: {
+        ...connectionOptions,
+        getWsUrl: () => deviceLinkWsUrl(getOfficialDeviceLinkApiBaseUrl()),
+        getToken: async () => {
+          await waitForMobileAgentNetPreferences();
+          if (!scopeCurrent() || !mobileAgentNetAllowsLegacy()) return null;
+          const token = await getAccessToken();
+          return scopeCurrent() ? token : null;
+        },
+      },
+    }, {
+      active: () => isMobileAgentNetActive() && mobileAgentNetAllowsLegacy(),
+      useForPeer: mobileAgentNetShouldUseLegacyPeer,
+      probeForPeer: mobileAgentNetShouldProbeLegacyPeer,
+      primaryCapability: 'agent-net-node-v2',
+      prefersPrimary: mobileAgentNetPrefersPrimary,
+      // The computer said on the relay that it runs Agent-Net: its session is about to arrive, open there (AgentNetSessionLinks.openAttested).
+      ...(agentNetEnabled ? { openOnPrimary: (peer: string, payload: unknown, timeoutMs: number | undefined,
+        primary: () => Promise<LinkAcceptPayload>): Promise<LinkAcceptPayload> => sessionLinks!.openAttested(peer, payload, timeoutMs, primary) } : {}),
+      options: legacyOptions,
     });
+    // Agent-Net sessions (docs/agent-net-session-plan.md §10, stage 4), as the Desktop and Node Host assemble them: with a
+    // computer that also runs the session layer, links, requests, results and pushes go on the session instead of Device Link
+    // frames; with Agent-Net off or an older computer every call goes to the routed client unchanged. The phone only controls.
+    let facade: PeerLinks | null = null;
+    let recoverPeerOnNewSession: ((deviceId: string) => void) | null = null;
+    const sessionLinks: AgentNetSessionLinks | null = !agentNetEnabled ? null : new AgentNetSessionLinks({
+      session: mobileAgentNetSession,
+      connectionEpoch: (deviceId): number => (facade ?? routed).connectionFor(deviceId).getConnectionEpoch(),
+      connect: connectMobileAgentNetSessionPeer,
+      agentNetPeer: mobileAgentNetPeerState,
+      selfDeviceId: () => routed.getSelfDeviceId(),
+      transferCodec: connectionOptions.transferCodec,
+      path: (deviceId) => mobileAgentNetPeerRoute(deviceId).path,
+      onRelayStall: mobileAgentNetRelayStalled,
+      rttMs: (deviceId) => mobileAgentNetPeerRoute(deviceId).rttMs,
+      connectedAt: mobileAgentNetPeerConnectedAt,
+      // The link to it broke with its previous session and a new one is here: recover it as after a Device Link transport reset.
+      reopenLink: (deviceId) => recoverPeerOnNewSession?.(deviceId),
+      // File connections on the session end with it (the computer has no idle timer for them).
+      onSessionClosed: (deviceId) => resetMobilePeer(deviceId),
+      log: mobileDeviceLinkLogger,
+    });
+    useMobileAgentNetSessions(sessionLinks ? { laneFor: agentNetSessionLane, handlers: (deviceId) => sessionLinks.handlers(deviceId) } : null);
+    const client: PeerLinks = sessionLinks ? (facade = routeSessionPeers(routed, sessionLinks, mobileDeviceLinkLogger)) : routed;
+    // File bytes go on the session only when this call to the computer really does (outboundOnSession): with a Device Link link
+    // still alive to it the bytes stay on WebRTC rather than going block by block over Device Link.
+    const offFileStreams = sessionLinks
+      ? installPeerStreamTransport((deviceId) => !isScopedPeer(deviceId) && outboundOnSession(routed, sessionLinks, deviceId)) : () => {};
     meterDeviceLinkInvokes(client);
     clientRef.current = client;
+    routedRef.current = routed;
+    const stopSharing = bindMobileAgentNetSharing(routed, connectionOptions, { deviceId: auth.deviceId ?? '', apiFetch: auth.apiFetch });
     const catalogRefresh = createDeviceCatalogRefresh({
-      connectionEpoch: () => connectionEpochRef.current,
+      connectionEpoch: connectionEpochFor,
       canRead: (deviceId) => client === clientRef.current
-        && client.getStatus() === 'online'
+        && canUsePeerData(client, deviceId)
         && !backgroundReleaseInFlightRef.current
         && !unresponsiveDevicesStore.has(deviceId)
         && !revokedDevicesStore.has(deviceId)
         && presenceAvailableByDeviceRef.current.get(deviceId) !== false,
       readProviders: (deviceId) => sendInvokeWithAccessHandling<DeviceProvidersPayload>(
         client, deviceId, 'maker:provider:list',
-        [{ capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2] }],
+        providerPickerListArgs(),
       ),
       readCapabilities: (deviceId, agent) => sendInvokeWithAccessHandling<unknown>(
         client, deviceId, 'maker:get-capabilities', [agent],
@@ -1100,26 +1537,113 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     const recoverNetwork = (urgent: boolean) => {
       const replaceOldPath = networkPathChanged;
       networkPathChanged = false;
+      // Agent-Net connections send from the new address now and gather candidates again (the Desktop's network watcher does the same);
+      // on a route change its relay connection is replaced too, as Device Link's below.
+      if (agentNetEnabled && (urgent || replaceOldPath)) notifyMobileAgentNetNetworkChanged({ routeChanged: replaceOldPath });
       // Only this phone's established connection used the lost route. Keep
       // handshakes and congestion backoff on their existing recovery path.
       if (replaceOldPath && client.getStatus() === 'online') {
-        client.restartConnection('network-path-changed');
+        // An Agent-Net primary moves to the new address by itself and replaced only its relay connection (above). Rebuilding it
+        // closed every session and connected from scratch: 2026-11-20 on a phone, about 12 s after Wi-Fi/5G switches against
+        // 1.8 s on Device Link.
+        client.restartConnections('network-path-changed', { keepPrimary: primaryEncrypted });
       } else {
         client.notifyNetworkChanged({ urgent });
       }
     };
     const offIssue = client.onConnectionIssue(setConnectionIssue);
+    const offCrossAccountIssue = client.onSeparateCrossAccountIssue((issue) => {
+      setCrossAccountState((current) => ({ ...current, connectionIssue: issue }));
+    });
+    const connectionPeerIds = (connection: PeerLinks) => [...new Set([
+      ...registryRef.current.deviceIds(),
+      ...openLinkInFlightRef.current.keys(),
+      ...remoteSubscribedTopicsRef.current.keys(),
+      ...forcedPeerRecoveryIntentRef.current.deviceIds(),
+      ...unresponsiveDevicesStore.getSnapshot(),
+      ...catalogRefresh.deviceIds(),
+    ])].filter((deviceId) => routed.connectionFor(deviceId) === connection);
+    // This phone lost its route to a peer; that is not a verdict about the peer.
+    const invalidatePeerWithoutRoute = (deviceId: string) => {
+      catalogRefresh.cancel(deviceId);
+      invalidatePeerLinkState(deviceId, openLinkInFlightRef.current,
+        remoteSubscribedTopicsRef.current, noteSessionLiveStreamsInterrupted);
+      peerRecoverySchedulerRef.current?.cancel(deviceId);
+    };
+    const pauseRecoveryWithoutRoute = (connection: PeerLinks) => {
+      if (!client.hasOnlineConnection()
+        && !connectionPeerIds(connection).some(deviceId => connection.hasOfflineDirectPath(deviceId))) {
+        peerRecoverySchedulerRef.current?.pause();
+      }
+    };
+    const invalidateConnectionPeers = (connection: PeerLinks) => {
+      for (const deviceId of connectionPeerIds(connection)) {
+        if (connection.hasOfflineDirectPath(deviceId)) continue;
+        invalidatePeerWithoutRoute(deviceId);
+      }
+      pauseRecoveryWithoutRoute(connection);
+    };
+    // 走自建中转时共享任务看专用的官方连接;还没连上是「暂时不可用」,不是版本问题。
+    const syncSharedTaskAvailable = () => {
+      const connection = client.crossAccountConnection();
+      if (mobileAgentNetSharingEnabled()) { setSharedTaskAvailable(true); return; }
+      setSharedTaskAvailable(connection.getStatus() === 'online' ? connection.hasServerCapability(SHARED_TASK_CAPABILITY) : undefined);
+    };
+    const offCrossAccountStatus = client.onSeparateCrossAccountStatus((next) => {
+      if (next === 'online') crossAccountEpochRef.current = ++nextDeviceLinkConnectionEpoch;
+      scopedEpochsRef.current.set(client.crossAccountConnection(), crossAccountEpochRef.current);
+      setCrossAccountState((current) => ({ ...current, status: next, connectionEpoch: crossAccountEpochRef.current }));
+      syncSharedTaskAvailable();
+      if (next === 'online') {
+        // 共享 peer 没有同账号 presence 广播；官方连接的新代际要解除旧的
+        // disabled / link-close 判定，不能等待自建主连接也重连才恢复。
+        // 只清这条连接的状态，撤权及同账号设备的判定仍由原入口把守。
+        const stalePeers = new Set([
+          ...registryRef.current.deviceIds(),
+          ...presenceAvailableByDeviceRef.current.keys(),
+          ...rehydrateSuppressedDeviceIds,
+        ]);
+        for (const deviceId of stalePeers) {
+          if (!isSharedTaskPeer(deviceId) || routed.connectionFor(deviceId) !== routed.crossAccountConnection()) continue;
+          markPresenceAvailabilityEpoch(presenceAvailabilityEpochsRef.current, deviceId);
+          publishPresenceAvailabilityMutation(deviceId, (availabilityByDevice) => {
+            if (availabilityByDevice.get(deviceId) === false) {
+              presencePendingRecoveryDeviceIdsRef.current.add(deviceId);
+            }
+            availabilityByDevice.delete(deviceId);
+          });
+          presenceUnavailableVerdictsRef.current.delete(deviceId);
+          rehydrateSuppressedDeviceIds.delete(deviceId);
+        }
+      }
+      const connection = client.crossAccountConnection();
+      if (next === 'online') {
+        restorePendingReplyLinks(client, false, connection);
+        for (const deviceId of connectionPeerIds(connection)) {
+          resetRemoteProjectOrderPushFence(deviceId);
+          suspendRemoteProjectAliases(deviceId);
+          void rehydrate(deviceId);
+        }
+      } else invalidateConnectionPeers(connection);
+    });
+    const offScopedStatus = routed.onScopedConnectionStatus((connection, next) => {
+      if (connection === routed || connection === routed.crossAccountConnection()) return;
+      if (next === 'online') scopedEpochsRef.current.set(connection, ++nextDeviceLinkConnectionEpoch);
+      setPresenceVersion(version => version + 1);
+      syncSharedTaskAvailable();
+      if (next !== 'online') { invalidateConnectionPeers(connection); return; }
+      restorePendingReplyLinks(client, false, connection);
+      for (const deviceId of connectionPeerIds(connection)) {
+        presenceAvailableByDeviceRef.current.delete(deviceId); presenceUnavailableVerdictsRef.current.delete(deviceId);
+        rehydrateSuppressedDeviceIds.delete(deviceId);
+        void rehydrate(deviceId);
+      }
+    });
     const offStatus = client.onStatusChange((next) => {
       setStatus(next);
-      setSharedTaskAvailable(next === 'online' ? client.hasServerCapability(SHARED_TASK_CAPABILITY) : undefined);
+      syncSharedTaskAvailable();
       if (next !== 'online') {
-        catalogRefresh.clear();
-        openLinkInFlightRef.current.clear();
-        remoteSubscribedTopicsRef.current.clear();
-        // 掉线:所有会话的实时行都可能从此漏收,窗口连续性结论的上界不再可续算。
-        remoteSessionStore.noteLiveStreamInterrupted();
-        // Relay 连接故障才暂停全部 peer；重新 online 后它们各自重新进入恢复队列。
-        peerRecoverySchedulerRef.current?.pause();
+        invalidateConnectionPeers(routed);
         return;
       }
       // A new authenticated connection already supersedes any retained old path.
@@ -1132,14 +1656,32 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       const staleUnavailableDeviceIds = resetPresenceAvailabilityForConnection(
         presenceAvailableByDeviceRef.current,
         presencePendingRecoveryDeviceIdsRef.current,
+        (deviceId) => routed.connectionFor(deviceId) === routed,
       );
       // 新连接代际 = 世界重置:永久关闭抑制不跨代际(断线期间对方状态未知,
       // 新代按乐观补齐;若对方仍拒绝,入站永久 link-close 会重新建立抑制)。
-      liftRehydrateSuppressionForNewConnection(rehydrateSuppressedDeviceIds);
-      // 上一连接代的 rehydrate verdict 已被降为 unknown;新连接的 late response
-      // 不能再借旧 verdict 清理当前代状态。权威 presence 会在 delta 到达时重建。
+      liftRehydrateSuppressionForNewConnection(rehydrateSuppressedDeviceIds,
+        (deviceId) => routed.connectionFor(deviceId) === routed);
+      // 上一连接代的离线/存在性 verdict 已被降为 unknown;新连接的 late response
+      // 不能再借旧 verdict 清理当前代状态。明确关闭不是连接判定，必须保留到
+      // 该目标再次收到 online + enabled 的权威 presence 才能恢复。
       for (const deviceId of staleUnavailableDeviceIds) {
-        presenceUnavailableVerdictsRef.current.delete(deviceId);
+        const keepDisabled = !isScopedPeer(deviceId)
+          && presenceUnavailableVerdictsRef.current.get(deviceId)?.kind === 'disabled';
+        // Keep the explicit refusal across the new connection generation, but
+        // publish the availability mutation through the same helper as every
+        // other transport-side transition. A direct ref write here would leave
+        // mounted consumers without the version bump that makes the refusal
+        // visible.
+        publishPresenceAvailabilityMutation(deviceId, (availabilityByDevice) => {
+          if (keepDisabled) {
+            availabilityByDevice.set(deviceId, false);
+            presencePendingRecoveryDeviceIdsRef.current.delete(deviceId);
+          } else {
+            availabilityByDevice.delete(deviceId);
+          }
+        });
+        if (!keepDisabled) presenceUnavailableVerdictsRef.current.delete(deviceId);
       }
       for (const deviceId of staleUnavailableDeviceIds) {
         extendPresenceWipeTimerFloor(
@@ -1152,17 +1694,20 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       }
       connectionEpochRef.current = ++nextDeviceLinkConnectionEpoch;
       setConnectionEpoch(connectionEpochRef.current);
-      resetRemoteProjectOrderPushFence();
-      suspendRemoteProjectAliases();
-      restorePendingReplyLinks(client);
-      void rehydrate();
+      restorePendingReplyLinks(client, false, routed);
+      for (const deviceId of connectionPeerIds(routed)) {
+        resetRemoteProjectOrderPushFence(deviceId);
+        suspendRemoteProjectAliases(deviceId);
+        void rehydrate(deviceId);
+      }
       // A new controller receives only presence deltas. Read the roster once so
       // an already-offline host is known even when opening directly into history.
       void readDeviceList().catch(() => undefined);
     });
-    const offPeerTransportReset = client.onPeerTransportReset(({ deviceId }) => {
+    const recoverPeerTransport = (deviceId: string) => {
       // 这是本地 ACK 超时，不是对端可达证据：只失效该 peer 的建链缓存和
       // 订阅 ACK，再排该 peer 恢复；presence、其它 peer 与共享 WSS 均不动。
+      // Agent-Net 会话断了又回来（sessionLinks 的 reopenLink）也走这里：链路断在上一条会话上，按同样的方式恢复这个 peer。
       resetRemoteProjectOrderPushFence(deviceId);
       suspendRemoteProjectAliases(deviceId);
       const shouldRecover = requestForcedPeerRecovery(client, deviceId);
@@ -1173,17 +1718,37 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         noteSessionLiveStreamsInterrupted,
       );
       if (shouldRecover) void rehydrate(deviceId);
-    });
-    const applyPresence = (snap: PresenceSnapshot) => {
+    };
+    recoverPeerOnNewSession = recoverPeerTransport;
+    const offPeerTransportReset = client.onPeerTransportReset(({ deviceId }) => recoverPeerTransport(deviceId));
+    const retainedOfflinePeers = new Set<string>();
+    type PresenceApplicationSource = 'ws' | 'roster' | 'synthetic';
+    const applyPresence = (snap: PresenceSnapshot, source: PresenceApplicationSource) => {
+      const previousAvailable = presenceAvailableByDeviceRef.current.get(snap.deviceId);
+      const wasDisabledVerdict = presenceUnavailableVerdictsRef.current.get(snap.deviceId)?.kind === 'disabled';
+      const offlineProjection = !snap.online;
+      // Relay presence and REST both mask remoteControlEnabled to false for offline
+      // routes; only an online snapshot can carry an explicit control-off.
+      const explicitControlOff = snap.remoteControlEnabled === false && !offlineProjection;
+      const retained = !snap.online && client.connectionFor(snap.deviceId).peekOfflineDirectPath(snap.deviceId);
+      const retainedControlEnabled = isScopedPeer(snap.deviceId) ? true
+        : explicitControlOff ? false
+        : offlineProjection ? previousAvailable !== false && !wasDisabledVerdict
+        : snap.remoteControlEnabled !== false;
+      const effectiveSnap: PresenceSnapshot = retained
+        ? { ...snap, online: true, remoteControlEnabled: retainedControlEnabled }
+        : explicitControlOff ? { ...snap, remoteControlEnabled: false } : snap;
+      if (retained) retainedOfflinePeers.add(snap.deviceId); else retainedOfflinePeers.delete(snap.deviceId);
       markPresenceAvailabilityEpoch(presenceAvailabilityEpochsRef.current, snap.deviceId);
       // presence 变化代表目标链路代际变化(offline / remote-disabled / 恢复都一样):
       // 上一代成功 link 不能跨代复用,下一次请求必须重新 link-open 确认。
-      openLinkInFlightRef.current.delete(snap.deviceId);
-      setLastPresenceSnapshot(snap);
+      if (!retained || explicitControlOff) openLinkInFlightRef.current.delete(snap.deviceId);
+      recordPresenceUpdate();
+      setLastPresenceSnapshot(effectiveSnap);
       setPresenceVersion((n) => n + 1);
       const presence = updatePresenceAvailability(
         presenceAvailableByDeviceRef.current,
-        snap,
+        effectiveSnap,
         presencePendingRecoveryDeviceIdsRef.current,
       );
       if (presence.available) {
@@ -1192,7 +1757,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         // Relay presence 是权威 availability verdict,普通目标应答不能推翻。
         suspendRemoteProjectAliases(snap.deviceId);
         presenceUnavailableVerdictsRef.current.set(snap.deviceId, {
-          kind: snap.online && !snap.remoteControlEnabled ? 'disabled' : 'presence',
+          kind: explicitControlOff || wasDisabledVerdict ? 'disabled' : 'presence',
           responseEvidenceEpoch: capturePresenceAvailabilityEpoch(
             remoteResponseEvidenceEpochs,
             snap.deviceId,
@@ -1206,18 +1771,22 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         // Relay 的权威 presence 已说明目标离线或关闭远控:此前 INVOKE_TIMEOUT
         // 只能视为这次可用性变化的下游症状,不再代表桌面 IPC/DB 卡死。立即清除
         // 响应性计数并翻代,让在途请求随后到达的 timeout 也无法重建误熔断。
-        // 清理响应性状态会触发 rehydrate,但 presence 仍是 unavailable 时该设备会被
-        // availablePlans 过滤,不再立即重放一批注定 DEVICE_OFFLINE 的请求。
         clearDeviceResponsivenessTrackingFor(snap.deviceId);
         // 订阅跟踪必须立即失效(不进宽限):桌面端断开可能已丢失订阅者状态,
         // 恢复后的 rehydrate 靠 topicsMissingRemoteAck 判断要不要重发 subscribe,
         // 跟踪不清会误判「已订阅」而跳过重订阅,push 流静默断掉。重订阅本身
         // 便宜且服务端幂等;需要宽限的只是下面会引起界面闪烁的缓存清理。
         remoteSubscribedTopicsRef.current.delete(snap.deviceId);
-        if (snap.online && !snap.remoteControlEnabled) {
-          // 用户在桌面端显式关闭了远控:立即清,镜像不该多留一秒
+        if (explicitControlOff) {
+          // 明确关闭远控:目录、在途刷新与镜像一起立即收口。
+          catalogRefresh.cancel(snap.deviceId);
           clearOnePresenceWipeTimer(wipeTimers, snap.deviceId);
           wipeUnavailableDeviceMirror(snap.deviceId);
+          return;
+        }
+        if (wasDisabledVerdict) {
+          // REST 的 offline 投影不是新的控制关闭,也不是重新允许;保留原判定。
+          clearOnePresenceWipeTimer(wipeTimers, snap.deviceId);
           return;
         }
         // 桌面端离线:给一个短宽限。弱网下桌面端会反复闪断,每次都立即清空
@@ -1244,22 +1813,55 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       // (见 linkClose.ts 的具名 lift 入口)。
       if (presence.recovered) void rehydrate(snap.deviceId);
     };
-    const offPresence = client.onPresenceChanged(applyPresence);
+    const offPresence = client.onPresenceChanged((snap) => applyPresence(snap, 'ws'));
+    const offPeerPath = client.onPeerPathChanged(({ deviceId, path }) => {
+      setPresenceVersion(version => version + 1);
+      if (path !== 'relay') return;
+      if (!retainedOfflinePeers.has(deviceId)) {
+        if (canUsePeerData(client, deviceId)) return;
+        // The relay never reported this computer offline: the phone's own relay
+        // connection is down and its direct path just ended too. Handle it like
+        // every other peer of a disconnected relay (requests fail as transient
+        // NOT_CONNECTED and resume on reconnect) instead of declaring the
+        // computer offline, which would fail requests as DEVICE_OFFLINE, show it
+        // as offline and schedule its cached tasks for cleanup.
+        invalidatePeerWithoutRoute(deviceId);
+        pauseRecoveryWithoutRoute(client.connectionFor(deviceId));
+        return;
+      }
+      // The relay's offline verdict was on hold while the direct path carried
+      // data; with the path gone that verdict applies.
+      applyPresence({ deviceId, online: false, remoteControlEnabled: true,
+        deviceName: '', platform: '', appVersion: '', busy: false, lastSeenAt: Date.now() }, 'synthetic');
+      catalogRefresh.cancel(deviceId);
+      invalidatePeerLinkState(deviceId, openLinkInFlightRef.current,
+        remoteSubscribedTopicsRef.current, noteSessionLiveStreamsInterrupted);
+    });
     rosterConsumerRef.current = () => {
       const epoch = connectionEpochRef.current;
       const presenceEpoch = presenceAvailabilityEpochsRef.current.next;
       const responseEpoch = remoteResponseEvidenceEpochs.next;
       return (devices) => {
-        if (clientRef.current !== client || connectionEpochRef.current !== epoch || client.getStatus() !== 'online') return;
+        // A fresh roster row is current permission/control evidence even while
+        // signaling is reconnecting. Stale rows never reach this consumer, and
+        // explicit stop/teardown remains fenced by the client/epoch checks.
+        if (clientRef.current !== client || connectionEpochRef.current !== epoch || client.getStatus() === 'stopped') return;
         for (const device of devices) {
+          if (device.isSelf
+            || (presenceAvailabilityEpochsRef.current.byDevice.get(device.deviceId) ?? 0) > presenceEpoch) continue;
+          // An authoritative online row is fresh permission evidence; an offline
+          // row is only a directory projection and never clears the local gate.
+          if (device.online) {
+            if (device.remoteControlEnabled) client.noteRemoteControlEnabled(device.deviceId);
+            else client.noteRemoteControlDisabled(device.deviceId);
+          }
           const available = device.online && device.remoteControlEnabled;
           const disabled = device.online && !device.remoteControlEnabled;
           const wasDisabled = presenceUnavailableVerdictsRef.current.get(device.deviceId)?.kind === 'disabled';
-          if (device.isSelf || (presenceAvailableByDeviceRef.current.get(device.deviceId) === available && disabled === wasDisabled)
-            || (presenceAvailabilityEpochsRef.current.byDevice.get(device.deviceId) ?? 0) > presenceEpoch
+          if ((presenceAvailableByDeviceRef.current.get(device.deviceId) === available && disabled === wasDisabled)
             || (!device.online && (remoteResponseEvidenceEpochs.byDevice.get(device.deviceId) ?? 0) > responseEpoch)) continue;
           applyPresence({ ...device, deviceName: device.name, platform: device.platform ?? '',
-            appVersion: device.appVersion ?? '', lastSeenAt: Date.parse(device.lastSeenAt ?? '') || 0 });
+            appVersion: device.appVersion ?? '', lastSeenAt: Date.parse(device.lastSeenAt ?? '') || 0 }, 'roster');
         }
       };
     };
@@ -1329,6 +1931,14 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       onProjectAliasesChanged: (deviceId, ownerStamp) => refreshProjectAliasesForClient(client, deviceId, true, ownerStamp),
       onProviderChanged: (deviceId) => {
         catalogRefresh.notify(deviceId);
+      },
+      onProviderShareCatalogChanged: (deviceId) => {
+        // The host reports a received-share list/catalog change. This is a
+        // target-scoped freshness hint, never an authorization result.
+        setProviderShareCatalogVersions((versions) => ({
+          ...versions,
+          [deviceId]: (versions[deviceId] ?? 0) + 1,
+        }));
       },
       onAgentsChanged: (deviceId) => {
         for (const listener of remoteAgentRosterListeners) listener(deviceId);
@@ -1423,7 +2033,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         if (heavy.length === 0) continue;
         markRemoteTopicsUnsubscribed(remoteSubscribedTopicsRef.current, plan.deviceId, heavy);
         noteSessionLiveStreamsInterrupted(heavy);
-        if (client.getStatus() === 'online') {
+        if (client.connectionFor(plan.deviceId).getStatus() === 'online') {
           releases.push(sendUnsubscribe(client, plan.deviceId, heavy));
         }
       }
@@ -1433,17 +2043,24 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       isBackground: () => AppState.currentState === 'background',
       releaseTopics: releaseHeavyTopics,
       pendingTransitions: () => [...backgroundTransitions.current],
-      stop: () => client.stop(),
-      connect: () => client.connectNow('appstate-active', {
-        overrideCongestionCooldown: true,
-        keepInFlightAttempt: true,
-      }),
+      // 同一 client 的结果缓存跨后台保留；通知动作的 hold / reconnect 逻辑沿用主干。
+      stop: () => client.stop({ retainResultCache: true }),
+      isHeld: () => backgroundHoldsRef.current > 0,
+      // A tapped notification action is an explicit request too: it may leave the cooldown.
+      connect: (reason) => {
+        sessionLinks?.start();
+        client.connectAllNow(reason === 'hold' ? 'notification-action' : 'appstate-active', {
+          overrideCongestionCooldown: true,
+          keepInFlightAttempt: true,
+        });
+      },
       graceMs: BACKGROUND_STOP_GRACE_MS,
       releaseWaitMs: BACKGROUND_FINAL_UNSUBSCRIBE_WAIT_MS,
       suspendMs: BACKGROUND_SUSPEND_SUSPECT_MS,
       report: (event) => mobileDebugLog('debug', 'device-link', 'background lifecycle', event),
     });
-    noteAppLifecycleState(AppState.currentState);
+    backgroundConnectionRef.current = backgroundConnection;
+    if (AppState.currentState) noteAppLifecycleState(AppState.currentState);
     let refreshNetworkState = () => {};
     const sub = AppState.addEventListener('change', (next) => {
       // 先于下面的恢复动作记账:回前台后 rehydrate 新发的请求属于新生命周期。
@@ -1456,7 +2073,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         // 回前台立刻重连:绕开断线后遗留的指数退避计时器(可能 park 到 30s),
         // 让"打开 App → 打开会话"路径快速恢复在线,而不是干等退避。
         // overrideCongestionCooldown:用户显式回前台是拥塞冷却的合法豁免——
-        // 冷却默认只拦请求路径的 un-park(waitUntilOnline),不拦真人操作。
+        // waitUntilOnline 始终保留退避；这里由真人回前台的生命周期入口主动恢复。
         backgroundConnection.active();
         // A short background stay can preserve a socket whose route changed.
         // Replace a known old path; otherwise probe without the hint cooldown.
@@ -1467,23 +2084,35 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         // 快速切换(连接被宽限保住、始终 online)不会有 online 状态转换,这条显式
         // 补齐就是断档回填的唯一触发点;其余路径下它因 status 未 online 而空转。
         void rehydrate();
+        // A retained sessions ACK skips subscribe on short background returns.
+        // Its aliases were explicitly suspended; refresh once here, not for every new owner.
+        if (resumingFromBackground) {
+          for (const plan of registryRef.current.snapshot()) {
+            if (plan.topics.includes('sessions')) refreshProjectAliasesForClient(client, plan.deviceId);
+          }
+        }
       }
-      if (next === 'background') {
-        diagnostics.background();
-        backgroundReleaseInFlightRef.current = true;
-        backgroundReleaseGenerationRef.current += 1;
-        suspendRemoteProjectAliases();
-        // App 生命周期暂停全部恢复执行，但各 peer 状态仍彼此独立；回前台统一
-        // 重新排队，旧代请求的迟到结果不会创建重试。
-        peerRecoverySchedulerRef.current?.pause();
-        // 立即释放重量级 session:<id> 订阅(趁 socket 还活着、iOS 尚未挂起 JS):
-        // 被控桌面以「有人订阅该会话流」为防打扰信号压制手机系统推送,锁屏/切后台
-        // 后若订阅残留(宽限窗、挂起延迟最长可拖到 server 60s 空闲清扫),恰好在
-        // 用户离开的瞬间完成的任务就永远收不到通知。只动远端订阅与 ack 簿记,
-        // registry 所有权保留 —— 回前台的 rehydrate 会因 ack 已清而重新订阅。
-        backgroundConnection.background();
-      }
+      if (next === 'background') enterBackground();
     });
+    function enterBackground() {
+      diagnostics.background();
+      backgroundReleaseInFlightRef.current = true;
+      backgroundReleaseGenerationRef.current += 1;
+      suspendRemoteProjectAliases();
+      // App 生命周期暂停全部恢复执行，但各 peer 状态仍彼此独立；回前台统一
+      // 重新排队，旧代请求的迟到结果不会创建重试。
+      peerRecoverySchedulerRef.current?.pause();
+      // 立即释放重量级 session:<id> 订阅(趁 socket 还活着、iOS 尚未挂起 JS):
+      // 被控桌面以「有人订阅该会话流」为防打扰信号压制手机系统推送,锁屏/切后台
+      // 后若订阅残留(宽限窗、挂起延迟最长可拖到 server 60s 空闲清扫),恰好在
+      // 用户离开的瞬间完成的任务就永远收不到通知。只动远端订阅与 ack 簿记,
+      // registry 所有权保留 —— 回前台的 rehydrate 会因 ack 已清而重新订阅。
+      backgroundConnection.background();
+    }
+    // 通知按钮会让 App 直接在后台启动,这时不会再收到「进入后台」事件。照后台处理:不订阅、
+    // 不恢复，宽限后断开(有按钮操作在进行时由它保持到做完)，否则连接会一直留在后台，
+    // 电脑还会以为手机在看任务而压掉推送。回到前台时由上面的 active 分支照常恢复。
+    if (AppState.currentState === 'background') enterBackground();
 
     // Loaded inside the authenticated lifecycle; old native builds keep their
     // existing heartbeat fallback if the optional runtime module is unavailable.
@@ -1546,6 +2175,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       networkSubscription?.remove();
       localNetworkStore.update();
       sub.remove();
+      if (backgroundConnectionRef.current === backgroundConnection) backgroundConnectionRef.current = null;
       backgroundConnection.dispose();
       backgroundTransitions.current.clear();
       offUnresponsive();
@@ -1554,10 +2184,17 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       offFrame();
       catalogRefresh.dispose();
       offPresence();
+      offPeerPath();
       offPeerTransportReset();
       offStatus();
+      offScopedStatus(); stopSharing();
+      offCrossAccountStatus();
+      offCrossAccountIssue();
       offIssue();
       client.stop();
+      useMobileAgentNetSessions(null);
+      offFileStreams();
+      if (routedRef.current === routed) routedRef.current = null;
       rosterConsumerRef.current = null;
       rosterRequestRef.current = null;
       peerRecoverySchedulerRef.current?.clear();
@@ -1575,9 +2212,11 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     };
   }, [
     auth.accountGeneration,
+    connectionEpochFor,
     auth.getAccessToken,
     auth.isAuthenticated,
     relayRouteGeneration,
+    agentNetPreferences.generation,
     clearPerAccountDeviceLinkState,
     clearOnePresenceWipeTimer,
     clearAllPresenceWipeTimers,
@@ -1611,7 +2250,36 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     [sendOpenLinkOnce],
   );
 
+  const recoverWaitingPeer = useCallback(async (deviceId: string): Promise<boolean> => {
+    const client = clientRef.current;
+    if (!client || AppState.currentState !== 'active' || !canUsePeerData(client, deviceId)
+      || isScopedPeer(deviceId) || revokedDevicesStore.has(deviceId)
+      || presenceAvailableByDeviceRef.current.get(deviceId) !== true
+      || rehydrateSuppressedDeviceIds.has(deviceId)
+      || !hasOutboundPeerRecoveryIntent(client, deviceId)) return false;
+    if (unresponsiveDevicesStore.has(deviceId)) {
+      await rehydrateWithClient(client, deviceId);
+      return false;
+    }
+    // Join a pending handshake or replace the settled one. The outbox alone owns delivery.
+    await sendOpenLinkOnce(client, deviceId, false, true).request;
+    return true;
+  }, [hasOutboundPeerRecoveryIntent, rehydrateWithClient, sendOpenLinkOnce]);
+
+  const userCloseListeners = useRef(new Map<string, Set<() => void>>());
+  const onUserClose = useCallback((deviceId: string, listener: () => void) => {
+    const listeners = userCloseListeners.current.get(deviceId) ?? new Set<() => void>();
+    userCloseListeners.current.set(deviceId, listeners);
+    listeners.add(listener);
+    return () => {
+      listeners.delete(listener);
+      if (!listeners.size) userCloseListeners.current.delete(deviceId);
+    };
+  }, []);
+  const getUserCloseEpoch = useCallback((deviceId: string) => userCloseEpochsRef.current.get(deviceId) ?? 0, []);
   const closeLink = useCallback((deviceId: string) => {
+    userCloseEpochsRef.current.set(deviceId, (userCloseEpochsRef.current.get(deviceId) ?? 0) + 1);
+    for (const listener of userCloseListeners.current.get(deviceId) ?? []) listener();
     resetMobilePeer(deviceId);
     registryRef.current.untrackOpenLink(deviceId);
     forcedPeerRecoveryIntentRef.current.cancel(deviceId);
@@ -1623,7 +2291,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     deviceId: string,
     channel: string,
     args: unknown[] = [],
-    opts?: { preSend?: () => void; background?: boolean },
+    opts?: { preSend?: () => void; noResultCache?: boolean; background?: boolean },
   ) => {
     const preSend = () => {
       if (presenceAvailableByDeviceRef.current.get(deviceId) === false) {
@@ -1634,14 +2302,14 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     };
     preSend();
     const client = requireClient(clientRef.current);
-    const result = await invokeWithHistoryViewCapability(
+    const send = () => invokeWithHistoryViewCapability(
       channel,
       async () => {
         // Reuse the existing peer-scoped handshake cache and its invalidation.
         // A late accept from an obsolete link must not declare a downgrade.
         const tracked = sendOpenLinkOnce(client, deviceId);
         const accepted = await tracked.request;
-        if (clientRef.current !== client || openLinkInFlightRef.current.get(deviceId) !== tracked) {
+        if (clientRef.current !== client || !isCurrentOpenLink(deviceId, tracked)) {
           throw new DeviceLinkError('NOT_CONNECTED', 'history link was superseded');
         }
         preSend();
@@ -1656,14 +2324,29 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
             return withAccessRevokedHandling(deviceId, async () => unwrapInvoke<T>(result, channel));
           }
         }
-        return sendInvokeWithAccessHandling<T>(client, deviceId, channel, args, { preSend, background: opts?.background });
+        // File cleanup is best effort over the existing link, as on Desktop: a late
+        // file answer must not reopen the link just to dispose its allocation.
+        if (channel === FILE_PEER_CHANNEL && (args[0] as { action?: unknown } | null)?.action === 'close') {
+          if (client.needsLinkRecovery(deviceId)) {
+            throw new DeviceLinkError('LINK_NOT_OPEN', 'file cleanup requires an existing link');
+          }
+        } else {
+          await recoverLinkBeforeSend(client, deviceId, preSend);
+        }
+        return sendInvokeWithAccessHandling<T>(client, deviceId, channel, args, { preSend, background: opts?.background, noResultCache: opts?.noResultCache });
       },
     );
+    const result = isLowPriorityRead(channel)
+      // A caller's own preSend can cancel only its own read, so it must not share one.
+      ? await lowPriorityReadGateFor(client).run(
+        opts?.preSend ? null : JSON.stringify([deviceId, channel, args, opts?.background ?? null]), send,
+      )
+      : await send();
     // Existing list refreshes also reconcile optional project display names. This read
     // is single-flight and never changes task-list success or connection recovery.
     if (channel === 'local-db:sessions:list') refreshProjectAliasesForClient(client, deviceId);
     return result;
-  }, [refreshProjectAliasesForClient, sendOpenLinkOnce]);
+  }, [refreshProjectAliasesForClient, sendOpenLinkOnce, recoverLinkBeforeSend, isCurrentOpenLink]);
 
   const subscribe = useCallback(async (owner: string, deviceId: string, topics: string[]) => {
     topics = sharedTaskTopics(deviceId, topics);
@@ -1689,37 +2372,61 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     const staleUnheld = topics.filter((topic) =>
       isDeviceLinkTopic(topic) && !releasedSet.has(topic) && !registryRef.current.hasTopic(deviceId, topic));
     const toSend = normalizeDeviceLinkTopics([...new Set([...released, ...staleUnheld])]);
-    markRemoteTopicsUnsubscribed(remoteSubscribedTopicsRef.current, deviceId, toSend);
+    // A pending first ACK has no table entry yet. Fence it before releasing
+    // the last owner so a replacement cannot reuse the obsolete acquisition.
+    remoteSubscribedTopicsRef.current.release(deviceId, released);
     suspendRemoteProjectAliasesForReleasedTopics(deviceId, toSend);
     noteSessionLiveStreamsInterrupted(toSend);
     if (toSend.length === 0 || presenceAvailableByDeviceRef.current.get(deviceId) === false) return;
-    await sendUnsubscribe(
-      requireClient(clientRef.current),
-      deviceId,
-      toSend,
-      (topic) => presenceAvailableByDeviceRef.current.get(deviceId) !== false && !registryRef.current.hasTopic(deviceId, topic),
-    );
-  }, []);
+    const client = requireClient(clientRef.current);
+    await releaseTrackedSubscription({
+      share: { scope: client, deviceId }, topics: toSend,
+      generation: topic => `${backgroundReleaseGenerationRef.current}:${connectionEpochFor(deviceId)}:${remoteSubscribedTopicsRef.current.generation(deviceId, [topic])}`,
+      send: topics => sendUnsubscribe(client, deviceId, topics,
+        topic => clientRef.current === client && presenceAvailableByDeviceRef.current.get(deviceId) !== false && !registryRef.current.hasTopic(deviceId, topic)),
+    });
+  }, [connectionEpochFor]);
 
   const getPresenceAvailability = useCallback((deviceId: string): boolean | null => (
     isSharedTaskPeer(deviceId) ? clientRef.current?.isLinkReady(deviceId) ?? false
       : presenceAvailableByDeviceRef.current.get(deviceId) ?? null
   ), []);
 
+  const sharedTaskConnection = useMemo<DeviceLinkConnectionState>(() => (
+    clientRef.current && clientRef.current.crossAccountConnection() !== clientRef.current
+      ? crossAccountState : { status, connectionEpoch, connectionIssue }
+  ), [crossAccountState, status, connectionEpoch, connectionIssue]);
+  const getConnectionState = useCallback((deviceId: string): DeviceLinkConnectionState => {
+    const client = clientRef.current, source = client?.connectionFor(deviceId);
+    const state = source && source !== client ? { status: source.getStatus(), connectionEpoch: connectionEpochFor(deviceId), connectionIssue: source.getConnectionIssue() }
+      : { status, connectionEpoch, connectionIssue };
+    const retained = clientRef.current?.connectionFor(deviceId).peekOfflineDirectPath(deviceId) === true
+      && !revokedDevicesStore.has(deviceId) && presenceAvailableByDeviceRef.current.get(deviceId) !== false;
+    return retained ? { ...state, status: 'online', connectionIssue: null, signalingStatus: state.status, usingRetainedDirect: true } : state;
+  }, [connectionEpochFor, status, connectionEpoch, connectionIssue, presenceVersion]);
+
   const value = useMemo<DeviceLinkContextValue>(() => ({
     beginBackgroundTransition,
+    holdBackgroundConnection,
     status,
     sharedTaskAvailable,
+    sharedTaskConnection,
+    getConnectionState,
     recoveringDeviceIds,
     connectionIssue,
     presenceVersion,
     connectionEpoch,
+    rosterVersion,
+    providerShareCatalogVersions,
     lastPresenceSnapshot,
     getSubscriptionIdentity: (deviceId, topics) => remoteSubscribedTopicsRef.current.identity(deviceId, sharedTaskTopics(deviceId, topics)),
     getPresenceAvailability,
     readDeviceList,
     openLink,
+    recoverWaitingPeer,
     reopenLink,
+    getUserCloseEpoch,
+    onUserClose,
     closeLink,
     invoke,
     subscribe,
@@ -1728,19 +2435,27 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     onRemoteResourceChanged: subscribeRemoteResourceChanged,
   }), [
     beginBackgroundTransition,
+    holdBackgroundConnection,
+    getUserCloseEpoch,
+    onUserClose,
     closeLink,
     recoveringDeviceIds,
     connectionEpoch,
     connectionIssue,
+    rosterVersion,
+    providerShareCatalogVersions,
     getPresenceAvailability,
     readDeviceList,
     invoke,
     lastPresenceSnapshot,
     openLink,
+    recoverWaitingPeer,
     reopenLink,
     presenceVersion,
     status,
     sharedTaskAvailable,
+    sharedTaskConnection,
+    getConnectionState,
     subscribe,
     unsubscribe,
     subscribeRemoteAgentRoster,
@@ -1748,9 +2463,14 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     subscriptionVersion,
   ]);
 
+  const retainedDirectActive = [...new Set([...registryRef.current.deviceIds(),
+    ...openLinkInFlightRef.current.keys(), ...remoteSubscribedTopicsRef.current.keys()])]
+    .some(deviceId => !revokedDevicesStore.has(deviceId)
+      && presenceAvailableByDeviceRef.current.get(deviceId) !== false
+      && clientRef.current?.connectionFor(deviceId).peekOfflineDirectPath(deviceId));
   return <DeviceLinkContext.Provider value={value}>
-    <DirectLinkTransport key={`${auth.accountGeneration}:${connectionEpoch}`} bridge={directBridge}
-      owner={`${auth.accountGeneration}:${connectionEpoch}`} enabled={auth.isAuthenticated && status === 'online'} />
+    <DirectLinkTransport key={`${auth.accountGeneration}:${relayRouteGeneration}:${agentNetPreferences.generation}`} bridge={directBridge}
+      owner={`${auth.accountGeneration}:${relayRouteGeneration}`} enabled={auth.isAuthenticated && mobileAgentNetAllowsLegacy() && (status === 'online' || retainedDirectActive)} />
     {children}
   </DeviceLinkContext.Provider>;
 }
@@ -1773,6 +2493,7 @@ type RouteFrameHandlers = {
   onAccessRevoked?: (deviceId: string) => void;
   onLinkClosed?: (deviceId: string, reason?: string) => void;
   onProviderChanged?: (deviceId: string) => void;
+  onProviderShareCatalogChanged?: (deviceId: string) => void;
   onAgentsChanged?: (deviceId: string) => void;
   onProjectAliasesChanged?: (deviceId: string, ownerStamp: unknown) => void;
 };
@@ -1805,6 +2526,10 @@ export function routeFrame(env: Envelope, handlers: RouteFrameHandlers = {}): vo
   if (env.kind !== 'push' || !env.src) return;
   const rawPush = env.payload as PushPayload;
   const push = { ...rawPush, payload: decodeModelSpeedPayload(rawPush.channel, rawPush.payload) };
+  if (push.channel === TASK_ACTIVITY_SNAPSHOT) {
+    if (!isScopedPeer(env.src)) receiveHostTaskActivity(env.src, push.payload);
+    return;
+  }
   recordDeviceLinkPush(push.channel, push.payload);
   dispatchCredentialSwitchOutcome(env.src, push.channel, push.payload);
   if (push.channel === 'local-db:task-tags:changed') {
@@ -1815,6 +2540,10 @@ export function routeFrame(env: Envelope, handlers: RouteFrameHandlers = {}): vo
     );
     for (const listener of remoteTaskTagsChangedListeners)
       listener(env.src, (push.payload as { tags?: unknown })?.tags);
+  }
+  if (push.channel === 'subscription-accounts:changed') {
+    for (const listener of remoteSubscriptionAccountsChangedListeners) listener(env.src);
+    return;
   }
   if (push.channel === 'maker:model-favorites:changed') {
     for (const listener of remoteFavoritesChangedListeners) listener(env.src);
@@ -1829,6 +2558,10 @@ export function routeFrame(env: Envelope, handlers: RouteFrameHandlers = {}): vo
     handlers.onProviderChanged?.(env.src);
     return;
   }
+  if (push.channel === 'maker:model-catalog:changed') {
+    if (!isScopedPeer(env.src)) handlers.onProviderShareCatalogChanged?.(env.src);
+    return;
+  }
   if (push.channel === 'maker:agents:changed') {
     handlers.onAgentsChanged?.(env.src);
     return;
@@ -1839,6 +2572,7 @@ export function routeFrame(env: Envelope, handlers: RouteFrameHandlers = {}): vo
     for (const listener of remoteOrcaWorkerChangedListeners) listener(env.src, leadSessionId);
     return;
   }
+  // Only older hosts still push these (V1 background tasks and teammate messages); newer ones never do.
   if (push.channel === 'maker:bot-delegation:changed' || push.channel === 'maker:bot-direct-message:changed') {
     for (const listener of remoteBotChangedListeners) listener(env.src, push.channel, push.payload);
     return;
@@ -1899,7 +2633,7 @@ export function routeFrame(env: Envelope, handlers: RouteFrameHandlers = {}): vo
 }
 
 async function rebuildSessionSnapshot(
-  client: DeviceLinkClient,
+  client: PeerLinks,
   deviceId: string,
   sessionId: string,
   connectionEpoch: number,
@@ -2094,15 +2828,21 @@ async function rebuildSessionSnapshot(
 // 而不是把单次 client.invoke park 在退避 gap 里干等十几秒。
 const CONNECT_READY_TIMEOUT_MS = 1_500;
 
-// 发请求前确保连接就绪:online 直接放行;否则促成立即重连并有界等待上线,
-// 超时抛 NOT_CONNECTED(transient)交由上层重试 —— 把"等整个退避 gap"压成"等一次重连"。
-function ensureOnlineForRequest(client: DeviceLinkClient, deviceId?: string): Promise<void> {
-  if (client.getStatus() === 'online' || (deviceId && client.hasOfflineDirectPath(deviceId))) return Promise.resolve();
-  return client.waitUntilOnline(CONNECT_READY_TIMEOUT_MS);
+function canUsePeerData(client: PeerLinks, deviceId: string): boolean {
+  const connection = client.connectionFor(deviceId);
+  return connection.getStatus() === 'online' || connection.hasOfflineDirectPath(deviceId);
+}
+
+// 发请求前确保连接就绪:online 直接放行;否则在自己的预算内共享既有退避与握手。
+// 超时抛 NOT_CONNECTED(transient)交由上层重试，不提前建连或重置共享连接的退避。
+function ensureOnlineForRequest(client: PeerLinks, deviceId?: string): Promise<void> {
+  const connection = deviceId ? client.connectionFor(deviceId) : client;
+  if (connection.getStatus() === 'online' || (deviceId && connection.hasOfflineDirectPath(deviceId))) return Promise.resolve();
+  return connection.waitUntilOnline(CONNECT_READY_TIMEOUT_MS);
 }
 
 function sendOpenLinkWithAccessHandling(
-  client: DeviceLinkClient,
+  client: PeerLinks,
   deviceId: string,
   allowProbe = false,
   preSend?: () => void,
@@ -2112,7 +2852,7 @@ function sendOpenLinkWithAccessHandling(
 }
 
 async function sendOpenLink(
-  client: DeviceLinkClient,
+  client: PeerLinks,
   deviceId: string,
   allowProbe = false,
   preSend?: () => void,
@@ -2124,7 +2864,7 @@ async function sendOpenLink(
   // The provider's preSend guard limits this exemption to current pending work.
   const slot = pendingReplyRecovery ? null : acquireDeviceSendSlot(deviceId, undefined, { allowProbe });
   try {
-    await ensureOnlineForRequest(client);
+    await ensureOnlineForRequest(client, deviceId);
   } catch (err) {
     if (slot) settleDeviceSend(deviceId, slot, 'inconclusive');
     throw err;
@@ -2160,6 +2900,7 @@ async function sendOpenLink(
 interface SendInvokeOptions {
   preSend?: () => void;
   background?: boolean;
+  noResultCache?: boolean;
   /** 同一轮明确 fan-out 共享;普通独立请求省略。 */
   responsivenessCohort?: number;
   /** 仅主动的代表性 half-open 探测允许领取 probe 席位。 */
@@ -2167,7 +2908,7 @@ interface SendInvokeOptions {
 }
 
 function sendInvokeWithAccessHandling<T>(
-  client: DeviceLinkClient,
+  client: PeerLinks,
   deviceId: string,
   channel: string,
   args: unknown[],
@@ -2177,7 +2918,7 @@ function sendInvokeWithAccessHandling<T>(
 }
 
 async function sendInvoke<T>(
-  client: DeviceLinkClient,
+  client: PeerLinks,
   deviceId: string,
   channel: string,
   args: unknown[],
@@ -2210,7 +2951,7 @@ async function sendInvoke<T>(
       // 长通道(media / 文件搜索 / schedule 就绪窗口等)按 invokeTimeouts 解析
       // 规则保留更长窗口,避免 mobile 收紧的默认 15s 误伤合法慢操作。
       resolveMobileInvokeTimeoutMs(channel, args),
-      { background: opts?.background, preSend: () => {
+      { background: opts?.background, noResultCache: opts?.noResultCache, preSend: () => {
         try {
           opts?.preSend?.();
         } catch (err) {
@@ -2236,7 +2977,7 @@ async function sendInvoke<T>(
 }
 
 async function sendSubscribeWithAccessHandling(
-  client: DeviceLinkClient,
+  client: PeerLinks,
   deviceId: string,
   topics: readonly string[],
   shouldSend?: () => boolean,
@@ -2265,7 +3006,7 @@ async function sendSubscribeWithAccessHandling(
 }
 
 async function sendSubscribe(
-  client: DeviceLinkClient,
+  client: PeerLinks,
   deviceId: string,
   topics: readonly string[],
   shouldSend?: () => boolean,
@@ -2311,7 +3052,7 @@ async function sendSubscribe(
 }
 
 async function sendUnsubscribe(
-  client: DeviceLinkClient,
+  client: PeerLinks,
   deviceId: string,
   topics: readonly string[],
   shouldSendTopic?: (topic: string) => boolean,
@@ -2355,7 +3096,7 @@ function unwrapInvoke<T = unknown>(result: InvokeResultPayload, channel?: string
   throw new DeviceLinkError(result.error.code, result.error.message);
 }
 
-function requireClient(client: DeviceLinkClient | null): DeviceLinkClient {
+function requireClient(client: PeerLinks | null): PeerLinks {
   if (!client) throw new DeviceLinkError('NOT_CONNECTED', 'device-link client is not ready');
   return client;
 }
@@ -2456,8 +3197,9 @@ function logMobileDeviceLink(level: MobileDeviceLinkLogLevel, args: unknown[]): 
   console.debug('[device-link]', ...args);
 }
 
-export function useDeviceLink(): DeviceLinkContextValue {
+export function useDeviceLink(deviceId?: string): DeviceLinkContextValue {
   const ctx = useContext(DeviceLinkContext);
   if (!ctx) throw new Error('useDeviceLink must be used inside DeviceLinkProvider');
-  return ctx;
+  return useMemo(() => deviceId && ctx.getConnectionState
+    ? { ...ctx, ...ctx.getConnectionState(deviceId) } : ctx, [ctx, deviceId]);
 }

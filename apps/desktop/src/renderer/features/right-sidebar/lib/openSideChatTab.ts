@@ -1,7 +1,15 @@
 import { makerApiForSticky } from '@/lib/makerTransport';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
-import { appendQuoteToDraft, saveDraft, clearDraft } from '@/lib/composerDraftStore';
+import { sessionsStore } from '@/lib/sessionsStore';
+import {
+  appendQuoteToDraft,
+  clearDraft,
+  draftHasContent,
+  flushDraft,
+  getDraft,
+  saveDraft,
+} from '@/lib/composerDraftStore';
 import type { AttachedFile } from '@/lib/fileTypes';
 import { textToTiptapDoc } from '@/components/chat/useForkAtMessage';
 import { setStatus } from '@/lib/sessionService';
@@ -10,14 +18,36 @@ import i18n from '@/i18n';
 import { extractIpcError } from '@/utils/ipcError';
 import { createLogger } from '@/lib/logger';
 import { createCoalescedRefresh } from '@/lib/coalescedRefresh';
-import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
+import {
+  getDataOwnerGeneration,
+  isDataOwnerGenerationCurrent,
+  isDataOwnerPushCurrent,
+  type DataOwnerGeneration,
+} from '@/contexts/dataOwnerGeneration';
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { isSharedTaskPeer, remoteAgentErrorCode } from '@cindy/device-link';
 import type { Session } from '@/lib/ccAgent.types';
-import { addTab, closeTab, ensureHydrated, getBucket, setActiveTab, subscribe } from '../store';
+import { readSessionBatch } from '@/lib/sessionBatchRead';
+import { standardSessionRoute } from '@/lib/orcaSessionIdentity';
+import type { NavigateFunction } from 'react-router-dom';
+import { addTab, closeTab, ensureHydrated, getBucket, patchTabState, setActiveTab, subscribe } from '../store';
 import { mergeSidebarWindowBack } from './mergeSidebarWindowBack';
 import { requestRightSidebarVisibility } from './sidebarCommands';
-import { setTabGroup, type TabGroupId } from '../tabGroups';
+import type { TabGroupId } from '../tabGroups';
+import { hydrateSideChatState } from '../plugins/side-chat/state';
+import {
+  buildPreviewSideChatSession,
+  cancelPendingSideChat,
+  createPendingSideChatDraftKey,
+  failPendingSideChat,
+  getPendingSideChat,
+  hasInFlightSideChatForParent,
+  isChildClaimedByPendingSideChat,
+  markPendingSideChatRetrying,
+  registerPendingSideChat,
+  removePendingSideChat,
+  resolvePendingSideChat,
+} from '../plugins/side-chat/pendingSideChat';
 
 export interface SideChatTabPlacement {
   groupId?: TabGroupId;
@@ -26,17 +56,178 @@ export interface SideChatTabPlacement {
 
 const log = createLogger('side-chat');
 const restoring = new Map<string, { revision: number; schedule: ReturnType<typeof createCoalescedRefresh<void>> }>();
+/** Parents whose branch restore arrived while an optimistic creation was in flight. */
+const deferredRestores = new Set<string>();
+
+function resolveLocalParentSession(sessionId: string, deviceId: string | null): Session | null {
+  if (deviceId) {
+    const remote = remoteProjectsStore.getDeviceSessions?.(deviceId)?.find(row => row.id === sessionId);
+    if (remote) return remote;
+  }
+  return sessionsStore.findById?.(sessionId) ?? null;
+}
+
+function formatSideChatOpenError(error: unknown): string {
+  const code = extractIpcError(error)?.code;
+  const remoteCode = remoteAgentErrorCode(error instanceof Error ? error.message : String(error));
+  log.warn('open failed', { code, remoteCode });
+  const key = code === 'NO_PRIOR_ASSISTANT' ? 'notReady'
+    : code === 'UNSUPPORTED_CAPABILITY' ? 'unsupported'
+    : code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED' ? 'updateHost' : 'failed';
+  return key === 'failed' && remoteCode
+    ? i18n.t(`chat.remoteError.${remoteCode}`, { defaultValue: i18n.t('chat.sideChat.failed') })
+    : i18n.t(`chat.sideChat.${key}`);
+}
+
+async function deleteOrphanSideChat(
+  childId: string,
+  deviceId: string | null,
+  owner: DataOwnerGeneration,
+): Promise<void> {
+  if (!isDataOwnerGenerationCurrent(owner)) return;
+  await setStatus(childId, 'deleted', deviceId ? { kind: 'device-link', deviceId } : { kind: 'local' }, undefined, 'side-chat')
+    .catch(err => log.warn('orphan side chat cleanup failed', { childId, err }));
+  if (deviceId && isDataOwnerGenerationCurrent(owner)) {
+    remoteProjectsStore.applyPatch(deviceId, childId, { status: 'deleted' });
+  }
+}
+
+function flushDeferredRestore(parentSessionId: string, owner: DataOwnerGeneration): void {
+  if (!deferredRestores.has(parentSessionId)) return;
+  if (!isDataOwnerGenerationCurrent(owner) || hasInFlightSideChatForParent(parentSessionId)) return;
+  deferredRestores.delete(parentSessionId);
+  void restoreSideChatTabs(parentSessionId).catch(error => {
+    if (isDataOwnerGenerationCurrent(owner)) {
+      log.warn('deferred side chat recovery unavailable', { code: extractIpcError(error)?.code });
+    }
+  });
+}
+
+function settlePendingSideChatCreation(
+  sessionId: string,
+  tabId: string,
+  draftKey: string,
+  deviceId: string | null,
+  owner: DataOwnerGeneration,
+  creationPromise: Promise<Session>,
+): void {
+  void creationPromise.then(
+    async (child) => {
+      const tabAcceptsChild = () => {
+        const pending = getPendingSideChat(tabId);
+        return pending?.status === 'creating' && getBucket(sessionId).tabs.some(tab => tab.id === tabId);
+      };
+      const discardUnclaimedChild = async () => {
+        removePendingSideChat(tabId);
+        await deleteOrphanSideChat(child.id, deviceId, owner);
+        flushDeferredRestore(sessionId, owner);
+      };
+      if (!isDataOwnerGenerationCurrent(owner)) return;
+      if (!tabAcceptsChild()) return discardUnclaimedChild();
+      if (deviceId) {
+        remoteProjectsStore.pinSessionOrigin(deviceId, child.id);
+        remoteProjectsStore.mergeDeviceSessions(deviceId, remoteProjectsStore.getDeviceName(deviceId) ?? '', [child]);
+      }
+      // If a creation broadcast restored a separate tab before we bound this one,
+      // remove the duplicate and keep the tab the user is already typing in.
+      const duplicate = getBucket(sessionId).tabs.find(tab => tab.id !== tabId && tab.kind === 'side-chat'
+        && (tab.state as { sessionId?: string } | null)?.sessionId === child.id);
+      if (duplicate) {
+        await closeTab(sessionId, duplicate.id, { skipBeforeClose: true }).catch(() => undefined);
+      }
+      if (!isDataOwnerGenerationCurrent(owner)) return;
+      if (!tabAcceptsChild()) return discardUnclaimedChild();
+      let bindFailure: { error: unknown } | undefined;
+      try {
+        await patchTabState(sessionId, tabId, () => ({ sessionId: child.id, deviceId }));
+      } catch (error) {
+        bindFailure = { error };
+      }
+      if (!isDataOwnerGenerationCurrent(owner)) return;
+      if (!tabAcceptsChild()) return discardUnclaimedChild();
+      if (bindFailure) {
+        const { error } = bindFailure;
+        log.warn('side chat tab bind failed', { sessionId, tabId, childId: child.id, error });
+        const message = formatSideChatOpenError(error);
+        failPendingSideChat(tabId, message, child);
+        toast.error(message);
+      } else {
+        resolvePendingSideChat(tabId, child);
+      }
+      flushDeferredRestore(sessionId, owner);
+    },
+    async (error) => {
+      if (!isDataOwnerGenerationCurrent(owner)) return;
+      const pending = getPendingSideChat(tabId);
+      const tabStillOpen = getBucket(sessionId).tabs.some(tab => tab.id === tabId);
+      if (!pending || pending.status === 'cancelled' || !tabStillOpen) {
+        removePendingSideChat(tabId);
+        flushDeferredRestore(sessionId, owner);
+        return;
+      }
+      const message = formatSideChatOpenError(error);
+      toast.error(message);
+      flushDraft(draftKey);
+      const hasUserContent = draftHasContent(getDraft(draftKey)) || pending.hasQueuedSend;
+      if (hasUserContent) {
+        failPendingSideChat(tabId, message);
+      } else {
+        clearDraft(draftKey);
+        removePendingSideChat(tabId);
+        await closeTab(sessionId, tabId, { skipBeforeClose: true }).catch(() => undefined);
+      }
+      flushDeferredRestore(sessionId, owner);
+    },
+  );
+}
+
+/** Retry a failed optimistic side-chat creation in place without losing the user's draft. */
+export function retryPendingSideChatCreation(parentSessionId: string, tabId: string): boolean {
+  const pending = getPendingSideChat(tabId);
+  if (!pending || pending.parentSessionId !== parentSessionId || pending.status !== 'failed') return false;
+  const owner = getDataOwnerGeneration();
+  markPendingSideChatRetrying(tabId);
+  const creationPromise = pending.childSession
+    ? Promise.resolve(pending.childSession)
+    : makerApiForSticky(parentSessionId).createSideChat(parentSessionId);
+  settlePendingSideChatCreation(parentSessionId, tabId, pending.draftKey, pending.deviceId, owner, creationPromise);
+  return true;
+}
+
+export type SideChatUnavailableKey =
+  | 'chat.sideChat.sharedTaskUnavailable'
+  | 'chat.sideChat.mainTaskOnly'
+  | 'chat.sideChat.archivedTask'
+  | 'chat.sideChat.failed';
+
+/**
+ * Why this task cannot open a side chat, as an i18n key; null when it can.
+ * `deviceId` is the caller's resolved origin; the list snapshot may not carry it yet.
+ */
+export function sideChatUnavailableKey(
+  session: Session | null | undefined,
+  deviceId?: string | null,
+): SideChatUnavailableKey | null {
+  // The host never lets shared-task guests create or list branches (#9136).
+  if (isSharedTaskPeer(deviceId ?? '') || isSharedTaskPeer(session?.deviceLinkDeviceId ?? '')) {
+    return 'chat.sideChat.sharedTaskUnavailable';
+  }
+  if (!session) return 'chat.sideChat.failed';
+  if (['side-chat', 'bot', 'review'].includes(session.source ?? '')) return 'chat.sideChat.mainTaskOnly';
+  if (session.status === 'archived') return 'chat.sideChat.archivedTask';
+  return session.status === 'active' ? null : 'chat.sideChat.failed';
+}
 
 export function canOpenSideChat(session: Session | null | undefined): boolean {
-  return Boolean(session
-    && session.status === 'active'
-    && !['side-chat', 'bot', 'review'].includes(session.source ?? '')
-    && !isSharedTaskPeer(session.deviceLinkDeviceId ?? ''));
+  return sideChatUnavailableKey(session) === null;
 }
 
 /** Reconcile the host's branches on both the execution computer and its controllers. */
 export function restoreSideChatTabs(sessionId: string, isActive: () => boolean = () => true): Promise<void> {
   const deviceId = getStickySessionDeviceId(sessionId) ?? null;
+  // Shared-task guests own no branches; the host rejects their list reads. Check
+  // on every read: a watcher may start before the guest origin resolves.
+  if (isSharedTaskPeer(deviceId ?? '')) return Promise.resolve();
   const owner = getDataOwnerGeneration();
   const key = JSON.stringify([owner.dataOwnerId, owner.generation, deviceId, sessionId]);
   let entry = restoring.get(key);
@@ -61,16 +252,41 @@ export function restoreSideChatTabs(sessionId: string, isActive: () => boolean =
     if ((await window.electronAPI.rightSidebarWindow?.getState())?.detached) return;
     if (!valid()) return;
     const childIds = new Set(children.map(child => child.id));
-    for (const tab of previousTabs) {
-      if (!valid()) return;
+    const orphanedPendingTabs: string[] = [];
+    const unlisted = previousTabs.flatMap(tab => {
       const childId = (tab.state as { sessionId?: string } | null)?.sessionId;
-      if (childId && !childIds.has(childId)) {
-        // The host already removed this branch. Do not ask to delete it again.
-        await closeTab(sessionId, tab.id, { skipBeforeClose: true });
+      if (!childId) {
+        if (!getPendingSideChat(tab.id)) orphanedPendingTabs.push(tab.id);
+        return [];
       }
+      return !childIds.has(childId) ? [{ tabId: tab.id, childId }] : [];
+    });
+    for (const tabId of orphanedPendingTabs) {
+      if (!valid()) return;
+      await closeTab(sessionId, tabId, { skipBeforeClose: true });
+    }
+    // Linked tasks are absent from the recovery list. Check existing unmatched
+    // tabs for terminal status before dropping the stored label.
+    const details = new Map((await readSessionBatch(unlisted.map(tab => tab.childId), deviceId ?? undefined))
+      .map(result => [result.sessionId, result]));
+    for (const { tabId, childId } of unlisted) {
+      if (!valid()) return;
+      const result = details.get(childId);
+      if (result?.value?.status === 'deleted'
+        || (result?.value?.status === 'archived' && result.value.sideChatPromoted && result.value.orcaRole !== 'lead')
+        || result?.errorCode === 'NOT_FOUND') {
+        await closeTab(sessionId, tabId, { skipBeforeClose: true });
+      }
+    }
+    if (hasInFlightSideChatForParent(sessionId)) {
+      // Wait for the optimistic tab on this parent to claim its new child before
+      // adding unknown children from the host list, preventing duplicate tabs.
+      deferredRestores.add(sessionId);
+      return;
     }
     for (const child of children) {
       if (!valid()) return;
+      if (isChildClaimedByPendingSideChat(sessionId, child.id)) continue;
       if (getBucket(sessionId).tabs.some(tab => tab.kind === 'side-chat'
         && (tab.state as { sessionId?: string } | null)?.sessionId === child.id)) continue;
       if (deviceId) remoteProjectsStore.pinSessionOrigin(deviceId, child.id);
@@ -95,7 +311,8 @@ export function watchSideChatTabs(sessionId: string): () => void {
   };
   const changed = (patch?: Partial<Session>) => {
     // Usage/title/streaming changes cannot affect branch membership.
-    if (!patch || patch.status !== undefined || patch.parentSessionId !== undefined || patch.source !== undefined) refresh();
+    if (!patch || patch.status !== undefined || (patch.sideChatPromoted !== true
+      && (patch.parentSessionId !== undefined || patch.source !== undefined))) refresh();
   };
   const off = deviceId
     ? [window.electronAPI.deviceLink.onRemotePush((push, stamp) => {
@@ -129,61 +346,140 @@ export function watchSideChatTabs(sessionId: string): () => void {
   return () => { disposed = true; off.forEach(unsubscribe => unsubscribe()); };
 }
 
-/** Open an independent follow-up on the parent's execution host. */
+export function findLinkedSideChatTab(parentId: string, childId: string, deviceId: string | null) {
+  return getBucket(parentId).tabs.find(tab => {
+    if (tab.kind !== 'side-chat') return false;
+    const state = hydrateSideChatState(tab.state);
+    return state.sessionId === childId && state.deviceId === deviceId;
+  });
+}
+
+/** Return to the original parent's existing tab, or reopen that same task there. */
+export async function reopenLinkedSideChat(
+  parentId: string, childId: string, deviceId: string | null, navigate: NavigateFunction,
+): Promise<void> {
+  if (deviceId && isSharedTaskPeer(deviceId)) throw new Error('Side chat parent unavailable');
+  const owner = getDataOwnerGeneration();
+  const [parent, child] = await readSessionBatch([parentId, childId], deviceId ?? undefined);
+  if (!isDataOwnerGenerationCurrent(owner)) return;
+  if (parent?.value?.id !== parentId || parent.value.status === 'deleted' || parent.value.hiddenAt) {
+    throw new Error('Side chat parent unavailable');
+  }
+  if (child?.value?.id !== childId || child.value.parentSessionId !== parentId
+    || child.value.status !== 'active' || !child.value.sideChatPromoted) {
+    throw new Error('Linked follow-up is no longer active');
+  }
+  if ((await window.electronAPI.rightSidebarWindow?.getState())?.detached) {
+    if (!isDataOwnerGenerationCurrent(owner)) return;
+    await mergeSidebarWindowBack(parentId);
+  }
+  if (!isDataOwnerGenerationCurrent(owner)) return;
+  if (deviceId) {
+    remoteProjectsStore.pinSessionOrigin(deviceId, parentId);
+    remoteProjectsStore.pinSessionOrigin(deviceId, childId);
+  }
+  await ensureHydrated(parentId);
+  if (!isDataOwnerGenerationCurrent(owner)) return;
+  const existing = findLinkedSideChatTab(parentId, childId, deviceId);
+  if (existing) await setActiveTab(parentId, existing.id);
+  else await addTab(parentId, 'side-chat', { sessionId: childId, deviceId });
+  if (!isDataOwnerGenerationCurrent(owner)) return;
+  requestRightSidebarVisibility('open', { sessionId: parentId, userInitiated: false });
+  navigate(standardSessionRoute(parentId, deviceId));
+}
+
+/** Open an independent follow-up immediately while forking on the parent's execution host. */
 export async function openSideChatTab(
   sessionId: string,
   options: { prompt?: string; attachments?: AttachedFile[]; quote?: string; placement?: SideChatTabPlacement } = {},
 ): Promise<boolean> {
+  const deviceId = getStickySessionDeviceId(sessionId) ?? null;
+  // Shared-task guests cannot create branches on the host (#9136). Answer
+  // locally instead of sending a request the host will deny.
+  if (isSharedTaskPeer(deviceId ?? '')) {
+    toast.info(i18n.t('chat.sideChat.sharedTaskUnavailable'));
+    return false;
+  }
+  const parentSession = resolveLocalParentSession(sessionId, deviceId);
+  if (parentSession) {
+    const unavailableKey = sideChatUnavailableKey(parentSession, deviceId);
+    if (unavailableKey) {
+      toast.info(i18n.t(unavailableKey));
+      return false;
+    }
+    if (parentSession.remoteHostId) {
+      toast.error(i18n.t('chat.sideChat.unsupported'));
+      return false;
+    }
+  }
+  const owner = getDataOwnerGeneration();
+  const draftKey = createPendingSideChatDraftKey();
+  const hasTransferredAttachments = Boolean(options.attachments?.length);
+  let registeredTabId: string | null = null;
+  let creationPromise: Promise<Session> | null = null;
   try {
     if ((await window.electronAPI.rightSidebarWindow?.getState())?.detached) {
+      if (!isDataOwnerGenerationCurrent(owner)) return false;
       await mergeSidebarWindowBack(sessionId);
     }
+    if (!isDataOwnerGenerationCurrent(owner)) return false;
     await ensureHydrated(sessionId);
-    const deviceId = getStickySessionDeviceId(sessionId) ?? null;
-    const child = await makerApiForSticky(sessionId).createSideChat(sessionId);
-    if (deviceId) {
-      remoteProjectsStore.pinSessionOrigin(deviceId, child.id);
-      remoteProjectsStore.mergeDeviceSessions(deviceId, remoteProjectsStore.getDeviceName(deviceId) ?? '', [child]);
-    }
-    try {
-      if (options.prompt || options.attachments?.length) saveDraft(child.id, {
+    if (!isDataOwnerGenerationCurrent(owner)) return false;
+    const previewSession = buildPreviewSideChatSession(sessionId, parentSession, draftKey, deviceId);
+    if (options.prompt || options.attachments?.length) {
+      saveDraft(draftKey, {
         text: options.prompt ? textToTiptapDoc(options.prompt) : null,
         attachments: options.attachments ?? [],
       });
-      if (options.quote) appendQuoteToDraft(child.id, { text: options.quote });
-      // The creation broadcast may already have restored this tab.
-      const existing = getBucket(sessionId).tabs.find(tab => tab.kind === 'side-chat'
-        && (tab.state as { sessionId?: string } | null)?.sessionId === child.id);
-      if (existing) {
-        if (options.placement?.groupId) setTabGroup(existing.id, options.placement.groupId);
-        options.placement?.onOptimisticAdd?.(existing.id);
-        await setActiveTab(sessionId, existing.id);
-      } else {
-        await addTab(sessionId, 'side-chat', { sessionId: child.id, deviceId }, options.placement);
-      }
-    } catch (error) {
-      // A failed tab write must not leave an unreachable branch running or listed.
-      await setStatus(child.id, 'deleted', deviceId ? { kind: 'device-link', deviceId } : { kind: 'local' });
-      if (deviceId) remoteProjectsStore.applyPatch(deviceId, child.id, { status: 'deleted' });
-      // These files still belong to the parent's rejected send; do not recycle them.
-      clearDraft(child.id);
-      throw error;
     }
+    if (options.quote) appendQuoteToDraft(draftKey, { text: options.quote });
+    // Start the fork in parallel with adding the optimistic tab so the user can
+    // start typing immediately without waiting for the host fork to complete.
+    creationPromise = makerApiForSticky(sessionId).createSideChat(sessionId);
+    const registerForTab = (tabId: string) => {
+      registeredTabId = tabId;
+      registerPendingSideChat({
+        tabId,
+        draftKey,
+        parentSessionId: sessionId,
+        deviceId,
+        previewSession,
+        status: 'creating',
+        childSession: null,
+        hasTransferredAttachments,
+        onRetry: () => {
+          retryPendingSideChatCreation(sessionId, tabId);
+        },
+      });
+    };
+    const tab = await addTab(sessionId, 'side-chat', { sessionId: null, deviceId }, {
+      ...options.placement,
+      onOptimisticAdd: (tabId) => {
+        registerForTab(tabId);
+        options.placement?.onOptimisticAdd?.(tabId);
+      },
+    });
+    if (!registeredTabId) registerForTab(tab.id);
     // Menus in other groups or popout windows already own their visible host.
     if (!options.placement?.onOptimisticAdd && (!options.placement?.groupId || options.placement.groupId === 'right')) {
       requestRightSidebarVisibility('open', { sessionId, userInitiated: true });
     }
+    settlePendingSideChatCreation(sessionId, tab.id, draftKey, deviceId, owner, creationPromise);
     return true;
   } catch (error) {
-    const code = extractIpcError(error)?.code;
-    const remoteCode = remoteAgentErrorCode(error instanceof Error ? error.message : String(error));
-    log.warn('open failed', { code, remoteCode });
-    const key = code === 'NO_PRIOR_ASSISTANT' ? 'notReady'
-      : code === 'UNSUPPORTED_CAPABILITY' ? 'unsupported'
-      : code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED' ? 'updateHost' : 'failed';
-    toast.error(key === 'failed' && remoteCode
-      ? i18n.t(`chat.remoteError.${remoteCode}`, { defaultValue: i18n.t('chat.sideChat.failed') })
-      : i18n.t(`chat.sideChat.${key}`));
+    if (registeredTabId) {
+      cancelPendingSideChat(registeredTabId);
+      removePendingSideChat(registeredTabId);
+    }
+    // These files still belong to the parent's rejected send; do not recycle them.
+    clearDraft(draftKey);
+    if (creationPromise) {
+      void creationPromise.then(
+        child => deleteOrphanSideChat(child.id, deviceId, owner),
+        () => undefined,
+      );
+    }
+    toast.error(formatSideChatOpenError(error));
     return false;
   }
 }

@@ -1,0 +1,322 @@
+{
+  "description": "Public DeepSeek preset, interface profiles and model declarations extracted from retained instance catalog. Other products and unrelated directory sections omitted; no account config or credentials.",
+  "source": {
+    "catalogSha256": "49921e0514bc2aa2528bda8b422d13e877afc6ef68e1e0d17d07608305807380",
+    "envelopeSha256": "7ae535d9074aee88de2344bb0fa6c2bd1013484fa4e32811a57bba6acaf62d4d",
+    "schemaVersion": 6,
+    "updatedAt": "2026-10-30T08:00:00.000Z"
+  },
+  "preset": {
+    "id": "deepseek",
+    "name": "DeepSeek",
+    "docsUrl": "https://api-docs.deepseek.com/guides/anthropic_api",
+    "runtimes": {
+      "claude-code": {
+        "baseUrl": "https://api.deepseek.com/anthropic",
+        "modelsUrl": "https://api.deepseek.com/models",
+        "models": [
+          {
+            "id": "deepseek-flash",
+            "name": "DeepSeek V4.1 Flash",
+            "contextWindow": 1048576,
+            "supportsImageInput": true
+          },
+          {
+            "id": "deepseek-v4-pro",
+            "name": "DeepSeek-V4-Pro",
+            "contextWindow": 1048576,
+            "supportsImageInput": false
+          }
+        ]
+      },
+      "pi": {
+        "baseUrl": "https://api.deepseek.com/anthropic",
+        "wireProtocol": "anthropic-messages",
+        "piCatalogProviderId": "deepseek",
+        "modelsUrl": "https://api.deepseek.com/models",
+        "models": [
+          {
+            "id": "deepseek-flash",
+            "name": "DeepSeek V4.1 Flash",
+            "contextWindow": 1048576,
+            "supportsImageInput": true,
+            "reasoning": true,
+            "reasoningEfforts": [
+              "low",
+              "high",
+              "max"
+            ],
+            "reasoningDefaultEffort": "high"
+          },
+          {
+            "id": "deepseek-v4-pro",
+            "name": "DeepSeek-V4-Pro",
+            "contextWindow": 1048576,
+            "supportsImageInput": false,
+            "reasoning": true,
+            "reasoningEfforts": [
+              "high",
+              "max"
+            ],
+            "reasoningDefaultEffort": "high"
+          }
+        ]
+      },
+      "codex": {
+        "baseUrl": "https://api.deepseek.com",
+        "wireProtocol": "openai-chat",
+        "modelsUrl": "https://api.deepseek.com/models",
+        "models": [
+          {
+            "id": "deepseek-flash",
+            "name": "DeepSeek V4.1 Flash",
+            "contextWindow": 1048576,
+            "supportsImageInput": false
+          },
+          {
+            "id": "deepseek-v4-pro",
+            "name": "DeepSeek-V4-Pro",
+            "contextWindow": 1048576,
+            "supportsImageInput": false
+          }
+        ]
+      }
+    }
+  },
+  "registry": {
+    "schemaVersion": 6,
+    "updatedAt": "2026-10-30T08:00:00.000Z",
+    "models": [
+      {
+        "id": "deepseek/deepseek-v4-pro",
+        "name": "DeepSeek V4 Pro",
+        "sortOrder": 45,
+        "routes": [
+          {
+            "providerId": "deepseek",
+            "modelId": "deepseek-v4-pro",
+            "agents": [
+              "claude-code",
+              "codex"
+            ],
+            "defaults": {
+              "supportsFastMode": false
+            },
+            "referencePriceGroup": "global"
+          }
+        ],
+        "nativeApi": "openai-completions",
+        "modelRef": "deepseek/deepseek-v4-pro"
+      },
+      {
+        "id": "deepseek/deepseek-v4-flash",
+        "name": "DeepSeek V4.1 Flash",
+        "sortOrder": 46,
+        "routes": [
+          {
+            "providerId": "deepseek",
+            "modelId": "deepseek-v4-flash",
+            "agents": [
+              "claude-code",
+              "codex"
+            ],
+            "defaults": {
+              "supportsFastMode": false
+            },
+            "referencePriceGroup": "global"
+          }
+        ],
+        "nativeApi": "openai-completions",
+        "modelRef": "deepseek/deepseek-v4.1-flash"
+      },
+      {
+        "id": "deepseek/deepseek-v4.1-flash",
+        "name": "DeepSeek V4.1 Flash",
+        "sortOrder": 44,
+        "routes": [
+          {
+            "providerId": "deepseek",
+            "modelId": "deepseek-flash",
+            "agents": [
+              "claude-code",
+              "codex"
+            ],
+            "defaults": {
+              "supportsFastMode": false
+            },
+            "referencePriceGroup": "global"
+          }
+        ],
+        "nativeApi": "openai-completions",
+        "modelRef": "deepseek/deepseek-v4.1-flash"
+      }
+    ],
+    "interfaceProfiles": [
+      {
+        "id": "deepseek-anthropic-messages",
+        "providerId": "deepseek",
+        "api": "anthropic-messages",
+        "baseUrl": "https://api.deepseek.com/anthropic",
+        "inputBaseUrls": [
+          "https://api.deepseek.com/anthropic",
+          "https://api.deepseek.com"
+        ],
+        "defaultFor": [
+          "claude-code"
+        ],
+        "legacyApis": [
+          "openai-completions"
+        ]
+      },
+      {
+        "id": "deepseek-openai-responses",
+        "providerId": "deepseek",
+        "api": "openai-responses",
+        "baseUrl": "https://api.deepseek.com",
+        "inputBaseUrls": [
+          "https://api.deepseek.com",
+          "https://api.deepseek.com/anthropic"
+        ],
+        "defaultFor": [
+          "codex"
+        ]
+      },
+      {
+        "id": "deepseek-openai-completions",
+        "providerId": "deepseek",
+        "api": "openai-completions",
+        "baseUrl": "https://api.deepseek.com",
+        "inputBaseUrls": [
+          "https://api.deepseek.com/anthropic",
+          "https://api.deepseek.com"
+        ],
+        "defaultFor": [
+          "pi"
+        ]
+      }
+    ],
+    "baseModels": [
+      {
+        "id": "deepseek/deepseek-v4-pro",
+        "aliases": [
+          "deepseek-v4-pro"
+        ],
+        "defaults": {
+          "name": "DeepSeek V4 Pro",
+          "description": "DeepSeek V4 Pro reasoning model",
+          "group": "china",
+          "contextWindow": 1048576,
+          "maxOutputTokens": 384000,
+          "efforts": [
+            "low",
+            "high",
+            "max"
+          ],
+          "defaultEffort": "high"
+        },
+        "referencePriceGroups": [
+          {
+            "id": "global",
+            "prices": [
+              {
+                "currency": "USD",
+                "variant": "standard",
+                "inputPerMtok": 0.435,
+                "outputPerMtok": 0.87,
+                "cacheReadPerMtok": 0.003625,
+                "effectiveFrom": "2026-07-31",
+                "source": {
+                  "kind": "provider-official",
+                  "url": "https://api-docs.deepseek.com/quick_start/pricing",
+                  "verifiedAt": "2026-08-05"
+                },
+                "effectiveUntil": "2026-08-16"
+              },
+              {
+                "currency": "USD",
+                "variant": "standard",
+                "inputPerMtok": 1.32,
+                "outputPerMtok": 3.96,
+                "cacheReadPerMtok": 0.044,
+                "effectiveFrom": "2026-08-16",
+                "source": {
+                  "kind": "provider-official",
+                  "url": "https://api-docs.deepseek.com/quick_start/pricing",
+                  "verifiedAt": "2026-08-16"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "deepseek/deepseek-v4.1-flash",
+        "aliases": [
+          "deepseek-flash",
+          "deepseek-v4-flash"
+        ],
+        "defaults": {
+          "name": "DeepSeek V4.1 Flash",
+          "group": "china",
+          "contextWindow": 1048576,
+          "maxOutputTokens": 384000,
+          "efforts": [
+            "low",
+            "high",
+            "max"
+          ],
+          "defaultEffort": "high",
+          "officialDocs": "https://api-docs.deepseek.com/updates/"
+        },
+        "referencePriceGroups": [
+          {
+            "id": "global",
+            "prices": [
+              {
+                "currency": "USD",
+                "variant": "standard",
+                "inputPerMtok": 0.14,
+                "outputPerMtok": 0.28,
+                "cacheReadPerMtok": 0.0028,
+                "effectiveFrom": "2026-07-31",
+                "source": {
+                  "kind": "provider-official",
+                  "url": "https://api-docs.deepseek.com/quick_start/pricing",
+                  "verifiedAt": "2026-08-05"
+                },
+                "effectiveUntil": "2026-08-16"
+              },
+              {
+                "currency": "USD",
+                "variant": "standard",
+                "inputPerMtok": 0.44,
+                "outputPerMtok": 1.32,
+                "cacheReadPerMtok": 0.014,
+                "effectiveFrom": "2026-08-16",
+                "source": {
+                  "kind": "provider-official",
+                  "url": "https://api-docs.deepseek.com/quick_start/pricing",
+                  "verifiedAt": "2026-08-16"
+                },
+                "effectiveUntil": "2026-09-11"
+              },
+              {
+                "currency": "USD",
+                "variant": "standard",
+                "inputPerMtok": 0.3,
+                "outputPerMtok": 1.2,
+                "cacheReadPerMtok": 0.006,
+                "effectiveFrom": "2026-09-11",
+                "source": {
+                  "kind": "provider-official",
+                  "url": "https://api-docs.deepseek.com/quick_start/pricing",
+                  "verifiedAt": "2026-09-11"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

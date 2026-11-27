@@ -245,7 +245,7 @@ describe('interactionModel', () => {
   it('keeps every plugin setup phase, error code and action kind translated in all locales', async () => {
     const previous = i18n.language;
     try {
-      for (const locale of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko']) {
+      for (const locale of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', "es", "fr", "de", "pt-PT", "pt-BR"]) {
         await i18n.changeLanguage(locale);
         for (const phase of REMOTE_PLUGIN_SETUP_PHASES) {
           const key = `interaction.pluginSetup.phase.${phase}`;
@@ -280,7 +280,7 @@ describe('interactionModel', () => {
   });
 
   it('localizes queue titles and kind labels instead of rendering the shared Chinese defaults', () => {
-    for (const lang of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko']) {
+    for (const lang of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', "es", "fr", "de", "pt-PT", "pt-BR"]) {
       const bundle = JSON.parse(readFileSync(resolve(process.cwd(), `src/i18n/locales/${lang}/interaction.json`), 'utf8'));
       for (const kind of ['permission', 'ask_user_question', 'plan_review', 'issue_confirm', 'plugin_setup', 'fallback']) {
         expect(bundle.kinds?.[kind]?.title, `${lang}/${kind}.title`).toBeTruthy();
@@ -303,10 +303,14 @@ describe('interactionModel', () => {
     }
     visit(tree);
     if (!initializer) throw new Error('Missing production pending composer gate');
-    const blocks = new Function('pendingInteractionsBlockRemoteComposer', 'pending', 'return (' + initializer.getText(tree) + ')');
+    const blocks = new Function('pendingInteractionsBlockRemoteComposer', 'pending', 'collapsedPendingRequestIds = []', 'return (' + initializer.getText(tree) + ')');
     const pending = [{ request: { kind: 'plugin_setup', requestId: 'setup-1', revision: 1 } }, { request: { kind: 'permission', requestId: 'perm-1' } }];
     expect(blocks(pendingInteractionsBlockRemoteComposer, pending)).toBe(true);
     expect(blocks(pendingInteractionsBlockRemoteComposer, pending.slice(0, 1))).toBe(false);
+    const ask = { request: { kind: 'ask_user_question', requestId: 'ask-1' } };
+    expect(blocks(pendingInteractionsBlockRemoteComposer, [ask])).toBe(true);
+    expect(blocks(pendingInteractionsBlockRemoteComposer, [ask], ['ask-1'])).toBe(false);
+    expect(blocks(pendingInteractionsBlockRemoteComposer, [...pending, ask], ['ask-1'])).toBe(true);
     expect(pendingInteractionsBlockRemoteComposer([
       { request: { kind: 'plugin_setup', requestId: 'setup-1', revision: 1 } },
       { request: { kind: 'permission', requestId: 'perm-1' } },
@@ -388,7 +392,8 @@ describe('interactionModel', () => {
       { persistId: 'ask', request: { kind: 'ask_user_question', requestId: 'ask-1' } },
     ];
 
-    const selectedAsk = selectPendingInteractionByRequestId(interactions, 'ask-1');
+    expect(selectPendingInteractionByRequestId(interactions, 'ask-1')).toBe(interactions[0]);
+    const selectedAsk = selectPendingInteractionByRequestId(interactions.slice(1), 'ask-1');
     const selectedPlan = selectPendingInteractionByRequestId(interactions, 'plan-1');
 
     expect(selectedAsk?.request.requestId).toBe('ask-1');
@@ -409,6 +414,14 @@ describe('interactionModel', () => {
       activeKind: selectedPlan ? interactionKind(selectedPlan) : null,
       collapsed: true,
       planViewerState: 'expanded',
+    })).toBe(false);
+    // The feedback footer must stay outside the scrolling body, but collapsing
+    // must still release the fixed-height surface (unit; simulator regression).
+    expect(shouldUseFullHeightPendingInteractionSurface({
+      activeKind: 'issue_confirm', planViewerState: 'half',
+    })).toBe(true);
+    expect(shouldUseFullHeightPendingInteractionSurface({
+      activeKind: 'issue_confirm', planViewerState: 'half', collapsed: true,
     })).toBe(false);
   });
 
@@ -624,7 +637,7 @@ describe('interactionModel', () => {
   it('translates the collapse affordances in every locale', async () => {
     const previous = i18n.language;
     try {
-      for (const locale of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko']) {
+      for (const locale of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', "es", "fr", "de", "pt-PT", "pt-BR"]) {
         await i18n.changeLanguage(locale);
         for (const key of [
           'interaction.panel.collapse',
@@ -640,7 +653,7 @@ describe('interactionModel', () => {
       await i18n.changeLanguage(previous);
     }
 
-    for (const lang of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko']) {
+    for (const lang of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', "es", "fr", "de", "pt-PT", "pt-BR"]) {
       const bundle = JSON.parse(readFileSync(resolve(process.cwd(), `src/i18n/locales/${lang}/interaction.json`), 'utf8'));
       expect(bundle.panel?.expandPendingCard, `${lang}/panel.expandPendingCard`).toContain('{{title}}');
       // 旧的问题卡专属文案随卡内收起一起下线,不留悬空 key。
@@ -945,4 +958,12 @@ describe('resolveInteractionResilient', () => {
     }, 's1', 'req-1', {}, { sleep: noSleep })).rejects.toMatchObject({ code: 'NOT_CONNECTED' });
     expect(resolveCalls).toBe(4); // 首次 + 3 次重试
   });
+});
+
+// #8706 unit: shared projection retains only the known quota marker for Mobile's permission card.
+it('projects safe review quota metadata and ignores it on ordinary permissions', () => {
+  const request = { kind: 'permission', requestId: 'quota', toolName: 'Bash',
+    metadata: { autoReviewUnavailable: true, autoReviewUnavailableReason: 'quota_exhausted', autoReviewReason: 'stale model reason' } };
+  expect(buildPermissionReviewPresentation(request)).toMatchObject({ autoReviewUnavailable: true, autoReviewQuotaExhausted: true, autoReviewReason: null });
+  expect(buildPermissionReviewPresentation({ ...request, metadata: { autoReviewUnavailableReason: 'quota_exhausted' } })).not.toHaveProperty('autoReviewQuotaExhausted');
 });

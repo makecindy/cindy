@@ -8,6 +8,7 @@ import { modelRegistryCanonicalJson } from "./modelRegistryCanonical.js";
 import { MODEL_ACCESS_WIRE_PROTOCOLS } from './modelAccessBean.js';
 import type {
   ModelAccessV2Agent,
+  ModelAgent,
   ModelPriceVariant,
   ModelReferencePrice,
   ModelRegistry,
@@ -17,6 +18,34 @@ import type {
 
 export type ModelRegistryRevisionRelation =
   "newer" | "older" | "same" | "conflict" | "invalid-incoming";
+
+/** Same owned subscription aliases as the native API lookup; Gateway namespaces stay intact. */
+function registryRouteModelId(providerId: string, modelId: string): string {
+  const rawId = modelId.replace(/\[1m\]$/, "");
+  return providerId === "openai"
+    ? rawId.replace(/^chatgpt\//, "")
+    : providerId === "xai" && !rawId.startsWith("xai/")
+      ? `xai/${rawId}`
+      : rawId;
+}
+
+/** Catalog-recommended engine for one source and model: exact IDs win over the longest prefix.
+ * The result is advice only; callers still choose among engines this route actually offers. */
+export function resolveRecommendedAgent(
+  registry: ModelRegistry | undefined,
+  providerId: string,
+  modelId: string,
+): ModelAgent | undefined {
+  const rules = registry?.recommendedAgents?.filter((rule) => rule.providerId === providerId);
+  if (!rules?.length) return undefined;
+  const id = registryRouteModelId(providerId, modelId);
+  return (
+    rules.find((rule) => rule.modelId === id) ??
+    rules
+      .filter((rule) => rule.modelIdPrefix !== undefined && id.startsWith(rule.modelIdPrefix))
+      .sort((a, b) => b.modelIdPrefix!.length - a.modelIdPrefix!.length)[0]
+  )?.agent;
+}
 
 /** Explicit entries win, then the most specific rule for this exact provider route.
  * Missing data stays unknown; a retired or explicitly unverified entry suppresses family rules.
@@ -220,6 +249,31 @@ function routeModelCandidates(providerId: string, modelId: string): string[] {
   return ids;
 }
 
+type IndexedRoute = { entry: ModelRegistryEntry; route: ModelRegistryRoute; order: number };
+const registryRoutes = new WeakMap<ModelRegistry, Map<string, IndexedRoute[]>>();
+
+function routeIndex(registry: ModelRegistry) {
+  let index = registryRoutes.get(registry);
+  if (index) return index;
+  index = new Map();
+  let order = 0;
+  for (const entry of registry.models) {
+    for (const route of entry.routes) {
+      const match = { entry, route, order: order++ };
+      const family = route.providerId === "anthropic"
+        ? /^claude-(opus|sonnet|haiku)-/.exec(route.modelId)?.[1] : undefined;
+      for (const id of family ? [route.modelId, family] : [route.modelId]) {
+        const key = route.providerId + "\0" + id;
+        const bucket = index.get(key);
+        if (bucket) bucket.push(match);
+        else index.set(key, [match]);
+      }
+    }
+  }
+  registryRoutes.set(registry, index);
+  return index;
+}
+
 function matchingModelRegistryRoutes(
   registry: ModelRegistry | null | undefined,
   providerId: string,
@@ -232,31 +286,18 @@ function matchingModelRegistryRoutes(
   const candidates = new Set(
     routeModelCandidates(normalizedProviderId, normalizedModelId),
   );
-  const anthropicFamily =
-    normalizedProviderId === "anthropic" &&
-    (normalizedModelId === "opus" ||
-      normalizedModelId === "sonnet" ||
-      normalizedModelId === "haiku")
-      ? `claude-${normalizedModelId}-`
-      : null;
-  const matches: Array<{
-    entry: ModelRegistryEntry;
-    route: ModelRegistryRoute;
-  }> = [];
-  for (const entry of registry.models) {
-    for (const route of entry.routes) {
-      if (
-        route.providerId === normalizedProviderId &&
-        (candidates.has(route.modelId) ||
-          (anthropicFamily !== null &&
-            route.modelId.startsWith(anthropicFamily))) &&
-        (agent === undefined || route.agents.includes(agent))
-      ) {
-        matches.push({ entry, route });
+  const index = routeIndex(registry);
+  const matches: IndexedRoute[] = [];
+  for (const id of candidates) {
+    const routes = index.get(normalizedProviderId + "\0" + id);
+    if (routes) {
+      for (const match of routes) {
+        if (!agent || match.route.agents.includes(agent)) matches.push(match);
       }
     }
   }
-  return matches;
+  if (candidates.size > 1) matches.sort((a, b) => a.order - b.order);
+  return matches.map(({ entry, route }) => ({ entry, route }));
 }
 
 export function findModelRegistryRoute(

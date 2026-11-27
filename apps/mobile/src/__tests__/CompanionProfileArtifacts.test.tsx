@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { CompanionProfileArtifacts } from '@/session/CompanionProfileArtifacts';
 
 const state = vi.hoisted(() => ({ value: null as unknown, error: false, refresh: vi.fn() }));
+vi.mock('@/utils/useGuardedPush', () => ({ useGuardedPush: () => vi.fn() }));
 vi.mock('@/session/useRemoteCompanionQuery', () => ({ useRemoteCompanionQuery: () => state }));
 vi.mock('react-native', async () => {
   const { createElement } = await import('react');

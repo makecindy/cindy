@@ -1,7 +1,8 @@
 /**
  * 自建中转的本机配置与秘密(按当前账号隔离)。
  *
- * - `config.json`:当前用哪个中转(官方 / 自建)、本机中转的开启设置、部署到服务器的中转记录。不含秘密。
+ * - `config.json`:当前用哪个中转(官方 / 自建)、本机中转的开启设置、部署到服务器的中转记录(一台服务器一条)。
+ *   不含秘密。记录列表存在 `deployments`;同时把其中一条写进旧字段 `deployment`,装回旧版本时仍能看到它。
  * - `secrets/<中转ID>.enc`:本机在这个中转上的设备凭证与签名私钥,经 Electron safeStorage
  *   (钥匙串 / DPAPI)加密。Linux 只有明文后端(basic_text)时不保存,直接报不可用。
  *   主人(本机中转 / 部署的服务器中转)与成员(加入的中转)都按中转 ID 各存一份:切走再切回不用重新加入。
@@ -19,6 +20,10 @@ import { createLogger } from '../logger.js';
 import { oauthSecureStorageAvailable } from '../plugin-oauth/identityStore.js';
 import { DEFAULT_RELAY_PORT } from '../../shared/selfHostedRelay.js';
 import { setSelfHostedRelaySource, type ActiveSelfHostedRelay } from './selfHostedRelayRouting.js';
+import type { DeviceCertificate } from '@cindy/agent-net-protocol';
+import { readNotificationBridgeConfig } from '@cindy/agent-net-relay/notification-bridge';
+
+export function readHostNotificationBridgeConfig() { return readNotificationBridgeConfig(process.env); }
 
 const log = createLogger('self-hosted-relay:config');
 
@@ -39,6 +44,11 @@ export interface ActiveRelay {
   /** 本机在这个中转上的设备 ID。 */
   deviceId: string;
   ownerPublicKey: string;
+  /**
+   * 别人分享给这个账号的中转(§5.5):本账号在那台中转上有自己的网络(只走 V2),`relayId` 是这个网络的 ID,
+   * `ownerPublicKey` 是本账号自己的根公钥。`ownerName` 是分享者在链接里写的名字。
+   */
+  shared?: { ownerName: string | null };
 }
 
 export interface RelayHostSettings {
@@ -70,21 +80,31 @@ export interface RelayConfig {
   /** null = 使用 Cindy 官方中转。 */
   active: ActiveRelay | null;
   host: RelayHostSettings;
-  deployment: RelayDeployment | null;
+  /** 部署到服务器的中转,按部署顺序;中转 ID 与 SSH 主机都不重复。 */
+  deployments: RelayDeployment[];
 }
 
 /** 本机在某个中转上的秘密。 */
 export interface RelaySecrets {
+  /** 旧版(V1)中转凭证;只走 V2 的网络为空字符串,此时必有 `agentNet`。 */
   credential: string;
   /** Ed25519 私钥种子(base64url)。 */
   seed: string;
+  /** V2 keys use this same account-scoped safeStorage boundary, never renderer state or plaintext JSON. */
+  agentNet?: {
+    version: 2;
+    signingPrivateKey: string;
+    transportPrivateKey: string;
+    certificate: DeviceCertificate;
+    rootPublicKey: string;
+  };
 }
 
 const DEFAULT_CONFIG: RelayConfig = {
   version: CONFIG_VERSION,
   active: null,
   host: { enabled: false, port: DEFAULT_RELAY_PORT, listenAll: false, externalUrl: null, relayId: null },
-  deployment: null,
+  deployments: [],
 };
 
 interface Cache {
@@ -127,6 +147,7 @@ function parseActive(raw: unknown): ActiveRelay | null {
   ) {
     return null;
   }
+  const shared = a.shared && typeof a.shared === 'object' ? (a.shared as Record<string, unknown>) : null;
   return {
     relayId: a.relayId,
     name: a.name,
@@ -135,6 +156,7 @@ function parseActive(raw: unknown): ActiveRelay | null {
     origin: a.origin,
     deviceId: a.deviceId,
     ownerPublicKey: a.ownerPublicKey,
+    ...(shared ? { shared: { ownerName: isString(shared.ownerName) ? shared.ownerName.slice(0, 64) : null } } : {}),
   };
 }
 
@@ -167,6 +189,19 @@ function parseDeployment(raw: unknown): RelayDeployment | null {
   };
 }
 
+/** 新版本存 `deployments`;只有旧字段 `deployment` 时(旧版本写的)按一条读入。重复的中转或服务器只留第一条。 */
+function parseDeployments(value: Record<string, unknown>): RelayDeployment[] {
+  const raw = Array.isArray(value.deployments) ? value.deployments : [value.deployment];
+  const result: RelayDeployment[] = [];
+  for (const item of raw) {
+    const deployment = parseDeployment(item);
+    if (deployment && !result.some((d) => d.relayId === deployment.relayId || d.sshHostId === deployment.sshHostId)) {
+      result.push(deployment);
+    }
+  }
+  return result;
+}
+
 function parseConfig(raw: unknown): RelayConfig {
   if (!raw || typeof raw !== 'object') return structuredClone(DEFAULT_CONFIG);
   const value = raw as Record<string, unknown>;
@@ -183,8 +218,13 @@ function parseConfig(raw: unknown): RelayConfig {
       externalUrl: typeof host.externalUrl === 'string' && host.externalUrl ? host.externalUrl : null,
       relayId: current && isString(host.relayId) && RELAY_ID_PATTERN.test(host.relayId) ? host.relayId : null,
     },
-    deployment: current ? parseDeployment(value.deployment) : null,
+    deployments: current ? parseDeployments(value) : [],
   };
+}
+
+/** 写给旧版本看的那一条:正在用的优先,否则第一条。 */
+function legacyDeployment(config: RelayConfig): RelayDeployment | null {
+  return config.deployments.find((d) => d.relayId === config.active?.relayId) ?? config.deployments[0] ?? null;
 }
 
 function secretsFile(relayId: string): string {
@@ -196,7 +236,10 @@ function readSecretsFile(relayId: string): RelaySecrets | null {
   try {
     const encrypted = fs.readFileSync(secretsFile(relayId), 'utf8');
     const parsed = JSON.parse(safeStorage.decryptString(Buffer.from(encrypted, 'base64'))) as Partial<RelaySecrets>;
-    return isString(parsed.credential) && isString(parsed.seed) ? { credential: parsed.credential, seed: parsed.seed } : null;
+    // 只走 V2 的网络没有旧版凭证(空字符串),但必须带着 V2 身份。
+    const credentialOk = isString(parsed.credential) || (parsed.credential === '' && Boolean(parsed.agentNet));
+    return credentialOk && typeof parsed.credential === 'string' && isString(parsed.seed)
+      ? { credential: parsed.credential, seed: parsed.seed, ...(parsed.agentNet ? { agentNet: parsed.agentNet } : {}) } : null;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') log.warn('relay secrets unreadable');
     return null;
@@ -240,8 +283,9 @@ export function readRelayConfig(): RelayConfig {
   return structuredClone(load().config);
 }
 
-export function readRelaySecrets(relayId: string): RelaySecrets | null {
+export function readRelaySecrets(relayId: string, options?: { fresh?: boolean }): RelaySecrets | null {
   if (!getActiveAppSession().dataOwnerId) return null;
+  if (options?.fresh) load().secrets.delete(relayId);
   return cachedSecrets(load(), relayId);
 }
 
@@ -256,6 +300,7 @@ export function activeSelfHostedRelay(): ActiveSelfHostedRelay | null {
   if (!active || !secrets) return null;
   return {
     relayId: active.relayId,
+    scopeKey: activeOwnerScopeKey(),
     name: active.name,
     baseUrl: active.baseUrl,
     role: active.role,
@@ -296,7 +341,7 @@ function requireSignedIn(): void {
 export function writeRelayConfig(next: RelayConfig): void {
   requireSignedIn();
   const state = load();
-  writeAtomically(relayDataPath('config.json'), JSON.stringify(next, null, 2));
+  writeAtomically(relayDataPath('config.json'), JSON.stringify({ ...next, deployment: legacyDeployment(next) }, null, 2));
   state.config = structuredClone(next);
 }
 

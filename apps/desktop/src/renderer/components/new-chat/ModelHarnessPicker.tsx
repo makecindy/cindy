@@ -46,7 +46,9 @@ export function ModelHarnessPicker({
     return [
       labelOf(engine),
       api,
-      t(`settings.providers.models.advanced.protocol.${capability?.protocolMode ?? 'unknown'}`),
+      // A served interface needs no label; only Cindy's local conversion or missing metadata is named.
+      capability?.protocolMode !== 'matching' &&
+        t(`settings.providers.models.advanced.protocol.${capability?.protocolMode ?? 'unknown'}`),
       agent === entry.recommended && t('newChat.modelSelector.unified.recommended'),
     ]
       .filter(Boolean)
@@ -103,7 +105,7 @@ export function ModelHarnessPicker({
               <span className="min-w-0 text-12 leading-4">{labelOf(engine)}</span>
             </button>
             {mode === 'compatibility' && (
-              <span className="relative z-10 text-10 leading-4">
+              <span className="relative z-raised text-10 leading-4">
                 <ModelCompatibilityNotice />
               </span>
             )}

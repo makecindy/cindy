@@ -41,7 +41,9 @@ export function hasVisibleHistoryResult(content: unknown): boolean {
   try {
     const value = JSON.parse(text) as Record<string, unknown> | null;
     return !!value && !Array.isArray(value) && (typeof value.xdt_card_id === 'string'
-      || typeof value.xdt_anchor_card_id === 'string');
+      || typeof value.xdt_anchor_card_id === 'string'
+      // A send_to_session receipt: the teammate chat shows the task it started (BotStartedTasks).
+      || (value.ok === true && typeof value.target_session_id === 'string' && typeof value.wake_kind === 'string'));
   } catch { return false; }
 }
 
@@ -66,11 +68,61 @@ export function completesHistoryTurn(row: HistoryMessageSource): boolean {
     || (typeof meta.turnUsageDetails === 'object' && meta.turnUsageDetails !== null);
 }
 
-function hasFileDelivery(row: HistoryMessageSource): boolean {
-  if (row.role !== 'tool_use') return false;
-  const tool = parseMessageToolUse(row);
-  const descriptor = describeToolUse(tool.toolName, tool.input);
-  return descriptor.kind === 'mcp' && !!descriptor.createdPath;
+type RowFacts = { fileDelivery: boolean; visibleResult: boolean };
+const NO_FACTS: RowFacts = { fileDelivery: false, visibleResult: false };
+
+/**
+ * A projection derives the same two facts from a tool row several times per pass,
+ * and again on every refresh and page, so (id, role, body) is the key. The outline
+ * stamp only covers length plus the last 96 bytes, which an equal-length rewrite of
+ * the middle leaves unchanged; hashing the body is cheap next to the parse and regex
+ * work it lets us skip. Bounded FIFO: a page works on a few thousand rows at most.
+ * shortcut: hashing is linear in the body, so a multi-megabyte outline body costs
+ * about what recomputing its facts costs; upgrade only if such bodies dominate.
+ */
+const ROW_FACTS_LIMIT = 4096;
+const rowFacts = new Map<string, RowFacts>();
+
+function computeRowFacts(row: HistoryMessageSource): RowFacts {
+  if (row.role === 'tool_use') {
+    const tool = parseMessageToolUse(row);
+    const descriptor = describeToolUse(tool.toolName, tool.input);
+    return { fileDelivery: descriptor.kind === 'mcp' && !!descriptor.createdPath, visibleResult: false };
+  }
+  if (row.role === 'tool_result') return { fileDelivery: false, visibleResult: hasVisibleHistoryResult(row.content) };
+  return NO_FACTS;
+}
+
+/**
+ * Body identity for the row-fact cache. Two independent 32-bit FNV-1a runs over
+ * the serialized body — one forward, one backward — because a single 32-bit
+ * digest is forgeable: `<tool_use_error>` and `xdt-file:///Al乇坋` collide, and
+ * the key decides whether a result stays visible. The outline stamp is mixed in
+ * too, so a forged pair must also keep the length and the last 96 bytes.
+ * shortcut: hashing is linear in the body, so a multi-MB outline body costs about
+ * what recomputing the facts costs; upgrade only if such bodies dominate.
+ */
+function contentDigest(content: unknown): string {
+  const text = typeof content === 'string' ? content : JSON.stringify(content) ?? '';
+  let forward = 2166136261;
+  let backward = 3245307887;
+  const last = text.length - 1;
+  for (let index = 0; index <= last; index += 1) {
+    forward = Math.imul(forward ^ text.charCodeAt(index), 16777619);
+    backward = Math.imul(backward ^ text.charCodeAt(last - index), 604107029);
+  }
+  return `${text.length}:${forward >>> 0}:${backward >>> 0}`;
+}
+
+function factsFor(row: HistoryMessageSource): RowFacts {
+  if (row.role !== 'tool_use' && row.role !== 'tool_result') return NO_FACTS;
+  const key = `${row.id}\u0000${row.role}\u0000${row.historyContentStamp ?? ''}\u0000${contentDigest(row.content)}`;
+  const hit = rowFacts.get(key);
+  if (hit) return hit;
+  const facts = computeRowFacts(row);
+  rowFacts.set(key, facts);
+  if (rowFacts.size > ROW_FACTS_LIMIT) rowFacts.delete(rowFacts.keys().next().value!);
+  return facts;
 }
 
 /**
@@ -84,9 +136,22 @@ export function projectHistoryView<T extends HistoryMessageSource>(
   lazyDetails = false,
 ): HistoryViewItem<T>[] {
   if (lazyDetails) {
+    // Several passes inspect the same row. Reuse its facts within this synchronous
+    // projection so even a hit in the content-keyed cache only hashes the body once.
+    // A new projection gets a new map: callers may mutate rows between reads.
+    const facts = new Map<HistoryMessageSource, RowFacts>();
+    const readFacts = (row: HistoryMessageSource): RowFacts => {
+      if (row.role !== 'tool_use' && row.role !== 'tool_result') return NO_FACTS;
+      let value = facts.get(row);
+      if (!value) {
+        value = factsFor(row);
+        facts.set(row, value);
+      }
+      return value;
+    };
     const scopes = historySubagentScopes(rows);
-    const visibleTools = new Set(rows.filter((row) => row.role === 'tool_result' && hasVisibleHistoryResult(row.content)).map((row) => row.toolUseId));
-    for (const row of rows) if (hasFileDelivery(row)) visibleTools.add(parseMessageToolUse(row).toolUseId);
+    const visibleTools = new Set(rows.filter((row) => row.role === 'tool_result' && readFacts(row).visibleResult).map((row) => row.toolUseId));
+    for (const row of rows) if (readFacts(row).fileDelivery) visibleTools.add(parseMessageToolUse(row).toolUseId);
     const children = new Map<string, T[]>();
     const visible = rows.filter((row) => {
       const parent = scopes.get(row.id);
@@ -104,7 +169,7 @@ export function projectHistoryView<T extends HistoryMessageSource>(
         const result = file.toolUseId && results.get(file.toolUseId);
         return !result || !messageContentToPreview(result.content).includes('<tool_use_error>');
       }).map((file) => ({ ...file, ready: !file.toolUseId || results.has(file.toolUseId) })) } : row;
-    const projected = projectHistorySourceView(visible.map(withArtifacts), streaming, false);
+    const projected = projectHistorySourceView(visible.map(withArtifacts), streaming, false, readFacts);
     const attach = (items: HistoryViewItem<T>[]): HistoryViewItem<T>[] => items.map((item) => {
       if (item.type === 'work') return { ...item, ...(item.children ? { children: attach(item.children) } : {}) };
       const header = item.messages.find((row) => row.role === 'tool_use');
@@ -132,11 +197,12 @@ export function projectHistoryView<T extends HistoryMessageSource>(
     });
     return attach(projected);
   }
-  return projectHistorySourceView(rows, streaming, true);
+  return projectHistorySourceView(rows, streaming, true, factsFor);
 }
 
 function projectHistorySourceView<T extends HistoryMessageSource>(
   rows: readonly T[], streaming: boolean, preserveMixedSegments: boolean,
+  readFacts: (row: HistoryMessageSource) => RowFacts,
 ): HistoryViewItem<T>[] {
   const names = new Map<string, string>();
   const visibleResults = new Set<string>();
@@ -146,13 +212,13 @@ function projectHistorySourceView<T extends HistoryMessageSource>(
     if (row.role === 'tool_use') {
       const tool = parseMessageToolUse(row);
       if (tool.toolUseId) names.set(tool.toolUseId, tool.toolName);
-      if (!preserveMixedSegments && tool.toolUseId && hasFileDelivery(row)) visibleResults.add(tool.toolUseId);
+      if (!preserveMixedSegments && tool.toolUseId && readFacts(row).fileDelivery) visibleResults.add(tool.toolUseId);
       if (tool.toolUseId && (row.agentMeta as { mcpApp?: unknown } | null)?.mcpApp) visibleResults.add(tool.toolUseId);
       if (tool.toolUseId && (row.agentMeta as { parentUuid?: unknown } | null)?.parentUuid) nestedCalls.add(tool.toolUseId);
     }
     if (row.role === 'tool_result' && row.toolUseId) {
       settledTools.add(row.toolUseId);
-      if (hasVisibleHistoryResult(row.content)
+      if (readFacts(row).visibleResult
         || (row.agentMeta as { mcpApp?: unknown } | null)?.mcpApp) visibleResults.add(row.toolUseId);
     }
   }
@@ -179,7 +245,7 @@ function projectHistorySourceView<T extends HistoryMessageSource>(
     ));
     const plainAssistant = !nested && row.role === 'assistant' && typeof row.content === 'string'
       && !meta?.botCollaboration && !meta?.botDirectMessage
-      && !meta?.systemCardType && !meta?.goalCompletion && !meta?.goalNotice && !meta?.reviewRun;
+      && !meta?.systemCardType && !meta?.goalCompletion && !meta?.goalNotice && !meta?.reviewRun && !meta?.pluginModelRoute;
     return { type: 'source', row, activity, archivable: activity || (
       plainAssistant && !isDeliveryProseText(row.content as string)
     ) };
@@ -189,7 +255,7 @@ function projectHistorySourceView<T extends HistoryMessageSource>(
   // between its tools, which would move the media and create an extra work group.
   let toolSegment: SourceItem<T>[] = [];
   const flushToolSegment = () => {
-    if ((preserveMixedSegments || toolSegment.some((item) => item.row.role === 'tool_result' && hasVisibleHistoryResult(item.row.content)))
+    if ((preserveMixedSegments || toolSegment.some((item) => item.row.role === 'tool_result' && readFacts(item.row).visibleResult))
       && toolSegment.some((item) => !item.activity)) {
       for (const item of toolSegment) { item.activity = false; item.archivable = false; }
     }
@@ -201,9 +267,25 @@ function projectHistorySourceView<T extends HistoryMessageSource>(
   }
   flushToolSegment();
   type Item = SourceItem<T> | GroupItem<T>;
+  // thinking 行按块起点落库,结束时刻只留在 content.finishedAt —— 组时长必须用它收口,
+  // 否则「用户 → 15s 思考 → 回答」会算成从思考起点就结束。
+  const rowEndMs = (row: T): number => {
+    const started = Date.parse(row.createdAt);
+    if (row.role !== 'thinking') return started;
+    const content = row.content && typeof row.content === 'object' && !Array.isArray(row.content)
+      ? row.content as Record<string, unknown> : null;
+    const finishedAt = typeof content?.finishedAt === 'number' && Number.isFinite(content.finishedAt)
+      ? content.finishedAt : null;
+    return finishedAt ?? started;
+  };
   const timestamp = (item: Item | undefined): number | null => {
     if (!item) return null;
     const ms = item.type === 'group' ? item.summary.startedAtMs : Date.parse(item.row.createdAt);
+    return Number.isFinite(ms) ? ms : null;
+  };
+  const endTimestamp = (item: Item | undefined): number | null => {
+    if (!item) return null;
+    const ms = item.type === 'group' ? item.summary.endedAtMs : rowEndMs(item.row);
     return Number.isFinite(ms) ? ms : null;
   };
   const group = (run: SourceItem<T>[], active: boolean, boundary: number | null): GroupItem<T> => {
@@ -211,7 +293,8 @@ function projectHistorySourceView<T extends HistoryMessageSource>(
     const last = run[run.length - 1].row;
     const anchor = run.find((item) => item.activity && item.row.role !== 'tool_result')?.row ?? first;
     const startedAtMs = boundary ?? Date.parse(first.createdAt);
-    const endedAtMs = Date.parse(last.createdAt);
+    // 并行的动作可能乱序完成:按起点排的行里,更早的 thinking 可能结束得比最后一行还晚。
+    const endedAtMs = run.reduce((end, item) => Math.max(end, rowEndMs(item.row)), 0);
     const hash = historyRowsHash(run.map((item) => item.row));
     return { type: 'group', summary: {
       key: `work-${anchor.clientId || anchor.id}`,
@@ -276,8 +359,11 @@ function projectHistorySourceView<T extends HistoryMessageSource>(
     isCompactBoundary: (item) => item.type === 'source' && item.row.role === 'system',
     isActivity: (item): item is SourceItem<T> => item.type === 'source' && item.activity,
     isArchivable: (item): item is SourceItem<T> => item.type === 'source' && item.archivable,
+    // 分页游标按消息 id 切:work 的行区间一旦延伸到紧随其后的回答之后,切点落在回答上时
+    // 尾随行两页都取不到。这里不并回,渲染端拿到行后自行重新分组。
+    foldAnswerTail: false,
     startTimestamp: timestamp,
-    endTimestamp: timestamp,
+    endTimestamp,
     boundaryTimestamp: timestamp,
     userBoundaryEnd: (item, previous) => timestamp(item) ?? previous,
     createGroup: (run, _next, active, boundary) => activityGroup(run, active, boundary),

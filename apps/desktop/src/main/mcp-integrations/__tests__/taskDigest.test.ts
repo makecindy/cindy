@@ -23,7 +23,7 @@ function setup(watched: Record<string, WatchedSession> = {}) {
     watched: (key) => watched[key] ?? null,
     local: {
       readSession: async (id) => (id === 'gone' ? { title: 'x', status: 'deleted', route: null }
-        : id === 'local-1' ? { title: '修登录', status: 'active', route }
+        : id === 'local-1' ? { title: '修登录', status: 'active', pinned: true, route }
           : id === 'shared-1' ? { title: '和访客一起改文案', status: 'active', route, shared: true } : null),
       readActivity: async () => ({ phase: 'needs-interaction', interactionKind: 'permission', lastActivityAtMs: NOW - 9 * 60_000, runtimeGeneration: 4, route }),
       readLastExchange: async () => ({ lastUserAsk: '修登录', lastAssistantLine: '要删旧表吗?' }),
@@ -62,7 +62,7 @@ describe('task digest assembly', () => {
     expect(result).toEqual({
       ok: true,
       digest: {
-        session_id: 'local-1', device: null, title: '修登录', phase: 'waiting-permission', elapsed_minutes: 9, idle_minutes: 9,
+        session_id: 'local-1', device: null, title: '修登录', pinned: true, phase: 'waiting-permission', elapsed_minutes: 9, idle_minutes: 9,
         last_user_ask: '修登录', last_assistant_line: '要删旧表吗?', pending_question: null, error: null,
         current_route: route, runtime_generation: 4,
         // 等权限不是换模型能解决的:不给建议。
@@ -126,12 +126,47 @@ describe('task digest assembly', () => {
   });
 
   it('turns stored session rows and PR results into the digest vocabulary', () => {
-    expect(sessionFactsFromRow({ title: 't', status: 'active', agentKind: 'cc', model: 'claude-opus-5-5', providerId: null, effort: 'max', fastMode: true }))
-      .toEqual({ title: 't', status: 'active', route: { harness: 'claude-code', model: 'claude-opus-5-5', provider_id: null, effort: 'max', fast: true } });
-    expect(formatPrStatuses([
-      { ok: true, prNumber: 12, repo: 'cindy', status: 'open', unresolvedCount: 3 },
-      { ok: false, prNumber: 9, repo: 'cindy' },
-    ])).toBe('PR cindy#12 open,3 条评审未解决;PR cindy#9 状态未知');
+    expect(
+      sessionFactsFromRow({
+        title: 't',
+        status: 'active',
+        pinnedAt: 1,
+        agentKind: 'cc',
+        model: 'claude-opus-5-5',
+        providerId: null,
+        effort: 'max',
+        fastMode: true,
+      }),
+    ).toEqual({
+      pinned: true,
+      title: 't',
+      status: 'active',
+      route: {
+        harness: 'claude-code',
+        model: 'claude-opus-5-5',
+        provider_id: null,
+        effort: 'max',
+        fast: true,
+      },
+    });
+    expect(
+      formatPrStatuses([
+        { ok: true, prNumber: 12, repo: 'cindy', status: 'open', unresolvedCount: 3 },
+        { ok: false, prNumber: 9, repo: 'cindy' },
+      ]),
+    ).toBe('PR cindy#12 open,3 条评审未解决,CI 未知;PR cindy#9 状态未知');
+    expect(
+      formatPrStatuses([
+        {
+          ok: false,
+          provider: 'gitlab',
+          host: 'git.example.com',
+          owner: 'team/subgroup',
+          repo: 'project',
+          prNumber: 7,
+        },
+      ]),
+    ).toBe('MR git.example.com/team/subgroup/project!7 状态未知');
     expect(formatPrStatuses([])).toBeNull();
   });
 });

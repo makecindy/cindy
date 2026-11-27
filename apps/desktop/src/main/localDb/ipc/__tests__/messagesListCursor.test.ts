@@ -1,20 +1,25 @@
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { messages, sessions } from '../../schema';
 import * as taskImages from '../../../cindy-media/taskImageDelivery';
 import * as currentDb from '../../client/current';
 import { runDeviceLinkInvokeContext } from '../../../device-link/invoke-context';
-import { MAX_HISTORY_SCAN_ROWS } from '../historyViewReader';
+import { MAX_HISTORY_SCAN_ROWS, type HistoryPageShape } from '../historyViewReader';
 import { historyViewLeaves, type HistoryViewPage, type HistoryDetailPage, type HistoryMessageSource } from '@cindy/maker-shared/message-window';
 import type { DbClient } from '../../client/DbClient';
 import { captureMediaUserTurn, refreshMediaUserTurnCost } from '../../../usage/mediaTurnCost';
+import { readSessionCostDetails } from '../../../usage/sessionCostDetails';
 
 const h = vi.hoisted(() => ({
   db: null as ReturnType<typeof drizzle> | null,
   sqlite: null as Database.Database | null,
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
+  // Renderer windows a broadcast reaches; empty unless a test opens one.
+  windows: [] as Array<{ isDestroyed(): boolean; webContents: { send(...args: unknown[]): void } }>,
+  // When set, broadcasts are scoped to a test-controlled owner generation; otherwise the real tap.
+  ownerGeneration: null as number | null,
   query: vi.fn(
     async (query: string, params: unknown[] = []): Promise<Array<Record<string, unknown>>> => {
       if (!h.sqlite) throw new Error('test sqlite not initialized');
@@ -54,19 +59,28 @@ vi.mock('electron', () => ({
       h.handlers.set(channel, handler);
     }),
   },
-  BrowserWindow: { getAllWindows: () => [] },
+  BrowserWindow: { getAllWindows: () => h.windows },
 }));
+vi.mock('../../../device-link/broadcast-tap', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../device-link/broadcast-tap')>();
+  const key = () => `owner:${h.ownerGeneration}`;
+  return {
+    ...actual,
+    captureDataOwnerBroadcastScope: () => (h.ownerGeneration === null
+      ? actual.captureDataOwnerBroadcastScope()
+      : { ownerScopeKey: key(), ownerStamp: undefined }),
+    isDataOwnerBroadcastScopeCurrent: (scope: Parameters<typeof actual.isDataOwnerBroadcastScopeCurrent>[0]) => (
+      h.ownerGeneration === null ? actual.isDataOwnerBroadcastScopeCurrent(scope) : scope.ownerScopeKey === key()),
+  };
+});
 vi.mock('../../../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 vi.mock('../../../logger.js', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
-vi.mock('../../../maker-host/codex-local-sessions', () => ({
-  importExternalCodexMessagesForSession: vi.fn(async () => undefined),
-}));
-vi.mock('../../../maker-host/claude-local-sessions', () => ({
-  importExternalClaudeCodeMessagesForSession: vi.fn(async () => undefined),
+vi.mock('../../../session-import/legacy', () => ({
+  adoptLegacySessionBeforeOpen: vi.fn(async () => undefined),
 }));
 vi.mock('../../../embedders/chat-history-embedder', () => ({
   onMessageCreated: vi.fn(async () => undefined),
@@ -90,10 +104,10 @@ import {
   findParkedEngineSession,
   findPendingAgentHandoff,
   listMessagesForAgentHandoff,
+  readAutoReviewHistoryPage,
   findForkParentSessionId,
   findPendingForkOrigin,
   getMessageDeletionTarget,
-  commitMessageDeletion,
   markLatestAgentHandoffConsumed,
   readPriorUserRoundCost,
   registerMessageIpc,
@@ -107,6 +121,8 @@ function createDb(): Database.Database {
       id TEXT PRIMARY KEY,
       cleared_at INTEGER,
       source TEXT NOT NULL DEFAULT 'desktop',
+      side_chat_promoted INTEGER NOT NULL DEFAULT 0,
+      side_chat_close_pending INTEGER NOT NULL DEFAULT 0,
       parent_session_id TEXT,
       status TEXT NOT NULL DEFAULT 'active',
       created_at INTEGER NOT NULL DEFAULT 0,
@@ -180,6 +196,41 @@ function insertCostMessage(
 }
 
 describe('local-db:messages:list cursor', () => {
+  // DB regression: sealing a six-message page previously used 15 reads,
+  // including separate full-body reads for both already-loaded endpoints.
+  // Exercise the production handler and retain projected legacy round costs.
+  it('seals a text history page with a bounded batch without losing round costs', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    for (let i = 0; i < 6; i++) {
+      insertCostMessage(sqlite, { id: String(i), role: i % 2 ? 'assistant' : 'user',
+        createdAt: 1000 + i, agentMeta: i % 2 ? { turnCostUsd: 0.25, turnCompleted: true } : undefined });
+      sqlite.prepare('UPDATE messages SET content = ? WHERE id = ?').run(JSON.stringify(`fixture-${i}`), String(i));
+    }
+    const queries: string[] = [];
+    const prepare = sqlite.prepare.bind(sqlite);
+    const spy = vi.spyOn(sqlite, 'prepare').mockImplementation(((query: string) => {
+      queries.push(query);
+      return prepare(query);
+    }) as typeof sqlite.prepare);
+    try {
+      registerMessageIpc();
+      const channel = 'local-db:messages:view';
+      const page = await runDeviceLinkInvokeContext({ controllerDeviceId: 'fixture', channel },
+        () => h.handlers.get(channel)!({}, 's1', { lazyDetails: true })) as HistoryViewPage<HistoryMessageSource>;
+      expect(JSON.stringify(page)).toContain('fixture-5');
+      const answers = historyViewLeaves(page.items).flatMap(item => item.type === 'messages' ? item.messages : [])
+        .filter(message => message.role === 'assistant');
+      expect(answers).toHaveLength(3);
+      expect(answers.every(message => (message.agentMeta as { userTurnCostUsd: number }).userTurnCostUsd === 0.25)).toBe(true);
+      expect(queries.length).toBeLessThanOrEqual(11);
+      expect(queries.filter(query => query.includes('from "sessions"'))).toHaveLength(5);
+    } finally {
+      spy.mockRestore();
+      sqlite.close();
+    }
+  });
+
   it('serves a lightweight SQLite view, hydrates visible text, then reads only the expanded subagent', async () => {
     const sqlite = createDb();
     sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
@@ -193,11 +244,23 @@ describe('local-db:messages:list cursor', () => {
         usage: { details: usageDetails } }) : null, Number(id));
     add('0', 'user', 'Visible question');
     add('1', 'tool_use', { toolName: 'Agent', toolUseId: 'agent', input: { description: 'Inspect' } });
-    for (let n = 2; n < 103; n++) add(String(n), 'thinking', { text: 'hidden '.repeat(1000), durationMs: 10 }, 'agent');
+    const unchangedByteTail = 'q'.repeat(200);
+    for (let n = 2; n < 103; n++) add(String(n), 'thinking', {
+      text: n === 2 ? `ab${unchangedByteTail}` : 'hidden '.repeat(1000), durationMs: 10,
+    }, 'agent');
     add('103', 'assistant', 'Visible answer');
     registerMessageIpc();
-    const invoke = (channel: string, ...args: unknown[]) => runDeviceLinkInvokeContext({ controllerDeviceId: 'd', channel }, () => h.handlers.get(channel)!({}, 's1', ...args));
-    const page = await invoke('local-db:messages:view', { lazyDetails: true }) as HistoryViewPage<HistoryMessageSource>;
+    const shapes: HistoryPageShape[] = [];
+    const historyView = {
+      disable() {}, setExpanded() {},
+      update(_keys: readonly string[], latest?: { shape?: HistoryPageShape }) {
+        if (latest?.shape) shapes.push(latest.shape);
+      },
+    };
+    const invoke = (channel: string, ...args: unknown[]) => runDeviceLinkInvokeContext({
+      controllerDeviceId: 'd', channel, historyView,
+    }, () => h.handlers.get(channel)!({}, 's1', ...args));
+    const page = await invoke('local-db:messages:view', { lazyDetails: true, workLines: true }) as HistoryViewPage<HistoryMessageSource>;
     expect(page.hasMore).toBe(false);
     expect(JSON.stringify(page)).not.toContain('hidden ');
     expect(JSON.stringify(page)).toContain('Visible answer');
@@ -214,17 +277,23 @@ describe('local-db:messages:list cursor', () => {
     expect(detail.messages.every((row) => (row.agentMeta as { unknown?: string })?.unknown === 'keep')).toBe(true);
     expect(detail.messages.every((row) => (row.agentMeta as { mcpApp?: boolean })?.mcpApp === false)).toBe(true);
     expect(JSON.stringify(detail)).toContain('hidden ');
-    expect(await invoke('local-db:messages:view', { lazyDetails: true })).toEqual(page);
+    expect(await invoke('local-db:messages:view', { lazyDetails: true, workLines: true })).toEqual(page);
+    expect(shapes.at(-1)?.fingerprints).toEqual(shapes.at(-2)?.fingerprints);
     const meta = JSON.parse((sqlite.prepare('SELECT agent_meta FROM messages WHERE id = ?').get('2') as { agent_meta: string }).agent_meta);
     meta.usage.details = 'changed '.repeat(2500);
     sqlite.prepare('UPDATE messages SET agent_meta = ? WHERE id = ?').run(JSON.stringify(meta), '2');
-    const usageChanged = await invoke('local-db:messages:view', { lazyDetails: true }) as HistoryViewPage<HistoryMessageSource>;
+    const usageChanged = await invoke('local-db:messages:view', { lazyDetails: true, workLines: true }) as HistoryViewPage<HistoryMessageSource>;
     const usageCard = usageChanged.items.find((item) => item.type === 'messages' && item.deferred);
     if (usageCard?.type !== 'messages' || !usageCard.deferred) throw new Error('Missing changed subagent');
     expect(usageCard.deferred.revision).not.toBe(card.deferred.revision);
     expect({ ...usageCard.deferred, revision: card.deferred.revision }).toEqual(card.deferred);
-    sqlite.prepare('UPDATE messages SET content = ? WHERE id = ?').run(JSON.stringify({ text: 'edited '.repeat(1000), durationMs: 10 }), '2');
-    expect(await invoke('local-db:messages:view', { lazyDetails: true })).not.toEqual(usageChanged);
+    expect(shapes.at(-1)?.fingerprints).toEqual(shapes.at(-2)?.fingerprints);
+    // Same UTF-8 byte length and unchanged last 96 bytes, but a different character
+    // count ("ab" → "é"): the production UPDATE → outline entry must invalidate.
+    sqlite.prepare('UPDATE messages SET content = ? WHERE id = ?')
+      .run(JSON.stringify({ text: `é${unchangedByteTail}`, durationMs: 10 }), '2');
+    expect(await invoke('local-db:messages:view', { lazyDetails: true, workLines: true })).not.toEqual(usageChanged);
+    expect(shapes.at(-1)?.fingerprints).not.toEqual(shapes.at(-2)?.fingerprints);
   });
   it('keeps a command larger than the scan budget folded without losing its trailing artifact or full details', async () => {
     const sqlite = createDb();
@@ -335,12 +404,29 @@ describe('local-db:messages:list cursor', () => {
     } finally { sqlite.close(); }
   });
 
-  // Side-chat fork boundary: inherited history remains readable but cannot authorize new actions.
-  // This real SQLite fixture covers the query predicate missing from ordinary history tests (unit).
-  it('keeps inherited context out of side-chat authorization, including late answers to old cards', async () => {
+  it('detects omitted authority before filtering markers and pages replay before the rewind target', async () => {
     const sqlite = createDb();
     try {
-      sqlite.prepare("INSERT INTO sessions (id, source, created_at) VALUES ('s1', 'side-chat', 100)").run();
+      for (let i = 0; i < 400; i++) {
+        insertCostMessage(sqlite, { id: String(i), role: 'user', createdAt: 1 });
+      }
+      expect((await readAutoReviewHistoryPage('s1')).complete).toBe(true);
+      insertCostMessage(sqlite, { id: 'marker', role: 'user', createdAt: 2, agentMeta: { contextRebuild: {} } });
+      const page = await readAutoReviewHistoryPage('s1');
+      expect(page.complete).toBe(false);
+      expect(page.messages).toHaveLength(399);
+      const target = sqlite.prepare("SELECT rowid FROM messages WHERE id = '3'").get() as { rowid: number };
+      const kept = await listMessagesForAgentHandoff('s1', 2, undefined, 'replay', { createdAt: 1, rowid: target.rowid });
+      expect(kept.map(row => row.clientId)).toEqual(['1', '2']);
+    } finally { sqlite.close(); }
+  });
+
+  // Side-chat fork boundary: inherited history remains readable but cannot authorize new actions.
+  // This real SQLite fixture covers the query predicate missing from ordinary history tests (unit).
+  it.each([0, 1])('keeps inherited context out of side-chat authorization (promoted=%s)', async promoted => {
+    const sqlite = createDb();
+    try {
+      sqlite.prepare("INSERT INTO sessions (id, source, created_at, side_chat_promoted) VALUES ('s1', 'side-chat', 100, ?)").run(promoted);
       insertCostMessage(sqlite, { id: 'parent-grant', role: 'user', createdAt: 10 });
       insertCostMessage(sqlite, { id: 'parent-card', role: 'ask_user', createdAt: 20,
         agentMeta: { autoReviewUserText: { text: 'Deploy now', acceptedAt: 150 } } });
@@ -537,6 +623,30 @@ describe('local-db:messages:list cursor', () => {
     }
   });
 
+  // The history view reads through the shared reader (localHistoryViewReader.ts), which restores task
+  // images only through the port the desktop binds (restoreTaskImages); the cases above cover the other
+  // channels. Unbound, the view would show the unrestored rows. Both the outline read and the hydration
+  // of the visible rows restore, so the restored body is what the page carries.
+  it('restores visible images before returning the history view', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    insertMessage(sqlite, { id: 'answer', createdAt: 1000, content: 'Original with a local task image' });
+    const restore = vi.spyOn(taskImages, 'restoreTaskImageRows').mockImplementation(async (_db, rows) =>
+      rows.map((row) => ({ ...row, content: JSON.stringify('restored-image') })));
+    try {
+      registerMessageIpc();
+      const channel = 'local-db:messages:view';
+      const page = await runDeviceLinkInvokeContext({ controllerDeviceId: 'fixture', channel },
+        () => h.handlers.get(channel)!({}, 's1', { lazyDetails: true })) as HistoryViewPage<HistoryMessageSource>;
+      expect(restore).toHaveBeenCalled();
+      expect(JSON.stringify(page)).toContain('restored-image');
+      expect(JSON.stringify(page)).not.toContain('Original with a local task image');
+    } finally {
+      restore.mockRestore();
+      sqlite.close();
+    }
+  });
+
   it('keeps around windows stable for same timestamp rows', async () => {
     const sqlite = createDb();
     sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
@@ -655,9 +765,9 @@ describe('local-db:messages:list cursor', () => {
     expect(JSON.parse(stored.agent_meta)).toEqual({
       turnCostUsd: 0.777042,
     });
-    // list/session + prior-user lookup + bounded visibility scan
-    // (plus the direct storage assertion); never one SQLite query set per SDK segment.
-    expect(prepareSpy).toHaveBeenCalledTimes(6);
+    // The visible real user is already the boundary: no prior-user lookup.
+    // Includes the direct storage assertion; never a query set per SDK segment.
+    expect(prepareSpy).toHaveBeenCalledTimes(5);
   });
 
   it('does not scan older user rounds when projecting legacy turn cost', async () => {
@@ -1115,6 +1225,98 @@ describe('findPendingAgentHandoff 持久消费位', () => {
   });
 });
 
+// The consumption of an engine switch boundary rewrites its row and shows it again to the renderer
+// windows; a hidden context rebuild marker is only rewritten.
+describe('markLatestAgentHandoffConsumed boundary broadcast', () => {
+  function open(content: Record<string, unknown>, role = 'agent_switch') {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    sqlite
+      .prepare(
+        `
+      INSERT INTO messages (
+        id, client_id, session_id, role, content, tool_use_id, agent_meta,
+        agent_kind, created_at, rewind_at
+      ) VALUES ('sw', 'sw', 's1', ?, ?, NULL, NULL, 'cc', 1000, NULL)
+    `,
+      )
+      .run(role, JSON.stringify(content));
+    const sends: Array<{ args: unknown[]; storedAtSend: unknown }> = [];
+    const stored = () => JSON.parse((sqlite.prepare('SELECT content FROM messages WHERE id = ?').get('sw') as { content: string }).content);
+    h.windows = [{ isDestroyed: () => false, webContents: { send: (...args) => sends.push({ args, storedAtSend: stored() }) } }];
+    h.ownerGeneration = 1;
+    // The database worker's content update (client/tx), on this file's in-memory database.
+    h.tx.mockImplementation(async (name: string, input: Record<string, unknown>) => {
+      if (name !== 'message.updateContent') return deletion!(name, input as never);
+      const { changes } = sqlite.prepare('UPDATE messages SET content = ? WHERE session_id = ? AND client_id = ?')
+        .run(input.content, input.sessionId, input.clientId);
+      return { changes } as never;
+    });
+    return { sends, stored };
+  }
+  const deletion = h.tx.getMockImplementation();
+  afterEach(() => {
+    h.windows = [];
+    h.ownerGeneration = null;
+    h.tx.mockImplementation(deletion!);
+  });
+
+  it('writes the consumed engine switch boundary, then shows the written row to each window once', async () => {
+    const { sends, stored } = open({ handoff: 'HANDOFF', consumed: false, fromAgentKind: 'cc' });
+    await markLatestAgentHandoffConsumed('s1');
+    expect(stored()).toEqual({ handoff: 'HANDOFF', consumed: true, fromAgentKind: 'cc' });
+    expect(sends).toHaveLength(1);
+    const [{ args, storedAtSend }] = sends;
+    expect(args[0]).toBe('local-db:messages:created');
+    expect(args[1]).toMatchObject({ sessionId: 's1', message: { clientId: 'sw', role: 'agent_switch',
+      content: { handoff: 'HANDOFF', consumed: true, fromAgentKind: 'cc' } } });
+    expect(args).toHaveLength(3);
+    expect(storedAtSend).toEqual({ handoff: 'HANDOFF', consumed: true, fromAgentKind: 'cc' });
+  });
+
+  // 2026-11-18 replay contract, unit with the existing in-memory DB: a
+  // single large agent_switch must send the preview through list and push,
+  // while restart and consumption still read/write the original replay.
+  it('bounds list and push bodies while keeping the complete pending handoff', async () => {
+    const handoff = `Record start\n${'新'.repeat(24_000)}\n== End of handoff note; the user's new message follows ==`;
+    const { stored, sends } = open({ handoff, handoffCoverage: 'complete', consumed: false });
+    registerMessageIpc();
+    const listed = await h.handlers.get('local-db:messages:list')!({}, 's1', { limit: 10 }) as
+      Array<{ clientId: string; content: { handoff: string; handoffCoverage: string } }>;
+    const content = listed.find(row => row.clientId === 'sw')?.content;
+    expect(content?.handoff.length).toBeLessThanOrEqual(2048);
+    expect(content?.handoff).toContain('preview shortened');
+    expect(content?.handoffCoverage).toBe('complete');
+    await expect(findPendingAgentHandoff('s1')).resolves.toBe(handoff);
+    await markLatestAgentHandoffConsumed('s1');
+    expect(sends[0]?.args[1]).toMatchObject({ message: { content: { ...content, consumed: true } } });
+    expect(stored()).toEqual({ handoff, handoffCoverage: 'complete', consumed: true });
+  });
+
+  it('keeps the owner of the moment it was called: after an owner change the row is written but not shown', async () => {
+    const { sends, stored } = open({ handoff: 'HANDOFF', consumed: false });
+    const consuming = markLatestAgentHandoffConsumed('s1');
+    h.ownerGeneration = 2;
+    await consuming;
+    expect(stored()).toEqual({ handoff: 'HANDOFF', consumed: true });
+    expect(sends).toHaveLength(0);
+  });
+
+  it('neither writes nor shows a boundary already consumed', async () => {
+    const { sends, stored } = open({ handoff: 'HANDOFF', consumed: true, extra: 1 });
+    await markLatestAgentHandoffConsumed('s1');
+    expect(stored()).toEqual({ handoff: 'HANDOFF', consumed: true, extra: 1 });
+    expect(sends).toHaveLength(0);
+  });
+
+  it('writes a hidden context rebuild marker without showing it', async () => {
+    const { sends, stored } = open({ handoff: 'FILTERED', consumed: false }, 'context_rebuild');
+    await markLatestAgentHandoffConsumed('s1');
+    expect(stored()).toEqual({ handoff: 'FILTERED', consumed: true });
+    expect(sends).toHaveLength(0);
+  });
+});
+
 describe('findParkedEngineSession context rebuild boundary', () => {
   it('does not resume a parked native session from before message deletion', async () => {
     const sqlite = createDb();
@@ -1136,6 +1338,143 @@ describe('findParkedEngineSession context rebuild boundary', () => {
       );
 
     await expect(findParkedEngineSession('s1', 'codex')).resolves.toBeNull();
+  });
+
+  it('does not resume a thread parked on another computer', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    sqlite
+      .prepare(
+        `
+      INSERT INTO messages (
+        id, client_id, session_id, role, content, tool_use_id, agent_meta,
+        agent_kind, created_at, rewind_at
+      ) VALUES ('sw', 'sw', 's1', 'agent_switch', ?, NULL, NULL, 'codex', 1000, NULL)
+    `,
+      )
+      .run(JSON.stringify({
+        fromAgentKind: 'codex',
+        fromSdkSessionId: 'parked-codex',
+        fromAgentDeviceId: 'device-a',
+      }));
+
+    await expect(findParkedEngineSession('s1', 'codex', 'device-b')).resolves.toBeNull();
+    await expect(findParkedEngineSession('s1', 'codex', 'device-a')).resolves.toMatchObject({
+      sdkSessionId: 'parked-codex',
+    });
+  });
+
+  it('does not trust a legacy boundary after the task moved devices', async () => {
+    const sqlite = createDb();
+    const insertBoundary = sqlite.prepare(
+      `
+      INSERT INTO messages (
+        id, client_id, session_id, role, content, tool_use_id, agent_meta,
+        agent_kind, created_at, rewind_at
+      ) VALUES (?, ?, ?, 'agent_switch', ?, NULL, NULL, 'codex', ?, NULL)
+    `,
+    );
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('legacy');
+    insertBoundary.run('legacy-codex', 'legacy-codex', 'legacy', JSON.stringify({
+      fromAgentKind: 'codex',
+      fromSdkSessionId: 'parked-codex',
+    }), 1000);
+    insertBoundary.run('legacy-move', 'legacy-move', 'legacy', JSON.stringify({
+      fromAgentKind: 'cc',
+      fromAgentDeviceId: 'device-a',
+      toAgentDeviceId: 'device-b',
+    }), 2000);
+
+    await expect(findParkedEngineSession('legacy', 'codex', 'device-b')).resolves.toBeNull();
+
+    // With no later relocation the legacy boundary keeps its historical resume.
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('legacy-local');
+    insertBoundary.run('legacy-local-codex', 'legacy-local-codex', 'legacy-local', JSON.stringify({
+      fromAgentKind: 'codex',
+      fromSdkSessionId: 'parked-local',
+    }), 1000);
+    await expect(findParkedEngineSession('legacy-local', 'codex', null)).resolves.toMatchObject({
+      sdkSessionId: 'parked-local',
+    });
+  });
+
+  it('invalidates a parked thread after a forced relocation with the same logical device', async () => {
+    const sqlite = createDb();
+    const insertBoundary = sqlite.prepare(
+      `
+      INSERT INTO messages (
+        id, client_id, session_id, role, content, tool_use_id, agent_meta,
+        agent_kind, created_at, rewind_at
+      ) VALUES (?, ?, ?, 'agent_switch', ?, NULL, NULL, 'codex', ?, NULL)
+    `,
+    );
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('share');
+    insertBoundary.run('share-codex', 'share-codex', 'share', JSON.stringify({
+      fromAgentKind: 'codex',
+      fromSdkSessionId: 'parked-share',
+      fromAgentDeviceId: 'share:alice',
+    }), 1000);
+    insertBoundary.run('share-move', 'share-move', 'share', JSON.stringify({
+      fromAgentKind: 'cc',
+      fromAgentDeviceId: 'share:alice',
+      toAgentDeviceId: 'share:alice',
+    }), 2000);
+
+    await expect(findParkedEngineSession('share', 'codex', 'share:alice')).resolves.toBeNull();
+  });
+
+  it('keeps a normal-device parked thread when the task returns to that device', async () => {
+    const sqlite = createDb();
+    const insertBoundary = sqlite.prepare(
+      `
+      INSERT INTO messages (
+        id, client_id, session_id, role, content, tool_use_id, agent_meta,
+        agent_kind, created_at, rewind_at
+      ) VALUES (?, ?, ?, 'agent_switch', ?, NULL, NULL, 'codex', ?, NULL)
+    `,
+    );
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('return');
+    insertBoundary.run('return-codex', 'return-codex', 'return', JSON.stringify({
+      fromAgentKind: 'codex',
+      fromSdkSessionId: 'parked-return',
+      fromAgentDeviceId: 'device-a',
+    }), 1000);
+    insertBoundary.run('return-move', 'return-move', 'return', JSON.stringify({
+      fromAgentKind: 'cc',
+      fromAgentDeviceId: 'device-a',
+      toAgentDeviceId: 'device-b',
+    }), 2000);
+
+    await expect(findParkedEngineSession('return', 'codex', 'device-a')).resolves.toMatchObject({
+      sdkSessionId: 'parked-return',
+    });
+    await expect(findParkedEngineSession('return', 'codex', 'device-b')).resolves.toBeNull();
+  });
+
+  it('keeps a same-device boundary when another engine switched without relocating', async () => {
+    const sqlite = createDb();
+    const insertBoundary = sqlite.prepare(
+      `
+      INSERT INTO messages (
+        id, client_id, session_id, role, content, tool_use_id, agent_meta,
+        agent_kind, created_at, rewind_at
+      ) VALUES (?, ?, ?, 'agent_switch', ?, NULL, NULL, 'codex', ?, NULL)
+    `,
+    );
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('same-device');
+    insertBoundary.run('same-device-codex', 'same-device-codex', 'same-device', JSON.stringify({
+      fromAgentKind: 'codex',
+      fromSdkSessionId: 'parked-same-device',
+      fromAgentDeviceId: 'device-a',
+    }), 1000);
+    insertBoundary.run('same-device-cc', 'same-device-cc', 'same-device', JSON.stringify({
+      fromAgentKind: 'cc',
+      fromAgentDeviceId: 'device-a',
+    }), 2000);
+
+    await expect(findParkedEngineSession('same-device', 'codex', 'device-a')).resolves.toMatchObject({
+      sdkSessionId: 'parked-same-device',
+    });
   });
 });
 
@@ -1414,6 +1753,8 @@ describe('readPriorUserRoundCost', () => {
       },
       costUsd: 18.934191,
       hasEstimatedValue: true,
+      // autoResume 不算新的用户请求：这仍是任务的第一轮。
+      isFirstUserRound: true,
     });
   });
 
@@ -1452,7 +1793,35 @@ describe('readPriorUserRoundCost', () => {
       },
       costUsd: 0.5,
       hasEstimatedValue: false,
+      // /clear 之后的第一轮同样没有可复用的缓存。
+      isFirstUserRound: true,
     });
+  });
+
+  // 「缓存命中率偏低」建议据此排除第一轮；第二条真实用户请求起不再标记。
+  it('首轮运行中的插话不算新的用户请求', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    insertCostMessage(sqlite, { id: 'user-1', role: 'user', createdAt: 1_000 });
+    insertCostMessage(sqlite, {
+      id: 'steer', role: 'user', createdAt: 1_100, agentMeta: { delivery: 'steer' },
+    });
+    insertCostMessage(sqlite, { id: 'target', role: 'assistant', createdAt: 1_200 });
+
+    const prior = await readPriorUserRoundCost('s1', 'target');
+    expect(prior.isFirstUserRound).toBe(true);
+  });
+
+  it('第二条真实用户请求起不再标记为第一轮', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    insertCostMessage(sqlite, { id: 'user-1', role: 'user', createdAt: 1_000 });
+    insertCostMessage(sqlite, { id: 'reply-1', role: 'assistant', createdAt: 1_100 });
+    insertCostMessage(sqlite, { id: 'user-2', role: 'user', createdAt: 1_200 });
+    insertCostMessage(sqlite, { id: 'target', role: 'assistant', createdAt: 1_300 });
+
+    const prior = await readPriorUserRoundCost('s1', 'target');
+    expect(prior.isFirstUserRound).toBeUndefined();
   });
 });
 
@@ -1464,10 +1833,31 @@ describe('media user-round costs', () => {
     const db = {
       drizzle: h.db,
       queryOne: async (query: string, params: unknown[] = []) => sqlite.prepare(query).get(...params),
+      query: async (query: string, params: unknown[] = []) => sqlite.prepare(query).all(...params),
       exec: async (query: string, params: unknown[] = []) => sqlite.prepare(query).run(...params),
     } as unknown as DbClient;
     return { sqlite, db };
   }
+
+  // SQLite/IPC: historical mixed turns have per-model facts but only one scalar.
+  // Include an unpriced final continuation on a narrow page to check the whole round.
+  it('recovers both native currencies on a historical continuation from recorded models', async () => {
+    const { sqlite } = fixture();
+    insertCostMessage(sqlite, { id: 'user', role: 'user', createdAt: 1 });
+    const dollars = actual(1);
+    const yuan = { ...actual(3), currency: 'CNY' };
+    insertCostMessage(sqlite, { id: 'segment', role: 'assistant', createdAt: 2, agentMeta: {
+      turnCost: dollars, turnUsageDetails: { perModelCost: [
+        { model: 'own-key', money: dollars }, { model: 'gateway', money: yuan },
+      ] },
+    } });
+    insertCostMessage(sqlite, { id: 'final', role: 'assistant', createdAt: 3 });
+    expect(await readPriorUserRoundCost('s1', 'final')).toMatchObject({ amounts: [dollars, yuan] });
+    registerMessageIpc();
+    const rows = await h.handlers.get('local-db:messages:list')!({}, 's1', { limit: 1 }) as Array<{ id: string; agentMeta: unknown }>;
+    expect(rows).toMatchObject([{ id: 'final', agentMeta: { turnUsageDetails: { userTurnAmounts: [dollars, yuan] } } }]);
+    expect(sqlite.prepare("SELECT agent_meta FROM messages WHERE id = 'final'").pluck().get()).toBeNull();
+  });
 
   it('adds media to the visible round, keeps raw subscription valuation, and does not carry it to the next user', async () => {
     const { sqlite, db } = fixture();
@@ -1489,6 +1879,41 @@ describe('media user-round costs', () => {
     expect((await refreshMediaUserTurnCost(db, 's1', 'user'))?.clientId).toBe('final');
   });
 
+  // Integration: real SQLite projection, same model on different channels and a
+  // late fee. Protects against cumulative totals and subsequent rounds being billed twice.
+  it('reads model/channel details from the owning round and refreshes mixed subscription value once', async () => {
+    const { sqlite, db } = fixture();
+    const estimate = { ...actual(2), kind: 'value-estimate', approximate: true };
+    insertCostMessage(sqlite, { id: 'user', role: 'user', createdAt: 1, agentMeta: {
+      mediaCosts: [actual(.75)], mediaCostDetails: [{ model: 'extra-model', category: 'additional',
+        billingSource: 'cindy-ai', money: actual(.75) }],
+    } });
+    insertCostMessage(sqlite, { id: 'answer', role: 'assistant', createdAt: 2, agentMeta: {
+      turnCost: actual(1), userTurnCostUsd: 999, turnUsageDetails: {
+        inputTokens: 100, perModelCost: [
+          { model: 'same-model', billingSource: 'subscription', money: estimate },
+          { model: 'same-model', billingSource: 'cindy-ai', money: actual(1) },
+        ],
+      },
+    } });
+    insertCostMessage(sqlite, { id: 'next', role: 'user', createdAt: 3 });
+    insertCostMessage(sqlite, { id: 'other', role: 'assistant', createdAt: 4, agentMeta: { turnCost: actual(5) } });
+    const rows = await readSessionCostDetails(db, 's1', 'answer');
+    expect(rows.map(row => [row.model, row.billingSource, row.money.amount]))
+      .toEqual([['extra-model', 'cindy-ai', .75], ['same-model', 'subscription', 2], ['same-model', 'cindy-ai', 1]]);
+    for (let i = 0; i < 2; i++) {
+      expect(await refreshMediaUserTurnCost(db, 's1', 'user')).toMatchObject({
+        clientId: 'answer', userTurnMoney: { amount: 3.75 }, userTurnCostIsEstimate: true,
+        turnUsageDetails: { additionalCosts: [actual(.75)] },
+      });
+    }
+    expect(await readSessionCostDetails(db, 'other-session')).toEqual([]);
+    sqlite.prepare("UPDATE messages SET rewind_at = 5 WHERE id = 'answer'").run();
+    expect(await readSessionCostDetails(db, 's1', 'answer')).toEqual([]);
+    sqlite.prepare('UPDATE sessions SET cleared_at = 4').run();
+    expect(await readSessionCostDetails(db, 's1')).toEqual([]);
+  });
+
   it('projects media-only responses without inventing a chat segment price and ignores clear/rewind', async () => {
     const { sqlite, db } = fixture();
     insertCostMessage(sqlite, { id: 'user', role: 'user', createdAt: 10, agentMeta: { mediaCosts: [actual(0.75)] } });
@@ -1506,5 +1931,74 @@ describe('media user-round costs', () => {
     sqlite.prepare('UPDATE sessions SET cleared_at = 10').run();
     expect(await captureMediaUserTurn(db, 's1')).toBeNull();
     expect(await refreshMediaUserTurnCost(db, 's1', 'user')).toBeNull();
+  });
+
+  it('reads only the target round through the target message, including same-timestamp and auto-resume rows', async () => {
+    const { sqlite, db } = fixture();
+    insertCostMessage(sqlite, { id: 'old-user', role: 'user', createdAt: 1 });
+    insertCostMessage(sqlite, { id: 'old-answer', role: 'assistant', createdAt: 1, agentMeta: { turnCost: actual(50) } });
+    insertCostMessage(sqlite, { id: 'user', role: 'user', createdAt: 2, agentMeta: { mediaCosts: [actual(.75)] } });
+    insertCostMessage(sqlite, { id: 'resume', role: 'user', createdAt: 2, agentMeta: { autoResume: true } });
+    insertCostMessage(sqlite, { id: 'answer', role: 'assistant', createdAt: 2, agentMeta: { turnCost: actual(1) } });
+    insertCostMessage(sqlite, { id: 'later', role: 'assistant', createdAt: 2, agentMeta: { turnCost: actual(20) } });
+    insertCostMessage(sqlite, { id: 'next-user', role: 'user', createdAt: 2 });
+    const query = vi.spyOn(db, 'query');
+    expect((await readSessionCostDetails(db, 's1', 'answer')).map(row => row.money.amount)).toEqual([.75, 1]);
+    const fetched = await query.mock.results[0].value as Array<{ clientId: string }>;
+    expect(fetched.map(row => row.clientId)).toEqual(['user', 'resume', 'answer']);
+    expect(await readSessionCostDetails(db, 's1', 'missing')).toEqual([]);
+    const select = vi.spyOn(h.db!, 'select');
+    registerMessageIpc();
+    const result = await h.handlers.get('local-db:messages:estimatedSessionValue')!({}, 's1', {
+      includeBreakdown: true, clientId: 'answer',
+    }) as { costBreakdown: Array<{ money: { amount: number } }> };
+    expect(result.costBreakdown.map(row => row.money.amount)).toEqual([.75, 1]);
+    expect(select).not.toHaveBeenCalled();
+    select.mockRestore();
+  });
+
+  // A committed media fee must survive a missing follow-up patch. The older
+  // stale-total cases did not exercise unpriced assistants or absent metadata.
+  // Real list/around IPC over SQLite; billing metadata must remain untouched.
+  it.each([
+    { name: 'current total', original: { turnCost: actual(1), userTurnCost: actual(1.75) }, amount: 1.75 },
+    { name: 'stale total', original: { turnCost: actual(1), userTurnCost: actual(1) }, amount: 1.75 },
+    { name: 'no total', original: { turnCost: actual(1) }, amount: 1.75 },
+    { name: 'zero price', original: { turnCostUsd: 0 }, amount: .75 },
+    { name: 'usage only', original: {}, amount: .75 },
+    { name: 'no metadata', original: undefined, amount: .75 },
+    { name: 'legacy USD with subscription value', original: { turnCostUsd: 1 }, amount: 3.75, subscriptionValue: 2 },
+    { name: 'stale media snapshot', original: { turnCost: actual(1), userTurnCost: actual(1.5) }, amount: 1.75, snapshotAmount: .5 },
+    { name: 'snapshot without total', original: {}, amount: .75, snapshotAmount: .75 },
+  ])('hydrates a committed media fee with $name without rewriting billing', async ({ original: costs, amount, subscriptionValue, snapshotAmount }) => {
+    const { sqlite } = fixture();
+    insertCostMessage(sqlite, { id: 'user', role: 'user', createdAt: 1,
+      agentMeta: { mediaCosts: [actual(.75)] } });
+    const original = costs && { ...costs,
+      turnUsageDetails: { inputTokens: 1, billingSource: 'cindy-ai', model: 'existing',
+        ...(subscriptionValue ? { perModelCost: [{ model: 'subscription-model', billingSource: 'subscription',
+          money: { ...actual(subscriptionValue), kind: 'value-estimate', approximate: true } }] } : {}),
+        ...(snapshotAmount ? { additionalCosts: [actual(snapshotAmount)] } : {}),
+      } };
+    insertCostMessage(sqlite, { id: 'resume', role: 'user', createdAt: 2, agentMeta: { autoResume: true } });
+    insertCostMessage(sqlite, { id: 'answer', role: 'assistant', createdAt: 2, agentMeta: original });
+    insertCostMessage(sqlite, { id: 'next-user', role: 'user', createdAt: 2 });
+    insertCostMessage(sqlite, { id: 'next-answer', role: 'assistant', createdAt: 2 });
+    registerMessageIpc();
+    const rows = await h.handlers.get('local-db:messages:list')!({}, 's1', { limit: 10 }) as Array<{ id: string; agentMeta: unknown }>;
+    const expected = {
+      ...original, userTurnCost: { ...actual(amount), approximate: !!subscriptionValue },
+      userTurnCostIsEstimate: !!subscriptionValue, turnUsageDetails: {
+        ...original?.turnUsageDetails, additionalCosts: [actual(.75)],
+      },
+    };
+    expect(rows.find(row => row.id === 'answer')?.agentMeta).toMatchObject(expected);
+    expect(rows.find(row => row.id === 'next-answer')?.agentMeta).toBeNull();
+    // A narrow history window must recover the prior user outside that window,
+    // including repeated reads and same-millisecond next-round boundaries.
+    const around = await h.handlers.get('local-db:messages:around')!({}, 's1', 'answer', { radius: 1 }) as typeof rows;
+    expect(around.find(row => row.id === 'answer')?.agentMeta).toMatchObject(expected);
+    expect((sqlite.prepare("SELECT agent_meta FROM messages WHERE id = 'answer'").get() as { agent_meta: string | null }).agent_meta)
+      .toBe(original ? JSON.stringify(original) : null);
   });
 });

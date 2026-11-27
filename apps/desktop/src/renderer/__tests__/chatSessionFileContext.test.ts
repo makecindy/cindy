@@ -10,10 +10,16 @@
  *  3. gallery 改写同源契约:collectSessionImageSrcs 的输出必须与渲染侧
  *     rewriteToRemoteMedia(url, deviceId) 逐条一致,否则 ImageLightbox 的
  *     `sessionImages.includes(src)` 匹配失效(计数错 / 翻图退化)。
+ *     回复正文图(Markdown / 组件图)同理:任务画廊按产品规则
+ *     docs/product-rules/attachment-preview.md(2026-11-24 定稿)跨回合收录,
+ *     从真实 MarkdownRenderer 点开必须落在画廊里的对应位置。最小失败输入:改动前
+ *     回复图点开只有单张(无计数),代码块示例图若被计入则总数错。渲染时地址会变的
+ *     回复图(URL 转码、引用式写法、任务目录内查找)另有一例,见该用例注释。
+ *     Tier: unit/DOM(jsdom,真实 MarkdownRenderer + ImageLightbox)。
  */
 import React, { memo } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 
 // 可控的 remoteProjectsStore 假件:deviceMap 模拟 sessionId→deviceId 注册,
 // notify() 模拟 store 更新广播(origin-injection race 的"迟到注册"时刻)。
@@ -36,6 +42,14 @@ vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   },
   getSessionDeviceId: (sessionId: string) => storeMock.deviceMap.get(sessionId),
 }));
+// Component answers key their view state by the signed-in user.
+vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ user: { id: 'test-owner' } }) }));
+// UserMessage's message actions are not under test here.
+vi.mock('../components/chat/useForkAtMessage', () => ({
+  useForkAtMessage: () => async () => {},
+  textToTiptapDoc: () => null,
+}));
+vi.mock('../components/chat/useDeleteMessage', () => ({ useDeleteMessage: () => async () => {} }));
 
 import {
   LOCAL_FILE_ORIGIN,
@@ -49,7 +63,21 @@ import {
   useChatSessionFile,
   useChatSessionFileValue,
 } from '../components/chat/ChatSessionFileContext';
-import { collectSessionImageSrcs, type RenderItem } from '../components/chat/MessageStream';
+import {
+  collectSessionImageSrcs,
+  collectTaskImageGallery,
+  ToolMediaList,
+  type RenderItem,
+} from '../components/chat/MessageStream';
+import { ImageGalleryContext, ImageGalleryScopeContext } from '../components/chat/ImageGalleryContext';
+import { MarkdownRenderer } from '../components/chat/MarkdownRenderer';
+import { UserMessage } from '../components/chat/UserMessage';
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
+import { MemoryRouter } from 'react-router-dom';
+import { Provider as TooltipProvider } from '@radix-ui/react-tooltip';
+import { _clearSmartResolveCache, toLocalFileUrl } from '@/lib/localPathResolver';
+import { withStarterOptionList } from '../../shared/botStarterOptions';
+import i18n from '@/i18n';
 import { rewriteToRemoteMediaOrigin, type RemoteMediaOrigin } from '../../shared/remoteMediaUrl';
 import type { GhostCardSnapshot } from '@/cindy-brain/ghostCardStore';
 import {
@@ -154,6 +182,20 @@ describe('ChatSessionFileContext', () => {
     storeMock.deviceMap.set('s3', 'dev-7');
     render(React.createElement(Harness, { sessionId: 's3', workingDir: '/wd', remoteHostId: 'host-1' }));
     expect(screen.getByTestId('probe').textContent).toBe('device:dev-7|s3|/wd');
+  });
+
+  // 远程归属注入前 origin 暂时是 local;拿 workingDir 查本机文件系统的能力若只看 origin,
+  // 会把远端路径交给本机搜索。localConfirmed 只认会话视图确认过的本机归属。
+  it.each([
+    ['已确认本机', 'c1', null, null, undefined, true],
+    ['归属尚未解析', 'c2', undefined, null, undefined, false],
+    ['会话视图判定为远端设备', 'c3', 'dev-1', null, undefined, false],
+    ['SSH 会话', 'c4', null, 'host-1', undefined, false],
+    ['已确认本机但 store 注册了设备', 'c5', null, null, 'dev-5', false],
+  ])('localConfirmed:%s', (_label, sessionId, ownerDeviceId, remoteHostId, registered, expected) => {
+    if (registered) storeMock.deviceMap.set(sessionId, registered);
+    const { result } = renderHook(() => useChatSessionFileValue(sessionId, '/wd', remoteHostId, ownerDeviceId));
+    expect(result.current.localConfirmed).toBe(expected);
   });
 });
 
@@ -307,5 +349,477 @@ describe('collectSessionImageSrcs 与渲染改写同源契约', () => {
       { src: spawnImage, galleryId: ghostCardGalleryId(spawnCallId, 0) },
       { src: anchoredImage },
     ]);
+  });
+
+  // 依据：GLB/GLTF 预览图点开走 3D 查看器，不是看图器；进画廊会让翻页翻到一张静态海报。
+  // 缺口：工具产出与插件卡片回锚两条收集路径此前都不看 modelFile。
+  it('3D 模型预览图不进任务画廊，非 GLB/GLTF 模型的预览图照常进', () => {
+    const model = (format: string) => ({
+      provider: 'cindy' as const,
+      url: `cindy-media://blobs/${'9'.repeat(64)}.glb`,
+      format,
+    });
+    const modelItems: RenderItem[] = [
+      {
+        type: 'tool_media',
+        key: 'm-model',
+        items: [
+          { kind: 'image', url: 'xdt-image://sess/plain.png' },
+          { kind: 'image', url: 'xdt-image://sess/glb-poster.png', modelFile: model('glb') },
+          { kind: 'image', url: 'xdt-image://sess/fbx-poster.png', modelFile: model('FBX') },
+        ],
+      },
+      {
+        type: 'ghost_card',
+        key: 'ghostcard-model',
+        callId: 'card-model',
+        ghostId: 'cindy-art',
+        tool: 'generate',
+        toolCall: { clientId: 'tool-model', role: 'assistant', content: '' } as never,
+        settled: true,
+        media: [
+          { kind: 'image', url: 'xdt-image://sess/gltf-poster.png', modelFile: model('GLTF') },
+          { kind: 'image', url: 'xdt-image://sess/card-plain.png' },
+        ],
+      },
+    ];
+    expect(collectSessionImageSrcs(modelItems, undefined).map((g) => g.src)).toEqual([
+      'xdt-image://sess/plain.png',
+      'xdt-image://sess/fbx-poster.png',
+      'xdt-image://sess/card-plain.png',
+    ]);
+  });
+
+  it('回复正文图进入跨回合任务画廊，点开落在对应位置', () => {
+    const blob = (char: string) => `cindy-media://blobs/${char.repeat(64)}.png`;
+    const [uploaded, before, after, example, live] = ['1', '2', '3', '4', '5'].map(blob);
+    const reply = [
+      `Before:\n\n![before](${before})\n`,
+      '```md',
+      `![example](${example})`,
+      '```',
+      '',
+      '```cindy-ui',
+      `{"version":1,"seq":1,"op":"create","id":"after","kind":"image","props":{"src":"${after}","alt":"after"}}`,
+      '```',
+    ].join('\n');
+    const turns: RenderItem[] = [
+      {
+        type: 'message',
+        key: 'u1',
+        message: {
+          clientId: 'u1',
+          role: 'user',
+          content: 'Here is the bug',
+          images: [{ url: uploaded, mimeType: 'image/png', originalName: 'bug.png' }],
+        },
+      },
+      { type: 'message', key: 'a1', message: { clientId: 'a1', role: 'assistant', content: reply } },
+      {
+        type: 'message',
+        key: 'a2',
+        message: { clientId: 'a2', role: 'assistant', content: `![live](${live})`, isStreaming: true },
+      },
+    ];
+    const gallery = collectTaskImageGallery(
+      turns,
+      (item) => collectSessionImageSrcs([item as RenderItem]),
+      {
+        cache: new Map(),
+        workingDir: '/work',
+        allowPrivilegedLinks: true,
+        remoteMediaOrigin: undefined,
+        ownershipPending: false,
+        resolveInWorkspace: false,
+      },
+    );
+    // 代码块里的示例图、仍在输出的回复不进画廊。
+    expect(gallery.map((image) => image.src)).toEqual([uploaded, before, after]);
+
+    render(
+      React.createElement(
+        ImageGalleryContext.Provider,
+        { value: gallery },
+        React.createElement(
+          ImageGalleryScopeContext.Provider,
+          { value: 'a1' },
+          React.createElement(MarkdownRenderer, {
+            renderRichAnswers: true,
+            content: reply,
+            workingDir: '/work',
+            currentSessionId: 'task',
+          }),
+        ),
+      ),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'before' }));
+    expect(screen.getByText('2 / 3')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: i18n.t('chat.media.prevImage') }));
+    expect(screen.getByText('1 / 3')).toBeTruthy();
+    expect(screen.getByText('bug.png')).toBeTruthy();
+  });
+
+  // 渲染时地址会变的回复图：URL 被转码、引用式写法、相对任务目录写的路径（画廊在
+  // 历史加载时、目录查找完成前就已建好）。最小失败输入：`![web](https://example.com/图片.png)`
+  // 点开只有单张；`[r]:` 引用图不在画廊；翻到 `out/b.png` 显示直接拼接的坏地址。
+  it('地址被改写或需在任务目录查找的回复图，点开与翻页都落在任务画廊', async () => {
+    const resolvePathBatch = vi.fn(async ({ hrefs }: { hrefs: string[] }) =>
+      Object.fromEntries(
+        hrefs.map((href) => [href, { status: 'unique', candidates: [`/work/sub/${href}`], kind: 'file' }]),
+      ),
+    );
+    (window as unknown as { electronAPI?: unknown }).electronAPI = { resolvePathBatch };
+    try {
+      const web = 'https://example.com/图片.png';
+      const ref = 'https://example.com/ref.png';
+      const first = `![web](${web})\n\n![ref][r]\n\n[r]: ${ref}`;
+      const second = '![a](out/a.png)\n\n![b](out/b.png)';
+      const turns: RenderItem[] = [
+        { type: 'message', key: 'a1', message: { clientId: 'a1', role: 'assistant', content: first } },
+        { type: 'message', key: 'a2', message: { clientId: 'a2', role: 'assistant', content: second } },
+      ];
+      const gallery = collectTaskImageGallery(turns, () => [], {
+        cache: new Map(),
+        workingDir: '/work',
+        allowPrivilegedLinks: true,
+        remoteMediaOrigin: undefined,
+        ownershipPending: false,
+        resolveInWorkspace: true,
+      });
+      expect(gallery.map((image) => image.target)).toEqual([web, ref, 'out/a.png', 'out/b.png']);
+
+      const session = { sessionId: 'task', workingDir: '/work', origin: LOCAL_FILE_ORIGIN, localConfirmed: true };
+      const mount = (scope: string, content: string) =>
+        render(
+          React.createElement(ChatSessionFileProvider, {
+            value: session,
+            children: React.createElement(
+              ImageGalleryContext.Provider,
+              { value: gallery },
+              React.createElement(
+                ImageGalleryScopeContext.Provider,
+                { value: scope },
+                React.createElement(MarkdownRenderer, {
+                  renderRichAnswers: true,
+                  content,
+                  workingDir: '/work',
+                  currentSessionId: 'task',
+                }),
+              ),
+            ),
+          }),
+        );
+      const next = () => fireEvent.click(screen.getByRole('button', { name: i18n.t('chat.media.nextImage') }));
+
+      const firstView = mount('a1', first);
+      fireEvent.click(screen.getByRole('button', { name: 'web' }));
+      expect(screen.getByText('1 / 4')).toBeTruthy();
+      next();
+      expect(screen.getByText('2 / 4')).toBeTruthy();
+      firstView.unmount();
+
+      mount('a2', second);
+      fireEvent.click(await screen.findByRole('button', { name: 'a' }));
+      expect(screen.getByText('3 / 4')).toBeTruthy();
+      next();
+      expect(screen.getByText('4 / 4')).toBeTruthy();
+      // The viewer resolves the entry in the task folder, as the reply does.
+      await waitFor(() =>
+        expect(document.querySelector('.modal-panel img')?.getAttribute('src')).toBe(
+          toLocalFileUrl('/work/sub/out/b.png'),
+        ),
+      );
+    } finally {
+      delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+      _clearSmartResolveCache();
+    }
+  });
+
+  // PR #12724 review：同一条用户消息里上传了同一张图两次，点第二张要从第二张开始。
+  // 经真实 UserMessage 与任务画廊。最小失败输入：两张同址上传，点第二张显示「1 / 2」。
+  it('用户消息里重复的上传图从点开的那一张开始', () => {
+    const repeated = `cindy-media://blobs/${'u'.repeat(64)}.png`;
+    const images = [
+      { url: repeated, mimeType: 'image/png', originalName: 'first.png' },
+      { url: repeated, mimeType: 'image/png', originalName: 'again.png' },
+    ];
+    const item: RenderItem = {
+      type: 'message',
+      key: 'u1',
+      message: { clientId: 'u1', role: 'user', content: 'twice', images },
+    };
+    const gallery = collectTaskImageGallery(
+      [item],
+      (node) => collectSessionImageSrcs([node as RenderItem]),
+      {
+        cache: new Map(),
+        workingDir: '/work',
+        allowPrivilegedLinks: true,
+        remoteMediaOrigin: undefined,
+        ownershipPending: false,
+        resolveInWorkspace: false,
+      },
+    );
+    render(
+      React.createElement(
+        MemoryRouter,
+        null,
+        React.createElement(TooltipProvider, {
+          children: React.createElement(
+            ImageGalleryContext.Provider,
+            { value: gallery },
+            React.createElement(
+              ImageGalleryScopeContext.Provider,
+              { value: 'u1' },
+              React.createElement(UserMessage, {
+                pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
+                content: 'twice',
+                images,
+                workingDir: '/work',
+              }),
+            ),
+          ),
+        }),
+      ),
+    );
+    fireEvent.click(screen.getByAltText('again.png'));
+    expect(screen.getByText('2 / 2')).toBeTruthy();
+  });
+
+  // PR #12724 review：3D 模型预览图不进任务画廊，渲染端给同一行重复图编号时也必须跳过它，
+  // 否则编号与画廊错位。最小失败输入：同址的 GLB 预览图后跟两张普通图，点第一张显示 2 / 2。
+  it('工具产出里重复的图跳过 3D 模型预览图编号，从点开的那一张开始', () => {
+    const shared = `cindy-media://blobs/${'s'.repeat(64)}.png`;
+    const item: RenderItem = {
+      type: 'tool_media',
+      key: 'm1',
+      items: [
+        {
+          kind: 'image',
+          url: shared,
+          modelFile: { provider: 'cindy', url: `cindy-media://blobs/${'9'.repeat(64)}.glb`, format: 'GLB' },
+        },
+        { kind: 'image', url: shared },
+        { kind: 'image', url: shared },
+      ],
+    };
+    const gallery = collectTaskImageGallery(
+      [item],
+      (node) => collectSessionImageSrcs([node as RenderItem]),
+      {
+        cache: new Map(),
+        workingDir: '/work',
+        allowPrivilegedLinks: true,
+        remoteMediaOrigin: undefined,
+        ownershipPending: false,
+        resolveInWorkspace: false,
+      },
+    );
+    expect(gallery).toHaveLength(2);
+    const openAt = (alt: string) => {
+      const view = render(
+        React.createElement(
+          ImageGalleryContext.Provider,
+          { value: gallery },
+          React.createElement(
+            ImageGalleryScopeContext.Provider,
+            { value: 'm1' },
+            React.createElement(ToolMediaList, { items: item.items }),
+          ),
+        ),
+      );
+      fireEvent.click(screen.getByAltText(alt));
+      const counter = screen.getByText(/^\d+ \/ \d+$/).textContent;
+      view.unmount();
+      return counter;
+    };
+    expect(openAt('tool-image-2')).toBe('1 / 2');
+    expect(openAt('tool-image-3')).toBe('2 / 2');
+  });
+
+  // PR #12724 review：收进已完成工作时间线的回复被插件卡片替换后，卡片仍在时间线里显示，
+  // 卡片图要进任务画廊、被替换的正文图不进，且与前面普通回复的图按时间线顺序排列。
+  // 最小失败输入：画廊漏收卡片图；或卡片图排在前一条回复的图之前。
+  it('工作时间线里替换回复的插件卡片图按时间线顺序进任务画廊', () => {
+    const cardImage = `cindy-media://blobs/${'c'.repeat(64)}.png`;
+    const replyImage = `cindy-media://blobs/${'r'.repeat(64)}.png`;
+    const earlierImage = `cindy-media://blobs/${'e'.repeat(64)}.png`;
+    const ghostCards: GhostCardSnapshot = {
+      version: 1,
+      liveCards: [],
+      byCallId: new Map([
+        ['a1', { status: 'ready', ghostId: 'cindy-art', html: `<img src="${cardImage}">`, height: 200 }],
+      ]),
+    };
+    const group = {
+      type: 'work_group',
+      key: 'wg',
+      isStreaming: false,
+      children: [
+        { type: 'message', key: 'a0', message: { clientId: 'a0', role: 'assistant', content: `![e](${earlierImage})` } },
+        { type: 'message', key: 'a1', message: { clientId: 'a1', role: 'assistant', content: `![r](${replyImage})` } },
+      ],
+    } as unknown as RenderItem;
+    const gallery = collectTaskImageGallery(
+      [group],
+      (node) => collectSessionImageSrcs([node as RenderItem], undefined, ghostCards),
+      {
+        cache: new Map(),
+        workingDir: '/work',
+        allowPrivilegedLinks: true,
+        remoteMediaOrigin: undefined,
+        ownershipPending: false,
+        resolveInWorkspace: false,
+      },
+      ghostCards,
+    );
+    expect(gallery.map((image) => image.src)).toEqual([earlierImage, cardImage]);
+  });
+
+  // PR #12724 review：画廊只收回复实际显示的图。伙伴开场选项列表显示成按钮、不渲染正文，
+  // 其中的图片语法不进画廊。最小失败输入：选项 `![hidden](B)` 让画廊多出 B。
+  // PR #12724 review：组件里的 cindy-media 图地址被截断时，回复显示「图片地址无效」提示而不是图，
+  // 画廊与渲染端共用 isInvalidRichImageSource。最小失败输入：截断地址的组件图被收进画廊。
+  it('组件里地址无效的 cindy-media 图不进任务画廊', () => {
+    const valid = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+    const reply = [
+      '```cindy-ui',
+      '{"version":1,"seq":1,"op":"create","id":"col","kind":"stack"}',
+      '{"seq":2,"op":"create","id":"bad","kind":"image","parent":"col","props":{"src":"cindy-media://blobs/abc","alt":"bad"}}',
+      `{"seq":3,"op":"create","id":"good","kind":"image","parent":"col","props":{"src":"${valid}","alt":"good"}}`,
+      '```',
+    ].join('\n');
+    const gallery = collectTaskImageGallery(
+      [{ type: 'message', key: 'a1', message: { clientId: 'a1', role: 'assistant', content: reply } }],
+      (node) => collectSessionImageSrcs([node as RenderItem]),
+      {
+        cache: new Map(),
+        workingDir: '/work',
+        allowPrivilegedLinks: true,
+        remoteMediaOrigin: undefined,
+        ownershipPending: false,
+        resolveInWorkspace: false,
+      },
+    );
+    expect(gallery.map((image) => image.src)).toEqual([valid]);
+  });
+
+  it('回复里显示层剥离的内容不进任务画廊', () => {
+    const blob = (char: string) => `cindy-media://blobs/${char.repeat(64)}.png`;
+    const [shown, hidden] = ['s', 'h'].map(blob);
+    const option = `![hidden](${hidden})`;
+    const turns: RenderItem[] = [
+      {
+        type: 'message',
+        key: 'a1',
+        message: {
+          clientId: 'a1',
+          role: 'assistant',
+          content: withStarterOptionList(`Here:\n\n![shown](${shown})`, [option]),
+          botStarterOptions: [option],
+        },
+      },
+    ];
+    const gallery = collectTaskImageGallery(turns, () => [], {
+      cache: new Map(),
+      workingDir: '/work',
+      allowPrivilegedLinks: true,
+      remoteMediaOrigin: undefined,
+      ownershipPending: false,
+      resolveInWorkspace: false,
+    });
+    expect(gallery.map((image) => image.src)).toEqual([shown]);
+  });
+
+  // PR #12724 review：同一回复里重复出现的图要从点开的那一处开始；查看器里一张还没写出
+  // 的相对路径图，文件写到原位置后要重新加载，不能停在失败态。最小失败输入：回复依次
+  // 是 A、B、A，点最后的 A 显示「1 / 3」；两个相同的组件图块点第二个显示「1 / 2」；
+  // `out/c.png` 加载失败后文件出现，失败提示不消失。
+  it('重复图从点开处开始，查看器里后写出的文件会重新加载', async () => {
+    const blob = (char: string) => `cindy-media://blobs/${char.repeat(64)}.png`;
+    const [a, b] = ['a', 'b'].map(blob);
+    const repeated = `![first](${a})\n\n![other](${b})\n\n![again](${a})`;
+    const later = `![shown](${b})\n\n![late](out/c.png)`;
+    const missing = { status: 'none', candidates: [] };
+    const resolvePathBatch = vi.fn(
+      async ({ hrefs }: { hrefs: string[] }): Promise<Record<string, unknown>> =>
+        Object.fromEntries(hrefs.map((href) => [href, missing])),
+    );
+    (window as unknown as { electronAPI?: unknown }).electronAPI = { resolvePathBatch };
+    try {
+      const options = {
+        cache: new Map(),
+        workingDir: '/work',
+        allowPrivilegedLinks: true,
+        remoteMediaOrigin: undefined,
+        ownershipPending: false,
+        resolveInWorkspace: true,
+      };
+      const session = { sessionId: 'task', workingDir: '/work', origin: LOCAL_FILE_ORIGIN, localConfirmed: true };
+      const mount = (content: string) => {
+        const item: RenderItem = { type: 'message', key: 'r', message: { clientId: 'r', role: 'assistant', content } };
+        const gallery = collectTaskImageGallery([item], () => [], options);
+        return render(
+          React.createElement(ChatSessionFileProvider, {
+            value: session,
+            children: React.createElement(
+              ImageGalleryContext.Provider,
+              { value: gallery },
+              React.createElement(
+                ImageGalleryScopeContext.Provider,
+                { value: 'r' },
+                React.createElement(MarkdownRenderer, {
+                  renderRichAnswers: true,
+                  content,
+                  workingDir: '/work',
+                  currentSessionId: 'task',
+                  // As AssistantMessage passes the reply's client id.
+                  galleryMessageKey: 'r',
+                }),
+              ),
+            ),
+          }),
+        );
+      };
+
+      // Two component blocks with the identical image node: same text, different sections.
+      const imageBlock = (src: string) =>
+        '```cindy-ui\n' +
+        JSON.stringify({ version: 1, seq: 1, op: 'create', id: 'pic', kind: 'image', props: { src, alt: 'same' } }) +
+        '\n```';
+      const blocks = mount(`${imageBlock(a)}\n\nbetween\n\n${imageBlock(a)}`);
+      fireEvent.click(screen.getAllByRole('button', { name: 'same' })[1]!);
+      expect(screen.getByText('2 / 2')).toBeTruthy();
+      blocks.unmount();
+
+      const first = mount(repeated);
+      fireEvent.click(screen.getByRole('button', { name: 'again' }));
+      expect(screen.getByText('3 / 3')).toBeTruthy();
+      first.unmount();
+
+      mount(later);
+      fireEvent.click(await screen.findByRole('button', { name: 'shown' }));
+      fireEvent.click(screen.getByRole('button', { name: i18n.t('chat.media.nextImage') }));
+      const viewerImage = () => document.querySelector('.modal-panel img')!;
+      await waitFor(() => expect(viewerImage().getAttribute('src')).toBe(toLocalFileUrl('/work/out/c.png')));
+      fireEvent.error(viewerImage());
+      expect(screen.getByText(i18n.t('chat.media.imageMissing'))).toBeTruthy();
+
+      // The file is written where the reply said; the next check finds it.
+      const now = Date.now();
+      vi.spyOn(Date, 'now').mockImplementation(() => now + 3_000);
+      resolvePathBatch.mockResolvedValue({
+        'out/c.png': { status: 'unique', candidates: ['/work/out/c.png'], kind: 'file' },
+      });
+      act(() => {
+        window.dispatchEvent(new Event('focus'));
+      });
+      await waitFor(() => expect(screen.queryByText(i18n.t('chat.media.imageMissing'))).toBeNull());
+      expect(viewerImage().getAttribute('src')).toBe(toLocalFileUrl('/work/out/c.png'));
+    } finally {
+      vi.restoreAllMocks();
+      delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+      _clearSmartResolveCache();
+    }
   });
 });

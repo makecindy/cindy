@@ -26,6 +26,11 @@
  *
  * 依赖注入(规则 14):openExternal / fetchImpl / logger 全部经 opts 传入,
  * 单测用假浏览器(直接 HTTP 打回调端口)+ 假 fetch 全覆盖,零 Electron。
+ *
+ * 设备码登录(RFC 8628,声明 deviceAuthorizationUrl 时):不起 loopback,改为
+ * 申请 user_code → 拉起服务商确认页(远程时交给控制端展示验证码)→ 按服务商
+ * interval 轮询 tokenUrl。单例取消、令牌包形态与刷新与授权码模式共用;
+ * device_code / user_code 同样不进日志。
  */
 
 import * as http from 'node:http';
@@ -48,12 +53,20 @@ export interface GhostOauthClientConfig {
   authorizeUrl: string;
   /** code / refresh token 交换端点(https)。 */
   tokenUrl: string;
+  /**
+   * 设备码授权端点(RFC 8628)。声明后整单走设备码登录:不起 loopback,
+   * authorizeUrl / pkce / extraAuthorizeParams / redirectPort 不参与本单。
+   */
+  deviceAuthorizationUrl?: string;
   /** 申请的 scope 列表(空数组 = 不带 scope 参数,少数服务商用默认授权面)。 */
   scopes: readonly string[];
   /** scope 参数拼接分隔符(缺省空格 = OAuth 标准;Slack 这类逗号分隔的服务商传 ','). */
   scopeDelimiter?: string;
-  /** 用户在意识设置页自填的 OAuth 客户端 ID。 */
-  clientId: string;
+  /**
+   * 用户在意识设置页自填或清单内置的 OAuth 客户端 ID。由服务端签发应用身份的
+   * tokenBroker(飞书企业)可缺省,授权开始时经 broker bootstrap 取得。
+   */
+  clientId?: string;
   /** 可选:客户端 secret(桌面应用的 installed-app secret 本非机密,但仍按凭证纪律保管)。 */
   clientSecret?: string;
   /** PKCE(S256)开关,缺省 true;个别老服务商不支持时意识可显式声明关闭。 */
@@ -62,6 +75,7 @@ export interface GhostOauthClientConfig {
    * 服务商特有的授权页附加参数,由意识声明(平台不预设 provider 语义):
    * Google 要 refresh token 需 `access_type=offline` + `prompt=consent`,
    * Atlassian 需 `audience=api.atlassian.com` + `prompt=consent`。
+   * 直连 tokenUrl 时,授权 URL 的 resource 原样随授权码交换提交(RFC 8707)。
    * 协议保留参数(response_type / client_id / redirect_uri / state / scope /
    * code_challenge*)不可覆盖,撞名忽略。
    */
@@ -220,10 +234,23 @@ export type GhostOauthBrokerResult =
  * 带登录 JWT 调 server 端 `/api/integrations/<slug>/oauth/exchange|refresh`
  * 并把响应映射成 bundle;本引擎不感知 HTTP 细节。
  */
+/** broker 为本次授权签发的应用身份(一次性授权事务绑定当时的企业 App 版本)。 */
+export type GhostOauthBrokerBootstrapResult =
+  | { ok: true; clientId: string; transactionId: string }
+  | { ok: false; error: 'EXCHANGE_FAILED' | 'SERVICE_UNAVAILABLE' | 'NETWORK'; detail?: string };
+
 export interface GhostOauthBrokerClient {
+  /**
+   * 由服务端签发应用身份的 slug 返回本次授权的 clientId 与授权事务;其它 slug
+   * 返回 null,继续用清单里的 clientId。
+   */
+  bootstrap?(
+    slug: string,
+    params: { redirectUri: string },
+  ): Promise<GhostOauthBrokerBootstrapResult | null>;
   exchange(
     slug: string,
-    params: { code: string; redirectUri: string; codeVerifier?: string },
+    params: { code: string; redirectUri: string; codeVerifier?: string; transactionId?: string },
   ): Promise<GhostOauthBrokerResult>;
   refresh(slug: string, params: { refreshToken: string }): Promise<GhostOauthBrokerResult>;
 }
@@ -247,7 +274,7 @@ export interface StartGhostOauthFlowOptions {
   brandName?: string;
   /**
    * 可选:钉死端口(redirectPort)被外部进程占用时的回收器。listen 失败时
-   * 引擎调它一次(生产注入 portReclaim:查占用 PID 并强杀,护栏见该模块),
+   * 引擎调它一次(生产注入 portReclaim:展示占用程序并经用户确认后结束,护栏见该模块),
    * 返回 true 表示值得重试 listen;未注入或回收失败按 LISTEN_FAILED 收场。
    * 自家上一单的僵尸监听不走这里——引擎在 listen 前就等它关完了。
    */
@@ -255,9 +282,38 @@ export interface StartGhostOauthFlowOptions {
   /** config.tokenBroker 有值时必须注入;未注入按 INVALID_CONFIG 拒。 */
   broker?: GhostOauthBrokerClient;
   logger?: GhostOauthLogger;
+  /**
+   * 设备码登录在本机展示验证码的钩子(只在服务商没给带码确认页、需要用户手输
+   * user_code 时调用;远程单交给控制端展示,不调用)。返回值是本单结束时的
+   * 清理函数(如撤掉仍属于本单的剪贴板内容)。user_code 不得写日志或持久化。
+   */
+  presentDeviceUserCode?: (prompt: GhostOauthDeviceUserCodePrompt) => (() => void) | void;
+}
+
+/** 设备码登录需要用户手输验证码时交给宿主展示的内容(不含 device_code)。 */
+export interface GhostOauthDeviceUserCodePrompt {
+  userCode: string;
+  verificationUrl: string;
+  /** 验证码过期时刻(epoch ms)。 */
+  expiresAt: number;
 }
 
 const FLOW_TIMEOUT_DEFAULT_MS = 5 * 60 * 1000;
+/** 设备码单的整单上限:以服务商 expires_in 为准,但不让异常大的值把一单挂太久。 */
+const DEVICE_FLOW_MAX_MS = 15 * 60 * 1000;
+/** 服务商未给 expires_in 时的缺省有效期(RFC 8628 未规定缺省,取常见值)。 */
+const DEVICE_FLOW_DEFAULT_EXPIRES_MS = 5 * 60 * 1000;
+/**
+ * 轮询间隔:缺省 5s(RFC 8628 §3.5),服务商给的 interval 原样遵守(只设 1s 下限防异常值),
+ * slow_down 每次 +5s 且不设上限——放慢是服务商的要求,整单时长由 deadline 兜底。
+ */
+const DEVICE_POLL_DEFAULT_INTERVAL_MS = 5 * 1000;
+const DEVICE_POLL_MIN_INTERVAL_MS = 1 * 1000;
+/** 轮询遇到连续网络失败的容忍次数(偶发抖动不该让用户重来一遍)。 */
+const DEVICE_POLL_MAX_NETWORK_FAILURES = 3;
+/** 单次端点请求超时(设备码申请与每次轮询)。 */
+const DEVICE_REQUEST_TIMEOUT_MS = 30 * 1000;
+const DEVICE_CODE_GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:device_code';
 /** token 端点响应体读取上限(与 networkSlot 交换引擎同档)。 */
 const TOKEN_RESPONSE_MAX_BYTES = 256 * 1024;
 /** access token 过期安全余量:提前视为过期,避免出网瞬间刚好失效(broker 调用器共用同一口径)。 */
@@ -421,7 +477,10 @@ export async function startGhostOauthFlow(
 ): Promise<GhostOauthFlowResult> {
   const { config } = opts;
 
-  if (!config.clientId) return { ok: false, error: 'INVALID_CONFIG', detail: 'clientId 未配置' };
+  // tokenBroker 可在授权开始时由服务端签发 clientId,缺省时留到流程内判定。
+  if (!config.clientId && !config.tokenBroker) {
+    return { ok: false, error: 'INVALID_CONFIG', detail: 'clientId 未配置' };
+  }
   if (!isSafeHttpsUrl(config.authorizeUrl)) {
     return {
       ok: false,
@@ -445,6 +504,22 @@ export async function startGhostOauthFlow(
       error: 'INVALID_CONFIG',
       detail: 'publicRedirectUri 必须是 https 且不含内嵌凭证',
     };
+  }
+  if (config.deviceAuthorizationUrl !== undefined) {
+    if (!isSafeHttpsUrl(config.deviceAuthorizationUrl)) {
+      return {
+        ok: false,
+        error: 'INVALID_CONFIG',
+        detail: 'deviceAuthorizationUrl 必须是 https 且不含内嵌凭证',
+      };
+    }
+    if (config.tokenBroker !== undefined) {
+      return {
+        ok: false,
+        error: 'INVALID_CONFIG',
+        detail: '设备码登录不支持 tokenBroker',
+      };
+    }
   }
 
   // 本单取消信号在任何 await 之前**同步**注册:外部 cancel 与后来单的顶替,
@@ -477,7 +552,9 @@ export async function startGhostOauthFlow(
     // 就直接收场,不去抢端口。
     if (prior) await prior.catch(() => undefined);
     if (cancellation.isCancelled()) return { ok: false, error: 'CANCELLED' };
-    return runGhostOauthFlow(opts, cancellation);
+    return opts.config.deviceAuthorizationUrl !== undefined
+      ? runGhostDeviceFlow(opts, cancellation)
+      : runGhostOauthFlow(opts, cancellation);
   })();
   // 同步挂链:第三单在本单尚未真正跑起来时进场,也严格排到本单之后——
   // 任意时刻至多一单持有监听,不存在两单并发抢同一钉死端口的窗口。
@@ -601,23 +678,6 @@ async function runGhostOauthFlow(
   const callbackPath = config.callbackPath ?? CALLBACK_PATH;
   const redirectUri = config.publicRedirectUri ?? `http://127.0.0.1:${port}${callbackPath}`;
 
-  const authorizeUrl = new URL(config.authorizeUrl);
-  authorizeUrl.searchParams.set('response_type', 'code');
-  authorizeUrl.searchParams.set('client_id', config.clientId);
-  authorizeUrl.searchParams.set('redirect_uri', redirectUri);
-  authorizeUrl.searchParams.set('state', state);
-  if (config.scopes.length > 0) {
-    authorizeUrl.searchParams.set('scope', config.scopes.join(config.scopeDelimiter ?? ' '));
-  }
-  if (challenge) {
-    authorizeUrl.searchParams.set('code_challenge', challenge);
-    authorizeUrl.searchParams.set('code_challenge_method', 'S256');
-  }
-  for (const [key, value] of Object.entries(config.extraAuthorizeParams ?? {})) {
-    if (RESERVED_AUTHORIZE_PARAMS.has(key)) continue;
-    authorizeUrl.searchParams.set(key, value);
-  }
-
   // 回调等待(含超时与取消;三路竞速,谁先到听谁的)。
   const callback = new Promise<
     { kind: 'code'; code: string } | { kind: 'invalid'; detail: string }
@@ -714,6 +774,45 @@ async function runGhostOauthFlow(
   try {
     // listen / 回收期间已被顶掉或取消:别再拉浏览器弹无主的授权页。
     if (cancellation.isCancelled()) return { ok: false, error: 'CANCELLED' };
+    // 由服务端签发应用身份的 broker(飞书企业):每次授权取企业当前 App ID 与一次性
+    // 授权事务,不用包内 clientId(包内的只留给不认识该接口的旧客户端)。
+    let clientId = config.clientId;
+    let transactionId: string | undefined;
+    // 请求挂住时仍要能被取消(再点连接会顶掉本单)并受整单时限约束,否则本单
+    // 一直占着回调端口,新的一单也排不上。
+    const bootstrapping = config.tokenBroker
+      ? opts.broker?.bootstrap?.(config.tokenBroker, { redirectUri })
+      : undefined;
+    const issued = bootstrapping
+      ? await Promise.race([bootstrapping, timeout, cancellation.cancelledPromise])
+      : null;
+    if (issued === 'timeout') return { ok: false, error: 'TIMEOUT' };
+    if (issued === 'cancelled') return { ok: false, error: 'CANCELLED' };
+    if (issued) {
+      if (!issued.ok) {
+        logger?.warn('ghost oauth broker 获取授权应用失败', { slug: config.tokenBroker, error: issued.error });
+        return { ok: false, error: issued.error, detail: issued.detail };
+      }
+      ({ clientId, transactionId } = issued);
+    }
+    if (!clientId) return { ok: false, error: 'INVALID_CONFIG', detail: 'clientId 未配置' };
+    if (cancellation.isCancelled()) return { ok: false, error: 'CANCELLED' };
+    const authorizeUrl = new URL(config.authorizeUrl);
+    authorizeUrl.searchParams.set('response_type', 'code');
+    authorizeUrl.searchParams.set('client_id', clientId);
+    authorizeUrl.searchParams.set('redirect_uri', redirectUri);
+    authorizeUrl.searchParams.set('state', state);
+    if (config.scopes.length > 0) {
+      authorizeUrl.searchParams.set('scope', config.scopes.join(config.scopeDelimiter ?? ' '));
+    }
+    if (challenge) {
+      authorizeUrl.searchParams.set('code_challenge', challenge);
+      authorizeUrl.searchParams.set('code_challenge_method', 'S256');
+    }
+    for (const [key, value] of Object.entries(config.extraAuthorizeParams ?? {})) {
+      if (RESERVED_AUTHORIZE_PARAMS.has(key)) continue;
+      authorizeUrl.searchParams.set(key, value);
+    }
     opts.remote?.assertCurrent();
     if (opts.remote) await new Promise<void>(resolve => server.close(() => resolve()));
     // Reserve the same redirect port on both hosts. The controller never kills a port owner.
@@ -747,6 +846,7 @@ async function runGhostOauthFlow(
         code: outcome.code,
         redirectUri,
         ...(verifier !== null ? { codeVerifier: verifier } : {}),
+        ...(transactionId !== undefined ? { transactionId } : {}),
       });
       opts.remote?.assertCurrent();
       if (!brokered.ok) {
@@ -773,9 +873,15 @@ async function runGhostOauthFlow(
     form.set('grant_type', 'authorization_code');
     form.set('code', outcome.code);
     form.set('redirect_uri', redirectUri);
-    form.set('client_id', config.clientId);
+    form.set('client_id', clientId);
     if (config.clientSecret) form.set('client_secret', config.clientSecret);
     if (verifier) form.set('code_verifier', verifier);
+    // RFC 8707: preserve the resource indicators actually sent during authorization,
+    // including URL query values and extraAuthorizeParams overrides. Other
+    // authorize-only parameters (prompt, state, etc.) must not reach this endpoint.
+    for (const resource of authorizeUrl.searchParams.getAll('resource')) {
+      form.append('resource', resource);
+    }
 
     let res: Response;
     try {
@@ -835,6 +941,348 @@ async function runGhostOauthFlow(
 }
 
 /* ------------------------------------------------------------------------ */
+/* 设备码登录(RFC 8628)                                                     */
+/* ------------------------------------------------------------------------ */
+
+interface DeviceAuthorizationResponse {
+  device_code?: unknown;
+  user_code?: unknown;
+  verification_uri?: unknown;
+  verification_uri_complete?: unknown;
+  /** Google 等早期实现用的字段名。 */
+  verification_url?: unknown;
+  expires_in?: unknown;
+  interval?: unknown;
+}
+
+function positiveSeconds(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+/**
+ * 确认页地址只接受 https 默认端口、无内嵌凭证,且域名落在插件声明过的授权面:
+ * 设备码端点 / 授权页 / token 端点所在域名,或 manifest network.hosts 白名单。
+ * 服务商响应是外部输入,不能借它把用户引到白名单之外的页面。
+ */
+function safeVerificationUrl(raw: unknown, config: GhostOauthClientConfig): string | null {
+  if (typeof raw !== 'string' || raw.length === 0 || raw.length > 2048) return null;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'https:' || url.port !== '' || url.username || url.password) return null;
+  const hostname = url.hostname.toLowerCase();
+  const declaredHosts = new Set<string>();
+  for (const declared of [config.deviceAuthorizationUrl, config.authorizeUrl, config.tokenUrl]) {
+    if (!declared) continue;
+    try {
+      declaredHosts.add(new URL(declared).hostname.toLowerCase());
+    } catch {
+      /* 入口已校验 */
+    }
+  }
+  if (
+    declaredHosts.has(hostname) ||
+    (config.corsDeliveryHosts ?? []).some((pattern) => ghostNetworkHostMatches(pattern, hostname))
+  ) {
+    return url.toString();
+  }
+  return null;
+}
+
+/** 用户手输的验证码只接受可展示的短字符串(与远程卡片同一形状),其余视为服务商响应异常。 */
+function safeUserCode(raw: unknown): string | null {
+  return typeof raw === 'string' && /^[A-Za-z0-9](?:[A-Za-z0-9 -]{0,30}[A-Za-z0-9])?$/.test(raw)
+    ? raw
+    : null;
+}
+
+function readOauthError(text: string | null): string {
+  if (!text) return '';
+  try {
+    const parsed = JSON.parse(text) as { error?: unknown };
+    return typeof parsed.error === 'string' ? parsed.error : '';
+  } catch {
+    return '';
+  }
+}
+
+/** 可被取消打断的等待;返回 false 表示等待期间本单已取消。 */
+function sleepUnlessCancelled(ms: number, cancellation: FlowCancellation): Promise<boolean> {
+  if (cancellation.isCancelled()) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(!cancellation.isCancelled()), ms);
+    void cancellation.cancelledPromise.then(() => {
+      clearTimeout(timer);
+      resolve(false);
+    });
+  });
+}
+
+/**
+ * 设备码单主体:申请 user_code → 拉起确认页 → 轮询 tokenUrl。
+ * 客户端认证:设备码申请带 client_id,有 secret 时另带 HTTP Basic(RFC 6749
+ * §2.3.1 服务端必须支持的方式);轮询与授权码交换同口径在表单里带 client_secret。
+ */
+async function runGhostDeviceFlow(
+  opts: StartGhostOauthFlowOptions,
+  cancellation: FlowCancellation,
+): Promise<GhostOauthFlowResult> {
+  const { config, fetchImpl } = opts;
+  const logger: GhostOauthLogger | undefined = opts.remote && opts.logger ? {
+    info: message => opts.logger!.info(message),
+    warn: message => opts.logger!.warn(message),
+  } : opts.logger;
+  const deviceAuthorizationUrl = config.deviceAuthorizationUrl!;
+  const clientId = config.clientId!;
+  const inflight = new AbortController();
+  void cancellation.cancelledPromise.then(() => inflight.abort());
+  const remoteAbort = new AbortController();
+  // 控制端回「已打开」后,远程事务要一直活到账号落库(connectAccount 还会 assertCurrent);
+  // 此后不能再用 remoteAbort 取消它,失败收尾交给外层 remote.finish(false)。
+  let remoteOpened = false;
+  let releasePrompt: (() => void) | void = undefined;
+  const requestSignal = () =>
+    AbortSignal.any([inflight.signal, AbortSignal.timeout(DEVICE_REQUEST_TIMEOUT_MS)]);
+  try {
+    const form = new URLSearchParams();
+    form.set('client_id', clientId);
+    if (config.scopes.length > 0) form.set('scope', config.scopes.join(config.scopeDelimiter ?? ' '));
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Accept: 'application/json',
+    };
+    if (config.clientSecret) {
+      const basic = Buffer.from(
+        `${encodeURIComponent(clientId)}:${encodeURIComponent(config.clientSecret)}`,
+        'utf8',
+      ).toString('base64');
+      headers.Authorization = `Basic ${basic}`;
+    }
+    let res: Response;
+    let text: string | null;
+    try {
+      res = await fetchImpl(deviceAuthorizationUrl, {
+        method: 'POST',
+        headers,
+        body: form.toString(),
+        // 请求带 client 凭证:不跟随重定向,免得 307/308 把表单带到白名单之外。
+        redirect: 'error',
+        signal: requestSignal(),
+      });
+      text = await readBoundedText(res);
+    } catch (err) {
+      if (cancellation.isCancelled()) return { ok: false, error: 'CANCELLED' };
+      logger?.warn('ghost oauth 设备码申请网络失败', {
+        host: new URL(deviceAuthorizationUrl).hostname,
+        err: String(err),
+      });
+      return { ok: false, error: 'NETWORK', detail: String(err) };
+    }
+    opts.remote?.assertCurrent();
+    if (cancellation.isCancelled()) return { ok: false, error: 'CANCELLED' };
+    if (!res.ok) {
+      logger?.warn('ghost oauth 设备码申请被拒', {
+        host: new URL(deviceAuthorizationUrl).hostname,
+        status: res.status,
+      });
+      return { ok: false, error: 'EXCHANGE_FAILED', detail: summarizeTokenError(res.status, text) };
+    }
+    let authorization: DeviceAuthorizationResponse;
+    try {
+      authorization = JSON.parse(text ?? '') as DeviceAuthorizationResponse;
+    } catch {
+      return { ok: false, error: 'EXCHANGE_FAILED', detail: '设备码端点响应不是合法 JSON' };
+    }
+    const deviceCode =
+      typeof authorization.device_code === 'string' && authorization.device_code.length > 0
+        ? authorization.device_code
+        : null;
+    const userCode = safeUserCode(authorization.user_code);
+    const completeUrl = safeVerificationUrl(authorization.verification_uri_complete, config);
+    const plainUrl =
+      safeVerificationUrl(authorization.verification_uri, config) ??
+      safeVerificationUrl(authorization.verification_url, config);
+    const verificationUrl = completeUrl ?? plainUrl;
+    if (!deviceCode || !userCode || !verificationUrl) {
+      // 只回报确认页域名(不含路径与查询串,user_code 可能在查询串里),便于作者把它声明进 hosts。
+      let offeredHost: string | null = null;
+      for (const raw of [
+        authorization.verification_uri_complete,
+        authorization.verification_uri,
+        authorization.verification_url,
+      ]) {
+        if (typeof raw !== 'string') continue;
+        try {
+          offeredHost = new URL(raw).hostname;
+          break;
+        } catch {
+          /* 非法地址不回报 */
+        }
+      }
+      logger?.warn('ghost oauth 设备码响应不完整或确认页不在授权域名内', {
+        host: new URL(deviceAuthorizationUrl).hostname,
+        hasDeviceCode: deviceCode !== null,
+        hasUserCode: userCode !== null,
+        hasVerificationUrl: verificationUrl !== null,
+        offeredHost,
+      });
+      return {
+        ok: false,
+        error: 'EXCHANGE_FAILED',
+        detail:
+          deviceCode && userCode && offeredHost
+            ? `确认页域名 ${offeredHost} 不在插件声明的授权域名内(可声明进 network.hosts)`
+            : '设备码端点响应缺少 device_code / user_code 或确认页地址',
+      };
+    }
+    const expiresInMs =
+      (positiveSeconds(authorization.expires_in) ?? DEVICE_FLOW_DEFAULT_EXPIRES_MS / 1000) * 1000;
+    const startedAt = Date.now();
+    let deadline = startedAt + Math.min(expiresInMs, DEVICE_FLOW_MAX_MS);
+    if (opts.timeoutMs !== undefined) deadline = Math.min(deadline, startedAt + opts.timeoutMs);
+    if (opts.remote?.expiresAt !== undefined) deadline = Math.min(deadline, opts.remote.expiresAt);
+    let intervalMs = Math.max(
+      (positiveSeconds(authorization.interval) ?? DEVICE_POLL_DEFAULT_INTERVAL_MS / 1000) * 1000,
+      DEVICE_POLL_MIN_INTERVAL_MS,
+    );
+
+    if (opts.remote) {
+      if (!opts.remote.authorizePlugin) {
+        return { ok: false, error: 'INVALID_CONFIG', detail: '控制端不支持设备码登录,请更新后重试' };
+      }
+      opts.remote.assertCurrent();
+      // 控制端打开确认页并展示验证码;它只回「已打开」,令牌仍由本机轮询领取。
+      try {
+        await Promise.race([
+          opts.remote.authorizePlugin(
+            {
+              kind: 'authorization',
+              state: base64Url(crypto.randomBytes(32)),
+              request: { kind: 'device', url: verificationUrl, userCode, expiresAt: deadline },
+            },
+            remoteAbort.signal,
+          ),
+          cancellation.cancelledPromise,
+        ]);
+      } catch {
+        return { ok: false, error: 'CANCELLED' };
+      }
+      if (cancellation.isCancelled()) return { ok: false, error: 'CANCELLED' };
+      remoteOpened = true;
+      opts.remote.assertCurrent();
+    } else {
+      // 带码确认页(verification_uri_complete)打开即可确认;只给了通用页时
+      // 交给宿主展示验证码,让用户在页面上输入。
+      if (!completeUrl && opts.presentDeviceUserCode) {
+        try {
+          releasePrompt = opts.presentDeviceUserCode({
+            userCode,
+            verificationUrl,
+            expiresAt: deadline,
+          });
+        } catch (err) {
+          logger?.warn('ghost oauth 设备码展示失败', { err: String(err) });
+        }
+      }
+      await opts.openExternal(verificationUrl);
+    }
+    logger?.info(opts.remote ? 'ghost oauth 等待控制端确认设备码' : 'ghost oauth 设备码确认页已拉起', {
+      host: new URL(verificationUrl).hostname,
+      withCode: completeUrl !== null,
+    });
+
+    let networkFailures = 0;
+    while (Date.now() < deadline) {
+      const wait = Math.min(intervalMs, Math.max(0, deadline - Date.now()));
+      if (!(await sleepUnlessCancelled(wait, cancellation))) return { ok: false, error: 'CANCELLED' };
+      if (Date.now() >= deadline) break;
+      opts.remote?.assertCurrent();
+      const pollForm = new URLSearchParams();
+      pollForm.set('grant_type', DEVICE_CODE_GRANT_TYPE);
+      pollForm.set('device_code', deviceCode);
+      pollForm.set('client_id', clientId);
+      if (config.clientSecret) pollForm.set('client_secret', config.clientSecret);
+      let pollRes: Response;
+      let pollText: string | null;
+      try {
+        pollRes = await fetchImpl(config.tokenUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            Accept: 'application/json',
+          },
+          body: pollForm.toString(),
+          redirect: 'error',
+          signal: requestSignal(),
+        });
+        pollText = await readBoundedText(pollRes);
+      } catch (err) {
+        if (cancellation.isCancelled()) return { ok: false, error: 'CANCELLED' };
+        networkFailures += 1;
+        if (networkFailures >= DEVICE_POLL_MAX_NETWORK_FAILURES) {
+          logger?.warn('ghost oauth 设备码轮询网络失败', {
+            host: new URL(config.tokenUrl).hostname,
+            err: String(err),
+          });
+          return { ok: false, error: 'NETWORK', detail: String(err) };
+        }
+        continue;
+      }
+      networkFailures = 0;
+      opts.remote?.assertCurrent();
+      if (cancellation.isCancelled()) return { ok: false, error: 'CANCELLED' };
+      if (pollRes.ok) {
+        let parsed: TokenEndpointResponse;
+        try {
+          parsed = JSON.parse(pollText ?? '') as TokenEndpointResponse;
+        } catch {
+          return { ok: false, error: 'EXCHANGE_FAILED', detail: 'token 端点响应不是合法 JSON' };
+        }
+        const bundle = toBundle(parsed);
+        if (bundle) {
+          logger?.info('ghost oauth 设备码授权完成', {
+            host: new URL(config.tokenUrl).hostname,
+            hasRefreshToken: bundle.refreshToken !== null,
+          });
+          return { ok: true, bundle };
+        }
+        // 部分服务商把 pending 放在 2xx 里(无 access_token + error 字段),按错误码继续判。
+      }
+      const error = readOauthError(pollText);
+      if (error === 'authorization_pending') continue;
+      if (error === 'slow_down') {
+        intervalMs += 5 * 1000;
+        continue;
+      }
+      if (error === 'access_denied') {
+        return { ok: false, error: 'CANCELLED', detail: '已在授权页拒绝' };
+      }
+      if (error === 'expired_token') return { ok: false, error: 'TIMEOUT' };
+      logger?.warn('ghost oauth 设备码轮询被拒', {
+        host: new URL(config.tokenUrl).hostname,
+        status: pollRes.status,
+      });
+      return { ok: false, error: 'EXCHANGE_FAILED', detail: summarizeTokenError(pollRes.status, pollText) };
+    }
+    return { ok: false, error: 'TIMEOUT' };
+  } finally {
+    inflight.abort();
+    if (!remoteOpened) remoteAbort.abort();
+    if (typeof releasePrompt === 'function') {
+      try {
+        releasePrompt();
+      } catch {
+        /* 清理失败不影响结果 */
+      }
+    }
+    if (activeAbort === cancellation.myAbort) activeAbort = null;
+  }
+}
+
+/* ------------------------------------------------------------------------ */
 /* 刷新                                                                      */
 /* ------------------------------------------------------------------------ */
 
@@ -884,6 +1332,9 @@ export async function refreshGhostOauthToken(
     return { ok: true, bundle };
   }
 
+  if (!config.clientId) {
+    return { ok: false, error: 'EXCHANGE_FAILED', invalidGrant: false, detail: 'clientId 未配置' };
+  }
   const form = new URLSearchParams();
   form.set('grant_type', 'refresh_token');
   form.set('refresh_token', refreshToken);
@@ -1069,32 +1520,82 @@ function extractIdentityUrlValue(parsed: unknown, path: string): string | null {
 const AVATAR_MAX_BYTES = 256 * 1024;
 /** 头像可接受的图片 mime(data URL 直出给沙箱 <img>,只认常见位图)。 */
 const AVATAR_ALLOWED_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+/** 整次头像下载(含全部跳转)的时间上限。 */
+const AVATAR_TIMEOUT_MS = 10_000;
+const AVATAR_MAX_REDIRECTS = 3;
 
 /**
- * 下载账号头像并转 data URL。地址来自身份响应(服务商自报的 CDN),**绝不
- * 带 Authorization**——头像域名不在凭证注入白名单里,带令牌出去就是泄露。
- * 任何失败(非 https / 非图片 / 超限 / 网络)一律 null,纯 best-effort。
+ * 单跳受防护请求(生产注入 `guardedOutboundFetch`):每一跳都做 DNS/IP 级别的
+ * 内网、回环拦截,且不自动跟随跳转。release 归还连接,读完或放弃 body 后必须调用。
+ */
+export type GhostOauthAvatarHop = (
+  url: string,
+  init: RequestInit,
+) => Promise<{ response: Response; release: () => Promise<void> }>;
+
+/**
+ * 下载账号头像并转 data URL。地址来自身份响应(服务商自报的 CDN),对任何插件都
+ * 开放,因此整条链路按不可信地址处理:每一跳(含跳转)都走注入的受防护单跳请求,
+ * 跳转在这里手动复核 https;body 流式读取,超过上限立即放弃;整次下载有总时限。
+ * **绝不带 Authorization**——头像域名不在凭证注入白名单里,带令牌出去就是泄露。
+ * 任何失败一律 null,纯 best-effort。
  */
 export async function fetchGhostOauthAvatar(opts: {
   url: string;
-  fetchImpl: typeof fetch;
+  fetchHop: GhostOauthAvatarHop;
+  timeoutMs?: number;
 }): Promise<string | null> {
   if (!isSafeHttpsUrl(opts.url)) return null;
-  let res: Response;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? AVATAR_TIMEOUT_MS);
+  timer.unref?.();
   try {
-    res = await opts.fetchImpl(opts.url, { method: 'GET', headers: { Accept: 'image/*' } });
+    let url = opts.url;
+    for (let hop = 0; hop <= AVATAR_MAX_REDIRECTS; hop++) {
+      const { response, release } = await opts.fetchHop(url, {
+        method: 'GET',
+        headers: { Accept: 'image/*' },
+        redirect: 'manual',
+        signal: controller.signal,
+      });
+      try {
+        if ([301, 302, 303, 307, 308].includes(response.status)) {
+          const location = response.headers.get('location');
+          if (!location) return null;
+          const next = new URL(location, url).href;
+          if (!isSafeHttpsUrl(next)) return null;
+          url = next;
+          continue;
+        }
+        if (!response.ok) return null;
+        const mime = (response.headers.get('content-type') ?? '').split(';')[0]?.trim().toLowerCase() ?? '';
+        if (!AVATAR_ALLOWED_MIMES.has(mime)) return null;
+        const reader = response.body?.getReader();
+        if (!reader) return null;
+        const chunks: Uint8Array[] = [];
+        let total = 0;
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            total += value.byteLength;
+            if (total > AVATAR_MAX_BYTES) return null;
+            chunks.push(value);
+          }
+        } finally {
+          reader.releaseLock();
+        }
+        if (total === 0) return null;
+        return `data:${mime};base64,${Buffer.concat(chunks).toString('base64')}`;
+      } finally {
+        await response.body?.cancel().catch(() => undefined);
+        await release();
+      }
+    }
+    return null;
   } catch {
     return null;
+  } finally {
+    clearTimeout(timer);
   }
-  if (!res.ok) return null;
-  const mime = (res.headers.get('content-type') ?? '').split(';')[0]?.trim().toLowerCase() ?? '';
-  if (!AVATAR_ALLOWED_MIMES.has(mime)) return null;
-  let bytes: Buffer;
-  try {
-    bytes = Buffer.from(await res.arrayBuffer());
-  } catch {
-    return null;
-  }
-  if (bytes.byteLength === 0 || bytes.byteLength > AVATAR_MAX_BYTES) return null;
-  return `data:${mime};base64,${bytes.toString('base64')}`;
 }

@@ -11,15 +11,20 @@ public final class CindyIncomingShareModule: Module {
 
   public func definition() -> ModuleDefinition {
     Name("CindyIncomingShare")
-    Function("readSnapshot") { () throws -> String? in
-      try IncomingShareSlot.withDefaults(group: self.group) { defaults in
+    let read = { (wait: Bool) throws -> String? in
+      try IncomingShareSlot.withDefaults(group: self.group, wait: wait) { defaults in
         IncomingShareSlot.read(defaults.data(forKey: IncomingShareSlot.key)) {
           try IncomingShareSlot.clear($0, from: defaults)
         }.flatMap { String(data: $0, encoding: .utf8) }
       }
     }
+    // Foreground receipt can wait on the writer off the JS/UI thread. The
+    // synchronous entry remains for atomic account fences and old JS bundles.
+    Function("readSnapshot") { () throws -> String? in try read(false) }
+    AsyncFunction("readSnapshotAsync") { () throws -> String? in try read(true) }
+      .runOnQueue(DispatchQueue(label: "cindy.incoming-share.read"))
     Function("clearSnapshot") { (expected: String) throws -> Bool in
-      try IncomingShareSlot.withDefaults(group: self.group) { defaults in
+      try IncomingShareSlot.withDefaults(group: self.group, wait: false) { defaults in
         try IncomingShareSlot.clear(Data(expected.utf8), from: defaults)
       }
     }
@@ -30,7 +35,7 @@ public final class CindyIncomingShareModule: Module {
     Function("discardSnapshot") { (expected: String) throws -> Bool in
       let bytes = Data(expected.utf8)
       return try IncomingShareSlot.discard(bytes) { expected in
-        try IncomingShareSlot.withDefaults(group: self.group) { defaults in
+        try IncomingShareSlot.withDefaults(group: self.group, wait: false) { defaults in
           try IncomingShareSlot.clear(expected, from: defaults)
         }
       }

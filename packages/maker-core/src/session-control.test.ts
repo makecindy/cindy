@@ -133,6 +133,33 @@ describe('Session graceful-stop control state', () => {
     await expect(send).resolves.toEqual({ accepted: false, reason: 'cancelled-before-dispatch' });
     expect(sendSpy).not.toHaveBeenCalled();
   });
+  it('cancels a pre-dispatch send reservation without aborting the session', async () => {
+    const stub = createHandle();
+    const session = createSession(stub);
+    const sendSpy = vi.spyOn(stub.handle, 'send');
+    let acceptedStarted!: () => void;
+    const accepted = new Promise<void>((resolve) => { acceptedStarted = resolve; });
+    let releaseAcceptance!: () => void;
+    const acceptanceGate = new Promise<void>((resolve) => { releaseAcceptance = resolve; });
+
+    const send = session.send('hello', {
+      onAccepted: async () => {
+        acceptedStarted();
+        await acceptanceGate;
+      },
+    });
+    await accepted;
+
+    expect(session.getStatus()).toBe('active');
+    expect(session.cancelPendingSend()).toBe(true);
+    releaseAcceptance();
+
+    await expect(send).resolves.toEqual({ accepted: false, reason: 'cancelled-before-dispatch' });
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(stub.abort).not.toHaveBeenCalled();
+    expect(session.getStatus()).toBe('active');
+  });
+
   it('cancels and joins a pre-acceptance send reservation before reporting stop requested', async () => {
     const stub = createHandle();
     let running = false;
@@ -567,6 +594,23 @@ describe('Session graceful-stop control state', () => {
 });
 
 describe('Session current-generation terminal observation', () => {
+  it('retains bounded output-limit details in the observed terminal snapshot', async () => {
+    const stub = createHandle();
+    const session = createSession(stub);
+    await session.send('work');
+    const error = waitForSessionEvent(session, 'error');
+    stub.push({ type: 'error', data: { message: 'limit', reason: 'output-limit', isTerminal: true,
+      outputLimit: { outputTokens: 131072, reasoningTokens: 131064, raw: 'discard' } } });
+    await error;
+    expect(session.getObservedCurrentTurnTerminal().outputLimit).toEqual({ outputTokens: 131072, reasoningTokens: 131064 });
+    const done = waitForSessionEvent(session, 'done');
+    stub.push({ type: 'done', data: {} });
+    await done;
+    expect(session.getObservedCurrentTurnTerminal().outputLimit).toEqual({ outputTokens: 131072, reasoningTokens: 131064 });
+    await session.send('next');
+    expect(session.getObservedCurrentTurnTerminal().outputLimit).toBeUndefined();
+  });
+
   it('reports done until the next reservation, and keeps error ahead of a paired done tail', async () => {
     const stub = createHandle();
     const session = createSession(stub);
@@ -639,11 +683,12 @@ describe('Session current-generation terminal observation', () => {
     expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 1 });
 
     stub.handle.send = vi.fn(async () => {
-      throw new TurnDispatchRejectedError('provider rejected before acceptance');
+      throw new TurnDispatchRejectedError('private upstream details', { diagnostic: 'pi-retry-history-frame-too-large' });
     });
     await expect(session.send('second')).resolves.toEqual({
       accepted: false,
       reason: 'provider-rejected-before-dispatch',
+      diagnostic: 'pi-retry-history-frame-too-large',
     });
     expect(session.getTurnGeneration()).toBe(1);
     expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 1 });
@@ -1330,4 +1375,18 @@ describe('Session current-generation terminal observation', () => {
     await secondDone;
     expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 2 });
   });
+});
+
+// Session tier: an observer can reject a reservation before the provider sees it.
+it('releases a throwing reservation observer so the next Session send can start', async () => {
+  const stub = createHandle();
+  const session = createSession(stub);
+  const release = vi.fn();
+  const reserve = vi.fn().mockImplementationOnce(() => { throw new Error('reservation failed'); }).mockReturnValue(release);
+  session.setTurnLifecycleObserver({ onTurnReserved: reserve, beforeProviderStart() {}, onUndispatched() {}, onTerminal() {} });
+  try {
+    await expect(session.send('first')).rejects.toThrow('reservation failed');
+    expect(await session.send('retry')).toEqual({ accepted: true });
+    expect(release).toHaveBeenCalledWith(true);
+  } finally { await session.close(); }
 });

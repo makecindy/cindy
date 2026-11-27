@@ -171,7 +171,7 @@ describe('mobile message media thumbnail wiring', () => {
     expect(rendererSource).toContain('lightboxImagesForPayload(galleryImages, payload, payloadSourceGroupKey, prev, sourceGroupPresent, retainPendingSnapshot)');
     expect(rendererSource).toContain("const imageLightboxOpen = historyActive && payload?.kind === 'media' && isLightboxMediaKind(payload.media.kind);");
     expect(rendererSource).toContain('payload={historyActive ? payload : null}');
-    expect(rendererSource).toContain('() => (imageLightboxOpen');
+    expect(rendererSource).toMatch(/\(\) =>\s*\(?imageLightboxOpen/);
     expect(rendererSource).toContain(': null),');
     // 旧的内嵌缩放查看器与图库箭头已退役
     expect(rendererSource).not.toContain('ZoomablePayloadImage');
@@ -258,8 +258,6 @@ describe('mobile message media thumbnail wiring', () => {
     expect(screenSource).toContain('diskCache.lookup(diskSource)');
     // 缩略图查找带裸键兜底:回落原图(gif/老被控端)只落裸键,缩略图直接复用不二次下载
     expect(screenSource).toContain('media.thumbnail ? await diskCache.lookup(bareDiskSource)');
-    // inline 缩略图落盘走 storeBytes(字节已随回包到手,不经网络下载)
-    expect(screenSource).toContain('diskCache.storeBytes(diskSource, resolved.inlineBase64, resolved.mimeType)');
     // 带 size:超缓存预算的对象跳过落盘,不白下载
     expect(screenSource).toContain('diskCache.store(bareDiskSource, resolved.url, resolved.mimeType, resolved.size)');
     expect(screenSource).toContain('deviceIdRef.current');

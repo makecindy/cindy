@@ -12,25 +12,30 @@ import { useTranslation } from 'react-i18next';
 
 import { readProviderShareGroupSize, type ProviderShareReceived } from '@cindy/device-link';
 
+import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import {
   ReadOnlyProviderModelSection,
   readOnlyProviderModels,
 } from '@/components/settings/ReadOnlyProviderModels';
 import { Button } from '@/components/ui/button';
+import { ErrorNotice } from '@/components/ui/error-notice';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Switch } from '@/components/ui/switch';
 import { Tip } from '@/components/ui/tooltip';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
+import { useRemotePluginEngines } from '@/hooks/usePluginEngines';
 import { providerMonogram } from '@/lib/providerModels';
-import { refreshRemoteCatalogSnapshot } from '@/lib/remoteCatalogSnapshot';
+import { retryProviderShareCatalog } from '@/lib/remoteCatalogSnapshot';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { extractIpcError, mapIpcErrorToI18nKey } from '@/utils/ipcError';
+import { pluginEngineKeyFromProviderId } from '../../../shared/pluginEngines';
 
 import { providerShareAgentDeviceId } from './providerShareFormat';
 import { providerShareDisplayNames } from './providerShareNames';
 import { useProviderShareReceived } from './providerShareStore';
+import { useProviderShareSource } from './providerShareSource';
 import { ShareAvatar } from './ShareAvatar';
 import { SharedProviderGroupStatus } from './SharedProviderGroupStatus';
 
@@ -75,7 +80,10 @@ export function ProviderShareReceivedRailGroup({
   hiddenShareIds?: ReadonlySet<string>;
 }) {
   const { t } = useTranslation();
-  const { received: all } = useProviderShareReceived();
+  // Another device's shares (cloud instance page) replace this device's list.
+  const source = useProviderShareSource();
+  const local = useProviderShareReceived();
+  const { received: all } = source?.received ?? local;
   const received = hiddenShareIds?.size
     ? all.filter((share) => share.shareId === selectedShareId || !hiddenShareIds.has(share.shareId))
     : all;
@@ -148,12 +156,15 @@ function useCredentialConsent(shareId: string) {
   const [skip, setSkip] = useState<boolean | null>(null);
   const [saving, setSaving] = useState(false);
   const revision = useRef(0);
+  // Trust is per device: another device's page asks that device.
+  const source = useRef(useProviderShareSource());
+  const command: Window['electronAPI']['providerShare']['command'] = (value) =>
+    (source.current?.command ?? window.electronAPI.providerShare.command)(value);
   useEffect(() => {
     const currentRevision = ++revision.current;
     setSkip(null);
     setSaving(false);
-    void window.electronAPI.providerShare
-      .command({ action: 'get-credential-consent', shareId })
+    void command({ action: 'get-credential-consent', shareId })
       .then((view) => {
         if (revision.current === currentRevision) setSkip(view.skip === true);
       })
@@ -167,8 +178,7 @@ function useCredentialConsent(shareId: string) {
   const update = (next: boolean) => {
     const currentRevision = revision.current;
     setSaving(true);
-    void window.electronAPI.providerShare
-      .command({ action: 'set-credential-consent', shareId, skip: next })
+    void command({ action: 'set-credential-consent', shareId, skip: next })
       .then((view) => {
         if (revision.current === currentRevision) setSkip(view.skip === true);
       })
@@ -183,25 +193,70 @@ function useCredentialConsent(shareId: string) {
   return { skip, saving, update };
 }
 
+export function ProviderShareReceivedCatalogRetry({ shareId }: { shareId: string }) {
+  const { t } = useTranslation();
+  const [retrying, setRetrying] = useState(false);
+  const retry = async () => {
+    setRetrying(true);
+    try {
+      await retryProviderShareCatalog(providerShareAgentDeviceId(shareId));
+    } catch {
+      // The unavailable view remains visible and allows another manual retry.
+    } finally {
+      setRetrying(false);
+    }
+  };
+
+  return (
+    <ErrorNotice
+      className="m-5"
+      message={t('newChat.modelSelector.remoteLoadFailed')}
+      actions={(
+        <Button variant="secondary" size="sm" disabled={retrying} onClick={() => void retry()}>
+          {t(retrying ? 'providerShare.received.modelsLoading' : 'providerShare.received.retryModels')}
+        </Button>
+      )}
+    />
+  );
+}
+
 /** 右栏：一条分享给我的供应商。 */
 export function ProviderShareReceivedDetail({ share }: { share: ProviderShareReceived }) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
   const [leaving, setLeaving] = useState(false);
   const credentialConsent = useCredentialConsent(share.shareId);
+  const source = useProviderShareSource();
   const status = receivedStatus(share);
+  const isPluginEngine = pluginEngineKeyFromProviderId(share.providerId) !== null;
   const catalogDeviceId = providerShareAgentDeviceId(share.shareId);
-  const catalog = useDeviceProviders(status === 'active' ? catalogDeviceId : undefined);
-  const provider = catalog.providers.find((entry) => entry.id === share.providerId) ?? catalog.providers[0] ?? null;
-
-  const models = useMemo(
-    () => readOnlyProviderModels(provider, catalog.modelVisibilityOverrides),
-    [provider, catalog.modelVisibilityOverrides],
+  const catalog = useDeviceProviders(!isPluginEngine && status === 'active' ? catalogDeviceId : undefined);
+  const pluginCatalogue = useRemotePluginEngines(
+    isPluginEngine && status === 'active' ? catalogDeviceId : undefined,
+    true,
   );
+  const provider = isPluginEngine
+    ? null
+    : catalog.providers.find((entry) => entry.id === share.providerId) ?? catalog.providers[0] ?? null;
+  const pluginEngine = isPluginEngine
+    ? pluginCatalogue.engines?.find((entry) => entry.providerId === share.providerId) ?? pluginCatalogue.engines?.[0] ?? null
+    : null;
+
+  const models = useMemo(() => {
+    if (isPluginEngine) {
+      if (!pluginEngine) return [];
+      if (pluginEngine.models.length === 0) {
+        return pluginEngine.defaultModelAllowed === false
+          ? []
+          : [{ id: 'default', name: t('newChat.pluginEngines.defaultModel') }];
+      }
+      return pluginEngine.models.map((model) => ({ id: model.id, name: model.displayName || model.id }));
+    }
+    return readOnlyProviderModels(provider, catalog.modelVisibilityOverrides);
+  }, [isPluginEngine, pluginEngine, provider, catalog.modelVisibilityOverrides, t]);
 
   const leave = async () => {
     const ok = await confirm({
-      presentation: 'standard',
       title: t('providerShare.received.leaveConfirm.title', {
         name: share.owner.displayName,
         provider: share.providerLabel,
@@ -213,9 +268,15 @@ export function ProviderShareReceivedDetail({ share }: { share: ProviderShareRec
     if (!ok) return;
     setLeaving(true);
     try {
-      await window.electronAPI.providerShare.command({ action: 'leave', memberId: share.memberId });
+      await (source?.command ?? window.electronAPI.providerShare.command)({
+        action: 'leave',
+        memberId: share.memberId,
+      });
       toast.success(
-        t('providerShare.received.left', { name: share.owner.displayName, provider: share.providerLabel }),
+        t('providerShare.received.left', {
+          name: share.owner.displayName,
+          provider: share.providerLabel,
+        }),
       );
     } catch (error) {
       toast.error(t(mapIpcErrorToI18nKey(error)));
@@ -225,18 +286,25 @@ export function ProviderShareReceivedDetail({ share }: { share: ProviderShareRec
   };
 
   // 只写来自谁；分享者建了供应商组时补一句组里有几台，不写是哪几台(provider-sharing.md §6)。
-  const { received: allReceived } = useProviderShareReceived();
+  const localReceived = useProviderShareReceived();
+  const { received: allReceived } = source?.received ?? localReceived;
   const groupSize = readProviderShareGroupSize(provider);
-  const ownerName = providerShareDisplayNames(allReceived, t).get(share.shareId)
-    ?? t('providerShare.received.fromOwner', { name: share.owner.displayName });
-  const owner = groupSize !== null
-    ? `${ownerName} · ${t('settings.providers.remote.groupBadge', { count: groupSize })}`
-    : ownerName;
+  const ownerName =
+    providerShareDisplayNames(allReceived, t).get(share.shareId) ??
+    t('providerShare.received.fromOwner', { name: share.owner.displayName });
+  const owner =
+    groupSize !== null
+      ? `${ownerName} · ${t('settings.providers.remote.groupBadge', { count: groupSize })}`
+      : ownerName;
   let body: string | null = null;
   if (status === 'paused') body = t('providerShare.received.pausedNote');
   else if (status === 'offline') body = t('providerShare.received.offlineNote');
   else if (status === 'needs-update') body = t('providerShare.received.needsUpdateNote');
-  else if (catalog.error) {
+  else if (isPluginEngine) {
+    if (pluginCatalogue.engines === null) body = t('providerShare.received.modelsLoading');
+    else if (!pluginEngine) body = t('providerShare.received.modelsRefused');
+    else if (models.length === 0) body = t('providerShare.received.modelsEmpty');
+  } else if (catalog.error) {
     // 分享者电脑拒绝(关了远程控制 / 允许被远程调用，或那边还没加载好分享)与连不上要分开说；
     // 其余错误带上错误代码，截图就能看出卡在哪一步。
     const code = extractIpcError(new Error(catalog.error))?.code ?? null;
@@ -260,10 +328,14 @@ export function ProviderShareReceivedDetail({ share }: { share: ProviderShareRec
                 color: 'var(--settings-integration-avatar-icon)',
               }}
             >
-              {provider && hasProviderLogo(provider.id, provider.routing) ? (
+              {isPluginEngine ? (
+                <PluginEngineIcon size={18} iconDataUrl={pluginEngine?.iconDataUrl} />
+              ) : provider && hasProviderLogo(provider.id, provider.routing) ? (
                 <ProviderLogoMark providerId={provider.id} routing={provider.routing} size={18} />
               ) : (
-                <span className="text-15 font-medium leading-none">{providerMonogram(share.providerLabel)}</span>
+                <span className="text-15 font-medium leading-none">
+                  {providerMonogram(share.providerLabel)}
+                </span>
               )}
             </div>
             <div className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -284,7 +356,11 @@ export function ProviderShareReceivedDetail({ share }: { share: ProviderShareRec
           <div className="flex shrink-0 items-center gap-2.5">
             <span role="status" className="inline-flex items-center gap-1.5 text-12 text-[var(--text-secondary)]">
               <StatusDot status={status} />
-              {t(status === 'active' && groupSize !== null ? 'providerShare.received.groupStatus.shareActive' : STATUS_LABEL_KEY[status])}
+              {t(
+                status === 'active' && groupSize !== null
+                  ? 'providerShare.received.groupStatus.shareActive'
+                  : STATUS_LABEL_KEY[status],
+              )}
             </span>
             <Button
               variant="secondary"
@@ -351,15 +427,17 @@ export function ProviderShareReceivedDetail({ share }: { share: ProviderShareRec
           models={models}
           note={body}
           onRefresh={status === 'active'
-            ? () => void refreshRemoteCatalogSnapshot(catalogDeviceId).catch(() => undefined)
+            ? (isPluginEngine
+                ? () => pluginCatalogue.refresh()
+                : () => void retryProviderShareCatalog(catalogDeviceId).catch(() => undefined))
             : undefined}
-          refreshing={catalog.loading}
+          refreshing={isPluginEngine ? pluginCatalogue.engines === null && status === 'active' : catalog.loading}
           action={
-            status === 'active' && catalog.error ? (
+            status === 'active' && !isPluginEngine && catalog.error ? (
               <Button
                 variant="secondary"
                 size="sm"
-                onClick={() => void refreshRemoteCatalogSnapshot(catalogDeviceId).catch(() => undefined)}
+                onClick={() => void retryProviderShareCatalog(catalogDeviceId).catch(() => undefined)}
               >
                 {t('providerShare.received.retryModels')}
               </Button>

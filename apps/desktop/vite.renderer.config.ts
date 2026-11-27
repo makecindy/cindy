@@ -299,6 +299,38 @@ function invalidateStalePrebundleCache(): void {
   console.log('[vite.renderer] internal package sources changed — cleared dep prebundle cache (will re-optimize)');
 }
 
+function requestedTargetPlatform(): string {
+  const args = process.argv;
+  const index = args.indexOf('--platform');
+  return (
+    process.env.ELECTRON_FORGE_PLATFORM ||
+    (index !== -1 ? args[index + 1] : undefined) ||
+    args.find((arg) => arg.startsWith('--platform='))?.slice('--platform='.length) ||
+    process.platform
+  );
+}
+
+function omitDockPreviewAssetsPlugin(): Plugin {
+  const resource = (file: string) => path.resolve(__dirname, 'resources', file).replace(/\\/g, '/');
+  const builtInIcon = resource('icon-dock.png');
+  // Every generated Dock rendition; the set of files follows the shared icon list.
+  const artworkDir = `${resource('app-icons')}/`;
+
+  return {
+    name: 'cindy-omit-dock-preview-assets',
+    enforce: 'pre',
+    // Run before Vite's asset loader so runtime-hidden Dock controls cannot
+    // emit macOS-only PNGs into Windows/Linux renderer builds.
+    load(id) {
+      const file = id.split('?')[0].replace(/\\/g, '/');
+      if (file === builtInIcon || (file.startsWith(artworkDir) && file.endsWith('.png'))) {
+        return 'export default "";';
+      }
+      return null;
+    },
+  };
+}
+
 export default defineConfig(({ command }) => {
   if (command === 'serve') invalidateStalePrebundleCache();
   if (command !== 'build') return rendererConfig;
@@ -308,6 +340,12 @@ export default defineConfig(({ command }) => {
   // (check-login-production-guard.mjs 以 sentinel 扫描产物兜底)。
   return {
     ...rendererConfig,
+    plugins: [
+      ...rendererConfig.plugins,
+      ...(['darwin', 'mas'].includes(requestedTargetPlatform())
+        ? []
+        : [omitDockPreviewAssetsPlugin()]),
+    ],
     resolve: {
       ...rendererConfig.resolve,
       alias: {
@@ -346,6 +384,8 @@ const rendererConfig = {
     include: ['@tiptap/react', 'highlight.js'],
   },
   server: {
+    // Keep optional settings modules on demand. Warming the entire settings tree
+    // at startup can exhaust the Forge/Vite heap on Windows (#9504).
     watch: {
       // 被 exclude 的内部包以 node_modules 软链路径进模块图,默认 `**/node_modules/**`
       // 忽略规则会让 watcher 对它们的源码变更全盲(变更后引用新导出的组件热更、被引用包

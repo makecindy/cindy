@@ -1,7 +1,7 @@
-import { isChatOnlyGroupLane } from '../../shared/botGroupChat.js';
+import { groupLaneUsesChatWorkspace } from '../../shared/botGroupChat.js';
 import { buildTeammateGuide as buildBotCapabilityContextPrompt } from './teammateGuide.js';
 import { and, desc, eq, inArray } from 'drizzle-orm';
-import { buildBotMemoryScopeKey } from '@cindy/maker-core';
+import { buildBotMemoryScopeKey, resolveMemoryScopeKey } from '@cindy/maker-core';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 
@@ -29,10 +29,16 @@ import { normalizeBotToolCapabilities } from '../../shared/botCapabilitySelectio
 import { BOT_BASELINE_PLUGIN_IDS } from '../maker-host/plugins/types.js';
 import { BOT_IM_CHANNELS_VENDOR_KEY, type BotImChannel } from '../../shared/botImConnection.js';
 import businessOwnershipPrompt from '../maker-host/business-ownership-prompt.md?raw';
+import { readBotProjectMode } from '../../shared/botProjectMode.js';
+import { botLearningTracker } from './botLearningTracker.js';
+import { unlinkedTeammateProjectMemoryDir } from './botProjectMemory.js';
+import { createProjectMemoryReceipts } from './botProjectLearning.js';
+import { joinSharedSkillPreparation } from '../skillhub/sharedSkillPreparation.js';
 
 const log = createLogger('maker-ipc:bot-profile-runtime');
 
 interface BotSkillCatalogItem {
+  cindyOfficial?: boolean;
   name: string;
   enabled?: boolean;
   runtimeStatus?: 'discovered' | 'approved' | 'loaded' | 'failed' | 'unknown';
@@ -56,6 +62,9 @@ interface BotToolsetCatalogItem {
   available?: boolean;
   version?: string;
 }
+
+/** A group conversation lane with tools (owner or member access) or its Thread lane (not a 分工, queue, AI reply or digest lane). */
+const GROUP_CONVERSATION_LANE = /^group:[^:]+:access:(?:owner|tools):[1-9][0-9]*(?::mask:[^:]+)?(?::thread:[^:]+)?$/;
 
 export interface BotProfileRuntimeSnapshot {
   snapshotId: string;
@@ -81,6 +90,9 @@ export interface BotProfileRuntimeSnapshot {
   memoryRefs: BotMemoryRuntimeRef[];
   /** True when the permanent canonical Chat must rebuild its live runtime. */
   runtimeEpochChanged: boolean;
+  /** True only when `runtimeEpochChanged` came from comparing against an
+   * applied/degraded snapshot. Without that baseline "unchanged" is unknown. */
+  runtimeEpochBaseline: boolean;
 }
 
 export interface BotMemoryRuntimeRef {
@@ -95,6 +107,12 @@ export interface BotMemoryRuntimeRef {
 export type BotRuntimeFailureStage = 'prepare' | 'agent-start' | 'storage';
 
 export interface BotProfileRuntimeDeps {
+  getUserName?: () => string | null | undefined;
+  /**
+   * Joins the shared Skill preparation before `listSkills`. The snapshot is frozen for the
+   * session and is taken before the Agent launch prepares; startup only warms it up.
+   */
+  prepareSharedSkills?: () => Promise<void>;
   listSkills?: (input: {
     agentKind: MakerSessionCreateOpts['agentKind'];
     workingDir: string;
@@ -166,6 +184,8 @@ export interface BotProfileRuntimeDeps {
     contentWritableDirs?: string[];
     systemPromptOverride: string;
   }>;
+  /** Project mode: this computer's linked project directories (other computers' links are only references). */
+  listLinkedProjectDirs?: (input: { botId: string }) => Promise<string[]>;
 }
 
 function runtimeFailureMetadata(
@@ -294,8 +314,8 @@ export function buildBotProfileContextPrompt(displayName: string): string {
   const name = displayName.trim() || 'Cindy Bot';
   return [
     `Active Cindy Bot profile: ${name}.`,
-    'Your name is the active profile name; your personality, role, and relationship with the user come from the current SOUL and user profile. Keep them consistent across replies, context compaction, restarts, and model changes. Do not reverse who is the boss or invent a relationship from habitual forms of address. Correct earlier replies that conflict with the current profile instead of treating them as identity facts.',
-    'The user is talking to this named teammate inside Cindy. Pi, Claude Code, and Codex are execution engines, not your personal identity or the user-facing application. Their native coding instructions describe how to use tools; they do not replace your profile. If asked about the engine or model, distinguish it from your identity and only state runtime facts you can verify.',
+    'Your name is the active profile name; your personality, role, and relationship with the user come from the current SOUL and user profile. Keep them consistent across replies, context compaction, restarts, and model changes. Correct earlier replies that conflict with the current profile instead of treating them as identity facts.',
+    'The user is talking to this named buddy inside Cindy. Pi, Claude Code, and Codex are execution engines, not your personal identity or the user-facing application. Their native coding instructions describe how to use tools; they do not replace your profile. If asked about the engine or model, distinguish it from your identity and only state runtime facts you can verify.',
     businessOwnershipPrompt.trim(),
     'Use available host tools for model changes and verify their results before claiming a change. Connecting a new model or signing in to a provider is managed in Cindy settings. Do not present terminal-only slash commands such as /login or /model as commands available in this chat or assume the user is in a Pi terminal. When the exact Cindy entry is unknown, say so rather than inventing steps. When the user asks about a native CLI, explain which instructions belong to that terminal. This distinction does not restrict native tools, Pi package management, extensions, or self-repair.',
   ].join('\n');
@@ -511,7 +531,8 @@ export async function hydrateBotProfileRuntime(
   if (!row || !['canonical', 'delegation', 'group', 'channel', 'thread', 'routine'].includes(row.role)) return null;
   // A private-chat topic is the owner's own conversation, so it carries the main
   // Chat's owner-private abilities (cindy-bots-runtime.md「私聊话题」).
-  const ownerChat = row.role === 'canonical' || row.role === 'thread' || row.role === 'routine';
+  const privateChat = row.role === 'canonical' || row.role === 'thread';
+  const ownerChat = privateChat || row.role === 'routine';
   const [profile] = await db
     .select()
     .from(botProfiles)
@@ -529,7 +550,7 @@ export async function hydrateBotProfileRuntime(
     )
     .limit(1);
   if (!version) return null;
-  const chatOnly = row.role === 'group' && isChatOnlyGroupLane(row.routeKey);
+  const chatOnly = row.role === 'group' && groupLaneUsesChatWorkspace(row.routeKey ?? '');
   const config = normalizeBotToolCapabilities(chatOnly ? {
     toolCapabilityVersion: 1, memory: false, userContextSource: '', skills: [], skillMode: 'allowlist',
     mcpServers: [], mcpMode: 'allowlist', toolsets: [], toolsetMode: 'allowlist',
@@ -543,7 +564,7 @@ export async function hydrateBotProfileRuntime(
   const configuredSkills = Array.isArray(config.skills)
     ? config.skills.filter((item): item is string => typeof item === 'string')
     : [];
-  const skillMode =
+  let skillMode: 'inherit' | 'allowlist' =
     config.skillMode === 'allowlist'
       ? 'allowlist'
       : config.skillMode === 'inherit'
@@ -552,10 +573,10 @@ export async function hydrateBotProfileRuntime(
           ? 'allowlist'
           : 'inherit';
   // `inherit` is retained only as a wire/storage compatibility value. For a
-  // Bot it now means "no explicit external Skill grant"; ambient Cindy,
-  // project, and harness Skills never become part of the Bot runtime.
+  // Bot it means no personal Skill grants. Cindy official sources are added
+  // from the host-attested catalog; project and harness Skills stay opt-in.
   const configuredMcpServers = readStringList(config.mcpServers);
-  const mcpMode =
+  let mcpMode: 'inherit' | 'allowlist' =
     config.mcpMode === 'allowlist'
       ? 'allowlist'
       : config.mcpMode === 'inherit'
@@ -571,7 +592,7 @@ export async function hydrateBotProfileRuntime(
     config.toolsetMode !== 'allowlist' &&
     rawToolsets.length > 0 && rawToolsets.every((item) => legacyToolPlaceholders.has(item));
   const configuredToolsets = hasOnlyLegacyToolPlaceholders ? [] : rawToolsets;
-  const toolsetMode =
+  let toolsetMode: 'inherit' | 'allowlist' =
     config.toolsetMode === 'allowlist'
       ? 'allowlist'
       : config.toolsetMode === 'inherit'
@@ -579,12 +600,74 @@ export async function hydrateBotProfileRuntime(
         : configuredToolsets.length > 0
           ? 'allowlist'
           : 'inherit';
+  /*
+    伙伴的家。读失败一律当"没有" —— 一次读不动不该让整个伙伴起不来,只是这一轮
+    它不知道自己有个家(工具面也不会多出这个目录,两边同时缺,不会出现"提示词说有、
+    工具够不到"的错位)。overlay 只有真的写了才生效,且不能取代 Cindy 核心协议。
+  */
+  let folderPrompt: {
+    homeDir: string;
+    contentWritableDirs?: string[];
+    systemPromptOverride: string;
+  } | null = null;
+  // Local userData paths are meaningless on a remote harness. Do not promise or
+  // mount a Home there until the host provisions an actual remote-owned path.
+  if (!chatOnly && deps.readProfileFolder && !opts.remoteHostId) {
+    folderPrompt = await deps
+      .readProfileFolder({ botId: row.botId })
+      .catch(() => null);
+  }
+  const botHomeDir = folderPrompt?.homeDir.trim() ?? '';
+  /*
+    伙伴 V2(项目模式):伙伴就是一个包装过的项目 + 一堆任务。在自己的 workspace 里干活时,
+    它和同目录的普通任务完全一样(说明文件、设置、技能、MCP、记忆、宿主提示词),只多一层
+    伙伴身份和它自己的技能。群分工等在别的目录干活的会话按普通任务走那个目录。
+  */
+  const workspaceDir = botHomeDir ? path.join(path.resolve(botHomeDir), 'workspace') : '';
+  const inTeammateWorkspace = !!workspaceDir && path.resolve(opts.workingDir) === workspaceDir;
+  // A group lane working in the group's project folder on this computer (bot-group-chat.md §7.5).
+  // A lane without a project runs in its own dialogue workspace, also outside Home: that is not a
+  // project, so it keeps the teammate's project memory.
+  const groupProjectLane = row.role === 'group' && GROUP_CONVERSATION_LANE.test(row.routeKey ?? '')
+    && opts.workspaceKind !== 'dialogue'
+    && !!workspaceDir && !inTeammateWorkspace
+    && !path.resolve(opts.workingDir).startsWith(path.dirname(workspaceDir) + path.sep);
+  // Every session of a V2 teammate runs as an ordinary project task wherever it works: the owner's
+  // chats, IM channel lanes, group lanes (whoever spoke), topics and 分工 (owner 2026-11-22: there is
+  // no "isolated lane"; cindy-bots-runtime.md §6). Who may do what is the permission tier's job
+  // (channelToolPolicy for non-owner turns), not a narrower context. A chat-only group has no tools.
+  const projectContext = !!workspaceDir && readBotProjectMode(config) && !chatOnly;
+  // Only the teammate's own working directory discovers its skills and memory natively.
+  const nativeTeammateProject = projectContext && inTeammateWorkspace;
+  const fullLane = ownerChat;
   // Bot Memory belongs to the Bot Home and is independent from Cindy's global
   // Maker Memory switch. The profile can still explicitly disable its own memory.
-  const memoryEngineEnabled = config.memory !== false;
-  opts.makerMemoryEnabled = memoryEngineEnabled;
+  // A V2 teammate uses its project's memory like an ordinary task, still switched
+  // by the teammate's own memory setting rather than the global one.
+  // Every V2 lane (group and plan lanes too, wherever they run) shares that one project memory.
+  const projectMode = !!workspaceDir && readBotProjectMode(config);
+  if (projectMode && opts.id) await botLearningTracker.prepareProjectTeammate(opts.id,
+    fullLane && config.memory !== false ? () => createProjectMemoryReceipts(workspaceDir) : undefined);
+  // V2 (2026-11-10, owner): one capability set in every session of the teammate — its own chats,
+  // group and IM lanes, 分工 — so the capability selection no longer narrows any of them. Skills load
+  // as for any ordinary task there, and a chat-only group stays without tools (that is the group's
+  // authorization, not a capability choice).
+  if (projectMode && !chatOnly) {
+    skillMode = 'inherit';
+    mcpMode = 'inherit';
+    toolsetMode = 'inherit';
+  }
+  const memoryEngineEnabled = !projectMode && config.memory !== false;
+  opts.makerMemoryEnabled = projectMode ? config.memory !== false : memoryEngineEnabled;
+  // The teammate's memory switch decides, as before the upgrade, not an engine's own memory setting.
+  if (projectMode) opts.makerMemorySwitchOwned = true;
   const botMemoryScopeKey = buildBotMemoryScopeKey(row.botId);
-  if (config.memory !== false) opts.makerMemoryScopeKey = botMemoryScopeKey;
+  if (memoryEngineEnabled) opts.makerMemoryScopeKey = botMemoryScopeKey;
+  // 分工 and other work outside the teammate's project keep the teammate's one project memory.
+  // A group project lane uses that folder's memory natively and reaches the teammate's by file tools.
+  else if (projectMode && !inTeammateWorkspace && !groupProjectLane && opts.makerMemoryEnabled) {
+    opts.makerMemoryScopeKey = await resolveMemoryScopeKey(workspaceDir);
+  }
   const memoryActive = memoryEngineEnabled;
   let botMemoryIndex: string | null = '';
   if (memoryActive && deps.readMemoryIndex) {
@@ -601,39 +684,77 @@ export async function hydrateBotProfileRuntime(
   const userContextSource = typeof config.userContextSource === 'string'
     ? config.userContextSource
     : '';
-  opts.botUserProfilePrompt = buildBotUserProfilePrompt(userContextSource);
+  const userName = ownerChat ? deps.getUserName?.()?.trim() : '';
+  opts.botUserProfilePrompt = [
+    userName ? `User: ${JSON.stringify(userName)}` : '',
+    buildBotUserProfilePrompt(userContextSource),
+  ].filter(Boolean).join('\n\n');
   const memoryRefs: BotMemoryRuntimeRef[] = !memoryActive
     ? []
     : [
         memoryRef('bot', botMemoryScopeKey, 'read-write', botMemoryIndex),
         memoryRef('user', `profile:${row.botId}:v${row.profileVersion}`, 'read-only', userContextSource),
       ];
+  // Canonical Chats, private-chat topics, group lanes and IM channel lanes follow
+  // Profile updates; delegation children stay frozen.
+  const followsProfile = row.role === 'canonical' || row.role === 'thread' || row.role === 'routine' || row.role === 'group' || row.role === 'channel';
+  const [previousSnapshot] = await db
+    .select({
+      profileVersion: botRuntimeSnapshots.profileVersion,
+      resolvedJson: botRuntimeSnapshots.resolvedJson,
+    })
+    .from(botRuntimeSnapshots)
+    .where(
+      and(
+        eq(botRuntimeSnapshots.sessionId, opts.id),
+        inArray(botRuntimeSnapshots.status, ['applied', 'degraded']),
+      ),
+    )
+    .orderBy(desc(botRuntimeSnapshots.preparedAt))
+    .limit(1);
+  const previousResolved = previousSnapshot
+    ? parseObject(previousSnapshot.resolvedJson)
+    : null;
+  let runtimeConfiguredSkills = skillMode === 'allowlist' ? [...configuredSkills] : [];
   let resolvedSkills = configuredSkills;
   let unavailableSkills: string[] = [];
   let catalog: BotSkillCatalogItem[] = [];
   let resolvedSkillEntries: BotSkillCatalogItem[] = [];
   let skillCatalogAvailable = true;
   let runtimeSkillMode: 'inherit' | 'allowlist' = 'allowlist';
-  if (deps.listSkills) {
+  if (projectContext) {
+    // Every Skill an ordinary task here sees is available; nothing to resolve.
+    resolvedSkills = [];
+  } else if (deps.listSkills) {
     try {
+      await joinSharedSkillPreparation(deps.prepareSharedSkills, 'bot-runtime');
       catalog = await deps.listSkills({
         agentKind: opts.agentKind,
         workingDir: opts.workingDir,
         remoteHostId: opts.remoteHostId,
       });
-      if (skillMode === 'inherit') {
-        // Legacy "inherit" means no explicit external grants for a Bot. A Bot
-        // owns Home Skills; Cindy/project/harness Skills never flow in ambiently.
-        // Keep the discovered catalog only so each harness can emit explicit
-        // `off` entries for every ambient Skill it would otherwise discover.
-        resolvedSkillEntries = [];
-        resolvedSkills = [];
-      } else {
-        ({ resolvedSkills, unavailableSkills, resolvedSkillEntries } = resolveBotSkillReferences(
-          configuredSkills,
-          catalog,
-        ));
-      }
+      // A frozen delegation task reproduces the files it already ran with: an official
+      // Skill is inherited only when that exact file is in the frozen snapshot, so a
+      // same-name personal file frozen before this inheritance existed stays in effect.
+      const frozenPaths = previousSnapshot && !followsProfile && Array.isArray(previousResolved?.skillResources)
+        ? new Set((previousResolved.skillResources as Array<{ path?: unknown }>).map(entry => entry.path)) : null;
+      const official = chatOnly ? [] : catalog.filter(item => item.cindyOfficial &&
+        item.enabled !== false && item.runtimeStatus !== 'failed' &&
+        (!frozenPaths || frozenPaths.has(item.path?.trim() || null)));
+      const officialNames = new Set(official.flatMap(item => [item.name.trim(), item.runtimeCommandName?.trim()].filter(Boolean)));
+      // Native engines can discover the same command in a personal/project source.
+      // Default inheritance grants only the attested file, not its namesakes.
+      catalog = [
+        ...catalog.filter(item => !official.includes(item)).map(item =>
+          officialNames.has(item.name.trim()) || officialNames.has(item.runtimeCommandName?.trim())
+            ? { ...item, enabled: false } : item),
+        ...official,
+      ];
+      const inherited = official.map(item => item.runtimeCommandName?.trim() || item.name.trim());
+      runtimeConfiguredSkills = [...new Set([...runtimeConfiguredSkills, ...inherited])];
+      ({ resolvedSkills, unavailableSkills, resolvedSkillEntries } = resolveBotSkillReferences(
+        runtimeConfiguredSkills, catalog,
+      ));
     } catch (error) {
       // A remote Bot must freeze the catalog from the same machine that will
       // execute the Agent. Continuing with an empty/local catalog can leave
@@ -682,24 +803,15 @@ export async function hydrateBotProfileRuntime(
     // Keep every discovered ambient entry so native harnesses can explicitly
     // turn unselected Skills off. A selected entry whose source could not be
     // fingerprinted stays in the catalog only as a forced-disabled row.
-    const selectedNames = new Set(configuredSkills.map((item) => item.trim()));
-    const fingerprintedByName = new Map<string, BotSkillCatalogItem>();
-    for (const entry of fingerprinted) {
-      fingerprintedByName.set(entry.name.trim(), entry);
-      if (entry.runtimeCommandName?.trim()) {
-        fingerprintedByName.set(entry.runtimeCommandName.trim(), entry);
-      }
-    }
+    const selectedNames = new Set(runtimeConfiguredSkills.map((item) => item.trim()));
+    const fingerprintedByPath = new Map(fingerprinted.map(entry => [entry.path, entry]));
     catalog = catalog.map((entry) => {
       const runtimeName = entry.runtimeCommandName?.trim();
       const selected = selectedNames.has(entry.name.trim())
         || (!!runtimeName && selectedNames.has(runtimeName));
-      if (!selected) return entry;
-      return (
-        fingerprintedByName.get(entry.name.trim())
-        ?? (runtimeName ? fingerprintedByName.get(runtimeName) : undefined)
-        ?? { ...entry, enabled: false, runtimeStatus: 'failed' as const }
-      );
+      if (!selected || entry.enabled === false) return entry;
+      return fingerprintedByPath.get(entry.path)
+        ?? { ...entry, enabled: false, runtimeStatus: 'failed' as const };
     });
     const usableNames = new Set(
       fingerprinted.map((entry) => entry.runtimeCommandName?.trim() || entry.name.trim()),
@@ -707,7 +819,6 @@ export async function hydrateBotProfileRuntime(
     resolvedSkills = resolvedSkills.filter((name) => usableNames.has(name));
     unavailableSkills = [...new Set(unavailableSkills)];
   }
-  const runtimeConfiguredSkills = skillMode === 'allowlist' ? [...configuredSkills] : [];
   /*
     伙伴自己沉淀的技能。
 
@@ -726,20 +837,24 @@ export async function hydrateBotProfileRuntime(
   if (!chatOnly && deps.listOwnSkills && !opts.remoteHostId) {
     try {
       const own = await deps.listOwnSkills({ botId: row.botId });
-      ownSkills = [...(own.baseline && ownerChat ? [own.baseline.skill] : []), ...own.skills];
+      // V2: the teammate's Skills live in its project and load natively, and it
+      // works like an ordinary task, so the teammate core Skill is not mounted.
+      const learned = nativeTeammateProject ? [] : own.skills;
+      const core = own.baseline && fullLane && !projectContext ? own.baseline : null;
+      ownSkills = [...(core ? [core.skill] : []), ...learned];
       ownSkillPluginRoots = [
-        ...(own.baseline && ownerChat ? [own.baseline.pluginRoot] : []),
-        ...(own.skills.length > 0 ? [own.pluginRoot] : []),
+        ...(core ? [core.pluginRoot] : []),
+        ...(learned.length > 0 ? [own.pluginRoot] : []),
       ];
     } catch {
-      ownSkills = [];
-      ownSkillPluginRoots = [];
+      if (!nativeTeammateProject) skillCatalogAvailable = false;
     }
   }
   let mcpCatalog: BotMcpCatalogItem[] = [];
   let resolvedMcpServers: string[] = [];
   let unavailableMcpServers: string[] = [];
   let runtimeMcpMode: 'inherit' | 'allowlist' = mcpMode;
+  let mcpCatalogUnreadable = false;
   if (deps.listMcpServers) {
     runtimeMcpMode = 'allowlist';
     try {
@@ -755,8 +870,12 @@ export async function hydrateBotProfileRuntime(
       });
       resolvedMcpServers = resolvedMcp.resolved;
       unavailableMcpServers = resolvedMcp.unavailable;
-    } catch {
-      throw new Error('无法读取伙伴的 MCP 能力目录，请重试；不会以空能力列表启动。');
+    } catch (error) {
+      // A project-context (V2) session mounts the ordinary task's MCP surface; this catalog only
+      // shapes the snapshot, so an unreadable catalog must not keep the teammate from starting.
+      if (!projectContext) throw new Error('无法读取伙伴的 MCP 能力目录，请重试；不会以空能力列表启动。');
+      mcpCatalogUnreadable = true;
+      log.warn('teammate MCP catalog unavailable; ordinary task MCP surface applies', { error: String(error) });
     }
   } else if (mcpMode === 'allowlist') {
     unavailableMcpServers = configuredMcpServers;
@@ -768,6 +887,7 @@ export async function hydrateBotProfileRuntime(
   let unavailableToolsets: string[] = [];
   let disabledToolsets: string[] = [];
   let runtimeToolsetMode: 'inherit' | 'allowlist' = toolsetMode;
+  let toolsetCatalogUnreadable = false;
   if (!chatOnly && deps.listToolsets) {
     runtimeToolsetMode = 'allowlist';
     try {
@@ -785,8 +905,10 @@ export async function hydrateBotProfileRuntime(
       resolvedToolsets = resolvedToolsetsResult.resolved;
       unavailableToolsets = resolvedToolsetsResult.unavailable;
       disabledToolsets = resolvedToolsetsResult.disabled;
-    } catch {
-      throw new Error('无法读取伙伴的工具能力目录，请重试；不会以空能力列表启动。');
+    } catch (error) {
+      if (!projectContext) throw new Error('无法读取伙伴的工具能力目录，请重试；不会以空能力列表启动。');
+      toolsetCatalogUnreadable = true;
+      log.warn('teammate toolset catalog unavailable; ordinary task plugins apply', { error: String(error) });
     }
   } else if (toolsetMode === 'allowlist') {
     unavailableToolsets = configuredToolsets;
@@ -816,7 +938,10 @@ export async function hydrateBotProfileRuntime(
   // 可在桌面/后台轮次由 feishuTransportRouting.ts 查询 canonical 归属, 经伙伴可用连接
   // 通知已绑定主人; 伙伴连接不可用则拒绝发送, 不回落个人 bot, 也不授予轮次内 API 权限。
   const boundImChannels: readonly BotImChannel[] =
-    ownerChat ? (deps.listBotImChannels?.({ botId: row.botId }) ?? []) : [];
+    fullLane ? (deps.listBotImChannels?.({ botId: row.botId }) ?? [])
+      // A scheduler may open this persisted lane before the chat provides vendor options.
+      // Mount the server only. Calls still require a current inbound chat scope.
+      : row.role === 'channel' && row.routeKey?.startsWith('im:imessage:') ? ['imessage'] : [];
   if (boundImChannels.length > 0) {
     opts.vendorOptions = { ...(opts.vendorOptions ?? {}), [BOT_IM_CHANNELS_VENDOR_KEY]: [...boundImChannels] };
   }
@@ -860,6 +985,13 @@ export async function hydrateBotProfileRuntime(
       runtimeConfiguredMcpServers.push(imServer);
     }
   }
+  if ((row.role === 'channel' && typeof opts.vendorOptions?.imessageChatId === 'string')
+    || boundImChannels.includes('imessage')) {
+    if (!runtimeConfiguredMcpServers.includes('cindy_imessage')
+      && mcpCatalog.some(item => item.name === 'cindy_imessage' && item.available !== false)) {
+      runtimeConfiguredMcpServers.push('cindy_imessage');
+    }
+  }
   const identity = chatOnly ? profile.description : version.identitySource.trim();
   opts.botProfilePrompt = buildBotProfilePrompt({
     displayName: profile.displayName,
@@ -881,38 +1013,19 @@ export async function hydrateBotProfileRuntime(
     // the essential helper. It is not the generic Orca/team-worker surface and
     // therefore must not depend on optional toolset inheritance.
     partnerActionsEnabled: row.role === 'canonical' && helperAvailable,
-    routinesEnabled: ownerChat && helperAvailable && !opts.remoteHostId,
-    botCreationEnabled: ownerChat && helperAvailable,
+    botCreationEnabled: fullLane && helperAvailable,
     // Skill management is available before the first Skill exists. An empty
     // index must not hide the instructions for learning the first reusable method.
     // IM 专线与主任务是同一个伙伴: 群 / 话题里学到的做法同样该沉淀成它自己的技能, 否则主人在
     // 群里让它「记成技能」只能听到「当前任务只读」。写入仍只认主人触发的轮次(botSkillService
     // 按逐轮渠道作用域判定), 其他成员触发时工具会说明原因。
-    ownSkillsEnabled: (ownerChat || row.role === 'channel') && helperAvailable && !opts.remoteHostId,
-    botModeEnabled: ownerChat,
+    ownSkillsEnabled: (fullLane || row.role === 'channel') && helperAvailable && !opts.remoteHostId,
+    botModeEnabled: fullLane,
     // Match the ordinary helper surface on this engine and transport.
     sessionControlEnabled: helperAvailable && (!opts.remoteHostId || opts.agentKind === 'pi'),
     // scheduler 是伙伴基线工具(maker-host/plugins/types.ts),与挂载 allowlist 同一份目录判定。
     automationEnabled: toolsetCatalog.some((item) => item.id === 'scheduler' && item.available !== false),
   };
-  /*
-    伙伴的家。读失败一律当"没有" —— 一次读不动不该让整个伙伴起不来,只是这一轮
-    它不知道自己有个家(工具面也不会多出这个目录,两边同时缺,不会出现"提示词说有、
-    工具够不到"的错位)。overlay 只有真的写了才生效,且不能取代 Cindy 核心协议。
-  */
-  let folderPrompt: {
-    homeDir: string;
-    contentWritableDirs?: string[];
-    systemPromptOverride: string;
-  } | null = null;
-  // Local userData paths are meaningless on a remote harness. Do not promise or
-  // mount a Home there until the host provisions an actual remote-owned path.
-  if (!chatOnly && deps.readProfileFolder && !opts.remoteHostId) {
-    folderPrompt = await deps
-      .readProfileFolder({ botId: row.botId })
-      .catch(() => null);
-  }
-  const botHomeDir = folderPrompt?.homeDir.trim() ?? '';
   // 提示词与可写工具面必须同进同退 —— 只给其中一个就是开一张打不开的空头支票。
   if (botHomeDir) {
     const mounted = withBotHomeAccess(
@@ -923,6 +1036,23 @@ export async function hydrateBotProfileRuntime(
     );
     opts.extraDirs = mounted.extraDirs;
     opts.writableDirs = mounted.writableDirs;
+  }
+  /*
+    项目模式(实验):伙伴的 workspace 就是它的项目。只在这次真的在 workspace 里干活时生效
+    (群分工在别的项目目录里干活，不算)。项目说明由各引擎按项目原生方式加载;工作目录里的
+    项目技能视同伙伴自己的技能放行;关联项目作为只读的附加目录带进来。
+  */
+  if (projectContext) {
+    const linked = deps.listLinkedProjectDirs
+      ? await deps.listLinkedProjectDirs({ botId: row.botId }).catch(() => [])
+      : [];
+    if (linked.length > 0) {
+      const references = [...(opts.extraDirs ?? [])];
+      for (const dir of linked) {
+        if (!references.some((existing) => path.resolve(existing) === path.resolve(dir))) references.push(dir);
+      }
+      opts.extraDirs = references;
+    }
   }
   /*
     队友名册。只在伙伴消息能力真的开着时才查 —— 关闭时看见一份自己用不上的
@@ -945,18 +1075,31 @@ export async function hydrateBotProfileRuntime(
       ? { systemPromptOverride: folderPrompt.systemPromptOverride }
       : {}),
     ...(botHomeDir ? { homeDir: botHomeDir } : {}),
+    ...(projectContext ? { projectMode: true } : {}),
     ...(teammates.length > 0 ? { teammates } : {}),
     contextSections: [
+      ...(groupProjectLane && projectContext && opts.makerMemoryEnabled ? [
+        `Use the current project's memory tools for group project decisions. For this teammate's own preferences and reusable experience, read or update the Markdown records in ${JSON.stringify(unlinkedTeammateProjectMemoryDir(workspaceDir))} with file tools. Read its README.md before maintaining it.`,
+      ] : []),
+      ...(projectMode && config.memory === false ? [
+        `Memory is disabled for this Cindy task. Do not read, search, save or maintain memories in ${JSON.stringify(path.join(workspaceDir, '.cindy', 'memory'))}, even when project instructions describe a memory route. This runtime setting overrides the project's memory instructions.`,
+      ] : []),
       buildBotProfileContextPrompt(profile.displayName),
       // Hermes-style Bot Mode is a property of the owner's Bot Chat (the permanent
       // Chat and its private topics). Delegation children keep Cindy's normal
       // Session prompt plus their narrow task context.
-      ...(ownerChat
+      // V2 works like an ordinary task: its tools describe themselves.
+      ...(fullLane && !projectContext
         ? [buildBotCapabilityContextPrompt({ helperAvailable, cindyAvailable,
           ownSkillsEnabled: promptCapabilities.ownSkillsEnabled,
           // Same local canonical boundary as isBotAuthorizationSession; remote Pi still has plugins.
           pluginAuthorizationCardsEnabled: opts.remoteHostId == null })]
         : []),
+      ...(privateChat ? [
+        'From this private chat you cannot post to a Cindy group or @mention its members there. '
+        + 'If asked, explain that nothing was sent and provide text the user can paste in the target group, '
+        + 'where they can select the member to mention.',
+      ] : []),
     ],
   };
   opts.botProfileContextPrompt = [
@@ -1003,6 +1146,7 @@ export async function hydrateBotProfileRuntime(
       configured: runtimeConfiguredToolsets,
       catalog: toolsetCatalog.map((item) => ({ ...item })),
     },
+    ...(projectContext ? { projectContext: true } : {}),
   };
   const preparedAt = Date.now();
   const resolutionStatus =
@@ -1043,6 +1187,20 @@ export async function hydrateBotProfileRuntime(
     toolsetMode,
     toolsets: configuredToolsets,
   });
+  // An unreadable catalog says nothing new: keep the last known resources so a transient failure
+  // (and its recovery, or a second failure) does not look like a change and rebuild a working session.
+  const mcpResources = mcpCatalogUnreadable && Array.isArray(previousResolved?.mcpResources)
+    ? previousResolved.mcpResources
+    : resolvedMcpServers.map((name) => {
+      const entry = mcpCatalog.find((item) => item.name === name);
+      return { name, generation: entry?.generation ?? null };
+    });
+  const toolsetResources = toolsetCatalogUnreadable && Array.isArray(previousResolved?.toolsetResources)
+    ? previousResolved.toolsetResources
+    : resolvedToolsets.map((id) => {
+      const entry = toolsetCatalog.find((item) => item.id === id);
+      return { id, version: entry?.version ?? null };
+    });
   const runtimeEpochSha256 = createHash('sha256').update(JSON.stringify({
     profileVersion: row.profileVersion,
     profilePrompt: opts.botProfilePrompt ?? '',
@@ -1059,14 +1217,8 @@ export async function hydrateBotProfileRuntime(
     botOwnSkillResources: ownSkills.map((entry) => ({
       name: entry.name, path: entry.path, description: entry.description, updatedAt: entry.updatedAt ?? null,
     })),
-    mcpResources: resolvedMcpServers.map((name) => {
-      const entry = mcpCatalog.find((item) => item.name === name);
-      return { name, generation: entry?.generation ?? null };
-    }),
-    toolsetResources: resolvedToolsets.map((id) => {
-      const entry = toolsetCatalog.find((item) => item.id === id);
-      return { id, version: entry?.version ?? null };
-    }),
+    mcpResources,
+    toolsetResources,
   }), 'utf8').digest('hex');
   const resolvedJson = JSON.stringify({
     schemaVersion: 1,
@@ -1090,33 +1242,10 @@ export async function hydrateBotProfileRuntime(
     // 刻意与 skillResources 分开:下面的漂移检查只认那三个 *Resources 键,
     // 伙伴自己写的技能不该把「刚学会就 resume 不了」变成硬错误。
     botOwnSkillResources: ownSkills.map((entry) => ({ name: entry.name, path: entry.path })),
-    mcpResources: resolvedMcpServers.map((name) => {
-      const entry = mcpCatalog.find((item) => item.name === name);
-      return { name, generation: entry?.generation ?? null };
-    }),
-    toolsetResources: resolvedToolsets.map((id) => {
-      const entry = toolsetCatalog.find((item) => item.id === id);
-      return { id, version: entry?.version ?? null };
-    }),
+    mcpResources,
+    toolsetResources,
     runtimeEpoch: { sha256: runtimeEpochSha256 },
   });
-  const [previousSnapshot] = await db
-    .select({
-      profileVersion: botRuntimeSnapshots.profileVersion,
-      resolvedJson: botRuntimeSnapshots.resolvedJson,
-    })
-    .from(botRuntimeSnapshots)
-    .where(
-      and(
-        eq(botRuntimeSnapshots.sessionId, opts.id),
-        inArray(botRuntimeSnapshots.status, ['applied', 'degraded']),
-      ),
-    )
-    .orderBy(desc(botRuntimeSnapshots.preparedAt))
-    .limit(1);
-  const previousResolved = previousSnapshot
-    ? parseObject(previousSnapshot.resolvedJson)
-    : null;
   const previousRuntimeEpoch = previousResolved
     ? parseObject(
         typeof previousResolved.runtimeEpoch === 'string'
@@ -1124,10 +1253,8 @@ export async function hydrateBotProfileRuntime(
           : JSON.stringify(previousResolved.runtimeEpoch ?? {}),
       )
     : null;
-  // Canonical Chats, private-chat topics, group lanes and IM channel lanes follow
-  // Profile updates; delegation children stay frozen.
-  const followsProfile = row.role === 'canonical' || row.role === 'thread' || row.role === 'routine' || row.role === 'group' || row.role === 'channel';
-  const runtimeEpochChanged = followsProfile && previousSnapshot !== undefined
+  const runtimeEpochBaseline = followsProfile && previousSnapshot !== undefined;
+  const runtimeEpochChanged = runtimeEpochBaseline && previousSnapshot
     ? previousSnapshot.profileVersion !== row.profileVersion
       || previousRuntimeEpoch?.sha256 !== runtimeEpochSha256
     : false;
@@ -1203,5 +1330,6 @@ export async function hydrateBotProfileRuntime(
     toolsetMode,
     memoryRefs,
     runtimeEpochChanged,
+    runtimeEpochBaseline,
   };
 }

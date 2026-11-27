@@ -28,11 +28,13 @@ function viewer(rtc = false, frameCallback = true, nativeMedia = false) {
     type: string;
     epoch: string;
     sequence: number;
+    fieldTap?: boolean;
     events?: Array<{ kind: string; code?: string; text?: string; down?: boolean }>;
   }> = [];
   const listeners: Record<string, (event: unknown) => void> = {};
   const documentListeners: Record<string, (event: unknown) => void> = {};
   const windowListeners: Record<string, (event: unknown) => void> = {};
+  let resize = () => {};
   let activeElement: object | null = null;
   const elements = Object.fromEntries(
     [
@@ -183,6 +185,7 @@ function viewer(rtc = false, frameCallback = true, nativeMedia = false) {
       },
     },
     ResizeObserver: class {
+      constructor(callback: () => void) { resize = callback; }
       observe() {}
     },
     setInterval: (fn: () => void) => intervals.push(fn),
@@ -196,6 +199,7 @@ function viewer(rtc = false, frameCallback = true, nativeMedia = false) {
     cancelAnimationFrame: (key: number) => frames.delete(key),
   });
   return {
+    resize: () => resize(),
     dataChannel,
     messages,
     elements,
@@ -453,6 +457,7 @@ describe("remote desktop viewport", () => {
     v.send({ type: 'mouseButtons', native: true, enabled: true });
     v.send({ type: 'nativeMouse', control: 'left', event: 'pointerdown', id: 0, y: 100 });
     v.ack();
+    expect(v.messages.filter(m => m.type === 'input' && m.fieldTap)).toHaveLength(1);
     const beforeTap = v.messages.flatMap(m => m.events ?? []).length;
     v.send({ type: 'nativeTouchpad', tap: true });
     v.flush();
@@ -566,7 +571,25 @@ describe("remote desktop viewport", () => {
     expect(v.messages.filter((m) => m.type === 'input')).toHaveLength(0);
     expect(v.messages.filter((m) => m.type === 'inputOverflow')).toHaveLength(1);
   });
-  it.each([0, 59])(
+  // Unit regression: the orientation policy can arrive after ResizeObserver and
+  // rail insets. The parent needs the final measurement even without another
+  // DOM resize, otherwise automatic fitting keeps the previous narrow width.
+  it("reports the final usable width when orientation policy arrives last", () => {
+    const v = viewer();
+    v.send({ type: "init", epoch: "one", width: 800, height: 1000, fillHeight: true });
+    v.send({ type: "mouseButtons", fitToInsets: true, topInset: 60, bottomInset: 40, rightInset: 50 });
+    expect(v.messages.findLast(m => m.type === "viewportChanged"))
+      .toMatchObject({ width: 350, height: 500 });
+    for (let turn = 0; turn < 3; turn++) {
+      v.send({ type: "viewport", fillHeight: false });
+      expect(v.messages.findLast(m => m.type === "viewportChanged"))
+        .toMatchObject({ width: 400, height: 500 });
+      v.send({ type: "viewport", fillHeight: true });
+      expect(v.messages.findLast(m => m.type === "viewportChanged"))
+        .toMatchObject({ width: 350, height: 500 });
+    }
+  });
+  it.each([0, 59, 123])(
     "fits between the top safe area (%s) and toolbar with correct touch coordinates",
     (topInset) => {
       const v = viewer();
@@ -773,6 +796,32 @@ describe("remote desktop viewport", () => {
       { kind: "scroll", dx: 0, dy: -30 },
     ]);
   });
+  // Unit: Duo Modern sometimes overlaps its skin rail after switching from a
+  // smaller retro canvas. Insets and WebView resize arrive independently; the
+  // previous test only sent insets after the final dimensions were available.
+  it.each(["insets-first", "resize-first", "initial-layout"])("keeps Modern above the fold when switching skins (%s)", (order) => {
+    const v = viewer(false, true, true);
+    v.elements.stage.clientWidth = order === "initial-layout" ? 0 : 560;
+    v.elements.stage.clientHeight = order === "initial-layout" ? 0 : 310;
+    v.send({ type: "init", epoch: "fold", width: 1920, height: 1080 });
+    const applyInsets = () => v.send({ type: "mouseButtons", fitToInsets: true, topInset: 80, bottomInset: 720 });
+    const expand = () => {
+      v.elements.stage.clientWidth = 900;
+      v.elements.stage.clientHeight = 1400;
+      v.resize();
+    };
+    if (order === "resize-first") { expand(); applyInsets(); }
+    else { applyInsets(); expand(); }
+    v.frame(300);
+    expect(v.messages.findLast(m => m.type === "nativeViewport")).toMatchObject({
+      x: 0, y: 126.875, width: 900, height: 506.25,
+    });
+    for (const el of [v.elements.image, v.elements.video]) {
+      expect(el.style.top).toBe("126.875px");
+      expect(parseFloat(el.style.top) + parseFloat(el.style.height)).toBeLessThanOrEqual(680);
+    }
+    expect(v.messages.findLast(m => m.type === "viewportChanged")).toMatchObject({ width: 900, height: 600 });
+  });
   it('fits the folded desktop above the touchpad without shrinking the background stage', () => {
     const v = viewer(false, true, true);
     v.elements.stage.clientWidth = 900;
@@ -884,10 +933,14 @@ describe("remote desktop viewport", () => {
       expect(parseFloat(v.elements.image.style.left)).toBeCloseTo(
         parseFloat(originalLeft),
       );
+      const originalTop = parseFloat(v.elements.image.style.top);
       // Header, computer keyboard, phone keyboard, and closing the keyboard.
       for (const bottomInset of [60, 260, 300, 0]) {
         const previousLeft = parseFloat(v.elements.image.style.left);
         const previousCursorX = previousLeft + cursorX * parseFloat(width);
+        const previousCursorY =
+          parseFloat(v.elements.image.style.top) +
+          0.85 * parseFloat(v.elements.image.style.height);
         const rightInset = bottomInset > 0 ? 0 : 80;
         const expectedCursorX = Math.max(
           67,
@@ -911,12 +964,39 @@ describe("remote desktop viewport", () => {
         expect(parseFloat(image.left)).toBeCloseTo(
           previousLeft + expectedCursorX - previousCursorX,
         );
-        expect(
-          parseFloat(image.top) + 0.85 * parseFloat(image.height),
-        ).toBeCloseTo((400 - bottomInset) / 2);
+        // A visible cursor holds still; a covered one moves just into view.
+        const cursorY = parseFloat(image.top) + 0.85 * parseFloat(image.height);
+        if (bottomInset > 0) {
+          expect(cursorY).toBeCloseTo(
+            Math.max(17, Math.min(400 - bottomInset - 17, previousCursorY)),
+          );
+        } else {
+          expect(cursorY).toBeGreaterThanOrEqual(17);
+          expect(cursorY).toBeLessThanOrEqual(400 - 17);
+          if (scale === 1) expect(parseFloat(image.top)).toBeCloseTo(originalTop);
+        }
       }
     },
   );
+  it("lifts an unzoomed ultrawide cursor out from behind the landscape keyboard", () => {
+    const v = viewer();
+    v.elements.stage.clientWidth = 800;
+    v.elements.stage.clientHeight = 400;
+    v.send({ type: "init", epoch: "wide", width: 2560, height: 1080, fillHeight: true });
+    v.send({ type: "mouseButtons", keyboardOpen: false, bottomInset: 0, leftInset: 50, rightInset: 80 });
+    v.send({
+      type: "frame",
+      jpeg: "",
+      cursor: { x: 0.5, y: 0.95, width: 18, height: 18, hotX: 9, hotY: 9, visible: true, png: "iVBORw0KGgo=" },
+    });
+    for (let i = 0; i < 30; i++) v.frame();
+    const style = () => v.elements.image.style;
+    const cursorY = () => parseFloat(style().top) + 0.95 * parseFloat(style().height);
+    expect(cursorY()).toBeGreaterThan(300);
+    v.send({ type: "mouseButtons", keyboardOpen: true, bottomInset: 100, leftInset: 50, rightInset: 0 });
+    for (let i = 0; i < 30; i++) v.frame();
+    expect(cursorY()).toBeCloseTo(300 - 17);
+  });
   it("does not recenter portrait content for a keyboard overlay message", () => {
     const v = viewer();
     const before = { ...v.elements.image.style };
@@ -1085,6 +1165,33 @@ describe("remote desktop viewport", () => {
       { kind: "key", code: "Enter", down: false },
     ]);
   });
+  it.each([
+    "中".repeat(4095) + "😀tail",
+    "中文Ab😀".repeat(819) + "\n",
+  ])("commits long IME text without splitting a surrogate pair", (text) => {
+    const v = viewer();
+    v.send({ type: "init", epoch: "unicode", width: 1280, height: 800 });
+    v.send({ type: "control", enabled: true });
+    v.send({ type: "keyboard", enabled: true });
+    v.keyboardInput("compositionstart");
+    v.elements["keyboard-input"].value = "​" + text;
+    v.keyboardInput("input", { isComposing: true });
+    expect(v.messages.flatMap((m) => m.events ?? []).filter((e) => e.kind === "text")).toEqual([]);
+    v.keyboardInput("compositionend");
+    v.keyboardInput("input", { isComposing: false });
+    v.flush();
+    const chunks = v.messages
+      .flatMap((m) => m.events ?? [])
+      .filter((e) => e.kind === "text")
+      .map((e) => e.text!);
+    expect(chunks).toHaveLength(2);
+    expect(chunks.join("")).toBe(text);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(4096);
+      // A lone surrogate at either end means a character was cut in half.
+      expect(chunk).not.toMatch(/^[\udc00-\udfff]|[\ud800-\udbff]$/);
+    }
+  });
   it("forwards hardware keys after the mobile keyboard input loses focus", () => {
     const v = viewer();
     v.send({ type: "init", epoch: "typing", width: 1920, height: 1080 });
@@ -1127,6 +1234,212 @@ describe("remote desktop viewport", () => {
       expect(v.messages.flatMap((m) => m.events ?? [])).toEqual([]);
     },
   );
+  // Unit: shrinking below fit in touch mode keeps a stable origin for taps,
+  // including taps over a native video surface.
+  it.each([false, true])("keeps a smaller touch-mode picture centered and correct touch coordinates (native=%s)", (native) => {
+    const v = viewer(false, true, native);
+    v.send({ type: "init", epoch: "free", width: 1920, height: 1080 });
+    v.send({ type: "control", enabled: true });
+    v.send({ type: "mode", mode: "touch" });
+    v.flush(); v.ack();
+    const measurements = () => v.messages.filter(m => m.type === "viewportChanged").length;
+    const before = measurements();
+    v.pointer("pointerdown", 1, 100, 300);
+    v.pointer("pointerdown", 2, 300, 300);
+    v.pointer("pointermove", 1, 150, 300);
+    v.pointer("pointermove", 2, 250, 300);
+    v.frame(); v.frame(40);
+    v.pointer("pointerup", 1, 150, 300);
+    v.pointer("pointerup", 2, 250, 300);
+    for (let i = 0; i < 20; i++) v.frame(20);
+    expect(parseFloat(v.elements.image.style.width)).toBeCloseTo(200);
+    v.pointer("pointerdown", 1, 200, 300);
+    v.pointer("pointermove", 1, 260, 270);
+    v.pointer("pointerup", 1, 260, 270);
+    for (let i = 0; i < 20; i++) v.frame(20);
+    const r = v.elements.image.style;
+    expect(parseFloat(r.left)).toBeCloseTo(100);
+    expect(parseFloat(r.top)).toBeCloseTo(243.75);
+    expect(parseFloat(r.width)).toBeCloseTo(200);
+    // Manual camera gestures must not ask automatic resolution fitting to undo them.
+    expect(measurements()).toBe(before);
+    const x = parseFloat(r.left) + parseFloat(r.width) * 0.25;
+    const y = parseFloat(r.top) + parseFloat(r.height) * 0.75;
+    v.pointer("pointerdown", 1, x, y);
+    v.pointer("pointerup", 1, x, y);
+    v.flush();
+    expect(v.messages.flatMap(m => m.events ?? [])).toContainEqual({
+      kind: "button", button: 0, down: true, x: 0.25, y: 0.75,
+    });
+    // The fingers can start in the newly exposed space beside the picture.
+    // While still below fit the resized picture stays centered.
+    v.pointer("pointerdown", 1, 60, 300);
+    v.pointer("pointerdown", 2, 140, 300);
+    v.pointer("pointermove", 1, 50, 300);
+    v.pointer("pointermove", 2, 150, 300);
+    v.frame(); v.frame(40);
+    expect(parseFloat(r.width)).toBeCloseTo(250);
+    expect(parseFloat(r.left)).toBeCloseTo(75);
+    v.pointer("pointerup", 1, 50, 300);
+    v.pointer("pointerup", 2, 150, 300);
+    v.send({ type: "fit" });
+    expect(r.width).toBe("400px");
+    expect(r.left).toBe("0px");
+  });
+  // Unit: an off-center pinch crosses fit without lifting either finger.
+  // Compare actual rendered positions on both sides, including the return trip.
+  it("keeps the touch picture continuous across fit during an off-center pinch", () => {
+    const v = viewer();
+    v.send({ type: "control", enabled: true });
+    v.send({ type: "mode", mode: "touch" });
+    const move = (center: number, span: number) => {
+      v.pointer("pointermove", 1, center - span / 2, 260);
+      v.pointer("pointermove", 2, center + span / 2, 260);
+      v.frame(); v.frame(40);
+    };
+    v.pointer("pointerdown", 1, 100, 260);
+    v.pointer("pointerdown", 2, 300, 260);
+    move(200, 100);
+    v.pointer("pointerup", 1, 150, 260);
+    v.pointer("pointerup", 2, 250, 260);
+    v.frame(400);
+
+    v.pointer("pointerdown", 1, 60, 260);
+    v.pointer("pointerdown", 2, 140, 260);
+    const style = v.elements.image.style;
+    move(100, 158.4);
+    expect(parseFloat(style.width)).toBeCloseTo(396);
+    expect(parseFloat(style.left)).toBeCloseTo(2);
+    move(100, 161.6);
+    expect(parseFloat(style.width)).toBeCloseTo(404);
+    expect(Math.abs(parseFloat(style.left))).toBeLessThan(4);
+    move(120, 208);
+    move(125, 161.6);
+    expect(Math.abs(parseFloat(style.left))).toBeLessThan(4);
+    move(125, 158.4);
+    expect(parseFloat(style.left)).toBeCloseTo(2);
+  });
+  // Unit: a phone touch drag at fit used to leave the picture off-center.
+  // The same drag must still reach another part of a magnified desktop.
+  it("pans in touch mode only after enlarging the desktop", () => {
+    const v = viewer();
+    v.send({ type: "control", enabled: true });
+    v.send({ type: "mode", mode: "touch" });
+    const left = () => parseFloat(v.elements.image.style.left);
+    function drag() {
+      const before = left();
+      v.pointer("pointerdown", 1, 200, 300);
+      v.pointer("pointermove", 1, 240, 300);
+      const travel = left() - before;
+      v.pointer("pointerup", 1, 240, 300);
+      return travel;
+    }
+    expect(drag()).toBe(0);
+    v.pointer("pointerdown", 1, 150, 300);
+    v.pointer("pointerdown", 2, 250, 300);
+    v.pointer("pointermove", 1, 100, 300);
+    v.pointer("pointermove", 2, 300, 300);
+    v.frame(); v.frame(40);
+    v.pointer("pointerup", 1, 100, 300);
+    v.pointer("pointerup", 2, 300, 300);
+    expect(parseFloat(v.elements.image.style.width)).toBeCloseTo(800);
+    expect(drag()).toBeCloseTo(40);
+  });
+  // Unit: real pointer gestures must recover center from a visible offset,
+  // not only the previous 8pt zone, while preserving deliberate distant pans.
+  it("lets the fitted picture move freely and snaps a nearby release to center", () => {
+    const v = viewer();
+    const drag = (dx: number, dy: number) => {
+      v.pointer("pointerdown", 1, 200, 300);
+      v.pointer("pointermove", 1, 200 + dx, 300 + dy);
+      const before = { ...v.elements.image.style };
+      v.pointer("pointerup", 1, 200 + dx, 300 + dy);
+      expect(v.elements.image.style.left).toBe(before.left);
+      expect(v.elements.image.style.top).toBe(before.top);
+      for (let i = 0; i < 20; i++) v.frame(20);
+    };
+    drag(120, 140);
+    expect(parseFloat(v.elements.image.style.left)).toBeCloseTo(120);
+    expect(parseFloat(v.elements.image.style.top)).toBeCloseTo(327.5);
+    drag(-70, -100);
+    expect(parseFloat(v.elements.image.style.left)).toBeCloseTo(0);
+    expect(parseFloat(v.elements.image.style.top)).toBeCloseTo(187.5);
+    drag(-50, -40);
+    expect(parseFloat(v.elements.image.style.left)).toBeCloseTo(0);
+    expect(parseFloat(v.elements.image.style.top)).toBeCloseTo(187.5);
+    drag(120, 40);
+    expect(parseFloat(v.elements.image.style.left)).toBeCloseTo(120);
+    expect(parseFloat(v.elements.image.style.top)).toBeCloseTo(187.5);
+  });
+  // User trial: pinch stays continuous through fit in either direction. Only
+  // after both fingers lift does a nearby size animate back to centered fit.
+  it.each([
+    [1.5, 1.15, true], [1.5, 0.85, true], [1.5, 0.7, false],
+    [0.6, 0.85, true], [0.6, 1.15, true], [0.6, 1.3, false],
+  ])("settles near fit only on release (%s → %s, snap=%s)", (initial, target, snaps) => {
+    const v = viewer();
+    const begin = () => {
+      v.pointer("pointerdown", 1, 100, 250);
+      v.pointer("pointerdown", 2, 300, 250);
+    };
+    const move = (span: number) => {
+      v.pointer("pointermove", 1, 200 - span / 2, 250);
+      v.pointer("pointermove", 2, 200 + span / 2, 250);
+      v.frame(); v.frame(40);
+    };
+    begin(); move(200 * initial);
+    v.pointer("pointerup", 1, 200 - 100 * initial, 250);
+    v.pointer("pointerup", 2, 200 + 100 * initial, 250);
+    v.frame(400);
+    v.pointer("pointerdown", 1, 200, 300);
+    v.pointer("pointermove", 1, 240, 320);
+    v.pointer("pointerup", 1, 240, 320);
+    v.frame(400);
+    begin();
+    const span = 200 * target / initial;
+    move(span);
+    const style = v.elements.image.style;
+    expect(parseFloat(style.width)).toBeCloseTo(400 * target);
+    const left = parseFloat(style.left), top = parseFloat(style.top);
+    v.pointer("pointerup", 1, 200 - span / 2, 250);
+    v.frame(400);
+    // A remaining finger still owns the picture; no magnetic jump yet.
+    expect(parseFloat(style.width)).toBeCloseTo(400 * target);
+    expect(parseFloat(style.left)).toBeCloseTo(left);
+    v.pointer("pointerup", 2, 200 + span / 2, 250);
+    expect(parseFloat(style.width)).toBeCloseTo(400 * target);
+    v.frame(140);
+    if (snaps) {
+      expect(parseFloat(style.width)).toBeGreaterThan(Math.min(400, 400 * target));
+      expect(parseFloat(style.width)).toBeLessThan(Math.max(400, 400 * target));
+    }
+    v.frame(140);
+    expect(parseFloat(style.width)).toBeCloseTo(snaps ? 400 : 400 * target);
+    expect(parseFloat(style.left)).toBeCloseTo(snaps ? 0 : left);
+    expect(parseFloat(style.top)).toBeCloseTo(snaps ? 187.5 : top);
+  });
+  it("lets a new touch interrupt the release snap without a later jump", () => {
+    const v = viewer();
+    v.pointer("pointerdown", 1, 100, 300);
+    v.pointer("pointerdown", 2, 300, 300);
+    v.pointer("pointermove", 1, 92, 300);
+    v.pointer("pointermove", 2, 308, 300);
+    v.frame(); v.frame(40);
+    v.pointer("pointerup", 1, 92, 300);
+    v.pointer("pointerup", 2, 308, 300);
+    v.frame(100);
+    const width = parseFloat(v.elements.image.style.width);
+    expect(width).toBeGreaterThan(400);
+    expect(width).toBeLessThan(432);
+    v.pointer("pointerdown", 1, 100, 300);
+    v.frame(400);
+    expect(parseFloat(v.elements.image.style.width)).toBeCloseTo(width);
+    v.pointer("pointerdown", 2, 300, 300);
+    v.pointer("pointermove", 1, 150, 300);
+    v.pointer("pointermove", 2, 250, 300);
+    v.frame(); v.frame(40);
+    expect(parseFloat(v.elements.image.style.width)).toBeCloseTo(width / 2);
+  });
   it("stops a real pinch at 2x and resumes from the new limit after a viewport change", () => {
     const v = viewer();
     const width = () => parseFloat(v.elements.image.style.width);
@@ -1386,6 +1699,47 @@ describe("portrait keyboard positioning", () => {
       expect(parseFloat(v.elements.image.style.top)).toBeCloseTo(originalTop);
     },
   );
+  // The keyboard shrinks the portrait stage; keeping the old viewport center
+  // used to push a zoomed desktop's cursor out of view.
+  it.each([
+    [200, 200, 200],
+    [200, 500, 600 - 300 - 17],
+    [10, 500, 600 - 300 - 17],
+  ])("keeps a zoomed cursor at (%s, %s) in view as the keyboard opens", (screenX, screenY, expectedY) => {
+    const v = viewer();
+    v.send({ type: "init", epoch: "keyboard", width: 1920, height: 1080 });
+    v.pointer("pointerdown", 1, 190, 300);
+    v.pointer("pointerdown", 2, 210, 300);
+    v.pointer("pointermove", 1, 150, 300);
+    v.pointer("pointermove", 2, 250, 300);
+    v.frame();
+    v.frame(40);
+    v.pointer("pointermove", 1, 50, 300);
+    v.pointer("pointermove", 2, 350, 300);
+    v.frame();
+    v.pointer("pointerup", 1, 50, 300);
+    v.pointer("pointerup", 2, 350, 300);
+    for (let i = 0; i < 30; i++) v.frame(20);
+    const style = () => v.elements.image.style;
+    const top = parseFloat(style().top),
+      left = parseFloat(style().left),
+      width = parseFloat(style().width),
+      height = parseFloat(style().height);
+    expect(width).toBeGreaterThan(400);
+    const x = (screenX - left) / width,
+      y = (screenY - top) / height;
+    v.send({
+      type: "frame",
+      jpeg: "",
+      cursor: { x, y, width: 18, height: 18, hotX: 9, hotY: 9, visible: true, png: "iVBORw0KGgo=" },
+    });
+    v.elements.stage.clientHeight = 300;
+    v.resize();
+    for (let i = 0; i < 30; i++) v.frame(20);
+    expect(parseFloat(style().width)).toBeCloseTo(width);
+    expect(parseFloat(style().left) + x * width).toBeCloseTo(screenX);
+    expect(parseFloat(style().top) + y * height).toBeCloseTo(expectedY);
+  });
   it("limits the offset to available space below the desktop", () => {
     const v = viewer();
     v.elements.stage.clientHeight = 240;
@@ -1666,6 +2020,17 @@ describe("remote desktop three-segment backdrop", () => {
     v.frame();
     expect(v.elements.bg.style.display).toBe("none");
     expect(drawsOf(v)).toHaveLength(0);
+    // Shrinking exposes the same ambient background even at matching ratios.
+    v.pointer("pointerdown", 1, 100, 200);
+    v.pointer("pointerdown", 2, 300, 200);
+    v.pointer("pointermove", 1, 150, 200);
+    v.pointer("pointermove", 2, 250, 200);
+    v.frame(); v.frame(40);
+    expect(v.elements.bg.style.display).toBe("block");
+    v.pointer("pointerup", 1, 150, 200);
+    v.pointer("pointerup", 2, 250, 200);
+    v.send({ type: "fit" });
+    expect(v.elements.bg.style.display).toBe("none");
   });
 
   it("draws JPEG fallback frames into the backdrop canvas", () => {

@@ -59,6 +59,20 @@ describe('classifyTurnOverload', () => {
     expect(classifyTurnOverload({ message: 'overloaded_error: Overloaded' })).toBe(true);
   });
 
+  it('matches the upstream wording that only says the engine is overloaded', () => {
+    // Kimi 在编码端点回的原文：既带 `rate limit exceeded` 又说明是服务过载。
+    // 只认 `at capacity` / `overloaded_error` 时这里会落到限额通道，把 2 分钟冷却
+    // 拉成 30 分钟（issue #7897）。
+    expect(
+      classifyTurnOverload({
+        message: 'rate limit exceeded: The engine is currently overloaded, please try again later',
+      }),
+    ).toBe(true);
+    expect(classifyTurnOverload({ message: 'The engine is currently overloaded' })).toBe(true);
+    // 上游可能把短语放在句首, 大小写不敏感(与 maker-core / renderer 三处同步)。
+    expect(classifyTurnOverload({ message: 'Currently overloaded, retry shortly' })).toBe(true);
+  });
+
   it('does NOT match a real account rate limit (different recovery timing)', () => {
     // 限额要等账号周期重置(小时级),不能走过载的一分钟短窗口。
     expect(classifyTurnOverload({ sdkError: 'rate_limit', message: 'rate limit reached' })).toBe(false);
@@ -94,6 +108,22 @@ describe('classifyTurnOverload', () => {
     ).toBe(true);
     // 连 message 都没有时同样成立（host 合成的错误可能不带文案）。
     expect(classifyTurnOverload({ codexErrorInfo: 'serverOverloaded' })).toBe(true);
+  });
+
+  it('结构化 reason=upstream-overload 命中时不依赖文案，大写展示态 reason 不触发重试判定', () => {
+    expect(
+      classifyTurnOverload({
+        message: 'The upstream declined this request.',
+        reason: 'upstream-overload',
+      }),
+    ).toBe(true);
+    // telegram-bot-parity.md: 大写 UPSTREAM_OVERLOADED 仅作展示文案映射，不触发自动重试。
+    expect(
+      classifyTurnOverload({
+        message: 'stream disconnected before completion',
+        reason: 'UPSTREAM_OVERLOADED',
+      }),
+    ).toBe(false);
   });
 
   it('非过载的结构化 tag 不误判成过载', () => {
@@ -137,6 +167,18 @@ describe('classifyTurnUsageLimit (billing depletion)', () => {
 describe('classifyTurnUsageLimit (Codex structured tag)', () => {
   it('matches codexErrorInfo usageLimitExceeded even without limit wording', () => {
     expect(classifyTurnUsageLimit({ codexErrorInfo: 'usageLimitExceeded', message: 'Upgrade to Pro' })).toBe(true);
+  });
+
+  // Plugin-engine structured reasons must route to usage-limit vs overload without depending on wording.
+  it('matches ACP plugin structured usage-limit and overload reasons', () => {
+    expect(classifyTurnUsageLimit({ reason: 'acp-usage-limit', message: 'upstream text' })).toBe(true);
+    expect(
+      classifyTurnUsageLimit({
+        message: 'Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 2h13m2s.',
+      }),
+    ).toBe(true);
+    expect(classifyTurnOverload({ reason: 'acp-overloaded', message: 'upstream text' })).toBe(true);
+    expect(classifyTurnOverload({ reason: 'acp-usage-limit', message: 'upstream text' })).toBe(false);
   });
 });
 

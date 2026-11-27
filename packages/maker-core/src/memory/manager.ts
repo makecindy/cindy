@@ -33,7 +33,7 @@ import {
   type MemoryConfig,
   type WriteOptions,
 } from './types.js';
-import type { BaseAgent } from '../agents/base-agent.js';
+import type { BaseAgent, OneShotOptions } from '../agents/base-agent.js';
 import { NotSupportedError } from '../types/capabilities.js';
 import type { AgentKind } from '../types/common.js';
 import type { Logger } from '../interfaces/logger.js';
@@ -110,6 +110,8 @@ export interface MakerMemoryManagerDeps {
     prompt: string,
     opts: { maxTokens: number; timeoutMs: number },
   ) => Promise<string | null>;
+  /** Meter the legacy agent route without changing auxiliary-chain fallback semantics. */
+  reviewAgentOneShot?: (agent: AgentKind, prompt: string, opts: OneShotOptions) => Promise<string>;
   logger: Logger;
   /** 配置覆盖 */
   config?: Partial<MemoryConfig>;
@@ -143,7 +145,12 @@ interface PooledEntry {
 
 const MEMORY_SUBDIR = 'maker-memory';
 const FTS_DB_FILENAME = 'fts.db';
-const STORAGE_MIGRATION_RECEIPT = '.cindy-memory-migration-v1.json';
+/**
+ * Written in a host-resolved store once the shards of its historical `<owner>/maker-memory/<scope>`
+ * folder were copied in; a host that moves them itself writes it too, so they are copied once.
+ */
+export const MEMORY_STORAGE_MIGRATION_RECEIPT = '.cindy-memory-migration-v1.json';
+const STORAGE_MIGRATION_RECEIPT = MEMORY_STORAGE_MIGRATION_RECEIPT;
 // This shape is only a candidate: sanitized project paths can match it too.
 const LEGACY_BOT_MEMORY_DIR = /^bot-.{0,24}-[a-f0-9]{16}$/;
 
@@ -175,11 +182,36 @@ function copyLegacyMemoryShardsSync(sourceDir: string, targetDir: string): void 
     const source = path.join(sourceDir, entry.name);
     if (fsSync.lstatSync(source).isSymbolicLink()) continue;
     const target = path.join(targetDir, entry.name);
-    if (!fsSync.existsSync(target)) fsSync.copyFileSync(source, target);
+    // Exclusive: an existing file (or a link planted there) is never written through.
+    try {
+      fsSync.copyFileSync(source, target, fsSync.constants.COPYFILE_EXCL);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    }
+  }
+}
+
+/** fts.db and its journals are derived: a link in their place is removed, never opened through. */
+function removeLinkedDatabaseFilesSync(dbPath: string): void {
+  for (const file of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`, `${dbPath}-journal`]) {
+    try {
+      if (fsSync.lstatSync(file).isSymbolicLink()) fsSync.unlinkSync(file);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
   }
 }
 
 export class MakerMemoryManager {
+  /** Discover a project-local store without opening SQLite or creating any files. */
+  getProjectMemoryDirectory(scopeKey: string): string | undefined {
+    this.ensureOwnerScope();
+    if (!path.isAbsolute(scopeKey)) return undefined;
+    const dir = this.deps.resolveStorageDir?.(scopeKey, this.resolvedBasePath!);
+    if (!dir) return undefined;
+    const relative = path.relative(scopeKey, dir);
+    return relative && !relative.startsWith('..') && !path.isAbsolute(relative) ? dir : undefined;
+  }
   private enabled: boolean;
   private readonly stores = new Map<string, PooledEntry>();
   private readonly logger: Logger;
@@ -605,10 +637,11 @@ export class MakerMemoryManager {
         copyLegacyMemoryShardsSync(legacyStorageDir, storageDir);
         const receipt = path.join(storageDir, STORAGE_MIGRATION_RECEIPT);
         const receiptTmp = `${receipt}.tmp-${process.pid}`;
+        fs.rmSync(receiptTmp, { force: true });
         fs.writeFileSync(
           receiptTmp,
           `${JSON.stringify({ schemaVersion: 1, migratedAt: new Date().toISOString() })}\n`,
-          'utf8',
+          { encoding: 'utf8', flag: 'wx' },
         );
         fs.renameSync(receiptTmp, receipt);
       } catch (error) {
@@ -616,6 +649,7 @@ export class MakerMemoryManager {
       }
     }
     fs.mkdirSync(storageDir, { recursive: true });
+    removeLinkedDatabaseFilesSync(dbPath);
 
     const db = this.deps.sqliteFactory(dbPath);
     // 注册 in-flight 打开的 db (review #2388 Codex 26th P1): init 完成前不在
@@ -624,6 +658,7 @@ export class MakerMemoryManager {
     const store = new MakerMemoryStore({
       storageDir,
       absWorkdir,
+      nativeFileEdits: this.getProjectMemoryDirectory(absWorkdir) !== undefined,
       db,
       logger: this.logger.child(`memory:${sanitized}`),
       ...(this.deps.config ? { config: this.deps.config } : {}),
@@ -916,15 +951,35 @@ export class MakerMemoryManager {
     // 发送前复核: 边界已切换则丢弃旧 owner 的 records, fail-closed。
     this.assertScopeUnchanged(scopeAtEntry);
 
-    const summary = records
-      .map((r) => `### ${r.filename}\n- title: ${r.frontmatter.title}\n- description: ${r.frontmatter.description}\n- updatedAt: ${r.frontmatter.updatedAt}\n\n${r.body}`)
-      .join('\n\n---\n\n');
+    // Cap dump size so large memory stores (including a single 56 KB note) cannot overflow context.
+    const REVIEW_DUMP_MAX_CHARS = 48_000;
+    const TRUNCATION_NOTICE = '\n\n_(entry truncated due to review size budget)_';
+    const sorted = [...records].sort((a, b) => b.frontmatter.updatedAt.localeCompare(a.frontmatter.updatedAt));
+    const chunks: string[] = [];
+    let usedChars = 0;
+    for (const r of sorted) {
+      const entry = `### ${r.filename}\n- title: ${r.frontmatter.title}\n- description: ${r.frontmatter.description}\n- updatedAt: ${r.frontmatter.updatedAt}\n\n${r.body}`;
+      const sepLen = chunks.length > 0 ? 7 : 0;
+      if (usedChars + sepLen + entry.length > REVIEW_DUMP_MAX_CHARS) {
+        if (chunks.length === 0) {
+          const allowed = Math.max(0, REVIEW_DUMP_MAX_CHARS - TRUNCATION_NOTICE.length);
+          chunks.push(entry.slice(0, allowed) + TRUNCATION_NOTICE);
+          usedChars = chunks[0].length;
+        }
+        break;
+      }
+      chunks.push(entry);
+      usedChars += sepLen + entry.length;
+    }
+    const omitted = sorted.length - chunks.length;
+    const summary = chunks.join('\n\n---\n\n')
+      + (omitted > 0 ? `\n\n---\n\n_(${omitted} older entries omitted due to review size budget)_` : '');
     const prompt = [
       'You are reviewing a memory store for consistency.',
       'For each potential issue, classify as: contradiction / outdated / duplicate / fine.',
       'Output a concise plan (<= 200 words) listing which files to delete or merge and why.',
       '',
-      `Memory dump (${records.length} entries):`,
+      `Memory dump (${chunks.length}/${records.length} entries):`,
       '',
       summary,
     ].join('\n');
@@ -954,7 +1009,9 @@ export class MakerMemoryManager {
     if (!agent) {
       throw new Error(`runReview: review agent '${reviewAgentKind}' not registered`);
     }
-    const suggestions = await agent.oneShot(prompt, REVIEW_ONE_SHOT_OPTS);
+    const suggestions = this.deps.reviewAgentOneShot
+      ? await this.deps.reviewAgentOneShot(reviewAgentKind, prompt, REVIEW_ONE_SHOT_OPTS)
+      : await agent.oneShot(prompt, REVIEW_ONE_SHOT_OPTS);
     // oneShot await 后、返回前复核 (review #2388 Codex 21st P1): 边界在 LLM
     // 调用期间发生则建议文本基于旧 owner 数据 — 不得向当前 session 报 ok。
     this.assertScopeUnchanged(scopeAtEntry);

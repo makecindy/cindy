@@ -1,0 +1,241 @@
+import { describe, expect, it, vi } from 'vitest';
+import { CONTROLLED_SOURCE_READ_TIMEOUT_MS, createControlledModelCatalogReader, type ControlledModelCatalogDeps } from '../controlledModelCatalog.js';
+import { isDeviceUnresponsiveRemoteError, isTransientRemoteError } from '@cindy/maker-shared/device-link-contract';
+import { REMOTE_AGENT_INVOKE_TIMEOUT_MS } from '@cindy/device-link';
+import { invokeModelCatalog } from '../../../renderer/lib/invokeModelCatalog';
+import { CONTROLLED_MODEL_CATALOG_RETRY_SHARE, modelCatalogKey } from '../../../shared/controlledModelCatalog';
+import { extractIpcError } from '../../../shared/ipcError';
+
+// #8010, unit: real reader must use B's sources (including A and B-only shares),
+// restrict reads, and reject late results after revocation/account change.
+// Existing location tests only covered local discovery, not remote catalog routing.
+function fixture() {
+  const locations = vi.fn<ControlledModelCatalogDeps['locations']>(async () => ({ status: 'complete', locations: [
+    { agentDeviceId: 'device-a', name: 'A' },
+    { agentDeviceId: 'share:b-only', name: 'Provider · Owner' },
+  ] }));
+  const invoke = vi.fn<ControlledModelCatalogDeps['invoke']>().mockResolvedValue({ ok: true, result: { providers: [{ id: 'a-provider' }] } });
+  const assertOwner = vi.fn();
+  const assertCaller = vi.fn();
+  const retryShareDirectory = vi.fn<ControlledModelCatalogDeps['retryShareDirectory']>(async () => ({ receivedChangeSequence: 4 }));
+  return { locations, invoke, assertOwner, assertCaller, retryShareDirectory,
+    read: createControlledModelCatalogReader({ locations, invoke, retryShareDirectory, assertCaller, captureOwner: () => assertOwner }) };
+}
+const request = (agentDeviceId = 'device-a') => ({
+  op: 'read', agentDeviceId, channel: 'maker:provider:list', args: [],
+});
+
+describe('controlled model catalogs', () => {
+  // Unit: recovery must work even when the task host's failed discovery currently
+  // omits the source. Keep the same caller and owner fences as catalog reads.
+  it('recovers a task-host share before ordinary discovery without forwarding extra calls', async () => {
+    const f = fixture();
+    f.locations.mockResolvedValue({ status: 'degraded', locations: [] });
+    const retry = { op: CONTROLLED_MODEL_CATALOG_RETRY_SHARE, agentDeviceId: 'share:b-only' };
+    await expect(f.read({ ...retry, agentDeviceId: 'device-a' })).rejects.toThrow('INVALID_PARAMS');
+    f.assertCaller.mockImplementationOnce(() => { throw new Error('guest denied'); });
+    await expect(f.read(retry)).rejects.toThrow('guest denied');
+    expect(f.retryShareDirectory).not.toHaveBeenCalled();
+
+    await expect(f.read(retry)).resolves.toEqual({ ok: true, receivedChangeSequence: 4 });
+    expect(f.retryShareDirectory).toHaveBeenCalledExactlyOnceWith('share:b-only');
+    expect(f.locations).not.toHaveBeenCalled();
+    expect(f.invoke).not.toHaveBeenCalled();
+
+    f.retryShareDirectory.mockImplementationOnce(async () => {
+      f.assertOwner.mockImplementation(() => { throw new Error('account changed'); });
+      return {};
+    });
+    await expect(f.read(retry)).rejects.toThrow('account changed');
+  });
+
+  // #8010 review / unit: missing devices in a failed directory lookup are unknown,
+  // not revoked. Exercise both admission and the post-read authorization recheck.
+  it.each(['before read', 'after read'] as const)('keeps a degraded directory retryable %s', async phase => {
+    const f = fixture();
+    if (phase === 'before read') f.locations.mockResolvedValue({ status: 'degraded', locations: [] });
+    else f.invoke.mockImplementation(async () => {
+      f.locations.mockResolvedValue({ status: 'degraded', locations: [] });
+      return { ok: true, result: { providers: [{ id: 'a-provider' }] } };
+    });
+    await expect(f.read(request())).rejects.toThrow('MODEL_VISIBILITY_NOT_READY');
+    expect(f.invoke).toHaveBeenCalledTimes(phase === 'before read' ? 0 : 1);
+    f.locations.mockResolvedValue({ status: 'complete', locations: [{ agentDeviceId: 'device-a', name: 'A' }] });
+    f.invoke.mockResolvedValue({ ok: true, result: { providers: [{ id: 'a-provider' }] } });
+    await expect(f.read(request())).resolves.toEqual({ providers: [{ id: 'a-provider' }] });
+  });
+  it('still reads an explicitly confirmed share during a degraded device lookup', async () => {
+    const f = fixture();
+    f.locations.mockResolvedValue({ status: 'degraded', locations: [{ agentDeviceId: 'share:b-only', name: 'Share' }] });
+    await expect(f.read(request('share:b-only'))).resolves.toEqual({ providers: [{ id: 'a-provider' }] });
+  });
+  // #8010 review / unit: the real host reader must preserve nested source errors;
+  // success-only transport fixtures missed retry and old-source fallback semantics.
+  it.each([
+    { code: 'IPC_ERROR', message: '[MODEL_VISIBILITY_NOT_READY] preparing', expected: 'MODEL_VISIBILITY_NOT_READY' },
+    { code: 'CHANNEL_NOT_ALLOWED', message: 'old source', expected: 'DEVICE_LINK_CHANNEL_NOT_ALLOWED' },
+  ] as const)('preserves $expected across the task host', async ({ code, message, expected }) => {
+    const f = fixture();
+    f.invoke.mockResolvedValue({ ok: false, error: { code, message } });
+    const error = await f.read(request()).catch(error => error);
+    expect(extractIpcError(error)?.code).toBe(expected);
+  });
+  // #8010 / unit: exercise both sides of the transport contract. Provider-only
+  // fixtures cannot detect lost runtime rosters or reasoning/context metadata.
+  it.each([
+    { channel: 'maker:get-capabilities', args: ['pi'], value: { availableModels: [{ id: 'custom', contextWindow: 128000 }], effortLevels: ['high'] } },
+    { channel: 'maker:list-available-agents', args: [], value: ['pi', 'codex'] },
+  ])('preserves the source response for $channel through the renderer and host readers', async ({ channel, args, value }) => {
+    const f = fixture();
+    f.invoke.mockResolvedValue({ ok: true, result: value });
+    const link = { invoke: vi.fn(async (host: string, endpoint: string, payload: unknown[]) => {
+      if (host !== 'device-b' || endpoint !== 'maker:model-catalog:read') throw new Error('wrong task host');
+      return f.read(payload[0]);
+    }) };
+    await expect(invokeModelCatalog(link, modelCatalogKey('device-a', 'device-b')!, channel, args)).resolves.toEqual(value);
+    expect(f.invoke).toHaveBeenCalledWith('device-a', channel, args, f.assertOwner);
+  });
+
+  it.each([
+    { channel: 'maker:model-catalog:read', args: [{ op: 'locations' }] },
+    { channel: 'maker:agent:status', args: ['cc'] },
+    { channel: 'maker:get-capabilities', args: ['pi', { sessionId: 'other-task' }] },
+    { channel: 'maker:list-available-agents', args: [{ deviceId: 'other-account' }] },
+  ])('refuses recursive forwarding or unexpected arguments for $channel', async ({ channel, args }) => {
+    const f = fixture();
+    await expect(f.read({ ...request(), channel, args })).rejects.toThrow('INVALID_PARAMS');
+    expect(f.invoke).not.toHaveBeenCalled();
+    expect(f.locations).not.toHaveBeenCalled();
+  });
+
+  it('lists B sources including the controller and shares not received on A', async () => {
+    const f = fixture();
+    expect(await f.read({ op: 'locations' })).toEqual(await f.locations());
+  });
+  it.each(['device-a', 'share:b-only'])('reads %s through B without changing the execution identity', async id => {
+    const f = fixture();
+    expect(await f.read(request(id))).toEqual({ providers: [{ id: 'a-provider' }] });
+    expect(f.invoke).toHaveBeenCalledWith(id, 'maker:provider:list', [], f.assertOwner);
+  });
+  // provider-sharing.md §5.1 (2026-11-02) / unit: under remote control the picker reads shares through B,
+  // so B must apply the guest projection the controller's direct share reads use; otherwise a shared group
+  // whose own computer is signed out vanishes only when the task lives on another computer.
+  it.each([
+    ['share:b-only', true],
+    ['device-a', false],
+  ] as const)('projects a shared group read through B for %s', async (id, connected) => {
+    const f = fixture();
+    f.invoke.mockResolvedValue({ ok: true, result: { providers: [{ id: 'anthropic', connected: false, groupSize: 3 }] } });
+    expect(await f.read(request(id))).toEqual({ providers: [{ id: 'anthropic', connected, groupSize: 3 }] });
+  });
+  it('rejects mutations and unknown sources without forwarding', async () => {
+    const f = fixture();
+    await expect(f.read({ ...request(), channel: 'maker:send' })).rejects.toThrow('INVALID_PARAMS');
+    await expect(f.read({ ...request(), args: [{ remoteInvocationEnabled: true }] })).rejects.toThrow('INVALID_PARAMS');
+    await expect(f.read(request('unknown'))).rejects.toThrow('PRECONDITION_FAILED');
+    expect(f.invoke).not.toHaveBeenCalled();
+  });
+  it('preserves provider capability negotiation through the read-only gateway', async () => {
+    const f = fixture();
+    const args = [{ capabilities: ['provider-logo-kinds-v2'] }];
+    await f.read({ ...request(), args });
+    expect(f.invoke).toHaveBeenCalledWith('device-a', 'maker:provider:list', args, f.assertOwner);
+  });
+  // Unit: the model picker now asks B for anonymous share status. The existing
+  // catalog tests only send empty args, which missed this gateway rejecting the read.
+  it('forwards anonymous group status only for an authorized share', async () => {
+    const f = fixture();
+    const args = [{ includeSharedGroupStatus: true }];
+    f.invoke.mockResolvedValue({ ok: true, result: { providers: [{ id: 'anthropic', groupSize: 2,
+      groupStatus: ['available', 'cooling'], runningTurns: 4 }] } });
+    await expect(f.read({ ...request(), args })).rejects.toThrow('INVALID_PARAMS');
+    expect(f.invoke).not.toHaveBeenCalled();
+    await expect(f.read({ ...request('share:b-only'), args })).resolves.toEqual({ providers: [{
+      id: 'anthropic', groupSize: 2, groupStatus: ['available', 'cooling'],
+    }] });
+    expect(f.invoke).toHaveBeenCalledWith('share:b-only', 'maker:provider:list', args, f.assertOwner);
+  });
+  // 2026-11-23 用户反馈：A 远控 B 新建任务时看不到 B 收到的插件供应商分享（内置供应商分享可以）。
+  // 生产入口与可观察结果：renderer invokeModelCatalog → B 的 maker:model-catalog:read 代读 maker:list-plugin-engines，
+  // 控制端拿到的是该来源开放的引擎；用量标记不经 B 转出，分享只保留授予的那一个引擎，内置供应商分享不发请求。
+  // 覆盖缺口：此前这个通道只代读四个内置目录 channel，插件引擎列表一律 INVALID_PARAMS。
+  // 最小失败输入与 tier：unit；agentDeviceId='share:plugin'、channel='maker:list-plugin-engines'、args=[]。
+  it.each([
+    { source: 'device-a', providers: ['acp-plugin:dsh:dsh', 'acp-plugin:agy:agy'] },
+    { source: 'share:plugin', providers: ['acp-plugin:dsh:dsh'] },
+    { source: 'share:builtin', providers: [], forwarded: false },
+  ])('reads the plugin engines $source offers through B', async ({ source, providers, forwarded = true }) => {
+    const f = fixture();
+    f.locations.mockResolvedValue({ status: 'complete', locations: [
+      { agentDeviceId: 'device-a', name: 'A' },
+      { agentDeviceId: 'share:plugin', name: 'DSH · Owner', favoriteSource: {
+        shareId: 'plugin', memberId: 'm1', providerId: 'acp-plugin:dsh:dsh', owner: { region: 'cn' } } },
+      { agentDeviceId: 'share:builtin', name: 'Anthropic · Owner', favoriteSource: {
+        shareId: 'builtin', memberId: 'm2', providerId: 'anthropic', owner: { region: 'cn' } } },
+    ] });
+    const engineView = (key: string) => ({
+      key, providerId: `acp-plugin:${key}`, name: key, models: [{ id: 'm', displayName: 'M' }],
+      availability: { state: 'available' }, remoteUse: { supported: true, shareSupported: true, enabled: true },
+      permissionModes: [], defaultPermissionMode: 'ask', reportsUsage: true,
+    });
+    f.invoke.mockResolvedValue({ ok: true, result: [engineView('dsh:dsh'), engineView('agy:agy'), { key: 'broken' }] });
+    const link = { invoke: vi.fn(async (_host: string, _endpoint: string, payload: unknown[]) => f.read(payload[0])) };
+    const engines = await invokeModelCatalog(link, modelCatalogKey(source, 'device-b')!, 'maker:list-plugin-engines', []) as Array<Record<string, unknown>>;
+    expect(engines.map(engine => engine.providerId)).toEqual(providers);
+    expect(engines.some(engine => 'reportsUsage' in engine)).toBe(false);
+    expect(f.invoke).toHaveBeenCalledTimes(forwarded ? 1 : 0);
+    await expect(f.read({ ...request(source), channel: 'maker:list-plugin-engines', args: [{}] })).rejects.toThrow('INVALID_PARAMS');
+  });
+  it('discards results after source revocation', async () => {
+    const f = fixture();
+    f.invoke.mockImplementation(async () => {
+      f.locations.mockResolvedValue({ status: 'complete', locations: [] });
+      return { ok: true, result: { providers: [{ id: 'a-provider' }] } };
+    });
+    await expect(f.read(request())).rejects.toThrow('PRECONDITION_FAILED');
+  });
+  it('discards results after account change and rejects guest callers', async () => {
+    const f = fixture();
+    f.invoke.mockImplementation(async () => {
+      f.assertOwner.mockImplementation(() => { throw new Error('account changed'); });
+      return { ok: true, result: { providers: [{ id: 'a-provider' }] } };
+    });
+    await expect(f.read(request())).rejects.toThrow('account changed');
+    f.assertCaller.mockImplementation(() => { throw new Error('guest denied'); });
+    await expect(f.read({ op: 'locations' })).rejects.toThrow('guest denied');
+  });
+
+  // Gap (2026-11-23): a slow/offline sharer behind the task computer came back to the controller as
+  // PRECONDITION_FAILED, which Desktop and Mobile treat as final and drop the share's catalog.
+  // Minimal input: one temporary source failure per form, plus one hung source read.
+  it.each([
+    ['envelope timeout', { ok: false as const, error: { code: 'INVOKE_TIMEOUT' as const, message: 'no reply' } }, 'DEVICE_LINK_TIMEOUT'],
+    ['envelope offline', { ok: false as const, error: { code: 'DEVICE_OFFLINE' as const, message: 'offline' } }, 'DEVICE_LINK_DEVICE_OFFLINE'],
+    ['thrown link closed', Object.assign(new Error('[LINK_CLOSED] closed'), { code: 'LINK_CLOSED' }), 'DEVICE_LINK_NOT_CONNECTED'],
+  ] as const)('keeps a %s from the source temporary for the controller', async (_label, failure, code) => {
+    const f = fixture();
+    if (failure instanceof Error) f.invoke.mockRejectedValue(failure);
+    else f.invoke.mockResolvedValue(failure);
+    const error = await f.read(request('share:b-only')).catch((caught: unknown) => caught);
+    expect(extractIpcError(error)?.code).toBe(code);
+    expect(isTransientRemoteError(error) || isDeviceUnresponsiveRemoteError(error)).toBe(true);
+  });
+
+  it('still reports a refused source as unavailable', async () => {
+    const f = fixture();
+    f.invoke.mockResolvedValue({ ok: false, error: { code: 'ACCESS_REVOKED', message: 'revoked' } });
+    await expect(f.read(request('share:b-only'))).rejects.toThrow('PRECONDITION_FAILED');
+  });
+
+  it('answers a hung source read before the controller request times out', async () => {
+    vi.useFakeTimers();
+    try {
+      const f = fixture();
+      f.invoke.mockImplementation(() => new Promise(() => {}));
+      const pending = f.read(request('share:b-only')).catch((caught: unknown) => caught);
+      await vi.advanceTimersByTimeAsync(CONTROLLED_SOURCE_READ_TIMEOUT_MS);
+      expect(extractIpcError(await pending)?.code).toBe('DEVICE_LINK_TIMEOUT');
+      expect(CONTROLLED_SOURCE_READ_TIMEOUT_MS).toBeLessThan(REMOTE_AGENT_INVOKE_TIMEOUT_MS);
+    } finally { vi.useRealTimers(); }
+  });
+});

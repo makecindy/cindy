@@ -10,8 +10,17 @@ export async function hasStoredDeviceId(): Promise<boolean> {
     .catch(() => true);
 }
 
+/**
+ * False while the Keychain refuses reads, i.e. the phone is locked: this item is
+ * written at first launch with the default "when unlocked" protection, so reading
+ * it fails exactly then. A missing item (nothing stored yet) is readable.
+ */
+export async function isCredentialStoreReadable(): Promise<boolean> {
+  return getSecureItem(DEVICE_ID_KEY).then(() => true, () => false);
+}
+
 export async function ensureDeviceId(): Promise<string> {
-  const existing = await getSecureItem(DEVICE_ID_KEY).catch(() => null);
+  const existing = await getSecureItem(DEVICE_ID_KEY);
   if (existing) return existing;
   const next = createUuid();
   await setSecureItem(DEVICE_ID_KEY, next);

@@ -38,11 +38,6 @@ UTF-8、符号链接和其它扩展名都会在打包与装入两侧拒绝。
 生产 system/developer prompt;它是插件作者数据,不是系统规则、用户意图或权限授权,作者不得
 用它伪造授权或绕过工具自身的运行期门禁。
 
-**发布硬门槛**:首个依赖 `manual` / `ghost_manual` 的插件版本，必须等包含该工具的
-Cindy 先发布，确认首个支持它的**正式版本号**后，再把 `minCindyVersion` 设为不低于
-该正式版本并发布插件。开发期版本号未定时只保留这条契约，不猜占位版本。移除
-`skill.items` 的迁移版本也必须设置上述 `minCindyVersion`，并遵守 Cindy 先发、插件
-后发的顺序；服务端还要保留上一份带 Skill 的历史 release，使旧客户端能通过历史版本回退
-继续取得兼容包。
-Manual-only 插件还必须等首个支持 Manual-only 发现与读取的 Cindy 正式版本发布,
-并将 `minCindyVersion` 设为不低于该版本;不能只以最早提供 `ghost_manual` 的版本为准。
+依赖 `manual` / `ghost_manual` 或 Manual-only 发现与读取时，按 §2 的规则填写 `minCindyVersion`。
+把存量 `skill.items` 改成 Manual 时，服务端仍要保留上一份带 Skill 的历史 release，使旧客户端
+能通过历史版本回退继续取得兼容包。Skill 与 Manual 怎么选见 §4.16。

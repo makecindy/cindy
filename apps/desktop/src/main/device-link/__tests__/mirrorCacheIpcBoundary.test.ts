@@ -21,6 +21,7 @@ const h = vi.hoisted(() => ({
   selectFile: vi.fn(),
   canUseDeviceLink: true,
   diagnosticsInfo: vi.fn(),
+  loggers: {} as Record<string, { warn: ReturnType<typeof vi.fn> }>,
   quitHandlers: new Map<string, { fn: () => void; phase: string }>(),
   cache: {
     readMessages: vi.fn(async () => [] as Record<string, unknown>[]),
@@ -51,7 +52,16 @@ vi.mock('electron', () => ({
   },
 }));
 vi.mock('../../logger', () => ({
-  createLogger: (scope: string) => ({ warn: vi.fn(), error: vi.fn(), info: scope === 'device-link:ipc-diagnostics' ? h.diagnosticsInfo : vi.fn(), debug: vi.fn() }),
+  createLogger: (scope: string) => {
+    const logger = {
+      warn: vi.fn(),
+      error: vi.fn(),
+      info: scope === 'device-link:ipc-diagnostics' ? h.diagnosticsInfo : vi.fn(),
+      debug: vi.fn(),
+    };
+    h.loggers[scope] = logger;
+    return logger;
+  },
 }));
 vi.mock('../../lifecycle', () => ({
   onQuit: (name: string, fn: () => void, phase: string) => {
@@ -66,7 +76,7 @@ vi.mock('../../appSessionState', () => ({
   activeOwnerScopeKey: (): string => 'cloud:owner-x:1',
   ownerScopedUserDataPath: (...parts: string[]): string => ['/data/owners/x', ...parts].join('/'),
 }));
-vi.mock('../../i18n', () => ({ t: (key: string) => key }));
+vi.mock('../../i18n.desktop', () => ({ t: (key: string) => key }));
 // 读路径还会查 purge 队列是否有待清记录;边界测试只关心授权,给"干净"。
 vi.mock('../mirrorCachePurgeQueue', () => ({
   enqueuePurge: vi.fn(async () => undefined),
@@ -88,7 +98,7 @@ vi.mock('../../appCapabilities', () => ({
 vi.mock('../mirrorCacheStore', () => ({
   getMirrorCache: () => h.cache,
 }));
-vi.mock('../../serverApiClient', () => ({
+vi.mock('../../serverApiClient.desktop', () => ({
   serverApiFetch: vi.fn(),
   ServerApiError: class ServerApiError extends Error {},
 }));
@@ -105,12 +115,22 @@ vi.mock('../../clientEndpointsService.js', () => ({
 }));
 vi.mock('../index', () => ({
   getDeviceLinkStatus: () => 'online',
+  getDeviceLinkPeerLinks: () => ({ links: [{ deviceId: 'dev-1', path: 'relay', rttMs: 12, open: true, sentAgoMs: null, receivedAgoMs: null }], relayRttMs: 40 }),
+  hasOfflineDirectPath: () => false,
+  isDeviceDataPathAvailable: () => false,
+  isPeerControlAvailable: () => true,
+  getPeerControlState: () => ({ online: true, available: true, disabled: false }),
+  isPresenceFreshAfterRequest: () => false,
+  forgetPeerControlState: () => {},
+  getDirectDataDeviceIds: () => [],
   getDeviceLinkConnectionIssue: () => null,
   isDeviceLinkStandby: () => false,
+  getDeviceIdentityConflict: () => null,
   getUnresponsiveDeviceIds: () => [],
   clearDeviceResponsiveness: vi.fn(),
   setRemoteControlEnabled: vi.fn(),
   setKeepAwakeEnabled: vi.fn(),
+  rejoinThisDevice: vi.fn(),
   openRemoteLink: vi.fn(),
   closeRemoteLink: vi.fn(),
   remoteInvoke: vi.fn(),
@@ -134,7 +154,7 @@ vi.mock('../index', () => ({
     authoritativeName: null,
   }),
 }));
-vi.mock('../dispatch', () => ({ getActiveControllers: () => [] }));
+vi.mock('../dispatch.desktop', () => ({ getActiveControllers: () => [] }));
 vi.mock('../filePeer', () => ({ tryUploadPeerAttachment: vi.fn(async () => null) }));
 vi.mock('../outboundMedia', () => ({
   rewriteOutboundMedia: vi.fn(async (_c, a) => a),
@@ -144,7 +164,7 @@ vi.mock('../outboundSessionReferences', () => ({
   outboundSessionReferencesRequested: () => false,
   rewriteOutboundSessionReferences: vi.fn(async (_c, a) => a),
 }));
-vi.mock('../settings-store', () => ({
+vi.mock('../settings-store.desktop', () => ({
   forgetLastKnownDeviceName: vi.fn(),
   isPlaceholderDeviceName: () => false,
   normalizeCachedDeviceName: (name: string) => name.trim() || null,
@@ -173,6 +193,7 @@ import { readWithSourceFileAccessRecovery, sourceFileAccessTransferOptions, onSo
 import { rewriteOutboundMedia } from '../outboundMedia';
 import { DeviceLinkError, REMOTE_INVOKE_ALLOWLIST } from '@cindy/device-link';
 import { DESKTOP_LOCAL } from '../../../shared/remoteDesktop';
+import { LOCAL_NETWORK_LOCAL } from '../../../shared/localNetwork';
 import {
   setRemoteControlEnabled,
   revokeController,
@@ -180,12 +201,21 @@ import {
   disconnectAllControllers,
   remoteInvoke,
 } from '../index';
-import { setDeviceControlEnabled } from '../settings-store';
+import { setDeviceControlEnabled } from '../settings-store.desktop';
 
 const senderEvents = new EventEmitter();
-const FRAME = { detached: false };
+// sender 销毁后再读这些属性,Electron 会直接抛「对象已失效」——作用域守卫必须在
+// isDestroyed() 处停住,不能再碰 frame / window(#10906 review)。
+const destroyedAccess = (): never => { throw new Error('Object has been destroyed'); };
+const FRAME = {
+  get detached(): boolean { return h.senderDestroyed ? destroyedAccess() : false; },
+};
+const sender = Object.assign(senderEvents, { id: 42, isDestroyed: () => h.senderDestroyed, mainFrame: FRAME });
+Object.defineProperty(sender, 'mainFrame', {
+  get: () => (h.senderDestroyed ? destroyedAccess() : FRAME),
+});
 const EVENT = {
-  sender: Object.assign(senderEvents, { id: 42, isDestroyed: () => h.senderDestroyed, mainFrame: FRAME }),
+  sender,
   senderFrame: FRAME,
 } as unknown as Electron.IpcMainInvokeEvent;
 
@@ -266,6 +296,37 @@ describe('attachment access confirmation IPC', () => {
     expect(discard).not.toHaveBeenCalled();
   });
 
+  // Regression: HashRouter task switches fired did-start-navigation while a send
+  // was pending. Existing tests only covered document replacement, so ordinary
+  // navigation cancelled uploads and masked transport errors as permission errors.
+  // Unit tier: invoke the registered IPC with a same-document event during media
+  // preparation / remote dispatch; observe delivery or the original timeout.
+  it.each(['preparing', 'dispatched'] as const)(
+    'preserves a remote send across a task switch while %s', async phase => {
+      const switchTask = () => senderEvents.emit(
+        'did-start-navigation', {}, 'file:///app/index.html#/cc-agent/another', true, true,
+      );
+      if (phase === 'preparing') {
+        vi.mocked(rewriteOutboundMedia).mockImplementationOnce(async (_channel, args) => {
+          switchTask();
+          sourceFileAccessTransferOptions().assertCurrent?.();
+          return args;
+        });
+        vi.mocked(remoteInvoke).mockResolvedValueOnce({ ok: true, result: 'accepted' });
+        await expect(call(DEVICE_LINK_INVOKE.INVOKE, payload)).resolves.toBe('accepted');
+      } else {
+        vi.mocked(remoteInvoke).mockImplementationOnce(async () => {
+          switchTask();
+          throw new DeviceLinkError('INVOKE_TIMEOUT', 'uncertain');
+        });
+        await expect(call(DEVICE_LINK_INVOKE.INVOKE, payload)).rejects.toThrow('[DEVICE_LINK_TIMEOUT] uncertain');
+      }
+      expect(remoteInvoke).toHaveBeenCalledOnce();
+      expect(h.invalidations.size).toBe(0);
+      expect(senderEvents.listenerCount('did-start-navigation')).toBe(0);
+    },
+  );
+
   it.each([false, true])('queue content edits recover only in the foreground (background=%s)', async background => {
     const read = installReadFailure();
     h.selectFile.mockResolvedValueOnce({ canceled: false, filePaths: [source] });
@@ -303,12 +364,42 @@ describe('attachment access confirmation IPC', () => {
     });
     vi.mocked(rewriteOutboundMedia).mockImplementationOnce(async () => { await readWithSourceFileAccessRecovery(source, read); return []; });
     h.selectFile.mockResolvedValueOnce({ canceled: false, filePaths: [source] });
-    await expect(call(DEVICE_LINK_INVOKE.INVOKE, payload)).rejects.toThrow('PERMISSION_DENIED');
+    // #10852: 作用域作废掐断在途传输时,根因是作用域失效 —— 守卫错误(带作废原因)
+    // 当主错误,中止类错误降级成 cause,便于事后分辨是谁作废的。
+    const failure = await call(DEVICE_LINK_INVOKE.INVOKE, payload).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain('PERMISSION_DENIED');
+    expect(((failure as Error).cause as Error | undefined)?.message).toContain('UPLOAD_CANCELLED');
     expect(read).toHaveBeenCalledTimes(2);
     expect(remoteInvoke).not.toHaveBeenCalled();
     expect(h.invalidations.size).toBe(0);
     expect(senderEvents.listenerCount('destroyed')).toBe(0);
     expect(senderEvents.listenerCount('did-start-navigation')).toBe(0);
+  });
+
+  // #10852: 传输超时是真实故障原因,不能再被兜底复查的权限错误顶替。
+  // 生产里账号边界推进会同时作废作用域并中止在途传输,而 invoke 不看中止信号,
+  // 仍会一路跑到 30 秒超时 —— 这时真实故障必须留在主错误上。
+  it('keeps the transport timeout primary when the scope expired during the transfer', async () => {
+    let aborted = false;
+    vi.mocked(remoteInvoke).mockImplementationOnce(async () => {
+      const { signal } = sourceFileAccessTransferOptions();
+      h.ownerGeneration++;                             // 传输期间账号边界推进 → 作用域复查也会失败
+      for (const cancel of h.invalidations) cancel();   // 作用域作废同时中止在途传输
+      aborted = signal?.aborted === true;
+      throw new DeviceLinkError('INVOKE_TIMEOUT', 'no invoke-result within 30000ms');
+    });
+    const failure = await call(DEVICE_LINK_INVOKE.INVOKE, payload).catch((error: unknown) => error);
+    expect(aborted).toBe(true);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain('DEVICE_LINK_TIMEOUT');
+    expect((failure as Error).message).not.toContain('PERMISSION_DENIED');
+    expect(((failure as Error).cause as Error | undefined)?.message).toContain('PERMISSION_DENIED');
+    // 守卫命中哪一条要能从日志反推。
+    expect(h.loggers['device-link:ipc']?.warn).toHaveBeenCalledWith(
+      'device-link send scope is no longer current',
+      expect.objectContaining({ reason: 'aborted' }),
+    );
   });
 
   it.each(['cancel', 'wrong-file', 'owner-change', 'window-closed', 'page-changed'])('does not dispatch after %s', async outcome => {
@@ -321,6 +412,21 @@ describe('attachment access confirmation IPC', () => {
     });
     await expect(call(DEVICE_LINK_INVOKE.INVOKE, payload)).rejects.toThrow();
     expect(read).toHaveBeenCalledOnce();
+    expect(remoteInvoke).not.toHaveBeenCalled();
+  });
+
+  // #10906 review:sender 销毁后不能再读 frame / window 属性。最小失败输入:销毁后
+  // `detached` / `mainFrame` 一读就抛 —— 守卫若继续读,一次窗口关闭会变成 Electron 的
+  // 「对象已失效」,既不是用户看得懂的原因,也跳过了新增的原因日志。
+  it('reports the destroyed sender without reading frame properties after destruction', async () => {
+    installReadFailure();
+    h.selectFile.mockImplementationOnce(async () => { h.senderDestroyed = true; return { canceled: false, filePaths: [source] }; });
+    const failure = await call(DEVICE_LINK_INVOKE.INVOKE, payload).catch((error: unknown) => error);
+    expect((failure as Error).message).not.toContain('Object has been destroyed');
+    expect(h.loggers['device-link:ipc']?.warn).toHaveBeenCalledWith(
+      'device-link send scope is no longer current',
+      expect.objectContaining({ reason: 'sender-destroyed' }),
+    );
     expect(remoteInvoke).not.toHaveBeenCalled();
   });
 
@@ -491,8 +597,29 @@ describe('local control authorization IPC boundary', () => {
   });
 
   it('never exposes local grants, revocation or capture IPC to remote invokes', () => {
-    for (const channel of [...calls.map(([channel]) => channel), ...Object.values(DESKTOP_LOCAL)]) {
+    for (const channel of [...calls.map(([channel]) => channel), ...Object.values(DESKTOP_LOCAL), ...Object.values(LOCAL_NETWORK_LOCAL)]) {
       expect(REMOTE_INVOKE_ALLOWLIST.has(channel), channel).toBe(false);
     }
+  });
+});
+
+// 远程连接拓扑的只读 IPC 是新增的特权读(本账号设备的链路拓扑):沿 electron-security §5 两道门,
+// 不继承 GET_STATE / LIST_DEVICES 的免校验。
+describe('peer-links IPC 授权边界', () => {
+  it('sender 不可信 → 拒绝', async () => {
+    h.trusted = false;
+    await expect(call(DEVICE_LINK_INVOKE.GET_PEER_LINKS, undefined)).rejects.toThrow(/PERMISSION_DENIED/);
+  });
+
+  it('无 device-link capability → 拒绝', async () => {
+    h.canUseDeviceLink = false;
+    await expect(call(DEVICE_LINK_INVOKE.GET_PEER_LINKS, undefined)).rejects.toThrow(/PERMISSION_DENIED/);
+  });
+
+  it('sender 可信 + 有 capability → 原样返回主进程快照', async () => {
+    await expect(call(DEVICE_LINK_INVOKE.GET_PEER_LINKS, undefined)).resolves.toEqual({
+      links: [{ deviceId: 'dev-1', path: 'relay', rttMs: 12, open: true, sentAgoMs: null, receivedAgoMs: null }],
+      relayRttMs: 40,
+    });
   });
 });

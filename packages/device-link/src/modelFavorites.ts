@@ -10,6 +10,12 @@ export interface RemoteModelFavorite {
   effort?: string;
   fast?: true | "ultrafast";
 }
+/**
+ * 插件引擎收藏在收藏通道上的 agent 占位值：旧客户端的 parseModelFavorites 只接受
+ * cc / codex / pi，整表校验不通过会整份丢弃。插件引擎靠 acp-plugin: 来源键识别，
+ * 新客户端解析时忽略 agent，旧客户端把它当成不认识的供应商静默隐藏、不会错派到内置引擎。
+ */
+export const PLUGIN_ENGINE_FAVORITE_WIRE_AGENT = "cc" as const;
 export type ModelFavoriteMutation =
   | { kind: "add"; item: Omit<RemoteModelFavorite, "uid"> }
   | {
@@ -19,6 +25,11 @@ export type ModelFavoriteMutation =
     }
   | { kind: "remove"; expected: RemoteModelFavorite };
 export const MODEL_FAVORITE_TEXT_MAX_LENGTH = 512;
+/**
+ * Desktop 本机收藏能放下带分享与成员身份的来源键。收藏通道仍用上面的 512：
+ * 更长的键若出现在回复里，旧客户端会整表解析失败。
+ */
+export const PROVIDER_SHARE_FAVORITE_SOURCE_MAX_LENGTH = 2048;
 const text = (v: unknown, max = MODEL_FAVORITE_TEXT_MAX_LENGTH): v is string =>
   typeof v === "string" && v.length > 0 && v.length <= max;
 
@@ -46,6 +57,59 @@ export function parseAgentDeviceFavoriteSource(value: string): AgentDeviceFavori
     if (!Array.isArray(parts) || parts.length !== 2 || !parts.every((part) => text(part)))
       return null;
     return { deviceId: parts[0], providerId: parts[1] };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 分享来的模型收藏：键里带分享、成员、供应商与归属区域，存在受邀者账号的收藏里。
+ * 投影回目录时才换成真实 providerId，绝不把这个键用于模型请求。
+ * 老客户端不认识此前缀，只会把它当成不认识的供应商藏起来，不会派到本机同名供应商。
+ */
+const PROVIDER_SHARE_FAVORITE_PREFIX = "provider-share-favorite:";
+export interface ProviderShareFavoriteSource {
+  shareId: string;
+  memberId: string;
+  providerId: string;
+  owner: { region: "cn" | "global" };
+}
+export function providerShareFavoriteSource(source: ProviderShareFavoriteSource): string {
+  const key = PROVIDER_SHARE_FAVORITE_PREFIX + JSON.stringify([
+    source.shareId, source.memberId, source.providerId, source.owner.region,
+  ]);
+  if (!source.shareId || !source.memberId || !source.providerId
+    || key.length > PROVIDER_SHARE_FAVORITE_SOURCE_MAX_LENGTH)
+    throw new Error("Invalid shared favorite source");
+  return key;
+}
+export function parseProviderShareFavoriteSource(value: string): {
+  shareId: string; memberId: string; providerId: string; region: "cn" | "global";
+} | null {
+  if (!value.startsWith(PROVIDER_SHARE_FAVORITE_PREFIX)) return null;
+  try {
+    const parts: unknown = JSON.parse(value.slice(PROVIDER_SHARE_FAVORITE_PREFIX.length));
+    if (!Array.isArray(parts) || parts.length !== 4
+      || !parts.every((part) => typeof part === "string" && part.length > 0)
+      || (parts[3] !== "cn" && parts[3] !== "global"))
+      return null;
+    return { shareId: parts[0], memberId: parts[1], providerId: parts[2], region: parts[3] };
+  } catch {
+    return null;
+  }
+}
+/**
+ * 收藏来源键是否指向本机之外（同账号另一台电脑或分享来的供应商）。按前缀判定：
+ * 即使键内容损坏解析不出来，也不能被当成本机供应商。
+ */
+export function isNonLocalModelFavoriteSource(providerId: string): boolean {
+  return providerId.startsWith(AGENT_DEVICE_FAVORITE_PREFIX) || providerId.startsWith(PROVIDER_SHARE_FAVORITE_PREFIX);
+}
+/** 收藏通道能往返的分享来源键。更长的键 Desktop 本机仍可存，但手机会整表读失败，所以不提供星标。 */
+export function providerShareFavoriteWireKey(source: ProviderShareFavoriteSource): string | null {
+  try {
+    const key = providerShareFavoriteSource(source);
+    return key.length <= MODEL_FAVORITE_TEXT_MAX_LENGTH ? key : null;
   } catch {
     return null;
   }

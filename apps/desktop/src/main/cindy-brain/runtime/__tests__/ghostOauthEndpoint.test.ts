@@ -77,6 +77,12 @@ function call(params: {
 }
 
 describe('OAuth credential install target guard', () => {
+  // Tier 1: stopping a referenced account only removes metadata. A failed vault
+  // write must not return 204 while the reference can still inject credentials.
+  it('reports a failed account-reference removal instead of claiming it disconnected', async () => {
+    expect(await call({ method: 'DELETE', pathname: '/oauth/acct/accounts/acc-1',
+      manager: fakeManager({ disconnectAccount: () => false }) })).toEqual({ status: 500 });
+  });
   const mutations = [
     ['PUT', '/oauth/acct/client', '{"clientId":"fake-old-client"}', 'setClientConfig'],
     ['DELETE', '/oauth/acct/client', '', 'clearClientConfig'],

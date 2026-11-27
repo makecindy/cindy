@@ -135,6 +135,7 @@ describe('startGhostOauthFlow', () => {
       expect(form.get('code')).toBe('code-abc');
       expect(form.get('client_id')).toBe('client-123');
       expect(form.get('client_secret')).toBeNull();
+      expect(form.has('resource')).toBe(false);
       expect(String(input)).toBe(BASE_CONFIG.tokenUrl);
       return jsonResponse({
         access_token: 'at-1',
@@ -169,6 +170,48 @@ describe('startGhostOauthFlow', () => {
       // 60s 安全余量已扣除。
       expect(result.bundle.expiresAt).toBeLessThanOrEqual(Date.now() + 3600 * 1000);
     }
+  });
+
+  it.each<{
+    name: string;
+    authorizeUrl: string;
+    extraAuthorizeParams: Record<string, string>;
+    resources: string[];
+  }>([
+    {
+      name: 'extraAuthorizeParams resource overrides the URL value',
+      authorizeUrl: `${BASE_CONFIG.authorizeUrl}?resource=https%3A%2F%2Fold.example.com`,
+      extraAuthorizeParams: { resource: 'https://mcp.example.com/mcp?tenant=a&region=b', prompt: 'consent' },
+      resources: ['https://mcp.example.com/mcp?tenant=a&region=b'],
+    },
+    {
+      name: 'repeated resource indicators in the authorize URL',
+      authorizeUrl: `${BASE_CONFIG.authorizeUrl}?resource=https%3A%2F%2Fa.example.com&resource=https%3A%2F%2Fb.example.com`,
+      extraAuthorizeParams: { prompt: 'consent' },
+      resources: ['https://a.example.com', 'https://b.example.com'],
+    },
+  ])('token exchange preserves $name', async ({ authorizeUrl, extraAuthorizeParams, resources }) => {
+    let authorizedResources: string[] = [];
+    const fetchImpl = vi.fn(async (_input: unknown, init?: RequestInit) => {
+      const form = new URLSearchParams(String(init?.body ?? ''));
+      expect(form.getAll('resource')).toEqual(resources);
+      expect(form.getAll('resource')).toEqual(authorizedResources);
+      expect(form.has('prompt')).toBe(false);
+      expect(form.has('state')).toBe(false);
+      return jsonResponse({ access_token: 'fake-resource-token' });
+    });
+    const result = await startGhostOauthFlow({
+      config: { ...BASE_CONFIG, authorizeUrl, extraAuthorizeParams },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      openExternal: (url) => {
+        authorizedResources = new URL(url).searchParams.getAll('resource');
+        return browserRedirect(url, (au) => ({
+          code: 'fake-resource-code', state: au.searchParams.get('state') ?? '',
+        }));
+      },
+    });
+    expect(result.ok).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it('clientSecret 提供时进表单;extra 参数上 URL 且保留参数不可覆盖', async () => {
@@ -606,6 +649,67 @@ describe('startGhostOauthFlow', () => {
     });
 
     expect(result).toEqual({ ok: false, error: 'SERVICE_UNAVAILABLE', detail: undefined });
+  });
+
+  it('服务端签发应用身份失败:不拉浏览器,保留错误分类', async () => {
+    const openExternal = vi.fn();
+    const broker: GhostOauthBrokerClient = {
+      bootstrap: vi.fn(async () => ({ ok: false as const, error: 'SERVICE_UNAVAILABLE' as const })),
+      exchange: vi.fn(),
+      refresh: vi.fn(),
+    };
+    const result = await startGhostOauthFlow({
+      config: { ...BASE_CONFIG, clientId: undefined, tokenBroker: 'feishu' },
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      broker,
+      openExternal,
+    });
+    expect(result).toMatchObject({ ok: false, error: 'SERVICE_UNAVAILABLE' });
+    expect(openExternal).not.toHaveBeenCalled();
+    expect(broker.exchange).not.toHaveBeenCalled();
+  });
+
+  it('取服务端应用身份时卡住:再点连接即顶掉前一单,不拉浏览器、不阻塞新一单', async () => {
+    const firstOpen = vi.fn();
+    let secondDone: Promise<unknown> = Promise.resolve();
+    const hanging: GhostOauthBrokerClient = {
+      bootstrap: vi.fn(() => {
+        // 前一单卡在请求上时，用户再次点连接。
+        secondDone = startGhostOauthFlow({
+          config: BASE_CONFIG,
+          fetchImpl: vi.fn(async () => jsonResponse({ access_token: 'at-next' })) as unknown as typeof fetch,
+          openExternal: (url) => browserRedirect(url, (au) => ({
+            code: 'c-next',
+            state: au.searchParams.get('state') ?? '',
+          })),
+        });
+        return new Promise<never>(() => undefined);
+      }),
+      exchange: vi.fn(),
+      refresh: vi.fn(),
+    };
+    const first = startGhostOauthFlow({
+      config: { ...BASE_CONFIG, tokenBroker: 'feishu' },
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      broker: hanging,
+      openExternal: firstOpen,
+    });
+    await expect(first).resolves.toMatchObject({ ok: false, error: 'CANCELLED' });
+    await expect(secondDone).resolves.toMatchObject({ ok: true });
+    expect(firstOpen).not.toHaveBeenCalled();
+  });
+
+  it('取服务端应用身份超过整单时限 → TIMEOUT,不拉浏览器', async () => {
+    const openExternal = vi.fn();
+    const result = await startGhostOauthFlow({
+      config: { ...BASE_CONFIG, tokenBroker: 'feishu' },
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      broker: { bootstrap: () => new Promise<never>(() => undefined), exchange: vi.fn(), refresh: vi.fn() },
+      openExternal,
+      timeoutMs: 50,
+    });
+    expect(result).toMatchObject({ ok: false, error: 'TIMEOUT' });
+    expect(openExternal).not.toHaveBeenCalled();
   });
 
   it('tokenBroker + pkce:false(jira/slack 形态):授权页无 challenge,broker 不收 verifier', async () => {
@@ -1085,43 +1189,356 @@ describe('fetchGhostOauthIdentity', () => {
 });
 
 describe('fetchGhostOauthAvatar', () => {
+  // 头像对所有插件开放(2026-11-02 去特权),地址是身份响应里的任意 https:
+  // 每一跳都必须经注入的受防护单跳通道,跳转在这里手动复核,body 限量限时。
   const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
   const imageResponse = (mime: string, bytes: Buffer = pngBytes): Response =>
     new Response(new Uint8Array(bytes), { status: 200, headers: { 'Content-Type': mime } });
+  const hopOf = (respond: (url: string, init: RequestInit) => Promise<Response> | Response) => {
+    const release = vi.fn(async () => {});
+    const hop = vi.fn(async (url: string, init: RequestInit) => ({ response: await respond(url, init), release }));
+    return { hop, release };
+  };
 
-  it('图片响应转 data URL,且请求不带 Authorization(头像域名无凭证)', async () => {
-    const fetchImpl = vi.fn(async (_i: unknown, init?: RequestInit) => {
-      expect(new Headers(init?.headers).get('Authorization')).toBeNull();
+  it('图片响应转 data URL;不带 Authorization、不让底层自动跟随跳转,并归还连接', async () => {
+    const { hop, release } = hopOf((_url, init) => {
+      expect(new Headers(init.headers).get('Authorization')).toBeNull();
+      expect(init.redirect).toBe('manual');
       return imageResponse('image/png');
     });
-    await expect(
-      fetchGhostOauthAvatar({ url: 'https://cdn.example.com/a.png', fetchImpl: fetchImpl as unknown as typeof fetch }),
-    ).resolves.toBe(`data:image/png;base64,${pngBytes.toString('base64')}`);
+    await expect(fetchGhostOauthAvatar({ url: 'https://cdn.example.com/a.png', fetchHop: hop }))
+      .resolves.toBe(`data:image/png;base64,${pngBytes.toString('base64')}`);
+    expect(release).toHaveBeenCalledTimes(1);
   });
 
-  it('非 https / 非图片 mime / 超限 / 请求失败 → null(best-effort 不阻断)', async () => {
-    await expect(
-      fetchGhostOauthAvatar({ url: 'http://cdn.example.com/a.png', fetchImpl: vi.fn() as unknown as typeof fetch }),
-    ).resolves.toBeNull();
-    await expect(
-      fetchGhostOauthAvatar({
-        url: 'https://cdn.example.com/a.html',
-        fetchImpl: vi.fn(async () => imageResponse('text/html')) as unknown as typeof fetch,
+  it('跳转逐跳经受防护通道;跳到非 https 或超过跳数上限即放弃', async () => {
+    const redirect = (location: string) => new Response(null, { status: 302, headers: { Location: location } });
+    const followed = hopOf((url) => (url.endsWith('/a.png') ? redirect('/b.png') : imageResponse('image/png')));
+    await expect(fetchGhostOauthAvatar({ url: 'https://cdn.example.com/a.png', fetchHop: followed.hop }))
+      .resolves.toMatch(/^data:image\/png;base64,/);
+    expect(followed.hop.mock.calls.map((c) => c[0]))
+      .toEqual(['https://cdn.example.com/a.png', 'https://cdn.example.com/b.png']);
+
+    const toHttp = hopOf(() => redirect('http://127.0.0.1/secret.png'));
+    await expect(fetchGhostOauthAvatar({ url: 'https://cdn.example.com/a.png', fetchHop: toHttp.hop })).resolves.toBeNull();
+    expect(toHttp.hop).toHaveBeenCalledTimes(1);
+
+    const loop = hopOf(() => redirect('https://cdn.example.com/a.png'));
+    await expect(fetchGhostOauthAvatar({ url: 'https://cdn.example.com/a.png', fetchHop: loop.hop })).resolves.toBeNull();
+    expect(loop.hop).toHaveBeenCalledTimes(4);
+    expect(loop.release).toHaveBeenCalledTimes(4);
+  });
+
+  it('非 https / 非图片 mime / 流式超限 / 通道拒绝 / 超时 → null(best-effort 不阻断)', async () => {
+    const never = vi.fn();
+    await expect(fetchGhostOauthAvatar({ url: 'http://cdn.example.com/a.png', fetchHop: never })).resolves.toBeNull();
+    expect(never).not.toHaveBeenCalled();
+    await expect(fetchGhostOauthAvatar({
+      url: 'https://cdn.example.com/a.html', fetchHop: hopOf(() => imageResponse('text/html')).hop,
+    })).resolves.toBeNull();
+    // 超限按已读字节判定:分块流在越过上限的那一块就放弃,不先整包读进内存。
+    let pulled = 0;
+    const endless = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += 1;
+        controller.enqueue(new Uint8Array(64 * 1024));
+      },
+    });
+    await expect(fetchGhostOauthAvatar({
+      url: 'https://cdn.example.com/big.png',
+      fetchHop: hopOf(() => new Response(endless, { status: 200, headers: { 'Content-Type': 'image/png' } })).hop,
+    })).resolves.toBeNull();
+    expect(pulled).toBeLessThan(8);
+    await expect(fetchGhostOauthAvatar({
+      url: 'https://intranet.example/a.png',
+      fetchHop: vi.fn(async () => {
+        throw new Error('SSRF blocked');
       }),
-    ).resolves.toBeNull();
-    await expect(
-      fetchGhostOauthAvatar({
-        url: 'https://cdn.example.com/big.png',
-        fetchImpl: vi.fn(async () => imageResponse('image/png', Buffer.alloc(256 * 1024 + 1))) as unknown as typeof fetch,
+    })).resolves.toBeNull();
+    await expect(fetchGhostOauthAvatar({
+      url: 'https://slow.example/a.png',
+      timeoutMs: 1,
+      fetchHop: (_url, init) => new Promise((_resolve, reject) => {
+        init.signal?.addEventListener('abort', () => reject(new Error('aborted')));
       }),
-    ).resolves.toBeNull();
-    await expect(
-      fetchGhostOauthAvatar({
-        url: 'https://cdn.example.com/a.png',
-        fetchImpl: vi.fn(async () => {
-          throw new Error('boom');
-        }) as unknown as typeof fetch,
-      }),
-    ).resolves.toBeNull();
+    })).resolves.toBeNull();
+  });
+});
+
+/*
+ * 测试价值(设备码登录,RFC 8628)
+ * - 生产入口与可观察结果:startGhostOauthFlow 在声明 deviceAuthorizationUrl 时不起 loopback,
+ *   向设备码端点申请验证码、拉起确认页(远程交给控制端)、按 interval 轮询 tokenUrl,
+ *   返回与授权码模式同形的令牌包或结构化错误。
+ * - 规则依据:plugin-security-and-authoring.md「网络、凭证与资源交接」——授权页只能落在插件
+ *   声明的授权面内、user_code 只在需要手输时交给宿主展示;远程单不得回退到在执行设备开浏览器。
+ * - 现有覆盖缺口:既有用例只覆盖授权码 + loopback,设备码分支此前不存在。
+ * - 最小失败输入:确认页域名不在声明面内、服务商回 slow_down / access_denied / expired_token、
+ *   远程单与轮询中途取消。
+ * - tier:unit(注入 fetchImpl 与假计时器,不起真实网络与 loopback)。
+ * - 实测耗时:见 PR 描述。
+ */
+describe('设备码登录(RFC 8628)', () => {
+  const DEVICE_CONFIG: GhostOauthClientConfig = {
+    ...BASE_CONFIG,
+    deviceAuthorizationUrl: 'https://auth.example.com/device',
+    clientSecret: 'secret-xyz',
+  };
+
+  type Step = { status?: number; body: Record<string, unknown> };
+  function deviceFetch(device: Record<string, unknown>, polls: Step[]) {
+    const calls: { url: string; init: RequestInit }[] = [];
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), init: init ?? {} });
+      if (String(url) === DEVICE_CONFIG.deviceAuthorizationUrl) return jsonResponse(device);
+      const next = polls.shift();
+      if (!next) throw new Error('unexpected poll');
+      return jsonResponse(next.body, next.status ?? (next.body.access_token ? 200 : 400));
+    }) as unknown as typeof fetch;
+    return { fetchImpl, calls };
+  }
+
+  async function runWithTimers(promise: Promise<GhostOauthFlowResult>): Promise<GhostOauthFlowResult> {
+    let settled = false;
+    const markSettled = () => {
+      settled = true;
+    };
+    void promise.then(markSettled, markSettled);
+    for (let i = 0; i < 50 && !settled; i += 1) await vi.advanceTimersByTimeAsync(5_000);
+    return promise;
+  }
+
+  it('带码确认页:Basic 认证申请验证码、直接拉起确认页,pending/slow_down 后领到令牌', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const { fetchImpl, calls } = deviceFetch(
+        {
+          device_code: 'dev-code-1',
+          user_code: 'ABCD-EFGH',
+          verification_uri: 'https://auth.example.com/verify',
+          verification_uri_complete: 'https://auth.example.com/verify?user_code=ABCD-EFGH',
+          expires_in: 300,
+          interval: 1,
+        },
+        [
+          { body: { error: 'authorization_pending' } },
+          { body: { error: 'slow_down' } },
+          { body: { access_token: 'at-1', refresh_token: 'rt-1', expires_in: 7200, scope: 'read:a' } },
+        ],
+      );
+      const openExternal = vi.fn();
+      const presentDeviceUserCode = vi.fn();
+      const result = await runWithTimers(
+        startGhostOauthFlow({ config: DEVICE_CONFIG, openExternal, fetchImpl, presentDeviceUserCode }),
+      );
+      expect(result).toMatchObject({
+        ok: true,
+        bundle: { accessToken: 'at-1', refreshToken: 'rt-1', grantedScope: 'read:a' },
+      });
+      expect(openExternal).toHaveBeenCalledWith('https://auth.example.com/verify?user_code=ABCD-EFGH');
+      expect(presentDeviceUserCode).not.toHaveBeenCalled();
+      const [deviceCall, ...polls] = calls;
+      expect(new Headers(deviceCall!.init.headers).get('Authorization')).toBe(
+        `Basic ${Buffer.from('client-123:secret-xyz').toString('base64')}`,
+      );
+      expect(Object.fromEntries(new URLSearchParams(String(deviceCall!.init.body)))).toEqual({
+        client_id: 'client-123',
+        scope: 'read:a write:b',
+      });
+      expect(polls).toHaveLength(3);
+      // 两类请求都带 client 凭证,不得跟随重定向把表单带出白名单。
+      expect(calls.every((call) => call.init.redirect === 'error')).toBe(true);
+      expect(Object.fromEntries(new URLSearchParams(String(polls[0]!.init.body)))).toEqual({
+        grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+        device_code: 'dev-code-1',
+        client_id: 'client-123',
+        client_secret: 'secret-xyz',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('returns NETWORK if the device authorization response body is interrupted', async () => {
+    const response = jsonResponse({});
+    vi.spyOn(response, 'text').mockRejectedValueOnce(new Error('response interrupted'));
+    const fetchImpl = vi.fn(async () => response);
+    const openExternal = vi.fn();
+    await expect(startGhostOauthFlow({ config: DEVICE_CONFIG, openExternal, fetchImpl }))
+      .resolves.toMatchObject({ ok: false, error: 'NETWORK' });
+    expect(openExternal).not.toHaveBeenCalled();
+  });
+
+  it.each(['retry', 'cancel', 'exhausted'])('handles an interrupted token response body: %s', async (outcome) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const openExternal = vi.fn();
+      let pollCount = 0;
+      const poll = vi.fn(async () => {
+        pollCount += 1;
+        const response = jsonResponse({ access_token: 'at-after-retry' });
+        if (outcome === 'retry' && pollCount === 2) return response;
+        vi.spyOn(response, 'text').mockImplementationOnce(async () => {
+          if (outcome === 'cancel') cancelActiveGhostOauthFlow();
+          throw new Error('response interrupted');
+        });
+        return response;
+      });
+      const fetchImpl = vi.fn(async (url: string | URL | Request) =>
+        String(url) === DEVICE_CONFIG.deviceAuthorizationUrl
+          ? jsonResponse({
+              device_code: 'dev-code-1',
+              user_code: 'ABCD-EFGH',
+              verification_uri: 'https://auth.example.com/verify',
+              interval: 1,
+            })
+          : poll(),
+      );
+      const result = await runWithTimers(startGhostOauthFlow({ config: DEVICE_CONFIG, openExternal, fetchImpl }));
+      if (outcome === 'retry') {
+        expect(result).toMatchObject({ ok: true, bundle: { accessToken: 'at-after-retry' } });
+        expect(poll).toHaveBeenCalledTimes(2);
+      } else {
+        expect(result).toMatchObject({ ok: false, error: outcome === 'cancel' ? 'CANCELLED' : 'NETWORK' });
+        expect(poll).toHaveBeenCalledTimes(outcome === 'cancel' ? 1 : 3);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    ['access_denied', { ok: false, error: 'CANCELLED' }],
+    ['expired_token', { ok: false, error: 'TIMEOUT' }],
+    ['invalid_client', { ok: false, error: 'EXCHANGE_FAILED' }],
+  ])('只给通用确认页:交宿主展示验证码,轮询回 %s 后收场并清理展示', async (error, expected) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const { fetchImpl } = deviceFetch(
+        {
+          device_code: 'dev-code-2',
+          user_code: 'WXYZ-1234',
+          verification_uri: 'https://auth.example.com/verify',
+          interval: 1,
+        },
+        [{ body: { error } }],
+      );
+      const openExternal = vi.fn();
+      const release = vi.fn();
+      const presentDeviceUserCode = vi.fn(() => release);
+      const result = await runWithTimers(
+        startGhostOauthFlow({ config: DEVICE_CONFIG, openExternal, fetchImpl, presentDeviceUserCode }),
+      );
+      expect(result).toMatchObject(expected);
+      expect(openExternal).toHaveBeenCalledWith('https://auth.example.com/verify');
+      expect(presentDeviceUserCode).toHaveBeenCalledWith(
+        expect.objectContaining({ userCode: 'WXYZ-1234', verificationUrl: 'https://auth.example.com/verify' }),
+      );
+      expect(release).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('确认页不在插件声明的授权面内:拒绝且不拉起浏览器、不轮询', async () => {
+    const { fetchImpl, calls } = deviceFetch(
+      {
+        device_code: 'dev-code-3',
+        user_code: 'ABCD-EFGH',
+        verification_uri: 'https://phishing.example.net/verify',
+      },
+      [],
+    );
+    const openExternal = vi.fn();
+    const result = await startGhostOauthFlow({ config: DEVICE_CONFIG, openExternal, fetchImpl });
+    expect(result).toMatchObject({ ok: false, error: 'EXCHANGE_FAILED' });
+    expect(openExternal).not.toHaveBeenCalled();
+    expect(calls).toHaveLength(1);
+  });
+
+  it('远程单领到令牌后不取消控制端事务(账号落库前 assertCurrent 仍须有效)', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const { fetchImpl } = deviceFetch(
+        {
+          device_code: 'dev-code-5',
+          user_code: 'ABCD-EFGH',
+          verification_uri: 'https://auth.example.com/verify',
+          interval: 1,
+        },
+        [{ body: { access_token: 'at-remote', refresh_token: 'rt-remote', expires_in: 3600 } }],
+      );
+      let offerSignal: AbortSignal | undefined;
+      const authorizePlugin = vi.fn(async (_offer: unknown, signal: AbortSignal) => {
+        offerSignal = signal;
+        return { kind: 'device-opened' as const, state: 'x' };
+      });
+      const remote = {
+        scope: 'remote-2',
+        assertCurrent: () => undefined,
+        authorize: vi.fn(),
+        authorizePlugin,
+        finish: vi.fn(),
+      };
+      const result = await runWithTimers(
+        startGhostOauthFlow({ config: DEVICE_CONFIG, openExternal: vi.fn(), fetchImpl, remote: remote as never }),
+      );
+      expect(result).toMatchObject({ ok: true, bundle: { accessToken: 'at-remote' } });
+      expect(offerSignal?.aborted).toBe(false);
+      expect(remote.finish).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('远程单:验证码与确认页交给控制端,不在执行设备开浏览器;轮询中途取消即停', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const { fetchImpl, calls } = deviceFetch(
+        {
+          device_code: 'dev-code-4',
+          user_code: 'ABCD-EFGH',
+          verification_uri: 'https://auth.example.com/verify',
+          expires_in: 600,
+          interval: 2,
+        },
+        [{ body: { error: 'authorization_pending' } }, { body: { error: 'authorization_pending' } }],
+      );
+      const authorizePlugin = vi.fn(async () => ({ kind: 'device-opened' as const, state: 'x' }));
+      const remote = {
+        scope: 'remote-1',
+        assertCurrent: () => undefined,
+        authorize: vi.fn(),
+        authorizePlugin,
+        finish: vi.fn(),
+      };
+      const openExternal = vi.fn();
+      const pending = startGhostOauthFlow({
+        config: DEVICE_CONFIG,
+        openExternal,
+        fetchImpl,
+        remote: remote as never,
+      });
+      await vi.advanceTimersByTimeAsync(2_500);
+      expect(authorizePlugin).toHaveBeenCalledTimes(1);
+      const offer = (authorizePlugin.mock.calls[0] as unknown[])[0] as {
+        request: { kind: string; url: string; userCode: string; expiresAt: number };
+      };
+      expect(offer.request).toMatchObject({
+        kind: 'device',
+        url: 'https://auth.example.com/verify',
+        userCode: 'ABCD-EFGH',
+      });
+      expect(openExternal).not.toHaveBeenCalled();
+      cancelActiveGhostOauthFlow();
+      const result = await pending;
+      expect(result).toMatchObject({ ok: false, error: 'CANCELLED' });
+      const pollsBefore = calls.length;
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(calls).toHaveLength(pollsBefore);
+      expect(remote.authorize).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

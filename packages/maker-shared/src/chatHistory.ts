@@ -2,8 +2,13 @@
 export interface ChatHistoryMessage {
   id: string; seq: string; revision?: number; deleted?: boolean; threadRootId?: string | null;
 }
+export interface ChatHistoryRead {
+  thread_key: string; read_seq: string; following?: boolean; muted?: boolean; marked_unread?: boolean;
+  notification_scope?: 'all' | 'mentions' | null;
+}
 export interface ChatHistorySnapshot {
-  room: { id: string; kind?: string }; cursor: string; messages: ChatHistoryMessage[];
+  room: { id: string; kind?: string }; cursor: string; messages: ChatHistoryMessage[]; reads?: ChatHistoryRead[];
+  members?: Array<{ id: string; state: string }>;
 }
 export interface ChatHistoryState {
   generation: string;
@@ -14,6 +19,8 @@ export interface ChatHistoryState {
   pages: Record<string, string[]>;
   /** Aggregates absent from change bodies (reactions/reply counts) need a page refresh. */
   stalePages?: string[];
+  /** Exact aggregate targets; absent in legacy caches whose stale pages still need repair. */
+  staleAggregates?: string[];
   /** Individually fetched roots outside covered pages; bodies live in messages, as usual. */
   lookups?: string[];
   staleLookups?: string[];
@@ -30,11 +37,27 @@ export interface ChatHistoryChange {
 export interface ChatHistoryBatch { cursor: string; changes: ChatHistoryChange[]; hasMore?: boolean }
 type Api = <T>(route: string) => Promise<T>;
 const isCursor = (value: unknown): value is string => typeof value === 'string' && /^\d+$/.test(value);
+/** The caller can no longer read this room at all (distinct from one missing message). */
+const ROOM_LOST = ['FORBIDDEN', 'NOT_MEMBER', 'NOT_A_MEMBER', 'CONVERSATION_NOT_FOUND', 'ACTOR_NOT_FOUND', 'ACCOUNT_UNAVAILABLE'];
 const errorCode = (error: unknown) => error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
   ? error.code : error instanceof Error ? error.message : '';
 
-export function createChatHistory(input: { api: Api; store: ChatHistoryStore; current: () => boolean; newGeneration: () => string }) {
+export function createChatHistory(input: {
+  api: Api; store: ChatHistoryStore; current: () => boolean; newGeneration: () => string;
+  readerId?: string;
+  /** Commit once when a room operation finishes instead of after each of its steps. Whole-file
+   * stores (the phone) rewrite the room on every commit; the operation still resolves only after it. */
+  coalesceWrites?: boolean;
+  /** For a history that outlives the screens using it: how many messages rooms with no
+   * operation in flight may keep in memory. Beyond it the least recently used rooms are
+   * dropped and restored from the store on their next use; nothing durable is lost. Leave
+   * unset where callers read the in-memory state directly (cursor, committedSnapshot). */
+  maxIdleMessages?: number;
+}) {
   const chains = new Map<string, Promise<unknown>>();
+  // coalesceWrites: the room state awaiting its single commit, and what may run only after it.
+  const unsaved = new Map<string, ChatHistoryState>();
+  const afterCommit = new Map<string, Array<() => void>>();
   const states = new Map<string, ChatHistoryState>();
   const checked = new Map<string, number>();
   const metadataConnection = new Map<string, number>();
@@ -49,11 +72,24 @@ export function createChatHistory(input: { api: Api; store: ChatHistoryStore; cu
     const pending = (chains.get(room) ?? Promise.resolve()).catch(() => undefined).then(async () => {
       assertCurrent();
       for (let attempt = 0; ; attempt++) {
-        try { const result = await run(); assertCurrent(); return result; }
+        try {
+          const result = await run();
+          const state = unsaved.get(room);
+          if (state) {
+            unsaved.delete(room);
+            await input.store.write(room, state);
+            assertCurrent();
+            for (const done of afterCommit.get(room) ?? []) done();
+          }
+          afterCommit.delete(room);
+          assertCurrent(); release(room);
+          return result;
+        }
         catch (error) {
+          unsaved.delete(room); afterCommit.delete(room);
           states.delete(room); checked.delete(room); metadataConnection.delete(room);
           if (errorCode(error) === 'CHAT_CACHE_CONFLICT' && attempt < 2) continue;
-          if (['FORBIDDEN', 'NOT_MEMBER', 'NOT_A_MEMBER', 'CONVERSATION_NOT_FOUND', 'ACTOR_NOT_FOUND', 'ACCOUNT_UNAVAILABLE'].includes(errorCode(error))) {
+          if (ROOM_LOST.includes(errorCode(error))) {
             assertCurrent();
             try { await input.store.write(room, null); }
             catch (cleanupError) {
@@ -70,15 +106,55 @@ export function createChatHistory(input: { api: Api; store: ChatHistoryStore; cu
     void pending.finally(() => { if (chains.get(room) === pending) chains.delete(room); }).catch(() => undefined);
     return pending;
   }
-  async function save(room: string, state: ChatHistoryState) {
+  /** Keep the room just used, then let go of the longest-idle ones over the budget. */
+  function release(used: string) {
+    if (input.maxIdleMessages === undefined) return;
+    const current = states.get(used);
+    if (current) { states.delete(used); states.set(used, current); }
+    let held = 0;
+    for (const state of states.values()) held += Object.keys(state.messages).length;
+    for (const [room, state] of [...states]) {
+      if (held <= input.maxIdleMessages) break;
+      // Every commit happens before its operation ends, so an idle room equals its stored copy.
+      if (room === used || chains.has(room)) continue;
+      states.delete(room); held -= Object.keys(state.messages).length;
+    }
+  }
+  async function restore(room: string) {
+    const state = await input.store.read(room);
+    // Older writers preserve unknown JSON fields but cannot record exact targets.
+    // Disk/CAS restores must conservatively repair their stale flags through pages.
+    if (state && (state.stalePages?.length || state.staleLookups?.length)) delete state.staleAggregates;
+    return state;
+  }
+  async function save(room: string, state: ChatHistoryState, keepPage?: string) {
+    const excess = Object.keys(state.pages).length - 500;
+    if (excess > 0) {
+      const oldest = Object.entries(state.pages).filter(([key]) => key !== keepPage)
+        .map(([key, ids]) => ({ key, seq: BigInt(state.messages[ids[0] ?? '']?.seq ?? new URLSearchParams(key).get('before') ?? '0') }))
+        .sort((a, b) => a.seq < b.seq ? -1 : a.seq > b.seq ? 1 : 0);
+      for (const page of oldest.slice(0, excess)) delete state.pages[page.key];
+    }
     assertCurrent();
     state.stalePages = state.stalePages?.filter(key => state.pages[key]);
     // Keep only covered pages and the snapshot, never every change in the room's history.
     const retained = new Set([...state.snapshot.messages.map(m => m.id), ...Object.values(state.pages).flat(), ...(state.lookups ?? [])]);
     state.staleLookups = state.staleLookups?.filter(id => state.lookups?.includes(id));
+    state.staleAggregates = state.staleAggregates?.filter(id => retained.has(id));
     for (const id of Object.keys(state.messages)) if (!retained.has(id)) delete state.messages[id];
+    if (input.coalesceWrites) { states.set(room, state); unsaved.set(room, state); return; }
     await input.store.write(room, state);
     assertCurrent(); states.set(room, state);
+  }
+  /** Bookkeeping that is only true once the state it describes is durable. */
+  function committed(room: string, done: () => void) {
+    if (!input.coalesceWrites) { done(); return; }
+    afterCommit.set(room, [...(afterCommit.get(room) ?? []), done]);
+  }
+  /** A removal replaces whatever this operation still had to commit. */
+  async function remove(room: string) {
+    unsaved.delete(room); afterCommit.delete(room);
+    await input.store.write(room, null); states.delete(room); checked.delete(room); metadataConnection.delete(room);
   }
   async function bootstrap(room: string) {
     dirty.delete(room);
@@ -86,10 +162,10 @@ export function createChatHistory(input: { api: Api; store: ChatHistoryStore; cu
     const epoch = connection;
     const snapshot = await input.api<ChatHistorySnapshot>(`/conversations/${room}/snapshot`);
     if (!isCursor(snapshot.cursor) || snapshot.room.id !== room || !Array.isArray(snapshot.messages)) throw new Error('CHAT_RESPONSE_INVALID');
-    const state: ChatHistoryState = { generation: input.newGeneration(), snapshot, cursor: snapshot.cursor, messages: {}, pages: {}, metadataDirty: false };
+    const state: ChatHistoryState = { generation: input.newGeneration(), snapshot, cursor: snapshot.cursor, messages: {}, pages: {}, staleAggregates: [], metadataDirty: false };
     for (const message of snapshot.messages) state.messages[message.id] = message;
     await save(room, state);
-    if (metadataDirty.get(room) === invalidation) metadataDirty.delete(room);
+    committed(room, () => { if (metadataDirty.get(room) === invalidation) metadataDirty.delete(room); });
     if (epoch === connection) { checked.set(room, Date.now()); metadataConnection.set(room, epoch); }
     return state;
   }
@@ -99,15 +175,42 @@ export function createChatHistory(input: { api: Api; store: ChatHistoryStore; cu
       state.messages[message.id] = { ...previous, ...message };
   }
   /** Returns false when the membership/history boundary requires a new bootstrap. */
-  function apply(state: ChatHistoryState, batch: ChatHistoryBatch): boolean {
+  async function apply(state: ChatHistoryState, batch: ChatHistoryBatch, source: 'push' | 'catch-up'): Promise<boolean> {
     if (!isCursor(batch.cursor) || !Array.isArray(batch.changes)) throw new Error('CHAT_RESPONSE_INVALID');
     if (BigInt(batch.cursor) <= BigInt(state.cursor)) return true;
-    if (batch.changes.some(c => c.type === 'membership.changed')) return false;
+    const membership = batch.changes.filter(change => change.type === 'membership.changed');
+    let joinedSnapshot: ChatHistorySnapshot | undefined;
+    if (membership.length) {
+      const prior = state.snapshot.members;
+      const reader = prior?.find(member => member.id === input.readerId);
+      if (!reader || reader.state !== 'joined' || !prior) return false;
+      const targets = new Set(membership.map(change => change.entityId));
+      if ([...targets].some(id => !id || id === state.snapshot.room.id || prior.some(member => member.id === id && member.state === 'joined'))) return false;
+      // Only preserve open pages for confirmed peer joins under the same reader membership.
+      let fresh: ChatHistorySnapshot;
+      try {
+        fresh = await input.api<ChatHistorySnapshot>(`/conversations/${state.snapshot.room.id}/snapshot`);
+      } catch (error) {
+        if (source === 'catch-up') throw error;
+        // A failed join check invalidates this room. Other rooms share the push connection.
+        assertCurrent();
+        return false;
+      }
+      if (fresh.room.id !== state.snapshot.room.id || !isCursor(fresh.cursor) || BigInt(fresh.cursor) < BigInt(batch.cursor)
+        || JSON.stringify(fresh.members?.find(member => member.id === input.readerId)) !== JSON.stringify(reader)
+        || ![...targets].every(id => fresh.members?.some(member => member.id === id && member.state === 'joined'))) return false;
+      // A newer snapshot may already include another join or message. Leave that
+      // metadata to the ordinary catch-up rather than skipping intervening deltas.
+      if (fresh.cursor === batch.cursor) joinedSnapshot = fresh;
+    }
+    // Legacy stale flags have no target identity; repair them through the old page path first.
+    if (!state.stalePages?.length && !state.staleLookups?.length) state.staleAggregates ??= [];
     for (const change of batch.changes) {
       const message = change.data?.message;
       if (/^(message\.|reaction\.|pin\.)/.test(change.type)) {
         if (!message) return false;
         if (change.type === 'reaction.changed') {
+          markAggregate(state, message.id);
           if (state.snapshot.messages.some(m => m.id === message.id)) state.metadataDirty = true;
           for (const [key, ids] of Object.entries(state.pages)) if (ids.includes(message.id)) stale(state, key);
           staleLookup(state, message.id);
@@ -121,27 +224,44 @@ export function createChatHistory(input: { api: Api; store: ChatHistoryStore; cu
           }
           // A new reply also changes its root's reply count. Refresh only pages containing that root.
           if (message.threadRootId && ['message.created', 'message.deleted'].includes(change.type)) {
+            markAggregate(state, message.threadRootId);
             for (const [key, ids] of Object.entries(state.pages)) if (ids.includes(message.threadRootId)) stale(state, key);
             staleLookup(state, message.threadRootId);
           }
         }
         if (change.type === 'message.created') {
+          const seq = BigInt(message.seq);
           for (const key of Object.keys(state.pages)) {
             const query = new URLSearchParams(key);
-            if (query.has('before')) continue;
+            const before = query.get('before');
+            if (before !== null && seq >= BigInt(before)) continue;
             if (query.get('all') !== 'true' && (query.get('threadRootId') ?? null) !== (message.threadRootId ?? null)) continue;
             const ids = state.pages[key]!;
+            const after = query.get('after');
+            if (after !== null && seq <= BigInt(after)) continue;
             // Preserve the old window as bounded coverage: new arrivals shift pagination
             // boundaries, but must not make every older page download again.
             const first = ids[0] && state.messages[ids[0]];
-            if (first) {
+            if (before === null && first && seq > BigInt(first.seq)) {
               query.set('before', String(BigInt(first.seq) + 1n)); state.pages[query.toString()] = ids;
               if (state.stalePages?.includes(key)) stale(state, query.toString());
             }
-            delete state.pages[key];
+            if (query.has('after')) { delete state.pages[key]; continue; }
+            // Exact hits and stitched reads both depend on each window retaining its top rows.
+            const limit = Number(query.get('limit') ?? 100);
+            const last = ids.at(-1);
+            if (last && ids.length >= limit && seq <= BigInt(state.messages[last]!.seq)) continue;
+            state.pages[key] = [...new Set([message.id, ...ids])]
+              .sort((a, b) => BigInt(state.messages[a]!.seq) > BigInt(state.messages[b]!.seq) ? -1 : 1)
+              .slice(0, limit);
           }
         }
       } else if (!['execution.changed', 'plan.changed'].includes(change.type)) state.metadataDirty = true;
+    }
+    if (joinedSnapshot) {
+      for (const message of joinedSnapshot.messages) merge(state, message);
+      state.snapshot = joinedSnapshot;
+      state.metadataDirty = false;
     }
     state.snapshot.messages = state.snapshot.messages.map(m => state.messages[m.id] ?? m);
     state.cursor = batch.cursor;
@@ -156,28 +276,59 @@ export function createChatHistory(input: { api: Api; store: ChatHistoryStore; cu
     state.staleLookups ??= [];
     if (!state.staleLookups.includes(id)) state.staleLookups.push(id);
   }
+  function markAggregate(state: ChatHistoryState, id: string) {
+    if (state.staleAggregates && !state.staleAggregates.includes(id)) state.staleAggregates.push(id);
+  }
+  function clearAggregates(state: ChatHistoryState, ids: string[]) {
+    if (!state.staleAggregates) return;
+    const refreshed = new Set(ids);
+    state.staleAggregates = state.staleAggregates.filter(id => !refreshed.has(id));
+    const outstanding = new Set(state.staleAggregates);
+    state.stalePages = state.stalePages?.filter(key => state.pages[key]?.some(id => outstanding.has(id)));
+    state.staleLookups = state.staleLookups?.filter(id => !refreshed.has(id));
+  }
+  async function refreshAggregates(room: string, state: ChatHistoryState, ids: string[]): Promise<ChatHistoryState> {
+    const targets = new Set(ids);
+    // Catch-up may touch many rows: repair a shared page in one round trip rather
+    // than replacing the old page refresh with a serial request per changed row.
+    for (;;) {
+      const stale = new Set(state.staleAggregates?.filter(id => targets.has(id)));
+      const page = Object.entries(state.pages).map(([key, covered]) => ({ key, count: covered.filter(id => stale.has(id)).length }))
+        .sort((a, b) => b.count - a.count)[0];
+      if (!page || page.count < 2) break;
+      const before = stale.size;
+      await fetchPage(room, state, page.key);
+      if (state.staleAggregates?.filter(id => targets.has(id)).length === before) break;
+    }
+    for (const id of [...(state.staleAggregates ?? [])]) {
+      if (!targets.has(id) || !state.staleAggregates?.includes(id)) continue;
+      const known = state.messages[id];
+      if (!known) continue;
+      // The list endpoint includes reply counts and reactions; GET /messages/:id does not.
+      // One narrow authorized window repairs every overlapping copy of this row.
+      const query = new URLSearchParams({ limit: '1', before: String(BigInt(known.seq) + 1n) });
+      if (known.threadRootId) query.set('threadRootId', known.threadRootId);
+      const rows = await input.api<ChatHistoryMessage[]>(`/conversations/${room}/messages?${query}`);
+      if (!Array.isArray(rows)) throw new Error('CHAT_RESPONSE_INVALID');
+      if (rows[0]?.id !== id) return bootstrap(room); // Visibility/history boundary changed.
+      merge(state, rows[0]);
+      clearAggregates(state, [id]);
+    }
+    await save(room, state);
+    return state;
+  }
   async function fetchPage<M extends ChatHistoryMessage>(room: string, state: ChatHistoryState, key: string) {
     const messages = await input.api<M[]>(`/conversations/${room}/messages?${key}`);
     if (!Array.isArray(messages)) throw new Error('CHAT_RESPONSE_INVALID');
     for (const message of messages) merge(state, message);
     const ids = messages.map(m => m.id); state.pages[key] = ids;
     state.stalePages = state.stalePages?.filter(value => value !== key);
-    const excess = Object.keys(state.pages).length - 500;
-    if (excess > 0) {
-      // Retain the newest covered ranges, not insertion order: renaming a shifted
-      // head must not evict the next page and cascade misses through a transcript.
-      // Keep this response covered until page() has returned its message objects.
-      const oldest = Object.entries(state.pages).filter(([pageKey]) => pageKey !== key)
-        .map(([pageKey, pageIds]) => ({ key: pageKey,
-          seq: BigInt(state.messages[pageIds[0] ?? '']?.seq ?? new URLSearchParams(pageKey).get('before') ?? '0') }))
-        .sort((a, b) => a.seq < b.seq ? -1 : a.seq > b.seq ? 1 : 0);
-      for (const page of oldest.slice(0, excess)) delete state.pages[page.key];
-    }
-    await save(room, state);
+    clearAggregates(state, ids);
+    await save(room, state, key);
     return ids;
   }
   async function ensure(room: string, force = false): Promise<ChatHistoryState> {
-    let state = states.get(room) ?? await input.store.read(room);
+    let state = states.get(room) ?? await restore(room);
     assertCurrent();
     if (!state) return bootstrap(room);
     states.set(room, state);
@@ -194,8 +345,10 @@ export function createChatHistory(input: { api: Api; store: ChatHistoryStore; cu
       for (let page = 0; page < 20; page++) {
         const batch = await input.api<ChatHistoryBatch>(`/changes?scope=conversation:${room}&after=${state.cursor}&limit=100`);
         if (batch.hasMore && batch.cursor === state.cursor) throw new Error('CHAT_SYNC_STALLED');
-        if (!apply(state, batch)) return bootstrap(room);
-        await save(room, state);
+        const moved = batch.cursor !== state.cursor;
+        if (!await apply(state, batch, 'catch-up')) return bootstrap(room);
+        // An empty delta changes nothing durable; do not rewrite the room for it.
+        if (moved || !input.coalesceWrites) await save(room, state);
         if (!batch.hasMore) {
           if (state.metadataDirty) {
             const snapshot = await input.api<ChatHistorySnapshot>(`/conversations/${room}/snapshot`);
@@ -204,7 +357,7 @@ export function createChatHistory(input: { api: Api; store: ChatHistoryStore; cu
             state.snapshot = { ...snapshot, cursor: state.cursor, messages: snapshot.messages.map(m => state!.messages[m.id]!) };
             state.metadataDirty = false;
             await save(room, state);
-            if (metadataDirty.get(room) === invalidation) metadataDirty.delete(room);
+            committed(room, () => { if (metadataDirty.get(room) === invalidation) metadataDirty.delete(room); });
           }
           if (epoch === connection) { checked.set(room, Date.now()); metadataConnection.set(room, epoch); }
           return state;
@@ -245,8 +398,20 @@ export function createChatHistory(input: { api: Api; store: ChatHistoryStore; cu
     return undefined;
   }
   return {
+    /** Same bounded message reuse as ensure(); personal read metadata is independent. */
+    hasFreshMessages(room: string) {
+      assertCurrent();
+      return states.has(room) && checked.has(room) && !dirty.has(room) && Date.now() - checked.get(room)! < 30_000;
+    },
+    /** Latest authorized projection for immediate display; never a write authority. */
+    committedSnapshot: <S extends ChatHistorySnapshot>(room: string): (S & { cacheGeneration: string }) | undefined => {
+      assertCurrent();
+      const state = states.get(room);
+      return state ? { ...state.snapshot, cursor: state.cursor, cacheGeneration: state.generation } as S & { cacheGeneration: string } : undefined;
+    },
     message: <M extends ChatHistoryMessage>(room: string, id: string): Promise<M> => serial(room, async () => {
-      const state = await ensure(room);
+      let state = await ensure(room);
+      if (state.staleAggregates?.includes(id)) state = await refreshAggregates(room, state, [id]);
       if (!state.lookups?.includes(id) || !state.messages[id] || state.staleLookups?.includes(id)) {
         const message = await input.api<M>(`/conversations/${room}/messages/${encodeURIComponent(id)}`);
         if (message?.id !== id || !isCursor(message.seq)) throw new Error('CHAT_RESPONSE_INVALID');
@@ -257,16 +422,78 @@ export function createChatHistory(input: { api: Api; store: ChatHistoryStore; cu
       }
       return state.messages[id] as M;
     }),
+    /** Several roots/sources in one room operation: bounded parallel reads and one commit. A
+     * per-message failure is returned for that ID; losing the room itself still rejects. */
+    lookup: <M extends ChatHistoryMessage>(room: string, ids: readonly string[]): Promise<Map<string, { message: M } | { error: unknown }>> => serial(room, async () => {
+      let state = await ensure(room);
+      const wanted = [...new Set(ids)];
+      const aggregates = wanted.filter(id => state.staleAggregates?.includes(id));
+      if (aggregates.length) state = await refreshAggregates(room, state, aggregates);
+      const missing = wanted.filter(id => !state.lookups?.includes(id) || !state.messages[id] || state.staleLookups?.includes(id));
+      const failed = new Map<string, unknown>();
+      // Returned from here even if a long batch pushes an earlier lookup out of the retained 100.
+      const found = new Map<string, M>();
+      let next = 0;
+      await Promise.all(Array.from({ length: Math.min(4, missing.length) }, async () => {
+        while (next < missing.length) {
+          const id = missing[next++]!;
+          try {
+            const message = await input.api<M>(`/conversations/${room}/messages/${encodeURIComponent(id)}`);
+            if (message?.id !== id || !isCursor(message.seq)) throw new Error('CHAT_RESPONSE_INVALID');
+            merge(state, message); found.set(id, state.messages[id] as M);
+            state.lookups = [...(state.lookups ?? []).filter(value => value !== id), id].slice(-100);
+            state.staleLookups = state.staleLookups?.filter(value => value !== id);
+          } catch (error) { failed.set(id, error); }
+        }
+      }));
+      for (const error of failed.values()) if (ROOM_LOST.includes(errorCode(error))) throw error;
+      for (const id of wanted) if (!found.has(id) && !failed.has(id) && state.messages[id]) found.set(id, state.messages[id] as M);
+      if (missing.length > failed.size) await save(room, state);
+      return new Map(wanted.map(id => [id, found.has(id)
+        ? { message: found.get(id)! } : { error: failed.get(id) ?? new Error('CHAT_RESPONSE_INVALID') }]));
+    }),
     snapshot: <S extends ChatHistorySnapshot>(room: string): Promise<S & { cacheGeneration: string }> => serial(room, async () => {
       const state = await ensure(room);
       return { ...state.snapshot, cursor: state.cursor, cacheGeneration: state.generation } as S & { cacheGeneration: string };
     }),
     page: <M extends ChatHistoryMessage>(room: string, query: URLSearchParams): Promise<M[]> => serial(room, async () => {
-      const state = await ensure(room);
+      let state = await ensure(room);
       const key = query.toString();
+      if (state.stalePages?.includes(key) && state.staleAggregates) state = await refreshAggregates(room, state, state.pages[key] ?? []);
       const ids = (state.stalePages?.includes(key) ? undefined : state.pages[key])
         ?? coveredPage(state, query) ?? await fetchPage<M>(room, state, key);
       return ids.map(id => state.messages[id] as M);
+    }),
+    /** Apply an authenticated personal read receipt/event without re-downloading message bodies. */
+    readState: (room: string, value: unknown, sequenceOnly = false): Promise<boolean> => serial(room, async () => {
+      const values = Array.isArray(value) ? value : [value];
+      if (!values.length || values.some(item => !item || typeof item !== 'object')) return false;
+      const reads = values as Record<string, unknown>[];
+      if (reads.some(read =>
+        !isCursor(read.readSeq) || !Object.hasOwn(read, 'threadRootId')
+        || (read.threadRootId !== null && (typeof read.threadRootId !== 'string' || !read.threadRootId))
+        || typeof read.following !== 'boolean' || typeof read.muted !== 'boolean'
+        || (read.markedUnread !== undefined && typeof read.markedUnread !== 'boolean'))) return false;
+      const state = states.get(room);
+      if (!state?.snapshot.reads) return false; // Legacy servers/caches retain the full refresh fallback.
+      let changed = false;
+      for (const read of reads as Array<{ threadRootId?: string | null; readSeq: string; following: boolean; muted: boolean; markedUnread?: boolean; notificationScope?: ChatHistoryRead['notification_scope'] }>) {
+        const key = typeof read.threadRootId === 'string' ? read.threadRootId : 'main';
+        const previous: ChatHistoryRead | undefined = state.snapshot.reads.find(item => item.thread_key === key);
+        const next: ChatHistoryRead = { thread_key: key,
+          read_seq: previous && BigInt(previous.read_seq) > BigInt(read.readSeq) ? previous.read_seq : read.readSeq,
+          // An ordinary HTTP read can arrive after a newer preference event. It must
+          // only advance the position, never roll back that event's follow/mute state.
+          ...(sequenceOnly && previous ? { following: previous.following, muted: previous.muted, notification_scope: previous.notification_scope, marked_unread: previous.marked_unread }
+            : { following: read.following, muted: read.muted, notification_scope: read.notificationScope, ...(typeof read.markedUnread === 'boolean' ? { marked_unread: read.markedUnread } : {}) }) };
+        // The echo of a receipt already merged repeats it; that is nothing new to commit.
+        if (previous && (Object.keys(next) as Array<keyof ChatHistoryRead>).every(field => previous[field] === next[field])
+          && Object.keys(previous).length === Object.keys(next).length) continue;
+        changed = true;
+        state.snapshot.reads = previous ? state.snapshot.reads.map(item => item.thread_key === key ? next : item) : [...state.snapshot.reads, next];
+      }
+      if (changed) await save(room, state);
+      return true;
     }),
     /** A reconnect must verify membership and catch up before returning persisted content. */
     reconnect() { connection++; checked.clear(); },
@@ -276,29 +503,31 @@ export function createChatHistory(input: { api: Api; store: ChatHistoryStore; cu
     },
     cursor(room: string) { return states.get(room)?.cursor; },
     generation(room: string) { return states.get(room)?.generation; },
+    /** Read-only view of messages already loaded in memory for this room (zero I/O). */
+    cachedMessages: <M extends ChatHistoryMessage>(room: string): M[] => {
+      assertCurrent();
+      const state = states.get(room);
+      return state ? Object.values(state.messages) as M[] : [];
+    },
     projection: <M extends ChatHistoryMessage>(room: string, ids: string[]) => serial(room, async () => {
-      const state = await ensure(room);
+      let state = await ensure(room);
+      if (state.staleAggregates?.some(id => ids.includes(id))) state = await refreshAggregates(room, state, ids);
       const shown = new Set(ids);
-      for (const key of state.stalePages ?? [])
+      for (const key of state.staleAggregates ? [] : state.stalePages ?? [])
         if (state.pages[key]?.some(id => shown.has(id))) await fetchPage<M>(room, state, key);
       return { generation: state.generation, messages: ids.flatMap(id => state.messages[id] ? [state.messages[id] as M] : []) };
     }),
     receive: (room: string, batch: ChatHistoryBatch, subscribedAfter: string | undefined): Promise<string | undefined> => serial(room, async () => {
-      const state = states.get(room) ?? await input.store.read(room);
+      const state = states.get(room) ?? await restore(room);
       if (!state) return undefined;
       // Another foreground snapshot may have started this subscription beyond our durable cursor.
       // Catch up that gap instead of acknowledging unseen edits/deletions.
       if (!subscribedAfter || BigInt(subscribedAfter) > BigInt(state.cursor)) return (await ensure(room, true)).cursor;
-      if (!apply(state, batch)) {
-        await input.store.write(room, null); states.delete(room); checked.delete(room); metadataConnection.delete(room);
-        return undefined;
-      }
+      if (!await apply(state, batch, 'push')) { await remove(room); return undefined; }
       await save(room, state);
       return state.cursor;
     }),
-    clear: (room: string) => serial(room, async () => {
-      await input.store.write(room, null); states.delete(room); checked.delete(room); metadataConnection.delete(room);
-    }),
+    clear: (room: string) => serial(room, () => remove(room)),
   };
 }
 export type ChatHistory = ReturnType<typeof createChatHistory>;

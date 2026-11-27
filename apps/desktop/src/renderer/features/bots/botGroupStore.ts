@@ -11,6 +11,9 @@
  */
 import { useCallback, useSyncExternalStore } from 'react';
 import { seedBotGroupReadState } from './botReadState';
+import { isSecondaryWindow } from '@/lib/secondaryWindow';
+import { discardDraftTree } from '@/lib/composerDraftStore';
+import { botGroupAttachmentScope } from './botGroupAttachments';
 
 import {
   getDataOwnerGeneration,
@@ -118,7 +121,7 @@ function applySnapshot(next: BotGroupListSnapshot): void {
 }
 
 function persistList(): void {
-  if (!owner.dataOwnerId) return;
+  if (!owner.dataOwnerId || isSecondaryWindow()) return;
   void botGroupApi()?.chatDisplayCache?.({ action: 'write', key: 'groups', owner, value: snapshot.groups }).catch(() => undefined);
 }
 
@@ -193,7 +196,9 @@ export function startBotGroupSync(): () => void {
       unsubscribePush = api.onBotGroupChanged((payload, ownerStamp) => {
         if (!isDataOwnerPushCurrent(ownerStamp)) return;
         ensureOwner();
+        if (payload.change === 'deleted') discardDraftTree(botGroupAttachmentScope(payload.groupId));
         if (payload.change === 'list' && payload.listState && (personalList.get(payload.groupId)?.revision ?? 0) < payload.listState.revision) {
+          if (payload.listState.hidden) discardDraftTree(botGroupAttachmentScope(payload.groupId));
           personalList.set(payload.groupId, payload.listState);
           listReadVersion++;
           const groups = visibleGroups(snapshot.groups);
@@ -304,5 +309,6 @@ export function resetBotGroupStoreForTests(): void {
   readFailures = 0;
   owner = getDataOwnerGeneration();
   snapshot = EMPTY_SNAPSHOT;
+  personalList.clear();
   listeners.clear();
 }

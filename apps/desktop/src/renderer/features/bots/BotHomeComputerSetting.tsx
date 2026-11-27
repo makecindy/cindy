@@ -9,7 +9,10 @@ import { ChevronRight, Monitor } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
+import { CompanionCindyConflictAction, useCompanionCindyConflictAction } from './CompanionCindyConflictAction';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { Button } from '@/components/ui/button';
+import { CompanionProfileRepairDialog } from './CompanionProfileRepairDialog';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -17,7 +20,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
-import { toast } from '@/lib/toast';
+import { toast, type ToastAction } from '@/lib/toast';
 import type {
   CompanionCloudFailureCode,
   CompanionCloudSnapshot,
@@ -35,6 +38,7 @@ import {
 
 const SWITCH_ERROR_KEYS: Record<CompanionCloudFailureCode, string> = {
   HOME_CONFLICT: 'bots.cloud.switchConflict',
+  LOCAL_CINDY_CONFLICT: 'bots.cloud.localCindyConflict',
   OFFLINE: 'bots.cloud.switchOffline',
   NOT_ENABLED: 'bots.cloud.notEnabled',
   TARGET_UNAVAILABLE: 'bots.cloud.targetUnavailable',
@@ -42,6 +46,9 @@ const SWITCH_ERROR_KEYS: Record<CompanionCloudFailureCode, string> = {
   BUSY: 'bots.cloud.transferBusy',
   HOME_OUTDATED: 'bots.cloud.homeOutdated',
   PAUSED: 'bots.cloud.resumeToMove',
+  TARGET_OUTDATED: 'bots.cloud.targetOutdated',
+  SKILL_TARGET_OUTDATED: 'bots.cloud.skillTargetOutdated',
+  PROFILE_SNAPSHOT_MISSING: 'bots.cloud.missingProfileFailed',
 };
 
 /** How long a companion moved here from its online home may take to be built on this computer. */
@@ -63,12 +70,15 @@ export function companionArrivedHere(cloud: CompanionCloudSnapshot, botId: strin
 }
 
 /** Wait until the automatic take-over here finished (or time out). */
-async function waitForArrival(botId: string, isCurrent: () => boolean): Promise<boolean> {
+async function waitForArrival(botId: string, isCurrent: () => boolean): Promise<boolean | NonNullable<CompanionCloudSnapshot['actors'][number]['profileFailure']>> {
   const deadline = Date.now() + ARRIVAL_TIMEOUT_MS;
   while (isCurrent() && Date.now() < deadline) {
     const profiles = await ensureBotProfilesLoaded(true).catch(() => []);
     const local = profiles.filter((profile) => profile.status === 'active').map((profile) => profile.id);
-    if (companionArrivedHere(getCompanionCloudSnapshot(), botId, local)) return true;
+    const cloud = getCompanionCloudSnapshot();
+    const failure = cloud.actors.find(actor => actor.externalId === botId)?.profileFailure;
+    if (failure) return failure;
+    if (companionArrivedHere(cloud, botId, local)) return true;
     refreshCompanionCloud();
     await new Promise((resolve) => setTimeout(resolve, ARRIVAL_POLL_MS));
   }
@@ -80,15 +90,20 @@ export function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline'
   const { t } = useTranslation();
   const navigate = useNavigate();
   const cloud = useCompanionCloud();
+  const conflict = useCompanionCindyConflictAction();
   const [choices, setChoices] = useState<CompanionHomeChoices | null>(null);
   const [choicesFailed, setChoicesFailed] = useState(false);
   const [pending, setPending] = useState<CompanionTransferTarget | null>(null);
   /** The companion was still working when asked to move there: wait for it, or stop it. */
   const [busyTarget, setBusyTarget] = useState<CompanionTransferTarget | null>(null);
+  /** Another computer never uploaded a profile snapshot: ask before starting fresh here. */
+  const [missingProfileTarget, setMissingProfileTarget] = useState<CompanionTransferTarget | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [repairOpen, setRepairOpen] = useState(false);
+  const [repairAvailable, setRepairAvailable] = useState(false);
   const inFlight = useRef(false);
-  const report = (message: string) => { if (failures === 'toast') toast.error(message); else setError(message); };
+  const report = (message: string, action?: ToastAction) => { if (failures === 'toast') toast.error(message, { action }); else setError(message); };
   const actor = cloud.enabled ? cloud.actors.find((candidate) => candidate.externalId === bot.id) : undefined;
   const home = actor?.homeDeviceId ?? null;
   const homeHere = !!home && home === cloud.selfDeviceId;
@@ -119,6 +134,8 @@ export function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline'
     inFlight.current = true;
     setBusy(true);
     setError(null);
+    setRepairAvailable(false);
+    conflict.clear();
     const device = targetName(target);
     const owner = getDataOwnerGeneration();
     const current = () => isDataOwnerGenerationCurrent(owner);
@@ -128,13 +145,23 @@ export function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline'
       if (!current()) return;
       setPending(null);
       setBusyTarget(null);
+      setMissingProfileTarget(null);
       // Still working and nothing chosen yet: offer to wait for the turn or stop it.
       if (!result.ok && result.code === 'BUSY' && !options?.whenBusy) {
         setBusyTarget(target);
         return;
       }
+      if (!result.ok && result.code === 'PROFILE_SNAPSHOT_MISSING' && !options?.allowMissingProfile) {
+        setMissingProfileTarget(target);
+        return;
+      }
       if (!result.ok) {
-        report(t(SWITCH_ERROR_KEYS[result.code] ?? 'bots.cloud.switchFailed', { name: bot.name, device }));
+        setRepairAvailable(!!result.profileFailure);
+        report(result.profileFailure ? t(result.profileFailure.field === 'identitySource' ? 'bots.cloud.profileIdentityTooLong' : 'bots.cloud.profileUserTooLong', { limit: result.profileFailure.maxLength })
+          : t(SWITCH_ERROR_KEYS[result.code] ?? 'bots.cloud.switchFailed', {
+            name: bot.name, device, context: result.oversizedSkill ? 'skill' : undefined, ...result.oversizedSkill,
+          }),
+          result.profileFailure ? { label: t('bots.cloud.repair.action'), onClick: () => setRepairOpen(true) } : conflict.report(result));
         refreshCompanionCloud();
         return;
       }
@@ -146,7 +173,14 @@ export function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline'
       // Asked from another computer: this one builds the companion once the move reaches it.
       if (choices?.mode === 'remote') {
         toast.info(t('bots.cloud.takingOver', { name: bot.name }));
-        if (!(await waitForArrival(bot.id, current))) {
+        const arrival = await waitForArrival(bot.id, current);
+        if (!current()) return;
+        if (typeof arrival === 'object') {
+          report(t(arrival.field === 'identitySource' ? 'bots.cloud.profileIdentityTooLong' : 'bots.cloud.profileUserTooLong', { limit: arrival.maxLength }));
+          navigate(`/bots/remote/${encodeURIComponent(target.deviceId)}/${encodeURIComponent(bot.id)}`);
+          return;
+        }
+        if (!arrival) {
           if (current()) toast.info(t('bots.cloud.arrivingLater', { name: bot.name }));
           return;
         }
@@ -160,6 +194,7 @@ export function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline'
       if (!current()) return;
       setPending(null);
       setBusyTarget(null);
+      setMissingProfileTarget(null);
       report(t('bots.cloud.switchFailed', { name: bot.name, device }));
     } finally {
       inFlight.current = false;
@@ -170,8 +205,9 @@ export function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline'
   const homeName = homeHere
     ? t('bots.cloud.thisComputer')
     : actor?.homeDevice?.name?.trim() || t('bots.cloud.unknownDevice');
-  return { actor, home, homeHere, homeName, movable, choices, choicesFailed, pending, setPending, busyTarget, setBusyTarget, busy,
-    error, setError, inFlight, load, confirm, targetName };
+  return { actor, home, homeHere, homeName, movable, choices, choicesFailed, pending, setPending, busyTarget, setBusyTarget,
+    missingProfileTarget, setMissingProfileTarget, busy,
+    error, setError, inFlight, load, confirm, targetName, conflictAction: conflict.action, repairOpen, setRepairOpen, repairAvailable };
 }
 
 export type HomeSwitch = ReturnType<typeof useCompanionHomeSwitch>;
@@ -200,7 +236,9 @@ function HomeMenuItems({ bot, state }: { bot: CompanionHomeBot; state: HomeSwitc
       {choices.targets.map((target) => (
         <DropdownMenuItem key={target.deviceId} onSelect={() => { state.setError(null); state.setPending(target); }}>
           <span className="min-w-0 truncate">
-            {target.isSelf ? t('bots.cloud.switchHere') : t('bots.cloud.switchTo', { device: state.targetName(target) })}
+            {target.isSelf ? t('bots.cloud.switchHere')
+              // An older Cindy: it can take the teammate, which then runs there the older way.
+              : t(target.outdated ? 'bots.cloud.targetOutdatedItem' : 'bots.cloud.switchTo', { device: state.targetName(target) })}
           </span>
         </DropdownMenuItem>
       ))}
@@ -215,10 +253,9 @@ export function HomeSwitchConfirm({ bot, state }: { bot: CompanionHomeBot; state
   const busyDevice = state.busyTarget ? state.targetName(state.busyTarget) : '';
   return (
     <>
+    <CompanionProfileRepairDialog botId={bot.id} open={state.repairOpen} onOpenChange={state.setRepairOpen} />
     <ConfirmDialog
       open={state.busyTarget !== null}
-      presentation="standard"
-      cancelFirst
       onOpenChange={(open) => { if (!open && !state.inFlight.current) state.setBusyTarget(null); }}
       title={t('bots.cloud.busyTitle', { name: bot.name })}
       description={t('bots.cloud.busyDescription', { name: bot.name, device: busyDevice })}
@@ -230,12 +267,23 @@ export function HomeSwitchConfirm({ bot, state }: { bot: CompanionHomeBot; state
       onTertiary={() => void state.confirm(state.busyTarget, { whenBusy: 'stop' })}
     />
     <ConfirmDialog
+      open={state.missingProfileTarget !== null}
+      onOpenChange={(open) => { if (!open && !state.inFlight.current) state.setMissingProfileTarget(null); }}
+      title={t('bots.cloud.missingProfileTitle', { name: bot.name })}
+      description={t('bots.cloud.missingProfileDescription', { name: bot.name })}
+      confirmText={t('bots.cloud.missingProfileConfirm')}
+      cancelText={t('bots.cancel')}
+      loading={state.busy}
+      onConfirm={() => void state.confirm(state.missingProfileTarget, { allowMissingProfile: true })}
+    />
+    <ConfirmDialog
       open={state.pending !== null}
-      presentation="standard"
-      cancelFirst
       onOpenChange={(open) => { if (!open && !state.inFlight.current) state.setPending(null); }}
       title={t('bots.cloud.switchTitle', { name: bot.name, device })}
       description={t('bots.cloud.switchDescription', { name: bot.name, device })}
+      // An older Cindy there: say what the teammate keeps and what does not apply.
+      content={state.pending?.outdated
+        ? <p className="text-base text-[var(--confirm-desc)]">{t('bots.cloud.olderTargetNote', { name: bot.name, device })}</p> : undefined}
       confirmText={t('bots.cloud.switchAction', { device })}
       cancelText={t('bots.cancel')}
       loading={state.busy}
@@ -274,6 +322,8 @@ export function BotHomeComputerSetting({ bot, className = 'mt-3' }: { bot: Compa
       {state.error ? (
         <p role="alert" className="mt-2 px-1 text-12 text-[var(--text-danger)]">{state.error}</p>
       ) : null}
+      {state.error ? <CompanionCindyConflictAction action={state.conflictAction} /> : null}
+      {state.repairAvailable && state.error && <Button variant="secondary" size="md" className="mt-2" onClick={() => state.setRepairOpen(true)}>{t('bots.cloud.repair.action')}</Button>}
       <HomeSwitchConfirm bot={bot} state={state} />
     </div>
   );

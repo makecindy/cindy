@@ -5,7 +5,7 @@
   "changedDimensions": ["modelRoute", "nativeProviders"],
   "agentBackend": "pi",
   "agentBinaryPath": "/opt/cindy-headless/bin/pi/pi",
-  "agentBinaryVersion": "1.0.2",
+  "agentBinaryVersion": "1.5.2",
   "supportedModelIds": ["qwen3-coder"],
   "model": {
     "provider": "local-openai",
@@ -34,7 +34,7 @@
   ],
   "permissionMode": "bypassPermissions",
   "systemPromptFile": "prompt.md",
-  "expectedSystemPromptDigest": "67775f14177a07297ba4b73a5bdf9995a62742dffa97f2ccd5699431ee3f0e65",
+  "expectedSystemPromptDigest": "cea02c128380de8264bcc494e5ead4bc905bf51fea72d8578927a8db3e4d1a8a",
   "makerMemory": true,
   "nativeMemory": false,
   "projectContext": true,

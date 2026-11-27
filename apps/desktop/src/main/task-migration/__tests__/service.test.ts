@@ -6,6 +6,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { agentNetMediaDestination } from '../../device-link/agentNetMediaRouting';
 import {
   parseAttachmentOssRef,
   TASK_MIGRATION_ESTIMATE_TIMEOUT_MS,
@@ -20,6 +21,7 @@ const state = vi.hoisted(() => ({
   dbs: new Map<string, { query: ReturnType<typeof vi.fn>; queryOne: ReturnType<typeof vi.fn> }>(),
   rows: new Map<string, Map<string, Record<string, unknown>>>(),
   files: new Map<string, string>(),
+  uploadDestinations: [] as Array<string | undefined>,
   imports: vi.fn(),
   created: vi.fn(),
   snapshot: vi.fn(),
@@ -46,6 +48,7 @@ const state = vi.hoisted(() => ({
   workers: [] as string[],
   estimateLimits: [] as number[],
   timeoutAction: '' as string,
+  offlineError: null as Error | null,
   exclusions: [] as string[],
   /** Entries each snapshot reports it left behind. */
   skipped: [] as Array<{ path: string; code: string }>,
@@ -61,6 +64,13 @@ const state = vi.hoisted(() => ({
   },
   /** Target without the `externalTranscripts` capability. */
   oldTarget: false,
+  /** Target without `'acp'` in `caps.agents` (simulating an older target version). */
+  oldTargetNoAcp: false,
+  /** Enabled ACP plugin harnesses registered on each simulated device. */
+  acpHarnesses: new Map<
+    string,
+    Array<{ key: string; availability: { state: 'available' | 'unavailable' | 'unknown' } }>
+  >(),
   importedTranscripts: [] as Array<{ path: string; content: string }>,
   recentProjects: [] as string[],
   archiveDownloadFails: false,
@@ -123,7 +133,7 @@ vi.mock('../../device-link/invoke-context', () => ({
     return peer ? { controllerDeviceId: peer } : null;
   },
 }));
-vi.mock('../../device-link/settings-store', () => ({
+vi.mock('../../device-link/settings-store.desktop', () => ({
   readDeviceLinkSettings: () => ({ remoteControlEnabled: true, revokedControllers: [] }),
 }));
 vi.mock('../../device-link', () => ({
@@ -135,6 +145,7 @@ vi.mock('../../device-link', () => ({
     opts?: { preSend(): void },
   ) => {
     opts?.preSend();
+    if (state.offlineError) throw state.offlineError;
     if (state.timeoutAction === args[0].action) {
       const { DeviceLinkError } = await import('@cindy/device-link');
       throw new DeviceLinkError('INVOKE_TIMEOUT', 'no invoke-result within 180000ms');
@@ -144,6 +155,10 @@ vi.mock('../../device-link', () => ({
       requestTaskMigration(args[0]),
     );
     if (state.oldTarget && args[0].action === 'caps') delete result.externalTranscripts;
+    if (state.oldTargetNoAcp && args[0].action === 'caps' && Array.isArray(result.agents)) {
+      result.agents = result.agents.filter((a) => a !== 'acp');
+      delete result.acpProviders;
+    }
     if (state.loseReply === args[0].action) {
       state.loseReply = '';
       throw new Error('connection lost after commit');
@@ -152,13 +167,14 @@ vi.mock('../../device-link', () => ({
   },
 }));
 vi.mock('../../device-link/filePeer', () => ({ tryUploadPeerAttachment: async () => null }));
-vi.mock('../../device-link/mediaTransfer', () => ({
+vi.mock('../../device-link/mediaTransfer.desktop', () => ({
   MAX_MEDIA_BYTES: 2 * 1024 ** 3,
   removeRemote: (key: string) => state.remove(key),
   uploadLocalFile: async (
     file: string,
     opts: { onProgress?: (bytes: number) => void; signal?: AbortSignal },
   ) => {
+    state.uploadDestinations.push(agentNetMediaDestination());
     if (state.stallUpload) {
       state.stallUpload();
       await new Promise((_, reject) =>
@@ -184,7 +200,7 @@ vi.mock('../../device-link/remoteAttachment', () => ({
   },
 }));
 vi.mock('../../security/trustedAppRenderer', () => ({ assertTrustedAppRendererEvent() {} }));
-vi.mock('../../cindy-media/refCompensationJournal', () => ({
+vi.mock('../../cindy-media/refCompensationJournal.desktop', () => ({
   captureMediaRefCompensationScope: () => ({}),
 }));
 vi.mock('../../im/binding', () => ({ bindingStore: { findByTarget: () => null } }));
@@ -202,6 +218,11 @@ vi.mock('../../maker-host/createDesktopProviderService', () => ({
 }));
 vi.mock('../../maker-host/model-route-guard', () => ({
   pickEnabledFallbackModel: () => ({ model: 'target-model', providerId: 'target-provider' }),
+}));
+vi.mock('../../cindy-brain/pluginHarnesses', () => ({
+  getPluginHarnessRegistry: () => ({
+    list: () => state.acpHarnesses.get(device()) ?? [],
+  }),
 }));
 vi.mock('../../worktree/resourceLock', async (original) => ({
   ...(await original<typeof import('../../worktree/resourceLock')>()),
@@ -230,20 +251,68 @@ vi.mock('../../session-share/sessionShareExport', () => ({
         : [];
     for (const transcript of staged)
       await fs.writeFile(path.join(external!.dir, transcript.file), state.transcript);
+    const sourceRow = state.rows.get('A')?.get('fork');
+    const workerRows = state.workers
+      .map((id) => state.rows.get('A')?.get(id))
+      .filter((row): row is Record<string, unknown> => Boolean(row));
+    const isAcpLead = sourceRow?.agentKind === 'acp';
+    const hasAcpWorker = workerRows.some((row) => row.agentKind === 'acp');
+    const hasBuiltinWorker = workerRows.some((row) => row.agentKind !== 'acp');
+    const fidelity = isAcpLead
+      ? hasBuiltinWorker
+        ? 'partial'
+        : 'db-only'
+      : hasAcpWorker
+        ? 'partial'
+        : 'full';
     return {
       status: 'ok',
-      fidelity: 'full',
+      fidelity,
+      missingTranscripts: [],
       ...state.exportMedia,
       ...(external ? { externalTranscripts: staged } : {}),
     };
   },
 }));
 vi.mock('../../session-share/sessionShareImport', () => ({
-  inspectShareFile: async () => ({
-    draftId: 'draft',
-    encrypted: false,
-    preview: { fidelity: 'full', orcaWorkerCount: state.workers.length, agentKind: 'cc' },
-  }),
+  inspectShareFile: async () => {
+    const sourceRow = state.rows.get('A')?.get('fork');
+    const workerRows = state.workers
+      .map((id) => state.rows.get('A')?.get(id))
+      .filter((row): row is Record<string, unknown> => Boolean(row));
+    const agentKind = (sourceRow?.agentKind as 'cc' | 'codex' | 'pi' | 'acp') ?? 'cc';
+    const acpWorkers = workerRows.filter((row) => row.agentKind === 'acp');
+    const hasAcpWorker = acpWorkers.length > 0;
+    const hasBuiltinWorker = workerRows.some((row) => row.agentKind !== 'acp');
+    const fidelity =
+      agentKind === 'acp'
+        ? hasBuiltinWorker
+          ? 'partial'
+          : 'db-only'
+        : hasAcpWorker
+          ? 'partial'
+          : 'full';
+    return {
+      draftId: 'draft',
+      encrypted: false,
+      preview: {
+        fidelity,
+        orcaWorkerCount: state.workers.length,
+        agentKind,
+        ...(agentKind === 'acp'
+          ? { providerId: (sourceRow?.providerId as string | null) ?? null }
+          : {}),
+        ...(hasAcpWorker
+          ? {
+              hasAcpWorker: true,
+              acpWorkerProviderIds: acpWorkers.map(
+                (row) => (row.providerId as string | null) ?? null,
+              ),
+            }
+          : {}),
+      },
+    };
+  },
   cancelShareDraft() {},
   commitShareImport: async (
     _opts: unknown,
@@ -262,6 +331,21 @@ vi.mock('../../session-share/sessionShareImport', () => ({
         path: transcriptPath,
         content: await fs.readFile(file, 'utf8'),
       });
+    const sourceRow = state.rows.get('A')?.get('fork');
+    const workerRows = state.workers
+      .map((id) => state.rows.get('A')?.get(id))
+      .filter((row): row is Record<string, unknown> => Boolean(row));
+    const agentKind = (sourceRow?.agentKind as 'cc' | 'codex' | 'pi' | 'acp') ?? 'cc';
+    const hasAcpWorker = workerRows.some((row) => row.agentKind === 'acp');
+    const hasBuiltinWorker = workerRows.some((row) => row.agentKind !== 'acp');
+    const fidelity =
+      agentKind === 'acp'
+        ? hasBuiltinWorker
+          ? 'partial'
+          : 'db-only'
+        : hasAcpWorker
+          ? 'partial'
+          : 'full';
     const { sessionId, workingDir } = scope.migration;
     state.rows.get(device())!.set(sessionId, {
       id: sessionId,
@@ -269,17 +353,20 @@ vi.mock('../../session-share/sessionShareImport', () => ({
       remoteHostId: null,
       status: 'active',
       source: 'shared',
-      agentKind: 'cc',
+      agentKind,
+      providerId: (sourceRow?.providerId as string | null) ?? null,
       orcaRole: null,
     });
     for (const worker of scope.migration.workers ?? []) {
+      const sourceWorker = state.rows.get('A')?.get(worker.sourceSessionId);
       state.rows.get(device())!.set(worker.sessionId, {
         id: worker.sessionId,
         workingDir: worker.workingDir,
         remoteHostId: null,
         status: 'active',
         source: 'shared',
-        agentKind: 'cc',
+        agentKind: (sourceWorker?.agentKind as string) ?? 'cc',
+        providerId: (sourceWorker?.providerId as string | null) ?? null,
         orcaRole: 'worker',
       });
     }
@@ -287,7 +374,7 @@ vi.mock('../../session-share/sessionShareImport', () => ({
       state.importsFail = false;
       throw new Error('DB committed but acknowledgement lost');
     }
-    return { fidelity: 'full' };
+    return { fidelity };
   },
 }));
 vi.mock('../workspace', async (original) => ({
@@ -348,6 +435,7 @@ describe('resumable cross-computer copy', () => {
     state.rows.clear();
     state.dbs.clear();
     state.files.clear();
+    state.uploadDestinations = [];
     state.imports.mockClear();
     state.created.mockReset();
     state.snapshot.mockClear();
@@ -363,7 +451,10 @@ describe('resumable cross-computer copy', () => {
     state.sharingLatest = [];
     state.workers = [];
     state.estimateLimits = [];
+    state.oldTargetNoAcp = false;
+    state.acpHarnesses.clear();
     state.timeoutAction = '';
+    state.offlineError = null;
     state.exclusions = [];
     state.transcript = '';
     state.transcriptCount = 1;
@@ -432,6 +523,19 @@ describe('resumable cross-computer copy', () => {
     return separate;
   }
 
+  // V2 encryption rule: a locally started migration has no inbound invoke
+  // context. Peer-file refusal must still pass the known destination into the
+  // real media routing context, rather than upload plaintext or fail strict mode.
+  // Existing tests stubbed uploadLocalFile without observing its destination.
+  // Unit tier: real service/AsyncLocalStorage, memory transfer and temporary files.
+  it('binds every outbound fallback upload to the migration destination', async () => {
+    await start();
+    expect((await settled()).stage).toBe('complete');
+    expect(state.uploadDestinations.length).toBeGreaterThan(0);
+    expect(new Set(state.uploadDestinations)).toEqual(new Set(['B']));
+    expect(agentNetMediaDestination()).toBeUndefined();
+  });
+
   it('flushes journal files using writable handles without truncation', async () => {
     const open = vi.spyOn(syncFs, 'openSync');
     const flush = syncFs.fsyncSync.bind(syncFs);
@@ -460,7 +564,8 @@ describe('resumable cross-computer copy', () => {
     vi.mocked(moveSessionProjectFromHost).mockResolvedValueOnce({
       ok: true,
       sessionId: 'fork',
-      workingDir: '/another',
+      workingDir: '/repo/.cindy-worktrees/task',
+      projectDir: '/another',
       workspaceKind: 'project',
     });
     const result = await state.context.run({ device: 'A', peer: 'B' }, () =>
@@ -474,7 +579,7 @@ describe('resumable cross-computer copy', () => {
     );
     expect(result).toMatchObject({
       deviceId: 'A',
-      projectMove: { sessionId: 'fork', workingDir: '/another', workspaceKind: 'project' },
+      projectMove: { sessionId: 'fork', workingDir: '/repo/.cindy-worktrees/task', projectDir: '/another', workspaceKind: 'project' },
     });
     expect(state.snapshot).not.toHaveBeenCalled();
     expect(state.imports).not.toHaveBeenCalled();
@@ -638,6 +743,25 @@ describe('resumable cross-computer copy', () => {
       handler({} as never, 'B', { action: 'estimate', sessionId: 'fork' }),
     ).rejects.toThrow('MIGRATION_TIMEOUT');
   });
+  // Unit regression #10537: UI mocks bypassed the real migration IPC catch.
+  // Minimal input: a status read rejected by the SDK gate or desktop transport.
+  it.each(['sdk', 'desktop'])(
+    'preserves the offline reason across migration IPC (%s)',
+    async (kind) => {
+      const { ipcMain } = await import('electron');
+      const { DeviceLinkError } = await import('@cindy/device-link');
+      const handler = vi
+        .mocked(ipcMain.handle)
+        .mock.calls.findLast(([channel]) => channel === TASK_MIGRATION_LOCAL_CHANNEL)![1];
+      state.offlineError =
+        kind === 'sdk'
+          ? new DeviceLinkError('DEVICE_OFFLINE', 'route unavailable')
+          : new Error('[DEVICE_LINK_DEVICE_OFFLINE] route unavailable');
+      await expect(
+        handler({} as never, 'B', { action: 'status', sessionId: 'fork' }),
+      ).rejects.toThrow(kind === 'sdk' ? 'DEVICE_OFFLINE' : 'DEVICE_LINK_DEVICE_OFFLINE');
+    },
+  );
   it('ignores tasks running in other registered worktrees under the copied root', async () => {
     const rows = state.rows.get('A')!;
     const cwd = rows.get('fork')!.workingDir as string;
@@ -937,6 +1061,23 @@ describe('resumable cross-computer copy', () => {
     await start();
     expect(await copiedDir()).toBe(path.join(state.root, 'app 2'));
   });
+  // #7972: real copy entry must name its destination after membership, but copy cwd files.
+  // Existing coverage only exercised legacy worktree inference; unit, isolated host paths.
+  it.each([['products', 'Chosen'], ['app', '.worktrees', 'feature']])(
+    'copies explicit project identity independently of the checkout: %j',
+    async (...segments) => {
+      await moveSource('tmp', 'checkout');
+      const projectDir = path.join(state.root, ...segments);
+      await fs.mkdir(projectDir, { recursive: true });
+      await fs.writeFile(path.join(projectDir, 'draft'), 'project files');
+      state.rows.get('A')!.get('fork')!.projectDir = projectDir;
+      await start();
+      const copied = await copiedDir();
+      expect(copied).toBe(path.join(path.dirname(projectDir), `${path.basename(projectDir)} 2`));
+      expect(state.recentProjects).toEqual([copied]);
+      expect(await fs.readFile(path.join(copied, 'draft'), 'utf8')).toBe('original');
+    },
+  );
   it.each([
     ['parent', ['Code']],
     // E.g. a Windows reserved name such as CON: the parent exists, the folder itself is refused.
@@ -1068,6 +1209,19 @@ describe('resumable cross-computer copy', () => {
     state.rows.get('A')!.get('separate-worker')!.payload = JSON.stringify([{ text: 'pending' }]);
     await expect(start()).rejects.toThrow('MIGRATION_TASK_QUEUED');
     expect(state.exported).not.toHaveBeenCalled();
+  });
+
+  // #9346, unit: Stop metadata is not queued work; unknown data still blocks copying.
+  it('copies an empty stopped task but rejects a message or unknown metadata beside the marker', async () => {
+    const row = state.rows.get('A')!.get('fork')!;
+    const marker = { type: 'orca-report-stop', version: 1 };
+    for (const other of [{ text: 'pending' }, { type: 'unknown' }, { ...marker, clientId: 'input' }]) {
+      row.payload = JSON.stringify([marker, other]);
+      await expect(start()).rejects.toThrow('MIGRATION_TASK_QUEUED');
+    }
+    row.payload = JSON.stringify([marker]);
+    await start();
+    expect((await settled()).stage).toBe('complete');
   });
 
   it.each(['receiving', 'committed', 'imported'])(
@@ -1285,5 +1439,79 @@ describe('resumable cross-computer copy', () => {
     expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
     expect((await settled()).stage).toBe('complete');
     expect(state.imports).toHaveBeenCalledTimes(1);
+  });
+
+  it('migrates an ACP plugin-engine task via DB-only handoff when target has the required plugin', async () => {
+    state.acpHarnesses.set('B', [
+      { key: 'dsh-acp:dsh', availability: { state: 'available' } },
+    ]);
+    state.rows.get('A')!.get('fork')!.agentKind = 'acp';
+    state.rows.get('A')!.get('fork')!.providerId = 'acp-plugin:dsh-acp:dsh~ab12cd34';
+    await start();
+    const done = await settled();
+    expect(done.stage).toBe('complete');
+    expect(state.rows.get('B')!.get(done.targetSessionId!)?.agentKind).toBe('acp');
+  });
+
+  it('rejects migrating an ACP task to an older target whose caps omit acp', async () => {
+    state.acpHarnesses.set('B', [
+      { key: 'dsh-acp:dsh', availability: { state: 'available' } },
+    ]);
+    state.oldTargetNoAcp = true;
+    state.rows.get('A')!.get('fork')!.agentKind = 'acp';
+    state.rows.get('A')!.get('fork')!.providerId = 'acp-plugin:dsh-acp:dsh';
+    try {
+      await expect(start()).rejects.toThrow('MIGRATION_TARGET_MODEL_UNAVAILABLE');
+      expect(state.imports).not.toHaveBeenCalled();
+    } finally {
+      state.oldTargetNoAcp = false;
+    }
+  });
+
+  // Review (#13294, Greptile P1): target caps must not advertise 'acp' without enabled harnesses,
+  // and migration must verify each ACP member's concrete providerId (lead + Orca Workers) on both
+  // start and receive before reporting success.
+  it('rejects migrating an ACP lead or ACP worker when the target lacks or disables that specific plugin', async () => {
+    // 1. Target has no ACP plugins at all: caps omits 'acp' and start rejects.
+    state.rows.get('A')!.get('fork')!.agentKind = 'acp';
+    state.rows.get('A')!.get('fork')!.providerId = 'acp-plugin:dsh-acp:dsh';
+    const emptyCaps = await state.context.run({ device: 'B' }, () =>
+      requestTaskMigration({ action: 'caps' }),
+    );
+    expect(emptyCaps.agents).not.toContain('acp');
+    expect(emptyCaps.acpProviders).toEqual([]);
+    await expect(start()).rejects.toThrow('MIGRATION_TARGET_MODEL_UNAVAILABLE');
+    expect(state.imports).not.toHaveBeenCalled();
+
+    // 2. Target has a different plugin (and the required plugin is unavailable): start rejects.
+    state.acpHarnesses.set('B', [
+      { key: 'agy:agy', availability: { state: 'available' } },
+      { key: 'dsh-acp:dsh', availability: { state: 'unavailable' } },
+    ]);
+    await expect(start()).rejects.toThrow('MIGRATION_TARGET_MODEL_UNAVAILABLE');
+    expect(state.imports).not.toHaveBeenCalled();
+
+    // 3. Orca team with CC lead + ACP worker whose plugin is missing on target: start rejects.
+    state.rows.get('A')!.get('fork')!.agentKind = 'cc';
+    state.rows.get('A')!.get('fork')!.providerId = null;
+    await team();
+    state.rows.get('A')!.get('shared-worker')!.agentKind = 'acp';
+    state.rows.get('A')!.get('shared-worker')!.providerId = 'acp-plugin:dsh-acp:dsh';
+    await expect(start()).rejects.toThrow('MIGRATION_TARGET_MODEL_UNAVAILABLE');
+    expect(state.imports).not.toHaveBeenCalled();
+
+    // 4. Target plugin disappears after start() caps check before receive() commits: fails cleanly.
+    state.acpHarnesses.set('B', [
+      { key: 'dsh-acp:dsh', availability: { state: 'available' } },
+    ]);
+    state.snapshot.mockImplementationOnce(() => {
+      state.acpHarnesses.set('B', []);
+    });
+    await start();
+    expect(await settled()).toMatchObject({
+      stage: 'transferring',
+      error: 'MIGRATION_TARGET_MODEL_UNAVAILABLE',
+    });
+    expect(state.imports).not.toHaveBeenCalled();
   });
 });

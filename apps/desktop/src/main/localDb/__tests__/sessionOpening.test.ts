@@ -45,6 +45,14 @@ beforeEach(() => {
     return { ...request, model: route.model, providerId: route.providerId, effort: route.effort ?? '' };
   });
 });
+// Unit: the opening boundary must persist membership independently of cwd.
+it('persists the selected project while initializing Git only in the execution directory', async () => {
+  const opened = await openSession({ id: 'task', body: { ...body,
+    workspaceKind: 'project', projectDir: '/product', workingDir: '/temporary/checkout' } });
+  expect(h.values).toHaveBeenCalledWith(expect.objectContaining({ projectDir: '/product', workingDir: '/temporary/checkout' }));
+  expect(opened.row.projectDir).toBe('/product');
+  expect(h.bootstrap).toHaveBeenCalledWith(expect.objectContaining({ workingDir: '/temporary/checkout' }));
+});
 it.each(['desktop', 'plugin'] as const)('opens the same normal Session for %s without inventing model/permission defaults', async source => {
   const opened = await openSession({ id: 'session', body, source });
   expect(opened.row).toMatchObject({ id: 'session', model: 'model', providerId: 'connected', agentKind: 'codex',

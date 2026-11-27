@@ -46,53 +46,45 @@
     }
   },
   "contextWindowSwitch": {
-    "title": "This model can't fit the current conversation",
-    "remoteTitle": "This remote model switch isn't supported",
-    "description": "This conversation already uses {{used}}, more than the new model can hold ({{total}}, about {{pct}}%). If you switch, Cindy will make a short summary and continue. Your chat history stays; it just won't all be passed through verbatim.",
+    "condensedToast": "Earlier parts of the conversation will be condensed for the new model. Your full conversation history stays available.",
+    "remoteTitle": "This remote task can't switch models safely",
     "remoteDescription": "This remote task already uses {{used}} / {{total}} of the smaller model's context (about {{pct}}%), so Cindy cannot switch safely. Keep the current model or start a new task before choosing this model.",
-    "cancel": "Keep this model",
-    "confirm": "Switch and continue"
+    "cancel": "Keep this model"
   },
   "switchOutcome": {
     "applied": "Model provider switch is now in effect.",
-    "failed": "Model provider switch failed. Choose the model again."
+    "failed": "Model provider switch failed. Choose the model again.",
+    "previousSettingsRetained": "The switch didn’t complete. The task will keep using its previous settings."
   },
   "agentSwitch": {
-    "browseAccessibility": "Browse {{agent}} models",
-    "confirmTitle": "Switch to {{agent}}?",
-    "confirmMessage": "When you send the next message, {{appName}} hands the current session over to {{agent}}. The two agents may interpret context and tools differently, so confirm before choosing the target model.",
-    "cancel": "Cancel",
-    "confirm": "Continue"
-  },
-  "agentRelocation": {
-    "titleOther": "Run the Agent on “{{device}}”?",
-    "titleHost": "Run the Agent on “{{host}}” again?",
-    "titleHostUnnamed": "Run the Agent on the session’s computer again?",
-    "message": "The conversation record on the other computer can’t be moved over, so it continues from a handoff summary. Thinking and similar details may not carry over completely. Takes effect when you send the next message.",
-    "confirm": "Switch computer",
-    "cancel": "Keep as is"
+    "browseAccessibility": "Browse {{agent}} models"
   },
   "unified": {
-      "favoriteConfiguration": "Favorite This Configuration",
-      "savedConfiguration": "Favorited · Tap to Remove",
-      "currentConfiguration": "Current Configuration",
-      "usingRecommended": "Using Recommended Settings",
-      "customized": "Customized",
-      "resetScopeHint": "Restore Recommended resets the harness, reasoning effort, and Fast. Existing favorites stay unchanged.",
-      "saveFavoriteHint": "Save these settings for quick access from Favorites.",
-      "removeFavoriteHint": "Removing the shortcut leaves your current settings unchanged.",
-      "editFavorite": "Edit Original Favorite",
-      "editFavoriteHint": "Changes apply to this favorite only after saving. The configuration in use stays unchanged.",
-      "saveFavorite": "Save Favorite",
-      "cancelEdit": "Cancel Editing",
-      "originalFavoriteKept": "Settings updated. The original favorite is unchanged.",
-      "parametersSaved": "Settings saved.",
-      "restoredHint": "Recommended settings restored. Existing favorites are unchanged.",
-      "favoriteRemoved": "Favorite removed. Current settings are unchanged.",
-      "favoriteSaved": "Configuration added to Favorites.",
-      "favoriteUpdated": "Favorite updated. The configuration in use is unchanged.",
-      "favoriteChanged": "This favorite was changed or removed. Cancel editing and reopen it to try again.",
-      "favoriteExists": "This configuration is already in Favorites. Cancel editing to use it.",
+    "remoteCopyUnavailableOn": "“{{device}}” can’t use {{provider}} right now.",
+    "remoteCopyUnavailableOnTaskComputer": "The task’s computer can’t use {{provider}} right now.",
+    "accountCount_one": "{{count}} account",
+    "accountCount_other": "{{count}} accounts",
+    "accountFallback": "Account {{index}}",
+    "favoriteConfiguration": "Favorite This Configuration",
+    "savedConfiguration": "Favorited · Tap to Remove",
+    "currentConfiguration": "Current Configuration",
+    "usingRecommended": "Using Recommended Settings",
+    "customized": "Customized",
+    "resetScopeHint": "Restore Recommended resets the harness, reasoning effort, and Fast. Existing favorites stay unchanged.",
+    "saveFavoriteHint": "Save these settings for quick access from Favorites.",
+    "removeFavoriteHint": "Removing the shortcut leaves your current settings unchanged.",
+    "editFavorite": "Edit Original Favorite",
+    "editFavoriteHint": "Changes apply to this favorite only after saving. The configuration in use stays unchanged.",
+    "saveFavorite": "Save Favorite",
+    "cancelEdit": "Cancel Editing",
+    "originalFavoriteKept": "Settings updated. The original favorite is unchanged.",
+    "parametersSaved": "Settings saved.",
+    "restoredHint": "Recommended settings restored. Existing favorites are unchanged.",
+    "favoriteRemoved": "Favorite removed. Current settings are unchanged.",
+    "favoriteSaved": "Configuration added to Favorites.",
+    "favoriteUpdated": "Favorite updated. The configuration in use is unchanged.",
+    "favoriteChanged": "This favorite was changed or removed. Cancel editing and reopen it to try again.",
+    "favoriteExists": "This configuration is already in Favorites. Cancel editing to use it.",
     "favorites": "Favorites",
     "all": "All models",
     "recommended": "Recommended",
@@ -100,11 +92,11 @@
     "remoteProvider": "{{provider}} · {{device}}",
     "remoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
     "providerGroup": "{{provider}} · {{group}}",
-    "groupBadge_one": "Provider Group · {{count}} computer",
-    "groupBadge_other": "Provider Group · {{count}} computers",
+    "groupBadge_one": "Computer Group · {{count}} computer",
+    "groupBadge_other": "Computer Group · {{count}} computers",
     "harness": "Harness",
     "restoreRecommended": "Restore recommended",
-    "saveFailed": "Could not save. Please try again.",
+    "saveFailed": "Could not save. Try again.",
     "configure": "Configure",
     "syncFailed": "Favorites could not sync. Reopen the picker to retry; the remote computer may need an update.",
     "timeUnit": {
@@ -112,6 +104,67 @@
       "hour": "h",
       "minute": "m",
       "second": "s"
+    },
+    "quotaAverage": "Average remaining {{percent}}%",
+    "quotaUpdating": "Quota updating",
+    "quotaResetSoon": "Resets soon",
+    "quotaResetIn": "Resets in {{duration}}",
+    "quotaAverageHint": "Weekly quota · Equal weight per account",
+    "quotaResetHint": "At the current pace, quota may remain at reset: yellow within 24 hours, red within 6 hours."
+  },
+  "modelGroups": {
+    "title": "Model groups",
+    "sourceCount_one": "{{count}} source",
+    "sourceCount_other": "{{count}} sources",
+    "strategy": {
+      "expiring": "Expiring first",
+      "order": "In order",
+      "rotate": "Rotate",
+      "cheapest": "Cheapest",
+      "drain": "Use until empty",
+      "headroom": "Most quota left",
+      "weighted": "By weight"
+    },
+    "sourceOnDevice": "{{provider}} · {{device}}",
+    "why": {
+      "expiringQuota": "{{left}}% of its quota is left and resets {{reset}}, so it goes first",
+      "expiring": "First by quota",
+      "order": "The first available source",
+      "rotate": "Picked by rotation",
+      "only": "The only one available now",
+      "soonest": "Every source is out of quota; this one recovers first",
+      "soonestUntil": "Every source is out of quota; this one recovers first ({{reset}})",
+      "cheapest": "Lowest listed price",
+      "cheapestFree": "Subscription quota left, no extra cost",
+      "drain": "Still using it until its quota runs out",
+      "drainNext": "The previous source ran out or became unavailable, so it moved to this one",
+      "headroom": "Most quota left",
+      "headroomQuota": "{{left}}% of its quota is left, more than any other source",
+      "weighted": "Its turn by weight",
+      "exceptionImage": "The message has images, so only sources that can see images were considered",
+      "exceptionImageFallback": "The message has images, but no source can see images, so it picked as usual",
+      "exceptionHours": "During this time, it uses “{{name}}” instead",
+      "separator": "; "
+    },
+    "picker": {
+      "switched": "“{{name}}” switched this task to {{model}}",
+      "switchUnavailable": "“{{name}}” has no source this task can use right now. The model was not changed.",
+      "chooseUnavailable": "“{{name}}” has no source that can be used right now, so it was not selected.",
+      "managedBy": "Managed by “{{name}}”",
+      "detach": "Detach",
+      "detached": "Detached from smart routing. Keeping the current model."
+    },
+    "anotherDevice": "Another computer",
+    "sourceRouteTitle_one": "{{name}} · Smart Route ({{count}} source)",
+    "sourceRouteTitle_other": "{{name}} · Smart Route ({{count}} sources)",
+    "switchOffer": {
+      "button": "Switch to {{model}} & continue"
     }
+  },
+  "pluginEngines": {
+    "genericName": "Plugin engine",
+    "defaultModel": "Default model",
+    "unavailable": "{{engine}} is unavailable",
+    "unavailableWithHint": "{{engine}} is unavailable: {{hint}}"
   }
 }

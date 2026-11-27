@@ -1,12 +1,13 @@
 import type { DbClient } from '../localDb/client/DbClient.js';
 import { readPriorUserRoundCost } from '../localDb/ipc/messages.js';
 import {
-  addCompatibleRegionalMoney,
+  userRoundCostProjection,
   asValueEstimateMoney,
   legacyUsdMoney,
   normalizeRegionalMoney,
 } from '../../shared/regionalMoney.js';
 import type { MessageTurnCostPayload } from '../../shared/turnCostPayload.js';
+import { buildTurnUsageDetails, normalizeTurnUsageDetails } from '../../shared/turnUsageDetails.js';
 
 const realUser = `m.role = 'user' AND CASE WHEN json_valid(m.agent_meta)
   THEN json_extract(m.agent_meta, '$.autoResume') END IS NOT 1`;
@@ -70,15 +71,12 @@ export async function refreshMediaUserTurnCost(
       ? legacyUsdMoney(meta.turnCostUsd)
       : null);
   const current = raw && meta.turnCostIsEstimate === true ? asValueEstimateMoney(raw) : raw;
-  const money = addCompatibleRegionalMoney(
-    [...(prior.money ? [prior.money] : []), ...(current ? [current] : [])],
-    current?.currency,
-  );
-  if (!money) return null;
-  const isEstimate =
-    (prior.money?.currency === money.currency && prior.hasEstimatedValue) ||
-    (current?.currency === money.currency && current.kind === 'value-estimate');
+  const round = userRoundCostProjection(prior, current, meta.turnUsageDetails);
+  if (!round) return null;
+  const { money, isEstimate, userTurnAmounts } = round;
   const patch = {
+    turnUsageDetails: buildTurnUsageDetails({ ...normalizeTurnUsageDetails(meta.turnUsageDetails),
+      additionalCosts: prior.additionalCosts, userTurnAmounts }),
     userTurnCost: money,
     userTurnCostIsEstimate: isEstimate,
     // JSON merge patch removes a stale USD compatibility projection for CNY.
@@ -93,6 +91,7 @@ export async function refreshMediaUserTurnCost(
   return {
     sessionId,
     clientId: row.clientId,
+    ...(patch.turnUsageDetails ? { turnUsageDetails: patch.turnUsageDetails } : {}),
     userTurnMoney: money,
     userTurnCostIsEstimate: isEstimate,
     ...(money.currency === 'USD' ? { userTurnCostUsd: money.amount } : {}),

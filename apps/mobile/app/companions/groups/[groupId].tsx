@@ -1,6 +1,7 @@
 import { useLocalSearchParams } from 'expo-router';
 import { useAuth } from '@/auth/AuthContext';
 import { BotGroupChatScreen } from '@/session/BotGroupChatScreen';
+import { BotGroupPaneLayout } from '@/session/BotGroupPaneLayout';
 
 function firstParam(value: string | string[] | undefined): string {
   return Array.isArray(value) ? value[0] ?? '' : value ?? '';
@@ -16,6 +17,6 @@ export default function BotGroupChatRoute() {
   const { accountGeneration } = useAuth();
   const groupId = firstParam(params.groupId);
   const deviceId = firstParam(params.deviceId);
-  return <BotGroupChatScreen key={`${accountGeneration}:${deviceId}:${groupId}:${firstParam(params.threadRootId)}`} groupId={groupId} deviceId={deviceId}
-    threadRootId={firstParam(params.threadRootId) || undefined} deviceName={firstParam(params.deviceName)} messageId={firstParam(params.messageId)} notificationResponse={firstParam(params.notificationResponse)} />;
+  return <BotGroupPaneLayout><BotGroupChatScreen key={`${accountGeneration}:${deviceId}:${groupId}:${firstParam(params.threadRootId)}`} groupId={groupId} deviceId={deviceId}
+    threadRootId={firstParam(params.threadRootId) || undefined} deviceName={firstParam(params.deviceName)} messageId={firstParam(params.messageId)} notificationResponse={firstParam(params.notificationResponse)} /></BotGroupPaneLayout>;
 }

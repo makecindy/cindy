@@ -44,8 +44,11 @@ export interface PluginDetailViewProps {
   previewLabel?: string;
   settingsContent?: ReactNode;
   managementNotice?: PluginNoticeProps;
+  uiApprovalNotice?: PluginNoticeProps;
   onEnabledChange(enabled: boolean): void;
   onOpen(surface: PluginPageSurface): void;
+  /** Opens the detailed introduction; omitted when the Host declared none. */
+  onOpenReadme?(): void;
   onNewTask(): void;
   onChooseTask(): void;
   onResolveStatus(): void;
@@ -147,6 +150,7 @@ export function PluginDetailView(p: PluginDetailViewProps) {
             }
           />
         ) : null}
+        {p.uiApprovalNotice ? <PluginNotice {...p.uiApprovalNotice} /> : null}
         {p.managementNotice ? <PluginNotice {...p.managementNotice} /> : null}
         {notices.loading ? (
           <ActivityIndicator
@@ -188,6 +192,14 @@ export function PluginDetailView(p: PluginDetailViewProps) {
             ) : null}
           </View>
         ) : null}
+        {!p.settingsOpen && model.readme && p.onOpenReadme
+          ? row(
+              t("plugins.detail.readme"),
+              p.onOpenReadme,
+              !p.online,
+              "plugins.readme",
+            )
+          : null}
         {p.settingsContent ? (
           <View style={styles.information}>
             <Text style={styles.sectionHeading}>{t("plugins.settings")}</Text>

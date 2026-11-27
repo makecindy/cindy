@@ -879,3 +879,12 @@ describe('installed Plugin Connection audience resolver', () => {
     expect(isConnectionSecretReady(['service-a.x.test'], null)).toBe(false);
   });
 });
+
+
+it.each(['manual', 'agent-forge'] as const)('never signs enterprise OIDC for a local development copy (%s)', origin => {
+  const resolver = loadConnectionAudienceResolver({
+    ...resolverOptions(manifest, null), readInstallOrigin: () => origin,
+    readApprovedPackageSha256: () => 'a'.repeat(64), readInstallNamespace: () => 'local',
+  });
+  expect(resolver.resolve('_ns__local__plugin-a', identity)).toBeNull();
+});

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { InlineQueueSection, type InlineQueueSectionProps } from '@/session/InlineQueueSection';
 import type { InputProjection } from '@/session/types';
+import { i18n } from '@/i18n';
 
 vi.mock('react-native', async () => {
   const { createElement } = await import('react');
@@ -19,7 +20,7 @@ vi.mock('@/components/AppText', async () => ({ Text: (await import('react-native
 vi.mock('lucide-react-native', () => ({ Pause: () => null, Play: () => null, Split: () => null, CircleAlert: () => null, X: () => null, ChevronRight: () => null, ChevronDown: () => null }));
 vi.mock('react-i18next', async (importOriginal) => ({
   ...await importOriginal<typeof import('react-i18next')>(),
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({ i18n: { language: 'en' }, t: (key: string, opts?: { seconds?: number }) => opts?.seconds === undefined ? key : key + ' ' + opts.seconds }),
 }));
 vi.mock('@/theme', async () => {
   const tokens = await import('@/theme/tokens');
@@ -88,6 +89,19 @@ it('continues a settled error without replaying its old scheduled input', async 
   expect(retry).toHaveBeenCalledOnce();
   expect(onContinueAfterError).toHaveBeenCalledOnce();
 });
+
+it('explains a legacy compact failure without its discarded details and retains continuation', async () => {
+  const onContinueAfterError = vi.fn();
+  await show({
+    projection: { ...projection, error: 'Error running remote compact task', errorReason: 'context-overflow', errorRetryText: null },
+    onContinueAfterError,
+  });
+  expect(host.textContent).toContain(i18n.t('session.tail.remoteCompactEncryptedContent'));
+  expect(button('retry').disabled).toBe(false);
+  await act(async () => button('retry').click());
+  expect(onContinueAfterError).toHaveBeenCalledOnce();
+  expect(retry).not.toHaveBeenCalled();
+});
 // #7119 review: a host-confirmed scheduler failure without a retry token must
 // obey the existing history-error exclusions. Unit: render the real component;
 // previously these three minimal errors exposed a continuation action.
@@ -127,4 +141,59 @@ it('wires queue controls to the session availability gate', () => {
   const source = readFileSync('app/sessions/[sessionId].tsx', 'utf8');
   expect(source).toContain('readOnlyReason={queueAvailabilityReason}');
   expect(source).not.toContain('errorRecoveryReadOnlyReason');
+});
+
+it('counts down the executing host’s Gemini retry and offers cancellation', async () => {
+  vi.useFakeTimers();
+  try {
+    const error = JSON.stringify({ error: { code: 429, status: 'RESOURCE_EXHAUSTED',
+      message: 'Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_paid_tier_input_token_count. Generate content input tokens per minute limit exceeded. Please retry in 56.6s.' } });
+    const props = { projection: { ...projection, error, usageLimitWait: { resumeAt: Date.now() + 56_599 } }, onCancelUsageLimitWait: vi.fn() };
+    await show(props);
+    expect(host.textContent).toContain(i18n.t('chat.geminiRateLimit.title'));
+    expect(host.textContent).toContain('chat.geminiRateLimit.retryIn 57');
+    await act(async () => vi.advanceTimersByTime(1000));
+    expect(host.textContent).toContain('chat.geminiRateLimit.retryIn 56');
+    await act(async () => button('cancelUsageLimitWait').click());
+    expect(props.onCancelUsageLimitWait).toHaveBeenCalledOnce();
+    await show({ ...props, projection: { ...props.projection, usageLimitWait: null, errorReason: 'gemini-input-retry-exhausted' } });
+    expect(host.textContent).toContain(i18n.t('chat.geminiRateLimit.exhausted'));
+    expect(host.textContent).not.toContain('chat.geminiRateLimit.retryIn');
+  } finally { vi.useRealTimers(); }
+});
+
+it('shows the steer-unsupported notice only while running with queued items and not paused or aborting', async () => {
+  const base = {
+    sessionId: 's1',
+    pendingQueue: [{ clientId: 'q1' }],
+    steerUnsupported: true,
+    steeringQueueClientIds: [],
+    queuePaused: false,
+    queueExpanded: false,
+    queueInteractionLocks: [],
+    queueEditLocks: [],
+    queueAbortPending: false,
+    error: null,
+    errorRetryText: null,
+    credentialSwitchWait: null,
+  } as unknown as InputProjection;
+  const notice = () => host.querySelector('[data-testid="queue.inline.steerUnsupportedNotice"]');
+
+  await show({ projection: base, isRunning: true });
+  expect(notice()?.textContent).toBe('message.queue.steerUnsupportedNotice');
+
+  await show({ projection: base, isRunning: false });
+  expect(notice()).toBeNull();
+
+  await show({ projection: { ...base, pendingQueue: [] }, isRunning: true });
+  expect(notice()).toBeNull();
+
+  await show({ projection: { ...base, queuePaused: true }, isRunning: true });
+  expect(notice()).toBeNull();
+
+  await show({ projection: { ...base, queueAbortPending: true }, isRunning: true });
+  expect(notice()).toBeNull();
+
+  await show({ projection: { ...base, steerUnsupported: false }, isRunning: true });
+  expect(notice()).toBeNull();
 });

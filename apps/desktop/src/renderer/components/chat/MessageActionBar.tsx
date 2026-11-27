@@ -49,9 +49,11 @@ import { cn } from '@/lib/utils';
 import { MENU_ITEM_CLASS } from '@/features/cc-agent/sidebar/menuStyles';
 import { CHAT_COLOR_TRANSITION_CLASS, CHAT_ICON_BUTTON_CLASS } from './chatChrome';
 import { MessageReadAloudContext } from './MessageReadAloudContext';
+import { PluginUiSlot, PluginUiMessageMenuItem, runPluginUiEntry, type PluginUiEntry, type PluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 import { ChatReplyIcon } from './ChatReplyIcon';
 import { Spinner } from '@/components/ui/spinner';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import type { ForkAtMessageRunOptions } from './useForkAtMessage';
+import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tip, Tooltip } from '@/components/ui/tooltip';
 import {
   DropdownMenu,
@@ -66,6 +68,10 @@ import { formatAbsolute, useRelativeTime } from '@/hooks/useRelativeTime';
 import { SHARE_EXCLUDE_ATTR } from '@/lib/shareConversationImage';
 import { formatCompactTokens, formatTurnCostMoney } from '@/lib/usageFormat';
 import { buildTurnUsageTooltipLines } from '@/lib/turnUsageTooltip';
+import { messageCostParts } from '@cindy/maker-shared/usage-cost-details';
+import { UsageCostPopover } from '@/components/status/UsageCostPopover';
+import { TurnGenerationTrace } from '@/components/status/TurnGenerationTrace';
+import { traceHasChart } from '@cindy/maker-shared/usage-format';
 import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
 import {
   legacyUsdMoney,
@@ -73,6 +79,9 @@ import {
 } from '../../../shared/regionalMoney';
 
 interface MessageActionBarProps {
+  pluginUi: PluginUiMessageCandidates;
+  sessionId?: string;
+  clientId?: string;
   createdAt?: string;
   /** Plaintext that will hit the clipboard on copy click. */
   copyText: string;
@@ -94,13 +103,15 @@ interface MessageActionBarProps {
    * 打开它的按钮上，菜单项做不到。
    */
   compact?: boolean;
+  /** Private companion messages: persistent footer; topic actions stay in More. */
+  companionFooter?: boolean;
   /** When provided, render a Fork button (user messages fork *before* the
    *  question; assistant messages fork *through* the reply's turn — the
    *  parent decides whether to wire it). Returning a promise keeps the
    *  loading state alive until resolve/reject. The bar dims to opacity 0.6 +
    *  pointer-events:none for the duration; the Fork icon is replaced with a
    *  spinning Loader2. */
-  onFork?: () => Promise<void>;
+  onFork?: (options?: ForkAtMessageRunOptions) => Promise<void>;
   /** Insert this message's anchored conversation link into the active composer. */
   onAddToChat?: () => void;
   /** 进入「分享为图片」选择模式并预选本条。放在复制按钮右边(产品指定位置)。 */
@@ -112,7 +123,7 @@ interface MessageActionBarProps {
   /** Extra More-menu items owned by the caller, listed before link copy. */
   menuActions?: Array<{ key: string; label: string; icon: ReactNode; onSelect: () => void; disabled?: boolean }>;
   /** The caller owns reaction persistence; the toolbar owns its trigger and placement. */
-  reactionAction?: { label: string; open: boolean; onOpenChange: (open: boolean) => void; disabled?: boolean; content: ReactNode };
+  reactionAction?: { label: string; open: boolean; onOpenChange: (open: boolean) => void; onCloseAutoFocus?: (event: Event) => void; disabled?: boolean; content: ReactNode };
   /** When provided, the More menu exposes single-message deletion. The
    *  parent owns confirmation + persistence; the promise keeps the action
    *  bar disabled until the flow resolves. */
@@ -120,6 +131,9 @@ interface MessageActionBarProps {
   /** When provided, render an Edit (Pencil) button (last user message only).
    *  Click is fire-and-forget — the parent owns the inline edit lifecycle. */
   onEdit?: () => void;
+  /** Move Edit from the bar into the More menu (the task is running: editing
+   *  does not stop it, and the visible button returns once it stops). */
+  editInMenu?: boolean;
   /** When provided, render a Rewind (Undo2) button (user messages only).
    *  Click is fire-and-forget — the parent owns the dialog lifecycle and
    *  signals the loading state via `rewindInFlight`. */
@@ -156,6 +170,7 @@ const actionIconClass = cn(
 );
 
 export function MessageActionBar({
+  pluginUi,
   createdAt,
   copyText,
   copyLinkText,
@@ -164,6 +179,7 @@ export function MessageActionBar({
   simplifiedBotConversation = false,
   readAloudMessage,
   compact = false,
+  companionFooter = false,
   onFork,
   onAddToChat,
   onShareAsImage,
@@ -173,6 +189,7 @@ export function MessageActionBar({
   reactionAction,
   onDelete,
   onEdit,
+  editInMenu = false,
   onRewind,
   rewindInFlight = false,
   turnMoney,
@@ -182,12 +199,22 @@ export function MessageActionBar({
   userTurnCostUsd,
   userTurnCostIsEstimate = false,
   turnUsageDetails,
+  sessionId,
+  clientId,
 }: MessageActionBarProps) {
   const { t } = useTranslation();
+  const reactionTrigger = useRef<HTMLButtonElement>(null);
+  const pointerOpenedReaction = useRef(false);
+  const [reactionAnchor, setReactionAnchor] = useState<Element | null>(null);
   const readAloud = useContext(MessageReadAloudContext);
+  const pluginMenuEntries = align === 'right' ? pluginUi.userMenu : pluginUi.assistantMenu;
   const [copied, setCopied] = useState(false);
   const [forking, setForking] = useState(false);
-  const [deleting, setDeleting] = useState(false);
+  // 用户确认开启新任务后，到创建结束前提示与操作栏常驻，不随鼠标移开消失；
+  // 确认框打开期间仍按普通 hover 驱动，避免提示压在确认框背后。
+  const [forkConfirmed, setForkConfirmed] = useState(false);
+  const [forkTipHovered, setForkTipHovered] = useState(false);
+  const [menuActionPending, setMenuActionPending] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   // Radix restores focus to the trigger when a menu closes. Programmatic
   // focus restoration is treated as `:focus-visible` by Chromium even when
@@ -197,8 +224,8 @@ export function MessageActionBar({
   const menuInteractionFromPointerRef = useRef(false);
   // Fork has its own visible button. Menu-owned actions still dim and block
   // the whole bar; Fork keeps the More trigger available while it runs.
-  const inFlight = forking || deleting || rewindInFlight;
-  const moreInFlight = deleting || rewindInFlight;
+  const inFlight = forking || menuActionPending || rewindInFlight;
+  const moreInFlight = menuActionPending || rewindInFlight;
   // `visible` is the actual opacity driver. It tracks `hovered` with a
   // trailing debounce so the bar fades out smoothly (CSS handles the
   // opacity interpolation from current value, not from 1).
@@ -263,13 +290,15 @@ export function MessageActionBar({
       if (!onFork || forking) return;
       setForking(true);
       try {
-        await onFork();
+        await onFork({ onConfirmed: () => setForkConfirmed(true) });
       } catch {
         // useForkAtMessage already maps the error to a user-facing toast.
       } finally {
         // Reset regardless of outcome — caller toasts on failure, and on
         // success we usually navigate away anyway so unmount handles it.
         setForking(false);
+        setForkConfirmed(false);
+        setForkTipHovered(false);
       }
     },
     [onFork, forking],
@@ -298,16 +327,24 @@ export function MessageActionBar({
   }, [copyText, t]);
 
   const handleDelete = useCallback(async () => {
-    if (!onDelete || deleting) return;
-    setDeleting(true);
+    if (!onDelete || menuActionPending) return;
+    setMenuActionPending(true);
     try {
       await onDelete();
     } catch {
       // useDeleteMessage already maps persistence failures to a user-facing toast.
     } finally {
-      setDeleting(false);
+      setMenuActionPending(false);
     }
-  }, [deleting, onDelete]);
+  }, [menuActionPending, onDelete]);
+
+  const handlePluginMenuAction = async (entry: PluginUiEntry) => {
+    if (inFlight) return;
+    setMenuActionPending(true);
+    try { await runPluginUiEntry(entry, sessionId ?? null); }
+    catch { toast.error(t('pluginUi.actionFailed')); }
+    finally { setMenuActionPending(false); }
+  };
 
   const relText = useRelativeTime(createdAt, { hovered });
   const absText = formatAbsolute(createdAt);
@@ -367,7 +404,7 @@ export function MessageActionBar({
   );
 
   const forkBtn = !simplifiedBotConversation && onFork && (
-    <Tooltip.Root key="fork">
+    <Tooltip.Root key="fork" open={forkConfirmed || forkTipHovered} onOpenChange={setForkTipHovered}>
       <Tooltip.Trigger asChild>
         <button
           type="button"
@@ -394,30 +431,31 @@ export function MessageActionBar({
     </Tooltip.Root>
   );
 
-  const replyBtn = (replyAction || (simplifiedBotConversation && onAddToChat)) && (
+  const inlineReplyAction = companionFooter ? undefined : replyAction;
+  const replyBtn = (inlineReplyAction || (simplifiedBotConversation && onAddToChat)) && (
     <Tooltip.Root key="reply">
       <Tooltip.Trigger asChild>
         <button
           type="button"
           onClick={(event) => {
             event.stopPropagation();
-            (replyAction?.onClick ?? onAddToChat)?.();
+            (inlineReplyAction?.onClick ?? onAddToChat)?.();
           }}
           disabled={inFlight}
-          className={cn(actionButtonClass, replyAction?.count && 'w-auto min-w-6 gap-1 px-1')}
-          aria-label={replyAction?.label ?? t('chat.messageActionBar.reply')}
+          className={cn(actionButtonClass, inlineReplyAction?.count && 'w-auto min-w-6 gap-1 px-1')}
+          aria-label={inlineReplyAction?.label ?? t('chat.messageActionBar.reply')}
         >
-          {replyAction ? <MessagesSquare size={14} strokeWidth={2} className={actionIconClass} />
+          {inlineReplyAction ? <MessagesSquare size={14} strokeWidth={2} className={actionIconClass} />
             : <ChatReplyIcon size={14} strokeWidth={2} className={actionIconClass} />}
-          {!!replyAction?.count && <span className={cn('text-12 tabular-nums', actionIconClass)}>{replyAction.count}</span>}
+          {!!inlineReplyAction?.count && <span className={cn('text-12 tabular-nums', actionIconClass)}>{inlineReplyAction.count}</span>}
         </button>
       </Tooltip.Trigger>
-      <Tooltip.Content>{replyAction?.label ?? t('chat.messageActionBar.reply')}</Tooltip.Content>
+      <Tooltip.Content>{inlineReplyAction?.label ?? t('chat.messageActionBar.reply')}</Tooltip.Content>
     </Tooltip.Root>
   );
 
   // 伙伴私聊开了话题按钮时，原来的「回复」（把这条消息引用进输入框）挪到引用位，两者并存。
-  const botReplyBtn = !quoteAction && replyAction && simplifiedBotConversation && onAddToChat && (
+  const botReplyBtn = !quoteAction && inlineReplyAction && simplifiedBotConversation && onAddToChat && (
     <Tooltip.Root key="bot-reply">
       <Tooltip.Trigger asChild>
         <button
@@ -455,18 +493,34 @@ export function MessageActionBar({
   );
 
   const reactionBtn = reactionAction && (
-    <Popover key="reaction" open={reactionAction.open} onOpenChange={reactionAction.onOpenChange}>
+    <Popover key="reaction" open={reactionAction.open} onOpenChange={open => {
+      setReactionAnchor(open ? reactionTrigger.current?.closest('[data-reaction-anchor]') ?? null : null);
+      reactionAction.onOpenChange(open);
+    }}>
+      {reactionAction.open && reactionAnchor && <PopoverAnchor virtualRef={{ current: reactionAnchor }} />}
       <Tip text={reactionAction.label}>
         <PopoverTrigger asChild>
-          <button type="button" className={actionButtonClass} disabled={inFlight || reactionAction.disabled}
-            aria-label={reactionAction.label} onClick={event => event.stopPropagation()}>
+          <button ref={reactionTrigger} type="button" className={actionButtonClass} disabled={inFlight || reactionAction.disabled}
+            aria-label={reactionAction.label} onClick={event => {
+              pointerOpenedReaction.current = event.detail > 0;
+              event.stopPropagation();
+            }}>
             <SmilePlus size={14} strokeWidth={2} className={actionIconClass} />
           </button>
         </PopoverTrigger>
       </Tip>
-      <PopoverContent align={align === 'right' ? 'end' : 'start'} className="z-[80] w-fit p-2" aria-label={reactionAction.label}>
+      {reactionAction.open && <PopoverContent side="top" align={align === 'right' ? 'start' : 'end'}
+        collisionBoundary={reactionAnchor?.closest('[data-testid="bot-group-timeline"], .thread-panel') ?? undefined} collisionPadding={8}
+        className="w-fit p-1" aria-label={reactionAction.label} tabIndex={-1}
+        onCloseAutoFocus={reactionAction.onCloseAutoFocus}
+        onOpenAutoFocus={event => {
+          if (pointerOpenedReaction.current && event.currentTarget instanceof HTMLElement) {
+            event.preventDefault();
+            event.currentTarget.focus({ preventScroll: true });
+          }
+        }}>
         {reactionAction.content}
-      </PopoverContent>
+      </PopoverContent>}
     </Popover>
   );
 
@@ -499,97 +553,114 @@ export function MessageActionBar({
     </Tooltip.Root>
   );
 
-  // 用户轮累计优先；没有新字段的历史消息继续显示原始 SDK 分段成本。
-  const effectiveTurnMoney =
-    turnMoney ??
-    (typeof turnCostUsd === 'number' && turnCostUsd > 0
-      ? legacyUsdMoney(turnCostUsd)
-      : undefined);
-  const effectiveUserTurnMoney =
-    userTurnMoney ??
-    (typeof userTurnCostUsd === 'number' && userTurnCostUsd > 0
-      ? legacyUsdMoney(userTurnCostUsd)
-      : undefined);
-  const displayedMoney = effectiveUserTurnMoney ?? effectiveTurnMoney;
-  const displayedCostIsEstimate = effectiveUserTurnMoney
-    ? userTurnCostIsEstimate
-    : turnCostIsEstimate;
-  const isUserTurnTotal = effectiveUserTurnMoney != null;
+  // These modes omit usage entirely. Do not format discarded cost/token tooltips;
+  // compute fresh data again when a render switches back to a regular assistant.
+  const [costText, tokensText] = (() => {
+    if (companionFooter || compact || align !== 'left' || simplifiedBotConversation) return [null, null];
+    // 用户轮累计优先；没有新字段的历史消息继续显示原始 SDK 分段成本。
+    const effectiveTurnMoney =
+      turnMoney ??
+      (typeof turnCostUsd === 'number' && turnCostUsd > 0
+        ? legacyUsdMoney(turnCostUsd)
+        : undefined);
+    const effectiveUserTurnMoney =
+      userTurnMoney ??
+      (typeof userTurnCostUsd === 'number' && userTurnCostUsd > 0
+        ? legacyUsdMoney(userTurnCostUsd)
+        : undefined);
+    const displayedMoney = effectiveUserTurnMoney ?? effectiveTurnMoney;
+    const displayedCostIsEstimate = effectiveUserTurnMoney
+      ? userTurnCostIsEstimate
+      : turnCostIsEstimate;
+    const isUserTurnTotal = effectiveUserTurnMoney != null;
+    const parts = displayedMoney ? messageCostParts(
+      displayedCostIsEstimate ? { ...displayedMoney, kind: 'value-estimate' } : displayedMoney,
+      turnUsageDetails,
+    ) : null;
+    const costLabel = parts ? [
+      ...parts.conversation.map(money => money.kind === 'value-estimate'
+        ? t('chat.messageActionBar.turnCostEstimatedValue', { cost: formatTurnCostMoney(money) })
+        : formatTurnCostMoney(money)),
+      ...parts.additional.map(formatTurnCostMoney),
+    ].join(' + ') : '';
 
-  // 费用 — 样式与 timeText 完全一致(12px + 同色 + 0.5px 光学修正)。
-  // 仅 assistant(align='left')会拿到值;估算值(Codex 折算)表达为 token 价值。
-  const turnCostTooltipNode =
-    displayedMoney && displayedMoney.amount > 0 && turnUsageDetails ? (
-      <span className="whitespace-pre-line">
-        {buildTurnUsageTooltipLines({
-          details: turnUsageDetails,
-          t,
-          money: displayedMoney,
-          isEstimate: displayedCostIsEstimate,
-          ...(isUserTurnTotal ? { title: t('chat.messageActionBar.userTurnCostDetailsTitle') } : {}),
-        }).join('\n')}
-      </span>
-    ) : (
-      t(
-        displayedCostIsEstimate
-          ? 'chat.messageActionBar.turnCostEstimated'
-          : 'chat.messageActionBar.turnCost',
-      )
-    );
-
-  // 时间戳之后那一格的排版口径:与 timeText 同为 12px 次要文本 + 0.5px 光学修正;
-  // bar 的 gap-0.5(2px)对两段相邻文本太挤,额外 6px 左距(共 8px)让「时间 | 用量」
-  // 读成两个独立信息组。金额与 token 回退共用同一套 —— 换的是内容,不是位置。
-  const metaTextClassName = cn(
-    'inline-flex h-6 items-center text-12 font-normal whitespace-nowrap',
-    'relative top-[0.5px]',
-    'ml-1.5',
-    'text-[var(--settings-section-desc)] cursor-default',
-  );
-
-  const costText = displayedMoney && displayedMoney.amount > 0 && (
-    <Tooltip.Root key="cost">
-      <Tooltip.Trigger asChild>
-        <span className={metaTextClassName}>
-          {displayedCostIsEstimate
-            ? t('chat.messageActionBar.turnCostEstimatedValue', {
-                cost: formatTurnCostMoney(displayedMoney),
-              })
-            : formatTurnCostMoney(displayedMoney)}
+    // 费用 — 样式与 timeText 完全一致(12px + 同色 + 0.5px 光学修正)。
+    // 仅 assistant(align='left')会拿到值;估算值(Codex 折算)表达为 token 价值。
+    const turnCostTooltipNode =
+      displayedMoney && displayedMoney.amount > 0 && turnUsageDetails ? (
+        <span className="whitespace-pre-line">
+          {buildTurnUsageTooltipLines({
+            details: turnUsageDetails,
+            t,
+            money: displayedMoney,
+            usageOnly: !!sessionId,
+            isEstimate: displayedCostIsEstimate,
+            ...(isUserTurnTotal ? { title: t('chat.messageActionBar.userTurnCostDetailsTitle') } : {}),
+          }).join('\n')}
         </span>
-      </Tooltip.Trigger>
-      <Tooltip.Content>
-        {turnCostTooltipNode}
-      </Tooltip.Content>
-    </Tooltip.Root>
-  );
+      ) : (
+        t(
+          displayedCostIsEstimate
+            ? 'chat.messageActionBar.turnCostEstimated'
+            : 'chat.messageActionBar.turnCost',
+        )
+      );
 
-  // 金额缺席时的回退:显示本轮 token 总量。成因可能是网关目录整体不下发价格、
-  // 模型不在价表、或订阅估值也 miss —— 对用户都一样,这一格不该因此空着。
-  // 钱算不出来不代表用量算不出来:明细由 main 在 turn 结束时落库,与金额同源。
-  const tokensText = !(displayedMoney && displayedMoney.amount > 0) &&
-    turnUsageDetails &&
-    turnUsageDetails.totalTokens > 0 && (
-      <Tooltip.Root key="tokens">
-        <Tooltip.Trigger asChild>
-          <span className={metaTextClassName}>
-            {t('chat.messageActionBar.turnTokens', {
-              tokens: formatCompactTokens(turnUsageDetails.totalTokens),
-            })}
-          </span>
-        </Tooltip.Trigger>
-        <Tooltip.Content>
-          <span className="whitespace-pre-line">
-            {buildTurnUsageTooltipLines({ details: turnUsageDetails, t }).join('\n')}
-          </span>
-        </Tooltip.Content>
-      </Tooltip.Root>
+    // 时间戳之后那一格的排版口径:与 timeText 同为 12px 次要文本 + 0.5px 光学修正;
+    // bar 的 gap-0.5(2px)对两段相邻文本太挤,额外 6px 左距(共 8px)让「时间 | 用量」
+    // 读成两个独立信息组。金额与 token 回退共用同一套 —— 换的是内容,不是位置。
+    const metaTextClassName = cn(
+      'inline-flex h-6 items-center text-12 font-normal whitespace-nowrap',
+      'relative top-[0.5px]',
+      'ml-1.5',
+      'text-[var(--settings-section-desc)] cursor-default',
     );
+
+    // 本轮的速度与推理图：有金额时在费用明细顶部，没有金额时由 token 回退入口打开同一张图。
+    const turnTrace = turnUsageDetails?.trace && traceHasChart(turnUsageDetails.trace)
+      ? <TurnGenerationTrace trace={turnUsageDetails.trace} /> : undefined;
+
+    const costText = displayedMoney && displayedMoney.amount > 0 && (
+      <UsageCostPopover key="cost" sessionId={sessionId} clientId={clientId}
+        className={metaTextClassName} label={costLabel} fallback={turnCostTooltipNode}
+        header={turnTrace} />
+    );
+
+    // 金额缺席时的回退:显示本轮 token 总量。成因可能是网关目录整体不下发价格、
+    // 模型不在价表、或订阅估值也 miss —— 对用户都一样,这一格不该因此空着。
+    // 钱算不出来不代表用量算不出来:明细由 main 在 turn 结束时落库,与金额同源。
+    // 看本轮推理量不该取决于价格是否可用（免费模型、价表缺失、估值未命中都会走到这里）：有图时
+    // 这一格与金额一样悬停预览、点击固定，浮窗里是同一张图加 token 明细；不带 sessionId，
+    // 不读取也不显示费用明细。没有图时保持原来的文字提示。
+    const tokensText = !(displayedMoney && displayedMoney.amount > 0) &&
+      turnUsageDetails &&
+      turnUsageDetails.totalTokens > 0 && (() => {
+        const label = t('chat.messageActionBar.turnTokens', {
+          tokens: formatCompactTokens(turnUsageDetails.totalTokens),
+        });
+        const lines = buildTurnUsageTooltipLines({ details: turnUsageDetails, t }).join('\n');
+        return turnTrace ? (
+          <UsageCostPopover key="tokens" className={metaTextClassName} label={label} header={turnTrace}
+            fallback={<div className="whitespace-pre-line text-12 text-[var(--text-secondary)]">{lines}</div>} />
+        ) : (
+          <Tooltip.Root key="tokens">
+            <Tooltip.Trigger asChild>
+              <span className={metaTextClassName}>{label}</span>
+            </Tooltip.Trigger>
+            <Tooltip.Content>
+              <span className="whitespace-pre-line">{lines}</span>
+            </Tooltip.Content>
+          </Tooltip.Root>
+        );
+      })();
+
+    return [costText, tokensText];
+  })();
 
   // Edit (Pencil) button — last user message only. Enters the inline edit
   // state owned by UserMessage; keep it disabled while any message action is
   // in flight so editing cannot race with Fork's history read or a menu action.
-  const editBtn = onEdit && (
+  const editBtn = onEdit && !editInMenu && (
     <Tooltip.Root key="edit">
       <Tooltip.Trigger asChild>
         <button
@@ -617,8 +688,11 @@ export function MessageActionBar({
   // “添加到对话”，伙伴对话则将同一动作外显成“回复”。
   // 面板/行几何遵守 12px container + 8px inner-control 两档圆角。
   const canRewind = Boolean(onRewind);
+  const onEditInMenu = editInMenu ? onEdit : undefined;
   const addToChatInMenu = simplifiedBotConversation ? undefined : onAddToChat;
-  const moreMenu = (compact || addToChatInMenu || menuActions?.length || copyLinkText || canRewind || onDelete) && (
+  const moreTriggerRef = useRef<HTMLButtonElement>(null);
+  const pendingTopicRef = useRef(false);
+  const moreMenu = (compact || companionFooter || addToChatInMenu || menuActions?.length || copyLinkText || onEditInMenu || canRewind || onDelete || pluginMenuEntries.length > 0) && (
     <DropdownMenu key="more" open={menuOpen} onOpenChange={setMenuOpen}>
       <DropdownMenuTrigger asChild>
         <Tip text={t('chat.messageActionBar.moreActions')}>
@@ -633,6 +707,7 @@ export function MessageActionBar({
             }}
             disabled={moreInFlight}
             className={cn(actionButtonClass, 'data-[state=open]:bg-[var(--cmd-palette-item-hover)]')}
+            ref={moreTriggerRef}
             aria-label={t('chat.messageActionBar.moreActions')}
           >
             {moreInFlight ? (
@@ -660,7 +735,14 @@ export function MessageActionBar({
           menuInteractionFromPointerRef.current = false;
         }}
         onCloseAutoFocus={(event) => {
-          if (menuInteractionFromPointerRef.current) event.preventDefault();
+          if (pendingTopicRef.current) {
+            pendingTopicRef.current = false;
+            event.preventDefault();
+            // The topic panel remembers its opener. Restore the persistent trigger before opening,
+            // rather than leaving it pointing at a menu item that is about to unmount.
+            moreTriggerRef.current?.focus();
+            replyAction?.onClick();
+          } else if (menuInteractionFromPointerRef.current) event.preventDefault();
         }}
         className="min-w-[184px]"
       >
@@ -676,7 +758,7 @@ export function MessageActionBar({
             {t('chat.messageActionBar.copy')}
           </DropdownMenuItem>
         )}
-        {compact && onShareAsImage && (
+        {(compact || companionFooter) && onShareAsImage && (
           <DropdownMenuItem
             onSelect={(event) => {
               event.stopPropagation();
@@ -686,6 +768,13 @@ export function MessageActionBar({
           >
             <Share size={14} strokeWidth={2} className="shrink-0" />
             {t('chat.shareImage.entry')}
+          </DropdownMenuItem>
+        )}
+        {companionFooter && replyAction && (
+          <DropdownMenuItem className={MENU_ITEM_CLASS} disabled={inFlight}
+            onSelect={(event) => { event.stopPropagation(); pendingTopicRef.current = true; }}>
+            <MessagesSquare size={14} strokeWidth={2} className="shrink-0" />
+            {replyAction.label}
           </DropdownMenuItem>
         )}
         {addToChatInMenu && (
@@ -726,6 +815,19 @@ export function MessageActionBar({
             {t('chat.messageActionBar.copyLink')}
           </DropdownMenuItem>
         )}
+        {onEditInMenu && (
+          <DropdownMenuItem
+            disabled={inFlight}
+            onSelect={(event) => {
+              event.stopPropagation();
+              onEditInMenu();
+            }}
+            className={MENU_ITEM_CLASS}
+          >
+            <Pencil size={14} strokeWidth={2} className="shrink-0" />
+            {t('chat.messageActionBar.edit')}
+          </DropdownMenuItem>
+        )}
         {canRewind && (
           <DropdownMenuItem
             disabled={rewindInFlight}
@@ -739,13 +841,21 @@ export function MessageActionBar({
             {t('chat.messageActionBar.rewind')}
           </DropdownMenuItem>
         )}
+        {pluginMenuEntries.length > 0 && (
+          <>
+            {(compact || companionFooter && (onShareAsImage || replyAction) || addToChatInMenu || menuActions?.length || copyLinkText || onEditInMenu || canRewind) && <DropdownMenuSeparator />}
+            {pluginMenuEntries.map(entry => <PluginUiMessageMenuItem key={`${entry.instanceId}:${entry.contribution.id}`}
+              entry={entry} sessionId={sessionId ?? null} clientId={clientId} disabled={inFlight} className={MENU_ITEM_CLASS}
+              onSelect={() => void handlePluginMenuAction(entry)} />)}
+          </>
+        )}
         {onDelete && (
           <>
-            {(addToChatInMenu || menuActions?.length || copyLinkText || canRewind) && (
+            {(addToChatInMenu || menuActions?.length || copyLinkText || onEditInMenu || canRewind || pluginMenuEntries.length > 0) && (
               <DropdownMenuSeparator />
             )}
             <DropdownMenuItem
-              disabled={deleting}
+              disabled={menuActionPending}
               onSelect={(event) => {
                 event.stopPropagation();
                 void handleDelete();
@@ -758,7 +868,7 @@ export function MessageActionBar({
             </DropdownMenuItem>
           </>
         )}
-        {compact && absText && (
+        {(compact || companionFooter) && absText && (
           <>
             <DropdownMenuSeparator />
             <DropdownMenuLabel className="whitespace-pre-line text-12 font-normal text-[var(--settings-section-desc)]">
@@ -808,8 +918,10 @@ export function MessageActionBar({
   // align='left'  → [copy][share][fork][edit][more][time][cost]
   // align='right' → [time][copy][share][fork][edit][more]   (user)
   // 伙伴对话:[copy][share][reply][more][time] / [time][copy][share][reply][edit][more]
-  // 贴在气泡旁（compact，群聊与伙伴私聊）:[引用回复][话题][朗读][表情][编辑][more]，复制、分享与时间收进 more
-  const items = compact
+  // 贴在气泡旁（compact，群聊）:[引用回复][话题][朗读][表情][编辑][more]，复制、分享与时间收进 more
+  const items = companionFooter
+    ? [copyBtn, quoteBtn || replyBtn, readAloudBtn, editBtn, moreMenu]
+    : compact
     ? align === 'left' ? [quoteBtn || botReplyBtn, replyBtn, readAloudBtn, reactionBtn, editBtn, moreMenu] : [moreMenu, editBtn, reactionBtn, readAloudBtn, replyBtn, quoteBtn || botReplyBtn]
     : align === 'left'
       ? [
@@ -831,14 +943,17 @@ export function MessageActionBar({
     <div
       // 操作栏是纯交互件:分享图片的光栅化会按这个标记整条剔除,不进产物。
       {...{ [SHARE_EXCLUDE_ATTR]: '' }}
+      data-chat-copy-exclude
       className={cn(
         'flex flex-wrap items-center gap-0.5',
+        companionFooter && 'gap-1 [&>button]:h-8 [&>button]:w-8',
         align === 'right' ? 'justify-end' : 'justify-start',
+        companionFooter && (align === 'right' ? 'mr-1.5' : 'ml-1.5'),
         // 250ms is long enough to perceive the fade without dragging.
         // Hover re-enters mid-fade interpolate from the current opacity
         // (browser CSS transition behavior — no replay from 0).
         'transition-opacity duration-[var(--motion-enter)] ease-[var(--motion-ease-out)] motion-reduce:transition-none',
-        simplifiedBotConversation || visible || menuOpen || reactionAction?.open
+        simplifiedBotConversation || visible || menuOpen || forkConfirmed || reactionAction?.open
           ? 'opacity-100'
           : 'opacity-0 pointer-events-none focus-within:opacity-100 focus-within:pointer-events-auto',
         // Menu-owned actions dim the entire bar and block clicks. Fork only
@@ -846,30 +961,29 @@ export function MessageActionBar({
         moreInFlight && 'opacity-60 pointer-events-none',
       )}
     >
-      {items}
+      {pluginUi.messageActions ? <>{items}<PluginUiSlot position="message.actions" sessionId={sessionId} clientId={clientId} role={align === 'right' ? 'user' : 'assistant'} /></> : items}
     </div>
   );
 }
 
 /**
- * The frame that hangs a compact toolbar beside its message bubble (群聊与伙伴私聊): on the bubble's
+ * The frame that hangs a compact toolbar beside its message bubble (群聊): on the bubble's
  * outer `side`, level with its top, inside the message row so moving the pointer across the gap keeps
  * the row hovered. It shows while the message (`group/message`) is hovered, while keyboard focus is
- * inside, while `open` (a picker) is set, and always on touch screens. The bubble must be `relative`.
+ * inside, and on touch screens. The reaction picker takes its place while open. The bubble must be `relative`.
+ * Private ThreadPanel keeps this toolbar in flow below content; group topics retain the outer rail.
  */
-export function BubbleHoverToolbar({ side, open = false, besideReactions = false, marker, children }: {
+export function BubbleHoverToolbar({ side, open = false, marker, children }: {
   side: 'left' | 'right'; open?: boolean;
-  /** Steps past reactions hung on the bubble's outer top corner. */
-  besideReactions?: boolean;
   /** A data attribute that names this toolbar for its caller's tests and checks. */
   marker?: `data-${string}`;
   children: ReactNode;
 }) {
   const left = side === 'left';
   return (
-    <div {...{ [SHARE_EXCLUDE_ATTR]: '' }} {...(marker ? { [marker]: '' } : {})} data-open={open ? '' : undefined}
-      className={cn('pointer-events-none absolute top-0 z-10 w-max rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-0.5 opacity-0 transition-opacity duration-[var(--motion-fast)] ease-[var(--motion-ease-out)] focus-within:pointer-events-auto focus-within:opacity-100 group-hover/message:pointer-events-auto group-hover/message:opacity-100 data-[open]:pointer-events-auto data-[open]:opacity-100 motion-reduce:transition-none [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100',
-        left ? 'right-full' : 'left-full', besideReactions ? (left ? 'mr-6' : 'ml-6') : (left ? 'mr-1.5' : 'ml-1.5'))}>
+    <div data-chat-copy-exclude {...{ [SHARE_EXCLUDE_ATTR]: '' }} {...(marker ? { [marker]: '' } : {})} data-open={open ? '' : undefined}
+      className={cn('chat-bubble-toolbar pointer-events-none absolute top-0 z-raised w-max rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-0.5 opacity-0 transition-opacity duration-[var(--motion-fast)] ease-[var(--motion-ease-out)] has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:opacity-100 group-hover/message:pointer-events-auto group-hover/message:opacity-100 motion-reduce:transition-none [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100',
+        left ? 'right-full mr-1.5' : 'left-full ml-1.5')}>
       {children}
     </div>
   );

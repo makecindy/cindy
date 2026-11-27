@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { renderHook } from '@testing-library/react';
+import { act, renderHook } from '@testing-library/react';
 
 import {
   AGENT_ISLAND_SOUND_OPTIONS,
@@ -10,6 +10,10 @@ import {
 import {
   getAgentIslandDisplayTarget,
   getAgentIslandEnabled,
+  getAgentIslandMascotSkin,
+  getAgentIslandSubtleReminders,
+  setAgentIslandSubtleReminders,
+  resetAgentIslandSubtleReminders,
   getAgentIslandSoundSettings,
   isAgentIslandSoundSettingsCustomized,
   isAgentIslandSupported,
@@ -19,6 +23,7 @@ import {
   setAgentIslandEnabled,
   syncAgentIslandEnabledToMain,
   useResyncAgentIslandSettingsAfterLogin,
+  useAgentIslandSettings,
 } from '@/hooks/useAgentIslandSettings';
 
 vi.mock('@/lib/logger', () => ({
@@ -46,6 +51,24 @@ describe('agent island settings', () => {
     vi.restoreAllMocks();
   });
 
+  // Unit: new local preference; existing tests do not cover its persistence or
+  // bootstrap delivery. A saved true value must reach main before the island opens.
+  it('persists subtle reminders only after main accepts them and restores them before enabling', async () => {
+    const setSubtleReminders = vi.fn(async () => ({ ok: true as const }));
+    const setEnabled = vi.fn(async () => ({ ok: true as const }));
+    installElectronApi({ setSubtleReminders, setEnabled });
+    expect(getAgentIslandSubtleReminders()).toBe(false);
+    await expect(setAgentIslandSubtleReminders(true)).resolves.toBe(true);
+    expect(getAgentIslandSubtleReminders()).toBe(true);
+    syncAgentIslandEnabledToMain();
+    await vi.waitFor(() => expect(setEnabled).toHaveBeenCalled());
+    expect(setSubtleReminders).toHaveBeenLastCalledWith(true);
+    expect(setSubtleReminders.mock.invocationCallOrder.at(-1)).toBeLessThan(setEnabled.mock.invocationCallOrder[0]);
+    setSubtleReminders.mockRejectedValueOnce(new Error('unavailable'));
+    await expect(setAgentIslandSubtleReminders(false)).resolves.toBe(false);
+    expect(getAgentIslandSubtleReminders()).toBe(true);
+  });
+
   it('does not persist a disabled state when the preload API is stale', async () => {
     installElectronApi({});
     localStorage.setItem('notifications.agentIslandEnabled', 'true');
@@ -54,6 +77,38 @@ describe('agent island settings', () => {
 
     expect(getAgentIslandEnabled()).toBe(true);
     expect(localStorage.getItem('notifications.agentIslandEnabled')).toBe('true');
+  });
+
+  // Unit, configuration contract §4 / review #8848: resetting must remove the
+  // override, not pin false. Existing switch coverage only tested saved booleans.
+  it.each([true, false])('clears a subtle reminder override (%s) and updates mounted settings', async (override) => {
+    const setSubtleReminders = vi.fn(async () => ({ ok: true as const }));
+    installElectronApi({ setSubtleReminders });
+    localStorage.setItem('notifications.agentIslandSubtleReminders', String(override));
+    const { result, unmount } = renderHook(() => useAgentIslandSettings());
+    expect(result.current.subtleRemindersCustomized).toBe(true);
+
+    await act(async () => {
+      await expect(result.current.resetSubtleReminders()).resolves.toBe(true);
+    });
+    expect(setSubtleReminders).toHaveBeenLastCalledWith(false);
+    expect(localStorage.getItem('notifications.agentIslandSubtleReminders')).toBeNull();
+    expect(result.current.subtleReminders).toBe(false);
+    expect(result.current.subtleRemindersCustomized).toBe(false);
+    unmount();
+  });
+
+  it.each(['main', 'storage'] as const)('keeps the subtle reminder override when reset fails in %s', async (failure) => {
+    const setSubtleReminders = vi.fn(async () => ({ ok: true as const }));
+    installElectronApi({ setSubtleReminders });
+    localStorage.setItem('notifications.agentIslandSubtleReminders', 'true');
+    if (failure === 'main') setSubtleReminders.mockRejectedValueOnce(new Error('unavailable'));
+    else vi.spyOn(Storage.prototype, 'removeItem').mockImplementationOnce(() => { throw new Error('unavailable'); });
+
+    await expect(resetAgentIslandSubtleReminders()).resolves.toBe(false);
+    expect(localStorage.getItem('notifications.agentIslandSubtleReminders')).toBe('true');
+    expect(getAgentIslandSubtleReminders()).toBe(true);
+    if (failure === 'storage') expect(setSubtleReminders.mock.calls).toEqual([[false], [true]]);
   });
 
   it('persists the switch only after main accepts the enabled change', async () => {
@@ -117,6 +172,12 @@ describe('agent island settings', () => {
     expect(setSoundSettings.mock.invocationCallOrder[0]).toBeLessThan(setEnabled.mock.invocationCallOrder[0]);
     expect(setMascotSkin.mock.invocationCallOrder[0]).toBeLessThan(setEnabled.mock.invocationCallOrder[0]);
     expect(setDisplayTarget.mock.invocationCallOrder[0]).toBeLessThan(setEnabled.mock.invocationCallOrder[0]);
+  });
+
+  it('defaults the mascot to Cindy and keeps a saved choice', () => {
+    expect(getAgentIslandMascotSkin()).toBe('cindy');
+    localStorage.setItem('notifications.agentIslandMascotSkin', 'pululu');
+    expect(getAgentIslandMascotSkin()).toBe('pululu');
   });
 
   it('keeps built-in Agent Island sounds enabled by default', () => {

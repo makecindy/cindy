@@ -126,6 +126,20 @@ describe('session list SQL preview extract', () => {
     db.close();
   });
 
+  // Regression: the empty import end marker hid the imported task's last reply.
+  it.each(['""', ''])('skips empty assistant rows when choosing the preview (content=%j)', (content) => {
+    const db = openPreviewDb();
+    db.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    const insert = db.prepare(
+      `INSERT INTO messages (id, session_id, role, content, agent_meta, created_at) VALUES (?, 's1', ?, ?, ?, ?)`,
+    );
+    insert.run('reply', 'assistant', JSON.stringify('last real reply'), null, 1);
+    insert.run('marker', 'assistant', content, JSON.stringify({ sessionImport: { phase: 'end' } }), 2);
+
+    expect(db.prepare(extractSql).get('s1')).toEqual({ preview: 'last real reply', role: 'assistant' });
+    db.close();
+  });
+
   it('fallback message count is the exact row total', () => {
     const db = openPreviewDb();
     db.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
@@ -293,6 +307,33 @@ describe('session list projection backfill SQL', () => {
       { id: 's1', list_preview: 'hello', list_preview_role: 'assistant', list_message_count: 2 },
       { id: 's2', list_preview: 'keep me', list_preview_role: 'user', list_message_count: 1 },
       { id: 's3', list_preview: null, list_preview_role: null, list_message_count: 7 },
+    ]);
+    db.close();
+  });
+
+  // Existing imported tasks hold the '' written by earlier backfills; no later message repairs them.
+  it('replaces a stored empty preview and never stores an empty one again', () => {
+    const db = openPreviewDb();
+    db.prepare(
+      `INSERT INTO sessions (id, list_preview, list_preview_role, list_message_count)
+       VALUES ('imported', '', 'assistant', 2), ('image-only', NULL, NULL, 1)`,
+    ).run();
+    const insert = db.prepare(
+      'INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)',
+    );
+    insert.run('question', 'imported', 'user', JSON.stringify({ text: 'last question' }), 1);
+    insert.run('marker', 'imported', 'assistant', '""', 2);
+    insert.run('image', 'image-only', 'user', JSON.stringify({ text: '', images: [{}] }), 1);
+
+    db.prepare(SESSION_LIST_PROJECTION_BACKFILL_SQL).run(
+      JSON.stringify([{ id: 'imported' }, { id: 'image-only' }]),
+    );
+
+    expect(
+      db.prepare('SELECT id, list_preview, list_preview_role FROM sessions ORDER BY id').all(),
+    ).toEqual([
+      { id: 'image-only', list_preview: null, list_preview_role: 'user' },
+      { id: 'imported', list_preview: 'last question', list_preview_role: 'user' },
     ]);
     db.close();
   });

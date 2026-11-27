@@ -1,8 +1,17 @@
-import { CodexResetAutoUseControl } from './CodexResetAutoUseControl';
-import { TaskTagLabels, TaskTagsPanel } from './TaskTags';
-import { TaskTagsSheet, useTaskTagsSheet } from './TaskTagsSheet';
-import type { OpenAiAccountProvider } from './sessionControls';
-import { formatQuotaResetCountdown } from './sessionUsagePresentation';
+import { useRemoteProjectAliases } from './remoteProjectAliases';
+import { ProjectSettingsSheet } from "./ProjectSettingsSheet";
+import { sessionProjectDirectory } from "@cindy/maker-shared/worktree-paths";
+import {
+  sessionAllowsProjectMove,
+  useSessionProjectMoveSheet,
+} from "./SessionProjectMoveSheet";
+import { SessionPrLinks } from "./SessionPrLinks";
+import { SessionMenuPrLinks } from "./SessionMenuPrLinks";
+import { CodexResetAutoUseControl } from "./CodexResetAutoUseControl";
+import { TaskTagLabels, TaskTagsPanel } from "./TaskTags";
+import { TaskTagsSheet, useTaskTagsSheet } from "./TaskTagsSheet";
+import type { OpenAiAccountProvider } from "./sessionControls";
+import { formatQuotaResetCountdown } from "./sessionUsagePresentation";
 /**
  * SessionMenuSheet —— 会话右上角「…」菜单浮窗(取代旧三 tab 的会话设置面板)。
  *
@@ -24,6 +33,7 @@ import {
   Archive,
   ArchiveRestore,
   Copy,
+  Folder,
   Link2,
   LogOut,
   Pencil,
@@ -58,6 +68,7 @@ import { isSharedTaskPeer } from '@cindy/device-link';
 import { computeContextSheetSnapHeights, type ContextSheetSnap } from '@/session/contextSheetModel';
 import { writeClipboardText } from '@/session/messageActions';
 import { normalizeExtraDirs } from '@/session/newSession';
+import { usePluginEngineFor } from '@/session/pluginEngines';
 import {
   nextCodexBucketStaleAtMs,
   resolveCodexBucketTable,
@@ -117,7 +128,18 @@ export interface SessionMenuWorkerActions {
   onArchive?: (onConfirmed: () => void) => void;
 }
 
+/** One entry of the menu's 「打开」 section, in the order of the task page header. */
+export interface SessionMenuOpenEntry {
+  id: string;
+  label: string;
+  icon: MenuIcon;
+  disabled?: boolean;
+  onPress(): void;
+}
+
 export interface SessionMenuSheetProps {
+  /** 「打开」分区:远程桌面、电脑侧边栏里手机能打开的入口(如模拟器)与文件。 */
+  openEntries?: SessionMenuOpenEntry[];
   tagDeviceId?: string;
   providerName?: string;
   /** 当前模型在模型目录里的用户可读展示名(用量卡显示;缺席时卡片自行兜底)。 */
@@ -180,6 +202,7 @@ export interface SessionMenuSheetProps {
 }
 
 export function SessionMenuSheet({
+  openEntries,
   tagDeviceId,
   providerName,
   modelLabel,
@@ -223,13 +246,21 @@ export function SessionMenuSheet({
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t, i18n: i18nInstance } = useTranslation();
+  const projectMove = useSessionProjectMoveSheet();
+  const pendingProjectSettings = useRef(false);
+  const [projectSettingsOpen, setProjectSettingsOpen] = useState(false);
   const pendingArchiveRef = useRef<(() => void) | null>(null);
   const handleClosed = useCallback(() => {
     const archive = pendingArchiveRef.current;
     pendingArchiveRef.current = null;
     onClosed?.();
+    projectMove.parentClosed();
+    if (pendingProjectSettings.current) {
+      pendingProjectSettings.current = false;
+      setProjectSettingsOpen(true);
+    }
     archive?.();
-  }, [onClosed]);
+  }, [onClosed, projectMove.parentClosed]);
   const menuUsage = useSessionMenuUsage(
     session,
     usageReader,
@@ -412,7 +443,12 @@ export function SessionMenuSheet({
     return base;
   }, [copiedKey, t]);
 
-  const header = buildSessionMenuHeader(session);
+  const pluginEngine = usePluginEngineFor(
+    session.deviceLinkDeviceId,
+    session.agentKind === 'acp' ? session.providerId : null,
+    session.agentKind === 'acp' ? session.agentDeviceId : null,
+  );
+  const header = buildSessionMenuHeader(session, pluginEngine?.name);
   const actions = buildSessionMenuActions({
     archived: session.status === 'archived',
     pinned: !!session.pinnedAt,
@@ -589,8 +625,21 @@ export function SessionMenuSheet({
   const workspace = buildSessionInfoWorkspace(session);
   const sharedGuest = isSharedTaskPeer(session.deviceLinkDeviceId ?? '');
   // 协同 Worker 任务:只保留与 Worker 相关的入口(见 SessionMenuWorkerActions)。
-  const workerMode = !messageOnly && session.orcaRole === 'worker';
-  const showExtraDirs = !sharedGuest && !workerMode && sessionInfoShowsExtraDirs(session);
+  const workerMode = !messageOnly && session.orcaRole === "worker";
+  const projectDirectory =
+    session.workspaceKind === "project"
+      ? sessionProjectDirectory(session)
+      : null;
+  const projectInfo = useRemoteProjectAliases().get(tagDeviceId ?? "");
+  const projectSettingsAvailable =
+    (projectInfo?.settingsVersion ?? 0) >= 6 &&
+    !!projectDirectory &&
+    !!tagDeviceId &&
+    !sharedGuest &&
+    !workerMode &&
+    !messageOnly;
+  const showExtraDirs =
+    !sharedGuest && !workerMode && sessionInfoShowsExtraDirs(session);
 
   // 协同 Worker 的生命周期只能经所属 Lead 的协同面板(归档 Worker / 结束协同)走 Orca 服务;
   // 通用归档 / 删除会绕过团队状态与焦点收尾。桌面同样不给 Worker 这两个入口。
@@ -693,7 +742,43 @@ export function SessionMenuSheet({
             </View>
                 )}
 
+          {!messageOnly && !workerMode && !sharedGuest && (tagDeviceId ?? session.deviceLinkDeviceId) ? (
+            <SessionMenuPrLinks
+              deviceId={(tagDeviceId ?? session.deviceLinkDeviceId)!}
+              sessionId={session.id}
+              updatedAt={session.updatedAt}
+              visible={visible && view === 'menu'}
+            />
+          ) : null}
+
           {!messageOnly ? <SessionUsageSummary modelLabel={modelLabel} providerName={providerName} session={session} usage={menuUsage} contextUsage={contextUsage} onPress={openInfo} translucent={Platform.OS === 'ios'} /> : null}
+
+          {openEntries?.length && !workerMode ? (
+            <View testID="session.openSection">
+              <Text style={styles.openHeading}>{t('session.menu.openSection')}</Text>
+              {Platform.OS === 'ios' ? (
+                <SessionDetailsNativeActions actions={openEntries.map((entry) => ({
+                  label: entry.label,
+                  disabled: entry.disabled,
+                  testID: `session.open.${entry.id}`,
+                  onPress: entry.onPress,
+                }))} />
+              ) : (
+                <View style={styles.actionGroup}>
+                  {openEntries.map((entry) => (
+                    <MenuActionRow
+                      key={entry.id}
+                      disabled={entry.disabled}
+                      icon={entry.icon}
+                      label={entry.label}
+                      onPress={entry.onPress}
+                      testID={`session.open.${entry.id}`}
+                    />
+                  ))}
+                </View>
+              )}
+            </View>
+          ) : null}
 
           {workerMode ? (
             <WorkerMenuActions onClose={onClose} worker={worker} />
@@ -727,6 +812,16 @@ export function SessionMenuSheet({
               />
             ))}
           </View>}
+
+          {!messageOnly && sessionAllowsProjectMove(session) ? (
+            Platform.OS === 'ios' ? <SessionDetailsNativeActions actions={[{
+              label: t('session.menu.moveToProject'), disabled: busy,
+              onPress: () => projectMove.open(session, onClose, tagDeviceId), testID: 'session.moveToProject',
+            }]} /> : <View style={styles.actionGroup}>
+              <MenuActionRow icon={Folder} label={t('session.menu.moveToProject')} disabled={busy}
+                onPress={() => projectMove.open(session, onClose, tagDeviceId)} testID="session.moveToProject" />
+            </View>
+          ) : null}
 
           {workerMode ? null : !messageOnly && isSharedTaskPeer(session.deviceLinkDeviceId) && onLeaveSharing ? (
             Platform.OS === 'ios' ? <SessionDetailsNativeActions actions={[{
@@ -819,6 +914,7 @@ export function SessionMenuSheet({
 
   const infoContent = (
     <View style={styles.infoBody} testID="session.infoSheetBody">
+      {!sharedGuest && (tagDeviceId ?? session.deviceLinkDeviceId) && <SessionPrLinks key={`${session.id}:${tagDeviceId ?? session.deviceLinkDeviceId}`} sessionId={session.id} deviceId={(tagDeviceId ?? session.deviceLinkDeviceId)!} readOnly={session.source === 'review'} />}
       <SessionUsageSummary modelLabel={modelLabel} providerName={providerName} session={session} usage={menuUsage} contextUsage={contextUsage} detail translucent={Platform.OS === 'ios'} />
       <View style={styles.infoSection}>
         <View style={styles.infoSectionHeader}>
@@ -903,7 +999,20 @@ export function SessionMenuSheet({
         </View>
       ) : null}
 
-      {showExtraDirs ? (
+      {projectSettingsAvailable && (
+        <View style={styles.infoSection}>
+          <MenuPillButton
+            label={t("settings.projectInfo.title")}
+            onPress={() => {
+              pendingProjectSettings.current = true;
+              onClose();
+            }}
+            testID="session.projectSettings"
+          />
+        </View>
+      )}
+      {showExtraDirs &&
+      (!projectSettingsAvailable || currentExtraDirs.length > 0) ? (
         <View style={styles.infoSection} testID="session.extraDirsSection">
           <Text style={styles.infoSectionTitle}>{t('session.menu.extraDirsSection')}</Text>
           {currentExtraDirs.length === 0 ? (
@@ -928,16 +1037,25 @@ export function SessionMenuSheet({
           {extraDirsNotice ? (
             <Text style={styles.infoCaption} testID="session.extraDirsDraftStatus">{extraDirsNotice}</Text>
           ) : null}
-          <View style={styles.infoActionRow}>
-            <MenuPillButton
-              disabled={busy || !!extraDirBrowser?.loading}
-              label={extraDirBrowser?.open ? t('session.menu.collapseRemoteDir') : t('session.menu.browseRemoteDir')}
-              onPress={onToggleExtraDirBrowser}
-              testID="session.extraDirsBrowseToggle"
-            />
-          </View>
-          {extraDirBrowser?.open ? (
-            <View style={styles.browsePanel} testID="session.extraDirsBrowsePanel">
+          {!projectSettingsAvailable && (
+            <View style={styles.infoActionRow}>
+              <MenuPillButton
+                disabled={busy || !!extraDirBrowser?.loading}
+                label={
+                  extraDirBrowser?.open
+                    ? t("session.menu.collapseRemoteDir")
+                    : t("session.menu.browseRemoteDir")
+                }
+                onPress={onToggleExtraDirBrowser}
+                testID="session.extraDirsBrowseToggle"
+              />
+            </View>
+          )}
+          {extraDirBrowser?.open && !projectSettingsAvailable ? (
+            <View
+              style={styles.browsePanel}
+              testID="session.extraDirsBrowsePanel"
+            >
               <Text
                 numberOfLines={2}
                 selectable
@@ -1020,6 +1138,25 @@ export function SessionMenuSheet({
     />
   ) : undefined;
 
+  const projectEditor =
+    projectSettingsOpen &&
+    projectSettingsAvailable &&
+    projectDirectory &&
+    tagDeviceId ? (
+      <ProjectSettingsSheet
+        key={`${tagDeviceId}:${session.id}`}
+        deviceId={tagDeviceId}
+        projectKey={
+          session.remoteHostId
+            ? `remote:${encodeURIComponent(session.remoteHostId)}:${projectDirectory}`
+            : `local:${projectDirectory}`
+        }
+        title={projectDirectory.split(/[\\/]/).pop() ?? projectDirectory}
+        directory={projectDirectory}
+        visible
+        onClose={() => setProjectSettingsOpen(false)}
+      />
+    ) : null;
   const tagEditor = tagsSheet.mounted ? (
     <TaskTagsSheet
       session={session}
@@ -1047,6 +1184,8 @@ export function SessionMenuSheet({
         {showingInfo ? infoContent : menuContent}
       </SessionDetailsNative>
         {tagEditor}
+        {projectMove.sheet}
+        {projectEditor}
       </>
     );
   }
@@ -1105,6 +1244,8 @@ export function SessionMenuSheet({
       ) : null}
     </SheetModal>
       {tagEditor}
+      {projectMove.sheet}
+      {projectEditor}
     </>
   );
 }
@@ -1360,6 +1501,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
       right: 0,
       top: 0,
       width: 44,
+    },
+    openHeading: {
+      color: colors.textSecondary,
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
+      paddingHorizontal: spacing.lg,
+      paddingBottom: Platform.OS === 'ios' ? 0 : spacing.xs,
+      paddingTop: spacing.md,
     },
     renameErrorText: {
       color: colors.errorText,

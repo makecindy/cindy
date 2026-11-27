@@ -1,5 +1,6 @@
 /**
- * 会话分享导出编排:把一个本机会话(cc / codex / pi)打成 .xdtshare 文件。
+ * 会话分享导出编排:把一个任务(cc / codex / pi)打成 .cshare 文件。
+ * 远程供应商任务导出本机消息与可用媒体，不读取本机的同名原生转录。
  *
  * 数据三层的收集策略:
  *   1. 本地 DB:session 行(白名单字段)+ messages(含 rewind 链,忠实快照;
@@ -15,8 +16,8 @@
  * Worker 以同样的三层策略收集,落在 zip 的 orca/workers/<i>/ 前缀下,关系图
  * (team 状态 + Worker role/label/status/focused)写进 manifest.orca;此时
  * minReaderVersion 提到 2,旧读端明确拒读而不是静默丢 Worker。Worker 会话
- * 自身仍拒绝直接导出(入口应是 lead)。远端 Worker 的转录在远端机器,本地
- * 找不到按缺失降档(消息历史仍全量携带)。
+ * 自身仍拒绝直接导出(入口应是 lead)。使用远程供应商的 Worker 只带消息与
+ * 本机可用媒体，整个包的保真度相应降档，不读取本机同名转录。
  *
  * 快照语义:导出不关闭活跃 handle、不加锁;流式输出中的会话可能差最后一轮。
  * 写盘用「同目录 .tmp + rename」保证目标文件原子出现。
@@ -42,16 +43,19 @@ import {
 } from '../maker-host/codex-local-sessions.js';
 import { readCodexThreadStorageReadOnly } from '../maker-host/codex-thread-storage.js';
 import { defaultClaudeConfigDirCandidates } from '../maker-orchestration/claudeTranscriptAnchors.js';
-import { resolveSafe as resolveImageUrl } from '../imageCacheStore.js';
+import { readBoundClaudeConfigDir } from '../subscription-accounts/store.js';
+import { resolveSafe as resolveImageUrl } from '../imageCacheStore.desktop.js';
 import { resolveSafe as resolveVideoUrl } from '../videoCacheStore.js';
 import { resolveSafe as resolveModelUrl } from '../modelCacheStore.js';
-import { resolveSafe as resolveCindyMediaUrl, getBlobsRoot as cindyMediaBlobsRoot } from '../cindy-media/blobStore.js';
+import { resolveSafe as resolveCindyMediaUrl, getBlobsRoot as cindyMediaBlobsRoot } from '../cindy-media/blobStore.desktop.js';
 import { app } from 'electron';
 
 import {
+  XDTSHARE_ACP_MIN_READER_VERSION,
   XDTSHARE_FORMAT_VERSION,
   XDTSHARE_MIN_READER_VERSION,
   XDTSHARE_ORCA_MIN_READER_VERSION,
+  type XdtshareAgentKind,
   type XdtshareFidelity,
   type XdtshareManifest,
   type XdtshareManifestEntry,
@@ -155,6 +159,7 @@ interface SessionRow {
   model: string;
   effort: string;
   permissionMode: string;
+  providerId: string | null;
   status: string;
   sdkSessionId: string | null;
   totalTokenUsage: number;
@@ -166,6 +171,7 @@ interface SessionRow {
   agentKind: string;
   orcaRole: string | null;
   remoteHostId: string | null;
+  agentDeviceId: string | null;
   codexHistoryHasProductPrompt: number | null;
   clearedAt: number | null;
   userSendAt: number | null;
@@ -205,8 +211,8 @@ function piSessionIdFromDigest(sha256: string): string {
   return `pi-${sha256.slice(0, 32)}.jsonl`;
 }
 
-/** Pi 的 agentMeta 不能把源机绝对 sessionFile 路径带进分享包。 */
-function rewritePiAgentMetaForExport(
+/** 映射可恢复的原生 id；没有随包转录的 id 清除，避免导入后使用旧历史。 */
+function rewriteAgentMetaForExport(
   agentMeta: string | null,
   portableIds: ReadonlyMap<string, string>,
 ): string | null {
@@ -222,6 +228,17 @@ function rewritePiAgentMetaForExport(
     return JSON.stringify(meta);
   } catch {
     return null;
+  }
+}
+
+/** 保留切换记录的展示内容，但不能让导入后的任务接回未随包提供的停泊会话。 */
+function detachAgentSwitchSessionForExport(content: string): string {
+  try {
+    const parsed = JSON.parse(content) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return content;
+    return JSON.stringify({ ...parsed, fromSdkSessionId: null });
+  } catch {
+    return content;
   }
 }
 
@@ -328,6 +345,15 @@ async function collectSessionPhaseA(
   const refs: XdtshareTranscriptRef[] = [];
   let codexState: CodexThreadStateDump | null = null;
 
+  // 远程供应商任务的原生转录在运行 Agent 的电脑上；插件引擎(acp)的原生会话格式
+  // 随外部 CLI/适配器而异、不可跨机搬运。两者均按 db-only 导出，不附原生转录，
+  // 由导入端通过 Cindy 消息历史重建上下文。
+  if (session.agentDeviceId || session.agentKind === 'acp') {
+    return {
+      session, messages, zipPrefix, sdkSessionIds, activeSdkSessionId, candidates, refs, codexState,
+    };
+  }
+
   const statSize = async (absPath: string): Promise<number | null> => {
     const stat = await fsp.stat(absPath).catch(() => null);
     return stat?.isFile() && stat.size > 0 ? stat.size : null;
@@ -356,13 +382,12 @@ async function collectSessionPhaseA(
       }
       sdkSessionIds = sdkSessionIds.filter((id) => allowed.has(id));
     }
-    // 与 loadClaudeTranscriptAnchorIndex 同口径:遍历全部候选目录
-    // (CLAUDE_CONFIG_DIR → ~/.claude → 旧版 dev 的 XDT_USER_DATA_DIR/claude-home),
-    // 只查第一个会把落在后续候选的 jsonl 误记缺失(review bot P1)。
-    const projectsRoots = defaultClaudeConfigDirCandidates().map((dir) =>
-      path.join(dir, 'projects'),
-    );
     for (const sid of sdkSessionIds) {
+      // Bound secondary histories never fall back to another account. Default and
+      // pre-pool histories retain the env/default/legacy-dev candidate search.
+      const boundDir = readBoundClaudeConfigDir(sid);
+      const projectsRoots = (boundDir ? [boundDir] : defaultClaudeConfigDirCandidates())
+        .map((dir) => path.join(dir, 'projects'));
       let jsonl: string | null = null;
       for (const projectsRoot of projectsRoots) {
         jsonl = await findClaudeSessionJsonl(sid, session.workingDir ?? undefined, projectsRoot);
@@ -500,13 +525,17 @@ async function readSessionPhaseB(
       }
     }
   }
-  if (session.agentKind === 'pi') {
-    activeSdkSessionId = session.sdkSessionId
-      ? (piPortableIds.get(session.sdkSessionId) ?? null)
-      : null;
+  if (session.agentKind === 'pi' || session.agentKind === 'acp' || session.agentDeviceId) {
+    activeSdkSessionId =
+      session.agentKind === 'pi' && session.sdkSessionId
+        ? (piPortableIds.get(session.sdkSessionId) ?? null)
+        : null;
     bundleMessages = a.messages.map((message) => ({
       ...message,
-      agentMeta: rewritePiAgentMetaForExport(message.agentMeta, piPortableIds),
+      content: (session.agentDeviceId || session.agentKind === 'acp') && message.role === 'agent_switch'
+        ? detachAgentSwitchSessionForExport(message.content)
+        : message.content,
+      agentMeta: rewriteAgentMetaForExport(message.agentMeta, piPortableIds),
     }));
   }
   return { transcriptFiles, bundleMessages, sdkSessionIds, activeSdkSessionId, refs };
@@ -554,7 +583,8 @@ async function collectOrcaWorkerSources(
     if (
       workerSession.agentKind !== 'cc' &&
       workerSession.agentKind !== 'codex' &&
-      workerSession.agentKind !== 'pi'
+      workerSession.agentKind !== 'pi' &&
+      workerSession.agentKind !== 'acp'
     ) {
       throw codedError(
         'SHARE_EXPORT_FAILED',
@@ -587,8 +617,8 @@ export async function exportSessionShare(
   if (session.remoteHostId) {
     throw codedError('PRECONDITION_FAILED', 'remote sessions cannot be exported');
   }
-  // Agent 在另一台电脑运行的任务：转录在那台，本机打包不全。
-  if (await sessionAgentRunsOnOtherDevice(opts.sessionId)) {
+  // 完整迁移仍要求原生历史；普通分享可按 db-only 导出远程供应商任务。
+  if (session.agentDeviceId && opts.migration) {
     throw codedError('PRECONDITION_FAILED', 'tasks whose agent runs on another computer cannot be exported');
   }
   if (session.orcaRole === 'worker') {
@@ -597,7 +627,12 @@ export async function exportSessionShare(
       'orca worker sessions cannot be exported directly; export the lead session',
     );
   }
-  if (session.agentKind !== 'cc' && session.agentKind !== 'codex' && session.agentKind !== 'pi') {
+  if (
+    session.agentKind !== 'cc' &&
+    session.agentKind !== 'codex' &&
+    session.agentKind !== 'pi' &&
+    session.agentKind !== 'acp'
+  ) {
     throw codedError('PRECONDITION_FAILED', `unsupported agentKind: ${session.agentKind}`);
   }
 
@@ -775,8 +810,9 @@ export async function exportSessionShare(
   const allRefs = allB.flatMap((b) => b.refs);
   const foundCount = allRefs.filter((t) => t.path !== null).length;
   let fidelity: XdtshareFidelity;
+  const hasDbOnlyMember = allA.some((a) => a.session.agentDeviceId || a.session.agentKind === 'acp');
   if (allRefs.length === 0 || foundCount === 0) fidelity = 'db-only';
-  else if (foundCount === allRefs.length) fidelity = 'full';
+  else if (foundCount === allRefs.length && !hasDbOnlyMember) fidelity = 'full';
   else fidelity = 'partial';
 
   // ── 打 zip ──
@@ -844,7 +880,8 @@ export async function exportSessionShare(
         teamStatus: orcaSources.teamStatus,
         workers: workerSources.map((w, i): XdtshareOrcaWorkerManifest => ({
           index: i,
-          agentKind: w.session.agentKind as 'cc' | 'codex' | 'pi',
+          agentKind: w.session.agentKind as XdtshareAgentKind,
+          ...(w.session.agentKind === 'acp' ? { providerId: w.session.providerId ?? null } : {}),
           title: w.session.title,
           role: w.record.role,
           label: w.record.label,
@@ -858,15 +895,24 @@ export async function exportSessionShare(
       }
     : undefined;
 
+  const hasAcpMember =
+    session.agentKind === 'acp' || workerSources.some((w) => w.session.agentKind === 'acp');
+  const bundleVersion = hasAcpMember
+    ? XDTSHARE_ACP_MIN_READER_VERSION
+    : orcaSection
+      ? XDTSHARE_ORCA_MIN_READER_VERSION
+      : XDTSHARE_MIN_READER_VERSION;
+
   const manifest: XdtshareManifest = {
-    formatVersion: orcaSection ? XDTSHARE_FORMAT_VERSION : XDTSHARE_MIN_READER_VERSION,
-    // 协同包必须让不认识 orca 段的旧读端拒读(否则静默丢全部 Worker);
-    // 普通包保持 1,旧读端照常可读。
-    minReaderVersion: orcaSection ? XDTSHARE_ORCA_MIN_READER_VERSION : XDTSHARE_MIN_READER_VERSION,
+    formatVersion: hasAcpMember ? XDTSHARE_FORMAT_VERSION : bundleVersion,
+    // 含插件引擎(acp)的包提至 v3,协同内置包提至 v2,普通内置包保持 v1,
+    // 确保旧读端继续兼容 v1/v2 并明确拒读不认识的新能力。
+    minReaderVersion: bundleVersion,
     appVersion: safeAppVersion(),
     platform: process.platform,
     exportedAt: new Date().toISOString(),
-    agentKind: session.agentKind as 'cc' | 'codex' | 'pi',
+    agentKind: session.agentKind as XdtshareAgentKind,
+    ...(session.agentKind === 'acp' ? { providerId: session.providerId ?? null } : {}),
     title: session.title,
     workspaceKind: session.workspaceKind === 'dialogue' ? 'dialogue' : 'project',
     originalWorkingDir: session.workingDir,
@@ -956,10 +1002,9 @@ function buildSessionSnapshot(
     model: session.model,
     effort: session.effort,
     permissionMode: session.permissionMode,
-    // Pi 的 DB 值是源机绝对路径，只能写入上面生成的便携 id。转录缺失时
-    // 保持 null，避免 fallback 又把绝对路径塞回包内。
+    // Pi 只写便携 id；远程供应商与插件引擎(acp)没有随包原生历史，不回退到不可恢复的 DB id。
     sdkSessionId:
-      session.agentKind === 'pi'
+      session.agentKind === 'pi' || session.agentKind === 'acp' || session.agentDeviceId
         ? activeSdkSessionId
         : (activeSdkSessionId ?? session.sdkSessionId),
     totalTokenUsage: session.totalTokenUsage,
@@ -969,6 +1014,7 @@ function buildSessionSnapshot(
     fastMode: (session.fastMode ?? false),
     planModeEnabled: !!session.planModeEnabled,
     agentKind: session.agentKind,
+    ...(session.agentKind === 'acp' ? { providerId: session.providerId ?? null } : {}),
     codexHistoryHasProductPrompt:
       session.codexHistoryHasProductPrompt == null ? null : !!session.codexHistoryHasProductPrompt,
     clearedAt: session.clearedAt,
@@ -1046,14 +1092,6 @@ function resolveMediaFile(
   }
 }
 
-async function sessionAgentRunsOnOtherDevice(sessionId: string): Promise<boolean> {
-  const row = await getDbClient().queryOne<{ agentDeviceId: string | null }>(
-    'SELECT agent_device_id AS agentDeviceId FROM sessions WHERE id = ? LIMIT 1',
-    [sessionId],
-  );
-  return Boolean(row?.agentDeviceId);
-}
-
 async function readSessionRow(sessionId: string): Promise<SessionRow | null> {
   return (
     (await getDbClient().queryOne<SessionRow>(
@@ -1063,6 +1101,7 @@ async function readSessionRow(sessionId: string): Promise<SessionRow | null> {
         workspace_kind AS workspaceKind,
         model, effort,
         permission_mode AS permissionMode,
+        provider_id AS providerId,
         status,
         sdk_session_id AS sdkSessionId,
         total_token_usage AS totalTokenUsage,
@@ -1074,6 +1113,7 @@ async function readSessionRow(sessionId: string): Promise<SessionRow | null> {
         agent_kind AS agentKind,
         orca_role AS orcaRole,
         remote_host_id AS remoteHostId,
+        agent_device_id AS agentDeviceId,
         codex_history_has_product_prompt AS codexHistoryHasProductPrompt,
         cleared_at AS clearedAt,
         user_send_at AS userSendAt,

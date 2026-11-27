@@ -7,7 +7,7 @@
 
 import type {
   AgentEvent,
-  AgentKind,
+  EngineKind,
   SendOrigin,
   SessionSendResult,
   SessionStatus,
@@ -75,7 +75,8 @@ export interface GoalState {
   usageResetAt: number | null;
   /** 最近一次裁决 / 守卫给出的理由(UI 展示 + resume 续轮提示)。 */
   lastReason: string | null;
-  agentKind: AgentKind;
+  /** 'acp' = 插件引擎任务(docs/plans/acp-plugin-bridge.md)。 */
+  agentKind: EngineKind;
   startedAt: number;
   updatedAt: number;
 }
@@ -85,7 +86,7 @@ export interface SetGoalInput {
   sessionId: string;
   objective: string;
   /** 留空则由 controller 从活动会话(SessionLike.agentKind)解析。 */
-  agentKind?: AgentKind;
+  agentKind?: EngineKind;
   /** 新建时的上限(GUI 新建弹窗的高级设置)。留空 → 走系统默认(getDefaults)。仅新建路径用;编辑改 objective 不动上限。 */
   limits?: GoalLimits;
 }
@@ -139,7 +140,7 @@ export interface GoalCompletionSummary {
 /** Session 的结构子集 —— 真 Session 满足之,fake 实现供单测。 */
 export interface SessionLike {
   readonly id: string;
-  readonly agentKind: AgentKind;
+  readonly agentKind: EngineKind;
   send(
     message: UserMessage | string,
     opts?: {
@@ -185,6 +186,10 @@ export interface GoalControllerDeps {
    * 调用方在重新读取 live session 且 Session.send 返回后执行 release。
    */
   acquirePendingAgentSwitch?: (sessionId: string) => Promise<() => void>;
+  /** 项目资源漂移回收 seam(pi 本地根任务):空闲时经 Maker 以 runtime-refresh 原因
+   * 关闭旧运行时,调用方随后的 ensureSession 活化即重扫重建。生产装配经 Maker;
+   * 测试可不注入(跳过回收,与桌面发送事务同口径)。 */
+  recyclePiRuntimeIfResourcesDrifted?: (sessionId: string) => Promise<boolean>;
   /** ← maker-ipc/register.isSessionInTurn(main 侧 turn 活跃跟踪)。 */
   isSessionInTurn(sessionId: string): boolean;
   /** Restore the existing input queue, then yield to its FIFO/locks/recovery. */
@@ -238,14 +243,25 @@ export interface GoalControllerDeps {
    */
   isSessionShared?: (sessionId: string) => boolean;
   /**
-   * 读该会话所用账号当前是否受限 + 何时重置(主动检测)。注入端按会话 provider 所属的订阅
-   * 家族读对应快照(ChatGPT / Claude / SuperGrok,见 usage/accountUsageLimit.ts);非订阅的
-   * Claude Code 会话退回 Cindy 网关预算快照。`turnError` 为本轮限额报错(被动检测时传入):
-   * 会话属于订阅账号时优先用报错原文里写明的重置时刻。
-   * 返回 null = 拿不到快照(按"未受限"处理)。
+   * 当目标任务即将因账号限额或来源故障停在 usageLimited / blocked 时，尝试按任务绑定的智能路由
+   * 切到组内下一个可用来源(支持跨引擎、跨分享/远程位置)；切换成功返回 true，目标保持 active 立刻续跑。
+   */
+  tryModelGroupRecovery?: (
+    sessionId: string,
+    signals: { message?: string; errorKind?: string; usageLimit?: boolean },
+  ) => Promise<boolean>;
+  /**
+   * 读该会话所用账号当前是否受限 + 何时重置。注入端按会话 provider 所属的订阅家族
+   * 处理(ChatGPT / Claude / SuperGrok,见 usage/accountUsageLimit.ts)。ChatGPT 成功轮次
+   * 不做缓存配额的主动检测,下一轮由上游判断准入;其它订阅仍主动读快照,非订阅的
+   * Claude Code 会话退回 Cindy 网关预算快照。
+   * 本机 OpenCode Go 只在本轮被拒后读取官方受限窗口。被拒路径必须传本轮限额报错
+   * `turnError`,否则 ChatGPT 与 OpenCode Go 都会跳过重置时刻查询;
+   * 订阅账号优先用报错原文里写明的重置时刻,再回落到实际账号窗口。
+   * 返回 null = 未提供账号限额信息(主动检测不阻止续轮;被动路径仍按限额错误停止)。
    */
   getAccountLimit?: (
-    agentKind: AgentKind,
+    agentKind: EngineKind,
     sessionId: string,
     turnError?: unknown,
   ) => Promise<AccountLimitInfo | null>;

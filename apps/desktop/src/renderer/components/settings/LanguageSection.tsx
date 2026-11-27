@@ -2,110 +2,152 @@
  * LanguageSection — Settings 页"显示语言"区块。
  *
  * 语言选项使用单个下拉菜单，避免未来增加语言后设置卡片被横向选项撑开。
+ * 文言（及以后其它古典版本）在菜单里只占一项；选中后同一张卡片下方多出一行，
+ * 选择字形（简体 / 繁體）与 AI 作答的输出风格。
  */
 
 import { useTranslation } from 'react-i18next';
-import { Check, ChevronDown } from 'lucide-react';
-import { SelectParts as Select } from '@/components/ui/select';
+import type { ClassicalReplyStyleId } from '@cindy/maker-shared/classical-reply';
+import { classicalStyleOptions, languageSettings } from './LanguageSection.settings-search';
+import { Select } from '@/components/ui/select';
+import { SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
+import '@/components/ui/segmented-control.css';
 
-import { cn } from '@/lib/utils';
+import { toast } from '@/lib/toast';
 import { useLocale } from '@/hooks/useLocale';
-import { SUPPORTED_LOCALES, type LocalePreference } from '@/i18n';
+import type { LocalePreference } from '@/i18n';
+import { isClassicalLocale, type ClassicalLocale } from '../../../shared/locale';
 
-// 「跟随系统」优先,英语作为第一个显式语言,其余语言按支持列表顺序排列。
-const LANGUAGE_OPTIONS: ReadonlyArray<LocalePreference> = [
-  'system',
-  'en',
-  ...SUPPORTED_LOCALES.filter((locale) => locale !== 'en'),
-];
+/** The menu's single entry for the classical editions. */
+const CLASSICAL_OPTION = 'classical';
+type LanguageOption = LocalePreference | typeof CLASSICAL_OPTION;
+
+// 「跟随系统」优先,英语作为第一个显式语言,其余语言按支持列表顺序排列;古典版本合为一项放最后。
 
 export function LanguageSection() {
+  const { locale, effectiveLocale, setLocale, classicalStyle, setClassicalStyle } = useLocale();
+  return (
+    <LanguageSectionView
+      locale={locale}
+      effectiveLocale={effectiveLocale}
+      onChange={setLocale}
+      classicalStyle={classicalStyle}
+      onClassicalStyleChange={setClassicalStyle}
+    />
+  );
+}
+
+/**
+ * The section body for a given preference. The cloud instance settings page renders it
+ * for the instance's language; without a style handler the classical style picker is hidden.
+ */
+export function LanguageSectionView({
+  locale,
+  effectiveLocale,
+  onChange: setLocale,
+  classicalStyle,
+  onClassicalStyleChange: setClassicalStyle,
+  disabled = false,
+  locales,
+  headingStatus,
+}: {
+  locale: LocalePreference;
+  effectiveLocale?: string;
+  /** Local saves report whether they persisted; a cloud target reports its own failures. */
+  onChange(next: LocalePreference): boolean | void | Promise<boolean | void>;
+  classicalStyle?: ClassicalReplyStyleId;
+  onClassicalStyleChange?(next: ClassicalReplyStyleId): void;
+  disabled?: boolean;
+  /** Languages the target can save; the menu offers only these. */
+  locales?: readonly LocalePreference[];
+  /** Cloud settings: a group that could not be read says so here, in place of the heading's action. */
+  headingStatus?: React.ReactNode;
+}) {
   const { t } = useTranslation();
-  const { locale, setLocale } = useLocale();
+  const classical = isClassicalLocale(locale) ? locale : null;
+  const options = languageSettings.language.options.filter(({ value }) =>
+    !locales || (value === CLASSICAL_OPTION ? locales.some(isClassicalLocale) : locales.includes(value)),
+  );
+
+  const saveLanguage = async (preference: LocalePreference) => {
+    if (await setLocale(preference) === false) toast.error(t('regionScreenshot.translation.saveFailed'));
+  };
+
+  const chooseLanguage = (option: LanguageOption) => {
+    if (option !== CLASSICAL_OPTION) {
+      void saveLanguage(option);
+      return;
+    }
+    if (classical) return;
+    // First switch keeps the script the user already reads.
+    void saveLanguage(effectiveLocale === 'zh-TW' ? 'zh-Hant-x-lzh' : 'zh-Hans-x-lzh');
+  };
 
   return (
-    <div className="flex flex-col gap-[14px]">
-      <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-        {t('settings.language.title')}
-      </h2>
+    <SettingsSection title={t(languageSettings.language.sectionKey)} action={headingStatus}>
+      <SettingsCard>
+        <SettingsRow
+          id={languageSettings.language.targetId}
+          className="cindy-segmented-row"
+          title={t(languageSettings.language.titleKey)}
+          hint={t(languageSettings.language.descriptionKey)}
+          trailing={
+            <Select
+              data-setting-id={languageSettings.language.id}
+              value={classical ? CLASSICAL_OPTION : locale}
+              options={options.map((option) => ({
+                value: option.value,
+                label: t(option.labelKey),
+              }))}
+              onValueChange={(next) => chooseLanguage(next as LanguageOption)}
+              label={t('settings.language.ariaLabel')}
+              width="md"
+              className="shrink-0"
+              disabled={disabled}
+            />
+          }
+        />
 
-      <div
-        className={cn(
-          'flex flex-row items-center justify-between gap-6 rounded-xl px-4 py-4',
-          'bg-[var(--settings-theme-card-bg)]',
-          'border border-[var(--settings-theme-card-border)]',
-        )}
-      >
-        <div className="min-w-0 flex-1">
-          <p
-            className="text-13 font-medium text-[var(--settings-section-sublabel)]"
-            style={{ letterSpacing: '0.12px' }}
-          >
-            {t('settings.language.label')}
-          </p>
-          <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-            {t('settings.language.hint')}
-          </p>
-        </div>
-
-        <Select.Root value={locale} onValueChange={(value) => setLocale(value as LocalePreference)}>
-          <Select.Trigger
-            aria-label={t('settings.language.ariaLabel')}
-            className={cn(
-              'flex h-9 w-[320px] max-w-full shrink-0 items-center justify-between gap-3 rounded-full border px-3.5 text-13 outline-none transition-colors',
-              'border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-              'hover:bg-[var(--settings-menu-bg-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-            )}
-          >
-            <span className="min-w-0 truncate text-left">
-              <Select.Value />
-            </span>
-            <Select.Icon asChild>
-              <ChevronDown
-                size={14}
-                className="shrink-0 text-[var(--settings-eye-icon)]"
-                aria-hidden="true"
-              />
-            </Select.Icon>
-          </Select.Trigger>
-          <Select.Portal>
-            <Select.Content
-              position="popper"
-              side="bottom"
-              align="start"
-              sideOffset={6}
-              className={cn(
-                'z-[10010] max-h-[min(18rem,var(--radix-select-content-available-height))] w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl p-2',
-                'border border-[var(--settings-input-border)] bg-[var(--settings-theme-card-bg)]',
-              )}
-            >
-              <Select.Viewport className="flex flex-col gap-[2px]">
-                {LANGUAGE_OPTIONS.map((opt) => (
-                  <Select.Item
-                    key={opt}
-                    value={opt}
-                    className={cn(
-                      'flex h-9 w-full cursor-pointer select-none items-center justify-between gap-3 rounded-[8px] px-3 text-left text-13 outline-none transition-colors',
-                      'text-[var(--settings-input-text)]',
-                      'data-[state=checked]:text-[var(--settings-menu-text-selected)]',
-                    )}
-                  >
-                    <Select.ItemText className="min-w-0 truncate">
-                      {t(`settings.language.options.${opt}`)}
-                    </Select.ItemText>
-                    <Select.ItemIndicator>
-                      <Check
-                        size={16}
-                        className="shrink-0 text-[var(--settings-theme-icon-active)]"
-                      />
-                    </Select.ItemIndicator>
-                  </Select.Item>
-                ))}
-              </Select.Viewport>
-            </Select.Content>
-          </Select.Portal>
-        </Select.Root>
-      </div>
-    </div>
+        {classical ? (
+          <SettingsRow
+            id={languageSettings.classical.targetId}
+            className="cindy-segmented-row"
+            title={t(languageSettings.classical.titleKey)}
+            hint={t(languageSettings.classical.descriptionKey)}
+            trailing={
+              <div className="flex w-[320px] max-w-full shrink-0 flex-row gap-2">
+                <Select
+                  data-setting-id={languageSettings.classical.id}
+                  value={classical}
+                  options={languageSettings.classical.options.map((script) => ({
+                    value: script.value,
+                    label: t(script.labelKey),
+                  }))}
+                  onValueChange={(next) => { void saveLanguage(next as ClassicalLocale); }}
+                  label={t('settings.language.classical.scriptAriaLabel')}
+                  width="xs"
+                  className="shrink-0"
+                  disabled={disabled}
+                />
+                {classicalStyle && setClassicalStyle ? (
+                  <Select
+                    data-setting-id={languageSettings.classical.id}
+                    value={classicalStyle}
+                    options={classicalStyleOptions.map((style) => ({
+                      value: style.value,
+                      label: t(style.labelKey),
+                    }))}
+                    onValueChange={(next) => setClassicalStyle(next as ClassicalReplyStyleId)}
+                    label={t('settings.language.classical.styleAriaLabel')}
+                    className="flex-1"
+                    disabled={disabled}
+                  />
+                ) : null}
+              </div>
+            }
+          />
+        ) : null}
+      </SettingsCard>
+    </SettingsSection>
   );
 }

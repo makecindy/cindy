@@ -1,3 +1,4 @@
+import { parseSettingsNavigationTarget } from '@cindy/maker-shared/settings-navigation';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -22,7 +23,8 @@ const compiled = ts.transpileModule(`const bridge = {${source.slice(start, end)}
 
 function connect() {
   let listener: ((payload: unknown) => void) | undefined;
-  const bridge = new Function('fanOutDeepLinkNavigate', 'isDeepLinkProviderConnectId', 'isValidPluginResourceId', `${compiled}; return bridge;`)(
+  const bridge = new Function('parseSettingsNavigationTarget', 'fanOutDeepLinkNavigate', 'isDeepLinkProviderConnectId', 'isValidPluginResourceId', `${compiled}; return bridge;`)(
+    parseSettingsNavigationTarget,
     (callback: (payload: unknown) => void) => {
       listener = callback;
       return () => { listener = undefined; };
@@ -62,6 +64,29 @@ it('delivers remote-control settings through the live bridge and cold-start buff
   openMainWindowRemoteControlSettings();
   expect(takePendingDeepLink()).toEqual(expected);
   expect(takePendingDeepLink()).toBeNull();
+});
+
+// Review #8227 (Codex P2): the Computer Use enablement link must reach a running app, not only
+// the cold-start buffer; the preload whitelist had no builtin-tools branch.
+it('delivers cindy://settings/builtin-tools through the live bridge and cold-start buffer', () => {
+  const { received } = connect();
+  handleIncomingDeepLink('cindy://settings/builtin-tools', 'open-url');
+  expect(received).toEqual([{ type: 'settings', tab: 'builtin-tools' }]);
+  setDeepLinkMainWindow(null);
+  handleIncomingDeepLink('cindy://settings/builtin-tools', 'argv');
+  expect(takePendingDeepLink()).toEqual({ type: 'settings', tab: 'builtin-tools' });
+});
+
+// Review 2026-10-29 (Codex P1): the warm-app path dropped installed-plugin payloads because the
+// preload validator had no branch for them; only the cold-start buffer worked.
+it('delivers cindy://plugins links through the live bridge and cold-start buffer', () => {
+  const { received } = connect();
+  handleIncomingDeepLink('cindy://plugins/my-browser', 'open-url');
+  handleIncomingDeepLink('cindy://plugins', 'open-url');
+  expect(received).toEqual([{ type: 'installed-plugin', ghostId: 'my-browser' }, { type: 'installed-plugin' }]);
+  setDeepLinkMainWindow(null);
+  handleIncomingDeepLink('cindy://plugins/my-browser', 'argv');
+  expect(takePendingDeepLink()).toEqual({ type: 'installed-plugin', ghostId: 'my-browser' });
 });
 
 describe('Agent Island click id across the preload deep-link bridge', () => {
@@ -142,4 +167,18 @@ describe('public plugin entry through the production bridge', () => {
     deliver({ ...expected, install: true, url: 'https://untrusted.example.test' });
     expect(received).toEqual([expected]);
   });
+});
+
+// Unit: both warm/cold delivery must preserve the computer and the requested setting.
+it('delivers device-bound settings through the live bridge and cold-start buffer', () => {
+  const { received, deliver } = connect();
+  const href = 'cindy://settings-link/appearance?device=computer-a&query=font';
+  const expected = { type: 'settings-navigation', target: { tab: 'appearance', deviceId: 'computer-a', query: 'font' } };
+  handleIncomingDeepLink(href, 'open-url');
+  expect(received).toEqual([expected]);
+  deliver({ type: 'settings-navigation', target: { ...expected.target, command: 'run' } });
+  expect(received).toEqual([expected]);
+  setDeepLinkMainWindow(null);
+  handleIncomingDeepLink(href, 'argv');
+  expect(takePendingDeepLink()).toEqual(expected);
 });

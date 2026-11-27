@@ -7,7 +7,7 @@
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { MAKER_PUSH } from '../../maker-ipc/channels';
 import {
@@ -22,6 +22,39 @@ const PRELOAD_PATH = path.resolve(
     : path.join(process.cwd(), 'apps', 'desktop'),
   'src/preload/sidebarWindowPreload.ts',
 );
+
+const bridge = vi.hoisted(() => ({ expose: vi.fn(), invoke: vi.fn() }));
+vi.mock('electron', () => ({
+  contextBridge: { exposeInMainWorld: bridge.expose },
+  ipcRenderer: { invoke: bridge.invoke, on: vi.fn(), sendSync: vi.fn() },
+  webUtils: { getPathForFile: vi.fn() },
+}));
+
+// #11392: the detached window uses its own preload. Exercise its public methods,
+// since checking the main preload alone misses a disabled preview and missing thumbnails.
+it('routes detached file previews and thumbnails through their dedicated IPCs', async () => {
+  await import('../../../preload/sidebarWindowPreload');
+  const api = bridge.expose.mock.calls.find(([name]) => name === 'electronAPI')![1];
+  const filePath = path.resolve('report.pdf');
+  const thumbnail = { dataUrl: null, byteSize: 64 };
+  bridge.invoke.mockResolvedValueOnce(true).mockResolvedValueOnce(thumbnail);
+  expect(await api.openSystemPreview(filePath)).toBe(true);
+  expect(await api.getFileThumbnail({ path: filePath, size: 128 })).toBe(thumbnail);
+  expect(bridge.invoke.mock.calls).toEqual([
+    ['file:system-preview', filePath], ['file:thumbnail', { path: filePath, size: 128 }],
+  ]);
+});
+
+// Unit: the actual detached model picker preload admits a catalog retry and still rejects share mutations.
+it('lets the sidebar retry a shared model catalog without exposing share mutations', async () => {
+  await import('../../../preload/sidebarWindowPreload');
+  const api = bridge.expose.mock.calls.find(([name]) => name === 'electronAPI')![1];
+  const retry = { action: 'retry-model-catalog', agentDeviceId: 'share:s1' };
+  bridge.invoke.mockClear().mockResolvedValueOnce({ ok: true });
+  await expect(api.providerShare.command(retry)).resolves.toEqual({ ok: true });
+  await expect(api.providerShare.command({ action: 'leave', memberId: 'm1' })).rejects.toThrow('Unsupported model catalog operation');
+  expect(bridge.invoke).toHaveBeenCalledExactlyOnceWith('provider-share:command', retry);
+});
 
 let source = '';
 try {
@@ -42,6 +75,12 @@ function exposedNestedKeys(src: string, parent: string): string[] {
   const body = extractBlock(src, parent);
   return body === null ? [] : objectKeys(body);
 }
+
+// Electron 边界 §4/5：同一个 App/Host 组件也挂在分离侧栏，须提供同一组用途受限的桥。
+// 纯跨窗口协议契约（guard）；缺口是无插件时 Host 订阅也会调用缺失方法，具名页面无法打开。
+it('exposes the same bound plugin App operations to the detached renderer', () => {
+  expect(exposedNestedKeys(source, 'maker')).toEqual(expect.arrayContaining(['mcpApps', 'onPluginUiAction', 'onPluginUiState']));
+});
 
 function extractBlock(src: string, key: string): string | null {
   const re = new RegExp(`(?:^|\\n)[ \\t]*${key}[ \\t]*:[ \\t]*\\{`, 'm');
@@ -116,8 +155,6 @@ const deviceLinkKeys = exposedNestedKeys(source, 'deviceLink');
 const mirrorCacheKeys = exposedNestedKeys(source, 'mirrorCache');
 const localDbBody = extractBlock(source, 'localDb') ?? '';
 const localDbKeys = objectKeys(localDbBody);
-const botsKeys = exposedNestedKeys(localDbBody, 'bots');
-const botAutonomyKeys = exposedNestedKeys(localDbBody, 'autonomy');
 const rightSidebarTabsKeys = exposedNestedKeys(localDbBody, 'rightSidebarTabs');
 const subagentRunsKeys = exposedNestedKeys(localDbBody, 'subagentRuns');
 const orcaWorkflowKeys = exposedNestedKeys(localDbBody, 'orcaWorkflows');
@@ -218,18 +255,6 @@ describe('sidebarWindowPreload 椤跺眰濂戠害', () => {
       'onChanged', 'onRuntimeChanged', 'onPreviewMedia',
       'unreadSync', 'clearUnread', 'onBadge', 'onUnreadSnapshot',
     ]));
-  });
-
-  it('exposes only the workbench read, change event, and permission action', () => {
-    expect(localDbKeys).toContain('bots');
-    expect(botsKeys).toEqual(['autonomy']);
-    expect(botAutonomyKeys).toEqual(['glance']);
-    expect(makerKeys).toEqual(expect.arrayContaining([
-      'onBotAutonomyChanged', 'getPendingInteractions', 'allowBotWorkbenchPermission',
-    ]));
-    expect(makerKeys).not.toContain('resolveInteraction');
-    expect(source).toContain("ipcRenderer.invoke('local-db:bots:autonomy:glance', botId)");
-    expect(source).toContain("ipcRenderer.invoke('maker:rsb-window:allow-bot-workbench-permission', { botId, sessionId, requestId })");
   });
 
   it('涓嶆毚闇?maker / agent / voice / login 鑷不鑳藉姏', () => {

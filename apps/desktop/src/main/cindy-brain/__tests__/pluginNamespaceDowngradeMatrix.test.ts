@@ -6,7 +6,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ghostInstallApprovalToken, type InstalledGhost } from '../../../shared/ghost.js';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 import { ghostSecretStorageKey } from '../../../shared/providerSecrets.js';
-import { GhostManager, type GhostManagerOptions } from '../GhostManager.js';
+import { GhostManager, CINDY_OFFICIAL_GHOST_TRUST, type GhostManagerOptions } from '../GhostManager.js';
+import { fingerprintDirContent } from '../builtinGhostProvisioner.js';
 import { pluginInstanceRegistryPath, type PluginInstanceRegistry } from '../pluginInstanceRegistry.js';
 import { pendingCensusMismatches } from '../pluginInstanceRegistryService.js';
 import {
@@ -59,7 +60,7 @@ function manifest(id: string): Record<string, unknown> {
   };
 }
 
-async function plant(id: string): Promise<void> {
+async function plant(id: string, builtin = false): Promise<void> {
   const dir = path.join(rootDir, id);
   await fs.promises.mkdir(dir, { recursive: true });
   const declared = manifest(id);
@@ -73,9 +74,10 @@ async function plant(id: string): Promise<void> {
     manifest: declared as InstalledGhost['manifest'],
     localeResources: {},
     enabled: true,
-    trust: { level: 'unverified', publisherSigned: false, publisherVerified: false, reviewed: false },
+    trust: builtin ? CINDY_OFFICIAL_GHOST_TRUST
+      : { level: 'unverified', publisherSigned: false, publisherVerified: false, reviewed: false },
     skillContentSha256: await hashApprovedSkillContent(declared as InstalledGhost['manifest'], dir),
-    packageSha256: SHA,
+    packageSha256: builtin ? (await fingerprintDirContent(dir)).hash : SHA,
   }), { skillSourceDir: dir });
 }
 
@@ -185,8 +187,8 @@ describe('namespace downgrade matrix', () => {
     expect(kv().read(keys['public-tool'])).not.toEqual(kv().read(keys['xd-feishu']));
     expectPrivileges('public-tool', null, true, false, false);
     expectPrivileges('manual-tool', null, true, false, false);
-    expectPrivileges('xd-feishu', null, true, true, true);
-    expectPrivileges('cindy-helper', null, true, true, true);
+    expectPrivileges('xd-feishu', null, true, true, false);
+    expectPrivileges('cindy-helper', null, true, false, false);
   });
 
   it('survives an old client editing each class and still restores only confirmed privileges', async () => {
@@ -248,7 +250,7 @@ describe('namespace downgrade matrix', () => {
     await manager.reconcilePendingRootNamespaces(true);
     expect(byId('xd-feishu')).toMatchObject({ namespace: 'xd', namespaceState: 'confirmed', enabled: true });
     expect(manager.readDeliveryNamespace(keys['xd-feishu'])).toBe('xd');
-    expectPrivileges('xd-feishu', 'xd', false, true, true);
+    expectPrivileges('xd-feishu', 'xd', false, true, false);
     expectOwnedData(keys['xd-feishu'], 'kept:xd-feishu');
     expectOwnedData(keys['public-tool'], 'kept:public-tool');
   });
@@ -361,7 +363,7 @@ describe('namespace downgrade matrix', () => {
         sha256: newSha, approvedPackageSha256: newSha,
       },
     });
-    expect(restored).toMatchObject({ brokerEligible: true, hostPrimitiveEligible: true, basis: 'market-organization-current' });
+    expect(restored).toMatchObject({ brokerEligible: true, hostPrimitiveEligible: false, basis: 'market-organization-current' });
     expect(authorizeGhostTokenBroker('xd-feishu', { kind: 'ready', facts: {
       ghostId: 'xd-feishu', namespace: 'xd', builtin: false, installOrigin: 'manual',
       currentOrganization: { organizationId: 'org-xd', orgSlug: 'xd', pluginPrefix: 'xd' },
@@ -373,14 +375,16 @@ describe('namespace downgrade matrix', () => {
     } })).toBe(true);
   });
 
-  it('keeps official cindy plugin broker eligibility after an old client strips namespace', async () => {
+  it('keeps legacy installation evidence without reviving public Broker privileges after downgrade', async () => {
     manager = createManager({
       captureLegacyFirstPartyEligibility: (ghostId) => ghostId === 'cindy-helper',
     });
-    await plant('cindy-helper');
+    // #10296: the builtin migration requires an actual old seed's official
+    // directory-hash receipt; a manual/archive receipt cannot establish root.
+    await plant('cindy-helper', true);
     expect(manager.ensureNamespaceMigrationCensus()?.pendingRelIds).toContain('cindy-helper');
     expect(manager.readLegacyFirstPartyEligible('cindy-helper')).toBe(true);
-    await manager.commitPendingNamespace('cindy-helper', null, 'builtin');
+    await expect(manager.commitPendingNamespace('cindy-helper', null, 'builtin')).resolves.toEqual({ ok: true });
     const key = installedGhostStoragePart(byId('cindy-helper'));
     writeOwnedData(key, 'kept:cindy-helper');
     const store = new GhostInstallReceiptStore(() => path.join(workDir, 'ghosts-install-state'), mutateSnapshot);
@@ -410,9 +414,9 @@ describe('namespace downgrade matrix', () => {
       marketRecord: null,
     };
     expect(resolveGhostFirstPartyPrivilege(facts)).toMatchObject({
-      brokerEligible: true, hostPrimitiveEligible: true, basis: 'legacy-existing-install',
+      brokerEligible: false, hostPrimitiveEligible: false, basis: 'denied-unknown-origin',
     });
-    expect(authorizeGhostTokenBroker('cindy-helper', { kind: 'ready', facts })).toBe(true);
-    expect(authorizeGhostHostPrimitive('cindy-helper', { kind: 'ready', facts })).toBe(true);
+    expect(authorizeGhostTokenBroker('cindy-helper', { kind: 'ready', facts })).toBe(false);
+    expect(authorizeGhostHostPrimitive('cindy-helper', { kind: 'ready', facts })).toBe(false);
   });
 });

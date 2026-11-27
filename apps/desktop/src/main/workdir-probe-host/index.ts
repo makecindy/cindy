@@ -1,6 +1,5 @@
-/** Electron wiring for bounded asynchronous main-process directory probes. */
+/** Bounded asynchronous directory probes shared by both process launchers. */
 
-import { app } from 'electron';
 import path from 'node:path';
 
 import { createLogger } from '../logger.js';
@@ -12,8 +11,8 @@ const log = createLogger('workdir-diagnostics');
 export const workdirProbeHostClient = new MainProcessWorkdirProbeClient({ log });
 
 /** Bounded filesystem identity probe for local cwd recovery; never expose paths to a controller. */
-async function directoryOperation(dir: string, kind: WorkdirProbeRequest['kind']) {
-  const result = await workdirProbeHostClient.probe(dir, path.resolve(dir), 5_000, kind);
+async function directoryOperation(dir: string, kind: WorkdirProbeRequest['kind'], isCurrent?: () => boolean) {
+  const result = await workdirProbeHostClient.probe(dir, path.resolve(dir), 5_000, kind, isCurrent);
   if (!result.ok)
     throw Object.assign(new Error('Working directory probe failed'), { code: result.code });
   return result;
@@ -26,8 +25,12 @@ export async function statWorkingDirectory(
   return { isDirectory: () => result.isDirectory, dev: result.device };
 }
 
-export async function mkdirWorkingDirectory(dir: string): Promise<void> {
-  await directoryOperation(dir, 'mkdir');
+export async function mkdirWorkingDirectory(
+  dir: string,
+  _options: { recursive: true },
+  isCurrent: () => boolean,
+): Promise<void> {
+  await directoryOperation(dir, 'mkdir', isCurrent);
 }
 
 export async function realpathWorkingDirectory(dir: string): Promise<string> {
@@ -38,10 +41,4 @@ export async function realpathWorkingDirectory(dir: string): Promise<string> {
 
 export async function findSimilarWorkingDirectory(dir: string): Promise<string | null> {
   return (await directoryOperation(dir, 'similar')).path ?? null;
-}
-
-if (typeof app.once === 'function') {
-  app.once('before-quit', () => {
-    workdirProbeHostClient.dispose();
-  });
 }

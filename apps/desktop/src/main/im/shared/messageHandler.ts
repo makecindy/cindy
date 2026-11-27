@@ -1,3 +1,4 @@
+import { findImQuestionReply } from './questionPresentation';
 /**
  * main/im/shared/messageHandler.ts
  * ---------------------------------------------------------------------------
@@ -33,7 +34,7 @@ import { getControlScope, isInControl } from './controlState';
 import { isCommandAuthorized, isStopCommand } from './controlCommands';
 import type { ImSlashHandlers } from './slashCommands';
 import { looksLikeSlashCommand } from './slashCommands';
-import type { ImTurnRunner } from './turnRunner';
+import type { ImRunAgentTurnArgs, ImTurnRunner } from './turnRunner';
 import type { ImChannelAdapter } from './types';
 import { describeInteractionSource } from './interactionSource';
 import { buildImReplyContextBlock } from './replyContext';
@@ -47,6 +48,16 @@ import { isLaneTurnScopeChannel, type ChannelToolScope } from './channelToolScop
  * 普通 DM 文本里只有 `!` 前缀能原样到达 bot。
  */
 export { isStopCommand } from './controlCommands';
+
+/**
+ * Whether the message was sent inside a thread/topic. A message that opens a new topic from
+ * the main stream reads its context from the main stream, so it is not "in" that topic yet.
+ */
+function messageIsInThread(adapter: ImChannelAdapter, event: IMMessageEvent): boolean {
+  if (event.groupContextLane) return event.groupContextLane.threadId !== '';
+  const lane = adapter.companionLane?.(event.senderId);
+  return lane?.kind === 'group' && lane.threadId !== '';
+}
 
 export function createMessageHandler(
   adapter: ImChannelAdapter,
@@ -102,6 +113,8 @@ export function createMessageHandler(
     event: IMMessageEvent,
     accountGeneration: ImAccountGeneration,
   ): Promise<void> {
+    if (event.delivery?.isCancelled?.()) return;
+    event.assertCurrent?.();
     log.info(
       `processOne sender=...${event.senderId.slice(-8)} chat=...${event.chatId.slice(-8)} ` +
         `textLen=${event.text.length} att=${event.attachments.length} unsupported=${event.unsupported.length}`,
@@ -186,16 +199,29 @@ export function createMessageHandler(
     // 放在 slash 之前; 与 slash 同口径只认纯文本(见 pureTextCommandInput)。turn
     // 运行期间 userLocks 并不持锁(runAgentTurn 在 dispatch 后即返回), 所以这里能在
     // 上一轮仍在跑时立刻执行, 而不是排到它后面。
-    if (pureTextCommandInput && isStopCommand(event.text)) {
+    if (pureTextCommandInput && (isStopCommand(event.text) ||
+      (event.delivery && event.text.trim().toLowerCase() === '/stop'))) {
       let reply: string;
+      let droppedExternal = 0;
+      let cancellationError: string | undefined;
       try {
+        droppedExternal = event.delivery?.cancelPending?.() ?? 0;
+      } catch (err) {
+        if (isImAccountScopeClosedError(err)) throw err;
+        cancellationError = err instanceof Error ? err.message : String(err);
+        log.error(`cancelPending threw: ${cancellationError}`);
+      }
+      try {
+        // A failed durable queue cancellation must not prevent aborting the
+        // active turn. Report both outcomes without claiming the queue cleared.
         const result = await turnRunner.stopActiveTurn({
           botContextId: event.contextId,
           userId: event.senderId,
           scopeKey: notificationSessionId || threadScoped ? event.scopeKey : undefined,
           ...(notificationSessionId ? { notificationSessionId } : {}),
         });
-        reply = result.stopped ? ui.agent.stopDone(result.droppedQueued) : ui.agent.stopIdle;
+        reply = result.stopped || droppedExternal > 0
+          ? ui.agent.stopDone(result.droppedQueued + droppedExternal) : ui.agent.stopIdle;
         log.info(
           `!stop handled sender=...${event.senderId.slice(-8)} stopped=${result.stopped} dropped=${result.droppedQueued}`,
         );
@@ -204,6 +230,7 @@ export function createMessageHandler(
         log.error(`stopActiveTurn threw: ${msg}`);
         reply = ui.agent.sendInternalError(msg);
       }
+      if (cancellationError !== undefined) reply += `\n\n${ui.agent.sendInternalError(cancellationError)}`;
       // 群主流 @ 开话题的首条若是 !stop: 「思考中」开场白卡就地 patch 成
       // stop 回复(消费 pending opener), 不再另发一条; 消费不了再走正常发送。
       // 仅当本条消息**自己**开了话题(groupContextLane 存在)才消费 — 同话题
@@ -295,7 +322,35 @@ export function createMessageHandler(
       return;
     }
 
-    const hasContent = event.text.length > 0 || event.attachments.length > 0;
+    // ── 全响应(ambient)前置判定: 辅助模型先说该不该插话 ───────────────────
+    // 放在 ack / 提前落库之前: 判成 SKIP 的消息不留任何痕迹(不落专线、不起轮次、
+    // 群窗口游标不动)。判不出来按原路径起轮次, 由主模型自己 NO_REPLY。
+    const skipAmbient = async (): Promise<boolean> => {
+      if (event.ambient !== true || !adapter.ambientTurnGate) return false;
+      let verdict: 'proceed' | 'skip' = 'proceed';
+      try {
+        verdict = await adapter.ambientTurnGate(event);
+      } catch (err) {
+        if (isImAccountScopeClosedError(err)) throw err;
+        const msg = err instanceof Error ? err.message : String(err);
+        log.warn(`ambientTurnGate failed (proceeding): ${msg}`);
+      }
+      if (verdict === 'skip') {
+        log.info(
+          `ambient skipped by judge sender=...${event.senderId.slice(-8)} msg=...${event.messageId.slice(-8)}`,
+        );
+        return true;
+      }
+      return false;
+    };
+
+    // iMessage participation mode applies before any attachment notice.
+    if (channel === 'imessage' && event.ambient === true && adapter.ambientTurnGate && await skipAmbient()) return;
+
+    // An entry the model can fetch by itself (an original over the direct-delivery cap) is content.
+    const hasContent = event.text.length > 0 || event.attachments.length > 0
+      || event.unsupported.some(entry => entry.retrievable);
+    const reportedUnsupported = event.unsupported.filter(entry => !entry.retrievable);
 
     // ── pure-unsupported: reply directly, do NOT invoke agent ───────────────
     if (!hasContent && !event.invoked && !event.replyContext && event.unsupported.length > 0) {
@@ -324,37 +379,22 @@ export function createMessageHandler(
       return;
     }
 
-    // ── mixed: ack the dropped bits as a SEPARATE text msg, then run agent ──
-    if (event.unsupported.length > 0) {
+    // Durable callers may retry a busy dispatch. Emit mixed-attachment notices
+    // only after acceptance so those queue retries cannot repeat the notice.
+    const notifyUnsupported = async () => {
+      if (!reportedUnsupported.length) return;
       try {
-        await im.sendText(event.senderId, ui.agent.unsupportedNotice(event.unsupported), {
+        await im.sendText(event.senderId, ui.agent.unsupportedNotice(reportedUnsupported), {
           threadTs: event.scopeKey,
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log.warn(`unsupportedNotice send failed (non-fatal): ${msg}`);
       }
-    }
+    };
+    if (!event.delivery) await notifyUnsupported();
 
-    // ── 全响应(ambient)前置判定: 辅助模型先说该不该插话 ───────────────────
-    // 放在 ack / 提前落库之前: 判成 SKIP 的消息不留任何痕迹(不落专线、不起轮次、
-    // 群窗口游标不动)。判不出来按原路径起轮次, 由主模型自己 NO_REPLY。
-    if (event.ambient === true && adapter.ambientTurnGate) {
-      let verdict: 'proceed' | 'skip' = 'proceed';
-      try {
-        verdict = await adapter.ambientTurnGate(event);
-      } catch (err) {
-        if (isImAccountScopeClosedError(err)) throw err;
-        const msg = err instanceof Error ? err.message : String(err);
-        log.warn(`ambientTurnGate failed (proceeding): ${msg}`);
-      }
-      if (verdict === 'skip') {
-        log.info(
-          `ambient skipped by judge sender=...${event.senderId.slice(-8)} msg=...${event.messageId.slice(-8)}`,
-        );
-        return;
-      }
-    }
+    if (channel !== 'imessage' && event.ambient === true && adapter.ambientTurnGate && await skipAmbient()) return;
 
     // ── invoke agent ────────────────────────────────────────────────────────
     // 本条的渠道来源事实(只进模型正文); 取不到按"不写说明"降级, 不阻断消息。与下面的
@@ -413,7 +453,7 @@ export function createMessageHandler(
     if (adapter.prepareAgentTurnText) {
       handedOverAck = event.messageId ? ackProcessingEarly(im, event.messageId) : null;
       try {
-        if (!notificationSessionId) {
+        if (!notificationSessionId && !event.delivery) {
           prePersisted =
             (await turnRunner.persistInboundUserMessageEarly?.({
               botContextId: event.contextId,
@@ -451,26 +491,29 @@ export function createMessageHandler(
       : isCommandAuthorized(event);
     // Telegram / 飞书由渠道自己登记带 transport 的作用域; 企业微信 / 钉钉 / Discord 的伙伴专线
     // 轮次登记一份不带 transport 的, 让伙伴技能等能按本轮触发者授权(否则主人也只读)。
-    const channelToolScope: ChannelToolScope | undefined =
-      adapter.channelToolScopeFor?.(event) ??
-      (isLaneTurnScopeChannel(channel) && turnRunner.companionBotIdFor?.(event.contextId)
-        ? {
-            channel,
-            botId: event.contextId,
-            laneUserId: event.senderId,
-            chatId: event.chatId?.trim() || event.senderId,
-            chatKind: channelNoteSource?.chatKind ?? (event.speaker ? 'group' : 'direct'),
-            requesterIsOwner,
-            companion: true,
-          }
-        : undefined);
-    const fallbackReplyPrefix = !adapter.prepareAgentTurnText && event.replyContext
-      ? buildImReplyContextBlock(event.replyContext)
-      : '';
-    const deliveredReply = prepared?.replyContext ??
-      (!adapter.prepareAgentTurnText ? event.replyContext : undefined);
     try {
-      await turnRunner.runAgentTurn({
+      // A context failure may degrade, but it cannot renew an invalidated ingress grant.
+      event.assertCurrent?.();
+      const channelToolScope: ChannelToolScope | undefined =
+        adapter.channelToolScopeFor?.(event) ??
+        (isLaneTurnScopeChannel(channel) && turnRunner.companionBotIdFor?.(event.contextId)
+          ? {
+              channel,
+              botId: event.contextId,
+              laneUserId: event.senderId,
+              chatId: event.chatId?.trim() || event.senderId,
+              chatKind: channelNoteSource?.chatKind ?? (event.speaker ? 'group' : 'direct'),
+              requesterIsOwner,
+              companion: true,
+            }
+          : undefined);
+      const fallbackReplyPrefix = !adapter.prepareAgentTurnText && event.replyContext
+        ? buildImReplyContextBlock(event.replyContext, event.text)
+        : '';
+      const deliveredReply = prepared?.replyContext ??
+        (!adapter.prepareAgentTurnText ? event.replyContext : undefined);
+      const turnArgs: ImRunAgentTurnArgs = {
+        ...(event.assertCurrent ? { beforeProviderStart: async () => { event.assertCurrent?.(); } } : {}),
         ...(notificationSessionId ? {
           notificationSessionId,
           revalidateNotificationReply: async () => {
@@ -484,6 +527,7 @@ export function createMessageHandler(
         userMessageId: event.messageId,
         sourceDescription: describeInteractionSource(event),
         requesterIsOwner,
+        questionRespondentId: event.speaker?.id ?? event.senderId,
         ...(channelNoteSource ? { channelNoteSource } : {}),
         ...(messageOrigin ? { messageOrigin } : {}),
         text: event.text,
@@ -508,7 +552,8 @@ export function createMessageHandler(
         agentText: buildInboundMessageFacts({
           text: event.text,
           invoked: event.invoked,
-          hasReply: !!event.replyContext,
+          hasReply: !!deliveredReply,
+          inThread: messageIsInThread(adapter, event),
           attachmentCount: event.attachments.length + (prepared?.contextAttachments?.length ?? 0),
           unavailable: [
             ...event.unsupported.map((entry) => `${entry.type}：${entry.label}`),
@@ -547,8 +592,45 @@ export function createMessageHandler(
             log.warn(`account-scoped background task failed (non-fatal): ${msg}`);
           });
         },
-      });
+      };
+      if (event.delivery) {
+        // Durable transports own their pending queue. A busy session must not
+        // silently accept this message into turnRunner's volatile sendQueue.
+        event.delivery.awaitPersistence();
+        const dispatch = await turnRunner.dispatchAgentTurn({
+          ...turnArgs, queueMode: 'external',
+          beforeProviderStart: async () => {
+            event.assertCurrent?.();
+            event.delivery!.awaitPersistence();
+            if (event.delivery!.isCancelled?.()) throw new Error('IM_INPUT_CANCELLED');
+          },
+        });
+        if (dispatch.kind === 'busy') event.delivery.defer();
+        else if (dispatch.kind === 'rejected') {
+          const text = dispatch.notice ?? (dispatch.reason === 'missing_auth' ? ui.agent.apiKeyMissing
+            : dispatch.reason === 'companion_unavailable'
+              ? ui.agent.companionUnavailable?.(dispatch.reason) ?? ui.agent.runtimeError(dispatch.reason)
+              : ui.agent.sendInternalError(dispatch.reason));
+          try {
+            await im.sendText(event.senderId, text, { threadTs: event.scopeKey });
+            event.delivery.accept();
+          } catch {
+            // A failed failure notice is not handled: retain it for a later retry.
+            event.delivery.defer();
+          }
+        }
+        else await notifyUnsupported();
+      } else {
+        await turnRunner.runAgentTurn(turnArgs);
+      }
     } catch (err) {
+      if (event.delivery?.isCancelled?.()) return;
+      try { event.assertCurrent?.(); }
+      catch {
+        const reactionId = await handedOverAck;
+        if (reactionId) await im.removeMessageReaction?.(event.messageId, reactionId).catch(() => undefined);
+        return;
+      }
       const msg = err instanceof Error ? err.message : String(err);
       log.error(`runAgentTurn threw: ${msg}`);
       // 本条消息自己开了话题(groupContextLane)时, 开场白卡还没被流式认领 —
@@ -582,6 +664,11 @@ export function createMessageHandler(
         log.info(`drop inbound message after account boundary closed channel=${channel}`);
         return;
       }
+      const answer = findImQuestionReply(im, event);
+      if (answer) {
+        event.delivery?.accept();
+        return answer().catch(() => log.warn('IM question reply failed'));
+      }
       // threadScoped 渠道: 同 thread 串行、跨 thread 并行(scopeKey 进锁键);
       // feishu scopeKey 恒 undefined — 键多一个冒号后缀, 行为不变。
       const key = `${event.contextId}:${event.senderId}:${threadScoped ? (event.scopeKey ?? '') : ''}`;
@@ -607,6 +694,7 @@ export function createMessageHandler(
         // Only clear if I'm still the tail (no follow-up enqueued).
         if (userLocks.get(key) === work) userLocks.delete(key);
       });
+      return work;
     });
   };
 }

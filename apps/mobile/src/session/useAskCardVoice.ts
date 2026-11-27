@@ -9,6 +9,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { i18n } from '@/i18n';
 import { useAskCardAuth } from '@/session/askCardAuth';
+import { useSpeakerFilterNotice } from '@/session/useSpeakerFilterNotice';
 import type { MobileVoiceSelection } from '@/session/mobileVoiceInput';
 
 type VoiceRun = {
@@ -27,6 +28,8 @@ export function useAskCardVoice(input: {
   busy: boolean;
   stopping: boolean;
   error: string | null;
+  /** The voiceprint filter just muted someone else's speech. */
+  speakerFiltered: boolean;
   toggle: () => void;
   stop: () => Promise<boolean>;
 } {
@@ -35,6 +38,11 @@ export function useAskCardVoice(input: {
   const [listening, setListening] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const {
+    visible: speakerFiltered,
+    show: showSpeakerFiltered,
+    clear: clearSpeakerFiltered,
+  } = useSpeakerFilterNotice();
   const runRef = useRef<VoiceRun | null>(null);
   const startingRef = useRef(false);
   const runReadyRef = useRef<{ promise: Promise<VoiceRun | null>; resolve: (run: VoiceRun | null) => void } | null>(null);
@@ -119,6 +127,7 @@ export function useAskCardVoice(input: {
     failedRef.current = false;
     setStarting(true);
     setError(null);
+    clearSpeakerFiltered();
     let resolveRun!: (run: VoiceRun | null) => void;
     const ready = { promise: new Promise<VoiceRun | null>((resolve) => { resolveRun = resolve; }), resolve: (run: VoiceRun | null) => resolveRun(run) };
     runReadyRef.current = ready;
@@ -150,6 +159,9 @@ export function useAskCardVoice(input: {
             if (abort.signal.aborted) { void run.cancel().catch(() => undefined); return; }
             runRef.current = run;
             ready.resolve(run);
+          },
+          onSpeakerFiltered: () => {
+            if (!abort.signal.aborted) showSpeakerFiltered();
           },
           onError: (message) => {
             if (abort.signal.aborted) return;
@@ -186,7 +198,7 @@ export function useAskCardVoice(input: {
         }
       }
     })();
-  }, [stop]);
+  }, [clearSpeakerFiltered, showSpeakerFiltered, stop]);
 
-  return { listening, starting, stopping, busy: starting || listening || stopping, error, toggle, stop };
+  return { listening, starting, stopping, busy: starting || listening || stopping, error, speakerFiltered, toggle, stop };
 }

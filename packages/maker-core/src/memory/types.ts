@@ -58,16 +58,25 @@ export interface MemoryFrontmatter {
 
 /** 解析后的内存记录 (storage.list / read 返回) */
 export interface MemoryRecord {
-  /** 含扩展名, e.g. 'feedback_response_style.md' */
+  /** 含扩展名, e.g. 'feedback_response_style.md' 或自由笔记 'notes.md' */
   filename: string;
-  /** 去掉 <type>_ 前缀和 .md 后缀, e.g. 'response_style' */
+  /** 去掉 <type>_ 前缀和 .md 后缀 (自由笔记为去掉 .md 后的文件名) */
   slug: string;
   frontmatter: MemoryFrontmatter;
   /** Body excludes storage frontmatter; imports retain their original whitespace. */
   body: string;
   /** 文件大小 (bytes), 用作 size warning 判断 */
   sizeBytes: number;
+  /** True for project-local freeform Markdown files (no strict <type>_<slug> schema). */
+  freeform?: boolean;
+  /** True when the on-disk file started with YAML frontmatter. */
+  hasFrontmatter?: boolean;
 }
+
+/** Max body size for project-local freeform edits/restores (fits inside 60 KB cloud preference cap). */
+export const PROJECT_MEMORY_HARD_BYTES = 56 * 1024;
+/** Max UTF-8 bytes injected from a teammate project's always-loaded MEMORY.md core entry. */
+export const CORE_MEMORY_INDEX_MAX_BYTES = 3072;
 
 export type WriteMode = 'create' | 'update' | 'append';
 
@@ -146,6 +155,7 @@ export type MemoryErrorCode =
   | 'version-conflict'
   | 'already-exists'
   | 'not-found'
+  | 'ambiguous-address'
   | 'path-traversal'
   | 'io-error'
   | 'not-ready';
@@ -165,15 +175,17 @@ export interface SearchHit {
   filename: string;
   type: MemoryType;
   title: string;
-  /** FTS5 snippet() 高亮片段 */
+  /** 命中片段: MATCH 臂为 FTS5 snippet() 高亮, LIKE 臂为命中窗口（多词按词分窗） + <mark> 标记 */
   snippet: string;
-  /** bm25 score, 越小越相关 */
+  /** 越小越相关; MATCH 臂为 bm25, LIKE 臂为基准分减质量分, 两臂之间不可比 */
   score: number;
 }
 
 export interface SearchOptions {
   /** 限定类目 */
   type?: MemoryType;
+  /** 排除类目 (如默认排除系统内部 digest) */
+  excludeTypes?: readonly MemoryType[];
   /** 默认 10 */
   limit?: number;
 }

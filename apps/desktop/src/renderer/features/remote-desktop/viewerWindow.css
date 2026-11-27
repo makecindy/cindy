@@ -12,7 +12,7 @@
   height: 60px;
   min-width: 0;
   padding-right: var(--space-3);
-  gap: 6px;
+  gap: var(--space-1_5);
   align-items: center;
   border-bottom: 1px solid var(--border-default);
   background: var(--surface);
@@ -27,7 +27,7 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-0_5);
 }
 .remote-viewer-title {
   overflow: hidden;
@@ -38,7 +38,7 @@
 .remote-viewer-status {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1_5);
   white-space: nowrap;
   overflow: hidden;
   color: var(--text-secondary);
@@ -135,11 +135,11 @@
   transform: translate(-50%, -50%);
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-3);
   max-width: 90%;
   border: 1px solid var(--border-default);
-  border-radius: 12px;
-  padding: 12px 20px;
+  border-radius: var(--radius-xl);
+  padding: var(--space-3) var(--space-5);
   background: var(--surface);
   font-size: var(--text-13);
   z-index: 4;
@@ -157,8 +157,8 @@
   position: absolute;
   bottom: 12px;
   left: 12px;
-  padding: 4px 10px;
-  border-radius: 9999px;
+  padding: var(--space-1) var(--space-2_5);
+  border-radius: var(--radius-full);
   background: var(--surface);
   border: 1px solid var(--border-default);
   pointer-events: none;
@@ -275,8 +275,18 @@
   inset: 0 0 auto;
   transition: transform 150ms ease-out;
   transform: translateY(calc(-100% + 8px));
+  /* Controls stay below the macOS menu bar and titlebar that slide in with the
+     reveal; the band keeps the toolbar background once macOS slides them away. */
+  padding-top: var(--remote-viewer-system-inset, 0px);
+  min-height: calc(52px + var(--remote-viewer-system-inset, 0px));
   /* Drag regions never receive pointer events; fullscreen has no window to drag. */
   -webkit-app-region: no-drag;
+}
+/* Wide toolbars keep their fixed 60px control row; wrapped narrow ones stay auto. */
+@media (min-width: 621px) {
+  .remote-viewer-fullscreen .remote-viewer-toolbar {
+    height: calc(60px + var(--remote-viewer-system-inset, 0px));
+  }
 }
 .remote-viewer-fullscreen .remote-viewer-toolbar[data-revealed='true'],
 .remote-viewer-fullscreen .remote-viewer-toolbar:focus-within,
@@ -298,8 +308,8 @@
   display: flex;
   flex: none;
   align-items: center;
-  gap: 2px;
-  padding: 2px;
+  gap: var(--space-0_5);
+  padding: var(--space-0_5);
   border-radius: var(--radius-full);
   background: var(--segmented-track);
   -webkit-app-region: no-drag;
@@ -325,7 +335,7 @@
 .remote-viewer-zoom-divider {
   width: 1px;
   height: var(--space-4);
-  margin-inline: 2px;
+  margin-inline: var(--space-0_5);
   /* --border-default nearly matches the Light track; derive from the tool ink instead. */
   background: color-mix(in srgb, var(--segmented-option-fg) 35%, transparent);
 }

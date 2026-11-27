@@ -320,7 +320,7 @@ export function SkillhubHomeContent({
           onClick={() => void handleImportSkill()}
           disabled={importBusy || !!target}
           aria-label={t('skillhub.home.importAria')}
-          className="plugin-management-action-trigger shrink-0 shadow-[var(--plugin-card-shadow)]"
+          className="plugin-management-action-trigger shrink-0"
         >
           <Upload size={14} strokeWidth={1.8} aria-hidden="true" />
           <span className="plugin-management-action-label">{t('skillhub.home.import')}</span>
@@ -405,20 +405,20 @@ export function SkillhubHomeContent({
                     {Array.from({ length: MARKET_PAGE_SIZE }).map((_, i) => (
                       <div
                         key={i}
-                        className="flex min-h-[100px] flex-col gap-2 rounded-[12px] border-[0.5px] border-[var(--border-default)] bg-[var(--surface-elevated)] p-3 shadow-[var(--plugin-card-shadow)]"
+                        className="flex min-h-[100px] flex-col gap-2 rounded-xl border-[0.5px] border-[var(--border-default)] bg-[var(--surface-elevated)] p-3"
                       >
                         <div className="flex items-center gap-2">
                           <div className="size-9 shrink-0 animate-pulse rounded-xl bg-[var(--cmd-palette-item-hover)] opacity-60" />
-                          <div className="h-3.5 w-2/3 animate-pulse rounded bg-[var(--cmd-palette-item-hover)] opacity-60" />
+                          <div className="h-3.5 w-2/3 animate-pulse rounded-full bg-[var(--cmd-palette-item-hover)] opacity-60" />
                         </div>
-                        <div className="h-3 w-full animate-pulse rounded bg-[var(--cmd-palette-item-hover)] opacity-40" />
-                        <div className="h-3 w-4/5 animate-pulse rounded bg-[var(--cmd-palette-item-hover)] opacity-40" />
-                        <div className="mt-auto h-3 w-1/3 animate-pulse rounded bg-[var(--cmd-palette-item-hover)] opacity-40" />
+                        <div className="h-3 w-full animate-pulse rounded-full bg-[var(--cmd-palette-item-hover)] opacity-40" />
+                        <div className="h-3 w-4/5 animate-pulse rounded-full bg-[var(--cmd-palette-item-hover)] opacity-40" />
+                        <div className="mt-auto h-3 w-1/3 animate-pulse rounded-full bg-[var(--cmd-palette-item-hover)] opacity-40" />
                       </div>
                     ))}
                   </div>
                 ) : marketError && catalogItems.length === 0 ? null : catalogItems.length === 0 ? (
-                  <div className="rounded-[12px] border-[0.5px] border-[var(--border-default)] px-4 py-5 text-13 leading-5 text-[var(--text-secondary)]">
+                  <div className="rounded-xl border-[0.5px] border-[var(--border-default)] px-4 py-5 text-13 leading-5 text-[var(--text-secondary)]">
                     {t('skillhub.home.catalogEmpty')}
                   </div>
                 ) : (
@@ -455,7 +455,7 @@ export function SkillhubHomeContent({
             {catalogTab === 'local' && (!normalizedQuery || visibleLocalCount > 0) ? (
               <section className="plugin-motion-page-section min-w-0">
                 {visibleLocalCount === 0 ? (
-                  <div className="rounded-[12px] border-[0.5px] border-[var(--border-default)] px-4 py-5 text-13 leading-5 text-[var(--text-secondary)]">
+                  <div className="rounded-xl border-[0.5px] border-[var(--border-default)] px-4 py-5 text-13 leading-5 text-[var(--text-secondary)]">
                     {bootstrapped ? t('skillhub.home.localEmpty') : t('skillhub.welcome.scanning')}
                   </div>
                 ) : (
@@ -484,7 +484,7 @@ export function SkillhubHomeContent({
             ) : null}
 
             {normalizedQuery && (catalogTab === 'local' || !marketLoading) && !hasSearchResults ? (
-              <div className="plugin-motion-page-section rounded-[12px] border-[0.5px] border-[var(--border-default)] px-4 py-8 text-center text-13 leading-5 text-[var(--text-secondary)]">
+              <div className="plugin-motion-page-section rounded-xl border-[0.5px] border-[var(--border-default)] px-4 py-8 text-center text-13 leading-5 text-[var(--text-secondary)]">
                 {t('skillhub.home.noSearchResults')}
               </div>
             ) : null}
@@ -588,8 +588,8 @@ function LocalGroup({
               type="button"
               onClick={() => onOpen(s)}
               className={cn(
-                'group flex w-full items-start gap-3 rounded-[12px] border-[0.5px] border-[var(--border-default)] px-3 py-2.5 text-left',
-                'bg-[var(--surface-elevated)] shadow-[var(--plugin-card-shadow)]',
+                'group flex w-full items-start gap-3 rounded-xl border-[0.5px] border-[var(--border-default)] px-3 py-2.5 text-left',
+                'bg-[var(--surface-elevated)]',
                 'transition-[background-color,border-color,transform] duration-150 ease-out',
                 'hover:-translate-y-0.5 hover:border-[var(--text-tertiary)]',
                 'active:translate-y-0 active:scale-[0.992]',
@@ -599,7 +599,7 @@ function LocalGroup({
               {s.kind === 'skill' ? (
                 <SkillIcon />
               ) : (
-                <span className="flex size-9 shrink-0 items-center justify-center rounded-[22%] border-[0.5px] border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)] shadow-[var(--plugin-card-shadow)]">
+                <span className="flex size-9 shrink-0 items-center justify-center rounded-[22%] border-[0.5px] border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)]">
                   <Icon size={17} strokeWidth={1.75} />
                 </span>
               )}

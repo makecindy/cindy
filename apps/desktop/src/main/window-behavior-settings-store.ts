@@ -1,3 +1,4 @@
+import { validateAdditionalSettingsOverrides } from '../shared/settingsEditableCatalog.js';
 /**
  * window-behavior-settings-store —— main 进程对窗口交互行为开关的持久化。
  *
@@ -9,6 +10,8 @@
  *    防误触的用户需在设置里显式打开)
  *  - windowsCloseBehavior: null (Windows 首次关闭时弹窗询问,选择后持久化)
  *  - linuxCloseBehavior: null (Linux 首次关闭时弹窗询问,选择后持久化)
+ *  - awayGuard: false (macOS「离开时继续工作」;开启后由 remote-desktop/awayGuard 执行)
+ *  - awayGuardDelaySeconds: null (离开多久后遮住;null 跟随系统熄屏时间)
  *
  * swallowActivationClick 仍由 renderer localStorage 承担运行时事实标准,main
  * 侧文件只供下次创建 BrowserWindow 时读取。平台关闭行为则完全由 main 侧
@@ -19,26 +22,45 @@ import { app } from 'electron';
 import path from 'node:path';
 
 import { desktopMakerLogger } from './maker-host/logger-adapter.js';
-import { createOverrideSettingsFile } from './maker-host/override-settings-file.js';
+import { createOverrideSettingsFile, portableOverrideSettings } from './maker-host/override-settings-file.js';
 import {
   isLinuxCloseBehavior,
   isWindowsCloseBehavior,
   type LinuxCloseBehavior,
   type WindowsCloseBehavior,
 } from '../shared/windowBehavior.js';
+import { isAwayGuardDelaySeconds, type AwayGuardDelaySeconds } from '../shared/awayGuard.js';
+
+import { inspectSettingsFile, isSettingBoolean, validateOptionalSettingsFields } from './maker-host/settings-inspection.js';
 
 const log = desktopMakerLogger.child('window-behavior-settings-store');
+
+export function inspectWindowBehaviorSettings() {
+  return inspectSettingsFile({ filePath: settingsFilePath, defaults: DEFAULTS, normalize,
+    validate: (raw) => validateOptionalSettingsFields(raw, {
+      swallowActivationClick: isSettingBoolean,
+      windowsCloseBehavior: (value) => value === null || isWindowsCloseBehavior(value),
+      linuxCloseBehavior: (value) => value === null || isLinuxCloseBehavior(value),
+      awayGuard: isSettingBoolean,
+      awayGuardDelaySeconds: (value) => value === null || isAwayGuardDelaySeconds(value),
+    }),
+  });
+}
 
 export interface WindowBehaviorSettings {
   swallowActivationClick: boolean;
   windowsCloseBehavior: WindowsCloseBehavior | null;
   linuxCloseBehavior: LinuxCloseBehavior | null;
+  awayGuard: boolean;
+  awayGuardDelaySeconds: AwayGuardDelaySeconds | null;
 }
 
 const DEFAULTS: WindowBehaviorSettings = {
   swallowActivationClick: false,
   windowsCloseBehavior: null,
   linuxCloseBehavior: null,
+  awayGuard: false,
+  awayGuardDelaySeconds: null,
 };
 
 function settingsFilePath(): string {
@@ -59,10 +81,15 @@ function normalize(raw: unknown): WindowBehaviorSettings {
     linuxCloseBehavior: isLinuxCloseBehavior(r.linuxCloseBehavior)
       ? r.linuxCloseBehavior
       : DEFAULTS.linuxCloseBehavior,
+    awayGuard: typeof r.awayGuard === 'boolean' ? r.awayGuard : DEFAULTS.awayGuard,
+    awayGuardDelaySeconds: isAwayGuardDelaySeconds(r.awayGuardDelaySeconds)
+      ? r.awayGuardDelaySeconds
+      : DEFAULTS.awayGuardDelaySeconds,
   };
 }
 
 const store = createOverrideSettingsFile<WindowBehaviorSettings>({
+  validateOverrides: raw => validateAdditionalSettingsOverrides('linuxWindow', raw),
   filePath: settingsFilePath,
   defaults: DEFAULTS,
   normalize,
@@ -89,4 +116,21 @@ export function writeLinuxCloseBehavior(linuxCloseBehavior: LinuxCloseBehavior):
   log.info('Linux close behavior written', { linuxCloseBehavior });
 }
 
+export function writeAwayGuard(awayGuard: boolean): void {
+  store.writePatch({ awayGuard });
+  log.info('away guard setting written', { awayGuard });
+}
+
+export function writeAwayGuardDelay(awayGuardDelaySeconds: AwayGuardDelaySeconds | null): void {
+  store.writePatch({ awayGuardDelaySeconds });
+  log.info('away guard delay written', { awayGuardDelaySeconds });
+}
+
 export const __testing = { normalize };
+
+/** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
+// The away guard needs this computer's own Accessibility grant, like remote desktop,
+// so it is turned on per computer instead of being copied over.
+export const windowBehaviorPortableSettings = portableOverrideSettings(store, { omitKeys: ['awayGuard'] });
+/** Internal Host settings adapter; no new IPC or persistence location. */
+export function getWindowBehaviorSettingsStore() { return store; }

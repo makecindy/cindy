@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { createElement } from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', () => ({
@@ -34,11 +34,23 @@ import {
   computeInlineDiffRanges,
   computeInlineDiffRangesUncached,
   INLINE_DIFF_MAX_PAIR_COUNT,
+  INLINE_DIFF_MIN_COMMON_RATIO,
   mergeInlineDiffRanges,
   renderInlineDiffHtml,
   shouldSkipInlineDiffCollection,
 } from '../inlineDiff';
 import { isPreviewableImageDiff } from '../ImageDiffPreview';
+
+// Exact ranges exercise diff content, not the host's 20 ms execution budget
+// (#7955). Restore the clock before any asynchronous work, including waitFor.
+function withInlineDiffClock<T>(run: () => T): T {
+  const now = vi.spyOn(Date, 'now').mockReturnValue(0);
+  try {
+    return run();
+  } finally {
+    now.mockRestore();
+  }
+}
 
 function hunk(index: number, oldStart: number, oldLines: number): Hunk {
   return {
@@ -758,10 +770,60 @@ describe('PlainUnifiedDiff inline diff helpers', () => {
     const oldText = 'const color = "red";';
     const newText = 'const color = "blue";';
 
-    const result = computeInlineDiffRanges(oldText, newText);
+    const result = withInlineDiffClock(() => computeInlineDiffRanges(oldText, newText));
 
     expect(result?.deleteRanges).toEqual([{ start: oldText.indexOf('red'), end: oldText.indexOf('red') + 3 }]);
     expect(result?.addRanges).toEqual([{ start: newText.indexOf('blue'), end: newText.indexOf('blue') + 4 }]);
+  });
+
+  it.each([20, 21])('applies the real word-diff budget at %i ms elapsed', (elapsed) => {
+    const oldText = 'const budget = "red";';
+    const newText = 'const budget = "blue";';
+    const now = vi.spyOn(Date, 'now').mockReturnValue(elapsed).mockReturnValueOnce(0);
+    try {
+      const result = computeInlineDiffRangesUncached(oldText, newText, {
+        maxLineLength: HIGHLIGHT_MAX_LINE_LENGTH,
+        minCommonRatio: INLINE_DIFF_MIN_COMMON_RATIO,
+      });
+
+      expect(result).toEqual(elapsed === 20 ? {
+        deleteRanges: [{ start: oldText.indexOf('red'), end: oldText.indexOf('red') + 3 }],
+        addRanges: [{ start: newText.indexOf('blue'), end: newText.indexOf('blue') + 4 }],
+      } : null);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('caches a budget fallback without preventing other or uncached word diffs', () => {
+    // Keep this pair independent of successful range/render fixtures: the first
+    // call must reach the real diff library rather than a previously cached result.
+    const oldText = 'const cachedBudget = "red";';
+    const newText = 'const cachedBudget = "blue";';
+    const now = vi.spyOn(Date, 'now').mockReturnValue(21).mockReturnValueOnce(0);
+    try {
+      expect(computeInlineDiffRanges(oldText, newText)).toBeNull();
+
+      now.mockReset().mockReturnValue(0);
+      expect(computeInlineDiffRanges(oldText, newText)).toBeNull();
+      expect(now).not.toHaveBeenCalled();
+
+      expect(computeInlineDiffRangesUncached(oldText, newText, {
+        maxLineLength: HIGHLIGHT_MAX_LINE_LENGTH,
+        minCommonRatio: INLINE_DIFF_MIN_COMMON_RATIO,
+      })).toEqual({
+        deleteRanges: [{ start: oldText.indexOf('red'), end: oldText.indexOf('red') + 3 }],
+        addRanges: [{ start: newText.indexOf('blue'), end: newText.indexOf('blue') + 4 }],
+      });
+      const otherOld = 'const otherBudget = "red";';
+      const otherNew = 'const otherBudget = "blue";';
+      expect(computeInlineDiffRanges(otherOld, otherNew)).toEqual({
+        deleteRanges: [{ start: otherOld.indexOf('red'), end: otherOld.indexOf('red') + 3 }],
+        addRanges: [{ start: otherNew.indexOf('blue'), end: otherNew.indexOf('blue') + 4 }],
+      });
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it('merges adjacent ranges and drops invalid ranges', () => {
@@ -777,10 +839,10 @@ describe('PlainUnifiedDiff inline diff helpers', () => {
 
   it('skips oversized and low-similarity lines', () => {
     expect(computeInlineDiffRanges('a'.repeat(HIGHLIGHT_MAX_LINE_LENGTH + 1), 'a'.repeat(HIGHLIGHT_MAX_LINE_LENGTH + 1))).toBeNull();
-    expect(computeInlineDiffRangesUncached('abc', 'xyz', {
+    expect(withInlineDiffClock(() => computeInlineDiffRangesUncached('abc', 'xyz', {
       maxLineLength: HIGHLIGHT_MAX_LINE_LENGTH,
       minCommonRatio: 0.3,
-    })).toBeNull();
+    }))).toBeNull();
   });
 
   it('collects inline ranges only for paired changed lines and leaves surplus rows unhighlighted', () => {
@@ -796,7 +858,7 @@ describe('PlainUnifiedDiff inline diff helpers', () => {
       selectableLines: [0, 1, 2, 4],
     };
 
-    const ranges = collectInlineDiffRanges([sourceHunk]);
+    const ranges = withInlineDiffClock(() => collectInlineDiffRanges([sourceHunk]));
 
     expect(ranges.has(highlightLineKey(0, 0))).toBe(true);
     expect(ranges.has(highlightLineKey(0, 2))).toBe(true);
@@ -884,13 +946,53 @@ describe('PlainUnifiedDiff inline diff helpers', () => {
       error: null,
     };
 
-    const { container, rerender } = render(createElement(PlainUnifiedDiff, { diff, viewMode: 'unified' }));
+    const { container, rerender } = withInlineDiffClock(() => render(createElement(PlainUnifiedDiff, { diff, viewMode: 'unified' })));
     expect(container.querySelector('[data-review-inline-diff="delete"]')?.textContent).toBe('old');
     expect(container.querySelector('[data-review-inline-diff="add"]')?.textContent).toBe('new');
 
-    rerender(createElement(PlainUnifiedDiff, { diff, viewMode: 'split' }));
+    withInlineDiffClock(() => rerender(createElement(PlainUnifiedDiff, { diff, viewMode: 'split' })));
     expect(container.querySelector('[data-review-inline-diff="delete"]')?.textContent).toBe('old');
     expect(container.querySelector('[data-review-inline-diff="add"]')?.textContent).toBe('new');
+  });
+
+  // Unit regression: an unchanged review refresh must preserve highlighted DOM
+  // and text selection. Replacing these nodes flooded Windows accessibility
+  // notifications; existing coverage only checked the resulting text/markup.
+  // Code semantics also retain a parent in the AX tree for newly highlighted
+  // tokens instead of promoting every token to the row (native SHOW-event flood).
+  it.each(['unified', 'split'] as const)('preserves highlighted nodes and selection on unchanged %s refresh', (viewMode) => {
+    const diff = fileDiff({
+      hunks: [{
+        ...hunk(0, 1, 1),
+        lines: [
+          line(0, 'delete', 'const label = "old";', 1, null),
+          line(1, 'add', 'const label = "new";', null, 1),
+        ],
+      }],
+    });
+    const { container, rerender } = withInlineDiffClock(() => render(createElement(PlainUnifiedDiff, { diff, viewMode })));
+    expect(within(container).getAllByRole('code').map((code) => code.textContent)).toEqual([
+      'const label = "old";',
+      'const label = "new";',
+    ]);
+    const highlighted = container.querySelector('[data-review-inline-diff="add"]')!;
+    const selection = window.getSelection()!;
+    const range = document.createRange();
+    range.selectNodeContents(highlighted);
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    // A refreshed response has new object identities but identical content.
+    const refreshed = structuredClone(diff);
+    withInlineDiffClock(() => rerender(createElement(PlainUnifiedDiff, { diff: refreshed, viewMode, wordWrap: true })));
+    expect(container.querySelector('[data-review-inline-diff="add"]')).toBe(highlighted);
+    expect(selection.toString()).toBe('new');
+
+    refreshed.hunks[0].lines[1] = line(1, 'add', 'const label = "updated";', null, 1);
+    withInlineDiffClock(() => rerender(createElement(PlainUnifiedDiff, { diff: structuredClone(refreshed), viewMode, wordWrap: true })));
+    expect(container.textContent).toContain('const label = "updated";');
+    expect(container.textContent).not.toContain('const label = "new";');
+    selection.removeAllRanges();
   });
 
   it('skips inline emphasis when word diffs are disabled', () => {

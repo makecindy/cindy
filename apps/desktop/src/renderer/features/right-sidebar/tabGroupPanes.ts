@@ -8,7 +8,7 @@
  * 隐藏、空间回流(树数据保留,下次原位回来)。右侧组始终注册,不经这里。
  */
 
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
 import {
   ensureTabGroupPane,
@@ -18,10 +18,16 @@ import {
   type TabGroupId,
 } from '../../../shared/layoutTree';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
+import { usePluginUiRegions } from '@/cindy-brain/pluginUiVisibility';
 import { createLogger } from '@/lib/logger';
 import { useSidebarTabWindowsState } from '@/lib/sidebarTabWindowState';
-import { registerPanelKind, unregisterPanelKind } from '@/panels/registry';
-import { useGlobalTabs } from './globalTabs';
+import {
+  hasPanelKind,
+  registerPanelKind,
+  setPanelKindParked,
+  unregisterPanelKind,
+} from '@/panels/registry';
+import { useGlobalTabs, type PluginViewTabState } from './globalTabs';
 import { getBucket, subscribe } from './store';
 import { projectAvailableTabs, buildTabAvailabilities } from './tabAvailability';
 import { tabGroupPanelComponent } from './TabGroupPanel';
@@ -36,8 +42,13 @@ export const EDGE_TAB_GROUP_IDS = TAB_GROUP_IDS.filter(
 
 export interface TabGroupPanesInput {
   sessionId: string | null;
-  /** 内容区在聊天路由上(右侧栏可用);false 时所有边组一律不在场。 */
+  /** 本窗口能承载边组(右栏窗口状态已加载、未整栏分离、不在设置页);false 时所有边组一律注销。 */
   enabled: boolean;
+  /**
+   * 内容区在聊天路由上(右侧栏可用),默认 true。false 时在聊天页出现过的组停放而不注销;
+   * 从未在聊天页出现过的组不挂载(不创建 webview)。
+   */
+  onChatRoute?: boolean;
   remoteHostId: string | null;
   deviceLinkDeviceId?: string | null;
   subagentsAvailable?: boolean;
@@ -80,8 +91,15 @@ function ensurePaneInTree(groupId: EdgeTabGroupId): void {
  * 挂在主窗口(MainLayout):随任务桶 / 全局页签 / 组归属 / 弹出状态的变化维护
  * 边组 pane 的注册与树里的在场。
  */
-export function useTabGroupPanes(input: TabGroupPanesInput): void {
-  const { sessionId, enabled, remoteHostId, deviceLinkDeviceId, subagentsAvailable } = input;
+export function useTabGroupPanes(input: TabGroupPanesInput): boolean {
+  const {
+    sessionId,
+    enabled,
+    onChatRoute = true,
+    remoteHostId,
+    deviceLinkDeviceId,
+    subagentsAvailable,
+  } = input;
   const subscribeBucket = useCallback(
     (onChange: () => void) =>
       subscribe((changedSessionId) => {
@@ -96,8 +114,9 @@ export function useTabGroupPanes(input: TabGroupPanesInput): void {
   const poppedOut = useSidebarTabWindowsState();
   const installedGhosts = useInstalledGhosts();
 
-  const present = useMemo(() => {
-    if (!enabled) return new Set<EdgeTabGroupId>();
+  const { present, globalViewGroups } = useMemo(() => {
+    const globalViewGroups = new Set<TabGroupId>();
+    if (!enabled) return { present: new Set<EdgeTabGroupId>(), globalViewGroups };
     const hidden = Object.keys(poppedOut);
     const availability = buildTabAvailabilities({
       installedGhosts,
@@ -110,7 +129,12 @@ export function useTabGroupPanes(input: TabGroupPanesInput): void {
       ? projectAvailableTabs(bucket.tabs, bucket.activeTabId, availability.session).tabs
       : [];
     const pinned = projectAvailableTabs(globalTabs, null, availability.global).tabs;
-    return presentEdgeTabGroups({ sessionTabs, globalTabs: pinned, assignments });
+    for (const tab of pinned) {
+      if ((tab.state as PluginViewTabState | null)?.resourceViewId) {
+        globalViewGroups.add(tabGroupOf(assignments, tab.id));
+      }
+    }
+    return { present: presentEdgeTabGroups({ sessionTabs, globalTabs: pinned, assignments }), globalViewGroups };
   }, [
     assignments,
     bucket,
@@ -132,27 +156,41 @@ export function useTabGroupPanes(input: TabGroupPanesInput): void {
     return api.onChanged(() => setLayoutRevision((revision) => revision + 1));
   }, []);
 
+  // 任务页签沿原停放规则；显式打开的全局具名页不依赖任务路由。
+  const mountedOnChatRef = useRef(new Set<EdgeTabGroupId>());
+  const regions = usePluginUiRegions();
+
   useEffect(() => {
+    const mountedOnChat = mountedOnChatRef.current;
     for (const groupId of EDGE_TAB_GROUP_IDS) {
       const kind = tabGroupPanelKind(groupId);
-      if (present.has(groupId)) {
+      const availableOnRoute = onChatRoute || globalViewGroups.has(groupId);
+      if (!present.has(groupId)) mountedOnChat.delete(groupId);
+      else if (availableOnRoute) mountedOnChat.add(groupId);
+      if (!mountedOnChat.has(groupId)) {
+        unregisterPanelKind(kind);
+        continue;
+      }
+      if (!hasPanelKind(kind)) {
         registerPanelKind({
           kind,
           Component: tabGroupPanelComponent(groupId),
           collapseMemory: 'none',
         });
-        ensurePaneInTree(groupId);
-      } else {
-        unregisterPanelKind(kind);
       }
+      setPanelKindParked(kind, !availableOnRoute || !regions.workspace || !regions.tools);
+      ensurePaneInTree(groupId);
     }
     // presentKey 是 present 的稳定字符串化;layoutRevision 触发树重检。
-  }, [present, presentKey, layoutRevision]);
+  }, [present, presentKey, globalViewGroups, onChatRoute, layoutRevision, regions.workspace, regions.tools]);
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    const mountedOnChat = mountedOnChatRef.current;
+    return () => {
+      mountedOnChat.clear();
       for (const groupId of EDGE_TAB_GROUP_IDS) unregisterPanelKind(tabGroupPanelKind(groupId));
-    },
-    [],
-  );
+    };
+  }, []);
+  // MainLayout reuses this hook's existing subscriptions and availability projection.
+  return globalViewGroups.has('right');
 }

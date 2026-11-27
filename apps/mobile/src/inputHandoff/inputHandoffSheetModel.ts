@@ -13,6 +13,7 @@ export interface InputHandoffQrSheet {
   view: InputHandoffQrView;
   onOpen(): void;
   onShare(): void;
+  verification?: { refresh(): void; cancel(): void };
   onCopy(): void;
   /** Result of the last open, share or copy. */
   notice: string | null;
@@ -53,7 +54,8 @@ export function inputHandoffSheetMode(snapshot: InputHandoffSnapshot): "qr" | "p
 export function inputHandoffWarnings(snapshot: InputHandoffSnapshot, t: (key: string) => string): string[] {
   const out: string[] = [];
   if (snapshot.source.warning) out.push(t(`interaction.inputHandoff.originWarning.${snapshot.source.warning}`));
-  if (snapshot.agentControlled) out.push(t("interaction.inputHandoff.agentControlled"));
+  if (snapshot.agentPicture) out.push(t("interaction.inputHandoff.agentPicture"));
+  else if (snapshot.agentControlled) out.push(t("interaction.inputHandoff.agentControlled"));
   if (snapshot.remoteInput !== true) out.push(t("interaction.inputHandoff.remoteUnavailable"));
   if (snapshot.failure && !snapshot.terminal) out.push(t(`interaction.inputHandoff.failure.${snapshot.failure}`));
   return out;

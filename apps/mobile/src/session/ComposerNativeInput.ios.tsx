@@ -23,9 +23,8 @@ import {
 import { composerNodesForBoundedPlainTextPaste } from "./composerPaste";
 import { COMPOSER_PASTED_IMAGE_FILE_PREFIX } from "./pastedImageAttachment";
 
-type Payload = { ack: number; nodes: ReturnType<typeof nativeComposerNodes> };
+type Payload = { ack: number; nodes: ReturnType<typeof nativeComposerNodes>; caret?: number };
 type NativeHandle = {
-  expand(): Promise<void>;
   resolveLink(href: string, semantic: object): Promise<void>;
   focus(): Promise<void>;
   blur(): Promise<void>;
@@ -57,6 +56,7 @@ type Props = ViewProps & {
   ): void;
   onFocusChange(event: Event<{ focused: boolean }>): void;
   onContentHeight(event: Event<{ height: number }>): void;
+  onScrollEdge(event: Event<{ atTop: boolean; atBottom: boolean }>): void;
   onPasteText(
     event: Event<{
       text: string;
@@ -124,7 +124,6 @@ export const ComposerNativeInput = forwardRef<
     rememberSelection(draft, value) {
       rememberedSelection.current = { draft, ...value };
     },
-    expand() { void native.current?.expand(); },
     focus() {
       void native.current?.focus();
     },
@@ -168,6 +167,12 @@ export const ComposerNativeInput = forwardRef<
     },
   }), []);
   if (!NativeInput) return null;
+  // Dictation writes text while the editor is unfocused, so UIKit will not
+  // scroll to it. Hand native the insertion point to place and reveal.
+  const remembered = rememberedSelection.current;
+  const documentPayload = payload(props.document);
+  if (remembered && remembered.draft === composerDocumentProjectedText(props.document))
+    documentPayload.caret = composerOffsetToNative(props.document, remembered.end);
   return (
     <Animated.View
       style={[{ width: "100%", opacity: props.hidden ? 0 : 1 }, animatedStyle]}
@@ -176,7 +181,7 @@ export const ComposerNativeInput = forwardRef<
         ref={native}
         style={{ flex: 1 }}
         colorScheme={mode}
-        document={payload(props.document)}
+        document={documentPayload}
         editable={props.editable !== false}
         placeholder={props.placeholder}
         inputHint={props.accessibilityHint ?? ""}
@@ -204,6 +209,9 @@ export const ComposerNativeInput = forwardRef<
         onContentHeight={({ nativeEvent }) =>
           props.onHeightChange?.(nativeEvent.height)
         }
+        onScrollEdge={({ nativeEvent }) =>
+          props.onScrollEdgeChange?.({ atTop: nativeEvent.atTop, atBottom: nativeEvent.atBottom })
+        }
         onPasteText={({ nativeEvent }) => {
           const nodes = composerNodesForBoundedPlainTextPaste(nativeEvent.text);
           if (nodes)
@@ -230,10 +238,9 @@ export const ComposerNativeInput = forwardRef<
         }}
         onPasteImages={({ nativeEvent }) => {
           const images = nativeEvent.images;
-          if (!images.length) {
-            props.onPasteImagesLoadFailed?.();
-            return;
-          }
+          // No placeholder belongs to an empty/rejected batch. Reporting its
+          // failure could release another accepted paste's FIFO placeholder.
+          if (!images.length || !props.onPasteImages) return;
           props.onPasteImagesLoading?.(images.length);
           void (async () => {
             const uris: string[] = [];

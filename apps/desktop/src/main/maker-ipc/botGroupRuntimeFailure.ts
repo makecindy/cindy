@@ -1,6 +1,11 @@
-import { isBotGroupRuntimeFailureCode, type BotGroupRuntimeFailureCode } from '../../shared/botGroupChat.js';
+import { isBotGroupClientId, isBotGroupInTaskClientId, isBotGroupRuntimeFailureCode, type BotGroupRuntimeFailureCode } from '../../shared/botGroupChat.js';
 import { isPiImageInputUnsupportedError, isPiPromptRpcTimeoutError } from '../../shared/inputError.js';
-import { extractNonSecretErrorSignals, matchesDeterministicUsageExhaustionText } from '@cindy/maker-shared/error-redaction';
+import {
+  extractNonSecretErrorSignals,
+  isProviderSafetyRefusalError,
+  matchesDeterministicUsageExhaustionText,
+  PROVIDER_SAFETY_REFUSAL_REASON,
+} from '@cindy/maker-shared/error-redaction';
 import { remoteAgentLimitErrorKey } from '../../shared/remoteAgentLimits.js';
 import type { BotGroupChatService } from './botGroupChatService.js';
 import { parseOverloadError, UPSTREAM_OVERLOAD_REASON } from '@cindy/maker-core';
@@ -22,24 +27,55 @@ export function botGroupRuntimeFailureCode(error: unknown): BotGroupRuntimeFailu
   // Codex translators publish the stable tag even when message text is redacted.
   if (data?.codexErrorInfo === 'usageLimitExceeded' || data?.codexErrorInfo === 'sessionBudgetExceeded') return 'QUOTA_EXCEEDED';
   if (data?.codexErrorInfo === 'unauthorized') return 'AUTH_REQUIRED';
+  if (
+    data?.codexErrorInfo === 'cyberPolicy' ||
+    data?.codexErrorInfo === 'misalignmentPolicyViolation' ||
+    data?.reason === PROVIDER_SAFETY_REFUSAL_REASON
+  ) {
+    return 'RUNTIME_ERROR';
+  }
   if (data?.reason === 'pi-prompt-timeout' || isPiPromptRpcTimeoutError(data ?? { message: error })
     || (typeof data?.reason === 'string' && /^(?:bridge_)?(?:turn_no_event_timeout|upstream_response_idle_timeout)$/.test(data.reason))) return 'RUNTIME_TIMEOUT';
-  const text = values.filter((value): value is string => typeof value === 'string').join('\n');
+  const stringValues = values.filter((value): value is string => typeof value === 'string');
+  if (stringValues.some((value) => isProviderSafetyRefusalError(value, data?.reason))) {
+    return 'RUNTIME_ERROR';
+  }
+  const text = stringValues.join('\n');
   const remoteLimit = remoteAgentLimitErrorKey(text);
   if (remoteLimit === 'chat.remoteError.REMOTE_AGENT_DEVICE_LIMIT') return 'REMOTE_DEVICE_LIMIT';
   if (remoteLimit === 'chat.remoteError.REMOTE_AGENT_TOTAL_LIMIT') return 'REMOTE_TOTAL_LIMIT';
-  const status = typeof data?.errorStatus === 'number' ? data.errorStatus : extractNonSecretErrorSignals(text).errorStatus;
+  // Codex's structured label drops the HTTP status when it is serialized as an
+  // error tag. Recover it from the explicit Codex failure wording as well.
+  const explicitStatus = /\b(?:HTTP(?:\/\d(?:\.\d)?)?(?:\s+status)?|(?:unexpected|last)\s+status(?:\s+code)?)\s*:?\s*(\d{3})\b/i.exec(text);
+  const status = typeof data?.errorStatus === 'number'
+    ? data.errorStatus
+    : extractNonSecretErrorSignals(text).errorStatus
+      ?? (explicitStatus ? Number(explicitStatus[1]) : undefined);
   if (data?.modelAccessDenied === true || /\b(?:NO_MODEL|MODEL_NOT_FOUND|MODEL_UNAVAILABLE|NO_AVAILABLE_MODEL|BOT_MODEL_REQUIRED|MODEL_REQUIRED|user_model_access_denied)\b/i.test(text)) return 'MODEL_UNAVAILABLE';
   if (status === 401 || status === 403 || /\b(?:AUTH_REQUIRED|INVALID_TOKEN|TOKEN_EXPIRED|UNAUTHORIZED|invalid_api_key|authentication_error|authentication_failed|provider_auth_or_access)\b/i.test(text)) return 'AUTH_REQUIRED';
   if (data?.reason === UPSTREAM_OVERLOAD_REASON
     || parseOverloadError(text, status, typeof data?.codexErrorInfo === 'string' ? data.codexErrorInfo : undefined)) return 'UPSTREAM_OVERLOADED';
   if (status === 402 || matchesDeterministicUsageExhaustionText(text) || /\b(?:QUOTA_EXCEEDED|USAGE_LIMIT_EXCEEDED|INSUFFICIENT_BALANCE|insufficient_quota|billing_error|provider_quota_limit|usageLimitExceeded|sessionBudgetExceeded)\b/i.test(text)) return 'QUOTA_EXCEEDED';
   // usageLimit also accompanies temporary rate limits; an explicit rate signal wins.
-  if (/\b(?:RATE_LIMITED|RATE_LIMIT_EXCEEDED|rate_limit_error|rate_limit|provider_rate_limit)\b|rate limit(?:ed|ing)?|too many requests/i.test(text)) return 'RATE_LIMITED';
+  if (data?.codexErrorInfo === 'rateLimitExceeded' || /\b(?:RATE_LIMITED|RATE_LIMIT_EXCEEDED|rate_limit_error|rate_limit|provider_rate_limit)\b|rate limit(?:ed|ing)?|too many requests/i.test(text)) return 'RATE_LIMITED';
   if (data?.usageLimit === true) return 'QUOTA_EXCEEDED';
   if (status === 429) return 'RATE_LIMITED';
+  // Codex tags every non-2xx HTTP response as httpConnectionFailed. An explicit
+  // 4xx client rejection (for example a provider policy 422) is a terminal
+  // runtime failure, not a transient network error the group should retry.
+  // 407 (proxy auth) and 408 (request timeout) keep the network/proxy
+  // classification. Stream disconnect tags are uncertain transport failures
+  // even when they carry a 4xx, so only gate the request-level tag.
+  if (data?.codexErrorInfo === 'httpConnectionFailed'
+    && status !== undefined && status >= 400 && status < 500
+    && status !== 407 && status !== 408) {
+    return 'RUNTIME_ERROR';
+  }
   if (data?.codexErrorInfo === 'httpConnectionFailed' || data?.codexErrorInfo === 'responseStreamConnectionFailed'
     || data?.codexErrorInfo === 'responseStreamDisconnected') return 'NETWORK_ERROR';
+  // Device Link IPC and the remote Agent controller preserve these transport codes in error envelopes.
+  if (/\b(?:DEVICE_LINK_TIMEOUT|REMOTE_AGENT_TIMEOUT)\b/.test(text)) return 'RUNTIME_TIMEOUT';
+  if (/\b(?:DEVICE_LINK_NOT_CONNECTED|DEVICE_LINK_DEVICE_OFFLINE|REMOTE_AGENT_OFFLINE)\b/.test(text)) return 'NETWORK_ERROR';
   if (/\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|REQUEST_TIMEOUT)\b|fetch failed|socket hang up/i.test(text)) return 'NETWORK_ERROR';
   return 'RUNTIME_ERROR';
 }
@@ -55,4 +91,19 @@ export async function settleUndispatchedBotGroupTurn(
   if (disposition !== 'failed' || !service) return false;
   return service.settleLaneTurn({ sessionId, activeInputClientId: clientId, outcome: 'error',
     resultText: '', failureCode: botGroupRuntimeFailureCode(error), undispatched: true });
+}
+
+/** A closed runtime may never emit done/error. Capture its input before close
+ * cleanup clears the coordinator. Recovery-owned closes keep the same execution. */
+export async function settleClosedBotGroupTurn(
+  service: Pick<BotGroupChatService, 'settleLaneTurn'> | null,
+  sessionId: string,
+  activeInputClientId: string | null,
+  preserveInput: boolean,
+): Promise<boolean> {
+  // A group execution answered inside an ordinary task (the group Cindy's task, a task card's task)
+  // ends with that turn too, so a runtime that closes without a terminal settles it instead of the lease timing out.
+  if (preserveInput || !service || !(isBotGroupClientId(activeInputClientId) || isBotGroupInTaskClientId(activeInputClientId))) return false;
+  return service.settleLaneTurn({ sessionId, activeInputClientId, outcome: 'error',
+    resultText: '', failureCode: 'RUNTIME_ERROR' });
 }

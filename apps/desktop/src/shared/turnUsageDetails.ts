@@ -3,14 +3,27 @@
  * message. Stored in messages.agent_meta so old DB schema stays unchanged.
  */
 
+import { groupUsageCostRows, normalizeUsageBillingSource, type UsageBillingSource } from '@cindy/maker-shared/usage-cost-details';
+import { normalizeGenerationTrace, type GenerationTrace } from '@cindy/maker-shared/usage-format';
 import {
-  addCompatibleRegionalMoney,
   legacyUsdMoney,
   normalizeRegionalMoney,
   type RegionalMoney,
 } from './regionalMoney.js';
 
-export interface TurnUsageDetails {
+type TokenCounts = Pick<TurnUsageDetails, 'inputTokens' | 'outputTokens' | 'cacheReadTokens' | 'cacheCreateTokens'>;
+type ModelTokenUsage = TokenCounts & UsageBillingSource & { model: string };
+const tokenFields = ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheCreateTokens'] as const;
+
+export interface TurnUsageDetails extends UsageBillingSource {
+  /** Actual charges for a mixed-currency segment. */
+  actualAmounts?: RegionalMoney[];
+  /** Cumulative display snapshot, including media, when the user round has two currencies. */
+  userTurnAmounts?: RegionalMoney[];
+  /** Snapshot for this user round; not an incremental segment charge. */
+  additionalCosts?: RegionalMoney[];
+  /** Native estimate totals for this segment when it has more than one currency. */
+  estimatedAmounts?: RegionalMoney[];
   /** 新输入 token：未命中缓存、按输入价计费的部分。 */
   inputTokens: number;
   /** 输出 token：Codex 路径沿用现有口径，包含 reasoning 合并量。 */
@@ -23,12 +36,29 @@ export interface TurnUsageDetails {
   totalTokens: number;
   /** 可证明的纯模型生成耗时；不含工具执行/用户等待，用于计算输出速率。 */
   durationMs?: number;
-  /** 整轮 wall-clock 耗时，仅供诊断展示；绝不用于计算输出速率。 */
+  /**
+   * 整轮 wall-clock 耗时。不能直接当输出速率的分母（含工具执行/用户等待）；
+   * 仅作为 durationMs 的上限，避免并行请求累加的生成耗时超过整轮实际耗时。
+   */
   turnDurationMs?: number;
   /** cacheRead / (input + cacheRead + cacheCreate)，无输入分母时为 null。 */
   cacheHitRate: number | null;
+  /**
+   * 本轮的模型请求次数，只数主 agent（子代理不计）。一次请求重发一遍上下文，
+   * 用来说明「合并 N 步」是否划算；仅 pi 路径能从逐请求用量段数出来，老消息无此字段。
+   */
+  steps?: number;
+  /** 每次请求平均重发的上下文 (input + cacheRead + cacheCreate) / steps。 */
+  stepContextTokens?: number;
+  /**
+   * 本轮是任务（或 /clear 之后）的第一轮用户请求：此前没有可复用的 prompt cache，
+   * 命中率为 0 是必然而非缓存被打断。老消息无此字段。
+   */
+  firstUserRound?: true;
   /** 本轮主要模型；能确定时填写。 */
   model?: string;
+  /** Exact per-model, per-source token counters, independent of pricing. */
+  perModelTokens?: ModelTokenUsage[];
   /** 本轮涉及多个模型时的分桶列表。 */
   models?: string[];
   /**
@@ -36,28 +66,46 @@ export interface TurnUsageDetails {
    * (来自 resolveClaudeTurnCostSinks 的 perModel)，含 subagent (如 Task 工具
    * 跑的 Haiku) —— tooltip 据此展示「按模型成本明细」。老消息无此字段。
    */
-  perModelCost?: Array<{ model: string; money: RegionalMoney }>;
+  perModelCost?: Array<{ model: string; money: RegionalMoney } & UsageBillingSource>;
+  /**
+   * 本轮的生成速度与逐次模型请求的推理用量，用来在结束后重现运行时的速度图；仅展示用。
+   * 由各引擎的测速器在轮末给出（已限长），老消息与测速不可靠的轮次无此字段。
+   */
+  trace?: GenerationTrace;
 }
 
-export interface BuildTurnUsageDetailsInput {
+export interface BuildTurnUsageDetailsInput extends UsageBillingSource {
+  /** Actual charges for a mixed-currency segment. */
+  actualAmounts?: RegionalMoney[];
+  /** Cumulative display snapshot, including media, when the user round has two currencies. */
+  userTurnAmounts?: RegionalMoney[];
+  additionalCosts?: RegionalMoney[];
+  /** Native estimate totals for this segment when it has more than one currency. */
+  estimatedAmounts?: RegionalMoney[];
   inputTokens?: number;
   outputTokens?: number;
   cacheReadTokens?: number;
   cacheCreateTokens?: number;
+  steps?: number;
+  stepContextTokens?: number;
   model?: string | null;
   models?: Array<string | null | undefined> | readonly (string | null | undefined)[];
+  perModelTokens?: readonly ModelTokenUsage[];
   perModelCost?: ReadonlyArray<
-    | {
+    | (UsageBillingSource & {
         model?: string | null;
         money?: RegionalMoney | null;
         /** 旧消息兼容：历史事实始终是 USD。 */
         costUsd?: number | null;
-      }
+      })
     | null
     | undefined
   >;
   durationMs?: number;
   turnDurationMs?: number;
+  firstUserRound?: boolean;
+  /** 引擎轮末事件或已落库的原始值；格式不对整体丢弃。 */
+  trace?: unknown;
 }
 
 function sanitizeToken(value: unknown): number {
@@ -88,9 +136,9 @@ function uniqueModels(models: BuildTurnUsageDetailsInput['models']): string[] | 
  */
 function sanitizePerModelCost(
   list: BuildTurnUsageDetailsInput['perModelCost'],
-): Array<{ model: string; money: RegionalMoney }> | undefined {
+): TurnUsageDetails['perModelCost'] {
   if (!list || !Array.isArray(list)) return undefined;
-  const byModel = new Map<string, RegionalMoney>();
+  const rows: NonNullable<TurnUsageDetails['perModelCost']> = [];
   for (const item of list) {
     if (!item || typeof item !== 'object') continue;
     const model = sanitizeModel(item.model);
@@ -101,20 +149,33 @@ function sanitizePerModelCost(
         : undefined;
     const money = structured ?? legacy;
     if (!model || !money || money.amount <= 0) continue;
-    const current = byModel.get(model);
-    byModel.set(
-      model,
-      current
-        ? (addCompatibleRegionalMoney([current, money]) ?? money)
-        : money,
-    );
+    rows.push({ model, money, ...normalizeUsageBillingSource(item) });
   }
-  return byModel.size > 0
-    ? [...byModel.entries()].map(([model, money]) => ({
-        model,
-        money,
-      }))
-    : undefined;
+  return rows.length ? groupUsageCostRows(rows.map(row => ({ ...row, category: 'conversation' })))
+    .map(row => ({ model: row.model, money: row.money, ...normalizeUsageBillingSource(row) })) : undefined;
+}
+
+/** Only publish a breakdown when all four columns reconcile with the same receipt.
+ * Include zero-price models and keep one model on different routes separate. */
+function normalizeModelTokenRows(value: unknown, totals: TokenCounts): ModelTokenUsage[] | undefined {
+  if (!Array.isArray(value) || !value.length) return undefined;
+  const grouped = new Map<string, ModelTokenUsage>();
+  const sum = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0 };
+  for (const row of value) {
+    if (!row || typeof row !== 'object') return undefined;
+    const model = sanitizeModel(row.model);
+    if (!model || !tokenFields.every(key => Number.isSafeInteger(row[key]) && row[key] >= 0)) return undefined;
+    const source = normalizeUsageBillingSource(row);
+    const key = JSON.stringify([model, source.providerId, source.billingSource, source.providerName]);
+    const entry = grouped.get(key) ?? { model, ...source, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0 };
+    for (const field of tokenFields) {
+      entry[field] += row[field];
+      sum[field] += row[field];
+    }
+    grouped.set(key, entry);
+  }
+  return tokenFields.every(key => Number.isSafeInteger(sum[key]) && sum[key] === totals[key])
+    ? [...grouped.values()] : undefined;
 }
 
 /**
@@ -129,7 +190,7 @@ export function aggregateTurnUsageDetails(
 ): TurnUsageDetails | null {
   const details = detailsList.filter(
     (item): item is TurnUsageDetails =>
-      Boolean(item && (item.totalTokens > 0 || item.turnDurationMs !== undefined)),
+      Boolean(item && (item.totalTokens > 0 || item.turnDurationMs !== undefined || item.additionalCosts?.length || item.userTurnAmounts?.length || item.actualAmounts?.length || item.perModelCost?.length)),
   );
   if (details.length === 0) return null;
 
@@ -137,18 +198,13 @@ export function aggregateTurnUsageDetails(
   const addModel = (model: string | undefined) => {
     if (model && !modelNames.includes(model)) modelNames.push(model);
   };
-  const perModel = new Map<string, RegionalMoney>();
+  const perModel: NonNullable<TurnUsageDetails['perModelCost']> = [];
   for (const detail of details) {
     addModel(detail.model);
     for (const model of detail.models ?? []) addModel(model);
     for (const item of detail.perModelCost ?? []) {
-      const current = perModel.get(item.model);
-      perModel.set(
-        item.model,
-        current
-          ? (addCompatibleRegionalMoney([current, item.money]) ?? item.money)
-          : item.money,
-      );
+      perModel.push({ ...(item.billingSource && item.billingSource !== detail.billingSource
+        ? {} : normalizeUsageBillingSource(detail)), ...item });
     }
   }
 
@@ -169,6 +225,15 @@ export function aggregateTurnUsageDetails(
   // Taking the maximum preserves that complete value without double-counting.
   const turnDurationMs =
     details.reduce((max, item) => Math.max(max, item.turnDurationMs ?? 0), 0) || undefined;
+  // 步数相加，每步上下文按步数加权平均：合并后的「每步 ~K 上下文」仍是真实均值。
+  const steps = details.reduce((sum, item) => sum + (item.steps ?? 0), 0);
+  const stepContextTokens =
+    steps > 0
+      ? Math.round(
+          details.reduce((sum, item) => sum + (item.steps ?? 0) * (item.stepContextTokens ?? 0), 0) /
+            steps,
+        )
+      : undefined;
 
   return buildTurnUsageDetails({
     inputTokens: details.reduce((sum, item) => sum + item.inputTokens, 0),
@@ -177,9 +242,17 @@ export function aggregateTurnUsageDetails(
     cacheCreateTokens: details.reduce((sum, item) => sum + item.cacheCreateTokens, 0),
     durationMs,
     turnDurationMs,
+    steps,
+    stepContextTokens,
     model: modelNames.length === 1 ? modelNames[0] : undefined,
     models: modelNames,
-    perModelCost: [...perModel.entries()].map(([model, money]) => ({ model, money })),
+    perModelTokens: details.flatMap(item => item.perModelTokens ?? []),
+    perModelCost: perModel,
+    userTurnAmounts: details.at(-1)?.userTurnAmounts,
+    additionalCosts: [...details].reverse().find(detail => detail.additionalCosts)?.additionalCosts,
+    firstUserRound: details.some((detail) => detail.firstUserRound === true),
+    // 各段各有自己的时间轴，无法拼接：保留最近一段的图。
+    trace: [...details].reverse().find(detail => detail.trace)?.trace,
   });
 }
 
@@ -198,12 +271,17 @@ export function mergeTurnUsageDetailsForMessage(
   // must extend the existing user-turn aggregate rather than replace the
   // output tokens and generation duration already attached to that message.
   if (incoming.outputTokens <= 0 && existing.outputTokens > 0) {
-    return aggregateTurnUsageDetails([existing, incoming]) ?? incoming;
+    const merged = aggregateTurnUsageDetails([existing, incoming]) ?? incoming;
+    return { ...merged,
+      ...(incoming.actualAmounts && { actualAmounts: incoming.actualAmounts }),
+      ...(incoming.estimatedAmounts && { estimatedAmounts: incoming.estimatedAmounts }),
+    };
   }
   const turnDurationMs = Math.max(existing.turnDurationMs ?? 0, incoming.turnDurationMs ?? 0);
   const base = incoming.totalTokens > 0 ? incoming : existing.totalTokens > 0 ? existing : incoming;
   return {
     ...base,
+    ...(incoming.userTurnAmounts && { userTurnAmounts: incoming.userTurnAmounts }),
     ...(turnDurationMs > 0 ? { turnDurationMs } : {}),
   };
 }
@@ -217,29 +295,49 @@ export function buildTurnUsageDetails(input: BuildTurnUsageDetailsInput): TurnUs
   const outputTokens = sanitizeToken(input.outputTokens);
   const cacheReadTokens = sanitizeToken(input.cacheReadTokens);
   const cacheCreateTokens = sanitizeToken(input.cacheCreateTokens);
+  const steps = sanitizeToken(input.steps);
+  const stepContextTokens = sanitizeToken(input.stepContextTokens);
   const totalTokens = inputTokens + outputTokens + cacheReadTokens + cacheCreateTokens;
   const durationMs = sanitizeDuration(input.durationMs);
   const turnDurationMs = sanitizeDuration(input.turnDurationMs);
-  if (totalTokens <= 0 && turnDurationMs === undefined) return null;
+  const actualAmounts = input.actualAmounts?.map(normalizeRegionalMoney)
+    .filter((value): value is RegionalMoney => value?.kind === 'actual-cost' && value.amount > 0);
+  const userTurnAmounts = input.userTurnAmounts?.map(normalizeRegionalMoney)
+    .filter((value): value is RegionalMoney => !!value && value.amount > 0);
+  const estimatedAmounts = input.estimatedAmounts?.map(normalizeRegionalMoney)
+    .filter((value): value is RegionalMoney => value?.kind === 'value-estimate' && value.amount > 0);
+  const perModelCost = sanitizePerModelCost(input.perModelCost);
+  const additionalCosts = input.additionalCosts?.map(normalizeRegionalMoney).filter((money): money is RegionalMoney => !!money);
+  if (totalTokens <= 0 && turnDurationMs === undefined && !additionalCosts?.length && !estimatedAmounts?.length && !actualAmounts?.length && !userTurnAmounts?.length && !perModelCost?.length) return null;
 
   const cacheDenominator = inputTokens + cacheReadTokens + cacheCreateTokens;
   const cacheHitRate = cacheDenominator > 0 ? cacheReadTokens / cacheDenominator : null;
   const model = sanitizeModel(input.model);
   const models = uniqueModels(input.models);
-  const perModelCost = sanitizePerModelCost(input.perModelCost);
+  const perModelTokens = normalizeModelTokenRows(input.perModelTokens, { inputTokens, outputTokens, cacheReadTokens, cacheCreateTokens });
+  const trace = normalizeGenerationTrace(input.trace);
 
   return {
+    ...normalizeUsageBillingSource(input),
+    ...(additionalCosts?.length ? { additionalCosts } : {}),
+    ...(actualAmounts?.length && { actualAmounts }),
+    ...(userTurnAmounts?.length && { userTurnAmounts }),
+    ...(estimatedAmounts?.length ? { estimatedAmounts } : {}),
     inputTokens,
     outputTokens,
     cacheReadTokens,
     cacheCreateTokens,
     totalTokens,
     cacheHitRate,
+    ...(steps > 0 && stepContextTokens > 0 ? { steps, stepContextTokens } : {}),
     ...(durationMs ? { durationMs } : {}),
     ...(turnDurationMs ? { turnDurationMs } : {}),
     ...(model ? { model } : {}),
     ...(models ? { models } : {}),
     ...(perModelCost ? { perModelCost } : {}),
+    ...(perModelTokens ? { perModelTokens } : {}),
+    ...(input.firstUserRound === true ? { firstUserRound: true as const } : {}),
+    ...(trace ? { trace } : {}),
   };
 }
 
@@ -249,6 +347,11 @@ export function normalizeTurnUsageDetails(value: unknown): TurnUsageDetails | un
   const raw = value as Record<string, unknown>;
   return (
     buildTurnUsageDetails({
+      ...normalizeUsageBillingSource(raw),
+      actualAmounts: Array.isArray(raw.actualAmounts) ? raw.actualAmounts : undefined,
+      userTurnAmounts: Array.isArray(raw.userTurnAmounts) ? raw.userTurnAmounts : undefined,
+      estimatedAmounts: Array.isArray(raw.estimatedAmounts) ? raw.estimatedAmounts : undefined,
+      additionalCosts: Array.isArray(raw.additionalCosts) ? raw.additionalCosts as RegionalMoney[] : undefined,
       inputTokens: typeof raw.inputTokens === 'number' ? raw.inputTokens : undefined,
       outputTokens: typeof raw.outputTokens === 'number' ? raw.outputTokens : undefined,
       cacheReadTokens: typeof raw.cacheReadTokens === 'number' ? raw.cacheReadTokens : undefined,
@@ -260,10 +363,17 @@ export function normalizeTurnUsageDetails(value: unknown): TurnUsageDetails | un
         : undefined,
       durationMs: typeof raw.durationMs === 'number' ? raw.durationMs : undefined,
       turnDurationMs: typeof raw.turnDurationMs === 'number' ? raw.turnDurationMs : undefined,
+      steps: typeof raw.steps === 'number' ? raw.steps : undefined,
+      stepContextTokens:
+        typeof raw.stepContextTokens === 'number' ? raw.stepContextTokens : undefined,
+      firstUserRound: raw.firstUserRound === true,
+      perModelTokens: Array.isArray(raw.perModelTokens) ? raw.perModelTokens : undefined,
+      trace: raw.trace,
       perModelCost: Array.isArray(raw.perModelCost)
         ? raw.perModelCost.map((e) =>
             e && typeof e === 'object'
               ? {
+                  ...normalizeUsageBillingSource(e),
                   model: (e as Record<string, unknown>).model as string | null | undefined,
                   money: (e as Record<string, unknown>).money as RegionalMoney | null | undefined,
                   costUsd: (e as Record<string, unknown>).costUsd as number | null | undefined,

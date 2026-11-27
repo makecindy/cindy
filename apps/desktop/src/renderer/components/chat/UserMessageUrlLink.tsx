@@ -6,41 +6,65 @@
  * 场景通过可见会话 bucket 打开。
  */
 
-import type { MouseEvent } from 'react';
+import { useMemo, type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useSidebarTargetSessionId } from '@/features/cc-agent/embeddedSessionNavigation';
-import { activateMessageUrl, useOpenWithMenu } from './useOpenWithMenu';
+import { parsePrLinkUrl } from '@/features/cc-agent/PrSummaryPopoverContent';
+import { PrLinkHoverPopover, type PrLinkHoverTriggerProps } from './PrLinkHoverPopover';
+import { useOpenWithMenu } from './useOpenWithMenu';
+import { activateMessageUrl } from './messageLinkActions';
 import { activateInlineLinkFromKeyboard } from './linkInteraction';
 
 export function UserMessageUrlLink({ url, sessionId }: { url: string; sessionId?: string }) {
   const { t } = useTranslation();
   const sidebarTargetSessionId = useSidebarTargetSessionId(sessionId);
   const openWith = useOpenWithMenu({ sessionId });
+  const prLink = useMemo(() => parsePrLinkUrl(url), [url]);
 
   async function handleClick(event: MouseEvent<HTMLAnchorElement>): Promise<void> {
     await activateMessageUrl(event, sidebarTargetSessionId, url, t);
   }
 
+  const renderAnchor = (prHoverProps?: PrLinkHoverTriggerProps) => (
+    <a
+      href={url}
+      // 可点 = 正文色 + 常显下划线(见 MarkdownRenderer.MARKDOWN_LINK_CLASS 的
+      // 规则说明)。改前是 --msg-link + hover:underline —— 静止状态下只有颜色、
+      // 悬停才出下划线,而用户消息气泡里同样需要「不动鼠标就能看出哪个能点」。
+      className="underline underline-offset-2 cursor-pointer"
+      onPointerEnter={prHoverProps?.onPointerEnter}
+      onPointerLeave={prHoverProps?.onPointerLeave}
+      onPointerDown={prHoverProps?.onPointerDown}
+      onClick={(event) => {
+        prHoverProps?.onDismiss();
+        void handleClick(event);
+      }}
+      onKeyDown={activateInlineLinkFromKeyboard}
+      onAuxClick={(event) => {
+        if (event.button === 1) {
+          prHoverProps?.onDismiss();
+          void handleClick(event);
+        }
+      }}
+      onContextMenu={(event) => {
+        prHoverProps?.onDismiss();
+        openWith.onContextMenu(event, url);
+      }}
+    >
+      {url}
+    </a>
+  );
+
   return (
     <>
-      <a
-        href={url}
-        // 可点 = 正文色 + 常显下划线(见 MarkdownRenderer.MARKDOWN_LINK_CLASS 的
-        // 规则说明)。改前是 --msg-link + hover:underline —— 静止状态下只有颜色、
-        // 悬停才出下划线,而用户消息气泡里同样需要「不动鼠标就能看出哪个能点」。
-        className="underline underline-offset-2 cursor-pointer"
-        onClick={handleClick}
-        onKeyDown={activateInlineLinkFromKeyboard}
-        onAuxClick={(event) => {
-          if (event.button === 1) void handleClick(event);
-        }}
-        onContextMenu={(event) => {
-          openWith.onContextMenu(event, url);
-        }}
-      >
-        {url}
-      </a>
+      {prLink ? (
+        <PrLinkHoverPopover prRef={prLink} sessionId={sessionId}>
+          {(prHoverProps) => renderAnchor(prHoverProps)}
+        </PrLinkHoverPopover>
+      ) : (
+        renderAnchor()
+      )}
       {openWith.menu}
     </>
   );

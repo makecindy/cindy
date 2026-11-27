@@ -7,6 +7,15 @@ export const COMPOSER_LONG_PRESS_MOVE_TOLERANCE_PX = 4;
 
 export type ComposerLongPressPoint = { x: number; y: number };
 
+/**
+ * 长按只是已开启语音输入的快捷方式，不负责首次开启：麦克风尚未授权时，长按与
+ * 长按提示都不生效，免得选字或停顿时意外弹出授权。点麦克风按钮或快捷键授权一次
+ * 后自动可用。读 main 的同步缓存，只在按下与提示即将出现时调用。
+ */
+export function isComposerLongPressVoiceReady(): boolean {
+  return window.electronAPI?.voiceInput?.getMicrophonePermissionCached?.().ok === true;
+}
+
 export type ComposerLongPressVoiceGestureOptions = {
   holdMs?: number;
   moveTolerancePx?: number;

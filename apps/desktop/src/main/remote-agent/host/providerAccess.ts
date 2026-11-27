@@ -10,10 +10,12 @@ import {
   type ProviderView,
 } from '@cindy/model-providers';
 import { isProviderSharePeer } from '@cindy/device-link';
-import { registerGuestProviderRoute, guestProviderModelAllowed } from '../../maker-host/guest-provider-route-store.js';
+import { registerGuestProviderRoute, guestProviderModelAllowed, guestProviderRouteForToken } from '../../maker-host/guest-provider-route-store.js';
 import { providerWeeklyQuotaSource } from '../../../shared/providerQuotaSource.js';
 import type { GuestRequestUsage } from '../../maker-host/guest-provider-route-store.js';
 import { isMemberBudgetPaused } from '../../../shared/providerShareBudget.js';
+import { getSessionSubscriptionAccount, readPoolExecutionRoute } from '../../subscription-accounts/session.js';
+import { sharedCodexTurnValue } from './sharedCodexTurnValue.js';
 import type { RemoteAgentHostDeps } from './runHost.js';
 
 /** Shared users and same-account group relays both need a guest-isolated proxy binding. */
@@ -95,6 +97,16 @@ export function createGuestProviderRouteBinder(deps: {
       deps.recordRequestUsage!(controller, providerId, kind, { ...sample, model });
     } : undefined);
     return {
+      ...(kind === 'codex' && provider && providerWeeklyQuotaSource(provider) === 'codex' ? {
+        estimateTurn: (event) => {
+          if (!isCurrent() || !providerAllowed() || !guestProviderRouteForToken(binding.token) || readPoolExecutionRoute(hostSessionId)) return;
+          // The native subscription lease alone authorizes translation from the shared
+          // pool's ID to the engine's built-in route. An API-key pool member has no such lease.
+          const account = getSessionSubscriptionAccount(hostSessionId);
+          const engineProviderId = account?.sharedProviderId === providerId ? 'openai' : providerId;
+          return sharedCodexTurnValue(providerId, engineProviderId, event);
+        },
+      } : {}),
       receiptMetering: !!receiptMetering,
       routeToken: binding.token,
       modelIds,
@@ -129,6 +141,7 @@ export function resolveSharedProviderId(
  * 供应商分享的受邀者：来源只能是分享给它的那个供应商(没指定时也落到它上面)，而且这个供应商
  * 要为本 Agent 提供所选模型(口径同上：新路由优先，再按实际路由)。只看分享的这一个供应商，
  * 不会因为本机别的供应商有同名模型而放行。返回 null = 不允许。
+ * groupRouting 只给宿主分配组员或向已确认的组员转发时核对来源：本机登录不代表整组的可用性；本机执行不带它核对。
  */
 export function resolveGuestProviderId(
   views: readonly ProviderView[],
@@ -137,11 +150,13 @@ export function resolveGuestProviderId(
   kind: AgentKind,
   model: string,
   providerId: string | null | undefined,
+  context: { groupRouting?: boolean } = {},
 ): string | null {
   if (!sharedProviderId || !isAllowed(sharedProviderId)) return null;
   if (providerId && providerId !== sharedProviderId) return null;
   if (!model) return null;
-  const shared = views.filter((view) => view.id === sharedProviderId);
+  const shared = views.filter((view) => view.id === sharedProviderId)
+    .map((view) => context.groupRouting ? { ...view, connected: true } : view);
   return effectiveSourceIdForModel(shared, sharedProviderId, model, kind)
     ?? actualSourceIdForModel(shared, sharedProviderId, model, kind);
 }

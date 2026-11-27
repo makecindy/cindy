@@ -24,9 +24,10 @@
  *     变化时自动切到对应桶，已加载桶立即出列表，未加载桶走一次 ensure。
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { AgentKind, Session, WorkspaceKind } from '@/lib/ccAgent.types';
+import type { PLUGIN_ENGINE_AGENT_KIND } from '../../shared/pluginEngines';
 import {
   getDataOwnerGeneration,
   isDataOwnerGenerationCurrent,
@@ -35,6 +36,7 @@ import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOr
 import * as sessionService from '@/lib/sessionService';
 import type { ListStatusFilter } from '@/lib/sessionService';
 import { sessionsStore } from '@/lib/sessionsStore';
+import { getDraft } from '@/state/newMakerDraft';
 
 interface UseCCSessionsOptions {
   /** Session status filter — F-PJ-10 V0.5.1。默认 'active'。 */
@@ -56,12 +58,14 @@ interface UseCCSessionsReturn {
     model?: string;
     effort?: string;
     workingDir?: string;
+    localPluginWorktree?: NonNullable<Parameters<typeof sessionService.create>[0]>['localPluginWorktree'];
     workspaceKind?: WorkspaceKind;
     permissionMode?: string;
     fastMode?: boolean | 'ultrafast';
     /** 计划模式一级开关(与 permissionMode 正交); 草稿开着时随建会话落库。 */
     planModeEnabled?: boolean;
-    agentKind?: AgentKind;
+    /** 'acp' = 插件引擎任务(只在本机新任务草稿创建，见 sessionService.create)。 */
+    agentKind?: AgentKind | typeof PLUGIN_ENGINE_AGENT_KIND;
     extraDirs?: string[];
     writableDirs?: string[];
     remoteHostId?: string;
@@ -71,7 +75,7 @@ interface UseCCSessionsReturn {
     providerId?: string | null;
     /** Only the Cindy Make purpose may be requested from the renderer; Main validates it. */
     source?: 'cindy-make';
-  }) => Promise<Session | null>;
+  }, onCreateError?: (error: unknown) => void) => Promise<Session | null>;
   refreshSessions: () => Promise<Session[]>;
   patchLocal: (id: string, patch: Partial<Session>) => void;
 }
@@ -107,7 +111,10 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
     // 命中 cache: 立刻 swap, 关 loading。
     const cached = sessionsStore.getByFilter(filter);
     if (cached !== null) {
-      setSnapshotState({ data: cached, filter });
+      // Re-read after render, but do not publish the same warm snapshot twice.
+      setSnapshotState((previous) =>
+        previous.data === cached && previous.filter === filter ? previous : { data: cached, filter },
+      );
       setIsLoading(false);
       setError(null);
     } else if (!hasAnySnapshotRef.current) {
@@ -162,11 +169,12 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
       model?: string;
       effort?: string;
       workingDir?: string;
+      localPluginWorktree?: NonNullable<Parameters<typeof sessionService.create>[0]>['localPluginWorktree'];
       workspaceKind?: WorkspaceKind;
       permissionMode?: string;
       fastMode?: boolean | 'ultrafast';
       planModeEnabled?: boolean;
-      agentKind?: AgentKind;
+      agentKind?: AgentKind | typeof PLUGIN_ENGINE_AGENT_KIND;
       /** 附加只读引用目录列表 (绝对路径); 透传到 sessionService.create → mapper 写库。 */
       extraDirs?: string[];
       writableDirs?: string[];
@@ -180,19 +188,23 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
       source?: 'cindy-make';
       /** 新建页的未发送任务(见 sessionService.create)。 */
       provisional?: boolean;
-    }): Promise<Session | null> => {
+    }, onCreateError?: (error: unknown) => void): Promise<Session | null> => {
+      const worktreeOwner = opts?.localPluginWorktree ? getDataOwnerGeneration() : null;
       try {
         const newSession = await sessionService.create({
-          permissionMode: 'auto',
+          permissionMode: getDraft().newChatDefaultPermissionMode ?? 'auto',
           fastMode: false,
           ...opts,
         });
+        if (worktreeOwner && !isDataOwnerGenerationCurrent(worktreeOwner)) return null;
         // 本地 prepend：新建必然是 active 且 _count.messages=0，
         // projectGrouping 自动把它落到"未分类区"。省掉一次全量 IPC。
         sessionsStore.prependCreated(newSession);
         return newSession;
       } catch (err) {
         setError(err instanceof Error ? err : new Error(String(err)));
+        // The caller needs this invocation's error before React commits setError.
+        onCreateError?.(err);
         return null;
       }
     },
@@ -220,4 +232,17 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
     refreshSessions,
     patchLocal,
   };
+}
+
+/**
+ * A bounded `all` query lets recent archived history displace active tasks. Keep
+ * each status's existing allowance and let sessionsStore own updates / migration.
+ * Concurrent subscribers share the same two bucket requests and subscriptions.
+ */
+export function useCCSessionsAllStatuses(): Session[] {
+  const active = useCCSessions({ includeArchived: 'active' });
+  const archived = useCCSessions({ includeArchived: 'archived' });
+  return useMemo(() => [...new Map(
+    [...archived.sessions, ...active.sessions].map(session => [session.id, session]),
+  ).values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), [active.sessions, archived.sessions]);
 }

@@ -10,11 +10,13 @@ function harness() {
       destroyed = true;
     }),
     setContextMenu: vi.fn(),
+    setToolTip: vi.fn(),
     on: vi.fn<(event: 'click', listener: () => void) => void>(),
   };
   const deps = {
     createTray: vi.fn(() => tray),
     buildMenu: vi.fn(() => ({ label: 'Show Cindy' })),
+    tooltip: 'Cindy',
     showWindow: vi.fn(),
     onError: vi.fn(),
   };
@@ -41,6 +43,12 @@ describe('Linux tray lifetime', () => {
     controller.refreshMenu();
     expect(tray.setContextMenu).toHaveBeenLastCalledWith({ label: '显示 Cindy' });
     expect(deps.createTray).toHaveBeenCalledOnce();
+  });
+
+  it('labels the icon so panel hover text is not the internal tray id', () => {
+    const { tray, controller } = harness();
+    controller.ensure();
+    expect(tray.setToolTip).toHaveBeenCalledWith('Cindy');
   });
 
   it('does not create a tray on language changes before startup or after disposal', () => {

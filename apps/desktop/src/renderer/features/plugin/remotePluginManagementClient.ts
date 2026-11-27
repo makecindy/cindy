@@ -11,13 +11,18 @@ import {
   type RemoteActionInvokeResponse,
 } from '@cindy/device-link';
 import { validateNormalizedGhostManifest } from '../../../shared/ghost';
+import { createIpcError, isIpcErrorCode } from '../../../shared/ipc-errors';
+import { contributionPreflight } from '../../../shared/pluginContributionContract';
+import type { PreparedPluginContribution } from '../../../shared/pluginContributions';
 import type {
   PluginManagementReceipt,
   PluginManagementSnapshot,
   PluginManagementProjectState,
   PluginManagementProject,
+  RemotePluginPublicationStatus,
 } from '../../../shared/pluginManagement';
-import type { PluginMarketDetail } from '../../../shared/pluginMarket';
+import type { PluginMarketDetail, PluginMarketPage, PluginMarketItem } from '../../../shared/pluginMarket';
+import { extractIpcError } from '@/utils/ipcError';
 import type { RemotePluginPreferenceSnapshot } from '../../../shared/pluginPreferences';
 
 const pluginManagementClient = {
@@ -42,17 +47,18 @@ export function boundedPluginResponse(
   );
 }
 export async function hasPluginManagement(deviceId: string): Promise<boolean> {
+  return (await pluginManagementActions(deviceId)).includes('management:snapshot');
+}
+export async function pluginManagementActions(deviceId: string): Promise<string[]> {
   const manifest = await window.electronAPI.deviceLink.invoke(
     deviceId,
     REMOTE_RESOURCE_MANIFEST_CHANNEL,
     [{ client: pluginManagementClient }],
   );
-  if (!boundedPluginResponse(manifest)) return false;
-  return !!(
+  if (!boundedPluginResponse(manifest)) return [];
+  return (
     manifest as { collections?: Array<{ id: string; actions?: Array<{ id: string }> }> }
-  ).collections?.some(
-    (c) => c.id === 'plugins' && c.actions?.some((a) => a.id === 'management:snapshot'),
-  );
+  ).collections?.find(c => c.id === 'plugins')?.actions?.map(a => a.id) ?? [];
 }
 export async function invokePluginManagement(
   deviceId: string,
@@ -78,6 +84,43 @@ export async function invokePluginManagement(
   if (!boundedPluginResponse(response)) throw new Error('INVALID_RESPONSE');
   return response.result;
 }
+/** Old version-1 Hosts reject nonempty snapshot input before collecting their catalog. */
+export async function hasPluginCatalogPaging(deviceId: string): Promise<boolean> {
+  try {
+    const result = await invokePluginManagement(deviceId, 'snapshot', { read: 'capabilities' });
+    return !!result && (result as { catalogPaging?: unknown }).catalogPaging === true;
+  } catch (error) {
+    if (extractIpcError(error)?.code === 'INVALID_PARAMS') return false;
+    throw error;
+  }
+}
+export function parsePluginManagementMarketPage(value: unknown): PluginMarketPage {
+  const data = value as PluginMarketPage;
+  const snapshot = parsePluginManagementSnapshot({ version: 1, ghosts: [], market: value });
+  if (!boundedPluginResponse(value) || data.items.length > 100
+    || (data.nextCursor !== null && (typeof data.nextCursor !== 'string' || data.nextCursor.length > 2048))
+    || (data.customSourceCounts !== undefined && (!Array.isArray(data.customSourceCounts)
+      || !data.customSourceCounts.every(item => item && typeof item.name === 'string'
+        && data.customSourceNames.includes(item.name) && Number.isSafeInteger(item.count) && item.count >= 0)
+      || new Set(data.customSourceCounts.map(item => item.name)).size !== data.customSourceCounts.length))
+    || (data.counts !== null && (!data.counts || !(['all', 'public', 'organization', 'personal', 'custom', 'official', 'community'] as const).every(key => {
+      const count = data.counts![key];
+      if ((key === 'official' || key === 'community') && count === undefined) return true;
+      return typeof count === 'number' && Number.isSafeInteger(count) && count >= 0;
+    }) || (data.counts.official ?? 0) + (data.counts.community ?? 0) > data.counts.public
+      || data.counts.all !== data.counts.public + data.counts.organization + data.counts.personal + data.counts.custom)))
+    throw new Error('INVALID_RESPONSE');
+  return { ...data, ...snapshot.market };
+}
+export function parsePluginManagementRecommendations(value: unknown): PluginMarketItem[] {
+  const snapshot = parsePluginManagementSnapshot({ version: 1, ghosts: [], market: {
+    items: value, unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [],
+  } });
+  if (snapshot.market.items.length > 12 || snapshot.market.items.some(item => item.scope !== 'public' || item.publisherKind !== 'official')
+    || new Set(snapshot.market.items.map(item => item.pluginId)).size !== snapshot.market.items.length)
+    throw new Error('INVALID_RESPONSE');
+  return snapshot.market.items;
+}
 export function parsePluginManagementSnapshot(value: unknown): PluginManagementSnapshot {
   const data = value as PluginManagementSnapshot;
   if (
@@ -95,7 +138,9 @@ export function parsePluginManagementSnapshot(value: unknown): PluginManagementS
         ) ||
         new Set(data.projects.map((project) => project.id)).size !== data.projects.length)) ||
     (data.projectBrowse !== undefined && data.projectBrowse !== true) ||
+    (data.communityPublication !== undefined && data.communityPublication !== true) ||
     (data.localShares !== undefined && data.localShares !== true) ||
+    (data.uiCapabilityApproval !== undefined && data.uiCapabilityApproval !== true) ||
     !data.ghosts.every(
       (g) =>
         typeof g.instanceKey === 'string' &&
@@ -173,7 +218,9 @@ export function parseRemotePluginPreferences(value: unknown): RemotePluginPrefer
       Array.isArray(data.tasks.config) ||
       !Array.isArray(data.tasks.permissionModes) ||
       !data.tasks.permissionModes.every((mode) => typeof mode === 'string') ||
-      typeof data.tasks.defaultPermissionMode !== 'string')
+      typeof data.tasks.defaultPermissionMode !== 'string' ||
+      (data.tasks.remoteRoutes !== undefined && typeof data.tasks.remoteRoutes !== 'boolean') ||
+      (data.tasks.config.agentDeviceId !== undefined && data.tasks.config.agentDeviceId !== null && typeof data.tasks.config.agentDeviceId !== 'string'))
   )
     throw new Error('INVALID_RESPONSE');
   return data;
@@ -374,4 +421,30 @@ export async function readLegacyManagedPlugin(
       ? { details: details.map(({ key, title, value }) => ({ key, title, value })) }
       : {}),
   };
+}
+
+export function parseRemotePublicationPreview(value: unknown): PreparedPluginContribution {
+  const result = value as { preview?: PreparedPluginContribution; errorCode?: unknown } | null;
+  if (isIpcErrorCode(result?.errorCode)) throw createIpcError(result.errorCode, 'Could not prepare remote plugin publication');
+  const preview = result?.preview;
+  if (!preview || typeof preview.preparedId !== 'string' || !preview.preparedId.length || preview.preparedId.length > 256 ||
+    typeof preview.instanceId !== 'string' || typeof preview.ghostId !== 'string' ||
+    typeof preview.name !== 'string' || typeof preview.version !== 'string' || typeof preview.description !== 'string' ||
+    typeof preview.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(preview.sha256) ||
+    !Number.isSafeInteger(preview.sizeBytes) || preview.sizeBytes <= 0 || !Number.isFinite(Date.parse(preview.expiresAt)) ||
+    !(preview.pluginId === null || typeof preview.pluginId === 'string') ||
+    !(preview.releaseNotes === undefined || typeof preview.releaseNotes === 'string') ||
+    !(preview.permissionLabels === undefined || (Array.isArray(preview.permissionLabels) &&
+      preview.permissionLabels.every(label => typeof label === 'string' && /^[A-Za-z0-9_]+$/.test(label)))) ||
+    !contributionPreflight.safeParse(preview.preflight).success)
+    throw new Error('INVALID_RESPONSE');
+  return preview;
+}
+
+export function parseRemotePublicationStatus(value: unknown): RemotePluginPublicationStatus {
+  const status = value as RemotePluginPublicationStatus | null;
+  if (status?.stage === 'pending' || status?.stage === 'submitted') return { stage: status.stage };
+  if (status?.stage === 'failed' && typeof status.errorCode === 'string')
+    return { stage: 'failed', errorCode: status.errorCode };
+  throw new Error('INVALID_RESPONSE');
 }

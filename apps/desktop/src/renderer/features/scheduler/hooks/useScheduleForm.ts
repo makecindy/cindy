@@ -9,28 +9,49 @@
  */
 
 import { useCallback, useRef, useState } from 'react';
+import { formatScheduleDeadline, parseScheduleDeadline } from '@cindy/maker-shared/schedule-form';
 import type { CreateScheduleInput, Schedule, ScheduleTemplate, ScheduleWorkspaceKind } from '@cindy/maker-scheduler';
-import type { ProviderView } from '@cindy/model-providers';
+import { effectiveSourceIdForModel, type ProviderView } from '@cindy/model-providers';
 import { getDraft, getPersistedVendorModel } from '@/state/newMakerDraft';
+import { isModelEnabled } from '@/state/modelVisibilityPrefs';
 import { resolveNewTaskDefaultRoute } from '@/lib/draftModelCalibration';
+import { GHOST_CONTROL_POINTS } from '../../../../shared/ghost';
 import type { Session } from '@/lib/ccAgent.types';
+import type { PluginEngineSelection } from '@/lib/pluginEngineSelection';
 import {
   EFFORT_VALUES,
   isEffortValue,
   applyRunMode,
   buildScheduleInput,
   captureBinding,
+  scheduleEngineFormFields,
   sessionAgentKindToScheduleAgentKind,
   PENDING_SESSION_ID,
   resolveTemplateAgentFields,
 } from '../lib/scheduleFormLogic';
 import type { ScheduleFormState, RunMode, RememberedBinding } from '../lib/scheduleFormLogic';
+import { parseWebhookFormatText, webhookSourceFormFields, validGithubRepositories } from '../lib/scheduleFormLogic';
 
 // 类型与 effort 白名单已迁入 lib/scheduleFormLogic(纯函数层,node 环境可测);
 // 原处 re-export 保持既有 import 路径不变(ScheduleChips / projectAutomationConfig 等)。
 export { EFFORT_VALUES, isEffortValue } from '../lib/scheduleFormLogic';
 export type { EffortValue, ScheduleFormState, RunMode } from '../lib/scheduleFormLogic';
 export { deriveRunMode, hasRealBinding, PENDING_SESSION_ID } from '../lib/scheduleFormLogic';
+
+import { isGithubPrTriggerUrl, isGitlabMrTriggerUrl, normalizePrTrigger, schedulePrTriggers } from '@cindy/maker-scheduler/pr-trigger';
+import { parseGitlabItemReference, parseGitlabProjectReference } from '@cindy/maker-scheduler/github-item';
+
+function prFields(schedule: Schedule): Partial<ScheduleFormState> {
+  if (schedule.webhookTrigger && schedule.prTrigger === undefined) return {};
+  const rules = schedulePrTriggers(schedule);
+  if (rules.length !== 1) return schedule.prTrigger === null ? { prEnabled: false } : {};
+  const url = rules[0]!.url;
+  const gitlab = isGithubPrTriggerUrl(url) ? null : parseGitlabItemReference(url);
+  return { prEnabled: true, prUrl: url, prChange: rules[0]!.change,
+    ...(gitlab
+      ? { gitlabItem: url, gitlabItemHost: gitlab.host, gitlabItemProject: gitlab.project, gitlabItemNumber: gitlab.number, gitlabItemKind: 'mr' as const }
+      : { githubItem: url, githubItemRepository: url.split('/').slice(3, 5).join('/') }) };
+}
 
 const DEFAULT_FORM: ScheduleFormState = {
   name: '',
@@ -44,6 +65,11 @@ const DEFAULT_FORM: ScheduleFormState = {
   timezone: 'Asia/Shanghai',
   recurring: true,
   manual: false,
+  webhookEnabled: false,
+  webhookEvents: '',
+  webhookPreset: 'github-app',
+  webhookSigned: true,
+  webhookFormat: '',
   agentKind: 'claude-code',
   model: '',
   providerId: '',
@@ -59,6 +85,9 @@ const DEFAULT_FORM: ScheduleFormState = {
   preRunHookEnabled: false,
   preRunHookCommand: '',
   preRunHookTimeoutSec: '',
+  preRunSource: 'script',
+  preRunPluginId: '',
+  preRunPluginOnFailure: GHOST_CONTROL_POINTS['will-schedule-run'].defaultOnFailure,
   notifyDesktop: true,
   notifyFeishu: false,
   notifyWecomGroup: false,
@@ -159,7 +188,8 @@ export function getScheduleAgentPrefs(agentKind: ScheduleFormState['agentKind'])
  *      一起落到表单:只存模型会让 runner 把空来源重新解析成原生默认(可能是网关)。
  * 不变量:返回值是原子的 (模型, 来源) 对,调用方整对应用,不拿别处的来源去拼模型。
  * 三级都返回与模型成对的来源(一级取任务记忆的来源,二级取对话草稿记着的来源),
- * 没有记来源时为 null(跟随原生默认)。`preferredProviderId` 是表单 / 模板已定下的来源:
+ * 清单未到位且没有记来源时为 null；清单就绪后保留校验命中的可见来源。
+ * `preferredProviderId` 是表单 / 模板已定下的来源:
  * 给定时只接受同一来源的一、二级结果,第三级只在该来源内挑,保证模型一定由这个来源提供。
  */
 export function getScheduleDefaultRoute(
@@ -167,24 +197,37 @@ export function getScheduleDefaultRoute(
   providers?: readonly ProviderView[],
   preferredProviderId?: string | null,
 ): { model: string; providerId: string | null } {
+  // Match the picker before both history validation and fallback. Catalog membership
+  // alone includes bridge routes hidden by default and user-disabled display rows.
+  const candidates = providers?.map((provider) => ({
+    ...provider,
+    models: { ...provider.models, [agentKind]: (provider.models[agentKind] ?? [])
+      .filter((model) => isModelEnabled(agentKind, provider.id, model)) },
+  }));
   const preferred = preferredProviderId?.trim() || null;
   const compatible = (providerId: string | null) => !preferred || providerId === preferred;
+  const rememberedRoute = (model: string, providerId: string | null) => {
+    if (!model.trim() || !compatible(providerId)) return null;
+    if (!candidates) return { model, providerId };
+    const sourceId = effectiveSourceIdForModel(candidates, providerId, model, agentKind);
+    // Pin the source that passed visibility checks. Returning the remembered null
+    // would let downstream resolution use the full catalog and pick a hidden copy.
+    // Auto relocation may resolve another source; an explicit template/source
+    // constraint still applies to the result, not only to the remembered input.
+    return sourceId && compatible(sourceId) ? { model, providerId: sourceId } : null;
+  };
   const prefs = getScheduleAgentPrefs(agentKind);
-  const prefsProviderId = prefs.providerId || null;
-  if (prefs.model.trim() && compatible(prefsProviderId)) {
-    return { model: prefs.model, providerId: prefsProviderId };
-  }
+  const scheduleRoute = rememberedRoute(prefs.model, prefs.providerId || null);
+  if (scheduleRoute) return scheduleRoute;
   const vendor = agentKind === 'codex' ? 'codex' : agentKind === 'pi' ? 'pi' : 'cc';
   const draft = getDraft();
   const chatLast = getPersistedVendorModel(vendor);
-  const chatProviderId = draft.lastByVendor[vendor]?.providerId || null;
-  if (chatLast.trim() && compatible(chatProviderId)) {
-    return { model: chatLast, providerId: chatProviderId };
-  }
-  if (!providers) return { model: '', providerId: preferred };
+  const chatRoute = rememberedRoute(chatLast, draft.lastByVendor[vendor]?.providerId || null);
+  if (chatRoute) return chatRoute;
+  if (!candidates) return { model: '', providerId: preferred };
   return (
     resolveNewTaskDefaultRoute({
-      providers,
+      providers: candidates,
       agent: agentKind,
       requiredProviderId: preferred,
       draft: {
@@ -260,14 +303,17 @@ export function makeFormFromSchedule(s: Schedule | null): ScheduleFormState {
     cronExpr: s.cronExpr,
     intervalMs: s.intervalMs,
     timezone: s.timezone,
+    deadline: formatScheduleDeadline(s.expireAt),
+    sourceExpireAt: s.expireAt,
     recurring: s.recurring,
     manual: s.manual,
-    agentKind: s.modelAgentKind ?? s.agentKind,
-    modelAgentKind: s.modelAgentKind,
+    ...prFields(s),
+    webhookEnabled: Boolean(s.webhookTrigger),
+    webhookEvents: (s.webhookTrigger?.events ?? []).join(', '),
+    ...webhookSourceFormFields(s.webhookTrigger?.source, s.webhookTrigger?.events),
+    ...scheduleEngineFormFields(s),
     modelAgentDeviceId: s.modelAgentDeviceId,
-    boundAgent: s.targetSessionId ? { sessionId: s.targetSessionId, agentKind: s.agentKind } : undefined,
-    model: s.model ?? '',
-    providerId: s.providerId ?? '',
+    modelGroup: s.modelGroup,
     agentDeviceId: s.agentDeviceId ?? '',
     effort: s.effort && isEffortValue(s.effort) ? s.effort : '',
     fastMode: (s.fastMode ?? false),
@@ -277,7 +323,13 @@ export function makeFormFromSchedule(s: Schedule | null): ScheduleFormState {
     targetSessionId: s.targetSessionId ?? '',
     persistentSession: !!s.persistentSession,
     silentWhenIdle: !!s.silentWhenIdle,
-    preRunHookEnabled: !!s.preRunHook?.command,
+    preRunHookEnabled: !!s.preRunHook?.command || !!s.preRunPlugin,
+    // 两者都有时(Agent 设的)界面显示插件;脚本保持原样直到用户改成脚本来源。
+    preRunSource: s.preRunPlugin ? 'plugin' : 'script',
+    preRunKeepScript: !!s.preRunPlugin && !!s.preRunHook?.command,
+    primaryHostKey: s.primaryHostKey,
+    preRunPluginId: s.preRunPlugin?.pluginId ?? '',
+    preRunPluginOnFailure: s.preRunPlugin?.onFailure ?? GHOST_CONTROL_POINTS['will-schedule-run'].defaultOnFailure,
     preRunHookCommand: s.preRunHook?.command ?? '',
     preRunHookTimeoutSec: s.preRunHook?.timeoutMs
       ? String(Math.round(s.preRunHook.timeoutMs / 1000))
@@ -297,6 +349,13 @@ export interface UseScheduleFormResult {
     selection: Pick<ScheduleFormState, 'agentKind' | 'model' | 'providerId' | 'effort' | 'fastMode' | 'modelAgentDeviceId'> | null,
     followedAgentKind?: ScheduleFormState['agentKind'],
   ) => void;
+  /**
+   * 选中插件引擎(docs/plans/acp-plugin-bridge.md)：每次新建任务、在本机运行，清掉运行位置
+   * 与 Fast(worktree 保留)；选内置模型(selectModelConfiguration)时清掉它。
+   */
+  selectPluginEngine: (selection: PluginEngineSelection) => void;
+  /** 选一个模型组(模式)。 */
+  selectModelGroup: (modelGroup: string) => void;
   setField: <K extends keyof ScheduleFormState>(k: K, v: ScheduleFormState[K]) => void;
   /** 改 destination 时同步改 useWorktree / targetSessionId 三态互斥。 */
   setDestination: (d: Destination) => void;
@@ -316,16 +375,27 @@ export interface UseScheduleFormResult {
    * heartbeat 模式（targetSessionId 非空）只跳过 workingDir/useWorktree
    * （runner 从 SessionMeta 取，传了也被忽略）；model/effort 照常发送。
    */
-  toInput: () => CreateScheduleInput;
+  toInput: (override?: Partial<ScheduleFormState>) => CreateScheduleInput;
   /**
    * 校验 + 返回错误 i18n key + 可选 interpolation values。null = 通过。
    * 调用方负责用 t() 翻译。
    */
-  validate: () => { key: string; values?: Record<string, string> } | null;
+  validate: (override?: Partial<ScheduleFormState>) => { key: string; values?: Record<string, string> } | null;
+}
+
+function withMrTiming(form: ScheduleFormState): ScheduleFormState {
+  if (!form.prEnabled || !isGitlabMrTriggerUrl(form.prUrl) || (!form.manual && form.recurring)) return form;
+  // A manual schedule has no active cadence. Start with the 10-minute timed status check.
+  return {
+    ...form,
+    manual: false,
+    recurring: true,
+    ...(form.manual ? { cronExpr: '*/10 * * * *', intervalMs: undefined } : {}),
+  };
 }
 
 export function useScheduleForm(initial: Schedule | null = null): UseScheduleFormResult {
-  const [form, setForm] = useState<ScheduleFormState>(() => makeFormFromSchedule(initial));
+  const [form, setForm] = useState<ScheduleFormState>(() => withMrTiming(makeFormFromSchedule(initial)));
   // "记住的真实绑定"快照:三态来回切换(bound → fresh/persistent → bound)时
   // 不丢用户已选/任务已有的绑定 —— 表单切换是非破坏性的,只有保存才落库。
   // 快照含 model/effort 等关联字段:切到 fresh 后空 model 会被回填 effect 填成
@@ -337,7 +407,7 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
 
   const setField = useCallback(
     <K extends keyof ScheduleFormState>(k: K, v: ScheduleFormState[K]) => {
-      setForm((f) => ({ ...f, [k]: v }));
+      setForm((f) => withMrTiming({ ...f, [k]: v }));
     },
     [],
   );
@@ -348,7 +418,7 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
         const boundAgent = form.targetSessionId && form.targetSessionId !== PENDING_SESSION_ID &&
           form.boundAgent?.sessionId !== form.targetSessionId
           ? { sessionId: form.targetSessionId, agentKind: form.agentKind } : form.boundAgent;
-        return { ...form, ...selection, boundAgent, modelAgentKind: selection.agentKind };
+        return { ...form, ...selection, followTeammateModel: false, boundAgent, modelAgentKind: selection.agentKind, pluginEngine: null, modelGroup: undefined };
       }
       const agentKind = followedAgentKind ??
         (form.boundAgent?.sessionId === form.targetSessionId
@@ -356,17 +426,35 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
       const boundAgent = followedAgentKind && form.targetSessionId
         ? { sessionId: form.targetSessionId, agentKind } : form.boundAgent;
       return { ...form, agentKind, boundAgent, model: '', providerId: '', agentDeviceId: '', effort: '', fastMode: false,
-        modelAgentKind: undefined, modelAgentDeviceId: undefined };
+        modelAgentKind: undefined, modelAgentDeviceId: undefined, pluginEngine: null, modelGroup: undefined };
     });
   }, []);
 
   const reset = useCallback((s: Schedule | null = null, overrides?: Partial<ScheduleFormState>) => {
     const next = { ...makeFormFromSchedule(s), ...overrides };
     if (next.targetSessionId && next.boundAgent?.sessionId !== next.targetSessionId) {
-      next.boundAgent = { sessionId: next.targetSessionId, agentKind: s?.agentKind ?? next.agentKind };
+      // A bound automation never runs on a plugin engine (refused on save).
+      next.boundAgent = { sessionId: next.targetSessionId, agentKind: s && s.agentKind !== 'acp' ? s.agentKind : next.agentKind };
     }
     lastBindingRef.current = captureBinding(next);
-    setForm(next);
+    setForm(withMrTiming(next));
+  }, []);
+
+  // 选模式：具体模型留作选不出来时沿用的，插件引擎不再生效。
+  const selectModelGroup = useCallback((modelGroup: string) => {
+    setForm((f) => ({ ...f, modelGroup, pluginEngine: null, followTeammateModel: false }));
+  }, []);
+
+  const selectPluginEngine = useCallback((selection: PluginEngineSelection) => {
+    const deviceId = selection.deviceId?.trim() || '';
+    setForm((f) => ({
+      ...f,
+      modelGroup: undefined,
+      pluginEngine: selection,
+      agentDeviceId: deviceId,
+      modelAgentDeviceId: deviceId,
+      fastMode: false,
+    }));
   }, []);
 
   const applyTemplateAgentFields = useCallback((template: ScheduleTemplate, providers?: readonly ProviderView[]) => {
@@ -379,8 +467,11 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
       // A template that supplies a model is an explicit selection, even while following a bound task.
       // 模板的模型与来源属于本机目录;路由变了就回到本机运行。
       const sameRoute = selection.agentKind === f.agentKind && selection.model === f.model && selection.providerId === f.providerId;
-      return { ...f, ...selection, agentDeviceId: sameRoute ? f.agentDeviceId : '',
-        modelAgentKind: selection.model.trim() || selection.modelAgentDeviceId === '' ? selection.agentKind : undefined };
+      // 模板换了模型就是选了一个具体模型：去掉模式；没换沿用。
+      return { ...f, ...selection, pluginEngine: null, agentDeviceId: sameRoute ? f.agentDeviceId : '',
+        modelGroup: sameRoute ? f.modelGroup : undefined,
+        modelAgentKind: template.model?.trim() || (f.targetSessionId.trim() && selection.modelAgentDeviceId === '')
+          ? selection.agentKind : sameRoute ? f.modelAgentKind : undefined };
     });
   }, []);
 
@@ -415,7 +506,8 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
       // 还原 —— 模式切换非破坏性,绑定只有保存才真正丢失。
       const snapshot = captureBinding(f);
       if (snapshot) lastBindingRef.current = snapshot;
-      return applyRunMode(f, mode, lastBindingRef.current);
+      const next = applyRunMode(f, mode, lastBindingRef.current);
+      return next;
     });
   }, []);
 
@@ -429,6 +521,7 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
       const next: ScheduleFormState = {
         ...f,
         targetSessionId: session.id,
+        pluginEngine: null,
         agentKind: sessionAgentKindToScheduleAgentKind(session.agentKind),
         boundAgent: { sessionId: session.id, agentKind: sessionAgentKindToScheduleAgentKind(session.agentKind) },
         model: '',
@@ -445,46 +538,83 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
     });
   }, []);
 
-  const validate = useCallback((): { key: string; values?: Record<string, string> } | null => {
-    if (!form.name.trim()) return { key: 'scheduler.editor.validation.nameRequired' };
-    if ((form.executionMode ?? 'agent') === 'agent' && !form.prompt.trim()) {
+  const validate = useCallback((override?: Partial<ScheduleFormState>): { key: string; values?: Record<string, string> } | null => {
+    const current = override ? { ...form, ...override } : form;
+    if (Number.isNaN(parseScheduleDeadline(current.deadline ?? '', current.sourceExpireAt))) {
+      return { key: 'scheduler.deadline.invalid' };
+    }
+    if (!current.name.trim()) return { key: 'scheduler.editor.validation.nameRequired' };
+    if ((current.executionMode ?? 'agent') === 'agent' && !current.prompt.trim()) {
       return { key: 'scheduler.editor.validation.promptRequired' };
     }
-    if ((form.executionMode ?? 'agent') === 'agent' && form.modelAgentKind && !form.model.trim()) {
-      return { key: 'scheduler.editor.validation.modelUnavailable', values: { model: form.providerId } };
+    if ((current.executionMode ?? 'agent') === 'agent' && current.modelAgentKind && !current.model.trim()) {
+      return { key: 'scheduler.editor.validation.modelUnavailable', values: { model: current.providerId } };
     }
-    if (form.executionMode === 'script' && !form.scriptCommand?.trim()) {
+    if (current.executionMode === 'script' && !current.scriptCommand?.trim()) {
       return { key: 'scheduler.editor.validation.scriptCommandRequired' };
     }
-    if (!form.cronExpr.trim()) return { key: 'scheduler.editor.validation.scheduleRequired' };
-    if (!form.timezone.trim()) return { key: 'scheduler.editor.validation.timezoneRequired' };
+    if (!current.cronExpr.trim()) return { key: 'scheduler.editor.validation.scheduleRequired' };
+    if (!current.timezone.trim()) return { key: 'scheduler.editor.validation.timezoneRequired' };
 
-    const tgt = form.targetSessionId.trim();
+    const tgt = current.targetSessionId.trim();
     const isHeartbeat = !!tgt;
-    if (form.executionMode === 'script') {
-      if (!form.workingDir.trim()) return { key: 'scheduler.editor.validation.selectProject' };
+    if (current.executionMode === 'script') {
+      if (!current.workingDir.trim()) return { key: 'scheduler.editor.validation.selectProject' };
       // Script bindings survive editing; unavailable owners are paused by the host.
     } else if (isHeartbeat) {
       if (tgt === '__pending__') return { key: 'scheduler.editor.validation.selectThread' };
     } else {
-      if (form.workspaceKind === 'project' && !form.workingDir.trim()) {
+      if (current.workspaceKind === 'project' && !current.workingDir.trim()) {
         return { key: 'scheduler.editor.validation.selectProject' };
       }
-      if (form.effort && !isEffortValue(form.effort)) {
+      if (current.effort && !isEffortValue(current.effort)) {
         return { key: 'scheduler.editor.validation.reasoningInvalid', values: { values: EFFORT_VALUES.join(' / ') } };
       }
     }
     // script 模式保留已有前置检查;切换时命令留空不创建 hook,
     // 否则用户明明看不到该区块也点不到那个开关,却被挡在保存之外。
-    if (form.executionMode !== 'script' && form.preRunHookEnabled && !form.preRunHookCommand.trim()) {
+    if (current.executionMode !== 'script' && current.preRunHookEnabled && current.preRunSource === 'plugin' && !current.preRunPluginId.trim()) {
+      return { key: 'scheduler.editor.validation.preRunPluginRequired' };
+    }
+    if (current.executionMode !== 'script' && current.preRunHookEnabled && current.preRunSource !== 'plugin' && !current.preRunHookCommand.trim()) {
       return { key: 'scheduler.editor.validation.preRunHookCommandRequired' };
+    }
+    if (current.prEnabled) {
+      try { normalizePrTrigger({ url: current.prUrl ?? '', change: current.prChange ?? 'any' }); }
+      catch { return { key: 'scheduler.prTrigger.invalid' }; }
+    }
+    if (current.webhookEnabled && current.webhookPreset === 'custom' && !parseWebhookFormatText(current.webhookFormat)) {
+      return { key: 'scheduler.editor.webhook.customInvalid' };
+    }
+    if (current.webhookEnabled && current.webhookPreset === 'github-app' && current.githubItemNumber === undefined
+      && !validGithubRepositories(current.webhookRepositories)) {
+      return { key: 'scheduler.editor.webhook.repositoriesInvalid' };
+    }
+    if (current.webhookEnabled && current.webhookPreset === 'github-item') {
+      return { key: 'scheduler.editor.webhook.item.required' };
+    }
+    if (current.webhookEnabled && (current.webhookPreset === 'gitlab-item' || current.webhookPreset === 'gitlab-mr-poll')) {
+      return { key: 'scheduler.editor.webhook.gitlabItem.required' };
+    }
+    if (current.webhookEnabled && current.webhookPreset === 'gitlab-plugin') {
+      if (!current.gitlabPluginId) return { key: 'scheduler.editor.webhook.gitlabPlugin.unavailable' };
+      if (current.gitlabItemNumber === undefined && !parseGitlabProjectReference(current.gitlabPluginProject ?? '')) {
+        return { key: 'scheduler.editor.webhook.gitlabPlugin.projectInvalid' };
+      }
+    }
+    if (current.webhookEnabled && current.webhookPreset === 'plugin' && !current.webhookPluginSources?.length) {
+      return { key: 'scheduler.editor.webhook.plugin.required' };
     }
     return null;
   }, [form]);
 
   // 核心转换在 lib/scheduleFormLogic.buildScheduleInput(纯函数,node 单测覆盖);
   // heartbeat 分支 model/effort 恒带 key(空值 undefined → update patch 清列 = 跟随会话)。
-  const toInput = useCallback((): CreateScheduleInput => buildScheduleInput(form), [form]);
+  const toInput = useCallback(
+    (override?: Partial<ScheduleFormState>): CreateScheduleInput =>
+      buildScheduleInput(override ? { ...form, ...override } : form),
+    [form],
+  );
 
-  return { form, setField, selectModelConfiguration, setDestination, setRunMode, selectBoundSession, applyTemplateAgentFields, reset, toInput, validate };
+  return { form, setField, selectModelConfiguration, selectPluginEngine, selectModelGroup, setDestination, setRunMode, selectBoundSession, applyTemplateAgentFields, reset, toInput, validate };
 }

@@ -1,0 +1,170 @@
+{
+  "picker": {
+    "title": "模型",
+    "permissionTitle": "权柄",
+    "searchAccessibility": "寻模型",
+    "searchPlaceholder": "寻模型…",
+    "noResults": "无相合之模型",
+    "emptyDefault": "暂无可用之模型",
+    "loadingDefault": "方载模型…",
+    "subscriptionBadge": "订",
+    "subscriptionBadgeCompact": "订",
+    "backToModels": "归模型录",
+    "agentSwitchHint": "择模型之后，次讯将转至 {{agent}}",
+    "crossAgentEmptyHint": "请先于远程设备连 {{agent}} 之模型来源",
+    "permissionModeAccessibility": "权柄之式：{{mode}}",
+    "selectProviderModelAccessibility": "择来源 {{provider}} 之模型 {{model}}",
+    "selectModelAccessibility": "择模型 {{model}}",
+    "configureAccessibility": "设 {{model}}",
+    "budgetDisabledHint": "此模型须先于远程设备设 API key，方可用之",
+    "priceLine": "入 {{input}} · 出 {{output}} / 百万 token",
+    "priceTitle": "每百万 token",
+    "priceAmounts": "入 {{input}} · 出 {{output}}",
+    "discountedVsStandard": "方折价，较常价省 {{percent}}%",
+    "contextSuffix": "{{size}} 上下文",
+    "fastTag": "疾"
+  },
+  "options": {
+    "speed": {
+      "label": "速",
+      "standard": "常速",
+      "fast": "疾",
+      "ultrafast": "迅极"
+    },
+    "fastMode": "疾行之式",
+    "fastModeAccessibility": "疾行之式 {{model}}",
+    "reasoningEffort": "思之深浅",
+    "reasoningEffortAccessibility": "思之深浅 {{label}}",
+    "effortLevels": {
+      "minimal": "至浅",
+      "low": "浅",
+      "medium": "中",
+      "high": "深",
+      "xhigh": "甚深",
+      "max": "至深",
+      "ultra": "极"
+    }
+  },
+  "contextWindowSwitch": {
+    "condensedToast": "为合新模型之容量，较早之言将压缩，言谈全录仍可阅。",
+    "remoteTitle": "今远程差事不能安然易模型",
+    "remoteDescription": "今远程差事之上下文已用 {{used}} / {{total}}（约 {{pct}}%），不能安然易至此小窗之模型。请守今模型，或新开差事后再择。",
+    "cancel": "守今模型"
+  },
+  "switchOutcome": {
+    "applied": "模型来源之易已生效。",
+    "failed": "模型来源之易未成，请重择。",
+    "previousSettingsRetained": "此次更易未成，任务仍循旧设。"
+  },
+  "agentSwitch": {
+    "browseAccessibility": "览 {{agent}} 模型"
+  },
+  "unified": {
+    "remoteCopyUnavailableOn": "「{{device}}」之 {{provider}} 今不可用。",
+    "remoteCopyUnavailableOnTaskComputer": "差事所在之机，{{provider}} 今不可用。",
+    "accountCount_one": "{{count}} 个名籍",
+    "accountCount_other": "{{count}} 个名籍",
+    "accountFallback": "名籍 {{index}}",
+    "favoriteConfiguration": "藏此设置",
+    "savedConfiguration": "已藏 · 点之则去",
+    "currentConfiguration": "今之设置",
+    "usingRecommended": "用所荐之设置",
+    "customized": "已自定",
+    "resetScopeHint": "复所荐，则重设引擎、思之深浅与 Fast，已藏者不变。",
+    "saveFavoriteHint": "存此组参数，他日自所藏信手取用。",
+    "removeFavoriteHint": "去之唯除捷径，今之参数不变。",
+    "editFavorite": "修原藏",
+    "editFavoriteHint": "唯修此藏，存后生效；方用之设置不变。",
+    "saveFavorite": "存所藏",
+    "cancelEdit": "罢修",
+    "originalFavoriteKept": "参数已调，原藏犹存。",
+    "parametersSaved": "参数已存。",
+    "restoredHint": "已复所荐之设置；君之所藏，吾分毫未动。",
+    "favoriteRemoved": "已去所藏，今之参数不变。",
+    "favoriteSaved": "此组设置已藏。",
+    "favoriteUpdated": "所藏已更，方用之设置不变。",
+    "favoriteChanged": "原藏已遭改易或删除。罢修后重启再试。",
+    "favoriteExists": "已有同设之藏。罢修即可径用。",
+    "favorites": "所藏",
+    "all": "诸模型",
+    "recommended": "所荐",
+    "source": "所自",
+    "remoteProvider": "{{provider}} · {{device}}",
+    "remoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
+    "providerGroup": "{{provider}} · {{group}}",
+    "groupBadge_one": "机组 · {{count}} 机",
+    "groupBadge_other": "机组 · {{count}} 机",
+    "harness": "Harness",
+    "restoreRecommended": "复所荐",
+    "saveFailed": "存之未成，请再试。",
+    "configure": "设",
+    "syncFailed": "所藏未能同步。请重启再试；远方之机上之 Cindy 或须更新。",
+    "timeUnit": {
+      "day": "日",
+      "hour": "时",
+      "minute": "分",
+      "second": "秒"
+    },
+    "quotaAverage": "平均余量 {{percent}}%",
+    "quotaUpdating": "余量待新",
+    "quotaResetSoon": "将重置",
+    "quotaResetIn": "{{duration}}后复初",
+    "quotaAverageHint": "周限额 · 诸名籍等权均值",
+    "quotaResetHint": "依今耗速，重置或尚有余：距 24 小时以内示黄，6 小时以内示红。"
+  },
+  "modelGroups": {
+    "title": "模型组",
+    "sourceCount_one": "{{count}} 源",
+    "sourceCount_other": "{{count}} 源",
+    "strategy": {
+      "expiring": "将废者先用",
+      "order": "依序",
+      "rotate": "轮值",
+      "cheapest": "最省",
+      "drain": "尽而后易",
+      "headroom": "余多者先",
+      "weighted": "依权"
+    },
+    "sourceOnDevice": "{{provider}} · {{device}}",
+    "why": {
+      "expiringQuota": "限额尚余 {{left}}%，{{reset}} 重设，故先用之",
+      "expiring": "依限额居首",
+      "order": "居首之可用者",
+      "rotate": "此番轮至彼",
+      "only": "今唯彼可用",
+      "soonest": "诸源限额皆尽，彼最先复",
+      "soonestUntil": "诸源限额皆尽，彼最先复（{{reset}}）",
+      "cheapest": "标价最低",
+      "cheapestFree": "订阅尚有限额，不另费钱",
+      "drain": "续用之，待其限额尽",
+      "drainNext": "前源已尽或不可用，易至此",
+      "headroom": "余额最多",
+      "headroomQuota": "限额尚余 {{left}}%，多于诸源",
+      "weighted": "依权此番分至彼",
+      "exceptionImage": "讯中有图，唯于能观图之源中择",
+      "exceptionImageFallback": "讯中有图，然无能观图之源，照常择之",
+      "exceptionHours": "此时段改行「{{name}}」",
+      "separator": "；"
+    },
+    "picker": {
+      "switched": "「{{name}}」已将此差事易为 {{model}}",
+      "switchUnavailable": "「{{name}}」今无可供此差事之源，模型未易。",
+      "chooseUnavailable": "「{{name}}」今无可用之源，未取之。",
+      "managedBy": "今由「{{name}}」常管",
+      "detach": "解管",
+      "detached": "已解智能路由常管，仍用今之模型"
+    },
+    "anotherDevice": "他机",
+    "sourceRouteTitle_one": "{{name}} · 智能路由（{{count}} 源）",
+    "sourceRouteTitle_other": "{{name}} · 智能路由（{{count}} 源）",
+    "switchOffer": {
+      "button": "易为 {{model}} 并续行"
+    }
+  },
+  "pluginEngines": {
+    "genericName": "法器引擎",
+    "defaultModel": "预设模型",
+    "unavailable": "{{engine}} 暂不可用",
+    "unavailableWithHint": "{{engine}} 暂不可用：{{hint}}"
+  }
+}

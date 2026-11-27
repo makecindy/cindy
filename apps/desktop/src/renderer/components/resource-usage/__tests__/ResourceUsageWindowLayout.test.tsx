@@ -25,11 +25,7 @@ vi.mock('@/components/title-bar/WindowControls', () => ({
 
 vi.mock('@/hooks/useTheme', () => ({ ThemeProvider: ({ children }: React.PropsWithChildren) => children }));
 vi.mock('@/hooks/useFontSettings', () => ({ FontSettingsProvider: ({ children }: React.PropsWithChildren) => children }));
-const { setLocale } = vi.hoisted(() => ({ setLocale: vi.fn() }));
-vi.mock('@/hooks/useLocale', () => ({
-  LocaleProvider: ({ children }: React.PropsWithChildren) => children,
-  useLocale: () => ({ effectiveLocale: 'en', setLocale }),
-}));
+vi.mock('@/i18n', () => ({ i18n: { changeLanguage: vi.fn() } }));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({ ConfirmDialogProvider: ({ children }: React.PropsWithChildren) => children }));
 vi.mock('@/components/ui/toast', () => ({ ToastContainer: () => null }));
 vi.mock('@/hooks/useAppShortcut', () => ({ useAppShortcut: vi.fn() }));
@@ -39,6 +35,7 @@ vi.mock('@/lib/logger', () => ({
 }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 
+import { DEFAULT_APPEARANCE_SETTINGS } from '../../../../shared/appearanceSettings';
 import { ResourceUsageWindowRoot } from '../ResourceUsageWindowLayout';
 
 afterEach(() => {
@@ -57,7 +54,7 @@ describe('ResourceUsageWindowRoot prewarm lifecycle', () => {
     resourceBodyProps = null;
     samplingListener = null;
     localeListener = null;
-    setLocale.mockClear();
+    localStorage.clear();
     rendererReady.mockClear();
     presentationReady.mockClear();
     resourceClose.mockClear();
@@ -90,6 +87,21 @@ describe('ResourceUsageWindowRoot prewarm lifecycle', () => {
     expect(screen.getByText('titleBar.menuItems.resourceUsage')).toBeTruthy();
   });
 
+  // The window has no native backdrop bridge, so with no wallpaper it must stay opaque.
+  it('does not enter the desktop background mode when no wallpaper is chosen', () => {
+    const electronAPI = window.electronAPI as unknown as Record<string, unknown>;
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        ...electronAPI,
+        appearanceSettings: { getSync: () => ({ ...DEFAULT_APPEARANCE_SETTINGS, wallpaperId: 'none' }) },
+      },
+    });
+    render(<ResourceUsageWindowRoot />);
+
+    expect(document.documentElement.dataset.desktopBackground).toBeUndefined();
+  });
+
   it('removes the macOS traffic-light inset in native fullscreen', () => {
     fullscreenState.isMac = true;
     fullscreenState.isFullscreen = true;
@@ -114,20 +126,20 @@ describe('ResourceUsageWindowRoot prewarm lifecycle', () => {
     expect(resourceBodyProps).toMatchObject({ active: false, shellVisible: false });
   });
 
-  it('applies locale changes received while the window is prewarmed', async () => {
+  // A cold-start system-locale broadcast used to overwrite the saved choice.
+  it.each(['zh-CN', 'system'])('updates the prewarmed display and preserves %s', async preference => {
+    localStorage.setItem('language', preference);
+    const publish = vi.fn().mockResolvedValue({ ok: true });
+    Object.assign(window.electronAPI, { preferredSystemLocale: 'zh-CN', setApplicationMenuLocale: publish });
     render(<ResourceUsageWindowRoot />);
-
-    await act(async () => localeListener?.('zh-CN'));
-
-    expect(setLocale).toHaveBeenCalledWith('zh-CN');
-  });
-
-  it('ignores a same-locale broadcast to avoid an IPC feedback loop', async () => {
-    render(<ResourceUsageWindowRoot />);
+    expect(document.documentElement.lang).toBe('zh-CN');
 
     await act(async () => localeListener?.('en'));
 
-    expect(setLocale).not.toHaveBeenCalled();
+    expect(document.documentElement.lang).toBe('en');
+    expect(localStorage.getItem('language')).toBe(preference);
+    expect(publish).not.toHaveBeenCalled();
+    expect(rendererReady).toHaveBeenCalledOnce();
   });
 
   it('clears and remounts window controls when the reusable window is hidden', async () => {

@@ -1,0 +1,809 @@
+{
+  "date": "2026-11-07T04:19:02.691Z",
+  "baseline": "4538b647a6af841aed5c49f00fa96f581538f7b8",
+  "source": {
+    "platform": "darwin",
+    "version": "0.0.0"
+  },
+  "target": {
+    "platform": "darwin",
+    "version": "0.1.124"
+  },
+  "directBefore": true,
+  "directAfter": true,
+  "idleControl": {
+    "medianMs": 11.6,
+    "p95Ms": 20.82,
+    "n": 10
+  },
+  "summary": [
+    {
+      "sourceBytes": 4194327,
+      "kind": "serial",
+      "upload": {
+        "medianMs": 1129.01,
+        "p95Ms": 1286.98,
+        "n": 3
+      },
+      "control": {
+        "medianMs": 12.25,
+        "p95Ms": 117.94,
+        "n": 18
+      },
+      "directEverySample": true,
+      "allValidated": true
+    },
+    {
+      "sourceBytes": 4194327,
+      "kind": "window2",
+      "upload": {
+        "medianMs": 908.68,
+        "p95Ms": 1075.13,
+        "n": 3
+      },
+      "control": {
+        "medianMs": 11.6,
+        "p95Ms": 314.75,
+        "n": 18
+      },
+      "directEverySample": true,
+      "allValidated": true
+    },
+    {
+      "sourceBytes": 4194327,
+      "kind": "window4",
+      "upload": {
+        "medianMs": 774.11,
+        "p95Ms": 864.87,
+        "n": 3
+      },
+      "control": {
+        "medianMs": 21.28,
+        "p95Ms": 451.61,
+        "n": 18
+      },
+      "directEverySample": true,
+      "allValidated": true
+    },
+    {
+      "sourceBytes": 11184835,
+      "kind": "serial",
+      "upload": {
+        "medianMs": 2195.13,
+        "p95Ms": 2352.17,
+        "n": 3
+      },
+      "control": {
+        "medianMs": 7.03,
+        "p95Ms": 36.69,
+        "n": 18
+      },
+      "directEverySample": true,
+      "allValidated": true
+    },
+    {
+      "sourceBytes": 11184835,
+      "kind": "window2",
+      "upload": {
+        "medianMs": 2003.64,
+        "p95Ms": 2027.26,
+        "n": 3
+      },
+      "control": {
+        "medianMs": 7.37,
+        "p95Ms": 14.85,
+        "n": 18
+      },
+      "directEverySample": true,
+      "allValidated": true
+    },
+    {
+      "sourceBytes": 11184835,
+      "kind": "window4",
+      "upload": {
+        "medianMs": 1874.48,
+        "p95Ms": 1944.4,
+        "n": 3
+      },
+      "control": {
+        "medianMs": 8.4,
+        "p95Ms": 64.26,
+        "n": 18
+      },
+      "directEverySample": true,
+      "allValidated": true
+    }
+  ],
+  "records": [
+    {
+      "kind": "window2",
+      "round": 0,
+      "sourceBytes": 4194327,
+      "gzipBytes": 3159106,
+      "chunks": 7,
+      "uploadMs": 908.6751669999999,
+      "peakUploadRequests": 2,
+      "uploadRequests": 7,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 8.496792000000369
+        },
+        {
+          "op": "close",
+          "ms": 9.315375000000131
+        },
+        {
+          "op": "caps",
+          "ms": 7.250833999999486
+        },
+        {
+          "op": "close",
+          "ms": 11.596999999999753
+        },
+        {
+          "op": "caps",
+          "ms": 265.89850000000024
+        },
+        {
+          "op": "close",
+          "ms": 277.16220799999974
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "window4",
+      "round": 0,
+      "sourceBytes": 4194327,
+      "gzipBytes": 3159106,
+      "chunks": 7,
+      "uploadMs": 661.5005419999998,
+      "peakUploadRequests": 4,
+      "uploadRequests": 7,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 7.420083999999406
+        },
+        {
+          "op": "close",
+          "ms": 10.748458000000028
+        },
+        {
+          "op": "caps",
+          "ms": 8.103540999999495
+        },
+        {
+          "op": "close",
+          "ms": 23.781750000000102
+        },
+        {
+          "op": "caps",
+          "ms": 304.52745799999957
+        },
+        {
+          "op": "close",
+          "ms": 211.55362499999956
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "serial",
+      "round": 0,
+      "sourceBytes": 4194327,
+      "gzipBytes": 3159106,
+      "chunks": 7,
+      "uploadMs": 1286.9781659999999,
+      "peakUploadRequests": 1,
+      "uploadRequests": 7,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 11.397124999999505
+        },
+        {
+          "op": "close",
+          "ms": 10.453375000000051
+        },
+        {
+          "op": "caps",
+          "ms": 12.245750000000044
+        },
+        {
+          "op": "close",
+          "ms": 15.622417000000496
+        },
+        {
+          "op": "caps",
+          "ms": 19.11683399999947
+        },
+        {
+          "op": "close",
+          "ms": 11.223375000000487
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "window4",
+      "round": 1,
+      "sourceBytes": 4194327,
+      "gzipBytes": 3159106,
+      "chunks": 7,
+      "uploadMs": 774.1130829999993,
+      "peakUploadRequests": 4,
+      "uploadRequests": 7,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 9.256540999999743
+        },
+        {
+          "op": "close",
+          "ms": 6.587250000000495
+        },
+        {
+          "op": "caps",
+          "ms": 8.323333999999704
+        },
+        {
+          "op": "close",
+          "ms": 8.630833000000166
+        },
+        {
+          "op": "caps",
+          "ms": 445.36775000000034
+        },
+        {
+          "op": "close",
+          "ms": 190.59979199999998
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "serial",
+      "round": 1,
+      "sourceBytes": 4194327,
+      "gzipBytes": 3159106,
+      "chunks": 7,
+      "uploadMs": 1129.0100000000002,
+      "peakUploadRequests": 1,
+      "uploadRequests": 7,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 10.702541999999994
+        },
+        {
+          "op": "close",
+          "ms": 13.580333000000792
+        },
+        {
+          "op": "caps",
+          "ms": 6.260750000000371
+        },
+        {
+          "op": "close",
+          "ms": 11.25774999999976
+        },
+        {
+          "op": "caps",
+          "ms": 12.52337499999976
+        },
+        {
+          "op": "close",
+          "ms": 15.188916999999492
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "window2",
+      "round": 1,
+      "sourceBytes": 4194327,
+      "gzipBytes": 3159106,
+      "chunks": 7,
+      "uploadMs": 794.6677500000005,
+      "peakUploadRequests": 2,
+      "uploadRequests": 7,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 7.830500000000029
+        },
+        {
+          "op": "close",
+          "ms": 8.328125
+        },
+        {
+          "op": "caps",
+          "ms": 23.581874999999854
+        },
+        {
+          "op": "close",
+          "ms": 174.69795799999883
+        },
+        {
+          "op": "caps",
+          "ms": 221.8474580000002
+        },
+        {
+          "op": "close",
+          "ms": 216.4615419999991
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "serial",
+      "round": 2,
+      "sourceBytes": 4194327,
+      "gzipBytes": 3159106,
+      "chunks": 7,
+      "uploadMs": 996.3096670000014,
+      "peakUploadRequests": 1,
+      "uploadRequests": 7,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 10.206083999999464
+        },
+        {
+          "op": "close",
+          "ms": 6.17725000000064
+        },
+        {
+          "op": "caps",
+          "ms": 8.22808299999997
+        },
+        {
+          "op": "close",
+          "ms": 117.93716700000004
+        },
+        {
+          "op": "caps",
+          "ms": 77.17020799999955
+        },
+        {
+          "op": "close",
+          "ms": 116.10487499999908
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "window2",
+      "round": 2,
+      "sourceBytes": 4194327,
+      "gzipBytes": 3159106,
+      "chunks": 7,
+      "uploadMs": 1075.1294579999994,
+      "peakUploadRequests": 2,
+      "uploadRequests": 7,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 10.279333000000406
+        },
+        {
+          "op": "close",
+          "ms": 9.495750000000044
+        },
+        {
+          "op": "caps",
+          "ms": 8.587917000000743
+        },
+        {
+          "op": "close",
+          "ms": 5.7627080000002024
+        },
+        {
+          "op": "caps",
+          "ms": 314.7535420000004
+        },
+        {
+          "op": "close",
+          "ms": 313.2463339999995
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "window4",
+      "round": 2,
+      "sourceBytes": 4194327,
+      "gzipBytes": 3159106,
+      "chunks": 7,
+      "uploadMs": 864.8735830000005,
+      "peakUploadRequests": 4,
+      "uploadRequests": 7,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 7.285083000000668
+        },
+        {
+          "op": "close",
+          "ms": 8.172082999999475
+        },
+        {
+          "op": "caps",
+          "ms": 21.28137500000048
+        },
+        {
+          "op": "close",
+          "ms": 451.61262499999975
+        },
+        {
+          "op": "caps",
+          "ms": 435.4393749999999
+        },
+        {
+          "op": "close",
+          "ms": 294.8287500000006
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "window2",
+      "round": 0,
+      "sourceBytes": 11184835,
+      "gzipBytes": 8424206,
+      "chunks": 17,
+      "uploadMs": 2003.642541000001,
+      "peakUploadRequests": 2,
+      "uploadRequests": 17,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 10.200833999999304
+        },
+        {
+          "op": "close",
+          "ms": 8.675833999997849
+        },
+        {
+          "op": "caps",
+          "ms": 10.066542000000481
+        },
+        {
+          "op": "close",
+          "ms": 6.352666999999201
+        },
+        {
+          "op": "caps",
+          "ms": 6.850458000000799
+        },
+        {
+          "op": "close",
+          "ms": 5.782917000000452
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "window4",
+      "round": 0,
+      "sourceBytes": 11184835,
+      "gzipBytes": 8424206,
+      "chunks": 17,
+      "uploadMs": 1874.4782500000001,
+      "peakUploadRequests": 4,
+      "uploadRequests": 17,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 8.124541999997746
+        },
+        {
+          "op": "close",
+          "ms": 7.393667000000278
+        },
+        {
+          "op": "caps",
+          "ms": 6.179457999998704
+        },
+        {
+          "op": "close",
+          "ms": 7.567915999999968
+        },
+        {
+          "op": "caps",
+          "ms": 8.080749999997352
+        },
+        {
+          "op": "close",
+          "ms": 10.227624999999534
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "serial",
+      "round": 0,
+      "sourceBytes": 11184835,
+      "gzipBytes": 8424206,
+      "chunks": 17,
+      "uploadMs": 2125.547125000001,
+      "peakUploadRequests": 1,
+      "uploadRequests": 17,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 6.643749999999272
+        },
+        {
+          "op": "close",
+          "ms": 8.46808400000009
+        },
+        {
+          "op": "caps",
+          "ms": 6.6276250000009895
+        },
+        {
+          "op": "close",
+          "ms": 6.511084000001574
+        },
+        {
+          "op": "caps",
+          "ms": 6.47333300000173
+        },
+        {
+          "op": "close",
+          "ms": 36.68816700000025
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "window4",
+      "round": 1,
+      "sourceBytes": 11184835,
+      "gzipBytes": 8424206,
+      "chunks": 17,
+      "uploadMs": 1860.9535829999986,
+      "peakUploadRequests": 4,
+      "uploadRequests": 17,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 41.78045900000143
+        },
+        {
+          "op": "close",
+          "ms": 23.172875000000204
+        },
+        {
+          "op": "caps",
+          "ms": 64.2599160000027
+        },
+        {
+          "op": "caps",
+          "ms": 18.574334000000817
+        },
+        {
+          "op": "close",
+          "ms": 8.647082999999839
+        },
+        {
+          "op": "close",
+          "ms": 34.76145800000086
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "serial",
+      "round": 1,
+      "sourceBytes": 11184835,
+      "gzipBytes": 8424206,
+      "chunks": 17,
+      "uploadMs": 2195.1324590000004,
+      "peakUploadRequests": 1,
+      "uploadRequests": 17,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 7.029125000000931
+        },
+        {
+          "op": "close",
+          "ms": 4.965583000001061
+        },
+        {
+          "op": "caps",
+          "ms": 6.615125000000262
+        },
+        {
+          "op": "close",
+          "ms": 6.47820800000045
+        },
+        {
+          "op": "caps",
+          "ms": 5.1738750000004075
+        },
+        {
+          "op": "close",
+          "ms": 6.501250000001164
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "window2",
+      "round": 1,
+      "sourceBytes": 11184835,
+      "gzipBytes": 8424206,
+      "chunks": 17,
+      "uploadMs": 1955.9470000000001,
+      "peakUploadRequests": 2,
+      "uploadRequests": 17,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 7.421500000000378
+        },
+        {
+          "op": "close",
+          "ms": 4.79566700000214
+        },
+        {
+          "op": "caps",
+          "ms": 7.368957999999111
+        },
+        {
+          "op": "close",
+          "ms": 8.271875000002183
+        },
+        {
+          "op": "caps",
+          "ms": 7.290082999999868
+        },
+        {
+          "op": "close",
+          "ms": 4.979708000002574
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "serial",
+      "round": 2,
+      "sourceBytes": 11184835,
+      "gzipBytes": 8424206,
+      "chunks": 17,
+      "uploadMs": 2352.169332999998,
+      "peakUploadRequests": 1,
+      "uploadRequests": 17,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 11.126791000002413
+        },
+        {
+          "op": "close",
+          "ms": 35.84087499999805
+        },
+        {
+          "op": "caps",
+          "ms": 27.83312500000102
+        },
+        {
+          "op": "close",
+          "ms": 7.038875000002008
+        },
+        {
+          "op": "caps",
+          "ms": 11.966208000001643
+        },
+        {
+          "op": "close",
+          "ms": 9.754916000001685
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "window2",
+      "round": 2,
+      "sourceBytes": 11184835,
+      "gzipBytes": 8424206,
+      "chunks": 17,
+      "uploadMs": 2027.2588749999995,
+      "peakUploadRequests": 2,
+      "uploadRequests": 17,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 8.351209000000381
+        },
+        {
+          "op": "close",
+          "ms": 14.083332999995037
+        },
+        {
+          "op": "caps",
+          "ms": 14.845375000004424
+        },
+        {
+          "op": "close",
+          "ms": 5.046833000000333
+        },
+        {
+          "op": "caps",
+          "ms": 6.522958999994444
+        },
+        {
+          "op": "close",
+          "ms": 5.702166999995825
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    },
+    {
+      "kind": "window4",
+      "round": 2,
+      "sourceBytes": 11184835,
+      "gzipBytes": 8424206,
+      "chunks": 17,
+      "uploadMs": 1944.4034170000014,
+      "peakUploadRequests": 4,
+      "uploadRequests": 17,
+      "controlProbes": [
+        {
+          "op": "caps",
+          "ms": 8.396083999999973
+        },
+        {
+          "op": "close",
+          "ms": 9.283374999999069
+        },
+        {
+          "op": "caps",
+          "ms": 6.2228329999998095
+        },
+        {
+          "op": "close",
+          "ms": 7.210207999996783
+        },
+        {
+          "op": "caps",
+          "ms": 7.225333000002138
+        },
+        {
+          "op": "close",
+          "ms": 8.38995900000009
+        }
+      ],
+      "direct": true,
+      "validatedAndConsumed": true
+    }
+  ],
+  "limitations": [
+    "Actual Cindy-to-Cindy authenticated Device Link. CDP is a local invocation adapter, identical across variants.",
+    "Receiver unchanged; invalid-open sentinel exercises reassembly, gzip verification/JSON parsing and cleanup without model/task creation.",
+    "Control probes are caps and no-op close, not user-message rendering or interruption of a running model.",
+    "No forced relay/network impairment; no restart/update of installed apps."
+  ]
+}

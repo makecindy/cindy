@@ -144,18 +144,18 @@ describe("collaboration navigation against the real StackRouter", () => {
   interface TestState {
     index: number;
     key: string;
+    routeKeySeq: number;
     routeNames: string[];
     routes: TestRoute[];
-    preloadedRoutes: TestRoute[];
     stale: boolean;
     type: "stack";
   }
   const startState = (): TestState => ({
     index: 0,
     key: "Stack-root",
+    routeKeySeq: 1,
     routeNames: [SESSION_ROUTE_NAME],
     routes: [{ ...(route(deviceList, "DEVICES") as TestRoute) }],
-    preloadedRoutes: [],
     stale: false,
     type: "stack",
   });
@@ -177,7 +177,7 @@ describe("collaboration navigation against the real StackRouter", () => {
         action as never,
         routerConfig as never,
       );
-      if (next) state = next as TestState;
+      if (next && typeof next === "object") state = next.state as TestState;
     };
     return {
       get state() {
@@ -303,7 +303,7 @@ describe("collaboration navigation wiring", () => {
     expect(source).toContain("type CollabSessionStateLike,");
     expect(block).toContain("navigateToCollabSession(");
     expect(block).toContain("getState: () => navigation.getState(),");
-    expect(block).toContain("push: (target) => router.push({");
+    expect(block).toContain("push: (target) => pushSessionDrillDown(router, {");
     expect(block).toContain("dismissTo: (target) => router.dismissTo({");
     // 旧的裸 push(直接拿目标 id 组 params)已不存在:那正是命中「同 id 复用 + 移到栈顶」的那一行。
     expect(block).not.toContain(

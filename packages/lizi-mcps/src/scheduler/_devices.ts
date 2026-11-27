@@ -27,11 +27,13 @@ export type SchedulerRemoteOp =
   | "list"
   | "get"
   | "list-runs"
+  | "create"
   | "update"
   | "pause"
   | "resume"
   | "delete"
-  | "run-now";
+  | "run-now"
+  | "webhook-restore";
 
 export type SchedulerRemoteResult =
   { ok: true; data: unknown } | { ok: false; code: string; message: string };
@@ -105,7 +107,7 @@ export async function runOnDevice(
   remote: {
     op: SchedulerRemoteOp;
     args: unknown[];
-    map?: (data: unknown) => unknown;
+    map?: (data: unknown) => unknown | Promise<unknown>;
   },
 ): Promise<SchedulerToolResult> {
   if (isLocalDevice(device)) return withScheduler(deps, local);
@@ -122,12 +124,11 @@ export async function runOnDevice(
     );
   const result = await deps.remote.invoke(device!, remote.op, remote.args);
   if (!result.ok) return failure(result.code, result.message);
+  const qualified = qualifyRemoteSessionIds(result.data, device!);
   return buildJsonResult({
     ok: true,
     deviceId: device,
-    data: (remote.map ?? ((data: unknown) => data))(
-      qualifyRemoteSessionIds(result.data, device!),
-    ),
+    data: remote.map ? await remote.map(qualified) : qualified,
   });
 }
 

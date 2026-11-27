@@ -8,14 +8,18 @@
  *   5. watch 订阅生命周期:onFsWatchSubscribed → 真实 fs 变更 → push 出口收到事件
  */
 
-import { mkdtemp, mkdir, realpath, rm, writeFile as fsWriteFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, realpath, rm, readFile as fsReadFile, writeFile as fsWriteFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { gzipSync, gunzipSync } from 'node:zlib';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { WorkdirWatchManager, type RemoteFileTreeEvent } from '@cindy/remote-file-service';
+import {
+  FileServiceRpcError,
+  WorkdirWatchManager,
+  type RemoteFileTreeEvent,
+} from '@cindy/remote-file-service';
 import { FILE_BROWSER_EVENT_CHANNEL } from '@cindy/device-link';
 import type { RemoteWorkingDirCheckResult } from '../../device-link/remote-workdir-guard.js';
 
@@ -56,7 +60,7 @@ const uploadMock = vi.fn(async (p: string, _opts?: unknown) => ({
   size: 4,
   contentType: 'text/plain',
 }));
-vi.mock('../../device-link/mediaTransfer.js', () => ({
+vi.mock('../../device-link/mediaTransfer.desktop.js', () => ({
   uploadLocalFile: (p: string, opts: unknown) => uploadMock(p, opts),
 }));
 vi.mock('../../device-link/remote-workdir-guard.js', async (importOriginal) => {
@@ -69,7 +73,7 @@ vi.mock('../../device-link/remote-workdir-guard.js', async (importOriginal) => {
 vi.mock('../../device-link/broadcast-tap.js', () => ({
   getSafeDataOwnerPushStamp: () => ownerStampState.current,
 }));
-vi.mock('../../device-link/dispatch.js', () => ({
+vi.mock('../../device-link/dispatch.desktop.js', () => ({
   pushToTopicSubscribers: (channel: string, payload: unknown, ownerStamp?: unknown) =>
     pushSpy(channel, payload, ownerStamp),
 }));
@@ -1348,6 +1352,15 @@ describe('file-browser device-op', () => {
     expect(res.code).toBe('OVERSIZE');
   });
 
+  // #10882: device-link must preserve the read/write target guard. Unit via
+  // real device-op and scanner; existing gzip tests only assert the content.
+  it('rejects a mismatched target on compressed device-link writes', async () => {
+    const result = await handleRemoteOp({ op: 'writeFile', workdir, relPath: 'src/a.ts',
+      contentGz: gzipSync(Buffer.from('lost')).toString('base64'), expectedResolvedPath: 'b/a.ts' });
+    expect(result).toMatchObject({ ok: false, message: expect.stringContaining('FILE_TARGET_CHANGED') });
+    expect(await fsReadFile(path.join(workdir, 'src/a.ts'), 'utf8')).toBe('export const a = 1;\n');
+  });
+
   it('nested SSH: contentGz is decoded before the two-hop forward (daemon sees plaintext)', async () => {
     const sshWorkdir = '/remote/home/user/proj';
     guardMock.mockResolvedValue({ allowed: false, reason: 'not-found' });
@@ -1360,12 +1373,46 @@ describe('file-browser device-op', () => {
       workdir: sshWorkdir,
       relPath: 'a.md',
       contentGz,
+      expectedResolvedPath: 'actual/a.md',
     })) as { ok: boolean };
     expect(res.ok).toBe(true);
     expect(sshRequestMock).toHaveBeenCalledWith('host-1', 'writeFile', {
       workdir: sshWorkdir,
       relPath: 'a.md',
       content: original,
+      expectedResolvedPath: 'actual/a.md',
+    });
+  });
+
+  // #10882, unit: the real device-op must return a
+  // save failure that FileBodyView can localize. Existing coverage only checks
+  // successful SSH forwarding and local rejection; the minimal missing input
+  // is the daemon's OPERATION_FAILED / FILE_TARGET_CHANGED response.
+  it('nested SSH: returns target-change failures without rejecting the device invocation', async () => {
+    guardMock.mockResolvedValue({ allowed: false, reason: 'not-found' });
+    dbRowsMock.mockReturnValue([{ remoteHostId: 'host-1' }]);
+    sshRequestMock.mockRejectedValueOnce(
+      new FileServiceRpcError(
+        'OPERATION_FAILED',
+        'FILE_TARGET_CHANGED: file target changed; reopen the file before saving',
+      ),
+    );
+
+    await expect(
+      handleRemoteOp({
+        op: 'writeFile',
+        workdir: '/remote/proj',
+        relPath: 'alias/a.md',
+        contentGz: gzipSync(Buffer.from('retained draft')).toString('base64'),
+        expectedResolvedPath: 'original/a.md',
+      }),
+    ).resolves.toEqual({ ok: false, message: 'FILE_TARGET_CHANGED' });
+    expect(sshRequestMock).toHaveBeenCalledTimes(1);
+    expect(sshRequestMock).toHaveBeenCalledWith('host-1', 'writeFile', {
+      workdir: '/remote/proj',
+      relPath: 'alias/a.md',
+      content: 'retained draft',
+      expectedResolvedPath: 'original/a.md',
     });
   });
 

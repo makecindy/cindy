@@ -33,7 +33,7 @@ describe('local publishing availability shared by details and selection', () => 
   });
   it.each([
     { ghost: null, reason: 'installationUnavailable' },
-    { ghost: { ...installed, manifest: { ...installed.manifest, id: 'cindy-art' } }, reason: 'reservedId' },
+    { ghost: { ...installed, namespace: 'local', manifest: { ...installed.manifest, id: 'cindy-art' } }, reason: null },
     { ghost: { ...installed, builtin: true }, reason: 'reservedId' },
     { ghost: { ...installed, namespace: 'org' }, reason: 'privatePlugin' },
     { ghost: { ...installed, namespace: undefined }, reason: 'privatePlugin' },

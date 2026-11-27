@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   invalidateMcpEndpoint: vi.fn(),
   dbLimit: vi.fn(),
   logWarn: vi.fn(),
+  send: vi.fn(),
 }));
 
 vi.mock('../../logger.js', async (importOriginal) => {
@@ -51,7 +52,7 @@ vi.mock('electron', async (importOriginal) => {
       }),
     },
     BrowserWindow: class {
-      static getAllWindows(): never[] { return []; }
+      static getAllWindows() { return [{ isDestroyed: () => false, webContents: { send: mocks.send } }]; }
     },
   };
 });
@@ -134,6 +135,9 @@ vi.mock('../../maker-host/index.js', () => ({
 
 import {
   getRemoteSshPool,
+  updateRemoteSshHost,
+  removeRemoteSshHost,
+  REMOTE_SSH_PUSH,
   probeRemoteWorkingDirectory,
   registerRemoteSshIpc,
   REMOTE_SSH_INVOKE,
@@ -211,6 +215,32 @@ beforeEach(async () => {
 });
 
 describe('remote SSH mutation runtime semantics', () => {
+  // Unit: AI rename previously had no native path. A key-backed external host
+  // with existing sessions must remain usable without exposing/replacing the key.
+  it('renames through the Agent patch path without rewriting a key-backed connection', async () => {
+    const original = host('agent-name', { managedByCindy: false, authMethod: 'key', identityFile: '/private/id_ed25519', port: 2222 });
+    await getRemoteSshPool().hydrate([original]);
+    mocks.dbLimit.mockResolvedValue([{ id: 'existing-session' }]);
+    await updateRemoteSshHost({ id: original.id, displayName: '家里的服务器' }, { patch: true });
+    expect(mocks.patchPref).toHaveBeenCalledWith(original.id, expect.objectContaining({ displayName: '家里的服务器' }));
+    expect(mocks.updateManagedHostFields).not.toHaveBeenCalled();
+    expect(getRemoteSshPool().get(original.id)?.config).toEqual(original);
+  });
+
+  // Unit: deleting through AI has no Settings component to remove its row.
+  // The shared mutation must broadcast the sanitized remaining list itself.
+  it('broadcasts the remaining SSH list after a native removal', async () => {
+    const target = host('delete-from-agent');
+    const other = host('keep-from-agent', { authMethod: 'key', identityFile: '/private/keep-key' });
+    await getRemoteSshPool().hydrate([target, other]);
+    mocks.readSshConfigDetailed.mockResolvedValueOnce(successfulRead([target, other]))
+      .mockResolvedValueOnce(successfulRead([other]));
+    await removeRemoteSshHost({ id: target.id });
+    const receipt = mocks.send.mock.calls.find(([channel]) => channel === REMOTE_SSH_PUSH.HOSTS_CHANGED);
+    expect(receipt?.[1].hosts.map((entry: { config: { id: string } }) => entry.config.id)).toEqual([other.id]);
+    expect(JSON.stringify(receipt)).not.toContain('/private/keep-key');
+  });
+
   it.each(['\n', '\r', '\r\n'])('rejects injected protocol lines before remote execution (%j)', async (separator) => {
     await getRemoteSshPool().hydrate([host('worker-dir')]);
     const remote = getRemoteSshPool().get('worker-dir')!;
@@ -659,14 +689,69 @@ describe('remote SSH mutation runtime semantics', () => {
     expect(mocks.removeMcpPref).toHaveBeenCalledWith(target.id);
   });
 
+  // Async MCP persistence must be awaited before REMOVE reports success.
+  // Unit: previous synchronous cleanup coverage cannot expose a late rejection.
+  it('waits for asynchronous MCP cleanup and preserves removal on persistence failure', async () => {
+    const target = host('remove-async-cleanup');
+    await getRemoteSshPool().hydrate([target]);
+    mocks.readSshConfigDetailed
+      .mockResolvedValueOnce(successfulRead([target]))
+      .mockResolvedValue(successfulRead([]));
+    let rejectCleanup!: (error: Error) => void;
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const cleanup = new Promise<void>((_, reject) => { rejectCleanup = reject; });
+    mocks.removeMcpPref.mockImplementationOnce(() => { entered(); return cleanup; });
+    let settled = false;
+    const removal = handler(REMOTE_SSH_INVOKE.REMOVE)({}, { id: target.id });
+    void removal.then(() => { settled = true; }, () => { settled = true; });
+    await Promise.race([started, removal]);
+    expect(settled).toBe(false);
+    rejectCleanup(new Error('synthetic prefs write failure'));
+    await expect(removal).resolves.toEqual({ ok: true });
+    expect(mocks.removeManagedHost.mock.calls[0]?.[0]).toBe(target.id);
+    expect(mocks.clearAgentProxy).toHaveBeenCalledWith(target.id);
+  });
+
+  // A slow prefs write must not postpone RemoteHost.disconnect's epoch fence:
+  // cindy_ssh/list_machines can use the old pool host outside the mutation queue.
+  // Unit: spy wraps the real disconnect; no SSH/socket or private epoch access.
+  it('fences the old endpoint before slow asynchronous MCP persistence finishes', async () => {
+    const target = host('slow-endpoint-prefs');
+    const other = host('unaffected-endpoint');
+    const updated = { ...target, hostname: '192.0.2.99' };
+    await getRemoteSshPool().hydrate([target, other]);
+    const oldHost = getRemoteSshPool().get(target.id)!;
+    const disconnect = vi.spyOn(oldHost, 'disconnect');
+    const otherDisconnect = vi.spyOn(getRemoteSshPool().get(other.id)!, 'disconnect');
+    let committed = false;
+    mocks.updateManagedHostFields.mockImplementationOnce(async () => { committed = true; });
+    mocks.readSshConfigDetailed.mockImplementation(async () => successfulRead(
+      committed ? [updated, other] : [target, other],
+    ));
+    let release!: () => void;
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    mocks.invalidateMcpEndpoint.mockImplementationOnce(() => { entered(); return pending; });
+    const update = handler(REMOTE_SSH_INVOKE.UPDATE)({}, { ...updated, displayName: target.id });
+    try {
+      await Promise.race([started, update]);
+      expect(disconnect).toHaveBeenCalledOnce();
+      expect(otherDisconnect).not.toHaveBeenCalled();
+    } finally {
+      release();
+      await update;
+    }
+    expect(getRemoteSshPool().get(target.id)?.config.hostname).toBe(updated.hostname);
+  });
+
   it('still disconnects the target when endpoint cleanup fails after UPDATE writes', async () => {
     const target = host('cleanup-failure');
     await getRemoteSshPool().hydrate([target]);
     const targetLive = getRemoteSshPool().get(target.id)!;
     const disconnect = vi.spyOn(targetLive, 'disconnect').mockResolvedValue();
-    mocks.invalidateMcpEndpoint.mockImplementationOnce(() => {
-      throw new Error('prefs disk unavailable');
-    });
+    mocks.invalidateMcpEndpoint.mockRejectedValueOnce(new Error('prefs disk unavailable'));
 
     await expect(handler(REMOTE_SSH_INVOKE.UPDATE)({}, {
       ...target,

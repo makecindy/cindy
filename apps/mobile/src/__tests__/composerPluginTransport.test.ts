@@ -8,6 +8,7 @@ import { createMobileMakerTransport, type RemoteInvoke } from '@/device-link/mob
 import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import type { QueuedRemoteMessage } from '@/session/types';
 import type { DurableOutboxRecord } from '@/session/durableOutbox';
+import { endOutboxBackgroundSend } from '@/session/outboxBackgroundSend';
 
 const bridgeSource = ts.createSourceFile('MobileOutboxBridge.tsx', readFileSync(resolve(
   process.cwd(), 'src/session/MobileOutboxBridge.tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -29,9 +30,9 @@ function outboxSender(invokeOwned: (record: DurableOutboxRecord) => RemoteInvoke
   const maker = (record: DurableOutboxRecord) => createMobileMakerTransport({
     deviceId: record.deviceId, invoke: invokeOwned(record),
   });
-  const compiled = ts.transpileModule(`function create(maker, invokeOwned) { return ${enqueueSource}; }`,
+  const compiled = ts.transpileModule(`function create(maker, invokeOwned, unarchiveSessionAfterSend, ownerInvoke, endOutboxBackgroundSend) { return ${enqueueSource}; }`,
     { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-  return new Function(`${compiled}; return create;`)()(maker, invokeOwned) as
+  return new Function(`${compiled}; return create;`)()(maker, invokeOwned, async () => {}, invokeOwned, endOutboxBackgroundSend) as
     (record: DurableOutboxRecord) => Promise<unknown>;
 }
 

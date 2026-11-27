@@ -1,4 +1,4 @@
-import type { PreRunHookRunResult, RunStatus, Schedule } from '../types.js';
+import type { PreRunHookRunResult, RunStatus, Schedule, ScheduleWebhookEvent, ScheduleRunTrigger } from '../types.js';
 
 export interface ChildRunInput {
   sessionId?: string;
@@ -10,10 +10,25 @@ export interface ChildRunInput {
 export interface FireContext {
   runId: string;
   firedAt: number;
+  /** True only for a scheduled clock tick, not an explicit Run now. */
+  timed?: boolean;
+  /** Host-owned validity check captured when this fire starts. */
+  assertFireContext?: () => void;
+  /** Continue the interrupted conversation, without replaying the initial prompt or precheck. */
+  resumeSessionId?: string;
   /** Host caller owns deferred retries; never schedule a cron replay for this attempt. */
   deferToCaller?: boolean;
   /** Internal caller validity, checked at the accepted -> vendor-dispatch boundary. Never persisted. */
   canDispatch?: () => boolean;
+  /** Events that woke this run. Untrusted external data; never persisted with the run. */
+  webhook?: { events: ScheduleWebhookEvent[]; omitted: number };
+  /** Bound pre-run hooks must execute in the directory shown in the approval card. */
+  expectedPreRunWorkingDir?: string;
+  /**
+   * Why an early run was started by host code (for example a watched PR's status changed).
+   * Passed to the pre-run hook's stdin as `trigger`; absent for cron fires and user run-now.
+   */
+  trigger?: ScheduleRunTrigger;
   /**
    * 由 Scheduler 创建并 own 的 AbortSignal。当用户在 UI 上 delete/pause 这条 schedule 时,
    * Scheduler 会对所有 in-flight 的 runner.fire() 触发 abort。
@@ -136,6 +151,8 @@ export interface FireResult {
    * deferred=true 时必填(否则 nextFireAt 不前移会导致下个 tick 立刻再触发的忙循环)。
    */
   deferRetryMs?: number;
+  /** Optional diagnostic reason for a deferred fire (e.g. 'already-queued', 'session-running'). */
+  deferReason?: string;
   /**
    * true = 本轮被前置检查脚本(preRunHook exit 2)拦截，或发送到模型前被用户停止：
    * 未消耗模型 token。engine 据此:把预插的 running run 改成 status='skipped'(带

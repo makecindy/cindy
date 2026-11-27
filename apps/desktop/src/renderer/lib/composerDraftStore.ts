@@ -20,9 +20,15 @@
  *   `onUpdate` hook (every keystroke; cheap Map.set).
  * - `getDraft` is called by `useAttachments` and `ChatInput` after the
  *   sessionId switches, to restore whatever the user left in the new session.
- * - `clearDraft` is called from `dispatchSend` (after a successful send) and
- *   from the session delete/archive flow in `CCAgentSidebarUpper` (to avoid
- *   the Map holding orphan entries for sessions that no longer exist).
+ * - `clearDraft` is called from `dispatchSend` (after a successful send).
+ * - `discardDraft` is called when a session is deleted: the draft and the
+ *   staged attachment copies it owns are released, since the session can no
+ *   longer be opened.
+ * - Archive deliberately keeps the draft. Archive is reversible and asks
+ *   nothing about the draft, so Restore (or opening the archived task, whose
+ *   composer stays usable) must bring back the text and attachments. Kept
+ *   entries are bounded by the renderer lifetime like any other draft; delete
+ *   still releases them.
  *
  * Why a separate module instead of expanding `makerChatStore`:
  * - `makerChatStore` is the chat business state (messages, streaming flags,
@@ -33,6 +39,7 @@
 import type { AttachedFile } from '@/lib/fileTypes';
 import type { BrowserCommentDraftItem } from '@/lib/browserComments';
 import type { ChatQuote } from '@/lib/chatQuotes';
+import type { BotGroupQuoteView } from '../../shared/botGroupChat';
 import {
   appendQuoteToComposerDocument,
   prependLegacyQuotesToComposerDocument,
@@ -60,6 +67,13 @@ export interface ComposerDraft {
   text: JSONContent | null;
   /** Snapshot of attachments at save time. Empty array means no attachments. */
   attachments: AttachedFile[];
+  /** Failed companion send being edited; follows this owner-scoped, in-memory draft only. */
+  botGroupEdit?: {
+    clientId: string;
+    enqueueOperationId?: string;
+    source: { groupId: string; clientId: string; revision: number };
+    signature: string;
+  };
   /** Plugin-page handoff consumed by ChatInput after its editor hydration. */
   pendingGhostId?: string;
   /** Routed built-in identity; re-resolve in the final task environment before sending. */
@@ -72,6 +86,8 @@ export interface ComposerDraft {
   focusAtEnd?: boolean;
   /** @deprecated 旧 renderer 的独立引用数组;saveDraft 会提升为正文节点。 */
   quotes?: ChatQuote[];
+  /** Unsent group reply reference, scoped to the same owner/group as this draft. */
+  botGroupQuote?: BotGroupQuoteView;
   /**
    * 内置浏览器页面评论(browser-comment-chip):待随下一条消息发送的评论列表,
    * composer 渲染为「N 条注释」胶囊,发送时序列化为 `# Browser comments:` 段
@@ -102,8 +118,9 @@ export interface RemoteOptimisticDraftSnapshot {
  * Process-local discard boundary captured by async composer work. A successful
  * send uses `clearDraft` and deliberately does not invalidate this token:
  * files added while the send is settling are newer composer input. Explicit
- * discard (session delete/archive) advances the generation so late work can
- * recycle its files instead of resurrecting the removed draft.
+ * discard (e.g. session delete; archive keeps the draft) advances the
+ * generation so late work can recycle its files instead of resurrecting the
+ * removed draft.
  */
 export interface ComposerDraftDiscardToken {
   ownerScopedKey: string;
@@ -135,7 +152,7 @@ const ATTACHED_FILE_SNAPSHOT_KEYS = [
  * id-only cleanup can delete a newer file that happens to reuse the id. Keep
  * every mutable serialized field in the click-time snapshot comparison.
  */
-function areAttachedFileSnapshotsEqual(left: AttachedFile, right: AttachedFile): boolean {
+export function areAttachedFileSnapshotsEqual(left: AttachedFile, right: AttachedFile): boolean {
   return (
     ATTACHED_FILE_SNAPSHOT_KEYS.every((key) => left[key] === right[key]) &&
     JSON.stringify(left.annotationStrokes ?? null) ===
@@ -227,6 +244,7 @@ const remoteOptimisticRecoveryBatchSnapshots = new WeakMap<
 >();
 let remoteOptimisticAttachmentUrls: string[] = [];
 let botGroupOutboxAttachmentUrls: string[] = [];
+let botGroupThreadAttachmentUrls: string[] = [];
 let activeDataOwnerId: string | null = null;
 
 /**
@@ -243,6 +261,7 @@ function draftKey(sessionId: string): string {
 }
 
 export function setComposerDraftOwner(ownerId: string | null): void {
+  if (activeDataOwnerId !== ownerId) setBotGroupThreadAttachmentUrls([]);
   activeDataOwnerId = ownerId;
 }
 
@@ -282,6 +301,18 @@ const presenceListeners = new Map<string, Set<DraftListener>>();
  *  detection in `recomputeDraftPresence`. NOT the read source of truth
  *  (`getDraftPresence` always computes fresh). */
 const presenceCache = new Map<string, boolean>();
+const allPresenceListeners = new Set<DraftListener>();
+
+/** Task housekeeping only needs identifiers, never composer contents. */
+export function getComposerDraftSessionIds(): string[] {
+  const prefix = ownerPrefix();
+  return [...drafts.entries()].filter(([key, draft]) => key.startsWith(prefix) && draftHasContent(draft))
+    .map(([key]) => key.slice(prefix.length));
+}
+export function subscribeAllDraftPresence(listener: DraftListener): () => void {
+  allPresenceListeners.add(listener);
+  return () => { allPresenceListeners.delete(listener); };
+}
 
 /**
  * Whether a Tiptap JSON doc carries any real content. Mirrors `isEditorEmpty`
@@ -314,6 +345,7 @@ export function draftHasContent(draft: ComposerDraft | undefined): boolean {
   if (!draft) return false;
   if (draft.attachments.length > 0) return true;
   if (draft.quotes && draft.quotes.length > 0) return true;
+  if (draft.botGroupQuote) return true;
   if (draft.browserComments && draft.browserComments.length > 0) return true;
   return tiptapDocHasContent(draft.text);
 }
@@ -326,6 +358,18 @@ export function draftHasContent(draft: ComposerDraft | undefined): boolean {
  */
 /** Every write to a draft, including silent keystroke saves (the new-task title preview). */
 const contentListeners = new Map<string, Set<DraftListener>>();
+const draftFlushers = new Map<string, DraftListener>();
+
+/** External editor operations first settle the original pending keystroke save. */
+export function registerDraftFlush(sessionId: string, flush: DraftListener): () => void {
+  const key = draftKey(sessionId);
+  draftFlushers.set(key, flush);
+  return () => { if (draftFlushers.get(key) === flush) draftFlushers.delete(key); };
+}
+
+export function flushDraft(sessionId: string): void {
+  draftFlushers.get(draftKey(sessionId))?.();
+}
 
 /** Subscribe to every save / clear of `sessionId`'s draft, including silent keystroke saves. */
 export function subscribeDraftContent(sessionId: string, handler: DraftListener): () => void {
@@ -359,6 +403,9 @@ function recomputeDraftPresence(sessionId: string, key = draftKey(sessionId)): v
   if (next === prev) return;
   if (next) presenceCache.set(key, true);
   else presenceCache.delete(key);
+  for (const listener of allPresenceListeners) {
+    try { listener(); } catch { log.warn('Draft protection observer failed'); }
+  }
   const set = presenceListeners.get(key);
   if (set)
     for (const fn of set) {
@@ -382,9 +429,12 @@ export function getDraft(sessionId: string): ComposerDraft | undefined {
 /** Capture the current process-local discard generation for async draft work. */
 export function captureDraftDiscardToken(sessionId: string): ComposerDraftDiscardToken {
   const ownerScopedKey = draftKey(sessionId);
+  const generation = draftDiscardGenerations.get(ownerScopedKey) ?? 0;
+  // Remember even an empty scope: a picker may still be preparing its first file.
+  draftDiscardGenerations.set(ownerScopedKey, generation);
   return {
     ownerScopedKey,
-    generation: draftDiscardGenerations.get(ownerScopedKey) ?? 0,
+    generation,
   };
 }
 
@@ -508,7 +558,8 @@ function saveDraftAtKey(
  *
  * Call sites:
  * - After successful send (the composer is already cleared).
- * - When a session is deleted or archived (avoid Map leak).
+ *
+ * Session delete uses `discardDraft` instead; archive keeps the draft.
  */
 export function clearDraft(sessionId: string): void {
   const key = draftKey(sessionId);
@@ -534,6 +585,15 @@ export function discardDraft(sessionId: string): void {
   // recreate the discarded draft, while late async files are fenced by the
   // generation above and recycled by their owner.
   clearDraftAndNotify(sessionId);
+}
+
+/** Discard a colon-delimited scope and its children, including empty scopes with async work. */
+export function discardDraftTree(sessionId: string): void {
+  const root = draftKey(sessionId);
+  const keys = new Set([root, ...drafts.keys(), ...draftDiscardGenerations.keys(), ...listeners.keys()]);
+  for (const key of keys) {
+    if (key === root || key.startsWith(`${root}:`)) discardDraft(key.slice(ownerPrefix().length));
+  }
 }
 
 /**
@@ -801,7 +861,7 @@ export function restoreRemoteOptimisticDraft(
  * 没关系，main 侧只抽 cindy-media 指纹)。
  */
 export function getAllDraftAttachmentUrls(): string[] {
-  const urls = new Set<string>([...remoteOptimisticAttachmentUrls, ...botGroupOutboxAttachmentUrls]);
+  const urls = new Set<string>([...remoteOptimisticAttachmentUrls, ...botGroupOutboxAttachmentUrls, ...botGroupThreadAttachmentUrls]);
   // Owner switches retain each owner's draft so switching back can restore it.
   // Protect every retained namespace as well; reporting only the active owner
   // would leave an old owner's still-restorable attachment eligible for sweep.
@@ -847,6 +907,14 @@ export function setBotGroupOutboxAttachmentUrls(urls: readonly string[]): void {
     return;
   }
   botGroupOutboxAttachmentUrls = next;
+  syncDraftUrlsToMain();
+}
+
+/** Burned-in thread images remain retryable even while their panel is closed. */
+export function setBotGroupThreadAttachmentUrls(urls: readonly string[]): void {
+  const next = [...new Set(urls)].sort();
+  if (next.length === botGroupThreadAttachmentUrls.length && next.every((url, index) => url === botGroupThreadAttachmentUrls[index])) return;
+  botGroupThreadAttachmentUrls = next;
   syncDraftUrlsToMain();
 }
 

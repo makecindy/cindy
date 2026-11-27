@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setMainLocale } from '../../../i18n.desktop';
 
 const mocks = vi.hoisted(() => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -11,7 +12,14 @@ const mocks = vi.hoisted(() => ({
   getSessionProvider: vi.fn(),
   getMaker: vi.fn(),
   executeDetach: vi.fn(),
+  readRemotePluginEngines: vi.fn(),
+  listPluginEngineViews: vi.fn((): unknown[] => []),
 }));
+vi.mock('../../../remote-agent/controller/deviceCatalog', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../remote-agent/controller/deviceCatalog')>()),
+  readRemotePluginEngines: mocks.readRemotePluginEngines,
+}));
+vi.mock('../../../maker-ipc/pluginEnginesIpc', () => ({ listPluginEngineViews: mocks.listPluginEngineViews }));
 
 vi.mock('../../../logger', () => ({ createLogger: () => mocks.logger }));
 vi.mock('../../../maker-host', () => ({ getMaker: mocks.getMaker }));
@@ -54,7 +62,7 @@ import type { ChannelIM, TextChannelIM } from '@cindy/im';
 import { ui } from '../../feishu/uiText';
 import { ui as telegramUi } from '../../telegram/uiText';
 import { ui as wecomUi } from '../../wecom/uiText';
-import { COMPANION_MANAGED_COMMAND_FALLBACK } from '../botCommands';
+import { companionManagedCommandFallback } from '../botCommands';
 import { createSlashHandlers } from '../slashCommands';
 import type { ImCardBuilders } from '../cardBuilders';
 import type { ImSessionRepo, ImSessionRow } from '../sessionRepo';
@@ -97,7 +105,7 @@ function makeTurnRunner(overrides: Partial<ImTurnRunner> = {}): ImTurnRunner {
     disposeAllSessions: vi.fn(),
     disposeOneSession: vi.fn(),
     getMakerSessionById: vi.fn(() => null),
-    getPermissionModes: vi.fn(() => [
+    getPermissionModes: vi.fn(async () => [
       { id: 'auto', displayName: 'Auto', description: 'Safe default' },
     ]),
     changePermissionMode: vi.fn(),
@@ -153,6 +161,11 @@ function makeHarness(
   const handlers = createSlashHandlers(adapter, repo, cards, turnRunner);
   return { handlers, repo, turnRunner, cards };
 }
+
+
+// 这些用例断言中文控制文案：显式切到 zh-CN，结束后复位为 en。
+beforeEach(() => setMainLocale('zh-CN'));
+afterEach(() => setMainLocale('en'));
 
 describe('IM slash commands', () => {
   beforeEach(() => {
@@ -253,6 +266,36 @@ describe('IM slash commands', () => {
     expect(handled).toBe(true);
     expect(withCard).toHaveBeenCalledTimes(1);
     expect(mocks.sendInteractiveCard).toHaveBeenCalled();
+  });
+
+  it.each(['/ctr', '/exctr', '/session', '/project', '/workspace'])(
+    '公共对话(服务器频道)里 %s 不接入本机任务，私聊同一命令不受影响',
+    async (command) => {
+      const { enterControl } = await import('../controlState');
+      const { handlers } = makeHarness({
+        adapterOverrides: {
+          blocksLocalTaskAccess: (userId) => userId.startsWith('g/'),
+          ui: { ...ui, slash: { ...ui.slash, localTaskAccessUnavailable: (cmd) => `blocked ${cmd}` } },
+        },
+      });
+
+      await handlers.handleSlashCommand(command, { botContextId: 'bot', userId: 'g/1/2' });
+
+      expect(enterControl).not.toHaveBeenCalled();
+      expect(mocks.sendInteractiveCard).not.toHaveBeenCalled();
+      expect(mocks.sendMarkdownText).toHaveBeenCalledWith('g/1/2', expect.stringContaining('blocked'));
+    },
+  );
+
+  it('私聊 /ctr 在声明了 blocksLocalTaskAccess 的渠道里照常发卡', async () => {
+    const { enterControl } = await import('../controlState');
+    const { handlers } = makeHarness({
+      adapterOverrides: { blocksLocalTaskAccess: (userId) => userId.startsWith('g/') },
+    });
+
+    await handlers.handleSlashCommand('/ctr', SLASH_CTX);
+
+    expect(enterControl).toHaveBeenCalledWith('bot', 'ou_user');
   });
 
   it('/ctr 发卡失败时不 enterControl(用户不会被锁死)', async () => {
@@ -401,6 +444,25 @@ describe('IM slash commands', () => {
     expect(mocks.sendMarkdownText).toHaveBeenCalledWith('ou_user', ui.agent.apiKeyMissing);
   });
 
+  // Review on #12820: a plugin-engine task whose engine runs on another computer of the same account
+  // lists that computer's offered models, never this computer's (which may not have the plugin, or have
+  // a namesake with other settings). Minimal input: row agentKind 'acp' with agentDeviceId.
+  it('lists a remote plugin engine’s models from the computer it runs on', async () => {
+    const engine = { providerId: 'acp-plugin:agy:agy', name: 'Antigravity', models: [{ id: 'gemini-3-pro', displayName: 'Gemini 3 Pro' }] };
+    mocks.readRemotePluginEngines.mockResolvedValueOnce([engine]);
+    mocks.listPluginEngineViews.mockReturnValue([{ ...engine, models: [{ id: 'local-only', displayName: 'Local' }] }]);
+    const row = { ...defaultRow, agentKind: 'acp', providerId: 'acp-plugin:agy:agy', model: 'gemini-3-pro', agentDeviceId: 'studio' };
+    const turnRunner = makeTurnRunner({ resolveRouteTarget: vi.fn(async () => ({ row, attached: false })) as never });
+    const { handlers, cards } = makeHarness({ turnRunner });
+    await handlers.handleSlashCommand('/model', { botContextId: 'bot', userId: 'ou_user' });
+    expect(mocks.readRemotePluginEngines).toHaveBeenCalledWith('studio');
+    expect(mocks.listPluginEngineViews).not.toHaveBeenCalled();
+    expect(cards.buildModelPickerCard).toHaveBeenCalledWith(expect.objectContaining({
+      currentProviderId: 'acp-plugin:agy:agy',
+      sections: [expect.objectContaining({ models: [expect.objectContaining({ id: 'gemini-3-pro' })] })],
+    }));
+  });
+
   it('waits for model preferences before constructing the IM picker', async () => {
     let release!: () => void;
     mocks.waitForModelVisibilityMirror.mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; }));
@@ -456,6 +518,22 @@ describe('IM slash commands', () => {
       expect(repo.prepareNewSession).not.toHaveBeenCalled();
       expect(mocks.resetSessionToDefaults).not.toHaveBeenCalled();
       expect(mocks.sendMarkdownText).toHaveBeenCalledWith('ou_user', ui.slash.companionDmNew);
+    });
+
+    // An unresolvable companion (paused, no model) used to fall through to the channel's own
+    // `/new`, creating a task under another identity. It must answer with the notice instead.
+    it('/new answers with the companion notice and creates nothing when the bot is unavailable', async () => {
+      const repo = makeRepo();
+      const turnRunner = makeTurnRunner({
+        rotateCompanionLane: vi.fn(async () => ({ unavailable: 'companion paused notice' })),
+      } as Partial<ImTurnRunner>);
+      const { handlers } = makeHarness({ repo, turnRunner });
+
+      await handlers.handleSlashCommand('/new', { botContextId: 'bot', userId: 'g/oc_chat' });
+
+      expect(repo.prepareNewSession).not.toHaveBeenCalled();
+      expect(repo.createSession).not.toHaveBeenCalled();
+      expect(mocks.sendMarkdownText).toHaveBeenCalledWith('g/oc_chat', 'companion paused notice');
     });
 
     it('/new falls back to the channel’s own behaviour when the connection is not handed over', async () => {
@@ -568,9 +646,11 @@ describe('IM slash commands', () => {
   // 回归(PR #6289 review): 拦截之前要求文案包定义了 companionManagedCommand, 企业微信 / Discord 没定义,
   // 伙伴连接上主人的 /permission 会直接改伙伴主任务的权限模式。
   it.each([
-    ['WeCom pack', wecomUi, wecomUi.slash.companionManagedCommand],
-    ['a pack without the hint', { ...wecomUi, slash: { ...wecomUi.slash, companionManagedCommand: undefined } }, COMPANION_MANAGED_COMMAND_FALLBACK],
-  ])('intercepts /permission on a WeCom companion lane (%s)', async (_label, packUi, expected) => {
+    // 文案按发送时的界面语言现取，期望值也在用例内（zh-CN 生效后）再取。
+    ['WeCom pack', wecomUi, () => wecomUi.slash.companionManagedCommand],
+    ['a pack without the hint', { ...wecomUi, slash: { ...wecomUi.slash, companionManagedCommand: undefined } }, () => companionManagedCommandFallback()],
+  ])('intercepts /permission on a WeCom companion lane (%s)', async (_label, packUi, expectedText) => {
+    const expected = expectedText();
     const textIm = { sendMarkdownText: mocks.sendMarkdownText } as unknown as TextChannelIM;
     const changePermissionMode = vi.fn();
     const turnRunner = makeTurnRunner({
@@ -603,7 +683,7 @@ describe('IM slash commands', () => {
       label: 'Full Access',
     }));
     const turnRunner = makeTurnRunner({
-      getPermissionModes: vi.fn(() => [
+      getPermissionModes: vi.fn(async () => [
         { id: 'auto' as const, displayName: 'Auto' },
         { id: 'bypassPermissions' as const, displayName: 'Full Access' },
       ]),

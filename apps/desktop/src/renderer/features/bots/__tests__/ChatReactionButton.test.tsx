@@ -1,9 +1,13 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render as renderUI, screen, waitFor } from '@testing-library/react';
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from "@/cindy-brain/PluginUiContributions";
+import { act, cleanup, fireEvent, render as renderUI, renderHook, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { Tooltip } from '@/components/ui/tooltip';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ChatMessageActions } from '../ChatServerControls';
+import { toast } from '@/lib/toast';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { ChatReactionReads, useChatReactions } from '../useChatReactions';
+import { GroupReactionFixture } from './GroupReactionFixture';
 import type { BotGroupMemberView, BotGroupMessageView, ChatReactor } from '../../../../shared/botGroupChat';
 
 const mocks = vi.hoisted(() => ({ react: vi.fn(), reactors: vi.fn(), ownerCurrent: true }));
@@ -14,14 +18,17 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({ i18n: { language: 'en
     if (name === 'reactorSelf') return 'You';
     if (name === 'reactorFormer') return `${o?.name} (left)`;
     if (name === 'reactorsUnavailable') return `${o?.count} unavailable`;
+    if (name === 'reactionTotal') return `${o?.emoji} · ${o?.count} reactions`;
     if (name === 'reactionCount') return `${o?.emoji} · ${o?.count}`;
     if (name === 'reactionWho') return `${o?.emoji} · ${o?.count}: ${o?.names}`;
     return name;
   } }) }));
 vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
-vi.mock('@/contexts/dataOwnerGeneration', () => ({
-  getDataOwnerGeneration: () => 1, isDataOwnerGenerationCurrent: () => mocks.ownerCurrent,
-}));
+vi.mock('@/contexts/dataOwnerGeneration', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@/contexts/dataOwnerGeneration')>();
+  return { ...original, isDataOwnerGenerationCurrent: (owner: ReturnType<typeof original.getDataOwnerGeneration>) =>
+    mocks.ownerCurrent && original.isDataOwnerGenerationCurrent(owner) };
+});
 
 const reactor = (actorId: string, name: string | null, extra: Partial<ChatReactor> = {}): ChatReactor =>
   ({ actorId, name, isSelf: false, formerMember: false, ...extra });
@@ -37,8 +44,10 @@ const members = [
 ];
 const message = (reactions: BotGroupMessageView['reactions']) =>
   ({ id: 'root', authorName: 'Human', content: 'Root', reactions }) as BotGroupMessageView;
-const actions = (reactions: BotGroupMessageView['reactions']) =>
-  <ChatMessageActions shareScope="group:room" groupId="room" message={message(reactions)} members={members} onChanged={vi.fn()} />;
+const actions = (reactions: BotGroupMessageView['reactions'], props: {
+  reactionReads?: ChatReactionReads; onChanged?: () => void; groupId?: string;
+} = {}) =>
+  <GroupReactionFixture pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room" groupId="room" message={message(reactions)} members={members} onChanged={vi.fn()} {...props} />;
 // The message toolbar expects the app-level tooltip provider.
 const render = (ui: ReactNode) => {
   const view = renderUI(<Tooltip.Provider>{ui}</Tooltip.Provider>);
@@ -55,6 +64,27 @@ beforeEach(() => {
   Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { chatServer: mocks } } });
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+
+it('puts the latest addition first and keeps that order through timeline echoes', async () => {
+  const initial = ['👍', '❤️'].map(emoji => ({ emoji, count: 1, me: false }));
+  const reads = new ChatReactionReads();
+  const { result, rerender } = renderHook(({ row }) => useChatReactions('room', row, vi.fn(), reads),
+    { initialProps: { row: message(initial) } });
+  const order = () => result.current.reactions.map(r => r.emoji);
+  await act(() => result.current.toggle('🎉'));
+  await act(() => result.current.toggle('😂'));
+  expect(order()).toEqual(['😂', '🎉', '👍', '❤️']);
+  const synced = message([...initial, ...['🎉', '😂'].map(emoji => ({ emoji, count: 1, me: true }))]);
+  act(() => { rerender({ row: synced }); reads.beginRead()([synced]); });
+  expect(order()).toEqual(['😂', '🎉', '👍', '❤️']);
+  await act(() => result.current.toggle('❤️'));
+  expect(order()).toEqual(['❤️', '😂', '🎉', '👍']);
+  await act(() => result.current.toggle('😂'));
+  expect(order()).toEqual(['❤️', '🎉', '👍']);
+  rerender({ row: message([...synced.reactions!, { emoji: '🔥', count: 1, me: false }]) });
+  expect(order()).toEqual(['🔥', '❤️', '🎉', '👍']);
+  expect(mocks.react).toHaveBeenCalledTimes(4);
+});
 
 describe('reaction avatars', () => {
   it('shows a few reactors as avatars without hovering, matched to members by actor ID', async () => {
@@ -141,11 +171,11 @@ describe('reaction avatars', () => {
   it('re-reads when who reacted changes but the count does not', async () => {
     mocks.reactors.mockResolvedValueOnce({ ok: true, reactors: [reactor('z', 'Zoe')] })
       .mockResolvedValueOnce({ ok: true, reactors: [reactor('c1', 'Cindy (Chris)')] });
-    const view = render(<ChatMessageActions shareScope="group:room" groupId="room" members={members} onChanged={vi.fn()}
+    const view = render(<GroupReactionFixture pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room" groupId="room" members={members} onChanged={vi.fn()}
       reactionRevision={3} message={message([{ emoji: '👍', count: 1, me: false }])} />);
     await waitFor(() => expect(badge().getAttribute('aria-label')).toBe('👍 · 1: Zoe'));
     // Zoe removed 👍 and Chris's companion added it: same count and `me`, a new room reaction revision.
-    view.rerender(<ChatMessageActions shareScope="group:room" groupId="room" members={members} onChanged={vi.fn()}
+    view.rerender(<GroupReactionFixture pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room" groupId="room" members={members} onChanged={vi.fn()}
       reactionRevision={4} message={message([{ emoji: '👍', count: 1, me: false }])} />);
     await waitFor(() => expect(badge().getAttribute('aria-label')).toBe('👍 · 1: Cindy (Chris)'));
     expect(images()).toEqual(['https://example.test/cindy-chris.png']);
@@ -156,7 +186,7 @@ describe('reaction avatars', () => {
     const view = render(actions([{ emoji: '👍', count: 1, me: false }]));
     await waitFor(() => expect(badge().getAttribute('aria-label')).toBe('👍 · 1: Zoe'));
     // Zoe leaves; her reaction stays and the member list no longer has her.
-    view.rerender(<ChatMessageActions shareScope="group:room" groupId="room" members={members.filter(m => m.actorId !== 'z')}
+    view.rerender(<GroupReactionFixture pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room" groupId="room" members={members.filter(m => m.actorId !== 'z')}
       onChanged={vi.fn()} message={message([{ emoji: '👍', count: 1, me: false }])} />);
     expect(badge().getAttribute('aria-label')).toBe('👍 · 1: Zoe (left)');
     expect(mocks.reactors).toHaveBeenCalledTimes(1);
@@ -167,7 +197,7 @@ describe('reaction avatars', () => {
     const view = render(actions([{ emoji: '👍', count: 1, me: false }]));
     await waitFor(() => expect(badge().getAttribute('aria-label')).toBe('👍 · 1: Zoe'));
     const renamed = members.map(m => m.actorId === 'z' ? { ...m, name: 'Zoey' } : m);
-    view.rerender(<ChatMessageActions shareScope="group:room" groupId="room" members={renamed} onChanged={vi.fn()}
+    view.rerender(<GroupReactionFixture pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room" groupId="room" members={renamed} onChanged={vi.fn()}
       message={message([{ emoji: '👍', count: 1, me: false }])} />);
     expect(badge().getAttribute('aria-label')).toBe('👍 · 1: Zoey');
     expect(mocks.reactors).toHaveBeenCalledTimes(1);
@@ -179,6 +209,193 @@ describe('reaction avatars', () => {
     await waitFor(() => expect(images()).toHaveLength(1));
     fireEvent.click(badge());
     await waitFor(() => expect(mocks.react).toHaveBeenCalledWith({ groupId: 'room', messageId: 'root', emoji: '👍', present: false }));
+  });
+
+  it.each(['rejection', 'error response'])('keeps a failed choice until a later read of that message (%s)', async failure => {
+    const reads = new ChatReactionReads();
+    const props = { reactionReads: reads, onChanged: vi.fn() };
+    let fail!: () => void;
+    mocks.react.mockImplementationOnce(() => new Promise((resolve, reject) => {
+      fail = failure === 'rejection' ? () => reject(new Error('offline')) : () => resolve({ ok: false, errorCode: 'SERVICE_ERROR' });
+    }));
+    const view = render(actions([{ emoji: '👍', count: 4, me: false }], props));
+    fireEvent.click(badge());
+    expect(badge().textContent).toBe('👍5');
+    const olderRead = reads.beginRead();
+    view.rerender(actions([{ emoji: '👍', count: 5, me: false }], props));
+    await act(async () => fail());
+    vi.useFakeTimers();
+    try {
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+        olderRead([{ id: 'root' }]);
+        reads.beginRead()([{ id: 'another-message' }]);
+      });
+      expect(badge().getAttribute('aria-pressed')).toBe('true');
+      expect(badge().textContent).toBe('👍6');
+      act(() => reads.beginRead()([{ id: 'root' }]));
+      expect(badge().getAttribute('aria-pressed')).toBe('false');
+      expect(badge().textContent).toBe('👍5');
+      expect(mocks.react).toHaveBeenCalledTimes(1);
+      expect(props.onChanged).not.toHaveBeenCalled();
+      expect(toast.error).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each([2, 3])('sends only the latest distinct choice after %i quick taps during an outage', async taps => {
+    let fail!: () => void;
+    mocks.react.mockImplementationOnce(() => new Promise(resolve => { fail = () => resolve({ ok: false }); }))
+      .mockResolvedValue({ ok: false });
+    const props = { reactionReads: new ChatReactionReads(), onChanged: vi.fn() };
+    render(actions([{ emoji: '👍', count: 4, me: false }], props));
+    for (let tap = 0; tap < taps; tap++) fireEvent.click(badge());
+    expect(mocks.react).toHaveBeenCalledTimes(1);
+    await act(async () => fail());
+    expect(mocks.react.mock.calls.map(([request]) => request.present)).toEqual(taps === 2 ? [true, false] : [true]);
+    expect(badge().getAttribute('aria-pressed')).toBe(String(taps === 3));
+    expect(props.onChanged).not.toHaveBeenCalled();
+  });
+
+  it('discards queued writes when switching rooms before a receipt', async () => {
+    let finish!: () => void;
+    mocks.react.mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve({ ok: false }); }));
+    const reactions = [{ emoji: '👍', count: 4, me: false }];
+    const props = { reactionReads: new ChatReactionReads(), onChanged: vi.fn() };
+    const view = render(actions(reactions, props));
+    fireEvent.click(badge());
+    fireEvent.click(badge());
+    view.rerender(actions(reactions, { ...props, groupId: 'another-room' }));
+    await act(async () => finish());
+    expect(mocks.react).toHaveBeenCalledTimes(1);
+    expect(props.onChanged).not.toHaveBeenCalled();
+    expect(badge().getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('keeps my acknowledged choice through an older refresh and releases it once the server catches up', async () => {
+    const view = render(actions([{ emoji: '👍', count: 4, me: false }]));
+    await act(async () => fireEvent.click(badge()));
+    view.rerender(actions([{ emoji: '👍', count: 5, me: false }]));
+    expect(badge().textContent).toBe('👍6');
+    view.rerender(actions([{ emoji: '👍', count: 6, me: true }]));
+    expect(badge().textContent).toBe('👍6');
+    view.rerender(actions([{ emoji: '👍', count: 5, me: false }]));
+    expect(badge().getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('shares the last choice across the timeline and thread while a write is pending', async () => {
+    let acknowledge!: () => void;
+    mocks.react.mockImplementationOnce(() => new Promise(resolve => { acknowledge = () => resolve({ ok: true }); }));
+    const row = message([]);
+    const timelineReads = new ChatReactionReads();
+    const threadReads = new ChatReactionReads();
+    const refreshTimeline = vi.fn();
+    const refreshThread = vi.fn();
+    const timeline = renderHook(() => useChatReactions('room', row, refreshTimeline, timelineReads));
+    act(() => { void timeline.result.current.toggle('👍'); });
+    const thread = renderHook(() => useChatReactions('room', row, refreshThread, threadReads));
+    expect(thread.result.current.reactions).toEqual([{ emoji: '👍', me: true, count: 1 }]);
+    act(() => { void timeline.result.current.toggle('👍'); });
+    expect(thread.result.current.reactions).toEqual([]);
+    act(() => { void thread.result.current.toggle('👍'); });
+    expect(timeline.result.current.reactions).toEqual(thread.result.current.reactions);
+    timeline.unmount();
+    await act(async () => acknowledge());
+    expect(mocks.react.mock.calls.map(([request]) => request.present)).toEqual([true]);
+    expect(refreshTimeline).not.toHaveBeenCalled();
+    expect(refreshThread).toHaveBeenCalledOnce();
+  });
+
+  it('allows undo from the new badge while its picker write is pending and serializes the final choice', async () => {
+    let acknowledge!: () => void;
+    mocks.react.mockImplementationOnce(() => new Promise(resolve => { acknowledge = () => resolve({ ok: true }); }));
+    render(actions([]));
+    fireEvent.click(screen.getByRole('button', { name: 'addReaction' }));
+    fireEvent.click(screen.getByRole('button', { name: '🎉' }));
+    const selected = screen.getByRole('button', { name: '🎉 · 1' });
+    expect(selected.getAttribute('aria-pressed')).toBe('true');
+    expect(mocks.reactors).not.toHaveBeenCalled();
+    fireEvent.click(selected);
+    expect(screen.queryByRole('button', { name: '🎉 · 1' })).toBeNull();
+    expect(mocks.react).toHaveBeenCalledTimes(1);
+    await act(async () => acknowledge());
+    expect(mocks.react.mock.calls.map(([request]) => request.present)).toEqual([true, false]);
+  });
+
+  it('reuses pending and completed reactor reads when the stacked badge reopens', async () => {
+    let resolve!: (value: unknown) => void;
+    const pending = new Promise(r => { resolve = r; });
+    mocks.reactors.mockReturnValue(pending);
+    render(actions([{ emoji: '👍', count: 1, me: false }, { emoji: '❤️', count: 1, me: false }]));
+    const toggle = screen.getByRole('button', { name: '👍 ❤️ · 2 reactions' });
+    expect(mocks.reactors).not.toHaveBeenCalled();
+    fireEvent.click(toggle);
+    expect(mocks.reactors).toHaveBeenCalledTimes(2);
+    fireEvent.click(toggle);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    fireEvent.click(toggle);
+    await act(async () => resolve({ ok: true, reactors: [reactor('z', 'Zoe')] }));
+    expect(badge().getAttribute('aria-label')).toContain('Zoe');
+    fireEvent.click(toggle);
+    fireEvent.click(toggle);
+    await waitFor(() => expect(badge().getAttribute('aria-label')).toContain('Zoe'));
+    expect(mocks.reactors).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries only the failed roster when the stacked badge is reopened', async () => {
+    const zoe = { ok: true, reactors: [reactor('z', 'Zoe')] };
+    mocks.reactors.mockResolvedValueOnce({ ok: false }).mockResolvedValue(zoe);
+    render(actions([{ emoji: '👍', count: 1, me: false }, { emoji: '❤️', count: 1, me: false }]));
+    const toggle = screen.getByRole('button', { name: '👍 ❤️ · 2 reactions' });
+    await act(async () => fireEvent.click(toggle));
+    expect(badge().getAttribute('aria-label')).toBe('👍 · 1');
+    expect(mocks.reactors).toHaveBeenCalledTimes(2);
+    fireEvent.click(toggle);
+    await act(async () => fireEvent.click(toggle));
+    expect(badge().getAttribute('aria-label')).toContain('Zoe');
+    expect(mocks.reactors.mock.calls.map(([r]) => r.emoji)).toEqual(['👍', '❤️', '👍']);
+  });
+
+  it('shows the reactor name when the compact badge receives keyboard focus', async () => {
+    mocks.reactors.mockResolvedValue({ ok: true, reactors: [reactor('z', 'Zoe')] });
+    render(actions([{ emoji: '👍', count: 1, me: false }]));
+    await waitFor(() => expect(badge().getAttribute('aria-label')).toContain('Zoe'));
+    act(() => badge().focus());
+    const tip = await screen.findByRole('tooltip');
+    expect(tip.textContent).toContain('Zoe');
+    expect(badge().getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('holds an acknowledged undo until a read started after that write confirms it', async () => {
+    const reads = new ChatReactionReads();
+    const props = { reactionReads: reads };
+    const initial = [{ emoji: '👍', count: 4, me: false }];
+    const added = [{ emoji: '👍', count: 5, me: true }];
+    let acknowledge!: () => void;
+    mocks.react.mockImplementationOnce(() => new Promise(r => { acknowledge = () => r({ ok: true }); }));
+    const view = render(actions(initial, props));
+    fireEvent.click(badge());
+    const stale = reads.beginRead();
+    fireEvent.click(badge());
+    await act(async () => acknowledge());
+    act(() => stale([message(added)]));
+    view.rerender(actions(added, props));
+    expect(badge().getAttribute('aria-pressed')).toBe('false');
+    act(() => reads.beginRead()([message(added)]));
+    expect(badge().getAttribute('aria-pressed')).toBe('false');
+    act(() => reads.beginRead()([message(initial)]));
+    view.rerender(actions(initial, props));
+    view.rerender(actions(added, props));
+    expect(badge().getAttribute('aria-pressed')).toBe('true');
+    expect(mocks.react).toHaveBeenCalledTimes(2);
+  });
+
+  it('accepts a new click when the same owner advances generation with the row still mounted', async () => {
+    setDataOwnerGeneration('owner', 1);
+    render(actions([{ emoji: '👍', count: 4, me: false }]));
+    act(() => setDataOwnerGeneration('owner', 2));
+    await act(async () => fireEvent.click(badge()));
+    expect(badge().getAttribute('aria-pressed')).toBe('true');
+    expect(mocks.react).toHaveBeenCalledTimes(1);
   });
 
   it('drops a read that settles after the account changed', async () => {

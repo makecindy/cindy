@@ -235,3 +235,18 @@ describe('handleStreamEvent — terminal error keeps the projection retry token'
     expect(next.toolLoop).toBeNull();
   });
 });
+
+
+describe('output-limit usage lifecycle', () => {
+  it('keeps details through paired done and clears them on the next unrelated error', () => {
+    const limited = handleStreamEvent({ ...EMPTY_SESSION_STATE, isStreaming: true }, {
+      ...terminalError(), data: { message: 'limit', reason: 'output-limit', isTerminal: true,
+        outputLimit: { outputTokens: 131072, reasoningTokens: 131064, raw: 'discard' } },
+    } as Parameters<typeof handleStreamEvent>[1]);
+    expect(limited.outputLimit).toEqual({ outputTokens: 131072, reasoningTokens: 131064 });
+    const settled = handleStreamEvent(limited, { sessionId: SESSION_ID, type: 'done', data: { status: 'failed' } } as Parameters<typeof handleStreamEvent>[1]);
+    expect(settled.outputLimit).toEqual(limited.outputLimit);
+    const unrelated = handleStreamEvent(settled, terminalError('other failure'));
+    expect(unrelated.outputLimit).toBeNull();
+  });
+});

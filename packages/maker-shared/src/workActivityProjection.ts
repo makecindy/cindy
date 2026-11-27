@@ -1,3 +1,4 @@
+import { formatToolRowText, isToolResultFailureLike, type ToolRowWording } from './messagePresentation';
 /**
  * Shared work activity projection for desktop and mobile.
  *
@@ -13,6 +14,7 @@ import {
 } from './commandIntent';
 import {
   describeToolUse,
+  humanizeToolToken,
   type ToolUseDescriptor,
 } from './toolUseDescriptor';
 
@@ -43,6 +45,8 @@ export interface ProjectedToolActivity<
   /** One structured sub-action from the parent Codex command execution. */
   intentOverride?: CommandIntent;
   exploration?: ExplorationActivity;
+  /** Number of contiguous non-error polling calls collapsed into this row (present only when > 1). */
+  repeatCount?: number;
 }
 
 export interface ProjectedThinkingActivity {
@@ -216,6 +220,67 @@ function projectThinkingMessage<TMessage extends WorkActivityMessageLike>(
     : null;
 }
 
+function extractRawCollabWaitThreadIds(toolInput: unknown): string[] {
+  if (!toolInput || typeof toolInput !== 'object' || Array.isArray(toolInput)) return [];
+  const inp = toolInput as Record<string, unknown>;
+  const ids = new Set<string>();
+  const addId = (value: unknown): void => {
+    if (typeof value !== 'string') return;
+    const trimmed = value.trim();
+    if (trimmed) ids.add(trimmed);
+  };
+  for (const key of ['receiverThreadIds', 'receiver_thread_ids', 'agentIds', 'agent_ids'] as const) {
+    const raw = inp[key];
+    if (Array.isArray(raw)) {
+      for (const entry of raw) addId(entry);
+    }
+  }
+  for (const key of ['threadId', 'thread_id', 'agentId', 'agent_id', 'id'] as const) {
+    addId(inp[key]);
+  }
+  return Array.from(ids).sort();
+}
+
+/**
+ * Return a stable collapse key for non-error `collab:wait` polling calls so
+ * contiguous polls waiting on the same target set collapse into one row (`×N`),
+ * while waits targeting different subagents remain separate rows.
+ */
+export function getCollapsibleCollabWaitKey(
+  toolName: string,
+  toolInput: unknown,
+  toolResult?: string | null,
+): string | null {
+  const descriptor = describeToolUse(toolName, toolInput);
+  if (descriptor.kind !== 'collab' || descriptor.action !== 'wait') return null;
+  if (toolResult && isToolResultFailureLike(descriptor, toolResult)) return null;
+  if (descriptor.targets?.length) {
+    const normalized = Array.from(
+      new Set(descriptor.targets.map((target) => target.trim().toLowerCase()).filter(Boolean)),
+    ).sort();
+    if (normalized.length > 0) return `targets:${normalized.join('\u0000')}`;
+  }
+  const threadIds = extractRawCollabWaitThreadIds(toolInput);
+  if (threadIds.length > 0) {
+    return `threads:${threadIds.join('\u0000')}`;
+  }
+  if (descriptor.targetCount && descriptor.targetCount > 0) {
+    return `count:${descriptor.targetCount}`;
+  }
+  return 'any';
+}
+
+function getCollapsibleCollabWaitActivityKey<TMessage extends WorkActivityMessageLike>(
+  activity: ProjectedWorkActivity<TMessage>,
+): string | null {
+  if (activity.kind !== 'tool') return null;
+  return getCollapsibleCollabWaitKey(
+    activity.message.toolName ?? '',
+    activity.message.toolInput,
+    activity.toolResult,
+  );
+}
+
 /** Reverse hot path used by the running latest-N preview. */
 export function projectRecentWorkActivities<TMessage extends WorkActivityMessageLike>(
   childItems: readonly ProjectableWorkChild<TMessage>[],
@@ -227,6 +292,14 @@ export function projectRecentWorkActivities<TMessage extends WorkActivityMessage
   const seenReadKeys = new Set<string>();
 
   const append = (activity: ProjectedWorkActivity<TMessage>): boolean => {
+    const prev = reversed[reversed.length - 1];
+    const prevWaitKey = prev ? getCollapsibleCollabWaitActivityKey(prev) : null;
+    const nextWaitKey = getCollapsibleCollabWaitActivityKey(activity);
+    if (prev && prev.kind === 'tool' && prevWaitKey && nextWaitKey && prevWaitKey === nextWaitKey) {
+      prev.repeatCount = (prev.repeatCount ?? 1) + 1;
+      return false;
+    }
+    if (reversed.length >= limit) return true;
     if (resetsReadDeduplication(activity)) seenReadKeys.clear();
     if (
       activity.kind === 'tool'
@@ -236,8 +309,8 @@ export function projectRecentWorkActivities<TMessage extends WorkActivityMessage
       if (seenReadKeys.has(activity.exploration.readKey)) return false;
       seenReadKeys.add(activity.exploration.readKey);
     }
-    reversed.push(activity);
-    return reversed.length === limit;
+    reversed.push(nextWaitKey ? { ...activity } : activity);
+    return reversed.length === limit && !nextWaitKey;
   };
 
   for (let childIndex = childItems.length - 1; childIndex >= 0; childIndex -= 1) {
@@ -263,6 +336,7 @@ export function projectRecentWorkActivities<TMessage extends WorkActivityMessage
 export function projectWorkActivities<TMessage extends WorkActivityMessageLike>(
   childItems: readonly ProjectableWorkChild<TMessage>[],
   isStreaming: boolean,
+  preserveRepeatedReads = false,
 ): WorkActivityProjection<TMessage> {
   const rawActivities: ProjectedWorkActivity<TMessage>[] = [];
   const rawToolActivitiesByChildKey = new Map<string, ProjectedToolActivity<TMessage>[]>();
@@ -287,7 +361,8 @@ export function projectWorkActivities<TMessage extends WorkActivityMessageLike>(
     const activity = rawActivities[index];
     if (resetsReadDeduplication(activity)) seenReadKeys.clear();
     if (
-      activity.kind === 'tool'
+      !preserveRepeatedReads
+      && activity.kind === 'tool'
       && activity.exploration?.kind === 'read'
       && activity.exploration.readKey
     ) {
@@ -297,12 +372,45 @@ export function projectWorkActivities<TMessage extends WorkActivityMessageLike>(
     keptKeys.add(activity.key);
   }
 
-  const activities = rawActivities.filter((activity) => keptKeys.has(activity.key));
+  const dedupedActivities = rawActivities.filter((activity) => keptKeys.has(activity.key));
+  // Collapse contiguous non-error `collab:wait` polls targeting the same subagents into the latest row.
+  const droppedWaitKeys = new Set<string>();
+  const waitRepeatCountByKey = new Map<string, number>();
+  let index = 0;
+  while (index < dedupedActivities.length) {
+    const startKey = getCollapsibleCollabWaitActivityKey(dedupedActivities[index]);
+    if (!startKey) {
+      index += 1;
+      continue;
+    }
+    let end = index + 1;
+    while (end < dedupedActivities.length && getCollapsibleCollabWaitActivityKey(dedupedActivities[end]) === startKey) {
+      end += 1;
+    }
+    const count = end - index;
+    if (count > 1) {
+      for (let i = index; i < end - 1; i += 1) droppedWaitKeys.add(dedupedActivities[i].key);
+      waitRepeatCountByKey.set(dedupedActivities[end - 1].key, count);
+    }
+    index = end;
+  }
+
+  const attachRepeatCount = <T extends ProjectedWorkActivity<TMessage>>(activity: T): T => {
+    if (activity.kind !== 'tool') return activity;
+    const repeatCount = waitRepeatCountByKey.get(activity.key);
+    return repeatCount && repeatCount > 1 ? { ...activity, repeatCount } : activity;
+  };
+
+  const activities = dedupedActivities
+    .filter((activity) => !droppedWaitKeys.has(activity.key))
+    .map(attachRepeatCount);
   const toolActivitiesByChildKey = new Map<string, ProjectedToolActivity<TMessage>[]>();
   for (const [childKey, childActivities] of rawToolActivitiesByChildKey) {
     toolActivitiesByChildKey.set(
       childKey,
-      childActivities.filter((activity) => keptKeys.has(activity.key)),
+      childActivities
+        .filter((activity) => keptKeys.has(activity.key) && !droppedWaitKeys.has(activity.key))
+        .map(attachRepeatCount),
     );
   }
 
@@ -325,4 +433,97 @@ export function projectWorkActivities<TMessage extends WorkActivityMessageLike>(
     isPureExploration:
       toolActivities.length > 0 && toolActivities.every((activity) => !!activity.exploration),
   };
+}
+
+/** Teammate-only summaries are deterministic projections of existing events.
+ * No prompt, generated copy, model request, or hidden reasoning is needed. */
+export type TeammateWorkKind = 'read' | 'edit' | 'search' | 'web' | 'command' | 'tools' | 'delegate' | 'plan';
+export interface TeammateWorkSummary {
+  kinds: TeammateWorkKind[];
+  toolCount: number;
+  failedCount: number;
+  running: boolean;
+  thinking: boolean;
+  latestTool?: ToolUseDescriptor;
+  runningTool?: ToolUseDescriptor;
+}
+
+export function summarizeTeammateWork<T extends WorkActivityMessageLike>(
+  activities: readonly ProjectedWorkActivity<T>[],
+): TeammateWorkSummary {
+  const kinds = new Set<TeammateWorkKind>();
+  const calls = new Set<string>();
+  const failed = new Set<string>();
+  let running = false;
+  let thinking = false;
+  let latestTool: ToolUseDescriptor | undefined;
+  let runningTool: ToolUseDescriptor | undefined;
+  for (const activity of activities) {
+    if (activity.kind === 'thinking') { thinking = true; continue; }
+    const message = activity.message;
+    calls.add(message.clientId);
+    running ||= activity.status === 'running';
+    const descriptor = describeToolUse(message.toolName ?? '', message.toolInput);
+    latestTool = descriptor.kind === 'command' && activity.intentOverride
+      ? { ...descriptor, intent: activity.intentOverride } : descriptor;
+    // Dispatch wrappers should identify the requested operation, not just
+    // repeat "call tool". Do not project arbitrary arguments or result text.
+    const input = message.toolInput;
+    if ((latestTool.kind === 'mcp' || latestTool.kind === 'dynamic') && latestTool.tool === 'call_tool'
+      && input && typeof input === 'object' && 'name' in input && typeof input.name === 'string' && input.name.trim()) {
+      latestTool = { ...latestTool, toolLabel: humanizeToolToken(input.name.trim()) };
+    }
+    if (activity.status === 'running') runningTool = latestTool;
+    if (activity.toolResult && isToolResultFailureLike(descriptor, activity.toolResult)) failed.add(message.clientId);
+    if (activity.exploration) kinds.add(activity.exploration.kind === 'search' ? 'search' : 'read');
+    else switch (descriptor.kind) {
+      case 'file': kinds.add(descriptor.action === 'read' ? 'read' : 'edit'); break;
+      case 'fileChange': kinds.add('edit'); break;
+      case 'search': kinds.add('search'); break;
+      case 'web': kinds.add('web'); break;
+      case 'command': kinds.add('command'); break;
+      case 'task': case 'collab': kinds.add('delegate'); break;
+      case 'todo': kinds.add('plan'); break;
+      default: kinds.add('tools');
+    }
+  }
+  return { kinds: [...kinds], toolCount: calls.size, failedCount: failed.size, running, thinking, latestTool, runningTool };
+}
+
+/** Prose and recovery cards are boundaries, never extracted to a separate list.
+ * Keys follow the preceding visible boundary, remaining stable across lazy hydration. */
+export function segmentTeammateWork<T extends { key: string }>(
+  items: readonly T[], isActivity: (item: T) => boolean,
+): Array<{ kind: 'work'; key: string; items: T[] } | { kind: 'content'; key: string; item: T }> {
+  const result: Array<{ kind: 'work'; key: string; items: T[] } | { kind: 'content'; key: string; item: T }> = [];
+  let pending: T[] = [];
+  let anchor = 'start';
+  const flush = () => {
+    if (pending.length) result.push({ kind: 'work', key: `segment:${anchor}`, items: pending });
+    pending = [];
+  };
+  for (const item of items) {
+    if (isActivity(item)) pending.push(item);
+    else { flush(); result.push({ kind: 'content', key: item.key, item }); anchor = item.key; }
+  }
+  flush();
+  return result;
+}
+
+export function teammateWorkSummaryText(
+  summary: TeammateWorkSummary,
+  active: boolean,
+  t: (key: string, options?: { count?: number }) => string,
+  wording?: ToolRowWording,
+): string {
+  const prefix = 'chat.teammateProcess.';
+  // A failed attempt is not a failed turn. Keep errors in the original records;
+  // the summary describes the current action, not an accumulating error counter.
+  const tool = active ? summary.runningTool ?? summary.latestTool : summary.latestTool;
+  if (tool) return formatToolRowText(tool, wording).label;
+  const state = active && summary.running ? 'running' : 'done';
+  const actions = summary.kinds.map(kind => t(`${prefix}actions.${state}.${kind}`));
+  const text = actions.length ? actions.join(t(`${prefix}separator`))
+    : t(`${prefix}${active ? 'thinking' : summary.thinking ? 'thought' : 'worked'}`);
+  return text;
 }

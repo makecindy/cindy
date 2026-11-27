@@ -10,6 +10,118 @@ Host 与 View 互操作使用 `@modelcontextprotocol/ext-apps@1.7.5`，MCP SDK �
 标准初始化回复逐字保留上游 MCP 的可选 `instructions`，由 Main 的认证连接读取；
 协议版本与 capabilities 仍由官方 SDK 协商。初始化失败会返回明确的 RPC 错误。
 
+## 任务停止与服务端取消
+
+Claude / Pi 的取消通知以及收到的标准 MCP `notifications/cancelled` 会转给上游服务。
+Cindy 会在用户停止 Codex 任务时尽力通知自定义 MCP 服务，但不保证服务端操作会被撤销。
+收到 `turn/interrupt` 确认后，宿主只取消发出停止时该任务实例、该线程仍在进行的 App 外壳
+`tools/call`，通过现有 AbortSignal 和上游 `notifications/cancelled` 传递，不等待工具结果、
+不重放或重试；内置服务、其它线程和发现请求不受影响。没有可靠线程归属或停止未获确认时不猜测取消。
+Codex 原生未必自行发送 MCP 取消；服务仍须限制长操作，并区分“停止等待”和“撤销已执行操作”。
+
+## 插件的交互页面
+
+具名页面与 Cindy 原生位置的增量见随包作者手册
+[插件界面扩展](../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-host-ui.md)。
+`mcpApps.host` 引用同一个 MCP Apps 资源，复用原 Host/SDK/隔离/工具审批；
+支持真实全局/任务来源、原生入口、可选正文展示和按批准开放的宿主操作。
+这一增量尚未发布，不能套用下文历史 SDK 版本下限。新入口目前仅 Desktop 本机；原远程和手机卡片不变。
+
+原生控件沿既有插件管子和窗口 IPC 更新；窗口合并实际消费需求，先有消费者才构造、推送状态。
+`message.menu` 将已批准动作加入消息「更多」菜单；菜单关闭时不订阅这些菜单项，打开后才接状态，关闭释放。
+页面状态沿标准 host context，普通历史消息只查本地候选，不增加逐消息 SQL、IPC 或插件渲染调用。
+入口旁页面使用 `presentation:"popover"`，沿同一个 MCP App presenter，关闭或不可见即释放。
+草稿选区替换使用原编辑器与 revision；区域显隐使用原布局和面板停放机制，释放插件后恢复。
+外观资源与可写字段逐项批准，经原设置所有者应用；字体按资源缓存。
+实现回归见 `nativeState.test.ts`、`ghostNativeUi.test.ts`、`PluginUiContributions.test.tsx`、`MessageActionBar.test.tsx` 与 `hostUi.test.ts`。
+
+首个支持版本为 `0.1.122-beta`（`PLUGIN_UI_MIN_CINDY_VERSION`）。声明交互页面的包须填写
+不低于它的 `minCindyVersion`；`0.1.122-beta.1`、`0.1.122` 满足，`0.1.121`、`0.1.121-beta` 不满足。
+该下限用于打包校验和市场兼容版本投影，不新增客户端安装闸门。
+
+插件继续通过 `ghost_info` / `ghost_call` 发现与执行 main.js 工具，不向 Agent 增加 MCP 服务。
+v3 顶层 `mcpApps.ui.resources[]` 声明作者指定的 `ui://` URI、包内静态 HTML 的 `file`、页面 CSP 和 `prefersBorder`；`mcpApps.ui.tools` 按原工具名原样保存标准 `_meta.ui`（`resourceUri` / `visibility`）。多个工具可以共用资源；仅供页面的工具不出现在模型清单，
+也不能经 `ghost_call` 调用。未关联的旧工具默认仅供模型使用。
+
+Main 为已批准页面能力的插件建立进程内 MCP 服务：`tools/list` 投影标准 `_meta.ui`，
+`resources/read` 返回 `text/html;profile=mcp-app` 和资源 `_meta.ui.csp`；AppConnection
+通过官方 SDK InMemoryTransport 连接。页面使用官方 App SDK 或标准 JSON-RPC，无需 Cindy API。
+不读取 `mcp.json`，不启动额外 Node MCP 进程，也没有插件 MCP 专用的远程连接或认证。
+
+`ghost_call` 完成后，宿主将同一份输入和结果写入标准 App 卡片，模型结果剥掉根 `_meta`。
+页面调用只允许同插件且 `visibility` 包含 `app` 的工具，审批通过后由 Main 签发一次性
+调用凭据，绑定任务、卡片、实例和批准版本。执行仍走 `ghost_call` 的准备、权限与 main.js
+派发链，沿用联网凭证、设置、文件、作品库和媒体能力的现有规则。页面不能自行提供 Agent
+附件或 `save_dir` 过户凭据。页面工具结果不会再生成第二张 App 卡片。
+
+普通安装确认列出交互页面；新增资源、页面域名或工具的 app 访问权限需要确认。只改 HTML 内容不扩权；同一文件的 URI 改名不扩权，改名同时新增域名或 app 工具权限仍需确认。
+`mcpApps` 是 Cindy 的清单扩展，并非 MCP Apps 标准包格式。资源的 `file` 不透传到 `_meta.ui`；`domain` / `permissions` 校验并保留，但一期不授予相应浏览器能力或指定源。未知 `mcpApps` 扩展保留为数据。
+服务端 `defaultInstall` 下发的插件，交互页面能力随下发方静默授予：首次默认安装、组织默认接管、
+同源静默更新以及仍具默认资格的恢复都随真实包批准写入 `uiCapabilityApproved`，不另询问、不出待确认提示条。
+旧 Host 安装缺该事实时，Main 依据当前默认资格、来源账本、owner、实例与 revision，复用市场更新事务
+重新校验当前发布包后补齐。普通市场手动安装、自定义市场、本地包、Forge 或已失去默认资格的插件不代批；
+Server 审核和展示 manifest 不是授权依据。
+CSP 域名不得超出 `network.hosts`。旧 Host 保留 v3 顶层未知 `mcpApps`，但不加载页面；升级后
+未具备默认下发资格且缺 `uiCapabilityApproved` 的插件仍可执行原工具，仅显示文字。用户通过执行电脑、同账号远程查看端或手机的任务提示条/插件详情确认
+后，下次调用即可显示页面，不改变当前任务工具注册。旧 Host 不识别 visibility，作者不能
+依赖旧 Host 隐藏工具。停用、卸载、更新、账号切换与睡眠撤销页面；晚到的调用结果不再交付。
+
+卡片由宿主显示插件名；仅第三方来源、本地安装、来源未知追加提醒色标签。来源来自宿主的安装记录，
+不是插件自报名称或签名等级；Cindy 官方、组织市场与公开插件市场不追加标签。旧卡片缺来源时只显示插件名。
+非插件 MCP 卡片显示用户在设置中起的服务名与「自定义 MCP」，名称来自 Host 配置快照，
+不使用工具名、服务自报名称或 ID；改名不追改旧卡片。没有名称记录的旧卡片保留工具标题/工具名与该标签。
+公开历史只保留这项展示名，组织插件的来源只保留 kind、不发送 namespace；不改变详情和安装确认中的来源信息。
+插件详情中的来源与签名分别展示。页面进度与本机文件只读地址见下文。
+同账号手机与远程 Desktop 复用 plugins 远程管理事务和现有插件确认界面。Host 快照中的
+可选 `uiCapabilityApproval:true` 表示支持；`approve-ui` / `defer-ui` 携带 `uiConsentVersion:1`，
+与操作 fingerprint 绑定。三端使用同一份页面、域名及页面可调用工具事实（含默认 model+app）。
+共享任务访客与供应商分享访客不能确认；Main 在写入前和写入中复核 owner、实例、revision。
+断线或超时不是拒绝，丢失回执只查询原操作，不重发批准；“以后再说”在同一执行电脑、
+账号、插件版本的本次运行内由各查看端共享。
+
+| 控制端 / 执行端 | 行为 |
+| --- | --- |
+| 新 / 新 | 可在任务提示条或插件详情确认交互页面 |
+| 新 / 旧 | 未声明 capability 时不发送新操作，提示更新执行电脑 |
+| 旧 / 新 | 原插件管理继续可用，泛化安装确认不能新增页面批准 |
+
+本期不经 device-link 传输插件文件。初始卡片或后续工具结果含本机媒体/Library 引用时，
+远程 Host 返回 `MCP_APP_FILES_LOCAL_ONLY`，查看端保留文字并显示“文件内容请在执行电脑查看”，
+不将坏图交给页面。不引用这些文件的标准页面继续交互；未声明 downloadFile 的 Host 仍明确拒绝下载。
+
+### 页面尺寸与操作确认
+
+对话卡片使用 28px 高、12px 字的紧凑标题栏，保留边框；内容高度范围为 80–5000 像素，
+通过 `containerDimensions: {width, maxHeight}` 通知页面。资源可以声明可选的 `initialHeight`（80–720 CSS px）作为首帧占位，宿主仍以页面就绪后上报的实际尺寸为准。短时间连续增高或来回振荡的保护仅用于内容高度模式。
+不要在此模式同时使用 `100vh` 和 SDK `autoResize`，以免分配高度又被当作内容高度反馈。
+本机卡片离屏保留、挂起与释放沿既有生命周期；远程卡片离屏即释放，卸载撤回待确认操作。
+
+桌面对话卡片加载完成后，若 Host 和 App 都支持 fullscreen，标题栏显示全屏按钮；退出按钮在同一位置，Esc 退出。
+`mcpApps.ui.resources[].hostFullscreenButton: false` 只隐藏宿主按钮，不限制插件主动调用 `requestDisplayMode`。
+自定义 MCP 使用资源 `_meta["cindy/host-fullscreen-button"]: false`；缺省为 true。
+旧执行端缺少明确按钮信息时，新查看端隐藏按钮。手机只有 inline，不显示全屏按钮。
+
+右侧栏页签（含分离侧栏窗口）不重复显示标题，页面铺满且无卡片边框与外边距；加载与错误在页面区域提示。
+页签和全屏使用固定 `containerDimensions: {width, height}`，尺寸变化沿现有 host-context 通道更新；
+隐藏或尺寸为 0 时不发送新尺寸，固定尺寸不使用自动增高锁定。页面需自行处理内部滚动，不能关掉页面自身滚动。
+入口旁弹层和侧栏折叠区同样隐藏标题，但仍按内容高度。面板的例外来源只出现在页签或入口悬停提示里。
+`message.body`、`tool.body`、`settings.section` 保留紧凑标题与内容高度。
+
+插件页面与自定义 MCP 页面操作在卡片标题下及输入框上方浮层显示同一个待确认请求；
+浮层不挤压对话区，多个请求合并呈现。页面调用与 AI 调用同一工具时审批一致，由任务权限模式决定。
+插件页面调用本插件 app-visible 工具时，Main 用可信插件身份构造 `ghost_call` 参数，复用
+`getDesktopMcpToolApprovalPolicy` 分类。Ask 下 `auto-approve` 直接放行，`prompt` 提供
+允许一次、拒绝和“本任务总是允许”，`prompt-each-time` 不提供总是允许。
+工具策略的自动放行例外继续生效；其他调用在 Auto 下走统一审阅并注明“由插件交互页面发起”。
+完全访问跳过页面操作审批，切换后通过同一交互请求放行已等待的审批。点击、加载时脚本和定时器调用处理相同，不把用户操作当作工具授权。
+页面的总是允许只保存在 Host 内存，限同任务、同服务、同工具的页面调用，与模型调用授权独立；
+重启、任务结束/清空、服务配置变化或插件撤销后清除。自定义 MCP 的审批行为不变，逐次确认或
+破坏性工具不提供总是允许。远程 Desktop 和 Mobile 复用同一交互请求通道，无新增协议。
+插件内部能力仍保留各自权限检查，页面工具审批不能抵消工作目录写入确认。系统选文件/另存为
+是选择动作；安装及交互页面能力批准是一次性授权，完全访问不替用户确认。SSH 任务不得借完全访问
+静默读取控制电脑文件的既有边界不变（插件页面不支持 SSH 任务）。
+作者格式与示例见[插件 Node 与交互页面手册](../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-node-worker.md#交互页面桥接原有工具)。
+
 ## 协议兼容矩阵
 
 卡片中的完整工具结果以 1 MiB 持久化预算为界；超限处理见下文「接入」。
@@ -74,7 +186,7 @@ App 的完整 CSP，proxy 的资源地址由宿主固定，不能被普通桥消
 同一个 WebView；卡片离屏或实际页面卸载后，先将内容移回屏幕外 host，保留消息回调，
 收到 teardown 响应或满 1 秒后移除 WebView、停止两项资源服务并清理专属缓存。退后台
 关闭旧 View，原生资源最多保留本次后台代次 1 秒；回前台打开新 View，不重放工具调用。
-这改变两端 runtime fingerprint，必须有针对冷更的明确确认并发布原生新包；不能仅 OTA 交付。
+这改变两端 runtime fingerprint，必须按冷更边界在 PR 中写明原因、存量装机影响与发版节奏，并发布原生新包；不能仅 OTA 交付。
 旧安装包缺少 App 承载能力时保留已保存文本并提示更新手机，不回退到同源或 opaque-origin
 `srcdoc`。下次进程首次打开时清理中断遗留的本功能随机目录。iOS 使用非持久 WebView
 数据存储；Android 不使用会清空其他 View cookie 的 incognito 开关，只删除本 View 的
@@ -92,10 +204,45 @@ iOS 另保留显式顶层请求拦截；可信 proxy 同时检查实际 `event.o
 
 ## 接入
 
-在 Cindy 设置中添加普通自定义 MCP，选择 Streamable HTTP 或 SSE 地址及所需认证。
-凭证留在 Main 的现有密钥存储中，不进入 iframe。Claude Code、Codex、Pi 都通过同一
-Host facade 调用自定义 MCP；支持 Apps 的工具执行时生成独立卡片，历史卡片可重新连接。
-不支持 UI 扩展的普通 MCP 保持文本工具使用方式。
+### 配置自定义 MCP 服务器
+
+在 Cindy 桌面端打开「设置 → 工具 → 外部工具」，选择「添加 MCP 服务器」。填写显示名称、
+传输类型（Streamable HTTP 或 SSE）和端点 URL，例如 `https://mcp.example.org/mcp`。
+需要认证时，在表单中填写 Bearer token 或服务要求的请求头。只有本地命令和参数的
+stdio 服务无法在这里启动，需要服务方先提供 Cindy 桌面端能访问的 HTTP 或 SSE 端点。
+
+也可以在本机桌面任务里请 Cindy 添加服务。助手用 `request_mcp_setup` 打开同一张表单，
+可预填名称、公开 URL 和传输类型。用户在表单内输入凭证并保存；取消会结束此次添加。
+远程任务或手机上无法打开此表单时，请在运行任务的桌面端设置中添加。
+
+### 外部配置管理工具能写到哪里？
+
+Cindy 当前没有供 magpie 等外部工具管理自定义 MCP 列表的全局 `mcp.json`、CLI 或公开本地 API。
+写入 Claude Code、Codex 或 Pi 的原生配置文件也不会更新 Cindy 设置中的列表。例如，本机 Claude Code
+任务可使用原生连接；Cindy 读取这些配置来识别重复连接，用户可在设置中选择保留的来源。
+
+外部工具可向用户
+展示服务名称、公开端点和传输类型，引导用户在上述表单中保存。请勿把凭证放进示例 URL 或聊天消息。
+
+桌面端将服务列表保存在当前账号的本地数据库中。Bearer token 单独保存在安全存储中，
+非空自定义请求头经 Electron `safeStorage` 加密后随配置入库。数据库属于应用内部存储，
+直接修改数据库或复制凭证文件均不属于受支持的配置方式。换电脑时可使用 Cindy 的
+[新设备配置迁移](product-rules/new-device-setup-migration.md)。请求头的保存方式详见[自定义 MCP 请求头](dev-rules/credentials-and-local-storage.md#自定义-mcp-请求头)。
+
+保存后，桌面端刷新 Claude Code、Codex 和 Pi 的工具列表；新建或重启的普通 Agent 会话使用更新后的配置。
+伙伴在本对话的配置表单中添加工具后，下一条消息就可以使用。三个引擎通过 Cindy 的 MCP Apps Host
+调用服务，凭证不会传给页面。普通 MCP 可直接提供文本工具；支持 Apps 的工具还可生成独立卡片，历史卡片可重新连接。
+
+App 发起的 `tools/call` 在 Host 到 MCP server 这一段有 30 分钟总时限；服务端进度不会
+延长这个总时限。Host 按单次请求映射进度 token，再将原始进度值、总量与消息转发给
+发起的 View。不同 View 可以使用相同的本地 token，不会互相接收进度。
+检查归属期间积压的进度只保留最新一条，避免高频上报造成无界队列。
+`@modelcontextprotocol/ext-apps@1.7.5` 的 `app.callServerTool(params, options)` 默认注册
+进度回调并启用 `resetTimeoutOnProgress`，因此服务端持续报告进度时，App 的默认
+60 秒等待时限会续期。服务端不报告进度时，App 应通过 `options.timeout` 显式设置
+所需等待时间（单位为毫秒）；App 自己的超时或取消仍会传递给对应的上游请求。
+Host 不生成虚构的服务端进度，也不自动重放超时的工具调用。
+
 模型侧 facade 继承下游 harness 实际声明的 client capabilities（含其他 extensions），
 再追加 Apps extension；roots、sampling、elicitation 与普通服务器回调只返回产生该
 连接的 harness，客户端通知（如 roots/list_changed）沿同一连接转发。回调返回前
@@ -240,3 +387,41 @@ Electron 检查启动独立隐藏测试窗口与唯一临时 profile，加载生
 唯一临时目录，不启动、重启或修改当前 Cindy。
 这是独立页面沙箱集成证据，不等同于完整 Cindy 卡片的 Light/Dark 实机目检；Mobile 真机
 与真实 SSH 主机仍需验收。
+
+
+插件页面按工具策略和任务权限模式审批后，取得绑定本卡文档的一次性调用票据；票据只绑定身份，不替代审批。
+`pick`、另存为、工作目录写入、联网域名与派活等能力仍执行各自原有检查，model-only 工具继续拒绝。
+可选 `tool-progress` 数值在页面提供 `_meta.progressToken` 时转成标准 `notifications/progress`，
+200ms 合并一次；无数值的旧消息仍只续命，结束或撤销后不继续通知。
+
+本机插件卡的标准文件 `resource_link`（本插件媒体地址或 `library:<相对路径>`）经归属复核后，
+在 `_meta["cindy/file"]` 得到同卡来源下的只读 URL、MIME 和大小。`ghost_call.attachments` 作为
+`toolInfo.tool._meta["cindy/attachments"]` 的标准资源链接补充到 Host context。只签发本卡输入或
+结果中出现的资源，不开放任意路径查询；View 的 connect-src 为读取本卡文件追加 `'self'`，
+该源只有本卡文档和签发文件。真实 Chromium frame、owner、卡片和插件版本共同守门；Range
+沿用现有媒体流式响应，关闭 View 中止在途读流。远程端和手机暂不签发本机文件地址。
+对话交接的非媒体副本以 `handoff:<uuid>` 资源链接写进 `cindy/attachments`，签发方式相同；
+副本过期或被删时，卡片里（附件列表、入参或结果）的 `handoff:` 链接只保留名称、类型和大小、不带地址，View 照常打开；Library／媒体链接仍严格拒绝。
+
+### 插件页面文件能力
+
+本机插件 View 可消费标准 `resource_link`，宿主在 `_meta['cindy/file']` 附加同卡源的
+只读地址、类型和大小；只授权本卡入参、工具结果和选择/上传得到的本插件文件。
+Range 可用，connect-src 的 `'self'` 只覆盖本卡文档和随机票据文件，不是任意本机
+文件代理。页面关闭、插件停用/更新、文件删除后地址失效。
+
+`pick(mode:'file')` 在宿主流式导入媒体或 Library；`fetch(as:'library')` 流式下载；
+`upload.library` 复用现有 multipart 与凭证/401 路径（不改公共传输）。上传单件
+64 MiB、总 128 MiB、最多 4 件；读取阶段报告真实字节，网络发送阶段不报告虚构百分比。
+Library 导入/下载沿用 8 GiB 流上限；媒体导入沿用 50 MiB 单件、1 GiB 寄存配额。
+页面分片建议原始字节 ≤2 MiB，View 单条消息含 JSON 总共 ≤4 MiB。
+
+本机插件卡声明草案标准 `downloadFile` capability，处理 `ui/download-file`：
+EmbeddedResource 或本卡授权文件，一次最多 16 件，每件系统另存为对话框就是确认，
+不代理任意网址。未提供本机处理器的 Host、手机和远程查看端仍不声明能力，调用
+得到标准不支持错误。没有新增跨端协议、数据库状态或非标准 View 方法。
+
+`ui/message` 中获本卡授权的本插件媒体图片走正常消息附件链（含排队和历史恢复），
+保留外部应用来源，不转成主人授权；其它链接保持现状，模型上下文更新不接收图片。
+验证覆盖官方 App SDK 和直接 JSON-RPC；file input 用独立 Electron/CDP 验证，拖放
+验证到 DOM 事件。系统选择/另存为对话框仅测试进程替换，原生点击与 OS 拖放未验证。

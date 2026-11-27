@@ -1,3 +1,7 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { withAuxiliaryUsage } from '../usage/auxiliaryUsage.js';
+import { parseAuxiliaryResponse, parseAuxiliaryTokens, type AuxiliaryUsageRecorder } from '../../shared/auxiliaryUsage.js';
+import { readUtilityTextStream } from '../utility-model/streamText.js';
 import { isOpenAiSubscriptionProvider } from '@cindy/model-providers';
 import { isClaudeSubscriptionProviderId } from './subscription-account-auth.js';
 /**
@@ -55,7 +59,7 @@ import { getActiveCatalog } from './active-catalog.js';
 import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
 import { readModelDisableOverrides } from './model-disable-store.js';
 import { readClaudeApiKey, readCodexOneShotCreds } from './auth-adapters.js';
-import { outboundUndiciFetch } from './outbound-fetch.js';
+import { outboundUndiciFetch } from './outbound-fetch.desktop.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
 import { validateTitleOutput } from './title-output-validation.js';
 
@@ -324,8 +328,9 @@ async function fetchAnthropicTitle(
     },
     body: JSON.stringify(body),
   });
+  const json = await res.json().catch(error => { if (res.ok) throw error; return null; }) as { content?: Array<{ type?: string; text?: string }> };
+  await observeTitleBody(json, 'anthropic-messages', modelId);
   if (!res.ok) throw new Error(`anthropic messages HTTP ${res.status}`);
-  const json = (await res.json()) as { content?: Array<{ type?: string; text?: string }> };
   return (json.content ?? [])
     .filter((b) => b.type === 'text')
     .map((b) => b.text ?? '')
@@ -377,8 +382,9 @@ async function fetchCodexTitle(
     },
     body: JSON.stringify(body),
   });
+  const raw = await readUtilityTextStream(res, undefined, text => observeTitleUsage(text, 'responses', modelId));
   if (!res.ok) throw new Error(`codex responses HTTP ${res.status}`);
-  return parseResponsesSse(await res.text());
+  return parseResponsesSse(raw);
 }
 
 /** XD 网关 litellm:Bearer 网关 key,OpenAI chat-completions 形状。 */
@@ -414,8 +420,9 @@ async function fetchGatewayTitle(
       messages,
     }),
   });
+  const json = await res.json().catch(error => { if (res.ok) throw error; return null; }) as { choices?: Array<{ message?: { content?: unknown } }> };
+  await observeTitleBody(json, 'chat-completions', modelId);
   if (!res.ok) throw new Error(`gateway chat HTTP ${res.status}`);
-  const json = (await res.json()) as { choices?: Array<{ message?: { content?: unknown } }> };
   return (json.choices ?? [])
     .map((c) => (typeof c.message?.content === 'string' ? c.message.content : ''))
     .join('')
@@ -483,7 +490,7 @@ export interface OneShotOpts {
  * `opts` 仅用于非标题场景(如 prompt prediction)覆盖默认 token 数/校验规则;
  * 标题场景不传即可走默认值。
  */
-export async function generateTitleViaProviderResult(
+async function generateTitleViaProviderResultUnmetered(
   args: { sessionId: string; agentKind: AgentKind; prompt: string; signal?: AbortSignal },
   deps: TitleOneShotDeps = {},
   opts?: OneShotOpts,
@@ -642,6 +649,8 @@ log.debug('title oneShot skipped: no title target', {
   const codexInstructions = opts?.codexInstructions ?? CODEX_TITLE_INSTRUCTIONS;
   const maxOutputChars = opts?.maxOutputChars ?? TITLE_OUTPUT_MAX_CHARS;
   const maxVisualChars = opts?.maxVisualChars ?? AUTO_TITLE_MAX_CHARS;
+  const context = titleUsage.getStore();
+  if (context) context.providerId = providerId;
   try {
     let text = '';
     switch (target.wire) {
@@ -885,4 +894,24 @@ export async function generateTitleViaProvider(
 ): Promise<string | null> {
   const result = await generateTitleViaProviderResult(args, deps);
   return result.status === 'ok' ? result.title : null;
+}
+
+const titleUsage = new AsyncLocalStorage<{ record: AuxiliaryUsageRecorder; providerId?: string }>();
+async function observeTitleUsage(raw: string, wire: string, model: string) {
+  const observed = parseAuxiliaryResponse(raw, wire);
+  const context = titleUsage.getStore();
+  if (observed.tokens && context) await context.record(observed.tokens, { providerId: context.providerId, model: observed.model ?? model, transport: wire });
+}
+export async function generateTitleViaProviderResult(
+  ...args: Parameters<typeof generateTitleViaProviderResultUnmetered>
+): Promise<TitleOneShotResult> {
+  return withAuxiliaryUsage({ source: 'title', sessionId: args[0].sessionId }, record =>
+    titleUsage.run({ record }, () => generateTitleViaProviderResultUnmetered(...args)));
+}
+
+async function observeTitleBody(body: unknown, wire: string, model: string) {
+  const tokens = parseAuxiliaryTokens(body, wire);
+  const context = titleUsage.getStore();
+  const served = body && typeof body === 'object' && 'model' in body && typeof body.model === 'string' ? body.model : model;
+  if (tokens && context) await context.record(tokens, { providerId: context.providerId, model: served, transport: wire });
 }

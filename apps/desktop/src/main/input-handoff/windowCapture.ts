@@ -107,6 +107,36 @@ export function pickQr(codes: DetectedQr[]): DetectedQr | null {
 }
 
 /**
+ * The QR code the owner should scan in a picture, cut out with its quiet zone:
+ * null when there is none, an error when the detector could not look. The
+ * picture stays in memory; `detect` reads it from a pipe.
+ */
+export async function cutQrFromImage(
+  image: NativeImage,
+  detect: (jpeg: Buffer) => Promise<DetectedQr[] | null>,
+): Promise<{ text: string; jpeg: Buffer; width: number; height: number; cut: Rect; size: { width: number; height: number } } | null | { error: WindowCaptureError }> {
+  const scan = image.toJPEG(90);
+  let codes: DetectedQr[] | null;
+  try {
+    codes = await detect(scan);
+  } finally {
+    scan.fill(0);
+  }
+  // The detector could not look: say so, so a waiting code is not taken as scanned.
+  if (!codes) return { error: 'unavailable' };
+  const code = pickQr(codes);
+  if (!code) return null;
+  const size = image.getSize();
+  const cut = qrCrop(code.box, size);
+  if (!cut) return null;
+  let cropped = image.crop(cut);
+  if (Math.max(cut.width, cut.height) > QR_MAX_SIDE) cropped = cropped.resize({ width: QR_MAX_SIDE, quality: 'good' });
+  const fitted = fitJpeg(cropped);
+  if (!fitted) return null;
+  return { text: code.text, ...fitted, cut, size };
+}
+
+/**
  * Looks for a QR code in one window (scan-to-sign-in). Returns the code cut
  * out of the window with its content, null when there is none. The window
  * photo stays in memory; `detect` reads it from a pipe.
@@ -118,29 +148,16 @@ export async function captureWindowQr(
 ): Promise<FoundQr | null | { error: WindowCaptureError }> {
   const shot = await photographWindow(frame, windowId);
   if ('error' in shot) return shot;
-  const scan = shot.image.toJPEG(90);
-  let codes: DetectedQr[] | null;
-  try {
-    codes = await detect(scan);
-  } finally {
-    scan.fill(0);
-  }
-  // The detector could not look: say so, so a waiting code is not taken as scanned.
-  if (!codes) return { error: 'unavailable' };
-  const code = pickQr(codes);
-  if (!code) return null;
-  const size = shot.image.getSize();
-  const cut = qrCrop(code.box, size);
-  if (!cut) return null;
-  let image = shot.image.crop(cut);
-  if (Math.max(cut.width, cut.height) > QR_MAX_SIDE) image = image.resize({ width: QR_MAX_SIDE, quality: 'good' });
-  const fitted = fitJpeg(image);
-  if (!fitted) return null;
+  const found = await cutQrFromImage(shot.image, detect);
+  if (!found || 'error' in found) return found;
+  const { cut, size } = found;
   const [x, y, w, h] = shot.area;
   return {
-    text: code.text,
+    text: found.text,
     capture: {
-      ...fitted,
+      jpeg: found.jpeg,
+      width: found.width,
+      height: found.height,
       // Taps on the code (for example "tap to refresh" on an expired one) land on the code in the window.
       area: [x + (cut.x / size.width) * w, y + (cut.y / size.height) * h, (cut.width / size.width) * w, (cut.height / size.height) * h],
       windowFrame: [...frame],

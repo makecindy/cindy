@@ -16,6 +16,7 @@ import {
   __resetPluginMarketIconStoreForTest,
   usePluginMarketIcon,
 } from '../usePluginMarketIcon';
+import { LEGACY_SCAFFOLD_ICON_SHA256 } from '../../__tests__/fixtures/legacyScaffoldIcon';
 
 function testHex(value: string, length: number): string {
   const encoded = [...value]
@@ -79,6 +80,82 @@ afterEach(() => {
 });
 
 describe('usePluginMarketIcon', () => {
+  it('uses the list thumbnail, falls back to the original, and leaves detail on the original', () => {
+    const icon = {
+      mimeType: 'image/png', sha256: 'a'.repeat(64), sizeBytes: 90598,
+      url: 'https://plugins.example.test/icon.png?signature=original',
+      thumbnailUrl: 'https://plugins.example.test/icon.png?signature=thumbnail',
+      expiresAt: '2026-11-05T12:00:00.000Z',
+    };
+    const item: PluginMarketItem = { ...customItem('remote-icon'), sourceType: 'server', icon };
+    const card = renderHook(() => usePluginMarketIcon(item, { deferUntilVisible: true }));
+    const detail = renderHook(() => usePluginMarketIcon(item, { deferUntilVisible: false }));
+    expect(card.result.current.iconDataUrl).toBe(icon.thumbnailUrl);
+    expect(detail.result.current.iconDataUrl).toBe(icon.url);
+    const refresh = vi.fn();
+    act(() => card.result.current.onIconLoadError(refresh));
+    expect(card.result.current.iconDataUrl).toBe(icon.url);
+    expect(refresh).not.toHaveBeenCalled();
+    act(() => card.result.current.onIconLoadError(refresh));
+    expect(refresh).toHaveBeenCalledOnce();
+  });
+
+  it('waits for remote card visibility before exposing its image URL', () => {
+    let callback: IntersectionObserverCallback;
+    const observer = { observe: vi.fn(), disconnect: vi.fn() };
+    vi.stubGlobal('IntersectionObserver', class {
+      constructor(next: IntersectionObserverCallback) { callback = next; }
+      observe = observer.observe;
+      disconnect = observer.disconnect;
+    });
+    const icon = {
+      mimeType: 'image/png', sha256: 'a'.repeat(64), sizeBytes: 90598,
+      url: 'https://plugins.example.test/icon.png',
+      thumbnailUrl: 'https://plugins.example.test/icon.png?resize=96',
+      expiresAt: '2026-11-05T12:00:00.000Z',
+    };
+    const item: PluginMarketItem = { ...customItem('remote-icon'), sourceType: 'server', icon };
+    const card = renderHook(() => usePluginMarketIcon(item, { deferUntilVisible: true }));
+    const target = document.createElement('span');
+    act(() => card.result.current.containerRef(target));
+    expect(observer.observe).toHaveBeenCalledWith(target);
+    expect(card.result.current.iconDataUrl).toBeUndefined();
+    const report = (isIntersecting: boolean) => act(() =>
+      callback([{ isIntersecting } as IntersectionObserverEntry], observer as unknown as IntersectionObserver));
+    report(false);
+    expect(card.result.current.iconDataUrl).toBeUndefined();
+    report(true);
+    expect(card.result.current.iconDataUrl).toBe(icon.thumbnailUrl);
+    expect(observer.disconnect).toHaveBeenCalled();
+    report(false);
+    expect(card.result.current.iconDataUrl).toBe(icon.thumbnailUrl);
+  });
+
+  // 市场只有短期 URL；已有本地图标缓存用例未覆盖旧占位图指纹。Tier: unit。
+  it('uses the server icon hash to hide only the historical placeholder and accepts its replacement', () => {
+    const item: PluginMarketItem = {
+      ...customItem('torch-announcements'),
+      sourceType: 'server',
+      customIconKey: undefined,
+      icon: {
+        mimeType: 'image/png',
+        sha256: LEGACY_SCAFFOLD_ICON_SHA256,
+        sizeBytes: 329,
+        url: 'https://plugins.example.test/icon.png?signature=current',
+        expiresAt: '2026-11-05T12:00:00.000Z',
+      },
+    };
+    const { result, rerender } = renderHook(
+      ({ current }) => usePluginMarketIcon(current, { deferUntilVisible: false }),
+      { initialProps: { current: item } },
+    );
+    expect(result.current.iconDataUrl).toBeUndefined();
+    expect(localIcons).not.toHaveBeenCalled();
+
+    rerender({ current: { ...item, icon: { ...item.icon!, sha256: 'a'.repeat(64) } } });
+    expect(result.current.iconDataUrl).toBe(item.icon!.url);
+  });
+
   it('merges same-frame consumers into one request and reuses the shared cache', async () => {
     const alpha = customItem('alpha');
     const beta = customItem('beta');

@@ -14,6 +14,7 @@ import { useTranslation } from 'react-i18next';
 import {
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
   PROVIDER_SHARE_RECEIVED_CATALOGS_CHANNEL,
+  type ProviderPickerModel,
 } from '@cindy/device-link';
 
 import { useAuth } from '@/auth/AuthContext';
@@ -24,11 +25,18 @@ import {
   getCachedDeviceProviders,
   subscribeDeviceProviders,
   subscribeDeviceProvidersError,
+  subscribeDeviceProvidersGen,
+  taskProviderCatalog,
   type DeviceProvidersPayload,
+  type RetainedProviderCatalog,
 } from '@/device-link/deviceProvidersCache';
+import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
+import { useRetainedProviderModel } from '@/device-link/useDeviceProviders';
 import { createMobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import {
   getCachedProviderShareCatalogs,
+  evictProviderShareCatalogs,
+  isProviderShareCatalogComplete,
   refreshProviderShareCatalogs,
   subscribeProviderShareCatalogs,
   type ProviderShareCatalogEntry,
@@ -44,14 +52,21 @@ import {
 } from './remoteAgentCatalogs';
 
 type CatalogState = { status: RemoteAgentCatalog['status']; payload?: DeviceProvidersPayload };
+type DeviceModelRoute = { deviceId: string; route: ProviderPickerModel };
 /** 被控电脑收到的分享;loaded = 已拿到过一次权威列表(含缓存)。 */
 type ShareState = { controlledDeviceId: string; shares: readonly ProviderShareCatalogEntry[]; loaded: boolean };
 
 const NO_CATALOGS: RemoteAgentCatalog[] = [];
+/**
+ * 被控电脑报了分享清单变化后，屏幕上已有的分享行最多留这么久等实时重读(被控电脑逐个读分享目录
+ * 最多 10 秒)。缓存照旧立即作废；重读失败或超时就退回作废后的状态，不留无界的旧清单。
+ */
+const SHARE_CHANGE_DISPLAY_HOLD_MS = 12_000;
 
 function cachedShareState(controlledDeviceId: string): ShareState {
   const cached = controlledDeviceId ? getCachedProviderShareCatalogs(controlledDeviceId) : undefined;
-  return { controlledDeviceId, shares: cached ?? [], loaded: !!cached };
+  return { controlledDeviceId, shares: cached ?? [],
+    loaded: !!cached && isProviderShareCatalogComplete(controlledDeviceId) !== false };
 }
 
 export function useRemoteAgentCatalogs(input: RemoteAgentCatalogsInput): RemoteAgentCatalog[] {
@@ -66,15 +81,20 @@ export interface RemoteAgentCatalogsInput {
   keepDeviceIds: readonly string[];
   /** 只读 keepDeviceIds 里的电脑(选择器没打开、只为模型药丸取 Agent 所在那台的目录时)。 */
   keepOnly?: boolean;
+  retainedModel?: DeviceModelRoute;
+  pendingModel?: DeviceModelRoute;
 }
 
 /** settled = 电脑清单(和分享清单)已读到过一次:此后清单里没有的电脑 / 分享才算真的不在了。 */
 export function useRemoteAgentCatalogsWithStatus(input: RemoteAgentCatalogsInput): {
   catalogs: RemoteAgentCatalog[];
   settled: boolean;
+  retainedCatalog?: RetainedProviderCatalog;
+  pendingCatalog?: RetainedProviderCatalog;
 } {
-  const { readDeviceList, invoke, openLink, connectionEpoch, status, presenceVersion, getPresenceAvailability } =
-    useDeviceLink();
+  const { readDeviceList, invoke, openLink, connectionEpoch, status, presenceVersion,
+    getPresenceAvailability, rosterVersion = 0, providerShareCatalogVersions = {} } =
+    useDeviceLink(input.controlledDeviceId);
   const { accountGeneration } = useAuth();
   const { t } = useTranslation();
   const revoked = useRevokedDevices();
@@ -83,6 +103,8 @@ export function useRemoteAgentCatalogsWithStatus(input: RemoteAgentCatalogsInput
   const [devicesLoaded, setDevicesLoaded] = useState(false);
   const [shareState, setShareState] = useState<ShareState>(() => cachedShareState(input.controlledDeviceId));
   const ownerRef = useRef({ accountGeneration, controlledDeviceId: input.controlledDeviceId });
+  const shareCatalogVersion = providerShareCatalogVersions[input.controlledDeviceId] ?? 0;
+  const shareCatalogVersionRef = useRef({ deviceId: input.controlledDeviceId, version: shareCatalogVersion });
   const keepKey = input.keepDeviceIds.join('\n');
   const keepOnly = input.keepOnly === true;
   // 选择器没打开时只为药丸取目录:Agent 不在某个分享上就不必去读分享。
@@ -94,11 +116,24 @@ export function useRemoteAgentCatalogsWithStatus(input: RemoteAgentCatalogsInput
     if (owner.accountGeneration === accountGeneration
       && owner.controlledDeviceId === input.controlledDeviceId) return;
     ownerRef.current = { accountGeneration, controlledDeviceId: input.controlledDeviceId };
+    shareCatalogVersionRef.current = { deviceId: input.controlledDeviceId, version: shareCatalogVersion };
     setDevices([]);
     setDevicesLoaded(false);
     setCatalogs(new Map());
     setShareState(cachedShareState(input.controlledDeviceId));
-  }, [accountGeneration, input.controlledDeviceId]);
+  }, [accountGeneration, input.controlledDeviceId, shareCatalogVersion]);
+
+  // A late roster denial retires same-account directory rows; share catalogs are a
+  // separate authority and stay untouched. The read effect deliberately does not
+  // depend on rosterVersion: retrying from the denial itself would recreate the
+  // 403 -> notification -> read feedback loop. Reconnect/focus/picker triggers
+  // may read again later.
+  useEffect(() => {
+    if (!input.enabled) return;
+    setDevices([]);
+    setDevicesLoaded(false);
+    setCatalogs(new Map());
+  }, [input.enabled, rosterVersion]);
 
   // 供应商分享:被控电脑代读它收到的分享与各自的目录。有缓存先显示,再在后台刷新;
   // 读不到(离线 / 旧版桌面)保留上一份,绝不影响被控电脑自己与同账号电脑的列表。
@@ -106,23 +141,51 @@ export function useRemoteAgentCatalogsWithStatus(input: RemoteAgentCatalogsInput
     const controlledDeviceId = input.controlledDeviceId;
     if (!input.enabled || !controlledDeviceId || status !== 'online' || !readShares) return;
     let cancelled = false;
-    setShareState(cachedShareState(controlledDeviceId));
+    let retired = false;
+    const previousVersion = shareCatalogVersionRef.current;
+    if (previousVersion.deviceId !== controlledDeviceId) {
+      shareCatalogVersionRef.current = { deviceId: controlledDeviceId, version: shareCatalogVersion };
+    } else if (previousVersion.version !== shareCatalogVersion) {
+      // The controlled host reported a received-share catalog/list change. Retire
+      // only this target's cached share rows; the live re-read below supplies the
+      // new authoritative list. Presence/push is not an authorization result.
+      evictProviderShareCatalogs(controlledDeviceId);
+      retired = true;
+      shareCatalogVersionRef.current = { deviceId: controlledDeviceId, version: shareCatalogVersion };
+    }
+    // 分享者电脑上线/离线都会推一次清单变化。缓存已作废，但屏幕上的行留到这次重读有结果(最多
+    // SHARE_CHANGE_DISPLAY_HOLD_MS)，不让分享在一次来回(实测约 2 秒)里消失又出现
+    // (2026-11-23 用户裁决「保留并标注」)；重读失败或超时就退回作废后的状态。
+    let hold: ReturnType<typeof setTimeout> | undefined;
+    const showCache = () => {
+      if (hold) clearTimeout(hold);
+      hold = undefined;
+      if (!cancelled) setShareState(cachedShareState(controlledDeviceId));
+    };
+    if (retired) hold = setTimeout(showCache, SHARE_CHANGE_DISPLAY_HOLD_MS);
+    else showCache();
     const unsubscribe = subscribeProviderShareCatalogs(controlledDeviceId, (shares) => {
-      if (!cancelled) setShareState({ controlledDeviceId, shares, loaded: true });
+      if (hold) clearTimeout(hold);
+      hold = undefined;
+      if (!cancelled) setShareState({ controlledDeviceId, shares,
+        loaded: isProviderShareCatalogComplete(controlledDeviceId) !== false });
     });
     void refreshProviderShareCatalogs(controlledDeviceId, () => invoke(
       controlledDeviceId,
       PROVIDER_SHARE_RECEIVED_CATALOGS_CHANNEL,
       [{ capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2] }],
     )).catch(() => {
-      // 保留缓存;下次打开选择器或重连时再读。
+      // 保留缓存;下次打开选择器或重连时再读。清单变化后的重读失败时，不再留着作废前的行。
+      if (hold) showCache();
     });
     return () => {
       cancelled = true;
+      if (hold) clearTimeout(hold);
       unsubscribe();
     };
     // keepOnly 也在依赖里:打开选择器时即使分享列表已在显示,也在后台再读一次。
-  }, [connectionEpoch, input.controlledDeviceId, input.enabled, invoke, keepOnly, readShares, status]);
+  }, [connectionEpoch, input.controlledDeviceId, input.enabled, invoke, keepOnly,
+    readShares, shareCatalogVersion, status]);
 
   useEffect(() => {
     if (!input.enabled || !input.controlledDeviceId || status !== 'online') return;
@@ -160,6 +223,9 @@ export function useRemoteAgentCatalogsWithStatus(input: RemoteAgentCatalogsInput
             // 有缓存继续显示缓存;从未读到过才标成读不到。
             const fallback = getCachedDeviceProviders(device.deviceId);
             patch(device.deviceId, fallback ? { status: 'ready', payload: fallback } : { status: 'error' });
+          }));
+          cleanups.push(subscribeDeviceProvidersGen(device.deviceId, reason => {
+            patch(device.deviceId, { status: reason === 'fresh-invalidate' ? 'loading' : 'error' });
           }));
           if (!device.canOpen) continue;
           const transport = createMobileMakerTransport({
@@ -218,23 +284,32 @@ export function useRemoteAgentCatalogsWithStatus(input: RemoteAgentCatalogsInput
       keepDeviceIds: keepKey ? keepKey.split('\n') : [],
       keepOnly,
       deviceName: (share) => names.get(share.agentDeviceId) ?? t('providerShare.picker.shareName', { owner: share.ownerName }),
+      offlineName: (name) => t('providerShare.picker.offline', { name }),
       unavailableName: t('providerShare.picker.unavailable'),
     });
   }, [input.controlledDeviceId, input.enabled, keepKey, keepOnly, readShares, shareState, t]);
 
+  const retained = useRemoteRetainedModel(input.retainedModel, catalogs, input.enabled, !keepOnly);
+  const pending = useRemoteRetainedModel(input.pendingModel, catalogs, input.enabled, !keepOnly);
+  const retainedDevice = input.retainedModel?.deviceId;
+  const pendingDevice = input.pendingModel?.deviceId;
   const result = useMemo(() => {
     if (devices.length === 0 && shareCatalogs.length === 0) return NO_CATALOGS;
     void presenceVersion;
     const deviceCatalogs = devices.map((device): RemoteAgentCatalog => {
       const state = catalogs.get(device.deviceId);
-      const payload = state?.payload;
+      const retainedHere = device.deviceId === retainedDevice ? retained : undefined;
+      const pendingHere = device.deviceId === pendingDevice ? pending : undefined;
+      const payload = state?.payload && taskProviderCatalog(state.payload, retainedHere?.catalog, pendingHere?.catalog);
       // 设备清单是打开时的快照;面板开着期间上下线以实时 presence 为准(未知时沿用清单)。
       const presence = getPresenceAvailability(device.deviceId);
       const offline = presence === false || (presence !== true && !device.canOpen);
       return {
         deviceId: device.deviceId,
         name: device.name,
-        status: state?.status ?? (device.canOpen ? 'loading' : 'error'),
+        status: retainedHere?.error || pendingHere?.error ? 'error'
+          : retainedHere?.loading || pendingHere?.loading ? 'loading'
+          : state?.status ?? (device.canOpen ? 'loading' : 'error'),
         ...(offline ? { offline: true as const } : {}),
         providers: payload ? remoteAgentProviders(payload.providers) : [],
         ...(payload?.modelVisibilityOverrides !== undefined
@@ -243,8 +318,21 @@ export function useRemoteAgentCatalogsWithStatus(input: RemoteAgentCatalogsInput
       };
     });
     return shareCatalogs.length === 0 ? deviceCatalogs : [...deviceCatalogs, ...shareCatalogs];
-  }, [catalogs, devices, shareCatalogs, presenceVersion, getPresenceAvailability]);
+  }, [catalogs, devices, shareCatalogs, presenceVersion, getPresenceAvailability, retainedDevice, retained.catalog, retained.loading, retained.error,
+    pendingDevice, pending.catalog, pending.loading, pending.error]);
   const settled = input.enabled && devicesLoaded
     && (!readShares || shareState.controlledDeviceId !== input.controlledDeviceId || shareState.loaded);
-  return { catalogs: result, settled };
+  return { catalogs: result, settled, retainedCatalog: retained.catalog, pendingCatalog: pending.catalog };
+}
+
+function useRemoteRetainedModel(
+  target: DeviceModelRoute | undefined,
+  catalogs: ReadonlyMap<string, CatalogState>,
+  enabled: boolean,
+  pickerOpen: boolean,
+) {
+  const device = target?.deviceId;
+  const base = device && enabled ? catalogs.get(device) : undefined;
+  const maker = useMobileMakerTransport(device ?? '');
+  return useRetainedProviderModel(device, maker, base?.status === 'ready' ? base.payload : undefined, target?.route, pickerOpen, remoteAgentProviders);
 }

@@ -1,6 +1,6 @@
 import { formatLocalizedDuration, formatLocalizedSeconds } from './sessionDurationFormat';
 import type { MobileSlashCommand } from '@/device-link/mobileMakerTransport';
-import type { InputProjection, RemoteSession } from '@/session/types';
+import type { InputProjection, MobileHandoffCoverage, RemoteSession } from '@/session/types';
 import {
   DEFAULT_LOCAL_SYSTEM_COMMANDS,
   buildSystemCardData,
@@ -30,6 +30,8 @@ export type MobileSystemCardType =
   | SystemCardType
   | 'goal-complete'
   | 'goal-resumed'
+  // 新任务「让插件选」的结果(桌面落库 agentMeta.pluginModelRoute,读侧派生)。
+  | 'plugin-model-route'
   | 'context-rebuild'
   | 'auto-resume'
   | 'learn'
@@ -38,7 +40,17 @@ export type MobileSystemCardType =
   // 代输入结束留痕(隐藏续接行派生)。
   | 'input-handoff'
   | 'mcp-app';
-export type MobileSystemCardPresentation = SystemCardPresentation;
+export type MobileSystemCardPresentation = SystemCardPresentation & { handoffNotice?: string };
+
+const handoffCoverageKeys = {
+  complete: 'message.renderer.handoffCoverageComplete',
+  condensed: 'message.renderer.handoffCoverageCondensed',
+} as const satisfies Record<MobileHandoffCoverage, string>;
+
+export function handoffCoverageKey(data?: Record<string, unknown>) {
+  const coverage = data?.handoffCoverage;
+  return coverage === 'complete' || coverage === 'condensed' ? handoffCoverageKeys[coverage] : undefined;
+}
 
 /** goal 达成记录文案(对齐桌面 GoalCompleteCard 的 goal.complete.record)。 */
 function formatGoalCompleteCard(data: Record<string, unknown> | undefined): SystemCardPresentation {
@@ -105,7 +117,7 @@ export function buildMobileSystemCardData(
 ): Record<string, unknown> {
   // goal / auto-resume / agent-switch 卡的数据由桌面落库行派生,learn 卡的数据由
   // 发送侧 buildLearnCardData 直接组装,都不走本地 slash 命令的数据组装。
-  if (type === 'goal-complete' || type === 'goal-resumed' || type === 'context-rebuild' || type === 'auto-resume' || type === 'learn' || type === 'agent-switch' || type === 'input-handoff' || type === 'mcp-app') return {};
+  if (type === 'goal-complete' || type === 'goal-resumed' || type === 'plugin-model-route' || type === 'context-rebuild' || type === 'auto-resume' || type === 'learn' || type === 'agent-switch' || type === 'input-handoff' || type === 'mcp-app') return {};
   return buildSystemCardData(type, {
     ...options,
     localCommands: MOBILE_LOCAL_SYSTEM_COMMANDS,
@@ -120,6 +132,20 @@ export function formatMobileSystemCard(
   if (type === 'compact') return formatCompactCard(data);
   if (type === 'context-rebuild') return formatContextRebuildCard(data);
   if (type === 'goal-complete') return formatGoalCompleteCard(data);
+  if (type === 'plugin-model-route') {
+    const plugin = typeof data?.pluginName === 'string' ? data.pluginName : '';
+    const modelName = typeof data?.modelName === 'string' ? data.modelName : '';
+    const effort = typeof data?.effort === 'string' && data.effort ? data.effort : '';
+    const model = effort ? `${modelName} · ${i18n.t(`models.options.effortLevels.${effort}`, { defaultValue: effort })}` : modelName;
+    const why = data?.why === 'failed' || data?.why === 'unavailable-route' ? data.why : 'no-opinion';
+    return {
+      title: data?.outcome === 'routed'
+        ? i18n.t('message.systemCard.pluginModelRoute.routed', { plugin, model })
+        : i18n.t(`message.systemCard.pluginModelRoute.kept.${why}`, { plugin, model }),
+      ...(data?.outcome === 'routed' && typeof data.reason === 'string' && data.reason ? { body: data.reason } : {}),
+      rows: [],
+    };
+  }
   if (type === 'goal-resumed') {
     // 两种续跑原因共用这张卡, 但说法必须分开(与桌面 GoalResumedCard 同口径):
     // 上游过载那条只是干等了 60s、**没有**任何容量探测, 说「用量已恢复」是假信息;
@@ -160,8 +186,9 @@ function formatCompactCard(data: Record<string, unknown> | undefined): SystemCar
   return { title: parts.join(' · '), rows: [] };
 }
 
-function formatContextRebuildCard(data: Record<string, unknown> | undefined): SystemCardPresentation {
+function formatContextRebuildCard(data: Record<string, unknown> | undefined): MobileSystemCardPresentation {
   const handoff = typeof data?.handoff === 'string' ? data.handoff : '';
+  const coverageKey = handoffCoverageKey(data);
   const titleKey = data?.reason === 'pi-prompt-timeout'
     ? 'labelTimeout'
     : data?.reason === 'codex-history-strip' ? 'labelStrip' : 'labelOverflow';
@@ -169,8 +196,9 @@ function formatContextRebuildCard(data: Record<string, unknown> | undefined): Sy
   const englishSource = handoff.trimEnd().endsWith("; the user's new message follows ==");
   return {
     title: i18n.t(`message.systemCard.contextRebuild.${titleKey}`),
+    ...(coverageKey ? { handoffNotice: i18n.t(coverageKey) } : {}),
     ...(handoff.trim() ? {
-      subtitle: i18n.t(englishSource
+      subtitle: i18n.t(coverageKey ? 'message.renderer.handoffContentTitle' : englishSource
         ? 'message.systemCard.contextRebuild.handoffTitleEnglishSource'
         : 'message.systemCard.contextRebuild.handoffTitle'),
       body: handoff,
@@ -221,8 +249,9 @@ export function formatAgentSwitchLocationLabel(
     : translate(location.kind === 'thisComputer'
       ? 'message.systemCard.agentSwitchLocationThisComputer'
       : 'message.systemCard.agentSwitchLocationOtherComputer');
-  const from = mobileAgentLabelFromUnknown(data?.fromAgentKind);
-  const to = mobileAgentLabelFromUnknown(data?.toAgentKind);
+  const fallback = translate('models.pluginEngines.genericName');
+  const from = mobileAgentLabelFromUnknown(data?.fromAgentKind, data?.fromEngineName, fallback);
+  const to = mobileAgentLabelFromUnknown(data?.toAgentKind, data?.toEngineName, fallback);
   const label = from === to ? place : `${place} · ${to}`;
   return data?.switchReason === 'quota-rebalance'
     ? `${label} · ${translate('message.systemCard.agentSwitchLocationQuotaRebalance')}`
@@ -236,12 +265,14 @@ export function formatAgentSwitchLocationLabel(
  * 这里仅保留为 formatMobileSystemCard 在该 union 分支上的类型完备兜底。
  */
 function formatAgentSwitchCard(data: Record<string, unknown> | undefined): SystemCardPresentation {
-  const from = mobileAgentLabelFromUnknown(data?.fromAgentKind);
-  const to = mobileAgentLabelFromUnknown(data?.toAgentKind);
+  const fallback = i18n.t('models.pluginEngines.genericName');
+  const from = mobileAgentLabelFromUnknown(data?.fromAgentKind, data?.fromEngineName, fallback);
+  const to = mobileAgentLabelFromUnknown(data?.toAgentKind, data?.toEngineName, fallback);
   const toModel = typeof data?.toModel === 'string' ? data.toModel : '';
   const rows = toModel ? [{ label: i18n.t('message.systemCard.modelLabel'), value: toModel }] : [];
-  // Phase 2:resumed = 目标引擎续接了自己的停泊原生会话(增量交接)。
-  if (data?.nativeHistory === 'fallback') rows.push({ label: i18n.t('message.systemCard.sessionLabel'), value: i18n.t('message.renderer.sessionFallbackPill') });
+  const coverageKey = handoffCoverageKey(data);
+  if (coverageKey) rows.push({ label: i18n.t('message.systemCard.sessionLabel'), value: i18n.t(coverageKey) });
+  else if (data?.nativeHistory === 'fallback') rows.push({ label: i18n.t('message.systemCard.sessionLabel'), value: i18n.t('message.renderer.sessionFallbackPill') });
   else if (data?.resumed === true) rows.push({ label: i18n.t('message.systemCard.sessionLabel'), value: i18n.t('message.systemCard.sessionResumed') });
   return {
     title: formatAgentSwitchLocationLabel(data, (key, options) => i18n.t(key, options))

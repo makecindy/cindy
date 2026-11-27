@@ -8,15 +8,20 @@
  * React 接线。优雅回退:被控端为旧版(allowlist 无 `maker:provider:list`)→ listProviders
  * reject → 暴露 unsupported,调用方才回退到基于 capabilities 的扁平模型列表。
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { AppState } from 'react-native';
 
+import type { ProviderPickerModel } from '@cindy/device-link';
 import type { ProviderView } from '@cindy/model-providers/registry';
 
 import { connectionRecoverySyncRetryDelayMs, formatRemoteError, isAutoRecoveringRemoteError } from './remoteStatus';
 import { useDeviceLink } from './DeviceLinkContext';
 import {
   fetchDeviceProviders,
+  needsRetainedProviderModel,
+  taskProviderCatalog,
+  readRetainedProviderModel,
+  retainedProviderModelKey,
   fetchDeviceProvidersFresh,
   getCachedDeviceProviders,
   getDeviceFetchEpoch,
@@ -28,13 +33,20 @@ import {
   subscribeDeviceProvidersGen,
   subscribeDeviceProvidersError,
   type DeviceProvidersPayload,
+  type RetainedProviderCatalog,
 } from './deviceProvidersCache';
+import type { MobileMakerTransport } from './mobileMakerTransport';
 import { useMobileMakerTransport } from './useMobileMakerTransport';
+
+/** Background catalog recovery rounds before waiting for an explicit trigger (≈2 min of backoff). */
+const MAX_PROVIDER_RECOVERY_ATTEMPTS = 8;
 
 export { evictDeviceProviders } from './deviceProvidersCache';
 
 export interface UseDeviceProvidersResult {
   providers: ProviderView[];
+  retainedCatalog?: RetainedProviderCatalog;
+  pendingCatalog?: RetainedProviderCatalog;
   /** 被控端「模型显示/隐藏」override 快照;undefined = 旧被控端(列表不过滤)。 */
   modelVisibilityOverrides?: Record<string, boolean>;
   loading: boolean;
@@ -52,6 +64,7 @@ export interface UseDeviceProvidersResult {
 }
 
 const EMPTY_PAYLOAD: DeviceProvidersPayload = { providers: [] };
+const MAX_RETAINED_MODEL_RETRIES = 2;
 
 function canRecoverProviderRead(error: unknown): boolean {
   return isAutoRecoveringRemoteError(error)
@@ -59,14 +72,19 @@ function canRecoverProviderRead(error: unknown): boolean {
 }
 
 /** 取被控设备的供应商目录;deviceId 省略 = 不拉取(返回空,调用方回退扁平列表)。 */
-export function useDeviceProviders(deviceId?: string, pickerOpen = false): UseDeviceProvidersResult {
+export function useDeviceProviders(
+  deviceId?: string,
+  pickerOpen = false,
+  retainedModel?: ProviderPickerModel,
+  pendingModel?: ProviderPickerModel,
+): UseDeviceProvidersResult {
   // hooks 规则:无条件取 transport(deviceId 空时其 call 会 reject,但本 hook 不会在空时调用)。
   const maker = useMobileMakerTransport(deviceId ?? '');
   // 连接代际:重连/恢复时 +1。离线驱逐(evict)后重拉失败时,依赖 [deviceId, maker]
   // 的 effect 不会因连接恢复重跑(maker.invoke 跨重连稳定,codex review P2)——把
   // connectionEpoch 纳入 effect 依赖,连接恢复即重跑 effect、经 cache-miss 重新
   // 拉取,不再永久停在 ready=false 的空目录。
-  const { connectionEpoch, status, recoveringDeviceIds } = useDeviceLink();
+  const { connectionEpoch, status, recoveringDeviceIds } = useDeviceLink(deviceId);
   const recovering = !!deviceId && recoveringDeviceIds.has(deviceId);
   const [payload, setPayload] = useState<DeviceProvidersPayload>(
     deviceId ? getCachedDeviceProviders(deviceId) ?? EMPTY_PAYLOAD : EMPTY_PAYLOAD,
@@ -114,7 +132,11 @@ export function useDeviceProviders(deviceId?: string, pickerOpen = false): UseDe
     let cancelled = false;
     const unsubscribeError = subscribeDeviceProvidersError(deviceId, (error) => {
       if (cancelled) return;
-      if (isDeviceProvidersUnsupportedError(error)) setPayload(EMPTY_PAYLOAD);
+      // 瞬时故障可继续显示有界快照；明确撤权、移除、旧端不支持或无效目录
+      // 属于永久失败，必须立刻清掉旧模型。
+      if (!canRecoverProviderRead(error) || isDeviceProvidersVisibilityNotReadyError(error)) {
+        setPayload(EMPTY_PAYLOAD);
+      }
       setReadyFor(null);
       setLoading(false);
       setError(formatRemoteError(error));
@@ -228,6 +250,9 @@ export function useDeviceProviders(deviceId?: string, pickerOpen = false): UseDe
 
   // A peer link can recover without a new relay epoch. Retry only this failed
   // catalog read; never reset the transport or turn cached rows into ready data.
+  // Bounded: after MAX_PROVIDER_RECOVERY_ATTEMPTS (about two minutes of backoff) wait for the
+  // next foreground entry, picker open, reconnect or catalog change instead of polling a
+  // computer that stays offline every 30s for as long as the app is open.
   const needsRecovery = errorDeviceId === deviceId && error !== null && canRecoverProviderRead(error);
   useEffect(() => {
     if (!deviceId || !needsRecovery || status !== 'online' || recovering) return;
@@ -253,14 +278,16 @@ export function useDeviceProviders(deviceId?: string, pickerOpen = false): UseDe
         await request;
       } catch (failure) {
         inFlight = false;
-        if (canRecoverProviderRead(failure)) schedule(connectionRecoverySyncRetryDelayMs(attempt++));
+        if (canRecoverProviderRead(failure) && attempt < MAX_PROVIDER_RECOVERY_ATTEMPTS) {
+          schedule(connectionRecoverySyncRetryDelayMs(attempt++));
+        }
       } finally {
         inFlight = false;
       }
     };
     const subscription = AppState.addEventListener('change', (next) => {
       clearTimeout(timer);
-      if (next === 'active') schedule(0);
+      if (next === 'active') { attempt = 0; schedule(0); }
     });
     schedule(pickerOpen ? 0 : connectionRecoverySyncRetryDelayMs(attempt++));
     return () => {
@@ -270,16 +297,95 @@ export function useDeviceProviders(deviceId?: string, pickerOpen = false): UseDe
     };
   }, [catalogGeneration, connectionEpoch, deviceId, needsRecovery, maker, pickerOpen, recovering, status]);
 
+  const ready = deviceId !== undefined && readyFor === deviceId && readyGen === getDeviceProvidersGen(deviceId);
+  const retained = useRetainedProviderModel(deviceId, maker, ready ? payload : undefined, retainedModel, pickerOpen);
+  const pending = useRetainedProviderModel(deviceId, maker, ready ? payload : undefined, pendingModel, pickerOpen);
+  const display = useMemo(() => taskProviderCatalog(payload, retained.catalog, pending.catalog),
+    [payload, retained.catalog, pending.catalog]);
   return {
-    providers: payload.providers,
-    ...(payload.modelVisibilityOverrides !== undefined
-      ? { modelVisibilityOverrides: payload.modelVisibilityOverrides }
-      : {}),
-    loading,
-    error: errorDeviceId === deviceId ? error : null,
+    providers: display.providers,
+    modelVisibilityOverrides: display.modelVisibilityOverrides,
+    retainedCatalog: retained.catalog,
+    pendingCatalog: pending.catalog,
+    loading: loading || retained.loading || pending.loading,
+    error: (errorDeviceId === deviceId ? error : null) ?? retained.error ?? pending.error,
     unsupported: errorDeviceId === deviceId && isDeviceProvidersUnsupportedError(error),
-    ready: deviceId !== undefined
-      && readyFor === deviceId
-      && readyGen === getDeviceProvidersGen(deviceId),
+    ready: ready && !retained.loading && !retained.error && !pending.loading && !pending.error,
   };
+}
+
+/** Keep the running task's exception private to its view. A replacement catalog (including a
+ * revocation or owner change) immediately retires the old result, even during render. */
+export function useRetainedProviderModel(
+  deviceId: string | undefined, maker: MobileMakerTransport, base: DeviceProvidersPayload | undefined,
+  route: ProviderPickerModel | undefined, pickerOpen = false,
+  projectProviders?: (providers: readonly ProviderView[]) => ProviderView[],
+) {
+  const { status, recoveringDeviceIds } = useDeviceLink(deviceId);
+  const peerReady = !!deviceId && status === 'online' && !recoveringDeviceIds.has(deviceId);
+  const agent = route?.agent;
+  const modelId = route?.modelId;
+  const providerId = route?.providerId;
+  const needed = useMemo(() => !!base && !!agent && !!modelId && providerId !== undefined
+    && needsRetainedProviderModel(base, { agent, modelId, providerId }, projectProviders), [base, agent, modelId, providerId, projectProviders]);
+  const [result, setResult] = useState<RetainedProviderCatalog | {
+    base: DeviceProvidersPayload; key: string; error: string; failedPickerOpen: boolean;
+  }>();
+  const key = route ? retainedProviderModelKey(route) : '';
+  const current = needed && result?.base === base && result?.key === key ? result : undefined;
+  const catalog = current && 'payload' in current ? current : undefined;
+  const failure = current && 'error' in current ? current : undefined;
+  // A peer recovering can rearm exhausted transient reads. Permanent errors wait for a new user attempt.
+  const settled = !!catalog || (failure?.failedPickerOpen === pickerOpen && !canRecoverProviderRead(failure.error));
+  useEffect(() => {
+    if (!needed || !base || !agent || !modelId || providerId === undefined || !peerReady || settled) return;
+    let cancelled = false;
+    let retries = 0;
+    let retryDelay: number | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const applyReply = (reply: DeviceProvidersPayload) => {
+      if (cancelled) return;
+      // A downgraded host can reply with a full directory. Only the exact suspended route
+      // may supplement this snapshot; no other source or model becomes selectable.
+      const kept = reply.providers.filter(p => p.suspended && base.deferredProviderIds?.includes(p.id)
+        && (providerId === null || p.id === providerId)).flatMap(p => {
+          const model = p.models[agent]?.find(m => m.id === modelId);
+          return model ? [{ ...p, models: { [agent]: [model] } }] : [];
+        });
+      const visibility: Record<string, boolean> = {};
+      for (const id of base.deferredProviderIds ?? []) {
+        if (providerId !== null && id !== providerId) continue;
+        const key = `${agent}:${id}:${modelId}`;
+        const visible = reply.modelVisibilityOverrides?.[key];
+        if (visible !== undefined) visibility[key] = visible;
+      }
+      setResult({ base, key, payload: { providers: kept, modelVisibilityOverrides: visibility } });
+    };
+    const scheduleRetry = (state = AppState.currentState) => {
+      clearTimeout(timer);
+      if (state === 'active' && retryDelay !== undefined) timer = setTimeout(read, retryDelay);
+    };
+    const read = () => {
+      retryDelay = undefined;
+      void readRetainedProviderModel(base, key, () => maker.listProviders({ agent, modelId, providerId }))
+        .then(applyReply).catch(reason => {
+          if (cancelled) return;
+          if (canRecoverProviderRead(reason) && retries < MAX_RETAINED_MODEL_RETRIES) {
+            retryDelay = connectionRecoverySyncRetryDelayMs(retries++);
+            scheduleRetry();
+            return;
+          }
+          setResult({ base, key, error: formatRemoteError(reason), failedPickerOpen: pickerOpen });
+        });
+    };
+    const subscription = AppState.addEventListener('change', scheduleRetry);
+    if (AppState.currentState === 'active') read();
+    else retryDelay = 0;
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      subscription.remove();
+    };
+  }, [agent, base, key, maker, modelId, needed, peerReady, pickerOpen, providerId, settled]);
+  return { catalog, loading: needed && !current, error: failure?.error ?? null };
 }

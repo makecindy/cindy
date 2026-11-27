@@ -13,17 +13,19 @@ import os from 'node:os';
 import path from 'node:path';
 
 import type { Effort, Maker } from '@cindy/maker-core';
+import { createPluginEngineLearnSession, type LearnPluginEngineAdmission } from './pluginEngineLearnSession';
 import { isTerminalAgentErrorEvent } from '@cindy/maker-core';
 
 import { emitSessionCreated } from '../localDb/ipc/sessionCreatedBroadcast.js';
 import { createLogger } from '../logger.js';
 import { getCurrentDataOwnerId } from '../authManager';
-import { getResolvedMainLocale } from '../i18n.js';
+import { getResolvedMainLocale } from '../i18n.desktop.js';
 import { wireSessionToIpc } from '../maker-ipc/register.js';
 import { createMessage } from '../localDb/ipc/messages.js';
 import { getDbClient } from '../localDb/client/current';
 import { and, desc, eq, isNull, inArray } from 'drizzle-orm';
 import { messages as messagesTable, sessions as sessionsTable } from '../localDb/schema';
+import { PluginEngineUnsupportedError } from '../maker-host/engineKind.js';
 import { getSessionProvider, setSessionProvider } from '../maker-host/session-provider-store.js';
 import {
   resolveLenientSessionRoute,
@@ -68,6 +70,11 @@ export interface StartLearnHostDeps {
   broadcast: (payload: LearnEventPayload) => void;
   beforeDispatchUserTurn?: (sessionId: string, signal?: AbortSignal) => void | Promise<void>;
   onUndispatchedUserTurn?: (sessionId: string) => void;
+  /**
+   * 插件引擎任务的 /learn(2026-11-25)：蒸馏任务跑在同一个插件引擎上，按在它上面新建任务的准入
+   * (停用、卸载或不可用时明确失败，不回落内置引擎)。未注入时插件引擎任务不能蒸馏。
+   */
+  admitPluginEngine?: LearnPluginEngineAdmission;
   /** hub 源:拉市场 skill 详情 + 可用已发布文件(bootstrap 注入,/learn hub:<slug>
    *  与 skill hub「学习此技能」共用)。未注入时 hub 源请求报 INVALID_PARAMS(兜底)。 */
   fetchHubSkill?: (slug: string, catalogScope?: 'market' | 'team') => Promise<{
@@ -122,6 +129,17 @@ export function startLearnHost(deps: StartLearnHostDeps): LearnController {
       // 停用轴准入(PR #744 review 第五轮):蒸馏会话是新的付费路由,继承的
       // model/provider 可能已被用户停用 —— 宽松降级(丢弃被停用的来源/模型,
       // 退回默认路由),不让 /learn 因停用整体失败。
+      // 插件引擎任务(docs/plans/acp-plugin-bridge.md)：蒸馏任务跑在同一个插件引擎与模型上，不改用内置引擎。
+      // 权限按同样的安全底线收敛：插件引擎没有「工作区内自动接受」这一档，用逐项确认(default)，
+      // 引擎不提供时取在它上面新建任务的默认档，「全部允许」永不自动给。
+      if (originMeta?.agentKind === 'acp') {
+        if (!deps.admitPluginEngine || !inheritedProviderId) throw new PluginEngineUnsupportedError('Learn');
+        const session = await createPluginEngineLearnSession({
+          maker: deps.maker, admitPluginEngine: deps.admitPluginEngine, setSessionProvider,
+        }, opts, originMeta, inheritedProviderId);
+        wireSessionToIpc(session);
+        return session;
+      }
       const agentKind = originMeta?.agentKind ?? 'claude-code';
       const newTaskDefault = await resolveNewTaskDefaultModelRoute(agentKind).catch(() => null);
       const desiredModel = originMeta?.model ?? newTaskDefault?.model;

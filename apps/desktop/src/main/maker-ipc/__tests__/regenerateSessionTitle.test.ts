@@ -28,7 +28,7 @@ vi.mock('../../maker-host/auxiliary-title-one-shot.js', () => ({
   generateTitleWithAuxiliaryModel: vi.fn(),
   generateTitleWithAuxiliaryModelResult: vi.fn(),
 }));
-vi.mock('../../i18n.js', () => ({
+vi.mock('../../i18n.desktop.js', () => ({
   getResolvedMainLocale: vi.fn(() => 'en'),
 }));
 // title.ts imports promptPrediction statically; this suite covers the
@@ -44,7 +44,7 @@ import {
 } from '../title.js';
 import { generateTitleWithAuxiliaryModel } from '../../maker-host/auxiliary-title-one-shot.js';
 import type { TitleOneShotResult } from '../../maker-host/title-one-shot.js';
-import { getResolvedMainLocale } from '../../i18n.js';
+import { getResolvedMainLocale } from '../../i18n.desktop.js';
 import type { RegenerateTitleMaterial } from '../../localDb/latestMessageText.js';
 
 beforeEach(() => {
@@ -98,6 +98,14 @@ describe('regenerateMakerSessionTitle', () => {
     expect(prompt.indexOf('User: 帮我排查登录失败')).toBeLessThan(
       prompt.indexOf('Assistant: 已定位到 token 过期问题'),
     );
+  });
+
+  // 插件引擎任务(2026-11-25)：此前读到 acp 即报「Session not found」。现在与其他任务一样重新起名，
+  // 只用辅助模型(agentKind null)，不把对话交给内置引擎。最小失败输入：readSessionAgentKind 返回 'plugin-engine'。
+  it('插件引擎任务只用辅助模型重新起名', async () => {
+    const deps = makeDeps({ readSessionAgentKind: vi.fn(async () => 'plugin-engine' as const) });
+    await expect(regenerateMakerSessionTitle('s1', deps)).resolves.toBe('登录失败排查');
+    expect((deps.generateTitle as ReturnType<typeof vi.fn>).mock.calls[0][1]).toBeNull();
   });
 
   it('长会话:开场消息早于最近窗口 → prompt 单独给出"对话开场"段', async () => {

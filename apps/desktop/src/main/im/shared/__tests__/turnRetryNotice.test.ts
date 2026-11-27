@@ -4,18 +4,59 @@
  * 断言的是判定边界: 只有过载类非终止 error 才出提示, 其它非终止 error 保持既有
  * 静默(它们的 message 是内部英文串, 外发等于把裸英文推给渠道用户)。
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { autoReviewUnavailablePromptLine, permissionPromptDescription } from '../autoReviewUnavailablePrompt';
+import { setMainLocale } from '../../../i18n.desktop';
 
 import {
   isQuotaExhaustionFailure,
+  openAiSubscriptionReconnectNotice,
   overloadFailureNotice,
   overloadRetryNotice,
-  QUOTA_FAILURE_NOTICE_PREFIX,
+  quotaFailureNoticePrefix,
   terminalErrorText,
   turnRetryNotice,
 } from '../turnRetryNotice';
 
+
+// 这些用例断言中文控制文案：显式切到 zh-CN，结束后复位为 en。
+beforeEach(() => setMainLocale('zh-CN'));
+afterEach(() => setMainLocale('en'));
+
+// #10854: the stable legacy reason includes non-budget failures, so IM must not
+// turn a first empty response plus failed dispatch into repeated empty responses.
+it.each([undefined, 'budget', 'rate-limit', 'session-breaker', 'dispatch-not-accepted', 'dispatch-error'])(
+  'uses neutral silent-stop IM copy for cause %s', silentStopFailureCause => {
+    expect(terminalErrorText({ reason: 'silent-stop-exhausted', silentStopFailureCause }))
+      .toBe('检测到空响应，自动续跑已暂停。');
+  },
+);
+
+// Telegram regression (unit): a provider rejection arrived as a serialized response body.
+it('explains unsupported audio input without hiding other unsupported parameters', () => {
+  const unsupported = 'Audio input is not supported for this request.';
+  const failure = (message: string, code: string | null = 'unsupported_parameter') => ({
+    message: JSON.stringify({
+      type: 'error',
+      error: { message, type: 'invalid_request_error', param: 'input', code },
+      status: 400,
+    }),
+  });
+  expect(terminalErrorText(failure(unsupported))).toContain('转成文字');
+  expect(terminalErrorText(failure('Audio input is not available.', null))).toContain('转成文字');
+  expect(terminalErrorText({ message: unsupported })).toContain('转成文字');
+  const other = failure('Audio output is not supported for this request.');
+  expect(terminalErrorText(other)).toBe(other.message);
+});
+
 describe('turnRetryNotice', () => {
+  // #10385, unit: both channel styles must expose recovery, never the provider's raw details.
+  it.each(['telegram', 'wechat'])('localizes missing review models for %s without widening permissions', (channel) => {
+    const text = turnRetryNotice({ message: '[AUTO_REVIEW_NO_AVAILABLE_MODEL] PRIVATE_EXCEPTION' }, { channel });
+    expect(text).toContain('模型供应商');
+    expect(text).toContain('辅助模型');
+    expect(text).not.toMatch(/PRIVATE_EXCEPTION|完全访问/);
+  });
   it('终态 429 外层重投 → 渠道侧限流进度', () => {
     expect(
       turnRetryNotice({
@@ -160,7 +201,7 @@ describe('overloadFailureNotice', () => {
 describe('terminalErrorText', () => {
   it('maps output-limit for user turns, scheduler relay and hook failures', () => {
     expect(terminalErrorText({ reason: 'output-limit', message: 'Pi reached the model output limit.' }))
-      .toBe('模型已达到输出长度上限，本轮回复可能不完整。可以直接发送下一条消息继续。');
+      .toBe('模型已达到输出长度上限，本轮回复可能不完整。可以发送新消息继续；若反复触发，请降低推理强度或先压缩对话记录。');
     expect(terminalErrorText({ reason: 'output-limit' })).toContain('回复可能不完整');
   });
 
@@ -173,6 +214,20 @@ describe('terminalErrorText', () => {
     });
     expect(text).toContain('模型服务繁忙');
     expect(text).toContain('在这里重发这条消息');
+  });
+
+  it('nested 529 presentation reason is localized across terminal paths without signaling a retry', () => {
+    // handleTurnErrorAsync, finalizeTranspond, and the official hook all consume this shared mapping.
+    const data = {
+      message: 'stream disconnected before completion',
+      reason: 'UPSTREAM_OVERLOADED',
+    };
+    const text = terminalErrorText(data);
+    expect(text).toContain('模型服务繁忙');
+    expect(text).toContain('在这里重发这条消息');
+    expect(text).not.toContain('stream disconnected before completion');
+    // The classification is presentation-only; it does not become an automatic retry signal.
+    expect(turnRetryNotice(data)).toBeNull();
   });
 
   it('只有状态码带 529 时也命中(errorStatus 不能在取文案时被丢掉)', () => {
@@ -301,7 +356,7 @@ describe('额度类终态错误', () => {
   it('花费上限: 定位 bot、任务、模型和供应商，只给当前任务的恢复动作', () => {
     const text = terminalErrorText({ message: SPEND_CAP }, { ...PERSONAL, providerLabel: 'OpenAI',
       botLabel: 'Telegram 个人 bot · 测试助手', modelLabel: 'GPT-6 Astra', taskLabel: '我的任务（12345678）' });
-    expect(text.startsWith(QUOTA_FAILURE_NOTICE_PREFIX)).toBe(true);
+    expect(text.startsWith(quotaFailureNoticePrefix())).toBe(true);
     expect(text).toContain('「OpenAI」已达到工作区所有者设置的花费上限');
     expect(text).toContain('Telegram 个人 bot · 测试助手');
     expect(text).toContain('GPT-6 Astra');
@@ -372,4 +427,102 @@ describe('额度类终态错误', () => {
       { ...PERSONAL, taskLabel: 'key sk-abcdefghijklmnop' });
     expect(text).not.toContain('sk-abcdefghijklmnop');
   });
+
+  // Plugin-engine usage limits must produce periodic usage-limit notices (not billing/balance) and never leak raw upstream text.
+  it('explains plugin-engine usage limits and overload in IM notices', () => {
+    const raw = 'Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 2h13m2s.';
+    const quotaText = terminalErrorText(
+      { reason: 'acp-usage-limit', message: raw },
+      { ...PERSONAL, providerLabel: 'Antigravity' },
+    );
+    expect(quotaText.startsWith(quotaFailureNoticePrefix())).toBe(true);
+    expect(quotaText).toContain('账号用量已达上限');
+    expect(quotaText).not.toContain('余额');
+    expect(quotaText).not.toContain('Individual quota reached');
+    expect(terminalErrorText({ message: raw }, { ...PERSONAL, providerLabel: 'Antigravity' })).toContain(
+      '账号用量已达上限',
+    );
+    expect(terminalErrorText({ message: 'HTTP 402: Usage limit reached' }, { ...PERSONAL, providerLabel: 'Custom' })).toContain(
+      '账号余额或配额不足',
+    );
+
+    const overloadText = terminalErrorText(
+      { reason: 'acp-overloaded', message: 'Upstream busy' },
+      { ...PERSONAL, providerLabel: 'Antigravity' },
+    );
+    expect(overloadText).toContain('繁忙');
+    expect(overloadText).not.toContain('Upstream busy');
+  });
+});
+
+describe('output-limit usage guidance', () => {
+  it('explains reasoning exhaustion and gives recovery actions', () => {
+    const text = terminalErrorText({ reason: 'output-limit', outputLimit: { outputTokens: 131072, reasoningTokens: 131064 } });
+    expect(text).toContain('131064');
+    expect(text).toContain('131072');
+    expect(text).toContain('降低推理强度');
+    expect(text).toContain('先压缩');
+    expect(text).not.toContain('可以发送新消息继续');
+  });
+  it('keeps ordinary output limits distinct and supports legacy payloads', () => {
+    const text = terminalErrorText({ reason: 'output-limit', outputLimit: { outputTokens: 131072, reasoningTokens: 1000 } });
+    expect(text).toContain('1000');
+    expect(text).toContain('可以发送新消息继续');
+    expect(terminalErrorText({ reason: 'output-limit' })).not.toContain('tokens');
+  });
+});
+
+describe('控制文案跟随界面语言', () => {
+  beforeEach(() => setMainLocale('en'));
+
+  it('English UI yields English retry progress with interpolated counts', () => {
+    expect(
+      overloadRetryNotice({ message: 'Selected model is at capacity. (auto-retry 2/4)' }),
+    ).toBe('The model service is busy. Retrying automatically (2/4)…');
+    expect(overloadRetryNotice({ message: 'Selected model is at capacity.' }))
+      .toBe('The model service is busy. Retrying automatically…');
+  });
+
+  it('English quota failure keeps provider, bot and recovery hint in English', () => {
+    const text = terminalErrorText(
+      { message: 'You hit your spend cap set by the owner of your workspace.' },
+      { surface: 'official', providerLabel: 'OpenAI', taskLabel: 'Fix login (12345678)' },
+    );
+    expect(text.split('\n')).toEqual([
+      '⚠️ Provider limit reached: “OpenAI” has reached the spending cap set by the workspace owner, so this task can\'t continue for now.',
+      'Source: official bot',
+      'Task: Fix login (12345678)',
+      'Ask a workspace admin to adjust the spending cap, or switch to another provider.',
+      'Open this task in Cindy, switch the provider or model, then come back and resend this message.',
+    ]);
+    expect(text.startsWith(quotaFailureNoticePrefix())).toBe(true);
+  });
+
+  it('switching language takes effect on the next message', () => {
+    const data = { message: 'Selected model is at capacity. (auto-retry 1/3)' };
+    expect(overloadRetryNotice(data)).toBe('The model service is busy. Retrying automatically (1/3)…');
+    setMainLocale('ja');
+    expect(overloadRetryNotice(data)).toBe('モデルサービスが混雑しています。自動で再試行しています（1/3）…');
+  });
+});
+
+// #8706 unit: IM notice and confirmation are separate real consumers. Neither may leak
+// English/provider text or replace the cause with generic Full access guidance.
+it.each(['telegram', 'wechat'])('explains review quota to %s and strips the fallback once', channel => {
+  const text = turnRetryNotice({ message: '[AUTO_REVIEW_UNAVAILABLE_QUOTA] PRIVATE_BODY' }, { channel });
+  expect(text).toContain('配额已耗尽');
+  expect(text).not.toMatch(/PRIVATE_BODY|完全访问/);
+  const request = { kind: 'permission' as const, requestId: 'quota', toolName: 'Bash', input: {},
+    description: 'Source\nAutomatic review could not finish, so this action needs your confirmation.',
+    metadata: { autoReviewUnavailable: true, autoReviewUnavailableReason: 'quota_exhausted' } };
+  expect(autoReviewUnavailablePromptLine(request)).toBe(text);
+  expect(permissionPromptDescription(request)).toBe('Source');
+});
+
+it('keeps unrelated providers, status codes and generic 401s out of subscription recovery', () => {
+  const data = { errorStatus: 401, message: 'unauthorized_unknown' };
+  expect(openAiSubscriptionReconnectNotice(data, 'openai')).toContain('ChatGPT');
+  expect(openAiSubscriptionReconnectNotice(data, 'custom-openai')).toBeNull();
+  expect(openAiSubscriptionReconnectNotice({ ...data, errorStatus: 403 }, 'openai')).toBeNull();
+  expect(openAiSubscriptionReconnectNotice({ ...data, message: 'invalid API key' }, 'openai')).toBeNull();
 });

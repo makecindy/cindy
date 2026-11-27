@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '@/i18n';
 import i18n from '@/i18n';
 import { PermissionPrompt } from '@/components/new-chat/PermissionPrompt';
+import { McpAppPermissionPrompt } from '@/components/chat/McpAppPermissionPrompt';
+import { makerChatStore } from '@/lib/makerChatStore';
 
 beforeEach(async () => {
   await i18n.changeLanguage('zh-CN');
@@ -107,6 +109,20 @@ describe('PermissionPrompt i18n', () => {
     expect(screen.getByText('add_repo_collaborator {"username":"octo"}')).toBeTruthy();
   });
 
+  // The shared MCP classifier used to overwrite this Host-owned title with “plugin”.
+  // Real permission card, unit tier: preserve the title, exact operation and allow-once response.
+  it('preserves the Host title and operation for an internal MCP confirmation', () => {
+    const onRespond = vi.fn();
+    render(<PermissionPrompt permission={{ requestId: 'mcp-permission',
+      toolName: 'mcp__cindy_scheduler__schedule_delete', title: '确认任务操作',
+      input: { id: 'completed-followup' } }} onRespond={onRespond} />);
+    expect(screen.getByText('确认任务操作')).toBeTruthy();
+    expect(screen.getByText('schedule_delete {"id":"completed-followup"}')).toBeTruthy();
+    expect(screen.queryByText(/允许使用插件/)).toBeNull();
+    fireEvent.click(screen.getByText('允许一次'));
+    expect(onRespond).toHaveBeenCalledExactlyOnceWith({ behavior: 'allow' });
+  });
+
   it('keeps the session boundary explicit in the English approval label', async () => {
     await i18n.changeLanguage('en');
 
@@ -145,4 +161,27 @@ describe('PermissionPrompt i18n', () => {
     expect(screen.getByText(/来源：Telegram · 开发群/)).toBeTruthy();
     expect(screen.queryByText('Automatic review could not finish, so this action needs your confirmation.')).toBeNull();
   });
+  // #8706 unit: the real confirmation card must choose safe localized quota guidance.
+  it('explains quota exhaustion on the confirmation card', () => {
+    render(<PermissionPrompt permission={{ requestId: 'quota', toolName: 'exec', input: { command: 'npm run build' },
+      autoReviewUnavailable: true, autoReviewQuotaExhausted: true }} onRespond={vi.fn()} />);
+    expect(screen.getByText(/自动审批模型的配额已耗尽/)).toBeTruthy();
+    expect(screen.queryByText(/完全访问/)).toBeNull();
+  });
+
+  // #8706 unit: MCP App has its own rendering surface, separate from the main card.
+  it.each([undefined, 'PRIVATE_UPSTREAM_BODY'])('localizes quota exhaustion in MCP App approval details (reason=%s)', autoReviewReason => {
+    const snapshot = { ...makerChatStore.getSnapshot('quota-app'), pendingAppPermissions: [{
+      requestId: 'quota-app', toolName: 'read', input: {}, autoReviewUnavailable: true,
+      autoReviewQuotaExhausted: true, autoReviewReason,
+      mcpApp: { clientId: 'card', serverId: 'fixture', title: 'Fixture', scope: 'once' as const },
+    }] };
+    const getSnapshot = vi.spyOn(makerChatStore, 'getSnapshot').mockReturnValue(snapshot);
+    try {
+      render(<McpAppPermissionPrompt sessionId="quota-app" />);
+      expect(screen.getByText(/自动审批模型的配额已耗尽/)).toBeTruthy();
+      expect(screen.queryByText(/PRIVATE_UPSTREAM_BODY|完全访问/)).toBeNull();
+    } finally { getSnapshot.mockRestore(); }
+  });
+
 });

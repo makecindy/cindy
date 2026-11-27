@@ -18,9 +18,10 @@ import {
   LoginTitleBlock,
 } from '../../../src/renderer/components/login/LoginControls';
 import { mountPage } from '../../ui-page/harness';
+import i18n from '../../../src/renderer/i18n';
 
 const noop = () => {};
-const statement = '我已阅读并同意 <terms>服务条款</terms> 和 <privacy>隐私政策</privacy>';
+const t = (key: string, options?: Record<string, string>) => i18n.t(key, options);
 
 /** 登录组(680 设计 px)按 0.5 缩放放进画布底,与 LoginStage 的缩放方式一致。 */
 function Stage({ children, height = 700 }: { children: ReactNode; height?: number }) {
@@ -54,10 +55,10 @@ void mountPage({
       return (
         <Stage>
           <LoginPanel>
-            <LoginTitleBlock title="登录 Cindy" subtitle="输入邮箱，我们会给你发送验证码" />
-            <LoginInput value="name@example.com" onChange={noop} placeholder="输入邮箱" testId="fixture-input" />
-            <LoginPrimaryButton onClick={noop} testId="fixture-primary">继续</LoginPrimaryButton>
-            <LoginSkipEntry onClick={noop}>跳过登录</LoginSkipEntry>
+            <LoginTitleBlock title={t('login.title')} subtitle={t('login.personalDesc')} />
+            <LoginInput value="name@example.com" onChange={noop} placeholder={t('login.emailPlaceholder')} testId="fixture-input" />
+            <LoginPrimaryButton onClick={noop} testId="fixture-primary">{t('login.continue')}</LoginPrimaryButton>
+            <LoginSkipEntry onClick={noop}>{t('login.localModeEntry')}</LoginSkipEntry>
           </LoginPanel>
           <LoginSocialRow count={3}>
             <LoginSocialButton label="Apple" variant="apple" onClick={noop} testId="fixture-apple">
@@ -70,7 +71,7 @@ void mountPage({
               <SsoGlyph />
             </LoginSocialButton>
           </LoginSocialRow>
-          <LoginConsentRow checked onToggle={noop} statement={statement} onOpenTerms={noop} onOpenPrivacy={noop} />
+          <LoginConsentRow checked onToggle={noop} statement={t('login.consentStatement')} onOpenTerms={noop} onOpenPrivacy={noop} />
         </Stage>
       );
     }
@@ -78,12 +79,12 @@ void mountPage({
       return (
         <Stage height={520}>
           <LoginPanel>
-            <LoginBackButton label="返回" onClick={noop} />
-            <LoginTitleBlock title="输入验证码" subtitle="验证码已发送至 name@example.com" />
-            <LoginInput value="" onChange={noop} placeholder="6 位验证码" testId="fixture-input" />
-            <LoginTextLink onClick={noop} testId="fixture-link">重新发送验证码</LoginTextLink>
-            <LoginPrimaryButton disabled onClick={noop}>登录</LoginPrimaryButton>
-            <LoginErrorText>验证码错误，请重新输入</LoginErrorText>
+            <LoginBackButton label={t('login.back')} onClick={noop} />
+            <LoginTitleBlock title={t('login.enterCode')} subtitle={t('login.codeSentTo', { identifier: 'name@example.com' })} />
+            <LoginInput value="" onChange={noop} placeholder={t('login.codePlaceholder')} testId="fixture-input" />
+            <LoginTextLink onClick={noop} testId="fixture-link">{t('login.resendCode')}</LoginTextLink>
+            <LoginPrimaryButton disabled onClick={noop}>{t('login.signIn')}</LoginPrimaryButton>
+            <LoginErrorText>{t('login.errors.INVALID_CODE')}</LoginErrorText>
           </LoginPanel>
         </Stage>
       );
@@ -92,10 +93,10 @@ void mountPage({
       return (
         <Stage height={520}>
           <LoginPanel>
-            <LoginBackButton label="返回" onClick={noop} />
-            <LoginTitleBlock title="选择登录方式" subtitle="选择你习惯的方式继续" />
-            <LoginMethodRow top={158} icon="person" title="个人账号" subtitle="使用邮箱或手机号登录" onClick={noop} testId="fixture-row" />
-            <LoginMethodRow top={278} title="企业 SSO" subtitle="通过公司账号登录" onClick={noop} />
+            <LoginBackButton label={t('login.back')} onClick={noop} />
+            <LoginTitleBlock title={t('login.chooseMethod')} subtitle={t('login.subtitle')} />
+            <LoginMethodRow top={158} icon="person" title={t('login.personalLogin')} subtitle={t('login.personalDesc')} onClick={noop} testId="fixture-row" />
+            <LoginMethodRow top={278} title={t('login.ssoOrgTitle')} subtitle={t('login.enterpriseLogin')} onClick={noop} />
           </LoginPanel>
         </Stage>
       );
@@ -104,9 +105,9 @@ void mountPage({
       return (
         <Stage height={520}>
           <LoginPanel>
-            <LoginTitleBlock title="企业 SSO" subtitle="输入组织标识" />
-            <LoginInput value="example" onChange={noop} placeholder="组织标识" />
-            <LoginPrimaryButton loading onClick={noop}>继续</LoginPrimaryButton>
+            <LoginTitleBlock title={t('login.ssoOrgTitle')} subtitle={t('login.ssoOrgSubtitle')} />
+            <LoginInput value="example" onChange={noop} placeholder={t('login.ssoOrgPlaceholder')} />
+            <LoginPrimaryButton loading onClick={noop}>{t('login.continue')}</LoginPrimaryButton>
           </LoginPanel>
           <LoginSsoOrgHistoryList
             entries={['example-studio', 'example-lab']}
@@ -123,18 +124,18 @@ void mountPage({
       return (
         <Stage height={520}>
           <LoginPanel>
-            <LoginTitleBlock title="正在打开浏览器" subtitle="请在浏览器里完成登录" />
-            <LoginLoadingRing y={158} label="加载中" />
+            <LoginTitleBlock title={t('login.browserWaiting')} subtitle={t('login.browserWaiting')} />
+            <LoginLoadingRing y={158} label={t('login.working')} />
           </LoginPanel>
         </Stage>
       );
     }
     return (
       <LoginConsentDialog
-        title="服务条款与隐私政策"
-        body="继续使用前，请阅读并同意 <terms>服务条款</terms> 和 <privacy>隐私政策</privacy>。"
-        agreeLabel="同意"
-        disagreeLabel="不同意"
+        title={t('login.consentDialog.title')}
+        body={t('login.consentDialog.body')}
+        agreeLabel={t('login.consentDialog.agree')}
+        disagreeLabel={t('login.consentDialog.disagree')}
         onAgree={noop}
         onDisagree={noop}
         onOpenTerms={noop}

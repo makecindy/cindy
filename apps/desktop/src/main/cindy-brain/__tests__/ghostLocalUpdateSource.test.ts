@@ -34,7 +34,7 @@ function input(): GhostLocalUpdateSourceInput {
 }
 
 describe('local update provenance independent of legacy privileges', () => {
-  it('only feeds the install gate a legacy override after proving package continuity', () => {
+  it('does not grant enterprise credentials from a legacy root qualification alone', () => {
     for (const packageSha256 of [OLD_SHA, NEW_SHA]) {
       const facts = input();
       facts.inspectedPackage.packageSha256 = packageSha256;
@@ -44,8 +44,8 @@ describe('local update provenance independent of legacy privileges', () => {
         currentOrganization: null, installOrigin: 'manual',
         legacyFirstPartyEligible: decision.legacyFirstPartyEligible,
       });
-      expect(privilege.brokerEligible).toBe(packageSha256 === OLD_SHA);
-      expect(privilege.hostPrimitiveEligible).toBe(packageSha256 === OLD_SHA);
+      expect(privilege.brokerEligible).toBe(false);
+      expect(privilege.hostPrimitiveEligible).toBe(false);
     }
   });
 
@@ -155,4 +155,17 @@ describe('local update provenance independent of legacy privileges', () => {
       sourceChanged: false, legacyFirstPartyEligible: false,
     });
   });
+});
+
+
+it.each(['manual', 'agent-forge'] as const)('keeps credentials when a local copy changes between file and Forge (%s)', (origin) => {
+  const facts = input();
+  facts.previousApprovedReceipt = { ...facts.previousApprovedReceipt!, namespace: 'local', trust: UNSIGNED,
+    legacyFirstPartyEligible: false, installOrigin: origin };
+  facts.inspectedPackage.namespace = 'local';
+  facts.nextInstallOrigin = origin === 'manual' ? 'agent-forge' : 'manual';
+  expect(classifyGhostLocalUpdateSource(facts).sourceChanged).toBe(false);
+  facts.previousApprovedReceipt.namespace = null;
+  facts.inspectedPackage.namespace = null;
+  expect(classifyGhostLocalUpdateSource(facts).sourceChanged).toBe(true);
 });

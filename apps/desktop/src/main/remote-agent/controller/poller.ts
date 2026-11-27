@@ -11,6 +11,8 @@
  */
 import {
   REMOTE_AGENT_MAX_POLL_RUNS,
+  REMOTE_AGENT_POLL_MAX_BYTES,
+  REMOTE_AGENT_POLL_MIN_BYTES,
   REMOTE_AGENT_READ_WAIT_MS,
   parseRemoteAgentPollResult,
   type RemoteAgentErrorInfo,
@@ -18,10 +20,12 @@ import {
 } from '@cindy/device-link';
 
 /** 经设备互联调用对方；失败时抛出带 `code` 的错误(与 remoteBackgroundInvoke 一致)。 */
-export type RemoteAgentInvoke = (args: unknown[]) => Promise<unknown>;
+export type RemoteAgentInvoke = (args: unknown[], options?: { beforeDispatch?: () => void }) => Promise<unknown>;
 
 /** 对方不可达时持续重拉的最长时间。 */
 export const REMOTE_AGENT_READ_GIVE_UP_MS = 2 * 60_000;
+/** 对方仍在持续回传其它业务帧(慢网大回包堵住 poll)时,重拉的最长总上限。 */
+export const REMOTE_AGENT_CONGESTED_GIVE_UP_MS = 5 * 60_000;
 const RETRY_BASE_MS = 500;
 const RETRY_MAX_MS = 5_000;
 /** 同时在途的 poll 上限：一个长等待 + 一个覆盖新任务的。 */
@@ -34,6 +38,19 @@ const FRESH_RUN_WAIT_MS = 1_000;
 const EMPTY_FAST_STREAK = 3;
 const EMPTY_FAST_MS = 50;
 const EMPTY_FAST_DELAY_MS = 1_000;
+/**
+ * 一次 poll 的回包按实测的回程速度要这么久能传完（poll 的 `maxBytes`）：请求时限 30 秒，扣掉对方最长 10 秒的挂起
+ * 和往返还有余量。不按速度要的话，慢线路上一次 1.5MB 的回包传不完，超时后按同一游标重拉同样大小，一直卡住，
+ * 2 分钟后任务被结束（2026-11-19 按代码推出，日志里还没见到）。
+ */
+const POLL_TARGET_TRANSFER_MS = 10_000;
+
+/** 超时这一类失败：回包可能是太大、传不完。 */
+function isTimeoutError(error: unknown): boolean {
+  const code = (error as { code?: unknown })?.code;
+  if (code === 'INVOKE_TIMEOUT' || code === 'TIMEOUT') return true;
+  return /TIMEOUT|timed out/i.test(error instanceof Error ? error.message : String(error));
+}
 
 export interface PolledRun {
   readonly runId: string;
@@ -43,6 +60,8 @@ export interface PolledRun {
   onLost(reason: string, error: RemoteAgentErrorInfo): void;
   /** 本机还有这个任务的工作在进行、对方看不到(拉取时报 hold，对方不按闲置收回)。 */
   holdsRemote?(): boolean;
+  /** Revalidate a direct-share grant through its owner, only during an existing outage. */
+  recoverAuthorization?(): Promise<void>;
 }
 
 interface Entry {
@@ -50,12 +69,17 @@ interface Entry {
   cursor: number;
 }
 
-/** 可恢复的链路错误：重拉即可。 */
+/**
+ * 可恢复的链路错误：重拉即可。
+ * DEVICE_UNRESPONSIVE 是本机熔断器在连续超时后的快速失败，不碰网络；熔断自己探测恢复，
+ * 这里照常退避重拉，由 REMOTE_AGENT_READ_GIVE_UP_MS 兜底，避免一次抖动直接结束远程任务。
+ */
 export function isRetryableLinkError(error: unknown): boolean {
   const code = (error as { code?: unknown })?.code;
   const message = error instanceof Error ? error.message : String(error);
   if (typeof code === 'string' && [
     'PEER_RESET', 'TIMEOUT', 'INVOKE_TIMEOUT', 'BACKPRESSURE', 'DEVICE_OFFLINE', 'LINK_CLOSED', 'LINK_NOT_OPEN', 'NOT_CONNECTED',
+    'DEVICE_UNRESPONSIVE',
   ].includes(code)) {
     return true;
   }
@@ -72,16 +96,26 @@ export function remoteAgentErrorFrom(error: unknown, fallbackCode = 'REMOTE_AGEN
   };
 }
 
+/** The executor no longer holds this task's in-memory delegation grant. */
+export function isSharedTaskAuthorizationDenied(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /\[REMOTE_AGENT_INVALID\] this shared task is not authorized on this computer/i.test(message);
+}
+
 export class RemoteAgentPoller {
   private readonly entries = new Map<string, Entry>();
   private inflight = 0;
   /** 有任务还没被任何在途 poll 覆盖。 */
   private needFresh = false;
   private unreachableSince: number | null = null;
+  private congestedSince: number | null = null;
   private attempt = 0;
+  private readonly recoveringAuthorization = new WeakSet<PolledRun>();
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private rotation = 0;
   private emptyFastStreak = 0;
+  /** 下一次 poll 要的最多字节（`maxBytes`），见 POLL_TARGET_TRANSFER_MS。 */
+  private pollBytes = REMOTE_AGENT_POLL_MAX_BYTES;
   /** 在途的 poll 各自覆盖哪些任务(判断有没有任务没人在拉)。 */
   private readonly inflightCoverage = new Set<ReadonlySet<string>>();
 
@@ -89,6 +123,7 @@ export class RemoteAgentPoller {
     readonly invoke: RemoteAgentInvoke,
     private readonly log?: { warn(message: string, meta?: Record<string, unknown>): void },
     private readonly now: () => number = Date.now,
+    private readonly isPeerDelivering?: () => boolean,
   ) {}
 
   /** 开始拉取一个任务(游标从 0 开始)。 */
@@ -101,6 +136,13 @@ export class RemoteAgentPoller {
 
   unregister(runId: string): void {
     this.entries.delete(runId);
+    if (this.entries.size === 0) {
+      if (this.retryTimer) clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+      this.unreachableSince = null;
+      this.congestedSince = null;
+      this.attempt = 0;
+    }
   }
 
   get size(): number {
@@ -153,9 +195,10 @@ export class RemoteAgentPoller {
     let raw: unknown;
     let failure: unknown = null;
     try {
-      raw = await this.invoke([{ op: 'poll', runs: wanted, waitMs }]);
+      raw = await this.invoke([{ op: 'poll', runs: wanted, waitMs, maxBytes: this.pollBytes }]);
     } catch (error) {
       failure = error;
+      if (isTimeoutError(error)) this.pollBytes = Math.max(REMOTE_AGENT_POLL_MIN_BYTES, Math.floor(this.pollBytes / 2));
     } finally {
       this.inflight -= 1;
       this.inflightCoverage.delete(coverage);
@@ -171,12 +214,14 @@ export class RemoteAgentPoller {
       }
     }
     if (result) {
+      this.measureDelivery(result, this.now() - startedAt);
       if (this.retryTimer && this.attempt > 0) {
         // 另一个在途的 poll 成功了：链路已恢复，不必等退避。
         clearTimeout(this.retryTimer);
         this.retryTimer = null;
       }
       this.unreachableSince = null;
+      this.congestedSince = null;
       this.attempt = 0;
       const delivered = this.apply(wanted, result);
       if (!delivered && this.now() - startedAt < EMPTY_FAST_MS) this.emptyFastStreak += 1;
@@ -190,6 +235,18 @@ export class RemoteAgentPoller {
       return;
     }
     this.handleFailure(wanted, failure);
+  }
+
+  /**
+   * 按这次回包的大小和用时估回程速度，定下一次要多少（POLL_TARGET_TRANSFER_MS 内传得完）。回包太小时不估：
+   * 那多半是对方挂起等到的零星事件，用时里大半是等待。
+   */
+  private measureDelivery(result: RemoteAgentPollResult, elapsedMs: number): void {
+    let bytes = 0;
+    for (const item of result.runs) if (typeof item.data === 'string') bytes += Buffer.byteLength(item.data, 'base64');
+    if (bytes < REMOTE_AGENT_POLL_MIN_BYTES || elapsedMs <= 0) return;
+    const target = Math.floor(bytes / elapsedMs * POLL_TARGET_TRANSFER_MS);
+    this.pollBytes = Math.min(REMOTE_AGENT_POLL_MAX_BYTES, Math.max(REMOTE_AGENT_POLL_MIN_BYTES, target));
   }
 
   private ensureAfterReturn(): void {
@@ -256,7 +313,25 @@ export class RemoteAgentPoller {
   }
 
   private handleFailure(wanted: ReadonlyArray<{ runId: string; cursor: number }>, error: unknown): void {
-    if (!isRetryableLinkError(error)) {
+    if (!wanted.some(({ runId }) => this.entries.has(runId))) {
+      this.ensureAfterReturn();
+      return;
+    }
+    // An unconfirmed share list can be the first sign of a temporary outage.
+    // Unlike an explicit denial, UNAVAILABLE alone may start the existing read grace.
+    // A restarting executor's ACCESS_REVOKED still needs an established outage;
+    // never bypass the owner or reset the original deadline.
+    // remoteAgentInvoker may prefix a rejection with UNAVAILABLE while preserving
+    // the authoritative transport code on the Error, so check both.
+    const shareRefusal = (code: unknown) => code === 'ACCESS_REVOKED' || code === 'REMOTE_AGENT_SHARE_UNAVAILABLE';
+    const code = (error as { code?: unknown })?.code;
+    const reportedCode = remoteAgentErrorFrom(error).code;
+    const ownerRefused = code === 'REMOTE_DISABLED'
+      || /\[REMOTE_AGENT_PROVIDER_NOT_ALLOWED\]/.test(error instanceof Error ? error.message : String(error));
+    const shareRefused = shareRefusal(reportedCode) || shareRefusal(code);
+    const temporaryShareUnavailable = (reportedCode === 'REMOTE_AGENT_SHARE_UNAVAILABLE' || code === 'REMOTE_AGENT_SHARE_UNAVAILABLE')
+      && (code === undefined || code === 'IPC_ERROR' || code === 'REMOTE_AGENT_SHARE_UNAVAILABLE');
+    if (ownerRefused || (shareRefused ? this.unreachableSince === null && !temporaryShareUnavailable : !isRetryableLinkError(error))) {
       // 对方拒绝整个 poll(远程控制已关、版本不支持等)：涉及的任务都无法继续。
       const info = remoteAgentErrorFrom(error);
       for (const { runId } of wanted) {
@@ -266,17 +341,39 @@ export class RemoteAgentPoller {
       this.ensureAfterReturn();
       return;
     }
-    this.unreachableSince ??= this.now();
-    if (this.now() - this.unreachableSince > REMOTE_AGENT_READ_GIVE_UP_MS) {
+    const now = this.now();
+    this.congestedSince ??= now;
+    if (!shareRefused && this.isPeerDelivering?.() === true) {
+      this.unreachableSince = now;
+    } else {
+      this.unreachableSince ??= now;
+    }
+    if (
+      now - this.unreachableSince > REMOTE_AGENT_READ_GIVE_UP_MS
+      || now - this.congestedSince > REMOTE_AGENT_CONGESTED_GIVE_UP_MS
+    ) {
       this.unreachableSince = null;
+      this.congestedSince = null;
       this.attempt = 0;
+      // The outage deadline does not prove the peer is offline. Keep the final
+      // timeout/backpressure/breaker cause for both live and persisted errors.
+      const info = remoteAgentErrorFrom(error);
       for (const entry of [...this.entries.values()]) {
-        this.lose(entry, 'unreachable', {
-          code: 'REMOTE_AGENT_UNAVAILABLE',
-          message: '[REMOTE_AGENT_UNAVAILABLE] The computer running this agent is unreachable.',
-        });
+        this.lose(entry, 'unreachable', info);
       }
       return;
+    }
+    if (shareRefused) {
+      for (const { runId } of wanted) {
+        const run = this.entries.get(runId)?.run;
+        if (!run?.recoverAuthorization || this.recoveringAuthorization.has(run)) continue;
+        this.recoveringAuthorization.add(run);
+        // Do not await authorization: the poll deadline and per-task lease expiry
+        // must still fire if O or M never answers. A grant alone is not poll success.
+        void Promise.resolve().then(() => {
+          if (this.entries.get(runId)?.run === run) return run.recoverAuthorization!();
+        }).catch(() => undefined).finally(() => this.recoveringAuthorization.delete(run));
+      }
     }
     this.attempt += 1;
     this.retryLater(Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** Math.min(this.attempt, 4)));

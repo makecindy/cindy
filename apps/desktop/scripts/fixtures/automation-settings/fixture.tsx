@@ -2,7 +2,17 @@ import { ComputerUseSection } from '../../../src/renderer/components/settings/Co
 import { mountPage, subscription } from '../../ui-page/harness';
 
 void mountPage({
+  // The section links to the plugin page, so it renders inside the app router.
+  route: '/settings',
   host: (ctx) => ({
+    ...(ctx.case === 'mac-control-permission' && {
+      platform: 'darwin',
+      osRelease: '27.3.0',
+      openExternal: async (url: string) => {
+        document.documentElement.dataset.openedSettings = url;
+        return { success: true };
+      },
+    }),
     maker: {
       plugins: {
         getState: async (id: string) => {
@@ -17,12 +27,57 @@ void mountPage({
         },
       },
       computer: {
-        status: async () => ({
-          installed: false,
-          executablePath: null,
-          version: null,
-          daemonRunning: false,
-        }),
+        status: async () => {
+          // driver-rate-limited 需要一个已安装的 macOS driver:更新行只在装上后渲染。
+          if (ctx.case === 'driver-rate-limited' || ctx.case === 'mac-control-permission') {
+            const control = ctx.case === 'mac-control-permission' ? 'missing' : 'granted';
+            return {
+              installed: true,
+              executablePath: '/Applications/CuaDriver.app',
+              version: '0.28.2',
+              daemonRunning: true,
+              installCommand: 'noop',
+              docsUrl: 'https://example.invalid/docs',
+              permissionState: {
+                platform: 'macos',
+                required: true,
+                canGrant: true,
+                status: control,
+                accessibility: control,
+                screenRecording: 'granted',
+                screenRecordingCapturable: 'granted',
+              },
+            };
+          }
+          return {
+            installed: false,
+            executablePath: null,
+            version: null,
+            daemonRunning: false,
+          };
+        },
+        grantPermissions: async () => ({ ok: false, status: await window.electronAPI.maker.computer.status() }),
+        // issue #8916:GitHub 匿名限额打满时 main 下发 checkError,面板要说「限流」而不是「检查失败」。
+        checkUpdate: async () =>
+          ctx.case === 'driver-rate-limited'
+            ? {
+                currentVersion: '0.28.2',
+                latestVersion: null,
+                updateAvailable: false,
+                updating: false,
+                checkStatus: 'error',
+                checkError: { kind: 'rate_limited' },
+                checkedAt: Date.now(),
+              }
+            : {
+                currentVersion: null,
+                latestVersion: null,
+                updateAvailable: false,
+                updating: false,
+              },
+        updateDriver: async () => {
+          throw new Error('updateDriver is not wired in the automation-settings fixture');
+        },
         onPermissionGuideStatusChanged: subscription('permissionStatus'),
         onPermissionGuideCancelled: subscription('permissionCancelled'),
         onUpdateProgress: subscription('updateProgress'),
@@ -36,9 +91,20 @@ void mountPage({
     browserBackend: {
       getState: async () => {
         if (ctx.case === 'error') throw new Error('Configuration unavailable');
-        return { active: 'external', useRealProfile: false };
+        return (ctx.case.startsWith('my-browser') || ['browser-updating', 'browser-selection'].includes(ctx.case))
+          ? { active: 'user-browser', useRealProfile: true }
+          : { active: 'external', useRealProfile: false };
       },
-      getHealth: async () => ({ active: 'external', status: 'ready', canRecover: false }),
+      getHealth: async () => ({
+        active: (ctx.case.startsWith('my-browser') || ['browser-updating', 'browser-selection'].includes(ctx.case)) ? 'user-browser' : 'external',
+        status: ctx.case.startsWith('browser-') || ['my-browser-disconnected', 'my-browser-probe-failed', 'my-browser-no-chrome'].includes(ctx.case) ? 'error' : 'ready',
+        ...(ctx.case === 'my-browser-disconnected' ? { reason: 'extension-disconnected' } : {}),
+        ...(ctx.case === 'my-browser-no-chrome' ? { reason: 'browser-missing' } : {}),
+        ...(ctx.case === 'my-browser-probe-failed' ? { reason: 'status-failed' } : {}),
+        ...(ctx.case === 'browser-updating' ? { reason: 'plugin-updating' } : {}),
+        ...(ctx.case === 'browser-selection' ? { reason: 'plugin-selection-required' } : {}),
+        canRecover: false,
+      }),
     },
   }),
   render: () => (

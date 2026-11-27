@@ -67,12 +67,20 @@ describe('useAvailableAgents roster cache', () => {
     delete (window as unknown as { electronAPI?: unknown }).electronAPI;
   });
 
-  it('revokes a loaded roster during refresh and keeps it unknown on failure', async () => {
+  // PR #8950: distinguish an initial failure from a pending lookup so a creation
+  // consumer can fail open. Existing coverage started with a successful roster.
+  it('finishes failed lookups without treating the unknown roster as authoritative', async () => {
     const pending = deferred<RuntimeAgentKind[]>();
     const { api, listeners } = installMakerApi();
-    api.listAvailableAgents.mockResolvedValue(['pi', 'codex']);
+    api.listAvailableAgents.mockRejectedValueOnce(new Error('initial roster unavailable'))
+      .mockResolvedValue(['pi', 'codex']);
     const { useAvailableAgents, getCachedAvailableVendors } = await import('../useAvailableAgents');
     const first = renderHook(() => useAvailableAgents());
+    expect(first.result.current.loading).toBe(true);
+    await waitFor(() => expect(first.result.current.loading).toBe(false));
+    expect(first.result.current.loaded).toBe(false);
+    expect(getCachedAvailableVendors()).toBeNull();
+    act(() => { window.dispatchEvent(new Event('focus')); });
     await waitFor(() => expect(first.result.current.loaded).toBe(true));
     const second = renderHook(() => useAvailableAgents());
     await act(async () => {});
@@ -80,6 +88,7 @@ describe('useAvailableAgents roster cache', () => {
     act(() => { for (const listener of listeners) listener(); });
     for (const consumer of [first, second]) {
       expect(consumer.result.current.loaded).toBe(false);
+      expect(consumer.result.current.loading).toBe(true);
       expect(consumer.result.current.availableVendors.size).toBe(0);
     }
     expect(getCachedAvailableVendors()).toBeNull();
@@ -91,8 +100,10 @@ describe('useAvailableAgents roster cache', () => {
     api.listAvailableAgents.mockRejectedValueOnce(new Error('roster unavailable'));
     await act(async () => { for (const listener of listeners) listener(); });
     expect(first.result.current.loaded).toBe(false);
+    expect(first.result.current.loading).toBe(false);
     expect(first.result.current.availableVendors.size).toBe(0);
     expect(second.result.current.loaded).toBe(false);
+    expect(second.result.current.loading).toBe(false);
     expect(getCachedAvailableVendors()).toBeNull();
     first.unmount();
     second.unmount();
@@ -118,6 +129,7 @@ describe('useAvailableAgents roster cache', () => {
       await first.promise;
     });
     expect(result.current.availableVendors.has('pi')).toBe(false);
+    expect(result.current.loading).toBe(true);
     unmount();
     const remounted = renderHook(() => useAvailableAgents());
     expect(remounted.result.current.loaded).toBe(false);

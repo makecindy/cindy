@@ -62,12 +62,13 @@ describe('notifyAgentIslandSessionPatch', () => {
   });
 
   it('still forwards metadata patches', async () => {
-    await notify({ title: 'Renamed' });
+    await notify({ title: 'Renamed', projectDir: null });
 
     expect(h.handleSessionClosed).not.toHaveBeenCalled();
     expect(h.handleSessionMetadataPatch).toHaveBeenCalledWith('session-1', {
       title: 'Renamed',
       workingDir: undefined,
+      projectDir: null,
       workspaceKind: undefined,
     });
   });

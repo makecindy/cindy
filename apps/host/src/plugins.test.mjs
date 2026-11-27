@@ -1,0 +1,691 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
+import { build } from 'esbuild';
+import { PassThrough } from 'node:stream';
+import { serialize } from 'node:v8';
+import { createServer } from 'node:http';
+import { WebSocketServer } from 'ws';
+import { createPluginControlPipe } from '../../desktop/src/main/cindy-brain/nodeRuntimePipe.ts';
+import { GhostNetworkSlot } from '../../desktop/src/main/cindy-brain/networkSlot.ts';
+import { GhostOauthAccountManager } from '../../desktop/src/main/cindy-brain/ghostOauthAccounts.ts';
+import { GhostSavedCredentialManager } from '../../desktop/src/main/cindy-brain/ghostSavedCredentials.ts';
+import { GhostConnectionManager } from '../../desktop/src/main/cindy-brain/ghostConnections.ts';
+import { GHOST_SAVED_CREDENTIAL_MARKER } from '../../desktop/src/shared/pluginAccountReuse.ts';
+import { installedGhostMutationTargetToken, installedGhostStoragePart } from '../../desktop/src/shared/pluginIdentity.ts';
+import { createHostNodeRuntimeBroker, createNodePluginProcessFactory } from './plugins/node-process.ts';
+import { HostTerminalService } from '../../desktop/src/main/terminal/hostTerminalService.ts';
+import { GhostFsSlot } from '../../desktop/src/main/cindy-brain/fsSlot.ts';
+import { HostStorageService } from '../../desktop/src/main/cindy-brain/storageService.ts';
+import { createHostStorageProviders } from '../../desktop/src/main/cindy-brain/storageProviders.ts';
+import { GhostHandoffStore } from '../../desktop/src/main/cindy-brain/handoffStore.ts';
+import { createGhostKvStore } from '../../desktop/src/main/cindy-brain/ghostKvStore.ts';
+import { defaultPtySpawn } from '../../desktop/src/main/terminal/ptyFactory.ts';
+import { createHostToolService } from './agent/host-tools.ts';
+import { createHostConfirmations } from './host-confirmations.ts';
+import { heldCredentialError, holdCredentialFetch } from './agent/held-credentials.ts';
+import { createLiziMcpProviders } from '@cindy/mcps';
+import { setCurrentDbClient, clearCurrentDbClient } from '../../desktop/src/main/localDb/client/current.ts';
+
+import { dataOwnerStorageKey } from '../../desktop/src/main/dataOwnerPath.ts';
+import { listInstalledPlugins } from './plugins.mjs';
+import { Session } from '../../../packages/maker-core/src/session.ts';
+import { createTerminalToolExecutor } from '../../desktop/src/main/terminal/terminalToolAccess.ts';
+
+// #9825 C, integration: use a real Session.close and real child PTY through the
+// shared task tool adapter. Prior plugin-stop cases did not close a task runtime.
+test('closing the actual task Session ends its managed child process', async t => {
+  const workDir = tempProfile(t);
+  const logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return this; } };
+  const session = new Session({ id: 'managed-task', agentKind: 'pi', workDir, capabilities: {}, logger,
+    handle: { setInteractionResolver() {}, isTurnRunning: () => false, close: async () => {} }, turnStallMs: 0 });
+  let ready, exit;
+  const started = new Promise(resolve => { ready = resolve; });
+  const exited = new Promise(resolve => { exit = resolve; });
+  const terminal = new HostTerminalService({ spawn: (...args) => {
+    const pty = defaultPtySpawn(...args);
+    let output = '';
+    pty.onData(data => { output += data; if (output.includes('task-child-ready')) ready(); });
+    pty.onExit(exit);
+    return pty;
+  } });
+  const executor = createTerminalToolExecutor({ service: terminal,
+    owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }), pending: () => false,
+    pluginCall: () => undefined, getGhost: () => null, getSession: () => session,
+    pluginDirectory: () => workDir });
+  t.after(async () => { terminal.disposeScoped(); await session.close(); });
+  const { job } = await executor.call({ agentKind: 'pi', workingDir: workDir, sessionId: session.id,
+    sessionInstanceId: session.instanceId }, 'terminal_start', {
+    program: { command: process.execPath, args: ['-e', "process.stdout.write('task-child-ready\\n');process.stdin.resume()"] },
+  });
+  try {
+    await started;
+    assert.equal(terminal.manager.has(job.id), true);
+    await session.close();
+    assert.equal(terminal.manager.has(job.id), false, 'Session.close must remove and terminate its exact managed PTY');
+    await exited;
+  } finally { terminal.disposeScoped(); await exited; }
+});
+
+// Load each production assembly once. Unrelated UI/database/process services
+// are boundaries; credential selection, its source guard and network are real.
+const credentialAssembly = await Promise.all(['authorization', 'runtime'].map(async name => {
+  const output = await build({ entryPoints: [fileURLToPath(new URL(`./plugins/${name}.ts`, import.meta.url))],
+    bundle: false, write: false, platform: 'node', format: 'cjs', target: 'node22', logLevel: 'silent' });
+  return new Function('require', 'module', 'exports', output.outputFiles[0].text);
+}));
+
+// Unit, #9825 / 4546519908: manager-only tests missed the standalone Host's
+// absent resolver wiring. Start the real Host factory on existing reference
+// records; assert the outgoing header, then revoke the source through its vault.
+test('Host assembly injects an existing saved credential and rejects its revoked source', async () => {
+  const records = new Map([
+    ['source:token', 'synthetic-source-only-pat'], ['target:token', GHOST_SAVED_CREDENTIAL_MARKER],
+    ['target:token-reused-credential', JSON.stringify({ kind: 'secret', instanceKey: 'source', secretKey: 'token', accountId: 'saved' })],
+  ]);
+  const secret = {
+    readGhostSecret: (id, key) => records.get(id + ':' + key) ?? null,
+    readGhostSecretStrict: (id, key) => records.get(id + ':' + key) ?? null,
+    storeGhostSecret: (id, key, value) => { records.set(id + ':' + key, value); return true; },
+    removeGhostSecret: (id, key) => records.delete(id + ':' + key), readGhostSecretTail: () => null,
+    listGhostAccountReferenceKeys: ids => ids.map(instanceKey => ({ instanceKey,
+      keys: [...records.keys()].filter(key => key.startsWith(instanceKey + ':')).map(key => key.slice(instanceKey.length + 1)) })),
+  };
+  const ghosts = ['source', 'target'].map(id => ({ enabled: true, dir: `/fixture/${id}`,
+    approval: { state: 'approved', revision: 'saved-reference-fixture' },
+    manifest: { id, name: id, version: '1.0.0', network: { hosts: ['api.example.test'],
+      secrets: [{ key: 'token', label: 'PAT', inject: { header: 'Authorization', format: 'Bearer {value}' } }] } } }));
+  const requests = [];
+  const noop = () => {};
+  const imports = new Proxy({
+    GhostSavedCredentialManager, GhostConnectionManager, GhostNetworkSlot, GhostOauthAccountManager,
+    withGhostOauthMutationLock: async (_owner, _id, _path, run) => run(),
+    installedGhostMutationTargetToken, installedGhostStoragePart,
+    activeOwnerScopeKey: () => 'owner:1', isAppSessionBoundaryPending: () => false,
+    createLogger: () => ({ warn: noop, info: noop }), hostRuntimeLayout: () => ({ packaged: false }),
+    createHostPluginSecrets: () => secret, createHostPluginIdentity: () => ({}),
+    createHeadlessPluginSandbox: () => ({ adapter: {}, deliver: noop }),
+    hostBlobStore: {}, hostOutbound: { outboundFetch: async (_url, init) => {
+      requests.push(init); return Response.json({ accepted: true });
+    } },
+  }, { get: (target, name) => name in target ? target[name] : /^[A-Z]/.test(String(name)) ? class {} : () => ({}) });
+  const load = compiled => {
+    const module = { exports: {} };
+    compiled(name => name === 'node:module' ? { createRequire: () => ({ resolve: () => '/fixture/sqlite' }) }
+      : name.startsWith('node:') ? createRequire(import.meta.url)(name) : imports, module, module.exports);
+    return module.exports;
+  };
+  imports.createHostPluginAuthorization = load(credentialAssembly[0]).createHostPluginAuthorization;
+  const api = await load(credentialAssembly[1]).createHostPluginRuntime({
+    profileDir: '/fixture/host', ownerId: 'owner', credentials: {}, getLoginEmail: () => null,
+    manager: { list: () => ghosts, findInstalledInstance: id => ghosts.find(ghost => ghost.manifest.id === id) },
+    publish: noop, assets: { nodeWorker: '/fixture/worker', close: noop },
+  });
+  try {
+    const result = await api.network.handleFetchRequest('target', { url: 'https://api.example.test/account' });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(requests[0].headers.Authorization, 'Bearer synthetic-source-only-pat');
+    assert.equal(JSON.stringify(result).includes('synthetic-source-only-pat'), false);
+    api.secret.removeGhostSecret('source', 'token');
+    const revoked = await api.network.handleFetchRequest('target', { url: 'https://api.example.test/account' });
+    assert.equal(revoked.ok, false);
+    assert.equal(requests.length, 1);
+    api.secret.storeGhostSecret('source', 'token', 'synthetic-replacement-pat');
+    await api.authorization.cleanupSourceReferences('source');
+    assert.equal(api.secret.readGhostSecret('target', 'token-reused-credential'), null);
+    assert.equal(api.secret.readGhostSecret('source', 'token'), 'synthetic-replacement-pat');
+    const replacement = await api.network.handleFetchRequest('target', { url: 'https://api.example.test/account' });
+    assert.equal(replacement.ok, false);
+    assert.equal(requests.length, 1);
+  } finally { await api.network.disposeAll(); }
+});
+
+// Coexistence plan A (reviewer, 2026-11-17): while a Cindy desktop app running on its own uses the
+// profile, plugin OAuth renews and writes nothing (plugins/authorization.ts, held-credentials.ts).
+// Unit, through the same production assembly as above: an expired access token is not renewed (no
+// token request leaves), the account vault is unchanged, and the tool fails with a refused renewal
+// carrying the reason, not "reconnect"; released, the same request renews and goes out.
+test('while a desktop uses the profile, plugin OAuth renews and writes nothing', async () => {
+  const records = new Map([
+    ['target:account-accounts', JSON.stringify({ accounts: [{ id: 'acc1', status: 'connected' }], defaultAccountId: 'acc1' })],
+    ['target:account-rt-acc1', 'synthetic-refresh-token'],
+  ]);
+  const secret = {
+    readGhostSecret: (id, key) => records.get(id + ':' + key) ?? null,
+    readGhostSecretStrict: (id, key) => records.get(id + ':' + key) ?? null,
+    storeGhostSecret: (id, key, value) => { records.set(id + ':' + key, value); return true; },
+    removeGhostSecret: (id, key) => records.delete(id + ':' + key), readGhostSecretTail: () => null,
+    listGhostAccountReferenceKeys: ids => ids.map(instanceKey => ({ instanceKey, keys: [] })),
+  };
+  const oauthDecl = { authorizeUrl: 'https://accounts.example.test/authorize', tokenUrl: 'https://accounts.example.test/token',
+    scopes: ['read'], clientId: 'fixture-client' };
+  const ghosts = [{ enabled: true, dir: '/fixture/target', approval: { state: 'approved', revision: 'held-oauth-fixture' },
+    manifest: { id: 'target', name: 'target', version: '1.0.0', network: { hosts: ['api.example.test'],
+      secrets: [{ key: 'account', label: 'Account', source: 'oauth', inject: { header: 'Authorization', format: 'Bearer {value}',
+        hosts: ['api.example.test'] }, oauth: oauthDecl }] } } }];
+  const requests = [];
+  const noop = () => {};
+  const imports = new Proxy({
+    GhostSavedCredentialManager, GhostConnectionManager, GhostNetworkSlot, GhostOauthAccountManager, heldCredentialError, holdCredentialFetch,
+    withGhostOauthMutationLock: async (_owner, _id, _path, run) => run(),
+    installedGhostMutationTargetToken, installedGhostStoragePart,
+    activeOwnerScopeKey: () => 'owner:1', isAppSessionBoundaryPending: () => false,
+    createLogger: () => ({ warn: noop, info: noop }), hostRuntimeLayout: () => ({ packaged: false }),
+    createHostPluginSecrets: () => secret, createHostPluginIdentity: () => ({}),
+    createHeadlessPluginSandbox: () => ({ adapter: {}, deliver: noop }),
+    hostBlobStore: {}, hostOutbound: { outboundFetch: async (url, init) => {
+      requests.push(String(url));
+      return String(url).startsWith('https://accounts.example.test/token')
+        ? Response.json({ access_token: 'synthetic-access-token', token_type: 'Bearer', expires_in: 3600 })
+        : Response.json({ accepted: true });
+    } },
+  }, { get: (target, name) => name in target ? target[name] : /^[A-Z]/.test(String(name)) ? class {} : () => ({}) });
+  const load = compiled => {
+    const module = { exports: {} };
+    compiled(name => name === 'node:module' ? { createRequire: () => ({ resolve: () => '/fixture/sqlite' }) }
+      : name.startsWith('node:') ? createRequire(import.meta.url)(name) : imports, module, module.exports);
+    return module.exports;
+  };
+  imports.createHostPluginAuthorization = load(credentialAssembly[0]).createHostPluginAuthorization;
+  let held = true;
+  const api = await load(credentialAssembly[1]).createHostPluginRuntime({
+    profileDir: '/fixture/host', ownerId: 'owner', credentials: {}, getLoginEmail: () => null, isProfileHeld: () => held,
+    manager: { list: () => ghosts, findInstalledInstance: id => ghosts.find(ghost => ghost.manifest.id === id) },
+    publish: noop, assets: { nodeWorker: '/fixture/worker', close: noop },
+  });
+  try {
+    const before = JSON.stringify([...records]);
+    const refused = await api.network.handleFetchRequest('target', { url: 'https://api.example.test/account' });
+    assert.equal(refused.ok, false);
+    const text = JSON.stringify(refused);
+    assert.match(text, /HOST_PROFILE_IN_USE_BY_DESKTOP: this plugin sign-in is not renewed while a Cindy desktop app/);
+    assert.doesNotMatch(text, /重新连接/, 'a refused renewal does not ask to reconnect');
+    assert.deepEqual(requests, [], 'no token request and no API request left');
+    assert.equal(JSON.stringify([...records]), before, 'the account vault is unchanged');
+    // Held, no refresh token stored: the account is not marked expired either (that is a vault write).
+    records.delete('target:account-rt-acc1');
+    const withoutToken = JSON.stringify([...records]);
+    assert.equal((await api.network.handleFetchRequest('target', { url: 'https://api.example.test/account' })).ok, false);
+    assert.equal(JSON.stringify([...records]), withoutToken, 'no expired mark while held');
+    records.set('target:account-rt-acc1', 'synthetic-refresh-token');
+    // Released: the same request renews the token and goes out.
+    held = false;
+    const renewed = await api.network.handleFetchRequest('target', { url: 'https://api.example.test/account' });
+    assert.equal(renewed.ok, true, JSON.stringify(renewed));
+    assert.deepEqual(requests, ['https://accounts.example.test/token', 'https://api.example.test/account']);
+  } finally { await api.network.disposeAll(); }
+});
+
+// Rebase #9496 onto #9621: execute the real gateway's registered page-tool
+// callback with process/database boundaries injected. A null task must not be
+// restored, while task-bound calls must retain their original source context.
+test('page tools accept a null task without changing task-bound context', async t => {
+  let runPageTool;
+  let held = false;
+  let completeTool = async () => ({ ok: true, result: { content: [{ type: 'text', text: 'delivered' }] } });
+  const contexts = [], restored = [];
+  const session = { id: 'task', instanceId: 'instance', agentKind: 'codex', workDir: '/workspace' };
+  const boundaries = {
+    createMcpAppsRuntime: () => ({ setMcpAppsHost() {} }),
+    getCurrentDbClientSnapshot: () => undefined,
+    createCustomMcpStore: () => ({}), createCustomMcpRegistry: () => ({}),
+    createAppServerProxyFactory: () => () => undefined,
+    createPluginAppRegistry: () => ({ setPluginPageToolRunner(runner) { runPageTool = runner; } }),
+    dataOwnerStorageKey: value => value,
+    createMcpAppRevisionKeyStore: () => ({ get: () => 'revision' }),
+    createMcpAppsService: () => ({ host: {} }),
+    createPluginAppPublisher: () => () => undefined,
+    createGhostAttachmentResolver: () => () => undefined,
+    createImageCacheStore: () => ({}), hostChatAttachments: {},
+    createGhostGateway: () => ({ setPageControlGhostProvider() {}, getCindyGhostsMcpDeps(context) {
+      contexts.push(context);
+      return { callGhostTool: (...args) => completeTool(...args) };
+    } }),
+    pluginAppResult: value => value,
+  };
+  const built = await build({ entryPoints: [fileURLToPath(new URL('./plugins/gateway.ts', import.meta.url))],
+    bundle: false, write: false, platform: 'node', format: 'cjs', target: 'node22' });
+  const localRequire = createRequire(import.meta.url), gatewayModule = { exports: {} };
+  new Function('require', 'module', 'exports', built.outputFiles[0].text)(
+    name => name.startsWith('node:') ? localRequire(name) : boundaries, gatewayModule, gatewayModule.exports);
+  gatewayModule.exports.createHostPluginGateway({
+    runtime: {
+      current: () => true,
+      assertCurrent() {},
+      assertPluginAvailable() {
+        if (held) throw Object.assign(new Error('profile held'), { code: 'PRECONDITION_FAILED' });
+      },
+      authorization: { i18n: {} },
+    },
+    profileDir: '/unused', ownerId: 'owner', version: 'test', credentials: {}, cards: {},
+    restoreSession: async id => { assert.equal(id, session.id); restored.push(id); return session; },
+  });
+  for (const sessionId of [null, session.id]) {
+    const result = await runPageTool({ sessionId, instance: 'plugin', tool: 'read', assertCurrent: async () => {} },
+      {}, new AbortController().signal);
+    assert.deepEqual(result, { content: [{ type: 'text', text: 'delivered' }] });
+  }
+  assert.deepEqual(restored, [session.id]);
+  assert.deepEqual(contexts, [undefined, { sessionId: session.id, sessionInstanceId: session.instanceId,
+    agentKind: session.agentKind, workingDir: session.workDir }]);
+  held = true;
+  await assert.rejects(runPageTool({ sessionId: session.id, instance: 'plugin', tool: 'read', assertCurrent: async () => {} },
+    {}, new AbortController().signal), { code: 'PRECONDITION_FAILED' });
+  assert.deepEqual(restored, [session.id], 'held page tools must stop before task restore');
+  assert.equal(contexts.length, 2);
+
+  await t.test('page tools preserve an uncertain outcome when a hold interrupts dispatch', async () => {
+    held = false;
+    const interrupted = { ok: false, errorCode: 'PLUGIN_DELIVERY_UNKNOWN', message: 'synthetic pause interruption' };
+    completeTool = async () => {
+      held = true; // admitted above, as in a desktop hold during dispatch
+      return interrupted;
+    };
+    const result = await runPageTool({ sessionId: null, instance: 'plugin', tool: 'read', assertCurrent: async () => {} },
+      {}, new AbortController().signal);
+    assert.equal(result.isError, true);
+    assert.deepEqual(JSON.parse(result.content[0].text), interrupted);
+  });
+});
+
+function tempProfile(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-plugins-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
+test('lists canonical plugin instances with manifest identity', (t) => {
+  const userDataDir = tempProfile(t);
+  const ownerId = 'owner-1';
+  const ownerRoot = path.join(userDataDir, 'owners', dataOwnerStorageKey(ownerId));
+  fs.mkdirSync(path.join(ownerRoot, 'ghost-install-state'), { recursive: true });
+  fs.mkdirSync(path.join(ownerRoot, 'cindy-brain/_ns/_root/demo'), { recursive: true });
+  fs.writeFileSync(path.join(ownerRoot, 'cindy-brain/_ns/_root/demo/ghost.json'),
+    JSON.stringify({ name: 'Demo plugin', version: '1.2.3' }));
+  fs.writeFileSync(path.join(ownerRoot, 'ghost-install-state/plugin-instances.v2.json'), JSON.stringify({
+    schemaVersion: 2,
+    instances: {
+      _root__demo: {
+        instanceKey: '_root__demo', contentRelId: 'cindy-brain/_ns/_root/demo',
+        ghostId: 'demo', namespace: null, source: 'market', active: true,
+      },
+    },
+  }));
+
+  const result = listInstalledPlugins(userDataDir, ownerId);
+  assert.deepEqual(result.plugins, [{
+    instanceKey: '_root__demo', id: 'demo', name: 'Demo plugin', version: '1.2.3',
+    namespace: null, source: 'market', active: true,
+  }]);
+  assert.equal(result.namespace, 'canonical');
+  assert.equal(result.legacyNamespacePresent, false);
+});
+
+test('reports legacy namespaces without reading them', (t) => {
+  const userDataDir = tempProfile(t);
+  fs.mkdirSync(path.join(userDataDir, 'owners', 'raw-owner-id'), { recursive: true });
+  const result = listInstalledPlugins(userDataDir, 'owner-1');
+  assert.deepEqual(result.plugins, []);
+  assert.equal(result.legacyNamespacePresent, true);
+});
+
+test('a missing profile yields an empty list rather than an error', (t) => {
+  const userDataDir = tempProfile(t);
+  assert.deepEqual(listInstalledPlugins(userDataDir, 'nobody'), {
+    plugins: [], namespace: 'canonical', legacyNamespacePresent: false,
+  });
+});
+
+// Integration: the Node launcher must preserve the production broker's stdio,
+// private child-spawn bridge, environment filtering and complete stop. Existing
+// broker tests use fake OS processes and cannot cover this platform adapter.
+// Integration: exercise the production Host bootstrap and native spawn with a
+// synthetic environment value. Existing workers covered only the filtered mode.
+test('plugin environment inheritance reaches real workers and their children only when enabled', async t => {
+  const dir = tempProfile(t);
+  const key = 'CINDY_PLUGIN_ENV_PROBE';
+  const previous = process.env[key];
+  process.env[key] = 'synthetic-inherited-value';
+  t.after(() => { if (previous === undefined) delete process.env[key]; else process.env[key] = previous; });
+  const workerEntry = path.join(dir, 'bootstrap.cjs');
+  await build({ entryPoints: [fileURLToPath(new URL('./plugins/node-worker.ts', import.meta.url))],
+    outfile: workerEntry, bundle: true, platform: 'node', format: 'cjs', target: 'node22' });
+  const rawEntry = path.join(dir, 'raw.cjs');
+  fs.writeFileSync(rawEntry, 'process.stdout.write(JSON.stringify({ value: process.env.CINDY_PLUGIN_ENV_PROBE ?? null, id: process.env.CINDY_GHOST_ID }));');
+  fs.writeFileSync(path.join(dir, 'worker.cjs'), String.raw`
+    require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
+      const request = JSON.parse(line);
+      const child = require('node:child_process').spawnSync(process.execPath, [require('node:path').join(__dirname, 'raw.cjs')], { encoding: 'utf8' });
+      process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: {
+        value: process.env.CINDY_PLUGIN_ENV_PROBE ?? null, child: JSON.parse(child.stdout)
+      } }) + '\n');
+    });
+  `);
+  for (const inheritEnv of [false, true]) {
+    const ghost = { dir, enabled: true, approval: { state: 'approved', revision: 'env-probe' },
+      manifest: { id: 'env-probe', node: { entry: 'worker.cjs', protocol: 'json-rpc-stdio', inheritEnv } } };
+    const broker = createHostNodeRuntimeBroker(workerEntry, { getGhost: () => ghost });
+    try {
+      const expected = inheritEnv ? 'synthetic-inherited-value' : null;
+      const result = await broker.handleRequest('env-probe', { type: 'node-request', method: 'probe' });
+      assert.equal(result.ok, true, JSON.stringify(result));
+      assert.deepEqual(result.result, { value: expected, child: { value: expected, id: 'env-probe' } });
+      const child = createNodePluginProcessFactory(workerEntry)(rawEntry, dir, 'env-probe', [], inheritEnv);
+      let output = '';
+      child.stdout.on('data', data => { output += data; });
+      await Promise.all([
+        new Promise((resolve, reject) => { child.on('exit', resolve); child.on('error', reject); }),
+        new Promise(resolve => child.stdout.once('end', resolve)),
+      ]);
+      assert.deepEqual(JSON.parse(output), { value: expected, id: 'env-probe' });
+    } finally { await broker.stopAndWait('env-probe'); broker.destroyAll(); }
+  }
+});
+
+test('runs and reaps real plugin workers through the common broker', async t => {
+  const dir = tempProfile(t);
+  const http = createServer((request, response) => {
+    if (request.url === '/account') {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ authorized: request.headers.authorization === 'Bearer synthetic-host-only-access' }));
+    } else { response.writeHead(200, { 'content-type': 'text/event-stream' }); response.write('data: ready\n\n'); }
+  });
+  const websocket = new WebSocketServer({ server: http });
+  websocket.on('connection', socket => socket.on('message', (bytes, binary) => socket.send(bytes, { binary })));
+  await new Promise(resolve => http.listen(0, '127.0.0.1', resolve));
+  const port = http.address().port;
+  t.after(async () => {
+    for (const client of websocket.clients) client.terminate();
+    http.closeAllConnections();
+    await new Promise(resolve => http.close(resolve));
+  });
+  const workerEntry = process.env.CINDY_TEST_PLUGIN_WORKER || path.join(dir, 'bootstrap.cjs');
+  if (!process.env.CINDY_TEST_PLUGIN_WORKER) await build({
+    entryPoints: [fileURLToPath(new URL('./plugins/node-worker.ts', import.meta.url))],
+    outfile: workerEntry, bundle: true, platform: 'node', format: 'cjs', target: 'node22',
+    plugins: [{ name: 'node-only', setup(builder) {
+      builder.onResolve({ filter: /^electron(?:\/|$)/ }, () => { throw new Error('Electron is not a Node plugin dependency'); });
+    } }],
+  });
+  fs.writeFileSync(path.join(dir, 'worker.cjs'), String.raw`
+    require('node:readline').createInterface({ input: process.stdin }).on('line', async line => {
+      const request = JSON.parse(line);
+      if (!request.method) return;
+      let result;
+      if (request.method === 'child') {
+        const child = await globalThis.__CINDY_NODE__.spawnEntry('child.cjs', ['input']);
+        let output = '';
+        child.stdout.on('data', data => { output += data; });
+        await new Promise(resolve => child.once('close', resolve));
+        result = JSON.parse(output);
+      } else if (request.method === 'network') {
+        const stream = await cindy.fetch({ url: request.params.http + '/events', as: 'stream' });
+        if (!stream.ok) throw new Error(JSON.stringify(stream));
+        const first = await cindy.network.read({ connectionId: stream.connectionId, waitMs: 1000 });
+        await cindy.network.close({ connectionId: stream.connectionId });
+        const socket = await cindy.network.open({ url: request.params.ws + '/echo' });
+        if (!socket.ok) throw new Error(JSON.stringify(socket));
+        await cindy.network.send({ connectionId: socket.connectionId, data: 'plugin-frame' });
+        const echoed = await cindy.network.read({ connectionId: socket.connectionId, waitMs: 1000 });
+        await cindy.network.close({ connectionId: socket.connectionId });
+        result = { status: stream.status, first, echoed };
+      } else if (request.method === 'account') {
+        const response = await cindy.fetch({ url: 'https://api.example.test/account' });
+        result = { response, receivedSecrets: !!request.cindy?.secrets };
+      } else if (request.method === 'terminal') {
+        const response = await cindy.host.call(request.params.server || 'cindy_helper', request.params.tool, request.params.args);
+        result = JSON.parse(response.content.find(item => item.type === 'text').text);
+      } else result = { value: request.params.value, pid: process.pid,
+        filtered: process.env.CINDY_TEST_PRIVATE_HOST_VALUE === undefined,
+        privatePort: process.parentPort === undefined && process.send === undefined };
+      process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\n');
+    });
+  `);
+  fs.writeFileSync(path.join(dir, 'child.cjs'),
+    `process.stdout.write(JSON.stringify({ arg: process.argv[2], nestedSpawn: !!globalThis.__CINDY_NODE__ }));`);
+  fs.writeFileSync(path.join(dir, 'terminal.cjs'), `
+    process.stdout.write('managed-ready\\n');
+    require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
+      process.stdout.write(JSON.stringify({ line, filtered: process.env.CINDY_TEST_PRIVATE_HOST_VALUE === undefined }) + '\\n');
+    });
+  `);
+  const previous = process.env.CINDY_TEST_PRIVATE_HOST_VALUE;
+  process.env.CINDY_TEST_PRIVATE_HOST_VALUE = 'synthetic-secret-for-filter-test';
+  t.after(() => { if (previous === undefined) delete process.env.CINDY_TEST_PRIVATE_HOST_VALUE;
+    else process.env.CINDY_TEST_PRIVATE_HOST_VALUE = previous; });
+  const ghost = { manifest: { id: 'test-node', name: 'Node fixture', version: '1.0.0', node: {
+    entry: 'worker.cjs', protocol: 'json-rpc-stdio', entries: ['child.cjs'], childSpawn: true,
+    secretBindings: [{ key: 'raw_account', label: 'Account', oauthSecret: 'account', methods: ['raw-account'] }],
+  }, agent: { hostTools: ['terminal', 'files', 'storage', 'browser', 'discovery'] }, network: { hosts: ['api.example.test', 'http://127.0.0.1:' + port, 'ws://127.0.0.1:' + port],
+    secrets: [{ key: 'account', label: 'Account', source: 'oauth', inject: { header: 'Authorization', format: 'Bearer {value}', hosts: ['api.example.test'] },
+      oauth: { authorizeUrl: 'https://accounts.example.test/authorize', tokenUrl: 'https://accounts.example.test/token', scopes: ['read'], clientId: 'fixture-client' } }] } }, dir, enabled: true,
+    namespace: null, namespaceState: 'confirmed',
+    approval: { state: 'approved', revision: 'real-worker-fixture' } };
+  const receiverDir = path.join(dir, 'receiver'); fs.mkdirSync(receiverDir);
+  fs.copyFileSync(path.join(dir, 'worker.cjs'), path.join(receiverDir, 'worker.cjs'));
+  const receiver = { manifest: { id: 'test-receiver', name: 'Receiver fixture', version: '1.0.0',
+    agent: { hostTools: ['storage'] }, node: { entry: 'worker.cjs', protocol: 'json-rpc-stdio' } },
+    dir: receiverDir, enabled: true, namespace: null, namespaceState: 'confirmed',
+    approval: { state: 'approved', revision: 'receiver-fixture' } };
+  const getGhost = id => id === 'test-node' ? ghost : id === 'test-receiver' ? receiver : null;
+  const original = { ...ghost, manifest: { ...ghost.manifest, id: 'source-account' } };
+  const values = new Map([
+    ['source-account:account-client-id', 'fixture-client'],
+    ['source-account:account-accounts', JSON.stringify({ defaultAccountId: 'original', accounts: [{ id: 'original', label: 'demo@example.test', status: 'connected', createdAt: 1 }] })],
+    ['source-account:account-rt-original', 'synthetic-source-refresh'],
+  ]);
+  const oauth = new GhostOauthAccountManager({
+    vault: { read: (id, key) => values.get(id + ':' + key) ?? null, store: (id, key, value) => { values.set(id + ':' + key, value); return true; }, remove: (id, key) => values.delete(id + ':' + key) },
+    connectionSources: () => [ghost, original].map(item => ({ instanceKey: item.manifest.id, name: item.manifest.id, manifest: item.manifest })),
+    connectionSource: id => [ghost, original].map(item => ({ instanceKey: item.manifest.id, name: item.manifest.id, manifest: item.manifest }))
+      .find(item => item.instanceKey === id) ?? null,
+    openExternal: () => { throw new Error('reuse must not log in again'); },
+    fetchImpl: async () => Response.json({ access_token: 'synthetic-host-only-access', token_type: 'Bearer', expires_in: 3600 }),
+  });
+  assert.equal((await oauth.reuseAccount('test-node', 'account', ghost.manifest.network.secrets[0].oauth,
+    { instanceKey: 'source-account', secretKey: 'account', accountId: 'original' })).ok, true);
+  const network = new GhostNetworkSlot({ getGhost: () => ghost, readSecret: () => null, getLoginEmail: () => null,
+    // Deterministic transport double: synthetic HTTPS origin reaches this real
+    // loopback server. This verifies Host injection, not TLS/DNS behavior.
+    fetchImpl: (url, init) => fetch(url === 'https://api.example.test/account' ? 'http://127.0.0.1:' + port + '/account' : url, init),
+    fetchPublicImpl: async () => { throw new Error('undeclared request'); },
+    oauthTokens: { getFreshAccessToken: (...args) => oauth.getFreshAccessToken(...args), invalidateAccessToken: (...args) => oauth.invalidateAccessToken(...args) },
+    readGhostMedia: async () => null, takeDirDeposit: () => null, writeSaveDeposit: async () => null,
+    saveGhostMedia: async () => { throw new Error('media not used'); }, isSupportedMediaMime: () => false });
+  // Real PTY through the same Host service, gateway and registry. Overall install
+  // authority covers the declarations; no supplementary prompt may be requested.
+  let readyResolve, echoResolve;
+  const ready = new Promise(resolve => { readyResolve = resolve; });
+  const echo = new Promise(resolve => { echoResolve = resolve; });
+  const terminalExits = new Map();
+  const terminals = new HostTerminalService({ spawn: (...args) => {
+    const pty = defaultPtySpawn(...args);
+    let text = '';
+    pty.onData(chunk => { text += chunk; if (text.includes('managed-ready')) readyResolve(); if (text.includes('"filtered":true')) echoResolve(); });
+    terminalExits.set(pty.pid, new Promise(resolve => pty.onExit(resolve)));
+    return pty;
+  } });
+  const owner = () => ({ dataOwnerId: 'fixture-owner', ownerGeneration: 1 });
+  const directoryStat = fs.statSync(dir, { bigint: true });
+  // Match the native pick issuer's realpath semantics, including Windows casing.
+  const selectedDirectory = { ref: 'fixture-files', path: await fs.promises.realpath(dir), dev: directoryStat.dev.toString(), ino: directoryStat.ino.toString() };
+  const fileService = new GhostFsSlot({ getGhost: () => ghost, ownerKey: () => 'fixture-owner:1', dataRootDir: () => dir,
+    // Only the native-selection receipt is supplied by this fixture. Worker,
+    // private control pipe, public gateway, shared registry and filesystem are real.
+    resolvePickedDirectory: (id, ref) => id === 'test-node' && ref === selectedDirectory.ref ? selectedDirectory : null,
+    callInfo: () => null, inFlightCallInfo: () => null, getSessionSnapshot: async () => null,
+    requestWriteConfirm: async () => ({ confirmed: false, reason: 'cancelled' }), writeSaveDeposit: async () => null,
+    log: { warn: (message, details) => t.diagnostic(`${message}: ${details.error}`) } });
+  const handoff = new GhostHandoffStore({ root: () => path.join(dir, 'handoff') });
+  const kv = createGhostKvStore({ getRootDir: () => path.join(dir, 'storage-kv') });
+  const sharedValue = { title: 'shared business record', count: 2 };
+  kv.write('test-node', { record: sharedValue });
+  const database = { drizzle: {} }; setCurrentDbClient(database, 'fixture-owner');
+  const confirmations = createHostConfirmations({ current: () => true });
+  let prompts = 0;
+  const disconnect = confirmations.connect('web:fixture', () => { prompts++; return false; });
+  const storage = new HostStorageService({ ownerKey: () => 'fixture-owner:1', getGhost, handoff, listGhosts: () => [ghost, receiver],
+    providers: createHostStorageProviders({ kv, files: fileService, library: null, handoff,
+      media: { describe: async () => null, read: async () => new Response(null, { status: 404 }) } }),
+  });
+  const hostTools = createHostToolService({ terminal: terminals, files: () => fileService, storage: () => storage,
+    profileDir: dir, ownerId: 'fixture-owner', owner,
+    getGhost, getSession: () => undefined, current: () => true, confirmations, t: key => key,
+  });
+  // This fixture supplies a browser driver, as Desktop does. Node Host's default
+  // assembly remains unsupported; Worker/FD/gateway/registry are the real path.
+  const browserProviders = createLiziMcpProviders({ browser: { getRuntime: () => ({ call: async request =>
+    ({ ok: true, action: request.action, data: { source: 'shared-browser-handler' } }) }) } });
+  hostTools.providers.push(...browserProviders);
+  hostTools.services.replace(hostTools.providers);
+  const broker = createHostNodeRuntimeBroker(workerEntry, { getGhost,
+    hostToolRequest: hostTools.request, onStopped: hostTools.stopPlugin,
+    resolveOauthSecret: (id, key, accountId) => oauth.getNodeAccessToken(id, key, ghost.manifest.network.secrets[0].oauth, accountId),
+    networkRequest: (id, request) => request.op === 'fetch' ? network.handleFetchRequest(id, request) : network.handleNetworkRequest(id, request) });
+  try {
+    const first = await broker.handleRequest('test-node', { type: 'node-request', method: 'echo', params: { value: '你好' } });
+    assert.equal(first.ok, true, JSON.stringify(first));
+    assert.equal(first.result.value, '你好');
+    assert.equal(first.result.filtered, true);
+    assert.equal(first.result.privatePort, true);
+    const child = await broker.handleRequest('test-node', { type: 'node-request', method: 'child' });
+    assert.equal(child.ok, true, JSON.stringify(child));
+    assert.deepEqual(child.result, { arg: 'input', nestedSpawn: false });
+    const connected = await broker.handleRequest('test-node', { type: 'node-request', method: 'network', params: { http: 'http://127.0.0.1:' + port, ws: 'ws://127.0.0.1:' + port } });
+    assert.equal(connected.ok, true, JSON.stringify(connected));
+    assert.equal(connected.result.status, 200);
+    assert.equal(connected.result.first.events[0].data, 'data: ready\n\n');
+    assert.equal(connected.result.echoed.events[0].data, 'plugin-frame');
+    const account = await broker.handleRequest('test-node', { type: 'node-request', method: 'account' });
+    assert.equal(account.ok, true, JSON.stringify(account));
+    assert.equal(account.result.response.ok, true);
+    assert.equal(JSON.parse(account.result.response.body).authorized, true);
+    assert.equal(account.result.receivedSecrets, false);
+    assert.equal(JSON.stringify(account).includes('synthetic-host-only-access'), false);
+    const raw = await broker.handleRequest('test-node', { type: 'node-request', method: 'raw-account' });
+    assert.equal(raw.ok, false);
+    assert.equal(raw.errorCode, 'HOST_INJECTION_REQUIRED');
+    const browser = await broker.handleRequest('test-node', { type: 'node-request', method: 'terminal', params: {
+      server: 'cindy_browser', tool: 'browser', args: { action: 'status' } } });
+    assert.equal(browser.ok, true, JSON.stringify(browser));
+    assert.equal(browser.result.ok, true, JSON.stringify(browser));
+    assert.equal(browser.result.data.source, 'shared-browser-handler');
+    ghost.approvedHostToolGroups = [];
+    const legacyBrowser = await broker.handleRequest('test-node', { type: 'node-request', method: 'terminal', params: {
+      server: 'cindy_browser', tool: 'browser', args: { action: 'status' } } });
+    assert.equal(legacyBrowser.result.ok, true, JSON.stringify(legacyBrowser));
+    ghost.manifest.agent.hostTools = ghost.manifest.agent.hostTools.filter(group => group !== 'browser');
+    const undeclaredBrowser = await broker.handleRequest('test-node', { type: 'node-request', method: 'terminal', params: {
+      server: 'cindy_browser', tool: 'browser', args: { action: 'status' } } });
+    assert.equal(undeclaredBrowser.result.errorCode, 'PERMISSION_DENIED');
+    const terminalCall = async (tool, args = {}) => {
+      const result = await broker.handleRequest('test-node', { type: 'node-request', method: 'terminal', params: { tool, args } });
+      assert.equal(result.ok, true, JSON.stringify(result));
+      assert.equal(result.result.ok, true, JSON.stringify(result));
+      return result.result;
+    };
+    const capabilities = await terminalCall('host_services');
+    assert.equal(capabilities.scope, 'local');
+    assert.equal(capabilities.services.find(service => service.group === 'terminal').available, true);
+    assert.equal(capabilities.services.find(service => service.group === 'discovery').declared, true);
+    assert.equal(Object.hasOwn(capabilities.services.find(service => service.group === 'discovery'), 'approved'), false);
+    assert.equal(capabilities.services.find(service => service.group === 'scheduler').available, false);
+    assert.equal(capabilities.services.find(service => service.group === 'computer').available, false);
+    // §21 integration: execute a real plugin's host.call across the private FD,
+    // approval gateway and common service; the plugin never receives a path.
+    const fileCall = (op, args = {}) => terminalCall('file_request', { op, directoryRef: selectedDirectory.ref, ...args });
+    await fileCall('write', { path: 'exports/worker.txt', content: 'worker-selected-directory' });
+    assert.equal((await fileCall('read', { path: 'exports/worker.txt' })).content, 'worker-selected-directory');
+    assert.equal((await fileCall('list', { path: 'exports' })).entries[0].path, 'exports/worker.txt');
+    const escaped = await broker.handleRequest('test-node', { type: 'node-request', method: 'terminal',
+      params: { tool: 'file_request', args: { op: 'read', directoryRef: selectedDirectory.ref, path: '../outside.txt' } } });
+    assert.equal(escaped.result.ok, false);
+    await fileCall('delete', { path: 'exports/worker.txt' });
+    assert.equal(fs.existsSync(path.join(dir, 'exports/worker.txt')), false);
+    // §27 integration: two actual workers use the same provider interface and
+    // real KV/handoff persistence without supplementary confirmation.
+    assert.deepEqual((await terminalCall('storage_request', { op: 'targets' })).targets,
+      [{ id: 'test-receiver', name: 'Receiver fixture' }]);
+    const share = await terminalCall('storage_request', { op: 'share', targetPluginId: 'test-receiver', source: { provider: 'kv', key: 'record' } });
+    const copiedRef = share.files[0].ref;
+    await terminalCall('storage_request', { op: 'call', provider: 'kv', request: { op: 'write', value: { record: { title: 'changed after sharing' } } } });
+    const received = await broker.handleRequest('test-receiver', { type: 'node-request', method: 'terminal', params: {
+      tool: 'storage_request', args: { op: 'call', provider: 'handoff', request: { op: 'read', ref: copiedRef } } } });
+    assert.equal(received.ok, true, JSON.stringify(received));
+    assert.equal(received.result.ok, true, JSON.stringify(received));
+    assert.deepEqual(JSON.parse(Buffer.from(received.result.base64, 'base64').toString()), sharedValue);
+    const unowned = await broker.handleRequest('test-node', { type: 'node-request', method: 'terminal', params: {
+      tool: 'storage_request', args: { op: 'call', provider: 'handoff', request: { op: 'read', ref: copiedRef } } } });
+    assert.equal(unowned.result.ok, false, 'a target handoff ref never grants source access to target storage');
+    const terminal = await terminalCall('terminal_start', { program: { command: process.execPath, args: [path.join(dir, 'terminal.cjs')] } });
+    await ready;
+    const output = await terminalCall('terminal_read', { id: terminal.job.id });
+    assert.match(output.chunks.map(chunk => chunk.data).join(''), /managed-ready/);
+    // xterm sends CR for Enter; Windows cooked input does not submit on LF.
+    await terminalCall('terminal_write', { id: terminal.job.id, data: 'managed-input\r' });
+    await echo;
+    const resumed = await terminalCall('terminal_read', { id: terminal.job.id, cursor: output.cursor, generation: output.generation });
+    assert.match(resumed.chunks.map(chunk => chunk.data).join(''), /managed-input/);
+    assert.match(resumed.chunks.map(chunk => chunk.data).join(''), /"filtered":true/);
+    assert.equal((await terminalCall('terminal_list')).jobs[0].id, terminal.job.id);
+    await terminalCall('terminal_stop', { id: terminal.job.id });
+    await terminalExits.get(terminal.job.pid);
+    assert.equal((await terminalCall('terminal_list')).jobs[0].status, 'exited');
+    await terminalCall('terminal_forget', { id: terminal.job.id });
+    assert.deepEqual((await terminalCall('terminal_list')).jobs, []);
+    const background = await terminalCall('terminal_start', { program: { command: process.execPath, args: [path.join(dir, 'terminal.cjs')] } });
+    await broker.stopAndWait('test-node');
+    await terminalExits.get(background.job.pid);
+    assert.equal(terminals.manager.has(background.job.id), false);
+    assert.throws(() => process.kill(first.result.pid, 0), { code: 'ESRCH' });
+    ghost.enabled = false;
+    assert.equal((await broker.handleRequest('test-node', { type: 'node-request', method: 'echo' })).ok, false);
+    assert.equal(prompts, 0);
+  } finally {
+    fileService.disposeAll();
+    disconnect(); confirmations.close(); hostTools.close(); clearCurrentDbClient(database);
+    await network.disposeAll(); await broker.stopAndWait('test-node');
+    await broker.stopAndWait('test-receiver');
+    broker.destroyAll();
+  }
+});
+
+// Unit: private IPC must decode arbitrary OS fragmentation and settle pending
+// broker calls on abrupt descriptor loss. Real-worker happy paths above cannot
+// deterministically produce truncated/invalid frames or a close without end.
+test('plugin control pipe preserves fragmented binary frames and reports abrupt close once', async () => {
+  const stream = new PassThrough();
+  const messages = [];
+  let failures = 0;
+  const pipe = createPluginControlPipe(stream, message => messages.push(message), () => failures++);
+  const payloads = [{ text: '你好', bytes: new Uint8Array([0, 255]) }, { value: 2 }];
+  const frames = payloads.map(value => {
+    const body = serialize(value);
+    const frame = Buffer.alloc(body.length + 4); frame.writeUInt32BE(body.length); body.copy(frame, 4); return frame;
+  });
+  const wire = Buffer.concat(frames);
+  for (const [start, end] of [[0, 1], [1, 3], [3, 7], [7, wire.length]]) stream.write(wire.subarray(start, end));
+  assert.deepEqual(messages, payloads);
+  stream.destroy();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(failures, 1);
+  assert.throws(() => pipe.send({ ignored: true }), /closed/);
+  pipe.dispose();
+  assert.equal(failures, 1);
+});
+
+test('plugin control pipe rejects invalid frame lengths and payloads before delivery', async () => {
+  for (const frame of [Buffer.alloc(4), Buffer.from([255, 255, 255, 255]), Buffer.from([0, 0, 0, 1, 0])]) {
+    const stream = new PassThrough();
+    let failures = 0, delivered = false;
+    const pipe = createPluginControlPipe(stream, () => { delivered = true; }, () => failures++);
+    stream.write(frame);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(failures, 1); assert.equal(delivered, false);
+    pipe.dispose();
+  }
+});

@@ -1,3 +1,4 @@
+import { storageManagementCardSettings } from './StorageManagementCard.settings-search';
 /**
  * StorageManagementCard — 关于页「存储空间」卡片。
  * ---------------------------------------------------------------------------
@@ -16,11 +17,11 @@
  * 点击用 ref 标志,不产生任何视觉变化。
  */
 
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Check, ChevronDown, RefreshCw } from 'lucide-react';
+import { RefreshCw } from 'lucide-react';
 import * as AlertDialog from '@radix-ui/react-alert-dialog';
-import { SelectParts as Select } from '@/components/ui/select';
+import { Select } from '@/components/ui/select';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -33,9 +34,16 @@ import { Spinner } from '@/components/ui/spinner';
 import { Button } from '@/components/ui/button';
 import { FormField } from '@/components/ui/form-field';
 import { Switch } from '@/components/ui/switch';
+import { Checkbox } from '@/components/ui/checkbox';
+import { SettingsCard, SettingsField, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
+import { SettingsTextInput } from './SettingsTextInput';
 import { DialogueDirectorySection } from './DialogueDirectorySection';
+import { BuddyWorkspaceDirectorySection } from './BuddyWorkspaceDirectorySection';
+import { ProjectsRootSection } from './ProjectsRootSection';
+import { TaskExportDirectorySection } from './TaskExportDirectorySection';
+import { TaskManagementSection } from './TaskManagementSection';
 import {
   DB_SLIMMING_ARCHIVE_AGE_OPTIONS,
   DB_SLIMMING_DEFAULT_ARCHIVE_AGE,
@@ -44,6 +52,7 @@ import {
   type DbSlimmingResult,
   type DbSlimmingScanResult,
 } from '../../../shared/localDbMaintenance';
+import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
 
 type StatsResult = Awaited<ReturnType<typeof window.electronAPI.cindyMediaStorage.stats>>;
 type ScanResult = Awaited<ReturnType<typeof window.electronAPI.cindyMediaStorage.scan>>;
@@ -56,6 +65,126 @@ type CleanPhase =
   | { kind: 'idle' }
   | { kind: 'scanned'; scan: ScanResult }
   | { kind: 'done'; result: CleanupResult };
+
+/**
+ * 占用总览卡片(纯展示):本页与云端设置页共用;云端页传入云实例的占用与自己的标题、说明。
+ */
+export function StorageOverviewView({
+  databaseBytes,
+  mediaBytes,
+  legacyImagesBytes,
+  chatAttachmentsBytes,
+  warningThresholdGiB,
+  statsFailed,
+  refreshing,
+  onRefresh,
+  title,
+  description,
+  children,
+  usagePercent,
+  usageLabel,
+}: {
+  databaseBytes: number | null;
+  mediaBytes: number | null;
+  legacyImagesBytes: number | null;
+  chatAttachmentsBytes: number | null;
+  warningThresholdGiB: number;
+  statsFailed: boolean;
+  refreshing: boolean;
+  onRefresh: () => void;
+  title?: ReactNode;
+  description?: ReactNode;
+  /** 说明下方的补充行。 */
+  children?: ReactNode;
+  /** 进度条改为表示别的占用(如另一台电脑的磁盘);不传时为数据库相对提醒阈值。 */
+  usagePercent?: number | null;
+  usageLabel?: string;
+}) {
+  const { t } = useTranslation();
+  const fixedCacheBytes = legacyImagesBytes !== null && chatAttachmentsBytes !== null
+    ? legacyImagesBytes + chatAttachmentsBytes
+    : null;
+  const totalBytes = databaseBytes !== null && mediaBytes !== null && fixedCacheBytes !== null
+    ? databaseBytes + mediaBytes + fixedCacheBytes
+    : null;
+  const overviewPercent = usagePercent !== undefined
+    ? usagePercent
+    : databaseBytes === null || warningThresholdGiB <= 0
+      ? null
+      : Math.min(100, (databaseBytes / (warningThresholdGiB * GIB_BYTES)) * 100);
+  return (
+    <div
+      className={cn(
+        'grid gap-4 rounded-xl px-5 py-5 md:grid-cols-[1.15fr_0.85fr] md:items-center',
+        'bg-[var(--settings-theme-card-bg)]',
+        'border border-[var(--settings-theme-card-border)]',
+      )}
+    >
+      <div>
+        <h3 className="text-13 font-medium text-[var(--settings-section-title)]">
+          {title ?? t('settings.about.storage.overviewTitle')}
+        </h3>
+        <p className="mt-1 text-12 leading-[1.5] text-[var(--settings-section-sublabel)]">
+          {description ?? t('settings.about.storage.overviewDescription')}
+        </p>
+        {children}
+        <div id={storageManagementCardSettings.aboutStorageDatabaseSectionTitle.targetId}
+          role="progressbar"
+          aria-label={usageLabel ?? t(storageManagementCardSettings.aboutStorageDatabaseSectionTitle.titleKey)}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={overviewPercent ?? undefined}
+          className="mt-4 h-2 overflow-hidden rounded-full bg-[var(--settings-theme-card-border)]"
+        >
+          {overviewPercent !== null && (
+            <span
+              className="block h-full rounded-full bg-[var(--accent-cta-bg)] transition-[width]"
+              style={{ width: `${overviewPercent}%` }}
+            />
+          )}
+        </div>
+      </div>
+      <div className="flex items-end justify-between gap-3 md:flex-col md:items-end">
+        <div className="text-right">
+          <strong className="block text-24 font-medium leading-none tracking-[-0.04em] text-[var(--settings-section-title)]">
+            {totalBytes === null ? t('settings.about.storage.unknown') : formatBytes(totalBytes)}
+          </strong>
+          <span id={storageManagementCardSettings.aboutStorageMediaSectionTitle.targetId} className="mt-1 block text-11 text-[var(--settings-section-sublabel)]">
+            {t('settings.about.storage.databaseUsage', {
+              size: databaseBytes === null
+                ? t('settings.about.storage.unknown')
+                : formatBytes(databaseBytes),
+            })}{' '}
+            · {t(storageManagementCardSettings.aboutStorageMediaSectionTitle.titleKey)} {mediaBytes === null
+              ? t('settings.about.storage.unknown')
+              : formatBytes(mediaBytes)}{' '}
+            · {t('settings.about.storage.legacyImagesLabel')} {legacyImagesBytes === null
+              ? t('settings.about.storage.unknown')
+              : formatBytes(legacyImagesBytes)}{' '}
+            · {t('settings.about.storage.chatAttachmentsLabel')} {chatAttachmentsBytes === null
+              ? t('settings.about.storage.unknown')
+              : formatBytes(chatAttachmentsBytes)}
+          </span>
+          {statsFailed && (
+            <span className="mt-1 block text-11 text-[var(--warning-fg)]">
+              {t('settings.about.storage.statsFailed')}
+            </span>
+          )}
+        </div>
+        <Button data-setting-id={storageManagementCardSettings.aboutStorageMediaSectionTitle.id}
+          variant="secondary"
+          size="md"
+          onClick={onRefresh}
+          disabled={refreshing}
+          loading={refreshing}
+        >
+          <RefreshCw className="h-3.5 w-3.5" aria-hidden />
+          {t('settings.about.storage.refreshStatsButton')}
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 export function StorageManagementCard() {
   const { t } = useTranslation();
@@ -257,341 +386,230 @@ export function StorageManagementCard() {
     scan.tmpFileCount > 0;
 
   const mediaBytes = stats?.success ? stats.blobs.totalBytes : null;
-  const fixedCacheBytes = stats?.success
-    ? stats.fixedCaches.legacyImages.bytes + stats.fixedCaches.chatAttachments.bytes
-    : null;
   const fixedCaches = stats?.success ? stats.fixedCaches : null;
-  const totalBytes = databaseBytes !== null && mediaBytes !== null && fixedCacheBytes !== null
-    ? databaseBytes + mediaBytes + fixedCacheBytes
-    : null;
-  const overviewPercent = databaseBytes === null || warningThresholdGiB <= 0
-    ? null
-    : Math.min(100, (databaseBytes / (warningThresholdGiB * GIB_BYTES)) * 100);
 
   return (
-    <div id="settings-storage-section" className="flex flex-col gap-3">
-      <div className="flex items-end justify-between gap-4 px-0.5">
-        <div className="min-w-0">
-          <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-            {t('settings.about.storage.title')}
-          </h2>
-          <p className="mt-1 text-13 leading-[1.5] text-[var(--settings-section-desc)]">
-            {t('settings.about.storage.overviewDescription')}
-          </p>
-        </div>
-      </div>
+    <StorageSectionFrame>
+      {/* 目录与占用总览同属一组，彼此 14px */}
+      <SettingsSection>
+        <DialogueDirectorySection />
 
-      <DialogueDirectorySection />
+        <BuddyWorkspaceDirectorySection />
 
-      {/* 占用总览 */}
-      <div
-        className={cn(
-          'grid gap-4 rounded-xl px-5 py-5 md:grid-cols-[1.15fr_0.85fr] md:items-center',
-          'bg-[var(--settings-theme-card-bg)]',
-          'border border-[var(--settings-theme-card-border)]',
-        )}
-      >
-        <div>
-          <h3 className="text-13 font-medium text-[var(--settings-section-title)]">
-            {t('settings.about.storage.overviewTitle')}
-          </h3>
-          <p className="mt-1 text-12 leading-[1.5] text-[var(--settings-section-sublabel)]">
-            {t('settings.about.storage.overviewDescription')}
-          </p>
-          <div id="settings-search-settings-about-storage-databaseSectionTitle"
-            role="progressbar"
-            aria-label={t('settings.about.storage.databaseSectionTitle')}
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={overviewPercent ?? undefined}
-            className="mt-4 h-2 overflow-hidden rounded-full bg-[var(--settings-theme-card-border)]"
-          >
-            {overviewPercent !== null && (
-              <span
-                className="block h-full rounded-full bg-[var(--accent-cta-bg)] transition-[width]"
-                style={{ width: `${overviewPercent}%` }}
-              />
-            )}
-          </div>
-        </div>
-        <div className="flex items-end justify-between gap-3 md:flex-col md:items-end">
-          <div className="text-right">
-            <strong className="block text-24 font-medium leading-none tracking-[-0.04em] text-[var(--settings-section-title)]">
-              {totalBytes === null ? t('settings.about.storage.unknown') : formatBytes(totalBytes)}
-            </strong>
-            <span id="settings-search-settings-about-storage-mediaSectionTitle" className="mt-1 block text-11 text-[var(--settings-section-sublabel)]">
-              {t('settings.about.storage.databaseUsage', {
-                size: databaseBytes === null
-                  ? t('settings.about.storage.unknown')
-                  : formatBytes(databaseBytes),
-              })}{' '}
-              · {t('settings.about.storage.mediaSectionTitle')} {mediaBytes === null
-                ? t('settings.about.storage.unknown')
-                : formatBytes(mediaBytes)}{' '}
-              · {t('settings.about.storage.legacyImagesLabel')} {fixedCacheBytes === null
-                ? t('settings.about.storage.unknown')
-                : formatBytes(fixedCaches?.legacyImages.bytes ?? 0)}{' '}
-              · {t('settings.about.storage.chatAttachmentsLabel')} {fixedCacheBytes === null
-                ? t('settings.about.storage.unknown')
-                : formatBytes(fixedCaches?.chatAttachments.bytes ?? 0)}
-            </span>
-            {statsFailed && (
-              <span className="mt-1 block text-11 text-[var(--warning-fg)]">
-                {t('settings.about.storage.statsFailed')}
-              </span>
-            )}
-          </div>
-          <Button
-            variant="secondary"
-            size="md"
-            onClick={() => void refreshStats()}
-            disabled={statsRefreshing}
-            loading={statsRefreshing}
-          >
-            <RefreshCw className="h-3.5 w-3.5" aria-hidden />
-            {t('settings.about.storage.refreshStatsButton')}
-          </Button>
-        </div>
-      </div>
+        <ProjectsRootSection />
 
-      <div className="flex items-baseline justify-between gap-3 px-0.5">
-        <h3 className="text-13 font-medium text-[var(--settings-section-title)]">
-          {t('settings.about.storage.mediaSectionTitle')}
-        </h3>
-        <span className="text-11 text-[var(--settings-section-sublabel)]">
-          {t('settings.about.storage.mediaSectionHint')}
-        </span>
-      </div>
-      <div
-        className={cn(
-          'overflow-hidden rounded-xl',
-          'bg-[var(--settings-theme-card-bg)]',
-          'border border-[var(--settings-theme-card-border)]',
-        )}
-      >
-        <div className="flex items-center justify-between gap-3 px-[18px] py-4">
-          <div className="flex min-w-0 flex-col gap-1">
-            <span className="text-13 text-[var(--settings-section-sublabel)]">
-              {t('settings.about.storage.legacyImagesLabel')}
-            </span>
-            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-              {t('settings.about.storage.legacyImagesDescription')}
-            </p>
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <CardButton onClick={handleOpenLegacyImagesDir}>
-              {t('settings.about.storage.legacyImagesOpenButton')}
-            </CardButton>
-            <CardButton onClick={handleClearLegacyImagesDir}>
-              {t('settings.about.storage.legacyImagesClearButton')}
-            </CardButton>
-          </div>
-        </div>
+        <TaskExportDirectorySection />
 
-        <div
-          aria-hidden
-          className="h-px w-full bg-[var(--settings-theme-card-border)]"
-        />
-
-        <div className="flex items-center justify-between gap-3 px-[18px] py-4">
-          <div className="flex min-w-0 flex-col gap-1">
-            <span className="text-13 text-[var(--settings-section-sublabel)]">
-              {t('settings.about.storage.chatAttachmentsLabel')}
-            </span>
-            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-              {t('settings.about.storage.chatAttachmentsDescription')}
-            </p>
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <CardButton onClick={handleOpenChatAttachmentsDir}>
-              {t('settings.about.storage.chatAttachmentsOpenButton')}
-            </CardButton>
-            <CardButton onClick={handleClearChatAttachmentsDir}>
-              {t('settings.about.storage.chatAttachmentsClearButton')}
-            </CardButton>
-          </div>
-        </div>
-        <div aria-hidden className="h-px w-full bg-[var(--settings-theme-card-border)]" />
-        <div className="flex items-center justify-between gap-3 px-[18px] py-4">
-          <div className="flex min-w-0 flex-col gap-1">
-            <span className="text-13 text-[var(--settings-section-sublabel)]">
-              <span id="settings-search-settings-about-storage-remoteMediaLabel">{t('settings.about.storage.remoteMediaLabel')}</span>
-              {' · '}{stats?.remoteMedia ? formatBytes(stats.remoteMedia.bytes) : t('settings.about.storage.unknown')}
-            </span>
-            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-              {t('settings.about.storage.remoteMediaDescription')}
-            </p>
-          </div>
-          <CardButton onClick={handleClearRemoteMedia}>
-            {t('settings.about.storage.remoteMediaClearButton')}
-          </CardButton>
-        </div>
-      </div>
-
-      <div className="flex items-baseline justify-between gap-3 px-0.5">
-        <h3 className="text-13 font-medium text-[var(--settings-section-title)]">
-          {t('settings.about.storage.databaseSectionTitle')}
-        </h3>
-        <span className="text-11 text-[var(--settings-section-sublabel)]">
-          {databaseBytes === null
-            ? t('settings.about.storage.unknown')
-            : t('settings.about.storage.databaseUsage', { size: formatBytes(databaseBytes) })}
-        </span>
-      </div>
-      <div
-        className={cn(
-          'overflow-hidden rounded-xl',
-          'bg-[var(--settings-theme-card-bg)]',
-          'border border-[var(--settings-theme-card-border)]',
-        )}
-      >
-        <DatabaseSlimmingSection
+        {/* 占用总览 */}
+        <StorageOverviewView
+          databaseBytes={databaseBytes}
+          mediaBytes={mediaBytes}
+          legacyImagesBytes={fixedCaches?.legacyImages.bytes ?? null}
+          chatAttachmentsBytes={fixedCaches?.chatAttachments.bytes ?? null}
           warningThresholdGiB={warningThresholdGiB}
-          onWarningThresholdChange={setWarningThresholdGiB}
+          statsFailed={statsFailed}
+          refreshing={statsRefreshing}
+          onRefresh={() => void refreshStats()}
         />
-      </div>
+      </SettingsSection>
 
-      <div className="flex items-start gap-2 rounded-xl bg-[var(--warning-bg-soft)] px-3.5 py-3 text-12 text-[var(--warning-fg)]">
-        <span className="text-14 font-semibold leading-none" aria-hidden>
-          !
-        </span>
-        <span>{t('settings.about.storage.databaseWarningNote')}</span>
-      </div>
-
-      {/* 清理:扫描 → 报数确认 → 执行 → 结果 */}
-      <div
-        className={cn(
-          'flex flex-col gap-2 rounded-xl px-[18px] py-4',
-          'bg-[var(--settings-theme-card-bg)]',
-          'border border-[var(--settings-theme-card-border)]',
-        )}
+      <SettingsSection
+        title={t(storageManagementCardSettings.aboutStorageMediaSectionTitle.titleKey)}
+        action={
+          <span className="text-11 text-[var(--settings-section-sublabel)]">
+            {t(storageManagementCardSettings.aboutStorageMediaSectionTitle.descriptionKey)}
+          </span>
+        }
       >
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex min-w-0 flex-col gap-1">
-            <span id="settings-search-settings-about-storage-cleanupLabel" className="text-13 text-[var(--settings-section-sublabel)]">
-              {t('settings.about.storage.cleanupLabel')}
-            </span>
-            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-              {t('settings.about.storage.cleanupDescription')}
-            </p>
-          </div>
-          <CardButton onClick={handleScan}>
-            {t('settings.about.storage.scanButton')}
-          </CardButton>
+        <SettingsCard>
+          <SettingsRow
+            title={t('settings.about.storage.legacyImagesLabel')}
+            hint={t('settings.about.storage.legacyImagesDescription')}
+            trailing={
+              <div className="flex shrink-0 items-center gap-2">
+                <CardButton onClick={handleOpenLegacyImagesDir}>
+                  {t('settings.about.storage.legacyImagesOpenButton')}
+                </CardButton>
+                <CardButton danger onClick={handleClearLegacyImagesDir}>
+                  {t('settings.about.storage.legacyImagesClearButton')}
+                </CardButton>
+              </div>
+            }
+          />
+          <SettingsRow
+            title={t('settings.about.storage.chatAttachmentsLabel')}
+            hint={t('settings.about.storage.chatAttachmentsDescription')}
+            trailing={
+              <div className="flex shrink-0 items-center gap-2">
+                <CardButton onClick={handleOpenChatAttachmentsDir}>
+                  {t('settings.about.storage.chatAttachmentsOpenButton')}
+                </CardButton>
+                <CardButton danger onClick={handleClearChatAttachmentsDir}>
+                  {t('settings.about.storage.chatAttachmentsClearButton')}
+                </CardButton>
+              </div>
+            }
+          />
+          <SettingsRow
+            title={
+              <>
+                <span id={storageManagementCardSettings.aboutStorageRemoteMediaLabel.targetId}>{t(storageManagementCardSettings.aboutStorageRemoteMediaLabel.titleKey)}</span>
+                {' · '}{stats?.remoteMedia ? formatBytes(stats.remoteMedia.bytes) : t('settings.about.storage.unknown')}
+              </>
+            }
+            hint={t(storageManagementCardSettings.aboutStorageRemoteMediaLabel.descriptionKey)}
+            trailing={
+              <CardButton danger onClick={handleClearRemoteMedia}>
+                {t('settings.about.storage.remoteMediaClearButton')}
+              </CardButton>
+            }
+          />
+        </SettingsCard>
+      </SettingsSection>
+
+      <TaskManagementSection />
+
+      <SettingsSection
+        title={t(storageManagementCardSettings.aboutStorageDatabaseSectionTitle.titleKey)}
+        action={
+          <span className="text-11 text-[var(--settings-section-sublabel)]">
+            {databaseBytes === null
+              ? t('settings.about.storage.unknown')
+              : t('settings.about.storage.databaseUsage', { size: formatBytes(databaseBytes) })}
+          </span>
+        }
+      >
+        <SettingsCard>
+          <DatabaseSlimmingSection
+            warningThresholdGiB={warningThresholdGiB}
+            onWarningThresholdChange={setWarningThresholdGiB}
+          />
+        </SettingsCard>
+
+        <div className="flex items-start gap-2 rounded-xl bg-[var(--warning-bg-soft)] px-3.5 py-3 text-12 text-[var(--warning-fg)]">
+          <span className="text-14 font-semibold leading-none" aria-hidden>
+            !
+          </span>
+          <span>{t('settings.about.storage.databaseWarningNote')}</span>
         </div>
 
-        {phase.kind === 'scanned' && (
-          <div className="flex flex-col gap-1.5 rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5">
-            {hasCleanable(phase.scan) ? (
-              <>
-                <ReportLine
-                  visible={phase.scan.zeroRef.count > 0}
-                  text={t('settings.about.storage.reportZeroRef', {
-                    count: phase.scan.zeroRef.count,
-                    size: formatBytes(phase.scan.zeroRef.bytes),
-                  })}
-                />
-                <ReportLine
-                  visible={phase.scan.zeroRef.protectedCount > 0}
-                  text={t('settings.about.storage.reportProtected', {
-                    count: phase.scan.zeroRef.protectedCount,
-                  })}
-                />
-                <ReportLine
-                  visible={phase.scan.cache.evictable.length > 0}
-                  text={t('settings.about.storage.reportCache', {
-                    size: formatBytes(
-                      phase.scan.cache.evictable.reduce((sum, e) => sum + e.bytes, 0),
-                    ),
-                    total: formatBytes(phase.scan.cache.totalBytes),
-                    limit: formatBytes(phase.scan.cache.limitBytes),
-                  })}
-                />
-                <ReportLine
-                  visible={phase.scan.deadDirs.some((d) => d.eligible)}
-                  text={t('settings.about.storage.reportDeadDirs', {
-                    size: formatBytes(
-                      phase.scan.deadDirs
-                        .filter((d) => d.eligible)
-                        .reduce((sum, d) => sum + d.bytes, 0),
-                    ),
-                  })}
-                />
-                <ReportLine
-                  visible={phase.scan.tmpFileCount > 0}
-                  text={t('settings.about.storage.reportTmpFiles', {
-                    count: phase.scan.tmpFileCount,
-                  })}
-                />
-                <div className="mt-1 flex items-center justify-end gap-2">
-                  <CardButton onClick={() => setPhase({ kind: 'idle' })}>
-                    {t('settings.about.storage.cancelButton')}
-                  </CardButton>
-                  <CardButton emphasis onClick={() => handleCleanup(phase.scan)}>
-                    {cleanableBytes(phase.scan) > 0
-                      ? t('settings.about.storage.confirmCleanup', {
-                          size: formatBytes(cleanableBytes(phase.scan)),
-                        })
-                      : t('settings.about.storage.confirmCleanupNoSize')}
-                  </CardButton>
-                </div>
-              </>
-            ) : (
-              <p className="text-12 text-[var(--settings-section-sublabel)]">
-                {t('settings.about.storage.nothingToClean')}
+        {/* 清理:扫描 → 报数确认 → 执行 → 结果 */}
+        <SettingsCard>
+          {/* 报数与结果同属清理这一项,紧贴在名称下面,不另起分割线 */}
+          <SettingsField
+            title={<span id={storageManagementCardSettings.aboutStorageCleanupLabel.targetId}>{t(storageManagementCardSettings.aboutStorageCleanupLabel.titleKey)}</span>}
+            hint={t(storageManagementCardSettings.aboutStorageCleanupLabel.descriptionKey)}
+            action={(
+              <CardButton onClick={handleScan}>
+                {t('settings.about.storage.scanButton')}
+              </CardButton>
+            )}
+          >
+            {phase.kind === 'scanned' && (
+              <div className="flex flex-col gap-1.5 rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5">
+                {hasCleanable(phase.scan) ? (
+                  <>
+                    <ReportLine
+                      visible={phase.scan.zeroRef.count > 0}
+                      text={t('settings.about.storage.reportZeroRef', {
+                        count: phase.scan.zeroRef.count,
+                        size: formatBytes(phase.scan.zeroRef.bytes),
+                      })}
+                    />
+                    <ReportLine
+                      visible={phase.scan.zeroRef.protectedCount > 0}
+                      text={t('settings.about.storage.reportProtected', {
+                        count: phase.scan.zeroRef.protectedCount,
+                      })}
+                    />
+                    <ReportLine
+                      visible={phase.scan.cache.evictable.length > 0}
+                      text={t('settings.about.storage.reportCache', {
+                        size: formatBytes(
+                          phase.scan.cache.evictable.reduce((sum, e) => sum + e.bytes, 0),
+                        ),
+                        total: formatBytes(phase.scan.cache.totalBytes),
+                        limit: formatBytes(phase.scan.cache.limitBytes),
+                      })}
+                    />
+                    <ReportLine
+                      visible={phase.scan.deadDirs.some((d) => d.eligible)}
+                      text={t('settings.about.storage.reportDeadDirs', {
+                        size: formatBytes(
+                          phase.scan.deadDirs
+                            .filter((d) => d.eligible)
+                            .reduce((sum, d) => sum + d.bytes, 0),
+                        ),
+                      })}
+                    />
+                    <ReportLine
+                      visible={phase.scan.tmpFileCount > 0}
+                      text={t('settings.about.storage.reportTmpFiles', {
+                        count: phase.scan.tmpFileCount,
+                      })}
+                    />
+                    <div className="mt-1 flex items-center justify-end gap-2">
+                      <CardButton onClick={() => setPhase({ kind: 'idle' })}>
+                        {t('settings.about.storage.cancelButton')}
+                      </CardButton>
+                      <CardButton emphasis onClick={() => handleCleanup(phase.scan)}>
+                        {cleanableBytes(phase.scan) > 0
+                          ? t('settings.about.storage.confirmCleanup', {
+                              size: formatBytes(cleanableBytes(phase.scan)),
+                            })
+                          : t('settings.about.storage.confirmCleanupNoSize')}
+                      </CardButton>
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-12 text-[var(--settings-section-sublabel)]">
+                    {t('settings.about.storage.nothingToClean')}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {phase.kind === 'done' && (
+              <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)]">
+                {t('settings.about.storage.cleanupResult', {
+                  size: formatBytes(phase.result.freedBytes),
+                  skipped:
+                    phase.result.zeroRef.skipped +
+                    phase.result.cacheEvicted.skipped +
+                    phase.result.deadDirs.skipped.length,
+                })}
               </p>
             )}
-          </div>
-        )}
+          </SettingsField>
+        </SettingsCard>
 
-        {phase.kind === 'done' && (
-          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)]">
-            {t('settings.about.storage.cleanupResult', {
-              size: formatBytes(phase.result.freedBytes),
-              skipped:
-                phase.result.zeroRef.skipped +
-                phase.result.cacheEvicted.skipped +
-                phase.result.deadDirs.skipped.length,
-            })}
-          </p>
-        )}
-      </div>
-
-      {/* 体检(对账,只报不删) */}
-      <div
-        className={cn(
-          'flex flex-col gap-1.5 rounded-xl px-[18px] py-4',
-          'bg-[var(--settings-theme-card-bg)]',
-          'border border-[var(--settings-theme-card-border)]',
-        )}
-      >
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex min-w-0 flex-col gap-1">
-            <span id="settings-search-settings-about-storage-reconcileLabel" className="text-13 text-[var(--settings-section-sublabel)]">
-              {t('settings.about.storage.reconcileLabel')}
-            </span>
-            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-              {t('settings.about.storage.reconcileDescription')}
-            </p>
-          </div>
-          <CardButton onClick={handleReconcile}>
-            {t('settings.about.storage.reconcileButton')}
-          </CardButton>
-        </div>
-        {reconcile && (
-          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)]">
-            {reconcile.orphanCount === 0 && reconcile.missingCount === 0 && reconcile.strayCount === 0
-              ? t('settings.about.storage.reconcileHealthy')
-              : t('settings.about.storage.reconcileIssues', {
-                  orphans: reconcile.orphanCount,
-                  orphanSize: formatBytes(reconcile.orphanBytes),
-                  missing: reconcile.missingCount,
-                  stray: reconcile.strayCount,
-                })}
-          </p>
-        )}
-      </div>
-    </div>
+        {/* 体检(对账,只报不删) */}
+        <SettingsCard>
+          <SettingsField
+            title={<span id={storageManagementCardSettings.aboutStorageReconcileLabel.targetId}>{t(storageManagementCardSettings.aboutStorageReconcileLabel.titleKey)}</span>}
+            hint={t(storageManagementCardSettings.aboutStorageReconcileLabel.descriptionKey)}
+            action={(
+              <CardButton onClick={handleReconcile}>
+                {t('settings.about.storage.reconcileButton')}
+              </CardButton>
+            )}
+          >
+            {reconcile && (
+              <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)]">
+                {reconcile.orphanCount === 0 && reconcile.missingCount === 0 && reconcile.strayCount === 0
+                  ? t('settings.about.storage.reconcileHealthy')
+                  : t('settings.about.storage.reconcileIssues', {
+                      orphans: reconcile.orphanCount,
+                      orphanSize: formatBytes(reconcile.orphanBytes),
+                      missing: reconcile.missingCount,
+                      stray: reconcile.strayCount,
+                    })}
+              </p>
+            )}
+          </SettingsField>
+        </SettingsCard>
+      </SettingsSection>
+    </StorageSectionFrame>
   );
 }
 
@@ -599,6 +617,59 @@ type DbSlimmingPhase =
   | { kind: 'idle' }
   | { kind: 'scanned'; scan: DbSlimmingScanResult }
   | { kind: 'done'; result: DbSlimmingResult };
+
+
+/** 存储空间页框架:页标题与说明 + 各分区。云实例设置复用同一框架。 */
+export function StorageSectionFrame({
+  children,
+  description,
+}: {
+  children: ReactNode;
+  /** 另一台电脑的存储页用自己的说明。 */
+  description?: ReactNode;
+}) {
+  const { t } = useTranslation();
+  return (
+    <SettingsSection
+      variant="page"
+      id="settings-storage-section"
+      title={t(storageManagementCardSettings.storage.sectionKey)}
+      description={description ?? t('settings.about.storage.overviewDescription')}
+    >
+      {children}
+    </SettingsSection>
+  );
+}
+
+/** 「数据库」卡片内容的留白(与 SettingsField 一致),本机清理区与云实例阈值设置共用。 */
+export const STORAGE_DATABASE_BODY_CLASS = 'flex flex-col gap-3 px-4 py-4';
+
+/** 「数据库」分区:标题、占用(可选)与卡片。 */
+export function StorageDatabaseSection({
+  usage,
+  children,
+  headingStatus,
+}: {
+  usage?: string;
+  children: ReactNode;
+  /** Cloud settings: a group that could not be read says so here, in place of the heading's action. */
+  headingStatus?: ReactNode;
+}) {
+  const { t } = useTranslation();
+  return (
+    <SettingsSection
+      title={t(storageManagementCardSettings.aboutStorageDatabaseSectionTitle.titleKey)}
+      action={
+        headingStatus ??
+        (usage !== undefined ? (
+          <span className="text-11 text-[var(--settings-section-sublabel)]">{usage}</span>
+        ) : undefined)
+      }
+    >
+      <SettingsCard>{children}</SettingsCard>
+    </SettingsSection>
+  );
+}
 
 function DatabaseSlimmingSection({
   warningThresholdGiB,
@@ -887,17 +958,12 @@ function DatabaseSlimmingSection({
   );
 
   return (
-    <div className="flex flex-col gap-3 px-[18px] py-4" aria-busy={scanLoading}>
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex min-w-0 flex-col gap-1">
-          <span id="settings-search-settings-about-storage-dbSlimmingLabel" className="text-13 text-[var(--settings-section-sublabel)]">
-            {t('settings.about.storage.dbSlimmingLabel')}
-          </span>
-          <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-            {t('settings.about.storage.dbSlimmingDescription')}
-          </p>
-        </div>
-        <Button
+    <SettingsField
+      aria-busy={scanLoading}
+      title={<span id={storageManagementCardSettings.aboutStorageDbSlimmingLabel.targetId}>{t(storageManagementCardSettings.aboutStorageDbSlimmingLabel.titleKey)}</span>}
+      hint={t(storageManagementCardSettings.aboutStorageDbSlimmingLabel.descriptionKey)}
+      action={(
+        <Button data-setting-id={storageManagementCardSettings.aboutStorageDbSlimmingLabel.id}
           variant="cta"
           size="md"
           className="gap-1.5"
@@ -906,7 +972,8 @@ function DatabaseSlimmingSection({
         >
           {t('settings.about.storage.dbSlimmingScanButton')}
         </Button>
-      </div>
+      )}
+    >
 
       <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5">
         <label
@@ -916,71 +983,23 @@ function DatabaseSlimmingSection({
           {t('settings.about.storage.dbSlimmingArchiveAgeLabel')}
         </label>
         <div className="flex items-center">
-          <Select.Root
+          <Select data-setting-id={storageManagementCardSettings.aboutStorageDbSlimmingLabel.id}
+            id="db-slimming-archive-age"
+            size="compact"
+            width="sm"
             value={String(archiveAge)}
             onValueChange={handleArchiveAgeChange}
             disabled={scanLoading}
-          >
-            <Select.Trigger
-              id="db-slimming-archive-age"
-              aria-label={t('settings.about.storage.dbSlimmingArchiveAgeLabel')}
-              className={cn(
-                'flex h-8 min-w-[104px] items-center justify-between gap-2 rounded-full border px-3 text-12 outline-none transition-colors',
-                'border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-                'hover:bg-[var(--settings-menu-bg-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-                'disabled:cursor-not-allowed disabled:opacity-50',
-              )}
-            >
-              <Select.Value />
-              <Select.Icon asChild>
-                <ChevronDown
-                  size={13}
-                  className="shrink-0 text-[var(--settings-eye-icon)]"
-                  aria-hidden="true"
-                />
-              </Select.Icon>
-            </Select.Trigger>
-            <Select.Portal>
-              <Select.Content
-                position="popper"
-                side="bottom"
-                align="end"
-                sideOffset={6}
-                className={cn(
-                  'z-[10010] w-[var(--radix-select-trigger-width)] rounded-xl p-1.5',
-                  'border border-[var(--settings-input-border)] bg-[var(--settings-theme-card-bg)]',
-                )}
-              >
-                <Select.Viewport className="flex flex-col gap-0.5">
-                  {DB_SLIMMING_ARCHIVE_AGE_OPTIONS.map((age) => (
-                    <Select.Item
-                      key={age}
-                      value={String(age)}
-                      className={cn(
-                        'flex h-8 cursor-pointer select-none items-center justify-between gap-2 rounded-lg px-2.5 text-12 outline-none transition-colors',
-                        'text-[var(--settings-input-text)]',
-                        'data-[state=checked]:font-medium data-[state=checked]:text-[var(--settings-menu-text-selected)]',
-                      )}
-                    >
-                      <Select.ItemText>
-                        {t(
-                          age === '7-days'
-                            ? 'settings.about.storage.dbSlimmingArchiveAgeOption7Days'
-                            : `settings.about.storage.dbSlimmingArchiveAgeOption${age}`,
-                        )}
-                      </Select.ItemText>
-                      <Select.ItemIndicator>
-                        <Check
-                          size={14}
-                          className="shrink-0 text-[var(--settings-theme-icon-active)]"
-                        />
-                      </Select.ItemIndicator>
-                    </Select.Item>
-                  ))}
-                </Select.Viewport>
-              </Select.Content>
-            </Select.Portal>
-          </Select.Root>
+            label={t('settings.about.storage.dbSlimmingArchiveAgeLabel')}
+            options={DB_SLIMMING_ARCHIVE_AGE_OPTIONS.map((age) => ({
+              value: String(age),
+              label: t(
+                age === '7-days'
+                  ? 'settings.about.storage.dbSlimmingArchiveAgeOption7Days'
+                  : `settings.about.storage.dbSlimmingArchiveAgeOption${age}`,
+              ),
+            }))}
+          />
         </div>
 
         <label
@@ -994,7 +1013,7 @@ function DatabaseSlimmingSection({
             {t('settings.about.storage.dbSlimmingIncludeActiveDescription')}
           </span>
         </label>
-        <Switch
+        <Switch data-setting-id={storageManagementCardSettings.aboutStorageDbSlimmingLabel.id}
           id="db-slimming-include-active"
           checked={includeActiveTasks}
           disabled={scanLoading}
@@ -1015,10 +1034,11 @@ function DatabaseSlimmingSection({
               : t('settings.about.storage.dbSlimmingBackupDefaultLocation')}
           </span>
         </label>
-        <Switch
+        {/* Read only when slimming runs: Checkbox, not Switch (DESIGN.md §4 Desktop settings controls). */}
+        <Checkbox data-setting-id={storageManagementCardSettings.aboutStorageDbSlimmingLabel.id}
           id="db-slimming-backup-enabled"
           checked={backupEnabled}
-          onCheckedChange={(checked) => setBackupEnabled(checked)}
+          onChange={(event) => setBackupEnabled(event.currentTarget.checked)}
           aria-label={t('settings.about.storage.dbSlimmingBackupLabel')}
         />
 
@@ -1081,71 +1101,22 @@ function DatabaseSlimmingSection({
         onConfirm={handleSchedule}
       />
 
-      <div id="settings-search-settings-about-storage-dbSizeWarningThresholdLabel" className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5">
-        <FormField
-          id="db-size-warning-threshold"
-          label={t('settings.about.storage.dbSizeWarningThresholdLabel')}
-          hint={t('settings.about.storage.dbSizeWarningThresholdDescription')}
-          error={warningThresholdInvalid ? t('settings.about.storage.dbSizeWarningThresholdInvalid') : undefined}
-          reserveFeedback
-          className="col-span-2 grid grid-cols-[minmax(0,1fr)_auto] items-center [&>div:last-child]:col-span-2"
-        >
-          {({ error, ...control }) => (
-            <div className="flex items-center gap-1.5">
-              <input
-                {...control}
-                type="number"
-                min={1}
-                max={1024}
-                step={1}
-                value={warningThresholdDraft}
-                disabled={warningSaving}
-                onChange={(event) => {
-                  warningThresholdDirtyRef.current = true;
-                  warningThresholdEditVersionRef.current += 1;
-                  setWarningThresholdDraft(event.target.value);
-                  setWarningThresholdInvalid(false);
-                }}
-                onBlur={() => void saveWarningThreshold()}
-                className={cn(
-                  'h-8 w-16 rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-2.5 text-center text-12 text-[var(--settings-input-text)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:cursor-not-allowed disabled:opacity-50',
-                  error && 'border-[var(--error-border)] focus-visible:ring-[var(--error-fg)]',
-                )}
-              />
-              <span className="text-12 text-[var(--settings-section-sublabel)]">G</span>
-            </div>
-          )}
-        </FormField>
-
-        <label
-          htmlFor="db-size-warning-disabled"
-          className="flex min-w-0 cursor-pointer flex-col gap-0.5"
-        >
-          <span id="settings-search-settings-about-storage-dbSizeWarningDisableLabel" className="text-12 text-[var(--settings-section-sublabel)]">
-            {t('settings.about.storage.dbSizeWarningDisableLabel')}
-          </span>
-          <span className="text-11 leading-[1.4] text-[var(--text-secondary)]">
-            {t('settings.about.storage.dbSizeWarningDisableDescription')}
-          </span>
-        </label>
-        <Switch
-          id="db-size-warning-disabled"
-          checked={warningDisabled}
-          disabled={warningSaving}
-          onCheckedChange={(checked) => void persistWarningSettings({ disabled: checked })}
-          aria-label={t('settings.about.storage.dbSizeWarningDisableLabel')}
-        />
-        <div className="col-span-2 flex justify-end">
-          <DefaultOverrideControls
-            isCustomized={warningCustomized}
-            alwaysVisible
-            showCustomizedBadge={false}
-            disabled={warningSaving}
-            onReset={() => void persistWarningSettings()}
-          />
-        </div>
-      </div>
-    </div>
+      <DatabaseWarningSettingsView
+        warningThresholdDraft={warningThresholdDraft}
+        warningThresholdInvalid={warningThresholdInvalid}
+        warningSaving={warningSaving}
+        warningDisabled={warningDisabled}
+        warningCustomized={warningCustomized}
+        saveWarningThreshold={saveWarningThreshold}
+        persistWarningSettings={persistWarningSettings}
+        onThresholdChange={(value) => {
+          warningThresholdDirtyRef.current = true;
+          warningThresholdEditVersionRef.current += 1;
+          setWarningThresholdDraft(value);
+          setWarningThresholdInvalid(false);
+        }}
+      />
+    </SettingsField>
   );
 }
 
@@ -1199,16 +1170,16 @@ function DatabaseCleanupDialog({
     >
       <AlertDialog.Portal>
         <AlertDialog.Overlay
-          className="modal-scrim fixed inset-0 z-[10020]"
-          style={{ ...WINDOW_DRAG_STYLE, zIndex: 10020 }}
+          className="modal-scrim fixed inset-0 z-modal-nested"
+          style={{ ...WINDOW_DRAG_STYLE, zIndex: Z_INDEX_LAYERS['modal-nested'] }}
         >
           <AlertDialog.Content
             className={cn(
-              'modal-panel fixed inset-0 z-[10020] m-auto flex h-fit min-h-[180px] w-full max-w-[640px] flex-col',
+              'modal-panel fixed inset-0 z-modal-nested m-auto flex h-fit min-h-[180px] w-full max-w-[640px] flex-col',
               'p-4',
               mode === 'report' ? 'select-text' : 'select-none',
             )}
-            style={{ ...WINDOW_NO_DRAG_STYLE, zIndex: 10020 }}
+            style={{ ...WINDOW_NO_DRAG_STYLE, zIndex: Z_INDEX_LAYERS['modal-nested'] }}
             aria-describedby={mode === 'report' ? bodyId : undefined}
             aria-busy={busy || undefined}
             onEscapeKeyDown={(event) => {
@@ -1278,12 +1249,12 @@ function DatabaseCleanupDialog({
                   </div>
                   <div className="mt-6 flex shrink-0 justify-end gap-2.5">
                     <AlertDialog.Cancel asChild>
-                      <Button variant="secondary" size="lg" type="button" className="min-w-[96px]">
+                      <Button data-settings-search-action="Cancel database cleanup" variant="secondary" size="lg" type="button" className="min-w-[96px]">
                         {t('settings.about.storage.cancelButton')}
                       </Button>
                     </AlertDialog.Cancel>
-                    <Button
-                      variant="secondary"
+                    <Button data-settings-search-action="Confirm the selected database cleanup"
+                      variant="primary"
                       size="lg"
                       tone="danger-solid"
                       ref={confirmButtonRef}
@@ -1314,18 +1285,22 @@ function CardButton({
   children,
   onClick,
   emphasis = false,
+  danger = false,
   disabled = false,
   busy = false,
 }: {
   children: React.ReactNode;
   onClick: () => void;
   emphasis?: boolean;
+  /** Irreversible clears use the danger tone (CONTROLS decision 4). */
+  danger?: boolean;
   disabled?: boolean;
   busy?: boolean;
 }) {
   return (
-    <Button
+    <Button data-settings-search-action="Run the labeled storage cleanup or folder action"
       variant={emphasis ? 'cta' : 'secondary'}
+      tone={danger ? 'danger' : 'default'}
       size="sm"
       compact
       type="button"
@@ -1335,5 +1310,99 @@ function CardButton({
     >
       {children}
     </Button>
+  );
+}
+
+
+export function DatabaseWarningSettingsView({
+  warningThresholdDraft,
+  warningThresholdInvalid,
+  warningSaving,
+  warningDisabled,
+  warningCustomized,
+  saveWarningThreshold,
+  persistWarningSettings,
+  onThresholdChange,
+}: {
+  warningThresholdDraft: string;
+  warningThresholdInvalid: boolean;
+  warningSaving: boolean;
+  warningDisabled: boolean;
+  warningCustomized: boolean;
+  saveWarningThreshold: () => Promise<void> | undefined;
+  persistWarningSettings: (patch?: { disabled?: boolean; thresholdGiB?: number }) => Promise<void>;
+  onThresholdChange: (value: string) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div
+      id={storageManagementCardSettings.aboutStorageDbSizeWarningThresholdLabel.targetId}
+      className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5"
+    >
+      <FormField
+        id="db-size-warning-threshold"
+        label={t(storageManagementCardSettings.aboutStorageDbSizeWarningThresholdLabel.titleKey)}
+        hint={t(storageManagementCardSettings.aboutStorageDbSizeWarningThresholdLabel.descriptionKey)}
+        error={
+          warningThresholdInvalid
+            ? t('settings.about.storage.dbSizeWarningThresholdInvalid')
+            : undefined
+        }
+        reserveFeedback
+        className="col-span-2 grid grid-cols-[minmax(0,1fr)_auto] items-center [&>div:last-child]:col-span-2"
+      >
+        {({ error, ...control }) => (
+          <div className="flex items-center gap-1.5">
+            {/* Group reset sits left of the first control, only when customized (CONTROLS decision 3). */}
+            <DefaultOverrideControls
+              isCustomized={warningCustomized}
+              disabled={warningSaving}
+              onReset={() => void persistWarningSettings()}
+            />
+            <SettingsTextInput data-setting-id={storageManagementCardSettings.aboutStorageDbSizeWarningThresholdLabel.id}
+              {...control}
+              type="number"
+              size="sm"
+              surface="ivory"
+              min={1}
+              max={1024}
+              step={1}
+              value={warningThresholdDraft}
+              disabled={warningSaving}
+              error={error}
+              onChange={(next) => {
+                onThresholdChange(next);
+              }}
+              onBlur={() => void saveWarningThreshold()}
+              className="w-16"
+              inputClassName="text-center"
+            />
+            <span className="text-12 text-[var(--settings-section-sublabel)]">G</span>
+          </div>
+        )}
+      </FormField>
+
+      <label
+        htmlFor="db-size-warning-disabled"
+        className="flex min-w-0 cursor-pointer flex-col gap-0.5"
+      >
+        <span
+          id={storageManagementCardSettings.aboutStorageDbSizeWarningDisableLabel.targetId}
+          className="text-12 text-[var(--settings-section-sublabel)]"
+        >
+          {t(storageManagementCardSettings.aboutStorageDbSizeWarningDisableLabel.titleKey)}
+        </span>
+        <span className="text-11 leading-[1.4] text-[var(--text-secondary)]">
+          {t(storageManagementCardSettings.aboutStorageDbSizeWarningDisableLabel.descriptionKey)}
+        </span>
+      </label>
+      <Switch data-setting-id={storageManagementCardSettings.aboutStorageDbSizeWarningDisableLabel.id}
+        id="db-size-warning-disabled"
+        checked={warningDisabled}
+        disabled={warningSaving}
+        onCheckedChange={(checked) => void persistWarningSettings({ disabled: checked })}
+        aria-label={t(storageManagementCardSettings.aboutStorageDbSizeWarningDisableLabel.titleKey)}
+      />
+    </div>
   );
 }

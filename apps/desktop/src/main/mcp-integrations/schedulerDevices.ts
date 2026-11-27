@@ -12,11 +12,13 @@ const CHANNELS: Record<SchedulerRemoteOp, string> = {
   list: 'maker:schedule:list',
   get: 'maker:schedule:get',
   'list-runs': 'maker:schedule:list-runs',
+  create: 'maker:schedule:create',
   update: 'maker:schedule:update',
   pause: 'maker:schedule:pause',
   resume: 'maker:schedule:resume',
   delete: 'maker:schedule:delete',
   'run-now': 'maker:schedule:run-now',
+  'webhook-restore': 'maker:schedule:webhook-restore',
 };
 
 /** 远程失败说明。只陈述事实；旧版本对方不认识的请求明确说不支持。 */
@@ -33,11 +35,13 @@ const MESSAGES: Record<string, string> = {
 };
 
 const WRITE_OPS: ReadonlySet<SchedulerRemoteOp> = new Set([
+  'create',
   'update',
   'pause',
   'resume',
   'delete',
   'run-now',
+  'webhook-restore',
 ]);
 
 /**
@@ -78,6 +82,8 @@ function failure(code: string, message: string): { ok: false; code: string; mess
 export function createSchedulerRemoteDeps(deps: {
   listDevices(): Promise<SchedulerDevice[]>;
   captureAccess(): () => void;
+  /** Plugin approval must remain current after connection setup, at the wire boundary. */
+  captureInvocationGuard?(): (() => void) | undefined;
   invoke(
     deviceId: string,
     channel: string,
@@ -90,7 +96,9 @@ export function createSchedulerRemoteDeps(deps: {
     async invoke(deviceId, op, args) {
       let assertCurrent: () => void;
       try {
-        assertCurrent = deps.captureAccess();
+        const access = deps.captureAccess();
+        const invocation = deps.captureInvocationGuard?.();
+        assertCurrent = invocation ? () => { access(); invocation(); } : access;
       } catch {
         return {
           ok: false,
@@ -99,18 +107,45 @@ export function createSchedulerRemoteDeps(deps: {
         };
       }
       let response: InvokeResultPayload;
+      let operationStarted = false;
       try {
         const patch = op === 'update' ? args[1] as Record<string, unknown> | undefined : undefined;
+        const input = op === 'create' ? args[0] as Record<string, unknown> | undefined : patch;
+        const needsWebhook = input?.webhookTrigger !== undefined;
+        // Plugin events are handed over on the target computer itself: no account or receiver needed there.
+        const pluginEvents = (input?.webhookTrigger as { source?: { preset?: unknown } } | null | undefined)?.source?.preset === 'plugin';
+        // 设模式要对方能存：旧端会丢掉未知字段后照样报成功，任务静默按具体模型运行。清除(null)不需要。
+        const needsModelGroup = typeof input?.modelGroup === 'string' && input.modelGroup.trim() !== '';
         const needsModelSelection = patch?.modelAgentKind != null;
         const needsLocationSelection = patch && (Object.prototype.hasOwnProperty.call(patch, 'modelAgentDeviceId')
           || ['modelAgentKind', 'model', 'providerId', 'effort'].some((key) => patch[key] === null));
-        if (needsModelSelection || needsLocationSelection) {
+        if (op === 'create' || needsModelSelection || needsLocationSelection || needsWebhook || needsModelGroup || input?.prTrigger !== undefined) {
           const capabilities = await deps.invoke(deviceId, 'maker:get-capabilities', ['claude-code'], { preSend: assertCurrent });
           assertCurrent();
           const supported = capabilities.ok ? capabilities.result as {
             supportsScheduleModelSelection?: boolean;
             supportsScheduleAgentDeviceSelection?: boolean;
+            supportsRemoteScheduleDirectoryCheck?: boolean;
+            supportsSchedulePrTrigger?: boolean;
+            supportsScheduleWebhookTrigger?: boolean;
+            supportsSchedulePluginEventTrigger?: boolean;
+            supportsScheduleModelGroup?: boolean;
           } | null : null;
+          if (op === 'create' && supported?.supportsRemoteScheduleDirectoryCheck !== true) {
+            return { ok: false, code: 'REMOTE_UNSUPPORTED', message: '目标电脑的版本不支持远程创建定时任务，请先更新目标电脑' };
+          }
+          if (input?.prTrigger !== undefined && !supported?.supportsSchedulePrTrigger) {
+            return { ok: false, code: 'REMOTE_UNSUPPORTED', message: '目标电脑需要更新才能设置 PR 触发条件' };
+          }
+          if (needsWebhook && supported?.supportsScheduleWebhookTrigger !== true) {
+            return { ok: false, code: 'REMOTE_UNSUPPORTED', message: '目标电脑的版本不支持 Webhook 触发，请先更新目标电脑' };
+          }
+          if (pluginEvents && supported?.supportsSchedulePluginEventTrigger !== true) {
+            return { ok: false, code: 'REMOTE_UNSUPPORTED', message: '目标电脑的版本不支持插件事件触发，请先更新目标电脑' };
+          }
+          if (needsModelGroup && supported?.supportsScheduleModelGroup !== true) {
+            return { ok: false, code: 'REMOTE_UNSUPPORTED', message: '目标电脑的版本不支持自动化选择模型组，请先更新目标电脑' };
+          }
           if (needsModelSelection && supported?.supportsScheduleModelSelection !== true) {
             return { ok: false, code: 'REMOTE_UNSUPPORTED', message: '目标电脑的版本不支持自动化完整模型选择，请先更新目标电脑' };
           }
@@ -118,11 +153,35 @@ export function createSchedulerRemoteDeps(deps: {
             return { ok: false, code: 'REMOTE_UNSUPPORTED', message: '目标电脑的版本不支持自动化选择远程或分享供应商，请先更新目标电脑' };
           }
         }
+        if (needsWebhook && input?.webhookTrigger !== null && !pluginEvents) {
+          const receiver = await deps.invoke(deviceId, 'maker:schedule:webhook-receiver', [], { preSend: assertCurrent });
+          assertCurrent();
+          if (!receiver.ok) return failure(receiver.error.code, receiver.error.message);
+          if (receiver.result !== 'cloud' && receiver.result !== 'local') {
+            return { ok: false, code: 'INVALID_PARAMS', message: receiver.result === 'signed-out'
+              ? '目标电脑需要登录 Cindy 账号才能配置 Webhook' : '目标电脑没有可用的 Webhook 接收服务' };
+          }
+        }
+        operationStarted = true;
         response = await deps.invoke(deviceId, CHANNELS[op], args, { preSend: assertCurrent });
+        if (op === 'get') {
+          assertCurrent();
+          const schedule = response.ok ? response.result : null;
+          if (schedule && typeof schedule === 'object' && !Array.isArray(schedule)
+            && 'webhookTrigger' in schedule && schedule.webhookTrigger) {
+            // Remote reads skip the local schedule_get callback, so enrich through
+            // the target's existing read-only channel under the same owner snapshot.
+            const status = await deps.invoke(deviceId, 'maker:schedule:webhook-status', [args[0]], { preSend: assertCurrent });
+            assertCurrent();
+            response = status.ok
+              ? { ok: true, result: status.result ? { ...schedule, webhookStatus: status.result } : schedule }
+              : status;
+          }
+        }
       } catch (error) {
         if (error instanceof DeviceLinkError) {
           // inFlight = 请求已发出、回执丢失。
-          if (error.inFlight) return unknownOutcome(op);
+          if (error.inFlight) return operationStarted ? unknownOutcome(op) : unknownOutcome('get');
           return failure(error.code, error.message);
         }
         const message = error instanceof Error ? error.message : '';

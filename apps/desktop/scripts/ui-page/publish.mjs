@@ -1,13 +1,15 @@
 #!/usr/bin/env node
-// `pnpm ui:check:publish [<run dir>] [--remote <name>] [--branch <name>] [--dry-run]`
+// `pnpm ui:check:publish [<run dir>] [--case <a,b>] [--remote <name>] [--branch <name>] [--dry-run]`
 // Publishes a run's screenshots for a PR description, the way this repo's PRs carry images:
 // an orphan-history `pr-assets/…` branch on the author's fork (never the upstream repo), linked
-// by commit SHA. The worktree, index and current branch are not touched. Prints the PR text.
+// by commit SHA. The worktree, index and current branch are not touched. Prints the PR text:
+// a few captures of what changed side by side (see prShots), the full overview only as links.
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { root } from './build.mjs';
+import { prShots } from './pr.mjs';
 
 const git = (args, input) =>
   execFileSync('git', args, {
@@ -23,6 +25,7 @@ function parse(argv) {
     const arg = argv[i];
     if (arg === '--') continue;
     if (arg === '--remote' || arg === '--branch') options[arg.slice(2)] = argv[++i];
+    else if (arg === '--case') options.cases = argv[++i].split(',').filter(Boolean);
     else if (arg === '--dry-run') options.dryRun = true;
     else if (arg.startsWith('--')) throw new Error(`Unknown option: ${arg}`);
     else options.run = path.resolve(arg);
@@ -58,6 +61,11 @@ async function main() {
   const summary = JSON.parse(await readFile(path.join(run, 'summary.json'), 'utf8'));
   const images = summary.overviews ?? (summary.overview ? [summary.overview] : []);
   if (!images.length) throw new Error(`${run} has no overview images`);
+  const unknown = options.cases?.filter(
+    (name) => !summary.variants.some((variant) => variant.case === name),
+  );
+  if (unknown?.length) throw new Error(`no scenario named ${unknown.join(', ')} in ${run}`);
+  const rows = await prShots(summary, run, { cases: options.cases });
 
   // Images go to the author's fork, never to the repository PRs target: the project's own
   // repository (package.json) and an `upstream` remote, if any. Checked against the URL git
@@ -92,10 +100,16 @@ async function main() {
   const folder = path.basename(run);
 
   // One commit per run under its own folder; earlier runs stay reachable through the parent.
+  // Captures keep their evidence path, flattened, so before/after of one variant never collide.
+  const published = new Map(images.map((file) => [file, path.basename(file)]));
+  for (const row of rows)
+    for (const column of row.columns)
+      if (column.file)
+        published.set(path.join(run, column.file), column.file.replaceAll('/', '__'));
   const entries = [];
-  for (const file of images) {
+  for (const [file, name] of published) {
     const blob = git(['hash-object', '-w', file]);
-    entries.push(`100644 blob ${blob}\t${path.basename(file)}`);
+    entries.push(`100644 blob ${blob}\t${name}`);
   }
   const runTree = git(['mktree'], `${entries.join('\n')}\n`);
   const tree = git(['mktree'], `040000 tree ${runTree}\t${folder}\n`);
@@ -110,16 +124,36 @@ async function main() {
   const commit = git(['commit-tree', tree, ...(parent ? ['-p', parent] : []), '-m', message]);
   if (!options.dryRun) git(['push', '--quiet', remote, `${commit}:refs/heads/${branch}`]);
 
-  const url = (file) =>
-    `https://raw.githubusercontent.com/${repo}/${commit}/${folder}/${path.basename(file)}`;
+  const url = (name) => `https://raw.githubusercontent.com/${repo}/${commit}/${folder}/${name}`;
+  const section = [];
+  for (const row of rows) {
+    const cells = row.columns.map((column) =>
+      column.file
+        ? `![${row.title} · ${column.label}](${url(published.get(path.join(run, column.file)))})`
+        : '（这一步改前没有截图）',
+    );
+    section.push(
+      `**\`${row.title}\`** · ${row.subtitle}`,
+      '',
+      `| ${row.columns.map((column) => column.label).join(' | ')} |`,
+      `| ${row.columns.map(() => '---').join(' | ')} |`,
+      `| ${cells.join(' | ')} |`,
+      '',
+    );
+  }
+  if (summary.compare && !rows.length)
+    section.push('改前／改后的截图逐像素一致，本次对照没有看得见的变化。', '');
+  section.push(
+    `完整总览（全部场景，自检用）：${images.map((file, i) => `[${i + 1}/${images.length}](${url(path.basename(file))})`).join(' · ')}`,
+  );
   const text = (await readFile(path.join(run, 'pr.md'), 'utf8')).replace(
     /\n<!-- 截图：[^\n]*-->\n?$/,
-    `\n${images.map((file, i) => `![单页验证截图 ${i + 1}/${images.length}](${url(file)})`).join('\n')}\n`,
+    `\n${section.join('\n')}\n`,
   );
   const out = path.join(run, 'pr.published.md');
   await writeFile(out, text);
   console.log(
-    `UI_PUBLISH${options.dryRun ? ' (dry run, not pushed)' : ''} ${repo}@${branch} ${commit.slice(0, 12)} · ${images.length} images\npr: ${out}\n`,
+    `UI_PUBLISH${options.dryRun ? ' (dry run, not pushed)' : ''} ${repo}@${branch} ${commit.slice(0, 12)} · ${rows.length} rows in the PR body, ${images.length} overview images linked\npr: ${out}\n`,
   );
   console.log(text);
 }

@@ -13,11 +13,34 @@ export interface RemoteBot {
   sessionId: string | null;
   online: boolean;
   connectionKnown?: boolean;
+  teammateActivity?: { phase: string };
+  needsAttention?: boolean;
   generation?: { phase: WorkingPhase; startedAt: number | null };
   lastReplyAt?: number;
   readAt?: number;
+  /** Read position the home computer keeps (any device's reading). Absent: older host, no `read` action. */
+  hostReadAt?: number;
   followingSessionIds?: string[];
   delegatedSessionIds?: string[];
+  /** Inbox snooze of the main conversation. Absent: older host, or no conversation; no snooze offered. */
+  inboxSnooze?: TeammateInboxSnooze;
+}
+
+/** The Session snooze fields a host mirrors on a teammate row (ISO, null = unset). */
+export interface TeammateInboxSnooze {
+  snoozedUntil: string | null;
+  snoozedAt: string | null;
+  userSendAt: string | null;
+}
+
+/** A malformed snooze is no snooze: the row then offers none rather than hiding on a bad date. */
+export function parseTeammateInboxSnooze(value: unknown): TeammateInboxSnooze | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const item = value as Record<string, unknown>;
+  const time = (field: unknown) => field === null || (typeof field === 'string' && Number.isFinite(Date.parse(field)));
+  if (!time(item.snoozedUntil) || !time(item.snoozedAt) || !time(item.userSendAt)) return undefined;
+  return { snoozedUntil: item.snoozedUntil as string | null, snoozedAt: item.snoozedAt as string | null,
+    userSendAt: item.userSendAt as string | null };
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -60,7 +83,7 @@ export function remoteBotCreatedTaskIds(value: unknown, botId: string): string[]
 export function parseRemoteBots(value: unknown, deviceId: string, deviceName: string): RemoteBot[] {
   const response = record(value);
   if (response.collectionId !== 'teammates' || !Array.isArray(response.items)) {
-    throw new Error('Invalid teammate collection');
+    throw new Error('Invalid buddy collection');
   }
   return response.items.map((value: unknown) => {
     const item = record(value);
@@ -74,7 +97,7 @@ export function parseRemoteBots(value: unknown, deviceId: string, deviceName: st
       !ref.id ||
       !text(display.title)
     ) {
-      throw new Error('Invalid teammate identity');
+      throw new Error('Invalid buddy identity');
     }
     const link = Array.isArray(item.links)
       ? item.links.find((value: unknown) => {
@@ -95,7 +118,12 @@ export function parseRemoteBots(value: unknown, deviceId: string, deviceName: st
       activityAt: typeof display.timestamp === 'number' ? display.timestamp : 0,
       sessionId: typeof sessionId === 'string' && sessionId ? sessionId : null,
       lastReplyAt: typeof display.lastReplyAt === 'number' && Number.isFinite(display.lastReplyAt) && display.lastReplyAt >= 0 ? display.lastReplyAt : undefined,
+      hostReadAt: typeof display.lastReadAt === 'number' && Number.isFinite(display.lastReadAt) && display.lastReadAt >= 0 ? display.lastReadAt : undefined,
       followingSessionIds: remoteBotTaskIds(item.links, 'following'),
+      teammateActivity: typeof record(display.teammateActivity).phase === 'string'
+        ? { phase: record(display.teammateActivity).phase as string } : undefined,
+      needsAttention: ['warning', 'critical'].includes(String(record(display.status).tone)),
+      ...(parseTeammateInboxSnooze(display.inboxSnooze) ? { inboxSnooze: parseTeammateInboxSnooze(display.inboxSnooze) } : {}),
       online: true,
       connectionKnown: true,
       ...(typeof record(display.generation).phase === 'string' ? { generation: {

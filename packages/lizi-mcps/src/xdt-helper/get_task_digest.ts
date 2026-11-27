@@ -32,11 +32,15 @@ export interface TaskDigestRoute {
   fast: boolean | 'ultrafast';
 }
 
+/** Observed routes may include plugin engines outside the runtime selection contract. */
+export type TaskDigestCurrentRoute = TaskDigestRoute | (Omit<TaskDigestRoute, 'harness'> & { harness: 'acp' });
+
 export interface TaskDigestWire {
   session_id: string;
   sessionUrl?: string;
   /** 另一台电脑的名字;本机为 null。 */
   device: string | null;
+  pinned?: boolean;
   title: string;
   phase: TaskDigestPhase;
   /** 处于当前状态(或本轮运行)多少分钟;未知为 null。 */
@@ -49,13 +53,15 @@ export interface TaskDigestWire {
   last_assistant_line: string | null;
   pending_question: string | null;
   error: string | null;
-  current_route: TaskDigestRoute | null;
+  current_route: TaskDigestCurrentRoute | null;
   /** set_session_runtime 的 expected_generation;另一台电脑上的任务为 null。 */
   runtime_generation: number | null;
   /** 调用方伙伴候选链里的下一条可用路线;没有则 null。 */
   suggested_route: TaskDigestRoute | null;
   pr_status: string | null;
   queued_count: number | null;
+  /** 本机输入队列的暂停状态，未知时省略。 */
+  queue_paused?: boolean;
   follower_bot_id: string | null;
   creator_bot_id: string | null;
   /**
@@ -111,6 +117,7 @@ export function boundTaskDigest(raw: TaskDigestWire): TaskDigestWire {
     digest.suggested_route = null;
     digest.title = clip(digest.title, 20) ?? '';
   }
+  if (payloadBytes(digest) > TASK_DIGEST_MAX_BYTES) delete digest.queue_paused;
   if (raw.sessionUrl !== undefined) {
     digest.sessionUrl = raw.sessionUrl;
     if (payloadBytes(digest) > TASK_DIGEST_MAX_BYTES) delete digest.sessionUrl;
@@ -119,6 +126,7 @@ export function boundTaskDigest(raw: TaskDigestWire): TaskDigestWire {
 }
 
 const DESCRIPTION = [
+  'pinned 表示侧栏置顶状态。',
   '已知任务 id、需要给用户任务链接时也用本工具；sessionUrl 可直接写成 [任务标题](sessionUrl)。',
   '读一件任务的短摘要(≤2KB):状态 phase、已持续分钟数、最近用户消息(排除隐藏协调/续跑输入)、最新助手回复首尾片段、待回答的问题、错误、当前模型路线、',
   '建议换到的下一条路线(只在出错或撞用量上限、换模型确实有用且装得下当前上下文时,给你候选链里还没试过的那条;否则 null,此时提醒主人)、PR 状态、排队消息数、谁开的 / 谁在跟。',
@@ -126,7 +134,8 @@ const DESCRIPTION = [
   '被程序叫醒跟进任务时先读这一份再决定;要看原文再用 get_chat_history。',
   '作用范围:本机任务直接传 id;另一台电脑上的任务传 deviceId::sessionId(只读,对方须在线)。',
   'phase:running 运行中 / waiting-permission 等权限 / waiting-answer 等回答 / errored 出错 / usage-limit 撞用量上限 / finished 本轮已结束 / idle 空闲。',
-  'finished 只描述所查任务的本轮，不代表它委派的后台任务或用户目标已完成。下一条消息的派发仍由该任务的实时运行状态和输入队列决定。',
+  'finished 只描述所查任务的本轮，不代表它新建的其它任务或用户目标已完成。下一条消息的派发仍由该任务的实时运行状态和输入队列决定。',
+  'queue_paused 为 true 且 queued_count 大于 0 时，提醒用户在任务页继续发送。未提供 queue_paused 时，队列是否暂停未知。',
   'suggested_route 只供判断，不是换模型授权。获得目标和变更的明确授权后才用 set_session_runtime(expected_generation 填 runtime_generation;只支持本机任务)。',
 ].join('\n');
 
