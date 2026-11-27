@@ -264,6 +264,8 @@
     "delete": "Eliminar",
     "retry": "Tentar novamente",
     "notSent": "Não enviado",
+    "deliveryUnconfirmed": "Envio não confirmado",
+    "recheckDelivery": "Verificar novamente",
     "imagesNotUploaded_one": "Não foi possível carregar {{count}} imagem",
     "imagesNotUploaded_other": "Não foi possível carregar {{count}} imagens",
     "waitingForNamedComputer": "Envio automático quando {{name}} se ligar",

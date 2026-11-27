@@ -69,6 +69,8 @@ function loadMobileOutbox() {
       return {
         ...loader.require('../../mobile/src/session/durableOutbox.ts', import.meta.url),
         ...loader.require('../../mobile/src/session/durableOutboxDelivery.ts', import.meta.url),
+        ...loader.require('../../mobile/src/session/outboxHistoryConfirmation.ts', import.meta.url),
+        ...loader.require('../../mobile/src/device-link/historyViewCapability.ts', import.meta.url),
       };
     } finally { loader.unregister(); }
   } finally {
@@ -170,8 +172,10 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   const insertMessage = sqlite.prepare(
     'INSERT INTO messages (id, session_id, client_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)',
   );
+  const outboxHistory = createHostHistoryReader({ running: () => false, live: () => [] });
   const service = createHostService({
     profileHold: () => held,
+    historyView: (id, before, opts) => readHostHistoryView(outboxHistory, id, before, opts),
     // One USD and one CNY quote: the device-link v1 projection keeps only USD (usageHandlers.ts).
     modelPricing: async () => ({ xd: {
       'usd-model': { providerId: 'xd', modelId: 'usd-model', currency: 'USD', source: 'gateway', approximate: false, inputPerMtok: 3, outputPerMtok: 15 },
@@ -812,13 +816,17 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
    * committed user message whose outbox confirmation is pending. The existing
    * enqueue test can't observe the second record waiting behind it. The Host
    * must confirm the first without re-enqueueing it and persist the second once.
-   * The legacy peer sends the original CHANNEL_NOT_ALLOWED over the same wire.
+   * The legacy peer sends the original CHANNEL_NOT_ALLOWED over the same wire and offers the
+   * historical page route without the newer capability. Exercise the same bounded read that
+   * Mobile uses and count its requests along with actual committed SQLite rows.
    * Tier: integration with synthetic engine IO and an in-memory SQLite DB.
    */
   await t.test('confirms an already committed mobile input and sends the next exactly once', async t => {
-    const { createDurableOutbox, createDurableOutboxDelivery } = loadMobileOutbox();
+    const { createDurableOutbox, createDurableOutboxDelivery, readLegacyOutboxHistory,
+      invokeWithHistoryViewCapability } = loadMobileOutbox();
     const sessionId = 'outbox-task';
     const channel = 'local-db:messages:around-client-id';
+    const view = 'local-db:messages:view';
     sqlite.prepare('INSERT INTO sessions(id, source, status, created_at, updated_at) VALUES (?,?,?,?,?)')
       .run(sessionId, 'desktop', 'active', 1, 1);
     const mobile = clients[0];
@@ -826,10 +834,11 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       .get(sessionId, clientId).n;
     const rpc = (target, channel, args) => mobile.invoke(target, { channel, args });
 
-    async function tryFollowup(target, firstState) {
-      const first = `${target}-first`;
-      const next = `${target}-next`;
-      insertMessage.run(randomUUID(), sessionId, first, 'user', 'first input', 100);
+    async function followup(target, firstState, { saved = true, suffix = '', cacheCaughtUp = () => true } = {}) {
+      const first = [target, suffix, 'first'].filter(Boolean).join('-');
+      const next = [target, suffix, 'next'].filter(Boolean).join('-');
+      const commitFirst = () => insertMessage.run(randomUUID(), sessionId, first, 'user', 'first input', 100);
+      if (saved) commitFirst();
       const data = new Map();
       const store = createDurableOutbox({
         getAllKeys: async () => [...data.keys()],
@@ -839,7 +848,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       });
       const message = (clientId, createdAt) => ({
         version: 1, accountId: 'test-account', deviceId: target, createdAt, state: 'queued', uploads: [],
-        item: { sessionId, clientId, text: 'follow-up input' },
+        item: { sessionId, clientId, text: 'follow-up input', attachmentSlots: [] },
       });
       await store.activate('test-account');
       await store.add({
@@ -847,68 +856,130 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
         prepared: { clientId: first, text: 'first input' }, enqueueStarted: true, sendAtMs: 1,
       });
       await store.add(message(next, 2));
-      const invoke = async (channel, args) => {
-        const reply = await rpc(target, channel, args);
+      const calls = [];
+      const invoke = async (destination, name, args) => {
+        calls.push([destination, name, ...args]);
+        const reply = await rpc(destination, name, args);
         if (!reply.ok) throw new DeviceLinkError(reply.error.code, reply.error.message);
         return reply.result;
       };
       const enqueued = [];
       const delivery = createDurableOutboxDelivery({
         store, isCurrent: () => true, canRun: () => true,
-        projection: r => invoke('maker:input:get-projection', [sessionId, { deliveryClientIds: [r.item.clientId] }]),
+        projection: r => invoke(target, 'maker:input:get-projection', [sessionId, { deliveryClientIds: [r.item.clientId] }]),
         prepare: async r => ({ clientId: r.item.clientId, text: r.item.text }),
         enqueue: r => {
           enqueued.push(r.item.clientId);
-          return invoke('maker:input:enqueue', [sessionId, r.prepared, { sendAtMs: r.sendAtMs }]);
+          return invoke(target, 'maker:input:enqueue', [sessionId, r.prepared, { sendAtMs: r.sendAtMs }]);
         },
-        history: async r => (await invoke(channel, [sessionId, r.item.clientId, { radius: 1 }]))
+        history: async r => (await invoke(target, channel, [sessionId, r.item.clientId, { radius: 1 }]))
           .some(row => row.clientId === r.item.clientId && row.role === 'user'),
+        legacyHistory: async r => Boolean(await readLegacyOutboxHistory(r, (device, name, args) =>
+          invokeWithHistoryViewCapability(name, async () => ({ capabilities: [] }),
+            () => invoke(device, name, args), true))),
+        cacheHistory: async r => cacheCaughtUp(r.item.clientId, first),
         bindProjection: () => () => {}, cleanup: async () => {},
         retryable: () => false, describe: error => error.message,
       });
-      for (let pass = 0; pass < 4; ++pass) {
+      const run = async () => {
         delivery.wake();
         await delivery.run();
-      }
-      delivery.stop();
-      return { first, next, enqueued, remaining: store.getSnapshot() };
+      };
+      return { first, next, enqueued, store, run, commitFirst, calls, stop: delivery.stop };
     }
 
-    await t.test('old Host leaves an unconfirmed head in front of the follow-up', async t => {
-      const legacy = new DeviceLinkClient({
-        getWsUrl: () => url, getToken: async () => 'synthetic-legacy-host',
-        getHello: () => ({ deviceName: 'legacy-host', platform: 'linux', appVersion: 'test', remoteControlEnabled: true }),
-        createWebSocket: (address, headers) => new WebSocket(address, { headers }),
-      });
-      t.after(() => legacy.stop());
-      legacy.onFrame(frame => {
-        if (frame.kind === 'link-open') {
-          legacy.sendLinkAccept(frame.src, frame.id, { appVersion: 'test', allowlistHash: '' });
-        } else if (frame.kind === 'invoke') {
-          const result = frame.payload.channel === 'maker:input:get-projection'
-            ? { ok: true, result: { sessionId, pendingQueue: [], turnInProgress: false } }
-            : { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: `channel '${frame.payload.channel}' not allowed remotely` } };
-          legacy.sendInvokeResult(frame.src, frame.id, result);
+    const legacy = new DeviceLinkClient({
+      getWsUrl: () => url, getToken: async () => 'synthetic-legacy-host',
+      getHello: () => ({ deviceName: 'legacy-host', platform: 'linux', appVersion: 'test', remoteControlEnabled: true }),
+      createWebSocket: (address, headers) => new WebSocket(address, { headers }),
+    });
+    t.after(() => legacy.stop());
+    const legacyRoutes = new Map([
+      [view, ([sid, opts]) => service('/api/messages/history-view', { sessionId: sid, opts })],
+      ['maker:input:get-projection', ([sid]) => service('/api/input/projection', { sessionId: sid })],
+      ['maker:input:enqueue', ([sid, item]) => service('/api/input/enqueue', { sessionId: sid, item })],
+    ]);
+    legacy.onFrame(async frame => {
+      if (frame.kind === 'link-open') {
+        legacy.sendLinkAccept(frame.src, frame.id, { appVersion: 'test', allowlistHash: '' });
+      } else if (frame.kind === 'invoke') {
+        const handle = legacyRoutes.get(frame.payload.channel);
+        if (!handle) {
+          legacy.sendInvokeResult(frame.src, frame.id,
+            { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: "legacy peer does not support this channel" } });
+          return;
         }
-      });
-      legacy.start();
-      await waitFor(() => legacy.getStatus() === 'online');
-      await mobile.openLink('legacy-host', { controllerName: 'ios', protocolVersion: PROTOCOL_VERSION, appVersion: 'test' });
-      const { first, next, enqueued, remaining } = await tryFollowup('legacy-host', 'confirming');
-      assert.deepEqual(remaining.map(r => [r.state, r.error]), [
-        ['failed', `channel '${channel}' not allowed remotely`], ['queued', undefined],
+        try {
+          const { body } = await handle(frame.payload.args);
+          legacy.sendInvokeResult(frame.src, frame.id, { ok: true, result: body });
+        } catch (error) {
+          legacy.sendInvokeResult(frame.src, frame.id, { ok: false, error: { code: 'IPC_ERROR', message: error.message } });
+        }
+      }
+    });
+    legacy.start();
+    await waitFor(() => legacy.getStatus() === 'online');
+    const accepted = await mobile.openLink('legacy-host', { controllerName: 'ios', protocolVersion: PROTOCOL_VERSION, appVersion: 'test' });
+    assert.equal(accepted.capabilities?.includes(DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1) ?? false, false);
+
+    await t.test('old Host confirms with one page even while local history is catching up', async t => {
+      let cacheReady = false;
+      const f = await followup('legacy-host', 'confirming', { cacheCaughtUp: (id, head) => id !== head || cacheReady });
+      t.after(f.stop);
+      await f.run();
+      assert.deepEqual(f.store.getSnapshot().map(r => r.state), ['host-owned', 'queued']);
+      assert.equal(f.store.getSnapshot()[0].historyConfirmed, true);
+      assert.deepEqual(f.calls.filter(([, name]) => name === view), [
+        ['legacy-host', view, sessionId, { lazyDetails: true }],
       ]);
-      assert.deepEqual(enqueued, []);
-      assert.equal(count(first), 1);
-      assert.equal(count(next), 0);
+      await f.run();
+      assert.deepEqual(f.enqueued, [f.next]);
+      assert.equal(count(f.first), 1);
+      assert.equal(count(f.next), 1);
+      assert.equal(f.calls.filter(([, name, , clientId]) => name === channel && clientId === f.first).length, 1);
+      cacheReady = true;
+      await f.run();
+      assert.deepEqual(f.store.getSnapshot(), []);
     });
 
-    // An upgrade can repair a phone ledger whose first confirmation already failed.
-    const { first, next, enqueued, remaining } = await tryFollowup('host', 'failed');
-    assert.deepEqual(enqueued, [next], 'the confirmed first message must release the next FIFO entry');
+    await t.test('a legacy miss waits for a read-only recheck before releasing the next input', async t => {
+      const f = await followup('legacy-host', 'confirming', { saved: false, suffix: 'recheck' });
+      t.after(f.stop);
+      await f.run();
+      await f.run();
+      assert.deepEqual(f.enqueued, []);
+      assert.deepEqual(f.store.getSnapshot().map(r => [r.item.clientId, r.state, r.historyConfirmation]), [
+        [f.first, 'failed', 'unconfirmed'], [f.next, 'queued', undefined],
+      ]);
+      const reads = f.calls.filter(([, name]) => name === view);
+      assert.equal(reads.length, 1);
+      assert.equal(count(f.first), 0);
+      assert.equal(count(f.next), 0);
+
+      f.commitFirst();
+      await f.store.update(f.store.getSnapshot()[0], { historyConfirmation: 'requested' });
+      await f.run();
+      assert.deepEqual(f.enqueued, []);
+      assert.equal(f.calls.filter(([, name]) => name === view).length, 2);
+      assert.deepEqual(f.calls.filter(([, name]) => name === channel)
+        .map(([target, , task, clientId]) => [target, task, clientId]),
+      [['legacy-host', sessionId, f.first], ['legacy-host', sessionId, f.first]]);
+      await f.run();
+      assert.deepEqual(f.enqueued, [f.next]);
+      assert.equal(count(f.first), 1);
+      assert.equal(count(f.next), 1);
+    });
+
+    // An upgraded Host can repair a phone ledger whose first confirmation already failed.
+    const f = await followup('host', 'failed');
+    t.after(f.stop);
+    for (let pass = 0; pass < 4; ++pass) await f.run();
+    const { first, next } = f;
+    assert.deepEqual(f.enqueued, [next], 'the confirmed first message must release the next FIFO entry');
     assert.equal(count(first), 1);
     assert.equal(count(next), 1);
-    assert.deepEqual(remaining, []);
+    assert.deepEqual(f.store.getSnapshot(), []);
+    assert.equal(f.calls.some(([, name]) => name === view), false);
 
     // The same read works during a profile hold and respects the desktop's
     // exact session/client identity, persisted visibility and content limit.

@@ -29,7 +29,14 @@ export function usePendingOutboxActions({
     r.deviceId === deviceId && r.item.sessionId === sessionId && r.item.clientId === clientId), [deviceId, sessionId]);
   const retryOutboxItem = useCallback((clientId: string) => {
     const record = findDurableOutboxRecord(clientId);
-    if (!record || record.state !== 'failed') return;
+    if (!record || record.historyConfirmation === 'requested') return;
+    if (record.historyConfirmation === 'unconfirmed') {
+      void mobileDurableOutbox.update(record, { historyConfirmation: 'requested' }).catch((err) => {
+        if (findDurableOutboxRecord(clientId) === record) setError(formatRemoteError(err));
+      });
+      return;
+    }
+    if (record.state !== 'failed') return;
     if (record.creation && !record.prepared && !record.template) {
       const owner = getMobileAuthOwner();
       void mobileDurableOutbox.update(record, { suspended: true }).then(() => {
@@ -46,7 +53,7 @@ export function usePendingOutboxActions({
   }, [deviceId, deviceName, findDurableOutboxRecord, outboxSessionAliveRef, router, sessionId, setError, setQueueSelectedClientId]);
   const removeOutboxItem = useCallback((clientId: string) => {
     const record = findDurableOutboxRecord(clientId);
-    if (!record) return;
+    if (!record || record.historyConfirmation) return;
     // Until creation succeeds, this row also owns the recovery form for every later message.
     if (record.creation && !record.prepared && !record.template) {
       setError(t('session.outbox.creationRecoveryRequired'));

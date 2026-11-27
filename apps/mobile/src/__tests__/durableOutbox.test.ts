@@ -1,3 +1,4 @@
+import { DeviceLinkError } from '@cindy/device-link';
 import { describe, expect, it, vi } from "vitest";
 import { formatRemoteError, isAutoRecoveringRemoteError } from '@/device-link/remoteStatus';
 import { uploadMobileAttachmentFromFile } from '@/session/mobileAttachmentUpload';
@@ -195,6 +196,38 @@ async function setup(storage = disk()) {
     },
   };
 }
+
+// Unit coverage for the legacy decision at the production runner. An untyped
+// message and unrelated wire refusals must never open a second history route.
+it.each([
+  new Error('CHANNEL_NOT_ALLOWED'),
+  new DeviceLinkError('ACCESS_REVOKED', 'CHANNEL_NOT_ALLOWED'),
+  new DeviceLinkError('INVOKE_TIMEOUT', 'timed out'),
+])('leaves an unrelated history failure on the existing path (%s)', async (error) => {
+  const { store, deps } = await setup();
+  const record = message();
+  await store.add({ ...record, state: 'confirming', enqueueStarted: true,
+    prepared: { clientId: record.item.clientId } as QueuedRemoteMessage });
+  const legacyHistory = vi.fn(async () => true);
+  deps.history.mockRejectedValue(error);
+  await createDurableOutboxDelivery({ ...deps, legacyHistory, retryable: () => false }).run();
+  expect(legacyHistory).not.toHaveBeenCalled();
+  expect(deps.enqueue).not.toHaveBeenCalled();
+  expect(store.getSnapshot()[0]).toMatchObject({ state: 'failed' });
+  expect(store.getSnapshot()[0].historyConfirmation).toBeUndefined();
+});
+
+it('restores a waiting confirmation without replaying an interrupted recheck', async () => {
+  const { store, storage, deps } = await setup();
+  const record = message();
+  await store.add({ ...record, historyConfirmation: 'requested', state: 'failed', enqueueStarted: true });
+  const restarted = createDurableOutbox(storage);
+  await restarted.activate('alice');
+  await createDurableOutboxDelivery({ ...deps, store: restarted }).run();
+  expect(restarted.getSnapshot()[0]).toMatchObject({ historyConfirmation: 'unconfirmed', state: 'failed' });
+  expect(deps.history).not.toHaveBeenCalled();
+  expect(deps.enqueue).not.toHaveBeenCalled();
+});
 
 describe('disabled Cindy Make outbox recovery', () => {
   it.each(['cindy-make', 'cindy-make-merge'])('cleans upgraded %s records before contacting a legacy host', async (source) => {

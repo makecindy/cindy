@@ -40,8 +40,11 @@ Mobile 始终走原流程。Mobile 学到的这些结论绑定 device-link 连�
 Node Host 接通已有的 `local-db:messages:around-client-id(sessionId, clientId, opts?)`。同账号控制端可在
 当前任务的可见历史中按消息 clientId 确认投递，返回桌面既有的消息数组。沿用撤权、会话可见性、
 清空和撤回边界，以及 `radius` 和 `contentCharLimit` 上限。账号间的分享访客不能调用此 Host 入口。
-旧 Host 仍返回 `CHANNEL_NOT_ALLOWED`。现有手机端在这类确认失败时保留队首与后续待发送消息，
-升级 Host 后可凭原 clientId 确认已落库的消息并继续发送。此接线沿用既有帧与路由，控制端和中转无需更新。
+旧 Host 仍返回 `CHANNEL_NOT_ALLOWED`。收到这个明确回执时，新版手机用同设备、同任务的
+`local-db:messages:view` 取最新一页，凭已落库的用户行及原 clientId 结束确认。早期 Host 在宣布
+`history-view-v1` 之前已提供此页读，兼容查询仅在续发确认时使用。找不到时保留原消息和队列顺序，
+由「重新确认」再查原 ID。每次最多追加一页，确认只读，只有肯定证据才释放后续发送。旧手机升级 Host
+后仍可用原流程确认。请求、回包、授权与中转不变。
 
 桌面被控端在队列快照中用可选的 `withdrawnQueueClientIds` 携带本会话最近 32 个显式撤回的待发消息 ID。
 同一 ID 再次入队时移出该列表。桌面控制端收到后清掉对应的待发气泡、临时消息及回执等待；

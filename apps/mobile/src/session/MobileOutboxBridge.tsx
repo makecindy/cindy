@@ -52,6 +52,7 @@ import {
 import { remoteSessionStore } from "./remoteSessionStore";
 import { unarchiveSessionAfterSend, type SessionPatchInvoke } from "./unarchiveAfterSend";
 import { cacheOutboxHistory } from "./outboxHistoryCache";
+import { readLegacyOutboxHistory } from "./outboxHistoryConfirmation";
 import { validateOutboxResourceBinding } from './outboxResourceBinding';
 import { findRemoteHistoryView } from "./remoteHistoryViews";
 import { endOutboxBackgroundSend, hasOutboxBackgroundSend, syncOutboxLeftInBackground } from './outboxBackgroundSend';
@@ -341,13 +342,28 @@ export function MobileOutboxBridge() {
         );
         guard();
         const found = messages.some(
-          (m) => m.clientId === r.item.clientId && m.role === "user",
+          (m) => m.sessionId === r.item.sessionId && m.clientId === r.item.clientId && m.role === "user",
         );
         if (found)
           remoteSessionStore.mergeMessages(r.item.sessionId, messages, {
             authority,
           });
         return found;
+      },
+      legacyHistory: async (r) => {
+        const sessionId = r.item.sessionId;
+        const authority = remoteSessionStore.captureSessionMessageAuthority(sessionId);
+        const epoch = connectionEpochFor(r.deviceId);
+        const row = await readLegacyOutboxHistory(r, invokeOwned(r, {
+          legacyHistoryConfirmation: true,
+          noResultCache: true,
+          preSend: () => {
+            if (connectionEpochFor(r.deviceId) !== epoch) throw new Error("OUTBOX_STALE_HISTORY");
+          },
+        }));
+        if (!row) return false;
+        remoteSessionStore.mergeMessages(sessionId, [row], { authority });
+        return true;
       },
       cacheHistory: (r) => cacheOutboxHistory(r.deviceId, r.item.sessionId, r.item.clientId,
         () => isCurrent() && mobileDurableOutbox.getSnapshot().includes(r)),
