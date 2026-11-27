@@ -1253,12 +1253,13 @@ describe('personal mask transport', () => {
     const client = createChatServerClient(request as never);
     expect(await client.mask(id(2))).toBeNull();
     expect(await client.maskMentions(id(2))).toEqual({ mentions: [], hasMore: false });
+    await expect(client.maskMentions(id(2), undefined, undefined, undefined, true)).rejects.toThrow('UNSUPPORTED_OPERATION');
     expect(request.mock.calls.every(call => call[0] === '/me')).toBe(true);
   });
   it('pairs the original mention with its reply and acknowledges only the selected message', async () => {
     const companion = { id: id(3), name: 'Cindy', avatarUrl: null };
     const request = vi.fn(async (path: string, method?: string, body?: unknown) => {
-      if (path === '/me') return { actor: { id: id(1), kind: 'human' }, capabilities: { personalMask: 1 } };
+      if (path === '/me') return { actor: { id: id(1), kind: 'human' }, capabilities: { personalMask: 1, personalMentionHistory: 1 } };
       if (path.endsWith('/read')) return {};
       return { messages: [{ ...message(20), reply: { content: [{ type: 'text', text: 'Recorded' }], maskAttribution: { companion } } }], hasMore: false };
     });
@@ -1266,8 +1267,18 @@ describe('personal mask transport', () => {
     await expect(client.mask(id(2), { type: 'resume' })).rejects.toThrow('UNSUPPORTED_OPERATION');
     expect((await client.maskMentions(id(2))).mentions[0]).toMatchObject({ messageId: id(20), text: '20', reply: { companion, text: 'Recorded' } });
     expect(request.mock.calls.some(([, method]) => method === 'POST')).toBe(false);
+    await client.maskMentions(id(2), '20', undefined, undefined, true);
+    expect(request.mock.calls.map(([path]) => path)).toContain(`/conversations/${id(2)}/mentions?limit=100&scope=personal-history&before=20`);
     await client.maskMentions(id(2), undefined, [id(20)], 'read-one');
     expect(request.mock.calls.filter(([, method]) => method === 'POST')).toEqual([[`/conversations/${id(2)}/mentions/read`, 'POST', { operationId: 'read-one', messageIds: [id(20)] }]]);
+  });
+  // Unit: the old history row should read a single group message, never traverse pages
+  // or move the read watermark. A retracted source must not retain its body.
+  it('fetches the current original by ID without paging or acknowledging', async () => {
+    const request = vi.fn(async (_path: string) => ({ ...message(20), deleted: true }));
+    const original = await createChatServerClient(request as never).mentionOriginal(id(2), id(20));
+    expect(original).toMatchObject({ messageId: id(20), text: '', deleted: true });
+    expect(request.mock.calls).toEqual([[`/conversations/${id(2)}/messages/${id(20)}`]]);
   });
   it('keeps the human author and stand-in attribution in the actual mobile timeline', () => {
     const attribution = { self: { id: id(10), name: 'Chris', avatarUrl: null }, companion: { id: id(3), name: 'Cindy', avatarUrl: null }, sourceMessageId: id(19) };

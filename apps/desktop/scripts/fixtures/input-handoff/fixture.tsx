@@ -3,6 +3,7 @@ import type { InputHandoffSnapshot } from '@cindy/device-link';
 import { mountPage } from '../../ui-page/harness';
 import { Button } from '../../../src/renderer/components/ui/button';
 import { InputHandoffDialog } from '../../../src/renderer/features/input-handoff/InputHandoffDialog';
+import { InputHandoffCard } from '../../../src/renderer/features/input-handoff/InputHandoffCard';
 import { InputHandoffStepForm } from '../../../src/renderer/features/input-handoff/InputHandoffStepForm';
 
 function Form({ count, description = false }: { count: number; description?: boolean }) {
@@ -23,4 +24,14 @@ function Form({ count, description = false }: { count: number; description?: boo
   </InputHandoffDialog>;
 }
 
-void mountPage({ render: (ctx) => <Form count={Number(ctx.data.count)} description={Boolean(ctx.data.description)} /> });
+function Verification() {
+  const { t } = useTranslation();
+  return <InputHandoffCard sessionId="verification-fixture" snapshot={{
+    kind: 'input_handoff', requestId: 'synthetic', revision: 1, phase: 'ready', stepNumber: 1,
+    purpose: t('antigravityVerification.title'), note: t('antigravityVerification.note'), controls: [],
+    source: { app: 'Cindy', origin: 'https://example.test' }, picture: true, qr: 'scan', accountVerification: true,
+  }} />;
+}
+
+void mountPage({ host: ctx => ({ maker: { getInputHandoffPicture: async () => ctx.data.picture },
+  deviceLink: { listDevices: async () => [], onRemotePush: () => () => {} } }), render: (ctx) => ctx.case === 'verification' ? <Verification /> : <Form count={Number(ctx.data.count)} description={Boolean(ctx.data.description)} /> });

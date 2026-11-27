@@ -63,9 +63,10 @@ export function createUtilityNodeWorkerProcess(
   fork: UtilityFork = utilityProcess.fork,
   /** 提供即为"原样 stdio 子进程"模式(childSpawn 代启):透传启动参数,不参与协议。 */
   childArgs?: string[],
+  inheritEnv = false,
 ): NodeWorkerProcess {
   const isChild = childArgs !== undefined;
-  const env = desktopPluginEnvironment(ghostId);
+  const env = inheritEnv ? pluginNodeEnvironment(ghostId, process.env, true) : desktopPluginEnvironment(ghostId);
   const workerEntry = path.join(__dirname, 'nodeRuntimeWorkerProcess.desktop.js');
   const forkArgs = isChild
     ? [entryPath, GHOST_NODE_CHILD_MODE_FLAG, ...childArgs]
@@ -82,7 +83,8 @@ export function createUtilityNodeWorkerProcess(
   return adaptPluginNodeProcess(child, isChild);
 }
 
-const defaultSpawnProcess = createUtilityNodeWorkerProcess;
+const defaultSpawnProcess = (entryPath: string, cwd: string, ghostId: string, inheritEnv = false): NodeWorkerProcess =>
+  createUtilityNodeWorkerProcess(entryPath, cwd, ghostId, utilityProcess.fork, undefined, inheritEnv);
 
 /** 代启子进程缺省实现:同一 utilityProcess 通道,原样 stdio 模式。 */
 const defaultSpawnChildProcess = (
@@ -90,8 +92,9 @@ const defaultSpawnChildProcess = (
   cwd: string,
   ghostId: string,
   args: string[],
+  inheritEnv = false,
 ): NodeWorkerProcess =>
-  createUtilityNodeWorkerProcess(entryPath, cwd, ghostId, utilityProcess.fork, args);
+  createUtilityNodeWorkerProcess(entryPath, cwd, ghostId, utilityProcess.fork, args, inheritEnv);
 
 export class GhostNodeRuntimeBroker extends SharedGhostNodeRuntimeBroker {
   constructor(deps: GhostNodeRuntimeBrokerDeps) {

@@ -32,7 +32,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { machineIdSync } from 'node-machine-id';
 import { writeDeviceLinkSetting } from './device-link/settings-store.desktop';
-import {readCloudGuest,cloudGuestSaved,cloudGuestAuthorization,markCloudGuestSaved,confirmCloudGuestWhenOnline} from '@cindy/auth-client/linux-cloud';
+import {readCloudGuest,cloudGuestSaved,cloudGuestAuthorization,cloudGuestFailureReason,markCloudGuestSaved,confirmCloudGuestWhenOnline} from '@cindy/auth-client/linux-cloud';
 import { enrollTestCloudDesktop } from './cloudDesktopTestEnrollment';
 import {
   AuthApiError,
@@ -41,12 +41,14 @@ import {
   discoverEmailLogin,
   discoverPersonalLoginOrganization,
   discoverSsoOrgRealm,
+  encodeQrLoginUrl,
   parseAccountDeletionReceiptRecord,
   parseAuthSessionRecord,
   reduceAuthFlow,
   serializeAccountDeletionReceiptRecord,
   ssoOrgDiscoveryToMethods,
   serializeAuthSessionRecord,
+  SIGNUP_CONFIRMATION_CAPABILITY,
   type AuthFlowState,
   type AuthMembership,
   type AuthRegion,
@@ -57,6 +59,7 @@ import {
   type LoginMethod,
   type LoginOutcome,
   type ProviderConfig,
+  type QrRequesterInfo,
   type SocialProvider,
 } from '@cindy/auth-client';
 import { readReloginFlag, clearReloginFlag, enableUncustomizedBetaChannel } from './updateService';
@@ -112,6 +115,7 @@ import {
   type AuthLoopbackDevBridge,
 } from './authLoopbackCallback';
 import { createDesktopPollCredentials, runHostedCallbackPolling } from './authHostedCallback';
+import { deviceName as localDeviceName } from './device-link/deviceName';
 import { launchAuthBrowser } from './authBrowserLaunch';
 import { reconcileSavedAccountMetadata, type StoredAccountMetadata } from './authAccountMetadata';
 import {
@@ -167,6 +171,9 @@ import {
   type DesktopLoginAction,
   type DesktopLoginActionResult,
   type DesktopLoginState,
+  type DesktopQrHandoffDecisionResult,
+  type DesktopQrHandoffResult,
+  type DesktopQrHandoffStateResult,
 } from '../shared/authIpc';
 import { LOGIN_CAPTCHA_PAGE_PATH } from '../shared/webviewPartition';
 import {
@@ -419,6 +426,8 @@ let pendingAccountMemberships: AuthMembership[] = [];
 let pendingLoginTicket: string | null = null;
 let pendingBindTicket: string | null = null;
 let pendingSsoVerificationTicket: string | null = null;
+// 「创建新账号」确认票据：只在本进程内存，确认或放弃后清空。
+let pendingSignupTicket: string | null = null;
 let loginActionPromise: Promise<DesktopLoginActionResult> | null = null;
 let loginActionPromiseEpoch: number | null = null;
 // Separate from authStateEpoch: closing an add-account surface must invalidate
@@ -467,6 +476,8 @@ function createAuthClient(
     deviceId,
     clientType: 'desktop',
     locale: getResolvedMainLocale(),
+    // 桌面登录页能处理「创建新账号」确认；cindy-host CLI 等其它调用方不声明。
+    capabilities: [SIGNUP_CONFIRMATION_CAPABILITY],
     fetch: withProviderResponseDiagnostics(
       scenarioFetch ?? desktopAuthFetch,
       (diagnostic) => log.warn('login providers non-JSON response', diagnostic),
@@ -4183,6 +4194,7 @@ function resetLoginFlowState(): void {
   pendingLoginTicket = null;
   pendingBindTicket = null;
   pendingSsoVerificationTicket = null;
+  pendingSignupTicket = null;
   pendingAuthRealm = null;
   pendingAccountDeletionRestored = false;
 }
@@ -4904,6 +4916,93 @@ async function runProtectedAuthRequest<T>(
   }
 }
 
+// ── 扫码登录：本机已登录，为另一台设备出码（「远程控制 Cindy」弹窗）─────────────
+
+function qrHandoffFailureCode(error: unknown): string {
+  return error instanceof AuthApiError ? error.code : 'AUTH_REQUEST_FAILED';
+}
+
+/**
+ * 记下请求发起时的登录态：弹窗轮询期间用户可能已换号，旧请求迟到的 401 只能让
+ * 发起它的那个登录态失效，不能登出之后切换到的账号。
+ */
+function captureQrHandoffSession(): () => boolean {
+  const epoch = authStateEpoch;
+  const realm = activeAuthRealm;
+  const userId = currentUser?.id;
+  return () => authStateEpoch === epoch && activeAuthRealm === realm && currentUser?.id === userId;
+}
+
+/** 生成一次性出码；二维码同时是本版本官网下载页链接。凭据只在 main 与 auth-server 之间。 */
+export async function createQrLoginHandoff(): Promise<DesktopQrHandoffResult> {
+  try {
+    if (!accessToken || !currentUser) throw new AuthApiError('UNAUTHENTICATED', 401, 'QR handoff requires login');
+    const token = accessToken;
+    const realm = activeAuthRealm;
+    const created = await runProtectedAuthRequest(
+      () => createAuthClient(realm).createQrHandoff(token),
+      captureQrHandoffSession(),
+    );
+    const name = localDeviceName().trim().slice(0, 64);
+    const payload = encodeQrLoginUrl(qrLoginDownloadPageUrl(), {
+      kind: 'handoff',
+      region: created.region,
+      id: created.handoffId,
+      scanToken: created.scanToken,
+      ...(name ? { deviceName: name } : {}),
+      platform: process.platform,
+    });
+    return { success: true, handoffId: created.handoffId, payload, expiresAt: created.expiresAt };
+  } catch (error) {
+    const code = qrHandoffFailureCode(error);
+    log.warn(`qr handoff create failed code=${code}`);
+    return { success: false, code };
+  }
+}
+
+/** 弹窗打开期间轮询；到期即停，由用户手动刷新。 */
+export async function getQrLoginHandoffState(handoffId: string): Promise<DesktopQrHandoffStateResult> {
+  try {
+    if (!accessToken) throw new AuthApiError('UNAUTHENTICATED', 401, 'QR handoff requires login');
+    const token = accessToken;
+    const state = await runProtectedAuthRequest(
+      () => createAuthClient(activeAuthRealm).qrHandoffState(token, handoffId),
+      captureQrHandoffSession(),
+    );
+    if (state.status === 'expired') return { success: true, status: 'expired' };
+    const requester: QrRequesterInfo | undefined = state.requester;
+    return {
+      success: true,
+      status: state.status,
+      expiresAt: state.expiresAt,
+      ...(requester ? { requester } : {}),
+    };
+  } catch (error) {
+    const retryAt = error instanceof AuthApiError ? error.retryAt : undefined;
+    return { success: false, code: qrHandoffFailureCode(error), ...(retryAt !== undefined ? { retryAt } : {}) };
+  }
+}
+
+export async function decideQrLoginHandoff(
+  handoffId: string,
+  approve: boolean,
+): Promise<DesktopQrHandoffDecisionResult> {
+  try {
+    if (!accessToken) throw new AuthApiError('UNAUTHENTICATED', 401, 'QR handoff requires login');
+    const token = accessToken;
+    await runProtectedAuthRequest(
+      () => createAuthClient(activeAuthRealm).decideQrHandoff(token, handoffId, approve),
+      captureQrHandoffSession(),
+    );
+    log.info(`qr handoff decided approve=${approve}`);
+    return { success: true };
+  } catch (error) {
+    const code = qrHandoffFailureCode(error);
+    log.warn(`qr handoff decision failed code=${code}`);
+    return { success: false, code };
+  }
+}
+
 /** Server-controlled visibility and verification channel for personal-account deletion. */
 export function getAccountDeletionAvailability(): Promise<AccountDeletionAvailability> {
   const token = requireAccountDeletionAccessToken();
@@ -5502,7 +5601,13 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
               });
             },
           };
-          const grant = await cloudGuestAuthorization(guest, deviceId, authServerUrl(AUTH_REGION), store, desktopAuthFetch);
+          // Keep trying while this guest stays signed out: after the first-boot window only a restart used to retry.
+          const grant = await cloudGuestAuthorization(guest, deviceId, authServerUrl(AUTH_REGION), store, desktopAuthFetch,
+            {
+              persistent: true,
+              stopped: () => Boolean(superseded()),
+              onRetrying: (reason) => log.warn('Cloud guest sign-in still retrying', reason),
+            });
           if (superseded()) return snapshotAuthState();
           const client = createAuthClient(AUTH_REGION);
           const pair = await client.exchangeAuthorizationCode(grant.code, grant.verifier);
@@ -5521,8 +5626,8 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
             () => getClientEndpointForRealm(AUTH_REGION, 'modelAccessApiBaseUrl'), getAccessToken, desktopAuthFetch,
           );
           return snapshotAuthState();
-        })().catch(() => {
-          log.warn('Cloud guest sign-in did not complete');
+        })().catch((error: unknown) => {
+          log.warn('Cloud guest sign-in did not complete', cloudGuestFailureReason(error));
           return snapshotAuthState();
         }).finally(() => { enterpriseGuestSignIn = null; });
         const completion = enterpriseGuestSignIn;
@@ -6010,6 +6115,7 @@ async function loadLoginProviders(expectedLoginFlowEpoch = loginFlowEpoch): Prom
   pendingLoginTicket = null;
   pendingBindTicket = null;
   pendingSsoVerificationTicket = null;
+  pendingSignupTicket = null;
   pendingAccountDeletionRestored = false;
   pendingAuthRealm = null;
   // 与冷启动 splash 同一把闸:限时等待,超时先以 AUTH_SERVICE_UNAVAILABLE 解锁
@@ -6248,6 +6354,7 @@ async function completeLogin(
     pendingLoginTicket = null;
     pendingBindTicket = null;
     pendingSsoVerificationTicket = null;
+    pendingSignupTicket = null;
     pendingPersonalLogin = null;
     handledLoginEmail = null;
     loginFlowState = reduceAuthFlow(loginFlowState, { type: 'outcome', outcome });
@@ -6284,6 +6391,7 @@ async function acceptLoginOutcome(
         : [];
 
   if (outcome.status === 'ok') return finishFreshLogin(outcome, expectedLoginFlowEpoch);
+  pendingSignupTicket = null;
   if (outcome.status === 'select_account') {
     pendingLoginTicket = outcome.loginTicket;
     pendingBindTicket = null;
@@ -6291,6 +6399,12 @@ async function acceptLoginOutcome(
   } else if (outcome.status === 'binding_required') {
     pendingBindTicket = outcome.bindTicket;
     pendingLoginTicket = null;
+    pendingSsoVerificationTicket = null;
+  } else if (outcome.status === 'signup_required') {
+    // 只有本机声明了注册确认才会收到；票据留在 main，renderer 只看到脱敏展示值。
+    pendingSignupTicket = outcome.signupTicket;
+    pendingLoginTicket = null;
+    pendingBindTicket = null;
     pendingSsoVerificationTicket = null;
   } else {
     pendingSsoVerificationTicket = outcome.verificationTicket;
@@ -6325,6 +6439,11 @@ async function finishFreshLogin(
     return loginFlowState;
   }
   return completeLogin(outcome, expectedLoginFlowEpoch, { recoverInvalidForExplicitLogin: true });
+}
+
+/** 扫码登录二维码落到本机所属版本的官网下载页：系统相机扫码即可下载对应版本。 */
+function qrLoginDownloadPageUrl(): string {
+  return new URL('/download/', getClientEndpoint('websiteUrl')).toString();
 }
 
 async function runLoginAction(
@@ -6625,6 +6744,19 @@ async function runLoginAction(
       }
     }
 
+    if (action.type === 'confirm-signup') {
+      assertLoginCredentialStoreReady();
+      const signupTicket = pendingSignupTicket;
+      if (!signupTicket || loginFlowState?.step !== 'signup-confirmation') {
+        throw new AuthApiError('INVALID_SIGNUP_TICKET', 401, 'Missing signup ticket');
+      }
+      // 个人登录与注册确认始终在构建区域完成（与 startsBuildRealmFlow 同口径）。
+      const outcome = await createAuthClient(AUTH_REGION).signup(signupTicket);
+      assertLoginFlowCurrent(actionLoginFlowEpoch);
+      pendingSignupTicket = null;
+      return { success: true, state: await acceptLoginOutcome(outcome, actionLoginFlowEpoch) };
+    }
+
     if (action.type === 'select-account') {
       const accountToken = pendingAccountToken;
       if (accountToken) {
@@ -6733,6 +6865,7 @@ async function runLoginAction(
       'INVALID_LOGIN_TICKET',
       'INVALID_BIND_TICKET',
       'INVALID_SSO_VERIFICATION_TICKET',
+      'INVALID_SIGNUP_TICKET',
       'INVALID_AUTH_CODE',
       'INVALID_TOKEN',
       'TOKEN_EXPIRED',
@@ -6745,6 +6878,7 @@ async function runLoginAction(
       pendingLoginTicket = null;
       pendingBindTicket = null;
       pendingSsoVerificationTicket = null;
+      pendingSignupTicket = null;
       pendingAuthRealm = null;
     }
     // Storage failures need recovery guidance, not another verification-code

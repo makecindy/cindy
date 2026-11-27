@@ -22,6 +22,8 @@ const STORAGE_KEY = 'remoteConnection.v2';
 let memoryValue: boolean | null = null;
 let onlyEncryptedValue = false;
 let changedByValue: AgentNetRemoteChange | null = null;
+/** 开关是因为这台电脑在账号里被移除过才自动关掉的（selfHostedRelayRuntime.ts）；重新打开即可重新加入。 */
+let removedValue = false;
 export function getRemoteConnectionOnlyEncrypted(): boolean { return onlyEncryptedValue; }
 const listeners = new Set<() => void>();
 let storageSubscribed = false;
@@ -82,6 +84,7 @@ function subscribe(listener: () => void): () => void {
 
 function applyState(state: SelfHostedRelayState): void {
   changedByValue = state.agentNetChangedBy ?? null;
+  removedValue = state.agentNetRemoved === true;
   applyView(state.agentNetEnabled === true, state.agentNetOnlyEncrypted === true);
 }
 
@@ -101,6 +104,8 @@ export function setRemoteConnectionV2Enabled(next: boolean): Promise<void> {
   if (!api) { applyView(next); return Promise.resolve(); } // Standalone UI previews have no transport.
   const epoch = ++hostEpoch;
   return api.command({ type: 'set-agent-net', enabled: next }).then((result) => {
+    // A computer removed from the account rejoined before the switch went on (selfHostedRelayRuntime.ts): the settings page says how.
+    if (result.rejoin) window.dispatchEvent(new CustomEvent('agent-net-rejoin-result', { detail: { result: result.rejoin } }));
     if (result.error) throw new Error(result.error);
     if (epoch === hostEpoch) applyState(result.state);
   });
@@ -121,14 +126,17 @@ export function useRemoteConnectionV2(): {
   onlyEncrypted: boolean;
   setOnlyEncrypted: (next: boolean) => void;
   changedBy: AgentNetRemoteChange | null;
+  removed: boolean;
 } {
   const [enabled, setState] = useState<boolean>(getRemoteConnectionV2Enabled);
   const [onlyEncrypted, setOnlyEncryptedState] = useState(getRemoteConnectionOnlyEncrypted);
   const [changedBy, setChangedBy] = useState<AgentNetRemoteChange | null>(changedByValue);
+  const [removed, setRemoved] = useState(removedValue);
   useEffect(() => subscribe(() => {
     setState(getRemoteConnectionV2Enabled());
     setOnlyEncryptedState(getRemoteConnectionOnlyEncrypted());
     setChangedBy(changedByValue);
+    setRemoved(removedValue);
   }), []);
   const setEnabled = useCallback((next: boolean) => {
     void setRemoteConnectionV2Enabled(next).catch((error) => {
@@ -140,7 +148,7 @@ export function useRemoteConnectionV2(): {
       window.dispatchEvent(new CustomEvent('agent-net-preference-error', { detail: { code: error instanceof Error ? error.message : 'FAILED' } }));
     });
   }, []);
-  return { enabled, setEnabled, onlyEncrypted, setOnlyEncrypted, changedBy };
+  return { enabled, setEnabled, onlyEncrypted, setOnlyEncrypted, changedBy, removed };
 }
 
 /** 测试专用:清空内存值与监听。 */
@@ -148,6 +156,7 @@ export function _resetRemoteConnectionV2ForTests(): void {
   memoryValue = null;
   onlyEncryptedValue = false;
   changedByValue = null;
+  removedValue = false;
   listeners.clear();
   offHost?.(); offHost = null; hostEpoch++;
   if (storageSubscribed) {

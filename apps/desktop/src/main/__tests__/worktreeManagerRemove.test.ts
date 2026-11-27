@@ -4,7 +4,13 @@ const readWorktreeRuntimePathsMock = vi.hoisted(() => vi.fn(async () => new Set<
 const reclaimOrphanedRuntimeLeasesMock = vi.hoisted(() => vi.fn(async () => 0));
 vi.mock('../worktree/runtimeLeases', () => ({
   readWorktreeRuntimePaths: readWorktreeRuntimePathsMock,
-  acquireWorktreeRuntimeLease: async () => {}, releaseWorktreeRuntimeLease: async () => {},
+  acquireWorktreeRuntimeLease: async (ownerId: string, worktreePath: string) => ({
+    ownerId,
+    worktreePath,
+    filePath: `${worktreePath}.lease`,
+  }),
+  recordWorktreeRuntimeLeaseChild: () => {},
+  releaseWorktreeRuntimeLease: async () => {},
   reclaimOrphanedWorktreeRuntimeLeases: reclaimOrphanedRuntimeLeasesMock,
 }));
 /**
@@ -323,7 +329,7 @@ describe('removeWorktreeForSession', () => {
     await expect(manager.cancelPrecreatedWorktree('s1', { recoveryKey: 'wrong' }, { canRemove: async () => true }))
       .resolves.toEqual({ status: 'path-mismatch' });
     await expect(manager.cancelPrecreatedWorktree('s1', { recoveryKey: 'right' }, { canRemove: async () => false }))
-      .resolves.toEqual({ status: 'preserved' });
+      .resolves.toEqual({ status: 'preserved', reason: 'claimed' });
     expect(cancelledIds.size).toBe(0);
     expect(storeMap.get('s1')).toBe(meta);
     expect(gitExecMock).not.toHaveBeenCalled();
@@ -334,7 +340,7 @@ describe('removeWorktreeForSession', () => {
     storeMap.set('s1', meta);
     isWorktreeDirtyMock.mockResolvedValue(true);
     await expect(manager.cancelPrecreatedWorktree('s1', { recoveryKey: 'right' }, { canRemove: async () => true }))
-      .resolves.toEqual({ status: 'preserved' });
+      .resolves.toEqual({ status: 'preserved', reason: 'dirty' });
     expect(cancelledIds.has('s1')).toBe(true);
     expect(storeMap.get('s1')).toBe(meta);
     expect(gitExecMock).not.toHaveBeenCalledWith(['worktree', 'remove', meta.path], BASE_REPO);
@@ -354,7 +360,7 @@ describe('removeWorktreeForSession', () => {
       meta.sessionId,
       { recoveryKey: meta.recoveryKey },
       { canRemove: async () => true },
-    )).resolves.toEqual({ status: 'preserved' });
+    )).resolves.toEqual({ status: 'preserved', reason: 'live-reference' });
 
     expect(reclaimOrphanedRuntimeLeasesMock).toHaveBeenCalledWith(meta.path);
     expect(storeMap.has(meta.sessionId)).toBe(true);
@@ -419,7 +425,7 @@ describe('removeWorktreeForSession', () => {
 
     await expect(
       manager.discardPrecreatedWorktreeByRecoveryKey('s1', meta.recoveryKey, { canRemove }),
-    ).resolves.toEqual({ status: 'preserved' });
+    ).resolves.toEqual({ status: 'preserved', reason: 'claimed' });
 
     expect(canRemove).toHaveBeenCalledTimes(1);
     expect(gitExecMock).not.toHaveBeenCalledWith(['worktree', 'remove', meta.path], BASE_REPO);
@@ -448,6 +454,7 @@ describe('removeWorktreeForSession', () => {
 
     await expect(manager.discardPrecreatedWorktree('s1', meta.path)).resolves.toEqual({
       status: 'preserved',
+      reason: 'dirty',
     });
 
     expect(autoStashMock).not.toHaveBeenCalled();
@@ -462,7 +469,7 @@ describe('removeWorktreeForSession', () => {
 
     await expect(
       manager.discardPrecreatedWorktree('s1', meta.path, { canRemove }),
-    ).resolves.toEqual({ status: 'preserved' });
+    ).resolves.toEqual({ status: 'preserved', reason: 'claimed' });
 
     expect(canRemove).toHaveBeenCalledTimes(1);
     expect(gitExecMock).not.toHaveBeenCalledWith(['worktree', 'remove', meta.path], BASE_REPO);
@@ -485,6 +492,7 @@ describe('removeWorktreeForSession', () => {
 
     await expect(manager.discardPrecreatedWorktree('s1', meta.path)).resolves.toEqual({
       status: 'preserved',
+      reason: 'remove-failed',
     });
 
     expect(gitExecMock).toHaveBeenCalledWith(['worktree', 'remove', meta.path], BASE_REPO);
@@ -504,6 +512,7 @@ describe('removeWorktreeForSession', () => {
 
     await expect(manager.discardPrecreatedWorktree('s1', meta.path)).resolves.toEqual({
       status: 'preserved',
+      reason: 'ignored-files',
     });
 
     expect(ignoredFilesMock).toHaveBeenCalledWith(BASE_REPO, meta.path);
@@ -541,6 +550,7 @@ describe('removeWorktreeForSession', () => {
 
       await expect(manager.discardPrecreatedWorktree('s1', meta.path)).resolves.toEqual({
         status: 'preserved',
+        reason: 'ignored-files',
       });
 
       const moves = gitExecMock.mock.calls.filter(
@@ -725,6 +735,7 @@ describe('removeWorktreeForSession', () => {
 
       await expect(manager.discardPrecreatedWorktree('s1', worktreePath)).resolves.toEqual({
         status: 'preserved',
+        reason: 'quarantine-failed',
       });
 
       expect(gitExecMock).not.toHaveBeenCalledWith(
@@ -843,6 +854,7 @@ describe('removeWorktreeForSession', () => {
 
     await expect(manager.discardPrecreatedWorktree('s1', meta.path)).resolves.toEqual({
       status: 'preserved',
+      reason: 'branch-mismatch',
     });
 
     expect(gitExecMock).not.toHaveBeenCalled();
@@ -851,6 +863,380 @@ describe('removeWorktreeForSession', () => {
       BASE_REPO,
     );
     expect(gitExecMock).not.toHaveBeenCalledWith(expect.arrayContaining(['rev-list']), BASE_REPO);
+  });
+
+  /*
+   * Test value (engineering-conventions §3.2)
+   * - Production entry: WorktreeManager.discardPrecreatedWorktreeByRecoveryKey / discardPrecreatedWorktree / createWorktree.
+   * - Bug/rule basis: remote precreated worktree recovery permanently deadlocked with PRECONDITION_FAILED or 60s timeout
+   *   when orphaned runtime leases persisted, directories were already deleted on disk, Multibox repos triggered ignored-file
+   *   scans, or a stuck createWorktree blocked the per-session operation queue.
+   * - Existing coverage gap: prior discard tests did not cover default orphan-lease reclamation on recovery-key discard,
+   *   stale-metadata pruning on ENOENT, Multibox ignored-file bypass, in-flight create abort, or bounded queue timeout.
+   * - Minimal failing inputs: (1) dead-owner lease held during recovery-key discard; (2) ENOENT directory with stale store
+   *   entry; (3) repo with .multibox.toml and ignored files; (4) stuck git worktree add + matching discard; (5) queue stall > 40s.
+   */
+  it('discard by recovery key reclaims orphaned runtime leases by default before checking live references', async () => {
+    const meta = { ...makeMeta('orphan-discard'), recoveryKey: 'recovery-key-orphan-discard' };
+    storeMap.set(meta.sessionId, meta);
+    const runtimePaths = new Set<string>([meta.path]);
+    readWorktreeRuntimePathsMock.mockImplementation(async () => new Set(runtimePaths));
+    reclaimOrphanedRuntimeLeasesMock.mockImplementation(async () => {
+      runtimePaths.clear();
+      return 1;
+    });
+
+    await expect(
+      manager.discardPrecreatedWorktreeByRecoveryKey(meta.sessionId, meta.recoveryKey, {
+        canRemove: async () => true,
+      }),
+    ).resolves.toMatchObject({ status: 'discarded' });
+
+    expect(reclaimOrphanedRuntimeLeasesMock).toHaveBeenCalledWith(meta.path);
+    expect(storeMap.has(meta.sessionId)).toBe(false);
+  });
+
+  it('discard pre-created prunes stale metadata when the worktree directory is absent on disk, but preserves an existing unreadable worktree', async () => {
+    const tmpRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), 'xdt-wt-missing-'));
+    try {
+      const base = path.join(tmpRoot, 'repo');
+      fsSync.mkdirSync(base, { recursive: true });
+      const missingPath = path.join(base, '.xdt-worktrees', 'gone');
+      const existingPath = path.join(base, '.xdt-worktrees', 'detached');
+      fsSync.mkdirSync(existingPath, { recursive: true });
+
+      const missingMeta: WorktreeMeta = { ...makeMeta('gone'), baseRepo: base, path: missingPath };
+      const existingMeta: WorktreeMeta = { ...makeMeta('detached'), baseRepo: base, path: existingPath };
+      storeMap.set(missingMeta.sessionId, missingMeta);
+      storeMap.set(existingMeta.sessionId, existingMeta);
+
+      gitExecMock.mockImplementation(async (args: string[]) => {
+        if (args[0] === 'symbolic-ref') {
+          throw new Error('fatal: not a git repository');
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      await expect(manager.discardPrecreatedWorktree(missingMeta.sessionId, missingMeta.path)).resolves.toMatchObject({
+        status: 'discarded',
+      });
+      expect(storeMap.has(missingMeta.sessionId)).toBe(false);
+      expect(gitExecMock).toHaveBeenCalledWith(['worktree', 'prune'], base);
+
+      await expect(manager.discardPrecreatedWorktree(existingMeta.sessionId, existingMeta.path)).resolves.toEqual({
+        status: 'preserved',
+        reason: 'branch-mismatch',
+      });
+      expect(storeMap.has(existingMeta.sessionId)).toBe(true);
+    } finally {
+      fsSync.rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('discard pre-created skips ignored-file scanning on Multibox repositories', async () => {
+    const tmpRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), 'xdt-wt-multibox-'));
+    try {
+      const base = path.join(tmpRoot, 'repo');
+      const worktreePath = path.join(base, '.xdt-worktrees', 'mb');
+      fsSync.mkdirSync(worktreePath, { recursive: true });
+      fsSync.writeFileSync(path.join(base, '.multibox.toml'), 'version = 1\n');
+      const meta: WorktreeMeta = { ...makeMeta('mb'), baseRepo: base, path: worktreePath };
+      storeMap.set(meta.sessionId, meta);
+      ignoredFilesMock.mockResolvedValue(['huge-cloned-cache']);
+      gitExecMock.mockImplementation(async (args: string[]) => {
+        if (args[0] === 'multibox' && args[1] === '--version') {
+          return { stdout: 'git-multibox 1.0.0\n', stderr: '' };
+        }
+        if (args[0] === 'symbolic-ref') {
+          return { stdout: `refs/heads/${meta.branch}\n`, stderr: '' };
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      await expect(manager.discardPrecreatedWorktree(meta.sessionId, meta.path)).resolves.toMatchObject({
+        status: 'discarded',
+      });
+
+      expect(ignoredFilesMock).not.toHaveBeenCalled();
+      expect(storeMap.has(meta.sessionId)).toBe(false);
+    } finally {
+      fsSync.rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('discard by recovery key aborts a stuck in-flight createWorktree instead of waiting indefinitely', async () => {
+    const tmpRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), 'xdt-wt-abort-'));
+    try {
+      const base = path.join(tmpRoot, 'repo');
+      fsSync.mkdirSync(base, { recursive: true });
+      const recoveryKey = 'recovery-key-abort-123456';
+      let worktreeAddSignal: AbortSignal | undefined;
+      let sawWorktreeAdd = false;
+
+      gitExecMock.mockImplementation(async (args: string[], _cwd?: string, opts?: { signal?: AbortSignal }) => {
+        if (args[0] === '--version') {
+          return { stdout: 'git version 2.50.0\n', stderr: '' };
+        }
+        if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') {
+          return { stdout: `${base}\nmain\n.git\n.git\n`, stderr: '' };
+        }
+        if (args[0] === 'branch') {
+          return { stdout: 'refs/heads/main\n', stderr: '' };
+        }
+        if (args[0] === 'for-each-ref') {
+          return { stdout: 'main\n', stderr: '' };
+        }
+        if (args[0] === 'worktree' && args[1] === 'list') {
+          return { stdout: '', stderr: '' };
+        }
+        if (args.includes('worktree') && args.includes('add')) {
+          sawWorktreeAdd = true;
+          worktreeAddSignal = opts?.signal;
+          return new Promise((_resolve, reject) => {
+            opts?.signal?.addEventListener('abort', () => {
+              reject(new Error('aborted by discard'));
+            }, { once: true });
+          });
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      const createPromise = manager.createWorktree({
+        sessionId: 'stuck-create',
+        baseRepo: base,
+        name: 'stuck-branch',
+        sourceBranch: 'main',
+        recoveryKey,
+      });
+
+      await vi.waitFor(() => {
+        expect(sawWorktreeAdd).toBe(true);
+      });
+      expect(worktreeAddSignal?.aborted).toBe(false);
+
+      const discardResult = await manager.discardPrecreatedWorktreeByRecoveryKey(
+        'stuck-create',
+        recoveryKey,
+        { canRemove: async () => true },
+      );
+
+      expect(worktreeAddSignal?.aborted).toBe(true);
+      expect(discardResult).toEqual({ status: 'absent' });
+      await expect(createPromise).resolves.toMatchObject({ ok: false });
+    } finally {
+      fsSync.rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('discard by recovery key returns preserved(in-progress) when the operation queue stalls past the bounded wait', async () => {
+    const baseRepo = fsSync.mkdtempSync(path.join(os.tmpdir(), 'xdt-wt-stalled-queue-'));
+    onTestFinished(() => fsSync.rmSync(baseRepo, { recursive: true, force: true }));
+    const recoveryKey = 'recovery-key-timeout-123456';
+    let releaseCreate!: () => void;
+    let revParseStarted = false;
+    gitExecMock.mockImplementation(async (args: string[]) => {
+      if (args[0] === '--version') {
+        return { stdout: 'git version 2.50.0\n', stderr: '' };
+      }
+      if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') {
+        revParseStarted = true;
+        return new Promise<{ stdout: string; stderr: string }>((resolve) => {
+          releaseCreate = () => resolve({ stdout: `${baseRepo}\nmain\n.git\n.git\n`, stderr: '' });
+        });
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const createPromise = manager.createWorktree({
+      sessionId: 'stalled-queue',
+      baseRepo,
+      name: 'stalled-branch',
+      sourceBranch: 'main',
+      recoveryKey,
+    });
+    await vi.waitFor(() => {
+      expect(revParseStarted).toBe(true);
+    });
+
+    vi.useFakeTimers();
+    try {
+      const discardPromise = manager.discardPrecreatedWorktreeByRecoveryKey(
+        'stalled-queue',
+        recoveryKey,
+        { canRemove: async () => true },
+      );
+
+      await vi.advanceTimersByTimeAsync(40_000);
+      await expect(discardPromise).resolves.toEqual({
+        status: 'preserved',
+        reason: 'in-progress',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    releaseCreate();
+    await expect(createPromise).resolves.toMatchObject({ ok: false });
+  });
+
+  /*
+   * Test value (engineering-conventions §3.2)
+   * - Production entry: WorktreeManager.cancelPrecreatedWorktree / createWorktree / rollbackPartialCreate.
+   * - Bug/rule basis: (1) path-based cancel with a mismatched path must never abort or seal an in-flight create
+   *   before path verification; (2) background full checkout must receive the create AbortSignal so cancelling
+   *   before metadata publication lets rollback finish without keeping the repository create queue wedged.
+   * - Existing coverage gap: prior abort tests only checked matching recoveryKey aborts during worktree add,
+   *   not wrong-path cancel safety or background full checkout cancellation during rollback.
+   * - Minimal failing inputs: (1) in-flight create + cancel with unrelated path; (2) stuck background full checkout
+   *   aborted during post-stage setup followed by a second create on the same baseRepo.
+   */
+  it('cancel with a mismatched path never aborts or seals an in-flight createWorktree', async () => {
+    const tmpRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), 'xdt-wt-wrong-path-'));
+    try {
+      const base = path.join(tmpRoot, 'repo');
+      fsSync.mkdirSync(base, { recursive: true });
+      const recoveryKey = 'recovery-key-wrong-path-123456';
+      let releaseWorktreeAdd!: () => void;
+      let sawWorktreeAdd = false;
+      let worktreeAddSignal: AbortSignal | undefined;
+
+      gitExecMock.mockImplementation(async (args: string[], _cwd?: string, opts?: { signal?: AbortSignal }) => {
+        if (args[0] === '--version') return { stdout: 'git version 2.50.0\n', stderr: '' };
+        if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') {
+          return { stdout: `${base}\nmain\n.git\n.git\n`, stderr: '' };
+        }
+        if (args[0] === 'branch') return { stdout: 'refs/heads/main\n', stderr: '' };
+        if (args[0] === 'for-each-ref') return { stdout: 'main\n', stderr: '' };
+        if (args[0] === 'worktree' && args[1] === 'list') return { stdout: '', stderr: '' };
+        if (args.includes('worktree') && args.includes('add')) {
+          sawWorktreeAdd = true;
+          worktreeAddSignal = opts?.signal;
+          return new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
+            releaseWorktreeAdd = () => resolve({ stdout: '', stderr: '' });
+            opts?.signal?.addEventListener('abort', () => reject(new Error('unexpected abort')), { once: true });
+          });
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      const createPromise = manager.createWorktree({
+        sessionId: 'wrong-path-session',
+        baseRepo: base,
+        name: 'valid-branch',
+        sourceBranch: 'main',
+        recoveryKey,
+      });
+
+      await vi.waitFor(() => expect(sawWorktreeAdd).toBe(true));
+
+      const cancelPromise = manager.cancelPrecreatedWorktree(
+        'wrong-path-session',
+        { path: path.join(base, '.cindy-worktrees', 'completely-different') },
+        { canRemove: async () => true },
+      );
+
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(worktreeAddSignal?.aborted).toBe(false);
+      expect(cancelledIds.has('wrong-path-session')).toBe(false);
+
+      releaseWorktreeAdd();
+      const created = await createPromise;
+      expect(created).toMatchObject({ ok: true });
+      await expect(cancelPromise).resolves.toEqual({ status: 'path-mismatch' });
+      expect(cancelledIds.has('wrong-path-session')).toBe(false);
+      expect(storeMap.has('wrong-path-session')).toBe(true);
+    } finally {
+      fsSync.rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('cancelling while background full checkout is stuck aborts the checkout and unblocks the repo create queue', async () => {
+    const tmpRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), 'xdt-wt-bg-abort-'));
+    try {
+      const base = path.join(tmpRoot, 'repo');
+      fsSync.mkdirSync(base, { recursive: true });
+      const recoveryKey = 'recovery-key-bg-abort-123456';
+      let bgCheckoutSignal: AbortSignal | undefined;
+      let sawBgCheckout = false;
+      let releaseProtectedLsFiles!: () => void;
+      let sawProtectedLsFiles = false;
+
+      gitExecMock.mockImplementation(async (args: string[], _cwd?: string, opts?: { signal?: AbortSignal }) => {
+        if (args[0] === '--version') return { stdout: 'git version 2.50.0\n', stderr: '' };
+        if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') {
+          return { stdout: `${base}\nmain\n.git\n.git\n`, stderr: '' };
+        }
+        if (args[0] === 'branch') return { stdout: 'refs/heads/main\n', stderr: '' };
+        if (args[0] === 'for-each-ref') return { stdout: 'main\n', stderr: '' };
+        if (args[0] === 'worktree' && args[1] === 'list') return { stdout: '', stderr: '' };
+        if (args[0] === 'checkout' && args.includes(':(exclude).claude')) {
+          sawBgCheckout = true;
+          bgCheckoutSignal = opts?.signal;
+          return new Promise((_resolve, reject) => {
+            opts?.signal?.addEventListener('abort', () => {
+              reject(new Error('background checkout aborted'));
+            }, { once: true });
+          });
+        }
+        if (args[0] === 'ls-files') {
+          sawProtectedLsFiles = true;
+          return new Promise<{ stdout: string; stderr: string }>((resolve) => {
+            releaseProtectedLsFiles = () => resolve({ stdout: '', stderr: '' });
+          });
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      const firstCreate = manager.createWorktree({
+        sessionId: 'bg-stuck-session',
+        baseRepo: base,
+        name: 'bg-stuck',
+        sourceBranch: 'main',
+        recoveryKey,
+      });
+
+      await vi.waitFor(() => {
+        expect(sawBgCheckout).toBe(true);
+        expect(sawProtectedLsFiles).toBe(true);
+      });
+      expect(bgCheckoutSignal?.aborted).toBe(false);
+
+      const cancelPromise = manager.cancelPrecreatedWorktree(
+        'bg-stuck-session',
+        { recoveryKey },
+        { canRemove: async () => true },
+      );
+
+      await vi.waitFor(() => expect(bgCheckoutSignal?.aborted).toBe(true));
+      releaseProtectedLsFiles();
+
+      await expect(firstCreate).resolves.toMatchObject({ ok: false });
+      await expect(cancelPromise).resolves.toEqual({ status: 'absent' });
+
+      // Subsequent create on the same baseRepo must proceed instead of hanging behind rollbackPartialCreate.
+      gitExecMock.mockImplementation(async (args: string[]) => {
+        if (args[0] === '--version') return { stdout: 'git version 2.50.0\n', stderr: '' };
+        if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') {
+          return { stdout: `${base}\nmain\n.git\n.git\n`, stderr: '' };
+        }
+        if (args[0] === 'branch') return { stdout: 'refs/heads/main\n', stderr: '' };
+        if (args[0] === 'for-each-ref') return { stdout: 'main\n', stderr: '' };
+        if (args[0] === 'worktree' && args[1] === 'list') return { stdout: '', stderr: '' };
+        return { stdout: '', stderr: '' };
+      });
+
+      const secondCreate = await manager.createWorktree({
+        sessionId: 'next-session',
+        baseRepo: base,
+        name: 'next-branch',
+        sourceBranch: 'main',
+        recoveryKey: 'recovery-key-next-123456',
+      });
+      expect(secondCreate).toMatchObject({ ok: true });
+    } finally {
+      fsSync.rmSync(tmpRoot, { recursive: true, force: true });
+    }
   });
 
   // Incomplete staged checkouts (--no-checkout whose background checkout was aborted or failed)
@@ -876,6 +1262,7 @@ describe('removeWorktreeForSession', () => {
       isIncompleteCheckoutDirtyMock.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
       await expect(manager.discardPrecreatedWorktree('s1', worktreePath)).resolves.toEqual({
         status: 'preserved',
+        reason: 'dirty',
       });
       expect(gitExecMock).not.toHaveBeenCalledWith(
         expect.arrayContaining(['worktree', 'remove']),

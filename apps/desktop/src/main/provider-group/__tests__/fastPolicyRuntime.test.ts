@@ -577,6 +577,69 @@ describe('durable direct task routing', () => {
     expect(await locate('reshare-recovery')).toEqual({ deviceId: 'one' });
   });
 
+  // Unit, direct-execution §7: after a direct task's 30-minute lease expires
+  // (or O restarts), O must still issue a direct-switch token from the durable
+  // historical location so G can silently hand off to another group member when
+  // original M cannot be restored, while keeping autoSwitch/access/generation fences.
+  it.each(['expired', 'removed-member', 'uncommitted-provisional', 'auto-switch-off', 'revoked', 'model-disallowed', 'stale-generation'] as const)(
+    'switches a durable historical direct location after lease expiry: %s', async mode => {
+      await installDirectHost();
+      const first = await allocate('expired-history');
+      expect(first?.generation).toBeTruthy();
+      disposeRemoteAgentHost();
+      await state.usage!.flush();
+      // Age the persisted receipt past its 30-minute lease and simulate an O
+      // restart so only the durable historical location remains.
+      const persisted = JSON.parse(fs.readFileSync(usageFile(), 'utf8'));
+      const savedRoute = persisted.directReceiptRoutes.find((route: { sessionId: string }) => route.sessionId === 'expired-history');
+      expect(savedRoute).toBeTruthy();
+      savedRoute.expiresAt -= 31 * 60_000;
+      if (mode === 'uncommitted-provisional') {
+        const provisional = { ...savedRoute, generation: randomUUID(),
+          expiresAt: Date.now() + 30 * 60_000, createdAt: Date.now() };
+        delete provisional.committedAt;
+        persisted.directReceiptRoutes.push(provisional);
+      }
+      fs.writeFileSync(usageFile(), JSON.stringify(persisted));
+      await installDirectHost();
+      state.planDevice = 'two';
+      if (mode === 'removed-member') {
+        state.config!.members = state.config!.members.filter(member => member.key !== 'device:one:openai');
+      }
+      if (mode === 'auto-switch-off') state.config!.autoSwitch = false;
+      if (mode === 'revoked') state.approved = false;
+      if (mode === 'model-disallowed') state.delegatedAllowed = false;
+      const direct = state.hostDeps!.directGuestExecution!;
+      const result = await direct.switch(guestPeer, {
+        op: 'direct-switch',
+        sessionId: 'expired-history',
+        ...(mode === 'stale-generation' ? { generation: randomUUID() } : {}),
+      });
+      const canSwitch = ['expired', 'removed-member', 'uncommitted-provisional'].includes(mode);
+      // Historical fallback must not probe old M for a same-machine account swap.
+      expect(state.calls.some(call => call.command.action === 'session')).toBe(false);
+      if (canSwitch) {
+        expect(result.token).toBeTruthy();
+        expect(result.generation).toBe(first!.generation);
+        expect(state.switchToken).toHaveBeenCalledWith(guestPeer, 'expired-history', new Set(['device:one:openai']));
+        await expect(direct.switched!(guestPeer, 'expired-history', result.token!)).resolves.toBe(true);
+        expect(await locate('expired-history')).toBeNull();
+        if (mode === 'uncommitted-provisional') {
+          // Uncommitted failed grant stays queued for reconcileDirectJournal rather
+          // than being marked revoked before M confirms.
+          const remaining = state.usage!.listActiveDirectReceiptRoutes(state.owner)
+            .filter(route => route.sessionId === 'expired-history');
+          expect(remaining).toHaveLength(1);
+          expect(remaining[0]!.committedAt).toBeUndefined();
+        }
+      } else {
+        expect(result).toEqual({});
+        expect(state.switchToken).not.toHaveBeenCalled();
+        if (mode !== 'revoked') expect(await locate('expired-history')).toEqual({ deviceId: 'one' });
+      }
+    },
+  );
+
   it('retains historical affinity on release but clears it on accepted fresh O fallback', async () => {
     await installDirectHost();
     const first = await allocate('history');

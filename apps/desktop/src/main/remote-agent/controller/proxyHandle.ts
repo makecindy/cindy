@@ -334,10 +334,10 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
   const eventSource: AgentKind | undefined = started.agentKind === 'acp' ? undefined : started.agentKind;
   let resolver: InteractionResolver | null = null;
   const capabilityListeners = new Set<(capabilities: Capabilities) => void>();
-  const notifyCapabilitiesIfChanged = (previous: unknown, next: unknown) => {
+  const notifyCapabilitiesIfChanged = (previous: unknown, next: unknown, force = false) => {
     if (!next || typeof next !== 'object' || Array.isArray(next)) return;
     if (capabilityListeners.size === 0) return;
-    if (JSON.stringify(previous) === JSON.stringify(next)) return;
+    if (!force && JSON.stringify(previous) === JSON.stringify(next)) return;
     const caps = next as Capabilities;
     for (const listener of capabilityListeners) {
       try {
@@ -355,7 +355,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     onInteractionStateChange?: (state: 'waiting' | 'resolved' | 'cancelled') => void;
   }>();
   const readImage = deps.readImage ?? ((file: string) => fsp.readFile(file));
-  const supported = new Set(started.methods);
+  let supported = new Set(started.methods);
   /** 连回后的新进程还没报过有内容的用量：先保留上一次的读数，界面不清零。 */
   let carriedUsage: unknown;
   /** 回到某条消息后、下一轮跑完前(Claude Code 要到下一次发送才在对方截断)：不能让出名额。 */
@@ -562,8 +562,88 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     }
   }
 
-  const optional = <K extends keyof AgentSessionHandle>(method: RemoteAgentMethod, fn: AgentSessionHandle[K]) =>
-    (supported.has(method) ? { [method]: fn } : {}) as Partial<AgentSessionHandle>;
+  const optionalMethods: Partial<Record<Exclude<RemoteAgentMethod, 'send' | 'steer' | 'abort' | 'setVendorOptions'>, unknown>> = {
+    requestGracefulStop: async () => {
+      await callIfLive('requestGracefulStop');
+    },
+    setModel: async (model: string, opts?: { providerId?: string | null; effort?: Effort }) => {
+      if (!await callIfLive('setModel', model, opts)) {
+        state = { ...state, model, ...(opts?.effort ? { effort: opts.effort } : {}) };
+      }
+      deps.onModel?.(model, opts);
+    },
+    // 已让出名额时下一次连回本来就是带新模型的冷启动接回，不用另外重建。
+    requiresModelSwitchRebuild: async (model: string, opts?: { providerId?: string | null }) => {
+      const end = link.begin();
+      try {
+        const live = await link.live();
+        return live ? (await live.call('requiresModelSwitchRebuild', [model, opts])) === true : false;
+      } finally {
+        end();
+      }
+    },
+    previewModelSwitch: (async (model: string, opts?: { providerId?: string | null }) =>
+      call('previewModelSwitch', model, opts)) as AgentSessionHandle['previewModelSwitch'],
+    setPermissionMode: async (mode: string) => {
+      await callIfLive('setPermissionMode', mode);
+      deps.onPermissionMode?.(mode);
+    },
+    setEffort: async (effort: Effort) => {
+      if (!await callIfLive('setEffort', effort)) state = { ...state, effort };
+      deps.onEffort?.(effort);
+    },
+    setFastMode: async (enabled: boolean | 'ultrafast') => {
+      if (!await callIfLive('setFastMode', enabled)) state = { ...state, fastMode: enabled };
+      deps.onFastMode?.(enabled);
+    },
+    setPlanMode: async (enabled: boolean) => {
+      if (!await callIfLive('setPlanMode', enabled)) {
+        state = {
+          ...state,
+          planMode: enabled,
+          ...('executionPlanMode' in state ? { executionPlanMode: enabled } : {}),
+        };
+      }
+      deps.onPlanMode?.(enabled);
+    },
+    setThinkingEnabled: async (enabled: boolean) => {
+      await callIfLive('setThinkingEnabled', enabled);
+      deps.onThinkingEnabled?.(enabled);
+    },
+    setExtraDirs: async (dirs: string[], libraryRoot?: string | null) => {
+      deps.onExtraDirs?.(dirs, libraryRoot);
+      await callIfLive('setExtraDirs', deps.workspace.virtualizeDirs(dirs), libraryRoot ? deps.workspace.virtualizeDirs([libraryRoot])[0] : null);
+    },
+    setWritableDirs: async (dirs: string[]) => {
+      await callIfLive('setWritableDirs', deps.workspace.virtualizeDirs(dirs));
+      // 对方成功后才更新本机执行器的根目录：新建的可写目录在本机也能过 root 判定，
+      // 撤掉的不再被本机上限当可信根；失败时两边都保持原状。
+      deps.onWritableDirs?.(dirs);
+    },
+    // 已让出名额时对方进程里没有后台任务(有后台任务时不会让)。
+    stopBackgroundTask: async (taskId: string) => {
+      await callIfLive('stopBackgroundTask', taskId);
+    },
+    resumeBackgroundTask: async (taskId: string, message: string, childId?: string) => {
+      await call('resumeBackgroundTask', taskId, message, childId);
+    },
+    compactSession: (async (instructions?: string) =>
+      call('compactSession', instructions)) as AgentSessionHandle['compactSession'],
+    getContextUsage: (async () => call('getContextUsage')) as AgentSessionHandle['getContextUsage'],
+    getCodexContextWindowInfo: (async () =>
+      call('getCodexContextWindowInfo')) as AgentSessionHandle['getCodexContextWindowInfo'],
+    useCindyAutoReviewFallback: async () => {
+      await callIfLive('useCindyAutoReviewFallback');
+      deps.onAutoReviewFallback?.();
+    },
+    previewRewindFiles: (async (userUuid: string) =>
+      call('previewRewindFiles', userUuid)) as AgentSessionHandle['previewRewindFiles'],
+    commitRewindFiles: (async (userUuid: string, priorAssistantUuid: string, opts?: unknown) => {
+      const result = await call('commitRewindFiles', userUuid, priorAssistantUuid, opts ?? null);
+      rewindPending = true;
+      return result;
+    }) as AgentSessionHandle['commitRewindFiles'],
+  };
 
   const handle: AgentSessionHandle = {
     get id() {
@@ -638,92 +718,38 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     getEffort: () => (typeof state.effort === 'string' ? state.effort as Effort : null),
     listBackgroundTasks: () => (Array.isArray(state.backgroundTasks) ? state.backgroundTasks as BackgroundTaskSnapshot[] : []),
     countPendingWakeContinuations: () => (typeof state.pendingWake === 'number' ? state.pendingWake : 0),
-    ...optional('requestGracefulStop', async () => {
-      await callIfLive('requestGracefulStop');
-    }),
-    ...optional('setModel', async (model: string, opts?: { providerId?: string | null; effort?: Effort }) => {
-      if (!await callIfLive('setModel', model, opts)) {
-        state = { ...state, model, ...(opts?.effort ? { effort: opts.effort } : {}) };
+    requiresRuntimeRecycleForExtraDirs: () => {
+      if (typeof state.requiresRuntimeRecycleForExtraDirs === 'boolean') {
+        return state.requiresRuntimeRecycleForExtraDirs;
       }
-      deps.onModel?.(model, opts);
-    }),
-    // 已让出名额时下一次连回本来就是带新模型的冷启动接回，不用另外重建。
-    ...optional('requiresModelSwitchRebuild', async (model: string, opts?: { providerId?: string | null }) => {
-      const end = link.begin();
-      try {
-        const live = await link.live();
-        return live ? (await live.call('requiresModelSwitchRebuild', [model, opts])) === true : false;
-      } finally {
-        end();
-      }
-    }),
-    ...optional('previewModelSwitch', (async (model: string, opts?: { providerId?: string | null }) =>
-      call('previewModelSwitch', model, opts)) as AgentSessionHandle['previewModelSwitch']),
-    ...optional('setPermissionMode', async (mode: string) => {
-      await callIfLive('setPermissionMode', mode);
-      deps.onPermissionMode?.(mode);
-    }),
-    ...optional('setEffort', async (effort: Effort) => {
-      if (!await callIfLive('setEffort', effort)) state = { ...state, effort };
-      deps.onEffort?.(effort);
-    }),
-    ...optional('setFastMode', async (enabled: boolean | 'ultrafast') => {
-      if (!await callIfLive('setFastMode', enabled)) state = { ...state, fastMode: enabled };
-      deps.onFastMode?.(enabled);
-    }),
-    ...optional('setPlanMode', async (enabled: boolean) => {
-      if (!await callIfLive('setPlanMode', enabled)) {
-        state = {
-          ...state,
-          planMode: enabled,
-          ...('executionPlanMode' in state ? { executionPlanMode: enabled } : {}),
-        };
-      }
-      deps.onPlanMode?.(enabled);
-    }),
-    ...optional('setThinkingEnabled', async (enabled: boolean) => {
-      await callIfLive('setThinkingEnabled', enabled);
-      deps.onThinkingEnabled?.(enabled);
-    }),
-    ...optional('setExtraDirs', async (dirs: string[], libraryRoot?: string | null) => {
-      deps.onExtraDirs?.(dirs, libraryRoot);
-      await callIfLive('setExtraDirs', deps.workspace.virtualizeDirs(dirs), libraryRoot ? deps.workspace.virtualizeDirs([libraryRoot])[0] : null);
-    }),
-    ...optional('setWritableDirs', async (dirs: string[]) => {
-      await callIfLive('setWritableDirs', deps.workspace.virtualizeDirs(dirs));
-      // 对方成功后才更新本机执行器的根目录：新建的可写目录在本机也能过 root 判定，
-      // 撤掉的不再被本机上限当可信根；失败时两边都保持原状。
-      deps.onWritableDirs?.(dirs);
-    }),
+      // Older remote hosts omit this boolean; preserve the pre-PR recycle rule
+      // for ACP sessions unless negotiatedCapabilities proves extraDirs unsupported.
+      return started.agentKind === 'acp'
+        && (handle.negotiatedCapabilities?.extraDirs?.supported ?? true);
+    },
     // 本机 MCP 身份(协同等工具)必须立即看到改动；对方不支持时也照样更新本机这一份。
     setVendorOptions: async (patch: Record<string, unknown>) => {
       deps.onVendorOptions?.(patch ?? {});
       if (supported.has('setVendorOptions')) await callIfLive('setVendorOptions', JSON.parse(JSON.stringify(patch ?? {})));
     },
-    // 已让出名额时对方进程里没有后台任务(有后台任务时不会让)。
-    ...optional('stopBackgroundTask', async (taskId: string) => {
-      await callIfLive('stopBackgroundTask', taskId);
-    }),
-    ...optional('resumeBackgroundTask', async (taskId: string, message: string, childId?: string) => {
-      await call('resumeBackgroundTask', taskId, message, childId);
-    }),
-    ...optional('compactSession', (async (instructions?: string) =>
-      call('compactSession', instructions)) as AgentSessionHandle['compactSession']),
-    ...optional('getContextUsage', (async () => call('getContextUsage')) as AgentSessionHandle['getContextUsage']),
-    ...optional('getCodexContextWindowInfo', (async () =>
-      call('getCodexContextWindowInfo')) as AgentSessionHandle['getCodexContextWindowInfo']),
-    ...optional('useCindyAutoReviewFallback', async () => {
-      await callIfLive('useCindyAutoReviewFallback');
-      deps.onAutoReviewFallback?.();
-    }),
-    ...optional('previewRewindFiles', (async (userUuid: string) =>
-      call('previewRewindFiles', userUuid)) as AgentSessionHandle['previewRewindFiles']),
-    ...optional('commitRewindFiles', (async (userUuid: string, priorAssistantUuid: string, opts?: unknown) => {
-      const result = await call('commitRewindFiles', userUuid, priorAssistantUuid, opts ?? null);
-      rewindPending = true;
-      return result;
-    }) as AgentSessionHandle['commitRewindFiles']),
   };
+
+  /**
+   * 同步远端当前支持的可选方法到 handle。执行电脑升级、降级或重连到不同版本对端后，
+   * `next.methods` 与 `negotiatedCapabilities` 必须保持一致，避免能力宣称支持而方法缺失。
+   */
+  const syncOptionalMethods = (methods: readonly string[]): boolean => {
+    const previous = supported;
+    const next = new Set(methods);
+    supported = next;
+    const mutable = handle as unknown as Record<string, unknown>;
+    for (const [method, impl] of Object.entries(optionalMethods)) {
+      if (next.has(method)) mutable[method] = impl;
+      else delete mutable[method];
+    }
+    return previous.size !== next.size || [...next].some((method) => !previous.has(method));
+  };
+  syncOptionalMethods(started.methods);
 
   async function answerInteraction(request: InteractionRequest): Promise<RemoteAgentReply> {
     if (!resolver) {
@@ -812,14 +838,19 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     onReconnected(next) {
       terminalOwnership = new RemoteTurnTerminalOwnership();
       imessageSendContext = next.imessageSendContext === true;
+      const methodsChanged = syncOptionalMethods(next.methods);
       const previousUsage = state.usage;
       const previousCapabilities = state.negotiatedCapabilities;
-      state = { ...state, ...next.state };
+      const nextState: Record<string, unknown> = { ...state, ...next.state };
+      if (!('requiresRuntimeRecycleForExtraDirs' in next.state)) {
+        delete nextState.requiresRuntimeRecycleForExtraDirs;
+      }
+      state = nextState;
       if (!isEmptyUsage(previousUsage) && isEmptyUsage(state.usage) && state.turnRunning !== true) {
         carriedUsage = previousUsage;
         state = { ...state, usage: previousUsage };
       }
-      notifyCapabilitiesIfChanged(previousCapabilities, state.negotiatedCapabilities);
+      notifyCapabilitiesIfChanged(previousCapabilities, state.negotiatedCapabilities, methodsChanged);
     },
     notifyResumeLost() {
       if (disposed) return;

@@ -2454,15 +2454,17 @@ describe('GoalController', () => {
   // Unit, docs/plans/acp-plugin-bridge.md (Goals on plugin engines): a plugin engine sends no
   // end-of-turn status, so its turns counted 0 tokens and a token budget never stopped the goal.
   // Minimal input: one turn whose done carries the ACP prompt-result usage.
-  it('plugin engine goal turn counts its prompt-result usage against the token budget', async () => {
+  // #13373: verification may end with a terminal error after a billed prompt.
+  it.each(['done', 'error'] as const)('plugin engine goal turn counts its prompt-result usage on %s', async (type) => {
     await startGoal(h);
     await h.controller.updateGoal('s1', { budgetTokens: 1000 });
     h.session.emit({ type: 'tool_use', data: { name: 'edit' } } as never);
     h.session.emit({ type: 'text', data: { text: '```json\n{"goal_status":"continue","reason":"wip"}\n```', isFinal: true } } as never);
     h.session.emit({
-      type: 'done',
+      type,
       data: {
-        type: 'acp/prompt_end', status: 'completed', stopReason: 'end_turn',
+        type: 'acp/prompt_end',
+        ...(type === 'error' ? { message: 'Verification failed', isTerminal: true } : { status: 'completed', stopReason: 'end_turn' }),
         usage: { inputTokens: 700, outputTokens: 200, cacheReadTokens: 100, cacheCreationTokens: 50 },
       },
       turnOrigin: { kind: 'goal' },
@@ -2470,7 +2472,7 @@ describe('GoalController', () => {
     await tick();
     const st = await h.storage.get('s1');
     expect(st?.tokensUsed).toBe(1050);
-    expect(st?.status).toBe('budgetLimited');
+    expect(st?.status).toBe(type === 'error' ? 'blocked' : 'budgetLimited');
   });
 
   it('on complete: persists a completion record, clears the row, emits null, no continuation', async () => {

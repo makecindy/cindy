@@ -8,6 +8,19 @@
       "selected": "已选择"
     }
   },
+  "voiceCall": {
+    "title": "语音通话",
+    "saved": "记录已保存",
+    "you": "你",
+    "companion": "伙伴",
+    "sendFailed": "发送失败，原话已保留。",
+    "handoff": {
+      "sending": "正在交接…",
+      "accepted": "已交给伙伴处理",
+      "failed": "交接失败，原话已保留",
+      "completed": "结果已返回"
+    }
+  },
   "renderer": {
     "sourceLocalApp": "由本机应用「{{name}}」发送",
     "sourceLocalAppId": "应用 ID：{{id}}",
@@ -185,7 +198,8 @@
     "groupSent": "从群聊发送",
     "sourceGroupId": "群聊 ID：{{id}}",
     "selectText": "选择文字",
-    "you": "你"
+    "you": "你",
+    "recentActivity": "最近活动"
   },
   "actions": {
     "attachmentsPrefix": "附件：{{names}}",
@@ -264,6 +278,8 @@
     "delete": "删除",
     "retry": "重试",
     "notSent": "未发送",
+    "deliveryUnconfirmed": "发送结果未确认",
+    "recheckDelivery": "重新确认",
     "imagesNotUploaded_one": "{{count}} 张图片没传上去",
     "imagesNotUploaded_other": "{{count}} 张图片没传上去",
     "waitingForNamedComputer": "连上{{name}}后自动发送",

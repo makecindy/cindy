@@ -11,7 +11,8 @@ import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscri
 import { BOT_GROUP_CLIENT_PRIMITIVES, botGroupChatDataFromResource, botGroupResourceRef } from './botGroupRemote';
 
 import { BotGroupSpeakerRow } from './BotGroupSpeakerRow';
-import type { BotGroupIdentity } from './BotGroupAvatars';
+import { BOT_GROUP_MESSAGE_AVATAR_SIZE, type BotGroupIdentity } from './BotGroupAvatars';
+import { BotGroupAuthorAvatar } from './BotGroupAuthorAvatar';
 import { Text } from '@/components/AppText';
 import { useThemedStyles, type ThemeColors } from '@/theme';
 import { lineHeight, spacing, typeScale } from '@/theme/tokens';
@@ -21,11 +22,12 @@ const EMPTY_WORK_ROWS: BotGroupWorkRow[] = [];
 
 /** Live work is inserted into messages by its original timestamp. Only an owned companion's computer can
  * resolve its execution to a task; another member's private task is never queried. */
-export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop, stopping = false, onError, children, enabled = true }: {
+export function BotGroupWorkArea({ group, deviceId, online, identityFor, onMentionBot, onStop, stopping = false, onError, children, enabled = true }: {
   enabled?: boolean;
   children?: (rows: BotGroupWorkRow[]) => ReactNode;
   group: BotGroupRemoteChatData; deviceId: string; online: boolean;
   identityFor(botId: string, name: string): BotGroupIdentity;
+  onMentionBot?(botId: string): void;
   onStop?(scope?: 'all'): Promise<void>;
   stopping?: boolean;
   onError(message: string | null): void;
@@ -106,10 +108,13 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
         const step = plan?.steps.find(step => step.position === plan.currentStep);
         const identity = identityFor(member.botId, member.name);
         const displayName = speaker.requesterName ? t('groupChat.assistant.actingFor', { name: identity.name, person: speaker.requesterName }) : identity.name;
+        const speakerIdentity = { ...identity, name: displayName, ...(target ? { botId: target.botId } : {}) };
+        const speakerOnline = online && !!host && getPresenceAvailability(host) !== false;
         const key = `${accountGeneration}:${group.id}:${deviceId}:${speaker.executionId ?? `${speaker.botId}:${speaker.activity}`}`;
         return [{ key, executionId: speaker.executionId, sourceMessageId: speaker.sourceMessageId, startedAt: speaker.startedAt, timelineAt: speaker.timelineAt, node: <BotGroupSpeakerRow key={key}
-          deviceId={host} online={online && !!host && getPresenceAvailability(host) !== false}
-          identity={{ ...identity, name: displayName, ...(target ? { botId: target.botId } : {}) }} sessionId={member.isOwned === false ? null : speaker.sessionId ?? target?.sessionId ?? null}
+          deviceId={host} online={speakerOnline}
+          avatar={<BotGroupAuthorAvatar style={styles.avatar} deviceId={host} identity={speakerIdentity} online={speakerOnline} member={member} onMention={onMentionBot} />}
+          identity={speakerIdentity} sessionId={member.isOwned === false ? null : speaker.sessionId ?? target?.sessionId ?? null}
           executionId={speaker.executionId} inputClientId={target ? target.inputClientId : speaker.inputClientId} startedAt={speaker.startedAt} groupId={group.id}
           workStep={plan && step ? { position: step.position + 1, total: plan.steps.length, task: step.task } : undefined}
           revealWaiting={speaker.isSelfRequested === true || !group.serverBacked && !speaker.executionId} footer={speaker === controlSpeaker ? stopControl : undefined}
@@ -120,6 +125,7 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onStop,
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   container: { flexShrink: 0, gap: spacing.sm },
+  avatar: { width: BOT_GROUP_MESSAGE_AVATAR_SIZE, height: BOT_GROUP_MESSAGE_AVATAR_SIZE, marginTop: spacing.sm },
   stop: { alignSelf: 'flex-start', minHeight: 44, minWidth: 48,
     paddingHorizontal: spacing.sm, justifyContent: 'center', alignItems: 'center' },
   stopText: { color: colors.destructive, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },

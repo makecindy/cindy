@@ -55,7 +55,7 @@ export interface ImLaneProjectDefaults {
   /** 项目设置的权限档; 路由键自己没单独设置权限时用它。null = 项目的档位不可用, 回到渠道设置。 */
   permissionMode: PermissionMode | null;
   /** 按这一行解析新任务的路由; 模型不可用时抛错(同插件与官方机器人)。 */
-  resolve(providerSnapshot?: ProviderView[] | null): Promise<ResolvedImSessionDefaults>;
+  resolve(providerSnapshot?: ProviderView[] | null, options?: { dryRun?: boolean }): Promise<ResolvedImSessionDefaults>;
 }
 
 /** 按路由键覆写的新任务模型路由(见 ImSessionNamespace.routeOverrideFor)。 */
@@ -65,6 +65,7 @@ export interface ImLaneRouteOverride {
   providerId: string | null;
   agentDeviceId: string | null;
   effort: ImDefaultEffort | '';
+  modelGroup?: string | null;
 }
 
 /**

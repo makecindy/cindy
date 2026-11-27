@@ -134,10 +134,10 @@ async function list(ctx: ScanContext): Promise<SourceListResult> {
         if (str(ev.type) === 'session/title') title = titleOf(ev.data) || title;
         if (!firstUser && str(ev.type) === 'user/message') {
           const m = parseDeepSeekEvent(ev, 0, new Set()).find((x) => x.role === 'user');
-          if (m && typeof m.content === 'string') firstUser = m.content;
+          if (m && typeof m.content === 'string') firstUser = makeTitle(m.content, '');
         }
       }
-      const shown = makeTitle(title || firstUser, '');
+      const shown = makeTitle(title, '') || firstUser;
       if (!shown) continue;
       sessions.push({
         source: 'deepseek',

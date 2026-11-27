@@ -2466,6 +2466,18 @@ describe('usage through the production event pipeline', () => {
       expect(effects.fn('recordModelTurnUsage')).toHaveBeenLastCalledWith(expect.objectContaining({
         inputTokensDelta: 0, outputTokensDelta: 0, cacheReadTokensDelta: 0, cacheCreateTokensDelta: 0,
       }));
+      // #13373: a failed verification terminates with an error after a billed first prompt.
+      const error = { ...done, type: 'error', sessionTurnGeneration: 4, data: {
+        type: 'acp/prompt_end', usage: done.data.usage, usageModel: done.data.usageModel,
+        isTerminal: true, message: 'Verification failed', reason: 'acp-auth-required',
+      } } satisfies AgentEvent;
+      h.emit(error);
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledTimes(3);
+      h.emit({ ...done, sessionTurnGeneration: 4 });
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledTimes(3);
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenLastCalledWith(expect.objectContaining({
+        model: 'original-model', inputTokensDelta: 2161, cacheReadTokensDelta: 9459,
+      }));
     } finally {
       await h.dispose();
     }

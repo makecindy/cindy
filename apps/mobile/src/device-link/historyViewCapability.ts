@@ -11,8 +11,11 @@ export async function invokeWithHistoryViewCapability<T>(
   channel: string,
   openLink: () => Promise<LinkAcceptPayload>,
   invoke: () => Promise<T>,
+  legacyHistoryConfirmation?: true,
 ): Promise<T> {
-  if (HISTORY_VIEW_CHANNELS.has(channel)) {
+  // The original Host exposed the page read before advertising history-view-v1.
+  // Only outbox confirmation can probe that page; details and intents stay negotiated.
+  if (HISTORY_VIEW_CHANNELS.has(channel) && !(legacyHistoryConfirmation && channel === 'local-db:messages:view')) {
     const accepted = await openLink();
     if (!accepted.capabilities?.includes(DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1)) {
       // Use the existing unavailable path to retire memory/disk projections and

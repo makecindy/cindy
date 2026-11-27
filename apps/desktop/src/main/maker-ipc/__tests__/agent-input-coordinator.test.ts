@@ -1,3 +1,4 @@
+import { createBotModelRouteApplier } from '../botModelRouteReconciler.js';
 import { BotCapabilityRefreshDeferredError } from '../botCompactRuntimeRefresh.js';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 import { createSharedTaskDelivery } from '../../mcp-integrations/sharedTaskDelivery.js';
@@ -3077,6 +3078,48 @@ describe('AgentInputCoordinator trusted session reference snapshots', () => {
 });
 
 describe('AgentInputCoordinator send transaction', () => {
+  // #13437, unit: drive a real cross-harness route through send admission while a
+  // background job owns the runtime. A switch that fails once idle stays retryable.
+  it.each([true, false])('keeps the pending companion route queued until idle (switch succeeds: %s)', async (succeeds) => {
+    const h = createHarness();
+    const sid = 'pending-route';
+    let idle = false;
+    let pending = true;
+    let switchSucceeds = succeeds;
+    const apply = createBotModelRouteApplier({
+      isIdle: () => idle, stage: async () => {}, hasPendingSwitch: () => pending,
+      applyPendingSwitch: async () => { pending = !switchSucceeds; }, onApplied: async () => {},
+    });
+    const send = h.sendToAgent.getMockImplementation()!;
+    h.sendToAgent.mockImplementation(async (...args) => {
+      const current = { agentKind: 'claude-code' as const, model: 'old', providerId: null, effort: null, fastMode: false };
+      await apply(sid, { ...current, agentKind: 'codex', model: 'new' }, current);
+      return send(...args);
+    });
+    h.coordinator.enqueue(sid, makeItem('original', 'hello'));
+    await flush();
+    expect(h.coordinator.getProjection(sid)).toMatchObject({
+      error: null, recovery: null, pendingQueue: [expect.objectContaining({ clientId: 'original' })],
+    });
+    h.coordinator.wakeSession(sid, 'unrelated-wake');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    idle = true;
+    h.coordinator.onBotRouteIdleBoundary(sid);
+    h.coordinator.onBotCapabilityRefreshReady(sid);
+    await flush();
+    if (!succeeds) {
+      expect(h.coordinator.getProjection(sid).recovery).toMatchObject({ kind: 'queue-head', clientId: 'original' });
+      expect(h.onDispatchedUserTurn).not.toHaveBeenCalled();
+      switchSucceeds = true;
+      await h.coordinator.retryLastError(sid);
+      await flush();
+    }
+    expect(h.sendToAgent.mock.lastCall?.[3].persistUserMessage?.clientId).toBe('original');
+    expect(h.onDispatchedUserTurn).toHaveBeenCalledOnce();
+    expect(h.coordinator.getProjection(sid).pendingQueue).toEqual([]);
+  });
+
   it.each(['text', 'content', 'replace'])('dispatches edited companion input after a refresh wait (%s)', async (edit) => {
     vi.useFakeTimers();
     try {
@@ -6645,6 +6688,51 @@ describe('AgentInputCoordinator send transaction', () => {
     await flush();
     expect(h.sendToAgent).toHaveBeenCalledTimes(2);
     expect(h.coordinator.getActiveInputClientId(sid)).toBe('retry-rebuild');
+  });
+
+  // 回归测试：deferred runtime-refresh（closeAfterCurrentTurn）在下一条排队消息尚处
+  // pre-send 准备期（getSdkSessionId 未返回、sendStarted=false）时完成关闭，不得把新输入误判为
+  // 「Session closed before dispatch completed」。最小失败输入：getSdkSessionId 挂起期间收到
+  // onSessionClosed(sid, { preserveInputBoundary: true, wakeQueuedInput: true })。tier: unit。
+  it('keeps an in-flight pre-send drain alive when a runtime-refresh close finishes before sendToAgent starts', async () => {
+    const sdkIdGate = deferred<string | undefined>();
+    const h = createHarness();
+    h.getSdkSessionId.mockImplementationOnce(() => sdkIdGate.promise);
+    const sid = 'runtime-refresh-before-send-started';
+    h.coordinator.enqueue(sid, makeItem('queued-after-refresh', 'continue work'));
+    await flush();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+
+    h.coordinator.onSessionClosed(sid, { preserveInputBoundary: true, wakeQueuedInput: true });
+    expect(h.coordinator.getProjection(sid).error).toBeNull();
+    expect(h.coordinator.getProjection(sid).recovery).toBeNull();
+
+    sdkIdGate.resolve('sdk-session-1');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    expect(h.coordinator.getActiveInputClientId(sid)).toBe('queued-after-refresh');
+    expect(h.coordinator.getProjection(sid).error).toBeNull();
+  });
+
+  // 回归测试：deferred runtime-refresh 在 turn-done 的 queueMicrotask 尚未执行前就完成关闭，
+  // onSessionClosed 取消了原微任务后仍须通过 wakeQueuedInput 重新唤醒队列。tier: unit。
+  it('re-drains queued input when a runtime-refresh close completes before turn-done microtask runs', async () => {
+    const h = createHarness();
+    const sid = 'runtime-refresh-before-turn-done-microtask';
+    h.coordinator.enqueue(sid, makeItem('turn-1', 'first'));
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    h.coordinator.enqueue(sid, makeItem('turn-2', 'second'));
+    h.setRunning(false);
+    // 同一个 tick 内：turn-done 刚排入 microtask，紧接着 deferred close 同步收尾。
+    h.coordinator.onTurnEvent(sid, 'done');
+    h.coordinator.onSessionClosed(sid, { preserveInputBoundary: true, wakeQueuedInput: true });
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.coordinator.getActiveInputClientId(sid)).toBe('turn-2');
+    expect(h.coordinator.getProjection(sid).error).toBeNull();
   });
 
   it('preserveInputBoundary keeps the signal alive but still settles an already-reserved turn (#1930)', async () => {
@@ -16635,7 +16723,12 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
             now: Date.now, config: () => ({ routes: [{ id: 'group', name: 'group', strategy: 'order', candidates }] }),
             candidateFacts: async () => candidates.map(c => ({ available: true, modelName: c.model, sourceName: c.providerId, windows: null })),
           }, id, { ...recovery, current, visited, recordUnavailable: c => visited.add(modelGroupCandidateKey(c)) });
-          return { candidate: offer && { ...offer, agentKind: offer.agentKind === 'cc' ? 'claude-code' : offer.agentKind, effort: null, fastMode: false } };
+          return {
+            candidate:
+              offer
+                ? { ...offer, agentKind: offer.agentKind === 'cc' ? 'claude-code' : offer.agentKind, effort: null, fastMode: false }
+                : null,
+          };
         },
       }),
     });

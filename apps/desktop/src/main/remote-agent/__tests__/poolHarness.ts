@@ -125,6 +125,7 @@ export function sharedAccountSessionTool(dispatcherSessionId: string, ports: Rec
     withPluginTaskService: none, getSessionActiveInputClientIds: () => [],
     extractPlainText: String, assertReviewExternalInputAllowed: none, syncBotLanePermission: none,
     reconcileBotModelRoute: none, refreshBotCapabilityEpochBeforeSend: none, assertSessionNotRestarting: noop,
+    runDesktopModelGroupBeforeSend: async () => ({ switched: false }),
     sendToSessionLocks: new Map(), waitForSendToSessionLock: none,
     trackSendToSessionLockRun: (_id: string, run: Promise<unknown>) => run,
     scheduledModelScope: { restore: none }, agentSwitchPending: new Map(), BOT_GROUP_CLIENT_ID_PREFIX: 'bot-group:',

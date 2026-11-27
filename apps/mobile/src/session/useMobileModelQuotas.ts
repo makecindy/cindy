@@ -2,6 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { AppState } from "react-native";
 import type { GhostHarnessUsage } from "@cindy/plugin-protocol";
 import type { ProviderView } from "@cindy/model-providers/registry";
+import {
+  effectivePluginWindowMinutes,
+  pickPluginEngineWeeklyQuota,
+} from "@cindy/maker-shared/plugin-engine-quota";
 import { isCodexBucketStale } from "@cindy/maker-shared/codex-usage-buckets";
 import type { MobileCodexRateLimitsResult } from "@cindy/maker-shared/device-link-contract";
 import {
@@ -94,22 +98,35 @@ function quotaTimeKey(values: QuotaValues, now: number): string {
   );
 }
 
-/** Compare time-dependent presentation for plugin engine windows (expiry and countdown). */
+/** Compare time-dependent presentation for plugin engine windows (expiry, countdown, and reset-soon). */
 function pluginQuotaTimeKey(
   values: Readonly<Record<string, GhostHarnessUsage>>,
   now: number,
 ): string {
   return JSON.stringify(
-    Object.entries(values).map(([providerId, usage]) => [
-      providerId,
-      (usage.windows ?? [])
-        .filter((row) => !row.resetsAt || row.resetsAt > now)
-        .map((row) => [
-          row.label,
-          Math.round(row.remainingPercent),
-          row.resetsAt ? quotaCountdown(row.resetsAt / 1000, now) : null,
-        ]),
-    ]),
+    Object.entries(values).map(([providerId, usage]) => {
+      const overview = pickPluginEngineWeeklyQuota(usage, now);
+      const primary = overview.primary;
+      const primaryResetsAt = primary?.resetsAt ? primary.resetsAt / 1000 : null;
+      return [
+        providerId,
+        primary
+          ? subscriptionQuotaOverview(
+              [{ remaining: Math.round(primary.remainingPercent), resetsAt: primaryResetsAt }],
+              now,
+            ).reset
+          : null,
+        (usage.windows ?? [])
+          .filter((row) => !row.resetsAt || row.resetsAt > now)
+          .map((row) => [
+            row.label,
+            Math.round(row.remainingPercent),
+            row.resetsAt
+              ? quotaCountdown(row.resetsAt / 1000, now, undefined, effectivePluginWindowMinutes(row))
+              : null,
+          ]),
+      ];
+    }),
   );
 }
 

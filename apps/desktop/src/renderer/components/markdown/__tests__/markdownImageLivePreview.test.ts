@@ -348,4 +348,63 @@ describe('resolveImageSrcToUrl', () => {
     expect(resolveImageSrcToUrl('', '/base')).toBeNull();
     expect(resolveImageSrcToUrl('img/a.png', '')).toBeNull();
   });
+
+  // Value: FileBodyView in remote device-link / SSH sessions must route image
+  // previews through cindy-remote-media:// and fail closed on SSH out-of-workdir
+  // paths so it never reads the controller's local filesystem.
+  it('rewrites local/relative image paths for device-link and SSH remote origins', () => {
+    const device = { kind: 'device' as const, deviceId: 'dev-1' };
+    const ssh = { kind: 'ssh' as const, remoteHostId: 'host-1', workdir: '/srv/repo' };
+
+    const devUrl = resolveImageSrcToUrl('../assets/shot.png', '/remote/repo/docs', device);
+    expect(devUrl).toMatch(/^cindy-remote-media:\/\/m\//);
+
+    const sshInside = resolveImageSrcToUrl('../assets/shot.png', '/srv/repo/docs', ssh);
+    expect(sshInside).toMatch(/^cindy-remote-media:\/\/m\//);
+
+    expect(resolveImageSrcToUrl('/etc/secret.png', '/srv/repo/docs', ssh)).toBeNull();
+    expect(resolveImageSrcToUrl('../../outside.png', '/srv/repo/docs', ssh)).toBeNull();
+    expect(resolveImageSrcToUrl('xdt-image://local/a.png', '/srv/repo/docs', ssh)).toBeNull();
+  });
+});
+
+describe('findImageTargets — carousel fences', () => {
+  // Value: image-only ````carousel blocks (e.g. Dark/Light screenshot pairs)
+  // render as interactive inline carousels in FileBodyView while mixed prose/code
+  // carousels remain editable raw source.
+  it('extracts image-only carousel blocks as carousel targets', () => {
+    const doc = docOf(
+      '# Screenshots',
+      '````carousel',
+      '![Dark](/tmp/01-dark.png)',
+      '<!-- slide -->',
+      '![Light](/tmp/01-light.png)',
+      '````',
+    );
+    const targets = findImageTargets(doc);
+    expect(targets).toHaveLength(1);
+    expect(targets[0]).toMatchObject({
+      from: doc.line(2).from,
+      to: doc.line(6).to,
+      carousel: true,
+      align: 'center',
+    });
+    expect(targets[0].images.map((img) => ({ alt: img.alt, src: img.src }))).toEqual([
+      { alt: 'Dark', src: '/tmp/01-dark.png' },
+      { alt: 'Light', src: '/tmp/01-light.png' },
+    ]);
+  });
+
+  it('leaves carousels containing non-image prose or code as raw source', () => {
+    const doc = docOf(
+      '````carousel',
+      '![Preview](/tmp/a.png)',
+      '<!-- slide -->',
+      '```python',
+      'print(1)',
+      '```',
+      '````',
+    );
+    expect(findImageTargets(doc)).toEqual([]);
+  });
 });

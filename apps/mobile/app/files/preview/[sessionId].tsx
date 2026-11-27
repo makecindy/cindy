@@ -79,6 +79,10 @@ import { prepareMobileHtmlPreview, type PrepareMobileHtmlPreview } from '@/sessi
 import { useHtmlSnapshot } from '@/session/useHtmlSnapshot';
 import { MainWindowActionButton } from '@/components/MobilePrimitives';
 import { MarkdownFileReader } from '@/session/MarkdownFileReader';
+import {
+  useMarkdownDocumentImages,
+  type MarkdownLightboxSession,
+} from '@/session/useMarkdownDocumentImages';
 import { RemoteMediaPlayerWebView } from '@/session/mediaPlayerWebView';
 import { NativeVideoPlayer } from '@/session/NativeVideoPlayer';
 import {
@@ -242,6 +246,7 @@ function RemoteFilePreviewContent() {
   const [notice, setNotice] = useState<string | null>(null);
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+  const [markdownLightbox, setMarkdownLightbox] = useState<MarkdownLightboxSession | null>(null);
   const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // 当前页是否处在「HTML 渲染态」——外层横滑要为它让路(见 pager 的 scrollEnabled)。
@@ -604,6 +609,22 @@ function RemoteFilePreviewContent() {
     showNotice(t('files.preview.copiedPath'));
   }, [absolutePathOf, showNotice, t]);
 
+  const shareMarkdownLightboxImage = useCallback(async (
+    media: MobileMessageGalleryImage['payload']['media'],
+    displayUri: string,
+    mimeType?: string,
+  ) => {
+    const fileName = media.title || pathDisplayName(media.url.split('?')[0]) || 'image.png';
+    const mime = mimeType || media.mimeType || shareMimeForFileName(fileName);
+    const localUri = await downloadRemoteMediaShareTemp(displayUri, mime, fileName);
+    if (!localUri) {
+      showNotice(t('files.preview.downloadFailed'));
+      return;
+    }
+    const sharing = await import('expo-sharing');
+    await sharing.shareAsync(localUri, { mimeType: mime });
+  }, [showNotice, t]);
+
   const sendToSession = useCallback((item: FileBrowserGridItem) => {
     const merged = mergePathIntoComposerDraft(sessionId, item.relPath);
     router.navigate({
@@ -749,6 +770,10 @@ function RemoteFilePreviewContent() {
               prepareHtmlPreview={prepareHtmlPreview}
               item={item}
               maker={maker}
+              openLink={openLink}
+              presignGet={presignGet}
+              deleteResourceOssObject={deleteResourceOssObject}
+              sshMediaContext={sshMediaContext}
               onDownload={() => void downloadAndShare(item)}
               htmlBrowserActions={{
                 meta: [
@@ -783,6 +808,7 @@ function RemoteFilePreviewContent() {
               }}
               readTextFile={readTextFile}
               onOpenLightbox={setLightboxUrl}
+              onOpenMarkdownLightbox={setMarkdownLightbox}
               recoveryEpoch={recoveryEpoch}
               targetLine={item.relPath === (singleAbsPath ?? initialRelPath) ? targetLine : null}
               workdir={workdir}
@@ -811,6 +837,17 @@ function RemoteFilePreviewContent() {
             }}
           />
       ) : null}
+
+      {markdownLightbox ? (
+        <ImageLightbox
+          images={markdownLightbox.images}
+          initialUrl={markdownLightbox.initialUrl}
+          initialImageKey={markdownLightbox.initialImageKey}
+          onResolveRemoteMedia={markdownLightbox.onResolveRemoteMedia}
+          onShareImage={shareMarkdownLightboxImage}
+          onClose={() => setMarkdownLightbox(null)}
+        />
+      ) : null}
     </SafeAreaView>
   );
 }
@@ -826,11 +863,16 @@ function FilePreviewPage({
   item,
   htmlBrowserActions,
   maker,
+  openLink,
+  presignGet,
+  deleteResourceOssObject,
+  sshMediaContext,
   onDownload,
   onHtmlPanChange,
   onMarkdownPagerChange,
   onMarkdownPageSwipe,
   onOpenLightbox,
+  onOpenMarkdownLightbox,
   onQuoteSelection,
   readTextFile,
   recoveryEpoch,
@@ -845,13 +887,18 @@ function FilePreviewPage({
   prepareHtmlPreview: PrepareMobileHtmlPreview;
   item: FileBrowserGridItem;
   htmlBrowserActions: HtmlBrowserActions;
-  maker: Pick<MobileMakerTransport, 'fileBrowser'>;
+  maker: Pick<MobileMakerTransport, 'fileBrowser' | 'fetchRemoteMedia'>;
+  openLink(deviceId: string): Promise<unknown>;
+  presignGet(ossKey: string): Promise<MobileRemoteMediaPresignResult>;
+  deleteResourceOssObject(ossKey: string): void;
+  sshMediaContext: RemoteMediaSshContext | null;
   onDownload(): void;
   /** 上报本页是否处在 HTML 渲染态(外层 pager 据此让出横滑,仅文本页产出)。 */
   onHtmlPanChange?: (key: string, wants: boolean) => void;
   onMarkdownPagerChange?: (key: string, wants: boolean) => void;
   onMarkdownPageSwipe?: (key: string, direction: 'previous' | 'next') => void;
   onOpenLightbox(url: string): void;
+  onOpenMarkdownLightbox(session: MarkdownLightboxSession): void;
   /** chat-text-quote:markdown 渲染态的选中引用回调(仅文本页消费)。 */
   onQuoteSelection?: (text: string) => void;
   readTextFile(relPath: string, signal?: AbortSignal): Promise<FileBrowserReadFileResult>;
@@ -907,11 +954,17 @@ function FilePreviewPage({
         active={active}
         prepareHtmlPreview={prepareHtmlPreview}
         item={item}
+        maker={maker}
+        openLink={openLink}
+        presignGet={presignGet}
+        deleteResourceOssObject={deleteResourceOssObject}
+        sshMediaContext={sshMediaContext}
         htmlBrowserActions={htmlBrowserActions}
         onDownload={onDownload}
         onHtmlPanChange={onHtmlPanChange}
         onMarkdownPagerChange={onMarkdownPagerChange}
         onMarkdownPageSwipe={onMarkdownPageSwipe}
+        onOpenMarkdownLightbox={onOpenMarkdownLightbox}
         onQuoteSelection={onQuoteSelection}
         readTextFile={readTextFile}
         targetLine={targetLine}
@@ -1203,11 +1256,17 @@ function TextPreviewPage({
   active,
   prepareHtmlPreview,
   item,
+  maker,
+  openLink,
+  presignGet,
+  deleteResourceOssObject,
+  sshMediaContext,
   htmlBrowserActions,
   onDownload,
   onHtmlPanChange,
   onMarkdownPagerChange,
   onMarkdownPageSwipe,
+  onOpenMarkdownLightbox,
   onQuoteSelection,
   readTextFile,
   targetLine,
@@ -1222,12 +1281,18 @@ function TextPreviewPage({
   /** 下载完整目录并返回受控网页预览,签名地址不进入页面。 */
   prepareHtmlPreview: PrepareMobileHtmlPreview;
   item: FileBrowserGridItem;
+  maker: Pick<MobileMakerTransport, 'fetchRemoteMedia'>;
+  openLink(deviceId: string): Promise<unknown>;
+  presignGet(ossKey: string): Promise<MobileRemoteMediaPresignResult>;
+  deleteResourceOssObject(ossKey: string): void;
+  sshMediaContext: RemoteMediaSshContext | null;
   htmlBrowserActions: HtmlBrowserActions;
   onDownload(): void;
   /** 上报本页是否处在 HTML 渲染态(外层 pager 据此让出横滑,见调用处说明)。 */
   onHtmlPanChange?: (key: string, wants: boolean) => void;
   onMarkdownPagerChange?: (key: string, wants: boolean) => void;
   onMarkdownPageSwipe?: (key: string, direction: 'previous' | 'next') => void;
+  onOpenMarkdownLightbox?: (session: MarkdownLightboxSession) => void;
   /** chat-text-quote:markdown 渲染态的选中引用回调(源码态暂不支持,见 PR 说明)。 */
   onQuoteSelection?: (text: string) => void;
   /** 屏级注入:readFile 带瞬断重试 + openLink(与列表/搜索/导出同路径)。 */
@@ -1365,6 +1430,19 @@ function TextPreviewPage({
     return () => onMarkdownPagerChange?.(item.key, false);
   }, [item.key, markdownPagerWanted, onMarkdownPagerChange]);
 
+  const markdownImages = useMarkdownDocumentImages({
+    enabled: markdownPagerWanted,
+    markdown: state.status === 'ready' ? (state.content ?? '') : '',
+    docAbsPath: absolutePathOf(item.relPath),
+    versionMs: item.mtimeMs,
+    deviceId,
+    maker,
+    openLink,
+    presignGet,
+    deleteOssObject: deleteResourceOssObject,
+    ssh: sshMediaContext,
+  });
+
   if (website) return visible ? (
       <HtmlWebsiteBrowser
     visit={website}
@@ -1444,6 +1522,13 @@ function TextPreviewPage({
             markdown={ready?.content ?? ''}
             viewportInsets={{ ...browserContentInset, top: clipped ? 0 : browserContentInset.top, left: insets.left, right: insets.right }}
             onPageSwipe={onMarkdownPageSwipe ? (direction) => onMarkdownPageSwipe(item.key, direction) : undefined}
+            onImagePress={onOpenMarkdownLightbox
+              ? (imageIndex) => {
+                  const lightboxSession = markdownImages.buildLightboxSession(imageIndex);
+                  if (lightboxSession) onOpenMarkdownLightbox(lightboxSession);
+                }
+              : undefined}
+            resolvedImages={markdownImages.resolvedImages}
             onQuoteSelection={onQuoteSelection}
             targetLine={targetLine}
             testID="filePreview.markdownRendered"
