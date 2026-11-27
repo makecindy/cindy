@@ -17275,6 +17275,8 @@
       "organizeSidebar": "サイドバー表示設定",
       "filterAllText": "すべて",
       "filterSelectedProjects": "{{count}} 件選択",
+      "filterSelectedHarnesses": "{{count}} 件選択",
+      "filterVendorPluginHeading": "プラグイン提供",
       "filterStatus": {
         "active": "アクティブ",
         "archived": "アーカイブ済み",
@@ -17292,6 +17294,11 @@
         "device": "デバイス",
         "dialogue": "チャット",
         "automation": "自動化"
+      },
+      "filterGroupByHint": {
+        "device": "最上位",
+        "dialogue": "プロジェクトのないセッション",
+        "automation": "自動化の実行"
       },
       "filterGroupByDeviceManualTip": "手動並び替え中はデバイス別のグループ化を使用できません",
       "deviceGroup": {
@@ -17323,6 +17330,11 @@
       "filterSortByTip": {
         "priority": "要対応を最上位に、次に未読、実行中、残りは時間順"
       },
+      "filterSortByHint": {
+        "priority": "要対応を先頭に",
+        "activity": "最近動いたものを先頭に",
+        "created": "新しく作成したものを先頭に"
+      },
       "filterStatusHeading": "ステータス",
       "filterAgentHeading": "Harness",
       "filterLastActivityHeading": "最終アクティビティ",
@@ -17337,9 +17349,17 @@
       "filterProjectOrderTip": {
         "custom": "マウスでプロジェクト行をドラッグして並び替えます。グループ内のセッションは上の並び替えに従います。"
       },
+      "filterProjectOrderHint": {
+        "custom": "プロジェクト行をドラッグ"
+      },
       "filterCreatorsHeading": "仲間",
       "filterCreatorsAny": "すべて",
-      "filterHideAutomations": "自動化タスクを非表示",
+      "hideHeading": "非表示",
+      "hideOptions": {
+        "automations": "自動化タスク",
+        "taskCreated": "他のタスクから作成されたタスク",
+        "teammates": "仲間のタスク"
+      },
       "filterCreatorsNone": "すべて非表示",
       "filterSelectedCreators": "{{count}} 人を選択",
       "filterProjectsHeading": "プロジェクト",
@@ -17362,6 +17382,10 @@
         "openWorktree": "worktree フォルダーを開く",
         "tokens": "トークン",
         "cost": "コスト"
+      },
+      "taskInfoSection": {
+        "identity": "セッションの目印",
+        "meta": "右側の情報 · 選択した順に表示"
       },
       "taskInfoTip": {
         "tokens": "累計トークン",
@@ -17709,9 +17733,9 @@
         "tasks": "タスク一覧",
         "inbox": "受信トレイ",
         "enterInbox": "受信トレイモードに切り替え",
-        "leaveInbox": "タスク一覧モードに切り替え"
+        "leaveInbox": "タスク一覧モードに切り替え",
+        "inboxTips": "受信トレイの使い方"
       },
-      "filterHideTaskCreated": "他のタスクから作成されたタスクを非表示",
       "origin": {
         "createdByTask": "他のタスクから作成",
         "createdByTaskNamed": "タスク「{{title}}」から作成",

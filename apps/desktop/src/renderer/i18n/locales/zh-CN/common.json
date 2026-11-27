@@ -17275,6 +17275,8 @@
       "organizeSidebar": "侧边栏显示设置",
       "filterAllText": "全部",
       "filterSelectedProjects": "已选 {{count}} 个",
+      "filterSelectedHarnesses": "已选 {{count}} 个",
+      "filterVendorPluginHeading": "来自插件",
       "filterStatus": {
         "active": "活跃",
         "archived": "已归档",
@@ -17292,6 +17294,11 @@
         "device": "设备",
         "dialogue": "对话",
         "automation": "自动化"
+      },
+      "filterGroupByHint": {
+        "device": "最外层",
+        "dialogue": "没有项目的任务",
+        "automation": "自动化运行的任务"
       },
       "filterGroupByDeviceManualTip": "手动排序时按设备分组暂不可用",
       "deviceGroup": {
@@ -17323,6 +17330,11 @@
       "filterSortByTip": {
         "priority": "等你处理的排在最前，然后是未读、运行中，其余按时间"
       },
+      "filterSortByHint": {
+        "priority": "等你处理的在前",
+        "activity": "刚动过的在前",
+        "created": "新建的在前"
+      },
       "filterStatusHeading": "状态",
       "filterAgentHeading": "Harness",
       "filterLastActivityHeading": "最近活跃",
@@ -17337,9 +17349,17 @@
       "filterProjectOrderTip": {
         "custom": "用鼠标拖动项目行调整顺序，组内任务仍按上面的排序"
       },
+      "filterProjectOrderHint": {
+        "custom": "拖动项目行"
+      },
       "filterCreatorsHeading": "伙伴",
       "filterCreatorsAny": "全部",
-      "filterHideAutomations": "隐藏自动化任务",
+      "hideHeading": "隐藏",
+      "hideOptions": {
+        "automations": "自动化任务",
+        "taskCreated": "由其他任务创建的任务",
+        "teammates": "伙伴的任务"
+      },
       "filterCreatorsNone": "都不显示",
       "filterSelectedCreators": "已选 {{count}} 位",
       "filterProjectsHeading": "项目",
@@ -17362,6 +17382,10 @@
         "openWorktree": "打开 worktree 文件夹",
         "tokens": "Token",
         "cost": "费用"
+      },
+      "taskInfoSection": {
+        "identity": "任务标识",
+        "meta": "右侧信息 · 按勾选顺序显示"
       },
       "taskInfoTip": {
         "tokens": "累计 Token",
@@ -17709,9 +17733,9 @@
         "tasks": "任务列表",
         "inbox": "收件箱",
         "enterInbox": "切换到收件箱模式",
-        "leaveInbox": "切换到任务列表模式"
+        "leaveInbox": "切换到任务列表模式",
+        "inboxTips": "收件箱使用技巧"
       },
-      "filterHideTaskCreated": "隐藏由其他任务创建的任务",
       "origin": {
         "createdByTask": "由其他任务创建",
         "createdByTaskNamed": "由任务「{{title}}」创建",

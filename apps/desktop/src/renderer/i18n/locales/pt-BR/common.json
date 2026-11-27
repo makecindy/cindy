@@ -17515,6 +17515,8 @@
       "organizeSidebar": "Configurações da barra lateral",
       "filterAllText": "todos",
       "filterSelectedProjects": "{{count}} selecionados",
+      "filterSelectedHarnesses": "{{count}} selecionados",
+      "filterVendorPluginHeading": "De plugins",
       "filterStatus": {
         "active": "Ativas",
         "archived": "Arquivadas",
@@ -17532,6 +17534,11 @@
         "device": "Dispositivo",
         "dialogue": "Conversa",
         "automation": "Automação"
+      },
+      "filterGroupByHint": {
+        "device": "Nível externo",
+        "dialogue": "Sessões sem projeto",
+        "automation": "Execuções de automações"
       },
       "filterGroupByDeviceManualTip": "Agrupar por dispositivo não está disponível durante a ordenação manual",
       "deviceGroup": {
@@ -17563,6 +17570,11 @@
       "filterSortByTip": {
         "priority": "Primeiro as que aguardam você, depois as não lidas, as em execução e, por fim, por horário"
       },
+      "filterSortByHint": {
+        "priority": "Primeiro as que aguardam você",
+        "activity": "Atividade mais recente primeiro",
+        "created": "Mais novas primeiro"
+      },
       "filterStatusHeading": "Status",
       "filterAgentHeading": "Harness",
       "filterLastActivityHeading": "Última atividade",
@@ -17577,9 +17589,17 @@
       "filterProjectOrderTip": {
         "custom": "Arraste as linhas dos projetos com o mouse para reordenar. As sessões dentro deles continuam seguindo a ordenação acima."
       },
+      "filterProjectOrderHint": {
+        "custom": "Arraste as linhas"
+      },
       "filterCreatorsHeading": "Amigos",
       "filterCreatorsAny": "Todas",
-      "filterHideAutomations": "Ocultar tarefas automatizadas",
+      "hideHeading": "Ocultar",
+      "hideOptions": {
+        "automations": "Tarefas automatizadas",
+        "taskCreated": "Tarefas criadas por outras tarefas",
+        "teammates": "Tarefas de amigos"
+      },
       "filterCreatorsNone": "Ocultar tudo",
       "filterSelectedCreators": "{{count}} selecionadas",
       "filterProjectsHeading": "Projetos",
@@ -17602,6 +17622,10 @@
         "openWorktree": "Abrir pasta do worktree",
         "tokens": "Tokens",
         "cost": "Custo"
+      },
+      "taskInfoSection": {
+        "identity": "Identificadores da sessão",
+        "meta": "Detalhes à direita · na ordem em que você seleciona"
       },
       "taskInfoTip": {
         "tokens": "Total de tokens",
@@ -17956,9 +17980,9 @@
         "tasks": "Lista de tarefas",
         "inbox": "Caixa de entrada",
         "enterInbox": "Mudar para o modo caixa de entrada",
-        "leaveInbox": "Mudar para o modo lista de tarefas"
+        "leaveInbox": "Mudar para o modo lista de tarefas",
+        "inboxTips": "Dicas da caixa de entrada"
       },
-      "filterHideTaskCreated": "Ocultar tarefas criadas por outras tarefas",
       "origin": {
         "createdByTask": "Aberta por outra tarefa",
         "createdByTaskNamed": "Aberta pela tarefa “{{title}}”",

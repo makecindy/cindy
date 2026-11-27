@@ -71,7 +71,7 @@ function props(groupDevice: boolean): ProjectsSectionProps {
       projectOrder: 'activity', manualProjectOrder: [], projects: 'all', status: 'active', isFilterActive: false,
       projectsAsSet: null, isSessionContentFiltered: false, vendor: 'all', lastActivity: 'all', manualPinnedOrder: [],
       setStatus: vi.fn(), toggleProject: vi.fn(), ensureProjectIncluded: vi.fn(), setProjectsAll: vi.fn(), gc: vi.fn(),
-      setVendor: vi.fn(), setLastActivity: vi.fn(), setGroupBy: vi.fn(), setGroupDialogue: vi.fn(), setGroupAutomation: vi.fn(), setGroupDevice: vi.fn(),
+      setVendor: vi.fn(), toggleVendor: vi.fn(), setLastActivity: vi.fn(), setGroupBy: vi.fn(), setGroupDialogue: vi.fn(), setGroupAutomation: vi.fn(), setGroupDevice: vi.fn(),
       setSortBy: vi.fn(), setProjectOrder: vi.fn(), resetContentFilters: vi.fn(), setManualProjectOrder: vi.fn(),
       setManualPinnedOrder: vi.fn(), promotePin: vi.fn(), removePin: vi.fn(),
     },

@@ -17350,6 +17350,8 @@
       "organizeSidebar": "Seitenleisteneinstellungen",
       "filterAllText": "alle",
       "filterSelectedProjects": "{{count}} ausgewählt",
+      "filterSelectedHarnesses": "{{count}} ausgewählt",
+      "filterVendorPluginHeading": "Aus Plugins",
       "filterStatus": {
         "active": "Aktiv",
         "archived": "Archiviert",
@@ -17367,6 +17369,11 @@
         "device": "Gerät",
         "dialogue": "Chat",
         "automation": "Automatisierung"
+      },
+      "filterGroupByHint": {
+        "device": "Äußerste Ebene",
+        "dialogue": "Sitzungen ohne Projekt",
+        "automation": "Automatisierungsläufe"
       },
       "filterGroupByDeviceManualTip": "Bei manueller Sortierung ist die Gruppierung nach Gerät nicht verfügbar",
       "deviceGroup": {
@@ -17398,6 +17405,11 @@
       "filterSortByTip": {
         "priority": "Zuerst auf dich wartende, dann ungelesene, dann laufende, dann nach Zeit"
       },
+      "filterSortByHint": {
+        "priority": "Wartet auf dich zuerst",
+        "activity": "Zuletzt aktiv zuerst",
+        "created": "Neueste zuerst"
+      },
       "filterStatusHeading": "Status",
       "filterAgentHeading": "Harness",
       "filterLastActivityHeading": "Letzte Aktivität",
@@ -17412,9 +17424,17 @@
       "filterProjectOrderTip": {
         "custom": "Ziehe Projektzeilen mit der Maus, um sie neu anzuordnen. Sitzungen darin folgen weiterhin der obigen Sortierung."
       },
+      "filterProjectOrderHint": {
+        "custom": "Projektzeilen ziehen"
+      },
       "filterCreatorsHeading": "Freunde",
       "filterCreatorsAny": "Alle",
-      "filterHideAutomations": "Automatisierte Aufgaben ausblenden",
+      "hideHeading": "Ausblenden",
+      "hideOptions": {
+        "automations": "Automatisierte Aufgaben",
+        "taskCreated": "Von anderen Aufgaben erstellte Aufgaben",
+        "teammates": "Aufgaben von Freunden"
+      },
       "filterCreatorsNone": "Alle ausblenden",
       "filterSelectedCreators": "{{count}} ausgewählt",
       "filterProjectsHeading": "Projekte",
@@ -17437,6 +17457,10 @@
         "openWorktree": "Worktree-Ordner öffnen",
         "tokens": "Tokens",
         "cost": "Kosten"
+      },
+      "taskInfoSection": {
+        "identity": "Sitzungskennzeichen",
+        "meta": "Details rechts · in Auswahlreihenfolge"
       },
       "taskInfoTip": {
         "tokens": "Tokens gesamt",
@@ -17784,9 +17808,9 @@
         "tasks": "Aufgabenliste",
         "inbox": "Posteingang",
         "enterInbox": "Zum Posteingangsmodus wechseln",
-        "leaveInbox": "Zum Aufgabenlistenmodus wechseln"
+        "leaveInbox": "Zum Aufgabenlistenmodus wechseln",
+        "inboxTips": "Tipps zum Posteingang"
       },
-      "filterHideTaskCreated": "Von anderen Aufgaben erstellte Aufgaben ausblenden",
       "origin": {
         "createdByTask": "Von einer anderen Aufgabe geöffnet",
         "createdByTaskNamed": "Von Aufgabe „{{title}}“ geöffnet",

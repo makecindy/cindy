@@ -17275,6 +17275,8 @@
       "organizeSidebar": "사이드바 표시 설정",
       "filterAllText": "전체",
       "filterSelectedProjects": "{{count}}개 선택됨",
+      "filterSelectedHarnesses": "{{count}}개 선택됨",
+      "filterVendorPluginHeading": "플러그인 제공",
       "filterStatus": {
         "active": "활성",
         "archived": "보관됨",
@@ -17292,6 +17294,11 @@
         "device": "기기",
         "dialogue": "대화",
         "automation": "자동화"
+      },
+      "filterGroupByHint": {
+        "device": "최상위",
+        "dialogue": "프로젝트가 없는 세션",
+        "automation": "자동화 실행"
       },
       "filterGroupByDeviceManualTip": "수동 정렬 중에는 기기별 그룹을 사용할 수 없습니다",
       "deviceGroup": {
@@ -17323,6 +17330,11 @@
       "filterSortByTip": {
         "priority": "확인이 필요한 항목, 읽지 않은 항목, 실행 중인 항목 순으로 표시하고 나머지는 시간순으로 정렬합니다"
       },
+      "filterSortByHint": {
+        "priority": "확인이 필요한 항목 먼저",
+        "activity": "최근 활동 먼저",
+        "created": "새로 만든 항목 먼저"
+      },
       "filterStatusHeading": "상태",
       "filterAgentHeading": "Harness",
       "filterLastActivityHeading": "최근 활동",
@@ -17337,9 +17349,17 @@
       "filterProjectOrderTip": {
         "custom": "마우스로 프로젝트 행을 끌어 순서를 바꿉니다. 안의 세션은 위 정렬을 따릅니다."
       },
+      "filterProjectOrderHint": {
+        "custom": "프로젝트 행 끌기"
+      },
       "filterCreatorsHeading": "동반자",
       "filterCreatorsAny": "전체",
-      "filterHideAutomations": "자동화 작업 숨기기",
+      "hideHeading": "숨기기",
+      "hideOptions": {
+        "automations": "자동화 작업",
+        "taskCreated": "다른 작업에서 만든 작업",
+        "teammates": "동반자의 작업"
+      },
       "filterCreatorsNone": "모두 숨기기",
       "filterSelectedCreators": "{{count}}명 선택됨",
       "filterProjectsHeading": "프로젝트",
@@ -17362,6 +17382,10 @@
         "openWorktree": "worktree 폴더 열기",
         "tokens": "토큰",
         "cost": "비용"
+      },
+      "taskInfoSection": {
+        "identity": "세션 표시",
+        "meta": "오른쪽 정보 · 선택한 순서대로 표시"
       },
       "taskInfoTip": {
         "tokens": "누적 토큰",
@@ -17709,9 +17733,9 @@
         "tasks": "작업 목록",
         "inbox": "받은 편지함",
         "enterInbox": "받은 편지함 모드로 전환",
-        "leaveInbox": "작업 목록 모드로 전환"
+        "leaveInbox": "작업 목록 모드로 전환",
+        "inboxTips": "받은 편지함 사용 팁"
       },
-      "filterHideTaskCreated": "다른 작업에서 만든 작업 숨기기",
       "origin": {
         "createdByTask": "다른 작업에서 생성됨",
         "createdByTaskNamed": "「{{title}}」 작업에서 생성됨",

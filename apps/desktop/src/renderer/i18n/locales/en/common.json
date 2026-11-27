@@ -17350,6 +17350,8 @@
       "organizeSidebar": "Sidebar settings",
       "filterAllText": "all",
       "filterSelectedProjects": "{{count}} selected",
+      "filterSelectedHarnesses": "{{count}} selected",
+      "filterVendorPluginHeading": "From plugins",
       "filterStatus": {
         "active": "Active",
         "archived": "Archived",
@@ -17367,6 +17369,11 @@
         "device": "Device",
         "dialogue": "Chat",
         "automation": "Automation"
+      },
+      "filterGroupByHint": {
+        "device": "Outermost",
+        "dialogue": "Sessions without a project",
+        "automation": "Automation runs"
       },
       "filterGroupByDeviceManualTip": "Group by device is unavailable while sorting manually",
       "deviceGroup": {
@@ -17398,6 +17405,11 @@
       "filterSortByTip": {
         "priority": "Waiting on you first, then unread, then running, then by time"
       },
+      "filterSortByHint": {
+        "priority": "Waiting on you first",
+        "activity": "Latest activity first",
+        "created": "Newest first"
+      },
       "filterStatusHeading": "Status",
       "filterAgentHeading": "Harness",
       "filterLastActivityHeading": "Last activity",
@@ -17412,9 +17424,17 @@
       "filterProjectOrderTip": {
         "custom": "Drag project rows with the mouse to reorder. Sessions inside still follow the sort above."
       },
+      "filterProjectOrderHint": {
+        "custom": "Drag project rows"
+      },
       "filterCreatorsHeading": "Buddies",
       "filterCreatorsAny": "All",
-      "filterHideAutomations": "Hide automation tasks",
+      "hideHeading": "Hide",
+      "hideOptions": {
+        "automations": "Automation tasks",
+        "taskCreated": "Tasks from other tasks",
+        "teammates": "Buddy tasks"
+      },
       "filterCreatorsNone": "Hide all",
       "filterSelectedCreators": "{{count}} selected",
       "filterProjectsHeading": "Projects",
@@ -17437,6 +17457,10 @@
         "openWorktree": "Open worktree folder",
         "tokens": "Tokens",
         "cost": "Cost"
+      },
+      "taskInfoSection": {
+        "identity": "Session markers",
+        "meta": "Right-side details · shown in the order you select"
       },
       "taskInfoTip": {
         "tokens": "Total tokens",
@@ -17784,9 +17808,9 @@
         "tasks": "Task list",
         "inbox": "Inbox",
         "enterInbox": "Switch to Inbox mode",
-        "leaveInbox": "Switch to task list mode"
+        "leaveInbox": "Switch to task list mode",
+        "inboxTips": "Inbox tips"
       },
-      "filterHideTaskCreated": "Hide tasks from other tasks",
       "origin": {
         "createdByTask": "Opened by another task",
         "createdByTaskNamed": "Opened by task “{{title}}”",
