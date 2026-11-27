@@ -225,6 +225,7 @@ import { BotGroupQuote } from '@/session/BotGroupQuote';
 import {
   clearSentCompanionReplyQuote,
   companionReplyQuoteDisplay,
+  companionReplyQuoteScope,
   getPendingCompanionReplyQuote,
   setPendingCompanionReplyQuote,
   usePendingCompanionReplyQuote,
@@ -456,6 +457,7 @@ import {
   findPluginEngine,
   isPluginEngineEffort,
   isPluginEngineSessionKind,
+  isPluginEngineSwitchSourceAllowed,
   isSamePluginEngineChoice,
   pluginEngineExecutionDeviceId,
   pluginEngineModelName,
@@ -1954,12 +1956,12 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const currentPluginEngineIsRemote = !!currentSession?.agentDeviceId && currentSession.agentDeviceId !== deviceId;
   const pluginEngineTargetId = pluginEngineExecutionDeviceId(currentSession?.agentDeviceId, pluginEngineSwitchIntent);
   const pluginEngineTargetIsRemote = !!pluginEngineTargetId && pluginEngineTargetId !== deviceId;
-  // 换到 / 换出插件引擎只限被控电脑本机的普通任务，与 Desktop 的切换准入一致。
+  // 换到 / 换出插件引擎与 Desktop 切换准入一致（支持桌面、伙伴、官方 hook 与个人 IM 任务）。
   const pluginEngineSwitchEligible = !!currentSession && !!deviceId && !isSharedTaskPeer(deviceId)
     // Agent 在另一台电脑的任务照样可以：选插件引擎时 Agent 回到被控电脑(被控端负责换位置)。
     && !currentSession.remoteHostId
     && !currentSession.orcaRole && !currentSession.orcaRemoteLead
-    && (currentSession.source == null || currentSession.source === 'desktop')
+    && isPluginEngineSwitchSourceAllowed(currentSession.source)
     && currentSession.status !== 'archived';
   const pluginEngines = usePluginEngines(maker, deviceId, pluginEngineTask || pluginEngineSwitchEligible);
   const pluginEngineKeepDeviceIds = useMemo(
@@ -6573,18 +6575,19 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     companionName={companionName} enabled={companionEntry.ready} />
   ) : undefined;
   const showCompanionReplyTargets = useCompanionReplyTargetPreference();
-  const pendingCompanionReplyQuote = usePendingCompanionReplyQuote(companionChat ? sessionId : null);
+  const pendingReplyScope = companionReplyQuoteScope(deviceId, sessionId);
+  const pendingCompanionReplyQuote = usePendingCompanionReplyQuote(companionChat && sessionId ? pendingReplyScope : null);
   const companionQuoteNames = useMemo(() => ({ owner: t('message.renderer.you'), companion: companionName }), [companionName, t]);
   const companionQuoteOptions = useMemo<CompanionQuoteOptions | undefined>(() =>
       companionChat && sessionId ? {
     names: companionQuoteNames,
     showReplyTargets: showCompanionReplyTargets,
     onQuote: (quote) => {
-      setPendingCompanionReplyQuote(sessionId, quote);
+      setPendingCompanionReplyQuote(pendingReplyScope, quote);
       requestAnimationFrame(() => composerInputRef.current?.focus());
     },
     onLocate: (clientId) => router.setParams({ focusClientId: clientId, focusRequestKey: String(Date.now()) }),
-  } : undefined, [companionChat, companionQuoteNames, router, sessionId, showCompanionReplyTargets]);
+  } : undefined, [companionChat, companionQuoteNames, pendingReplyScope, router, sessionId, showCompanionReplyTargets]);
   const pendingCompanionQuoteOriginal = useMemo(() => {
     const clientId = pendingCompanionReplyQuote?.clientId;
     if (!clientId) return undefined;
@@ -6896,7 +6899,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     if (!connectionDispatchBlockedAtSend) setError(null);
     const outboxEligible = !queueEditAtSendStart;
     // 伙伴私聊的待发引用随这条消息写进信封；送达交接后才撤下，失败时保留以便重发。
-    const replyQuoteAtSend = outboxEligible && !independent ? (getPendingCompanionReplyQuote(sessionId) ?? undefined)
+    const replyQuoteAtSend = outboxEligible && !independent ? (getPendingCompanionReplyQuote(pendingReplyScope) ?? undefined)
           : undefined;
     const uploadsInFlight = outboxEligible && !independent ? getPendingUploadCount() : 0;
     const willHaveAttachments = !independent && (attachmentsRef.current.length > 0 || uploadsInFlight > 0);
@@ -7249,7 +7252,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           mobileDebugLog('debug', 'device-link', 'send saved on phone', {
             client: item.clientId.slice(-8), clickToSavedMs: Date.now() - clickedAt,
           });
-          if (replyQuoteAtSend) clearSentCompanionReplyQuote(sessionId, replyQuoteAtSend);
+          if (replyQuoteAtSend) clearSentCompanionReplyQuote(pendingReplyScope, replyQuoteAtSend);
           handoff?.release(true);
           // Durable ownership precedes clearing the composer or deleting annotation sources.
           if (!isMobileAuthOwnerCurrent(ownerAtSend) || !sendScopeStillAlive()) {
@@ -7650,7 +7653,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           queued.clientId,
         );
         enqueueAccepted = true;
-        if (replyQuoteAtSend) clearSentCompanionReplyQuote(sessionId, replyQuoteAtSend);
+        if (replyQuoteAtSend) clearSentCompanionReplyQuote(pendingReplyScope, replyQuoteAtSend);
       } catch (err) {
         // 回滚前先分辨「确实没应用」vs「已应用但响应丢了」:优先 refetch 权威
         // projection 判断。只有权威证据能保留乐观气泡；证据不可用时回到现有
@@ -10347,11 +10350,17 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const archiveFromCard = useCallback(() => {
     void patchSessionMeta({ status: 'archived' }, async (isCurrent) => {
       const names = deviceId
-        ? await loadActiveBoundScheduleNames({ deviceId, invoke, sessionId, source: sessionSourceForSchedule })
+        ? await loadActiveBoundScheduleNames({
+            deviceId,
+            invoke,
+            sessionId,
+            source: sessionSourceForSchedule,
+            orcaRole: currentSession?.orcaRole,
+          })
         : [];
       return isCurrent() && confirmArchiveWithSchedules(t, names);
     });
-  }, [deviceId, invoke, patchSessionMeta, sessionId, sessionSourceForSchedule, t]);
+  }, [currentSession?.orcaRole, deviceId, invoke, patchSessionMeta, sessionId, sessionSourceForSchedule, t]);
   useTaskAutoArchive({
     session: currentSession?.id === sessionId ? currentSession : null,
     deviceId,
@@ -10981,7 +10990,13 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             onArchive={(prepare) => { void patchSessionMeta({ status: 'archived' }, prepare); }}
             confirmArchive={async (isCurrent) => {
               const names = deviceId
-                ? await loadActiveBoundScheduleNames({ deviceId, invoke, sessionId, source: sessionSourceForSchedule })
+                ? await loadActiveBoundScheduleNames({
+                    deviceId,
+                    invoke,
+                    sessionId,
+                    source: sessionSourceForSchedule,
+                    orcaRole: currentSession?.orcaRole,
+                  })
                 : [];
               return isCurrent() && confirmArchiveWithSchedules(t, names);
             }}
@@ -12088,7 +12103,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                   <RouteActionButton
                     accessibilityLabel={t('message.quote.remove')}
                     hitSlop={COMPOSER_CONTROL_HIT_SLOP}
-                    onPress={() => setPendingCompanionReplyQuote(sessionId, null)}
+                    onPress={() => setPendingCompanionReplyQuote(pendingReplyScope, null)}
                     style={styles.queueEditBarClose}
                     testID="session.companionQuoteRemove"
                   >

@@ -246,8 +246,39 @@ describe('switching a task onto a plugin engine', () => {
     expect(handoff).toContain('帮我改一下登录页');
   });
 
+  // 回归：此前仅 source=desktop/bot 可切插件引擎，X / 飞书等 IM 与官方 hook 会话在选择器里看不到插件引擎，
+  // 切换也被 UNSUPPORTED_CAPABILITY 拒绝。现开放 IM/hook 来源切换本机与远程插件引擎，同时继续禁止 review/learn/orca。
+  // 最小失败输入与 tier：unit，source='x'/'feishu' 会话切到本机或远程 acp 插件引擎。
   it.each([
-    { name: 'an IM task', row: { source: 'feishu' }, code: 'UNSUPPORTED_CAPABILITY' },
+    { source: 'x', agentDeviceId: 'mini' },
+    { source: 'feishu', agentDeviceId: null },
+    { source: 'telegram', agentDeviceId: null },
+    { source: 'discord-hook', agentDeviceId: 'mini' },
+  ])('allows $source task to switch onto a plugin engine (device=$agentDeviceId)', async ({ source, agentDeviceId }) => {
+    const admitRemotePluginEngineTarget = vi.fn(async () => ({
+      model: 'gemini-4-neon', effort: 'high', permissionMode: 'default', engineName: 'Antigravity',
+    }));
+    const { deps, pendingSwitches } = makeDeps(makeRow({ source }), { admitRemotePluginEngineTarget });
+    const staged = await performSessionAgentSwitch(deps, {
+      sessionId: 's1',
+      targetAgentKind: 'acp',
+      model: 'gemini-4-neon',
+      providerId: ENGINE,
+      ...(agentDeviceId ? { agentDeviceId } : {}),
+    });
+    expect(staged).toMatchObject({ deferred: true, agentKind: 'acp', model: 'gemini-4-neon' });
+    expect(pendingSwitches.get('s1')).toMatchObject({
+      targetAgentKind: 'acp',
+      model: 'gemini-4-neon',
+      providerId: ENGINE,
+      ...(agentDeviceId ? { targetAgentDeviceId: agentDeviceId } : {}),
+    });
+  });
+
+  it.each([
+    { name: 'a review task', row: { source: 'review' }, code: 'UNSUPPORTED_CAPABILITY' },
+    { name: 'a learn task', row: { source: 'learn' }, code: 'UNSUPPORTED_CAPABILITY' },
+    { name: 'a scheduler task', row: { source: 'scheduler' }, code: 'UNSUPPORTED_CAPABILITY' },
     { name: 'a collaboration lead', row: { orcaRole: 'lead' }, code: 'UNSUPPORTED_CAPABILITY' },
   ])('refuses $name before staging anything', async ({ row, code }) => {
     const { deps, pendingSwitches } = makeDeps(makeRow(row));
