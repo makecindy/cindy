@@ -1149,7 +1149,7 @@
     "permissionMissing": "未授權",
     "openPermissionSettings": "去授權",
     "recheckPermissions": "重新檢測",
-    "permissionActionFailed": "無法開啟授權引導。請在電腦端的遠端控制設定中重試。",
+    "permissionActionFailed": "無法開啟授權引導。請在電腦端的「設定 → 遠端連線」中重試。",
     "permissionCheckFailed": "暫時無法檢測權限，請確認電腦在線後重試。",
     "openGuideOnComputer": "在電腦上開啟授權引導",
     "permissionGuideOpened": "已在電腦上顯示授權引導，請在電腦上繼續。",

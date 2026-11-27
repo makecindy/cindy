@@ -1149,7 +1149,7 @@
     "permissionMissing": "未許可",
     "openPermissionSettings": "権限を許可",
     "recheckPermissions": "再確認",
-    "permissionActionFailed": "権限ガイドを開けませんでした。コンピューターのリモート操作設定で再試行してください。",
+    "permissionActionFailed": "権限ガイドを開けませんでした。コンピューターの「設定 → リモート接続」で再試行してください。",
     "permissionCheckFailed": "権限を確認できません。コンピューターがオンラインか確認して再試行してください。",
     "openGuideOnComputer": "コンピューターでガイドを開く",
     "permissionGuideOpened": "コンピューターに権限ガイドを表示しました。そちらで続けてください。",
