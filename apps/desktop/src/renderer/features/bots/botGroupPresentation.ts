@@ -23,6 +23,7 @@ export {
   botGroupPlanFollowUp,
   botGroupPreviewLine,
   botGroupSidebarPlanPreview,
+  canMentionAllInBotGroup,
   collapseBotGroupMemberJoined,
   continuableRoundEndId,
   currentBotGroupPlanStep,

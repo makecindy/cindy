@@ -82,6 +82,7 @@ import {
   type PeerAppUpdateReply,
   type PeerAppUpdateRequest,
   type RelayDeployStep,
+  type AgentNetSwitchRejoin,
 } from '../../shared/selfHostedRelay.js';
 import { deviceName } from './deviceName.js';
 import { readAccountPreference, updateAccountPreference } from './relayAccountPreferences.js';
@@ -89,6 +90,7 @@ import {
   broadcast,
   getDeviceLinkConnectionIssue,
   getDeviceLinkPeerLinks,
+  rejoinThisDevice,
   remoteBackgroundInvoke,
   restartDeviceLinkForRelayChange,
   setKeepAwakeEnabled,
@@ -130,7 +132,7 @@ import { getClientEndpoint, getClientEndpointForRealm, loadClientEndpointsForRea
 import { hostJoinBaseUrl, suggestedRelayUrls as suggestedUrls } from './selfHostedRelayAddress.js';
 import { AgentNetClientError, submitJoin, pollJoin, submitTenantJoin, pollTenantJoin, type AgentNetClient } from '@cindy/agent-net-relay/client';
 import { startRelayGateway } from '@cindy/agent-net';
-import { agentNetClientForRelay, approveAgentNetMember, createAgentNetTenantRequest, isAgentNetActive, ensureOwnerAgentNetBootstrap, memberAgentNetIdentity, memberAgentNetSecrets } from './agentNetRuntime.js';
+import { agentNetClientForRelay, approveAgentNetMember, createAgentNetTenantRequest, isAgentNetActive, ensureOwnerAgentNetBootstrap, memberAgentNetIdentity, memberAgentNetSecrets, officialAgentNetRemoved, onAgentNetRemoved } from './agentNetRuntime.js';
 import { readDeviceLinkSettings, updateDeviceLinkSetting, type DeviceLinkSettings } from './settings-store.desktop.js';
 import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending, onAppSessionInvalidated } from '../appSessionState.js';
 
@@ -236,6 +238,7 @@ export function getState(): SelfHostedRelayState {
     agentNetEnabled: readDeviceLinkSettings().agentNetEnabled === true,
     agentNetOnlyEncrypted: readDeviceLinkSettings().agentNetOnlyEncrypted === true,
     agentNetChangedBy: readDeviceLinkSettings().agentNetChangedBy ?? null,
+    agentNetRemoved: !relay && readDeviceLinkSettings().agentNetRemoved === true && readDeviceLinkSettings().agentNetEnabled !== true,
     available: authManager.getAuthState().isAuthenticated && secureStorageAvailable(),
     mode: relay ? 'self-hosted' : 'official',
     relay: relay && origin
@@ -818,6 +821,7 @@ type CommandResult = {
   peerUpdate?: PeerAppUpdateReply;
   check?: SelfHostedRelayServerCheck;
   deploymentStatus?: SelfHostedRelayDeploymentStatus;
+  rejoin?: AgentNetSwitchRejoin;
 };
 
 function requireReady(): SelfHostedRelayErrorCode | null {
@@ -1809,7 +1813,7 @@ async function deploymentStatus(relayId: string): Promise<CommandResult> {
 }
 
 /** Agent-Net 写入在实际拿到设置文件锁后核验账号代次，不让过期操作先提交再报错。 */
-async function writeAgentNetSetting<K extends 'agentNetEnabled' | 'agentNetOnlyEncrypted' | 'agentNetChangedBy' | 'agentNetPendingSwitch'>(
+async function writeAgentNetSetting<K extends 'agentNetEnabled' | 'agentNetOnlyEncrypted' | 'agentNetChangedBy' | 'agentNetPendingSwitch' | 'agentNetRemoved'>(
   key: K, value: DeviceLinkSettings[K], assertOwner = captureOwner(),
 ): Promise<void> {
   // updater 在设置文件实际写锁内执行；等待队列/锁期间失效的账号不能先落盘再被拒绝。
@@ -1825,6 +1829,8 @@ async function applyAgentNet(enabled: boolean): Promise<CommandResult> {
   const previous = readDeviceLinkSettings().agentNetEnabled === true;
   if (previous === enabled) return { state: getState() };
   await writeAgentNetSetting('agentNetEnabled', enabled, assertOwner); assertOwner();
+  // 「被移除后自动关掉」只说明那一次关掉：开关再变（人打开、远程切换）就不再成立（下面 turnOffAgentNetAfterRemoval 关掉后再写回）。
+  if (readDeviceLinkSettings().agentNetRemoved) { await writeAgentNetSetting('agentNetRemoved', false, assertOwner); assertOwner(); }
   try {
     if (readRelayConfig().host.enabled) {
       await startHost(readRelayConfig()); assertOwner();
@@ -1840,6 +1846,50 @@ async function applyAgentNet(enabled: boolean): Promise<CommandResult> {
   }
   restartDeviceLinkForRelayChange();
   return { state: getState() };
+}
+
+/**
+ * 被删后要能重新加入（2026-11-26 用户定）：这台电脑上的人打开开关时，官方服务明确说这台被移除过（账号设备列表里没有它，
+ * 或身份已撤销，officialAgentNetRemoved），先按「重新加入」把它接回来（deviceRejoin.ts，与点一次按钮同一组请求），再照常打开。
+ * 重新登录后 Device Link 已经回来、设置里不再有「重新加入」，这是剩下的入口。只在本机操作时做，远程切换不替它恢复（只能让自己这台回来）；网络错误不算移除。
+ * 接不回来时照旧打开：Agent-Net 拒绝它的身份后，这次运行走 Device Link。结果交给界面提示（没去重新加入时 null）。
+ */
+async function rejoinRemovedDeviceBeforeEnable(assertOwner: () => void): Promise<AgentNetSwitchRejoin | null> {
+  if (readDeviceLinkSettings().agentNetEnabled === true || requireReady() || !(await officialAgentNetRemoved())) return null;
+  assertOwner();
+  let outcome: AgentNetSwitchRejoin;
+  try {
+    const { agentNet } = await rejoinThisDevice({ agentNet: true });
+    outcome = agentNet === 'rejoined' ? 'rejoined' : 'agent-net-unavailable';
+    if (agentNet !== 'rejoined') log.warn(`agent-net rejoin before enabling: ${agentNet}`);
+  } catch (error) {
+    assertOwner();
+    log.warn('agent-net rejoin before enabling failed; this device stays on Device Link', error);
+    outcome = error instanceof Error && error.message === 'DEVICE_REJOIN_UNSUPPORTED' ? 'unsupported' : 'failed';
+  }
+  assertOwner();
+  return outcome;
+}
+
+/**
+ * 2026-11-26（用户定：被删后默认关掉，再打开就重新加入）：Agent-Net 运行时说这台电脑被移除过（agentNetRuntime.ts 的
+ * onAgentNetRemoved：身份被撤销，或账号设备列表里没有它），就按本机改开关的同一条路关掉，并记下原因（远程连接页写明「重新打开
+ * 即可重新加入」，打开时由 rejoinRemovedDeviceBeforeEnable 重新加入）。已经关着、换了账号就不做；同一次移除通知多次只关一次。
+ */
+async function turnOffAgentNetAfterRemoval(): Promise<void> {
+  const assertOwner = captureOwner();
+  const change = async () => {
+    assertOwner();
+    if (readDeviceLinkSettings().agentNetEnabled !== true) return true;
+    const result = await applyAgentNet(false); assertOwner();
+    if (result.error) return false;
+    await writeAgentNetSetting('agentNetRemoved', true, assertOwner); assertOwner();
+    log.warn('agent-net turned off: this computer was removed from the account; turning it on again rejoins');
+    return true;
+  };
+  if (readDeviceLinkSettings().agentNetEnabled !== true) return;
+  if (remoteSwitch) await remoteSwitch.onLocalChange(change); else await change();
+  emitChanged();
 }
 
 /**
@@ -1988,14 +2038,16 @@ async function execute(command: SelfHostedRelayCommand): Promise<CommandResult> 
       const assertOwner = captureOwner();
       // 这台电脑上的人自己改了开关：以人为准，丢掉待确认的远程切换与「由谁打开」的说明。
       let result!: CommandResult;
+      let rejoin: AgentNetSwitchRejoin | null = null;
       const change = async () => {
         assertOwner();
+        if (command.enabled) rejoin = await rejoinRemovedDeviceBeforeEnable(assertOwner);
         result = await applyAgentNet(command.enabled); assertOwner();
         return !result.error;
       };
       if (remoteSwitch) await remoteSwitch.onLocalChange(change); else await change();
       assertOwner();
-      return { ...result, state: getState() };
+      return { ...result, state: getState(), ...(rejoin ? { rejoin } : {}) };
     }
     case 'peer-agent-net':
       return { state: getState(), peer: await askPeerAgentNet(command.deviceId, command.request) };
@@ -2060,6 +2112,11 @@ export function registerSelfHostedRelayIpc(): void {
   // 先登记中转来源:之后 device-link 每次建连都按当前账号的选择走官方或自建中转。
   installSelfHostedRelayRouting();
   installAgentNetRemoteSwitch();
+  onAgentNetRemoved(() => {
+    void turnOffAgentNetAfterRemoval().catch((error: unknown) => {
+      if (!(error instanceof RelayOperationExpired)) log.warn('agent-net: could not turn off after removal', error);
+    });
+  });
   ipcMain.handle(SELF_HOSTED_RELAY_IPC.COMMAND, async (event, raw: unknown) => {
     // 账号级本机设置:只接受本机应用窗口,不经设备互联代理。
     if (getDeviceLinkInvokeContext()) throwIpcError('PERMISSION_DENIED', 'Self-hosted relay settings are local only');

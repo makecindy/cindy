@@ -259,6 +259,11 @@ import {
   resolveDocModeFilesSession,
 } from './workdir-browse/lib/docModeSwitchProjects';
 import { ConversationSearchBox, SearchResultsBody } from './sidebar/ConversationSearchBox';
+import {
+  CONVERSATION_SEARCH_KEEPALIVE_SELECTOR,
+  createSearchResultTaskMenuActions,
+  type SearchResultTaskMenuActions,
+} from './sidebar/SearchResultTaskMenu';
 import { useConversationSearchContext } from './sidebar/conversationSearchContext';
 import {
   SidebarIconButton,
@@ -490,6 +495,57 @@ export function CCAgentSidebarUpper() {
   );
   const remoteProjectSessions = useRemoteProjectSessions();
   const remoteDevices = useRemoteDevices();
+  const projectPickerOptions = useProjectPickerOptions();
+  const searchTaskMenuHandlersRef = useRef<Pick<
+    SearchResultTaskMenuActions,
+    'onAction' | 'onRename' | 'onTogglePin' | 'onMoveSession'
+  > | null>(null);
+  const searchLiveSessionByKey = useMemo(() => {
+    const byKey = new Map<string, Session>();
+    for (const session of allSessionsForAttention) {
+      byKey.set(`:${session.id}`, session);
+    }
+    for (const session of sessionsHook.sessions) {
+      if (!byKey.has(`:${session.id}`)) byKey.set(`:${session.id}`, session);
+    }
+    for (const session of remoteProjectSessions) {
+      byKey.set(`${session.deviceLinkDeviceId ?? ''}:${session.id}`, session);
+    }
+    return byKey;
+  }, [allSessionsForAttention, remoteProjectSessions, sessionsHook.sessions]);
+  const remoteConnectionStatusByDeviceId = useMemo(() => {
+    const byDevice = new Map<string, Session['deviceLinkConnectionStatus']>();
+    for (const session of remoteProjectSessions) {
+      if (session.deviceLinkDeviceId && session.deviceLinkConnectionStatus) {
+        byDevice.set(session.deviceLinkDeviceId, session.deviceLinkConnectionStatus);
+      }
+    }
+    for (const device of remoteDevices) {
+      if (!byDevice.has(device.deviceId)) {
+        byDevice.set(device.deviceId, device.connected ? 'connected' : 'disconnected');
+      }
+    }
+    return byDevice;
+  }, [remoteDevices, remoteProjectSessions]);
+  const searchResultTaskMenu = useMemo<SearchResultTaskMenuActions>(
+    () =>
+      createSearchResultTaskMenuActions({
+        resolveSession: (summary) =>
+          searchLiveSessionByKey.get(`${summary.deviceLinkDeviceId ?? ''}:${summary.id}`) ?? null,
+        getRemoteConnectionStatus: (deviceId) =>
+          remoteConnectionStatusByDeviceId.get(deviceId) ?? null,
+        onAction: (sessionId, action, session) =>
+          searchTaskMenuHandlersRef.current?.onAction(sessionId, action, session),
+        onRename: (sessionId, newTitle, session) =>
+          searchTaskMenuHandlersRef.current?.onRename(sessionId, newTitle, session),
+        onTogglePin: (sessionId, currentlyPinned, session) =>
+          searchTaskMenuHandlersRef.current?.onTogglePin(sessionId, currentlyPinned, session),
+        onMoveSession: (sessionId, target, session) =>
+          searchTaskMenuHandlersRef.current?.onMoveSession?.(sessionId, target, session),
+        projectOptions: projectPickerOptions,
+      }),
+    [projectPickerOptions, remoteConnectionStatusByDeviceId, searchLiveSessionByKey],
+  );
   const selectedMachineId = useEffectiveSelectedMachineId();
   const projectAliasMembers = useMemo(
     () => [...allSessionsForAttention, ...remoteProjectSessions],
@@ -863,6 +919,9 @@ export function CCAgentSidebarUpper() {
                 projectAliases={projectAliases}
                 scheduleSessionIndex={scheduleSessionIndex}
                 persistentLocalProjects={persistentLocalProjects}
+                projectPickerOptions={projectPickerOptions}
+                searchResultTaskMenu={searchResultTaskMenu}
+                searchTaskMenuHandlersRef={searchTaskMenuHandlersRef}
               />
             </div>
           </div>
@@ -887,6 +946,7 @@ export function CCAgentSidebarUpper() {
               manualPinnedOrder={filter.manualPinnedOrder}
               pinnedSortBy={filter.pinnedSortBy}
               onReorderPinned={handleRailPinnedReorder}
+              searchResultTaskMenu={searchResultTaskMenu}
             />
           </div>
         </div>
@@ -921,6 +981,12 @@ interface ExpandedProps {
   projectAliases: ReturnType<typeof useProjectAliases>;
   scheduleSessionIndex: ReturnType<typeof usePublishedAutomationScheduleSessionIndex>;
   persistentLocalProjects: readonly PersistentLocalProject[];
+  projectPickerOptions: ReturnType<typeof useProjectPickerOptions>;
+  searchResultTaskMenu: SearchResultTaskMenuActions;
+  searchTaskMenuHandlersRef: React.MutableRefObject<Pick<
+    SearchResultTaskMenuActions,
+    'onAction' | 'onRename' | 'onTogglePin' | 'onMoveSession'
+  > | null>;
 }
 
 /** rail 未分类隐藏态的空列表(引用稳定,免得 lampScope 发布 effect 空转)。 */
@@ -935,6 +1001,8 @@ interface ConfirmState {
   dirtyWorktree: boolean;
   /** Owned shared task to close before the confirmed delete. */
   sharedTaskId?: string;
+  /** Fallback session snapshot for search results outside the loaded sidebar buckets. */
+  session?: Session;
 }
 
 const CONFIRM_INITIAL: ConfirmState = {
@@ -943,6 +1011,7 @@ const CONFIRM_INITIAL: ConfirmState = {
   action: 'delete',
   dirtyWorktree: false,
   sharedTaskId: undefined,
+  session: undefined,
 };
 
 function ExpandedView({
@@ -959,6 +1028,9 @@ function ExpandedView({
   projectAliases,
   scheduleSessionIndex,
   persistentLocalProjects,
+  projectPickerOptions,
+  searchResultTaskMenu,
+  searchTaskMenuHandlersRef,
 }: ExpandedProps) {
   const { t, i18n } = useTranslation();
   const location = useLocation();
@@ -975,7 +1047,6 @@ function ExpandedView({
     setProjectHidden,
     initialSnapshot: sidebarSettingsSnapshot,
   } = hiddenProjects;
-  const projectPickerOptions = useProjectPickerOptions();
 
   // 自动化任务本身仍在顶部 Automations 入口管理；自动化任务 fire 后创建出的
   // session 是普通会话,按 project/dialogue 与普通排序/红点逻辑进入 sidebar。
@@ -2439,8 +2510,7 @@ function ExpandedView({
     const isOutsideSearch = (event: Event) => {
       const target = event.target as Element | null;
       if (!target) return false;
-      if (target.closest('[data-conversation-search-surface]')) return false;
-      if (target.closest('[data-radix-popper-content-wrapper]')) return false;
+      if (target.closest(CONVERSATION_SEARCH_KEEPALIVE_SELECTOR)) return false;
       return true;
     };
     const onPointerDown = (event: PointerEvent) => {
@@ -2972,11 +3042,14 @@ function ExpandedView({
 
   /* ---- Rename handler ---- */
   const handleRename = useCallback(
-    async (sessionId: string, editedTitle: string) => {
-      const session = sessionsByIdRef.current.get(sessionId);
+    async (sessionId: string, editedTitle: string, sessionOverride?: Session) => {
+      const session = sessionOverride ?? sessionsByIdRef.current.get(sessionId);
       if (isRemoteSessionWriteBlocked(session)) {
         toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
-        return;
+        return false;
+      }
+      if (session?.deviceLinkDeviceId) {
+        remoteProjectsStore.pinSessionOrigin(session.deviceLinkDeviceId, session.id);
       }
       // SessionItem / SessionCard 的重命名输入框预填的是**显示标题**(legacy automation
       // 会话已剥掉 `[Schedule] ` 前缀),直接落库会让它从 automation 分组里消失。提交前
@@ -2985,15 +3058,19 @@ function ExpandedView({
       // 取旧值用于失败回滚，乐观先 patch（不刷整列表，列表顺序保持稳定）
       // 保持读 sessions(而非 sessionsById):后者含 remoteProjectSessions,换源会连带
       // 改变远程会话的回滚行为,不在本次修复范围内。
-      const oldTitle = sessionsRef.current.find((s) => s.id === sessionId)?.title;
+      const oldTitle =
+        sessionsRef.current.find((s) => s.id === sessionId)?.title ??
+        (!session?.deviceLinkDeviceId ? session?.title : undefined);
       patchLocal(sessionId, { title: newTitle });
       try {
         // 远程会话:patch-meta 经隧道写被控端 → 广播 sessions:patched → applyPatch 更新远程分片(纯镜像)。
         await sessionService.patchMeta(sessionId, { title: newTitle });
+        return true;
       } catch (err) {
         log.error('[session rename]', err);
         toast.error(t('ccAgent.sidebar.renameFailed'));
         if (oldTitle !== undefined) patchLocal(sessionId, { title: oldTitle });
+        return false;
       }
     },
     [patchLocal, t],
@@ -3014,14 +3091,19 @@ function ExpandedView({
 
   /* ---- Pin / Unpin handler ---- */
   const handleTogglePin = useCallback(
-    async (sessionId: string, currentlyPinned: boolean) => {
-      const session = sessionsByIdRef.current.get(sessionId);
+    async (sessionId: string, currentlyPinned: boolean, sessionOverride?: Session) => {
+      const session = sessionOverride ?? sessionsByIdRef.current.get(sessionId);
       if (isRemoteSessionWriteBlocked(session)) {
         toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
-        return;
+        return false;
+      }
+      if (session?.deviceLinkDeviceId) {
+        remoteProjectsStore.pinSessionOrigin(session.deviceLinkDeviceId, session.id);
       }
       // 同 handleRename:回滚值刻意仍读 sessions,不换成 sessionsById。
-      const current = sessionsRef.current.find((s) => s.id === sessionId);
+      const current =
+        sessionsRef.current.find((s) => s.id === sessionId) ??
+        (!session?.deviceLinkDeviceId ? session : undefined);
       const oldPinnedAt = current?.pinnedAt ?? null;
       const oldSummary = current?.summary ?? null;
       const newPinnedAt = currentlyPinned ? null : new Date().toISOString();
@@ -3040,6 +3122,7 @@ function ExpandedView({
       try {
         // 远程会话:patch-meta → 广播 sessions:patched → applyPatch 更新远程分片(纯镜像)。
         await sessionService.patchMeta(sessionId, { pinnedAt: newPinnedAt });
+        return true;
       } catch (err) {
         log.error('[session pin]', err);
         toast.error(t('ccAgent.sidebar.pinFailed'));
@@ -3049,6 +3132,7 @@ function ExpandedView({
             ? { pinnedAt: oldPinnedAt, summary: oldSummary }
             : { pinnedAt: oldPinnedAt },
         );
+        return false;
       }
     },
     // 只依赖 filter.promotePin(useCallback 稳定),不要整个 filter ——
@@ -3095,8 +3179,8 @@ function ExpandedView({
     [collapse.expand, patchLocal, t],
   );
   const handleMoveSession = useCallback(
-    async (sessionId: string, target: SessionMoveTarget) => {
-      const session = sessionsByIdRef.current.get(sessionId);
+    async (sessionId: string, target: SessionMoveTarget, sessionOverride?: Session) => {
+      const session = sessionOverride ?? sessionsByIdRef.current.get(sessionId);
       if (!session) return;
       if (session.remoteHostId || session.deviceLinkDeviceId) {
         toast.warning(t('ccAgent.sidebar.sessionMenu.moveToProjectRemoteUnsupported'));
@@ -3225,8 +3309,9 @@ function ExpandedView({
       sessionId: string,
       action: 'delete' | 'archive' | 'archive-now' | 'complete' | 'unarchive',
       sharedTaskId?: string,
+      sessionOverride?: Session,
     ) => {
-      const session = sessionsByIdRef.current.get(sessionId);
+      const session = sessionOverride ?? sessionsByIdRef.current.get(sessionId);
       const offlineDeviceId = session?.deviceLinkDeviceId;
       const canHandleOfflineInbox =
         Boolean(offlineDeviceId) &&
@@ -3387,10 +3472,14 @@ function ExpandedView({
         const dirtyWorktree =
           isDirtyWorktree(await resolveWorktreeRemovalPreflight(sessionId, session?.deviceLinkDeviceId));
         // Keep the existing confirm-state shape for the normal delete flow, then attach
-        // the shared-task scope in a functional update so cancellation still leaves it open.
+        // optional shared-task or out-of-window session scope in a functional update.
         setConfirm({ open: true, sessionId, action, dirtyWorktree });
-        if (sharedTaskId) {
-          setConfirm((previous) => ({ ...previous, sharedTaskId }));
+        if (sharedTaskId || sessionOverride) {
+          setConfirm((previous) => ({
+            ...previous,
+            ...(sharedTaskId ? { sharedTaskId } : {}),
+            ...(sessionOverride ? { session: sessionOverride } : {}),
+          }));
         }
         return;
       }
@@ -3409,9 +3498,35 @@ function ExpandedView({
     ],
   );
 
+  useLayoutEffect(() => {
+    const pinIfRemote = (session?: Session) => {
+      if (session?.deviceLinkDeviceId) {
+        remoteProjectsStore.pinSessionOrigin(session.deviceLinkDeviceId, session.id);
+      }
+    };
+    searchTaskMenuHandlersRef.current = {
+      onAction: (sessionId, action, session) => {
+        pinIfRemote(session);
+        return handleActionClick(sessionId, action, undefined, session);
+      },
+      onRename: (sessionId, newTitle, session) => {
+        pinIfRemote(session);
+        return handleRename(sessionId, newTitle, session);
+      },
+      onTogglePin: (sessionId, currentlyPinned, session) => {
+        pinIfRemote(session);
+        return handleTogglePin(sessionId, currentlyPinned, session);
+      },
+      onMoveSession: (sessionId, target, session) => {
+        pinIfRemote(session);
+        return handleMoveSession(sessionId, target, session);
+      },
+    };
+  }, [handleActionClick, handleMoveSession, handleRename, handleTogglePin, searchTaskMenuHandlersRef]);
+
   const handleConfirm = useCallback(async () => {
-    const { sessionId, action, sharedTaskId } = confirm;
-    const session = sessionsById.get(sessionId);
+    const { sessionId, action, sharedTaskId, session: confirmSession } = confirm;
+    const session = confirmSession ?? sessionsById.get(sessionId);
     if (isRemoteSessionWriteBlocked(session)) {
       toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
       setConfirm(CONFIRM_INITIAL);
@@ -3430,7 +3545,14 @@ function ExpandedView({
     await runSessionAction(sessionId, action, {
       activeSessionId: viewedSessionId,
       deleteRedirectRoute,
-      deleteTarget: action === 'delete' && session?.sideChatPromoted ? 'task' : undefined,
+      deleteTarget:
+        action === 'delete'
+          ? session?.sideChatPromoted
+            ? 'task'
+            : session?.source === 'side-chat'
+              ? 'side-chat'
+              : undefined
+          : undefined,
     });
     setConfirm(CONFIRM_INITIAL);
   }, [closeOwnedSharedTask, viewedSessionId, confirm, resolveSessionRemovalRedirect, runSessionAction, sessionsById, t]);
@@ -3818,6 +3940,8 @@ function ExpandedView({
                 onSelect={search.handleSelect}
                 leading={<TeammateSearchResults matches={teammateMatches} />}
                 leadingCount={teammateMatches.length}
+                taskMenu={searchResultTaskMenu}
+                statusFilter={search.statusFilter}
               />
             </div>
           ) : null}
@@ -4145,6 +4269,8 @@ interface CollapsedProps {
   pinnedSortBy: UseSidebarFilterReturn['pinnedSortBy'];
   /** 置顶瓷砖拖拽落定(写回 manualPinnedOrder,与展开态同一持久化语义)。 */
   onReorderPinned: (newOrderIds: string[]) => void;
+  /** 搜索结果行的任务右键菜单动作（与展开态共用同一套 handler）。 */
+  searchResultTaskMenu: SearchResultTaskMenuActions;
 }
 
 /**
@@ -4165,6 +4291,7 @@ function CollapsedView({
   manualPinnedOrder,
   pinnedSortBy,
   onReorderPinned,
+  searchResultTaskMenu,
 }: CollapsedProps) {
   const location = useLocation();
   const isCollapsed = useSidebarCollapsedState();
@@ -4261,6 +4388,7 @@ function CollapsedView({
             triggerClassName={SIDEBAR_RAIL_ICON_BUTTON_CLASS}
             defaultOpen={defaultOpen}
             onOpenChange={onOpenChange}
+            taskMenu={searchResultTaskMenu}
           />
         )}
       />

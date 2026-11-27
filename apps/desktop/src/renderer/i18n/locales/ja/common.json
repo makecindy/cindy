@@ -7151,6 +7151,7 @@
         },
         "onlyEncrypted": "Agent-Net のみ使用",
         "onlyEncryptedHint": "有効にすると、旧バージョンの端末と旧接続を使用する共有は利用できなくなります。初期設定はオフです。",
+        "removedOff": "このパソコンはアカウントから削除されたため、Agent-Net をオフにしました。もう一度オンにすると再参加します。",
         "peerSwitch": {
           "row": {
             "toAgentNet": "Agent-Net に切り替え中…",
@@ -12185,6 +12186,8 @@
         "projectDirSaveFailed": "プロジェクトフォルダを保存できませんでした。フォルダがまだあるか確認してから、もう一度お試しください",
         "allowMemberInvites": "全メンバーによる友達の招待を許可",
         "allowMemberInvitesHint": "オンにすると、参加済みの全メンバーが友達を招待できます。変更できるのはグループオーナーと管理者のみです。",
+        "allowMemberMentionAll": "すべてのメンバーに @全員 を許可",
+        "allowMemberMentionAllHint": "オンにすると全メンバーが @全員 を使用でき、オフのときはグループオーナーと管理者のみ使用できます。変更できるのはグループオーナーと管理者のみです。",
         "allowMentionAllBots": "すべての仲間への @ を許可",
         "allowMentionAllBotsHint": "変更できるのはグループ所有者のみです。すべての仲間が返信する可能性があるため、大人数のグループでは慎重に有効にしてください。AI代理返信には影響しません。"
       },
@@ -12216,6 +12219,7 @@
         "groupDissolved": "このグループは解散しました。閲覧権限のある履歴は引き続き確認できます。",
         "lastOwner": "退出する前にオーナーを譲渡するか、グループを解散してください。",
         "allBotsMentionDisabled": "グループ所有者がすべての仲間への @ を有効にしていません。",
+        "allHumansMentionForbidden": "@全員 を使用できるのはグループ所有者と管理者のみです。",
         "turnAlreadyStarted": "この仲間はすでに実行を開始しているため、スキップできません"
       },
       "organizer": "まとめ役",
@@ -12403,8 +12407,10 @@
         },
         "replyPlaceholder": "このメッセージに返信。@ で仲間を指定できます…",
         "sendReply": "返信を送信",
+        "moreReactions": "その他のリアクション",
         "addReaction": "リアクションを追加",
         "reactionCount": "{{emoji}} · {{count}} 件のリアクション",
+        "reactionTotal": "{{emoji}} · {{count}} 件のリアクション",
         "reactionWho": "{{emoji}} · {{count}} 件のリアクション：{{names}}",
         "reactorSelf": "あなた",
         "reactorFormer": "{{name}}（現在はグループにいません）",
@@ -12541,6 +12547,7 @@
           "accessNone": "オーナーのみ",
           "accessChat": "グループ内の会話のみ",
           "accessTools": "ツールと情報を利用可",
+          "memberPermissions": "メンバーの権限",
           "replies": "仲間の返信",
           "replyModeMentionedNote": "@ されない限り、仲間は返信しません。",
           "assistant": "グループの Cindy",
@@ -15660,7 +15667,8 @@
       "runningFor": "実行時間 {{duration}}",
       "startedAt": "開始 {{time}}",
       "recentOutput": "最近の出力 · {{time}} 前に更新",
-      "noOutputYet": "まだ出力はありません"
+      "noOutputYet": "まだ出力はありません",
+      "recentActivity": "直近のアクティビティ"
     },
     "planPill": {
       "step": "ステップ {{current}} / {{total}}",
@@ -16186,7 +16194,30 @@
       },
       "status": {
         "running": "実行中",
-        "done": "完了"
+        "done": "完了",
+        "failed": "失敗"
+      },
+      "collab": {
+        "wait": "サブエージェントを待機",
+        "waitCount_one": "{{count}} 件のサブエージェントを待機",
+        "waitCount_other": "{{count}} 件のサブエージェントを待機",
+        "sendInput": "サブエージェントに指示を送信",
+        "sendInputCount_one": "{{count}} 件のサブエージェントに指示を送信",
+        "sendInputCount_other": "{{count}} 件のサブエージェントに指示を送信",
+        "resume": "サブエージェントを再開",
+        "resumeCount_one": "{{count}} 件のサブエージェントを再開",
+        "resumeCount_other": "{{count}} 件のサブエージェントを再開",
+        "close": "サブエージェントを終了",
+        "closeCount_one": "{{count}} 件のサブエージェントを終了",
+        "closeCount_other": "{{count}} 件のサブエージェントを終了",
+        "spawn": "サブエージェントを起動",
+        "spawnCount_one": "{{count}} 件のサブエージェントを起動",
+        "spawnCount_other": "{{count}} 件のサブエージェントを起動",
+        "targets": "対象: {{targets}}",
+        "targetCount_one": "対象: {{count}} 件のサブエージェント",
+        "targetCount_other": "対象: {{count}} 件のサブエージェント",
+        "prompt": "指示: {{prompt}}",
+        "model": "モデル: {{model}}"
       }
     },
     "systemCard": {

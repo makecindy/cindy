@@ -396,6 +396,7 @@
       "sortHeading": "Ordenação de tarefas",
       "projectOrderHeading": "Ordenação de projetos",
       "projectOrderManualTip": "Toque e segure uma linha de projeto e arraste para reordenar. As tarefas dentro dele continuam seguindo a ordenação acima.",
+      "pinnedOrderManualTip": "Toque e segure uma tarefa fixada e arraste para reordenar.",
       "statusHeading": "Status da tarefa",
       "showDeviceTasks": "Mostrar tarefas",
       "openDevice": "Abrir",

@@ -7262,10 +7262,10 @@ function CCAgentSessionContent({
                   writableDirs={session?.writableDirs ?? []}
                   writableGrantScope={sessionId}
                   onWritableDirsChange={
-                    writableDirsChangeSupported && !pluginEngineTask ? handleWritableDirsChange : undefined
+                    writableDirsChangeSupported ? handleWritableDirsChange : undefined
                   }
                   onWritableDirRemove={
-                    writableDirsChangeSupported && !pluginEngineTask ? handleWritableDirRemove : undefined
+                    writableDirsChangeSupported ? handleWritableDirRemove : undefined
                   }
                   compactToolbar={compactToolbar}
                   // doc rail (isCompactRail) 宽度受限 + 拖宽上限,工具行需要把字号/控件压一档。

@@ -396,6 +396,7 @@
       "sortHeading": "Orden de tareas",
       "projectOrderHeading": "Orden de proyectos",
       "projectOrderManualTip": "Mantén presionada la fila de un proyecto y arrástrala para reordenarla. Las tareas de cada proyecto siguen el orden de arriba.",
+      "pinnedOrderManualTip": "Mantén presionada una tarea fijada y arrástrala para reordenarla.",
       "statusHeading": "Estado de la tarea",
       "showDeviceTasks": "Mostrar tareas",
       "openDevice": "Abrir",
