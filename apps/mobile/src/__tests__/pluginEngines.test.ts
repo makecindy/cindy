@@ -218,6 +218,22 @@ describe('the pending engine switch the computer projects', () => {
       .toEqual({ agentSwitchIntent: null, pluginEngineSwitchIntent: null });
   });
 
+  // PR #13360, unit: the public patch used by history and push must preserve
+  // progress for the plugin picker too. Existing location cases never carried
+  // preparation fields; one preparing -> failed patch covers the dropped state.
+  it('retains preparation progress and failure details in the plugin selection patch', () => {
+    const choice = { targetAgentKind: 'acp', model: 'deepseek-v4', providerId: DSH };
+    for (const preparation of ['preparing', 'failed'] as const) {
+      const { agentSwitchIntent, pluginEngineSwitchIntent } = sessionAgentSwitchIntentPatch({
+        ...choice, preparation, ...(preparation === 'failed' ? { preparationError: 'target unavailable' } : {}),
+        resumeFallbackRecovery: { handoff: 'host-only' },
+      });
+      expect(agentSwitchIntent).toBeNull();
+      expect(pluginEngineSwitchIntent).toEqual({ providerId: DSH, model: choice.model, preparation,
+        ...(preparation === 'failed' ? { preparationError: 'target unavailable' } : {}) });
+    }
+  });
+
   // The store receives a scoped ACP intent over the existing task patch. The picker must
   // distinguish another computer from an explicit return home or a legacy omitted device.
   it.each([

@@ -56,9 +56,9 @@ export function captureMessageDispatchRoute(actual: MessageRoute, selected?: Mes
     ? { ...snapshot, ...(switchError ? { switchError } : {}) } : { ...actual };
 }
 
-export function messageDispatchRouteLabel(route: MessageRoute): string {
+export function messageDispatchRouteLabel(route: MessageRoute, pluginEngineName = 'ACP'): string {
   const agent = route.agentKind === 'claude-code' ? 'Claude Code' : route.agentKind === 'codex' ? 'Codex'
-    : route.agentKind === 'pi' ? 'Pi' : route.providerId;
+    : route.agentKind === 'pi' ? 'Pi' : pluginEngineName;
   return [agent, route.providerId, route.model].filter(Boolean).join(' · ');
 }
 

@@ -1438,13 +1438,14 @@ export function UserMessage({
         {dispatchRoute && messageDispatchRouteMismatch(dispatchRoute) && dispatchRoute.selected ? (
           <ErrorNotice
             message={t('newChat.modelSelector.preparation.usingPrevious', {
-              actual: messageDispatchRouteLabel(dispatchRoute), target: messageDispatchRouteLabel(dispatchRoute.selected),
+              actual: messageDispatchRouteLabel(dispatchRoute, t('newChat.pluginEngines.genericName')),
+              target: messageDispatchRouteLabel(dispatchRoute.selected, t('newChat.pluginEngines.genericName')),
             })}
             details={dispatchRoute.switchError}
           />
         ) : dispatchRoute && (
           <span className="max-w-full break-words text-12 text-[var(--text-secondary)]" title={dispatchRoute.agentDeviceId ?? undefined}>
-            {messageDispatchRouteLabel(dispatchRoute)}
+            {messageDispatchRouteLabel(dispatchRoute, t('newChat.pluginEngines.genericName'))}
           </span>
         )}
         {sharedAuthorName && (

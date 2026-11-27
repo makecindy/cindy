@@ -3259,9 +3259,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       }),
     ];
   }, [pluginEngines.engines, remotePluginEngines.engines, remoteAgentCatalogs]);
-  const composerRuntimeLabel = agentSwitchIntent
-    ? `${t(`session.screen.modelSwitchPreparation.${agentSwitchIntent.preparation ?? 'pending'}`)} · ${composerTargetLabel}`
-    : composerTargetLabel;
   // 插件引擎(插件引擎任务自己的引擎，或下一条消息要切到的引擎)：药丸写引擎的模型(+ 思考深度)，
   // 图标用插件自己的；待切到时与内置引擎意图一样写「引擎 · 模型」。
   const composerPluginEngine = pluginEngineSwitchIntent
@@ -3299,7 +3296,13 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       iconDataUrl: engine?.iconDataUrl ?? null,
     };
   })();
-  // 按钮省去时机前缀，读屏仍说明待生效选择，避免被误认为当前运行配置。
+  const composerPreparationIntent = pluginEngineSwitchIntent ?? agentSwitchIntent;
+  const composerPreparationLabel = composerPreparationIntent
+    ? t(`session.screen.modelSwitchPreparation.${composerPreparationIntent.preparation ?? 'pending'}`)
+    : '';
+  const composerRuntimeLabel = [composerPreparationLabel, composerPluginEngineLabel?.label ?? composerTargetLabel]
+    .filter(Boolean).join(' · ');
+  // 插件和内置引擎使用同一准备状态，读屏仍补充待生效选择的时机与目标。
   const composerRuntimeAccessibilitySummary = composerPluginEngineLabel
     ? composerPluginEngineLabel.accessibility
     : composerRuntimeSummary && agentSwitchIntent
@@ -3307,15 +3310,17 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         agent: mobileAgentLabel(agentSwitchIntent.targetAgentKind),
         model: composerRuntimeSummary.modelSummary,
       })
-    : composerRuntimeLabel;
+    : composerTargetLabel;
   // 下一条消息时 Agent 所在的另一台电脑名(药丸带远程标记,读屏一并读出);目录在缺名时以 deviceId
   // 兜底,那种情况不读出来。
   const nextAgentDeviceName = nextAgentDeviceId
     ? (remoteAgentCatalogs.find((item) => item.deviceId === nextAgentDeviceId)?.name ?? null)
     : null;
-  const composerRuntimeAccessibilityLabel = nextAgentDeviceName && nextAgentDeviceName !== nextAgentDeviceId
+  const composerRuntimeAccessibilityTarget = nextAgentDeviceName && nextAgentDeviceName !== nextAgentDeviceId
     ? [composerRuntimeAccessibilitySummary, nextAgentDeviceName].filter(Boolean).join(', ')
     : composerRuntimeAccessibilitySummary;
+  const composerRuntimeAccessibilityLabel = [composerPreparationLabel, composerRuntimeAccessibilityTarget]
+    .filter(Boolean).join(' · ');
   // 选择器说明里使用被控电脑的展示名，缺名时不显示设备 ID。
   const controlledComputerName = (() => {
     const name = currentSession?.deviceLinkDeviceName?.trim();
@@ -7889,7 +7894,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             disabled={controlBusy || !canConfigureSessionModel}
             accessibilityLabel={composerRuntimeAccessibilityLabel}
             fastOn={composerPluginEngineLabel ? false : composerPillFastOn}
-            label={composerPluginEngineLabel?.label ?? composerRuntimeLabel}
+            label={composerRuntimeLabel}
             leading={composerPluginEngineLabel ? (
               <PluginEngineMark
                 iconDataUrl={composerPluginEngineLabel.iconDataUrl}

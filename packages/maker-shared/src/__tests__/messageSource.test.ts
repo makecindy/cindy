@@ -17,12 +17,19 @@ import {
   splitPluginMessage,
   readMessageDispatchRoute,
   messageDispatchRouteMismatch,
+  messageDispatchRouteLabel,
 } from '../messageSource';
 
 // Unit: history reads the executor's message snapshot, including billing source.
 // Previous source labels described the sender, not the route that ran the input.
 describe('dispatch route snapshots', () => {
   const actual = { agentKind: 'pi' as const, model: 'same-model', providerId: 'xd', agentDeviceId: null };
+  // PR #13360 review, unit: history uses this formatter on both clients. ACP
+  // previously repeated the private engine id as both its name and provider.
+  it('labels a plugin route with a readable name and one copy of its source', () => {
+    const route = { ...actual, agentKind: 'acp' as const, providerId: 'acp-plugin:fixture:engine' };
+    expect(messageDispatchRouteLabel(route, '插件引擎')).toBe('插件引擎 · acp-plugin:fixture:engine · same-model');
+  });
   it.each(['agentKind', 'model', 'providerId', 'agentDeviceId'] as const)('detects a different %s even when the other axes match', axis => {
     const selected = { ...actual, [axis]: axis === 'agentKind' ? 'codex' : 'different' };
     const snapshot = readMessageDispatchRoute({ dispatchRoute: { ...actual, selected, switchError: 'target failed' } });

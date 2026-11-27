@@ -4146,7 +4146,8 @@ test('switching to a plugin engine is unsupported on the Host', async t => {
 test('model change at send: an engine pick that cannot land lets the send go on, and lands on a later send', { timeout: 30_000 }, async t => {
   const r = await modelChangeRuntime(t);
   await r.createTask('cross');
-  const picked = await r.selection.switchAgent({ sessionId: 'cross', targetAgentKind: 'codex', model: 'gpt-x', providerId: 'prov-a' });
+  r.views.current = [...r.views.current, { ...switchViews('codex')[0], id: 'prov-b', models: { codex: [switchModel('gpt-x')] } }];
+  const picked = await r.selection.switchAgent({ sessionId: 'cross', targetAgentKind: 'codex', model: 'gpt-x', providerId: 'prov-b' });
   assert.equal(picked.deferred, true, 'an engine pick waits for the send');
   const views = r.views.current;
   // The picked route is unusable when the send lands the pick: its copy is disabled. The task's current
@@ -4161,6 +4162,19 @@ test('model change at send: an engine pick that cannot land lets the send go on,
   assert.equal(r.row('cross').agent_kind, 'cc');
   assert.equal(r.h.queue.projection('cross').error ?? null, null, 'no error for the send');
   assert.equal(r.selection.projectIntent('cross')?.targetAgentKind, 'codex', 'the pick stays for the next send');
+  // PR #13360, DB tier: the existing send-time fixture reaches the real Host
+  // assembly. Previously it proved fallback delivery, but not what history tells
+  // either client about that delivery. One failed pick followed by success is
+  // enough to expose missing assembly and attribution rewritten by later picks.
+  const routes = () => r.db.db.prepare("SELECT agent_meta FROM messages WHERE session_id = ? AND role = 'user' ORDER BY rowid")
+    .all('cross').map(row => JSON.parse(row.agent_meta ?? '{}').dispatchRoute);
+  const firstRoute = routes()[0];
+  assert.deepEqual(firstRoute && { ...firstRoute, switchError: undefined }, {
+    agentKind: 'claude-code', model: 'big', providerId: 'prov-a', agentDeviceId: null,
+    selected: { agentKind: 'codex', model: 'gpt-x', providerId: 'prov-b', agentDeviceId: null },
+    switchError: undefined,
+  });
+  assert.ok(firstRoute.switchError, 'the failed preparation reason stays with this input');
   first.emit({ type: 'done', data: {}, sessionTurnGeneration: first.generation, sessionInstanceId: first.instanceId });
   await waitFor(() => !r.h.queue.projection('cross').active);
   r.views.current = views;
@@ -4169,9 +4183,12 @@ test('model change at send: an engine pick that cannot land lets the send go on,
   const next = r.h.maker.sessions.get('cross');
   assert.equal(next.agentKind, 'codex', 'the next send lands the engine pick');
   assert.equal(next.options.model, 'gpt-x');
+  assert.equal(next.options.providerId, 'prov-b');
   assert.equal(r.row('cross').agent_kind, 'codex');
   assert.equal(r.selection.projectIntent('cross') ?? null, null);
   assert.equal(r.userRows('cross').length, 2);
+  assert.deepEqual(routes()[0], firstRoute, 'later successful selection does not change the first input');
+  assert.deepEqual(routes()[1], { agentKind: 'codex', model: 'gpt-x', providerId: 'prov-b', agentDeviceId: null });
 });
 
 // The runtime start admission (register.ts bootstrapSession's admitLocalRoute, shared as

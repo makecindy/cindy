@@ -82,6 +82,8 @@ export interface MobilePluginEngine {
 
 /** 已建任务下一条消息要切到的插件引擎(desktop 意图投影 targetAgentKind = 'acp')。 */
 export interface MobilePluginEngineSwitchIntent {
+  preparation?: 'preparing' | 'failed';
+  preparationError?: string;
   providerId: string;
   model: string;
   effort?: string;
@@ -393,6 +395,8 @@ export function normalizePluginEngineSwitchIntent(value: unknown): MobilePluginE
   return {
     providerId: item.providerId,
     model: item.model,
+    ...(item.preparation === 'preparing' || item.preparation === 'failed' ? { preparation: item.preparation } : {}),
+    ...(typeof item.preparationError === 'string' ? { preparationError: item.preparationError.slice(0, 4000) } : {}),
     ...(typeof item.effort === 'string' && item.effort ? { effort: item.effort } : {}),
     ...(agentDeviceId !== undefined ? { agentDeviceId } : {}),
   };

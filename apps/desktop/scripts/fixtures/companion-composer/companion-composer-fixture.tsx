@@ -153,7 +153,8 @@ function Fixture() {
           inputWidth="100%" composerHeaderRef={setHeaderTarget} />}
         {ctx.data.switchPreparation === 'failed' && <UserMessage workingDir="/fixture" content="Continue the task"
           pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} allowPrivilegedLinks={false}
-          dispatchRoute={{ agentKind: 'pi', model: 'fixture-chat', providerId: 'xd', agentDeviceId: null,
+          dispatchRoute={{ agentKind: ctx.data.dispatchPluginSource ? 'acp' : 'pi', model: 'fixture-chat',
+            providerId: ctx.data.dispatchPluginSource ? 'acp-plugin:fixture:engine' : 'xd', agentDeviceId: null,
             selected: { agentKind: 'codex', model: 'fixture-chat', providerId: 'openai', agentDeviceId: null },
             switchError: '[DEVICE_LINK_TIMEOUT] Target preparation timed out' }} />}
         {ctx.data.headerStack && <div data-header-goal><GoalIndicator sessionId="fixture-companion" /></div>}
