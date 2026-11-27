@@ -23500,7 +23500,10 @@
       "mergedLabel_one": "{{name}} · rota ({{count}} fonte)",
       "mergedLabel_other": "{{name}} · rota ({{count}} fontes)",
       "routeDecides": "A rota “{{name}}” decide qual fonte esta tarefa usa",
-      "quotaOf": "Cota: {{name}}"
+      "quotaOf": "Cota: {{name}}",
+      "managedBy": "Gerenciado por “{{name}}”",
+      "detach": "Desvincular",
+      "detached": "Desvinculado do roteamento inteligente. Mantendo o modelo atual."
     },
     "why": {
       "expiringQuota": "Restam {{left}}% da cota, que é redefinida {{reset}}, por isso vai primeiro",
@@ -23538,7 +23541,7 @@
       "newRoute": "Nova rota",
       "newRouteName": "Nova rota",
       "routesEmpty": "Ainda não há rotas. Crie uma e adicione algumas fontes.",
-      "scopeNote": "O roteamento inteligente se aplica às tarefas deste computador. Uma nova tarefa escolhe uma fonte ao começar. Escolher uma rota em uma tarefa já em andamento troca uma vez, na hora; depois ela não troca sozinha.",
+      "scopeNote": "O roteamento inteligente gerencia continuamente as tarefas neste computador e nas entradas compatíveis. Depois de escolhido — ao iniciar ou no meio da tarefa — ele verifica disponibilidade e cota antes de cada turno, muda para uma fonte com visão quando há imagens, protege o cache ativo e faz fallback em caso de falha até você desvincular ou escolher um modelo específico.",
       "back": "Voltar ao roteamento inteligente",
       "name": "Nome",
       "nameHint": "Aparece no seletor de modelos.",
@@ -23674,6 +23677,11 @@
       "deviceDefaultReadOnly": "Atualize esse computador para mudar aqui o modelo padrão dele.",
       "deviceUnavailable": "Não é possível ler agora as configurações de parceiros desse computador. Verifique se ele está online e abra de novo.",
       "deviceLoading": "Lendo as configurações desse computador…"
+    },
+    "turnSwitch": {
+      "preflightUnavailable": "Fonte atual indisponível ou sem cota; trocada antes de enviar",
+      "imageInput": "A mensagem tem imagens; trocado para uma fonte com visão",
+      "cacheExpired": "Janela de cache expirada; fonte reescolhida pela estratégia da rota"
     }
   },
   "projectSettings": {

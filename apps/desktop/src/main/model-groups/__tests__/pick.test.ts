@@ -36,6 +36,7 @@ import {
 } from '../../../shared/modelGroups.js';
 import { pickModelGroupCandidate, type ModelGroupCandidateFacts } from '../pick.js';
 import { createModelGroupResolver, MODEL_GROUP_REMOTE_WAIT_MS, modelGroupQuotaKey } from '../resolver.js';
+import { createSshModelGroupSupport } from '../sshFilter.js';
 
 const NOW = Date.UTC(2026, 10, 11, 4);
 const HOUR = 3_600_000;
@@ -667,4 +668,47 @@ it('asks for the quota readings on hand only when the request is for display', a
   await resolver.resolve({ selection, dryRun: true });
   await resolver.resolve({ selection });
   expect(quotaWindows.mock.calls.map(([options]) => options?.cached === true)).toEqual([true, false, false]);
+});
+
+it('resolves SSH native Codex candidates from the SSH host catalog without local openai login or local codex install', async () => {
+  const sshCodexProvider = {
+    id: 'openai',
+    name: 'Codex',
+    source: 'builtin',
+    connected: true,
+    agents: ['codex'],
+    routing: { codex: { upstream: 'https://chatgpt.com/backend-api/codex', authStrategy: 'oauth-passthrough' } },
+    models: { codex: [{ id: 'gpt-5.5', name: 'GPT-5.5', mode: 'chat', efforts: ['high'] }] },
+  } as unknown as ProviderView;
+  const groups = {
+    routes: [{
+      id: 'r-ssh',
+      name: 'SSH Route',
+      strategy: 'order',
+      effort: 'high',
+      candidates: [{ agentKind: 'codex', providerId: 'openai', model: 'gpt-5.5' }],
+    }],
+  } as ModelGroupsConfig;
+  const { sshFilter, sshCodexViews } = createSshModelGroupSupport({
+    listSshCodexProviders: async (hostId) => (hostId === 'ssh-1' ? [sshCodexProvider] : []),
+    now: () => NOW,
+  });
+  const resolver = createModelGroupResolver({
+    config: () => groups,
+    views: async () => [],
+    agents: () => [],
+    harnessInstalled: async () => false,
+    quotaWindows: async () => new Map(),
+    scope: () => 'owner',
+    now: () => NOW,
+    sshFilter,
+    sshCodexViews,
+  });
+  const routed = await resolver.resolve({ selection: { type: 'route', id: 'r-ssh' }, sshHostId: 'ssh-1' });
+  expect(routed).toMatchObject({
+    outcome: 'routed',
+    route: { agentKind: 'codex', providerId: 'openai', model: 'gpt-5.5', effort: 'high' },
+  });
+  const missing = await resolver.resolve({ selection: { type: 'route', id: 'r-ssh' }, sshHostId: 'ssh-empty' });
+  expect(missing).toMatchObject({ outcome: 'unavailable' });
 });

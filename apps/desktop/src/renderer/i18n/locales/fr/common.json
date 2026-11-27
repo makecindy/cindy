@@ -23499,7 +23499,10 @@
       "mergedLabel_one": "{{name}} · route ({{count}} source)",
       "mergedLabel_other": "{{name}} · route ({{count}} sources)",
       "routeDecides": "La route « {{name}} » décide de la source utilisée par cette tâche",
-      "quotaOf": "Quota : {{name}}"
+      "quotaOf": "Quota : {{name}}",
+      "managedBy": "Géré par « {{name}} »",
+      "detach": "Détacher",
+      "detached": "Détaché du routage intelligent. Le modèle actuel est conservé."
     },
     "why": {
       "expiringQuota": "Il lui reste {{left}} % de quota, réinitialisé le {{reset}} : elle passe en premier",
@@ -23537,7 +23540,7 @@
       "newRoute": "Nouvelle route",
       "newRouteName": "Nouvelle route",
       "routesEmpty": "Aucune route pour l'instant. Créez-en une et ajoutez-y quelques sources.",
-      "scopeNote": "Le routage intelligent s'applique aux tâches de cet ordinateur. Une nouvelle tâche choisit une source au démarrage. En choisir une dans une tâche en cours la bascule une fois, tout de suite ; elle ne change plus d'elle-même ensuite.",
+      "scopeNote": "Le routage intelligent gère en continu les tâches sur cet ordinateur et ses points d’entrée compatibles. Une fois sélectionné — au démarrage ou en cours de tâche — il vérifie la disponibilité et le quota avant chaque tour, bascule vers une source vision pour les images, préserve le cache actif et prend le relais en cas d’erreur jusqu’à ce que vous le détachiez ou choisissiez un modèle précis.",
       "back": "Retour au routage intelligent",
       "name": "Nom",
       "nameHint": "Affiché dans le sélecteur de modèles.",
@@ -23673,6 +23676,11 @@
       "deviceDefaultReadOnly": "Mettez cet ordinateur à jour pour modifier ici son modèle par défaut.",
       "deviceUnavailable": "Impossible de lire les réglages des compagnons de cet ordinateur pour le moment. Vérifiez qu’il est en ligne, puis rouvrez.",
       "deviceLoading": "Lecture des réglages de cet ordinateur…"
+    },
+    "turnSwitch": {
+      "preflightUnavailable": "Source actuelle indisponible ou quota épuisé ; bascule avant envoi",
+      "imageInput": "Le message contient des images ; bascule vers une source compatible vision",
+      "cacheExpired": "Fenêtre de cache expirée ; source réévaluée selon la stratégie de la route"
     }
   },
   "projectSettings": {

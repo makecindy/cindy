@@ -23186,7 +23186,10 @@
       "chooseUnavailable": "「{{name}}」今無可用之源，未取之。",
       "mergedLabel_other": "{{name}} · 路（{{count}} 源）",
       "routeDecides": "此番用何源，由路「{{name}}」定之",
-      "quotaOf": "額度：{{name}}"
+      "quotaOf": "額度：{{name}}",
+      "managedBy": "今由「{{name}}」常管",
+      "detach": "解管",
+      "detached": "已解智慧路由常管，仍用今之模型"
     },
     "why": {
       "expiringQuota": "限額尚餘 {{left}}%，{{reset}} 重設，故先用之",
@@ -23224,7 +23227,7 @@
       "newRoute": "立新路",
       "newRouteName": "新路",
       "routesEmpty": "尚無路。立其一，納數源於中。",
-      "scopeNote": "智慧路由用於此機之差事：起新差事時定一源；於行中之差事擇之，即時易一次，此後不自易。",
+      "scopeNote": "智慧路由用於此機及諸入口之差事：起新差事或行中擇路後，皆常管此差事——發前察其可用與餘量、夾圖自易觀圖之源、護提示快取且遇障自替，迄解管或手易他模型止。",
       "back": "歸智慧路由",
       "name": "名",
       "nameHint": "擇模型時顯此名。",
@@ -23352,6 +23355,11 @@
       "deviceDefaultReadOnly": "彼機更新後，方可於此改其預設模型。",
       "deviceUnavailable": "今不能讀彼機夥伴之設。確其在線後再開。",
       "deviceLoading": "方讀彼機之設…"
+    },
+    "turnSwitch": {
+      "preflightUnavailable": "今源暫不可用或額已滿，發前自易他源",
+      "imageInput": "此輪夾圖，自易善觀圖之源",
+      "cacheExpired": "快取既逾，依路法重擇其源"
     }
   },
   "projectSettings": {
