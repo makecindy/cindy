@@ -5,6 +5,7 @@ import {
   Alert,
   BackHandler,
   Image,
+  Keyboard,
   Pressable,
   Platform,
   RefreshControl,
@@ -244,6 +245,9 @@ function PluginDirectory() {
     isOnline: list.isOnline,
     installedDeviceId: deviceId,
     query,
+    // Both platforms (reshoots m1, m2 Android; m2b iOS): the search field lets go of focus as an install starts, so the
+    // closed consent sheet gives it nothing to focus again. The typed search stays; tapping the field focuses it as before.
+    onInstallStart: () => { searchBar.current?.blur(); Keyboard.dismiss(); },
   });
   // Shown unavailable while anyone holds this computer's slot, this plugin has a pending check, or this detail's own
   // operation is still open.

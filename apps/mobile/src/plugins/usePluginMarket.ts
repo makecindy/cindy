@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { AppState, Keyboard, Platform } from "react-native";
+import { AppState } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useAuth } from "@/auth/AuthContext";
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from "@/auth/authOwnerGeneration";
@@ -84,6 +84,12 @@ export interface UsePluginMarketOptions {
   /** Installed-tab computer filter; empty means all computers. */
   installedDeviceId: string;
   query: string;
+  /**
+   * An install starts (it took the computer's slot). The page lets go of its search field here (reshoots m1, m2, m2b): the
+   * consent sheet is a window of its own, and when it closes the system gives focus back to the field under it, so the
+   * keyboard came up over the result on both platforms.
+   */
+  onInstallStart?: () => void;
 }
 
 function useDebounced(value: string, delay: number) {
@@ -108,6 +114,8 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
   const owner = useRef(getMobileAuthOwner()).current;
   const storageKey = `cindy.pluginMarketDevice.v1.${owner.accountKey}`;
   const { targets, isOnline, installedDeviceId, visible, focused } = options;
+  const onInstallStart = useRef(options.onInstallStart);
+  onInstallStart.current = options.onInstallStart;
 
   // ---- Install attempt (declared first: it pins the market to the installing computer).
   // An attempt still holding its computer's slot outlives this hook (maintainer review 17:43): the plugins page mounted
@@ -494,11 +502,9 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     const token = slot.tryAcquire("market-install", { name: item.name, deviceId: target.deviceId, deviceName: target.deviceName,
       pluginId: item.pluginId, ghostId: item.ghostId });
     if (!token) return;
-    // Android (reshoots 2026-11-26): the consent sheet is a window of its own, and when it closes the system gives focus
-    // back to the search field under it, so the keyboard came up over the result. The field lets go of focus as the
-    // install starts (the search typed stays; tapping the field focuses it again as before). Installed-detail updates
-    // do not come through here; iOS's native search bar is not affected.
-    if (Platform.OS === "android") Keyboard.dismiss();
+    // The page's search field lets go of focus as the install starts (see `onInstallStart`). Installed-detail updates do
+    // not come through here.
+    onInstallStart.current?.();
     setRowErrors(({ [errorKey(target.deviceId, item.pluginId)]: _removed, ...rest }) => rest);
     const attempt = { id: ++nextAttemptId, token, target, item, detail: known, started: false, confirmed: false };
     installRef.current = attempt;
