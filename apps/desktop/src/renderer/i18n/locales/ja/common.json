@@ -10344,6 +10344,7 @@
     "sessionCostLabel": "セッション {{cost}}",
     "codex": {
       "waiting": "Codex --",
+      "openAiApiLabel": "OpenAI API",
       "noUsageLabel": "使用量なし",
       "noUsageDetail": "このセッションにはまだ使用量がありません。",
       "unavailableLabel": "使用量を取得できません",

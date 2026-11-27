@@ -10344,6 +10344,7 @@
     "sessionCostLabel": "本任務 {{cost}}",
     "codex": {
       "waiting": "Codex --",
+      "openAiApiLabel": "OpenAI API",
       "noUsageLabel": "暫無用量",
       "noUsageDetail": "本任務尚未產生用量。",
       "unavailableLabel": "用量暫不可用",
