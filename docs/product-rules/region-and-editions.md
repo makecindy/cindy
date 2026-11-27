@@ -102,13 +102,15 @@ Cindy 是一个面向全球的产品。中国大陆版是它为当地法规、�
   只有手机会因此切换登录态所属区域（重启后按保存的区域恢复），安装包的更新通道与构建身份
   不随之改变；电脑登录页不出码，电脑不会因扫码切换版本。
 
-### 2.5 对外英文口径
+### 2.5 对外口径（版本叫法）
 
-- 英文使用 `Global` 与 `Mainland China`。
-- 禁用 `overseas`、`international edition`、`domestic`、`China version` 等表述——
-  它们都在暗示存在一个本土主场版本。
-- 中文口径保持「国际版」与「中国大陆版」不变（这两个词在中文语境里没有对应的
-  贬义联想，且已在多处落地）。
+- 中文叫「国际版」与「中国版」，不说「中国大陆版」（2026-11-27 用户决策）。
+- 英文使用 `Global` 与 `China`（如 `the Global edition` / `the China edition`）；其他语言
+  同样不加「大陆 / mainland / continental / 本土」一类限定。
+- 禁用 `overseas`、`international edition`、`domestic` 等表述——它们都在暗示存在一个
+  本土主场版本。
+- 本条只管「版本」叫法。企业服务所在区域的名称（术语表 `中国大陆区`）描述的是服务区域，
+  不是安装的版本，不在本条范围。存量的「中国大陆版 / Mainland China edition」文案见 §4。
 
 与术语表的分工：`i18n/glossary.json` 的机制约束的是**同一英文源词的各语言译法**，
 它无法表达"英文该选哪个源词"——`overseas` / `international edition` 与 `Global`
@@ -137,7 +139,7 @@ Cindy 是一个面向全球的产品。中国大陆版是它为当地法规、�
 2. 新增的标识符、文件名、产物名、目录名中，无后缀的那个是否归 Global？两版共用的
    展示名不受此约束（§2.1 例外）。
 3. 新增的界面区分，是否只标注了中国大陆版，而没有给 Global 加标签？
-4. 新增的英文文案是否使用 `Global` / `Mainland China`，而不是 §2.5 的禁用词？若该
+4. 新增文案的版本叫法是否为「国际版 / 中国版」、英文 `Global` / `China`，而不是「中国大陆版」或 §2.5 的禁用词？若该
    文案进入 UI，是否已按 `i18n/GLOSSARY.md` 流程登记译法？
 5. 新接入的外部服务，在 Global 构建里是否有合适的对应形态（§2.6）？
 6. 是否引入了让用户自行选择版本或地区的入口（§2.4 禁止）？跨区域登录是否只发生在
@@ -158,7 +160,8 @@ Cindy 是一个面向全球的产品。中国大陆版是它为当地法规、�
 | --- | --- | --- | --- |
 | 日志上传编号 | 2026-10-26 用户选择所有区域均带前缀：`GLOBAL-` / `CN-` / 内部 `DEV-`，用于按编号定位 SLS 查询区域；见 [PR #7284](https://github.com/makecindy/cindy/pull/7284) 与 [#7324](https://github.com/makecindy/cindy/issues/7324) | §2.1 明示的用途限定例外，§2.3 按检索命名空间处理 | 有意保留，仅适用于 `uploadCode` 的生成、显示、复制和上报；不改变产品命名或 Global 区域徽标规则 |
 | 登录页区域徽标 | 原设计规范规定国际区在标题旁显示红色 `Global` pill、中国大陆版不标。规范原散落三处：`docs/design-rules/DESIGN.md` §16.1、`docs/design-rules/figma-component-spec.md` §4.10、`docs/design-rules/token-decision-table.md`（§3 的 `#df0c27` 语义与 `login-global-badge-bg` token）；其中 `figma-component-spec.md` 已于 2026-10-23 随该文档移除，不再是设计源。落码在 `apps/desktop/src/renderer/components/login/LoginControls.tsx` 的 `LoginTitleBlock`（`LoginPage.tsx` 只负责传入） | §2.3 | **正在收敛**：PR #554 已将徽标翻转为 global 不标、`cn` / `dev` 标注，并同步修订 `DESIGN.md`。但它只改了现存两份设计源中的一份——`token-decision-table.md` 仍规定 `Global` pill 可见。**本行的删除条件是实现与剩余设计源（`DESIGN.md`、`token-decision-table.md`）全部收敛，而不是 #554 单独合并** |
-| 侧栏与移动端的区域标签 | 桌面侧栏 `apps/desktop/src/renderer/components/sidebar/UserInfoSection.tsx` 的 **§2.3 部分已收敛**：区域代号统一走 `apps/desktop/src/shared/regionCode.ts` 的 `CINDY_REGION_CODE`（cn → `CN`、dev → `Dev`、global 为 `null` 不标），Global 构建的版本行只剩版本号。**§2.5 部分未收敛**：cn 构建仍渲染代号 `CN`，不是本文规定的 `Mainland China`。`apps/mobile/src/settings/mobileSettings.ts:124` 的 debug 项两条都未收敛，仍输出 `Global` / `CN` | §2.5（桌面）；§2.3、§2.5（移动端） | 属于调试 / 身份自查信息而非产品叙事表达，收敛优先级低于登录页。**`CN` → `Mainland China` 是待产品裁决项**，不是单纯落码：术语表把 `CN` / `Dev` 登记为 `proposed`（`i18n/GLOSSARY.md` region-code-cn / region-code-dev），且 `DESIGN.md` §16.3 现规定徽标值就是四语同文的区域代号——改判要同时动设计规范、术语表与三条消费链路（登录页徽标、侧栏版本行、issue 正文）。本行的删除条件是移动端补上 §2.3、且 `CN` 措辞冲突被裁决或重新归类 |
+| 侧栏与移动端的区域标签 | 桌面侧栏 `apps/desktop/src/renderer/components/sidebar/UserInfoSection.tsx` 的 **§2.3 部分已收敛**：区域代号统一走 `apps/desktop/src/shared/regionCode.ts` 的 `CINDY_REGION_CODE`（cn → `CN`、dev → `Dev`、global 为 `null` 不标），Global 构建的版本行只剩版本号。**§2.5 部分未收敛**：cn 构建仍渲染代号 `CN`，不是本文规定的版本叫法（中国版 / `China`）。`apps/mobile/src/settings/mobileSettings.ts:124` 的 debug 项两条都未收敛，仍输出 `Global` / `CN` | §2.5（桌面）；§2.3、§2.5（移动端） | 属于调试 / 身份自查信息而非产品叙事表达，收敛优先级低于登录页。**`CN` → 版本叫法是待产品裁决项**，不是单纯落码：术语表把 `CN` / `Dev` 登记为 `proposed`（`i18n/GLOSSARY.md` region-code-cn / region-code-dev），且 `DESIGN.md` §16.3 现规定徽标值就是四语同文的区域代号——改判要同时动设计规范、术语表与三条消费链路（登录页徽标、侧栏版本行、issue 正文）。本行的删除条件是移动端补上 §2.3、且 `CN` 措辞冲突被裁决或重新归类 |
+| 版本叫法存量文案 | 2026-11-27 前落地的用户可见文案仍写「中国大陆版」/「Mainland China edition」：礼品卡 `wrongRegionCn`（桌面 `common.json`、手机 `giftCard.json`）、帮助知识 `apps/desktop/help-knowledge/mobile-app.md`、`shared-tasks.md` | §2.5 | 需同步各语言译文与帮助知识生成物，按功能逐处改；新增文案不得沿用 |
 | 端点清单文件名 | `config/endpoint.json` 是中国大陆版，`config/endpoint.global.json` 才是 Global | §2.1 | 改名牵动构建脚本与发布链路 |
 | Electron userData 目录名 | `cn` 为 `Cindy`、`global` 为 `CindyGlobal` | §2.1 | 已发布客户端的数据目录不能直接改名，需要迁移方案 |
 | Mobile 构建的 region 缺省 | `apps/mobile/app.config.js` 的 `resolveRegion()` 与 `scripts/shared/client-endpoint-build-env.cjs` 的 `resolveRegion()` 在未注入 `EXPO_PUBLIC_CINDY_AUTH_REGION` 时缺省为 `cn` | §2.2 | **有意保留的兼容基线**：这是 mobile 原生指纹基线，翻转默认值即触发一次全量冷更（`app.config.js` 顶部注释已写明）。日常开发脚本都显式注入 `global`，该缺省只在无 env 时兜底。收敛必须并入一次计划内冷更，并按 `docs/dev-rules/mobile-development.md` 的「冷更边界」在 PR 中写明冷更原因、存量装机影响与发版节奏 |
