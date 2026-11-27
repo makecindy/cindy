@@ -8,6 +8,8 @@
 import { useEffect, useId, useState } from 'react';
 import { AtSign, ArrowUpRight, ChevronRight, MessagesSquare, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { Button } from '@/components/ui/button';
+import { ErrorNotice } from '@/components/ui/error-notice';
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover';
 import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
@@ -67,7 +69,7 @@ function MentionRow({ entry, onLocate }: { entry: GroupMaskMention; onLocate: ()
   );
 }
 
-export function BotGroupThreadHint({ threads, openRootId, onOpen, onOpenList, mentions = [], onLocateMention, onReadMentions, saving = false, suppressed = false }: {
+export function BotGroupThreadHint({ threads, openRootId, onOpen, onOpenList, mentions = [], onLocateMention, onReadMentions, onRetryMentionRead, saving = false, suppressed = false }: {
   threads: readonly BotGroupThreadSummary[];
   /** The Thread open beside the chat: already being read, so it never asks for attention. */
   openRootId: string | null;
@@ -77,6 +79,7 @@ export function BotGroupThreadHint({ threads, openRootId, onOpen, onOpenList, me
   mentions?: readonly GroupMaskMention[];
   onLocateMention?: (mention: GroupMaskMention) => void;
   onReadMentions?: () => void;
+  onRetryMentionRead?: () => void;
   saving?: boolean;
   suppressed?: boolean;
 }) {
@@ -85,13 +88,16 @@ export function BotGroupThreadHint({ threads, openRootId, onOpen, onOpenList, me
   useEffect(() => { if (suppressed) setListOpen(false); }, [suppressed]);
   const [dismissed, setDismissed] = useState<ReadonlyMap<string, number>>(new Map());
   const [dismissedMentions, setDismissedMentions] = useState<ReadonlySet<string>>(new Set());
+  const [dismissedReadError, setDismissedReadError] = useState(false);
+  useEffect(() => { if (!onRetryMentionRead) setDismissedReadError(false); }, [onRetryMentionRead]);
+  const hasMentionInbox = mentions.length > 0 || !!onRetryMentionRead;
   const hinted = botGroupHintThreads(threads, openRootId);
   const newMentions = mentions.some(entry => !dismissedMentions.has(entry.messageId));
-  if ((!hinted.length && !mentions.length && !listOpen) || (!hasNews(hinted, dismissed) && !newMentions && !listOpen)) return null;
+  if (!hasNews(hinted, dismissed) && !newMentions && !(onRetryMentionRead && !dismissedReadError) && !listOpen) return null;
   const mentioned = hinted.some(thread => thread.unread.mentioned);
-  const label = mentions.length ? `${t('bots.groupChat.mask.catchup.title')} · ${mentions.length}`
+  const label = hasMentionInbox ? t('bots.groupChat.mask.catchup.title') + (mentions.length ? ` · ${mentions.length}` : '')
     : hinted.length === 1 ? t(key('hintOne')) : t(key('hintMany'), { count: hinted.length });
-  const usePopover = mentions.length > 0 || listOpen;
+  const usePopover = hasMentionInbox || listOpen;
   const open = (rootId: string, focusMessageId?: string) => {
     setListOpen(false);
     if (focusMessageId) onOpen(rootId, focusMessageId);
@@ -121,14 +127,14 @@ export function BotGroupThreadHint({ threads, openRootId, onOpen, onOpenList, me
             aria-haspopup={usePopover ? 'dialog' : undefined} aria-expanded={usePopover ? listOpen : undefined}
             onClick={handlePrimaryClick}
             className={cn('flex min-w-0 items-center gap-2 rounded-full py-1.5 pl-3 pr-1 leading-5', FOCUS)}>
-            {mentions.length ? <AtSign size={14} aria-hidden className="shrink-0 text-[var(--text-secondary)]" />
+            {hasMentionInbox ? <AtSign size={14} aria-hidden className="shrink-0 text-[var(--text-secondary)]" />
               : <MessagesSquare size={14} aria-hidden className="shrink-0 text-[var(--text-secondary)]" />}
             <UnreadDot />
             <span className="truncate">{label}</span>
-            {mentioned && !mentions.length ? <span className="shrink-0 font-medium"><span aria-hidden className="mr-1.5 font-normal text-[var(--text-tertiary)]">·</span>{t(key('hintMentioned'))}</span> : null}
+            {mentioned && !hasMentionInbox ? <span className="shrink-0 font-medium"><span aria-hidden className="mr-1.5 font-normal text-[var(--text-tertiary)]">·</span>{t(key('hintMentioned'))}</span> : null}
           </button>
           <Tip text={t(key('hintDismiss'))}>
-            <button type="button" aria-label={t(key('hintDismiss'))} onClick={() => { setDismissed(new Map([...dismissed, ...seen(hinted)])); setDismissedMentions(new Set(mentions.map(entry => entry.messageId))); setListOpen(false); }}
+            <button type="button" aria-label={t(key('hintDismiss'))} onClick={() => { setDismissed(new Map([...dismissed, ...seen(hinted)])); setDismissedMentions(new Set(mentions.map(entry => entry.messageId))); setDismissedReadError(!!onRetryMentionRead); setListOpen(false); }}
               className={cn('mr-1 flex size-6 shrink-0 items-center justify-center rounded-full text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]', FOCUS)}>
               <X size={12} aria-hidden />
             </button>
@@ -137,12 +143,15 @@ export function BotGroupThreadHint({ threads, openRootId, onOpen, onOpenList, me
       </PopoverAnchor>
       <PopoverContent side="top" align="end" sideOffset={8} aria-label={t('bots.groupChat.mask.catchup.title')}
         className="max-h-[420px] w-[380px] max-w-[calc(100vw-32px)] overflow-y-auto p-1.5">
-        {mentions.length > 0 ? <section data-testid="group-mention-list">
+        {hasMentionInbox ? <section data-testid="group-mention-list">
           <header className="flex items-center justify-between gap-3 px-2 py-1.5">
             <h3 className="text-12 font-medium text-[var(--text-tertiary)]">{t('bots.groupChat.mask.catchup.title')}</h3>
-            {onReadMentions && <button type="button" disabled={saving} onClick={onReadMentions}
+            {mentions.length > 0 && onReadMentions && <button type="button" disabled={saving || !!onRetryMentionRead} onClick={onReadMentions}
               className={cn('min-h-8 text-12 text-[var(--text-secondary)] hover:text-[var(--text-primary)] disabled:opacity-50', FOCUS)}>{t('bots.groupChat.mask.catchup.markAll')}</button>}
           </header>
+          {onRetryMentionRead && <ErrorNotice role="alert" className="mx-2 mb-2"
+            message={t('bots.groupChat.mask.catchup.markReadFailed')}
+            actions={<Button type="button" size="md" variant="secondary" disabled={saving} onClick={onRetryMentionRead}>{t('commonUi.retry')}</Button>} />}
           {mentions.map(entry => <MentionRow key={entry.messageId} entry={entry} onLocate={() => { setListOpen(false); onLocateMention?.(entry); }} />)}
         </section> : (
           <p className="px-2 py-4 text-13 text-[var(--text-secondary)]">{t('bots.groupChat.mask.catchup.empty')}</p>

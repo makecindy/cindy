@@ -1,6 +1,6 @@
 import { and, eq, isNull } from 'drizzle-orm';
 
-import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
+import { dbToMakerEngineKind } from '../../shared/agentKindConversion.js';
 import { getDbClient } from '../localDb/client/current';
 import { sessions } from '../localDb/schema';
 import { buildImDefaultRouteRecord, parseImDefaultRouteRecord } from '../im/shared/channelDefaultRoute.js';
@@ -52,7 +52,7 @@ export async function writeHookDefaultRouteRecord(sessionId: string, fingerprint
     .update(sessions)
     .set({
       imDefaultRoute: buildImDefaultRouteRecord(fingerprint, {
-        agentKind: dbToMakerAgentKind(row.agentKind),
+        agentKind: dbToMakerEngineKind(row.agentKind),
         model: row.model,
         providerId: row.providerId?.trim() || null,
         agentDeviceId: row.agentDeviceId ?? null,
