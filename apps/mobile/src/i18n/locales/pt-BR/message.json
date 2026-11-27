@@ -8,6 +8,19 @@
       "selected": "Selecionada"
     }
   },
+  "voiceCall": {
+    "title": "Chamada de voz",
+    "saved": "Registro salvo",
+    "you": "Você",
+    "companion": "Amigo",
+    "sendFailed": "Não foi possível enviar. Suas palavras foram mantidas.",
+    "handoff": {
+      "sending": "Transferindo…",
+      "accepted": "Transferido para seu amigo",
+      "failed": "Não foi possível transferir. Suas palavras foram mantidas.",
+      "completed": "Resultado recebido"
+    }
+  },
   "renderer": {
     "sourceLocalApp": "Enviado pelo aplicativo local “{{name}}”",
     "sourceLocalAppId": "ID do aplicativo: {{id}}",
@@ -185,7 +198,8 @@
     "groupSent": "Enviado de um grupo",
     "sourceGroupId": "ID do grupo: {{id}}",
     "selectText": "Selecionar texto",
-    "you": "Você"
+    "you": "Você",
+    "recentActivity": "Atividade recente"
   },
   "actions": {
     "attachmentsPrefix": "Anexos: {{names}}",
@@ -264,6 +278,8 @@
     "delete": "Excluir",
     "retry": "Tentar novamente",
     "notSent": "Não enviado",
+    "deliveryUnconfirmed": "Envio não confirmado",
+    "recheckDelivery": "Verificar novamente",
     "imagesNotUploaded_one": "{{count}} imagem não foi enviada",
     "imagesNotUploaded_other": "{{count}} imagens não foram enviadas",
     "waitingForNamedComputer": "Envio automático quando {{name}} se conectar",

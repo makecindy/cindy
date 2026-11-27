@@ -285,6 +285,8 @@ const onProviderChange = vi.fn();
 
 // #13463, unit: mounted partner settings and form picker must show a saved
 // source's disconnection even while the source still lists the saved model.
+// #13548 adds implicit routing for drafts. A matching group must not relabel
+// the same fixed partner settings as managed by that group.
 it('shows a disconnected saved buddy model until the owner restores the default', async () => {
   const originalProviders = providersRef.providers;
   const source = originalProviders[0] as ProviderView;
@@ -305,10 +307,31 @@ it('shows a disconnected saved buddy model until the owner restores the default'
     );
   }
   try {
-    window.electronAPI.modelGroups = { get: async () => MODEL_GROUPS_DEFAULTS } as typeof window.electronAPI.modelGroups;
+    const config = {
+      ...MODEL_GROUPS_DEFAULTS,
+      sourceRoutes: [{
+        id: 'auto:anthropic', name: 'Claude pool', strategy: 'expiring' as const,
+        sources: [{ providerId: source.id }, { providerId: next.id }],
+      }],
+      routes: [{
+        id: 'src:claude-opus-5', name: 'Opus 5', strategy: 'expiring' as const,
+        parent: { id: 'auto:anthropic', name: 'Claude pool' },
+        candidates: [
+          { agentKind: 'cc' as const, providerId: source.id, model: saved.model },
+          { agentKind: 'cc' as const, providerId: next.id, model: saved.model },
+        ],
+      }],
+    };
+    window.electronAPI.modelGroups = { get: async () => config } as typeof window.electronAPI.modelGroups;
+    await act(async () => { await refreshModelGroups(); });
     providersRef.providers = [source, next];
     const view = render(<Fixture />);
     expect(screen.queryByText(status)).toBeNull();
+    const pickers = view.container.querySelectorAll('button[aria-haspopup="listbox"]');
+    expect(pickers).toHaveLength(2);
+    for (const picker of pickers) {
+      expect(picker.getAttribute('title')).not.toContain('modelGroups.picker.routeDecides');
+    }
     providersRef.providers = [{ ...source, connected: false }, next];
     providersRef.loading = true;
     view.rerender(<Fixture />);
@@ -326,6 +349,8 @@ it('shows a disconnected saved buddy model until the owner restores the default'
     providersRef.providers = originalProviders;
     providersRef.loading = false;
     cleanup();
+    window.electronAPI.modelGroups = { get: async () => MODEL_GROUPS_DEFAULTS } as typeof window.electronAPI.modelGroups;
+    await act(async () => { await refreshModelGroups(); });
   }
 });
 

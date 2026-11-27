@@ -335,9 +335,9 @@ node --import tsx scripts/eval-browser-tasks.mjs --live --baseline-ref origin/ma
 完全访问）与自动审核。保留的底线只有：任务文件夹边界（也是共享／远程任务的边界）、不打扰
 用户、防冒充，以及[代输入规则](../product-rules/input-handoff.md)（主人
 填写的密码、验证码等值只交给宿主，不进模型；权限档位与自动审核不能代替它）。
-Agent 自行把后端切到「我的浏览器」的调用
+Agent 自行调用 `setBackend` 切换任意浏览器后端的动作一律
 走任务的权限审批（询问档确认、自动审核档复审、完全访问档放行，见
-`maker-host/mcp-tool-approval-policy.ts`）；用户在设置里选了「我的浏览器」不经过工具调用，也就
+`maker-host/mcp-tool-approval-policy.ts`）；用户在设置里选择浏览器后端不经过工具调用，也就
 不需要审批。Cindy 打开的标签页不设固定数量上限，闲置 10 分钟自动关闭。
 
 ## 「我的浏览器」不占用用户的页签（2026-11-06）

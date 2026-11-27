@@ -398,7 +398,13 @@
     "forkConfirmTitle": "自此另开一差事？",
     "forkConfirmDescription": "将据此处言谈之上下文，另立一独立新差事。原差事不改，此后两处之讯互不相扰。",
     "forkConfirm": "另开差事",
-    "forkCancel": "罢"
+    "forkCancel": "罢",
+    "modelSwitchPreparation": {
+      "pending": "下则消息",
+      "preparing": "正备…",
+      "failed": "切换未成",
+      "usingPrevious": "此则用 {{actual}}，{{target}} 尚未备"
+    }
   },
   "shareImage": {
     "title": "分享言谈",

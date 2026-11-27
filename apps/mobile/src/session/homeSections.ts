@@ -1,4 +1,5 @@
 import { isTeammateOwnInboxTask, taskInboxSection, taskInboxSignalsFromRank, taskSnoozeUntil, teammateInboxSection, type TaskInboxState } from '@cindy/maker-shared/live-task-priority';
+import { getSessionArchivedActivityAt } from '@cindy/maker-shared/session-activity';
 import { getMobileOfflineInboxIntent } from './offlineInboxIntents';
 import { orcaLeadSessionKey } from '@cindy/maker-shared/orca-team';
 import type { TeammateStatus } from '@cindy/maker-shared/teammate-status';
@@ -30,6 +31,7 @@ import {
 import {
   moveVisibleProjectOrder,
   normalizeManualProjectOrder,
+  reorderVisibleProjectByDropIndex,
   type HomeProjectOrder,
 } from './homeProjectOrder';
 import {
@@ -168,16 +170,34 @@ function pinnedOrderKey(item: RemoteSessionListItem): string {
   return item.session.id + '\0' + (item.session.pinnedAt ?? '');
 }
 
+function retainActivePinnedOrder(
+  order: readonly string[],
+  current: ReadonlyMap<string, string>,
+): string[] {
+  // Remove superseded generations from the visible scope. Other devices retain their slots.
+  return order.filter(key => {
+    const [taskId] = key.split('\0');
+    return !current.has(taskId) || current.get(taskId) === key;
+  });
+}
+
 export function movePinnedItem(order: readonly string[], visible: readonly RemoteSessionListItem[], id: string, direction: -1 | 1) {
   const current = new Map(visible.map(item => [item.session.id, pinnedOrderKey(item)]));
   const source = current.get(id);
   if (!source) return null;
-  // Remove superseded generations from the visible scope. Other devices retain their slots.
-  const retained = order.filter(key => {
-    const [taskId] = key.split('\0');
-    return !current.has(taskId) || current.get(taskId) === key;
-  });
-  return moveVisibleProjectOrder(retained, [...current.values()], source, direction);
+  return moveVisibleProjectOrder(retainActivePinnedOrder(order, current), [...current.values()], source, direction);
+}
+
+export function reorderPinnedItemByDropIndex(
+  order: readonly string[],
+  visible: readonly RemoteSessionListItem[],
+  id: string,
+  dropIndex: number,
+): string[] | null {
+  const current = new Map(visible.map(item => [item.session.id, pinnedOrderKey(item)]));
+  const source = current.get(id);
+  if (!source) return null;
+  return reorderVisibleProjectByDropIndex(retainActivePinnedOrder(order, current), [...current.values()], source, dropIndex);
 }
 
 export function orderedPinnedItems(items: readonly RemoteSessionListItem[], sort: HomePinnedSort, keys: readonly string[]) {
@@ -711,7 +731,13 @@ export function buildInboxHomeSections(
             : group === 'archived' && offlineIntent?.kind === 'complete'
               ? i18n.t('devices.list.menu.inbox.pendingArchiveSync')
               : row.sourceLabel;
-        groups.get(group)!.push({ ...row, key: `inbox:${task.deviceLinkDeviceId ?? ''}:${task.id}`, item,
+        const displayActivityAt = group === 'archived'
+          ? (getSessionArchivedActivityAt(task) ?? item.lastActivityAt)
+          : item.lastActivityAt;
+        const rowItem = displayActivityAt !== item.lastActivityAt
+          ? { ...item, lastActivityAt: displayActivityAt }
+          : item;
+        groups.get(group)!.push({ ...row, key: `inbox:${task.deviceLinkDeviceId ?? ''}:${task.id}`, item: rowItem,
           sourceLabel });
       }
     }

@@ -101,6 +101,11 @@ function currentMembership(): AgentNetMembership | null {
 }
 /** 装上本账号 Device Link 设备列表的读取（官方服务，设备号与平台）。 */
 export function useDeviceLinkDeviceList(read: () => Promise<readonly DeviceLinkListedDevice[] | null>): void { deviceLinkDeviceList = read; }
+/** 在异步读之前建立当前账号／网络的成员状态，避免首次结果早于延迟初始化的 resetAt 而被丢弃。 */
+export function agentNetStartDeviceLinkRead(): number {
+  currentMembership();
+  return Date.now();
+}
 /** 刚读到的官方 Device Link 设备列表（设备列表界面、上线补名字），顺带用来判断哪些设备删掉了、有哪些手机。 */
 export function agentNetNoteDeviceLinkDevices(devices: readonly DeviceLinkListedDevice[], startedAt: number): void {
   const members = currentMembership();

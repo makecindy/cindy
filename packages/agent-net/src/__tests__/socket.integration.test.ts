@@ -178,6 +178,14 @@ it.each([false, true])('runs existing RPC and multi-megabyte results through cer
       expect(controller.pathTo('a-host')).toBe('relay');
       expect(host.pathTo('b-controller')).toBe('relay');
     }, { timeout: 5_000 });
+  } else {
+    // The native unit test covers changes and invalid announcements. Two real
+    // WASM peers joined through a WebSocket-only relay also need to agree on
+    // the reported transport so a desktop can label the other device's leg.
+    await vi.waitFor(() => {
+      expect(controller.peerSnapshot('a-host')).toMatchObject({ path: 'relay', peerRelayVia: 'websocket' });
+      expect(host.peerSnapshot('b-controller')).toMatchObject({ path: 'relay', peerRelayVia: 'websocket' });
+    });
   }
   expect(await f.controller.invoke('a-host', { channel: 'test:echo', args: ['private-business-value-0123456789'] })).toMatchObject({ ok: true, result: 'private-business-value-0123456789' });
   // This checks intact multi-megabyte delivery, not a 4-second throughput SLA.

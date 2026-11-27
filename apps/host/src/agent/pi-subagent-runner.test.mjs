@@ -57,13 +57,16 @@ function stageRun(root, runId) {
   const runDir = path.join(root, 'runs', runId);
   fs.mkdirSync(runDir, { recursive: true });
   const status = path.join(root, 'status.json');
+  const stagedStatus = `${status}.tmp`;
   // The fixture runner records what it sees, then stays alive until stopped.
   fs.writeFileSync(path.join(runDir, 'runner.cjs'), `
 const fs = require('node:fs');
-fs.writeFileSync(${JSON.stringify(status)}, JSON.stringify({
+fs.writeFileSync(${JSON.stringify(stagedStatus)}, JSON.stringify({
   connected: process.connected, send: typeof process.send, argv: process.argv.slice(1),
   home: process.env.HOME, parentOnly: process.env.CINDY_TEST_PARENT_ONLY ?? null,
 }));
+// Publish only complete JSON: the parent waits for status.json to appear.
+fs.renameSync(${JSON.stringify(stagedStatus)}, ${JSON.stringify(status)});
 setInterval(() => {}, 1000);
 `);
   fs.writeFileSync(path.join(runDir, 'config.json'), '{}');

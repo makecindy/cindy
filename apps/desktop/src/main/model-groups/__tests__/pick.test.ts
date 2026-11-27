@@ -36,6 +36,7 @@ import {
 } from '../../../shared/modelGroups.js';
 import { pickModelGroupCandidate, type ModelGroupCandidateFacts } from '../pick.js';
 import { createModelGroupResolver, MODEL_GROUP_REMOTE_WAIT_MS, modelGroupQuotaKey } from '../resolver.js';
+import { createSshModelGroupSupport } from '../sshFilter.js';
 
 const NOW = Date.UTC(2026, 10, 11, 4);
 const HOUR = 3_600_000;
@@ -141,6 +142,86 @@ describe('createModelGroupResolver', () => {
     quotaWindows: async () => new Map([['a', [week(26, 100)]], ['b', [week(39, 20)]]]),
     scope: () => 'owner',
     now: () => now,
+  });
+
+  // 生产入口与可观察结果：createModelGroupResolver.resolve 对本地与远程 acp 插件引擎候选的可用性、努力档、看图与远程调用判定。
+  // 规则依据：2026-11-27 模型组支持 acp 插件引擎，按实时插件目录校验 availability/suspended/disabledModels/defaultModelAllowed/efforts。
+  // 覆盖缺口：此前 ModelGroupCandidate 拒绝 'acp'，解析器没有任何插件引擎候选覆盖。
+  // 最小失败输入与 tier：unit，构造停用与可用本地/远程插件引擎的候选列表并调用 resolver.resolve。
+  it('evaluates local and remote plugin engine (acp) candidates with availability, effort, and disabled-model rules', async () => {
+    const DSH = 'acp-plugin:dsh-acp:dsh';
+    const AGY = 'acp-plugin:agy-acp:agy';
+    const acpGroup: ModelGroupsConfig = {
+      routes: [
+        {
+          id: 'r-acp',
+          name: '插件路线',
+          strategy: 'order',
+          effort: 'high',
+          candidates: [
+            { agentKind: 'acp', providerId: DSH, model: 'deepseek-v4' },
+            { agentKind: 'acp', providerId: AGY, model: 'gemini-3-pro', agentDeviceId: 'studio' },
+          ],
+        },
+      ],
+    };
+    const resolver = createModelGroupResolver({
+      config: () => acpGroup,
+      views: async () => [],
+      agents: () => ['codex'],
+      harnessInstalled: async () => true,
+      quotaWindows: async () => new Map(),
+      pluginEngines: () => [
+        {
+          key: 'dsh-acp:dsh',
+          providerId: DSH,
+          ghostId: 'dsh-acp',
+          harnessId: 'dsh',
+          name: 'DeepSeek Harness',
+          availability: { state: 'available' },
+          suspended: true,
+          models: [{ id: 'deepseek-v4', displayName: 'DeepSeek V4', efforts: ['high'] }],
+          permissionModes: [{ id: 'ask' }],
+          defaultPermissionMode: 'ask',
+        } as never,
+      ],
+      remotePluginEngines: async (deviceId) =>
+        deviceId === 'studio'
+          ? [
+              {
+                key: 'agy-acp:agy',
+                providerId: AGY,
+                ghostId: 'agy-acp',
+                harnessId: 'agy',
+                name: 'Antigravity',
+                availability: { state: 'available' },
+                remoteUse: { supported: true, enabled: true },
+                models: [{ id: 'gemini-3-pro', displayName: 'Gemini 3 Pro', efforts: ['low', 'high'] }],
+                reportedModelDetails: [{ modelId: 'gemini-3-pro', imageInput: true }],
+                permissionModes: [{ id: 'ask' }],
+                defaultPermissionMode: 'ask',
+              } as never,
+            ]
+          : [],
+      locations: async () => ({ locations: [{ agentDeviceId: 'studio' }] }),
+      scope: () => 'owner',
+      now: () => NOW,
+    });
+
+    const resolved = await resolver.resolve({ selection: { type: 'route', id: 'r-acp' }, context: { hasImages: true } });
+    expect(resolved).toMatchObject({
+      outcome: 'routed',
+      route: {
+        agentKind: 'acp',
+        providerId: AGY,
+        model: 'gemini-3-pro',
+        agentDeviceId: 'studio',
+        effort: 'high',
+      },
+      modelName: 'Gemini 3 Pro',
+      sourceName: 'Antigravity',
+    });
+    expect(resolved.trace[0]).toMatchObject({ state: 'skipped', why: 'unavailable' });
   });
 
   it('advances rotation only after adoption, not on cancelled picks or previews (#10240)', async () => {
@@ -667,4 +748,47 @@ it('asks for the quota readings on hand only when the request is for display', a
   await resolver.resolve({ selection, dryRun: true });
   await resolver.resolve({ selection });
   expect(quotaWindows.mock.calls.map(([options]) => options?.cached === true)).toEqual([true, false, false]);
+});
+
+it('resolves SSH native Codex candidates from the SSH host catalog without local openai login or local codex install', async () => {
+  const sshCodexProvider = {
+    id: 'openai',
+    name: 'Codex',
+    source: 'builtin',
+    connected: true,
+    agents: ['codex'],
+    routing: { codex: { upstream: 'https://chatgpt.com/backend-api/codex', authStrategy: 'oauth-passthrough' } },
+    models: { codex: [{ id: 'gpt-5.5', name: 'GPT-5.5', mode: 'chat', efforts: ['high'] }] },
+  } as unknown as ProviderView;
+  const groups = {
+    routes: [{
+      id: 'r-ssh',
+      name: 'SSH Route',
+      strategy: 'order',
+      effort: 'high',
+      candidates: [{ agentKind: 'codex', providerId: 'openai', model: 'gpt-5.5' }],
+    }],
+  } as ModelGroupsConfig;
+  const { sshFilter, sshCodexViews } = createSshModelGroupSupport({
+    listSshCodexProviders: async (hostId) => (hostId === 'ssh-1' ? [sshCodexProvider] : []),
+    now: () => NOW,
+  });
+  const resolver = createModelGroupResolver({
+    config: () => groups,
+    views: async () => [],
+    agents: () => [],
+    harnessInstalled: async () => false,
+    quotaWindows: async () => new Map(),
+    scope: () => 'owner',
+    now: () => NOW,
+    sshFilter,
+    sshCodexViews,
+  });
+  const routed = await resolver.resolve({ selection: { type: 'route', id: 'r-ssh' }, sshHostId: 'ssh-1' });
+  expect(routed).toMatchObject({
+    outcome: 'routed',
+    route: { agentKind: 'codex', providerId: 'openai', model: 'gpt-5.5', effort: 'high' },
+  });
+  const missing = await resolver.resolve({ selection: { type: 'route', id: 'r-ssh' }, sshHostId: 'ssh-empty' });
+  expect(missing).toMatchObject({ outcome: 'unavailable' });
 });

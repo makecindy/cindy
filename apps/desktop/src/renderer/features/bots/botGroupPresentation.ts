@@ -27,6 +27,8 @@ export {
   collapseBotGroupMemberJoined,
   continuableRoundEndId,
   currentBotGroupPlanStep,
+  findFirstUnreadBotGroupMessageId,
+  hasUnreadBotGroupMessages,
   isActiveBotGroupMember,
   isBotGroupDivisionBlocked,
   isRunningBotGroupSidebarPreview,
@@ -38,6 +40,7 @@ export {
   type BotGroupComposerPlanState,
   type BotGroupPlanFollowUp,
   type BotGroupSidebarPlanPreview,
+  type BotGroupUnreadBoundary,
 } from '@cindy/maker-shared/botGroupPresentation';
 
 export { BOT_GROUP_MAX_MEMBERS, BOT_GROUP_MIN_MEMBERS };

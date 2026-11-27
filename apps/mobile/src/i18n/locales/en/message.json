@@ -8,6 +8,19 @@
       "selected": "Selected"
     }
   },
+  "voiceCall": {
+    "title": "Voice Call",
+    "saved": "Record saved",
+    "you": "You",
+    "companion": "Companion",
+    "sendFailed": "Could not send. Your words have been kept.",
+    "handoff": {
+      "sending": "Handing over…",
+      "accepted": "Handed to your companion",
+      "failed": "Could not hand over. Your words have been kept.",
+      "completed": "Result received"
+    }
+  },
   "renderer": {
     "sourceLocalApp": "Sent by local app “{{name}}”",
     "sourceLocalAppId": "App ID: {{id}}",
@@ -185,7 +198,8 @@
     "groupSent": "Sent from a group",
     "sourceGroupId": "Group ID: {{id}}",
     "selectText": "Select Text",
-    "you": "You"
+    "you": "You",
+    "recentActivity": "Recent activity"
   },
   "actions": {
     "attachmentsPrefix": "Attachments: {{names}}",
@@ -264,6 +278,8 @@
     "delete": "Delete",
     "retry": "Retry",
     "notSent": "Not sent",
+    "deliveryUnconfirmed": "Delivery unconfirmed",
+    "recheckDelivery": "Check again",
     "imagesNotUploaded_one": "{{count}} image didn't upload",
     "imagesNotUploaded_other": "{{count}} images didn't upload",
     "waitingForNamedComputer": "Sends automatically when {{name}} connects",

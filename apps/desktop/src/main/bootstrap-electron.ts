@@ -125,10 +125,13 @@ import {
   writeWindowTransparencyHint,
 } from './window-theme-mode-store';
 import {
+  createGpuFallbackArgument,
   createWindowBackdropMaterialArgument,
   WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL,
 } from '../shared/windowBackdrop.js';
+import { isHardwareAccelerationDisabled } from './gpuRenderingPolicy.js';
 import { isAllowedBillingMailtoRequest } from '../shared/billing.js';
+import { parseDesktopQrHandoffId } from '../shared/authIpc';
 import path from 'node:path';
 import fs from 'node:fs';
 import { textFilePreviewResult, TEXT_PREVIEW_LIMIT_MB } from './text-file-preview';
@@ -695,7 +698,7 @@ import { copyFileToClipboardWindows, copyFileToClipboardMacOS } from './fileClip
 import { COPY_TEXT_TO_CLIPBOARD_CHANNEL } from '../shared/textClipboard.js';
 import {
   readLinuxClipboardSnapshot,
-  supportsLinuxClipboard,
+  supportsHyprlandClipboard,
   writeLinuxClipboard,
 } from './remote-desktop/linuxClipboardNative';
 import { initHeartbeatService } from './heartbeatService';
@@ -876,6 +879,7 @@ import {
   waitForInitialCustomMcpRefresh,
   registerPiAgentIfAvailable,
   setBotConversationConnectionsReader,
+  listSshCodexProviders,
 } from './maker-host/index.js';
 import {
   createPiRuntimeRecovery,
@@ -1265,6 +1269,7 @@ import {
   type SubagentModelSettingsPatch,
 } from '../shared/subagentModelSettings.js';
 import { isBrowserOpenablePath } from '../shared/browserOpenableExts.js';
+import { resolveConsoleExternalUrlForDesktop } from './consoleHandoff.js';
 import {
   getClientEndpoint,
   getClientEndpointForRealm,
@@ -1364,6 +1369,7 @@ import { runComputerUseSmokeIfRequested } from './smoke/computerUseSmoke.js';
 import { getResolvedMainLocale, setMainClassicalStyle, setMainLocale, t } from './i18n.desktop.js';
 import { isClassicalReplyStyle } from '@cindy/maker-shared/classical-reply';
 import { registerModelGroupDecisionIpc } from './model-groups/decisionIpc.js';
+import { registerDesktopSshCodexProvidersReader } from './model-groups/desktopResolver.js';
 import { registerModelGroupsIpc } from './model-groups/ipc.js';
 import { registerFeishuGroupSettingsIpc } from './im/feishu/groupSettingsIpc.js';
 import { wireFeishuGroupProjectPorts } from './im/feishu/groupProjectPortsWiring.js';
@@ -2570,6 +2576,12 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
       await resetScheduler();
     } catch (err) {
       authBoundaryLog.error(`resetScheduler on ${reason} failed (non-fatal):`, err);
+    }
+    try {
+      const { stopGlobalMemoryTidy } = await import('./maker-ipc/globalMemoryTidyRuntime.js');
+      stopGlobalMemoryTidy();
+    } catch (err) {
+      authBoundaryLog.error(`stopGlobalMemoryTidy on ${reason} failed (non-fatal):`, err);
     }
     // attemptStartScheduler 的 WeakSet 也要给新 scheduler 实例留位置 — 老实例被
     // resetScheduler 置 null 后会被 GC,WeakSet 自动清理;新实例从未 add 过,
@@ -4702,7 +4714,13 @@ const createWindow = () => {
           persistedTheme?.resolvedIsDark,
         )
       : nativeTheme.shouldUseDarkColors;
-  const bgColor = process.platform === 'darwin' ? '#00000000' : isDark ? '#1f1f1e' : '#f8f8f6';
+  const gpuFallback = isHardwareAccelerationDisabled();
+  const bgColor =
+    process.platform === 'darwin' && !gpuFallback
+      ? '#00000000'
+      : isDark
+        ? '#1f1f1e'
+        : '#f8f8f6';
   const winBackdropConfig = resolveVibrancyConfig(
     persistedTheme?.familyId ?? 'cindy',
     isDark,
@@ -4711,12 +4729,14 @@ const createWindow = () => {
   // Windows: a transparent window flickers under a system backdrop.
   // macOS: a transparent window triggers high WindowServer GPU usage (#11670) while
   // `transparent: false` + `vibrancy: 'hud'` preserves behind-window vibrancy (see vibrancyConfig).
+  // GPU fallback (software rendering): also disable transparent window + vibrancy.
   const windowTransparent =
-    process.platform === 'win32'
+    !gpuFallback &&
+    (process.platform === 'win32'
       ? resolveWindowsWindowTransparent(winBackdropConfig, persistedTheme?.needsTransparentWindow)
       : process.platform === 'darwin'
         ? resolveMacWindowTransparent(winBackdropConfig, persistedTheme?.needsTransparentWindow)
-        : true;
+        : true);
 
   // Window state persistence (F-WST-1): remembers position / size / maximized
   // / fullscreen across launches. Falls back to the defaults below on first
@@ -4804,13 +4824,14 @@ const createWindow = () => {
           backgroundColor: winBackdropConfig.backgroundColor,
         }
       : {}),
-    ...(process.platform === 'darwin' ? { vibrancy: 'hud' as const } : {}), // 创建期材质与缺省定稿一致(hud);运行时按主题族经 applyWindowVibrancy 修正
+    ...(process.platform === 'darwin' && !gpuFallback ? { vibrancy: 'hud' as const } : {}), // 创建期材质与缺省定稿一致(hud);运行时按主题族经 applyWindowVibrancy 修正
     acceptFirstMouse: !swallowActivationClick,
     ...platformOptions,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       additionalArguments: [
         createWindowBackdropMaterialArgument(winBackdropConfig.backgroundMaterial ?? 'none'),
+        ...(gpuFallback ? [createGpuFallbackArgument()] : []),
         ...cloudWindowArguments(),
       ],
       spellcheck: false,
@@ -5884,8 +5905,11 @@ const registerIpcHandlers = () => {
   });
   wireFeishuGroupProjectPorts();
   registerFeishuGroupSettingsIpc();
-  registerModelGroupsIpc();
-  registerModelGroupDecisionIpc();
+  if (!hostClientMode) {
+    registerDesktopSshCodexProvidersReader(listSshCodexProviders);
+    registerModelGroupsIpc();
+    registerModelGroupDecisionIpc();
+  }
   ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_GET, async () => {
     return subagentModelSettingsWire();
   });
@@ -7168,6 +7192,25 @@ const registerIpcHandlers = () => {
     return authManager.getLoginCaptchaChallengeUrl();
   });
 
+  // 扫码登录：本机已登录，在「远程控制 Cindy」弹窗为另一台设备出码并允许/拒绝。
+  // 仅本机界面使用（手机端直连 auth-server），不进入设备互联白名单。
+  ipcMain.handle('auth:qr-handoff:create', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return authManager.createQrLoginHandoff();
+  });
+  ipcMain.handle('auth:qr-handoff:state', async (event, handoffId: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const id = parseDesktopQrHandoffId(handoffId);
+    if (!id) return { success: false, code: 'INVALID_PARAMS' };
+    return authManager.getQrLoginHandoffState(id);
+  });
+  ipcMain.handle('auth:qr-handoff:decide', async (event, handoffId: unknown, approve: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const id = parseDesktopQrHandoffId(handoffId);
+    if (!id || typeof approve !== 'boolean') return { success: false, code: 'INVALID_PARAMS' };
+    return authManager.decideQrLoginHandoff(id, approve);
+  });
+
   ipcMain.handle('auth:logout', async () => {
     await authManager.logout();
   });
@@ -7774,19 +7817,23 @@ const registerIpcHandlers = () => {
       try {
         const parsed = new URL(url);
         const isWebUrl = parsed.protocol === 'http:' || parsed.protocol === 'https:';
+        const trustedAppRenderer = isTrustedAppRendererEvent(event);
         // Mail links are restricted to the fixed billing inbox. Renderer content may
         // provide the localized subject/body, but it must not choose a recipient or
         // use mailto as a general-purpose external scheme.
         const isBillingMailto = isAllowedBillingMailtoRequest(
           url,
-          isTrustedAppRendererEvent(event),
+          trustedAppRenderer,
         );
         const isAllowedSystemSettingsUrl =
           process.platform === 'darwin' && allowedSystemSettingsUrls.has(url);
         if (!isWebUrl && !isBillingMailto && !isAllowedSystemSettingsUrl) {
           return { success: false };
         }
-        await shell.openExternal(url);
+        const targetUrl = isWebUrl
+          ? await resolveConsoleExternalUrlForDesktop(url, trustedAppRenderer)
+          : url;
+        await shell.openExternal(targetUrl);
         return { success: true };
       } catch {
         return { success: false };
@@ -9306,11 +9353,11 @@ const registerIpcHandlers = () => {
         }
       },
       write: (text) =>
-        supportsLinuxClipboard()
+        supportsHyprlandClipboard()
           ? writeLinuxClipboard({ text }, () => true, { checkLock: false })
           : clipboard.writeText(text),
       read: async () =>
-        supportsLinuxClipboard()
+        supportsHyprlandClipboard()
           ? (await readLinuxClipboardSnapshot(false, { checkLock: false })).content.text
           : clipboard.readText(),
     }),

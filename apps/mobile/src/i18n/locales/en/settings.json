@@ -549,5 +549,14 @@
   },
   "navigation": {
     "unavailable": "Could not open settings on the target computer. Check that it is online and allows remote control; update Cindy if it is an older version."
+  },
+  "qrLogin": {
+    "scanTitle": "Scan to sign in",
+    "hintLogin": "Scan the code shown by Cindy on your computer",
+    "hintLoginDetail": "On your computer: phone icon next to your avatar → Control Cindy Remotely",
+    "cameraNeeded": "Cindy needs the camera to scan",
+    "grantCamera": "Allow camera",
+    "openSettings": "Open Settings",
+    "wrongCode": "This isn't a Cindy sign-in code"
   }
 }

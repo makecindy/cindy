@@ -123,6 +123,7 @@ import type { AutoReviewUserReferences } from '@cindy/maker-shared/auto-review-i
 
 import { readImPluginEngine } from './pluginEngineCatalog';
 import { persistUserMessage } from '../messagePersistence';
+import { getModelGroupStartBridge } from '../../model-groups/startBridge.js';
 import { imAutoReviewReferences } from './autoReviewReferences';
 import { bindingStore } from '../binding';
 import { buildImUserMessage } from './inboundMessage';
@@ -2290,6 +2291,7 @@ export function createTurnRunner(
           // 别的 session(/new 重置等), 那份预落库不属于本轮, 照常自己落一条。
           const persisted = await persistAcceptedInput(item);
           if (persisted) {
+            getModelGroupStartBridge()?.dispatched(rowId, persisted.clientId);
             item.prePersistedUserMessage = { sessionId: rowId, clientId: persisted.clientId };
             if (item.channelToolScope) item.channelToolScope.inputClientId = persisted.clientId;
             await beginTurnChangeSetAtDispatch(state.makerSession, persisted.clientId);

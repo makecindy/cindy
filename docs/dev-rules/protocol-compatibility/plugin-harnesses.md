@@ -20,7 +20,7 @@ Host receipt 追加可选 `approvedHarnesses?: string[]`：只来自安装／更
 插件同源端点（本机 Electron 插件页与远程设置页的同一 fetch 白名单，非 device-link）：`PUT /harnesses` 正文
 `{ harnesses: [{ id, available: boolean, reason?: slug, message?: ≤200, version?: ≤64, models?: [{ id: ≤256, name: ≤200, description?: ≤200, group?: ≤200, efforts?: [level] ≤16, defaultEffort?: level }] ≤200, modes?: [mode] ≤16, defaultMode?: mode }] }`，
 整体覆盖，内容不变不写盘不通知，成功返回规范化后的列表；`GET /harnesses` 读回（按当前清单过滤）。未声明 `harnesses` 403，未安装 404，
-格式错误、未声明的 id 或模型 id 重复 400 且不改原状态，其它方法 405；额外字段丢弃。旧 Host 与 Node Host 返回 404，插件按不支持处理；
+格式错误、未声明的 id 或模型 id 重复 400 且不改原状态，其它方法 405；额外字段丢弃。旧 Host 返回 404，插件按不支持处理（Node Host 同步支持 `/harnesses`）；
 不认识 `models` 的旧 Host 丢弃该字段，新 Host 读到没有 `models` 的旧记录按「插件不列模型」处理。
 `efforts` / `defaultEffort`（2026-11-19）是 Cindy 思考深度 id（`minimal`、`low`、`medium`、`high`、`xhigh`、`max`，与 maker-core 从
 ACP `thought_level` 取值映射的集合相同）：非数组、非字符串或有 `defaultEffort` 无 `efforts` 400；本版不认识的 id 跳过、不拒整份
@@ -97,7 +97,8 @@ renderer `scheduleFormLogic.test.ts`「plugin engine selection」。
   控制端记为不支持、只列 B 自己的引擎(与此前相同)；B 没有来源名单(更早的版本)时同样只列 B 自己的引擎。手机端同样复用同一条
   `maker:model-catalog:read` 路径读取同账号其他电脑与已收到插件引擎分享，支持在模型选择器来源页筛选、收藏（沿用 `PLUGIN_ENGINE_FAVORITE_WIRE_AGENT = 'cc'` 既有槽位）、新建任务、会话内切换、伙伴模型链与插件自动化草稿中选择，并在不支持的旧被控端上静默降级为只列 B 本机引擎。
   来源名单或链接状态变化时丢弃该任务电脑的引擎目录与在途读取。重新发现来源后，只为已打开任务回读仍可用的来源。
-- **暂未开放**：插件引擎加入供应商组（电脑组）或备用机委托、转分享(`relayKey`)、协同 Worker 跨机运行插件引擎。这些入口保持明确拒绝。（注：本机插件引擎任务的分叉与回退已于 2026-11-27 #13001 支持；Agent 在另一台电脑上运行时的冷恢复回退仍受 `session-regressions.md` 同口径约束。）
+- **暂未开放**：插件引擎加入供应商组（电脑组）或备用机委托、转分享(`relayKey`)、协同 Worker 跨机运行插件引擎。这些入口保持明确拒绝。（注：本机插件引擎任务的分叉与回退已于 2026-11-27 #13001 支持；Agent 在另一台电脑上运行时的冷恢复回退仍受 `session-regressions.md` 同口径约束。） 跨电脑或直连分享插件引擎的分叉与侧边追问于 2026-11-27 开放：沿用从 Cindy 记录交接的新会话路径(`sdk_session_id = null`)，子任务首轮启动时仍由执行端完整复核准入。
+
 
 实现见 `maker-host/pluginEngineRemoteUse.ts`、`device-link/providerShareHost.ts`、`device-link/providerShareRuntime.ts`、`device-link/dispatch.ts`、`remote-agent/host/service.ts`、`remote-agent/host/runHost.ts`、`remote-agent/controller/service.ts`、maker-core `agents/acp/acp-agent.ts`；远程控制下的来源与代读见 `maker-ipc/controlledModelCatalog.ts`、renderer `lib/pluginEngineSelection.ts`(`controlledPluginEngineSources`)与 `hooks/usePluginEngines.ts`；回归见 `roundtrip.test.ts`、`providerShareDispatch.test.ts`、`pluginHarnesses.test.ts`、`nodeRuntimeBroker.test.ts`、`pluginEngineSessionAdmission.test.ts`、`PluginEnginesSection.test.tsx`、`PluginEngineRemoteUse.test.tsx`、`controlledModelCatalog.test.ts` 与 `newMakerDraftSubmission.test.ts`。
 
@@ -256,7 +257,7 @@ remote-agent `host/runHost.ts`、`controller/proxyHandle.ts`；回归见 `acp-se
 `/<skill>` 用的 Skill 清单（`AcpAgent.listAgentSkills`，与首轮 Skill 清单同源），返回既有 `AgentSkillCommand` 形状，
 `runtimeCommandName` / `runtimeStatus` / `origin` 不出现。这是既有字段的新取值，channel 早已在 allowlist：新控制端对旧被控端
 发出时旧端以 INVALID_PARAMS 拒绝，菜单按读取失败不列 Skill（旧被控端的引擎也不展开 `/<skill>`，不会列出点了没用的项）；
-旧控制端从不发出。Node Host（`/api/agent-skills`）不运行插件引擎，对 `acp` 回「未注册」，不按 Claude 列清单。
+旧控制端从不发出。Node Host（`/api/agent-skills`）装配了插件引擎，在 `acp` 已注册时与桌面同样经 `maker.listAgentSkills` 返回该引擎的 Skill 清单（未注册时回「未注册」，不按 Claude 列清单）。
 不新增 channel、中转帧或字段，自建中转原样转发，无需同步修改。
 实现见 desktop `maker-ipc/register.ts`、maker-core `agents/acp/acp-agent.ts`、host `agent/agent-skills.ts`；回归见
 `acp-session.test.ts`「lists for the `/` menu」、renderer `slashCommands.test.ts`「plugin engine Skills」与 host `boundary.test.mjs`「25b L1」。
@@ -286,6 +287,28 @@ main `sessionsUpdate.test.ts`「plugin engine runs on another computer」、`orc
 - **Agent 工具**：`send_to_session`（create 模式）的 `agent_kind` 新增取值 `acp`，配合 `provider_id`（`acp-plugin:<插件>:<引擎>`，取自 `list_available_models` 的 `plugin_engines[].provider_id`；来源本身已是插件引擎且未换引擎时可省）、`model`（省略或 `default` 由引擎自选；有模型关闭或受限时不可用 `default`）与 `effort`（按该模型的 `efforts` 严格校验，不支持 `fast`）。支持本机插件引擎、同账号其他电脑与已收到插件引擎分享（`provider_device_id` / 兼容旧名 `agent_device_id`），以及在同账号另一台电脑上新建插件引擎任务（`device`）。`list_available_models` 的 `agent` 枚举同步追加 `acp`，并在查询远程电脑或插件引擎分享位置时返回其开放的 `plugin_engines`（不向内置供应商分享发插件引擎目录请求）；向另一台电脑查询 `agent: 'acp'` 时经既有 `maker:orca:remote-worker:models` 省略 `agent` 参数并在本机裁剪，不向旧电脑发未知枚举值。
 - **跨电脑新建协议（`maker:session:handoff`）**：`task-action-capability` 探测回包追加可选能力位 `ordinaryCreatePluginEngine: 1`（仅 Desktop 声明，Node Host 不声明）；`remoteSessionCreationSchema` 的 `agentKind` 新增取值 `acp`、追加可选字段 `providerId`（仅 `agentKind === 'acp'` 时出现，内置引擎新建载荷与回执操作串字节不变）。发送端在发起带 `agentKind: 'acp'` 或 `providerId` 的远程新建前复核 `ordinaryCreatePluginEngine === 1`，旧版电脑或 Node Host 缺少该位时在发送前以 `REMOTE_UNSUPPORTED` 拒绝，不创建任务。发送端对 `maker:session:handoff` 成功回包的 `agentKind` 校验同步接受 `acp`（覆盖跨电脑新建与既有插件引擎任务的 jump 投递）。不新增 channel、allowlist、relay 帧或服务端字段，官方与自建中转按既有 invoke 帧透明转发，无需同步修改。
 - **实现与回归**：`packages/lizi-mcps/src/xdt-helper/{send_to_session,list_available_models}.ts`、`packages/device-link/src/orcaRemoteWorker.ts`、`apps/desktop/src/shared/remoteSessionCreation.ts`、`apps/desktop/src/main/maker-ipc/{sendToSessionExecutionConfig,remoteSessionCreation,sessionHandoffCore,register}.ts`、`apps/desktop/src/main/mcp-integrations/{sessionHandoffRemote,mcp-providers}.ts`、`apps/host/src/agent/session-handoff.ts`；回归见 `sendToSessionTool.test.ts`、`listAvailableModelsTool.test.ts`、`sendToSessionExecutionConfig.test.ts`、`sendToSessionLazyResumePermission.test.ts`、`sessionHandoffIpc.test.ts`、`sessionHandoffRemote.test.ts` 与 host `device-link.test.mjs`。
+
+## 设置页打开引擎的供应商页（2026-11-27，未发布）
+
+- **页面接口**：插件页面同源 `POST /harnesses/open-settings`，请求体 `{"id":"<本插件声明的引擎 id>"}`（只此一个字段，
+  ≤256 字符，不带 query）。成功 `200 {"ok":true}`；`400` 请求体不合格，`403` 引擎未声明或没有紧跟用户操作，
+  `405` 非 POST，`503` 没有可显示设置的主窗口。只导航，不读写任何设置。页面可用不带副作用的 `GET` 探测是否支持：
+  支持的宿主回 405，不支持的回 404；这两个状态码是对插件的约定，不要改成别的。
+- **本机内部事件**：Main → 主窗口 `deep-link:navigate` 新增 payload `{ type: 'plugin-engine-settings', engineKey }`，
+  Renderer 路由 `/settings?tab=providers&pluginEngine=<引擎 key>`（一次性参数，消费后从 URL 摘除）。两者都只在同一台
+  电脑的同一版本内使用，不跨设备、不落盘，没有对应的 `cindy://` 链接。
+- **旧端与其他端**：旧 Desktop、Node Host、手机页和远程设置页对该路径返回 404，插件保留文字引导即可；不新增
+  device-link channel 或 allowlist，自建中转无需改动。
+- **实现与回归**：`apps/desktop/src/main/cindy-brain/runtime/{ghostEngineSettingsEndpoint,ghostPageHandler}.ts`、
+  `apps/desktop/src/main/deepLink.ts`、`apps/desktop/src/renderer/components/settings/ProvidersSection.tsx`；
+  `ghostEngineSettingsEndpoint.test.ts`、`deepLink.test.ts`、`providersSectionDeepLink.test.tsx`。
+
+## 插件模型选择、插件任务与搜索筛选（2026-11-27）
+
+- **插件模型选择与插件任务**：`PluginModelSelection`、`PluginTaskPreferences.config`、`PluginTaskRoute`、`tasks-request`（`taskSlot` / `pluginTargetSlot` / `pluginTargetReview`）与 `MobileTaskSettings` 的 `agentKind` 新增取值 `acp`（此时 `providerId` 必为 `acp-plugin:<插件>:<引擎>` 且 `fastMode === false`）。本机与远程位置分别按对应电脑的插件引擎目录实时复核；插件「模型与任务」设置页在选了插件引擎时，快问快答（`cindy.text.oneshot`）与远程模型同口径回落到声明／系统辅助模型链，不借本机内置供应商。未升级的旧控制端不会发出 `acp`；新控制端发给旧被控端时旧端以 `INVALID_PARAMS` / `PLUGIN_SETTINGS_INVALID` 明确拒绝，不会静默切到内置引擎。
+- **搜索、筛选与历史读取**：会话搜索（`ConversationSearchAgentKind`、`local-db:conversations:search`）、侧栏与手机首页 Harness 筛选、`cindy_helper` 历史工具（`list_sessions` / `get_chat_history` / `search_chat_history`）及 `local-db:history:messages` 的 `agentKind` 新增取值 `acp`，且会话搜索返回行保留 `agentKind: 'acp'` 而不再压成 `'cc'`。旧被控端收到显式 `acp` 过滤时以 `INVALID_PARAMS` 拒绝，`all` 与既有内置取值不变。
+- **远程灵动岛**：`applyDeviceSessionMeta` 保留远程任务 `agentKind = 'acp'`（插件引擎的 `/review` 只读审查沙盒已由下方「附加目录、只读 `/review` 与共享任务」支持）。
+- 均属既有字段的新取值，不新增 channel、allowlist 或中转帧，官方与自建中转无需修改。
 
 ## 每轮权限闸（2026-11-25）
 
@@ -351,3 +374,45 @@ IM 轮次只有已知的读和搜索操作可以经上述条件直接放行，�
      `packages/device-link/src/taskMigration.ts` 与 renderer `SessionShareImportWizard.tsx`；回归见
      `xdtshareFormat.pure.test.ts`、`sessionShareExport.test.ts`、`sessionShareImport.test.ts`、`task-migration/__tests__/service.test.ts`、
      `store.git-integration.test.ts` 与 maker-core `acp-session.test.ts`。
+
+## 附加目录、只读 `/review` 与共享任务（2026-11-27）
+
+三项边界能力对齐内置引擎，均复用既有 wire 与本地存储结构，不新增 channel、relay 帧、manifest 字段、批准项或数据库迁移，官方与自建中转无需改动：
+
+- **附加参考目录与可写目录（`extraDirs` / `writableDirs`）**：`buildAcpCapabilities` 对 `extraDirs` 与 `writableDirs` 均声明支持。
+  新会话首轮说明附 `<cindy-extra-reference-directories>` / `<cindy-extra-writable-directories>`（对齐内置 Pi，插件 Library 根不进通用参考清单，
+  由 `<cindy-library-native-read>` 单独下发）；会话中调用 `setExtraDirs` / `setWritableDirs` 立即刷新实时快照并在下一条普通消息附上更新与撤销说明。
+  完全访问（`bypassPermissions`）遵循与内置引擎（Claude Code / Codex / Pi）一致的口径，普通写操作直接放行、不因工作目录或附加目录边界弹窗拦截；
+  非完全访问档下启用每轮权限闸（`permissionGate`）的 `routine` 自动放行路径中，宿主对 `edit` / `delete` / `move` 权限请求按 `realpath`
+  （含大小写不敏感路径键提取、不存在子路径祖先校验与悬空符号链接拒绝、凭据路径与只读 Library 根拒绝，以及并发撤权复核）校验全部目标路径：
+  落在任务工作目录与当前 `writableDirs` 之外的写操作绝不自动放行，升级到人工确认或无解析器时直接拒绝，撤销目录即时生效。桌面新建页与任务页对本机插件引擎任务开放附加目录入口（远程与 SSH 仍由既有能力门关闭）。
+- **只读 `/review` 沙盒（`reviewMode` + `reviewReadPaths`）**：`maker:review:start` 保留来源任务的 `agentKind = acp`、`providerId`、`model`、`effort`
+  并先做插件引擎准入；`AcpAgent` 启动时剥离全部 MCP 服务、记忆、插件花名册、Skill 清单与展开、伙伴画像、附加目录与宿主说明，并将权限模式固定为 `ask`。
+  握手后强要求对端声明 `initialize._meta.permissionGate.supported === true`：未声明时立即关闭进程并 fail-closed 抛出
+  `AgentStartupStoppedError(NotSupportedError('reviewMode', reason: 'sdk-missing'))`。声明支持时，每轮强制发送 `scope: 'all-tool-calls'`，
+  在 `decidePermission` 强制执行不可绕过的只读审查闸（即使处于 `bypassPermissions` 也不放行）：因外部插件 `permissionGate` 仅在调用前拦截、无法在搜索执行或结果层逐文件过滤凭据与软硬链接，仅允许目标为具体常规文件（`stat.isFile()`）的 `read` / `search` 且全部路径经 `resolveReviewReadPath` 验证落在工作目录或 `reviewReadPaths` 内、非凭据路径且无硬链接逃逸；目录级搜索（如 `Grep` / `Glob` 扫描目录或省略路径）、`edit`、`delete`、
+  `move`、`execute`、`fetch` 或未知/不可验证调用一律拒绝。直接消息附件在发送/插话前经 `assertReviewMessageContentPaths` 校验。
+- **共享任务（Shared Tasks）**：`AgentInputCreateOpts.agentKind` 与主进程 `readSharedTaskTaskCreateOpts` / `requireQueuedMessage` 接受 `acp`，
+  访客消息由宿主盖章保留任务自身的 `agentKind = acp`、`providerId`、`model`、`effort`、`agentDeviceId` 与权限档（剥离访客自报覆盖字段）；
+  访客端不读取或泄漏宿主本地插件目录，沿用通用插件引擎图标与现有共享任务安全边界（访客交互过滤、仅用户可确认项拒绝、撤权隔离）。
+  兼容：旧版宿主仍拒绝共享任务上的 `acp`；旧控制端或手机端查看共享任务按既有通用标识展示、继续发消息由新版宿主按任务记录盖章执行。
+
+实现见 maker-core `agents/acp/{acp-agent,briefing,capabilities,sandbox,session}.ts` 与 Desktop `shared/agentInputQueue.ts`、
+`maker-ipc/{register,reviewStartHandler}.ts`、`renderer/features/cc-agent/{CCAgentSessionView,NewMakerDraftRoute}.tsx`；
+回归见 maker-core `acp-session.test.ts` 与 Desktop `reviewStartHandler.test.ts`、`sharedTaskInput.test.ts`、`newMakerProjectPicker.test.ts`。
+
+## 全系统放开插件引擎的兼容边界（2026-11-27）
+
+1. **IM 默认设置与项目偏好（`ImDefaultSettings` / `FeishuGroupRoute` / `HookWorkspacePrefs`）**：
+   - `ImDefaultSettings.agentKind` 与 `FeishuGroupRoute.agentKind` 新增取值 `'acp'`，`ImDefaultSettings.agents` 追加可选键 `acp?: ImDefaultAgentSettings`（`effort` 允许 `''`，`providerId` 必为 `acp-plugin:…`）。未配置插件引擎时，磁盘 JSON 与指纹字符串与旧版逐字节一致；配置后旧版读写若遇到 `'acp'` 不会静默写入内置引擎。
+   - 固定 schema 的云端/远程宿主设置读取口（`additionalIm.ts`、`additionalWorkspaces.ts`）遇到保存为 `'acp'` 的配置行时返回 `{ status: 'unavailable', revision: null }`，防止旧控制端或云端设置页覆写或丢弃插件引擎路由。
+2. **智能路由 / 模型组（`ModelGroupAgentKind`）**：
+   - `ModelGroupAgentKind` 新增取值 `'acp'`（`providerId` 必为 `acp-plugin:…`），同时放宽 `model-groups:bind-session`、决策日志与手机端 `mobileMakerTransport.bindModelGroupSession` 的入参枚举。不新增 channel、allowlist 或 relay 帧；旧控制端/旧手机按未知 `agentKind` 忽略该候选或结果，不误落内置引擎。
+   - 辅助模型与 Subagent（`auxiliaryRouteRefs.ts`）读取模型组时显式过滤 `'acp'` 候选，不向直连 HTTP 一次性请求或 Claude `CLAUDE_CODE_SUBAGENT_MODEL` 下发插件引擎。
+3. **自动化 / 定时任务与项目自动化**：
+   - `Schedule` 放开 `persistentSession: true` 与插件引擎组合；`runner.ts`、`scheduledModelSelection.ts` 与 `scheduler-host/index.ts` 放开 IM、协同、伙伴例行任务绑定与切换（继续保留 `review`、SSH `remoteHostId` 与非法 peer ID 拒绝）。
+   - 项目自动化文件（`.cindy/automations/schedules.json`）的 `agentKind` / `modelAgentKind` 接受 `'acp'`（校验 `providerId` 以 `acp-plugin:` 开头）。未装对应插件的成员执行时由准入明确报错，不回落内置模型。
+4. **跨设备协同 Worker（`ORCA_REMOTE_WORKER_AGENT_KINDS`）**：
+   - `packages/device-link/src/orcaRemoteWorker.ts` 的 `ORCA_REMOTE_WORKER_AGENT_KINDS` 新增 `'acp'`，`parseOrcaRemoteWorkerOpenRequest` 在 `agentKind === 'acp'` 且非模型组时校验 `providerId` 为 `acp-plugin:…`；旧版运行设备收到 `'acp'` 时以 `[INVALID_PARAMS] invalid agentKind` fail-closed 拒绝，不创建错误引擎的 Worker。
+   - 代理任务行（`OrcaRemoteWorkerProxySessionSeed`）追加可选 `providerId` 落库，`orcaRemoteWorkerBridge` 放开 `'acp'` Worker 向 Lead 回报（MCP 上下文 `agentKind` 与 `acp-agent.ts` 同口径映射为 `'pi'`）。
+   - 不新增 channel、allowlist 项或中转帧，官方与自建中转按既有 invoke 帧透明转发，无需改动。

@@ -12,12 +12,14 @@
  * - tier：unit（进程内假对端，无真实等待；宽限期用 fake timers）。
  */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent, InteractionDecision, InteractionRequest } from '../../types/events.js';
+import { NotSupportedError } from '../../types/capabilities.js';
+import { LIBRARY_READ_ROOT } from '../shared/library-native-read.js';
 import { AcpLineDecoder, AcpLineTooLongError, type AcpLineTransport, type AcpTransportClosed } from './line-transport.js';
 import {
   AcpAccountError,
@@ -2383,6 +2385,635 @@ describe('AcpAgent (the acp engine)', () => {
       fullText: '{"ok":true,"xdt_card_id":"fresh-card"}',
       isError: false,
     });
+  });
+});
+
+// 测试价值
+// - 生产入口与可观察结果：AcpAgent.startSession / openAcpSession / AcpSession.setExtraDirs / setWritableDirs /
+//   decidePermission；断言能力声明、目录说明与撤销注入、非完全访问下 routine 写目录边界校验，以及完全访问（bypassPermissions）放行。
+// - 规则依据：docs/dev-rules/protocol-compatibility/plugin-harnesses.md「附加目录、只读 /review 与共享任务」与
+//   docs/dev-rules/pi-full-access-native-parity.md（完全访问与内置引擎一致放行，非完全访问校验可写边界）。
+// - 现有覆盖缺口：此前 ACP 的 extraDirs/writableDirs 标为 not-implemented 且缺少目录边界与完全访问放行回归覆盖。
+// - 最小失败输入与 tier：unit；非完全访问下越界写/大小写路径键/软链逃逸/悬空链接/凭据路径/Library 根写入/并发撤权，以及完全访问下工作目录外写。
+describe('AcpSession extraDirs and writableDirs', () => {
+  const gateInit = () => ({
+    protocolVersion: 1,
+    agentCapabilities: { promptCapabilities: {}, mcpCapabilities: {}, sessionCapabilities: {} },
+    _meta: { permissionGate: { supported: true } },
+  });
+  const requestMeta = (agent: ReturnType<typeof createFakeAgent>, index: number, routine = true) => {
+    const { turnId } = asRecord(asRecord(agent.prompts[index]!.params._meta).permissionGate);
+    return { _meta: { permissionGate: { turnId, routine } } };
+  };
+  const routineDesktopPolicy = (): TurnPermissionPolicy => ({
+    origin: { kind: 'desktop' },
+    confirmationSurface: 'desktop',
+    forceConfirmToolCall: () => false,
+  });
+
+  it('advertises directory grant capabilities, includes briefing sections, excludes libraryRoot from general list, and emits mid-session updates', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'acp-dirs-briefing-'));
+    try {
+      const workDir = join(root, 'workspace');
+      const refDir = join(root, 'refs');
+      const writeDir = join(root, 'writable');
+      const libRoot = join(root, 'library');
+      mkdirSync(workDir, { recursive: true });
+      mkdirSync(refDir, { recursive: true });
+      mkdirSync(writeDir, { recursive: true });
+      mkdirSync(libRoot, { recursive: true });
+
+      const agent = createFakeAgent({ handlers: { initialize: gateInit } });
+      const engine = new AcpAgent(
+        {
+          auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+          runtimeConfig: {},
+          binaryPath: '',
+          logger: silentLogger,
+          mcpProviders: [],
+          clientInfo: { name: 'cindy-test', version: '0.0.0' },
+          endpoints: { connect: async () => agent.transport },
+        },
+      );
+      const handle = await engine.startSession({
+        workingDir: workDir,
+        model: '',
+        providerId: 'acp-plugin:dsh:dsh',
+        extraDirs: [refDir, libRoot],
+        writableDirs: [writeDir],
+        [LIBRARY_READ_ROOT]: libRoot,
+      });
+
+      expect(handle.negotiatedCapabilities?.extraDirs).toEqual({ supported: true });
+      expect(handle.negotiatedCapabilities?.writableDirs).toEqual({ supported: true });
+
+      const assetRef = `library:assets/ab/${'ab'.repeat(32)}/blob.png`;
+      await handle.send({ type: 'user', content: `Inspect ${assetRef}` });
+      await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+      const turn1Blocks = agent.prompts[0]!.params.prompt as Array<{ type: string; text?: string }>;
+      expect(turn1Blocks[0]!.text).toContain('<cindy-extra-reference-directories>');
+      expect(turn1Blocks[0]!.text).toContain(`- ${refDir}`);
+      expect(turn1Blocks[0]!.text).not.toContain(`- ${libRoot}`);
+      expect(turn1Blocks[0]!.text).toContain('<cindy-extra-writable-directories>');
+      expect(turn1Blocks[0]!.text).toContain(`- ${writeDir}`);
+      const libBlock = turn1Blocks.at(-1)?.text ?? '';
+      expect(libBlock).toContain('<cindy-library-native-read>');
+      expect(libBlock).toContain(JSON.stringify({ libraryRoot: libRoot }));
+      expect(libBlock).toContain(assetRef);
+      agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+
+      // Revoke all extra & writable dirs and library root mid-session.
+      await handle.setExtraDirs?.([], null);
+      await handle.setWritableDirs?.([]);
+      await handle.send({ type: 'user', content: 'Continue after revoke' });
+      await vi.waitFor(() => expect(agent.prompts).toHaveLength(2));
+      const turn2Blocks = agent.prompts[1]!.params.prompt as Array<{ type: string; text?: string }>;
+      expect(turn2Blocks[0]!.text).toContain('<cindy-directory-grants-update>');
+      expect(turn2Blocks[0]!.text).toContain('No extra reference directories or extra writable directories are currently authorized');
+      expect(turn2Blocks.at(-1)?.text ?? '').toContain(JSON.stringify({ libraryRoot: null }));
+      agent.prompts[1]!.settle.resolve({ stopReason: 'end_turn' });
+      await handle.close();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('enforces realpath-verified write directory boundaries and immediate revocation for routine policy auto-approval', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'acp-write-bounds-'));
+    try {
+      const workDir = join(root, 'workspace');
+      const writableDir = join(root, 'writable');
+      const outsideDir = join(root, 'outside');
+      const libraryDir = join(root, 'library');
+      mkdirSync(workDir, { recursive: true });
+      mkdirSync(writableDir, { recursive: true });
+      mkdirSync(outsideDir, { recursive: true });
+      mkdirSync(libraryDir, { recursive: true });
+      const insideFile = join(workDir, 'app.ts');
+      const outsideFile = join(outsideDir, 'secret.txt');
+      writeFileSync(insideFile, 'ok');
+      writeFileSync(outsideFile, 'nope');
+
+      const escapingLink = join(writableDir, 'escape.txt');
+      const danglingLink = join(writableDir, 'dangling.txt');
+      let symlinksReady = true;
+      try {
+        symlinkSync(outsideFile, escapingLink);
+        symlinkSync(join(outsideDir, 'missing.txt'), danglingLink);
+      } catch {
+        symlinksReady = false;
+      }
+
+      const agent = createFakeAgent({ handlers: { initialize: gateInit } });
+      const { session } = await open(agent, {
+        cwd: workDir,
+        permissionMode: 'ask',
+        extraDirs: [libraryDir],
+        libraryRoot: libraryDir,
+      });
+      const asked: InteractionRequest[] = [];
+      session.setInteractionResolver(async (request) => {
+        asked.push(request);
+        return { kind: 'permission', behavior: 'deny' };
+      });
+
+      await session.send({ type: 'user', content: 'Edit files' }, { turnPermissionPolicy: routineDesktopPolicy() });
+      await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+
+      // Inside cwd -> auto-approved for routine policy calls.
+      const inside = await agent.requestPermission({
+        toolCall: { toolCallId: 'w-in', kind: 'edit', rawInput: { path: 'app.ts' } },
+        options: PERMISSION_OPTIONS,
+        ...requestMeta(agent, 0),
+      });
+      expect(inside).toEqual({ outcome: { outcome: 'selected', optionId: 'yes' } });
+      expect(asked).toHaveLength(0);
+
+      // Outside cwd before grant (including PascalCase `Path` key without locations) -> escalated to resolver.
+      const outsideBefore = await agent.requestPermission({
+        toolCall: { toolCallId: 'w-out-1', kind: 'edit', rawInput: { path: outsideFile } },
+        options: PERMISSION_OPTIONS,
+        ...requestMeta(agent, 0),
+      });
+      const outsidePascalCase = await agent.requestPermission({
+        toolCall: { toolCallId: 'w-out-pascal', kind: 'edit', rawInput: { Path: outsideFile } },
+        options: PERMISSION_OPTIONS,
+        ...requestMeta(agent, 0),
+      });
+      expect([outsideBefore, outsidePascalCase]).toEqual([
+        { outcome: { outcome: 'selected', optionId: 'no' } },
+        { outcome: { outcome: 'selected', optionId: 'no' } },
+      ]);
+      expect(asked).toHaveLength(2);
+
+      // Grant writableDir -> existing or non-existent nested file inside writableDir is auto-approved (case-insensitive keys).
+      await session.setWritableDirs([writableDir]);
+      const grantedNested = await agent.requestPermission({
+        toolCall: { toolCallId: 'w-grant', kind: 'edit', rawInput: { file_path: join(writableDir, 'nested', 'new.ts') } },
+        options: PERMISSION_OPTIONS,
+        ...requestMeta(agent, 0),
+      });
+      const grantedPascalCase = await agent.requestPermission({
+        toolCall: { toolCallId: 'w-grant-pascal', kind: 'edit', rawInput: { Path: join(writableDir, 'nested', 'other.ts') } },
+        options: PERMISSION_OPTIONS,
+        ...requestMeta(agent, 0),
+      });
+      expect([grantedNested, grantedPascalCase]).toEqual([
+        { outcome: { outcome: 'selected', optionId: 'yes' } },
+        { outcome: { outcome: 'selected', optionId: 'yes' } },
+      ]);
+      expect(asked).toHaveLength(2);
+
+      // Symlink escape and dangling symlink inside writableDir -> fail closed (escalated, not auto-approved).
+      if (symlinksReady) {
+        const escaped = await agent.requestPermission({
+          toolCall: { toolCallId: 'w-sym', kind: 'edit', rawInput: { path: escapingLink } },
+          options: PERMISSION_OPTIONS,
+          ...requestMeta(agent, 0),
+        });
+        const dangling = await agent.requestPermission({
+          toolCall: { toolCallId: 'w-dang', kind: 'edit', rawInput: { path: danglingLink } },
+          options: PERMISSION_OPTIONS,
+          ...requestMeta(agent, 0),
+        });
+        expect(escaped).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
+        expect(dangling).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
+      }
+
+      // Move from writableDir to outsideDir -> fail closed (destination outside).
+      const crossMove = await agent.requestPermission({
+        toolCall: {
+          toolCallId: 'w-move',
+          kind: 'move',
+          rawInput: { from: join(writableDir, 'a.ts'), to: join(outsideDir, 'b.ts') },
+        },
+        options: PERMISSION_OPTIONS,
+        ...requestMeta(agent, 0),
+      });
+      expect(crossMove).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
+
+      // Sensitive credential path inside cwd and read-only libraryRoot -> never auto-approved.
+      const envEdit = await agent.requestPermission({
+        toolCall: { toolCallId: 'w-env', kind: 'edit', rawInput: { path: join(workDir, '.env') } },
+        options: PERMISSION_OPTIONS,
+        ...requestMeta(agent, 0),
+      });
+      const libEdit = await agent.requestPermission({
+        toolCall: { toolCallId: 'w-lib', kind: 'delete', rawInput: { path: join(libraryDir, 'blob.png') } },
+        options: PERMISSION_OPTIONS,
+        ...requestMeta(agent, 0),
+      });
+      // Missing path under permissionGate -> never auto-approved.
+      const blindWrite = await agent.requestPermission({
+        toolCall: { toolCallId: 'w-blind', kind: 'edit', rawInput: {} },
+        options: PERMISSION_OPTIONS,
+        ...requestMeta(agent, 0),
+      });
+      expect([envEdit, libEdit, blindWrite]).toEqual([
+        { outcome: { outcome: 'selected', optionId: 'no' } },
+        { outcome: { outcome: 'selected', optionId: 'no' } },
+        { outcome: { outcome: 'selected', optionId: 'no' } },
+      ]);
+
+      // Immediate revocation via setWritableDirs([]) blocks the previously allowed dir right away.
+      await session.setWritableDirs([]);
+      const askedBeforeRevoke = asked.length;
+      const afterRevoke = await agent.requestPermission({
+        toolCall: { toolCallId: 'w-revoked', kind: 'edit', rawInput: { file_path: join(writableDir, 'nested', 'new.ts') } },
+        options: PERMISSION_OPTIONS,
+        ...requestMeta(agent, 0),
+      });
+      expect(afterRevoke).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
+      expect(asked.length).toBe(askedBeforeRevoke + 1);
+
+      agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+      await session.close();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('auto-approves writes outside cwd and writableDirs under bypassPermissions (Full access)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'acp-full-access-writes-'));
+    try {
+      const workDir = join(root, 'workspace');
+      const outsideDir = join(root, 'outside');
+      const libraryDir = join(root, 'library');
+      mkdirSync(workDir, { recursive: true });
+      mkdirSync(outsideDir, { recursive: true });
+      mkdirSync(libraryDir, { recursive: true });
+      const outsideFile = join(outsideDir, 'worktree-file.ts');
+      writeFileSync(outsideFile, 'export const a = 1;\n');
+
+      for (const withGate of [false, true]) {
+        const agent = createFakeAgent(withGate ? { handlers: { initialize: gateInit } } : undefined);
+        const { session } = await open(agent, {
+          cwd: workDir,
+          permissionMode: 'bypassPermissions',
+          extraDirs: [libraryDir],
+          libraryRoot: libraryDir,
+        });
+        const asked: InteractionRequest[] = [];
+        session.setInteractionResolver(async (request) => {
+          asked.push(request);
+          return { kind: 'permission', behavior: 'deny' };
+        });
+
+        await session.send({ type: 'user', content: 'Edit files across directories' });
+        await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+        const meta = withGate ? requestMeta(agent, 0) : {};
+
+        const outsideEdit = await agent.requestPermission({
+          toolCall: {
+            toolCallId: 'fa-out',
+            kind: 'edit',
+            locations: [{ path: outsideFile }],
+            rawInput: { Path: outsideFile, Target: 'a = 1', Replacement: 'a = 2' },
+          },
+          options: PERMISSION_OPTIONS,
+          ...meta,
+        });
+        const envEdit = await agent.requestPermission({
+          toolCall: { toolCallId: 'fa-env', kind: 'edit', rawInput: { path: join(workDir, '.env') } },
+          options: PERMISSION_OPTIONS,
+          ...meta,
+        });
+        const libDelete = await agent.requestPermission({
+          toolCall: { toolCallId: 'fa-lib', kind: 'delete', rawInput: { path: join(libraryDir, 'blob.png') } },
+          options: PERMISSION_OPTIONS,
+          ...meta,
+        });
+        const crossMove = await agent.requestPermission({
+          toolCall: {
+            toolCallId: 'fa-move',
+            kind: 'move',
+            rawInput: { from: join(workDir, 'a.ts'), to: join(outsideDir, 'b.ts') },
+          },
+          options: PERMISSION_OPTIONS,
+          ...meta,
+        });
+
+        expect([outsideEdit, envEdit, libDelete, crossMove]).toEqual([
+          { outcome: { outcome: 'selected', optionId: 'yes' } },
+          { outcome: { outcome: 'selected', optionId: 'yes' } },
+          { outcome: { outcome: 'selected', optionId: 'yes' } },
+          { outcome: { outcome: 'selected', optionId: 'yes' } },
+        ]);
+        expect(asked).toHaveLength(0);
+
+        agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+        await session.close();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('never auto-approves routine policy writes when writableDirs is revoked during a second async directory recheck', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'acp-write-race-'));
+    try {
+      const workDir = join(root, 'workspace');
+      const writableDir = join(root, 'writable');
+      const extraWritableDir = join(root, 'writable-2');
+      mkdirSync(workDir, { recursive: true });
+      mkdirSync(writableDir, { recursive: true });
+      mkdirSync(extraWritableDir, { recursive: true });
+      const targetFile = join(writableDir, 'race.ts');
+      writeFileSync(targetFile, 'initial\n');
+
+      const agent = createFakeAgent({ handlers: { initialize: gateInit } });
+      const { session } = await open(agent, {
+        cwd: workDir,
+        permissionMode: 'ask',
+        writableDirs: [writableDir],
+      });
+      const asked: InteractionRequest[] = [];
+      session.setInteractionResolver(async (request) => {
+        asked.push(request);
+        return { kind: 'permission', behavior: 'deny' };
+      });
+
+      await session.send(
+        { type: 'user', content: 'Edit file under concurrent revoke' },
+        { turnPermissionPolicy: routineDesktopPolicy() },
+      );
+      await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+
+      const fsPromises = (await import('node:fs')).promises;
+      const realRealpath = fsPromises.realpath.bind(fsPromises);
+      let targetChecks = 0;
+      const realpathSpy = vi.spyOn(fsPromises, 'realpath').mockImplementation(async (p, ...rest) => {
+        const resolved = await realRealpath(p, ...rest);
+        if (String(p) === targetFile) {
+          targetChecks += 1;
+          if (targetChecks === 1) {
+            // Generation bumps during attempt 1 while writableDir is still granted.
+            await session.setWritableDirs([writableDir, extraWritableDir]);
+          } else if (targetChecks === 2) {
+            // User revokes writableDir while attempt 2 is already in flight with the stale array.
+            await session.setWritableDirs([]);
+          }
+        }
+        return resolved;
+      });
+      try {
+        const outcome = await agent.requestPermission({
+          toolCall: { toolCallId: 'w-race', kind: 'edit', rawInput: { path: targetFile } },
+          options: PERMISSION_OPTIONS,
+          ...requestMeta(agent, 0),
+        });
+        expect(outcome).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
+        expect(asked).toHaveLength(1);
+        expect(targetChecks).toBeGreaterThanOrEqual(2);
+      } finally {
+        realpathSpy.mockRestore();
+      }
+
+      agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+      await session.close();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// 测试价值
+// - 生产入口与可观察结果：AcpAgent.startSession({ reviewMode: true, reviewReadPaths }) 与 AcpSession.decidePermission / send；
+//   断言缺少 permissionGate 时 fail-closed 关停并抛 AgentStartupStoppedError(NotSupportedError)、剥离全部 MCP/花名册/Skill/说明、
+//   每轮强制 scope=all-tool-calls 及不可绕过的只读审查闸。
+// - 规则依据：docs/dev-rules/protocol-compatibility/plugin-harnesses.md「只读 /review 沙盒」与 claude-code/pi 的 reviewMode 不变量。
+// - 现有覆盖缺口：此前 AcpAgent 在握手前硬拒绝所有 reviewMode，无只读审查沙盒与 fail-closed 覆盖。
+// - 最小失败输入与 tier：unit；无 permissionGate 的对端、bypassPermissions 下的写/命令/联网/凭据/越界读/逃逸 glob 与越界附件。
+describe('AcpAgent and AcpSession read-only /review sandbox', () => {
+  const gateInit = () => ({
+    protocolVersion: 1,
+    agentCapabilities: { promptCapabilities: { image: true }, mcpCapabilities: { http: true }, sessionCapabilities: {} },
+    _meta: { permissionGate: { supported: true } },
+  });
+  const requestMeta = (agent: ReturnType<typeof createFakeAgent>, index: number) => {
+    const { turnId } = asRecord(asRecord(agent.prompts[index]!.params._meta).permissionGate);
+    return { _meta: { permissionGate: { turnId, routine: true } } };
+  };
+
+  it('fails closed and closes the endpoint when the ACP agent does not advertise permissionGate', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'acp-review-nogate-'));
+    try {
+      const workDir = join(root, 'repo');
+      mkdirSync(workDir, { recursive: true });
+      const agent = createFakeAgent();
+      const closeSpy = vi.spyOn(agent.transport, 'close');
+      const prepareBridge = vi.fn();
+      const engine = new AcpAgent({
+        auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+        runtimeConfig: {},
+        binaryPath: '',
+        logger: silentLogger,
+        mcpProviders: [],
+        preparePiExtraSpawnConfig: prepareBridge,
+        clientInfo: { name: 'cindy-test', version: '0.0.0' },
+        endpoints: { connect: async () => agent.transport },
+      });
+
+      let caught: unknown;
+      try {
+        await engine.startSession({
+          workingDir: workDir,
+          model: '',
+          providerId: 'acp-plugin:dsh:dsh',
+          reviewMode: true,
+        });
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toBeInstanceOf(AgentStartupStoppedError);
+      const cause = (caught as AgentStartupStoppedError).cause;
+      expect(cause).toBeInstanceOf(NotSupportedError);
+      expect((cause as NotSupportedError).capability).toBe('reviewMode');
+      expect((cause as NotSupportedError).status).toMatchObject({ supported: false, reason: 'sdk-missing' });
+      expect(closeSpy).toHaveBeenCalled();
+      expect(prepareBridge).not.toHaveBeenCalled();
+      expect(agent.methods()).toEqual(['initialize']);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('strips all MCP/context/skills, forces permissionGate every turn, and enforces an unbypassable read-only sandbox', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'acp-review-sandbox-'));
+    try {
+      const workDir = join(root, 'repo');
+      const extraRepo = join(root, 'extra-repo');
+      const artifactDir = join(root, 'artifacts');
+      const outsideDir = join(root, 'outside');
+      mkdirSync(join(workDir, 'src'), { recursive: true });
+      mkdirSync(join(workDir, '.git'), { recursive: true });
+      mkdirSync(extraRepo, { recursive: true });
+      mkdirSync(artifactDir, { recursive: true });
+      mkdirSync(outsideDir, { recursive: true });
+      const srcFile = join(workDir, 'src', 'index.ts');
+      const envFile = join(workDir, '.env');
+      const privateKeyFile = join(workDir, 'private.key');
+      const gitConfig = join(workDir, '.git', 'config');
+      const extraRepoFile = join(extraRepo, 'lib.ts');
+      const allowedArtifact = join(artifactDir, 'report.md');
+      const siblingArtifact = join(artifactDir, 'other.md');
+      const outsideFile = join(outsideDir, 'secret.txt');
+      writeFileSync(srcFile, 'export const ok = true;\n');
+      writeFileSync(envFile, 'FIXTURE_ENV_VAR=placeholder\n');
+      writeFileSync(privateKeyFile, 'synthetic-key-fixture-not-a-real-key\n');
+      writeFileSync(gitConfig, '[core]\n');
+      writeFileSync(extraRepoFile, 'export const lib = 1;\n');
+      writeFileSync(allowedArtifact, '# report\n');
+      writeFileSync(siblingArtifact, '# sibling\n');
+      writeFileSync(outsideFile, 'top-secret\n');
+
+      const symlinkInRepo = join(workDir, 'src', 'leak.txt');
+      let symlinksReady = true;
+      try {
+        symlinkSync(outsideFile, symlinkInRepo);
+      } catch {
+        symlinksReady = false;
+      }
+
+      const agent = createFakeAgent({ handlers: { initialize: gateInit } });
+      const prepareBridge = vi.fn();
+      const readRoster = vi.fn(() => '<ghost-roster>should-not-appear</ghost-roster>');
+      const listSkills = vi.fn(async () => [{ name: 'pr', path: join(workDir, 'SKILL.md') }]);
+      const engine = new AcpAgent({
+        auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+        runtimeConfig: {},
+        binaryPath: '',
+        logger: silentLogger,
+        mcpProviders: [],
+        preparePiExtraSpawnConfig: prepareBridge,
+        getGhostRosterPrompt: readRoster,
+        listSessionSkills: listSkills,
+        clientInfo: { name: 'cindy-test', version: '0.0.0' },
+        endpoints: { connect: async () => agent.transport },
+      });
+
+      const handle = await engine.startSession({
+        workingDir: workDir,
+        model: '',
+        providerId: 'acp-plugin:dsh:dsh',
+        permissionMode: 'bypassPermissions',
+        reviewMode: true,
+        reviewReadPaths: [extraRepo, allowedArtifact],
+        extraDirs: [outsideDir],
+        writableDirs: [outsideDir],
+        pluginEngineBriefing: 'Worker briefing should be stripped',
+        botRuntimeProfile: { botId: 'b1', mode: 'project', mcpPolicy: { allow: [] } } as never,
+        botProfilePrompt: 'Bot prompt should be stripped',
+        makerMemoryEnabled: true,
+        makerMemoryIndexSnapshot: 'Memory should be stripped',
+      });
+
+      expect(prepareBridge).not.toHaveBeenCalled();
+      expect(readRoster).not.toHaveBeenCalled();
+      expect(listSkills).not.toHaveBeenCalled();
+      const sessionNewCall = agent.sent.find((req) => req.method === 'session/new');
+      expect(asRecord(sessionNewCall?.params).mcpServers).toEqual([]);
+
+      // Even attempting to elevate permission mode or directories mid-session stays a no-op.
+      await handle.setPermissionMode?.('bypassPermissions');
+      await handle.setWritableDirs?.([outsideDir]);
+      await handle.setExtraDirs?.([outsideDir]);
+
+      // Direct attachments outside reviewReadPaths or sensitive paths are refused before send.
+      await expect(handle.send({
+        type: 'user',
+        content: [{ type: 'text', text: 'check' }, { type: 'file', path: outsideFile }],
+      })).rejects.toThrow();
+      await expect(handle.send({
+        type: 'user',
+        content: [{ type: 'text', text: 'check' }, { type: 'file', path: envFile }],
+      })).rejects.toThrow();
+
+      const asked: InteractionRequest[] = [];
+      handle.setInteractionResolver(async (request) => {
+        asked.push(request);
+        return { kind: 'permission', behavior: 'allow' };
+      });
+
+      await handle.send({
+        type: 'user',
+        content: [{ type: 'text', text: 'Review changes' }, { type: 'file', path: allowedArtifact }],
+      });
+      await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+      expect(agent.prompts[0]!.params._meta).toEqual({
+        permissionGate: { turnId: expect.any(String), scope: 'all-tool-calls' },
+      });
+      // Prompt has no stripped briefing/roster/skills/memory/dir notes.
+      const promptBlocks = agent.prompts[0]!.params.prompt as Array<{ type: string; text?: string }>;
+      expect(promptBlocks[0]).toEqual({ type: 'text', text: 'Review changes' });
+
+      // Allowed reads and single-file searches within cwd + reviewReadPaths.
+      const allowedCalls = await Promise.all([
+        agent.requestPermission({
+          toolCall: { toolCallId: 'r-cwd', kind: 'read', rawInput: { file_path: 'src/index.ts' } },
+          options: PERMISSION_OPTIONS,
+          ...requestMeta(agent, 0),
+        }),
+        agent.requestPermission({
+          toolCall: { toolCallId: 'r-extra', kind: 'read', locations: [{ path: extraRepoFile }] },
+          options: PERMISSION_OPTIONS,
+          ...requestMeta(agent, 0),
+        }),
+        agent.requestPermission({
+          toolCall: { toolCallId: 'r-exact', kind: 'read', rawInput: { path: allowedArtifact } },
+          options: PERMISSION_OPTIONS,
+          ...requestMeta(agent, 0),
+        }),
+        agent.requestPermission({
+          toolCall: { toolCallId: 's-grep-file', kind: 'search', name: 'Grep', rawInput: { pattern: 'export const', path: 'src/index.ts' } },
+          options: PERMISSION_OPTIONS,
+          ...requestMeta(agent, 0),
+        }),
+      ]);
+      expect(allowedCalls).toEqual(Array(4).fill({ outcome: { outcome: 'selected', optionId: 'yes' } }));
+
+      // Denied calls: writes, deletes, moves, execute, fetch, unknown, outside reads, sibling of exact file,
+      // credentials, directory-wide searches/reads (which cannot filter private.key/.env/symlinks in external harnesses), and escaping globs.
+      const deniedToolCalls: AcpRecord[] = [
+        { toolCallId: 'd-edit', kind: 'edit', rawInput: { path: srcFile } },
+        { toolCallId: 'd-del', kind: 'delete', rawInput: { path: srcFile } },
+        { toolCallId: 'd-move', kind: 'move', rawInput: { from: srcFile, to: join(workDir, 'src', 'b.ts') } },
+        { toolCallId: 'd-exec', kind: 'execute', rawInput: { command: 'ls' } },
+        { toolCallId: 'd-fetch', kind: 'fetch', rawInput: { url: 'https://example.com' } },
+        { toolCallId: 'd-other', kind: 'other', rawInput: { path: srcFile } },
+        { toolCallId: 'd-nopath', kind: 'read', rawInput: {} },
+        { toolCallId: 'd-read-dir', kind: 'read', rawInput: { path: workDir } },
+        { toolCallId: 'd-outside', kind: 'read', rawInput: { path: outsideFile } },
+        { toolCallId: 'd-sibling', kind: 'read', rawInput: { path: siblingArtifact } },
+        { toolCallId: 'd-env', kind: 'read', rawInput: { path: envFile } },
+        { toolCallId: 'd-key', kind: 'read', rawInput: { path: privateKeyFile } },
+        { toolCallId: 'd-git', kind: 'read', rawInput: { path: gitConfig } },
+        { toolCallId: 'd-grep-root', kind: 'search', name: 'Grep', rawInput: { path: '.', pattern: 'synthetic-key-fixture' } },
+        { toolCallId: 'd-grep-dir', kind: 'search', name: 'Grep', rawInput: { pattern: 'export const', path: 'src', glob: '*.ts' } },
+        { toolCallId: 'd-grep-nopath', kind: 'search', name: 'Grep', rawInput: { pattern: 'synthetic-key-fixture' } },
+        { toolCallId: 'd-glob-dir', kind: 'search', name: 'Glob', rawInput: { pattern: 'src/**/*.ts' } },
+        { toolCallId: 'd-grep-key', kind: 'search', name: 'Grep', rawInput: { path: privateKeyFile, pattern: 'synthetic-key-fixture' } },
+        { toolCallId: 'd-glob-escape', kind: 'search', name: 'Glob', rawInput: { pattern: '../outside/*' } },
+        { toolCallId: 'd-grep-env', kind: 'search', name: 'Grep', rawInput: { pattern: 'FIXTURE_ENV_VAR', glob: '**/.env*' } },
+        ...(symlinksReady ? [{ toolCallId: 'd-sym', kind: 'read', rawInput: { path: symlinkInRepo } }] : []),
+      ];
+      for (const toolCall of deniedToolCalls) {
+        const outcome = await agent.requestPermission({
+          toolCall,
+          options: PERMISSION_OPTIONS,
+          ...requestMeta(agent, 0),
+        });
+        expect(outcome, String(toolCall.toolCallId)).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
+      }
+      // Review gate never escalates to interactive resolver (even if resolver would approve).
+      expect(asked).toHaveLength(0);
+
+      agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+      await handle.close();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

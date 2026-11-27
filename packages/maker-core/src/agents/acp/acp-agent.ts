@@ -44,6 +44,8 @@ import {
   deviceHostedPluginEngineMcpServers,
   deviceHostedPluginEngineNote,
 } from '../shared/device-hosted.js';
+import { LIBRARY_READ_ROOT } from '../shared/library-native-read.js';
+import { buildReviewReadGrants, type ReviewReadGrant } from '../shared/review-read-scope.js';
 import { NATIVE_SUBSCRIPTION_ACCOUNT } from '../../interfaces/auth-adapter.js';
 import {
   AcpAccountError,
@@ -242,12 +244,26 @@ export class AcpAgent extends BaseAgent {
       }));
     }
     const hosted = opts.deviceHosted;
-    if (opts.reviewMode) {
-      throw new AgentStartupStoppedError(new NotSupportedError('reviewMode', { supported: false, reason: 'not-implemented' }));
+    const reviewMode = opts.reviewMode === true;
+    if (reviewMode && hosted) {
+      throw new AgentStartupStoppedError(new NotSupportedError('reviewMode', {
+        supported: false,
+        reason: 'not-implemented',
+        message: 'Review is not available for tasks whose agent runs on another computer',
+      }));
     }
     const harnessKey = acpHarnessKeyFromProviderId(opts.providerId);
     if (!harnessKey) {
       throw new AgentStartupStoppedError(new Error('A plugin engine task needs its harness id (acp-plugin:<plugin>:<harness>)'));
+    }
+
+    let reviewReadGrants: ReviewReadGrant[] = [];
+    if (reviewMode) {
+      try {
+        reviewReadGrants = await buildReviewReadGrants(opts.workingDir, opts.reviewReadPaths ?? []);
+      } catch (error) {
+        throw new AgentStartupStoppedError(error);
+      }
     }
 
     const managed = opts[NATIVE_SUBSCRIPTION_ACCOUNT];
@@ -269,7 +285,8 @@ export class AcpAgent extends BaseAgent {
     let extra: PiExtraSpawnConfig | null = null;
     // Hosted for another computer: Cindy tools are that computer's and arrive through the tunnel,
     // so this computer's own tool bridge (and its installed plugins, memory, sessions) stays out.
-    if (!hosted && this.deps.preparePiExtraSpawnConfig) {
+    // Read-only /review strips all MCP servers, matching claude-code and pi.
+    if (!hosted && !reviewMode && this.deps.preparePiExtraSpawnConfig) {
       try {
         extra = await this.deps.preparePiExtraSpawnConfig(this.deps.mcpProviders ?? [], {
           // Same Cindy tool scope as the built-in Pi engine (product decision 2026-11-18).
@@ -302,7 +319,7 @@ export class AcpAgent extends BaseAgent {
     };
 
     // Only a host-provided companion profile supplies the identity for this chat.
-    const companionBriefing = opts.botRuntimeProfile ? [
+    const companionBriefing = !reviewMode && opts.botRuntimeProfile ? [
       opts.botProfilePrompt ?? '',
       opts.botProfileContextPrompt ?? '',
       memoryEnabled && opts.makerMemoryIndexSnapshot?.trim()
@@ -341,7 +358,8 @@ export class AcpAgent extends BaseAgent {
     // (`deviceHostedGhostRoster`, only when the tunnel offers the gateway; this computer's plugins never
     // enter it), and no Skill list: there is no cross-computer source for one. A resumed session already
     // has the briefing, and resuming never falls back to a new session, so nothing is read for it.
-    const capabilities = isolatedBotProfile(opts.botRuntimeProfile) || opts.resumeSessionId ? null
+    // Read-only /review strips roster, skills, memory, companion profile and host briefings.
+    const capabilities = reviewMode || isolatedBotProfile(opts.botRuntimeProfile) || opts.resumeSessionId ? null
       : hosted ? { pluginRoster: deviceHostedGhostRoster(hosted, opts.ghostRosterSnapshot, () => ''), skills: [] }
       : {
         pluginRoster: this.readPluginRoster(opts.workingDir, logger),
@@ -358,7 +376,7 @@ export class AcpAgent extends BaseAgent {
       return raw ? defusePluginEngineSlashMentions(raw, skillCommandNames) : '';
     };
     // The workspace note comes first: without it the agent has no way to know where the project is.
-    const briefing = (acceptedMcpServers: readonly string[]): string => [
+    const briefing = (acceptedMcpServers: readonly string[]): string => reviewMode ? '' : [
       hosted ? deviceHostedPluginEngineNote(hosted, opts.workingDir) : '',
       companionBriefing,
       renderMemoryBriefing(acceptedMcpServers),
@@ -369,12 +387,15 @@ export class AcpAgent extends BaseAgent {
     // message that asks for one (resumed conversations included). Same exclusions as the Skill list:
     // an isolated companion keeps its frozen capability set, and a task of another computer has no
     // Skill source here.
-    const expandSlashInvocation = isolatedBotProfile(opts.botRuntimeProfile) || hosted ? undefined
+    const expandSlashInvocation = reviewMode || isolatedBotProfile(opts.botRuntimeProfile) || hosted ? undefined
       : (text: string) => expandPluginEngineSkillInvocation(
           text,
           () => this.readSessionSkills(opts.workingDir, logger),
           (message) => logger.warn('acp: Skill invocation left unexpanded', { message }),
         );
+    const extraDirs = reviewMode || hosted ? [] : (opts.extraDirs ?? []);
+    const writableDirs = reviewMode || hosted ? [] : (opts.writableDirs ?? []);
+    const libraryRoot = reviewMode || hosted ? undefined : opts[LIBRARY_READ_ROOT];
     // The host's account pool picked an account Cindy added (its own directory); the agent's
     // original login runs exactly as before.
     const account = opts[NATIVE_SUBSCRIPTION_ACCOUNT];
@@ -394,19 +415,22 @@ export class AcpAgent extends BaseAgent {
           cwd: opts.workingDir,
           clientInfo: this.acpDeps.clientInfo,
           ...(!hosted && opts.sessionId ? { recoverVerification: this.acpDeps.verificationForTask?.(harnessKey, opts.sessionId) } : {}),
-          mcpServers: hosted ? acpMcpServersForHostedTask(hosted) : acpMcpServersFromBridge(extra),
+          mcpServers: reviewMode ? [] : hosted ? acpMcpServersForHostedTask(hosted) : acpMcpServersFromBridge(extra),
           // Without the replacement file and command tools the agent could do nothing on the project.
           ...(hosted ? { requiredMcpServers: [DEVICE_HOSTED_EXEC_MCP_SERVER] } : {}),
-          ...(opts.resumeSessionId ? { resumeSessionId: opts.resumeSessionId } : {}),
+          ...(!reviewMode && opts.resumeSessionId ? { resumeSessionId: opts.resumeSessionId } : {}),
           ...(opts.model ? { model: opts.model } : {}),
-          ...(opts.botRuntimeProfile || hosted ? { requireSelectedModel: true } : {}),
+          ...(!reviewMode && (opts.botRuntimeProfile || hosted) ? { requireSelectedModel: true } : {}),
           ...(opts.effort ? { effort: opts.effort } : {}),
-          ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
-          ...(opts.planMode ? { planMode: true } : {}),
-          ...(!hosted && opts.extraDirs && opts.extraDirs.length > 0 ? { extraDirs: opts.extraDirs } : {}),
+          ...(reviewMode ? { permissionMode: 'ask' as const } : opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
+          ...(!reviewMode && opts.planMode ? { planMode: true } : {}),
+          ...(extraDirs.length > 0 ? { extraDirs } : {}),
+          ...(writableDirs.length > 0 ? { writableDirs } : {}),
+          ...(libraryRoot !== undefined ? { libraryRoot } : {}),
+          ...(reviewMode ? { reviewMode: true, reviewReadGrants } : {}),
           // Device-hosted tasks mutate files on the controller computer through cindy_exec,
           // where RemoteExecutor captures pre-write snapshots on the real workspace.
-          ...(!hosted && opts.sessionId && this.deps.turnChangeCapture
+          ...(!reviewMode && !hosted && opts.sessionId && this.deps.turnChangeCapture
             ? { captureSessionId: opts.sessionId, turnChangeCapture: this.deps.turnChangeCapture }
             : {}),
           briefing,
