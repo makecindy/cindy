@@ -13,6 +13,7 @@ import {
   MCP_APP_MAX_HEIGHT,
   McpAppHeightGuard,
   mcpAppFailureKey,
+  type McpAppResourceSource,
   type AppRpc,
   type AppInvoker,
 } from '@cindy/maker-shared/mcp-app-controller';
@@ -161,7 +162,7 @@ interface McpAppCardProps {
   composerPlacement?: string;
   chrome?: 'card' | 'panel';
   sizing?: 'content' | 'fill' | 'sidebar-section';
-  source?: { instanceId: string; viewId: string };
+  source?: McpAppResourceSource;
   contextSource?: { read(): Record<string, unknown>; subscribe(changed: () => void): () => void };
   onUnavailable?(): void;
 }
@@ -203,6 +204,7 @@ export function McpAppCard(props: McpAppCardProps) {
 
 /** Untrusted HTML always sits across an origin boundary, without Cindy's preload. */
 function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, deviceId, plugin, source, composerPlacement, contextSource, onUnavailable, customMcp, initialHeight, chrome = 'card', sizing = 'content' }: McpAppCardProps & { deviceId?: string }) {
+  const composerActionId = source?.composerAction?.id;
   const { t, i18n } = useTranslation();
   const [canFullscreen, setCanFullscreen] = useState(false);
   const appTitle = title || t('mcpApps.appName');
@@ -250,15 +252,16 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     // A failed View collapses; observe the card so its retry stays visible.
     const element = card.current;
     if (!element) return;
-    let intersecting = false;
+    let intersecting = !!composerActionId;
     let windowHidden = isWindowHidden();
     const update = () => {
       const windowVisible = !windowHidden && document.visibilityState !== 'hidden';
       const regionVisible = isPluginUiElementVisible(element);
       const next = intersecting && windowVisible && regionVisible;
+      if (composerActionId && !next) unavailableRef.current?.();
       visibleRef.current = next;
       if (!windowVisible) releaseAllRetainedLocalViews();
-      if (!next && windowVisible && regionVisible && deviceId === undefined && controllerRef.current?.document) {
+      if (!composerActionId && !next && windowVisible && regionVisible && deviceId === undefined && controllerRef.current?.document) {
         retainLocalView(retentionKey, () => setRetained(false));
         setRetained(true);
       } else {
@@ -267,11 +270,14 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       }
       setVisible(next);
     };
-    const observer = new IntersectionObserver(([entry]) => {
+    // The native button already passed the visible composer gate. Its inert
+    // action frame has no viewport share to observe and can never be retained.
+    const observer = composerActionId ? undefined : new IntersectionObserver(([entry]) => {
       intersecting = entry.isIntersecting;
       update();
     }, { rootMargin: '80px 0px' });
-    observer.observe(element);
+    observer?.observe(element);
+    if (composerActionId) update();
     document.addEventListener('visibilitychange', update);
     const stopWindowHidden = window.electronAPI?.onWindowHiddenChange?.((hidden) => { windowHidden = hidden; update(); });
     const stopRegions = subscribePluginUiRegions(() => {
@@ -281,14 +287,14 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       update();
     });
     return () => {
-      observer.disconnect();
+      observer?.disconnect();
       document.removeEventListener('visibilitychange', update);
       stopWindowHidden?.();
       stopRegions();
       forgetRetainedLocalView(retentionKey);
       visibleRef.current = false;
     };
-  }, [deviceId, retentionKey]);
+  }, [deviceId, retentionKey, composerActionId]);
 
   useLayoutEffect(() => {
     const element = root.current;
@@ -400,7 +406,10 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       post,
       (message) => {
         if (disposed) return;
-        if (message.method === 'ui/notifications/sandbox-handshake-started') handshakeStarted = true;
+        if (message.method === 'ui/notifications/sandbox-handshake-started') {
+          if (composerActionId && handshakeStarted) { fail(new Error('MCP_APP_VIEW_UNAVAILABLE')); return; }
+          handshakeStarted = true;
+        }
         if (message.method === 'ui/notifications/sandbox-result-delivered') resultDelivered = true;
         if (message.method === 'ui/notifications/initialized') { phase = 'active'; initialized = true; }
         if (message.method === 'ui/notifications/size-changed') {
@@ -425,7 +434,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
           const controls = message.params?.['cindy/host-controls'];
           if (controls && typeof controls === 'object') setCanFullscreen((controls as { fullscreenButton?: unknown }).fullscreenButton === true);
           const mode = message.params?.displayMode;
-          if (mode === 'inline' || mode === 'fullscreen') setMode(mode);
+          if (!composerActionId && (mode === 'inline' || mode === 'fullscreen')) setMode(mode);
         }
       },
       fail,
@@ -549,7 +558,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       observer.observe(card.current!);
     });
     void controller
-      .open(initialContext, async waiting => {
+      .open(initialContext, composerActionId ? undefined : async waiting => {
         if (disposed || !visibleRef.current) return false;
         clearTimeout(loadingTimer);
         if (!waiting) {
@@ -657,7 +666,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
         });
     }
     return dispose;
-  }, [sessionId, clientId, attempt, appTitle, enabled, deviceId, source?.instanceId, source?.viewId, composerPlacement, sidebarSection, heights, heightKey, rememberLayout]);
+  }, [sessionId, clientId, attempt, appTitle, enabled, deviceId, source?.instanceId, source?.viewId, composerActionId, composerPlacement, sidebarSection, heights, heightKey, rememberLayout]);
 
   useLayoutEffect(() => {
     const controller = controllerRef.current;
@@ -749,7 +758,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       </div>}
       {chrome === 'panel' && mode !== 'fullscreen' && !sidebarSection && showSpinner && <div className="flex justify-center p-3"><Spinner size={16} /></div>}
       {chrome === 'panel' && mode !== 'fullscreen' && error && <div className="p-3"><Button variant="secondary" size="sm" onClick={() => setAttempt(value => value + 1)}>{t('mcpApps.retry')}</Button></div>}
-      {sessionId !== null && <McpAppPermissionPrompt sessionId={sessionId} clientId={clientId} />}
+      {sessionId !== null && !composerActionId && <McpAppPermissionPrompt sessionId={sessionId} clientId={clientId} />}
       {error && (
         <p role="alert" className="px-3 pb-3 text-13 text-[var(--text-secondary)]">
           {t(error)}

@@ -1,6 +1,10 @@
 import { useEffect } from 'react';
 import { getDraft, saveDraft, plainTextToTiptapDoc } from '@/lib/composerDraftStore';
-import { pluginUiDraftSnapshot, subscribePluginUiDraft, replacePluginUiDraftSelection, readPluginUiDraftDocument, assertPluginUiDraftWritable } from './pluginUiContext';
+import {
+  pluginUiDraftSnapshot, subscribePluginUiDraft, replacePluginUiDraftSelection, readPluginUiDraftDocument, assertPluginUiDraftWritable,
+  startPluginUiComposerAction, assertPluginUiComposerActionStarted, finishPluginUiComposerAction, editPluginUiDraft, type PluginUiDraftWriteMode,
+} from './pluginUiContext';
+import type { JSONContent } from '@tiptap/core';
 import { openPluginUiView } from '@/features/right-sidebar/lib/openPluginUiView';
 import { usePluginUiLaunchers, runPluginUiLauncher } from './PluginUiContributions';
 import { matchesPluginAppShortcut } from '@/lib/appShortcutStore';
@@ -54,6 +58,15 @@ export function PluginUiHost() {
           } else if (action.kind === 'regions') {
             applyPluginUiRegions(action.values as PluginUiRegions);
             result = { applied: true };
+          } else if (action.kind === 'composer-action-start' && typeof action.sessionId === 'string') {
+            startPluginUiComposerAction(action.sessionId, action.composerAction);
+            result = { started: true };
+          } else if (action.kind === 'composer-action-finish' && typeof action.sessionId === 'string' &&
+            (action.status === 'success' || action.status === 'error')) {
+            finishPluginUiComposerAction(action.sessionId, action.composerAction, {
+              status: action.status, message: typeof action.message === 'string' ? action.message : undefined,
+            });
+            result = { finished: true };
           } else if (action.kind === 'draft-watch' && typeof action.sessionId === 'string') {
             const sessionId = action.sessionId;
             let disposed = false, queued = false, forwarding = false, dirty = false;
@@ -87,6 +100,7 @@ export function PluginUiHost() {
             changed();
             return;
           } else if (action.kind === 'draft-read' && typeof action.sessionId === 'string') {
+            if (action.composerAction !== undefined) assertPluginUiComposerActionStarted(action.sessionId, action.composerAction);
             result = readPluginUiDraftDocument(action.sessionId, action.offset as number | undefined, action.revision as string | undefined);
           } else if (action.kind === 'open' && typeof action.instanceId === 'string' && typeof action.viewId === 'string') {
             // App 自己请求开页，不是用户手势：只落页签与可见性，不拉宽主窗口（userInitiated:false）。
@@ -95,19 +109,34 @@ export function PluginUiHost() {
               undefined,
               { userInitiated: false });
             result = { opened: true };
-          } else if (action.kind === 'draft' && typeof action.sessionId === 'string' && typeof action.text === 'string') {
-            assertPluginUiDraftWritable(action.sessionId);
+          } else if (action.kind === 'draft' && typeof action.sessionId === 'string' &&
+            (typeof action.text === 'string' || action.document !== undefined)) {
+            const inlineEditor = action.composerAction === undefined ? undefined
+              : assertPluginUiComposerActionStarted(action.sessionId, action.composerAction);
+            const editor = assertPluginUiDraftWritable(action.sessionId);
+            if ((inlineEditor || action.document !== undefined) && editor?.view.composing) throw new Error('MCP_APP_DRAFT_UNAVAILABLE');
+            if (!['append', 'replace', 'replace-selection'].includes(String(action.mode)) ||
+              action.document !== undefined && action.text !== undefined) throw new Error('MCP_APP_INVALID_REQUEST');
             const current = pluginUiDraftSnapshot(action.sessionId);
             if (action.mode !== 'append' && action.revision !== current.revision) throw new Error('MCP_APP_DRAFT_CHANGED');
-            if (action.mode === 'replace-selection') {
-              replacePluginUiDraftSelection(action.sessionId, action.text);
+            if (action.document !== undefined) {
+              if (!editor) throw new Error('MCP_APP_DRAFT_UNAVAILABLE');
+              editPluginUiDraft(editor, action.document as JSONContent, action.mode as PluginUiDraftWriteMode);
+            } else if (typeof action.text !== 'string') {
+              throw new Error('MCP_APP_INVALID_REQUEST');
+            } else if (action.mode === 'replace-selection') {
+              replacePluginUiDraftSelection(action.sessionId, action.text, !!inlineEditor);
             } else {
               const draft = getDraft(action.sessionId);
               const incoming = plainTextToTiptapDoc(action.text);
-              const text = action.mode === 'append' && draft?.text
-                ? { ...draft.text, content: [...(draft.text.content ?? []), ...(incoming.content ?? [])] }
-                : incoming;
-              saveDraft(action.sessionId, { ...draft, text, attachments: draft?.attachments ?? [] });
+              if (inlineEditor) {
+                editPluginUiDraft(inlineEditor, incoming, action.mode === 'append' ? 'append' : 'replace');
+              } else {
+                const text = action.mode === 'append' && draft?.text
+                  ? { ...draft.text, content: [...(draft.text.content ?? []), ...(incoming.content ?? [])] }
+                  : incoming;
+                saveDraft(action.sessionId, { ...draft, text, attachments: draft?.attachments ?? [] });
+              }
             }
             result = pluginUiDraftSnapshot(action.sessionId);
           } else throw new Error('MCP_APP_INVALID_REQUEST');

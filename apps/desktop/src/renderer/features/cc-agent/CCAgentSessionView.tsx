@@ -45,7 +45,7 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react';
-import type { CSSProperties, ReactNode } from 'react';
+import type { CSSProperties, ReactNode, Ref } from 'react';
 import { Navigate, useLocation, useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import {
   getProvisionalDraftTaskId,
@@ -57,7 +57,7 @@ import { SessionRouteOriginGate } from './SessionRouteOriginGate';
 import { usePluginSkillSetup } from './pluginSkillSetup';
 import { useBotIslandVisibleSession } from '@/features/bots/useBotIslandVisibleSession';
 import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../../shared/agentKindConversion';
-import { isPluginEngineEffort, isPluginEngineKind, pluginEngineKeyFromProviderId } from '../../../shared/pluginEngines';
+import { isPluginEngineEffort, isPluginEngineKind, isPluginEngineSwitchSourceAllowed, pluginEngineKeyFromProviderId } from '../../../shared/pluginEngines';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import {
   findPluginEngine,
@@ -975,6 +975,8 @@ function CCAgentSessionContent({
   const { t } = useTranslation();
   const hasWorkdirMenu = usePluginUiHas('workdir.menu');
   const hasPluginStatusbar = usePluginUiHas('statusbar');
+  const hasComposerHeader = usePluginUiHas('composer.header');
+  const [composerHeaderTarget, setComposerHeaderTarget] = useState<HTMLDivElement | null>(null);
   const { sessionId: paramSessionId } = useParams<{ sessionId: string }>();
   const sessionId = sessionIdProp ?? paramSessionId;
   const botChatIdentity = resolveBotChatIdentity(botIdentity, sessionId);
@@ -2354,7 +2356,7 @@ function CCAgentSessionContent({
   const completedLocalAutomation = localAutomation && scheduleSessionInfo?.canSwitchPluginEngine === true;
   const pluginEngineSwitchEligible = pluginEngineOnTaskComputer && !!sessionId && !readOnly
     && !session.orcaRole && !session.orcaRemoteLead
-    && ((session.source ?? 'desktop') === 'desktop' || session.source === 'bot' || completedLocalAutomation)
+    && (isPluginEngineSwitchSourceAllowed(session.source) || completedLocalAutomation)
     && session.status !== 'archived';
   const automationCanReturnToBuiltin = localAutomation && pluginEngineOnTaskComputer && pluginEngineTask
     && !readOnly && !session.orcaRole && !session.orcaRemoteLead && session.status === 'active';
@@ -6339,6 +6341,7 @@ function CCAgentSessionContent({
                   errorText={errorTailText}
                   dismissOnEscape={viewVisible && ownsHardwareTaskActions}
                   errorReason={errorTailMsg?.errorReason}
+                  errorCreatedAt={errorTailMsg?.createdAt}
                   reconnectHandoff={errorTailMsg?.reconnectHandoff}
                   toolLoop={errorTailMsg?.toolLoop}
                   outputLimit={errorTailMsg?.outputLimit}
@@ -6548,6 +6551,26 @@ function CCAgentSessionContent({
     (agentStatus.isRunning || waitingRemoteStart || backgroundTasksActive || runningWorkflow !== null);
   const originDeviceId = rightSidebarDeviceLinkDeviceId ?? null;
   const originAccessAvailable = !readOnly && !remoteSessionUnavailable && !isSharedTaskPeer(originDeviceId ?? '');
+  const showComposerHeader = hasComposerHeader && !session?.remoteHostId && !originDeviceId;
+  const composerCenter = (
+    <>
+      <PinnedPlanPanel
+        sessionId={sessionId ?? null}
+        messages={sideChatMessages}
+        animated={isStreaming}
+        streaming={isStreaming}
+        width={inputWidth}
+        inlinePlanVisibility={inlinePlanVisibility}
+        taskHistoryMayBeIncomplete={!historyLoaded || hasMoreMessages || historyWindowHasIsland}
+        visible={!(pendingPlanReview || pendingPermission || pendingAskUser || pendingPluginSetup ||
+          pendingIssueConfirm || pendingRenameSessionsConfirm || pendingGhostGrantConfirm ||
+          pendingRemoteDesktopConfirmation || pendingInputHandoff)}
+        className="mb-0"
+      />
+      {showCenteredControlledBanner && <ControlledBanner
+        placement="composer" maxWidth={controlledBannerMaxWidth} sessionId={sessionId ?? null} />}
+    </>
+  );
 
   const content = (
     // Layout: single scroll container (full height) + sticky input overlay at bottom.
@@ -6831,9 +6854,7 @@ function CCAgentSessionContent({
 
           {/* Solid background zone */}
           <div className="wallpaper-composer-zone pointer-events-auto flex w-full flex-col items-center bg-[hsl(var(--content-area))] pb-5">
-            {/* 单行 composer 状态层：RunningStatusBar 与中央胶囊组合叠在同一个 grid row。
-              展开态由「计划 + 完整被控提示」组成真实 flex 组合共同居中,被控提示会把计划
-              向左挤且不会互相覆盖；折叠态计划恢复单独居中,呼吸灯移到 token 统计左侧。 */}
+            {/* 状态与输入区按钮共用一行。按钮由下方 ChatInput 持有，行内位置不随运行态切换。 */}
             <div
               className="mx-auto grid grid-cols-1 grid-rows-1 items-center"
               style={{ width: inputWidth }}
@@ -6891,46 +6912,11 @@ function CCAgentSessionContent({
                       />
                     ) : null
                   }
+                  centeredSlot={composerCenter}
+                  composerHeaderRef={showComposerHeader ? setComposerHeaderTarget : undefined}
                   className="col-start-1 row-start-1"
                 />
-              ) : null}
-              <div
-                data-composer-center-group="true"
-                className="pointer-events-none relative z-raised col-start-1 row-start-1 flex max-w-full -translate-y-1 items-center justify-center gap-2"
-              >
-                <PinnedPlanPanel
-                  sessionId={sessionId ?? null}
-                  messages={sideChatMessages}
-                  animated={isStreaming}
-                  streaming={isStreaming}
-                  width={inputWidth}
-                  inlinePlanVisibility={inlinePlanVisibility}
-                  taskHistoryMayBeIncomplete={
-                    !historyLoaded || hasMoreMessages || historyWindowHasIsland
-                  }
-                  visible={
-                    !(
-                      pendingPlanReview ||
-                      pendingPermission ||
-                      pendingAskUser ||
-                      pendingPluginSetup ||
-                      pendingIssueConfirm ||
-                      pendingRenameSessionsConfirm ||
-                      pendingGhostGrantConfirm ||
-                      pendingRemoteDesktopConfirmation ||
-                      pendingInputHandoff
-                    )
-                  }
-                  className="mb-0"
-                />
-                {showCenteredControlledBanner && (
-                  <ControlledBanner
-                    placement="composer"
-                    maxWidth={controlledBannerMaxWidth}
-                    sessionId={sessionId ?? null}
-                  />
-                )}
-              </div>
+              ) : <ComposerCenterGroup>{composerCenter}</ComposerCenterGroup>}
             </div>
 
             {/* worktree 恢复横幅(P1):worktree 已被回收(目录缺失、分支还在)时
@@ -7193,6 +7179,7 @@ function CCAgentSessionContent({
                   voiceConversationDisabledReason={voiceCall.open && !voiceModeOpen && voiceCall.botName ? t('bots.voiceMode.inCallWith', { name: voiceCall.botName }) : undefined}
                   voiceConversationActive={voiceModeOpen}
                   sessionId={sessionId}
+                  composerHeaderTarget={showComposerHeader && !(voiceModeOpen && voiceSurfaceAvailable) ? composerHeaderTarget : null}
                   ownsHardwareComposerActions={ownsHardwareTaskActions && !voiceModeOpen}
                   // session=null 是冷启动 / 直链 GET 尚未回流的合法首帧；显式传 null，
                   // 让 ChatInput 暂不显示 Agent 身份，不能跟随 displayAgentKind 的 cc 回退。
@@ -7697,6 +7684,13 @@ function HandoffSourcePill({
 const STATUS_BAR_FADE_MS = 400;
 const CONTROLLED_BANNER_MAX_WIDTH = 420;
 
+function ComposerCenterGroup({ children }: { children: ReactNode }) {
+  return <div data-composer-center-group="true"
+    className="pointer-events-none relative z-raised col-span-full row-start-1 flex max-w-full -translate-y-1 items-center justify-center gap-2 empty:hidden group-has-[[data-header-control]:not(:empty)]/composer-status:translate-y-0">
+    {children}
+  </div>;
+}
+
 export function RunningStatusBar({
   status,
   preparing = false,
@@ -7718,6 +7712,8 @@ export function RunningStatusBar({
   backgroundStopping = false,
   onStopBackgroundTasks,
   rightLeadingSlot = null,
+  centeredSlot,
+  composerHeaderRef,
   suppressContent = false,
   sessionKey = null,
   clockDeviceId = null,
@@ -7779,6 +7775,9 @@ export function RunningStatusBar({
   onStopBackgroundTasks?: () => void;
   /** 独立于运行态淡出的右侧前置槽位；折叠后的被控呼吸灯固定在 token 统计左侧。 */
   rightLeadingSlot?: ReactNode;
+  centeredSlot?: ReactNode;
+  /** Stable portal host for the existing composer's header controls, including during idle. */
+  composerHeaderRef?: Ref<HTMLDivElement>;
   /** 交互卡接管 composer 时立即隐藏旧运行文案/token，只保留折叠呼吸灯。 */
   suppressContent?: boolean;
   /** 会话身份：速度历史按它做进程内缓存，切任务再切回图表不清零。 */
@@ -7968,24 +7967,22 @@ export function RunningStatusBar({
         !sideTaskRunning &&
         !backgroundTasksRunning &&
         (elapsedText !== null || displayTokens > 0) && usageMeta.kind === 'rate'));
-  // A pinned panel keeps its anchor mounted through idle and subsequent turns.
-  // 空闲后真正收起,不再给输入框上方留下固定空行。overlay 的 ResizeObserver 会在
-  // DOM 尺寸变化后补齐 MessageStream 的 bottomPadding,因此不靠硬编码高度制造跳变。
-  if (!rightLeadingSlot && (suppressContent || (isHidden && !ratePanelPinned))) return null;
+  // Keep the composer anchor and the plan mounted across turns, while an idle
+  // row with no controls takes up no space. A pinned rate panel retains its anchor.
+  const showRuntime = Boolean(rightLeadingSlot) || (!suppressContent && (!isHidden || ratePanelPinned));
+  if (!showRuntime && !centeredSlot && !composerHeaderRef) return null;
 
-  // 两段式布局:左(运行状态) / 右(elapsed·tokens)。
-  // - 左段 min-w-0(可收缩):status 并非短枚举 —— turn-start 文案带用户名(可含中文长句)、
-  //   claude tool 进度会拼成 `mcp__x__y running...` 长串,窄宽时左段靠 span truncate;
-  // - 右段 justify-self-end + min-w-0:elapsed / token 是低优先级信息,必要时可溢出。
   return (
     <div
+      data-composer-status-row
       className={cn(
-        'mx-auto grid select-none grid-cols-[minmax(0,1fr)_auto] items-center px-2 py-1.5',
+        'group/composer-status mx-auto grid select-none grid-cols-[minmax(0,1fr)_auto] items-center',
+        'has-[[data-header-control]:not(:empty)]:flex has-[[data-header-control]:not(:empty)]:gap-2',
         className,
       )}
       style={{ width: inputWidth }}
     >
-      <div
+      {showRuntime && <div
         // cadenced shimmer:key 重挂载 = 重播一次呼吸(见上方 shimmerCycle 说明)。
         // 左段只有 icon + 一行文字,1.5s 一次的重挂载成本可忽略。
         key={shimmerCycle}
@@ -7993,7 +7990,8 @@ export function RunningStatusBar({
         className={cn(
           // min-w-0(非 shrink-0):让内部 status span 的 truncate 真正生效 —— status 可变长
           // (turn-start 带用户名 / tool 进度长串),窄宽时左段截断而非把右段顶出界。
-          'flex min-w-0 items-center gap-1.5',
+          'col-start-1 row-start-1 flex min-w-0 items-center gap-1.5 py-1.5 pl-2 group-has-[[data-header-control]:not(:empty)]/composer-status:max-w-[40%]',
+          isHidden && 'group-has-[[data-header-control]:not(:empty)]/composer-status:hidden',
           reconnecting && 'text-[var(--status-bar-accent)]',
           // 隐藏时一律摘所有动画类:动画即便 visibility:hidden 不画也照算样式/合成层，
           // 长期累积会复刻 0f8fa84 那次 breathing 在 :root 的内存泄漏。
@@ -8013,6 +8011,7 @@ export function RunningStatusBar({
         )}
         style={fadeStyle}
         aria-hidden={isHidden}
+        data-running-status-label
       >
         {reconnecting ? (
           <Spinner size={14} />
@@ -8033,11 +8032,14 @@ export function RunningStatusBar({
           <Sparkles size={14} className="shrink-0 -translate-y-px" />
         )}
         <span className="truncate text-13 font-medium">{displayStatus}</span>
-      </div>
+      </div>}
+      {centeredSlot && <ComposerCenterGroup>{centeredSlot}</ComposerCenterGroup>}
+      {composerHeaderRef && <div ref={composerHeaderRef}
+        className="hidden min-w-7 flex-1 has-[[data-header-control]:not(:empty)]:block" />}
       {/* 右侧先放不随运行态淡出的被控呼吸灯,再放 elapsed / · / arrow-down / tokens。
           side-task (mivo 等) 运行时只显示 elapsed, 不带 token 行 —— 这类任务不
           走 LLM, 显示残留 token 计数会误导用户以为也耗了 token。 */}
-      <div className="flex min-w-0 items-center justify-self-end gap-2">
+      {showRuntime && <div className="col-start-2 row-start-1 flex min-w-0 items-center justify-self-end gap-2 py-1.5 pr-2 group-has-[[data-header-control]:not(:empty)]/composer-status:shrink-0">
         {rightLeadingSlot}
         {(!suppressContent && (!preparing || backgroundTasksRunning) && (!isHidden || ratePanelPinned)) && (
           <div
@@ -8108,7 +8110,7 @@ export function RunningStatusBar({
             )}
           </div>
         )}
-      </div>
+      </div>}
     </div>
   );
 }

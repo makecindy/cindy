@@ -252,11 +252,11 @@ function parseRouteTarget(
 function parseBootTarget(boot: SecondaryWindowBootInfo): SecondaryWindowUrlTarget | null {
   const trimmed = boot.bootSession.trim();
   if (!trimmed) return null;
-  if (trimmed.startsWith('/bots/')) {
+  if (trimmed.startsWith('/bots/') || trimmed.startsWith('/cc-agent/')) {
     const queryIdx = trimmed.indexOf('?');
     const routePath = queryIdx >= 0 ? trimmed.slice(0, queryIdx) : trimmed;
     const routeSearch = queryIdx >= 0 ? trimmed.slice(queryIdx + 1) : '';
-    return parseRouteTarget(routePath, routeSearch);
+    return parseRouteTarget(routePath, routeSearch, boot);
   }
   return {
     kind: 'session',

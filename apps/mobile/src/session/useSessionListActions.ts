@@ -34,6 +34,7 @@ import {
   swipeActionPatch,
   writeGuardFields,
   type SessionSwipeAction,
+  type SessionOptionsContext,
 } from '@/session/swipeRowRegistry';
 import type { RemoteSession } from '@/session/types';
 import { withNewSessionCreationRemoval } from '@/session/newSessionCreation';
@@ -77,6 +78,8 @@ export function useSessionListActions(options?: {
   const { invoke } = useDeviceLink();
   const swipeRegistry = useMemo(() => createSwipeRowRegistry(), []);
   const [actionSheetSession, setActionSheetSession] = useState<RemoteSession | null>(null);
+  /** Where the options sheet was opened; undefined keeps the list mode's default. */
+  const [actionSheetContext, setActionSheetContext] = useState<SessionOptionsContext | undefined>(undefined);
   const [renameSessionTarget, setRenameSessionTarget] = useState<RemoteSession | null>(null);
   const [renameSessionDraft, setRenameSessionDraft] = useState('');
   const [snoozeSessionTarget, setSnoozeSessionTarget] = useState<RemoteSession | null>(null);
@@ -290,7 +293,11 @@ export function useSessionListActions(options?: {
     void patchSession(session, swipeActionPatch(action), action === 'archive' && !options.skipScheduleConfirm ? async (isLatest) => {
       const devices = resolveSessionWriteDevices(session.id, session, preferredRpcDeviceId);
       const names = devices ? await loadActiveBoundScheduleNames({
-        deviceId: devices.rpcDeviceId, invoke, sessionId: session.id, source: session.source,
+        deviceId: devices.rpcDeviceId,
+        invoke,
+        sessionId: session.id,
+        source: session.source,
+        orcaRole: session.orcaRole,
       }) : [];
       return isLatest() && confirmArchiveWithSchedules(t, names);
     } : undefined).catch((err: unknown) => {
@@ -388,7 +395,8 @@ export function useSessionListActions(options?: {
     runSwipeAction(session, action);
   }, [runSwipeAction]);
 
-  const showSessionOptions = useCallback((session: RemoteSession) => {
+  const showSessionOptions = useCallback((session: RemoteSession, context?: SessionOptionsContext) => {
+    setActionSheetContext(context);
     setActionSheetSession(session);
   }, []);
 
@@ -475,8 +483,34 @@ export function useSessionListActions(options?: {
       markSessionRead(session);
       return;
     }
+    // An Orca Lead's active Worker may sit outside the 200-row home window; check authoritatively
+    // before archiving so inbox Done cannot mis-archive a Lead with an active Worker automation.
+    if (session.orcaRole === 'lead') {
+      const devices = resolveSessionWriteDevices(session.id, session, preferredRpcDeviceId);
+      if (devices) {
+        swipeRegistry.closeOpenRow();
+        void loadActiveBoundScheduleNames({
+          deviceId: devices.rpcDeviceId,
+          invoke,
+          sessionId: session.id,
+          source: session.source,
+          orcaRole: session.orcaRole,
+        })
+          .then((names) => {
+            if (names.length > 0) {
+              markSessionRead(session);
+              return;
+            }
+            runSwipeAction(session, 'archive', { skipScheduleConfirm: true, inboxComplete: true });
+          })
+          .catch(() => {
+            runSwipeAction(session, 'archive', { skipScheduleConfirm: true, inboxComplete: true });
+          });
+        return;
+      }
+    }
     runSwipeAction(session, 'archive', { skipScheduleConfirm: true, inboxComplete: true });
-  }, [applyOfflineInboxAction, isSessionHostOffline, markSessionRead, runSwipeAction, swipeRegistry]);
+  }, [applyOfflineInboxAction, isSessionHostOffline, invoke, markSessionRead, preferredRpcDeviceId, runSwipeAction, swipeRegistry]);
 
   const sessionSwipeControls = useMemo<SessionSwipeControls>(() => ({
     onSnooze: snoozeSession,
@@ -492,6 +526,7 @@ export function useSessionListActions(options?: {
     snoozeSessionTarget, confirmSnooze, closeSnooze, handleSnoozeClosed,
     patchSession,
     actionSheetSession,
+    actionSheetContext,
     archiveSession,
     closeRenameSession,
     confirmRenameSession,
