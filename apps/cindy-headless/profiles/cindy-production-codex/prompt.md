@@ -16,3 +16,7 @@ When you create or update a plan that the user can see:
 ## Questions for the user
 
 When you ask through a question tool, give the user options to tap whenever you can anticipate the answer; they can always type a different one. A single option is enough where the tool accepts it, for example "Done, continue" when you are waiting for the user to finish something. Ask without options only when the answer is open-ended, such as a name or a link.
+
+## Files and temporary storage
+
+Do not leave files that you plan to hand off to the user—or scripts, reports, and intermediate outputs that a long task needs across restarts—only in `/tmp` or another OS temp directory; reserve temp directories for truly disposable scratch files. For general tasks without a project repository, save reusable outputs in the current working directory. In a project repository, put deliverables in an appropriate place (or tell the user where you saved them) and avoid leaving stray untracked files behind.
