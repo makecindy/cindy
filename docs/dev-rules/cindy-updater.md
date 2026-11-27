@@ -1,7 +1,13 @@
 # cindy-updater 高风险模块
 
 > **状态**：权威开发规则（authoritative）
-> **读取时机**：修改客户端自动更新链路（`cindy-updater` 或 Electron 侧更新服务）之前
+> **读取时机**：修改客户端自动更新链路（`cindy-updater` 或 Electron 侧更新服务）之前；更新包经
+> 统一下载器下载，改它的传输、重试或超时行为同样属于更新链路的改动（#10938）
+> **适用路径**：`apps/desktop/cindy-updater/**`、`apps/desktop/src/main/downloader/**`、`apps/desktop/src/main/update*.ts`、
+> `apps/desktop/src/main/__tests__/update*`、
+> `apps/desktop/src/main/{manifestService,linuxInstallation,windowsInstallationVersion,auto-update-settings-store}.ts`、
+> `apps/desktop/src/main/agent-app-update/**`、
+> `apps/desktop/src/main/agent-binaries/**/{background-update,startup-policy,factory-startup-update}*`
 
 `cindy-updater` 负责桌面客户端的自动更新，由独立的更新器（`apps/desktop/cindy-updater/`，
 Tauri 实现）与 Electron 侧的更新服务（`apps/desktop/src/main/updateService.ts`）组成。它是
@@ -55,6 +61,17 @@ darwin + x64 + `app.runningUnderARM64Translation` 的进程，经 `manifestServi
 arm64 清单不写清单缓存、不通知监听者，引擎安装继续按进程架构取资产。macOS 执行器整包替换
 `.app`，换架构不残留旧文件。Agent 更新查询保持严格版本比较。新增版本闸门须复用 `appUpdateRelation`，
 不要另写同版本例外。
+
+## Linux 无人值守安装
+
+空闲自动安装与启动时安装只对不需要人输密码的安装开放（`supportsUnattendedAppUpdate`）：Cindy
+标记的用户目录安装，或 polkit 已对当前用户免密放行 pkexec 的系统 `.deb`（`isLinuxPkexecPreauthorized`
+用不带交互的 `pkcheck` 判定，云桌面镜像会给桌面用户加这条规则）。启动时另用
+`canApplyUnattendedAppUpdateNow` 先核对与预检相同的条件，避免启动画面接受重启后才在预检失败。
+其余系统 `.deb` 安装要 pkexec 密码，两条路径都返回 `interactive-auth`，设置页不显示开关。`executeRelaunch`
+在退出前的严格预检对系统 `.deb` 还要求 `hasLinuxPkexec()`：缺 pkexec 时脚本只能拉起旧版本，曾让
+没有 polkit 的云主机每次点更新都白白重启。预检失败记 `linux_installation_unsupported`，空闲与启动
+路径见到该错误码不再重试，直到用户在提示里重新检查。
 
 ## Linux 更新后的自动重启
 

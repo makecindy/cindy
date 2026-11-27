@@ -1,4 +1,5 @@
 import { botGroupMentionAudience } from '@cindy/maker-shared/botGroupMentions';
+import { chatGroupNotificationPreference, botGroupStopRunEpoch, canStopBotGroupWork, canStopBotGroupPlan } from '@cindy/maker-shared/botGroupChat';
 import { readBotGroupProcessCard, type BotGroupMention } from '@cindy/maker-shared/botGroupChat';
 import type { ChatMaskAction, ChatMaskState, ChatMaskMention, ChatGroupNotificationMode } from '@cindy/maker-shared/botGroupChat';
 import { teammateChatActivity, type TeammateActivity } from '@cindy/maker-shared/teammate-status';
@@ -7,7 +8,7 @@ import { parseChatInvitationShareId, parseChatInvitationToken } from '@cindy/dev
 import type { ChatInviteShares } from './chatInviteShare';
 import { createConversationListState } from '@cindy/maker-shared/chatConversationList';
 import type { ChatHistory } from '@cindy/maker-shared/chat-history';
-import { readBotGroupCapabilityNotice, botGroupMessageSummaryText, botGroupQuoteFromMessage, buildBotGroupQuoteCard, readBotGroupExecutionFailure, readBotGroupQuote, readBotGroupQuoteCard, readBotGroupTaskCard, readImportedBotGroupRuntimeFailureCode, type BotGroupAttachment, type BotGroupMemberView, type BotGroupMessageView, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
+import { readBotGroupAssistantNotice, groupAssistantNoticeCode, readBotGroupCapabilityNotice, botGroupMessageSummaryText, botGroupQuoteFromMessage, buildBotGroupQuoteCard, readBotGroupExecutionFailure, readBotGroupQuote, readBotGroupQuoteCard, readBotGroupTaskCard, readImportedBotGroupRuntimeFailureCode, type BotGroupAttachment, type BotGroupMemberView, type BotGroupMessageView, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
 import { chatGroupMemberName as memberName, chatGroupOwnerName, botGroupActivityAt, latestBotGroupMessage, botGroupExecutionFailureBatches, projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
 import type { HostedRemoteCollectionItem } from '@/device-link/remoteResources';
 // The app's `@/i18n` sets up this default instance; importing it here would pull React bindings into a plain client.
@@ -50,17 +51,22 @@ function invitationPreview(value: MobileChatInvitePreview): MobileChatInvitePrev
 }
 
 export interface ChatRoom {
+  assistant_device_id?: string | null;
+  default_notification_scope?: 'all' | 'mentions';
   id: string; name: string; state?: string; kind: string; archived: boolean; dissolved_at?: string | null;
-  topic?: string; description?: string; allow_mention_all_bots?: boolean;
+  org_id?: string | null; org_name?: string | null; external?: boolean;
+  topic?: string; description?: string; allow_mention_all_bots?: boolean; allow_member_invites?: boolean;
   created_at: string; updated_at: string; revision: number; head?: string;
   response_mode: 'all' | 'mentioned'; speaking_mode: 'auto' | 'sequential'; organizer_id?: string | null;
 }
 export interface ChatMember {
+  assistant?: boolean;
   id: string; kind: 'human' | 'bot' | 'integration'; name: string; state: string;
   ownerActorId: string; ownerName: string; avatar: string | null;
   role: 'owner' | 'admin' | 'member' | 'guest';
   /** Group-scoped identity and grants; older servers omit them. */
   displayName?: string; nickname?: string | null; groupAvatar?: string | null; defaultAvatarUrl?: string | null;
+  orgName?: string | null; department?: string | null; departmentPath?: string | null; external?: boolean; showOrgName?: boolean;
   guestAccess?: 'none' | 'chat' | 'tools'; accessRevision?: number;
 }
 export interface ChatMessage {
@@ -72,12 +78,16 @@ export interface ChatMessage {
   content: Array<{ type: string; text?: string; fallback?: string; mediaId?: string; caption?: string;
     namespace?: string; schemaRevision?: number; data?: Record<string, unknown> }>;
 }
-export interface ChatSnapshot { cacheGeneration?: string; room: ChatRoom; members: ChatMember[]; messages: ChatMessage[]; cursor: string; reads?: Array<{ thread_key: string; read_seq: string; muted?: boolean; following?: boolean; notification_scope?: 'all' | 'mentions' | null }> }
+export interface ChatSnapshot { assistantComputers?: Array<{ id: string; name: string }>; cacheGeneration?: string; room: ChatRoom; members: ChatMember[]; messages: ChatMessage[]; cursor: string; reads?: Array<{ thread_key: string; read_seq: string; muted?: boolean; following?: boolean; notification_scope?: 'all' | 'mentions' | null }> }
 export interface ChatExecutionFailure {
   id: string; conversation_id?: string; source_message_id: string; bot_id: string; epoch: number; status?: string;
   failure_code?: unknown; updated_at?: string; plan_id?: string | null;
 }
-export interface ChatExecution extends ChatExecutionFailure { threadRootId?: string | null; requester_id?: string; created_at?: string; status: string }
+export interface ChatExecution extends ChatExecutionFailure { threadRootId?: string | null; requester_id?: string; mask_owner_id?: string; created_at?: string; status: string }
+function mayStopWork(members: ChatMember[], selfId: string, botId: string, requesterId?: string) {
+  const member = members.find(member => member.id === botId && member.kind === 'bot');
+  return canStopBotGroupWork(member && { assistant: member.assistant, isOwned: member.ownerActorId === selfId }, requesterId === selfId);
+}
 /** Existing Chat Server plan contract, also consumed by Desktop's chatServer adapter. */
 export interface ChatPlan {
   activeExecution?: { id: string; status: string };
@@ -103,9 +113,10 @@ export interface ChatCapabilities { companionHome: boolean }
 export type ChatSetHomeResult = { ok: true; homeDeviceId: string } | { ok: false; homeDeviceId: string | null };
 export interface ChatHistoryPage { messages: ChatMessage[]; before: string | null; historyRevision?: string; messageUpdates?: ChatMessage[] }
 export type ChatGroupSettingsAction =
+  | { type: 'assistantDevice'; deviceId: string }
   | { type: 'notifications'; mode: ChatGroupNotificationMode }
-  | { type: 'update'; expectedRevision: number; name?: string; topic?: string; description?: string; responseMode?: 'all' | 'mentioned'; speakingMode?: 'auto' | 'sequential'; organizerId?: string | null; archived?: boolean; allowMentionAllBots?: boolean }
-  | { type: 'member'; actorId: string; action: 'invite' | 'remove' | 'role'; role?: 'admin' | 'member' }
+  | { type: 'update'; expectedRevision: number; name?: string; topic?: string; description?: string; responseMode?: 'all' | 'mentioned'; speakingMode?: 'auto' | 'sequential'; organizerId?: string | null; archived?: boolean; allowMentionAllBots?: boolean; allowMemberInvites?: boolean }
+  | { type: 'member'; actorId: string; action: 'invite' | 'leave' | 'remove' | 'role'; role?: 'admin' | 'member' }
   /** Your own group identity: a nickname, or a public avatar URL (null resets it). */
   | { type: 'nickname'; actorId: string; nickname: string | null }
   | { type: 'avatar'; actorId: string; avatar: string | null }
@@ -113,7 +124,7 @@ export type ChatGroupSettingsAction =
   | { type: 'botAccess'; actorId: string; access: 'none' | 'chat' | 'tools'; expectedRevision: number };
 
 /** Same routes as Desktop's chatServer.manage; update/member keep their original bodies. */
-const SETTINGS_ROUTES: Record<Exclude<ChatGroupSettingsAction['type'], 'notifications'>, [string, 'POST' | 'PATCH']> = {
+const SETTINGS_ROUTES: Record<Exclude<ChatGroupSettingsAction['type'], 'notifications' | 'assistantDevice'>, [string, 'POST' | 'PATCH']> = {
   update: ['', 'PATCH'], member: ['/members', 'POST'], nickname: ['/nickname', 'POST'], avatar: ['/nickname', 'POST'],
   transfer: ['/transfer', 'POST'], botAccess: ['/bot-access', 'POST'],
 };
@@ -145,9 +156,10 @@ function chatPlanView(plan: ChatPlan, snapshot: ChatSnapshot, self: string): Bot
   return { id: plan.id, revision: plan.revision, status: plan.status, organizerBotId: plan.organizer_id,
     organizerName: snapshot.members.find(member => member.id === plan.organizer_id)?.name ?? '',
     supportsPendingSkip: plan.supportsPendingSkip === true,
-    steps: plan.steps.map(step => ({ ...step, ...(step.position === plan.current_step && plan.activeExecution
+    steps: plan.steps.map(step => ({ ...step, canStop: mayStopWork(snapshot.members, self, step.botId, plan.creator_id), ...(step.position === plan.current_step && plan.activeExecution
       ? { executionId: plan.activeExecution.id, executionStatus: plan.activeExecution.status } : {}) })), currentStep: plan.current_step, workDir: null, branch: null,
     ...(plan.kind ? { kind: plan.kind } : {}),
+    canStop: !snapshot.room.archived && !snapshot.room.dissolved_at && canStopBotGroupPlan(plan, self, (bot, requester) => mayStopWork(snapshot.members, self, bot, requester)),
     canManage: !snapshot.room.archived && !snapshot.room.dissolved_at && (plan.creator_id === self || !!chatGroupManager(snapshot, self)),
     // Direct sends do not yet use the computer's plan-comment/arrangement pipeline.
     canAdd: false, createdAt: Date.parse(plan.created_at), updatedAt: Date.parse(plan.updated_at) };
@@ -162,6 +174,7 @@ export interface ChatSendInput {
   attachments?: readonly RemoteSerializedAttachment[];
 }
 export interface ChatSendBody {
+  independentReplies?: boolean;
   operationId: string; content: ChatMessage['content']; mentions: string[]; mentionAudience?: 'humans' | 'bots' | 'everyone'; threadRootId?: string;
 }
 
@@ -238,6 +251,10 @@ export function chatRoomRow(room: ChatRoom, snapshot?: ChatSnapshot, selfId?: st
   const preview = joinedPreview ?? (last
     ? mobileMarkdownPreviewText(sharedReplyPreview(last, members, selfId) || botGroupMessageSummaryText({ content: contentText(last), task: taskCardOf(last) ?? undefined, deleted: last.deleted }) || mediaNames(last)).slice(0, 160) || subtitle
     : '');
+  const externalBadge = room.kind !== 'direct' && room.external === true ? (i18next.isInitialized ? {
+    fallback: i18next.t('groupChat.externalBadge', { lng: DEFAULT_LOCALE }),
+    translations: Object.fromEntries(SUPPORTED_LOCALES.map(lng => [lng, i18next.t('groupChat.externalBadge', { lng })])),
+  } : 'External') : undefined;
   return { key: `chat:${room.id}`, host: { deviceId: '', deviceName: '' },
     lastReplySequence: snapshot && selfId ? chatLastReplySequence(snapshot.messages, selfId) : undefined,
     chatUnread: snapshot?.reads && selfId ? chatUnread(snapshot, selfId) : undefined,
@@ -247,6 +264,7 @@ export function chatRoomRow(room: ChatRoom, snapshot?: ChatSnapshot, selfId?: st
       subtitle,
       ...(activity ? { teammateActivity: activity } : {}),
       ...(snapshot ? { preview } : {}),
+      ...(externalBadge ? { badges: [{ tone: 'external', label: externalBadge, accessibilityLabel: externalBadge }] } : {}),
       timestamp: botGroupActivityAt({ createdAt: Date.parse(room.created_at), lastMessage: last ? { createdAt: Date.parse(last.createdAt) } : null }),
       lastReplyAt: snapshot && selfId ? chatLastReplyAt(snapshot.messages, selfId) : undefined },
     links: members.map(member => ({ rel: 'member', label: memberName(member, ownerMembers),
@@ -331,15 +349,21 @@ function chatMessageMentions(message: ChatMessage): BotGroupMention {
  * Sequence strings stay on the wire; numeric positions below are presentation order only.
  * `actors` (the account's own, from `/actors`) tell which computer runs each owned companion.
  */
-export function chatGroupView(page: ChatPage, selfId: string, actors: readonly ChatActor[] = []): BotGroupRemoteChatData {
+export function chatGroupView(page: ChatPage, selfId: string, actors: readonly ChatActor[] = [], activityScope: 'thread' | 'group' = 'thread'): BotGroupRemoteChatData {
   const { room, members } = page.snapshot;
   const ownerMembers = room.kind === 'direct' ? [] : members;
   const active = members.filter(member => member.state === 'joined');
   const memberViews: BotGroupMemberView[] = active.map(member => ({
     ...chatMemberIdentity(member, ownerMembers), actorId: member.id, actorKind: member.kind, isSelf: member.id === selfId,
     isOwned: member.ownerActorId === selfId, role: member.role, ownerActorId: member.ownerActorId,
+    ...(member.assistant === true ? { assistant: true } : {}),
     ...(member.displayName !== undefined ? { displayName: member.displayName } : {}),
     ...(member.nickname !== undefined ? { nickname: member.nickname } : {}),
+    ...(member.orgName ? { orgName: member.orgName } : {}),
+    ...(member.department ? { department: member.department } : {}),
+    ...(member.departmentPath ? { departmentPath: member.departmentPath } : {}),
+    ...(member.external === true ? { external: true } : {}),
+    ...(member.showOrgName === true ? { showOrgName: true } : {}),
     ...(member.groupAvatar !== undefined ? { groupAvatar: member.groupAvatar } : {}),
     ...(member.defaultAvatarUrl !== undefined ? { defaultAvatarUrl: member.defaultAvatarUrl } : {}),
     ...(member.guestAccess ? { guestAccess: member.guestAccess, accessRevision: member.accessRevision } : {}),
@@ -352,7 +376,9 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
   const sorted = [...new Map(page.messages.map(message => [message.id, message])).values()].filter(message => !message.deleted)
     .sort((a, b) => BigInt(chatCursor(a.seq)) < BigInt(chatCursor(b.seq)) ? -1 : BigInt(a.seq) > BigInt(b.seq) ? 1 : 0);
   const messages: BotGroupMessageView[] = sorted.map((message, index) => {
-    const capabilityNoticeCode = readBotGroupCapabilityNotice(message);
+    const assistantNotice = page.snapshot.members.some(candidate => candidate.id === message.authorId && candidate.assistant) ? readBotGroupAssistantNotice(message) : null;
+    const capabilityNoticeCode = assistantNotice ? groupAssistantNoticeCode(assistantNotice.reason) : readBotGroupCapabilityNotice(message);
+    const requester = assistantNotice && page.snapshot.members.find(candidate => candidate.id === assistantNotice.requesterId);
     const runtimeFailureCode = readImportedBotGroupRuntimeFailureCode(message);
     const legacy = runtimeFailureCode ? message.content.find(block => block.type === 'card' && block.namespace === 'cindy.local-history' && block.schemaRevision === 1)?.data : undefined;
     if (runtimeFailureCode) return { id: message.id, sequence: index + 1, serverSequence: chatCursor(message.seq), kind: 'notice', authorKind: 'system',
@@ -366,10 +392,11 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
     const task = message.origin === 'system' || planCard ? null : taskCardOf(message);
     const process = !message.deleted && message.origin !== 'system' && message.author.kind === 'bot' ? message.content.map(readBotGroupProcessCard).find(Boolean) : null;
     return { id: message.id, sequence: index + 1, serverSequence: chatCursor(message.seq), kind: capabilityNoticeCode ? 'notice' : planCard ? 'plan' : message.origin === 'system' ? 'notice' : 'message', ...(capabilityNoticeCode ? { capabilityNoticeCode } : {}),
+      ...(assistantNotice?.reason === 'unbound' && assistantNotice.requesterId === selfId && page.snapshot.assistantComputers && !room.assistant_device_id ? { canChooseAssistantDevice: true as const } : {}),
       ...(message.maskAttribution ? { maskAttribution: message.maskAttribution } : {}),
       ...(task ? { task } : {}), ...(process ? { process } : {}), threadRootId: message.threadRootId, replyCount: message.replyCount, reactions: message.reactions,
       authorKind: message.origin === 'system' ? 'system' : message.author.kind === 'human' ? 'user' : 'bot',
-      authorBotId: message.authorId, authorName: joinedName !== undefined ? joinedName
+      authorBotId: message.authorId, authorName: requester ? memberName(requester, ownerMembers) : joinedName !== undefined ? joinedName
         : member ? memberName(member, ownerMembers) : message.author.name,
       isSelf: message.authorId === selfId, content: contentText(message), mentions: chatMessageMentions(message),
       ...(quote ? { quote: deletedIds.has(quote.messageId) ? { ...quote, originalDeleted: true } : quote } : {}),
@@ -440,26 +467,32 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
   const executions = (page.executions ?? []).filter(row => ['queued', 'running', 'needs_input', 'stopping'].includes(row.status));
   // Enqueue time anchors history; it is not an elapsed-work start.
   const speakers = executions.map(row => {
+    const bot = page.snapshot.members.find(member => member.id === row.bot_id);
+    const requester = page.snapshot.members.find(member => member.id === row.requester_id);
     const source = [...page.messages, ...page.snapshot.messages].find(message => message.id === row.source_message_id);
     const threadRootId = row.plan_id ? null : row.threadRootId !== undefined ? row.threadRootId : source ? source.threadRootId ?? null : undefined;
     return { sourceMessageId: row.source_message_id, ...(threadRootId !== undefined ? { threadRootId } : {}), botId: row.bot_id, sessionId: null, executionId: row.id,
-    timelineAt: row.created_at && Number.isFinite(Date.parse(row.created_at)) ? Date.parse(row.created_at) : undefined,
+    isSelfRequested: row.requester_id === selfId,
+    ...(bot?.kind === 'bot' && bot.assistant === true && requester ? { requesterName: memberName(requester, ownerMembers) } : {}),
+    ...(row.created_at && Number.isFinite(Date.parse(row.created_at)) ? { timelineAt: Date.parse(row.created_at) } : {}),
     executionStatus: row.status as 'queued' | 'running' | 'needs_input' | 'stopping', stopping: row.status === 'stopping',
     activity: row.plan_id ? 'step' as const : 'reply' as const };
-  }).filter(speaker => speaker.threadRootId === (page.threadRootId ?? null));
+  }).filter(speaker => activityScope === 'group' || speaker.threadRootId === (page.threadRootId ?? null));
   const plans = (page.plans ?? []).map(plan => chatPlanView(plan, page.snapshot, selfId));
   const open = plans.find(plan => ['proposed', 'running', 'waiting'].includes(plan.status));
   const currentStep = open?.steps.find(step => step.position === open.currentStep);
-  return { id: room.id, conversationKind: room.kind === 'direct' ? 'direct' : 'group',
+  return { ...(page.snapshot.assistantComputers ? { assistantComputers: page.snapshot.assistantComputers, assistantDeviceId: room.assistant_device_id ?? null } : {}), id: room.id, conversationKind: room.kind === 'direct' ? 'direct' : 'group',
     name: room.kind === 'direct' ? active.filter(member => member.id !== selfId).map(member => memberName(member, [])).join(', ') || room.name : room.name,
-    ...(room.kind !== 'direct' && page.snapshot.reads ? { notificationMode: mainRead?.muted ? 'none' as const : mainRead?.notification_scope ?? 'all' as const } : {}),
+    ...(room.kind !== 'direct' && room.org_name ? { orgName: room.org_name } : {}),
+    ...(room.kind !== 'direct' && room.external === true ? { external: true } : {}),
+    ...(room.kind !== 'direct' && page.snapshot.reads ? chatGroupNotificationPreference(room, mainRead) : {}),
     serverBacked: true, supportsGroupLeave: room.kind !== 'direct', dissolvedAt: room.dissolved_at ?? null, archived: room.archived, selfActorId: selfId,
     // Invite links are created by an owner or admin this account controls, as on Desktop.
-    canStopAll: room.kind !== 'direct' && !!chatGroupManager(page.snapshot, selfId),
-    canInvite: room.kind !== 'direct' && !room.dissolved_at && active.some(member => member.ownerActorId === selfId && ['owner', 'admin'].includes(member.role)),
+    canStopAll: false, supportsOwnedStop: true,
+    canInvite: room.kind !== 'direct' && !room.archived && !room.dissolved_at && active.some(member => member.ownerActorId === selfId && (['owner', 'admin'].includes(member.role) || (room.kind === 'group' && room.allow_member_invites === true))),
     topic: room.topic, description: room.description,
     supportsSettingsManagement: room.kind === 'group', supportsMemberRemoval: room.kind === 'group',
-    revision: room.revision, members: memberViews, allowMentionAllBots: room.allow_mention_all_bots === true, replyMode: room.response_mode, speakingMode: room.speaking_mode,
+    revision: room.revision, members: memberViews, allowMentionAllBots: room.allow_mention_all_bots === true, allowMemberInvites: room.allow_member_invites === true, replyMode: room.response_mode, speakingMode: room.speaking_mode,
     organizerBotId: room.organizer_id ?? null, projectDir: null, projectDirName: null,
     createdAt: Date.parse(room.created_at), updatedAt: Date.parse(room.updated_at),
     lastMessage: last ? { authorKind: last.authorKind, authorName: last.authorName, preview: mobileMarkdownPreviewText(last.threadShare ? i18next.t(last.isSelf ? 'groupChat.thread.sidebarOwn' : 'groupChat.thread.sidebarOther', { name: last.authorName }) : botGroupMessageSummaryText(last)).slice(0, 80), createdAt: last.createdAt } : null,
@@ -467,15 +500,24 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
     openPlan: open ? { id: open.id, status: open.status, currentStep: open.currentStep, stepCount: open.steps.length,
       currentBotName: currentStep?.botName ?? null, currentStepStatus: currentStep?.status ?? null, ...(open.kind ? { kind: open.kind } : {}) } : null,
     plans, messages: projectBotGroupExecutionFailures(messages, failures),
-    hasMoreBefore: page.before !== null, round: { canStop: (page.plans ?? []).some(p => p.creator_id === selfId && ['proposed', 'running', 'waiting'].includes(p.status)) || executions.some(e => ['queued', 'running', 'needs_input'].includes(e.status)
-        && ((!e.requester_id && !members.some(m => m.id === selfId && m.state === 'joined' && ['owner', 'admin'].includes(m.role))) || e.requester_id === selfId
-        || active.some(m => m.id === e.bot_id && m.kind === 'bot' && m.ownerActorId === selfId))), status: executions.length ? 'running' : 'idle', speakers, canContinue: false,
+    hasMoreBefore: page.before !== null, round: { canStop: (page.plans ?? []).some(p => canStopBotGroupPlan(p, selfId, (bot, requester) => mayStopWork(members, selfId, bot, requester)) && ['proposed', 'running', 'waiting'].includes(p.status)) || executions.some(e => ['queued', 'running', 'needs_input'].includes(e.status)
+        && mayStopWork(members, selfId, e.bot_id, e.requester_id)), status: executions.length ? 'running' : 'idle', speakers, canContinue: false,
       othersActive: executions.some(execution => ['queued', 'running', 'needs_input'].includes(execution.status)
-        && execution.requester_id !== selfId && !members.some(member => member.id === execution.bot_id && member.ownerActorId === selfId)) }, supportsAttachments: true };
+        && !mayStopWork(members, selfId, execution.bot_id, execution.requester_id)) }, supportsAttachments: true };
+}
+
+type ChatMe = { actor: { id: string; kind: string }; capabilities?: { groupLifecycleVersion?: number; conversationListStateVersion?: number; groupSingleSpeaker?: number; independentReplies?: number; personalMask?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; groupMemberInvites?: number; groupNotificationSettings?: number } };
+/** What every screen of one signed-in account may share: who it is on the Chat Server and the
+ * read in flight for it. `request` must be fenced to the account, never to one screen, so a
+ * screen that closes cannot fail the read another screen is waiting on. */
+export interface ChatAccountIdentity {
+  request?: ChatRequest;
+  known?: { id: string; at: number; capabilities: ChatMe['capabilities'] };
+  reading?: Promise<{ id: string; capabilities: ChatMe['capabilities'] }>;
 }
 
 export function createChatServerClient(request: ChatRequest, personalList = createConversationListState(),
-  openHistory?: (human: string) => Promise<ChatHistory>, inviteShares?: ChatInviteShares) {
+  openHistory?: (human: string) => Promise<ChatHistory>, inviteShares?: ChatInviteShares, account: ChatAccountIdentity = {}) {
   const threadFailures = new Map<string, { attempts: number; at: number }>();
   const retryDelays = [30_000, 60_000, 120_000, 240_000, 480_000];
   let historyCache: Promise<ChatHistory> | undefined;
@@ -553,28 +595,55 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
   let supportsDissolve = false;
   let supportsListRemoval = false;
   let singleSpeaker = false;
+  let independentReplies = false;
   let personalMask = false;
   let supportsMemberAvatar = false;
   let supportsNotificationSettings = false;
   let supportsMentionAudiences = false;
-  let lastIdentity: { id: string; at: number } | undefined;
-  let readingIdentity: Promise<string> | undefined;
-  async function identity() {
-    if (openHistory && lastIdentity && Date.now() - lastIdentity.at < 60_000) return lastIdentity.id;
-    return readingIdentity ??= (async () => {
-      const me = await request<{ actor: { id: string; kind: string }; capabilities?: { groupLifecycleVersion?: number; conversationListStateVersion?: number; groupSingleSpeaker?: number; personalMask?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; groupNotificationSettings?: number } }>('/me');
-      if (me.actor.kind !== 'human') throw new Error('INVALID_CHAT_IDENTITY');
-      supportsDissolve = me.capabilities?.groupLifecycleVersion === 1;
-      supportsListRemoval = me.capabilities?.conversationListStateVersion === 1;
-      singleSpeaker = me.capabilities?.groupSingleSpeaker === 1;
-      personalMask = me.capabilities?.personalMask === 1;
-      supportsMemberAvatar = me.capabilities?.groupMemberAvatar === 1;
-      supportsNotificationSettings = me.capabilities?.groupNotificationSettings === 1;
-      supportsMentionAudiences = me.capabilities?.groupMentionAudiences === 1;
-      const id = chatId(me.actor.id); lastIdentity = { id, at: Date.now() };
-      return id;
-    })().finally(() => { readingIdentity = undefined; });
+  let supportsMemberInvites = false;
+  function adopt(capabilities: ChatMe['capabilities']) {
+    supportsDissolve = capabilities?.groupLifecycleVersion === 1;
+    supportsListRemoval = capabilities?.conversationListStateVersion === 1;
+    independentReplies = capabilities?.independentReplies === 1;
+    singleSpeaker = capabilities?.groupSingleSpeaker === 1;
+    personalMask = capabilities?.personalMask === 1;
+    supportsMemberAvatar = capabilities?.groupMemberAvatar === 1;
+    supportsNotificationSettings = capabilities?.groupNotificationSettings === 1;
+    supportsMentionAudiences = capabilities?.groupMentionAudiences === 1;
+    supportsMemberInvites = capabilities?.groupMemberInvites === 1;
   }
+  // A screen opened after another already knows what the account's server supports.
+  if (account.known) adopt(account.known.capabilities);
+  async function identity() {
+    if (openHistory && account.known && Date.now() - account.known.at < 60_000) { adopt(account.known.capabilities); return account.known.id; }
+    const reading = account.reading ??= (async () => {
+      const me = await (account.request ?? request)<ChatMe>('/me');
+      if (me.actor.kind !== 'human') throw new Error('INVALID_CHAT_IDENTITY');
+      const id = chatId(me.actor.id);
+      account.known = { id, at: Date.now(), capabilities: me.capabilities };
+      return { id, capabilities: me.capabilities };
+    })().finally(() => { if (account.reading === reading) account.reading = undefined; });
+    const me = await reading;
+    adopt(me.capabilities);
+    return me.id;
+  }
+  /** Bounded parallel single-message reads; a failure belongs to its own ID. */
+  async function lookup(room: string, ids: readonly string[]): Promise<Map<string, { message: ChatMessage } | { error: unknown }>> {
+    const stored = await cache();
+    if (stored) return stored.lookup<ChatMessage>(room, ids);
+    const found = new Map<string, { message: ChatMessage } | { error: unknown }>();
+    const wanted = [...new Set(ids)];
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(4, wanted.length) }, async () => {
+      while (next < wanted.length) {
+        const id = wanted[next++]!;
+        try { found.set(id, { message: await request<ChatMessage>(`/conversations/${room}/messages/${chatId(id)}`) }); }
+        catch (error) { found.set(id, { error }); }
+      }
+    }));
+    return found;
+  }
+  const denied = (error: unknown) => [403, 404, 410].includes((error as { status?: number })?.status ?? 0);
   return {
     async previewInvite(link: string, signal?: AbortSignal): Promise<MobileChatInvitePreview> {
       return invitationPreview(await request<MobileChatInvitePreview>('/invite-links/preview', 'POST', { token: invitationToken(link) }, undefined, signal));
@@ -589,7 +658,17 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
     },
     invalidateHistory(room: string, metadata = false) {
       if (metadata) for (const key of threadFailures.keys()) if (key.startsWith(`${room}:`)) threadFailures.delete(key);
-      void historyCache?.then(value => value.invalidate(room, metadata)).catch(() => undefined); },
+      // Open the account's history if this screen has not used it yet: the next read must see this.
+      void cache()?.then(value => value.invalidate(room, metadata)).catch(() => undefined); },
+    /** The account's own read position, from its POST receipt or its `read.changed` event. Merging
+     * it locally keeps reading a room from costing a snapshot download; anything else refreshes. */
+    async acceptRead(room: string, value: unknown, threadRootId?: string | null, receipt = false): Promise<boolean> {
+      const stored = await cache();
+      const read = receipt && value && typeof value === 'object' && !Array.isArray(value) ? { ...value, threadRootId: threadRootId ?? null } : value;
+      const applied = !!stored && await stored.readState(room, read, receipt).catch(() => false);
+      if (!applied) stored?.invalidate(room, true);
+      return applied;
+    },
     async refreshHistory(room: string, metadata = false) { const value = await cache(); value?.invalidate(room, metadata); await value?.snapshot(room); },
     personalList,
     async mask(roomId: string, action?: ChatMaskAction, operationId?: string): Promise<ChatMaskState | null> {
@@ -611,7 +690,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
           text: message.reply.content.map(block => block.text ?? block.fallback ?? block.caption ?? '').join('\n') } } : {}),
       })) };
     },
-    lifecycleCapabilities: () => ({ supportsDissolve, supportsListRemoval, singleSpeaker, supportsMemberAvatar, supportsMentionAudiences, supportsNotificationSettings, supportsScopedStop: singleSpeaker }),
+    lifecycleCapabilities: () => ({ supportsDissolve, supportsListRemoval, singleSpeaker, supportsMemberAvatar, supportsMentionAudiences, supportsMemberInvites, supportsNotificationSettings, supportsScopedStop: singleSpeaker }),
     async groupSettings(roomId: string) {
       const [snapshot, self] = await Promise.all([
         request<ChatSnapshot>(`/conversations/${chatId(roomId)}/snapshot`), identity(),
@@ -624,6 +703,11 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
      * identity, grants and teammates are written as yourself (no `managerId`).
      */
     async manageGroup(roomId: string, managerId: string | undefined, action: ChatGroupSettingsAction, operationId: string) {
+      if (action.type === 'assistantDevice') {
+        const saved = await request(`/conversations/${chatId(roomId)}/assistant-device`, 'POST', { operationId, deviceId: action.deviceId });
+        (await cache())?.invalidate(roomId, true);
+        return saved;
+      }
       if (action.type === 'notifications') {
         await identity();
         if (!supportsNotificationSettings) throw new Error('CHAT_UNAVAILABLE');
@@ -636,7 +720,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       const { type: _type, ...body } = action;
       return request(`/conversations/${chatId(roomId)}${route}`, method, { operationId, ...body }, managerId ? chatId(managerId) : undefined);
     },
-    /** A reusable or expiring join link; only an owner or admin may create one. */
+    /** A reusable or expiring join link; the server checks current invitation rights. */
     async createInvite(roomId: string, managerId: string, operationId: string): Promise<ChatInviteLink> {
       if (!inviteShares) throw new Error('CHAT_ENDPOINT_UNAVAILABLE');
       const invite = await request<{ token?: unknown; expiresAt?: unknown; reusable?: unknown }>(`/conversations/${chatId(roomId)}/invite-links`, 'POST', { operationId }, chatId(managerId));
@@ -782,20 +866,35 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       return stored ? stored.message<ChatMessage>(room, id) : request<ChatMessage>(`/conversations/${room}/messages/${id}`);
     },
     /** Read-only roster state; independent of message heads because an approval can arrive silently. */
-    async rosterActivity(roomId: string, snapshot: ChatSnapshot): Promise<TeammateActivity | undefined> {
+    async rosterActivity(roomId: string, snapshot: ChatSnapshot, selfId?: string): Promise<TeammateActivity | undefined> {
       const room = chatId(roomId);
       const results = await Promise.allSettled([
         request<ChatExecution[]>(`/conversations/${room}/executions`),
-        request<Array<{ status: string }>>(`/conversations/${room}/plans`),
+        request<Array<Partial<ChatPlan> & { id?: string; status: string }>>(`/conversations/${room}/plans`),
       ]);
       // Older servers can lack these reads. Never manufacture a result from an ordinary unread message.
       if (results.some(result => result.status === 'rejected')) return undefined;
       const executions = results[0].status === 'fulfilled' ? results[0].value : [];
-      const plans = results[1].status === 'fulfilled' ? results[1].value : [];
+      let plans = results[1].status === 'fulfilled' ? results[1].value : [];
       if (!Array.isArray(executions) || !Array.isArray(plans)) return undefined;
       const last = latestBotGroupMessage(snapshot.messages);
+      const lastMessageAt = last ? Date.parse(last.createdAt) : 0;
+      // Closed plans may no longer be in the server's default window. Only a
+      // failure inside teammateChatActivity's alert time window needs this read.
+      const missingPlans = [...new Set(executions.flatMap(row => row.status === 'failed' && row.plan_id
+        && row.updated_at && Number.isFinite(Date.parse(row.updated_at)) && Date.parse(row.updated_at) >= lastMessageAt
+        && !plans.some(plan => plan.id === row.plan_id) ? [chatId(row.plan_id)] : []))];
+      if (missingPlans.length) {
+        const closed = await request<Array<Partial<ChatPlan> & { id?: string; status: string }>>(`/conversations/${room}/plans?ids=${missingPlans.join(',')}`).catch(() => []);
+        if (Array.isArray(closed)) plans = [...plans, ...closed];
+      }
+      const self = selfId ?? account.known?.id;
       return teammateChatActivity({ executions, plans, archived: snapshot.room.archived,
-        lastMessageAt: last ? Date.parse(last.createdAt) : 0 });
+        lastMessageAt,
+        ...(self ? {
+          isOwnWork: ({ botId, requesterId, maskOwnerId }) =>
+            maskOwnerId ? maskOwnerId === self : !!botId && mayStopWork(snapshot.members, self, botId, requesterId),
+        } : {}) });
     },
     async snapshot(roomId: string, metadata = false): Promise<ChatSnapshot> {
       const stored = await cache();
@@ -807,13 +906,24 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       if (!Array.isArray(members)) throw new Error('INVALID_CHAT_MEMBERS');
       return members;
     },
-    async load(roomId: string, oldest?: string, threadRootId?: string, attempt = 0): Promise<ChatPage> {
+    /** `shown` is the page this screen read moments ago. While the room's change cursor and
+     * history generation have not moved, nothing in the room changed (messages, executions and
+     * plans all advance that cursor), so only the personal metadata in the snapshot is replaced. */
+    async load(roomId: string, oldest?: string, threadRootId?: string, attempt = 0, shown?: ChatPage): Promise<ChatPage> {
       const room = chatId(roomId);
       const threadQuery = threadRootId ? `&threadRootId=${chatId(threadRootId)}` : '';
       const stored = await cache();
       const snapshot = stored ? await stored.snapshot<ChatSnapshot>(room) : await request<ChatSnapshot>(`/conversations/${room}/snapshot`);
       if (snapshot.room.id !== room || !Array.isArray(snapshot.members)) throw new Error('INVALID_CHAT_SNAPSHOT');
       chatCursor(snapshot.cursor);
+      if (shown && snapshot.cacheGeneration !== undefined && shown.historyRevision === snapshot.cacheGeneration
+        && shown.snapshot.room.id === room && shown.snapshot.cursor === snapshot.cursor && shown.threadRootId === threadRootId) {
+        return { ...shown, snapshot };
+      }
+      // Read after the snapshot's cursor, so a later change is still announced after it. It
+      // does not depend on the message page; let both travel together.
+      const executionsRead = request<ChatExecution[]>(`/conversations/${room}/executions`);
+      executionsRead.catch(() => undefined); // Reported below; an earlier failure must not leave it unhandled.
       // Snapshot includes Thread replies; the message endpoint selects the main timeline.
       let batch = await messagePage(room, `limit=100${threadQuery}`);
       const messages = [...batch];
@@ -837,24 +947,23 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
           if (!chatRejection(error, 404, 'MESSAGE_NOT_FOUND')) throw error;
         }
       }
-      // Use the same execution snapshot for running status and stop controls.
-      const executions = await request<ChatExecution[]>(`/conversations/${room}/executions`);
+      // Use the same execution snapshot for running status and stop controls. Failure notices
+      // and plan cards only need the page's message IDs; none of the three waits for another.
+      const [executions, executionFailures, plans] = await Promise.all([executionsRead, failures(room, messages),
+        snapshot.room.kind === 'group' && !threadRootId ? readPlans(room, messages) : undefined]);
       const sourceMessages = new Map<string, ChatMessage | undefined>([...snapshot.messages, ...messages].map(message => [message.id, message]));
-      for (const execution of Array.isArray(executions) ? executions : []) {
-        if (execution.plan_id || !['queued', 'running', 'needs_input', 'stopping'].includes(execution.status)) continue;
-        let source = sourceMessages.get(execution.source_message_id);
-        if (!sourceMessages.has(execution.source_message_id)) {
-          try { source = await this.message(room, execution.source_message_id); }
-          catch (error) {
-            // Source-level denial leaves this execution unresolved, not the readable room.
-            if (![403, 404, 410].includes((error as { status?: number })?.status ?? 0)) throw error;
-          }
-          sourceMessages.set(execution.source_message_id, source);
-        }
+      const live = (Array.isArray(executions) ? executions : [])
+        .filter(execution => !execution.plan_id && ['queued', 'running', 'needs_input', 'stopping'].includes(execution.status));
+      const unknown = [...new Set(live.map(execution => execution.source_message_id).filter(id => !sourceMessages.has(id)))];
+      if (unknown.length) for (const [id, result] of await lookup(room, unknown.map(chatId))) {
+        // Source-level denial leaves this execution unresolved, not the readable room.
+        if ('error' in result && !denied(result.error)) throw result.error;
+        sourceMessages.set(id, 'message' in result ? result.message : undefined);
+      }
+      for (const execution of live) {
+        const source = sourceMessages.get(execution.source_message_id);
         if (source) execution.threadRootId = source.threadRootId ?? null;
       }
-      const executionFailures = await failures(room, messages);
-      const plans = snapshot.room.kind === 'group' && !threadRootId ? await readPlans(room, messages) : undefined;
       const projection = await stored?.projection<ChatMessage>(room, []);
       if (projection && snapshot.cacheGeneration !== projection.generation) {
         if (attempt >= 2) throw new Error('CHAT_HISTORY_CHANGED');
@@ -880,6 +989,11 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       if (plan.creator_id !== self && !manager) throw new Error('ROLE_REQUIRED');
       const step = plan.steps.find(step => step.position === plan.current_step);
       const action = input.action === 'dismiss' && plan.status === 'waiting' ? 'stop' : input.action;
+      if (action === 'stop' && !canStopBotGroupPlan(plan, self, (bot, requester) => mayStopWork(snapshot.members, self, bot, requester))) throw new Error('ROLE_REQUIRED');
+      if (input.action === 'skip') {
+        const target = plan.steps.find(step => step.position === input.position);
+        if (!target || !mayStopWork(snapshot.members, self, target.botId, plan.creator_id)) throw new Error('ROLE_REQUIRED');
+      }
       if ((action === 'start' || action === 'dismiss') && plan.status !== 'proposed'
         || action === 'stop' && plan.status !== 'waiting'
         || action === 'continue' && (plan.status !== 'waiting' || !(step?.status === 'done' || plan.kind === 'talk' && step?.status === 'skipped'))
@@ -910,6 +1024,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
         { operationId, expectedRevision: plan.revision, action, ...edit }, manager?.id === self ? undefined : manager?.id, signal);
     },
     async stop(roomId: string, operationId: string, scope?: 'all', current = () => true) {
+      if (scope === 'all') throw new Error('ROLE_REQUIRED');
       const room = chatId(roomId);
       const check = () => { if (!current()) throw new Error('OWNER_CHANGED'); };
       const call: ChatRequest = async <T,>(path: string, method?: 'GET' | 'POST' | 'PATCH', body?: unknown, actorId?: string) => {
@@ -921,12 +1036,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       check();
       const self = await identity(); check();
       const snapshot = await call<ChatSnapshot>(`/conversations/${room}/snapshot`);
-      const manager = chatGroupManager(snapshot, self);
-      if (scope === 'all' && (!singleSpeaker || !manager)) throw new Error('ROLE_REQUIRED');
-      const everything = scope === 'all';
-      const asManager = manager?.id === self ? undefined : manager?.id;
-      const humanIsManager = snapshot.members.some(member => member.id === self && member.state === 'joined' && ['owner', 'admin'].includes(member.role));
-      const ownBots = new Set(snapshot.members.filter(member => member.state === 'joined' && member.kind === 'bot' && member.ownerActorId === self).map(member => member.id));
+
       const plans = await call<ChatPlan[]>(`/conversations/${room}/plans`);
       const stoppedPlans = new Set<string>();
       const refusedPlans = new Map<string, unknown>();
@@ -938,25 +1048,28 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       };
       let stopped = false;
       let unknownRequester = false;
-      for (const plan of plans.filter(plan => (everything || plan.creator_id === self) && ['proposed', 'running', 'waiting'].includes(plan.status))) {
+      for (const plan of plans.filter(plan => canStopBotGroupPlan(plan, self, (bot, requester) => mayStopWork(snapshot.members, self, bot, requester)) && ['proposed', 'running', 'waiting'].includes(plan.status))) {
         try {
           await call(`/conversations/${room}/plans/${chatId(plan.id)}`, 'POST',
             { operationId: `${operationId}:plan:${plan.id}`, expectedRevision: plan.revision, action: 'stop' },
-            plan.creator_id === self ? undefined : asManager);
+            undefined);
           stoppedPlans.add(plan.id); stopped = true;
         } catch (error) { if (!refused(error)) throw error; refusedPlans.set(plan.id, error); }
       }
       const executions = await call<ChatExecution[]>(`/conversations/${room}/executions`);
       for (const execution of executions.filter(execution => ['queued', 'running', 'needs_input'].includes(execution.status) && !(execution.plan_id && stoppedPlans.has(execution.plan_id)))) {
-        const asBot = !everything && execution.requester_id !== self && ownBots.has(execution.bot_id);
-        if (!everything && execution.requester_id !== self && !asBot) {
-          if (execution.requester_id) continue;
-          if (humanIsManager) { unknownRequester = true; continue; }
+
+        if (!mayStopWork(snapshot.members, self, execution.bot_id, execution.requester_id)) {
+          const member = snapshot.members.find(member => member.id === execution.bot_id);
+          if (!member || (member.assistant ? !execution.requester_id : !member.ownerActorId)) unknownRequester = true;
+          continue;
         }
         try {
-          await call(`/conversations/${room}/executions/${chatId(execution.id)}/control`, 'POST',
+          const epoch = botGroupStopRunEpoch(execution);
+          const query = epoch === undefined ? '' : `?runEpoch=${epoch}`;
+          await call(`/conversations/${room}/executions/${chatId(execution.id)}/control${query}`, 'POST',
             { operationId: `${operationId}:execution:${execution.id}`, action: 'stop' },
-            asBot ? execution.bot_id : everything && execution.requester_id !== self ? asManager : undefined);
+            undefined);
           stopped = true;
         } catch (error) { if (!refused(error)) throw error; refusedExecutions.set(execution.id, error); }
       }
@@ -1010,31 +1123,37 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       const work: Array<() => Promise<void>> = [];
       let threadRetryAt: number | undefined;
       const schedule = (at: number) => { if (Number.isFinite(at)) threadRetryAt = Math.min(threadRetryAt ?? at, at); };
-      const read = (id: string, task: () => Promise<void>) => {
+      const due = (id: string) => {
+        const failed = threadFailures.get(`${room}:${id}`);
+        if (failed && failed.at > Date.now()) { schedule(failed.at); return false; }
+        return true;
+      };
+      const settle = (id: string, ok: boolean) => {
         const key = `${room}:${id}`, failed = threadFailures.get(key);
-        if (failed && failed.at > Date.now()) { schedule(failed.at); return; }
+        if (ok) { threadFailures.delete(key); return; }
+        const attempts = (failed?.attempts ?? 0) + 1;
+        const at = attempts <= retryDelays.length ? Date.now() + retryDelays[attempts - 1]! : Infinity;
+        threadFailures.set(key, { attempts, at }); schedule(at);
+      };
+      const read = (id: string, task: () => Promise<void>) => {
+        if (!due(id)) return;
         work.push(async () => {
-          try { await task(); threadFailures.delete(key); }
-          catch {
-            const attempts = (failed?.attempts ?? 0) + 1;
-            const at = attempts <= retryDelays.length ? Date.now() + retryDelays[attempts - 1]! : Infinity;
-            threadFailures.set(key, { attempts, at }); schedule(at);
-          }
+          try { await task(); settle(id, true); }
+          catch { settle(id, false); }
         });
+      };
+      // Sources and roots are single-message reads of one room: fetch them as one batch
+      // (one local commit) instead of one queued read and one commit per message.
+      const singles = new Map<string, Array<{ key: string; put(value: ChatMessage | null): void }>>();
+      const single = (key: string, id: string, put: (value: ChatMessage | null) => void) => {
+        if (!due(key)) return;
+        try { chatId(id); } catch { settle(key, false); return; }
+        singles.set(id, [...(singles.get(id) ?? []), { key, put }]);
       };
       for (const sourceId of new Set(page.messages.flatMap(message => readBotGroupThreadShareCard(message)?.messageId ?? []))) {
         if (known.has(sourceId)) { threadSources[sourceId] = known.get(sourceId)!; continue; }
-        read(`source:${sourceId}`, async () => {
-          try {
-            const stored = await cache();
-            threadSources[sourceId] = stored ? await stored.message<ChatMessage>(room, chatId(sourceId))
-              : await request<ChatMessage>(`/conversations/${room}/messages/${chatId(sourceId)}`);
-          } catch (error) {
-            // Source-level denial hides this reference, never the entire room.
-            if ([403, 404, 410].includes((error as { status?: number })?.status ?? 0)) threadSources[sourceId] = null;
-            else throw error;
-          }
-        });
+        // Source-level denial hides this reference, never the entire room.
+        single(`source:${sourceId}`, sourceId, value => { threadSources[sourceId] = value; });
       }
       // A recent reply does not prove that its root is in the current window.
       // Resolve roots independently; a transient failure stays loading, never deleted.
@@ -1044,22 +1163,26 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       }));
       for (const rootId of rootIds) {
         if (known.has(rootId)) continue;
-        read(`root:${rootId}`, async () => {
-          try {
-            const stored = await cache();
-            threadRoots[rootId] = stored ? await stored.message<ChatMessage>(room, chatId(rootId))
-              : await request<ChatMessage>(`/conversations/${room}/messages/${chatId(rootId)}`);
-          } catch (error) {
-            if ([403, 404, 410].includes((error as { status?: number })?.status ?? 0)) threadRoots[rootId] = null;
-            else throw error;
+        single(`root:${rootId}`, rootId, value => { threadRoots[rootId] = value; });
+      }
+      if (singles.size) {
+        // A failed batch (for example the room itself became unreadable, which the page read
+        // reports) leaves every reference loading and due for its own retry.
+        const results = await lookup(room, [...singles.keys()])
+          .catch(() => new Map<string, { message: ChatMessage } | { error: unknown }>());
+        for (const [id, readers] of singles) {
+          const result = results.get(id);
+          for (const reader of readers) {
+            if (result && 'message' in result) { reader.put(result.message); settle(reader.key, true); }
+            else if (result && denied(result.error)) { reader.put(null); settle(reader.key, true); }
+            else settle(reader.key, false);
           }
-        });
+        }
       }
       let index = 0;
       const drain = () => Promise.all(Array.from({ length: Math.min(4, work.length) }, async () => {
         while (index < work.length) await work[index++]!();
       }));
-      await drain();
       const previewRoots = new Map([...page.messages, ...[...rootIds].flatMap(id => threadRoots[id] ?? known.get(id) ?? [])]
         .map(message => [message.id, message]));
       if (!page.threadRootId) for (const root of previewRoots.values()) {
@@ -1184,6 +1307,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       try {
         if (input.mentions.all && !mentions.size && !supportsMentionAudiences && self) mentions.add(self);
         const body: ChatSendBody = { operationId: input.clientId,
+          ...(independentReplies && input.conversationKind !== 'direct' ? { independentReplies: true } : {}),
           ...(supportsMentionAudiences && input.conversationKind !== 'direct' && botGroupMentionAudience(input.mentions) ? { mentionAudience: botGroupMentionAudience(input.mentions) } : {}),
           content, mentions: [...mentions], ...(input.threadRootId ? { threadRootId: chatId(input.threadRootId) } : {}) };
         // The exact body is durable before POST. A lost response/restart must not

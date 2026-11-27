@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { RotateCcw, ImagePlus, Film } from 'lucide-react';
 import { useEffect, useCallback, useId, useRef, useState } from 'react';
 import { extractIpcError } from '@/utils/ipcError';
-import { downloadPercent } from './DownloadMeter';
+import { downloadPercentLabel } from '@/components/ui/download-meter';
 
 import { Button } from '@/components/ui/button';
 import { SegmentedControl } from '@/components/ui/segmented-control';
@@ -45,6 +45,7 @@ export function WallpaperSection() {
     downloadPending,
     downloadFailed,
     downloadProgress,
+    downloadRetryReason,
     retryDownload,
     setWallpaper,
     setVisibility,
@@ -93,7 +94,7 @@ export function WallpaperSection() {
   const progressRatio = Number.isFinite(downloadProgress)
     ? Math.min(1, Math.max(0, downloadProgress))
     : 0;
-  const progressPercent = downloadPercent({ percent: downloadProgress * 100 }) ?? 0;
+  const progressPercent = downloadPercentLabel(downloadProgress * 100) ?? 0;
   const chooseWallpaper = async () => {
     setBusy(true);
     setError('');
@@ -322,6 +323,9 @@ export function WallpaperSection() {
               aria-valuemin={0}
               aria-valuemax={100}
               aria-valuenow={progressPercent}
+              aria-valuetext={
+                downloadRetryReason ? t(`downloadProgress.retry.${downloadRetryReason}`) : undefined
+              }
               className="sr-only"
             >
               {t('settings.appearance.wallpaper.downloading')}

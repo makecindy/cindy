@@ -74,6 +74,7 @@ export interface HistoryCompanion {
 }
 
 export interface HistorySession {
+  pinnedAt?: number | null;
   id: string;
   title: string;
   workingDir: string | null;
@@ -247,6 +248,16 @@ export interface SearchChatHistoryResult {
 // ── Deps interface ─────────────────────────────────────────────────────────
 
 export interface XdtHelperHistoryDeps {
+  readSharedTaskProgress?: (
+    args: { task_link: string; before?: string },
+    caller: import('../types.js').LiziMcpSessionContext | undefined,
+  ) => Promise<ControlResult<{
+    title: string;
+    inTurn: boolean;
+    observedAt: string;
+    events: { role: string; text?: string; createdAt?: string; truncated?: boolean }[];
+    nextBefore: string | null;
+  }, string>>;
   readSessionAttachment?: (args: import('./read_session_attachment.js').ReadSessionAttachmentArgs,
     context?: import('../types.js').LiziMcpSessionContext) => Promise<ControlResult<Record<string, unknown>, string>>;
   listTeammates?: (args: { teammateId?: string; limit: number; cursor: HistoryCursor | null },

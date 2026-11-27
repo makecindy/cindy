@@ -1,9 +1,9 @@
-import type { SettingsSearchContext } from './settingsSearchTypes';
+import type { SettingsSearchContext, SettingsSearchEntry } from './settingsSearchTypes';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Search, X } from 'lucide-react';
+import { X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import { Input } from '@/components/ui/input';
+import { SearchInput } from '@/components/ui/search-input';
 import { Tip } from '@/components/ui/tooltip';
 import { currentSelectedOption } from '@/components/ui/dropdown-menu-highlight';
 import {
@@ -23,15 +23,18 @@ import {
 } from './settingsSearchCatalog';
 
 interface SettingsSearchBoxProps {
+  requestedQuery?: string;
   visibleTabIds: readonly VisibleSettingsTab[];
   searchContext?: SettingsSearchContext;
   additionalDocuments?: readonly SettingsSearchDocument[];
+  allowSearchEntry?: (entry: SettingsSearchEntry) => boolean;
   onSelect?: (result: { tab: SettingsTab; sectionId: string }) => void;
 }
 
-export function SettingsSearchBox({ visibleTabIds, searchContext, additionalDocuments, onSelect }: SettingsSearchBoxProps) {
+export function SettingsSearchBox({ requestedQuery = '', visibleTabIds, searchContext, additionalDocuments, onSelect, allowSearchEntry }: SettingsSearchBoxProps) {
   const { t } = useTranslation();
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState(requestedQuery.slice(0, 200));
+  useEffect(() => { setQuery(requestedQuery.slice(0, 200)); }, [requestedQuery]);
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   // Results list: glide highlight on the aria-selected result; arrow keys stay in the field.
@@ -44,8 +47,8 @@ export function SettingsSearchBox({ visibleTabIds, searchContext, additionalDocu
     },
   });
   const documents = useMemo(
-    () => [...buildSettingsSearchDocuments(t, visibleTabIds, searchContext), ...(additionalDocuments ?? [])],
-    [t, visibleTabIds, searchContext, additionalDocuments],
+    () => [...buildSettingsSearchDocuments(t, visibleTabIds, searchContext), ...(additionalDocuments ?? [])].filter(doc => !allowSearchEntry || allowSearchEntry(doc.entry)),
+    [t, visibleTabIds, searchContext, additionalDocuments, allowSearchEntry],
   );
   const results = useMemo(() => searchSettings(documents, query), [documents, query]);
   const hasQuery = query.trim().length > 0;
@@ -69,21 +72,13 @@ export function SettingsSearchBox({ visibleTabIds, searchContext, additionalDocu
 
   return (
     <div className="mb-3 px-1">
-      <div className="relative">
-        <Search
-          aria-hidden="true"
-          size={15}
-          className="pointer-events-none absolute left-3 top-1/2 z-[1] -translate-y-1/2 text-[var(--settings-section-sublabel)]"
-        />
-        <Input
+        <SearchInput
           inputRef={inputRef}
           value={query}
           onChange={(value) => {
             setQuery(value);
             setActiveIndex(0);
           }}
-          size="sm"
-          surface="ivory"
           ariaLabel={t('settings.search.ariaLabel')}
           placeholder={t('settings.search.placeholder')}
           role="combobox"
@@ -91,7 +86,6 @@ export function SettingsSearchBox({ visibleTabIds, searchContext, additionalDocu
           aria-controls={hasQuery ? 'settings-search-results' : undefined}
           aria-autocomplete="list"
           aria-activedescendant={activeResult ? 'settings-search-result-' + activeResult.entry.id : undefined}
-          inputClassName="pl-9 pr-9"
           onKeyDown={(event) => {
             if (!hasQuery) return;
             if (event.nativeEvent.isComposing) return;
@@ -129,7 +123,6 @@ export function SettingsSearchBox({ visibleTabIds, searchContext, additionalDocu
             ) : undefined
           }
         />
-      </div>
 
       {hasQuery ? (
         <div

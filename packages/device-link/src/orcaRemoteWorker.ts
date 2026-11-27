@@ -34,6 +34,7 @@ export interface OrcaExecutionDeviceView {
   supported: boolean;
   /** The Lead and execution host support an independent remote Agent location. */
   supportsAgentDevice?: boolean;
+  supportsModelGroup?: boolean;
 }
 
 /** 运行设备上 open 可能要准备工作目录并启动 Agent，给足执行与回程余量。 */
@@ -50,6 +51,7 @@ export interface OrcaRemoteWorkerCaps {
   version: number;
   workerBridge?: true;
   agentDevice?: boolean;
+  modelGroup?: true;
 }
 
 export const ORCA_REMOTE_WORKER_BRIDGE_TOOLS = ['send_to_lead', 'read_lead_history', 'read_lead', 'lead_status'] as const;
@@ -93,6 +95,14 @@ export interface OrcaRemoteWorkerModelsResult {
   codex?: OrcaRemoteWorkerModel[];
   claude_code?: OrcaRemoteWorkerModel[];
   pi?: OrcaRemoteWorkerModel[];
+  /** Plugin engines offered on the execution computer (or selected provider location). */
+  pluginEngines?: Array<{
+    providerId: string;
+    name: string;
+    available: boolean;
+    message?: string;
+    models: Array<{ id: string; label: string; efforts?: string[] }>;
+  }>;
 }
 
 export interface OrcaRemoteWorkerModel {
@@ -108,6 +118,7 @@ export interface OrcaRemoteWorkerOpenRequest {
   agentKind: OrcaRemoteWorkerAgentKind;
   /** 缺省 = 运行设备的默认模型与来源。 */
   model?: string;
+  modelGroup?: string;
   providerId?: string;
   /** Agent location relative to the execution computer; absent/null is local there. */
   agentDeviceId?: string | null;
@@ -213,12 +224,14 @@ export function parseOrcaRemoteWorkerOpenRequest(raw: unknown): OrcaRemoteWorker
     throw new Error('[INVALID_PARAMS] workingDir contains control characters');
   }
   const model = optString(raw.model);
+  const modelGroup = raw.modelGroup === undefined ? undefined : requiredString(raw.modelGroup, 'modelGroup', 64);
   const providerId = optString(raw.providerId);
   const effort = optString(raw.effort, 32);
   return {
     sessionId: raw.sessionId,
     agentKind: agentKind as OrcaRemoteWorkerAgentKind,
     ...(model ? { model } : {}),
+    ...(modelGroup ? { modelGroup } : {}),
     ...(providerId ? { providerId } : {}),
     ...(raw.agentDeviceId !== undefined ? { agentDeviceId: parseAgentDeviceId(raw.agentDeviceId) } : {}),
     ...(effort ? { effort } : {}),

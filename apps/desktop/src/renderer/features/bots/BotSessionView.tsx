@@ -12,7 +12,8 @@ import { useCompanionArrivalNotice } from './useCompanionArrivalNotice';
 import { CompanionShadowBanner } from './CompanionShadowBanner';
 import type { ComposerBotMention } from '@/lib/fileTypes';
 import { getBotLastReadAt, markBotRead } from './botReadState';
-import { getBotProfiles, useBotProfiles } from './botStore';
+import { ensureBotProfilesLoaded, getBotProfiles, getBotUnreadCounts, hasLoadedBotProfiles, useBotProfiles } from './botStore';
+import { isBotDirectEntryState } from './botNavigation';
 import type { BotChatIdentity } from './BotSessionContentHeader';
 import type { BotChatBinding } from './botChatPresentation';
 import { BotDmThreadHost } from './BotDmThreadHost';
@@ -98,7 +99,7 @@ function BotSessionGateView() {
     // The already-read local roster selects a display; fresh validation still
     // controls writes and read receipts. Mount the existing message cache now.
     return { kind: 'ready', verified: false, identity: { ...readBotChatIdentity(profile, profile.id), sessionId },
-      isCanonical: projection.role === 'canonical', unreadBoundaryAt: projection.role === 'canonical' && ((profile as { unreadCount?: number }).unreadCount ?? 0) > 0 ? getBotLastReadAt(profile.id) : null,
+      isCanonical: projection.role === 'canonical', unreadBoundaryAt: projection.role === 'canonical' && (getBotUnreadCounts()[profile.id] ?? 0) > 0 ? getBotLastReadAt(profile.id) : null,
       mentions: profiles.map(bot => readBotMention(bot, profile.id)).filter((bot): bot is ComposerBotMention => bot !== null) };
   });
   // The companion now runs on its main computer: this copy's main task is read only.
@@ -155,9 +156,17 @@ function BotSessionGateView() {
         if (sessionEntryFailure(error) === 'missing') return null;
         throw error;
       }),
-      window.electronAPI.localDb.bots.list(
-        lastReadAt === null ? undefined : { lastReadAtByBotId: { [botId]: lastReadAt } },
-      ),
+      // Unread count and @ candidates come from the shared roster projection
+      // (same read positions as the sidebar badge) instead of a second full
+      // `bots.list`. A loaded roster is used as is: waiting for in-flight
+      // refreshes could keep the gate unverified while notifications keep
+      // queueing them. Only an unloaded roster is read, shared with the sidebar.
+      hasLoadedBotProfiles()
+        ? Promise.resolve(getBotProfiles())
+        : ensureBotProfilesLoaded().then((profiles) => {
+          if (!hasLoadedBotProfiles()) throw new Error('Bot roster is not loaded');
+          return profiles;
+        }),
     ])
       .then(([bot, bots]) => {
         if (cancelled || !isDataOwnerGenerationCurrent(owner)) return;
@@ -176,20 +185,7 @@ function BotSessionGateView() {
           setGate({ kind: 'ordinary' });
           return;
         }
-        const listedBot = Array.isArray(bots)
-          ? bots.find(
-              (candidate) =>
-                candidate &&
-                typeof candidate === 'object' &&
-                (candidate as { id?: unknown }).id === botId,
-            )
-          : undefined;
-        const unreadCount =
-          listedBot &&
-          typeof listedBot === 'object' &&
-          typeof (listedBot as { unreadCount?: unknown }).unreadCount === 'number'
-            ? (listedBot as { unreadCount: number }).unreadCount
-            : 0;
+        const unreadCount = getBotUnreadCounts()[botId] ?? 0;
         readOwner.current = owner;
         setGate({
           kind: 'ready',
@@ -200,11 +196,9 @@ function BotSessionGateView() {
           unreadBoundaryAt:
             activeProjection?.role === 'canonical' && unreadCount > 0 ? lastReadAt : null,
           identity: { ...readBotChatIdentity(bot, botId), sessionId },
-          mentions: Array.isArray(bots)
-            ? bots
-                .map((candidate) => readBotMention(candidate, botId))
-                .filter((candidate): candidate is ComposerBotMention => candidate !== null)
-            : [],
+          mentions: bots
+            .map((candidate) => readBotMention(candidate, botId))
+            .filter((candidate): candidate is ComposerBotMention => candidate !== null),
         });
       })
       .catch((error: unknown) => {
@@ -225,6 +219,11 @@ function BotSessionGateView() {
     if (isDataOwnerGenerationCurrent(readOwner.current) && gate.kind === 'ready' && gate.verified && gate.isCanonical && botId && gate.identity.sessionId === sessionId) markBotRead(botId, at);
   }, [botId, gate, sessionId]);
 
+  if (gate.kind === 'ordinary' && botId && isBotDirectEntryState(location.state)) {
+    // The sidebar skipped the Bot page on a roster that looked healthy; the fresh
+    // read disagrees, so let that page validate and repair the main chat.
+    return <Navigate to={`/bots/${encodeURIComponent(botId)}`} replace />;
+  }
   if (gate.kind === 'ordinary' && sessionId) {
     return <Navigate to={`${standardSessionRoute(sessionId)}${location.search ?? ''}`} state={location.state} replace />;
   }

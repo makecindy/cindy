@@ -294,6 +294,26 @@ describe('checkImRouteAuth', () => {
   });
 });
 
+// 2026-11-25: IM channels drive plugin-engine tasks too. Their engine signs in with its own CLI, so the
+// route check must not read Cindy provider credentials (which would report a missing key and block the
+// turn). Minimal input: agentKind 'acp' with no providers and no gateway key.
+describe('plugin-engine routes', () => {
+  it('passes without consulting Cindy providers or agent logins', async () => {
+    const d = deps({
+      readXdGatewayApiKey: () => null,
+      listProviders: vi.fn(async () => []),
+      getAgentAuthState: vi.fn(async () => ({ authenticated: false })),
+    });
+    const acp = { agentKind: 'acp' as const, model: 'gemini-3-pro', providerId: 'acp-plugin:agy:agy' };
+    await expect(checkImRouteAuth(acp, undefined, d)).resolves.toEqual({ ok: true, missing: null });
+    await expect(checkImRouteAuthDetailed(acp, undefined, d)).resolves.toMatchObject({
+      ok: true, providerId: 'acp-plugin:agy:agy',
+    });
+    expect(d.listProviders).not.toHaveBeenCalled();
+    expect(d.getAgentAuthState).not.toHaveBeenCalled();
+  });
+});
+
 describe('resolveEffectiveProvider', () => {
   // issue #882 第 3 点(2026-07 review):同一 model id 在不同来源上 mode 不一致时,
   // 鉴权解析不能只看"这个来源提供这个 id",还要看这个来源上这个 id 是不是聊天模型

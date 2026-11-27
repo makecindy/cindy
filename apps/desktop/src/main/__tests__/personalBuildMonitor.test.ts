@@ -1,13 +1,31 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
+import { runInNewContext } from 'node:vm';
 import os from 'node:os';
 import path from 'node:path';
-import { createPersonalBuildMonitor, consumePersonalMonitorEnvironment } from '../personalBuildMonitor.js';
+import { createPersonalBuildMonitor, createPersonalRendererProbe, consumePersonalMonitorEnvironment } from '../personalBuildMonitor.js';
 
 // Unit tier through the actual monitor tick and real temporary files. No existing test exercises
 // developer supervisor quit requests. A stale pid/generation or activity beginning during await
 // must not authorize quitting. No real user profile, Electron process, timers or credentials.
 describe.runIf(process.platform === 'darwin')('personal build host handoff', () => {
+  it('checks the local main document and mounted content, including after navigation', async () => {
+    let href = 'file:///candidate/main/index.html';
+    let mounted = true;
+    const win = { isDestroyed: () => false, webContents: {
+      isDestroyed: () => false, isCrashed: () => false, isLoadingMainFrame: () => false,
+      executeJavaScript: async (code: string) => runInNewContext(code, {
+        location: { href }, document: { readyState: 'complete',
+          querySelector: (selector: string) => mounted && selector === '#root[data-cindy-mounted="1"]' ? {childElementCount:1} : null },
+      }),
+    }};
+    const probe = createPersonalRendererProbe(() => win, '/candidate/main/index.html');
+    expect(await probe()).toBe(true);
+    mounted = false;
+    expect(await probe()).toBe(false);
+    mounted = true; href = 'http://localhost:5173/';
+    expect(await probe()).toBe(false);
+  });
   it('consumes routing before child spawn and refuses a second writer for the same generation', async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'personal-owner-'));
     try {

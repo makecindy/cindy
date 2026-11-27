@@ -79,6 +79,7 @@ function createLocalDb(): Database.Database {
       sdk_session_id TEXT,
       total_token_usage INTEGER NOT NULL DEFAULT 0,
       total_cost_usd REAL NOT NULL DEFAULT 0,
+      total_cost_usd_is_approximate INTEGER DEFAULT 0,
       total_cost_amount REAL NOT NULL DEFAULT 0,
       total_cost_currency TEXT,
       total_cost_is_approximate INTEGER NOT NULL DEFAULT 0,
@@ -89,7 +90,7 @@ function createLocalDb(): Database.Database {
       list_preview_role TEXT,
       list_message_count INTEGER,
       cleared_at INTEGER,
-      pinned_at INTEGER,
+      pinned_at INTEGER, snoozed_until INTEGER, snoozed_at INTEGER,
       user_send_at INTEGER,
       agent_kind TEXT NOT NULL DEFAULT 'cc',
       parent_session_id TEXT,
@@ -314,6 +315,12 @@ describe('Codex local session import', () => {
     const newer = path.join(home, 'archived_sessions', `rollout-2026-05-13-${threadId}.jsonl`);
     const unrelated = path.join(home, 'sessions', `rollout-2026-05-13-${execThreadId}.jsonl`);
     const content = JSON.stringify({ type: 'session_meta', payload: { id: threadId, source: 'cli' } }) + '\n';
+    // #11025 unit: the no-index archive fallback reads sqlite_home from native
+    // config. A single BOM previously blocked archive lookup; never rewrite it.
+    const sqliteHome = path.join(rootDir, 'custom-state');
+    const config = `\uFEFFsqlite_home = ${JSON.stringify(sqliteHome)}\n`;
+    fs.mkdirSync(home, { recursive: true });
+    fs.writeFileSync(path.join(home, 'config.toml'), config);
     for (const file of [older, newer, unrelated]) {
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, content);
@@ -323,10 +330,11 @@ describe('Codex local session import', () => {
     const stat = vi.spyOn(fs.promises, 'stat');
     try {
       await expect(readCodexThreadStorageForArchiveAsync(threadId)).resolves.toEqual({
-        historyHome: home, sqliteHome: home, rolloutPath: newer,
+        historyHome: home, sqliteHome, rolloutPath: newer,
       });
       expect(stat.mock.calls.some(([file]) => file === unrelated)).toBe(false);
       expect(fs.readFileSync(newer, 'utf8')).toBe(content);
+      expect(fs.readFileSync(path.join(home, 'config.toml'), 'utf8')).toBe(config);
       expect(currentTestDb().prepare('SELECT COUNT(*) AS n FROM sessions').get()).toEqual({ n: 0 });
       await expect(readCodexThreadStorageForArchiveAsync('not-a-thread')).resolves.toBeUndefined();
     } finally { stat.mockRestore(); }

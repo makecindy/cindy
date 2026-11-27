@@ -4,6 +4,8 @@
  * 纯函数，所有事实由调用方注入。
  */
 import {
+  modelGroupAutoSwitchFor,
+  type ModelGroupResolveRequest,
   modelGroupCandidateKey,
   type ModelGroupAgentKind,
   type ModelGroupRoute,
@@ -33,7 +35,7 @@ export interface ModelGroupSwitchOfferDeps {
   /** 这个任务有目标(目标模式自己管撞限额后的续跑)。 */
   hasGoal(sessionId: string): Promise<boolean>;
   config(): ModelGroupsConfig;
-  candidateFacts(route: ModelGroupRoute): Promise<ModelGroupCandidateFacts[]>;
+  candidateFacts(route: ModelGroupRoute, context?: ModelGroupResolveRequest['context']): Promise<ModelGroupCandidateFacts[]>;
   now(): number;
 }
 
@@ -42,17 +44,27 @@ function isModelGroupAgentKind(value: unknown): value is ModelGroupAgentKind {
 }
 
 /**
- * 只给本机直接开的普通任务：伙伴、定时与自动化、IM、复核等来源，SSH、Agent 在另一台电脑、协同
- * (Lead / Worker)、共享中的任务与目标都不提议。被控电脑上的任务由那台的主进程回答，本机查不到会话行。
+ * 哪些来源的任务按记下的模式接替(撞配额提议与自动降级共用)：本机直接开的普通任务，以及定时任务与自动化建的任务
+ * (2026-11-22 用户裁决：模式跟着任务走，接替是所有任务公共的事)。伙伴另有自己的接替(§6.2)；IM、复核等来源
+ * 还没有接入模式选择，按原样不接替。
+ */
+export function isModelGroupRecoverySource(source: string | null | undefined): boolean {
+  return source === 'desktop' || source === 'scheduler';
+}
+
+/**
+ * SSH、Agent 在另一台电脑、协同(Lead / Worker)、共享中的任务与目标都不提议。被控电脑上的任务由那台的主进程回答，
+ * 本机查不到会话行。
  */
 function isPlainLocalTask(row: ModelGroupSwitchOfferSessionRow): boolean {
-  return row.source === 'desktop' && !row.remoteHostId && !row.agentDeviceId && !row.orcaRole;
+  return isModelGroupRecoverySource(row.source) && !row.remoteHostId && !row.agentDeviceId && !row.orcaRole;
 }
 
 export async function computeModelGroupSwitchOffer(
   deps: ModelGroupSwitchOfferDeps,
   sessionId: string,
-): Promise<ModelGroupSwitchOffer | null> {
+  recovery?: { visited: ReadonlySet<string>; accountUnavailable: boolean; hasImages?: boolean; recordUnavailable(candidate: ModelGroupRoute['candidates'][number]): void; current: { agentKind: ModelGroupAgentKind; providerId: string; model: string; effort?: string | null; fastMode?: boolean | 'ultrafast' | null } },
+): Promise<(ModelGroupSwitchOffer & { effort?: string; fastMode?: true | 'ultrafast'; fromLabel?: string }) | null> {
   const binding = deps.readBinding(sessionId);
   if (!binding) return null;
   const row = await deps.readSession(sessionId);
@@ -60,35 +72,64 @@ export async function computeModelGroupSwitchOffer(
   if (!isModelGroupAgentKind(row.agentKind) || !row.providerId || !row.model) return null;
   // 任务此刻的运行位置(只给本机任务提议，所以这里总是本机)；记录里的候选键同样带位置。
   const location = row.agentDeviceId || undefined;
-  const current = { agentKind: row.agentKind, providerId: row.providerId, model: row.model, agentDeviceId: location };
-  if (modelGroupCandidateKey(current) !== binding.pickedKey) {
+  const current = recovery?.current ?? { agentKind: row.agentKind, providerId: row.providerId, model: row.model, agentDeviceId: location };
+  if (modelGroupCandidateKey(current) !== binding.pickedKey && !recovery?.visited.has(binding.pickedKey)) {
     // 模型或来源此刻不是记下的这个(用户自己换了，或别处换了)：不提议。记录不删 —— 跨引擎的换模型
     // 可能只是登记了「下一条消息再换」，任务还在旧模型上跑；等真换过去时记录要照样有效。
     return null;
   }
   const now = deps.now();
-  const target = modelGroupRouteFor(deps.config(), binding.selection, now);
+  const config = deps.config();
+  if (recovery && !modelGroupAutoSwitchFor(config, binding.selection)) return null;
+  const target = modelGroupRouteFor(config, binding.selection, now);
   if (target.outcome === 'missing') return null;
   const { route } = target;
   // 同一个供应商连接是同一个账号、同一份配额：一并跳过，连同正在用的这个。
   // 在别的位置运行的来源也跳过：把运行中的任务挪到另一台电脑不是这个提议做的事。
+  const currentKey = modelGroupCandidateKey(current);
+  const accountUnavailable = recovery?.accountUnavailable ?? true;
   const eligible: ModelGroupRoute = {
     ...route,
-    candidates: route.candidates.map((candidate) => (candidate.agentDeviceId !== location || candidate.providerId === current.providerId
-      ? { ...candidate, off: true }
-      : candidate)),
+    candidates: route.candidates.map((candidate) => {
+      const key = modelGroupCandidateKey(candidate);
+      const failed = candidate.agentDeviceId === location && (key === currentKey ||
+        (accountUnavailable && candidate.providerId === current.providerId));
+      if (failed) recovery?.recordUnavailable(candidate);
+      return candidate.agentDeviceId !== location || failed || recovery?.visited.has(key)
+        ? { ...candidate, off: true } : candidate;
+    }),
   };
   if (!eligible.candidates.some((candidate) => !candidate.off)) return null;
   // 跳过的来源(含别的位置上的)已标成停用，不为它们去读别处的目录。
-  const facts = await deps.candidateFacts(eligible);
+  // 供应商路由下的任务：接替到另一个成员时沿用任务此刻的思考深度与 Fast(那个成员支持时)，不退回模型默认档。
+  const wanted = recovery?.current;
+  const facts = await deps.candidateFacts(eligible, wanted ? {
+    ...(wanted.effort ? { effort: wanted.effort } : {}),
+    ...(wanted.fastMode ? { fastMode: wanted.fastMode } : {}),
+  } : undefined);
   // 「轮流」从正在用的这个往后数；不读也不改新任务用的轮流位置。
-  const picked = pickModelGroupCandidate(eligible, facts, { now, lastPickedKey: binding.pickedKey });
-  if (picked.index === null) return null;
+  const pickFrom = (candidates: ModelGroupRoute) => pickModelGroupCandidate(candidates, facts, { now, lastPickedKey: binding.pickedKey,
+    needsImage: recovery?.hasImages === true && route.exceptions?.some(item => item.when.type === 'image'),
+  });
+  // 能用的都撞了上限时 pick 仍会选最早恢复的那个(带 limitedUntilMs)；换过去一样要等，不算选到。
+  const usablePick = (pick: ReturnType<typeof pickFrom>) =>
+    pick.index !== null && !('limitedUntilMs' in pick.trace[pick.index]) ? pick : null;
+  // 自动接替先在同一引擎的来源里按选法挑(同一引擎内换来源不用交接、上下文不丢)；没有才跨引擎(§4.2，2026-11-26 排查补上)。
+  // 横幅里的手动提议照 §6.1 按选法挑，由用户决定。
+  const sameEngine: ModelGroupRoute = {
+    ...eligible,
+    candidates: eligible.candidates.map((candidate) => (candidate.agentKind === current.agentKind ? candidate : { ...candidate, off: true })),
+  };
+  const picked = (recovery && sameEngine.candidates.some((candidate) => !candidate.off) ? usablePick(pickFrom(sameEngine)) : null)
+    ?? usablePick(pickFrom(eligible));
+  if (!picked || picked.index === null) return null;
   const entry = picked.trace[picked.index];
-  // 能用的都撞了上限时 pick 仍会选最早恢复的那个(带 limitedUntilMs)；换过去一样要等，不提议。
-  if ('limitedUntilMs' in entry) return null;
   const candidate = route.candidates[picked.index];
+  // 正在用的那个来源的名字(活动行「{from} …，已换到 {to} 继续」)，在 trace 里与其他候选一起算好了。
+  const currentIndex = route.candidates.findIndex((item) => modelGroupCandidateKey(item) === currentKey);
+  const fromEntry = currentIndex >= 0 ? picked.trace[currentIndex] : undefined;
   return {
+    ...(fromEntry ? { fromLabel: `${fromEntry.modelName} · ${fromEntry.sourceName}` } : {}),
     groupName: target.groupName,
     selection: binding.selection,
     agentKind: candidate.agentKind,
@@ -96,6 +137,8 @@ export async function computeModelGroupSwitchOffer(
     model: candidate.model,
     modelName: entry.modelName,
     sourceName: entry.sourceName,
+    ...(recovery && facts[picked.index].effort ? { effort: facts[picked.index].effort } : {}),
+    ...(recovery && facts[picked.index].fastMode ? { fastMode: facts[picked.index].fastMode } : {}),
     crossEngine: candidate.agentKind !== current.agentKind,
   };
 }

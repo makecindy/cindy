@@ -10,6 +10,8 @@ export interface SelectOption {
   label: string;
   disabled?: boolean;
   title?: string;
+  /** Secondary line under the label in the open list; the trigger shows the label only. */
+  description?: string;
   endAdornment?: ReactNode;
 }
 
@@ -19,6 +21,8 @@ export interface SelectProps {
   /** Settings search checker reason, forwarded to the trigger. */
   'data-settings-search-action'?: string;
   label: string;
+  /** Displayed when there is no selected option. Defaults to the field label. */
+  placeholder?: string;
   value: string;
   options?: ReadonlyArray<SelectOption>;
   /** Labelled option groups (e.g. commands / keys); use instead of options. */
@@ -33,8 +37,12 @@ export interface SelectProps {
   className?: string;
   /** Size a compact trigger's menu independently; ordinary fields keep equal width. */
   contentClassName?: string;
-  /** Trigger height: default 36px; compact 32px for narrow drawers and dense lists. */
-  size?: 'default' | 'compact';
+  /**
+   * Trigger height: default 36px; compact 32px for narrow drawers and dense lists; inline
+   * 24px, frameless and in the surrounding text colour, for a value that sits inside a line
+   * of text (plugin UI slots, provider run location, Cindy device picker). DESIGN.md §4.
+   */
+  size?: 'default' | 'compact' | 'inline';
   /**
    * Trigger width preset: 220px / 320px, full width for stacked fields, or 120px (`xs`) for a
    * short value paired inline with another control (DESIGN.md §4 Desktop settings controls).
@@ -50,6 +58,18 @@ export interface SelectProps {
 /** Width presets, also for SelectParts triggers that compose their own rows. */
 export const SELECT_WIDTHS = { xs: 'w-[120px]', sm: 'w-[220px]', md: 'w-[320px]', full: 'w-full' } as const;
 
+const SELECT_BUTTON_SIZES = { default: 'lg', compact: 'md', inline: 'xs' } as const;
+
+/** Inline trigger: fits its value, no frame or fill at rest, surrounding text colour;
+ * the secondary hover/pressed fill and focus ring still mark it as a control. */
+const SELECT_INLINE_TRIGGER =
+  'w-fit gap-1 px-1.5 text-inherit [--button-face-bg:transparent] [--button-face-border:transparent]';
+
+/** An inline trigger is only as wide as its value, so its list fits the options instead:
+ * at least the trigger width, at most 18rem and the space available. */
+const SELECT_INLINE_CONTENT =
+  'w-max min-w-[var(--radix-select-trigger-width)] max-w-[min(18rem,var(--radix-select-content-available-width))]';
+
 /** Desktop single-value field (DESIGN.md §4): standard secondary Button,
  * equal-width Radix panel, 12px container / 8px rows and semantic theme colors.
  * Use with FormField for a visible label; className sizes the trigger only.
@@ -59,6 +79,7 @@ export function Select({
   'data-setting-id': settingId,
   'data-settings-search-action': searchAction,
   label,
+  placeholder = label,
   value,
   options,
   groups,
@@ -86,7 +107,14 @@ export function Select({
       title={option.title ?? (truncateOptions ? option.label : undefined)}
       className="relative flex min-h-8 cursor-pointer select-none items-center rounded-lg py-1 pl-2 pr-6 outline-none [overflow-wrap:anywhere] data-[disabled]:opacity-60"
     >
-      {truncateOptions ? (
+      {option.description ? (
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5 py-0.5">
+          <span className={cn(truncateOptions && 'truncate')}>
+            <SelectPrimitive.ItemText>{option.label}</SelectPrimitive.ItemText>
+          </span>
+          <span className="text-12 leading-[1.4] text-[var(--text-secondary)]">{option.description}</span>
+        </span>
+      ) : truncateOptions ? (
         <span className="min-w-0 flex-1 truncate">
           <SelectPrimitive.ItemText>{option.label}</SelectPrimitive.ItemText>
         </span>
@@ -113,14 +141,15 @@ export function Select({
           data-setting-id={settingId}
           data-settings-search-action={searchAction}
           variant="secondary"
-          size={size === 'compact' ? 'md' : 'lg'}
+          size={SELECT_BUTTON_SIZES[size]}
           aria-label={label}
           aria-describedby={describedBy}
           aria-invalid={error ? true : invalid}
           aria-required={required}
-          title={selected?.title ?? selected?.label}
+          title={selected?.title ?? selected?.label ?? (placeholder !== label ? placeholder : undefined)}
           className={cn(
             'min-w-0 max-w-full justify-between gap-2 px-3 font-normal [-webkit-app-region:no-drag]',
+            size === 'inline' && SELECT_INLINE_TRIGGER,
             width && SELECT_WIDTHS[width],
             className,
             (error || (invalid !== undefined && invalid !== false && invalid !== 'false')) &&
@@ -128,11 +157,11 @@ export function Select({
           )}
         >
           <span className={cn('min-w-0 truncate text-left', triggerAdornment && 'flex-1')}>
-            <SelectPrimitive.Value placeholder={label} />
+            <SelectPrimitive.Value placeholder={placeholder} />
           </span>
           {triggerAdornment}
           <SelectPrimitive.Icon asChild>
-            <ChevronDown size={14} className="shrink-0" aria-hidden="true" />
+            <ChevronDown size={size === 'inline' ? 12 : 14} className="shrink-0" aria-hidden="true" />
           </SelectPrimitive.Icon>
         </Button>
       </SelectPrimitive.Trigger>
@@ -144,7 +173,8 @@ export function Select({
           sideOffset={4}
           collisionPadding={8}
           className={cn(
-            'z-[10010] w-[var(--radix-select-trigger-width)] max-h-[var(--radix-select-content-available-height)] overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1.5 text-13 text-[var(--text-primary)] [-webkit-app-region:no-drag]',
+            'z-dropdown w-[var(--radix-select-trigger-width)] max-h-[var(--radix-select-content-available-height)] overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1.5 text-13 text-[var(--text-primary)] [-webkit-app-region:no-drag]',
+            size === 'inline' && SELECT_INLINE_CONTENT,
             contentClassName,
           )}
         >

@@ -28,6 +28,7 @@ const h = vi.hoisted(() => ({
   windows: [] as any[],
   deps: null as any,
   permissionDeps: null as any,
+  screenPermission: 'granted',
   lease: 'lease',
   background: false,
   ready: false,
@@ -72,7 +73,11 @@ vi.mock('../linuxDesktop', () => ({
   linuxMonitor: vi.fn(),
   linuxDisplay: () => ({ id: 'hyprland:eDP-2', name: 'eDP-2', width: 1600, height: 1000 }),
 }));
-vi.mock('../linuxCapture', () => ({ readLinuxCursorSupport: async () => false }));
+vi.mock('../linuxCapture', () => ({
+  readLinuxCursorSupport: async () => false,
+  readLinuxX11CaptureSupport: async () => false,
+  resolveLinuxCaptureBinary: async () => '/missing/capture',
+}));
 vi.mock('../linuxSessionLock', () => ({ isLinuxDesktopUnlocked: h.unlocked }));
 vi.mock('../linuxAudio', () => ({
   supportsLinuxAudio: () => h.linuxAudio,
@@ -113,7 +118,7 @@ vi.mock('electron', () => ({
     on: (name: string, handler: any) => h.screenHandlers.set(name, handler),
     getAllDisplays: () => [{ id: 1 }],
   },
-  systemPreferences: { getMediaAccessStatus: () => 'granted' },
+  systemPreferences: { getMediaAccessStatus: () => h.screenPermission },
   desktopCapturer: {
     getSources: () => h.source ?? Promise.resolve([{ id: 'screen:1', display_id: '1' }]),
   },
@@ -211,6 +216,7 @@ vi.mock('../nativeCapture', () => ({
   },
 }));
 vi.mock('../inputHost', () => ({
+  isEditableDesktopPoint: vi.fn(async () => false),
   resolveDesktopInputBinary: vi.fn(async () => '/fake/desktop-input'),
   DesktopInputHost: class {
     constructor(onFailure: () => void) {
@@ -259,7 +265,7 @@ vi.mock('../../utils/ipcValidate', () => ({
     throw new Error('PERMISSION_DENIED');
   },
 }));
-import { registerRemoteDesktopIpc } from '../index';
+import { registerRemoteDesktopIpc, requestRemoteDesktop } from '../index';
 import { PrivacyScreen } from '../privacyScreen';
 const event = (owner = h.owner) => ({ sender: owner, senderFrame: owner.mainFrame });
 const flush = async () => {
@@ -287,6 +293,7 @@ beforeEach(() => {
   h.windows.length = 0;
   h.source = null;
   h.lease = 'lease';
+  h.screenPermission = 'granted';
   h.dispose.mockClear();
   h.stop.mockClear();
   h.releaseControl.mockClear();
@@ -404,22 +411,26 @@ it('joins resolution restoration through the shared asynchronous quit phase', as
   expect(settled).toHaveBeenCalledOnce();
 });
 
-it('bounds a stalled screen permission probe so the guide can finish its request', async () => {
-  h.source = new Promise(() => {});
-  const pending = h.permissionDeps.request(
-    'screenRecording',
-    () => true,
-    new AbortController().signal,
-  );
-  const rejected = expect(pending).rejects.toThrow('DESKTOP_VIDEO_TIMEOUT');
-  await vi.advanceTimersByTimeAsync(5000);
-  await rejected;
-  h.source = Promise.resolve([]);
-  await expect(
-    h.permissionDeps.request('screenRecording', () => true, new AbortController().signal),
-  ).resolves.toBeUndefined();
-  expect(h.stop).not.toHaveBeenCalled();
-});
+it.each(['granted', 'denied'])(
+  'bounds a stalled screen permission probe and reports the actual OS state (%s)',
+  async (status) => {
+    h.source = new Promise(() => {});
+    const pending = h.permissionDeps.request(
+      'screenRecording',
+      () => true,
+      new AbortController().signal,
+    );
+    const rejected = expect(pending).rejects.toThrow('DESKTOP_VIDEO_TIMEOUT');
+    await vi.advanceTimersByTimeAsync(5000);
+    await rejected;
+    h.source = Promise.resolve([]);
+    h.screenPermission = status;
+    await expect(
+      h.permissionDeps.request('screenRecording', () => true, new AbortController().signal),
+    ).resolves.toBe(status === 'granted');
+    expect(h.stop).not.toHaveBeenCalled();
+  },
+);
 
 it('drops enumeration timeouts for one relay frame and resumes without stopping the host', async () => {
   vi.stubGlobal('process', { ...process, platform: 'linux' });
@@ -964,7 +975,7 @@ it('uses native Hyprland capture for video and relay without opening a portal pi
   expect(h.hyprlandStop).toHaveBeenCalled();
 });
 
-it('authorizes channel requests exactly like the relay and only for small control ops', async () => {
+it.each(['control', 'heartbeat'] as const)('authorizes channel %s requests exactly like the relay', async (op) => {
   const settings = await import('../../device-link/settings-store.desktop');
   const config = {
     remoteDesktopEnabled: true,
@@ -976,7 +987,7 @@ it('authorizes channel requests exactly like the relay and only for small contro
   vi.spyOn(screen, 'getAllDisplays').mockReturnValue([
     { id: 1, label: 'Main', size: { width: 1920, height: 1080 } },
   ] as any);
-  expect((await h.deps.capabilities()).channelRequests).toBe(true);
+  expect(await h.deps.capabilities()).toMatchObject({ channelRequests: true, signalingContinuity: true });
   const pending = offer();
   h.handlers.get(DESKTOP_LOCAL.REGISTER)(event());
   await flush();
@@ -985,13 +996,19 @@ it('authorizes channel requests exactly like the relay and only for small contro
   h.controllerState = { peer: 'phone', controlling: true };
   h.controllerRequest.mockResolvedValue({ controlling: true });
   const channel = h.handlers.get(DESKTOP_LOCAL.CHANNEL_REQUEST);
-  const control = { op: 'control', lease: h.lease, enabled: true };
+  const control = op === 'control'
+    ? { op, lease: h.lease, enabled: true }
+    : { op, lease: h.lease };
   await expect(channel(event(), h.lease, control)).resolves.toEqual({
     ok: true,
     result: { controlling: true },
   });
   // The lease owner is the authority, never anything the viewer claims.
-  expect(h.controllerRequest).toHaveBeenLastCalledWith('phone', control);
+  expect(h.controllerRequest).toHaveBeenLastCalledWith('phone', control, 'media');
+  // Relay payloads cannot label themselves as media; only the trusted IPC can.
+  const relayed = { ...control, source: 'media' };
+  await requestRemoteDesktop('phone', relayed);
+  expect(h.controllerRequest).toHaveBeenLastCalledWith('phone', relayed, 'relay');
   h.controllerRequest.mockClear();
   for (const [value, error] of [
     [{ op: 'start', displayId: '1' }, 'INVALID_REQUEST'],

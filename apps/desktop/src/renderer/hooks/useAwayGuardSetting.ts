@@ -1,24 +1,43 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import type { AwayGuardDelaySeconds, AwayGuardState } from '../../shared/awayGuard';
+import { useTranslation } from 'react-i18next';
+import { toast } from '@/lib/toast';
+import type { AwayGuardDelaySeconds, AwayGuardPreviewResult, AwayGuardState } from '../../shared/awayGuard';
 
-/** macOS "Keep working while away" toggle; re-reads on focus to pick up Accessibility grants. */
+type PreviewState = 'idle' | 'starting' | Extract<AwayGuardPreviewResult, { ok: false }>['reason'];
+
+/** Local privacy screen preferences and the last attempt to show the screen. */
 export function useAwayGuardSetting() {
+  const { t } = useTranslation();
+  const [preview, setPreview] = useState<PreviewState>('idle');
   const [state, setState] = useState<AwayGuardState | null>(null);
+  const [readFailed, setReadFailed] = useState(false);
   const [busy, setBusy] = useState(false);
   const mounted = useRef(false);
   const generation = useRef(0);
-  const supported = window.electronAPI?.platform === 'darwin';
+  // Main confirms the OS version (macOS 14+, supported Hyprland). Windows is implemented
+  // but off until verified on Windows hardware (WINDOWS_PRIVACY_SCREEN_ENABLED).
+  const supported = ['darwin', 'linux'].includes(window.electronAPI?.platform ?? '');
+
+  const applyState = useCallback((next: AwayGuardState) => {
+    setReadFailed(false);
+    setState(next);
+    setPreview((value) => {
+      if (value !== 'permission' && value !== 'checkFailed') return value;
+      if (next.permission === 'unknown') return 'checkFailed';
+      return next.permission === 'missing' ? 'permission' : 'idle';
+    });
+  }, []);
 
   const refresh = useCallback(async () => {
     const current = ++generation.current;
     try {
       const next = await window.electronAPI.windowBehavior.getAwayGuardState();
-      if (mounted.current && generation.current === current) setState(next);
+      if (mounted.current && generation.current === current) applyState(next);
     } catch {
-      if (mounted.current && generation.current === current) setState(null);
+      if (mounted.current && generation.current === current) setReadFailed(true);
     }
-  }, []);
+  }, [applyState]);
 
   useEffect(() => {
     mounted.current = true;
@@ -33,57 +52,57 @@ export function useAwayGuardSetting() {
     };
   }, [supported, refresh]);
 
+  const save = useCallback(
+    async (write: () => Promise<AwayGuardState>) => {
+      const current = ++generation.current;
+      try {
+        const next = await write();
+        if (!mounted.current) return;
+        if (generation.current === current) {
+          applyState(next);
+        } else {
+          // A focus read may have finished before the preference was committed.
+          void refresh();
+        }
+      } catch {
+        if (mounted.current) {
+          toast.error(t('settings.windowBehavior.awayGuard.saveFailed'));
+          void refresh();
+        }
+      }
+    },
+    [applyState, refresh, t],
+  );
+
   const setEnabled = useCallback(
     async (enabled: boolean) => {
-      const current = ++generation.current;
       setBusy(true);
-      setState((previous) => (previous ? { ...previous, enabled } : previous));
       try {
-        const next = await window.electronAPI.windowBehavior.setAwayGuardEnabled(enabled);
-        if (mounted.current && generation.current === current) setState(next);
-      } catch {
-        if (mounted.current && generation.current === current) void refresh();
+        await save(() => window.electronAPI.windowBehavior.setAwayGuardEnabled(enabled));
       } finally {
         if (mounted.current) setBusy(false);
       }
     },
-    [refresh],
+    [save],
   );
-
   const setDelay = useCallback(
-    async (delaySeconds: AwayGuardDelaySeconds | null) => {
-      const current = ++generation.current;
-      setState((previous) => (previous ? { ...previous, delaySeconds } : previous));
-      try {
-        const next = await window.electronAPI.windowBehavior.setAwayGuardDelay(delaySeconds);
-        if (mounted.current && generation.current === current) setState(next);
-      } catch {
-        if (mounted.current && generation.current === current) void refresh();
-      }
-    },
-    [refresh],
+    (seconds: AwayGuardDelaySeconds | null) => save(() => window.electronAPI.windowBehavior.setAwayGuardDelay(seconds)),
+    [save],
   );
 
-  const [preview, setPreview] = useState<'idle' | 'starting' | 'permission' | 'unavailable'>('idle');
   const startPreview = useCallback(async () => {
     setPreview('starting');
     try {
       const result = await window.electronAPI.windowBehavior.previewAwayGuard();
       if (!mounted.current) return;
-      setPreview(result.ok ? 'starting' : result.reason);
-      if (!result.ok) void refresh();
+      setPreview(result.ok ? 'idle' : result.reason);
+      if (result.ok) void refresh();
     } catch {
       if (mounted.current) setPreview('unavailable');
     }
   }, [refresh]);
-  // The masks arrive a few seconds after the click; the hint goes back once they did.
-  useEffect(() => {
-    if (preview !== 'starting') return;
-    const timer = setTimeout(() => setPreview('idle'), 6_000);
-    return () => clearTimeout(timer);
-  }, [preview]);
-
   return {
+    readFailed,
     available: supported && state?.available === true,
     state,
     busy,
@@ -91,5 +110,6 @@ export function useAwayGuardSetting() {
     setDelay,
     preview,
     startPreview,
+    refresh,
   };
 }

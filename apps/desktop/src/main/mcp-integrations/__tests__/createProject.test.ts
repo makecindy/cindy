@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, realpath, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -19,13 +19,14 @@ const h = vi.hoisted(() => ({
   registered: [] as Array<{ path: string }>,
   list: vi.fn(),
   aliases: vi.fn(),
+  updateInfo: vi.fn(),
   rename: vi.fn(),
   visibility: vi.fn(),
   hiddenKeys: [] as string[],
   projectsRoot: null as string | null,
   home: '',
 }));
-vi.mock('../../localDb/dialogueWorkspace.js', () => ({
+vi.mock('../../dialogue-workspace-settings.js', () => ({
   dialogueWorkspaceRootDir: () => h.dialogueRoot,
   dialogueWorkspaceRoots: () => [h.dialogueRoot, ...h.historicalRoots],
 }));
@@ -70,19 +71,25 @@ vi.mock('../../localDb/client/current.js', async () => {
   };
   return { tryGetDbClient: () => (h.ready ? client : null) };
 });
-vi.mock('../../localDb/ipc/recentWorkdirs.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../localDb/ipc/recentWorkdirs.js')>();
+vi.mock('../../localDb/ipc/recentWorkdirsCore.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../localDb/ipc/recentWorkdirsCore.js')>();
   return {
     normalizeRecentWorkdirPath: actual.normalizeRecentWorkdirPath,
     upsertRecentWorkdir: h.upsert,
     listRecentWorkdirs: h.list,
   };
 });
-vi.mock('../../localDb/ipc/projectAliases.js', () => ({
+vi.mock('../../localDb/ipc/projectAliasesCore.js', () => ({
   listProjectAliases: h.aliases,
   upsertProjectAlias: h.rename,
 }));
-vi.mock('../../sidebarSettingsStore.js', () => ({
+vi.mock('../../projectInfoCore.js', () => ({ updateProjectInfo: h.updateInfo }));
+vi.mock('../../localDb/ipc/projectAliases.js', () => ({ broadcastProjectAliasesChanged: vi.fn() }));
+vi.mock('node:os', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('node:os')>()),
+  homedir: () => h.home,
+}));
+vi.mock('../../sidebarSettingsStoreCore.js', () => ({
   restoreLocalProjectVisibility: h.restore,
   setLocalProjectHidden: h.visibility,
   loadSidebarSettingsSnapshot: () => ({ ...h.owner, hiddenProjectKeys: h.hiddenKeys }),
@@ -90,6 +97,7 @@ vi.mock('../../sidebarSettingsStore.js', () => ({
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn() }) }));
 vi.mock('../../projects-root-settings.js', () => ({ readProjectsRootDirectory: () => h.projectsRoot }));
 
+import { projectForNewTask } from '../projectManagementCore.js';
 import { createProject } from '../createProject.js';
 import { listProjects, renameProject, removeProject, resolveSessionProject, readCurrentSessionProject } from '../projectManagement.js';
 
@@ -97,7 +105,7 @@ describe('createProject', () => {
   let directory: string;
   beforeEach(async () => {
     vi.clearAllMocks();
-    directory = await mkdtemp(path.join(os.tmpdir(), 'cindy-create-project-'));
+    directory = await realpath(await mkdtemp(path.join(os.tmpdir(), 'cindy-create-project-')));
     h.dialogueRoot = path.join(directory, 'dialogues');
     h.historicalRoots = [];
     h.inaccessibleRoots = {};
@@ -123,6 +131,40 @@ describe('createProject', () => {
     await rm(directory, { recursive: true, force: true });
   });
   const run = (workingDir: string) => createProject({ callerSessionId: 'caller', workingDir });
+
+  it('creates by name or repository through the form entry and preserves existing settings when naming a selected folder', async () => {
+    h.updateInfo.mockResolvedValue({ createdProjectKey: 'local:/Projects/Demo-2' });
+    expect(
+      await createProject({
+        callerSessionId: 'caller',
+        name: 'Demo',
+        repositoryUrl: 'https://gitlab.com/g/demo',
+      }),
+    ).toEqual({ ok: true, workingDir: '/Projects/Demo-2' });
+    expect(h.updateInfo).toHaveBeenLastCalledWith(
+      {
+        ...h.owner,
+        create: true,
+        projectKey: 'local:',
+        repositoryUrl: 'https://gitlab.com/g/demo',
+        field: 'profile',
+        value: { name: 'Demo' },
+      },
+      { kind: 'host', assertCurrent: expect.any(Function) },
+    );
+    await createProject({ callerSessionId: 'caller', workingDir: directory, name: 'Renamed' });
+    expect(h.updateInfo).toHaveBeenLastCalledWith(
+      {
+        ...h.owner,
+        create: true,
+        projectKey: `local:${directory}`,
+        repositoryUrl: undefined,
+        field: 'profile',
+        value: { name: 'Renamed' },
+      },
+      { kind: 'host', assertCurrent: expect.any(Function) },
+    );
+  });
 
   // Unit: project self-inspection must agree with sidebar membership, including
   // old managed worktrees, and must never leak across an account switch.
@@ -174,6 +216,29 @@ describe('createProject', () => {
       .toEqual({ ok: true, projectDir: h.registered[0].path });
     expect(h.upsert).not.toHaveBeenCalled();
     expect(h.restore).not.toHaveBeenCalled();
+  });
+
+  it('opens a directory as a dialogue until it is registered and never revives hidden projects', async () => {
+    h.registered = [];
+    expect(await projectForNewTask(directory)).toEqual({ workspaceKind: 'dialogue', projectDir: null });
+    await expect(projectForNewTask(directory, directory)).rejects.toThrow();
+    h.registered = [{ path: directory }];
+    expect(await projectForNewTask(path.join(directory, 'child'))).toEqual({ workspaceKind: 'project', projectDir: directory });
+    h.hiddenKeys = [`local:${directory}`];
+    expect(await projectForNewTask(directory)).toEqual({ workspaceKind: 'dialogue', projectDir: null });
+    expect(h.upsert).not.toHaveBeenCalled();
+    expect(h.restore).not.toHaveBeenCalled();
+  });
+
+  it('hands off from the buddy’s private chat to its already registered project', async () => {
+    const home = path.join(directory, 'owners', 'owner-a', 'bots', 'bot-1', 'workspace');
+    await mkdir(home, { recursive: true });
+    h.registered.push({ path: home });
+    h.query.mockResolvedValue([{ id: 'caller', source: 'bot', workspaceKind: 'dialogue', workingDir: home }]);
+    h.botLinks.mockResolvedValue([{ botId: 'bot-1', role: 'canonical' }]);
+    expect(await resolveSessionProject({ callerSessionId: 'caller' })).toEqual({ ok: true, projectDir: home });
+    h.botLinks.mockResolvedValue([{ botId: 'bot-1', role: 'group' }]);
+    expect(await resolveSessionProject({ callerSessionId: 'caller' })).toEqual({ ok: true, projectDir: null });
   });
 
   // Unit: omitted membership inherits the persisted source, never the execution
@@ -398,8 +463,9 @@ describe('createProject', () => {
       expect(h.restore).not.toHaveBeenCalled();
       await rm(alias);
       await symlink(directory, alias, process.platform === 'win32' ? 'junction' : 'dir');
-      // Preserve the logical alias identity, not the physical target path.
-      expect(await run(alias)).toMatchObject({ ok: true, workingDir: alias.replaceAll('\\', '/') });
+      // The task permission decision must name the physical directory.
+      expect(await run(alias)).toMatchObject({ ok: false, errorCode: 'WRITABLE_DIRECTORY_TARGET_CHANGED' });
+      expect(await run(directory)).toMatchObject({ ok: true, workingDir: directory.replaceAll('\\', '/') });
     },
   );
   it('rejects files, relative paths and managed task worktrees', async () => {

@@ -15,6 +15,7 @@ import { createDurableOutbox, observeDurableOutboxSending, type DurableOutboxRec
 import type { QueuedRemoteMessage, RemoteSerializedAttachment } from '@/session/types';
 import { createRemoteMediaResolveQueue } from '@/session/remoteMediaResolveQueue';
 import type { MobileResolvedRemoteMedia } from '@/session/remoteMedia';
+import { openNativeByteStream } from '../../../../packages/agent-net/src/nativeMediaStream';
 import {
   ImageLightbox,
   type ImageLightboxProps,
@@ -42,17 +43,24 @@ const runtime = vi.hoisted(() => ({
   insets: { top: 40, bottom: 20, left: 0, right: 0 },
   gesture: null as GestureNode | null,
   alerts: [] as Array<[string, string, Array<{ text: string; style?: string; onPress?: () => void }>]>,
+  savePreviewImage: vi.fn(),
   scrollToOffset: vi.fn(),
   renderPageIndex: 0,
 }));
 
 // 预览外壳的液态玻璃与系统菜单:测试环境没有原生模块,走实色底与底部面板回退。
+// Keep the real preview layout hook so rotation assertions exercise production geometry.
+vi.mock('@/platform/AdaptiveWindowContext', () => ({ useAdaptiveWindow: () => ({
+  ...runtime.dimensions, insets: runtime.insets, regularWidth: false, regularHeight: true,
+  barEdge: 'none', reservedRegionsSupported: false, regions: [],
+}) }));
 vi.mock('expo-glass-effect', () => ({ GlassView: ({ children }: any) => children }));
 vi.mock('@/session/useLiquidGlassAvailable', () => ({ useLiquidGlassAvailable: () => false }));
 vi.mock('@/platform/chrome', () => ({
   NativePullDownMenu: ({ children }: any) => children,
   usesNativePullDownMenu: () => false,
 }));
+vi.mock('@/session/savePreviewImage', () => ({ savePreviewImage: runtime.savePreviewImage }));
 vi.mock("@/session/SheetModal", () => ({
   SheetModal: ({ visible, children }: any) => (visible ? children : null),
 }));
@@ -71,6 +79,7 @@ vi.mock("react-native-safe-area-context", () => ({
   useSafeAreaInsets: () => runtime.insets,
 }));
 vi.mock("lucide-react-native", () => ({
+  Download: () => null,
   MessageSquarePlus: () => null,
   Pen: () => null,
   Share: () => null,
@@ -1726,6 +1735,15 @@ describe("image viewer actions", () => {
     expect(runtime.nodes.get("Image").source.uri).toBe(props.initialUrl);
   });
 
+  // Android regression: one decoded image must be exportable even without a host share action.
+  it("saves the original directly from the toolbar without a share handler", async () => {
+    const { props } = mount();
+    expect(runtime.nodes.get("message.imageLightboxSave").disabled).toBe(true);
+    act(() => runtime.nodes.get("Image").onLoad({ source: { width: 400, height: 800 } }));
+    await act(async () => { await runtime.nodes.get("message.imageLightboxSave").onPress(); });
+    expect(runtime.savePreviewImage).toHaveBeenCalledWith(props.initialUrl, undefined, "Image");
+  });
+
   it("deduplicates sharing and restores its button after rejection", async () => {
     let reject!: (error: Error) => void;
     const onShareImage = vi.fn(
@@ -2195,7 +2213,9 @@ describe("chrome toggle, loading and video pages", () => {
       key: "video", title: "clip.mp4", url,
       payload: { kind: "media", media: { kind: "video", url, previewable: false } },
     } as ImageLightboxProps["images"][number];
-    const resolved = { url: "https://cdn.invalid/clip.mp4", previewable: true, mimeType: "video/mp4" };
+    let consumers = 0;
+    const resolved = { url: "https://cdn.invalid/clip.mp4", previewable: true, mimeType: "video/mp4",
+      protectLocalFile: () => { consumers++; return () => { consumers--; }; } };
     const resolver = vi.fn(async (media: { thumbnail?: boolean }) => {
       if (media.thumbnail) throw new Error("no thumb");
       return resolved;
@@ -2219,26 +2239,190 @@ describe("chrome toggle, loading and video pages", () => {
     });
     expect(player.url).toBe(resolved.url);
     expect(player.visible).toBe(true);
+    expect(consumers).toBe(1);
     expect(runtime.nodes.has("message.imageLightboxShareButton")).toBe(false);
     expect(runtime.nodes.get("message.imageLightboxCloseButton")).toBeTruthy();
 
     act(() => player.onError("decode failed"));
     const web = runtime.nodes.get("message.imageLightboxVideoWebPlayer");
     expect(web.url).toBe(resolved.url);
+    expect(consumers).toBe(1);
 
     // WebView 兜底也播不了:落失败态给重试,重试经 forceRefresh 重新取件后回到原生播放器。
     runtime.nodes.delete("message.imageLightboxVideoPlayer");
     act(() => web.onStatusChange({ type: "xdt-media-player/status", state: "error", error: "decode" }));
     expect(runtime.nodes.has("message.imageLightboxRetryButton")).toBe(true);
+    // Playback failure must not invalidate the footer's export source.
+    expect(runtime.nodes.get('message.videoDownload').source).toBe(resolved.url);
+    expect(consumers).toBe(1);
     await act(async () => press("message.imageLightboxRetryButton"));
     expect(resolver).toHaveBeenLastCalledWith(
       expect.objectContaining({ url }),
       expect.objectContaining({ forceRefresh: true }),
     );
     expect(runtime.nodes.get("message.imageLightboxVideoPlayer").url).toBe(resolved.url);
+    expect(consumers).toBe(1);
 
     act(() => root.unmount());
     expect(onReleaseRemoteMedia).toHaveBeenCalledWith(url, resolved);
+    expect(consumers).toBe(0);
     root = createRoot(document.createElement("div"));
+  });
+
+  // Playback refresh does not prove the original unavailable. Real React unit
+  // regression for #10136: leased file/Range and unleased OSS HTTPS, plus expiry.
+  it.each([
+    ['file:///cache/clip.mp4', true, false],
+    ['http://127.0.0.1:12345/clip', true, false],
+    ['https://cdn.invalid/clip.mp4', false, false],
+    ['https://cdn.invalid/clip.mp4', false, true],
+  ] as const)('preserves available exports across failed video refresh (%s, lease=%s, expired=%s)', async (source, leased, expired) => {
+    const url = 'xdt-video://cache/retry.mp4';
+    const video = { key: 'retry', title: 'retry.mp4', url,
+      payload: { kind: 'media', media: { kind: 'video', url, previewable: false } } } as ImageLightboxProps['images'][number];
+    let consumers = 0;
+    const resolved: MobileResolvedRemoteMedia = { url: source, previewable: true, mimeType: 'video/mp4',
+      ossKey: '', size: 16, expiresAt: expired ? '2000-01-01T00:00:00Z' : '2099-01-01T00:00:00Z',
+      ...(leased ? { protectLocalFile: () => { consumers++; return () => { consumers--; }; } } : {}) };
+    const resolver = vi.fn(async () => resolved);
+    await act(async () => { mount({ images: [video], initialUrl: url, resolveOpaqueSource: true,
+      onResolveRemoteMedia: resolver }); });
+    expect(consumers).toBe(leased ? 1 : 0);
+    act(() => runtime.nodes.get('message.imageLightboxVideoPlayer').onError('unsupported codec'));
+    act(() => runtime.nodes.get('message.imageLightboxVideoWebPlayer').onStatusChange({ state: 'error' }));
+    let reject!: (error: Error) => void;
+    resolver.mockImplementation(() => new Promise((_resolve, fail) => { reject = fail; }));
+    await act(async () => press('message.imageLightboxRetryButton'));
+    expect(runtime.nodes.get('message.videoDownload').source).toBe(expired ? null : source);
+    expect(consumers).toBe(leased ? 1 : 0);
+    await act(async () => reject(new Error('REMOTE_OFFLINE')));
+    expect(isMounted('message.imageLightboxRetryButton')).toBe(true);
+    expect(runtime.nodes.get('message.videoDownload').source).toBe(expired ? null : source);
+    expect(consumers).toBe(leased ? 1 : 0);
+    resolver.mockResolvedValue({ ...resolved, expiresAt: '2099-01-01T00:00:00Z' });
+    await act(async () => press('message.imageLightboxRetryButton'));
+    expect(runtime.nodes.get('message.imageLightboxVideoPlayer').url).toBe(source);
+    expect(runtime.nodes.get('message.videoDownload').source).toBe(source);
+    expect(consumers).toBe(leased ? 1 : 0);
+    act(() => root.unmount());
+    root = createRoot(document.createElement('div'));
+    expect(consumers).toBe(0);
+  });
+
+  // #10136: the existing player test covered rendering/cache eviction, not stream
+  // survival. Real React + production stream idle/retain logic, unit tier; only
+  // native commands/reader are in-memory. A paused active page is the minimum
+  // failure input; paging and close must restore the original idle reclamation.
+  it('keeps an active gallery stream past idle expiry and releases it on paging and close', async () => {
+    vi.useFakeTimers();
+    const stream = await openNativeByteStream({
+      command: async <T,>(command: Record<string, unknown>) =>
+        (command.op === 'httpMediaStart' ? { url: `http://127.0.0.1:12345/${'a'.repeat(43)}` } : []) as T,
+      destroy: async () => undefined,
+    }, 'video/mp4', async () => ({ size: 16, read: async () => undefined, close: async () => undefined }));
+    const url = 'xdt-video://cache/lease.mp4';
+    const video = { key: 'lease', title: 'lease.mp4', url,
+      payload: { kind: 'media', media: { kind: 'video', url, previewable: false } } } as ImageLightboxProps['images'][number];
+    const resolved: MobileResolvedRemoteMedia = { url: stream.url, previewable: true, mimeType: 'video/mp4',
+      ossKey: '', size: 16, expiresAt: '2099-01-01T00:00:00Z', protectLocalFile: stream.retain };
+    try {
+      await act(async () => { mount({ images: [video, { ...video, key: 'next', url: 'https://example.invalid/next.png',
+        payload: { ...video.payload, media: { kind: 'image', url: 'https://example.invalid/next.png', previewable: true } } }],
+        initialUrl: url, onResolveRemoteMedia: async () => resolved }); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(308_000); });
+      expect(stream.isOpen()).toBe(true);
+      act(() => runtime.nodes.get('message.imageLightboxVideoPlayer').onError('decode'));
+      act(() => runtime.nodes.get('message.imageLightboxVideoWebPlayer').onStatusChange({ state: 'error' }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(308_000); });
+      expect(isMounted('message.imageLightboxRetryButton')).toBe(true);
+      expect(runtime.nodes.get('message.videoDownload').source).toBe(stream.url);
+      expect(stream.isOpen()).toBe(true);
+      // Keep the first page mounted but inactive, as a virtualized list can.
+      act(() => runtime.nodes.get('FlatList').onMomentumScrollEnd({ nativeEvent: { contentOffset: { x: 400 } } }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+      expect(stream.isOpen()).toBe(true);
+      act(() => runtime.nodes.get('FlatList').onMomentumScrollEnd({ nativeEvent: { contentOffset: { x: 0 } } }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(308_000); });
+      expect(stream.isOpen()).toBe(true);
+      // Unmount/close relinquishes this consumer without closing other leases.
+      const releaseOther = stream.retain!();
+      act(() => root.unmount());
+      root = createRoot(document.createElement('div'));
+      await vi.advanceTimersByTimeAsync(308_000);
+      expect(stream.isOpen()).toBe(true);
+      releaseOther();
+      await vi.advanceTimersByTimeAsync(308_000);
+      expect(stream.isOpen()).toBe(false);
+    } finally { await stream.close(); vi.useRealTimers(); }
+  });
+
+  it.each(['success', 'stale', 'rejected'] as const)('ignores late inactive results and refreshes an expired stream (%s)', async (refreshResult) => {
+    const url = 'xdt-video://cache/late.mp4';
+    const video = { key: 'late', title: 'late.mp4', url,
+      payload: { kind: 'media', media: { kind: 'video', url, previewable: false } } } as ImageLightboxProps['images'][number];
+    let finish!: (media: MobileResolvedRemoteMedia) => void;
+    let reject!: (error: Error) => void;
+    let consumers = 0;
+    let expired = false;
+    const protectLocalFile = vi.fn(() => {
+      if (expired) throw new Error('MEDIA_CLOSED');
+      consumers++;
+      return () => { consumers--; };
+    });
+    const resolved: MobileResolvedRemoteMedia = { url: 'http://127.0.0.1:12345/late', previewable: true, mimeType: 'video/mp4',
+      ossKey: '', size: 16, expiresAt: '2099-01-01T00:00:00Z', protectLocalFile };
+    const resolver = vi.fn(() => new Promise<MobileResolvedRemoteMedia>((resolve, rejectPromise) => {
+      finish = resolve;
+      reject = rejectPromise;
+    }));
+    await act(async () => { mount({ images: [video, { ...video, key: 'next', url: 'https://example.invalid/next.mp4',
+      payload: { ...video.payload, media: { kind: 'video', url: 'https://example.invalid/next.mp4', previewable: true } } }],
+      initialUrl: url, resolveOpaqueSource: true, onResolveRemoteMedia: resolver }); });
+    act(() => runtime.nodes.get('FlatList').onMomentumScrollEnd({ nativeEvent: { contentOffset: { x: 400 } } }));
+    await act(async () => { finish(resolved); });
+    expect(protectLocalFile).not.toHaveBeenCalled();
+    act(() => runtime.nodes.get('FlatList').onMomentumScrollEnd({ nativeEvent: { contentOffset: { x: 0 } } }));
+    expect(consumers).toBe(1);
+    act(() => runtime.nodes.get('FlatList').onMomentumScrollEnd({ nativeEvent: { contentOffset: { x: 400 } } }));
+    expect(consumers).toBe(0);
+    expired = true;
+    act(() => runtime.nodes.get('FlatList').onMomentumScrollEnd({ nativeEvent: { contentOffset: { x: 0 } } }));
+    expect(resolver).toHaveBeenLastCalledWith(expect.objectContaining({ url }), expect.objectContaining({ forceRefresh: true }));
+    const freshProtect = vi.fn(() => { consumers++; return () => { consumers--; }; });
+    const fresh = { ...resolved, protectLocalFile: freshProtect };
+    // A refreshed source can keep its URL; its lease identity still changes.
+    await act(async () => {
+      if (refreshResult === 'rejected') reject(new Error('REMOTE_OFFLINE'));
+      else finish(refreshResult === 'stale' ? resolved : fresh);
+    });
+    if (refreshResult !== 'success') {
+      // Both an unavailable cached result and a rejected refresh offer manual
+      // retry immediately, without waiting for the stale players to error.
+      expect(isMounted('message.imageLightboxRetryButton')).toBe(true);
+      expect(isMounted('message.imageLightboxVideoPlayer')).toBe(false);
+      expect(isMounted('message.imageLightboxVideoWebPlayer')).toBe(false);
+      expect(resolver).toHaveBeenCalledTimes(2);
+      expect(consumers).toBe(0);
+      expect(runtime.nodes.get('message.videoDownload').source).toBe(null);
+      if (refreshResult === 'rejected') {
+        act(() => runtime.nodes.get('FlatList').onMomentumScrollEnd({ nativeEvent: { contentOffset: { x: 400 } } }));
+        act(() => runtime.nodes.get('FlatList').onMomentumScrollEnd({ nativeEvent: { contentOffset: { x: 0 } } }));
+        await act(async () => { reject(new Error('REMOTE_OFFLINE')); });
+        expect(isMounted('message.imageLightboxRetryButton')).toBe(true);
+        expect(isMounted('message.imageLightboxVideoPlayer')).toBe(false);
+        expect(isMounted('message.imageLightboxVideoWebPlayer')).toBe(false);
+        expect(resolver).toHaveBeenCalledTimes(3);
+        expect(consumers).toBe(0);
+        expect(runtime.nodes.get('message.videoDownload').source).toBe(null);
+      }
+      resolver.mockResolvedValue(fresh);
+      await act(async () => press('message.imageLightboxRetryButton'));
+    }
+    expect(runtime.nodes.get('message.imageLightboxVideoPlayer').url).toBe(resolved.url);
+    expect(runtime.nodes.get('message.videoDownload').source).toBe(resolved.url);
+    expect(consumers).toBe(1);
+    act(() => root.unmount());
+    root = createRoot(document.createElement('div'));
+    expect(consumers).toBe(0);
   });
 });

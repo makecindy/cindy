@@ -9,10 +9,11 @@
  */
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import React from 'react';
+import { remoteProviderDisableKey } from '@cindy/model-providers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The shared-quota rail observes auth; this component fixture has no auth host.
-vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null, useOptionalAuthDeviceId: () => catalogs.selfDeviceId }));
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalDataOwnerGeneration: () => 0, useOptionalAuthUser: () => null, useOptionalAuthDeviceId: () => catalogs.selfDeviceId }));
 
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-i18next')>()),
@@ -83,10 +84,11 @@ const catalogs = vi.hoisted(() => {
   return {
     provider,
     selfDeviceId: 'desk',
+    disabledProviders: {} as Record<string, true>,
     local: [provider('a-local', 'A Local', 'me@desk')] as unknown[],
     localGroups: {
       'a-local': {
-        strategy: 'least',
+        strategy: 'expiring',
         autoSwitch: true,
         members: [member('local', 'local', null, 'a-local')],
       },
@@ -97,7 +99,7 @@ const catalogs = vi.hoisted(() => {
         provider('c-open', 'C Open', 'studio@x', {
           remoteInvocationEnabled: true,
           group: {
-            strategy: 'least',
+            strategy: 'expiring',
             autoSwitch: true,
             members: [member('local', 'local', null, 'c-open'), member('device:device-d:d-open', 'device', 'device-d', 'd-open')],
           },
@@ -120,7 +122,7 @@ const claude = (used: number) => ({
 });
 
 vi.mock('@/hooks/useProviders', () => ({
-  useProviders: () => ({ providers: catalogs.local, providerOrder: [] }),
+  useProviders: () => ({ providers: catalogs.local, providerOrder: [], disabledProviders: catalogs.disabledProviders }),
 }));
 vi.mock('@/hooks/useDeviceProviders', () => ({
   evictDeviceProviders: vi.fn(),
@@ -213,6 +215,7 @@ const remaining = (button: HTMLElement) =>
   button.querySelector('[data-weekly-remaining]')?.getAttribute('data-weekly-remaining') ?? null;
 
 beforeEach(() => {
+  catalogs.disabledProviders = {};
   resetEnginePrefs();
   resetFavorites();
 });
@@ -312,7 +315,7 @@ describe('模型列表里供应商组那一项的用量', () => {
   it('读到任务归哪个组时，别的组那一项不认这台', async () => {
     // 本机的组也收了 Laptop：任务归的是 Studio 的组。
     catalogs.localGroups['a-local'] = {
-      strategy: 'least',
+      strategy: 'expiring',
       autoSwitch: true,
       members: [
         { key: 'local', kind: 'local', agentDeviceId: null, providerId: 'a-local', limit: 4, weight: 1, paused: false },
@@ -348,7 +351,7 @@ describe('模型列表里供应商组那一项的用量', () => {
       expect(local.getAttribute('aria-description')).toBe('开始后由供应商组选一台电脑，用量按那台显示');
     } finally {
       catalogs.localGroups['a-local'] = {
-        strategy: 'least',
+        strategy: 'expiring',
         autoSwitch: true,
         members: [{ key: 'local', kind: 'local', agentDeviceId: null, providerId: 'a-local', limit: 4, weight: 1, paused: false }],
       };
@@ -368,8 +371,8 @@ describe('同一个供应商在几台自己的电脑上只列一项', () => {
   const railNames = () => screen.getAllByRole('button').map((button) => button.getAttribute('aria-label') ?? button.textContent ?? '');
   const withShared = async (local: Record<string, unknown>, check: () => void, remote: Record<string, unknown> = {}) => {
     const original = { local: catalogs.local, laptop: catalogs.byDevice['device-d'] };
-    catalogs.local = [...catalogs.local, catalogs.provider('b-shared', 'B Shared', 'me@desk', local)];
-    catalogs.byDevice['device-d'] = [...original.laptop!, catalogs.provider('b-shared', 'B Shared', 'laptop-b@x', { remoteInvocationEnabled: true, ...remote })];
+    catalogs.local = [...catalogs.local, catalogs.provider('b-shared', 'B Shared', 'me@desk', { subscriptionAccountKeys: ['same-account'], ...local })];
+    catalogs.byDevice['device-d'] = [...original.laptop!, catalogs.provider('b-shared', 'B Shared', 'me@desk', { subscriptionAccountKeys: ['same-account'], remoteInvocationEnabled: true, ...remote })];
     try {
       renderNewTask();
       await act(async () => {});
@@ -385,6 +388,36 @@ describe('同一个供应商在几台自己的电脑上只列一项', () => {
       expect(railNames().some((name) => name.startsWith('B Shared · me@desk'))).toBe(true);
       expect(railNames().some((name) => name.startsWith('B Shared · Laptop'))).toBe(false);
     });
+  });
+
+  it('collapses every duplicate connection on one own computer, while retaining an extra model', async () => {
+    const original = catalogs.byDevice['device-d'];
+    const alias = catalogs.provider('duplicate-remote', 'Remote Alias', 'me@desk', {
+      subscriptionAccountKeys: ['same-account'], remoteInvocationEnabled: true,
+    });
+    const extra = catalogs.provider('extra-remote', 'Extra Remote', 'me@desk', {
+      subscriptionAccountKeys: ['same-account'], remoteInvocationEnabled: true,
+      models: { 'claude-code': [{ id: 'extra', name: 'Extra', contextWindow: 200000, efforts: ['high'], defaultEffort: 'high' }] },
+    });
+    catalogs.byDevice['device-d'] = [...original!, alias, extra];
+    try {
+      await withShared({}, () => {
+        expect(railNames().some(name => name.startsWith('Remote Alias · Laptop'))).toBe(false);
+        expect(railNames().some(name => name.startsWith('Extra Remote · Laptop'))).toBe(true);
+      });
+    } finally { catalogs.byDevice['device-d'] = original; }
+  });
+
+  it('an explicitly disabled extra source stays out of browsing until re-enabled', async () => {
+    const key = remoteProviderDisableKey('device-d', 'b-shared');
+    catalogs.disabledProviders = { [key]: true };
+    await withShared({}, () => {
+      expect(railNames().some(name => name.startsWith('B Shared · Laptop'))).toBe(false);
+    }, { subscriptionAccountKeys: ['different-account'] });
+    catalogs.disabledProviders = {};
+    await withShared({}, () => {
+      expect(railNames().some(name => name.startsWith('B Shared · Laptop'))).toBe(true);
+    }, { subscriptionAccountKeys: ['different-account'] });
   });
 
   it('not signed in here: the laptop\'s entry stands in, once', async () => {

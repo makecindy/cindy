@@ -10,9 +10,15 @@ import { randomUUID } from 'node:crypto';
 
 import type { Maker } from '@cindy/maker-core';
 
+import { accountUsageLimitFromExhaustedResets } from '../../shared/accountUsageLimit.js';
+import { isOpenCodeGoProvider, opencodeGoUsageEndpoint } from '../../shared/opencodeGoUsage.js';
+import { getActiveCatalog } from '../maker-host/active-catalog.js';
+import { readOpenCodeGoAccountUsage } from '../maker-host/provider-account-usage.js';
+import { providerRoutingForModel } from '../maker-host/provider-route.js';
 import { createLogger } from '../logger.js';
 import {
   hasRestoredCodexQuota,
+  readLocalSubscriptionTaskUsageLimit,
   acquirePendingAgentSwitchForDirectSend,
   isSessionInTurn,
   ensureGoalInputReady,
@@ -67,6 +73,7 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
   const storage = new GoalStorage(deps.getDb);
   const controller = new GoalController({
     storage,
+    // 插件引擎任务同样能设目标(2026-11-25)：每轮按与用户发送相同的路径交给它自己的引擎。
     getSession: (id): SessionLike | undefined => deps.maker.getSession(id),
     // 确保会话活着:已活直接返回;未活按存档 SessionMeta resume(spawn agent),
     // 仿 scheduler 心跳。修"开了对话没发消息 → goal 发不出第一轮"的根因。
@@ -116,9 +123,25 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
       });
     },
     // 按实际订阅账号处理限额错误与重置时刻；其它订阅保留主动配额检测。
-    getAccountLimit: async (agentKind, sessionId, turnError) => {
+    getAccountLimit: async (engineKind, sessionId, turnError) => {
+      // Plugin engines use their own CLI's login: Cindy has no account window to read. A rejected turn
+      // still stops the goal through the turn error itself (passive path).
+      if (engineKind === 'acp') return null;
+      const agentKind = engineKind;
       const row = await getSessionRowSnapshot(sessionId);
       const { providerId, modelId } = resolveSessionRuntimeRoute(sessionId, agentKind, row);
+      const provider = providerId && getActiveCatalog().providers.find(p => p.id === providerId);
+      if (provider && isOpenCodeGoProvider(provider, agentKind)) {
+        // Go uses an API key for its subscription. A rejected turn can consult
+        // the official allowance for this runtime; successful turns carry on.
+        if (turnError === undefined || !row || sessionUsesOtherMachineAccount(row)) return null;
+        const route = providerRoutingForModel(provider, agentKind, modelId ?? undefined);
+        if (!route || !opencodeGoUsageEndpoint(route.upstream)) return null;
+        const result = await readOpenCodeGoAccountUsage({ providerId: provider.id, agent: agentKind }, 'after-limit');
+        if (result.status !== 'ready' || result.stale || result.snapshot.kind !== 'opencode-go-quota') return null;
+        const exhausted = result.snapshot.windows.filter(w => w.limited);
+        return accountUsageLimitFromExhaustedResets(exhausted.map(w => w.resetsAt), Date.now());
+      }
       const family = subscriptionFamilyOf(agentKind, providerId);
       // ChatGPT windows do not establish credit-backed admission, and cached credits
       // may be stale or unknown. Let the next normal turn reach the provider; retain
@@ -142,9 +165,17 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
       // 那台的独立账号本机目录认不出(上面判不出订阅家族)时也到这里,同样不读。
       // SSH 沿用原有的网关预算回落。
       if (row?.agentDeviceId && !row.remoteHostId) return null;
-      const subscription = await readAccountUsageLimit(agentKind, providerId, modelId).catch(
-        () => null,
-      );
+      const subscription = await (async () => {
+        if (family === 'claude' || family === 'codex') {
+          const pooled = await readLocalSubscriptionTaskUsageLimit(
+            family,
+            { sessionId, nativeSessionId: row?.sdkSessionId, providerId, agentKind, modelId },
+            { fresh: turnError !== undefined },
+          );
+          if (pooled !== undefined) return pooled;
+        }
+        return readAccountUsageLimit(agentKind, providerId, modelId);
+      })().catch(() => null);
       if (subscription !== undefined) return subscription;
       // 非订阅的 Claude Code 会话(Cindy 网关):读 LiteLLM 预算周期。
       if (agentKind === 'claude-code') {

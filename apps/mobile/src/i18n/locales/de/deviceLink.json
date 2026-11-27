@@ -35,7 +35,17 @@
   "retryAccess": "Zugriff erneut versuchen",
   "recheck": "Erneut prüfen",
   "deviceRemovedTitle": "Gerät entfernt",
-  "deviceRemovedHint": "Melde dich ab und wieder an, um das Gerät wieder zur Geräteliste hinzuzufügen.",
+  "deviceRemovedHint": "Dieses Handy wurde aus deinem Konto entfernt. Tippe auf „Wieder beitreten“, um es zurückzuholen.",
+  "rejoin": {
+    "action": "Wieder beitreten",
+    "busy": "Tritt wieder bei",
+    "doneTitle": "Wieder beigetreten",
+    "agentNetUnavailable": "Der Agent-Net-Dienst unterstützt das Wiederbeitreten noch nicht. Dieses Handy verbindet sich vorerst ohne Agent-Net.",
+    "failedTitle": "Wiederbeitreten fehlgeschlagen",
+    "failed": "Prüfe dein Netzwerk und versuche es erneut.",
+    "unsupported": "Der Dienst unterstützt das Wiederbeitreten noch nicht. Melde dich ab und wieder an.",
+    "agentNetUnsupported": "Der Agent-Net-Dienst unterstützt das Wiederbeitreten noch nicht. Schalte „Nur verschlüsselte Verbindungen“ aus, um dieses Handy ohne Agent-Net zurückzuholen."
+  },
   "authFailedTitle": "Anmeldung abgelaufen",
   "authFailedHint": "Deine Anmeldung ist abgelaufen. Melde dich ab und wieder an.",
   "replacedTitle": "Verbindung ersetzt",
@@ -65,6 +75,7 @@
     "noCredentials": "{{agent}} kann nicht verwendet werden, da auf dem Computer keine Anmeldung vorliegt. Melde dich in {{appName}} auf dem Computer unter Einstellungen → Modellanbieter an und versuch es erneut.",
     "noEncryption": "{{agent}} kann nicht verwendet werden, da der sichere Systemspeicher auf dem Computer nicht verfügbar ist. Prüfe die Schlüsselbundverwaltung unter macOS oder die Kontoverschlüsselung unter Windows und starte {{appName}} auf dem Computer neu.",
     "proxyNotReady": "{{agent}} ist auf dem Computer noch nicht bereit. Versuch es gleich erneut. Falls das Problem weiterhin besteht, starte {{appName}} auf dem Computer neu.",
+    "sharedLinkUnavailable": "{{agent}} kann momentan nicht verwendet werden: Codex ist auf dem Computer angemeldet, aber {{appName}} kann diese Anmeldung nicht erreichen (der Link darauf lässt sich nicht erstellen; unter einem Windows-Standardkonto geht das in der Regel nicht). Sorge dafür, dass {{appName}} auf dem Computer den Link erstellen darf (unter Windows einmal als Administrator ausführen oder den Entwicklermodus aktivieren) und versuch es erneut.",
     "default": "{{agent}} kann nicht verwendet werden, da die Anmeldung auf dem Computer nicht verfügbar ist. Melde dich auf dem Computer in {{appName}} unter Einstellungen → Modellanbieter erneut an. ({{reason}})"
   },
   "remoteError": {

@@ -11,17 +11,19 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentDeps, DeviceHostedSession, StartSessionOptions } from '../../base-agent.js';
+import { NATIVE_SUBSCRIPTION_ACCOUNT, type NativeSubscriptionAccount } from '../../../interfaces/auth-adapter.js';
 import type { Logger } from '../../../interfaces/logger.js';
-import { AppServerClient, type RequestProgressDeadline } from '../app-server/client.js';
+import { AppServerClient, AppServerRequestTimeoutError, type RequestProgressDeadline } from '../app-server/client.js';
 import { Method } from '../app-server/protocol.js';
+import { createStdioTransport } from '../app-server/stdioTransport.js';
 import type { CloseHandler, LineHandler, Transport } from '../app-server/transport.js';
 import { withoutCodexSpawnModelOverrides } from '../device-hosted-guest.js';
 import { CodexAgent } from '../index.js';
 
 vi.mock('../app-server/stdioTransport.js', () => ({
-  createStdioTransport: () => {
+  createStdioTransport: vi.fn(() => {
     throw new Error('tests must not spawn a real Codex app-server');
-  },
+  }),
 }));
 
 const GHOST_ROSTER = 'HOST GHOST ROSTER';
@@ -42,8 +44,14 @@ class FakeAppServerTransport implements Transport {
   private readonly lineHandlers = new Set<LineHandler>();
   private readonly closeHandlers = new Set<CloseHandler>();
 
+  constructor(private readonly respond?: (method: string, params: unknown) => Promise<unknown>) {}
+
   async writeLine(line: string): Promise<void> {
     this.lines.push(line);
+    if (this.respond) {
+      const { id, method, params } = JSON.parse(line);
+      if (id !== undefined && method) this.emitLine({ id, result: await this.respond(method, params) });
+    }
   }
 
   onLine(handler: LineHandler): () => void {
@@ -125,14 +133,24 @@ interface Fixture {
   guestHome?: boolean;
   /** 受邀者启动时用的来源；默认就是分享的供应商(xd)。 */
   providerId?: string;
+  guestProvider?: DeviceHostedSession['guestProvider'];
+  subscriptionAccount?: NativeSubscriptionAccount;
+  createCodexAuthTokenReader?: AgentDeps['createCodexAuthTokenReader'];
+  prepareCodexExtraSpawnConfig?: AgentDeps['prepareCodexExtraSpawnConfig'];
   /** app-server 不给功能清单(旧版本或出错)。 */
   noFeatureList?: boolean;
+  /** Process-level MCP isolation must still fail closed after local provisioning is removed. */
+  mcpStatusFailure?: Error;
   /** 宿主提供的任务隧道往来记录。 */
   linkActivity?: DeviceHostedSession['linkActivity'];
   /** 任务所在电脑带来的插件花名册快照。 */
   ghostRosterSnapshot?: string;
   /** 经隧道的 Cindy MCP；默认只有通讯录。 */
   mcpServers?: string[];
+  /** Independently failed task-computer plugin gateway; cold resume repairs it. */
+  recoverPluginGateway?: boolean;
+  mcpProviders?: AgentDeps['mcpProviders'];
+  makerMemoryEnabled?: boolean;
   /** 任务所在电脑带来了自己的托管 Skill。 */
   controllerManagedSkills?: boolean;
 }
@@ -199,7 +217,10 @@ async function startHosted(fixture: Fixture) {
       taskShellEnv: () => ({ CINDY_INPUT_HANDOFF_ROUTE: 'host-route' }),
     },
     binaryPath: process.execPath,
+    prepareCodexExtraSpawnConfig: fixture.prepareCodexExtraSpawnConfig,
+    createCodexAuthTokenReader: fixture.createCodexAuthTokenReader,
     logger: noopLogger(),
+    mcpProviders: fixture.mcpProviders,
     getGhostRosterPrompt,
     getDisabledSkillPaths,
     getManagedSkills: async () => [{
@@ -225,8 +246,13 @@ async function startHosted(fixture: Fixture) {
       { name: 'guest', description: 'guest', path: guestSkill, scope: 'repo' as const, enabled: true },
     ];
   }
+  let resumeCount = 0;
   const request = vi.fn(async (method: string, params: unknown): Promise<unknown> => {
     switch (method) {
+      case 'initialize':
+        return { userAgent: 'mock-codex/0.159.2', codexHome: reportedHome };
+      case 'account/login/start':
+        return { type: 'chatgptAuthTokens' };
       case Method.SkillsList: {
         const { cwds = [workingDir] } = params as { cwds?: string[] };
         return { data: cwds.map((cwd) => ({ cwd, skills: skillList(), errors: [] })) };
@@ -234,6 +260,7 @@ async function startHosted(fixture: Fixture) {
       case Method.ConfigRead:
         return {
           config: {
+            cli_auth_credentials_store: 'ephemeral',
             mcp_servers: {
               local_docs: { command: '/usr/bin/local-docs', enabled: true },
               cindy_contacts: { url: 'http://127.0.0.1:9/mcp/cindy_contacts', enabled: true },
@@ -246,12 +273,17 @@ async function startHosted(fixture: Fixture) {
           },
         };
       case Method.McpServerStatusList:
+        if (fixture.mcpStatusFailure) throw fixture.mcpStatusFailure;
         return {
           data: [
             { name: 'codex_apps', tools: {} },
             { name: 'local_docs', tools: {} },
             { name: 'cindy_contacts', tools: {} },
             { name: 'configured_server', tools: {} },
+            ...(fixture.recoverPluginGateway && (params as { threadId?: string }).threadId ? [
+              { name: 'cindy_helper', runtimeStatus: 'connected', tools: { list_tools: {}, call_tool: {} } },
+              { name: 'cindy', runtimeStatus: resumeCount > 1 ? 'connected' : 'failed', tools: { ghost_info: {}, ghost_call: {} } },
+            ] : []),
           ],
           nextCursor: null,
         };
@@ -266,7 +298,10 @@ async function startHosted(fixture: Fixture) {
           model: 'gpt-5.5', modelProvider: 'openai', cwd: workingDir,
         };
       case Method.ThreadResume:
+        resumeCount++;
         return { thread: { id: 'resume-thread-id' }, model: 'gpt-5.5', modelProvider: 'openai', cwd: workingDir };
+      case Method.ThreadBackgroundTerminalsList:
+        return fixture.recoverPluginGateway ? { data: [], nextCursor: null } : {};
       case Method.ThreadFork:
         return { thread: { id: 'fork-thread-id' }, model: 'gpt-5.5', modelProvider: 'openai' };
       case Method.TurnStart:
@@ -286,6 +321,7 @@ async function startHosted(fixture: Fixture) {
     request,
     subscribeThread: vi.fn(() => ({ release: vi.fn() })),
     unsubscribeThread: vi.fn(async () => {}),
+    captureThreadResumeOwnership: vi.fn(() => () => true),
     hasThreadSubscription: vi.fn(() => false),
     isCodexProxyActive: vi.fn(() => false),
     isCodexBrowserUseAvailable: vi.fn(() => false),
@@ -311,7 +347,11 @@ async function startHosted(fixture: Fixture) {
     (agent as unknown as { hosts: Map<string, unknown> }).hosts.set(options?.keyOverride ?? 'local', host);
     return host;
   });
-  Object.defineProperty(agent, 'getHost', { value: getHost });
+  if (!fixture.prepareCodexExtraSpawnConfig) Object.defineProperty(agent, 'getHost', { value: getHost });
+  if (fixture.createCodexAuthTokenReader) {
+    reportedHome = path.join(guestHome!, 'codex');
+    vi.mocked(createStdioTransport).mockImplementationOnce(() => new FakeAppServerTransport(request));
+  }
 
   const deviceHosted: DeviceHostedSession = {
     workingDir,
@@ -324,7 +364,7 @@ async function startHosted(fixture: Fixture) {
     tunnelToken: 'tok',
     mcpServers: fixture.mcpServers ?? ['cindy_contacts'],
     mirrorRoot,
-    ...(fixture.guest ? { guest: true, guestProvider: SHARED_PROVIDER } : {}),
+    ...(fixture.guest ? { guest: true, guestProvider: fixture.guestProvider ?? SHARED_PROVIDER } : {}),
     ...(guestHome ? { guestHome } : {}),
     ...(fixture.linkActivity ? { linkActivity: fixture.linkActivity } : {}),
     ...(fixture.controllerManagedSkills ? { controllerManagedSkills: { claudePluginRoots: [] } } : {}),
@@ -335,14 +375,16 @@ async function startHosted(fixture: Fixture) {
     ...(fixture.guest ? { providerId: fixture.providerId ?? SHARED_PROVIDER.providerId } : {}),
     workingDir,
     permissionMode: fixture.permissionMode ?? 'acceptEdits',
+    makerMemoryEnabled: fixture.makerMemoryEnabled,
     extraDirs: fixture.extraDirs,
     writableDirs: fixture.writableDirs,
     deviceHosted,
+    ...(fixture.subscriptionAccount ? { [NATIVE_SUBSCRIPTION_ACCOUNT]: fixture.subscriptionAccount } : {}),
     ...(fixture.ghostRosterSnapshot !== undefined ? { ghostRosterSnapshot: fixture.ghostRosterSnapshot } : {}),
     ...(fixture.resume ? { resumeSessionId: '0199aaaa-bbbb-7ccc-8ddd-eeeeffff0000' } : {}),
   });
   return {
-    started, request, getHost, getGhostRosterPrompt, getDisabledSkillPaths,
+    started, request, getHost, host, getGhostRosterPrompt, getDisabledSkillPaths,
     prepareCodexSkills, prepareCodexResumeSession, resolveCodexThreadStorage, recordCodexThreadLocation,
     hostSkill, systemSkill, pluginSkill, guestSkill, hostManagedSkill, guestHome, codexHome, agent, workingDir,
   };
@@ -366,6 +408,65 @@ afterEach(async () => {
 });
 
 describe('Codex device-hosted guest sessions', () => {
+  // Unit, provider sharing §12. A split subscription uses the native OpenAI transport
+  // while the host authorizes only the specific share. Same-ID fixtures missed its 403.
+  it('keeps the split subscription grant on guest startup and history-only fork', async () => {
+    const account: NativeSubscriptionAccount = {
+      id: 'leased-account', configDir: await makeTempDir('maker-core-split-account-'),
+      sharedProviderId: 'openai-sub-test', assertCurrent: () => {},
+      readState: async () => ({ authenticated: true }),
+    };
+    // Stop at the host's actual proxy-configuration boundary, before starting Codex.
+    const prepare = vi.fn<NonNullable<AgentDeps['prepareCodexExtraSpawnConfig']>>(async () => {
+      throw Object.assign(new Error('captured guest proxy configuration'), { codexSpawnConfigFatal: true });
+    });
+    const fixture = await startHosted({
+      guest: true, providerId: 'openai', guestProvider: { ...SHARED_PROVIDER, providerId: 'openai' },
+      subscriptionAccount: account, prepareCodexExtraSpawnConfig: prepare,
+    });
+    await expect(fixture.started).rejects.toThrow('captured guest proxy configuration');
+    const hostOptions = { deviceHostedGuestProviderId: account.sharedProviderId, credentialMode: 'oauth-bearer' };
+    expect(prepare).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      ...hostOptions, deviceHostedGuestSessionId: 'hosted-session', deviceHostedGuestModelIds: ['gpt-5.5'],
+    }));
+    prepare.mockClear();
+    await expect(fixture.agent.forkSdkSession({
+      sourceSdkSessionId: 'guest-source', upToMessageId: undefined, lastTurnId: 'kept-turn',
+      workingDir: fixture.workingDir, hostedGuestHome: fixture.guestHome, providerId: 'openai',
+      [NATIVE_SUBSCRIPTION_ACCOUNT]: account,
+    })).rejects.toThrow('captured guest proxy configuration');
+    expect(prepare).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      ...hostOptions, nativeStorageOnly: true, deviceHostedGuestSessionId: expect.any(String),
+    }));
+    expect(prepare.mock.calls[0]?.[1]?.deviceHostedGuestSessionId).not.toBe('hosted-session');
+  });
+
+  // A valid route alone cannot establish which subscription the native app-server logs in to.
+  it.each([false, true])('authenticates a shared Codex task with its leased account (resume: %s)', async (resume) => {
+    const tokens = { accessToken: 'fixture-guest-token', chatgptAccountId: 'fixture-guest-account' };
+    const readCodexTokens = vi.fn(async () => tokens);
+    const defaultReader = vi.fn(() => { throw new Error('unexpected owner account lookup'); });
+    const fixture = await startHosted({
+      guest: true, resume, providerId: 'openai', guestProvider: { ...SHARED_PROVIDER, providerId: 'openai' },
+      subscriptionAccount: {
+        id: 'leased-account', configDir: await makeTempDir('maker-core-split-account-'),
+        sharedProviderId: 'openai-sub-test', assertCurrent() {}, readState: async () => ({ authenticated: true }),
+        readCodexTokens,
+      },
+      createCodexAuthTokenReader: defaultReader,
+      prepareCodexExtraSpawnConfig: async () => ({ extraArgs: [], extraEnv: {}, codexProxyActive: true }),
+    });
+    const handle = await fixture.started;
+    try {
+      expect(threadParams(fixture.request, 'account/login/start')).toEqual({ type: 'chatgptAuthTokens', ...tokens });
+      expect(fixture.request.mock.calls.some(([method]) => method === (resume ? Method.ThreadResume : Method.ThreadStart))).toBe(true);
+      expect(readCodexTokens).toHaveBeenCalled();
+      expect(defaultReader).not.toHaveBeenCalled();
+    } finally {
+      await handle.close();
+    }
+  });
+
   // 测试价值：startSession / setWritableDirs / send 生成的 exec-server 环境必须带齐模型可见的目录。
   // 依据：本 PR 修复了 Claude hosted 遗漏附加目录；Codex 原有 runtimeWorkspaceRoots 用例只覆盖本机路径。
   // 最小失败输入：hosted 初始只读、可写目录各一个，追加可写目录后发送；完全访问也不能省略目录。
@@ -550,6 +651,32 @@ describe('Codex device-hosted guest sessions', () => {
     await handle.close();
   });
 
+  // #10533 review: an executor memory provider does not mean the guest host has
+  // its transport. A bare enabled override makes native thread/start fail.
+  // Unit: real startSession projection; old fixtures had no executor providers.
+  it.each([
+    { resume: false, tunnelMemory: false },
+    { resume: true, tunnelMemory: false },
+    { resume: false, tunnelMemory: true },
+  ])('uses only the guest memory transport (resume: $resume, tunnel: $tunnelMemory)', async ({ resume, tunnelMemory }) => {
+    const fixture = await startHosted({
+      guest: true,
+      resume,
+      mcpProviders: [{ name: 'cindy_memory' }],
+      makerMemoryEnabled: false,
+      mcpServers: tunnelMemory ? ['cindy_memory'] : [],
+    });
+    const handle = await fixture.started;
+    const config = threadParams(fixture.request, resume ? Method.ThreadResume : Method.ThreadStart).config as Record<string, unknown>;
+    const memoryConfig = Object.fromEntries(Object.entries(config)
+      .filter(([key]) => key.startsWith('mcp_servers.cindy_memory.')));
+    expect(memoryConfig).toEqual(tunnelMemory ? {
+      'mcp_servers.cindy_memory.url': 'http://127.0.0.1:4000/t/tok/mcp/cindy_memory',
+      'mcp_servers.cindy_memory.enabled': true,
+    } : {});
+    await handle.close();
+  });
+
   // 插件工具经隧道回到受邀者电脑：花名册用它带来的快照，本机的仍不读。
   it('gives a shared user the roster from its own computer', async () => {
     const ownerRoster = 'TASK COMPUTER GHOST ROSTER';
@@ -559,6 +686,33 @@ describe('Codex device-hosted guest sessions', () => {
     expect(instructions).toContain(ownerRoster);
     expect(instructions).not.toContain(GHOST_ROSTER);
     expect(fixture.getGhostRosterPrompt).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
+  // Plugin gateway recovery must preserve provider-sharing §9 isolation and
+  // task-computer routing. Existing helper tests only use local MCP config.
+  // Unit tier, production hosted Agent.send: failed cindy + healthy helper on
+  // a resumed task; inspect the cold-resume wire config and single input.
+  it.each([false, true])('recovers the task-computer plugin gateway with its own tunnel (guest=%s)', async guest => {
+    const fixture = await startHosted({ guest, resume: true, recoverPluginGateway: true,
+      mcpServers: ['cindy_helper', 'cindy'] });
+    const handle = await fixture.started;
+    const originalId = handle.id;
+    expect((await handle.readMcpServerTools?.('cindy'))?.state).toBe('failed');
+    expect((await handle.readMcpServerTools?.('cindy_helper'))?.state).toBe('connected');
+    await handle.send({ type: 'user', content: 'continue with the task computer plugins' }, { throwOnStartFailure: true });
+    const resumes = fixture.request.mock.calls.filter(([method]) => method === Method.ThreadResume);
+    expect(resumes).toHaveLength(2);
+    expect(resumes[1][1]).toMatchObject({ threadId: originalId, config: {
+      'mcp_servers.cindy.url': 'http://127.0.0.1:4000/t/tok/mcp/cindy',
+      'mcp_servers.cindy.enabled': true,
+      'mcp_servers.cindy_helper.url': 'http://127.0.0.1:4000/t/tok/mcp/cindy_helper',
+      'mcp_servers.local_docs.enabled': false,
+    } });
+    expect(fixture.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(1);
+    expect((await handle.readMcpServerTools?.('cindy'))?.state).toBe('connected');
+    expect(handle.id).toBe(originalId);
+    expect(fixture.host.retire).not.toHaveBeenCalled();
     await handle.close();
   });
 
@@ -612,6 +766,28 @@ describe('Codex device-hosted guest sessions', () => {
     const fixture = await startHosted({ guest: true, noFeatureList: true });
     await expect(fixture.started).rejects.toThrow(/Cannot start Codex for a shared user safely/);
     expect(fixture.request.mock.calls.some(([method]) => method === Method.ThreadStart)).toBe(false);
+  });
+
+  // Unit: the existing fixture bypasses the Desktop spawn factory. Verify that
+  // removing local MCP provisioning never makes a failed runtime inventory safe,
+  // and that failure before thread/start still retires its isolated host.
+  it('keeps MCP status timeouts fail-closed and cleans up before reporting stopped', async () => {
+    const fixture = await startHosted({
+      guest: true,
+      mcpStatusFailure: new AppServerRequestTimeoutError(Method.McpServerStatusList, 60_000),
+    });
+    await expect(fixture.started).rejects.toMatchObject({
+      name: 'AgentStartupStoppedError',
+      cause: expect.objectContaining({ message: expect.stringContaining('mcpServerStatus/list timed out') }),
+    });
+    expect(fixture.request.mock.calls.some(([method]) => method === Method.ThreadStart)).toBe(false);
+    expect(fixture.host.subscribeThread).not.toHaveBeenCalled();
+    expect(fixture.host.retire).toHaveBeenCalled();
+    expect((fixture.agent as unknown as { hosts: Map<string, unknown> }).hosts.size).toBe(0);
+    const retireCalls = fixture.host.retire.mock.calls.length;
+    await fixture.agent.dispose();
+    await fixture.agent.dispose();
+    expect(fixture.host.retire).toHaveBeenCalledTimes(retireCalls);
   });
 
   it('refuses a shared user without its own Codex home', async () => {

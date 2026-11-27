@@ -31,6 +31,8 @@ import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import {
   isAutoReviewConfirmUndeliveredNotice,
   isAutoReviewUnavailableNotice,
+  isAutoReviewNoAvailableModelNotice,
+  isAutoReviewQuotaExhaustedNotice,
   parseOverloadError,
   parseOverloadRetryProgress,
   parseTerminalRateLimitRetryProgress,
@@ -54,6 +56,10 @@ import { imText } from './imText';
  * 同名提示同句, 跟随界面语言。
  */
 function autoReviewUnavailableNotice(message: string, channel?: string): string | null {
+  if (isAutoReviewQuotaExhaustedNotice(message)) return imText('imBot.text.shared.retry.autoReviewQuotaExhausted');
+  if (isAutoReviewNoAvailableModelNotice(message)) {
+    return imText('imBot.text.shared.retry.autoReviewNoAvailableModel');
+  }
   if (isAutoReviewUnavailableNotice(message)) {
     return channel === 'wechat'
       ? imText('imBot.text.shared.retry.autoReviewUnavailableWechat')
@@ -208,6 +214,15 @@ function terminalErrorRecord(data: unknown): {
   };
 }
 
+/** Only the subscription backend's token-parse rejection calls for reconnecting ChatGPT. */
+export function openAiSubscriptionReconnectNotice(data: unknown, providerId: string | null): string | null {
+  if (providerId !== 'openai') return null;
+  const { errorStatus, message } = terminalErrorRecord(data);
+  if (!(errorStatus === 401 || (errorStatus === undefined && /\b401\b/.test(message)))) return null;
+  if (!/\bunauthorized_unknown\b|could not parse your authentication token/i.test(message)) return null;
+  return imText('imBot.text.shared.openAiReconnect');
+}
+
 /**
  * 终态错误是不是「供应商账号的额度 / 花费上限 / 余额用完了」。
  *
@@ -305,10 +320,17 @@ export function terminalErrorText(data: unknown, options?: QuotaFailureNoticeOpt
     return imText('imBot.text.shared.outputLimit.silentStopExhausted');
   }
   const { message, errorStatus, codexErrorInfo } = terminalErrorRecord(data);
+  // Providers return this rejection either as plain text or inside a JSON error envelope.
+  if (/(?:^|"message"\s*:\s*")Audio input is not (?:supported for this request|available)\.?(?:"|$)/i.test(message.trim())) {
+    return imText('imBot.text.shared.audioInputUnavailable');
+  }
   return (
     toolLoopFailureNotice(data) ??
     overloadFailureNotice(message, errorStatus, codexErrorInfo) ??
     (options ? quotaFailureNotice(data, options) : null) ??
+    (data && typeof data === 'object' && 'reason' in data && data.reason === 'UPSTREAM_OVERLOADED'
+      ? imText('imBot.text.shared.retry.overloadFailed')
+      : null) ??
     message
   );
 }

@@ -389,6 +389,72 @@ export async function readPiBundledModels(
 
 
 /**
+ * #12298: 订阅来源的连接态判定(供启动器接到 AgentDeps.isNativeProviderSourceConnected)。
+ *
+ * 断开的订阅仍留在会话目录里(重连后父会话可直接切换),但子代理路由不能列它:
+ * 按这些名字派发的子任务会在首次上游请求时必败(空 runId + 噪声失败通知)。
+ *
+ * 判定口径与「设置 → 模型供应商」列表一致,且是纯读(不触发绑定自愈、不写凭证文件):
+ *  · xAI 家族(内置 SuperGrok 与独立账号)读 Grok OAuth 登录态;
+ *  · Codex 家族账号读该账号自己的登录态(bridge 对非 'openai' 的 providerId 也用这一条);
+ *  · 'openai'(ChatGPT 订阅)两条凭证路径任一可用即算连接 —— 本机 Codex 登录与账号池,
+ *    bridge 实际按会话绑定的账号取凭证,只判一条会把仍可用的来源误删。
+ *
+ * 读不到结论的来源一律按「连接」处理:只在确知断开时剔除,宁可多列也不误伤可用来源。
+ *
+ * 桌面与 Node Host 各接各的凭证读数(port 注入),但判定规则共用这一份;连接态不进入
+ * provider 清单本身 —— 清单是桌面与 Host 的逐字节契约(host↔desktop parity)。
+ */
+export interface PiSubscriptionConnectionPorts {
+  /** 当前生效目录(判断来源属于哪个订阅家族)。 */
+  getActiveCatalog: () => Catalog;
+  /** SuperGrok OAuth 登录态(providerId 缺省即内置 'xai')。 */
+  hasGrokOAuthLogin: (providerId?: string) => boolean;
+  /** 独立 Codex 账号的登录态。 */
+  codexAccountState: (providerId: string) => { authenticated: boolean };
+  /** 本机 Codex(ChatGPT 订阅)登录态,纯读版。 */
+  hasCodexOAuthLoginReadOnly: () => boolean;
+  /**
+   * ChatGPT 账号池里是否还有已连接的账号。桌面有这个账号池;Node Host 的订阅账号以
+   * 独立来源出现(各自判自己的登录态),没有池可读 → 缺省即不读这一条。
+   */
+  hasConnectedSubscriptionPool?: (
+    providerId: string,
+    options?: { includeBoundAccounts?: boolean },
+  ) => boolean;
+  /** 读取结论失败时的兜底日志。 */
+  onReadFailure?: (providerId: string, error: unknown) => void;
+}
+
+export function createPiSubscriptionConnectionReader(
+  ports: PiSubscriptionConnectionPorts,
+): (providerId: string) => boolean {
+  const {
+    getActiveCatalog,
+    hasGrokOAuthLogin,
+    codexAccountState,
+    hasCodexOAuthLoginReadOnly,
+    hasConnectedSubscriptionPool,
+    onReadFailure,
+  } = ports;
+  return (providerId: string): boolean => {
+    try {
+      const account = getActiveCatalog().providers.find((provider) => provider.id === providerId);
+      const native = account?.auth.native;
+      if (native === 'xai' || providerId === 'xai') return hasGrokOAuthLogin(providerId);
+      if (native === 'codex') return codexAccountState(providerId).authenticated;
+      if (providerId === 'openai') {
+        return hasCodexOAuthLoginReadOnly()
+          || Boolean(hasConnectedSubscriptionPool?.('openai', { includeBoundAccounts: true }));
+      }
+    } catch (error) {
+      onReadFailure?.(providerId, error);
+    }
+    return true;
+  };
+}
+
+/**
  * Overlay Cindy's host-managed subscription endpoints onto PI's bundled
  * provider catalog. Resolved catalog metadata is authoritative for all subscription
  * models; the version-matched PI binary remains authoritative for native API and
@@ -469,6 +535,12 @@ export function buildPiSubscriptionNativeProviders(
         ];
       }),
     );
+    if (sourceProviderId === 'openai') {
+      // A saved ChatGPT selection may include the namespace even when the catalog uses wire IDs.
+      for (const model of models) {
+        if (!model.id.includes('/')) modelIdAliases[`chatgpt/${model.id}`] ??= model.id;
+      }
+    }
     providers.push({
       id: piProviderId,
       sourceProviderId,
@@ -945,6 +1017,7 @@ export interface PiNativeProviderPorts {
   /** Loopback endpoint of the compat proxy (desktop: anthropic-compat-proxy-host.ts). */
   getClaudeEndpoint(): string;
   isAnthropicCompatProxyHandleReady(): boolean;
+  ensureAnthropicCompatProxyReady?(): Promise<void>;
   resolvePiBinaryPath(): string | null;
   isOpenAiSubscriptionProviderId(providerId?: string | null): boolean;
   hasGrokOAuthLogin(providerId?: string): boolean;
@@ -1061,9 +1134,12 @@ async function resolvePiNativeProviders(ctx: {
     // before the process snapshots its global skills. Remote Pi has a different HOME/root.
     await ensureSharedGlobalSkills();
   }
-  const compatProxyReady = isAnthropicCompatProxyHandleReady();
   const selectedOfficialXai =
     isXaiSubscriptionProviderId(ctx.providerId) || (ctx.providerId == null && isExclusiveXaiModelId(ctx.model));
+  if (selectedOfficialXai && !ctx.remoteHostId && ctx.purpose !== 'preview') {
+    await ports.ensureAnthropicCompatProxyReady?.();
+  }
+  let compatProxyReady = isAnthropicCompatProxyHandleReady();
   if (selectedOfficialXai && !compatProxyReady) {
     log.error('resolvePiNativeProviders: SuperGrok requires the local compat proxy', {
       providerId: ctx.providerId ?? null,
@@ -1078,22 +1154,6 @@ async function resolvePiNativeProviders(ctx: {
     ? await readPiBundledModels(piBinaryPath, { cachedOnly: ctx.purpose === 'preview' })
     : null;
   let subscriptions: PiNativeProvidersResult = { providers: [], env: {} };
-  if (!ctx?.remoteHostId && compatProxyReady) {
-    const retainedOpenAiModel =
-      ctx.resumeSessionId && ctx.providerId && isOpenAiSubscriptionProviderId(ctx.providerId)
-        ? resolvePiRuntimeModelDescriptor(getActiveCatalog(), ctx.providerId, ctx.model, {
-            localOverrides: getLocalCatalogOverridesSnapshot(),
-          })
-        : null;
-    subscriptions = buildPiSubscriptionNativeProviders(
-      getActiveCatalog(),
-      getClaudeEndpoint(),
-      bundledModels ?? undefined,
-      undefined,
-      retainedOpenAiModel,
-      ctx.providerId ?? 'openai',
-    );
-  }
   let configs: CustomProviderConfig[] = [];
   try {
     configs = await listCustomProvidersWithSecureHeaders();
@@ -1147,7 +1207,7 @@ async function resolvePiNativeProviders(ctx: {
       }) },
     }),
   } : sessionCatalog;
-  const custom = buildPiNativeProvidersFromConfigs(
+  const buildCustom = () => buildPiNativeProvidersFromConfigs(
     mergeByokNativeConfigs(configs, getActiveCatalog().providers),
     readCustomProviderKey,
     (id, reason) => log.warn('resolvePiNativeProviders: skipped custom provider', { id, reason }),
@@ -1155,6 +1215,42 @@ async function resolvePiNativeProviders(ctx: {
     pinnedCatalog,
     !isRemote && compatProxyReady ? getClaudeEndpoint() : undefined,
   );
+  let custom = buildCustom();
+  // Match the final runtime namespace and PiAgent's null/undefined semantics.
+  // A usable native BYOM must not wait for an unrelated in-flight proxy startup.
+  const hasSelectedNativeProvider = (providers: PiNativeProviderSpec[]) => providers.some(provider => {
+    if (ctx.providerId === null) return false;
+    if (ctx.providerId && ctx.providerId !== (provider.sourceProviderId ?? provider.id)) return false;
+    if (!ctx.providerId && provider.sourceProviderId !== undefined && !(
+      (provider.sourceProviderId === 'openai' && ctx.model.startsWith('chatgpt/')) ||
+      (provider.sourceProviderId === 'xai' && ctx.model.startsWith('xai/')) ||
+      (provider.sourceProviderId === 'anthropic' && ctx.model.startsWith('claude-'))
+    )) return false;
+    const model = provider.modelIdAliases?.[ctx.model] ?? ctx.model;
+    return provider.models.some(candidate => candidate.id === model);
+  });
+  if (!isRemote && !compatProxyReady && ctx.purpose !== 'preview'
+    && !hasSelectedNativeProvider(mergePiNativeProviderResults(subscriptions, custom).providers)) {
+    await ports.ensureAnthropicCompatProxyReady?.();
+    compatProxyReady = isAnthropicCompatProxyHandleReady();
+    if (compatProxyReady) custom = buildCustom();
+  }
+  if (!isRemote && compatProxyReady) {
+    const retainedOpenAiModel =
+      ctx.resumeSessionId && ctx.providerId && isOpenAiSubscriptionProviderId(ctx.providerId)
+        ? resolvePiRuntimeModelDescriptor(getActiveCatalog(), ctx.providerId, ctx.model, {
+            localOverrides: getLocalCatalogOverridesSnapshot(),
+          })
+        : null;
+    subscriptions = buildPiSubscriptionNativeProviders(
+      getActiveCatalog(),
+      getClaudeEndpoint(),
+      bundledModels ?? undefined,
+      undefined,
+      retainedOpenAiModel,
+      ctx.providerId ?? 'openai',
+    );
+  }
   // Remote PI cannot use the local native overlay. Preserve upstream's exact
   // SuperGrok provenance/forwarding path there; locally the version-matched PI
   // native provider above remains the protocol authority.
@@ -1175,7 +1271,7 @@ async function resolvePiNativeProviders(ctx: {
     custom.providers.push(...xai.providers);
     Object.assign(custom.env, xai.env);
   }
-  return mergePiNativeProviderResults(
+  const result = mergePiNativeProviderResults(
     subscriptions,
     {
       providers: custom.providers,
@@ -1194,6 +1290,15 @@ async function resolvePiNativeProviders(ctx: {
       });
     },
   );
+  // Native API/keyless providers retain their own endpoints. Gateway,
+  // subscription and OAuth routes must never silently become direct routes.
+  // Preview remains read-only and does not start the proxy.
+  if (!isRemote && !compatProxyReady && ctx.purpose !== 'preview') {
+    if (!hasSelectedNativeProvider(result.providers)) {
+      throw new PiNativeProviderProxyNotReadyError('Pi model route requires the local compatibility proxy, but it is not ready');
+    }
+  }
+  return result;
 }
 
 return { buildXaiPiNativeProvider, resolvePiNativeProviders };

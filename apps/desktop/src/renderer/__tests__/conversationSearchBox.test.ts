@@ -1,4 +1,4 @@
-import { setSearchDraft } from '@/features/cc-agent/sidebar/conversationSearchDraft';
+import { setSearchDraft, setSearchMatchAll } from '@/features/cc-agent/sidebar/conversationSearchDraft';
 // @vitest-environment jsdom
 
 import { readFileSync } from 'node:fs';
@@ -204,6 +204,7 @@ function allProjectsOption(): HTMLButtonElement {
 
 beforeEach(() => {
   setSearchDraft('');
+  setSearchMatchAll(false);
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
     value: { platform: 'win32' },

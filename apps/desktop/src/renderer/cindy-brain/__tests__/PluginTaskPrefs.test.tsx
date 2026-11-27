@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { PluginTaskPrefs } from '../PluginTaskPrefs';
+import { modelCatalogKey } from '../../../shared/controlledModelCatalog';
 
 const state = vi.hoisted(() => ({
   config: {} as Record<string, unknown>,
@@ -15,6 +16,14 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 vi.mock('@/hooks/useAvailableAgents', () => ({ useModelPickerAgents: () => [] }));
+vi.mock('@/hooks/useModelRouteDevices', () => ({
+  // Like the real hook: a controlled computer that lists its own sources reads them through itself.
+  useModelRouteDevices: ({ controlledDeviceId }: { controlledDeviceId: string | null }) => ({
+    leadAgentDeviceId: null,
+    devices: [{ deviceId: 'share:abc', name: 'Shared' }],
+    ...(controlledDeviceId ? { catalogHostDeviceId: controlledDeviceId } : {}),
+  }),
+}));
 vi.mock('@/state/newMakerDraft', () => ({
   getEffortForModel: () => undefined, getFastModeForModel: () => false,
 }));
@@ -24,7 +33,11 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({ ModelSelector: (props: a
     {props.fallbackOption?.active ? props.fallbackOption.label : `${props.vendorKey}/${props.currentProviderId}/${props.modelId}`}
   </button>
   <button data-testid="follow" onClick={() => props.fallbackOption?.onSelect()}>follow</button>
+  {props.remoteAgent ? <button data-testid="remote-row" onClick={() => props.onUnifiedSelect({ engine: 'codex',
+    providerId: 'openai', modelId: 'chosen', effort: 'high', fast: false,
+    agentDevice: { deviceId: props.remoteAgent.devices[0].deviceId, name: 'Shared' } })}>remote</button> : null}
   <button data-testid="fast" onClick={() => props.onFastModeChange(true)}>Fast</button>
+  <span data-testid="trigger-catalog">{props.deviceId ?? 'local'}</span>
   </>
 ) }));
 vi.mock('@/components/new-chat/PermissionSelector', () => ({ PermissionSelector: (props: any) => (
@@ -86,13 +99,48 @@ it('saves the complete selected combination as the plugin model', async () => {
   render(<PluginTaskPrefs ghostId="plugin" />);
   fireEvent.click(screen.getByTestId('model'));
   await waitFor(() => expect(state.save).toHaveBeenCalledWith('plugin', {
-    permissionMode: 'auto', agentKind: 'codex', providerId: 'openai', model: 'chosen', effort: 'high', fastMode: false,
+    permissionMode: 'auto', agentKind: 'codex', providerId: 'openai', model: 'chosen', agentDeviceId: null, effort: 'high', fastMode: false,
   }));
   expect(screen.getByTestId('model').textContent).toBe('codex/openai/chosen');
   expect(screen.getByText('settings.ghosts.detail.errandPrefs.restoreModel')).toBeTruthy();
 });
+// Rule (2026-11-16, model-selector-unified.md): a task-creating plugin lists other computers and
+// shares like an ordinary task, and a row there is saved with its run location. tier: unit.
+it('saves a remote row together with its run location and explains the quick-answer fallback', async () => {
+  render(<PluginTaskPrefs ghostId="plugin" />);
+  fireEvent.click(screen.getByTestId('remote-row'));
+  await waitFor(() => expect(state.save).toHaveBeenCalledWith('plugin', {
+    agentKind: 'codex', providerId: 'openai', model: 'chosen', agentDeviceId: 'share:abc', effort: 'high', fastMode: false,
+  }));
+  expect(screen.getByText('settings.ghosts.detail.errandPrefs.remoteQuickAnswerHint')).toBeTruthy();
+});
+// Production entry: the real PluginTaskPrefs hands the saved route's catalog to the model field
+// (ModelSelector's deviceId contract: non-empty = resolve the trigger on that catalog).
+// Bug: a model saved from another computer or a received share was saved, but the field resolved it
+// on the plugin computer's own catalog and showed "model info unavailable". Gap: the case above
+// checks only the save, not how the saved route is shown again. Minimal failing input: a saved
+// agentDeviceId 'share:abc', locally or on a controlled plugin computer. tier: unit (jsdom).
+it.each([
+  ['a saved share on this computer resolves on its own catalog', 'share:abc', false, true, 'share:abc'],
+  ['a saved share of a controlled computer is read through that computer', 'share:abc', true, true,
+    modelCatalogKey('share:abc', 'host')],
+  ['a local route stays on the local catalog', null, false, true, 'local'],
+  ['the controlled computer itself stays on its catalog', null, true, true, 'host'],
+  ['a quick-answer-only plugin stays local', 'share:abc', false, false, 'local'],
+] as const)('model field: %s', (_name, agentDeviceId, controlled, showTaskRows, expected) => {
+  const config = { agentKind: 'codex' as const, providerId: 'openai', model: 'chosen', agentDeviceId };
+  state.config = config;
+  render(<PluginTaskPrefs ghostId="plugin" showTaskRows={showTaskRows} {...(controlled ? { remote: {
+    deviceId: 'host',
+    value: { revision: '1', config, permissionModes: ['ask'], defaultPermissionMode: 'ask', remoteRoutes: true },
+    auxiliaryModelLabel: null,
+    onChange: vi.fn(),
+  } } : {})} />);
+  expect(screen.getByTestId('trigger-catalog').textContent).toBe(expected);
+});
 it('quick-answer-only plugins show just the model row', () => {
   render(<PluginTaskPrefs ghostId="plugin" showTaskRows={false} />);
+  expect(screen.queryByTestId('remote-row')).toBeNull();
   expect(screen.getByTestId('model')).toBeTruthy();
   expect(screen.getByText('settings.ghosts.detail.errandPrefs.descModelOnly')).toBeTruthy();
   expect(screen.queryByTestId('permission')).toBeNull();

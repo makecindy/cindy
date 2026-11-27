@@ -54,90 +54,452 @@ export interface NormalizeMathDelimitersOptions {
 // 回溯模式在「大量未闭合开定界符 / 大量反引号」的对抗性输入上是 O(n²)
 // (CodeQL js/polynomial-redos,PR #656 实报)。
 
-// reference 式链接定义行:≤3 空格缩进 + [label]:(单字符类 + 行锚点,线性)。
+// reference 式链接定义行:≤3 空格缩进 + [label]:(互斥分支 + 行锚点,线性)。
 // 整行(destination + 可选 title)纳入保护——定义行不是 prose,行上不存在
 // 合法的数学公式场景,整行保护安全且省去 destination/title 的精细切分。
-const LINK_REFERENCE_DEFINITION_RE = /^ {0,3}\[[^\]\n]*\]:/gm;
+const LINK_REFERENCE_DEFINITION_RE = /^ {0,3}\[(?:[^\]\\\n]|\\.)*\]:/gm;
 
-/**
- * markdown 链接目标的保护区间,两类形态(review 分两轮实捉):
- * - inline:`](` 到与之配平的 `)`(反斜杠转义感知、不跨行);
- * - reference 定义:`[label]: dest` 整行。
- * `[log](./run\(1\).md)` / `[r]: ./run\(1\).md` 里的 URL 转义括号都不能被
- * 当成数学定界符改写。单调推进,线性复杂度;结果按起点排序供单指针消费。
- */
-function findLinkDestinationRanges(text: string): Array<[number, number]> {
-  const ranges: Array<[number, number]> = [];
-  let i = 0;
-  while (i < text.length) {
-    const open = text.indexOf('](', i);
-    if (open === -1) break;
-    let j = open + 2;
-    let depth = 1;
-    while (j < text.length && depth > 0) {
-      const ch = text[j];
-      if (ch === '\\') {
-        j += 2;
-        continue;
-      }
-      if (ch === '\n') break; // destination 不跨行,视为未闭合
-      if (ch === '(') depth += 1;
-      else if (ch === ')') depth -= 1;
-      j += 1;
+// 行中嵌入的单行 `\[...\]` 与 CommonMark 转义方括号(`\[Schedule\]`、`\[TODO\]`、
+// `\[飞书·...\]`)写法完全重合:只有在内容具备明确 LaTeX / 数学信号时才转成
+// display math;独立成行或跨行的 `\[...\]` 不受此限制,仍按标准块级公式处理。
+const LATEX_COMMAND_RE = /\\[a-zA-Z]+/;
+const CJK_CHAR_RE = /[\u3400-\u9fff\uf900-\ufaff]/;
+const MIDLINE_DISPLAY_MATH_OP_RE = /[=^≤≥≠≈×÷±∫∑∏√∞∈∉⊂⊃⊆⊇∪∩∀∃∂∇⇒⇔]/;
+
+function isBackslashEscaped(text: string, idx: number): boolean {
+  let backslashes = 0;
+  for (let i = idx - 1; i >= 0 && text.charCodeAt(i) === 92 /* \\ */; i -= 1) {
+    backslashes += 1;
+  }
+  return backslashes % 2 === 1;
+}
+
+function mergeRanges(ranges: Array<[number, number]>): Array<[number, number]> {
+  if (ranges.length <= 1) return ranges;
+  ranges.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const merged: Array<[number, number]> = [ranges[0]];
+  for (let i = 1; i < ranges.length; i += 1) {
+    const prev = merged[merged.length - 1];
+    const curr = ranges[i];
+    if (curr[0] <= prev[1]) {
+      if (curr[1] > prev[1]) prev[1] = curr[1];
+    } else {
+      merged.push(curr);
     }
-    if (depth === 0) ranges.push([open, j]);
-    // 无论是否闭合都推进到已扫过的位置,不回头重扫
-    i = Math.max(open + 2, j);
   }
-  for (const match of text.matchAll(LINK_REFERENCE_DEFINITION_RE)) {
-    const lineEnd = text.indexOf('\n', match.index);
-    ranges.push([match.index, lineEnd === -1 ? text.length : lineEnd]);
+  return merged;
+}
+
+function createRangeLookup(ranges: ReadonlyArray<[number, number]>): (pos: number) => number {
+  let rangeIndex = 0;
+  return (pos: number): number => {
+    while (rangeIndex < ranges.length && ranges[rangeIndex][1] <= pos) rangeIndex += 1;
+    const range = ranges[rangeIndex];
+    return range && pos >= range[0] && pos < range[1] ? range[1] : -1;
+  };
+}
+
+function findRangeEnd(ranges: ReadonlyArray<[number, number]>, pos: number): number {
+  let lo = 0;
+  let hi = ranges.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const range = ranges[mid];
+    if (pos < range[0]) hi = mid - 1;
+    else if (pos >= range[1]) lo = mid + 1;
+    else return range[1];
   }
-  return ranges.sort((a, b) => a[0] - b[0]);
+  return -1;
 }
 
 /**
- * 单段纯文本(已排除 code)内做定界符替换。indexOf 单遍扫描,线性复杂度。
- * 双指针:consumed 是 out 已覆盖到的位置,scan 是扫描位置——跳过分支只推进
- * scan、不动 consumed,被跳过的文本由下一次成功替换或结尾统一搬运。
+ * 在非 fence 段内定位全部 inline code span 区间(CommonMark 语义:开 backtick
+ * 序列与等长闭合序列配对)。按长度建表 + 单调游标,严格 O(n) 线性复杂度。
  */
-function transformMathInText(text: string, preserveLineCount: boolean): string {
-  if (!text.includes('\\(') && !text.includes('\\[')) return text;
-  // link destination 内的 \( \) \[ \] 是 URL 转义,整段保护不参与转换。
-  // 惰性条件覆盖两种形态:inline 的 `](` 与 reference 定义的 `]:`。
-  const protectedRanges =
-    text.includes('](') || text.includes(']:') ? findLinkDestinationRanges(text) : [];
-  let rangeIndex = 0;
-  const inProtectedRange = (pos: number): number => {
-    while (rangeIndex < protectedRanges.length && protectedRanges[rangeIndex][1] <= pos) rangeIndex += 1;
-    const range = protectedRanges[rangeIndex];
-    return range && pos >= range[0] && pos < range[1] ? range[1] : -1;
+function findInlineCodeRanges(segment: string): Array<[number, number]> {
+  if (!segment.includes('`')) return [];
+  const runs: Array<{ start: number; end: number; len: number }> = [];
+  const runIndicesByLen = new Map<number, number[]>();
+  let pos = 0;
+  while (pos < segment.length) {
+    const tick = segment.indexOf('`', pos);
+    if (tick === -1) break;
+    let end = tick + 1;
+    while (end < segment.length && segment[end] === '`') end += 1;
+    const len = end - tick;
+    const runIdx = runs.length;
+    runs.push({ start: tick, end, len });
+    let list = runIndicesByLen.get(len);
+    if (!list) {
+      list = [];
+      runIndicesByLen.set(len, list);
+    }
+    list.push(runIdx);
+    pos = end;
+  }
+
+  const ranges: Array<[number, number]> = [];
+  const headByLen = new Map<number, number>();
+  let r = 0;
+  while (r < runs.length) {
+    const run = runs[r];
+    const list = runIndicesByLen.get(run.len)!;
+    let head = headByLen.get(run.len) ?? 0;
+    while (head < list.length && list[head] <= r) head += 1;
+    headByLen.set(run.len, head);
+    if (head >= list.length) {
+      r += 1;
+      continue;
+    }
+    const closeIdx = list[head];
+    headByLen.set(run.len, head + 1);
+    ranges.push([run.start, runs[closeIdx].end]);
+    r = closeIdx + 1;
+  }
+  return ranges;
+}
+
+/**
+ * markdown 链接相关的保护区间(严格 O(n) 线性扫描,跳过 inline code span):
+ * - destinationRanges: inline `](...)` 与 reference 定义 `[label]: dest` 整行,
+ *   URL 里的 `\( \)` / `\[ \]` 都是转义,全部跳过。
+ * - labelRanges: inline 链接/图片 `[label](dest)`、`![alt](dest)` 与引用式链接
+ *   `[label][ref]` 的标签区间;标签里的 `\[...\]` 是 CommonMark 转义方括号
+ *   (如 `[\[Schedule\] 标题](url)`),且块级 `$$` 在行内标签内必然语法非法,
+ *   禁止转为 display math(标签内的行内 `\(...\)` 仍照常转换)。
+ */
+function findLinkProtectedRanges(
+  text: string,
+  codeRanges: ReadonlyArray<[number, number]>,
+): { destinationRanges: Array<[number, number]>; labelRanges: Array<[number, number]> } {
+  const destinationRanges: Array<[number, number]> = [];
+  const destEndByBracket = new Map<number, number>();
+  const inCode = createRangeLookup(codeRanges);
+
+  if (text.includes('](')) {
+    let i = 0;
+    while (i < text.length) {
+      const open = text.indexOf('](', i);
+      if (open === -1) break;
+      const codeEnd = inCode(open);
+      if (codeEnd !== -1) {
+        i = codeEnd;
+        continue;
+      }
+      if (isBackslashEscaped(text, open)) {
+        i = open + 2;
+        continue;
+      }
+      let j = open + 2;
+      let depth = 1;
+      while (j < text.length && depth > 0) {
+        const ch = text[j];
+        if (ch === '\\') {
+          j += 2;
+          continue;
+        }
+        if (ch === '\n') break; // destination 不跨行,视为未闭合
+        if (ch === '(') depth += 1;
+        else if (ch === ')') depth -= 1;
+        j += 1;
+      }
+      if (depth === 0) {
+        destinationRanges.push([open, j]);
+        destEndByBracket.set(open, j);
+      }
+      // 无论是否闭合都推进到已扫过的位置,不回头重扫
+      i = Math.max(open + 2, j);
+    }
+  }
+
+  if (text.includes(']:')) {
+    const inCodeRef = createRangeLookup(codeRanges);
+    for (const match of text.matchAll(LINK_REFERENCE_DEFINITION_RE)) {
+      if (inCodeRef(match.index) !== -1) continue;
+      const lineEnd = text.indexOf('\n', match.index);
+      destinationRanges.push([match.index, lineEnd === -1 ? text.length : lineEnd]);
+    }
+  }
+
+  const labelRanges: Array<[number, number]> = [];
+  if (destEndByBracket.size > 0 || text.includes('][')) {
+    const stack: number[] = [];
+    let lastClosedBracket: [number, number] | null = null;
+    let codeIdx = 0;
+    let pos = 0;
+    while (pos < text.length) {
+      while (codeIdx < codeRanges.length && codeRanges[codeIdx][1] <= pos) codeIdx += 1;
+      if (codeIdx < codeRanges.length && pos >= codeRanges[codeIdx][0] && pos < codeRanges[codeIdx][1]) {
+        pos = codeRanges[codeIdx][1];
+        continue;
+      }
+      const ch = text[pos];
+      if (ch === '\\') {
+        pos += 2;
+        continue;
+      }
+      if (ch === '\n') {
+        // 空行结束当前段落,未闭合方括号不能跨段落配对成链接(兼容 LF 与 CRLF)
+        let next = pos + 1;
+        while (next < text.length && (text[next] === ' ' || text[next] === '\t')) next += 1;
+        if (
+          next < text.length &&
+          (text[next] === '\n' || (text[next] === '\r' && text[next + 1] === '\n'))
+        ) {
+          stack.length = 0;
+          lastClosedBracket = null;
+        }
+        pos += 1;
+        continue;
+      }
+      if (ch === '[') {
+        stack.push(pos);
+        pos += 1;
+        continue;
+      }
+      if (ch === ']') {
+        const destEnd = destEndByBracket.get(pos);
+        const openIdx = stack.pop();
+        if (destEnd !== undefined) {
+          if (openIdx !== undefined) labelRanges.push([openIdx, pos + 1]);
+          lastClosedBracket = null;
+          // 跳过已配平的 destination 区间,避免 URL 内的 `[` / `]` 污染栈
+          pos = destEnd;
+          continue;
+        }
+        if (openIdx !== undefined) {
+          if (lastClosedBracket && lastClosedBracket[1] + 1 === openIdx) {
+            labelRanges.push([lastClosedBracket[0], lastClosedBracket[1] + 1]);
+            lastClosedBracket = null;
+          } else {
+            lastClosedBracket = [openIdx, pos];
+          }
+        } else {
+          lastClosedBracket = null;
+        }
+        pos += 1;
+        continue;
+      }
+      pos += 1;
+    }
+  }
+
+  return {
+    destinationRanges: mergeRanges(destinationRanges),
+    labelRanges: mergeRanges(labelRanges),
   };
+}
+
+function stripBlockquotePrefix(line: string): string {
+  let i = 0;
+  while (i < line.length) {
+    let spaces = 0;
+    while (i + spaces < line.length && line[i + spaces] === ' ' && spaces < 3) spaces += 1;
+    if (i + spaces < line.length && line[i + spaces] === '>') {
+      i += spaces + 1;
+      if (i < line.length && line[i] === ' ') i += 1;
+    } else {
+      break;
+    }
+  }
+  return line.slice(i);
+}
+
+function splitUnescapedTableCells(line: string): { cells: string[]; hasPipe: boolean } {
+  const trimmed = stripBlockquotePrefix(line).trim();
+  if (!trimmed) return { cells: [], hasPipe: false };
+  let start = 0;
+  let end = trimmed.length;
+  let hasPipe = false;
+  if (trimmed[0] === '|') {
+    hasPipe = true;
+    start = 1;
+  }
+  if (end > start && trimmed[end - 1] === '|' && !isBackslashEscaped(trimmed, end - 1)) {
+    hasPipe = true;
+    end -= 1;
+  }
+  const cells: string[] = [];
+  let cellStart = start;
+  for (let i = start; i < end; i += 1) {
+    if (trimmed[i] === '\\') {
+      i += 1;
+      continue;
+    }
+    if (trimmed[i] === '|') {
+      hasPipe = true;
+      cells.push(trimmed.slice(cellStart, i).trim());
+      cellStart = i + 1;
+    }
+  }
+  cells.push(trimmed.slice(cellStart, end).trim());
+  return { cells, hasPipe };
+}
+
+function gfmTableDelimiterColumns(line: string): number {
+  const { cells, hasPipe } = splitUnescapedTableCells(line);
+  if (!hasPipe || cells.length === 0) return 0;
+  for (const cell of cells) {
+    if (!/^:?-{1,}:?$/.test(cell)) return 0;
+  }
+  return cells.length;
+}
+
+/**
+ * 识别 GFM 表格的全部行区间(表头 + 分隔行 + 数据行)。
+ * 表格单元格内插入 `\n\n$$\n...\n$$\n\n` 必然截断表格,故表格行内的 `\[...\]`
+ * 不得展开为多行 display math(行内 `\(...\)` 不插行,照常转换)。
+ */
+function findGfmTableLineRanges(segment: string): Array<[number, number]> {
+  if (!segment.includes('|')) return [];
+  const lines: Array<{ start: number; end: number; text: string }> = [];
+  let pos = 0;
+  while (pos <= segment.length) {
+    const nl = segment.indexOf('\n', pos);
+    const end = nl === -1 ? segment.length : nl;
+    lines.push({ start: pos, end, text: segment.slice(pos, end) });
+    if (nl === -1) break;
+    pos = nl + 1;
+  }
+
+  const ranges: Array<[number, number]> = [];
+  for (let i = 1; i < lines.length; i += 1) {
+    const colCount = gfmTableDelimiterColumns(lines[i].text);
+    if (colCount === 0) continue;
+    const header = splitUnescapedTableCells(lines[i - 1].text);
+    if (!header.hasPipe || header.cells.length !== colCount) continue;
+    ranges.push([lines[i - 1].start, lines[i - 1].end]);
+    ranges.push([lines[i].start, lines[i].end]);
+    let j = i + 1;
+    while (j < lines.length) {
+      const row = splitUnescapedTableCells(lines[j].text);
+      if (!row.hasPipe) break;
+      ranges.push([lines[j].start, lines[j].end]);
+      j += 1;
+    }
+    i = j;
+  }
+  return ranges;
+}
+
+/**
+ * 单调 O(n) 判定单行 `\[...\]` 是否独占一行(行首仅允许空白或 blockquote 前缀,
+ * 行尾仅允许空白)。每个物理行最多计算一次首尾有效字符边界,避免长行内重复出现
+ * `\[...\]` 时逐次向前/向后扫描整行退化为 O(n²)。
+ */
+function createStandaloneDisplayChecker(
+  text: string,
+): (open: number, closeEnd: number) => boolean {
+  let cachedLineEnd = -1;
+  let cachedFirstContent = -1;
+  let cachedLastContentEnd = -1;
+
+  return (open: number, closeEnd: number): boolean => {
+    if (open > cachedLineEnd) {
+      const lineStart = text.lastIndexOf('\n', open - 1) + 1;
+      const lineEndIdx = text.indexOf('\n', open);
+      cachedLineEnd = lineEndIdx === -1 ? text.length : lineEndIdx;
+
+      // 跳过可选的 blockquote 前缀 `(?: {0,3}> ?)*` 与前导 `[ \t]*`
+      let i = lineStart;
+      while (i < cachedLineEnd) {
+        let spaces = 0;
+        while (i + spaces < cachedLineEnd && text[i + spaces] === ' ' && spaces < 3) {
+          spaces += 1;
+        }
+        if (i + spaces < cachedLineEnd && text[i + spaces] === '>') {
+          i += spaces + 1;
+          if (i < cachedLineEnd && text[i] === ' ') i += 1;
+        } else {
+          break;
+        }
+      }
+      while (i < cachedLineEnd && (text[i] === ' ' || text[i] === '\t')) i += 1;
+      cachedFirstContent = i;
+
+      // 剥除行尾 `[ \t\r]*`
+      let j = cachedLineEnd;
+      while (
+        j > cachedFirstContent &&
+        (text[j - 1] === ' ' || text[j - 1] === '\t' || text[j - 1] === '\r')
+      ) {
+        j -= 1;
+      }
+      cachedLastContentEnd = j;
+    }
+
+    return open === cachedFirstContent && closeEnd === cachedLastContentEnd;
+  };
+}
+
+function looksLikeMidlineDisplayMath(inner: string): boolean {
+  const trimmed = inner.trim();
+  if (!trimmed) return false;
+  if (LATEX_COMMAND_RE.test(trimmed)) return true;
+  if (CJK_CHAR_RE.test(trimmed)) return false;
+  return MIDLINE_DISPLAY_MATH_OP_RE.test(trimmed);
+}
+
+/**
+ * 在非 fence 整段文本内做定界符替换(先在整段上计算 code span、链接与表格保护区间,
+ * 再单遍线性扫描)。整段计算避免同一行里 inline code 把前面的表格前缀或链接标签切碎。
+ */
+function transformOutsideInlineCode(segment: string, preserveLineCount: boolean): string {
+  if (!segment.includes('\\(') && !segment.includes('\\[')) return segment;
+  const codeRanges = findInlineCodeRanges(segment);
+  const { destinationRanges, labelRanges } = findLinkProtectedRanges(segment, codeRanges);
+  const tableRanges = segment.includes('\\[') ? findGfmTableLineRanges(segment) : [];
+  const fullProtectedRanges = mergeRanges([...codeRanges, ...destinationRanges]);
+  const displayProtectedRanges = mergeRanges([...labelRanges, ...tableRanges]);
+
+  const inFullProtected = createRangeLookup(fullProtectedRanges);
+  const inDisplayProtected = createRangeLookup(displayProtectedRanges);
+  const isStandaloneDisplay = createStandaloneDisplayChecker(segment);
+
   let out = '';
   let consumed = 0;
   let scan = 0;
-  // closer 缺席记忆化:indexOf 一旦在某位置之后找不到 `\)` / `\]`,更靠后的
-  // 搜索必然也找不到——没有这两个标记,大量未闭合 opener(如 `\[a` 重复
-  // 五万次)会让每个 opener 都把 indexOf 扫到串尾,总量 O(n²)(本文件顶部
-  // ReDoS 约束的 indexOf 版变体,回归测试实捉)。
+  // 按 inline code 间隔切分边界:定界符不能跨越 inline code span 配对。
+  // closer 缺席记忆化按当前非 code 区间维护,避免大量未闭合 opener 在同区间
+  // 内重复扫到区尾(O(n²),CodeQL js/polynomial-redos 约束)。
+  let codeCursor = 0;
+  let currentGapEnd = -1;
   let noParenCloser = false;
   let noBracketCloser = false;
-  while (scan < text.length) {
-    const open = text.indexOf('\\', scan);
-    if (open === -1 || open + 1 >= text.length) break;
-    const kind = text[open + 1];
+
+  const getGapEnd = (pos: number): number => {
+    while (codeCursor < codeRanges.length && codeRanges[codeCursor][1] <= pos) codeCursor += 1;
+    const nextEnd = codeCursor < codeRanges.length ? codeRanges[codeCursor][0] : segment.length;
+    if (nextEnd !== currentGapEnd) {
+      currentGapEnd = nextEnd;
+      noParenCloser = false;
+      noBracketCloser = false;
+    }
+    return nextEnd;
+  };
+
+  while (scan < segment.length) {
+    const open = segment.indexOf('\\', scan);
+    if (open === -1 || open + 1 >= segment.length) break;
+    const fullEnd = inFullProtected(open);
+    if (fullEnd !== -1) {
+      scan = fullEnd;
+      continue;
+    }
+    const kind = segment[open + 1];
     if (kind !== '(' && kind !== '[') {
       // 普通反斜杠(LaTeX 命令等),跳过继续扫
       scan = open + 2;
       continue;
     }
-    const protectedEnd = inProtectedRange(open);
-    if (protectedEnd !== -1) {
-      // 位于 link destination 内:整段跳过
-      scan = protectedEnd;
+    const isDisplay = kind === '[';
+    if (isDisplay && inDisplayProtected(open) !== -1) {
+      // 链接标签或表格行内的 `\[`:按 CommonMark 转义方括号保留,仅跳过定界符自身,
+      // 以便同标签/同行内后续的行内 `\(...\)` 仍可正常转换。
+      scan = open + 2;
       continue;
     }
-    const isDisplay = kind === '[';
+    const gapEnd = getGapEnd(open);
     if (isDisplay ? noBracketCloser : noParenCloser) {
       scan = open + 2;
       continue;
@@ -145,10 +507,22 @@ function transformMathInText(text: string, preserveLineCount: boolean): string {
     const closer = isDisplay ? '\\]' : '\\)';
     let close = -1;
     let probe = open + 2;
-    while (probe < text.length) {
-      const slash = text.indexOf('\\', probe);
-      if (slash === -1) break;
-      if (text.startsWith(closer, slash)) { close = slash; break; }
+    while (probe < gapEnd) {
+      const slash = segment.indexOf('\\', probe);
+      if (slash === -1 || slash + 1 >= gapEnd) break;
+      const destEnd = findRangeEnd(destinationRanges, slash);
+      if (destEnd !== -1) {
+        probe = Math.min(gapEnd, destEnd);
+        continue;
+      }
+      if (segment.startsWith(closer, slash)) {
+        if (isDisplay && findRangeEnd(displayProtectedRanges, slash) !== -1) {
+          probe = slash + 2;
+          continue;
+        }
+        close = slash;
+        break;
+      }
       probe = slash + 2; // Skip escaped backslashes, including \\) / \\].
     }
     if (close === -1) {
@@ -162,69 +536,28 @@ function transformMathInText(text: string, preserveLineCount: boolean): string {
       scan = open + 2;
       continue;
     }
-    const inner = text.slice(open + 2, close);
+    const inner = segment.slice(open + 2, close);
     // 保行数模式:display(必插行)与跨行 inline(trim 可能吃掉边缘换行)
     // 都不转换,只放行单行 inline——替换前后行数严格一致。
     if (preserveLineCount && (isDisplay || inner.includes('\n'))) {
       scan = close + 2;
       continue;
     }
-    out += text.slice(consumed, open);
+    if (
+      isDisplay &&
+      !inner.includes('\n') &&
+      !isStandaloneDisplay(open, close + 2) &&
+      !looksLikeMidlineDisplayMath(inner)
+    ) {
+      scan = close + 2;
+      continue;
+    }
+    out += segment.slice(consumed, open);
     out += isDisplay ? `\n\n$$\n${inner.trim()}\n$$\n\n` : `$${inner.trim()}$`;
     consumed = close + 2;
     scan = consumed;
   }
-  return out + text.slice(consumed);
-}
-
-/**
- * 在非 fence 段内跳过 inline code span,只转换 span 之间的文本。
- * code span 按 CommonMark 语义定位:开 backtick 序列与**等长**闭合序列配对,
- * 长度不等的序列不闭合(indexOf 逐运行扫描,线性复杂度)。
- */
-function transformOutsideInlineCode(segment: string, preserveLineCount: boolean): string {
-  if (!segment.includes('`')) return transformMathInText(segment, preserveLineCount);
-  let out = '';
-  let cursor = 0;
-  // 等长闭合缺席记忆化:某长度的闭合运行在位置 p 之后不存在,则更靠后也不
-  // 存在(与 transformMathInText 的 closer 记忆化同理,防对抗性输入二次扫描)。
-  const noCloserForLength = new Set<number>();
-  while (cursor < segment.length) {
-    const tick = segment.indexOf('`', cursor);
-    if (tick === -1) break;
-    let openEnd = tick;
-    while (openEnd < segment.length && segment[openEnd] === '`') openEnd += 1;
-    const runLength = openEnd - tick;
-    // 找等长闭合序列(CommonMark 语义):逐个 backtick 运行推进
-    let closeStart = -1;
-    let closeEnd = openEnd;
-    if (!noCloserForLength.has(runLength)) {
-      let probe = openEnd;
-      while (probe < segment.length) {
-        const t = segment.indexOf('`', probe);
-        if (t === -1) break;
-        let e = t;
-        while (e < segment.length && segment[e] === '`') e += 1;
-        if (e - t === runLength) {
-          closeStart = t;
-          closeEnd = e;
-          break;
-        }
-        probe = e;
-      }
-      if (closeStart === -1) noCloserForLength.add(runLength);
-    }
-    out += transformMathInText(segment.slice(cursor, tick), preserveLineCount);
-    if (closeStart === -1) {
-      // 无闭合:开序列按字面输出,其后文本继续参与转换
-      out += segment.slice(tick, openEnd);
-      cursor = openEnd;
-      continue;
-    }
-    out += segment.slice(tick, closeEnd);
-    cursor = closeEnd;
-  }
-  return out + (cursor < segment.length ? transformMathInText(segment.slice(cursor), preserveLineCount) : '');
+  return consumed === 0 ? segment : out + segment.slice(consumed);
 }
 
 export function normalizeMathDelimiters(
@@ -241,10 +574,14 @@ export function normalizeMathDelimiters(
   const out: string[] = [];
   let textBuf: string[] = [];
   let fenceMarker: string | null = null; // 开 fence 的字符序列,如 "```"
+  let changed = false;
 
   const flushText = () => {
     if (textBuf.length === 0) return;
-    out.push(transformOutsideInlineCode(textBuf.join('\n'), preserveLineCount));
+    const raw = textBuf.join('\n');
+    const transformed = transformOutsideInlineCode(raw, preserveLineCount);
+    if (transformed !== raw) changed = true;
+    out.push(transformed);
     textBuf = [];
   };
 
@@ -273,7 +610,7 @@ export function normalizeMathDelimiters(
     }
   }
   flushText();
-  return out.join('\n');
+  return changed ? out.join('\n') : markdown;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

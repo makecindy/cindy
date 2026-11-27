@@ -348,6 +348,8 @@ export function agentDeviceModelMemoryAccessors(deviceId: string): ModelMemoryAc
         getAgentDeviceModelThinking(deviceId, agent, providerId, model),
       setThinking: (agent, providerId, model, enabled) =>
         setAgentDeviceModelThinking(deviceId, agent, providerId, model, enabled),
+      clearThinking: (agent, providerId, model) =>
+        writeValue(deviceId, agent, providerId, model, 'thinkingByModel', undefined),
       clearEffort: (agent, providerId, model) =>
         clearAgentDeviceModelEffort(deviceId, agent, providerId, model),
       clearFast: (agent, providerId, model) =>

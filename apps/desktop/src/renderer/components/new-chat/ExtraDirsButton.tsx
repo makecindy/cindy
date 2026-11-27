@@ -6,7 +6,9 @@ import { MorphPopover } from '@/components/ui/morph-popover';
 import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 
-export type CollabWorkerKind = 'cc' | 'codex' | 'pi';
+import type { CollabDraft } from '@/state/newMakerDraft';
+
+export type CollabWorkerKind = CollabDraft['worker'];
 
 export interface CollaborationMenuConfig {
   enabled: boolean;

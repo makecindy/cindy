@@ -62,6 +62,28 @@
       "dark": "Escuro"
     },
     "saveFailed": "Falha ao salvar o modo de aparência. A configuração anterior será restaurada após reiniciar.",
+    "wallpaper": {
+      "title": "Papel de parede",
+      "choose": "Escolher foto ou vídeo",
+      "replace": "Substituir papel de parede",
+      "remove": "Remover papel de parede",
+      "importing": "Processando…",
+      "tooLarge": "Escolha uma foto de até 20 MB ou um vídeo de até 100 MB.",
+      "importFailed": "Não foi possível importar a foto ou o vídeo.",
+      "saveFailed": "Não foi possível salvar a configuração do papel de parede.",
+      "static": "Estático",
+      "dynamic": "Dinâmico",
+      "motionLabel": "Exibição",
+      "options": {
+        "none": "Nenhum",
+        "custom": "Papel de parede personalizado",
+        "cindy-whisper": "Sussurro",
+        "cindy-night-glance": "Olhar noturno",
+        "cindy-scarlet-stroll": "Passeio escarlate",
+        "cindy-neon": "Silhueta neon",
+        "cindy-prism": "Fragmentos de prisma"
+      }
+    },
     "userBubble": {
       "title": "Cor do balão das minhas mensagens",
       "presets": "Cor",
@@ -85,6 +107,16 @@
       "reset": "Restaurar padrão",
       "apply": "Aplicar",
       "hex": "Valor da cor"
+    },
+    "appIcon": {
+      "label": "Ícone do app",
+      "saveFailed": "Não foi possível alterar o ícone do app. Tente novamente.",
+      "options": {
+        "default": "Padrão",
+        "cat": "Gato preto",
+        "wordmark": "Logotipo do Cindy",
+        "mark": "Símbolo do Cindy"
+      }
     }
   },
   "language": {
@@ -253,7 +285,7 @@
     "openUserAgreement": "Abrir o contrato do usuário",
     "appFilingNumber": "Número de registro do app",
     "analytics": "Estatísticas de uso",
-    "analyticsHint": "Ajuda a entender as inicializações e a retenção. Envia informações do dispositivo, como modelo, sistema operacional e versão do app, um identificador do dispositivo e, após o login, o ID da sua conta; nunca conversas, arquivos ou prompts.",
+    "analyticsHint": "Se você ativar esta opção, usaremos um pseudônimo de conta e um identificador do dispositivo para entender as aberturas do aplicativo e as visitas recorrentes. Isso nos ajuda a melhorar o produto. Os pagamentos usam outro pseudônimo. Essas estatísticas não incluem suas conversas, arquivos ou prompts.\nRegistros antigos contêm os IDs originais das contas. Quem tem acesso a eles pode conseguir associar um novo pseudônimo à conta pelo mesmo identificador de dispositivo.",
     "analyticsSaveFailed": "Não foi possível salvar esta configuração; ela pode ser revertida após reiniciar.",
     "analyticsReset": "Restaurar padrão",
     "analyticsResetAction": "Redefinir"
@@ -436,5 +468,86 @@
       "sendText": "Enviar texto digitado",
       "taskHint": "Estes atalhos funcionam nas páginas de sessão. Um botão atribuído à voz tem prioridade; ao soltá-lo, o texto fica na caixa de mensagem."
     }
+  },
+  "projectInfo": {
+    "automatic": "Usar ícone do projeto",
+    "autoLoading": "Buscando ícone…",
+    "autoNone": "Usando as iniciais do nome do projeto.",
+    "autoSource": "Origem",
+    "githubAvatar": "Usar avatar do GitHub",
+    "title": "Configurações do projeto",
+    "name": "Nome de exibição",
+    "saveName": "Salvar nome",
+    "reset": "Restaurar padrão",
+    "icon": "Ícone",
+    "directory": "Pasta do projeto",
+    "done": "Concluído",
+    "failed": "Não foi possível salvar. Tente novamente.",
+    "unavailable": "Configurações indisponíveis. Conecte um computador atualizado e tente novamente.",
+    "back": "Voltar",
+    "cancel": "Cancelar",
+    "changeIcon": "Alterar ícone",
+    "chooseIcon": "Escolher ícone",
+    "save": "Salvar",
+    "symbols": "Ícones",
+    "emoji": "Emoji",
+    "letters": "Letras",
+    "image": "Imagem",
+    "upload": "Enviar imagem",
+    "imageHint": "PNG, JPG ou WebP · corte quadrado",
+    "imageError": "Não foi possível ler a imagem. Tente um PNG ou JPG menor.",
+    "search": "Buscar ícones",
+    "customEmoji": "Ou cole um emoji",
+    "lettersHint": "Use uma ou duas letras ou números.",
+    "thisComputer": "Este computador",
+    "nameHint": "Nome na lista de projetos. A pasta não será renomeada.",
+    "copy": "Copiar caminho",
+    "copied": "Copiado",
+    "applyIcon": "Usar ícone",
+    "noResults": "Nenhum ícone encontrado",
+    "discardHint": "Descartar alterações não salvas?",
+    "keepEditing": "Continuar editando",
+    "discard": "Descartar",
+    "colors": {
+      "default": "Padrão (seguir tema)"
+    },
+    "directories": "Diretórios do projeto",
+    "directoriesHint": "Aplica-se a todas as tarefas deste projeto a partir do próximo turno. Os diretórios específicos de cada tarefa são mantidos.",
+    "removeDirectory": "Remover diretório",
+    "directoryPath": "Caminho completo do diretório",
+    "addDirectory": "Adicionar diretório",
+    "browseDirectory": "Procurar diretórios",
+    "mainDirectory": "Diretório principal",
+    "createTitle": "Novo projeto",
+    "createAction": "Criar projeto",
+    "repository": "URL do repositório",
+    "repositoryHint": "Compatível com GitHub, GitLab e outros repositórios Git via HTTPS ou SSH.",
+    "autoDirectory": "Sem selecionar diretório, será criado em {{path}}. Nomes repetidos recebem um número.",
+    "cloning": "Clonando repositório…",
+    "invalidRepository": "Insira uma URL válida de repositório GitHub, GitLab ou Git.",
+    "createFailed": "Não foi possível criar o projeto. Verifique a permissão de escrita, a URL e o acesso Git deste computador. O destino da clonagem deve estar vazio.",
+    "createNamePlaceholder": "Nome do projeto",
+    "createNameHint": "Dê um nome ao projeto para começar.",
+    "createFromRepository": "Criar de um repositório de código",
+    "createBlank": "Mudar para um projeto vazio",
+    "source_blank": "Projeto vazio",
+    "source_existing": "Abrir pasta existente",
+    "source_repository": "Importar repositório",
+    "sourceHint_blank": "Digite um nome. A pasta será criada automaticamente.",
+    "sourceHint_existing": "Escolha uma pasta de projeto neste computador.",
+    "sourceHint_repository": "Cole o link do repositório para baixar neste computador.",
+    "source": "Origem do projeto",
+    "sourceShort_blank": "Novo",
+    "sourceShort_existing": "Pasta",
+    "sourceShort_repository": "Repositório",
+    "automaticMain": "Principal · Automático",
+    "source_local": "Pasta local",
+    "sourceShort_local": "Pasta local",
+    "sourceHint_local": "Digite um nome para criar uma pasta ou escolha uma existente.",
+    "chooseExistingFolder": "Escolher pasta existente",
+    "changeMainDirectory": "Alterar"
+  },
+  "navigation": {
+    "unavailable": "Não foi possível abrir as configurações do computador de destino. Verifique se está online e permite controle remoto; atualize o Cindy se estiver em uma versão antiga."
   }
 }

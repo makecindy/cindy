@@ -28,6 +28,7 @@ export interface ScheduleNotifierRuntime {
   showSessionNotification(payload: { sessionId: string; title: string; kind: 'done' | 'error' }): void;
   sendMobileSessionNotify(payload: {
     sessionId: string; title: string; kind: 'done' | 'error'; generation: number; detail?: string;
+    eventId: string; attentionExempt: true;
   }): void;
 }
 
@@ -88,6 +89,8 @@ export class ScheduleNotifier implements Notifier {
           title: schedule.name,
           kind: run.status === 'success' ? 'done' : 'error',
           generation,
+          eventId: `schedule-run:${run.id}`,
+          attentionExempt: true,
           ...(detail ? { detail } : {}),
         });
       } catch (err) {
@@ -154,7 +157,13 @@ function renderExternalMessage(schedule: Schedule, run: ScheduleRun): string {
   const lines: string[] = [`${statusEmoji(run.status)} **${schedule.name}**`];
 
   if (run.status === 'failed' && run.errorMsg) {
-    lines.push('', `⚠️ ${truncate(run.errorMsg, 200)}`);
+    const scriptExit = schedule.executionMode === 'script'
+      ? /^(script exited with code [^:]+: )([\s\S]*)$/.exec(run.errorMsg)
+      : null;
+    const errorText = scriptExit && run.errorMsg.length > 200
+      ? `${scriptExit[1]}…${scriptExit[2].slice(-(199 - scriptExit[1].length))}`
+      : truncate(run.errorMsg, 200);
+    lines.push('', `⚠️ ${errorText}`);
   } else if (run.status === 'success' && run.resultText) {
     // prompt 类成功：把 agent 这一轮 turn 的最终文本贴出来 — 与飞书正常对话
     // 气泡显示同源（runner 按 text 事件 isFinal 语义聚合）。截断防卡片体积过大,

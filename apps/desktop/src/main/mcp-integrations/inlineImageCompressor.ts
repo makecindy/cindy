@@ -41,8 +41,10 @@ function loadSharp(): SharpModule | null {
   return sharpInstance;
 }
 
+export type ImageCompressionStep = { maxEdgePx: number; webpQuality: number };
+
 /** 质量/边长阶梯:从"几乎无感"压到"缩略图",第一个达标的胜出。 */
-const LADDER: ReadonlyArray<{ maxEdgePx: number; webpQuality: number }> = [
+const LADDER: ReadonlyArray<ImageCompressionStep> = [
   { maxEdgePx: 1280, webpQuality: 78 },
   { maxEdgePx: 1024, webpQuality: 65 },
   { maxEdgePx: 800, webpQuality: 55 },
@@ -70,7 +72,7 @@ export async function isDecodableInlineImage(buffer: Buffer): Promise<boolean> {
 export async function compressInlineImage(
   buffer: Buffer,
   mime: string,
-  opts: { targetBytes: number },
+  opts: { targetBytes: number; ladder?: ReadonlyArray<ImageCompressionStep>; timeoutMs?: number },
 ): Promise<{ buffer: Buffer; mime: string } | null> {
   if (buffer.byteLength <= opts.targetBytes) return null;
 
@@ -79,7 +81,7 @@ export async function compressInlineImage(
 
   const work = (async (): Promise<{ buffer: Buffer; mime: string } | null> => {
     let smallest: Buffer | null = null;
-    for (const step of LADDER) {
+    for (const step of opts.ladder ?? LADDER) {
       const out = await sharp(buffer, { failOn: 'none' })
         .rotate()
         .resize({
@@ -108,7 +110,7 @@ export async function compressInlineImage(
   })();
 
   const timeout = new Promise<'timeout'>((resolve) => {
-    setTimeout(() => resolve('timeout'), TIMEOUT_MS).unref?.();
+    setTimeout(() => resolve('timeout'), opts.timeoutMs ?? TIMEOUT_MS).unref?.();
   });
 
   try {

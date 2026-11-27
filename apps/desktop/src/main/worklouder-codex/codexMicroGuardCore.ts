@@ -407,7 +407,24 @@ export class CodexMicroGuardManager {
     }
     // Profiles share launchctl's environment. New instances must serialize the
     // complete read/remove/write transaction, not just each profile's files.
-    await this.rootStore.withLeaseLock(() => this.recoverLocked());
+    let enteredLock = false;
+    try {
+      await this.rootStore.withLeaseLock(() => {
+        enteredLock = true;
+        return this.recoverLocked();
+      });
+    } catch (error) {
+      // A report storm can fill the disk before we can create the cleanup lock.
+      // Do not make stopping the storm depend on allocating another filesystem
+      // entry. Only storage exhaustion/read-only failures qualify; never bypass
+      // a held lock, unsafe path, or permission failure. Keep recovery-required
+      // even after removing the preload: legacy files still need normal cleanup.
+      const code = (error as NodeJS.ErrnoException).code;
+      if (!enteredLock && (code === 'ENOSPC' || code === 'EDQUOT' || code === 'EROFS')) {
+        await this.cleanLaunchEnvironment([]);
+      }
+      throw error;
+    }
     if (inheritedFailed) throw new Error('guard inherited environment could not be cleaned');
   }
 
@@ -446,6 +463,19 @@ export class CodexMicroGuardManager {
       }
     }
 
+    await this.cleanLaunchEnvironment(states);
+    for (const store of cleanedStores) {
+      try {
+        await store.withLeaseLock(async () => store.removeState());
+      } catch {
+        filesFailed = true;
+      }
+    }
+    if (filesFailed) throw new Error('guard legacy files could not be deactivated');
+  }
+
+  /** Uses only launchctl; the emergency path must not read or write guard files. */
+  private async cleanLaunchEnvironment(states: readonly CodexMicroGuardStateRecord[]): Promise<void> {
     const current = await this.readNodeOptions();
     let restored = this.stripNodeOptions(current);
     // Preserve an explicitly empty original value. Never restore snapshot text:
@@ -459,14 +489,6 @@ export class CodexMicroGuardManager {
         throw new Error('guard preload remains in the launch environment');
       }
     }
-    for (const store of cleanedStores) {
-      try {
-        await store.withLeaseLock(async () => store.removeState());
-      } catch {
-        filesFailed = true;
-      }
-    }
-    if (filesFailed) throw new Error('guard legacy files could not be deactivated');
   }
 
   private async readNodeOptions(): Promise<string | null> {

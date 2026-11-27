@@ -122,6 +122,17 @@ const search = await cindy.send({
   callerTool: msg.tool,            // 与 callId 配对验身,必须逐字透传
 });
 // search = { ok:true, provider:'cindy', results:[{ title, url, snippet }] }
+// 失败 = { ok:false, message, errorCode },errorCode 怎么处理:
+//   'UPSTREAM_UNAVAILABLE' = 暂时不可用(上游故障、账号切换中,或刚登录凭证
+//     还在下发 / 同步暂时失败:这段窗口里"未配置"会改报成它)。仅能确认未出网的
+//     凭证准备失败时,才允许同一个 tool-call 的原请求受控重试一次。已出网后的
+//     超时、传输故障或账号切换不能复用该调用;不要只凭错误码自动重试,无法确认时
+//     如实告知用户,必要时由 Agent 发起新的工具调用;
+//   'NOT_CONFIGURED' = 主机或服务端确实没配好搜索,重试没用,如实告诉用户;
+//   'QUOTA_EXHAUSTED' / 'AUTH_REJECTED' = 额度或账号问题,提示用户处理,别重试;
+//   'RATE_LIMITED' = 退避后再试;'INVALID_PARAMS' / 'PERMISSION_DENIED' = 调用
+//     本身不对(参数、callId / callerTool 没透传),改代码;'RESPONSE_INVALID' /
+//     'INTERNAL' = 主机侧异常,别轰炸,报给用户即可。
 // 改图(需详单含 "edit";源图必须是本插件名下的,1–4 张——含用户过户给你的
 // args.attachments 指纹):
 //   { kind: 'edit_image', prompt, hashes: ['<指纹>'] }
@@ -194,6 +205,10 @@ const search = await cindy.send({
 // 主机模型目录暂时不可用时(返回 ok:false 且 message 含"模型目录暂时取不到"):
 //   这是主机侧临时状态,不代表本插件缺这项能力——**不要频繁重试**,
 //   如实告诉用户"当前模型不可用,稍后再试或重启应用",然后结束本次操作。
+// 返回 ok:false 且 errorCode === 'NO_CANDIDATE' 时:Cindy 模型服务未登录,
+//   其他已连接的供应商也没有这类模型。这不是临时状态,重试和重启都没用——
+//   **不要重试**,如实告诉用户去登录 Cindy,或在设置里连接、启用支持这项能力
+//   的模型,然后结束本次操作。判断请用 errorCode,不要匹配 message 文案。
 ```
 
 ### 4.0.1 寄存:让"用户自己的图"也能被 AI 改(deposit_media)
@@ -281,7 +296,10 @@ const r = await cindy.send({
   (cindy 详单未知类目硬拒),
   声明前确认目标用户群的主机版本;
 - `errorCode:'NO_CANDIDATE'` = 用户当前没有可用的快速通道(未配置或凭证
-  不可用)。**这是正常失败面**:如实提示用户,不要重试轰炸;
+  不可用)。**这是正常失败面**:如实提示用户,不要重试轰炸。账号切换、刚登录
+  凭证还在下发或同步暂时失败时主机回 `'INTERNAL'` 而不是它,稍后可以再试。
+  例外:用户在详情页把这个插件钉在非 Cindy 的供应商上时,Cindy 凭证下发救不回
+  那条路由,这段窗口里无候选照样回 `'NO_CANDIDATE'`(账号切换期间仍回 `'INTERNAL'`);
 - `expectJson: true` 时主机会剥掉代码围栏并校验 JSON.parse,解析失败返回
   `errorCode:'BAD_MODEL_OUTPUT'`(message 带原始输出开头供排查)。字段结构
   在 prompt 里自己描述,主机不做逐字段 schema 校验;
@@ -385,7 +403,8 @@ const r = await cindy.send({
   给你另一个长度;
 - `errorCode:'NO_CANDIDATE'` = 当前没有可用的向量型号(用户在设置里停用了、
   该版本/该区域不提供,或主机侧凭证不可用)。**这是正常失败面**,如实提示,别
-  重试轰炸;
+  重试轰炸。账号切换、刚登录凭证还在下发或同步暂时失败时主机回 `'INTERNAL'`
+  而不是它;
 - 失败码是分档的,按它决定下一步,别一律重试:`'INVALID_PARAMS'` = 你的请求
   本身要改(型号不在白名单、维度不支持、texts/documents 同时传、不支持上下文化
   的型号收到 documents),原样重试永远失败;`'RATE_LIMITED'` = 退避后可再来;
@@ -398,3 +417,44 @@ const r = await cindy.send({
 
 页面用 SDK onprogress 接收工具进度；文件选择、上传、下载会自动报告自身进度。
 进度值保持递增，成功、失败、取消都应结束等待。完整写法见[§4.23](plugin-interactive-pages.md)。
+
+### 决策与重排模型
+
+在 `cindy.models` 声明 `decisions` 或 `rerank`，并在安装或更新时确认相应权限后，可通过 `cindy.send` 同步调用。
+旧版本中作为未知字段保存的声明不会随宿主升级自动获得权限，插件原有能力照常可用。
+这些接口使用主人的 Cindy AI 模型额度，不经过媒体生成 Guide，也不创建媒体任务。
+请用 `minCindyVersion` 声明完成验收的最低客户端版本，并处理旧客户端不支持的响应。
+
+```js
+const models = await cindy.send({ type: 'cindy-request', kind: 'list_models', api: 'rerank' });
+const ranked = await cindy.send({
+  type: 'cindy-request', kind: 'rerank', model: models.models[0].model,
+  providerId: models.models[0].providerId, query: '用户的问题',
+  documents: ['候选内容一', '候选内容二'], top_n: 1,
+});
+```
+
+`list_models` 只列当前账号可用且未停用、插件已声明的接口模型。
+省略 `model` 时仅在恰好一个模型可用时自动选择，否则返回 `MODEL_REQUIRED`。
+决策请求使用 `kind: 'decisions'`、`questions`、`state`；问题按 ID 映射到
+`{ type: 'noul' | 'choice' | 'score' | 'box', instructions, criteria? }`。
+`criteria` 按题型提供：`noul` 可省略，或写 `{ true: '成立的标准', false: '不成立的标准' }`；
+`choice` 必须写 `{ 选项ID: '选项说明' }`；`score` 必须写按从低到高排列的等级说明数组；`box` 省略。
+图片放在 state 顶层数组的 `{ type: 'image_url', image_url: { url } }`，url 只能使用
+图片 data URL 或本插件名下的受管媒体。每次最多 16 张、图片总大小和请求体分别不超过
+32 MiB；`typesafe/` 模型要求图片每边至少 256 像素。主机会校正方向、缩放并转成 PNG/JPEG。
+题型支持由所选模型决定，`box` 需要图片且仅支持该题型的模型可用。
+
+成功结果包含 `model`、原始 `usage`、`estimatedCost: { amount, currency } | null`，
+决策另含 `answers`，重排另含 `results: [{ index, relevance_score }]`，不重复返回文档原文。
+`answers` 以问题 ID 为键：`noul` 是成立的概率（0–1）；`choice` 是概率最高的选项 ID，
+`probabilities` 是各选项概率；`score` 是等级序号（从 0 开始）按概率加权的平均值，不是百分制，
+最可能的等级看 `probabilities`，序号含义看 `legend`；`box` 是相对图片宽高的 0–1 比例
+`{ left, top, right, bottom }`。答案是概率而不是确定结论，需要是/否或分档时由插件按业务设阈值。
+重排的 `index` 是 `documents` 的下标，`relevance_score` 越高越相关，只适合在同一次请求内比较。
+估算费用计入任务和当天费用；缺价时不猜测金额。失败返回
+`{ ok: false, errorCode, message }`；模型提交的失败还带 `retryable` 和 `outcomeKnown`。
+超时或断网后的 `SUBMISSION_OUTCOME_UNKNOWN`，以及 HTTP 5xx 返回的 `outcomeKnown: false`，
+表示请求可能已执行，不得自动重提付费请求。HTTP 429 表示明确限流，可稍后重试。
+
+`media_request`：见 [§4.0.4](plugin-media.md)。

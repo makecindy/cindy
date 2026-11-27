@@ -20,6 +20,7 @@ const source = (relative: string) =>
 
 describe('unsupported text preview guard', () => {
   it('allows text-like files and rejects non-text formats', () => {
+    expect(isTextPreviewSupported('Contract.sol')).toBe(true);
     expect(isTextPreviewSupported('src/App.tsx')).toBe(true);
     expect(isTextPreviewSupported('debug.log')).toBe(true);
     expect(isTextPreviewSupported('data.csv')).toBe(true);

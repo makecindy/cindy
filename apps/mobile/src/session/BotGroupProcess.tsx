@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useFocusEffect } from 'expo-router';
 import { remoteSessionStore } from './remoteSessionStore';
 import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscription';
@@ -27,20 +27,47 @@ import type { RemoteMessage } from './types';
 
 type ProcessMessage = BotGroupProcessMessage & Partial<Pick<RemoteMessage, 'id' | 'mobileToolInputProjection'>>;
 
+type ProcessResult = { messages: BotGroupProcessMessage[]; failed: boolean };
+type CachedProcess = {
+  result: ProcessResult;
+  boundary: boolean;
+  mirror: readonly RemoteMessage[];
+  invalidation: object | undefined;
+  subscription: number | null;
+  connectionEpoch: number | undefined;
+};
+const ProcessCache = createContext<Map<string, CachedProcess> | null>(null);
+
+/** Retain at most 64 histories for this focused timeline, never a global/account cache.
+ * Rows still release all work when offscreen. Blur, owner/scope changes and leaving
+ * the page discard the cache; retaining data never starts a subscription or read. */
+export function BotGroupProcessCacheProvider({ scope, active = true, children }: { scope: string; active?: boolean; children: ReactNode }) {
+  const { accountGeneration } = useAuth();
+  const cache = useMemo(() => new Map<string, CachedProcess>(), [accountGeneration, scope]);
+  useFocusEffect(useCallback(() => () => cache.clear(), [cache]));
+  useEffect(() => { if (!active) cache.clear(); }, [active, cache]);
+  return <ProcessCache.Provider value={cache}>{children}</ProcessCache.Provider>;
+}
+
 export function BotGroupProcess({ process, owned, deviceId }: { process: BotGroupProcessRef; owned: boolean; deviceId: string }) {
   const { accountGeneration } = useAuth();
+  const cache = useContext(ProcessCache);
   const executionDeviceId = process.deviceId || deviceId;
-  if (!owned || !executionDeviceId) return null;
-  return <BotGroupProcessHistory key={`${accountGeneration}:${executionDeviceId}:${process.sessionId}:${process.clientId}:${process.executionId}`} process={process} deviceId={executionDeviceId} />;
+  const cacheKey = JSON.stringify([accountGeneration, executionDeviceId, process.groupId, process.sessionId, process.clientId, process.executionId]);
+  if (!owned || !executionDeviceId) { cache?.delete(cacheKey); return null; }
+  return <BotGroupProcessHistory key={cacheKey} cacheKey={cacheKey} process={process} deviceId={executionDeviceId} />;
 }
-function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProcessRef; deviceId: string }) {
+function BotGroupProcessHistory({ process, deviceId, cacheKey }: { process: BotGroupProcessRef; deviceId: string; cacheKey: string }) {
   const { t } = useTranslation();
   const { colors } = useTheme();
-  const { invoke, subscribe, unsubscribe, getSubscriptionIdentity } = useDeviceLink();
+  const link = useDeviceLink();
+  const { invoke, subscribe, unsubscribe, getSubscriptionIdentity } = link;
+  const latestLink = useRef(link); latestLink.current = link;
+  const cache = useContext(ProcessCache);
   const subscriptionIdentity = getSubscriptionIdentity?.(deviceId, [`session:${process.sessionId}`]) ?? null;
   const refreshAfterRecovery = useRef<(() => void) | null>(null);
   const observedSubscription = useRef(subscriptionIdentity);
-  const [result, setResult] = useState<{ messages: BotGroupProcessMessage[]; failed: boolean }>();
+  const [result, setResult] = useState<ProcessResult | undefined>(() => cache?.get(cacheKey)?.result);
   const [attempt, retry] = useState(0);
   const [subscriptionFailed, setSubscriptionFailed] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -50,6 +77,28 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
     let cancelled = false;
     let closed = false;
     setSubscriptionFailed(false);
+    const snapshot = () => ({
+      mirror: remoteSessionStore.getMessages(process.sessionId),
+      invalidation: remoteSessionStore.getHistoryInvalidationToken(process.sessionId),
+      subscription: latestLink.current.getSubscriptionIdentity?.(deviceId, [`session:${process.sessionId}`]) ?? null,
+      connectionEpoch: latestLink.current.getConnectionState?.(deviceId).connectionEpoch,
+    });
+    const cached = cache?.get(cacheKey);
+    const current = snapshot();
+    // A final answer alone is not a boundary: late tool results may still arrive.
+    // Without a continuous ACK, reconcile that tail on return. Closed turns have
+    // the same stop condition as the reader and need no topic just to be shown.
+    const reusable = attempt === 0 && cached && cached.invalidation === current.invalidation
+      && cached.connectionEpoch === current.connectionEpoch && (cached.boundary
+        || cached.mirror === current.mirror && cached.subscription === current.subscription
+          && (current.subscription !== null || cached.result.failed));
+    if (reusable) {
+      // Touch insertion order for bounded LRU retention outside virtual cells.
+      cache?.delete(cacheKey); cache?.set(cacheKey, cached);
+      setResult(cached.result); setLoading(false);
+      if (cached.boundary) return;
+    }
+    let latestResult = cached?.result ?? result;
     let reading = false;
     let refreshPending = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -72,6 +121,14 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
       clearTimeout(timer);
       reading = true;
       refreshPending = false;
+      const atRead = snapshot();
+      const remember = (result: ProcessResult) => {
+        latestResult = result;
+        cache?.delete(cacheKey);
+        cache?.set(cacheKey, { ...atRead, result, boundary: closed && !result.failed });
+        while (cache && cache.size > 64) cache.delete(cache.keys().next().value!);
+        setResult(result); setLoading(false);
+      };
       const active = () => !cancelled;
       setLoading(true);
       void readBotGroupProcessMessages(process, clientId => invoke<BotGroupProcessMessage[]>(deviceId,
@@ -79,8 +136,8 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
           background: true,
           preSend: () => { if (!active()) throw new Error('Group history read cancelled'); },
         }), () => !active(), () => { if (active()) stopUpdates(); })
-        .then(messages => { if (active()) { setResult({ messages, failed: false }); setLoading(false); } })
-        .catch(() => { if (active()) { setResult(previous => ({ messages: previous?.messages ?? [], failed: true })); setLoading(false); } })
+        .then(messages => { if (active()) remember({ messages, failed: false }); })
+        .catch(() => { if (active()) remember({ messages: latestResult?.messages ?? [], failed: true }); })
         .finally(() => {
           reading = false;
           if (refreshPending) refresh();
@@ -108,9 +165,9 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
       changed();
     });
     refreshAfterRecovery.current = changed;
-    refresh();
+    if (!reusable) refresh();
     return () => { cancelled = true; refreshAfterRecovery.current = null; stopUpdates(); };
-  }, [invoke, subscribe, unsubscribe, deviceId, process.sessionId, process.clientId, process.executionId, attempt]));
+  }, [invoke, subscribe, unsubscribe, deviceId, process.sessionId, process.clientId, process.executionId, attempt, cache, cacheKey]));
   // A restarted host has no push backlog. Its confirmed subscription changes
   // even when the hidden lane's global history snapshot cannot enter the mirror.
   // Keep this separate from focus ownership so a re-ACK never churns the topic.

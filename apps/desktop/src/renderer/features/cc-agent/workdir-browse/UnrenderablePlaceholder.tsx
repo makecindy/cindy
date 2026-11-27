@@ -83,7 +83,7 @@ export function UnrenderablePlaceholder({
         </div>
       </div>
       {localCopyPath ? (
-        <OpenInSystemActions absPath={localCopyPath} />
+        <OpenInSystemActions absPath={localCopyPath} systemPreview={false} />
       ) : (
         !remote && <OpenInSystemActions absPath={absPath} />
       )}

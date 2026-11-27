@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseProviderShareInsights } from '../../../shared/providerShareInsights';
 const state = vi.hoisted(() => ({
   owner: 0,
@@ -7,6 +7,7 @@ const state = vi.hoisted(() => ({
   snapshot: null as unknown,
   personal: false,
   pool: undefined as unknown,
+  endpoint: 'region-a',
 }));
 const remote = vi.hoisted(() => vi.fn());
 const readers = vi.hoisted(() => ({ claude: vi.fn(), xai: vi.fn(), codex: vi.fn() }));
@@ -20,7 +21,7 @@ vi.mock('../../authManager.js', () => ({
     user: { membershipKind: state.personal ? 'personal' : 'organization' },
   }),
 }));
-vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: vi.fn() }));
+vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => state.endpoint }));
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
   getDesktopProviderService: () => ({ listProviders: async () => state.providers }),
 }));
@@ -63,9 +64,45 @@ beforeEach(() => {
   state.providers = [{ id: 'xd', connected: true, auth: { method: 'apiKey' } }];
   state.snapshot = null;
   state.pool = undefined;
+  state.endpoint = 'region-a';
   remote.mockReset().mockResolvedValue(ready);
 });
+afterEach(() => vi.useRealTimers());
 describe('share quota projection', () => {
+  // Unit, server-channel-review: a read longer than the 30s cache age used to
+  // start another native quota RPC; the same owner/provider in another region
+  // also reused its result. The production account reader is the tested entry.
+  it('joins a slow quota read beyond cache expiry without extending its freshness', async () => {
+    vi.useFakeTimers();
+    state.providers = [{ id: 'anthropic', connected: true, source: 'builtin', auth: { method: 'oauth', native: 'claude' } }];
+    let finish!: (value: unknown) => void;
+    readers.claude.mockReset().mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
+      .mockResolvedValue({ updatedAt: 2, fiveHour: { utilization: 20, resetsAt: null } });
+    const first = readProviderShareQuotaAccount('anthropic');
+    await vi.advanceTimersByTimeAsync(30_001);
+    const second = readProviderShareQuotaAccount('anthropic');
+    await vi.advanceTimersByTimeAsync(0);
+    const callsBeforeReply = readers.claude.mock.calls.length;
+    finish({ updatedAt: 1, fiveHour: { utilization: 10, resetsAt: null } });
+    const results = await Promise.all([first, second]);
+    expect(callsBeforeReply).toBe(1);
+    expect(results.map(row => row.updatedAt)).toEqual([1, 1]);
+    expect((await readProviderShareQuotaAccount('anthropic')).updatedAt).toBe(2);
+    expect(readers.claude).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not reuse a display quota across regions or return a late result after a region change', async () => {
+    state.providers = [{ id: 'anthropic', connected: true, source: 'builtin', auth: { method: 'oauth', native: 'claude' } }];
+    readers.claude.mockReset().mockResolvedValue({ updatedAt: 1, fiveHour: { utilization: 10, resetsAt: null } });
+    await readProviderShareQuotaAccount('anthropic');
+    state.endpoint = 'region-b';
+    readers.claude.mockResolvedValue({ updatedAt: 2, fiveHour: { utilization: 20, resetsAt: null } });
+    expect((await readProviderShareQuotaAccount('anthropic')).updatedAt).toBe(2);
+    state.owner++;
+    readers.claude.mockImplementationOnce(async () => { state.endpoint = 'region-c'; return { updatedAt: 3 }; });
+    await expect(readProviderShareQuotaAccount('anthropic')).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+  });
+
   it('distinguishes real zero from unavailable and unsupported sources', async () => {
     state.snapshot = { fetchedAt: 1, maxBudget: 100, spend: 100, currency: 'USD' };
     expect(await readProviderShareQuotaAccount('xd')).toMatchObject({
@@ -137,16 +174,60 @@ describe('share quota projection', () => {
     expect(JSON.stringify(result)).not.toContain('secret');
   });
   // Regression: a shared multi-account subscription showed only its default account's quota.
-  // #10405, unit: no assignable accounts is not a single-account fallback. A pure
-  // historical alias still serves its original shared account after it moved elsewhere.
+  // Unit tier: merged subscription aliases now resolve their pinned serving account through
+  // readSubscriptionPoolAccountUsages, so an empty pool (paused/signed-out/disconnected) must
+  // return unavailable rather than falling back to the legacy single-account reader.
   it.each([false, true])('does not borrow old quota from an empty target pool (compatibility alias: %s)', async alias => {
     state.providers = [{ id: 'legacy', connected: true, auth: { method: 'oauth', native: 'claude' },
       ...(alias ? { subscriptionPoolAlias: true } : { subscriptionAccountPool: 'anthropic' }) }];
     state.pool = [];
+    readers.claude.mockClear();
     readers.claude.mockResolvedValue({ updatedAt: 1, sevenDay: { utilization: 25, resetsAt: Date.now() / 1000 + 3600 } });
     const result = await readProviderShareQuota('legacy');
-    expect(result.accounts[0]).toMatchObject(alias ? { state: 'ready', windows: [{ remainingPercent: 75 }] }
-      : { state: 'unavailable', windows: [] });
+    expect(result.accounts[0]).toMatchObject({ state: 'unavailable', windows: [] });
+    expect(readers.claude).not.toHaveBeenCalled();
+  });
+
+  // Regression (unit): shared created Claude subscriptions (`anthropic-sub-*`) previously
+  // misrouted into codexSource whenever providerWeeklyQuotaSource could not classify the
+  // provider view. Use the authoritative pool `kind` returned with each pooled usage entry,
+  // and classify opencode-go as unsupported instead of falling into Codex.
+  it('uses the authoritative pool kind for created subscriptions and marks opencode-go unsupported', async () => {
+    const resetsAt = Date.now() / 1000 + 3600;
+    state.providers = [{
+      id: 'anthropic-sub-a1b2c3d4',
+      connected: true,
+      auth: { method: 'oauth' },
+      subscriptionAccountPool: 'anthropic',
+    }];
+    state.pool = [{
+      kind: 'anthropic',
+      usage: { claudeUsage: { updatedAt: 10, fiveHour: { utilization: 20, resetsAt }, sevenDay: { utilization: 45, resetsAt } } },
+    }];
+    const claudeResult = await readProviderShareQuota('anthropic-sub-a1b2c3d4');
+    expect(claudeResult.accounts).toHaveLength(1);
+    expect(claudeResult.accounts[0]).toMatchObject({
+      state: 'ready',
+      windows: [
+        { kind: 'session', remainingPercent: 80 },
+        { kind: 'week', remainingPercent: 55 },
+      ],
+    });
+
+    state.owner++;
+    state.pool = undefined;
+    state.providers = [{
+      id: 'opencode-go-1',
+      connected: true,
+      auth: { method: 'apiKey' },
+      access: { kind: 'coding-plan', product: 'OpenCode Go' },
+      agents: ['claude-code'],
+      routing: {
+        'claude-code': { kind: 'anthropic-messages', baseUrl: 'https://opencode.ai/zen/go/v1' },
+      },
+    }];
+    expect(await readProviderShareQuotaAccount('opencode-go-1')).toMatchObject({ state: 'unsupported', windows: [] });
+    expect(readers.codex).not.toHaveBeenCalled();
   });
 
   // #10405 unit: a named target must expand its accounts too, selecting the quota family
@@ -155,7 +236,7 @@ describe('share quota projection', () => {
     const providerId = `${native}-target`;
     state.providers = [{ id: providerId, connected: true, auth: { method: 'oauth', native } }];
     const resetsAt = Date.now() / 1000 + 3600;
-    state.pool = [25, 60].map(percent => ({ isDefault: false, usage: native === 'claude'
+    state.pool = [25, 60].map(percent => ({ usage: native === 'claude'
       ? { claudeUsage: { updatedAt: 1, sevenDay: { utilization: percent, resetsAt } } }
       : { codexUsage: { appServerBuckets: { codex: { updatedAt: 1,
         secondary: { usedPercent: percent, windowMinutes: 10_080, resetsAt } } } } } }));
@@ -174,9 +255,8 @@ describe('share quota projection', () => {
       updatedAt: 1,
     });
     state.pool = [
-      { isDefault: true, usage: undefined },
+      { usage: { claudeUsage: { updatedAt: 1, sevenDay: { utilization: 86, resetsAt } } } },
       {
-        isDefault: false,
         usage: {
           claudeUsage: {
             updatedAt: 2,
@@ -203,9 +283,11 @@ describe('share quota projection', () => {
     const member = await readProviderShareQuotaAccountResult('anthropic');
     expect(member).toMatchObject({ windows: [{ kind: 'week' }], accounts: result.accounts });
     state.owner++;
-    state.pool = [{ isDefault: true, usage: undefined }];
+    state.pool = [(state.pool as unknown[])[0]];
+    readers.claude.mockClear();
     expect(await readProviderShareQuota('anthropic')).toMatchObject({ group: false, accounts: [{ windows: [{ kind: 'week' }] }] });
     expect(await readProviderShareQuotaAccountResult('anthropic')).not.toHaveProperty('accounts');
+    expect(readers.claude).not.toHaveBeenCalled();
   });
   it('expands pooled accounts reported by a group member computer and keeps older members readable', async () => {
     state.group = {

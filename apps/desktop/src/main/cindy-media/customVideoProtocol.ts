@@ -13,9 +13,14 @@ export function videoConnectionRevision(providerId: string, modelId: string, bin
 }
 
 /** Validate at the paid boundary; a Guide shown to an agent is not enforcement. */
-export function validateCustomVideoBody(body: Record<string, unknown>, image: boolean, protocol: ProviderVideoApi = 'xai-videos'): void {
+export function isXaiVideo15(modelId: string): boolean {
+  return modelId.slice(modelId.lastIndexOf('/') + 1) === 'grok-imagine-video-1.5';
+}
+
+export function validateCustomVideoBody(body: Record<string, unknown>, image: boolean, protocol: ProviderVideoApi = 'xai-videos', modelId = ''): void {
   if (protocol === 'minimax-videos') return validateMinimaxVideoBody(body, image);
   if (protocol === 'openai-videos') return validateOpenaiVideoBody(body, image);
+  if (isXaiVideo15(modelId)) return validateXaiVideo15Body(body, image);
   const allowed = new Set(['prompt', 'duration', 'resolution', 'aspect_ratio', ...(image ? ['image'] : [])]);
   if (Object.keys(body).some(key => !allowed.has(key))) throw new Error('视频请求包含当前协议不支持的字段');
   if (typeof body.prompt !== 'string' || !body.prompt.trim()) throw new Error('视频请求必须提供 prompt');
@@ -27,6 +32,49 @@ export function validateCustomVideoBody(body: Record<string, unknown>, image: bo
     if (!ref || Array.isArray(ref) || Object.keys(ref).length !== 1 || typeof ref.url !== 'string' || !ref.url) throw new Error('图生视频必须提供一张图片: image: {url}');
     // Local managed refs are expanded after this check, through the media store.
     if (!/^(cindy-media:\/\/blobs\/|xdt-image:\/\/|data:image\/(png|jpeg|webp);base64,|https:\/\/)/.test(ref.url)) throw new Error('图生视频需要有效的图片引用');
+  }
+}
+
+function validateXaiVideo15Body(body: Record<string, unknown>, image: boolean): void {
+  const fields = ['prompt', 'duration', 'resolution', 'aspect_ratio', ...(image ? ['image', 'last_frame', 'keyframes', 'reference_images'] : [])];
+  if (Object.keys(body).some(key => !fields.includes(key))) throw new Error('视频请求包含当前协议不支持的字段');
+  const reference = body.last_frame !== undefined || body.keyframes !== undefined || body.reference_images !== undefined;
+  if (body.resolution !== undefined && (typeof body.resolution !== 'string' || !['480p', '720p', ...(reference ? [] : ['1080p'])].includes(body.resolution)))
+    throw new Error('首尾帧、关键帧和参考图视频最高支持 720p');
+  const hasInput = body.image !== undefined || reference;
+  if ((!hasInput || body.prompt !== undefined) && (typeof body.prompt !== 'string' || !body.prompt.trim()))
+    throw new Error('文生视频必须提供 prompt');
+  if (image && !hasInput) throw new Error('图生视频必须提供首帧、尾帧、关键帧或参考图');
+  if (body.duration !== undefined && (!Number.isInteger(body.duration) || Number(body.duration) < 1 || Number(body.duration) > 15))
+    throw new Error('视频时长必须为 1–15 秒的整数');
+  if (body.aspect_ratio !== undefined && (typeof body.aspect_ratio !== 'string' || !['16:9', '9:16', '1:1', '4:3', '3:4', '3:2', '2:3', '21:9', '5:2'].includes(body.aspect_ratio)))
+    throw new Error('视频画幅不受支持');
+  const frame = (value: unknown) => {
+    if (!plainObject(value) || Object.keys(value).length !== 1 || typeof value.url !== 'string' ||
+        !/^(cindy-media:\/\/blobs\/|xdt-image:\/\/|data:image\/(png|jpeg|webp);base64,|https:\/\/)/.test(value.url))
+      throw new Error('图片必须是有效的 image: {url} 引用');
+  };
+  if (body.image !== undefined) frame(body.image);
+  if (body.last_frame !== undefined) frame(body.last_frame);
+  if (body.reference_images !== undefined) {
+    if (!Array.isArray(body.reference_images) || body.reference_images.length < 1 || body.reference_images.length > 14)
+      throw new Error('参考图数量必须为 1–14 张');
+    body.reference_images.forEach(frame);
+  }
+  if (body.keyframes !== undefined) {
+    if (!Array.isArray(body.keyframes) || body.keyframes.length < 1 || body.keyframes.length > 4)
+      throw new Error('关键帧数量必须为 1–4 张');
+    const slots = new Set<number>();
+    for (const keyframe of body.keyframes) {
+      if (!plainObject(keyframe) || Object.keys(keyframe).some(key => !['image', 'timestamp_s'].includes(key)) ||
+          typeof keyframe.timestamp_s !== 'number' || !Number.isFinite(keyframe.timestamp_s) ||
+          keyframe.timestamp_s <= 0 || keyframe.timestamp_s >= Number(body.duration ?? 8))
+        throw new Error('关键帧时间必须位于视频内部');
+      frame(keyframe.image);
+      const slot = Math.round(keyframe.timestamp_s * 3);
+      if (slots.has(slot)) throw new Error('关键帧不能落在同一个 1/3 秒时间格');
+      slots.add(slot);
+    }
   }
 }
 

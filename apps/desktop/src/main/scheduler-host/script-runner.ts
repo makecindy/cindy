@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 
 import { eq } from 'drizzle-orm';
@@ -140,6 +141,15 @@ function safeError(error: unknown): { code: string; message: string } {
   };
 }
 
+function isSameOrChildPath(candidate: string, root: string): boolean {
+  const resolvedRoot = path.resolve(root);
+  const resolvedCandidate = path.resolve(candidate);
+  const relative = process.platform === 'win32'
+    ? path.win32.relative(resolvedRoot.toLowerCase(), resolvedCandidate.toLowerCase())
+    : path.relative(resolvedRoot, resolvedCandidate);
+  return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
 export class ScriptScheduleRunner {
   constructor(
     private readonly deps: ScriptScheduleRunnerDeps,
@@ -189,7 +199,18 @@ export class ScriptScheduleRunner {
         return { sessionId: '', skipped: true,
           resultText: `Script stopped: target session ${owner?.status ?? 'missing'}` };
       }
-      if (restore) await this.targets.restoreScheduledTarget(schedule.targetSessionId, owner, ctx.signal);
+      const scriptUsesOwnerWorktree =
+        !!owner.workingDir &&
+        !!schedule.workingDir?.trim() &&
+        isSameOrChildPath(schedule.workingDir, owner.workingDir);
+      if (restore) {
+        await this.targets.restoreScheduledTarget(
+          schedule.targetSessionId,
+          owner,
+          ctx.signal,
+          ...(scriptUsesOwnerWorktree ? [{ allowUnrestoredWorktreeFallback: false }] : []),
+        );
+      }
     }
 
     return null;
@@ -300,6 +321,11 @@ export class ScriptScheduleRunner {
 
     let stdoutBuffer = '';
     let stderr = '';
+    let stderrTail = '';
+    const collectStderr = (chunk: string): void => {
+      stderr = capAppend(stderr, chunk, OUTPUT_CAP);
+      stderrTail = (stderrTail + chunk).slice(-1_000);
+    };
     // chunk 边界可能正好切在一个多字节 UTF-8 字符中间(中文/emoji 常见)——逐 chunk
     // 独立 toString('utf8') 会把被截断的字节解成替换字符(U+FFFD),即使后续 chunk
     // 补全了剩余字节也回不去了(codex review 第七轮发现:CJK resultText/call
@@ -526,7 +552,7 @@ export class ScriptScheduleRunner {
       }
     });
     child.stderr?.on('data', (chunk: Buffer) => {
-      stderr = capAppend(stderr, stderrDecoder.write(chunk), OUTPUT_CAP);
+      collectStderr(stderrDecoder.write(chunk));
     });
 
     writeFrame({
@@ -593,7 +619,7 @@ export class ScriptScheduleRunner {
     // 子进程已经没了,decoder 里可能还压着一段没消费的多字节尾巴——在读取
     // stdoutBuffer/stderr 前先 flush,否则被截断的最后一个字符会丢失/半解码。
     stdoutBuffer += stdoutDecoder.end();
-    stderr = capAppend(stderr, stderrDecoder.end(), OUTPUT_CAP);
+    collectStderr(stderrDecoder.end());
 
     // 终态前有界收干净在途 broker 调用。broker 不支持取消——脚本已发出的写操作
     // (sessions.dispatch/jira.add_comment)只能等它落地,不等就抛终态的话,run
@@ -629,7 +655,7 @@ export class ScriptScheduleRunner {
             : exit.spawnError
               ? new Error(`script spawn failed: ${exit.spawnError}`)
               : exit.code !== 0
-                ? new Error(`script exited with code ${exit.code}: ${stderr.slice(0, 1_000)}`)
+                ? new Error(`script exited with code ${exit.code}: ${stderrTail}`)
                 : null);
       if (preTerminalError) {
         await drainInflightCalls();

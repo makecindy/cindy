@@ -4,6 +4,10 @@
  * 两者共用 useContextSheetMediaAssets 加载资产,点选走页面注入的 onToggleAsset
  * (页面负责 getAssetInfoAsync 换 localUri → 原生直传既有 presign→OSS 链路)。
  * 选中态由页面传入 selectedAssetIds(assetId ↔ 附件映射的真相在页面)。
+ *
+ * 页面传入 selection 时,缩略图右上角多一个选择圈:点圈是多选(先留在面板里,由底部按钮
+ * 一次加入);点照片本身仍是单张即加入。已经选了照片后,点照片也按选中 / 取消处理,
+ * 免得一次误触把已选的丢掉(2026-11-16 用户要求)。
  */
 import { Check } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
@@ -19,6 +23,7 @@ import {
 } from 'react-native';
 import { Text } from '@/components/AppText';
 import { useContextSheetDismissAction } from '@/session/ContextSheet';
+import type { ContextSheetMediaSelection } from '@/session/ContextSheetMediaSelection';
 import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import {
   useContextSheetMediaAssets,
@@ -26,6 +31,8 @@ import {
 } from '@/session/useContextSheetMediaAssets';
 
 const STRIP_THUMB_SIZE = 80;
+/** 选择圈的点按区域:可见的圈只有 22,热区按独立触控目标补到 44×44。 */
+const SELECT_HIT_SIZE = 44;
 const GRID_COLUMNS = 3;
 
 export interface ContextSheetMediaCallbacks {
@@ -36,6 +43,8 @@ export interface ContextSheetMediaCallbacks {
   /** 正在上传中的 assetId 集(对应格子显示 spinner 并禁点;其余照常可选——上传已后台并发,不再整面板锁定)。 */
   busyAssetIds?: ReadonlySet<string>;
   disabled?: boolean;
+  /** 多选待选集;提供后每张缩略图显示选择圈。 */
+  selection?: ContextSheetMediaSelection;
 }
 
 /** 主视图顶部的最近照片横向条(对照设计稿 PhotoStrip)。 */
@@ -45,9 +54,11 @@ export function RecentPhotosStrip({
   selectedAssetIds,
   busyAssetIds,
   disabled,
+  selection,
   testID,
 }: ContextSheetMediaCallbacks & { enabled: boolean; testID?: string }) {
   const dismiss = useContextSheetDismissAction();
+  const selecting = !!selection && selection.assets.length > 0;
   const styles = useThemedStyles(makeMediaStyles);
   const media = useContextSheetMediaAssets({ enabled, kind: 'recent' });
 
@@ -79,7 +90,9 @@ export function RecentPhotosStrip({
           disabled={disabled || selectedAssetIds.has(asset.id) || busyAssetIds?.has(asset.id)}
           key={asset.id}
           // Validate/enqueue immediately; the caller can defer focus until dismissal.
-          onPress={() => onToggleAsset(asset, dismiss)}
+          onPress={() => (selecting ? selection.toggle(asset) : onToggleAsset(asset, dismiss))}
+          onToggleSelect={selection ? () => selection.toggle(asset) : undefined}
+          pendingIndex={selection?.order.get(asset.id)}
           selected={selectedAssetIds.has(asset.id)}
           size={STRIP_THUMB_SIZE}
         />
@@ -144,6 +157,8 @@ function MediaThumb({
   busy,
   disabled,
   onPress,
+  onToggleSelect,
+  pendingIndex,
   selected,
   size,
 }: {
@@ -151,6 +166,10 @@ function MediaThumb({
   busy: boolean;
   disabled?: boolean;
   onPress: () => void;
+  /** 提供则显示选择圈(多选入口)。 */
+  onToggleSelect?: () => void;
+  /** 待选序号(从 1 起);与 selected(已附加勾选)互斥展示。 */
+  pendingIndex?: number;
   selected: boolean;
   size: number;
 }) {
@@ -158,32 +177,53 @@ function MediaThumb({
   const { colors } = useTheme();
   const { t } = useTranslation();
   const accessibilityLabel = t('interaction.contextSheet.mediaSelect', { name: asset.filename });
+  const inactive = !!disabled || busy;
+  const picked = pendingIndex !== undefined;
   return (
-    <Pressable
-      accessibilityLabel={accessibilityLabel}
-      accessibilityRole="button"
-      accessibilityState={{ disabled: disabled || busy, selected }}
-      disabled={disabled || busy}
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.thumb,
-        { height: size, width: size },
-        pressed && styles.thumbPressed,
-      ]}
-      testID={`contextSheet.mediaThumb.${asset.id}`}
-    >
-      <Image contentFit="cover" recyclingKey={asset.id} source={{ uri: asset.uri }} style={styles.thumbImage} transition={0} />
+    // 照片与选择圈是并列的两个点按目标,不嵌套:圈在上层只占右上角,其余都是照片本身。
+    <View style={[styles.thumb, { height: size, width: size }]}>
+      <Pressable
+        accessibilityLabel={accessibilityLabel}
+        accessibilityRole="button"
+        accessibilityState={{ disabled: inactive, selected: selected || picked }}
+        disabled={inactive}
+        onPress={onPress}
+        style={({ pressed }) => [styles.thumbImage, pressed && styles.thumbPressed]}
+        testID={`contextSheet.mediaThumb.${asset.id}`}
+      >
+        <Image contentFit="cover" recyclingKey={asset.id} source={{ uri: asset.uri }} style={styles.thumbImage} transition={0} />
+      </Pressable>
       {selected ? (
-        <View style={styles.thumbBadge}>
+        <View pointerEvents="none" style={styles.thumbBadge}>
           <Check color={colors.ctaText} size={iconSize.xs} strokeWidth={iconStroke.bold} />
         </View>
       ) : null}
       {busy ? (
-        <View style={styles.thumbBusyOverlay}>
-          <ActivityIndicator color={colors.ctaText} size="small" />
+        <View pointerEvents="none" style={styles.thumbBusyOverlay}>
+          {/* 遮罩两种模式都是深色,转圈用恒白;ctaText 在深色模式反相为近黑,压在上面看不见。 */}
+          <ActivityIndicator color={colors.swipeActionText} size="small" />
         </View>
       ) : null}
-    </Pressable>
+      {onToggleSelect && !selected && !busy ? (
+        <Pressable
+          accessibilityLabel={accessibilityLabel}
+          accessibilityRole="checkbox"
+          accessibilityState={{ checked: picked, disabled: !!disabled }}
+          disabled={disabled}
+          onPress={onToggleSelect}
+          style={({ pressed }) => [styles.thumbSelectHit, pressed && styles.thumbPressed]}
+          testID={`contextSheet.mediaSelect.${asset.id}`}
+        >
+          {picked ? (
+            <View style={styles.thumbBadge}>
+              <Text style={styles.thumbBadgeText}>{pendingIndex}</Text>
+            </View>
+          ) : (
+            <View style={styles.thumbSelectRing} />
+          )}
+        </Pressable>
+      ) : null}
+    </View>
   );
 }
 
@@ -244,11 +284,32 @@ function makeMediaStyles(colors: ThemeColors) {
       top: 6,
       width: 22,
     },
+    thumbSelectHit: {
+      height: SELECT_HIT_SIZE,
+      position: 'absolute' as const,
+      right: 0,
+      top: 0,
+      width: SELECT_HIT_SIZE,
+    },
+    // 空选择圈压在任意照片上:恒深底 + 恒白描边(ctaText 在深色模式反相为近黑,不适合)。
+    // 圈比 1px 描边略粗,在浅色照片上才认得出来。
+    thumbSelectRing: {
+      backgroundColor: colors.overlay,
+      borderColor: colors.swipeActionText,
+      borderRadius: radius.pill,
+      borderWidth: 1.5,
+      height: 22,
+      position: 'absolute' as const,
+      right: 6,
+      top: 6,
+      width: 22,
+    },
     thumbBadgeText: {
       color: colors.ctaText,
       fontSize: typeScale.caption,
       lineHeight: lineHeight.caption,
       fontWeight: fontWeight.semibold,
+      textAlign: 'center' as const,
     },
     thumbBusyOverlay: {
       alignItems: 'center' as const,

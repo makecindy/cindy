@@ -12,12 +12,13 @@
 import { additionalSettings } from './AdditionalSettings.settings-search';
 import { useSettingDefinition } from './useSettingDefinition';
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle, CheckCircle2, Puzzle, RefreshCw } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Download, Puzzle, RefreshCw } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { Button } from '@/components/ui/button';
 import { SettingsBlock, SettingsRow } from '@/components/ui/settings-rows';
+import { withDefaultOverride, type DefaultOverrideReset } from './DefaultOverrideControls';
 import type {
   BrowserBackendHealth,
   BrowserBackendHealthReason,
@@ -32,6 +33,8 @@ interface BrowserBackendSubsectionProps {
   health: BrowserBackendHealth | null;
   onSelect: (kind: BackendKind) => void;
   onRecover: () => void;
+  /** Optional: a saved override and how to clear it (the cloud page). */
+  reset?: DefaultOverrideReset;
   /**
    * 推荐的页面控制插件在本机的状态,决定第 1 步写「安装」「启用」还是「更新」:
    * 只在未声明页面控制能力时提示更新。
@@ -77,6 +80,8 @@ function healthReasonKey(reason: BrowserBackendHealthReason | undefined): string
       return 'settings.computerUse.browserBackend.health.reasons.extensionDisconnected';
     case 'plugin-missing':
       return 'settings.computerUse.browserBackend.health.reasons.pluginMissing';
+    case 'browser-missing':
+      return 'settings.computerUse.browserBackend.health.reasons.browserMissing';
     case 'status-failed':
     default:
       return 'settings.computerUse.browserBackend.health.reasons.statusFailed';
@@ -94,6 +99,7 @@ export function BrowserBackendSubsection({
   userBrowserPluginState = 'not-installed',
   onSetUpUserBrowser,
   userBrowserSetupBusy = false,
+  reset,
 }: BrowserBackendSubsectionProps) {
   const { t } = useTranslation();
   const setting = useSettingDefinition(additionalSettings.browserTarget);
@@ -103,7 +109,9 @@ export function BrowserBackendSubsection({
   // 「我的浏览器」只有连接状态可报,没有可恢复的宿主侧控制连接。
   const userBrowserHealth =
     active === 'user-browser' && health?.active === 'user-browser' ? health : null;
-  const setupKeys = userBrowserHealth?.reason === 'plugin-updating'
+  const setupKeys = userBrowserHealth?.reason === 'browser-missing'
+    ? { title: `${SETUP_KEY}.installBrowserTitle`, body: `${SETUP_KEY}.installBrowserBody`, action: 'settings.computerUse.browser.download' }
+    : userBrowserHealth?.reason === 'plugin-updating'
     ? { title: `${SETUP_KEY}.updatingTitle`, body: `${SETUP_KEY}.updatingBody`, action: '' }
     : userBrowserHealth?.reason === 'plugin-selection-required' ||
       (userBrowserHealth?.reason === 'plugin-missing' && userBrowserPluginState === 'enabled' && userBrowserPluginSupportsControl)
@@ -119,7 +127,7 @@ export function BrowserBackendSubsection({
         title={setting.title}
         // 选中哪个就介绍哪个,切换时一起变。
         hint={<span aria-live="polite">{selectedOption ? t(selectedOption.descriptionKey) : null}</span>}
-        trailing={
+        trailing={withDefaultOverride(
           <SegmentedControl<BackendKind>
             {...setting.controlProps}
             value={active}
@@ -127,8 +135,9 @@ export function BrowserBackendSubsection({
             onValueChange={onSelect}
             aria-label={setting.title}
             options={setting.options}
-          />
-        }
+          />,
+          reset,
+        )}
       />
       {embeddedHealth ? (
         <SettingsBlock className="flex flex-wrap items-center justify-between gap-3">
@@ -171,17 +180,21 @@ export function BrowserBackendSubsection({
       ) : null}
       {userBrowserHealth &&
       userBrowserHealth.status === 'error' &&
-      (userBrowserHealth.reason === 'plugin-updating' ||
+      (userBrowserHealth.reason === 'browser-missing' ||
+        userBrowserHealth.reason === 'plugin-updating' ||
         userBrowserHealth.reason === 'plugin-selection-required' ||
         userBrowserHealth.reason === 'plugin-missing' ||
         userBrowserHealth.reason === 'extension-disconnected') ? (
         // 「我的浏览器」还差一步:说清缺的是哪一步,并给出直接去做的按钮;连上后父组件轮询会自动变绿。
+        // 没有 Chrome / Edge 时先装浏览器,装好后轮询会自动进入装插件、装扩展的下一步。
         <SettingsBlock className="flex flex-wrap items-center justify-between gap-3">
           <div
             className="flex min-w-0 flex-1 basis-[280px] items-start gap-2 text-12 leading-[1.5]"
             role="status"
           >
-            {userBrowserHealth.reason !== 'extension-disconnected' ? (
+            {userBrowserHealth.reason === 'browser-missing' ? (
+              <Download size={14} className="mt-0.5 shrink-0 text-[var(--settings-section-desc)]" />
+            ) : userBrowserHealth.reason !== 'extension-disconnected' ? (
               <Puzzle size={14} className="mt-0.5 shrink-0 text-[var(--settings-section-desc)]" />
             ) : (
               <RefreshCw size={14} className="mt-0.5 shrink-0 text-[var(--settings-section-desc)]" />

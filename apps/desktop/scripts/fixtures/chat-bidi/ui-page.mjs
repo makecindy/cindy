@@ -42,7 +42,7 @@ export default {
   notCovered: 'Live model sending, OS clipboard/input methods and remote synchronization. Clipboard events exercise the real editor serializer; OS clipboard is checked in the full mock app. Host/model/voice data use the existing composer fixture stubs.',
   stubs: {
     ...composer.stubs,
-    'src/renderer/contexts/AuthContext': { partial: 'export const useAuth = () => ({ user: { id: "bidi-fixture" } });' },
+    'src/renderer/contexts/AuthContext': { partial: 'export const useAuth = () => ({ user: { id: "bidi-fixture" } }); export const useOptionalDataOwnerGeneration = () => 0;' },
   },
   cases: {
     default: { about: '#10114: independent RTL/LTR paragraphs, code, stream and editable text' },
@@ -50,10 +50,40 @@ export default {
     lists: { about: '#10188: typed/restored composer lists keep each marker beside its mixed-direction item' },
     orca: { about: '#10188: expanded Lead/Worker messages retain per-paragraph direction and original text' },
     context: { about: '#10188: attached IM replies, thread messages and group background retain paragraph direction' },
+    'long-inline-code': { about: '#11312: unbroken inline-code tokens wrap inside the bubble instead of overflowing it' },
   },
   async check(page, ui) {
     const rtl = 'سلام، فایل index.html با API 123 آماده است.';
     const english = 'English paragraph: API 123 and https://example.com/docs.';
+    if (ui.case === 'long-inline-code') {
+      // #11312: real Chromium layout. jsdom and class-name assertions cannot see
+      // that an unbreakable inline-code token widens the bubble and paints past
+      // its right edge; this check fails on the pre-fix component for both a
+      // long path inline among prose and a single enormous standalone token.
+      const section = page.getByTestId('long-inline');
+      const codes = section.locator('code');
+      const count = await codes.count();
+      assert.ok(count >= 3, `expected inline code elements, got ${count}`);
+      for (let i = 0; i < count; i += 1) {
+        const overflows = await codes.nth(i).evaluate((element) => {
+          const bubble = element.closest('[data-ui-page-subject]') ?? document.body;
+          const limit = bubble.getBoundingClientRect();
+          const rects = Array.from(element.getClientRects()).filter(r => r.width > 0);
+          if (rects.length === 0) return null;
+          // Any painted fragment sticking out past the bubble's content edge
+          // means the token did not wrap inside the available width.
+          return Math.max(...rects.map(r => r.right)) - limit.right;
+        });
+        if (overflows === null) continue;
+        assert.ok(overflows <= 1, `inline code #${i} paints ${overflows.toFixed(1)}px past the container edge`);
+      }
+      // The wrapping must not swallow content: every token still present in full.
+      const text = await section.textContent();
+      assert.ok(text?.includes('JudgeAttributeFieldWithVeryLongName.tsx'), 'long path token must stay readable in full');
+      assert.ok(text?.includes(`${'a'.repeat(220)}.tsx`), 'standalone long token must stay readable in full');
+      await ui.capture('long-inline-code');
+      return;
+    }
     if (ui.case === 'context') {
       // The real UserMessage -> HookTaskCard disclosure renders three distinct
       // context leaves. jsdom covers their text/counts, but cannot detect this
@@ -85,13 +115,21 @@ export default {
       return;
     }
     if (ui.case === 'orca') {
-      // Orca bodies use a separate plain-text <pre>, not the normal bubble or
-      // Markdown renderer. A Persian-first line reproduces the layout bug.
+      // Orca bodies render through the chat Markdown renderer, so mixed-direction
+      // paragraphs keep their own alignment and Markdown structure is not shown raw.
       // Existing messageLinkActions tests cover content, not browser geometry.
+      assert.ok(['before', 'after'].includes(ui.role), 'ui.role missing from the check context');
       for (const role of ['Lead', 'Worker']) {
         const toggle = page.getByRole('button', { name: await ui.t(`chat.userMessage.orcaFrom${role}`), exact: true });
         await toggle.click();
-        const body = toggle.locator('..').locator('pre[data-selection-quote-body]');
+        const body = toggle.locator('..').locator('[data-selection-quote-body]');
+        // Markdown structure, not raw markers: heading, bold list item, fenced code.
+        // Skipped on the compare side, which replays the old plain-text body.
+        if (ui.role === 'after') {
+          await body.locator('h3').first().waitFor();
+          await body.locator('li strong').first().waitFor();
+          await body.locator('pre code').first().waitFor();
+        }
         for (const [text, side] of [[rtl, 'right'], [english, 'left'],
           ['مرحبا، الإصدار API 123 جاهز.', 'right'], ['שלום, הקובץ index.html מוכן.', 'right'],
           ['中文段落：文件 index.html，版本 123。', 'left']]) {
@@ -103,7 +141,7 @@ export default {
           range.selectNodeContents(e); selection.removeAllRanges(); selection.addRange(range);
           const text = selection.toString(); selection.removeAllRanges(); return text;
         });
-        assert.equal(selected, original);
+        assert.equal(selected.replace(/\s+/g, ' ').trim(), original.replace(/\s+/g, ' ').trim());
         await toggle.focus(); await toggle.press('Enter');
         await body.waitFor({ state: 'hidden' });
         await toggle.press('Enter');

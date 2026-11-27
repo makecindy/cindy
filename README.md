@@ -77,7 +77,7 @@ controls and rich HTML**, not just a wall of text.
 
 Build a recurring routine with **automations**, or hand over work through
 connected chat channels such as Slack and Telegram. Connect more tools through
-**Skills, plugins and MCP**.
+**Skills, plugins and [MCP](docs/mcp-apps.md#接入)**.
 
 ## Ready from day one. Yours to shape over time.
 
@@ -106,6 +106,27 @@ billing still apply; the free client does not mean unlimited model usage.
 
 Linux users: see the [Ubuntu, Arch Linux and Omarchy installation guide](docs/linux.md)
 for installation, updates, keyring setup and migration from a manual install.
+
+<details>
+<summary>Can I set up a buddy offline, before any model inference?</summary>
+
+**Skip Sign-In** opens the desktop interface offline without a Cindy account.
+Cindy account-backed services require sign-in; connected third-party API models can still be used.
+
+- **Creating a named buddy needs an available model.** Choose one in **Buddies → + → New buddy**.
+  Preparation automatically starts its first hello, before you send a message.
+  It is marked ready when the runtime accepts that turn, not when the full reply appears.
+- **The built-in Cindy can be listed while waiting for a model.** During pending or failed initial
+  preparation, name, self-introduction, personality and **What you know about me** remain read-only.
+  Model settings stay available: use **Change Model** or retry preparation for the same buddy.
+- **There is no supported hand-authored declaration / zero-inference setup route**, including in
+  Linux Global **0.1.143**, to create a named buddy, edit its profile, personality and preferences,
+  save, and verify them after restart before any inference.
+- **Import is not a general declaration-text format.** Hermes / OpenClaw import can save recognized
+  source application data before setup finishes; native packages are limited to the bundled, validated catalog.
+- **Compatible, available local models still infer**, including the ordinary first hello: offline is not zero-inference setup.
+
+</details>
 
 <h3 align="center">A few people noticed.</h3>
 
@@ -136,7 +157,7 @@ their shared packages, organized as a pnpm monorepo.
 | `apps/desktop` | Electron desktop client |
 | `apps/mobile` | Expo / React Native mobile client |
 | `packages/*` | Shared client capabilities (auth, device-link, agent orchestration, model providers, …) |
-| `apps/*-bin` | Tool binaries shipped with the desktop app; none are committed — claude-code, codex, and ripgrep are downloaded per platform by `pnpm install`, and the Android platform-tools binaries are fetched (pinned version, sha256-verified) before Windows packaging |
+| `apps/*-bin` | Tool binaries shipped with the desktop app; none are committed — claude-code, codex, ripgrep, and pi are downloaded per platform by `pnpm install`, and the Android platform-tools binaries are fetched (pinned version, sha256-verified) before Windows packaging |
 
 **Not in this repo:** the backend service lives in a separate
 repository and is not part of this monorepo.
@@ -148,8 +169,8 @@ repository and is not part of this monorepo.
 
 ### Prerequisites
 
-- **Node.js** 22.x
-- **pnpm** 10.x (v11 is not yet supported)
+- **Node.js** >= 22.13 (see `engines.node` in `package.json`)
+- **pnpm** 11.x (`>=11.25 <12`, see `engines.pnpm` and `packageManager` in `package.json`)
 - **Git LFS**
 
 ### Getting started
@@ -231,16 +252,21 @@ privately rather than opening a public issue.
 ## Privacy & telemetry
 
 **Official distribution builds** include [TapDB](https://www.taptap.io/tapdb)
-usage analytics for product-level aggregate statistics, including device identifiers,
-OS / app version, startup and activity events. Events are associated with your account
-ID after sign-in, so this is not fully anonymous. TapDB does **not** collect chat
-content, file content, or working-directory data.
+usage analytics for app launches and return visits, including a device identifier
+and OS / app version. After sign-in, visits use a regional account alias. The same
+alias links daily model choices and token totals from participating desktop
+devices. Payment statistics use a separate alias. Desktop uses a fresh device
+identifier. On mobile, someone with older records may be able to link the new
+alias to the original account ID through the existing device identifier.
+These statistics exclude chats, prompts, files and working-directory data.
 
 **You can disable usage analytics without editing code**: on Desktop, use
 Settings → About → Usage statistics; on Mobile, use Usage statistics in Settings.
 The SDK checks the stored privacy-consent state and the statistics preference,
 which defaults to on. Accepting the Privacy Policy records consent; a one-time
 migration also records consent for eligible existing signed-in users.
+Upgrading keeps the current setting. Per-account model usage starts at upgrade
+and enrollment on each desktop. Earlier usage is not uploaded as account history.
 
 **Known Mobile exception:** enterprise SSO skips the policy-acceptance step. If no
 analytics consent record exists and that sign-in is restored after restarting the

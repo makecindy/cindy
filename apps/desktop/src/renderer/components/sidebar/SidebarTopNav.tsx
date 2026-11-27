@@ -5,7 +5,7 @@
  * 按用户偏好排序与显示(插件的显隐沿用其「在侧边栏显示」开关);未勾选的进「更多」。
  * 最小化插件面板恢复入口仍按需出现。
  *   - 新建 / 自动任务:项目(cc-agent)视图的动作 —— 在任意视图点击都跳回项目视图并执行。
- *   - Plugins:主视图切换(navigateToView),命中当前视图时高亮。
+ *   - Plugins:主视图切换(navigateToView),等待插件路由就绪时即高亮。
  *   - 伙伴 2026-10-13 起不再是导航行:它是侧栏第一层的「伙伴」段(置顶上方),
  *     与任务列表并存,不再整栏切换(见 features/bots/TeammatesSection)。
  *   - 搜索(SidebarInlineSearch):静息态与其余行同款「🔍 搜索」;hover / 聚焦
@@ -31,11 +31,11 @@ import {
   SlidersHorizontal,
   type LucideIcon,
 } from 'lucide-react';
-import { useLocation, useNavigate, useMatch } from 'react-router-dom';
+import { matchPath, useLocation, useNavigate, useMatch, useNavigation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
-import { NavigationCountBadge } from '@/components/sidebar/NavigationCountBadge';
+import { CountBadge } from '@/components/ui/badge';
 import { useAuth } from '@/contexts/AuthContext';
 import { usePluginReviewUpdates } from '@/contexts/PluginReviewUpdatesContext';
 import { AttentionDot, type DotTone } from '@/components/sidebar/AttentionDot';
@@ -44,6 +44,7 @@ import { useGhostMainViews, type GhostMainViewItem } from '@/cindy-brain/ghostMa
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import { readPluginUiEntries, PluginUiSlotControls } from '@/cindy-brain/PluginUiContributions';
 import { useActiveMainView } from '@/hooks/useActiveMainView';
+import { preloadPluginPage } from '@/features/plugin/GhostPluginRoute';
 import { SidebarInlineSearch } from '@/features/cc-agent/sidebar/SidebarInlineSearch';
 import { SidebarIconButton, SIDEBAR_RAIL_ICON_BUTTON_CLASS } from './SidebarIconButton';
 import { Tip } from '@/components/ui/tooltip';
@@ -105,6 +106,7 @@ export interface SidebarNavigationAction {
   label: string;
   icon: LucideIcon;
   onSelect: () => void;
+  onIntent?: () => void;
   active: boolean;
   showDot: boolean;
   dotTone?: DotTone;
@@ -113,7 +115,7 @@ export interface SidebarNavigationAction {
 }
 
 function EntryCountBadge({ count, className }: { count?: SidebarNavigationAction['count']; className?: string }) {
-  return count ? <NavigationCountBadge count={count.value} label={count.label} className={className} /> : null;
+  return count ? <CountBadge count={count.value} label={count.label} className={className} /> : null;
 }
 
 /** One definition per built-in entry, shared by the rows, the rail and More. */
@@ -124,6 +126,8 @@ function useSidebarNavigationActions(
   const navigate = useNavigate();
   const { activeKey, navigateToView } = useActiveMainView();
   const onScheduleMatch = useMatch('/cc-agent/scheduled');
+  const pendingLocation = useNavigation().location;
+  const pendingPlugins = Boolean(pendingLocation && matchPath('/plugins', pendingLocation.pathname));
   // 任一插件有未读 → 入口行尾一颗**静态**绿点(聚合入口按 AttentionDot 规范不呼吸,
   // 呼吸留给单条卡片;见 AttentionDot 头部的形态规范)。
   const hasRetirementUnread = useInstalledGhosts().some((ghost) => ghost.retirement?.unread);
@@ -141,7 +145,8 @@ function useSidebarNavigationActions(
       label: t('sidebar.tabs.plugins'),
       icon: SIDEBAR_NAVIGATION_ITEM_ICONS.plugins,
       onSelect: () => navigateToView('plugins'),
-      active: activeKey === 'plugins',
+      onIntent: preloadPluginPage,
+      active: activeKey === 'plugins' || pendingPlugins,
       showDot: hasGhostUnread || reviewUnread.length > 0,
       dotTone: reviewUnread.some(item => item.status !== 'approved' && item.status !== 'enabled') ? 'error' : hasRetirementUnread ? 'awaiting' : 'done',
     },
@@ -293,7 +298,7 @@ function SidebarNavigationMoreMenu({
           if (!action) return null;
           const Icon = action.icon;
           return (
-            <DropdownMenuItem key={id} onSelect={action.onSelect} className="gap-2.5">
+            <DropdownMenuItem key={id} onSelect={action.onSelect} onMouseEnter={action.onIntent} onFocus={action.onIntent} className="gap-2.5">
               <Icon size={16} strokeWidth={1.8} />
               {action.label}
               {action.showDot && <AttentionDot size={6} tone={action.dotTone} className="ml-auto" />}
@@ -384,6 +389,8 @@ export function SidebarRailNavigation({
             dotTone={action.dotTone}
             badge={<EntryCountBadge count={action.count} />}
             onClick={action.onSelect}
+            onMouseEnter={action.onIntent}
+            onFocus={action.onIntent}
           />
         );
       })}
@@ -438,7 +445,6 @@ export function SidebarTopNav({
     setSearchOpenSignal((signal) => signal + 1);
   });
 
-  // 通用新建继承当前任务的电脑，由草稿页集中迁移；同机保留已选项目。
   const handleNew = () => {
     navigate('/cc-agent/new', { state: makeGenericNewMakerRouteState(location.pathname) });
   };
@@ -501,6 +507,8 @@ export function SidebarTopNav({
     return (
       <button
         onClick={action.onSelect}
+        onMouseEnter={action.onIntent}
+        onFocus={action.onIntent}
         className={cn(ROW_CLASS, action.active && ROW_ACTIVE_CLASS)}
         aria-label={action.label}
         aria-current={action.active ? 'page' : undefined}
@@ -518,7 +526,7 @@ export function SidebarTopNav({
           )}
         />
         <span className="leading-none">{action.label}</span>
-        {action.showDot && <AttentionDot size={6} tone={action.dotTone} className="ml-auto mr-0.5" />}
+        {action.showDot && <AttentionDot size={6} tone={action.dotTone} className="ml-auto mr-px" />}
         <EntryCountBadge count={action.count} className="ml-auto" />
       </button>
     );
@@ -597,7 +605,7 @@ export function SidebarTopNav({
             onDone={() => setCustomizing(false)}
           />
         ) : !showSearch ? (
-          <div className="flex flex-col gap-0.5 pr-3 pl-3">
+          <div className="flex flex-col gap-0.5 pr-0 pl-3">
             {orderedNavigationRows}
             {pluginRows}
             {customizeRow}
@@ -605,13 +613,13 @@ export function SidebarTopNav({
         ) : (
           <>
             {searchIndex > 0 && (
-              <div className="flex flex-col gap-0.5 pr-3 pl-3">{rowsBeforeSearch}</div>
+              <div className="flex flex-col gap-0.5 pr-0 pl-3">{rowsBeforeSearch}</div>
             )}
             <div
               className={cn(
-                'shrink-0 px-3',
+                'shrink-0 pr-0 pl-3',
                 searchIndex > 0 && '-mt-1.5',
-                pinSearch && 'sticky top-0 z-30',
+                pinSearch && 'sticky top-0 z-page-overlay',
               )}
               ref={searchRowRef}
             >
@@ -619,7 +627,7 @@ export function SidebarTopNav({
             </div>
             {/* Entries after Search stay reachable while a query is pinned; the
                 results follow them instead of replacing them. */}
-            <div className="-mt-1.5 flex flex-col gap-0.5 pr-3 pl-3">
+            <div className="-mt-1.5 flex flex-col gap-0.5 pr-0 pl-3">
               {rowsAfterSearch}
               {pluginRows}
                 {customizeRow}

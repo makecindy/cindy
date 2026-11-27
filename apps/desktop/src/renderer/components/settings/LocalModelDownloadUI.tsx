@@ -1,8 +1,10 @@
 import { type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Pause, Play, X } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { DownloadMeter, type DownloadMeterProgress } from './DownloadMeter';
+import { DownloadMeter } from '@/components/ui/download-meter';
+import type { DownloadProgress } from '../../../shared/downloadProgress';
 
 /** One visibility rule for both runtimes: installed items only appear in search;
  * active/paused/failed downloads stay visible, once, even while searching. */
@@ -107,7 +109,7 @@ export function LocalModelCard({
 }) {
   return (
     <article
-      className="flex flex-col gap-3 rounded-[12px] border px-4 py-3.5"
+      className="flex flex-col gap-3 rounded-xl border px-4 py-3.5"
       style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--surface-elevated)' }}
     >
       <div className="flex items-start justify-between gap-3">
@@ -137,12 +139,9 @@ export function LocalModelCard({
 }
 export function LocalModelTag({ children }: { children: ReactNode }) {
   return (
-    <span
-      className="rounded-full px-2 py-0.5 text-11 font-medium"
-      style={{ backgroundColor: 'var(--surface-chip)', color: 'var(--text-secondary)' }}
-    >
+    <Badge>
       {children}
-    </span>
+    </Badge>
   );
 }
 export function LocalModelDownloadButton({
@@ -291,7 +290,7 @@ export function LocalModelManualDownload({
 }
 export function LocalRuntimeInstallView({
   description,
-  progress,
+  download,
   canInstall,
   installing,
   onInstall,
@@ -299,7 +298,8 @@ export function LocalRuntimeInstallView({
   label,
 }: {
   description: string;
-  progress?: DownloadMeterProgress;
+  /** Standard progress drawn by the shared DownloadMeter. */
+  download?: { label: string; progress: DownloadProgress; error?: string | null };
   canInstall: boolean;
   installing: boolean;
   onInstall: () => void;
@@ -312,7 +312,7 @@ export function LocalRuntimeInstallView({
       <p className="text-13 leading-[1.5]" style={{ color: 'var(--text-secondary)' }}>
         {description}
       </p>
-      {progress && <DownloadMeter progress={progress} />}
+      {download && <DownloadMeter {...download} />}
       <div className="flex flex-wrap gap-2">
         {canInstall && (
           <Button

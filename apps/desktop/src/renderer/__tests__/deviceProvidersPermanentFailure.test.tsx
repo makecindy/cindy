@@ -6,7 +6,7 @@ import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProviderShareReceived } from '@cindy/device-link';
-import { PROVIDER_METADATA_TRUST_MS } from '../../../../../packages/device-link/src/metadataContinuity';
+import { PROVIDER_METADATA_TRUST_MS, REMOTE_CATALOG_FRESH_MS } from '../../../../../packages/device-link/src/metadataContinuity';
 import type { ProviderView } from '@cindy/model-providers';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { refreshProviderShareFavoriteMembership, refreshProviderShareReceived, resetProviderShareStoreForTests, useProviderShareReceived } from '@/features/provider-share/providerShareStore';
@@ -19,8 +19,14 @@ import {
   prefetchDeviceCapabilities,
   useAgentCapabilities,
 } from '@/hooks/useAgentCapabilities';
-import { CONTROLLED_MODEL_CATALOG_CHANNEL, modelCatalogKey } from '../../shared/controlledModelCatalog';
-import { useControlledModelLocations } from '@/hooks/useControlledModelLocations';
+import { CONTROLLED_MODEL_CATALOG_CHANNEL, CONTROLLED_MODEL_CATALOG_CHANGED, modelCatalogKey } from '../../shared/controlledModelCatalog';
+import {
+  invalidateDetachedControlledModelLocations,
+  registerControlledCatalogPushWatcher,
+  resetControlledModelLocationsForTests,
+  useControlledModelLocations,
+} from '@/hooks/useControlledModelLocations';
+import { useRemotePluginEngines } from '@/hooks/usePluginEngines';
 import type { ProviderShareReceivedSnapshot, ProviderShareRegionBudget } from '../../shared/providerShare';
 
 // This mounted fixture uses empty model lists and does not exercise the full
@@ -121,12 +127,14 @@ async function cleanupMounted(): Promise<void> {
 
 beforeEach(() => {
   providers.evictAllDeviceProviders();
+  resetControlledModelLocationsForTests();
   resetProviderShareStoreForTests();
   setDataOwnerGeneration('owner', 1);
 });
 afterEach(async () => {
   await cleanupMounted();
   providers.evictAllDeviceProviders();
+  resetControlledModelLocationsForTests();
   resetProviderShareStoreForTests();
 });
 
@@ -201,6 +209,8 @@ async function mountSharePicker(options: { deferInitial?: boolean } = {}) {
   let remotePush: ((push: { deviceId: string; channel: string; payload?: unknown }) => void) | undefined;
   let currentSnapshot = receivedSnapshot([receivedShare()]);
   let phase: 'fresh' | 'pending' = 'fresh';
+  let catalogProviders = [provider('shared-model-provider')];
+  let catalogCapabilities = capabilities;
   let providerContinuity: { stale: boolean; remainingMs: number } | undefined;
   let capabilityContinuity: { stale: boolean; remainingMs: number } | undefined;
   let snapshotGate: Promise<ProviderShareReceivedSnapshot> | null = null;
@@ -212,10 +222,10 @@ async function mountSharePicker(options: { deferInitial?: boolean } = {}) {
     : null;
   const invoke = vi.fn(async (_device: string, channel: string) => {
     if (channel !== 'maker:provider:list') {
-      return { ...capabilities, ...(capabilityContinuity ? { providerContinuity: capabilityContinuity } : {}) };
+      return { ...catalogCapabilities, ...(capabilityContinuity ? { providerContinuity: capabilityContinuity } : {}) };
     }
     if (phase === 'pending') return new Promise<never>(() => undefined);
-    return { providers: [provider('shared-model-provider')],
+    return { providers: catalogProviders,
       ...(providerContinuity ? { providerContinuity } : {}) };
   });
   const command = vi.fn(async (request: { action: string }) => {
@@ -253,11 +263,14 @@ async function mountSharePicker(options: { deferInitial?: boolean } = {}) {
     latest = providers.useDeviceProviders('share:a');
     return null;
   }
-  await renderElement(createElement(Probe));
+  const catalogView = await renderElement(createElement(Probe));
   await flushMounted();
   expect(latest?.providers).toHaveLength(1);
   return {
-    command, store,
+    unmountCatalog: () => unmountElement(catalogView),
+    command, store, invoke,
+    setCapabilities: (next: typeof capabilities) => { catalogCapabilities = next; },
+    setProviders: (next: ProviderView[]) => { catalogProviders = next; },
     latest: () => latest!,
     providerReads: () => invoke.mock.calls.filter(([, channel]) => channel === 'maker:provider:list').length,
     capabilityReads: () => invoke.mock.calls.filter(([, channel]) => channel === 'maker:get-capabilities').length,
@@ -919,7 +932,10 @@ describe('provider share catalog identity changes', () => {
     expect(f.providerReads()).toBe(1);
   });
 
-  it('expires provider and capability snapshots without prefetching the expired target', async () => {
+  // 2026-11-23: a mounted picker reads an expired catalog once more (same as Mobile) instead of
+  // staying empty until the window is focused; the host's forwarded budget still bounds the
+  // result, and a second expiry inside 5s retires without another read.
+  it('re-reads an expired provider and capability snapshot once for a mounted picker, then retires it', async () => {
     const f = await mountSharePicker();
     f.setContinuity({ provider: { stale: false, remainingMs: 1_000 },
       capabilities: { stale: false, remainingMs: 1_000 } });
@@ -932,8 +948,16 @@ describe('provider share catalog identity changes', () => {
       const providerReads = f.providerReads();
       const capabilityReads = f.capabilityReads();
       await act(async () => { await vi.advanceTimersByTimeAsync(1_100); await Promise.resolve(); });
-      expect(f.providerReads()).toBe(providerReads);
-      expect(f.capabilityReads()).toBe(capabilityReads);
+      await flushMounted();
+      expect(f.providerReads()).toBe(providerReads + 1);
+      expect(f.capabilityReads()).toBeGreaterThanOrEqual(capabilityReads);
+      expect(f.latest().providers).toHaveLength(1);
+      const rereadProviders = f.providerReads();
+      const rereadCapabilities = f.capabilityReads();
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_100); await Promise.resolve(); });
+      await flushMounted();
+      expect(f.providerReads()).toBe(rereadProviders);
+      expect(f.capabilityReads()).toBe(rereadCapabilities);
       expect(f.latest().providers).toEqual([]);
       expect(getCachedCapabilities('claude-code', 'share:a')).toBeNull();
     } finally {
@@ -1004,6 +1028,96 @@ describe('provider share catalog identity changes', () => {
       await act(async () => { evictAllRemoteCapabilities(); });
       vi.useRealTimers();
     }
+  });
+
+  // #10711 P2 / unit: the task-host discovery listener shares the source's active route read.
+  it('queues discovery-driven catalog reads behind a refresh from the share source', async () => {
+    const target = modelCatalogKey('share:a', 'host')!;
+    let finish!: () => void;
+    const blocked = new Promise<void>(resolve => { finish = resolve; });
+    let revision = 'initial';
+    let remotePush: ((push: { deviceId: string; channel: string }) => void) | undefined;
+    const invoke = vi.fn(async (_device: string, channel: string, args: unknown[]) => {
+      const request = args[0] as { op?: string; channel?: string } | undefined;
+      if (request?.op === 'locations') {
+        return { status: 'complete', locations: [{ agentDeviceId: 'share:a', name: 'A' }] };
+      }
+      const value = revision;
+      if (request?.op === 'read' && value === 'blocked') await blocked;
+      return (request?.channel ?? channel) === 'maker:provider:list'
+        ? { providers: [provider(value)] }
+        : capabilities;
+    });
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: { deviceLink: { invoke, onRemotePush: (callback: typeof remotePush) => {
+        remotePush = callback;
+        return () => undefined;
+      } } },
+    });
+    const locationHook = await renderHookFixture(() => useControlledModelLocations('host'));
+    const catalogHook = await renderHookFixture(() => providers.useDeviceProviders(target));
+    const routedReads = () => invoke.mock.calls.filter(([, channel, args]) =>
+      channel === CONTROLLED_MODEL_CATALOG_CHANNEL && (args[0] as { op?: string })?.op === 'read');
+    await flushMounted();
+    expect(catalogHook.result.current.providers[0]?.id).toBe('initial');
+    const initial = routedReads().length;
+    revision = 'blocked';
+    let pending!: Promise<void>;
+    await act(async () => { pending = refreshRemoteCatalogSnapshot('share:a'); });
+    try {
+      expect(routedReads()).toHaveLength(initial + 4);
+      revision = 'latest';
+      await act(async () => { remotePush?.({ deviceId: 'host', channel: CONTROLLED_MODEL_CATALOG_CHANGED }); });
+      await flushMounted();
+      expect(locationHook.result.current).toHaveLength(1);
+      expect(routedReads()).toHaveLength(initial + 4);
+    } finally {
+      await act(async () => { finish(); await pending; });
+    }
+    await flushMounted();
+    expect(routedReads()).toHaveLength(initial + 5);
+    expect(catalogHook.result.current.providers[0]?.id).toBe('latest');
+  });
+
+  it('retires a revoked controlled plugin share and drops an engine reply already in flight', async () => {
+    let granted = true;
+    let hold = false;
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    let remotePush: ((push: { deviceId: string; channel: string }) => void) | undefined;
+    const invoke = vi.fn(async (_device: string, _channel: string, args: unknown[]) => {
+      const request = args[0] as { op: string };
+      if (request.op === 'locations') {
+        return { status: 'complete', locations: granted ? [{ agentDeviceId: 'share:plugin', name: 'Plugin' }] : [] };
+      }
+      if (hold) await blocked;
+      return [{
+        key: 'test-plugin:engine', providerId: 'acp-plugin:test-plugin:engine', name: 'Engine',
+        availability: { state: 'available' }, models: [],
+        remoteUse: { supported: true, enabled: true },
+      }];
+    });
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: { deviceLink: { invoke, onRemotePush: (callback: typeof remotePush) => {
+        remotePush = callback;
+        return () => undefined;
+      } } },
+    });
+    const hook = await renderHookFixture(() => ({
+      locations: useControlledModelLocations('host'),
+      catalogue: useRemotePluginEngines(modelCatalogKey('share:plugin', 'host'), true),
+    }));
+    expect(hook.result.current.catalogue.engines?.[0]?.name).toBe('Engine');
+    hold = true;
+    await act(async () => { hook.result.current.catalogue.read(); });
+    granted = false;
+    await act(async () => { remotePush?.({ deviceId: 'host', channel: CONTROLLED_MODEL_CATALOG_CHANGED }); });
+    expect(hook.result.current.locations).toEqual([]);
+    expect(hook.result.current.catalogue.engines).toBeNull();
+    await act(async () => { release(); });
+    expect(hook.result.current.catalogue.engines).toBeNull();
   });
 
   it('retires only the denied route on a zero-budget provider push and keeps a healthy neighbor', async () => {
@@ -1085,6 +1199,294 @@ describe('provider share catalog identity changes', () => {
     expect(current?.locations).toHaveLength(2);
     expect(reads.get('share:b')).toBe(1);
     expect(current?.b.providers).toHaveLength(1);
+
+    // Main-process routed denial push (deviceId = modelCatalogKey('share:b', 'host'))
+    // retires only that routed alias without touching the host's locations list.
+    await act(async () => {
+      remotePush?.({ deviceId: modelCatalogKey('share:b', 'host')!, channel: 'maker:provider:changed',
+        payload: { providerContinuity: { stale: true, remainingMs: 0 } } });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(current?.locations).toHaveLength(2);
+    expect(reads.get('share:b')).toBe(1);
+    expect(current?.b.providers).toEqual([]);
+  });
+
+  // Regression: useControlledModelLocations must cache locations per (owner, device),
+  // avoid wiping healthy routed share catalogs on window focus / remount / unrelated
+  // device presence flaps, and still evict any source removed from the host list.
+  it('caches controlled locations across remounts, revalidates non-destructively on focus, and isolates owners', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+    try {
+      let hostLocations = [
+        { agentDeviceId: 'share:a', name: 'Share A' },
+        { agentDeviceId: 'share:b', name: 'Share B' },
+      ];
+      let onPresence: ((presence: { deviceId: string; online: boolean; remoteControlEnabled: boolean }) => void) | undefined;
+      const invoke = vi.fn(async (_device: string, channel: string, args: unknown[]) => {
+        if (channel !== CONTROLLED_MODEL_CATALOG_CHANNEL) throw new Error('unexpected channel');
+        const request = args[0] as { op?: string; agentDeviceId?: string; channel?: string } | undefined;
+        if (request?.op === 'locations') return { status: 'complete', locations: hostLocations };
+        if (request?.op === 'read') {
+          if (request.channel === 'maker:provider:list') {
+            return { providers: [provider(request.agentDeviceId!)] };
+          }
+          return capabilities;
+        }
+        throw new Error('unexpected request');
+      });
+      Object.defineProperty(window, 'electronAPI', {
+        configurable: true,
+        value: {
+          deviceLink: {
+            invoke,
+            onPresenceChanged: (callback: typeof onPresence) => {
+              onPresence = callback;
+              return () => undefined;
+            },
+            onStatusChanged: () => () => undefined,
+            onRemotePush: () => () => undefined,
+            onPeerLinkReset: () => () => undefined,
+            onControlTargetChanged: () => () => undefined,
+          },
+        },
+      });
+      const routeA = modelCatalogKey('share:a', 'host')!;
+      const routeB = modelCatalogKey('share:b', 'host')!;
+      const locationReads = () => invoke.mock.calls.filter(([, , args]) =>
+        (args[0] as { op?: string })?.op === 'locations').length;
+
+      const first = await renderHookFixture(() => useControlledModelLocations('host', 'self'));
+      await flushMounted();
+      expect(first.result.current?.map(item => item.agentDeviceId)).toEqual(['share:a', 'share:b']);
+      expect(locationReads()).toBe(1);
+
+      await Promise.all([
+        providers.prefetchDeviceProviders(routeA),
+        providers.prefetchDeviceProviders(routeB),
+        prefetchDeviceCapabilities(routeA),
+        prefetchDeviceCapabilities(routeB),
+      ]);
+      expect(providers.getCachedDeviceProviders(routeA)).not.toBeNull();
+      expect(providers.getCachedDeviceProviders(routeB)).not.toBeNull();
+
+      // Unmount and remount: cached locations appear immediately on first render without wiping routes.
+      await first.unmount();
+      let initialOnRemount: ReturnType<typeof useControlledModelLocations> | undefined;
+      function RemountProbe() {
+        const value = useControlledModelLocations('host', 'self');
+        if (initialOnRemount === undefined) initialOnRemount = value;
+        return null;
+      }
+      const remounted = await renderElement(createElement(RemountProbe));
+      expect(initialOnRemount?.map(item => item.agentDeviceId)).toEqual(['share:a', 'share:b']);
+      await flushMounted();
+      expect(locationReads()).toBe(2); // Quiet background revalidation after detached period.
+      expect(providers.getCachedDeviceProviders(routeA)).not.toBeNull();
+      expect(providers.getCachedDeviceProviders(routeB)).not.toBeNull();
+      expect(getCachedCapabilities('claude-code', routeB)).not.toBeNull();
+
+      // Window focus inside the fresh window does not trigger an extra locations read or evict routes.
+      await act(async () => { window.dispatchEvent(new Event('focus')); });
+      await flushMounted();
+      expect(locationReads()).toBe(2);
+      expect(providers.getCachedDeviceProviders(routeB)).not.toBeNull();
+
+      // Unrelated neighbor device presence going offline must not evict host's shared models.
+      await act(async () => {
+        onPresence?.({ deviceId: 'unrelated-phone', online: false, remoteControlEnabled: false });
+      });
+      await flushMounted();
+      expect(locationReads()).toBe(2);
+      expect(providers.getCachedDeviceProviders(routeB)).not.toBeNull();
+
+      // Focus after the fresh window revalidates quietly: removed share:a is evicted, share:b stays cached.
+      hostLocations = [{ agentDeviceId: 'share:b', name: 'Share B' }];
+      await vi.advanceTimersByTimeAsync(REMOTE_CATALOG_FRESH_MS);
+      await act(async () => { window.dispatchEvent(new Event('focus')); });
+      await flushMounted();
+      expect(locationReads()).toBe(3);
+      expect(providers.getCachedDeviceProviders(routeA)).toBeNull();
+      expect(getCachedCapabilities('claude-code', routeA)).toBeNull();
+      expect(providers.getCachedDeviceProviders(routeB)).not.toBeNull();
+      expect(getCachedCapabilities('claude-code', routeB)).not.toBeNull();
+
+      // Switching account owner isolates the cache completely (no leakage of previous owner's locations).
+      await unmountElement(remounted);
+      setDataOwnerGeneration('other-owner', 2);
+      hostLocations = [];
+      let nextOwnerInitial: ReturnType<typeof useControlledModelLocations> | undefined;
+      function NextOwnerProbe() {
+        const value = useControlledModelLocations('host', 'self');
+        if (nextOwnerInitial === undefined) nextOwnerInitial = value;
+        return null;
+      }
+      await renderElement(createElement(NextOwnerProbe));
+      expect(nextOwnerInitial).toEqual([]);
+      await flushMounted();
+    } finally {
+      await act(async () => { evictAllRemoteCapabilities(); });
+      vi.useRealTimers();
+    }
+  });
+
+  // Regression (Greptile P1 #1): a retained host refresh (e.g. PROVIDER_GROUP_IPC.CHANGED
+  // triggering refreshRemoteCatalogSnapshot('host')) bumps routedGen and must keep mounted
+  // locations populated and recovered instead of returning [] silently.
+  it('keeps mounted controlled locations populated and synced after a retained host catalog refresh', async () => {
+    const invoke = vi.fn(async (_device: string, channel: string, args: unknown[]) => {
+      if (channel === CONTROLLED_MODEL_CATALOG_CHANNEL && (args[0] as { op?: string })?.op === 'locations') {
+        return { status: 'complete', locations: [{ agentDeviceId: 'share:a', name: 'Share A' }] };
+      }
+      if (channel === 'maker:provider:list') return { providers: [provider('host-provider')] };
+      return capabilities;
+    });
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        deviceLink: {
+          invoke,
+          onPresenceChanged: () => () => undefined,
+          onStatusChanged: () => () => undefined,
+          onRemotePush: () => () => undefined,
+          onPeerLinkReset: () => () => undefined,
+          onControlTargetChanged: () => () => undefined,
+        },
+      },
+    });
+    let latest: ReturnType<typeof useControlledModelLocations> | undefined;
+    function Probe({ tick }: { tick: number }) {
+      void tick;
+      latest = useControlledModelLocations('host', 'self');
+      return null;
+    }
+    const mounted = await renderElement(createElement(Probe, { tick: 0 }));
+    await flushMounted();
+    expect(latest?.map(item => item.agentDeviceId)).toEqual(['share:a']);
+
+    await act(async () => { await refreshRemoteCatalogSnapshot('host'); });
+    await flushMounted();
+    expect(latest?.map(item => item.agentDeviceId)).toEqual(['share:a']);
+
+    // Re-rendering the hook after routedGen advanced must keep returning the live locations.
+    await act(async () => { mounted.root.render(createElement(Probe, { tick: 1 })); });
+    await flushMounted();
+    expect(latest?.map(item => item.agentDeviceId)).toEqual(['share:a']);
+  });
+
+  // Regression (Greptile P1 #2): unmounting the last subscriber while the initial locations
+  // read is still in flight and remounting promptly must queue a replacement read.
+  it('recovers the initial locations read when remounted while the first request is still in flight', async () => {
+    let resolveFirst!: (value: unknown) => void;
+    let calls = 0;
+    const invoke = vi.fn((_device: string, channel: string, args: unknown[]) => {
+      if (channel !== CONTROLLED_MODEL_CATALOG_CHANNEL || (args[0] as { op?: string })?.op !== 'locations') {
+        throw new Error('unexpected request');
+      }
+      calls += 1;
+      if (calls === 1) return new Promise((resolve) => { resolveFirst = resolve; });
+      return Promise.resolve({ status: 'complete', locations: [{ agentDeviceId: 'share:a', name: 'Share A' }] });
+    });
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        deviceLink: {
+          invoke,
+          onPresenceChanged: () => () => undefined,
+          onStatusChanged: () => () => undefined,
+          onRemotePush: () => () => undefined,
+          onPeerLinkReset: () => () => undefined,
+          onControlTargetChanged: () => () => undefined,
+        },
+      },
+    });
+    const first = await renderHookFixture(() => useControlledModelLocations('host', 'self'));
+    expect(calls).toBe(1);
+    await first.unmount();
+
+    const second = await renderHookFixture(() => useControlledModelLocations('host', 'self'));
+    await act(async () => {
+      resolveFirst({ status: 'complete', locations: [{ agentDeviceId: 'share:stale', name: 'Stale' }] });
+      await Promise.resolve();
+    });
+    await flushMounted();
+
+    expect(calls).toBe(2);
+    expect(second.result.current?.map(item => item.agentDeviceId)).toEqual(['share:a']);
+  });
+
+  // Regression (Greptile P1 #3): model changes on a still-present share while detached
+  // must not stay stale on return — both with a global push watcher and standalone.
+  it('refreshes stale routed share models after detach both with and without a global push watcher', async () => {
+    let version = 'v1';
+    const invoke = vi.fn(async (_device: string, channel: string, args: unknown[]) => {
+      if (channel !== CONTROLLED_MODEL_CATALOG_CHANNEL) throw new Error('unexpected channel');
+      const request = args[0] as { op?: string; channel?: string } | undefined;
+      if (request?.op === 'locations') {
+        return { status: 'complete', locations: [{ agentDeviceId: 'share:a', name: 'Share A' }] };
+      }
+      if (request?.op === 'read') {
+        return request.channel === 'maker:provider:list' ? { providers: [provider(version)] } : capabilities;
+      }
+      throw new Error('unexpected request');
+    });
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        deviceLink: {
+          invoke,
+          onPresenceChanged: () => () => undefined,
+          onStatusChanged: () => () => undefined,
+          onRemotePush: () => () => undefined,
+          onPeerLinkReset: () => () => undefined,
+          onControlTargetChanged: () => () => undefined,
+        },
+      },
+    });
+    const routeA = modelCatalogKey('share:a', 'host')!;
+    const readCount = () => invoke.mock.calls.filter(([, , args]) =>
+      (args[0] as { op?: string; channel?: string })?.op === 'read'
+      && (args[0] as { channel?: string })?.channel === 'maker:provider:list').length;
+
+    // 1) Standalone (no global push watcher): returning refreshes cached routes in background.
+    const first = await renderHookFixture(() => useControlledModelLocations('host', 'self'));
+    await flushMounted();
+    await providers.prefetchDeviceProviders(routeA);
+    expect(providers.getCachedDeviceProviders(routeA)?.providers[0]?.id).toBe('v1');
+    await first.unmount();
+
+    version = 'v2';
+    const second = await renderHookFixture(() => useControlledModelLocations('host', 'self'));
+    await flushMounted();
+    expect(providers.getCachedDeviceProviders(routeA)?.providers[0]?.id).toBe('v2');
+    await second.unmount();
+
+    // 2) With global push watcher: unchanged detach keeps route warm (0 extra provider reads),
+    //    while a detached CONTROLLED_MODEL_CATALOG_CHANGED push evicts the stale cache immediately.
+    const offWatcher = registerControlledCatalogPushWatcher();
+    try {
+      const readsBeforeUnchanged = readCount();
+      const third = await renderHookFixture(() => useControlledModelLocations('host', 'self'));
+      await flushMounted();
+      expect(readCount()).toBe(readsBeforeUnchanged);
+      expect(providers.getCachedDeviceProviders(routeA)?.providers[0]?.id).toBe('v2');
+      await third.unmount();
+
+      version = 'v3';
+      invalidateDetachedControlledModelLocations('host');
+      expect(providers.getCachedDeviceProviders(routeA)).toBeNull();
+      expect(readCount()).toBe(readsBeforeUnchanged); // No background read while detached.
+
+      const fourth = await renderHookFixture(() => useControlledModelLocations('host', 'self'));
+      await flushMounted();
+      await providers.prefetchDeviceProviders(routeA);
+      expect(providers.getCachedDeviceProviders(routeA)?.providers[0]?.id).toBe('v3');
+      await fourth.unmount();
+    } finally {
+      offWatcher();
+      await act(async () => { evictAllRemoteCapabilities(); });
+    }
   });
 
   it('ignores a late initial share list from the previous owner', async () => {
@@ -1147,4 +1549,137 @@ describe('agent capability cache hits', () => {
       await act(async () => { evictAllRemoteCapabilities(); });
     }
   });
+});
+
+// #6208 / unit: exercise received-push → real shared cache → mounted consumer.
+// Existing lifecycle cases changed permission/presence, missing unchanged-share
+// metadata with a successful empty directory followed by restored models.
+describe('received-share model catalog freshness', () => {
+  // #10711 review / unit: direct details can leave a cache while the only live
+  // consumer uses a task-host route. Previously its eviction had no replacement.
+  it.each(['providers', 'capabilities'] as const)('refreshes routed %s after direct details close', async (consumer) => {
+    const f = await mountSharePicker();
+    await f.unmountCatalog();
+    const original = f.invoke.getMockImplementation()!;
+    const routedReads: string[] = [];
+    f.invoke.mockImplementation(async (device, channel, ...args: unknown[]) => {
+      if (channel === CONTROLLED_MODEL_CATALOG_CHANNEL) {
+        const request = (args[0] as { channel: string; agentDeviceId: string }[])[0];
+        routedReads.push(request.agentDeviceId);
+        return original(device, request.channel);
+      }
+      return original(device, channel);
+    });
+    const target = modelCatalogKey('share:a', 'task-host')!;
+    const hook = await renderHookFixture(() => consumer === 'providers'
+      ? providers.useDeviceProviders(target) : useAgentCapabilities('claude-code', target));
+    await flushMounted();
+    const reads = routedReads.length;
+    f.setProviders([provider('updated-route')]);
+    f.setCapabilities({ ...capabilities, availableModels: [{ ...capabilities.availableModels[0], id: 'updated-route' }] });
+    await act(async () => { f.push([receivedShare()]); });
+    await flushMounted();
+    expect(hook.result.current.loading).toBe(false);
+    expect(providers.getCachedDeviceProviders(target)?.providers[0]?.id).toBe('updated-route');
+    expect(getCachedCapabilities('claude-code', target)?.availableModels[0]?.id).toBe('updated-route');
+    expect(routedReads.length).toBeGreaterThan(reads);
+    expect(routedReads.every(source => source === 'share:a')).toBe(true);
+  });
+
+  it('updates mounted and cached catalogs on unchanged membership, including empty → restored', async () => {
+    const f = await mountSharePicker();
+    const reads = f.providerReads();
+    f.setProviders([]);
+    f.setCapabilities({ ...capabilities, availableModels: [] });
+    await act(async () => { f.push([receivedShare()]); });
+    await flushMounted();
+    expect(f.latest().providers).toEqual([]);
+    expect(providers.getCachedDeviceProviders('share:a')?.providers).toEqual([]);
+    expect(f.providerReads()).toBe(reads + 1);
+    expect(getCachedCapabilities('claude-code', 'share:a')?.availableModels).toEqual([]);
+    const restored = provider('restored');
+    restored.models['claude-code'] = [{ id: 'restored-model', name: 'Restored', contextWindow: 32000, efforts: [], defaultEffort: null }];
+    f.setProviders([restored]);
+    f.setCapabilities({ ...capabilities, availableModels: [{ ...capabilities.availableModels[0], id: 'restored-model' }] });
+    await act(async () => { f.push([receivedShare()]); });
+    await flushMounted();
+    expect(f.latest().providers[0]?.models['claude-code']?.[0]?.id).toBe('restored-model');
+    expect(providers.getCachedDeviceProviders('share:a')?.providers[0]?.id).toBe('restored');
+    expect(getCachedCapabilities('claude-code', 'share:a')?.availableModels[0]?.id).toBe('restored-model');
+    expect(f.providerReads()).toBe(reads + 2);
+    expect(f.capabilityReads()).toBe(6); // Three engines per shared refresh.
+  });
+
+  it('does not prefetch unopened shares or reread unchanged offline/paused shares', async () => {
+    const f = await mountSharePicker();
+    const unavailable = [receivedShare({ shareId: 'offline', hostOnline: false }), receivedShare({ shareId: 'paused', status: 'paused' })];
+    const snapshot = receivedSnapshot([receivedShare(), receivedShare({ shareId: 'unopened' }), ...unavailable]);
+    f.setSnapshot(snapshot);
+    await providers.prefetchDeviceProviders('share:offline');
+    await providers.prefetchDeviceProviders('share:paused');
+    await act(async () => { f.push([...snapshot.received]); });
+    await flushMounted();
+    const reads = f.providerReads();
+    await act(async () => { f.push([...snapshot.received]); });
+    await flushMounted();
+    expect(f.providerReads()).toBe(reads + 1); // Only the already-mounted active share.
+    expect(providers.getCachedDeviceProviders('share:unopened')).toBeNull();
+  });
+  it('coalesces repeated unchanged pushes during a slow read and keeps the last catalog', async () => {
+    const f = await mountSharePicker();
+    const original = f.invoke.getMockImplementation()!;
+    let finish!: () => void;
+    const pending = new Promise<void>(resolve => { finish = resolve; });
+    let hold = true;
+    f.invoke.mockImplementation(async (device, channel) => {
+      if (hold) await pending;
+      return original(device, channel);
+    });
+    const reads = f.providerReads();
+    await act(async () => { f.push([receivedShare()]); });
+    expect(f.providerReads()).toBe(reads + 1);
+    for (let n = 0; n < 8; n++) {
+      await act(async () => { f.push([receivedShare()]); });
+    }
+    expect(f.providerReads()).toBe(reads + 1);
+    f.setProviders([provider('last')]);
+    hold = false;
+    await act(async () => { finish(); });
+    await flushMounted();
+    expect(f.providerReads()).toBe(reads + 2);
+    expect(f.latest().providers[0]?.id).toBe('last');
+  });
+
+  it.each(['direct', 'routed'])('invalidates a loaded but unused empty %s catalog without background polling', async (route) => {
+    const f = await mountSharePicker();
+    const cached = receivedShare({ shareId: 'cached' });
+    const snapshot = receivedSnapshot([receivedShare(), cached]);
+    f.setSnapshot(snapshot);
+    await act(async () => { f.push([...snapshot.received]); });
+    await flushMounted();
+    const original = f.invoke.getMockImplementation()!;
+    f.invoke.mockImplementation(async (device, channel) => channel === CONTROLLED_MODEL_CATALOG_CHANNEL
+      || (device === 'share:cached' && channel === 'maker:provider:list')
+      ? { providers: [] } : original(device, channel));
+    const target = route === 'routed' ? modelCatalogKey('share:cached', 'task-host')! : 'share:cached';
+    await providers.prefetchDeviceProviders(target);
+    expect(providers.getCachedDeviceProviders(target)?.providers).toEqual([]);
+    const reads = f.providerReads();
+    await act(async () => { f.push([...snapshot.received]); });
+    await flushMounted();
+    expect(providers.getCachedDeviceProviders(target)).toBeNull();
+    expect(f.providerReads()).toBe(reads + 1); // Only the mounted share is reread.
+  });
+
+  it('refreshes the model capability consumer after the settings catalog unmounts', async () => {
+    const f = await mountSharePicker();
+    await f.unmountCatalog();
+    const hook = await renderHookFixture(() => useAgentCapabilities('claude-code', 'share:a'));
+    await flushMounted();
+    f.setCapabilities({ ...capabilities, availableModels: [{ ...capabilities.availableModels[0], id: 'new-capability-model' }] });
+    await act(async () => { f.push([receivedShare()]); });
+    await flushMounted();
+    expect(hook.result.current.capabilities?.availableModels[0]?.id).toBe('new-capability-model');
+  });
+
 });

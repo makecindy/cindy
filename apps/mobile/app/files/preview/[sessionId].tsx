@@ -712,11 +712,7 @@ function RemoteFilePreviewContent() {
   return (
     <SafeAreaView edges={[]} style={styles.safeArea} testID="filePreview.screen">
       <FlatList
-        style={
-          siblings.length > 1
-            ? { marginBottom: 56 + chromeFrame.bottom }
-            : undefined
-        }
+        style={{ flex: 1 }}
         onLayout={(event) => setMeasuredPageWidth(Math.max(1, event.nativeEvent.layout.width))}
         data={siblings}
         getItemLayout={(_, index) => ({ index, length: pageWidth, offset: pageWidth * index })}
@@ -870,7 +866,7 @@ function FilePreviewPage({
   const insets = useSafeAreaInsets();
   const chromeFrame = usePreviewChromeFrame();
   const contentPadding = {
-    paddingTop: insets.top + 64,
+    paddingTop: chromeFrame.documentContentTop,
     paddingBottom: insets.bottom + spacing.xs,
     paddingLeft: insets.left,
     paddingRight: insets.right,
@@ -1091,6 +1087,7 @@ function PdfPreviewPage({
   workdir: string;
 }) {
   const insets = useSafeAreaInsets();
+  const chromeFrame = usePreviewChromeFrame();
   const model = /\.(glb|gltf)$/i.test(item.relPath);
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
@@ -1182,7 +1179,7 @@ function PdfPreviewPage({
   return (
     <View
       style={[styles.pdfView,
-        !model && { paddingTop: insets.top + 64, paddingBottom: insets.bottom },
+        !model && { paddingTop: chromeFrame.documentContentTop, paddingBottom: insets.bottom, paddingLeft: insets.left, paddingRight: insets.right },
       ]}>
     <>
         {model ? (
@@ -1249,7 +1246,7 @@ function TextPreviewPage({
   const chromeFrame = usePreviewChromeFrame();
   const browserTop = chromeFrame.top;
   const browserBottom = chromeFrame.bottom;
-  const browserContentInset = { top: richKind === "html" ? chromeFrame.contentTop : insets.top + 64, bottom: browserBottom + (richKind === 'html' ? HTML_BROWSER_CONTROL_SIZE : 0) + spacing.xs };
+  const browserContentInset = { top: richKind === "html" ? chromeFrame.contentTop : chromeFrame.documentContentTop, bottom: browserBottom + (richKind === 'html' ? HTML_BROWSER_CONTROL_SIZE : 0) + spacing.xs };
   const browserRef = useRef<WebView>(null);
   const [website, setWebsite] = useState<WebsiteVisit | null>(null);
   const [browserNavigation, setBrowserNavigation] = useState<{

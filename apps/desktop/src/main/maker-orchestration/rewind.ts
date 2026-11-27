@@ -27,6 +27,8 @@ import { and, asc, desc, eq, gt, gte, isNull, lt, or, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 
 import { getDbClient } from '../localDb/client/current';
+import { resolveDesktopHandoffWindow } from '../maker-host/model-context-settings.js';
+import { scheduleNativeHistoryBackupCleanup } from '../remote-agent/controller/nativeHistoryBackup.js';
 import { assertTaskActionCurrent, runTaskActionRewindBoundary } from '../maker-ipc/taskActionAuthorization.js';
 import { sessions, messages } from '../localDb/schema';
 import { sessionToCamel } from '../localDb/mapper';
@@ -40,7 +42,7 @@ import {
 import type { RewindCommitArgs } from '../localDb/client/tx/types';
 import { getMaker, withRehydrateCloseSuppressed } from '../maker-host/index.js';
 import { syncBackgroundCommandWork } from '../maker-host/claude-background-command-work-sync.js';
-import { buildHandoffText } from '../maker-ipc/agentHandoff.js';
+import { buildHandoff } from '../maker-ipc/agentHandoff.js';
 import { readGitSafetySettings } from '../maker-host/git-safety-settings-store.js';
 import { ownerScopedUserDataPath } from '../appSessionState';
 import { SnapshotAttemptStore } from '../git-snapshot/snapshotAttemptStore';
@@ -169,11 +171,14 @@ interface RewindContext {
   // 业务函数自己读 isRunning / 拿 query；这里只暴露 sessionId 之类的元数据
   targetCreatedAt: number;
   /** target 行的 rowid(同 createdAt 时的次序键);Codex 原生边界查询用。 */
-  targetRowid?: number;
+  targetRowid: number;
   targetMessageId: string;
   targetClientId: string;
-  /** 当前 agent kind；Claude checkpoint 与 conversation-tree rollback 机制不同。 */
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  /** 当前 agent kind；Claude checkpoint、Codex/Pi rollback 与 ACP 交接重建机制不同。 */
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'acp';
+  /** ACP 离线回退时仍需用工作目录定位本机 Git 保存点链。 */
+  workDir?: string;
+  remoteHostId?: string | null;
   /**
    * prior assistant uuid——Claude SDK resumeSessionAt 用。Claude 缺省表示目标之前没有
    * 可续接的回复(首条消息、之前的轮次都被停掉等),改为换全新原生会话。
@@ -237,30 +242,53 @@ async function loadRewindContext(
   const maker = getMaker();
   const makerSession = maker.getSession(sessionId);
   let detached = false;
+  let detachedRow: {
+    agentKind: string | null;
+    sdkSessionId: string | null;
+    workingDir: string | null;
+    remoteHostId: string | null;
+  } | undefined;
   if (!makerSession) {
     // session 不在内存中:app 刚启动 / 这条 session 还没在新链路激活过。
-    // 例外:Claude 任务上一次回退没有续接点,已关闭会话并清掉原生会话 id——没有原生
-    // 会话可回滚,继续回退只需要裁剪对话,不必先发一条无关消息把会话叫起来。
+    // 例外:
+    // 1) Claude 任务上一次回退没有续接点,已关闭会话并清掉原生会话 id——没有原生
+    //    会话可回滚,继续回退只需要裁剪对话,不必先发一条无关消息把会话叫起来。
+    // 2) ACP 插件引擎没有原生回滚原语,回退本身就是「本机保存点回退 + 交接重建」,
+    //    不依赖活跃的外部 CLI 进程。
     const [row] = await db
-      .select({ agentKind: sessions.agentKind, sdkSessionId: sessions.sdkSessionId })
+      .select({
+        agentKind: sessions.agentKind,
+        sdkSessionId: sessions.sdkSessionId,
+        workingDir: sessions.workingDir,
+        remoteHostId: sessions.remoteHostId,
+      })
       .from(sessions)
       .where(eq(sessions.id, sessionId))
       .limit(1);
-    if (row?.agentKind !== 'cc' || activeSdkSessionId(row.sdkSessionId ?? undefined)) {
+    const detachedClaude = row?.agentKind === 'cc' && !activeSdkSessionId(row.sdkSessionId ?? undefined);
+    const detachedAcp = row?.agentKind === 'acp';
+    if (!detachedClaude && !detachedAcp) {
       throw rewindError(
         'NO_LIVE_QUERY',
         '任务运行环境未能恢复，无法回退',
       );
     }
+    detachedRow = row;
     detached = true;
   }
   if (makerSession?.isTurnRunning()) {
     throw rewindError('SESSION_RUNNING', '会话进行中，无法回滚');
   }
-  const agentKind = makerSession?.agentKind === 'codex'
-    ? 'codex'
-    : makerSession?.agentKind === 'pi'
-      ? 'pi'
+  const agentKind: RewindContext['agentKind'] = makerSession
+    ? makerSession.agentKind === 'codex'
+      ? 'codex'
+      : makerSession.agentKind === 'pi'
+        ? 'pi'
+        : makerSession.agentKind === 'acp'
+          ? 'acp'
+          : 'claude-code'
+    : detachedRow?.agentKind === 'acp'
+      ? 'acp'
       : 'claude-code';
 
   // 2. 取 target user 消息
@@ -302,7 +330,7 @@ async function loadRewindContext(
   // context_rebuild 的写入契约是 rewind_at 固定非 NULL(schema.ts),与 fork.ts 的
   // 边界查询一样对它豁免可见性过滤,否则守卫永远不命中(review P2)。
   const boundaryRole =
-    agentKind === 'claude-code'
+    agentKind === 'claude-code' || agentKind === 'acp'
       ? and(eq(messages.role, 'agent_switch'), isNull(messages.rewindAt))
       : or(
           and(eq(messages.role, 'agent_switch'), isNull(messages.rewindAt)),
@@ -327,6 +355,29 @@ async function loadRewindContext(
       'REWIND_UNSUPPORTED_HISTORY',
       '目标消息在引擎切换或会话重建边界之前,当前引擎的会话历史无法回滚到那里',
     );
+  }
+
+  if (agentKind === 'acp') {
+    const tailTurns = await loadTailUserTurns(sessionId, target);
+    const targetStillVisible = tailTurns.some((row) => row.rowid === target.rowid);
+    if (!targetStillVisible) {
+      throw rewindError('MESSAGE_NOT_FOUND', `Message ${clientId} 不在当前 agent turn 时间线`);
+    }
+    const codexUserMessages = tailTurns.map((row) => ({ clientId: row.clientId, createdAt: row.createdAt }));
+    log.debug(
+      `[rewind] acp sessionId=${sessionId.slice(0, 8)} clientId=${clientId} target.createdAt=${target.createdAt} tailTurns=${tailTurns.length} detached=${detached}`,
+    );
+    return {
+      targetCreatedAt: target.createdAt,
+      targetRowid: target.rowid,
+      targetMessageId: target.id,
+      targetClientId: target.clientId,
+      agentKind: 'acp',
+      codexUserMessages,
+      workDir: makerSession?.workDir ?? detachedRow?.workingDir ?? undefined,
+      remoteHostId: makerSession?.remoteHostId ?? detachedRow?.remoteHostId ?? null,
+      ...(detached ? { detached: true as const } : {}),
+    };
   }
 
   if (agentKind === 'codex' || agentKind === 'pi') {
@@ -425,7 +476,7 @@ async function loadRewindContext(
   );
 
   // Claude Code 在另一台电脑运行：文件按本机保存点链回退，需要 target 之后的 user 消息时间线。
-  let savepointTimeline: Pick<RewindContext, 'savepointRewind' | 'codexUserMessages' | 'targetRowid'> = {};
+  let savepointTimeline: Pick<RewindContext, 'savepointRewind' | 'codexUserMessages'> = {};
   if (currentSessionMeta?.agentDeviceId && !currentSessionMeta.remoteHostId) {
     const tailTurns = await loadTailUserTurns(sessionId, target);
     if (!tailTurns.some((row) => row.rowid === target.rowid)) {
@@ -433,13 +484,13 @@ async function loadRewindContext(
     }
     savepointTimeline = {
       savepointRewind: true,
-      targetRowid: target.rowid,
       codexUserMessages: tailTurns.map((row) => ({ clientId: row.clientId, createdAt: row.createdAt })),
     };
   }
 
   return {
     targetCreatedAt: target.createdAt,
+    targetRowid: target.rowid,
     targetMessageId: target.id,
     targetClientId: target.clientId,
     agentKind,
@@ -467,6 +518,18 @@ export async function previewRewindAtMessage(
   const ctx = await loadRewindContext(sessionId, clientId);
 
   const makerSession = getMaker().getSession(sessionId);
+  if (ctx.agentKind === 'acp') {
+    const workDir = makerSession?.workDir ?? ctx.workDir;
+    if (!workDir) {
+      return { canRewind: true, conversationOnly: true, filesChanged: [], insertions: 0, deletions: 0 };
+    }
+    return previewCodexFileRewindPlan(
+      await buildCodexFilePlanForSession(sessionId, clientId, ctx.codexUserMessages ?? [], {
+        workDir,
+        remoteHostId: makerSession?.remoteHostId ?? ctx.remoteHostId ?? null,
+      }),
+    );
+  }
   if (!makerSession) {
     if (ctx.detached) {
       // 没有原生会话也就没有文件检查点:只裁剪对话。
@@ -743,13 +806,10 @@ async function loadCodexRewindNativeBoundary(
   // /clear 之后旧 target 已不在当前原生线程。空时间线不能当成第一轮,否则会换空
   // 线程并把 clear 之后的新消息一并软删(#4994 review P1)。
   assertTargetVisibleAfterClear(ctx.targetCreatedAt, clearedAt);
-  const beforeTarget =
-    ctx.targetRowid === undefined
-      ? lt(messages.createdAt, ctx.targetCreatedAt)
-      : or(
-          lt(messages.createdAt, ctx.targetCreatedAt),
-          and(eq(messages.createdAt, ctx.targetCreatedAt), lt(messageRowid, ctx.targetRowid)),
-        );
+  const beforeTarget = or(
+    lt(messages.createdAt, ctx.targetCreatedAt),
+    and(eq(messages.createdAt, ctx.targetCreatedAt), lt(messageRowid, ctx.targetRowid)),
+  );
   // /clear 与 context_rebuild 之后是新的原生线程,之前的行不能拿来当锚点或时间戳。
   // context_rebuild 的写入契约是 rewind_at 固定非 NULL,需豁免可见性过滤才能看到边界。
   const inTimeline = and(
@@ -809,24 +869,52 @@ async function loadCodexRewindNativeBoundary(
  */
 async function buildNativeContextReset(
   sessionId: string,
-  targetClientId: string,
+  ctx: Pick<RewindContext, 'targetCreatedAt' | 'targetRowid' | 'agentKind'>,
 ): Promise<NonNullable<RewindCommitArgs['nativeContextReset']>> {
-  // 不设条数上限：这条路径的目标靠近会话开头，最近 N 条窗口可能整段落在目标之后。
-  const history = await listMessagesForAgentHandoff(sessionId, null);
-  const targetIndex = history.findIndex((message) => message.clientId === targetClientId);
-  const kept = targetIndex >= 0 ? history.slice(0, targetIndex) : [];
-  const handoff = kept.some((message) => message.role === 'user')
-    ? buildHandoffText(kept, {
-        fromLabel: 'Claude Code',
-        toLabel: 'Claude Code',
+  // The rewind target may be earlier than the last page of durable history.
+  const kept = await listMessagesForAgentHandoff(sessionId, 2000, undefined, 'replay', {
+    createdAt: ctx.targetCreatedAt, rowid: ctx.targetRowid,
+  });
+  const label =
+    ctx.agentKind === 'codex'
+      ? 'Codex'
+      : ctx.agentKind === 'pi'
+        ? 'Pi'
+        : ctx.agentKind === 'acp'
+          ? 'the plugin engine'
+          : 'Claude Code';
+  const hasUserHistory = kept.some((message) => message.role === 'user');
+  const route = hasUserHistory ? await getMaker().getSessionMeta(sessionId) : null;
+  let targetContextWindow: number | null = null;
+  if (hasUserHistory) {
+    if (ctx.agentKind === 'acp') {
+      const [row] = await getDbClient()
+        .drizzle.select({ contextWindow: sessions.contextWindow })
+        .from(sessions)
+        .where(eq(sessions.id, sessionId))
+        .limit(1);
+      targetContextWindow = row?.contextWindow && row.contextWindow > 0 ? row.contextWindow : null;
+    } else if (route) {
+      targetContextWindow = await resolveDesktopHandoffWindow(sessionId, { ...route, providerId: route.providerId ?? null });
+    }
+  }
+  const replay = hasUserHistory ? buildHandoff(kept, {
+        fromLabel: label,
+        toLabel: label,
+        targetContextWindow,
         sessionId,
         reason: 'message-rewind',
       })
-    : '';
+    : { handoff: '' };
   return {
     markerId: createId(),
     markerClientId: `context-rebuild:${createId()}`,
-    markerContent: JSON.stringify({ handoff, consumed: false, reason: 'message-rewind' }),
+    markerContent: JSON.stringify({
+      ...replay,
+      consumed: false,
+      reason: 'message-rewind',
+      ...(ctx.agentKind === 'acp' ? { sourceAgentKind: 'acp' } : {}),
+    }),
   };
 }
 
@@ -867,11 +955,50 @@ export async function commitRewindAtMessage(
   let nativeForkAnchorSessionMap: Array<[string, string]> | undefined;
   let nativeContextReset: RewindCommitArgs['nativeContextReset'];
   let expectedClearedAt: number | null = null;
-  if (!makerSession) {
+  if (ctx.agentKind === 'acp') {
+    // ACP 插件引擎没有原生回滚原语：先按本机保存点链回退文件（若有），再关闭当前
+    // 活跃运行时；DB 事务清掉 sdk_session_id 并写入交接标记，下次发送开全新原生会话。
+    expectedClearedAt = await rereadSessionClearedAt(sessionId);
+    await assertClearGenerationUnchanged(sessionId, expectedClearedAt, ctx.targetCreatedAt);
+    nativeContextReset = await buildNativeContextReset(sessionId, ctx);
+    const workDir = makerSession?.workDir ?? ctx.workDir;
+    const commitConversationRewind = async () => {
+      await assertTaskActionCurrent();
+      if (makerSession) await closeSessionForNativeRestart(sessionId, clientId);
+      return undefined;
+    };
+    if (opts?.allowFileRestore === false || !workDir) {
+      rewindResult = await commitConversationRewind();
+    } else {
+      const filePlan = await buildCodexFilePlanForSession(sessionId, clientId, ctx.codexUserMessages ?? [], {
+        workDir,
+        remoteHostId: makerSession?.remoteHostId ?? ctx.remoteHostId ?? null,
+      });
+      await assertTaskActionCurrent();
+      const onCompensationError = (compErr: unknown, execution: { rollbackCommit: string | null }) => {
+        log.error('[rewind commit] acp file rewind compensation failed', {
+          sessionId,
+          rollbackCommit: execution.rollbackCommit,
+          error: compErr instanceof Error ? compErr.message : String(compErr),
+        });
+      };
+      const result =
+        filePlan.mode === 'file-restore'
+          ? await executeCodexFileRestorePlanWithThreadRollback(filePlan, sessionId, {
+              commitThreadRollback: commitConversationRewind,
+              onCompensationError,
+            })
+          : await executeCodexFileRewindPlanWithThreadRollback(filePlan, sessionId, {
+              commitThreadRollback: commitConversationRewind,
+              onCompensationError,
+            });
+      rewindResult = result.threadRollback;
+    }
+  } else if (!makerSession) {
     // 脱离会话(见 RewindContext.detached):没有原生会话和文件检查点,只裁剪对话并留下交接。
     expectedClearedAt = await rereadSessionClearedAt(sessionId);
     await assertClearGenerationUnchanged(sessionId, expectedClearedAt, ctx.targetCreatedAt);
-    nativeContextReset = await buildNativeContextReset(sessionId, ctx.targetClientId);
+    nativeContextReset = await buildNativeContextReset(sessionId, ctx);
   } else if (ctx.agentKind === 'codex' || ctx.agentKind === 'pi') {
     // thread/rollback 不可用(分页线程 #4421、0.156.0 起已移除 #4994):把 target 之前的
     // 原生 turn 边界(持久化锚点、事件时间戳或线程第一轮标记)一并交给 maker-core,
@@ -939,7 +1066,7 @@ export async function commitRewindAtMessage(
     // 没有可续接的回复时改为关闭会话，下次发送开全新原生会话。
     expectedClearedAt = await rereadSessionClearedAt(sessionId);
     await assertClearGenerationUnchanged(sessionId, expectedClearedAt, ctx.targetCreatedAt);
-    if (!ctx.assistantUuid) nativeContextReset = await buildNativeContextReset(sessionId, ctx.targetClientId);
+    if (!ctx.assistantUuid) nativeContextReset = await buildNativeContextReset(sessionId, ctx);
     const priorAssistantUuid = ctx.assistantUuid;
     const commitConversationRewind = async () => {
       await assertTaskActionCurrent();
@@ -974,7 +1101,7 @@ export async function commitRewindAtMessage(
     // 回滚，然后关闭会话；事务清掉 sdk_session_id 并留下交接，下次发送开全新原生会话。
     expectedClearedAt = await rereadSessionClearedAt(sessionId);
     await assertClearGenerationUnchanged(sessionId, expectedClearedAt, ctx.targetCreatedAt);
-    nativeContextReset = await buildNativeContextReset(sessionId, ctx.targetClientId);
+    nativeContextReset = await buildNativeContextReset(sessionId, ctx);
     await assertTaskActionCurrent();
     if (ctx.userUuid && opts?.allowFileRestore !== false) {
       await makerSession.commitRewindFiles(ctx.userUuid, '', { rewindsToNativeThreadStart: true });
@@ -1070,6 +1197,7 @@ export async function commitRewindAtMessage(
   // Remote controllers can hold cached history even after SQLite committed.
   // Keep the initiating renderer's reload and edit-and-resend on their existing paths.
   const [firstRewoundClientId] = rewoundClientIds;
+  if (isDataOwnerBroadcastScopeCurrent(ownerScope)) scheduleNativeHistoryBackupCleanup(sessionId);
   if (!opts?.requireLatestUser && firstRewoundClientId && isDataOwnerBroadcastScopeCurrent(ownerScope)) {
     const payload: MessageDeletedPayload = {
       sessionId,

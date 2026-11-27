@@ -15,6 +15,7 @@
  */
 
 import { BRAND_IDENTITY, allDeepLinkSchemes } from '@cindy/maker-shared/brand-identity';
+export { buildTaskDeepLink } from '@cindy/maker-shared/brand-identity';
 
 /** 深链主 scheme(生成侧唯一使用的 scheme)。 */
 export const DEEP_LINK_PRIMARY_SCHEME: string = BRAND_IDENTITY.primaryScheme;

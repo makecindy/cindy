@@ -6,6 +6,8 @@ enum HelperError: Error, CustomStringConvertible {
   case missingValue(String)
   case invalidArgument(String)
   case accessibilityNotTrusted
+  /// macOS 27.3+: control is allowed for chosen apps only, and the target is not one of them.
+  case appControlNotAllowed
   case targetNotFound
   case commandFailed(String)
   case unsupported(String)
@@ -18,6 +20,9 @@ enum HelperError: Error, CustomStringConvertible {
       return message
     case .accessibilityNotTrusted:
       return "Accessibility permission is not granted"
+    case .appControlNotAllowed:
+      // Main matches this exact phrase; keep it free of "accessibility permission".
+      return "App control is limited to chosen apps and excludes the target"
     case .targetNotFound:
       return "Could not identify the target app for voice input."
     case .commandFailed(let message):
@@ -408,7 +413,9 @@ func focusTargetApplication(_ app: NSRunningApplication) throws -> (name: String
   return (lines.first, bundleId, true)
 }
 
-func postCommandV() throws {
+/// `targetPid` is set only when the person allowed control of chosen apps
+/// only; the system-wide path stays the default everywhere else.
+func postCommandV(targetPid: pid_t? = nil) throws {
   // Use a private event source so a still-held physical modifier from the
   // dictation shortcut does not turn Cmd+V into Cmd+Option+V / Cmd+Shift+V.
   guard let source = CGEventSource(stateID: .privateState),
@@ -418,6 +425,12 @@ func postCommandV() throws {
   }
   keyDown.flags = .maskCommand
   keyUp.flags = .maskCommand
+  if let targetPid {
+    keyDown.postToPid(targetPid)
+    waitWithRunLoop(for: 0.02)
+    keyUp.postToPid(targetPid)
+    return
+  }
   keyDown.post(tap: .cghidEventTap)
   waitWithRunLoop(for: 0.02)
   keyUp.post(tap: .cghidEventTap)
@@ -436,19 +449,79 @@ func virtualKey(for name: String) throws -> CGKeyCode {
   }
 }
 
-func requireAccessibilityTrusted() throws {
-  guard AXIsProcessTrusted() else {
+// Reading AX context and sending a global key or wheel event have different
+// authorization on newer macOS. Check posting only on input paths.
+func canPostInput() -> Bool {
+  AXIsProcessTrusted() && CGPreflightPostEventAccess()
+}
+
+func requireEventPostingAccess() throws {
+  guard canPostInput() else {
     throw HelperError.accessibilityNotTrusted
   }
 }
 
+// macOS 27.3 lets the person allow an app to control only apps they choose.
+// The per-target trust keys exist only there, so they are looked up at run
+// time: before 27.3 both are nil and nothing below changes behavior.
+// Measured on 27.3 beta 2 (26C5047e) with one chosen app: AXIsProcessTrusted()
+// is already true, CGPreflightPostEventAccess() is false and HID-tap events are
+// dropped even for the chosen app, while events posted to the chosen app's
+// process arrive. Unchosen apps receive nothing and answer AX with -25211.
+// Same lookup as the remote-desktop input helper (macos-input.swift).
+func appControlConstant(_ name: String) -> CFString? {
+  guard let handle = dlopen(nil, RTLD_NOW), let symbol = dlsym(handle, name) else { return nil }
+  return symbol.assumingMemoryBound(to: Unmanaged<CFString>?.self).pointee?.takeUnretainedValue()
+}
+let appControlTargetKey = appControlConstant("kAXTrustedCheckOptionTargetBundleIdentifier")
+let appControlAllApps = appControlConstant("kAXTrustedCheckTargetAllApplications")
+
+/// Whether macOS lets this process control `bundleId` (all apps when nil).
+/// nil before macOS 27.3. Never shows a prompt.
+func appControlAllowed(_ bundleId: String?) -> Bool? {
+  guard let key = appControlTargetKey, let allApps = appControlAllApps else { return nil }
+  let options = [
+    kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: false,
+    key as String: (bundleId ?? allApps as String),
+  ] as CFDictionary
+  return AXIsProcessTrustedWithOptions(options)
+}
+
+/// Allowed to control some chosen apps but not the whole Mac (macOS 27.3+).
+/// Global input is refused then; only a chosen app accepts input at its pid.
+func controlsChosenAppsOnly() -> Bool {
+  !canPostInput() && AXIsProcessTrusted() && appControlAllowed(nil) == false
+}
+
+/// Where a hardware key for the frontmost app must go. nil: post system-wide
+/// as before (whole-Mac control, or macOS before 27.3). With chosen apps only,
+/// the frontmost app's pid, and only if it is one of them. Wheel events are not
+/// redirected: 27.3 beta 2 drops them even at a chosen app's pid, so scrolling
+/// keeps requiring whole-Mac control.
+func frontmostKeyTargetPid() throws -> pid_t? {
+  if canPostInput() { return nil }
+  guard controlsChosenAppsOnly() else { throw HelperError.accessibilityNotTrusted }
+  guard let app = NSWorkspace.shared.frontmostApplication,
+        let bundleId = app.bundleIdentifier,
+        appControlAllowed(bundleId) == true else {
+    throw HelperError.appControlNotAllowed
+  }
+  return app.processIdentifier
+}
+
 func postHardwareKey(name: String) throws {
-  try requireAccessibilityTrusted()
+  let targetPid = try frontmostKeyTargetPid()
   let virtualKey = try virtualKey(for: name)
   guard let source = CGEventSource(stateID: .privateState),
         let keyDown = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: true),
         let keyUp = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: false) else {
     throw HelperError.commandFailed("Could not create \(name) keyboard event")
+  }
+  if let targetPid {
+    keyDown.postToPid(targetPid)
+    waitWithRunLoop(for: 0.02)
+    keyUp.postToPid(targetPid)
+    return
   }
   keyDown.post(tap: .cghidEventTap)
   waitWithRunLoop(for: 0.02)
@@ -485,7 +558,7 @@ func keyEventPayload(options: Options) throws -> [String: Any] {
 }
 
 func scrollEventPayload(options: Options) throws -> [String: Any] {
-  try requireAccessibilityTrusted()
+  try requireEventPostingAccess()
   try postScroll(deltaY: options.scrollDeltaY)
   return [
     "ok": true,
@@ -500,7 +573,7 @@ func scrollEventPayload(options: Options) throws -> [String: Any] {
 /// signed pixels/second; we own the 16ms clock so a held stick keeps scrolling
 /// even when the device stops sending move events.
 func runHoldScroll() throws {
-  try requireAccessibilityTrusted()
+  try requireEventPostingAccess()
   let lock = NSLock()
   var velocity = 0
   var stopped = false
@@ -1089,7 +1162,8 @@ func revertEnhancedAxIfNeeded(_ lifecycle: EnhancedAxLifecycle?) {
 func pasteVerifiedPayload(options: Options) -> [String: Any] {
   let totalStartedAt = Date()
   var timings: [String: Int] = [:]
-  guard AXIsProcessTrusted() else {
+  let chosenAppsOnly = controlsChosenAppsOnly()
+  guard canPostInput() || chosenAppsOnly else {
     return buildPasteResult(
       outcome: "verified_failure",
       reason: HelperError.accessibilityNotTrusted.description,
@@ -1118,6 +1192,27 @@ func pasteVerifiedPayload(options: Options) -> [String: Any] {
       error: HelperError.targetNotFound.description,
       timings: ["totalMs": elapsedMs(since: totalStartedAt)]
     )
+  }
+  // Only a chosen app accepts our input; check before touching the clipboard
+  // so an unchosen target never sees the transcript.
+  if chosenAppsOnly {
+    timings["chosenAppsOnly"] = 1
+    guard let bundleId = app.bundleIdentifier, appControlAllowed(bundleId) == true else {
+      timings["totalMs"] = elapsedMs(since: totalStartedAt)
+      return buildPasteResult(
+        outcome: "verified_failure",
+        reason: HelperError.appControlNotAllowed.description,
+        commandIssued: false,
+        target: app,
+        before: nil,
+        after: nil,
+        providerRequested: false,
+        requestedTypes: [],
+        restoredClipboard: false,
+        error: HelperError.appControlNotAllowed.description,
+        timings: timings
+      )
+    }
   }
 
   var restoredClipboard = false
@@ -1210,7 +1305,7 @@ func pasteVerifiedPayload(options: Options) -> [String: Any] {
 
   do {
     let commandStartedAt = Date()
-    try postCommandV()
+    try postCommandV(targetPid: chosenAppsOnly ? app.processIdentifier : nil)
     commandIssued = true
     timings["commandVMs"] = elapsedMs(since: commandStartedAt)
   } catch {

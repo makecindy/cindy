@@ -35,7 +35,17 @@
   "retryAccess": "重试访问",
   "recheck": "重新检查",
   "deviceRemovedTitle": "设备已移除",
-  "deviceRemovedHint": "请退出后重新登录，以重新加入设备列表。",
+  "deviceRemovedHint": "这台手机已从账号中移除，点「重新加入」即可回来。",
+  "rejoin": {
+    "action": "重新加入",
+    "busy": "正在重新加入",
+    "doneTitle": "已重新加入",
+    "agentNetUnavailable": "Agent-Net 服务暂不支持重新加入，这台手机暂时不使用 Agent-Net 连接。",
+    "failedTitle": "没能重新加入",
+    "failed": "请检查网络后再试一次。",
+    "unsupported": "服务暂不支持重新加入，请退出后重新登录。",
+    "agentNetUnsupported": "Agent-Net 服务暂不支持重新加入。关闭「仅使用加密连接」后，这台手机可以先不用 Agent-Net 连回来。"
+  },
   "authFailedTitle": "登录已失效",
   "authFailedHint": "登录状态已过期，请退出后重新登录。",
   "replacedTitle": "连接被顶替",
@@ -65,6 +75,7 @@
     "noCredentials": "{{agent}} 无法使用：电脑端尚未登录。请在电脑端 {{appName}} 的「设置 → 模型供应商」完成登录后再试。",
     "noEncryption": "{{agent}} 无法使用：电脑端系统安全存储不可用，读取不到已保存的密钥。请检查系统钥匙串（macOS）或系统账户加密（Windows），然后重启电脑端 {{appName}}。",
     "proxyNotReady": "{{agent}} 暂时无法使用：电脑端组件尚未就绪。请稍候重试；若持续出现，请重启电脑端 {{appName}}。",
+    "sharedLinkUnavailable": "{{agent}} 暂时无法使用：电脑端的 Codex 已经登录，但 {{appName}} 读不到那份登录（建不出指向它的链接，Windows 上通常是普通权限建不了）。请确认电脑端的 {{appName}} 有权限创建链接（Windows 上可以用管理员身份运行一次，或开启开发者模式）后重试。",
     "default": "{{agent}} 无法使用：电脑端登录凭证不可用。请在电脑端 {{appName}} 的「设置 → 模型供应商」重新登录后再试。（{{reason}}）"
   },
   "remoteError": {

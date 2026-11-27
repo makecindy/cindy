@@ -8,7 +8,7 @@ export async function checkSplit(page, ui) {
     const { group } = await window.electronAPI.maker.getBotGroup('fixture-group');
     group.messages = group.messages.map((message, i) => ({ ...message, reactions: [], content: i ? [
       '今天发布前需要确认这几件事：',
-      '1. **主界面与气泡宽度**：群聊和私聊使用同样的阅读宽度。打开话题后，两边正文随各自的可用空间调整。',
+      '1. **主界面与气泡宽度**：群聊长消息与私聊共用阅读宽度。打开话题后，两边正文随各自的可用空间调整。',
       '2. **分栏极值**：侧栏展开时，把话题拖到最宽和最窄，长消息仍然可以阅读，操作按钮不会遮住正文。',
       '3. **复杂内容**：长链接、代码、表格和长文件名保持在当前消息区域内，表格最后一列可以通过内部滚动查看。',
       '4. **输入与草稿**：主群和话题分别输入多行内容，拖拽、收起侧栏、关闭重开话题之后，两份草稿都应保留。',
@@ -43,15 +43,18 @@ export async function checkSplit(page, ui) {
   };
   const check = async label => {
     await page.evaluate(() => { delete window.__widthSample; });
-    await page.waitForFunction(() => {
+    await page.waitForFunction(ratio => {
       const main = document.querySelector('[data-testid="bot-group-timeline"]').closest('main');
       const width = main.getBoundingClientRect().width;
       const column = main.querySelector('[data-testid="bot-group-timeline"]').firstElementChild.getBoundingClientRect().width;
       const sample = `${width}:${column}`;
       const stable = window.__widthSample === sample;
       window.__widthSample = sample;
-      return stable && Math.abs(column - Math.min(914, width - (width < 700 ? 40 : 100))) < 1;
-    });
+      const available = width - 40 - Math.min(60, Math.max(0, (width - 700) / 2));
+      const expected = ratio === undefined ? Math.min(914, available)
+        : Math.min(available, Math.max(660, available * ratio / 100));
+      return stable && Math.abs(column - expected) < 1;
+    }, ui.data.ratio);
     const result = await page.evaluate(() => {
       const timeline = document.querySelector('[data-testid="bot-group-timeline"]');
       const main = timeline.closest('main'), panel = document.querySelector('.thread-panel');

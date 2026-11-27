@@ -1,6 +1,8 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 
 const invoke = vi.hoisted(() => vi.fn());
+// This catalog fixture has no signed-in owner or persisted disable preferences.
+vi.mock('../../maker-host/model-disable-store.js', () => ({ readModelDisableOverrides: () => ({ disabledModels: {}, disabledProviders: {} }) }));
 vi.mock('../../device-link', () => ({ remoteBackgroundInvoke: invoke }));
 import { readImRemoteAutomaticDefaults, readImRemotePermissionModes, readImRemoteProviderRoute } from '../remoteProviderRoute';
 import { IM_DEFAULT_SETTINGS } from '../../../shared/imDefaultSettings';

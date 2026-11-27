@@ -5,6 +5,7 @@ import {
   type VoiceConversationSelection,
 } from '../../shared/voiceConversation.js';
 import type { VoiceInputSettings } from '../../shared/voiceInputData.js';
+import { normalizeRealtimeVoicePreferences, type RealtimeVoiceSelection } from '../../shared/realtimeVoice.js';
 
 export function companionVoicePreference(
   settings: VoiceInputSettings,
@@ -16,11 +17,28 @@ export function companionVoicePreference(
     : (settings.conversationSelection ?? null);
   const playback = normalizeSentencePlaybackOverrides(settings.conversationSentencePlayback);
   const hasOverride = Object.hasOwn(playback, botId);
+  const active = normalizeRealtimeVoicePreferences(settings.realtimeSelections);
+  const previous = normalizeRealtimeVoicePreferences(settings.previousRealtimeSelections);
   return {
     selection,
     customized: !!selection || hasOverride,
     sentencePlayback: hasOverride ? playback[botId] : true,
+    ...(Object.hasOwn(active, botId) ? { realtimeSelection: active[botId] } : {}),
+    ...(Object.hasOwn(previous, botId) ? { previousRealtimeSelection: previous[botId] } : {}),
   };
+}
+
+export function updateRealtimeVoicePreference(settings: VoiceInputSettings, botId: string, selection: RealtimeVoiceSelection | null) {
+  const active = normalizeRealtimeVoicePreferences(settings.realtimeSelections);
+  const previous = normalizeRealtimeVoicePreferences(settings.previousRealtimeSelections);
+  if (selection) {
+    Object.defineProperty(active, botId, { value: selection, enumerable: true, configurable: true, writable: true });
+    delete previous[botId];
+  } else if (Object.hasOwn(active, botId)) {
+    Object.defineProperty(previous, botId, { value: active[botId], enumerable: true, configurable: true, writable: true });
+    delete active[botId];
+  }
+  return { realtimeSelections: active, previousRealtimeSelections: previous };
 }
 
 export function updateSentencePlaybackPreference(

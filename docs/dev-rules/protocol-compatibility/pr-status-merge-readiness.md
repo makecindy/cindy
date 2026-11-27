@@ -8,9 +8,21 @@
 卡片省掉这一项而不是猜测。不改握手、白名单、relay 或服务端，无数据库迁移。
 回归入口：`gitContextPrStatusService.test.ts`、`ghostCardPrStatus.test.ts`。
 
+`git-context:pr-status` / `git-context:mr-status` 的回答不再带可选 `metadata`（PR 正文、作者与审阅人对象）。
+任何控制端与本机界面都不读它，只有宿主内的 GitHub 读取工具（`get_pr_changes`）需要，它们直接调用状态服务，不经这条通道。
+远程日志里每次回答平均约 11 KB，是仅次于 Agent 事件的第二大回包流。旧宿主仍会带上，新旧控制端都忽略；不改握手、
+白名单、relay 或服务端。回归入口：`gitContextPrStatusService.test.ts`。
+
 插件卡片可在 `div` / `span` / `button` 上标 `data-ghost-pr-open-only="owner/repo#N"`：标题栏同源状态为已合并或已关闭时，
 电脑端藏起这些元素，手机投影在宿主侧把它们连同文字、`live` 与按钮一起去掉，所以新旧手机都无需改动；查不到状态时照常显示。
 手机只对含 PR 状态位或 PR 链接的卡片定时重读，带该标记的卡片需保留其中之一（GitHub 插件的 PR 卡片标题始终链接到 PR）。旧宿主的净化器丢掉这个属性，卡片维持原快照。不改握手、白名单、relay 或服务端，无数据库迁移。
+回归入口：`cardSanitizer.test.ts`、`cardRemoteResource.test.ts`、`ghostCardPrStatus.test.ts`。
+
+插件卡片可在合并按钮上标 `data-ghost-pr-merge-ready="owner/repo#N"`（仅限带动作的 `button`）：当 PR 尚在等 CI 或评审变为可合并时，
+插件把休眠按钮写成 `style="display:none"` 并改用 `data-ghost-pr-merge-action="pr:merge"`（不带 `data-ghost-action`，旧宿主和旧手机都不会露出）；
+新电脑端净化器在合法 `data-ghost-pr-merge-ready` 存在时把该动作提升为 `data-ghost-action`，随后电脑端卡片与手机投影都按标题栏同源状态实时显隐——
+状态为 `open` 且 `mergeState === 'CLEAN'` 时露出，明确非 `CLEAN` 或已结束时隐藏，查不到状态或旧宿主缺 `mergeState` 时回退到插件初始快照的显隐。
+点击后仍由插件重新向平台核实提交、分支与权限再展示确认条。不改握手、白名单、relay 或服务端，无数据库迁移。
 回归入口：`cardSanitizer.test.ts`、`cardRemoteResource.test.ts`、`ghostCardPrStatus.test.ts`。
 
 插件卡片可放一颗归档任务按钮：`button` 上标 `data-ghost-task-archive="owner/repo#N"`（不得同时带 `data-ghost-action`

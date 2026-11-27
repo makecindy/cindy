@@ -26,7 +26,7 @@ export function registerCreateTeammateTool(
   registry.register({
     name: 'create_teammate',
     category: 'bots',
-    description: "Create a new Cindy Bot buddy directly when the user asks for one. Do not write a template file or tell the user to create it manually. Only a name is required. Follow the user’s Cindy default model chain and shared Bot baseline. Leave unspecified identity details open; the new buddy speaks for itself using its own runtime and memory. To message it, take its main chat session_id from list_agents and use send_to_session; creation alone does not start hidden work.",
+    description: "Create a new Cindy Bot buddy directly when the user asks for one. Do not write a template file or tell the user to create it manually. This also sets up the buddy’s own project. Only a name is required. Follow the user’s Cindy default model chain and shared Bot baseline. Leave unspecified identity details open; the new buddy speaks for itself using its own runtime and memory. To message it, take its main chat session_id from list_agents and use send_to_session; creation alone does not start hidden work.",
     inputShape: {
       name: z.string().min(1).max(200).describe('Display name for the new buddy.'),
       description: z.string().max(4000).optional().describe('Role or purpose, only if the user supplied it.'),

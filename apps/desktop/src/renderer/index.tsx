@@ -12,6 +12,7 @@
 import { i18nReady } from './i18n';
 
 const urlParams = new URLSearchParams(window.location.search);
+const isCloudLoginWindow = urlParams.get('cloudLoginWindow') === '1';
 const isRecordingPreview = urlParams.get('recordingPreview') === '1';
 const isRemoteDesktopViewer = urlParams.get('remoteDesktopViewer') === '1';
 const isResourceUsageWindow = urlParams.get('resourceUsageWindow') === '1';
@@ -19,10 +20,13 @@ const isSidebarWindow = urlParams.get('sidebarWindow') === '1';
 const isRegionScreenshot = urlParams.get('regionScreenshot') === '1';
 const isRegionScreenshotEditor = urlParams.get('regionScreenshotEditor') === '1';
 const isRegionScreenshotPin = urlParams.get('regionScreenshotPin') === '1';
+const isQuotaTray = urlParams.get('quotaTray') === '1';
 
 void i18nReady
   .then(() =>
-    isRecordingPreview
+    isCloudLoginWindow
+      ? import('./cloud-login-entry')
+      : isRecordingPreview
       ? import('./recording-preview-entry')
       : isRemoteDesktopViewer
       ? import('./remote-desktop-viewer-entry')
@@ -36,7 +40,9 @@ void i18nReady
             ? import('./region-screenshot-entry')
             : isRegionScreenshotPin
               ? import('./region-screenshot-pin-entry')
-              : import('./main-entry'),
+              : isQuotaTray
+                ? import('./quota-tray-entry')
+                : import('./main-entry'),
   )
   .catch((error: unknown) => {
     // 入口加载失败发生在 React boundary 之前，仍通过统一 renderer logger 落盘。

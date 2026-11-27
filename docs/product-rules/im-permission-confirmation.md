@@ -1,5 +1,12 @@
 # IM 与 Cindy 共用工具权限确认
 
+> **读取时机**：修改 IM 工具授权、来源消息、多端确认或暂停期间的确认回执，或新增 IM 渠道之前
+> **适用路径**：`apps/desktop/src/main/maker-ipc/**/{interactionRouter,sharedPermission}*`、
+> `apps/desktop/src/main/im/shared/**/{permissionPresentation,pendingInteractions,interactionSource,autoReviewUnavailablePrompt}*`、
+> `apps/desktop/src/main/im/*/{adapter,interaction,textInteractions,WechatIM}*`、
+> `apps/desktop/src/main/hook-control/**/{interactions,sharedPermission}*`、
+> `apps/mobile/src/session/{permissionPresentation,interactionModel}*`
+
 2026-10-03，用户要求：授权同时在 IM 和 Cindy 显示，任一处可以确认，来源群聊和
 触发消息要保留；各种 IM 及未来新增机器人应复用同一实现。
 
@@ -64,6 +71,10 @@
 均尝试恢复，并将逻辑占用保留至恢复结束。恢复采用权限代次校验，绝不覆盖处理中用户的新选择。
 无法启用自动审批时继续拒绝执行，不能丢掉策略强行用完全访问受理。权限不兼容提示说明
 本条消息未执行和处理方式；钉钉引导到 Cindy，不建议其不支持的 `/permission` 命令。
+
+2026-11-25 起插件引擎任务也接 IM，逐轮策略由引擎的每轮权限闸执行（见
+[plugin-harnesses.md](../dev-rules/protocol-compatibility/plugin-harnesses.md#每轮权限闸2026-11-25)）。引擎未声明该能力时
+带策略的消息同样拒绝执行并提示当前引擎不支持；临时 Auto 只在引擎提供 Auto 模式时生效，否则按上面的规则拒绝。
 
 `IMMessageEvent.interactionSource` 是可选的传输层元数据，提供群/聊天名、话题名、
 发起人和平台原消息链接。共享层取本轮实际触发消息，截取短摘要，绝不取聊天里“最新”一条。

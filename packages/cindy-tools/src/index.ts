@@ -1,6 +1,7 @@
 export {
   buildGhostRosterPrompt,
   createCindyGhostsMcpServer,
+  prepareStartupGhostToolInputSchema,
   handleForgeGuide,
   handleForgeInstall,
   handleForgePack,
@@ -41,4 +42,5 @@ export type {
   CindyGhostsMcpDeps,
   CindyMediaCapability,
   CindyMediaToolRequest,
+  CindyEvaluateToolRequest,
 } from './types.js';

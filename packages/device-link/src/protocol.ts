@@ -132,6 +132,14 @@ export function isInFlightDeviceLinkError(err: unknown): boolean {
   return err instanceof DeviceLinkError && err.inFlight === true;
 }
 
+/** Local-only signal. The reliable sender has retained no business frame and wrote no fragment. */
+export class DeviceLinkUnsentInvokeError extends DeviceLinkError {
+  constructor() {
+    super('BACKPRESSURE', 'unsent invoke yielded to an available route');
+    this.inFlight = false;
+  }
+}
+
 // ─── 连接层 payload ───────────────────────────────────────────────────────────
 
 // ─── 隧道层 payload ───────────────────────────────────────────────────────────
@@ -154,6 +162,23 @@ export interface LinkOpenPayload {
 /** 控制端能安全消费完整 ProviderLogoKind（含 #527 新增品牌）的 maker:provider:list 投影。 */
 export const CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2 = 'provider-logo-kinds-v2';
 
+/** Per-invoke opt-in. Older hosts ignore the capability and return their full directory. */
+export const CONTROLLER_CAPABILITY_PROVIDER_PICKER_V1 = 'provider-picker-v1';
+
+export interface ProviderPickerModel {
+  agent: 'claude-code' | 'codex' | 'pi';
+  providerId: string | null;
+  modelId: string;
+}
+
+export function providerPickerListArgs(retainedModel?: ProviderPickerModel) {
+  return [{
+    capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2, CONTROLLER_CAPABILITY_PROVIDER_PICKER_V1],
+    ...(retainedModel ? { retainedModel } : {}),
+  }];
+}
+
+
 /** 控制端能区分 set-model 中显式 providerId:null 与 JSON optional 占位。 */
 export const CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1 =
   'set-model-explicit-provider-null-v1';
@@ -171,6 +196,13 @@ export const CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1 = 'maker-event-batch-v1'
 
 /** Accepts ordered current-text snapshots and history repair hints, including after backpressure. */
 export const CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1 = 'session-text-snapshot-v1';
+
+/**
+ * 控制端认识「待切到插件引擎」的意图(`agentSwitchIntent.targetAgentKind = 'acp'`，
+ * docs/plans/acp-plugin-bridge.md)。被控端只把这种意图推给 / 读给声明了本能力的控制端；
+ * 其余控制端看到的是「没有待切换」(旧版手机会把未知引擎显示成 Claude Code)。
+ */
+export const CONTROLLER_CAPABILITY_PLUGIN_ENGINE_SWITCH_INTENT_V1 = 'plugin-engine-switch-intent-v1';
 
 /**
  * 后台链路(link-open / link-accept 双向声明)。控制端在本机没有订阅对端任何 topic 时建链

@@ -69,6 +69,7 @@ import {
 } from './macHelperProcess.js';
 
 const log = createLogger('voice-input-global');
+const DISABLE_GLOBAL_SHORTCUTS = process.env.XDT_DISABLE_GLOBAL_SHORTCUTS === '1';
 type GlobalVoiceInputShortcutPhase = 'start' | 'tap' | 'end';
 
 const modifierShortcutRecordingWebContentsIds = new Set<number>();
@@ -197,6 +198,8 @@ type VoiceInputGlobalErrorCode =
   | 'unavailable'
   | 'unconfirmed'
   | 'permission'
+  /** macOS 27.3+: Cindy may control only chosen apps, and the target is not one of them. */
+  | 'appNotAllowed'
   | 'failed'
   /**
    * 这次调用在启动 listener 期间被更晚的一轮顶掉了。既不是故障也不该清理状态，
@@ -952,6 +955,7 @@ function schedulePendingShortcutRecoveryRetry(delayMs: number): void {
 }
 
 async function recoverPendingNativeShortcutRegistration(): Promise<void> {
+  if (DISABLE_GLOBAL_SHORTCUTS) return;
   if (process.platform !== 'darwin') return;
   if (pendingShortcutRecoveryRunning) {
     // 同限流那条的道理：在飞的那次可能刚好在用户点开开关**之前**读到了 denied，而这次聚焦
@@ -1075,6 +1079,11 @@ function registerModifierShortcutRecordingCleanup(sender: WebContents): void {
 export function registerGlobalVoiceInputIpc(deps: GlobalVoiceInputIpcDeps): void {
   if (registered) return;
   registered = true;
+
+  // 两个全局入口共用开关，只在这里记录一次，避免设置同步和窗口聚焦反复刷日志。
+  if (DISABLE_GLOBAL_SHORTCUTS) {
+    log.info('global voice input and region screenshot shortcuts skipped (XDT_DISABLE_GLOBAL_SHORTCUTS=1)');
+  }
 
   onVoiceInputReady(prewarmGlobalVoiceInputOverlayAfterReady);
 
@@ -1628,6 +1637,7 @@ async function startWindowsNativeListener(
 async function setVoiceInputGlobalShortcut(
   shortcut: VoiceInputShortcut | null,
 ): Promise<VoiceInputGlobalResult> {
+  if (DISABLE_GLOBAL_SHORTCUTS) return { ok: true };
   if (process.platform === 'linux' && shortcut) {
     return {
       ok: false,
@@ -2978,6 +2988,15 @@ async function pasteTextToMacTarget(text: string, pasteTarget: MacPasteTarget | 
       'permission',
     );
   }
+  // macOS 27.3+: Cindy may control only the apps the person chose, and this
+  // target is not one of them. The helper refuses before touching the clipboard.
+  if (isMacAppControlNotAllowedError(result.reason) || isMacAppControlNotAllowedError(result.error)) {
+    throw new PasteCommandError(
+      'This app is not one of the apps Cindy may control.',
+      result.reason || result.error || 'App control is limited to chosen apps.',
+      'appNotAllowed',
+    );
+  }
 
   // Accept-unconfirmed has two channels:
   //
@@ -4255,6 +4274,11 @@ function getPasteErrorPresentation(error: unknown): {
 function isMacAccessibilityPermissionError(value: string | null | undefined): boolean {
   if (!value) return false;
   return value.toLowerCase().includes('accessibility permission is not granted');
+}
+
+/** Exact phrase of HelperError.appControlNotAllowed in macos-text-insertion-helper.swift. */
+function isMacAppControlNotAllowedError(value: string | null | undefined): boolean {
+  return value?.includes('App control is limited to chosen apps') === true;
 }
 
 function getPasteErrorDetail(error: unknown): string {

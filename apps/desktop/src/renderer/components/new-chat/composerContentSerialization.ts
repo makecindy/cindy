@@ -64,7 +64,7 @@ function expandedIndentWidth(text: string): number {
 function literalListContinuationPrefix(text: string): string | null {
   const match =
     text.match(/^([ \t]+)(?:[-+*•]|[1-9]\d{0,8}[.)])([ \t]+)/) ??
-    text.match(/^([ \t]+)[1-9]\d{0,8}、[ \t]*/);
+    text.match(/^([ \t]+)[1-9]\d?、[ \t]*/);
   if (!match) return null;
   return ' '.repeat(expandedIndentWidth(match[0]));
 }
