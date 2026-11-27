@@ -11,6 +11,7 @@ import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import {
   DEFAULT_SUBSCRIPTION_ACCOUNT,
   MAX_SUBSCRIPTION_ACCOUNTS,
+  type SubscriptionLongLivedTokenRecord,
   type LinkedLogin,
   type SubscriptionPoolConfig,
   type SubscriptionProvider,
@@ -31,6 +32,23 @@ function normalizeLegacyAccounts(raw: unknown): Record<string, string> | undefin
     seen.add(accountId);
     return true;
   }).slice(0, 512));
+}
+const shortText = (value: unknown): string | undefined =>
+  typeof value === 'string' && value.trim() && value.length <= 64 ? value.trim() : undefined;
+function normalizeLongLivedToken(raw: unknown): SubscriptionLongLivedTokenRecord | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const value = raw as Record<string, unknown>;
+  const plan = shortText(value.plan);
+  const planTier = shortText(value.planTier);
+  const planDisplayName = shortText(value.planDisplayName);
+  return {
+    ...(typeof value.mintedAt === 'number' && Number.isSafeInteger(value.mintedAt) && value.mintedAt > 0
+      ? { mintedAt: value.mintedAt } : {}),
+    ...(value.verification === 'verified' || value.verification === 'mismatch' ? { verification: value.verification } : {}),
+    ...(plan ? { plan } : {}),
+    ...(planTier ? { planTier } : {}),
+    ...(planDisplayName ? { planDisplayName } : {}),
+  };
 }
 export const defaultPool = (): SubscriptionPoolConfig => ({
   strategy: DEFAULT_ROUTE_STRATEGY,
@@ -88,6 +106,8 @@ export function normalizePoolFile(raw: unknown): PoolFile {
           ...(provider === 'anthropic' && typeof a.reloginIdentity === 'string' && a.reloginIdentity.trim()
             && a.reloginIdentity.length <= 320
             ? { reloginIdentity: a.reloginIdentity.trim() } : {}),
+          ...(provider === 'anthropic' && normalizeLongLivedToken(a.longLivedToken)
+            ? { longLivedToken: normalizeLongLivedToken(a.longLivedToken) } : {}),
           paused: a.paused === true,
           limit: Number.isInteger(a.limit) && a.limit >= 1 && a.limit <= 16 ? a.limit : 4,
           ...(a.limitSet === true ? { limitSet: true as const } : {}),

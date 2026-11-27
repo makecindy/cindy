@@ -245,6 +245,7 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
   usage: '只读查询订阅额度、任务额度、已记录供应商用量与供应组状态。get_subscription_usage 查询本机订阅；get_session_quota 按任务读取实际执行来源的额度，包含已授权的同账号电脑和供应商分享。供应商历史与组状态可用 device 指定同账号已授权电脑，缺省本机。插件需声明 usage 组。',
   feedback: `向 ${BRAND_NAME} 官方提交反馈。`,
   handoff: [
+    '用于跨任务发消息，或为独立业务工作流新建用户侧边栏可见的普通任务（只服务当前任务的临时检查、复核或子步骤优先用引擎原生 subagent，多 worker 协同用 cindy_orca）。',
     '新建普通任务默认在本机；宿主支持跨电脑新建时，可用 device 指定任务和文件所在电脑。',
     '新建可指定 title；',
     '本机省略 project_path 继承来源归属（来源不绑项目时按执行目录所在的已登记可见项目归属），传已有项目路径切换项目，传 null 创建不绑项目的任务。',

@@ -25,9 +25,11 @@ import { applyPluginEnginePick, buildRemoteCreateSessionOptions, type NewSession
 import {
   buildPluginEngineGroups,
   formatPluginEngineModelQuota,
+  formatPluginEngineModelQuotaLabel,
   formatPluginEnginePickerQuota,
   getCachedControlledPluginEngines,
   getCachedPluginEngines,
+  isPluginEngineSwitchSourceAllowed,
   loadControlledPluginEngines,
   loadPluginEngines,
   normalizeOfferedRemotePluginEngines,
@@ -355,7 +357,59 @@ describe('a task running on a plugin engine', () => {
       remaining: 20,
       level: 'warn',
       accessibilityLabel: '5h · 20% · 2h',
+      groups: [
+        {
+          id: 'default',
+          label: '5h',
+          remaining: 20,
+          level: 'warn',
+          reset: '2h',
+          summary: '20% · 2h',
+          accessibilityLabel: '5h · 20% · 2h',
+        },
+      ],
     });
+
+    // Multi-group plugin engine (Antigravity): Gemini and Claude & GPT stay separate.
+    const agyUsage = {
+      updatedAt: now,
+      windows: [
+        { label: 'Gemini Models · weekly', remainingPercent: 89, resetsAt: now + 6 * 24 * 3_600_000 },
+        { label: 'Gemini Models · 5h', remainingPercent: 8.4, resetsAt: now + 3_600_000 },
+        { label: 'Claude and GPT models · weekly', remainingPercent: 84.09, resetsAt: now + 6 * 24 * 3_600_000 },
+        { label: 'Claude and GPT models · 5h', remainingPercent: 100 },
+      ],
+    };
+    expect(formatPluginEnginePickerQuota(agyUsage, now, 'en-US', countdown)).toEqual({
+      summary: 'Gemini 8% · Claude & GPT 84%',
+      level: 'crit',
+      accessibilityLabel: 'Gemini · 8% · 1h · Claude & GPT · 84% · 144h',
+      isMultiGroup: true,
+      groups: [
+        {
+          id: 'label:gemini models',
+          label: 'Gemini',
+          remaining: 8,
+          level: 'crit',
+          reset: '1h',
+          summary: '8% · 1h',
+          accessibilityLabel: 'Gemini · 8% · 1h',
+        },
+        {
+          id: 'label:claude and gpt models',
+          label: 'Claude & GPT',
+          remaining: 84,
+          level: 'normal',
+          reset: '144h',
+          summary: '84% · 144h',
+          accessibilityLabel: 'Claude & GPT · 84% · 144h',
+        },
+      ],
+    });
+    expect(formatPluginEngineModelQuotaLabel(agyUsage, { id: 'gemini-4-neon', name: 'Gemini 4 Neon' }, now, countdown)).toBe('1h · 8%');
+    expect(formatPluginEngineModelQuotaLabel(agyUsage, { id: 'gemini-pro-orchestrator-neon', name: 'Orchestrator (Neon)' }, now, countdown)).toBe('1h · 8%');
+    expect(formatPluginEngineModelQuotaLabel(agyUsage, { id: 'claude-sonnet-5-5', name: 'Claude Sonnet 5.5' }, now, countdown)).toBe('144h · 84%');
+    expect(formatPluginEngineModelQuotaLabel(agyUsage, { id: 'gpt-oss-120b-medium', name: 'GPT-OSS 120B (Medium)' }, now, countdown)).toBe('144h · 84%');
 
     expect(formatPluginEnginePickerQuota({
       updatedAt: now,
@@ -374,6 +428,30 @@ describe('a task running on a plugin engine', () => {
     });
 
     expect(formatPluginEnginePickerQuota(null, now, 'en-US', countdown)).toBeUndefined();
+  });
+
+  // 回归：Mobile 会话页的模型选择器需对 IM 与官方 hook 来源(x/feishu/telegram 等)开放插件引擎切换，
+  // 同时保持 review/learn/cindy-make/scheduler 关闭。最小失败输入：source='x' 或 'feishu' 被判 false。
+  it.each([
+    ['desktop', true],
+    ['bot', true],
+    ['x', true],
+    ['feishu', true],
+    ['telegram', true],
+    ['discord', true],
+    ['discord-hook', true],
+    ['slack', true],
+    ['wechat', true],
+    ['dingtalk', true],
+    ['wecom', true],
+    ['imessage', true],
+    [null, true],
+    ['review', false],
+    ['learn', false],
+    ['cindy-make', false],
+    ['scheduler', false],
+  ] as const)('switch source allowlist: %s -> %s', (source, allowed) => {
+    expect(isPluginEngineSwitchSourceAllowed(source)).toBe(allowed);
   });
 
   // 生产入口：resolveMobilePluginEngineFavorite + matchesPluginEngineFavoriteQuery。

@@ -1,3 +1,4 @@
+import { base64DecodedByteLength, isLooseBase64Chars, parseBase64DataUrl } from './dataUrl.js';
 import { piEditReplacements } from './toolUseDescriptor.js';
 import { presentationText, type PresentationLocalizer } from './presentationLocalization.js';
 
@@ -1001,12 +1002,12 @@ function formatMediaPayloadDisplayText(
 }
 
 function describeDataImageUrl(url: string): { mimeLabel: string; sizeLabel: string } | null {
-  const match = /^data:image\/([^;,]+)(?:;[^,]*)?,([a-zA-Z0-9+/=\s]+)$/.exec(url);
-  if (!match) return null;
-  const subtype = match[1]?.trim().toUpperCase() || 'IMAGE';
-  const encoded = (match[2] ?? '').replace(/\s/g, '');
-  const padding = encoded.endsWith('==') ? 2 : encoded.endsWith('=') ? 1 : 0;
-  const bytes = Math.max(0, Math.floor((encoded.length * 3) / 4) - padding);
+  const parsed = parseBase64DataUrl(url, /^data:image\/([^;,]+)(?:;[^,]*)?$/, {
+    allowLineTerminators: true,
+  });
+  if (!parsed || !isLooseBase64Chars(parsed.payload, { allowWhitespace: true })) return null;
+  const subtype = parsed.header[1]?.trim().toUpperCase() || 'IMAGE';
+  const bytes = base64DecodedByteLength(parsed.payload);
   return {
     mimeLabel: subtype,
     sizeLabel: formatPayloadByteSize(bytes),
