@@ -9096,7 +9096,10 @@
             "user": "Usuário",
             "assistant": "Assistente"
           }
-        }
+        },
+        "agentChecks": "Pode verificar se há conteúdo novo",
+        "agentChecksDetail": "Compartilha apenas o estado de alteração, sem alterações ou desconhecido com outros plugins autorizados. Cada plugin usa suas próprias contas conectadas, sem compartilhar mensagens ou credenciais. A verificação não usa modelos. Também verifica alterações nas conversas locais do Cindy sem retornar o conteúdo.",
+        "agentChecksRequest": "Revisar permissão de verificação"
       },
       "connections": {
         "confirmTitle": "Adicionar endereço de conexão",
@@ -12505,12 +12508,37 @@
           "unfollowTip": "Deixar de seguir: você só receberá avisos quando alguém mencionar você",
           "listLabel": "Tópicos nesta conversa em grupo",
           "listNews": "Novas respostas",
-          "listOthers": "Outros tópicos",
           "newSeparator": "Novas respostas",
           "open_many": "Abrir discussão, {{count}} respostas",
           "alsoSendFailed_many": "{{count}} respostas estão no tópico, mas não foi possível enviá-las à conversa principal.",
           "newReplies_many": "{{count}} novas respostas",
-          "hintMany_many": "Novas respostas em {{count}} discussões"
+          "hintMany_many": "Novas respostas em {{count}} discussões",
+          "openIndex": "Tópicos",
+          "indexTitle": "Tópicos",
+          "backToList": "Voltar aos tópicos",
+          "filterAria": "Filtrar tópicos",
+          "filterMine": "Para mim",
+          "filterAll": "Todos",
+          "searchPlaceholder": "Buscar tópicos, respostas ou membros",
+          "clearSearch": "Limpar busca",
+          "listRecent": "Recentes",
+          "indexParticipatedTag": "Participou",
+          "indexMentionedTag": "Mencionado",
+          "locateInGroup": "Mostrar no grupo",
+          "indexEmptyMine": "Ainda não há tópicos em que você participou ou foi mencionado",
+          "indexEmptyAll": "Ainda não há tópicos neste grupo",
+          "indexEmptySearch": "Nenhum tópico correspondente",
+          "viewAllThreads": "Ver todos os tópicos",
+          "syncingHistory": "Carregando tópicos anteriores…",
+          "rootKind": {
+            "task": "Tarefa",
+            "image": "Imagem",
+            "video": "Vídeo",
+            "audio": "Áudio",
+            "file": "Arquivo",
+            "share": "Resposta compartilhada",
+            "card": "Cartão"
+          }
         },
         "replyPlaceholder": "Responda a esta mensagem; use @ para mencionar um amigo…",
         "sendReply": "Enviar resposta",
@@ -17305,9 +17333,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "Adicionar computador na nuvem",
-        "preparingCloud": "Preparando computador na nuvem",
-        "manageCloud": "Gerenciar computador na nuvem",
         "allMachines": "Todas",
         "localMachine": "Locais",
         "connecting": "Conectando…",
@@ -17806,6 +17831,13 @@
         "inbox": "Caixa de entrada",
         "enterInbox": "Mudar para o modo caixa de entrada",
         "leaveInbox": "Mudar para o modo lista de tarefas"
+      },
+      "filterHideTaskCreated": "Ocultar tarefas criadas por outras tarefas",
+      "origin": {
+        "createdByTask": "Aberta por outra tarefa",
+        "createdByTaskNamed": "Aberta pela tarefa “{{title}}”",
+        "createdByRemoteTask": "Aberta por uma tarefa em {{device}}",
+        "createdByRemoteTaskNamed": "Aberta por “{{title}}” em {{device}}"
       }
     },
     "rename": {
@@ -17826,7 +17858,9 @@
       "orcaRemoteLead": "Colaboração de {{device}}",
       "orcaRemoteLeadReleased": "Colaboração encerrada · de {{device}}",
       "orcaRemoteLeadUnknownDevice": "outro computador",
-      "orcaRemoteLeadTip": "Um Worker de “{{lead}}” em {{device}}. Sua tarefa, pasta e comandos são executados neste computador. As mensagens que você enviar aqui não serão repassadas ao Lead."
+      "orcaRemoteLeadTip": "Um Worker de “{{lead}}” em {{device}}. Sua tarefa, pasta e comandos são executados neste computador. As mensagens que você enviar aqui não serão repassadas ao Lead.",
+      "createdByTask": "De outra tarefa",
+      "createdByTaskNamed": "De “{{title}}”"
     },
     "gitContext": {
       "detached": "HEAD desanexado",

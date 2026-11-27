@@ -8979,7 +8979,10 @@
             "user": "사용자",
             "assistant": "어시스턴트"
           }
-        }
+        },
+        "agentChecks": "새 콘텐츠가 있는지 확인할 수 있음",
+        "agentChecksDetail": "승인된 다른 플러그인과 변경 있음, 변경 없음 또는 확인 불가 상태만 공유합니다. 각 플러그인은 자체 연결 계정을 사용하며 메시지 본문이나 인증 정보를 공유하지 않습니다. 확인에는 모델을 사용하지 않습니다. 로컬 Cindy 대화의 변경 여부도 내용 반환 없이 확인합니다.",
+        "agentChecksRequest": "변경 확인 권한 검토"
       },
       "connections": {
         "confirmTitle": "연결 주소 추가",
@@ -12365,8 +12368,33 @@
           "unfollowTip": "팔로우를 해제하면 나를 언급할 때만 알려 드립니다",
           "listLabel": "이 그룹 채팅의 스레드",
           "listNews": "새 답글 있음",
-          "listOthers": "다른 스레드",
-          "newSeparator": "새 답글"
+          "newSeparator": "새 답글",
+          "openIndex": "스레드",
+          "indexTitle": "스레드",
+          "backToList": "스레드 목록으로 돌아가기",
+          "filterAria": "스레드 필터",
+          "filterMine": "내 관련",
+          "filterAll": "전체",
+          "searchPlaceholder": "스레드, 답글 또는 멤버 검색",
+          "clearSearch": "검색 지우기",
+          "listRecent": "최근",
+          "indexParticipatedTag": "참여함",
+          "indexMentionedTag": "멘션됨",
+          "locateInGroup": "그룹에서 보기",
+          "indexEmptyMine": "참여했거나 멘션된 스레드가 아직 없습니다",
+          "indexEmptyAll": "이 그룹에 아직 스레드가 없습니다",
+          "indexEmptySearch": "일치하는 스레드가 없습니다",
+          "viewAllThreads": "전체 스레드 보기",
+          "syncingHistory": "이전 스레드 불러오는 중…",
+          "rootKind": {
+            "task": "작업",
+            "image": "이미지",
+            "video": "동영상",
+            "audio": "오디오",
+            "file": "파일",
+            "share": "공유된 답글",
+            "card": "카드"
+          }
         },
         "replyPlaceholder": "이 메시지에 답글을 쓰세요. @로 동반자를 멘션할 수 있어요…",
         "sendReply": "답글 보내기",
@@ -17072,9 +17100,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "클라우드 컴퓨터 추가",
-        "preparingCloud": "클라우드 컴퓨터 준비 중",
-        "manageCloud": "클라우드 컴퓨터 관리",
         "allMachines": "전체",
         "localMachine": "이 기기",
         "connecting": "연결 중…",
@@ -17565,6 +17590,13 @@
         "inbox": "받은 편지함",
         "enterInbox": "받은 편지함 모드로 전환",
         "leaveInbox": "작업 목록 모드로 전환"
+      },
+      "filterHideTaskCreated": "다른 작업에서 만든 작업 숨기기",
+      "origin": {
+        "createdByTask": "다른 작업에서 생성됨",
+        "createdByTaskNamed": "「{{title}}」 작업에서 생성됨",
+        "createdByRemoteTask": "{{device}}의 작업에서 생성됨",
+        "createdByRemoteTaskNamed": "{{device}}의 「{{title}}」 작업에서 생성됨"
       }
     },
     "rename": {
@@ -17585,7 +17617,9 @@
       "orcaRemoteLead": "{{device}}에서 온 협업",
       "orcaRemoteLeadReleased": "협업 종료됨 · {{device}}에서",
       "orcaRemoteLeadUnknownDevice": "다른 컴퓨터",
-      "orcaRemoteLeadTip": "{{device}}에 있는 “{{lead}}”의 Worker입니다. 작업, 폴더, 명령은 이 컴퓨터에서 실행됩니다. 여기서 보낸 메시지는 Lead에 보고되지 않습니다."
+      "orcaRemoteLeadTip": "{{device}}에 있는 “{{lead}}”의 Worker입니다. 작업, 폴더, 명령은 이 컴퓨터에서 실행됩니다. 여기서 보낸 메시지는 Lead에 보고되지 않습니다.",
+      "createdByTask": "다른 작업에서 시작",
+      "createdByTaskNamed": "「{{title}}」에서 시작"
     },
     "gitContext": {
       "detached": "Detached HEAD",
