@@ -1,4 +1,5 @@
 import type { VoiceCallRecord } from '@cindy/maker-core';
+export { readVoiceCallRecord } from '@cindy/maker-shared/voice-call-record';
 export type { VoiceCallRecord } from '@cindy/maker-core';
 import type { AudioTrace, ConversationInputEvent } from '@cindy/voice-input-core';
 import type { AgentKind } from '@cindy/model-providers';
@@ -23,24 +24,6 @@ export function isVoiceCallTaskMessage(
   const suffix = `:${source.clientId}`;
   return clientId.startsWith(prefix) && clientId.endsWith(suffix)
     && clientId.length > prefix.length + suffix.length;
-}
-
-/** Persisted metadata can come from an older or incomplete history projection. */
-export function readVoiceCallRecord(value: unknown): VoiceCallRecord | null {
-  if (!value || typeof value !== 'object') return null;
-  const record = value as Partial<VoiceCallRecord>;
-  if (record.version !== 1 || typeof record.callId !== 'string'
-    || !Number.isFinite(record.startedAt)
-    || (record.endedAt !== undefined && !Number.isFinite(record.endedAt))
-    || !Array.isArray(record.turns) || record.turns.length > 2_000
-    || !Array.isArray(record.handoffs) || record.handoffs.length > 2_000) return null;
-  if (!record.turns.every(turn => turn && typeof turn.id === 'string'
-    && (turn.role === 'user' || turn.role === 'assistant') && typeof turn.text === 'string'
-    && Number.isFinite(turn.createdAt) && typeof turn.complete === 'boolean')) return null;
-  if (!record.handoffs.every(task => task && typeof task.id === 'string'
-    && typeof task.inputId === 'string' && typeof task.text === 'string'
-    && ['sending', 'accepted', 'failed', 'completed'].includes(task.state))) return null;
-  return record as VoiceCallRecord;
 }
 
 /** Presentation frame of the one live call, published by the main window's call host. */
