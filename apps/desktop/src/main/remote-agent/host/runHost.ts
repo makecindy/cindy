@@ -684,6 +684,12 @@ function safeCall<T>(fn: (() => T) | undefined): T | undefined {
 
 /** 控制端镜像同步读取的会话状态。 */
 export function snapshotHandleState(handle: AgentSessionHandle): Record<string, unknown> {
+  const planMode = safeCall(handle.getPlanMode?.bind(handle));
+  // Handles without getExecutionPlanMode (e.g. ACP) mirror planMode so older controllers
+  // also observe a stable execution Plan state; handles that implement it fail closed to null on throw.
+  const executionPlanMode = handle.getExecutionPlanMode
+    ? (safeCall(handle.getExecutionPlanMode.bind(handle)) ?? null)
+    : planMode;
   const state: Record<string, unknown> = {
     id: handle.id,
     model: handle.model,
@@ -691,8 +697,8 @@ export function snapshotHandleState(handle: AgentSessionHandle): Record<string, 
     turnRunning: safeCall(handle.isTurnRunning?.bind(handle)),
     preparing: safeCall(handle.isPreparingUserTurn?.bind(handle)),
     currentTurnId: safeCall(handle.getCurrentTurnId?.bind(handle)),
-    planMode: safeCall(handle.getPlanMode?.bind(handle)),
-    executionPlanMode: safeCall(handle.getExecutionPlanMode?.bind(handle)),
+    planMode,
+    executionPlanMode,
     fastMode: safeCall(handle.getFastMode?.bind(handle)),
     effort: safeCall(handle.getEffort?.bind(handle)),
     backgroundTasks: safeCall(handle.listBackgroundTasks?.bind(handle)),
@@ -703,6 +709,7 @@ export function snapshotHandleState(handle: AgentSessionHandle): Record<string, 
     disabledSkillPaths: handle.disabledSkillPaths,
     // 插件引擎：模型、思考深度与权限档是它握手时给的，控制端没有这个插件，只能从这里得知(内置引擎没有这一项)。
     negotiatedCapabilities: handle.negotiatedCapabilities,
+    requiresRuntimeRecycleForExtraDirs: safeCall(handle.requiresRuntimeRecycleForExtraDirs?.bind(handle)),
   };
   for (const key of Object.keys(state)) if (state[key] === undefined) delete state[key];
   return JSON.parse(JSON.stringify(state)) as Record<string, unknown>;

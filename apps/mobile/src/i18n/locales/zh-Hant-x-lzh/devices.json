@@ -366,7 +366,11 @@
       "close": "闔",
       "cancelRename": "罷易名",
       "createdBy": "{{name}} 所立",
-      "ownedBy": "屬 {{name}}"
+      "ownedBy": "屬 {{name}}",
+      "orcaRemoteLead": "自 {{device}} 之協同",
+      "createdByTask": "他差事所立",
+      "createdByTaskNamed": "差事「{{title}}」所立",
+      "unknownDevice": "遠方之機"
     },
     "accounts": {
       "title": "易名籍",
@@ -422,7 +426,8 @@
         "all": "全",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "法器引擎"
       },
       "filterLastActivityHeading": "近動",
       "filterLastActivity": {

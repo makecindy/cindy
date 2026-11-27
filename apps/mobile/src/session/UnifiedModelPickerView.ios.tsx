@@ -83,6 +83,15 @@ function ProviderSourceMark({
 }: {
   filter: UnifiedMobilePickerViewProps["filters"][number] | undefined;
 }) {
+  if (filter?.pluginEngineMark) {
+    return (
+      <PluginEngineMark
+        iconDataUrl={filter.pluginEngineMark.iconDataUrl}
+        remote={filter.remote != null}
+        size={iconSize.action}
+      />
+    );
+  }
   return (
     <MobileProviderMark
       {...filter?.providerMark}
@@ -182,8 +191,8 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
         key={row.key}
         modifiers={[id(`${groupKey}:${row.key}`)]}
         title={row.title}
-        subtitle={[row.effortLabel, row.subtitle, row.notice].filter(Boolean).join(" · ")}
-        subtitleContent={row.subtitle || row.notice ? (
+        subtitle={[row.remoteDevice?.name, row.effortLabel, row.subtitle, row.notice, row.quotaLabel].filter(Boolean).join(" · ")}
+        subtitleContent={row.subtitle || row.notice || row.quotaLabel ? (
           <VStack alignment="leading" spacing={2}>
             {row.subtitle ? (
               <Text modifiers={[font({ textStyle: "caption" }), foregroundStyle(colors.textSecondary)]}>
@@ -193,6 +202,11 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
             {row.notice ? (
               <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textSecondary)]}>
                 {row.notice}
+              </Text>
+            ) : null}
+            {row.quotaLabel ? (
+              <Text modifiers={[font({ textStyle: "caption2" }), foregroundStyle(colors.textTertiary)]}>
+                {row.quotaLabel}
               </Text>
             ) : null}
           </VStack>
@@ -205,7 +219,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
         leading={
           <RNHostView matchContents>
             <View style={{ width: 28, height: 28, justifyContent: "center" }}>
-              <PluginEngineMark iconDataUrl={row.iconDataUrl} size={iconSize.action} />
+              <PluginEngineMark iconDataUrl={row.iconDataUrl} remote={row.remoteDevice != null} size={iconSize.action} />
             </View>
           </RNHostView>
         }
@@ -401,7 +415,43 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
         <Section
           key={group.key}
           title={group.title}
-          header={group.quota?.summary ? (
+          header={group.quota?.isMultiGroup && group.quota.groups?.length ? (
+            <HStack spacing={6}>
+              <Text modifiers={[font({ textStyle: "caption", weight: "medium" }), foregroundStyle(colors.textSecondary)]}>
+                {group.title}
+              </Text>
+              <Spacer />
+              <HStack spacing={4}>
+                {group.quota.groups.map((item, index) => (
+                  <HStack key={item.id} spacing={4}>
+                    {index > 0 ? (
+                      <Text modifiers={[font({ textStyle: "caption" }), foregroundStyle(colors.textTertiary)]}>
+                        ·
+                      </Text>
+                    ) : null}
+                    <Text modifiers={[font({ textStyle: "caption" }), foregroundStyle(colors.textTertiary)]}>
+                      {item.label}
+                    </Text>
+                    <Text
+                      modifiers={[
+                        font({ textStyle: "caption" }),
+                        foregroundStyle(
+                          item.level === "crit"
+                            ? colors.quotaBarCrit
+                            : item.level === "warn"
+                              ? colors.quotaBarWarn
+                              : colors.textSecondary,
+                        ),
+                        accessibilityLabel(item.accessibilityLabel),
+                      ]}
+                    >
+                      {`${item.remaining}%`}
+                    </Text>
+                  </HStack>
+                ))}
+              </HStack>
+            </HStack>
+          ) : group.quota?.summary ? (
             <HStack spacing={6}>
               <Text modifiers={[font({ textStyle: "caption", weight: "medium" }), foregroundStyle(colors.textSecondary)]}>
                 {group.title}
@@ -478,7 +528,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
       selected={p.filter === item.id}
       selectionIcon={mark(Check)}
       leading={
-        item.providerMark ? (
+        item.providerMark || item.pluginEngineMark ? (
           <VStack spacing={2}>
             <NativeMark>
               <ProviderSourceMark filter={item} />
@@ -534,9 +584,13 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
         active: !options && !pluginOptions && !page,
         header: listHeader,
         content: listContent,
-        initialScrollTargetId: p.groups.flatMap(group =>
-          group.rows.filter(row => row.selected).map(row => `${group.key}:${row.key}`)
-        )[0],
+        initialScrollTargetId:
+          p.groups.flatMap(group =>
+            group.rows.filter(row => row.selected).map(row => `${group.key}:${row.key}`)
+          )[0] ??
+          (p.pluginEngines?.groups ?? []).flatMap(group =>
+            group.rows.filter(row => row.selected).map(row => `${group.key}:${row.key}`)
+          )[0],
       }}
     >
       {p.error ? (
