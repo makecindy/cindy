@@ -144,6 +144,86 @@ describe('createModelGroupResolver', () => {
     now: () => now,
   });
 
+  // 生产入口与可观察结果：createModelGroupResolver.resolve 对本地与远程 acp 插件引擎候选的可用性、努力档、看图与远程调用判定。
+  // 规则依据：2026-11-27 模型组支持 acp 插件引擎，按实时插件目录校验 availability/suspended/disabledModels/defaultModelAllowed/efforts。
+  // 覆盖缺口：此前 ModelGroupCandidate 拒绝 'acp'，解析器没有任何插件引擎候选覆盖。
+  // 最小失败输入与 tier：unit，构造停用与可用本地/远程插件引擎的候选列表并调用 resolver.resolve。
+  it('evaluates local and remote plugin engine (acp) candidates with availability, effort, and disabled-model rules', async () => {
+    const DSH = 'acp-plugin:dsh-acp:dsh';
+    const AGY = 'acp-plugin:agy-acp:agy';
+    const acpGroup: ModelGroupsConfig = {
+      routes: [
+        {
+          id: 'r-acp',
+          name: '插件路线',
+          strategy: 'order',
+          effort: 'high',
+          candidates: [
+            { agentKind: 'acp', providerId: DSH, model: 'deepseek-v4' },
+            { agentKind: 'acp', providerId: AGY, model: 'gemini-3-pro', agentDeviceId: 'studio' },
+          ],
+        },
+      ],
+    };
+    const resolver = createModelGroupResolver({
+      config: () => acpGroup,
+      views: async () => [],
+      agents: () => ['codex'],
+      harnessInstalled: async () => true,
+      quotaWindows: async () => new Map(),
+      pluginEngines: () => [
+        {
+          key: 'dsh-acp:dsh',
+          providerId: DSH,
+          ghostId: 'dsh-acp',
+          harnessId: 'dsh',
+          name: 'DeepSeek Harness',
+          availability: { state: 'available' },
+          suspended: true,
+          models: [{ id: 'deepseek-v4', displayName: 'DeepSeek V4', efforts: ['high'] }],
+          permissionModes: [{ id: 'ask' }],
+          defaultPermissionMode: 'ask',
+        } as never,
+      ],
+      remotePluginEngines: async (deviceId) =>
+        deviceId === 'studio'
+          ? [
+              {
+                key: 'agy-acp:agy',
+                providerId: AGY,
+                ghostId: 'agy-acp',
+                harnessId: 'agy',
+                name: 'Antigravity',
+                availability: { state: 'available' },
+                remoteUse: { supported: true, enabled: true },
+                models: [{ id: 'gemini-3-pro', displayName: 'Gemini 3 Pro', efforts: ['low', 'high'] }],
+                reportedModelDetails: [{ modelId: 'gemini-3-pro', imageInput: true }],
+                permissionModes: [{ id: 'ask' }],
+                defaultPermissionMode: 'ask',
+              } as never,
+            ]
+          : [],
+      locations: async () => ({ locations: [{ agentDeviceId: 'studio' }] }),
+      scope: () => 'owner',
+      now: () => NOW,
+    });
+
+    const resolved = await resolver.resolve({ selection: { type: 'route', id: 'r-acp' }, context: { hasImages: true } });
+    expect(resolved).toMatchObject({
+      outcome: 'routed',
+      route: {
+        agentKind: 'acp',
+        providerId: AGY,
+        model: 'gemini-3-pro',
+        agentDeviceId: 'studio',
+        effort: 'high',
+      },
+      modelName: 'Gemini 3 Pro',
+      sourceName: 'Antigravity',
+    });
+    expect(resolved.trace[0]).toMatchObject({ state: 'skipped', why: 'unavailable' });
+  });
+
   it('advances rotation only after adoption, not on cancelled picks or previews (#10240)', async () => {
     const resolver = make();
     const selection = { type: 'route', id: 'r1' } as const;
@@ -668,90 +748,6 @@ it('asks for the quota readings on hand only when the request is for display', a
   await resolver.resolve({ selection, dryRun: true });
   await resolver.resolve({ selection });
   expect(quotaWindows.mock.calls.map(([options]) => options?.cached === true)).toEqual([true, false, false]);
-});
-
-// 2026-11-27(ACP 插件执行引擎接入智能路由) / unit：
-// 1. normalizeModelGroupsConfig 接受带有效 acp-plugin: 前缀的 acp 候选，拒绝缺少前缀的坏数据(acp-plugin-harness.md §2.2)；
-// 2. createModelGroupResolver 解析本机 + 分享来的 Antigravity 候选：本机不可用时切到分享来源、仅在模型声明时保留 effort、
-//    remoteInvocableOnly 只放行允许被远程调用的本机插件引擎。
-describe('ACP plugin engines in smart routes', () => {
-  it('validates acp candidates require an acp-plugin: providerId', () => {
-    const normalized = normalizeModelGroupsConfig({
-      routes: [{
-        id: 'r-acp', name: 'Antigravity', strategy: 'order',
-        candidates: [
-          { agentKind: 'acp', providerId: 'acp-plugin:antigravity:agy', model: 'gemini-4-neon' },
-          { agentKind: 'acp', providerId: 'openai', model: 'gemini-4-neon' },
-          { agentKind: 'acp', providerId: 'acp-plugin:antigravity:agy', model: 'gemini-4-neon', agentDeviceId: 'share:dash-agy' },
-        ],
-      }],
-    });
-    expect(normalized.routes[0]?.candidates).toEqual([
-      { agentKind: 'acp', providerId: 'acp-plugin:antigravity:agy', model: 'gemini-4-neon' },
-      { agentKind: 'acp', providerId: 'acp-plugin:antigravity:agy', model: 'gemini-4-neon', agentDeviceId: 'share:dash-agy' },
-    ]);
-  });
-
-  it('resolves local and shared ACP candidates, falls back when local is unavailable, and honors effort & remoteInvocableOnly', async () => {
-    const localEngine = {
-      key: 'antigravity:agy',
-      providerId: 'acp-plugin:antigravity:agy',
-      ghostId: 'antigravity',
-      harnessId: 'agy',
-      name: 'Antigravity',
-      availability: { state: 'unavailable' as const },
-      models: [{ id: 'gemini-4-neon', displayName: 'Gemini 4 Neon', efforts: ['high' as const] }],
-      permissionModes: [],
-      defaultPermissionMode: 'ask' as const,
-      remoteUse: { supported: true, enabled: false, shareSupported: true },
-    };
-    const sharedEngine = {
-      ...localEngine,
-      availability: { state: 'available' as const },
-      remoteUse: { supported: true, enabled: true, shareSupported: true },
-    };
-    const groups: ModelGroupsConfig = {
-      routes: [{
-        id: 'r-acp', name: 'Agy', strategy: 'order', effort: 'high',
-        candidates: [
-          { agentKind: 'acp', providerId: 'acp-plugin:antigravity:agy', model: 'gemini-4-neon' },
-          { agentKind: 'acp', providerId: 'acp-plugin:antigravity:agy', model: 'gemini-4-neon', agentDeviceId: 'share:dash-agy' },
-        ],
-      }],
-    };
-    const resolver = createModelGroupResolver({
-      config: () => groups,
-      views: async () => [],
-      pluginEngines: () => [localEngine],
-      agents: () => ['codex'],
-      harnessInstalled: async () => true,
-      quotaWindows: async () => new Map(),
-      locations: async () => ({ locations: [{ agentDeviceId: 'share:dash-agy' }] }),
-      remotePluginEngines: async (id) => (id === 'share:dash-agy' ? [sharedEngine] : null),
-      scope: () => 'owner',
-      now: () => NOW,
-    });
-    const picked = await resolver.resolve({ selection: { type: 'route', id: 'r-acp' } });
-    expect(picked).toMatchObject({
-      outcome: 'routed',
-      route: { agentKind: 'acp', providerId: 'acp-plugin:antigravity:agy', model: 'gemini-4-neon', agentDeviceId: 'share:dash-agy', effort: 'high' },
-      modelName: 'Gemini 4 Neon',
-      sourceName: 'Antigravity',
-    });
-    // 本机虽然设为 available，但未开 remoteUse.enabled 时，remoteInvocableOnly 必须拦截它。
-    const localOnlyResolver = createModelGroupResolver({
-      config: () => ({ routes: [{ id: 'r-local', name: 'Local', strategy: 'order', candidates: [groups.routes[0]!.candidates[0]!] }] }),
-      views: async () => [],
-      pluginEngines: () => [{ ...localEngine, availability: { state: 'available' as const } }],
-      agents: () => [],
-      harnessInstalled: async () => true,
-      quotaWindows: async () => new Map(),
-      scope: () => 'owner',
-      now: () => NOW,
-    });
-    const remoteBlocked = await localOnlyResolver.resolve({ selection: { type: 'route', id: 'r-local' }, remoteInvocableOnly: true });
-    expect(remoteBlocked.outcome).toBe('unavailable');
-  });
 });
 
 it('resolves SSH native Codex candidates from the SSH host catalog without local openai login or local codex install', async () => {

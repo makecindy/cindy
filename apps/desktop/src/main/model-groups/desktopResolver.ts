@@ -11,7 +11,6 @@ import { isSessionSharedTaskActive } from '../device-link/sharedTaskDispatch.js'
 import { getGoalController } from '../goal-host/index.js';
 import { getSessionRowSnapshot } from '../localDb/sessionDispatchSnapshot.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
-import { isPluginEngineOfferedRemotely } from '../maker-host/pluginEngineRemoteUse.js';
 import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider-access-store.js';
 import * as pluginEnginesIpc from '../maker-ipc/pluginEnginesIpc.js';
 import { readWorkerAgentLocations } from '../maker-ipc/workerAgentLocations.js';
@@ -114,7 +113,7 @@ export const desktopModelGroupRuntime = createModelGroupRuntime({
     ensurePluginEnginesSubscription();
     return getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true });
   },
-  localPluginEngines: () => pluginEnginesIpc.listPluginEngineViews(),
+  pluginEngines: () => pluginEnginesIpc.listPluginEngineViews(),
   localAgents: () => getPluginModelPickerAgents(),
   harnessInstalled: (agent, agentDeviceId) => isPluginRouteHarnessInstalled(agent, agentDeviceId, async (deviceId, name) => {
     const result = await remoteBackgroundInvoke(deviceId, 'maker:agent:status', [name]);
@@ -124,10 +123,9 @@ export const desktopModelGroupRuntime = createModelGroupRuntime({
   quotaWindows: (options) => quotaWindows(options),
   innerQuota: (source) => innerQuota(source),
   remoteInvocable: (providerId) => isRemoteProviderInvocationAllowed(providerId),
-  pluginEngineRemoteInvocable: (providerId) => isPluginEngineOfferedRemotely(providerId),
   locations: () => readWorkerAgentLocations({ favoriteSources: true }),
   remoteViews: (agentDeviceId) => readDeviceProviderCatalog(remoteBackgroundInvoke, agentDeviceId),
-  remotePluginEngines: (agentDeviceId) => readRemotePluginEngines(agentDeviceId).catch(() => null),
+  remotePluginEngines: (agentDeviceId) => readRemotePluginEngines(agentDeviceId),
   pricing: async () => ({ gateway: await getGatewayModelPricing(), reference: getReferenceModelPricing() }),
   listSshCodexProviders: (hostId) => sshCodexProvidersReader ? sshCodexProvidersReader(hostId) : Promise.resolve([]),
   readSession: (sessionId) => getSessionRowSnapshot(sessionId),

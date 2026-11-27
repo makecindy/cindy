@@ -12,18 +12,12 @@ import type { PluginModelRouteNote } from '@/lib/ccAgent.types';
 import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { useProviderShareAgentDevices } from '@/features/provider-share/useProviderShareAgentDevices';
 import { useSelectableDevices } from '@/hooks/useControllableDevices';
-import { useDevicesPluginEngines, usePluginEngines } from '@/hooks/usePluginEngines';
 import { useDevicesProviders } from '@/hooks/useDevicesProviders';
+import { usePickerPluginEngines } from '@/hooks/usePickerPluginEngines';
 import { useProviders } from '@/hooks/useProviders';
 import { deviceDisplayName } from '@/lib/deviceName';
 import { createLogger } from '@/lib/logger';
-import { isPluginEngineSelectable } from '@/lib/pluginEngineSelection';
-import {
-  PLUGIN_ENGINE_DEFAULT_MODEL,
-  isPluginEngineModelDisabled,
-  isPluginEngineOfferedRemotely,
-  type PluginEngineView,
-} from '../../../shared/pluginEngines';
+import { PLUGIN_ENGINE_DEFAULT_MODEL, type PluginEngineChoice } from '@/lib/pluginEngineSelection';
 import {
   buildModelGroupRouteNote,
   modelGroupSourceLabel,
@@ -110,13 +104,8 @@ export function useModelGroups(enabled = true, options: { includeHidden?: boolea
     void refreshModelGroups();
     // 供应商路由是按已连接的供应商合成和展开的：供应商连上、断开或模型目录变了就重新读一次(本机进程间调用)。
     // 桥接还没有这个接口的窗口(与读取失败一样)照常工作，只是不跟着刷新。
-    const maker = (window.electronAPI as typeof window.electronAPI | undefined)?.maker;
-    const unsubProviders = maker?.onProvidersChanged?.(() => { void refreshModelGroups(); });
-    const unsubPlugins = maker?.onPluginEnginesChanged?.(() => { void refreshModelGroups(); });
-    return () => {
-      if (typeof unsubProviders === 'function') unsubProviders();
-      if (typeof unsubPlugins === 'function') unsubPlugins();
-    };
+    const unsubscribe = (window.electronAPI as typeof window.electronAPI | undefined)?.maker?.onProvidersChanged?.(() => { void refreshModelGroups(); });
+    return typeof unsubscribe === 'function' ? unsubscribe : undefined;
   }, [enabled]);
   return { config: enabled ? config : MODEL_GROUPS_DEFAULTS, loaded: cached?.owner === ownerNow() };
 }
@@ -227,7 +216,7 @@ type CandidateRef = Pick<ModelGroupCandidate, 'agentKind' | 'providerId' | 'mode
 
 export interface ModelGroupCandidateNames {
   provider: ProviderView | undefined;
-  pluginEngine?: PluginEngineView;
+  pluginEngine?: PluginEngineChoice;
   modelName: string;
   sourceName: string;
   /** 来源连同运行位置：modelGroupSourceLabel。 */
@@ -248,50 +237,35 @@ export function useModelGroupCandidateNames(
   const { t } = useTranslation();
   const { providers } = useProviders();
   const locationName = useModelGroupLocationName();
-  const hasAcp = candidates.some((candidate) => candidate.agentKind === 'acp');
-  const localPluginEngines = usePluginEngines(hasAcp);
-  const remoteKey = [...new Set(candidates.flatMap((candidate) => (candidate.agentDeviceId && candidate.agentKind !== 'acp' ? [candidate.agentDeviceId] : [])))].sort().join('\n');
+  const remoteKey = [...new Set(candidates.flatMap((candidate) => (candidate.agentKind !== 'acp' && candidate.agentDeviceId ? [candidate.agentDeviceId] : [])))].sort().join('\n');
   const remoteIds = useMemo(() => (remoteKey ? remoteKey.split('\n') : []), [remoteKey]);
   const catalogs = useDevicesProviders(remoteIds);
-  const acpRemoteKey = [...new Set(candidates.flatMap((candidate) => (candidate.agentDeviceId && candidate.agentKind === 'acp' ? [candidate.agentDeviceId] : [])))].sort().join('\n');
+  const hasAcp = candidates.some((candidate) => candidate.agentKind === 'acp');
+  const acpRemoteKey = [...new Set(candidates.flatMap((candidate) => (candidate.agentKind === 'acp' && candidate.agentDeviceId ? [candidate.agentDeviceId] : [])))].sort().join('\n');
   const acpRemoteIds = useMemo(() => (acpRemoteKey ? acpRemoteKey.split('\n') : []), [acpRemoteKey]);
-  const { catalogues: acpCatalogues, read: readAcpCatalogues } = useDevicesPluginEngines(acpRemoteIds);
-  useEffect(() => {
-    if (acpRemoteIds.length > 0) readAcpCatalogues();
-  }, [acpRemoteIds, readAcpCatalogues]);
+  const pluginEngines = usePickerPluginEngines({ enabled: hasAcp, rememberedDeviceIds: acpRemoteIds });
   // fallback：目录里找不到时用的名字(如选路结果里带回的)，再找不到才显示 id。
   return useCallback((candidate: CandidateRef, fallback?: { modelName?: string; sourceName?: string }) => {
     if (candidate.agentKind === 'acp') {
-      const remoteList = candidate.agentDeviceId ? acpCatalogues.get(candidate.agentDeviceId) : undefined;
-      const list = candidate.agentDeviceId ? (remoteList ?? []) : localPluginEngines;
-      const engine = list.find((item) => item.providerId === candidate.providerId);
-      const allEngines = [localPluginEngines, ...[...acpCatalogues.values()].flatMap((item) => (item ? [item] : []))];
-      const knownEngine = engine ?? allEngines.flat().find((item) => item.providerId === candidate.providerId);
-      const model = engine?.models.find((item) => item.id === candidate.model);
-      const knownModel = model ?? allEngines.flat().flatMap((item) => item.models).find((item) => item.id === candidate.model);
-      const sourceName = engine?.name ?? (fallback?.sourceName && fallback.sourceName !== candidate.providerId
-        ? fallback.sourceName : knownEngine?.name ?? fallback?.sourceName ?? candidate.providerId);
-      const defaultLabel = candidate.model === PLUGIN_ENGINE_DEFAULT_MODEL ? t('newChat.pluginEngines.defaultModel') : null;
-      const modelName = defaultLabel ?? model?.displayName ?? model?.id ?? (fallback?.modelName && fallback.modelName !== candidate.model
-        ? fallback.modelName : knownModel?.displayName ?? knownModel?.id ?? fallback?.modelName ?? candidate.model);
-      const loading = !!candidate.agentDeviceId && remoteList === undefined;
-      const disabledIds = engine?.disabledModels?.map((item) => item.id);
-      const modelAllowed = !!engine
-        && !isPluginEngineModelDisabled(candidate.model, disabledIds)
-        && (candidate.model === PLUGIN_ENGINE_DEFAULT_MODEL
-          ? engine.defaultModelAllowed !== false
-          : (engine.models.length === 0 || !!model));
-      const engineUsable = !!engine && (candidate.agentDeviceId
-        ? isPluginEngineOfferedRemotely(engine)
-        : (!engine.suspended && isPluginEngineSelectable(engine)));
+      const exactEngine = pluginEngines.findEngine(candidate.providerId, candidate.agentDeviceId);
+      const anyEngine = exactEngine ?? pluginEngines.engines.find((item) => item.providerId === candidate.providerId) ?? null;
+      const modelEntry = (exactEngine ?? anyEngine)?.models.find((item) => item.id === candidate.model);
+      const sourceName = exactEngine?.name
+        ?? (fallback?.sourceName && fallback.sourceName !== candidate.providerId ? fallback.sourceName : anyEngine?.name ?? fallback?.sourceName ?? t('newChat.pluginEngines.genericName'));
+      const modelName = candidate.model === PLUGIN_ENGINE_DEFAULT_MODEL
+        ? t('newChat.pluginEngines.defaultModel')
+        : modelEntry?.displayName ?? (fallback?.modelName && fallback.modelName !== candidate.model ? fallback.modelName : candidate.model);
+      const modelDisabled = !!exactEngine?.disabledModels?.some((item) => item.id === candidate.model);
+      const modelAllowed = !!exactEngine && !modelDisabled
+        && !(exactEngine.defaultModelAllowed === false && (candidate.model === PLUGIN_ENGINE_DEFAULT_MODEL || !modelEntry));
       return {
         provider: undefined,
-        pluginEngine: knownEngine,
+        pluginEngine: exactEngine ?? anyEngine ?? undefined,
         modelName,
         sourceName,
         sourceLabel: modelGroupSourceLabel({ sourceName, agentDeviceId: candidate.agentDeviceId }, locationName, t),
-        known: !!engine,
-        connected: loading || (engineUsable && modelAllowed),
+        known: !!exactEngine,
+        connected: !!exactEngine && !exactEngine.suspended && exactEngine.availability.state !== 'unavailable' && modelAllowed,
       };
     }
     const agent = candidate.agentKind === 'cc' ? 'claude-code' : candidate.agentKind;
@@ -316,7 +290,7 @@ export function useModelGroupCandidateNames(
       known: !!provider,
       connected: catalog?.loading === true || (!!provider?.connected && !provider.suspended && !!model),
     };
-  }, [acpCatalogues, catalogs, localPluginEngines, locationName, providers, t]);
+  }, [catalogs, locationName, pluginEngines, providers, t]);
 }
 
 /**

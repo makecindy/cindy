@@ -57,7 +57,7 @@ import { SessionRouteOriginGate } from './SessionRouteOriginGate';
 import { usePluginSkillSetup } from './pluginSkillSetup';
 import { useBotIslandVisibleSession } from '@/features/bots/useBotIslandVisibleSession';
 import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../../shared/agentKindConversion';
-import { isPluginEngineEffort, isPluginEngineKind, isPluginEngineSwitchSourceAllowed, pluginEngineKeyFromProviderId, type PluginEngineEffort } from '../../../shared/pluginEngines';
+import { isPluginEngineEffort, isPluginEngineKind, isPluginEngineSwitchSourceAllowed, pluginEngineKeyFromProviderId } from '../../../shared/pluginEngines';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import {
   findPluginEngine,
@@ -2363,15 +2363,11 @@ function CCAgentSessionContent({
   const pluginEngineOnTaskComputer = !!session && !isSharedTaskPeer(pluginEngineDeviceId)
     && !session.remoteHostId;
   const scheduleSessionInfo = useAutomationScheduleSessionInfo(sessionId);
-  const localAutomation = session?.source === 'scheduler' && !remoteDeviceId
-    && !pluginEngineDeviceId && !session.agentDeviceId;
-  const completedLocalAutomation = localAutomation && scheduleSessionInfo?.canSwitchPluginEngine === true;
+  // 所有非只读、非归档、非 SSH、非 review、非共享访客会话（含普通、伙伴、IM、Hook、侧边追问、
+  // 定时任务与多 Agent 协同）均与内置引擎同等开放插件引擎切换。
   const pluginEngineSwitchEligible = pluginEngineOnTaskComputer && !!sessionId && !readOnly
-    && !session.orcaRole && !session.orcaRemoteLead
-    && (isPluginEngineSwitchSourceAllowed(session.source) || completedLocalAutomation)
+    && isPluginEngineSwitchSourceAllowed(session.source)
     && session.status !== 'archived';
-  const automationCanReturnToBuiltin = localAutomation && pluginEngineOnTaskComputer && pluginEngineTask
-    && !readOnly && !session.orcaRole && !session.orcaRemoteLead && session.status === 'active';
   const localPluginEngines = usePluginEngines(!pluginEngineDeviceId && (pluginEngineTask || pluginEngineSwitchEligible));
   const remotePluginCatalogue = useRemotePluginEngines(
     pluginEngineOnTaskComputer && !readOnly && (pluginEngineTask || pluginEngineSwitchEligible)
@@ -2518,7 +2514,7 @@ function CCAgentSessionContent({
         ? (session?.agentDeviceId ?? undefined)
         : (pluginEngineSwitchIntent.agentDeviceId ?? undefined))
     : undefined;
-  const canBrowseRemotePluginEngines = viewVisible && pluginEngineSwitchEligible && !pluginEngineDeviceId && !completedLocalAutomation;
+  const canBrowseRemotePluginEngines = viewVisible && pluginEngineSwitchEligible && !pluginEngineDeviceId;
   // 远程控制的被控电脑上的任务：与内置模型一样按被控电脑的名单列出同账号其他电脑与它收到的插件供应商分享
   // 开放的引擎，经被控电脑代读(provider-sharing.md §5.1)；被控电脑不提供名单时只列它自己的引擎。
   const canBrowseControlledPluginEngines = viewVisible && pluginEngineSwitchEligible && !!pluginEngineDeviceId
@@ -2967,7 +2963,9 @@ function CCAgentSessionContent({
   // 模型组(model-groups.md §6.1)：经路线建的本机任务撞了配额，横幅多给一个「换到下一个来源继续」。
   // 只在撞配额的横幅挂着时问一次；点了走输入框里选择器同一条换模型路径，换成了再走横幅原有的重试。
   const sessionModelPickRef = useRef<SessionModelPick | null>(null);
-  const pluginEngineSwitchSelectRef = useRef<((selection: PluginEngineSelection, options?: { switchLockHeld?: boolean }) => Promise<boolean>) | null>(null);
+  const pluginEngineSwitchSelectRef = useRef<
+    ((selection: PluginEngineSelection, options?: { alreadyLocked?: boolean }) => Promise<boolean>) | null
+  >(null);
   const isLiveSafetyRefusalError =
     !!error &&
     (errorReason === PROVIDER_SAFETY_REFUSAL_REASON ||
@@ -2991,27 +2989,30 @@ function CCAgentSessionContent({
       label: t('modelGroups.switchOffer.action', { model: `${offer.modelName} · ${offer.sourceName}` }),
       onSwitch: async () => {
         if (!await isModelGroupSwitchOfferCurrent(sessionId, offer, modelGroupsTaskDeviceId)) return false;
-        let applied = false;
         if (offer.agentKind === 'acp') {
           const switchPlugin = pluginEngineSwitchSelectRef.current;
           if (!switchPlugin) return false;
-          applied = await switchPlugin({
+          const applied = await switchPlugin({
             providerId: offer.providerId,
             modelId: offer.model,
-            ...(offer.effort ? { effort: offer.effort as PluginEngineEffort } : {}),
-            ...(!session?.remoteHostId && offer.agentDeviceId ? { deviceId: offer.agentDeviceId } : {}),
+            ...(offer.agentDeviceId ? { deviceId: offer.agentDeviceId } : {}),
+            ...(isPluginEngineEffort(offer.effort) ? { effort: offer.effort } : {}),
           });
-        } else {
-          const pick = sessionModelPickRef.current;
-          if (!pick) return false;
-          applied = await pick({
-            agent: dbToMakerAgentKind(offer.agentKind),
-            providerId: offer.providerId,
-            modelId: offer.model,
-            ...(offer.effort ? { effort: offer.effort as Effort } : {}),
-            ...(!session?.remoteHostId ? { agentDeviceId: offer.agentDeviceId ?? null } : {}),
-          });
+          if (applied) {
+            if (modelGroupsTaskDeviceId) await bindDeviceModelGroupSession(modelGroupsTaskDeviceId, sessionId, offer.selection, offer);
+            else await bindModelGroupSession(sessionId, offer.selection, offer);
+          }
+          return applied;
         }
+        const pick = sessionModelPickRef.current;
+        if (!pick) return false;
+        const applied = await pick({
+          agent: dbToMakerAgentKind(offer.agentKind),
+          providerId: offer.providerId,
+          modelId: offer.model,
+          ...(offer.effort ? { effort: offer.effort as Effort } : {}),
+          ...(!session?.remoteHostId ? { agentDeviceId: offer.agentDeviceId ?? null } : {}),
+        });
         // 记下现在用的是这一个：之后再撞配额或进入下一轮，继续沿这条路由持续托管。
         if (applied) {
           if (modelGroupsTaskDeviceId) await bindDeviceModelGroupSession(modelGroupsTaskDeviceId, sessionId, offer.selection, offer);
@@ -3071,16 +3072,16 @@ function CCAgentSessionContent({
         if (result) toast.warning(t('modelGroups.picker.switchUnavailable', { name: result.groupName }));
         return;
       }
-      let applied = false;
+      let applied: boolean;
       if (result.route.agentKind === 'acp') {
         const switchPlugin = pluginEngineSwitchSelectRef.current;
         if (!switchPlugin) return;
         applied = await switchPlugin({
           providerId: result.route.providerId,
           modelId: result.route.model,
-          ...(result.route.effort ? { effort: result.route.effort as PluginEngineEffort } : {}),
-          ...(!sshHostId && result.route.agentDeviceId ? { deviceId: result.route.agentDeviceId } : {}),
-        }, { switchLockHeld: true });
+          ...(result.route.agentDeviceId ? { deviceId: result.route.agentDeviceId } : {}),
+          ...(isPluginEngineEffort(result.route.effort) ? { effort: result.route.effort } : {}),
+        }, { alreadyLocked: true });
       } else {
         const pick = sessionModelPickRef.current;
         if (!pick) return;
@@ -4028,11 +4029,11 @@ function CCAgentSessionContent({
   // 下一条消息发送时带着对话交接过去。和在选择器里点一行同一个顺序保证：已经点了发送就不再换。
   const handlePluginEngineSwitchSelect = useCallback(async (
     selection: PluginEngineSelection,
-    options?: { switchLockHeld?: boolean },
+    options?: { alreadyLocked?: boolean },
   ): Promise<boolean> => {
     if (!sessionId || !session || !pluginEngineSwitchEligible || remoteWritesBlocked) return false;
-    if (hasPendingAgentSendDispatch(sessionId) || (!options?.switchLockHeld && hasPendingAgentSwitchOperation(sessionId))) return false;
-    const finishSwitch = options?.switchLockHeld ? null : beginAgentSwitchOperation(sessionId);
+    if (hasPendingAgentSendDispatch(sessionId) || (!options?.alreadyLocked && hasPendingAgentSwitchOperation(sessionId))) return false;
+    const finishSwitch = options?.alreadyLocked ? null : beginAgentSwitchOperation(sessionId);
     const targetEngine = switchablePluginEngines.find((item) => isSamePluginEngineChoice(item, selection));
     const resolvedEffort = resolvePluginEngineSessionSwitchEffort(
       selection,
@@ -4102,21 +4103,21 @@ function CCAgentSessionContent({
     }
   }, [pluginEngineDeviceId, refreshPluginEngineCatalogue, pluginEngineAgentDeviceId, pluginEngineAgentIsThisComputer,
     refreshAgentPluginCatalogue, readDevicePluginEngines, activePluginEngineInDeviceList]);
-  // 普通任务的选择器列出本机及同账号其他电脑开放的插件引擎(本机须已装对应插件)：
+  // 选择器列出本机及同账号其他电脑与分享开放的插件引擎：
   // 当前选中的是待切到的引擎，或任务自己的引擎；待切到内置引擎时不选中任何插件引擎。
   const pluginEngineSwitchPicker = useMemo<PluginEnginesPickerProps | undefined>(() => {
-    if ((!pluginEngineSwitchEligible && !automationCanReturnToBuiltin) || !session
+    if (!pluginEngineSwitchEligible || !session
       || (!pluginEngineTask && !pluginEngineDeviceId && switchablePluginEngines.length === 0 && switchPluginEngineDevices.length === 0)) {
       return undefined;
     }
     return {
-      engines: pluginEngineSwitchEligible ? switchablePluginEngines : [],
+      engines: switchablePluginEngines,
       active: activeSessionPluginEngineChoice,
       running: runningSessionPluginEngineChoice,
       onSelect: handlePluginEngineSwitchSelect,
       readCatalogue: readSessionPluginEngines,
     };
-  }, [pluginEngineSwitchEligible, automationCanReturnToBuiltin, pluginEngineDeviceId, switchablePluginEngines, switchPluginEngineDevices.length,
+  }, [pluginEngineSwitchEligible, pluginEngineDeviceId, switchablePluginEngines, switchPluginEngineDevices.length,
     session, activeSessionPluginEngineChoice, runningSessionPluginEngineChoice, pluginEngineTask,
     handlePluginEngineSwitchSelect, readSessionPluginEngines]);
 

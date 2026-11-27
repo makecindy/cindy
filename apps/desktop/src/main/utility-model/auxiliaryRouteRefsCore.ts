@@ -19,12 +19,12 @@ import { readModelGroupsConfig, readModelGroupsConfigForSelected } from '../mode
 const PREFERRED_TTL_MS = 30_000;
 const MINE = OWN_ROUTES_PROVIDER_ID;
 
-type BuiltinModelGroupCandidate = ModelGroupCandidate & { agentKind: 'cc' | 'codex' | 'pi' };
+type BuiltinModelGroupCandidate = ModelGroupCandidate & {
+  agentKind: Exclude<ModelGroupCandidate['agentKind'], 'acp'>;
+};
 
-const isBuiltinCandidate = (
-  candidate: Pick<ModelGroupCandidate, 'agentKind'>,
-): candidate is Pick<BuiltinModelGroupCandidate, 'agentKind'> =>
-  candidate.agentKind === 'cc' || candidate.agentKind === 'codex' || candidate.agentKind === 'pi';
+const isBuiltinCandidate = (candidate: ModelGroupCandidate): candidate is BuiltinModelGroupCandidate =>
+  candidate.agentKind !== 'acp';
 
 const agentOf = (kind: BuiltinModelGroupCandidate['agentKind']): CatalogModelPinRoute['agentKind'] =>
   (kind === 'cc' ? 'claude-code' : kind);
@@ -33,10 +33,12 @@ function pinOf(candidate: Pick<BuiltinModelGroupCandidate, 'agentKind' | 'provid
   return encodeCatalogModelPin({ providerId: candidate.providerId, agentKind: agentOf(candidate.agentKind), model: candidate.model });
 }
 
-/** 路由里辅助请求能用的来源：本机、没停用、且不是插件执行引擎(辅助请求直接调 HTTP API，不拉起 ACP 进程)。 */
+/** 路由里辅助请求能用的来源：本机、没停用、非插件引擎(直接 HTTP 一次性请求)。 */
 function localCandidates(route: ModelGroupRoute): BuiltinModelGroupCandidate[] {
-  return route.candidates.filter((candidate): candidate is BuiltinModelGroupCandidate =>
-    !candidate.off && !candidate.agentDeviceId && isBuiltinCandidate(candidate));
+  return route.candidates.filter(
+    (candidate): candidate is BuiltinModelGroupCandidate =>
+      !candidate.off && !candidate.agentDeviceId && isBuiltinCandidate(candidate),
+  );
 }
 
 function readRoutesSafely(): ModelGroupRoute[] {
@@ -75,7 +77,9 @@ export function createAuxiliaryRouteRefs(ports: AuxiliaryRouteRefsPorts) {
         if (scopeOf() !== scope) return;
         preferred.set(key, {
           scope,
-          pin: result.outcome === 'routed' && !result.route.agentDeviceId && isBuiltinCandidate(result.route) ? pinOf(result.route) : null,
+          pin: result.outcome === 'routed' && !result.route.agentDeviceId && result.route.agentKind !== 'acp'
+            ? pinOf(result.route as BuiltinModelGroupCandidate)
+            : null,
           at: now(),
         });
       })
@@ -124,7 +128,8 @@ export function buildAuxiliaryRouteOptions(
   selected: readonly string[],
 ): AuxiliaryModelOption[] {
   const options: AuxiliaryModelOption[] = [];
-  for (const route of readRoutesSafely()) {
+  const knownRoutes = readRoutesSafely();
+  for (const route of knownRoutes) {
     const id = encodeAuxiliaryRouteRef(route.id);
     if (route.hidden && !selected.includes(id)) continue;
     const members = localCandidates(route);
@@ -150,12 +155,16 @@ export function buildAuxiliaryRouteOptions(
       route: { kind: route.parent ? 'merged' : 'route', name: route.parent?.name ?? route.name, members: members.length },
     });
   }
+  // 选着的路由已经删掉或仅含插件引擎(轻量调用不能拉起 ACP 进程)：留一项不可用的，界面能认出它、能换掉。
   for (const ref of selected) {
     if (!ref.startsWith('route:') || options.some((option) => option.id === ref)) continue;
+    const existing = knownRoutes.find((route) => encodeAuxiliaryRouteRef(route.id) === ref);
+    const name = existing?.name ?? '';
     options.push({
-      id: ref, label: '', group: '', providerId: MINE, agentKind: 'codex', modelId: ref, modelName: '',
+      id: ref, label: name, group: existing?.parent?.name ?? name, providerId: MINE, agentKind: 'codex',
+      modelId: existing ? existing.id : ref, modelName: name,
       budget: false, subscription: false, agentSuffix: '', available: false,
-      route: { kind: 'route', name: '', members: 0 },
+      route: { kind: existing?.parent ? 'merged' : 'route', name: existing?.parent?.name ?? name, members: 0 },
     });
   }
   return options;

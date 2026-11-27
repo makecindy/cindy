@@ -116,7 +116,7 @@ export function PluginModelPicker({
     }
     const { route } = result;
     if (route.agentKind === "acp") {
-      Alert.alert(t("models.modelGroups.picker.chooseUnavailable", { name: result.groupName ?? "" }));
+      Alert.alert(t("models.modelGroups.picker.chooseUnavailable", { name: result.groupName }));
       return false;
     }
     return answer({

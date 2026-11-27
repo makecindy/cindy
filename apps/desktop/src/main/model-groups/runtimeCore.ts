@@ -35,16 +35,15 @@ const REMOTE_CATALOG_TTL_MS = 60_000;
 export interface ModelGroupRuntimePorts {
   scope(): string;
   localViews(): Promise<ProviderView[]>;
-  localPluginEngines?(): readonly PluginEngineView[];
+  pluginEngines?(): readonly PluginEngineView[];
   localAgents(): readonly string[];
   harnessInstalled(agent: string, agentDeviceId?: string): Promise<boolean>;
   quotaWindows(options?: { cached?: boolean }): Promise<ReadonlyMap<string, readonly (ModelGroupTraceQuota & { scopedTo?: string | null })[]>>;
   innerQuota?(source: { providerId: string; model: string; agentKind: ModelGroupAgentKind }): Promise<ModelGroupInnerQuota | null>;
   remoteInvocable?(providerId: string): boolean;
-  pluginEngineRemoteInvocable?(providerId: string): boolean;
   locations?(): Promise<{ locations: readonly { agentDeviceId: string; providerIds?: readonly string[] }[] }>;
   remoteViews?(agentDeviceId: string): Promise<{ views: ProviderView[]; stale: boolean }>;
-  remotePluginEngines?(agentDeviceId: string): Promise<readonly PluginEngineView[] | null>;
+  remotePluginEngines?(agentDeviceId: string): Promise<readonly PluginEngineView[]>;
   pricing?(): Promise<{ gateway: ModelPricingCatalog | null; reference: ModelPricingCatalog | null }>;
   listSshCodexProviders?(hostId: string): Promise<ProviderView[]>;
   readSession(sessionId: string): Promise<ModelGroupSwitchOfferSessionRow | null>;
@@ -84,8 +83,8 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
 
   function refreshLocalPluginEngines(): void {
     const scope = ports.scope();
-    if (lastLocal?.scope === scope && ports.localPluginEngines) {
-      lastLocal = { ...lastLocal, pluginEngines: ports.localPluginEngines() };
+    if (lastLocal?.scope === scope && ports.pluginEngines) {
+      lastLocal = { ...lastLocal, pluginEngines: ports.pluginEngines() };
       publishCatalog();
     }
   }
@@ -129,7 +128,7 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
 
   async function readLocalViews(): Promise<ProviderView[]> {
     const views = await ports.localViews();
-    lastLocal = { scope: ports.scope(), views, pluginEngines: ports.localPluginEngines ? ports.localPluginEngines() : [] };
+    lastLocal = { scope: ports.scope(), views, pluginEngines: ports.pluginEngines ? ports.pluginEngines() : [] };
     publishCatalog();
     void readRemoteCatalogs();
     return views;
@@ -157,9 +156,8 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
     config: readModelGroupsConfigForSelected,
     recordDecision: recordModelGroupDecision,
     views: readLocalViews,
-    pluginEngines: ports.localPluginEngines ? () => ports.localPluginEngines!() : undefined,
+    pluginEngines: ports.pluginEngines ? () => ports.pluginEngines!() : undefined,
     remoteInvocable: ports.remoteInvocable ? (providerId) => ports.remoteInvocable!(providerId) : undefined,
-    pluginEngineRemoteInvocable: ports.pluginEngineRemoteInvocable ? (providerId) => ports.pluginEngineRemoteInvocable!(providerId) : undefined,
     agents: () => ports.localAgents(),
     harnessInstalled: (agent, agentDeviceId) => ports.harnessInstalled(agent, agentDeviceId),
     quotaWindows: (options) => ports.quotaWindows(options),

@@ -50,12 +50,11 @@ export function PluginModelPickerPopover({
       setError(true);
       return;
     }
-    const agentKind = resolved.route.agentKind;
     const next: PluginModelPickerRoute = {
       ...(resolved.route.agentDeviceId ? { agentDeviceId: resolved.route.agentDeviceId } : {}),
       providerId: resolved.route.providerId,
       model: resolved.route.model,
-      agentKind,
+      agentKind: resolved.route.agentKind,
       effort: resolved.route.effort ?? '',
       fastMode: resolved.route.fastMode ?? false,
       modelGroup: selection.id,
@@ -279,12 +278,11 @@ export function PluginModelPickerDialog({
       setError(true);
       return;
     }
-    const agentKind = resolved.route.agentKind;
     setRoute({
       ...(resolved.route.agentDeviceId ? { agentDeviceId: resolved.route.agentDeviceId } : {}),
       providerId: resolved.route.providerId,
       model: resolved.route.model,
-      agentKind,
+      agentKind: resolved.route.agentKind,
       effort: resolved.route.effort ?? '',
       fastMode: resolved.route.fastMode ?? false,
       modelGroup: selection.id,

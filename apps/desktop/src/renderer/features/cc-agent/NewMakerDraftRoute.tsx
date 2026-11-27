@@ -14,6 +14,7 @@ import {
 } from '@/hooks/usePluginEngines';
 import {
   controlledPluginEngineSources,
+  PLUGIN_ENGINE_DEFAULT_MODEL,
   pluginEnginePermissionMode,
   pluginEngineSessionCreateFields,
   remotePluginEngineChoices,
@@ -27,8 +28,8 @@ import { bindModelGroupSession, buildModelGroupRouteNote, commitModelGroupDecisi
 import { modelGroupOwnerDevice, resolveDraftModelGroup } from '../model-groups/draftModelGroupRouting';
 import { implicitSourceRouteSelection } from '../model-groups/sourceRouteProviders';
 import { bindDeviceModelGroupSession, commitDeviceModelGroupDecision, useDeviceModelGroups, useDevicesModelGroups, writeDeviceModelGroupRouteNote } from '../model-groups/remoteModelGroups';
-import { findModelGroupRoute, MODEL_GROUPS_DEFAULTS, type ModelGroupResolveResult, type ModelGroupSelection } from '../../../shared/modelGroups';
-import { isPluginEnginePermissionModeId, pluginEngineKeyFromProviderId, type PluginEngineEffort } from '../../../shared/pluginEngines';
+import { findModelGroupRoute, MODEL_GROUPS_DEFAULTS, type ModelGroupResolvedRoute, type ModelGroupSelection } from '../../../shared/modelGroups';
+import { isPluginEngineEffort, isPluginEnginePermissionModeId } from '../../../shared/pluginEngines';
 import type { GhostModelRoute, GhostPickerModel } from '../../../shared/ghost';
 import { deviceDisplayName } from '@/lib/deviceName';
 import { useRemoteDraftDefaults, useRemoteDraftSelection, useRemoteDraftPush } from './useRemoteDraftDefaults';
@@ -318,8 +319,10 @@ import { classifyUnclassifiedDroppedItems, getDroppedFileItems } from '@/lib/fil
 import { createLogger } from '@/lib/logger';
 import { getRemoteWorkingDirErrorMessage } from './remoteWorkingDirErrors';
 import {
+  classifyRemoteWorktreeDiscardFailure,
   createRemoteSessionWithPrecreatedWorktree,
   forgetPendingRemotePrecreatedWorktree,
+  getRemoteWorktreeCleanupPendingMessage,
   isRemotePrecreatedWorktreeCleanupPendingError,
   isRemotePrecreatedWorktreeOwnerChangedError,
   parseRemoteWorktreeCreateResult,
@@ -1329,9 +1332,9 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   //     (与手机端远程建任务同一套 `maker:list-plugin-engines` / `maker:create-session` 通道；选择只留内存，
   //     不写本机 newMakerDraft)，以及被控电脑名单里同账号其他电脑与它收到的插件供应商分享开放的引擎
   //     (经被控电脑代读，与内置模型同一套名单，provider-sharing.md §5.1)。SSH、协同与共享任务访客不提供。
-  const pluginEnginesAllowed = !isDeviceLinkDraft && !effectiveRemoteHostId && draft.vendor !== 'orca';
+  const pluginEnginesAllowed = !isDeviceLinkDraft && !effectiveRemoteHostId;
   const controlledPluginEnginesAllowed =
-    isDeviceLinkDraft && !isSharedTaskPeer(effectiveDeviceLinkDeviceId) && !effectiveRemoteHostId && draft.vendor !== 'orca';
+    isDeviceLinkDraft && !isSharedTaskPeer(effectiveDeviceLinkDeviceId) && !effectiveRemoteHostId;
   const pluginEngineList = usePluginEngines(pluginEnginesAllowed);
   const controlledPluginCatalogue = useRemotePluginEngines(
     controlledPluginEnginesAllowed ? effectiveDeviceLinkDeviceId : undefined,
@@ -1599,7 +1602,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   );
   const activeModelGroup = useMemo(() => {
     const selection = draft.modelGroup;
-    if (!modelGroupsAllowed || activePluginModel || !selection) return null;
+    if (!modelGroupsAllowed || activePluginModel || !!dlPluginEngine || !selection) return null;
     if (selection.deviceId) {
       // 远程控制草稿只认被控那台的模式，不带位置；本机草稿里那台还没答复时先保留，发送时由那台决定。
       if (isDeviceLinkDraft) return null;
@@ -1608,12 +1611,12 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       return !snapshot.config || findModelGroupRoute(snapshot.config, selection) ? selection : null;
     }
     return findModelGroupRoute(modelGroupsConfig, selection) ? selection : null;
-  }, [modelGroupsAllowed, activePluginModel, modelGroupsConfig, draft.modelGroup, isDeviceLinkDraft, devicesModelGroups]);
+  }, [modelGroupsAllowed, activePluginModel, dlPluginEngine, modelGroupsConfig, draft.modelGroup, isDeviceLinkDraft, devicesModelGroups]);
   /** 草稿选着的是合并了整个供应商的路由下的模型时，那条路由的名字；否则 null。 */
   const activeSourceRouteName = activeModelGroup && !activeModelGroup.deviceId
     ? modelGroupsConfig.routes.find((route) => route.id === activeModelGroup.id)?.parent?.name ?? null
     : null;
-  // 非 SSH 草稿、没在用插件模型时，供应商路由成员的模型(含合并的插件执行引擎)一律经路由开任务(本机与被控端一致)。
+  // 非 SSH 草稿、没在用插件模型或插件引擎时，供应商路由成员的模型一律经路由开任务(本机与被控端一致)。
   const sourceRoutesImplicit = modelGroupsAllowed && !effectiveRemoteHostId && !activePluginModel && !dlPluginEngine;
   const modelGroupsProps = useMemo(
     () => modelGroupsAllowed
@@ -5039,14 +5042,6 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
         slashCommandRanges?: SlashCommandRange[];
         recoveryDraftDoc?: JSONContent;
         onAccepted?: () => void;
-        modelGroupInfo?: {
-          selection: ModelGroupSelection;
-          result: ModelGroupResolveResult | null;
-          owner: string | null;
-          keptModelName: string;
-        };
-        /** 调用方已持有 sendInFlight 锁，等待本次发送完成后由调用方统一释放。 */
-        awaitCompletion?: boolean;
       },
     ): Promise<boolean> => {
       if (matchNavigationCommandName(message)) {
@@ -5114,15 +5109,12 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
         ...(selection.effort ? { effort: selection.effort } : {}),
         permissionMode: enginePermissionMode,
       };
-      const modelGroupInfo = opts?.modelGroupInfo;
-      const bindLocalGroupBeforeSend = !!modelGroupInfo && !modelGroupInfo.owner
-        && modelGroupInfo.result?.outcome === 'routed' && !modelGroupInfo.result.route.agentDeviceId;
-      if (!opts?.awaitCompletion) markSendInFlight(true);
+      markSendInFlight(true);
       let optimisticTitleSessionId: string | null = null;
       let remoteOptimisticTitleSessionId: string | null = null;
       let markedStartingSessionId: string | null = null;
       let failedPreview: (() => void) | undefined;
-      const runWork = (async () => {
+      void (async () => {
         try {
           if (remoteDeviceId && !isCurrentDataOwner()) return;
           const branchView = wtCheckoutBranchViewRef.current;
@@ -5367,6 +5359,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               const ownerAtSend = engineDataOwnerAtSend.dataOwnerId;
               const precreated = await precreateRemoteDraftWorktree({
                 deviceId: remoteDeviceId,
+                deviceName: remoteDeviceName,
                 sessionId: presetSessionId,
                 dataOwnerId: ownerAtSend,
                 baseRepo,
@@ -5391,6 +5384,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               ? {
                   sessionId: await createRemoteSessionWithPrecreatedWorktree({
                     deviceId: remoteDeviceId,
+                    deviceName: remoteDeviceName,
                     sessionId: presetSessionId,
                     path: precreatedWorktree.path,
                     recoveryKey: precreatedWorktree.recoveryKey,
@@ -5414,14 +5408,6 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             }
             if (!remoteProjectsStore.getCreationPreview(presetSessionId)) return;
             rememberCreatedWorkspace();
-            if (modelGroupInfo?.owner) {
-              void bindDeviceModelGroupSession(modelGroupInfo.owner, remoteSessionId, modelGroupInfo.selection, modelGroupInfo.result);
-              writeDeviceModelGroupRouteNote(modelGroupInfo.owner, remoteSessionId, buildModelGroupRouteNote(
-                modelGroupInfo.result,
-                modelGroupInfo.keptModelName,
-                t, i18n.resolvedLanguage ?? i18n.language, modelGroupLocationName,
-              ));
-            }
             // 插件引擎自己解释 `/` 命令，不进内置 Harness 的斜杠命令分派，直接走远程发件队列。
             const remoteSendWorkingDir = created.workDir ?? selectedWorkingDir;
             const remoteDirectSend = !!remoteSendWorkingDir;
@@ -5587,9 +5573,6 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             handOffAndNavigate();
             return;
           }
-          if (bindLocalGroupBeforeSend && modelGroupInfo?.result?.outcome === 'routed') {
-            await bindModelGroupSession(newSession.id, modelGroupInfo.selection, modelGroupInfo.result.route);
-          }
           // 原样发出：插件引擎自己解释 `/` 命令，不经内置 Harness 的斜杠命令分派。
           const sendPromise = makerChatStore.sendMessage(
             newSession.id,
@@ -5610,12 +5593,6 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           handOffAndNavigate();
           void sendPromise.then(
             (accepted) => {
-              if (accepted && modelGroupInfo) {
-                writeModelGroupRouteNote(newSession.id, modelGroupInfo.result, modelGroupInfo.keptModelName, t, i18n.resolvedLanguage ?? i18n.language, modelGroupLocationName);
-                if (bindLocalGroupBeforeSend) commitModelGroupDecision(modelGroupInfo.result);
-                else if (modelGroupInfo.owner) commitDeviceModelGroupDecision(modelGroupInfo.owner, modelGroupInfo.result);
-                else void bindModelGroupSession(newSession.id, modelGroupInfo.selection, modelGroupInfo.result);
-              }
               if (accepted) opts?.onAccepted?.();
               else restoreEngineFirstMessageDraft();
             },
@@ -5637,21 +5614,23 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           if (isRemotePrecreatedWorktreeOwnerChangedError(err)) return;
           failedPreview?.();
           log.error('[draft send] plugin engine', err);
-          toast.error(
-            isRemotePrecreatedWorktreeCleanupPendingError(err)
-              ? t('ccAgent.draft.remoteWorktreeCleanupPending')
-              : (getRemoteWorkingDirErrorMessage(err, t) ?? t('ccAgent.draft.createSessionFailed')),
-          );
+          if (isRemotePrecreatedWorktreeCleanupPendingError(err)) {
+            toast.error(getRemoteWorktreeCleanupPendingMessage(err, t), {
+              action: {
+                label: t('ccAgent.draft.remoteWorktreeCleanupOpenSettings'),
+                onClick: () => navigate('/settings?tab=storage'),
+              },
+            });
+          } else {
+            toast.error(
+              getRemoteWorkingDirErrorMessage(err, t) ?? t('ccAgent.draft.createSessionFailed'),
+            );
+          }
         } finally {
           if (baseRepo) setWtCreatingInfo(null);
-          if (!opts?.awaitCompletion) markSendInFlight(false);
+          markSendInFlight(false);
         }
       })();
-      if (opts?.awaitCompletion) {
-        await runWork;
-        return false;
-      }
-      void runWork;
       return false;
     },
     [
@@ -5672,8 +5651,6 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       markSendInFlight,
       makeRemoteWorktreeProgress,
       createSessionRow,
-      modelGroupLocationName,
-      i18n,
       t,
     ],
   );
@@ -5704,94 +5681,17 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
         toast.warning(localModelIssueText);
         return false;
       }
-      const buildRoutedPluginEngine = (
-        route: { providerId: string; model: string; agentDeviceId?: string; effort?: string },
-        sourceName: string,
-        fallbackEngine?: PluginEngineChoice,
-      ): ActivePluginEngine => {
-        const matched = pluginEngineChoices.find((item) =>
-          item.providerId === route.providerId && (item.deviceId ?? null) === (route.agentDeviceId ?? null));
-        const engine: PluginEngineChoice = matched ?? (fallbackEngine ? {
-          ...fallbackEngine,
-          providerId: route.providerId,
-          key: pluginEngineKeyFromProviderId(route.providerId) ?? fallbackEngine.key,
-          name: sourceName || fallbackEngine.name,
-          ...(route.agentDeviceId ? { deviceId: route.agentDeviceId } : { deviceId: undefined, deviceName: undefined }),
-        } : {
-          key: pluginEngineKeyFromProviderId(route.providerId) ?? route.providerId,
-          providerId: route.providerId,
-          ghostId: '',
-          harnessId: '',
-          name: sourceName || route.providerId,
-          availability: { state: 'available' },
-          models: [],
-          permissionModes: [],
-          defaultPermissionMode: 'ask',
-          ...(route.agentDeviceId ? { deviceId: route.agentDeviceId } : {}),
-        });
-        return {
-          engine,
-          modelId: route.model,
-          permissionMode: pluginEnginePermissionMode(permissionMode, engine),
-          effort: (route.effort as PluginEngineEffort | undefined) ?? null,
-        };
-      };
-      // 选着插件引擎：如果它挂在合并的供应商路由下，先走智能路由挑成员再发(可能换到另一台电脑或分享来的同名引擎，
-      // 混合手动路由也可能选出内置来源——选出内置来源时交回下方内置发送路径，保证实际执行与绑定记录一致)。
-      let preResolvedPluginGroup: {
-        selection: ModelGroupSelection;
-        result: ModelGroupResolveResult;
-        keptModelName: string;
-      } | null = null;
-      if (activePluginEngine) {
-        const pluginModelGroup = activeModelGroup ?? (sourceRoutesImplicit
-          ? implicitSourceRouteSelection(modelGroupsConfig, {
-              providerId: activePluginEngine.engine.providerId,
-              model: activePluginEngine.modelId,
-              agentDeviceId: activePluginEngine.engine.deviceId,
-            })
-          : null);
-        if (!pluginModelGroup) {
-          return sendWithPluginEngine(activePluginEngine, message, permissionMode, files, mentions, opts);
-        }
-        const modelGroupDraftDeviceId = isDeviceLinkDraft ? effectiveDeviceLinkDeviceId ?? null : null;
-        const modelGroupOwner = modelGroupOwnerDevice(pluginModelGroup, modelGroupDraftDeviceId);
-        const keptModelName = activePluginEngine.engine.models.find((m) => m.id === activePluginEngine.modelId)?.displayName
-          || activePluginEngine.modelId;
-        const pluginDataOwnerAtSend = getDataOwnerGeneration();
-        markSendInFlight(true);
-        let handoffToBuiltin = false;
-        try {
-          const result = await resolveDraftModelGroup(pluginModelGroup, {
-            draftDeviceId: modelGroupDraftDeviceId,
-            context: {
-              hasImages: !!files?.some((file) => file.category === 'image'),
-              ...(activePluginEngine.effort ? { effort: activePluginEngine.effort } : {}),
-            },
-          });
-          if (pluginDataOwnerAtSend.dataOwnerId !== dataOwnerId || !isDataOwnerGenerationCurrent(pluginDataOwnerAtSend)) {
-            return false;
-          }
-          if (result?.outcome === 'routed' && result.route.agentKind !== 'acp') {
-            preResolvedPluginGroup = { selection: pluginModelGroup, result, keptModelName };
-            handoffToBuiltin = true;
-          } else {
-            const target = result?.outcome === 'routed' && result.route.agentKind === 'acp'
-              ? buildRoutedPluginEngine(result.route, result.sourceName, activePluginEngine.engine)
-              : activePluginEngine;
-            await sendWithPluginEngine(target, message, permissionMode, files, mentions, {
-              ...opts,
-              awaitCompletion: true,
-              modelGroupInfo: { selection: pluginModelGroup, result, owner: modelGroupOwner, keptModelName },
-            });
-          }
-        } finally {
-          markSendInFlight(false);
-        }
-        if (!handoffToBuiltin) return false;
+      const pluginSourceRoute = activePluginEngine && sourceRoutesImplicit
+        ? activeModelGroup ?? implicitSourceRouteSelection(modelGroupsConfig, {
+            providerId: activePluginEngine.engine.providerId,
+            model: activePluginEngine.modelId,
+            agentDeviceId: activePluginEngine.engine.deviceId,
+          })
+        : null;
+      if (activePluginEngine && !pluginSourceRoute) {
+        return sendWithPluginEngine(activePluginEngine, message, permissionMode, files, mentions, opts);
       }
-      // 远程引擎的目录可能还没到或已不可用。保留草稿，避免把消息交给未选择的模型。
-      if (!preResolvedPluginGroup && (rememberedPluginEngineDeviceId || dlPluginEngine)) {
+      if (!pluginSourceRoute && (rememberedPluginEngineDeviceId || dlPluginEngine)) {
         toast.warning(t('newChat.pluginEngines.unavailable'));
         return false;
       }
@@ -5836,9 +5736,9 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       }
       const shouldEnableCollab = effectiveCollab.enabled && collabPolicyEligible && policyEnabled;
       // 插件模型：发送那一帧的选择为准；插件给出的真实模型只用于这次新建，不改草稿里的默认模型。
-      const pluginModelAtSend = shouldEnableCollab || preResolvedPluginGroup ? null : activePluginModel;
+      const pluginModelAtSend = shouldEnableCollab ? null : activePluginModel;
       // 模型组同理：按它选出的具体模型只用于这次新建。
-      const chosenModelGroupAtSend = preResolvedPluginGroup ? preResolvedPluginGroup.selection : (pluginModelAtSend ? null : activeModelGroup);
+      const chosenModelGroupAtSend = pluginModelAtSend ? null : pluginSourceRoute ?? activeModelGroup;
       // device-link 切设备后,capabilities/providers hook 可能还没 re-render 到新设备快照;
       // 此时 effectiveFastMode / supportsFastMode / sendProviderId 仍基于旧设备。
       // remoteDraftState 必须一起看:换设备时我们会把它打回 loading(防上一台的默认值串台),
@@ -6002,9 +5902,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           // 远程控制草稿由被控那台选；「其他电脑」段的模式由那台选(draftModelGroupRouting)。
           const modelGroupDraftDeviceId = isDeviceLinkDraft ? effectiveDeviceLinkDeviceId ?? null : null;
           const modelGroupOwner = modelGroupAtSend ? modelGroupOwnerDevice(modelGroupAtSend, modelGroupDraftDeviceId) : null;
-          const modelGroupRoute = preResolvedPluginGroup
-            ? preResolvedPluginGroup.result
-            : modelGroupAtSend
+          const modelGroupRoute = modelGroupAtSend
             ? await resolveDraftModelGroup(modelGroupAtSend, {
                 draftDeviceId: modelGroupDraftDeviceId,
                 ...(effectiveRemoteHostId ? { sshHostId: effectiveRemoteHostId } : {}),
@@ -6012,37 +5910,22 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                 // 选中的来源支持才生效(主进程核对)。
                 context: {
                   hasImages: !!files?.some((file) => file.category === 'image'),
-                  ...(sendBaseRoute.submittedEffort ? { effort: sendBaseRoute.submittedEffort } : {}),
+                  effort: activePluginEngine?.effort || sendBaseRoute.submittedEffort || undefined,
                   ...(sendBaseRoute.effectiveFastMode ? { fastMode: sendBaseRoute.effectiveFastMode } : {}),
                 },
               })
             : null;
           if (modelGroupAtSend && !isCurrentDataOwner()) return;
-          const keptGroupModelName = preResolvedPluginGroup?.keptModelName
-            ?? keptModelNameForGroupNote(sendBaseRoute.persistedAgentKind, sendBaseRoute.providerId, sendBaseRoute.model);
-          if (pluginRoute?.outcome !== 'routed' && modelGroupRoute?.outcome === 'routed' && modelGroupRoute.route.agentKind === 'acp') {
-            if (effectiveRemoteHostId) {
-              toast.error(t('newChat.pluginEngines.unavailable'));
-              return;
-            }
-            const routedEngine = buildRoutedPluginEngine(modelGroupRoute.route, modelGroupRoute.sourceName);
-            await sendWithPluginEngine(routedEngine, message, permissionMode, files, mentions, {
-              ...opts,
-              awaitCompletion: true,
-              modelGroupInfo: {
-                selection: modelGroupAtSend!,
-                result: modelGroupRoute,
-                owner: modelGroupOwner,
-                keptModelName: keptGroupModelName,
-              },
-            });
-            return;
-          }
-          const routedTo: GhostModelRoute | null = pluginRoute?.outcome === 'routed'
+          const keptPluginRoute: ModelGroupResolvedRoute | null = pluginSourceRoute && activePluginEngine ? {
+            agentKind: 'acp',
+            providerId: activePluginEngine.engine.providerId,
+            model: activePluginEngine.modelId,
+            effort: activePluginEngine.effort || undefined,
+            agentDeviceId: activePluginEngine.engine.deviceId,
+          } : null;
+          const routedTo: GhostModelRoute | ModelGroupResolvedRoute | null = pluginRoute?.outcome === 'routed'
             ? pluginRoute.route
-            : modelGroupRoute?.outcome === 'routed' && modelGroupRoute.route.agentKind !== 'acp'
-              ? { ...modelGroupRoute.route, agentKind: modelGroupRoute.route.agentKind }
-              : null;
+            : modelGroupRoute?.outcome === 'routed' ? modelGroupRoute.route : keptPluginRoute;
           // 输入框见到选着模型组或插件模型就不按原模型挡发送(ChatInput sendRoutesOwnModel)；这里没选出来源、
           // 沿用原模型时补上那道检查：原模型所在那台的目录要就绪，也要有已连接的来源。
           if ((activeModelGroup || activePluginModel) && !routedTo) {
@@ -6056,8 +5939,10 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           }
           const routeAgentDeviceId = routedTo ? routedTo.agentDeviceId : effectiveAgentDeviceId;
           const persistedAgentKind = routedTo?.agentKind ?? sendBaseRoute.persistedAgentKind;
-          const authVendor = persistedAgentKind;
-          const capabilityAgentKind = dbToMakerAgentKind(persistedAgentKind);
+          const isRoutedPluginEngine = persistedAgentKind === 'acp';
+          const capabilityAgentKind = dbToMakerAgentKind(
+            isRoutedPluginEngine ? sendBaseRoute.persistedAgentKind : persistedAgentKind,
+          );
           const model = routedTo?.model ?? sendBaseRoute.model;
           const providerId = routedTo ? routedTo.providerId : sendBaseRoute.providerId;
           // The composer guards its visible selection, but a late route override
@@ -6079,7 +5964,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             ? bindModelGroupSession(sessionId, modelGroupAtSend!, modelGroupRoute.route) : undefined;
           const writePluginRouteNote = (sessionId: string) => {
             writePluginModelRouteNote(sessionId, pluginRoute);
-            writeModelGroupRouteNote(sessionId, modelGroupRoute, keptGroupModelName, t, i18n.resolvedLanguage ?? i18n.language, modelGroupLocationName);
+            writeModelGroupRouteNote(sessionId, modelGroupRoute, keptModelNameForGroupNote(sendBaseRoute.persistedAgentKind, sendBaseRoute.providerId, sendBaseRoute.model), t, i18n.resolvedLanguage ?? i18n.language, modelGroupLocationName);
             // 撞配额时据此提议换到同一条路线里的下一个来源(model-groups.md §6.1)。
             if (bindLocalGroupBeforeSend) commitModelGroupDecision(modelGroupRoute);
             // 「其他电脑」段的模式：选路记录属于那台；任务在本机、Agent 在那台，不记本机的撞配额绑定。
@@ -6090,13 +5975,15 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           // 本地草稿 effectiveDeviceLinkDeviceId 为 undefined → 仍走控制端本机就绪检查(行为不变)。
           // Agent 在另一台电脑运行时同样查那台的 Agent 登录(订阅 / 供应商都用那台的)。
           // 目录键也可能包含任务电脑的中继；插件未改选时原样保留，改选后仍经同一目录宿主。
-          const { proceed } = await vendorAuthGate.checkAndConfirm(authVendor, {
-            deviceId: routedTo
-              ? modelCatalogKey(routeAgentDeviceId ?? effectiveDeviceLinkDeviceId, controlledModelRoute.catalogHostDeviceId)
-              : catalogDeviceId,
-            // SSH 任务在远端主机运行;只有此时才带上主机,其余调用保持原参数。
-            ...(isRemoteProjectDraft && effectiveRemoteHostId ? { remoteHostId: effectiveRemoteHostId } : {}),
-          });
+          const { proceed } = isRoutedPluginEngine
+            ? { proceed: true }
+            : await vendorAuthGate.checkAndConfirm(persistedAgentKind, {
+                deviceId: routedTo
+                  ? modelCatalogKey(routeAgentDeviceId ?? effectiveDeviceLinkDeviceId, controlledModelRoute.catalogHostDeviceId)
+                  : catalogDeviceId,
+                // SSH 任务在远端主机运行;只有此时才带上主机,其余调用保持原参数。
+                ...(isRemoteProjectDraft && effectiveRemoteHostId ? { remoteHostId: effectiveRemoteHostId } : {}),
+              });
           if (isDeviceLinkDraft && !isCurrentDataOwner()) return;
           if (!proceed) return;
 
@@ -6180,7 +6067,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             // 提出来存一份:交接收尾要按**实际提交的** model / effort / permission / workspaceKind
             // 组装临时会话行(见 commitRemoteSessionHandoff),不能再各自推一遍。
             const createArgs = resolveDeviceLinkSubmission({
-              agentKind: persistedAgentKind,
+              agentKind: isRoutedPluginEngine ? sendBaseRoute.persistedAgentKind : persistedAgentKind,
               // 先用所选项目归组。启用 worktree 时，创建请求随后使用实际分配的路径。
               workingDir: remoteWorkingDir,
               extraDirs: effectiveExtraDirs,
@@ -6200,6 +6087,17 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               capabilityAgentKind,
               // Agent 在另一台电脑运行:被控电脑把它记进任务,模型与来源属于那台的目录。
               agentDeviceId: routeAgentDeviceId,
+              ...(isRoutedPluginEngine && providerId
+                ? {
+                    pluginEngine: {
+                      providerId,
+                      model: model || PLUGIN_ENGINE_DEFAULT_MODEL,
+                      effort: isPluginEngineEffort(submittedEffort) ? submittedEffort : '',
+                      permissionMode,
+                      ...(routeAgentDeviceId ? { agentDeviceId: routeAgentDeviceId } : {}),
+                    },
+                  }
+                : {}),
             });
             const usesWorktree = wt.enabled && wt.confirmedIneligible !== true;
             const retryId = usesWorktree ? undefined : remoteCreationRetryId(NEW_MAKER_DRAFT_KEY, deviceId, createArgs);
@@ -6290,6 +6188,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             ) {
               const precreated = await precreateRemoteDraftWorktree({
                 deviceId,
+                deviceName,
                 sessionId: presetSessionId,
                 dataOwnerId: ownerAtSend,
                 baseRepo: wt.baseRepo,
@@ -6328,7 +6227,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             const created = precreatedWorktree
               ? {
                   sessionId: await createRemoteSessionWithPrecreatedWorktree({
-                    deviceId, sessionId: presetSessionId, path: precreatedWorktree.path,
+                    deviceId, deviceName, sessionId: presetSessionId, path: precreatedWorktree.path,
                     recoveryKey: precreatedWorktree.recoveryKey,
                     ...(ownerAtSend ? { dataOwnerId: ownerAtSend } : {}),
                     createdAt: precreatedWorktree.createdAt, createArgs, invoke: invokeRemote, isCurrent: isCurrentDataOwner,
@@ -6351,7 +6250,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               ]).finally(() => clearTimeout(bindTimer));
               writeDeviceModelGroupRouteNote(modelGroupOwner, remoteSessionId, buildModelGroupRouteNote(
                 modelGroupRoute,
-                keptGroupModelName,
+                keptModelNameForGroupNote(sendBaseRoute.persistedAgentKind, sendBaseRoute.providerId, sendBaseRoute.model),
                 t, i18n.resolvedLanguage ?? i18n.language, modelGroupLocationName,
               ));
             }
@@ -6401,12 +6300,14 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             // 草稿里选中的那条收藏跟着会话走(见 carryDraftFavoriteAnchorToSession)。锚点是
             // **控制端的 UI 态**,与被控端无关:按对端会话 id 记在本机即可,不进任何 payload。
             // 用 createArgs 里**实际提交**的 model / providerId(远程分支会按被控端目录校准)。
-            carryDraftFavoriteAnchorToSession(
-              remoteSessionId,
-              persistedAgentKind,
-              createArgs.model,
-              createArgs.providerId ?? null,
-            );
+            if (!isRoutedPluginEngine) {
+              carryDraftFavoriteAnchorToSession(
+                remoteSessionId,
+                persistedAgentKind,
+                createArgs.model,
+                createArgs.providerId ?? null,
+              );
+            }
             const rehydratedFiles = await attachmentCopy;
             if (!isCurrentDataOwner()) {
               throw new RemotePrecreatedWorktreeOwnerChangedError();
@@ -6521,7 +6422,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           // agent 启动时看到的工作区已是迁移后的状态。fail-soft：检测错误只 warn，不阻塞 send。
           try {
             const wd = effectiveWorkingDir;
-            if (wd && !isRemoteProjectDraft && persistedAgentKind !== 'pi') {
+            if (wd && !isRemoteProjectDraft && persistedAgentKind !== 'pi' && persistedAgentKind !== 'acp') {
               const r = await crossAgentConvertService.detect(
                 wd,
                 persistedAgentKind === 'cc' ? 'claude-code' : persistedAgentKind,
@@ -6590,7 +6491,9 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             }
             // 草稿里选中的那条收藏跟着会话走(见 carryDraftFavoriteAnchorToSession)。
             rememberCreatedWorkspace();
-            carryDraftFavoriteAnchorToSession(newSession.id, persistedAgentKind, model, providerId);
+            if (!isRoutedPluginEngine) {
+              carryDraftFavoriteAnchorToSession(newSession.id, persistedAgentKind, model, providerId);
+            }
             // 计划模式是一次性选择:随本次发送被消耗,草稿勾选同步熄灭,
             // 下一次 New Maker 不延续。
             if (effectivePlanMode) patchActivePrefs({ planMode: false });
@@ -6607,7 +6510,9 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               log.warn('[draft worktree send] touchUserSend failed', err);
             });
             makerChatStore.setSessionRuntime(newSession.id, {
-              agentKind: persistedAgentKind === 'cc' ? 'claude-code' : persistedAgentKind,
+              ...(isRoutedPluginEngine
+                ? { sessionProviderId: providerId ?? null }
+                : { agentKind: persistedAgentKind === 'cc' ? 'claude-code' : persistedAgentKind }),
               fastMode: effectiveFastMode,
               planModeEnabled: effectivePlanMode,
               remoteHostId: effectiveRemoteHostId ?? null,
@@ -6812,7 +6717,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                   return;
                 }
 
-                const dispatchedMessage = builtInSkillIntent ? message : await rewritePiSkillMessageForSend({
+                const dispatchedMessage = builtInSkillIntent || isRoutedPluginEngine ? message : await rewritePiSkillMessageForSend({
                   agentKind: persistedAgentKind === 'cc' ? 'claude-code' : persistedAgentKind,
                   message,
                   workingDir: newDir,
@@ -6910,7 +6815,9 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           }
           // 草稿里选中的那条收藏跟着会话走(见 carryDraftFavoriteAnchorToSession)。
           rememberCreatedWorkspace();
-          carryDraftFavoriteAnchorToSession(newSession.id, persistedAgentKind, model, providerId);
+          if (!isRoutedPluginEngine) {
+            carryDraftFavoriteAnchorToSession(newSession.id, persistedAgentKind, model, providerId);
+          }
           // 计划模式是一次性选择:随本次发送被消耗,草稿勾选同步熄灭。
           if (effectivePlanMode) patchActivePrefs({ planMode: false });
           // 本机/SSH 首条在下面直接 sendMessage,createOpts 读 chat store 的
@@ -6918,7 +6825,9 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           // 必须先确定性 seed store,否则勾了计划模式的首条可能以 planMode:false 发出,
           // SSH 首条会把远端路径当本机 workdir(worktree 路径同款 seed)。
           makerChatStore.setSessionRuntime(newSession.id, {
-            agentKind: capabilityAgentKind,
+            ...(isRoutedPluginEngine
+              ? { sessionProviderId: providerId ?? null }
+              : { agentKind: capabilityAgentKind }),
             fastMode: effectiveFastMode,
             planModeEnabled: effectivePlanMode,
             remoteHostId: workingDir ? (effectiveRemoteHostId ?? null) : null,
@@ -7031,10 +6940,10 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             }
             const slashMatch = message.match(/^\/(\S+)(?:\s+(.*))?$/s);
             const leading =
-              !slashMatch && capabilityAgentKind === 'pi'
+              !slashMatch && !isRoutedPluginEngine && capabilityAgentKind === 'pi'
                 ? leadingSlashInvocation(message)
                 : undefined;
-            if (slashMatch || leading) {
+            if (!isRoutedPluginEngine && (slashMatch || leading)) {
               setPending(newSession.id, {
                 text: message,
                 builtInSkillIntent: currentBuiltInSkillIntent(),
@@ -7057,12 +6966,14 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               return;
             }
 
-            const dispatchedMessage = await rewritePiSkillMessageForSend({
-              agentKind: capabilityAgentKind,
-              message,
-              workingDir: sendWorkingDir,
-              sessionId: newSession.id,
-            });
+            const dispatchedMessage = isRoutedPluginEngine
+              ? message
+              : await rewritePiSkillMessageForSend({
+                  agentKind: capabilityAgentKind,
+                  message,
+                  workingDir: sendWorkingDir,
+                  sessionId: newSession.id,
+                });
             const rebaseRanges = <T extends { start: number; end: number }>(
               ranges: readonly T[] | undefined,
             ): T[] | undefined => {
@@ -7137,13 +7048,20 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           if (isRemotePrecreatedWorktreeOwnerChangedError(err)) return;
           failedPreview?.();
           log.error('[draft send]', err);
-          toast.error(
-            isRemotePrecreatedWorktreeCleanupPendingError(err)
-              ? t('ccAgent.draft.remoteWorktreeCleanupPending')
-              : extractIpcError(err)?.code === 'REMOTE_CODEX_SOURCE_UNSUPPORTED'
+          if (isRemotePrecreatedWorktreeCleanupPendingError(err)) {
+            toast.error(getRemoteWorktreeCleanupPendingMessage(err, t), {
+              action: {
+                label: t('ccAgent.draft.remoteWorktreeCleanupOpenSettings'),
+                onClick: () => navigate('/settings?tab=storage'),
+              },
+            });
+          } else {
+            toast.error(
+              extractIpcError(err)?.code === 'REMOTE_CODEX_SOURCE_UNSUPPORTED'
                 ? t('settings.remote.startSession.unsupportedCodexSource')
-              : (getRemoteWorkingDirErrorMessage(err, t) ?? t('ccAgent.draft.createSessionFailed')),
-          );
+                : (getRemoteWorkingDirErrorMessage(err, t) ?? t('ccAgent.draft.createSessionFailed')),
+            );
+          }
         } finally {
           setWtCreatingInfo(null);
           markSendInFlight(false);
@@ -7157,17 +7075,15 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     [
       NEW_MAKER_DRAFT_KEY,
       activePluginEngine,
-      pluginEngineChoices,
       dlPluginEngine,
       localModelIssueText,
       rememberedPluginEngineDeviceId,
       sendWithPluginEngine,
-      activePluginModel,
-      activeModelGroup,
       sourceRoutesImplicit,
       modelGroupsConfig,
+      activePluginModel,
+      activeModelGroup,
       modelGroupLocationName,
-      i18n,
       providers,
       deviceProvidersUnsupported,
       effectiveWorkingDir,
@@ -7400,14 +7316,9 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             })
           : null;
         if (goalModelGroup && !isCurrentDataOwner()) return;
-        if (pluginRoute?.outcome !== 'routed' && modelGroupRoute?.outcome === 'routed' && modelGroupRoute.route.agentKind === 'acp') {
-          throw new Error(t('newChat.pluginEngines.unavailable'));
-        }
-        const routedTo: GhostModelRoute | null = pluginRoute?.outcome === 'routed'
+        const routedTo: GhostModelRoute | ModelGroupResolvedRoute | null = pluginRoute?.outcome === 'routed'
           ? pluginRoute.route
-          : modelGroupRoute?.outcome === 'routed' && modelGroupRoute.route.agentKind !== 'acp'
-            ? { ...modelGroupRoute.route, agentKind: modelGroupRoute.route.agentKind }
-            : null;
+          : modelGroupRoute?.outcome === 'routed' ? modelGroupRoute.route : null;
         if (goalModelGroup && !routedTo) assertDraftCatalogReady();
         // 同 handleSend：选了模型组或插件模型却沿用原模型时，原模型要有已连接的来源，
         // 否则不建目标任务、提示先连接来源(输入框这时不按原模型挡，见 ChatInput sendRoutesOwnModel)。
@@ -7418,21 +7329,25 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
         }
         const routeAgentDeviceId = routedTo ? routedTo.agentDeviceId : effectiveAgentDeviceId;
         const persistedAgentKind = routedTo?.agentKind ?? goalBaseRoute.persistedAgentKind;
-        const authVendor = persistedAgentKind;
-        const capabilityAgentKind = dbToMakerAgentKind(persistedAgentKind);
+        const isRoutedPluginEngine = persistedAgentKind === 'acp';
+        const capabilityAgentKind = dbToMakerAgentKind(
+          isRoutedPluginEngine ? goalBaseRoute.persistedAgentKind : persistedAgentKind,
+        );
         const draftInitialModel = routedTo?.model ?? goalBaseRoute.model;
         const draftInitialEffort = routedTo ? ((routedTo.effort ?? '') as Effort) : goalBaseRoute.effort;
         const chatInitialProviderId = routedTo ? routedTo.providerId : goalBaseRoute.providerId;
         const effectiveFastMode = routedTo
           ? (pluginRoute?.outcome !== 'routed' && modelGroupRoute?.outcome === 'routed' ? modelGroupRoute.route.fastMode ?? false : false)
           : goalBaseRoute.effectiveFastMode;
-        const { proceed } = await vendorAuthGate.checkAndConfirm(authVendor, {
-          deviceId: routedTo
-            ? modelCatalogKey(routeAgentDeviceId ?? effectiveDeviceLinkDeviceId, controlledModelRoute.catalogHostDeviceId)
-            : catalogDeviceId,
-          // SSH 任务在远端主机运行;只有此时才带上主机,其余调用保持原参数。
-          ...(isRemoteProjectDraft && effectiveRemoteHostId ? { remoteHostId: effectiveRemoteHostId } : {}),
-        });
+        const { proceed } = isRoutedPluginEngine
+          ? { proceed: true }
+          : await vendorAuthGate.checkAndConfirm(persistedAgentKind, {
+              deviceId: routedTo
+                ? modelCatalogKey(routeAgentDeviceId ?? effectiveDeviceLinkDeviceId, controlledModelRoute.catalogHostDeviceId)
+                : catalogDeviceId,
+              // SSH 任务在远端主机运行;只有此时才带上主机,其余调用保持原参数。
+              ...(isRemoteProjectDraft && effectiveRemoteHostId ? { remoteHostId: effectiveRemoteHostId } : {}),
+            });
         if (!proceed) return; // 用户取消授权:弹窗关闭即可,不算错误。
         if (isDeviceLinkDraft) {
           // partial state 防御:只要 deviceId 就够 —— #807 起「选了设备但没选项目」是合法状态
@@ -7467,7 +7382,10 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             && selectedWorktree.supportsRecoveryKeyDiscard === true
           ) {
             if (!ownerAtGoal) {
-              throw new RemotePrecreatedWorktreeCleanupPendingError();
+              throw new RemotePrecreatedWorktreeCleanupPendingError({
+                failureKind: 'storage',
+                deviceId,
+              });
             }
             const recovery = await recoverPendingRemotePrecreatedWorktrees({
               deviceId,
@@ -7476,7 +7394,11 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               isCurrent: isCurrentDataOwner,
             });
             if (!recovery.storageReadable || recovery.retained > 0) {
-              throw new RemotePrecreatedWorktreeCleanupPendingError();
+              throw new RemotePrecreatedWorktreeCleanupPendingError({
+                failureKind: recovery.storageReadable ? recovery.failureKind : 'storage',
+                preserveReason: recovery.preserveReason,
+                deviceId,
+              });
             }
             let name = selectedWorktree.name.trim();
             if (!name) name = `auto-${Date.now().toString(36).slice(-6)}`;
@@ -7485,6 +7407,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             const createdAt = Date.now();
             const reservation = {
               deviceId,
+              ...(deviceName ? { deviceName } : {}),
               sessionId: presetSessionId,
               dataOwnerId: ownerAtGoal,
               recoveryKey,
@@ -7497,7 +7420,10 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             );
             if (!reservationRecorded) {
               await forgetPendingRemotePrecreatedWorktree(reservation, isCurrentDataOwner);
-              throw new RemotePrecreatedWorktreeCleanupPendingError();
+              throw new RemotePrecreatedWorktreeCleanupPendingError({
+                failureKind: 'storage',
+                deviceId,
+              });
             }
             const startedAt = Date.now();
             setWtCreatingInfo({ branch: getWorktreeModelNamingEnabled() ? '' : getBranchName(name), startedAt });
@@ -7524,10 +7450,36 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                 if (isRemotePrecreatedWorktreeCleanupPendingError(error)) throw error;
                 // No response means the host may already have created it.
                 // Retain the reservation and force reconciliation before retry.
-                throw new RemotePrecreatedWorktreeCleanupPendingError({ cause: error });
+                const classified = classifyRemoteWorktreeDiscardFailure(error);
+                await registerPendingRemotePrecreatedWorktree(
+                  {
+                    ...reservation,
+                    lastFailureKind: classified.kind,
+                    ...(classified.preserveReason ? { lastFailureReason: classified.preserveReason } : {}),
+                    lastFailureAt: Date.now(),
+                  },
+                  isCurrentDataOwner,
+                );
+                throw new RemotePrecreatedWorktreeCleanupPendingError({
+                  cause: error,
+                  failureKind: classified.kind,
+                  preserveReason: classified.preserveReason,
+                  deviceId,
+                });
               }
               if (!resp) {
-                throw new RemotePrecreatedWorktreeCleanupPendingError();
+                await registerPendingRemotePrecreatedWorktree(
+                  {
+                    ...reservation,
+                    lastFailureKind: 'unknown',
+                    lastFailureAt: Date.now(),
+                  },
+                  isCurrentDataOwner,
+                );
+                throw new RemotePrecreatedWorktreeCleanupPendingError({
+                  failureKind: 'unknown',
+                  deviceId,
+                });
               }
               if (!resp.ok) {
                 await forgetPendingRemotePrecreatedWorktree(reservation, isCurrentDataOwner);
@@ -7553,7 +7505,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           }
           // 与 handleSend 同口径先存一份 args:临时行要按实际提交的值组装(见 commitRemoteSessionHandoff)。
           const createArgs = resolveDeviceLinkSubmission({
-            agentKind: persistedAgentKind,
+            agentKind: isRoutedPluginEngine ? goalBaseRoute.persistedAgentKind : persistedAgentKind,
             // 无项目 → 不传,由 workingDir 派生 workspaceKind:'dialogue'。
             id: presetSessionId,
             workingDir: remoteWorkingDir,
@@ -7572,12 +7524,24 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             deviceProviders: agentCatalogProviders,
             capabilityAgentKind,
             agentDeviceId: routeAgentDeviceId,
+            ...(isRoutedPluginEngine && chatInitialProviderId
+              ? {
+                  pluginEngine: {
+                    providerId: chatInitialProviderId,
+                    model: draftInitialModel || PLUGIN_ENGINE_DEFAULT_MODEL,
+                    effort: isPluginEngineEffort(draftInitialEffort) ? draftInitialEffort : '',
+                    permissionMode: chatInitialPermissionMode,
+                    ...(routeAgentDeviceId ? { agentDeviceId: routeAgentDeviceId } : {}),
+                  },
+                }
+              : {}),
           });
           let created: { sessionId?: string; workDir?: string } | null = null;
           const remoteSessionId = await (
             presetSessionId && precreatedWorktree
               ? createRemoteSessionWithPrecreatedWorktree({
                   deviceId,
+                  deviceName,
                   sessionId: presetSessionId,
                   path: precreatedWorktree.path,
                   recoveryKey: precreatedWorktree.recoveryKey,
@@ -7645,12 +7609,14 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           // 与远端普通发送同口径:锚点是**控制端的 UI 态**,按对端会话 id 记在本机 renderer
           // localStorage,不进任何 payload;model / providerId 用 createArgs 里**实际提交**的值
           // (经被控端目录校准,与 draftInitialModel 可能不同)。
-          carryDraftFavoriteAnchorToSession(
-            remoteSessionId,
-            persistedAgentKind,
-            createArgs.model,
-            createArgs.providerId ?? null,
-          );
+          if (!isRoutedPluginEngine) {
+            carryDraftFavoriteAnchorToSession(
+              remoteSessionId,
+              persistedAgentKind,
+              createArgs.model,
+              createArgs.providerId ?? null,
+            );
+          }
           // setGoal 不在这里发:重 topic session:<id> 订阅要等 CCAgentSessionView
           // mount 才建立,在 /cc-agent/new 就起 goal 首轮会让 maker:event/status 推送
           // 掉在订阅建立前的窗口里(Codex review #548)。与首条消息同款交接 ——
@@ -7685,7 +7651,9 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           // autoNameSession 对位:先立即用目标文案截断占位(Codex 式,侧边栏不停留在
           // 'New Maker'),再经隧道生成智能标题窄口径覆盖。fire-and-forget;
           // 覆盖前 re-read,仅在标题仍是占位/默认时落盘(用户手动改名 wins)。
-          const titleAgentKind = persistedAgentKind === 'cc' ? 'claude-code' : persistedAgentKind;
+          const titleAgentKind = isRoutedPluginEngine
+            ? capabilityAgentKind
+            : persistedAgentKind === 'cc' ? 'claude-code' : persistedAgentKind;
           // 先折叠空白并 trim 再截断,避免前导空白吃满 40 字符得到空占位(PR #296 review)。
           const placeholderTitle = objective.replace(/\s+/g, ' ').trim().slice(0, 40).trimEnd();
           void (async () => {
@@ -7821,12 +7789,14 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           throw new Error(t('ccAgent.draft.createSessionFailed'));
         }
         // 草稿里选中的那条收藏跟着会话走(见 carryDraftFavoriteAnchorToSession)。
-        carryDraftFavoriteAnchorToSession(
-          newSession.id,
-          persistedAgentKind,
-          draftInitialModel,
-          chatInitialProviderId ?? null,
-        );
+        if (!isRoutedPluginEngine) {
+          carryDraftFavoriteAnchorToSession(
+            newSession.id,
+            persistedAgentKind,
+            draftInitialModel,
+            chatInitialProviderId ?? null,
+          );
+        }
         if (useLocalGoalWorktree) {
           const baseRepo = selectedWorktree.baseRepo!;
           await prepareLocalGoalWorktree({
@@ -7942,7 +7912,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           throw new Error(t('ccAgent.draft.localWorktreeCleanupPending'));
         }
         if (isRemotePrecreatedWorktreeCleanupPendingError(error)) {
-          throw new Error(t('ccAgent.draft.remoteWorktreeCleanupPending'));
+          throw new Error(getRemoteWorktreeCleanupPendingMessage(error, t));
         }
         if (isRemotePrecreatedWorktreeOwnerChangedError(error)) {
           throw new Error(t('ccAgent.draft.createSessionFailed'));

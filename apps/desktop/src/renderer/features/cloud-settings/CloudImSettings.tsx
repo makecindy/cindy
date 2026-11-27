@@ -153,7 +153,11 @@ export function CloudImSettings({
     if (!state || !value || !deviceGroups.config) return;
     const group = deviceGroups.config.routes.find((r) => r.id === selection.id);
     const preview = await resolveDeviceModelGroup(deviceId, selection, undefined, undefined, undefined);
-    if (preview?.outcome !== 'routed' || preview.route.agentKind === 'acp') {
+    if (preview?.outcome !== 'routed') {
+      toast.warning(t('modelGroups.picker.chooseUnavailable', { name: group?.name ?? '' }));
+      return;
+    }
+    if (preview.route.agentKind === 'acp') {
       toast.warning(t('modelGroups.picker.chooseUnavailable', { name: group?.name ?? '' }));
       return;
     }

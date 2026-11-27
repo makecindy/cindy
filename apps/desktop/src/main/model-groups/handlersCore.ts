@@ -3,7 +3,6 @@
  * 覆盖：get / set / resolve / commit / bind-session / unbind-session / get-session-binding / switch-offer / route-note / decisions。
  */
 import {
-  isModelGroupAgentKind,
   MODEL_GROUP_LIMITS,
   modelGroupAgentDeviceId,
   modelGroupCandidateKey,
@@ -154,7 +153,7 @@ export function createModelGroupHandlers(ports: ModelGroupHandlersPorts) {
       const agentDeviceId = route.agentDeviceId === undefined || route.agentDeviceId === null
         ? undefined
         : modelGroupAgentDeviceId(route.agentDeviceId);
-      if (!selection || !isModelGroupAgentKind(agentKind)
+      if (!selection || (agentKind !== 'cc' && agentKind !== 'codex' && agentKind !== 'pi' && agentKind !== 'acp')
         || typeof providerId !== 'string' || !providerId || providerId.length > MODEL_GROUP_LIMITS.field
         || (agentKind === 'acp' && !pluginEngineKeyFromProviderId(providerId))
         || typeof model !== 'string' || !model || model.length > MODEL_GROUP_LIMITS.field

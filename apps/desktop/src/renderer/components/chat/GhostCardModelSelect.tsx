@@ -58,12 +58,11 @@ export function GhostCardModelSelect({
   const pickGroup = async (selection: ModelGroupSelection) => {
     const preview = await previewModelGroup(selection);
     if (preview?.outcome !== 'routed' || preview.route.agentKind === 'acp') return;
-    const agentKind = preview.route.agentKind;
     picked.current = true;
     update({
       providerId: preview.route.providerId,
       model: preview.route.model,
-      agentKind,
+      agentKind: preview.route.agentKind,
       effort: preview.route.effort ?? '',
       fastMode: preview.route.fastMode ?? false,
       ...(preview.route.agentDeviceId ? { agentDeviceId: preview.route.agentDeviceId } : {}),

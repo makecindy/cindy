@@ -8,13 +8,12 @@ import {
   MODEL_GROUP_DECISIONS_MAX,
   type ModelGroupDecision,
 } from '../../shared/modelGroupDecisions.js';
-import {
-  isModelGroupAgentKind,
-  type ModelGroupAgentKind,
-  type ModelGroupResolveResult,
-  type ModelGroupSelection,
-  type ModelGroupTraceQuota,
-  type ModelGroupTraceWhy,
+import type {
+  ModelGroupAgentKind,
+  ModelGroupResolveResult,
+  ModelGroupSelection,
+  ModelGroupTraceQuota,
+  ModelGroupTraceWhy,
 } from '../../shared/modelGroups.js';
 import { createLogger } from '../logger.js';
 import { activeDataOwnerId, ownerScopedPath } from '../ownerContext.js';
@@ -54,7 +53,7 @@ function quota(value: unknown): ModelGroupTraceQuota | null {
 }
 
 function agentKind(value: unknown): ModelGroupAgentKind | undefined {
-  return isModelGroupAgentKind(value) ? value : undefined;
+  return value === 'cc' || value === 'codex' || value === 'pi' || value === 'acp' ? value : undefined;
 }
 
 /** 读盘与写盘的同一道归一：坏条目丢弃，其余照常显示。 */

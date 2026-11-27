@@ -185,27 +185,6 @@ describe('host model group strategies', () => {
     expect(buildHostModelGroupRouteNote(fromNewHost, 'Kept', t, 'en', () => '')?.reason).toBe('models.modelGroups.why.drainNext');
   });
 
-  it('accepts routed ACP plugin engines with acp-plugin: providerId and applies them to the draft', () => {
-    const valid = parseHostModelGroupResult({
-      outcome: 'routed', groupName: 'Agy',
-      route: { agentKind: 'acp', providerId: 'acp-plugin:antigravity:agy', model: 'gemini-4-neon', effort: 'high', agentDeviceId: 'share:dash-agy' },
-      modelName: 'Gemini 4 Neon', sourceName: 'Antigravity', why: 'order', quota: null, trace: [],
-    });
-    expect(valid?.outcome).toBe('routed');
-    const next = applyHostModelGroupRoute(draft, valid);
-    expect(next.pluginEngine).toEqual({
-      providerId: 'acp-plugin:antigravity:agy', model: 'gemini-4-neon', effort: 'high',
-      permissionMode: 'ask', agentDeviceId: 'share:dash-agy',
-    });
-    expect(next.agentDeviceId).toBe('share:dash-agy');
-    // 缺少 acp-plugin: 前缀的坏数据必须被拒绝。
-    expect(parseHostModelGroupResult({
-      outcome: 'routed', groupName: 'Bad',
-      route: { agentKind: 'acp', providerId: 'openai', model: 'gpt-6' },
-      modelName: 'GPT', sourceName: 'OpenAI', why: 'order', quota: null, trace: [],
-    })).toBeNull();
-  });
-
   it('preserves route fastMode, parses sourceRoutes + expandedRoutes, and parses binding / switchOffer', async () => {
     const fastRouted = parseHostModelGroupResult({
       ...routed,

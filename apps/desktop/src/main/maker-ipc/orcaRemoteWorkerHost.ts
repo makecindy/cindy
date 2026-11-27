@@ -48,9 +48,6 @@ export function createOrcaRemoteWorkerSessionOpener(deps: {
     assertOwner();
     if (group?.route) {
       const route = group.route;
-      if (route.agentKind === 'acp') {
-        fail('UNSUPPORTED_CAPABILITY', 'plugin engines run on this computer only and cannot run in remote Workers');
-      }
       request = {
         ...request,
         agentKind: route.agentKind === 'cc' ? 'claude-code' : route.agentKind,
@@ -93,9 +90,10 @@ export function createOrcaRemoteWorkerSessionOpener(deps: {
       else await deps.bootstrapSession(opened, assertCurrent);
     });
     deps.broadcastSessionCreated(row.id);
-    const agentKind = row.agentKind === 'cc' ? 'claude-code' : (row.agentKind as 'codex' | 'pi');
+    const agentKind = row.agentKind === 'cc' ? 'claude-code' : (row.agentKind as 'codex' | 'pi' | 'acp');
     return { workingDir: row.workingDir ?? '', model: row.model, agentKind, effort: row.effort, fastMode: row.fastMode,
-      ...(request.modelGroup || request.agentDeviceId !== undefined ? { agentDeviceId: row.agentDeviceId ?? null, providerId: row.providerId ?? null } : {}) };
+      ...(request.modelGroup || request.agentDeviceId !== undefined || agentKind === 'acp'
+        ? { agentDeviceId: row.agentDeviceId ?? null, providerId: row.providerId ?? null } : {}) };
   };
 }
 

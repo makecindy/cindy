@@ -232,8 +232,12 @@ export function parseHostModelGroupResult(raw: unknown): HostModelGroupResult | 
   const agentKind = route?.agentKind;
   const providerId = str(route?.providerId, 256);
   const model = str(route?.model, 256);
-  if ((agentKind !== 'cc' && agentKind !== 'codex' && agentKind !== 'pi' && agentKind !== 'acp')
-    || !providerId || (agentKind === 'acp' && !providerId.startsWith('acp-plugin:')) || !model) return null;
+  if (
+    (agentKind !== 'cc' && agentKind !== 'codex' && agentKind !== 'pi' && agentKind !== 'acp')
+    || !providerId
+    || (agentKind === 'acp' && !providerId.startsWith('acp-plugin:'))
+    || !model
+  ) return null;
   const agentDeviceId = str(route?.agentDeviceId, 256);
   const effort = str(route?.effort, 32);
   const fastMode = fastModeOf(route?.fastMode);
@@ -301,8 +305,10 @@ export function parseHostModelGroupSwitchOffer(raw: unknown): HostModelGroupSwit
   const model = str(value.model, 256);
   if (
     selection?.type !== 'route' || !id || !groupName
-    || (agentKind !== 'cc' && agentKind !== 'codex' && agentKind !== 'pi')
-    || !providerId || !model
+    || (agentKind !== 'cc' && agentKind !== 'codex' && agentKind !== 'pi' && agentKind !== 'acp')
+    || !providerId
+    || (agentKind === 'acp' && !providerId.startsWith('acp-plugin:'))
+    || !model
   ) {
     return null;
   }
@@ -361,14 +367,13 @@ export function applyHostModelGroupRoute(draft: NewSessionDraft, result: HostMod
   if (route.agentKind === 'acp') {
     const next: NewSessionDraft = {
       ...draft,
+      fastMode: false,
       pluginEngine: {
         providerId: route.providerId,
         model: route.model,
         effort: route.effort ?? '',
-        permissionMode: draft.permissionMode === 'bypassPermissions' ? 'bypassPermissions' : 'ask',
-        ...(route.agentDeviceId ? { agentDeviceId: route.agentDeviceId } : {}),
+        permissionMode: draft.permissionMode,
       },
-      fastMode: false,
     };
     if (route.agentDeviceId) next.agentDeviceId = route.agentDeviceId;
     else delete next.agentDeviceId;

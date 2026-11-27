@@ -129,10 +129,9 @@ export function PluginTaskPrefs({
       ? await resolveDeviceModelGroup(remote.deviceId, selection, undefined, showTaskRows ? undefined : { agentDeviceId: null })
       : await previewModelGroup(selection);
     if (preview?.outcome !== 'routed' || preview.route.agentKind === 'acp') return;
-    const agentKind = preview.route.agentKind;
     await save({
       ...config,
-      agentKind,
+      agentKind: preview.route.agentKind,
       providerId: preview.route.providerId,
       model: preview.route.model,
       agentDeviceId: showTaskRows ? (preview.route.agentDeviceId ?? null) : null,
