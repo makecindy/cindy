@@ -66,6 +66,12 @@ export function useRemoteCindyIds(): ReadonlySet<string> {
 }
 const EMPTY_CINDY_IDS: ReadonlySet<string> = new Set();
 
+let retryRoster: ((deviceId: string) => void) | undefined;
+
+export function retryRemoteBotRoster(deviceId: string): void {
+  retryRoster?.(deviceId);
+}
+
 /** Each complete app window mirrors the roster; only the main window writes the display cache. */
 export function useRemoteBotSync(): void {
   const { dataOwnerId, isAuthenticated } = useAuth();
@@ -288,6 +294,7 @@ export function useRemoteBotSync(): void {
     // Sharing its pushes avoids competing subscribe/unsubscribe owners.
     // Subscribe before reading status: a stopped/connecting relay cannot inherit
     // a stale device directory's online flag, and a late GET cannot undo a push.
+    retryRoster = refresh;
     const offPush = window.electronAPI.deviceLink.onRemotePush((push, stamp) => {
       if (
         !current() ||
@@ -336,6 +343,7 @@ export function useRemoteBotSync(): void {
     });
     return () => {
       disposed = true;
+      if (retryRoster === refresh) retryRoster = undefined;
       offPush();
       offStatus();
       timers.forEach(clearTimeout);
