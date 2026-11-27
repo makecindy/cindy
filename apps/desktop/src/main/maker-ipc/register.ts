@@ -22077,7 +22077,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           // Share the release path’s lock, and recheck after all async preparation.
           projection = await withSendToSessionLock(sid, async () => {
             assertPluginEngineInput(await getInputSessionRow(sid));
-            return enqueueInput(queued);
+            // ACP identifies the remote request for admission. Persist the same
+            // built-in placeholder as local plugin input; dispatch reads the
+            // actual engine and its route from the Worker session.
+            return enqueueInput({
+              ...queued,
+              createOpts: { ...queued.createOpts, agentKind: 'claude-code' },
+            });
           });
         } else {
           projection ??= enqueueInput(queued);

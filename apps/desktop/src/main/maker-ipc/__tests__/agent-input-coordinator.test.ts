@@ -12,7 +12,7 @@ import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import type { DbClient } from '../../localDb/client/DbClient.js';
 import { setCurrentDbClient, clearCurrentDbClient } from '../../localDb/client/current.js';
-import { saveAgentInputQueueSnapshot, awaitAgentInputQueueSnapshotPersistence, readInputDeliveryReceipts, loadAgentInputQueueSnapshot, saveCancelledInputDelivery } from '../../localDb/agentInputQueueSnapshots.js';
+import { saveAgentInputQueueSnapshot, awaitAgentInputQueueSnapshotPersistence, readInputDeliveryReceipts, loadAgentInputQueueSnapshot, loadAgentInputQueueSnapshotCounts, saveCancelledInputDelivery } from '../../localDb/agentInputQueueSnapshots.js';
 import { createInputEnqueueHarness, createInputRetryHarness, createInputStopHarness, createSavedQuotaRestoreHarness } from './inputEnqueueHarness.js';
 import { runSessionExecutionAction } from '../sessionExecutionActions.js';
 import { createSharedPermission } from '../sharedPermission.js';
@@ -688,6 +688,67 @@ describe('INPUT_ENQUEUE crash-restored remote Worker pause', () => {
         code: controllerDeviceId === 'database-unavailable' ? 'INTERNAL' : 'PERMISSION_DENIED',
       });
       expect(h.sendToAgent).not.toHaveBeenCalled();
+    }
+  });
+
+  // #13225 review P1, unit with in-memory SQLite: admission alone never reads the
+  // durable snapshot. A busy linked ACP Worker must report pending and recover
+  // the acknowledged input after a fresh coordinator starts.
+  it('keeps acknowledged ACP input pending and restores it for dispatch after restart', async () => {
+    const sid = 'durable-acp-worker';
+    const sqlite = new Database(':memory:');
+    sqlite.exec([
+      'CREATE TABLE agent_input_queue_snapshots (session_id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at INTEGER);',
+      'CREATE TABLE messages (id TEXT, session_id TEXT, client_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER);',
+      'CREATE TABLE sessions (id TEXT PRIMARY KEY, cleared_at INTEGER);',
+    ].join('\n'));
+    sqlite.prepare('INSERT INTO sessions (id) VALUES (?)').run(sid);
+    setCurrentDbClient({
+      drizzle: drizzle(sqlite),
+      query: async (sql: string, args: unknown[] = []) => sqlite.prepare(sql).all(...args),
+    } as unknown as DbClient, 'acp-worker-queue-test');
+    try {
+      const live = createHarness();
+      live.persistQueueSnapshot.mockImplementation(saveAgentInputQueueSnapshot);
+      live.setRunning(true);
+      const { enqueue } = createInputEnqueueHarness(live.coordinator, {
+        awaitQueuePersistence: awaitAgentInputQueueSnapshotPersistence,
+        getInputSessionRow: async () => ({
+          clearedAt: null, agentKind: 'acp', orcaRemoteLead: JSON.stringify({
+            leadDeviceId: 'lead-computer', leadSessionId: 'lead-task', workerLabel: 'reviewer',
+          }),
+        }),
+      });
+      const clientId = 'durable-acp-input';
+      const createOpts: AgentInputCreateOpts = {
+        ...makeItem('settings', '').createOpts,
+        agentKind: 'acp',
+        providerId: 'acp-plugin:fixture',
+        model: 'fixture-model',
+      };
+      const item = buildRemoteWorkerQueuedMessage({
+        clientId, rawContent: 'Do the task', createOpts, createdAt: '2026-11-01T00:00:00.000Z',
+      });
+      await enqueue({}, sid, item);
+      expect(live.sendToAgent).not.toHaveBeenCalled();
+      await expect(readInputDeliveryReceipts(sid, [clientId])).resolves.toEqual([{ clientId, state: 'pending' }]);
+      await expect(loadAgentInputQueueSnapshotCounts([sid])).resolves.toEqual({ [sid]: 1 });
+
+      const restarted = createHarness();
+      restarted.setLoadQueueSnapshot(loadAgentInputQueueSnapshot);
+      await restarted.coordinator.ensureQueueRestored(sid);
+      expect(restarted.coordinator.getProjection(sid).pendingQueue.map(input => input.clientId)).toEqual([clientId]);
+      expect(restarted.sendToAgent).not.toHaveBeenCalled();
+      restarted.coordinator.resume(sid);
+      await flush();
+      expect(restarted.sendToAgent).toHaveBeenCalledOnce();
+      expect(restarted.sendToAgent.mock.calls[0]?.[1]).toEqual({ type: 'user', content: item.text });
+      expect(restarted.sendToAgent.mock.calls[0]?.[2]).toMatchObject({
+        providerId: 'acp-plugin:fixture', model: 'fixture-model',
+      });
+    } finally {
+      clearCurrentDbClient();
+      sqlite.close();
     }
   });
 

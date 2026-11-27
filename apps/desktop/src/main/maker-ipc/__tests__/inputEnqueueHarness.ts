@@ -144,6 +144,7 @@ export function createInputEnqueueHarness(coordinator: AgentInputCoordinator, op
   remote?: boolean;
   mobile?: boolean;
   controllerDeviceId?: string;
+  awaitQueuePersistence?: (sid: string) => Promise<void>;
   getInputSessionRow?: () => Promise<{ clearedAt: number | null; agentKind?: string; orcaRemoteLead?: string }>;
   resumeInterruptedScheduleRun?: typeof import('../../scheduler-host/index.desktop.js').resumeInterruptedScheduleRun;
   getSessionFsSnapshot?: () => Promise<{ planModeEnabled?: boolean } | null>;
@@ -196,6 +197,7 @@ export function createInputEnqueueHarness(coordinator: AgentInputCoordinator, op
     beginRemoteSendTrace: noop,
     remoteInputClientIdWasPersisted: () => false,
     hasInputDeliveryCancellation: () => false,
+    awaitAgentInputQueueSnapshotPersistence: options.awaitQueuePersistence ?? noop,
     materializeQueuedOssAttachmentsDeferred: (_sid: string, item: AgentInputQueuedMessage) => ({ item }),
     hydrateQueuedAgentReferences: sameItem,
     stampTurnUiLanguage: sameItem,
@@ -208,7 +210,7 @@ export function createInputEnqueueHarness(coordinator: AgentInputCoordinator, op
     throwIpcError: (code: string, message: string) => { throw Object.assign(new Error(message), { code }); },
     ...Object.fromEntries([
       'assertReviewExternalInputAllowed', 'assertTrustedAppRendererEvent', 'withSessionPermissionChange',
-      'awaitAgentInputQueueSnapshotPersistence', 'assertRemoteInputClearNotInFlight',
+      'assertRemoteInputClearNotInFlight',
       'readRemoteInputClearBoundaryPrecondition', 'observeLocalInputClearBoundary',
       'assertExpectedRemoteInputClearBoundary', 'registerQueuedAttachmentOwnership',
       'discardSpecificQueuedAttachmentOwnership', 'markQueuedAttachmentDurableAfterSnapshot',
