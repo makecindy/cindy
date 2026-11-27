@@ -51,6 +51,9 @@ export function buildAgentIslandRemoteSessionInputs(
   const companionSessionIds = new Set(inputs.map((input) => input.sessionId));
   for (const session of selectVisibleSessions([], remoteSessions, selection)) {
     const deviceId = session.deviceLinkDeviceId;
+    // Archived tasks stay in history, but the island must forget them: a turn closed before
+    // its terminal event leaves a truncation error behind that outlives the archive (#13473).
+    if (session.status === 'archived') continue;
     // `connecting` rows are cached/unverified (cold start, relay reconnect): their retained
     // activity may be stale, so it must not be presented as live in the island.
     const status = session.deviceLinkConnectionStatus;
