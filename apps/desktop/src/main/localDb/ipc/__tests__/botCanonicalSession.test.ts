@@ -2806,7 +2806,9 @@ describe('Bot canonical Session lifecycle', () => {
     expect(fresh.ok && fresh.sessionId).not.toBe(first.sessionId);
   });
 
-  // Same topic contract through the authorized mobile channel, including empty lanes and roots with colons (unit).
+  // Same topic contract through the authorized mobile channel (unit).
+  // #10873: existing coverage never reopened persisted DB bytes. After reopening,
+  // list/get/ensure must still discover the original topic and preserve its root.
   it.each(['local', 'remote'])('opens one private-chat topic per main-chat message via %s, with its own context note and timeline entry', async (entry) => {
     const topicInvoke = async (channel: string, body: unknown): Promise<any> => entry === 'local' ? invoke(channel, body)
       : runDeviceLinkInvokeContext({ controllerDeviceId: 'mobile-1', channel }, () => h.handlers.get(channel)!({}, body));
@@ -2852,6 +2854,26 @@ describe('Bot canonical Session lifecycle', () => {
       sessionId: first.sessionId, rootSessionId: chatId, rootClientId: 'bot-opening:inv-1',
       replyCount: 2, lastReplyAt: 3_000, lastAssistantAt: 3_000, createdAt: expect.any(Number),
     }]);
+
+    // Restart-like reload: discard the connection and all live sessions, keeping
+    // only persisted rows. This does not rewrite history or reparent route keys.
+    const saved = h.sqlite!.serialize();
+    h.sqlite!.close();
+    const reopened = new Database(saved);
+    reopened.pragma('foreign_keys = ON');
+    h.sqlite = reopened;
+    h.db = drizzle(reopened);
+    h.tx = async (name, args) => runWorkerTx(reopened, { name: name as never, args } as never);
+    h.getSession.mockReturnValue(null);
+    const reloaded = await topicInvoke('local-db:bots:get', 'bot-1');
+    expect(reloaded.sessions).toEqual(expect.arrayContaining([expect.objectContaining({
+      id: first.sessionId, role: 'thread',
+      threadRoot: { rootSessionId: chatId, rootClientId: 'bot-opening:inv-1' },
+    })]));
+    await expect(topicInvoke('local-db:bots:dm-thread:ensure', root))
+      .resolves.toEqual({ ok: true, sessionId: first.sessionId, created: false });
+    await expect(topicInvoke('local-db:bots:dm-thread:list', { botId: 'bot-1', rootSessionId: chatId }))
+      .resolves.toEqual([expect.objectContaining({ sessionId: first.sessionId, rootClientId: root.rootClientId, replyCount: 2 })]);
 
     // The topic's model context names its root; a rewound root is reported as unavailable, not guessed.
     const { readBotDmThreadContextNote } = await import('../../../maker-ipc/botDmThreadContext');

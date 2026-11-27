@@ -6,6 +6,9 @@ import { MemoryRouter } from 'react-router-dom';
 
 import { runBotLifecycleAction, type BotProfile } from '../botStore';
 import { BotLifecycleSettings } from '../BotLifecycleSettings';
+import { botRouteForOwnedSession } from '../botSessionOwners';
+import { BotSettingsTargetContext } from '../botSettingsTarget';
+import { localBotSettingsTarget } from '../localBotSettingsTarget';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -106,6 +109,51 @@ describe('BotLifecycleSettings v1 actions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'bots.historySearch.search' }));
     await waitFor(() => expect(screen.getByText('bots.historySearch.empty')).toBeTruthy());
     expect(window.electronAPI.localDb.bots.searchHistory).toHaveBeenCalledWith({ botId: 'bot-1', query: 'project', limit: 20 });
+  });
+
+  // #10873: production history settings must provide access after a cold roster
+  // reload even when the original message/current canonical root is unavailable.
+  // Existing coverage only exercised search and lifecycle actions. Minimal input:
+  // persisted thread projections with the same clientId in distinct root sessions,
+  // including an archived topic; no transcript cache or summary. Tier: unit/jsdom.
+  it('reopens persisted private threads by their original IDs after remount, without rebinding their roots', () => {
+    const profile = bot('active');
+    profile.sessions = [
+      { id: 'current-main', kind: 'chat', role: 'canonical', status: 'active', title: 'Main', updatedAt: 1 },
+      { id: 'topic-old', kind: 'thread', role: 'thread', status: 'archived', title: 'Launch plan', updatedAt: 2,
+        threadRoot: { rootSessionId: 'previous-main', rootClientId: 'bot-opening:1' } },
+      { id: 'topic-current', kind: 'thread', role: 'thread', status: 'active', title: 'Review plan', updatedAt: 3,
+        threadRoot: { rootSessionId: 'current-main', rootClientId: 'bot-opening:1' } },
+      // Older/malformed root keys must not make the linked history unreachable.
+      { id: 'topic-no-root', kind: 'thread', role: 'thread', status: 'active', title: 'Saved discussion', updatedAt: 4 },
+      { id: 'topic-deleted', kind: 'thread', role: 'thread', status: 'deleted', title: 'Deleted topic', updatedAt: 5 },
+      { id: 'channel', kind: 'channel', role: 'channel', status: 'active', title: 'Channel lane', updatedAt: 6 },
+    ];
+    const before = JSON.stringify(profile);
+    const navigate = vi.fn();
+    const mount = () => {
+      const reloaded = JSON.parse(before) as BotProfile;
+      return render(<MemoryRouter><BotLifecycleSettings bot={reloaded} mode="history"
+        onOpenSession={(id) => navigate(botRouteForOwnedSession([reloaded], id)?.route)} /></MemoryRouter>);
+    };
+    mount().unmount();
+    const view = mount();
+    for (const [title, id] of [['Launch plan', 'topic-old'], ['Review plan', 'topic-current'], ['Saved discussion', 'topic-no-root']]) {
+      fireEvent.click(screen.getByRole('button', { name: new RegExp(title) }));
+      expect(navigate).toHaveBeenLastCalledWith(`/cc-agent/${id}`);
+    }
+    expect(screen.queryByText('Deleted topic')).toBeNull();
+    expect(screen.queryByText('Channel lane')).toBeNull();
+    expect(screen.queryByText('Main')).toBeNull();
+    expect(runBotLifecycleAction).not.toHaveBeenCalled();
+    // Remote settings retain their existing discovery behavior; this local
+    // fallback must not create a route that drops the originating computer.
+    view.rerender(<MemoryRouter><BotSettingsTargetContext.Provider value={{ ...localBotSettingsTarget, kind: 'remote', deviceId: 'other-pc' }}>
+      <BotLifecycleSettings bot={profile} mode="history" onOpenSession={navigate} />
+    </BotSettingsTargetContext.Provider></MemoryRouter>);
+    expect(screen.queryByText('Launch plan')).toBeNull();
+    expect(screen.queryByText('Review plan')).toBeNull();
+    expect(screen.queryByText('Saved discussion')).toBeNull();
   });
 
   it('offers deletion and restart without a pause action', async () => {
