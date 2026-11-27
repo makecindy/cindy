@@ -92,9 +92,9 @@ export function chatGroupMembership(group: Pick<BotGroupSummary, 'serverBacked' 
 
 /** Whether the signed-in human may broadcast @所有人 in this group (default managers only; all members when enabled). */
 export function canMentionAllInBotGroup(
-  group: Pick<BotGroupSummary, 'serverBacked' | 'supportsMemberMentionAll' | 'allowMemberMentionAll' | 'members'>,
+  group: Pick<BotGroupSummary, 'conversationKind' | 'serverBacked' | 'supportsMemberMentionAll' | 'allowMemberMentionAll' | 'members'>,
 ): boolean {
-  if (group.serverBacked !== true || group.supportsMemberMentionAll !== true) return true;
+  if (group.conversationKind === 'direct' || group.serverBacked !== true || group.supportsMemberMentionAll !== true) return true;
   if (group.allowMemberMentionAll === true) return true;
   const self = group.members.find(member => member.isSelf === true);
   return self?.role === 'owner' || self?.role === 'admin';
