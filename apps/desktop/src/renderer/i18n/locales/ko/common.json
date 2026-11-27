@@ -7122,6 +7122,8 @@
           "controlling": "이 컴퓨터를 제어 중",
           "protocol": "연결 방식",
           "rttNote": "최근 측정",
+          "relayLegSelf": "이 기기 {{transport}}",
+          "relayLegPeer": "상대 기기 {{transport}}",
           "manage": "기기 관리…",
           "linkStatus": "「{{name}}」 연결",
           "version": "Cindy {{version}}",
