@@ -20,6 +20,8 @@ function fixture({
   write,
   read,
   remove,
+  selectAccount,
+  appContext,
   supportsDelete = true,
   replyParent,
   readReplyQuote,
@@ -91,11 +93,13 @@ function fixture({
       },
     },
     async fetch(url, options = {}) {
-      if (url === "/app-context")
+      if (url === "/app-context") {
+        if (appContext) await appContext();
         return {
           ok: true,
           json: async () => ({ context: { locale: "zh-CN" } }),
         };
+      }
       assert.equal(url, "/kv");
       if (options.method === "PUT") kv = JSON.parse(options.body);
       return { ok: true, json: async () => copy(kv) };
@@ -136,6 +140,10 @@ function fixture({
       return remove ? remove(request) : { ok: true, data: { deleted: true, draftId: current.draftId } };
     } } : {}),
     async selectAccount(id) {
+      if (selectAccount) {
+        const result = await selectAccount(id);
+        if (result) return result;
+      }
       return id === account.accountId
         ? account
         : { ok: false, message: "账号不存在" };
@@ -1272,4 +1280,167 @@ test('a slower change event never clobbers an immediate Send, and Send retries t
   await f.advance(10000);
   await retry;
   assert.equal(f.writes.filter(w => w.send).length, 1);
+});
+
+// PR #13384 review family 1: early prepare() failures after showing preparingSend
+// (e.g. selectAccount failure before writeDraft) must unlock the card into a
+// retryable error state instead of leaving it stuck in preparingSend.
+test('prepare() restores a retryable error state when runMailDraft fails early after showing preparingSend', async () => {
+  let rejectAccount = false;
+  const f = fixture({
+    autoSend: false,
+    selectAccount: async () => (rejectAccount ? { ok: false, message: 'Gmail 账号未授权' } : undefined),
+  });
+  await f.present();
+  const edited = { ...f.values(), body: 'Unsaved before account drop' };
+  await f.card('change', edited);
+
+  rejectAccount = true;
+  await f.card('send', edited);
+  assert.ok(f.cards.some(c => c.statusOnly?.state === 'sending' && c.statusOnly?.cancelLabel === '撤销'));
+  const afterFailure = f.cards.at(-1).statusOnly;
+  assert.equal(afterFailure?.state, 'error');
+  assert.equal(afterFailure?.status, 'Gmail 账号未授权');
+  assert.equal(afterFailure?.cancelLabel, undefined);
+  assert.equal(afterFailure?.pendingSend, undefined);
+  assert.equal(f.writes.length, 0);
+
+  // Recovering the account allows clicking Send again to save and enter countdown.
+  rejectAccount = false;
+  const retry = f.card('send', edited);
+  await f.waitCountdown();
+  assert.equal(f.writes.filter(w => !w.send).length, 1);
+  assert.equal(f.cards.at(-1).statusOnly?.state, 'sending');
+  assert.ok(f.cards.at(-1).statusOnly?.pendingSend);
+  await f.advance(10000);
+  await retry;
+  assert.equal(f.writes.filter(w => w.send).length, 1);
+
+  // Symmetric interleaving: an in-flight autosave publishes a preparingSend card
+  // update while holding the lock, succeeds without unlocking, and then prepare()'s
+  // queued runMailDraft fails in selectAccount() — card must still unlock to error.
+  let holdSaveCopy = false;
+  let releaseSaveCopy;
+  let failQueuedSelect = false;
+  let saveCalls = 0;
+  const f2 = fixture({
+    autoSend: false,
+    selectAccount: async () => (failQueuedSelect ? { ok: false, message: 'Gmail 账号过期' } : undefined),
+    appContext: async () => {
+      if (!holdSaveCopy) return;
+      holdSaveCopy = false;
+      await new Promise((resolve) => { releaseSaveCopy = resolve; });
+    },
+    write: async (request) => {
+      if (!request.send) saveCalls++;
+    },
+  });
+  await f2.present();
+  const edited2 = { ...f2.values(), body: 'Syncing before queued selectAccount drops' };
+  await f2.card('change', edited2);
+  holdSaveCopy = true;
+  const autosave = f2.advance(2000);
+  while (!releaseSaveCopy) await new Promise((r) => setImmediate(r));
+
+  // Click Send while autosave is paused before its preparing-aware showMailDraft().
+  const queuedSend = f2.card('send', edited2);
+  for (let i = 0; i < 50 && f2.cards.at(-1).statusOnly?.state !== 'sending'; i++) await Promise.resolve();
+  assert.equal(f2.cards.at(-1).statusOnly?.cancelLabel, '撤销');
+
+  // Drop account authorization before prepare()'s runMailDraft acquires the lock,
+  // then release autosave so it renders preparingSend via showMailDraft and finishes.
+  failQueuedSelect = true;
+  releaseSaveCopy();
+  await autosave;
+  await queuedSend;
+  assert.equal(saveCalls, 1);
+  const unlocked = f2.cards.at(-1).statusOnly;
+  assert.equal(unlocked?.state, 'error');
+  assert.equal(unlocked?.status, 'Gmail 账号过期');
+  assert.equal(unlocked?.cancelLabel, undefined);
+  assert.equal(unlocked?.pendingSend, undefined);
+});
+
+// PR #13384 review family 2: delayed /app-context (mailCopy) inside showMailDraft
+// must never let a stale mail:change or cancelled prepare() preview overwrite a
+// newer countdown or restored draft card.
+test('delayed mailCopy inside showMailDraft never overwrites a live send countdown or cancelled draft', async () => {
+  const heldContexts = [];
+  let holdAfter = -1;
+  let armHoldAfterOnSelect = -1;
+  const f = fixture({
+    autoSend: false,
+    selectAccount: async () => {
+      if (armHoldAfterOnSelect >= 0) {
+        holdAfter = armHoldAfterOnSelect;
+        armHoldAfterOnSelect = -1;
+      }
+      return undefined;
+    },
+    appContext: async () => {
+      if (holdAfter < 0) return;
+      if (holdAfter > 0) { holdAfter--; return; }
+      holdAfter = -1;
+      await new Promise((resolve) => heldContexts.push(resolve));
+    },
+  });
+  await f.present();
+
+  // Case A: mail:change passes selectAccount and pauses inside showMailDraft's
+  // mailCopy(); meanwhile mail:send finishes saving and enters countdown.
+  const edited = { ...f.values(), body: 'Delayed change publish' };
+  armHoldAfterOnSelect = 0; // hold the mailCopy() immediately inside showMailDraft()
+  const changePromise = f.card('change', edited);
+  while (heldContexts.length === 0) await new Promise((r) => setImmediate(r));
+
+  const sendPromise = f.card('send', edited);
+  await f.waitCountdown();
+  const countdownUpdate = f.cards.at(-1);
+  assert.equal(countdownUpdate.statusOnly?.state, 'sending');
+  assert.ok(countdownUpdate.statusOnly?.pendingSend);
+
+  // Release the stale mail:change showMailDraft() — it must NOT clobber countdown.
+  heldContexts.shift()();
+  await changePromise;
+  assert.equal(f.cards.at(-1).statusOnly?.state, 'sending');
+  assert.ok(f.cards.at(-1).statusOnly?.pendingSend);
+
+  // Clean up Case A by cancelling countdown (draft is now already synced).
+  await f.card('cancel');
+  await sendPromise;
+  assert.equal(f.cards.at(-1).draft?.state, 'draft');
+
+  // Case B: prepare() enters its preview showMailDraft() and pauses on mailCopy();
+  // meanwhile mail:cancel cancels sending and restores draft. Releasing the stale
+  // preview must NOT overwrite the restored draft with sending or error.
+  let selectCount = 0;
+  const f2 = fixture({
+    autoSend: false,
+    selectAccount: async () => {
+      selectCount++;
+      // selectCount 1 = runMailDraft (already synced, returns early),
+      // selectCount 2 = prepare() right before mailCopy() + preview showMailDraft().
+      if (selectCount === 2) holdAfter = 1; // skip prepare()'s mailCopy(), hold showMailDraft()'s mailCopy()
+      return undefined;
+    },
+    appContext: async () => {
+      if (holdAfter < 0) return;
+      if (holdAfter > 0) { holdAfter--; return; }
+      holdAfter = -1;
+      await new Promise((resolve) => heldContexts.push(resolve));
+    },
+  });
+  await f2.present();
+  const send2 = f2.card('send', f2.values());
+  while (heldContexts.length === 0) await new Promise((r) => setImmediate(r));
+
+  await f2.card('cancel');
+  assert.equal(f2.cards.at(-1).draft?.state, 'draft');
+  const countAfterCancel = f2.cards.length;
+
+  heldContexts.shift()();
+  await send2;
+  assert.equal(f2.cards.length, countAfterCancel);
+  assert.equal(f2.cards.at(-1).draft?.state, 'draft');
+  assert.equal(f2.writes.filter(w => w.send).length, 0);
 });
