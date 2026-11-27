@@ -6,7 +6,7 @@
  * Slack、Discord 和 `/new` 都走这里，避免渠道之间借用同一份用户选择。
  */
 
-import type { AgentKind, Effort, PermissionMode } from '@cindy/maker-core';
+import type { AgentKind, Effort, EngineKind, PermissionMode } from '@cindy/maker-core';
 import { resolveAutomaticImSettings, resolvedImDefaultFingerprint, usesAutomaticImModel } from '../../shared/imAutomaticModel.js';
 import {
   chatEligibleSourcesForModel,
@@ -26,14 +26,17 @@ import {
 } from '../maker-host/model-route-guard';
 
 import {
+  activeImDefaultAgentSettings,
   IM_DEFAULT_EFFORT_OVERRIDES,
+  IM_DEFAULT_PLUGIN_ENGINE_SETTINGS,
   IM_DEFAULT_SETTINGS,
+  type ImDefaultBuiltinAgentKind,
   type ImDefaultAgentSettings,
   type ImDefaultSettingsChannel,
   type ImDefaultSettings,
-  type ImDefaultAgentKind,
   isUnconditionalTurnPolicyChannel,
 } from '../../shared/imDefaultSettings.js';
+import { pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
 import { createLogger } from '../logger';
 import { getMaker } from '../maker-host';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService';
@@ -50,7 +53,7 @@ export async function resolveImAutomaticDefaults<T extends ImDefaultSettings>(
   raw: T,
   channel?: ImDefaultSettingsChannel,
   providerSnapshot?: ProviderView[] | null,
-  agentKind?: ImDefaultAgentKind,
+  agentKind?: ImDefaultBuiltinAgentKind,
 ): Promise<T | null> {
   const providers = providerSnapshot === undefined ? await listProvidersForDefaults() : providerSnapshot;
   if (!providers) return null;
@@ -80,9 +83,9 @@ export async function projectImDefaultSettings<T extends ImDefaultSettings>(raw:
 
 export interface ResolvedImSessionDefaults {
   agentDeviceId?: string | null;
-  agentKind: AgentKind;
+  agentKind: EngineKind;
   model: string;
-  effort: Effort;
+  effort: Effort | '';
   providerId: string | null;
   permissionMode: PermissionMode;
   fastMode: boolean | 'ultrafast';
@@ -115,6 +118,21 @@ export function applyImRouteOverride<T extends ImDefaultSettings>(
   override: ImLaneRouteOverride | null | undefined,
 ): T {
   if (!override) return raw;
+  if (override.agentKind === 'acp') {
+    return {
+      ...raw,
+      agentKind: 'acp',
+      agents: {
+        ...raw.agents,
+        acp: {
+          providerId: override.providerId,
+          model: override.model,
+          effort: override.effort,
+          ...(override.agentDeviceId ? { agentDeviceId: override.agentDeviceId } : {}),
+        },
+      },
+    };
+  }
   return {
     ...raw,
     agentKind: override.agentKind,
@@ -123,7 +141,7 @@ export function applyImRouteOverride<T extends ImDefaultSettings>(
       [override.agentKind]: {
         providerId: override.providerId,
         model: override.model,
-        effort: override.effort,
+        effort: override.effort || raw.agents[override.agentKind].effort,
         ...(override.agentDeviceId ? { agentDeviceId: override.agentDeviceId } : {}),
       },
     },
@@ -137,12 +155,29 @@ export async function resolveImSessionDefaults(
   routeOverride?: ImLaneRouteOverride | null,
 ): Promise<ResolvedImSessionDefaults> {
   const raw = applyImRouteOverride(readImDefaultSettings(channel), routeOverride);
+  if (raw.agentKind === 'acp') {
+    const acp = raw.agents.acp ?? IM_DEFAULT_PLUGIN_ENGINE_SETTINGS;
+    if (!pluginEngineKeyFromProviderId(acp.providerId) || !acp.model.trim()) {
+      throw new Error('im default plugin engine route is incomplete; reselect a model in settings');
+    }
+    return {
+      ...(acp.agentDeviceId ? { agentDeviceId: acp.agentDeviceId } : {}),
+      agentKind: 'acp',
+      model: acp.model.trim(),
+      effort: acp.effort,
+      providerId: acp.providerId,
+      permissionMode: raw.permissionMode ?? config.defaultPermissionMode,
+      fastMode: false,
+      fingerprint: fingerprintImDefaultSettings(raw),
+    };
+  }
   if (usesAutomaticImModel(raw)) {
     const resolved = await resolveImAutomaticDefaults(raw, channel, providerSnapshot);
     if (!resolved) throw new Error('im default session has no available chat model; connect or enable a model in settings');
+    const resolvedSettings = activeImDefaultAgentSettings(resolved);
     return {
       agentKind: resolved.agentKind,
-      ...resolved.agents[resolved.agentKind],
+      ...resolvedSettings,
       permissionMode: raw.permissionMode ?? config.defaultPermissionMode,
       fastMode: false,
       fingerprint: resolvedImDefaultFingerprint(fingerprintImDefaultSettings(raw), resolved),
@@ -216,13 +251,13 @@ export function readImDefaultSettingsFingerprint(
  */
 export function readImRawDefaultRoute(channel?: ImDefaultSettingsChannel): ImDefaultRoute {
   const raw = readImDefaultSettings(channel);
-  const settings = raw.agents[raw.agentKind];
+  const settings = activeImDefaultAgentSettings(raw);
   return {
     agentKind: raw.agentKind,
     model: settings.model,
     providerId: settings.providerId?.trim() || null,
     agentDeviceId: settings.agentDeviceId ?? null,
-    effort: settings.effort,
+    effort: settings.effort || null,
   };
 }
 
