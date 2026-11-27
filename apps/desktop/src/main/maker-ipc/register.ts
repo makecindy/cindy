@@ -1307,6 +1307,7 @@ import {
   isUserPendingAgentSwitchIntent,
   performSessionAgentSwitch,
   projectPendingAgentSwitchIntent,
+  projectPendingModelGroupTarget,
   registerMakerSessionAgentSwitchHandler,
   relocateForFreshStart,
   settleSystemRouteSwitchIntent,
@@ -1512,7 +1513,7 @@ import {
   readModelGroupRecoveryOffer,
   refreshAutoModelGroupRoutes,
 } from '../model-groups/desktopResolver.js';
-import { registerModelGroupPendingTargetReader } from '../model-groups/ipc.js';
+import { registerModelGroupPendingSelection } from '../model-groups/ipc.js';
 import { modelGroupSessionStart } from '../model-groups/sessionStart.desktop.js';
 import { isModelGroupRecoverySource } from '../model-groups/switchOffer.js';
 import { readModelGroupsConfigForSelected } from '../model-groups/store.js';
@@ -6995,9 +6996,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   setSessionTextSnapshotReader(getSessionTextSnapshot);
   log.info('registering maker:* IPC handlers');
-  let readPendingModelGroupTarget: ((sessionId: string) => {
-    agentKind?: string | null; providerId?: string | null; model?: string | null; agentDeviceId?: string | null;
-  } | null) | null = null;
+  let readPendingModelGroupTarget: ((sessionId: string) => ReturnType<typeof projectPendingModelGroupTarget>) | null = null;
   const projectTaskModelGroupBinding = (
     sessionId: string,
     target: { agentKind?: string | null; providerId?: string | null; model?: string | null; agentDeviceId?: string | null },
@@ -11862,17 +11861,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   // turn 运行中登记的切换意图(下一条消息发送时刻由 send 事务 apply)。
   const agentSwitchPending = createPendingAgentSwitchRegistry();
-  readPendingModelGroupTarget = (sessionId) => {
-    const intent = agentSwitchPending.get(sessionId);
-    if (!intent || intent.targetAgentKind === 'acp') return null;
-    return {
-      agentKind: makerToDbAgentKind(intent.targetAgentKind),
-      providerId: intent.providerId ?? null,
-      model: intent.model,
-      agentDeviceId: intent.targetAgentDeviceId ?? null,
-    };
-  };
-  registerModelGroupPendingTargetReader(readPendingModelGroupTarget);
+  readPendingModelGroupTarget = (sessionId) => projectPendingModelGroupTarget(agentSwitchPending.get(sessionId));
+  registerModelGroupPendingSelection({
+    readPendingSessionTarget: readPendingModelGroupTarget,
+    markPendingModelGroupPick: (sessionId, pickedKey) => agentSwitchPending.markModelGroupPick(sessionId, pickedKey),
+  });
   /**
    * The send_to_session route projected into model input before delivery: the live session's
    * host-reconciled route. A steer ('live') reaches that running runtime as is. A send ('send': queued
@@ -11901,6 +11894,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       agentSwitchIntent: null,
       agentSwitchIntentCanceled: true,
     });
+    if (peekModelGroupSessionBinding(sessionId)) {
+      void broadcastSessionRuntimeProjection(sessionId).catch(() => {});
+    }
   };
 
   // session-agent-switch:lazy-create 前以 DB 行为真源校正 createOpts。切换后
@@ -12003,6 +11999,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     onPendingSwitchChanged: (sessionId, intent) => {
       if (intent && !intent.preparation) recordUserSessionRuntimeMutation(sessionId);
       broadcastSessionPatched(sessionId, { agentSwitchIntent: intent });
+      if (peekModelGroupSessionBinding(sessionId)) {
+        void broadcastSessionRuntimeProjection(sessionId).catch(() => {});
+      }
     },
     // 用户选择落地 → 给 IM 任务打「脱离跟随」标记(同值重选也永久脱离, PR #5155)。
     onUserRouteSelectionLanded: async (sessionId) => {
@@ -23697,6 +23696,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         ...(deviceLinkModelSelectionOrigin ? { deviceLinkModelSelectionOrigin } : {}),
         ...(internalOptions.runtimeSource ? { runtimeSource: internalOptions.runtimeSource } : {}),
         ...(internalOptions.configStaged === true ? { configStaged: true } : {}),
+        ...(internalOptions.modelGroupPickedKey ? { modelGroupPickedKey: internalOptions.modelGroupPickedKey } : {}),
         sameAgentSelection: true,
         targetAgentKind: agentKind,
         model,
