@@ -434,7 +434,7 @@ export function createSlashHandlers(
           sections,
           currentModelId: row.model,
           currentProviderId,
-          currentEffort: row.effort,
+          currentEffort: row.effort || null,
           defaultEffortByModel: target.attached
             ? Object.fromEntries(
                 sections.flatMap((s) => s.models.map((m) => [m.id, m.defaultEffort ?? row.effort])),

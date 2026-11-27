@@ -583,15 +583,25 @@ export interface TurnChangeCaptureHooks {
   /** Capture one known target before the provider is allowed to mutate it. */
   beforeKnownFileWrite(input: {
     sessionId: string;
-    provider: 'claude-code' | 'pi';
+    provider: 'claude-code' | 'pi' | 'acp';
     cwd: string;
     targetPath: string;
+    remote?: boolean;
+  }): Promise<void>;
+  /** Record an exact preimage supplied by a structured diff (e.g. ACP tool_call_update). */
+  recordKnownFilePreimage?(input: {
+    sessionId: string;
+    provider: 'claude-code' | 'pi' | 'acp';
+    cwd: string;
+    targetPath: string;
+    beforeExists: boolean;
+    beforeText: string;
     remote?: boolean;
   }): Promise<void>;
   /** Record a tool whose filesystem effects cannot be known before execution. */
   noteOpaqueWrite(input: {
     sessionId: string;
-    provider: 'claude-code' | 'pi';
+    provider: 'claude-code' | 'pi' | 'acp';
     cwd: string;
     remote?: boolean;
   }): void;
