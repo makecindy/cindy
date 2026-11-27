@@ -649,8 +649,8 @@ function sanitize(raw: unknown): NewMakerDraft {
 }
 
 /**
- * 只认 `acp-plugin:<插件>:<引擎>` 形态的来源；模型值是引擎给的不透明字符串。`deviceId` 是引擎所在的
- * 另一台自己的电脑(设备 id 形态)：别人分享的来源不提供插件引擎，读到就整项作废，不悄悄改成本机的同名引擎。
+ * 只认 `acp-plugin:<插件>:<引擎>` 形态的来源；模型值是引擎给的不透明字符串。`deviceId` 可指向
+ * 另一台电脑或收到的分享。这里只恢复来源标识，能否使用由当前目录及分享准入判定。
  */
 function sanitizePluginEngine(value: unknown): NewMakerDraft['pluginEngine'] {
   if (!value || typeof value !== 'object') return null;
@@ -658,7 +658,9 @@ function sanitizePluginEngine(value: unknown): NewMakerDraft['pluginEngine'] {
     providerId?: unknown; modelId?: unknown; permissionMode?: unknown; effort?: unknown; deviceId?: unknown;
   };
   if (deviceId !== undefined && (
-    typeof deviceId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(deviceId) || isProviderShareAgentDeviceId(deviceId)
+    typeof deviceId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(deviceId)
+    // Combine the common length/character check with the share parser's alphanumeric first character.
+    || (isProviderShareAgentDeviceId(deviceId) && !/^share:[A-Za-z0-9]/.test(deviceId))
   )) return null;
   if (
     typeof providerId !== 'string' || providerId.length > 512 || !pluginEngineKeyFromProviderId(providerId)
