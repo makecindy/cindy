@@ -81,6 +81,7 @@ function snapshot() {
       directRttMs: route?.directRttMs ?? null,
       relayRttMs: route?.relayRttMs ?? null,
       pathPreference: route?.pathPreference ?? 'auto',
+      peerRelayVia: route?.peerRelayVia ?? null,
       dialing: current.isDialing(id),
     }];
   });

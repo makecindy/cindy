@@ -529,7 +529,8 @@
           "all": "Todas",
           "cc": "Claude Code",
           "codex": "Codex",
-          "pi": "Pi"
+          "pi": "Pi",
+          "acp": "Mecanismo de plugin"
         },
         "lastActivity": {
           "1d": "1d",

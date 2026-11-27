@@ -16,6 +16,8 @@ export interface DurableUpload {
   annotationRegions?: AnnotationRegion[];
 }
 
+export type OutboxHistoryConfirmation = 'unconfirmed' | 'requested';
+
 export interface DurableOutboxRecord {
   version: 1;
   /** Canonical realm-qualified auth accountKey; unqualified pre-release rows are never claimed. */
@@ -56,6 +58,10 @@ export interface DurableOutboxRecord {
   retrySafe?: boolean;
   /** A persisted host user row was observed; only local history caching remains. */
   historyConfirmed?: boolean;
+  /** A legacy peer could not confirm this send. Only a read may release it. */
+  historyConfirmation?: OutboxHistoryConfirmation;
+  /** Failed awaits a Retry tap; queued may retry once; sending is an uncertain retry. */
+  retryAfterConfirmedMiss?: true;
   error?: string;
   cancelRequested?: boolean;
   /** Delivery is settled; retain the ledger solely until local cleanup succeeds. */
@@ -250,7 +256,11 @@ export function createDurableOutbox(storage: OutboxStorage, reconcileDraft?: (
             console.warn('[outbox] skipped unreadable ledger row', key);
             continue;
           }
-          loaded.push(record);
+          // A check or an already-started retry interrupted by exit needs a new check.
+          loaded.push(record.retryAfterConfirmedMiss && record.state === 'sending'
+            ? { ...record, state: 'failed', historyConfirmation: 'unconfirmed', retryAfterConfirmedMiss: undefined }
+            : record.historyConfirmation === 'requested'
+              ? { ...record, historyConfirmation: 'unconfirmed' } : record);
         }
         assertOwner(owner, epoch);
         records = loaded.sort((a, b) => a.createdAt - b.createdAt);
@@ -309,6 +319,10 @@ function isLoadableOutboxRecord(
     && keyFor(row) === key
     && Array.isArray(row.uploads)
     && (row.historyConfirmed === undefined || typeof row.historyConfirmed === 'boolean')
+    && (row.historyConfirmation === undefined
+      || row.historyConfirmation === 'unconfirmed'
+      || row.historyConfirmation === 'requested')
+    && (row.retryAfterConfirmedMiss === undefined || row.retryAfterConfirmedMiss === true)
     && (row.cleanupOutcome === undefined
       || row.cleanupOutcome === 'accepted'
       || row.cleanupOutcome === 'cancelled')
