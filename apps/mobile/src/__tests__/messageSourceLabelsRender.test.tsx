@@ -3,7 +3,7 @@
  * 消息来源标签渲染:设备(查看者自己发的不标)、插件、共享任务作者(气泡上方)、
  * 脱敏自动化、本机 IM 卡片(保留普通用户操作)。沿用 pluginAttachmentBubble 的 RN 替身。
  */
-import { act, createElement, useContext, useImperativeHandle, useMemo, useState, type ReactNode } from "react";
+import { act, createElement, useContext, useImperativeHandle, useMemo, useState, type MouseEventHandler, type ReactNode, type Ref } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 // This suite renders zh-CN only. Keep the real i18n initializer, Chinese catalog
@@ -68,6 +68,9 @@ const viewportHarness = vi.hoisted(() => ({
   window: { width: 402, height: 874, scale: 3, fontScale: 1 },
   windowListeners: new Set<() => void>(),
   opacityTargets: new Set<HTMLElement>(),
+  layouts: new WeakMap<Element, (event: { nativeEvent: { layout: { height: number } } }) => void>(),
+  scrollToEnd: vi.fn(),
+  scrollToOffset: vi.fn(),
 }));
 
 // Keep the production list, bubble gate, invocation header, and message model.
@@ -75,12 +78,28 @@ const viewportHarness = vi.hoisted(() => ({
 vi.mock("react-native", async () => {
   const React = await import("react");
   // onLongPress 映射到 contextmenu,便于测试长按显示来源 ID。
-  const view = ({ children, testID, accessibilityLabel, accessibilityHint, onLongPress, onPress, disabled, selectable, style, nativeRef }: any) => {
+  const view = ({ children, testID, accessibilityLabel, accessibilityHint, accessibilityState, onLayout, onLongPress, onPress, disabled, selectable, style, nativeRef }: {
+    children?: ReactNode;
+    testID?: string;
+    accessibilityLabel?: string;
+    accessibilityHint?: string;
+    accessibilityState?: { expanded?: boolean };
+    onLayout?: (event: { nativeEvent: { layout: { height: number } } }) => void;
+    onLongPress?: () => void;
+    onPress?: MouseEventHandler<HTMLDivElement>;
+    disabled?: boolean;
+    selectable?: boolean;
+    style?: unknown;
+    nativeRef?: Ref<HTMLDivElement>;
+  }) => {
     const layoutStyle = Object.assign({}, ...[typeof style === 'function' ? style({ pressed: false }) : style].flat(Infinity).filter(Boolean));
     return React.createElement(
       "div",
       {
-        ref: nativeRef,
+        ref: onLayout ? (node: HTMLDivElement | null) => {
+          if (node) viewportHarness.layouts.set(node, onLayout);
+        } : nativeRef,
+        style: { height: layoutStyle.height },
         "data-testid": testID,
         "data-min-height": layoutStyle.minHeight,
         "data-padding-left": layoutStyle.paddingLeft,
@@ -90,6 +109,7 @@ vi.mock("react-native", async () => {
         } : {}),
         ...(selectable !== undefined ? { "data-selectable": String(selectable) } : {}),
         "aria-label": accessibilityLabel,
+        "aria-expanded": accessibilityState?.expanded,
         ...(accessibilityHint ? { "data-hint": accessibilityHint } : {}),
         ...(onLongPress ? { onContextMenu: () => onLongPress() } : {}),
         ...(onPress ? { onClick: disabled ? undefined : onPress } : {}),
@@ -107,7 +127,7 @@ vi.mock("react-native", async () => {
     stopAnimation() {}
   }
   function AnimatedView(props: any) {
-    const nativeRef = React.useRef<HTMLElement>(null);
+    const nativeRef = React.useRef<HTMLDivElement>(null);
     React.useLayoutEffect(() => {
       const style = Object.assign({}, ...[props.style].flat(Infinity).filter(Boolean));
       if (viewportHarness.captureNativeOpacity && nativeRef.current && style.opacity !== undefined) {
@@ -179,16 +199,17 @@ vi.mock("@legendapp/list/react-native", () => ({
     viewportHarness.list = { ...props, data };
     useImperativeHandle(ref, () => ({
       getNativeScrollRef: () => ({ getBoundingClientRect: () => ({ top: 0, bottom: viewportHarness.bottom }) }),
-      scrollToEnd() {},
-      scrollToOffset() {},
+      scrollToEnd: viewportHarness.scrollToEnd,
+      scrollToOffset: viewportHarness.scrollToOffset,
       getState() {
         return undefined;
       },
     }));
     // Model retained native cells: changing renderItem alone need not redraw them.
-    return useMemo(() => data.map((item: any, index: number) =>
+    const rows = useMemo(() => data.map((item: any, index: number) =>
       createElement("section", { key: item.key }, renderItem({ item, index })),
     ), [data, props.extraData, viewportHarness.memoizedCells ? null : renderItem]);
+    return <>{rows}{props.ListFooterComponent && <footer>{props.ListFooterComponent}</footer>}</>;
   },
   useRecyclingState: (initial: any) => useState(initial),
   useViewability: () => {},
@@ -219,6 +240,7 @@ vi.mock("lucide-react-native", () => ({
   CircleDashed: () => null,
   CircleMinus: () => null, CircleStop: () => null, CircleX: () => null,
   Copy: () => null,
+  CornerDownLeft: () => null,
   Ellipsis: () => null,
   ExternalLink: () => null,
   File: () => null,
@@ -1284,6 +1306,182 @@ it('opens cross-device source labels while redacted sources remain inert', () =>
   act(() => labels.forEach(label => label.dispatchEvent(new MouseEvent('click', { bubbles: true }))));
   expect(onOpenOriginSession).toHaveBeenCalledExactlyOnceWith('dev-A::task-1');
   act(() => root.unmount());
+});
+
+// #11759, unit (jsdom): a short two-paragraph session input previously showed
+// both paragraphs in a user bubble. The existing source-label tests do not
+// exercise disclosure, full-body recovery or navigation from a buddy's inbox.
+describe('buddy primary inbox letters', () => {
+  const origin = { kind: 'session', senderSessionId: 'task-1', senderSessionTitle: 'Release checklist' };
+  const letters = '[data-testid="message.companionLetter"]';
+  const sources = '[data-testid="message.sessionOrigin"]';
+  const primary = { companion: true, companionPrimaryChat: true };
+
+  it('independently opens and closes letters, with all content and original source routes', () => {
+    const onOpenOriginSession = vi.fn();
+    const h = mount([
+      msg('task-letter', {
+        text: '\n\n   Task first line.\n\n' + 'A synthetic progress line.\n\n'.repeat(16) + 'Task last paragraph.',
+        files: [{ name: 'fixture.txt', path: '/fixture/fixture.txt' }],
+      }, { origin }),
+      msg('buddy-letter', 'Buddy first line.\n\nBuddy second paragraph.', {
+        origin: { ...origin, senderSessionId: 'fixture-computer::buddy-chat', senderBotId: 'fixture-buddy', senderBotName: 'Orchid' },
+      }),
+    ], { ...primary, onOpenOriginSession });
+    try {
+      const [task, buddy] = h.host.querySelectorAll<HTMLElement>(letters);
+      const taskRow = task.closest('section')!;
+      const buddyRow = buddy.closest('section')!;
+      const openTaskLabel = i18n.t('devices.companions.openTask');
+      expect(task.textContent).toContain('Release checklist');
+      expect(task.textContent).toContain('Task first line.');
+      expect(buddy.textContent).toContain('Orchid');
+      expect(buddy.textContent).toContain('Buddy first line.');
+      expect(task.getAttribute('aria-expanded')).toBe('false');
+      expect(buddy.getAttribute('aria-expanded')).toBe('false');
+      expect(taskRow.textContent).not.toMatch(/Task last paragraph\.|fixture\.txt/);
+      expect(buddyRow.textContent).not.toContain('Buddy second paragraph.');
+      expect(h.host.querySelector(sources)).toBeNull();
+      expect(h.host.querySelector('[data-testid="companion.messageActions"]')).toBeNull();
+
+      act(() => task.click());
+      expect(task.getAttribute('aria-expanded')).toBe('true');
+      expect(taskRow.querySelector('[data-testid="message.agentBubble"]')?.textContent).toContain('Task last paragraph.');
+      expect(taskRow.textContent).toContain('fixture.txt');
+      expect(taskRow.querySelector('[data-testid="companion.messageActions"]')).not.toBeNull();
+      expect(buddyRow.textContent).not.toContain('Buddy second paragraph.');
+      const taskSource = taskRow.querySelector<HTMLElement>(sources)!;
+      expect(taskSource.textContent).toBe(openTaskLabel);
+      expect(onOpenOriginSession).not.toHaveBeenCalled();
+      act(() => taskSource.click());
+      act(() => buddy.click());
+      expect(buddyRow.textContent).toContain('Buddy second paragraph.');
+      act(() => buddyRow.querySelector<HTMLElement>(sources)!.click());
+      expect(onOpenOriginSession.mock.calls).toEqual([['task-1'], ['fixture-computer::buddy-chat']]);
+
+      act(() => task.click());
+      expect(task.getAttribute('aria-expanded')).toBe('false');
+      expect(taskRow.textContent).not.toContain('Task last paragraph.');
+      expect(taskRow.querySelector(sources)).toBeNull();
+      expect(buddyRow.textContent).toContain('Buddy second paragraph.');
+    } finally { h.unmount(); }
+  });
+
+  // PR #12151, unit: the existing disclosure tests have no native size events.
+  // A long letter opened at the tail must not seek past its heading or follow live growth.
+  it('holds the reading position across letter size changes until following is requested again', () => {
+    const h = mount([
+      msg('long-letter', 'First line.\n\n' + 'Synthetic progress.\n\n'.repeat(16) + 'Last paragraph.', { origin }),
+      { ...msg('streaming-reply', 'A reply in progress.', null), role: 'assistant' },
+    ], { ...primary, isSessionStreaming: true, scrollResetKey: 'original-task' });
+    const size = (height: number) => act(() => viewportHarness.list.onContentSizeChange(402, height));
+    const scroll = (y: number, height: number) => act(() => viewportHarness.list.onScroll({
+      nativeEvent: { contentOffset: { y }, contentSize: { height }, layoutMeasurement: { height: 500 } },
+    }));
+    const jump = () => h.host.querySelector<HTMLElement>('[data-testid="message.jumpToLatestButton"]');
+    const footer = () => h.host.querySelector<HTMLElement>('footer > div');
+    const clearScrollCommands = () => {
+      viewportHarness.scrollToEnd.mockClear();
+      viewportHarness.scrollToOffset.mockClear();
+    };
+    try {
+      scroll(500, 1000);
+      clearScrollCommands();
+      const letter = h.host.querySelector<HTMLElement>(letters)!;
+      act(() => letter.click());
+      size(1600);
+      scroll(500, 1600); // native layout sample, not a downward gesture
+      size(1680); // the in-progress reply adds another 80pt
+      expect(viewportHarness.scrollToOffset).not.toHaveBeenCalled();
+      expect(viewportHarness.scrollToEnd).not.toHaveBeenCalled();
+      expect(jump()).not.toBeNull();
+
+      // Return to the live reply, then close a measured body while following at the tail.
+      act(() => jump()!.click());
+      expect(viewportHarness.scrollToEnd).toHaveBeenCalledWith({ animated: true });
+      expect(jump()).toBeNull();
+      scroll(1180, 1680);
+      const body = letter.nextElementSibling!;
+      act(() => viewportHarness.layouts.get(body)!({ nativeEvent: { layout: { height: 600 } } }));
+      clearScrollCommands();
+      act(() => letter.click());
+      expect(letter.closest('section')?.textContent).not.toContain('Last paragraph.');
+      expect(footer()?.style.height).toBe('600px'); // native max offset stays 1180, not 580
+      size(1680);
+      size(1720); // another chunk, even though the viewport was at the old tail
+      expect(viewportHarness.scrollToOffset).not.toHaveBeenCalled();
+      expect(viewportHarness.scrollToEnd).not.toHaveBeenCalled();
+
+      h.rerender({ scrollResetKey: 'next-task' });
+      expect(footer()).toBeNull();
+      expect(jump()).toBeNull();
+      expect(h.host.querySelector(letters)?.getAttribute('aria-expanded')).toBe('false');
+    } finally {
+      h.unmount();
+      clearScrollCommands();
+    }
+  });
+
+  it('keeps an ID-less letter readable without inventing a source target', () => {
+    const onOpenOriginSession = vi.fn();
+    const h = mount([msg('redacted-letter', 'Redacted preview.\n\nRedacted detail.', {
+      origin: { kind: 'session' },
+    })], { ...primary, onOpenOriginSession });
+    try {
+      const letter = h.host.querySelector<HTMLElement>(letters)!;
+      expect(letter.textContent).toContain(i18n.t('message.renderer.sessionOrigin'));
+      expect(h.host.textContent).not.toContain('Redacted detail.');
+      act(() => letter.click());
+      expect(h.host.textContent).toContain('Redacted detail.');
+      expect(h.host.querySelector(sources)).toBeNull();
+      expect(onOpenOriginSession).not.toHaveBeenCalled();
+    } finally { h.unmount(); }
+  });
+
+  it('keeps owner and coordinator speech and other sources in their usual presentations', () => {
+    const groupSpeaker = { groupId: 'synthetic-group', speakerId: 'synthetic-speaker' };
+    const html = render([
+      msg('owner', 'Owner follow-up stays visible.', null),
+      { ...msg('summary', 'Coordinator summary stays visible.', { turnCompleted: true }), role: 'assistant' },
+      msg('hook', 'Hook text stays visible.', { origin, hookSource: { im: 'telegram', userText: 'Hook text stays visible.' } }),
+      msg('plugin', 'Plugin text stays visible.', { origin, sourcePlugin: { pluginId: 'fixture-plugin', name: 'Fixture plugin' } }),
+      msg('automated', 'Scheduled text stays visible.', { origin: { kind: 'scheduler', scheduleId: 'fixture-schedule' } }),
+      msg('group-thread', 'Group topic text stays visible.', { origin: { kind: 'session', groupThread: groupSpeaker } }),
+      msg('group-request', 'Group request stays visible.', { origin: { kind: 'session', groupRequest: groupSpeaker } }),
+      msg('orca', { orcaSource: 'worker', content: 'Orca report detail.' }, { origin: { kind: 'orca', senderSessionId: 'fixture-worker' } }),
+    ], primary);
+    expect(html).not.toContain('message.companionLetter');
+    for (const text of ['Owner follow-up', 'Coordinator summary', 'Hook text', 'Plugin text', 'Scheduled text', 'Group topic text', 'Group request']) {
+      expect(html).toContain(text);
+    }
+    for (const marker of ['message.userBubble', 'message.agentBubble', 'message.hookSource', 'message.sourcePlugin',
+      'message.automationOrigin', 'message.orcaCard.report']) {
+      expect(html).toContain(marker);
+    }
+  });
+
+  it.each([false, true])('keeps ordinary message bodies outside the primary chat (companion styling %s)', (companion) => {
+    const html = render([msg('same-input', 'First paragraph.\n\nSecond paragraph.', { origin })], { companion });
+    expect(html).toContain('message.userBubble');
+    expect(html).toContain('message.sessionOrigin');
+    expect(html).toContain('Second paragraph.');
+    expect(html).not.toContain('message.companionLetter');
+  });
+
+  it('folds a retained history row when the primary chat identity arrives', () => {
+    // Session history can render before the companion resource is available.
+    viewportHarness.memoizedCells = true;
+    const h = mount([msg('retained-letter', 'First paragraph.\n\nSecond paragraph.', { origin })], { companion: true });
+    try {
+      expect(h.host.textContent).toContain('Second paragraph.');
+      h.rerender({ companionPrimaryChat: true });
+      expect(h.host.querySelector(letters)?.textContent).toContain('First paragraph.');
+      expect(h.host.textContent).not.toContain('Second paragraph.');
+    } finally {
+      h.unmount();
+      viewportHarness.memoizedCells = false;
+    }
+  });
 });
 
 it('opens managed audio on tap and reflects the viewer states on the message card', async () => {

@@ -14,6 +14,7 @@
     "failedSamplingAttempt": "This reply did not complete. Its content is for reference only.",
     "moreActions": "More message actions",
     "reply": "Reply",
+    "taskLetterReplied": "{{name}} replied",
     "newMessagesToBottom": "New messages, jump to bottom",
     "jumpToBottom": "Jump to bottom",
     "openForkOrigin": "Open fork source message",

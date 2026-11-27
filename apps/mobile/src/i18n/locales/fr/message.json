@@ -14,6 +14,7 @@
     "failedSamplingAttempt": "Cette réponse n'a pas abouti. Son contenu est fourni à titre indicatif uniquement.",
     "moreActions": "Plus d'actions sur le message",
     "reply": "Répondre",
+    "taskLetterReplied": "{{name}} a répondu",
     "newMessagesToBottom": "Nouveaux messages, aller en bas",
     "jumpToBottom": "Aller en bas",
     "openForkOrigin": "Ouvrir le message source de la bifurcation",

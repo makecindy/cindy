@@ -14,6 +14,7 @@
     "failedSamplingAttempt": "此答未竟，所言仅供参酌。",
     "moreActions": "讯之余事",
     "reply": "覆",
+    "taskLetterReplied": "{{name}}之覆书",
     "newMessagesToBottom": "有新讯，跃至末",
     "jumpToBottom": "跃至末",
     "openForkOrigin": "启分歧所出之讯",

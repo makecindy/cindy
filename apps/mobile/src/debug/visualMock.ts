@@ -1031,10 +1031,30 @@ function visualMockMessages(sessionId: string): RemoteMessage[] {
   ] : [];
   if (sessionId === VISUAL_TEAMMATE_SESSION_ID || sessionId.startsWith(`${VISUAL_TEAMMATE_SESSION_ID}:`)) {
     const rows = visualMockMessages('ui-mock-rich-answer');
+    const replyAt = teammateVisualReplyAt(sessionId);
     const messages = rows.map((row, index) => ({
       ...row, id: `${sessionId}-${row.id}`, clientId: `${sessionId}-${row.clientId}`, sessionId,
-      createdAt: new Date(teammateVisualReplyAt(sessionId) - (rows.length - 1 - index) * 1_000).toISOString(),
+      createdAt: new Date(replyAt - (rows.length - 1 - index) * 1_000).toISOString(),
     }));
+    if (sessionId === `${VISUAL_TEAMMATE_SESSION_ID}:cindy-default`) {
+      const afterHistory = replyAt - NOW;
+      messages.push(
+        message(sessionId, 'letter-owner', 'user', 'Give me a short release recap.', afterHistory + 1_000),
+        message(sessionId, 'letter-task', 'user', {
+          text: 'The release checklist is ready.\n\nThe rollout is still waiting for your approval.',
+          files: [{ name: 'release-checklist.txt', path: '/synthetic/release-checklist.txt' }],
+        }, afterHistory + 2_000, {
+          agentMeta: { origin: { kind: 'session', senderSessionId: 'ui-mock-rich-answer', senderSessionTitle: 'Release checklist' } },
+        }),
+        message(sessionId, 'letter-buddy', 'user', 'I checked the preview on a small screen.\n\nThe release notes and links all fit.', afterHistory + 3_000, {
+          agentMeta: { origin: { kind: 'session', senderSessionId: `${VISUAL_TEAMMATE_SESSION_ID}:visual-bot-lizi`,
+            senderSessionTitle: 'LiZi', senderBotId: 'visual-bot-lizi', senderBotName: 'LiZi' } },
+        }),
+        message(sessionId, 'letter-summary', 'assistant', 'The checklist and preview are ready. Only rollout approval is pending.', afterHistory + 4_000, {
+          agentMeta: { assistantPhase: 'final_answer', turnCompleted: true },
+        }),
+      );
+    }
     return sessionId === VISUAL_TEAMMATE_SESSION_ID ? [...messages,
       message(sessionId, VISUAL_TEAMMATE_THREAD_ROOT_ID, 'assistant', '我们在话题里确认移动端样式，主聊天继续处理其他事情。', -300_000)] : messages;
   }

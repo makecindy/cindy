@@ -81,6 +81,7 @@ import {
   CircleDashed,
   CircleStop,
   Copy,
+  CornerDownLeft,
   Ellipsis,
   ExternalLink,
   Ghost,
@@ -605,6 +606,8 @@ interface CompanionQuoteActions extends CompanionQuoteOptions {
 interface MessageActions {
   onRetryImageDelivery?: (imageId: string) => Promise<void>;
   companion?: boolean;
+  /** Inbox letters are for the canonical buddy chat, not other companion-styled timelines. */
+  companionPrimaryChat?: boolean;
   intermediateProcess?: boolean;
   companionQuoteActions?: CompanionQuoteActions;
   companionThreads?: CompanionThreads;
@@ -701,6 +704,7 @@ function sameMapEntries<V>(
 
 export function MessageRenderer({
   companion = false,
+  companionPrimaryChat = false,
   companionQuote,
   companionThreads,
   conversationHeader,
@@ -1901,6 +1905,7 @@ export function MessageRenderer({
   }, [companion, companionQuote, lastCompanionReplyKey]);
   const actions: MessageActions & { firstUserMessageClientId?: string } = useMemo(() => ({
     companion,
+    companionPrimaryChat,
     companionQuoteActions,
     companionThreads,
     companionWorkingLabel,
@@ -1949,6 +1954,7 @@ export function MessageRenderer({
     screenWidth: viewportLayout.contentWidth,
   }), [
     companion,
+    companionPrimaryChat,
     companionQuoteActions,
     companionThreads,
     companionWorkingLabel,
@@ -3079,6 +3085,7 @@ export function MessageRenderer({
       // Resource discovery can complete after history has already populated the list.
       // Update visible cells when a task is identified as a companion chat.
       companion,
+      companionPrimaryChat,
       companionWorkingLabel,
       companionPluginWork,
       // Topic capabilities, busy state and reply counts can arrive without new messages.
@@ -3090,7 +3097,7 @@ export function MessageRenderer({
       companionContinuationKeys,
       contentWidth: viewportLayout.contentWidth,
     }),
-    [pendingSend?.selectedClientId, shareSelectionActive, companion, companionWorkingLabel, companionPluginWork, companionThreads,
+    [pendingSend?.selectedClientId, shareSelectionActive, companion, companionPrimaryChat, companionWorkingLabel, companionPluginWork, companionThreads,
       lastCompanionReplyKey, companionTimeGroups, companionContinuationKeys, viewportLayout.contentWidth],
   );
   // Keep production and regular DEV screens on keyed remounts. With Fabric,
@@ -3326,7 +3333,10 @@ const RenderItemView = memo(function RenderItemView({
   );
   let node: ReactNode;
   switch (item.type) {
-    case 'message':
+    case 'message': {
+      const letterOrigin = actions.companion && actions.companionPrimaryChat && !actions.intermediateProcess
+        && !actions.shareSelectionActive
+        ? companionTaskLetterOrigin(item.message) : undefined;
       node = item.message.authorization
         ? (
         <AuthorizationMessageCard message={item.message} />
@@ -3347,10 +3357,13 @@ const RenderItemView = memo(function RenderItemView({
               blockKey={JSON.stringify([actions.remoteDeviceId, item.key])} />
           </>
         )
-        : (
+        : letterOrigin ? (
+          <CompanionTaskLetter item={item} actions={actions} origin={letterOrigin} />
+        ) : (
         <MessageBubble item={hookSourceUserItem ?? systemCardUserItem ?? item} actions={actions} />
       );
       break;
+    }
     case 'thinking':
       node = (
         <ThinkingCard
@@ -3585,26 +3598,29 @@ function SessionOriginLabel({
   origin,
   onOpen,
   sourceMeta,
+  openTask = false,
 }: {
   align: 'user' | 'agent';
   origin: NonNullable<NormalizedRemoteMessage['sessionOrigin']>;
   onOpen?: (sessionId: string) => void;
+  openTask?: boolean;
   /** 原始 agentMeta:长按 ID 与桌面悬停、排队行同源(伙伴给伙伴 ID + 任务 ID)。 */
   sourceMeta?: unknown;
 }) {
   const { colors } = useTheme();
   const { t } = useTranslation();
   const senderSessionId = origin.senderSessionId;
+  const openSource = onOpen && senderSessionId && parseSourceSessionTarget(senderSessionId)
+    ? () => onOpen(senderSessionId)
+    : undefined;
   return (
     <SourceLabelWithId
       align={align}
       icon={<Send color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.thin} />}
       idText={sourceIdText(sourceMeta)
         ?? (senderSessionId ? t('message.renderer.sourceSessionId', { id: senderSessionId }) : undefined)}
-      label={sessionOriginLabel(origin)}
-      onPress={onOpen && senderSessionId && parseSourceSessionTarget(senderSessionId)
-        ? () => onOpen(senderSessionId)
-        : undefined}
+      label={openTask && openSource ? t('devices.companions.openTask') : sessionOriginLabel(origin)}
+      onPress={openSource}
       openHint={t('message.renderer.openSessionOrigin')}
       testID="message.sessionOrigin"
     />
@@ -3729,12 +3745,86 @@ function SyncingMessages() {
   );
 }
 
+function companionTaskLetterOrigin(message: NormalizedRemoteMessage) {
+  if (message.kind !== 'user' || !message.sessionOrigin || message.hookSource
+    || message.sourcePlugin || message.sourceDevice || message.sharedAuthorName
+    || message.systemCardType || message.isSyntheticTrigger) return undefined;
+  // sessionOrigin also normalizes Orca and group forwards; neither is a task letter.
+  const origin = message.source.agentMeta?.origin;
+  if (!origin || typeof origin !== 'object' || !('kind' in origin) || origin.kind !== 'session'
+    || ('orca' in origin && origin.orca)
+    || ('groupThread' in origin && origin.groupThread)
+    || ('groupRequest' in origin && origin.groupRequest)) return undefined;
+  return message.sessionOrigin;
+}
+
+function CompanionTaskLetter({ item, actions, origin }: {
+  item: MobileMessageItem;
+  actions: MessageActions & { firstUserMessageClientId?: string };
+  origin: NonNullable<NormalizedRemoteMessage['sessionOrigin']>;
+}) {
+  const styles = useThemedStyles(makeStyles);
+  const { colors } = useTheme();
+  const { t } = useTranslation();
+  const [expanded, setExpanded] = useRecyclingState(false);
+  const inspectViewport = useContext(ProcessDisclosureViewport);
+  const bodyHeight = useRef(0);
+  const sender = origin.senderBotName ?? origin.senderSessionTitle;
+  const title = sender
+    ? t('message.renderer.taskLetterReplied', { name: sender })
+    : sessionOriginLabel(origin);
+  const preview = useMemo(() => {
+    const message = item.message;
+    const text = message.quotesEncoded || message.slashCommandRanges?.length
+      ? buildMobileMessageCopyText(message)
+      : message.body;
+    return text.match(/\S[^\r\n\u2028\u2029]*/)?.[0].trimEnd() ?? '';
+  }, [item.message]);
+  const showPreview = !expanded && !!preview;
+  const Chevron = expanded ? ChevronDown : ChevronRight;
+  return (
+    <View style={actions.companionAvatar ? styles.companionAvatarInset : undefined}>
+      <FoldableHeaderButton
+        accessibilityLabel={t(expanded ? 'message.renderer.collapseRow' : 'message.renderer.expandRow', {
+          label: showPreview ? `${title} · ${preview}` : title,
+        })}
+        expanded={expanded}
+        onPress={() => {
+          // Take ownership before layout changes; closing needs the current body height
+          // so the native scroll range does not clamp the reader to a new bottom.
+          inspectViewport?.(expanded ? bodyHeight.current : 0);
+          bodyHeight.current = 0;
+          setExpanded(!expanded);
+        }}
+        style={styles.companionLetterPill}
+        testID="message.companionLetter"
+      >
+        <CornerDownLeft color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+        <Text numberOfLines={1} style={[styles.companionLetterTitle, showPreview && styles.companionLetterTitleWithPreview]}>
+          {title}
+        </Text>
+        {showPreview ? (
+          <Text numberOfLines={1} style={styles.companionLetterPreview}>{preview}</Text>
+        ) : null}
+        <Chevron color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+      </FoldableHeaderButton>
+      {expanded ? (
+        <View onLayout={event => { bodyHeight.current = event.nativeEvent.layout.height; }}>
+          <MessageBubble item={item} actions={actions} taskLetter />
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 function MessageBubble({
   item,
   actions,
+  taskLetter = false,
 }: {
   item: MobileMessageItem;
   actions: MessageActions & { firstUserMessageClientId?: string };
+  taskLetter?: boolean;
 }) {
   const { colors: userBubbleColors } = useUserBubbleAppearance();
   const { user: viewer } = useAuth();
@@ -3833,7 +3923,7 @@ function MessageBubble({
     secondaryBody: item.message.secondaryBody,
   });
   // IM 来源卡片(本机 IM 保留 user kind 以挂普通用户操作)与桌面一样左对齐。
-  const isUser = presentation.isUserAligned && !item.message.hookSource;
+  const isUser = presentation.isUserAligned && !item.message.hookSource && !taskLetter;
   const isStreamingAssistant = item.message.kind === 'assistant' && item.message.isStreaming === true;
   const clientId = messageClientId(item);
   const shareableMessage = isShareableMessage(item.message);
@@ -3975,6 +4065,10 @@ function MessageBubble({
   }, [collapseResolved, collapseLatched, displayBubbleBody]);
   const shouldCollapseLongMessage = (collapseMeasureEnabled && collapseLatched) || collapseResolved;
   const longMessageCollapsed = shouldCollapseLongMessage && !longMessageExpanded;
+  // A letter opens in one tap. Bound its native text runs without measuring
+  // a second, invisible copy of the body just to decide whether to fold it.
+  const boundCompanionBody = actions.companion === true && (shouldCollapseLongMessage
+    || (taskLetter && mayExceedVisualLineThreshold(displayBubbleBody, collapseThreshold)));
   // label 走 i18n.t,所以语言必须进依赖:否则用户在任务页挂载期间切语言,菜单会一直
   // 停在切换前的语言,直到 capability 变化或组件重挂。
   const messageMenu = useMemo(() => buildMobileMessageMenu({
@@ -4270,6 +4364,7 @@ function MessageBubble({
                   tableFallbackBackground={tableFallbackBackground}
                   richStateKey={`${item.message.source.clientId ?? item.message.key}:text:${index}`}
                   codeCopyEnabled={!shareSelectionActive}
+                  boundTextRuns={taskLetter && boundCompanionBody}
                   layout={contentLayout}
                   markdownImageCacheKey={item.message.key}
                   onOpenPayload={actions.onOpenPayload}
@@ -4291,7 +4386,7 @@ function MessageBubble({
             renderRichAnswers={item.message.kind === 'assistant'}
             richStateKey={item.message.source.clientId ?? item.message.key}
             allowIosUITextView={!shouldCollapseLongMessage || actions.companion === true}
-            boundTextRuns={shouldCollapseLongMessage && actions.companion === true}
+            boundTextRuns={boundCompanionBody}
             markdownImageCacheKey={item.message.key}
             layout={contentLayout}
             onOpenPayload={actions.onOpenPayload}
@@ -4355,6 +4450,17 @@ function MessageBubble({
     </View>
   );
 
+  const sessionOriginNode = item.message.kind === 'user' && item.message.sessionOrigin && !item.message.sourcePlugin
+    && (!taskLetter || item.message.sessionOrigin.senderSessionId) ? (
+    <SessionOriginLabel
+      align={isUser ? 'user' : 'agent'}
+      origin={item.message.sessionOrigin}
+      onOpen={actions.onOpenOriginSession}
+      openTask={taskLetter}
+      sourceMeta={item.message.source.agentMeta}
+    />
+  ) : null;
+
   const messageNode = (
     <View
       ref={shareableMessage ? handleShareableMessageViewChange : undefined}
@@ -4392,14 +4498,7 @@ function MessageBubble({
         <AutomationOriginLabel align={isUser ? 'user' : 'agent'} origin={automationOrigin} />
       ) : null}
       {/* 插件优先(与 messageSourceSenderFromMeta 同序):同时带来源任务 origin 时只显示插件。 */}
-      {item.message.kind === 'user' && item.message.sessionOrigin && !item.message.sourcePlugin ? (
-        <SessionOriginLabel
-          align={isUser ? 'user' : 'agent'}
-          origin={item.message.sessionOrigin}
-          onOpen={actions.onOpenOriginSession}
-          sourceMeta={item.message.source.agentMeta}
-        />
-      ) : null}
+      {!taskLetter ? sessionOriginNode : null}
       {item.message.kind === 'user' && item.message.sourcePlugin ? (
         <SourcePluginLabel align={isUser ? 'user' : 'agent'} plugin={item.message.sourcePlugin} />
       ) : null}
@@ -4429,6 +4528,7 @@ function MessageBubble({
       ) : bubbleShown ? (
         bubble
       ) : null}
+      {taskLetter ? sessionOriginNode : null}
       {threadEligible && actions.companionThreads ? (
         <View style={styles.companionThreadSummary}>
         <CompanionThreadSummary message={item.message} topics={actions.companionThreads} />
@@ -9628,6 +9728,33 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   companionAvatarPlaceholder: { width: COMPANION_AVATAR_SIZE },
   companionAvatarContent: { flex: 1, minWidth: 0 },
   companionAvatarInset: { paddingLeft: COMPANION_AVATAR_SIZE + COMPANION_AVATAR_GAP },
+  companionLetterPill: {
+    alignSelf: 'flex-start',
+    backgroundColor: colors.surfaceChip,
+    borderRadius: radius.pill,
+    gap: spacing.xs,
+    maxWidth: '100%',
+    minHeight: 44,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
+  companionLetterTitle: {
+    color: colors.textPrimary,
+    flexShrink: 1,
+    minWidth: 0,
+    fontSize: typeScale.bodySmall,
+    lineHeight: lineHeight.bodySmall,
+    fontWeight: fontWeight.medium,
+  },
+  companionLetterTitleWithPreview: { flexShrink: 0, maxWidth: '45%' },
+  companionLetterPreview: {
+    color: colors.textSecondary,
+    flexShrink: 1,
+    minWidth: 0,
+    fontSize: typeScale.bodySmall,
+    lineHeight: lineHeight.bodySmall,
+    fontWeight: fontWeight.regular,
+  },
   companionTimeGroup: {
     color: colors.textTertiary,
     fontSize: typeScale.caption,
