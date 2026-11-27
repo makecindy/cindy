@@ -732,6 +732,13 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     }
     return intent;
   });
+  registry.register('model-groups:route-note', ([raw]) => {
+    refuseWhileHeld();
+    if (readDeviceLinkModelSelectionOrigin() !== 'owner') {
+      throwIpcError('PRECONDITION_FAILED', 'model group route notes require an owner controller');
+    }
+    return call('/api/model-groups/route-note', raw ?? {});
+  });
   registry.register('maker:session:prewarm', async ([id, input]) => {
     assertCurrent();
     if (readDeviceLinkModelSelectionOrigin() !== 'owner') throw new Error('[PRECONDITION_FAILED] Task owner required');

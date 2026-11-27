@@ -5,6 +5,9 @@ import { ErrorNotice } from '@/components/ui/error-notice';
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover';
 import type { WebviewTag } from 'electron';
 import { ModelRouteSelectorContent } from '@/components/new-chat/ModelRouteSelector';
+import { resolveModelGroup, useModelGroups } from '@/features/model-groups/modelGroupsClient';
+import { resolveDeviceModelGroup, useDeviceModelGroups } from '@/features/model-groups/remoteModelGroups';
+import { MODEL_GROUPS_DEFAULTS, type ModelGroupSelection } from '../../shared/modelGroups';
 import { modelCatalogKey } from '../../shared/controlledModelCatalog';
 import { useTransientModelPickerPreferences } from '@/components/new-chat/modelPickerPreferences';
 import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
@@ -32,10 +35,33 @@ export function PluginModelPickerPopover({
   const lock = useRef<'selection' | 'cancel' | null>(null);
   const answerSequence = useRef(0);
   const preferenceStore = useTransientModelPickerPreferences();
+  const { config: localGroupsConfig } = useModelGroups();
   const agents = useModelPickerAgents(
     route?.agentKind === 'cc' ? 'claude-code' : (route?.agentKind ?? 'codex'),
     modelCatalogKey(route?.agentDeviceId),
   );
+  const pickPopoverGroup = async (selection: ModelGroupSelection) => {
+    const resolved = await resolveModelGroup(
+      selection,
+      undefined,
+      request.allowRemote ? undefined : { agentDeviceId: null },
+    );
+    if (resolved?.outcome !== 'routed') {
+      setError(true);
+      return;
+    }
+    const next: PluginModelPickerRoute = {
+      ...(resolved.route.agentDeviceId ? { agentDeviceId: resolved.route.agentDeviceId } : {}),
+      providerId: resolved.route.providerId,
+      model: resolved.route.model,
+      agentKind: resolved.route.agentKind,
+      effort: resolved.route.effort ?? '',
+      fastMode: resolved.route.fastMode ?? false,
+      modelGroup: selection.id,
+    };
+    update(next);
+    await answer(next);
+  };
   const [anchor, setAnchor] = useState<DOMRect>();
   const answerRef = useRef(onAnswer);
   answerRef.current = onAnswer;
@@ -178,6 +204,19 @@ export function PluginModelPickerPopover({
           effort={(route?.effort ?? '') as Effort}
           fastMode={route?.fastMode ?? false}
           unifiedAgents={agents}
+          modelGroups={{
+            config: localGroupsConfig,
+            active: route?.modelGroup && localGroupsConfig.routes.some((r) => r.id === route.modelGroup)
+              ? { type: 'route', id: route.modelGroup }
+              : null,
+            onSelect: (selection) => { void pickPopoverGroup(selection); },
+            onAttach: (selection) => {
+              if (!draft.current) return;
+              const next: PluginModelPickerRoute = { ...draft.current, modelGroup: selection.id };
+              update(next);
+              void answer(next);
+            },
+          }}
           onModelChange={() => false}
           onEffortChange={(effort) => {
             if (draft.current) update({ ...draft.current, effort });
@@ -220,12 +259,36 @@ export function PluginModelPickerDialog({
   const { t } = useTranslation();
   const [route, setRoute] = useState(request.initial);
   const preferenceStore = useTransientModelPickerPreferences(deviceId);
+  const localGroups = useModelGroups(!deviceId);
+  const remoteGroups = useDeviceModelGroups(deviceId ?? null, !!deviceId);
+  const dialogGroupsConfig = deviceId ? remoteGroups.config ?? MODEL_GROUPS_DEFAULTS : localGroups.config;
+  const dialogGroupsAvailable = !deviceId || !!remoteGroups.config;
   const agents = useModelPickerAgents(
     route?.agentKind === 'cc' ? 'claude-code' : (route?.agentKind ?? 'codex'),
     modelCatalogKey(route?.agentDeviceId ?? deviceId, deviceId),
   );
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(false);
+  const pickDialogGroup = async (selection: ModelGroupSelection) => {
+    const location = request.allowRemote ? undefined : { agentDeviceId: null };
+    const resolved = deviceId
+      ? await resolveDeviceModelGroup(deviceId, selection, undefined, location)
+      : await resolveModelGroup(selection, undefined, location);
+    if (resolved?.outcome !== 'routed') {
+      setError(true);
+      return;
+    }
+    setRoute({
+      ...(resolved.route.agentDeviceId ? { agentDeviceId: resolved.route.agentDeviceId } : {}),
+      providerId: resolved.route.providerId,
+      model: resolved.route.model,
+      agentKind: resolved.route.agentKind,
+      effort: resolved.route.effort ?? '',
+      fastMode: resolved.route.fastMode ?? false,
+      modelGroup: selection.id,
+    });
+    setError(false);
+  };
   const lock = useRef(false);
   const answer = async (value: PluginModelPickerRoute | null) => {
     if (lock.current) return;
@@ -272,6 +335,18 @@ export function PluginModelPickerDialog({
             effort={(route?.effort ?? '') as Effort}
             fastMode={route?.fastMode ?? false}
             unifiedAgents={agents}
+            {...(dialogGroupsAvailable ? {
+              modelGroups: {
+                config: dialogGroupsConfig,
+                active: route?.modelGroup && dialogGroupsConfig.routes.some((r) => r.id === route.modelGroup)
+                  ? { type: 'route' as const, id: route.modelGroup }
+                  : null,
+                onSelect: (selection: ModelGroupSelection) => { void pickDialogGroup(selection); },
+                onAttach: (selection: ModelGroupSelection) => {
+                  setRoute((current) => (current ? { ...current, modelGroup: selection.id } : current));
+                },
+              },
+            } : {})}
             onModelChange={() => false}
             onEffortChange={(effort) => {
               setRoute((r) => (r ? { ...r, effort } : r));

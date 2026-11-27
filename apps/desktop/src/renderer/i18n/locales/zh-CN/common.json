@@ -8779,6 +8779,8 @@
         "nodeRuntime": "可在本机运行随插件附带的 Node 程序",
         "nodeMcp": "可在本机运行随插件附带的 stdio MCP",
         "nodeRuntimeDetail": "高风险：它和你本人一样，可以读取或修改你账号能访问的本机文件、访问网络并启动其它程序。Cindy 不能用浏览器沙箱限制它。",
+        "nodeInheritEnv": "继承本机运行环境",
+        "nodeInheritEnvDetail": "高风险：插件的 Node 程序及其子进程会获得 Cindy 当前全部环境变量，包括 Proxy、证书配置，以及其中可能保存的 API Key、Token 等敏感信息。",
         "nodeSecret": "可将已保存凭证「{{name}}」提供给本机 Node 程序",
         "nodeSecretDetail": "Cindy 加密保管，仅在下列已声明 Worker 方法执行时临时注入。Node 程序会收到明文，也可以将其回传、记录、保存或暴露给浏览器侧插件代码及 Agent 参数；请只安装可信插件。",
         "nodeResident": "Node 程序可常驻后台",
@@ -23183,7 +23185,10 @@
       "chooseUnavailable": "「{{name}}」里现在没有能用的来源，没有选它。",
       "mergedLabel_other": "{{name}} · 路由（{{count}} 个来源）",
       "routeDecides": "这次用哪个来源由路由「{{name}}」决定",
-      "quotaOf": "配额：{{name}}"
+      "quotaOf": "配额：{{name}}",
+      "managedBy": "当前由「{{name}}」持续托管",
+      "detach": "解除托管",
+      "detached": "已解除智能路由托管，保留当前模型"
     },
     "why": {
       "expiringQuota": "还剩 {{left}}% 配额，{{reset}} 重置，先用它",
@@ -23221,7 +23226,7 @@
       "newRoute": "新建路由",
       "newRouteName": "新路由",
       "routesEmpty": "还没有路由。新建一个，把几个来源放进去。",
-      "scopeNote": "智能路由用于这台电脑上的任务：开新任务时选定一个来源；在进行中的任务里选它，会当场换一次，之后不会自己换。",
+      "scopeNote": "智能路由适用于这台电脑及已接入入口的任务：开新任务或在任务中途选定路由后，将持续托管该任务——每轮发前检查可用性与配额、带图自动切视觉来源、保护提示缓存并在故障时自动接替，直到你解除托管或手动改选具体模型。",
       "back": "返回智能路由",
       "name": "名字",
       "nameHint": "选模型时显示这个名字。",
@@ -23345,6 +23350,11 @@
       "deviceDefaultReadOnly": "那台电脑更新到新版本后，才能在这里改它的默认模型。",
       "deviceUnavailable": "现在读不到那台电脑的伙伴设置。确认它在线后再打开。",
       "deviceLoading": "正在读取那台电脑的设置…"
+    },
+    "turnSwitch": {
+      "preflightUnavailable": "当前来源暂不可用或配额已满，发前自动切换",
+      "imageInput": "本轮包含图片，自动切换到支持视觉的来源",
+      "cacheExpired": "缓存窗口已过，按路由策略重新挑选来源"
     }
   },
   "projectSettings": {

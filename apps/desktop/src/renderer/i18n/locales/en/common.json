@@ -8822,6 +8822,8 @@
         "nodeRuntime": "Can run a bundled Node program on this computer",
         "nodeMcp": "Can run a bundled stdio MCP on this computer",
         "nodeRuntimeDetail": "High risk: it has the same local access as your user account, including files, network, and starting other programs. Cindy cannot contain it in the browser sandbox.",
+        "nodeInheritEnv": "Inherit local environment",
+        "nodeInheritEnvDetail": "High risk: the plugin’s Node program and its child processes receive all environment variables available to Cindy, including proxy and certificate settings and any API keys or tokens they contain.",
         "nodeSecret": "Can provide the stored credential “{{name}}” to the local Node program",
         "nodeSecretDetail": "Cindy stores it encrypted and injects it only while the declared Worker methods below run. The Node program receives the plaintext and can return, log, save, or otherwise expose it to browser-side plugin code or Agent parameters. Only install plugins you trust.",
         "nodeResident": "The Node program can stay running in the background",
@@ -23274,7 +23276,10 @@
       "mergedLabel_one": "{{name}} · route ({{count}} source)",
       "mergedLabel_other": "{{name}} · route ({{count}} sources)",
       "routeDecides": "The route “{{name}}” decides which source this task uses",
-      "quotaOf": "Quota: {{name}}"
+      "quotaOf": "Quota: {{name}}",
+      "managedBy": "Managed by “{{name}}”",
+      "detach": "Detach",
+      "detached": "Detached from smart routing. Keeping the current model."
     },
     "why": {
       "expiringQuota": "{{left}}% of its quota is left and resets {{reset}}, so it goes first",
@@ -23312,7 +23317,7 @@
       "newRoute": "New route",
       "newRouteName": "New route",
       "routesEmpty": "No routes yet. Create one and add a few sources.",
-      "scopeNote": "Smart routing applies to tasks on this computer. A new task picks a source when it starts. Choosing one in a task already under way switches it once, right away; it does not switch by itself afterwards.",
+      "scopeNote": "Smart routing manages tasks on this computer and supported entry points continuously. Once selected—at start or mid-task—it checks availability and quota before each turn, switches to a vision source for images, preserves warm prompt caches, and falls back on failure until you detach or pick a specific model.",
       "back": "Back to smart routing",
       "name": "Name",
       "nameHint": "Shown in the model picker.",
@@ -23442,6 +23447,11 @@
       "deviceDefaultReadOnly": "Update that computer to change its default model here.",
       "deviceUnavailable": "Can’t read that computer’s buddy settings right now. Make sure it’s online, then open this again.",
       "deviceLoading": "Reading that computer’s settings…"
+    },
+    "turnSwitch": {
+      "preflightUnavailable": "Current source unavailable or out of quota; switched before sending",
+      "imageInput": "Message includes images; switched to a vision-capable source",
+      "cacheExpired": "Prompt cache window expired; re-selected source by route strategy"
     }
   },
   "projectSettings": {
