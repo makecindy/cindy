@@ -97,6 +97,7 @@ export const PORTS_ONLY_CLAUDE_READS = {
   registerClaudeSubagentTask: undefined,
   remoteCcQueryFactory: undefined,
   resolveCcDebugFile: undefined,
+  resolveClaudeSdkModelMetadata: undefined,
   resolveClaudeSubagentModelAccess: undefined,
   resolveLocalMcpDuplicateChoices: undefined,
   resolveModelEfforts: undefined,

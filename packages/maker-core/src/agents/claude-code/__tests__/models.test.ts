@@ -77,8 +77,8 @@ describe('ClaudeCodeAgent model capabilities', () => {
     expect(toSdkModelString('cindy/claude-opus-5')).toBe('cindy/claude-opus-5');
     expect(toSdkModelString('winky/claude-sonnet-4-6')).toBe('winky/claude-sonnet-4-6');
     expect(toSdkModelString('winky/claude-opus-4-8')).toBe('winky/claude-opus-4-8');
-    // 目录窗口已知时仍按窗口决定 [1m](与命名空间无关)。
-    expect(toSdkModelString('cindy/claude-sonnet-5', 1_000_000)).toBe('cindy/claude-sonnet-5[1m]');
+    // A large catalog window is not a declaration of a custom-provider wire alias.
+    expect(toSdkModelString('cindy/claude-sonnet-5', 1_000_000)).toBe('cindy/claude-sonnet-5');
     expect(toSdkModelString('cindy/claude-opus-5', 200_000)).toBe('cindy/claude-opus-5');
   });
 
@@ -92,19 +92,12 @@ describe('ClaudeCodeAgent model capabilities', () => {
     }
   });
 
-  it('maps GLM-5.2 to the Z.ai 1M Claude Code route', () => {
-    expect(toSdkModelString('z-ai/glm-5.2')).toBe('z-ai/glm-5.2[1m]');
-  });
-
-  it('maps the bare DeepSeek V4 Flash id to the 1M Claude Code route', () => {
-    expect(toSdkModelString('deepseek-v4-flash')).toBe('deepseek-v4-flash[1m]');
-  });
-
-  it('keeps the [1m] beta channel for the official gpt-5.5 / gpt-5.4 (true 1M)', () => {
-    expect(toSdkModelString('gpt-5.5')).toBe('gpt-5.5[1m]');
-    expect(toSdkModelString('gpt-5.4')).toBe('gpt-5.4[1m]');
-  });
-
+  // #10716 / unit: without a selected-route declaration, historical third-party
+  // IDs must remain exact even when no catalog window was supplied (title calls).
+  it.each(['z-ai/glm-5.2', 'deepseek-v4-flash', 'gpt-5.5', 'gpt-5.4', 'custom-sonnet'])(
+    'does not invent a legacy third-party alias for %s',
+    (model) => expect(toSdkModelString(model)).toBe(model),
+  );
   it('does NOT add [1m] to budget codex/* models (real window 272k, not 1M)', () => {
     // [1m] 会让 cc-code 的 has1mContext 把窗口判成 1M, 撑大 auto-compact 阈值,
     // 对话冲过折扣网关真实上限后空转。折扣版必须保持原样、不带 [1m]。
@@ -112,21 +105,24 @@ describe('ClaudeCodeAgent model capabilities', () => {
     expect(toSdkModelString('codex/gpt-5.4')).toBe('codex/gpt-5.4');
   });
 
-  // ── 窗口驱动的 [1m] 规则(目录 contextWindow 已知时优先于硬编码链)──────────
-  it('appends [1m] when catalog window >= 1M — new 1M models need no code change', () => {
-    expect(toSdkModelString('some-provider/brand-new-model', 1_000_000)).toBe('some-provider/brand-new-model[1m]');
-    expect(toSdkModelString('gemini-3.5-flash', 1_000_000)).toBe('gemini-3.5-flash[1m]');
-    expect(toSdkModelString('deepseek/deepseek-v4-pro', 1_048_576)).toBe('deepseek/deepseek-v4-pro[1m]');
-    // 已带后缀不重复追加
-    expect(toSdkModelString('gpt-5.5[1m]', 1_000_000)).toBe('gpt-5.5[1m]');
+  // #10716: capacity alone must not synthesize unsupported SDK model identities.
+  it.each(['deepseek-flash', 'gemini-3.5-flash', 'some-provider/brand-new-model', 'claude-custom'])(
+    'keeps the configured third-party ID %s even with a 1M catalog window',
+    (model) => expect(toSdkModelString(model, 1_048_576)).toBe(model),
+  );
+
+  it('adds only declared or native long-context aliases', () => {
+    expect(toSdkModelString('glm-5.3', 1_000_000, true)).toBe('glm-5.3[1m]');
+    expect(toSdkModelString('claude-sonnet-5', 1_000_000)).toBe('claude-sonnet-5[1m]');
+    expect(toSdkModelString('claude-sonnet-5', 200_000)).toBe('claude-sonnet-5');
+    expect(toSdkModelString('deepseek-v4-flash', undefined, false)).toBe('deepseek-v4-flash');
   });
 
-  it('never emits [1m] when catalog window < 1M (strips a stray suffix too)', () => {
-    // 折扣 codex/*(272k/372k)带 [1m] 会让 cc 把窗口误判 1M → 会话假死,窗口规则兜死这一类。
+  it('preserves explicitly selected variant identities independently of working budgets', () => {
+    expect(toSdkModelString('glm-5.3[1m]', 200_000)).toBe('glm-5.3[1m]');
+    expect(toSdkModelString('gpt-5.5[1m]', 1_000_000)).toBe('gpt-5.5[1m]');
     expect(toSdkModelString('codex/gpt-5.5', 272_000)).toBe('codex/gpt-5.5');
-    expect(toSdkModelString('codex/gpt-5.6-sol', 372_000)).toBe('codex/gpt-5.6-sol');
     expect(toSdkModelString('qwen/qwen3.7-max', 992_000)).toBe('qwen/qwen3.7-max');
-    expect(toSdkModelString('chatgpt/gpt-5.5[1m]', 272_000)).toBe('chatgpt/gpt-5.5');
   });
 
   it('haiku passes through as the official alias — no more dated snapshot rewrite', () => {
@@ -136,8 +132,8 @@ describe('ClaudeCodeAgent model capabilities', () => {
     expect(toSdkModelString('claude-haiku-4-5')).toBe('claude-haiku-4-5');
   });
 
-  it('falls back to the legacy hardcoded chain when window is unknown', () => {
-    // 目录外模型 / 未传窗口的老调用方(title-one-shot)行为不变
+  it('falls back to native Claude aliases when the window is unknown', () => {
+    // Native Claude compatibility remains available for catalog-free callers.
     expect(toSdkModelString('claude-opus-5')).toBe('claude-opus-5[1m]');
     expect(toSdkModelString('claude-sonnet-5')).toBe('claude-sonnet-5[1m]');
     expect(toSdkModelString('codex/gpt-5.5')).toBe('codex/gpt-5.5');

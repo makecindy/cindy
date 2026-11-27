@@ -11,7 +11,7 @@
  */
 
 import type { AgentDeps } from '@cindy/maker-core';
-import type { Catalog } from '@cindy/model-providers';
+import { isClaudeSubscriptionProvider, type Catalog } from '@cindy/model-providers';
 
 import { readModelContextLimit, resolveModelCompactionPct } from './model-context-limit-store.js';
 import {
@@ -37,11 +37,26 @@ export type ClaudeModelResolvers = Required<Pick<AgentDeps,
   | 'resolveModelCompactionPct'
   | 'resolveVerifiedContextWindow'
   | 'resolveModelEfforts'
+  | 'resolveClaudeSdkModelMetadata'
 >>;
 
 export function createClaudeModelResolvers(ports: EngineModelResolverPorts): ClaudeModelResolvers {
   const { getCatalog, resolveContextProviderId } = ports;
   return {
+    resolveClaudeSdkModelMetadata: (providerId, modelId) => {
+      const catalog = getCatalog();
+      const source = resolveContextProviderId(catalog, 'claude-code', providerId, modelId);
+      const provider = catalog.providers.find((provider) => provider.id === source);
+      const models = provider?.models['claude-code'];
+      if (!models) return null;
+      const model = models.find((model) => model.id === modelId);
+      if (!model) return null;
+      return {
+        contextWindow: model.contextWindow,
+        supportsOneMillionSuffix: isClaudeSubscriptionProvider(provider)
+          || models.some((candidate) => candidate.id === `${modelId}[1m]`),
+      };
+    },
     resolveModelContextLimit: (providerId, modelId) => {
       const catalog = getCatalog();
       const source = resolveContextProviderId(catalog, 'claude-code', providerId, modelId);
