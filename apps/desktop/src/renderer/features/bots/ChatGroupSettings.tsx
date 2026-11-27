@@ -26,7 +26,7 @@ import type { BotGroupMemberView, BotGroupSummary, ChatGroupAction } from '../..
 import { groupRepositoryLabel, parseGroupRepository } from '../../../shared/botGroupChat';
 import { BotGroupExternalBadge } from './BotGroupExternalBadge';
 import { GroupMaskAvatar, useOpenGroupMask } from './GroupMaskControls';
-import { useGroupMask } from './groupMaskPresentation';
+import { useGroupMaskControls } from './groupMaskPresentation';
 import { ChatBotAccessField } from './ChatBotAccessField';
 import { ChatGroupNotificationSettings } from './ChatGroupNotificationSettings';
 import { ChatGroupInviteMenu } from './ChatGroupInviteMenu';
@@ -35,7 +35,7 @@ import { SETTINGS_HINT, SettingsCard, SettingsNotice, SettingsRow, SettingsRowIc
 import { useBotProfiles } from './botStore';
 import { BotAvatar } from './BotAvatar';
 import { BotGroupSidebarAvatar } from './BotGroupAvatars';
-import { chatErrorKey } from './ChatServerControls';
+import { chatErrorKey } from './chatError';
 import { refreshBotGroups } from './botGroupStore';
 import { chatGroupMembership } from '@cindy/maker-shared/botGroupPresentation';
 import { BOT_GROUP_SETTINGS_PAGE_PARAM, BOT_GROUP_SETTINGS_PARAM, botGroupPathBasename } from './botGroupPresentation';
@@ -79,7 +79,7 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const { confirm } = useConfirmDialog();
   const profiles = useBotProfiles();
-  const mask = useGroupMask(group.id);
+  const mask = useGroupMaskControls(group.id);
   const openMask = useOpenGroupMask();
   // Teammates someone owns; the group's own Cindy is set by its switch in group management.
   const companions = group.members.filter(member => member.actorKind === 'bot' && member.assistant !== true);
@@ -269,13 +269,18 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
     const assistantAnswers = group.supportsGroupAssistant === true && group.assistantEnabled === true;
     body = <>
       {group.archived && <SettingsNotice>{t(key('archived'))}</SettingsNotice>}
-      {group.supportsMemberInvites && <SettingsSection title={t(key('inviteEntry'))}>
+      {(group.supportsMemberInvites || group.supportsMemberMentionAll) && <SettingsSection title={t(key('memberPermissions'))}>
         <SettingsCard>
-          <SettingsRow wrap title={t(shared('allowMemberInvites'))} hint={t(shared('allowMemberInvitesHint'))}
+          {group.supportsMemberInvites && <SettingsRow wrap title={t(shared('allowMemberInvites'))} hint={t(shared('allowMemberInvitesHint'))}
             trailing={<Switch aria-label={t(shared('allowMemberInvites'))} checked={group.allowMemberInvites === true}
               disabled={busy || group.revision === undefined || group.archived} onCheckedChange={allowMemberInvites => {
                 if (group.revision !== undefined) void mutate({ type: 'update', name: group.name, topic: group.topic ?? '', description: group.description ?? '', expectedRevision: group.revision, allowMemberInvites });
-              }} />} />
+              }} />} />}
+          {group.supportsMemberMentionAll && <SettingsRow wrap title={t(shared('allowMemberMentionAll'))} hint={t(shared('allowMemberMentionAllHint'))}
+            trailing={<Switch aria-label={t(shared('allowMemberMentionAll'))} checked={group.allowMemberMentionAll === true}
+              disabled={busy || group.revision === undefined || group.archived} onCheckedChange={allowMemberMentionAll => {
+                if (group.revision !== undefined) void mutate({ type: 'update', name: group.name, topic: group.topic ?? '', description: group.description ?? '', expectedRevision: group.revision, allowMemberMentionAll });
+              }} />} />}
         </SettingsCard>
       </SettingsSection>}
       {/* Whether unaddressed messages wake anyone; independent of the order teammates answer in. */}

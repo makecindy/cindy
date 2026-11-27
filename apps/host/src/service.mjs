@@ -24,7 +24,9 @@ export const HOST_PATHS_ALLOWED_WHILE_HELD = Object.freeze({
     '/api/plugins/list', '/api/providers', '/api/agents', '/api/agents/auth-state', '/api/agents/status',
     '/api/agents/codex-runtime-route', '/api/model-access', '/api/usage/model-pricing', '/api/usage/reference-model-pricing',
     '/api/interactions/pending', '/api/input/projection', '/api/agent-commands', '/api/agent-skills', '/api/capabilities',
-    '/api/right-sidebar-tabs/list', '/api/browser-backend/get-state',
+    '/api/right-sidebar-tabs/list', '/api/browser-backend/get-state', '/api/notifications/clear-session-attention',
+    '/api/model-groups/get', '/api/model-groups/resolve', '/api/model-groups/get-session-binding',
+    '/api/model-groups/switch-offer', '/api/model-groups/decisions',
   ]),
   // Stopping or interrupting the running turn.
   stop: Object.freeze(['/api/input/stop']),
@@ -198,10 +200,19 @@ export function createHostService(deps) {
         return { status: 200, body: await deps.estimatedSessionValue(String(body.sessionId ?? '')) };
     }
     if (url.pathname === '/api/messages/history-view') {
-        return { status: 200, body: await deps.historyView(String(body.sessionId ?? ''), body.before ?? null) };
+        return { status: 200, body: await deps.historyView(String(body.sessionId ?? ''), body.before ?? null, body.opts) };
     }
     if (url.pathname === '/api/messages/work-details') {
         return { status: 200, body: await deps.workDetails(String(body.sessionId ?? ''), body.ref, body.after ?? null) };
+    }
+    if (url.pathname === '/api/sessions/ack-interrupted') {
+        return { status: 200, body: await deps.ackInterrupted(body.sessionId) };
+    }
+    if (url.pathname === '/api/notifications/clear-session-attention') {
+        return { status: 200, body: await deps.clearSessionAttention(body.sessionId, body.intent) };
+    }
+    if (url.pathname === '/api/messages/dismiss-error') {
+        return { status: 200, body: await deps.dismissError(body.sessionId, body.clientId) };
     }
     if (url.pathname === '/api/messages/create') {
         return { status: 201, body: await deps.createMessage(String(body.sessionId ?? ''), body.message ?? {}) };
@@ -282,6 +293,36 @@ export function createHostService(deps) {
     }
     if (url.pathname === '/api/usage/reference-model-pricing') {
         return { status: 200, body: await deps.referenceModelPricing() };
+    }
+    if (url.pathname === '/api/model-groups/get') {
+        return { status: 200, body: await deps.modelGroups.get(body) };
+    }
+    if (url.pathname === '/api/model-groups/set') {
+        return { status: 200, body: await deps.modelGroups.set(body.config ?? body) };
+    }
+    if (url.pathname === '/api/model-groups/resolve') {
+        return { status: 200, body: await deps.modelGroups.resolve(body) };
+    }
+    if (url.pathname === '/api/model-groups/commit') {
+        return { status: 200, body: await deps.modelGroups.commit(body.decisionId) };
+    }
+    if (url.pathname === '/api/model-groups/bind-session') {
+        return { status: 200, body: (await deps.modelGroups.bindSession(body)) ?? null };
+    }
+    if (url.pathname === '/api/model-groups/unbind-session') {
+        return { status: 200, body: await deps.modelGroups.unbindSession(body) };
+    }
+    if (url.pathname === '/api/model-groups/get-session-binding') {
+        return { status: 200, body: await deps.modelGroups.getSessionBinding(body) };
+    }
+    if (url.pathname === '/api/model-groups/switch-offer') {
+        return { status: 200, body: await deps.modelGroups.switchOffer(body) };
+    }
+    if (url.pathname === '/api/model-groups/route-note') {
+        return { status: 200, body: (await deps.modelGroups.routeNote(body)) ?? null };
+    }
+    if (url.pathname === '/api/model-groups/decisions') {
+        return { status: 200, body: await deps.modelGroups.decisions() };
     }
     if (url.pathname === '/api/agents') {
         return { status: 200, body: await deps.agents() };

@@ -6,6 +6,7 @@ import type { RemoteSessionCreation, RemoteSessionCreated } from '../../shared/r
 import { resolveSessionExecutionSelection, type SessionExecutionSelection } from './sessionExecutionSelection.js';
 import { resolveSendToSessionPluginEngineConfig } from './sendToSessionExecutionConfig.js';
 import type { PluginEngineView } from '../../shared/pluginEngines.js';
+import type { SessionCreatedBy } from '../../shared/sessionOrigin.js';
 import type { HandoffWorkingDirValidation } from './handoffWorkingDir.js';
 
 type Failure = { ok: false; errorCode: string; message: string };
@@ -114,7 +115,12 @@ export function createRemoteSessionOpener(deps: {
   discardWorktree(id: string, path: string, assertOwner: () => void): Promise<unknown>;
   broadcastCreated(id: string): void;
 }) {
-  return async (id: string, input: RemoteSessionCreation, guard: TaskActionDeliveryGuard): Promise<({ ok: true } & RemoteSessionCreated) | Failure> => {
+  return async (
+    id: string,
+    input: RemoteSessionCreation,
+    guard: TaskActionDeliveryGuard,
+    options?: { createdBySession?: SessionCreatedBy },
+  ): Promise<({ ok: true } & RemoteSessionCreated) | Failure> => {
     const assertOwner = deps.captureOwner();
     const check = async () => { assertOwner(); await guard(); assertOwner(); };
     try { return await deps.withSessionLock(id, async () => {
@@ -156,6 +162,7 @@ export function createRemoteSessionOpener(deps: {
             agentDeviceId: execution.agentDeviceId ?? null,
             effort: execution.effort ?? '', fastMode: execution.fastMode,
             permissionMode: execution.permissionMode ?? input.permissionMode,
+            ...(options?.createdBySession ? { createdBySession: options.createdBySession } : {}),
           },
         }, async (row, assertCurrent) => {
           // Revalidate the source after model/directory preparation and before the first write.

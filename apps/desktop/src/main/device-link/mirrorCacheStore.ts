@@ -1,5 +1,7 @@
 import { cachedProjectAliases } from '@cindy/maker-shared/project-alias-sync';
 import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
+import { parseOrcaRemoteLead } from '../../shared/orcaRemoteWorker.js';
+import { parseSessionCreatedBy } from '../../shared/sessionOrigin.js';
 /**
  * mirrorCacheStore —— 控制端「远程会话镜像」的本地冷缓存(落盘)。
  * ---------------------------------------------------------------------------
@@ -293,6 +295,10 @@ export function coerceCachedSession(input: unknown): Record<string, unknown> | n
       ...(typeof companion.channel === 'string' ? { channel: companion.channel } : {}),
       ...(typeof companion.routineId === 'string' ? { routineId: companion.routineId } : {}) };
   }
+  const orcaRemoteLead = parseOrcaRemoteLead(input.orcaRemoteLead);
+  if (orcaRemoteLead) out.orcaRemoteLead = orcaRemoteLead;
+  const createdBySession = parseSessionCreatedBy(input.createdBySession);
+  if (createdBySession) out.createdBySession = createdBySession;
   return out;
 }
 

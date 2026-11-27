@@ -38,6 +38,26 @@ function installed(
 }
 
 describe('plugin install consent', () => {
+  // Unit: the real permission projection must expose the opt-in on install and
+  // upgrades, while an installed declaration and permission removal stay silent.
+  it('confirms newly enabled Node environment inheritance without a separate approval record', () => {
+    const node = { entry: 'node/worker.cjs', protocol: 'json-rpc-stdio' };
+    const base = manifest({ node });
+    const next = manifest({ node: { ...node, inheritEnv: true } });
+    expect(evaluateGhostInstallConsent(null, next)).toMatchObject({ kind: 'install',
+      permissions: expect.arrayContaining([expect.objectContaining({ key: 'node:inherit-env' })]) });
+    for (const previous of [base, manifest({ node: { ...node, inheritEnv: false } })]) {
+      expect(evaluateGhostInstallConsent(installed(previous), next)).toMatchObject({ kind: 'update',
+        added: [expect.objectContaining({ key: 'node:inherit-env' })] });
+    }
+    expect(evaluateGhostInstallConsent(installed(next), next)).toBeNull();
+    expect(evaluateGhostInstallConsent(installed(next), base)).toBeNull();
+    expect(evaluateGhostInstallConsent(installed(next), manifest({ node: { ...node, inheritEnv: false } }))).toBeNull();
+    for (const inheritEnv of ['true', 1, null]) {
+      expect(validateGhostManifest({ ...base, node: { ...node, inheritEnv } }).ok).toBe(false);
+    }
+  });
+
   it.each(['browser', 'computer', 'ssh', 'docs', 'discovery', 'usage'] as const)('retains an installed %s declaration and confirms newly added declarations', group => {
     const next = manifest({ agent: { hostTools: [group] } });
     const old = installed(next);

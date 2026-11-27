@@ -812,7 +812,7 @@ export class Session {
         if (!this.interactionListener) {
           this.logger.warn('interaction request received but no listener attached, denying', { kind: req.kind, requestId: req.requestId });
           if (req.kind === 'ask_user_question') {
-            return { kind: 'ask_user_question', answers: {} };
+            return { kind: 'ask_user_question', answers: {}, dismissed: true };
           }
           if (req.kind === 'plan_review') {
             return { kind: 'plan_review', behavior: 'deny', reason: 'no_listener_attached', dismissed: true };
@@ -2524,6 +2524,14 @@ export class Session {
       throw new NotSupportedError('extraDirs', { supported: false, reason: 'not-implemented' });
     }
     await this.handle.setExtraDirs(dirs, libraryRoot, remote);
+  }
+
+  /**
+   * 附加只读目录变更后是否需要回收并重建运行时；仅对真正把 `extraDirs` 冻结在
+   * 建连握手期的适配器返回 true，避免无谓重启靠 prompt 注入热更新的会话。
+   */
+  requiresRuntimeRecycleForExtraDirs(): boolean {
+    return this.handle.requiresRuntimeRecycleForExtraDirs?.() === true;
   }
 
   /**

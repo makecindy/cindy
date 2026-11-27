@@ -16,18 +16,24 @@
  * Nothing here calls the plugin: the list is the main process's last known state. Opening a picker
  * only asks main to have the engine plugins republish their models (with a per-plugin cooldown).
  */
+import {
+  buildPluginEngineUsagePresentation,
+  matchPluginEngineQuotaGroup,
+  splitPluginUsageWindowLabel,
+  type PluginEngineUsagePresentation,
+} from '@cindy/maker-shared/plugin-engine-usage';
 import { quotaLevelFromRemaining } from '@cindy/maker-shared/quota-level';
 import type { GhostHarnessUsage } from '@cindy/plugin-protocol';
 import { SlidersHorizontal, Star } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { EffortSlider } from '@/components/ui/effort-slider';
 import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import { Tip } from '@/components/ui/tooltip';
-import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
-import { readPluginEngineUsage } from '@/hooks/pluginEngineUsage';
+import { usePluginEngineUsage } from '@/hooks/usePluginEngineUsage';
 import { requestPluginEnginesRefresh } from '@/hooks/usePluginEngines';
+import { formatCompactTimeUntilReset } from '@/lib/compactQuotaCountdown';
 import { toast } from '@/lib/toast';
 import { LOCAL_MODEL_FAVORITE_STORE } from '@/state/agentDeviceFavorites';
 import { useProviderShareFavoriteKeysByDevice } from '@/state/providerShareFavorites';
@@ -199,113 +205,133 @@ interface EngineBlockProps {
   effortOf(row: PluginEngineModelRow): PluginEngineEffort | null;
   /** Picks the row's model with this level; the picker stays open. */
   onChooseEffort(modelId: string, effort: PluginEngineEffort): void;
+  /** Task host computer when controlling a remote device; null/undefined = this computer. */
+  hostDeviceId?: string | null;
   favorites?: PluginEngineFavoritesController;
   panelElement?: HTMLElement | null;
   overlayClassName?: string;
 }
 
-function pluginGroupQuotaTimeKey(
-  usage: GhostHarnessUsage,
-  now: number,
-  t: ReturnType<typeof useTranslation>['t'],
-): string {
-  return (usage.windows ?? [])
-    .filter((row) => !row.resetsAt || row.resetsAt > now)
-    .map((row) => [
-      row.label,
-      Math.round(row.remainingPercent),
-      row.resetsAt ? formatQuotaResetDuration(row.resetsAt / 1000, now, t) : null,
-    ])
-    .map((parts) => parts.join(':'))
-    .join('|');
-}
-
-/** Compact quota/balance readout on a plugin engine group header; reuses the 1-minute shared reader. */
-function PluginEngineGroupQuota({ engine }: { engine: PluginEngineChoice }) {
+/** Inline quota/balance readout on the plugin engine group heading, matching ModelPoolQuotaSummary. */
+function PluginEngineGroupQuota({
+  engine,
+  presentation,
+  usage,
+  now,
+}: {
+  engine: PluginEngineChoice;
+  presentation: PluginEngineUsagePresentation;
+  usage: GhostHarnessUsage;
+  now: number;
+}) {
   const { t, i18n } = useTranslation();
-  const targetKey = `${engine.deviceId ?? ''}:${engine.key}`;
-  const [reading, setReading] = useState<{ targetKey: string; usage: GhostHarnessUsage } | null>(null);
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const owner = getDataOwnerGeneration();
-    let active = true;
-    void readPluginEngineUsage(owner, engine.deviceId ?? null, engine.key).result.then((usage) => {
-      if (!active || !isDataOwnerGenerationCurrent(owner)) return;
-      setReading(usage ? { targetKey, usage } : null);
-      setNow(Date.now());
-    });
-    return () => { active = false; };
-  }, [engine.key, engine.deviceId, targetKey]);
-  const activeUsage = reading?.targetKey === targetKey ? reading.usage : null;
-  const hasTimedWindow = !!activeUsage?.windows?.some(
-    (row) => typeof row.resetsAt === 'number' && row.resetsAt > now,
-  );
-  const clockSnapshot = useRef({ usage: activeUsage, now, t });
-  clockSnapshot.current = { usage: activeUsage, now, t };
-  useEffect(() => {
-    if (!hasTimedWindow) return;
-    const syncClock = () => {
-      if (typeof document !== 'undefined' && document.hidden) return;
-      const { usage: currentUsage, now: prevNow, t: translate } = clockSnapshot.current;
-      if (!currentUsage) return;
-      const nextNow = Date.now();
-      if (
-        pluginGroupQuotaTimeKey(currentUsage, prevNow, translate) !==
-        pluginGroupQuotaTimeKey(currentUsage, nextNow, translate)
-      ) {
-        setNow(nextNow);
-      }
-    };
-    const timer = window.setInterval(syncClock, 1000);
-    const onVisibility = () => {
-      if (!document.hidden) syncClock();
-    };
-    if (typeof document !== 'undefined') {
-      document.addEventListener('visibilitychange', onVisibility);
-    }
-    return () => {
-      window.clearInterval(timer);
-      if (typeof document !== 'undefined') {
-        document.removeEventListener('visibilitychange', onVisibility);
-      }
-    };
-  }, [hasTimedWindow]);
-  if (!activeUsage) return null;
-  const usage = activeUsage;
-  const current = (usage.windows ?? []).filter((row) => !row.resetsAt || row.resetsAt > now);
+  const [open, setOpen] = useState(false);
   const balances = pluginEngineUsageBalances(usage, i18n.language, t);
-  const first = current.reduce<(typeof current)[number] | undefined>((lowest, row) =>
-    !lowest || row.remainingPercent < lowest.remainingPercent ? row : lowest, undefined);
-  if (!first && !balances.length) return null;
-  const reset = first?.resetsAt ? formatQuotaResetDuration(first.resetsAt / 1000, now, t) : null;
-  const value = first ? `${Math.round(first.remainingPercent)}%` : balances[0]!;
-  const firstBalance = (usage.balances ?? []).find((row) => Number.isFinite(Number(row.amount)));
-  const level = first
-    ? quotaLevelFromRemaining(first.remainingPercent)
-    : firstBalance && Number(firstBalance.amount) <= 0 ? 'crit' : 'normal';
+  if (presentation.groups.length === 0 && balances.length === 0) return null;
+
   const details = (
-    <div className="space-y-1">
-      {current.map((row, index) => {
-        const rowReset = row.resetsAt ? formatQuotaResetDuration(row.resetsAt / 1000, now, t) : null;
-        return (
-          <div key={index}>
-            {[row.label, t('quotaCard.remainingPercent', { percent: Math.round(row.remainingPercent) }), rowReset].filter(Boolean).join(' · ')}
-          </div>
-        );
-      })}
+    <div className="space-y-2">
+      {presentation.groups.map((group) => (
+        <div key={group.id} className="space-y-0.5">
+          {presentation.isMultiGroup && group.rawName && (
+            <div className="font-medium">{group.rawName}</div>
+          )}
+          {group.windows.map((row, index) => {
+            const rowReset = row.resetsAt
+              ? formatQuotaResetDuration(row.resetsAt / 1000, now, t)
+              : null;
+            const label = presentation.isMultiGroup && group.rawName
+              ? splitPluginUsageWindowLabel(row.label).period
+              : row.label;
+            const rowLevel = quotaLevelFromRemaining(row.remainingPercent);
+            return (
+              <div key={index} className={QUOTA_TEXT_COLOR_CLASSES[rowLevel]}>
+                {[
+                  label,
+                  t('quotaCard.remainingPercent', { percent: Math.round(row.remainingPercent) }),
+                  rowReset,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </div>
+            );
+          })}
+        </div>
+      ))}
       {balances.map((line, index) => <div key={`b:${index}`}>{line}</div>)}
     </div>
   );
+
+  if (presentation.isMultiGroup && presentation.groups.length > 0) {
+    const items = presentation.groups.map((group) => {
+      const label = group.shortLabel ?? group.primary.label;
+      const value = `${group.remainingPercent}%`;
+      const reset = group.primary.resetsAt
+        ? formatQuotaResetDuration(group.primary.resetsAt / 1000, now, t)
+        : null;
+      return {
+        id: group.id,
+        label,
+        value,
+        level: group.level,
+        aria: [label, value, reset].filter(Boolean).join(' · '),
+      };
+    });
+    return (
+      <Tip
+        text={details}
+        side="bottom"
+        controlledOpen={open || undefined}
+        onOpenChange={setOpen}
+        contentClassName="max-w-[320px] break-words"
+      >
+        <button
+          type="button"
+          data-plugin-engine-quota={engine.providerId}
+          aria-expanded={open}
+          aria-label={items.map((item) => item.aria).join(' · ')}
+          onClick={() => setOpen((value) => !value)}
+          className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-x-1.5 gap-y-0.5 text-12 font-normal tabular-nums text-[var(--text-secondary)]"
+        >
+          {items.map((item, index) => (
+            <Fragment key={item.id}>
+              {index > 0 && <span aria-hidden className="text-[var(--text-tertiary)]">·</span>}
+              <span data-plugin-engine-quota-group={item.id} className="inline-flex items-center gap-1 whitespace-nowrap">
+                <span className="text-[var(--text-tertiary)]">{item.label}</span>
+                <span className={QUOTA_TEXT_COLOR_CLASSES[item.level]}>{item.value}</span>
+              </span>
+            </Fragment>
+          ))}
+        </button>
+      </Tip>
+    );
+  }
+
+  const group = presentation.groups[0];
+  const reset = group?.primary.resetsAt
+    ? formatQuotaResetDuration(group.primary.resetsAt / 1000, now, t)
+    : null;
+  const value = group ? `${group.remainingPercent}%` : balances[0]!;
+  const level = group ? group.level : presentation.level;
   return (
-    <Tip text={details} side="bottom" contentClassName="max-w-[320px] break-words">
-      <span
+    <Tip
+      text={details}
+      side="bottom"
+      controlledOpen={open || undefined}
+      onOpenChange={setOpen}
+      contentClassName="max-w-[320px] break-words"
+    >
+      <button
+        type="button"
         data-plugin-engine-quota={engine.providerId}
-        aria-label={[first?.label, value, reset].filter(Boolean).join(' · ')}
+        aria-expanded={open}
+        aria-label={[group?.primary.label, value, reset].filter(Boolean).join(' · ')}
+        onClick={() => setOpen((current) => !current)}
         className="ml-auto flex shrink-0 items-center gap-1 text-12 font-normal tabular-nums text-[var(--text-secondary)]"
       >
         <span className={QUOTA_TEXT_COLOR_CLASSES[level]}>{value}</span>
         {reset && <span className="text-[var(--text-tertiary)]">· {reset}</span>}
-      </span>
+      </button>
     </Tip>
   );
 }
@@ -322,6 +348,7 @@ function EngineBlock({
   onChoose,
   effortOf,
   onChooseEffort,
+  hostDeviceId = null,
   favorites,
   panelElement = null,
   overlayClassName,
@@ -344,6 +371,12 @@ function EngineBlock({
   const hint = selectable
     ? undefined
     : engine.availability.message?.trim() || t('newChat.pluginEngines.unavailable');
+  const { usage, now } = usePluginEngineUsage({
+    engineKey: engine.key,
+    deviceId: engine.deviceId ?? hostDeviceId,
+    enabled: selectable && engine.reportsUsage === true,
+  });
+  const usagePresentation = usage ? buildPluginEngineUsagePresentation(usage, now) : null;
   return (
     <div
       role="group"
@@ -352,9 +385,16 @@ function EngineBlock({
       {...(engine.deviceId ? { 'data-plugin-engine-device': engine.deviceId } : {})}
     >
       {/* Shared menu group label (DESIGN §4 Menu text): 12px / 500 meta, like the provider headings. */}
-      <div className="flex items-center gap-1.5 px-2.5 pb-1 pt-2 text-12 font-medium leading-[1.33] text-[var(--cmd-palette-item-meta,var(--text-tertiary))]">
+      <div className="flex flex-wrap items-center gap-1.5 px-2.5 pb-1 pt-2 text-12 font-medium leading-[1.33] text-[var(--cmd-palette-item-meta,var(--text-tertiary))]">
         <span title={engineLabel} className="truncate">{engineLabel}</span>
-        {selectable && engine.reportsUsage && <PluginEngineGroupQuota engine={engine} />}
+        {usage && usagePresentation && (
+          <PluginEngineGroupQuota
+            engine={engine}
+            presentation={usagePresentation}
+            usage={usage}
+            now={now}
+          />
+        )}
       </div>
       {hint && (
         <div
@@ -373,6 +413,42 @@ function EngineBlock({
         const description = row.isDefault
           ? t('newChat.pluginEngines.defaultModelHint')
           : row.description || engineLabel;
+        const matchedGroup = !row.isDefault
+          ? matchPluginEngineQuotaGroup(usagePresentation, { id: row.id, name: row.name })
+          : null;
+        const rowQuota = matchedGroup
+          ? {
+              groupId: matchedGroup.id,
+              countdown: matchedGroup.primary.resetsAt
+                ? formatCompactTimeUntilReset(
+                    matchedGroup.primary.resetsAt / 1000,
+                    now,
+                    t,
+                    matchedGroup.primary.windowMinutes ?? null,
+                  )
+                : null,
+              percentage: `${matchedGroup.remainingPercent}%`,
+              level: matchedGroup.level,
+              title: matchedGroup.windows
+                .map((windowRow) =>
+                  [
+                    windowRow.label,
+                    t('quotaCard.remainingPercent', { percent: Math.round(windowRow.remainingPercent) }),
+                    windowRow.resetsAt
+                      ? formatCompactTimeUntilReset(
+                          windowRow.resetsAt / 1000,
+                          now,
+                          t,
+                          windowRow.windowMinutes ?? null,
+                        )
+                      : null,
+                  ]
+                    .filter(Boolean)
+                    .join(' · '),
+                )
+                .join(' · '),
+            }
+          : null;
         const choose = () => {
           if (!selectable || interactionDisabled) return;
           onChoose(row.id);
@@ -487,12 +563,31 @@ function EngineBlock({
                 </span>
               )}
             </div>
-            <span
-              title={description}
-              className="min-w-0 max-w-[36ch] truncate pl-[26px] pt-px text-12 font-normal leading-[1.4] text-[var(--text-secondary)]"
-            >
-              {description}
-            </span>
+            {rowQuota ? (
+              <div
+                title={[description, rowQuota.title].filter(Boolean).join(' · ')}
+                className="flex w-0 min-w-full items-center gap-1 whitespace-nowrap pl-[26px] pt-px text-12 font-normal leading-[1.4] text-[var(--text-secondary)]"
+              >
+                <span className="min-w-0 truncate">{description}</span>
+                <span aria-hidden className="shrink-0">·</span>
+                <span
+                  data-plugin-model-quota={rowQuota.groupId}
+                  className="min-w-0 max-w-[70%] truncate tabular-nums"
+                >
+                  {rowQuota.countdown && <>{rowQuota.countdown}{' '}</>}
+                  <span className={QUOTA_TEXT_COLOR_CLASSES[rowQuota.level]}>
+                    {rowQuota.percentage}
+                  </span>
+                </span>
+              </div>
+            ) : (
+              <span
+                title={description}
+                className="min-w-0 max-w-[36ch] truncate pl-[26px] pt-px text-12 font-normal leading-[1.4] text-[var(--text-secondary)]"
+              >
+                {description}
+              </span>
+            )}
           </div>
         );
       })}
@@ -675,6 +770,8 @@ export function PluginEngineFavoriteRow({
   interactionDisabled = false,
   readable = false,
   measurementOnly = false,
+  tabIndex = 0,
+  position,
   onSelect,
   onRemove,
   onReveal,
@@ -687,6 +784,8 @@ export function PluginEngineFavoriteRow({
   interactionDisabled?: boolean;
   readable?: boolean;
   measurementOnly?: boolean;
+  tabIndex?: number | undefined;
+  position?: { index: number; total: number } | undefined;
   onSelect(): void;
   onRemove?: () => void;
   onReveal(anchor: UnifiedAnchor, element: HTMLElement, toggle?: boolean): void;
@@ -705,7 +804,9 @@ export function PluginEngineFavoriteRow({
         'aria-selected': false,
         'aria-disabled': interactionDisabled ? true : undefined,
         'aria-keyshortcuts': adjustable ? 'ArrowLeft' : undefined,
-        tabIndex: interactionDisabled ? -1 : 0,
+        tabIndex: interactionDisabled ? -1 : tabIndex,
+        'aria-posinset': position?.index,
+        'aria-setsize': position?.total,
         ...menuRowAttrs({ disabled: interactionDisabled }),
         'data-state': active ? 'open' : undefined,
         'data-unified-anchor': anchorKey(anchor),
@@ -762,6 +863,7 @@ export function PluginEngineFavoriteRow({
           ) : (
             <button
               type="button"
+              tabIndex={tabIndex}
               disabled={interactionDisabled}
               onClick={(event) => {
                 event.stopPropagation();
@@ -782,6 +884,7 @@ export function PluginEngineFavoriteRow({
           ) : (
             <button
               type="button"
+              tabIndex={tabIndex}
               data-row-customize
               aria-expanded={active}
               aria-haspopup="dialog"
@@ -834,6 +937,7 @@ export function PluginEnginesSection({
   picker,
   query,
   onPicked,
+  hostDeviceId = null,
   favorites,
   panelElement,
   overlayClassName,
@@ -841,6 +945,7 @@ export function PluginEnginesSection({
   picker: PluginEnginesPickerProps;
   query: string;
   onPicked(): void;
+  hostDeviceId?: string | null;
   favorites?: PluginEngineFavoritesController;
   panelElement?: HTMLElement | null;
   overlayClassName?: string;
@@ -899,6 +1004,7 @@ export function PluginEnginesSection({
           onChooseEffort={(modelId, effort) => { void choose({
             providerId: engine.providerId, modelId, effort, ...(engine.deviceId ? { deviceId: engine.deviceId } : {}),
           }, false); }}
+          hostDeviceId={hostDeviceId}
           {...(favorites ? { favorites } : {})}
           panelElement={panelElement ?? null}
           {...(overlayClassName !== undefined ? { overlayClassName } : {})}
@@ -1019,6 +1125,7 @@ export function PluginEngineSessionPanel({
             if (applied === false) setPending(null);
           }, () => setPending(null));
         }}
+        hostDeviceId={deviceId ?? null}
         {...(favoritesController ? { favorites: favoritesController } : {})}
       />
     </div>

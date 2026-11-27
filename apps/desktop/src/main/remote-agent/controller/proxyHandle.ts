@@ -597,7 +597,13 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       deps.onFastMode?.(enabled);
     },
     setPlanMode: async (enabled: boolean) => {
-      if (!await callIfLive('setPlanMode', enabled)) state = { ...state, planMode: enabled };
+      if (!await callIfLive('setPlanMode', enabled)) {
+        state = {
+          ...state,
+          planMode: enabled,
+          ...('executionPlanMode' in state ? { executionPlanMode: enabled } : {}),
+        };
+      }
       deps.onPlanMode?.(enabled);
     },
     setThinkingEnabled: async (enabled: boolean) => {
@@ -700,11 +706,27 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     isPreparingUserTurn: () => state.preparing === true,
     getCurrentTurnId: () => (typeof state.currentTurnId === 'string' ? state.currentTurnId : null),
     getPlanMode: () => (typeof state.planMode === 'boolean' ? state.planMode : null),
-    getExecutionPlanMode: () => (typeof state.executionPlanMode === 'boolean' ? state.executionPlanMode : null),
+    // Remote ACP handles only implement getPlanMode(); an omitted executionPlanMode falls back to planMode,
+    // while an explicit executionPlanMode: null keeps the fail-closed unknown state.
+    getExecutionPlanMode: () => {
+      if ('executionPlanMode' in state) {
+        return typeof state.executionPlanMode === 'boolean' ? state.executionPlanMode : null;
+      }
+      return typeof state.planMode === 'boolean' ? state.planMode : null;
+    },
     getFastMode: () => state.fastMode === 'ultrafast' ? 'ultrafast' : state.fastMode === true,
     getEffort: () => (typeof state.effort === 'string' ? state.effort as Effort : null),
     listBackgroundTasks: () => (Array.isArray(state.backgroundTasks) ? state.backgroundTasks as BackgroundTaskSnapshot[] : []),
     countPendingWakeContinuations: () => (typeof state.pendingWake === 'number' ? state.pendingWake : 0),
+    requiresRuntimeRecycleForExtraDirs: () => {
+      if (typeof state.requiresRuntimeRecycleForExtraDirs === 'boolean') {
+        return state.requiresRuntimeRecycleForExtraDirs;
+      }
+      // Older remote hosts omit this boolean; preserve the pre-PR recycle rule
+      // for ACP sessions unless negotiatedCapabilities proves extraDirs unsupported.
+      return started.agentKind === 'acp'
+        && (handle.negotiatedCapabilities?.extraDirs?.supported ?? true);
+    },
     // 本机 MCP 身份(协同等工具)必须立即看到改动；对方不支持时也照样更新本机这一份。
     setVendorOptions: async (patch: Record<string, unknown>) => {
       deps.onVendorOptions?.(patch ?? {});
@@ -819,7 +841,11 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       const methodsChanged = syncOptionalMethods(next.methods);
       const previousUsage = state.usage;
       const previousCapabilities = state.negotiatedCapabilities;
-      state = { ...state, ...next.state };
+      const nextState: Record<string, unknown> = { ...state, ...next.state };
+      if (!('requiresRuntimeRecycleForExtraDirs' in next.state)) {
+        delete nextState.requiresRuntimeRecycleForExtraDirs;
+      }
+      state = nextState;
       if (!isEmptyUsage(previousUsage) && isEmptyUsage(state.usage) && state.turnRunning !== true) {
         carriedUsage = previousUsage;
         state = { ...state, usage: previousUsage };

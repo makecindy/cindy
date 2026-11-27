@@ -26,6 +26,8 @@ const mocks = vi.hoisted(() => ({
   loadURL: vi.fn(),
   loadFile: vi.fn(),
   installWindowZoomRestoration: vi.fn(),
+  browserWindowOptions: [] as Array<Record<string, unknown>>,
+  readWindowThemeSnapshot: vi.fn<() => { mode: string; needsTransparentWindow?: boolean } | null>(() => null),
   createdWindows: [] as MockSecondaryWindowInstance[],
 }));
 vi.mock('electron', () => ({
@@ -69,7 +71,8 @@ vi.mock('electron', () => ({
     hookWindowMessage = vi.fn();
     loadURL = mocks.loadURL;
     loadFile = mocks.loadFile;
-    constructor() {
+    constructor(options: Record<string, unknown>) {
+      mocks.browserWindowOptions.push(options);
       mocks.createdWindows.push(this);
     }
   },
@@ -97,7 +100,9 @@ vi.mock('../appearance-settings-ipc.js', () => ({
 vi.mock('../mainWindowFullscreenStartup.js', () => ({
   installWindowFullscreenStateBroadcast: vi.fn(),
 }));
-vi.mock('../window-theme-mode-store.js', () => ({ readWindowThemeSnapshot: () => null }));
+vi.mock('../window-theme-mode-store.js', () => ({
+  readWindowThemeSnapshot: () => mocks.readWindowThemeSnapshot(),
+}));
 
 import {
   findSecondaryWindowForGroupChat,
@@ -105,10 +110,17 @@ import {
   openSessionInNewWindow,
   updateSecondaryWindowVisibleSessions,
 } from '../secondary-windows';
+import {
+  configureGpuRenderingPolicy,
+  resetActiveGpuRenderingPolicyForTest,
+} from '../gpuRenderingPolicy';
+import { createGpuFallbackArgument } from '../../shared/windowBackdrop';
 import type { BrowserWindow } from 'electron';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.browserWindowOptions.length = 0;
+  mocks.readWindowThemeSnapshot.mockReturnValue(null);
   mocks.createdWindows.length = 0;
   vi.stubGlobal('MAIN_WINDOW_VITE_NAME', 'main_window');
 });
@@ -117,6 +129,8 @@ afterEach(() => {
     if (!win.destroyed) win.emit('closed');
   }
   mocks.createdWindows.length = 0;
+  resetActiveGpuRenderingPolicyForTest();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -158,6 +172,56 @@ describe('session window link targets', () => {
     vi.stubGlobal('MAIN_WINDOW_VITE_DEV_SERVER_URL', undefined);
     openSessionInNewWindow('task', null);
     expect(mocks.installWindowZoomRestoration).toHaveBeenCalledOnce();
+  });
+
+  // Regression (#11670): macOS secondary windows previously passed `transparent: true` unconditionally
+  // (causing WindowServer GPU overhead) and omitted initial `vibrancy: 'hud'`, which left
+  // `contentOpaque = 1` when switched to `transparent: false`. Existing tests only checked URL/zoom.
+  it('uses a non-transparent macOS window with hud vibrancy by default and respects persisted transparent hint', () => {
+    vi.stubGlobal('MAIN_WINDOW_VITE_DEV_SERVER_URL', undefined);
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin');
+
+    openSessionInNewWindow('task-default', null);
+    expect(mocks.browserWindowOptions[0]).toMatchObject({
+      transparent: false,
+      backgroundColor: '#00000000',
+      vibrancy: 'hud',
+    });
+
+    mocks.readWindowThemeSnapshot.mockReturnValue({ mode: 'dark', needsTransparentWindow: true });
+    openSessionInNewWindow('task-transparent', null);
+    expect(mocks.browserWindowOptions[1]).toMatchObject({
+      transparent: true,
+      backgroundColor: '#00000000',
+      vibrancy: 'hud',
+    });
+  });
+
+  // 回归（P0-4 × #13221）：软件渲染 GPU 回退启用时，即使持久化了 macOS needsTransparentWindow=true，
+  // 副窗口也必须关闭 transparent 与 hud vibrancy 并使用不透明底色，同时传递 gpuFallback 启动参数。
+  // 覆盖缺口：上方用例仅验证正常硬件加速路径，未覆盖 gpuFallback 与 #13221 macOS 透明/vibrancy 选项的叠加。
+  // 最小失败输入与 tier：unit，darwin + needsTransparentWindow=true + XDT_DISABLE_HARDWARE_ACCELERATION=1。
+  it('disables macOS transparency and hud vibrancy for secondary windows when GPU fallback is active', () => {
+    vi.stubGlobal('MAIN_WINDOW_VITE_DEV_SERVER_URL', undefined);
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin');
+    mocks.readWindowThemeSnapshot.mockReturnValue({ mode: 'light', needsTransparentWindow: true });
+    configureGpuRenderingPolicy({
+      platform: 'darwin',
+      env: { XDT_DISABLE_HARDWARE_ACCELERATION: '1' },
+      commandLine: { appendSwitch: vi.fn() },
+      disableHardwareAcceleration: vi.fn(),
+    });
+
+    openSessionInNewWindow('task-gpu-fallback', null);
+    const options = mocks.browserWindowOptions[0]!;
+    expect(options).toMatchObject({
+      transparent: false,
+      backgroundColor: '#f8f8f6',
+    });
+    expect(options.vibrancy).toBeUndefined();
+    expect((options.webPreferences as { additionalArguments?: string[] }).additionalArguments).toContain(
+      createGpuFallbackArgument(),
+    );
   });
 });
 
@@ -426,5 +490,52 @@ describe('secondary window target matching', () => {
     expect(
       findSecondaryWindowForSession({ sessionId: 'worker-remote', deviceId: 'other-mac' }),
     ).toBeNull();
+  });
+
+  // 测试价值:
+  // - 生产入口与可观察结果: openSessionInNewWindow('/cc-agent/new', ...) + findSecondaryWindowForSession;
+  //   验证从左侧导航「新建」开出的副窗在启动期和停留在 /cc-agent/new 时不会误匹配任何任务，创建并导航到真实任务后可正常命中。
+  // - Bug／规则依据: 左侧导航新建按钮支持在新窗口打开；parseBootTarget 此前把非 /bots/ 路径一律当 sessionId 索引。
+  // - 现有覆盖缺口: 此前仅覆盖会话、伙伴与群聊副窗，未覆盖 /cc-agent/new 空白新建副窗的登记与导航后匹配。
+  // - 最小失败输入: openSessionInNewWindow('/cc-agent/new', null) 后在启动期查询 sessionId '/cc-agent/new'。
+  // - tier: unit（纯内存 Electron mock）。
+  it('treats /cc-agent/new boot windows as unbound until they navigate to a created session', () => {
+    vi.stubGlobal('MAIN_WINDOW_VITE_DEV_SERVER_URL', 'http://localhost:5173/');
+
+    openSessionInNewWindow('/cc-agent/new', null);
+    const newTaskWin = mocks.createdWindows.at(-1)!;
+    const loadedUrl = new URL(mocks.loadURL.mock.calls.at(-1)![0]);
+    expect(loadedUrl.hash).toBe('#/cc-agent/boot');
+    expect(loadedUrl.searchParams.get('bootSession')).toBe('/cc-agent/new');
+    expect(findSecondaryWindowForSession({ sessionId: '/cc-agent/new' })).toBeNull();
+    expect(findSecondaryWindowForSession({ sessionId: 'new' })).toBeNull();
+
+    newTaskWin.currentUrl =
+      'http://localhost:5173/?secondaryWindow=1&bootSession=%2Fcc-agent%2Fnew#/cc-agent/new';
+    expect(findSecondaryWindowForSession({ sessionId: '/cc-agent/new' })).toBeNull();
+    expect(findSecondaryWindowForSession({ sessionId: 'new' })).toBeNull();
+
+    newTaskWin.currentUrl =
+      'http://localhost:5173/?secondaryWindow=1&bootSession=%2Fcc-agent%2Fnew#/cc-agent/created-1';
+    expect(findSecondaryWindowForSession({ sessionId: 'created-1' })).toEqual({
+      window: newTaskWin,
+      matchKind: 'direct',
+    });
+
+    const remoteDraftBootSession = '/cc-agent/new?workingDir=%2Fremote%2Fapp&deviceName=Remote+Mac';
+    openSessionInNewWindow(remoteDraftBootSession, null, 'remote-mac');
+    const remoteDraftWin = mocks.createdWindows.at(-1)!;
+    const remoteLoadedUrl = new URL(mocks.loadURL.mock.calls.at(-1)![0]);
+    expect(remoteLoadedUrl.searchParams.get('bootSession')).toBe(remoteDraftBootSession);
+    expect(remoteLoadedUrl.searchParams.get('bootDevice')).toBe('remote-mac');
+    expect(findSecondaryWindowForSession({ sessionId: remoteDraftBootSession, deviceId: 'remote-mac' })).toBeNull();
+    expect(findSecondaryWindowForSession({ sessionId: 'new', deviceId: 'remote-mac' })).toBeNull();
+
+    remoteDraftWin.currentUrl =
+      'http://localhost:5173/?secondaryWindow=1&bootSession=%2Fcc-agent%2Fnew%3FworkingDir%3D%252Fremote%252Fapp&bootDevice=remote-mac#/cc-agent/remote-created-1?device=remote-mac';
+    expect(findSecondaryWindowForSession({ sessionId: 'remote-created-1', deviceId: 'remote-mac' })).toEqual({
+      window: remoteDraftWin,
+      matchKind: 'direct',
+    });
   });
 });

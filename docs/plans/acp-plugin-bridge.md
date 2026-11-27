@@ -1,7 +1,14 @@
 # ACP 插件桥接层：让插件提供任务执行引擎
 
-> 状态：第 1–4 步已在 `feat/acp-plugin-bridge` 实现，待真实 DSH 联调与维护者评审；不代表发布承诺。
-> 核对日期：2026-11-18。源码基线：`12d21eb7b3`。
+> **状态：历史设计方案（已被新正本取代，2026-11-27 归档标注）**。
+> 本文最初记录 2026-11-18 第一期隔离接入设计与后续多轮演进笔记，其中「一律跳过 `acp`」「手机/Orca/定时任务/IM/用量不接」「不支持 Lead／分叉／回退」等早期约束已陆续被主线实现取代。
+> **当前权威正本（开发与审查一律以此为准）**：
+> - 产品定位、三概念边界与全场景能力台账：[插件引擎与插件模型](../product-rules/plugin-engines-and-models.md)
+> - 工程不变量、类型约束与回归入口：[ACP 插件执行引擎工程规范](../dev-rules/acp-plugin-harness.md)
+> - 跨端 wire 字段与旧端兼容契约：[插件任务执行引擎协议记录](../dev-rules/protocol-compatibility/plugin-harnesses.md)
+> - 安全边界与存量插件兼容：[插件运行时安全与作者契约](../dev-rules/plugin-security-and-authoring.md)
+>
+> 以下保留原方案作为历史背景参考，不再作为当前约束依据。
 
 ## 要解决的问题
 
@@ -281,8 +288,8 @@ export interface PluginHarnessRegistry {
 
 ## 第一期明确不支持（遇到即明确拒绝，不回落到内置引擎）
 
-（换引擎、定时任务与协同 Worker 已在第二期支持，见下面几节；标题、send_to_session、/learn、目标、IM 渠道
-与分叉、侧聊、上下文溢出续接、每轮权限闸见下文。）回退、移到另一台电脑或 SSH、插件引擎当协同 Lead、共享任务、
+（换引擎、定时任务与协同 Worker 已在第二期支持，见下面几节；标题、send_to_session、/learn、目标、IM / 官方 hook 渠道、
+分叉、侧聊、上下文溢出续接、每轮权限闸、附加目录、只读 `/review` 与共享任务见下文。）回退、移到另一台电脑或 SSH、插件引擎当协同 Lead、
 Node Host（`apps/host`）。插件引擎任务的消息按 `agent_kind = 'acp'` 落库，不带供应商元信息。
 
 伙伴的后续支持范围见[模型候选链](../product-rules/cindy-bots-runtime.md#5-模型候选链)。伙伴可以在设置中选择所在电脑的插件模型，主聊天按所选模型运行。
@@ -295,12 +302,11 @@ Node Host（`apps/host`）。插件引擎任务的消息按 `agent_kind = 'acp'`
 - **入口**：内置任务的模型选择器列出插件引擎；插件引擎任务的选择器与内置任务相同，列出内置模型与全部插件引擎。
   同一个插件引擎内换模型照旧立即生效；换到另一个引擎（内置 ↔ 插件、插件 ↔ 插件）与内置引擎之间一样登记意图，
   下一条消息发送时交接，模型胶囊显示「下条：引擎 · 模型」。
-- **范围**：只限本机普通任务（`source = desktop`）。远程 / SSH、协同、IM、伙伴、定时、共享任务暂不支持换到或换出
-  插件引擎，主进程拒绝，选择器也不列。Agent 在另一台电脑（例如供应商组按额度挪过去、或用朋友分享的供应商）的本机
-  任务可以切到插件引擎：插件引擎只在任务所在电脑运行，切过去就是把 Agent 换回这台（意图与提交都带 `agentDeviceId = null`，
-  与内置引擎之间换电脑同一套交接）；点名另一台电脑上的插件引擎仍拒绝。插件引擎任务换到另一台电脑或供应商组上的内置
-  引擎，按内置引擎换电脑的规则裁决（2026-11-19 用户反馈：Agent 被供应商组挪走后列表里选不到插件引擎，插件引擎任务里
-  选供应商组的模型被拒绝）。
+- **范围**：开放本机普通任务（`source = desktop`）、伙伴（`source = bot`）以及个人 IM / 官方 hook 会话
+  （`x` / `feishu` / `telegram` / `discord` / `discord-hook` / `slack` / `wechat` / `dingtalk` / `wecom` / `imessage`）。
+  SSH 远端宿主机、协同（Orca）、review、learn、cindy-make、定时、共享任务仍不支持换到或换出插件引擎，主进程拒绝，
+  选择器也不列。个人 IM 新对话默认设置与飞书按群设置也支持选择本机或同账号远程 / 分享插件引擎；微信等无条件挂载
+  `turnPermissionPolicy` 的渠道保留不支持提示，Node Host `host-settings` v1 读到 `acp` 默认配置时返回 `unavailable`。
 - **准入**：与在插件引擎上新建任务同一规则（`admitPluginEngineSwitchTarget`）：引擎此刻由本机提供且可用；登记与提交
   各判一次。插件停用或不可用时，发送前的切换失败会挡住发送并保留选择，不悄悄留在原引擎。
 - **交接**：切到插件引擎总带完整交接，不复用它此前的原生会话，也不提前启动，下一条消息启动它；切回内置引擎照常找
@@ -454,7 +460,7 @@ Node Host（`apps/host`）。插件引擎任务的消息按 `agent_kind = 'acp'`
 - **内容**：新会话首条消息前的说明里加两段——已装插件花名册（与内置引擎同一份文本，`getGhostRosterPrompt`），
   以及 Skill 清单（名称、说明、`SKILL.md` 路径，Agent 需要时用自己的文件工具读）。Skill 范围与内置 Pi 相同
   （Cindy 内置与已批准插件的 Skill、Pi 的共享与项目目录，按用户的启用开关过滤；目录在隔离、限时的扫描进程里发现，不在 Main 上同步扫描，见 `maker-host/pluginEngineSkills.ts`），
-  与 Cindy 工具范围同一口径。恢复的会话已有，不重复。
+  与 Cindy 工具范围同一口径。单条说明上限放宽至 600 字符（避免 `pr` 等技能的 `Use when ...` 触发条件被截断），且 Cindy 托管与插件 Skill 排在普通目录扫描 Skill 之前，命中 120 条 / 24,000 字符上限时最后裁切。恢复的会话已有，不重复。
 - **只写真实可用的**：花名册只在 Agent 实际接收了插件网关（`cindy` MCP）时附上；对端不收 HTTP MCP 或工具桥不可用时
   只留 Skill 清单。花名册或 Skill 读取失败只少这一段，不挡任务启动。
 - **另一台电脑的任务与伙伴**：另一台电脑托管的任务与内置引擎一致，附任务所在电脑带来的花名册快照（`deviceHostedGhostRoster`，隧道提供 `cindy` 时），不读本机花名册；Skill 清单不附（没有跨电脑的来源）。隔离伙伴（按伙伴自己冻结的能力集）两样都不附；按普通任务装配的 V2 项目伙伴（`projectContext`）照常附上。恢复的会话不读取。
@@ -552,4 +558,15 @@ Cindy 不能复制或截断，所以这三项都只用 Cindy 自己的记录。
   **带本轮权限策略的轮次（群聊要求主人确认）一律拒绝**：插件的 Agent 可以不经 Cindy 询问就执行操作，任何权限档都
   无法兑现「须经主人确认」，所以与内置引擎在绕过审批钩子的档位下同样 fail-closed（`AcpSession.validateSendOptions` 抛
   `TurnPermissionPolicyUnsupportedError`，渠道按「所选 Agent 无法提供逐条确认」提示）。不带策略的私聊与已关闭群强确认的轮次照常运行。
+- **附加参考目录与可写目录（2026-11-27）**：`extraDirs` 与 `writableDirs` 在能力快照中标为支持；新会话首轮与会话中变更通过目录说明
+  （`<cindy-extra-reference-directories>` / `<cindy-extra-writable-directories>`，以及独立下发的 `<cindy-library-native-read>`）
+  同步给引擎，`setExtraDirs` / `setWritableDirs` 立即更新实时边界。完全访问（`bypassPermissions`）与内置引擎一致直接放行普通写入；
+  非完全访问档下启用每轮权限闸的 `routine` 自动放行路径中，写/删/移动请求在 `decidePermission` 按 `realpath` 校验目标路径，
+  位于工作目录与当前 `writableDirs` 之外（或命中凭据路径、只读 Library 根、悬空符号链接）的写操作绝不自动放行，撤销目录即时生效。
+- **只读 `/review`（2026-11-27）**：来源任务为插件引擎时，审查任务沿用其引擎、来源、模型与思考深度，启动前剥离全部 MCP 服务、记忆、
+  花名册、Skill、伙伴画像与附加目录，并强制要求对端声明每轮权限闸（`_meta.permissionGate.supported === true`）；未声明时关闭进程并
+  fail-closed 拒绝。声明支持时每轮开启 `scope: 'all-tool-calls'`，仅允许工作目录与 `reviewReadPaths` 内且通过 `resolveReviewReadPath`
+  校验的 `read` / `search`（拒绝写/删/移动/命令执行/联网请求、凭据路径与逃逸通配符），即使处于「全部允许」也不可绕过。
+- **共享任务（2026-11-27）**：插件引擎任务可开放共享并接受访客协作；访客消息由宿主按任务记录盖章保留 `agentKind = acp`、`providerId`、
+  `model`、`effort`、`agentDeviceId` 与权限档，并保持既有访客权限过滤、仅用户确认项拦截、撤权隔离与不泄露宿主插件目录等边界。
 

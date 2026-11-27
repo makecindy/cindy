@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as groupChatContract from '@cindy/maker-shared/botGroupChat';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 const fixture = vi.hoisted(() => ({ download: vi.fn(), handle: vi.fn(), profiles: [] as unknown[], workspaces: new Map<string, unknown>() }));
 vi.mock('../../authManager.js', () => ({ getAccessToken: () => 'isolated-test-token', refresh: vi.fn(async () => true) }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://chat.cindy.app' }));
@@ -550,6 +551,10 @@ describe('Chat Server Thread context reaches the Agent input', () => {
     const request = post('question', { mentions: [bots[0].id] });
     if (kind !== 'mention') quoting(request, original);
     if (personal) {
+      // This case protects quote delivery when personal replies are enabled.
+      // The release default is tested separately in chatServer.test.ts.
+      const enabled = vi.spyOn(groupChatContract, 'BOT_GROUP_PERSONAL_REPLIES_ENABLED', 'get').mockReturnValue(true);
+      onTestFinished(() => enabled.mockRestore());
       request.authorId = uuid(++ids);
       request.mentions = [];
       const [execution] = trigger({ ...request, mentions: [bots[0].id] });

@@ -1,12 +1,27 @@
 import { flushDraft, getDraft, subscribeDraftContent } from '@/lib/composerDraftStore';
 import type { Editor, JSONContent } from '@tiptap/core';
+import { closeHistory } from '@tiptap/pm/history';
+import { Selection, type Transaction } from '@tiptap/pm/state';
+import { Slice } from '@tiptap/pm/model';
+import { normalizeComposerDocumentJSON } from '@/lib/composerListDocument';
 import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
 type Listener = () => void;
 type Source = { listeners: Set<Listener>; stop(): void; stopSelection?(): void; revision: number;
   document?: { text: JSONContent | null; serialized: string } };
 const sources = new Map<string, Source>();
-const editors = new Map<string, { editor: Editor; locked(): boolean }>();
+type DraftEditor = { editor: Editor; locked(): boolean };
+const editors = new Map<string, DraftEditor>();
+export type ComposerActionOutcome = { status: 'success' | 'error'; message?: string };
+type ComposerAction = {
+  sessionId: string;
+  instanceId: string;
+  contributionId: string;
+  editor: DraftEditor;
+  openId?: string;
+  finish(outcome: ComposerActionOutcome): void;
+};
+const composerActions = new Map<string, ComposerAction>();
 let revision = 0;
 // Same-owner projection repairs do not remount the existing composer editor.
 const key = (sessionId: string) => JSON.stringify([getDataOwnerGeneration().dataOwnerId, sessionId]);
@@ -46,18 +61,88 @@ export function registerPluginUiDraftEditor(sessionId: string, editor: Editor, l
   };
 }
 
-export function replacePluginUiDraftSelection(sessionId: string, text: string): void {
+function dispatchComposerEdit(editor: Editor, transaction: Transaction, isolated: boolean) {
+  if (isolated && transaction.doc.eq(transaction.before)) return;
+  editor.view.dispatch(isolated ? closeHistory(transaction) : transaction);
+  if (isolated) editor.view.dispatch(closeHistory(editor.state.tr));
+}
+
+export function replacePluginUiDraftSelection(sessionId: string, text: string, isolated = false): void {
   const entry = editors.get(key(sessionId));
   if (!entry || entry.editor.isDestroyed || !entry.editor.isEditable || entry.locked()) throw new Error('MCP_APP_DRAFT_UNAVAILABLE');
   const { from, to, empty } = entry.editor.state.selection;
   if (empty) throw new Error('MCP_APP_SELECTION_UNAVAILABLE');
-  entry.editor.view.dispatch(entry.editor.state.tr.insertText(text, from, to));
+  dispatchComposerEdit(entry.editor, entry.editor.state.tr.insertText(text, from, to), isolated);
+}
+
+/** A click belongs to this renderer and this exact mounted editor. */
+export function registerPluginUiComposerAction(sessionId: string, editor: Editor,
+  source: Pick<ComposerAction, 'instanceId' | 'contributionId'>, finish: ComposerAction['finish']) {
+  const entry = editors.get(key(sessionId));
+  if (!entry || entry.editor !== editor || editor.isDestroyed || !editor.isEditable || entry.locked()) return;
+  const id = crypto.randomUUID();
+  composerActions.set(id, { ...source, sessionId, editor: entry, finish });
+  return { id, release: () => { composerActions.delete(id); } };
+}
+
+function resolveComposerAction(sessionId: string, binding: unknown) {
+  if (!binding || typeof binding !== 'object') throw new Error('MCP_APP_ACTION_UNAVAILABLE');
+  const { id, openId, instanceId, contributionId } = binding as Record<string, unknown>;
+  const action = typeof id === 'string' ? composerActions.get(id) : undefined;
+  if (typeof id !== 'string' || typeof openId !== 'string' || !action || action.sessionId !== sessionId ||
+      action.instanceId !== instanceId || action.contributionId !== contributionId ||
+      action.editor !== editors.get(key(sessionId)) || action.editor.editor.isDestroyed) {
+    throw new Error('MCP_APP_ACTION_UNAVAILABLE');
+  }
+  return { id, openId, action };
+}
+
+export function startPluginUiComposerAction(sessionId: string, binding: unknown): void {
+  const { openId, action } = resolveComposerAction(sessionId, binding);
+  if (action.openId !== undefined) throw new Error('MCP_APP_ACTION_UNAVAILABLE');
+  assertPluginUiDraftWritable(sessionId);
+  action.openId = openId;
+}
+
+export function assertPluginUiComposerActionStarted(sessionId: string, binding: unknown): Editor {
+  const { openId, action } = resolveComposerAction(sessionId, binding);
+  if (action.openId !== openId) throw new Error('MCP_APP_ACTION_UNAVAILABLE');
+  return action.editor.editor;
+}
+
+export function finishPluginUiComposerAction(sessionId: string, binding: unknown, outcome: ComposerActionOutcome): void {
+  const { id, openId, action } = resolveComposerAction(sessionId, binding);
+  if (action.openId !== openId) throw new Error('MCP_APP_ACTION_UNAVAILABLE');
+  composerActions.delete(id);
+  action.finish(outcome);
+}
+
+export type PluginUiDraftWriteMode = 'append' | 'replace' | 'replace-selection';
+/** Write through the editor's own schema, save pipeline and undo history. */
+export function editPluginUiDraft(editor: Editor, content: JSONContent, mode: PluginUiDraftWriteMode): void {
+  let incoming;
+  try {
+    if (!content || content.type !== 'doc' || !Array.isArray(content.content)) throw new Error('invalid document');
+    const document = editor.schema.nodeFromJSON(normalizeComposerDocumentJSON(content));
+    if (document.type !== editor.schema.topNodeType) throw new Error('invalid document');
+    document.check();
+    incoming = document.content;
+  } catch { throw new Error('MCP_APP_INVALID_REQUEST'); }
+  const { tr, doc } = editor.state;
+  if (mode === 'replace-selection') {
+    if (editor.state.selection.empty) throw new Error('MCP_APP_SELECTION_UNAVAILABLE');
+    tr.replaceSelection(new Slice(incoming, 0, 0));
+  } else if (mode === 'append' && !editor.isEmpty) tr.insert(doc.content.size, incoming);
+  else tr.replaceWith(0, doc.content.size, incoming);
+  if (!editor.isFocused && mode !== 'replace-selection') tr.setSelection(Selection.atEnd(tr.doc));
+  dispatchComposerEdit(editor, tr, true);
 }
 
 /** No mounted editor means a stored draft; a live editor owns its existing lock. */
-export function assertPluginUiDraftWritable(sessionId: string): void {
+export function assertPluginUiDraftWritable(sessionId: string): Editor | undefined {
   const entry = editors.get(key(sessionId));
   if (entry && (entry.editor.isDestroyed || !entry.editor.isEditable || entry.locked())) throw new Error('MCP_APP_DRAFT_UNAVAILABLE');
+  return entry?.editor;
 }
 
 /** The existing draft store is authoritative; only active Views connect to it. */
