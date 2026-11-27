@@ -168,6 +168,12 @@ Codex/Pi 在受邀者原有隔离目录分叉；新原生会话登记到既有�
 同账号远程任务也保留此映射，连续分叉和运行端重启后仍有效。
 执行前后检查账号、分享与转分享权限。分叉是一次写操作，超时或断线不自动重发；
 失败不创建 Cindy 子任务，不回退本机，不重建共享连接或影响其它 peer。
+例外是 Claude Code 收到明确的 `REMOTE_AGENT_FORK_FAILED`：运行端在线、有权限，只是原生历史接不上
+(典型是压缩后底层对话换了编号，旧回复已不在当前原生记录里，运行端日志为 `Message <uuid> not found in session`)。
+控制端不再报错，改为复制可见历史并写入 `native-session-recovery` 交接，子任务保留原运行位置，
+首轮在运行端新开原生对话(2026-11-27)。本机 Claude 转录里找不到锚点、但复制范围内有 AI 回复时同样交接，
+不再误报「请在 AI 回复之后的提问上 fork」。超时、断线、无权限，以及旧运行端回的 `REMOTE_AGENT_UNAVAILABLE`
+仍按失败处理。实现见 `apps/desktop/src/main/maker-orchestration/fork.ts`，回归见 Desktop `fork.test.ts`。
 
 回归：`remoteAgent.test.ts`、Desktop `fork.test.ts`、`guestHost.test.ts`、
 `groupRelay.test.ts` 与数据库 `client/__tests__/tx.test.ts`；三引擎沿用原生分叉入口。
