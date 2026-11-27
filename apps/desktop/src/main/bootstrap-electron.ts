@@ -125,9 +125,11 @@ import {
   writeWindowTransparencyHint,
 } from './window-theme-mode-store';
 import {
+  createGpuFallbackArgument,
   createWindowBackdropMaterialArgument,
   WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL,
 } from '../shared/windowBackdrop.js';
+import { isHardwareAccelerationDisabled } from './gpuRenderingPolicy.js';
 import { isAllowedBillingMailtoRequest } from '../shared/billing.js';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -4702,7 +4704,13 @@ const createWindow = () => {
           persistedTheme?.resolvedIsDark,
         )
       : nativeTheme.shouldUseDarkColors;
-  const bgColor = process.platform === 'darwin' ? '#00000000' : isDark ? '#1f1f1e' : '#f8f8f6';
+  const gpuFallback = isHardwareAccelerationDisabled();
+  const bgColor =
+    process.platform === 'darwin' && !gpuFallback
+      ? '#00000000'
+      : isDark
+        ? '#1f1f1e'
+        : '#f8f8f6';
   const winBackdropConfig = resolveVibrancyConfig(
     persistedTheme?.familyId ?? 'cindy',
     isDark,
@@ -4711,12 +4719,14 @@ const createWindow = () => {
   // Windows: a transparent window flickers under a system backdrop.
   // macOS: a transparent window triggers high WindowServer GPU usage (#11670) while
   // `transparent: false` + `vibrancy: 'hud'` preserves behind-window vibrancy (see vibrancyConfig).
+  // GPU fallback (software rendering): also disable transparent window + vibrancy.
   const windowTransparent =
-    process.platform === 'win32'
+    !gpuFallback &&
+    (process.platform === 'win32'
       ? resolveWindowsWindowTransparent(winBackdropConfig, persistedTheme?.needsTransparentWindow)
       : process.platform === 'darwin'
         ? resolveMacWindowTransparent(winBackdropConfig, persistedTheme?.needsTransparentWindow)
-        : true;
+        : true);
 
   // Window state persistence (F-WST-1): remembers position / size / maximized
   // / fullscreen across launches. Falls back to the defaults below on first
@@ -4804,13 +4814,14 @@ const createWindow = () => {
           backgroundColor: winBackdropConfig.backgroundColor,
         }
       : {}),
-    ...(process.platform === 'darwin' ? { vibrancy: 'hud' as const } : {}), // 创建期材质与缺省定稿一致(hud);运行时按主题族经 applyWindowVibrancy 修正
+    ...(process.platform === 'darwin' && !gpuFallback ? { vibrancy: 'hud' as const } : {}), // 创建期材质与缺省定稿一致(hud);运行时按主题族经 applyWindowVibrancy 修正
     acceptFirstMouse: !swallowActivationClick,
     ...platformOptions,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       additionalArguments: [
         createWindowBackdropMaterialArgument(winBackdropConfig.backgroundMaterial ?? 'none'),
+        ...(gpuFallback ? [createGpuFallbackArgument()] : []),
         ...cloudWindowArguments(),
       ],
       spellcheck: false,

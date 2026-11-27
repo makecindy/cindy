@@ -7151,6 +7151,7 @@
         },
         "onlyEncrypted": "僅使用 Agent-Net",
         "onlyEncryptedHint": "開啟後，舊版裝置及仍使用舊連線的分享將無法使用。預設關閉。",
+        "removedOff": "這台電腦已從帳號中移除，Agent-Net 已自動關閉。重新開啟即可重新加入。",
         "peerSwitch": {
           "row": {
             "toAgentNet": "正在切到 Agent-Net…",
@@ -12185,6 +12186,8 @@
         "projectDirSaveFailed": "專案資料夾沒能儲存，確認資料夾還在後再試",
         "allowMemberInvites": "允許所有成員邀請朋友",
         "allowMemberInvitesHint": "開啟後，已加入的所有成員都可邀請朋友。僅群主和管理員可變更。",
+        "allowMemberMentionAll": "允許所有成員 @所有人",
+        "allowMemberMentionAllHint": "開啟後，所有成員都可 @所有人；關閉時僅群主和管理員可用。僅群主和管理員可變更。",
         "allowMentionAllBots": "允許 @所有夥伴",
         "allowMentionAllBotsHint": "僅群主可更改。夥伴可能都會回覆，大群請謹慎開啟。此開關不影響 AI 代答。"
       },
@@ -12216,6 +12219,7 @@
         "groupDissolved": "群聊已解散，仍可查看有權存取的歷史訊息。",
         "lastOwner": "請先轉讓群主或解散群聊，再退出。",
         "allBotsMentionDisabled": "群主尚未開啟 @所有夥伴。",
+        "allHumansMentionForbidden": "僅群主和管理員可以 @所有人。",
         "turnAlreadyStarted": "這位夥伴已開始執行，不能略過"
       },
       "organizer": "負責人",
@@ -12403,8 +12407,10 @@
         },
         "replyPlaceholder": "回覆這則訊息，可用 @ 點名夥伴…",
         "sendReply": "傳送回覆",
+        "moreReactions": "更多表情",
         "addReaction": "新增表情回應",
         "reactionCount": "{{emoji}} · {{count}} 人回應",
+        "reactionTotal": "{{emoji}} · {{count}} 次回應",
         "reactionWho": "{{emoji}} · {{count}} 人回應：{{names}}",
         "reactorSelf": "你",
         "reactorFormer": "{{name}}（已不在群組中）",
@@ -12541,6 +12547,7 @@
           "accessNone": "僅主人可用",
           "accessChat": "僅群內交流",
           "accessTools": "可用工具與資料",
+          "memberPermissions": "成員權限",
           "replies": "夥伴怎麼接話",
           "replyModeMentionedNote": "不 @ 人時，夥伴不會接話。",
           "assistant": "群裡的 Cindy",
@@ -15659,7 +15666,8 @@
       "runningFor": "已執行 {{duration}}",
       "startedAt": "開始於 {{time}}",
       "recentOutput": "最近輸出 · {{time}} 前更新",
-      "noOutputYet": "尚無輸出"
+      "noOutputYet": "尚無輸出",
+      "recentActivity": "最近活動"
     },
     "planPill": {
       "step": "第 {{current}} / {{total}} 步",
@@ -16185,7 +16193,30 @@
       },
       "status": {
         "running": "執行中",
-        "done": "已完成"
+        "done": "已完成",
+        "failed": "失敗"
+      },
+      "collab": {
+        "wait": "等待 Subagent",
+        "waitCount_one": "等待 {{count}} 個 Subagent",
+        "waitCount_other": "等待 {{count}} 個 Subagent",
+        "sendInput": "向 Subagent 傳送指令",
+        "sendInputCount_one": "向 {{count}} 個 Subagent 傳送指令",
+        "sendInputCount_other": "向 {{count}} 個 Subagent 傳送指令",
+        "resume": "恢復 Subagent",
+        "resumeCount_one": "恢復 {{count}} 個 Subagent",
+        "resumeCount_other": "恢復 {{count}} 個 Subagent",
+        "close": "關閉 Subagent",
+        "closeCount_one": "關閉 {{count}} 個 Subagent",
+        "closeCount_other": "關閉 {{count}} 個 Subagent",
+        "spawn": "啟動 Subagent",
+        "spawnCount_one": "啟動 {{count}} 個 Subagent",
+        "spawnCount_other": "啟動 {{count}} 個 Subagent",
+        "targets": "目標：{{targets}}",
+        "targetCount_one": "目標：{{count}} 個 Subagent",
+        "targetCount_other": "目標：{{count}} 個 Subagent",
+        "prompt": "指令：{{prompt}}",
+        "model": "模型：{{model}}"
       }
     },
     "systemCard": {
@@ -19015,6 +19046,24 @@
         "reconnectFailed": "暫時無法重新連線，請檢查剩餘名額後再試。"
       },
       "pluginTitle": "插件事件觸發"
+    },
+    "pause": {
+      "prBarTitle": "{{count}} 條已暫停的 PR 跟進",
+      "viewPaused": "檢視",
+      "resumeAll": "全部恢復",
+      "cleanMerged": "清理已合併",
+      "checking": "檢查中…",
+      "resumeAllConfirmTitle": "恢復 {{count}} 條已暫停的 PR 跟進？",
+      "resumeAllConfirmDescription": "將恢復目前檢視下全部已暫停的 PR 自動化，並重新計算下次排程檢查時間。",
+      "resumeAllConfirmAction": "全部恢復",
+      "resumeAllDone": "已恢復 {{count}} 條 PR 跟進",
+      "resumeAllPartial": "已恢復 {{resumed}} 條 PR 跟進（{{failed}} 條失敗）",
+      "noMergedFound": "已暫停的 PR 自動化中未發現已合併或已關閉的 PR",
+      "cleanMergedConfirmTitle": "刪除 {{count}} 條已結束的 PR 自動化？",
+      "cleanMergedConfirmDescription": "以下已暫停自動化對應的 PR 已合併或關閉：{{names}}",
+      "cleanMergedConfirmAction": "刪除",
+      "cleanMergedDone": "已刪除 {{count}} 條已結束的 PR 自動化",
+      "checkFailed": "暫時無法檢查 PR 狀態"
     }
   },
   "issueTracker": {

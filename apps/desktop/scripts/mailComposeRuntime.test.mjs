@@ -20,6 +20,8 @@ function fixture({
   write,
   read,
   remove,
+  selectAccount,
+  appContext,
   supportsDelete = true,
   replyParent,
   readReplyQuote,
@@ -91,11 +93,13 @@ function fixture({
       },
     },
     async fetch(url, options = {}) {
-      if (url === "/app-context")
+      if (url === "/app-context") {
+        if (appContext) await appContext();
         return {
           ok: true,
           json: async () => ({ context: { locale: "zh-CN" } }),
         };
+      }
       assert.equal(url, "/kv");
       if (options.method === "PUT") kv = JSON.parse(options.body);
       return { ok: true, json: async () => copy(kv) };
@@ -136,6 +140,10 @@ function fixture({
       return remove ? remove(request) : { ok: true, data: { deleted: true, draftId: current.draftId } };
     } } : {}),
     async selectAccount(id) {
+      if (selectAccount) {
+        const result = await selectAccount(id);
+        if (result) return result;
+      }
       return id === account.accountId
         ? account
         : { ok: false, message: "账号不存在" };
@@ -1150,4 +1158,289 @@ test('readonly or mismatched drafts are not deleted; unknown deletion is never r
   await legacy.present();
   assert.equal(legacy.cards.at(-1).draft.deleteLabel, undefined);
   assert.equal(await legacy.tool('delete'), null);
+});
+
+// User regression (unit): clicking Send while a rich-text draft is syncing gave
+// no card feedback, treated the browser's full HTML document wrapper as a fresh
+// edit (cancelling an already-queued send and forcing extra provider writes),
+// and flashed back to draft before entering the countdown.
+// Production entry: cindyMail handleCard('change'/'send'/'cancel') with a slow
+// fake adapter. Existing tests only sent after flush or via tool('send').
+test('clicking Send during rich-text sync shows cancellable preparing state immediately, avoids duplicate writes, and enters countdown cleanly', async () => {
+  let release, started;
+  const ready = new Promise(resolve => { started = resolve; });
+  const wait = new Promise(resolve => { release = resolve; });
+  const f = fixture({
+    richText: true,
+    autoSend: false,
+    write: async (request, number) => {
+      if (!request.send && number === 1) { started(); await wait; }
+    },
+  });
+  await f.present();
+  const edited = {
+    ...f.values(),
+    body: 'Updated body',
+    bodyHtml: '<html><head></head><body><p style="color:red">Updated body</p></body></html>',
+  };
+  await f.card('change', edited);
+  const saving = f.advance(2000);
+  await ready;
+  assert.equal(f.cards.at(-1).draft.state, 'syncing');
+
+  // Click Send while syncing, then click a second time with the same HTML doc.
+  const firstSend = f.card('send', edited);
+  for (let i = 0; i < 50 && f.cards.at(-1).statusOnly?.state !== 'sending'; i++) await Promise.resolve();
+  const preparing = f.cards.at(-1).statusOnly;
+  assert.equal(preparing?.state, 'sending');
+  assert.equal(preparing?.cancelLabel, '撤销');
+  assert.match(preparing?.status || '', /正在同步草稿/);
+
+  const secondSend = f.card('send', edited);
+  const beforeRelease = f.cards.length;
+  release();
+  await saving;
+  await f.waitCountdown();
+
+  // Only one draft save occurred (no duplicate write from HTML wrapper diff)
+  // and no intermediate draft/Send-button flash between preparing and countdown.
+  assert.equal(f.writes.filter(w => !w.send).length, 1);
+  assert.equal(f.writes.filter(w => w.send).length, 0);
+  const transitions = f.cards.slice(beforeRelease);
+  assert.equal(transitions.some(c => (c.draft?.state || c.statusOnly?.state) === 'draft'), false);
+  assert.ok(f.cards.at(-1).statusOnly?.pendingSend);
+
+  await f.advance(10000);
+  await Promise.all([firstSend, secondSend]);
+  assert.equal(f.writes.filter(w => w.send).length, 1);
+  assert.equal(f.continuations.length, 1);
+});
+
+// User regression (unit): cancelling a queued send while the in-flight draft
+// save is still running (record.state === 'pending') previously returned early.
+test('cancelling a preparing send during an in-flight sync cancels sending while letting the draft save finish', async () => {
+  let release, started;
+  const ready = new Promise(resolve => { started = resolve; });
+  const wait = new Promise(resolve => { release = resolve; });
+  const f = fixture({
+    autoSend: false,
+    write: async (request, number) => {
+      if (!request.send && number === 1) { started(); await wait; }
+    },
+  });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Keep saving' });
+  const saving = f.advance(2000);
+  await ready;
+
+  const sending = f.card('send', { ...f.values(), body: 'Keep saving' });
+  for (let i = 0; i < 50 && f.cards.at(-1).statusOnly?.state !== 'sending'; i++) await Promise.resolve();
+  assert.equal(f.cards.at(-1).statusOnly?.cancelLabel, '撤销');
+
+  await f.card('cancel', undefined, { formValues: undefined });
+  assert.equal(f.cards.at(-1).draft.state, 'syncing');
+
+  release();
+  await saving;
+  await sending;
+  assert.equal(f.cards.at(-1).draft.state, 'draft');
+  assert.equal(f.current().editor.body, 'Keep saving');
+  assert.equal(f.writes.filter(w => w.send).length, 0);
+  assert.equal(f.cards.some(c => c.statusOnly?.pendingSend), false);
+});
+
+// User regression (unit): (1) a slower mail:change finishing after mail:send
+// starts must not overwrite the card back to waiting/draft or re-arm autosave;
+// (2) clicking Send after a transient not_executed save failure must retry.
+test('a slower change event never clobbers an immediate Send, and Send retries transient not_executed save errors', async () => {
+  let failSave = true;
+  const f = fixture({
+    autoSend: false,
+    write: async (request) => {
+      if (!request.send && failSave) {
+        return { ok: false, execution: 'not_executed', message: 'Temporary network error' };
+      }
+    },
+  });
+  await f.present();
+  const edited = { ...f.values(), body: 'Quick edit' };
+  const change = f.card('change', edited);
+  const send = f.card('send', edited);
+  await Promise.all([change, send]);
+  assert.equal(f.cards.at(-1).draft.state, 'error');
+  assert.equal(f.writes.length, 1);
+
+  // Retry Send without editing further after the transient failure clears.
+  failSave = false;
+  const retry = f.card('send', edited);
+  await f.waitCountdown();
+  assert.equal(f.writes.filter(w => !w.send).length, 2);
+  assert.equal(f.cards.at(-1).statusOnly?.state, 'sending');
+  assert.ok(f.cards.at(-1).statusOnly?.pendingSend);
+  await f.advance(10000);
+  await retry;
+  assert.equal(f.writes.filter(w => w.send).length, 1);
+});
+
+// PR #13384 review family 1: early prepare() failures after showing preparingSend
+// (e.g. selectAccount failure before writeDraft) must unlock the card into a
+// retryable error state instead of leaving it stuck in preparingSend.
+test('prepare() restores a retryable error state when runMailDraft fails early after showing preparingSend', async () => {
+  let rejectAccount = false;
+  const f = fixture({
+    autoSend: false,
+    selectAccount: async () => (rejectAccount ? { ok: false, message: 'Gmail 账号未授权' } : undefined),
+  });
+  await f.present();
+  const edited = { ...f.values(), body: 'Unsaved before account drop' };
+  await f.card('change', edited);
+
+  rejectAccount = true;
+  await f.card('send', edited);
+  assert.ok(f.cards.some(c => c.statusOnly?.state === 'sending' && c.statusOnly?.cancelLabel === '撤销'));
+  const afterFailure = f.cards.at(-1).statusOnly;
+  assert.equal(afterFailure?.state, 'error');
+  assert.equal(afterFailure?.status, 'Gmail 账号未授权');
+  assert.equal(afterFailure?.cancelLabel, undefined);
+  assert.equal(afterFailure?.pendingSend, undefined);
+  assert.equal(f.writes.length, 0);
+
+  // Recovering the account allows clicking Send again to save and enter countdown.
+  rejectAccount = false;
+  const retry = f.card('send', edited);
+  await f.waitCountdown();
+  assert.equal(f.writes.filter(w => !w.send).length, 1);
+  assert.equal(f.cards.at(-1).statusOnly?.state, 'sending');
+  assert.ok(f.cards.at(-1).statusOnly?.pendingSend);
+  await f.advance(10000);
+  await retry;
+  assert.equal(f.writes.filter(w => w.send).length, 1);
+
+  // Symmetric interleaving: an in-flight autosave publishes a preparingSend card
+  // update while holding the lock, succeeds without unlocking, and then prepare()'s
+  // queued runMailDraft fails in selectAccount() — card must still unlock to error.
+  let holdSaveCopy = false;
+  let releaseSaveCopy;
+  let failQueuedSelect = false;
+  let saveCalls = 0;
+  const f2 = fixture({
+    autoSend: false,
+    selectAccount: async () => (failQueuedSelect ? { ok: false, message: 'Gmail 账号过期' } : undefined),
+    appContext: async () => {
+      if (!holdSaveCopy) return;
+      holdSaveCopy = false;
+      await new Promise((resolve) => { releaseSaveCopy = resolve; });
+    },
+    write: async (request) => {
+      if (!request.send) saveCalls++;
+    },
+  });
+  await f2.present();
+  const edited2 = { ...f2.values(), body: 'Syncing before queued selectAccount drops' };
+  await f2.card('change', edited2);
+  holdSaveCopy = true;
+  const autosave = f2.advance(2000);
+  while (!releaseSaveCopy) await new Promise((r) => setImmediate(r));
+
+  // Click Send while autosave is paused before its preparing-aware showMailDraft().
+  const queuedSend = f2.card('send', edited2);
+  for (let i = 0; i < 50 && f2.cards.at(-1).statusOnly?.state !== 'sending'; i++) await Promise.resolve();
+  assert.equal(f2.cards.at(-1).statusOnly?.cancelLabel, '撤销');
+
+  // Drop account authorization before prepare()'s runMailDraft acquires the lock,
+  // then release autosave so it renders preparingSend via showMailDraft and finishes.
+  failQueuedSelect = true;
+  releaseSaveCopy();
+  await autosave;
+  await queuedSend;
+  assert.equal(saveCalls, 1);
+  const unlocked = f2.cards.at(-1).statusOnly;
+  assert.equal(unlocked?.state, 'error');
+  assert.equal(unlocked?.status, 'Gmail 账号过期');
+  assert.equal(unlocked?.cancelLabel, undefined);
+  assert.equal(unlocked?.pendingSend, undefined);
+});
+
+// PR #13384 review family 2: delayed /app-context (mailCopy) inside showMailDraft
+// must never let a stale mail:change or cancelled prepare() preview overwrite a
+// newer countdown or restored draft card.
+test('delayed mailCopy inside showMailDraft never overwrites a live send countdown or cancelled draft', async () => {
+  const heldContexts = [];
+  let holdAfter = -1;
+  let armHoldAfterOnSelect = -1;
+  const f = fixture({
+    autoSend: false,
+    selectAccount: async () => {
+      if (armHoldAfterOnSelect >= 0) {
+        holdAfter = armHoldAfterOnSelect;
+        armHoldAfterOnSelect = -1;
+      }
+      return undefined;
+    },
+    appContext: async () => {
+      if (holdAfter < 0) return;
+      if (holdAfter > 0) { holdAfter--; return; }
+      holdAfter = -1;
+      await new Promise((resolve) => heldContexts.push(resolve));
+    },
+  });
+  await f.present();
+
+  // Case A: mail:change passes selectAccount and pauses inside showMailDraft's
+  // mailCopy(); meanwhile mail:send finishes saving and enters countdown.
+  const edited = { ...f.values(), body: 'Delayed change publish' };
+  armHoldAfterOnSelect = 0; // hold the mailCopy() immediately inside showMailDraft()
+  const changePromise = f.card('change', edited);
+  while (heldContexts.length === 0) await new Promise((r) => setImmediate(r));
+
+  const sendPromise = f.card('send', edited);
+  await f.waitCountdown();
+  const countdownUpdate = f.cards.at(-1);
+  assert.equal(countdownUpdate.statusOnly?.state, 'sending');
+  assert.ok(countdownUpdate.statusOnly?.pendingSend);
+
+  // Release the stale mail:change showMailDraft() — it must NOT clobber countdown.
+  heldContexts.shift()();
+  await changePromise;
+  assert.equal(f.cards.at(-1).statusOnly?.state, 'sending');
+  assert.ok(f.cards.at(-1).statusOnly?.pendingSend);
+
+  // Clean up Case A by cancelling countdown (draft is now already synced).
+  await f.card('cancel');
+  await sendPromise;
+  assert.equal(f.cards.at(-1).draft?.state, 'draft');
+
+  // Case B: prepare() enters its preview showMailDraft() and pauses on mailCopy();
+  // meanwhile mail:cancel cancels sending and restores draft. Releasing the stale
+  // preview must NOT overwrite the restored draft with sending or error.
+  let selectCount = 0;
+  const f2 = fixture({
+    autoSend: false,
+    selectAccount: async () => {
+      selectCount++;
+      // selectCount 1 = runMailDraft (already synced, returns early),
+      // selectCount 2 = prepare() right before mailCopy() + preview showMailDraft().
+      if (selectCount === 2) holdAfter = 1; // skip prepare()'s mailCopy(), hold showMailDraft()'s mailCopy()
+      return undefined;
+    },
+    appContext: async () => {
+      if (holdAfter < 0) return;
+      if (holdAfter > 0) { holdAfter--; return; }
+      holdAfter = -1;
+      await new Promise((resolve) => heldContexts.push(resolve));
+    },
+  });
+  await f2.present();
+  const send2 = f2.card('send', f2.values());
+  while (heldContexts.length === 0) await new Promise((r) => setImmediate(r));
+
+  await f2.card('cancel');
+  assert.equal(f2.cards.at(-1).draft?.state, 'draft');
+  const countAfterCancel = f2.cards.length;
+
+  heldContexts.shift()();
+  await send2;
+  assert.equal(f2.cards.length, countAfterCancel);
+  assert.equal(f2.cards.at(-1).draft?.state, 'draft');
+  assert.equal(f2.writes.filter(w => w.send).length, 0);
 });

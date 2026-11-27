@@ -29,6 +29,11 @@ export interface WordFadeTimeline {
   startAtByKey: Map<string, number>;
   /** 已完成淡入的 key。流式期间只摘动画 class，节点留到终态统一回收。 */
   settled: Set<string>;
+  /**
+   * 仅 candidate 持有的增量落袋集合：避免 createWordFadeCandidate 每次渲染
+   * 整份拷贝 committed.timeline.settled（O(N) → O(Δ)），同时维持并发渲染丢弃安全。
+   */
+  candidateSettled?: Set<string>;
   /** 下一段最早可开播的绝对时刻；同一条消息的所有 Markdown 分片共享。 */
   nextSegmentStartAtMs: number;
   /** key → 该段的淡入时长(ms)。开播时按当时的出字速度定下，remount 沿用。 */
@@ -105,6 +110,10 @@ export function getOrCreateWordFadeSourceState(
 /**
  * React render 只允许改 candidate。真正挂载后由 MarkdownRenderer 的
  * useLayoutEffect 提交,被并发渲染放弃的 parse 不会偷跑稳定 key / 时间线。
+ *
+ * 零拷贝优化:render 阶段从不写 startAtByKey(只在 DOM commit 写入),而 settled 只做
+ * 增量追加 —— candidate 直接只读共享 committed 的 Map/Set,把本轮新增落袋写入轻量
+ * candidateSettled 集合,避免每 32ms chunk 复制整张历史表导致长回复 O(N²) CPU 抖动。
  */
 export function createWordFadeCandidate(committed: WordFadeState): WordFadeState {
   return {
@@ -112,8 +121,9 @@ export function createWordFadeCandidate(committed: WordFadeState): WordFadeState
     previous: committed.previous,
     keyPrefix: committed.keyPrefix,
     timeline: {
-      startAtByKey: new Map(committed.timeline.startAtByKey),
-      settled: new Set(committed.timeline.settled),
+      startAtByKey: committed.timeline.startAtByKey,
+      settled: committed.timeline.settled,
+      candidateSettled: new Set(),
       nextSegmentStartAtMs: committed.timeline.nextSegmentStartAtMs,
       // 只在 DOM commit（scheduleWordFadeSegment）写入，候选与已提交共享即可。
       durationByKey: committed.timeline.durationByKey,
@@ -154,8 +164,22 @@ export function retainOnlyWordFadeSourceState(
 export function commitWordFadeCandidate(committed: WordFadeState, candidate: WordFadeState): void {
   committed.nextId = candidate.nextId;
   committed.previous = candidate.previous;
-  // render 到 layout-effect 之间可能正好收到上一帧的 animationend；只合并，不能覆盖。
-  for (const key of candidate.timeline.settled) committed.timeline.settled.add(key);
+  // render 到 layout-effect 之间可能正好收到上一帧的 animationend；只合并增量，不能覆盖。
+  const added = candidate.timeline.candidateSettled;
+  if (added) {
+    for (const key of added) {
+      committed.timeline.settled.add(key);
+      committed.timeline.startAtByKey.delete(key);
+      committed.timeline.durationByKey.delete(key);
+    }
+    added.clear();
+  } else if (candidate.timeline.settled !== committed.timeline.settled) {
+    for (const key of candidate.timeline.settled) {
+      committed.timeline.settled.add(key);
+      committed.timeline.startAtByKey.delete(key);
+      committed.timeline.durationByKey.delete(key);
+    }
+  }
 }
 
 /**
@@ -195,13 +219,51 @@ export function _resetWordFadeStateCacheForTests(): void {
   wordFadeStateCache.clear();
 }
 
+function hasSettled(timeline: WordFadeTimeline, key: string): boolean {
+  return timeline.settled.has(key) || (timeline.candidateSettled?.has(key) ?? false);
+}
+
+function addSettled(timeline: WordFadeTimeline, key: string): void {
+  if (timeline.candidateSettled) {
+    timeline.candidateSettled.add(key);
+  } else {
+    timeline.settled.add(key);
+    timeline.startAtByKey.delete(key);
+    timeline.durationByKey.delete(key);
+  }
+}
+
 /** animationend 闭包的落袋入口;身份来自 render 时捕获的 key,不读取可变 DOM dataset。 */
 export function markWordFadeSettled(state: WordFadeState, key: string): void {
-  state.timeline.settled.add(key);
+  addSettled(state.timeline, key);
 }
 
 export function isWordFadeSettled(state: WordFadeState, key: string): boolean {
-  return state.timeline.settled.has(key);
+  return hasSettled(state.timeline, key);
+}
+
+/**
+ * 估算当前仍在播放淡入动画的段数：用于高吞吐降级，防止高速流式输出时同时存在
+ * 数百个 opacity GPU 合成层导致掉帧/花屏。
+ */
+function shouldDegradeWordFadeForHighThroughput(
+  timeline: WordFadeTimeline,
+  nowMs: number,
+): boolean {
+  const recent = timeline.recentStarts;
+  if (recent.length < WORD_FADE_MAX_ACTIVE) return false;
+  let activeCount = 0;
+  let recentWindowCount = 0;
+  const windowFloor = nowMs - WORD_FADE_RATE_WINDOW_MS;
+  for (let i = recent.length - 1; i >= 0; i--) {
+    const startAt = recent[i]!;
+    if (startAt < windowFloor) break;
+    recentWindowCount += 1;
+    if (nowMs - startAt < WORD_FADE_MIN_DURATION_MS) {
+      activeCount += 1;
+    }
+  }
+  return activeCount >= WORD_FADE_MAX_ACTIVE || recentWindowCount >= WORD_FADE_MAX_ACTIVE * 2;
 }
 
 function nextWordFadeStep(delayMs: number): number {
@@ -496,7 +558,7 @@ function makeFadeNode(
   nowMs: number,
   segmentIndex: number,
 ): ElementContent {
-  const settled = state.timeline.settled.has(key);
+  const settled = hasSettled(state.timeline, key);
   return {
     type: 'element',
     tagName: 'span',
@@ -562,7 +624,7 @@ function applyMarkerFade(
 ): void {
   const hasSegment = entry.segmentEnd > entry.segmentStart;
   const key = hasSegment ? keys[entry.segmentStart] : undefined;
-  if (key && state.timeline.settled.has(key)) return;
+  if (key && hasSettled(state.timeline, key)) return;
   const delay = key ? renderDelay(key, state, nowMs, entry.segmentStart) : 0;
   entry.node.properties = {
     ...entry.node.properties,
@@ -584,12 +646,20 @@ export const rehypeStreamWordFade: Plugin<[WordFadeState], Root> = (state) => {
     // pass 3：回填 span。ref 会在 DOM commit 阶段接入共享连续时间线。
     // 槽位从后往前 splice,前面槽位的 index 不受影响。
     const nowMs = (state.timeline.nowFn ?? (() => performance.now()))();
-    // 结构变化会让活动 span remount,旧节点因此可能收不到 animationend。超过动画
-    // 时长的已开播段直接落袋,避免它永久保留活动包装。
+    const degradeNewSegments = shouldDegradeWordFadeForHighThroughput(state.timeline, nowMs);
+    // 结构变化会让活动 span remount,旧节点因此可能收不到 animationend。超过该段自身
+    // 淡入时长(兼容自适应缩短后的 150ms)的已开播段直接落袋,避免永久保留活动包装;
+    // 当活跃淡入层已达高吞吐上限时，新到达段直接落袋降级为无动画文本 span，限制合成层数量。
     for (const key of keys) {
+      if (hasSettled(state.timeline, key)) continue;
       const startAt = state.timeline.startAtByKey.get(key);
-      if (startAt !== undefined && nowMs - startAt >= WORD_FADE_DURATION_MS) {
-        state.timeline.settled.add(key);
+      if (startAt !== undefined) {
+        const segDuration = state.timeline.durationByKey.get(key) ?? WORD_FADE_DURATION_MS;
+        if (nowMs - startAt >= segDuration) {
+          addSettled(state.timeline, key);
+        }
+      } else if (degradeNewSegments) {
+        addSettled(state.timeline, key);
       }
     }
     const nodesBySlot = slots.map((slot) => makeSlotNodes(slot, keys, state, nowMs));

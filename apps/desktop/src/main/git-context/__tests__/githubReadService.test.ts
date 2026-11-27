@@ -742,3 +742,59 @@ it('arms GraphQL rate-limit backoff on HTTP 200 RATE_LIMITED errors and exhauste
   });
   expect(fetcher).toHaveBeenCalledTimes(5);
 });
+
+// 测试价值：
+// - 防退化点：仅在剩余配额归零（HTTP 403/429）时才限流会导致后台轮询直接打穿配额；需要在低配额阶段渐进降频并在窗口重置后自动恢复。
+// - 触发条件：连续响应返回 remaining=900/5000（low）、remaining=100/5000（critical）、时钟跨过 resetAt（恢复 normal）、invalidate 清除状态。
+// - 生产入口与可观察结果：GithubReadTransport.read + getRateLimitPressure + getCombinedRateLimitPressure。
+// - 依赖策略：纯内存 fake fetch 与可控 now 时钟。
+// - 对应规则或根因：docs/dev-rules/server-channel-review.md（GitHub API 低配额自适应降频与自动恢复）。
+it('tracks x-ratelimit pressure per resource bucket and auto-recovers after resetAt or invalidate', async () => {
+  let now = 1_700_000_000_000;
+  const resetSec = String(Math.floor((now + 1_800_000) / 1000));
+  const fetcher = vi
+    .fn()
+    .mockResolvedValueOnce(
+      Response.json({ ok: 1 }, {
+        headers: {
+          'x-ratelimit-resource': 'core',
+          'x-ratelimit-limit': '5000',
+          'x-ratelimit-remaining': '900',
+          'x-ratelimit-reset': resetSec,
+        },
+      }),
+    )
+    .mockResolvedValueOnce(
+      Response.json({ data: { ok: 2 } }, {
+        headers: {
+          'x-ratelimit-resource': 'graphql',
+          'x-ratelimit-limit': '5000',
+          'x-ratelimit-remaining': '100',
+          'x-ratelimit-reset': resetSec,
+        },
+      }),
+    );
+  const transport = new GithubReadTransport(fetcher as typeof fetch, () => now);
+  expect(transport.getCombinedRateLimitPressure('acct')).toBe('normal');
+
+  await transport.read('acct', 'tok', '/repos/o/r/pulls/1', { ttl: 0 });
+  expect(transport.getRateLimitPressure('acct', 'rest')).toMatchObject({ level: 'low', remaining: 900, limit: 5000 });
+  expect(transport.getRateLimitPressure('acct', 'graphql').level).toBe('normal');
+  expect(transport.getCombinedRateLimitPressure('acct')).toBe('low');
+
+  await transport.read('acct', 'tok', '/graphql', { body: { query: '{ viewer { login } }' }, ttl: 0 });
+  expect(transport.getRateLimitPressure('acct', 'graphql')).toMatchObject({ level: 'critical', remaining: 100, limit: 5000 });
+  expect(transport.getCombinedRateLimitPressure('acct')).toBe('critical');
+
+  // Once the reset window passes, pressure returns to normal automatically without needing a network probe.
+  now += 1_801_000;
+  expect(transport.getRateLimitPressure('acct', 'rest').level).toBe('normal');
+  expect(transport.getRateLimitPressure('acct', 'graphql').level).toBe('normal');
+  expect(transport.getCombinedRateLimitPressure('acct')).toBe('normal');
+
+  // invalidate() also drops recorded quota state immediately (e.g. account switch).
+  now -= 1_000_000;
+  expect(transport.getCombinedRateLimitPressure('acct')).toBe('critical');
+  transport.invalidate();
+  expect(transport.getCombinedRateLimitPressure('acct')).toBe('normal');
+});
