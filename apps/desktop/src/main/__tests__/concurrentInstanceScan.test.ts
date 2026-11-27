@@ -140,7 +140,16 @@ describe('concurrentInstanceScan stale registry record cleanup', () => {
   // #12917 已把日志去重；这里锁住另一半——证死后就地删除记录（连带 .bak），让后续扫描
   // 的 readdir 里根本不再出现它。
   const userDataDir = '/tmp/cindy-stale-cleanup';
-  const raw = JSON.stringify({ pid: 4242, userDataDir, startedAtMs: 1_000_000, rootDir: '/Applications/Cindy.app' });
+  // 记录的形状照 devStartupStatus 实际写入的来（schemaVersion 1 + instanceId）：
+  // 只删认得的格式，不认得的记录原地保留。
+  const raw = JSON.stringify({
+    schemaVersion: 1,
+    instanceId: 'stale-instance',
+    pid: 4242,
+    userDataDir,
+    startedAtMs: 1_000_000,
+    rootDir: '/Applications/Cindy.app',
+  });
   const nonCindy = () => ({ startedAtMs: 5_000_000, command: '/usr/libexec/microstackshot' });
 
   it('deletes a proven-stale registry record and its backup, swallowing unlink failures', async () => {
@@ -196,6 +205,8 @@ describe('concurrentInstanceScan stale registry record cleanup', () => {
     // 新 Cindy 登记重写。按文件名 unlink 会删掉活实例的注册——Windows 没有
     // SingletonLock 兜底，后续扫描再也看不到这个实例。删除必须绑定证死时的原文。
     const replacedRaw = JSON.stringify({
+      schemaVersion: 1,
+      instanceId: 'live-instance',
       pid: 4242,
       userDataDir,
       startedAtMs: 9_900_000,
@@ -218,6 +229,8 @@ describe('concurrentInstanceScan stale registry record cleanup', () => {
     vi.setSystemTime(10_000_000);
     const unlinked: string[] = [];
     const replacedRaw = JSON.stringify({
+      schemaVersion: 1,
+      instanceId: 'live-instance',
       pid: 4242,
       userDataDir,
       startedAtMs: 9_900_000,
@@ -233,5 +246,26 @@ describe('concurrentInstanceScan stale registry record cleanup', () => {
     // 正典已被新实例重写（保留），.bak 仍是证死那份的原文（删）。
     expect(await findConcurrentLiveInstancePids(deps, userDataDir)).toEqual([]);
     expect(unlinked).toEqual([path.join(userDataDir, '.dev-instances', '4242.json.bak')]);
+  });
+
+  it('keeps a record whose shape it does not recognize', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000_000);
+    const unlinked: string[] = [];
+    // 不是本应用写的实例登记（没有 schemaVersion / instanceId）：认不出来就不动它。
+    const foreignRaw = JSON.stringify({
+      pid: 4242,
+      userDataDir,
+      startedAtMs: 1_000_000,
+      note: 'another tool',
+    });
+    const deps = makeDeps({
+      raw: foreignRaw,
+      readProcessIdentity: nonCindy,
+      unlink: async (file) => { unlinked.push(file); },
+    });
+
+    expect(await findConcurrentLiveInstancePids(deps, userDataDir)).toEqual([]);
+    expect(unlinked).toEqual([]);
   });
 });

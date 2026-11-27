@@ -157,6 +157,24 @@ export function hasFreshStaleProcessProof(key: string): boolean {
 }
 
 /**
+ * 这份文件是不是本应用写的实例登记（schema≥1 且带 instanceId，文件名就是 `<pid>.json`）。
+ * 不认得的格式一律不动：只删自己认得的东西，别把目录里的其它文件当残留清掉。
+ */
+function isCindyInstanceRecord(raw: string, fileName: string, pid: number): boolean {
+  if (fileName !== `${pid}.json`) return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return false;
+  }
+  if (parsed === null || typeof parsed !== 'object') return false;
+  const record = parsed as { schemaVersion?: unknown; instanceId?: unknown };
+  if (typeof record.schemaVersion !== 'number' || record.schemaVersion < 1) return false;
+  return typeof record.instanceId === 'string' && record.instanceId.length > 0;
+}
+
+/**
  * 就地清理一条已证死的注册表记录（`<pid>.json` 与它的原子备份 `.bak`）。能走到这里的记录
  * 都满足完整 provenance：属主进程已退出、PID 被一个更晚启动的非 Cindy 进程复用——文件再
  * 没有人会读，删掉之后后续扫描的 readdir 里不再出现，不再为同一条残留反复 readFile /
@@ -169,9 +187,11 @@ async function cleanupStaleRegistryRecord(
   registryDir: string,
   fileName: string,
   staleRaw: string,
+  pid: number,
 ): Promise<void> {
   const unlink = deps.unlink;
   if (!unlink) return;
+  if (!isCindyInstanceRecord(staleRaw, fileName, pid)) return;
   // 证死之后到删除之前隔着身份查询，同一 PID 可能已被新实例登记重写。删除前重读
   // 并与证死的那份原文比对：内容一致才删，已被替换（或读不了、已不在）就放弃——
   // 宁可留一份残档，不能误删活实例的注册（Windows 没有 SingletonLock 兜底）。
@@ -372,7 +392,7 @@ export async function findConcurrentLiveInstancePids(
     if (rememberStaleProcessProof(proofKey)) {
       log.info('ignoring stale instance registry record after PID reuse', { pid: candidate.pid });
     }
-    await cleanupStaleRegistryRecord(deps, registryDir, candidate.fileName, candidate.raw);
+    await cleanupStaleRegistryRecord(deps, registryDir, candidate.fileName, candidate.raw, candidate.pid);
   }
 
   // 追溯 fallback:本补丁之前的 packaged build 不写注册表,但 Chromium 单例锁是
