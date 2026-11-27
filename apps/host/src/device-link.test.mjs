@@ -865,6 +865,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
         let stopping;
         const originalEnqueue = enqueueHandoff;
         const input = createInputQueue({
+          hub,
           getMaker: () => ({ getSession: () => undefined }),
           getOwner: getCurrentDbClientSnapshot,
           readSession: async sessionId => {
