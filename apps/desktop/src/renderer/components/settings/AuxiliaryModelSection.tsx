@@ -32,12 +32,21 @@ import type {
 import { useAuxiliaryRouteHealth } from '@/hooks/useAuxiliaryRouteHealth';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
+import { useRemoteAuxiliaryRoutes } from './useRemoteAuxiliaryRoutes';
+import { isRemoteAuxiliaryModelRef } from '../../../shared/remoteAuxiliaryModelRef';
 import { AuxiliaryModelHealthNotice } from './AuxiliaryModelHealthNotice';
 import { useAuxiliaryModelHealth } from '@/hooks/useAuxiliaryModelHealth';
 
 const log = createLogger('AuxiliaryModelSection');
 
 const SLOT_I18N = ['preferred', 'fallback1', 'fallback2'] as const;
+/** Literal keys so the settings search index can resolve each rendered status. */
+const REMOTE_STATUS_KEYS = {
+  outdated: 'settings.auxiliaryModels.remoteStatus.outdated',
+  offline: 'settings.auxiliaryModels.remoteStatus.offline',
+  revoked: 'settings.auxiliaryModels.remoteStatus.revoked',
+  unavailable: 'settings.auxiliaryModels.remoteStatus.unavailable',
+} as const;
 type AuxiliaryModelMode = 'automatic' | 'custom';
 type AuxiliaryTestFailure = Extract<AuxiliaryModelSettingsTestResult, { ok: false }>;
 /** Saved, failed, failed its test, or dropped because the account changed meanwhile. */
@@ -53,6 +62,8 @@ export function AuxiliaryModelSection() {
   const [settings, setSettings] = useState<AuxiliaryModelSettingsState | null>(null);
   const [pending, setPending] = useState(false);
   const [drafting, setDrafting] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const remote = useRemoteAuxiliaryRoutes(pickerOpen);
   const routeHealth = useAuxiliaryRouteHealth();
   const pendingRef = useRef(false);
   const modelVisibilityVersion = useModelVisibilityVersion();
@@ -115,10 +126,10 @@ export function AuxiliaryModelSection() {
         } : {}),
         available:
           option.available !== false &&
-          isModelEnabled(option.agentKind, option.providerId, {
+          (isRemoteAuxiliaryModelRef(option.id) || isModelEnabled(option.agentKind, option.providerId, {
             id: option.modelId,
             defaultEnabled: option.defaultEnabled,
-          }),
+          })),
       };
     });
   }, [providers, cindyAiName, cindyAiProvider?.logoKind, modelVisibilityVersion, settings?.options]);
@@ -136,6 +147,9 @@ export function AuxiliaryModelSection() {
       persistModels={persistModels}
       health={health}
       routeHealth={routeHealth}
+      remote={remote}
+      pickerOpen={pickerOpen}
+      setPickerOpen={setPickerOpen}
     />
   );
 }
@@ -157,6 +171,10 @@ export interface AuxiliaryModelSectionViewProps {
   /** Recent auxiliary failures of this computer; absent for another computer's settings. */
   health?: ReturnType<typeof useAuxiliaryModelHealth>;
   routeHealth?: ReturnType<typeof useAuxiliaryRouteHealth>;
+  /** Remote same-account candidates for the auxiliary slots, resolved by the owner. */
+  remote?: ReturnType<typeof useRemoteAuxiliaryRoutes>;
+  pickerOpen?: boolean;
+  setPickerOpen?: (open: boolean) => void;
 }
 
 /** Shared native view. Local and cloud controllers provide the same state/actions. */
@@ -171,6 +189,9 @@ export function AuxiliaryModelSectionView({
   headingStatus,
   health,
   routeHealth: healthSnapshots = [],
+  remote,
+  pickerOpen = false,
+  setPickerOpen = () => undefined,
 }: AuxiliaryModelSectionViewProps) {
   const { t } = useTranslation();
   const [draftModels, setDraftModels] = useState<readonly string[] | null>(null);
@@ -406,6 +427,20 @@ export function AuxiliaryModelSectionView({
                         data-setting-id={definition.id}
                         value={pin ?? undefined}
                         options={slotOptions}
+                        {...(remote ? { remote: {
+                          devices: remote.devices,
+                          open: pickerOpen,
+                          onOpenChange: setPickerOpen,
+                          allows: (route: Parameters<typeof remote.allows>[0]) => {
+                            if (!route.deviceId || !remote.allows(route)) return false;
+                            const ref = remote.encode(route.deviceId, route.providerId, route.agentKind, route.model);
+                            return !!ref && !selectedByOtherSlot.has(ref);
+                          },
+                          encode: (deviceId, providerId, agent, model) => {
+                            const ref = remote.encode(deviceId, providerId, agent, model);
+                            return ref && !selectedByOtherSlot.has(ref) ? ref : null;
+                          },
+                        }} : {})}
                         onChange={(next) => applySlot(index, next)}
                         ariaLabel={t(`settings.auxiliaryModels.${slotKey}.ariaLabel`)}
                         dense
@@ -431,6 +466,12 @@ export function AuxiliaryModelSectionView({
                 </span>
               ) : null}
               {t('settings.auxiliaryModels.customHint')}
+              <span className="mt-1 block">{t('settings.auxiliaryModels.remoteHint')}</span>
+              {(remote?.statuses ?? []).map(({ deviceId, name, status }) => (
+                <span key={deviceId} className="mt-1 block" role="status">
+                  {t(REMOTE_STATUS_KEYS[status], { device: name })}
+                </span>
+              ))}
             </p>
           </>
         ) : (

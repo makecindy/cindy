@@ -11,13 +11,16 @@ export interface ModelPickerPreferenceStore {
     set(providerId: string, modelId: string, engine: ModelEngine): void;
     clear(providerId: string, modelId: string): void;
   };
+  enginesForLocation?: (agentDeviceId: string | null) => ModelPickerPreferenceStore['engines'];
   favorites: { items: readonly ModelFavoriteItem[]; store: FavoriteStore };
   memory: ModelMemoryAccessors;
   memoryForLocation?: (agentDeviceId: string | null) => ModelMemoryAccessors;
 }
 
 /** A picker request may read favorites, but every edit stays in its own draft. */
-export function useTransientModelPickerPreferences(deviceId?: string): ModelPickerPreferenceStore {
+export function useTransientModelPickerPreferences(
+  deviceId?: string, { inheritEngines = true }: { inheritEngines?: boolean } = {},
+): ModelPickerPreferenceStore {
   const localFavorites = useModelFavorites();
   const remoteFavorites = useRemoteModelFavorites(deviceId);
   const sourceFavorites = deviceId ? remoteFavorites.items : localFavorites;
@@ -54,23 +57,25 @@ export function useTransientModelPickerPreferences(deviceId?: string): ModelPick
       refresh();
     },
   });
-  return {
-    engines: {
-      get: (providerId, modelId) => {
-        const id = key(providerId, modelId);
-        if (!draft.engines.has(id))
-          draft.engines.set(id, deviceId ? undefined : getModelEngineOverride(providerId, modelId));
-        return draft.engines.get(id);
-      },
-      set: (providerId, modelId, engine) => {
-        draft.engines.set(key(providerId, modelId), engine);
-        refresh();
-      },
-      clear: (providerId, modelId) => {
-        draft.engines.set(key(providerId, modelId), undefined);
-        refresh();
-      },
+  const enginesForLocation = (agentDeviceId: string | null): ModelPickerPreferenceStore['engines'] => ({
+    get: (providerId, modelId) => {
+      const id = key(agentDeviceId ?? '', providerId, modelId);
+      if (!draft.engines.has(id))
+        draft.engines.set(id, !agentDeviceId && !deviceId && inheritEngines ? getModelEngineOverride(providerId, modelId) : undefined);
+      return draft.engines.get(id);
     },
+    set: (providerId, modelId, engine) => {
+      draft.engines.set(key(agentDeviceId ?? '', providerId, modelId), engine);
+      refresh();
+    },
+    clear: (providerId, modelId) => {
+      draft.engines.set(key(agentDeviceId ?? '', providerId, modelId), undefined);
+      refresh();
+    },
+  });
+  return {
+    engines: enginesForLocation(null),
+    enginesForLocation,
     memory: memoryForLocation(null),
     memoryForLocation,
     favorites: {

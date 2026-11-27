@@ -1,4 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { encodeRemoteAuxiliaryModelRef } from '../../../shared/remoteAuxiliaryModelRef.js';
+
+const remoteMocks = vi.hoisted(() => ({ caps: vi.fn(), read: vi.fn(), state: vi.fn(), write: vi.fn(), handle: vi.fn(), owner: vi.fn(() => 'owner') }));
+vi.mock('../../app-settings/runtime.js', () => ({ registerRuntimeSettingsSection: vi.fn() }));
+vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: remoteMocks.owner, isAppSessionBoundaryPending: () => false }));
+
 import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
 import { ipcMain } from 'electron';
 import { notifyAppSettingsChanged } from '../../app-settings/changes.js';
@@ -18,7 +24,7 @@ vi.mock('../../cindyAiProviderName.js', () => ({ getCindyAiProviderName: () => '
 
 vi.mock('../../maker-host/index.js', () => ({ getMaker: () => ({}) }));
 vi.mock('electron', () => ({
-  ipcMain: { handle: vi.fn() },
+  ipcMain: { handle: remoteMocks.handle },
 }));
 
 vi.mock('../../logger.js', () => ({
@@ -39,10 +45,10 @@ vi.mock('../../maker-host/provider-order-store.js', () => ({
 }));
 
 vi.mock('../../utility-model/auxiliary-model-settings-store.js', () => ({
-  readAuxiliaryModelSettings: vi.fn(),
-  readAuxiliaryModelSettingsState: vi.fn(),
+  readAuxiliaryModelSettings: remoteMocks.read,
+  readAuxiliaryModelSettingsState: remoteMocks.state,
   onAuxiliaryModelSettingsRead: vi.fn(),
-  writeAuxiliaryModelSettingsPatch: vi.fn(),
+  writeAuxiliaryModelSettingsPatch: remoteMocks.write,
 }));
 
 vi.mock('../../utility-model/oneshotProviderUsability.js', () => ({
@@ -67,6 +73,7 @@ import {
   testAuxiliaryModelSettings,
   registerAuxiliaryModelSettingsIpc,
 } from '../auxiliary-model-settings.js';
+import { setRemoteUtilityTextClient } from '../../utility-model/remote/registry.js';
 import { requestUtilityText } from '../../utility-model/oneShotCandidates.js';
 
 const PIN = 'cat:openrouter:codex:openai/gpt-5-mini';
@@ -125,6 +132,44 @@ function builtinCodexCatalog() {
     ],
   } as never;
 }
+
+// 测试价值：设置 IPC 保存远程模型时按设备能力验证并持久化；依据远程辅助模型身份隔离契约；
+// 原 helper 测试没有保存 IPC 和远端能力；最小输入为可用和不在能力列表中的远程路由。
+// tier: unit（内存配置和 RPC fake）；单文件实测墙钟 2.010s。
+describe('remote auxiliary settings save', () => {
+  const route = { deviceId: 'device-b', providerId: 'provider', agentKind: 'codex' as const, model: 'model' };
+  const ref = encodeRemoteAuxiliaryModelRef(route);
+  beforeEach(() => {
+    vi.clearAllMocks();
+    remoteMocks.owner.mockReturnValue('owner');
+    remoteMocks.read.mockReturnValue({ models: [] });
+    remoteMocks.state.mockReturnValue({ value: { models: [] }, isCustomized: false, customizedKeys: [], defaults: { models: [] } });
+    remoteMocks.write.mockResolvedValue(undefined);
+    // Saving tests each route first; the mocked request answers like a live route.
+    vi.mocked(requestUtilityText).mockResolvedValue({ ok: true, text: 'Title', providerId: 'provider',
+      model: 'model', transport: 'codex-responses' });
+    setRemoteUtilityTextClient({
+      request: async (route) => ({ ok: true, text: 'Remote title', providerId: route.providerId,
+        model: route.model, transport: 'codex-responses' }),
+      readCapabilities: remoteMocks.caps,
+    });
+    registerAuxiliaryModelSettingsIpc();
+  });
+  function setHandler() {
+    return remoteMocks.handle.mock.calls.find(([channel]) => channel === MAKER_INVOKE.AUXILIARY_MODEL_SETTINGS_SET)![1];
+  }
+  it('saves a route advertised by the selected device', async () => {
+    remoteMocks.caps.mockResolvedValue({ allowedRoutes: [{ providerId: route.providerId, agentKind: route.agentKind, model: route.model }] });
+    await setHandler()({}, { models: [ref] });
+    expect(remoteMocks.caps).toHaveBeenCalledWith('device-b');
+    expect(remoteMocks.write).toHaveBeenCalledWith({ models: [ref] }, expect.any(Function));
+  });
+  it('rejects a route not advertised by that device', async () => {
+    remoteMocks.caps.mockResolvedValue({ allowedRoutes: [] });
+    await expect(setHandler()({}, { models: [ref] })).rejects.toThrow(/not currently routable/);
+    expect(remoteMocks.write).not.toHaveBeenCalled();
+  });
+});
 
 describe('auxiliary model settings IPC helpers', () => {
   beforeEach(() => {

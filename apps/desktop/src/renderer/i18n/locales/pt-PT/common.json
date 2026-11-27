@@ -5659,6 +5659,13 @@
       "budget": "Desconto",
       "subscription": "Subscrição",
       "saveFailed": "Falha ao guardar as definições dos modelos auxiliares",
+      "remoteHint": "Os modelos remotos podem gerar textos curtos. A revisão de voz BYOK continua a usar modelos compatíveis neste computador.",
+      "remoteStatus": {
+        "outdated": "Atualize o Cindy em {{device}} para usar os seus modelos auxiliares.",
+        "offline": "{{device}} está offline.",
+        "revoked": "O acesso aos modelos em {{device}} foi revogado.",
+        "unavailable": "Os modelos auxiliares de {{device}} estão indisponíveis de momento."
+      },
       "testFailed": "O teste de ligação falhou para {{model}}",
       "save": "Guardar modelos auxiliares",
       "saving": "A guardar e testar…",

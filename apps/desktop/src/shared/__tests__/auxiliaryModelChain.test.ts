@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { decodeRemoteAuxiliaryModelRef, encodeRemoteAuxiliaryModelRef, isRemoteAuxiliaryModelRef } from '../remoteAuxiliaryModelRef.js';
 import { encodeCatalogModelPin, decodeCatalogModelPin } from '../catalogModelPin.js';
 import { normalizeAuxiliaryModelList } from '../auxiliaryModelSettings.js';
 
@@ -28,6 +29,19 @@ describe('AUTO_AUXILIARY_MODEL_CHAIN', () => {
     ]);
     expect(AUTO_AUXILIARY_MODEL_CHAIN_I18N_KEYS).toHaveLength(AUTO_AUXILIARY_MODEL_CHAIN.length);
 
+  });
+
+  // Unit: the old catalog container must preserve the device identity and unknown versions.
+  it('round trips remote identities without losing unavailable future versions', () => {
+    const route = { deviceId: 'device-a', providerId: 'same/provider', agentKind: 'pi' as const, model: 'model:1' };
+    const pin = encodeRemoteAuxiliaryModelRef(route);
+    expect(decodeRemoteAuxiliaryModelRef(pin)).toEqual(route);
+    expect(normalizeAuxiliaryModelList([pin])).toEqual([pin]);
+    const future = encodeCatalogModelPin({ providerId: 'cindy-remote-aux://v2/device-a/provider', agentKind: 'pi', model: 'm' });
+    expect(isRemoteAuxiliaryModelRef(future)).toBe(true);
+    expect(decodeRemoteAuxiliaryModelRef(future)).toBeNull();
+    expect(normalizeAuxiliaryModelList([future])).toEqual([future]);
+    expect(() => encodeRemoteAuxiliaryModelRef({ ...route, deviceId: 'share:foreign' })).toThrow();
   });
 
   it('parses profile keys and catalog pins', () => {

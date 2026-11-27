@@ -146,6 +146,7 @@ import { modelCatalogKey, type ControlledModelFavoriteSource } from '../../../sh
 import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
 import { RouteSourceMark } from '@/components/icons/RouteSourceMark';
 import { buildUnifiedRail, remoteAgentProviders } from './unifiedModelSelection';
+import { filterModelSelectorRoutes, type ModelSelectorRouteFilter } from './modelSelectorRouteFilter';
 import {
   collectRemoteProviderGroups,
   providerGroupMemberOfRoute,
@@ -886,6 +887,12 @@ export interface ModelSelectorBaseProps {
   /** Authoritative surface-specific allowlist (e.g. one-shot or vision routes). */
   providersOverride?: ProviderView[];
   providersOverrideState?: { status: 'loading' | 'error' | 'ready'; refresh: () => void };
+  /** Optional exact-route admission applied to every device catalog. */
+  routeFilter?: ModelSelectorRouteFilter;
+  preferenceStore?: ModelPickerPreferenceStore;
+  /** Include the selected remote computer and provider in the field label. */
+  showRemoteSourceLabel?: boolean;
+  onOpenChange?: (open: boolean) => void;
   /**
    * 已建立的本机任务跟着账号走时的原来源视图(sourceSwitch.ts followedAccountSourceProvider)：
    * 只替换本机目录里同 id 的那一项；远程目录、SSH 与外部注入目录不受影响。
@@ -1119,6 +1126,7 @@ export interface ModelSelectorContentBaseProps {
   modelGroups?: ModelGroupsPickerProps;
   providersOverride?: ProviderView[];
   providersOverrideState?: ModelSelectorProps['providersOverrideState'];
+  routeFilter?: ModelSelectorRouteFilter;
   taskSourceProvider?: ModelSelectorProps['taskSourceProvider'];
   sshCodex?: SshCodexCatalog;
   modelId: string;
@@ -1413,6 +1421,7 @@ function ModelSelectorContentView({
   pluginEngines,
   providersOverride,
   providersOverrideState,
+  routeFilter,
   taskSourceProvider,
   sshCodex,
   modelId,
@@ -1633,8 +1642,14 @@ function ModelSelectorContentView({
   const { hasSavedKey, canReadKey } = useApiKey();
   // 供应商来源:本机会话用本机 useProviders;device-link 远程会话用**被控端**供应商目录
   // (useDeviceProviders,隧道 maker:provider:list)。两 hook 都无条件调用(hooks 规则),按 deviceId 取。
-  const localProviders = useProviders();
-  const remoteProviders = useDeviceProviders(catalogDeviceId);
+  const localSnapshot = useProviders();
+  const remoteSnapshot = useDeviceProviders(catalogDeviceId);
+  const filteredLocalProviders = useMemo(() => filterModelSelectorRoutes(localSnapshot.providers, null, routeFilter),
+    [localSnapshot.providers, routeFilter]);
+  const filteredRemoteProviders = useMemo(() => filterModelSelectorRoutes(remoteSnapshot.providers, deviceId ?? null, routeFilter),
+    [remoteSnapshot.providers, deviceId, routeFilter]);
+  const localProviders = { ...localSnapshot, providers: filteredLocalProviders };
+  const remoteProviders = { ...remoteSnapshot, providers: filteredRemoteProviders };
   const remoteDisable = useRemoteProviderDisable();
   // 远程 Agent 只能用那台电脑「允许被远程调用」的供应商(远程控制照常列全部,被控电脑上的任务
   // 浏览被控电脑自己的目录时也一样)。
@@ -1659,7 +1674,7 @@ function ModelSelectorContentView({
   );
   const listedProviders = deviceId
     ? remoteCatalogProviders
-    : providersOverride ?? sshCatalogProviders ?? localTaskProviders;
+    : filterModelSelectorRoutes(providersOverride ?? sshCatalogProviders ?? localTaskProviders, null, routeFilter);
   // 供应商路由在面板里就是一个普通供应商(sourceRouteProviders.ts)：草稿(onAttach)与进行中的任务(onPickMerged)、
   // 本机与远程控制被控端自身的目录均生效；切去浏览「其他电脑」时只停用右侧列表，左栏本机/宿主区仍保持稳定。
   const homeSourceRouteConfig = ((!!modelGroupsProp?.onAttach && !!onUnifiedSelectProp) || !!modelGroupsProp?.onPickMerged)
@@ -1974,11 +1989,13 @@ function ModelSelectorContentView({
       agent: AgentKind,
     ): boolean =>
       // SSH 的 Codex 行是远端 model/list 已筛过的可选清单，本机可见性偏好不适用。
-      providersOverride || (sshCodexActive && agent === 'codex') ? true : deviceId
+      deviceId && routeFilter
         ? isDeviceModelVisible(remoteProviders.modelVisibilityOverrides, agent, providerId, model)
-        : isModelEnabled(agent, providerId, model),
+        : providersOverride || (sshCodexActive && agent === 'codex') ? true : deviceId
+          ? isDeviceModelVisible(remoteProviders.modelVisibilityOverrides, agent, providerId, model)
+          : isModelEnabled(agent, providerId, model),
     // biome-ignore lint/correctness/useExhaustiveDependencies: visibilityVersion 是本机可见性偏好的外部刷新信号(值本身不进判定)。
-    [providersOverride, sshCodexActive, deviceId, remoteProviders.modelVisibilityOverrides, visibilityVersion],
+    [providersOverride, sshCodexActive, deviceId, remoteProviders.modelVisibilityOverrides, visibilityVersion, routeFilter],
   );
   const unifiedExcludeProvider = useMemo(
     () =>
@@ -2017,8 +2034,10 @@ function ModelSelectorContentView({
   // Keep each computer's rows while its catalog refreshes (and through a temporary read failure), as
   // the single-device catalog already does; disconnects, refusals and expiry still clear them.
   const scopedCatalogs = useDevicesProviders(remoteCatalogKeys, { retainDisplaySnapshot: true });
-  const remoteDeviceCatalogs = useMemo(() => new Map(remoteAgentDeviceIds.map((id, index) =>
-    [id, scopedCatalogs.get(remoteCatalogKeys[index])!] as const)), [remoteAgentDeviceIds, remoteCatalogKeys, scopedCatalogs]);
+  const remoteDeviceCatalogs = useMemo(() => new Map(remoteAgentDeviceIds.map((id, index) => {
+    const catalog = scopedCatalogs.get(remoteCatalogKeys[index]);
+    return [id, catalog ? { ...catalog, providers: filterModelSelectorRoutes(catalog.providers, id, routeFilter) } : catalog] as const;
+  })), [remoteAgentDeviceIds, remoteCatalogKeys, scopedCatalogs, routeFilter]);
   // 任务所在电脑那一格:本机任务用本机目录与可见性偏好;被控电脑上的任务用被控电脑的目录与它的
   // 可见性快照(顺序沿用被控端快照,不套本机排序,同远程控制)。
   const homeDeviceProviders = useDeviceProviders(homeDeviceId);
@@ -2035,9 +2054,9 @@ function ModelSelectorContentView({
         }),
         ...(homeDeviceId ? [{ deviceId: homeDeviceId, providers: homeDeviceProviders.providers }] : []),
       ],
-      homeDeviceId ? {} : localProviderGroups,
+      homeDeviceId || routeFilter ? {} : localProviderGroups,
     ),
-    [remoteAgentDevices, remoteDeviceCatalogs, homeDeviceId, homeDeviceProviders.providers, localProviderGroups],
+    [remoteAgentDevices, remoteDeviceCatalogs, homeDeviceId, homeDeviceProviders.providers, localProviderGroups, routeFilter],
   );
   // 组那一项在面板里的位置：任务所在电脑自己的供应商(被控电脑上的任务即被控电脑的)在本机那一栏，记为 null。
   const groupEntryAt = useCallback(
@@ -2113,6 +2132,9 @@ function ModelSelectorContentView({
   const runLocationFold = useMemo(() => {
     const hiddenRemote = new Set<string>();
     const hiddenLocal = new Set<string>();
+    // An exact-route picker must retain separate device identities, even for identical providers.
+    if (routeFilter) return { hiddenRemote, hiddenLocal, unavailableReasons: new Map<string, string>() };
+    // Deduplicate the task computer's catalog even when another computer is viewing it.
     // Never use the viewer's catalog or provider groups for a task on another computer.
     // Without location choices ChatInput supplies only deviceId, not remoteAgent.
     const taskDeviceId = homeDeviceId ?? (!remoteAgent ? deviceId : undefined);
@@ -2155,7 +2177,7 @@ function ModelSelectorContentView({
     return { hiddenRemote, hiddenLocal, unavailableReasons };
   }, [remoteAgent, deviceId, remoteProviders.providers, remoteAgentDevices, homeDeviceId, homeDeviceProviders.providers,
     localProviders.providers, localProviderGroups, remoteDeviceCatalogs,
-    remoteAgentDeviceId, currentProviderIdProp, remoteDisable, remoteProviderGroups.hidden, remoteProviderGroups.groups, t]);
+    remoteAgentDeviceId, currentProviderIdProp, remoteDisable, remoteProviderGroups.hidden, remoteProviderGroups.groups, routeFilter, t]);
   // 有其他电脑可选时，宿主那一段的侧栏另从这份列表建：供应商路由同样作为一个普通供应商列在里面。
   // 放在 remoteAgentGroups 之前，供后者过滤已被合并进供应商路由的远程/共享成员。
   const homeBaseProviders = homeDeviceId ? homeDeviceProviders.providers : localProviders.providers;
@@ -2260,7 +2282,14 @@ function ModelSelectorContentView({
     [remoteAgentDevices, remoteDeviceCatalogs],
   );
   const hasRemoteAgent = remoteAgent !== undefined;
-  const homeProviders = homeSourceRoutes.providers;
+  const homeProviders = useMemo(() => {
+    // An exact-route picker never shows source routes; filter that device's own catalog instead.
+    if (routeFilter) {
+      if (homeDeviceId) return filterModelSelectorRoutes(homeDeviceProviders.providers, homeDeviceId, routeFilter);
+      if (providersOverride) return filterModelSelectorRoutes(providersOverride, null, routeFilter);
+    }
+    return homeSourceRoutes.providers;
+  }, [homeDeviceId, homeDeviceProviders.providers, providersOverride, routeFilter, homeSourceRoutes.providers]);
   const homeModelVisibilityOverrides = homeDeviceProviders.modelVisibilityOverrides;
   const remoteAgentLocalRailItems = useMemo(() => {
     if (!hasRemoteAgent) return undefined;
@@ -2270,7 +2299,7 @@ function ModelSelectorContentView({
       isVisible: homeDeviceId
         ? (providerId, model, agent) =>
             isDeviceModelVisible(homeModelVisibilityOverrides, agent, providerId, model)
-        : (providerId, model, agent) => isModelEnabled(agent, providerId, model),
+        : (providerId, model, agent) => providersOverride && routeFilter ? true : isModelEnabled(agent, providerId, model),
       includePaymentRequired: true,
       scope: 'draft',
     });
@@ -2283,6 +2312,8 @@ function ModelSelectorContentView({
     localProviders.providerOrder,
     visibilityVersion,
     runLocationFold,
+    providersOverride,
+    routeFilter,
   ]);
   // 供应商组在分组标题与左栏提示里带上台数(provider-groups.md §10)：「Anthropic · 供应商组 · 2 台电脑」。
   // 只算任务所在电脑就是本机时本机建的组；被控电脑上的任务看那台的目录，不在这里标。远程 Agent 面板正在浏览
@@ -4263,7 +4294,9 @@ function ModelSelectorContentView({
               unifiedSelectionPolicy === 'official' || !browsingLiveCatalog ? undefined : effort
             }
             {...(modelMemory ? { modelMemory } : {})}
-            {...(preferenceStore ? { preferenceStore } : {})}
+            {...(preferenceStore ? { preferenceStore: preferenceStore.enginesForLocation
+              ? { ...preferenceStore, engines: preferenceStore.enginesForLocation(remoteBrowse?.deviceId ?? null) }
+              : preferenceStore } : {})}
             {...(remoteAgent && remoteAgentLocalRailItems
               ? {
                   remoteSources: {
@@ -4781,6 +4814,10 @@ export function ModelSelector({
   pluginEnginePending,
   providersOverride,
   providersOverrideState,
+  routeFilter,
+  preferenceStore,
+  showRemoteSourceLabel = false,
+  onOpenChange,
   taskSourceProvider,
   sshCodex,
   modelId: selectedModelId,
@@ -4894,8 +4931,9 @@ export function ModelSelector({
         resetDiscoveryPresentation();
       }
       setOpen(next);
+      onOpenChange?.(next);
     },
-    [discovery, resetDiscoveryPresentation],
+    [discovery, resetDiscoveryPresentation, onOpenChange],
   );
   const handleOpenChange = useCallback(
     (next: boolean): void => {
@@ -4917,9 +4955,10 @@ export function ModelSelector({
         resetDiscoveryPresentation();
       }
       setOpen(nextOpen);
+      if (nextOpen !== wasOpen) onOpenChange?.(nextOpen);
     },
     [deviceId, disabled, discovery, resetDiscoveryPresentation, providersOverride, providersOverrideState, sshCodexRefresh,
-      pluginEngineSessionActive],
+      pluginEngineSessionActive, onOpenChange],
   );
 
   const consumedOpenRequest = useRef(0);
@@ -5073,7 +5112,7 @@ export function ModelSelector({
   // 只限新建草稿(!actualRoute):已建会话的模型身份由目标目录决定,目标目录里没有这个
   // 模型时不能用本机同名模型的名字顶替 —— 路由与候选仍指向远端目标,名字却来自本机,
   // 会显示成一个「看着正常但其实不对」的模型。
-  const localFallbackName = !actualRoute && deviceId && remoteModelListStatus === 'ready' && agentKind
+  const localFallbackName = !routeFilter && !actualRoute && deviceId && remoteModelListStatus === 'ready' && agentKind
     ? localProviders.providers
         .map((provider) => findCatalogModel(provider, modelId, agentKind, { exact: true })?.name)
         .find((name) => name !== undefined)
@@ -5102,7 +5141,7 @@ export function ModelSelector({
   // must not expose internal wire IDs when no display metadata is available.
   // unknown label 空串/全空白按缺省处理(否则 ?? 不回落,trigger 渲染成空白)。
   const unknownLabel = modelId && unknownModelLabel ? unknownModelLabel(modelId).trim() : '';
-  const displayLabel = fallbackOption?.active
+  const modelDisplayLabel = fallbackOption?.active
     ? fallbackOption.label
     : (localizedName ??
       (remoteModelLoading ? t('newChat.modelSelector.remoteLoading') : null) ??
@@ -5115,6 +5154,9 @@ export function ModelSelector({
             ? 'newChat.modelSelector.trigger.loading'
             : 'newChat.modelSelector.trigger.unresolved')
         : t('newChat.modelSelector.trigger.placeholder')));
+  const displayLabel = showRemoteSourceLabel && agentDevice && !fallbackOption?.active
+    ? [modelDisplayLabel, agentDevice.name ?? agentDevice.deviceId, displayProvider?.name ?? currentProviderId].filter(Boolean).join(' · ')
+    : modelDisplayLabel;
   const agentName =
     agentIdentity && !fallbackOption?.active
       ? agentIdentity.vendorKey === 'cc'
@@ -6031,6 +6073,8 @@ export function ModelSelector({
       fastModeConfigurable={fastModeConfigurable}
       providersOverride={providersOverride}
       providersOverrideState={providersOverrideState}
+      routeFilter={routeFilter}
+      preferenceStore={preferenceStore}
       {...(taskSourceProvider ? { taskSourceProvider } : {})}
       sshCodex={sshCodex}
       unifiedPanel={unifiedPanel}

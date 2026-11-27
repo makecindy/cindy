@@ -1987,6 +1987,7 @@ it('an open plugin selection without a source session follows the auxiliary chai
       resolveSessionExecution: resolver, PluginTaskError, routeUnavailable: () => { throw Error('unavailable'); },
       getEffectiveAuxiliaryModelRefs: () => ['chain'], getEffectiveAuxiliaryModelChainSnapshot: () => 'chain',
       auxiliaryChainSessionCandidates: () => candidates, pluginTaskRouteAttempts, pluginTaskSelectionIsOpen,
+      isRemoteAuxiliaryModelRef: () => false,
       resolveLightestPluginTaskFallback, reportPluginTaskAuxiliaryFallback: reportFallback,
       savedPluginTaskRemoteRoute, readPluginRouteProviders: async () => [],
       readRemotePluginEngines: async () => [],
@@ -2121,6 +2122,7 @@ it.each([
     // No auxiliary chain configured in this scenario: the new-task selection stays the inherited default.
     getEffectiveAuxiliaryModelRefs: () => [], getEffectiveAuxiliaryModelChainSnapshot: () => '',
     auxiliaryChainSessionCandidates: () => [], pluginTaskRouteAttempts, pluginTaskSelectionIsOpen, savedPluginTaskRemoteRoute,
+    isRemoteAuxiliaryModelRef: () => false,
     readRemotePluginEngines: async () => [],
     admitLocalPluginEngineTaskRoute: (sel: Record<string, unknown>) => ({
       agentKind: 'acp' as const,

@@ -39,6 +39,9 @@ vi.mock('@/lib/toast', () => ({
   toast: { error: h.toastError },
 }));
 
+vi.mock('../useRemoteAuxiliaryRoutes', () => ({
+  useRemoteAuxiliaryRoutes: () => ({ devices: [], statuses: [], allows: () => false, encode: () => null }),
+}));
 vi.mock('react-router-dom', () => ({ useNavigate: () => h.navigate }));
 
 vi.mock('@/contexts/AuthContext', () => ({
