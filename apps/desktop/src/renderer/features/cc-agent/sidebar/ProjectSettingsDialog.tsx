@@ -47,6 +47,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { Input } from '@/components/ui/input';
+import { SearchInput } from '@/components/ui/search-input';
 import { FormField } from '@/components/ui/form-field';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { useProjectInfo } from '../hooks/useProjectInfo';
@@ -780,7 +781,7 @@ export function ProjectSettingsDialog({
                   )}
                   {mode === 'symbols' ? (
                     <>
-                      <Input
+                      <SearchInput
                         value={query}
                         onChange={setQuery}
                         placeholder={label('search')}

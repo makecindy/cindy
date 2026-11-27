@@ -1,5 +1,10 @@
 import { base64DecodedByteLength, isLooseBase64Chars, parseBase64DataUrl } from './dataUrl.js';
-import { piEditReplacements } from './toolUseDescriptor.js';
+import {
+  describeToolUse,
+  formatCollabTargetsSummary,
+  piEditReplacements,
+  truncateToolText,
+} from './toolUseDescriptor.js';
 import { presentationText, type PresentationLocalizer } from './presentationLocalization.js';
 
 export type PayloadKind = 'text' | 'diff' | 'media' | 'mermaid' | 'file';
@@ -212,6 +217,15 @@ export function buildDiffPayload<Diff extends PayloadToolDiffLike>(
 }
 
 export function formatPayloadToolUseSummary(toolName: string, input: unknown): string {
+  if (toolName.startsWith('collab:')) {
+    const descriptor = describeToolUse(toolName, input);
+    if (descriptor.kind === 'collab') {
+      if (descriptor.prompt) return truncateToolText(descriptor.prompt, 120);
+      const targets = formatCollabTargetsSummary(descriptor.targets, descriptor.targetCount, 4);
+      if (targets) return targets;
+      return '';
+    }
+  }
   const inp = readPayloadRecord(input);
   if (!inp) return `${toolName}()`;
   const keyParamMap: Record<string, string[]> = {

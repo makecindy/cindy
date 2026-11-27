@@ -97,7 +97,7 @@ JS 参数协议来适配另一版本原生依赖。此检查不修改 App 配置
 Xcode 27 构建的 App 在 iOS 27 上必须采用 UIScene 生命周期。SDK 58 默认由 prebuild
 生成主 App 的 Scene manifest 和工厂入口，不再使用 SDK 57 的
 `expo-build-properties.ios.enableSceneSupport` 回移开关。不要只改忽略目录里的 AppDelegate。
-升级原生依赖会改变 runtime fingerprint，必须按下文冷更边界审核；链接唤起、前后台切换
+升级原生依赖会改变 runtime fingerprint，按[下文冷更边界](#原生配置与-runtime-fingerprint冷更边界)说明影响平台与旧包兼容；链接唤起、前后台切换
 与页面显示须单独验证。
 
 ```bash
@@ -191,6 +191,10 @@ iOS 18 起同一活动另外声明 `.small` 尺寸，配对的 Apple Watch（wat
 显示绿色 `1` 与橙色 `5`，只有未读结果时也显示数量。左侧数量由既有总数减运行数得到，兼容旧活动数据。
 生成物随原生 Asset Catalog 编译，不另画手机角色。桌面角色或颜色更新后重跑导出并提交生成物；加 `--check`
 可在任意平台核验角色选择、源文件与生成物的哈希。手机固定使用 Cindy，不同步电脑的个性化皮肤选择。
+前台摘要带有伙伴身份时（所选任务属于伙伴且等你处理或有新回复，见
+[任务汇总与 ActivityKit Push](protocol-compatibility/task-activity-summary-activitykit-push.md)），收起、最小、展开、
+锁屏与手表视图把角色换成伙伴头像（图片或底色加 emoji／首字，色板与 macOS 实时活动一致），并始终带状态色圆点；
+运行中、缺少伙伴身份或 APNs 更新的内容仍显示 Cindy；系统按锁屏隐私遮盖敏感内容（`redactionReasons` 含 `.privacy`）时同样回退 Cindy，与标题的 `privacySensitive()` 同一边界。
 Android 与没有此模块的旧安装包不调用 ActivityKit。
 
 推送权限与实时活动权限分开：ActivityKit 读取系统 `areActivitiesEnabled`，不读取普通通知
@@ -289,7 +293,7 @@ PostgreSQL 的多电脑、版本、设备移除和活动 start/update/end 集成
 推送验收：后台／冷启动、跨端已读与真实 APNs 仍需在部署后的签名安装包上核验。
 新增原生模块与扩展源码需要新 iOS 安装包，不能只发 OTA。共享 config plugin 的变更也会
 改变 Android 指纹（虽然没有新增 Android 功能），应随计划内双端原生发版交付；两端存量
-安装均需升级对应原生包才能继续接收新指纹的 OTA，PR 须按冷更边界写明原因、影响与发版节奏。
+安装均需升级对应原生包才能继续接收新指纹的 OTA，PR 按冷更边界说明影响平台与旧包兼容。
 原生验收需检查紧凑／展开／锁屏、浅深模式、点击任务定位、账号切换、后台到期（画面不变，
 随后被结束）和关闭实时活动。
 手表智能叠放需另用配对的 Apple Watch 真机（或已安装 watchOS runtime 的配对模拟器）检查运行中、
@@ -446,8 +450,8 @@ iOS 的系统选图器在确认后立即把选中项交给现有附件队列。�
 实现：`modules/cindy-photo-picker/`、`src/session/deferredPhotoLibrary.ts` 与
 `useMobileLocalAttachments.ts`；回归：`deferredPhotoLibrary.test.ts`、
 `useMobileLocalAttachmentsAbandon.test.tsx`。新增原生模块需要冷更，不能作为旧安装包的 OTA
-独立交付；旧原生包缺模块时继续使用 Expo 选图入口。首次发布应随下一次 iOS 原生包交付，
-指纹与存量装机影响仍须按下文冷更边界在 PR 中写明。Android 保持系统选图器和既有附件队列。
+独立交付；旧原生包缺模块时继续使用 Expo 选图入口。首次发布须随 iOS 原生包交付，
+PR 按下文冷更边界说明影响平台与旧包兼容。Android 保持系统选图器和既有附件队列。
 
 ### 相册照片与视频附件
 
@@ -461,7 +465,7 @@ iOS 的 `CindyPhotoPicker.pickMedia` 在选择后立即把图片占位与视频�
 此回退在选择器内等原件就绪；新原生包保留延迟读取体验。原有 `pick` 方法继续提供照片选择合同，
 拍照仍仅拍照片，「文件」继续接收视频，不新增录像或专用视频编辑器。
 扩展原生模块会改变 iOS fingerprint，需随原生包发布，不能作为旧安装包的独立 OTA 交付；
-PR 须按冷更边界写明原因、影响与发版节奏。Android 使用现有 Expo 系统混合选择器，无原生改动。
+PR 按冷更边界说明影响平台与旧包兼容。Android 使用现有 Expo 系统混合选择器，无原生改动。
 
 实现：`modules/cindy-photo-picker/`、`deferredPhotoLibrary.ts`、`useMobileLocalAttachments.ts`；
 回归：`deferredPhotoLibrary.test.ts`、`useMobileLocalAttachmentsAbandon.test.tsx`。
@@ -699,7 +703,7 @@ L2、R2 或 Start 被选为语音键时，优先保留语音操作，不同时�
 
 实现：`modules/cindy-handheld/`、`src/handheld/` 和 `app/settings/handheld.tsx`；
 偏好与跨页按住交接回归：`src/__tests__/handheldMode.test.ts`。Android 窗口按键拦截和换屏
-必须随新原生包交付，仍受下文冷更审核门约束。
+必须随新原生包交付，按[下文冷更边界](#原生配置与-runtime-fingerprint冷更边界)说明影响平台与旧包兼容。
 组合键与 Start 同样需要原生窗口输入拦截，无法仅通过 JS OTA 增加；应随计划内新原生包
 交付，存量安装升级新包前仍保留原操作与旧指纹更新轨道。两端实际影响以本次指纹比对为准。
 
@@ -732,7 +736,7 @@ Xcode 自动签名会以 entitlement 无法写入 profile 拒绝构建。
 系统超时都回退原通知，且只交付一次。头像不发起网络请求、不读取用户账号存储。
 Swift 源码和打包头像显式进入 fingerprint。首次发布需要原生新包和重新生成的签名配置；
 服务端须先支持可选发送者透传和 `aps.mutable-content = 1`，未升级双方保持普通推送。
-这不是 OTA 可独立交付的功能，仍受下述冷更审核门约束。
+这不是 OTA 可独立交付的功能，需随原生新包交付（见下文冷更边界）。
 
 ### 通知按钮与后台作答
 
@@ -806,8 +810,8 @@ Android 的 `TaskBadgeDelivery` 在已有 FCM receiver 中消费 data-only `task
 只保存账号标识、版本和数字，不落盘令牌或任务内容；0 值不顺带清除群聊通知。
 启动器及系统权限决定显示数字、圆点或不支持；FCM 不可用的设备仍只能在前台核对。
 
-Android 原生接收器修改需要新安装包，旧包不能靠 OTA 获得后台处理能力；此 PR 必须按
-冷更规则确认，并与配套服务端部署协调。实现与上线分开核验：需真实 APNs／FCM、杀进程、
+Android 原生接收器修改需要新安装包，旧包不能靠 OTA 获得后台处理能力；按冷更边界
+说明影响平台与旧包兼容，并与配套服务端部署协调。实现与上线分开核验：需真实 APNs／FCM、杀进程、
 跨电脑已读和关闭通知测试。纯 Kotlin 回归入口 `scripts/test-task-badge-android.mjs`
 通过 `CINDY_BADGE_TEST_KOTLINC`、`CINDY_BADGE_TEST_JDK_HOME`、`CINDY_BADGE_TEST_JSON_JAR`
 指定本机工具链，验证真实生产接收器的账号、版本、不完整数据、零值与退出行为。
@@ -920,29 +924,36 @@ SharedPreferences `cindy-usage-widgets`。「订阅余量」的设置页另有�
 `when_to_start_glanceable_hub` 先设 0 再设 2；SystemUI 的 `keyguardState` 变为 `GLANCEABLE_HUB` 即已进入，不要再按电源键。
 点组件后进入 `PRIMARY_BOUNCER`（解锁界面截图为黑屏），输入 PIN 后 App 到前台。模拟器重启后运行时覆盖会失效，需重新启用。
 
-Mobile 用 `runtimeVersion.policy: "fingerprint"`:OTA 热更只在**指纹一致**的装机上生效,
-指纹一旦变化就必须**冷更出包**(新商店包 / 自建重装),存量装机拿不到该次热更。
+Mobile 用 `runtimeVersion.policy: "fingerprint"`：OTA 热更只在**指纹一致**的装机上生效，
+指纹变化后需要随新原生包交付（新商店包 / 自建整包更新），未更新原生包的存量装机暂时停留在
+旧指纹轨道，直到装上新包。
 
-### 硬性规则:除非必要,不得提交会改变指纹的改动
+### 原则：鼓励为更好体验做原生更新，只拦意外冷更并守住旧包兼容
 
-触发冷更的代价由全体存量用户承担——他们拿不到本次及后续热更,直到装上新包。性质上这与
-技术框架变动同级,因此:
+（2026-11-27 放宽，取代旧版「除非必要不得改动指纹」「与技术框架变动同级」口径。）
+原生更新是持续提升手机体验的正常路径，不把冷更当作需要极力回避的例外：
 
-- 只为实现 JS / UI 需求时,不得顺手改动指纹输入。同样效果能用不动指纹的写法达成时,必须
-  选不动指纹的写法。已知踩点与既有规避写法:调试信息走 `EXPO_PUBLIC_*` 进 JS bundle,不写进
-  `app.config.js` 的 `extra`;新增开发脚本放仓库根 `package.json`,不放
-  `apps/mobile/package.json`(后者的 `scripts` 是指纹输入,见
-  [`simulator-debugging.md`](../../apps/mobile/docs/simulator-debugging.md))。
-- 确实必须冷更时(升原生依赖、改 config plugin / 原生模块、动 production 段 `app.json` /
-  `eas.json`),PR Description 必须写明三件事:为什么冷更不可避免、存量装机影响范围、发版
-  节奏建议。
-- **审查标准:会触发冷更的 PR 按普通流程审查与合并,不需要指定把关人另外确认。** 审查时
-  逐条核对:是否确实必须冷更(同样效果能用不动指纹的写法达成时,要求改写),PR Description
-  是否写全上面三件事。冷更 PR 可以保持 Ready 并正常进入自动审查,不因冷更要求新建讨论
-  issue 或转为 draft。若同时命中其他独立的讨论、草稿或确认门禁,仍按对应规则处理。
-- 提交前自查：按下方[指纹前后对比](#指纹前后对比)使用同一个干净检出，在改动前后各跑一次
+- **鼓励以体验为先采用原生方案**：只要改动能够带来明确的用户体验收益（更好的系统原生控件、
+  动效与手势、系统能力集成、性能或稳定性提升、原生缺陷修复、依赖升级等），**鼓励直接采用
+  原生实现并正常触发冷更**；不要为了避免改动指纹而改用体验更差的 JS 模仿或删减体验。
+- **禁止无意/无收益地顺手污染指纹**：只做纯 JS / UI 改动、且没有体验差异时，不得因工程
+  疏忽顺手改动指纹输入。已知踩点与既有规避写法：调试信息走 `EXPO_PUBLIC_*` 进 JS bundle，
+  不写进 `app.config.js` 的 `extra`；新增开发脚本放仓库根 `package.json`，不放
+  `apps/mobile/package.json`（后者的 `scripts` 是指纹输入，见
+  [`simulator-debugging.md`](../../apps/mobile/docs/simulator-debugging.md)）。
+- **必须保证旧原生包兼容（硬底线）**：新增或修改原生模块、原生方法、原生配置或扩展能力时，
+  JS 侧必须做好能力探测与平滑降级（旧包缺模块或方法时不崩溃、原有功能照常可用，升到新原生
+  包后自动获得新体验），不得让尚未升级整包的存量用户出错。
+- **PR 说明与审查标准**：会触发冷更的 PR 按普通流程审查与合并，可保持 Ready 并正常进入自动
+  审查，不需要指定把关人另外确认，也不因冷更要求新建讨论 issue 或转为 draft。PR Description
+  只需简明写清两件事：① 影响哪些平台（iOS / Android）以及带来的体验或能力变化（确认是有意
+  的原生改动，而非误碰指纹）；② 未升级旧原生包的表现与降级兼容处理。不要求论证「冷更不可
+  避免」，也不要求填写发版节奏建议。审查重点核对是否无意误碰指纹输入，以及旧包兼容/降级是否
+  可靠；不以「或许能用 JS 绕过」为由否决体验更好的原生方案。若同时命中其他独立的讨论、草稿
+  或确认门禁，仍按对应规则处理。
+- **提交前自查**：按下方[指纹前后对比](#指纹前后对比)使用同一个干净检出，在改动前后各跑一次
   `node apps/mobile/scripts/ci-fingerprint.mjs compute --output <file>` 并比对 hash。PR 上
-  出现 fingerprint guard 的 sticky comment 时,以它给出的 base(main) vs 合并结果对比为准。
+  出现 fingerprint guard 的 sticky comment 时，以它给出的 base(main) vs 合并结果对比为准。
 
 ### 指纹前后对比
 
@@ -1072,8 +1083,8 @@ Android 后台连接默认「自动」：中国大陆账号、设备地区 CN、
 发行到 Play 前须完成对应前台服务用途申报。Doze、厂商电池策略和强行停止可能中断连接；FCM 也需要 Google
 服务及有效项目配置，不能承诺所有设备强杀后送达。
 
-本次 Swift 扩展、Android 原生模块和头像资源都需要新原生包，不能只发 OTA；PR 须按冷更边界写明原因、
-存量装机影响与发版节奏。上线顺序为服务端兼容接口／通道配置、各端原生包，
+本次 Swift 扩展、Android 原生模块和头像资源都需要新原生包，不能只发 OTA；PR 按冷更边界说明
+影响平台与旧包兼容。上线顺序为服务端兼容接口／通道配置、各端原生包，
 再验证 token 注册、前后台、拒绝权限、预览关闭、停止后台连接、断网重连、通知点击定位及人／伙伴头像。旧服务端没有 chat push API 时手机保留已有任务通知。
 
 普通任务直连新增 Android 原生接收器，必须随新 APK 冷更；旧包通过可选 native 方法检测继续使用原聊天接口，不能靠 OTA 获得任务直连。

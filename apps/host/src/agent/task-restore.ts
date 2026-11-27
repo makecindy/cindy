@@ -53,7 +53,7 @@ export function createHostTaskRestore(deps: { getOwner(): unknown; publish: Publ
     await database.tx('sessions.setStatus', { sessionIds: [sessionId], status: 'active' });
     if (options.publish !== false && deps.getOwner() === owner) {
       deps.publish({ type: 'session_changed', action: 'update', sessionId,
-        patch: { status: 'active', snoozedUntil: null, snoozedAt: null }, status: 'active' });
+        patch: { status: 'active', snoozedUntil: null, snoozedAt: null, archivedAt: null }, status: 'active' });
     }
   }
 

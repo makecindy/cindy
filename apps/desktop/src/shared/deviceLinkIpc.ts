@@ -270,6 +270,11 @@ export interface DeviceLinkAgentNetPeerRouteView {
   relayRttMs?: number | null;
   /** 本机对该设备的选路偏好:auto(默认,自动选最快)/ direct / relay。 */
   pathPreference?: DeviceLinkPeerPathPreference;
+  /**
+   * 对方那台设备到中转走 UDP 还是 WebSocket(对方经 Agent-Net 控制流告诉本机，2026-11-27)。经中转时拓扑图
+   * 在通往它的线上写这一段;对方是旧版、还没说时不给。
+   */
+  peerRelayVia?: 'udp' | 'websocket';
 }
 
 /** 跨账号供应商分享在 Agent-Net 上的纯内存路由快照（不触发建链、探测或发包）。 */

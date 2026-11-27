@@ -7,6 +7,22 @@
 > `apps/desktop/src/main/{remote-agent,remote-ssh}/**`、`apps/desktop/src/main/remote-desktop*/**`、
 > `apps/mobile/src/remote-desktop/**`、`apps/desktop/src/preload/preload.ts`
 
+## 被移除的设备：开着时关掉 Agent-Net，打开时先重新加入（2026-11-26）
+
+被删后重新登录的手机 Device Link 照常，但不在账号设备列表里，同账号电脑在 Agent-Net 上都拦它；它打开 Agent-Net 后把这些电脑
+当成在线、请求发出去等不到回应，一台都连不上、干等十几秒。现在手机与电脑打开 Agent-Net 连接时，若成功读到的设备列表里没有
+本机，或官方服务回 `DEVICE_REVOKED`，就不打开这条连接、这次按「被拒」走 Device Link，并把开关关掉、写明重新打开即可重新加入；
+打开开关时同样判断，是就先按「重新加入」接回来。约定与回归见
+[设备移除协议记录](protocol-compatibility/agent-net-device-removal.md)。
+
+故障半径三问：① 证据是官方服务对本机身份的明确回答（`DEVICE_REVOKED`）或一次成功读到、里面没有本机的账号设备列表，只说明
+本机被移除；读不到、超时、断网都不算，不涉及其它设备或连接；② 只关本机的 Agent-Net 开关并让本机主连接改走 Device Link（与人关掉
+开关同一条路），别的账号分享来的连接、其它对端不动；重新加入只在本机的人打开开关时发一轮请求，不重试、不轮询，远程切换不触发；
+「仅使用加密连接」时不关，不会因此改走未加密连接；③ 手机 `agentNetRuntime.test.ts`「turns Agent-Net off as removed …」按列表里没有
+自己／身份被撤销／列表读不到／在列表里／仅加密五格驱动真实 `openMobileAgentNetSocket`，电脑 `agentNetRuntime.test.ts`「reports a
+removal …」与 `selfHostedRelayRuntime.test.ts`「turns Agent-Net off with the removed note …」驱动真实主连接工厂与设置 IPC，修复前前两格
+照样打开连接、开关不变。
+
 ## 建连限流的服务端重试期限（2026-11-26，#13041）
 
 分享传输建连（`agentNetSharing.ts` 的 scoped 连接工厂申请租约）收到 429 时，`AgentNetSharingError`

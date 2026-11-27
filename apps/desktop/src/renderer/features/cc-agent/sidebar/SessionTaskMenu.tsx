@@ -67,6 +67,8 @@ interface Props {
   tags: ReactNode;
   copy: ReactNode;
   exportShare: ReactNode;
+  /** Optional top notice (e.g. out-of-window hydration loading/retry) rendered only when present. */
+  statusNotice?: ReactNode;
 }
 
 type TaskMenuDialog =
@@ -103,6 +105,7 @@ function ActiveSessionTaskMenu({
   tags,
   copy,
   exportShare,
+  statusNotice,
   dialog,
   setDialog,
 }: Props & {
@@ -248,126 +251,133 @@ function ActiveSessionTaskMenu({
         align="start"
         sideOffset={sideOffset}
         collisionPadding={TASK_MENU_COLLISION_PADDING}
-        className="max-h-[var(--radix-dropdown-menu-content-available-height)] min-w-32 overflow-y-auto"
+        className="flex max-h-[var(--radix-dropdown-menu-content-available-height)] min-w-32 flex-col"
         onClick={(event) => event.stopPropagation()}
         onCloseAutoFocus={(event) => {
           if (dialog) event.preventDefault();
         }}
       >
-        {!guest && (
-          <>
-            {!archived &&
-              !empty &&
-              item(session.pinnedAt != null ? 'unpin' : 'pin', onPin, ownerActionsBlocked)}
-            {canSnooze && (
-              <SessionSnoozeSubmenu
-                session={session}
-                action={snoozeAction}
-                onCustom={() => setDialog({ kind: 'custom-snooze' })}
-              />
-            )}
-            {item('rename', onRename, ownerActionsBlocked)}
-            {/* 提醒归任务所在的那台设备发，device-link 任务（别人的任务）在这里设不了。 */}
-            {!archived && !empty && !session.deviceLinkDeviceId && (
-              <DropdownMenuItem
-                className={MENU_ITEM_CLASS}
-                disabled={ownerActionsBlocked}
-                onSelect={() => {
-                  void setSessionNotificationsMuted(
-                    session,
-                    session.notificationsMuted !== true,
-                  ).catch(() => toast.error(t('ccAgent.sidebar.muteNotificationsFailed')));
-                }}
-              >
-                {t(
-                  session.notificationsMuted
-                    ? 'ccAgent.sidebar.sessionMenu.unmuteNotifications'
-                    : 'ccAgent.sidebar.sessionMenu.muteNotifications',
-                )}
-              </DropdownMenuItem>
-            )}
-            {tags}
-            {showRuntimePlugins && <DropdownMenuItem className={MENU_ITEM_CLASS}
-              disabled={ownerActionsBlocked} onSelect={() => setDialog({ kind: 'runtime-plugins' })}>
-              {t('runtimePlugins.title')}
-            </DropdownMenuItem>}
-            {separator}
-          </>
-        )}
-        {copy}
-        {session.status === 'active' &&
-          (hosted && !guest ? (
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger className={MENU_ROW_CLASS}>
-                <span className="flex-1">{t('sharedTask.manageSharing')}</span>
-                <ChevronRight
-                  size={14}
-                  className="ml-2 shrink-0 text-[var(--cmd-palette-item-meta)]"
-                  aria-hidden
+        <div className="min-h-0 overflow-y-auto" data-task-menu-scroll>
+          {statusNotice}
+          {!guest && (
+            <>
+              {!archived &&
+                !empty &&
+                item(session.pinnedAt != null ? 'unpin' : 'pin', onPin, ownerActionsBlocked)}
+              {canSnooze && (
+                <SessionSnoozeSubmenu
+                  session={session}
+                  action={snoozeAction}
+                  onCustom={() => setDialog({ kind: 'custom-snooze' })}
                 />
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent
-                sideOffset={4}
-                className="min-w-40"
-              >
+              )}
+              {item('rename', onRename, ownerActionsBlocked)}
+              {/* 提醒归任务所在的那台设备发，device-link 任务（别人的任务）在这里设不了。 */}
+              {!archived && !empty && !session.deviceLinkDeviceId && (
                 <DropdownMenuItem
                   className={MENU_ITEM_CLASS}
-                  disabled={copying || writeBlocked}
-                  onSelect={(event) => {
-                    event.preventDefault();
-                    void copyInvitation();
+                  disabled={ownerActionsBlocked}
+                  onSelect={() => {
+                    void setSessionNotificationsMuted(
+                      session,
+                      session.notificationsMuted !== true,
+                    ).catch(() => toast.error(t('ccAgent.sidebar.muteNotificationsFailed')));
                   }}
                 >
-                  {t('sharedTask.invite')}
+                  {t(
+                    session.notificationsMuted
+                      ? 'ccAgent.sidebar.sessionMenu.unmuteNotifications'
+                      : 'ccAgent.sidebar.sessionMenu.muteNotifications',
+                  )}
                 </DropdownMenuItem>
-                <DropdownMenuItem
-                  className={MENU_ITEM_CLASS}
-                  disabled={copying}
-                  onSelect={() => setDialog({ kind: 'manage' })}
+              )}
+              {tags}
+              {showRuntimePlugins && <DropdownMenuItem className={MENU_ITEM_CLASS}
+                disabled={ownerActionsBlocked} onSelect={() => setDialog({ kind: 'runtime-plugins' })}>
+                {t('runtimePlugins.title')}
+              </DropdownMenuItem>}
+              {separator}
+            </>
+          )}
+          {copy}
+          {session.status === 'active' &&
+            (hosted && !guest ? (
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger className={MENU_ROW_CLASS}>
+                  <span className="flex-1">{t('sharedTask.manageSharing')}</span>
+                  <ChevronRight
+                    size={14}
+                    className="ml-2 shrink-0 text-[var(--cmd-palette-item-meta)]"
+                    aria-hidden
+                  />
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent
+                  sideOffset={4}
+                  className="min-w-40"
                 >
-                  {t('sharedTask.manageMembers')}
-                </DropdownMenuItem>
-                {separator}
-                <DropdownMenuItem
-                  className={MENU_ITEM_CLASS}
-                  disabled={copying}
-                  onSelect={openSharing}
-                >
-                  {t('sharedTask.cancelSharing')}
-                </DropdownMenuItem>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-          ) : (
-            <DropdownMenuItem className={MENU_ITEM_CLASS} onSelect={openSharing}>
-              {t(guest ? 'sharedTask.leaveShort' : 'sharedTask.title')}
-            </DropdownMenuItem>
-          ))}
+                  <DropdownMenuItem
+                    className={MENU_ITEM_CLASS}
+                    disabled={copying || writeBlocked}
+                    onSelect={(event) => {
+                      event.preventDefault();
+                      void copyInvitation();
+                    }}
+                  >
+                    {t('sharedTask.invite')}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    className={MENU_ITEM_CLASS}
+                    disabled={copying}
+                    onSelect={() => setDialog({ kind: 'manage' })}
+                  >
+                    {t('sharedTask.manageMembers')}
+                  </DropdownMenuItem>
+                  {separator}
+                  <DropdownMenuItem
+                    className={MENU_ITEM_CLASS}
+                    disabled={copying}
+                    onSelect={openSharing}
+                  >
+                    {t('sharedTask.cancelSharing')}
+                  </DropdownMenuItem>
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+            ) : (
+              <DropdownMenuItem className={MENU_ITEM_CLASS} onSelect={openSharing}>
+                {t(guest ? 'sharedTask.leaveShort' : 'sharedTask.title')}
+              </DropdownMenuItem>
+            ))}
+          {!guest && (
+            <>
+              {!archived && !empty && !session.remoteHostId && (
+                <TaskMoveSubmenu
+                  session={session}
+                  disabled={ownerActionsBlocked}
+                  localProjects={move}
+                  onMigration={(destination) => setDialog({ kind: 'migration', destination })}
+                  onBrowseRemote={() => setDialog({ kind: 'browse-project' })}
+                />
+              )}
+              {exportShare}
+              {!archived && !empty && (
+                <>
+                  {separator}
+                  {item('openInNewWindow', onOpenInNewWindow, ownerActionsBlocked)}
+                </>
+              )}
+              {pluginActions.length > 0 && <PluginUiSessionMenuItems sessionId={session.id}
+                disabled={ownerActionsBlocked || archived} className={MENU_ITEM_CLASS} />}
+            </>
+          )}
+        </div>
         {!guest && (
-          <>
-            {!archived && !empty && !session.remoteHostId && (
-              <TaskMoveSubmenu
-                session={session}
-                disabled={ownerActionsBlocked}
-                localProjects={move}
-                onMigration={(destination) => setDialog({ kind: 'migration', destination })}
-                onBrowseRemote={() => setDialog({ kind: 'browse-project' })}
-              />
-            )}
-            {exportShare}
-            {!archived && !empty && (
-              <>
-                {separator}
-                {item('openInNewWindow', onOpenInNewWindow, ownerActionsBlocked)}
-              </>
-            )}
-            {pluginActions.length > 0 && <PluginUiSessionMenuItems sessionId={session.id}
-              disabled={ownerActionsBlocked || archived} className={MENU_ITEM_CLASS} />}
+          <div className="shrink-0" data-task-menu-footer>
             {separator}
             {archived
               ? item('unarchive', onUnarchive, ownerActionsBlocked)
               : !empty && item('archived', onArchive, ownerActionsBlocked)}
             {item('delete', onDelete, ownerActionsBlocked)}
-          </>
+          </div>
         )}
       </DropdownMenuContent>
       {canSnooze && dialog?.kind === 'custom-snooze' && (

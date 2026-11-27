@@ -37,7 +37,7 @@ const DESCRIPTION = [
   '【过滤参数】所有参数可任意组合, 不传 = 不过滤:',
   '  - workdir: 精确匹配 sessions.workingDir',
   '  - from / to: ISO 8601 时间窗 (from 含, to 不含), 按 time_field 过滤（默认创建时间，activity 为最近活动）',
-  '  - agent_kind: cc(Claude Code) | codex | pi',
+  '  - agent_kind: cc(Claude Code) | codex | pi | acp(插件引擎)',
   '  - include_deleted: 默认 false (排除 status=deleted)',
   '',
   'pinned 表示侧栏置顶状态。旧版远程电脑省略该字段时可查 get_task_digest。',
@@ -82,7 +82,7 @@ export function registerListSessionsTool(
         .optional()
         .describe('ISO 8601 时间字符串(不含), 过滤所选 time_field < to。'),
       agent_kind: z
-        .enum(['cc', 'codex', 'pi'])
+        .enum(['cc', 'codex', 'pi', 'acp'])
         .optional()
         .describe('过滤 agent 类型, 不传 = 全部返回。'),
       include_deleted: z

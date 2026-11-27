@@ -704,6 +704,175 @@ describe('Chat Server group open latency (simulated 100ms per request)', () => {
     expect(read.value.ok && read.value.group.messages[0].attachments.map(item => item.id)).toEqual(ids);
   });
 
+  it('pushes incremental attachment updates, backs off from 2s, and supports manual retryAttachment', async () => {
+    const mediaId = '60000000-0000-4000-8000-000000000399';
+    const ready = { id: mediaId, name: 'clip.png', category: 'image' as const, mimeType: 'image/png', size: 4, url: 'cindy-media://blobs/clip.png', path: null };
+    fixture.page = [{ ...message, content: [{ type: 'media', mediaId, caption: 'clip.png' }] }];
+    fixture.download
+      .mockRejectedValueOnce(new Error('OBJECT_STORE_UNAVAILABLE'))
+      .mockResolvedValueOnce(ready);
+    await timed(() => service.getGroup(rooms[0]));
+    onChanged.mockClear();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(onChanged).toHaveBeenCalledWith(expect.objectContaining({
+      groupId: rooms[0],
+      change: 'attachments',
+      attachments: [expect.objectContaining({ id: mediaId, state: 'unavailable' })],
+    }), undefined);
+    // Manual retry bypasses the 2s backoff immediately, flips state to loading, then delivers ready.
+    onChanged.mockClear();
+    const retried = await timed(() => service.chatServer!.manage({
+      groupId: rooms[0],
+      action: { type: 'retryAttachment', mediaId, name: 'clip.png' },
+    }));
+    expect(retried.value.ok).toBe(true);
+    expect(fixture.download).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(300);
+    const pushes = onChanged.mock.calls.map(([payload]) => payload).filter(p => p.groupId === rooms[0]);
+    expect(pushes[0]).toMatchObject({ change: 'attachments', attachments: [expect.objectContaining({ id: mediaId, state: 'loading' })] });
+    expect(pushes.at(-1)).toMatchObject({ change: 'attachments', attachments: [ready] });
+  });
+
+  it('overlaps media prefetch and execution-failures with /executions when history page is cached', async () => {
+    const disk = new Map<string, ChatHistoryState>();
+    const store: ChatHistoryStore = { read: async key => structuredClone(disk.get(key)), write: async (key, state) => {
+      if (state) disk.set(key, structuredClone(state)); else disk.delete(key);
+    } };
+    service.dispose();
+    service = withChatServer(local as unknown as BotGroupChatService,
+      { onChanged, chatHistoryStore: () => store } as unknown as BotGroupChatServiceDeps);
+    const mediaId = '60000000-0000-4000-8000-000000000398';
+    const imageAttachment = { id: mediaId, name: 'fast.png', category: 'image' as const, mimeType: 'image/png', size: 4, url: 'cindy-media://blobs/fast.png', path: null };
+    fixture.page = [{ ...message, content: [{ type: 'media', mediaId, caption: 'fast.png' }] }];
+    fixture.download.mockResolvedValue(imageAttachment);
+    fixture.handle.mockImplementation(route => route.startsWith('/changes?')
+      ? { body: { cursor: '57', changes: [], hasMore: false } } : response(route));
+    await timed(() => service.getGroup(rooms[0]));
+    // Re-open after cache settles with slow /executions (400ms) and fast /execution-failures (100ms).
+    let downloadStartedWhileExecutionsInFlight = false;
+    let executionsFinished = false;
+    fixture.cacheGeneration++;
+    fixture.download.mockImplementation(() => {
+      if (!executionsFinished) downloadStartedWhileExecutionsInFlight = true;
+      return Promise.resolve(imageAttachment);
+    });
+    fixture.timing = route => route.endsWith('/executions') ? { serve: 400, deliver: 400 } : { serve: 100, deliver: 100 };
+    fixture.handle.mockImplementation(route => {
+      if (route.endsWith('/executions')) executionsFinished = true;
+      return route.startsWith('/changes?') ? { body: { cursor: '57', changes: [], hasMore: false } } : response(route);
+    });
+    const reopen = await timed(() => service.getGroup(rooms[0]));
+    expect(reopen.value.ok).toBe(true);
+    expect(downloadStartedWhileExecutionsInFlight).toBe(true);
+    // Cached page: execution-failures overlapped /executions (400ms) + /plans (100ms) = 500ms instead of 600ms.
+    expect(reopen.ms).toBeLessThanOrEqual(500);
+  });
+
+  it('recovers legacy execution failures after /executions 429 cooldown even when /execution-failures 404s first', async () => {
+    await warm();
+    let executionsAttempt = 0;
+    const legacyFailure = {
+      id: 'exec-legacy-1',
+      epoch: 1,
+      status: 'failed',
+      source_message_id: message.id,
+      bot_id: 'actor-mimi',
+      failure_code: 'MODEL_UNAVAILABLE',
+      failure_reason: 'temporary failure',
+      updated_at: '2026-04-01T00:01:00.000Z',
+    };
+    fixture.timing = route => route.endsWith('/executions') ? { serve: 200, deliver: 200 } : { serve: 50, deliver: 50 };
+    fixture.handle.mockImplementation(route => {
+      if (route.includes('/execution-failures')) return { status: 404, body: { error: { code: 'NOT_FOUND' } } };
+      if (route.endsWith('/executions')) {
+        executionsAttempt += 1;
+        if (executionsAttempt === 1) return { status: 429, headers: { 'retry-after': '1' }, body: { error: { code: 'RATE_LIMITED' } } };
+        return { body: [legacyFailure] };
+      }
+      return response(route);
+    });
+
+    const rateLimited = await timed(() => service.getGroup(rooms[0]));
+    expect(rateLimited.value.ok).toBe(true);
+    if (!rateLimited.value.ok) throw new Error('expected ok');
+    expect(rateLimited.value.group.executionFailures).toEqual([]);
+    expect(rateLimited.value.group.metadataRetryAt).toBeGreaterThan(Date.now());
+
+    // After the rate-limit cooldown expires, the re-read must recover the legacy failure (not reuse cached []).
+    await vi.advanceTimersByTimeAsync(Math.max(0, (rateLimited.value.group.metadataRetryAt ?? 0) - Date.now()) + 100);
+    const recovered = await timed(() => service.getGroup(rooms[0]));
+    expect(recovered.value.ok).toBe(true);
+    if (!recovered.value.ok) throw new Error('expected ok');
+    expect(recovered.value.group.executionFailures).toHaveLength(1);
+    expect(recovered.value.group.executionFailures?.[0]).toMatchObject({
+      executionId: 'exec-legacy-1',
+      sourceMessageId: message.id,
+    });
+  });
+
+  it('retries idempotent GET once on transient ECONNRESET but never auto-retries POST', async () => {
+    await warm();
+    let getFailures = 1;
+    let postCalls = 0;
+    fixture.handle.mockImplementation((route, method) => {
+      if (method === 'GET' && route.endsWith('/executions') && getFailures > 0) {
+        getFailures -= 1;
+        return Promise.reject(Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }));
+      }
+      if (method === 'POST' && route.endsWith('/messages')) {
+        postCalls += 1;
+        return Promise.reject(Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }));
+      }
+      return response(route);
+    });
+    const opened = await timed(() => service.getGroup(rooms[0]));
+    expect(opened.value.ok).toBe(true);
+    expect(getFailures).toBe(0);
+    const sent = await timed(() => service.sendMessage({ groupId: rooms[0], text: 'no-retry', clientId: 'post-reset-1', mentions: { all: false, botIds: [] } }));
+    expect(sent.value.ok).toBe(false);
+    expect(postCalls).toBe(1);
+  });
+
+  it('auto-retries an image interrupted by cache cleanup without another getGroup read, and falls back to unavailable once bounded retries exhaust', async () => {
+    const mediaId = '60000000-0000-4000-8000-000000000299';
+    const staleImage = { id: mediaId, name: 'photo.png', category: 'image', path: null, url: `cindy-media://blobs/${'c'.repeat(64)}.png` };
+    const freshImage = { id: mediaId, name: 'photo.png', category: 'image', path: null, url: `cindy-media://blobs/${'d'.repeat(64)}.png` };
+    let resolveFirst!: (value: typeof staleImage) => void;
+    fixture.download
+      .mockImplementationOnce(() => new Promise(resolve => { resolveFirst = resolve; }))
+      .mockResolvedValueOnce(freshImage);
+    fixture.page = [{ ...message, content: [{ type: 'media', mediaId }] }];
+    const pushed: Array<{ change?: string; attachments?: Array<{ id: string; url: string | null; state?: string }> }> = [];
+    onChanged.mockImplementation((payload: { groupId: string; change?: string; attachments?: Array<{ id: string; url: string | null; state?: string }> }) => {
+      if (payload.groupId === rooms[0]) pushed.push(payload);
+    });
+
+    const first = await timed(() => service.getGroup(rooms[0]));
+    expect(first.value.ok && first.value.group.messages[0].attachments[0].state).toBe('loading');
+    // Cleanup invalidates the in-flight image before it settles; no second getGroup() is called.
+    fixture.cacheGeneration++;
+    resolveFirst(staleImage);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(fixture.download).toHaveBeenCalledTimes(2);
+    const settledPush = pushed.findLast(item => item.change === 'attachments');
+    expect(settledPush?.attachments?.[0]).toMatchObject({ id: mediaId, url: freshImage.url });
+
+    // When cleanups repeatedly interrupt all bounded retries, the UI receives `unavailable` (retryable) instead of stuck `loading`.
+    const exhaustedId = '60000000-0000-4000-8000-000000000300';
+    fixture.page = [{ ...message, content: [{ type: 'media', mediaId: exhaustedId }] }];
+    fixture.download.mockImplementation(() => {
+      fixture.cacheGeneration++;
+      return Promise.reject(new Error('REMOTE_MEDIA_CACHE_CLEARED'));
+    });
+    pushed.length = 0;
+    await timed(() => service.getGroup(rooms[0]));
+    await vi.advanceTimersByTimeAsync(2000);
+    // Initial attempt + 2 bounded cleanup retries = 3 total attempts, then stops and emits `unavailable`.
+    expect(fixture.download).toHaveBeenCalledTimes(5);
+    const finalPush = pushed.findLast(item => item.change === 'attachments');
+    expect(finalPush?.attachments?.[0]).toMatchObject({ id: exhaustedId, state: 'unavailable' });
+  });
+
   describe('attachment notices across the coalescing window', () => {
     const media = (index: number) => `60000000-0000-4000-8000-0000000004${String(index).padStart(2, '0')}`;
     const attachment = (mediaId: string) => ({ id: mediaId, name: 'file.png', category: 'image', path: '/test/file.png', url: null });

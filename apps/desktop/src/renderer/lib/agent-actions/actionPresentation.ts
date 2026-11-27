@@ -1,4 +1,8 @@
-import { truncateToolText, type ToolUseDescriptor } from '@cindy/maker-shared';
+import {
+  formatCollabTargetsSummary,
+  truncateToolText,
+  type ToolUseDescriptor,
+} from '@cindy/maker-shared';
 
 /** Lightweight human-readable parameter shared by full tool rows and live previews. */
 export interface DisplayParam {
@@ -84,13 +88,32 @@ export function extractDisplayParam(
           ? `${descriptor.toolName}\n${descriptor.detail}`
           : descriptor.toolName,
       };
-    case 'collab':
-      return {
-        text: descriptor.toolLabel,
-        fullTitle: descriptor.detail
-          ? `${descriptor.toolName}\n${descriptor.detail}`
-          : descriptor.toolName,
-      };
+    case 'collab': {
+      if (descriptor.action === 'other') {
+        return {
+          text: descriptor.toolLabel,
+          fullTitle: descriptor.detail
+            ? `${descriptor.toolName}\n${descriptor.detail}`
+            : descriptor.toolName,
+        };
+      }
+      const targetSummary = formatCollabTargetsSummary(descriptor.targets, descriptor.targetCount);
+      if (targetSummary) {
+        const allTargets = descriptor.targets?.join(', ');
+        const titleParts = [allTargets, descriptor.prompt].filter(Boolean);
+        return {
+          text: targetSummary,
+          ...(titleParts.length > 0 ? { fullTitle: titleParts.join('\n') } : {}),
+        };
+      }
+      if (descriptor.prompt) {
+        return {
+          text: truncateToolText(descriptor.prompt, 60),
+          fullTitle: descriptor.prompt,
+        };
+      }
+      return null;
+    }
     case 'generic':
       return { text: descriptor.toolName };
   }

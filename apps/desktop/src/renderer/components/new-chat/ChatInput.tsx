@@ -538,6 +538,10 @@ export type SessionModelPick = (pick: {
   modelId: string;
   /** 同时换到这一档推理强度(模型组的模式指定了时)；省略 = 按选择器原有规则。 */
   effort?: Effort;
+  /** 同时设置 Fast 模式(合并供应商路由或路由指定了时)。 */
+  fastMode?: boolean | 'ultrafast';
+  /** 跨运行位置切换目标(null = 本机，string = 另一台电脑或分享来源；省略 = 保持当前运行位置)。 */
+  agentDeviceId?: string | null;
 }) => Promise<boolean>;
 
 interface ChatInputProps {
@@ -4744,7 +4748,7 @@ export function ChatInput({
   // 插件引擎在列清单的这台电脑上运行(本机，或正在远控的那台)时，`/` 列出它能展开的 Cindy 技能；
   // Agent 在另一台电脑上的任务，引擎那边没有技能来源，与首轮技能清单一致不列。
   const pluginEngineDeviceId = pluginEngineSession
-    ? pluginEngineSession.engine?.deviceId
+    ? (pluginEngineSession.engine?.deviceId ?? pluginEngineSession.agentDeviceId ?? undefined)
     : !sessionId ? pluginEngines?.active?.deviceId : undefined;
   const pluginEngineSkillsListed = pluginEngineActive
     && (!pluginEngineDeviceId || pluginEngineDeviceId === deviceLinkDeviceId);
@@ -9212,18 +9216,34 @@ export function ChatInput({
   // 每次渲染后换成最新闭包(与 performAgentSwitchRef 同理)；卸载时收回，横幅不会调到已离开的任务。
   useEffect(() => {
     if (!sessionModelPickRef || !sessionId) return;
-    const pick: SessionModelPick = async ({ agent, providerId, modelId, effort }) => {
+    const pick: SessionModelPick = async ({ agent, providerId, modelId, effort, fastMode: targetFastMode, agentDeviceId: targetAgentDeviceId }) => {
+      const targetLocation = targetAgentDeviceId === undefined ? effectiveAgentDeviceId : targetAgentDeviceId;
+      const crossLocation = targetLocation !== effectiveAgentDeviceId;
+      if (crossLocation) {
+        if (!sessionAgentSwitchSupported || remoteHostId) return false;
+        return performAgentSwitchRef.current(agent, modelId, providerId, {
+          ...(effort ? { effort } : {}),
+          ...(targetFastMode !== undefined ? { fastMode: targetFastMode } : {}),
+          agentDeviceId: targetLocation,
+        });
+      }
       if (!sessionEngineFilter) {
         if (agent !== runtimeAgentKind) return false;
-        return (await handleProviderChange(providerId, modelId, effort)) !== false;
+        return (await handleProviderChange(providerId, modelId, effort, undefined, targetFastMode)) !== false;
       }
       const runtime = sessionEngineFilter.runtimeAgent;
       const pending = sessionEngineFilter.pendingTarget;
       const crossEngine = runtime === undefined || agent !== runtime || (pending !== undefined && pending !== runtime);
       if (crossEngine) {
-        return sessionEngineFilter.onCrossEngineSelect({ providerId, modelId, targetAgent: agent, effort: effort ?? '' });
+        return sessionEngineFilter.onCrossEngineSelect({
+          providerId,
+          modelId,
+          targetAgent: agent,
+          effort: effort ?? '',
+          ...(targetFastMode !== undefined ? { fast: targetFastMode } : {}),
+        });
       }
-      return (await handleProviderChange(providerId, modelId, effort)) !== false;
+      return (await handleProviderChange(providerId, modelId, effort, undefined, targetFastMode)) !== false;
     };
     sessionModelPickRef.current = pick;
     return () => {

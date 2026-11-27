@@ -26,6 +26,11 @@ import type { Effort, PermissionMode, UserContentBlock, UserMessage } from '../.
 import type { ContextUsageData } from '../../types/context-usage.js';
 import type { AgentEvent, InteractionRequest, InteractionResolver, UsageSnapshot } from '../../types/events.js';
 import { createAsyncQueue } from '../shared/async-queue.js';
+import { libraryNativeReadContext } from '../shared/library-native-read.js';
+import {
+  assertReviewMessageContentPaths,
+  type ReviewReadGrant,
+} from '../shared/review-read-scope.js';
 import {
   ACP_SUPPORTED_PERMISSION_MODES,
   findModeOption,
@@ -38,7 +43,17 @@ import {
 } from './capabilities.js';
 import { AcpConnection, AcpConnectionClosedError, AcpHandlerError, AcpRpcError, methodNotFound } from './connection.js';
 import { encodeAcpElicitationResponse, parseAcpElicitationForm } from './elicitation.js';
-import { defusePluginEngineSlashMentions, isLeadingSlashCommand } from './briefing.js';
+import {
+  defusePluginEngineSlashMentions,
+  formatPluginEngineDirectoryGrants,
+  formatPluginEngineDirectoryGrantsUpdate,
+  isLeadingSlashCommand,
+} from './briefing.js';
+import {
+  isAcpReviewToolCallAllowed,
+  isAcpWriteToolKind,
+  isAcpWriteWithinAllowedDirs,
+} from './sandbox.js';
 import type { AcpLineTransport, AcpTransportClosed } from './line-transport.js';
 import {
   ACP_ELICITATION_CREATE_METHOD,
@@ -155,8 +170,16 @@ export interface OpenAcpSessionOptions {
   effort?: Effort;
   permissionMode?: PermissionMode;
   planMode?: boolean;
-  /** Additional workspace directories passed as `additionalDirectories` when the agent advertises support. */
+  /** Initial read-only extra reference directories granted to the task (also sent as `additionalDirectories` when supported). */
   extraDirs?: readonly string[];
+  /** Initial extra writable directories granted to the task. */
+  writableDirs?: readonly string[];
+  /** Host-owned read-only plugin library root (`null` signals revoked). */
+  libraryRoot?: string | null;
+  /** Read-only `/review` sandbox; requires `init.permissionGate` and cannot be bypassed. */
+  reviewMode?: boolean;
+  /** Validated read-only review grants (`cwd` + `reviewReadPaths`). */
+  reviewReadGrants?: readonly ReviewReadGrant[];
   logger?: Logger;
   requestTimeoutMs?: number;
   /** How long a cancelled prompt may take to settle before Cindy ends the turn itself. */
@@ -329,8 +352,18 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
       clientInfo: { name: opts.clientInfo.name, version: opts.clientInfo.version, ...(opts.clientInfo.title ? { title: opts.clientInfo.title } : {}) },
     }));
     if (init.protocolVersion !== ACP_PROTOCOL_VERSION) throw new AcpProtocolVersionError(init.protocolVersion);
+    if (opts.reviewMode && !init.permissionGate) {
+      throw new NotSupportedError('reviewMode', {
+        supported: false,
+        reason: 'sdk-missing',
+        message: 'This plugin engine does not support the per-turn permission gate required for read-only /review.',
+      });
+    }
 
-    const { accepted, dropped } = filterMcpServers(opts.mcpServers ?? [], init.agentCapabilities.mcpCapabilities);
+    const { accepted, dropped } = filterMcpServers(
+      opts.reviewMode ? [] : (opts.mcpServers ?? []),
+      init.agentCapabilities.mcpCapabilities,
+    );
     if (dropped.length > 0) {
       opts.logger?.warn('acp: dropping MCP servers whose transport the agent did not advertise', {
         dropped,
@@ -339,7 +372,7 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
     }
     const missing = (opts.requiredMcpServers ?? []).filter((name) => !accepted.some((server) => server.name === name));
     if (missing.length > 0) throw new AcpRequiredMcpUnavailableError(missing);
-    const additionalDirs = init.agentCapabilities.sessionCapabilities.additionalDirectories
+    const additionalDirs = !opts.reviewMode && init.agentCapabilities.sessionCapabilities.additionalDirectories
       ? [...new Set((opts.extraDirs ?? []).map((dir) => dir.trim()).filter(Boolean))]
       : [];
     const additionalDirsField = additionalDirs.length > 0 ? { additionalDirectories: additionalDirs } : {};
@@ -352,7 +385,7 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
     let outcome: AcpResumeOutcome;
     let result: AcpRecord;
     const onSessionOpened = (): void => router.markSessionOpened();
-    if (opts.resumeSessionId) {
+    if (opts.resumeSessionId && !opts.reviewMode) {
       const method = init.agentCapabilities.sessionCapabilities.resume
         ? 'session/resume'
         : init.agentCapabilities.loadSession ? 'session/load' : null;
@@ -402,7 +435,12 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
       options: opts,
     });
     router.attach(session, Array.isArray(result.configOptions));
-    await session.applyInitialSelection(opts.model, opts.effort, opts.permissionMode, opts.planMode);
+    await session.applyInitialSelection(
+      opts.model,
+      opts.effort,
+      opts.reviewMode ? 'ask' : opts.permissionMode,
+      opts.reviewMode ? false : opts.planMode,
+    );
     return session;
   } catch (error) {
     await connection.close().catch(() => {});
@@ -586,6 +624,14 @@ export class AcpSession {
   private readonly recoverVerification?: AcpVerificationRecovery;
   private readonly connection: AcpConnection;
   private readonly cwd: string;
+  private readonly reviewMode: boolean;
+  private readonly reviewReadGrants: readonly ReviewReadGrant[];
+  private extraDirs: string[];
+  private writableDirs: string[];
+  private libraryRoot: string | null | undefined;
+  private directoryGeneration = 0;
+  private directoryGrantsDirty = false;
+  private initialDirectoryBriefingPending: boolean;
   private readonly captureSessionId: string;
   private readonly turnChangeCapture: TurnChangeCaptureHooks | undefined;
   private readonly logger: Logger | undefined;
@@ -622,7 +668,6 @@ export class AcpSession {
   private steeringOffered: boolean;
   private permissionMode: 'ask' | 'bypassPermissions' = 'ask';
   private lastNonPlanModeValue: string | null = null;
-  private extraDirs: string[];
   /** The Cindy mode the task asked for, reported when a turn policy is refused. */
   private selectedPermissionMode: PermissionMode = 'ask';
   /** The most recent finished turn can still own permission requests while the session is idle. */
@@ -648,14 +693,19 @@ export class AcpSession {
   constructor(init: AcpSessionInit) {
     this.connection = init.connection;
     this.cwd = init.options.cwd;
+    this.reviewMode = init.options.reviewMode === true;
+    this.reviewReadGrants = this.reviewMode ? [...(init.options.reviewReadGrants ?? [])] : [];
+    this.extraDirs = this.reviewMode ? [] : [...new Set((init.options.extraDirs ?? []).map((dir) => dir.trim()).filter(Boolean))];
+    this.writableDirs = this.reviewMode ? [] : [...(init.options.writableDirs ?? [])];
+    this.libraryRoot = this.reviewMode ? undefined : init.options.libraryRoot;
+    this.initialDirectoryBriefingPending = !this.reviewMode && init.resumeOutcome === 'new';
     this.captureSessionId = init.options.captureSessionId ?? init.sessionId;
-    this.turnChangeCapture = init.options.turnChangeCapture;
+    this.turnChangeCapture = this.reviewMode ? undefined : init.options.turnChangeCapture;
     this.initializeResult = init.init;
     this.id = init.sessionId;
     this.resumeOutcome = init.resumeOutcome;
     this.droppedMcpServers = init.droppedMcpServers;
     this.configOptions = init.configOptions;
-    this.extraDirs = [...new Set((init.options.extraDirs ?? []).map((dir) => dir.trim()).filter(Boolean))];
     this.rememberNonPlanMode();
     this.requireSelectedModel = init.options.requireSelectedModel === true;
     this.initialModel = this.model;
@@ -664,14 +714,16 @@ export class AcpSession {
     this.capabilitiesSnapshot = this.buildCapabilities();
     this.logger = init.options.logger;
     this.readImage = init.options.readFile ?? ((path) => fsReadFile(path));
-    this.expandSlashInvocation = init.options.expandSlashInvocation;
+    this.expandSlashInvocation = this.reviewMode ? undefined : init.options.expandSlashInvocation;
     this.cancelGraceMs = init.options.cancelGraceMs ?? DEFAULT_CANCEL_GRACE_MS;
     this.onVendorOptionsChange = init.options.onVendorOptionsChange;
     this.recoverVerification = init.options.recoverVerification;
     this.onEnded = init.options.onEnded;
     this.now = init.options.now ?? Date.now;
     this.openToolQuietCapMs = init.options.openToolQuietCapMs ?? ACP_OPEN_TOOL_QUIET_CAP_MS;
-    const briefing = init.resumeOutcome === 'new' ? init.briefing : init.options.resumedCompanionBriefing;
+    const briefing = this.reviewMode
+      ? ''
+      : init.resumeOutcome === 'new' ? init.briefing : init.options.resumedCompanionBriefing;
     this.pendingBriefing = briefing?.trim() ? briefing : null;
     for (const name of init.options.skillCommandNames ?? []) {
       const trimmed = name.trim().replace(/^\/+/, '').toLowerCase();
@@ -682,7 +734,8 @@ export class AcpSession {
       ...(init.options.takeMcpToolResult ? { takeMcpToolResult: init.options.takeMcpToolResult } : {}),
       mcpServerNames: init.acceptedMcpServers,
     });
-    if (init.options.permissionMode) this.applyPermissionMode(init.options.permissionMode);
+    if (this.reviewMode) this.applyPermissionMode('ask');
+    else if (init.options.permissionMode) this.applyPermissionMode(init.options.permissionMode);
     this.connection.onClose((info) => this.handleConnectionClosed(info));
     // Logical RPC closure cancels requests. Only an endpoint exit can end
     // the product event stream and release the task for a replacement.
@@ -824,15 +877,46 @@ export class AcpSession {
     // Attachments are read asynchronously; chain conversions so turns keep the order they were sent in.
     const generation = this.stopGeneration;
     const accepted = this.sendChain.then(async () => {
+      if (this.reviewMode) {
+        await assertReviewMessageContentPaths(message.content, this.cwd, this.reviewReadGrants);
+      }
       const prompt = await this.toPrompt(message);
       if (prompt.length === 0) throw new Error('Cannot send an empty message');
       if (this.ended || this.closing) throw new Error('ACP session is closed');
       // Stop also discards messages that were still being prepared, like queued ones.
       if (generation !== this.stopGeneration) return;
       const firstText = prompt.find((block): block is Extract<AcpContentBlock, { type: 'text' }> => block.type === 'text')?.text ?? '';
-      if (this.pendingBriefing && !isLeadingSlashCommand(firstText)) {
-        prompt.unshift({ type: 'text', text: defusePluginEngineSlashMentions(this.pendingBriefing, this.commandNames) });
-        this.pendingBriefing = null;
+      if (!isLeadingSlashCommand(firstText)) {
+        const hostParts: string[] = [];
+        if (this.pendingBriefing) {
+          hostParts.push(this.pendingBriefing);
+          this.pendingBriefing = null;
+        }
+        if (!this.reviewMode) {
+          if (this.initialDirectoryBriefingPending) {
+            const dirNote = formatPluginEngineDirectoryGrants(this.extraDirs, this.writableDirs, this.libraryRoot);
+            if (dirNote) hostParts.push(dirNote);
+            this.initialDirectoryBriefingPending = false;
+            this.directoryGrantsDirty = false;
+          } else if (this.directoryGrantsDirty) {
+            hostParts.push(formatPluginEngineDirectoryGrantsUpdate(this.extraDirs, this.writableDirs, this.libraryRoot));
+            this.directoryGrantsDirty = false;
+          }
+        }
+        const hostPrefix = hostParts.filter((part) => part.trim()).join('\n\n');
+        if (hostPrefix) {
+          prompt.unshift({ type: 'text', text: defusePluginEngineSlashMentions(hostPrefix, this.commandNames) });
+        }
+      }
+      if (!this.reviewMode && this.libraryRoot !== undefined) {
+        const promptText = prompt
+          .filter((block): block is Extract<AcpContentBlock, { type: 'text' }> => block.type === 'text')
+          .map((block) => block.text)
+          .join('\n');
+        const libCtx = libraryNativeReadContext(this.libraryRoot, this.extraDirs, promptText);
+        if (libCtx) {
+          prompt.push({ type: 'text', text: defusePluginEngineSlashMentions(libCtx, this.commandNames) });
+        }
       }
       this.pendingPrompts.push({ blocks: prompt, gate });
       this.pump();
@@ -859,7 +943,10 @@ export class AcpSession {
     if (this.ended || this.closing) throw new Error('ACP session is closed');
     if (!turn || turn.cancelTimer || turn.verification) throw new Error(NO_ACTIVE_TURN_TO_STEER);
     // The agent was not told to ask before each call of an ungated turn: the message waits for its own turn.
-    if (gate && !turn.gate) throw new Error(NO_ACTIVE_TURN_TO_STEER);
+    if (gate && !turn.gate && !this.reviewMode) throw new Error(NO_ACTIVE_TURN_TO_STEER);
+    if (this.reviewMode) {
+      await assertReviewMessageContentPaths(message.content, this.cwd, this.reviewReadGrants);
+    }
     const prompt = await this.toPrompt(message);
     if (prompt.length === 0) throw new Error('Cannot send an empty message');
     if (this.ended || this.closing || this.connection.closed) throw new Error('ACP session is closed');
@@ -978,6 +1065,7 @@ export class AcpSession {
   }
 
   async setPermissionMode(mode: PermissionMode): Promise<void> {
+    if (this.reviewMode) return;
     this.applyPermissionMode(mode);
     await this.applyAgentMode(mode);
   }
@@ -990,6 +1078,7 @@ export class AcpSession {
   }
 
   async setPlanMode(enabled: boolean): Promise<void> {
+    if (this.reviewMode) return;
     const option = findModeOption(this.configOptions);
     const mapped = mapModeValues(option);
     const planEntry = mapped.find((entry) => entry.mode === 'plan');
@@ -1015,17 +1104,17 @@ export class AcpSession {
     }
   }
 
-  async setExtraDirs(dirs: string[]): Promise<void> {
-    if (!this.initializeResult.agentCapabilities.sessionCapabilities.additionalDirectories) {
-      throw new NotSupportedError('extraDirs', { supported: false, reason: 'not-implemented' });
-    }
+  async setExtraDirs(dirs: string[], libraryRoot?: string | null): Promise<void> {
+    if (this.reviewMode) return;
     const normalized = [...new Set(dirs.map((dir) => dir.trim()).filter(Boolean))];
     const unchanged = normalized.length === this.extraDirs.length
       && normalized.every((dir, index) => dir === this.extraDirs[index]);
-    if (unchanged) return;
     // ACP carries `additionalDirectories` only on session/new, session/resume, and session/load.
-    // Refuse live directory changes when the engine cannot resume its session on reload.
-    if (!this.canResumeAfterClose()) {
+    // Refuse live directory changes when an engine relies on native `additionalDirectories` but
+    // cannot resume its session on reload.
+    if (this.initializeResult.agentCapabilities.sessionCapabilities.additionalDirectories
+      && !unchanged
+      && !this.canResumeAfterClose()) {
       throw new NotSupportedError('extraDirs', {
         supported: false,
         reason: 'sdk-missing',
@@ -1033,6 +1122,16 @@ export class AcpSession {
       });
     }
     this.extraDirs = normalized;
+    if (libraryRoot !== undefined) this.libraryRoot = libraryRoot;
+    this.directoryGeneration += 1;
+    if (!this.initialDirectoryBriefingPending) this.directoryGrantsDirty = true;
+  }
+
+  async setWritableDirs(dirs: string[]): Promise<void> {
+    if (this.reviewMode) return;
+    this.writableDirs = [...dirs];
+    this.directoryGeneration += 1;
+    if (!this.initialDirectoryBriefingPending) this.directoryGrantsDirty = true;
   }
 
   requiresRuntimeRecycleForExtraDirs(): boolean {
@@ -1092,7 +1191,7 @@ export class AcpSession {
     this.lastNonPlanModeValue = option.currentValue;
   }
 
-  /** Switches the agent's own mode when it offers one standing for this Cindy mode. */
+  /** Switches the agent's own mode when it offers one standing for this Cindy mode (`ask` <-> `default`). */
   private async applyAgentMode(mode: PermissionMode): Promise<void> {
     const option = findModeOption(this.configOptions);
     const mappedModes = mapModeValues(option);
@@ -1245,7 +1344,7 @@ export class AcpSession {
     if (turn.permissionTurnId) {
       params._meta = { permissionGate: {
         turnId: turn.permissionTurnId,
-        ...(next.gate ? { scope: ACP_PERMISSION_GATE_SCOPE } : {}),
+        ...(next.gate || this.reviewMode ? { scope: ACP_PERMISSION_GATE_SCOPE } : {}),
       } };
     }
     this.runPrompt(turn, params, true);
@@ -1429,7 +1528,7 @@ export class AcpSession {
     if (gate?.toolsDisabled) return selected(reject);
     const allowOnce = firstOfKind(options, ['allow_once']);
     const fields = normalizeToolCallFields(params.toolCall);
-    if (gate?.policy && !fields) return selected(reject);
+    if ((gate?.policy || this.reviewMode) && !fields) return selected(reject);
     const { events, toolCall } = this.translator.noteToolCall(fields ?? { toolCallId: `acp-permission-${this.permissionSeq + 1}` });
     this.emit(events);
     const rejectDecision = (): AcpPermissionOutcome => {
@@ -1442,6 +1541,11 @@ export class AcpSession {
       if (signal.aborted || this.closing || this.turn?.cancelTimer) return { outcome: 'cancelled' };
       return selected(allowOnce);
     };
+    if (this.reviewMode) {
+      const allowed = await isAcpReviewToolCallAllowed(toolCall, this.cwd, this.reviewReadGrants);
+      if (signal.aborted || this.closing || this.turn?.cancelTimer) return { outcome: 'cancelled' };
+      return allowed ? (allowOnce ? selected(allowOnce) : rejectDecision()) : rejectDecision();
+    }
     if (this.permissionMode === 'bypassPermissions') {
       return allowDecision();
     }
@@ -1466,7 +1570,43 @@ export class AcpSession {
       && !this.policyForcesConfirmation(gate.policy, policyToolName, requestInput)
       && (!toolCall.name || toolCall.name === policyToolName
         || !this.policyForcesConfirmation(gate.policy, toolCall.name, requestInput))) {
-      return allowDecision();
+      let writeOutsideAllowedDirs = false;
+      let verifiedGeneration: number | undefined;
+      if (isAcpWriteToolKind(toolCall.kind)) {
+        let verifiedWithin = false;
+        // Bind every async realpath check to the directoryGeneration snapshot it verified.
+        // If writableDirs changes while an async check is in flight, re-verify against the
+        // new snapshot; fail closed (never auto-approve) if generations keep changing.
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          const checkedGeneration = this.directoryGeneration;
+          const writableSnapshot = [...this.writableDirs];
+          const within = await isAcpWriteWithinAllowedDirs(
+            toolCall,
+            this.cwd,
+            writableSnapshot,
+            this.libraryRoot,
+          );
+          if (signal.aborted || this.closing || this.turn?.cancelTimer) return { outcome: 'cancelled' };
+          if (!within) {
+            verifiedWithin = false;
+            break;
+          }
+          if (this.directoryGeneration === checkedGeneration) {
+            verifiedWithin = true;
+            verifiedGeneration = checkedGeneration;
+            break;
+          }
+        }
+        writeOutsideAllowedDirs = !verifiedWithin;
+      }
+      if (!writeOutsideAllowedDirs) {
+        if (!allowOnce) return rejectDecision();
+        await this.captureBeforeAllowedToolCall(toolCall);
+        if (signal.aborted || this.closing || this.turn?.cancelTimer) return { outcome: 'cancelled' };
+        if (verifiedGeneration === undefined || this.directoryGeneration === verifiedGeneration) {
+          return selected(allowOnce);
+        }
+      }
     }
     const resolver = this.resolver;
     if (!resolver) return rejectDecision();
