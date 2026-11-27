@@ -2243,7 +2243,7 @@ export class GoalController {
           lastReason,
           turnsUsed: decision.turnsUsed,
           tokensUsed: decision.tokensUsed,
-          noProgressStreak: decision.noProgressStreak,
+          noProgressStreak: switchedByModelGroup ? 0 : decision.noProgressStreak,
           usageResetAt: status === 'usageLimited' ? usageResetAt : null,
           ...(objectiveRewrite ? { objective: objectiveRewrite } : {}),
           updatedAt: this.now(),
@@ -2275,30 +2275,6 @@ export class GoalController {
       return;
 
     }
-    const updated = await this.trackPersistence(
-      turn,
-      this.deps.storage.update(sessionId, {
-        // active 是保持态，不是 transition；省略它可让迟到 continuation 写在任何
-        // 防线失效时仍只能补计数，绝不能把显式 Stop 的 paused 改回 active。
-        ...(status === 'active' ? {} : { status }),
-        lastReason,
-        turnsUsed: decision.turnsUsed,
-        tokensUsed: decision.tokensUsed,
-        noProgressStreak: switchedByModelGroup ? 0 : decision.noProgressStreak,
-        usageResetAt: status === 'usageLimited' ? usageResetAt : null,
-        ...(objectiveRewrite ? { objective: objectiveRewrite } : {}),
-        updatedAt: this.now(),
-      }),
-      async (persisted) => {
-        // objective 与对应 marker 是同一个可观察提交；Stop 必须等二者都 settle，
-        // 不能留下“文案已改但更新标记缺失”的半提交。
-        if (objectiveRewrite && persisted) {
-          await this.deps.persistUserMessage?.(sessionId, objectiveRewrite, {
-            goalObjective: { updated: true },
-          });
-        }
-      },
-    );
     if (!isCurrentTurn()) return;
     if (updated) this.emit(updated, state.status);
 
