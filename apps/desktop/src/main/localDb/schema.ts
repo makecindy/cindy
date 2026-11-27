@@ -184,6 +184,7 @@ export const sessions = sqliteTable(
     pinnedAt: integer('pinned_at'), // unix ms
     snoozedUntil: integer('snoozed_until'), // unix ms; presentation only
     snoozedAt: integer('snoozed_at'), // host time of the explicit snooze
+    archivedAt: integer('archived_at'), // host time of the explicit archive (unix ms)
     /**
      * 后台隐藏时刻（unix ms）。非 NULL = 插件以 `agent.hiddenTasks` 声明创建或切换为
      * 隐藏的后台任务：不进入任务列表、搜索、未结束提示与新任务通知；用户仍可在插件
@@ -331,6 +332,12 @@ export const sessions = sqliteTable(
      * 任务、目录与命令都在本机；Lead 与团队在那台。NULL = 普通任务。
      */
     orcaRemoteLead: text('orca_remote_lead'),
+    /**
+     * 由其他任务通过 send_to_session（create 模式）新建时的来源任务元数据
+     * (JSON，见 shared/sessionOrigin.ts)。独立于 parent_session_id（仅用于 fork / 侧边追问）。
+     * NULL = 非任务新建（用户直接新建、自动化、导入或旧版数据）。
+     */
+    createdBySession: text('created_by_session'),
     /**
      * interrupted-turn-resume: 最近一次 turn 的启动时刻(unix ms)。与
      * lastTurnEndedAt 配对做「疑似中断」纯读判定(startedAt > endedAt),两个
@@ -1871,6 +1878,12 @@ export const embeddingJobs = sqliteTable(
     idxSourceId: index('idx_embedding_jobs_source_id').on(t.source, t.sourceId),
   }),
 );
+
+// Row IDs only. Writers without sqlite-vec can unlink chat content immediately;
+// the next vector-capable connection finishes deleting the physical index rows.
+export const deletedChatVectorRows = sqliteTable('deleted_chat_vector_rows', {
+  rowid: integer('rowid').primaryKey(),
+});
 
 /**
  * embedding-host (Phase 1.1): vec 虚表元信息登记。

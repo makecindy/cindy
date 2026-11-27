@@ -1,5 +1,9 @@
 # 供应商内多订阅账号（2026-11-07 起；账号池与旧 Codex 连接归并已随 v0.1.135 正式版发布）
 
+## 已有登录的发现与连接（2026-11-26）
+
+桌面执行端在原账号管理通道接受 `discover-logins`、`pick-login` 和 `attach-login`。前两者返回执行电脑名称、经 CLI 核实的候选及短期回执；连接只提交回执，重新核实身份后落盘。仅限可信本机窗口和同账号控制端，共享任务与供应商受邀者不可使用。无新增中转帧、推送或 allowlist 项，执行端原生目录选择器在执行电脑上打开。旧执行端拒绝未知动作；旧界面继续原有添加账号流程。旧版本无法解析新绑定的外部目录，降级时终端登录仍保留。
+
 ## Claude 官方套餐显示名（2026-11-17）
 
 Claude 登录、额度及账号视图可选追加 `planDisplayName`；匿名用量投影的 `plan` 对象可选追加
@@ -19,6 +23,9 @@ Claude 登录、额度及账号视图可选追加 `planDisplayName`；匿名用�
 回包为 `{providerId, model, scheduling}`；`scheduling` 为 null 或版本 1 的匿名对象：`accounts`（当前配额候选带中
 可新分配的不同账号数）、`running`（池策略下一账号负载）、`totalRunning`（含预约的池内总负载）、`full`、
 `urgency` 和 `fiveHourTight`。不含账号 ID、身份、目录、原生会话 ID 或真实账号指纹。
+2026-11-26 起版本 1 对象可选追加 `headroom`（池下一个会用的账号的剩余配额占比，0–100，读不到为 null），供组的「余量最多的先用」
+比较这台；不升版本号。旧执行端不回这个字段，组主按读不到处理（排在读得到的后面）；旧组主忽略它。解析只收有限数值并收敛到
+0–100，其他值按 null。不新增 channel、请求参数或权限。
 
 请求只接受合法供应商 ID 形状和有界模型字符串，再由执行端解析实际账号归属；命名订阅池也适用。
 共享任务访客和供应商分享 peer 不可读取；`ownComputer: true` 只能在已验证同账号上下文中生效，false 保持更严格的
@@ -154,6 +161,20 @@ owner 本机新文件 `subscription-account-placement.json`，不进入任何 wi
 没有新增 channel、allowlist、订阅或轮询，也不改变 invoke/push 包装与中转签名；官方及自建中转继续透传原 JSON，无需中转升级。
 回归覆盖新旧字段、owner IPC、所选目录、错误身份与取消后重启恢复；真实双账号浏览器授权仍需安装包验收。
 
+2026-11-24 Claude 长期令牌：owner 账号管理通道追加两个动作 `token-login`（`accountId`、`loginKey`，可用原 `cancel` 取消）
+与 `token-remove`（`accountId`）；账号视图可选追加 `longLivedToken?: { expiresAt?, storedLogin, verification, settingsOnly? }`
+与 `authIssue: 'claude-token-account-mismatch'`；固定错误码追加 `SUBSCRIPTION_CLAUDE_TOKEN_NEEDS_LOGIN`、
+`SUBSCRIPTION_CLAUDE_TOKEN_NOT_PERMITTED`、`SUBSCRIPTION_CLAUDE_TOKEN_UNSUPPORTED`。令牌本身不在任何通道里出现：
+生成、保存与使用都只发生在执行电脑上，远程发起时浏览器在执行电脑打开，与普通登录相同。
+旧执行电脑按未知动作拒绝两个新动作，控制端按通用失败展示，不回退成普通登录；旧控制端忽略新字段，账号照常显示为
+已登录，只是看不到令牌状态与菜单入口。新字段只属于账号管理，不进入匿名分享用量、供应商组或任务选号协议。
+本机 owner 元数据追加可选 `longLivedToken`（生成时刻、核对结论与最近一次套餐），不含凭证；令牌被拿掉后随下次读取清除。
+降级到旧版本后，macOS／Linux 的任务不再把令牌交给 CLI，账号退回普通登录（未到期则照常可用，令牌文件保留）；
+Windows 上令牌在用户设置里，CLI 仍会用它，但旧版本把这种登录判为「不是订阅」而停用该账号，需先在新版停用令牌再降级。
+没有新增 channel、allowlist、订阅或轮询；账号状态读取在令牌期间多一次本机 CLI 状态查询（约 0.1 秒，不联网），沿用
+原有 30 秒缓存。官方及自建中转继续透传原 JSON，无需中转升级。回归覆盖动作解析、视图字段、身份沿用、窗口核对与
+Windows 限制；真实浏览器授权、设备托管任务与 Windows 安装包仍需验收。
+
 Codex 所选目录由当前供应商管理认证、无法提供 ChatGPT 账号时，管理操作使用追加的
 `SUBSCRIPTION_CODEX_PROVIDER_AUTH` 错误码。新版控制端显示独立账号指引，旧控制端仍按通用账号失败呈现；
 新版连接旧宿主仍接受旧错误。账号视图可选追加 `authIssue: 'codex-provider-managed-auth'`，让新向导
@@ -221,6 +242,7 @@ Codex 原生桶不冒充 WHAM：旧 bridge 无法表达按模型的账号池额�
 得到的是该原生会话所在账号的窗口，只显示用量、不显示身份；回 null 时不显示用量。不再落回 `default-subscription-account`
 读法——那会把执行端的默认账号当成任务的账号。早于该追加参数的宿主忽略它并返回原单账号。查询失败、回复不可解析，或旧宿主不支持
 新查询且缺少原生会话 id 时，保留同 owner 代次的上次结果；没有已知结果就保持未知并允许后续刷新，不冒用默认账号。
+OpenAI 的绑定回包可选带上 `account.kind`（`subscription` 或 `apiKey`），标明执行端绑定的成员类型。旧端缺少此字段时，底栏沿用原显示。
 只有宿主明确返回 `legacy` 才恢复原读取。官方及自建中转只透传原 invoke，无新 channel、allowlist 或服务端字段。
 
 2026-11-16：已绑定官方 CLI 目录的账号也返回 `bound` 并携带自身用量，不再让查看端按 `isDefault`

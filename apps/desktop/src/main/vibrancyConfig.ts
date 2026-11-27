@@ -6,6 +6,7 @@
  * 较早 Windows 11 与 Linux 回退不透明。
  */
 import type { BrowserWindow } from 'electron';
+import { isHardwareAccelerationDisabled } from './gpuRenderingPolicy.js';
 import { createLogger } from './logger.js';
 import {
   CINDY_ACRYLIC_WINDOW_BACKING,
@@ -29,6 +30,7 @@ export interface ResolveVibrancyConfigOptions {
   getSystemVersion?: () => string;
   wallpaperCovered?: boolean;
   desktopBlur?: number | null;
+  gpuFallback?: boolean;
 }
 
 // Coverage belongs to the rendered window, not the shared wallpaper selection:
@@ -137,6 +139,63 @@ export function fitWindowsBackdropToWindow(
   return { ...config, backgroundMaterial: 'acrylic' };
 }
 
+// macOS: a BrowserWindow created with `transparent: true` sets NSWindow.backgroundColor to
+// clearColor, which triggers per-frame alpha shadow recomputation and disables rectangular
+// occlusion culling in WindowServer (~7-10x WindowServer GPU overhead on 4K HiDPI displays, #11670).
+// A regular window (`transparent: false`) created with `vibrancy: 'hud'` + `#00000000` still keeps
+// behind-window NSVisualEffectView vibrancy (contentOpaque=0) on WindowServer's fast path.
+// Only custom desktop-blur / clear see-through mode (which clears vibrancy and relies on an alpha-0
+// NSWindow background + CGSSetWindowBackgroundBlurRadius) requires `transparent: true`.
+const macTransparentWindows = new WeakSet<BrowserWindow>();
+
+export function markMacTransparentWindow(win: BrowserWindow): void {
+  macTransparentWindows.add(win);
+}
+
+export function isMacTransparentWindow(win: BrowserWindow): boolean {
+  return macTransparentWindows.has(win);
+}
+
+/** Custom desktop blur or unblurred see-through without system vibrancy requires `transparent: true`. */
+export function needsMacTransparentWindow(config: VibrancyConfig): boolean {
+  return (
+    config.desktopBlurRadius !== undefined ||
+    (config.vibrancy === null && config.backgroundColor === '#00000000')
+  );
+}
+
+/**
+ * `rememberedNeed` is the last need the main window reported (writeWindowTransparencyHint).
+ * Default CINDY vibrancy and opaque themes use a regular window (`transparent: false`);
+ * custom desktop-transparency mode opts into `transparent: true`.
+ */
+export function resolveMacWindowTransparent(
+  creationConfig: VibrancyConfig,
+  rememberedNeed: boolean | undefined,
+): boolean {
+  return rememberedNeed === true || needsMacTransparentWindow(creationConfig);
+}
+
+/**
+ * A regular macOS window keeps an opaque NSWindow background once vibrancy is cleared, so custom
+ * CGS desktop blur / clear-desktop mode cannot reveal the desktop until the next launch creates a
+ * transparent window. Keep the system vibrancy fallback in the meantime.
+ */
+export function fitMacBackdropToWindow(
+  config: VibrancyConfig,
+  windowIsTransparent: boolean,
+): VibrancyConfig {
+  if (windowIsTransparent || !needsMacTransparentWindow(config)) return config;
+  const fitted: VibrancyConfig = {
+    vibrancy: config.vibrancy ?? 'under-window',
+    backgroundColor: config.backgroundColor,
+  };
+  if (config.backgroundMaterial !== undefined) {
+    fitted.backgroundMaterial = config.backgroundMaterial;
+  }
+  return fitted;
+}
+
 function resolveBackdropMaterial(): WindowsBackdropMaterial {
   const raw = process.env.XDT_BACKDROP_MATERIAL;
   if (!raw) return 'acrylic';
@@ -156,6 +215,16 @@ export function resolveVibrancyConfig(
   platform: string,
   options?: ResolveVibrancyConfigOptions,
 ): VibrancyConfig {
+  const opaqueBg = isDark ? '#1f1f1e' : '#f8f8f6';
+  const gpuFallback = options?.gpuFallback ?? isHardwareAccelerationDisabled();
+  if (gpuFallback) {
+    // 软件渲染回退模式关闭透明窗、原生 vibrancy 与桌面模糊，规避 GPU 合成花屏/黑块。
+    return {
+      vibrancy: null,
+      backgroundColor: opaqueBg,
+      ...(platform === 'win32' ? { backgroundMaterial: 'none' as const } : {}),
+    };
+  }
   if (!options?.wallpaperCovered && typeof options?.desktopBlur === 'number') {
     return {
       vibrancy: platform === 'darwin' && options.desktopBlur ? 'under-window' : null,
@@ -170,7 +239,6 @@ export function resolveVibrancyConfig(
     };
   }
   const isCindy = familyId === 'cindy' && !options?.wallpaperCovered;
-  const opaqueBg = isDark ? '#1f1f1e' : '#f8f8f6';
   if (platform === 'darwin') {
     // 材质 A/B 旋钮(dev 调参用):XDT_VIBRANCY_MATERIAL=sidebar|hud|under-window|fullscreen-ui|
     // popover|menu|none('none'=无材质纯透明,壁纸不模糊直透)。缺省 'hud'(用户实测定稿,2026-07-19 回写)。

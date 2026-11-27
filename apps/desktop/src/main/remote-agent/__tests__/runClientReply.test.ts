@@ -4,7 +4,7 @@
  */
 import { randomBytes, randomUUID } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
-import { parseRemoteAgentRequest, type RemoteAgentPayload } from '@cindy/device-link';
+import { DeviceLinkError, parseRemoteAgentRequest, REMOTE_AGENT_INVOKE_TIMEOUT_MS, type RemoteAgentPayload } from '@cindy/device-link';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createDeviceUnresponsiveError } from '../../device-link/responsivenessTracker';
@@ -231,6 +231,55 @@ describe('RemoteAgentRunClient slow payload delivery', () => {
     expect(client.hasPendingWork).toBe(false);
     client.abandon('fixture-complete');
   });
+
+  // Unit regression for a missing invoke-result after the socket write. Ordinary
+  // send tests delivered both receipts. The matching stream result can arrive
+  // on either side of the timeout, and a second send would duplicate the input.
+  it.each(['already received', 'late failure', 'missing', 'cancelled wait', 'access denied'] as const)(
+    'settles a send once after a missing receipt (%s)', async scenario => {
+      vi.useFakeTimers();
+      const abort = new AbortController();
+      const callId = randomUUID();
+      const success = { t: 'result', callId, ok: true, value: 'accepted' };
+      const emit = (event: unknown) => client.onData(Buffer.from(JSON.stringify(event) + '\n'), false);
+      const transport = vi.fn(async () => {
+        if (scenario === 'already received') {
+          emit(success);
+          throw Object.assign(new DeviceLinkError('INVOKE_TIMEOUT',
+            'no invoke-result within 30000ms after first socket write'), { inFlight: true });
+        }
+        const code = scenario === 'access denied' ? 'ACCESS_REVOKED' : 'INVOKE_TIMEOUT';
+        return { ok: false, error: { code, message: 'no receipt' } };
+      });
+      const client = new RemoteAgentRunClient(randomUUID(), {
+        invoke: remoteAgentInvoker('host', transport), unregister() {},
+      } as unknown as RemoteAgentPoller, {
+        onEvent() {}, onState() {}, onWs() {}, onClosed() {},
+        onRequest: async () => ({ type: 'callback', value: null }),
+      }, randomUUID);
+      const outcome = client.callWithId(callId, 'send', ['hello'], abort.signal).catch(error => error);
+      await vi.advanceTimersByTimeAsync(0);
+      if (scenario === 'already received') {
+        expect(await outcome).toBe('accepted');
+      } else if (scenario === 'late failure') {
+        emit({ t: 'result', callId, ok: false, error: { code: 'REMOTE_AGENT_UNAVAILABLE', message: 'model unavailable' } });
+        expect(await outcome).toMatchObject({ message: 'model unavailable' });
+      } else if (scenario === 'access denied') {
+        expect(await outcome).toMatchObject({ code: 'ACCESS_REVOKED' });
+      } else {
+        if (scenario === 'cancelled wait') abort.abort();
+        else {
+          emit({ ...success, callId: randomUUID() });
+          await vi.advanceTimersByTimeAsync(REMOTE_AGENT_INVOKE_TIMEOUT_MS);
+        }
+        expect(await outcome).toMatchObject({ code: 'INVOKE_TIMEOUT' });
+      }
+      expect(transport).toHaveBeenCalledOnce();
+      expect(client.hasPendingWork).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+      client.abandon('fixture-complete');
+    },
+  );
 
   // Closing during preparation rejects both the internal result and the public
   // call. Vitest must see no orphaned rejection after the caller handles it.

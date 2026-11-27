@@ -62,9 +62,9 @@ export function bindHostCompanyReporting(options: HostReportingOptions) {
     decision = readDecision(decisionFile);
     core = createCompanyTokenReportingCore({
       dir,
-      identity: () => phase === 'active' && decision ? options.identity() : null,
+      identity: () => phase === 'active' && decision && options.canWrite() ? options.identity() : null,
       recovering: () => phase === 'suspended' || (phase === 'active' && (!decision || !options.canWrite())),
-      isAnalyticsAllowed: () => decision?.allowed === true && options.canWrite(),
+      readCompanyTokenReportingPreference: () => decision?.allowed ?? null,
       subscribeAuth(listener) { onAuth = listener; return () => { onAuth = undefined; }; },
       subscribeSettings(listener) { onSetting = listener; return () => { onSetting = undefined; }; },
       direct(provider, kind) {

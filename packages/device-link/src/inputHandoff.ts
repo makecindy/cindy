@@ -164,6 +164,8 @@ export interface InputHandoffSnapshot {
    * Older clients ignore it and still show `agentControlled` and skip.
    */
   agentPicture?: true;
+  /** A Host-owned account check can open the scan view and confirm completion. */
+  accountVerification?: true;
   /** Remote controllers may submit values through the signed v3 exchange. */
   remoteInput?: true;
   /** The request has settled; kept briefly for terminal feedback only. */

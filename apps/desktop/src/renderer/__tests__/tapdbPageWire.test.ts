@@ -35,11 +35,14 @@ it('serializes registered desktop event names without sending navigation details
   document.dispatchEvent(new Event('visibilitychange'));
   const events = send.mock.calls.map(([body]) => JSON.parse(decodeURIComponent(String(body))));
   expect(events.map(event => event.name)).toEqual([
-    'device_login', '#cindy_desktop_page_show_v1', '#cindy_desktop_page_view_v1', '#cindy_desktop_page_hide_v1',
+    'device_login', 'cindy_desktop_page_show_v1', 'cindy_desktop_page_view_v1', 'cindy_desktop_page_hide_v1',
   ]);
-  expect(events[2].properties['#cindy_activity_trigger']).toBe('app_start');
+  expect(events[2].properties.cindy_activity_trigger).toBe('app_start');
+  expect(events[2].properties).not.toHaveProperty('#cindy_activity_trigger');
   expect(events[3].properties.duration).toBe(2);
   for (const event of events) {
+    expect(event.name.startsWith('#')).toBe(false);
+    expect(Object.keys(event.properties).some(key => key.startsWith('#'))).toBe(false);
     expect(event.device_id).toBeTruthy();
     expect(event).not.toHaveProperty('user_id');
     for (const key of ['url', 'url_path', 'referrer', 'referrer_host', 'title']) {

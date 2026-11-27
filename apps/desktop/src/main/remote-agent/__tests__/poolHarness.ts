@@ -14,6 +14,7 @@ import path from 'node:path';
 
 import { registerSendToSessionTool, XdtHelperToolRegistry, type SendToSessionCallback } from '@cindy/mcps';
 import { sessionQueueOriginForDispatcher } from '../../maker-ipc/sessionControlService';
+import { buildSessionCreatedBy, serializeSessionCreatedBy } from '../../../shared/sessionOrigin';
 import type { RemoteAgentKind } from '@cindy/device-link';
 import { ScriptTarget, transpileModule } from 'typescript';
 import type { AgentEvent, AgentSessionHandle } from '@cindy/maker-core';
@@ -120,9 +121,11 @@ export function sharedAccountSessionTool(dispatcherSessionId: string, ports: Rec
     AUTO_REVIEW_DELEGATED_CONTINUATION: Symbol(), verifiedOwnerRequestText: noop,
     isDeviceLinkInvoke: () => false,
     hostPluginInputSource: noop, readSenderIdentity: none, sessionQueueOriginForDispatcher,
+    buildSessionCreatedBy, serializeSessionCreatedBy,
     withPluginTaskService: none, getSessionActiveInputClientIds: () => [],
     extractPlainText: String, assertReviewExternalInputAllowed: none, syncBotLanePermission: none,
     reconcileBotModelRoute: none, refreshBotCapabilityEpochBeforeSend: none, assertSessionNotRestarting: noop,
+    runDesktopModelGroupBeforeSend: async () => ({ switched: false }),
     sendToSessionLocks: new Map(), waitForSendToSessionLock: none,
     trackSendToSessionLockRun: (_id: string, run: Promise<unknown>) => run,
     scheduledModelScope: { restore: none }, agentSwitchPending: new Map(), BOT_GROUP_CLIENT_ID_PREFIX: 'bot-group:',
@@ -235,6 +238,8 @@ export function sharedAccountRegisterWiring(ports: Record<string, unknown> & {
     providerShareAccessEpoch: () => 0,
     findReceivedShare: () => ({ status: 'active' }),
     withRehydrateCloseSuppressed: (_id: string, run: () => unknown) => run(),
+    createSessionStartTimer: () => ({ lap: noop, attempt: noop, finish: noop }),
+    logSessionStartTiming: noop,
     RuntimePluginControlError, SessionCreationCleanupPendingError,
     withSharedSessionResumeRecovery, withSharedReconnectHandoff, isProviderShareAgentDeviceId,
     createAgentSwitchBoundaryInsert, relocateForFreshStart,

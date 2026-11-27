@@ -6,7 +6,7 @@ import Animated, {
   useAnimatedStyle,
   type SharedValue,
 } from "react-native-reanimated";
-import { List, Search, SquarePen, type LucideIcon } from "lucide-react-native";
+import { List, Search, Settings, SquarePen, type LucideIcon } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 import {
   ReanimatedSwipeable,
@@ -30,6 +30,7 @@ const ACTION_SIZE = 56;
 const GAP = spacing.md;
 const LEADING_WIDTH = ACTION_SIZE * 2 + GAP * 3;
 const TRAILING_WIDTH = ACTION_SIZE + GAP * 2;
+const TWO_ACTION_TRAILING_WIDTH = ACTION_SIZE * 2 + GAP * 3;
 const EDGE_HIT_SLOP = { left: -spacing.xl };
 
 interface Props {
@@ -38,6 +39,7 @@ interface Props {
   onNewTask(): void;
   onOpenTasks(): void;
   onSearch(): void;
+  onSettings?: () => void;
   children: ReactNode;
 }
 
@@ -48,6 +50,7 @@ export const SwipeableProjectHeader = memo(function SwipeableProjectHeader({
   onNewTask,
   onOpenTasks,
   onSearch,
+  onSettings,
   children,
 }: Props) {
   const { t } = useTranslation();
@@ -62,6 +65,7 @@ export const SwipeableProjectHeader = memo(function SwipeableProjectHeader({
   const { selected } = useWallpaper();
   const [swiping, setSwiping] = useState<string | null>(null);
   const surface = selected === 'none' || swiping === rowKey ? styles.surface : undefined;
+  const trailingWidth = onSettings ? TWO_ACTION_TRAILING_WIDTH : TRAILING_WIDTH;
   const close = useCallback(() => methods.current?.close(), []);
   useEffect(() => {
     methods.current?.reset();
@@ -114,7 +118,7 @@ export const SwipeableProjectHeader = memo(function SwipeableProjectHeader({
       renderLeftActions={(_progress, offset) => {
         translation.current = offset;
         return (
-          <View style={styles.leadingShell}>
+          <View style={[styles.leadingShell, { width: LEADING_WIDTH }]}>
             <ProjectAction
               icon={List}
               label={t("devices.list.projectActions.allTasks")}
@@ -124,6 +128,7 @@ export const SwipeableProjectHeader = memo(function SwipeableProjectHeader({
               styles={styles}
               background={colors.swipeActionNeutral}
               foreground={colors.swipeActionText}
+              panelWidth={LEADING_WIDTH}
             />
             <ProjectAction
               icon={Search}
@@ -135,6 +140,7 @@ export const SwipeableProjectHeader = memo(function SwipeableProjectHeader({
               background={colors.swipeActionNeutral}
               foreground={colors.swipeActionText}
               index={1}
+              panelWidth={LEADING_WIDTH}
             />
           </View>
         );
@@ -142,7 +148,18 @@ export const SwipeableProjectHeader = memo(function SwipeableProjectHeader({
       renderRightActions={(_progress, offset) => {
         translation.current = offset;
         return (
-          <View style={styles.trailingShell}>
+          <View style={[styles.trailingShell, { width: trailingWidth }]}>
+            {onSettings ? <ProjectAction
+              icon={Settings}
+              label={t("settings.projectInfo.title")}
+              onPress={() => run(onSettings)}
+              offset={offset}
+              styles={styles}
+              background={colors.swipeActionNeutral}
+              foreground={colors.swipeActionText}
+              index={1}
+              panelWidth={trailingWidth}
+            /> : null}
             <ProjectAction
               icon={SquarePen}
               label={t("devices.list.projectActions.newTask")}
@@ -151,6 +168,7 @@ export const SwipeableProjectHeader = memo(function SwipeableProjectHeader({
               styles={styles}
               background={colors.cta}
               foreground={colors.ctaText}
+              panelWidth={trailingWidth}
             />
           </View>
         );
@@ -171,6 +189,7 @@ function ProjectAction({
   styles,
   background,
   foreground,
+  panelWidth = LEADING_WIDTH,
 }: {
   icon: LucideIcon;
   label: string;
@@ -181,19 +200,20 @@ function ProjectAction({
   styles: ReturnType<typeof makeStyles>;
   background: string;
   foreground: string;
+  panelWidth?: number;
 }) {
   const animatedStyle = useAnimatedStyle(() => {
     const revealed = Math.max(0, leading ? offset.value : -offset.value);
     const progress = Math.min(
       1,
-      revealed / (leading ? LEADING_WIDTH : TRAILING_WIDTH),
+      revealed / panelWidth,
     );
     return {
       opacity: interpolate(progress, [0.15, 0.7], [0, 1], "clamp"),
       transform: [
         { scale: interpolate(progress, [0.15, 1], [0.5, 1], "clamp") },
       ],
-      width: leading ? ACTION_SIZE : Math.max(ACTION_SIZE, revealed - GAP * 2),
+      width: ACTION_SIZE,
     };
   });
   return (
@@ -201,7 +221,9 @@ function ProjectAction({
       style={[
         styles.action,
         { backgroundColor: background },
-        leading ? { left: GAP + index * (ACTION_SIZE + GAP) } : { right: GAP },
+        leading
+          ? { left: GAP + index * (ACTION_SIZE + GAP) }
+          : { right: GAP + index * (ACTION_SIZE + GAP) },
         animatedStyle,
       ]}
     >

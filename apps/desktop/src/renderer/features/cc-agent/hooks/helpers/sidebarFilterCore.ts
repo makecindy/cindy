@@ -62,7 +62,7 @@ export const DIALOGUE_FILTER_KEY = 'dialogue';
 /** 'all' 字符串字面量 = 选中"全部"；string[] = 勾选的 projectKey 和/或 DIALOGUE_FILTER_KEY。 */
 export type FilterProjects = 'all' | string[];
 /** Harness filter；沿用 vendor 存储键，兼容已有筛选偏好。 */
-export type FilterVendor = 'all' | 'cc' | 'codex' | 'pi';
+export type FilterVendor = 'all' | 'cc' | 'codex' | 'pi' | 'acp';
 /**
  * Sidebar 主列表分组方式(侧边栏重设计 D 期)。
  *   - project: 「按项目分组」开——有项目的任务收进项目行(默认)。
@@ -312,7 +312,7 @@ export function removeProjectsFromFilter(
 
 /* ============================== vendor load/persist ============================== */
 
-const VENDOR_VALUES: ReadonlySet<string> = new Set<FilterVendor>(['all', 'cc', 'codex', 'pi']);
+const VENDOR_VALUES: ReadonlySet<string> = new Set<FilterVendor>(['all', 'cc', 'codex', 'pi', 'acp']);
 
 export function loadVendor(mode: TaskListMode = 'tasks'): FilterVendor {
   const storage = safeStorage();
@@ -446,15 +446,35 @@ export function persistHideAutomations(hide: boolean, mode: TaskListMode): void 
   }
 }
 
+const HIDE_TASK_CREATED_KEYS: Record<TaskListMode, string> = {
+  tasks: 'cc-agent.sidebar.filter.hideTaskCreated',
+  inbox: 'cc-agent.sidebar.filter.inbox.hideTaskCreated',
+};
+
+export function loadHideTaskCreated(mode: TaskListMode): boolean {
+  try { return safeStorage()?.getItem(HIDE_TASK_CREATED_KEYS[mode]) === 'true'; } catch { return false; }
+}
+
+export function persistHideTaskCreated(hide: boolean, mode: TaskListMode): void {
+  try {
+    if (hide) safeStorage()?.setItem(HIDE_TASK_CREATED_KEYS[mode], 'true');
+    else safeStorage()?.removeItem(HIDE_TASK_CREATED_KEYS[mode]);
+  } catch (err) {
+    log.warn('[useSidebarFilter] failed to persist task-created filter:', err);
+  }
+}
+
 export function sidebarContentFilterCount(filter: {
   projects: FilterProjects;
   vendor: FilterVendor;
   lastActivity: FilterLastActivity;
   creators: FilterCreators;
   hideAutomations: boolean;
+  hideTaskCreated?: boolean;
 }): number {
   return Number(filter.projects !== 'all') + Number(filter.vendor !== 'all')
-    + Number(filter.lastActivity !== 'all') + Number(filter.creators !== 'all') + (filter.hideAutomations ? 1 : 0);
+    + Number(filter.lastActivity !== 'all') + Number(filter.creators !== 'all')
+    + (filter.hideAutomations ? 1 : 0) + (filter.hideTaskCreated ? 1 : 0);
 }
 
 /* ============================== groupDevice load/persist ============================== */

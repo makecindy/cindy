@@ -26,7 +26,7 @@ import { buildDbWorkerBundle } from '../localDb/__tests__/dbWorkerTestUtils';
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CodexResumePreparationBlockedError } from '@cindy/maker-core';
-import { providerShareHostPeer } from '@cindy/device-link';
+import { providerShareGuestPeer, providerShareHostPeer, sharedTaskGuestPeer } from '@cindy/device-link';
 import { createRemoteAgentHost } from '../remote-agent/host/runHost';
 import { RemoteAgentPoller, RemoteAgentRunClient } from '../remote-agent/controller/runClient';
 import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
@@ -405,10 +405,16 @@ describe('forkSessionAtMessage', () => {
           await gate;
           return { ok: true, result: { newSdkSessionId: 'child-sdk', uuidMap: [['native-anchor', 'child-anchor']] } };
         });
-        const opening = createSideChat('src-session');
+        // A phone retry with the same ID must reuse the committed snapshot, even after losing the first reply.
+        const childId = change === 'unchanged' || transport === 'inline' ? '1262e2db-f2b9-408d-9523-ee4e4d781409' : undefined;
+        const opening = createSideChat('src-session', childId);
         // Attach rejection handling before changing the source.
         const outcome = opening.then(value => ({ value, error: null }), error => ({ value: null, error }));
         await Promise.race([waiting, opening]);
+        if (childId) {
+          await expect(createSideChat('src-session', childId)).rejects.toThrow('in progress');
+          await expect(createSideChat('src-session', 'src-session')).rejects.toThrow('ID is unavailable');
+        }
         if (change === 'pi-next-turn' || isCodex) {
           db.insert(messages).values({ id: 'next', clientId: 'next', sessionId: 'src-session',
             role: 'user', content: '"next turn"', createdAt: 1200 }).run();
@@ -426,6 +432,11 @@ describe('forkSessionAtMessage', () => {
         if (change === 'append' || change === 'remote-append' || change === 'unchanged'
           || change === 'pi-unchanged' || change === 'codex-anchored-next-turn') {
           expect(result.error).toBeNull();
+          if (childId) {
+            expect(result.value?.id).toBe(childId);
+            await expect(createSideChat('src-session', childId)).resolves.toMatchObject({ id: childId, source: 'side-chat' });
+            expect(forkSdkSessionMock).toHaveBeenCalledTimes(1);
+          }
           expect(sqlite.prepare('SELECT role, content FROM messages WHERE session_id = ? ORDER BY created_at, rowid')
             .all(result.value!.id)).toEqual([{ role: 'user', content: '"question"' }, { role: 'assistant', content: '"answer"' }]);
           if (change === 'remote-append') {
@@ -1795,6 +1806,167 @@ describe('forkSessionAtMessage', () => {
       }),
     );
     expect(createMessageMock).toHaveBeenCalled();
+  });
+
+  // Unit, docs/plans/acp-plugin-bridge.md: plugin engine history belongs to the plugin's agent, so a
+  // fork copies Cindy's record and hands it over to a fresh session on the same engine. Before, every
+  // plugin engine task was refused (UNSUPPORTED_HISTORY) and a segment the task had left could not be
+  // read. Minimal input: one completed reply on a plugin engine, current or before a switch away.
+  const PLUGIN_PROVIDER = 'acp-plugin:dsh-acp:dsh';
+  it.each([
+    {
+      name: 'a task running on a plugin engine',
+      source: { agentKind: 'acp', providerId: PLUGIN_PROVIDER, model: 'deepseek-v4-pro', sdkSessionId: 'acp-native' },
+      exit: null,
+    },
+    {
+      name: 'a plugin engine segment the task later left',
+      source: { agentKind: 'cc', sdkSessionId: 'claude-now' },
+      exit: {
+        fromAgentKind: 'acp', toAgentKind: 'cc', fromModel: 'deepseek-v4-pro', fromProviderId: PLUGIN_PROVIDER,
+        fromSdkSessionId: 'acp-native', fromAgentDeviceId: null, handoff: 'switch handoff',
+      },
+    },
+  ])('forks $name on that engine from Cindy\'s record', async ({ source, exit }) => {
+    const priorUser = makeMessageRow({ id: 'u1', clientId: 'u1-client', role: 'user', createdAt: 2000, rowid: 10, agentKind: 'acp' });
+    const target = makeMessageRow({
+      id: 'a1', clientId: 'a1-client', role: 'assistant', content: '"done"', createdAt: 2500, rowid: 20, agentKind: 'acp',
+    });
+    selectQueue.push(
+      [makeSourceRow(source)],
+      [target],
+      [],
+      [priorUser, target],
+      [makeSourceRow({ id: 'forked-id', agentKind: 'acp', sdkSessionId: null, parentSessionId: 'src-session' })],
+    );
+    queryOneMock.mockResolvedValueOnce(null);
+    if (exit) queryOneMock.mockResolvedValueOnce({ content: JSON.stringify(exit), created_at: 4000, rowid: 40 });
+
+    await forkSessionAtMessage('src-session', 'a1-client');
+
+    expect(forkSdkSessionMock).not.toHaveBeenCalled();
+    expect(remoteInvokeMock).not.toHaveBeenCalled();
+    const childId = forkedSessionIdFromTx();
+    const txArgs = txCalls.find((call) => call.name === 'fork.session')!.args as { newSession: Record<string, unknown> };
+    expect(txArgs.newSession).toMatchObject({
+      agentKind: 'acp', providerId: PLUGIN_PROVIDER, model: 'deepseek-v4-pro', sdkSessionId: null,
+      parentSessionId: 'src-session', fastMode: false,
+    });
+    expect(commitContextRebuildMock).toHaveBeenCalledWith(
+      childId,
+      expect.stringContaining('could not be safely transferred'),
+      expect.objectContaining({
+        reason: 'native-session-recovery',
+        sourceAgentKind: 'acp',
+        sourceModel: 'deepseek-v4-pro',
+        sourceProviderId: PLUGIN_PROVIDER,
+      }),
+    );
+    expect(createMessageMock).toHaveBeenCalledWith(childId, expect.objectContaining({ agentKind: 'acp' }));
+  });
+
+  // Same plugin engine rule at the first message: nothing was said yet, so no empty handoff is queued.
+  it('forks a plugin engine task before its first message without queuing a handoff', async () => {
+    const first = makeMessageRow({ id: 'u1', clientId: 'u1-client', role: 'user', createdAt: 2000, rowid: 10 });
+    selectQueue.push(
+      [makeSourceRow({ agentKind: 'acp', providerId: PLUGIN_PROVIDER, model: 'deepseek-v4-pro', sdkSessionId: null })],
+      [first],
+      [],
+      [makeSourceRow({ id: 'forked-id', agentKind: 'acp', sdkSessionId: null, parentSessionId: 'src-session' })],
+    );
+
+    await forkSessionAtMessage('src-session', 'u1-client');
+
+    expect(txCalls.find((call) => call.name === 'fork.session')?.args).toMatchObject({
+      newSession: { agentKind: 'acp', providerId: PLUGIN_PROVIDER, sdkSessionId: null },
+    });
+    expect(commitContextRebuildMock).not.toHaveBeenCalled();
+    expect(createMessageMock).not.toHaveBeenCalled();
+  });
+
+  // 2026-11-27 regression (protocol-compatibility/plugin-harnesses.md): plugin engine tasks running
+  // on another computer or a direct share fork through Cindy's record (sdkSessionId = null + handoff),
+  // and the remote host runs full admission when the child starts its first turn. Coverage gap: this
+  // branch previously threw UNSUPPORTED_HISTORY for every remote agentDeviceId. Minimal failing input:
+  // an acp session with agentDeviceId 'device-b' or 'share:share-1' forked via forkSessionAtMessage
+  // and createSideChat. Tier: unit.
+  it.each(['device-b', 'share:share-1'])('forks and opens a side chat for a plugin engine task running on %s', async (agentDeviceId) => {
+    const source = makeSourceRow({
+      source: 'desktop',
+      agentKind: 'acp',
+      agentDeviceId,
+      providerId: PLUGIN_PROVIDER,
+      model: 'gemini-4-neon',
+      sdkSessionId: 'acp-native',
+      lastTurnEndedAt: 2600,
+    });
+    const question = makeMessageRow({ id: 'u1', clientId: 'u1-client', role: 'user', createdAt: 2000, rowid: 10 });
+    const reply = makeMessageRow({ id: 'a1', clientId: 'a1-client', role: 'assistant', createdAt: 2500, rowid: 20 });
+    selectQueue.push(
+      [source],
+      [{ clientId: 'a1-client' }],
+      [source],
+      [reply],
+      [],
+      [question, reply],
+      [makeSourceRow({ id: 'child', source: 'side-chat', agentKind: 'acp', agentDeviceId, providerId: PLUGIN_PROVIDER, sdkSessionId: null })],
+    );
+
+    const child = await createSideChat('src-session');
+
+    expect(child.id).toBe('child');
+    expect(txCalls.find((call) => call.name === 'fork.session')?.args).toMatchObject({
+      newSession: {
+        source: 'side-chat',
+        agentKind: 'acp',
+        agentDeviceId,
+        providerId: PLUGIN_PROVIDER,
+        model: 'gemini-4-neon',
+        sdkSessionId: null,
+      },
+    });
+    expect(forkSdkSessionMock).not.toHaveBeenCalled();
+    expect(remoteInvokeMock).not.toHaveBeenCalled();
+    expect(commitContextRebuildMock).toHaveBeenCalledOnce();
+  });
+
+  // Security boundary (unit): plugin engine forks must still fail closed on missing engine identity
+  // or invalid peer agentDeviceId values (matching createUserSession / admitPluginEngineSessionElsewhere).
+  it.each([
+    { name: 'missing engine providerId', providerId: null, agentDeviceId: null },
+    { name: 'shared-task peer device', providerId: PLUGIN_PROVIDER, agentDeviceId: sharedTaskGuestPeer('task-1', 'member-1', 'device-b') },
+    { name: 'provider-share peer device', providerId: PLUGIN_PROVIDER, agentDeviceId: providerShareGuestPeer('share-1', 'member-1', 'device-b') },
+  ])('refuses to fork a plugin engine task with $name', async ({ providerId, agentDeviceId }) => {
+    selectQueue.push(
+      [makeSourceRow({ agentKind: 'acp', agentDeviceId, providerId, sdkSessionId: 'acp-native' })],
+      [makeMessageRow({ id: 'a1', clientId: 'a1-client', role: 'assistant', createdAt: 2500, rowid: 20 })],
+    );
+
+    await expect(forkSessionAtMessage('src-session', 'a1-client')).rejects.toMatchObject({ code: 'UNSUPPORTED_HISTORY' });
+    expect(txCalls).toHaveLength(0);
+    expect(commitContextRebuildMock).not.toHaveBeenCalled();
+  });
+
+  // Side chats of a plugin engine task were refused before reaching the fork (unit, same rule).
+  it('opens a side chat of a plugin engine task on the same engine', async () => {
+    const source = makeSourceRow({
+      source: 'desktop', agentKind: 'acp', providerId: PLUGIN_PROVIDER, model: 'deepseek-v4-pro', lastTurnEndedAt: 2600,
+    });
+    const question = makeMessageRow({ clientId: 'q-client', createdAt: 2000, rowid: 10 });
+    const reply = makeMessageRow({ role: 'assistant', clientId: 'r-client', createdAt: 2500, rowid: 20 });
+    selectQueue.push(
+      [source], [{ clientId: 'r-client' }], [source], [reply], [], [question, reply],
+      [makeSourceRow({ id: 'child', source: 'side-chat', agentKind: 'acp', sdkSessionId: null })],
+    );
+
+    const child = await createSideChat('src-session');
+
+    expect(child.id).toBe('child');
+    expect(txCalls.find((call) => call.name === 'fork.session')?.args).toMatchObject({
+      newSession: { source: 'side-chat', agentKind: 'acp', providerId: PLUGIN_PROVIDER, sdkSessionId: null },
+    });
+    expect(forkSdkSessionMock).not.toHaveBeenCalled();
+    expect(commitContextRebuildMock).toHaveBeenCalledOnce();
   });
 
   // Review #6563: native-session routing tests did not cover rebuild-before-switch.

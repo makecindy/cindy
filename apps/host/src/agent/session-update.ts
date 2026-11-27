@@ -64,6 +64,7 @@ export function createHostSessionUpdate(deps: {
   /** Making the task active again (task-restore.ts), the one Host route for it; it also serves sends. */
   restoreTaskToActive(sessionId: string, options?: { publish?: boolean }): Promise<void>;
   onSoftDelete?(sessionId: string): Promise<void>;
+  onManualTitleWrite?(sessionId: string): void;
   /** A model or provider change: the desktop's set-model, with the desktop IPC's arguments. */
   setModel(sessionId: string, model: unknown, providerId: unknown, revision: unknown, selection: unknown): Promise<unknown>;
   /** The working-directory move's ports (session-move.ts). */
@@ -133,6 +134,7 @@ export function createHostSessionUpdate(deps: {
     // project), with a resume id the Claude transcript move persisted.
     const terminal = patch.status === 'archived' || patch.status === 'deleted';
     const setObj = sessionPatchToRow({
+      projectDir: patch.projectDir,
       workingDir: patch.workingDir,
       workspaceKind: patch.workspaceKind,
       snoozedUntil: patch.status !== undefined ? undefined : patch.snoozedUntil,
@@ -158,6 +160,7 @@ export function createHostSessionUpdate(deps: {
       if (patch.status === 'deleted') deletedIds.push(sessionId, ...deletedSideChats.map(child => child.sessionId));
     }
     if (Object.keys(update).length > 0) {
+      if (typeof update.title === 'string') deps.onManualTitleWrite?.(sessionId);
       await getDbClient().drizzle.update(sessionTable).set(update).where(eq(sessionTable.id, sessionId));
     }
     if (patch.status === 'active') await deps.restoreTaskToActive(sessionId, { publish: false });
@@ -182,8 +185,10 @@ export function createHostSessionUpdate(deps: {
     const result = sessionToCamel({ ...row, messageCount: 0 });
     const snooze = patch.snoozedUntil !== undefined || patch.status === 'active' || patch.status === 'archived' || patch.status === 'deleted'
       ? { snoozedUntil: result.snoozedUntil, snoozedAt: result.snoozedAt } : {};
+    const archive = patch.status === 'active' || patch.status === 'archived' || patch.status === 'deleted'
+      ? { archivedAt: result.archivedAt } : {};
     const clearedSummary = patch.pinnedAt === null ? { summary: null } : {};
-    deps.publish({ type: 'session_changed', action: 'update', sessionId, patch: { ...published, ...clearedSummary, ...snooze }, status: row.status });
+    deps.publish({ type: 'session_changed', action: 'update', sessionId, patch: { ...published, ...clearedSummary, ...snooze, ...archive }, status: row.status });
     if (hasBudget) {
       // A mixed update keeps its other fields when the budget cannot be saved (updateSessionInDb).
       try {

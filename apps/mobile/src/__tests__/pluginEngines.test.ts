@@ -24,12 +24,21 @@ import { createMobileMakerTransport, type RemoteInvoke } from '@/device-link/mob
 import { applyPluginEnginePick, buildRemoteCreateSessionOptions, type NewSessionDraft } from '@/session/newSession';
 import {
   buildPluginEngineGroups,
+  formatPluginEngineModelQuota,
   formatPluginEnginePickerQuota,
+  getCachedControlledPluginEngines,
   getCachedPluginEngines,
+  isPluginEngineSwitchSourceAllowed,
+  loadControlledPluginEngines,
   loadPluginEngines,
+  normalizeOfferedRemotePluginEngines,
   normalizePluginEngines,
+  parseControlledModelLocations,
+  pluginEngineChoiceKey,
   pluginEngineExecutionDeviceId,
   pluginEngineSessionCapabilities,
+  resolveMobilePluginEngineFavorite,
+  matchesPluginEngineFavoriteQuery,
   setCachedPluginEngines,
   type MobilePluginEngine,
 } from '@/session/pluginEngines';
@@ -261,7 +270,7 @@ describe('a task running on a plugin engine', () => {
   const [engine] = normalizePluginEngines([desktopView]) as [MobilePluginEngine];
   const labels = { defaultModel: 'Default model', effort: (id: string) => `level:${id}` };
 
-  it('shows the engine models, levels and modes, keeps host switches and has no Fast or plan mode', () => {
+  it('shows the engine models, levels and modes, keeps host switches, has no Fast, and enables plan mode only when declared', () => {
     const host = {
       availableModels: [{ id: 'claude-fable-5', label: 'Fable', efforts: ['high'], effortDisplayNames: {}, defaultEffort: 'high', supportsFastMode: true }],
       effortLevels: [], permissionModes: [{ id: 'acceptEdits', label: 'Accept edits' }],
@@ -269,12 +278,17 @@ describe('a task running on a plugin engine', () => {
     };
     const caps = pluginEngineSessionCapabilities(host, engine, labels);
     expect(caps).toMatchObject({
-      hasFastMode: false, planModeSupported: false, supportsSessionAgentSwitch: true,
+      hasFastMode: false, planModeSupported: true, supportsSessionAgentSwitch: true,
       permissionModes: [{ id: 'default' }, { id: 'plan' }, { id: 'bypassPermissions' }],
     });
     expect(caps.availableModels).toEqual([expect.objectContaining({
       id: 'deepseek-v4', label: 'DeepSeek-V4-Pro', efforts: ['low', 'high', 'max'], defaultEffort: 'high', supportsFastMode: false,
     })]);
+    const [withoutPlan] = normalizePluginEngines([{
+      ...desktopView,
+      permissionModes: [{ id: 'default', displayName: 'Default' }, { id: 'bypassPermissions', displayName: 'Allow all' }],
+    }]) as [MobilePluginEngine];
+    expect(pluginEngineSessionCapabilities(host, withoutPlan, labels).planModeSupported).toBe(false);
   });
 
   // 2026-11-20 用户反馈：只安装了插件但尚未登录/不可用(unavailable)的引擎不在模型选择器里占位；仅当前已选该引擎时保留提示。
@@ -324,10 +338,11 @@ describe('a task running on a plugin engine', () => {
     expect(picker({ providerId: DSH, modelId: 'deepseek-v4' })).toEqual(['DeepSeek Harness', 'Antigravity']);
   });
 
-  // Unit: Mobile model picker plugin engine group header quota formatting (windows, expired
-  // windows falling back to balances, and depleted balance warning). Minimal failing input:
-  // tightest window not chosen or balance-only plugin returns undefined.
-  it('formats plugin engine picker quota from tightest unexpired window or currency balance', () => {
+  // Unit: Mobile model picker plugin engine group header + Sources quota formatting aligned
+  // with built-in subscription providers (weekly primary %, reset-soon countdown, Sources
+  // `[countdown, remaining]` order, expired fallback to currency balance, and depleted warning).
+  // Minimal failing input: weekly window ignored in favor of 5h or balance-only returns undefined.
+  it('formats plugin engine picker quota from weekly window (with reset-soon metadata) or currency balance', () => {
     const now = 1_700_000_000_000;
     const countdown = (resetsAtSec: number) => `${Math.round((resetsAtSec * 1000 - now) / 3_600_000)}h`;
     expect(formatPluginEnginePickerQuota({
@@ -337,11 +352,66 @@ describe('a task running on a plugin engine', () => {
         { label: '5h', remainingPercent: 20, resetsAt: now + 2 * 3_600_000 },
         { label: 'Expired', remainingPercent: 0, resetsAt: now - 1000 },
       ],
-    }, now, 'en-US', countdown)).toEqual({
-      summary: '20% · 2h',
-      level: 'warn',
-      accessibilityLabel: '5h · 20% · 2h',
+    }, now, 'en-US', countdown, {
+      formatRemaining: (percent) => `${percent}% left`,
+      formatResetIn: (duration) => `Resets in ${duration}`,
+      resetSoonLabel: 'Resets soon',
+    })).toEqual({
+      summary: '80%',
+      sourceLabel: '24h · 80% left',
+      remaining: 80,
+      level: 'normal',
+      resetSoon: true,
+      reset: { remaining: 80, time: '24h', level: 'warn' },
+      resetParts: ['Resets in ', ''],
+      resetDescription: 'Resets in 24h · 80% left',
+      accessibilityLabel: 'Weekly · 80% left · Resets soon · Resets in 24h',
     });
+
+    // Multi-group plugin engine (Antigravity): Gemini and Claude & GPT stay separate.
+    const agyUsage = {
+      updatedAt: now,
+      windows: [
+        { label: 'Gemini Models · weekly', remainingPercent: 89, resetsAt: now + 6 * 24 * 3_600_000 },
+        { label: 'Gemini Models · 5h', remainingPercent: 8.4, resetsAt: now + 3_600_000 },
+        { label: 'Claude and GPT models · weekly', remainingPercent: 84.09, resetsAt: now + 6 * 24 * 3_600_000 },
+        { label: 'Claude and GPT models · 5h', remainingPercent: 100 },
+      ],
+    };
+    // Each pool keeps its own weekly-first value; Gemini's 5h at 8% only raises that pool to warn.
+    expect(formatPluginEnginePickerQuota(agyUsage, now, 'en-US', countdown)).toEqual({
+      summary: 'Gemini 89% · Claude & GPT 84%',
+      sourceLabel: 'Gemini 89% · Claude & GPT 84%',
+      remaining: 84,
+      level: 'warn',
+      accessibilityLabel: 'Gemini · 89% · 144h · Claude & GPT · 84% · 144h',
+      isMultiGroup: true,
+      groups: [
+        {
+          id: 'label:gemini models',
+          label: 'Gemini',
+          remaining: 89,
+          level: 'warn',
+          reset: '144h',
+          summary: '89% · 144h',
+          accessibilityLabel: 'Gemini · 89% · 144h',
+        },
+        {
+          id: 'label:claude and gpt models',
+          label: 'Claude & GPT',
+          remaining: 84,
+          level: 'normal',
+          reset: '144h',
+          summary: '84% · 144h',
+          accessibilityLabel: 'Claude & GPT · 84% · 144h',
+        },
+      ],
+    });
+    // Model rows follow their own pool (weekly-first on Mobile) and never borrow the other pool.
+    expect(formatPluginEngineModelQuota(agyUsage, 'gemini-4-neon', now, countdown, 'Gemini 4 Neon')).toBe('144h · 89%');
+    expect(formatPluginEngineModelQuota(agyUsage, 'gemini-pro-orchestrator-neon', now, countdown, 'Orchestrator (Neon)')).toBe('144h · 89%');
+    expect(formatPluginEngineModelQuota(agyUsage, 'claude-sonnet-5-5', now, countdown, 'Claude Sonnet 5.5')).toBe('144h · 84%');
+    expect(formatPluginEngineModelQuota(agyUsage, 'gpt-oss-120b-medium', now, countdown, 'GPT-OSS 120B (Medium)')).toBe('144h · 84%');
 
     expect(formatPluginEnginePickerQuota({
       updatedAt: now,
@@ -350,6 +420,7 @@ describe('a task running on a plugin engine', () => {
     }, now, 'en-US', countdown)).toMatchObject({
       level: 'normal',
       summary: expect.stringContaining('12.50'),
+      sourceLabel: expect.stringContaining('12.50'),
     });
 
     expect(formatPluginEnginePickerQuota({
@@ -360,5 +431,218 @@ describe('a task running on a plugin engine', () => {
     });
 
     expect(formatPluginEnginePickerQuota(null, now, 'en-US', countdown)).toBeUndefined();
+  });
+
+  // 回归：Mobile 会话页的模型选择器需与 Desktop 保持一致，对除 review 外的所有任务来源开放插件引擎切换。
+  it.each([
+    ['desktop', true],
+    ['bot', true],
+    ['x', true],
+    ['feishu', true],
+    ['telegram', true],
+    ['discord', true],
+    ['discord-hook', true],
+    ['slack', true],
+    ['wechat', true],
+    ['dingtalk', true],
+    ['wecom', true],
+    ['imessage', true],
+    ['learn', true],
+    ['cindy-make', true],
+    ['scheduler', true],
+    [null, true],
+    ['review', false],
+  ] as const)('switch source allowlist: %s -> %s', (source, allowed) => {
+    expect(isPluginEngineSwitchSourceAllowed(source)).toBe(allowed);
+  });
+
+  // 生产入口：resolveMobilePluginEngineFavorite + matchesPluginEngineFavoriteQuery。
+  // 规则依据：protocol-compatibility/plugin-harnesses.md「插件引擎模型收藏」— 已隐藏但可用的引擎照常解析收藏，
+  // 不可用引擎、被关闭模型与 defaultModelAllowed=false 不解析也不删原收藏。
+  // 覆盖缺口：此前手机端无插件引擎收藏解析逻辑。最小失败输入与 tier：unit，传入 hidden/unavailable/defaultModelAllowed=false。
+  it('resolves plugin engine favorites including hidden engines while rejecting unavailable or disallowed models', () => {
+    const [hidden] = normalizePluginEngines([{ ...desktopView, hidden: true }]) as [MobilePluginEngine];
+    const [unavailable] = normalizePluginEngines([{
+      ...desktopView,
+      providerId: 'acp-plugin:_ns__local__agy:agy',
+      name: 'Antigravity',
+      availability: { state: 'unavailable', message: 'Install agy' },
+    }]) as [MobilePluginEngine];
+    const [noDefault] = normalizePluginEngines([{
+      ...desktopView,
+      providerId: 'acp-plugin:nodefault:cli',
+      name: 'NoDefault',
+      defaultModelAllowed: false,
+    }]) as [MobilePluginEngine];
+
+    const fav = {
+      uid: 'fav-1',
+      providerId: hidden.providerId,
+      modelId: 'deepseek-v4',
+      agent: 'claude-code' as const,
+      effort: 'max',
+      fast: false,
+    };
+    const resolved = resolveMobilePluginEngineFavorite(fav, [hidden, unavailable, noDefault], labels);
+    expect(resolved).toMatchObject({
+      key: 'fav-1',
+      providerId: hidden.providerId,
+      modelId: 'deepseek-v4',
+      title: 'DeepSeek-V4-Pro',
+      subtitle: 'DeepSeek Harness',
+      effort: 'max',
+      effortLabel: 'level:max',
+      selected: false,
+      disabled: false,
+      favorite: fav,
+    });
+    expect(matchesPluginEngineFavoriteQuery(resolved!, 'deepseek')).toBe(true);
+    expect(matchesPluginEngineFavoriteQuery(resolved!, 'nonexistent')).toBe(false);
+    // Unavailable engine, missing model, and closed default do not resolve.
+    expect(resolveMobilePluginEngineFavorite({ ...fav, providerId: unavailable.providerId }, [hidden, unavailable], labels)).toBeNull();
+    expect(resolveMobilePluginEngineFavorite({ ...fav, modelId: 'removed' }, [hidden], labels)).toBeNull();
+    expect(resolveMobilePluginEngineFavorite({ ...fav, providerId: noDefault.providerId, modelId: 'default' }, [noDefault], labels)).toBeNull();
+  });
+
+  // Unit: remote & shared plugin engines via maker:model-catalog:read (excluding built-in shares),
+  // per-model quota window filtering, and agentDeviceId round-trip in create-session options.
+  it('filters remote model locations, normalizes offered remote engines, and formats per-model quotas', async () => {
+    const locations = parseControlledModelLocations('host-a', {
+      locations: [
+        { agentDeviceId: 'studio', name: 'Studio Mac' },
+        {
+          agentDeviceId: 'share:plugin-1',
+          name: 'Alice DSH',
+          favoriteSource: { shareId: 'plugin-1', memberId: 'alice', providerId: DSH, owner: { region: 'global' } },
+        },
+        {
+          agentDeviceId: 'share:builtin-1',
+          name: 'Built-in Share',
+          favoriteSource: { shareId: 'builtin-1', memberId: 'bob', providerId: 'openai', owner: { region: 'global' } },
+        },
+      ],
+    });
+    expect(locations.map((loc) => loc.agentDeviceId)).toEqual(['studio', 'share:plugin-1']);
+
+    const offered = normalizeOfferedRemotePluginEngines(
+      [
+        { ...desktopView, remoteUse: { supported: true, enabled: true }, hidden: true, reportsUsage: true },
+        { ...desktopView, providerId: 'acp-plugin:local-only:eng', remoteUse: { supported: true, enabled: false } },
+      ],
+      { deviceId: 'studio', deviceName: 'Studio Mac' },
+    );
+    expect(offered).toHaveLength(1);
+    expect(offered[0]).toMatchObject({ providerId: DSH, deviceId: 'studio', deviceName: 'Studio Mac', reportsUsage: true });
+    expect(offered[0]).not.toHaveProperty('hidden');
+    expect(pluginEngineChoiceKey(offered[0]!)).toBe(`studio\n${DSH}`);
+
+    const sharedOffered = normalizeOfferedRemotePluginEngines(
+      [{ ...desktopView, remoteUse: { supported: true, enabled: true }, reportsUsage: true }],
+      { deviceId: 'share:plugin-1', deviceName: 'Alice DSH' },
+    );
+    expect(sharedOffered[0]?.reportsUsage).toBeUndefined();
+
+    setMobileAuthOwner('remote-plugin-owner');
+    try {
+      const invoke = vi.fn(async () => [
+        { ...desktopView, remoteUse: { supported: true, enabled: true } },
+      ]) as unknown as RemoteInvoke;
+      await loadControlledPluginEngines('host-a', 'studio', invoke, {
+        deviceName: 'Studio Mac',
+        force: true,
+      });
+      expect(invoke).toHaveBeenCalledWith('host-a', 'maker:model-catalog:read', [{
+        op: 'read',
+        agentDeviceId: 'studio',
+        channel: 'maker:list-plugin-engines',
+        args: [],
+      }]);
+      const loaded = getCachedControlledPluginEngines('host-a', 'studio');
+      expect(loaded).toHaveLength(1);
+      expect(loaded[0]).toMatchObject({
+        providerId: DSH,
+        deviceId: 'studio',
+        deviceName: 'Studio Mac',
+      });
+
+      // Transient timeout keeps the last known catalog; PRECONDITION_FAILED (revoked source) evicts it.
+      const timeoutInvoke = vi.fn(async () => {
+        throw Object.assign(new Error('[DEVICE_LINK_TIMEOUT] slow'), { code: 'DEVICE_LINK_TIMEOUT' });
+      }) as unknown as RemoteInvoke;
+      await loadControlledPluginEngines('host-a', 'studio', timeoutInvoke, { force: true });
+      expect(getCachedControlledPluginEngines('host-a', 'studio')).toHaveLength(1);
+
+      const revokedInvoke = vi.fn(async () => {
+        throw Object.assign(new Error('[PRECONDITION_FAILED] Model source is no longer available'), {
+          code: 'PRECONDITION_FAILED',
+        });
+      }) as unknown as RemoteInvoke;
+      await loadControlledPluginEngines('host-a', 'studio', revokedInvoke, { force: true });
+      expect(getCachedControlledPluginEngines('host-a', 'studio')).toEqual([]);
+    } finally {
+      setMobileAuthOwner(null);
+    }
+
+    const now = 1_700_000_000_000;
+    const countdown = (resetsAtSec: number) => {
+      const hours = Math.round((resetsAtSec * 1000 - now) / 3_600_000);
+      return hours >= 24 ? `${Math.round(hours / 24)}d` : `${hours}h`;
+    };
+    const usage = {
+      updatedAt: now,
+      windows: [
+        { label: 'V4-5h', remainingPercent: 42, resetsAt: now + 3 * 3_600_000, models: ['deepseek-v4'] },
+        { label: 'Global', remainingPercent: 80, resetsAt: now + 5 * 3_600_000 },
+      ],
+    };
+    expect(formatPluginEngineModelQuota(usage, 'deepseek-v4', now, countdown)).toBe('3h · 42%');
+    // Models outside explicit scopes inherit the engine's unscoped Global window, matching built-in Claude/Codex.
+    expect(formatPluginEngineModelQuota(usage, 'other-model', now, countdown)).toBe('5h · 80%');
+    expect(formatPluginEngineModelQuota(usage, 'default', now, countdown)).toBeNull();
+    // Strictly model-scoped snapshots never borrow another model's window.
+    expect(formatPluginEngineModelQuota({
+      updatedAt: now,
+      windows: [{ label: 'V4-5h', remainingPercent: 42, resetsAt: now + 3 * 3_600_000, models: ['deepseek-v4'] }],
+    }, 'other-model', now, countdown)).toBeNull();
+    // Multi-group snapshots without `models[]` (Antigravity v0.5.0): prefer each model group's weekly window.
+    const antigravityUsage = {
+      updatedAt: now,
+      windows: [
+        { label: 'Gemini Models · weekly', windowMinutes: 10080, remainingPercent: 95, resetsAt: now + 7 * 24 * 3_600_000 },
+        { label: 'Gemini Models · 5h', windowMinutes: 300, remainingPercent: 80, resetsAt: now + 4 * 3_600_000 },
+        { label: 'Claude and GPT models · weekly', windowMinutes: 10080, remainingPercent: 60, resetsAt: now + 6 * 24 * 3_600_000 },
+        { label: 'Claude and GPT models · 5h', windowMinutes: 300, remainingPercent: 20, resetsAt: now + 2 * 3_600_000 },
+      ],
+    };
+    expect(formatPluginEngineModelQuota(antigravityUsage, 'gemini-4-neon', now, countdown, 'Gemini 4 Neon')).toBe('7d · 95%');
+    expect(formatPluginEngineModelQuota(antigravityUsage, 'claude-opus-4-7', now, countdown, 'Claude Opus 4.7')).toBe('6d · 60%');
+    expect(formatPluginEngineModelQuota(antigravityUsage, 'unknown-model', now, countdown, 'Mystery')).toBeNull();
+    // When Gemini's windows all expire while Claude/GPT stays live, Gemini and unmatched rows must return null, never Claude's quota.
+    const geminiExpiredUsage = {
+      updatedAt: now,
+      windows: [
+        { label: 'Gemini Models · weekly', windowMinutes: 10080, remainingPercent: 10, resetsAt: now - 60_000 },
+        { label: 'Gemini Models · 5h', windowMinutes: 300, remainingPercent: 0, resetsAt: now - 60_000 },
+        { label: 'Claude and GPT models · weekly', windowMinutes: 10080, remainingPercent: 60, resetsAt: now + 6 * 24 * 3_600_000 },
+        { label: 'Claude and GPT models · 5h', windowMinutes: 300, remainingPercent: 20, resetsAt: now + 2 * 3_600_000 },
+      ],
+    };
+    expect(formatPluginEngineModelQuota(geminiExpiredUsage, 'gemini-4-neon', now, countdown, 'Gemini 4 Neon')).toBeNull();
+    expect(formatPluginEngineModelQuota(geminiExpiredUsage, 'unknown-model', now, countdown, 'Mystery')).toBeNull();
+    expect(formatPluginEngineModelQuota(geminiExpiredUsage, 'claude-opus-4-7', now, countdown, 'Claude Opus 4.7')).toBe('6d · 60%');
+
+    const remoteCreateOpts = buildRemoteCreateSessionOptions(applyPluginEnginePick({
+      agentKind: 'claude-code', workspaceKind: 'project', workingDir: '/repo', model: 'claude-fable-5',
+      providerId: 'xd', effort: 'high', permissionMode: 'ask', fastMode: true, firstMessage: 'hi',
+    }, {
+      providerId: DSH, model: 'deepseek-v4', effort: 'high', permissionMode: 'default', agentDeviceId: 'share:plugin-1',
+    }));
+    expect(remoteCreateOpts).toMatchObject({
+      agentKind: 'acp',
+      providerId: DSH,
+      model: 'deepseek-v4',
+      agentDeviceId: 'share:plugin-1',
+      fastMode: false,
+    });
   });
 });

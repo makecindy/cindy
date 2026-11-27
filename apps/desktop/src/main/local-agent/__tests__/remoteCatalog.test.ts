@@ -28,7 +28,7 @@ describe('application remote catalog', () => {
   it('collapses online group members and restores them when their group is unavailable', async () => {
     setup();
     mock.devices.push({ deviceId: 'member', name: 'member', online: true, remoteControlEnabled: true });
-    const group = { strategy: 'least', autoSwitch: true, members: [
+    const group = { strategy: 'expiring', autoSwitch: true, members: [
       { kind: 'local' }, { kind: 'device', agentDeviceId: 'member', providerId: 'openai' },
       { kind: 'share', agentDeviceId: 'share:active', providerId: 'openai' },
     ] };
@@ -49,7 +49,7 @@ describe('application remote catalog', () => {
   it.each(['disconnected', 'engine-missing', 'model-missing', 'available'] as const)(
     'only hides members represented by an available local choice (%s)', async state => {
       setup();
-      const group = normalizeProviderGroupConfig({ strategy: 'least', autoSwitch: true,
+      const group = normalizeProviderGroupConfig({ strategy: 'expiring', autoSwitch: true,
         members: [{ kind: 'local' }, { kind: 'device', agentDeviceId: 'device', providerId: 'openai' },
           { kind: 'share', agentDeviceId: 'share:active', providerId: 'openai' }] }, 'openai')!;
       const localModels: LocalAgentModel[] = state === 'disconnected' ? [] : [{

@@ -15,6 +15,7 @@ import type {
 import { createLogger } from '../logger';
 import { HumanDesktopInput } from './inputOwnership';
 import { resolveLinuxInputBinary, isX11Desktop, x11InputGeometry } from './linuxInput';
+import { GNOME_DISPLAY } from './gnomeDesktop';
 import { readLinuxUnlockState } from './linuxCredentials';
 import { WAYLAND_DISPLAY_ID } from './waylandCapture';
 import {
@@ -341,10 +342,13 @@ export class DesktopInputHost {
       throw new Error('DESKTOP_INPUT_UNSUPPORTED');
     // The managed cloud desktop keeps its guarded X11 adapter instead of XTest.
     const x11 = platform === 'linux' && !cloudX11 && isX11Desktop(platform);
+    // GNOME's RemoteDesktop session maps normalized points onto its monitor stream.
+    const gnome = platform === 'linux' && !x11 && !cloudX11 && GNOME_DISPLAY.test(displayId);
     if (
       platform === 'linux' &&
       !x11 &&
       !cloudX11 &&
+      !gnome &&
       displayId !== WAYLAND_DISPLAY_ID &&
       !/^hyprland:[A-Za-z0-9_.-]{1,80}$/.test(displayId)
     )
@@ -370,7 +374,7 @@ export class DesktopInputHost {
         return;
       }
       this.x11Geometry = x11 ? x11InputGeometry(screen.getAllDisplays(), displayId) : null;
-      if (platform === 'linux' && !x11 && displayId !== WAYLAND_DISPLAY_ID) {
+      if (platform === 'linux' && !x11 && !gnome && displayId !== WAYLAND_DISPLAY_ID) {
         this.linuxPoint = linuxInputMapping(await linuxMonitors(), displayId);
         if (generation !== this.generation) throw new Error('DESKTOP_LEASE_EXPIRED');
       } else this.linuxPoint = null;
@@ -395,7 +399,14 @@ export class DesktopInputHost {
       if (generation !== this.generation) throw new Error('DESKTOP_LEASE_EXPIRED');
       const child = window
         ? this.runtime.spawn(binary, ['--window', String(window.windowId), String(window.pid)])
-        : this.runtime.spawn(binary, this.x11Geometry ? ['--x11', ...this.x11Geometry] : []);
+        : this.runtime.spawn(
+            binary,
+            this.x11Geometry
+              ? ['--x11', ...this.x11Geometry]
+              : gnome
+                ? ['--gnome', displayId.slice('gnome:'.length)]
+                : [],
+          );
       this.child = child;
       this.displayId = displayId;
       this.window = window ? { windowId: window.windowId, pid: window.pid } : null;
@@ -479,7 +490,14 @@ export class DesktopInputHost {
         }
         flush();
         const chars = Array.from(event.text);
-        for (let i = 0, chunk = this.x11Geometry ? 64 : 256; i < chars.length; i += chunk) {
+        // Preflight the whole logical text on the SAME serialized helper pipe.
+        // A refusal rejects this write chain before any per-character command.
+        if (this.x11Geometry && chars.length)
+          this.write([{ kind: 'text-check', text: event.text }], this.activity!.begin([]));
+        // X11 may need two 2 s client fences (preflight + key consumption).
+        // One code point per ACK stays below both the 6 s native watchdog and
+        // the 10 s parent ACK deadline even for a consistently slow receiver.
+        for (let i = 0, chunk = this.x11Geometry ? 1 : 256; i < chars.length; i += chunk) {
           pending = [{ kind: 'text', text: chars.slice(i, i + chunk).join('') }];
           flush();
         }
@@ -534,7 +552,10 @@ export class DesktopInputHost {
     const connection = this.windows;
     const linuxX11 = this.linuxX11;
     const bytes = Buffer.byteLength(line);
-    if (this.queuedBytes + bytes > 32_768 || (!linuxX11 && !connection && (!child || child.stdin.destroyed))) {
+    // Per-character X11 ACKs add JSON framing to a valid 4096-code-point paste.
+    // Bound that queue too, without rejecting one legal paste for its framing.
+    const queueLimit = this.x11Geometry ? 262_144 : 32_768;
+    if (this.queuedBytes + bytes > queueLimit || (!linuxX11 && !connection && (!child || child.stdin.destroyed))) {
       batch?.complete();
       this.onFailure();
       return Promise.resolve(false);

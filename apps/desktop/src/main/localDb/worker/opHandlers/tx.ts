@@ -1136,11 +1136,33 @@ function botsPersistSessionPermission(
   }
   const profilePermission = mode === 'bypassPermissions' ? 'trusted' : mode === 'auto' ? 'auto' : mode === 'ask' ? 'ask' : null;
   return db.transaction(() => {
-    const session = db.prepare('SELECT id FROM sessions WHERE id = ?').get(sessionId);
+    const columns = db.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>;
+    const hasBaselineCol = columns.some((col) => col.name === 'scheduled_model_baseline');
+    const hasAgentKindCol = columns.some((col) => col.name === 'agent_kind');
+    const session = hasBaselineCol
+      ? db.prepare(`SELECT id, ${hasAgentKindCol ? 'agent_kind AS agentKind, ' : ''}scheduled_model_baseline AS scheduledModelBaseline FROM sessions WHERE id = ?`)
+        .get(sessionId) as { id: string; agentKind?: string | null; scheduledModelBaseline: string | null } | undefined
+      : db.prepare('SELECT id FROM sessions WHERE id = ?').get(sessionId) as { id: string } | undefined;
     if (!session) return { updated: false };
+    const savedBaseline = 'scheduledModelBaseline' in session
+      ? parseScheduledModelBaseline(session.scheduledModelBaseline)
+      : null;
+    const nextBaseline = savedBaseline && !savedBaseline.pendingBotProfileVersion
+      ? JSON.stringify({ ...savedBaseline, permissionMode: mode })
+      : null;
+    const crossPluginTemp = !!nextBaseline && !!savedBaseline
+      && ((('agentKind' in session ? session.agentKind : null) === 'acp') !== (savedBaseline.agentKind === 'acp'));
     if (!profilePermission) {
-      db.prepare('UPDATE sessions SET permission_mode = ?, updated_at = ? WHERE id = ?')
-        .run(mode, Date.now(), sessionId);
+      if (crossPluginTemp) {
+        db.prepare('UPDATE sessions SET scheduled_model_baseline = ?, updated_at = ? WHERE id = ?')
+          .run(nextBaseline, Date.now(), sessionId);
+      } else if (nextBaseline) {
+        db.prepare('UPDATE sessions SET permission_mode = ?, scheduled_model_baseline = ?, updated_at = ? WHERE id = ?')
+          .run(mode, nextBaseline, Date.now(), sessionId);
+      } else {
+        db.prepare('UPDATE sessions SET permission_mode = ?, updated_at = ? WHERE id = ?')
+          .run(mode, Date.now(), sessionId);
+      }
       return { updated: true };
     }
     const link = db.prepare(`SELECT bot_id AS botId FROM bot_session_links
@@ -1178,6 +1200,16 @@ function botsPersistSessionPermission(
         (SELECT session_id FROM bot_session_links WHERE bot_id = ?
           AND role IN ('canonical', 'group', 'channel', 'thread', 'routine') AND archived_at IS NULL)`)
         .run(mode, Date.now(), link.botId);
+      if (nextBaseline) {
+        db.prepare('UPDATE sessions SET scheduled_model_baseline = ? WHERE id = ?')
+          .run(nextBaseline, sessionId);
+      }
+    } else if (crossPluginTemp) {
+      db.prepare('UPDATE sessions SET scheduled_model_baseline = ?, updated_at = ? WHERE id = ?')
+        .run(nextBaseline, Date.now(), sessionId);
+    } else if (nextBaseline) {
+      db.prepare('UPDATE sessions SET permission_mode = ?, scheduled_model_baseline = ?, updated_at = ? WHERE id = ?')
+        .run(mode, nextBaseline, Date.now(), sessionId);
     } else {
       db.prepare('UPDATE sessions SET permission_mode = ?, updated_at = ? WHERE id = ?')
         .run(mode, Date.now(), sessionId);
@@ -2171,6 +2203,7 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
   workspaceKind: string | null;
   remoteHostId: string | null;
   source: string | null;
+  archivedAt: number | null;
   status: 'active' | 'archived';
 }> {
   const payload = asRecord(args, 'sessions.setStatus args');
@@ -2183,10 +2216,10 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
     throw invalidArgs(`invalid status: ${status}`);
   }
   const selectSession = db.prepare(
-    'SELECT status, source, side_chat_close_pending AS sideChatClosePending FROM sessions WHERE id = ? LIMIT 1',
+    'SELECT status, source, archived_at AS archivedAt, side_chat_close_pending AS sideChatClosePending FROM sessions WHERE id = ? LIMIT 1',
   );
   const updateSession = db.prepare(
-    'UPDATE sessions SET status = ?, snoozed_until = NULL, snoozed_at = NULL, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
+    'UPDATE sessions SET status = ?, snoozed_until = NULL, snoozed_at = NULL, archived_at = ?, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source, archived_at AS archivedAt',
   );
   const transaction = db.transaction(() => {
     const applied: Array<{
@@ -2196,6 +2229,7 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
       workspaceKind: string | null;
       remoteHostId: string | null;
       source: string | null;
+      archivedAt: number | null;
       status: 'active' | 'archived';
     }> = [];
     const now = Date.now();
@@ -2204,7 +2238,7 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
       if (guard && !db.prepare(PROJECT_ARCHIVE_GUARD_SQL).get(
         sessionId, guard.workingDir, guard.projectDir, guard.workspaceKind, guard.remoteHostId, status === 'active' ? 'archived' : 'active',
       )) throw Object.assign(new Error('Project task changed'), { code: 'PRECONDITION_FAILED' });
-      const existing = selectSession.get(sessionId) as { status: string; source: string; sideChatClosePending: number } | undefined;
+      const existing = selectSession.get(sessionId) as { status: string; source: string; archivedAt: number | null; sideChatClosePending: number } | undefined;
       if (!existing) {
         throw Object.assign(new Error(`Session 不存在: ${sessionId}`), { code: 'NOT_FOUND' });
       }
@@ -2228,8 +2262,13 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
       if (existing.source === 'bot' && (status === 'archived' || existing.status === 'archived')) {
         db.prepare("UPDATE bot_session_links SET archived_at = COALESCE(archived_at, ?) WHERE session_id = ? AND role = 'group'").run(now, sessionId);
       }
-      const updated = updateSession.get(status, now, sessionId) as
-        | { id: string; title: string | null; workingDir: string | null; workspaceKind: string | null; remoteHostId: string | null; source: string | null }
+      const nextArchivedAt = status === 'active'
+        ? null
+        : existing.status === 'archived'
+          ? (existing.archivedAt ?? null)
+          : now;
+      const updated = updateSession.get(status, nextArchivedAt, now, sessionId) as
+        | { id: string; title: string | null; workingDir: string | null; workspaceKind: string | null; remoteHostId: string | null; source: string | null; archivedAt: number | null }
         | undefined;
       if (!updated) {
         throw Object.assign(new Error(`Session 不存在: ${sessionId}`), { code: 'NOT_FOUND' });
@@ -2244,6 +2283,7 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
         workspaceKind: updated.workspaceKind,
         remoteHostId: updated.remoteHostId,
         source: updated.source,
+        archivedAt: updated.archivedAt ?? null,
         status,
       });
     }
@@ -2256,6 +2296,7 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
     workspaceKind: string | null;
     remoteHostId: string | null;
     source: string | null;
+    archivedAt: number | null;
     status: 'active' | 'archived';
   }>;
 }
@@ -2266,6 +2307,11 @@ function sessionsSetTerminalStatus(db: Database.Database, args: unknown): Sessio
   const sessionId = expectString(payload.sessionId, 'sessionId');
   const status = expectString(payload.status, 'status');
   if (status !== 'archived' && status !== 'deleted') throw invalidArgs('invalid terminal status: ' + status);
+  const hasExplicitArchivedAt = Object.prototype.hasOwnProperty.call(payload, 'archivedAt');
+  if (hasExplicitArchivedAt && (status !== 'archived'
+    || (payload.archivedAt !== null && (typeof payload.archivedAt !== 'number' || !Number.isFinite(payload.archivedAt))))) {
+    throw invalidArgs('invalid archivedAt');
+  }
   const transaction = db.transaction((): SessionsSetTerminalStatusResult => {
     const guard = payload.projectGuard as ProjectArchiveGuard | undefined;
     if (guard && !db.prepare(PROJECT_ARCHIVE_GUARD_SQL).get(
@@ -2280,8 +2326,8 @@ function sessionsSetTerminalStatus(db: Database.Database, args: unknown): Sessio
       || !db.prepare("SELECT id FROM sessions WHERE id = ? AND status = 'active' AND user_send_at IS NULL AND active_turn_started_at IS NULL AND pinned_at IS NULL AND NOT EXISTS (SELECT 1 FROM messages WHERE session_id = sessions.id)").get(sessionId))) {
       throw Object.assign(new Error('Task is no longer unused'), { code: 'PRECONDITION_FAILED' });
     }
-    const existing = db.prepare('SELECT id, status, source, side_chat_promoted AS sideChatPromoted, side_chat_close_pending AS sideChatClosePending FROM sessions WHERE id = ? LIMIT 1').get(sessionId) as
-      | { id: string; status: string; source: string; sideChatPromoted: number; sideChatClosePending: number } | undefined;
+    const existing = db.prepare('SELECT id, status, source, archived_at AS archivedAt, side_chat_promoted AS sideChatPromoted, side_chat_close_pending AS sideChatClosePending FROM sessions WHERE id = ? LIMIT 1').get(sessionId) as
+      | { id: string; status: string; source: string; archivedAt: number | null; sideChatPromoted: number; sideChatClosePending: number } | undefined;
     if (!existing) throw Object.assign(new Error('Session not found: ' + sessionId), { code: 'NOT_FOUND' });
     if (existing.status === 'deleted') throw Object.assign(new Error('Deleted session cannot change status: ' + sessionId), { code: 'PRECONDITION_FAILED' });
     const closeParentId = payload.sideChatCloseParentId;
@@ -2303,20 +2349,29 @@ function sessionsSetTerminalStatus(db: Database.Database, args: unknown): Sessio
       db.prepare("UPDATE bot_session_links SET archived_at = COALESCE(archived_at, ?) WHERE session_id = ? AND role = 'group'").run(now, sessionId);
     }
     if (status === 'archived' || status === 'deleted') db.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, sessionId);
+    const nextArchivedAt = status === 'deleted'
+      ? null
+      : payload.idleArchiveCutoff !== undefined
+        ? (existing.archivedAt ?? null)
+        : hasExplicitArchivedAt
+          ? (payload.archivedAt as number | null)
+          : existing.status === 'archived'
+            ? (existing.archivedAt ?? null)
+            : now;
     const updated = db.prepare(
-      'UPDATE sessions SET status = ?, side_chat_close_pending = CASE WHEN ? THEN 1 ELSE side_chat_close_pending END, snoozed_until = NULL, snoozed_at = NULL, updated_at = CASE WHEN ? IS NOT NULL THEN updated_at ELSE ? END WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
-    ).get(status, closeParentId === undefined ? 0 : 1, payload.idleArchiveCutoff ?? null, now, sessionId) as {
-      id: string; title: string | null; workingDir: string | null; workspaceKind: string | null; remoteHostId: string | null; source: string | null;
+      'UPDATE sessions SET status = ?, side_chat_close_pending = CASE WHEN ? THEN 1 ELSE side_chat_close_pending END, snoozed_until = NULL, snoozed_at = NULL, archived_at = ?, updated_at = CASE WHEN ? IS NOT NULL THEN updated_at ELSE ? END WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source, archived_at AS archivedAt',
+    ).get(status, closeParentId === undefined ? 0 : 1, nextArchivedAt, payload.idleArchiveCutoff ?? null, now, sessionId) as {
+      id: string; title: string | null; workingDir: string | null; workspaceKind: string | null; remoteHostId: string | null; source: string | null; archivedAt: number | null;
     } | undefined;
     if (!updated) throw Object.assign(new Error('Session not found: ' + sessionId), { code: 'NOT_FOUND' });
     // Hidden children must become unreachable in the same commit as the parent.
     // A failure in either the status write or its closure fence rolls back all rows.
     const deletedSideChats = status === 'deleted' && (existing.source !== 'side-chat' || existing.sideChatPromoted)
-      ? db.prepare(`UPDATE sessions SET status = 'deleted', updated_at = ?
+      ? db.prepare(`UPDATE sessions SET status = 'deleted', archived_at = NULL, updated_at = ?
           WHERE parent_session_id = ? AND source = 'side-chat' AND side_chat_promoted = 0 AND status <> 'deleted'
             AND NOT ${COMMITTED_SIDE_CHAT_WORKER_SQL}
           RETURNING id AS sessionId, title, working_dir AS workingDir, workspace_kind AS workspaceKind,
-            remote_host_id AS remoteHostId, source`).all(now, sessionId) as SessionsSetTerminalStatusResult['deletedSideChats']
+            remote_host_id AS remoteHostId, source, archived_at AS archivedAt`).all(now, sessionId) as SessionsSetTerminalStatusResult['deletedSideChats']
       : [];
     if (status === 'deleted') {
       deleteDeletedSessionViewStates(db, [sessionId, ...deletedSideChats.map(child => child.sessionId)]);
@@ -2324,7 +2379,7 @@ function sessionsSetTerminalStatus(db: Database.Database, args: unknown): Sessio
     for (const child of deletedSideChats) {
       db.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, child.sessionId);
     }
-    return { ...updated, sessionId: updated.id, status, deletedSideChats };
+    return { ...updated, sessionId: updated.id, archivedAt: updated.archivedAt ?? null, status, deletedSideChats };
   });
   return transaction();
 }
@@ -3547,12 +3602,13 @@ function orcaUpsertWorker(db: Database.Database, args: unknown): void {
       const remote = asRecord(payload.remoteExecution, 'remoteExecution');
       if (remote.proxySession !== undefined) {
         const proxy = asRecord(remote.proxySession, 'remoteExecution.proxySession');
-        db.prepare("INSERT INTO sessions (id, title, working_dir, workspace_kind, model, effort, permission_mode, fast_mode, status, agent_kind, orca_role, source, created_at, updated_at, agent_device_id) VALUES (?, ?, NULL, 'project', ?, ?, ?, ?, 'active', ?, 'worker', 'desktop', ?, ?, ?)").run(
+        db.prepare("INSERT INTO sessions (id, title, working_dir, workspace_kind, model, effort, permission_mode, fast_mode, status, agent_kind, orca_role, source, created_at, updated_at, provider_id, agent_device_id) VALUES (?, ?, NULL, 'project', ?, ?, ?, ?, 'active', ?, 'worker', 'desktop', ?, ?, ?, ?)").run(
           sessionId, expectString(proxy.title, 'proxySession.title'),
           expectString(proxy.model, 'proxySession.model'),
           proxy.effort == null ? 'high' : expectString(proxy.effort, 'proxySession.effort'),
           expectString(proxy.permissionMode, 'proxySession.permissionMode'), fastModeToStorage(proxy.fastMode),
           expectString(proxy.agentKind, 'proxySession.agentKind'), now, now,
+          proxy.providerId == null ? null : expectString(proxy.providerId, 'proxySession.providerId'),
           proxy.agentDeviceId == null ? null : expectString(proxy.agentDeviceId, 'proxySession.agentDeviceId'),
         );
       }

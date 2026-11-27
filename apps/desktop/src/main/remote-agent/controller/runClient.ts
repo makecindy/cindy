@@ -15,6 +15,7 @@ import { gzip } from 'node:zlib';
 import {
   DeviceLinkError,
   REMOTE_AGENT_CHANNEL,
+  REMOTE_AGENT_INVOKE_TIMEOUT_MS,
   REMOTE_AGENT_MAX_INLINE_PAYLOAD_CHARS,
   REMOTE_AGENT_MAX_PAYLOAD_BYTES,
   REMOTE_AGENT_MAX_UPLOAD_CHUNKS,
@@ -124,6 +125,32 @@ export interface RemoteAgentRunHandlers {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isInvokeResultTimeout(error: unknown): error is Error {
+  if (!(error instanceof Error) || error.name === 'AbortError') return false;
+  const transport = error instanceof DeviceLinkError ? error : error.cause;
+  if (transport instanceof DeviceLinkError && transport.inFlight === false) return false;
+  const code = (error as { code?: unknown }).code;
+  return code === 'INVOKE_TIMEOUT'
+    || ((code === undefined || code === 'IPC_ERROR')
+      && /^(?:\[REMOTE_AGENT_TIMEOUT\] )?\[INVOKE_TIMEOUT\]/.test(error.message));
+}
+
+/** One more poll response may carry the business result independently of the missing receipt. */
+async function waitForStreamResult<T>(result: Promise<T>, timeout: Error, signal?: AbortSignal): Promise<T> {
+  const deadline = Promise.withResolvers<never>();
+  // Cancellation stops waiting. The original timeout retains the unknown delivery outcome.
+  const stopWaiting = () => deadline.reject(timeout);
+  const timer = setTimeout(stopWaiting, REMOTE_AGENT_INVOKE_TIMEOUT_MS);
+  if (signal?.aborted) stopWaiting();
+  else signal?.addEventListener('abort', stopWaiting, { once: true });
+  try {
+    return await Promise.race([result, deadline.promise]);
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', stopWaiting);
+  }
 }
 
 export class RemoteAgentRunClient implements PolledRun {
@@ -305,7 +332,9 @@ export class RemoteAgentRunClient implements PolledRun {
       if (this.closed) {
         // 打开途中本机关掉了这个任务：对方可能先收到关闭(那时还没有这个任务)再收到打开，补发一次关闭。
         void started.catch(() => undefined);
-        void this.invoke([{ op: 'close', runId: this.runId, mode: 'close', reason: 'navigation' }]).catch(() => undefined);
+        // Do not settle the abandoned open before its compensating close returns.
+        // Callers can then observe completed cleanup even on a slow remote host.
+        await this.invoke([{ op: 'close', runId: this.runId, mode: 'close', reason: 'navigation' }]).catch(() => undefined);
         throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
       }
       this.registered = true;
@@ -355,12 +384,18 @@ export class RemoteAgentRunClient implements PolledRun {
         },
       });
       if (method === 'send') this.handlers.onSend?.();
-      await delivery;
-    } catch (error) {
+      try {
+        await delivery;
+      } catch (error) {
+        if (!isInvokeResultTimeout(error)) throw error;
+        // The peer may have handled this call already. Keep its callId attached
+        // to the existing poll stream, including a result received before the timeout.
+        return await waitForStreamResult(result, error, signal);
+      }
+      return await result;
+    } finally {
       this.pendingCalls.delete(callId);
-      throw error;
     }
-    return result;
   }
 
   /**

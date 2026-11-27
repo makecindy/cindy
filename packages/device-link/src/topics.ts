@@ -61,8 +61,25 @@ export interface HostTaskActivity {
   waitingCount: number;
   unreadCount: number;
   runningCount: number;
-  selected: { sessionId: string; title: string; status: 'attention' | 'completed' | 'error' | 'running' } | null;
+  selected: {
+    sessionId: string;
+    title: string;
+    status: 'attention' | 'completed' | 'error' | 'running';
+    /** Optional companion identity when the selected task speaks for one and is not running.
+     * Only on the device-link snapshot; never part of the official task-activity upload. */
+    companion?: HostTaskActivityCompanion;
+  } | null;
 }
+/** Mirrors the desktop Live Activity companion: hue family, glyph fallback and an optional
+ * base64 JPEG thumbnail of at most {@link HOST_TASK_ACTIVITY_COMPANION_JPEG_MAX} characters. */
+export interface HostTaskActivityCompanion {
+  hue: string;
+  glyph: string;
+  glyphIsInitial: boolean;
+  imageJpeg?: string;
+}
+/** ActivityKit caps a content update at 4 KB; the thumbnail must leave room for the rest. */
+export const HOST_TASK_ACTIVITY_COMPANION_JPEG_MAX = 2048;
 
 export type SessionActivityPhase = 'running' | 'needs-interaction' | 'completed' | 'error';
 

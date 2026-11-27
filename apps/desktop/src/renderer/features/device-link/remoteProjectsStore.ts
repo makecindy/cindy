@@ -1,5 +1,10 @@
 import { normalizeTaskTags, reconcileTaskTags } from '@cindy/maker-shared';
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
+import { projectSessionWithOfflineInboxIntent } from '@cindy/maker-shared/offline-inbox-intent';
+import {
+  getOfflineInboxIntent,
+  subscribeOfflineInboxIntents,
+} from './offlineInboxIntentsStore';
 /**
  * remoteProjectsStore —— 控制端「远程项目」内存层(device-link 跨设备远程控制)。
  * ---------------------------------------------------------------------------
@@ -40,6 +45,7 @@ import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy
  */
 
 import { useSyncExternalStore } from 'react';
+import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
 import type { DeviceLinkConnectionStatus, Session } from '@/lib/ccAgent.types';
 import type { ListStatusFilter } from '@/lib/sessionService';
@@ -64,7 +70,7 @@ interface DeviceShard {
 
 const EMPTY_SCHEDULE_BINDINGS: readonly ScheduleBinding[] = Object.freeze([]);
 /** Display-only until the creating host returns. Never feed these rows to the mirror cache. */
-type CreationPreview = {
+export type CreationPreview = {
   row: Session;
   message: import('@/lib/makerChatStore').ChatMessage;
   handedOff?: boolean;
@@ -138,6 +144,21 @@ const removedSubs = new Set<(sessionId: string) => void>();
 
 function emitRemoved(sessionId: string): void {
   for (const fn of removedSubs) fn(sessionId);
+}
+
+type RemoteSessionPatchListener = (
+  deviceId: string,
+  sessionId: string,
+  patch: Partial<Session>,
+) => void;
+/**
+ * 远端会话 patch 订阅（含不在当前有界分片窗口内的任务）。与 `sessionsStore.subscribePatches`
+ * 对称，供搜索结果等旁路视图即时同步窗口外远端任务的归档/恢复/重命名/置顶/删除状态。
+ */
+const patchSubs = new Set<RemoteSessionPatchListener>();
+
+function emitPatched(deviceId: string, sessionId: string, patch: Partial<Session>): void {
+  for (const fn of patchSubs) fn(deviceId, sessionId, patch);
 }
 
 /**
@@ -437,6 +458,7 @@ export interface RemotePendingStatusToken {
 
 interface PendingStatusEntry {
   token: RemotePendingStatusToken;
+  archivedAt: string | null;
   /**
    * 写库成功那一刻两个状态桶的 snapshot epoch;null = 写库仍在途。
    * 只有 epoch 大于栅栏的列表(写库确认之后才发出的 sessions:list)落地,才算权威确认。
@@ -474,8 +496,12 @@ function withPendingStatus(session: Session, deviceId: string): Session {
   const { status } = entry.token;
   // 归档一并 unpin(与被控端写库、本机 sessionsStore 乐观补丁同口径)。
   const unpin = status === 'archived' && session.pinnedAt != null;
-  if (session.status === status && !unpin) return session;
-  return { ...session, status, ...(unpin ? { pinnedAt: null } : {}) };
+  const nextArchivedAt = status === 'archived'
+    ? (session.status === 'archived' && session.archivedAt ? session.archivedAt : entry.archivedAt)
+    : null;
+  const archiveChanged = (session.archivedAt ?? null) !== nextArchivedAt;
+  if (session.status === status && !unpin && !archiveChanged) return session;
+  return { ...session, status, ...(unpin ? { pinnedAt: null } : {}), archivedAt: nextArchivedAt };
 }
 
 /**
@@ -522,9 +548,12 @@ function recompute(): void {
     const flat: Session[] = [];
     for (const shard of shards.values()) {
       for (const s of shard.sessions) {
-        const projected = withPendingStatus(
-          withPendingFirstSend(withPendingTitle(s)),
-          shard.deviceId,
+        const projected = projectSessionWithOfflineInboxIntent(
+          withPendingStatus(
+            withPendingFirstSend(withPendingTitle(s)),
+            shard.deviceId,
+          ),
+          getOfflineInboxIntent(shard.deviceId, s.id),
         );
         flat.push(projected);
         const pinnedDeviceId = pinnedOrigins.get(s.id);
@@ -597,6 +626,10 @@ function recompute(): void {
   recomputeArchivedLoadedDeviceIds();
   subs.forEach((fn) => fn());
 }
+
+subscribeOfflineInboxIntents(() => {
+  if (shards.size > 0) recompute();
+});
 
 /** 更新某个状态桶的读取态但不通知；调用方与其它 mutation 合并成一次通知。 */
 function setSessionStatusLoading(
@@ -1091,6 +1124,7 @@ const actions = {
       }
       emitRemoved(sessionId);
     }
+    emitPatched(deviceId, sessionId, patch as Partial<Session>);
     // 状态迁移叠加层:删除一律让位。active / archived 推送不带 updatedAt,可能是写库前
     // 迟到的旧推送,不动叠加层,交给写库后的列表按内容确认(见 pendingStatuses)。
     if (deleted && pendingStatuses.get(sessionId)?.token.deviceId === deviceId) {
@@ -1280,6 +1314,24 @@ const actions = {
   },
 
   /**
+   * 每台被控设备最近一次可见任务的活跃时间(unix ms)。
+   * 复用 `visibleMergedSnapshot`(已过滤隐藏来源并叠加首条发送与创建预览时间戳),
+   * 供新建页设备切换器在尚未有本地显式选择记录时,也能按真实最近使用顺序排布对端设备。
+   */
+  getDeviceLatestActivityAt(): Record<string, number> {
+    const out: Record<string, number> = {};
+    for (const session of visibleMergedSnapshot) {
+      const deviceId = session.deviceLinkDeviceId;
+      if (!deviceId || session.status === 'deleted') continue;
+      const ts = Date.parse(getSessionListActivityAt(session));
+      if (Number.isFinite(ts) && ts > (out[deviceId] ?? 0)) {
+        out[deviceId] = ts;
+      }
+    }
+    return out;
+  },
+
+  /**
    * 发送瞬间登记标题预览(见 {@link pendingTitlePreview})。只影响投影层显示,
    * 权威标题仍由被控端写回;被控端标题到达后本条自动失效。
    *
@@ -1355,13 +1407,18 @@ const actions = {
     status: RemoteSessionStatus,
   ): RemotePendingStatusToken {
     const token: RemotePendingStatusToken = { deviceId, sessionId, status };
-    pendingStatuses.set(sessionId, { token, fence: null, toleratedMismatch: false });
+    pendingStatuses.set(sessionId, {
+      token,
+      archivedAt: status === 'archived' ? new Date().toISOString() : null,
+      fence: null,
+      toleratedMismatch: false,
+    });
     recompute();
     return token;
   },
 
   /**
-   * 写库成功:用被控端返回的行(status / pinnedAt / updatedAt)就地落进分片,不等
+   * 写库成功:用被控端返回的行(status / pinnedAt / archivedAt / updatedAt)就地落进分片,不等
    * `sessions:patched` 回流;叠加层留到写库后的新列表确认为止。凭据已被取代 / 设备
    * 已移除时 no-op —— 旧写库的结果不能盖过更新的一次迁移,权威值交给 push 回流。
    */
@@ -1380,6 +1437,13 @@ const actions = {
       patch.pinnedAt = persisted.pinnedAt ?? null;
     } else if (token.status === 'archived') {
       patch.pinnedAt = null;
+    }
+    if (persisted && Object.prototype.hasOwnProperty.call(persisted, 'archivedAt')) {
+      entry.archivedAt = persisted.archivedAt ?? null;
+      patch.archivedAt = entry.archivedAt;
+    } else {
+      entry.archivedAt = null;
+      patch.archivedAt = null;
     }
     if (typeof persisted?.updatedAt === 'string') patch.updatedAt = persisted.updatedAt;
     actions.applyPatch(token.deviceId, token.sessionId, patch);
@@ -1633,6 +1697,13 @@ export function subscribeRemoteSessionRemoval(fn: (sessionId: string) => void): 
   };
 }
 
+export function subscribeRemoteSessionPatches(fn: RemoteSessionPatchListener): () => void {
+  patchSubs.add(fn);
+  return () => {
+    patchSubs.delete(fn);
+  };
+}
+
 /** listing tier 挂载时注册「重拉某设备」的实现;卸载时传 null 清。 */
 export function setRemoteReseedImpl(
   fn: ((deviceId: string, status: RemoteSessionStatus) => void) | null,
@@ -1733,6 +1804,7 @@ export const remoteProjectsStore = {
   subscribe,
   subscribeRename,
   subscribeRemoved: subscribeRemoteSessionRemoval,
+  subscribePatches: subscribeRemoteSessionPatches,
 };
 
 /** 便捷导出:传输层只关心 origin 判定。 */

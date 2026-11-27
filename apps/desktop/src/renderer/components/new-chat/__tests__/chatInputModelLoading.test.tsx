@@ -5,6 +5,7 @@ import { useState, type ComponentProps, type ReactNode } from 'react';
 import type { Editor } from '@tiptap/react';
 import { type InstalledGhost } from '../../../../shared/ghost';
 import { PluginUiProvider } from '@/cindy-brain/PluginUiContributions';
+import { pluginUiInterestKey, type PluginUiInterest } from '../../../../shared/pluginUi';
 import type { ComposerSuggestionEntry } from '@/lib/composerSuggestion';
 import type { UnifiedCommand } from '@/lib/slashCommands';
 import { BUNDLED_CATALOG, buildUserProvider, type ProviderView } from '@cindy/model-providers';
@@ -55,11 +56,16 @@ const h = vi.hoisted(() => ({ t: (key: string) => key, confirm: vi.fn(), editor:
 }));
 vi.mock('@/cindy-brain/useInstalledGhosts', () => ({ useInstalledGhosts: () => h.ghosts, readInstalledGhostsSnapshot: () => h.ghosts }));
 // A loaded roster lets the real send path tell Desktop commands from paths and Skills.
-const roster = vi.hoisted(() => ({ commands: null as null | readonly unknown[] }));
+const roster = vi.hoisted(() => ({
+  commands: null as null | readonly unknown[],
+  onLoad: null as null | ((...args: unknown[]) => void),
+}));
 vi.mock('@/lib/slashCommands', async (original) => {
   const actual = await original<typeof import('@/lib/slashCommands')>();
-  return { ...actual, loadAllCommands: (...args: Parameters<typeof actual.loadAllCommands>) =>
-    roster.commands ? Promise.resolve([...roster.commands] as Awaited<ReturnType<typeof actual.loadAllCommands>>) : actual.loadAllCommands(...args) };
+  return { ...actual, loadAllCommands: (...args: Parameters<typeof actual.loadAllCommands>) => {
+    roster.onLoad?.(...args);
+    return roster.commands ? Promise.resolve([...roster.commands] as Awaited<ReturnType<typeof actual.loadAllCommands>>) : actual.loadAllCommands(...args);
+  } };
 });
 vi.mock('react-i18next', async (original) => ({ ...await original<typeof import('react-i18next')>(), useTranslation: () => ({ t: h.t }) }));
 vi.mock('react-router-dom', () => ({ useNavigate: () => vi.fn() }));
@@ -218,6 +224,52 @@ it('confirms a thinking preference only after the real session write succeeds', 
   expect(h.thinkingValue).toBe(false);
   expect(getProviderModelThinking('pi', 'mimo-thinking-test', 'mimo-v2.6-pro')).toBe(false);
   await act(async () => { setProviderModelThinking('pi', 'mimo-thinking-test', 'mimo-v2.6-pro', true); });
+});
+
+// Unit: exercise eligibility at the actual ChatInput entry. The contribution
+// lifecycle tests alone cannot detect a new/remote task leaving a toolbar lane.
+it('shows opt-in composer actions only for established local drafts', async () => {
+  h.ghosts = [{ enabled: true, dir: '/fixture', approval: { state: 'approved', revision: 'one' },
+    manifest: { schemaVersion: 3, id: 'polish', name: 'Polish', kind: 'chip', entry: 'main.js', version: '1',
+      tools: [{ name: 'apply', description: 'Apply' }], mcpApps: {
+      ui: { resources: [{ uri: 'ui://polish', file: 'polish.html' }], tools: { apply: { visibility: ['app'] } } },
+      host: { views: [{ id: 'polish', title: 'Polish', resourceUri: 'ui://polish', scope: 'task' }],
+        contributions: [{ id: 'polish', title: 'AI Polish', position: 'composer.toolbar',
+          view: 'polish', presentation: 'popover', composerAction: 'inline', visible: true },
+        { id: 'actions', title: 'Never show template', position: 'composer.header', tool: 'apply', dynamicItems: true }] },
+    } } }];
+  h.providerCall.mockImplementation(async (...args) => {
+    const input = args[1] as { op: string; entries?: PluginUiInterest[] };
+    return { updates: input.op === 'native-interest' ? (input.entries ?? []).map(interest => ({
+      key: pluginUiInterestKey(interest), revision: 1, state: { visible: true, items: [{ id: 'one', title: 'Quick action' }] },
+    })) : [] };
+  });
+  const onSend = vi.fn();
+  const scene = (extra: Partial<ComponentProps<typeof ChatInput>>) => <PluginUiProvider>
+    <ChatInput {...props} sessionId="known-local-task" deviceLinkDeviceId={null} onSend={onSend} {...extra} />
+  </PluginUiProvider>;
+  const view = render(scene({}));
+  expect(screen.getByRole('button', { name: 'AI Polish' }).closest('[data-composer-left-controls]')).not.toBeNull();
+  await screen.findByRole('button', { name: 'Quick action' });
+  for (const excluded of [
+    { sessionId: undefined, draftKey: 'transient-draft' },
+    { draftKey: 'queued-edit' },
+    { deviceLinkDeviceId: undefined },
+    { deviceLinkDeviceId: 'another-computer' },
+    { deviceLinkDeviceId: sharedTaskHostPeer('shared', 'host') },
+    { remoteHostId: 'ssh' },
+    { agentDeviceId: 'another-agent-computer' },
+  ]) {
+    await act(async () => { view.rerender(scene(excluded)); });
+    expect(screen.queryByRole('button', { name: 'AI Polish' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Quick action' })).toBeNull();
+    expect(view.container.querySelector('[data-plugin-composer-header]')).toBeNull();
+    expect(view.container.querySelector('[data-plugin-composer-toolbar]')).toBeNull();
+    const last = h.providerCall.mock.calls.filter(args => (args[1] as { op: string }).op === 'native-interest').at(-1);
+    expect(last?.[1]).toEqual(expect.objectContaining({ entries: [] }));
+  }
+  expect(onSend).not.toHaveBeenCalled();
+  expect(h.providerCall).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ op: 'open-resource' }));
 });
 
 // New completion contract through the real editor/selection entry. The panel is
@@ -1416,4 +1468,40 @@ it('offers both delivery modes for one message from the Send button tip, and cha
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'newChat.sendButton.queue' }), { ctrlKey: true }); });
   await waitFor(() => expect(onSend).toHaveBeenCalledTimes(3));
   expect(modeOf()).toBe('queue');
+});
+
+// 2026-11-27 regression: before the remote plugin engine catalogue arrives (pluginEngineSession.engine
+// is null), ChatInput treated a task with agentDeviceId as local and queried maker:list-agent-skills('acp')
+// on a computer without the plugin installed. Coverage gap: no ChatInput test covered a remote
+// pluginEngineSession with engine === null. Minimal failing input: pluginEngineSession with
+// agentDeviceId 'studio' and engine null. Tier: unit/jsdom.
+it('skips local plugin-engine skill scanning when a remote plugin engine catalogue is not loaded yet', async () => {
+  const calls: Array<Record<string, unknown> | undefined> = [];
+  roster.commands = [];
+  roster.onLoad = (_agentKind, _wd, opts) => {
+    calls.push(opts as Record<string, unknown> | undefined);
+  };
+  try {
+    render(
+      <ChatInput
+        {...companionProps()}
+        onSend={vi.fn().mockResolvedValue(true)}
+        sessionId="remote-acp-session"
+        runtimeAgentKind={null}
+        pluginEngineSession={{
+          providerId: 'acp-plugin:antigravity:agy',
+          agentDeviceId: 'studio',
+          engine: null,
+          engineName: 'Plugin engine',
+          modelId: 'gemini-4-neon',
+          onSelectModel: vi.fn(),
+        }}
+      />,
+    );
+    await waitFor(() => expect(calls.length).toBeGreaterThan(0));
+    expect(calls.every((opts) => opts?.skipAgentSkills === true)).toBe(true);
+  } finally {
+    roster.onLoad = null;
+    roster.commands = null;
+  }
 });

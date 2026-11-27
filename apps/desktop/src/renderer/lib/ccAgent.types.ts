@@ -3,11 +3,13 @@ import type { AgentRequestReceipt } from '../../shared/forwardedRequest.js';
 import type { ImMessageSource } from '../../shared/imMessageSource';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import type { SessionSource } from '../../shared/sessionSource';
+import type { ModelGroupSessionBindingView } from '../../shared/modelGroups';
 import type { TurnUsageDetails } from '../../shared/turnUsageDetails';
 import type { RegionalMoney } from '../../shared/regionalMoney';
 import type { AutoResumeInfo, RecoveryCheckpoint } from '../../shared/agentInputQueue';
 import type { ReviewRunMeta } from '../../shared/reviewRun';
 import type { OrcaRemoteLead } from '../../shared/orcaRemoteWorker';
+import type { SessionCreatedBy } from '../../shared/sessionOrigin';
 import type { AgentTaskTerminalStatus } from '@cindy/maker-shared/agent-task';
 import type {
   MessageSourceDevice,
@@ -413,6 +415,8 @@ export interface Session {
   runtimeBaselineRecoveryPending?: boolean;
   /** Host projection of existing task plugin choices, including uninstalled providers. */
   runtimePluginsSelected?: boolean;
+  /** Host projection of the active smart-routing binding for this task; absent on older hosts or unbound tasks. */
+  modelGroupBinding?: ModelGroupSessionBindingView | null;
   /**
    * 计划模式一级开关(与 permissionMode 正交):开启时 agent 先产出计划、经审批后再执行。
    * 计划批准后 agent 自动退出并经 plan_mode_changed → sessions:patched 回流为 false。
@@ -434,7 +438,11 @@ export interface Session {
   notificationsMuted?: boolean;
   /** Inbox deferral, saved by the task host. Missing on older hosts. */
   snoozedUntil?: string | null;
+  /** Host-authoritative IM attachment flag returned by `local-db:sessions:get`. */
+  imAttached?: boolean;
   snoozedAt?: string | null;
+  /** Host time when the task was explicitly archived (ISO 8601). Missing on older hosts and legacy/idle-archived rows. */
+  archivedAt?: string | null;
   /**
    * 用户最近一次"按下发送"的时刻（ISO 8601，null = 从未发过）。
    * Sidebar 排序唯一时间轴：null ⟺ 草稿（归未分类），非 null 即按倒序上浮。
@@ -507,6 +515,11 @@ export interface Session {
    * null/undefined = 普通任务；旧版本 payload 没有该字段。
    */
   orcaRemoteLead?: OrcaRemoteLead | null;
+  /**
+   * 由另一个任务通过 send_to_session（create 模式）新建时的来源任务元数据。
+   * 独立于 parentSessionId（仅用于 fork / 侧边追问）。null/undefined = 非任务新建或旧版 payload。
+   */
+  createdBySession?: SessionCreatedBy | null;
   /**
    * device-link 跨设备远程控制:本 session 实际归属的**被控设备 deviceId**。
    * 仅存在于控制端**内存**里(由 remoteProjectsStore 注入),**永不落本地 DB**——

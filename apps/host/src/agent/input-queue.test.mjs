@@ -2320,14 +2320,20 @@ test('restart restores a paused durable queue and deduplicates accepted input', 
   t.after(() => { clearCurrentDbClient(); sqlite?.close(); rmSync(root, { recursive: true, force: true }); });
   reopen();
   const delivered = new Set();
+  const deliveries = [];
+  let failPersistedLookup = false;
   const persistence = {
     markStarted: markSessionTurnStartedDurable,
     markEnded: async (id, at) => { markSessionTurnEnded(id, at); await drainSessionActiveTurnWrites(id); },
     persistQueueSnapshot: saveAgentInputQueueSnapshot,
     loadQueueSnapshot: loadAgentInputQueueSnapshot,
-    getPersistedClientIds: getPersistedInputClientIds,
+    getPersistedClientIds: (id, clientIds) => {
+      if (failPersistedLookup) throw new Error('persisted lookup unavailable');
+      return getPersistedInputClientIds(id, clientIds);
+    },
     persistMessage: async (id, row) => {
       if (row.role === 'user') {
+        deliveries.push(row.clientId);
         sqlite.prepare('INSERT OR IGNORE INTO messages(session_id,client_id) VALUES (?,?)').run(id, row.clientId);
         delivered.add(row.clientId);
       }
@@ -2339,6 +2345,11 @@ test('restart restores a paused durable queue and deduplicates accepted input', 
   const pendingContent = JSON.stringify({ text: 'pending', images: [], files: [], slashCommandRanges: [] });
   await first.queue.enqueue('durable', { clientId: 'b', text: 'pending', persistedContent: pendingContent,
     chatMessage: { content: 'pending' } });
+  // Repeating a coordinator-owned input is acknowledged ahead of SQLite IO.
+  failPersistedLookup = true;
+  const duplicatePending = await first.queue.enqueue('durable', { clientId: 'b', text: 'replayed input' });
+  assert.deepEqual(duplicatePending.pendingQueue.map(item => item.text), ['pending']);
+  failPersistedLookup = false;
   await first.queue.dispose();
   clearCurrentDbClient();
   sqlite.close();
@@ -2358,11 +2369,15 @@ test('restart restores a paused durable queue and deduplicates accepted input', 
     assert.equal(restored.pendingQueue[0].persistedContent, pendingContent);
     assert.equal(restored.queuePaused, true);
     assert.equal(restarted.maker.sessions.size, 0);
-    await restarted.queue.enqueue('durable', { clientId: 'a', text: 'already running' });
+    const duplicateCommitted = await restarted.queue.enqueue('durable', { clientId: 'a', text: 'replayed input' });
+    assert.deepEqual(duplicateCommitted.pendingQueue.map(item => item.clientId), ['b']);
     assert.equal(restarted.maker.sessions.size, 0);
     await restarted.queue.resume('durable');
     await waitFor(() => restarted.maker.getSession('durable')?.sent.length === 1);
     assert.deepEqual(restarted.maker.getSession('durable').sent, ['pending']);
+    assert.deepEqual(deliveries, ['a', 'b']);
+    assert.deepEqual(sqlite.prepare('SELECT client_id FROM messages ORDER BY rowid').all()
+      .map(row => row.client_id), ['a', 'b']);
   } finally { await restarted.queue.dispose(); }
 });
 
@@ -4109,18 +4124,100 @@ test('model change at send: the context rollover resumes a released Pi task to r
     'the released runtime is resumed to read its window');
 });
 
-// Production entry: the Host's switchAgent handler leaves the task and its pending choice unchanged.
-// Basis: #11629, Host has no ACP runtime. The desktop's tests only reject with the admission port bound.
-// Minimal input (unit): a local Claude task and a valid plugin engine route, using the real Host handler.
-test('switching to a plugin engine is unsupported on the Host', async t => {
+// Production entry: Host switchAgent admits local plugin engines using the live harness registry
+// and switches tasks to and from `acp`, rejecting unavailable/missing plugin engines cleanly.
+// Minimal input (unit): a local Claude task with the shared plugin harness registry configured.
+test('switching to and from a plugin engine follows live plugin engine admission on the Host', async t => {
+  const { configurePluginHarnessRegistry, reconcilePluginHarnesses } = await import('../../../desktop/src/main/cindy-brain/pluginHarnesses.ts');
+  const { validateGhostManifest } = await import('../../../desktop/src/shared/ghost.ts');
+  const { installedGhostStoragePart } = await import('../../../desktop/src/shared/pluginIdentity.ts');
   const r = await modelChangeRuntime(t);
   await r.createTask('switch-to-acp');
+  let listedGhosts = [];
+  let availability = {};
+  configurePluginHarnessRegistry({
+    listGhosts: () => listedGhosts,
+    isAvailable: () => true,
+    readAvailability: (id) => availability[id] ?? {},
+    uiLocale: () => 'en',
+    spawn: async () => { throw new Error('unused in switch admission test'); },
+  });
+  reconcilePluginHarnesses([]);
+  t.after(() => {
+    listedGhosts = [];
+    availability = {};
+    reconcilePluginHarnesses([]);
+  });
+
+  // Publish an approved, enabled harness descriptor first so we share the canonical providerId.
+  const parsed = validateGhostManifest({
+    schemaVersion: 3, minCindyVersion: '0.1.61', id: 'dsh-acp', name: 'DeepSeek ACP', version: '1.0.0', entry: 'main.js',
+    node: { entry: 'worker.js', protocol: 'json-rpc-stdio', entries: ['acp.js'] },
+    harnesses: [{ id: 'dsh', name: 'DeepSeek Harness', protocol: 'acp', entry: 'acp.js' }],
+  });
+  if (!parsed.ok) throw new Error(parsed.reason);
+  const ghost = {
+    manifest: parsed.manifest,
+    dir: path.join(os.tmpdir(), 'fixture-dsh-acp'),
+    enabled: true,
+    approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
+    approvedHarnesses: ['dsh'],
+    approvedNode: true,
+  };
+  const ghostKey = installedGhostStoragePart(ghost);
+  const acpProviderId = `acp-plugin:${ghostKey}:dsh`;
+
+  // Unlisted engine is refused and leaves the task untouched.
   await assert.rejects(r.selection.switchAgent({
     sessionId: 'switch-to-acp', targetAgentKind: 'acp', model: 'deepseek-v4',
-    providerId: 'acp-plugin:_ns__local__dsh-acp:dsh',
-  }), { code: 'UNSUPPORTED_CAPABILITY', message: '[UNSUPPORTED_CAPABILITY] plugin engines are not available here' });
+    providerId: acpProviderId,
+  }), /停用或卸载/);
   assert.equal(r.row('switch-to-acp').agent_kind, 'cc');
   assert.equal(r.selection.projectIntent('switch-to-acp') ?? null, null);
+
+  // Publish the approved, enabled harness and verify switching to ACP and back to Claude.
+  listedGhosts = [ghost];
+  availability = {
+    [ghostKey]: {
+      harnesses: [{
+        id: 'dsh', available: true, version: '0.3.0',
+        models: [{ id: 'deepseek-v4', name: 'DeepSeek V4', efforts: ['low', 'high'], defaultEffort: 'high' }],
+      }],
+    },
+  };
+  reconcilePluginHarnesses(listedGhosts);
+
+  const pickedAcp = await r.selection.switchAgent({
+    sessionId: 'switch-to-acp', targetAgentKind: 'acp', model: 'deepseek-v4',
+    providerId: acpProviderId, effort: 'low',
+  });
+  assert.equal(pickedAcp.deferred, true, 'switch to ACP stages a pending intent until next send');
+  assert.equal(r.selection.projectIntent('switch-to-acp')?.targetAgentKind, 'acp');
+  assert.equal(r.selection.projectIntent('switch-to-acp')?.providerId, acpProviderId);
+
+  // Next send lands the switch onto `acp`.
+  await r.h.queue.enqueue('switch-to-acp', { clientId: 'acp-1', text: 'hello acp' });
+  await waitFor(() => r.h.maker.sessions.get('switch-to-acp')?.sent.length === 1);
+  const acpSession = r.h.maker.sessions.get('switch-to-acp');
+  assert.equal(acpSession.agentKind, 'acp');
+  assert.equal(acpSession.options.providerId, acpProviderId);
+  assert.equal(acpSession.options.model, 'deepseek-v4');
+  assert.equal(r.row('switch-to-acp').agent_kind, 'acp');
+  acpSession.emit({ type: 'done', data: {}, sessionTurnGeneration: acpSession.generation, sessionInstanceId: acpSession.instanceId });
+  await waitFor(() => !r.h.queue.projection('switch-to-acp').active);
+
+  // Switch back from `acp` to built-in `claude-code`.
+  const pickedClaude = await r.selection.switchAgent({
+    sessionId: 'switch-to-acp', targetAgentKind: 'claude-code', model: 'big', providerId: 'prov-a',
+  });
+  assert.equal(pickedClaude.deferred, true);
+  await r.h.queue.enqueue('switch-to-acp', { clientId: 'cc-back-1', text: 'back to claude' });
+  await waitFor(() => {
+    const next = r.h.maker.sessions.get('switch-to-acp');
+    return next && next !== acpSession && next.sent.length === 1;
+  });
+  assert.equal(r.h.maker.sessions.get('switch-to-acp').agentKind, 'claude-code');
+  assert.equal(r.row('switch-to-acp').agent_kind, 'cc');
 });
 
 // Rule (sessionAgentSwitchHandler.ts applyPendingAgentSwitchIfIdle: a user's engine pick that fails
@@ -5480,7 +5577,7 @@ test('idle release: watchers scan once started and stop when the owner runtime i
   h.queue.startIdleRelease();
   t.mock.timers.tick(60_000);
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(scans, 2, 'the Claude and Codex watchers scan each minute');
+  assert.equal(scans, 3, 'the Claude, Codex and ACP watchers scan each minute');
   await h.queue.dispose();
   scans = 0;
   t.mock.timers.tick(120_000);
@@ -5938,11 +6035,11 @@ async function resumeHarness(t, overrides = {}) {
   // As Maker stamps every event of a turn with the attempt token its send carried (maker-core
   // session.ts; the resume's send carries it): the guard clears a resume's pending attempt on its
   // first stamped event, so an unstamped fixture would never resume twice.
-  const interrupt = async () => {
+  const interrupt = async (failure = INTERRUPTION) => {
     const token = session.sendOptions.at(-1)?.turnAttemptToken;
     const stamp = typeof token === 'number' ? { turnAttemptToken: token } : {};
     session.emit({ type: 'text', data: { text: 'half done', isFinal: true }, ...stamp });
-    session.emit({ type: 'error', data: INTERRUPTION, ...stamp });
+    session.emit({ type: 'error', data: { ...failure }, ...stamp });
     await settle();
   };
   // Until the engine has received `count` messages: a message reaches it only after its send's
@@ -5976,7 +6073,7 @@ test('auto-resume exit 1: the resumed turn answers the input and ends its stream
 test('auto-resume exit 2: interruptions until the budget is spent end the stream on the last error, written once', async t => {
   const r = await resumeHarness(t);
   for (let sent = 2; sent < 20; sent += 1) {
-    await r.interrupt();
+    await r.interrupt({ reason: 'codex_reconnect_stalled', message: 'Model reconnect timed out.', isTerminal: true });
     if (r.response.writableEnded) break;
     await r.backoff(sent);
   }
@@ -5985,7 +6082,9 @@ test('auto-resume exit 2: interruptions until the budget is spent end the stream
   assert.ok(r.session.sent.length > 2, `resumed ${r.session.sent.length - 1} time(s)`);
   const last = r.streamed().filter(e => e.type === 'error').at(-1);
   assert.equal(last.autoResumePending, undefined);
+  assert.equal(last.data.reconnectHandoff, 'exhausted');
   assert.equal(r.errorRows().length, 1);
+  assert.equal(r.errorRows()[0].content.reconnectHandoff, 'exhausted');
   t.mock.timers.reset();
   await r.h.queue.dispose();
 });
@@ -8721,6 +8820,93 @@ test('list activity: a dispatched or steered input moves the task\'s activity ti
 });
 
 /*
+ * Silenced scheduler runs do not advance list activity (Desktop & Host parity).
+ * - Production entry and observable result: Host coordinator + turn-executor over a real profile DB;
+ *   last_activity_at stays unchanged for a silenced scheduler turn, and advances on notified or failed turns.
+ * - Rule: task-inbox.md (silent background runs must not bump the task to the top of the inbox/list).
+ * - Coverage gap: onDispatchedUserTurn and turn-executor only excluded goal turns, not silenced scheduler turns.
+ * - Minimal failing input: a silenced scheduler run (status running -> not running -> done) bumps last_activity_at.
+ * - Tier: unit (node:test, real profile database, Host coordinator + executor).
+ */
+test('list activity: a silenced scheduler turn leaves last_activity_at unchanged while notified and failed turns advance it', { timeout: 30_000 }, async t => {
+  const { setSilencedRunProbe } = await import('../../../desktop/src/main/scheduler-host/silent-output.ts');
+  const silencedRuns = new Set(['run-silent']);
+  setSilencedRunProbe(runId => silencedRuns.has(runId));
+  t.after(() => setSilencedRunProbe(null));
+
+  const db = await recoveryDatabase(t);
+  const { createHostSessionActivity } = await import('./session-activity.ts');
+  const write = createHostSessionActivity({ getOwner: getCurrentDbClientSnapshot, publish: () => {} });
+  const { h } = assembledRuntime(t, db, { touchSessionActivity: write });
+  const activity = id => db.db.prepare('SELECT last_activity_at FROM sessions WHERE id = ?').get(id).last_activity_at;
+  await db.createTask('silent-sch');
+  db.db.prepare('UPDATE sessions SET last_activity_at = 1000, updated_at = 1000 WHERE id = ?').run('silent-sch');
+
+  const sq = h.queue.schedulerQueue();
+  const silentOrigin = { kind: 'scheduler', scheduleId: 'sch-1', scheduleName: 'PR #1', runId: 'run-silent' };
+  await sq.enqueuePrompt({
+    sessionId: 'silent-sch',
+    text: 'check',
+    persistedContent: 'check',
+    origin: silentOrigin,
+    onAccepted: () => {},
+  });
+  await waitFor(() => h.maker.sessions.get('silent-sch')?.sent.length === 1);
+  const session = h.maker.sessions.get('silent-sch');
+  session.emit({ type: 'status', data: { isRunning: true }, turnOrigin: silentOrigin });
+  session.emit({ type: 'status', data: { isRunning: false }, turnOrigin: silentOrigin });
+  session.emit({ type: 'done', data: { result: 'ok' }, turnOrigin: silentOrigin });
+  await waitFor(() => !h.queue.isTurnRunning('silent-sch'));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(activity('silent-sch'), 1000, 'pre-silenced scheduler turn must not advance last_activity_at');
+
+  // Mid-turn schedule_silence_current_run (not silenced at dispatch) must also keep last_activity_at unchanged.
+  const midSilentOrigin = { kind: 'scheduler', scheduleId: 'sch-1', scheduleName: 'PR #1', runId: 'run-mid-silent' };
+  await sq.enqueuePrompt({
+    sessionId: 'silent-sch',
+    text: 'check-mid',
+    persistedContent: 'check-mid',
+    origin: midSilentOrigin,
+    onAccepted: () => {},
+  });
+  await waitFor(() => session.sent.length === 2);
+  session.emit({ type: 'status', data: { isRunning: true }, turnOrigin: midSilentOrigin });
+  silencedRuns.add('run-mid-silent');
+  session.emit({ type: 'status', data: { isRunning: false }, turnOrigin: midSilentOrigin });
+  session.emit({ type: 'done', data: { result: 'quiet' }, turnOrigin: midSilentOrigin });
+  await waitFor(() => !h.queue.isTurnRunning('silent-sch'));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(activity('silent-sch'), 1000, 'mid-turn silenced scheduler turn must not advance last_activity_at');
+
+  const notifyOrigin = { kind: 'scheduler', scheduleId: 'sch-1', scheduleName: 'PR #1', runId: 'run-notify' };
+  await sq.enqueuePrompt({
+    sessionId: 'silent-sch',
+    text: 'alert',
+    persistedContent: 'alert',
+    origin: notifyOrigin,
+    onAccepted: () => {},
+  });
+  await waitFor(() => session.sent.length === 3);
+  session.emit({ type: 'status', data: { isRunning: true }, turnOrigin: notifyOrigin });
+  session.emit({ type: 'done', data: { result: 'needs user' }, turnOrigin: notifyOrigin });
+  await waitFor(() => !h.queue.isTurnRunning('silent-sch'));
+  await waitFor(() => activity('silent-sch') > 1000);
+
+  db.db.prepare('UPDATE sessions SET last_activity_at = 2000, updated_at = 2000 WHERE id = ?').run('silent-sch');
+  await sq.enqueuePrompt({
+    sessionId: 'silent-sch',
+    text: 'fail',
+    persistedContent: 'fail',
+    origin: silentOrigin,
+    onAccepted: () => {},
+  });
+  await waitFor(() => session.sent.length === 4);
+  session.emit({ type: 'status', data: { isRunning: true }, turnOrigin: silentOrigin });
+  session.emit({ type: 'error', data: { message: 'boom', isTerminal: true }, turnOrigin: silentOrigin });
+  await waitFor(() => activity('silent-sch') > 2000);
+});
+
+/*
  * List preview after a done (release table 甲 13, the preview half).
  * - Production entry and observable result: the Host executor's turn end over a real profile database; the
  *   session_changed event with the task's list preview.
@@ -9338,6 +9524,49 @@ async function silentStopHarness(t, { disabled = false, failBanner = false, queu
     turnEnds: () => turnEndWrites(spy.calls).map(call => call.atMs) };
   return r;
 }
+
+// #12759, unit: the real Host queue, terminal pipeline and silent-stop handler must
+// carry the breaker across separate inputs, suppress repeated errors, and re-arm only
+// after a completed visible reply. The old single-done test cannot catch this.
+for (const source of ['claude', 'codex']) test(`silent stop: repeated breaker ends once and a completed ${source} reply re-arms recovery`, async t => {
+  const r = await silentStopHarness(t);
+  let sends = 1;
+  const send = async clientId => {
+    await r.h.queue.enqueue('s', { clientId, text: 'next' });
+    await r.sent(++sends);
+  };
+  const stop = async () => {
+    t.mock.timers.tick(6_000);
+    await r.turn('');
+    await r.decide();
+  };
+  const settled = () => settleUntil(() => !r.h.queue.projection('s').turnInProgress, 'the turn ends');
+  // Three user inputs, each with two continuations, reach the session limit.
+  for (let input = 0; input < 3; input++) {
+    if (input > 0) await send(`input-${input}`);
+    for (let continuation = 0; continuation < 2; continuation++) {
+      await stop();
+      await r.sent(++sends);
+    }
+    await stop();
+    await settled();
+  }
+  const breakerRows = () => r.rows('error').filter(row => row.content.silentStopFailureCause === 'session-breaker');
+  assert.equal(breakerRows().length, 1);
+  await send('still-broken');
+  await stop();
+  await settled();
+  assert.equal(breakerRows().length, 1, 'another turn does not persist a duplicate error');
+  await send('productive');
+  // #12834 review: Codex done must also clear the breaker; previously this
+  // event reached an out-of-scope history variable and silently skipped finish.
+  await r.turn('done', { type: 'done', source, data: { raw: { status: 'completed' }, result: 'done' } });
+  await settled();
+  await send('new-request');
+  await stop();
+  await r.sent(++sends);
+  assert.equal(r.session.sent.at(-1), '继续', 'the completed reply re-enabled automatic recovery');
+});
 
 test('silent stop: the turn continues on a new generation with a hidden 继续; the stream and the activity time follow it to its end', async t => {
   const r = await silentStopHarness(t);

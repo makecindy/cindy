@@ -39,6 +39,7 @@ import {
   CircleDot,
   Clock,
   Coins,
+  CornerDownRight,
   Filter,
   Folder,
   Folders,
@@ -46,6 +47,7 @@ import {
   Globe,
   Info,
   LayoutList,
+  Puzzle,
   SlidersHorizontal,
   Timer,
   Wallet,
@@ -124,6 +126,7 @@ const VENDOR_OPTIONS: ReadonlyArray<Option<FilterVendor>> = [
   { value: 'cc', labelKey: 'ccAgent.sidebar.filterVendor.cc', Icon: SquareTerminal },
   { value: 'codex', labelKey: 'ccAgent.sidebar.filterVendor.codex', Icon: SquareTerminal },
   { value: 'pi', labelKey: 'ccAgent.sidebar.filterVendor.pi', Icon: SquareTerminal },
+  { value: 'acp', labelKey: 'ccAgent.sidebar.filterVendor.acp', Icon: Puzzle },
 ];
 
 const LAST_ACTIVITY_OPTIONS: ReadonlyArray<Option<FilterLastActivity>> = [
@@ -899,6 +902,12 @@ export function SidebarFilterPopover({
                   checked={filter.hideAutomations}
                   onToggle={() => filter.setHideAutomations(!filter.hideAutomations)}
                   Icon={Timer}
+                />
+                <CheckMenuItem
+                  label={t('ccAgent.sidebar.filterHideTaskCreated')}
+                  checked={filter.hideTaskCreated}
+                  onToggle={() => filter.setHideTaskCreated(!filter.hideTaskCreated)}
+                  Icon={CornerDownRight}
                 />
                 <DropdownMenuSeparator />
                 <DropdownMenuItem

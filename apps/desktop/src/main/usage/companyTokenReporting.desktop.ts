@@ -1,5 +1,5 @@
 import { app, net } from 'electron';
-import { isAnalyticsAllowed } from '../analytics-settings-store.js';
+import { readCompanyTokenReportingPreference } from '../analytics-settings-store.js';
 import * as auth from '../authManager.js';
 import { getClientEndpointForRealm } from '../clientEndpointsService.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
@@ -41,7 +41,7 @@ export function createCompanyTokenReporting(subscribeSettings: ReportingRuntime[
       return state.mode !== 'local' && state.user?.membershipKind !== 'personal' &&
         (auth.isSavedLoginRecoveryPending() || (!state.canEnterApp && state.isAuthenticated && state.user?.membershipKind === 'org'));
     },
-    isAnalyticsAllowed,
+    readCompanyTokenReportingPreference,
     subscribeAuth: auth.onAuthStateChange,
     subscribeSettings,
     fetch: (input, init) => net.fetch(input, init),

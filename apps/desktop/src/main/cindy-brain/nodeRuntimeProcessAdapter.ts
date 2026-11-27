@@ -8,7 +8,8 @@ export interface PluginNodeProcess extends Pick<NodeJS.EventEmitter, 'on' | 'rem
   postMessage(message: unknown): void;
   kill(): boolean;
 }
-export function pluginNodeEnvironment(ghostId: string, inherited: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+export function pluginNodeEnvironment(ghostId: string, inherited: NodeJS.ProcessEnv = process.env, inheritEnv = false): NodeJS.ProcessEnv {
+  if (inheritEnv) return { ...inherited, CINDY_GHOST_ID: ghostId };
   // 不继承 API key / token 等宿主环境变量。Node 本身仍有用户级本机权限，
   // 这里只是在“无意泄露宿主秘密”和“系统运行必需变量”之间取最小集合。
   const inheritedKeys = [
@@ -34,6 +35,18 @@ export function pluginNodeEnvironment(ghostId: string, inherited: NodeJS.Process
     'GH_CONFIG_DIR',
     // XDG_CONFIG_HOME 也可指定 gh 配置目录，且在 Windows 上同样可能优先于 APPDATA。
     'XDG_CONFIG_HOME',
+    // Linux 图形会话定位变量（显示器名、socket 与 cookie 路径，不含秘密）：缺少它们时
+    // 插件或其代启的 CLI 打不开浏览器（如 agy 的 Google 登录报“没有图形界面”）。
+    // 与 cindy-make/testRunner 的桌面会话清单同一口径；macOS/Windows 上不存在，透传为空。
+    'DISPLAY',
+    'WAYLAND_DISPLAY',
+    'XAUTHORITY',
+    'XDG_RUNTIME_DIR',
+    'XDG_SESSION_TYPE',
+    'XDG_CURRENT_DESKTOP',
+    'XDG_SESSION_DESKTOP',
+    'DESKTOP_SESSION',
+    'DBUS_SESSION_BUS_ADDRESS',
   ] as const;
   const env: NodeJS.ProcessEnv = {
     CINDY_GHOST_ID: ghostId,

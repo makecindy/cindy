@@ -585,6 +585,95 @@ describe('RsbWebviewBackend — direct WebContents actions', () => {
       data: Buffer.from('PDFDATA').toString('base64'),
     });
   });
+
+  // Regression (P0-2): capturePage() and printToPDF() on a hidden guest webview previously had
+  // no timeout, keeping the tab pinned forever (exempting its OS PID from BrowserGuestResourceWatchdog)
+  // and leaking activeCalls.
+  // Production entry: RsbWebviewBackend.call({ action: 'screenshot' | 'pdf' }); unit tier, fake timers.
+  it.each([
+    ['screenshot', 'capturePageMock', 'captureTimeoutMs', 'capturePage timed out'],
+    ['pdf', 'printToPDFMock', 'pdfTimeoutMs', 'printToPDF timed out'],
+  ] as const)('%s times out cleanly, releases tab pin, and clears activeCalls', async (action, mockKey, timeoutKey, expectedMessage) => {
+    vi.useFakeTimers();
+    try {
+      const wc = fakeWc();
+      wc[mockKey].mockImplementation(() => new Promise(() => {}));
+      const registry = fakeRegistry(
+        [{ sessionId: 's1', tabId: 't1', webContentsId: 101 }],
+        new Map([['t1', wc]]),
+      );
+      const backend = new RsbWebviewBackend({
+        registry,
+        getActiveSessionId: () => 's1',
+        bridge: { getHostWebContents: () => null, logger: logger() },
+        logger: logger(),
+        [timeoutKey]: 1000,
+      });
+
+      const pending = backend.call({ action, targetId: 't1' } as never);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(registry.isPinned('t1')).toBe(true);
+      expect(backend.canReleaseClient()).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(900);
+      const res = await pending;
+      expect(res.ok).toBe(false);
+      expect(res.message).toContain(expectedMessage);
+      expect(registry.isPinned('t1')).toBe(false);
+      expect(registry.pinHistory).toEqual([
+        { op: 'pin', tabId: 't1' },
+        { op: 'unpin', tabId: 't1' },
+      ]);
+      expect(backend.canReleaseClient()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('screenshot and pdf abort immediately on webContents destroyed or backend dispose and unpin the tab', async () => {
+    const listeners = new Map<string, Array<() => void>>();
+    const wc = fakeWc();
+    wc.capturePageMock.mockImplementation(() => new Promise(() => {}));
+    wc.printToPDFMock.mockImplementation(() => new Promise(() => {}));
+    Object.assign(wc, {
+      once: (event: string, fn: () => void) => {
+        const list = listeners.get(event) ?? [];
+        list.push(fn);
+        listeners.set(event, list);
+      },
+      removeListener: (event: string, fn: () => void) => {
+        const list = listeners.get(event);
+        if (list) listeners.set(event, list.filter((f) => f !== fn));
+      },
+    });
+    const registry = fakeRegistry(
+      [{ sessionId: 's1', tabId: 't1', webContentsId: 101 }],
+      new Map([['t1', wc]]),
+    );
+    const backend = new RsbWebviewBackend({
+      registry,
+      getActiveSessionId: () => 's1',
+      bridge: { getHostWebContents: () => null, logger: logger() },
+      logger: logger(),
+      captureTimeoutMs: 60_000,
+      pdfTimeoutMs: 60_000,
+    });
+
+    const screenshotPending = backend.call({ action: 'screenshot', targetId: 't1' } as never);
+    await vi.waitFor(() => expect(registry.isPinned('t1')).toBe(true));
+    for (const fn of listeners.get('destroyed') ?? []) fn();
+    const screenshotRes = await screenshotPending;
+    expect(screenshotRes.ok).toBe(false);
+    expect(screenshotRes.message).toContain('destroyed');
+    expect(registry.isPinned('t1')).toBe(false);
+
+    const pdfPending = backend.call({ action: 'pdf', targetId: 't1' } as never);
+    await vi.waitFor(() => expect(registry.isPinned('t1')).toBe(true));
+    await backend.dispose();
+    const pdfRes = await pdfPending;
+    expect(pdfRes.ok).toBe(false);
+    expect(registry.isPinned('t1')).toBe(false);
+  });
 });
 
 describe('RsbWebviewBackend — act:evaluate', () => {

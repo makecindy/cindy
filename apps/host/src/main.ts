@@ -72,8 +72,10 @@ import { getDbClient, setCurrentDbClient, clearCurrentDbClient, getCurrentDbClie
 import { waitForRetainedDbClient } from '../../desktop/src/main/localDb/client/pendingOperations.ts';
 import { loadAgentInputQueueSnapshot, saveAgentInputQueueSnapshot, getPersistedInputClientIds } from '../../desktop/src/main/localDb/agentInputQueueSnapshots.ts';
 import { markSessionTurnStartedDurable, markSessionTurnEnded, drainSessionActiveTurnWrites, ackSessionTurnEndedDurable,
-  hasAssistantProgressAfterMessage, getRecoveryContextSnapshot,
+  hasAssistantProgressAfterMessage, getRecoveryContextSnapshot, setOnSessionTurnEndedPersisted,
 } from '../../desktop/src/main/localDb/sessionActiveTurn.ts';
+import { setHistoryWorkPageReader } from '../../desktop/src/main/device-link/historyViewPush.ts';
+import { ensureSessionFlagRegistryLoaded } from '../../desktop/src/main/localDb/sessionFlagRegistry.ts';
 import { readSessionExtraDirsFromDb, readSessionWritableDirsFromDb, readSessionWorkingDirFromDb } from '../../desktop/src/main/maker-host/session-storage.js';
 import { applyRemoteDirectoryGrantUpdate } from '../../desktop/src/main/maker-ipc/remoteDirectoryGrantUpdate.js';
 import { createTaskWritableDirsUpdater } from '../../desktop/src/main/projectDirectoryRuntime.js';
@@ -114,7 +116,8 @@ import { getXdGatewayModels, markXdGatewayModelAccessUnknown, setXdGatewayModels
 import { buildModelsSyncRequest, parseModelsSyncPayload, withModelsSyncOverallDeadline } from '../../desktop/src/main/model-access/modelsSyncRefresh.js';
 import { createHostProviderConfig } from './agent/provider-config.js';
 import { createProviderRouteResolver } from './agent/provider-credentials.mjs';
-import { createHostHistoryReader, readMessagesList, readMessagesAroundClientId } from './agent/history.js';
+import { createHostHistoryReader, dismissHostErrorMessage, readHostHistoryView, readHostSessionActivityMeta, readHostWorkDetails, readMessagesList, readMessagesAroundClientId } from './agent/history.js';
+import { requireString } from '../../desktop/src/main/utils/ipcValidate.js';
 import { runLoginCommand } from './login-cli.mjs';
 import { readOrCreateApiToken } from './api-token.mjs';
 import { CindyAuthClient } from '@cindy/auth-client';
@@ -129,7 +132,12 @@ import { createHostGhostManager } from './plugins-installed.ts';
 import { initializeHostPluginRemoteAuthorization } from './plugins/remote-authorization.js';
 import { ownerScopedPath } from '../../desktop/src/main/dataOwnerPath.js';
 import { createHostPluginRuntime } from './plugins/runtime.js';
+import { createHostPluginEngines } from './plugins/plugin-engines.js';
 import { createHostPluginGateway } from './plugins/gateway.js';
+import { getPluginHarnessRegistry } from '../../desktop/src/main/cindy-brain/pluginHarnesses.js';
+import { admitPluginEngineSession } from '../../desktop/src/main/maker-ipc/pluginEngineSessionAdmission.js';
+import { pluginEngineModelsOf, pluginEngineSettingsOf } from '../../desktop/src/main/maker-ipc/pluginEnginesIpc.js';
+import { isPluginEngineKind } from '../../desktop/src/shared/pluginEngines.js';
 import type { createHostToolService } from './agent/host-tools.js';
 import { createHostConfirmations } from './host-confirmations.js';
 import { createMainI18n } from '../../desktop/src/main/i18n.js';
@@ -199,7 +207,8 @@ import { botSessionLinks, messages as messageTable, projectAliases as projectAli
 import { describeHostOutboundProxy, describeOutboundProxyLine, startHostSystemProxySettings, stopHostSystemProxySettings } from './outbound-proxy.ts';
 import { and, eq, isNull } from 'drizzle-orm';
 import { projectHistoryView } from '@cindy/maker-shared/message-window';
-import { isDefaultDraftSessionTitle, normalizeAutoTitle } from '@cindy/maker-shared/session-title';
+import { createHostAutoTitle } from './agent/auto-title.ts';
+import { createHostModelGroups } from './agent/model-groups.ts';
 
 const DEFAULT_VOICE_INPUT_SETTINGS = getDefaultVoiceInputSettings();
 configureGhostSnapshotProcess(createSnapshotProcess);
@@ -313,9 +322,11 @@ if (command === '--help' || command === '-h') {
     const result = await requestHostRemote(resolveHostDataDir(), action, process.argv[4]);
     console.log(JSON.stringify(result, null, 2));
     // 「重新加入」 reports its outcome in the result (device-link.ts `rejoin`): say why it did not work, and fail the command.
-    const rejoin = action === 'rejoin' ? (result as { rejoin?: { result?: unknown; hint?: unknown } }).rejoin : undefined;
+    // `agent-net-on` rejoins first when this Host was removed: the same hint, but the switch is on either way.
+    const rejoin = action === 'rejoin' || action === 'agent-net-on'
+      ? (result as { rejoin?: { result?: unknown; hint?: unknown } }).rejoin : undefined;
     if (rejoin && typeof rejoin.hint === 'string') (rejoin.result === 'rejoined' ? console.log : console.error)(rejoin.hint);
-    if (rejoin && rejoin.result !== 'rejoined') process.exitCode = 1;
+    if (action === 'rejoin' && rejoin && rejoin.result !== 'rejoined') process.exitCode = 1;
   } catch (error) {
     console.error(`cindy-host remote failed: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 1;
@@ -741,6 +752,7 @@ let stopPluginAuthorization: (() => void) | null = null;
 let platformClient: ReturnType<typeof createPlatformClientBridge> | null = null;
 let platformTools: ReturnType<typeof createHostPlatformTools> | null = null;
 let plugins: Awaited<ReturnType<typeof createHostPluginRuntime>> | null = null;
+let pluginEngines: ReturnType<typeof createHostPluginEngines> | null = null;
 let pluginGateway: ReturnType<typeof createHostPluginGateway> | null = null;
 let pluginManager: ReturnType<typeof createHostGhostManager> | null = null;
 let hostTools: ReturnType<typeof createHostToolService> | null = null;
@@ -867,9 +879,12 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   // Shared readers (history, tags) resolve the owner client from this singleton;
   // installing it here keeps them on the same connection as the host runtime.
   setCurrentDbClient(client, ownerId);
+  setHistoryWorkPageReader((sid, onShape) => hostHistoryReader.page(sid, undefined, true, { workLines: true, onShape }));
+  void ensureSessionFlagRegistryLoaded().catch(() => {});
   activeOwner = ownerId;
   await reconcileDeletedTaskViewState(client, () => activeOwner === ownerId);
   closeStorage = async () => {
+    setHistoryWorkPageReader(null);
     clearCurrentDbClient(client);
     await waitForRetainedDbClient(client);
     await client.dispose();
@@ -1022,6 +1037,10 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   });
   const held = inputQueue.profileHoldReason();
   if (held) plugins.pauseForDesktop(held);
+  pluginEngines = createHostPluginEngines({
+    availabilityPolicy: availabilityPolicy!,
+    publish: (channel, payload) => eventHub.publish({ type: 'plugin_push', channel, payload }),
+  });
 
   if (!plugins.pluginPauseFailure() && pluginManager.hasPendingMutationRecovery()) await pluginManager.retryInterruptedMutationsAfterDbReady();
 
@@ -1106,7 +1125,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   const claudeBinary = harnessBinaryPaths['claude-code'];
   const codexBinary = harnessBinaryPaths.codex;
   const piBinary = harnessBinaryPaths.pi;
-  if (claudeBinary || codexBinary || piBinary) {
+  {
     const gateway = modelAccess!.gateway;
     // Memory uses the same owner-scoped store Desktop reads, so a task started
     // here sees the same memories as a task started there.
@@ -1141,6 +1160,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       await claudeProxy.ready();
     }
     agentGraph = createHostAgentGraph({
+      appVersion: layout.version,
       onSessionClose: (id, close) => {
         if (!close.transient && (close.reason === 'requested' || close.reason === 'unexpected'))
           taskRuntimePlugins?.forgetSession(id);
@@ -1177,6 +1197,8 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       reportGatewayKeyRejected: key => modelAccess?.reportRejectedKey(key),
       readAuthRealm: () => account.realm,
       sharedGlobalSkills,
+      expandRouteRef: hostModelGroups.expandAuxiliaryRouteRef,
+      subagentRouteMembers: hostModelGroups.subagentRouteMembers,
       mcpProviders: await pluginGateway.prepareMcpProviders([...hostTools.providers, ...memory.providers({ readsAccountHistory: hostTools.readsAccountHistory, deviceId: () => currentDeviceId ?? '', searchProviders: taskPlugins.searchGhostRuntimeMemories }), pluginGateway.provider]),
       userDataDir: dataDir,
     });
@@ -1195,11 +1217,10 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       publish: (channel, payload) => eventHub.publish({ type: 'plugin_push', channel, payload }) });
     // Second step, now that the agents exist: turn their native memory off.
     if (makerMemory.isEnabled()) await makerMemory.enable();
-    runtime.agents = [...agentGraph.agents];
+    runtime.agents = [...agentGraph.maker.listAvailableAgents()];
     runtime.agentLane = currentGateway() ? 'gateway-key' : 'claude-subscription';
     // Idle ordinary tasks release their runtimes from here on, as on the desktop (idle-release.ts).
     inputQueue.startIdleRelease();
-
   }
   if (claudeBinary) {
     const ownerSession = activeOwnerScopeKey();
@@ -1210,7 +1231,9 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       });
   }
   await plugins.reconcile();
+  if (agentGraph) runtime.agents = [...agentGraph.maker.listAvailableAgents()];
   await pluginGateway.refresh();
+  void hostModelGroups.refresh();
   startProfileCoexistence(dataDir, scanProfile);
   runtime.state = 'ready';
   runtime.unavailable = null;
@@ -1234,8 +1257,17 @@ const sessionDraftPorts = {
   emitSessionListChangedLocally: (sessionId: string) => eventHub.publish({ type: 'session_changed', action: 'delete', sessionId }),
   notifyPluginSessionCreated: (input: { sessionId: string; workdir?: string }) => eventHub.publish({ type: 'session_created', ...input }),
 };
+setOnSessionTurnEndedPersisted(
+  (sessionId, endedAt, capturedScope) => {
+    if (capturedScope && !isDataOwnerBroadcastScopeCurrent(capturedScope as ReturnType<typeof captureDataOwnerBroadcastScope>)) return;
+    eventHub.publish({ type: 'session_changed', sessionId, patch: { lastTurnEndedAt: endedAt } });
+  },
+  captureDataOwnerBroadcastScope,
+);
 setSessionOpeningModelAdmission(async body => {
-  if (body.agentKind === 'acp') throw new Error('插件引擎在无界面 Host 上不可用');
+  if (isPluginEngineKind(body.agentKind)) {
+    return admitPluginEngineSession(body, getPluginHarnessRegistry().list(), pluginEngineModelsOf, pluginEngineSettingsOf);
+  }
   const kind = body.agentKind === 'cc' ? 'claude-code' : body.agentKind;
   const snapshot = await listProviders({ gateway: currentGateway(), ownerId: runtime.owner });
   const execution = resolveSessionExecutionSelection({
@@ -1266,8 +1298,10 @@ const readSessionForRun = async (sessionId: string, { forHandoff = false } = {})
   const [botLink] = await db.drizzle.select({ botId: botSessionLinks.botId })
     .from(botSessionLinks).where(eq(botSessionLinks.sessionId, sessionId)).limit(1);
   if (forHandoff && botLink) return null;
-  const storedKind = requireBuiltinAgentKind(row.agentKind as EngineKind, 'Host task execution');
-  const agentKind: 'claude-code' | 'codex' | 'pi' = storedKind === 'codex' ? 'codex' : storedKind === 'pi' ? 'pi' : 'claude-code';
+  const storedKind = row.agentKind;
+  const agentKind: EngineKind = storedKind === 'acp'
+    ? 'acp'
+    : storedKind === 'codex' ? 'codex' : storedKind === 'pi' ? 'pi' : 'claude-code';
   return {
     id: row.id,
     status: row.status, source: row.source, botId: botLink?.botId ?? null,
@@ -1358,8 +1392,34 @@ const contextRecovery = createHostContextRecoveryWiring({
   log: createLogger('context-recovery'),
   rehydrateColdPiRuntimeForWindowVerification: sessionId => runtimeSelection.rehydrateColdPiRuntimeForWindowVerification(sessionId),
 });
+const hostAutoTitle = createHostAutoTitle({
+  getAutoReview: () => agentGraph?.autoReview ?? null,
+  getMaker: () => agentGraph?.maker ?? null,
+  profileHoldReason: () => inputQueue.profileHoldReason(),
+  profileHoldGeneration: () => inputQueue.profileHoldGeneration(),
+  hasEnabledUserMessageHookGhost: () => Boolean(plugins?.taskPlugins.hasEnabledUserMessageHookGhost()),
+  drainHistories: () => inputQueue.drainHistories(),
+  isSessionTurnPendingCompletion: id => agentGraph?.maker.getSession(id)?.isTurnRunning() === true
+    || inputQueue.isTurnRunning(id) || inputQueue.isTurnRecovering(id),
+  publish: event => eventHub.publish(event),
+});
+const hostModelGroups = createHostModelGroups({
+  listProviderViews: async () => (await listProviders({ gateway: currentGateway(), ownerId: runtime.owner })).providers,
+  listLocalAgents: () => agentGraph?.agents ?? [],
+  readPricing: async () => ({
+    gateway: await usagePricing.getGatewayModelPricing().catch(() => null),
+    reference: usagePricing.readReferenceModelPricing(),
+  }),
+  createDbMessage: (sessionId, body) => insertSessionMessage(sessionId, body),
+  readPendingSessionTarget: (sessionId) => runtimeSelection.readPendingTarget(sessionId),
+  onBindingChanged: (sessionId) => runtimeSelection.broadcastBindingProjection(sessionId),
+});
 const inputQueue = createInputQueue({
+  readModelGroupAutoSwitchMode: hostModelGroups.readAutoSwitchMode,
+  onModelGroupSessionAttached: hostModelGroups.sessionStart.attach,
+  onModelGroupDispatched: hostModelGroups.sessionStart.dispatched,
   getTaskRuntimePlugins: () => taskRuntimePlugins,
+  prepareDeviceLinkAutoTitle: (sessionId: string, queued: any) => hostAutoTitle.prepareDeviceLinkAutoTitle(sessionId, queued),
   getOwner: getCurrentDbClientSnapshot,
   // The turn usage recorders (agent/usage-recording.ts), fed by the turn executor.
   usage: usageRecording,
@@ -1480,6 +1540,7 @@ const runtimeSelection = createHostRuntimeSelection({
   inputQueue: inputQueue as unknown as Parameters<typeof createHostRuntimeSelection>[0]['inputQueue'],
   readProviderGroupBinding: sessionId => hostProviderBindings.readProviderGroupBinding(sessionId),
   readProviderGroup: providerId => hostProviderGroups.readProviderGroup(providerId),
+  modelGroups: hostModelGroups,
   log: createLogger('runtime-selection'),
 });
 // The desktop's process-wide runtime selection slots (runtime-selection.ts), before any owner commit.
@@ -1695,7 +1756,7 @@ const serverDeps = {
     agentAuth?.close();
     await providerConfig?.cancelLogins();
   },
-  listRunningSessions: (options: unknown) => listRunningSessions(agentGraph?.maker, options),
+  listRunningSessions: (options: unknown) => listRunningSessions(agentGraph?.maker, options, deviceLink ? () => deviceLink!.getSessionActivityMap() : undefined),
   refreshAuth: async () => {
     const ok = await refreshAuthSession();
     return { ok, ...projectAuthState() };
@@ -1833,6 +1894,7 @@ const serverDeps = {
         runtimeSelection.setModel(sessionId, model, providerId, revision, selection),
       persistSessionFields: (sessionId, patch) => runtimeSelection.persistSessionFields(sessionId, patch),
       move: sessionMove.move,
+      onManualTitleWrite: sessionId => hostAutoTitle.markManuallyRenamed(sessionId),
       onSoftDelete: async sessionId => {
         await inputQueue.disposeSession(sessionId);
         runtimeSelection.clearIntent(sessionId);
@@ -1909,33 +1971,8 @@ const serverDeps = {
     });
   },
   getSessionAgentSwitchIntent: (sessionId: string) => runtimeSelection.projectIntent(sessionId),
-  /**
-   * Auto-title step 1 (Codex-style immediate placeholder): persist the
-   * normalized first user text while the title is still the default sentinel.
-   * The desktop's smart-title model pass stays desktop-owned; the web client
-   * still gets the visible sidebar update D3 expects.
-   */
-  autoTitle: async (input: { sessionId?: unknown; text?: unknown; isUserText?: unknown }) => {
-    const sessionId = String(input.sessionId ?? '');
-    const text = typeof input.text === 'string' ? input.text : '';
-    const seed = normalizeAutoTitle(text);
-    if (!sessionId || !seed) return { applied: false, done: false };
-    if (plugins?.taskPlugins.hasEnabledUserMessageHookGhost()) return { applied: false, done: false };
-    const rows = await getDbClient().drizzle.select({ title: sessionTable.title }).from(sessionTable)
-      .where(eq(sessionTable.id, sessionId)).limit(1);
-    const current = rows[0]?.title ?? null;
-    if (current === null || !isDefaultDraftSessionTitle(current)) {
-      return { applied: false, done: true };
-    }
-    await getDbClient().drizzle.update(sessionTable)
-      .set({ title: seed, updatedAt: Date.now() })
-      .where(and(eq(sessionTable.id, sessionId), eq(sessionTable.title, current)));
-    const after = await getDbClient().drizzle.select({ title: sessionTable.title }).from(sessionTable)
-      .where(eq(sessionTable.id, sessionId)).limit(1);
-    const applied = after[0]?.title === seed;
-    if (applied) eventHub.publish({ type: 'session_changed', sessionId, patch: { title: seed } });
-    return { applied, done: applied };
-  },
+  autoTitle: (input: { sessionId?: unknown; text?: unknown; isUserText?: unknown; agentKind?: unknown }) =>
+    hostAutoTitle.runAutoTitle(input),
   getSession: async (sessionId: string) => {
     return readHostSession(getDbClient().drizzle, sessionId);
   },
@@ -1977,7 +2014,8 @@ const serverDeps = {
     committed: await commitProvisionalSession(sessionId, sessionDraftPorts),
   }),
   createSession: async (input: Record<string, unknown>) => {
-    if (!agentGraph && sessionStorage && runtime.state === 'ready') throwAgentBinaryNotReady();
+    if ((!agentGraph || (agentGraph.maker.listAvailableAgents().length === 0 && !agentGraph.hasEngine('acp')))
+      && sessionStorage && runtime.state === 'ready') throwAgentBinaryNotReady();
     if (!agentGraph || !sessionStorage) throw new Error('agent runtime is not ready');
     const allowed: Record<string, true> = {
       id: true, title: true, workingDir: true, model: true, effort: true, permissionMode: true,
@@ -2046,7 +2084,21 @@ const serverDeps = {
   // XD quotes. The v1 channel shares this path; only device-link reaches it (device-link.ts).
   modelPricing: () => usagePricing.getGatewayModelPricing(),
   referenceModelPricing: () => usagePricing.readReferenceModelPricing(),
-  agents: () => agentGraph?.agents ?? [],
+  modelGroups: hostModelGroups.handlers,
+  agents: () => agentGraph?.maker.listAvailableAgents() ?? [],
+  pluginEngines: {
+    list: () => pluginEngines?.list() ?? [],
+    refresh: (targetGhostId?: unknown) => pluginEngines?.refresh(targetGhostId),
+    usage: (key: unknown, task?: unknown) => pluginEngines?.usage(key, task) ?? null,
+    setRemoteUse: (input: unknown) => {
+      if (!pluginEngines) throw new Error('Plugin engines are not ready');
+      return pluginEngines.setRemoteUse(input);
+    },
+    setPrefs: (input: unknown) => {
+      if (!pluginEngines) throw new Error('Plugin engines are not ready');
+      return pluginEngines.setPrefs(input);
+    },
+  },
   events: eventHub,
   input: {
     ...inputQueue,
@@ -2056,6 +2108,7 @@ const serverDeps = {
   interactions,
   agentCommands: async (input: { agentKind?: string; sessionId?: string }) => {
     const rawKind = String(input.agentKind ?? '');
+    if (rawKind === 'acp') return { success: false, error: "Agent 'acp' is not registered" };
     const kind = rawKind === 'codex' ? 'codex' : rawKind === 'pi' ? 'pi' : 'claude-code';
     const graph = agentGraph;
     const agent = graph?.instances?.[kind];
@@ -2075,7 +2128,7 @@ const serverDeps = {
   },
   agentSkills: createHostAgentSkillList({
     maker: () => agentGraph?.maker ?? null,
-    hasAgent: kind => Boolean(agentGraph?.instances?.[kind as 'claude-code' | 'codex' | 'pi']),
+    hasAgent: kind => Boolean(agentGraph?.hasEngine(kind)),
     readStoredWorkDir: async (sessionId) => {
       const stored = await sessionStorage?.get(sessionId);
       return { found: Boolean(stored), workDir: stored?.workDir };
@@ -2130,15 +2183,33 @@ const serverDeps = {
     if (!row) throw new Error('session not found');
     return { totalValueUsd: row.totalCostUsd, entries: [] };
   },
-  historyView: async (sessionId: string, before?: string | null) => {
-    return hostHistoryReader.page(sessionId, before ?? undefined, true);
+  historyView: async (sessionId: string, before?: string | null, opts?: unknown) => {
+    return readHostHistoryView(hostHistoryReader, sessionId, before, opts);
   },
   workDetails: async (sessionId: string, ref: unknown, after?: string | null) => {
-    return hostHistoryReader.details(sessionId, ref as any, after ?? undefined);
+    return readHostWorkDetails(hostHistoryReader, sessionId, ref, after);
   },
-  messagesAroundClientId: async (sessionId: string, clientId: string, opts?: { radius?: number }) => {
-    return readMessagesAroundClientId(sessionId, clientId, opts);
+  ackInterrupted: async (sessionId: unknown) => {
+    const sid = requireString(sessionId, 'id');
+    await ackSessionTurnEndedDurable(sid);
+    return { ok: true };
   },
+  clearSessionAttention: async (sessionId: unknown, intent?: unknown) => {
+    if (typeof sessionId !== 'string' || !sessionId) return { ok: true };
+    await deviceLink?.acknowledgeSessionRead(sessionId, intent === 'explicit' ? 'explicit' : 'passive');
+    return { ok: true };
+  },
+  dismissError: async (sessionId: unknown, clientId: unknown) => {
+    return dismissHostErrorMessage(
+      sessionId,
+      clientId,
+      (message) => {
+        eventHub.publish({ type: 'message_created', sessionId: message.sessionId, messageId: message.id, message });
+      },
+      (sid, cid) => inputQueue.whenTurnErrorPersisted(sid, cid),
+    );
+  },
+  messagesAroundClientId: readMessagesAroundClientId,
   messagesList: async (sessionId: string, limit?: number, before?: string | null) => {
     return readMessagesList(sessionId, { limit: limit ?? 200, before: before ?? undefined });
   },
@@ -2189,6 +2260,8 @@ async function disposeOwnerRuntime(): Promise<void> {
     await attempt(() => agentAuth?.close());
     await attempt(() => modelAccess?.close());
     agentGraph?.gatewayRestart.clear();
+    agentGraph?.disposePluginEngines();
+    pluginEngines?.dispose(); pluginEngines = null;
     await attempt(() => providerConfig?.close());
     taskRuntimePlugins = null;
     setGhostToolApprovalResolver(null);
@@ -2222,6 +2295,7 @@ async function disposeOwnerRuntime(): Promise<void> {
   } finally {
     platformTools = null;
     plugins = null;
+    pluginEngines = null;
     pluginGateway = null;
     pluginManager = null;
     hostTools = null;
@@ -2246,6 +2320,7 @@ async function disposeOwnerRuntime(): Promise<void> {
     reportEndpoint = null;
     currentDeviceId = null;
     claudeState = null;
+    hostModelGroups.resetForOwner();
     account = { authenticated: false, realm: account.realm };
     await attempt(() => runtimeLease?.release());
     runtimeLease = null;
@@ -2390,6 +2465,10 @@ function startDeviceLink(): void {
     sessionHandoff,
     profileDir, worktree, version: layout.version,
     mcpApps: pluginGateway ?? undefined,
+    autoTitle: {
+      generateTitle: rawRequest => hostAutoTitle.generateTitle(rawRequest),
+      regenerateTitle: rawRequest => hostAutoTitle.regenerateTitle(rawRequest),
+    },
     releaseAuthCaller: caller => agentAuth?.releaseCaller(caller),
     getWsUrl: () => endpoint.replace(/^https:/, 'wss:') + '/api/device-link/ws',
     getToken: async () => currentSessionToken,
@@ -2401,6 +2480,9 @@ function startDeviceLink(): void {
     invoke: service, subscribe: eventHub.subscribe,
     readMachineStatus: () => readHostMachineStatus(() =>
       agentGraph?.maker.listActiveSessions().filter(session => session.isTurnRunning()).length ?? 0),
+    hasPendingQueuedWork: id => inputQueue.hasPendingQueuedWork(id),
+    readSessionActivityMeta: readHostSessionActivityMeta,
+    getHistoryToolName: (id, toolUseId) => inputQueue.getHistoryToolName(id, toolUseId),
     isBusyForProjectArchive: id => !agentGraph || inputQueue.isTurnRunning(id)
       || !!agentGraph.maker.getSession(id)?.isTurnRunning() || isProvisionalSession(id),
     sessionInTurn: id => agentGraph?.maker.getSession(id)?.isTurnRunning() === true
@@ -2457,7 +2539,18 @@ function startDeviceLink(): void {
     publish: event => eventHub.publish(event),
     availabilityPolicy: availabilityPolicy ?? undefined,
     disableShareAvailability,
-
+    remoteAgentPluginEngines: {
+      getMaker: () => agentGraph?.maker ?? null,
+      isOffered: (providerId, model) => Boolean(
+        pluginEngines
+        && !pluginEngines.remoteUse.isPluginEngineModelTurnedOff(providerId, model)
+        && pluginEngines.remoteUse.isPluginEngineOfferedRemotely(providerId)
+        && (model === undefined || pluginEngines.remoteModelAccess.allows(providerId, model)),
+      ),
+      onAccessChanged: listener => pluginEngines?.onAccessChanged(listener) ?? (() => {}),
+      managedSkills: async () => (await plugins?.listManagedSkills() ?? []).flatMap(skill =>
+        skill.path ? [{ command: skill.claudeCommandName, dir: path.dirname(skill.path) }] : []),
+    },
   });
 }
 
@@ -2583,6 +2676,7 @@ const stop = () => {
       try {
         commitVolatileAppSession('signed-out', null, true);
         releaseOwnerBoundary();
+        hostModelGroups.dispose();
         workdirProbeHostClient.dispose();
         runtimeLease?.release();
         releaseService();

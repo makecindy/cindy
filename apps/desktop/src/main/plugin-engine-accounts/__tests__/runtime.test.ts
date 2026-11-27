@@ -33,6 +33,7 @@ const h = vi.hoisted(() => ({
   files: new Map<string, unknown>(),
   cooling: {} as Record<string, Record<string, unknown>>,
   status: new Map<string, { state: 'signed-in' | 'signed-out'; identity?: { email?: string }; fingerprint?: string; models?: string[] }>(),
+  usage: new Map<string, { updatedAt: number; windows?: Array<{ label: string; remainingPercent: number; resetsAt?: number; windowMinutes?: number }> } | null>(),
   login: vi.fn(),
   harnesses: [] as Array<Record<string, unknown>>,
 }));
@@ -72,13 +73,17 @@ vi.mock('../../provider-group/coolingStore.js', () => ({
 vi.mock('../../cindy-brain/pluginHarnesses.js', () => ({
   getPluginHarnessRegistry: () => ({ list: () => h.harnesses }),
   readPluginHarnessAccountStatus: async (_key: string, dir?: string) => h.status.get(dir ? path.basename(dir) : 'default') ?? null,
-  readPluginHarnessUsage: async () => null,
+  readPluginHarnessUsage: async (_key: string, dir?: string) => h.usage.get(dir ? path.basename(dir) : 'default') ?? null,
   loginPluginHarnessAccount: h.login,
   cancelPluginHarnessAccountLogin: async () => undefined,
 }));
 
-const { acquirePluginEngineAccount, runPluginEngineAccountCommand, resetPluginEngineAccountsRuntimeForTests } =
-  await import('../runtime.js');
+const {
+  acquirePluginEngineAccount,
+  readPluginEnginePoolAccountUsages,
+  runPluginEngineAccountCommand,
+  resetPluginEngineAccountsRuntimeForTests,
+} = await import('../runtime.js');
 const { withPluginEngineAccounts } = await import('../agent.js');
 const { preparePluginEngineAccountForSend } = await import('../failover.js');
 const { updatePluginEnginePool, readPluginEngineBinding, readPluginEnginePool } = await import('../store.js');
@@ -274,7 +279,7 @@ describe('plugin engine account pool', () => {
   // the handoff must bind through it. Minimal input: task on S bound to A, S merged back, A paused.
   it('keeps a handed-off task on its new account when its taken-out provider was merged back', async () => {
     const S = `${PROVIDER}~ab12cd34`;
-    await updatePluginEnginePool(ENGINE, pool => ({ ...pool, providers: { ab12cd34: { strategy: 'least' } }, placement: { [A]: 'ab12cd34' } }));
+    await updatePluginEnginePool(ENGINE, pool => ({ ...pool, providers: { ab12cd34: { strategy: 'expiring' } }, placement: { [A]: 'ab12cd34' } }));
     const lease = await acquirePluginEngineAccount(S, undefined, ['task:t1']);
     expect(lease!.accountId).toBe(A);
     await lease!.bind(['task:t1', 'native:native-1']);
@@ -335,4 +340,57 @@ describe('plugin engine account pool', () => {
     h.harnesses = [{ ...h.harnesses[0], accounts: { methods: [] } }];
     expect(await acquirePluginEngineAccount(PROVIDER, undefined, ['task:t1'])).toBeNull();
   });
+
+  // Unit regression (provider-sharing.md): shared plugin engines (e.g. Antigravity) read only
+  // assignable signed-in accounts' usage without exposing account identities or directories,
+  // and distinguish non-reporting engines (`unsupported`) from unavailable ones (`[]`).
+  it('reads assignable signed-in account usages for shared plugin engines without leaking identity', async () => {
+    const now = Date.now();
+    h.usage.clear();
+    h.harnesses = [{ ...h.harnesses[0], reportsUsage: true }];
+    h.status.set('default', { state: 'signed-in', identity: { email: 'default@example.com' } });
+    h.status.set(A, { state: 'signed-in', identity: { email: 'a@example.com' } });
+    h.status.set(B, { state: 'signed-out', identity: { email: 'b@example.com' } });
+    h.usage.set('default', { updatedAt: now, windows: [{ label: 'Gemini Models · weekly', remainingPercent: 80, windowMinutes: 10_080 }] });
+    h.usage.set(A, { updatedAt: now, windows: [{ label: 'Gemini Models · weekly', remainingPercent: 50, windowMinutes: 10_080 }] });
+    await updatePluginEnginePool(ENGINE, pool => ({
+      ...pool,
+      accounts: pool.accounts.map(account => account.id === 'default' ? { ...account, paused: true } : account),
+    }));
+
+    const pooled = await readPluginEnginePoolAccountUsages(PROVIDER);
+    expect(pooled).toEqual([{ usage: h.usage.get(A) }]);
+    expect(JSON.stringify(pooled)).not.toContain('example.com');
+
+    // Non-pooled (single-account) plugin engine with reportsUsage reads the base engine usage.
+    h.harnesses = [{ ...h.harnesses[0], reportsUsage: true, accounts: undefined }];
+    expect(await readPluginEnginePoolAccountUsages(PROVIDER)).toEqual([{ usage: h.usage.get('default') }]);
+
+    // Engine without reportsUsage is explicitly unsupported; unavailable engine returns empty.
+    h.harnesses = [{ ...h.harnesses[0], reportsUsage: undefined }];
+    expect(await readPluginEnginePoolAccountUsages(PROVIDER)).toBe('unsupported');
+    h.harnesses = [{ ...h.harnesses[0], reportsUsage: true, availability: { state: 'unavailable' } }];
+    expect(await readPluginEnginePoolAccountUsages(PROVIDER)).toEqual([]);
+  });
+});
+
+// plugin-security-and-authoring.md §5（存量升级无感）＋ provider-groups.md「选择方式」：旧版本存下的选法名字
+// (轮询 round、权重 weight、最少占用 least)读进来换成统一后的选法，账号与权重原样保留，用户什么都不用做。
+it('reads strategies an older version stored for a plugin engine pool under the unified names', async () => {
+  const { normalizePluginEngineAccountsFile } = await import('../store');
+  const file = normalizePluginEngineAccountsFile({
+    engines: {
+      'sample:engine': {
+        strategy: 'round',
+        accounts: [{ id: 'default', paused: false, limit: 4, weight: 3 }],
+        providers: { ab12cd34: { strategy: 'weight' } },
+      },
+      'other:engine': { strategy: 'least', accounts: [{ id: 'default' }] },
+    },
+    bindings: {},
+  });
+  expect(file.engines['sample:engine']).toMatchObject({
+    strategy: 'rotate', accounts: [{ id: 'default', weight: 3 }], providers: { ab12cd34: { strategy: 'weighted' } },
+  });
+  expect(file.engines['other:engine']?.strategy).toBe('expiring');
 });

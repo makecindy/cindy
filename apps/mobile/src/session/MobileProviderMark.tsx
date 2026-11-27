@@ -25,6 +25,7 @@ import {
   MODEL_SPECTRUM_COLORS,
   PROVIDER_LOGO_PATHS,
   CINDY_MARK_TRANSFORM, CINDY_MARK_PATH, CINDY_MARK_EARRING_PATH, CINDY_MARK_EARRING_COLOR,
+  CONNECTION_BRANDS, isConnectionBrand, isProviderConnectionImage,
   isProviderLogoKind,
   resolveProviderLogoKind,
   type ProviderLogoRouting,
@@ -46,13 +47,53 @@ const GLYPH_INSET = { x: (MARK_SIZE - GLYPH_SIZE) / 2, y: (MARK_SIZE - GLYPH_SIZ
 const XD_INSET = { x: (MARK_SIZE - XD_WIDTH) / 2, y: (MARK_SIZE - XD_WIDTH * XD_ASPECT) / 2 };
 const MONOGRAM_INSET = { x: 0, y: 0 };
 
-/** remote → 叠远程标记(右上角波纹 + 点);图形本身大小与位置不变。 */
+/** 智能路由角标使用桌面 RouteSourceMark 的 Lucide Sparkle 路径。 */
+const ROUTED_BADGE_SIZE = 9;
+const ROUTED_BADGE_PATH =
+  'M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962'
+  + 'L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0'
+  + 'L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964'
+  + 'L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z';
+
+/** routed → 叠智能路由角标；remote → 叠远程标记(右上角波纹 + 点)；两者互斥，图形本身大小与位置不变。 */
 function withRemote(
   node: ReactNode,
   remote: boolean | undefined,
   inset: { x: number; y: number },
   color: string,
+  routed?: boolean,
 ) {
+  if (routed) {
+    return (
+      <View
+        accessibilityElementsHidden
+        importantForAccessibility="no-hide-descendants"
+        pointerEvents="none"
+        style={{ height: MARK_SIZE, width: MARK_SIZE }}
+      >
+        {node}
+        <View
+          style={{
+            position: 'absolute',
+            right: Math.max(-4, inset.x - 5),
+            top: Math.max(-3, inset.y - 4),
+          }}
+        >
+          <Svg height={ROUTED_BADGE_SIZE} viewBox="0 0 24 24" width={ROUTED_BADGE_SIZE}>
+            {/* 描边随 24 单位画布缩放，与桌面实心四角星的几何一致。 */}
+            <Path
+              d={ROUTED_BADGE_PATH}
+              fill={color}
+              stroke={color}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={0.6}
+            />
+          </Svg>
+        </View>
+      </View>
+    );
+  }
   if (!remote) return node;
   return (
     <RemoteSourceMark color={color} inset={inset} size={MARK_SIZE}>
@@ -103,6 +144,8 @@ export interface MobileProviderMarkProps {
   color?: string;
   /** true → 另一台电脑上的供应商:右上角叠远程标记(波纹 + 点),图形不缩放不移位。 */
   remote?: boolean;
+  /** true → 合并后的智能路由条目或当前由智能路由持续托管:右上角叠路由角标。 */
+  routed?: boolean;
 }
 
 /** 渲染单个供应商的来源徽标(官方 mark 或 monogram)。 */
@@ -115,20 +158,22 @@ export function MobileProviderMark(props: MobileProviderMarkProps) {
       svg={props.customIcon}
       color={props.color}
       remote={props.remote}
+      routed={props.routed}
     >
       {fallback}
     </MobileCustomProviderIcon>
   );
 }
 
-function MobileCustomProviderIcon({ svg, children, color, remote }: {
+function MobileCustomProviderIcon({ svg, children, color, remote, routed }: {
   svg: string;
   children: ReactNode;
   color?: string;
   remote?: boolean;
+  routed?: boolean;
 }) {
   const { mode } = useTheme();
-  const themedSvg = resolveProviderSvgColorScheme(svg, mode);
+  const themedSvg = isProviderConnectionImage(svg) ? svg : resolveProviderSvgColorScheme(svg, mode);
   return (
     <MobileProviderImage
       key={themedSvg}
@@ -136,22 +181,24 @@ function MobileCustomProviderIcon({ svg, children, color, remote }: {
       fallback={children}
       color={color}
       remote={remote}
+      routed={routed}
     />
   );
 }
 
-function MobileProviderImage({ svg, fallback, color, remote }: {
+function MobileProviderImage({ svg, fallback, color, remote, routed }: {
   svg: string;
   fallback: ReactNode;
   color?: string;
   remote?: boolean;
+  routed?: boolean;
 }) {
   const [failed, setFailed] = useState(false);
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   if (failed) return fallback;
   // expo-image's native data URL loaders support base64 on both platforms.
-  const uri = `data:image/svg+xml;base64,${btoa(String.fromCharCode(...utf8Bytes(svg)))}`;
+  const uri = isProviderConnectionImage(svg) ? svg : `data:image/svg+xml;base64,${btoa(String.fromCharCode(...utf8Bytes(svg)))}`;
   return withRemote(
     <View accessible={false} style={styles.markBox}>
       <Image source={{ uri }} contentFit="contain" style={{ width: GLYPH_SIZE, height: GLYPH_SIZE }}
@@ -160,6 +207,7 @@ function MobileProviderImage({ svg, fallback, color, remote }: {
     remote,
     GLYPH_INSET,
     color ?? colors.textSecondary,
+    routed,
   );
 }
 
@@ -170,14 +218,16 @@ function DefaultProviderMark({
   name,
   color,
   remote,
+  routed,
 }: MobileProviderMarkProps) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const fill = color ?? colors.textSecondary;
 
-  const kind = isProviderLogoKind(logoKind)
+  const selected = isProviderLogoKind(logoKind)
     ? logoKind
     : resolveProviderLogoKind(providerId ?? '', routing);
+  const kind = isConnectionBrand(selected) ? CONNECTION_BRANDS[selected] : selected;
 
   switch (kind) {
     case 'anthropic':
@@ -190,9 +240,10 @@ function DefaultProviderMark({
         remote,
         GLYPH_INSET,
         fill,
+        routed,
       );
     case 'openai-spectrum':
-      return withRemote(<View accessible={false} style={styles.markBox}><OpenAISpectrumArtwork fill={fill} /></View>, remote, GLYPH_INSET, fill);
+      return withRemote(<View accessible={false} style={styles.markBox}><OpenAISpectrumArtwork fill={fill} /></View>, remote, GLYPH_INSET, fill, routed);
     case 'openai':
       return withRemote(
         <View accessible={false} style={styles.markBox}>
@@ -203,9 +254,10 @@ function DefaultProviderMark({
         remote,
         GLYPH_INSET,
         fill,
+        routed,
       );
     case 'cindy':
-      return withRemote(<View accessible={false} style={styles.markBox}><CindyArtwork fill={fill} /></View>, remote, GLYPH_INSET, fill);
+      return withRemote(<View accessible={false} style={styles.markBox}><CindyArtwork fill={fill} /></View>, remote, GLYPH_INSET, fill, routed);
     case 'xd':
       return withRemote(
         <View accessible={false} style={styles.markBox}>
@@ -218,6 +270,7 @@ function DefaultProviderMark({
         remote,
         XD_INSET,
         fill,
+        routed,
       );
   }
 
@@ -231,6 +284,7 @@ function DefaultProviderMark({
       remote,
       GLYPH_INSET,
       fill,
+      routed,
     );
   }
 
@@ -243,6 +297,7 @@ function DefaultProviderMark({
     remote,
     MONOGRAM_INSET,
     fill,
+    routed,
   );
 }
 
@@ -258,11 +313,13 @@ export interface MobileModelIconMarkProps {
   color?: string;
   /** 同 MobileProviderMark.remote。 */
   remote?: boolean;
+  /** 同 MobileProviderMark.routed。 */
+  routed?: boolean;
 }
 
 /**
  * 模型行 / composer 药丸的图标 —— 统一规则(与桌面 ModelIconMark 同源,共享
- * resolveModelIconKind 口径):优先使用模型目录的厂牌 `icon`，缺省时回落来源供应商标。
+ * resolveModelIconKind 口径):已选的连接图标优先，否则使用模型厂牌 `icon`，缺省时回落来源供应商标。
  * 禁止在客户端按 model id 猜厂牌。
  */
 export function MobileModelIconMark({
@@ -274,14 +331,15 @@ export function MobileModelIconMark({
   name,
   color,
   remote,
+  routed,
 }: MobileModelIconMarkProps) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
-  const kind = resolveModelIconKind(icon);
+  const kind = resolveModelIconKind(icon, logoKind, customIcon);
   if (kind) {
     const fill = color ?? colors.textSecondary;
     if (kind === 'cindy') {
-      return withRemote(<View accessible={false} style={styles.markBox}><CindyArtwork fill={fill} /></View>, remote, GLYPH_INSET, fill);
+      return withRemote(<View accessible={false} style={styles.markBox}><CindyArtwork fill={fill} /></View>, remote, GLYPH_INSET, fill, routed);
     }
 
     return withRemote(
@@ -296,6 +354,7 @@ export function MobileModelIconMark({
       remote,
       GLYPH_INSET,
       fill,
+      routed,
     );
   }
   return (
@@ -307,6 +366,7 @@ export function MobileModelIconMark({
       logoKind={logoKind}
       customIcon={customIcon}
       remote={remote}
+      routed={routed}
     />
   );
 }

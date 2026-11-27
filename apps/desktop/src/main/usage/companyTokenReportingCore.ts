@@ -46,7 +46,7 @@ export interface ReportingRuntime {
   dir: string;
   identity(): ReportingIdentity | null;
   recovering(): boolean;
-  isAnalyticsAllowed(): boolean;
+  readCompanyTokenReportingPreference(): boolean | null;
   subscribeAuth(listener: () => void): () => void;
   subscribeSettings(listener: (allowed: boolean, explicitEnabled?: boolean) => void): () => void;
   direct(provider: string, kind: 'claude-code' | 'codex' | 'pi'): boolean;
@@ -69,7 +69,7 @@ function projectTurn(models: ReadonlySet<string>, day: string, samples: readonly
 }
 
 export function createCompanyTokenReportingCore(ports: ReportingRuntime) {
-  const { identity, isAnalyticsAllowed } = ports;
+  const { identity, readCompanyTokenReportingPreference } = ports;
   const current = (id: ReportingIdentity) => {
     const active = identity();
     return (
@@ -124,8 +124,9 @@ export function createCompanyTokenReportingCore(ports: ReportingRuntime) {
   let syncing = false;
   let rerun = false;
   let disposed = false;
+  let localPreference: boolean | null = null;
   const visible = (checkedIdentity?: ReportingIdentity | null) => {
-    if (!policy || disposed || !isAnalyticsAllowed()) return null;
+    if (!policy || disposed || localPreference !== true) return null;
     const who = checkedIdentity === undefined ? identity() : checkedIdentity;
     return who?.owner === policy.owner &&
       who.generation === policy.generation &&
@@ -143,7 +144,7 @@ export function createCompanyTokenReportingCore(ports: ReportingRuntime) {
     }
     syncing = true;
     clearTimeout(timer);
-    const version = invalidation;
+    let version = invalidation;
     let policyLoaded = false;
     let nextRefreshAt = Date.now() + POLICY_CHECK_INTERVAL_MS;
     try {
@@ -156,13 +157,21 @@ export function createCompanyTokenReportingCore(ports: ReportingRuntime) {
       const offFile = optOutFile(who.owner);
       const onFile = offFile + '.enable';
       const localOff = existsSync(offFile);
-      const allowed = isAnalyticsAllowed();
-      const localOn = allowed && existsSync(onFile);
-      if (!allowed && !localOff) {
-        purge();
+      localPreference = readCompanyTokenReportingPreference();
+      if (localPreference !== true && policy) {
         policy = null;
+        version = ++invalidation;
+      }
+      if (localPreference === null) {
+        liveReceipts.clear();
+        nextRefreshAt = Date.now() + RETRY_INTERVAL_MS;
+      }
+      // An existing withdrawal is explicit and owner-bound, even if the preference becomes unreadable.
+      if (localPreference !== true && !localOff) {
+        if (localPreference === false) purge();
         return;
       }
+      const localOn = localPreference === true && existsSync(onFile);
       const me = meResponseSchema.parse(await (await request(who, '/api/me')).json());
       if (!current(who) || invalidation !== version) return;
       const rule = me.membership.companyTokenReporting;
@@ -189,7 +198,7 @@ export function createCompanyTokenReportingCore(ports: ReportingRuntime) {
         purge();
         let participating = rule.participating;
         for (const [file, target] of [[offFile, false], [onFile, true]] as const) {
-          if (!existsSync(file) || (target && !isAnalyticsAllowed())) continue;
+          if (!existsSync(file) || (target && localPreference !== true)) continue;
           if (participating !== target) {
             await request(who, endpoint(who) + '/participation', 'PUT', { participating: target });
             if (!current(who) || invalidation !== version) return;
@@ -197,7 +206,7 @@ export function createCompanyTokenReportingCore(ports: ReportingRuntime) {
           }
           rmSync(file, { force: true });
         }
-        rerun = participating && isAnalyticsAllowed();
+        rerun = participating && localPreference === true;
         return;
       }
       const previous = policy;
@@ -418,7 +427,6 @@ export function createCompanyTokenReportingCore(ports: ReportingRuntime) {
       };
     },
   };
-  let lastAllowed = isAnalyticsAllowed();
   const onOwner = (force: boolean) => {
     const id = identity();
     const phase = id ? 'active' : ports.recovering() ? 'recovering' : 'inactive';
@@ -433,7 +441,6 @@ export function createCompanyTokenReportingCore(ports: ReportingRuntime) {
       // same member's scoped data after the membership and both switches are revalidated.
       if (phase === 'inactive' || (id && activeOwner && (activeOwner !== id.owner || ownerPhase === 'active'))) purge();
       activeOwner = owner;
-      lastAllowed = isAnalyticsAllowed();
       activeGeneration = id?.generation ?? -1;
       ownerPhase = phase;
     } else if (!force) {
@@ -446,16 +453,20 @@ export function createCompanyTokenReportingCore(ports: ReportingRuntime) {
   }, POLICY_CHECK_INTERVAL_MS);
   timer.unref();
   const unsubscribe = ports.subscribeAuth(() => onOwner(false));
-  const unsubscribeSettings = ports.subscribeSettings((allowed, explicitEnabled) => {
-    if (allowed === lastAllowed && explicitEnabled === undefined) return;
-    lastAllowed = allowed;
+  const unsubscribeSettings = ports.subscribeSettings((_personalAnalyticsAllowed, explicitEnabled) => {
+    const who = identity();
+    if (!who || (explicitEnabled === undefined &&
+        (who.owner !== activeOwner || who.generation !== activeGeneration))) return;
+    const allowed = readCompanyTokenReportingPreference();
+    if (allowed === localPreference && explicitEnabled === undefined) return;
+    localPreference = allowed;
     uploads.abort();
     uploads = new AbortController();
     invalidation++;
     policy = null;
-    purge();
-    const who = identity();
-    if (who && explicitEnabled !== undefined) {
+    if (allowed === false || explicitEnabled === false) purge();
+    else liveReceipts.clear();
+    if (explicitEnabled !== undefined) {
       const offFile = optOutFile(who.owner);
       if (!explicitEnabled) {
         rmSync(offFile + '.enable', { force: true });

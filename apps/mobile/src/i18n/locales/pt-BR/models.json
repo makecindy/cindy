@@ -93,8 +93,8 @@
     "remoteProvider": "{{provider}} · {{device}}",
     "remoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
     "providerGroup": "{{provider}} · {{group}}",
-    "groupBadge_one": "Grupo de provedores · {{count}} computador",
-    "groupBadge_other": "Grupo de provedores · {{count}} computadores",
+    "groupBadge_one": "Grupo de computadores · {{count}} computador",
+    "groupBadge_other": "Grupo de computadores · {{count}} computadores",
     "harness": "Harness",
     "restoreRecommended": "Restaurar recomendadas",
     "saveFailed": "Não foi possível salvar. Tente novamente.",
@@ -152,9 +152,18 @@
     "picker": {
       "switched": "“{{name}}” trocou esta tarefa para {{model}}",
       "switchUnavailable": "“{{name}}” não tem agora nenhuma fonte que esta tarefa possa usar. O modelo não foi alterado.",
-      "chooseUnavailable": "“{{name}}” não tem agora nenhuma fonte utilizável, então não foi selecionado."
+      "chooseUnavailable": "“{{name}}” não tem agora nenhuma fonte utilizável, então não foi selecionado.",
+      "managedBy": "Gerenciado por “{{name}}”",
+      "detach": "Desvincular",
+      "detached": "Desvinculado do roteamento inteligente. Mantendo o modelo atual."
     },
-    "anotherDevice": "Outro computador"
+    "anotherDevice": "Outro computador",
+    "sourceRouteTitle_one": "{{name}} · Rota inteligente ({{count}} fonte)",
+    "sourceRouteTitle_many": "{{name}} · Rota inteligente ({{count}} fontes)",
+    "sourceRouteTitle_other": "{{name}} · Rota inteligente ({{count}} fontes)",
+    "switchOffer": {
+      "button": "Trocar para {{model}} e continuar"
+    }
   },
   "pluginEngines": {
     "genericName": "Mecanismo de plugin",
