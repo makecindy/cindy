@@ -32,6 +32,9 @@ export interface TaskDigestRoute {
   fast: boolean | 'ultrafast';
 }
 
+/** Observed routes may include plugin engines outside the runtime selection contract. */
+export type TaskDigestCurrentRoute = TaskDigestRoute | (Omit<TaskDigestRoute, 'harness'> & { harness: 'acp' });
+
 export interface TaskDigestWire {
   session_id: string;
   sessionUrl?: string;
@@ -50,7 +53,7 @@ export interface TaskDigestWire {
   last_assistant_line: string | null;
   pending_question: string | null;
   error: string | null;
-  current_route: TaskDigestRoute | null;
+  current_route: TaskDigestCurrentRoute | null;
   /** set_session_runtime 的 expected_generation;另一台电脑上的任务为 null。 */
   runtime_generation: number | null;
   /** 调用方伙伴候选链里的下一条可用路线;没有则 null。 */

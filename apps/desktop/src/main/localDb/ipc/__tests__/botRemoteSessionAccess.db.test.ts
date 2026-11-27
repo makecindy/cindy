@@ -3,7 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDrizzleProxy } from '../../client/drizzleProxy';
 import type { DbTransport } from '../../client/DbTransport';
 import { currentDbRpcAdmissionClass, runAsBackgroundDbRpc } from '../../client/rpcAdmission';
-import { projectRemoteSessionResult, setRemoteBotSessionLookup } from '../../../device-link/remoteBotSessionBoundary';
+import { DL_HISTORY_QUERY_CHANNEL } from '@cindy/device-link';
+import {
+  projectRemoteBotPush,
+  projectRemoteSessionResult,
+  setRemoteBotSessionLookup,
+} from '../../../device-link/remoteBotSessionBoundary';
 
 const state = vi.hoisted(() => ({ db: null as unknown, owner: 1 }));
 vi.mock('../../client/current.js', () => ({ getDbClient: () => ({ drizzle: state.db }) }));
@@ -97,6 +102,75 @@ describe('remote visibility batch SQL', () => {
     expect(result.size).toBe(450);
     expect([...result.values()].every((access) => access === 'hidden')).toBe(true);
     expect(calls).toHaveLength(2);
+  });
+
+  it('omits hidden/archived/background createdBySession on list and push channels while preserving exact-ID reads and history', async () => {
+    sqlite.exec("INSERT INTO sessions (id, source) VALUES ('from-hidden-bot', 'desktop'), ('from-archived-bot', 'desktop'), ('from-plugin-bg', 'desktop'), ('from-deleted-hidden-bot', 'desktop'), ('from-visible-bot', 'desktop'), ('from-ordinary', 'desktop'), ('from-remote', 'desktop')");
+    const fromHiddenBot = { id: 'from-hidden-bot', createdBySession: { kind: 'session', sessionId: 'hidden', title: 'Hidden bot task', botId: 'hidden', botName: 'Secret' } };
+    const fromArchivedBot = { id: 'from-archived-bot', createdBySession: { kind: 'session', sessionId: 'archived', title: 'Archived bot task', botId: 'archived', botName: 'Old' } };
+    const fromPluginBg = { id: 'from-plugin-bg', createdBySession: { kind: 'session', sessionId: 'background', title: 'Plugin background' } };
+    const fromDeletedHiddenBot = { id: 'from-deleted-hidden-bot', createdBySession: { kind: 'session', sessionId: 'deleted-session', title: 'Deleted hidden bot', botId: 'hidden', botName: 'Secret' } };
+    const fromVisibleBot = { id: 'from-visible-bot', createdBySession: { kind: 'session', sessionId: 'visible', title: 'Visible bot task', botId: 'visible', botName: 'Alex' } };
+    const fromOrdinary = { id: 'from-ordinary', createdBySession: { kind: 'session', sessionId: 'ordinary', title: 'Ordinary task' } };
+    const fromRemote = { id: 'from-remote', createdBySession: { kind: 'session', sessionId: 'other-device::hidden', title: 'Remote task', deviceId: 'other-device' } };
+
+    // Real readRemoteBotSessionAccessBatch returns 'background' for hidden/archived companions and plugin background tasks:
+    // list channels must omit createdBySession so hidden companion metadata never leaks into remote sidebars.
+    expect(await projectRemoteSessionResult('local-db:sessions:list', [
+      fromHiddenBot,
+      fromArchivedBot,
+      fromPluginBg,
+      fromDeletedHiddenBot,
+      fromVisibleBot,
+      fromOrdinary,
+      fromRemote,
+    ])).toEqual([
+      { id: 'from-hidden-bot' },
+      { id: 'from-archived-bot' },
+      { id: 'from-plugin-bg' },
+      { id: 'from-deleted-hidden-bot' },
+      fromVisibleBot,
+      fromOrdinary,
+      fromRemote,
+    ]);
+
+    expect(await projectRemoteSessionResult('maker:list-active', [
+      { sessionId: 'from-hidden-bot', createdBySession: fromHiddenBot.createdBySession },
+      { sessionId: 'from-visible-bot', createdBySession: fromVisibleBot.createdBySession },
+    ])).toEqual([
+      { sessionId: 'from-hidden-bot' },
+      { sessionId: 'from-visible-bot', createdBySession: fromVisibleBot.createdBySession },
+    ]);
+
+    // Live pushes for newly created/patched ordinary tasks must also strip hidden/background origins without dropping the visible task.
+    expect(await projectRemoteBotPush({ session: fromHiddenBot }, 'local-db:sessions:created')).toEqual({
+      session: { id: 'from-hidden-bot' },
+    });
+    expect(await projectRemoteBotPush({ sessionId: 'from-archived-bot', patch: { title: 'Updated', createdBySession: fromArchivedBot.createdBySession } }, 'local-db:sessions:patched')).toEqual({
+      sessionId: 'from-archived-bot',
+      patch: { title: 'Updated' },
+    });
+    expect(await projectRemoteBotPush({ session: fromVisibleBot }, 'local-db:sessions:created')).toEqual({
+      session: fromVisibleBot,
+    });
+
+    // Exact-ID reads and history queries keep 'background' companion lineage readable by ID.
+    expect(await projectRemoteSessionResult('local-db:sessions:get', fromHiddenBot)).toEqual(fromHiddenBot);
+    expect(await projectRemoteSessionResult('local-db:sessions:get-many', [fromHiddenBot, fromVisibleBot])).toEqual([
+      fromHiddenBot,
+      fromVisibleBot,
+    ]);
+    expect(await projectRemoteSessionResult(DL_HISTORY_QUERY_CHANNEL, {
+      ok: true,
+      sessions: [fromHiddenBot, fromVisibleBot],
+      nextCursor: null,
+      hasMore: false,
+    })).toEqual({
+      ok: true,
+      sessions: [fromHiddenBot, fromVisibleBot],
+      nextCursor: null,
+      hasMore: false,
+    });
   });
 
   it('does not cache visibility across separate deliveries and propagates DB failures', async () => {

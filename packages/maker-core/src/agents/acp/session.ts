@@ -10,7 +10,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { readFile as fsReadFile } from 'node:fs/promises';
-import { basename, extname } from 'node:path';
+import { basename, extname, resolve as resolvePath } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { Logger } from '../../interfaces/logger.js';
 import {
@@ -18,6 +18,7 @@ import {
   type AgentSessionHandle,
   type SendOptions,
   type TakeMcpToolResult,
+  type TurnChangeCaptureHooks,
   type TurnPermissionPolicy,
 } from '../base-agent.js';
 import { NotSupportedError, type Capabilities } from '../../types/capabilities.js';
@@ -174,6 +175,10 @@ export interface OpenAcpSessionOptions {
   onVendorOptionsChange?: (patch: Record<string, unknown>) => void;
   /** Called once when the session's event stream ends (closed, or the endpoint exited). */
   onEnded?: () => void;
+  /** Cindy session id used for host-side turn change capture (defaults to the ACP session id). */
+  captureSessionId?: string;
+  /** Host-side file change capture callbacks for local ACP turns. */
+  turnChangeCapture?: TurnChangeCaptureHooks;
   /** Backfills empty MCP tool results from the host HTTP MCP bridge when the engine omits them. */
   takeMcpToolResult?: TakeMcpToolResult;
   /** Overrides ACP_OPEN_TOOL_QUIET_CAP_MS (tests). */
@@ -428,6 +433,82 @@ const ACP_KIND_POLICY_NAMES: Readonly<Record<string, string>> = {
   fetch: 'WebFetch',
 };
 
+const ACP_FILE_MUTATION_KINDS: ReadonlySet<string> = new Set(['edit', 'delete', 'move']);
+const ACP_FILE_PATH_INPUT_KEYS = [
+  'path',
+  'file_path',
+  'filePath',
+  'target_file',
+  'targetFile',
+  'notebook_path',
+  'notebookPath',
+  'old_path',
+  'oldPath',
+  'new_path',
+  'newPath',
+  'source_path',
+  'sourcePath',
+  'destination_path',
+  'destinationPath',
+] as const;
+const ACP_MOVE_PATH_INPUT_KEYS = ['source', 'destination', 'from', 'to'] as const;
+
+interface AcpStructuredDiff {
+  path: string;
+  beforeExists: boolean;
+  beforeText: string;
+}
+
+function extractAcpStructuredDiffs(content: readonly unknown[] | undefined): AcpStructuredDiff[] {
+  if (!Array.isArray(content) || content.length === 0) return [];
+  const diffs: AcpStructuredDiff[] = [];
+  for (const entry of content) {
+    const item = asRecord(entry);
+    if (item.type !== 'diff') continue;
+    const targetPath = asNonEmptyString(item.path)?.trim();
+    if (!targetPath) continue;
+    if (typeof item.oldText === 'string') {
+      diffs.push({ path: targetPath, beforeExists: true, beforeText: item.oldText });
+    } else if (item.oldText === null) {
+      diffs.push({ path: targetPath, beforeExists: false, beforeText: '' });
+    }
+  }
+  return diffs;
+}
+
+function extractAcpToolTargetPaths(toolCall: AcpToolCallFields): string[] {
+  const seen = new Set<string>();
+  const add = (value: unknown): void => {
+    const trimmed = typeof value === 'string' ? value.trim() : '';
+    if (trimmed) seen.add(trimmed);
+  };
+  for (const location of toolCall.locations ?? []) {
+    add(location.path);
+  }
+  const input = asRecord(toolCall.rawInput);
+  for (const key of ACP_FILE_PATH_INPUT_KEYS) {
+    add(input[key]);
+  }
+  if (toolCall.kind === 'move') {
+    for (const key of ACP_MOVE_PATH_INPUT_KEYS) {
+      add(input[key]);
+    }
+  }
+  for (const arrayKey of ['paths', 'files'] as const) {
+    const list = input[arrayKey];
+    if (!Array.isArray(list)) continue;
+    for (const item of list) {
+      if (typeof item === 'string') {
+        add(item);
+      } else {
+        const entry = asRecord(item);
+        add(entry.path ?? entry.file_path ?? entry.filePath ?? entry.target_file);
+      }
+    }
+  }
+  return [...seen];
+}
+
 function mergeGates(running: TurnGate, incoming: TurnGate): TurnGate {
   const prior = running.policy;
   const next = incoming.policy;
@@ -488,6 +569,9 @@ export class AcpSession {
   readonly initializeResult: AcpInitializeResult;
 
   private readonly connection: AcpConnection;
+  private readonly cwd: string;
+  private readonly captureSessionId: string;
+  private readonly turnChangeCapture: TurnChangeCaptureHooks | undefined;
   private readonly logger: Logger | undefined;
   private readonly readImage: (path: string) => Promise<Uint8Array>;
   private readonly expandSlashInvocation: ((text: string) => Promise<string | null>) | undefined;
@@ -497,6 +581,11 @@ export class AcpSession {
   private readonly queue = createAsyncQueue<AgentEvent>();
   private readonly translator: AcpUpdateTranslator;
   private readonly pendingPrompts: QueuedPrompt[] = [];
+  private readonly inFlightCaptures = new Map<string, Promise<void>>();
+  private readonly reliablePathsByTool = new Map<string, Set<string>>();
+  private readonly capturedOpaqueTools = new Set<string>();
+  private readonly pendingOpaqueTools = new Set<string>();
+  private readonly rejectedTools = new Set<string>();
   /** Sent once, ahead of the first prompt of a new session. */
   private pendingBriefing: string | null;
   /** Slash-command names advertised by Skills or `available_commands_update`. */
@@ -542,6 +631,9 @@ export class AcpSession {
 
   constructor(init: AcpSessionInit) {
     this.connection = init.connection;
+    this.cwd = init.options.cwd;
+    this.captureSessionId = init.options.captureSessionId ?? init.sessionId;
+    this.turnChangeCapture = init.options.turnChangeCapture;
     this.initializeResult = init.init;
     this.id = init.sessionId;
     this.resumeOutcome = init.resumeOutcome;
@@ -784,6 +876,13 @@ export class AcpSession {
     }
     switch (result.outcome) {
       case 'injected':
+        return;
+      case 'queued':
+        // Some ACP adapters (for example zcode-acp) accept steering by queueing it
+        // internally when the active turn cannot inject mid-flight. Treat it as
+        // accepted without flushing the current assistant segment so the host neither
+        // reports a failure nor sends the message twice.
+        this.logger?.info('acp: agent queued the steered message for delivery');
         return;
       case 'promptRequired':
         throw new Error(NO_ACTIVE_TURN_TO_STEER);
@@ -1048,6 +1147,15 @@ export class AcpSession {
       default:
         if (STATE_UPDATES.has(update.sessionUpdate)) return;
         this.emit(this.translator.handleUpdate(update));
+        if (
+          this.turn
+          && this.turnChangeCapture
+          && (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update')
+        ) {
+          const toolCallId = asNonEmptyString(update.toolCallId);
+          const merged = toolCallId ? this.translator.getToolCall(toolCallId) : undefined;
+          if (merged) this.captureFromToolCallUpdate(merged);
+        }
         if (this.turn) return;
         // Progress on a running call may change nothing on screen, yet it proves the agent
         // is still working: it keeps the runtime busy and restarts the open-call quiet bound.
@@ -1103,6 +1211,7 @@ export class AcpSession {
       gate: next.gate,
     };
     this.turn = turn;
+    this.resetTurnChangeCaptureState();
     this.backgroundPermission = null;
     this.usage = { ...this.usage, tokenUsage: 0 };
     this.emit([{ type: 'status', data: { status: 'running', ...this.usage, isRunning: true } }]);
@@ -1131,6 +1240,14 @@ export class AcpSession {
     turn.settled = true;
     if (turn.cancelTimer) clearTimeout(turn.cancelTimer);
     this.cancelPermissions();
+    if (this.pendingOpaqueTools.size > 0 && this.turnChangeCapture) {
+      this.turnChangeCapture.noteOpaqueWrite({
+        sessionId: this.captureSessionId,
+        provider: 'acp',
+        cwd: this.cwd,
+      });
+    }
+    this.resetTurnChangeCaptureState();
     this.turn = null;
     this.backgroundPermission = turn.cancelTimer || 'error' in outcome || outcome.stopReason === 'cancelled'
       ? null
@@ -1241,8 +1358,18 @@ export class AcpSession {
     if (gate?.policy && !fields) return selected(reject);
     const { events, toolCall } = this.translator.noteToolCall(fields ?? { toolCallId: `acp-permission-${this.permissionSeq + 1}` });
     this.emit(events);
+    const rejectDecision = (): AcpPermissionOutcome => {
+      this.notePermissionRejected(toolCall.toolCallId);
+      return selected(reject);
+    };
+    const allowDecision = async (): Promise<AcpPermissionOutcome> => {
+      if (!allowOnce) return rejectDecision();
+      await this.captureBeforeAllowedToolCall(toolCall);
+      if (signal.aborted || this.closing || this.turn?.cancelTimer) return { outcome: 'cancelled' };
+      return selected(allowOnce);
+    };
     if (this.permissionMode === 'bypassPermissions') {
-      return selected(allowOnce ?? reject);
+      return allowDecision();
     }
     const input = toolCall.rawInput;
     const hasInputRecord = input !== null && typeof input === 'object' && !Array.isArray(input);
@@ -1255,7 +1382,7 @@ export class AcpSession {
     // A shell approval without a command would also leave the channel's destructive-command check blind.
     if (gate?.policy && toolCall.kind === 'execute'
       && (typeof requestInput.command !== 'string' || requestInput.command.trim() === '')) {
-      return selected(reject);
+      return rejectDecision();
     }
     // An IM policy can defer authorization to the normal approval chain, including the
     // owner's review of guest writes. Only explicitly read-only kinds can skip that chain.
@@ -1265,10 +1392,10 @@ export class AcpSession {
       && !this.policyForcesConfirmation(gate.policy, policyToolName, requestInput)
       && (!toolCall.name || toolCall.name === policyToolName
         || !this.policyForcesConfirmation(gate.policy, toolCall.name, requestInput))) {
-      return selected(allowOnce ?? reject);
+      return allowDecision();
     }
     const resolver = this.resolver;
-    if (!resolver) return selected(reject);
+    if (!resolver) return rejectDecision();
 
     const controller = new AbortController();
     const forwardAbort = (): void => controller.abort();
@@ -1295,12 +1422,12 @@ export class AcpSession {
       // Stop must answer the agent at once, even while a confirmation card is still open.
       const decision = await untilAborted(resolver(request, controller.signal), controller.signal);
       if (decision === ABORTED || controller.signal.aborted) return { outcome: 'cancelled' };
-      if (decision.kind !== 'permission' || decision.behavior !== 'allow') return selected(reject);
-      return selected(allowOnce ?? reject);
+      if (decision.kind !== 'permission' || decision.behavior !== 'allow') return rejectDecision();
+      return await allowDecision();
     } catch (error) {
       if (controller.signal.aborted) return { outcome: 'cancelled' };
       this.logger?.warn('acp: permission resolver failed; rejecting', { error: String(error) });
-      return selected(reject);
+      return rejectDecision();
     } finally {
       signal.removeEventListener('abort', forwardAbort);
       this.interactionControllers.delete(controller);
@@ -1339,6 +1466,204 @@ export class AcpSession {
     } finally {
       signal.removeEventListener('abort', forwardAbort);
       this.interactionControllers.delete(controller);
+    }
+  }
+
+  private resetTurnChangeCaptureState(): void {
+    this.inFlightCaptures.clear();
+    this.reliablePathsByTool.clear();
+    this.capturedOpaqueTools.clear();
+    this.pendingOpaqueTools.clear();
+    this.rejectedTools.clear();
+  }
+
+  private normalizeCapturePath(targetPath: string): string {
+    const resolved = resolvePath(this.cwd, targetPath);
+    return process.platform === 'win32' ? resolved.toLocaleLowerCase('en-US') : resolved;
+  }
+
+  private captureKey(toolCallId: string, normalizedPath: string): string {
+    return `${toolCallId}\0${normalizedPath}`;
+  }
+
+  private markToolOpaque(toolCallId: string): void {
+    if (!this.turn || !this.turnChangeCapture) return;
+    this.pendingOpaqueTools.delete(toolCallId);
+    if (this.capturedOpaqueTools.has(toolCallId)) return;
+    this.capturedOpaqueTools.add(toolCallId);
+    this.turnChangeCapture.noteOpaqueWrite({
+      sessionId: this.captureSessionId,
+      provider: 'acp',
+      cwd: this.cwd,
+    });
+  }
+
+  private notePermissionRejected(toolCallId: string): void {
+    if (this.reliablePathsByTool.has(toolCallId) || this.capturedOpaqueTools.has(toolCallId)) return;
+    this.rejectedTools.add(toolCallId);
+    this.pendingOpaqueTools.delete(toolCallId);
+  }
+
+  private isToolReliablyCovered(toolCall: AcpToolCallFields): boolean {
+    const reliable = this.reliablePathsByTool.get(toolCall.toolCallId);
+    if (!reliable || reliable.size === 0) return false;
+    const paths = extractAcpToolTargetPaths(toolCall);
+    return paths.every((targetPath) => reliable.has(this.normalizeCapturePath(targetPath)));
+  }
+
+  private startDiffPreimageCapture(toolCallId: string, diff: AcpStructuredDiff): Promise<void> | null {
+    const turn = this.turn;
+    const capture = this.turnChangeCapture;
+    if (!turn || !capture?.recordKnownFilePreimage) return null;
+    const norm = this.normalizeCapturePath(diff.path);
+    const key = this.captureKey(toolCallId, norm);
+    const existing = this.inFlightCaptures.get(key);
+    if (existing) return existing;
+    let reliable = this.reliablePathsByTool.get(toolCallId);
+    if (reliable?.has(norm)) return Promise.resolve();
+    if (!reliable) {
+      reliable = new Set();
+      this.reliablePathsByTool.set(toolCallId, reliable);
+    }
+    reliable.add(norm);
+    const turnToken = turn.token;
+    let raw: Promise<void>;
+    try {
+      raw = capture.recordKnownFilePreimage({
+        sessionId: this.captureSessionId,
+        provider: 'acp',
+        cwd: this.cwd,
+        targetPath: diff.path,
+        beforeExists: diff.beforeExists,
+        beforeText: diff.beforeText,
+      });
+    } catch (error) {
+      raw = Promise.reject(error);
+    }
+    const promise = raw.catch((error: unknown) => {
+      this.logger?.warn('acp: structured diff preimage capture failed', {
+        toolCallId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      if (this.turn?.token === turnToken) {
+        this.reliablePathsByTool.get(toolCallId)?.delete(norm);
+        this.markToolOpaque(toolCallId);
+      }
+    }).finally(() => {
+      if (this.inFlightCaptures.get(key) === promise) {
+        this.inFlightCaptures.delete(key);
+      }
+    });
+    this.inFlightCaptures.set(key, promise);
+    return promise;
+  }
+
+  private startPermissionPathCapture(toolCallId: string, targetPath: string): Promise<void> {
+    const turn = this.turn;
+    const capture = this.turnChangeCapture;
+    if (!turn || !capture) return Promise.resolve();
+    const norm = this.normalizeCapturePath(targetPath);
+    const key = this.captureKey(toolCallId, norm);
+    const existing = this.inFlightCaptures.get(key);
+    if (existing) return existing;
+    let reliable = this.reliablePathsByTool.get(toolCallId);
+    if (reliable?.has(norm)) return Promise.resolve();
+    if (!reliable) {
+      reliable = new Set();
+      this.reliablePathsByTool.set(toolCallId, reliable);
+    }
+    reliable.add(norm);
+    const turnToken = turn.token;
+    let raw: Promise<void>;
+    try {
+      raw = capture.beforeKnownFileWrite({
+        sessionId: this.captureSessionId,
+        provider: 'acp',
+        cwd: this.cwd,
+        targetPath,
+      });
+    } catch (error) {
+      raw = Promise.reject(error);
+    }
+    const promise = raw.catch((error: unknown) => {
+      this.logger?.warn('acp: turn change capture before permission failed', {
+        toolCallId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      if (this.turn?.token === turnToken) {
+        this.reliablePathsByTool.get(toolCallId)?.delete(norm);
+        this.markToolOpaque(toolCallId);
+      }
+    }).finally(() => {
+      if (this.inFlightCaptures.get(key) === promise) {
+        this.inFlightCaptures.delete(key);
+      }
+    });
+    this.inFlightCaptures.set(key, promise);
+    return promise;
+  }
+
+  private async captureBeforeAllowedToolCall(toolCall: AcpToolCallFields): Promise<void> {
+    const turn = this.turn;
+    const capture = this.turnChangeCapture;
+    if (!turn || !capture) return;
+    const turnToken = turn.token;
+    this.rejectedTools.delete(toolCall.toolCallId);
+    const kind = toolCall.kind;
+    if (kind === 'execute') {
+      this.markToolOpaque(toolCall.toolCallId);
+      return;
+    }
+    const diffs = extractAcpStructuredDiffs(toolCall.content);
+    const isMutation = kind !== undefined && ACP_FILE_MUTATION_KINDS.has(kind);
+    if (!isMutation && diffs.length === 0) return;
+    for (const diff of diffs) {
+      const task = this.startDiffPreimageCapture(toolCall.toolCallId, diff);
+      if (task) {
+        await task;
+      } else {
+        await this.startPermissionPathCapture(toolCall.toolCallId, diff.path);
+      }
+    }
+    const paths = isMutation ? extractAcpToolTargetPaths(toolCall) : [];
+    for (const targetPath of paths) {
+      await this.startPermissionPathCapture(toolCall.toolCallId, targetPath);
+    }
+    if (this.turn?.token !== turnToken) return;
+    if (isMutation && !this.isToolReliablyCovered(toolCall)) {
+      this.pendingOpaqueTools.add(toolCall.toolCallId);
+    } else {
+      this.pendingOpaqueTools.delete(toolCall.toolCallId);
+    }
+  }
+
+  private captureFromToolCallUpdate(toolCall: AcpToolCallFields): void {
+    if (!this.turn || !this.turnChangeCapture) return;
+    if (this.rejectedTools.has(toolCall.toolCallId)) return;
+    const diffs = extractAcpStructuredDiffs(toolCall.content);
+    for (const diff of diffs) {
+      void this.startDiffPreimageCapture(toolCall.toolCallId, diff);
+    }
+    const kind = toolCall.kind;
+    if (kind === 'execute') {
+      if (toolCall.status === 'pending') {
+        this.pendingOpaqueTools.add(toolCall.toolCallId);
+      } else {
+        this.markToolOpaque(toolCall.toolCallId);
+      }
+      return;
+    }
+    if (!kind || !ACP_FILE_MUTATION_KINDS.has(kind)) return;
+    // Never read from disk on un-paused notifications: under bypassPermissions or after
+    // a pathless permission approval, the agent may already have mutated the file before
+    // this notification arrives. Only pre-permission snapshots and exact structured diffs
+    // count as reliable preimages; any remaining path or pathless write stays opaque.
+    if (this.isToolReliablyCovered(toolCall)) {
+      this.pendingOpaqueTools.delete(toolCall.toolCallId);
+    } else if (toolCall.status === 'completed' || toolCall.status === 'failed') {
+      this.markToolOpaque(toolCall.toolCallId);
+    } else {
+      this.pendingOpaqueTools.add(toolCall.toolCallId);
     }
   }
 
