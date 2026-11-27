@@ -95,9 +95,19 @@ export function useSessionListActions(options?: {
     const devices = resolveSessionWriteDevices(session.id, session, preferredRpcDeviceId);
     if (!devices) throw new Error(t('devices.list.error.sessionDeviceNotFound'));
     const { rpcDeviceId, shardId } = devices;
-    // Snooze is one persisted pair. Mask, settle and roll it back together.
+    // Snooze and archive timestamps are host-derived; mask, settle and roll them back with status.
     const localPatch = patch.status !== undefined
-      ? { ...patch, snoozedUntil: null, snoozedAt: null }
+      ? {
+          ...patch,
+          snoozedUntil: null,
+          snoozedAt: null,
+          archivedAt:
+            patch.status === 'archived'
+              ? (session.status === 'archived' && session.archivedAt
+                  ? session.archivedAt
+                  : new Date().toISOString())
+              : null,
+        }
       : patch.snoozedUntil !== undefined
         ? { ...patch, snoozedAt: patch.snoozedUntil === null ? null : new Date().toISOString() }
         : patch;
@@ -176,10 +186,14 @@ export function useSessionListActions(options?: {
       if (updated && write.isLatest()) {
         const currentUpdatedAt = remoteSessionStore.getSessions()
           .find((s) => s.id === session.id)?.updatedAt ?? null;
+        const settled = pickWriteFields(updated, fields, currentUpdatedAt);
+        if (patch.status !== undefined && !Object.prototype.hasOwnProperty.call(updated, 'archivedAt')) {
+          settled.archivedAt = null;
+        }
         remoteSessionStore.applySessionPatch(
           shardId,
           session.id,
-          pickWriteFields(updated, fields, currentUpdatedAt),
+          settled,
         );
         if (sessionPendingWrites.consumeMaskedPush(session.id, fields)) {
           remoteSessionStore.requestReseed(shardId);

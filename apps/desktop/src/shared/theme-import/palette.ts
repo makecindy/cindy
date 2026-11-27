@@ -26,8 +26,10 @@
  */
 
 import {
+  compositeOver,
   contrastRatio,
   mix,
+  relativeLuminance,
   toHex,
   toHslTriplet,
   toRgbaString,
@@ -246,6 +248,54 @@ export function deriveUncheckedSwitchTrack(preferred: Rgb, against: readonly Rgb
   );
 }
 
+// 「允许」按钮键帽（Kbd onSolid）：主人 2026-11-27 裁决，与内置主题同一规则。
+const ALLOW_KBD_TARGET = 4;
+/** Kbd onSolid 整体 70% 不透明（components/ui/kbd.tsx），对比度按实际绘制计算。 */
+const ALLOW_KBD_OPACITY = 0.7;
+const ALLOW_KBD_BORDER_EXTRA = 0.12;
+
+/** 键帽文字对键帽底的实际对比度：键帽底 = 叠层合成到按钮底，再与文字一起按 70% 合成到按钮底。 */
+export function allowKbdContrast(button: Rgb, text: Rgb, overlay: Rgb, alpha: number): number {
+  const cap = compositeOver(overlay, alpha, button);
+  return contrastRatio(
+    compositeOver(text, ALLOW_KBD_OPACITY, button),
+    compositeOver(cap, ALLOW_KBD_OPACITY, button),
+  );
+}
+
+/**
+ * 派生「允许」按钮键帽的底 / 描边（半透明叠层）。
+ * 1. 先按 cindy 方向往按钮文字色叠：深字叠黑 8%（描边 20%），浅字叠白 16%（描边 30%）。
+ * 2. 不到 4:1 就往反方向叠，透明度从 10% 起每档 +10%，取第一个到 4:1 的；描边 = 底 + 12%。
+ * 3. 反方向加到 100% 仍不到 4:1 时，在所有候选里取对比度最高的一档（不报错）。
+ * 内置 6 套彩色允许按钮主题（atom-one-light 等）的值就是这条规则的结果，由 golden 测试对照。
+ */
+export function deriveAllowKbd(button: Rgb, text: Rgb): { bg: string; border: string } {
+  const lightText = relativeLuminance(text) > relativeLuminance(button);
+  const toward = lightText
+    ? { color: WHITE, bg: 0.16, border: 0.3 }
+    : { color: BLACK, bg: 0.08, border: 0.2 };
+  const away = lightText ? BLACK : WHITE;
+  const format = (color: Rgb, bg: number, border: number) => ({
+    bg: `rgba(${color.r}, ${color.g}, ${color.b}, ${bg.toFixed(2)})`,
+    border: `rgba(${color.r}, ${color.g}, ${color.b}, ${Math.min(1, border).toFixed(2)})`,
+  });
+
+  const towardContrast = allowKbdContrast(button, text, toward.color, toward.bg);
+  const towardValue = format(toward.color, toward.bg, toward.border);
+  if (towardContrast >= ALLOW_KBD_TARGET) return towardValue;
+
+  let best = { contrast: towardContrast, value: towardValue };
+  for (let step = 1; step <= 10; step += 1) {
+    const alpha = step / 10;
+    const contrast = allowKbdContrast(button, text, away, alpha);
+    const value = format(away, alpha, alpha + ALLOW_KBD_BORDER_EXTRA);
+    if (contrast >= ALLOW_KBD_TARGET) return value;
+    if (contrast > best.contrast) best = { contrast, value };
+  }
+  return best.value;
+}
+
 /**
  * 把色板展开成 Cindy token map。`type` 决定 22 处 light / dark 分支——取值依据
  * 全部来自既有 builtin 主题的实测对照,不是自由发挥。
@@ -271,7 +321,6 @@ export function buildThemeColorsFromPalette(
   const accentPrimary = toHex(palette.accentPrimary);
   const accentSoft = toHex(palette.accentSoft);
   const accentDeep = toHex(palette.accentDeep);
-  const white = toHex(WHITE);
 
   const surfaceHsl = toHslTriplet(palette.surface);
   const elevatedHsl = toHslTriplet(palette.elevated);
@@ -287,10 +336,13 @@ export function buildThemeColorsFromPalette(
    *  （它们在 3:1–4.5:1 区间也使用 white）。 */
   const defaultOnAccent = pick(palette.surface, WHITE);
   const MIN_CONTRAST = 3;
-  const onAccent = contrastRatio(palette.accentPrimary, defaultOnAccent) >= MIN_CONTRAST
-    ? pick(surface, white)
+  const onAccentRgb = contrastRatio(palette.accentPrimary, defaultOnAccent) >= MIN_CONTRAST
+    ? defaultOnAccent
     : (contrastRatio(palette.accentPrimary, WHITE) >= contrastRatio(palette.accentPrimary, BLACK)
-      ? white : toHex(BLACK));
+      ? WHITE : BLACK);
+  const onAccent = toHex(onAccentRgb);
+  /** 「允许」按钮（accentPrimary 底 + onAccent 字）上的键帽。 */
+  const allowKbd = deriveAllowKbd(palette.accentPrimary, onAccentRgb);
   /** dark 用 accent 提亮档做链接/info,light 用压暗档才够对比度。 */
   const accentReadable = pick(accentSoft, accentDeep);
   /** 链接色:dark 提亮档,light 直接用 primary。 */
@@ -403,8 +455,8 @@ export function buildThemeColorsFromPalette(
     'muted-foreground': textSecondaryHsl,
     'perm-allow-btn-bg': accentPrimary,
     'perm-allow-btn-text': onAccent,
-    'perm-allow-kbd-bg': chip,
-    'perm-allow-kbd-border': border,
+    'perm-allow-kbd-bg': allowKbd.bg,
+    'perm-allow-kbd-border': allowKbd.border,
     'perm-code-bg': pick(surface, elevatedSoft),
     'perm-item-selected-bg': chip,
     'plan-outline-active-bg': chip,

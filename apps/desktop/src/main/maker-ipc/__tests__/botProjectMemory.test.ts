@@ -56,12 +56,12 @@ it('uploads a V2 teammate\'s project memories, with not-yet-copied earlier ones 
 
   expect(await read(false)).toEqual({ 'user_tea.md': 'old version', 'project_launch.md': 'not copied yet' });
   expect(await read(true)).toEqual({
-    'user_tea.md': 'project version', 'feedback_tone.md': 'not moved yet', 'project_launch.md': 'not copied yet',
+    'MEMORY.md': 'index', 'user_tea.md': 'project version', 'feedback_tone.md': 'not moved yet', 'project_launch.md': 'not copied yet',
   });
   await writeFile(path.join(botProfileDir(root, 'bot_mia'), TEAMMATE_V2_RECEIPT_FILE), '{}');
-  expect(await read(true)).toEqual({ 'user_tea.md': 'project version', 'feedback_tone.md': 'not moved yet' });
+  expect(await read(true)).toEqual({ 'MEMORY.md': 'index', 'user_tea.md': 'project version', 'feedback_tone.md': 'not moved yet' });
   await writeFile(path.join(botProfileDir(root, 'bot_mia'), TEAMMATE_MEMORY_MOVE_RECEIPT_FILE), '{}');
-  expect(await read(true)).toEqual({ 'user_tea.md': 'project version' });
+  expect(await read(true)).toEqual({ 'MEMORY.md': 'index', 'user_tea.md': 'project version' });
 });
 
 // PR #9314 review: the cloud upload followed a project memory folder (or `.cindy`) that is a link

@@ -278,6 +278,8 @@ export interface SelfHostedRelayState {
    * 开关下面写「由谁在几点打开」;这台电脑自己再改开关后清除。旧版主进程不提供。
    */
   agentNetChangedBy?: { deviceId: string; deviceName: string; at: number; enabled: boolean } | null;
+  /** 开关关着，是因为这台电脑在账号里被移除过而自动关掉的；重新打开即可重新加入。旧版主进程不提供。 */
+  agentNetRemoved?: boolean;
   /** 已登录且系统安全存储可用。 */
   available: boolean;
   mode: 'official' | 'self-hosted';
@@ -492,7 +494,15 @@ export interface SelfHostedRelayCommandResult {
   check?: SelfHostedRelayServerCheck;
   /** 只有 `deployment-status` 返回。 */
   deploymentStatus?: SelfHostedRelayDeploymentStatus;
+  /** 只有本机 `set-agent-net` 打开、且官方 Agent-Net 说这台被移除过时返回：开关先替它「重新加入」的结果。 */
+  rejoin?: AgentNetSwitchRejoin;
 }
+
+/**
+ * 打开开关前的「重新加入」（selfHostedRelayRuntime.ts）：`agent-net-unavailable` 是 Device Link 已回来、Agent-Net 暂未恢复，
+ * 这次运行走 Device Link；`unsupported` 是服务端还没有重新加入的接口；`failed` 是这次没成（开关照样打开）。
+ */
+export type AgentNetSwitchRejoin = 'rejoined' | 'agent-net-unavailable' | 'unsupported' | 'failed';
 
 /** 服务器中转的实时状态;`online: false` 表示这台电脑现在连不上它(或它不认这台电脑的主人凭证)。 */
 export interface SelfHostedRelayDeploymentStatus {

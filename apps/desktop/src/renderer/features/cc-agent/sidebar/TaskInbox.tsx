@@ -9,6 +9,7 @@ import {
   teammateInboxSection,
   type TaskInboxSection,
 } from '@cindy/maker-shared/live-task-priority';
+import { getSessionArchivedActivityAt } from '@cindy/maker-shared/session-activity';
 import {
   getRemoteSessionActivity,
   useRemoteSessionActivityRevision,
@@ -52,6 +53,12 @@ const itemSnoozeUntil = (item: InboxItem) =>
   taskSnoozeUntil(item.kind === 'session' ? item.session : item.entry.snooze ?? {});
 const itemSnoozedUntil = (item: InboxItem) =>
   (item.kind === 'session' ? item.session.snoozedUntil : item.entry.snooze?.snoozedUntil);
+const itemArchivedActivityMs = (item: InboxItem) => {
+  if (item.kind !== 'session') return item.entry.activityAt;
+  const iso = getSessionArchivedActivityAt(item.session);
+  const ms = iso ? Date.parse(iso) : 0;
+  return Number.isFinite(ms) ? ms : 0;
+};
 const itemOfflineIntent = (item: InboxItem) => {
   if (item.kind === 'session') {
     return getOfflineInboxIntent(item.session.deviceLinkDeviceId, item.session.id);
@@ -169,6 +176,9 @@ export function TaskInbox({ sessions, now = Date.now(), contentFiltered, priorit
       result.set(section, result.get(section)!.concat(items));
     }
     result.get('snoozed')!.sort((a, b) => itemSnoozeUntil(a) - itemSnoozeUntil(b));
+    // Handled tasks order by explicit handle time (`archivedAt`, falling back to latest activity),
+    // matching the row-end time shown in the Handled section (2026-11-27 user decision).
+    result.get('archived')!.sort((a, b) => itemArchivedActivityMs(b) - itemArchivedActivityMs(a));
     // The open task moves like any other (a reply sends it to Working at once); its row does not
     // scroll the sidebar after it (useScrollActiveRowIntoView).
     return result;

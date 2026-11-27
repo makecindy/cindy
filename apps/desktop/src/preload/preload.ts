@@ -85,6 +85,7 @@ import { supportsBetaUpdateChannel } from '../shared/updateChannelCapability';
 import { macPermissionAppPath } from '../shared/macControlPermission';
 import {
   isWindowsBackdropMaterial,
+  readGpuFallbackFromArgv,
   readWindowBackdropMaterialFromArgv,
   WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL,
 } from '../shared/windowBackdrop';
@@ -343,6 +344,9 @@ import type {
   DesktopContactChangeVerified,
   DesktopLoginAction,
   DesktopLoginActionResult,
+  DesktopQrHandoffDecisionResult,
+  DesktopQrHandoffResult,
+  DesktopQrHandoffStateResult,
 } from '../shared/authIpc';
 import { BILLING_INVOKE, type BillingRendererApi } from '../shared/billing';
 import {
@@ -743,9 +747,10 @@ const fanOutRsbBrowserBridgeResourceEvent = createIpcFanOut('rsb-browser-bridge:
 const fanOutProcessMonitorSample = createIpcFanOut(PROCESS_MONITOR_SAMPLE_CHANNEL);
 // Phase 3: RsbWebviewBackend (open/focus/close) push 给 renderer 让它代调 store。
 const fanOutRsbBrowserBridgeTabOpRequest = createIpcFanOut('rsb-browser-bridge:tab-op-request');
-// session-git-pr-context: HEAD 分支变化 / session PR 引用变化推送
+// session-git-pr-context: HEAD 分支变化 / session PR 引用与状态变化推送
 const fanOutGitContextChanged = createIpcFanOut('git-context:changed');
 const fanOutGitContextPrRefsChanged = createIpcFanOut('git-context:pr-refs-changed');
+const fanOutGitContextPrStatusChanged = createIpcFanOut('git-context:pr-status-changed');
 const fanOutGithubConnected = createIpcFanOut('git-context:github-connected');
 const fanOutGithubSetupOpen = createIpcFanOut('git-context:github-setup:open');
 // 系统级瞬时网络错误 tip：lifecycle 兜底 catch 到 ETIMEDOUT/ECONNRESET 等不杀进程时,
@@ -1324,6 +1329,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   liveScreenRelay: createLiveScreenRelayBridge(),
   supportsBetaUpdateChannel: supportsBetaUpdateChannel(process.platform, process.arch),
   windowBackdropMaterial: readWindowBackdropMaterialFromArgv(process.argv),
+  gpuFallback: readGpuFallbackFromArgv(process.argv),
   onWindowBackdropMaterialChanged: (
     cb: (material: import('../shared/windowBackdrop').WindowsBackdropMaterial) => void,
   ) =>
@@ -1519,7 +1525,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** 模型组：路线与模式的配置，以及把选中的一项解析成现在能用的具体模型。 */
   modelGroups: {
     commit: (decisionId: string): Promise<boolean> => ipcRenderer.invoke('model-groups:commit', decisionId),
-    get: (): Promise<import('../shared/modelGroups').ModelGroupsConfig> => ipcRenderer.invoke('model-groups:get'),
+    get: (options?: import('../shared/modelGroups').ModelGroupGetOptions): Promise<import('../shared/modelGroups').ModelGroupsConfig> =>
+      options ? ipcRenderer.invoke('model-groups:get', options) : ipcRenderer.invoke('model-groups:get'),
     set: (config: import('../shared/modelGroups').ModelGroupsConfig): Promise<import('../shared/modelGroups').ModelGroupsConfig> =>
       ipcRenderer.invoke('model-groups:set', config),
     resolve: (request: import('../shared/modelGroups').ModelGroupResolveRequest): Promise<import('../shared/modelGroups').ModelGroupResolveResult> =>
@@ -1530,8 +1537,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     bindSession: (request: {
       sessionId: string;
       selection: import('../shared/modelGroups').ModelGroupSelection;
-      route: Pick<import('../shared/modelGroups').ModelGroupResolvedRoute, 'agentKind' | 'providerId' | 'model'>;
+      route: Pick<import('../shared/modelGroups').ModelGroupResolvedRoute, 'agentKind' | 'providerId' | 'model' | 'agentDeviceId'>;
     }): Promise<void> => ipcRenderer.invoke('model-groups:bind-session', request),
+    /** 解除任务的智能路由持续托管，保留当前具体模型。 */
+    unbindSession: (request: { sessionId: string }): Promise<{ ok: boolean; unbound: boolean }> =>
+      ipcRenderer.invoke('model-groups:unbind-session', request),
+    /** 读取任务当前是否处于智能路由持续托管状态及所属路由信息。 */
+    getSessionBinding: (request: { sessionId: string }): Promise<import('../shared/modelGroups').ModelGroupSessionBindingView | null> =>
+      ipcRenderer.invoke('model-groups:get-session-binding', request),
     /** 撞配额时同一条路线里还能接着用的下一个来源；没有为 null。 */
     switchOffer: (request: { sessionId: string }): Promise<import('../shared/modelGroups').ModelGroupSwitchOffer | null> =>
       ipcRenderer.invoke('model-groups:switch-offer', request),
@@ -2601,6 +2614,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('auth:get-login-state'),
   authDispatchLoginAction: (action: DesktopLoginAction): Promise<DesktopLoginActionResult> =>
     ipcRenderer.invoke('auth:dispatch-login-action', action),
+  // 扫码登录：本机已登录，为另一台设备出码（凭据只在 main）。
+  authQrHandoffCreate: (): Promise<DesktopQrHandoffResult> =>
+    ipcRenderer.invoke('auth:qr-handoff:create'),
+  authQrHandoffState: (handoffId: string): Promise<DesktopQrHandoffStateResult> =>
+    ipcRenderer.invoke('auth:qr-handoff:state', handoffId),
+  authQrHandoffDecide: (handoffId: string, approve: boolean): Promise<DesktopQrHandoffDecisionResult> =>
+    ipcRenderer.invoke('auth:qr-handoff:decide', handoffId, approve),
   // 登录 captcha 托管挑战页地址(不含 query);LoginCaptchaOverlay 装载 webview 用。
   authGetCaptchaChallengeUrl: (): Promise<string> =>
     ipcRenderer.invoke('auth:get-captcha-challenge-url'),
@@ -6027,6 +6047,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       teamId: string | null;
       workspace: string;
       providerId: string | null;
+      modelGroup?: string | null;
     }): Promise<{ entries: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:workspace-provider-source-set', payload),
     onSharedProjectPrefsChanged: fanOutHookControlSharedPrefs,
@@ -6091,11 +6112,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
         repo: string;
         prNumber: number;
       }>,
-    ): Promise<unknown> => ipcRenderer.invoke('git-context:pr-status', queries),
+      options?: { refresh?: boolean },
+    ): Promise<unknown> =>
+      options?.refresh
+        ? ipcRenderer.invoke('git-context:pr-status', queries, { refresh: true })
+        : ipcRenderer.invoke('git-context:pr-status', queries),
     /** 订阅 HEAD 分支变化。payload: { workdir, head }。 */
     onChanged: fanOutGitContextChanged,
     /** 订阅 PR 引用变化。payload: { sessionId }。 */
     onPrRefsChanged: fanOutGitContextPrRefsChanged,
+    /** 订阅主进程观察到的 PR 状态变化（已去 metadata，仅本机窗口）。 */
+    onPrStatusChanged: fanOutGitContextPrStatusChanged,
   },
 
   gitReview: {
@@ -8072,7 +8099,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     listActive: (): Promise<
       Array<{
         sessionId: string;
-        agentKind: 'claude-code' | 'codex' | 'pi';
+        agentKind: 'claude-code' | 'codex' | 'pi' | 'acp';
         workDir: string;
         capabilities: unknown;
         isTurnRunning: boolean;
@@ -8373,6 +8400,33 @@ contextBridge.exposeInMainWorld('electronAPI', {
       defaults: { maker: boolean; claudeCode: boolean; codex: boolean; pi: boolean };
       codexRestartDeferred: boolean;
     }> => ipcRenderer.invoke('maker:memory:reset-settings'),
+    memoryTidyStatus: (): Promise<{
+      cadence: 'weekly' | 'biweekly' | 'monthly' | 'off';
+      isCustomCadence: boolean;
+      running: boolean;
+      lastRunAt: number | null;
+      lastOutcome: 'idle' | 'updated' | 'skipped' | 'error' | null;
+      lastSummary: string;
+      lastTouchedBots: string[];
+      nextEligibleAt: number | null;
+    }> => ipcRenderer.invoke('maker:memory:tidy-status'),
+    memoryTidySetCadence: (
+      cadence: 'weekly' | 'biweekly' | 'monthly' | 'off' | null,
+    ): Promise<{
+      cadence: 'weekly' | 'biweekly' | 'monthly' | 'off';
+      isCustomCadence: boolean;
+      running: boolean;
+      lastRunAt: number | null;
+      lastOutcome: 'idle' | 'updated' | 'skipped' | 'error' | null;
+      lastSummary: string;
+      lastTouchedBots: string[];
+      nextEligibleAt: number | null;
+    }> => ipcRenderer.invoke('maker:memory:tidy-set-cadence', cadence),
+    memoryTidyRun: (): Promise<{
+      outcome: 'idle' | 'updated' | 'skipped' | 'error';
+      summary: string;
+      touchedBots: string[];
+    }> => ipcRenderer.invoke('maker:memory:tidy-run'),
 
     /** IM 新会话默认 agent/model/effort/provider。传 channel 时按渠道独立读写。 */
     imDefaultSettingsGet: (channel?: ImDefaultSettingsChannel): Promise<ImDefaultSettingsState> =>

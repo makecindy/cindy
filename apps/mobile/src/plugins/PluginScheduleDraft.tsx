@@ -29,6 +29,11 @@ import {
 import { normalizeMobileAgentCapabilities } from "@/session/agentCapabilities";
 import { ModelPickerSheet } from "@/session/ModelPickerSheet";
 import {
+  resolveHostModelGroup,
+  useHostModelGroupPickerOptions,
+  useHostModelGroupsPayload,
+} from "@/session/hostModelGroups";
+import {
   PLUGIN_ENGINE_DEFAULT_MODEL,
   findPluginEngine,
   isPluginEngineEffort,
@@ -221,6 +226,52 @@ export function PluginScheduleDraft({
             translate: (_key, _fallback, _values) =>
               t("plugins.automationInvalid"),
           });
+  const hostModelGroupsPayload = useHostModelGroupsPayload(
+    deviceId,
+    maker,
+    picker || Boolean(draft.modelGroup),
+  );
+  const selectScheduleModelGroup = async (
+    id: string,
+    overrides?: { effort?: string; fastMode?: boolean | "ultrafast" },
+  ): Promise<boolean> => {
+    const resolved = await resolveHostModelGroup(
+      maker,
+      id,
+      overrides ? { effort: overrides.effort || undefined, fastMode: overrides.fastMode } : undefined,
+      remoteSupported ? undefined : { agentDeviceId: null },
+    );
+    assertCurrent();
+    if (!resolved || resolved.outcome !== "routed") return false;
+    const { route } = resolved;
+    const mappedAgent = route.agentKind === "cc" ? "claude-code" : route.agentKind;
+    setDraft((d) => ({
+      ...d,
+      ...(route.agentDeviceId && remoteSupported
+        ? { modelAgentKind: mappedAgent, modelAgentDeviceId: route.agentDeviceId }
+        : { modelAgentKind: undefined, modelAgentDeviceId: undefined }),
+      agentKind: mappedAgent,
+      model: route.model,
+      providerId: route.providerId,
+      effort: route.effort ?? overrides?.effort ?? "",
+      fastMode: route.fastMode ?? overrides?.fastMode ?? false,
+      modelGroup: id,
+    }));
+    setPicker(false);
+    return true;
+  };
+  const scheduleModelGroupOptions = useHostModelGroupPickerOptions(
+    hostModelGroupsPayload?.groups ?? null,
+    draft.modelGroup ?? null,
+    (id) => selectScheduleModelGroup(id),
+    t,
+    {
+      sourceRoutesPayload: hostModelGroupsPayload,
+      activeRouteId: draft.modelGroup ?? null,
+      onPickMerged: (routeId, value) =>
+        selectScheduleModelGroup(routeId, { effort: value.effort, fastMode: value.fast }),
+    },
+  );
   const remoteCatalog = draft.modelAgentDeviceId
     ? remoteCatalogs.find((catalog) => catalog.deviceId === draft.modelAgentDeviceId)
     : undefined;
@@ -251,7 +302,15 @@ export function PluginScheduleDraft({
         ?.models[draft.agentKind]?.find((model) => model.id === draft.model)
         ?.name ?? draft.model;
   const remoteName = remoteCatalog?.name ?? (draftIsPluginEngine ? activeEngine?.deviceName : undefined);
-  const modelName = remoteName ? `${shownModel} · ${remoteName}` : shownModel;
+  const activeRouteLabel = draft.modelGroup
+    ? (hostModelGroupsPayload?.groups.find((g) => g.id === draft.modelGroup)?.name
+      ?? hostModelGroupsPayload?.expandedRoutes.find((r) => r.id === draft.modelGroup)?.parent.name
+      ?? null)
+    : null;
+  const concreteModelName = remoteName ? `${shownModel} · ${remoteName}` : shownModel;
+  const modelName = activeRouteLabel
+    ? (concreteModelName ? `${activeRouteLabel} (${concreteModelName})` : activeRouteLabel)
+    : concreteModelName;
   return (
     <>
       <SheetModal
@@ -465,6 +524,7 @@ export function PluginScheduleDraft({
             : undefined,
           scope: JSON.stringify([owner.accountKey, deviceId]),
           agents: ["claude-code", "codex", "pi"],
+          ...(scheduleModelGroupOptions ? { modelGroups: scheduleModelGroupOptions } : {}),
           loadCapabilities: async (kind) => {
             const caps = normalizeMobileAgentCapabilities(
               await maker.getCapabilities(kind),
@@ -489,6 +549,7 @@ export function PluginScheduleDraft({
                       providerId: selection.providerId,
                       effort: selection.effort || "",
                       fastMode: false,
+                      modelGroup: undefined,
                     }));
                     setPickerVisible(false);
                     return true;
@@ -508,6 +569,7 @@ export function PluginScheduleDraft({
               providerId: value.providerId,
               effort: value.effort || "",
               fastMode: value.fast,
+              modelGroup: undefined,
             }));
             setPickerVisible(false);
             return true;
