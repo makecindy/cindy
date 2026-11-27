@@ -1337,6 +1337,84 @@ test('cindy-host remote rejoin reports why it could not rejoin, and asks the off
 });
 
 // Test value (engineering-conventions §3.2)
+// - Production entry and observable result: `cindy-host remote agent-net-on` (createHostDeviceLink `setAgentNetEnabled`, with the
+//   real shared agentNetNode): whether it asks the official service, rejoins first, and turns Agent-Net on; the `rejoin` result.
+// - Rule: 2026-11-26, a device removed from the account must be able to come back by turning Agent-Net on on that device
+//   (signing in again restores only Device Link; agent-net-device-removal.md).
+// - Coverage gap: the rejoin test above covers `cindy-host remote rejoin` only; turning the switch on never looked at revocation.
+// - Minimal failing input: an enrolled Host whose `/directory` answers 401 DEVICE_REVOKED, or missing from the account's Device Link
+//   device list, turned on again; offline; never enrolled.
+// - Tier: unit, fake official services in process (real certificates), the Device Link client stays stopped.
+test('cindy-host remote agent-net-on rejoins a Host removed from the account before turning Agent-Net on', async t => {
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'host-agent-net-on-'));
+  configureHostOwner({ userDataDir: profile, ownerId: 'agent-net-on-owner' });
+  // On, so that the first rejoin below enrolls the identity this Host had before it was removed.
+  fs.writeFileSync(path.join(profile, 'device-link-settings.json'), '{"agentNetEnabled":true,"remoteControlEnabled":false}');
+  const { root, bootstrap } = createPrivateNetwork('Test Host network', generateIdentity('root-agent-net-on'));
+  const secrets = new Map(), rejoins = [], enrollments = [];
+  let directory = async () => new Response(JSON.stringify({ rootPublicKey: bootstrap.rootPublicKey, devices: [] }), { status: 200 });
+  let directoryReads = 0, listed = null;
+  const host = createHostDeviceLink({
+    profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test', getWsUrl: () => 'ws://127.0.0.1:9',
+    getToken: async () => null, canRegister: () => true, profileHold: () => null,
+    invoke: async () => ({ status: 200, body: {} }), subscribe: () => () => {},
+    createRuntimeSession: async () => ({}), closeRuntimeSession: async () => {}, disableShareAvailability: async () => {},
+    agentNet: {
+      base: () => 'https://test-agent-net.invalid', subject: () => 'agent-net-on-owner', deviceId: () => 'host', deviceName: () => 'Test Host',
+      readSecret: async key => secrets.get(key) ?? null,
+      writeSecret: async (key, value) => { secrets.set(key, value); },
+      enroll: async (_base, body) => {
+        enrollments.push(body.rejoin === true ? 'rejoin' : 'enroll');
+        return { rootPublicKey: bootstrap.rootPublicKey,
+          certificate: issueCertificate(root, { networkId: 'account:test', subject: 'agent-net-on-owner', identity: body, role: 'member' }) };
+      },
+      fetch: async url => { if (String(url).endsWith('/directory')) directoryReads++; return directory(); },
+      createWebSocket: async () => { throw new Error('No real Agent-Net relay in this test'); },
+      workerFile: () => null, coreModule: async () => { throw new Error('No Agent-Net core in this test'); }, log: { info() {}, warn() {} },
+      deviceLinkDeviceIds: async () => listed,
+    },
+    officialDeviceLinkFetch: async route => { rejoins.push(route); return { deviceId: 'host', rejoined: true }; },
+  });
+  t.after(async () => {
+    await host.stop();
+    commitVolatileAppSession('signed-out', null, true);
+    fs.rmSync(profile, { recursive: true, force: true });
+  });
+  const turnOn = async () => { await host.setAgentNetEnabled(false); const result = await host.setAgentNetEnabled(true); return result.rejoin; };
+
+  // Never enrolled on this account's service: nothing to ask.
+  await host.setAgentNetEnabled(false);
+  secrets.clear();
+  assert.equal(await turnOn(), undefined);
+  assert.equal(directoryReads, 0);
+  assert.equal((await host.rejoin()).rejoin.agentNet, 'rejoined'); // Enrolls the identity this Host had.
+  rejoins.length = 0; enrollments.length = 0;
+
+  // Removed from the account: its certificate is revoked. Turning Agent-Net on brings it back first, then turns it on.
+  directory = async () => new Response(JSON.stringify({ error: { code: 'DEVICE_REVOKED' } }), { status: 401 });
+  assert.deepEqual(await turnOn(), { result: 'rejoined', agentNet: 'rejoined' });
+  assert.deepEqual([rejoins, enrollments], [['/api/device-link/rejoin'], ['rejoin']]);
+  assert.equal(host.state().agentNet.enabled, true);
+
+  // Signed in again after a removal: not on the account's device list (every computer refuses it on Agent-Net), even with no
+  // stored Agent-Net secret yet: turning Agent-Net on still forces Agent-Net rejoin (never 'skipped').
+  directory = async () => new Response(JSON.stringify({ rootPublicKey: bootstrap.rootPublicKey, devices: [] }), { status: 200 });
+  rejoins.length = 0; enrollments.length = 0; listed = ['desktop']; secrets.clear();
+  assert.deepEqual(await turnOn(), { result: 'rejoined', agentNet: 'rejoined' });
+  assert.deepEqual([rejoins, enrollments], [['/api/device-link/rejoin'], ['rejoin']]);
+  listed = ['desktop', 'host'];
+
+  // Offline, or not removed: turned on as before, without asking anyone to rejoin.
+  for (const answer of [async () => { throw new TypeError('fetch failed'); },
+    async () => new Response(JSON.stringify({ rootPublicKey: bootstrap.rootPublicKey, devices: [] }), { status: 200 })]) {
+    directory = answer;
+    assert.equal(await turnOn(), undefined);
+    assert.equal(host.state().agentNet.enabled, true);
+  }
+  assert.deepEqual([rejoins, enrollments], [['/api/device-link/rejoin'], ['rejoin']]);
+});
+
+// Test value (engineering-conventions §3.2)
 // - Production entry and observable result: Node Host's shared `parseAgentNetUdpPort` (`CINDY_AGENT_NET_UDP_PORT`) and
 //   `getOfficialAgentNetPeerBase` helpers run without Electron, validate 1..65535 (warning and falling back to ephemeral on
 //   invalid input), and map official CN <-> Global bases while returning null for self-hosted/custom URLs.

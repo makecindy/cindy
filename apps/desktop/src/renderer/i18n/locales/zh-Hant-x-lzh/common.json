@@ -7151,6 +7151,7 @@
         },
         "onlyEncrypted": "唯用 Agent-Net",
         "onlyEncryptedHint": "啟之則舊版裝置及仍循舊路之分享不可用。常例為闔。",
+        "removedOff": "此機已自名籍中移除，Agent-Net 已自閉。復啟即可重新加入。",
         "peerSwitch": {
           "row": {
             "toAgentNet": "方轉 Agent-Net…",
