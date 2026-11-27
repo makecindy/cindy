@@ -31,9 +31,13 @@ import {
 } from './windowBounds.js';
 import { readWindowBehaviorSettings } from './window-behavior-settings-store.js';
 import {
+  fitMacBackdropToWindow,
   fitWindowsBackdropToWindow,
+  isMacTransparentWindow,
   isWindowsTransparentWindow,
+  markMacTransparentWindow,
   markWindowsTransparentWindow,
+  resolveMacWindowTransparent,
   resolveVibrancyConfig,
   resolveWindowVibrancyConfig,
   resolveWindowsWindowTransparent,
@@ -131,7 +135,10 @@ export function openSessionInNewWindow(
     process.platform === 'darwin'
       ? { titleBarStyle: 'hidden' as const, trafficLightPosition: { x: 12, y: 16 } }
       : { frame: false };
-  const persistedTheme = process.platform === 'win32' ? readWindowThemeSnapshot() : null;
+  const persistedTheme =
+    process.platform === 'win32' || process.platform === 'darwin'
+      ? readWindowThemeSnapshot()
+      : null;
   const isDark = process.platform === 'win32'
     ? resolveAppThemeIsDark(
         nativeTheme.shouldUseDarkColors,
@@ -139,16 +146,21 @@ export function openSessionInNewWindow(
         persistedTheme?.resolvedIsDark,
       )
     : nativeTheme.shouldUseDarkColors;
-  const bgColor = isDark ? '#1f1f1e' : '#f8f8f6';
+  const bgColor = process.platform === 'darwin' ? '#00000000' : isDark ? '#1f1f1e' : '#f8f8f6';
   const winBackdropConfig = resolveVibrancyConfig(
     persistedTheme?.familyId ?? 'cindy',
     isDark,
     process.platform,
   );
-  // Windows: a transparent window flickers under a system backdrop (see vibrancyConfig).
+  // Windows: a transparent window flickers under a system backdrop.
+  // macOS: a transparent window triggers high WindowServer GPU usage (#11670) while
+  // `transparent: false` + `vibrancy: 'hud'` preserves behind-window vibrancy (see vibrancyConfig).
   const windowTransparent =
-    process.platform !== 'win32' ||
-    resolveWindowsWindowTransparent(winBackdropConfig, persistedTheme?.needsTransparentWindow);
+    process.platform === 'win32'
+      ? resolveWindowsWindowTransparent(winBackdropConfig, persistedTheme?.needsTransparentWindow)
+      : process.platform === 'darwin'
+        ? resolveMacWindowTransparent(winBackdropConfig, persistedTheme?.needsTransparentWindow)
+        : true;
 
   const base = mainWindow && !mainWindow.isDestroyed() ? mainWindow.getBounds() : null;
   const requestedSize = base
@@ -187,6 +199,7 @@ export function openSessionInNewWindow(
           backgroundColor: winBackdropConfig.backgroundColor,
         }
       : {}),
+    ...(process.platform === 'darwin' ? { vibrancy: 'hud' as const } : {}),
     acceptFirstMouse: !swallowActivationClick,
     ...platformOptions,
     webPreferences: {
@@ -202,6 +215,7 @@ export function openSessionInNewWindow(
   });
   markAppContentWindow(win);
   if (process.platform === 'win32' && windowTransparent) markWindowsTransparentWindow(win);
+  if (process.platform === 'darwin' && windowTransparent) markMacTransparentWindow(win);
   installWindowsTransparentTitleBar(win);
   applyAppearanceToWindow(win);
   win.webContents.on('did-finish-load', () => {
@@ -305,7 +319,9 @@ export function applyVibrancyToSecondaryWindows(familyId: string, isDark: boolea
     const config =
       process.platform === 'win32'
         ? fitWindowsBackdropToWindow(requested, isWindowsTransparentWindow(win))
-        : requested;
+        : process.platform === 'darwin'
+          ? fitMacBackdropToWindow(requested, isMacTransparentWindow(win))
+          : requested;
 
     // Windows 11:副窗口与主窗口一致地应用 acrylic/mica 材质;切回非 CINDY family 时
     // config.backgroundMaterial 为 'none',显式复位,避免会话副窗口残留上一次的毛玻璃材质。

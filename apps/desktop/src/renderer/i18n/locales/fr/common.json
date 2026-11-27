@@ -1,4 +1,9 @@
 {
+  "antigravityVerification": {
+    "title": "Validez votre compte Google",
+    "note": "Scannez le code ou ouvrez la page Google. La tâche reprendra dès qu’Antigravity aura confirmé l’accès.",
+    "refresh": "Actualiser le code QR"
+  },
   "runtimePlugins": {
     "save": "Enregistrer",
     "promptUnsupported": "Cet emplacement d’exécution de Pi ne prend pas en charge les fragments d’instructions système.",
@@ -9096,7 +9101,10 @@
             "user": "Utilisateur",
             "assistant": "Assistant"
           }
-        }
+        },
+        "agentChecks": "Peut vérifier si les sources ont du nouveau",
+        "agentChecksDetail": "Échange uniquement les états modifié, inchangé ou inconnu avec les autres plugins autorisés. Chaque plugin utilise ses propres comptes connectés, sans partager de messages ni d’identifiants. La vérification ne sollicite aucun modèle. Vérifie aussi les changements des conversations Cindy locales sans en renvoyer le contenu.",
+        "agentChecksRequest": "Vérifier l’autorisation de détection"
       },
       "connections": {
         "confirmTitle": "Ajouter une adresse de connexion",
@@ -12033,6 +12041,7 @@
           "title": "Mentions me concernant",
           "me": "Moi",
           "markAll": "Tout marquer comme lu",
+          "markReadFailed": "Impossible de marquer les mentions comme lues.",
           "empty": "Aucune mention non lue",
           "thread": "Fil",
           "main": "Conversation de groupe",
@@ -12242,6 +12251,8 @@
       },
       "notice": {
         "memberJoined": "{{name}} a rejoint le groupe",
+        "memberJoinedList": "{{names}} ont rejoint le groupe",
+        "memberJoinedSummary": "{{names}} et {{others}} autres ont rejoint le groupe",
         "memberFailed": "{{name}} n'a pas pu répondre cette fois",
         "memberTimeout": "{{name}} a mis trop de temps à répondre et a été ignoré cette fois",
         "memberUnavailable": "{{name}} est indisponible et n'est pas intervenu cette fois",
@@ -12424,6 +12435,8 @@
         "threadNew": "Nouveaux messages du fil",
         "replyingTo": "En réponse à « {{name}} » : {{text}}",
         "filesOutsideWorkingDir": "Les fichiers situés hors du répertoire de travail n’ont pas été joints.",
+        "modelFallback": "Le modèle sélectionné n’est pas sur cet ordinateur ; cette réponse utilise donc {{model}}.",
+        "modelFallbackUnnamed": "Le modèle sélectionné n’est pas sur cet ordinateur ; cette réponse utilise donc un modèle disponible ici.",
         "earlierOmitted": "(Messages plus anciens omis)",
         "actingFor": "{{name}} · pour {{person}}",
         "checkout": {
@@ -12504,12 +12517,37 @@
           "unfollowTip": "Ne plus suivre : vous ne serez averti que si quelqu'un vous mentionne",
           "listLabel": "Fils de cette conversation de groupe",
           "listNews": "Nouvelles réponses",
-          "listOthers": "Autres fils",
           "newSeparator": "Nouvelles réponses",
           "open_many": "Ouvrir le fil, {{count}} réponses",
           "alsoSendFailed_many": "{{count}} réponses figurent dans le fil, mais elles n'ont pas pu être envoyées dans la conversation principale.",
           "newReplies_many": "{{count}} nouvelles réponses",
-          "hintMany_many": "Nouvelles réponses dans {{count}} fils"
+          "hintMany_many": "Nouvelles réponses dans {{count}} fils",
+          "openIndex": "Fils",
+          "indexTitle": "Fils",
+          "backToList": "Retour aux fils",
+          "filterAria": "Filtrer les fils",
+          "filterMine": "Pour moi",
+          "filterAll": "Tous",
+          "searchPlaceholder": "Rechercher des fils, réponses ou membres",
+          "clearSearch": "Effacer la recherche",
+          "listRecent": "Récents",
+          "indexParticipatedTag": "Participé",
+          "indexMentionedTag": "Mentionné",
+          "locateInGroup": "Afficher dans le groupe",
+          "indexEmptyMine": "Aucun fil auquel vous avez participé ou où vous avez été mentionné",
+          "indexEmptyAll": "Aucun fil dans ce groupe pour le moment",
+          "indexEmptySearch": "Aucun fil correspondant",
+          "viewAllThreads": "Voir tous les fils",
+          "syncingHistory": "Chargement des fils précédents…",
+          "rootKind": {
+            "task": "Tâche",
+            "image": "Image",
+            "video": "Vidéo",
+            "audio": "Audio",
+            "file": "Fichier",
+            "share": "Réponse partagée",
+            "card": "Carte"
+          }
         },
         "replyPlaceholder": "Répondre à ce message ; utilisez @ pour mentionner un ami…",
         "sendReply": "Envoyer la réponse",
@@ -17304,9 +17342,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "Ajouter un ordinateur cloud",
-        "preparingCloud": "Ordinateur cloud en préparation",
-        "manageCloud": "Gérer l’ordinateur cloud",
         "allMachines": "Tous",
         "localMachine": "Local",
         "connecting": "Connexion…",
@@ -17673,6 +17708,8 @@
         "moveToProjectRemoteUnsupported": "Le déplacement des sessions distantes n'est pas encore pris en charge",
         "moveToProjectWorktreeBlocked": "Le répertoire de travail de cette session est un worktree : elle ne peut pas encore être déplacée vers un autre projet",
         "openInNewWindow": "Ouvrir dans une nouvelle fenêtre",
+        "openInNewWindowShortcutMac": "⌘+clic",
+        "openInNewWindowShortcutOther": "Ctrl+clic",
         "exportShare": "Exporter la session…",
         "exportHtml": "Exporter en HTML…",
         "exportHtmlSuccess": "Session exportée en HTML",
@@ -17805,6 +17842,13 @@
         "inbox": "Boîte de réception",
         "enterInbox": "Passer en mode boîte de réception",
         "leaveInbox": "Passer en mode liste des tâches"
+      },
+      "filterHideTaskCreated": "Masquer les tâches créées par d’autres tâches",
+      "origin": {
+        "createdByTask": "Ouverte par une autre tâche",
+        "createdByTaskNamed": "Ouverte par la tâche « {{title}} »",
+        "createdByRemoteTask": "Ouverte par une tâche sur {{device}}",
+        "createdByRemoteTaskNamed": "Ouverte par « {{title}} » sur {{device}}"
       }
     },
     "rename": {
@@ -17825,7 +17869,9 @@
       "orcaRemoteLead": "Collaboration depuis {{device}}",
       "orcaRemoteLeadReleased": "Collaboration terminée · depuis {{device}}",
       "orcaRemoteLeadUnknownDevice": "un autre ordinateur",
-      "orcaRemoteLeadTip": "Un Worker pour « {{lead}} » sur {{device}}. Sa tâche, son dossier et ses commandes s'exécutent sur cet ordinateur. Les messages que vous envoyez ici ne sont pas transmis au Lead."
+      "orcaRemoteLeadTip": "Un Worker pour « {{lead}} » sur {{device}}. Sa tâche, son dossier et ses commandes s'exécutent sur cet ordinateur. Les messages que vous envoyez ici ne sont pas transmis au Lead.",
+      "createdByTask": "Depuis une autre tâche",
+      "createdByTaskNamed": "Depuis « {{title}} »"
     },
     "gitContext": {
       "detached": "HEAD détachée",
@@ -23238,6 +23284,30 @@
     "loginMayHaveExpired": "La connexion a peut-être expiré",
     "loginExpiryUnknown": "Expiration de la connexion inconnue",
     "loginExpiryDetail": "Expiration estimée : {{date}}. Cette estimation provient de Claude ; la connexion peut expirer plus tôt.",
+    "longLivedToken": {
+      "tag": "Jeton longue durée",
+      "use": "Utiliser un jeton longue durée (environ un an)",
+      "renew": "Créer un nouveau jeton longue durée",
+      "remove": "Ne plus utiliser le jeton longue durée",
+      "confirmTitle": "Utiliser un jeton longue durée pour {{name}} ?",
+      "confirmDescription": "Votre navigateur ouvre la page d'autorisation de Claude. Choisissez-y ce même compte. Le jeton est valable environ un an et enregistré sur cet ordinateur : les tâches continuent de s'exécuter après la fin de la connexion ordinaire.",
+      "confirmAction": "Continuer dans le navigateur",
+      "removeTitle": "Ne plus utiliser le jeton longue durée de {{name}} ?",
+      "removeDescription": "Le jeton est supprimé de cet ordinateur et le compte revient à sa connexion ordinaire. Le jeton lui-même reste valide chez Anthropic jusqu'à son expiration.",
+      "removeAction": "Ne plus utiliser",
+      "expiresInDays": "Le jeton expire dans environ {{days}} jours",
+      "mayHaveExpired": "Le jeton a peut-être expiré",
+      "active": "Fonctionne avec un jeton longue durée",
+      "detailExpiry": "Expiration estimée : {{date}}.",
+      "detailLoginActive": "La connexion ordinaire est toujours active : le compte et son utilisation sont lus en direct.",
+      "detailLoginEnded": "La connexion ordinaire a pris fin. L'utilisation se met à jour quand des tâches s'exécutent ; reconnectez-vous pour l'actualiser à tout moment.",
+      "detailPending": "Le jeton n'a pas encore été vérifié pour ce compte. Cela se fera lors de l'exécution de sa première tâche.",
+      "detailSettingsOnly": "Sur cet ordinateur, une fois la connexion ordinaire terminée, le jeton ne peut pas servir aux tâches exécutées pour un autre ordinateur ni aux amis isolés.",
+      "mismatchStatus": "Le jeton appartient à un autre compte",
+      "needsLogin": "Connectez-vous d'abord à ce compte, puis créez son jeton longue durée.",
+      "notPermitted": "Votre organisation n'autorise pas les jetons longue durée.",
+      "unsupported": "Ce compte ne peut pas utiliser de jeton longue durée sur cet ordinateur."
+    },
     "loginAccountAria": "Se reconnecter à {{name}}",
     "loginIdentityMismatchStatus": "Le compte ne correspond pas",
     "loginIdentityMismatch": "Vous avez utilisé un autre compte. Reconnectez-vous avec le compte affiché sur cette ligne.",

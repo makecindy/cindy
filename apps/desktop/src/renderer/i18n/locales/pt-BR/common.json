@@ -1,4 +1,9 @@
 {
+  "antigravityVerification": {
+    "title": "Verifique sua Conta do Google",
+    "note": "Escaneie o código QR ou abra a página do Google. A tarefa continuará quando o Antigravity confirmar o acesso.",
+    "refresh": "Atualizar código QR"
+  },
   "runtimePlugins": {
     "save": "Salvar",
     "promptUnsupported": "Este local de execução do Pi não oferece suporte a trechos de instruções de sistema.",
@@ -9096,7 +9101,10 @@
             "user": "Usuário",
             "assistant": "Assistente"
           }
-        }
+        },
+        "agentChecks": "Pode verificar se há conteúdo novo",
+        "agentChecksDetail": "Compartilha apenas o estado de alteração, sem alterações ou desconhecido com outros plugins autorizados. Cada plugin usa suas próprias contas conectadas, sem compartilhar mensagens ou credenciais. A verificação não usa modelos. Também verifica alterações nas conversas locais do Cindy sem retornar o conteúdo.",
+        "agentChecksRequest": "Revisar permissão de verificação"
       },
       "connections": {
         "confirmTitle": "Adicionar endereço de conexão",
@@ -12033,6 +12041,7 @@
           "title": "Menções a mim",
           "me": "Eu",
           "markAll": "Marcar todas como lidas",
+          "markReadFailed": "Não foi possível marcar as menções como lidas.",
           "empty": "Nenhuma menção não lida",
           "thread": "Tópico",
           "main": "Conversa em grupo",
@@ -12242,6 +12251,8 @@
       },
       "notice": {
         "memberJoined": "{{name}} entrou no grupo",
+        "memberJoinedList": "{{names}} entraram no grupo",
+        "memberJoinedSummary": "{{names}} e mais {{others}} entraram no grupo",
         "memberFailed": "{{name}} não conseguiu responder desta vez",
         "memberTimeout": "{{name}} demorou demais para responder e foi ignorado desta vez",
         "memberUnavailable": "{{name}} está indisponível e não falou desta vez",
@@ -12424,6 +12435,8 @@
         "threadNew": "Mensagens novas do tópico",
         "replyingTo": "Em resposta a \"{{name}}\": {{text}}",
         "filesOutsideWorkingDir": "Os arquivos fora do diretório de trabalho não foram anexados.",
+        "modelFallback": "O modelo selecionado não está neste computador, então esta resposta usa {{model}}.",
+        "modelFallbackUnnamed": "O modelo selecionado não está neste computador, então esta resposta usa um modelo disponível aqui.",
         "earlierOmitted": "(Mensagens anteriores omitidas)",
         "actingFor": "{{name}} · por {{person}}",
         "checkout": {
@@ -12504,12 +12517,37 @@
           "unfollowTip": "Deixar de seguir: você só receberá avisos quando alguém mencionar você",
           "listLabel": "Tópicos nesta conversa em grupo",
           "listNews": "Novas respostas",
-          "listOthers": "Outros tópicos",
           "newSeparator": "Novas respostas",
           "open_many": "Abrir discussão, {{count}} respostas",
           "alsoSendFailed_many": "{{count}} respostas estão no tópico, mas não foi possível enviá-las à conversa principal.",
           "newReplies_many": "{{count}} novas respostas",
-          "hintMany_many": "Novas respostas em {{count}} discussões"
+          "hintMany_many": "Novas respostas em {{count}} discussões",
+          "openIndex": "Tópicos",
+          "indexTitle": "Tópicos",
+          "backToList": "Voltar aos tópicos",
+          "filterAria": "Filtrar tópicos",
+          "filterMine": "Para mim",
+          "filterAll": "Todos",
+          "searchPlaceholder": "Buscar tópicos, respostas ou membros",
+          "clearSearch": "Limpar busca",
+          "listRecent": "Recentes",
+          "indexParticipatedTag": "Participou",
+          "indexMentionedTag": "Mencionado",
+          "locateInGroup": "Mostrar no grupo",
+          "indexEmptyMine": "Ainda não há tópicos em que você participou ou foi mencionado",
+          "indexEmptyAll": "Ainda não há tópicos neste grupo",
+          "indexEmptySearch": "Nenhum tópico correspondente",
+          "viewAllThreads": "Ver todos os tópicos",
+          "syncingHistory": "Carregando tópicos anteriores…",
+          "rootKind": {
+            "task": "Tarefa",
+            "image": "Imagem",
+            "video": "Vídeo",
+            "audio": "Áudio",
+            "file": "Arquivo",
+            "share": "Resposta compartilhada",
+            "card": "Cartão"
+          }
         },
         "replyPlaceholder": "Responda a esta mensagem; use @ para mencionar um amigo…",
         "sendReply": "Enviar resposta",
@@ -17304,9 +17342,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "Adicionar computador na nuvem",
-        "preparingCloud": "Preparando computador na nuvem",
-        "manageCloud": "Gerenciar computador na nuvem",
         "allMachines": "Todas",
         "localMachine": "Locais",
         "connecting": "Conectando…",
@@ -17673,6 +17708,8 @@
         "moveToProjectRemoteUnsupported": "Ainda não é possível mover sessões remotas",
         "moveToProjectWorktreeBlocked": "O diretório de trabalho desta sessão é um worktree, então ainda não é possível movê-la para outro projeto",
         "openInNewWindow": "Abrir em nova janela",
+        "openInNewWindowShortcutMac": "⌘+clique",
+        "openInNewWindowShortcutOther": "Ctrl+clique",
         "exportShare": "Exportar sessão…",
         "exportHtml": "Exportar para HTML…",
         "exportHtmlSuccess": "Sessão exportada para HTML",
@@ -17805,6 +17842,13 @@
         "inbox": "Caixa de entrada",
         "enterInbox": "Mudar para o modo caixa de entrada",
         "leaveInbox": "Mudar para o modo lista de tarefas"
+      },
+      "filterHideTaskCreated": "Ocultar tarefas criadas por outras tarefas",
+      "origin": {
+        "createdByTask": "Aberta por outra tarefa",
+        "createdByTaskNamed": "Aberta pela tarefa “{{title}}”",
+        "createdByRemoteTask": "Aberta por uma tarefa em {{device}}",
+        "createdByRemoteTaskNamed": "Aberta por “{{title}}” em {{device}}"
       }
     },
     "rename": {
@@ -17825,7 +17869,9 @@
       "orcaRemoteLead": "Colaboração de {{device}}",
       "orcaRemoteLeadReleased": "Colaboração encerrada · de {{device}}",
       "orcaRemoteLeadUnknownDevice": "outro computador",
-      "orcaRemoteLeadTip": "Um Worker de “{{lead}}” em {{device}}. Sua tarefa, pasta e comandos são executados neste computador. As mensagens que você enviar aqui não serão repassadas ao Lead."
+      "orcaRemoteLeadTip": "Um Worker de “{{lead}}” em {{device}}. Sua tarefa, pasta e comandos são executados neste computador. As mensagens que você enviar aqui não serão repassadas ao Lead.",
+      "createdByTask": "De outra tarefa",
+      "createdByTaskNamed": "De “{{title}}”"
     },
     "gitContext": {
       "detached": "HEAD desanexado",
@@ -23239,6 +23285,30 @@
     "loginMayHaveExpired": "O login pode ter expirado",
     "loginExpiryUnknown": "Validade do login desconhecida",
     "loginExpiryDetail": "Validade estimada: {{date}}. Esta estimativa é fornecida pelo Claude; o login pode expirar antes.",
+    "longLivedToken": {
+      "tag": "Token de longa duração",
+      "use": "Usar um token de longa duração (cerca de um ano)",
+      "renew": "Criar um novo token de longa duração",
+      "remove": "Parar de usar o token de longa duração",
+      "confirmTitle": "Usar um token de longa duração para {{name}}?",
+      "confirmDescription": "O navegador abre a página de autorização do Claude. Escolha lá esta mesma conta. O token dura cerca de um ano e fica salvo neste computador, então as tarefas continuam sendo executadas depois que o login comum termina.",
+      "confirmAction": "Continuar no navegador",
+      "removeTitle": "Parar de usar o token de longa duração de {{name}}?",
+      "removeDescription": "O token é excluído deste computador e a conta volta ao login comum. O token em si continua válido na Anthropic até expirar.",
+      "removeAction": "Parar de usar",
+      "expiresInDays": "O token expira em cerca de {{days}} dias",
+      "mayHaveExpired": "O token pode ter expirado",
+      "active": "Em execução com um token de longa duração",
+      "detailExpiry": "Expiração estimada: {{date}}.",
+      "detailLoginActive": "O login comum ainda está ativo, então a conta e o uso são lidos em tempo real.",
+      "detailLoginEnded": "O login comum terminou. O uso é atualizado quando as tarefas são executadas; faça login novamente para atualizá-lo a qualquer momento.",
+      "detailPending": "Ainda não foi verificado se o token pertence a esta conta. Isso acontece quando a primeira tarefa for executada.",
+      "detailSettingsOnly": "Neste computador, depois que o login comum termina, o token não pode ser usado em tarefas executadas para outro computador nem em amigos isolados.",
+      "mismatchStatus": "O token pertence a outra conta",
+      "needsLogin": "Faça login nesta conta primeiro e depois crie o token de longa duração.",
+      "notPermitted": "Sua organização não permite tokens de longa duração.",
+      "unsupported": "Esta conta não pode usar um token de longa duração neste computador."
+    },
     "loginAccountAria": "Entrar novamente em {{name}}",
     "loginIdentityMismatchStatus": "A conta não corresponde",
     "loginIdentityMismatch": "Você entrou em outra conta. Entre novamente e escolha a conta exibida nesta linha.",

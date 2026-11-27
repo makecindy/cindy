@@ -518,6 +518,11 @@ it.each((['responses', 'anthropic', 'chat'] as const).flatMap(format => [
     const chunks: Buffer[] = [];
     for await (const chunk of req) chunks.push(chunk);
     received.push(Buffer.concat(chunks));
+    if (req.headers['x-test-provider'] === 'agnes' && received.length === 1) {
+      res.writeHead(400);
+      res.end(JSON.stringify({ error: { message: 'OpenAIException - {"message":"Image count 7 exceeds limit 4 per request.","code":400}' } }));
+      return;
+    }
     if (pendingFailure) { pendingFailure = false; res.writeHead(503); res.end('retry failed'); return; }
     if (reject) {
       const next = reject; reject = undefined; pendingFailure = next.failRetry === true;
@@ -605,6 +610,14 @@ it.each((['responses', 'anthropic', 'chat'] as const).flatMap(format => [
   }
 
   if (scenario === 'tiny count-only retries') {
+    // #13363: the Anthropic gateway reports both the observed count and the cap.
+    if (format === 'anthropic') {
+      const retry = await send(7, 200, 'agnes', 3);
+      expect(received).toHaveLength(2);
+      expect(received[0]).toEqual(wire(7, 3));
+      expect(imageCount(retry)).toBeLessThanOrEqual(4);
+      expect(JSON.parse(retry.toString()).messages.at(-1)).toEqual(JSON.parse(wire(7, 3).toString()).messages.at(-1));
+    }
     reject = { count: 50 };
     const tinyRetry = await send(60, 200, 'route-e', 3);
     expect(imageCount(tinyRetry)).toBe(31); // Placeholders can make this retry larger in bytes.
