@@ -10726,7 +10726,8 @@ app.on('ready', async () => {
           throwIpcError('PRECONDITION_FAILED', 'The task already has a worktree');
         }
         return WorktreeManager.createWorktree(request, {
-          awaitFullCheckout: true,
+          trackBackgroundCheckout: true,
+          strictSelectiveCheckout: true,
           refreshDefaultSource: true,
           assertCurrent,
         });
