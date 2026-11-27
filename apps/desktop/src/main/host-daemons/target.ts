@@ -55,7 +55,12 @@ export interface HostDaemonAdapter {
   scan(): Promise<RawHostDaemon[]>;
   /** 结束当前这一次运行，不动定义（之后仍会按自己的时机再跑起来）。 */
   stop(id: string): Promise<void>;
-  /** 立即运行一次。 */
+  /**
+   * 立即运行一次，必须按该常驻项定义里的执行上下文执行：命令、shell、环境变量、
+   * 工作目录。平台能自己执行时交给平台（`Start-ScheduledTask` / `launchctl kickstart` /
+   * `systemctl start`），环境与工作目录由平台按定义遵守；只能本地复现时，复现的也得
+   * 是那个上下文（见 crontab.ts）—— 在另一套环境里跑，跑的就不是用户写的那件事。
+   */
   run(id: string): Promise<void>;
   /** 从这台电脑删除，之后不再自动启动。 */
   remove(id: string): Promise<void>;

@@ -10,13 +10,16 @@
  *   由界面按条目能力决定按钮。
  * - 「立即运行」只做本地复现：把命令按同样的 shell 语义起一次，不经过 crond
  *   （vixie-cron 的 `%` 转义与 MAILTO 之类语义差异由此说明，不假装等价）。
+ *   复现的不只是命令文本：crond 起任务时的执行上下文也要复现 —— 由 crontab 里
+ *   `SHELL=` 决定的 shell、`PATH=` 与自定义变量的环境赋值、HOME 工作目录。
+ *   丢了这些，命令会跑在另一个环境里（变量为空、路径不对），界面还报「已启动」。
  *
  * 条目身份用整行的 hash：行本身就是用户 crontab 里的定义，改一行就是另一条。
  */
 
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { homedir } from 'node:os';
+import { homedir, userInfo } from 'node:os';
 
 import { runCommand, type RunCommand } from './exec.js';
 import type { HostDaemonAdapter, RawHostDaemon } from './target.js';
@@ -28,6 +31,11 @@ export interface CronEntry {
   command: string;
   /** 命令里的第一个 token（去引号）作为可读名字。 */
   name: string;
+  /**
+   * 该条目之前生效的环境赋值。crontab 里 `NAME=value` 这样的行不是条目，
+   * 而是环境变量，对它之后的每一条都生效（vixie-cron 语义）。
+   */
+  env: Record<string, string>;
 }
 
 const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*\s*=/;
@@ -41,7 +49,7 @@ const MACRO_SCHEDULE = /^@\S+\s+/;
 const FIVE_FIELD_SCHEDULE = /^(\S+\s+){5}/;
 
 /** 一行 crontab → 条目；注释、空行、环境变量赋值、无效行都返回 null。 */
-export function parseCronLine(raw: string): CronEntry | null {
+export function parseCronLine(raw: string): Omit<CronEntry, 'env'> | null {
   const line = raw.trim();
   if (!line || line.startsWith('#') || ENV_ASSIGNMENT.test(line)) return null;
   const schedule = line.startsWith('@') ? MACRO_SCHEDULE : FIVE_FIELD_SCHEDULE;
@@ -49,6 +57,29 @@ export function parseCronLine(raw: string): CronEntry | null {
   const command = line.replace(schedule, '').trim();
   if (!command) return null;
   return { line, command, name: firstName(command) };
+}
+
+/**
+ * 一行 `NAME=value` → 环境赋值；不是环境赋值返回 null。
+ * 值的成对引号去掉（`FOO="a b"` 与 `FOO=a b` 同义），其余原样保留。
+ */
+export function parseCronEnvAssignment(raw: string): { name: string; value: string } | null {
+  const line = raw.trim();
+  if (!line || line.startsWith('#')) return null;
+  const match = /^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
+  if (!match) return null;
+  return { name: match[1], value: unquote(match[2].trim()) };
+}
+
+function unquote(value: string): string {
+  if (value.length >= 2) {
+    const first = value[0];
+    const last = value[value.length - 1];
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+      return value.slice(1, -1);
+    }
+  }
+  return value;
 }
 
 function firstName(command: string): string {
@@ -65,9 +96,16 @@ export function cronEntryId(line: string): string {
 
 export function parseCrontab(text: string): CronEntry[] {
   const entries: CronEntry[] = [];
+  // 环境赋值对其后的所有条目生效：解析时按出现顺序累积，每个条目带上当下的快照。
+  const env: Record<string, string> = {};
   for (const raw of text.split(/\r?\n/)) {
+    const assignment = parseCronEnvAssignment(raw);
+    if (assignment) {
+      env[assignment.name] = assignment.value;
+      continue;
+    }
     const entry = parseCronLine(raw);
-    if (entry) entries.push(entry);
+    if (entry) entries.push({ ...entry, env: { ...env } });
   }
   return entries;
 }
@@ -92,21 +130,100 @@ export function removeCronLine(text: string, line: string): { text: string; remo
 export interface CrontabAdapterDeps {
   exec?: RunCommand;
   /** 「立即运行」的本地复现；resolve 表示进程已真正被拉起。 */
-  launch?: (command: string) => Promise<void>;
+  launch?: (command: string, env: Record<string, string>) => Promise<void>;
 }
 
-function defaultLaunch(command: string): Promise<void> {
-  // crond 以用户 HOME 为工作目录起任务，本地复现也用它，才不会在应用目录里跑。
-  const child = spawn(command, { shell: true, detached: true, stdio: 'ignore', cwd: homedir() });
-  return new Promise((resolve, reject) => {
-    // `spawn` 事件才是「内核真的接手了这个进程」；不能 spawn 就直接报错，
-    // 否则界面会说「已运行」而实际什么都没起。
-    child.once('error', (error) => reject(error));
-    child.once('spawn', () => {
-      child.unref();
-      resolve();
-    });
+/** crond 起任务时的基础环境：不是 Cindy 自己的环境。 */
+const CRON_BASE_PATH = '/usr/bin:/bin';
+
+/** 起了之后留多久看退出码：立刻失败要如实报失败，长任务照旧只报「已启动」。 */
+const RUN_RESULT_WINDOW_MS = 1_500;
+
+function currentUser(): string {
+  try {
+    return userInfo().username;
+  } catch {
+    return process.env.USER ?? process.env.LOGNAME ?? '';
+  }
+}
+
+/**
+ * 条目的环境赋值 + crond 的基础环境 → 一次本地复现该用的执行上下文。
+ *
+ * crond 起任务时给的是固定环境（HOME、LOGNAME、PATH、SHELL），不是继承谁的 shell；
+ * crontab 里的赋值覆盖它。带着 Cindy 进程自己的环境去跑，跑的就不是用户写的那件事。
+ */
+export function resolveCronExecution(env: Record<string, string>): {
+  shell: string;
+  env: Record<string, string>;
+  cwd: string;
+} {
+  const home = homedir();
+  const user = currentUser();
+  const merged: Record<string, string> = {
+    HOME: home,
+    LOGNAME: user,
+    USER: user,
+    PATH: CRON_BASE_PATH,
+    SHELL: '/bin/sh',
+    ...env,
+  };
+  return { shell: merged.SHELL || '/bin/sh', env: merged, cwd: merged.HOME || home };
+}
+
+/**
+ * 展开命令里的简单变量引用（`$VAR` / `${VAR}`）：只做变量替换，不做命令替换。
+ *
+ * 两个用途：
+ * - 「立即运行」前先看一眼展开结果对不对（变量为空时要能报出来）。
+ * - 归属匹配：用户执行的是展开后的命令，needle 用原文永远匹配不上，
+ *   面板会把用户自己的任务显示成「无关」。
+ *
+ * 未定义的变量保持原样：`$VAR` 留给 shell 去报错，界面才能看到失败，
+ * 而不是这里悄悄展开成空串。
+ */
+export function expandCronVars(command: string, env: Record<string, string>): string {
+  return command.replace(
+    /\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))/g,
+    (whole, braced: string | undefined, bare: string | undefined) => {
+      const key = braced ?? bare;
+      if (!key) return whole;
+      const value = env[key];
+      return value === undefined ? whole : value;
+    },
+  );
+}
+
+async function defaultLaunch(command: string, env: Record<string, string>): Promise<void> {
+  const { shell, env: childEnv, cwd } = resolveCronExecution(env);
+  // 用条目自己的 shell 执行整条命令（crond 就是 `$SHELL -c '<命令>'`），
+  // 不是把命令交给 Cindy 这边的默认 shell。
+  const child = spawn(shell, ['-c', command], {
+    env: childEnv,
+    cwd,
+    detached: true,
+    stdio: 'ignore',
   });
+  // `spawn` 事件才是「内核真的接手了这个进程」；不能 spawn 就直接报错，
+  // 否则界面会说「已运行」而实际什么都没起。
+  await new Promise<void>((resolve, reject) => {
+    child.once('spawn', () => resolve());
+    child.once('error', reject);
+  });
+  child.unref();
+  const exited = new Promise<number | null>((resolve) => {
+    child.once('exit', (code) => resolve(code));
+  });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), RUN_RESULT_WINDOW_MS);
+  });
+  const code = await Promise.race([exited, timedOut]);
+  if (timer) clearTimeout(timer);
+  // 立刻失败（命令不存在、路径不对、变量为空）要如实报失败，不能让界面显示「已启动」。
+  if (code !== null && code !== 0) {
+    throw new Error(`cron command exited with code ${code}`);
+  }
 }
 
 export function createCrontabAdapter(deps: CrontabAdapterDeps = {}): HostDaemonAdapter {
@@ -167,6 +284,10 @@ export function createCrontabAdapter(deps: CrontabAdapterDeps = {}): HostDaemonA
       const current = await readCrontab();
       const out: RawHostDaemon[] = [];
       for (const [id, entry] of entriesOf(current)) {
+        // 归属用的是「真正被执行的那条命令」：条目里写 `$BACKUP_ROOT/run.sh` 时，
+        // 实际跑的是展开后的路径，用原文去匹配历史执行记录永远匹配不上。
+        const execution = resolveCronExecution(entry.env);
+        const expanded = expandCronVars(entry.command, execution.env);
         out.push({
           id,
           name: entry.name || entry.command,
@@ -176,7 +297,7 @@ export function createCrontabAdapter(deps: CrontabAdapterDeps = {}): HostDaemonA
           command: entry.command,
           // `@reboot` 是开机跑一次，和「等到某个时刻」不是一回事。
           trigger: entry.line.startsWith('@reboot') ? 'startup' : 'schedule',
-          attributionNeedles: [entry.command],
+          attributionNeedles: expanded === entry.command ? [entry.command] : [expanded, entry.command],
           definitionMtimeMs: null,
           lastRunAtMs: null,
           stoppable: false,
@@ -192,7 +313,8 @@ export function createCrontabAdapter(deps: CrontabAdapterDeps = {}): HostDaemonA
     async run(id) {
       const entry = entriesOf(await readCrontab()).get(id);
       if (!entry) throw new Error('cron entry is no longer present');
-      await launch(entry.command);
+      // 连同条目当时生效的环境赋值一起执行：用另一套环境跑，跑的就不是用户写的那件事。
+      await launch(entry.command, entry.env);
     },
 
     async remove(id) {

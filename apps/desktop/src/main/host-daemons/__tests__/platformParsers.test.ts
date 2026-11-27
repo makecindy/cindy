@@ -6,7 +6,7 @@
  */
 
 import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -14,9 +14,11 @@ import { describe, expect, it } from 'vitest';
 import {
   createCrontabAdapter,
   cronEntryId,
+  expandCronVars,
   parseCronLine,
   parseCrontab,
   removeCronLine,
+  resolveCronExecution,
 } from '../crontab.js';
 import {
   createLaunchAgentsAdapter,
@@ -33,6 +35,7 @@ import {
 } from '../systemdUser.js';
 import { combineHostDaemonAdapters } from '../target.js';
 import type { ExecResult, RawHostDaemon } from '../target.js';
+import { toRawHostDaemon } from '../scheduledTasks.js';
 
 describe('launchd', () => {
   it('按 plutil 真实输出取 Label、命令与触发', () => {
@@ -233,6 +236,82 @@ describe('crontab', () => {
     });
     await expect(adapter.run(cronEntryId('0 4 * * * /bin/absent'))).rejects.toThrow('ENOENT');
   });
+
+  /**
+   * 下面三条锁的是同一类根因：「立即运行」必须在条目自己定义的那套执行上下文里跑。
+   * crontab 的环境赋值（SHELL=、PATH=、自定义变量）是条目定义的一部分；丢掉它，
+   * 命令就跑在另一套环境里（shell 不对、路径不对、变量为空），界面却报「已启动」。
+   */
+  it('「立即运行」按条目定义的环境执行：SHELL、PATH、自定义变量都带上', async () => {
+    const launched: Array<{ command: string; env: Record<string, string> }> = [];
+    const adapter = createCrontabAdapter({
+      exec: async () => ({
+        stdout: 'PATH=/opt/bin:/usr/bin\nSHELL=/bin/bash\nFOO=bar\n0 4 * * * /opt/bin/task --go\n',
+        failed: false,
+      }),
+      launch: async (command, env) => {
+        launched.push({ command, env });
+      },
+    });
+    await adapter.run(cronEntryId('0 4 * * * /opt/bin/task --go'));
+    expect(launched).toHaveLength(1);
+    expect(launched[0].command).toBe('/opt/bin/task --go');
+    expect(launched[0].env.SHELL).toBe('/bin/bash');
+    expect(launched[0].env.PATH).toBe('/opt/bin:/usr/bin');
+    expect(launched[0].env.FOO).toBe('bar');
+  });
+
+  it('执行上下文是 crond 的基础环境，不是 Cindy 自己的环境', () => {
+    // crond 起任务时给的是固定环境（HOME、LOGNAME、PATH、SHELL），不继承谁的 shell；
+    // crontab 里的赋值覆盖它。带着 Cindy 进程自己的环境去跑，跑的就不是用户写的那件事。
+    process.env.__CRON_ENV_LEAK__ = 'from-cindy';
+    try {
+      const resolved = resolveCronExecution({ PATH: '/opt/bin', SHELL: '/bin/bash', FOO: 'bar' });
+      expect(resolved.shell).toBe('/bin/bash');
+      expect(resolved.env.PATH).toBe('/opt/bin');
+      expect(resolved.env.FOO).toBe('bar');
+      expect(resolved.env.HOME).toBe(homedir());
+      expect(resolved.cwd).toBe(homedir());
+      expect(resolved.env.__CRON_ENV_LEAK__).toBeUndefined();
+      // 没有 crontab 赋值时是 crond 的默认 PATH 与默认 shell，不是 Cindy 进程的值。
+      const bare = resolveCronExecution({});
+      expect(bare.shell).toBe('/bin/sh');
+      expect(bare.env.PATH).toBe('/usr/bin:/bin');
+    } finally {
+      delete process.env.__CRON_ENV_LEAK__;
+    }
+  });
+
+  it('环境赋值按位置生效：只对它之后的条目有效', () => {
+    // vixie-cron 语义：赋值对其后的所有条目生效，前面的条目不受影响。
+    const entries = parseCrontab('0 4 * * * /bin/a\nFOO=bar\n0 5 * * * /bin/b\n');
+    expect(entries[0].env.FOO).toBeUndefined();
+    expect(entries[1].env.FOO).toBe('bar');
+  });
+
+  it('命令里的变量按条目的环境展开，未定义的变量保持原样', () => {
+    expect(expandCronVars('$BACKUP_ROOT/run.sh', { BACKUP_ROOT: '/home/u/backup' })).toBe(
+      '/home/u/backup/run.sh',
+    );
+    expect(expandCronVars('${BACKUP_ROOT}/run.sh', { BACKUP_ROOT: '/home/u/backup' })).toBe(
+      '/home/u/backup/run.sh',
+    );
+    // 未定义的变量留给 shell 去报错：悄悄展开成空串就会跑去错误的路径。
+    expect(expandCronVars('$MISSING/run.sh', {})).toBe('$MISSING/run.sh');
+  });
+
+  it('归属按展开后的命令匹配：用户执行的是展开后的那条', async () => {
+    // 条目写 `$BACKUP_ROOT/run.sh`，实际跑的是 `/home/u/backup/run.sh`；
+    // needle 用原文就永远匹配不上历史执行记录，面板会把用户自己的任务显示成「无关」。
+    const adapter = createCrontabAdapter({
+      exec: async () => ({
+        stdout: 'BACKUP_ROOT=/home/u/backup\n0 4 * * * $BACKUP_ROOT/run.sh --daily\n',
+        failed: false,
+      }),
+    });
+    const items = await adapter.scan();
+    expect(items[0].attributionNeedles).toContain('/home/u/backup/run.sh --daily');
+  });
 });
 
 describe('systemd 动作契约（真目录 + 假 systemctl）', () => {
@@ -265,6 +344,34 @@ describe('systemd 动作契约（真目录 + 假 systemctl）', () => {
     const cleanup = () => rm(dir, { recursive: true, force: true });
     return { adapter, commands, dir, cleanup };
   }
+
+  it('归属追溯词是实际执行的命令，不是只有 unit 名', async () => {
+    // 历史里存的是命令行。unit 名一般不出现在命令行里，
+    // 只拿 unit 名匹配，用户自己的任务会被永远显示成「无关」。
+    const { adapter, cleanup } = await withUnits({
+      'cron-a.timer': '[Timer]\nUnit=cron-a.service\nOnCalendar=hourly\n',
+      'cron-a.service': '[Service]\nExecStart=/usr/local/bin/backup.sh --daily\n',
+    });
+    try {
+      const items = await adapter.scan();
+      expect(items[0].attributionNeedles).toContain('/usr/local/bin/backup.sh --daily');
+      expect(items[0].attributionNeedles).toContain('cron-a.timer');
+    } finally {
+      await cleanup();
+    }
+
+    const windows = toRawHostDaemon({
+      id: '\\backup',
+      name: 'backup',
+      state: 'Ready',
+      triggers: 'MSFT_TaskLogonTrigger',
+      exec: 'C:\\ops\\backup.exe',
+      args: '--daily',
+      definitionMtimeMs: 1,
+      lastRunAtMs: null,
+    });
+    expect(windows.attributionNeedles).toContain('C:\\ops\\backup.exe --daily');
+  });
 
   it('删 timer 先停执行面；执行面被别的 timer 指名时留在盘上', async () => {
     const { adapter, commands, dir, cleanup } = await withUnits({
@@ -432,6 +539,19 @@ describe('launchd 动作契约（真目录 + 假 launchctl）', () => {
     } finally {
       await stuck.cleanup();
       await notLoaded.cleanup();
+    }
+  });
+
+  it('归属追溯词是实际执行的命令，不是只有 Label', async () => {
+    // 历史里存的是命令行。Label 一般不出现在命令行里，
+    // 只拿 Label 匹配，用户自己的任务会被永远显示成「无关」。
+    const { adapter, cleanup } = await withAgents(() => undefined);
+    try {
+      const items = await adapter.scan();
+      expect(items[0].attributionNeedles).toContain('/bin/true');
+      expect(items[0].attributionNeedles).toContain(LABEL);
+    } finally {
+      await cleanup();
     }
   });
 

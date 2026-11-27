@@ -183,6 +183,9 @@ export function createLaunchAgentsAdapter(deps: LaunchAgentsAdapterDeps = {}): H
           kind: 'launch-agent',
           state: stateOf(plist, jobs),
           command: plist.command || path,
+          // 归属追溯词得是「实际被执行的东西」：历史里存的是命令行，
+          // 而 Label 一般不出现在命令行里，只拿 Label 匹配几乎永远不命中。
+          attributionNeedles: [plist.command || path, plist.label],
           trigger: toHostDaemonTrigger(plist),
           definitionMtimeMs,
           lastRunAtMs: null,
@@ -202,6 +205,8 @@ export function createLaunchAgentsAdapter(deps: LaunchAgentsAdapterDeps = {}): H
 
     // kickstart 要求 job 已加载；没加载就先 bootstrap 进当前 gui 域（bootstrap 本身也会启动它）。
     // 两条路径都要真的成功才算跑起来：bootstrap 成功但 kickstart 再失败时不能报成功。
+    // 交给 launchd 执行：plist 里的 EnvironmentVariables、WorkingDirectory、
+    // ProgramArguments 都由 launchd 按定义遵守，不在这里复现一遍。
     async run(id) {
       const label = id.slice('launch-agent:'.length);
       const domain = guiDomain();

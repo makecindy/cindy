@@ -150,6 +150,8 @@ export function buildDeleteScheduledTaskScript(id: string): string | null {
 
 /** 立即跑一次；停止之后用户要靠它把任务重新拉起来。 */
 export function buildRunScheduledTaskScript(id: string): string | null {
+  // 交给 Task Scheduler 执行：动作里的程序、参数与「起始于」目录都按任务定义走，
+  // 不在这里复现一遍（复现就会丢掉任务的执行上下文）。
   return buildActionScript(id, [(target) => `Start-ScheduledTask ${target}`]);
 }
 
@@ -210,12 +212,16 @@ export function toHostDaemonTrigger(triggers: string): HostDaemonTrigger {
 
 /** 扫描结果 → 编排层用的归一化条目。 */
 export function toRawHostDaemon(task: RawScheduledTask): RawHostDaemon {
+  const command = `${task.exec} ${task.args}`.trim();
   return {
     id: task.id,
     name: task.name,
     kind: 'scheduled-task',
     state: toHostDaemonState(task.state),
-    command: `${task.exec} ${task.args}`.trim(),
+    command,
+    // 归属追溯词得是「实际被执行的东西」：历史里存的是命令行，
+    // 任务名一般不出现在命令行里，只拿任务名匹配几乎永远不命中。
+    attributionNeedles: [command, task.name],
     trigger: toHostDaemonTrigger(task.triggers),
     definitionMtimeMs: task.definitionMtimeMs,
     lastRunAtMs: task.lastRunAtMs,

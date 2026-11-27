@@ -295,7 +295,9 @@ export function createSystemdUserAdapter(deps: SystemdUserAdapterDeps = {}): Hos
           state: stateOf(unit, runtime, file.declaredUnit),
           command: file.execStart || serviceFile?.execStart || file.schedule,
           trigger: triggerOf(file),
-          attributionNeedles: [unit],
+          // 归属追溯词得是「实际被执行的东西」：历史里存的是命令行，
+          // unit 名一般不出现在命令行里，只拿 unit 匹配几乎永远不命中。
+          attributionNeedles: [file.execStart || serviceFile?.execStart || '', unit],
           definitionMtimeMs,
           lastRunAtMs: null,
         });
@@ -311,6 +313,8 @@ export function createSystemdUserAdapter(deps: SystemdUserAdapterDeps = {}): Hos
     },
 
     // timer 的 start 只是「开始等下一次」，用户点「立即运行」要的是一次真实执行。
+    // 交给 systemd 执行：单元里的 Environment=、WorkingDirectory= 都由 systemd
+    // 按定义遵守，不在这里复现一遍。
     async run(id) {
       const unit = id.slice('systemd-user:'.length);
       const { declaredUnit } = await requireUnit(unit);
