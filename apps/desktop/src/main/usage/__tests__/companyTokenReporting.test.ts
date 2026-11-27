@@ -1,20 +1,22 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { mkdtempSync, readdirSync, rmSync, existsSync } from 'node:fs';
+import fs, { mkdtempSync, readdirSync, readFileSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createCompanyTokenReporting } from '../companyTokenReporting.desktop';
 import { companyExecutionReporting, startCompanyUsage } from '../companyTokenFacts';
+import { closeLegacyConsentMigration, isAnalyticsAllowed, setAnalyticsEnabled } from '../../analytics-settings-store';
 
 const ports = vi.hoisted(() => ({
   fetch: vi.fn(),
   getPath: vi.fn(),
   getAuthState: vi.fn(),
   token: vi.fn(),
-  allowed: vi.fn(),
   subscribe: vi.fn(),
 }));
-vi.mock('../../analytics-settings-store.js', () => ({ isAnalyticsAllowed: ports.allowed }));
-vi.mock('electron', () => ({ app: { getPath: ports.getPath }, net: { fetch: ports.fetch } }));
+vi.mock('electron', () => ({ app: { getPath: ports.getPath, isPackaged: true }, net: { fetch: ports.fetch } }));
+vi.mock('../../maker-host/logger-adapter.js', () => ({
+  desktopMakerLogger: { child: () => ({ info: vi.fn(), warn: vi.fn() }) },
+}));
 vi.mock('../../authManager.js', () => ({
   getActiveAuthRealm: () => 'cn',
   getAuthState: ports.getAuthState,
@@ -62,7 +64,6 @@ const subscribeSettings = (listener: typeof settingsChanged) => {
 };
 beforeEach(() => {
   vi.resetAllMocks();
-  ports.allowed.mockReturnValue(true);
   dir = mkdtempSync(path.join(os.tmpdir(), 'cindy-company-test-'));
   ports.getPath.mockReturnValue(dir);
   ports.getAuthState.mockReturnValue(state);
@@ -74,6 +75,75 @@ afterEach(() => {
   service.dispose();
   rmSync(dir, { recursive: true, force: true });
 });
+
+// A direct enterprise SSO login can have a valid membership but no personal privacy consent.
+// Exercise policy discovery, turn capture and the daily upload through the real settings store.
+it('delivers enterprise SSO usage without granting personal analytics consent', async () => {
+  closeLegacyConsentMigration();
+  const settingsFile = path.join(dir, 'analytics-settings.json');
+  const before = readFileSync(settingsFile, 'utf8');
+  expect(JSON.parse(before)).toEqual({ legacyConsentMigrationClosed: true });
+  const batches: unknown[] = [];
+  ports.fetch.mockImplementation(async (url, options) => {
+    if (url.endsWith('/api/me')) return Response.json(me(true));
+    if (url.endsWith('/batches')) batches.push(JSON.parse(options.body).rows);
+    return new Response(null, { status: 204 });
+  });
+  vi.useFakeTimers();
+  try {
+    vi.setSystemTime(new Date('2026-01-05T08:00:00Z'));
+    const onAuthChange = ports.subscribe.mock.lastCall![0];
+    ports.getAuthState.mockReturnValue({ ...state, isAuthenticated: false, user: null });
+    onAuthChange();
+    expect(startCompanyUsage()).toBeUndefined();
+    expect(ports.fetch).not.toHaveBeenCalled();
+    ports.getAuthState.mockReturnValue(state);
+    onAuthChange(); // Enterprise SSO finishes without going through the personal consent dialog.
+    await vi.advanceTimersByTimeAsync(0);
+    const record = startCompanyUsage();
+    expect(record).toBeTypeOf('function');
+    record!([{ model: 'gpt-5', ...counts }]);
+    expect(isAnalyticsAllowed()).toBe(false);
+    settingsChanged(isAnalyticsAllowed()); // Auth replay with the personal statistics gate still closed.
+    const opens = vi.spyOn(fs, 'openSync');
+    try {
+      for (let i = 0; i < 100; i++) startCompanyUsage();
+      expect(opens).not.toHaveBeenCalled();
+    } finally {
+      opens.mockRestore();
+    }
+    expect(ports.fetch).toHaveBeenCalledTimes(1);
+    expect(batches).toEqual([]);
+    vi.setSystemTime(new Date('2026-01-07T08:00:00Z'));
+    service.refresh();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(batches).toEqual([[{ day: '2026-01-05', model: 'gpt-5', ...counts }]]);
+    expect(isAnalyticsAllowed()).toBe(false);
+    expect(readFileSync(settingsFile, 'utf8')).toBe(before);
+  } finally { vi.useRealTimers(); }
+});
+
+it('pauses on an unreadable usage preference and delivers the saved aggregate after a settings change', async () => {
+  const settingsFile = path.join(dir, 'analytics-settings.json');
+  const outbox = path.join(dir, 'company-token-outbox.json');
+  const { CompanyTokenQueue } = await import('../companyTokenQueue');
+  new CompanyTokenQueue(outbox).add(
+    { owner: JSON.stringify(['cn', org.orgId, org.id]), orgRevision: 2, memberRevision: 1 },
+    [{ day: '2020-01-01', model: 'gpt-5', ...counts }],
+  );
+  writeFileSync(settingsFile, '{broken');
+  ports.fetch.mockImplementation(async url => url.endsWith('/api/me') ? Response.json(me(true)) : new Response(null, { status: 204 }));
+  service.refresh();
+  expect(startCompanyUsage()).toBeUndefined();
+  expect(ports.fetch).not.toHaveBeenCalled();
+  expect(existsSync(outbox)).toBe(true);
+  writeFileSync(settingsFile, JSON.stringify({ analyticsEnabled: true }));
+  settingsChanged(isAnalyticsAllowed());
+  await vi.waitFor(() => expect(existsSync(outbox)).toBe(false));
+  expect(ports.fetch.mock.calls.map(([url]) => new URL(url).pathname)).toEqual([
+    '/api/me', '/api/orgs/org1/company-token-reporting/batches',
+  ]);
+});
 it.each([
   { ...state, mode: 'local' },
   { ...state, isAuthenticated: false },
@@ -84,7 +154,7 @@ it.each([
     ports.getAuthState.mockReturnValue(status);
     service.refresh();
     expect(startCompanyUsage()).toBeUndefined();
-    settingsChanged(true, true);
+    settingsChanged(isAnalyticsAllowed(), true);
     expect(ports.fetch).not.toHaveBeenCalled();
     expect(readdirSync(dir)).toEqual([]);
   },
@@ -147,7 +217,7 @@ it.each(['policy', 'withdrawal', 'batch'] as const)(
       });
       service = createCompanyTokenReporting(subscribeSettings);
       if (failure === 'withdrawal') {
-        ports.allowed.mockReturnValue(false);
+        setAnalyticsEnabled(false);
         settingsChanged(false, false);
       } else {
         service.refresh();
@@ -163,7 +233,7 @@ it.each(['policy', 'withdrawal', 'batch'] as const)(
       expect(companyExecutionReporting()?.available()).toBe(failure !== 'withdrawal');
       if (failure === 'withdrawal') {
         expect(participating).toBe(false);
-        expect(readdirSync(dir)).toEqual([]);
+        expect(readdirSync(dir)).toEqual(['analytics-settings.json']);
       }
       if (failure === 'batch') expect(batches).toEqual([batches[0], batches[0]]);
       const requests = ports.fetch.mock.calls.length;
@@ -234,7 +304,7 @@ it('uses only the account endpoint until the company enables reporting; stops an
   record([{ model: 'gpt-5', ...counts }]);
   const file = path.join(dir, 'company-token-outbox.json');
   expect(existsSync(file)).toBe(true);
-  ports.allowed.mockReturnValue(false);
+  setAnalyticsEnabled(false);
   settingsChanged(false, false);
   expect(companyExecutionReporting()?.available()).toBe(false);
   record([{ model: 'gpt-5', ...counts }]);
@@ -268,20 +338,20 @@ it('leaves a previous member withdrawal in place until an explicit enable, then 
     throw new Error('unexpected delivery');
   });
   service.dispose();
-  ports.allowed.mockReturnValue(false);
+  setAnalyticsEnabled(false);
   service = createCompanyTokenReporting(subscribeSettings);
   service.refresh();
   expect(ports.fetch).not.toHaveBeenCalled();
-  ports.allowed.mockReturnValue(true);
-  settingsChanged(true);
+  setAnalyticsEnabled(true);
+  settingsChanged(isAnalyticsAllowed());
   await vi.waitFor(() => expect(ports.fetch).toHaveBeenCalledTimes(1));
   expect(startCompanyUsage()).toBeUndefined();
   expect(changes).toEqual([]);
-  settingsChanged(true, true);
+  settingsChanged(isAnalyticsAllowed(), true);
   await vi.waitFor(() => expect(startCompanyUsage()).toBeTypeOf('function'));
   expect(changes).toEqual([true]);
   const prior = startCompanyUsage()!;
-  ports.allowed.mockReturnValue(false);
+  setAnalyticsEnabled(false);
   settingsChanged(false, false);
   prior([{ model: 'gpt-5', ...counts }]);
   expect(existsSync(path.join(dir, 'company-token-outbox.json'))).toBe(false);
@@ -303,7 +373,7 @@ it('cancels an in-flight report and discards its pending batch when the master s
   });
   service.refresh();
   await vi.waitFor(() => expect(sent).toBeDefined());
-  ports.allowed.mockReturnValue(false);
+  setAnalyticsEnabled(false);
   settingsChanged(false, false);
   expect(sent?.aborted).toBe(true);
   expect(existsSync(file)).toBe(false);
