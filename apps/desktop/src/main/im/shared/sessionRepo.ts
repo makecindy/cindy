@@ -36,6 +36,7 @@ import {
 import { buildImDefaultRouteRecord } from './channelDefaultRoute';
 import { broadcastSessionCreated, broadcastSessionPatched } from './sessionBroadcast';
 import { captureChannelAccount, openChannelSession } from './openChannelSession';
+import { getModelGroupStartBridge } from '../../model-groups/startBridge.js';
 import type { ImOrchestratorConfig, ImSessionNamespace } from './types';
 
 const log = createLogger('im:repo');
@@ -98,6 +99,8 @@ export interface ImSessionRow {
    * 仅 prepareNewSession 产出的行带: `/new` 使用该路由键的项目或渠道对话目录。
    */
   laneWorkingDir?: boolean;
+  /** 仅 prepareNewSession 产出的行带: 智能路由启动凭据，建会话后 attach 绑定。 */
+  modelGroupStart?: string;
 }
 
 export interface SessionModelRouteSnapshot {
@@ -558,6 +561,9 @@ export function createImSessionRepo(
           `provider=${result.providerId ?? 'default'} permissionMode=${result.permissionMode}`,
       );
       // 通知 renderer sidebar / device-link 控制端有新会话行,否则要手动刷新才出现
+      if (persisted?.isFreshInsert && defaults.modelGroupStart) {
+        getModelGroupStartBridge()?.attach(result.id, defaults.modelGroupStart);
+      }
       broadcastSessionCreated(result.id);
       // Native group/channel names are authoritative only while this fresh row still has its draft title.
       if (ns.resolveSessionTitle && persisted?.isFreshInsert) {
@@ -671,6 +677,9 @@ export function createImSessionRepo(
             now,
           });
           if (fresh.providerId && fresh.agentKind !== 'acp') setSessionProvider(fresh.id, fresh.providerId);
+          if (defaults.modelGroupStart) {
+            getModelGroupStartBridge()?.attach(fresh.id, defaults.modelGroupStart);
+          }
           log.info(
             `created fresh ${ns.source} session id=${fresh.id} workingDir=${maskPath(fresh.workingDir)} ` +
               `agent=${fresh.agentKind} model=${fresh.model} effort=${fresh.effort} ` +
@@ -711,6 +720,7 @@ function rowFromDefaults(
     providerId: defaults.providerId,
     agentDeviceId: defaults.agentDeviceId ?? null,
     defaultRouteFingerprint: defaults.fingerprint,
+    ...(defaults.modelGroupStart ? { modelGroupStart: defaults.modelGroupStart } : {}),
   };
 }
 
@@ -812,6 +822,9 @@ export async function resetSessionToDefaults(
       listPreviewRole: null,
     })
     .where(eq(sessions.id, sessionId));
+  if (defaults.modelGroupStart) {
+    getModelGroupStartBridge()?.attach(sessionId, defaults.modelGroupStart);
+  }
   setSessionProvider(sessionId, defaults.providerId);
   // 目录变动后侧栏要换分组，沿用 switchSessionWorkingDir 的刷新方式。
   if (laneWorkspace && (
