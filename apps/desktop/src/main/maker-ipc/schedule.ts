@@ -955,6 +955,7 @@ export function attachSchedulerEventListeners(
   scheduler.on('skipped', broadcastSchedulerEvent);
   scheduler.on('session-bound', broadcastSchedulerEvent);
   scheduler.on('changed', broadcastSchedulerEvent);
+  scheduler.on('read', broadcastSchedulerEvent);
   scheduler.on('runtime-state', broadcastSchedulerEvent);
 
   // 必须在 .on 全挂完之后调:setSchedulerReady 会立即 resolve 在途 await,

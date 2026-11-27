@@ -254,6 +254,8 @@ describe('desktop scheduler cross-device transport', () => {
     const s = setup();
     await s.remote.invoke('mac', 'list', [{ status: 'active' }]);
     await s.remote.invoke('mac', 'list-runs', ['s1', 5]);
+    await s.remote.invoke('mac', 'delete-run', ['run-1']);
+    await s.remote.invoke('mac', 'mark-run-read', ['run-1']);
     for (const op of ['get', 'pause', 'resume', 'delete', 'run-now'] as const) {
       s.invoke.mockResolvedValueOnce({
         ok: true,
@@ -269,6 +271,8 @@ describe('desktop scheduler cross-device transport', () => {
     expect(s.invoke.mock.calls.map(([device, channel, args]) => [device, channel, args])).toEqual([
       ['mac', 'maker:schedule:list', [{ status: 'active' }]],
       ['mac', 'maker:schedule:list-runs', ['s1', 5]],
+      ['mac', 'maker:schedule:delete-run', ['run-1']],
+      ['mac', 'maker:schedule:mark-run-read', ['run-1']],
       ['mac', 'maker:schedule:get', ['s1']],
       ['mac', 'maker:schedule:pause', ['s1']],
       ['mac', 'maker:schedule:resume', ['s1']],
@@ -276,6 +280,19 @@ describe('desktop scheduler cross-device transport', () => {
       ['mac', 'maker:schedule:run-now', ['s1']],
       ['mac', 'maker:schedule:update', ['s1', { name: 'n' }]],
     ]);
+  });
+
+  // Unit: delete-run reuses maker:schedule:delete-run. A missing row is rejected
+  // before the write, so it must stay NOT_FOUND instead of REMOTE_RESULT_UNKNOWN.
+  it('reports a missing run delete as not found, not an unknown write', async () => {
+    const s = setup(vi.fn<Invoke>(async () => ({
+      ok: false,
+      error: { code: 'IPC_ERROR', message: '[NOT_FOUND] Schedule run not found: run-1' },
+    })));
+    expect(await s.remote.invoke('mac', 'delete-run', ['run-1'])).toMatchObject({
+      ok: false,
+      code: 'NOT_FOUND',
+    });
   });
 
   it('reports an older peer, offline, disabled, timeout and remote business errors explicitly', async () => {

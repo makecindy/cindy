@@ -1418,6 +1418,17 @@ describe('PR follow watch', () => {
           (r) => r.scheduleId === scheduleId && (r.status === 'running' || r.status === 'interrupted'),
         );
       },
+      async getRun(id: string) {
+        const ex = runsMap.get(id);
+        return ex ? { ...ex } : null;
+      },
+      async markRunRead(runId: string) {
+        const row = runsMap.get(runId);
+        if (!row || row.readAt != null) return null;
+        if (!['success', 'failed', 'aborted', 'interrupted'].includes(row.status)) return null;
+        row.readAt = Date.now();
+        return row.scheduleId;
+      },
       async deleteRun(id: string) {
         const ex = runsMap.get(id);
         if (!ex) return null;

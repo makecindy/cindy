@@ -1394,6 +1394,11 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     });
   }
 
+  async getRun(id: string): Promise<ScheduleRun | null> {
+    const [row] = await this.getDb().select().from(scheduleRuns).where(eq(scheduleRuns.id, id)).limit(1);
+    return row ? scheduleRunToCamel(row) : null;
+  }
+
   async deleteRun(id: string, options?: { excludeBotSchedules?: boolean }): Promise<ScheduleRun | null> {
     const db = this.getDb();
     // 先 select 一次拿到 scheduleId（callers 需要它来定位 'changed' 事件目标 schedule）；

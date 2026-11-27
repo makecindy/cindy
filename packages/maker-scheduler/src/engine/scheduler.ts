@@ -2787,6 +2787,40 @@ export class Scheduler extends EventEmitter {
     this.emitEvent({ type: 'changed', scheduleId: target.scheduleId });
   }
 
+  /**
+   * 把一条运行记录标为已读。与 maker:schedule:mark-run-read 同一存储规则：
+   * 只有终态且尚未读过的记录会写入 readAt。不存在时抛错，让调用方能区分
+   * 「没有这条记录」和「已经读过 / 还在跑」。
+   */
+  async markRunRead(runId: string): Promise<{
+    scheduleId: string;
+    marked: boolean;
+    reason?: 'already-read' | 'not-terminal';
+  }> {
+    const terminal = new Set(['success', 'failed', 'aborted', 'interrupted']);
+    const classify = (run: ScheduleRun): {
+      scheduleId: string;
+      marked: boolean;
+      reason?: 'already-read' | 'not-terminal';
+    } | null => {
+      if (run.readAt != null) return { scheduleId: run.scheduleId, marked: false, reason: 'already-read' };
+      if (!terminal.has(run.status)) return { scheduleId: run.scheduleId, marked: false, reason: 'not-terminal' };
+      return null;
+    };
+    const current = await this.storage.getRun(runId);
+    if (!current) throw new Error(`Schedule run not found: ${runId}`);
+    const unchanged = classify(current);
+    if (unchanged) return unchanged;
+    const scheduleId = await this.storage.markRunRead(runId);
+    if (!scheduleId) {
+      const again = await this.storage.getRun(runId);
+      if (!again) throw new Error(`Schedule run not found: ${runId}`);
+      return classify(again) ?? { scheduleId: again.scheduleId, marked: false, reason: 'already-read' };
+    }
+    this.emitEvent({ type: 'read', scheduleId });
+    return { scheduleId, marked: true };
+  }
+
   async create(input: CreateScheduleInput): Promise<Schedule> {
     if ((input as Partial<Schedule>).source === 'bot') throw new Error('invalid schedule source');
     if (input.primaryHostKey !== undefined && (typeof input.primaryHostKey !== 'string' ||
@@ -3966,6 +4000,7 @@ export class Scheduler extends EventEmitter {
   on(event: 'skipped', listener: (e: Extract<SchedulerEvent, { type: 'skipped' }>) => void): this;
   on(event: 'session-bound', listener: (e: Extract<SchedulerEvent, { type: 'session-bound' }>) => void): this;
   on(event: 'changed', listener: (e: Extract<SchedulerEvent, { type: 'changed' }>) => void): this;
+  on(event: 'read', listener: (e: Extract<SchedulerEvent, { type: 'read' }>) => void): this;
   on(event: 'runtime-state', listener: (e: Extract<SchedulerEvent, { type: 'runtime-state' }>) => void): this;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   on(event: string | symbol, listener: (...args: any[]) => void): this {

@@ -4,7 +4,7 @@
  * 用 MCP SDK 真实 Client + InMemoryTransport pair（@modelcontextprotocol/sdk
  * 提供的 in-process transport）连真 `createSchedulerMcpServer`，端到端验证：
  *
- *   - list_tools 入口：无参数 → 返回 categories；传 category='scheduler' → 11 个 tool
+ *   - list_tools 入口：无参数 → 返回 categories；传 category='scheduler' → 13 个 tool
  *   - call_tool 入口：透传到 SchedulerToolRegistry；正确分发 handler
  *   - 真 Scheduler（InMemoryStorage + mock runner）的 create / list / get /
  *     run_now / list_runs 行为透传给 MCP 调用方时形态正确
@@ -90,6 +90,17 @@ class InMemoryStorage implements ScheduleStorage {
   }
   async listRuns(scheduleId: string): Promise<ScheduleRun[]> {
     return [...this.runs.values()].filter((r) => r.scheduleId === scheduleId);
+  }
+  async getRun(id: string): Promise<ScheduleRun | null> {
+    const ex = this.runs.get(id);
+    return ex ? { ...ex } : null;
+  }
+  async markRunRead(runId: string): Promise<string | null> {
+    const row = this.runs.get(runId);
+    if (!row || row.readAt != null) return null;
+    if (!['success', 'failed', 'aborted', 'interrupted'].includes(row.status)) return null;
+    row.readAt = Date.now();
+    return row.scheduleId;
   }
   async deleteRun(id: string): Promise<ScheduleRun | null> {
     const ex = this.runs.get(id);
@@ -318,7 +329,7 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     expect(payload.ok).toBe(true);
     // 类目概览要在第一步就写明用途与作用范围(本机 / 可跨电脑)。
     expect(payload.categories).toEqual([
-      { name: 'scheduler', tool_count: 11, description: expect.stringMatching(/各自的电脑.*schedule_create.*只在本机/) },
+      { name: 'scheduler', tool_count: 13, description: expect.stringMatching(/各自的电脑.*schedule_create.*只在本机/) },
     ]);
     // Agent/user parity: the first discovery result must expose remote trigger
     // configuration while keeping secret/URL operations out of Agent tools.
@@ -350,7 +361,7 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     } finally { await h.cleanup(); }
   });
 
-  it('list_tools(category=scheduler) lists all 11 tools by name', async () => {
+  it('list_tools(category=scheduler) lists all 13 tools by name', async () => {
     const result = await h.client.callTool({
       name: 'list_tools',
       arguments: { category: 'scheduler' },
@@ -365,9 +376,11 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     expect(names).toEqual([
       'schedule_create',
       'schedule_delete',
+      'schedule_delete_run',
       'schedule_get',
       'schedule_list',
       'schedule_list_runs',
+      'schedule_mark_run_read',
       'schedule_notify_current_run',
       'schedule_pause',
       'schedule_resume',
@@ -805,6 +818,101 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     expect(env.message).toMatch(/not found/i);
     await h.cleanup();
   });
+
+  // Unit, agent-user-parity: one run record can be marked read or removed without
+  // deleting the automation. The real MCP dispatcher and Scheduler are the
+  // production entry. Missing and already-deleted ids must surface NOT_FOUND
+  // instead of a silent success. Minimal input: a finished unread run, then
+  // the same id after delete, plus an id that was never stored.
+  it('marks one finished run read and deletes only that record', async () => {
+    const created = await h.client.callTool({
+      name: 'call_tool',
+      arguments: { name: 'schedule_create', args: baseCreate as unknown as Record<string, unknown> },
+    });
+    const createdEnv = parseToolResult(created as { content: unknown[]; isError?: boolean }).envelope;
+    if (!createdEnv.ok) throw new Error('create failed');
+    const scheduleId = (createdEnv.data as Schedule).id;
+    await h.storage.insertRun({
+      id: 'run-finished',
+      scheduleId,
+      firedAt: 1,
+      status: 'success',
+    });
+    await h.storage.insertRun({
+      id: 'run-live',
+      scheduleId,
+      firedAt: 2,
+      status: 'running',
+    });
+    const marked = await h.client.callTool({
+      name: 'call_tool',
+      arguments: { name: 'schedule_mark_run_read', args: { runId: 'run-finished' } },
+    });
+    expect(parseToolResult(marked as { content: unknown[] }).envelope).toEqual({
+      ok: true,
+      data: { scheduleId, marked: true },
+    });
+    const again = await h.client.callTool({
+      name: 'call_tool',
+      arguments: { name: 'schedule_mark_run_read', args: { runId: 'run-finished' } },
+    });
+    expect(parseToolResult(again as { content: unknown[] }).envelope).toEqual({
+      ok: true,
+      data: { scheduleId, marked: false, reason: 'already-read' },
+    });
+    const live = await h.client.callTool({
+      name: 'call_tool',
+      arguments: { name: 'schedule_mark_run_read', args: { runId: 'run-live' } },
+    });
+    expect(parseToolResult(live as { content: unknown[] }).envelope).toEqual({
+      ok: true,
+      data: { scheduleId, marked: false, reason: 'not-terminal' },
+    });
+    const removed = await h.client.callTool({
+      name: 'call_tool',
+      arguments: { name: 'schedule_delete_run', args: { runId: 'run-finished' } },
+    });
+    expect(parseToolResult(removed as { content: unknown[] }).envelope).toEqual({
+      ok: true,
+      data: { deleted: 'run-finished' },
+    });
+    expect((await h.storage.listRuns(scheduleId)).map((run) => run.id)).toEqual(['run-live']);
+    expect(await h.storage.get((createdEnv.data as Schedule).id)).toMatchObject({ id: scheduleId });
+    await h.cleanup();
+  });
+
+  it.each(['schedule_delete_run', 'schedule_mark_run_read'] as const)(
+    'call_tool(%s) returns NOT_FOUND when the run is missing or already deleted', async (name) => {
+      const missing = await h.client.callTool({
+        name: 'call_tool',
+        arguments: { name, args: { runId: 'does-not-exist' } },
+      });
+      const missingEnv = parseToolResult(missing as { content: unknown[]; isError?: boolean }).envelope;
+      expect(missingEnv).toMatchObject({ ok: false, code: 'NOT_FOUND' });
+      if (missingEnv.ok) throw new Error('unreachable');
+      expect(missingEnv.message).toMatch(/not found/i);
+
+      const created = await h.client.callTool({
+        name: 'call_tool',
+        arguments: { name: 'schedule_create', args: baseCreate as unknown as Record<string, unknown> },
+      });
+      const createdEnv = parseToolResult(created as { content: unknown[] }).envelope;
+      if (!createdEnv.ok) throw new Error('create failed');
+      const scheduleId = (createdEnv.data as Schedule).id;
+      await h.storage.insertRun({ id: 'run-gone', scheduleId, firedAt: 1, status: 'failed' });
+      await h.scheduler.deleteRun('run-gone');
+      const gone = await h.client.callTool({
+        name: 'call_tool',
+        arguments: { name, args: { runId: 'run-gone' } },
+      });
+      expect(parseToolResult(gone as { content: unknown[] }).envelope).toMatchObject({
+        ok: false,
+        code: 'NOT_FOUND',
+      });
+      expect(await h.storage.get(scheduleId)).toMatchObject({ id: scheduleId });
+      await h.cleanup();
+    },
+  );
 
   it('call_tool(schedule_delete, non-existent id) returns NOT_FOUND', async () => {
     const result = await h.client.callTool({

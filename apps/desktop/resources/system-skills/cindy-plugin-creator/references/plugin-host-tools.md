@@ -278,9 +278,11 @@ const claude = await cindy.host.call('cindy_helper', 'get_subscription_usage', {
 ### 管理定时任务与应用设置
 
 `scheduler` 组直接复用 `cindy_scheduler` 的完整管理工具：`schedule_create`、`schedule_update`、
-`schedule_pause`、`schedule_resume`、`schedule_delete`、`schedule_run_now` 与 `schedule_list_runs`。
+`schedule_pause`、`schedule_resume`、`schedule_delete`、`schedule_run_now`、`schedule_list_runs`、
+`schedule_delete_run` 与 `schedule_mark_run_read`。
 参数和执行位置沿用原工具；插件没有当前任务，不能用 `bindToCurrentSession:true`，
 需要绑定时显式传 `targetSessionId`。运行记录由 `schedule_list_runs({scheduleId})` 读取。
+`schedule_delete_run({runId})` 只删这一条记录；`schedule_mark_run_read({runId})` 把一条已结束的记录标为已读。
 调用使用整体安装授予的 `scheduler` 声明和 Host 业务准入；回执不明时先查询，不自动重试写操作。
 
 没有已批准 `node` 能力的插件，不支持提交或修改脚本、前置命令，以及运行或恢复已有脚本或前置命令的调度，

@@ -80,6 +80,17 @@ class InMemoryStorage implements ScheduleStorage {
     return [...this.runs.values()].some((r) => r.scheduleId === scheduleId &&
       (r.status === 'running' || r.status === 'interrupted'));
   }
+  async getRun(id: string): Promise<ScheduleRun | null> {
+    const ex = this.runs.get(id);
+    return ex ? { ...ex } : null;
+  }
+  async markRunRead(runId: string): Promise<string | null> {
+    const row = this.runs.get(runId);
+    if (!row || row.readAt != null) return null;
+    if (!['success', 'failed', 'aborted', 'interrupted'].includes(row.status)) return null;
+    row.readAt = Date.now();
+    return row.scheduleId;
+  }
   async deleteRun(id: string, options?: { excludeBotSchedules?: boolean }): Promise<ScheduleRun | null> {
     const ex = this.runs.get(id);
     if (!ex || (options?.excludeBotSchedules && this.schedules.get(ex.scheduleId)?.source === 'bot')) return null;

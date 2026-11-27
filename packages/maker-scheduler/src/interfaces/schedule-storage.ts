@@ -27,6 +27,13 @@ export interface ScheduleStorage {
   insertRun(run: ScheduleRun): Promise<ScheduleRun>;
   updateRun(id: string, patch: Partial<ScheduleRun>): Promise<ScheduleRun | null>;
   listRuns(scheduleId: string, limit?: number): Promise<ScheduleRun[]>;
+  /** One run by id, including runs that belong to internal schedules. Null if missing. */
+  getRun(id: string): Promise<ScheduleRun | null>;
+  /**
+   * Mark one terminal run read. Returns its scheduleId when this call wrote
+   * readAt; null when the run is missing, already read, or not terminal.
+   */
+  markRunRead(runId: string): Promise<string | null>;
   /** Atomically claim one interrupted agent run whose last turn still belongs
    * to it. Hosts must exclude paused/deleted schedules, taken-over sessions and
    * sessions owned by another running attempt. Optional for stores without session history. */

@@ -156,7 +156,7 @@ Cindy 应用更新（2026-11-11）：`list_tools({query:"更新 Cindy"})`（含�
 | 定时任务 | `schedule_create/update` 设置 `manual`：关闭定时、仅 Webhook 事件触发或恢复原定时，Agent／脚本执行方式均适用 | 有（省略值保持创建默认／更新 partial 语义） | 有；更新时 `manual` 不与 `cronExpr`、`notify` 三者同时传，避免旧手机全量表单兼容逻辑清除未传设置，可单独修改 `manual` |
 | 定时任务 | 安装检查脚本                                               | 有（绑定远程 Agent 时由本机辅助模型生成脚本） | 无 |
 | 定时任务 | 查可选运行位置与模型；设每次新建任务的 Agent 运行位置（其他电脑 / 分享来的供应商） | 有（2026-10-22） | 无 |
-| 定时任务 | 删除单条运行记录、标记已读                                 | 无   | 无               |
+| 定时任务 | 删除单条运行记录（`schedule_delete_run`）、标记已读（`schedule_mark_run_read`） | 有（2026-11-27；只动这一条运行记录，不删除整条自动化） | 有（复用已有 `maker:schedule:delete-run` / `maker:schedule:mark-run-read`，不新增协议。标记已读的跨电脑回执只表示对方接受了请求） |
 | 项目     | 列出、登记、改名、移除；工作目录列表                       | 有   | 无               |
 | 项目     | 新建（自动目录／仓库导入）、读取与编辑名称／图标／多个目录 | 有（Desktop 与 Node Host 共用工具） | 有（目标 v6／v7；执行宿主须已有出站连接） |
 | 项目     | 查询远程已有项目（`list_projects(device)`，复用目标项目目录与可见性） | 有 | 有（2026-11-11） |
@@ -190,7 +190,7 @@ Worker 工具省略 working_dir 时保持继承 Lead 任务记录目录，不跟
 
 插件宿主工具入口（2026-11-10）：整体安装批准有效、已启用且 manifest 声明 `agent.hostTools` 时，插件以显式调用方经
 `cindy.host.call` 使用上述同一工具与宿主服务，不绑定当前任务。`scheduler` 已覆盖新建、修改、
-暂停、恢复、删除、立即运行和运行记录；`settings` 的应用分类读改复用设置页保存与生效路径，
+暂停、恢复、删除、立即运行、运行记录、删除单条运行记录和标记已读；`settings` 的应用分类读改复用设置页保存与生效路径，
 不返回秘密值。工具的本机/跨电脑范围与 Host 业务约束不变；插件不另走逐次确认，真实 Agent 运行仍使用自身既有权限流程。
 插件自己的设置界面不属于这些宿主工具。调用契约见
 [插件宿主工具](../../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-host-tools.md)。

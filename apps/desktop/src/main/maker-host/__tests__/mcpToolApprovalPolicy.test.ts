@@ -814,6 +814,12 @@ describe('cross-device actions use the task permission mode', () => {
     expect(scheduler('schedule_get', { id: 's1', device: 'mbp' })).toBe('auto-approve');
     expect(scheduler('schedule_list_runs', { scheduleId: 's1', device: 'mbp' })).toBe('auto-approve');
     expect(scheduler('schedule_create', { name: 'n' })).toBe('auto-approve');
+    expect(scheduler('schedule_mark_run_read', { runId: 'run-1' })).toBe('auto-approve');
+    expect(scheduler('schedule_mark_run_read', { runId: 'run-1', device: 'local' })).toBe('auto-approve');
+    expect(scheduler('schedule_mark_run_read', { runId: 'run-1', device: 'mbp' })).toBe('prompt-each-time');
+    expect(getDesktopMcpToolApprovalPolicy({
+      serverName: 'cindy_scheduler', toolName: 'schedule_delete_run', toolParams: { runId: 'run-1' },
+    })).toBe('prompt-each-time');
   });
 
   it('requires action review for local and remote task messages', () => {
