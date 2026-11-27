@@ -13,6 +13,11 @@ vi.hoisted(() => {
 const h = vi.hoisted(() => ({
   wayland: false,
   hyprland: false,
+  gnomeSession: false,
+  gnomeReady: false,
+  x11Clipboard: false,
+  gnomeClipboard: false,
+  stopGnomeClipboard: vi.fn(),
   linuxInput: false,
   linuxAudio: false,
   unlocked: vi.fn(async () => true),
@@ -250,6 +255,28 @@ vi.mock('../clipboard', () => ({
   transferDesktopClipboard: vi.fn(),
   transferDesktopClipboardContent: vi.fn(),
 }));
+vi.mock('../linuxX11Clipboard', () => ({
+  supportsX11Clipboard: async () => h.x11Clipboard,
+}));
+vi.mock('../linuxGnomeClipboard', () => ({
+  readGnomeClipboardSupport: async () => h.gnomeClipboard,
+  stopGnomeClipboard: h.stopGnomeClipboard,
+}));
+vi.mock('../gnomeDesktop', () => ({
+  isGnomeWaylandSession: () => h.gnomeSession,
+  gnomeDesktopReady: () => h.gnomeReady,
+  readGnomeDesktopSupport: async () => h.gnomeReady,
+  gnomeMonitors: async () => [
+    { id: 'eDP-1', name: 'Built-in', x: 0, y: 0, width: 1280, height: 800, scale: 1, primary: true },
+  ],
+  gnomeDisplay: (m: { id: string; name: string; width: number; height: number }) => ({
+    id: `gnome:${m.id}`,
+    name: m.name,
+    width: m.width,
+    height: m.height,
+  }),
+  gnomeMonitor: vi.fn(),
+}));
 vi.mock('../../device-link/settings-store.desktop', () => ({
   readDeviceLinkSettings: () => ({}),
   writeDeviceLinkSetting: vi.fn(),
@@ -279,6 +306,11 @@ beforeEach(() => {
   h.wayland = false;
   h.background = false;
   h.hyprland = false;
+  h.gnomeSession = false;
+  h.gnomeReady = false;
+  h.x11Clipboard = false;
+  h.gnomeClipboard = false;
+  h.stopGnomeClipboard.mockReset();
   h.linuxInput = false;
   h.linuxAudio = false;
   h.unlocked.mockReset().mockResolvedValue(true);
@@ -1373,3 +1405,51 @@ it('advertises and starts X11 input while retaining the local opt-in', async () 
     Object.defineProperty(process, 'platform', { value: platform });
   }
 });
+
+// Regression: ordinary Linux X11 and GNOME Wayland hosts previously advertised
+// clipboardSync/clipboardContent/clipboardText as false, hiding copy/paste and
+// showing "not supported" in the viewer clipboard panel.
+it.each([
+  { mode: 'x11', wayland: false, gnome: false, x11Clip: true, gnomeClip: false, expected: true },
+  { mode: 'gnome-wayland', wayland: true, gnome: true, x11Clip: false, gnomeClip: true, expected: true },
+  { mode: 'portal-wayland', wayland: true, gnome: false, x11Clip: false, gnomeClip: true, expected: false },
+])(
+  'advertises Linux clipboard capabilities on $mode: $expected',
+  async ({ wayland, gnome, x11Clip, gnomeClip, expected }) => {
+    const platform = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'linux' });
+    try {
+      h.wayland = wayland;
+      h.hyprland = false;
+      h.gnomeSession = gnome;
+      h.gnomeReady = gnome;
+      h.x11Clipboard = x11Clip;
+      h.gnomeClipboard = gnomeClip;
+      const settings = await import('../../device-link/settings-store.desktop');
+      const { screen } = await import('electron');
+      vi.spyOn(screen, 'getAllDisplays').mockReturnValue([
+        { id: 1, size: { width: 1600, height: 1000 }, bounds: { x: 0, y: 0, width: 1600, height: 1000 } },
+      ] as unknown as Electron.Display[]);
+      const config = {
+        remoteDesktopEnabled: true,
+        remoteControlEnabled: true,
+      } as ReturnType<typeof settings.readDeviceLinkSettings>;
+      vi.spyOn(settings, 'readDeviceLinkSettings').mockReturnValue(config);
+      expect(await h.deps.capabilities()).toMatchObject({
+        clipboardContent: expected,
+        clipboardSync: expected,
+        clipboardInline: expected,
+        clipboardText: expected,
+      });
+      config.remoteDesktopEnabled = false;
+      expect(await h.deps.capabilities()).toMatchObject({
+        clipboardContent: false,
+        clipboardSync: false,
+        clipboardInline: false,
+        clipboardText: false,
+      });
+    } finally {
+      Object.defineProperty(process, 'platform', { value: platform });
+    }
+  },
+);

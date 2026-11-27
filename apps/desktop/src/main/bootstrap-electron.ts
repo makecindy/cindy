@@ -697,7 +697,7 @@ import { copyFileToClipboardWindows, copyFileToClipboardMacOS } from './fileClip
 import { COPY_TEXT_TO_CLIPBOARD_CHANNEL } from '../shared/textClipboard.js';
 import {
   readLinuxClipboardSnapshot,
-  supportsLinuxClipboard,
+  supportsHyprlandClipboard,
   writeLinuxClipboard,
 } from './remote-desktop/linuxClipboardNative';
 import { initHeartbeatService } from './heartbeatService';
@@ -9322,11 +9322,11 @@ const registerIpcHandlers = () => {
         }
       },
       write: (text) =>
-        supportsLinuxClipboard()
+        supportsHyprlandClipboard()
           ? writeLinuxClipboard({ text }, () => true, { checkLock: false })
           : clipboard.writeText(text),
       read: async () =>
-        supportsLinuxClipboard()
+        supportsHyprlandClipboard()
           ? (await readLinuxClipboardSnapshot(false, { checkLock: false })).content.text
           : clipboard.readText(),
     }),
