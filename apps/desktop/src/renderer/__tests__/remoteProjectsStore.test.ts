@@ -1390,4 +1390,26 @@ describe('remoteProjectsStore pending status (remote archive / unarchive)', () =
     remoteProjectsStore.setDeviceSessions('dev-A', 'A', [mk('b')]);
     expect(projected('b')?.status).toBe('active');
   });
+
+  it('computes latest visible session activity per device and ignores deleted sessions', () => {
+    remoteProjectsStore.setDeviceSessions('dev-A', 'A', [
+      { ...mk('a1'), userSendAt: null, updatedAt: '2026-11-25T10:00:00.000Z' },
+      { ...mk('a2'), updatedAt: '2026-11-26T08:00:00.000Z', userSendAt: '2026-11-26T09:30:00.000Z' },
+      { ...mk('a3'), userSendAt: '2026-11-26T12:00:00.000Z', updatedAt: '2026-11-26T12:00:00.000Z' },
+    ]);
+    remoteProjectsStore.applyPatch('dev-A', 'a3', { status: 'deleted' });
+    remoteProjectsStore.setDeviceSessions('dev-B', 'B', [
+      { ...mk('b1'), userSendAt: null, updatedAt: '2026-11-24T05:00:00.000Z' },
+    ]);
+
+    expect(remoteProjectsStore.getDeviceLatestActivityAt()).toEqual({
+      'dev-A': Date.parse('2026-11-26T09:30:00.000Z'),
+      'dev-B': Date.parse('2026-11-24T05:00:00.000Z'),
+    });
+
+    remoteProjectsStore.removeDevice('dev-A');
+    expect(remoteProjectsStore.getDeviceLatestActivityAt()).toEqual({
+      'dev-B': Date.parse('2026-11-24T05:00:00.000Z'),
+    });
+  });
 });
