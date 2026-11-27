@@ -343,6 +343,12 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
       icon(LayoutGrid)
     ) : filter.id === "favorites" ? (
       icon(Star, selected || p.filter === "favorites")
+    ) : filter.pluginEngineMark ? (
+      <PluginEngineMark
+        iconDataUrl={filter.pluginEngineMark.iconDataUrl}
+        remote={filter.remote != null}
+        size={iconSize.action}
+      />
     ) : filter.providerMark ? (
       <MobileProviderMark
         {...filter.providerMark}
@@ -899,7 +905,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
       <View key={row.key}>
         <View style={styles.modelRow}>
           <Pressable
-            accessibilityLabel={[row.title, row.effortLabel, row.subtitle, row.notice, row.quotaLabel].filter(Boolean).join(", ")}
+            accessibilityLabel={[row.title, row.remoteDevice?.name, row.effortLabel, row.subtitle, row.notice, row.quotaLabel].filter(Boolean).join(", ")}
             accessibilityRole="button"
             accessibilityState={{ selected: row.selected, disabled }}
             disabled={disabled}
@@ -908,7 +914,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
             testID={`${p.testID}.pluginEngine.${row.key}`}
           >
             <View style={styles.leading}>
-              <PluginEngineMark iconDataUrl={row.iconDataUrl} size={iconSize.action} />
+              <PluginEngineMark iconDataUrl={row.iconDataUrl} remote={row.remoteDevice != null} size={iconSize.action} />
             </View>
             <View style={styles.rowMain}>
               <View style={styles.titleLine}>
