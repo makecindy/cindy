@@ -17434,6 +17434,8 @@
         "moveToProjectRemoteUnsupported": "リモートセッションの移動はまだサポートされていません",
         "moveToProjectWorktreeBlocked": "このセッションの作業ディレクトリは worktree のため、まだ他のプロジェクトへは移動できません",
         "openInNewWindow": "新しいウィンドウで開く",
+        "cmdClick": "⌘+クリック",
+        "ctrlClick": "Ctrl+クリック",
         "exportShare": "セッションをエクスポート…",
         "exportHtml": "HTML にエクスポート…",
         "exportHtmlSuccess": "セッションを HTML にエクスポートしました",

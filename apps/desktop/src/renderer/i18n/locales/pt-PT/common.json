@@ -17674,6 +17674,8 @@
         "moveToProjectRemoteUnsupported": "Ainda não é possível mover sessões remotas",
         "moveToProjectWorktreeBlocked": "O diretório de trabalho desta sessão é um worktree, pelo que ainda não pode ser movida para outro projeto",
         "openInNewWindow": "Abrir numa nova janela",
+        "cmdClick": "⌘+clique",
+        "ctrlClick": "Ctrl+clique",
         "exportShare": "Exportar sessão…",
         "exportHtml": "Exportar para HTML…",
         "exportHtmlSuccess": "Sessão exportada para HTML",

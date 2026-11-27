@@ -17434,6 +17434,8 @@
         "moveToProjectRemoteUnsupported": "暂不支持移远程差事",
         "moveToProjectWorktreeBlocked": "此差事之工作目录乃 worktree，暂不支持移至他案",
         "openInNewWindow": "于新窗启",
+        "cmdClick": "⌘+点",
+        "ctrlClick": "Ctrl+点",
         "exportShare": "输差事…",
         "exportHtml": "输为 HTML…",
         "exportHtmlSuccess": "言谈已输为 HTML",

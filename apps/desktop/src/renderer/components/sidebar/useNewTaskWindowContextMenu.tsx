@@ -14,8 +14,10 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { getNewWindowClickShortcutKey } from '@/features/cc-agent/lib/newTaskSecondaryWindow';
 import { MENU_ITEM_CLASS } from '@/features/cc-agent/sidebar/menuStyles';
 
 // Native window dragging ignores a portal's z-index. Keep the menu surface
@@ -33,6 +35,7 @@ export function useNewTaskWindowContextMenu(onOpenInNewWindow: () => void): {
   contextMenu: ReactElement;
 } {
   const { t } = useTranslation();
+  const openInNewWindowShortcut = t(getNewWindowClickShortcutKey());
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
   const restoreFocusOnCloseRef = useRef(false);
@@ -99,8 +102,9 @@ export function useNewTaskWindowContextMenu(onOpenInNewWindow: () => void): {
             onOpenInNewWindow();
           }}
         >
-          <AppWindow size={14} aria-hidden="true" />
+          <AppWindow size={14} className="shrink-0" aria-hidden="true" />
           {t('ccAgent.sidebar.sessionMenu.openInNewWindow')}
+          <DropdownMenuShortcut aria-hidden>{openInNewWindowShortcut}</DropdownMenuShortcut>
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

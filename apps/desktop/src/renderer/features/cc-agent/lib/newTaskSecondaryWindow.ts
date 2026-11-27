@@ -32,6 +32,15 @@ export interface NewTaskSecondaryWindowLaunch {
   bootDeviceId: string | undefined;
 }
 
+function isMacNewWindowPlatform(
+  platform: string | undefined =
+    typeof window !== 'undefined' ? window.electronAPI?.platform : undefined,
+): boolean {
+  return platform
+    ? platform === 'darwin'
+    : typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/i.test(navigator.platform);
+}
+
 /**
  * Primary modifier click for opening a new window:
  * Command+Click on macOS (leaving Ctrl+Click for the native context menu),
@@ -39,13 +48,23 @@ export interface NewTaskSecondaryWindowLaunch {
  */
 export function isNewWindowClickModifier(
   event: { metaKey?: boolean; ctrlKey?: boolean },
-  platform: string | undefined =
-    typeof window !== 'undefined' ? window.electronAPI?.platform : undefined,
+  platform?: string,
 ): boolean {
-  const isMac = platform
-    ? platform === 'darwin'
-    : typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/i.test(navigator.platform);
+  const isMac = isMacNewWindowPlatform(platform);
   return Boolean(isMac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey);
+}
+
+/**
+ * i18n key for the modifier-click hint displayed beside "Open in new window"
+ * in the left-sidebar New button context menu. Shares platform detection with
+ * `isNewWindowClickModifier` so the hint stays aligned with the real gesture.
+ */
+export function getNewWindowClickShortcutKey(
+  platform?: string,
+): 'ccAgent.sidebar.sessionMenu.cmdClick' | 'ccAgent.sidebar.sessionMenu.ctrlClick' {
+  return isMacNewWindowPlatform(platform)
+    ? 'ccAgent.sidebar.sessionMenu.cmdClick'
+    : 'ccAgent.sidebar.sessionMenu.ctrlClick';
 }
 
 function encodeNewTaskSecondaryWindowTarget(hint?: NewTaskSecondaryWindowDraftHint): string {
