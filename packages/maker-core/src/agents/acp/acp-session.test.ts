@@ -1038,18 +1038,43 @@ describe('AcpSession stop and failure', () => {
     await expect(session.send({ type: 'user', content: 'again' })).rejects.toThrow('closed');
   });
 
-  // 引擎账号：运行中的额度用完、服务繁忙带上 Cindy 失败判定认得的字段；不认识的 kind 照普通错误处理。
+  // 引擎账号：运行中的额度用完、服务繁忙带上 Cindy 失败判定认得的字段并保留上游原文；不认识的 kind 照普通错误处理。
   it.each([
-    { kind: 'usage-limit', resetsAt: 1_900_000_000_000, expected: { reason: 'acp-usage-limit', usageLimit: true, usageResetAt: 1_900_000_000_000 } },
-    { kind: 'overloaded', expected: { reason: 'acp-overloaded', errorStatus: 529 } },
-    { kind: 'auth-required', expected: { reason: 'acp-auth-required' } },
-    { kind: 'something-new', expected: { reason: 'acp-request-failed' } },
-  ])('reports a turn the agent classified as $kind with failure fields Cindy understands', async ({ kind, resetsAt, expected }) => {
+    {
+      kind: 'usage-limit',
+      resetsAt: 1_900_000_000_000,
+      message: 'Individual quota reached. Resets in 2h13m2s.',
+      expected: {
+        reason: 'acp-usage-limit',
+        message: 'Individual quota reached. Resets in 2h13m2s.',
+        usageLimit: true,
+        usageResetAt: 1_900_000_000_000,
+      },
+    },
+    {
+      kind: 'usage-limit',
+      resetsAt: 1_900_000_000_000,
+      message: '',
+      expected: {
+        reason: 'acp-usage-limit',
+        message: 'The plugin engine account has reached its usage limit.',
+        usageLimit: true,
+        usageResetAt: 1_900_000_000_000,
+      },
+    },
+    {
+      kind: 'overloaded',
+      message: 'upstream busy',
+      expected: { reason: 'acp-overloaded', message: 'upstream busy', errorStatus: 529 },
+    },
+    { kind: 'auth-required', message: 'upstream said no', expected: { reason: 'acp-auth-required' } },
+    { kind: 'something-new', message: 'upstream said no', expected: { reason: 'acp-request-failed' } },
+  ])('reports a turn the agent classified as $kind with failure fields Cindy understands', async ({ kind, resetsAt, message, expected }) => {
     const agent = createFakeAgent();
     const { session, events } = await open(agent);
     await session.send({ type: 'user', content: 'go' });
     await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
-    agent.prompts[0]!.settle.reject(Object.assign(new Error('upstream said no'), { code: -32603, data: { _meta: { cindy: { kind, ...(resetsAt ? { resetsAt } : {}) } } } }));
+    agent.prompts[0]!.settle.reject(Object.assign(new Error(message), { code: -32603, data: { _meta: { cindy: { kind, ...(resetsAt ? { resetsAt } : {}) } } } }));
     await vi.waitFor(() => expect(events.at(-1)?.type).toBe('error'));
     expect(events.at(-1)?.data).toMatchObject({ isTerminal: true, ...expected });
   });

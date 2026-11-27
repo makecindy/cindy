@@ -1356,10 +1356,11 @@ export class AcpSession {
       return { error: 'The agent needs you to sign in again.', reason: 'acp-auth-required' };
     }
     if (classified) {
+      const detail = error instanceof AcpRpcError ? error.peerMessage : undefined;
       return {
-        error: classified.kind === 'usage-limit'
+        error: detail || (classified.kind === 'usage-limit'
           ? 'The plugin engine account has reached its usage limit.'
-          : 'The plugin engine service is currently overloaded.',
+          : 'The plugin engine service is currently overloaded.'),
         reason: classified.kind === 'usage-limit' ? 'acp-usage-limit' : 'acp-overloaded',
         signals: acpCindyErrorSignals(classified),
       };
