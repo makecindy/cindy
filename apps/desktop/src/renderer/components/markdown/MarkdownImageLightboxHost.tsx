@@ -12,12 +12,18 @@
 
 import { useEffect, useRef, useState } from 'react';
 
+import { AttachmentCollectionContext } from '@/components/chat/AttachmentCollectionContext';
+import { ImageGalleryContext } from '@/components/chat/ImageGalleryContext';
 import { ImageLightbox, imageSourceSnapshotFields } from '@/components/chat/ImageLightbox';
 
 import {
   MD_IMAGE_LIGHTBOX_EVENT,
   type MdImageLightboxOpenDetail,
 } from './markdownImageLivePreview';
+
+type MarkdownImageLightboxState = ReturnType<typeof imageSourceSnapshotFields> & {
+  gallery: MdImageLightboxOpenDetail['gallery'] | null;
+};
 
 export function MarkdownImageLightboxHost({
   sessionId,
@@ -28,39 +34,40 @@ export function MarkdownImageLightboxHost({
 }) {
   const sessionRef = useRef(sessionId);
   sessionRef.current = sessionId;
-  const [media, setMedia] = useState<{
-    src: string;
-    sessionId?: string;
-    galleryId?: string;
-    filename?: string;
-    enableGallery?: boolean;
-    annotationFallbackSrc?: string;
-    autoAnnotate?: boolean;
-    annotationDisabled?: boolean;
-  } | null>(null);
+  const [opening, setOpening] = useState<MarkdownImageLightboxState | null>(null);
 
   useEffect(() => {
     const onOpen = (ev: Event) => {
       const detail = (ev as CustomEvent<MdImageLightboxOpenDetail>).detail;
-      if (detail?.src) setMedia({ src: detail.src, sessionId: sessionRef.current });
+      if (!detail?.src) return;
+      setOpening({
+        ...imageSourceSnapshotFields({
+          src: detail.src,
+          sessionId: sessionRef.current,
+          galleryId: detail.galleryId,
+          enableGallery: Boolean(detail.gallery && detail.gallery.length > 0),
+        }),
+        gallery: detail.gallery ?? null,
+      });
     };
     window.addEventListener(MD_IMAGE_LIGHTBOX_EVENT, onOpen);
     return () => window.removeEventListener(MD_IMAGE_LIGHTBOX_EVENT, onOpen);
   }, []);
 
-  if (media == null) return null;
+  if (opening == null) return null;
   return (
-    <ImageLightbox
-      src={media.src}
-      galleryId={media.galleryId}
-      filename={media.filename}
-      enableGallery={media.enableGallery}
-      annotationFallbackSrc={media.annotationFallbackSrc}
-      autoAnnotate={media.autoAnnotate}
-      annotationDisabled={media.annotationDisabled}
-      onClose={() => setMedia(null)}
-      onSourceChangeCancelled={(displayed) => setMedia(imageSourceSnapshotFields(displayed))}
-      sessionId={media.sessionId}
-    />
+    <AttachmentCollectionContext.Provider value={null}>
+      <ImageGalleryContext.Provider value={opening.gallery ?? null}>
+        <ImageLightbox
+          {...imageSourceSnapshotFields(opening)}
+          onClose={() => setOpening(null)}
+          onSourceChangeCancelled={(displayed) =>
+            setOpening((current) =>
+              current ? { ...current, ...imageSourceSnapshotFields(displayed) } : current,
+            )
+          }
+        />
+      </ImageGalleryContext.Provider>
+    </AttachmentCollectionContext.Provider>
   );
 }

@@ -18,6 +18,23 @@ export function emptyUserInputResponse(questions: readonly Pick<ToolRequestUserI
   return { answers };
 }
 
+/**
+ * Explicit system rejection for native `item/tool/requestUserInput`.
+ * Codex app-server turns JSON-RPC errors on this method into `{"answers":{}}`,
+ * so returning a clearly-labeled system notice per question id is the only
+ * protocol-level way for the calling thread to observe the rejection reason.
+ */
+export function rejectedUserInputResponse(
+  questions: readonly Pick<ToolRequestUserInputQuestion, 'id'>[],
+  message: string,
+): ToolRequestUserInputResponse {
+  const answers: ToolRequestUserInputResponse['answers'] = Object.create(null);
+  for (const q of questions) {
+    if (q.id) answers[q.id] = { answers: [message] };
+  }
+  return { answers };
+}
+
 export function normalizeRequestUserInputQuestions(
   questions: readonly ToolRequestUserInputQuestion[],
 ): ToolRequestUserInputQuestion[] {
