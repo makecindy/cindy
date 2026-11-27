@@ -174,16 +174,60 @@ describe('share quota projection', () => {
     expect(JSON.stringify(result)).not.toContain('secret');
   });
   // Regression: a shared multi-account subscription showed only its default account's quota.
-  // #10405, unit: no assignable accounts is not a single-account fallback. A pure
-  // historical alias still serves its original shared account after it moved elsewhere.
+  // Unit tier: merged subscription aliases now resolve their pinned serving account through
+  // readSubscriptionPoolAccountUsages, so an empty pool (paused/signed-out/disconnected) must
+  // return unavailable rather than falling back to the legacy single-account reader.
   it.each([false, true])('does not borrow old quota from an empty target pool (compatibility alias: %s)', async alias => {
     state.providers = [{ id: 'legacy', connected: true, auth: { method: 'oauth', native: 'claude' },
       ...(alias ? { subscriptionPoolAlias: true } : { subscriptionAccountPool: 'anthropic' }) }];
     state.pool = [];
+    readers.claude.mockClear();
     readers.claude.mockResolvedValue({ updatedAt: 1, sevenDay: { utilization: 25, resetsAt: Date.now() / 1000 + 3600 } });
     const result = await readProviderShareQuota('legacy');
-    expect(result.accounts[0]).toMatchObject(alias ? { state: 'ready', windows: [{ remainingPercent: 75 }] }
-      : { state: 'unavailable', windows: [] });
+    expect(result.accounts[0]).toMatchObject({ state: 'unavailable', windows: [] });
+    expect(readers.claude).not.toHaveBeenCalled();
+  });
+
+  // Regression (unit): shared created Claude subscriptions (`anthropic-sub-*`) previously
+  // misrouted into codexSource whenever providerWeeklyQuotaSource could not classify the
+  // provider view. Use the authoritative pool `kind` returned with each pooled usage entry,
+  // and classify opencode-go as unsupported instead of falling into Codex.
+  it('uses the authoritative pool kind for created subscriptions and marks opencode-go unsupported', async () => {
+    const resetsAt = Date.now() / 1000 + 3600;
+    state.providers = [{
+      id: 'anthropic-sub-a1b2c3d4',
+      connected: true,
+      auth: { method: 'oauth' },
+      subscriptionAccountPool: 'anthropic',
+    }];
+    state.pool = [{
+      kind: 'anthropic',
+      usage: { claudeUsage: { updatedAt: 10, fiveHour: { utilization: 20, resetsAt }, sevenDay: { utilization: 45, resetsAt } } },
+    }];
+    const claudeResult = await readProviderShareQuota('anthropic-sub-a1b2c3d4');
+    expect(claudeResult.accounts).toHaveLength(1);
+    expect(claudeResult.accounts[0]).toMatchObject({
+      state: 'ready',
+      windows: [
+        { kind: 'session', remainingPercent: 80 },
+        { kind: 'week', remainingPercent: 55 },
+      ],
+    });
+
+    state.owner++;
+    state.pool = undefined;
+    state.providers = [{
+      id: 'opencode-go-1',
+      connected: true,
+      auth: { method: 'apiKey' },
+      access: { kind: 'coding-plan', product: 'OpenCode Go' },
+      agents: ['claude-code'],
+      routing: {
+        'claude-code': { kind: 'anthropic-messages', baseUrl: 'https://opencode.ai/zen/go/v1' },
+      },
+    }];
+    expect(await readProviderShareQuotaAccount('opencode-go-1')).toMatchObject({ state: 'unsupported', windows: [] });
+    expect(readers.codex).not.toHaveBeenCalled();
   });
 
   // #10405 unit: a named target must expand its accounts too, selecting the quota family

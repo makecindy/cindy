@@ -370,6 +370,7 @@ export function sessionCacheInvalidationToken(sessionId: string): number {
 export interface CachedDeviceSessionsSnapshot {
   deviceId: string;
   deviceName: string;
+  projectAliases?: import('@cindy/maker-shared/project-alias-sync').CachedProjectAliases;
   sessions: Session[];
 }
 
@@ -419,6 +420,7 @@ export async function readCachedSessionList(): Promise<CachedDeviceSessionsSnaps
     return result.devices.map((device) => ({
       deviceId: device.deviceId,
       deviceName: device.deviceName,
+      projectAliases: device.projectAliases,
       sessions: (device.sessions ?? []) as unknown as Session[],
     }));
   } catch (err) {
@@ -476,6 +478,7 @@ function writeSessionListNow(
       devices.map((device) => ({
         deviceId: device.deviceId,
         deviceName: device.deviceName,
+        projectAliases: device.projectAliases,
         sessions: device.sessions as unknown as Record<string, unknown>[],
       })),
       expectedOwnerToken,

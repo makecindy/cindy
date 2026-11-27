@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronRight, Folder, Info, RotateCcw } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { SETTINGS_HINT, SettingsBlock, SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
 import { Tip } from '@/components/ui/tooltip';
@@ -69,10 +70,8 @@ export function TaskExportDirectorySection() {
         wrap
         title={<span role="heading" aria-level={3}>{setting.title}</span>}
         tag={badge && (
-          <span className={cn('rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-11',
-            warning ? 'text-[var(--warning-fg)]' : 'text-[var(--text-secondary)]')}>
-            {badge}
-          </span>
+          // Badge has no warning tone; a folder that needs attention keeps the warning text colour.
+          <Badge className={cn(warning && 'text-[var(--warning-fg)]')}>{badge}</Badge>
         )}
         hint={state?.path && (
           <span className="flex min-w-0 items-center gap-1.5" title={state.path}>

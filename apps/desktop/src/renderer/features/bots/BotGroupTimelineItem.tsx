@@ -36,6 +36,7 @@ import { ChatBubble, CHAT_BUBBLE_COLUMN_CLASS } from '@/components/chat/ChatBubb
 import { SessionQuickSendProvider } from '@/components/chat/SessionQuickSendContext';
 import { ShareMessageCheckbox } from '@/components/chat/ShareMessageCheckbox';
 import { CHAT_MESSAGE_LOCATE_TRANSITION_CLASS, CHAT_MESSAGE_LOCATE_HIGHLIGHT_CLASS } from '@/components/chat/chatChrome';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { SHARE_EXCLUDE_ATTR, SHARE_MESSAGE_ATTR, SHARE_SESSION_ATTR } from '@/lib/shareConversationImage';
 import { ChatReadReceipt } from './ChatMessageReaders';
@@ -281,12 +282,9 @@ function BotGroupMessageText({ content, mentionLabels, members, mentions, server
 /** Quiet pill after an author name (负责人, 第 k 步, 某某的主人, 部门). */
 export function BotGroupNameTag({ children, title }: { children: ReactNode; title?: string }) {
   return (
-    <span
-      title={title}
-      className="inline-flex min-h-[18px] max-w-[12rem] shrink-0 select-none items-center truncate rounded-full bg-[var(--surface-chip)] px-1.5 py-px text-11 font-medium leading-tight text-[var(--text-secondary)]"
-    >
+    <Badge title={title} className="max-w-[12rem] truncate">
       {children}
-    </span>
+    </Badge>
   );
 }
 
@@ -304,6 +302,7 @@ export function BotGroupDateDivider({ timestamp, locale }: { timestamp: number; 
 // ---- The row ---------------------------------------------------------------------------
 
 export interface BotGroupTimelineItemProps {
+  showDeviceChoice?: boolean;
   pluginUi: import('@/cindy-brain/PluginUiContributions').PluginUiMessageCandidates;
   message: BotGroupTimelineMessage;
   /** Same author as the row above within five minutes: no avatar or name. */
@@ -448,7 +447,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
   if (message.kind === 'notice' || message.authorKind === 'system') {
     const name = message.authorName.trim() || authorName;
     if (isBotGroupCapabilityNoticeCode(message.capabilityNoticeCode)) return <Row {...rowProps} block="system">
-      <BotGroupCapabilityNotice name={name} code={message.capabilityNoticeCode} />
+      <BotGroupCapabilityNotice name={name} code={message.capabilityNoticeCode} chooseDevice={props.showDeviceChoice && message.canChooseAssistantDevice} />
     </Row>;
     if (isBotGroupRuntimeFailureCode(message.runtimeFailureCode)) {
       return (

@@ -1,3 +1,4 @@
+import type { ReconnectHandoff } from '../../../shared/agentInputQueue';
 import { localizeOutputLimit } from './outputLimitI18n';
 import { type OutputLimitDetails } from '@cindy/maker-shared';
 import { isMemberBudgetPaused } from '../../../shared/providerShareBudget';
@@ -68,9 +69,10 @@ import {
   isStreamInterruptedErrorMessage,
 } from '@/utils/streamInterruptError';
 import { isQuotaExhaustedErrorMessage } from '@/utils/quotaError';
+import { parseUpstreamStatusError } from '@/utils/upstreamStatusError';
 import { parseTerminalRateLimitRetryProgress } from '@/utils/rateLimitRetry';
 import type { UsageLimitRecoveryHint } from '@/lib/usageLimitRecovery';
-import { errorReasonI18nKey as resolveErrorReasonI18nKey } from './errorReasonI18n';
+import { errorReasonI18nKey as resolveErrorReasonI18nKey, localizeReconnectStall } from './errorReasonI18n';
 import { isCodexSharedAuthLinkUnavailableError } from '../../../shared/codexAuthReason';
 import { getToolLoopI18nKey } from './toolLoopI18n';
 import {
@@ -87,6 +89,7 @@ interface ErrorBannerProps {
   /** terminal error 的稳定 reason key。'silent-stop-exhausted'(silent-stop 自动
    *  续跑额度耗尽)时隐藏 Retry、改显「继续」按钮(onSilentStopContinue)。 */
   errorReason?: string | null;
+  reconnectHandoff?: ReconnectHandoff;
   /** Structured details for a tool-loop terminal error (optional for legacy rows). */
   toolLoop?: ToolLoopErrorDetails | null;
   outputLimit?: OutputLimitDetails | null;
@@ -173,6 +176,7 @@ export function ErrorBanner({
   onChooseComputer,
   error,
   errorReason,
+  reconnectHandoff,
   toolLoop,
   outputLimit,
   retryText,
@@ -428,8 +432,20 @@ export function ErrorBanner({
     !isProviderSafetyRefusal && isOverloadErrorMessage(error, undefined, errorReason);
   const isStreamInterrupted =
     !isProviderSafetyRefusal && isStreamInterruptedErrorMessage(error, errorReason);
+  // 上游 5xx 但没带错误正文:兜底文案只会说「回复未完成」,看不出是上游拒了。
+  const upstreamStatusError = !isProviderSafetyRefusal ? parseUpstreamStatusError(error) : null;
   const overloadRetryProgress = parseOverloadRetryProgress(error);
   const errorReasonI18nKey = resolveErrorReasonI18nKey(errorReason, error);
+  // #12970 review: a history read the provider refused means the message was
+  // never accepted. That fact outranks every status word in the message —
+  // `(status 502)` and friends would otherwise land in the network/overload
+  // branches and tell the user the service was unreachable, hiding that nothing
+  // was ever sent. Both bounded diagnostics share the same priority.
+  const piRetryHistoryKey =
+    errorReasonI18nKey === 'chat.errorBanner.piRetryHistoryUnavailable'
+    || errorReasonI18nKey === 'chat.errorBanner.piRetryHistoryTooLarge'
+      ? errorReasonI18nKey
+      : undefined;
   const toolLoopI18nKey =
     errorReason === 'tool_use_loop_detected' ? getToolLoopI18nKey(toolLoop) : undefined;
   const localizedReasonError =
@@ -485,6 +501,7 @@ export function ErrorBanner({
   const isAccountUsageLimitText =
     !isProviderSafetyRefusal && isAccountUsageLimitReachedText(error);
   // 原始恢复记录优先；自动任务收口后可手动续跑。按钮与指引共用同一判定。
+  const isReconnectStalled = errorReason === 'codex_reconnect_stalled';
   const isSilentStopExhausted = errorReason === 'silent-stop-exhausted';
   const isClaudeGatewayOpusPlanMismatch = errorReason === CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON;
   const isClaudeSubscriptionOpusPlanMismatch =
@@ -576,6 +593,11 @@ export function ErrorBanner({
     displayError = piCloudContextRecovery;
   } else if (isProviderSafetyRefusal) {
     displayError = t('chat.errorBanner.providerSafetyRefusal');
+    hasSpecialGuidance = false;
+  } else if (piRetryHistoryKey) {
+    // 「本次消息未发送」优先于网络/过载/上游状态等宽泛分支:历史读取被拒时上游
+    // 返回什么状态都与「这条消息根本没发出去」无关,用户先要知道的是这件事。
+    displayError = t(piRetryHistoryKey);
     hasSpecialGuidance = false;
   } else if (geminiLimit !== null) {
     displayError = t(errorReason === 'gemini-input-retry-exhausted' ? 'chat.geminiRateLimit.exhausted' : 'chat.geminiRateLimit.title');
@@ -683,6 +705,8 @@ export function ErrorBanner({
   } else if (agentKind === 'pi' && /bundled node not installed/.test(error)) {
     // 引导:需先装 claude-code 或 codex 连带 node。
     displayError = t('chat.errorBanner.piBundledNodeMissing');
+  } else if (isReconnectStalled) {
+    displayError = localizeReconnectStall(t, reconnectHandoff);
   } else if (isOverloadError) {
     // 服务过载:上游模型没有可用容量。原始英文("Selected model is at capacity")
     // 对用户没有行动价值,换成友好文案 + 明确的下一步;原始错误折叠可查。
@@ -723,6 +747,11 @@ export function ErrorBanner({
             ? 'chat.errorBanner.networkUnreachable'
             : 'chat.errorBanner.networkUnreachableNoRetry',
         );
+  } else if (upstreamStatusError) {
+    // 上游 5xx(无正文):标题直接点名状态,原始报错折叠可查。
+    // 放在网络分支之后 —— 502/503/504 仍走「服务暂时不可达」那套更贴近恢复动作的文案。
+    displayError = t('chat.errorBanner.upstreamStatusError', { status: upstreamStatusError.status });
+    hasSpecialGuidance = false;
   } else {
     // Keep the raw message available to every specialized gate above. Only
     // the final fallback uses the stable reason map, so auth/network/overload
@@ -743,6 +772,7 @@ export function ErrorBanner({
     displayError = t(`sharedTaskRecovery.reason.${sharedRecoveryReason}`);
   }
   const canShowErrorDetails =
+    isReconnectStalled ||
     piCloudContextRecovery ||
     isNetworkishError ||
     isOverloadError ||
@@ -1088,10 +1118,10 @@ export function ErrorBanner({
               disabled={forkStripEncryptedRunning}
               loading={retrying}
               onClick={() => void handleRetry()}
-              title={t('chat.errorBanner.retryTitle')}
+              title={t(isReconnectStalled ? 'chat.errorBanner.silentStopContinueTitle' : 'chat.errorBanner.retryTitle')}
             >
-              <RotateCcw size={12} />
-              {t('chat.errorBanner.retry')}
+              {isReconnectStalled ? <Play size={12} /> : <RotateCcw size={12} />}
+              {t(isReconnectStalled ? 'chat.errorBanner.silentStopContinueTitle' : 'chat.errorBanner.retry')}
             </Button>
           )}
           {(showHistoryRecovery || showInvalidEncryptedContentRecovery) && onForkStripEncrypted && (

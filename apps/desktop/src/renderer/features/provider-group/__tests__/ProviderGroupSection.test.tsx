@@ -161,7 +161,7 @@ afterEach(() => cleanup());
 
 describe('ProviderGroupSection', () => {
   it('shows the version and sharing update hint alongside the owner’s normal availability', async () => {
-    stored = { strategy: 'least', autoSwitch: true, members: [LOCAL] };
+    stored = { strategy: 'expiring', autoSwitch: true, members: [LOCAL] };
     const base = viewOf(stored);
     base.members[0] = { ...base.members[0], appVersion: '0.1.103', guestSupport: 'needs-update' };
     command.mockImplementation(async (cmd: { action: string }) => cmd.action === 'list' ? { anthropic: stored } : base);
@@ -186,14 +186,14 @@ describe('ProviderGroupSection', () => {
     await waitFor(() => expect(command).toHaveBeenCalledWith(expect.objectContaining({ action: 'save-if-current', expectedConfig: null })));
     const saved = command.mock.calls.find(([cmd]) => cmd.action === 'save-if-current')![0].config as ProviderGroupConfig;
     expect(saved.members.map((m) => m.key)).toEqual(['local', MINI.key]);
-    expect(saved).toMatchObject({ strategy: 'least', autoSwitch: true });
+    expect(saved).toMatchObject({ strategy: 'expiring', autoSwitch: true });
     expect(await screen.findAllByTestId('provider-group-member')).toHaveLength(2);
     // 一台组里原来没有的电脑：照旧说「N 台电脑」。
     expect(toast.success).toHaveBeenCalledWith('providerGroup.toast.added:{"count":1,"provider":"Anthropic"}');
   });
 
   it.each(['save', 'delete'] as const)('refreshes a stale view after a rejected %s without replaying the write', async (operation) => {
-    const initial: ProviderGroupConfig = { strategy: 'least', autoSwitch: true, members: [LOCAL] };
+    const initial: ProviderGroupConfig = { strategy: 'expiring', autoSwitch: true, members: [LOCAL] };
     stored = initial;
     render(<ProviderGroupSection providerId="anthropic" providerName="Anthropic" />);
     await screen.findByTestId('provider-group-member');
@@ -219,7 +219,7 @@ describe('ProviderGroupSection', () => {
     realLocale = createInstance();
     await realLocale.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } }, interpolation: { escapeValue: false } });
     const SHARED = { key: 'share:s1:anthropic', kind: 'share' as const, agentDeviceId: 'share:s1', providerId: 'anthropic', limit: 4, weight: 1, paused: false };
-    stored = { strategy: 'least', autoSwitch: true, members: [LOCAL, SHARED] };
+    stored = { strategy: 'expiring', autoSwitch: true, members: [LOCAL, SHARED] };
     const view = viewOf(stored);
     view.members[1] = {
       ...view.members[1],
@@ -249,7 +249,7 @@ describe('ProviderGroupSection', () => {
   });
 
   it('expands a computer to show the quota of its own account', async () => {
-    stored = { strategy: 'least', autoSwitch: true, members: [LOCAL, MINI] };
+    stored = { strategy: 'expiring', autoSwitch: true, members: [LOCAL, MINI] };
     render(<ProviderGroupSection providerId="anthropic" providerName="Anthropic" />);
     const rows = await screen.findAllByTestId('provider-group-member');
     expect(screen.queryByTestId('member-quota')).toBeNull();
@@ -273,7 +273,7 @@ describe('ProviderGroupSection', () => {
   });
 
   it('shows each computer with its state and lets the user pause one', async () => {
-    stored = { strategy: 'least', autoSwitch: true, members: [LOCAL, MINI] };
+    stored = { strategy: 'expiring', autoSwitch: true, members: [LOCAL, MINI] };
     render(<ProviderGroupSection providerId="anthropic" providerName="Anthropic" />);
     const rows = await screen.findAllByTestId('provider-group-member');
     expect(rows[0].getAttribute('data-member-state')).toBe('available');
@@ -317,7 +317,7 @@ describe('ProviderGroupSection', () => {
 
   it('says idle instead of staying silent when a computer is available with nothing running', async () => {
     running = { local: 0 };
-    stored = { strategy: 'least', autoSwitch: true, members: [LOCAL] };
+    stored = { strategy: 'expiring', autoSwitch: true, members: [LOCAL] };
     render(<ProviderGroupSection providerId="anthropic" providerName="Anthropic" />);
     const rows = await screen.findAllByTestId('provider-group-member');
     // 每行都要报负载：跑 0 个时说「空闲」，不是什么都不显示。
@@ -330,7 +330,7 @@ describe('ProviderGroupSection', () => {
   it('shows quota exhaustion and its reset in the collapsed row alongside running tasks', async () => {
     realLocale = createInstance();
     await realLocale.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } }, interpolation: { escapeValue: false } });
-    stored = { strategy: 'least', autoSwitch: true, members: [LOCAL, MINI] };
+    stored = { strategy: 'expiring', autoSwitch: true, members: [LOCAL, MINI] };
     const view = viewOf(stored);
     view.members[1] = {
       ...view.members[1], running: 2,
@@ -345,20 +345,20 @@ describe('ProviderGroupSection', () => {
     expect(screen.queryByTestId('member-quota')).toBeNull();
   });
 
-  it('changes the group strategy and turns automatic switching off', async () => {
-    stored = { strategy: 'least', autoSwitch: true, members: [LOCAL, MINI] };
+  // 2026-11-24：组里的几台电脑是一条自动路由，选法只在「智能路由」里改；这里只说明现状，不再有第二个控件。
+  it('states how the group assigns tasks without a second strategy control, and turns automatic switching off', async () => {
+    stored = { strategy: 'rotate', autoSwitch: true, members: [LOCAL, MINI] };
     render(<ProviderGroupSection providerId="anthropic" providerName="Anthropic" />);
     await screen.findAllByTestId('provider-group-member');
-    fireEvent.click(screen.getByRole('radio', { name: 'providerGroup.strategy.round' }));
-    await waitFor(() => expect(stored?.strategy).toBe('round'));
-    fireEvent.click(screen.getByRole('radio', { name: 'providerGroup.strategy.order' }));
-    await waitFor(() => expect(stored?.strategy).toBe('order'));
+    expect(screen.getByTestId('route-strategy-note').textContent).toContain('modelGroups.auto.assignedBy');
+    expect(screen.queryByRole('radiogroup')).toBeNull();
     fireEvent.click(screen.getByRole('switch', { name: 'providerGroup.autoSwitch.label' }));
     await waitFor(() => expect(stored?.autoSwitch).toBe(false));
+    expect(stored?.strategy).toBe('rotate');
   });
 
   it('removes a computer after confirmation', async () => {
-    stored = { strategy: 'least', autoSwitch: true, members: [LOCAL, MINI] };
+    stored = { strategy: 'expiring', autoSwitch: true, members: [LOCAL, MINI] };
     render(<ProviderGroupSection providerId="anthropic" providerName="Anthropic" />);
     const rows = await screen.findAllByTestId('provider-group-member');
     fireEvent.click(within(rows[1]).getByRole('button', { name: 'providerGroup.member.remove' }));
@@ -366,39 +366,9 @@ describe('ProviderGroupSection', () => {
     expect(confirmSpy).toHaveBeenCalledWith(expect.objectContaining({ confirmVariant: 'destructive' }));
   });
 
-  it('explains in Chinese that quota comes first for a disconnected subscription and shows an old usage group as least busy', async () => {
-    realLocale = createInstance();
-    await realLocale.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } }, interpolation: { escapeValue: false } });
-    providerState.providers[0].connected = false;
-    stored = { strategy: 'usage', autoSwitch: true, members: [LOCAL] };
-    render(<ProviderGroupSection providerId="anthropic" providerName="Claude" />);
-    expect(await screen.findByText('能读取订阅用量时，先用快重置、还剩得多的电脑，各账号会按时间均匀用掉；差不多时按组策略')).toBeTruthy();
-    expect(screen.getByRole('radio', { name: '最少占用' }).getAttribute('aria-checked')).toBe('true');
-    expect(screen.getByText('给最闲的那台')).toBeTruthy();
-    expect(screen.queryByRole('radio', { name: '用量均衡' })).toBeNull();
-    fireEvent.click(screen.getByRole('radio', { name: '按顺序' }));
-    await waitFor(() => expect(stored?.strategy).toBe('order'));
-  });
-
-  it.each([
-    { kind: 'API-only', members: [LOCAL] },
-    { kind: 'mixed local API and remote subscription', members: [LOCAL, MINI] },
-  ])('explains when quota overrides the strategy for a $kind group', async ({ members }) => {
-    realLocale = createInstance();
-    await realLocale.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } }, interpolation: { escapeValue: false } });
-    providerState.providers[0].auth.method = 'api-key';
-    // Group views do not expose remote authentication types; the local connection cannot gate this explanation.
-    stored = { strategy: 'order', autoSwitch: true, members };
-    render(<ProviderGroupSection providerId="anthropic" providerName="Anthropic" />);
-    await screen.findAllByTestId('provider-group-member');
-    expect(screen.getByText('能读取订阅用量时，先用快重置、还剩得多的电脑，各账号会按时间均匀用掉；差不多时按组策略')).toBeTruthy();
-    expect(screen.getByRole('radio', { name: '按顺序' }).getAttribute('aria-checked')).toBe('true');
-    expect(screen.queryByRole('radio', { name: '用量均衡' })).toBeNull();
-  });
-
   it('lists several accounts of one computer under that computer, each with its own settings', async () => {
     const MINI_B = { ...MINI, key: 'device:mini:anthropic-b', providerId: 'anthropic-b', providerName: 'Claude B' };
-    stored = { strategy: 'least', autoSwitch: true, members: [LOCAL, { ...MINI, providerName: 'Claude A' }, MINI_B] };
+    stored = { strategy: 'expiring', autoSwitch: true, members: [LOCAL, { ...MINI, providerName: 'Claude A' }, MINI_B] };
     render(<ProviderGroupSection providerId="anthropic" providerName="Anthropic" />);
     const device = await screen.findByTestId('provider-group-device');
     // 台数按电脑算：本机 + Mac mini = 2 台(组里 3 个账号)。
@@ -468,7 +438,7 @@ describe('ProviderGroupSection', () => {
       key: `share:${id}:anthropic`, kind: 'share' as const, agentDeviceId: `share:${id}`, providerId: 'anthropic',
       providerName, hostDeviceId: 'kai-pc', limit: 4, weight: 1, paused: false,
     });
-    stored = { strategy: 'least', autoSwitch: true, members: [LOCAL, share('s1', 'Claude Pro'), share('s2', 'Claude Max')] };
+    stored = { strategy: 'expiring', autoSwitch: true, members: [LOCAL, share('s1', 'Claude Pro'), share('s2', 'Claude Max')] };
     const view = viewOf(stored);
     view.members = view.members.map((m) => (m.kind === 'share' ? { ...m, ownerName: 'Kai', state: 'available' as const } : m));
     const candidates = [
@@ -487,7 +457,7 @@ describe('ProviderGroupSection', () => {
     expect(accounts[0].textContent).toContain('Claude Pro');
     expect(accounts[1].textContent).toContain('Claude Max');
     // 本机 + Kai 的那台 = 2 台。
-    expect(screen.getByRole('heading', { name: '供应商组' }).nextElementSibling?.textContent).toBe('2');
+    expect(screen.getByRole('heading', { name: '电脑组' }).nextElementSibling?.textContent).toBe('2');
     fireEvent.click(screen.getByRole('button', { name: '添加电脑' }));
     const dialog = await screen.findByTestId('provider-group-add-dialog');
     const offered = await within(dialog).findByTestId('provider-group-candidate-device');
@@ -499,7 +469,7 @@ describe('ProviderGroupSection', () => {
   it('keeps remote management and account quotas when grouping several accounts by computer', async () => {
     const MINI_B = { ...MINI, key: 'device:mini:anthropic-b', providerId: 'anthropic-b', providerName: 'Claude B' };
     const initial: ProviderGroupConfig = {
-      strategy: 'least', autoSwitch: true,
+      strategy: 'expiring', autoSwitch: true,
       members: [LOCAL, { ...MINI, providerName: 'Claude A' }, MINI_B],
     };
     let finishRead!: (value: ProviderGroupView) => void;
@@ -514,7 +484,6 @@ describe('ProviderGroupSection', () => {
     const accountRows = within(devices).getAllByTestId('provider-group-member');
     expect(accountRows).toHaveLength(2);
     expect((within(accountRows[1]).getByRole('switch') as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('radio', { name: 'providerGroup.strategy.order' }) as HTMLButtonElement).disabled).toBe(true);
     await act(async () => finishRead(viewOf(initial)));
     expect(within(devices).getByTestId('provider-group-device-header').textContent).toContain('Mac mini');
     fireEvent.click(accountRows[1].querySelector<HTMLButtonElement>('button[aria-expanded]')!);
@@ -545,7 +514,7 @@ describe('ProviderGroupSection', () => {
   ])('shows a generic subscription quota hint for a $kind OpenAI group', async ({ deviceId }) => {
     realLocale = createInstance();
     await realLocale.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } }, interpolation: { escapeValue: false } });
-    stored = { strategy: 'least', autoSwitch: true, members: [{ ...LOCAL, providerId: 'openai' }] };
+    stored = { strategy: 'expiring', autoSwitch: true, members: [{ ...LOCAL, providerId: 'openai' }] };
     if (deviceId) command.mockResolvedValue(viewOf(stored));
     render(<ProviderGroupSection
       providerId="openai"
@@ -554,7 +523,8 @@ describe('ProviderGroupSection', () => {
       initialConfig={stored}
     />);
     await screen.findAllByTestId('provider-group-member');
-    expect(screen.getByText('能读取订阅用量时，先用快重置、还剩得多的电脑，各账号会按时间均匀用掉；差不多时按组策略')).toBeTruthy();
+    // 2026-11-26：账号与电脑按智能路由同一套选法，说明写这个选法本身(通用，不写 Claude 专属的话)。
+    expect(screen.getByText('剩得多又快重置的订阅配额先用，不浪费；读不到配额的来源排在后面。')).toBeTruthy();
   });
 });
 
@@ -589,7 +559,7 @@ describe('ProviderGroupSection reopened', () => {
   }
 
   it('shows the group it read last time right away while refreshing', async () => {
-    stored = { strategy: 'least', autoSwitch: true, members: [LOCAL, MINI] };
+    stored = { strategy: 'expiring', autoSwitch: true, members: [LOCAL, MINI] };
     const first = render(<ProviderGroupSection providerId="anthropic" providerName="Anthropic" />);
     expect(await screen.findAllByTestId('provider-group-member')).toHaveLength(2);
     first.unmount();
@@ -603,7 +573,7 @@ describe('ProviderGroupSection reopened', () => {
   });
 
   it('lays out the computers from the local group settings before their live state arrives', async () => {
-    stored = { strategy: 'least', autoSwitch: true, members: [LOCAL, MINI] };
+    stored = { strategy: 'expiring', autoSwitch: true, members: [LOCAL, MINI] };
     const local = renderHook(() => useLocalProviderGroupsState());
     await waitFor(() => expect(local.result.current.ready).toBe(true));
 
@@ -656,7 +626,7 @@ describe('memberStatusText', () => {
 
 describe('ProviderGroupSection status source', () => {
   it('does not present a stale source as live member status', async () => {
-    stored = { strategy: 'least', autoSwitch: true, members: [LOCAL, MINI] };
+    stored = { strategy: 'expiring', autoSwitch: true, members: [LOCAL, MINI] };
     const stale = viewOf(stored);
     // Unit: a stale quota verdict must not leak through the shared status helper (#8647).
     stale.members[1] = { ...stale.members[1], usageLimit: { resetAtMs: null } };
@@ -670,7 +640,7 @@ describe('ProviderGroupSection status source', () => {
   });
 
   it('drops live member status after a failed reload', async () => {
-    stored = { strategy: 'least', autoSwitch: true, members: [LOCAL, MINI] };
+    stored = { strategy: 'expiring', autoSwitch: true, members: [LOCAL, MINI] };
     render(<ProviderGroupSection providerId="anthropic" providerName="Anthropic" />);
     await screen.findByText('providerGroup.member.runningCount:{"count":1}');
     command.mockImplementation(async (cmd: { action: string }) => {
@@ -695,7 +665,7 @@ describe('ProviderGroupSection status source', () => {
   it('retires the live member status when the forwarded view budget ends', async () => {
     vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
     try {
-      stored = { strategy: 'least', autoSwitch: true, members: [LOCAL, MINI] };
+      stored = { strategy: 'expiring', autoSwitch: true, members: [LOCAL, MINI] };
       const view = viewOf(stored);
       view.providerContinuity = { stale: false, remainingMs: 1_000 };
       const currentView = view;

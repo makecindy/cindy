@@ -2592,6 +2592,7 @@ function mergeMembershipWithExisting(
 
 /** Serialize a verified cloud owner commit with the shared Ghost projection. */
 async function withCloudOwnerCommit<T>(opts: {
+  explicitLogin?: boolean;
   previousOwnerId: string | null;
   nextOwnerId: string;
   prepareTransition: () => Promise<void>;
@@ -2638,7 +2639,7 @@ async function withCloudOwnerCommit<T>(opts: {
         }
       },
       prepareCommit: async () => {
-        rollbackReservation = reserveCloudOwnerData(opts.nextOwnerId, opts.previousOwnerId);
+        rollbackReservation = reserveCloudOwnerData(opts.nextOwnerId, opts.previousOwnerId, opts.explicitLogin);
         await opts.prepareCommit?.();
       },
       commit: async () => {
@@ -2897,17 +2898,18 @@ function recoverCloudOwnerDataReservations(
   return profileRecovery !== 'failed' && nativeRecovery !== 'failed';
 }
 
-function resolveProfileReservationOwnerId(ownerId: string): string {
+function resolveProfileReservationOwnerId(ownerId: string): { id: string; firstOwner: boolean } {
   const nativeOwner = readLegacyNativeProviderAuthOwner();
   if (nativeOwner.status === 'failed') {
     throw new Error('native provider ownership could not be read before profile reservation');
   }
-  return nativeOwner.status === 'owned' ? nativeOwner.ownerId : ownerId;
+  return { id: nativeOwner.status === 'owned' ? nativeOwner.ownerId : ownerId, firstOwner: nativeOwner.status === 'none' };
 }
 
 function reserveCloudOwnerData(
   ownerId: string,
   previousOwnerId: string | null,
+  explicitLogin = false,
 ): CloudOwnerDataReservation {
   const rollbackActions: Array<() => void> = [];
   try {
@@ -2918,11 +2920,12 @@ function reserveCloudOwnerData(
     // Preserve that first owner when introducing the profile marker: a
     // different currently persisted account may authenticate, but must not
     // reinterpret the still-shared local database as its own.
-    const profileReservationOwnerId = resolveProfileReservationOwnerId(ownerId);
+    const profileOwner = resolveProfileReservationOwnerId(ownerId);
     const profileReservation = reserveLocalProfileDataOwnerDetailed(
-      profileReservationOwnerId,
+      profileOwner.id,
       app.getPath('userData'),
       BRAND_IDENTITY.dbFilePrefix,
+      explicitLogin && (previousOwnerId === null || previousOwnerId === LOCAL_DATA_OWNER_ID) && profileOwner.firstOwner,
     );
     if (profileReservation.status === 'failed') {
       throw new Error('local profile data reservation failed before cloud owner commit');
@@ -2930,7 +2933,7 @@ function reserveCloudOwnerData(
     if (profileReservation.status === 'claimed' && profileReservation.claimToken) {
       rollbackActions.push(() => {
         releaseLocalProfileDataOwner(
-          profileReservationOwnerId,
+          profileOwner.id,
           app.getPath('userData'),
           BRAND_IDENTITY.dbFilePrefix,
           profileReservation.claimToken!,
@@ -3000,9 +3003,9 @@ function repairStableCloudOwnerDataReservationsWhileLocked(ownerId: string): boo
     return false;
   }
   try {
-    const profileReservationOwnerId = resolveProfileReservationOwnerId(ownerId);
+    const profileOwner = resolveProfileReservationOwnerId(ownerId);
     profileReservation = reserveCommittedLocalProfileDataOwnerDetailed(
-      profileReservationOwnerId,
+      profileOwner.id,
       app.getPath('userData'),
       BRAND_IDENTITY.dbFilePrefix,
     );
@@ -6166,6 +6169,7 @@ async function completeLogin(
           activeSessionWritten = true;
           assertTransitionCurrent();
           await withCloudOwnerCommit({
+            explicitLogin: true,
             previousOwnerId: previousSession.dataOwnerId,
             nextOwnerId: nextUser.id,
             prepareTransition: async () => {

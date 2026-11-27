@@ -1,3 +1,4 @@
+import { CodexAccountReadDeferred } from '../subscription-accounts/accountServiceError.js';
 import { acceptedAttachmentReplay, type ACCEPTED_ATTACHMENT_REPLAY } from './attachmentReplay.js';
 import { TRUSTED_DESKTOP_QUEUE_ORIGIN, type TrustedDesktopQueueOriginReceipt } from './queuedInputOrigin.js';
 export { TRUSTED_DESKTOP_QUEUE_ORIGIN, TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT, stampTrustedDesktopQueuedOrigin, stampTrustedDeviceLinkQueuedOrigin, restoreTrustedDesktopQueuedOrigin, revokeTrustedDesktopQueuedOrigin } from './queuedInputOrigin.js';
@@ -81,7 +82,7 @@ import type { MakerSessionCreateOpts } from './sessionRequest.js';
 import { TELEGRAM_QUESTION_ORIGIN, activateTelegramQuestionReply, withTelegramQuestionPolicy } from './telegramQuestionReply.js';
 import { channelTurnSourceFor, withChannelTurnSource } from './channelTurnSignal.js';
 import type { CindyLearnInvocationGrant } from '../learn-host/invocationGrant.js';
-import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from './autoReviewUserIntent.js';
+import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewUserIntent, type AutoReviewHistory } from './autoReviewUserIntent.js';
 import type { McpAppModelContext } from '../mcp-apps/host.js';
 import { MCP_APP_MESSAGE_GUARD, type McpAppMessageGuard } from '../mcp-apps/message.js';
 
@@ -323,7 +324,7 @@ export interface MakerSendTransactionDeps {
   preflightBotRuntimeResources(opts: CreateOpts): Promise<void>;
   getSessionMeta(sessionId: string): Promise<{ title?: string } | null>;
   /** The same clear/rewind-filtered transcript used for native context handoffs. */
-  readAutoReviewHistory?(sessionId: string): Promise<AutoReviewHistoryMessage[]>;
+  readAutoReviewHistory?(sessionId: string): Promise<AutoReviewHistory>;
   readScheduledPermissions?(sessionId: string): Promise<{ permissionMode: unknown; planModeEnabled: unknown } | null>;
   /** Scheduler-only final route check, after asynchronous send preparation. */
   assertScheduledDispatchRoute?(sessionId: string): Promise<void>;
@@ -985,6 +986,11 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       // Preserve the old error shape for other failures. Only an explicitly
       // stopped bootstrap proves this input never reached native execution.
       const err = startupError instanceof AgentStartupStoppedError ? startupError.cause : startupError;
+      if (startupError instanceof AgentStartupStoppedError && err instanceof CodexAccountReadDeferred) {
+        return { kind: 'failure', result: toCompatibleMakerSendResult(
+          createHostSendFailure('REHYDRATE_FAILED', err.message, { accountReadRetryAt: err.retryAt }),
+        ) };
+      }
       if (startupError instanceof AgentStartupStoppedError && err instanceof Error
         && err.message.startsWith('[SUBSCRIPTION_ACCOUNT_LIMITED]')) {
         return { kind: 'failure', result: toCompatibleMakerSendResult(
@@ -1118,6 +1124,11 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       // Preserve the old error shape for other failures. Only an explicitly
       // stopped bootstrap proves this input never reached native execution.
       const err = startupError instanceof AgentStartupStoppedError ? startupError.cause : startupError;
+      if (startupError instanceof AgentStartupStoppedError && err instanceof CodexAccountReadDeferred) {
+        return { kind: 'failure', result: toCompatibleMakerSendResult(
+          createHostSendFailure('LAZY_CREATE_FAILED', err.message, { accountReadRetryAt: err.retryAt }),
+        ) };
+      }
       if (startupError instanceof AgentStartupStoppedError && err instanceof Error
         && err.message.startsWith('[SUBSCRIPTION_ACCOUNT_LIMITED]')) {
         return { kind: 'failure', result: toCompatibleMakerSendResult(
@@ -1843,7 +1854,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         // A queued teammate routine is reviewed against its own instruction, exactly as
         // when it dispatches directly; never against unrelated main-task chat.
         const routineIntent = teammateRoutineReviewIntent(scheduledOrigin.scheduleId, reconcilePersistText);
-        let history: AutoReviewHistoryMessage[] = [];
+        let history: AutoReviewHistory = [];
         if (routineIntent === undefined) {
           try {
             history = await deps.readAutoReviewHistory?.(sessionId) ?? [];
@@ -1863,7 +1874,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       }
       if (!resolveScheduledIntent && restoredAutoReviewIntent === undefined && isOrdinaryUserTurn && trustedUserText !== undefined
         && (!mainOwnedSendContext || mainOwnedSendContext.origin.kind === 'desktop')) {
-        let history: AutoReviewHistoryMessage[] = [];
+        let history: AutoReviewHistory = [];
         try {
           history = await deps.readAutoReviewHistory?.(sessionId) ?? [];
         } catch {

@@ -1144,7 +1144,7 @@ describe('auth login-flow reset', () => {
     const prepareBody = source.slice(prepareStart, prepareEnd);
 
     expect(prepareBody).toContain(
-      'rollbackReservation = reserveCloudOwnerData(opts.nextOwnerId, opts.previousOwnerId);',
+      'rollbackReservation = reserveCloudOwnerData(opts.nextOwnerId, opts.previousOwnerId, opts.explicitLogin);',
     );
     expect(prepareBody.indexOf('reserveCloudOwnerData')).toBeLessThan(
       prepareBody.indexOf('await opts.prepareCommit?.();'),
@@ -1178,10 +1178,10 @@ describe('auth login-flow reset', () => {
     const repairBody = source.slice(repairStart, repairEnd);
     expect(repairBody).toContain('reserveCommittedLocalProfileDataOwnerDetailed(');
     expect(repairBody).toContain(
-      'const profileReservationOwnerId = resolveProfileReservationOwnerId(ownerId);',
+      'const profileOwner = resolveProfileReservationOwnerId(ownerId);',
     );
     expect(repairBody).toContain(
-      'reserveCommittedLocalProfileDataOwnerDetailed(\n      profileReservationOwnerId,',
+      'reserveCommittedLocalProfileDataOwnerDetailed(\n      profileOwner.id,',
     );
     expect(repairBody).toContain(
       'reserveCommittedLegacyNativeProviderAuthOwner(authoritativeOwnerId)',
@@ -1210,13 +1210,13 @@ describe('auth login-flow reset', () => {
     );
     const reserveBody = source.slice(reserveStart, reserveEnd);
     expect(reserveBody).toContain(
-      'const profileReservationOwnerId = resolveProfileReservationOwnerId(ownerId);',
+      'const profileOwner = resolveProfileReservationOwnerId(ownerId);',
     );
     expect(reserveBody).toContain(
-      'reserveLocalProfileDataOwnerDetailed(\n      profileReservationOwnerId,',
+      'reserveLocalProfileDataOwnerDetailed(\n      profileOwner.id,',
     );
     expect(reserveBody).toContain(
-      'releaseLocalProfileDataOwner(\n          profileReservationOwnerId,',
+      'releaseLocalProfileDataOwner(\n          profileOwner.id,',
     );
     expect(reserveBody).toContain(
       "if (nativeReservation.status === 'claimed' && nativeReservation.claimToken)",
