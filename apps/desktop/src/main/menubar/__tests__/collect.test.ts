@@ -1113,7 +1113,7 @@ describe('plugin engine quota collection', () => {
           directory: '/home/.codex',
           status: 'ready',
           running: 0,
-          identity: 'pricky@gmail.com',
+          identity: 'alice@example.test',
           planType: 'pro',
           usage: {
             codex: {
@@ -1142,7 +1142,7 @@ describe('plugin engine quota collection', () => {
     });
     expect(single.sources).toMatchObject([{
       id: 'openai',
-      account: 'pricky@gmail.com',
+      account: 'alice@example.test',
       label: '主力 Codex',
       providerName: '主力 Codex',
     }]);
@@ -1171,7 +1171,7 @@ describe('plugin engine quota collection', () => {
             status: 'ready',
             running: 0,
             label: '主号',
-            identity: 'pricky@gmail.com',
+            identity: 'alice@example.test',
             planType: 'pro',
             usage: { codex: { planType: 'pro', credits: null, buckets: { codex: { limitId: 'codex', limitName: null, updatedAt: NOW, primary: null, secondary: { usedPercent: 20, windowMinutes: 10_080, resetsAt: nowSec + 86_400 } } } } },
           },
@@ -1183,7 +1183,7 @@ describe('plugin engine quota collection', () => {
             directory: '/home/.codex-2',
             status: 'ready',
             running: 0,
-            identity: 'backup@gmail.com',
+            identity: 'bob@example.test',
             planType: 'pro',
             usage: { codex: { planType: 'pro', credits: null, buckets: { codex: { limitId: 'codex', limitName: null, updatedAt: NOW, primary: null, secondary: { usedPercent: 50, windowMinutes: 10_080, resetsAt: nowSec + 86_400 } } } } },
           },
@@ -1208,42 +1208,122 @@ describe('plugin engine quota collection', () => {
       uiStrings: buildMenubarUiStrings(mainStringKeysUnder('menubar.ui'), raw, 'en'),
       t: createMenubarTranslate('en', raw),
     });
-    expect(view.sources.map(source => source.name)).toEqual(['主号', 'backup']);
+    expect(view.sources.map(source => source.name)).toEqual(['主号', 'bob']);
     expect(view.details['openai'].title).toBe('主号');
     expect(view.details['openai'].actionLabel).toBe('Start a task with 团队号池');
     expect(view.details['openai:account:second'].title).toBe('团队号池');
     expect(view.details['openai:account:second'].actionLabel).toBe('Start a task with 团队号池');
 
-    // Legacy user OAuth connections: preserve brand-prefixed custom names ("OpenAI · 工作"),
-    // exclude generated "<Brand> · <email>" names, and never collapse multi-account tubes.
+    // Legacy user OAuth connections: full collectMenubarInputs -> buildMenubarView verification
+    // for single-account alias precedence/restoration ("OpenAI · 工作") and multi-account pool ("工作池").
     const generatedLegacy = codexSource(provider({
       id: 'openai-legacy',
       source: 'user',
-      name: 'OpenAI · pricky@gmail.com',
-      openAiAccount: { source: 'oauth', identity: 'pricky@gmail.com' },
+      name: 'OpenAI · alice@example.test',
+      openAiAccount: { source: 'oauth', identity: 'alice@example.test' },
     }), null, NOW);
     expect(generatedLegacy.label).toBeUndefined();
 
-    const renamedLegacySingle = codexSource(provider({
+    const explicitlyRenamedToBrand = codexSource(provider({
       id: 'openai-legacy',
       source: 'user',
-      name: 'OpenAI · 工作',
-      openAiAccount: { source: 'oauth', identity: 'pricky@gmail.com' },
+      name: 'OpenAI',
+      customName: true,
+      openAiAccount: { source: 'oauth', identity: 'alice@example.test' },
     }), null, NOW);
-    expect(renamedLegacySingle).toMatchObject({
-      label: 'OpenAI · 工作',
-      providerName: 'OpenAI · 工作',
+    expect(explicitlyRenamedToBrand.label).toBe('OpenAI');
+
+    const rawZh = (key: string) => rawMainString(key, 'zh-CN');
+    const renderZhView = async (
+      providerItem: ProviderView,
+      pool: Awaited<ReturnType<NonNullable<MenubarCollectDeps['readSubscriptionPool']>>>,
+    ) => {
+      const collected = await collectMenubarInputs({
+        nowMs: NOW,
+        selfDeviceName: 'Mac',
+        listProviders: async () => [providerItem],
+        readSubscriptionPool: async () => pool,
+        readCodex: async () => null,
+        readClaude: async () => null,
+        readXai: async () => null,
+        readBalance: async () => null,
+        readUsage: async () => null,
+        activities: () => [],
+        sessionRow: async () => null,
+      });
+      return buildMenubarView({
+        ...collected,
+        nowMs: NOW,
+        locale: 'zh-CN',
+        moneySymbol: '¥',
+        settings: DEFAULT_MENUBAR_SETTINGS,
+        harnessLogos: MENUBAR_HARNESS_LOGOS,
+        uiStrings: buildMenubarUiStrings(mainStringKeysUnder('menubar.ui'), rawZh, 'zh-CN'),
+        t: createMenubarTranslate('zh-CN', rawZh),
+      });
+    };
+
+    const legacyWorkProvider = provider({
+      id: 'openai-work',
+      source: 'user',
+      name: 'OpenAI · 工作',
+      subscriptionAccountPool: 'openai',
+    });
+    const makeSinglePool = (label?: string) => ({
+      providerId: 'openai-work',
+      kind: 'openai' as const,
+      configured: true,
+      strategy: 'expiring' as const,
+      accounts: [{
+        id: 'default',
+        paused: false,
+        limit: 4,
+        weight: 1,
+        directory: '/home/.codex-work',
+        status: 'ready' as const,
+        running: 0,
+        ...(label ? { label } : {}),
+        identity: 'alice@example.test',
+        planType: 'pro',
+        usage: { codex: { planType: 'pro', credits: null, buckets: { codex: { limitId: 'codex', limitName: null, updatedAt: NOW, primary: null, secondary: { usedPercent: 20, windowMinutes: 10_080, resetsAt: nowSec + 86_400 } } } } },
+      }],
     });
 
-    const renamedLegacyPool = subscriptionPoolSources(
+    const singleProviderNamed = await renderZhView(legacyWorkProvider, makeSinglePool());
+    expect(singleProviderNamed.sources.map(source => source.name)).toEqual(['OpenAI · 工作']);
+    expect(singleProviderNamed.headlinePrimary).toContain('OpenAI · 工作');
+    expect(singleProviderNamed.manage.map(row => row.title)).toEqual(['OpenAI · 工作']);
+    expect(singleProviderNamed.details['openai-work']).toMatchObject({
+      title: 'OpenAI · 工作',
+      actionLabel: '用 OpenAI · 工作 开新任务',
+      action: { kind: 'new-task', providerId: 'openai-work' },
+    });
+
+    const singleAccountAliased = await renderZhView(legacyWorkProvider, makeSinglePool('主力账号'));
+    expect(singleAccountAliased.sources.map(source => source.name)).toEqual(['主力账号']);
+    expect(singleAccountAliased.headlinePrimary).toContain('主力账号');
+    expect(singleAccountAliased.manage.map(row => row.title)).toEqual(['主力账号']);
+    expect(singleAccountAliased.details['openai-work']).toMatchObject({
+      title: '主力账号',
+      actionLabel: '用 OpenAI · 工作 开新任务',
+      action: { kind: 'new-task', providerId: 'openai-work' },
+    });
+
+    const singleRestored = await renderZhView(legacyWorkProvider, makeSinglePool());
+    expect(singleRestored.sources.map(source => source.name)).toEqual(['OpenAI · 工作']);
+    expect(singleRestored.headlinePrimary).toContain('OpenAI · 工作');
+    expect(singleRestored.manage.map(row => row.title)).toEqual(['OpenAI · 工作']);
+    expect(singleRestored.details['openai-work'].title).toBe('OpenAI · 工作');
+
+    const legacyPoolView = await renderZhView(
       provider({
-        id: 'openai-legacy',
+        id: 'openai-pool',
         source: 'user',
-        name: 'OpenAI · 工作',
+        name: '工作池',
         subscriptionAccountPool: 'openai',
       }),
       {
-        providerId: 'openai-legacy',
+        providerId: 'openai-pool',
         kind: 'openai',
         configured: true,
         strategy: 'expiring',
@@ -1253,10 +1333,10 @@ describe('plugin engine quota collection', () => {
             paused: false,
             limit: 4,
             weight: 1,
-            directory: '/home/.codex',
+            directory: '/home/.codex-1',
             status: 'ready',
             running: 0,
-            identity: 'pricky@gmail.com',
+            identity: 'alice@example.test',
             planType: 'pro',
             usage: { codex: { planType: 'pro', credits: null, buckets: { codex: { limitId: 'codex', limitName: null, updatedAt: NOW, primary: null, secondary: { usedPercent: 20, windowMinutes: 10_080, resetsAt: nowSec + 86_400 } } } } },
           },
@@ -1268,15 +1348,23 @@ describe('plugin engine quota collection', () => {
             directory: '/home/.codex-2',
             status: 'ready',
             running: 0,
-            identity: 'backup@gmail.com',
+            identity: 'bob@example.test',
             planType: 'pro',
             usage: { codex: { planType: 'pro', credits: null, buckets: { codex: { limitId: 'codex', limitName: null, updatedAt: NOW, primary: null, secondary: { usedPercent: 50, windowMinutes: 10_080, resetsAt: nowSec + 86_400 } } } } },
           },
         ],
       },
-      NOW,
     );
-    expect(renamedLegacyPool.map(source => source.label)).toEqual([undefined, undefined]);
-    expect(renamedLegacyPool.map(source => source.providerName)).toEqual(['OpenAI · 工作', 'OpenAI · 工作']);
+    expect(legacyPoolView.sources.map(source => source.name)).toEqual(['alice', 'bob']);
+    expect(legacyPoolView.headlinePrimary).toContain('alice');
+    expect(legacyPoolView.manage.map(row => row.title)).toEqual(['alice', 'bob']);
+    expect(legacyPoolView.details['openai-pool']).toMatchObject({
+      actionLabel: '用 工作池 开新任务',
+      action: { kind: 'new-task', providerId: 'openai-pool' },
+    });
+    expect(legacyPoolView.details['openai-pool:account:second']).toMatchObject({
+      actionLabel: '用 工作池 开新任务',
+      action: { kind: 'new-task', providerId: 'openai-pool' },
+    });
   });
 });

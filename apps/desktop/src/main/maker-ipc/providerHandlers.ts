@@ -1918,6 +1918,9 @@ export function registerProviderHandlers(
             throw error;
           }
           assertOptionalRequestedOwner(value);
+          if (provider.auth.method === 'oauth') {
+            await setProviderPresentation(providerId, { name });
+          }
           await refreshCatalogAfterCommit();
         });
       }

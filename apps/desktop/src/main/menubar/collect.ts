@@ -427,7 +427,8 @@ function customSubscriptionProviderName(
 ): string | null {
   const name = provider.name?.trim();
   if (!name) return null;
-  if (provider.source === 'builtin') return provider.customName === true ? name : null;
+  if (provider.customName === true && provider.id !== 'xd') return name;
+  if (provider.source === 'builtin') return null;
   if (provider.source === 'user') {
     if (name === provider.id) return null;
     const ownIdentity = accountIdentity(provider);

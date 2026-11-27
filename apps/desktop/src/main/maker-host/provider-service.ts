@@ -349,10 +349,14 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       : []);
     const icons = deps.getProviderConnectionIcons?.() ?? {};
     return buildRegistry(catalog, connected, discoveryFailures, modelAccess).map(formatModels).map((provider) => {
-      const presentation = provider.source === 'builtin' ? deps.getProviderPresentation?.(provider.id) : undefined;
+      const presentation = deps.getProviderPresentation?.(provider.id);
+      const builtinPresentation = provider.source === 'builtin' ? presentation : undefined;
+      const hasCustomName = provider.source === 'builtin'
+        ? Boolean(builtinPresentation?.name && provider.id !== 'xd')
+        : provider.source === 'user' && Boolean(presentation?.name && presentation.name === provider.name);
       return {
       ...(subscriptionInfo.get(provider.id) ? { subscriptionAccount: subscriptionInfo.get(provider.id) } : {}),
-      ...provider, ...(presentation ?? {}), ...(presentation?.name && provider.id !== 'xd' ? { customName: true as const } : {}), ...(accountInfo.get(provider.id) ? { openAiAccount: accountInfo.get(provider.id) } : {}),
+      ...provider, ...(builtinPresentation ?? {}), ...(hasCustomName ? { customName: true as const } : {}), ...(accountInfo.get(provider.id) ? { openAiAccount: accountInfo.get(provider.id) } : {}),
       ...(provider.source === 'user' && Object.hasOwn(icons, provider.id) ? connectionArtworkFields(icons[provider.id]) : {}),
       ...(provider.source === 'organization' ? { logoKind: deps.getOrganizationProviderLogoKind?.(provider) } : {}),
       // Deletion disconnects first. A live binding wins over a stale removed flag if
