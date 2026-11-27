@@ -1,4 +1,4 @@
-import { useState, type ComponentProps, type ReactNode, type RefObject, type UIEventHandler } from 'react';
+import type { ComponentProps, ReactNode, RefObject, UIEventHandler } from 'react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { PluginCatalogPublishButton } from './GhostPluginActions';
@@ -34,6 +34,8 @@ export interface PluginCatalogModel {
   onSelectCatalogTab?: ComponentProps<typeof PluginManagementLayout>['onSelectTab'];
   query: string;
   onQueryChange(query: string): void;
+  searchScope: Market['scope'];
+  onSearchScope: Market['onScope'];
   scrollRef: RefObject<HTMLElement | null>;
   onScroll: UIEventHandler<HTMLElement>;
   tabsRef: RefObject<HTMLDivElement | null>;
@@ -64,7 +66,6 @@ type PluginCatalogViewProps = {
 );
 
 export function PluginCatalogView({ catalog, detail, notice, aside, overlay }: PluginCatalogViewProps) {
-  const [searchScope, setSearchScope] = useState<Market['scope']>('all');
   if (detail) {
     return (
       <div className="flex h-full min-h-0 w-full">
@@ -84,20 +85,17 @@ export function PluginCatalogView({ catalog, detail, notice, aside, overlay }: P
     );
   }
 
-  return <PluginCatalogList catalog={catalog} aside={aside} overlay={overlay}
-    searchScope={searchScope} onSearchScope={setSearchScope} />;
+  return <PluginCatalogList catalog={catalog} aside={aside} overlay={overlay} />;
 }
 
-function PluginCatalogList({ catalog, aside, overlay, searchScope, onSearchScope }: {
+function PluginCatalogList({ catalog, aside, overlay }: {
   catalog: PluginCatalogModel;
   aside: ReactNode;
   overlay: ReactNode;
-  searchScope: Market['scope'];
-  onSearchScope: Market['onScope'];
 }) {
   const { t } = useTranslation();
   const {
-    embedded, onSelectCatalogTab, query, onQueryChange, scrollRef, onScroll, tabsRef,
+    embedded, onSelectCatalogTab, query, onQueryChange, searchScope, onSearchScope, scrollRef, onScroll, tabsRef,
     tab, onSelectTab, target, headerActions, publication, notice, scopeNotice, installedTotal, installedCount,
     installedGrid, installedSentinel, installedNotice, installedEmpty, recommendations, market, wrapSections,
   } = catalog;

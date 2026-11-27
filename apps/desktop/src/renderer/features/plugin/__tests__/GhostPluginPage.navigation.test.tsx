@@ -634,6 +634,10 @@ it('fills installed recommendation slots from the original pool and hides the in
 // and hid matching community plugins. Existing search cases only had official items.
 // Two public items and a selected browsing source are the smallest failing input.
 it.each(['official', 'community'])('starts search across all plugins after browsing %s and keeps explicit search filters', async source => {
+  auth.mode = 'cloud';
+  Object.assign(window.electronAPI, { pluginContributions: {
+    list: vi.fn().mockResolvedValue({ plugins: [], nextCursor: null, queriedAt: detail.publishedAt }),
+  } });
   const community = { ...detail, pluginId: 'community-navigation', ghostId: 'community-navigation',
     name: 'Navigation Community', publisherKind: 'personal' as const };
   window.electronAPI.pluginMarket.snapshot = async () => ({ items: [detail, community],
@@ -643,7 +647,7 @@ it.each(['official', 'community'])('starts search across all plugins after brows
   await screen.findByRole('button', { name: detail.name });
   openSourceMenu();
   fireEvent.click(screen.getByRole('option', { name: new RegExp(`publisherKind\\.${source}`) }));
-  const input = openPluginSearch();
+  let input = openPluginSearch();
   fireEvent.change(input, { target: { value: 'Navigation' } });
   expect(screen.getByRole('combobox', { name: /^settings\.ghosts\.page\.filtersAria/ }).textContent)
     .toContain('settings.ghosts.page.filterAll');
@@ -652,6 +656,16 @@ it.each(['official', 'community'])('starts search across all plugins after brows
   openSourceMenu();
   fireEvent.click(screen.getByRole('option', { name: /publisherKind\.official/ }));
   fireEvent.change(input, { target: { value: 'Navigation ' } });
+  expect(screen.getByRole('combobox', { name: /^settings\.ghosts\.page\.filtersAria/ }).textContent)
+    .toContain('settings.ghosts.market.publisherKind.official');
+  expect(screen.queryByRole('button', { name: community.name })).toBeNull();
+  // Review regression: author management unmounts the catalog while its query
+  // remains; returning must retain the chosen source as well as the query.
+  fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.contribution.myPlugins' }));
+  await screen.findByRole('heading', { name: 'settings.ghosts.contribution.myPlugins' });
+  fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.title' }));
+  input = screen.getByRole('textbox', { name: 'settings.ghosts.page.search' });
+  expect((input as HTMLInputElement).value).toBe('Navigation ');
   expect(screen.getByRole('combobox', { name: /^settings\.ghosts\.page\.filtersAria/ }).textContent)
     .toContain('settings.ghosts.market.publisherKind.official');
   expect(screen.queryByRole('button', { name: community.name })).toBeNull();
