@@ -143,18 +143,18 @@ describe('long-lived subscription token', () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'cindy-status-token-version-'));
     try {
       const settingsPath = path.join(dir, 'settings.json');
-      writeFileSync(settingsPath, JSON.stringify({ env: { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-first' } }));
+      writeFileSync(settingsPath, JSON.stringify({ env: { CLAUDE_CODE_OAUTH_TOKEN: 'test-stub-first' } }));
       const dirOptions = { ...options, env: { CLAUDE_CONFIG_DIR: dir } };
       reply(tokenJson);
       reply('Auth token: CLAUDE_CODE_OAUTH_TOKEN\n');
       reply(JSON.stringify({ loggedIn: false, authMethod: 'none' }), new Error('exit 1'));
       const first = await readClaudeCliLoginStatusBySpawn(dirOptions);
       expect(first?.longLivedTokenVersion).toMatch(/^settings:/);
-      expect(first?.longLivedTokenVersion).not.toContain('sk-ant-');
+      expect(first?.longLivedTokenVersion).not.toContain('test-stub-');
 
       // Atomic replacement (temp + rename, like writePrivateFile) changes inode and version.
       const tmp = path.join(dir, 'settings.json.tmp');
-      writeFileSync(tmp, JSON.stringify({ env: { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-second' } }));
+      writeFileSync(tmp, JSON.stringify({ env: { CLAUDE_CODE_OAUTH_TOKEN: 'test-stub-second' } }));
       renameSync(tmp, settingsPath);
       const secondVersion = claudeLongLivedTokenFileVersion('settings', dir);
       expect(secondVersion).toMatch(/^settings:/);

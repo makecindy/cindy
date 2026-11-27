@@ -143,7 +143,7 @@ describe('spawnObservedClaudeProcess', () => {
   it('hands the token file to the CLI as descriptor 3 and keeps no copy open', () => {
     const directory = mkdtempSync(path.join(tmpdir(), 'cindy-token-spawn-'));
     const file = path.join(directory, 'cindy-long-lived-token');
-    writeFileSync(file, 'sk-ant-oat01-not-a-real-token\n', { mode: 0o600 });
+    writeFileSync(file, 'test-stub-first\n', { mode: 0o600 });
     try {
       const versions: Array<string | null> = [];
       mocks.spawn.mockReturnValueOnce(makeChild());
@@ -152,14 +152,14 @@ describe('spawnObservedClaudeProcess', () => {
       expect(options.stdio.slice(0, 3)).toEqual(['pipe', 'pipe', 'pipe']);
       expect(typeof options.stdio[3]).toBe('number');
       expect(options.env).toEqual({ CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: '3' });
-      expect(JSON.stringify(options.env)).not.toContain('sk-ant-');
+      expect(JSON.stringify(options.env)).not.toContain('test-stub-');
       expect(() => fstatSync(options.stdio[3] as number)).toThrow();
       expect(versions[0]).toMatch(/^descriptor:/);
-      expect(versions[0]).not.toContain('sk-ant-');
+      expect(versions[0]).not.toContain('test-stub-');
 
       // Replacing the token file atomically changes the spawned process's token version.
       const replacement = path.join(directory, 'cindy-long-lived-token.tmp');
-      writeFileSync(replacement, 'sk-ant-oat01-second-fake-token\n', { mode: 0o600 });
+      writeFileSync(replacement, 'test-stub-second\n', { mode: 0o600 });
       renameSync(replacement, file);
       mocks.spawn.mockReturnValueOnce(makeChild());
       spawnProcess({ oauthTokenFile: file, onOAuthTokenVersion: (v) => versions.push(v) });
