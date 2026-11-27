@@ -6,8 +6,9 @@
  * (标题 / 重新加载 / 回主界面 / 错误详情),而不是 react-router 的
  * 开发者默认错误页,也不会把错误继续往上抛炸掉整个应用。
  */
+import { transferableAbortController } from 'node:util';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 
 // 仓库同款 i18n mock:t 返回 key 本身,断言直接用 key;带插值时把参数附在后面以便断言。
@@ -38,8 +39,12 @@ function renderWithError(variant?: 'fullscreen' | 'section') {
   return render(<RouterProvider router={router} />);
 }
 
+// React Router's Node-native Request requires a matching native AbortSignal (newer Node rejects jsdom's).
+const NativeAbortController = transferableAbortController().constructor;
+beforeEach(() => vi.stubGlobal('AbortController', NativeAbortController));
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   clearDraft(NEW_MAKER_DRAFT_KEY);
 });
 
