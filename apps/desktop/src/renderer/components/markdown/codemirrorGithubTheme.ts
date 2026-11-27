@@ -150,6 +150,54 @@ function makeEditorTheme(c: typeof githubLightColors, isDark: boolean) {
         height: '100%',
         color: c.text,
       },
+
+      '.cm-minimap-gutter': {
+        alignSelf: 'stretch',
+        height: 'auto',
+        // 压缩 minimap 默认的 120px 宽度。
+        width: '96px !important',
+        paddingLeft: '0',
+        borderLeft: '1px solid var(--border-default)',
+        backgroundColor: 'color-mix(in srgb, var(--surface-elevated) 88%, transparent)',
+        zIndex: '200',
+      },
+      '.cm-minimap-inner canvas': {
+        maxWidth: '96px !important',
+      },
+      '.cm-minimap-overlay-container .cm-minimap-overlay': {
+        background: 'var(--text-primary)',
+        opacity: '0.12',
+      },
+      '.cm-minimap-overlay-container .cm-minimap-overlay:hover, .cm-minimap-overlay-container.cm-minimap-overlay-active .cm-minimap-overlay':
+        {
+          opacity: '0.2',
+        },
+      '.cm-minimap-mark-labels': {
+        position: 'absolute',
+        inset: '0',
+        overflow: 'hidden',
+        pointerEvents: 'none',
+        zIndex: '2',
+      },
+      '.cm-minimap-mark-label': {
+        position: 'absolute',
+        right: '5px',
+        maxWidth: 'calc(100% - 10px)',
+        padding: '0 4px',
+        border: '1px solid var(--border-default)',
+        borderRadius: '4px',
+        background: 'var(--card)',
+        boxSizing: 'border-box',
+        color: 'var(--text-secondary)',
+        fontFamily: UI_FONT_STACK,
+        // 跟随「外观 → UI 字号」：10 已是登记档位，走 token 而不是字面量。
+        fontSize: 'var(--text-10)',
+        lineHeight: '16px',
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        opacity: '0.9',
+      },
       '.cm-scroller': {
         // 不在这层设 fontFamily —— CodeMirror baseTheme 给 .cm-content 显式
         // 写了 `font-family: monospace`,specificity 比 .cm-scroller 高,
