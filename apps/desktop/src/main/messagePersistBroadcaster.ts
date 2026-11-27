@@ -748,6 +748,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
   const failedWrites: {
     label: string;
     ownerScope: OwnerScope;
+    canStart?: () => boolean;
     perform: (scope: OwnerScope) => Promise<unknown>;
   }[] = [];
   const OWNER_SCOPE_SUPERSEDED = 'OWNER_SCOPE_SUPERSEDED';
@@ -869,17 +870,19 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
   function enqueueDurableWrite<T>(
     label: string,
     fn: (ownerScope: OwnerScope) => Promise<T> | T,
+    canStart?: () => boolean,
   ): Promise<T> {
     const ownerScope = captureOwnerScope();
+    const current = canStart ?? (() => isOwnerScopeCurrent(ownerScope));
     return new Promise<T>((resolve, reject) => {
       writeChain = writeChain
         .then(async () => {
-          if (!isOwnerScopeCurrent(ownerScope)) {
+          if (!current()) {
             reject(ownerScopeSupersededError());
             return;
           }
           if (deps.onPersistenceError && failedWrites.length) {
-            failedWrites.push({ label, ownerScope, perform: async (scope) => fn(scope) });
+            failedWrites.push({ label, ownerScope, canStart, perform: async (scope) => fn(scope) });
             reject(new Error('Message persistence is paused'));
             return;
           }
@@ -892,8 +895,8 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
             // suppressing its old-owner broadcast via ownerScope.
             resolve(value);
           } catch (err) {
-            if (deps.onPersistenceError && isOwnerScopeCurrent(ownerScope)) {
-              failedWrites.push({ label, ownerScope, perform: async (scope) => fn(scope) });
+            if (deps.onPersistenceError && current()) {
+              failedWrites.push({ label, ownerScope, canStart, perform: async (scope) => fn(scope) });
               deps.onPersistenceError(err);
             }
             if (!isOwnerScopeSupersededError(err)) {
@@ -933,7 +936,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     const retry = writeChain.then(async () => {
       while (failedWrites.length) {
         const entry = failedWrites[0]!;
-        if (isOwnerScopeCurrent(entry.ownerScope)) await entry.perform(entry.ownerScope);
+        if (entry.canStart ? entry.canStart() : isOwnerScopeCurrent(entry.ownerScope)) await entry.perform(entry.ownerScope);
         failedWrites.shift();
       }
     });
@@ -1219,15 +1222,19 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
    * Late child results are still useful after a parent turn has ended, but must
    * not borrow the next turn's persistence context. Keep snapshots keyed by the
    * in-flight collab tool ids for events explicitly marked `turnScope=background`.
+   * Plugin engines (ACP) keep a call they have not finished open past `end_turn`
+   * and report its result between turns, so every pending call of theirs is kept.
    */
   const backgroundTurnPersistStatesBySession = new Map<string, BackgroundTurnPersistState[]>();
 
   function preserveTurnPersistStateForBackground(sessionId: string): void {
     const knownToolUseIds = knownToolUseIdsBySession.get(sessionId) ?? new Set<string>();
     const toolUseInfo = toolUseInfoBySession.get(sessionId);
+    const pluginEngine = getSessionDbAgentKind(sessionId) === 'acp';
     const collabToolUseIds = new Set(
       [...knownToolUseIds].filter(
-        (toolUseId) => toolUseInfo?.get(toolUseId)?.toolName.startsWith('collab:') === true,
+        (toolUseId) =>
+          pluginEngine || toolUseInfo?.get(toolUseId)?.toolName.startsWith('collab:') === true,
       ),
     );
     const resultIds = toolResultIdByToolUseId.get(sessionId) ?? new Map<string, string>();
@@ -3093,6 +3100,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
           sdkError?: unknown;
           toolLoop?: unknown;
           outputLimit?: unknown;
+          reconnectHandoff?: unknown;
         }
       | null
       | undefined,
@@ -3138,6 +3146,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
           sdkError?: unknown;
           toolLoop?: unknown;
           outputLimit?: unknown;
+          reconnectHandoff?: unknown;
         }
       | null
       | undefined,
@@ -3208,7 +3217,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
   function buildTurnErrorContent(
     sessionId: string,
     data:
-      | { reason?: unknown; sdkError?: unknown; toolLoop?: unknown; outputLimit?: unknown }
+      | { reason?: unknown; sdkError?: unknown; toolLoop?: unknown; outputLimit?: unknown; reconnectHandoff?: unknown }
       | null
       | undefined,
     message: string,
@@ -3217,6 +3226,9 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     if (typeof data?.reason === 'string' && data.reason) content.reason = data.reason;
     if (typeof data?.sdkError === 'string' && data.sdkError) {
       content.sdkError = redactSensitiveText(data.sdkError);
+    }
+    if (data?.reason === 'codex_reconnect_stalled' && (data.reconnectHandoff === 'disabled' || data.reconnectHandoff === 'exhausted')) {
+      content.reconnectHandoff = data.reconnectHandoff;
     }
     const toolLoop = parseToolLoopErrorDetails(data?.toolLoop);
     const outputLimit = parseOutputLimitDetails(data?.outputLimit);

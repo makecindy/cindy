@@ -48,6 +48,11 @@ import {
   parseGhostNodeChildToHostMessage,
 } from '../../shared/ghost.js';
 import { isGhostOwnerScopeUsable, type GhostOwnerScope } from './ghostOwnerScope.js';
+import {
+  GHOST_HARNESS_ACCOUNT_DIR_ARG,
+  GHOST_HARNESS_GUEST_WORKSPACE_ARG,
+  GHOST_HARNESS_REMOTE_WORKSPACE_ARG,
+} from '@cindy/plugin-protocol';
 
 const DEFAULT_IDLE_TIMEOUT_MS = 2 * 60_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
@@ -331,8 +336,6 @@ interface HarnessProcEntry {
   stopping: boolean;
 }
 
-/** 一个任务一个引擎进程;同一插件同时在世的引擎进程上限。 */
-export const GHOST_HARNESS_MAX_PROCESSES_PER_GHOST = 8;
 /** 每个引擎进程写入插件日志的 stderr 字符总量上限。 */
 const HARNESS_STDERR_LOG_CAP = 64 * 1024;
 
@@ -1427,13 +1430,18 @@ export class GhostNodeRuntimeBroker {
    *
    * 守门(fork 前同步现查,fork 就绪后再核一次):未在停止/更新窗口、owner 代次可用、插件已
    * 启用且整包批准有效、声明了 node 与该引擎、协议为 `acp`、receipt `approvedHarnesses`
-   * 明确批准、入口逐字命中 node.entries、解析后的路径不越出安装目录、数量不超顶。
+   * 明确批准、入口逐字命中 node.entries、解析后的路径不越出安装目录。引擎由 Cindy 主进程按
+   * 用户任务发起(不同于插件自主 childSpawn),与内置引擎一致不设每插件固定进程数上限。
    *
    * 返回的进程:stdin.write 只收 base64 字节串;stdout 是未消费的原始字节流(调用方挂
    * 'data' 前自缓冲);stderr 已由 broker 有界写入插件日志,调用方后挂的监听只看到之后的
    * 片段。插件停用、更新、卸载与账号切换时,broker 在替换安装目录前结束这些进程。
    */
-  async spawnHarness(ghostId: string, harnessId: string): Promise<NodeWorkerProcess> {
+  async spawnHarness(
+    ghostId: string,
+    harnessId: string,
+    options?: { remoteWorkspace?: boolean; guestWorkspace?: boolean; accountDir?: string },
+  ): Promise<NodeWorkerProcess> {
     const logRejection = (reason: string): void => {
       this.deps.log?.warn('ghost harness spawn rejected', { ghostId, harnessId, reason });
     };
@@ -1452,15 +1460,22 @@ export class GhostNodeRuntimeBroker {
     if (!ghost || !resolved) {
       return reject('This task engine is not enabled, approved and declared by the plugin');
     }
-    if (this.harnessProcessCount(ghostId) >= GHOST_HARNESS_MAX_PROCESSES_PER_GHOST) {
-      reject(`At most ${GHOST_HARNESS_MAX_PROCESSES_PER_GHOST} task engine processes can run per plugin`);
-    }
     const identity = harnessIdentity(ghost);
     const generation = this.stopGeneration.get(ghostId) ?? 0;
 
     let proc: NodeWorkerProcess;
     try {
-      proc = this.deps.spawnChildProcess(resolved.entryPath, resolved.root, ghostId, []);
+      // 唯一的启动参数由宿主固定给出(任务的文件与命令在另一台电脑，以及是否为跨账号分享访客),插件仍然没有参数面。
+      // 账号目录同样由宿主给出(注册表已核对它是这个引擎的账号目录),插件不能自选路径。
+      const entryArgs = [
+        ...(options?.guestWorkspace
+          ? [GHOST_HARNESS_REMOTE_WORKSPACE_ARG, GHOST_HARNESS_GUEST_WORKSPACE_ARG]
+          : options?.remoteWorkspace
+            ? [GHOST_HARNESS_REMOTE_WORKSPACE_ARG]
+            : []),
+        ...(options?.accountDir ? [GHOST_HARNESS_ACCOUNT_DIR_ARG, options.accountDir] : []),
+      ];
+      proc = this.deps.spawnChildProcess(resolved.entryPath, resolved.root, ghostId, entryArgs);
     } catch (error) {
       return reject(error instanceof Error ? error.message : 'Task engine failed to start');
     }

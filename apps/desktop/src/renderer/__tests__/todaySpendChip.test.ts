@@ -19,6 +19,7 @@ import {
   buildCodexUsageCard,
   buildOpenCodeGoUsageCard,
   buildXaiUsageCard,
+  formatQuotaResetDuration,
 } from '../components/status/usageCardModel';
 
 const compact = (value: string) => value.replace(/\s+/g, '');
@@ -143,6 +144,8 @@ describe('TodaySpendChip dashboard routing', () => {
     );
     expect(compact(source)).toContain(compact('const codexApiHasTokenFallback = isCodexApi'));
     expect(compact(source)).toContain(compact('const codexApiEmptyState = isCodexApi'));
+    // 单一调用点契约：订阅分支与 codex-api 分支共用 codexEmptyState（#12149），
+    // 任一处内联第二份 getCodexApiEmptyState 调用都会在此打红（失效后果：空态判定分叉）。
     expect(source.match(/getCodexApiEmptyState\(latestTurnUsage\)/g)).toHaveLength(1);
     expect(compact(source)).toContain(compact('todaySpend.codex.sessionTokensLine'));
     expect(compact(source)).toContain(compact('todaySpend.codex.noUsageLabel'));
@@ -153,15 +156,29 @@ describe('TodaySpendChip dashboard routing', () => {
 
   it('caps the reset countdown at the window length right after a reset', () => {
     const units = ((key: string) =>
-      key === 'todaySpend.unit.day' ? '天' : key === 'todaySpend.unit.hour' ? '小时' : key) as TFunction;
+      key === 'todaySpend.unit.day'
+        ? '天'
+        : key === 'todaySpend.unit.hour'
+          ? '小时'
+          : key === 'todaySpend.unit.minute'
+            ? '分钟'
+            : key) as TFunction;
     const week = 7 * 24 * 60;
-    // resetsAt 比 now + 7 天晚 30 秒 (服务端取整 / 时钟偏差): 不得向上取整成「8天」
+    // resetsAt 比 now + 7 天晚 30 秒 (服务端取整 / 时钟偏差): 不得多出一小时
     const resetsAt = week * 60 + 30;
     expect(formatCompactTimeUntilReset(resetsAt, 0, units, week)).toBe('7天');
     expect(formatCompactTimeUntilReset(5 * 3600 + 30, 0, units, 5 * 60)).toBe('5小时');
-    // 未越界时封顶不改变向上取整口径
-    expect(formatCompactTimeUntilReset(6 * 86400 + 60, 0, units, week)).toBe('7天');
-    expect(formatCompactTimeUntilReset(5 * 86400 + 60, 0, units, week)).toBe('6天');
+    // 天级带小时段, 与悬浮窗同串: 剩 4天1小时 不得显示成「5天」
+    expect(formatCompactTimeUntilReset(6 * 86400 + 3600, 0, units, week)).toBe('6天 1小时');
+    expect(formatCompactTimeUntilReset(5 * 86400 + 3600, 0, units, week)).toBe('5天 1小时');
+    const fourDaysOneHour = 4 * 86400 + 3600;
+    expect(formatCompactTimeUntilReset(fourDaysOneHour, 0, units, week)).toBe(
+      formatQuotaResetDuration(fourDaysOneHour, 0, units),
+    );
+    // 残余分钟两处都不显示: 同一时刻两个界面同串, 不会出现「点开反而变少」
+    const withMinutes = fourDaysOneHour + 12 * 60;
+    expect(formatCompactTimeUntilReset(withMinutes, 0, units, week)).toBe('4天 1小时');
+    expect(formatQuotaResetDuration(withMinutes, 0, units)).toBe('4天 1小时');
     // 窗口长度未知时不封顶
     expect(formatCompactTimeUntilReset(25 * 86400, 0, units)).toBe('25天');
   });

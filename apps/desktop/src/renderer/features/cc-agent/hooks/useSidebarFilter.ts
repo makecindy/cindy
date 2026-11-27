@@ -61,6 +61,8 @@ import {
   loadCreators,
   loadHideAutomations,
   persistHideAutomations,
+  loadHideTaskCreated,
+  persistHideTaskCreated,
   persistCreators,
   nextCreatorsAfterToggle,
   normalizeTaskCreators,
@@ -139,6 +141,8 @@ export interface UseSidebarFilterReturn {
   creators: FilterCreators;
   hideAutomations: boolean;
   setHideAutomations: (hide: boolean) => void;
+  hideTaskCreated: boolean;
+  setHideTaskCreated: (hide: boolean) => void;
   creatorOptions: readonly TaskBotIdentity[];
   toggleCreator: (key: string) => void;
   setCreatorsAll: () => void;
@@ -246,7 +250,8 @@ function isExactOwnerStampCurrent(
 function useModeFilterState<T>(mode: TaskListMode, load: (mode: TaskListMode) => T) {
   const tasks = useState(() => load('tasks'));
   const inbox = useState(() => load('inbox'));
-  return mode === 'inbox' ? inbox : tasks;
+  const [value, setValue] = mode === 'inbox' ? inbox : tasks;
+  return [value, setValue, inbox[0]] as const;
 }
 
 /** Run project-filter cleanup once each mode has a nonempty, unfiltered catalogue. */
@@ -267,13 +272,21 @@ export function useSidebarFilter(
   hiddenProjectKeys: ReadonlySet<string>,
   initialSnapshot: SidebarSettingsSnapshot,
   creatorOptions: readonly TaskBotIdentity[] = [],
-): UseSidebarFilterReturn {
+): UseSidebarFilterReturn & {
+  /** Saved inbox scope, even while the regular task list is shown. */
+  inbox: Pick<UseSidebarFilterReturn, 'projects' | 'projectsAsSet' | 'vendor' | 'creators' | 'lastActivity' | 'hideAutomations' | 'hideTaskCreated'>;
+} {
   const { mode } = useTaskListMode();
-  const [hideAutomations, setHideAutomationsState] = useModeFilterState(mode, loadHideAutomations);
+  const [hideAutomations, setHideAutomationsState, inboxHideAutomations] = useModeFilterState(mode, loadHideAutomations);
   const setHideAutomations = useCallback((hide: boolean) => {
     setHideAutomationsState(hide);
     persistHideAutomations(hide, mode);
   }, [mode, setHideAutomationsState]);
+  const [hideTaskCreated, setHideTaskCreatedState, inboxHideTaskCreated] = useModeFilterState(mode, loadHideTaskCreated);
+  const setHideTaskCreated = useCallback((hide: boolean) => {
+    setHideTaskCreatedState(hide);
+    persistHideTaskCreated(hide, mode);
+  }, [mode, setHideTaskCreatedState]);
   const ownerId = initialSnapshot.dataOwnerId;
   const ownerStamp = useMemo<DataOwnerPushStamp>(
     () => ({
@@ -284,8 +297,8 @@ export function useSidebarFilter(
   );
   const [loadedPinned] = useState(() => loadManualPinnedOrder(initialSnapshot));
   const [status, setStatusState] = useState<FilterStatus>(() => loadStatus());
-  const [projects, setProjectsState] = useModeFilterState(mode, scope => loadProjects(ownerId, scope));
-  const [storedCreators, setCreators] = useModeFilterState(mode, scope => loadCreators(ownerId, scope));
+  const [projects, setProjectsState, inboxProjects] = useModeFilterState(mode, scope => loadProjects(ownerId, scope));
+  const [storedCreators, setCreators, inboxStoredCreators] = useModeFilterState(mode, scope => loadCreators(ownerId, scope));
   const normalizeCreators = useCallback((selected: FilterCreators): FilterCreators =>
     normalizeTaskCreators(selected, creatorOptions), [creatorOptions]);
   const creators = useMemo(() => normalizeCreators(storedCreators), [normalizeCreators, storedCreators]);
@@ -309,8 +322,8 @@ export function useSidebarFilter(
     setCreators('all');
     persistCreators('all', ownerId, mode);
   }, [ownerId, mode, setCreators]);
-  const [vendor, setVendorState] = useModeFilterState(mode, loadVendor);
-  const [lastActivity, setLastActivityState] = useModeFilterState(mode, loadLastActivity);
+  const [vendor, setVendorState, inboxVendor] = useModeFilterState(mode, loadVendor);
+  const [lastActivity, setLastActivityState, inboxLastActivity] = useModeFilterState(mode, loadLastActivity);
   const [groupBy, setGroupByState] = useState<FilterGroupBy>(() => loadGroupBy());
   const [groupDialogue, setGroupDialogueState] = useState<boolean>(() => loadGroupDialogue());
   const [groupAutomation, setGroupAutomationState] = useState<boolean>(() => loadGroupAutomation());
@@ -630,6 +643,7 @@ export function useSidebarFilter(
 
   const resetContentFilters = useCallback(() => {
     setHideAutomations(false);
+    setHideTaskCreated(false);
     setProjectsState((prev) => {
       if (prev === 'all') return prev;
       persistProjects('all', ownerId, mode);
@@ -641,7 +655,7 @@ export function useSidebarFilter(
     persistVendor('all', mode);
     setLastActivityState('all');
     persistLastActivity('all', mode);
-  }, [ownerId, mode, setCreators, setProjectsState, setVendorState, setLastActivityState, setHideAutomations]);
+  }, [ownerId, mode, setCreators, setProjectsState, setVendorState, setLastActivityState, setHideAutomations, setHideTaskCreated]);
 
   const setManualProjectOrder = useCallback(
     (order: readonly string[], activeWorkingDirs: readonly string[]) => {
@@ -718,13 +732,29 @@ export function useSidebarFilter(
   );
 
   const isSessionContentFiltered =
-    status !== 'active' || projects !== 'all' || vendor !== 'all' || lastActivity !== 'all' || creators !== 'all' || hideAutomations;
+    status !== 'active' || projects !== 'all' || vendor !== 'all' || lastActivity !== 'all' || creators !== 'all' || hideAutomations || hideTaskCreated;
 
   const isFilterActive = isSessionContentFiltered || groupBy !== 'project' || sortBy !== 'recency';
 
+  const inbox = useMemo(() => {
+    const visibleProjects = removeProjectsFromFilter(inboxProjects, hiddenProjectKeys, window.electronAPI.platform);
+    return {
+      projects: visibleProjects,
+      projectsAsSet: visibleProjects === 'all' ? null : new Set(visibleProjects),
+      creators: normalizeCreators(inboxStoredCreators),
+      vendor: inboxVendor,
+      lastActivity: inboxLastActivity,
+      hideAutomations: inboxHideAutomations,
+      hideTaskCreated: inboxHideTaskCreated,
+    };
+  }, [inboxProjects, hiddenProjectKeys, inboxStoredCreators, normalizeCreators, inboxVendor, inboxLastActivity, inboxHideAutomations, inboxHideTaskCreated]);
+
   return {
+    inbox,
     hideAutomations,
     setHideAutomations,
+    hideTaskCreated,
+    setHideTaskCreated,
     creators,
     creatorOptions,
     toggleCreator,

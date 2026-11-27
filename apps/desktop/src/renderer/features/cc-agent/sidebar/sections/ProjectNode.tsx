@@ -8,7 +8,6 @@ import { deviceDisplayName } from '@/lib/deviceName';
  *     · displayName Inter 14 / 500 #262626 (Light) / #f5f5f5 (Dark)
  *     · 整行 hover 高亮 sidebar-item-hover
  *   - Project Sessions：padding [2, 0, 0, 0] / gap 2 vertical
- *     子层级缩进 8px：文字行由 SessionItem 的 indented padding 承担，卡片由本容器承担。
  *     折叠时不渲染该容器
  *
  * 交互：
@@ -184,6 +183,7 @@ export const ProjectNode = memo(function ProjectNode({
         collapsedAttentionTone={collapsedAttentionTone}
         hideRemoteMachineLabel={hideRemoteMachineLabel}
         lamp={lamp}
+        sessionVariant={sessionVariant}
         onToggle={onToggle}
         onSettings={onSettings}
         onRenameProject={onRenameProject}
@@ -194,19 +194,14 @@ export const ProjectNode = memo(function ProjectNode({
         onArchiveAll={onArchiveAll}
       />
 
-      {/* Project Sessions（容器只负责 gap + 顶部 padding；左缩进由 SessionItem 自身承担）
+      {/* Project Sessions
           展开/收起走 SectionCollapse 高度动画；「显示全部」在收起动画结束后复位。
           data-no-drag: 拦截 SortableList 默认 filter,阻止"鼠标落在子 session 上按下"
           被父层 ProjectsSection SortableList 当成"拖动整个 ProjectNode"的起点。
           SessionItem 的 root 是 role="button" 而非 <button> 标签,默认 filter 拦不下来。 */}
       <SectionCollapse collapsed={isCollapsed} data-no-drag>
         {/* 组间留白由外层树的 4px gap 承担，组内任务保持 2px 间隔。 */}
-        <div
-          className={cn(
-            'flex flex-col gap-0.5 pt-0.5 pr-0',
-            sessionVariant === 'list' ? 'pl-2' : 'pl-0',
-          )}
-        >
+        <div className="flex flex-col gap-0.5 pt-0.5">
           <SessionEntryList
             sessions={displaySessions ?? project.sessions}
             activeSessionId={activeSessionId}
@@ -227,7 +222,6 @@ export const ProjectNode = memo(function ProjectNode({
             onMoveSession={onMoveSession}
             projectOptions={projectOptions}
             onScheduleAction={onScheduleAction}
-            indented
             sessionVariant={sessionVariant}
           />
         </div>
@@ -244,6 +238,7 @@ type ProjectHeaderProps = Pick<
   | 'collapsedAttentionTone'
   | 'hideRemoteMachineLabel'
   | 'lamp'
+  | 'sessionVariant'
   | 'onToggle'
   | 'onSettings'
   | 'onRenameProject'
@@ -261,6 +256,7 @@ const ProjectHeader = memo(function ProjectHeader({
   isCollapsed,
   collapsedAttentionTone = null,
   hideRemoteMachineLabel = false,
+  sessionVariant = 'text',
   onToggle,
   onSettings,
   onRenameProject,
@@ -378,7 +374,8 @@ const ProjectHeader = memo(function ProjectHeader({
           // 2026-07 用户定稿:项目行作分组容器退后半步,让会话行更突出)。
           // h-8 + rounded-full:hover 底与顶部导航行 / 会话行同款药丸形,三处
           // 高度、圆角、左右边界(同容器 w-full)完全一致(2026-07 用户定稿)。
-          'group flex h-8 w-full items-center gap-2.5 rounded-full pl-3 pr-2',
+          'group flex h-8 w-full items-center gap-2.5 rounded-full pl-3',
+          sessionVariant === 'list' ? 'pr-2.5' : 'pr-2',
           'text-sm font-normal text-[var(--sidebar-list-muted)]',
           // 整行点击 = toggle 折叠，常态用 pointer。即便支持手动拖拽排序也不显示
           // grab 光标——只有真正进入拖拽时（SortableList onStart 给 body 挂
@@ -422,7 +419,7 @@ const ProjectHeader = memo(function ProjectHeader({
               }}
               onClick={(e) => e.stopPropagation()}
               className={cn(
-                'min-w-0 flex-1 h-6 px-1.5 rounded',
+                'min-w-0 flex-1 h-6 px-1.5 rounded-full',
                 'text-sm font-normal text-foreground',
                 'bg-transparent outline-none',
                 'border-[1.5px] border-[var(--focus-ring)]',
@@ -718,7 +715,7 @@ function ProjectAction({ label, onClick, disabled = false, children }: ProjectAc
         onPointerDown={(e) => e.stopPropagation()}
         onKeyDown={(e) => e.stopPropagation()}
         className={cn(
-          'shrink-0 size-5 flex items-center justify-center rounded-md',
+          'shrink-0 size-5 flex items-center justify-center rounded-lg',
           'text-sidebar-action-icon hover:text-foreground',
           'hover:bg-sidebar-item-hover focus:outline-none',
           'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent',

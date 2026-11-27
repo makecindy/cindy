@@ -77,7 +77,14 @@ function attentionSidebar() {
     useCallback, useEffect, window,
     activeSessionRemoteReceiptKey: undefined, activeRemoteAttentionRev: 0,
     markAutomationSessionRunsRead: vi.fn(), clearSystemSessionAttention: clearAttention,
-    hasSessionSelectionModifier: () => false,
+    resolveSidebarSessionClickAction: ({ id }: { id: string }) => ({ kind: 'navigate', anchorId: id, clearSelection: false }),
+    isRemoteSessionWriteBlocked: () => false,
+    openTargetInNewWindow: vi.fn(),
+    toast: { warning: vi.fn() },
+    t: (key: string) => key,
+    sidebarScrollRef: { current: null },
+    getVisibleSidebarSessionIds: () => [],
+    selectionAnchorSessionIdRef: { current: null },
     selectedSessionIdsRef: { current: new Set<string>() }, setSelectedSessionIds: vi.fn(),
     setSelectionAnchorSessionId: vi.fn(), urgentSetRef: { current: new Set<string>() },
     attentionKindsRef: { current: new Map() }, sessionsByIdRef: { current: new Map() },
@@ -106,10 +113,11 @@ type NotificationSession = {
   deviceLinkDeviceId?: string;
   hiddenAt?: string | null;
   orcaRole?: 'lead' | 'worker';
+  companion?: { role: 'canonical' | 'history' | 'thread' | 'routine' | 'group' | 'channel' } | null;
 };
 const send = vi.fn();
 const reviewTarget = vi.fn(async () => false);
-const botTitle = vi.fn(async (): Promise<string | null> => null);
+const botTitle = vi.fn(async (): Promise<string | null | typeof BOT_GROUP_LANE_SESSION> => null);
 const leadOfWorker = vi.fn<(workerSessionId: string) => string | null>(() => null);
 beforeEach(() => { vi.clearAllMocks(); });
 afterEach(cleanup);
@@ -220,6 +228,55 @@ describe('disabled Make notification dispatch', () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(send).toHaveBeenCalledWith('unknown', 'Unnamed task', 'error');
+  });
+});
+
+describe('bot lane notification dispatch', () => {
+  // #10458 / unit: execute the production sidebar callback. Existing helper tests
+  // cover hidden lanes, but a group/channel session already in a list snapshot
+  // bypassed that fallback and emitted an extra external task notification.
+  // Island errors/approvals are owned independently by the main-process service.
+  it.each((['group', 'channel'] as const).flatMap(role =>
+    (['local', 'archived', 'remote'] as const).flatMap(location =>
+      (['done', 'error', 'needs-reply'] as const).map(kind => ({ role, location, kind })),
+    ),
+  ))('suppresses $kind for a $location $role lane without another lookup', async ({ role, location, kind }) => {
+    const session: NotificationSession = {
+      id: 'lane', title: 'Group reply', source: 'bot', companion: { role },
+      status: location === 'archived' ? 'archived' : 'active',
+      ...(location === 'remote' ? { deviceLinkDeviceId: 'host' } : {}),
+    };
+    const fire = dispatcher(location === 'remote' ? [] : [session], location === 'remote' ? [session] : []);
+    fire('lane', kind);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(send).not.toHaveBeenCalled();
+    expect(reviewTarget).not.toHaveBeenCalled();
+    expect(botTitle).not.toHaveBeenCalled();
+  });
+
+  it.each((['canonical', 'history', 'thread', 'routine', null, undefined] as const).flatMap(role =>
+    (['done', 'error', 'needs-reply'] as const).map(kind => ({ role, kind })),
+  ))('preserves $kind notifications for companion role $role', ({ role, kind }) => {
+    dispatcher([{ id: 'task', title: 'Task reply', source: 'bot', companion: role == null ? role : { role } }])('task', kind);
+    expect(send).toHaveBeenCalledExactlyOnceWith('task', 'Task reply', kind, {
+      remoteDevice: false, remoteDeviceId: undefined,
+    });
+  });
+
+  it.each(['done', 'error', 'needs-reply'] as const)('keeps the hidden-lane fallback silent for %s', async kind => {
+    botTitle.mockResolvedValueOnce(BOT_GROUP_LANE_SESSION);
+    dispatcher([])('hidden-lane', kind);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(send).not.toHaveBeenCalled();
+    expect(botTitle).toHaveBeenCalledWith('hidden-lane');
+
+    botTitle.mockResolvedValueOnce('Buddy');
+    dispatcher([])('private-chat', kind);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(send).toHaveBeenCalledExactlyOnceWith('private-chat', 'Buddy', kind);
   });
 });
 

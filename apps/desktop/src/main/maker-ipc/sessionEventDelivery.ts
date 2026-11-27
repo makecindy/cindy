@@ -7,6 +7,7 @@ import { MAKER_PUSH } from './channels.js';
 import { type OrcaTeamService } from './orcaTeamService.js';
 import { holdsContextRecoveryBroadcast } from './contextOverflowRollover.js';
 import { syncBackgroundCommandWork } from '../maker-host/claude-background-command-work-sync.js';
+import { observePluginEngineEvent } from '../maker-host/claude-session-background-activity.js';
 import { noteBackgroundActivityTurnEnded } from './sessionEventAutoResumeSteps.js';
 import { DeferredCodexRestartService } from './deferredCodexRestart.js';
 import {
@@ -17,6 +18,7 @@ import {
 import type { PreparedSessionEvent } from './sessionEventPreparation.js';
 import type { SessionStreamResult } from './sessionEventStream.js';
 import { isSessionErrorSuppressed } from './sessionErrorSuppression.js';
+import { isSilencedSchedulerTurn } from '../scheduler-host/silent-output.js';
 export interface DeliverSessionEventDeps {
   readonly sessionListActivityTracker: SessionListActivityTracker;
   readonly attemptBotCompactRuntimeRefresh: (session: Session, reason: string) => void;
@@ -55,7 +57,7 @@ export interface DeliverSessionEventDeps {
   readonly deferredCodexRestartHolder: Pick<DeferredCodexRestartService, 'onSessionSettled'> | null;
   readonly gatewayCodexRestartHolder?: Pick<DeferredCodexRestartService, 'onSessionSettled'> | null;
   readonly refreshRemoteCodexMcpOnTurnSettledHolder: ((sessionId: string) => void) | null;
-  readonly markTurnEndedAfterPersistDrain: (sessionId: string) => void;
+  readonly markTurnEndedAfterPersistDrain: (sessionId: string, event: AgentEvent) => void;
   readonly gitSnapshotCoordinator: Pick<GitSnapshotCoordinator, 'onTurnEnd' | 'onTurnAbort'> | null;
   /**
    * 智能体回合因 Cindy AI Key 失效终止时调用(按本机当前 Key 上报,触发凭据重新同步)。
@@ -138,6 +140,9 @@ export function deliverSessionEvent(
       deps.agentInputCoordinatorHolder?.bindErrorPersistId(session.id, persistId, message);
     }
   }
+  // 插件引擎回合外的工作(及回合结束时仍未完成的工具调用)点亮「后台活动」。放在广播与
+  // Agent Island 之前:岛先被点亮为运行中,这条回合外的工具调用才能显示为当前动作。
+  if (session.agentKind === 'acp') observePluginEngineEvent(session.id, event);
   if (suppressOverflowBroadcast) {
     deps.overflowSuppressedBroadcasts.set(session.id, {
       sessionId: session.id,
@@ -180,9 +185,11 @@ export function deliverSessionEvent(
     const wasInTurn = deps.sessionTurnActivityTracker.isSessionInTurn(session.id);
     deps.sessionTurnActivityTracker.scheduleIdleAfterStatusBroadcast(session.id);
     // status:isRunning=false 即逻辑 turn 结束(可重试 error 不发这个信号)。
-    deps.markTurnEndedAfterPersistDrain(session.id);
+    deps.markTurnEndedAfterPersistDrain(session.id, event);
     if (
-      wasInTurn && event.turnOrigin?.kind !== 'goal'
+      wasInTurn &&
+      event.turnOrigin?.kind !== 'goal' &&
+      !isSilencedSchedulerTurn(event.turnOrigin)
     ) {
       deps.sessionListActivityTracker.end(session.id, {
         identity: event.sessionTurnGeneration === undefined ? undefined

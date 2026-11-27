@@ -52,6 +52,8 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'newChat.modelSelector.pricing.free': '限时免费',
         'newChat.modelSelector.source.disconnected': '已断开',
         'newChat.modelSelector.source.unconfirmed': '模型列表暂未更新',
+        'newChat.modelSelector.source.unreachableDetail': '连不上，请检查网络',
+        'settings.providers.openai.title': 'OpenAI',
         'newChat.modelSelector.source.unavailable': '模型不可用',
         'newChat.modelSelector.source.reconnect': '重新连接',
         'newChat.modelSelector.source.manage': '管理来源',
@@ -92,6 +94,9 @@ vi.mock('react-i18next', async (importOriginal) => ({
       }
       if (key === 'newChat.modelSelector.pricing.discount') {
         return `立省 ${options?.percent}%`;
+      }
+      if (key === 'newChat.modelSelector.source.unreachable') {
+        return `连不上 ${options?.source}`;
       }
       return translations[key] ?? options?.defaultValue ?? key;
     },
@@ -543,6 +548,26 @@ describe('resolveRemoteModelListStatus', () => {
         providers: { loading: false, error: 'timeout', unsupported: false },
       }),
     ).toBe('error');
+  });
+
+  // Gap (2026-11-23 field report): one timeout reading the task computer's catalog made the pill
+  // show the red load-failure mark until the picker was opened, although the last catalog was still
+  // within its trust budget. Minimal input: a temporary error with and without a retained snapshot.
+  it('does not report a temporary failure while a bounded snapshot is still on screen', () => {
+    const base = { deviceId: 'dev-mini', agentKind: 'codex' as const, cc: ready, pi: ready };
+    const timeout = '[DEVICE_LINK_TIMEOUT] remote did not answer';
+    expect(resolveRemoteModelListStatus({ ...base, codex: { capabilities: {}, error: timeout },
+      providers: { error: timeout, providers: [{ id: 'openai' }] } })).toBe('ready');
+    // Nothing on screen yet: the failure is real for this view.
+    expect(resolveRemoteModelListStatus({ ...base, codex: ready,
+      providers: { error: timeout, providers: [] } })).toBe('error');
+    expect(resolveRemoteModelListStatus({ ...base, codex: { capabilities: null, error: timeout },
+      providers: { error: null, providers: [{ id: 'openai' }] } })).toBe('error');
+    // Expired budgets and refusals are not temporary even with a snapshot.
+    expect(resolveRemoteModelListStatus({ ...base, codex: ready, providers: {
+      error: '[MODEL_VISIBILITY_NOT_READY] Provider directory snapshot expired', providers: [{ id: 'openai' }] } })).toBe('error');
+    expect(resolveRemoteModelListStatus({ ...base, codex: ready, providers: {
+      error: '[DEVICE_LINK_ACCESS_REVOKED] revoked', providers: [{ id: 'openai' }] } })).toBe('error');
   });
 
   it('only treats an unsupported provider channel as a compatible flat-list fallback', () => {
@@ -1450,14 +1475,18 @@ describe('ModelSelector trigger variants', () => {
   // A complete empty list and a failed read previously rendered the same red error.
   it('keeps Astra identifiable and retries an unconfirmed subscription catalog', async () => {
     const source = { id: 'openai', name: 'OpenAI', connected: true, agents: ['codex'], routing: { codex: {} } };
-    providersRef.providers = [{ ...source, subscriptionReadUnavailable: true, models: { codex: [] } }];
+    providersRef.providers = [{
+      ...source, connected: false, subscriptionReadUnavailable: true, subscriptionModelsConfirmedAt: 123,
+      models: { codex: [] },
+      subscriptionDisplayModels: { codex: [{ id: 'gpt-6.2-astra', name: 'Astra from last confirmed list', efforts: ['high'] }] },
+    }];
     const props = { remoteAgent: undefined, modelId: 'gpt-6.2-astra', effort: 'high' as Effort,
       onModelChange: vi.fn(), onEffortChange: vi.fn(), vendorKey: 'codex' as const, currentProviderId: 'openai',
       actualRoute: true, sourceDisconnected: true, unifiedPanel: true, onReconnectSource: vi.fn() };
     const refresh = vi.fn(async () => ({ ok: true }));
     Object.assign(window.electronAPI.maker, { refreshBuiltinProviderModels: refresh });
     const view = render(React.createElement(ModelSelector, props));
-    const trigger = screen.getByRole('button', { name: /模型列表暂未更新.*astra/i });
+    const trigger = screen.getByRole('button', { name: /模型列表暂未更新.*Astra from last confirmed list/i });
     fireEvent.click(trigger);
     const retry = await screen.findByRole('button', { name: '重新读取模型' });
     await act(async () => { fireEvent.click(retry); });
@@ -1466,6 +1495,25 @@ describe('ModelSelector trigger variants', () => {
     providersRef.providers = [{ ...source, models: { codex: [{ id: props.modelId, name: 'GPT-6.2 Astra', efforts: ['high'] }] } }];
     view.rerender(React.createElement(ModelSelector, { ...props, sourceDisconnected: false }));
     expect(screen.getByRole('button', { name: /Select model.*GPT-6.2 Astra/ })).toBeTruthy();
+  });
+
+  // Unit: a model read that could not reach the provider names the connection, not a stale list.
+  it('says the provider cannot be reached when the model read failed on the network', async () => {
+    const source = { id: 'openai', name: 'OpenAI · a@example.com', connected: true, agents: ['codex'],
+      routing: { codex: {} }, subscriptionAccountPool: 'openai' as const };
+    providersRef.providers = [{ ...source, subscriptionReadUnavailable: true, subscriptionReadUnreachable: true,
+      subscriptionModelsConfirmedAt: Date.UTC(2026, 10, 20), models: { codex: [] } }];
+    try {
+      render(React.createElement(ModelSelector, { remoteAgent: undefined, modelId: 'gpt-6.2-astra',
+        effort: 'high' as Effort, onModelChange: vi.fn(), onEffortChange: vi.fn(), vendorKey: 'codex' as const,
+        currentProviderId: 'openai', actualRoute: true, sourceDisconnected: false, unifiedPanel: true }));
+      const trigger = screen.getByRole('button', { name: /连不上 OpenAI.*astra/i });
+      expect(trigger.textContent).not.toContain('模型列表暂未更新');
+      fireEvent.click(trigger);
+      const status = await screen.findByRole('status');
+      expect(status.textContent).toContain('OpenAI · a@example.com · 连不上，请检查网络');
+      expect(await screen.findByRole('button', { name: '重新读取模型' })).toBeTruthy();
+    } finally { providersRef.providers = providersRef.DEFAULT_PROVIDERS; }
   });
 
   it('keeps the disconnected status in the compact trigger title', () => {
@@ -3147,10 +3195,9 @@ describe('ModelSelector trigger variants', () => {
       name: 'newChat.modelSelector.search.placeholderAll',
     });
     expect(searchInput.hasAttribute('disabled')).toBe(true);
+    // Shared SearchInput disabled state (DESIGN.md §4 input/text: 60% opacity, not-allowed cursor).
     expect(searchInput.className).toContain('cursor-not-allowed');
-    expect(searchInput.className).toContain('text-[var(--text-disabled)]');
-    expect(searchInput.className).toContain('placeholder:text-[var(--text-disabled)]');
-    expect(searchInput.parentElement?.className).toContain('bg-[var(--surface-elevated-soft)]');
+    expect(searchInput.className).toContain('opacity-60');
 
     fireEvent.click(opusRow);
     fireEvent.pointerEnter(opusRow);

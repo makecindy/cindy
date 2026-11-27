@@ -8,6 +8,18 @@ export function foldDesktopRegion(g: WindowGeometry) {
     && split.first.height >= 160 && split.second.height >= 160 ? split : null;
 }
 
+/** Physical artwork reaches the window edges; safe regions constrain controls only. */
+export function foldDesktopHardware(g: WindowGeometry) {
+  const split = foldDesktopRegion(g);
+  const seam = split
+    ? (split.first.y + split.first.height + split.second.y) / 2
+    : 0;
+  return {
+    media: { x: 0, y: 0, width: g.width, height: seam },
+    controls: { x: 0, y: seam, width: g.width, height: g.height - seam },
+  };
+}
+
 /** Both media layers receive this same rect. Software keyboard occlusion never changes the lease. */
 export function foldDesktopLayout(g: WindowGeometry, keyboardBottom: number, panelHeight: number, keyboard: boolean) {
   const split = foldDesktopRegion(g);

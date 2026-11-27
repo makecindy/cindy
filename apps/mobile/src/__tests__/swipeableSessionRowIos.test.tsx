@@ -7,7 +7,7 @@ import type { RemoteSession } from "@/session/types";
 import { SwipeableSessionRow } from "@/session/SwipeableSessionRow.ios";
 
 const runtime = vi.hoisted(() => ({
-  width: 400,
+  rowWidth: 400,
   translation: { value: 0 },
   props: null as SwipeableProps | null,
   reset: vi.fn(),
@@ -17,7 +17,11 @@ const runtime = vi.hoisted(() => ({
   styles: [] as Array<() => Record<string, unknown>>,
 }));
 vi.mock("react-native", () => ({
-  View: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+  View: ({ children, onLayout }: { children?: React.ReactNode; onLayout?: (event: { nativeEvent: { layout: { width: number } } }) => void }) => {
+    const width = runtime.rowWidth;
+    React.useLayoutEffect(() => onLayout?.({ nativeEvent: { layout: { width } } }), [onLayout, width]);
+    return <div>{children}</div>;
+  },
   Pressable: ({
     children,
     onPress,
@@ -32,7 +36,7 @@ vi.mock("react-native", () => ({
     </button>
   ),
   StyleSheet: { create: (value: unknown) => value },
-  Dimensions: { get: () => ({ width: runtime.width }), addEventListener: () => ({ remove() {} }) },
+  Dimensions: { get: () => ({ width: 900 }), addEventListener: () => ({ remove() {} }) },
 }));
 vi.mock("@/platform/gestureHandler", async () => {
   const { forwardRef, useImperativeHandle } = await import("react");
@@ -76,7 +80,10 @@ vi.mock("react-native-reanimated", async () => {
     },
     useSharedValue: (value: number) => useRef({ value }).current,
     useAnimatedStyle: (fn: () => Record<string, unknown>) => {
-      runtime.styles.push(fn);
+      useEffect(() => {
+        runtime.styles.push(fn);
+        return () => { runtime.styles = runtime.styles.filter((style) => style !== fn); };
+      }, [fn]);
       return {};
     },
     useAnimatedReaction: (
@@ -108,6 +115,7 @@ vi.mock("lucide-react-native", () =>
   Object.fromEntries(
     [
       "Check",
+      "CircleDashed",
       "Archive",
       "ArchiveRestore",
       "Ellipsis",
@@ -127,15 +135,20 @@ vi.mock("@/session/swipeRowRegistry", () => ({
   pinToggleAction: () => ({ label: "pin" }),
   statusToggleAction: () => ({ label: "archive", action: "archive" }),
 }));
+vi.mock("@/components/AppText", () => ({
+  Text: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
+}));
 vi.mock("@/theme", () => ({
+  fontWeight: { medium: "500" },
   iconSize: { swipeAction: 24 },
   iconStroke: { regular: 2 },
+  textStyles: { body: { fontSize: 16, lineHeight: 22 } },
   useTheme: () => ({ colors: {} }),
   useThemedStyles: (make: (colors: object) => unknown) => make({}),
 }));
 vi.mock("@/theme/tokens", () => ({
   radius: { pill: 9999 },
-  spacing: { md: 12 },
+  spacing: { sm: 8, md: 12, lg: 16 },
 }));
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -170,7 +183,7 @@ function release(direction: "left" | "right") {
 }
 beforeEach(() => {
   vi.clearAllMocks();
-  runtime.width = 400;
+  runtime.rowWidth = 400;
   runtime.translation.value = 0;
   runtime.styles = [];
   runtime.reactions.clear();
@@ -187,7 +200,7 @@ describe("iOS swipe runtime contracts (mocked native boundary)", () => {
     const initial = runtime.props!;
     render("a");
     expect(runtime.props!.onSwipeableWillOpen).toBe(initial.onSwipeableWillOpen);
-    runtime.width = 800;
+    runtime.rowWidth = 800;
     render("b");
     expect(runtime.props!.onSwipeableWillOpen).toBe(initial.onSwipeableWillOpen);
     expect(runtime.props!.onSwipeableOpenStartDrag).toBe(initial.onSwipeableOpenStartDrag);
@@ -198,6 +211,38 @@ describe("iOS swipe runtime contracts (mocked native boundary)", () => {
     drag(-500);
     release("left");
     expect(controls.onArchive).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: "b" }));
+  });
+  // Unit regression: a 320-point floating row inside a 900-point window.
+  it("arms and archives at 55% of the floating row", () => {
+    runtime.rowWidth = 320;
+    render("a");
+    drag(-175);
+    release("left");
+    expect(runtime.timing).not.toHaveBeenCalled();
+    expect(controls.onArchive).not.toHaveBeenCalled();
+    drag(-176);
+    expect(runtime.timing).toHaveBeenCalledWith(1, expect.anything());
+    release("left");
+    expect(controls.onArchive).toHaveBeenCalledOnce();
+  });
+  // Unit regression: a narrow row settles beyond 55% when its action panel opens.
+  it.each([
+    ["left", -1, "onArchive"],
+    ["right", 1, "onMarkRead"],
+  ] as const)("keeps the %s panel unarmed when it settles on a 240-point row", (direction, sign, action) => {
+    runtime.rowWidth = 240;
+    render("a");
+    drag(sign * 100);
+    release(direction);
+    drag(sign * 148); // The native panel settles after release.
+    drag(sign * 159);
+    release(direction);
+    expect(runtime.timing).not.toHaveBeenCalledWith(1, expect.anything());
+    expect(controls[action]).not.toHaveBeenCalled();
+    drag(sign * 160);
+    expect(runtime.timing).toHaveBeenCalledWith(1, expect.anything());
+    release(direction);
+    expect(controls[action]).toHaveBeenCalledOnce();
   });
   it.each([
     ["left", -260, "onArchive"],
@@ -254,6 +299,26 @@ describe("iOS swipe runtime contracts (mocked native boundary)", () => {
     ).not.toHaveBeenCalled();
     expect(runtime.close).toHaveBeenCalledOnce();
   });
+  // 2026-11-20 用户要求:两个方向拉长后的胶囊都要有文字,文案即该动作的名称。
+  it("labels both stretched capsules with their action names", () => {
+    render("a");
+    const label = (button: string) =>
+      host.querySelector(`[data-testid="swipe.${button}"] span`)?.textContent;
+    expect(label("readAction")).toBe("session.row.markRead");
+    expect(label("archiveAction")).toBe("archive");
+    expect(host.querySelector('[data-testid="swipe.pinAction"] span')).toBeNull();
+    expect(host.querySelector('[data-testid="swipe.optionsAction"] span')).toBeNull();
+  });
+  // 2026-11-20 用户要求:中间态不留空——拉过面板宽度、未到全滑阈值(400 宽屏为 220)时,
+  // 主按钮跟着拉长到次按钮旁边:200 - 3 个间距(36) - 次按钮(56) = 108。
+  it.each([200, -200])("stretches the primary action beside the secondary one before arming: %s", (value) => {
+    render("a");
+    drag(value);
+    const widths = runtime.styles.map((fn) => fn().width);
+    expect(widths).toContain(108);
+    expect(widths).not.toContain(176);
+    expect(runtime.timing).not.toHaveBeenCalled();
+  });
   it("keeps layout width responsive in both directions and resets the armed state", () => {
     render("a");
     expect(runtime.timing).not.toHaveBeenCalled();
@@ -292,4 +357,10 @@ it('uses snooze in the inbox secondary slot, while ordinary rows retain More', (
   draw(false);
   act(() => (host.querySelector('[data-testid="swipe.optionsAction"]') as HTMLButtonElement).click());
   expect(controls.onShowOptions).toHaveBeenCalledWith(session);
+  // A pinned-section row tells the sheet to leave out the inbox actions; other rows say nothing.
+  act(() => root.render(
+    <SwipeableSessionRow {...controls} onSnooze={onSnooze} pinnedSection session={session} testID="swipe">row</SwipeableSessionRow>,
+  ));
+  act(() => (host.querySelector('[data-testid="swipe.optionsAction"]') as HTMLButtonElement).click());
+  expect(controls.onShowOptions).toHaveBeenLastCalledWith(session, { pinnedSection: true });
 });

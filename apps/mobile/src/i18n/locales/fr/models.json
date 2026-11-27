@@ -53,7 +53,8 @@
   },
   "switchOutcome": {
     "applied": "Le changement de fournisseur de modèles est désormais effectif.",
-    "failed": "Échec du changement de fournisseur de modèles. Choisissez à nouveau le modèle."
+    "failed": "Échec du changement de fournisseur de modèles. Choisissez à nouveau le modèle.",
+    "previousSettingsRetained": "Le changement n’a pas abouti. La tâche continuera d’utiliser ses paramètres précédents."
   },
   "agentSwitch": {
     "browseAccessibility": "Parcourir les modèles {{agent}}"
@@ -92,8 +93,8 @@
     "remoteProvider": "{{provider}} · {{device}}",
     "remoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
     "providerGroup": "{{provider}} · {{group}}",
-    "groupBadge_one": "Groupe de fournisseurs · {{count}} ordinateur",
-    "groupBadge_other": "Groupe de fournisseurs · {{count}} ordinateurs",
+    "groupBadge_one": "Groupe d'ordinateurs · {{count}} ordinateur",
+    "groupBadge_other": "Groupe d'ordinateurs · {{count}} ordinateurs",
     "harness": "Harness",
     "restoreRecommended": "Rétablir les paramètres recommandés",
     "saveFailed": "Impossible d'enregistrer. Réessayez.",
@@ -113,11 +114,52 @@
     "quotaAverageHint": "Quota hebdomadaire · Poids égal par compte",
     "quotaResetHint": "Au rythme actuel, il pourrait rester du quota au moment de la réinitialisation : jaune sous 24 heures, rouge sous 6 heures."
   },
+  "modelGroups": {
+    "title": "Groupes de modèles",
+    "sourceCount_one": "{{count}} source",
+    "sourceCount_many": "{{count}} sources",
+    "sourceCount_other": "{{count}} sources",
+    "strategy": {
+      "expiring": "Bientôt expiré d'abord",
+      "order": "Dans l'ordre",
+      "rotate": "À tour de rôle",
+      "cheapest": "Le moins cher",
+      "drain": "Épuiser puis passer",
+      "headroom": "Le plus de quota restant",
+      "weighted": "Par poids"
+    },
+    "sourceOnDevice": "{{provider}} · {{device}}",
+    "why": {
+      "expiringQuota": "Il lui reste {{left}} % de quota, réinitialisé le {{reset}} : elle passe en premier",
+      "expiring": "Première selon le quota",
+      "order": "La première source disponible",
+      "rotate": "C'est son tour",
+      "only": "La seule disponible pour l'instant",
+      "soonest": "Toutes les sources ont épuisé leur quota ; celle-ci revient en premier",
+      "soonestUntil": "Toutes les sources ont épuisé leur quota ; celle-ci revient en premier ({{reset}})",
+      "cheapest": "Prix affiché le plus bas",
+      "cheapestFree": "Il reste du quota d'abonnement, sans coût supplémentaire",
+      "drain": "Toujours utilisée jusqu’à épuisement de son quota",
+      "drainNext": "La source précédente était épuisée ou indisponible, d’où le passage à celle-ci",
+      "headroom": "Le plus de quota restant",
+      "headroomQuota": "Il lui reste {{left}} % de quota, plus que toute autre source",
+      "weighted": "Son tour selon le poids",
+      "exceptionImage": "Le message contient des images : seules les sources capables de les voir ont été prises en compte",
+      "exceptionImageFallback": "Le message contient des images, mais aucune source ne peut les voir : choix habituel",
+      "exceptionHours": "Sur cette plage horaire, utilise « {{name}} »",
+      "separator": " ; "
+    },
+    "picker": {
+      "switched": "« {{name}} » a basculé cette tâche sur {{model}}",
+      "switchUnavailable": "« {{name}} » n'a pour l'instant aucune source utilisable par cette tâche. Le modèle n'a pas changé.",
+      "chooseUnavailable": "« {{name}} » n’a pour l’instant aucune source utilisable : il n’a pas été choisi."
+    },
+    "anotherDevice": "Autre ordinateur"
+  },
   "pluginEngines": {
     "genericName": "Moteur de plugin",
     "defaultModel": "Modèle par défaut",
     "unavailable": "{{engine}} est indisponible",
-    "unavailableWithHint": "{{engine}} est indisponible : {{hint}}",
-    "worktreeUnsupported": "Les moteurs de plugins ne peuvent pas encore démarrer de tâche dans un worktree. Désactivez worktree pour envoyer."
+    "unavailableWithHint": "{{engine}} est indisponible : {{hint}}"
   }
 }

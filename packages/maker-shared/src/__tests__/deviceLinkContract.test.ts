@@ -20,12 +20,31 @@ import {
   isTransientRemoteError,
   relayStatusHint,
   relayStatusLabel,
+  patchSessionWithDeleteTarget,
   withTransientRemoteRetry,
 } from '../deviceLinkContract.js';
 
 const noSleep = async () => {};
 
 describe('device-link shared contract', () => {
+  // Unit: the caller may fall back only after a legacy host explicitly refuses the
+  // new key before writing. A missing acknowledgment or a promotion conflict cannot retry.
+  it.each([
+    ['[INVALID_PARAMS] field not allowed in patch-meta: deleteTarget', true],
+    ['[PRECONDITION_FAILED] This follow-up is now an independent task.', false],
+    ['[INVOKE_TIMEOUT] result unknown', false],
+  ] as const)('retries a follow-up close only after a definitive old-host rejection (%s)', async (message, retries) => {
+    const invoke = vi.fn().mockRejectedValueOnce(new Error(message)).mockResolvedValueOnce({ status: 'deleted' });
+    const closing = patchSessionWithDeleteTarget({ status: 'deleted' }, 'side-chat', invoke);
+    if (retries) {
+      await expect(closing).resolves.toEqual({ status: 'deleted' });
+      expect(invoke.mock.calls).toEqual([[{ status: 'deleted', deleteTarget: 'side-chat' }], [{ status: 'deleted' }]]);
+    } else {
+      await expect(closing).rejects.toThrow(message);
+      expect(invoke).toHaveBeenCalledExactlyOnceWith({ status: 'deleted', deleteTarget: 'side-chat' });
+    }
+  });
+
   it('documents mobile remote invoke channels and media special channels', () => {
     expect(DEVICE_LINK_MEDIA_FETCH_CHANNEL).toBe('device-link:media:fetch');
     expect(DEVICE_LINK_VOICE_TRANSCRIBE_CHANNEL).toBe('device-link:voice:transcribe');

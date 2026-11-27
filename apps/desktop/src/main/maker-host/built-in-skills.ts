@@ -59,6 +59,12 @@ export interface PrepareBuiltInSkillsResult {
   projectionSafe: boolean;
   changed: boolean;
   warnings: string[];
+  /**
+   * Subset of `warnings` describing stable state that retrying cannot clear (for example,
+   * preserving a verified newer installed bundle on an older build). Callers may cache past
+   * them and report each distinct set once instead of on every run.
+   */
+  persistentWarnings: string[];
 }
 
 export interface RefreshBuiltInClaudeSkillLinksOptions {
@@ -1108,6 +1114,7 @@ export async function prepareBuiltInSkills(
     ? sharedBuiltInSkillsRoot(options.appDataDir)
     : builtInSkillsRoot(options.userDataDir);
   const warnings: string[] = [];
+  const persistentWarnings: string[] = [];
   let changed = false;
   let projectionSafe = false;
   const bundleVersion = options.bundleVersion ?? await readBuiltInSkillsBundleVersion(options.bundledRoot);
@@ -1220,9 +1227,11 @@ export async function prepareBuiltInSkills(
     }
     const newerBundleIsInstalled = manifest.bundleVersion > bundleVersion;
     if (newerBundleIsInstalled) {
-      warnings.push(
-        `kept built-in Skill bundle ${manifest.bundleVersion}; this build only carries older bundle ${bundleVersion}`,
-      );
+      const warning =
+        `kept built-in Skill bundle ${manifest.bundleVersion}; this build only carries older bundle ${bundleVersion}`;
+      warnings.push(warning);
+      // Only treat the kept newer bundle as stable state when its projections were verified.
+      if (projectionSafe) persistentWarnings.push(warning);
       return true;
     }
 
@@ -1367,5 +1376,6 @@ export async function prepareBuiltInSkills(
     projectionSafe,
     changed,
     warnings,
+    persistentWarnings,
   };
 }

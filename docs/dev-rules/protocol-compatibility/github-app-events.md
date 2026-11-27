@@ -33,3 +33,51 @@ Webhook 服务的 `GET /api/v1/github` 可选返回 `prSubscriptions: true`、`d
 升级顺序为两区 migration、服务、客户端；回滚保留新列及既有连接，但不应重新开放旧绑定流程。
 
 自动化单条 PR 条件复用已有精确订阅；客户端的 `prTrigger` 可选，跨电脑写入先检查目标端 `supportsSchedulePrTrigger`，旧写入方省略字段保留已有条件。服务端消息格式沿用现状。
+
+## GitHub App 用户授权与统一连接（2026-11-17，待部署）
+
+`GET /api/v1/github` 新增可选 `userAuthorization: true`。新版 Desktop 仅在声明此能力时向
+`POST /api/v1/github/connect/complete` 追加 `includeUserToken: true`；成功返回原 `url` 加
+`grant: {userId,login,accessToken,refreshToken,expiresAt,refreshExpiresAt}`（过期时间为 Unix 毫秒）。
+同一 GitHub numeric ID 补授权保留已有订阅与积压事件，换身份才清旧绑定。
+旧客户端仍只收到 URL；旧服务仍走原事件绑定，不冒充已完成本机操作授权。
+回环回调只返回安装页重定向，grant 仅在带 Cindy 账号、原设备与私有 verifier 的 HTTPS 响应中出现。
+主进程加密保存成功才继续安装页；Renderer、插件、Agent 和 device-link 均不接触 grant。
+
+`POST /api/v1/github/user-token/refresh` 接收 `{refreshToken}`，要求原 Cindy 账号仍绑定同一
+GitHub numeric ID，并在 GitHub 回复后复核账号状态与绑定代次。返回新 grant；授权失效返回
+400 / `GITHUB_AUTHORIZATION_EXPIRED`，临时故障不清凭证。GitHub 已轮换令牌但身份核对暂时失败时返回 `200 {recovery}`：服务端密封、绑定 Cindy 账号的新令牌对，Desktop 必须先落盘再按临时失败处理，下次改用 `{recovery}` 续期（旧 refresh token 已被 GitHub 作废）；核对身份后才放出令牌。此通道不记录请求／响应正文。
+服务端不持久化用户令牌，App 私钥与 Client Secret 始终留在服务端。本机按数据所有者和服务
+端点隔离加密凭证；跨进程锁串行化保存、续期与删除，轮换结果落盘后才使用，账号／端点切换
+丢弃在途结果。断开清除此电脑的 App 授权和服务端事件绑定，不卸载 App，不清理 gh/PAT；
+其他电脑的 GitHub 已签发令牌受 GitHub 有效期与撤销控制，事件绑定删除后不再允许续期。
+
+优先级保持 gh → 已保存 PAT → App 用户令牌，已有用户不会被悄悄切换身份。插件沿用已批准的
+`source: "gh-cli"` 声明，只向 `api.github.com` 注入，未批准实例仍拒绝；无需重新安装或确认
+插件权限。App 用户令牌仅允许 GitHub 本身批准的权限及仓库范围。个人 Notifications API
+仍需原 gh/PAT。手机和自建中转没有新增 wire contract；OAuth 仍在发起电脑完成。
+
+上线顺序：服务端先发布能力与续期接口，再发布 Desktop；无需数据库 migration。回滚客户端
+保留本机加密 grant，回滚服务端使 App 续期暂不可用但不影响原 gh/PAT 和事件订阅。真实 OAuth、
+新权限接受与跨区回调仍需部署后验收，不能把单元测试通过当成生产已部署。
+
+## 指定 Issue（2026-11-24）
+
+自动任务的 `webhookTrigger.source` 在 `{preset:"github-app"}` 上纯增可选 `number`（正整数），此时 `repositories` 恰好一个，
+表示只接收该编号的事件（Issue 或 PR 的评论等）。存在既有 JSON 列，不加 migration；`sameGithubAppScope` 把编号计入范围，
+改变编号会更换本地队列身份。服务端订阅协议不变：客户端仍按仓库提交 `repositorySubscriptions`，编号只在客户端
+（宿主批次筛选与持久队列）复核，服务端事件已有的 `number` 字段即可。旧执行端的来源校验拒绝未知字段，写入报错而不会
+扩大为整个仓库；旧控制端编辑省略来源时原样保留。`schedule_create/update` 的 `webhookTrigger.source` 同步接受 `number`。
+
+本机 Renderer 新增只读 `git-context:github-item:resolve`（仓库、编号 → PR / Issue、标题、开闭状态），只信任本机应用窗口，
+不进 Device Link 白名单；复用账号级 GitHub 条件读取与限速，读取 `GET /repos/{repo}/issues/{number}`。
+
+## GitLab 指定 MR 与 Issue（2026-11-24）
+
+`prTrigger.url` 纯增接受 GitLab MR 链接（`https://<实例>/group/…/project/-/merge_requests/N`，规整为小写），
+沿用 `maker:schedule:create/update` 与 `supportsSchedulePrTrigger`；旧执行端的校验只认 GitHub 链接，写入报错而不会静默丢失。
+宿主的 GitHub App 订阅只取 GitHub 链接，GitLab MR 不进入 webhook-server；定时检查通过既有 MR 状态读取（本机 glab）复核。
+
+地址型发送方（如 `gitlab` / `gitlab-token`）的 `webhookTrigger.source` 纯增可选 `repository` 与 `number`，二者须同时出现，
+只在本机按事件已有的 `repository`、`number` 字段复核；服务器上的地址、格式与密钥不变，也不同步这两个字段。
+旧执行端拒绝认不出的字段；旧控制端编辑省略来源时原样保留。`schedule_create/update` 同步接受这两个字段。

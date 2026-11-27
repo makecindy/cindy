@@ -53,7 +53,8 @@
   },
   "switchOutcome": {
     "applied": "模型來源之易已生效。",
-    "failed": "模型來源之易未成，請重擇。"
+    "failed": "模型來源之易未成，請重擇。",
+    "previousSettingsRetained": "此次更易未成，任務仍循舊設。"
   },
   "agentSwitch": {
     "browseAccessibility": "覽 {{agent}} 模型"
@@ -61,6 +62,7 @@
   "unified": {
     "remoteCopyUnavailableOn": "「{{device}}」之 {{provider}} 今不可用。",
     "remoteCopyUnavailableOnTaskComputer": "差事所在之機，{{provider}} 今不可用。",
+    "accountCount_one": "{{count}} 個名籍",
     "accountCount_other": "{{count}} 個名籍",
     "accountFallback": "名籍 {{index}}",
     "favoriteConfiguration": "藏此設定",
@@ -90,8 +92,8 @@
     "remoteProvider": "{{provider}} · {{device}}",
     "remoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
     "providerGroup": "{{provider}} · {{group}}",
-    "groupBadge_one": "供方組 · {{count}} 機",
-    "groupBadge_other": "供方組 · {{count}} 機",
+    "groupBadge_one": "機組 · {{count}} 機",
+    "groupBadge_other": "機組 · {{count}} 機",
     "harness": "Harness",
     "restoreRecommended": "復所薦",
     "saveFailed": "存之未成，請再試。",
@@ -110,11 +112,51 @@
     "quotaAverageHint": "週限額 · 諸名籍等權均值",
     "quotaResetHint": "依今耗速，重置或尚有餘：距 24 小時以內示黃，6 小時以內示紅。"
   },
+  "modelGroups": {
+    "title": "模型組",
+    "sourceCount_one": "{{count}} 源",
+    "sourceCount_other": "{{count}} 源",
+    "strategy": {
+      "expiring": "將廢者先用",
+      "order": "依序",
+      "rotate": "輪值",
+      "cheapest": "最省",
+      "drain": "盡而後易",
+      "headroom": "餘多者先",
+      "weighted": "依權"
+    },
+    "sourceOnDevice": "{{provider}} · {{device}}",
+    "why": {
+      "expiringQuota": "限額尚餘 {{left}}%，{{reset}} 重設，故先用之",
+      "expiring": "依限額居首",
+      "order": "居首之可用者",
+      "rotate": "此番輪至彼",
+      "only": "今唯彼可用",
+      "soonest": "諸源限額皆盡，彼最先復",
+      "soonestUntil": "諸源限額皆盡，彼最先復（{{reset}}）",
+      "cheapest": "標價最低",
+      "cheapestFree": "訂閱尚有限額，不另費錢",
+      "drain": "續用之，待其限額盡",
+      "drainNext": "前源已盡或不可用，易至此",
+      "headroom": "餘額最多",
+      "headroomQuota": "限額尚餘 {{left}}%，多於諸源",
+      "weighted": "依權此番分至彼",
+      "exceptionImage": "訊中有圖，唯於能觀圖之源中擇",
+      "exceptionImageFallback": "訊中有圖，然無能觀圖之源，照常擇之",
+      "exceptionHours": "此時段改行「{{name}}」",
+      "separator": "；"
+    },
+    "picker": {
+      "switched": "「{{name}}」已將此差事易為 {{model}}",
+      "switchUnavailable": "「{{name}}」今無可供此差事之源，模型未易。",
+      "chooseUnavailable": "「{{name}}」今無可用之源，未取之。"
+    },
+    "anotherDevice": "他機"
+  },
   "pluginEngines": {
     "genericName": "法器引擎",
     "defaultModel": "預設模型",
     "unavailable": "{{engine}} 暫不可用",
-    "unavailableWithHint": "{{engine}} 暫不可用：{{hint}}",
-    "worktreeUnsupported": "法器引擎尚不能於 worktree 中新建差事，請先取消勾選 worktree 再發"
+    "unavailableWithHint": "{{engine}} 暫不可用：{{hint}}"
   }
 }

@@ -14,7 +14,16 @@
   "usageOnlyDevice": "{{name}} のみ",
   "usagePlans": "プランの残り利用枠",
   "usageBudget": "今期の残り予算",
+  "usageWaiting": "パソコンに接続すると、プランの残り利用枠と今日の使用量がここに表示されます",
+  "usageUpdateDesktop": "パソコンの Cindy をアップデートすると使用量を確認できます",
+  "usageWaitingTitle": "使用量はここに表示されます",
+  "usageWaitingCopy": "スマートフォンがパソコンに接続されると、各アカウントのプランの残り利用枠と毎日の使用量が自動で同期されます。通常は数秒で完了します。",
+  "usageUpdateDesktopTitle": "パソコンの Cindy をアップデートしてください",
+  "usageUpdateDesktopCopy": "パソコンの Cindy が古いため、使用量をスマートフォンに送れません。アップデートすると自動で表示されます。",
   "management": {
+    "addCloud": "クラウドマシンを追加",
+    "preparingCloud": "クラウドマシンを準備中",
+    "manageCloud": "クラウドマシンを管理",
     "title": "デバイス管理",
     "openDevice": "{{name}} のデバイス詳細を表示",
     "details": "デバイスの詳細",
@@ -23,7 +32,7 @@
     "notFound": "このデバイスはアカウントに登録されていません。",
     "deleteDevice": "デバイスを削除",
     "deleteTitle": "「{{name}}」を削除しますか？",
-    "deleteMessage": "アカウントからこのデバイスを削除し、リモート接続を切断します。デバイス上のセッションとファイルは保持されます。再度ログインすると追加できます。",
+    "deleteMessage": "アカウントからこのデバイスを削除し、リモート接続を切断します。デバイス上のセッションとファイルは保持されます。そのデバイスで「再参加」をタップすると戻せます。",
     "deleteFailed": "デバイスを削除できませんでした。",
     "deleteOnline": "現在のサーバーはオンラインのデバイス削除に未対応です。サービス更新後に再試行してください。",
     "deleteRejectedWhileOffline": "デバイスを削除できませんでした。一覧ではオフラインですが、サーバーではまだオンラインとして記録されています。",
@@ -357,7 +366,11 @@
       "close": "閉じる",
       "cancelRename": "名前の変更をキャンセル",
       "createdBy": "{{name}} が作成",
-      "ownedBy": "{{name}} に所属"
+      "ownedBy": "{{name}} に所属",
+      "orcaRemoteLead": "{{device}} からの協同",
+      "createdByTask": "他のタスクから作成",
+      "createdByTaskNamed": "タスク「{{title}}」から作成",
+      "unknownDevice": "別のコンピューター"
     },
     "accounts": {
       "title": "アカウントを切り替え",
@@ -380,10 +393,12 @@
       "sortHeading": "タスク順",
       "projectOrderHeading": "プロジェクトの並び順",
       "projectOrderManualTip": "プロジェクト行を長押ししてドラッグすると順番を変えられます。グループ内のタスクは上の並び替えに従います。",
+      "pinnedOrderManualTip": "ピン留めしたタスクを長押ししてドラッグすると順番を変えられます。",
       "statusHeading": "タスクの状態",
       "showDeviceTasks": "タスクを表示",
       "openDevice": "開く",
       "renameDevice": "名前を変更",
+      "groupDevice": "デバイス",
       "groupProject": "プロジェクト",
       "sortBy": {
         "priority": "優先度",
@@ -412,7 +427,8 @@
         "all": "すべて",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "プラグインエンジン"
       },
       "filterLastActivityHeading": "最終アクティビティ",
       "filterLastActivity": {
@@ -425,11 +441,15 @@
       "showCollapsedTeammateAvatars": "折りたたみ時にアバターを表示",
       "displayHeading": "表示",
       "view": {
+        "card": "カード",
         "text": "テキスト",
         "list": "リスト"
       },
       "taskInfoHeading": "タスク情報",
       "taskInfo": {
+        "teammate": "仲間のアバター",
+        "project": "プロジェクトのアイコンと名前",
+        "harness": "Harness アイコン",
         "time": "時間",
         "pr": "PR ステータス",
         "tokens": "トークン",
@@ -438,7 +458,7 @@
       "summaryNone": "なし",
       "summarySeparator": "、",
       "filterEmptyCopy": "表示設定の「フィルター」で調整またはリセットできます。",
-      "filterTeammatesHeading": "パートナー",
+      "filterTeammatesHeading": "仲間",
       "filterAnySource": "すべて",
       "filterHideAutomations": "自動化タスクを非表示",
       "filterHideAllTeammates": "すべて非表示",
@@ -463,7 +483,14 @@
         "nextWeek": "来週",
         "indefinite": "無期限",
         "custom": "カスタム…",
-        "invalidTime": "1年以内の未来の日時を選択してください。"
+        "invalidTime": "1年以内の未来の日時を選択してください。",
+        "pendingSync": "同期待ち",
+        "pendingArchiveSync": "コンピューターがオンラインになり次第アーカイブ",
+        "offlineCompleteRejectedDirty": "「{{title}}」を保留中に戻しました：worktree に未コミットの変更があるため、確認後にアーカイブしてください。",
+        "offlineCompleteRejectedNewActivity": "「{{title}}」を保留中に戻しました：オフライン中にこのタスクに新しい動きがありました。",
+        "offlineCompleteRejectedRunning": "「{{title}}」を保留中に戻しました：タスクは現在実行中です。",
+        "offlineCompleteRejectedAttached": "「{{title}}」を保留中に戻しました：接続中または共有中のため自動アーカイブできませんでした。",
+        "offlineCompleteRejectedPreflight": "「{{title}}」を保留中に戻しました：アーカイブ前に worktree の状態を確認できませんでした。"
       },
       "taskListMode": {
         "enterInbox": "受信トレイへ",
@@ -507,7 +534,8 @@
           "30d": "30日",
           "all": "すべて"
         }
-      }
+      },
+      "partial": "結果が一部のみの可能性があります。キーワードを具体的にするか、プロジェクトを絞ってください。"
     },
     "renameDevice": {
       "title": "デバイス名を変更",
@@ -735,7 +763,7 @@
     "viewResult": "結果を見る",
     "noWrittenResult": "テキストの結果はありません。",
     "errorDetails": "エラー詳細",
-    "createTeammate": "新しいチームメイト",
+    "createTeammate": "新しい仲間",
     "createMenu": "新規作成",
     "awaiting": "確認待ち",
     "taskResult": "タスクの結果",
@@ -814,9 +842,6 @@
     "connectionsEmpty": "スキルや接続は選択されていません",
     "largeProfileRecovery": "このプロフィールは長すぎるため、ここでは編集できません。{{deviceName}} で全文を編集してください。",
     "addModel": "予備モデルを追加",
-    "removeModel": "モデルを削除",
-    "moveModelUp": "モデルを上へ",
-    "backupModels": "予備のモデル（{{count}}）",
     "settingsTitle": "仲間の設定",
     "name": "名前",
     "portraitNumber": "アバター {{number}}",
@@ -943,6 +968,8 @@
     "timeout": "「{{device}}」の準備がまだ終わっていません。そのパソコンで Cindy が開いていてオンラインか確認して、もう一度お試しください。",
     "conflict": "{{name}} はすでに「{{device}}」に移っています。",
     "switchFailed": "メインのパソコンを変更できません。しばらくしてからもう一度お試しください。",
+    "skillTargetOutdated": "「{{name}}」には本文が 64 KB を超えるスキルがあるため、「{{device}}」の古い Cindy では受け取れません。先にそのパソコンの Cindy を更新してから移してください。仲間は元のパソコンに残っています",
+    "skillTargetOutdated_skill": "「{{device}}」の古い Cindy では、スキル「{{slug}}」を受け取れません。本文が {{bodyBytes, number}} バイトあり、上限の 64 KB を超えています。「{{name}}」は元のパソコンで引き続き動作しています。移行先の Cindy を更新してから、もう一度お試しください。",
     "unknownDevice": "別のパソコン",
     "runsOn": "「{{device}}」で実行中",
     "homeTitle": "メインのパソコン",

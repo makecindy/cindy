@@ -8,6 +8,7 @@ import type { RegionalMoney } from '../../shared/regionalMoney';
 import type { AutoResumeInfo, RecoveryCheckpoint } from '../../shared/agentInputQueue';
 import type { ReviewRunMeta } from '../../shared/reviewRun';
 import type { OrcaRemoteLead } from '../../shared/orcaRemoteWorker';
+import type { SessionCreatedBy } from '../../shared/sessionOrigin';
 import type { AgentTaskTerminalStatus } from '@cindy/maker-shared/agent-task';
 import type {
   MessageSourceDevice,
@@ -127,6 +128,8 @@ export interface PluginModelRouteNote {
  * 只接受 SDK 自己分配的 uuid，所以这是 fork 的唯一主键。
  */
 export interface CcMeta {
+  /** This input yielded to already queued messages after a context overflow. */
+  inputNotice?: 'oversized-input-skipped';
   /** 新任务「让插件选」的结果(宿主写入，非模型回复)。 */
   pluginModelRoute?: PluginModelRouteNote;
   /** Model boundary recorded by the host when the next input is dispatched. */
@@ -136,6 +139,8 @@ export interface CcMeta {
   botLearning?: import('@cindy/maker-shared/bot-learning').BotLearningReceipt[];
   /** Provider text phase, retained to exclude commentary from notification previews. */
   assistantPhase?: string;
+  /** Set only on finished user-visible progress for a foreground plugin task input. */
+  pluginProgressInputId?: string;
   /** Native text item identity, used to reconcile streamed and imported history. */
   agentMessageId?: string;
   /** Codex item text is durable but its sampling request has not yet been accepted. */
@@ -394,6 +399,7 @@ export interface Session {
   sdkSessionId: string | null;
   totalTokenUsage: number;
   totalCostUsd: number;
+  totalCostUsdIsApproximate?: boolean;
   /** 新版区域累计金额；旧会话仍只带 totalCostUsd。 */
   totalMoney?: RegionalMoney;
   contextTokens: number;
@@ -429,6 +435,8 @@ export interface Session {
   notificationsMuted?: boolean;
   /** Inbox deferral, saved by the task host. Missing on older hosts. */
   snoozedUntil?: string | null;
+  /** Host-authoritative IM attachment flag returned by `local-db:sessions:get`. */
+  imAttached?: boolean;
   snoozedAt?: string | null;
   /**
    * 用户最近一次"按下发送"的时刻（ISO 8601，null = 从未发过）。
@@ -442,9 +450,15 @@ export interface Session {
   agentKind: AgentKind;
   /** 会话来源。scheduler 表示由自动化任务创建；缺失时按 desktop 兼容旧 payload。 */
   source?: SessionSource;
+  /** This follow-up is also visible as an independent task. */
+  sideChatPromoted?: true;
   /** Host-owned teammate link, also used by the existing history API. Display only. */
   companion?: { id: string; role: string; taskProjectDir?: string; channel?: string; routineId?: string } | null;
   /** Orca split-session role marker. null/undefined means a regular Maker session. */
+  /** Owning Lead on this device, when the active team is known. */
+  orcaLeadSessionId?: string;
+  /** Live Worker question state, independent of Agent Island visibility. */
+  orcaHasPendingQuestion?: boolean;
   orcaRole?: OrcaRole | null;
   /** fork-session：派生来源会话 id（self-FK，源被删 → SET NULL）。null = 顶层会话。 */
   parentSessionId?: string | null;
@@ -496,6 +510,11 @@ export interface Session {
    * null/undefined = 普通任务；旧版本 payload 没有该字段。
    */
   orcaRemoteLead?: OrcaRemoteLead | null;
+  /**
+   * 由另一个任务通过 send_to_session（create 模式）新建时的来源任务元数据。
+   * 独立于 parentSessionId（仅用于 fork / 侧边追问）。null/undefined = 非任务新建或旧版 payload。
+   */
+  createdBySession?: SessionCreatedBy | null;
   /**
    * device-link 跨设备远程控制:本 session 实际归属的**被控设备 deviceId**。
    * 仅存在于控制端**内存**里(由 remoteProjectsStore 注入),**永不落本地 DB**——

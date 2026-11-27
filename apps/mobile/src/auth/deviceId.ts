@@ -20,7 +20,7 @@ export async function isCredentialStoreReadable(): Promise<boolean> {
 }
 
 export async function ensureDeviceId(): Promise<string> {
-  const existing = await getSecureItem(DEVICE_ID_KEY).catch(() => null);
+  const existing = await getSecureItem(DEVICE_ID_KEY);
   if (existing) return existing;
   const next = createUuid();
   await setSecureItem(DEVICE_ID_KEY, next);

@@ -16,6 +16,20 @@ import {
 /** swipe / 选项菜单可触发的全部动作。rename 无补丁形态(走重命名弹窗),单独排除。 */
 export type SessionSwipeAction = 'pin' | 'unpin' | 'archive' | 'restore' | 'delete' | 'rename' | 'snooze' | 'wake';
 
+/**
+ * Where the options sheet was opened. The pinned section is a shortcut list without the inbox
+ * actions (snooze / wake; 2026-11-25 user decision). Every other row, including shared tasks and
+ * search results, keeps the list mode's default.
+ */
+export interface SessionOptionsContext {
+  pinnedSection: true;
+}
+
+/** Whether the options sheet offers the inbox actions. */
+export function sessionOptionsInboxMode(listInboxMode: boolean, context?: SessionOptionsContext): boolean {
+  return listInboxMode && context?.pinnedSection !== true;
+}
+
 export interface SwipeRowRegistry {
   /**
    * 行开始滑开时上报(swipe 手势起手即调):自动关掉上一个打开的行,并把自己记为当前行。
@@ -296,6 +310,7 @@ export function writeGuardFields(patch: { status?: string | null; [key: string]:
 export async function retryPatchWhileLatest<T>(
   isLatest: () => boolean,
   send: (assertStillLatest: () => void) => Promise<T>,
+  maxAttempts?: number,
 ): Promise<T | null> {
   // 哨兵错误按引用识别;message 不含瞬时错误标记,withTransientRemoteRetry 不会重试它。
   const stale = new Error('stale session write superseded');
@@ -306,7 +321,7 @@ export async function retryPatchWhileLatest<T>(
     return await withTransientRemoteRetry(() => {
       assertStillLatest();
       return send(assertStillLatest);
-    });
+    }, { maxAttempts });
   } catch (err) {
     if (err === stale) return null;
     throw err;
@@ -349,7 +364,7 @@ export function buildSessionActionMenu(
   return [
     { action: 'rename', label: i18n.t('session.menu.renameAction') },
     { action: pinToggle.action, label: pinToggle.label },
-    ...(!pinnedAt && status !== 'archived' && snooze ? [
+    ...(status !== 'archived' && snooze ? [
       { action: 'snooze' as const, label: i18n.t('devices.list.menu.inbox.snooze') },
       ...(taskSnoozeUntil(snooze) > Date.now() ? [{ action: 'wake' as const, label: i18n.t('devices.list.menu.inbox.wake') }] : []),
     ] : []),

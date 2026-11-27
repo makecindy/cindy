@@ -2,6 +2,7 @@ import { ProjectIcon } from '@/features/cc-agent/sidebar/ProjectIcon';
 import { useProjectInfo } from '@/features/cc-agent/hooks/useProjectInfo';
 import { resolveProjectIcon } from '@cindy/maker-shared/project-alias-sync';
 import { ErrorNotice } from '@/components/ui/error-notice';
+import { SearchInput } from '@/components/ui/search-input';
 import { Button } from '@/components/ui/button';
 import {
   Folder,
@@ -10,7 +11,6 @@ import {
   Loader2,
   MessageCircle,
   RefreshCw,
-  Search,
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -81,6 +81,15 @@ const PROJECT_SEARCH_MIN_COUNT = 5;
  */
 const PROJECT_LIST_MAX_HEIGHT_CLASS = 'max-h-[252px]';
 
+/**
+ * 窗口矮到放不下整份菜单时,列表先让出高度,但至少留约 1 行半(半行提示还能滚动);
+ * 只有一行内容(空态、读取中)时不设下限,免得给短内容撑出空白。
+ */
+const LIST_SHRINK_MIN_HEIGHT_CLASS = 'min-h-[66px]';
+
+/** 菜单离窗口边缘的最小距离;调用方传了 collisionPadding 时以调用方为准。 */
+const DEFAULT_COLLISION_PADDING = 8;
+
 export function filterFolderPickerOptions(
   options: readonly FolderPickerOption[],
   query: string,
@@ -129,24 +138,45 @@ function normalizeWheelDeltaY(e: WheelEvent): number {
   return e.deltaY;
 }
 
+function canScrollBy(el: HTMLElement | null, deltaY: number): el is HTMLElement {
+  if (!el || el.scrollHeight <= el.clientHeight) return false;
+  if (deltaY > 0) return el.scrollTop + el.clientHeight < el.scrollHeight - 1;
+  if (deltaY < 0) return el.scrollTop > 0;
+  return false;
+}
+
 function handleFolderPickerWheel(e: WheelEvent) {
   e.stopPropagation();
 
   const current = e.currentTarget;
   if (!(current instanceof HTMLElement)) return;
   const target = e.target instanceof Element ? e.target : null;
-  // Keep native wheel/trackpad scrolling inside the list (including SVG icons).
-  // Its overscroll-contain prevents scrolling the page at either boundary.
-  if (target?.closest('[data-folder-picker-scroll="true"]')) return;
+  const deltaY = normalizeWheelDeltaY(e);
+  const list = current.querySelector<HTMLElement>('[data-folder-picker-scroll="true"]');
+  // In a window too short for the whole menu, the section above the pinned
+  // actions scrolls as well. Once the list cannot move further, the same wheel
+  // moves that section so the rows it hides can still be reached.
+  const section = current.querySelector<HTMLElement>('[data-folder-picker-section="true"]');
+  const rowList = target?.closest<HTMLElement>('[data-folder-picker-scroll="true"]') ?? null;
+  // Over the list (including SVG icons), keep native wheel/trackpad scrolling
+  // while it can still move this way. Its overscroll-contain stops the browser
+  // from passing the rest outward, so at its end hand the wheel to the section.
+  if (rowList && (canScrollBy(rowList, deltaY) || !canScrollBy(section, deltaY))) return;
 
   // Heading, search and footer forward to the list. Cancel first so the browser
   // cannot also scroll an ancestor; a non-cancelable event must not be forwarded.
   if (!e.cancelable || e.defaultPrevented) return;
   e.preventDefault();
-  const scrollRoot = current.querySelector<HTMLElement>('[data-folder-picker-scroll="true"]');
-  if (!scrollRoot || scrollRoot.scrollHeight <= scrollRoot.clientHeight) return;
+  const scrollRoot = rowList
+    ? section
+    : canScrollBy(list, deltaY)
+      ? list
+      : canScrollBy(section, deltaY)
+        ? section
+        : null;
+  if (!scrollRoot) return;
 
-  scrollRoot.scrollTop += normalizeWheelDeltaY(e);
+  scrollRoot.scrollTop += deltaY;
 }
 
 interface FolderPickerPopoverProps {
@@ -230,11 +260,33 @@ export function FolderPickerPopover({
     () => filterFolderPickerOptions(effectiveProjectOptions, activeProjectQuery),
     [effectiveProjectOptions, activeProjectQuery],
   );
+  // 当前高亮的项目行:回车选它,方向键与鼠标移动都改它。null = 默认:有词指向首个结果,
+  // 无词不高亮。每次改词(输入、Esc 清空、关闭)都显式回到默认,回到曾输入过的词也不复活
+  // 旧高亮;另记下所在的搜索词,搜索框因项目数变化出现/消失时同样回到默认。
+  // 列表异步变短时夹到末项;空列表时为 -1。
+  const [highlight, setHighlight] = useState<{ query: string; index: number | null }>({
+    query: '',
+    index: null,
+  });
+  const resetHighlight = () => setHighlight({ query: '', index: null });
+  const highlightIndex = Math.min(
+    highlight.index !== null && highlight.query === activeProjectQuery
+      ? highlight.index
+      : activeProjectQuery
+        ? 0
+        : -1,
+    visibleProjectOptions.length - 1,
+  );
+  const setHighlightIndex = (index: number) => {
+    if (index === highlightIndex) return;
+    setHighlight({ query: activeProjectQuery, index });
+  };
 
-  // 每次打开都从完整列表开始,不残留上次的搜索词。
+  // 每次打开都从完整列表开始,不残留上次的搜索词与高亮。
   useEffect(() => {
     if (!open) {
       setProjectQuery('');
+      setHighlight({ query: '', index: null });
       setBrowseFailed(false);
     }
   }, [open]);
@@ -304,8 +356,8 @@ export function FolderPickerPopover({
 
   const renderProject = (project: FolderPickerOption, index: number) => {
     const canRemove = allowRemove && (!project.remoteDevice || onRemoveRemoteProject !== undefined);
-    // 有搜索词时首个结果常亮:回车选中的就是它。
-    const isEnterTarget = activeProjectQuery !== '' && index === 0;
+    // 高亮行就是回车会选中的行;键盘与鼠标共用这一个指示,不再各亮一行。
+    const isHighlighted = index === highlightIndex;
     return (
       /* 行容器**不可交互**(Codex review P1):选择与删除是**兄弟**控件。
          之前为了避开 <button> 里嵌 <button> 的非法 HTML,把外层改成 div[role="button"] ——
@@ -315,11 +367,19 @@ export function FolderPickerPopover({
          语义清晰,也不再需要 stopPropagation 去拦冒泡。 */
       <div
         key={project.key ?? project.path}
+        data-folder-picker-index={index}
+        data-highlighted={isHighlighted || undefined}
+        onMouseMove={(e) => {
+          // 方向键滚动(或弹层刚出现)时,行会滑到静止的指针下,浏览器为此补发的 mousemove
+          // 没有位移;只有指针真的动了才算用户在用鼠标,高亮不会被拽到指针所在行。
+          if (e.movementX === 0 && e.movementY === 0) return;
+          setHighlightIndex(index);
+        }}
         className={cn(
-          'group flex w-full items-center gap-3 rounded-[8px] px-3 py-[10px]',
+          // scroll-my-6 与列表边缘 24px 渐隐等宽:方向键滚入的行不会停在半透明的边上。
+          'group flex w-full scroll-my-6 items-center gap-3 rounded-lg px-3 py-2.5',
           'transition-colors',
-          'hover:bg-[var(--folder-item-hover)]',
-          isEnterTarget && 'bg-[var(--folder-item-hover)]',
+          isHighlighted && 'bg-[var(--folder-item-hover)]',
         )}
       >
         <button
@@ -425,9 +485,11 @@ export function FolderPickerPopover({
         side={side}
         align={align}
         sideOffset={sideOffset}
-        collisionPadding={collisionPadding}
+        collisionPadding={collisionPadding ?? DEFAULT_COLLISION_PADDING}
         className={cn(
-          'z-[10010] w-[320px] rounded-[12px] p-2',
+          // 整份菜单不超过触发器这一侧的可用高度:否则矮窗口里底部的「新建项目」
+          // 「添加远程项目」会被推到窗口外,用户够不着。放不下时只压缩中间区域,底部操作固定。
+          'flex max-h-[var(--radix-popover-content-available-height)] w-[320px] flex-col rounded-xl p-2',
           'bg-[var(--folder-picker-bg)]',
           'border border-[var(--folder-picker-border)]',
         )}
@@ -448,265 +510,292 @@ export function FolderPickerPopover({
           if (!projectQuery) return;
           e.preventDefault();
           setProjectQuery('');
+          resetHighlight();
         }}
         aria-busy={selectionPending}
       >
-        {isProjectPicker && (
-          <>
-            {allowDialogue && (
-              <>
-                <div className="px-3 py-2">
-                  <span className="text-xs font-normal text-[var(--folder-label)]">
-                    {t('newChat.folderPicker.dialogueOrSelectProject')}
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  disabled={selectionPending}
-                  onClick={() => handleSelectPath('', 'dialogue')}
-                  className={cn(
-                    'flex w-full items-center gap-3 rounded-[8px] px-3 py-[10px] text-left',
-                    'transition-colors outline-none',
-                    'hover:bg-[var(--folder-item-hover)]',
-                  )}
-                >
-                  <MessageCircle size={20} className="shrink-0 text-[var(--folder-item-icon)]" />
-                  <span className="relative top-px text-sm font-medium text-[var(--folder-item-name)]">
-                    {t('newChat.folderPicker.dialogue')}
-                  </span>
-                </button>
-              </>
-            )}
-            <div className="px-3 pb-1 pt-3">
-              <span className="text-xs font-normal text-[var(--folder-label)]">
-                {t('newChat.folderPicker.projects')}
-              </span>
-            </div>
-            {showProjectSearch && (
-              <div className="px-1 pb-1">
-                <div className="relative">
-                  <Search
-                    size={12}
-                    className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--folder-item-path)]"
-                  />
-                  <input
-                    ref={projectSearchRef}
-                    type="text"
+        {/* 列表与它上方的内容。高度不够时先由列表让出高度;仍不够才让这一段整体滚动
+            (搜索框吸顶),底部操作始终留在可见范围内。 */}
+        <div
+          data-folder-picker-section="true"
+          // -mr-2 pr-2:列表自带的 -mr-2 把滚动条放进菜单右侧留白,这一段也让出同样的位置,
+          // 免得列表比这一段宽而出现横向滚动。
+          className="-mr-2 flex min-h-0 shrink flex-col overflow-y-auto overflow-x-hidden overscroll-contain pr-2"
+        >
+          {isProjectPicker && (
+            <>
+              {allowDialogue && (
+                <>
+                  <div className="px-3 py-2">
+                    <span className="text-xs font-normal text-[var(--folder-label)]">
+                      {t('newChat.folderPicker.dialogueOrSelectProject')}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={selectionPending}
+                    onClick={() => handleSelectPath('', 'dialogue')}
+                    className={cn(
+                      'flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left',
+                      'transition-colors outline-none',
+                      'hover:bg-[var(--folder-item-hover)]',
+                    )}
+                  >
+                    <MessageCircle size={20} className="shrink-0 text-[var(--folder-item-icon)]" />
+                    <span className="relative top-px text-sm font-medium text-[var(--folder-item-name)]">
+                      {t('newChat.folderPicker.dialogue')}
+                    </span>
+                  </button>
+                </>
+              )}
+              <div className="px-3 pb-1 pt-3">
+                <span className="text-xs font-normal text-[var(--folder-label)]">
+                  {t('newChat.folderPicker.projects')}
+                </span>
+              </div>
+              {showProjectSearch && (
+                <div className="sticky top-0 z-10 bg-[var(--folder-picker-bg)] px-1 pb-1">
+                  <SearchInput
+                    surface="panel"
+                    inputRef={projectSearchRef}
                     value={projectQuery}
-                    onChange={(e) => {
-                      setProjectQuery(e.target.value);
+                    onChange={(value) => {
+                      setProjectQuery(value);
+                      resetHighlight();
                       if (projectScrollEl) projectScrollEl.scrollTop = 0;
                     }}
                     onKeyDown={(e) => {
                       // 弹层经 portal 渲染,React 事件仍会冒泡到所在的输入区;搜索框的按键只归它自己。
                       e.stopPropagation();
-                      if (e.key !== 'Enter' || e.nativeEvent.isComposing) return;
-                      const first = activeProjectQuery ? visibleProjectOptions[0] : undefined;
-                      if (!first) return;
+                      // 输入法组字时的回车与方向键属于候选词,不动列表。
+                      if (e.nativeEvent.isComposing) return;
+                      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                        const last = visibleProjectOptions.length - 1;
+                        if (last < 0) return;
+                        e.preventDefault();
+                        // 首尾停住不循环;尚无高亮时 ↓ 进首项、↑ 进末项。
+                        const next =
+                          e.key === 'ArrowDown'
+                            ? Math.min(highlightIndex + 1, last)
+                            : highlightIndex < 0
+                              ? last
+                              : Math.max(highlightIndex - 1, 0);
+                        setHighlightIndex(next);
+                        // 焦点留在搜索框,只把高亮行滚进可视区(行已在 DOM,无需等重渲染)。
+                        projectScrollEl
+                          ?.querySelector<HTMLElement>(`[data-folder-picker-index="${next}"]`)
+                          ?.scrollIntoView?.({ block: 'nearest' });
+                        return;
+                      }
+                      if (e.key !== 'Enter') return;
+                      const target = visibleProjectOptions[highlightIndex];
+                      if (!target) return;
                       e.preventDefault();
-                      void handleSelectPath(first.path, 'project', first);
+                      void handleSelectPath(target.path, 'project', target);
                     }}
                     placeholder={t('newChat.folderPicker.searchProjects')}
                     aria-label={t('newChat.folderPicker.searchProjects')}
-                    className={cn(
-                      'h-8 w-full rounded-full border border-[var(--folder-picker-border)] bg-transparent',
-                      'pl-7 pr-2 text-13 text-[var(--folder-item-name)] outline-none',
-                      // DESIGN.md §4 Inputs & Forms:单行 input 一律 pill;placeholder 与 focus
-                      // 对齐分支选择器的搜索框。
-                      'placeholder:text-[var(--text-placeholder)]',
-                      'focus:border-[var(--focus-ring)] focus:ring-1 focus:ring-[var(--focus-ring-soft)]',
-                    )}
                   />
                 </div>
-              </div>
-            )}
-            <div
-              ref={setProjectScrollEl}
-              data-folder-picker-scroll="true"
-              onScroll={updateScrollFade}
-              className={cn(
-                'pending-queue-scroll -mr-2 overflow-x-hidden overflow-y-auto overscroll-contain pr-2',
-                scrollFade.top && 'folder-picker-fade-top',
-                scrollFade.bottom && 'folder-picker-fade-bottom',
-                PROJECT_LIST_MAX_HEIGHT_CLASS,
               )}
-            >
-              {deviceScope?.status === 'loading' ? (
-                <div className="flex items-center gap-2 px-3 py-[10px] text-sm text-[var(--folder-item-path)]">
-                  <span className="inline-flex shrink-0 animate-spinner motion-reduce:animate-none">
-                    <Loader2 size={14} />
-                  </span>
-                  <span>{t('newChat.addRemoteProject.existingLoading')}</span>
-                </div>
-              ) : deviceScope?.status === 'error' ? (
-                <>
-                  <ErrorNotice
-                    role="alert"
-                    className="mx-1"
-                    message={t('newChat.folderPicker.remoteProjectsLoadFailed', {
-                      device: deviceScope.deviceName,
-                    })}
-                    actions={
-                      deviceScope.retry && (
-                        <Button
-                          size="sm"
-                          compact
-                          disabled={selectionPending}
-                          onClick={deviceScope.retry}
-                        >
-                          <RefreshCw size={12} />
-                          {t('newChat.folderPicker.retryRemoteProjects')}
-                        </Button>
-                      )
-                    }
-                  />
-                  {visibleProjectOptions.map(renderProject)}
-                </>
-              ) : visibleProjectOptions.length > 0 ? (
-                visibleProjectOptions.map(renderProject)
-              ) : activeProjectQuery ? (
-                <div
-                  role="status"
-                  className="px-3 py-[10px] text-sm text-[var(--folder-item-path)]"
-                >
-                  {t('newChat.folderPicker.noMatchingProjects')}
-                </div>
-              ) : deviceScope && onAddRemoteProject ? (
-                /* 对端设备上一个项目都没有:空态里直接给「浏览文件夹」,并带着设备身份进弹窗 ——
-                   否则用户得自己退出去找入口,而这台机器恰恰是最可能需要新建目录的。 */
-                <div className="flex items-center justify-between gap-3 px-3 py-[10px]">
-                  <span className="min-w-0 text-xs text-[var(--folder-item-path)]">
-                    {t('newChat.addRemoteProject.existingEmpty')}
-                  </span>
+              <div
+                ref={setProjectScrollEl}
+                data-folder-picker-scroll="true"
+                onScroll={updateScrollFade}
+                // 无搜索词时高亮只是悬停反馈,指针离开就熄灭;有搜索词时它是回车目标,保留。
+                onMouseLeave={() => {
+                  if (!activeProjectQuery) setHighlightIndex(-1);
+                }}
+                className={cn(
+                  'pending-queue-scroll -mr-2 overflow-x-hidden overflow-y-auto overscroll-contain pr-2',
+                  scrollFade.top && 'folder-picker-fade-top',
+                  scrollFade.bottom && 'folder-picker-fade-bottom',
+                  PROJECT_LIST_MAX_HEIGHT_CLASS,
+                  visibleProjectOptions.length > 1 && LIST_SHRINK_MIN_HEIGHT_CLASS,
+                )}
+              >
+                {deviceScope?.status === 'loading' ? (
+                  <div className="flex items-center gap-2 px-3 py-2.5 text-sm text-[var(--folder-item-path)]">
+                    <span className="inline-flex shrink-0 animate-spinner motion-reduce:animate-none">
+                      <Loader2 size={14} />
+                    </span>
+                    <span>{t('newChat.addRemoteProject.existingLoading')}</span>
+                  </div>
+                ) : deviceScope?.status === 'error' ? (
+                  <>
+                    <ErrorNotice
+                      role="alert"
+                      className="mx-1"
+                      message={t('newChat.folderPicker.remoteProjectsLoadFailed', {
+                        device: deviceScope.deviceName,
+                      })}
+                      actions={
+                        deviceScope.retry && (
+                          <Button
+                            size="sm"
+                            compact
+                            disabled={selectionPending}
+                            onClick={deviceScope.retry}
+                          >
+                            <RefreshCw size={12} />
+                            {t('newChat.folderPicker.retryRemoteProjects')}
+                          </Button>
+                        )
+                      }
+                    />
+                    {visibleProjectOptions.map(renderProject)}
+                  </>
+                ) : visibleProjectOptions.length > 0 ? (
+                  visibleProjectOptions.map(renderProject)
+                ) : activeProjectQuery ? (
+                  <div
+                    role="status"
+                    className="px-3 py-2.5 text-sm text-[var(--folder-item-path)]"
+                  >
+                    {t('newChat.folderPicker.noMatchingProjects')}
+                  </div>
+                ) : deviceScope && onAddRemoteProject ? (
+                  /* 对端设备上一个项目都没有:空态里直接给「浏览文件夹」,并带着设备身份进弹窗 ——
+                     否则用户得自己退出去找入口,而这台机器恰恰是最可能需要新建目录的。 */
+                  <div className="flex items-center justify-between gap-3 px-3 py-2.5">
+                    <span className="min-w-0 text-xs text-[var(--folder-item-path)]">
+                      {t('newChat.addRemoteProject.existingEmpty')}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={selectionPending}
+                      onClick={() => {
+                        onAddRemoteProject(deviceScope.deviceId);
+                        onOpenChange(false);
+                      }}
+                      className="shrink-0 text-xs font-medium text-[var(--folder-item-name)] hover:underline"
+                    >
+                      {t('newChat.addRemoteProject.tabBrowse')}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="px-3 py-2.5 text-sm text-[var(--folder-item-path)]">
+                    {t('newChat.folderPicker.noProjects')}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+
+          {/* Recent folders — list scrolls past 4.5 rows, label and
+              "Choose a different folder" button stay outside the scroll area. */}
+          {!isProjectPicker && recentFolders.length > 0 && (
+            <>
+              <div className="px-3 py-2">
+                <span className="text-xs font-normal text-[var(--folder-label)]">
+                  {t('newChat.folderPicker.recent')}
+                </span>
+              </div>
+              <div
+                data-folder-picker-scroll="true"
+                className={cn(
+                  'pending-queue-scroll -mr-2 overflow-x-hidden overflow-y-auto overscroll-contain pr-2',
+                  PROJECT_LIST_MAX_HEIGHT_CLASS,
+                  recentFolders.length > 1 && LIST_SHRINK_MIN_HEIGHT_CLASS,
+                )}
+              >
+                {recentFolders.map((folder) => (
                   <button
+                    key={folder.path}
                     type="button"
                     disabled={selectionPending}
-                    onClick={() => {
-                      onAddRemoteProject(deviceScope.deviceId);
-                      onOpenChange(false);
-                    }}
-                    className="shrink-0 text-xs font-medium text-[var(--folder-item-name)] hover:underline"
+                    onClick={() => handleSelectPath(folder.path, 'recent')}
+                    className={cn(
+                      'flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left',
+                      'transition-colors outline-none',
+                      'hover:bg-[var(--folder-item-hover)]',
+                    )}
                   >
-                    {t('newChat.addRemoteProject.tabBrowse')}
+                    <Folder size={20} className="shrink-0 text-[var(--folder-item-icon)]" />
+                    <div className="flex min-w-0 flex-1 flex-col items-start">
+                      <span className="w-full truncate text-sm font-medium text-[var(--folder-item-name)]">
+                        {folder.name}
+                      </span>
+                      <span className="w-full truncate text-xs text-[var(--folder-item-path)]">
+                        {folder.path}
+                      </span>
+                    </div>
                   </button>
-                </div>
-              ) : (
-                <div className="px-3 py-[10px] text-sm text-[var(--folder-item-path)]">
-                  {t('newChat.folderPicker.noProjects')}
-                </div>
-              )}
-            </div>
-            <div className="mx-2 my-1 h-px bg-[var(--folder-picker-border)]" />
-          </>
-        )}
-
-        {/* Recent folders — list scrolls past 4.5 rows, label and
-            "Choose a different folder" button stay outside the scroll area. */}
-        {!isProjectPicker && recentFolders.length > 0 && (
-          <>
-            <div className="px-3 py-2">
-              <span className="text-xs font-normal text-[var(--folder-label)]">
-                {t('newChat.folderPicker.recent')}
-              </span>
-            </div>
-            <div
-              data-folder-picker-scroll="true"
-              className={cn(
-                'pending-queue-scroll -mr-2 overflow-x-hidden overflow-y-auto overscroll-contain pr-2',
-                PROJECT_LIST_MAX_HEIGHT_CLASS,
-              )}
-            >
-              {recentFolders.map((folder) => (
-                <button
-                  key={folder.path}
-                  type="button"
-                  disabled={selectionPending}
-                  onClick={() => handleSelectPath(folder.path, 'recent')}
-                  className={cn(
-                    'flex w-full items-center gap-3 rounded-[8px] px-3 py-[10px] text-left',
-                    'transition-colors outline-none',
-                    'hover:bg-[var(--folder-item-hover)]',
-                  )}
-                >
-                  <Folder size={20} className="shrink-0 text-[var(--folder-item-icon)]" />
-                  <div className="flex min-w-0 flex-1 flex-col items-start">
-                    <span className="w-full truncate text-sm font-medium text-[var(--folder-item-name)]">
-                      {folder.name}
-                    </span>
-                    <span className="w-full truncate text-xs text-[var(--folder-item-path)]">
-                      {folder.path}
-                    </span>
-                  </div>
-                </button>
-              ))}
-            </div>
-            <div className="mx-2 my-1 h-px bg-[var(--folder-picker-border)]" />
-          </>
-        )}
-
-        {browseFailed && (
-          <ErrorNotice
-            role="alert"
-            className="mx-1"
-            message={t('newChat.folderPicker.browseFailed')}
-          />
-        )}
-        {/* Choose a different folder */}
-        <button
-          type="button"
-          disabled={selectionPending}
-          onClick={handleChooseDifferent}
-          className={cn(
-            'flex w-full items-center gap-3 rounded-[8px] px-3 py-[10px] text-left',
-            'transition-colors outline-none',
-            'hover:bg-[var(--folder-item-hover)]',
+                ))}
+              </div>
+            </>
           )}
-        >
-          <FolderPlus size={20} className="shrink-0 text-[var(--folder-item-icon)]" />
-          {/* CJK label 视觉重心比 icon 偏高,nudge 1px 居中。与 chip 上 "对话" 同样处理。 */}
-          <span className="relative top-px text-sm font-medium text-[var(--folder-item-name)]">
-            {onCreateProject
-              ? t('projectSettings.createTitle')
-              : isProjectPicker
-                ? t('newChat.folderPicker.browseProjectFolder')
-                : t('newChat.folderPicker.browseFolder')}
-          </span>
-        </button>
+        </div>
 
-        {/* Phase D: 添加远程项目入口。仅 isProjectPicker 且上层传了
-            onAddRemoteProject (即至少一台 host 勾了 autoConnect) 时显示,
-            位置紧贴「选择其他项目文件夹」下方 — 跟用户要求一致。
-
-            **已选定远程设备时不出现**(2026-07-30 用户裁决)。三条理由:
-              · 职责已被上面那项承担 —— deviceScope 存在时「选择其他项目文件夹」点下去就是浏览
-                这台设备的文件夹(见 handleBrowse),两个入口并列只是让人以为它们是两件事;
-              · 它**不带 deviceId**,弹窗会让用户从头重选目标 —— 于是可以从设备 A 的语境里点一个
-                叫「添加远程项目」的入口、选到设备 B,等于绕过设备 pill 改掉了设备这一级维度。
-                #807 方案 B 的前提就是「设备是一级维度、由设备 pill 独占」,这条路径与之冲突;
-              · SSH 与 device-link 本就互斥(remoteHostId / deviceLinkDeviceId 二者只能有一个),
-                所以「在对端设备的语境里添加 SSH 项目」本身是语境错位;要用 SSH 先把设备切回本机,
-                与设备 pill 的语义一致。
-            对端一个项目都没有时的空态入口不受影响 —— 那条走 tabBrowse 且**带**设备身份。 */}
-        {isProjectPicker && onAddRemoteProject && !deviceScope && (
+        {/* 底部操作:不参与滚动,窗口再矮也留在菜单里可见、可点。 */}
+        <div className="shrink-0">
+          {(isProjectPicker || recentFolders.length > 0) && (
+            <div className="mx-2 my-1 h-px bg-[var(--folder-picker-border)]" />
+          )}
+          {browseFailed && (
+            <ErrorNotice
+              role="alert"
+              className="mx-1"
+              message={t('newChat.folderPicker.browseFailed')}
+            />
+          )}
+          {/* Choose a different folder */}
           <button
             type="button"
             disabled={selectionPending}
-            onClick={() => {
-              onAddRemoteProject();
-              onOpenChange(false);
-            }}
+            onClick={handleChooseDifferent}
             className={cn(
-              'flex w-full items-center gap-3 rounded-[8px] px-3 py-[10px] text-left',
+              'flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left',
               'transition-colors outline-none',
               'hover:bg-[var(--folder-item-hover)]',
             )}
           >
-            <Globe size={20} className="shrink-0 text-[var(--folder-item-icon)]" />
+            <FolderPlus size={20} className="shrink-0 text-[var(--folder-item-icon)]" />
+            {/* CJK label 视觉重心比 icon 偏高,nudge 1px 居中。与 chip 上 "对话" 同样处理。 */}
             <span className="relative top-px text-sm font-medium text-[var(--folder-item-name)]">
-              {t('newChat.projectPicker.addRemoteProject')}
+              {onCreateProject
+                ? t('projectSettings.createTitle')
+                : isProjectPicker
+                  ? t('newChat.folderPicker.browseProjectFolder')
+                  : t('newChat.folderPicker.browseFolder')}
             </span>
           </button>
-        )}
+
+          {/* Phase D: 添加远程项目入口。仅 isProjectPicker 且上层传了
+              onAddRemoteProject (即至少一台 host 勾了 autoConnect) 时显示,
+              位置紧贴「选择其他项目文件夹」下方 — 跟用户要求一致。
+
+              **已选定远程设备时不出现**(2026-07-30 用户裁决)。三条理由:
+                · 职责已被上面那项承担 —— deviceScope 存在时「选择其他项目文件夹」点下去就是浏览
+                  这台设备的文件夹(见 handleBrowse),两个入口并列只是让人以为它们是两件事;
+                · 它**不带 deviceId**,弹窗会让用户从头重选目标 —— 于是可以从设备 A 的语境里点一个
+                  叫「添加远程项目」的入口、选到设备 B,等于绕过设备 pill 改掉了设备这一级维度。
+                  #807 方案 B 的前提就是「设备是一级维度、由设备 pill 独占」,这条路径与之冲突;
+                · SSH 与 device-link 本就互斥(remoteHostId / deviceLinkDeviceId 二者只能有一个),
+                  所以「在对端设备的语境里添加 SSH 项目」本身是语境错位;要用 SSH 先把设备切回本机,
+                  与设备 pill 的语义一致。
+              对端一个项目都没有时的空态入口不受影响 —— 那条走 tabBrowse 且**带**设备身份。 */}
+          {isProjectPicker && onAddRemoteProject && !deviceScope && (
+            <button
+              type="button"
+              disabled={selectionPending}
+              onClick={() => {
+                onAddRemoteProject();
+                onOpenChange(false);
+              }}
+              className={cn(
+                'flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left',
+                'transition-colors outline-none',
+                'hover:bg-[var(--folder-item-hover)]',
+              )}
+            >
+              <Globe size={20} className="shrink-0 text-[var(--folder-item-icon)]" />
+              <span className="relative top-px text-sm font-medium text-[var(--folder-item-name)]">
+                {t('newChat.projectPicker.addRemoteProject')}
+              </span>
+            </button>
+          )}
+        </div>
       </PopoverContent>
     </Popover>
   );

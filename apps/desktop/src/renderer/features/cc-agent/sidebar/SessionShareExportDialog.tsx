@@ -22,6 +22,7 @@ import { Tip } from '@/components/ui/tooltip';
 import { toast } from '@/lib/toast';
 import { createLogger } from '@/lib/logger';
 import { extractIpcError } from '@/utils/ipcError';
+import { Checkbox } from '@/components/ui/checkbox';
 
 const log = createLogger('SessionShareExportDialog');
 
@@ -125,7 +126,7 @@ export function SessionShareExportDialog({
             统一截断冒泡。 */}
         <AlertDialog.Overlay
           className={cn(
-            'modal-scrim fixed inset-0 z-[10000]',
+            'modal-scrim fixed inset-0 z-modal',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           onClick={(e) => e.stopPropagation()}
@@ -134,7 +135,7 @@ export function SessionShareExportDialog({
         />
         <AlertDialog.Content
           className={cn(
-            'modal-panel fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
+            'modal-panel fixed left-1/2 top-1/2 z-modal -translate-x-1/2 -translate-y-1/2',
             'w-full max-w-[440px] p-4',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
@@ -160,12 +161,11 @@ export function SessionShareExportDialog({
           )}
 
           <label className="mt-4 flex items-start gap-2 cursor-pointer">
-            <input
-              type="checkbox"
+            <Checkbox
               checked={encrypt}
               onChange={(e) => setEncrypt(e.target.checked)}
               disabled={exporting}
-              className="mt-0.5 accent-[var(--confirm-btn-primary-bg)]"
+              className="mt-0.5"
             />
             <span className="text-sm text-[var(--confirm-title)]">
               {t('sessionShare.export.encryptLabel')}
@@ -182,7 +182,7 @@ export function SessionShareExportDialog({
                   placeholder={t('sessionShare.export.passwordPlaceholder')}
                   disabled={exporting}
                   autoFocus
-                  className="h-8 w-full rounded-md border bg-transparent px-2 pr-8 text-sm outline-none"
+                  className="h-8 w-full rounded-full border bg-transparent px-2 pr-8 text-sm outline-none"
                   style={{
                     borderColor: 'var(--border-default)',
                     color: 'var(--confirm-title)',
@@ -195,7 +195,6 @@ export function SessionShareExportDialog({
                       : 'sessionShare.export.showPassword',
                   )}
                   side="bottom"
-                  contentClassName="z-[10001]"
                 >
                   <button
                     type="button"
@@ -217,7 +216,7 @@ export function SessionShareExportDialog({
                 onChange={(e) => setPassConfirm(e.target.value)}
                 placeholder={t('sessionShare.export.passwordConfirmPlaceholder')}
                 disabled={exporting}
-                className="h-8 w-full rounded-md border bg-transparent px-2 text-sm outline-none"
+                className="h-8 w-full rounded-full border bg-transparent px-2 text-sm outline-none"
                 style={{
                   borderColor: mismatch ? 'var(--error-border)' : 'var(--border-default)',
                   color: 'var(--confirm-title)',

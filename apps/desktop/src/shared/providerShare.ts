@@ -20,12 +20,17 @@ import type { ProviderShareInsights, ProviderShareQuotaAccountResult, ProviderSh
 export const SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE =
   '[SHARED_PROVIDER_SCOPE_DENIED] This request is outside the provider shared with you.';
 
-/** 本机收藏清理依据。未加载、断线和账号切换的空列表不能用于撤权清理。 */
+/** 本机目录及偏好清理依据。目录不可用可以立即停用，删除偏好需要单独的证据。 */
 export interface ProviderShareReceivedSnapshot {
+  /** Local notification sequence that identifies the published membership view. */
+  receivedChangeSequence?: number;
   ownerStamp: DataOwnerPushStamp;
-  /** 仅这些区域的名单完整，可据此清理已撤权收藏；其它区域不受影响。 */
+  /** 本次目录可以替换这些区域的显示结果。 */
   confirmedRegions: readonly ProviderShareReceived['owner']['region'][];
   received: readonly ProviderShareReceived[];
+  /** 当前账号在本机已成功退出、仍待收藏写入确认的成员。 */
+  leftMemberIds?: readonly string[];
+  leftMemberRevision?: number;
   /** false = 分享运行时已停止/账号边界；empty + false 是权威清空，不是暂时投影。 */
   active?: boolean;
   /** Per-region remaining display budget measured by Main's wall and monotonic clocks. */
@@ -52,6 +57,8 @@ export interface ProviderShareRegionBudget {
 export interface ProviderShareFavoriteRecovery {
   ownerStamp: DataOwnerPushStamp;
   regions: readonly ProviderShareReceived['owner']['region'][];
+  /** 本机收藏已按这一版退出回执清理。 */
+  cleanedLeftMemberRevision?: number;
 }
 
 export const PROVIDER_SHARE_IPC = {
@@ -247,6 +254,7 @@ export type ProviderShareCommand =
   /** 转分享：同意或拒绝(拒绝已同意的 = 撤回)。 */
   | { action: 'reshare-decide'; id: string; decision: 'approve' | 'reject' }
   | { action: 'received' }
+  | { action: 'retry-model-catalog'; agentDeviceId: string }
   | { action: 'received-snapshot'; favoriteRecovery?: ProviderShareFavoriteRecovery }
   | { action: 'preview'; link: string }
   | { action: 'send-request'; link: string }
@@ -285,6 +293,7 @@ export interface ProviderShareCommandResult {
   'set-member-note': { ok: true };
   'reshare-decide': { ok: true };
   received: ProviderShareReceived[];
+  'retry-model-catalog': { ok: true; receivedChangeSequence?: number };
   'received-snapshot': ProviderShareReceivedSnapshot;
   preview: ProviderShareLinkPreview;
   'send-request': ProviderShareRequestState;

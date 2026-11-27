@@ -210,6 +210,54 @@ rollback candidate; its compatibility with data created by a newer build must st
 There is no automatic rollback of data and no automatic cleanup of worktrees. When finished, use
 normal Git worktree management after checking no process or uncommitted work depends on the directory.
 
+### Forward a reviewed resolution to its source PR
+
+A combination may conflict even while every source PR merges cleanly with its own base.
+Keep those resolutions in the personal build. For a PR that also conflicts with its actual
+target (including a stacked target or a fork), use the separate maintainer CLI below.
+
+1. Run `node scripts/personal-build.mjs conflicts list /build/report.json` after a
+   completed composition. Save its JSON output outside Git. The inventory identifies the
+   repository, PR, frozen head, first-parent merge and conflicting paths. An existing build
+   report works as long as the checkout still has its Git objects. Keep any explicitly
+   excluded PRs out of the follow-up inventory.
+2. One existing follow-up can consume several inventories. Run
+   `node scripts/personal-build.mjs conflicts check /build/inventory.json --cache /state/checked.json`.
+   Append other inventory filenames to the command when they are in scope. The check groups
+   by repository and PR, queries its live state once, and reuses Git's conflict paths while
+   both remote tips and branch identities match. Treat an error as an incomplete run. Empty
+   `pending` with open PRs means wait; stop the follow-up when a successful run returns
+   `open: 0`. This command never updates a remote branch.
+3. For a pending record, prepare a detached worktree with the commands below. Review both
+   the original resolution and the candidate against the current PR. Git supplies the clean
+   merge of the real target; only the text inside matching conflict blocks is taken from
+   the recorded resolution. Context outside those blocks comes from the live merge. Check
+   that the chosen lines themselves do not depend on an unmerged feature. If the file type,
+   conflict or a boundary is ambiguous, the tool stops. Inspect that case separately; do
+   not copy the private merge commit or an entire file onto the PR.
+4. With explicit authority to update the source PR, run `push` against the same worktree.
+   Supply the affected project's actual test and typecheck commands as JSON argument arrays.
+   On Windows, bare `pnpm` starts the installed executable or the JS entry alongside a standard
+   npm/Corepack shim. For a custom or ambiguous installation, supply the absolute path to
+   `pnpm.exe` or pass the installed JS entry to Node as the first argument.
+   The command checks the reviewed tree, parents, PR identity and both remote tips, pushes
+   the candidate with ordinary Git fast-forward semantics, then reads the remote head back.
+   A moved branch requires a fresh comparison. If a push receipt is interrupted, recheck
+   the remote head against the candidate before trying again.
+
+```sh
+tool=scripts/personal-build.mjs
+node "$tool" conflicts prepare /build/report.json --repo app --pr 123 --worktree /work/review-123
+git -C /work/review-123 show --remerge-diff HEAD
+# Example for a Desktop change; select commands for the actual conflict.
+node "$tool" conflicts push /build/report.json --repo app --pr 123 --worktree /work/review-123 \
+  --test '["pnpm","--dir","apps/desktop","exec","vitest","run","path/to/affected.test.ts"]' \
+  --typecheck '["pnpm","--dir","apps/desktop","typecheck"]'
+```
+
+Use `--repo plugins` for the composed plugin repository. Preparing or checking a build
+does not schedule a follow-up, change a PR target, publish branches or merge PRs.
+
 ## Personal iPhone companion delivery
 
 The optional mobile step consumes the **same `report.json` and frozen source commit** as Desktop.
@@ -909,8 +957,9 @@ The personal runtime also seals the same English privacy usage strings as the Fo
 resources when the declaration is missing: without `NSLocalNetworkUsageDescription` the personal
 app and every agent, SSH or scheduled child process it is responsible for receive `EHOSTUNREACH`
 ("No route to host") even for the LAN gateway (2026-11). An already installed runtime gets the
-declaration only from the next personal build; afterwards check System Settings → Privacy &
-Security → Local Network for the personal app.
+declaration only from the next personal build. macOS does not ask again for an app it already
+refused silently, so the app now detects the denial itself and offers to open System Settings →
+Privacy & Security → Local Network (see `remote-and-mobile-adaptation.md`).
 
 Mobile debug recording includes non-secret push registration stages, realm, app variant, APNs
 environment and numeric HTTP failure status. It never records the native token or authorization
@@ -947,13 +996,13 @@ and the target phone before calling delivery successful.
   CHECKED_BUILD_REPORT`，要求监督锁可取得、应用与 runner 均已停止、报告和事务的 runtime
   key/digest 一致；只完成文件事务，不启动应用、不更改业务 journal。候选开始尝试执行后，
   数据兼容性未知仍禁止自动退回旧版。
-- 换壳后注销退役包的 LaunchServices 登记并重新登记固定安装路径；隔离 smoke 正常停止
-  后注销预览包，仍被别的实例使用则保留并警告。改名为 `.bundle` 本身不保证系统注销。
+- 换壳后同时注销退役包的 LaunchServices 与 PlugInKit（`Contents/PlugIns/*.appex`）登记并重新登记固定安装路径，同时向已注销退役扩展及停机换壳前残留的扩展进程发送 `SIGTERM` 以便系统加载新二进制；隔离 smoke 正常停止后同样注销预览包及其扩展，仍被别的实例使用则保留并警告。改名为 `.bundle` 本身不保证系统注销；新旧个人版复用同一 Electron `CFBundleVersion` 时，若旧备份的 `.appex` 仍留在 PlugInKit 中，系统会继续拉起旧版灵动岛扩展。
   系统登记失败不得阻断文件安装或旧版恢复：完成文件事务，在安装元数据记录
   `registrationPending`，由 doctor 提示、registry-clean 成功后清除；smoke 的登记错误
   写入 `registrationWarnings`，不改变候选启动结果。停止进程失败仍使 smoke 失败。
-  `doctor` 列出同 Bundle ID 的登记路径；显式 `registry-clean --config FILE` 只注销
-  同 ID 且未运行的副本：状态目录内或固定包同级受管备份前缀内的退役包允许旧/临时签名，
+  固定安装启动前还会非阻断地核对 PlugInKit 的 `<bundleId>.agent-activity` 登记，清理陈旧的受管/缺失副本。
+  `doctor` 列出同 Bundle ID 的 LaunchServices 登记路径、PlugInKit 扩展登记路径及遗留的同级 `.previous-*` 备份；显式 `registry-clean --config FILE` 只注销
+  同 ID 且未运行的副本（含其 `.appex` 扩展登记并结束退役扩展残留进程）：状态目录内或固定包同级受管备份前缀内的退役包允许旧/临时签名，
   其它位置仍要求同证书有效签名；同 ID 查询中已不存在的路径只注销陈旧登记。真实路径
   是固定包的别名、异 ID、运行中或身份不明的条目保留。固定包始终验证原签名和摘要。
   此命令不删除文件、不重置 TCC；登记查询限时 60 秒，注销/登记各限时 15 秒。

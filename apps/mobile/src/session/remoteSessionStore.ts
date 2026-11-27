@@ -64,6 +64,7 @@ import {
 import { readComposerDocumentDraftSync, readComposerDraftSync } from '@/session/composerDraftStore';
 import { composerDocumentHasContent } from '@/session/composerDocument';
 import { getQuotes } from '@/session/chatQuoteStore';
+import { companionReplyQuoteScope, getPendingCompanionReplyQuote, setPendingCompanionReplyQuote } from '@/session/companionReplyQuote';
 import {
   sessionMessageLifecycle,
   type SessionMessageAuthority,
@@ -82,6 +83,14 @@ import { clampLiveRowCreatedAt, compareMessageOrder, MESSAGE_PAGE_SIZE } from '@
 import { normalizeRemoteMoney } from '@/session/remoteMoney';
 import { projectLargeSettledToolInputs } from '@/session/messageToolPayloadProjection';
 import { setRemoteSessionStoreSizeSource } from '@/debug/jankMetrics';
+import {
+  projectSessionWithOfflineInboxIntent,
+  type OfflineInboxIntent,
+} from '@cindy/maker-shared/offline-inbox-intent';
+import {
+  getMobileOfflineInboxIntent,
+  subscribeMobileOfflineInboxIntents,
+} from '@/session/offlineInboxIntents';
 
 interface DeviceShard {
   deviceId: string;
@@ -1441,12 +1450,13 @@ const mergedSessionById = new Map<string, RemoteSession>();
 // List-only projection. Detail consumers keep reading mergedSessions, including
 // live usage. Usage pushes must not rebuild Home's grouping/localization tree.
 let homeSessions: RemoteSession[] = [];
-const SESSION_USAGE_FIELDS = new Set(['totalMoney', 'totalCostUsd', 'totalTokenUsage']);
+const SESSION_USAGE_FIELDS = new Set(['totalMoney', 'totalCostUsd', 'totalCostUsdIsApproximate', 'totalTokenUsage']);
 // These fields cannot change shard ownership, visibility or retention. Timestamps
 // still update this task's live-row anchor; titles still reconcile local previews.
 const SESSION_METADATA_FIELDS = new Set([...SESSION_USAGE_FIELDS, 'title', 'updatedAt', 'userSendAt']);
 const homeSessionProjectionCache = new Map<string, {
   source: RemoteSession;
+  intent: OfflineInboxIntent | undefined;
   projected: RemoteSession;
 }>();
 
@@ -1454,17 +1464,23 @@ function reconcileHomeSessions(): void {
   const activeSessionIds = new Set<string>();
   const next = visibleSessions.map((session) => {
     activeSessionIds.add(session.id);
+    const intent = getMobileOfflineInboxIntent(
+      session.canonicalDeviceId ?? session.deviceLinkDeviceId,
+      session.id,
+    );
     const cached = homeSessionProjectionCache.get(session.id);
-    if (cached?.source === session) return cached.projected;
+    if (cached?.source === session && cached.intent === intent) return cached.projected;
 
-    const projected = { ...session };
+    let projected = { ...session };
     delete projected.totalMoney;
     delete projected.totalCostUsd;
+    delete projected.totalCostUsdIsApproximate;
     delete projected.totalTokenUsage;
+    projected = projectSessionWithOfflineInboxIntent(projected, intent);
     const stableProjected = cached && remoteSessionEqual(cached.projected, projected)
       ? cached.projected
       : projected;
-    homeSessionProjectionCache.set(session.id, { source: session, projected: stableProjected });
+    homeSessionProjectionCache.set(session.id, { source: session, intent, projected: stableProjected });
     return stableProjected;
   });
   for (const sessionId of homeSessionProjectionCache.keys()) {
@@ -1474,6 +1490,11 @@ function reconcileHomeSessions(): void {
   homeSessions = next;
   bumpHomeStatusVersion();
 }
+
+subscribeMobileOfflineInboxIntents(() => {
+  reconcileHomeSessions();
+  emit();
+});
 let messageVersion = 0;
 let storeVersion = 0;
 // A single remote snapshot often updates both the session shard and its
@@ -4282,6 +4303,14 @@ export const remoteSessionStore = {
     const next = existing.filter((message) => (
       !deletedClientIds.has(message.clientId) && !deletedClientIds.has(message.id)
     ));
+    const resolvedDeviceId = deviceId ?? sessionDeviceIndex.get(sessionId);
+    if (resolvedDeviceId) {
+      const scope = companionReplyQuoteScope(resolvedDeviceId, sessionId);
+      const pendingQuote = getPendingCompanionReplyQuote(scope);
+      if (pendingQuote && deletedClientIds.has(pendingQuote.clientId)) {
+        setPendingCompanionReplyQuote(scope, null);
+      }
+    }
     const syncMarkerChanged = sessionMessageSyncMarkers.delete(sessionId);
     // 连续性结论随窗口一起失效:rewind 可能删掉中间的行,清空/回收更是整窗重来。
     // 重置为未知,下一次最新窗口同步会重建(见 sessionWindowCoverage)。
@@ -4324,11 +4353,8 @@ export const remoteSessionStore = {
     // epoch，使更晚触发的旧 debounce/unmount flush 失去提交资格。
     if (retentionForSession(sessionId) === 'schedule' || !messagesChanged) {
       clearSessionMessageCache(sessionId, deviceId);
-    } else {
-      const resolvedDeviceId = deviceId ?? sessionDeviceIndex.get(sessionId);
-      if (resolvedDeviceId) {
-        void replaceCachedSessionMessages(resolvedDeviceId, sessionId, next).catch(() => undefined);
-      }
+    } else if (resolvedDeviceId) {
+      void replaceCachedSessionMessages(resolvedDeviceId, sessionId, next).catch(() => undefined);
     }
     if (messagesChanged) {
       applyMessageWriteRetention(sessionId);
@@ -4966,7 +4992,11 @@ export const remoteSessionStore = {
         bumpDeviceSessionListMutationEpoch(deviceId);
         this.applySessionPatch(deviceId, sessionId, {
           totalMoney,
-          ...(totalMoney.currency === 'USD' ? { totalCostUsd: totalMoney.amount } : {}),
+          ...(totalMoney.currency === 'USD' ? { totalCostUsd: totalMoney.amount }
+            : totalCostUsd !== null && totalCostUsd >= 0 ? { totalCostUsd } : {}),
+          ...(typeof payload.totalCostUsdIsApproximate === 'boolean' && {
+            totalCostUsdIsApproximate: payload.totalCostUsdIsApproximate,
+          }),
         });
       } else if (sessionId && totalCostUsd !== null && totalCostUsd >= 0) {
         bumpDeviceSessionListMutationEpoch(deviceId);
@@ -6365,6 +6395,14 @@ export function useRemoteSessions(): RemoteSession[] {
   return usePausableRemoteSessionStoreSnapshot('sessions', remoteSessionStore.getVisibleSessions);
 }
 
+/** Native deep links must resolve hidden/detail-only sessions after the mirror hydrates. */
+export function useRemoteSessionLinkTarget(sessionId: string): RemoteSession | null {
+  const read = useCallback(() => remoteSessionStore.getSessions().find(session =>
+    session.id === sessionId,
+  ) ?? null, [sessionId]);
+  return usePausableRemoteSessionStoreSnapshot(read, read);
+}
+
 /** Link chips observe only their visible targets, not every task's activity. */
 export function useRemoteSessionTitles(ids: readonly string[]): Record<string, string> | undefined {
   const read = useCallback(() => {
@@ -6400,12 +6438,13 @@ export function useRemoteHomeSessions(): RemoteSession[] {
   );
 }
 
-export type RemoteSessionUsage = Pick<RemoteSession, 'totalMoney' | 'totalCostUsd' | 'totalTokenUsage'>;
+export type RemoteSessionUsage = Pick<RemoteSession, 'totalMoney' | 'totalCostUsd' | 'totalCostUsdIsApproximate' | 'totalTokenUsage'>;
 const EMPTY_SESSION_USAGE: RemoteSessionUsage = {};
 
 function sessionUsageEqual(a: RemoteSessionUsage, b: RemoteSessionUsage): boolean {
   return a.totalTokenUsage === b.totalTokenUsage
     && a.totalCostUsd === b.totalCostUsd
+    && a.totalCostUsdIsApproximate === b.totalCostUsdIsApproximate
     && a.totalMoney?.amount === b.totalMoney?.amount
     && a.totalMoney?.currency === b.totalMoney?.currency
     && a.totalMoney?.kind === b.totalMoney?.kind
@@ -6422,7 +6461,7 @@ export function useRemoteSessionUsage(sessionId: string, enabled = true): Remote
   const readUsage = useCallback(() => {
     const session = enabled ? sessionById(sessionId) : undefined;
     const next: RemoteSessionUsage = session
-      ? { totalCostUsd: session.totalCostUsd, totalMoney: session.totalMoney, totalTokenUsage: session.totalTokenUsage }
+      ? { totalCostUsd: session.totalCostUsd, totalCostUsdIsApproximate: session.totalCostUsdIsApproximate, totalMoney: session.totalMoney, totalTokenUsage: session.totalTokenUsage }
       : EMPTY_SESSION_USAGE;
     if (sessionUsageEqual(previousRef.current, next)) return previousRef.current;
     previousRef.current = next;

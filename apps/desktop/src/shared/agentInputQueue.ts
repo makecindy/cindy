@@ -1,3 +1,4 @@
+import { isWindowsPathLike } from './workingDir.js';
 import type { AgentRequestReceipt } from './forwardedRequest.js';
 import { coordinationModelPrefix, type BotTaskCoordination } from './botTaskCoordination.js';
 /**
@@ -15,7 +16,7 @@ import { isSharedTaskPeer } from '@cindy/device-link';
 
 import { stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
 import type { SharedTaskAuthor } from '@cindy/maker-shared';
-import type { MessageSourceDevice, MessageSourceGroupRequest, MessageSourceGroupThread, MessageSourcePlugin } from '@cindy/maker-shared/message-source';
+import type { MessageSourceDevice, MessageSourceGroupRequest, MessageSourceGroupThread, MessageSourcePlugin, MessageSourcePluginReply } from '@cindy/maker-shared/message-source';
 import { UI_ACTION_TRIGGER_PREFIX } from '@cindy/maker-shared/synthetic-trigger';
 import { isAnsweredAsyncQuestionClientId } from '@cindy/maker-shared/interaction';
 import { MENTION_TOKEN_SPLIT, parseMentionToken } from '@cindy/maker-shared/mention-ref';
@@ -30,6 +31,7 @@ import {
   projectLiteralUserText,
   readAgentInputReferences,
   type AgentInputReference,
+  type AgentSendToSessionHint,
 } from '@cindy/maker-shared/agent-input-projection';
 
 export type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
@@ -166,10 +168,11 @@ export interface AgentInputChatMessage {
 }
 
 export interface AgentInputCreateOpts {
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'acp';
   workingDir: string;
   model: string;
   providerId?: string | null;
+  agentDeviceId?: string;
   orcaRole?: 'lead' | 'worker' | null;
   effort?: string;
   fastMode?: boolean | 'ultrafast';
@@ -197,6 +200,8 @@ export interface AgentInputClearBoundaryOpts {
  * 而不是让 renderer 引用 main 的常量——这样以后调整上限，旧记录仍显示当时的值。
  */
 export interface AutoResumeInfo {
+  /** One retry after the Gemini per-minute input limit, independent of subscription reset. */
+  geminiInputRetry?: true;
   /** 中断原文（terminal error 的 message，通常是 SDK 的英文文案）。 */
   error?: string;
   /**
@@ -300,6 +305,7 @@ export interface RecoveryCheckpoint {
 export const HOST_ONLY_AGENT_PREFIX = Symbol('host-only-agent-prefix');
 
 export interface AgentInputQueuedMessage {
+  waitingForRemoteAccount?: true;
   /** Rejection marker only. The positive authorization is a Main-only, non-persisted guard. */
   taskActionRequiresAuthorization?: true;
   /** Main-owned delegation receipt; stripped from renderer/device-link input. */
@@ -412,6 +418,11 @@ export interface AgentInputQueuedMessage {
          * 「群里的 Cindy」）。标签与 `[消息来源]` 写出是谁、在哪个群；没有来源任务（senderSessionId 为空）。
          */
         groupRequest?: MessageSourceGroupRequest;
+        /**
+         * 来源任务是本任务回答插件转来的 IM 消息时开的，插件跟随这一轮，把最后回答发回那条消息的来处
+         * （plugin-agent-tasks.md「后续轮次」）。只进 `[消息来源]`，标签照旧是「由任务「X」发送」。
+         */
+        pluginReply?: MessageSourcePluginReply;
       };
   /**
    * 本条由**手机控制端**入队 / 插入。
@@ -503,6 +514,8 @@ export interface AgentInputQueuedMessage {
 
 export type AgentInputDelivery = 'turn' | 'steer';
 
+export type ReconnectHandoff = 'disabled' | 'exhausted';
+
 export type AgentInputRecovery =
   | { kind: 'queue-head'; clientId: string }
   | { kind: 'active-turn'; item: AgentInputQueuedMessage }
@@ -534,6 +547,10 @@ export function normalizeAgentInputClearBoundaryMs(value: unknown): number | nul
 
 export interface AgentInputProjection {
   sessionId: string;
+  /** Recent explicit withdrawals. Older hosts omit this field. */
+  withdrawnQueueClientIds?: string[];
+  /** Snapshot order within a coordinator lifetime. Dispatch ownership is omitted until queue restore succeeds. */
+  queueSnapshot?: { host: string; sequence: number; dispatchClientId?: string | null; pendingSteerClientIds?: string[] };
   /** Host still owns a turn/dispatch/interaction boundary. Older hosts may omit it. */
   turnInProgress?: boolean;
   pendingQueue: AgentInputQueuedMessage[];
@@ -555,6 +572,11 @@ export interface AgentInputProjection {
    * 「仍在运行」呈现。旧被控端可能缺省，消费方必须按旧端兼容策略处理。
    */
   continuationTurnClientId?: string | null;
+  /**
+   * 当前 Agent 会话不能同轮插话（插件引擎的 Agent 没有声明插话扩展）：插话会排到这一轮
+   * 之后。只在确知不支持时为 true；缺省（含旧被控端、没有 Agent 会话）按支持处理。
+   */
+  steerUnsupported?: boolean;
   steeringQueueClientIds: string[];
   queuePaused: boolean;
   queueExpanded: boolean;
@@ -566,6 +588,8 @@ export interface AgentInputProjection {
   errorPersistId?: string | null;
   /** Stable error reason for live clients; older controlled hosts may omit it. */
   errorReason?: string | null;
+  /** Why this reconnect timeout needs manual continuation, when decided by the execution host. */
+  reconnectHandoff?: ReconnectHandoff;
   /** Bounded details for tool-loop errors; never carries the raw provider message. */
   toolLoop?: AgentInputToolLoopDetails | null;
   /** Final-request output usage; optional for older controlled hosts. */
@@ -964,11 +988,16 @@ export function serializeSessionReferencePayload(
 }
 
 /** Immutable semantic projection shared by Ghost, titles, turn and steer. */
-export function getAgentFacingText(queued: AgentInputQueuedMessage): string {
+export function getAgentFacingText(
+  queued: AgentInputQueuedMessage,
+  options: { sendToSession?: AgentSendToSessionHint } = {},
+): string {
+  const sendToSession = queued.toolsDisabled === true ? undefined : options.sendToSession;
   const text = projectAgentFacingText({
     text: queued.text,
     quotesEncoded: queued.chatMessage.quotesEncoded === true,
     agentReferences: queued.agentReferences,
+    sendToSession,
   });
   // Host text-only welcomes stay synthetic in queue/history projections, not in model input.
   return queued.toolsDisabled === true && text.startsWith(UI_ACTION_TRIGGER_PREFIX)
@@ -1217,9 +1246,12 @@ export function deriveAutoTitleSeed(
 export function buildMakerUserMessage(
   queued: AgentInputQueuedMessage,
   sessionReferenceContexts: AgentInputSessionReferenceContext[] = [],
+  options: { sendToSession?: AgentSendToSessionHint } = {},
 ): AgentInputMakerMessage {
   const blocks: Array<{ type: string; [k: string]: unknown }> = [];
-  const facingText = getAgentFacingText(queued);
+  // The route comes from the live session's host-reconciled identity. Queued createOpts are only a
+  // snapshot: Review and plugin-engine identity are restored at start, so they cannot decide it.
+  const facingText = getAgentFacingText(queued, { sendToSession: options.sendToSession });
   // 主机内部消息只在排队行 / 历史里需要隐藏前缀;发给模型的正文不带它。
   const authoredText = queued.agentOmitsTriggerPrefix === true && facingText.startsWith(UI_ACTION_TRIGGER_PREFIX)
     ? facingText.slice(UI_ACTION_TRIGGER_PREFIX.length)
@@ -1242,7 +1274,11 @@ export function buildMakerUserMessage(
     const pathOrigin = type === 'image' && f.pathOrigin === 'desktop-host'
       ? { pathOrigin: f.pathOrigin }
       : {};
-    if (f.url) {
+    const source = f.url || f.path;
+    // A pasted/selected local file can retain its old path alongside complete bytes.
+    if (f.base64 && source && (source.startsWith('/') || isWindowsPathLike(source))) {
+      blocks.push({ type, base64: f.base64, mimeType: f.mimeType, ...pathOrigin });
+    } else if (f.url) {
       blocks.push({ type, path: f.url, mimeType: f.mimeType, ...pathOrigin });
     } else if (f.path && !f.path.startsWith('clipboard://')) {
       blocks.push({ type, path: f.path, mimeType: f.mimeType, ...pathOrigin });

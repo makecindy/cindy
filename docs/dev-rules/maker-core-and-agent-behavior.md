@@ -7,9 +7,11 @@
 > **适用路径**：`packages/maker-core/**`、`apps/desktop/src/main/maker-host/*prompt*.md`、
 > `apps/desktop/src/main/maker-ipc/botSystemPrompt.ts`、`apps/cindy-headless/profiles/**`
 
-本文治理 Cindy 连接 Claude／Codex 等 Agent 的编排核心 `packages/maker-core`。它是所有
-Agent 会话的事件流与 prompt 组装中枢，这里的改动会在用户无感知的情况下影响线上行为与
-质量。进程边界与 IPC 另见
+本文治理 Cindy 连接 Claude／Codex／Pi／ACP（插件执行引擎）等 Agent 的编排核心
+`packages/maker-core`。它是所有 Agent 会话的事件流与 prompt 组装中枢，这里的改动会在用户
+无感知的情况下影响线上行为与质量。启动失败清理、事件流暂停、上下文溢出续接、后台命令与
+usage 计量须同时兼顾内置三引擎与第四种引擎 `acp`（ACP 不接入 Cindy system prompt，专用
+协议扩展与不变量见 [`acp-plugin-harness.md`](acp-plugin-harness.md)）。进程边界与 IPC 另见
 [`electron-security-and-process-boundaries.md`](electron-security-and-process-boundaries.md)，
 Orca 多 Agent 协同另见 [`orca-team-architecture.md`](orca-team-architecture.md)。
 
@@ -28,6 +30,11 @@ Claude Code、Codex、Pi 共用 Maker 的启动失败清理契约：只有明确
 当作进程退出，也不触发只允许真实退出证明的自动重试。清理未确认时继续保留保护，通过
 `AgentStartupCleanupPendingError.whenStopped` 接收同 owner 的实际清理／移交或进程退出证明。
 
+Codex handle 关闭、终止或未交付的启动清理时，除注销线程身份，还须通过
+`closeCodexMcpSessionInstance` 释放该实例的 MCP HTTP transports；不能依赖客户端发送 DELETE。
+Desktop 与 Node Host 共用此回收入口。线程替换、rewind 或 fork 仍沿用当前实例时只更新
+线程身份，不释放实例连接，也不影响兄弟任务；实例连接回收不代表原生线程已卸载。
+
 本地 SDK 已接收启动调用、已观察到进程创建、或远端启动请求已发出后，普通异常不是
 退出证明。Pi 在 transport 已创建而 RPC 包装器构造失败时，也必须关闭已取得的
 transport；关闭未确认时复用原有隔离清理记录和 `AgentStartupCleanupPendingError`，
@@ -38,10 +45,12 @@ transport；关闭未确认时复用原有隔离清理记录和 `AgentStartupCle
 
 Codex 的 MCP 目录探测可能拿到新工具，但原线程的客户端仍启动失败；读取工具时优先采用原生
 `runtimeStatus`，不以目录非空代替线程就绪。明确的 `null` 表示当前配置尚无原生运行状态，保持
-`pending` 并在后续发送时复查；只有字段缺失的旧运行时才保留目录兼容判据。明确配置且启用的 `cindy_helper` 失败后，在下次普通发送
+`pending` 并在后续发送时复查；只有字段缺失的旧运行时才保留目录兼容判据。明确配置且启用的
+`cindy_helper` 或 `cindy` 插件网关失败后，在下次普通发送
 之前复查；仅原线程明确 `failed`、没有原生子 Agent／终端／待续接工作时，释放该线程并冷恢复同一份
 完整历史，重用当前任务的 MCP 发现身份和配置。并发恢复合并，每个 handle 最多尝试两次，间隔至少
-30 秒；不后台轮询、不重放输入或工具，不重启共享 app-server／设备连接。健康任务不增加发送前查询。
+30 秒；不后台轮询、不重放输入或工具，不重启共享 app-server／设备连接。两组网关并行查询同一线程，
+各自按服务名过滤和分页，共用一个超时截止时间。不能以 helper 正常推定插件网关正常。健康任务不增加发送前查询。
 仍在异步启动、鉴权失败、明确停用、Review 或旧运行时无明确状态时不触发恢复。停止、关闭、账号退役
 或配置变化使在途恢复失效；取消后的迟到回包不得重新订阅，也不得释放新 handle 已接管的线程。
 接管按 handle 身份计算：同一 handle 的权限刷新、冷恢复与 daemon 恢复保留清理归属；新 handle
@@ -68,6 +77,13 @@ Host 按请求代次保存待确认的接管：未派发或收到关联的原生
 回写下一轮。异步启动转为明确不可用时，即使后台工作阻止恢复，也保留去重的缺席提示。
 原生冷恢复会重建失败任务内的 MCP 连接，其他任务的连接保持；后台工作未结束或状态不明时保留原线程。
 回归见 `agents/codex/helper-readiness.native.test.ts`、`index.test.ts` 与 `mcp-server-tools.test.ts`。
+
+单服务的线程就绪检查必须同时传 `threadId` 和 `serverName`。原生 Codex 0.166/0.167
+在缺少 `serverName` 时会重新发现全部 MCP 服务并建立临时客户端；某个无关服务阻塞时，
+健康 helper 的检查也会超时，临时客户端的迟到错误不能视为业务线程失效。
+helper 读取与恢复前复查、已有线程的 scheduler 检查均限定到目标服务；不增加查询、后台
+重试或共享进程重载。原生回归通过真实 app-server 验证健康连接不会重新初始化，也不会
+探测只对新连接挂起的其它服务；旧运行时忽略选择参数时保留原有兼容判据。
 
 回归见 `claude-code/__tests__/startup-cleanup.test.ts`、
 `pi/__tests__/pi-startsession-cleanup.test.ts` 与 `maker.test.ts`。
@@ -177,6 +193,12 @@ Claude Code 的 `upstream-idle-watchdog.test.ts` 与 desktop 的 `tool-loop-revi
 
 ## 上下文已满时的引擎边界
 
+Claude Code 切换模型／供应商时，当前或目标窗口、占用读数缺失不作为拒绝选择的理由：
+保留原生历史并尝试所选路由，真实超限沿用已有 overflow 恢复。目标窗口与占用已知且达到
+交接阈值时，按目标压力交接，不要求旧模型窗口可查，也不要求目标比旧窗口更小。
+主人从另一设备控制任务电脑不等于 SSH 执行：任务电脑能本地完成交接时直接准备并续接，
+不因控制入口来自远端报“不支持重建”。SSH 执行与 Pi 运行时核验边界保持各自语义。
+
 Claude Code 在同一模型上达到设置页自动压缩阈值且尚未满窗时，由 host 注入 `/compact`；
 Desktop 的压缩比例按供应商与模型统一（默认 90%），所有 Harness 共用，旧全局偏好不再生效。
 Pi 在启动或恢复时将模型比例写成原生 `compaction.reserveTokens` / `modelOverrides`，由 Pi 按
@@ -185,6 +207,10 @@ Pi 在启动或恢复时将模型比例写成原生 `compaction.reserveTokens` /
 UI、usage 与 digest 投影，不再向 Pi 注入 host 自动 compact RPC。
 
 ### 重放预算
+
+容量元数据回查与选模共用已声明的 wire 前缀／桥接名称候选，精确条目优先；来源推断、
+容量上限和任务预算收敛采用同一匹配。匹配仍限于指定供应商与 Harness，不剥 `[1m]`
+合并不同窗口商品；重复或多来源候选保持未知，显示兜底值不因此变成已核实容量。
 
 宿主按实际目标 Harness、模型、供应商和执行电脑核实窗口。目录条目须标记 `contextWindowVerified: true`，
 任务和模型级工作预算只在已核实路由上参与窗口收敛。旧版目录缺字段、供应商未申报窗口、远程目录只剩缓存、
@@ -318,6 +344,11 @@ Codex 同引擎切模（包括自动任务、Orca、设备互联与 SSH）保留
 90%／100% 或伙伴账本新鲜而抢先生成 Cindy 交接。窗口预算与用户 override 保持不变；重载模型
 目录或凭证执行句柄不等于重建历史。Cindy 只在明确的上下文超限、原生压缩失败或历史字节超限后
 沿用既有兜底及副作用保护。跨引擎交接和显式重启仍按各自生命周期规则处理；伙伴不再执行空闲间隔刷新。
+本地代理观察到当前根线程、当前轮在采样前为缩窗自动压缩，且上游明确拒绝了这次请求中的旧型号时，
+沿用上述有界交接。按请求关联原生元数据与 HTTP 拒绝，下一次采样使旧证据失效。目标模型被拒、
+账号权限错误、手动压缩及缺乏请求证据的错误仍按原分类处理。
+Chat Completions、Anthropic Messages 和使用原生 SDK 的桥接以同一条请求的上游错误为证据。
+桥接包装或脱敏前识别明确的模型拒绝，保留型号及拒绝类别，普通 403 不触发交接。
 真实 CLI 的同供应商、跨供应商与逐 thread 预算回归见
 `apps/desktop/src/main/maker-host/__tests__/codexContextSwitch.native.test.ts`；逐 thread 回归在本机
 模拟服务运行，不代表完成了真实 SSH 端到端验收。
@@ -447,7 +478,11 @@ Codex 0.153 的 unsubscribe 会延迟卸载 30 分钟，不能靠立即 resume �
 冻结输入。本地摘要再失败即正常报错，不循环切换。尚未结算的原生 exec continuation 无法跨
 线程迁移，不得重建后声称它仍可恢复。普通生成 502 与 stderr 文案不得触发此路径。
 
-Codex 的 120 秒 reconnect watchdog 只是 fallback 收口，不是根因诊断。stderr 仍只作诊断日志，
+Codex 的 120 秒 reconnect watchdog 只确认模型连接未在时限内恢复。诊断记录本次重连最后收到的尝试序号与上限、
+中断时仍登记为未完成的工具调用数，以及已知的上游网关状态码。工具仍在等待不能证明工具引起了断线。
+stderr 仍只作诊断日志
+（唯一例外：每次响应的计时 trace 行只读来显示 tok/s，不驱动任何行为，见
+[实时生成速度](protocol-compatibility/live-generation-speed.md)），
 不得用 `remote compaction v2` 文案驱动恢复动作，也不得根据图片历史大小把重连超时
 改写为历史故障（包括读取已保存消息时）。收到当前 turn 的原生 `contextCompaction`
 开始事件后，取消短重连计时，压缩期间交给既有 upstream-idle 长超时保护；完成后恢复
@@ -477,7 +512,13 @@ handle 的只读 `isPreparingUserTurn()`，使用 `bridge_turn_no_event_timeout`
 自动 CONTINUE 保留原请求的 Plan 与权限选项；超时恢复不等于 ExitPlanMode 批准，
 不得强制 planMode=false。若原计划已批准后执行失败，缺少可靠的审批周期记录时仍保守
 保留原 Plan 选项，可能重新进入计划模式；不为避免重入新增审批状态。人工 Retry 沿用
-既有合成 UI 动作策略，本自动恢复修复不调整该策略。
+既有合成 UI 动作策略。Codex 重连超时后的人工继续即使尚无助手消息也只发 CONTINUE，并保留原 Plan 与权限选项。
+
+Codex 重连超时后，宿主在发给模型的续跑消息中说明断线原因。收到工具错误时，模型可从
+原有的工具结果继续诊断；工具已开始但尚未收到结果时，先核对实际状态，避免重复执行。
+普通任务自动续跑后，如果没有新的实质产出就再次发生同样的重连超时，交给用户处理。
+有新的可见文本或工具调用时可再次恢复，仍受当前任务的自动恢复总预算约束。已配置的
+模型组沿用自己的重试和切换规则。
 退避窗口内 provider / Session 因 stall abort 复核、terminal-error drain
 或 interrupt ACK 失败而 `unexpected` close 时，必须用实例 + attemptToken 精确保留交棒，
 不得 teardown 已批准的自动续跑——包括 timer 已 fire、CONTINUE 已因 SESSION_RUNNING
@@ -875,6 +916,16 @@ Cindy 在返回拒绝前，通过已有 `turn/steer` 向对应 thread 和 expect
 的 long-command denial 用例；后者用未修改的 Codex 和本地模拟模型核对后续请求中的真实反馈，
 不代表真实审核模型的判定质量。
 
+**确认超时的说法（2026-11-21）。** 工具调用需要确认、但在时限内没人确认时（系统原因 `timeout` 或
+`*_timeout`，判据 `isPermissionConfirmationTimeoutReason`），模型收到的拒绝说明写明：没人在时限内确认、
+不是用户拒绝；不要自动重试同一个调用，改用不需要确认的方式，或告诉用户这一步需要用户确认。
+此前 Claude 只看到 `could not approve this tool call: timeout`，伙伴会把超时当成主人不同意。Codex exec/patch
+的原生结果可能仍显示用户拒绝；Cindy 已在同一轮向模型补充具体原因（上文的宿主反馈），本次改的是其中的超时说明。
+三个引擎共用 `PERMISSION_CONFIRMATION_TIMEOUT_GUIDANCE`：Claude 的工具结果与 Codex
+exec/patch 的同轮宿主反馈走 `formatPermissionDenial`，Pi 由桥接扩展按 `system-deny:<原因>` 解出同一句。
+只改文字，不改超时时长、判定和重试。**已知缺口**：Codex MCP 工具审批没有这条同轮反馈，超时时模型仍只看到
+`user rejected MCP tool call`（面向用户的超时诊断可见，不等于模型收到了原因）；补上需要为 MCP 拒绝新增一次 `turn/steer`，属于行为改动，未在本次处理。
+
 ### Auto 模式的同范围自动跟进
 
 用户授权完成一项工作时，可以通过定时任务在原目标与操作范围内继续跟进；延后执行、
@@ -929,8 +980,8 @@ Cindy reviewer 与 Codex native reviewer 使用同一份范围语义，但接入
 Agent developer 指令不会进入原生审批摘要，因此通过线程级 `auto_review.policy` 内联
 Markdown 接入；在创建或恢复线程时预装，不依赖初始权限模式，后续切到 Auto 即可使用。
 不修改用户配置文件，不改 sandbox／审批者，不覆盖用户或项目自定义策略，
-管理员策略仍由原生优先处理。当前覆盖已验证的 Codex 0.145.0、0.153.4、0.156.0、0.159.2 与 0.166.0，完整保留各版本
-默认租户策略；0.159.2 与 0.166.0 的原生 reviewer 请求已于 2026-11-03 抓取，租户策略
+管理员策略仍由原生优先处理。当前覆盖已验证的 Codex 0.145.0、0.153.4、0.156.0、0.159.2、0.166.0 与 0.167.2，完整保留各版本
+默认租户策略；0.159.2 与 0.166.0 的原生 reviewer 请求已于 2026-11-03 抓取，0.167.2 于 2026-11-21 抓取，租户策略
 与 0.153.4 逐行一致，因此复用同一文件。未知版本保留原生策略，不能拿旧版本策略覆盖新默认。
 `native-auto-review-policy.test.ts` 同时检查打包 pin 在已核验版本表内，升级运行时不能只改 pin。原生行为验证见
 `agents/codex/native-auto-review-policy.native.test.ts`（`packages/maker-core/src/` 下），
@@ -1030,7 +1081,8 @@ Desktop 的产品共用正文在 `apps/desktop/src/main/maker-host/host-system-p
    计量路径上？落在就必须按第 3 节评估 + 实测四项指标，PR 说明不得留空。
 4. 前缀稳定性是否被破坏（易变内容进前缀、拼接顺序变化、会话中途增删 tool／MCP）？
 5. translator 是否可能丢事件、错序或错配事件类型？model 路由是否残留裸别名？
-6. 是否触及 system prompt？触及就必须先取得 owner 确认，PR 说明写明已确认。
+6. 引擎分支是否显式处理了 `acp`（避免隐式回落到 Claude Code），且未把内置三引擎专有假设泄漏给插件引擎（见 [`acp-plugin-harness.md`](acp-plugin-harness.md)）？
+7. 是否触及 system prompt？触及就必须先取得 owner 确认，PR 说明写明已确认。
 
 命中 system prompt 未确认、或核心指标路径改动缺实测的 PR 必须阻断。验证命令按
 [`desktop-development.md`](desktop-development.md) 选择；指标类回退无法靠静态检查发现，

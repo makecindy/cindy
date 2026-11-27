@@ -1,5 +1,6 @@
 import { normalizeWorkerCreationSelection, type WorkerCreationSelection } from '../../shared/workerCreationSelection.js';
-import { normalizeBotModelChain, type BotModelRoute } from '../../shared/botModelChain.js';
+import { isPluginEnginePermissionModeId, pluginEngineKeyFromProviderId, type NewTaskPluginEngineSelection } from '../../shared/pluginEngines.js';
+import { normalizeCompanionModelRoute, type ModelRoute } from '@cindy/maker-shared/model-route';
 import { isDataOwnerPushStamp, type DataOwnerPushStamp } from '../../shared/dataOwnerPush.js';
 import {
   DEFAULT_ORCA_WORKER_PERMISSION_MODE,
@@ -38,7 +39,8 @@ interface VendorPrefsSnapshot {
 export interface NewMakerDraftSnapshot {
   /** Model picker preferences captured in the same owner-fenced envelope. */
   providerModelMemory?: ProviderModelMemorySnapshot;
-  selectedRoute?: BotModelRoute;
+  selectedRoute?: ModelRoute;
+  selectedPluginEngine?: NewTaskPluginEngineSelection;
   lastByVendor: Partial<Record<VendorKey, VendorPrefsSnapshot>>;
   /** 每个 vendor 是否由用户在 New Maker picker 明确选过模型；旧 renderer 缺省不提供。 */
   modelChosenByVendor?: Partial<Record<VendorKey, boolean>>;
@@ -107,8 +109,12 @@ export function syncNewMakerDraftCache(
     || p.ownerStamp.ownerGeneration !== activeOwner.ownerGeneration) return false;
   const record = (value: unknown) => !!value && typeof value === 'object' && !Array.isArray(value);
   if (!record(p.lastByVendor) || !record(p.fastModeByModel) || !record(p.effortByModel)) return false;
+  const route = normalizeCompanionModelRoute(p.selectedRoute);
   setNewMakerDraftCache({
-    selectedRoute: normalizeBotModelChain([p.selectedRoute])[0],
+    selectedPluginEngine: p.selectedPluginEngine ?? (route?.harness === 'acp' && route.providerId ? {
+      providerId: route.providerId, modelId: route.model, deviceId: route.agentDeviceId ?? undefined,
+    } : undefined),
+    selectedRoute: route && route.harness !== 'acp' ? route : undefined,
     ...(record(p.providerModelMemory) ? { providerModelMemory: p.providerModelMemory } : {}),
     lastByVendor: p.lastByVendor!,
     ...(record(p.modelChosenByVendor) ? { modelChosenByVendor: p.modelChosenByVendor } : {}),
@@ -313,7 +319,7 @@ export interface RemoteNewMakerDefaults {
   selectedAgentKind?: 'claude-code' | 'codex' | 'pi';
 }
 
-function selectedAgentKindFromRoute(route: BotModelRoute | undefined): RemoteNewMakerDefaults['selectedAgentKind'] {
+function selectedAgentKindFromRoute(route: ModelRoute | undefined): RemoteNewMakerDefaults['selectedAgentKind'] {
   if (route?.harness === 'claude') return 'claude-code';
   if (route?.harness === 'codex' || route?.harness === 'pi') return route.harness;
   return undefined;
@@ -368,8 +374,28 @@ export function getRemoteNewMakerDefaultsByVendor(): {
 }
 
 /** Read only the active owner’s current selection; never reuse another account’s mirror. */
-export function getSelectedNewMakerRoute(ownerScope: string): BotModelRoute | undefined {
+export function getSelectedNewMakerRoute(ownerScope: string): ModelRoute | undefined {
   return selectedRouteOwner === ownerScope ? cache?.selectedRoute : undefined;
+}
+
+/** The new-task engine lives on another computer; the group's Cindy runs on the claiming one. */
+export class GroupCindyRemoteEngineError extends Error {
+  constructor() { super('Group Cindy needs an engine on the executing computer'); this.name = 'GroupCindyRemoteEngineError'; }
+}
+
+export function getGroupAssistantPluginSelection(ownerScope: string) {
+  const selection = selectedRouteOwner === ownerScope ? cache?.selectedPluginEngine : undefined;
+  if (selection === undefined) return undefined;
+  if (!selection || typeof selection.providerId !== 'string' || !pluginEngineKeyFromProviderId(selection.providerId)
+    || typeof selection.modelId !== 'string' || !selection.modelId.trim()) {
+    throw new Error('Invalid plugin engine selection');
+  }
+  // Group execution belongs to the claiming computer and never moves to the engine's computer.
+  // The caller answers with one of this computer's models instead (bot-group-chat.md §9).
+  if (selection.deviceId !== undefined) throw new GroupCindyRemoteEngineError();
+  return { providerId: selection.providerId, model: selection.modelId,
+    effort: typeof selection.effort === 'string' ? selection.effort : '',
+    permissionMode: isPluginEnginePermissionModeId(selection.permissionMode) ? selection.permissionMode : undefined };
 }
 
 /** Same snapshot as the selected route; never consume the unfenced legacy preference cache. */

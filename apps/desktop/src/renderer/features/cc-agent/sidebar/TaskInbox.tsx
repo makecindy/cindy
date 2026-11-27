@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -13,6 +13,10 @@ import {
   getRemoteSessionActivity,
   useRemoteSessionActivityRevision,
 } from '@/features/device-link/remoteSessionActivityStore';
+import {
+  getOfflineInboxIntent,
+  useOfflineInboxIntentsRevision,
+} from '@/features/device-link/offlineInboxIntentsStore';
 import { useActiveFollowUpSessions } from '@/features/scheduler/lib/scheduleSessionBinding';
 import type { Session } from '@/lib/ccAgent.types';
 import { TeammateInboxRow } from '@/features/bots/TeammateInboxRow';
@@ -31,6 +35,7 @@ import { sidebarPriorityContext } from '../lib/sidebarPriorityContext';
 
 export type TaskInboxProps = Omit<SessionEntryRowsProps, 'entries'> & {
   sessions: readonly Session[];
+  now?: number;
   contentFiltered?: boolean;
   priorityContext: MainListPriorityContext;
   /** A teammate's task is listed only while it needs the user or runs. */
@@ -47,16 +52,37 @@ const itemSnoozeUntil = (item: InboxItem) =>
   taskSnoozeUntil(item.kind === 'session' ? item.session : item.entry.snooze ?? {});
 const itemSnoozedUntil = (item: InboxItem) =>
   (item.kind === 'session' ? item.session.snoozedUntil : item.entry.snooze?.snoozedUntil);
+const itemOfflineIntent = (item: InboxItem) => {
+  if (item.kind === 'session') {
+    return getOfflineInboxIntent(item.session.deviceLinkDeviceId, item.session.id);
+  }
+  const bot = item.entry.bot;
+  return bot && 'deviceId' in bot
+    ? getOfflineInboxIntent(bot.deviceId, item.entry.sessionId)
+    : undefined;
+};
+
+type InboxRowAction = Parameters<TaskInboxProps['onAction']>[1];
+
+const InboxSessionRow = memo(function InboxSessionRow({ session, onSessionAction, ...rows }: Omit<SessionEntryRowsProps, 'entries' | 'onAction'> & {
+  session: Session;
+  onSessionAction: (session: Session, action: InboxRowAction) => ReturnType<TaskInboxProps['onAction']>;
+}) {
+  const dispatch = useCallback((_id: string, action: InboxRowAction) => onSessionAction(session, action), [session, onSessionAction]);
+  return <SessionEntryRows {...rows} onAction={dispatch} inboxMode entries={[{ kind: 'session', session }]} showFirstDivider={false} />;
+});
 
 const EMPTY_KEYS: ReadonlySet<string> = new Set();
 const NO_TEAMMATES: readonly TeammateInboxEntry[] = [];
 
-export function TaskInbox({ sessions, contentFiltered, priorityContext, isTeammateTask, teammates = NO_TEAMMATES, ...rows }: TaskInboxProps) {
+export function TaskInbox({ sessions, now = Date.now(), contentFiltered, priorityContext, isTeammateTask, teammates = NO_TEAMMATES, ...rows }: TaskInboxProps) {
   const { t, i18n } = useTranslation();
   const followingSessions = useActiveFollowUpSessions(sessions);
   // The inbox spans more tasks than the regular list (e.g. outside its status filter), so remote
   // running / unread / waiting phases are read for every inbox task, not only the list's scope.
   const remoteActivityRevision = useRemoteSessionActivityRevision();
+  const offlineInboxRevision = useOfflineInboxIntentsRevision();
+  void offlineInboxRevision;
   const inboxContext = useMemo(
     () => sidebarPriorityContext(priorityContext, sessions,
       (session) => getRemoteSessionActivity(session.id, session.deviceLinkDeviceId)?.phase),
@@ -73,52 +99,45 @@ export function TaskInbox({ sessions, contentFiltered, priorityContext, isTeamma
     }
   }, [rows.activeSessionId, settlement.viewedId]);
   const [explicitMoves, setExplicitMoves] = useState<ReadonlySet<string>>(EMPTY_KEYS);
-  const actionInputs = useRef({ sessions, onAction: rows.onAction, viewedId: rows.activeSessionId });
-  actionInputs.current = { sessions, onAction: rows.onAction, viewedId: rows.activeSessionId };
-  const handleAction = useCallback(async (id: string, action: Parameters<TaskInboxProps['onAction']>[1]) => {
+  const [completing, setCompleting] = useState<ReadonlySet<string>>(EMPTY_KEYS);
+  const actionInputs = useRef({ onAction: rows.onAction, viewedId: rows.activeSessionId });
+  actionInputs.current = { onAction: rows.onAction, viewedId: rows.activeSessionId };
+  const handleAction = useCallback(async (session: Session, action: InboxRowAction) => {
     const input = actionInputs.current;
-    const session = input.sessions.find(session => session.id === id);
-    const result = await input.onAction(id, action);
-    if (action === 'complete' && result === 'marked-read' && session) {
-      const key = sessionRowKey(session);
-      if (actionInputs.current.viewedId === input.viewedId) {
-        setSettlement(previous => ({
-          viewedId: input.viewedId,
-          keys: new Set([...(previous.viewedId === input.viewedId ? previous.keys : EMPTY_KEYS), key]),
-        }));
+    const id = session.id;
+    if (action !== 'complete') return input.onAction(id, action);
+    const key = sessionRowKey(session);
+    setCompleting(previous => new Set(previous).add(key));
+    try {
+      const result = await input.onAction(id, action);
+      if (result === 'marked-read') {
+        if (actionInputs.current.viewedId === input.viewedId) {
+          setSettlement(previous => ({
+            viewedId: input.viewedId,
+            keys: new Set([...(previous.viewedId === input.viewedId ? previous.keys : EMPTY_KEYS), key]),
+          }));
+        }
+        setExplicitMoves(previous => new Set(previous).add(key));
       }
-      setExplicitMoves(previous => new Set(previous).add(key));
+      return result;
+    } finally {
+      setCompleting(previous => {
+        const next = new Set(previous);
+        next.delete(key);
+        return next;
+      });
     }
-    return result;
   }, []);
-  const [now, setNow] = useState(Date.now);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(
     () => new Set(['working', 'snoozed', 'archived']),
   );
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
-  // Only the nearest expiry needs a timer; a focus reconciles time after sleep.
-  useEffect(() => {
-    const refresh = () => setNow(Date.now());
-    const next = Math.min(...[...sessions.map(taskSnoozeUntil),
-      ...teammates.map((entry) => taskSnoozeUntil(entry.snooze ?? {}))].filter((at) => at > now));
-    const timer = Number.isFinite(next)
-      ? setTimeout(refresh, Math.min(2_147_483_647, Math.max(1, next - Date.now())))
-      : undefined;
-    window.addEventListener('focus', refresh);
-    return () => {
-      clearTimeout(timer);
-      window.removeEventListener('focus', refresh);
-    };
-  }, [sessions, teammates, now]);
-  const groups = useMemo(() => {
+  const sortedSessions = useMemo(() => sortSessionsForMainList(sessions, 'recency'), [sessions]);
+  const sessionGroups = useMemo(() => {
     const result = new Map<TaskInboxSection, InboxItem[]>(SECTIONS.map((key) => [key, []]));
-    // Teammates lead their section, latest activity first (the order they arrive in).
-    for (const entry of teammates) {
-      const section = teammateInboxSection(entry.status, entry.snooze, now);
-      // An idle, read teammate stays in the teammate section, outside the inbox.
-      if (section) result.get(section)!.push({ kind: 'teammate', entry });
-    }
-    for (const session of sortSessionsForMainList([...sessions], 'priority', inboxContext)) {
+    // Within a section rows follow time alone, newest activity first: unread or waiting decides the
+    // section, never the order inside it (2026-11-25 user decision).
+    for (const session of sortedSessions) {
       if (session.status === 'deleted') continue;
       const section = taskInboxSection(
         session,
@@ -137,11 +156,23 @@ export function TaskInbox({ sessions, contentFiltered, priorityContext, isTeamma
       // An idle teammate task stays with the teammate, outside the inbox.
       if (section) result.get(section)!.push({ kind: 'session', session });
     }
+    return result;
+  }, [sortedSessions, inboxContext, now, followingSessions, isTeammateTask, settledWhileOpen]);
+  const groups = useMemo(() => {
+    const result = new Map<TaskInboxSection, InboxItem[]>(SECTIONS.map((key) => [key, []]));
+    // Teammates lead their section, latest activity first (the order they arrive in).
+    for (const entry of teammates) {
+      const section = teammateInboxSection(entry.status, entry.snooze, now);
+      if (section) result.get(section)!.push({ kind: 'teammate', entry });
+    }
+    for (const [section, items] of sessionGroups) {
+      result.set(section, result.get(section)!.concat(items));
+    }
     result.get('snoozed')!.sort((a, b) => itemSnoozeUntil(a) - itemSnoozeUntil(b));
     // The open task moves like any other (a reply sends it to Working at once); its row does not
     // scroll the sidebar after it (useScrollActiveRowIntoView).
     return result;
-  }, [sessions, teammates, inboxContext, now, followingSessions, isTeammateTask, settledWhileOpen]);
+  }, [sessionGroups, teammates, now]);
   const rootRef = useRef<HTMLDivElement>(null);
   const hoveredDone = useRef<Element | null>(null);
   const [frozen, setFrozen] = useState<FrozenInboxLayout | null>(null);
@@ -199,12 +230,15 @@ export function TaskInbox({ sessions, contentFiltered, priorityContext, isTeamma
     >
       {SECTIONS.map((section) => {
         // Counts stay live; only the rows hold still while hovering Done.
-        const count = groups.get(section)!.length;
-        const items = shown.get(section)!;
+        const live = groups.get(section)!;
+        const placed = shown.get(section)!;
+        const isVisible = (item: InboxItem) => !completing.has(itemKey(item));
+        const count = completing.size ? live.filter(isVisible).length : live.length;
+        const items = completing.size ? placed.filter(isVisible) : placed;
         const closed = collapsed.has(section);
         const visible = expanded.has(section) ? items : items.slice(0, 20);
         return (
-          <section key={section}>
+          <section key={section} data-task-inbox-section={section}>
             <button
               type="button"
               aria-expanded={!closed}
@@ -232,21 +266,23 @@ export function TaskInbox({ sessions, contentFiltered, priorityContext, isTeamma
                 <div key={itemKey(item)} className="w-full">
                   <div className="min-w-0 flex-1">
                     {item.kind === 'teammate' ? (
-                      <TeammateInboxRow entry={item.entry} section={section} />
+                      <TeammateInboxRow entry={item.entry} section={section} sessionVariant={rows.sessionVariant} />
                     ) : (
-                      <SessionEntryRows
-                        {...rows}
-                        onAction={handleAction}
-                        inboxMode
-                        entries={[item]}
-                        showFirstDivider={false}
-                      />
+                      <InboxSessionRow {...rows} session={item.session} onSessionAction={handleAction} />
                     )}
                     {section === 'snoozed' && (
                       <div className="px-3 pb-1 text-11 text-[var(--sidebar-list-muted)]">
                         {itemSnoozedUntil(item) === INDEFINITE_SNOOZE_UNTIL
                           ? t('ccAgent.sidebar.inbox.indefinite')
                           : new Date(itemSnoozeUntil(item)).toLocaleString(i18n.language)}
+                        {itemOfflineIntent(item)?.kind === 'snooze' && (
+                          <span>{` · ${t('ccAgent.sidebar.inbox.pendingSync')}`}</span>
+                        )}
+                      </div>
+                    )}
+                    {section === 'archived' && itemOfflineIntent(item)?.kind === 'complete' && (
+                      <div className="px-3 pb-1 text-11 text-[var(--sidebar-list-muted)]">
+                        {t('ccAgent.sidebar.inbox.pendingArchiveSync')}
                       </div>
                     )}
                   </div>

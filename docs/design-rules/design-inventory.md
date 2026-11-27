@@ -11,7 +11,7 @@
 
 可达组件、样式来源与 Token / 裸颜色 / 裸圆角统计不入库：需要时运行 `pnpm design:inventory:report`，输出到 `tmp/design-inventory-report.md`；要看某次提交时的数字，在该提交上重跑。
 
-登记 surface 数：60。平台包含 Desktop 与 Mobile；静态入口发现不表示已迁移或已实机验证。
+登记 surface 数：62。平台包含 Desktop 与 Mobile；静态入口发现不表示已迁移或已实机验证。
 
 | ID | 平台 | 标题 | 生产入口 |
 | --- | --- | --- | --- |
@@ -24,6 +24,7 @@
 | `desktop.chat.orca-workflow` | desktop | Orca 协同工作台 | hash `/cc-agent/orca/:sessionId`（OrcaWorkflowRoute） |
 | `desktop.chat.scheduled` | desktop | 调度任务列表 | hash `/cc-agent/scheduled`（SchedulerPage） |
 | `desktop.chat.session` | desktop | 会话工作台 | hash `/cc-agent/:sessionId`；副窗经 `/cc-agent/boot` 解析后落到同一会话视图 |
+| `desktop.cloud.settings` | desktop | 云实例设置 | hash `/cloud-settings`（CloudSettingsRoute → CloudSettingsView；只在配置了云实例服务的客户端出现入口） |
 | `desktop.dev.maker-experimental` | desktop | Maker 实验诊断页 | hash `/maker-experimental`（MakerExperimentalView；EXPERIMENTAL_FEATURES 现为空，仍是生产路由） |
 | `desktop.issues.guide` | desktop | Issue 引导页 | hash `/issues`（IssueTrackerFeatureLayout，已迁 GitHub 后的引导页） |
 | `desktop.native.app-menu` | desktop | 应用菜单 | Menu.setApplicationMenu（用户可见出口，不展开业务逻辑） |
@@ -42,6 +43,7 @@
 | `desktop.shell.main-layout` | desktop | 主窗口壳（标题栏 / 左右栏 / 内容区） | main BrowserWindow → renderer/index.tsx → main-entry.tsx → App → MainLayout (`#/` 受保护壳) |
 | `desktop.skillhub.local` | desktop | SkillHub 本地技能 | hash `/skillhub/local` 及统一详情 `/skillhub/detail`（旧详情链接重定向） |
 | `desktop.skillhub.market` | desktop | SkillHub 市场 | hash `/skillhub/market`（SkillhubMarketListView） |
+| `desktop.window.cloud-login` | desktop | 云实例登录窗口 | `?cloudLoginWindow=1` → renderer/cloud-login-entry.tsx（不走 router.tsx；只在配置了云实例服务的客户端创建） |
 | `desktop.window.computer-permission-guide` | desktop | 电脑使用权限引导 | `?view=computer-permission-guide` → ComputerPermissionGuideWindow；backdrop 同文件 |
 | `desktop.window.quota-tray` | desktop | Windows 托盘额度卡片 | `?quotaTray=1` → renderer/quota-tray-entry.tsx（不走 router.tsx） |
 | `desktop.window.recording-preview` | desktop | 录屏独立回放窗口 | `?recordingPreview=1` → renderer/recording-preview-entry.tsx（不走 router.tsx） |
@@ -74,7 +76,7 @@
 | `mobile.relay-join` | mobile | 扫码加入自建中转 | app/relay-join.tsx |
 | `mobile.remote-desktop` | mobile | 远程桌面 | app/devices/desktop/[deviceId].tsx |
 | `mobile.resources` | mobile | 远程资源列表与详情 | app/resources/[collectionId].tsx / app/resources/[collectionId]/[resourceId].tsx |
-| `mobile.settings` | mobile | 设置（含调试与日志上传可见入口） | app/settings.tsx / app/settings/developer.tsx / app/settings/device-name.tsx / app/settings/handheld.tsx / app/settings/user-bubble.tsx / app/settings/voice-dictionary.tsx / app/settings/voice-speaker-filter.tsx |
+| `mobile.settings` | mobile | 设置（含调试与日志上传可见入口） | app/settings.tsx / app/settings/developer.tsx / app/settings/device-name.tsx / app/settings/handheld.tsx / app/settings/user-bubble.tsx / app/settings/voice-dictionary.tsx / app/settings/voice-speaker-filter.tsx / app/settings/wallpaper.tsx |
 
 ### 生产路由覆盖
 
@@ -102,6 +104,7 @@
 | `/cc-agent/new` | NewMakerDraftRoute | `desktop.chat.new-draft` |
 | `/cc-agent/orca/:sessionId` | OrcaWorkflowRoute | `desktop.chat.orca-workflow` |
 | `/cc-agent/scheduled` | SchedulerPage | `desktop.chat.scheduled` |
+| `/cloud-settings` | CloudSettingsRoute | `desktop.cloud.settings` |
 | `/issues` | IssueTrackerFeatureLayout | `desktop.issues.guide` |
 | `/login` | LoginPage | `desktop.auth.login` |
 | `/maker-experimental` | MakerExperimentalView | `desktop.dev.maker-experimental` |
@@ -162,6 +165,7 @@
 | apps/mobile/app/settings/user-bubble.tsx | UserBubblePage | `mobile.settings` |
 | apps/mobile/app/settings/voice-dictionary.tsx | VoiceDictionaryScreen | `mobile.settings` |
 | apps/mobile/app/settings/voice-speaker-filter.tsx | VoiceSpeakerFilterRoute | `mobile.settings` |
+| apps/mobile/app/settings/wallpaper.tsx | WallpaperPage | `mobile.settings` |
 | apps/mobile/app/settings.tsx | SettingsScreen | `mobile.settings` |
 | apps/mobile/app/shared-session.tsx | SharedSessionScreen | `mobile.chat.sharing` |
 | apps/mobile/app/usage.tsx | UsageScreen | `mobile.home` |
@@ -177,6 +181,7 @@
 | apps/mobile/app/listperf.tsx | __DEV__ list performance harness; not production UI |
 | apps/mobile/app/plugin-management-preview.tsx | gated plugin settings visual fixture; not production UI |
 | apps/mobile/app/plugin-preview-regression.tsx | MOBILE_VISUAL_MOCK_ENABLED card preview fixture; not production UI |
+| apps/mobile/app/retro-skin-preview.tsx | MOBILE_VISUAL_MOCK_ENABLED folded remote desktop skin fixture |
 | apps/mobile/app/splash-preview.tsx | MOBILE_VISUAL_MOCK_ENABLED preview; not production UI |
 
 Mobile 静态图跟随本地 import/reexport 与平台 TSX；根布局仅登记可见反馈，不把布局自身或资源实例另算 surface。服务端动态内容、运行期 import 拼接、原生系统呈现及未显式导入的消费者需人工复核；不宣称完整递归渲染图。
@@ -211,6 +216,7 @@ Mobile 已由 DS-7 纳入同一台账（2026-09-10 静态入口发现），保�
 | `desktop.chat.orca-workflow` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | 复用 CCAgentSessionView 的聊天组件，Orca 编排不变 | 共用呈现与紧凑宽度有受控验证；实际多 Agent 调度未发起，实测待定 |
 | `desktop.chat.scheduled` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | 调度列表自身无本批样式变更；生成任务使用标准聊天 | 核列表路由及生成任务对标准聊天的消费；未触发真实计划执行，实测待定 |
 | `desktop.chat.session` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | pilot | DESIGN §10 status/diff/消息卡语义族；§5 workflow-status-cell / system-category-square | chatChrome / activityRowChrome、原消息组件与 Diff Worker | 真实本地路由 + 固定历史与受控流式；09-11 用户整体视觉验收通过，DS-9 已于 09-12 合并；DS-10 接成熟保护样本；不改消息与媒体业务 |
+| `desktop.cloud.settings` | unassigned | legacy | — | 查现有标准组件与治理 §12 当前路线；按人工下一动作接管 | 保持现状；发现问题记下一动作，本张不修视觉 |
 | `desktop.dev.maker-experimental` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；下一步待定 |
 | `desktop.issues.guide` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；下一步待定 |
 | `desktop.native.app-menu` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；下一步待定 |
@@ -229,6 +235,7 @@ Mobile 已由 DS-7 纳入同一台账（2026-09-10 静态入口发现），保�
 | `desktop.shell.main-layout` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | DESIGN.md §15 CINDY 皮肤族（侧栏 vibrancy / 选中 pill）；外部主题导入保护 token；DESIGN.md §5 登记成员 `workflow-status-cell`（background-tasks 面板详情） | 保持布局树与主题；聊天区域继承本批共用呈现 | 真实本地主窗口、侧栏与聊天可用；其它皮肤/平台待用户实看 |
 | `desktop.skillhub.local` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | SkillhubDiffPanel 继承 DiffView 排版，文件比较和发布逻辑不变 | 同一 DiffView 的真实 Worker/长行/大字号验证；Skill Hub 真实网络长反馈未联调 |
 | `desktop.skillhub.market` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | SkillhubDiffPanel 复用 DiffView，列表/网络逻辑不变 | 真实 Diff 组件验证不等于市场流程完成；真实远端联调按 DS-10 平台清单继续安排 |
+| `desktop.window.cloud-login` | unassigned | legacy | — | 查现有标准组件与治理 §12 当前路线；按人工下一动作接管 | 保持现状；发现问题记下一动作，本张不修视觉 |
 | `desktop.window.computer-permission-guide` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；下一步待定 |
 | `desktop.window.quota-tray` | unassigned | legacy | — | 查现有标准组件与治理 §12 当前路线；按人工下一动作接管 | 保持现状；发现问题记下一动作，本张不修视觉 |
 | `desktop.window.recording-preview` | unassigned | legacy | — | 查现有标准组件与治理 §12 当前路线；按人工下一动作接管 | 保持现状；发现问题记下一动作，本张不修视觉 |

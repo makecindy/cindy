@@ -695,6 +695,17 @@ export function catalogSurfaces() {
       routeEntryComponents: { '/settings': 'SettingsView' },
     },
     {
+      id: 'desktop.cloud.settings',
+      platform: 'desktop',
+      title: '云实例设置',
+      productionEntry:
+        'hash `/cloud-settings`（CloudSettingsRoute → CloudSettingsView；只在配置了云实例服务的客户端出现入口）',
+      reachableComponents: ['CloudSettingsRoute', 'CloudSettingsView', 'CloudPluginManagement'],
+      styleRoots: ['apps/desktop/src/renderer/features/cloud-settings'],
+      routerPaths: ['/cloud-settings'],
+      routeEntryComponents: { '/cloud-settings': 'CloudSettingsRoute' },
+    },
+    {
       id: 'desktop.plugins.installed',
       platform: 'desktop',
       title: '已装插件',
@@ -704,7 +715,8 @@ export function catalogSurfaces() {
         'GhostPluginPage',
         'GhostPluginDetailView',
         'GhostPluginActions',
-        'RemotePluginPage',
+        'PluginCatalogView',
+        'RemotePluginCatalogSource',
         'RemotePluginConfiguration',
         'RemotePluginReadOnlyDetail',
         'PluginDevicePicker',
@@ -719,7 +731,9 @@ export function catalogSurfaces() {
         'apps/desktop/src/renderer/features/plugin/GhostPluginPage.tsx',
         'apps/desktop/src/renderer/features/plugin/GhostPluginDetailView.tsx',
         'apps/desktop/src/renderer/features/plugin/GhostPluginActions.tsx',
-        'apps/desktop/src/renderer/features/plugin/RemotePluginPage.tsx',
+        'apps/desktop/src/renderer/features/plugin/PluginCatalogView.tsx',
+        'apps/desktop/src/renderer/features/plugin/RemotePluginCatalogSource.tsx',
+        'apps/desktop/src/renderer/features/plugin/PluginDetailTopBar.tsx',
         'apps/desktop/src/renderer/features/plugin/RemotePluginConfiguration.tsx',
         'apps/desktop/src/renderer/features/plugin/RemotePluginReadOnlyDetail.tsx',
         'apps/desktop/src/renderer/features/plugin/PluginDevicePicker.tsx',
@@ -919,6 +933,25 @@ export function catalogSurfaces() {
       ],
       routerPaths: [],
       rendererEntryModules: { remoteDesktopViewer: './remote-desktop-viewer-entry' },
+    },
+    {
+      id: 'desktop.window.cloud-login',
+      platform: 'desktop',
+      title: '云实例登录窗口',
+      productionEntry:
+        '`?cloudLoginWindow=1` → renderer/cloud-login-entry.tsx（不走 router.tsx；只在配置了云实例服务的客户端创建）',
+      reachableComponents: ['CloudLoginWindowRoot', 'CloudInstanceLoginFlow', 'LoginPageView', 'LoginBrandStage'],
+      styleRoots: [
+        'apps/desktop/src/renderer/cloud-login-entry.tsx',
+        'apps/desktop/src/renderer/features/cloud-settings/CloudLoginWindowRoot.tsx',
+        'apps/desktop/src/renderer/features/cloud-settings/CloudInstanceLoginPage.tsx',
+        'apps/desktop/src/main/cloud-settings-client/login-window.ts',
+        'apps/desktop/src/renderer/styles/globals.css',
+        'apps/desktop/src/renderer/styles/generated/tokens.css',
+      ],
+      extraStyleRoots: ['desktop.auth.login'],
+      routerPaths: [],
+      rendererEntryModules: { cloudLoginWindow: './cloud-login-entry' },
     },
     {
       id: 'desktop.window.voice-overlay',
@@ -1546,7 +1579,7 @@ export function mobileCatalogSurfaces() {
     ['chat.new', '新建任务', ['sessions/new.tsx']],
     ['files', '任务文件与预览', ['files/[sessionId].tsx', 'files/preview/[sessionId].tsx']],
     ['relay-join', '扫码加入自建中转', ['relay-join.tsx']],
-    ['settings', '设置（含调试与日志上传可见入口）', ['settings.tsx', 'settings/developer.tsx', 'settings/device-name.tsx', 'settings/handheld.tsx', 'settings/user-bubble.tsx', 'settings/voice-dictionary.tsx', 'settings/voice-speaker-filter.tsx']],
+    ['settings', '设置（含调试与日志上传可见入口）', ['settings.tsx', 'settings/developer.tsx', 'settings/device-name.tsx', 'settings/handheld.tsx', 'settings/user-bubble.tsx', 'settings/voice-dictionary.tsx', 'settings/voice-speaker-filter.tsx', 'settings/wallpaper.tsx']],
     ['auth', '登录与添加账号', ['(auth)/login.tsx', 'add-account.tsx']],
     ['account-deletion', '账号注销', ['account-deletion.tsx']],
   ];
@@ -1568,14 +1601,18 @@ export function mobileCatalogSurfaces() {
 export function mobileRouteCoverage(repoRoot, catalog = mobileCatalogSurfaces()) {
   const files = [];
   walkFiles(path.join(repoRoot, 'apps/mobile/app'), 'apps/mobile/app', files);
+  const mockPreviews = new Map([
+    ['splash-preview.tsx', 'MOBILE_VISUAL_MOCK_ENABLED preview; not production UI'],
+    ['group-execution-preview.tsx', 'MOBILE_VISUAL_MOCK_ENABLED group execution fixture; not production UI'],
+    ['plugin-preview-regression.tsx', 'MOBILE_VISUAL_MOCK_ENABLED card preview fixture; not production UI'],
+    ['retro-skin-preview.tsx', 'MOBILE_VISUAL_MOCK_ENABLED folded remote desktop skin fixture'],
+  ]);
   const excluded = new Map([
+    ...mockPreviews,
     ['_layout.tsx', 'layout; visible mounted feedback is a separate overlay surface'],
     ['+native-intent.ts', 'native intent routing; no screen'],
     ['automations/[deviceId].tsx', 'legacy automation link redirect; no screen'],
-    ['splash-preview.tsx', 'MOBILE_VISUAL_MOCK_ENABLED preview; not production UI'],
-    ['group-execution-preview.tsx', 'MOBILE_VISUAL_MOCK_ENABLED group execution fixture; not production UI'],
     ['plugin-management-preview.tsx', 'gated plugin settings visual fixture; not production UI'],
-    ['plugin-preview-regression.tsx', 'MOBILE_VISUAL_MOCK_ENABLED card preview fixture; not production UI'],
     ['listperf.tsx', '__DEV__ list performance harness; not production UI'],
   ]);
   const owners = new Map(catalog.flatMap(s => (s.mobileRoutes ?? []).map(r => [r, s.id])));
@@ -1585,8 +1622,7 @@ export function mobileRouteCoverage(repoRoot, catalog = mobileCatalogSurfaces())
     const source = stripJsComments(fs.readFileSync(path.join(repoRoot, ...file.split('/')), 'utf8'));
     if (excluded.has(route)) {
       // Keep dev exclusions honest: removing their gate cannot silently hide a screen.
-      if ((route === 'splash-preview.tsx' || route === 'group-execution-preview.tsx' || route === 'plugin-preview-regression.tsx') &&
-        !source.includes('if (!MOBILE_VISUAL_MOCK_ENABLED)')) missing.push(file);
+      if (mockPreviews.has(route) && !source.includes('if (!MOBILE_VISUAL_MOCK_ENABLED)')) missing.push(file);
       if (route === 'plugin-management-preview.tsx' &&
         (!source.includes('if (!MOBILE_VISUAL_MOCK_ENABLED && !demosEnabled)') ||
           !source.includes('__DEV__ && process.env.EXPO_PUBLIC_CINDY_PLUGIN_DEMOS === "1"'))) missing.push(file);

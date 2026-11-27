@@ -1,8 +1,10 @@
 import { PI_CACHE_RECOVERY_SOURCE } from './cache-recovery-source.js';
+import { completedPiResponsesMessage } from './responses-completion.js';
 import { PI_NATIVE_PROVIDER_ADAPTER_SOURCE } from './native-provider-adapter-source.js';
 import { PI_NATIVE_TOOL_CATALOG_SOURCE } from './native-tool-catalog-source.js';
 import { MAX_JSONL_BUFFER_CHARS } from './rpc-limits.js';
 import { assertToolLifecycleBudget } from '../shared/tool-lifecycle.js';
+import { PERMISSION_CONFIRMATION_TIMEOUT_GUIDANCE } from '../shared/auto-review-decision.js';
 /**
  * cindy-bridge —— 写进 pi agentHome/extensions/ 的扩展源码(字符串常量)。
  *
@@ -38,7 +40,9 @@ import {
 } from "../shared/sensitive-credential-paths.js";
 import { projectPiPackageCommandDiagnostic, projectPiManagedCommandFailure } from "../base-agent.js";
 import { shellInputRedirectionParserSource } from "../shared/shell-input-redirections.js";
+import { PI_SUBAGENT_TOOL_NAME } from "@cindy/maker-shared/agent-task";
 import { CINDY_SUBAGENT_TOOL_NAME } from "./cindy-subagent-source.js";
+import { PI_NATIVE_SUBAGENT_CALL_ENTRY } from "./session-tree.js";
 
 const SHELL_INPUT_REDIRECTION_PARSER_SOURCE = shellInputRedirectionParserSource();
 const CREDENTIAL_WORD_BOUNDARY = '\u0001';
@@ -62,6 +66,7 @@ export const CINDY_PI_MODEL_REQUEST_INPUT_PREFIX = '[CINDY_MODEL_REQUEST]:';
 export const CINDY_PI_TEXT_ONLY_READY_PREFIX = 'cindy:text-only-ready:';
 export const CINDY_PI_TEXT_ONLY_CLOSED_PREFIX = 'cindy:text-only-unavailable:';
 export const CINDY_PI_REQUEST_DIAGNOSTICS_PREFIX = 'cindy:provider-request:';
+export const CINDY_PI_RESPONSES_COMPLETION_PREFIX = 'cindy:responses-completed:';
 
 /** Shared with the generated bridge: only bounded counts and known effort names may enter logs. */
 export function projectPiRequestDiagnostics(value: unknown): Record<string, number | string | null> {
@@ -91,7 +96,7 @@ import {
   closeSync, constants, fstatSync, globSync, lstatSync, openSync, opendirSync, readFileSync, readSync, realpathSync,
   renameSync, rmSync, statSync, writeFileSync, mkdirSync, readdirSync, rmdirSync, linkSync,
 } from 'node:fs';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { stat } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
@@ -159,6 +164,7 @@ const TURN_CHANGE_CAPTURE_TITLE = 'cindy:turn-change-capture';
 const PERMISSION_ALLOW = 'allow';
 const PERMISSION_USER_DENY = 'user-deny';
 const PERMISSION_AUTO_REVIEW_DENY = 'auto-review-deny';
+const PERMISSION_CONFIRMATION_TIMEOUT_GUIDANCE = ${JSON.stringify(PERMISSION_CONFIRMATION_TIMEOUT_GUIDANCE)};
 function permissionDenialReason(decision: string | undefined): string {
   const source = decision?.split(':', 1)[0];
   const label = source === PERMISSION_AUTO_REVIEW_DENY ? 'Cindy Auto-review denied this tool call'
@@ -166,6 +172,10 @@ function permissionDenialReason(decision: string | undefined): string {
       : 'Cindy could not approve this tool call';
   const known = source === PERMISSION_AUTO_REVIEW_DENY || source === PERMISSION_USER_DENY || source === 'system-deny';
   const detail = known && decision?.includes(':') ? decision.slice(decision.indexOf(':') + 1).trim().slice(0, 240) : '';
+  // Same wording as formatPermissionDenial: a confirmation nobody answered is not the user saying no.
+  if (source === 'system-deny' && (detail === 'timeout' || detail.endsWith('_timeout'))) {
+    return label + ' (' + detail + '). ' + PERMISSION_CONFIRMATION_TIMEOUT_GUIDANCE;
+  }
   return detail ? label + ': ' + detail : label + '.';
 }
 const READONLY_BUILTINS = new Set(['read', 'grep', 'find', 'ls']);
@@ -2746,7 +2756,13 @@ function isAllowedMcpUrl(url: URL): boolean {
 }
 
 /** Authenticated loopback MCP must use a socket, not Bun fetch's environment proxy. */
-async function fetchDirectLoopbackMcp(url: string, headers: Headers, body: string, signal: AbortSignal): Promise<Response> {
+async function fetchDirectLoopbackMcp(
+  url: string,
+  headers: Headers,
+  body: string | undefined,
+  signal: AbortSignal,
+  method = 'POST',
+): Promise<Response> {
   const parsed = new URL(url);
   if (!isLoopbackMcpHostname(parsed.hostname)) throw new McpBridgeError('URL outside security boundary');
   const host = parsed.hostname.replace(/^\[|\]$/g, '');
@@ -2770,16 +2786,16 @@ async function fetchDirectLoopbackMcp(url: string, headers: Headers, body: strin
     }
     const requestHeaders = new Headers(headers);
     requestHeaders.set('host', parsed.host);
-    requestHeaders.set('content-length', String(Buffer.byteLength(body)));
+    requestHeaders.set('content-length', String(body ? Buffer.byteLength(body) : 0));
     requestHeaders.set('connection', 'close');
     requestHeaders.set('accept-encoding', 'identity');
     requestHeaders.delete('transfer-encoding');
     const requestPath = (parsed.pathname || '/') + parsed.search;
-    const head = 'POST ' + requestPath + ' HTTP/1.1\r\n'
+    const head = method + ' ' + requestPath + ' HTTP/1.1\r\n'
       + Array.from(requestHeaders, ([name, value]) => name + ': ' + value + '\r\n').join('')
       + '\r\n';
     const iterator = socket[Symbol.asyncIterator]();
-    socket.write(head + body);
+    socket.write(head + (body ?? ''));
 
     let pending = Buffer.alloc(0);
     const readMore = async (): Promise<boolean> => {
@@ -2899,10 +2915,13 @@ async function fetchDirectLoopbackMcp(url: string, headers: Headers, body: strin
 class McpHttpClient {
   private nextId = 1;
   private sessionId: string | null = null;
+  private inFlight = 0;
+  private readonly idleWaiters: Array<() => void> = [];
   needsReconnect = false;
   private readonly requestUrl: string;
   private readonly directLoopback: boolean;
   private readonly requestTimeoutMs: number;
+  private readonly startupBudgetMs: number;
   private startupDeadlineAt: number | null;
   serverInfoName: string | undefined;
 
@@ -2931,18 +2950,27 @@ class McpHttpClient {
       ? configuredTimeout!
       : 600_000;
     const configuredStartupTimeout = server.remote?.startupTimeoutMs;
-    const startupTimeoutMs = Number.isInteger(configuredStartupTimeout)
+    this.startupBudgetMs = Number.isInteger(configuredStartupTimeout)
       && configuredStartupTimeout! > 0
       && configuredStartupTimeout! < 30_000
       ? configuredStartupTimeout!
       : 10_000;
-    this.startupDeadlineAt = Date.now() + startupTimeoutMs;
+    this.startupDeadlineAt = Date.now() + this.startupBudgetMs;
   }
 
-  private nextRequestTimeoutMs(): number {
+  private timeoutError(method: string | undefined, fallback: string): McpBridgeError {
+    if (this.server.remote && this.startupDeadlineAt !== null && (method === 'initialize' || method === 'tools/list')) {
+      const elapsed = Date.now() - (this.startupDeadlineAt - this.startupBudgetMs);
+      return new McpBridgeError('startup timed out during ' + method + ' after ' + elapsed
+        + 'ms (startup budget ' + this.startupBudgetMs + 'ms, request limit ' + this.requestTimeoutMs + 'ms)');
+    }
+    return new McpBridgeError(fallback);
+  }
+
+  private nextRequestTimeoutMs(method: string | undefined): number {
     if (this.startupDeadlineAt === null) return this.requestTimeoutMs;
     const remaining = this.startupDeadlineAt - Date.now();
-    if (remaining <= 0) throw new McpBridgeError('startup timed out');
+    if (remaining <= 0) throw this.timeoutError(method, 'startup timed out');
     return Math.max(1, Math.min(this.requestTimeoutMs, remaining));
   }
 
@@ -2979,7 +3007,9 @@ class McpHttpClient {
   }
 
   private async post<T>(body: unknown, consume: (response: Response) => Promise<T>, signal?: AbortSignal, notificationTimeoutMs?: number): Promise<T> {
-    const requestTimeoutMs = notificationTimeoutMs ?? this.nextRequestTimeoutMs();
+    const request = body as { id?: number; method?: string };
+    const requestTimeoutMs = notificationTimeoutMs ?? this.nextRequestTimeoutMs(request.method);
+    this.inFlight += 1;
     const controller = new AbortController();
     const cancel = () => controller.abort();
     signal?.addEventListener('abort', cancel, { once: true });
@@ -3002,7 +3032,6 @@ class McpHttpClient {
       // body 也会按 requestTimeoutMs 中止，不会无限阻塞后续 server 注册。
       return await consume(res);
     } catch (error) {
-      const request = body as { id?: number; method?: string };
       if (controller.signal.aborted && request.id !== undefined && request.method !== 'initialize') {
         // Aborting fetch only ends our wait. Cancel the exact MCP request on a
         // separate bounded POST; never reuse the already-aborted caller signal.
@@ -3013,7 +3042,7 @@ class McpHttpClient {
       if (signal?.aborted) throw new McpBridgeError('request cancelled');
       if (controller.signal.aborted) {
         this.needsReconnect = true;
-        throw new McpBridgeError('request timed out');
+        throw this.timeoutError(request.method, 'request timed out');
       }
       if (error instanceof McpBridgeError) throw error;
       if (error instanceof SyntaxError) throw new McpBridgeError('invalid JSON response');
@@ -3031,7 +3060,16 @@ class McpHttpClient {
     } finally {
       clearTimeout(timeout);
       signal?.removeEventListener('abort', cancel);
+      this.inFlight -= 1;
+      if (this.inFlight === 0) {
+        for (const resolve of this.idleWaiters.splice(0)) resolve();
+      }
     }
+  }
+
+  private async waitForIdle(): Promise<void> {
+    if (this.inFlight === 0) return;
+    await new Promise<void>((resolve) => this.idleWaiters.push(resolve));
   }
 
   /** 按 SSE event 增量取当前 JSON-RPC response；server 保持流打开也不阻塞。 */
@@ -3127,6 +3165,29 @@ class McpHttpClient {
       { jsonrpc: '2.0', method, ...(params !== undefined ? { params } : {}) },
       async (res) => { await res.body?.cancel(); },
     ).catch(() => {});
+  }
+
+  /** Best-effort bounded DELETE for a transport whose owning Pi client is gone. */
+  async close(timeoutMs = 1_000): Promise<void> {
+    if (!this.sessionId) return;
+    await this.waitForIdle();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const headers = this.headers();
+      const response = this.directLoopback
+        ? await fetchDirectLoopbackMcp(this.requestUrl, headers, undefined, controller.signal, 'DELETE')
+        : await fetch(this.requestUrl, {
+          method: 'DELETE', headers, redirect: 'error', signal: controller.signal,
+          timeout: false,
+        });
+      await response.body?.cancel();
+    } catch {
+      // Session teardown is best-effort. The process is already replacing or
+      // abandoning this client, so a failed DELETE must not block its successor.
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   async initialize(): Promise<void> {
@@ -3385,6 +3446,7 @@ class CindyMcpGateway {
   }
 
   add(serverName: string, client: McpHttpClient, tools: any[], displayName?: string): void {
+    const previous = this.clients.get(serverName);
     const resolvedDisplayName = mcpServerDisplayName(serverName, displayName, client.serverInfoName);
     this.serverDisplayNames.set(serverName, resolvedDisplayName);
     for (const [key, tool] of this.tools) {
@@ -3392,6 +3454,7 @@ class CindyMcpGateway {
     }
     this.innerListingCache.delete(serverName); // 工具表刷新 → 内层代拉缓存一并失效
     this.clients.set(serverName, client);
+    if (previous && previous !== client) void previous.close();
     this.unavailableServers.delete(serverName);
     for (const rawTool of tools) {
       if (!rawTool || typeof rawTool !== 'object' || typeof rawTool.name !== 'string' || !rawTool.name) {
@@ -3625,12 +3688,18 @@ class CindyMcpGateway {
   }
 
   /**
-   * 未披露时的回执（路标）：指名该查哪个 server/tool，并说明重发即可放行。
-   * tool_call hook 与 executeCall 共用同一段文本，避免两处漂移。
+   * 首次直调仍不执行。小工具在这次回执里给出完整定义，大工具继续按名称定向查阅。
    */
   private disclosureSignpost(call: ResolvedMcpGatewayCall): string {
+    const target = JSON.stringify({ server: call.tool.serverName, tool: call.tool.name });
+    const definition = JSON.stringify({ description: call.tool.description, inputSchema: call.tool.inputSchema });
+    // Bound the unsolicited tool result; an explicit lookup can return a definition of any size.
+    if (definition.length <= 2048) {
+      return 'Tool call did not run. Check the arguments against the definition for ' + target
+        + ' below, then retry the call with matching arguments.\n' + definition;
+    }
     return 'Inspect this tool before execution by calling cindy_mcp_list_tools with '
-      + JSON.stringify({ server: call.tool.serverName, tool: call.tool.name })
+      + target
       + '. The current schema has already been recorded; re-send the same call to proceed.';
   }
 
@@ -3845,10 +3914,10 @@ class CindyMcpGateway {
         reason: unavailableReason,
         availableServers: this.availableServers(),
       };
-    } else if (serverName && toolName) {
-      const selected = canonicalServerName && this.botMemoryFacadeEnabled && canonicalServerName === 'cindy_memory'
+    } else if (canonicalServerName && toolName) {
+      const selected = this.botMemoryFacadeEnabled && canonicalServerName === 'cindy_memory'
         ? undefined
-        : canonicalServerName ? this.tools.get(mcpGatewayKey(canonicalServerName, toolName)) : undefined;
+        : this.tools.get(mcpGatewayKey(canonicalServerName, toolName));
       if (!selected) {
         payload = {
           ok: false,
@@ -3892,7 +3961,9 @@ class CindyMcpGateway {
         offset,
         ...(offset + page.length < matches.length ? { nextOffset: offset + page.length } : {}),
         availableServers: this.availableServers(),
-        hint: 'Use query or server to narrow results; follow nextOffset for more. Inspect an exact server and tool for the complete description and input schema.',
+        hint: query && matches.length === 0 && tools.length > 0
+          ? 'No tools matched the query. Omit query or try a shorter keyword and start at offset 0. Browse by a known server, or pass exact server and tool to inspect its schema.'
+          : 'Use query or server to narrow results; follow nextOffset for more. Inspect an exact server and tool for the complete description and input schema.',
         ...(unavailableServers.length > 0 ? { unavailableServers } : {}),
       };
     }
@@ -4047,7 +4118,7 @@ class CindyMcpGateway {
       // 拦这一次的理由是零拦截实测出来的代价（2026-10-15）：模型没有任何信号知道
       // 该去查 schema，参数名和信封层级只能靠服务端报错反推——实测把 target_session_id
       // 猜成 worker_id、把 args 里的字段平铺到调用根，连续撞 -32602 后才放弃。回执里
-      // 指名 server/tool，模型才会去 list_tools。
+      // 把真实参数形状交给模型，或指名能查到完整形状的 server/tool，避免靠试错反推。
       //
       // 拦时即记账，模型照路标重发即放行。放行的语义是「这个工具的 schema 我见过了」，
       // 不是「这组参数是对的」：参数仍由工具自身 inputSchema 校验。
@@ -4346,27 +4417,32 @@ async function connectServer(server: McpServerRef, token: string): Promise<{
   displayName: string;
 }> {
   const client = new McpHttpClient(server, token);
-  await client.initialize();
-  const tools: any[] = [];
-  const seenCursors = new Set<string>();
-  let cursor: string | undefined;
-  for (;;) {
-    const listed = await client.request('tools/list', cursor === undefined ? {} : { cursor });
-    if (Array.isArray(listed?.tools)) tools.push(...listed.tools);
-    if (!listed || typeof listed !== 'object' || !('nextCursor' in listed)) break;
-    const nextCursor = listed.nextCursor;
-    if (typeof nextCursor !== 'string' || seenCursors.has(nextCursor)) {
-      throw new McpBridgeError('invalid tools pagination');
+  try {
+    await client.initialize();
+    const tools: any[] = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+    for (;;) {
+      const listed = await client.request('tools/list', cursor === undefined ? {} : { cursor });
+      if (Array.isArray(listed?.tools)) tools.push(...listed.tools);
+      if (!listed || typeof listed !== 'object' || !('nextCursor' in listed)) break;
+      const nextCursor = listed.nextCursor;
+      if (typeof nextCursor !== 'string' || seenCursors.has(nextCursor)) {
+        throw new McpBridgeError('invalid tools pagination');
+      }
+      seenCursors.add(nextCursor);
+      cursor = nextCursor;
     }
-    seenCursors.add(nextCursor);
-    cursor = nextCursor;
+    client.finishStartup();
+    return {
+      client,
+      tools,
+      displayName: mcpServerDisplayName(server.name, server.displayName, client.serverInfoName),
+    };
+  } catch (error) {
+    await client.close();
+    throw error;
   }
-  client.finishStartup();
-  return {
-    client,
-    tools,
-    displayName: mcpServerDisplayName(server.name, server.displayName, client.serverInfoName),
-  };
 }
 
 // Pi 内置 find 依赖 fd；PI_OFFLINE=1 时缺失后不会下载。Cindy 已随 Desktop 校验并
@@ -4604,6 +4680,8 @@ async function nativeFastPayload(payload, model, ctx, requestFast?: boolean) {
 
 ${PI_CACHE_RECOVERY_SOURCE}
 
+const CINDY_PI_RESPONSES_COMPLETION_PREFIX = ${JSON.stringify(CINDY_PI_RESPONSES_COMPLETION_PREFIX)};
+const completedPiResponsesMessage = ${completedPiResponsesMessage.toString()};
 ${PI_NATIVE_PROVIDER_ADAPTER_SOURCE}
 
 ${PI_NATIVE_TOOL_CATALOG_SOURCE}
@@ -5044,11 +5122,14 @@ export default async function cindyBridge(piApi: any) {
   if (process.platform === 'win32' && typeof createPowerShellTool === 'function' && !guestToolGate) {
     const powershellTool = createPowerShellTool(process.cwd(), {
       exposeSessionEnvironment: false,
-      spawnHook: ({ command, cwd, env }) => ({
-        command,
-        cwd,
-        env: isolatedBashEnvironment(env, bashPackageHome),
-      }),
+      spawnHook: ({ command, cwd, env }) => {
+        const childEnv = isolatedBashEnvironment(env, bashPackageHome);
+        // Windows env names are case-insensitive even after copying into a plain object.
+        const names = new Set(Object.keys(childEnv).filter(key => childEnv[key] !== undefined).map(key => key.toUpperCase()));
+        if (!names.has('PYTHONUTF8')) childEnv.PYTHONUTF8 = '1';
+        if (!names.has('PYTHONIOENCODING')) childEnv.PYTHONIOENCODING = 'utf-8';
+        return { command, cwd, env: childEnv };
+      },
     });
     var powershellParameters = powershellTool.parameters;
     if (
@@ -5471,6 +5552,17 @@ export default async function cindyBridge(piApi: any) {
     }
   });
 
+  // Store the provenance alongside the native call. Its name and result remain
+  // owned by the extension, and the custom entry stays out of model context.
+  pi.on('tool_result', (event: any) => {
+    if (event.toolName !== ${JSON.stringify(PI_SUBAGENT_TOOL_NAME)} || typeof event.toolCallId !== 'string') return;
+    try {
+      pi.appendEntry(${JSON.stringify(PI_NATIVE_SUBAGENT_CALL_ENTRY)}, { toolCallId: event.toolCallId });
+    } catch {
+      // History presentation must not fail a tool result.
+    }
+  });
+
   // Tool results reach the model after a library grant can change within this turn.
   // Project only the persisted task grant; never return it to the plugin itself.
   pi.on('tool_result', async (event: any) => {
@@ -5525,7 +5617,12 @@ export default async function cindyBridge(piApi: any) {
   const servers = Array.isArray(cfg.servers) ? cfg.servers : [];
   // 全部 server 并行启动：每个 remote 有独立短预算，多个黑洞 provider 也只占一份
   // startup window，不会串行叠加到 Pi RPC 的 30s ready 超时。
+  // The gateway and its reconnectors use the configured server name as identity.
+  // Claim it before the first await so the first descriptor owns both connections.
+  const claimedNames = new Set<string>();
   await Promise.all(servers.map(async (server) => {
+    if (claimedNames.has(server.name)) return;
+    claimedNames.add(server.name);
     mcpGateway.setServerDisplayName(server.name, server.displayName);
     mcpGateway.registerReconnect(server.name, () => connectServer(server, token));
     try {

@@ -351,7 +351,7 @@ function WorkdirBrowseContent({ requestedDeviceId }: { requestedDeviceId: string
 
       const scheduleNames =
         (await loadActiveBoundScheduleNames([
-          { id: closingId, deviceLinkDeviceId: closing?.deviceLinkDeviceId },
+          { id: closingId, deviceLinkDeviceId: closing?.deviceLinkDeviceId, orcaRole: closing?.orcaRole },
         ])).get(closingId) ?? [];
       const preflight = await resolveWorktreeRemovalPreflight(closingId, closing?.deviceLinkDeviceId);
       const confirmed = await confirmTaskArchive(
@@ -537,7 +537,7 @@ function WorkdirBrowseContent({ requestedDeviceId }: { requestedDeviceId: string
             aria-label={t('ccAgent.workdirBrowse.chatRail.resizeAria')}
             onPointerDown={rail.handleDragStart}
             onDoubleClick={rail.resetWidth}
-            className="absolute right-0 top-0 z-10 h-full w-[4px] cursor-col-resize group/handle"
+            className="absolute right-0 top-0 z-raised h-full w-[4px] cursor-col-resize group/handle"
           >
             {/* 1px 视觉条 —— right-0 与 middle 的 border-r 同位,所以 hover 时
                 单纯把那 1px 由 border-r 灰色换成 sidebar-action-icon,不会增厚。 */}

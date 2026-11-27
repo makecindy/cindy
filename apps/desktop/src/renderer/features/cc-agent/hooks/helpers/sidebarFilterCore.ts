@@ -1,3 +1,4 @@
+import { sidebarModeKey } from '@/hooks/sidebarModeKey';
 import type { TaskListMode } from '@/hooks/useTaskListMode';
 import { createLogger } from '@/lib/logger';
 import {
@@ -83,7 +84,7 @@ export type FilterProjectOrder = 'activity' | 'custom';
  * 任务行右侧信息项（复选）。存储数组的顺序 = 用户勾选先后(nextTaskInfoAfterToggle
  * 按序追加),列表行据此渲染(2026-08-12 用户裁决);菜单里选项的排列另有固定顺序。
  */
-export type TaskInfoField = 'time' | 'pr' | 'worktree' | 'tokens' | 'cost';
+export type TaskInfoField = 'time' | 'pr' | 'worktree' | 'tokens' | 'cost' | 'harness' | 'project' | 'teammate';
 export type ManualProjectDropPosition = 'before' | 'after';
 
 const STATUS_VALUES: ReadonlySet<string> = new Set<FilterStatus>(['active', 'archived', 'all']);
@@ -124,10 +125,6 @@ export function loadStatus(): FilterStatus {
   return 'active';
 }
 
-function contentFilterKey(key: string, mode: TaskListMode): string {
-  return mode === 'tasks' ? key : key + '.inbox';
-}
-
 /**
  * 读 localStorage 中的 projects；任何异常 / 非法值 → 'all'。
  *
@@ -136,7 +133,7 @@ function contentFilterKey(key: string, mode: TaskListMode): string {
  *   - JSON.parse 后是非空字符串数组（每项均为非空 string）；空数组 → 'all'
  */
 export function loadProjects(ownerId: string | null, mode: TaskListMode = 'tasks'): FilterProjects {
-  const raw = readSidebarOwnerStorage(contentFilterKey(PROJECTS_KEY, mode), ownerId);
+  const raw = readSidebarOwnerStorage(sidebarModeKey(PROJECTS_KEY, mode), ownerId);
   if (raw == null) return 'all';
   let parsed: unknown;
   try {
@@ -156,7 +153,7 @@ export function loadProjects(ownerId: string | null, mode: TaskListMode = 'tasks
 
 /** Creator keys contain both the computer and Bot identity, and are scoped to the signed-in owner. */
 export function loadCreators(ownerId: string | null, mode: TaskListMode = 'tasks'): FilterCreators {
-  const raw = readSidebarOwnerStorage(contentFilterKey(CREATORS_KEY, mode), ownerId);
+  const raw = readSidebarOwnerStorage(sidebarModeKey(CREATORS_KEY, mode), ownerId);
   if (!raw) return 'all';
   try {
     const value: unknown = JSON.parse(raw);
@@ -168,7 +165,7 @@ export function loadCreators(ownerId: string | null, mode: TaskListMode = 'tasks
 }
 
 export function persistCreators(value: FilterCreators, ownerId: string | null, mode: TaskListMode = 'tasks'): void {
-  writeSidebarOwnerStorage(contentFilterKey(CREATORS_KEY, mode), ownerId, JSON.stringify(value));
+  writeSidebarOwnerStorage(sidebarModeKey(CREATORS_KEY, mode), ownerId, JSON.stringify(value));
 }
 
 /** Canonicalize both per-device and older cloud-companion selections after discovery. */
@@ -202,7 +199,7 @@ export function persistStatus(s: FilterStatus): void {
 }
 
 export function persistProjects(p: FilterProjects, ownerId: string | null, mode: TaskListMode = 'tasks'): void {
-  if (!writeSidebarOwnerStorage(contentFilterKey(PROJECTS_KEY, mode), ownerId, JSON.stringify(p))) {
+  if (!writeSidebarOwnerStorage(sidebarModeKey(PROJECTS_KEY, mode), ownerId, JSON.stringify(p))) {
     log.warn('[useSidebarFilter] failed to persist projects');
   }
 }
@@ -322,7 +319,7 @@ export function loadVendor(mode: TaskListMode = 'tasks'): FilterVendor {
   if (!storage) return 'all';
   let raw: string | null = null;
   try {
-    raw = storage.getItem(contentFilterKey(VENDOR_KEY, mode));
+    raw = storage.getItem(sidebarModeKey(VENDOR_KEY, mode));
   } catch (err) {
     log.warn('[useSidebarFilter] failed to read vendor:', err);
     return 'all';
@@ -335,7 +332,7 @@ export function persistVendor(v: FilterVendor, mode: TaskListMode = 'tasks'): vo
   const storage = safeStorage();
   if (!storage) return;
   try {
-    storage.setItem(contentFilterKey(VENDOR_KEY, mode), v);
+    storage.setItem(sidebarModeKey(VENDOR_KEY, mode), v);
   } catch (err) {
     log.warn('[useSidebarFilter] failed to persist vendor:', err);
   }
@@ -449,15 +446,35 @@ export function persistHideAutomations(hide: boolean, mode: TaskListMode): void 
   }
 }
 
+const HIDE_TASK_CREATED_KEYS: Record<TaskListMode, string> = {
+  tasks: 'cc-agent.sidebar.filter.hideTaskCreated',
+  inbox: 'cc-agent.sidebar.filter.inbox.hideTaskCreated',
+};
+
+export function loadHideTaskCreated(mode: TaskListMode): boolean {
+  try { return safeStorage()?.getItem(HIDE_TASK_CREATED_KEYS[mode]) === 'true'; } catch { return false; }
+}
+
+export function persistHideTaskCreated(hide: boolean, mode: TaskListMode): void {
+  try {
+    if (hide) safeStorage()?.setItem(HIDE_TASK_CREATED_KEYS[mode], 'true');
+    else safeStorage()?.removeItem(HIDE_TASK_CREATED_KEYS[mode]);
+  } catch (err) {
+    log.warn('[useSidebarFilter] failed to persist task-created filter:', err);
+  }
+}
+
 export function sidebarContentFilterCount(filter: {
   projects: FilterProjects;
   vendor: FilterVendor;
   lastActivity: FilterLastActivity;
   creators: FilterCreators;
   hideAutomations: boolean;
+  hideTaskCreated?: boolean;
 }): number {
   return Number(filter.projects !== 'all') + Number(filter.vendor !== 'all')
-    + Number(filter.lastActivity !== 'all') + Number(filter.creators !== 'all') + (filter.hideAutomations ? 1 : 0);
+    + Number(filter.lastActivity !== 'all') + Number(filter.creators !== 'all')
+    + (filter.hideAutomations ? 1 : 0) + (filter.hideTaskCreated ? 1 : 0);
 }
 
 /* ============================== groupDevice load/persist ============================== */
@@ -592,7 +609,7 @@ export function loadLastActivity(mode: TaskListMode = 'tasks'): FilterLastActivi
   if (!storage) return 'all';
   let raw: string | null = null;
   try {
-    raw = storage.getItem(contentFilterKey(LAST_ACTIVITY_KEY, mode));
+    raw = storage.getItem(sidebarModeKey(LAST_ACTIVITY_KEY, mode));
   } catch (err) {
     log.warn('[useSidebarFilter] failed to read lastActivity:', err);
     return 'all';
@@ -605,7 +622,7 @@ export function persistLastActivity(lastActivity: FilterLastActivity, mode: Task
   const storage = safeStorage();
   if (!storage) return;
   try {
-    storage.setItem(contentFilterKey(LAST_ACTIVITY_KEY, mode), lastActivity);
+    storage.setItem(sidebarModeKey(LAST_ACTIVITY_KEY, mode), lastActivity);
   } catch (err) {
     log.warn('[useSidebarFilter] failed to persist lastActivity:', err);
   }
@@ -727,26 +744,29 @@ export function migrateLegacyManualSort(): void {
 
 /* ============================== taskInfo load/persist ============================== */
 
+// These identifiers were always visible before version 2 of the preference.
+const ROW_IDENTITY_FIELDS = ['harness', 'project', 'teammate'] as const;
 const TASK_INFO_VALUES: ReadonlySet<string> = new Set<TaskInfoField>([
   'time',
   'pr',
   'worktree',
   'tokens',
   'cost',
+  ...ROW_IDENTITY_FIELDS,
 ]);
-/** 默认仅显示最近活动时间。任务标签不属于可选信息项，始终跟在标题后显示。 */
-export const DEFAULT_TASK_INFO_FIELDS: readonly TaskInfoField[] = ['time'];
+/** 默认显示最近活动时间与行身份标识。任务标签不属于可选信息项，始终跟在标题后显示。 */
+export const DEFAULT_TASK_INFO_FIELDS: readonly TaskInfoField[] = ['time', ...ROW_IDENTITY_FIELDS];
 
 /**
  * 兼容旧 string[] 与带版本号的字段列表，保留字段及顺序（全不选合法）。
  * 旧版本存下的 'tags' 已不是信息项，按未知值静默丢弃。
  */
-export function loadTaskInfoFields(): TaskInfoField[] {
+export function loadTaskInfoFields(mode: TaskListMode = 'tasks'): TaskInfoField[] {
   const storage = safeStorage();
   if (!storage) return [...DEFAULT_TASK_INFO_FIELDS];
   let raw: string | null = null;
   try {
-    raw = storage.getItem(TASK_INFO_KEY);
+    raw = storage.getItem(sidebarModeKey(TASK_INFO_KEY, mode));
   } catch (err) {
     log.warn('[useSidebarFilter] failed to read taskInfo:', err);
     return [...DEFAULT_TASK_INFO_FIELDS];
@@ -755,7 +775,8 @@ export function loadTaskInfoFields(): TaskInfoField[] {
   try {
     const parsed = JSON.parse(raw);
     const legacy = Array.isArray(parsed);
-    const values = legacy ? parsed : parsed?.version === 1 ? parsed.fields : null;
+    if (!legacy && parsed?.version !== 1 && parsed?.version !== 2) return [...DEFAULT_TASK_INFO_FIELDS];
+    const values = legacy ? parsed : parsed.fields;
     if (!Array.isArray(values)) return [...DEFAULT_TASK_INFO_FIELDS];
     const seen = new Set<string>();
     const cleaned: TaskInfoField[] = [];
@@ -764,6 +785,11 @@ export function loadTaskInfoFields(): TaskInfoField[] {
       seen.add(value);
       cleaned.push(value as TaskInfoField);
     }
+    if (legacy || parsed.version === 1) {
+      for (const field of ROW_IDENTITY_FIELDS) {
+        if (!seen.has(field)) cleaned.push(field);
+      }
+    }
     return cleaned;
   } catch (err) {
     log.warn('[useSidebarFilter] failed to parse taskInfo JSON:', err);
@@ -771,11 +797,11 @@ export function loadTaskInfoFields(): TaskInfoField[] {
   }
 }
 
-export function persistTaskInfoFields(fields: readonly TaskInfoField[]): void {
+export function persistTaskInfoFields(fields: readonly TaskInfoField[], mode: TaskListMode = 'tasks'): void {
   const storage = safeStorage();
   if (!storage) return;
   try {
-    storage.setItem(TASK_INFO_KEY, JSON.stringify({ version: 1, fields }));
+    storage.setItem(sidebarModeKey(TASK_INFO_KEY, mode), JSON.stringify({ version: 2, fields }));
   } catch (err) {
     log.warn('[useSidebarFilter] failed to persist taskInfo:', err);
   }

@@ -64,7 +64,7 @@ beta 存量同意范围扩展及维护者确认要求见[平台契约的授权�
 | 打包限制                                             | `apps/desktop/src/main/cindy-brain/forge.ts` 的 `packGhostDir`                                                                                                                                                                                                                                                    |
 | 运行时、沙箱进程与生命周期                           | `apps/desktop/src/main/cindy-brain/runtime/GhostRuntime.ts`、`GhostManager.ts`                                                                                                                                                                                                                                    |
 | 安装事务状态、内容摘要与技能快照 receipt             | `apps/desktop/src/main/cindy-brain/ghostInstallReceipt.ts`，状态投影见 `shared/ghost.ts` 的 `GhostInstallApproval`                                                                                                                                                                                                |
-| 能力实现（网络／通知／确认／文件系统／技能／宿主等） | `networkSlot.ts`、`notifySlot.ts`、`badgeSlot.ts`、`confirmSlot.ts`、`fsSlot.ts`、`cindySlot.ts`、`skillSlot.ts`、`agentSlot.ts`、`errandSlot.ts`；持久作品库见 [`plugin-library-storage.md`](plugin-library-storage.md)，主实现在 `libraryVault.ts`、`librarySlot.ts`、`libraryDbCore.ts` |
+| 能力实现（网络／通知／确认／文件系统／技能／宿主等） | `networkSlot.ts`、`notifySlot.ts`、`badgeSlot.ts`、`confirmSlot.ts`、`formSlot.ts`（表单弹窗，载荷与校验在 `shared/ghostForm.ts`）、`fsSlot.ts`、`cindySlot.ts`、`skillSlot.ts`、`agentSlot.ts`、`errandSlot.ts`；持久作品库见 [`plugin-library-storage.md`](plugin-library-storage.md)，主实现在 `libraryVault.ts`、`librarySlot.ts`、`libraryDbCore.ts` |
 | 面板供片、注入主题 token 与协议                      | `apps/desktop/src/renderer/cindy-brain/ghostPanelTheme.ts`、`cindy-ghost://` 分支                                                                                                                                                                                                                                 |
 | 插件详情能力说明 UI                                  | `apps/desktop/src/renderer/features/plugin/GhostPluginDetailView.tsx`                                                                                                                                                                                                                                             |
 | 远程／手机版能力准入白名单                           | `packages/device-link/src/allowlist.ts`                                                                                                                                                                                                                                                                           |
@@ -208,7 +208,7 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   改用专用浏览器，由用户决定。大文件上传走分块，不依赖调试接口。新增权限不得改变 Chrome 的
   安装提示（`<all_urls>` 可加，`tabGroups` 只能做可选权限）。Agent 操作的页面显示红光边框与「Cindy 正在自动操作此页面」
   标签，保持到最后一次动作后约 20 秒。新增 id 或新增 `pageControl` 视为权限变多，删减视为收权。
-- 无配置的布尔能力只接受字面量 `true`：`notify`、`badge`、`confirm`、`fs`、`library`、
+- 无配置的布尔能力只接受字面量 `true`：`notify`、`badge`、`confirm`、`form`、`fs`、`library`、
   `sessionContext`、`pick`、`workspace`。不用就省略，写 `false` 是无效清单。
 - `card: {}` 与 `agent: {}` 分别表示基础卡片能力和由真实用户点击触发 Agent 回合；
   其它对象型能力必须至少包含一项真实能力，不能用空对象占位。
@@ -256,7 +256,7 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   已接受的插件消息复用现有独立投递守卫，正常关闭逻辑页或回收 Node 不撤销；实际投递仍核对 owner、安装目录/批准版本、enabled、manifest 声明及精确目标/正文/clientId。停用、卸载、安装批准失效和账号变化仍撤销；宿主重启不持久恢复守卫。
   作者契约见 [宿主工具调用](../../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-host-tools.md)。
   原生任务包由 `history/export_session` 和 `control/import_session` 开放，直接复用分享包导出与导入事务；插件按安装授权调用，Agent 运行时遵循自身权限流程。
-  插件仅经本实例既有 handoff 收取与提交包，不接受或返回宿主路径；Agent 导出由用户在原生保存对话框中选择位置，再返回最终路径，不接受 `output_path`。Agent 导入保留原生路径调用。
+  插件仅经本实例既有 handoff 收取与提交包，不接受或返回宿主路径；Agent 导出存到用户在「设置 → 存储空间」用原生选择器设定的导出位置（宿主命名、不覆盖同名文件、导出到私有临时目录后再落盘；位置失效返回 `EXPORT_DIRECTORY_UNAVAILABLE`，不改弹窗），未设定时由用户在原生保存对话框中选择位置，再返回最终路径，不接受 `output_path`。Agent 导入保留原生路径调用。
   加密包和未指定目录的项目包交原生导入向导，返回 `awaiting_user`，不能当成导入完成；工具不收密码。
   `browser/computer/ssh/docs` 直接复用相应现有 MCP server 的 validated handler；新组不改公共调用或调用方签名。
   browser recipe/切换用户浏览器/upload、电脑敏感输入与系统权限、SSH 认证和文档文件边界沿用原规则。
@@ -348,6 +348,20 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   Host receipt 的 `approvedHarnesses`（只来自确认里显示过的这一行；服务端默认安装与随包种子视为已批准），
   旧 receipt 缺字段 = 未批准但插件照常可用，Host 认识该字段之前声明的引擎不随升级静默生效，下一次更新按新增
   权限复核；已装快照里不合新规则的声明只丢弃，不让插件失效。见下文[任务执行引擎](#任务执行引擎harnesses新增能力尚未发布)。
+- `fileOpener`（插件接管打开的文件类型，2026-11-24，未发布）是 v3 顶层字段：`{ extensions: [".docx", …] }`，
+  1–32 个小写带点扩展名，必须同时声明 `node`（插件会拿到用户所开文件的宿主绝对路径，与 `pick` 同一边界）。
+  解析器只在协议包 `pluginFileOpener.ts` 一份，Desktop 镜像复用；已存 Release 与已装快照里不合规的历史值只丢弃。
+  安装／更新确认单列 `file-opener` 权限项并列出扩展名，新增该能力或扩展名即「权限变多」；市场真实包的扩展名只能
+  是审核清单的子集。Host 在安装批准记录中保存已确认的扩展名，旧版仅保存过声明的插件须经更新确认后才可接管。
+  同源更新保留仍在清单中的已批准扩展名，换源不继承。启动完成后，投递前再次核对安装批准与开关。
+  用户在插件详情「配置」区可关掉，偏好存 owner 作用域的 `plugin-file-openers.json`，只表示「不再交给它」，不是批准事实。
+  运行时只在 Main 的 `shell:open-path` 入口、经 `assertTrustedAppRendererEvent` 与 `isPathAllowed` 之后生效：
+  仅本机原件（排除 `cindy-media://`、远程文件缓存与聊天附件缓存、文件夹）会以 `open-file` 事件交给第一个已启用、
+  声明 node 与该扩展名、未被用户关掉的插件；回执 `file-open-result` 只认被问的同一实例（发送方由 Main 反查），
+  15 秒内未回执、回 `ok:false`、投递失败均回落系统默认应用，插件不可用不能让文件打不开。右键「打开方式」、
+  媒体「用默认应用打开」与远程／手机端不经此路径。实现见 `cindy-brain/fileOpenerSlot.ts`、`fileOpenerPrefs.ts`，
+  作者手册 §4.25（`plugin-file-opener.md`）；回归见协议包 `manifest.test.ts`、Desktop `ghost.test.ts`、
+  `fileOpenerSlot.test.ts` 与 `shellOpenPath.test.ts`。
 - **Agent 在途调用不需要重复登记具体操作。** 插件工具是否执行由当前
   `ghost_call` 的 Cindy Agent 授权决定；普通网络和当前工作目录操作使用主机
   下发且仍在途的 `callId`。随包代码与 CLI 继续使用已有 Node 工作进程，顶层
@@ -400,6 +414,17 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
 订阅发现异常时释放当前代次的原始焦点与主任务去重记录，允许同一焦点重试和切回通知；
 迟到的旧代次失败不得清除新焦点。任务资格暂不可用时仍只释放原始焦点，保留同 Lead 去重。
 
+Desktop 电子脑可用 `cindy.sessionStates({ sessionIds })`（`session-state-request`）补查生命周期。
+仅当前账号下已安装、已启用、整体安装批准有效且声明 `session` 的实例可查；回包前复核
+owner、电子脑和安装批准代次。不新增权限组或批准记录，不改变事件投递。按
+`did-session-created`／`did-session-archived` 的会话资格筛选，只查当前账号的本机库。SSH 或同账号
+跨设备执行不改变已在本机落库的会话资格；本机没有记录的 id 不向其它设备查找。
+每请求 1–100 个 id，仅做一次按 id 批量读取，不写库或轮询。回包每项仅 `sessionId`、
+`status`（`active`／`archived`／`deleted`／`out_of_scope`）；范围外与不存在不可区分。
+失败不返回会话数据，错误码为 `PERMISSION_DENIED`、`INVALID_REQUEST`、`HOST_NOT_READY`、
+`INTERNAL`。旧版 Desktop 不暴露该方法；方法存在但调用失败不表示不支持。
+示例见[作者手册 §4.6](../../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-event-subscriptions.md#查询会话状态desktop)。
+
 安装事实变化触发插件应用、浏览器扩展、未读与 Skill 对账。语言、OAuth 等展示变化
 只更新相关展示投影；语言变化还须更新插件 App 注册表中的本地化名称和工具说明，
 保证随后生成的卡片使用新语言，但不触发浏览器扩展、未读、Skill 或订阅索引对账。
@@ -429,9 +454,12 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   `approvedControlPoints` 记录后才可被任务选用——批准来自安装/更新确认里实际显示过的权限行，
   旧 receipt 缺字段视为未批准但插件照常可用，提前声明 Host 当时不认识的节点不会随 Host 升级
   静默生效，下一次更新会把它作为新增权限复核。随包种子与服务端默认安装视为已批准声明的节点。
-  **伙伴例行任务退役（2026-11-08，存量兼容）**：`will-routine-run` 与 manifest `routineEvents` 照常解析、
-  安装和保留批准记录，但不再触发；`routineEvents` 不再让插件常驻；`routine-request` 管子（`cindy.routines.request`）
-  的 status / publish 照旧校验与限额后返回稳定的空操作（publish 为 `accepted: 0`），不报错。插件与用户无需重装或重新确认。
+  **伙伴例行任务退役（2026-11-08，存量兼容）**：`will-routine-run` 照常解析、安装和保留批准记录，但不再触发。
+  manifest `routineEvents` 与 `routine-request` 管子（`cindy.routines.request`）自 2026-11-23 起改为叫醒用户在自动化
+  「事件」触发里选了该插件的任务（[插件事件触发](../product-rules/plugin-event-triggers.md)）：校验与限额照旧，
+  publish 返回实际入队的自动化数；只读的 `subscriptions` 告诉插件这些自动化选了哪些事件与条件（不含自动化身份和提示词）；
+  只有存在这样的自动化时 `routineEvents` 才让插件的逻辑页保持监听。
+  沿用原有声明与安装批准，插件与用户无需重装或重新确认。
   `will-start-task`（新任务选模型）能回 `route`：只在本机新任务第一条消息发出前、
   用户在模型选择器里选了这个插件发布的模型时询问一次，任务中途和伙伴任务都不问（换模型会让提示缓存失效）。
   Gateway 只保留 route 的 `agentKind` / `model` / `providerId` / `effort` 四个字段；Main 再按当前已连接、
@@ -778,13 +806,21 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   逐跳只发往 `network.hosts` / 连接地址中已声明的主机，插件自带的同名头（不区分大小写）一律剥除；版本无关
   （0.0.0）或找不到内置手册时不带。Node 工作进程的请求不带，只剥除同名头。
 - `source: "gh-cli"` 是按声明开放的宿主凭证来源；已批准且身份已确认的实例可使用。Host 优先读取
-  本机 `gh auth token`，不可用时才回落到同 key 经 `/secrets` 保存的 PAT。两种 token
+  本机 `gh auth token`，不可用时才回落到同 key 经 `/secrets` 保存的 PAT，再回落到当前 Cindy 数据所有者的 GitHub App 用户令牌。三种 token
   均只在 Main 的 networkSlot 或受信本机账号检查中注入 `api.github.com` 的
   `Authorization: Bearer` 请求头，不得进入插件、Renderer、Agent、KV、日志或 Node
-  Worker。本机账号检查仅允许固定 GET `/user`，拒绝重定向，限时 15 秒；只返回
+  Worker。App 用户令牌按本机所有者与服务端点加密隔离，续期与旧版本兼容见
+  [GitHub App 用户授权](protocol-compatibility/github-app-events.md#github-app-用户授权与统一连接2026-11-17待部署)。
+  本机账号检查仅允许固定 GET `/user`，拒绝重定向，限时 15 秒；只返回
   连接分类、用户名和来源，不返回响应原文。插件设置页只能读取 `hostAvailable`、
   `hostManagedSetup` 布尔与备用 PAT 的 `saved/tail` 状态。该来源
   不允许 `exchange` 或 `setup.requires` 引用。安装确认须说明它能使用本机 GitHub 账号的实际权限。
+- `network.connections[].source: "glab-cli"` 是按声明开放的本机 GitLab CLI 连接来源；仅已批准且身份已确认的实例可用。
+  连接解析与出网注入统一以用户在插件设置页显式添加的同域名连接优先；未单独添加时，Host 从本机 `glab` 配置发现候选 HTTPS
+  域名并经 `glab config get token --host <host>` 校验已登录态，在 `/connections` 中以只读 `source: "glab-cli"` 列出域名
+  （零令牌字节），在 `networkSlot` 中仅向该域名自身的默认端口 HTTPS 请求注入 `Authorization: Bearer` 请求头（逐跳剥除
+  `Authorization` 与声明头），令牌不得进入插件、Renderer、Agent、KV、日志、Node Worker 或跨插件凭证复用。安装/更新确认
+  须单独说明复用本机 `glab` 登录的权限。
 - OAuth 已连接账号复用沿用现有 `source:'oauth'` 服务端点、scope 与注入范围声明，由
   `GhostOauthAccountManager` 管理。只列当前 owner 下已批准、启用的来源，授权/token 端点必须相同，
   注入头形态一致且目标范围不超出原来源，所需 scope 不超出账号授权范围快照（旧账号无快照时
@@ -1218,6 +1254,8 @@ Host receipt 的 `simulatorPreviousRelId` 只允许这对 ID 和 root 路径，�
 
 随包作者手册只描述随包版本的当前能力，不写发布状态或首个可用版本；用到新能力时，`minCindyVersion` 填开发测试所用的 Cindy 版本。
 
+本机工作目录菜单的 `workdir.menu` 复用原生菜单动作与具名页面。该位置沿用安装批准、任务归属和页面上下文边界，状态栏按钮的字号仅影响排版。旧端忽略新位置，存量插件无需重装或迁移。
+
 插件界面扩展的作者入口为随包 `references/plugin-host-ui.md`，具名视图和原生入口仍共用
 MCP Apps，不能另建页面 SDK 或逐历史消息 render/query。`mcpApps.host` 能力以整版安装/更新
 批准有效、已启用及 manifest 声明为准，不另存分项批准。旧 receipt 的 `approvedHostUi` 残留字段
@@ -1493,9 +1531,9 @@ App 双向同步，**不另建存储**：Main 复用 device-link 同一条 owner
 `electronSandboxAdapter.ownerPartition.test.ts`、`modelFavoritesSync.test.ts`、`recentModels.test.ts` 与 `ghost.tasks.test.ts`；
 作者契约见 `cindy-plugin-creator/references/plugin-agent-models.md` §4.0.3c。
 
-### 任务执行引擎（harnesses，新增能力，尚未发布）
+### 任务执行引擎（harnesses）
 
-用途：插件把本机外部 ACP Agent 提供为任务执行引擎（设计见 [ACP 插件桥接层](../plans/acp-plugin-bridge.md)）。边界：
+用途：插件把本机外部 ACP Agent 提供为任务执行引擎（产品规则见[插件引擎与插件模型](../product-rules/plugin-engines-and-models.md)，工程不变量见[ACP 插件执行引擎](acp-plugin-harness.md)）。安全与隔离边界：
 
 - **只启动包内声明的入口**：`spawnHarness` 只接受 `harnesses[].entry`，且必须逐字命中 `node.entries`、解析后不越出安装
   目录；没有命令、参数或 shell 面。与 childSpawn 走同一 utilityProcess「原样 stdio」通道，但由 Main 发起、不挂 worker，
@@ -1505,11 +1543,25 @@ App 双向同步，**不另建存储**：Main 复用 device-link 同一条 owner
   替换目录；stop 后关闭启动闸，只有「该在场了」的统一入口（`spawnIfResident`：启用、更新／回滚完成、应用启动）重新放行，
   回滚失败路径保持关闭。启动未产生进程时直接释放本次任务的工作目录保护，已产生进程时以实际退出为准。账号切换随
   broker 一起销毁。stderr 截断后写插件日志（单段 4096、每进程 64K 字符）。
-- **可用状态**：插件页 `PUT /harnesses` 只发布元数据（`available`、slug `reason`、≤200 `message`、≤64 `version`），整体
+- **可用状态**：插件页 `PUT /harnesses` 只发布元数据（`available`、slug `reason`、≤200 `message`、≤64 `version` 等协议白名单字段），整体
   覆盖、内容不变无副作用，未声明 403、格式错 400 不改原状态；按 owner 单独落盘（`ghost-published-harnesses`），不进插件
   `/kv`，停用保留、卸载删除，读取时按当前清单重新校验。注册表只读这份记录，不调用插件；从未发布为 `unknown`。
+- **同账号远程调用与跨账号分享（2026-11-20 / 11-21）**：任务文件在同账号另一台电脑时，`spawnHarness` 向入口传入宿主固定参数 `--cindy-remote-workspace`，仅允许上报 `remoteWorkspace: true` 且本机已开启「允许被远程调用」的引擎启动；跨账号分享给好友还必须同时上报 `guestWorkspace: true`，启动时一并传入 `--cindy-guest-workspace`（要求插件额外隔离分享者个人配置／技能／记忆／会话并关闭自带网页抓取，改由受邀者本机 `cindy_exec` 提供 `WebFetch`）。未声明 `guestWorkspace` 的引擎在受邀者启动前拒绝；「允许被远程调用」默认关闭、只在本机窗口可改（`maker:set-plugin-engine-remote-use` 不进 device-link allowlist）；供应商组（电脑组）、备用机委托、转分享（`relayKey`）与本机应用仍不提供插件引擎。
+- **在模型供应商里的设置（2026-11-22）**：引擎同时列在「设置 → 模型供应商」，用户可改这台电脑上的显示名、隐藏、
+  停用与逐模型关闭，同样只在本机窗口可改(`maker:set-plugin-engine-prefs` 不进 device-link allowlist)。这些是宿主
+  按账号保存的用户设置(`plugin-engine-prefs.json`)，插件读不到也改不了，不改 manifest、批准状态或已发布的可用状态；
+  停用只是不再用这个引擎开新任务，插件本身、它的工具和页面照常。存量插件影响：无，文件缺失或损坏时引擎照插件
+  声明列出。字段与旧端降级见 [plugin-harnesses.md](protocol-compatibility/plugin-harnesses.md)。
 - **注册表**：`cindy-brain/pluginHarnesses.ts` 只列已启用、已批准、已声明、receipt 已批准且协议已支持的引擎，名称按
   界面语言选取；花名册广播、语言切换与状态发布后重算，内容不变不通知。`spawn` 现算列表，不在列表或已发布不可用即拒绝。
+- **引擎账号（2026-11-23，未发布）**：插件在 `PUT /harnesses` 发布 `accounts.methods` 后，Cindy 为每个添加的账号建一个按账号隔离的目录，
+  启动时以宿主固定的 `--cindy-account-dir <目录>` 交给入口；注册表核对目录是这个引擎根目录下的一级子目录且引擎声明了登录方式，否则拒绝启动，
+  插件仍没有参数面。账号状态、登录、取消与按账号用量只调用主 worker 的固定方法名，参数由注册表拼好，回包按协议白名单校验后才用
+  （身份只留邮箱、名字、说明与套餐，`fingerprint` 不出 Main）。**凭证交接的唯一例外**：用户为 `kind: 'secret'` 的方式在本机 Cindy 弹窗
+  里填的 Key，由 Main 原样交给该插件 worker 一次，用于写进这个账号目录里外部 Agent 自己的凭据存储——Cindy 不保存、不记日志、不进模型；
+  带 Key 的命令只接受本机受信窗口，device-link 一律拒绝，Helper 工具没有这个参数。这与插件自己的设置页收 Key 是同一信任边界（插件 worker
+  本来就能读写这台电脑的文件），不扩大权限。不增加 manifest 字段、权限行或批准状态，存量插件影响：无。字段与旧端降级见
+  [plugin-harnesses.md](protocol-compatibility/plugin-harnesses.md#引擎账号多账号2026-11-23未发布)。
 
 存量插件影响：无。旧 Host 装下、manifest 已声明 `harnesses` 的插件升级后照常启用，只是引擎不生效；回归见
 `ghostLocalInstallIdentity.test.ts`（旧 receipt 升级）与 `ghostInstallConsent.test.ts`。协议记录见
@@ -1603,6 +1655,13 @@ Main 从当前接受的输入、原批准和持久回执读取 scope，交给现
 作者契约见 cindy-plugin-creator/references/plugin-agent-tasks.md §4.11.7。
 
 ## 通用 OAuth 宿主保护
+
+声明式 OAuth 可选 `deviceAuthorizationUrl` 走 RFC 8628 设备码登录（协议约定见
+[插件 OAuth 设备码登录](protocol-compatibility/plugin-oauth-device-grant.md)）。不变量：确认页只接受落在
+设备码端点／授权页／token 端点域名或 `network.hosts` 内的 https 默认端口地址；`device_code`、`user_code`
+与令牌不进日志、卡片快照、插件或模型；本机只在服务商没给带码确认页时把验证码放进剪贴板，结束时只撤掉
+仍属于本单的内容；远程单只经 `authorizationV1` 交给控制端，旧控制端失败关闭，不回退到执行设备开浏览器；
+令牌保管、刷新与注入沿用授权码模式，未声明该字段的存量插件归一化清单与权限投影逐字不变。
 
 账号头像对声明了身份头像字段的插件开放，下载必须经过受防护网络通道的 DNS/IP、重定向、超时和流式大小检查。失败只省略头像，不把宿主变成内网读取通道。固定回调端口被占用时，所有插件统一在主窗口展示占用程序与 PID，经用户确认且再次核对进程身份后才结束程序并重试。
 

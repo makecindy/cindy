@@ -6,7 +6,12 @@ import type { TaskInboxSection } from '@cindy/maker-shared/live-task-priority';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
-import { SessionAction, SidebarTitleMarquee } from '@/features/cc-agent/sidebar/SessionItem';
+import { isNestedSessionRowAction, SessionAction, SidebarTitleMarquee } from '@/features/cc-agent/sidebar/SessionItem';
+import {
+  isSidebarNewWindowActivation,
+  openTargetInNewWindow,
+  preventMiddleClickAutoscroll,
+} from '@/lib/sidebarNewWindowActivation';
 import { SessionSnoozeAction, type SnoozeAction } from '@/features/cc-agent/sidebar/SessionSnoozeAction';
 import { SidebarRightStatusIndicator } from '@/features/cc-agent/sidebar/SidebarRightStatusIndicator';
 import { BotAvatar } from './BotAvatar';
@@ -21,7 +26,15 @@ const STATUS_KIND = { awaiting: 'awaiting', error: 'error', running: 'running', 
  * Done only reads the replies; it is offered when that is all the row asks for. A pending request
  * or a failure cannot be dismissed, and a running conversation has nothing to complete.
  */
-export function TeammateInboxRow({ entry, section }: { entry: TeammateInboxEntry; section: TaskInboxSection }) {
+export function TeammateInboxRow({
+  entry,
+  section,
+  sessionVariant = 'text',
+}: {
+  entry: TeammateInboxEntry;
+  section: TaskInboxSection;
+  sessionVariant?: 'text' | 'list';
+}) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { pathname } = useLocation();
@@ -58,17 +71,42 @@ export function TeammateInboxRow({ entry, section }: { entry: TeammateInboxEntry
       aria-label={label}
       aria-current={isActive ? 'page' : undefined}
       data-teammate-inbox-row={entry.key}
+      data-teammate-inbox-route={entry.route}
       // The title marquee listens for hover on a row carrying this marker.
       data-sidebar-navigation-row="true"
       {...companionDragProps(entry.route, entry.name)}
-      onClick={() => navigate(entry.route)}
+      onMouseDown={(event) => {
+        if (!isNestedSessionRowAction(event.target, event.currentTarget)) {
+          preventMiddleClickAutoscroll(event);
+        }
+      }}
+      onClick={(event) => {
+        if (isNestedSessionRowAction(event.target, event.currentTarget)) return;
+        if (isSidebarNewWindowActivation(event)) {
+          event.preventDefault();
+          void openTargetInNewWindow(entry.route);
+          return;
+        }
+        navigate(entry.route);
+      }}
+      onAuxClick={(event) => {
+        if (event.button !== 1 || isNestedSessionRowAction(event.target, event.currentTarget)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        void openTargetInNewWindow(entry.route);
+      }}
       onKeyDown={(event) => {
         if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return;
         event.preventDefault();
+        if (isSidebarNewWindowActivation(event)) {
+          void openTargetInNewWindow(entry.route);
+          return;
+        }
         navigate(entry.route);
       }}
       className={cn(
-        'group relative flex h-8 w-full cursor-pointer select-none items-center gap-2.5 rounded-full pl-3 pr-2 text-left text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+        'group relative flex h-8 w-full cursor-pointer select-none items-center gap-2.5 rounded-full pl-3 text-left text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+        sessionVariant === 'list' ? 'pr-2.5' : 'pr-2',
         isActive
           ? 'bg-sidebar-item-active text-sidebar-item-active-foreground border border-[var(--sidebar-item-active-border)]'
           : cn('text-foreground hover:bg-sidebar-item-hover', snoozeOpen && 'bg-sidebar-item-hover'),

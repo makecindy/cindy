@@ -5,6 +5,7 @@ import { useState, type ComponentProps, type ReactNode } from 'react';
 import type { Editor } from '@tiptap/react';
 import { type InstalledGhost } from '../../../../shared/ghost';
 import { PluginUiProvider } from '@/cindy-brain/PluginUiContributions';
+import { pluginUiInterestKey, type PluginUiInterest } from '../../../../shared/pluginUi';
 import type { ComposerSuggestionEntry } from '@/lib/composerSuggestion';
 import type { UnifiedCommand } from '@/lib/slashCommands';
 import { BUNDLED_CATALOG, buildUserProvider, type ProviderView } from '@cindy/model-providers';
@@ -19,7 +20,9 @@ import * as draftMemory from '@/state/newMakerDraft';
 import { getEffortChangeCoordinator } from '../effortChangeQueue';
 import { clearDraft } from '@/lib/composerDraftStore';
 import { peekComposerSubmitRequest, requestComposerSubmit, takeComposerSubmitRequest } from '@/lib/composerActionsBus';
-import { makerChatStore } from '@/lib/makerChatStore';
+import { buildCreateOptsForCurrentSession, makerChatStore } from '@/lib/makerChatStore';
+import { toast } from '@/lib/toast';
+import { getDataOwnerGeneration, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import {
   COMPOSER_FOLLOW_UP_STORAGE_KEY,
   _resetComposerFollowUpPreferenceForTests,
@@ -216,6 +219,52 @@ it('confirms a thinking preference only after the real session write succeeds', 
   expect(h.thinkingValue).toBe(false);
   expect(getProviderModelThinking('pi', 'mimo-thinking-test', 'mimo-v2.6-pro')).toBe(false);
   await act(async () => { setProviderModelThinking('pi', 'mimo-thinking-test', 'mimo-v2.6-pro', true); });
+});
+
+// Unit: exercise eligibility at the actual ChatInput entry. The contribution
+// lifecycle tests alone cannot detect a new/remote task leaving a toolbar lane.
+it('shows opt-in composer actions only for established local drafts', async () => {
+  h.ghosts = [{ enabled: true, dir: '/fixture', approval: { state: 'approved', revision: 'one' },
+    manifest: { schemaVersion: 3, id: 'polish', name: 'Polish', kind: 'chip', entry: 'main.js', version: '1',
+      tools: [{ name: 'apply', description: 'Apply' }], mcpApps: {
+      ui: { resources: [{ uri: 'ui://polish', file: 'polish.html' }], tools: { apply: { visibility: ['app'] } } },
+      host: { views: [{ id: 'polish', title: 'Polish', resourceUri: 'ui://polish', scope: 'task' }],
+        contributions: [{ id: 'polish', title: 'AI Polish', position: 'composer.toolbar',
+          view: 'polish', presentation: 'popover', composerAction: 'inline', visible: true },
+        { id: 'actions', title: 'Never show template', position: 'composer.header', tool: 'apply', dynamicItems: true }] },
+    } } }];
+  h.providerCall.mockImplementation(async (...args) => {
+    const input = args[1] as { op: string; entries?: PluginUiInterest[] };
+    return { updates: input.op === 'native-interest' ? (input.entries ?? []).map(interest => ({
+      key: pluginUiInterestKey(interest), revision: 1, state: { visible: true, items: [{ id: 'one', title: 'Quick action' }] },
+    })) : [] };
+  });
+  const onSend = vi.fn();
+  const scene = (extra: Partial<ComponentProps<typeof ChatInput>>) => <PluginUiProvider>
+    <ChatInput {...props} sessionId="known-local-task" deviceLinkDeviceId={null} onSend={onSend} {...extra} />
+  </PluginUiProvider>;
+  const view = render(scene({}));
+  expect(screen.getByRole('button', { name: 'AI Polish' }).closest('[data-composer-left-controls]')).not.toBeNull();
+  await screen.findByRole('button', { name: 'Quick action' });
+  for (const excluded of [
+    { sessionId: undefined, draftKey: 'transient-draft' },
+    { draftKey: 'queued-edit' },
+    { deviceLinkDeviceId: undefined },
+    { deviceLinkDeviceId: 'another-computer' },
+    { deviceLinkDeviceId: sharedTaskHostPeer('shared', 'host') },
+    { remoteHostId: 'ssh' },
+    { agentDeviceId: 'another-agent-computer' },
+  ]) {
+    await act(async () => { view.rerender(scene(excluded)); });
+    expect(screen.queryByRole('button', { name: 'AI Polish' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Quick action' })).toBeNull();
+    expect(view.container.querySelector('[data-plugin-composer-header]')).toBeNull();
+    expect(view.container.querySelector('[data-plugin-composer-toolbar]')).toBeNull();
+    const last = h.providerCall.mock.calls.filter(args => (args[1] as { op: string }).op === 'native-interest').at(-1);
+    expect(last?.[1]).toEqual(expect.objectContaining({ entries: [] }));
+  }
+  expect(onSend).not.toHaveBeenCalled();
+  expect(h.providerCall).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ op: 'open-resource' }));
 });
 
 // New completion contract through the real editor/selection entry. The panel is
@@ -571,6 +620,177 @@ it('lets a new SSH task with no window report reach main on model selection and 
   expect(remember).not.toHaveBeenCalled();
   expect(draft).not.toHaveBeenCalled();
   expect(effortPrefs).not.toHaveBeenCalled();
+});
+
+// Preserve the parent callbacks when SET_MODEL reports a generic deferred response.
+it('refreshes the local picker callbacks while waiting for the committed task patch', async () => {
+  h.remoteProviders = [sshNativeCodexProvider([sshModel('old'), sshModel('next')])];
+  h.setModel.mockResolvedValueOnce({ deferred: true, superseded: false });
+  const onModelDidChange = vi.fn();
+  const onEffortDidChange = vi.fn();
+  render(<ChatInput {...props} sessionId="deferred-codex" deviceLinkDeviceId={null} remoteHostId="builder"
+    runtimeAgentKind="codex" initialModel="old" initialProviderId="openai" initialEffort="low"
+    hideRuntimeControls={false} onModelDidChange={onModelDidChange} onEffortDidChange={onEffortDidChange} onSend={vi.fn()} />);
+  await act(async () => { await h.selectModel!('next'); });
+  expect(h.setModel).toHaveBeenCalledTimes(1);
+  expect(onModelDidChange).toHaveBeenCalledExactlyOnceWith('next');
+  expect(onEffortDidChange).toHaveBeenCalledOnce();
+  expect(screen.getByTestId('model-selector').textContent).toBe('old');
+});
+
+it('keeps the next remote picker choice when an earlier task patch arrives before its deferred reply', async () => {
+  const reply = Promise.withResolvers<{ deferred: boolean }>();
+  const invoke = vi.fn(async (_deviceId: string, channel: string) => {
+    if (channel === 'maker:set-model') return reply.promise;
+  });
+  const testLink = new Proxy(api.deviceLink, {
+    get: (link, key) => key === 'invoke' ? invoke : Reflect.get(link, key),
+  });
+  window.electronAPI = new Proxy(api, { get: (target, key) => key === 'deviceLink' ? testLink : Reflect.get(target, key) });
+  const onModelDidChange = vi.fn();
+  const controller = (previousModel: string, previousProvider = 'openai') => <ChatInput {...props}
+    sessionId="deferred-controller" initialProviderId={previousProvider} initialModel={previousModel} initialEffort="low"
+    hideRuntimeControls={false} onModelDidChange={onModelDidChange} onSend={vi.fn()} />;
+  const view = render(controller('old'));
+  let choice: Promise<void | boolean> | undefined;
+  act(() => { choice = h.selectModel!('next'); });
+  await waitFor(() => expect(invoke.mock.calls.some(([, channel]) => channel === 'maker:set-model')).toBe(true));
+  expect(screen.getByTestId('model-selector').textContent).toBe('next');
+  // The mirror receives an authoritative patch for the previous selection
+  // while capabilities and the current invoke receipt are still outstanding.
+  act(() => {
+    makerChatStore.mirrorSessionFields('deferred-controller', {
+      providerId: 'prior-provider', fastMode: false, agentSwitchIntent: null,
+    });
+    view.rerender(controller('prior-model', 'prior-provider'));
+  });
+  expect(screen.getByTestId('model-selector').textContent).toBe('next');
+  await act(async () => { reply.resolve({ deferred: true }); await choice; });
+  expect(invoke.mock.calls.map(([, channel]) => channel).filter(channel => channel === 'maker:set-model')).toHaveLength(1);
+  expect(onModelDidChange).toHaveBeenCalledExactlyOnceWith('next');
+  expect(screen.getByTestId('model-selector').textContent).toBe('next');
+});
+
+// Unit/jsdom. Use the real local/remote listeners and composer toast, with only the IPC edge supplied.
+describe.each(['local', 'device-link'])('deferred credential notices (%s)', transport => {
+  it.each([
+    ['codex', 'apply-failed', true, 'credentialSwitchKeptSettings'],
+    ['codex', 'apply-failed', undefined, 'credentialSwitchFailed'],
+    ['codex', 'apply-failed', false, 'credentialSwitchFailed'],
+    ['codex', 'apply-failed', 'true', 'credentialSwitchFailed'],
+    ['codex', 'rollback-failed', true, 'credentialSwitchFailed'],
+    ['pi', 'apply-failed', undefined, 'credentialSwitchFailed'],
+  ] as const)('shows %s %s with retained=%s', (runtimeAgentKind, reason, retained, key) => {
+    const originalOwner = getDataOwnerGeneration();
+    setDataOwnerGeneration('current-owner', 1);
+    const error = vi.spyOn(toast, 'error').mockImplementation(() => undefined as never);
+    let local!: Parameters<typeof api.maker.onSessionCredentialSwitchFailed>[0];
+    type RemoteListener = Parameters<typeof api.deviceLink.onRemotePush>[0];
+    const remoteListeners = new Set<RemoteListener>();
+    const remote: RemoteListener = (...args) => { for (const listener of remoteListeners) listener(...args); };
+    const testMaker = new Proxy(api.maker, {
+      get: (maker, name) => name === 'onSessionCredentialSwitchFailed'
+        ? (callback: typeof local) => { local = callback; return noOp; }
+        : Reflect.get(maker, name),
+    });
+    const testLink = new Proxy(api.deviceLink, {
+      get: (link, name) => name === 'onRemotePush'
+        ? (callback: RemoteListener) => {
+          remoteListeners.add(callback);
+          return () => { remoteListeners.delete(callback); };
+        }
+        : Reflect.get(link, name),
+    });
+    window.electronAPI = new Proxy(api, {
+      get: (target, name) => name === 'maker' ? testMaker : name === 'deviceLink' ? testLink : Reflect.get(target, name),
+    });
+    render(<ChatInput {...props} sessionId="credential-toast" deviceLinkDeviceId={transport === 'local' ? null : 'test-host'}
+      runtimeAgentKind={runtimeAgentKind} onSend={vi.fn()} />);
+    const stamp = { dataOwnerId: 'current-owner', ownerGeneration: 1 };
+    const payload = { sessionId: 'credential-toast', reason, ...(retained === undefined ? {} : { previousSettingsRetained: retained }) };
+    const push = { deviceId: 'test-host', channel: 'maker:session-credential-switch-failed', payload };
+    const localPayload = payload as Parameters<typeof local>[0];
+    try {
+      act(() => {
+        local({ ...localPayload, sessionId: 'other-task' });
+        remote({ ...push, deviceId: 'other-device' }, stamp);
+        remote({ ...push, payload: { ...payload, sessionId: 'other-task' } }, stamp);
+        remote(push, { ...stamp, ownerGeneration: 0 });
+      });
+      expect(error).not.toHaveBeenCalled();
+      act(() => {
+        // Same event on the other transport must not duplicate the active subscription.
+        local(localPayload);
+        remote(push, stamp);
+      });
+      expect(error).toHaveBeenCalledExactlyOnceWith('newChat.chatInput.' + key, { duration: 6000 });
+    } finally {
+      setDataOwnerGeneration(originalOwner.dataOwnerId, originalOwner.generation);
+    }
+  });
+});
+
+// Unit/jsdom. An existing owner-published intent remains visible in the picker.
+// The real dispatch uses the effective profile until the host projects the commit.
+it.each([null, 'test-host'])('displays a deferred choice while sending the committed profile (%s)', async (deviceLinkDeviceId) => {
+  const old = { agentKind: 'codex' as const, model: 'old', providerId: 'openai', effort: 'low' as const, fastMode: false };
+  const next = { ...old, model: 'next', providerId: 'next-provider', effort: 'high' as const, fastMode: true };
+  h.localProviders = [
+    sshNativeCodexProvider([sshModel(old.model)]),
+    { ...sshNativeCodexProvider([sshModel(next.model)]), id: next.providerId },
+  ];
+  const sessionId = 'credential-picker-' + deviceLinkDeviceId;
+  const onSend = vi.fn().mockResolvedValue(true);
+  const chat = (route: typeof old | typeof next) => <ChatInput {...props} sessionId={sessionId} deviceLinkDeviceId={deviceLinkDeviceId}
+    isStreaming={route === old} runtimeAgentKind="codex" runtimeEffective={route} initialModel={route.model}
+    initialProviderId={route.providerId} initialEffort={route.effort} hideRuntimeControls={false} onSend={onSend} />;
+  const view = render(chat(old));
+  try {
+    await act(async () => { makerChatStore.mirrorSessionFields(sessionId, {
+      agentKind: 'codex', providerId: old.providerId, fastMode: old.fastMode,
+      agentSwitchIntent: { targetAgentKind: 'codex', model: next.model, providerId: next.providerId, effort: next.effort, fastMode: next.fastMode },
+    }); });
+    view.rerender(chat(old));
+    expect(screen.getByTestId('model-selector').textContent).toBe(next.model);
+    const send = async (text: string, button: 'queue' | 'send') => {
+      await act(async () => { h.editor!.commands.setContent('<p>' + text + '</p>'); });
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'newChat.sendButton.' + button })); });
+    };
+    await send('while pending', 'queue');
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+    expect(onSend.mock.calls[0].slice(0, 3)).toEqual(['while pending', old.model, old.effort]);
+    expect(onSend.mock.calls[0][6]).toMatchObject({ providerId: old.providerId });
+    expect(buildCreateOptsForCurrentSession(sessionId, old.model, old.effort, 'default', '/tmp'))
+      .toMatchObject({ model: old.model, effort: old.effort, providerId: old.providerId, fastMode: old.fastMode });
+    await act(async () => { makerChatStore.mirrorSessionFields(sessionId, {
+      agentKind: 'codex', providerId: next.providerId, fastMode: next.fastMode, runtimeEffective: next, agentSwitchIntent: null,
+    }); });
+    view.rerender(chat(next));
+    await send('after commit', 'send');
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2));
+    expect(onSend.mock.calls[1].slice(0, 3)).toEqual(['after commit', next.model, next.effort]);
+    expect(onSend.mock.calls[1][6]).toMatchObject({ providerId: next.providerId });
+    expect(buildCreateOptsForCurrentSession(sessionId, next.model, next.effort, 'default', '/tmp'))
+      .toMatchObject({ model: next.model, effort: next.effort, providerId: next.providerId, fastMode: next.fastMode });
+  } finally {
+    makerChatStore.clearAgentSwitchIntent(sessionId);
+  }
+});
+
+it('renders an SSH task’s existing same-engine intent without querying for a new one', async () => {
+  const sessionId = 'ssh-credential-preview';
+  h.remoteProviders = [sshNativeCodexProvider([sshModel('old'), sshModel('next')])];
+  makerChatStore.mirrorSessionFields(sessionId, {
+    agentKind: 'codex', agentSwitchIntent: { targetAgentKind: 'codex', model: 'next', providerId: 'openai' },
+  });
+  try {
+    render(<ChatInput {...props} sessionId={sessionId} deviceLinkDeviceId={null} remoteHostId="builder"
+      runtimeAgentKind="codex" initialModel="old" initialProviderId="openai" hideRuntimeControls={false} onSend={vi.fn()} />);
+    expect(screen.getByTestId('model-selector').textContent).toBe('next');
+    expect(h.setModel).not.toHaveBeenCalled();
+  } finally {
+    makerChatStore.clearAgentSwitchIntent(sessionId);
+  }
 });
 
 it('sends a remote-only Codex model when the controller has no connected providers', async () => {

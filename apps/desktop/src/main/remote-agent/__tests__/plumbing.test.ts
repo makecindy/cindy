@@ -3,7 +3,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { LOCAL_AGENT_CLIENT, MAIN_OWNED_SEND_CONTEXT, type AgentEvent, type InteractionDecision } from '@cindy/maker-core';
+import {
+  AUTO_REVIEW_USER_INTENT,
+  LOCAL_AGENT_CLIENT,
+  MAIN_OWNED_SEND_CONTEXT,
+  type AgentEvent,
+  type InteractionDecision,
+} from '@cindy/maker-core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -574,7 +580,7 @@ describe('confirmations raised on this computer', () => {
     expect(await controller.confirm(request)).toBe(false);
     expect(credentialConfirmation({ kind: 'exec', command: 'cat .env', cwd: root }, 'x')).toMatchObject({
       toolName: 'Bash',
-      input: { command: 'cat .env' },
+      input: { command: 'cat .env', cwd: root },
     });
   });
 
@@ -680,6 +686,111 @@ describe('exec-server relay gate', () => {
       kind: 'permission', requestId: 'r', toolName: 'mcp__cindy_exec__WebFetch', input: { url: ' http://10.0.0.5/wiki ', prompt: 'x' },
     }, workspace)).toEqual([{ kind: 'fetch', url: 'http://10.0.0.5/wiki' }]);
     expect(approvalActionsFor({ kind: 'ask_user_question', requestId: 'r', questions: [] }, workspace)).toEqual([]);
+  });
+
+  // PR #11698: a generic ACP confirmation previously minted a local command or
+  // write grant from its arguments alone. This unit exercises the resulting
+  // grants and the real executor gate, which built-in-tool cases don't cover.
+  it('records only the canonical operation shown on a plugin engine confirmation', () => {
+    const workspace = new ExecutorWorkspace({ workingDir: root });
+    const acp = { acpToolKind: 'other', acpOptions: [{ name: 'Allow', kind: 'allow_once' }] };
+    expect(approvalActionsFor({
+      kind: 'permission', requestId: 'r', toolName: 'cindy_exec · Bash', input: { command: 'rm -rf build' }, metadata: acp,
+    }, workspace, true)).toEqual([]);
+    expect(approvalActionsFor({
+      kind: 'permission', requestId: 'r', toolName: 'Bash', input: { command: 'rm -rf build' },
+    }, workspace, true)).toEqual([{ kind: 'exec', command: 'rm -rf build', cwd: root }]);
+    expect(approvalActionsFor({
+      kind: 'permission', requestId: 'r', toolName: 'Write',
+      input: { file_path: '.env', content: 'A=1', changes: [{ path: 'hidden.txt' }] },
+    }, workspace, true)).toEqual([{ kind: 'write', path: path.join(root, '.env') }]);
+    const gate = new ExecutorGate(workspace, 'normal');
+    const target = path.join(root, '.env');
+    for (const approval of approvalActionsFor({
+      kind: 'permission', requestId: 'r', toolName: 'Read', input: { file_path: '.env' },
+    }, workspace, true)) gate.recordApproval(approval);
+    expect(gate.authorize({ kind: 'read', path: target }).ok).toBe(true);
+    expect(gate.authorize({ kind: 'write', path: target }).ok).toBe(false);
+  });
+
+  // PR #11698: the controller must show and grant the cwd used by the executor.
+  // Existing grant checks only use the workspace root. One Bash in a different
+  // cwd exposes the mismatch through the real reverse-interaction handler.
+  it('shows the live shell directory and binds the approval to it', async () => {
+    const workspace = new ExecutorWorkspace({ workingDir: root });
+    const cwd = path.join(root, 'project');
+    const recordApproval = vi.fn();
+    const controller = createRemoteAgentHandle({
+      client: {} as RemoteAgentRunClient,
+      started: { id: 'acp-1', agentKind: 'acp', model: 'm', shadowDir: '', methods: [], state: {} },
+      workspace,
+      getExecutorCwd: () => cwd,
+      recordApproval,
+      newId: () => 'req',
+      dispose: async () => undefined,
+    });
+    const show = vi.fn(async () => ({ kind: 'permission', behavior: 'allow' } as const));
+    controller.handle.setInteractionResolver(show);
+    const command = 'rm -rf build';
+    await controller.onRequest({
+      type: 'interaction',
+      request: { kind: 'permission', requestId: 'bash-1', toolName: 'Bash', input: { command } },
+    });
+    expect(show).toHaveBeenCalledWith(expect.objectContaining({ input: { command, cwd } }));
+    expect(recordApproval).toHaveBeenCalledExactlyOnceWith({ kind: 'exec', command, cwd });
+  });
+
+  // 回归测试：远程句柄需透传宿主机上报的 requiresRuntimeRecycleForExtraDirs，并在旧版宿主机省略该字段时
+  // 对 ACP 句柄按 negotiatedCapabilities.extraDirs 安全降级（缺省 true），且 onReconnected 不残留旧值。tier: unit。
+  it('forwards requiresRuntimeRecycleForExtraDirs and falls back cleanly for older remote hosts', () => {
+    const workspace = new ExecutorWorkspace({ workingDir: root });
+    const makeController = (agentKind: 'acp' | 'claude-code', state: Record<string, unknown>) =>
+      createRemoteAgentHandle({
+        client: {} as RemoteAgentRunClient,
+        started: { id: 's1', agentKind, model: 'm', shadowDir: '', methods: [], state },
+        workspace,
+        recordApproval: vi.fn(),
+        newId: () => 'req',
+        dispose: async () => undefined,
+      });
+
+    // Explicit host flag wins over negotiatedCapabilities.
+    expect(makeController('acp', {
+      requiresRuntimeRecycleForExtraDirs: false,
+      negotiatedCapabilities: { extraDirs: { supported: true } },
+    }).handle.requiresRuntimeRecycleForExtraDirs?.()).toBe(false);
+    expect(makeController('acp', {
+      requiresRuntimeRecycleForExtraDirs: true,
+      negotiatedCapabilities: { extraDirs: { supported: false } },
+    }).handle.requiresRuntimeRecycleForExtraDirs?.()).toBe(true);
+
+    // Older remote host omitting the flag: ACP falls back to negotiatedCapabilities.extraDirs (defaulting true).
+    expect(makeController('acp', {
+      negotiatedCapabilities: { extraDirs: { supported: true } },
+    }).handle.requiresRuntimeRecycleForExtraDirs?.()).toBe(true);
+    expect(makeController('acp', {
+      negotiatedCapabilities: { extraDirs: { supported: false } },
+    }).handle.requiresRuntimeRecycleForExtraDirs?.()).toBe(false);
+    expect(makeController('acp', {}).handle.requiresRuntimeRecycleForExtraDirs?.()).toBe(true);
+
+    // Non-ACP remote engines never trigger ACP handshake recycling.
+    expect(makeController('claude-code', {}).handle.requiresRuntimeRecycleForExtraDirs?.()).toBe(false);
+
+    // Reconnecting clears a stale flag when the new remote state omits it.
+    const reconnecting = makeController('acp', {
+      requiresRuntimeRecycleForExtraDirs: true,
+      negotiatedCapabilities: { extraDirs: { supported: true } },
+    });
+    expect(reconnecting.handle.requiresRuntimeRecycleForExtraDirs?.()).toBe(true);
+    reconnecting.onReconnected({
+      id: 's1',
+      agentKind: 'acp',
+      model: 'm',
+      shadowDir: '',
+      methods: [],
+      state: { negotiatedCapabilities: { extraDirs: { supported: false } } },
+    });
+    expect(reconnecting.handle.requiresRuntimeRecycleForExtraDirs?.()).toBe(false);
   });
 });
 
@@ -832,6 +943,121 @@ describe('wire payloads', () => {
     expect(references?.quotedMessages?.[0]).not.toHaveProperty('extra');
     const legacy = await decodeSendOptions({ cindy: { mainOwned: { origin: { kind: 'im', channel: 'telegram' }, rawChannelText: 'x' } } }, callbacks);
     expect(legacy[MAIN_OWNED_SEND_CONTEXT]).toEqual({ origin: { kind: 'im', channel: 'telegram' }, rawChannelText: 'x' });
+
+    // Local Host attachment file paths must never cross the remote wire in either direction.
+    const localBlob = '/Users/alice/Library/Application Support/Cindy/cindy-media/blobs/abcd1234.mp4';
+    const encodedWithPath = await encodeSendOptions({
+      [MAIN_OWNED_SEND_CONTEXT]: {
+        origin: { kind: 'im', channel: 'telegram' },
+        rawChannelText: '帮我看这个视频',
+        autoReviewReferences: {
+          attachments: { images: 0, files: 1 },
+          readOnlyAttachmentPaths: [localBlob],
+        },
+      },
+    }, async () => Buffer.alloc(0));
+    expect(encodedWithPath.wire.cindy?.mainOwned?.autoReviewReferences).toEqual({
+      attachments: { images: 0, files: 1 },
+    });
+    const encodedPathOnly = await encodeSendOptions({
+      [MAIN_OWNED_SEND_CONTEXT]: {
+        origin: { kind: 'im', channel: 'telegram' },
+        rawChannelText: '这是啥',
+        autoReviewReferences: { readOnlyAttachmentPaths: [localBlob] },
+      },
+    }, async () => Buffer.alloc(0));
+    expect(encodedPathOnly.wire.cindy?.mainOwned?.autoReviewReferences).toBeUndefined();
+    const peerInjectedPath = await decodeSendOptions({
+      cindy: {
+        mainOwned: {
+          origin: { kind: 'im', channel: 'telegram' },
+          rawChannelText: '帮我看这个视频',
+          autoReviewReferences: {
+            attachments: { images: 0, files: 1 },
+            readOnlyAttachmentPaths: [localBlob],
+          },
+        },
+      },
+    }, callbacks);
+    expect(peerInjectedPath[MAIN_OWNED_SEND_CONTEXT]?.autoReviewReferences).toEqual({
+      attachments: { images: 0, files: 1 },
+    });
+  });
+
+  // PR #13355 review (unit): AUTO_REVIEW_USER_INTENT also travels on cindy wire and can carry
+  // currentUserReferences.readOnlyAttachmentPaths. Prior tests only checked mainOwned.autoReviewReferences;
+  // minimal object intents on encode and decode prove local paths and extra keys never cross the wire.
+  it('strips readOnlyAttachmentPaths from AUTO_REVIEW_USER_INTENT on both encode and decode', async () => {
+    const callbacks = { onTranscriptUserEntry: async () => {}, onInteractionStateChange: () => {}, writeAttachment: async () => '' };
+    const localBlob = '/Users/alice/Library/Application Support/Cindy/cindy-media/blobs/abcd1234.mp4';
+
+    const encoded = await encodeSendOptions({
+      [AUTO_REVIEW_USER_INTENT]: {
+        earlierUserMessages: ['不要删文件'],
+        currentUserMessage: '帮我看这个视频',
+        historyOmitted: true,
+        currentUserReferences: {
+          attachments: { images: 0, files: 1 },
+          quotedMessages: [{ author: '群友', text: '[视频]', attachmentCount: 1 }],
+          readOnlyAttachmentPaths: [localBlob],
+        },
+      },
+    }, async () => Buffer.alloc(0));
+    expect(encoded.wire.cindy?.autoReviewUserIntent).toEqual({
+      earlierUserMessages: ['不要删文件'],
+      currentUserMessage: '帮我看这个视频',
+      historyOmitted: true,
+      currentUserReferences: {
+        attachments: { images: 0, files: 1 },
+        quotedMessages: [{ author: '群友', text: '[视频]', attachmentCount: 1 }],
+      },
+    });
+
+    const encodedPathOnly = await encodeSendOptions({
+      [AUTO_REVIEW_USER_INTENT]: {
+        earlierUserMessages: [],
+        currentUserMessage: '看下这个',
+        currentUserReferences: { readOnlyAttachmentPaths: [localBlob] },
+      },
+    }, async () => Buffer.alloc(0));
+    expect(encodedPathOnly.wire.cindy?.autoReviewUserIntent).toEqual({
+      earlierUserMessages: [],
+      currentUserMessage: '看下这个',
+    });
+
+    const peerInjected = await decodeSendOptions({
+      cindy: {
+        autoReviewUserIntent: {
+          earlierUserMessages: ['只读分析'],
+          currentUserMessage: '看这个视频',
+          historyOmitted: true,
+          extraField: 'drop-me',
+          currentUserReferences: {
+            attachments: { images: 1, files: 0 },
+            quotedMessages: [{ author: '群友', text: 'x'.repeat(10_000), extra: 'grant' }],
+            readOnlyAttachmentPaths: [localBlob],
+          },
+        },
+      },
+    }, callbacks);
+    const decodedIntent = peerInjected[AUTO_REVIEW_USER_INTENT];
+    expect(decodedIntent).toMatchObject({
+      earlierUserMessages: ['只读分析'],
+      currentUserMessage: '看这个视频',
+      historyOmitted: true,
+      currentUserReferences: {
+        attachments: { images: 1, files: 0 },
+      },
+    });
+    expect(decodedIntent).not.toHaveProperty('extraField');
+    if (decodedIntent && typeof decodedIntent === 'object') {
+      expect(decodedIntent.currentUserReferences?.readOnlyAttachmentPaths).toBeUndefined();
+      expect(decodedIntent.currentUserReferences?.quotedMessages?.[0]?.text.length).toBeLessThanOrEqual(600);
+      expect(decodedIntent.currentUserReferences?.quotedMessages?.[0]).not.toHaveProperty('extra');
+    }
+
+    const plainDecoded = await decodeSendOptions({ cindy: { autoReviewUserIntent: '仅查看' } }, callbacks);
+    expect(plainDecoded[AUTO_REVIEW_USER_INTENT]).toBe('仅查看');
   });
 });
 

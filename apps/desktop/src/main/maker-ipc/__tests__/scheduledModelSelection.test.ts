@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { providerShareGuestPeer, sharedTaskGuestPeer } from '@cindy/device-link';
 import type { CatalogModel, ProviderView } from '@cindy/model-providers';
 import {
   applyScheduledModelSelection,
@@ -7,6 +8,7 @@ import {
   createScheduledModelSelectionResolver,
   reconcileScheduledModelRouteBeforeBaseline,
   resolveScheduledModelSelection,
+  resolveScheduledModelSelectionWithRefresh,
   type ScheduledModelSelection,
   ScheduledModelSelectionBusyError,
 } from '../scheduledModelSelection';
@@ -61,6 +63,26 @@ describe('one-run automation model preferences', () => {
     const scope = createScheduledModelScope({ ...h.deps, write: async () => false });
     await expect(scope.restore('task')).rejects.toThrow('changed');
     expect(h.state().baseline).not.toBeNull();
+  });
+  // Unit regression: uncertainty must not invoke the recovery for a removed model
+  // and discard the owner's saved choice. Exercise real resolution through restore.
+  it.each(['owner-provider', null])('keeps the saved baseline with source %s when its catalog cannot be confirmed', async providerId => {
+    const h = scopeFixture();
+    await h.deps.apply('task', { ...h.original, providerId });
+    await h.scope.begin('task');
+    h.automate();
+    const before = h.state();
+    const recoverUnavailableBaseline = vi.fn(async () => true);
+    const scope = createScheduledModelScope({ ...h.deps, recoverUnavailableBaseline,
+      apply: async (_id, saved) => resolveScheduledModelSelection(saved, [{
+        ...provider('owner-provider'), agents: ['codex'],
+        routing: { codex: { upstream: 'https://example.test', authStrategy: 'oauth-passthrough' } },
+        subscriptionReadUnavailable: true, models: { codex: [] },
+      }]),
+    });
+    await expect(scope.restore('task')).rejects.toThrow('MODEL_CATALOG_UNCONFIRMED');
+    expect(h.state()).toEqual(before);
+    expect(recoverUnavailableBaseline).not.toHaveBeenCalled();
   });
   it.each(['same-process', 'restart'])('restores all owner settings after %s', async (mode) => {
     const h = scopeFixture();
@@ -763,5 +785,258 @@ describe('automation restore uses the execution computer', () => {
     await expect(h.scope.restore('task')).rejects.toThrow('provider unavailable');
     expect(h.remote).not.toHaveBeenCalled();
     expect(h.state().baseline).not.toBeNull();
+  });
+});
+
+// Unit regression: a missing model in a stale subscription directory must recover
+// before automation dispatch, and uncertainty must not retire the owner's baseline.
+describe('scheduled model discovery recovery', () => {
+  const missing = (): ProviderView => ({ ...provider('custom'), subscriptionAccountPool: 'openai',
+    subscriptionReadUnavailable: true, models: { pi: [] } });
+  it.each(['custom', null])('recovers the same saved model with source %s before returning its route', async providerId => {
+    const readProviders = vi.fn().mockResolvedValueOnce([missing()]).mockResolvedValue([provider('custom')]);
+    const refreshProvider = vi.fn(async () => {});
+    expect(await resolveScheduledModelSelectionWithRefresh({ ...selection, providerId }, { readProviders, refreshProvider, assertCurrent: () => {} }))
+      .toMatchObject({ model: selection.model, providerId: selection.providerId });
+    expect(refreshProvider).toHaveBeenCalledExactlyOnceWith('custom');
+  });
+  it.each([true, false].flatMap(uncertain => ['custom', null].map(providerId => ({ uncertain, providerId }))))
+  ('classifies still missing membership with uncertain=$uncertain and source=$providerId', async ({ uncertain, providerId }) => {
+    const view: ProviderView = { ...missing(), subscriptionReadUnavailable: uncertain ? true : undefined };
+    const refreshProvider = vi.fn(async () => {});
+    await expect(resolveScheduledModelSelectionWithRefresh({ ...selection, providerId }, {
+      readProviders: async () => [view], refreshProvider, assertCurrent: () => {},
+    })).rejects.toThrow(uncertain ? 'MODEL_CATALOG_UNCONFIRMED' : 'MODEL_SELECTION_UNAVAILABLE');
+    expect(refreshProvider).toHaveBeenCalledOnce();
+  });
+  it('preserves an already resolvable implicit route and never refreshes an unrelated explicit source', async () => {
+    const views = [missing(), provider('available')];
+    const refreshProvider = vi.fn(async () => {});
+    const deps = { readProviders: async () => views, refreshProvider, assertCurrent: () => {} };
+    await expect(resolveScheduledModelSelectionWithRefresh({ ...selection, providerId: null }, deps))
+      .resolves.toMatchObject({ providerId: 'available', model: selection.model });
+    await expect(resolveScheduledModelSelectionWithRefresh({ ...selection, providerId: 'removed' }, deps))
+      .rejects.toThrow('MODEL_SELECTION_UNAVAILABLE');
+    expect(refreshProvider).not.toHaveBeenCalled();
+  });
+  it('keeps suspension authoritative and rejects an owner switch during refresh', async () => {
+    const refreshProvider = vi.fn(async () => {});
+    await expect(resolveScheduledModelSelectionWithRefresh(selection, {
+      readProviders: async () => [{ ...missing(), suspended: true }], refreshProvider, assertCurrent: () => {},
+    })).rejects.toThrow('MODEL_SELECTION_UNAVAILABLE');
+    expect(refreshProvider).not.toHaveBeenCalled();
+    let current = true;
+    await expect(resolveScheduledModelSelectionWithRefresh(selection, {
+      readProviders: async () => [missing()], refreshProvider: async () => { current = false; },
+      assertCurrent: () => { if (!current) throw new Error('owner changed'); },
+    })).rejects.toThrow('owner changed');
+  });
+});
+
+// Greptile P1 regression: a temporary switch to a plugin engine narrows permissionMode to a mode
+// that plugin supports (e.g. acceptEdits → default). The scheduled baseline must capture and
+// restore the owner's original permissionMode across both built-in and cross-plugin switches.
+describe('scheduled baseline permissionMode preservation', () => {
+  it('captures permissionMode once and restores it after temporary plugin switches narrow the row', async () => {
+    let profile: ScheduledModelSelection = {
+      agentKind: 'claude-code',
+      agentDeviceId: null,
+      model: 'claude-sonnet-4-6',
+      providerId: 'anthropic',
+      effort: 'high',
+      fastMode: false,
+      permissionMode: 'acceptEdits',
+    };
+    let baseline: string | null = null;
+    const switchHarness = vi.fn(async (route: ScheduledModelSelection) => {
+      profile = {
+        ...route,
+        permissionMode: route.agentKind === 'acp' ? 'default' : (route.permissionMode ?? profile.permissionMode),
+      };
+      return { engineReady: true };
+    });
+    const applyModel = vi.fn(async (route: ScheduledModelSelection) => {
+      profile = { ...profile, ...route };
+    });
+    const scope = createScheduledModelScope({
+      createId: () => 'scope-perm',
+      read: async () => ({ profile, baseline }),
+      write: async (_id, value) => { baseline = value ? JSON.stringify(value) : null; },
+      isBusy: () => false,
+      apply: async (_id, route) => applyScheduledModelSelection(route, {
+        getTarget: async () => ({
+          agentKind: profile.agentKind,
+          providerId: profile.providerId,
+          agentDeviceId: profile.agentDeviceId,
+          status: 'active',
+          source: 'desktop',
+        }),
+        isBusy: () => false,
+        resolveSelection: async (next) => next,
+        switchHarness,
+        applyModel,
+      }),
+    });
+
+    await scope.begin('task');
+    // Temporary switch to plugin engine narrows permissionMode to 'default'.
+    await applyScheduledModelSelection({
+      agentKind: 'acp',
+      agentDeviceId: null,
+      model: 'gemini-4',
+      providerId: 'acp-plugin:agy:agy',
+      effort: 'high',
+      fastMode: false,
+    }, {
+      getTarget: async () => ({ agentKind: profile.agentKind, providerId: profile.providerId, agentDeviceId: null, status: 'active', source: 'desktop' }),
+      isBusy: () => false,
+      resolveSelection: async (next) => next,
+      switchHarness,
+      applyModel,
+    });
+    expect(profile.permissionMode).toBe('default');
+    // A second automation reuses the original baseline without overwriting its saved permissionMode.
+    await scope.begin('task');
+    expect(JSON.parse(baseline!)).toMatchObject({ permissionMode: 'acceptEdits' });
+
+    // Restoring the original built-in engine passes permissionMode='acceptEdits' back through switchHarness.
+    await scope.restore('task');
+    expect(baseline).toBeNull();
+    expect(switchHarness).toHaveBeenLastCalledWith(expect.objectContaining({
+      agentKind: 'claude-code',
+      permissionMode: 'acceptEdits',
+    }));
+    expect(profile.permissionMode).toBe('acceptEdits');
+  });
+
+  // 2026-11-26: a bound task on a remote plugin engine (e.g. Antigravity on Mac Studio) must be
+  // able to switch temporarily to a local built-in model (PR auto-follow) and restore back to the
+  // remote plugin engine with its agentDeviceId and permissionMode intact; temporary remote
+  // unreachability must preserve the baseline for retry, while raw wire peers stay refused.
+  it('switches a remote plugin-engine task to local built-in and restores remote ACP with device and permissionMode', async () => {
+    const REMOTE_ENGINE = 'acp-plugin:antigravity:agy';
+    let profile: ScheduledModelSelection = {
+      agentKind: 'acp',
+      agentDeviceId: 'studio',
+      model: 'gemini-3-pro',
+      providerId: REMOTE_ENGINE,
+      effort: 'high',
+      fastMode: false,
+      permissionMode: 'bypassPermissions',
+    };
+    let baseline: string | null = null;
+    let studioOnline = true;
+    const resolveSelection = createScheduledModelSelectionResolver({
+      readRemoteProviders: async () => [],
+      readSshCodexProviders: async () => [],
+      resolveLocalSelection: async (route) => route,
+      resolvePluginEngineSelection: async (route) => {
+        if (route.agentDeviceId === 'studio' && !studioOnline) {
+          throw new Error('[REMOTE_AGENT_DEVICE_UNREACHABLE] studio offline');
+        }
+        return route;
+      },
+    });
+    const switchHarness = vi.fn(async (route: ScheduledModelSelection) => {
+      profile = {
+        ...route,
+        agentDeviceId: route.agentDeviceId ?? null,
+        permissionMode: route.permissionMode ?? 'default',
+      };
+      return { engineReady: true };
+    });
+    const applyModel = vi.fn(async (route: ScheduledModelSelection) => {
+      profile = { ...profile, ...route };
+    });
+    const apply = (route: ScheduledModelSelection) => applyScheduledModelSelection(route, {
+      getTarget: async () => ({
+        agentKind: profile.agentKind,
+        providerId: profile.providerId,
+        agentDeviceId: profile.agentDeviceId,
+        status: 'active',
+        source: 'desktop',
+      }),
+      isBusy: () => false,
+      resolveSelection,
+      switchHarness,
+      applyModel,
+    });
+    const recoverUnavailableBaseline = vi.fn(async () => true);
+    const scope = createScheduledModelScope({
+      createId: () => 'remote-acp-scope',
+      read: async () => ({ profile, baseline }),
+      write: async (_id, value) => { baseline = value ? JSON.stringify(value) : null; },
+      isBusy: () => false,
+      apply: async (_id, route) => apply(route),
+      recoverUnavailableBaseline,
+    });
+
+    await scope.begin('task');
+    expect(JSON.parse(baseline!)).toMatchObject({
+      agentKind: 'acp',
+      agentDeviceId: 'studio',
+      providerId: REMOTE_ENGINE,
+      permissionMode: 'bypassPermissions',
+    });
+
+    // Temporary switch to local Codex override succeeds.
+    await apply({
+      agentKind: 'codex',
+      agentDeviceId: null,
+      model: 'gpt-5.4',
+      providerId: 'openai',
+      effort: 'medium',
+      fastMode: false,
+    });
+    expect(profile).toMatchObject({ agentKind: 'codex', agentDeviceId: null, model: 'gpt-5.4' });
+
+    // If the remote computer is temporarily unreachable on restore, retain the saved baseline.
+    studioOnline = false;
+    await expect(scope.restore('task')).rejects.toThrow('REMOTE_AGENT_DEVICE_UNREACHABLE');
+    expect(baseline).not.toBeNull();
+    expect(recoverUnavailableBaseline).not.toHaveBeenCalled();
+
+    // Once reachable again, restore switches back to the remote plugin engine with its device and mode.
+    studioOnline = true;
+    await scope.restore('task');
+    expect(baseline).toBeNull();
+    expect(profile).toMatchObject({
+      agentKind: 'acp',
+      agentDeviceId: 'studio',
+      providerId: REMOTE_ENGINE,
+      model: 'gemini-3-pro',
+      permissionMode: 'bypassPermissions',
+    });
+
+    // Raw wire peers remain refused for both target and destination plugin-engine locations.
+    expect(() => assertScheduledHarnessSupported(
+      { agentKind: 'acp', status: 'active', source: 'desktop', agentDeviceId: sharedTaskGuestPeer('task-1', 'member-1', 'peer-1') },
+      'codex',
+      null,
+    )).toThrow('cannot be used for scheduled tasks');
+    expect(() => assertScheduledHarnessSupported(
+      { agentKind: 'codex', status: 'active', source: 'desktop' },
+      'acp',
+      providerShareGuestPeer('share-1', 'member-1', 'peer-2'),
+    )).toThrow('cannot be used for scheduled tasks');
+
+    // Standalone scheduler-created tasks (e.g. a PR created inside an automation run)
+    // can also switch to/from a plugin engine, while IM and teammate routines stay refused.
+    expect(() => assertScheduledHarnessSupported(
+      { agentKind: 'acp', status: 'active', source: 'scheduler', providerId: REMOTE_ENGINE },
+      'codex',
+      null,
+    )).not.toThrow();
+    expect(() => assertScheduledHarnessSupported(
+      { agentKind: 'codex', status: 'active', source: 'scheduler' },
+      'acp',
+      'studio',
+      REMOTE_ENGINE,
+    )).not.toThrow();
+    expect(() => assertScheduledHarnessSupported(
+      { agentKind: 'acp', status: 'active', source: 'feishu', providerId: REMOTE_ENGINE },
+      'codex',
+      null,
+    )).toThrow('This task cannot switch to or from a plugin engine');
   });
 });

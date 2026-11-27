@@ -72,6 +72,16 @@ const validReq = {
 };
 
 describe('GhostScheduleSlot 资格审', () => {
+  it('suggests only the calling instance’s approved check and never adopts an existing schedule', () => {
+    const ghost = scheduleGhost({ namespace: null });
+    ghost.manifest.subscribe = { hooks: ['will-schedule-run'] };
+    const { slot, pushes } = makeSlot({ getGhost: () => ghost });
+    expect(slot.handleRequest('sched-ghost', { ...validReq, preRunCheck: true })).toMatchObject({ ok: false });
+    expect(pushes).toHaveLength(0);
+    ghost.approvedControlPoints = ['will-schedule-run'];
+    expect(slot.handleRequest('sched-ghost', { ...validReq, preRunCheck: true })).toEqual({ ok: true });
+    expect(pushes[0].preRunPlugin).toEqual({ pluginId: 'sched-ghost', onFailure: 'allow' });
+  });
   it('声明了 agent.schedule:true 才放行', () => {
     const { slot, pushes } = makeSlot();
     expect(slot.handleRequest('sched-ghost', validReq)).toEqual({ ok: true });
@@ -207,6 +217,14 @@ describe('GhostScheduleSlot 骚扰钳制', () => {
 });
 
 describe('GhostScheduleSlot 推送内容', () => {
+  it('binds a mobile draft to its installed instance rather than a same-named root plugin', () => {
+    const ghost = scheduleGhost({ namespace: 'acme', namespaceState: 'confirmed' });
+    ghost.instanceKey = '_ns__acme__sched-ghost';
+    const sendToMobile = vi.fn(() => true);
+    const { slot } = makeSlot({ getGhost: () => ghost, sendToMobile });
+    expect(slot.handleRequest('sched-ghost', { ...validReq, mobilePageId: 'phone' })).toEqual({ ok: true });
+    expect(sendToMobile).toHaveBeenCalledWith('phone', expect.objectContaining({ ghostId: 'sched-ghost' }), '_ns__acme__sched-ghost');
+  });
   it('企业实例的预填提示带上 namespace', () => {
     const { slot, pushes } = makeSlot({
       getGhost: () => scheduleGhost({ namespace: 'acme', namespaceState: 'confirmed' }),
@@ -226,6 +244,34 @@ describe('GhostScheduleSlot 推送内容', () => {
     expect(slot.handleRequest('sched-ghost', validReq)).toEqual({ ok: true });
     expect(pushes[0].namespace).toBeUndefined();
     expect(pushes[0].prompt).toContain('不要传 namespace');
+  });
+
+  it('derives the execution binding from an approved device-sync plugin, never from draft input', () => {
+    const ghost = scheduleGhost({ namespace: 'acme', namespaceState: 'confirmed' });
+    const sendToMobile = vi.fn(() => true);
+    const { slot, pushes } = makeSlot({ getGhost: () => ghost, sendToMobile });
+    expect(slot.handleRequest('sched-ghost', { ...validReq, primaryDeviceOnly: true })).toMatchObject({ ok: false });
+    ghost.manifest.deviceSync = true;
+    expect(slot.handleRequest('sched-ghost', { ...validReq, primaryDeviceOnly: true, mobilePageId: 'controller', primaryHostKey: 'public/other' })).toEqual({ ok: true });
+    expect(pushes[0].primaryHostKey).toBe('org.acme/sched-ghost');
+    expect(sendToMobile).not.toHaveBeenCalled();
+  });
+
+  it('retains both the primary-computer binding and the approved no-model check', () => {
+    const ghost = scheduleGhost({ namespace: null, namespaceState: 'confirmed' });
+    ghost.manifest.deviceSync = true;
+    ghost.manifest.subscribe = { hooks: ['will-schedule-run'] };
+    ghost.approvedControlPoints = ['will-schedule-run'];
+    const sendToMobile = vi.fn(() => true);
+    const { slot, pushes } = makeSlot({ getGhost: () => ghost, sendToMobile });
+    expect(slot.handleRequest('sched-ghost', {
+      ...validReq, primaryDeviceOnly: true, preRunCheck: true, mobilePageId: 'controller',
+    })).toEqual({ ok: true });
+    expect(pushes[0]).toMatchObject({
+      primaryHostKey: 'public/sched-ghost',
+      preRunPlugin: { pluginId: 'sched-ghost', onFailure: 'allow' },
+    });
+    expect(sendToMobile).not.toHaveBeenCalled();
   });
 
   it('已确认 root 显式带上 namespace null', () => {
@@ -387,6 +433,15 @@ describe('选窗回落:右侧栏弹出窗口聚焦时只能落到主窗口', () 
 });
 
 describe('isMainShellWindowUrl（投给哪个窗口的判据）', () => {
+  it.each(['direct', 'files', 'recording'])('excludes the %s transport renderer', mode => {
+    expect(isMainShellWindowUrl(`http://localhost:5175/index.html?mode=${mode}`)).toBe(false);
+  });
+  it.each(['cloudLoginWindow', 'recordingPreview', 'remoteDesktopViewer', 'resourceUsageWindow',
+    'regionScreenshot', 'regionScreenshotEditor', 'regionScreenshotPin', 'quotaTray'])(
+    'does not send a native draft into the %s renderer', key => {
+      expect(isMainShellWindowUrl(`http://localhost:5173/?${key}=1#/resource-usage-window`)).toBe(false);
+    },
+  );
   it.each([
     ['主窗口', 'file:///app/index.html#/cc-agent'],
     ['主窗口带其它 query', 'file:///app/index.html?foo=1#/cc-agent/scheduled'],

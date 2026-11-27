@@ -15,6 +15,8 @@ const links: Record<string, ProviderSetupLink> = {
   openai: key('https://platform.openai.com/api-keys'),
   xai: key('https://console.x.ai/team/default/api-keys'),
   openrouter: key('https://openrouter.ai/settings/keys'),
+  tokenrhythm: key('https://tokenrhythm.studio/account/keys'),
+  'command-code': key('https://commandcode.ai/settings/keys'),
   openhubs: key('https://openhubs.zhidemai.com/console/api-keys'),
   hinoki: account('https://app.hinoki.security'),
   'iflytek-maas': key('https://maas.xfyun.cn/apikey'),

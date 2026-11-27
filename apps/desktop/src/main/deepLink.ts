@@ -116,6 +116,7 @@ export type DeepLinkPayload =
       type: 'settings';
       tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot';
       connect?: string;
+      focusDeviceId?: string;
       intent?: 'topup';
       /** 仅 im-bot:定位到「官方」(cindy) 或「个人」(personal) 分区。 */
       imGroup?: 'cindy' | 'personal';
@@ -214,6 +215,10 @@ export function parseDeepLink(url: string): DeepLinkPayload | null {
     return null;
   }
   if (!decoded) return null;
+  if (type === 'devices') {
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(rawValue)) return null;
+    return { type: 'settings', tab: 'remote-control', focusDeviceId: rawValue };
+  }
   if (type === 'session') {
     const messageClientId = parseSessionQueryParam(rawValue, 'message');
     const deviceId = parseSessionQueryParam(rawValue, 'device');
@@ -459,13 +464,15 @@ export function handleIncomingShareFile(filePath: string, source: string, owner?
 }
 
 /**
- * 把主窗口拉回前台。Windows 的外部协议唤起需要先激活应用并提升目标窗口
+ * 把指定应用窗口拉回前台。Windows 的外部协议唤起需要先激活应用并提升目标窗口
  * z-order；其它平台短暂置顶后 focus，macOS 再使用 app.focus steal 从其它
  * 前台应用手里抢回焦点。
  * 窗口不存在 / 已销毁时返回 false,调用方自行决定是否忽略。
  */
-export function focusMainWindow(platform: NodeJS.Platform = process.platform): boolean {
-  const win = mainWindowRef;
+export function focusAppWindow(
+  win: BrowserWindow | null,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
   if (!win || win.isDestroyed()) return false;
   cancelPendingWindowHide(win);
   if (!win.isVisible()) win.show();
@@ -487,6 +494,31 @@ export function focusMainWindow(platform: NodeJS.Platform = process.platform): b
     if (!win.isDestroyed()) win.setAlwaysOnTop(false);
   }
   if (platform === 'darwin') app.focus({ steal: true });
+  return true;
+}
+
+/**
+ * 把主窗口拉回前台。窗口不存在 / 已销毁时返回 false,调用方自行决定是否忽略。
+ */
+export function focusMainWindow(platform: NodeJS.Platform = process.platform): boolean {
+  return focusAppWindow(mainWindowRef, platform);
+}
+
+/** 向已就绪的指定窗口发送一条 deep-link:navigate 导航意图（如副窗口内消息锚点或分屏切换）。 */
+export function sendWindowDeepLink(
+  win: BrowserWindow | null,
+  payload: DeepLinkPayload,
+): boolean {
+  if (
+    !win ||
+    win.isDestroyed() ||
+    !win.webContents ||
+    win.webContents.isDestroyed() ||
+    win.webContents.isLoading()
+  ) {
+    return false;
+  }
+  win.webContents.send('deep-link:navigate', payload);
   return true;
 }
 

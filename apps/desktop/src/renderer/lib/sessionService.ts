@@ -22,6 +22,7 @@ import { extractIpcError } from '@/utils/ipcError';
 import { makerApiFor } from '@/lib/makerTransport';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import type { SessionReference } from '../../shared/sessionReference';
+import { patchSessionWithDeleteTarget, type SessionDeleteTarget } from '@cindy/maker-shared/device-link-contract';
 import type { PLUGIN_ENGINE_AGENT_KIND } from '../../shared/pluginEngines';
 
 /**
@@ -102,6 +103,8 @@ export async function create(body?: {
   title?: string;
   workingDir?: string;
   workspaceKind?: WorkspaceKind;
+  /** Ordinary local plugin-engine task: provision the requested worktree before creating the task. */
+  localPluginWorktree?: { name: string; sourceBranch: string };
   model?: string;
   effort?: string;
   permissionMode?: string;
@@ -211,6 +214,7 @@ export async function update(
     clearedAt?: string | null;
     pinnedAt?: string | null;
     status?: SessionStatus;
+    deleteTarget?: SessionDeleteTarget;
     discardWorktreeChanges?: true;
     orcaRole?: OrcaRole | null;
     /** 附加只读引用目录覆盖列表 (绝对路径); main 端会在 mapper 里 JSON.stringify 后写库。 */
@@ -306,17 +310,19 @@ export async function setStatus(
   status: SessionStatus,
   target?: SessionStatusWriteTarget,
   discardWorktreeChanges?: true,
+  deleteTarget?: SessionDeleteTarget,
 ): Promise<Session> {
-  const patch = status === 'archived' ? { status, pinnedAt: null, ...(discardWorktreeChanges && { discardWorktreeChanges }) } : { status };
+  const patch = status === 'archived' ? { status, pinnedAt: null, ...(discardWorktreeChanges && { discardWorktreeChanges }) }
+    : { status };
   const resolvedTarget = target ?? (await resolveStatusWriteTarget(sessionId));
-  if (resolvedTarget.kind === 'local') return update(sessionId, patch);
-  return wrap(
+  if (resolvedTarget.kind === 'local') return update(sessionId, deleteTarget ? { ...patch, deleteTarget } : patch);
+  return wrap(patchSessionWithDeleteTarget(patch, deleteTarget, body =>
     window.electronAPI.deviceLink.invoke(
       resolvedTarget.deviceId,
       'local-db:sessions:patch-meta',
-      [sessionId, patch],
+      [sessionId, body],
     ) as Promise<Session>,
-  );
+  ));
 }
 
 /**

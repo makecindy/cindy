@@ -143,9 +143,70 @@ export function ghostHarnessText(
 
 /* ── Runtime availability (`PUT /harnesses`) ─────────────────────────────── */
 
+/**
+ * Host-authored argument of an engine entry started for a task whose files and commands are on
+ * another computer (`process.argv` of the entry). The plugin never supplies it. An entry started
+ * with it must switch off the agent's own file and command tools for that one process, without
+ * writing the agent's user-level configuration, and leave all file and command work to the MCP
+ * servers Cindy passes in `session/new`.
+ */
+export const GHOST_HARNESS_REMOTE_WORKSPACE_ARG = '--cindy-remote-workspace';
+
+/**
+ * Host-authored argument added alongside {@link GHOST_HARNESS_REMOTE_WORKSPACE_ARG} when the task
+ * belongs to another Cindy account (provider sharing). An entry started with it must also isolate
+ * the launch from the sharer's personal instructions, skills, plugins, MCP servers and local-network
+ * fetch tools so the guest uses only the model and the MCP tools Cindy passes in `session/new`.
+ */
+export const GHOST_HARNESS_GUEST_WORKSPACE_ARG = '--cindy-guest-workspace';
+
+/**
+ * Host-authored argument pair `--cindy-account-dir <absolute path>` of an engine entry started for a
+ * task assigned to one of the accounts Cindy added (not the agent's original login). The entry must
+ * keep the agent's sign-in, the settings it writes and its session history in that directory only,
+ * and exit non-zero when it cannot; it never falls back to the original login. Only engines that
+ * publish at least one account method receive it.
+ */
+export const GHOST_HARNESS_ACCOUNT_DIR_ARG = '--cindy-account-dir';
+
+/** How a plugin signs an engine account in: its own browser flow, or one secret typed into Cindy. */
+export const GHOST_HARNESS_ACCOUNT_METHOD_KINDS = ['browser', 'secret'] as const;
+export type GhostHarnessAccountMethodKind = (typeof GHOST_HARNESS_ACCOUNT_METHOD_KINDS)[number];
+export const GHOST_HARNESS_ACCOUNT_METHODS_MAX = 4;
+
+export interface GhostHarnessAccountMethod {
+  /** Slug the plugin receives back in `accountLogin`. */
+  id: string;
+  label: string;
+  kind: GhostHarnessAccountMethodKind;
+  /** Label of the secret field (`kind: 'secret'` only), e.g. "DeepSeek API Key". */
+  secretLabel?: string;
+}
+
+/**
+ * Account support of one engine. `methods: []` = the plugin only reports the identity of the
+ * agent's original login; one or more methods = Cindy may add accounts (each in its own directory).
+ */
+export interface GhostHarnessAccounts {
+  methods: GhostHarnessAccountMethod[];
+}
+
 export interface GhostHarnessAvailability {
   /** The main JSON-RPC worker can answer usage({harnessId}) for this engine. */
   reportsUsage?: true;
+  /** The main JSON-RPC worker answers accountStatus (and, with methods, accountLogin) for this engine. */
+  accounts?: GhostHarnessAccounts;
+  /**
+   * The entry honours {@link GHOST_HARNESS_REMOTE_WORKSPACE_ARG}: this engine can run a task whose
+   * files and commands are on another computer of the same account. Absent = this computer only.
+   */
+  remoteWorkspace?: true;
+  /**
+   * The entry honours {@link GHOST_HARNESS_GUEST_WORKSPACE_ARG}: this engine isolates personal
+   * instructions, skills, plugins and local-network fetch tools so the user can share it with
+   * other Cindy accounts. Valid only together with `remoteWorkspace`.
+   */
+  guestWorkspace?: true;
   id: string;
   available: boolean;
   /** Short machine-readable slug, e.g. `not-installed`. */
@@ -181,7 +242,12 @@ const HARNESS_MODES_MAX = 16;
 export interface GhostHarnessUsage {
   /** Unix epoch milliseconds at which the source was checked. */
   updatedAt: number;
-  windows?: { label: string; remainingPercent: number; resetsAt?: number }[];
+  /**
+   * `models`: the engine model ids this window limits; absent = every model. `windowMinutes`: the
+   * window's length, which lets Cindy prefer the account whose quota expires soonest; absent =
+   * the window only marks an account as used up.
+   */
+  windows?: { label: string; remainingPercent: number; resetsAt?: number; windowMinutes?: number; models?: string[] }[];
   balances?: { currency: string; amount: string }[];
 }
 
@@ -201,8 +267,13 @@ export function parseGhostHarnessUsage(raw: unknown): GhostHarnessUsage | undefi
         || typeof row.remainingPercent !== 'number' || !Number.isFinite(row.remainingPercent)
         || row.remainingPercent < 0 || row.remainingPercent > 100
         || (row.resetsAt !== undefined && !validTimestamp(row.resetsAt))) return undefined;
+      const models = parseModelIdList(row.models);
+      if (models === null || (row.windowMinutes !== undefined && (!Number.isSafeInteger(row.windowMinutes)
+        || (row.windowMinutes as number) < 1 || (row.windowMinutes as number) > 527_040))) return undefined;
       usage.windows.push({ label: row.label, remainingPercent: row.remainingPercent,
-        ...(row.resetsAt !== undefined ? { resetsAt: row.resetsAt as number } : {}) });
+        ...(row.resetsAt !== undefined ? { resetsAt: row.resetsAt as number } : {}),
+        ...(row.windowMinutes !== undefined ? { windowMinutes: row.windowMinutes as number } : {}),
+        ...(models ? { models } : {}) });
     }
   }
   if (raw.balances !== undefined) {
@@ -215,6 +286,112 @@ export function parseGhostHarnessUsage(raw: unknown): GhostHarnessUsage | undefi
     }
   }
   return usage.windows?.length || usage.balances?.length ? usage : undefined;
+}
+
+/** Engine model ids: undefined when absent, null when malformed (the whole value is then rejected). */
+function parseModelIdList(raw: unknown): string[] | undefined | null {
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw) || raw.length > GHOST_HARNESS_MODELS_MAX) return null;
+  const ids: string[] = [];
+  for (const id of raw) {
+    if (!plainText(id, GHOST_HARNESS_MODEL_ID_MAX)) return null;
+    if (!ids.includes(id)) ids.push(id);
+  }
+  return ids;
+}
+
+/* ── Engine accounts (multi-account, docs/dev-rules/protocol-compatibility/plugin-harnesses.md) ── */
+
+const ACCOUNT_METHOD_ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
+const ACCOUNT_LABEL_MAX = 64;
+const ACCOUNT_EMAIL_MAX = 254;
+const ACCOUNT_TEXT_MAX = 80;
+const ACCOUNT_PLAN_MAX = 64;
+const ACCOUNT_FINGERPRINT_MAX = 128;
+export const GHOST_HARNESS_ACCOUNT_SECRET_MAX = 4096;
+
+/**
+ * The account declaration of one published engine. Malformed values reject the report; method kinds
+ * this Cindy does not know are skipped (a plugin written for a newer Cindy keeps its other methods).
+ */
+function parseHarnessAccounts(raw: unknown): { ok: true; accounts?: GhostHarnessAccounts } | { ok: false; reason: string } {
+  if (raw === undefined) return { ok: true };
+  if (!isRecord(raw) || !Array.isArray(raw.methods) || raw.methods.length > GHOST_HARNESS_ACCOUNT_METHODS_MAX) {
+    return { ok: false, reason: `accounts must be { methods: [...] } with at most ${GHOST_HARNESS_ACCOUNT_METHODS_MAX} methods` };
+  }
+  const methods: GhostHarnessAccountMethod[] = [];
+  for (const entry of raw.methods) {
+    if (!isRecord(entry) || typeof entry.id !== 'string' || !ACCOUNT_METHOD_ID_RE.test(entry.id)
+      || !plainText(entry.label, ACCOUNT_LABEL_MAX) || typeof entry.kind !== 'string'
+      || (entry.secretLabel !== undefined && !plainText(entry.secretLabel, ACCOUNT_LABEL_MAX))) {
+      return { ok: false, reason: 'each account method needs a slug id, a label and a kind' };
+    }
+    if (methods.some((method) => method.id === entry.id)) return { ok: false, reason: `duplicate account method ${entry.id}` };
+    const kind = GHOST_HARNESS_ACCOUNT_METHOD_KINDS.find((value) => value === entry.kind);
+    if (!kind) continue;
+    methods.push({
+      id: entry.id,
+      label: entry.label,
+      kind,
+      ...(kind === 'secret' && entry.secretLabel !== undefined ? { secretLabel: entry.secretLabel as string } : {}),
+    });
+  }
+  return { ok: true, accounts: { methods } };
+}
+
+/** One account as the plugin worker reports it (`accountStatus`). Display data only. */
+export interface GhostHarnessAccountStatus {
+  state: 'signed-in' | 'signed-out';
+  identity?: { email?: string; name?: string; detail?: string };
+  plan?: string;
+  /** Opaque, stable per signed-in account; recognises the same account signed in twice. Never shown. */
+  fingerprint?: string;
+  /** Engine model ids this account can use; absent = the engine's whole list. */
+  models?: string[];
+}
+
+const EMAIL_RE = /^[^\s@]{1,64}@[^\s@]{1,253}$/;
+
+/**
+ * Validate a worker's `accountStatus` reply; `null` (no data) or anything malformed reads as null.
+ * Optional text that is malformed is dropped rather than failing the whole status.
+ */
+export function parseGhostHarnessAccountStatus(raw: unknown): GhostHarnessAccountStatus | null {
+  if (!isRecord(raw) || (raw.state !== 'signed-in' && raw.state !== 'signed-out')) return null;
+  const status: GhostHarnessAccountStatus = { state: raw.state };
+  if (isRecord(raw.identity)) {
+    const { email, name, detail } = raw.identity;
+    const identity = {
+      ...(plainText(email, ACCOUNT_EMAIL_MAX) && EMAIL_RE.test(email) ? { email } : {}),
+      ...(plainText(name, ACCOUNT_TEXT_MAX) ? { name } : {}),
+      ...(plainText(detail, ACCOUNT_TEXT_MAX) ? { detail } : {}),
+    };
+    if (Object.keys(identity).length) status.identity = identity;
+  }
+  if (plainText(raw.plan, ACCOUNT_PLAN_MAX)) status.plan = raw.plan;
+  if (plainText(raw.fingerprint, ACCOUNT_FINGERPRINT_MAX)) status.fingerprint = raw.fingerprint;
+  const models = parseModelIdList(raw.models);
+  if (models) status.models = models;
+  return status;
+}
+
+export const GHOST_HARNESS_ACCOUNT_LOGIN_ERRORS = [
+  'cancelled', 'timeout', 'busy', 'unsupported', 'invalid-secret', 'failed',
+] as const;
+export type GhostHarnessAccountLoginError = (typeof GHOST_HARNESS_ACCOUNT_LOGIN_ERRORS)[number];
+export type GhostHarnessAccountLoginResult =
+  | { ok: true }
+  | { ok: false; error: GhostHarnessAccountLoginError; message?: string };
+
+/** Validate a worker's `accountLogin` reply; anything else is a plain failure. */
+export function parseGhostHarnessAccountLoginResult(raw: unknown): GhostHarnessAccountLoginResult {
+  if (isRecord(raw) && raw.ok === true) return { ok: true };
+  const error = isRecord(raw)
+    ? GHOST_HARNESS_ACCOUNT_LOGIN_ERRORS.find((value) => value === raw.error) ?? 'failed'
+    : 'failed';
+  const message = isRecord(raw) && isText(raw.message, MESSAGE_MAX) && !CONTROL_RE.test(raw.message)
+    ? raw.message : undefined;
+  return { ok: false, error, ...(message ? { message } : {}) };
 }
 
 export interface GhostHarnessModel {
@@ -293,9 +470,14 @@ export function parseGhostHarnessAvailability(
     }
     const modes = parseHarnessModes(item.modes, item.defaultMode);
     if (!modes.ok) return { ok: false, reason: `Harness ${id} ${modes.reason}` };
+    const accounts = parseHarnessAccounts(item.accounts);
+    if (!accounts.ok) return { ok: false, reason: `Harness ${id} ${accounts.reason}` };
     harnesses.push({
       id,
       ...(item.available && item.reportsUsage === true ? { reportsUsage: true } : {}),
+      ...(item.available && accounts.accounts ? { accounts: accounts.accounts } : {}),
+      ...(item.available && item.remoteWorkspace === true ? { remoteWorkspace: true } : {}),
+      ...(item.available && item.remoteWorkspace === true && item.guestWorkspace === true ? { guestWorkspace: true } : {}),
       available: item.available as boolean,
       ...(item.reason !== undefined ? { reason: item.reason as string } : {}),
       ...(item.message !== undefined ? { message: item.message as string } : {}),

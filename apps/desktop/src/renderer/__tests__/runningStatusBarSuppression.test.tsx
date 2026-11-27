@@ -38,8 +38,11 @@ const ast = ts.createSourceFile(
 const component = ast.statements.find(
   (node) => ts.isFunctionDeclaration(node) && node.name?.text === 'RunningStatusBar',
 );
-if (!component) throw new Error('RunningStatusBar not found');
-const compiled = ts.transpileModule(component.getText(ast).replace(/^export\s+/, ''), {
+const centerGroup = ast.statements.find(
+  (node) => ts.isFunctionDeclaration(node) && node.name?.text === 'ComposerCenterGroup',
+);
+if (!component || !centerGroup) throw new Error('RunningStatusBar components not found');
+const compiled = ts.transpileModule([centerGroup, component].map(node => node.getText(ast).replace(/^export\s+/, '')).join('\n'), {
   compilerOptions: { jsx: ts.JsxEmit.React, target: ts.ScriptTarget.ES2022 },
 }).outputText;
 const Icon = () => null;
@@ -80,6 +83,8 @@ const RunningStatusBar = new Function(
   backgroundTasksRunning?: boolean;
   onStopBackgroundTasks?: () => void;
   rightLeadingSlot?: React.ReactNode;
+  centeredSlot?: React.ReactNode;
+  composerHeaderRef?: React.Ref<HTMLDivElement>;
   status: string;
   reconnectStatus?: string | null;
   startedAt: number;
@@ -91,6 +96,30 @@ const RunningStatusBar = new Function(
 }>;
 
 afterEach(cleanup);
+
+// Unit: the composer owns its live plugin anchor across runtime suppression.
+// The old null-return/source checks missed idle controls and plan preservation.
+it('keeps the composer anchor and centered controls mounted while runtime content appears and disappears', () => {
+  const anchor = React.createRef<HTMLDivElement>();
+  const props = { visible: false, status: 'Done', startedAt: 1, tokenUsage: 0,
+    outputTokens: 0, generationDurationMs: 0, composerHeaderRef: anchor,
+    centeredSlot: <button>Plan control</button> };
+  const { container, rerender } = render(<RunningStatusBar {...props} />);
+  const mounted = anchor.current;
+  expect(mounted?.isConnected).toBe(true);
+  expect(screen.getByRole('button', { name: 'Plan control' })).toBeTruthy();
+  expect(container.querySelector('[data-running-status-label]')).toBeNull();
+  rerender(<RunningStatusBar {...props} visible status="Running" />);
+  expect(anchor.current).toBe(mounted);
+  expect(container.querySelector('[data-running-status-label]')?.textContent).toBe('Running');
+  rerender(<RunningStatusBar {...props} suppressContent />);
+  expect(anchor.current).toBe(mounted);
+  expect(screen.getAllByRole('button', { name: 'Plan control' })).toHaveLength(1);
+  expect(container.querySelector('[data-running-status-label]')).toBeNull();
+  expect(container.querySelector('[data-running-status-meta]')).toBeNull();
+  rerender(<RunningStatusBar {...props} suppressContent centeredSlot={null} composerHeaderRef={undefined} />);
+  expect(container.firstChild).toBeNull();
+});
 
 it('keeps background stop available during remote preparation without displaying old metrics', () => {
   const stop = vi.fn();
@@ -217,7 +246,9 @@ it('shows the last measurement in the panel during tool execution and request wa
   const latest = { rate: 41.4, atMs: 5_000, kind: 'request' as const, measuredAt: Date.now() };
   rerender(<RunningStatusBar {...props} tokenSpeed={{ ...speed, streaming: false,
     measurement: { average: 37, latest } }} />);
-  expect(trigger()?.textContent).toContain('chat.runningStatus.recentTokenRate');
+  // The status bar shows the speed itself, without a "recent" label in front of it.
+  expect(trigger()?.textContent).toContain('chat.runningStatus.tokenRate');
+  expect(trigger()?.textContent).not.toContain('recentTokenRate');
   expect(screen.getByText('chat.runningStatus.lastRequestRate', { selector: 'div' }).nextElementSibling?.textContent).toContain('41.4');
   expect(value('chat.runningStatus.averageRate')?.textContent).toContain('37');
 });
@@ -260,14 +291,17 @@ it.each([true, false])(
 
 // 回合已结束、只有后台命令在跑:有命令仍在工作(跑测试、构建)时写「正在后台工作」并保留呼吸;
 // 只剩长驻服务(本地预览服务等)时任务已做完,写「后台服务运行中」且不再呼吸。
+// 插件引擎回答完仍在自己干活(2026-11-20 Antigravity)时写「正在后台继续工作」,不说成后台子任务。
 it.each([
-  ['commands still working', 2, 1, 'chat.backgroundActivity.bashWorkStatus', true],
-  ['only long-lived services left', 2, 0, 'chat.backgroundActivity.bashServiceStatus', false],
-] as const)('background commands: %s', (_label, total, working, statusKey, shimmers) => {
+  ['commands still working', 2, 1, false, 'chat.backgroundActivity.bashWorkStatus', true],
+  ['only long-lived services left', 2, 0, false, 'chat.backgroundActivity.bashServiceStatus', false],
+  ['a plugin engine still working after its answer', 0, 0, true, 'chat.backgroundActivity.pluginEngineStatus', true],
+] as const)('background commands: %s', (_label, total, working, pluginEngine, statusKey, shimmers) => {
   const Bar = RunningStatusBar as React.ComponentType<Record<string, unknown>>;
   const { container } = render(<Bar
     visible status="Done" startedAt={1} tokenUsage={0} outputTokens={0} generationDurationMs={0}
     backgroundTasksRunning backgroundBashOnlyCount={total} backgroundBashWorkCount={working}
+    backgroundPluginEngine={pluginEngine}
   />);
   expect(screen.getByText(statusKey)).toBeTruthy();
   expect(container.querySelector('.status-bar-shimmer') !== null).toBe(shimmers);

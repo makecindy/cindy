@@ -102,6 +102,8 @@ interface UseCCAgentChatReturn {
   pendingQueue: QueuedMessage[];
   /** 正在尝试插话投递的队列项 clientId。 */
   steeringQueueClientIds: string[];
+  /** 当前引擎不能同轮插话：不提供插话入口，消息等这一轮结束再发。 */
+  steerUnsupported: boolean;
   /** Queue was paused by Stop and resumes only after the user clicks Continue. */
   queuePaused: boolean;
   queueEditLocks: string[];
@@ -201,6 +203,7 @@ interface UseCCAgentChatReturn {
   /** 当前 terminal error 的稳定 reason key(如 'silent-stop-exhausted');ErrorBanner
    *  据此渲染专用 action。仅 error 非空时有意义。 */
   errorReason: string | null;
+  reconnectHandoff?: ChatMessage['reconnectHandoff'];
   /** Structured details for a tool-loop terminal error, when available. */
   toolLoop: ToolLoopErrorDetails | null;
   outputLimit: OutputLimitDetails | null;
@@ -209,6 +212,7 @@ interface UseCCAgentChatReturn {
   errorIsRecoverable: boolean;
   /** Explicit retry target for ErrorBanner; null means retry is unsafe or unavailable. */
   errorRetryText: string | null;
+  queueHeadRetry: boolean;
   errorCanContinue?: boolean;
   /** live 终态错误绑定的持久化 error 行 clientId;无则没有 persist 续跑依据。 */
   errorPersistId: string | null;
@@ -875,6 +879,7 @@ export function useCCAgentChat(
     pendingQueueLength,
     pendingQueue: lightState.pendingQueue,
     steeringQueueClientIds: lightState.steeringQueueClientIds,
+    steerUnsupported: lightState.steerUnsupported,
     queuePaused: lightState.queuePaused,
     queueEditLocks: lightState.queueEditLocks,
     queueInteractionLocks: lightState.queueInteractionLocks,
@@ -912,12 +917,14 @@ export function useCCAgentChat(
         : lightState.recoverableError != null
           ? (lightState.errorReason ?? null)
           : null,
+    reconnectHandoff: lightState.error ? lightState.reconnectHandoff : undefined,
     toolLoop: lightState.error ? (lightState.toolLoop ?? null) : null,
     outputLimit: lightState.error ? (lightState.outputLimit ?? null) : null,
     // 当前 error 是非终止 recoverableError(turn 在跑,daemon 自动重试中):
     // ErrorBanner 网络分支据此显示「正在自动重试…」而非「可点击重试」。
     errorIsRecoverable: !lightState.error && lightState.recoverableError != null,
     errorRetryText: lightState.errorRetryText,
+    queueHeadRetry: lightState.queueHeadRetry,
     errorCanContinue: lightState.errorCanContinue,
     errorPersistId: lightState.errorPersistId,
     disposedErrorPersistId: lightState.disposedErrorPersistId,

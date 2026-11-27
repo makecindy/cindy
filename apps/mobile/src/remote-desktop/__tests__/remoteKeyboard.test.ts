@@ -162,16 +162,34 @@ describe("classic keyboard", () => {
 
 describe("retro deck", () => {
   const safe = { top: 6, bottom: 20, left: 0, right: 0 };
+  it("fits the four classic trackpads to the keys and the space above the toolbar", () => {
+    // At Duo size a fixed 56pt cap left a tiny patch under five full rows.
+    const duo = { width: 669, height: 476 };
+    const insets = { top: 20, bottom: 34, left: 0, right: 0 };
+    for (const skin of ["classic", "compact", "edge", "macii"] as const) {
+      const deck = retroDeckLayout(duo, skin, insets, 44);
+      expect(deck.controlImage.width).toBeGreaterThan(deck.well.width / 4);
+      expect(deck.controlImage.height).toBeGreaterThan(56);
+
+      // Showing the mouse buttons reserves another 80pt below the palmrest.
+      const tight = retroDeckLayout(duo, skin, insets, 124);
+      expect(tight.controlImage.width).toBeLessThan(deck.controlImage.width);
+      expect(tight.controlImage.height).toBeLessThan(tight.control.height);
+      expect(tight.controlImage.width / tight.controlImage.height).toBeLessThanOrEqual(2);
+    }
+  });
   it("keeps keys near square and reserves the palm above the toolbar", () => {
-    const { well, control } = retroDeckLayout(
+    const { well, control, wellPadding, keyGap } = retroDeckLayout(
       { width: 760, height: 490 },
       "macii",
       safe,
       60,
     );
-    const keyWidth = (well.width - 12 - 12 * 5) / 13;
-    const keyHeight = (well.height - 12 - 4 * 5) / 5;
-    expect(keyHeight / keyWidth).toBeCloseTo(1, 1);
+    const keys = keyRects(classicKeyboardRows("darwin"), well.width - 2 * wellPadding,
+      well.height - 2 * wellPadding, false, keyGap);
+    const homeKey = keys.find((key) => key.id === "KeyF")!;
+    expect(homeKey.height).toBeCloseTo(homeKey.width, 3);
+    expect(keyAt(keys, homeKey.x + homeKey.width, homeKey.y + homeKey.height / 2)?.id).toBe("KeyF");
     expect(control.y).toBeCloseTo(well.y + well.height, 3);
     expect(control.y + control.height).toBe(490 - 20 - 60);
     expect(control.height).toBeGreaterThanOrEqual(52);

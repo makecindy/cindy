@@ -48,7 +48,8 @@ describe('controlled banner placement', () => {
     expect(sessionViewSource).toContain(
       'const isHidden = suppressContent || (!showContent && !visible);',
     );
-    expect(sessionViewSource).toContain('{showCenteredControlledBanner && (');
+    expect(sessionViewSource).toContain('{showCenteredControlledBanner && <ControlledBanner');
+    expect(sessionViewSource).toContain('centeredSlot={composerCenter}');
     expect(sessionViewSource).toContain('rightLeadingSlot?: ReactNode;');
     expect(sessionViewSource).toContain('{rightLeadingSlot}');
     expect(sessionViewSource).toContain('data-running-status-meta="true"');
@@ -61,8 +62,9 @@ describe('controlled banner placement', () => {
       'const controlledBannerMaxWidth = `min(${inputHalfWidth}, ${CONTROLLED_BANNER_MAX_WIDTH}px)`;',
     );
     expect(sessionViewSource).toContain(
-      'if (!rightLeadingSlot && (suppressContent || (isHidden && !ratePanelPinned))) return null;',
+      'const showRuntime = Boolean(rightLeadingSlot) || (!suppressContent && (!isHidden || ratePanelPinned));',
     );
+    expect(sessionViewSource).toContain('if (!showRuntime && !centeredSlot && !composerHeaderRef) return null;');
     expect(controlledBannerSource).toContain("placement?: 'floating' | 'inline' | 'composer';");
     expect(controlledBannerSource).toContain(
       'className="pointer-events-auto flex min-w-0 max-w-full shrink justify-end"',
@@ -86,7 +88,7 @@ describe('controlled banner placement', () => {
       "'pointer-events-auto flex h-7 min-w-0 max-w-full select-none items-center gap-2 overflow-hidden rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-0',",
     );
     expect(sessionViewSource).toContain(
-      'className="flex min-w-0 items-center justify-self-end gap-2"',
+      '{showRuntime && <div className="col-start-2 row-start-1 flex min-w-0 items-center justify-self-end gap-2',
     );
     expect(sessionViewSource).not.toContain('<div className="-translate-y-0.5">');
     expect(controlledBannerSource).toContain(
@@ -106,8 +108,9 @@ describe('controlled banner placement', () => {
     expect(sessionViewSource).toContain('className="col-start-1 row-start-1"');
     expect(sessionViewSource).toContain('data-composer-center-group="true"');
     expect(sessionViewSource).toContain(
-      'className="pointer-events-none relative z-10 col-start-1 row-start-1 flex max-w-full -translate-y-1 items-center justify-center gap-2"',
+      'className="pointer-events-none relative z-raised col-span-full row-start-1 flex max-w-full -translate-y-1 items-center justify-center gap-2',
     );
+    expect(sessionViewSource).toContain('{centeredSlot && <ComposerCenterGroup>{centeredSlot}</ComposerCenterGroup>}');
     expect(sessionViewSource).toContain('className="mb-0"');
     expect(pinnedPlanSource).toContain(
       "cn('mb-1.5 flex h-8 w-auto max-w-full shrink-0 items-center', className)",

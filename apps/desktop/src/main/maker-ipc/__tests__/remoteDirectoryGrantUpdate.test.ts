@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { excludeDirectoryGrantConflicts } from '../extraDirsValidator.js';
+import { excludeDirectoryGrantConflicts, replaceUserExtraDirs } from '../extraDirsValidator.js';
 import {
   applyRemoteDirectoryGrantUpdate,
   isPersistedDirectoryGrantSubset,
   type RemoteDirectoryGrantAxis,
 } from '../remoteDirectoryGrantUpdate.js';
 
-function createState(extraDirs: string[] = [], writableDirs: string[] = []) {
+function createState(extraDirs: string[] = [], writableDirs: string[] = [], assertWriteAllowed?: () => void) {
   const db = { extraDirs: [...extraDirs], writableDirs: [...writableDirs] };
   const runtime = { extraDirs: [...extraDirs], writableDirs: [...writableDirs] };
   const setExtraDirs = vi.fn(async (dirs: string[]) => { runtime.extraDirs = [...dirs]; });
@@ -19,6 +19,7 @@ function createState(extraDirs: string[] = [], writableDirs: string[] = []) {
   const terminate = vi.fn(async () => undefined);
   const update = (axis: RemoteDirectoryGrantAxis, dirs: string[]) =>
     applyRemoteDirectoryGrantUpdate(axis, dirs, { setExtraDirs, setWritableDirs }, {
+      assertWriteAllowed,
       validate: async (requested) => ({ valid: [...requested], rejected: [] }),
       readExtraDirs: async () => [...db.extraDirs],
       readWritableDirs: async () => [...db.writableDirs],
@@ -39,6 +40,33 @@ function createSessionSerializer() {
 }
 
 describe('remote directory grant atomic update', () => {
+  // Unit regression: pending Host edits must not update the profile after Desktop takes it.
+  // Exercise the grant transaction on either side of the asynchronous runtime update.
+  it.each([true, false])('rejects a takeover before persistence (already held: %s)', async initiallyHeld => {
+    let held = initiallyHeld;
+    const state = createState(['/previous'], [], () => {
+      if (held) throw new Error('profile held');
+    });
+    state.setExtraDirs.mockImplementationOnce(async dirs => {
+      state.runtime.extraDirs = [...dirs];
+      held = true;
+    });
+    await expect(state.update('extraDirs', ['/new'])).rejects.toThrow('profile held');
+    expect(state.setExtraDirs).toHaveBeenCalledTimes(initiallyHeld ? 0 : 2);
+    expect(state.runtime.extraDirs).toEqual(['/previous']);
+    expect(state.persist).not.toHaveBeenCalled();
+  });
+
+  // Unit regression: a controller edits user roots while the execution side owns the library slot.
+  it('retains the persisted library when replacing user roots', async () => {
+    const previous = ['/old', 'cindy-library:/library'];
+    const state = createState(previous);
+    const requested = ['/new', ' cindy-library:/other'];
+    await state.update('extraDirs', replaceUserExtraDirs(requested, previous));
+    expect(state.db.extraDirs).toEqual(['/new', 'cindy-library:/library']);
+    expect(state.runtime.extraDirs).toEqual(state.db.extraDirs);
+  });
+
   it('revokes stale runtime Library access even when the persisted grant is already empty', async () => {
     const state = createState();
     state.runtime.extraDirs = ['cindy-library:/old'];

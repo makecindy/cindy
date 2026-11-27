@@ -1,5 +1,6 @@
 import { inspectSkillListGrants } from './customizationScanHost';
 import { createRemoteSkillsHost } from './remoteManagementHost';
+import { joinSharedSkillPreparation } from './sharedSkillPreparation';
 import { remoteResourceRegistry } from '../device-link/remoteResourceRegistry';
 import { REMOTE_RESOURCE_CHANGED_CHANNEL } from '@cindy/device-link';
 import { tapWindowBroadcast, getSafeDataOwnerPushStamp } from '../device-link/broadcast-tap';
@@ -113,6 +114,12 @@ export interface RegisterSkillhubIpcOptions {
   getMaker: () => Maker;
   getManagedSkillRoots: () => readonly string[];
   getBuiltInSkills?: () => readonly BuiltInSkillDescriptor[];
+  /**
+   * Joins the shared Skill preparation (built-in bundle and shared links) before a scan reads
+   * them. Startup only warms it up in the background, and that pass is rejected while a saved
+   * owner is still being restored.
+   */
+  prepareSharedSkills?: () => Promise<void>;
   getAllowedProjectRoots: () => Promise<readonly string[]>;
   marketService?: SkillhubMarketService;
   publishService?: SkillPublishService;
@@ -463,6 +470,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
         if (!scanOwnerId || isAppSessionBoundaryPending()) {
           throw new Error('active data owner is unavailable');
         }
+        await joinSharedSkillPreparation(options.prepareSharedSkills, 'scan');
         const projects = await validateRequestedProjects(
           params?.projects,
           options.getAllowedProjectRoots,

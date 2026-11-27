@@ -24,9 +24,28 @@
  * 覆盖边界:仅本机 claude-code 会话(信号源是本机 loopback proxy)。SSH 远程
  * 工作区的 CC 进程与 proxy 都在远端,本模块观察不到;codex 无子 agent 概念,
  * 不在本期范围。
+ *
+ * 第二个信号源 —— 插件引擎(ACP,2026-11-20):有的外部 Agent 先回答 prompt(回合结束),
+ * 再自己接着干活(推分支、建 PR、隔几分钟查一次 CI)。maker-core 把这段输出标成
+ * turnScope:'background',回合结束时没报完成的工具调用也保持未完成
+ * (agents/acp/translator.ts)。observePluginEngineEvent 据此点亮同一份状态,
+ * 状态栏、任务列表、「全部停止」与归档守卫因此照常生效;从没有回合外工作的插件
+ * 不会触发。判定在上式之外再并上两条(仍要求 !turnRunning && lastTurnEndAt > 0):
+ *      engineActivityAt >= lastTurnEndAt && now - engineActivityAt <= ACTIVITY_WINDOW_MS
+ *   || 有未完成的工具调用 && now - max(engineActivityAt, lastTurnEndAt) <= PLUGIN_ENGINE_OPEN_WORK_CAP_MS
+ * 回合外事件本身就是确定信号,不需要 proxy 那段收尾宽限。插件引擎的这部分另外通知
+ * Agent Island(setPluginEngineBackgroundWorkListener),其他设备与手机的任务列表也显示运行中;
+ * 内置引擎不经过这条通知。
+ *
+ * 常驻服务不算工作(2026-11-26,#13004):Agent 用 `IsDaemon: true`(或 `pnpm dev` 这类
+ * 长驻开发命令)起本地服务时,服务活着就一直不会报 completed。这类调用与 Claude Code 的
+ * `backgroundCommandKind=service` 同类 —— 命令本身不会自己结束,回合结束后的「仍在工作」
+ * 不能再靠它撑 31 分钟,否则每轮结束都重新点亮一次(见 isLongRunningPluginEngineTool)。
  */
 
 import type { ResponseObserver } from '@cindy/anthropic-compat-proxy';
+import type { AgentEvent } from '@cindy/maker-core';
+import { classifyBackgroundCommand } from '@cindy/maker-core/background-command-kind';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('claude-bg-activity');
@@ -44,6 +63,55 @@ const STREAM_TOUCH_THROTTLE_MS = 5_000;
  * 已结束再亮回来;续跑没来时到点熄灭。
  */
 const COMMAND_WORK_END_GRACE_MS = 5_000;
+/**
+ * 插件引擎留着未完成的工具调用时,最多亮这么久没有新动静。maker-core 在 30 分钟无动静时
+ * 收尾这些调用(ACP_OPEN_TOOL_QUIET_CAP_MS),结果到达后按上面的静默窗熄灭;这里多留 1 分钟,
+ * 只兜住另一台电脑上运行的引擎断开、收尾结果到不了的情况。
+ */
+const PLUGIN_ENGINE_OPEN_WORK_CAP_MS = 31 * 60_000;
+/** 插件引擎回合外算作「在工作」的输出(状态类事件不算)。 */
+const PLUGIN_ENGINE_WORK_EVENT_TYPES: ReadonlySet<string> = new Set([
+  'text',
+  'thinking',
+  'tool_use',
+  'tool_result',
+  'tool_result_full',
+]);
+/**
+ * 工具入参里表示「这次调用是常驻服务」的标记。Antigravity 的 run_command 用 `IsDaemon`,
+ * 其他 ACP Agent 可能用 snake_case;键名匹配本身已够窄,值必须真的是布尔 true。
+ */
+const PLUGIN_ENGINE_DAEMON_FLAG_KEY = /^is_?daemon$/i;
+/** 工具入参里承载命令行文本的键(大小写不敏感);只有这些键的值参与长驻命令分类。 */
+const PLUGIN_ENGINE_COMMAND_KEYS: ReadonlySet<string> = new Set([
+  'command',
+  'commandline',
+  'command_line',
+  'cmd',
+  'script',
+]);
+
+/**
+ * 插件引擎的工具调用是不是「不会自己结束的常驻服务」(dev server / watcher / daemon)。
+ *
+ * 两条判据,与 Claude Code 的后台命令同口径(background-command-kind、#10786):
+ *  1. Agent 在入参里显式标了常驻(`IsDaemon: true`)—— 服务活着就永远不会报 completed;
+ *  2. 命令行本身是长驻开发服务(`pnpm dev`、`vite`、`docker compose up`…),即使没带标记。
+ * 拿不准(入参不是对象、没有命令文本、命令拆不干净)一律按「会自己结束的工作」处理:
+ * 宁可多亮一次运行中,也不让真实的构建/测试/等 CI 在任务列表里消失。
+ */
+export function isLongRunningPluginEngineTool(input: unknown): boolean {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return false;
+  const fields = input as Record<string, unknown>;
+  for (const [key, value] of Object.entries(fields)) {
+    if (value === true && PLUGIN_ENGINE_DAEMON_FLAG_KEY.test(key)) return true;
+  }
+  for (const [key, value] of Object.entries(fields)) {
+    if (typeof value !== 'string' || !PLUGIN_ENGINE_COMMAND_KEYS.has(key.toLowerCase())) continue;
+    if (classifyBackgroundCommand(value) === 'service') return true;
+  }
+  return false;
+}
 
 interface SessionActivityState {
   lastActivityAt: number;
@@ -52,6 +120,12 @@ interface SessionActivityState {
   turnRunning: boolean;
   active: boolean;
   offTimer: NodeJS.Timeout | null;
+  /** 插件引擎最近一次回合外输出的时刻;0 = 没有。 */
+  engineActivityAt: number;
+  /** 插件引擎已开始、还没报完成的工具调用。 */
+  engineOpenTools: Set<string>;
+  /** 已通知 Agent Island 的「插件引擎仍在回合外工作」。 */
+  engineActive: boolean;
   /** 最近一次快照:该会话是否有仍在运行、会自己结束的后台命令(不含长驻服务)。 */
   commandWork: boolean;
   /** 已广播的「回合已结束但后台命令仍在工作」。 */
@@ -66,6 +140,17 @@ const stickySdkToSession = new Map<string, string>();
 let broadcaster: ((payload: { sessionId: string; active: boolean }) => void) | null = null;
 let commandWorkBroadcaster: ((payload: { sessionId: string; active: boolean }) => void) | null =
   null;
+type PluginEngineBackgroundWorkListener = (
+  sessionId: string,
+  active: boolean,
+  options: { turnStarting: boolean },
+) => void;
+let pluginEngineListener: PluginEngineBackgroundWorkListener | null = null;
+
+/** host 注入:插件引擎回合外工作开始 / 结束(给 Agent Island);null = 卸载。 */
+export function setPluginEngineBackgroundWorkListener(fn: PluginEngineBackgroundWorkListener | null): void {
+  pluginEngineListener = fn;
+}
 
 /** host(register 阶段)注入广播函数;null = 卸载(测试收尾用)。 */
 export function setClaudeBackgroundActivityBroadcaster(
@@ -83,6 +168,9 @@ function ensureState(sessionId: string): SessionActivityState {
       turnRunning: false,
       active: false,
       offTimer: null,
+      engineActivityAt: 0,
+      engineOpenTools: new Set(),
+      engineActive: false,
       commandWork: false,
       commandWorkActive: false,
       commandWorkOffTimer: null,
@@ -92,16 +180,47 @@ function ensureState(sessionId: string): SessionActivityState {
   return st;
 }
 
-function shouldBeActive(st: SessionActivityState, now: number): boolean {
-  return (
-    !st.turnRunning &&
-    st.lastTurnEndAt > 0 &&
-    st.lastActivityAt > st.lastTurnEndAt + TURN_END_GRACE_MS &&
-    now - st.lastActivityAt <= ACTIVITY_WINDOW_MS
-  );
+/** 插件引擎这两条单独能撑住「后台活动」到何时;0 = 撑不住。 */
+function engineActiveUntil(st: SessionActivityState): number {
+  let until = 0;
+  if (st.engineActivityAt > 0 && st.engineActivityAt >= st.lastTurnEndAt) {
+    until = st.engineActivityAt + ACTIVITY_WINDOW_MS;
+  }
+  if (st.engineOpenTools.size > 0) {
+    until = Math.max(
+      until,
+      Math.max(st.engineActivityAt, st.lastTurnEndAt) + PLUGIN_ENGINE_OPEN_WORK_CAP_MS,
+    );
+  }
+  return until;
 }
 
-function setActive(sessionId: string, st: SessionActivityState, next: boolean): void {
+/** 当前输入下「后台活动」保持到何时;0 = 现在就不成立。 */
+function activeUntil(st: SessionActivityState): number {
+  if (st.turnRunning || st.lastTurnEndAt <= 0) return 0;
+  const proxyUntil =
+    st.lastActivityAt > st.lastTurnEndAt + TURN_END_GRACE_MS
+      ? st.lastActivityAt + ACTIVITY_WINDOW_MS
+      : 0;
+  return Math.max(proxyUntil, engineActiveUntil(st));
+}
+
+function shouldBeActive(st: SessionActivityState, now: number): boolean {
+  return now <= activeUntil(st);
+}
+
+function setActive(
+  sessionId: string,
+  st: SessionActivityState,
+  next: boolean,
+  options: { turnStarting?: boolean } = {},
+): void {
+  setEngineActive(
+    sessionId,
+    st,
+    next && !st.turnRunning && st.lastTurnEndAt > 0 && Date.now() <= engineActiveUntil(st),
+    options.turnStarting === true,
+  );
   if (st.active === next) return;
   st.active = next;
   if (!next && st.offTimer) {
@@ -118,18 +237,31 @@ function setActive(sessionId: string, st: SessionActivityState, next: boolean): 
   }
 }
 
-/** active 期间挂静默倒计时;到点重评,仍活跃则按新活动时刻续档。 */
+function setEngineActive(
+  sessionId: string,
+  st: SessionActivityState,
+  next: boolean,
+  turnStarting: boolean,
+): void {
+  if (st.engineActive === next) return;
+  st.engineActive = next;
+  try {
+    pluginEngineListener?.(sessionId, next, { turnStarting });
+  } catch (err) {
+    log.warn('plugin engine background work listener threw', { sessionId, error: String(err) });
+  }
+}
+
+/**
+ * active 期间按当前输入挂静默倒计时;每次重评都重挂 —— 未完成的工具调用结束后,
+ * 熄灭时刻会从 31 分钟上限提前到静默窗。
+ */
 function armOffTimer(sessionId: string, st: SessionActivityState): void {
-  if (st.offTimer) return;
-  const delay = Math.max(50, st.lastActivityAt + ACTIVITY_WINDOW_MS - Date.now() + 50);
+  if (st.offTimer) clearTimeout(st.offTimer);
+  const delay = Math.max(50, activeUntil(st) - Date.now() + 50);
   st.offTimer = setTimeout(() => {
     st.offTimer = null;
-    const now = Date.now();
-    if (shouldBeActive(st, now)) {
-      armOffTimer(sessionId, st);
-      return;
-    }
-    setActive(sessionId, st, false);
+    evaluate(sessionId, st);
   }, delay);
 }
 
@@ -138,6 +270,39 @@ function evaluate(sessionId: string, st: SessionActivityState): void {
   const next = shouldBeActive(st, now);
   setActive(sessionId, st, next);
   if (next) armOffTimer(sessionId, st);
+}
+
+/**
+ * 插件引擎(ACP)任务的事件:记下未完成的工具调用与回合外输出,再重评。
+ * 只给 agentKind === 'acp' 的任务调用;回合内的工具调用也要记,回合结束时仍未完成的
+ * 那些就是 Agent 还在跑的工作。
+ */
+export function observePluginEngineEvent(sessionId: string, event: AgentEvent): void {
+  const data =
+    event.data && typeof event.data === 'object' ? (event.data as Record<string, unknown>) : {};
+  const background = event.turnScope === 'background' && PLUGIN_ENGINE_WORK_EVENT_TYPES.has(event.type);
+  let st = states.get(sessionId);
+  if (event.type === 'tool_use' && typeof data.toolUseId === 'string' && data.toolUseId) {
+    // 只记会自己结束的调用:常驻服务的未完成调用不代表 Agent 还在干活(见
+    // isLongRunningPluginEngineTool),否则 `pnpm dev` 一停下来就点亮 31 分钟。
+    // `input` 是 translator 经 parseMessageToolUse 拍平后的工具入参(maker-shared)。
+    // ACP 会先发空入参的 tool_use、再用 tool_call_update 补齐同 id 的入参:补上的入参
+    // 才带常驻标记时,先前已记下的 id 必须撤掉,否则服务照样点亮。
+    if (isLongRunningPluginEngineTool(data.input)) {
+      st?.engineOpenTools.delete(data.toolUseId);
+    } else {
+      st ??= ensureState(sessionId);
+      st.engineOpenTools.add(data.toolUseId);
+    }
+  } else if (event.type === 'tool_result' && st) {
+    const ids = Array.isArray(data.toolUseIds) ? data.toolUseIds : [data.toolUseId];
+    for (const id of ids) if (typeof id === 'string') st.engineOpenTools.delete(id);
+  }
+  if (background) {
+    st ??= ensureState(sessionId);
+    st.engineActivityAt = Date.now();
+  }
+  if (st && !st.turnRunning) evaluate(sessionId, st);
 }
 
 /**
@@ -190,12 +355,13 @@ export function noteClaudeSessionTurnState(sessionId: string, running: boolean):
   st.turnRunning = running;
   if (running) {
     // turn 期间的 API 活动是正常主线流量,后台横幅熄灭。
-    setActive(sessionId, st, false);
+    setActive(sessionId, st, false, { turnStarting: true });
   } else {
     st.lastTurnEndAt = Date.now();
-    // turn 刚结束:此刻的 lastActivityAt 必然 ≤ lastTurnEndAt,不会立即误亮;
-    // 之后若仍有请求进来(后台子 agent),record 路径会重新评估点亮。
-    setActive(sessionId, st, false);
+    // turn 刚结束:此刻的 lastActivityAt 必然 ≤ lastTurnEndAt,proxy 信号不会立即误亮;
+    // 之后若仍有请求进来(后台子 agent),record 路径会重新评估点亮。插件引擎回合结束时
+    // 仍有未完成的工具调用则立即点亮(Agent 还在跑它们)。
+    evaluate(sessionId, st);
   }
   evaluateCommandWork(sessionId, st);
 }
@@ -275,7 +441,7 @@ export function listClaudeBackgroundCommandWorkSessions(): string[] {
   return ids;
 }
 
-/** 会话进程被关闭 / 会话被删除时清账(广播熄灭)。 */
+/** 会话进程被关闭 / 会话被删除时清账(广播熄灭;插件引擎未完成的工具调用随进程结束)。 */
 export function clearClaudeSessionBackgroundActivity(sessionId: string): void {
   const st = states.get(sessionId);
   if (!st) return;
@@ -315,6 +481,7 @@ export function resetClaudeBackgroundActivityForTests(): void {
   stickySdkToSession.clear();
   broadcaster = null;
   commandWorkBroadcaster = null;
+  pluginEngineListener = null;
 }
 
 /**

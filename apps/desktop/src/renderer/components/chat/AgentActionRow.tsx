@@ -46,6 +46,7 @@ import { FileTypeIcon } from '@/components/ui/file-type-icon';
  */
 
 import {
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -56,6 +57,7 @@ import { Check, ChevronDown, ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
   describeToolUse,
+  formatCollabToolResultText,
   normalizeDisplayCommand,
   piEditReplacements,
   type CommandIntent,
@@ -68,6 +70,7 @@ import { Spinner } from '@/components/ui/spinner';
 import type { ChatMessage } from '@/lib/makerChatStore';
 import {
   verbForTool,
+  verbLabelKeyForCollab,
   verbLabelKeyForIntent,
   verbLabelKeyForRow,
 } from '@/lib/agent-actions/verbAggregator';
@@ -106,9 +109,12 @@ import {
   ACTIVITY_ROW_HOVER_SURFACE_CLASS,
   ACTIVITY_ROW_RADIUS_CLASS,
 } from './activityRowChrome';
+import { ImageGalleryContext, ImageGalleryScopeContext } from './ImageGalleryContext';
+import { AttachmentCollectionContext } from './AttachmentCollectionContext';
 import { ImageLightbox } from './ImageLightbox';
 import { TextLightbox } from './lazyPreviewLightboxes';
 import { ToolPayloadLightbox, type ToolPayloadMode } from './ToolPayloadLightbox';
+import { useFilePreviewLightbox } from './FilePreviewLightboxHost';
 import { useFileChipContextMenu } from './useFileChipContextMenu';
 import { activateInlineLinkFromKeyboard } from './linkInteraction';
 import {
@@ -551,6 +557,43 @@ function commandDisplayText(inp: Record<string, unknown>): string {
   return normalizeDisplayCommand(inp.command) ?? inp.command;
 }
 
+function formatCollabInlineInput(
+  descriptor: Extract<ToolUseDescriptor, { kind: 'collab' }>,
+  inp: Record<string, unknown> | null,
+  t: (key: string, options?: Record<string, unknown>) => string,
+): string {
+  const lines: string[] = [];
+  if (descriptor.targets?.length) {
+    lines.push(t('chat.agentActionRow.collab.targets', { targets: descriptor.targets.join(', ') }));
+  } else if (descriptor.targetCount && descriptor.targetCount > 0) {
+    lines.push(t('chat.agentActionRow.collab.targetCount', { count: descriptor.targetCount }));
+  }
+  const rawPrompt = typeof inp?.prompt === 'string' && inp.prompt.trim()
+    ? inp.prompt.trim()
+    : typeof inp?.message === 'string' && inp.message.trim()
+      ? inp.message.trim()
+      : descriptor.prompt;
+  if (rawPrompt) {
+    lines.push(t('chat.agentActionRow.collab.prompt', { prompt: rawPrompt }));
+  }
+  if (typeof inp?.model === 'string' && inp.model.trim()) {
+    lines.push(t('chat.agentActionRow.collab.model', { model: inp.model.trim() }));
+  }
+  return lines.join('\n');
+}
+
+function humanizeCollabToolResult(
+  toolResult: string,
+  t: (key: string, options?: Record<string, unknown>) => string,
+): string | null {
+  return formatCollabToolResultText(toolResult, (state) => {
+    if (state === 'completed') return t('chat.agentActionRow.status.done');
+    if (state === 'failed') return t('chat.agentActionRow.status.failed');
+    if (state === 'running') return t('chat.agentActionRow.status.running');
+    return t('chat.agentTask.status.stopped');
+  });
+}
+
 function formatInlineInput(toolName: string, inp: Record<string, unknown> | null): string {
   if (!inp) return '';
   switch (toolName) {
@@ -749,6 +792,8 @@ export interface AgentActionRowProps {
    * isSessionStreaming 计算后传入;缺省按已完成渲染(历史消息路径)。
    */
   status?: 'running' | 'done';
+  /** Number of contiguous non-error polling calls collapsed into this row (rendered when > 1). */
+  repeatCount?: number;
   /**
    * Host-resolved descriptor of a remote single-line activity. Its input is not on this
    * device, so the row never re-describes a partial input.
@@ -793,6 +838,7 @@ export function AgentActionRow({
   showRawCommand = false,
   intentOverride,
   status = 'done',
+  repeatCount,
   descriptorOverride,
   onActivateOverride,
 }: AgentActionRowProps) {
@@ -862,15 +908,20 @@ export function AgentActionRow({
     !descriptor.description &&
     !descriptor.intent &&
     showRawCommand;
-  const verbLabel = t(
-    intentAction
-      ? verbLabelKeyForIntent(intentAction)
-      : isRawCommandFallback
-        ? 'chat.agentActionRow.verb.ranCommand'
-        : isFileChange
-          ? fileChangeVerbKey(descriptor)
-          : verbLabelKeyForRow(verbForTool(toolName)),
-  );
+  const collabVerb = descriptor.kind === 'collab' ? verbLabelKeyForCollab(descriptor) : null;
+  const verbLabel = collabVerb
+    ? collabVerb.count !== undefined
+      ? t(collabVerb.key, { count: collabVerb.count })
+      : t(collabVerb.key)
+    : t(
+        intentAction
+          ? verbLabelKeyForIntent(intentAction)
+          : isRawCommandFallback
+            ? 'chat.agentActionRow.verb.ranCommand'
+            : isFileChange
+              ? fileChangeVerbKey(descriptor)
+              : verbLabelKeyForRow(verbForTool(toolName)),
+      );
   // 意识行动词固定"召唤意识"(与其它工具的 Ran/Read 语系并列)。
   const rowVerbLabel = ghostInfo ? t('chat.ghostCall.verb') : verbLabel;
   const displayParam = useMemo(
@@ -890,7 +941,9 @@ export function AgentActionRow({
       ? descriptor.command
       : null;
   const userFacingToolResult = displayedToolResult
-    ? (humanizeDocumentToolResult(toolName, displayedToolResult) ?? displayedToolResult)
+    ? descriptor.kind === 'collab'
+      ? humanizeCollabToolResult(displayedToolResult, t)
+      : (humanizeDocumentToolResult(toolName, displayedToolResult) ?? displayedToolResult)
     : null;
   const diffSources = useMemo(() => diffSourcesForToolCall(toolName, inp), [toolName, inp]);
   const syncDiff = useMemo<ToolDiffDetails | null>(() => {
@@ -957,6 +1010,13 @@ export function AgentActionRow({
   const [expanded, setExpanded] = useState(false);
   const triggerRef = useRef<HTMLElement | null>(null);
   const fileChipRef = useRef<HTMLSpanElement | null>(null);
+  // 文件预览交给会话级宿主(issue #12851):这一行随时会被重建(实时预览区收起 /
+  // 「最近 5 条」把旧行挤出 / work group 换 key),预览不能跟着行一起消失。
+  // 没有宿主的场景(单独渲染这一行)保留就地渲染的退路。
+  const previewHost = useFilePreviewLightbox();
+  const images = useContext(ImageGalleryContext);
+  const scope = useContext(ImageGalleryScopeContext);
+  const attachments = useContext(AttachmentCollectionContext);
 
   /**
    * 行/chevron 激活时的分流:
@@ -972,7 +1032,16 @@ export function AgentActionRow({
     const diffPayload = buildDiffPayload(descriptor, inp, asyncDiff ?? syncDiff);
     if (diffPayload) {
       triggerRef.current = anchor;
-      setLightbox({ kind: 'payload', payload: diffPayload });
+      if (previewHost) {
+        previewHost.open({
+          kind: 'diff',
+          sessionId: fileCtx.sessionId,
+          payload: diffPayload,
+          triggerRef,
+        });
+      } else {
+        setLightbox({ kind: 'payload', payload: diffPayload });
+      }
       return;
     }
     if (isInlineExpand) {
@@ -991,16 +1060,28 @@ export function AgentActionRow({
       if (isImagePath(absPath)) {
         // remote 会话:xdt-file://?path= 经 origin 改写走远程媒体管线(device 全量 /
         // ssh 限 workdir 内);本地 no-op。
-        setLightbox({
-          kind: 'image',
-          src: rewriteToRemoteMediaOrigin(
-            toLocalFileUrl(absPath),
-            toRemoteMediaOrigin(fileCtx.origin, fileCtx.workingDir),
-          ),
-        });
+        const src = rewriteToRemoteMediaOrigin(
+          toLocalFileUrl(absPath),
+          toRemoteMediaOrigin(fileCtx.origin, fileCtx.workingDir),
+        );
+        if (previewHost) {
+          previewHost.open({ kind: 'image', sessionId: fileCtx.sessionId, src, images, scope, attachments, file: fileCtx });
+        } else {
+          setLightbox({ kind: 'image', src });
+        }
       } else {
         if (!(await shouldOpenTextLightboxForOrigin(fileCtx, absPath))) return;
-        setLightbox({ kind: 'file', path: absPath, name: basename(absPath) });
+        if (previewHost) {
+          previewHost.open({
+            kind: 'document',
+            sessionId: fileCtx.sessionId,
+            filePath: absPath,
+            fileName: basename(absPath),
+            triggerRef,
+          });
+        } else {
+          setLightbox({ kind: 'file', path: absPath, name: basename(absPath) });
+        }
       }
       return;
     }
@@ -1013,8 +1094,13 @@ export function AgentActionRow({
 
   // 就地展开时要展示的 input 文本(已按 tool 名做了人类可读的格式化)。
   const inlineInputText = useMemo(
-    () => (isInlineExpand ? formatInlineInput(toolName, inp) : ''),
-    [isInlineExpand, toolName, inp],
+    () =>
+      isInlineExpand
+        ? descriptor.kind === 'collab'
+          ? formatCollabInlineInput(descriptor, inp, t)
+          : formatInlineInput(toolName, inp)
+        : '',
+    [isInlineExpand, descriptor, toolName, inp, t],
   );
 
   // v12: 文件 chip 右键菜单 (复制 / 复制文件路径 / 打开文件所在目录)。
@@ -1056,7 +1142,7 @@ export function AgentActionRow({
           ref={fileChipRef}
           data-agent-action-file-chip="true"
           className={cn(
-            'inline-flex items-center gap-[3px] px-[5px] py-[0.5px]',
+            'inline-flex items-center gap-0.5 px-1 py-[0.5px]',
             'rounded-[4px] border',
             'bg-[var(--chat-input-chip-bg)]',
             'border-[var(--chat-input-chip-border)]',
@@ -1133,7 +1219,7 @@ export function AgentActionRow({
         className={cn(
           'group flex w-full items-center gap-1.5',
           ACTIVITY_ROW_RADIUS_CLASS,
-          'px-2 py-[3px]',
+          'px-2 py-0.5',
           ACTIVITY_ROW_HOVER_SURFACE_CLASS,
           ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
           'cursor-pointer select-none outline-none',
@@ -1161,6 +1247,14 @@ export function AgentActionRow({
           </span>
         )}
         {displayCell}
+        {repeatCount && repeatCount > 1 && (
+          <span
+            data-agent-action-repeat-count={repeatCount}
+            className="shrink-0 font-mono text-11 leading-[1.454545] tabular-nums text-[var(--text-tertiary)]"
+          >
+            ×{repeatCount}
+          </span>
+        )}
         <span className="flex-1" />
         {stats && (
           <span className="font-mono text-13 font-medium shrink-0 flex gap-1">
@@ -1178,7 +1272,7 @@ export function AgentActionRow({
         <div
           data-agent-action-raw-command="true"
           title={rawCommand}
-          className="min-w-0 truncate px-2 pb-[3px] pl-[30px] font-mono text-12 leading-[1.5] text-[var(--msg-tool-card-chevron)]"
+          className="min-w-0 truncate px-2 pb-0.5 pl-[30px] font-mono text-12 leading-[1.5] text-[var(--msg-tool-card-chevron)]"
         >
           {rawCommand}
         </div>
@@ -1199,7 +1293,7 @@ export function AgentActionRow({
           v11 (2026-04-20):背景色 + 边框对齐"用户输入气泡"
           (`--msg-user-bg` + `--msg-user-border`),与 hover 嵌入式 inline-code
           灰区分开,把就地展开视觉上提升为一个独立"卡片"。 */}
-      {renderPluginUiBody(pluginUi.toolBody ? { position: 'tool.body', sessionId: fileCtx.sessionId, tool: toolName,
+      {renderPluginUiBody(pluginUi.toolBody ? { position: 'tool.body', sessionId: fileCtx.sessionId, clientId: message.clientId, tool: toolName,
         disabled: isRemoteFileOrigin(fileCtx.origin), plugin: message.sourcePlugin?.pluginId,
         context: () => ({ tool: { clientId: message.clientId, name: toolName, input: message.toolInput, result: toolResult, status } }) } : undefined,
       isInlineExpand && expanded && (
@@ -1207,7 +1301,7 @@ export function AgentActionRow({
           // 行按钮本身是 select-none,这里必须显式 select-text,让用户能复制
           // grep pattern、bash command 这种关键文本。
           className={cn(
-            'mx-2 mt-1 mb-1 rounded-[6px] px-[10px] py-2',
+            'mx-2 mt-1 mb-1 rounded-lg px-[10px] py-2',
             'bg-[var(--msg-user-bg)]',
             'border border-[var(--msg-user-border)]',
             'font-mono text-[length:calc(var(--app-code-font-size)_-_1px)] leading-[calc(var(--app-code-font-size)_+_4px)]',
@@ -1230,7 +1324,13 @@ export function AgentActionRow({
           )}
           {!inlineInputText && !userFacingToolResult && (
             <span className="text-[var(--msg-tool-card-chevron)]">
-              {t('chat.agentActionRow.noContent')}
+              {descriptor.kind === 'collab'
+                ? t(
+                    status === 'running'
+                      ? 'chat.agentActionRow.status.running'
+                      : 'chat.agentActionRow.status.done',
+                  )
+                : t('chat.agentActionRow.noContent')}
             </span>
           )}
         </div>

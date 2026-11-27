@@ -305,6 +305,22 @@ describe('coerceCachedSession', () => {
     expect((coerced?.preview as string).length).toBe(MAX_CACHED_TEXT_CHARS);
   });
 
+  it('保留插件引擎任务的 providerId 与 agentDeviceId，冷启动侧栏不丢引擎身份', () => {
+    const coerced = coerceCachedSession({
+      id: 's-acp',
+      status: 'active',
+      agentKind: 'acp',
+      providerId: 'acp-plugin:dsh-plugin:dsh',
+      agentDeviceId: 'device-b',
+    });
+    expect(coerced).toMatchObject({
+      id: 's-acp',
+      agentKind: 'acp',
+      providerId: 'acp-plugin:dsh-plugin:dsh',
+      agentDeviceId: 'device-b',
+    });
+  });
+
   it('缺 id / 非 active|archived 状态 → 丢弃(不该出现在列表里)', () => {
     expect(coerceCachedSession({ status: 'active' })).toBeNull();
     expect(coerceCachedSession({ id: 's1', status: 'deleted' })).toBeNull();
@@ -743,6 +759,19 @@ describe('deviceId / sessionId 归一化', () => {
 });
 
 describe('session list', () => {
+  // Unit regression: legacy rows have only workingDir to match a cached project alias.
+  it('preserves a long legacy alias key across disk writes', async () => {
+    const workingDir = '/repo/' + 'long-directory/'.repeat(20) + 'app';
+    const alias = { projectKey: `local:${workingDir}`, alias: 'My project' };
+    await cache().writeSessionList([{ deviceId: 'mac', deviceName: 'Mac',
+      projectAliases: { platform: 'darwin', aliases: [alias] },
+      sessions: [{ id: 's1', status: 'active', workingDir }],
+    }]);
+    const [device] = await cache().readSessionList();
+    expect(device.sessions[0].workingDir).toBe(workingDir);
+    expect(device.projectAliases?.aliases).toEqual([alias]);
+  });
+
   // #7972: cold-start/offline list projection must retain project identity, not cwd.
   // Unit round trip with a new cache instance; remote POSIX paths, including old payloads.
   it.each([{ projectDir: `/projects/${'long-project/'.repeat(24)}` }, { projectDir: null }, {}])(

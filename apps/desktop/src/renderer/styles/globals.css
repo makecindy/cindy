@@ -131,6 +131,7 @@
       --motion-enter: 0ms;
       --motion-exit: 0ms;
       --motion-spinner-cycle: 0ms;
+      --motion-stream-word: 0ms;
       --motion-sidebar-title-marquee-per-viewport: 0ms;
     }
 
@@ -666,7 +667,7 @@ html:lang(ko) {
   display: inline-flex;
   align-items: center;
   vertical-align: -0.2em;
-  margin-left: 1px;
+  margin-left: var(--space-px);
   color: var(--chat-input-text);
   pointer-events: none;
   user-select: none;
@@ -786,7 +787,7 @@ html:lang(ko) {
 .composer-send-ring {
   position: absolute;
   inset: -4px;
-  border-radius: 9999px;
+  border-radius: var(--radius-full);
   border: 1.5px solid var(--text-secondary);
   opacity: 0;
   transform: scale(0.85);
@@ -927,7 +928,7 @@ html:lang(ko) {
   );
   position: absolute;
   inset: 0;
-  border-radius: 9999px;
+  border-radius: var(--radius-full);
   overflow: hidden;
   pointer-events: none;
   opacity: 0;
@@ -994,7 +995,7 @@ html:lang(ko) {
     radial-gradient(ellipse 11px 12px at 100% 27%, color-mix(in srgb, var(--beam-red) 30%, transparent), transparent);
 }
 .composer-send-beam-rim {
-  padding: 1px;
+  padding: var(--space-px);
   opacity: var(--beam-stroke);
   filter: brightness(1.3) saturate(var(--beam-saturate));
   mask:
@@ -1027,7 +1028,7 @@ html:lang(ko) {
   background: var(--beam-highlight);
 }
 .composer-send-beam-bloom {
-  padding: 1px;
+  padding: var(--space-px);
   background: var(--beam-bloom-fill);
   mask:
     linear-gradient(black 0 0) content-box,
@@ -1064,7 +1065,7 @@ html:lang(ko) {
     .slash-cmd-pill,
     .quick-start-pill
   ) {
-  margin-inline: 4px;
+  margin-inline: var(--space-1);
 }
 
 /* The base layer disables native element dragging globally. Composer atoms
@@ -1085,9 +1086,9 @@ html:lang(ko) {
   box-sizing: border-box;
   background: var(--surface-chip);
   border: 1px solid var(--border-default);
-  border-radius: 9999px;
+  border-radius: var(--radius-full);
   padding: 2px 8px 3px;
-  margin-inline: 0 4px;
+  margin-inline: 0 var(--space-1);
   color: var(--chat-input-text);
   font: inherit;
   box-decoration-break: clone;
@@ -1124,7 +1125,7 @@ html:lang(ko) {
    composer 正文字号,仅用 background/color/radius 做视觉区分。 */
 .ProseMirror .quick-start-pill {
   background: var(--accent-cta-bg);
-  border-radius: 9999px;
+  border-radius: var(--radius-full);
   padding: 2px 8px 3px;
   color: var(--accent-pure-cta-fg);
   font: inherit;
@@ -1138,8 +1139,8 @@ html:lang(ko) {
 .ProseMirror .ghost-cmd-pill {
   background: var(--surface-chip);
   border: 1px solid var(--border-default);
-  border-radius: 9999px;
-  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  padding: var(--space-0_5) var(--space-2);
   color: var(--text-primary);
   font-size: 12px;
   font-weight: 400;
@@ -1160,7 +1161,7 @@ html:lang(ko) {
   display: inline-block;
   width: 14px;
   height: 14px;
-  margin-right: 6px;
+  margin-right: var(--space-1_5);
   vertical-align: -2px;
   background-color: currentColor;
   -webkit-mask: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%20fill='none'%20stroke='black'%20stroke-width='2'%20stroke-linecap='round'%20stroke-linejoin='round'%3E%3Cpath%20d='M9%2010h.01'/%3E%3Cpath%20d='M15%2010h.01'/%3E%3Cpath%20d='M12%202a8%208%200%200%200-8%208v12l3-3%202.5%202.5L12%2019l2.5%202.5L17%2019l3%203V10a8%208%200%200%200-8-8z'/%3E%3C/svg%3E")
@@ -1172,7 +1173,7 @@ html:lang(ko) {
   background: var(--ghost-cmd-icon) center / cover no-repeat;
   -webkit-mask: none;
   mask: none;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
 }
 /* 全角触发符(＄/￥)同时命中 CjkPunctDecoration 时,ProseMirror 会把重叠
    区间切成相邻多个 span:接缝处去圆角/去边框拼回一颗胶囊,图标只画一次。 */
@@ -1200,7 +1201,7 @@ html:lang(ko) {
 }
 .ProseMirror .ghost-cmd-pill[data-ghost-cmd-origin]::after {
   content: attr(data-ghost-cmd-origin);
-  margin-left: 6px;
+  margin-left: var(--space-1_5);
   color: var(--text-tertiary);
 }
 /* CJK 标点会把胶囊切成多段、每段都带来源属性:只在最后一段显示标签。 */
@@ -1473,7 +1474,11 @@ body.resizing-pane [data-ghost-webview] {
 }
 
 /* 流式正文分段淡入(§14.4 第五个 sanctioned motion class,2026-08-07):
-   每个新词与 inline-code 原子以 --motion-fast 从透明「浮现」。词段沿消息级
+   每个新词与 inline-code 原子以 --motion-stream-word(500ms,linear)从透明「浮现」。
+   匀速放出(streamingReveal.ts)每帧只交出几个词,较长的线性淡入让最新一行形成
+   连续的渐显前沿,而不是逐批闪现(2026-11-25,§14.4 Stream pacing)。高速输出时
+   rehypeStreamWordFade 按出字密度写入较短的 --wf-duration(最短 150ms),限制同时
+   淡入的段数。词段沿消息级
    连续时间线错峰进入；已见段 remount 时可用负 delay 恢复原动画进度。
    不是逐字打字机 —— 段整体已就位,只有 opacity 渐变;
    pure-opacity 一次性动画,compositor-only。`both` 保证负 delay / remount 续播。
@@ -1482,14 +1487,14 @@ body.resizing-pane [data-ghost-webview] {
    不会钉在透明帧 —— 与「forwards/both 入场动画只能时长归零」那条坑的区别在于
    这里 0% 帧之外元素本身没有 opacity 声明)。 */
 .stream-word {
-  animation: stream-word-in var(--motion-fast) var(--motion-ease-out) var(--wf-delay, 0ms) both;
+  animation: stream-word-in var(--wf-duration, var(--motion-stream-word)) linear var(--wf-delay, 0ms) both;
 }
 /* 流式列表圆点淡入(同一 motion class 家族,2026-08-08):动画打在 ::marker 上,圆点/序号从 transparent
    浮现,delay 由 rehypeStreamWordFade 写入(与 li 内第一个词共享 timeline
    位置,圆点与文字同帧出现)。::marker 只支持 color/font 等少数属性,故用
    color 关键帧而不是 opacity。data 属性仅流式挂载;终版渲染无此属性。 */
 [data-stream-marker]::marker {
-  animation: stream-marker-in var(--motion-fast) var(--motion-ease-out) var(--wf-delay, 0ms) both;
+  animation: stream-marker-in var(--wf-duration, var(--motion-stream-word)) linear var(--wf-delay, 0ms) both;
 }
 /* 只定义 0% 帧：终点回落元素自然颜色，不用 inherit 终帧。 */
 @keyframes stream-marker-in {
@@ -2005,7 +2010,7 @@ body.resizing-pane [data-ghost-webview] {
 .pending-queue-scroll::-webkit-scrollbar-thumb {
   background-color: var(--msg-scrollbar);
   border: none;
-  border-radius: 9999px;
+  border-radius: var(--radius-full);
 }
 .pending-queue-scroll::-webkit-scrollbar-thumb:hover {
   background-color: var(--msg-scrollbar-hover);
@@ -2034,7 +2039,7 @@ body.resizing-pane [data-ghost-webview] {
   background-color: var(--msg-scrollbar);
   border: 2px solid transparent;
   background-clip: padding-box;
-  border-radius: 9999px;
+  border-radius: var(--radius-full);
 }
 .morph-panel-list-scroll::-webkit-scrollbar-thumb:hover {
   background-color: var(--msg-scrollbar-hover);
@@ -2119,7 +2124,7 @@ body.resizing-pane [data-ghost-webview] {
   z-index: 0;
   width: 5px;
   height: 5px;
-  border-radius: 9999px;
+  border-radius: var(--radius-full);
   background-color: var(--settings-section-sublabel);
   opacity: 0;
   transform: translate3d(0, 0, 0) scale(0.6);
@@ -2255,7 +2260,7 @@ body.resizing-pane [data-ghost-webview] {
      把 code block 里那段被高亮的字渲染得跟周围尺寸不一致。 */
   font: inherit;
   line-height: inherit;
-  padding: 2px 1px;
+  padding: var(--space-0_5) var(--space-px);
   border-radius: 2px;
 }
 .doc-search-mark[data-active] {
@@ -2329,8 +2334,8 @@ mark.doc-search-mark [class] {
 .msg-markdown .katex-display {
   overflow-x: auto;
   overflow-y: hidden;
-  padding: 4px 2px;
-  margin: 8px 0;
+  padding: var(--space-1) var(--space-0_5);
+  margin: var(--space-2) 0;
 }
 .msg-markdown .katex {
   /* 长 inline 公式允许在气泡内换行退化为可断行,避免撑破布局。 */
@@ -2614,7 +2619,7 @@ html[data-plugin-ui-hidden~='windowControls'] [data-plugin-ui-element='windowCon
     -webkit-backdrop-filter: none;
   }
   .modal-panel {
-    border-radius: 0.75rem;
+    border-radius: var(--radius-xl);
     border: 1px solid var(--border-default);
     background-color: var(--confirm-bg);
     box-shadow: var(--shadow-menu);
@@ -2769,6 +2774,31 @@ html.dark:is([data-wallpaper-active='true'], [data-desktop-background='true']) {
   :is([role='dialog'], [role='alertdialog'], [role='menu'], [role='listbox'], [role='tooltip']) *
 )) {
   background-color: color-mix(in srgb, var(--wallpaper-glass-fill) var(--wallpaper-glass-opacity), transparent);
+}
+/* A sticky header filled with its card's token (one of the fills above) would sit on
+   the glass card as an opaque slab. While the card is glass the header stays clear
+   until it sticks over scrolled content, then takes its opaque fill back, as sticky
+   surfaces do. Elsewhere it keeps its own fill unchanged.
+   @supports gates the whole rule: browsers without scroll-state queries (the Host
+   browser client ships this renderer) would apply the transparency but ignore the
+   stuck query, so scrolled rows would show through; there it stays opaque. */
+@supports (container-type: scroll-state) {
+  html:is([data-theme='cindy-light'], [data-theme='cindy-dark']):is([data-wallpaper-active='true'], [data-desktop-background='true']) .wallpaper-sticky-header {
+    container-type: scroll-state;
+    background-color: transparent;
+  }
+  html:is([data-theme='cindy-light'], [data-theme='cindy-dark']):is([data-wallpaper-active='true'], [data-desktop-background='true']) .wallpaper-sticky-header::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+  }
+  @container scroll-state(stuck: top) {
+    html:is([data-theme='cindy-light'], [data-theme='cindy-dark']):is([data-wallpaper-active='true'], [data-desktop-background='true']) .wallpaper-sticky-header::before {
+      background-color: var(--wallpaper-glass-fill);
+    }
+  }
 }
 
 /* Keep the decoded old canvas above the new one and fade only its opacity.

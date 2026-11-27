@@ -71,6 +71,9 @@ export function InputHandoffCard({ sessionId, snapshot, remote }: InputHandoffCa
   // Stays wanted across steps: after Continue the dialog hides while the
   // computer types and comes back by itself for the next screen to fill.
   const [dialogWanted, setDialogWanted] = useState(false);
+  useEffect(() => {
+    if (snapshot.accountVerification) setDialogWanted(true);
+  }, [snapshot.requestId, snapshot.accountVerification]);
   // The owner chose the form over the window (the live view or the window could not be used).
   const [formFor, setFormFor] = useState<string | null>(null);
 
@@ -243,12 +246,12 @@ export function InputHandoffCard({ sessionId, snapshot, remote }: InputHandoffCa
       aria-label={snapshot.purpose}
       data-testid="input-handoff-strip"
       className={cn(
-        'w-full max-w-[914px] rounded-[12px] border px-3 py-2.5',
+        'w-full max-w-[914px] rounded-xl border px-3 py-2.5',
         'border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)]',
       )}
     >
       <div className="flex min-w-0 items-center gap-3">
-        <span className="flex size-9 shrink-0 items-center justify-center rounded-[8px] bg-[var(--surface-chip)] text-[var(--text-primary)]">
+        <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-[var(--surface-chip)] text-[var(--text-primary)]">
           <Icon size={18} aria-hidden />
         </span>
         <div className="min-w-0 flex-1">
@@ -365,7 +368,16 @@ function InputHandoffStepDialog({
       />
     );
     // Cindy cannot see the agent's screen, so the owner says when the scan is done.
-    if (snapshot.agentPicture) {
+    if (snapshot.accountVerification) {
+      footer = (
+        <div className="flex flex-wrap justify-center gap-2">
+          <Button variant="secondary" disabled={busy} onClick={() => onDecide('refresh')}>
+            {t('antigravityVerification.refresh')}
+          </Button>
+          <Button variant="secondary" disabled={busy} onClick={() => onDecide('cancel')}>{t('inputHandoff.action.close')}</Button>
+        </div>
+      );
+    } else if (snapshot.agentPicture) {
       footer = (
         <div className="flex flex-col gap-2">
           <Button size="lg" variant="cta" palette="confirmation" disabled={busy} onClick={() => onDecide('done')}>
@@ -436,7 +448,7 @@ function InputHandoffStepDialog({
     );
   }
   // A terminal prompt has no screen to look at; a picture step already is one, except a QR code cut out of it.
-  const canPicture = !snapshot.command && mode !== 'picture' && !snapshot.agentPicture;
+  const canPicture = !snapshot.accountVerification && !snapshot.command && mode !== 'picture' && !snapshot.agentPicture;
   const links =
     canPicture || liveView ? (
       <>

@@ -23,7 +23,7 @@ vi.mock('@/components/onboarding/ConnectProviderCard', () => ({
 
 const translate = (key: string, opts?: Record<string, unknown>) =>
   opts ? `${key}:${JSON.stringify(opts)}` : key;
-vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: 'fixture-owner' }) }));
+vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: 'fixture-owner' }), useOptionalAuthDeviceId: () => null }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: translate, i18n: { resolvedLanguage: 'en' } }),
 }));
@@ -44,11 +44,16 @@ const mocks = vi.hoisted(() => ({
   setBotHidden: vi.fn(async () => undefined),
   setBotPinned: vi.fn(async () => undefined),
   duplicateBotProfile: vi.fn(async () => ({ id: 'copy' })),
+  toastError: vi.fn(),
   /** 灵动岛活动镜像:sessionId -> phase。侧栏据此显示「正在输入…」。 */
   islandActivity: new Map<string, { sessionId: string; phase: string; compactDetail?: string }>(),
   cloud: { enabled: false, selfDeviceId: null, humanActorId: null, actors: [], demotedBotIds: [] } as import('../../../../shared/companionCloud').CompanionCloudSnapshot,
 }));
 vi.mock('../companionCloudStore', () => ({ useCompanionCloud: () => mocks.cloud }));
+vi.mock('@/lib/toast', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/lib/toast')>();
+  return { ...actual, toast: { ...actual.toast, error: mocks.toastError } };
+});
 
 vi.mock('../useRemoteBots', () => ({ useRemoteBots: () => mocks.remoteBots }));
 vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
@@ -103,6 +108,7 @@ vi.mock('../BotDeleteDialog', () => ({
 }));
 
 import { TeammatesSection } from '../TeammatesSection';
+import { BotModelSelectionRequiredError } from '../botStore';
 import { BotConnectionStatus } from '../BotConnectionStatus';
 import { markBotRead, resetBotReadStateForTests } from '../botReadState';
 import { readCollapsedTeammateAvatars, writeCollapsedTeammateAvatars, readTeammatesViewMode, readTeammatesSectionCollapsed, writeTeammatesSectionCollapsed, writeTeammatesViewMode } from '../teammatesSectionPrefs';
@@ -157,6 +163,7 @@ beforeEach(() => {
   mocks.setBotHidden.mockResolvedValue(undefined);
   mocks.setBotPinned.mockResolvedValue(undefined);
   mocks.duplicateBotProfile.mockResolvedValue({ id: 'copy' });
+  mocks.toastError.mockReset();
   mocks.health = new Map();
   mocks.unread = {};
   mocks.groupMessages = new Map();
@@ -206,6 +213,18 @@ afterEach(() => {
 });
 
 describe('one Cindy entry across devices', () => {
+  // #8585, unit: two legacy Cindy choices must not absorb the newly reachable
+  // same-home cloud recovery row, which is intentionally outside their picker.
+  it('keeps cloud recovery separate from the legacy Cindy picker', async () => {
+    mocks.profiles = [{ ...bot({ id: 'legacy-local', name: 'Legacy local' }), templateId: 'cindy' },
+      bot({ id: 'cindy-default', name: 'Recovered Cindy' })];
+    mocks.remoteBots = [{ ...remote('legacy-desk', 'Legacy desk'), id: 'legacy-remote', templateId: 'cindy' }];
+    mocks.cloud = { enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: ['cindy-default'], actors: [
+      { id: 'actor-cindy', externalId: 'cindy-default', name: 'Recovered Cindy', avatar: null, homeDeviceId: 'desk' }] };
+    await renderSidebar();
+    fireEvent.click(screen.getByRole('button', { name: /Recovered Cindy/ }));
+    expect(mocks.navigate).toHaveBeenCalledWith('/bots/remote/desk/cindy-default');
+  });
   const remote = (deviceId: string, deviceName: string, extra = {}) => ({
     id: 'cindy-default', deviceId, deviceName, name: 'Cindy', avatar: '🤖', avatarColor: 'violet',
     description: '', preview: `${deviceName} preview`, activityAt: 1, sessionId: `${deviceId}-chat`, online: true, ...extra,
@@ -929,6 +948,17 @@ describe('TeammatesSection rows', () => {
     expect(mocks.navigate).toHaveBeenCalledWith('/bots/bot-1');
   });
 
+  // A healthy main chat skips the /bots/:botId spinner hand-off; the state lets the
+  // chat gate hand back to that page if its fresh read disagrees (see botOpenRoute).
+  it('opens a healthy main chat straight from the row', async () => {
+    mocks.profiles = [{ ...bot({ id: 'bot-1', name: 'PR steward' }), sessions: [
+      { id: 'main', kind: 'chat', role: 'canonical', status: 'active', title: '', updatedAt: 1 },
+    ] }];
+    await renderSidebar();
+    fireEvent.click(screen.getByText('PR steward'));
+    expect(mocks.navigate).toHaveBeenCalledWith('/bots/bot-1/session/main', { state: { botDirectEntry: true } });
+  });
+
   it('keeps legacy stopped Bots reachable for deletion without presenting archive or restore', async () => {
     mocks.profiles = [
       { ...bot({ id: 'legacy-stopped', name: 'Legacy stopped' }), status: 'archived' },
@@ -1023,6 +1053,49 @@ describe('TeammatesSection rows', () => {
     fireEvent.keyDown(row, { key: 'ContextMenu' });
     fireEvent.keyDown(await screen.findByRole('menuitem', { name: 'bots.list.pin' }), { key: 'Enter' });
     expect(mocks.setBotPinned).toHaveBeenCalledExactlyOnceWith('bot-1', true);
+  });
+
+  // Regression: roster writes are not optimistic, so a rejected pin / hide used to
+  // leave the row unchanged with no feedback (an unhandled rejection).
+  it.each([
+    { item: 'bots.list.pin', write: () => mocks.setBotPinned, message: 'bots.list.pinFailed' },
+    { item: 'bots.list.hide', write: () => mocks.setBotHidden, message: 'bots.list.hideFailed' },
+  ])('reports a failed $item instead of silently doing nothing', async ({ item, write, message }) => {
+    mocks.profiles = [bot({ id: 'bot-1', name: 'PR steward' })];
+    mocks.params = { botId: 'bot-1' };
+    write().mockRejectedValueOnce(new Error('ipc down'));
+    await renderSidebar();
+    fireEvent.contextMenu(screen.getByText('PR steward'));
+    fireEvent.click(await screen.findByRole('menuitem', { name: item }));
+    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledExactlyOnceWith(message));
+    expect(mocks.navigate).not.toHaveBeenCalled();
+  });
+
+  // Regression: duplicating reads the avatar and waits for the new profile with no
+  // progress, and a missing default model rejected silently.
+  it.each([
+    { error: new BotModelSelectionRequiredError(), message: 'bots.list.duplicateModelRequired' },
+    { error: new Error('create failed'), message: 'bots.list.duplicateFailed' },
+  ])('shows duplicate progress in the row, then explains $message', async ({ error, message }) => {
+    mocks.profiles = [bot({ id: 'bot-1', name: 'PR steward' })];
+    let reject!: (reason: unknown) => void;
+    mocks.duplicateBotProfile.mockReturnValueOnce(new Promise((_, fail) => { reject = fail; }));
+    await renderSidebar();
+    fireEvent.contextMenu(screen.getByText('PR steward'));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'bots.list.duplicate' }));
+    expect(await screen.findByRole('status', { name: 'bots.list.duplicating' })).toBeTruthy();
+
+    // A second request while the first is in flight must not start another copy.
+    fireEvent.contextMenu(screen.getByText('PR steward'));
+    const again = await screen.findByRole('menuitem', { name: 'bots.list.duplicate' });
+    expect(again.getAttribute('aria-disabled')).toBe('true');
+    fireEvent.click(again);
+    expect(mocks.duplicateBotProfile).toHaveBeenCalledTimes(1);
+
+    await act(async () => { reject(error); });
+    expect(mocks.toastError).toHaveBeenCalledExactlyOnceWith(message);
+    expect(screen.queryByRole('status', { name: 'bots.list.duplicating' })).toBeNull();
+    expect(mocks.navigate).not.toHaveBeenCalled();
   });
 
   it('re-reads the list when a Bot conversation is marked read', async () => {
@@ -1270,4 +1343,57 @@ it.each(['list', 'icons', 'collapsed'] as const)('shows the pending roster until
   expect(screen.queryByRole('status')).toBeNull();
   expect(store.getBotProfiles().map(row => row.id)).toEqual(['existing']);
   expect(list).toHaveBeenCalledOnce();
+});
+
+it('opens local, remote and icon-strip teammates in a new window on primary-mod click, middle click, and context menu', async () => {
+  const openSessionInNewWindow = vi.fn(async () => undefined);
+  const prevApi = window.electronAPI;
+  (window as unknown as { electronAPI: unknown }).electronAPI = {
+    ...(prevApi as unknown as Record<string, unknown>),
+    platform: 'darwin',
+    maker: {
+      ...((prevApi as { maker?: Record<string, unknown> } | undefined)?.maker ?? {}),
+      openSessionInNewWindow,
+    },
+  };
+  try {
+    mocks.profiles = [bot({ id: 'bot-1', name: 'PR steward' })];
+    mocks.remoteBots = [
+      {
+        id: 'cloud-1',
+        deviceId: 'mac-mini',
+        deviceName: 'Mac mini',
+        name: 'Cloud helper',
+        avatar: '🤖',
+        avatarColor: 'blue',
+        description: '',
+        preview: '',
+        sessionId: null,
+        online: true,
+        connectionKnown: true,
+        activityAt: 2,
+      },
+    ];
+    await renderSidebar();
+
+    const localRow = screen.getByText('PR steward').closest('button')!;
+    const remoteRow = screen.getByText('Cloud helper').closest('button')!;
+
+    fireEvent.click(localRow, { metaKey: true });
+    fireEvent(remoteRow, new MouseEvent('auxclick', { bubbles: true, button: 1 }));
+    // macOS Ctrl+click must not trigger new-window open.
+    fireEvent.click(localRow, { ctrlKey: true });
+
+    expect(openSessionInNewWindow).toHaveBeenNthCalledWith(1, '/bots/bot-1', undefined, undefined);
+    expect(openSessionInNewWindow).toHaveBeenNthCalledWith(2, '/bots/remote/mac-mini/cloud-1', undefined, undefined);
+    expect(openSessionInNewWindow).toHaveBeenCalledTimes(2);
+    expect(mocks.navigate).toHaveBeenCalledTimes(1);
+
+    fireEvent.contextMenu(localRow);
+    const menuItem = await screen.findByRole('menuitem', { name: 'ccAgent.sidebar.sessionMenu.openInNewWindow' });
+    fireEvent.click(menuItem);
+    expect(openSessionInNewWindow).toHaveBeenNthCalledWith(3, '/bots/bot-1', undefined, undefined);
+  } finally {
+    (window as unknown as { electronAPI: unknown }).electronAPI = prevApi;
+  }
 });

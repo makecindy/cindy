@@ -22,7 +22,7 @@ describe('ErrorMessageCard', () => {
   // #10385, unit: recover a persisted no-model error via real settings navigation, only for the execution host.
   it.each([
     ['settings.tabs.providers', '/settings?tab=providers'],
-    ['settings.sections.auxiliaryModels', '/settings?tab=personalization&section=personalization.auxiliaryModels'],
+    ['settings.sections.auxiliaryModels', '/settings?tab=model-groups&section=personalization.auxiliaryModels'],
   ])('opens %s from missing-model history', (label, destination) => {
     function Location() { const location = useLocation(); return <output>{location.pathname + location.search}</output>; }
     render(<MemoryRouter><ErrorMessageCard message="[AUTO_REVIEW_NO_AVAILABLE_MODEL] safe fallback" canConfigureAutoReview /><Location /></MemoryRouter>);
@@ -127,6 +127,46 @@ describe('ErrorMessageCard', () => {
     render(createElement(ErrorMessageCard, { message: raw }));
     expect(screen.getByText('chat.errorBanner.replyFailed')).toBeTruthy();
     expect(screen.queryByText(raw)).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
+    expect(screen.getByText(raw)).toBeTruthy();
+  });
+
+  // History rows of a subscription usage limit showed the same generic summary as the banner did.
+  it('names an account usage limit in history and still offers the original', () => {
+    const raw = "You've hit your session limit · resets 1:20am (Asia/Shanghai)";
+    render(createElement(ErrorMessageCard, { message: raw }));
+    expect(screen.getByText('chat.errorBanner.usageLimitReached')).toBeTruthy();
+    expect(screen.queryByText('chat.errorBanner.replyFailed')).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
+    expect(screen.getByText(raw)).toBeTruthy();
+  });
+
+  // Persisted plugin-engine account errors must stay localized instead of falling back to replyFailed.
+  it.each([
+    [
+      'Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 2h13m2s.',
+      'acp-usage-limit',
+      'chat.errorBanner.usageLimitReached',
+    ],
+    [
+      'Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 2h13m2s.',
+      undefined,
+      'chat.errorBanner.usageLimitReached',
+    ],
+    [
+      'The plugin engine service is temporarily busy.',
+      'acp-overloaded',
+      'chat.errorBanner.overloadBusyNoRetry',
+    ],
+    [
+      'Please sign in again.',
+      'acp-auth-required',
+      'chat.subscriptionAccountError.loginRequired',
+    ],
+  ])('localizes persisted plugin-engine error (%s, reason=%s)', (raw, reason, expectedKey) => {
+    render(createElement(ErrorMessageCard, { message: raw, reason }));
+    expect(screen.getByText(expectedKey)).toBeTruthy();
+    expect(screen.queryByText('chat.errorBanner.replyFailed')).toBeNull();
     fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
     expect(screen.getByText(raw)).toBeTruthy();
   });

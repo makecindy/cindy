@@ -1288,6 +1288,7 @@ describe('ghost · Manifest v3 直接能力声明', () => {
       agent: {},
       notify: true,
       library: true,
+      form: true,
       futureCapability: { mode: 'example' },
     });
     expect(result.ok).toBe(true);
@@ -1298,6 +1299,9 @@ describe('ghost · Manifest v3 直接能力声明', () => {
     expect(result.manifest.notify).toBe(true);
     expect(result.manifest.library).toBe(true);
     expect(ghostPermissionItems(result.manifest).map((item) => item.key)).toContain('library');
+    // form 是独立权限项:已装插件新增表单弹窗时,更新的扩权确认要能拦下。
+    expect(result.manifest.form).toBe(true);
+    expect(ghostPermissionItems(result.manifest).map((item) => item.key)).toContain('form');
     expect(result.manifest.futureCapability).toEqual({ mode: 'example' });
     expect(result.unsupportedLegacySlots).toEqual([]);
     expect(ghostPermissionItems(result.manifest).map((item) => item.key)).not.toContain(
@@ -5485,4 +5489,39 @@ describe('ghost · readme 详细介绍声明', () => {
     expect(validateProtocolManifest(raw).ok).toBe(ok);
     if (desktop.ok) expect(desktop.manifest.readme).toEqual(readme);
   });
+});
+
+/*
+ * 测试价值
+ * - 生产入口与可观察结果：validateGhostManifest / validateInstalledGhostManifest / ghostPermissionItems /
+ *   diffGhostPermissionItems / unreviewedGhostPermissionItems 对 fileOpener 的结果：装入确认单列一条
+ *   权限、更新新增该能力算权限变多、市场真实包只能收窄扩展名、已装快照里不合规的历史值只丢弃。
+ * - 规则依据：plugin-security-and-authoring.md §1.2、§3.1、§5（存量插件升级必须无感）。
+ * - 现有覆盖缺口：新字段，此前作为未知字段原样保留。
+ * - 最小失败输入：真实包比审核清单多一个 .pdf；已装快照里声明了 fileOpener 却没有 node。
+ * - tier：unit（纯函数）。实测耗时：随本文件整体运行。
+ */
+it('lists fileOpener as its own permission, caps it to reviewed extensions and keeps old installs usable', () => {
+  const base = {
+    schemaVersion: 3, minCindyVersion: '0.1.145', id: 'office', name: 'Office', version: '1.0.0', kind: 'chip',
+    entry: 'main.js', node: { entry: 'node/worker.cjs', protocol: 'json-rpc-stdio' },
+  };
+  const reviewed = validateGhostManifest({ ...base, fileOpener: { extensions: ['.docx', '.xlsx'] } });
+  const narrower = validateGhostManifest({ ...base, fileOpener: { extensions: ['.docx'] } });
+  const wider = validateGhostManifest({ ...base, fileOpener: { extensions: ['.docx', '.xlsx', '.pdf'] } });
+  const without = validateGhostManifest(base);
+  if (!reviewed.ok || !narrower.ok || !wider.ok || !without.ok) throw new Error('invalid fixture');
+
+  expect(ghostPermissionItems(reviewed.manifest).find((item) => item.key === 'file-opener')).toMatchObject({
+    kind: 'file-opener', labelKey: 'fileOpener', detailKey: 'fileOpenerDetail', detail: '.docx .xlsx',
+  });
+  expect(ghostPermissionItems(without.manifest).some((item) => item.key === 'file-opener')).toBe(false);
+  expect(diffGhostPermissionItems(without.manifest, reviewed.manifest).added.map((item) => item.key)).toEqual(['file-opener']);
+  expect(unreviewedGhostPermissionItems(reviewed.manifest, undefined, narrower.manifest)).toEqual([]);
+  expect(unreviewedGhostPermissionItems(reviewed.manifest, undefined, wider.manifest).map((item) => item.key)).toEqual(['file-opener']);
+
+  // 存量：Host 认识该字段之前写下的不合规声明只丢弃，插件其余能力照常可用。
+  const installed = validateInstalledGhostManifest({ ...base, node: undefined, fileOpener: { extensions: ['.docx'] } });
+  expect(installed.ok).toBe(true);
+  if (installed.ok) expect(installed.manifest.fileOpener).toBeUndefined();
 });

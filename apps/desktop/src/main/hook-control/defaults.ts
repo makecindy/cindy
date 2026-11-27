@@ -32,7 +32,7 @@
  * 纯函数 + 注入依赖(规则 14), Electron / maker 绑定在 session-runner 组装。
  */
 
-import type { Effort } from '@cindy/maker-core';
+import type { Effort, EngineKind } from '@cindy/maker-core';
 
 /** 依赖注入面: IM 默认值 + 各 agent 当前可用模型清单。 */
 export interface HookDefaultsDeps {
@@ -55,9 +55,9 @@ export interface HookDefaultsDeps {
 
 export interface ResolvedHookSessionConfig {
   agentDeviceId?: string | null;
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: EngineKind;
   model: string;
-  effort: Effort | undefined;
+  effort: Effort | '' | undefined;
   permissionMode: string;
   /**
    * 草稿默认的来源(供应商)id, 未设置为 null。这里只透传设置值不校验连接态 ——
@@ -66,6 +66,11 @@ export interface ResolvedHookSessionConfig {
    */
   providerId: string | null;
 }
+
+export type ResolvedBuiltinHookSessionConfig = Omit<ResolvedHookSessionConfig, 'agentKind' | 'effort'> & {
+  agentKind: 'claude-code' | 'codex' | 'pi';
+  effort: Effort | undefined;
+};
 
 const AGENT_KINDS = new Set(['claude-code', 'codex', 'pi']);
 
@@ -81,7 +86,7 @@ export function resolveHookSessionConfig(
     effort: string | null;
     permissionMode: string | null;
   },
-): ResolvedHookSessionConfig {
+): ResolvedBuiltinHookSessionConfig {
   const defaults = deps.readDefaults();
 
   // 1. agent: 显式合法值 > 草稿默认

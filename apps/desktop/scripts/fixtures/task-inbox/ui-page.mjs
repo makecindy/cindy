@@ -30,8 +30,52 @@ export default {
       about: 'The first switch into the inbox on this computer introduces it once; later switches do not',
       viewport: { width: 1040, height: 760 },
     },
+    offline: {
+      about: 'Offline remote computer tasks support queueing Done, Snooze, pending-sync labels, and offline Undo',
+    },
   },
   async check(page, ui) {
+    if (ui.case === 'offline') {
+      const doneTarget = page.locator('[data-session-id="offline-done-target"]');
+      const snoozeTarget = page.locator('[data-session-id="offline-snooze-target"]');
+      const completeLabel = await ui.t('ccAgent.sidebar.inbox.complete');
+      const snoozeLabel = await ui.t('ccAgent.sidebar.inbox.snooze');
+      const unarchiveLabel = await ui.t('ccAgent.sidebar.sessionMenu.unarchive');
+
+      await doneTarget.waitFor();
+      await doneTarget.hover();
+      assert.equal(await doneTarget.getByRole('button', { name: completeLabel, exact: true }).count(), 1);
+      assert.equal(await doneTarget.getByRole('button', { name: snoozeLabel, exact: true }).count(), 1);
+      await ui.capture('offline-actions');
+
+      // Queue offline Complete -> moves to Archived with pending-archive subtitle
+      await doneTarget.getByRole('button', { name: completeLabel, exact: true }).click();
+      const archivedSection = page.locator('section > button')
+        .filter({ hasText: await ui.t('ccAgent.sidebar.inbox.archived') }).locator('..');
+      await archivedSection.locator('> button').click();
+      await archivedSection.locator('[data-session-id="offline-done-target"]').waitFor();
+      await archivedSection.getByText(await ui.t('ccAgent.sidebar.inbox.pendingArchiveSync')).waitFor();
+
+      // Queue offline Snooze -> moves to Snoozed with pending-sync indicator
+      await snoozeTarget.hover();
+      await snoozeTarget.getByRole('button', { name: snoozeLabel, exact: true }).click();
+      await page.getByRole('menuitem').filter({ hasText: await ui.t('ccAgent.sidebar.inbox.tomorrow') }).click();
+      const snoozedSection = page.locator('section > button')
+        .filter({ hasText: await ui.t('ccAgent.sidebar.inbox.snoozed') }).locator('..');
+      await snoozedSection.locator('> button').click();
+      await snoozedSection.locator('[data-session-id="offline-snooze-target"]').waitFor();
+      await snoozedSection.getByText(new RegExp(await ui.t('ccAgent.sidebar.inbox.pendingSync'))).waitFor();
+      await ui.capture('offline-queued-states');
+
+      // Offline Undo on queued Complete restores it back to Pending
+      await doneTarget.hover();
+      await doneTarget.getByRole('button', { name: unarchiveLabel, exact: true }).click();
+      const pendingSection = page.locator('section > button')
+        .filter({ hasText: await ui.t('ccAgent.sidebar.inbox.inbox') }).locator('..');
+      await pendingSection.locator('[data-session-id="offline-done-target"]').waitFor();
+      await ui.capture('offline-undo');
+      return;
+    }
     if (ui.case === 'reply') {
       const scroller = page.locator('[data-inbox-scroller]');
       const working = page.locator('section').filter({ has: page.locator('button', { hasText: await ui.t('ccAgent.sidebar.inbox.working') }) });
@@ -123,7 +167,14 @@ export default {
       // The toggle at the right end of the top chrome row switches modes and shows pressed in the inbox.
       const toggle = page.locator('[data-task-list-mode-toggle]');
       assert.equal(await toggle.getAttribute('aria-pressed'), 'false');
+      assert.ok(await toggle.getAttribute('aria-description'), 'Unread inbox result in task list mode');
       await ui.capture('mode-toggle');
+      await toggle.click();
+      await inbox.waitFor();
+      assert.equal(await toggle.getAttribute('aria-description'), null, 'Entering the inbox hides the unread indicator');
+      await toggle.click();
+      await project.waitFor();
+      assert.ok(await toggle.getAttribute('aria-description'), 'Leaving with unread results restores the indicator');
       await toggle.click();
       await inbox.waitFor();
       assert.equal(await project.count(), 0);
@@ -155,6 +206,7 @@ export default {
       await report.waitFor({ state: 'detached' });
       assert.equal(await hide.getAttribute('aria-checked'), 'true');
       assert.equal(Number(await pending.locator('span').last().innerText()), count - 1);
+      assert.equal(await toggle.getAttribute('aria-description'), null, 'Only the hidden automation was unread');
       await ui.capture('inbox-filter');
       await page.keyboard.press('Escape');
       await page.keyboard.press('Escape');
@@ -163,6 +215,7 @@ export default {
       await report.waitFor();
       const teammate = page.locator('[data-session-id="teammate"]');
       await teammate.waitFor();
+      assert.equal(await toggle.getAttribute('aria-description'), null, 'Task mode keeps the inbox filter for its dot');
       await openFilters(false);
       assert.equal(await hide.getAttribute('aria-checked'), 'false');
       await hide.click();
@@ -182,6 +235,26 @@ export default {
       await page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.filterReset'), exact: true }).click();
       await report.waitFor();
       assert.equal(Number(await pending.locator('span').last().innerText()), count);
+      await page.keyboard.press('Escape');
+      await page.keyboard.press('Escape');
+
+      const display = page.getByRole('menuitem', { name: new RegExp(await ui.t('ccAgent.sidebar.displayHeading')) });
+      const compact = await ui.t('ccAgent.sidebar.viewStyleList');
+      const wide = await ui.t('ccAgent.sidebar.viewStyleListWide');
+      await settings.press('Enter');
+      await display.press('ArrowRight');
+      await page.getByRole('menuitem', { name: compact, exact: true }).press('Enter');
+      await page.keyboard.press('Escape');
+      await page.keyboard.press('Escape');
+      await toggle.click();
+      await project.waitFor();
+      await settings.press('Enter');
+      assert.ok((await display.innerText()).includes(wide), 'Regular list retains its own row style');
+      await page.keyboard.press('Escape');
+      await toggle.click();
+      await pending.waitFor();
+      await settings.press('Enter');
+      assert.ok((await display.innerText()).includes(compact), 'Inbox restores its row style');
       return;
     }
 
@@ -220,6 +293,10 @@ export default {
     await ready.hover();
     // Inbox shows a one-click Done instead of the two-step archive.
     const archiveLabel = await ui.t('ccAgent.sidebar.inbox.complete');
+    const snoozeLabel = await ui.t('ccAgent.sidebar.inbox.snooze');
+    const pinned = page.locator('[data-session-id="waiting"]');
+    assert.equal(await pinned.getByRole('button', { name: archiveLabel, exact: true }).count(), 1);
+    assert.equal(await pinned.getByRole('button', { name: snoozeLabel, exact: true }).count(), 1);
     const moreLabel = await ui.t('ccAgent.sidebar.sessionMenu.moreActions');
     assert.equal(await ready.getByRole('button', { name: archiveLabel, exact: true }).count(), 1);
     assert.equal(await page.getByRole('button', { name: moreLabel, exact: true }).count(), 0);
@@ -228,7 +305,6 @@ export default {
     await ui.capture('row-actions');
     await ready.click({ button: 'right' });
     await page.getByRole('menu').waitFor();
-    const snoozeLabel = await ui.t('ccAgent.sidebar.inbox.snooze');
     await page.getByRole('menuitem', { name: snoozeLabel, exact: true }).waitFor();
     await ui.capture('context-menu');
     await page.keyboard.press('Escape');
@@ -311,5 +387,13 @@ export default {
       expectedCustom,
     );
     assert.equal(await dialog.count(), 0);
+    // A pinned task snoozes like any other; the write carries only the snooze, so it stays pinned.
+    const pinnedTask = page.locator('[data-session-id="waiting"]');
+    await pinnedTask.hover();
+    await pinnedTask.getByRole('button', { name: snoozeLabel, exact: true }).click();
+    await page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.inbox.indefinite'), exact: true }).click();
+    await page.waitForFunction(() => document.documentElement.dataset.snoozedSession === 'waiting'
+      && document.documentElement.dataset.snoozedUntil === '9999-12-31T23:59:59.999Z'
+      && document.documentElement.dataset.patchKeys === 'snoozedUntil');
   },
 };

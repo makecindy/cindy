@@ -31,7 +31,7 @@ import {
   type BotGroupSummary,
 } from '../../../shared/botGroupChat';
 import { GroupMaskSettings } from './GroupMaskSettings';
-import { GROUP_MASK_SETTINGS_PARAM, useGroupMask } from './groupMaskPresentation';
+import { GROUP_MASK_SETTINGS_PARAM, useGroupMaskControls } from './groupMaskPresentation';
 import { ChatGroupSettings, chatGroupSettingsPageTitle, resolveChatGroupSettingsPage } from './ChatGroupSettings';
 import { BotAvatar } from './BotAvatar';
 import { BotGroupAvatarStack } from './BotGroupAvatars';
@@ -55,7 +55,7 @@ export function BotGroupSettingsDrawer() {
   const match = matchPath('/bots/groups/:groupId', location.pathname);
   const { groups } = useBotGroupList();
   const group = groups.find((candidate) => candidate.id === match?.params.groupId) ?? null;
-  const mask = useGroupMask(group?.id);
+  const mask = useGroupMaskControls(group?.id);
   const maskOpen = !!mask && searchParams.get(GROUP_MASK_SETTINGS_PARAM) === '1';
   // A shared group's settings open further pages (群管理, 编辑群资料, …) over the main one.
   const page = group && !maskOpen ? resolveChatGroupSettingsPage(group, searchParams.get(BOT_GROUP_SETTINGS_PAGE_PARAM)) : null;
@@ -87,7 +87,7 @@ export function BotGroupSettingsDrawer() {
     <Dialog.Root open={open} onOpenChange={(next) => !next && close()}>
       <Dialog.Portal>
         {/* Keep portaled controls inside the overlay’s React tree so its scroll lock allows them. */}
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-50">
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal">
           <Dialog.Content
             aria-describedby={undefined}
             // CJK IME: Escape during composition only cancels the candidate.
@@ -95,7 +95,7 @@ export function BotGroupSettingsDrawer() {
               if (event.isComposing || event.keyCode === 229) event.preventDefault();
               else if (subpage) { event.preventDefault(); back(); }
             }}
-            className="fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col border-l border-[var(--border-default)] bg-[var(--surface)] outline-none"
+            className="fixed inset-y-0 right-0 z-float flex w-full max-w-md flex-col border-l border-[var(--border-default)] bg-[var(--surface)] outline-none"
             // The header shares the window title strip; without no-drag the page's drag
             // regions underneath swallow the close button's clicks (see windowDrag.tsx).
             style={WINDOW_NO_DRAG_STYLE}
@@ -548,19 +548,19 @@ function BotGroupSettingsBody({ group }: { group: BotGroupSummary }) {
         </section>
 
         <section className="flex flex-col gap-2">
-          <div className="overflow-hidden rounded-xl border border-[var(--border-default)]">
-            <button
-              type="button"
-              disabled={busy !== null}
-              onClick={() => void deleteGroup()}
-              className={cn(
-                'flex min-h-11 w-full items-center px-3 py-2 text-left text-13 font-medium text-[var(--text-danger)] outline-none transition-colors',
-                'enabled:hover:bg-[var(--danger-bg-soft)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)] disabled:opacity-60',
-              )}
-            >
-              {t('bots.groupChat.settings.delete')}
-            </button>
-          </div>
+          {/* Irreversible: shared Button danger tone (DESIGN.md §4 Destructive actions, C-07). */}
+          <Button
+            variant="secondary"
+            tone="danger"
+            size="md"
+            compact
+            disabled={busy !== null}
+            loading={busy === 'delete'}
+            onClick={() => void deleteGroup()}
+            className="self-start"
+          >
+            {t('bots.groupChat.settings.delete')}
+          </Button>
           <p className="text-12 leading-normal text-[var(--text-tertiary)]">
             {t('bots.groupChat.settings.deleteNote')}
           </p>

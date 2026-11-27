@@ -43,6 +43,11 @@ const RECEIVES: Record<Exclude<SessionRole, 'both'>, ReadonlySet<string>> = { ca
 export interface SessionPeerOptions {
   wire: SessionWire;
   role?: SessionRole;
+  /**
+   * Session v2: the peer declared `agent-net-session-v2`, so large messages may go on body streams of their own (lanes.ts). This
+   * side reads the peer's body streams whenever the wire offers them (it declared v2 itself).
+   */
+  bodies?: boolean;
   /** Lane for a request channel (and its result). Pushes always use the normal lane in v1 (one order across topics). */
   laneFor(channel: string, background?: boolean): SessionLane;
   /** The peer opened its control link to us (Device Link's `link-open`); answer with `accept` or `reject`. */
@@ -51,6 +56,8 @@ export interface SessionPeerOptions {
   onRequest?(request: SessionRequest): void | Promise<void>;
   onPush?(channel: string, payload: unknown): void | Promise<void>;
   onPresence?(payload: unknown): void | Promise<void>;
+  /** Send backlog drained (`SessionWire.onDrain` or worker backlog report). */
+  onDrain?(): void;
   /** The session is unusable (bad frame, backlog, connection gone); pending requests have been failed. */
   onBroken?(code: string): void;
 }
@@ -95,9 +102,23 @@ export type SessionOpenOutcome = { opened: unknown } | { error: Error };
 
 /** What the business side uses of a session, the same whether it runs on this thread or in the Agent-Net worker. */
 export type SessionHandle = Pick<SessionPeer, 'open' | 'accept' | 'reject' | 'close' | 'presence' | 'request' | 'respond' | 'push'
-  | 'dispose' | 'bufferedAmount' | 'closedReason'>;
+  | 'dispose' | 'bufferedAmount' | 'closedReason' | 'cancelRequest'>;
 
-interface Pending { resolve(result: SessionResult): void; timer: ReturnType<typeof setTimeout> | null; written: boolean }
+interface Pending {
+  resolve(result: SessionResult): void; timer: ReturnType<typeof setTimeout> | null; written: boolean;
+  /** Session v2: when bytes of its result last arrived; set once the result started arriving on a body stream. */
+  progressAt?: number;
+  /** Session v2: all of its result arrived; it may still wait for messages before it on its lane (v1 order). */
+  complete?: boolean;
+}
+
+/**
+ * Session v2: once a request's result is arriving on a body stream, its time limit no longer counts; it fails only if this long
+ * passes without a byte of it. On a slow line a large result took longer than the request's limit to transfer, timed out, and was
+ * asked for again with the same size (remote task polls: the same cursor until the task was given up, docs/agent-net-session-plan.md
+ * 10.2). Half of the core's 30 s for declaring a silent connection dead.
+ */
+export const RESULT_STALL_MS = 15_000;
 
 /** Cancelled request ids kept until the request arrives; one entry per timed-out request, oldest dropped first. */
 const MAX_CANCELLED_REQUESTS = 1024;
@@ -115,6 +136,10 @@ export class SessionPeer {
   private readonly inboundLane = new Map<string, SessionLane>();
   private broken: string | null = null;
   private readonly cancelled = new Set<string>();
+  /** When bytes of anything last arrived on this session (lanes or bodies). */
+  private receivedAt = 0;
+  /** Session v2: requests with the business whose caller gave up: their result is not sent (results wait on no count). */
+  private readonly cancelledInFlight = new Set<string>();
   /**
    * Smallest (this side's clock when a request arrived − the sender's clock when it wrote it) on this session: the offset
    * between the two clocks plus the fastest trip. How much later than that a request arrives is how long it was held up
@@ -125,12 +150,17 @@ export class SessionPeer {
   private peerClockLowerBound: number | undefined;
 
   constructor(private readonly options: SessionPeerOptions) {
+    const openBody = options.bodies ? options.wire.openBody?.bind(options.wire) : undefined;
     this.lanes = new SessionLanes({
       write: (lane, bytes) => options.wire.write(lane, bytes),
       deliver: (message, lane) => this.deliver(message as Message, lane),
       onError: (error) => this.dispose(error.message),
+      ...(openBody ? { openBody } : {}),
+      onProgress: (id, received, total) => this.progress(id, received >= total),
     });
-    options.wire.onData((lane, bytes) => this.lanes.receive(lane, bytes));
+    options.wire.onData((lane, bytes) => { this.receivedAt = performance.now(); this.lanes.receive(lane, bytes); });
+    options.wire.onBody?.((key, bytes) => { this.receivedAt = performance.now(); this.lanes.receiveBody(key, bytes); });
+    options.wire.onDrain?.(() => options.onDrain?.());
   }
 
   get bufferedAmount(): number { return this.options.wire.bufferedAmount; }
@@ -147,7 +177,15 @@ export class SessionPeer {
       const refused = (error: Error) => { onSettled?.({ error }); reject(error); };
       const timer = setTimeout(() => { this.opening.delete(id); refused(new SessionError('LINK_TIMEOUT', 'no answer to session open')); }, timeoutMs);
       this.opening.set(id, { resolve: accepted, reject: refused, timer });
-      this.send('control', 'control', { t: 'open', id, payload });
+      try {
+        this.send('control', 'control', { t: 'open', id, payload });
+      } catch (error) {
+        // The worker forwards onSettled to Main. A rejected promise alone
+        // would leave Main waiting for a handshake that could not be sent.
+        if (!this.opening.delete(id)) return;
+        clearTimeout(timer);
+        refused(error instanceof Error ? error : new Error(String(error)));
+      }
     });
   }
   accept(id: string, payload: unknown): void { this.send('control', 'control', { t: 'accept', id, payload, at: performance.now() }); }
@@ -174,13 +212,7 @@ export class SessionPeer {
       const entry: Pending = { resolve, timer: null, written: false };
       const timeoutMs = options.timeoutMs;
       if (timeoutMs !== undefined) {
-        entry.timer = setTimeout(() => {
-          if (!this.pending.delete(id)) return;
-          if (entry.written && !this.broken) {
-            try { this.send('control', 'control', { t: 'cancel', id }); } catch { /* the session is closing; the peer drops it as late */ }
-          }
-          resolve(failure('INVOKE_TIMEOUT', `no result within ${timeoutMs}ms`));
-        }, timeoutMs);
+        entry.timer = setTimeout(() => this.expire(id, entry, `no result within ${timeoutMs}ms`), timeoutMs);
       }
       this.pending.set(id, entry);
       try {
@@ -198,9 +230,47 @@ export class SessionPeer {
   }
 
   respond(id: string, result: SessionResult): void {
+    if (this.cancelledInFlight.delete(id)) { this.inboundLane.delete(id); return; }
     const lane = this.inboundLane.get(id) ?? 'normal';
-    this.send(lane, 'result', { t: 'result', id, result });
+    this.send(lane, 'result', { t: 'result', id, result }, { id });
     this.inboundLane.delete(id);
+  }
+
+  cancelRequest(id: string): void {
+    const entry = this.pending.get(id);
+    if (entry) this.expire(id, entry, 'request was cancelled');
+  }
+
+  /** The request timed out (`INVOKE_TIMEOUT`, it may have run): tell the peer, so it does not start it or stops sending its result. */
+  private expire(id: string, entry: Pending, message: string): void {
+    if (this.pending.get(id) !== entry) return;
+    this.pending.delete(id);
+    if (entry.timer) clearTimeout(entry.timer);
+    if (entry.written && !this.broken) {
+      try { this.send('control', 'control', { t: 'cancel', id }); } catch { /* the session is closing; the peer drops it as late */ }
+    }
+    entry.resolve(failure('INVOKE_TIMEOUT', message));
+  }
+
+  /**
+   * Session v2: bytes of the result for `id` arrived on its body stream; from now on only a stall fails it (RESULT_STALL_MS). Once all
+   * of it arrived it waits for what is before it on its lane (a larger result still arriving, v1 order): then it fails only if nothing
+   * at all arrives on the session for that long.
+   */
+  private progress(id: string, complete: boolean): void {
+    const entry = this.pending.get(id);
+    if (!entry) return;
+    const first = entry.progressAt === undefined;
+    entry.progressAt = performance.now();
+    entry.complete ||= complete;
+    if (!first || !entry.timer) return;
+    clearTimeout(entry.timer);
+    const check = () => {
+      const idle = performance.now() - (entry.complete ? Math.max(entry.progressAt!, this.receivedAt) : entry.progressAt!);
+      if (idle >= RESULT_STALL_MS) this.expire(id, entry, `result stalled for ${RESULT_STALL_MS}ms`);
+      else entry.timer = setTimeout(check, RESULT_STALL_MS - idle);
+    };
+    entry.timer = setTimeout(check, RESULT_STALL_MS);
   }
 
   push(channel: string, payload: unknown): void { this.send('normal', 'push', { t: 'push', channel, payload }); }
@@ -217,6 +287,7 @@ export class SessionPeer {
     }
     for (const [id, open] of this.opening) { clearTimeout(open.timer); this.opening.delete(id); open.reject(new SessionError('DEVICE_OFFLINE', `session ${code}`)); }
     this.inboundLane.clear();
+    this.cancelledInFlight.clear();
     this.options.onBroken?.(code);
   }
 
@@ -281,8 +352,17 @@ export class SessionPeer {
         return;
       }
       case 'cancel': {
-        // Already with the business: too late to stop, the result goes back and the caller ignores it.
-        if (typeof message.id !== 'string' || this.inboundLane.has(message.id)) return;
+        if (typeof message.id !== 'string') return;
+        // Session v2: its result is on its way as a body: the rest of it is not sent.
+        if (this.lanes.abandonResult(message.id)) return;
+        // Already with the business: too late to stop; the result goes back and the caller ignores it (v1), or is not sent (v2).
+        if (this.inboundLane.has(message.id)) {
+          if (this.options.bodies) {
+            if (this.cancelledInFlight.size >= MAX_CANCELLED_REQUESTS) this.cancelledInFlight.delete(this.cancelledInFlight.values().next().value as string);
+            this.cancelledInFlight.add(message.id);
+          }
+          return;
+        }
         if (this.cancelled.size >= MAX_CANCELLED_REQUESTS) this.cancelled.delete(this.cancelled.values().next().value as string);
         this.cancelled.add(message.id);
         return;

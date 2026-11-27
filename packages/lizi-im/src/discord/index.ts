@@ -35,7 +35,7 @@ import {
 import type { DiscordChannelAccessConfig, DiscordChannelAccessStore, DiscordLane } from './lane.js';
 import { listBotGuilds } from './guildDirectory.js';
 import type { DirectoryClientLike, DiscordGuildInfo } from './guildDirectory.js';
-import { chunkDiscordText } from './chunk.js';
+import { chunkDiscordFinalText, chunkDiscordText } from './chunk.js';
 import { decodeMessageId, encodeMessageId } from './codec.js';
 import { markdownToDiscord } from './markdown.js';
 import { createDmResolver, sendChunked } from './outbound.js';
@@ -655,7 +655,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
           const message = await this.fetchMessage(messageId, { cleanup: true });
           await message.delete();
         },
-        chunk: chunkDiscordText,
+        chunk: chunkDiscordFinalText,
         resolveImageUrl: this.opts.resolveImageUrl,
         uploadImages: async (messageId, absPaths) => {
           await this.uploadImages(messageId, absPaths, assertCurrent);

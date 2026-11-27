@@ -1,4 +1,5 @@
 import { projectForNewTask } from '../mcp-integrations/projectManagementCore.js';
+import { modelGroupSessionStart } from '../model-groups/sessionStart.desktop.js';
 import { app } from 'electron';
 import './pre-run-hook.desktop.js';
 import type { BrowserWindow } from 'electron';
@@ -10,7 +11,7 @@ import { dialogueWorkspaceRoots } from '../localDb/dialogueWorkspace';
 import { sessions } from '../localDb/schema.js';
 import { getDbClient } from '../localDb/client/current';
 import { startRewoundSchedulerPromptCleanup, stopRewoundSchedulerPromptCleanup } from './rewoundSchedulerPromptCleanup.js';
-import { readRemoteProviderRoute } from '../remote-agent/controller/deviceCatalog.js';
+import { readRemotePluginEngines, readRemoteProviderRoute } from '../remote-agent/controller/deviceCatalog.js';
 import {
   resolveDefaultScheduleRoute,
   resolveRouteCopyCapabilities,
@@ -34,6 +35,7 @@ import {
   hasQueuedSchedulerPrompt,
   hasPendingSchedulerTargetInput,
   isSchedulerAutoResumePending,
+  isSchedulerSharedReconnectPending,
   isSchedulerPromptTracked,
   releaseQueuedSchedulerPrompt,
   isSchedulerTargetSessionBusy,
@@ -45,7 +47,8 @@ import { listPluginEngineViews } from '../maker-ipc/pluginEnginesIpc.js';
 import { admitPluginEngineSwitchTarget } from '../maker-ipc/pluginEngineSessionAdmission.js';
 import { MakerScheduleRunner } from './runner.desktop';
 import { captureScheduledOwnerGuard } from '../maker-ipc/scheduledSessionBootstrap.js';
-import { listMessagesForAgentHandoff } from '../localDb/ipc/messages.js';
+import { readAutoReviewHistoryPage } from '../localDb/ipc/messages.js';
+import { touchUserSendInDb } from '../localDb/ipc/sessions.js';
 import { drainPersistQueue } from '../messagePersistBroadcaster.desktop.js';
 import { ScriptScheduleRunner } from './script-runner.desktop';
 import { SchedulerScriptCapabilityBroker } from './script-capability-broker.desktop';
@@ -53,11 +56,14 @@ import { DesktopNotifier } from './notifier.desktop';
 import { sendFeishuSessionNotification } from '../im/feishu/notificationOrigin';
 import { wecomGroupNotificationService } from '../wecomGroupNotification';
 import { withTeammateHomeGuard } from './teammateHomeGuard.js';
+import { ownTeammateProjectPrimaryModel, ownTeammateProjectState } from './ownTeammateProject.js';
+import { readEffectiveBotModelChain } from '../maker-host/bot-model-chain-settings-store.js';
+import { resolveTeammateScheduleModel } from './teammateScheduleModel.js';
 import { withQuietRunArchive } from './quietRunArchive.js';
 import { archiveQuietScheduledTarget, readScheduledTargetStatus } from './quietRunArchive.desktop.js';
 import { createLogger } from '../logger';
 import type { ScheduleRunner } from '@cindy/maker-scheduler';
-import { ownTeammateProjectState } from './ownTeammateProject.js';
+import { pluginAutomationAccount } from '../device-link/pluginAutomationHost.desktop.js';
 import { companionHomes } from '../companion-cloud/homes.js';
 import { startScheduleWebhooks, stopScheduleWebhooks } from './webhook/runtime.js';
 
@@ -88,6 +94,8 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
     });
     const promptRunner = new MakerScheduleRunner({
       projectForNewTask,
+      // 设了模式的定时任务新建任务时按模式选来源(model-groups.md §6.3)，选路记账由任务层做。
+      modelGroupStart: modelGroupSessionStart,
       maker: deps.maker,
       bootstrapSession: bootstrapScheduledSession,
       getDb: deps.getDb,
@@ -97,16 +105,24 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
       beforeDispatchUserTurn: deps.beforeDispatchUserTurn,
       readAutoReviewHistory: async (sessionId) => {
         await drainPersistQueue();
-        return listMessagesForAgentHandoff(sessionId, null, undefined, 'authorization');
+        return readAutoReviewHistoryPage(sessionId);
       },
       onUndispatchedUserTurn: deps.onUndispatchedUserTurn,
+      resolveInheritedModel: schedule => resolveTeammateScheduleModel(schedule, {
+        follows: (dir, id): Promise<boolean> => desktop.getProjectAutomationLoader().followsTeammateModel(dir, id),
+        isOwnProject: async dir => (await ownTeammateProjectState(dir)) !== null,
+        primaryModel: dir => ownTeammateProjectPrimaryModel(dir, readEffectiveBotModelChain),
+      }),
       findUsageLimitWait: findSchedulerUsageLimitWait,
       acquirePendingAgentSwitch: acquirePendingAgentSwitchForDirectSend,
       prepareModelPreferences: prepareScheduledModelPreferencesUnderLock,
       onModelDispatched: recordDispatchedModel,
       applyPiModelSelectionUnderLock: applyPiImModelSelectionUnderLock,
       resolveModelSelection: (selection, location) => {
-        const route = { ...selection, agentDeviceId: selection.agentDeviceId === undefined ? location?.agentDeviceId : selection.agentDeviceId };
+        if (selection.agentKind === 'acp') {
+          throw new Error('Plugin engines are not resolved through the built-in catalog');
+        }
+        const route = { ...selection, agentKind: selection.agentKind, agentDeviceId: selection.agentDeviceId === undefined ? location?.agentDeviceId : selection.agentDeviceId };
         return resolveScheduledModelSelectionLive(route, async (agentDeviceId) => [
           (await readRemoteProviderRoute({ ...route, agentDeviceId })).provider,
         ]);
@@ -126,11 +142,15 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
       // 隐式改道后按落地拷贝 reconcile effort/Fast(见 runner deps 注释,R27)。
       resolveRouteCopyCapabilities,
       resolveDefaultModelRoute: resolveDefaultScheduleRoute,
-      // 插件引擎(docs/plans/acp-plugin-bridge.md)：按本机此刻提供的引擎准入，规则与新建任务相同。
-      admitPluginEngine: (route) => admitPluginEngineSwitchTarget(
-        { providerId: route.providerId, model: route.model, effort: route.effort },
-        listPluginEngineViews(),
-      ),
+      // 插件引擎(docs/plans/acp-plugin-bridge.md)：按本机或目标电脑此刻提供的引擎准入，规则与新建/切换任务相同。
+      admitPluginEngine: async (route) => {
+        const target = { providerId: route.providerId, model: route.model, effort: route.effort };
+        const deviceId = route.agentDeviceId?.trim() || null;
+        if (deviceId) {
+          return admitPluginEngineSwitchTarget(target, await readRemotePluginEngines(deviceId));
+        }
+        return admitPluginEngineSwitchTarget(target, listPluginEngineViews());
+      },
       // 心跳撞忙排队桥:实现挂在 maker-ipc/register.ts 的 coordinator 装配处
       // 先恢复快照再判忙闲；holder 未就绪时恢复返回 false，由 runner 顺延。
       schedulerQueue: {
@@ -144,6 +164,7 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
         isPromptTracked: isSchedulerPromptTracked,
         releasePrompt: releaseQueuedSchedulerPrompt,
         isAutoResumePending: isSchedulerAutoResumePending,
+        isSharedReconnectPending: isSchedulerSharedReconnectPending,
         onAutoResumeFailed: onSchedulerAutoResumeFailed,
         cancelAutoResume: cancelSchedulerAutoResume,
       },
@@ -162,6 +183,7 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
   },
   // A teammate's project automations run only on its main computer (handed away: skipped here).
   captureFireContext: captureScheduledOwnerGuard,
+  automationAccount: pluginAutomationAccount,
   // Quiet rounds return an archived target to archived (archive-pauses-automations.md).
   wrapRunner: (runner): ScheduleRunner => withQuietRunArchive(
     withTeammateHomeGuard(runner, () => companionHomes.snapshot().demotedBotIds, ownTeammateProjectState),
@@ -173,6 +195,7 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
     },
   ),
   getTeammateProjectState: ownTeammateProjectState,
+  touchUserSendInDb: (...args) => touchUserSendInDb(...args),
   isPassive: () => !app.isPackaged && process.env.XDT_SCHEDULER_PASSIVE === '1',
   dialogueWorkspaceRoots: () => dialogueWorkspaceRoots(),
   onStarted(scheduler, deps, passive) {

@@ -611,6 +611,35 @@ describe('telegram streaming finalize — 新鲜终稿与 Rich 降级', () => {
     expect(h.calls).toEqual([]);
     expect(handle.messageId).toBe('');
   });
+
+  it('sendFinalChunk 区分过程载体与终稿分段，且仅在存在过程载体时首段复用回挂目标', async () => {
+    const calls: Array<{ markdown: string; part: number; reuseReplyTarget: boolean | undefined }> = [];
+    const h = makeHarness();
+    const sendFinalChunk = vi.fn(async (markdown: string, part: number, reuseReplyTarget?: boolean) => {
+      calls.push({ markdown, part, reuseReplyTarget });
+      return `final-${part}`;
+    });
+
+    // 1. 存在过程载体: part 0 传 reuseReplyTarget=true, part 1 传 false, 完成后删过程载体。
+    const withCarrier = await startTelegramStreaming(
+      { ...h.deps, chunk: (text) => text.split('|'), sendFinalChunk },
+      '⚙️ 工作中',
+    );
+    await withCarrier.finalize('第一段|第二段');
+    expect(calls).toEqual([
+      { markdown: '第一段', part: 0, reuseReplyTarget: true },
+      { markdown: '第二段', part: 1, reuseReplyTarget: false },
+    ]);
+    expect(h.deleted).toEqual(['msg-1']);
+
+    // 2. 惰性占位(未建过程载体): part 0 传 reuseReplyTarget=false, 不删任何消息。
+    calls.length = 0;
+    const h2 = makeHarness();
+    const lazy = await startTelegramStreaming({ ...h2.deps, sendFinalChunk });
+    await lazy.finalize('唯一答案');
+    expect(calls).toEqual([{ markdown: '唯一答案', part: 0, reuseReplyTarget: false }]);
+    expect(h2.deleted).toEqual([]);
+  });
 });
 
 describe('startTelegramProgressCarrier(官方 bot 只驱动过程载体)', () => {

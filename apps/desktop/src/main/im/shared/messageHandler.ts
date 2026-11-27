@@ -49,6 +49,16 @@ import { isLaneTurnScopeChannel, type ChannelToolScope } from './channelToolScop
  */
 export { isStopCommand } from './controlCommands';
 
+/**
+ * Whether the message was sent inside a thread/topic. A message that opens a new topic from
+ * the main stream reads its context from the main stream, so it is not "in" that topic yet.
+ */
+function messageIsInThread(adapter: ImChannelAdapter, event: IMMessageEvent): boolean {
+  if (event.groupContextLane) return event.groupContextLane.threadId !== '';
+  const lane = adapter.companionLane?.(event.senderId);
+  return lane?.kind === 'group' && lane.threadId !== '';
+}
+
 export function createMessageHandler(
   adapter: ImChannelAdapter,
   slash: ImSlashHandlers,
@@ -337,7 +347,10 @@ export function createMessageHandler(
     // iMessage participation mode applies before any attachment notice.
     if (channel === 'imessage' && event.ambient === true && adapter.ambientTurnGate && await skipAmbient()) return;
 
-    const hasContent = event.text.length > 0 || event.attachments.length > 0;
+    // An entry the model can fetch by itself (an original over the direct-delivery cap) is content.
+    const hasContent = event.text.length > 0 || event.attachments.length > 0
+      || event.unsupported.some(entry => entry.retrievable);
+    const reportedUnsupported = event.unsupported.filter(entry => !entry.retrievable);
 
     // ── pure-unsupported: reply directly, do NOT invoke agent ───────────────
     if (!hasContent && !event.invoked && !event.replyContext && event.unsupported.length > 0) {
@@ -369,9 +382,9 @@ export function createMessageHandler(
     // Durable callers may retry a busy dispatch. Emit mixed-attachment notices
     // only after acceptance so those queue retries cannot repeat the notice.
     const notifyUnsupported = async () => {
-      if (!event.unsupported.length) return;
+      if (!reportedUnsupported.length) return;
       try {
-        await im.sendText(event.senderId, ui.agent.unsupportedNotice(event.unsupported), {
+        await im.sendText(event.senderId, ui.agent.unsupportedNotice(reportedUnsupported), {
           threadTs: event.scopeKey,
         });
       } catch (err) {
@@ -495,7 +508,7 @@ export function createMessageHandler(
             }
           : undefined);
       const fallbackReplyPrefix = !adapter.prepareAgentTurnText && event.replyContext
-        ? buildImReplyContextBlock(event.replyContext)
+        ? buildImReplyContextBlock(event.replyContext, event.text)
         : '';
       const deliveredReply = prepared?.replyContext ??
         (!adapter.prepareAgentTurnText ? event.replyContext : undefined);
@@ -540,6 +553,7 @@ export function createMessageHandler(
           text: event.text,
           invoked: event.invoked,
           hasReply: !!deliveredReply,
+          inThread: messageIsInThread(adapter, event),
           attachmentCount: event.attachments.length + (prepared?.contextAttachments?.length ?? 0),
           unavailable: [
             ...event.unsupported.map((entry) => `${entry.type}：${entry.label}`),
@@ -585,14 +599,18 @@ export function createMessageHandler(
         event.delivery.awaitPersistence();
         const dispatch = await turnRunner.dispatchAgentTurn({
           ...turnArgs, queueMode: 'external',
-          beforeProviderStart: async () => { event.assertCurrent?.(); event.delivery!.awaitPersistence(); },
+          beforeProviderStart: async () => {
+            event.assertCurrent?.();
+            event.delivery!.awaitPersistence();
+            if (event.delivery!.isCancelled?.()) throw new Error('IM_INPUT_CANCELLED');
+          },
         });
         if (dispatch.kind === 'busy') event.delivery.defer();
         else if (dispatch.kind === 'rejected') {
-          const text = dispatch.reason === 'missing_auth' ? ui.agent.apiKeyMissing
+          const text = dispatch.notice ?? (dispatch.reason === 'missing_auth' ? ui.agent.apiKeyMissing
             : dispatch.reason === 'companion_unavailable'
               ? ui.agent.companionUnavailable?.(dispatch.reason) ?? ui.agent.runtimeError(dispatch.reason)
-              : ui.agent.sendInternalError(dispatch.reason);
+              : ui.agent.sendInternalError(dispatch.reason));
           try {
             await im.sendText(event.senderId, text, { threadTs: event.scopeKey });
             event.delivery.accept();
@@ -606,6 +624,7 @@ export function createMessageHandler(
         await turnRunner.runAgentTurn(turnArgs);
       }
     } catch (err) {
+      if (event.delivery?.isCancelled?.()) return;
       try { event.assertCurrent?.(); }
       catch {
         const reactionId = await handedOverAck;

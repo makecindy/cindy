@@ -7,6 +7,7 @@ import { getSessionProvider, setSessionProvider } from '../../maker-host/session
 import {
   acceptSessionRuntimeAxisMutation,
   acceptSessionRuntimeMutation,
+  applySessionRuntimeOverrideForStart,
   cancelPendingSessionRuntimeMutation,
   captureSessionRuntimeControlOwnerEpoch,
   clearAllSessionRuntimeControlStates,
@@ -29,6 +30,7 @@ import {
   sessionRuntimeControlOwnerEpochMatches,
   sessionRuntimeGenerationMatches,
   settlePendingSessionRuntimeMutation,
+  startSessionRuntimeFallbackTurn,
   type SessionRuntimeProfile,
 } from '../sessionRuntimeControl.js';
 
@@ -44,6 +46,43 @@ const current: SessionRuntimeProfile = {
   effort: 'high',
   fastMode: true,
 };
+
+// Regression from PR #12130: a cold start after a device switch must use the
+// committed route. The display regression alone did not exercise bootstrap.
+describe('applySessionRuntimeOverrideForStart', () => {
+  it.each([
+    { previousDevice: 'shared', startDevice: null },
+    { previousDevice: undefined, startDevice: 'shared' },
+  ])('ignores an override from $previousDevice when starting on $startDevice', ({ previousDevice, startDevice }) => {
+    const id = 'switched-task';
+    acceptSessionRuntimeMutation({
+      sessionId: id, source: 'fallback', deferred: false,
+      profile: { ...current, agentDeviceId: previousDevice },
+    });
+    const start = { id, ...current, agentDeviceId: startDevice, model: 'committed-model',
+      providerId: 'committed-provider', effort: 'medium' as const, fastMode: false };
+    const committed = { ...start };
+    expect(applySessionRuntimeOverrideForStart(start, false)).toBeNull();
+    expect(start).toEqual(committed);
+  });
+
+  it.each([
+    { agentDeviceId: 'shared', startDevice: 'shared', groupDecidesSource: true },
+    { agentDeviceId: undefined, startDevice: null, groupDecidesSource: false },
+  ])('applies same-computer overrides while honoring provider group assignment ($startDevice)',
+    ({ agentDeviceId, startDevice, groupDecidesSource }) => {
+      const id = 'same-computer-task';
+      const profile = { ...current, agentDeviceId };
+      acceptSessionRuntimeMutation({ sessionId: id, source: 'fallback', deferred: false, profile });
+      const start = { id, ...current, agentDeviceId: startDevice, model: 'assigned-model',
+        providerId: 'assigned-provider', effort: 'medium' as const, fastMode: false };
+      expect(applySessionRuntimeOverrideForStart(start, groupDecidesSource)).toEqual(profile);
+      expect(start).toMatchObject({
+        model: profile.model, providerId: groupDecidesSource ? 'assigned-provider' : profile.providerId,
+        effort: profile.effort, fastMode: profile.fastMode,
+      });
+    });
+});
 
 // Rule: a committed account change drops every task's owner-scoped runtime selection (the desktop's
 // app session commit boundary; the Node Host's boundary hook calls the same step). Gap: the three
@@ -735,6 +774,18 @@ describe('session runtime fallback selection', () => {
     ).toEqual({ effort: null, fastMode: false });
   });
 
+  it('tracks the route already tried when a companion falls back onto a plugin engine', () => {
+    const sessionId = 'companion';
+    const engine = { ...current, agentKind: 'acp' as const, providerId: 'acp-plugin:sample:engine', model: 'default', fastMode: false };
+    const generation = acceptSessionRuntimeMutation({
+      sessionId, source: 'fallback', previousProfile: current, profile: engine, deferred: false,
+    });
+    expect(getSessionRuntimeControlSnapshot(sessionId)).toMatchObject({
+      generation, effectiveOverride: null, pending: null, fallbackHop: 1,
+      visitedRoutes: ['codex\u0000openai\u0000gpt-main', 'acp\u0000acp-plugin:sample:engine\u0000default'],
+    });
+    expect(recordFailedSessionRuntimeFallbackCandidate(sessionId, generation - 1, current)).toBe(false);
+  });
   it('skips a failed candidate without consuming a fallback hop or generation', () => {
     const sessionId = 'runtime-failed-candidate';
     const candidate = { ...current, providerId: 'xd' };
@@ -763,6 +814,21 @@ describe('session runtime fallback selection', () => {
         maxHops: 2,
       }),
     ).toMatchObject({ providerId: 'other', model: 'gpt-main' });
+  });
+
+  // Unit, 2026-11-26 smart-routing audit: the tried list used to be cleared only by a model change,
+  // so a long task whose every source had failed once (A's quota, later B's) never failed over again,
+  // even after A reset. Minimal input: A→B fallback, then a new turn. The fallback hop is kept: it
+  // still tells that the task runs on a substitute.
+  it('lets earlier failed sources take over again from the next turn on', () => {
+    const sessionId = 'long-task';
+    const other = { ...current, providerId: 'xd' };
+    acceptSessionRuntimeMutation({ sessionId, source: 'fallback', previousProfile: current, profile: other, deferred: false });
+    expect(getSessionRuntimeControlSnapshot(sessionId).visitedRoutes).toHaveLength(2);
+
+    startSessionRuntimeFallbackTurn(sessionId);
+
+    expect(getSessionRuntimeControlSnapshot(sessionId)).toMatchObject({ visitedRoutes: [], fallbackHop: 1 });
   });
 
   it('does not record a failed candidate against a stale generation', () => {

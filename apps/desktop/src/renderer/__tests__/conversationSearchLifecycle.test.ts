@@ -1,4 +1,4 @@
-import { setSearchDraft } from '@/features/cc-agent/sidebar/conversationSearchDraft';
+import { setSearchDraft, setSearchMatchAll } from '@/features/cc-agent/sidebar/conversationSearchDraft';
 // @vitest-environment jsdom
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -81,6 +81,7 @@ async function start(view: ReturnType<typeof mount>) {
 }
 beforeEach(() => {
   setSearchDraft('');
+  setSearchMatchAll(false);
   vi.useFakeTimers();
   vi.mocked(searchConversations).mockReset();
   Object.defineProperty(window, 'electronAPI', {

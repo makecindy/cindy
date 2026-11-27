@@ -123,6 +123,19 @@ async function runMigrationStatement(target: DbClient, statement: string): Promi
 }
 
 function applyMigrationScriptSync(db: Sqlite, fileName: string): void {
+  if (fileName === '0160_native_usage_amount_metadata.sql') {
+    ensureColumnSync(db, 'sessions', 'total_cost_usd_is_approximate', 'integer DEFAULT false NOT NULL');
+    ensureColumnSync(db, 'schedule_runs', 'other_estimated_value_amount', 'real DEFAULT 0 NOT NULL');
+    return;
+  }
+  if (fileName === '0158_close_linked_side_chat.sql') {
+    ensureColumnSync(db, 'sessions', 'side_chat_close_pending', 'integer DEFAULT false NOT NULL');
+    return;
+  }
+  if (fileName === '0157_promote_orca_side_chat.sql') {
+    ensureColumnSync(db, 'sessions', 'side_chat_promoted', 'integer DEFAULT false NOT NULL');
+    return;
+  }
   if (fileName === '0138_talented_blacklash.sql') {
     ensureColumnSync(db, 'session_pr_refs', 'pinned', 'integer DEFAULT false NOT NULL');
     ensureColumnSync(db, 'session_pr_refs', 'priority', 'integer DEFAULT 0 NOT NULL');
@@ -142,6 +155,7 @@ function applyMigrationScriptSync(db: Sqlite, fileName: string): void {
     ensureColumnSync(db, 'orca_workers', 'last_bridged_message_id', 'text');
     ensureColumnSync(db, 'orca_workers', 'remote_released_at', 'integer');
     ensureColumnSync(db, 'sessions', 'orca_remote_lead', 'text');
+    ensureColumnSync(db, 'sessions', 'created_by_session', 'text');
     return;
   }
   if (fileName === '0097_fresh_stryfe.sql') {
@@ -240,6 +254,19 @@ function applyMigrationScriptSync(db: Sqlite, fileName: string): void {
 }
 
 async function applyMigrationScript(target: DbClient, fileName: string): Promise<void> {
+  if (fileName === '0160_native_usage_amount_metadata.sql') {
+    await ensureColumn(target, 'sessions', 'total_cost_usd_is_approximate', 'integer DEFAULT false NOT NULL');
+    await ensureColumn(target, 'schedule_runs', 'other_estimated_value_amount', 'real DEFAULT 0 NOT NULL');
+    return;
+  }
+  if (fileName === '0158_close_linked_side_chat.sql') {
+    await ensureColumn(target, 'sessions', 'side_chat_close_pending', 'integer DEFAULT false NOT NULL');
+    return;
+  }
+  if (fileName === '0157_promote_orca_side_chat.sql') {
+    await ensureColumn(target, 'sessions', 'side_chat_promoted', 'integer DEFAULT false NOT NULL');
+    return;
+  }
   if (fileName === '0138_talented_blacklash.sql') {
     await ensureColumn(target, 'session_pr_refs', 'pinned', 'integer DEFAULT false NOT NULL');
     await ensureColumn(target, 'session_pr_refs', 'priority', 'integer DEFAULT 0 NOT NULL');
@@ -259,6 +286,7 @@ async function applyMigrationScript(target: DbClient, fileName: string): Promise
     await ensureColumn(target, 'orca_workers', 'last_bridged_message_id', 'text');
     await ensureColumn(target, 'orca_workers', 'remote_released_at', 'integer');
     await ensureColumn(target, 'sessions', 'orca_remote_lead', 'text');
+    await ensureColumn(target, 'sessions', 'created_by_session', 'text');
     return;
   }
   if (fileName === '0097_fresh_stryfe.sql') {

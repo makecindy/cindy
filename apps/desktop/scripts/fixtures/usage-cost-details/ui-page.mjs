@@ -8,7 +8,7 @@ export default {
   notCovered: 'Scenario billing data; no paid model request or remote device connection.',
   cases: {
     default: { about: 'One model in subscription and Cindy AI channels; two additional models' },
-    narrow: { about: 'Same detail panel at 320 px', viewport: { width: 320, height: 760 } },
+    narrow: { about: 'Two native currencies and media at 320 px', data: { mixed: true }, viewport: { width: 320, height: 760 } },
     legacy: { about: 'Older host has no breakdown; do not show zero', data: { legacy: true } },
     trace: { about: 'A three-request turn: its speed and reasoning per request above the details', data: { traceRequests: 3 } },
     'trace-long': { about: 'A 140-request turn drawn at the same width', data: { traceRequests: 140 } },
@@ -35,12 +35,25 @@ export default {
     }
     const trigger = page.getByRole('button').filter({ hasText: /1\.53/ });
     assert.match(await trigger.innerText(), /\+.*3\.34/);
+    if (ui.data.mixed) assert.match(await trigger.innerText(), /\$1\.53.*¥2\.00.*\$3\.34/);
     await trigger.hover();
     const panel = page.getByRole('dialog');
     await panel.waitFor();
     if (!ui.data.legacy) {
       await panel.getByText('seedance-2.0', { exact: true }).waitFor();
       assert.equal(await panel.getByText('gpt-6.1', { exact: true }).count(), 2);
+      // Subscription estimates and usage charges can share a currency, but
+      // the conversation subtotal must show what each amount represents.
+      const charged = await ui.t('usageCost.charged');
+      const estimate = await ui.t('usageCost.estimate');
+      for (const subtotal of [
+        `${charged} $0.42`,
+        `${estimate} $1.11`,
+        `${charged} $3.34`,
+        ...(ui.data.mixed ? [`${charged} ¥2.00`] : []),
+      ]) {
+        assert.equal(await panel.getByText(subtotal, { exact: true }).count(), 1, subtotal);
+      }
     } else await panel.getByText(await ui.t('usageCost.unavailable'), { exact: true }).waitFor();
     await trigger.click();
     await page.mouse.move(1, 1);

@@ -8,9 +8,66 @@ export default {
   name: 'provider-template-catalog', entry: './fixture.tsx', viewport: { width: 1000, height: 900 },
   real: 'Every bundled preset, real custom dialog and wizard, simulated clicks through identification and save',
   notCovered: 'Discovery and saving are fake host interfaces. No real keys, OAuth, network, disk persistence or model generation.',
-  cases: { default: { about: 'Catalog completeness smoke' }, ...Object.fromEntries(cases.map(c => [c.id, { about: `${c.kind}: ${c.providerId} ${c.address}` }])) },
+  cases: { 'wizard-bulk-selection': { about: 'Bulk selection in a built-in preset with 36 discovered models' },
+    'custom-model-picker': { about: 'Reference bulk controls in the custom connection model picker' },
+    default: { about: 'Catalog completeness smoke' }, 'official-model-plugins': { about: 'Search the official engine and open its exact market entry' }, ...Object.fromEntries(cases.map(c => [c.id, { about: `${c.kind}: ${c.providerId} ${c.address}` }])) },
   async ready(page) { await page.getByRole('dialog').waitFor(); },
   async check(page, ui) {
+    if (ui.case === 'official-model-plugins') {
+      const search = page.getByRole('textbox', { name: await ui.t('settings.providers.wizard.searchPlaceholder') });
+      await search.fill('Antigravity');
+      const row = page.getByRole('button', { name: /Antigravity/ });
+      await row.waitFor();
+      assert.equal(await row.count(), 1);
+      await page.getByText(await ui.t('settings.providers.wizard.officialModelPlugins'), { exact: true }).waitFor();
+      await ui.capture('official-list');
+      await row.click();
+      await page.getByRole('button', { name: await ui.t('settings.providers.wizard.installAndConfigure') }).waitFor();
+      await ui.capture('official-setup');
+      await page.getByRole('button', { name: await ui.t('settings.providers.wizard.back') }).click();
+      assert.equal(await search.inputValue(), 'Antigravity');
+      return;
+    }
+    if (['wizard-bulk-selection', 'custom-model-picker'].includes(ui.case)) {
+      const button = async key => page.getByRole('button', { name: await ui.t(key), exact: true });
+      const selectAll = await button('settings.providers.custom.fetch.selectAll');
+      const clear = await button('settings.providers.custom.fetch.clearAll');
+      await page.locator('input[type=password]').fill('fake-ui-key');
+      if (ui.case === 'custom-model-picker') {
+        await page.getByPlaceholder(await ui.t('settings.providers.custom.fields.baseUrlPlaceholder')).fill('https://fixture.example/v1');
+        await (await button('settings.providers.custom.fetch.button')).click();
+        await selectAll.waitFor();
+        await clear.waitFor();
+        await ui.capture('custom-bulk-controls');
+        return;
+      }
+      await (await button('settings.providers.wizard.next')).click();
+      const row = name => page.getByRole('checkbox', { name, exact: true });
+      const first = row('Fixture chat 1');
+      await first.waitFor();
+      const checkboxes = page.locator('input[type=checkbox][data-settings-search-action]');
+      const initial = await checkboxes.evaluateAll(rows => rows.map(row => row.checked));
+      assert.ok(initial.filter(value => !value).length >= 36);
+      assert.ok(initial.some(Boolean), 'Recommended models start selected');
+      await ui.capture('preset-models', { locator: page.getByRole('dialog') });
+      assert.equal(await selectAll.count(), 1, 'Built-in preset must offer Select all');
+      assert.equal(await clear.count(), 1, 'Built-in preset must offer Clear');
+      await selectAll.click();
+      assert.equal(await checkboxes.evaluateAll(rows => rows.every(row => row.checked)), true);
+      await first.click();
+      assert.equal(await first.isChecked(), false);
+      assert.equal(await row('Fixture chat 2').isChecked(), true);
+      await clear.click();
+      assert.equal(await checkboxes.evaluateAll(rows => rows.some(row => row.checked)), false);
+      await row('Fixture chat 2').click();
+      await (await button('settings.providers.wizard.finish')).click();
+      await page.waitForFunction(() => window.templateEvidence.saved);
+      const runtimes = await page.evaluate(() => Object.values(window.templateEvidence.saved.runtimes));
+      for (const runtime of runtimes) {
+        assert.deepEqual(runtime.models.filter(model => model.defaultEnabled !== false).map(model => model.id), ['fixture-chat-2']);
+      }
+      return;
+    }
     assert.deepEqual(await page.evaluate(() => window.templateIds), presets.map(p => p.id));
     const item = cases.find(c => c.id === ui.case) ?? cases[0];
     const retained = item.id === 'wizard-deepseek-retained';

@@ -15,9 +15,9 @@ vi.mock('../../imageCacheStore.desktop.js', () => ({ resolveSafe: imageResolve }
 vi.mock('../../videoCacheStore.js', () => ({ resolveSafe: videoResolve }));
 
 const uploadLocalFile = vi.hoisted(() => vi.fn());
-vi.mock('../mediaTransfer.desktop.js', () => ({
+vi.mock('../mediaTransfer.desktop.js', async () => ({
   uploadLocalFile,
-  mimeOf: () => 'application/octet-stream',
+  mimeOf: (await import('../mediaMime.js')).mimeOf,
 }));
 
 const materializeSshRemoteMedia = vi.hoisted(() => vi.fn());
@@ -133,6 +133,33 @@ it.each(['metadata', 'content'])('does not cache an OSS upload when source %s ch
 });
 
 describe('fetchLocalMediaToOss — scheme 路由', () => {
+  // #8805, unit: prepare must report Web resource types before either inline or
+  // peer transfer. Existing coverage only prepared resolver-typed images.
+  it.each([
+    ['index.html', 'text/html', 4096],
+    ['index.HTML', 'text/html', 509137],
+    ['index.htm', 'text/html', 42],
+    ['style.css', 'text/css', 42],
+    ['script.js', 'text/javascript', 42],
+    ['module.mjs', 'text/javascript', 42],
+    ['unknown.bin', 'application/octet-stream', 42],
+  ])('prepares %s with its MIME and preserves the inline budget', async (name, mimeType, size) => {
+    statMock.mockResolvedValue({ isFile: () => true, size, mtimeMs: 1000 });
+    const result = await fetchLocalMediaToOss({
+      url: 'xdt-file://local?path=' + encodeURIComponent(path.resolve('site', name)),
+      prepareOnly: true,
+    });
+    expect(result).toMatchObject({ mimeType, size });
+    if (size <= 65_536) {
+      expect(Buffer.from(result.inlineBase64!, 'base64')).toEqual(Buffer.alloc(size, 7));
+      expect(result.transferRequired).toBeUndefined();
+    } else {
+      expect(result.transferRequired).toBe(true);
+      expect(result.inlineBase64).toBeUndefined();
+    }
+    expect(uploadLocalFile).not.toHaveBeenCalled();
+  });
+
   const sharedTask: SharedTaskPeerCapture = {
     author: { sharedTaskId: 'shared', sessionId: 'task', memberId: 'guest', accountId: 'user', displayName: 'Guest' },
     isCurrent: () => true,
@@ -828,6 +855,45 @@ describe('fetchLocalMediaToOss — baseDir / maxBytes 服务端强制约束', ()
     statMock.mockResolvedValue({ isFile: () => true, size: 5_000_000, mtimeMs: 1 });
     await fetchLocalMediaToOss({ url: urlFor('/proj/out/big.css') });
     expect(uploadLocalFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('maxBytes + thumbnail:true: 静态大图优先缩略图 inline 回包; 缩图失败或不可缩(GIF)回退原图时在上传前拒绝超限', async () => {
+    realpathMock.mockImplementation(async (p: string) => p);
+    statMock.mockResolvedValue({ isFile: () => true, size: 5_000_000, mtimeMs: 1 });
+
+    // Static PNG > maxBytes still succeeds via inline thumbnail when thumbnail <= maxBytes.
+    __testing.setThumbnailRenderer(async () => Buffer.from('tiny-webp'));
+    const okThumb = await fetchLocalMediaToOss({
+      url: urlFor('/proj/out/large.png', '&maxBytes=2097152'),
+      thumbnail: true,
+    });
+    expect(okThumb.ossKey).toBe('');
+    expect(okThumb.mimeType).toBe('image/webp');
+    expect(okThumb.inlineBase64).toBe(Buffer.from('tiny-webp').toString('base64'));
+    expect(uploadLocalFile).not.toHaveBeenCalled();
+
+    // When thumbnail fails, fallback upload is rejected before touching uploadLocalFile.
+    __testing.setThumbnailRenderer(async () => null);
+    expect(
+      await codeOf(() =>
+        fetchLocalMediaToOss({
+          url: urlFor('/proj/out/large.png', '&maxBytes=2097152'),
+          thumbnail: true,
+        }),
+      ),
+    ).toMatch(/超出取件大小上限/);
+    expect(uploadLocalFile).not.toHaveBeenCalled();
+
+    // Non-thumbnailable GIF > maxBytes is rejected before upload.
+    expect(
+      await codeOf(() =>
+        fetchLocalMediaToOss({
+          url: urlFor('/proj/out/anim.gif', '&maxBytes=2097152'),
+          thumbnail: true,
+        }),
+      ),
+    ).toMatch(/超出取件大小上限/);
+    expect(uploadLocalFile).not.toHaveBeenCalled();
   });
 
   it('SSH 分支:两项约束原样下发给 materializeSshRemoteMedia(它 stat 完就会拉整份文件)', async () => {

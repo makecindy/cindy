@@ -1,11 +1,37 @@
-import { useRemoteModelFavorites } from '@/state/useRemoteModelFavorites';
+import { useRemoteModelFavorites, type FavoriteStore } from '@/state/useRemoteModelFavorites';
 import type { ControlledModelFavoriteSource } from '../../../shared/controlledModelCatalog';
 import {
   parseProviderShareFavoriteSource,
   providerShareFavoriteRegionsOf,
+  useProviderShareFavoriteKeysByDevice,
   useProviderShareFavorites,
   useProviderShareFavoriteSources,
 } from '@/state/providerShareFavorites';
+import {
+  isPluginEngineSelectable,
+  isSamePluginEngineChoice,
+  visiblePluginEngineChoices,
+} from '@/lib/pluginEngineSelection';
+import {
+  isPluginEngineFavoriteActive,
+  matchesPluginEngineFavoriteQuery,
+  pluginEngineFavoriteConfig,
+  pluginEngineFavoriteProviderId,
+  resolvePluginEngineFavorite,
+  type ResolvedPluginEngineFavorite,
+} from '@/lib/pluginEngineFavorites';
+import {
+  activePluginEngineModelId,
+  matchPluginEngineRows,
+  PluginEngineFavoriteRow,
+  PluginEngineModelConfig,
+  PluginEnginesSection,
+  usePluginEngineChoiceLabel,
+  usePluginEngineEffortLabel,
+  usePluginEngineModelLabel,
+  type PluginEngineFavoritesController,
+  type PluginEnginesPickerProps,
+} from './PluginEnginesSection';
 import {
   agentDeviceOfFavorite,
   LOCAL_MODEL_FAVORITE_STORE,
@@ -16,11 +42,14 @@ import {
   requestProviderShareFavoriteRegions,
 } from '@/features/provider-share/providerShareStore';
 import { toast } from '@/lib/toast';
-import { matchesModelName } from '@/lib/modelDisplayNames';
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { localizedModelName, matchesModelName } from '@/lib/modelDisplayNames';
+import { localizedModelDescription } from '@/lib/modelDescriptions';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react';
 import { favoritesSyncFailureI18nKey } from './favoritesSyncFailure';
-import { Check, Loader2, TriangleAlert } from 'lucide-react';
+import { Check, ChevronRight, Loader2, TriangleAlert } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { useInitialPaint } from '@/hooks/useInitialPaint';
+import { Spinner } from '@/components/ui/spinner';
 
 import {
   unifiedModelEntries,
@@ -54,6 +83,7 @@ import type { ModelPickerPreferenceStore } from './modelPickerPreferences';
 import { UnifiedFlyoutHost } from './UnifiedFlyoutHost';
 import { UnifiedModelRail } from './UnifiedModelRail';
 import { useUnifiedRowActions, withOptimisticConfig } from './useUnifiedRowActions';
+import { useUnifiedModelWindow } from './useUnifiedModelWindow';
 import { UnifiedModelRow } from './UnifiedModelRow';
 import { currentFocusedRow } from '@/components/ui/dropdown-menu-highlight';
 import {
@@ -84,6 +114,9 @@ import {
   resolveStoredModelEntry,
   sameAnchor,
   unavailableFavoriteEntry,
+  withRemoteModelGroupRailItems,
+  withRemotePluginEngineRailItems,
+  type DeviceModelGroupsRailTab,
   type ForeignFavoriteRow,
   type UnifiedAnchor,
   type UnifiedListRow,
@@ -106,6 +139,24 @@ const noop = (): void => {};
 const NO_FAVORITES: readonly ModelFavoriteItem[] = [];
 const NO_RECENT: readonly RecentModelItem[] = [];
 const NO_PROVIDERS: readonly ProviderView[] = [];
+const VIRTUAL_MODEL_LIST_MIN_ROWS = 80;
+
+function createWidthMeasure(fontFamily: string) {
+  const context = typeof CanvasRenderingContext2D === 'undefined'
+    ? null
+    : document.createElement('canvas').getContext('2d');
+  const cache = new Map<string, number>();
+  return (label: string, size: number, weight: number) => {
+    const font = `${weight} ${size}px ${fontFamily}`;
+    const key = `${font}\n${label}`;
+    const cached = cache.get(key);
+    if (cached !== undefined) return cached;
+    if (context && context.font !== font) context.font = font;
+    const width = context?.measureText(label).width ?? label.length * size;
+    cache.set(key, width);
+    return width;
+  };
+}
 
 export interface UnifiedSelectedRow {
   /** 该行**生效**引擎(推荐 ⊕ override ⊕ 会话内 pinnedEngine ⊕ 收藏副本)。 */
@@ -132,11 +183,24 @@ export interface UnifiedModelPanelProps {
   /** 左侧栏「模型组」一格及其内容；不传就没有这一格。 */
   modelGroupsView?: ReactNode;
   /**
+   * 另一台电脑自己的模式(model-groups.md §6.3)：每台一格，排进那台电脑那一段；选中时列表区显示
+   * `renderDeviceModelGroups(deviceId)`。不传 / 空数组就没有这些格。
+   */
+  deviceModelGroupTabs?: readonly DeviceModelGroupsRailTab[];
+  renderDeviceModelGroups?: (deviceId: string) => ReactNode;
+  /**
+   * 插件提供的执行引擎：传入完整列表（含已隐藏引擎，便于解析收藏），面板按 visiblePluginEngineChoices
+   * 派生常规分组与左侧栏格位，并接入统一收藏区与收藏浮层。
+   */
+  pluginEngines?: PluginEnginesPickerProps;
+  onPluginEnginePicked?: () => void;
+  /**
    * 插件提供的执行引擎：每个引擎在左侧栏单独一格(名字 + 插件图标)，选中时列表区显示
-   * `renderPluginEngine(providerId)`。不传 / 空数组就没有这些格(没装任何引擎时)。
+   * `renderPluginEngine(providerId, deviceId)`。不传 / 空数组就没有这些格(没装任何引擎时)。
+   * 带 `deviceId` 的是自己另一台电脑上的引擎，格位排进那台电脑那一段。
    */
   pluginEngineTabs?: readonly PluginEngineRailTab[];
-  renderPluginEngine?: (providerId: string) => ReactNode;
+  renderPluginEngine?: (providerId: string, deviceId?: string) => ReactNode;
   /** 「收藏」视图且没有搜索词时，列表最上方额外渲染的内容(收藏的模式)。 */
   favoritesPinned?: ReactNode;
   /** favoritesPinned 当前有内容：只有它时「收藏」不显示空态引导。 */
@@ -200,6 +264,8 @@ export interface UnifiedModelPanelProps {
    * 不显示某一台的配额。缺省 = 都按目录归属读。
    */
   providerGroupUsage?: ProviderGroupUsageOf;
+  /** 合并整个供应商的路由那一格显示谁的额度(sourceRouteProviders.ts 的 usageMember)。 */
+  routeUsageMember?: (providerId: string) => { provider: ProviderView; agentDeviceId: string | null } | null;
   /** 保留付费模型为锁定展示行，并把点击交给统一付费提示。 */
   includePaymentRequired?: boolean;
   paymentRequiredLabel?: string;
@@ -404,11 +470,36 @@ export interface UnifiedModelPanelProps {
  * 数据源:M1 的 `unifiedModelEntries`(纯逻辑,已按生效来源解析候选与能力)+ 调用方注入的
  * 可见性 / 排除谓词。本组件**不自己判定候选引擎或能力**,只做合成与呈现。
  */
-export function UnifiedModelPanel({
+export function UnifiedModelPanel(props: UnifiedModelPanelProps) {
+  const { t } = useTranslation();
+  const panelRoot = useRef<HTMLDivElement>(null);
+  // The first provider snapshot can arrive while the opening morph is still
+  // transparent. Track the shell's paint independently of the initial catalog.
+  const painted = useInitialPaint(() => true, panelRoot);
+  if (!painted) {
+    const localRows = props.providers.reduce((count, provider) =>
+      count + Object.values(provider.models).reduce((sum, models) => sum + models.length, 0), 0);
+    const remoteRows = props.remoteSources?.groups.reduce((count, group) => count + group.entries.length, 0) ?? 0;
+    if (localRows + remoteRows >= 80) {
+      return <div ref={panelRoot} role="status" style={{ height: props.listMaxHeight ?? 428 }} className="flex min-h-0 shrink items-center justify-center gap-1.5 px-3 text-13 text-[var(--text-tertiary)]">
+        <Spinner size={14} />
+        {t('newChat.modelSelector.trigger.loading')}
+      </div>;
+    }
+  }
+  return <UnifiedModelPanelContent {...props} panelRoot={panelRoot} />;
+}
+
+function UnifiedModelPanelContent({
+  panelRoot,
   pinnedTop,
   pinnedTopHasRows = false,
   modelGroupsView,
-  pluginEngineTabs,
+  deviceModelGroupTabs,
+  renderDeviceModelGroups,
+  pluginEngines,
+  onPluginEnginePicked,
+  pluginEngineTabs: pluginEngineTabsProp,
   renderPluginEngine,
   favoritesPinned,
   favoritesPinnedHasRows = false,
@@ -440,6 +531,7 @@ export function UnifiedModelPanel({
   interactionDisabled = false,
   providerUsage = null,
   providerGroupUsage,
+  routeUsageMember,
   includePaymentRequired = false,
   paymentRequiredLabel,
   paymentRequiredUnlockLabel,
@@ -463,7 +555,7 @@ export function UnifiedModelPanel({
   catalogNotice,
   emptyCatalogNotice,
   remoteSources,
-}: UnifiedModelPanelProps) {
+}: UnifiedModelPanelProps & { panelRoot: React.RefObject<HTMLDivElement | null> }) {
   const { t } = useTranslation();
   const [thinkingMemoryVersion, refreshThinkingMemory] = useState(0);
   const storedFavorites = useModelFavorites();
@@ -482,8 +574,43 @@ export function UnifiedModelPanel({
     remoteSources?.shareFavoriteSources,
   );
   const sharedFavoriteSources = useProviderShareFavoriteSources(remoteSources?.shareFavoriteSources);
+  const shareFavoriteKeys = useProviderShareFavoriteKeysByDevice(
+    remoteSources?.shareFavoriteSources,
+    !!favoritesListDeviceId,
+  );
   const hasRemoteSources = !!remoteSources;
   const favoritesHomeDeviceId = remoteSources?.homeDeviceId ?? null;
+  const homeFavoriteStore: FavoriteStore = preferenceStore
+    ? preferenceStore.favorites.store
+    : favoritesListDeviceId
+      ? remoteFavorites.store
+      : LOCAL_MODEL_FAVORITE_STORE;
+  const pluginEngineChoiceLabel = usePluginEngineChoiceLabel();
+  const pluginEngineModelLabel = usePluginEngineModelLabel();
+  const pluginEngineEffortLabel = usePluginEngineEffortLabel();
+  const visiblePluginEngines = useMemo(
+    () =>
+      pluginEngines
+        ? { ...pluginEngines, engines: visiblePluginEngineChoices(pluginEngines.engines, pluginEngines.active) }
+        : undefined,
+    [pluginEngines],
+  );
+  const pluginEngineTabs = useMemo<readonly PluginEngineRailTab[] | undefined>(() => {
+    if (pluginEngineTabsProp) return pluginEngineTabsProp;
+    if (!visiblePluginEngines || visiblePluginEngines.engines.length === 0) return undefined;
+    return visiblePluginEngines.engines.map((engine) => ({
+      key: engine.key,
+      providerId: engine.providerId,
+      ...(engine.deviceId ? { deviceId: engine.deviceId } : {}),
+      name: pluginEngineChoiceLabel(engine),
+      ...(engine.iconDataUrl ? { iconDataUrl: engine.iconDataUrl } : {}),
+      ...(engine.reportsUsage ? { reportsUsage: true as const } : {}),
+      selectable: isPluginEngineSelectable(engine),
+    }));
+  }, [pluginEngineTabsProp, visiblePluginEngines, pluginEngineChoiceLabel]);
+  const pluginEngineHostDeviceId = remoteSources
+    ? (remoteSources.localUsageDeviceId ?? null)
+    : (providerUsage?.deviceId ?? null);
   const agentDeviceFavorites = useAgentDeviceFavorites({
     deviceId: remoteSources?.active && !isSharedProvider ? deviceId : undefined,
     homeDeviceId: favoritesHomeDeviceId,
@@ -579,9 +706,8 @@ export function UnifiedModelPanel({
   const keepModelKey = keepModel
     ? `${keepModel.providerId ?? ''}::${keepModel.modelId}::${keepModel.agent}`
     : '';
-  const entries = useMemo(
-    () =>
-      unifiedModelEntries({
+  /** 联合列表的派生入参。「已隐藏」区复用同一份,只换掉可见性谓词(见 hiddenEntries)。 */
+  const entryOptions = (): Parameters<typeof unifiedModelEntries>[0] => ({
         providers,
         ...(!preferenceStore && (modelMemory?.editMany || configurationEnabled === false) ? { aliasPreferences: (providerId: string, agent: AgentKind, modelId: string) => ({
           engine: selectionPolicy === 'personalized' ? getEngineOverride(providerId, modelId) : undefined,
@@ -599,25 +725,79 @@ export function UnifiedModelPanel({
         excludeModel: (model, provider, agent) =>
           predicatesRef.current.excludeModel?.(model, provider, agent) ?? false,
         includePaymentRequired,
+        // 用户整家隐藏的供应商不从数据里剔掉:收藏 / 最近要继续解析到它们,面板自己把
+        // 它们从左栏与常规分组收进底部的「已隐藏」区(见 foldedProviderIds / hiddenEntries)。
+        includeHiddenProviders: true,
         scope,
         // 选中行豁免:会话正在用的那一条即便被停用或服务端下架,也必须留在列表里 ——
         // 否则选择器一打开就是空选态,用户看不出自己在跑什么、也换不回来。豁免按 agent
         // 收窄(见上面 keepModel 的推导注释与该选项头注)。
         ...(keepModel ? { keepModel } : {}),
-      }),
+  });
+  const entries = useMemo(
+    () => unifiedModelEntries(entryOptions()),
     // biome-ignore lint/correctness/useExhaustiveDependencies: 谓词经 ref 读取,刷新信号是 sourceVersion(见其注释);agents 以 agentsKey 表达身份;keepModel 以 keepModelKey 表达身份。
     [providers, agentsKey, scope, sourceVersion, keepModelKey, includePaymentRequired, enginePrefsVersion, memoryVersion, modelMemory, selectionPolicy, configurationEnabled, priceOf, preferenceStore, getEngineOverride],
   );
 
+  // ── 已隐藏区 ──────────────────────────────────────────────────────────────
+  // 两种来源并成一个可展开的区:整家隐藏的供应商(ProviderView.hidden)与逐个关掉显示
+  // 开关的模型。隐藏只是从常规列表收起,模型照常可选 —— 所以这里不做任何准入判断,
+  // 与常规行走同一条 unifiedModelEntries(只是不套可见性谓词)。
+  const userHiddenProviderIds = useMemo(
+    () => new Set(providers.filter((provider) => provider.hidden === true).map((provider) => provider.id)),
+    [providers],
+  );
+  const foldedProviderIds = useMemo<ReadonlySet<string> | undefined>(() => {
+    if (userHiddenProviderIds.size === 0) return listHiddenProviderIds;
+    return new Set([...(listHiddenProviderIds ?? []), ...userHiddenProviderIds]);
+  }, [listHiddenProviderIds, userHiddenProviderIds]);
+  const hiddenEntries = useMemo(
+    () => {
+      // 逐个成员比对:别名合并行(同一逻辑模型的新旧 id)在两次派生里可能选出不同的代表 id,
+      // 只比行 id 会把已经列出的模型当成「被隐藏」再列一遍。
+      const listed = new Set(entries.flatMap((entry) =>
+        entryModelIds(entry).map((modelId) => `${entry.providerId} ${modelId}`)));
+      // 整家隐藏的供应商里显示开关开着的模型,两次派生各出一个对象:统一用 entries 里的那个,
+      // 收藏 / 最近解析出的行与隐藏区里的行才是同一个对象(行身份按引用比较)。
+      const listedByKey = new Map(entries.map((entry) => [`${entry.providerId} ${entry.modelId}`, entry]));
+      return unifiedModelEntries({
+        ...entryOptions(),
+        // 与常规清单唯一的差别:不套逐模型可见性。
+        isVisible: () => true,
+      }).filter(
+        (entry) =>
+          // 「运行于」收起的那一份是重复项,不是用户隐藏的,不进这个区。
+          !listHiddenProviderIds?.has(entry.providerId) &&
+          (userHiddenProviderIds.has(entry.providerId) ||
+            !entryModelIds(entry).some((modelId) => listed.has(`${entry.providerId} ${modelId}`))),
+      ).map((entry) => listedByKey.get(`${entry.providerId} ${entry.modelId}`) ?? entry);
+    },
+    // biome-ignore lint/correctness/useExhaustiveDependencies: 与 entries 同一组派生入参(entryOptions 经 ref / key 表达身份),entries 变即重算。
+    [entries, listHiddenProviderIds, userHiddenProviderIds],
+  );
+  /**
+   * 收藏与最近的解析目录 = 常规清单 ∪ 被隐藏的模型。隐藏只决定常规分组里列不列,
+   * 模型照常可调用,用户存过的收藏和最近不能因此解析不回来(包括在「已隐藏」区里刚点的星)。
+   */
+  const resolvableEntries = useMemo(() => {
+    const known = new Set(entries);
+    const extra = hiddenEntries.filter((entry) => !known.has(entry));
+    return extra.length > 0 ? [...entries, ...extra] : entries;
+  }, [entries, hiddenEntries]);
+  const [hiddenExpanded, setHiddenExpanded] = useState(false);
+
   const localRailItems = remoteSources?.localRailItems;
   const remoteGroups = remoteSources?.groups;
   const hasModelGroupsView = modelGroupsView !== undefined;
-  const pluginEngineTabsKey = (pluginEngineTabs ?? []).map((tab) => tab.providerId).join('\n');
+  // 本机的引擎格与另一台电脑上的引擎格分开排：一个字符串键表达两组的身份，目录没变就不重排。
+  const pluginEngineTabsKey = JSON.stringify((pluginEngineTabs ?? []).map((tab) => [tab.providerId, tab.deviceId ?? '']));
+  const deviceModelGroupTabsKey = (deviceModelGroupTabs ?? []).map((tab) => tab.deviceId).join('\n');
   const railItems = useMemo<UnifiedRailItem[]>(() => {
     // 远程 Agent:本机格按本机目录派生(此刻 entries 可能是某台电脑的目录),
     // 其后每台电脑一段远程供应商格。
     const items: UnifiedRailItem[] = !localRailItems ? buildUnifiedRail(
-      entries.filter(entry => !listHiddenProviderIds?.has(entry.providerId)), undefined, providerOrder,
+      entries.filter(entry => !foldedProviderIds?.has(entry.providerId)), undefined, providerOrder,
     ) : [
       ...localRailItems,
       ...(remoteGroups ?? []).flatMap((group) =>
@@ -628,16 +808,21 @@ export function UnifiedModelPanel({
         })),
       ),
     ];
-    const engineProviderIds = pluginEngineTabsKey ? pluginEngineTabsKey.split('\n') : [];
-    if (!hasModelGroupsView && engineProviderIds.length === 0) return items;
-    // 「模型组」紧跟「全部」(和「全部」一样跨供应商)；插件引擎各占一格排在它后面、各供应商格之前。
+    const engineTabs = (JSON.parse(pluginEngineTabsKey) as Array<[string, string]>)
+      .map(([providerId, deviceId]) => ({ providerId, ...(deviceId ? { deviceId } : {}) }));
+    const groupTabs = deviceModelGroupTabsKey ? deviceModelGroupTabsKey.split('\n').map((deviceId) => ({ deviceId })) : [];
+    if (!hasModelGroupsView && engineTabs.length === 0) return withRemoteModelGroupRailItems(items, groupTabs);
+    // 「模型组」紧跟「全部」(和「全部」一样跨供应商)；本机的插件引擎各占一格排在它后面、各供应商格之前。
     const all = items.findIndex((item) => item.kind === 'all');
     const inserted: UnifiedRailItem[] = [
       ...(hasModelGroupsView ? [{ kind: 'model-groups' as const }] : []),
-      ...engineProviderIds.map((providerId) => ({ kind: 'plugin-engine' as const, providerId })),
+      ...engineTabs.filter((tab) => !tab.deviceId).map((tab) => ({ kind: 'plugin-engine' as const, providerId: tab.providerId })),
     ];
-    return [...items.slice(0, all + 1), ...inserted, ...items.slice(all + 1)];
-  }, [entries, providerOrder, localRailItems, remoteGroups, hasModelGroupsView, pluginEngineTabsKey, listHiddenProviderIds]);
+    // 另一台电脑上的引擎排进那台电脑那一段(它的供应商格之后)。
+    // 另一台电脑的「模型组」格排在那台电脑那一段最前面。
+    return withRemoteModelGroupRailItems(withRemotePluginEngineRailItems(
+      [...items.slice(0, all + 1), ...inserted, ...items.slice(all + 1)], engineTabs), groupTabs);
+  }, [entries, providerOrder, localRailItems, remoteGroups, hasModelGroupsView, pluginEngineTabsKey, deviceModelGroupTabsKey, foldedProviderIds]);
   // rail 上的筛选目标消失(供应商断开 / 收藏清空)时回落「全部」,避免停在空视图。
   useEffect(() => {
     if (rail.kind === 'all') return;
@@ -691,7 +876,7 @@ export function UnifiedModelPanel({
   const activeFavoriteUid = useMemo(() => {
     const item = favorites.find((favorite) => favorite.uid === selectedFavoriteUid);
     if (!item) return null;
-    const entry = resolveStoredModelEntry(entries, item.providerId, item.modelId);
+    const entry = resolveStoredModelEntry(resolvableEntries, item.providerId, item.modelId);
     return entry &&
       favoriteMatchesSelection({
         entry,
@@ -705,7 +890,7 @@ export function UnifiedModelPanel({
       ? item.uid
       : null;
   }, [
-    entries,
+    resolvableEntries,
     favorites,
     selectedFavoriteUid,
     selected.providerId,
@@ -723,10 +908,10 @@ export function UnifiedModelPanel({
     (
       entry: UnifiedModelEntry,
       /** 配置副本条目(收藏 / 最近)—— 只读它自存的引擎 / 深度 / Fast。 */
-      copy?: ModelConfigCopy,
+      copy: ModelConfigCopy | undefined,
       // 定宽 sizer 量的是「全部」视图,必须按那条轨解析,不能继承当前 effectiveRail
       // (否则兼容行被钉成 π 后量到更窄的三元组,切「全部」再弹宽)。
-      railForConfig: UnifiedRailFilter = effectiveRail,
+      railForConfig: UnifiedRailFilter,
     ): UnifiedRowConfig => {
       // 收藏 / 最近条目只读它自己存的副本(规格 §1.5),不掺模型默认与记忆。
       if (copy) {
@@ -802,7 +987,6 @@ export function UnifiedModelPanel({
     [
       activeFavoriteUid,
       agentFastModeCapable,
-      effectiveRail,
       enginePrefsVersion,
       getEngineOverride,
       fastMode,
@@ -906,13 +1090,35 @@ export function UnifiedModelPanel({
     };
   }, [deviceFavoritesEnabled, favoritesHomeDeviceId, deviceFavoriteGroups, unavailableDeviceIds, sharedFavoriteSources]);
 
-  const sections = useMemo(
+  const resolvePluginFavorite = useMemo(() => {
+    if (!pluginEngines || selectionPolicy === 'official') return undefined;
+    return (item: ModelFavoriteItem): ResolvedPluginEngineFavorite | null =>
+      resolvePluginEngineFavorite(item, pluginEngines.engines, {
+        homeDeviceId: favoritesHomeDeviceId,
+        sharedFavoriteSources,
+        running: pluginEngines.running,
+      });
+  }, [pluginEngines, selectionPolicy, favoritesHomeDeviceId, sharedFavoriteSources]);
+  const defaultPluginModelLabel = t('newChat.pluginEngines.defaultModel');
+  const matchesPluginFavorite = useCallback(
+    (resolved: ResolvedPluginEngineFavorite, q: string) =>
+      matchesPluginEngineFavoriteQuery(resolved, q, defaultPluginModelLabel),
+    [defaultPluginModelLabel],
+  );
+
+  const listedSections = useMemo(
     () =>
       buildUnifiedListSections({
         entries,
         favorites,
         recentModels,
         ...(resolveDeviceFavorite ? { resolveForeignFavorite: resolveDeviceFavorite } : {}),
+        ...(resolvePluginFavorite
+          ? {
+              resolvePluginEngineFavorite: resolvePluginFavorite,
+              matchesPluginEngineFavorite: matchesPluginFavorite,
+            }
+          : {}),
         query,
         matchesQuery: (entry, q) => matchesModelName({
           id: entry.modelId, displayName: entry.displayName, description: entry.description,
@@ -920,127 +1126,43 @@ export function UnifiedModelPanel({
         rail: effectiveRail,
         effectiveEngineOf,
         providerOrder,
-        ...(listHiddenProviderIds?.size ? { listHiddenProviderIds } : {}),
+        ...(foldedProviderIds?.size ? { listHiddenProviderIds: foldedProviderIds } : {}),
+        ...(resolvableEntries !== entries ? { resolveEntries: resolvableEntries } : {}),
         ...(scope === 'session' && liveEngineAgent
           ? { recommendation: { agent: liveEngineAgent, ...selected } }
           : {}),
       }),
-    [entries, favorites, recentModels, resolveDeviceFavorite, query, effectiveRail, effectiveEngineOf, providerOrder, t, scope, liveEngineAgent, selected.modelId, selected.providerId, listHiddenProviderIds],
+    [entries, resolvableEntries, favorites, recentModels, resolveDeviceFavorite, resolvePluginFavorite, matchesPluginFavorite, query, effectiveRail, effectiveEngineOf, providerOrder, t, scope, liveEngineAgent, selected.modelId, selected.providerId, foldedProviderIds],
   );
-
-  // 打开或切视图时，把模型本体的当前行对齐到可视高度 35% 处；收藏可以滚出顶部。
-  // 触发面不变:选中项自身变化(用户刚点了一行)不做任何对齐,否则点完列表会当场跳位;
-  // **只有视图本身变化**(rail 切换 / 搜索词变化 / 首次打开)才对齐 —— 数据刷新
-  // (目录轮询 / 收藏增删)不夺走用户的滚动位置(2026-08-13 实测:浏览到列表深处时,
-  // 后台目录刷新重建 sections 会把人拽回顶部的选中行)。
-  const viewKey = `${railItemKey(effectiveRail)}::${query.trim().toLowerCase()}`;
-  /**
-   * 「需要保证选中行可见」在途标记 —— 对齐不是一次性动作:面板在 morph 弹层里,
-   * 首开那一帧列表高度还是 pill 的裁切态,按它算滚动必错且此后不再重算,选中行
-   * 就停在可视区外(Chris 2026-08-14 实测:「当前模型必须可见」)。置位后由
-   * ResizeObserver 在每次尺寸变化时重新对齐,直到选中行真正可见;用户手动滚动
-   * 立即放弃(不跟用户抢滚动条)。
-   */
-  const needsEnsureVisibleRef = useRef(false);
-  const ensureSelectedVisible = useCallback(() => {
-    const el = listRef.current;
-    if (!el || !needsEnsureVisibleRef.current) return;
-    if (el.clientHeight < 1) return; // 还没有真实布局,等下一次尺寸回调。
-    const row = el.querySelector<HTMLElement>('[data-model-selected="true"]');
-    if (!row) {
-      el.scrollTop = 0;
-      needsEnsureVisibleRef.current = false; // 本视图没有选中行,无事可做。
-      return;
-    }
-    const listRect = el.getBoundingClientRect();
-    const rowRect = row.getBoundingClientRect();
-    // 「行是所在组第一行时把组标题一起露出来」的老逻辑已随居中一并去掉:居中天然在行上方
-    // 留出半屏内容,组标题不会再被裁在视口外,多一条特例只会让收敛条件更难对。
-    const alignment = computeSelectedRowScrollTop({
-      scrollTop: el.scrollTop,
-      clientHeight: el.clientHeight,
-      scrollHeight: el.scrollHeight,
-      headerInset: 0,
-      rowTop: rowRect.top - listRect.top + el.scrollTop,
-      rowBottom: rowRect.bottom - listRect.top + el.scrollTop,
-    });
-    // 只滚动、不抢焦点(DESIGN.md §14.2:弹层打开焦点在搜索框)。打开/改搜索词时
-    // 把焦点搬到选中行,第一个字符就会把搜索框失焦。勾选与居中已经能让收藏行可见;
-    // 键盘在行上 ←/Enter 仍由行自己的 tabIndex 接手。
-    if (alignment.oversized) {
-      // 行比可视区还高:此刻只能顶对齐,但**保持在途**(2026-08-19 预审 P1-3)——morph 生长
-      // 途中的一串中间尺寸都可能暂时「装不下一行」,在这里收工的话面板长开后不再复核,
-      // 选中行就钉在顶部、上方收藏被顶出,正是要修的原症状。不会振荡:顶对齐目标随尺寸
-      // 单调稳定、写入有 >1 阈值,长开后自然改走下面的居中并按其条件收工;真正的极矮
-      // 面板不再有尺寸回调,标记挂着也没有下一次工作。
-      if (Math.abs(alignment.scrollTop - el.scrollTop) > 1) {
-        suppressScrollDismissRef.current = true;
-        el.scrollTop = alignment.scrollTop;
-      }
-      return;
-    }
-    if (Math.abs(alignment.scrollTop - el.scrollTop) <= 1) {
-      // 已经居中(容器也有真实高度)→ 收工。
-      needsEnsureVisibleRef.current = false;
-      return;
-    }
-    const before = el.scrollTop;
-    suppressScrollDismissRef.current = true;
-    el.scrollTop = alignment.scrollTop;
-    // 夹紧后位置基本不动(已经贴着列表头 / 尾,没得再滚)→ 收工。少了这一条,短列表里
-    // 目标与实际永远差一截,ResizeObserver 每次回调都会重试一遍。判据带 1px 容差
-    // (2026-08-19 预审 P2-9):HiDPI 下 scrollTop 是小数,写整数读回小数,严格相等永远
-    // 不成立,在途标记就摘不下来,还会一直占用 suppressScrollDismiss 吞掉用户滚动。
-    if (Math.abs(el.scrollTop - before) <= 1) {
-      suppressScrollDismissRef.current = false;
-      needsEnsureVisibleRef.current = false;
-      return;
-    }
-    // morph 生长期间尺寸还会变,保持在途,交给下一次尺寸回调复核。
-  }, []);
-  useEffect(() => {
-    const el = listRef.current;
-    if (!el) return;
-    // 内容集合变了(切视图 / 搜索 / 数据刷新)→ 通知 morph 宿主重量一次面板尺寸:
-    // 增长方向被 min-h-0 钳制链挡住,宿主的 ResizeObserver 看不到(收缩才看得到),
-    // 不吱声的话切回大视图面板永远卡在小尺寸(2026-08-14 实机自查)。
-    el.dispatchEvent(new CustomEvent(MORPH_CONTENT_RESIZE_EVENT, { bubbles: true }));
-    const raf = requestAnimationFrame(() => {
-      const selectionKey = `${selected.providerId ?? ''}::${selected.modelId}::${selectedFavoriteUid ?? ''}`;
-      const previous = previousSelectionRef.current;
-      previousSelectionRef.current = selectionKey;
-      const previousView = previousViewRef.current;
-      previousViewRef.current = viewKey;
-      if (previous !== null && previous !== selectionKey) {
-        needsEnsureVisibleRef.current = false;
-        flashScrollbar(el);
-        return;
-      }
-      if (previousView !== null && previousView === viewKey) return;
-      needsEnsureVisibleRef.current = true;
-      ensureSelectedVisible();
-      flashScrollbar(el);
-    });
-    return () => cancelAnimationFrame(raf);
-  }, [
-    ensureSelectedVisible,
-    sections,
-    viewKey,
-    selected.modelId,
-    selected.providerId,
-    selectedFavoriteUid,
-  ]);
-  // morph 生长 / 窗口变化期间尺寸每变一次就复核一次对齐(仅在途标记置位时做事)。
-  useEffect(() => {
-    const el = listRef.current;
-    if (!el || typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(() => {
-      if (!needsEnsureVisibleRef.current) return;
-      requestAnimationFrame(ensureSelectedVisible);
-    });
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [ensureSelectedVisible]);
+  // 已隐藏区只跟「全部」与某个供应商的视图走(收藏 / 最近 / 模型组是另一种清单);
+  // 搜索时 effectiveRail 已回到「全部」,所以搜索天然覆盖所有被隐藏的模型。
+  const hiddenSections = useMemo(
+    () =>
+      effectiveRail.kind !== 'all' && effectiveRail.kind !== 'provider'
+        ? []
+        : buildUnifiedListSections({
+            entries: hiddenEntries,
+            favorites: [],
+            query,
+            matchesQuery: (entry, q) => matchesModelName({
+              id: entry.modelId, displayName: entry.displayName, description: entry.description,
+            }, q, t),
+            rail: effectiveRail,
+            effectiveEngineOf,
+            providerOrder,
+          }).map((section) => ({ ...section, key: `hidden:${section.key}`, hidden: true as const })),
+    [hiddenEntries, query, effectiveRail, effectiveEngineOf, providerOrder, t],
+  );
+  const hiddenRowCount = hiddenSections.reduce((count, section) => count + section.rows.length, 0);
+  // 当前选中的模型就在隐藏区里时直接展开:打开面板必须看得见自己正在用什么。
+  const selectedIsHidden = hiddenSections.some((section) =>
+    section.rows.some((row) =>
+      !row.pluginEngine && row.entry.providerId === selected.providerId && entryMatchesModelId(row.entry, selected.modelId)));
+  const hiddenShown = hiddenRowCount > 0 && (hiddenExpanded || selectedIsHidden || query.trim() !== '');
+  const sections = useMemo(
+    () => (hiddenShown ? [...listedSections, ...hiddenSections] : listedSections),
+    [hiddenShown, listedSections, hiddenSections],
+  );
 
   const closeFlyout = useCallback(() => {
     setFlyAnchor(null);
@@ -1181,6 +1303,105 @@ export function UnifiedModelPanel({
     },
   });
 
+  const pluginFavoriteEncodeOptions = useMemo(
+    () => ({
+      homeDeviceId: favoritesHomeDeviceId,
+      shareFavoriteKeys,
+      wireLimit: !!favoritesListDeviceId,
+    }),
+    [favoritesHomeDeviceId, shareFavoriteKeys, favoritesListDeviceId],
+  );
+  const selectPluginEngineFavorite = (resolved: ResolvedPluginEngineFavorite) => {
+    if (!pluginEngines) return;
+    void runExternal(async () => {
+      const result = pluginEngines.onSelect({
+        providerId: resolved.engine.providerId,
+        modelId: resolved.row.id,
+        ...(resolved.effort ? { effort: resolved.effort } : {}),
+        ...(resolved.engine.deviceId ? { deviceId: resolved.engine.deviceId } : {}),
+      });
+      const applied = typeof result === 'object' ? await result : result;
+      if (applied !== false) onPluginEnginePicked?.();
+      return applied;
+    });
+  };
+  const pluginEngineFavoritesController: PluginEngineFavoritesController | undefined =
+    pluginEngines && selectionPolicy === 'personalized'
+      ? {
+          canFavorite: (engine) =>
+            pluginEngineFavoriteProviderId(engine, pluginFavoriteEncodeOptions) !== null,
+          addFavorite: (engine, modelId, effort, flashKey) => {
+            const config = pluginEngineFavoriteConfig(
+              engine,
+              modelId,
+              effort,
+              pluginFavoriteEncodeOptions,
+            );
+            if (!config) return;
+            void runExternal(async () => {
+              try {
+                await homeFavoriteStore.add(config);
+                flashFavorite(flashKey);
+              } catch {
+                toast.error(t('newChat.modelSelector.unified.favoritesSaveFailed'));
+                return false;
+              }
+            });
+          },
+          removeFavorite: (uid) => {
+            if (flyAnchor?.kind === 'fav' && flyAnchor.uid === uid) closeFlyout();
+            void runExternal(async () => {
+              try {
+                await homeFavoriteStore.remove(uid);
+              } catch {
+                toast.error(t('newChat.modelSelector.unified.favoritesSaveFailed'));
+                return false;
+              }
+            });
+          },
+          updateFavoriteEffort: (resolved, nextEffort) => {
+            if (nextEffort === resolved.effort) return;
+            void runExternal(async () => {
+              const live = isPluginEngineFavoriteActive(
+                resolved,
+                pluginEngines.active,
+                pluginEngines.running,
+              );
+              const selectionBase = {
+                providerId: resolved.engine.providerId,
+                modelId: resolved.row.id,
+                ...(resolved.engine.deviceId ? { deviceId: resolved.engine.deviceId } : {}),
+              };
+              if (live) {
+                try {
+                  const res = pluginEngines.onSelect({ ...selectionBase, effort: nextEffort });
+                  const applied = typeof res === 'object' ? await res : res;
+                  if (applied === false) return false;
+                } catch {
+                  return false;
+                }
+              }
+              try {
+                await homeFavoriteStore.update(resolved.favorite.uid, { effort: nextEffort });
+              } catch {
+                if (live && resolved.effort) {
+                  try {
+                    await pluginEngines.onSelect({ ...selectionBase, effort: resolved.effort });
+                  } catch {
+                    // Best-effort rollback; error toast still informs the user.
+                  }
+                }
+                toast.error(t('newChat.modelSelector.unified.favoritesSaveFailed'));
+                return false;
+              }
+            });
+          },
+          justFavoritedKey: justFavorited,
+          configurationEnabled,
+          interactionDisabled: interactionDisabled || actionPending,
+        }
+      : undefined;
+
   // ── 浮层 ─────────────────────────────────────────────────────────────────
   const flyTarget = useMemo(() => {
     if (!flyAnchor) return null;
@@ -1223,7 +1444,7 @@ export function UnifiedModelPanel({
    * 小节标题:收藏 / 最近 / 推荐 / 供应商分组(Chris 2026-08-13 裁决:按供应商,
    * 不按模型家族;组名与模型设置页同一套 providerLabel)。
    */
-  const sectionLabel = (section: (typeof sections)[number]): string =>
+  const sectionLabel = useCallback((section: (typeof sections)[number]): string =>
     section.kind === 'favorites'
       ? t('newChat.modelSelector.unified.favoritesGroup')
       : section.kind === 'recent'
@@ -1232,19 +1453,219 @@ export function UnifiedModelPanel({
         ? t('newChat.modelSelector.unified.recommended')
       : section.group
         ? providerHeading(section.group.providerId)
-        : '';
+        : '', [providerHeading, t]);
 
   const quotaProviderOf = (section: (typeof sections)[number]): string | null => {
     if (section.group?.type === 'provider') return section.group.providerId;
     const first = section.rows[0];
-    if (!first || section.rows.some(row => row.agentDeviceId || row.entry.providerId !== first.entry.providerId)) return null;
+    if (!first || first.pluginEngine || section.rows.some(row => row.pluginEngine || row.agentDeviceId || row.entry.providerId !== first.entry.providerId)) return null;
     if (sections.some(other => other.group?.type === 'provider' && other.group.providerId === first.entry.providerId)) return null;
     const firstSourceSection = sections.find(other => other.rows.length > 0 && other.rows.every(row =>
-      !row.agentDeviceId && row.entry.providerId === first.entry.providerId));
+      !row.pluginEngine && !row.agentDeviceId && row.entry.providerId === first.entry.providerId));
     return firstSourceSection === section ? first.entry.providerId : null;
   };
-  const rows = sections.flatMap((section) => section.rows);
-  const hasRows = rows.length > 0;
+  const favoritesSection = sections.find((section) => section.kind === 'favorites');
+  const separateAllPrefix = effectiveRail.kind === 'all' && (!!pinnedTop || !!visiblePluginEngines?.engines.length);
+  const listSections = useMemo(() => separateAllPrefix ? sections.filter((section) => section.kind !== 'favorites') : sections, [separateAllPrefix, sections]);
+  const hasVisiblePluginEngineMatch =
+    !!visiblePluginEngines &&
+    matchPluginEngineRows(
+      visiblePluginEngines.engines,
+      query,
+      (engine) => activePluginEngineModelId(visiblePluginEngines.active, engine),
+      defaultPluginModelLabel.toLowerCase(),
+    ) > 0;
+  /**
+   * 「已隐藏」区的入口:折叠时排在列表末尾,展开后变成该区的标题。搜索词或当前选中项
+   * 把它强制展开时仍可点,只是收不起来(aria-expanded 如实反映)。
+   */
+  const hiddenDisclosure = hiddenRowCount > 0 ? (
+    <button
+      type="button"
+      data-hidden-models-toggle
+      aria-expanded={hiddenShown}
+      title={t('newChat.modelSelector.unified.hiddenGroupHint')}
+      onClick={() => setHiddenExpanded((open) => !open)}
+      className={cn(
+        'mt-1 flex w-full items-center gap-1 rounded-[8px] px-2.5 py-1.5 text-left text-12 font-medium leading-[1.33]',
+        'text-[var(--cmd-palette-item-meta)] transition-colors hover:bg-[var(--surface-hover)]',
+      )}
+    >
+      <ChevronRight
+        size={12}
+        aria-hidden
+        className={cn('shrink-0 transition-transform motion-reduce:transition-none', hiddenShown && 'rotate-90')}
+      />
+      <span className="truncate">
+        {t('newChat.modelSelector.unified.hiddenGroup', { count: hiddenRowCount })}
+      </span>
+    </button>
+  ) : null;
+  const hasRows = sections.some((section) => section.rows.length > 0);
+  // Search must not switch renderers, and growing a live list must not replace
+  // a focused row or an open flyout's anchor. Keep the window once it is active.
+  const hasLargeCatalog = resolvableEntries.length + favorites.length + recentModels.length >= VIRTUAL_MODEL_LIST_MIN_ROWS;
+  const [windowed, setWindowed] = useState(hasLargeCatalog);
+  const waitingForWindow = hasLargeCatalog && !windowed && !flyAnchor;
+  useLayoutEffect(() => {
+    if (waitingForWindow && !listRef.current?.contains(document.activeElement)) setWindowed(true);
+  }, [waitingForWindow]);
+  const windowEnabled = windowed && hasRows && !remoteListPending && !catalogNotice && effectiveRail.kind !== 'model-groups' && effectiveRail.kind !== 'plugin-engine';
+  const rowIsDisabled = (row: UnifiedListRow, knownConfig?: UnifiedRowConfig) => {
+    if (interactionDisabled || actionPending || row.unavailable) return true;
+    if (!isRouteDisabled || row.agentDeviceId || row.pluginEngine) return false;
+    const config = knownConfig ?? withOptimisticConfig(
+      row.anchor, configOf(row.entry, row.favorite ?? row.recent, effectiveRail), optimisticConfig,
+    );
+    return isRouteDisabled(row.entry.providerId, config.wireModelId ?? row.entry.modelId, config.agent);
+  };
+  const modelWindow = useUnifiedModelWindow({
+    enabled: windowEnabled,
+    sections: listSections,
+    listRef,
+    flyAnchor,
+    isRowDisabled: rowIsDisabled,
+    onNavigate: () => { needsEnsureVisibleRef.current = false; },
+  });
+
+  // 打开或切视图时，把模型本体的当前行对齐到可视高度 35% 处；收藏可以滚出顶部。
+  // 触发面不变:选中项自身变化(用户刚点了一行)不做任何对齐,否则点完列表会当场跳位;
+  // **只有视图本身变化**(rail 切换 / 搜索词变化 / 首次打开)才对齐 —— 数据刷新
+  // (目录轮询 / 收藏增删)不夺走用户的滚动位置(2026-08-13 实测:浏览到列表深处时,
+  // 后台目录刷新重建 sections 会把人拽回顶部的选中行)。
+  const viewKey = `${railItemKey(effectiveRail)}::${query.trim().toLowerCase()}`;
+  /**
+   * 「需要保证选中行可见」在途标记 —— 对齐不是一次性动作:面板在 morph 弹层里,
+   * 首开那一帧列表高度还是 pill 的裁切态,按它算滚动必错且此后不再重算,选中行
+   * 就停在可视区外(Chris 2026-08-14 实测:「当前模型必须可见」)。置位后由
+   * ResizeObserver 在每次尺寸变化时重新对齐,直到选中行真正可见;用户手动滚动
+   * 立即放弃(不跟用户抢滚动条)。
+   */
+  const needsEnsureVisibleRef = useRef(false);
+  const ensureSelectedVisible = useCallback(() => {
+    const el = listRef.current;
+    if (!el || !needsEnsureVisibleRef.current) return;
+    if (el.clientHeight < 1) return; // 还没有真实布局,等下一次尺寸回调。
+    let rowTop: number;
+    let rowBottom: number;
+    if (windowEnabled) {
+      const selectedIndex = modelWindow.items.findIndex((item) => item.row && isSelectedRow(item.row.anchor, item.row.entry));
+      const geometry = modelWindow.virtualizer.measurementsCache[selectedIndex];
+      if (!geometry) {
+        if (selectedIndex < 0) {
+          el.scrollTop = 0;
+          needsEnsureVisibleRef.current = false;
+        }
+        return;
+      }
+      const item = modelWindow.items[selectedIndex];
+      rowTop = geometry.start + (item?.row && item.rowIndex > 0 ? 4 : 0);
+      rowBottom = geometry.end;
+    } else {
+      const row = el.querySelector<HTMLElement>('[data-model-selected="true"]');
+      if (!row) {
+        el.scrollTop = 0;
+        needsEnsureVisibleRef.current = false;
+        return;
+      }
+      const listRect = el.getBoundingClientRect();
+      const rowRect = row.getBoundingClientRect();
+      rowTop = rowRect.top - listRect.top + el.scrollTop;
+      rowBottom = rowRect.bottom - listRect.top + el.scrollTop;
+    }
+    // 「行是所在组第一行时把组标题一起露出来」的老逻辑已随居中一并去掉:居中天然在行上方
+    // 留出半屏内容,组标题不会再被裁在视口外,多一条特例只会让收敛条件更难对。
+    const alignment = computeSelectedRowScrollTop({
+      scrollTop: el.scrollTop,
+      clientHeight: el.clientHeight,
+      scrollHeight: el.scrollHeight,
+      headerInset: 0,
+      rowTop,
+      rowBottom,
+    });
+    // 只滚动、不抢焦点(DESIGN.md §14.2:弹层打开焦点在搜索框)。打开/改搜索词时
+    // 把焦点搬到选中行,第一个字符就会把搜索框失焦。勾选与居中已经能让收藏行可见;
+    // 键盘在行上 ←/Enter 仍由行自己的 tabIndex 接手。
+    if (alignment.oversized) {
+      // 行比可视区还高:此刻只能顶对齐,但**保持在途**(2026-08-19 预审 P1-3)——morph 生长
+      // 途中的一串中间尺寸都可能暂时「装不下一行」,在这里收工的话面板长开后不再复核,
+      // 选中行就钉在顶部、上方收藏被顶出,正是要修的原症状。不会振荡:顶对齐目标随尺寸
+      // 单调稳定、写入有 >1 阈值,长开后自然改走下面的居中并按其条件收工;真正的极矮
+      // 面板不再有尺寸回调,标记挂着也没有下一次工作。
+      if (Math.abs(alignment.scrollTop - el.scrollTop) > 1) {
+        suppressScrollDismissRef.current = true;
+        el.scrollTop = alignment.scrollTop;
+      }
+      return;
+    }
+    if (Math.abs(alignment.scrollTop - el.scrollTop) <= 1) {
+      // 已经居中(容器也有真实高度)→ 收工。
+      needsEnsureVisibleRef.current = false;
+      return;
+    }
+    const before = el.scrollTop;
+    suppressScrollDismissRef.current = true;
+    el.scrollTop = alignment.scrollTop;
+    // 夹紧后位置基本不动(已经贴着列表头 / 尾,没得再滚)→ 收工。少了这一条,短列表里
+    // 目标与实际永远差一截,ResizeObserver 每次回调都会重试一遍。判据带 1px 容差
+    // (2026-08-19 预审 P2-9):HiDPI 下 scrollTop 是小数,写整数读回小数,严格相等永远
+    // 不成立,在途标记就摘不下来,还会一直占用 suppressScrollDismiss 吞掉用户滚动。
+    if (Math.abs(el.scrollTop - before) <= 1) {
+      suppressScrollDismissRef.current = false;
+      needsEnsureVisibleRef.current = false;
+      return;
+    }
+    // morph 生长期间尺寸还会变,保持在途,交给下一次尺寸回调复核。
+  }, [windowEnabled, modelWindow.items, modelWindow.virtualizer, isSelectedRow]);
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+    // 内容集合变了(切视图 / 搜索 / 数据刷新)→ 通知 morph 宿主重量一次面板尺寸:
+    // 增长方向被 min-h-0 钳制链挡住,宿主的 ResizeObserver 看不到(收缩才看得到),
+    // 不吱声的话切回大视图面板永远卡在小尺寸(2026-08-14 实机自查)。
+    el.dispatchEvent(new CustomEvent(MORPH_CONTENT_RESIZE_EVENT, { bubbles: true }));
+    const raf = requestAnimationFrame(() => {
+      const selectionKey = `${selected.providerId ?? ''}::${selected.modelId}::${selectedFavoriteUid ?? ''}`;
+      const previous = previousSelectionRef.current;
+      previousSelectionRef.current = selectionKey;
+      const previousView = previousViewRef.current;
+      previousViewRef.current = viewKey;
+      if (previous !== null && previous !== selectionKey) {
+        needsEnsureVisibleRef.current = false;
+        flashScrollbar(el);
+        return;
+      }
+      if (previousView !== null && previousView === viewKey) return;
+      needsEnsureVisibleRef.current = true;
+      ensureSelectedVisible();
+      flashScrollbar(el);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [
+    ensureSelectedVisible,
+    sections,
+    viewKey,
+    selected.modelId,
+    selected.providerId,
+    selectedFavoriteUid,
+  ]);
+  // Recheck the estimated offscreen position when its DOM measurements arrive.
+  useEffect(() => {
+    if (!windowEnabled || !needsEnsureVisibleRef.current) return;
+    const raf = requestAnimationFrame(ensureSelectedVisible);
+    return () => cancelAnimationFrame(raf);
+  }, [windowEnabled, modelWindow.virtualItems, ensureSelectedVisible]);
+  // morph 生长 / 窗口变化期间尺寸每变一次就复核一次对齐(仅在途标记置位时做事)。
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => {
+      if (!needsEnsureVisibleRef.current) return;
+      requestAnimationFrame(ensureSelectedVisible);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [ensureSelectedVisible]);
 
   /**
    * 行 L2 显示 provider 来源而不是模型描述(2026-09-16 实测裁决)。
@@ -1261,8 +1682,7 @@ export function UnifiedModelPanel({
    * 折后价比例填充并尾随 ↓X%;限免显示淡染小徽标;无报价不渲染节点。
    * 价格按**该行生效引擎的 wire id**查(同一逻辑模型换引擎可能换一条报价)。
    *
-   * 抽成函数是因为定宽 sizer 也要画一份**逐像素等价**的行(见 widthSizerSections):价格
-   * 节点参与行宽,两边各算一遍必然漂成「量出来的宽度不是真视图的宽度」。
+   * The width probe and visible rows use the same effective quote.
    */
   const priceDisplayOf = useCallback(
     (
@@ -1323,7 +1743,8 @@ export function UnifiedModelPanel({
    *   - 选中交给调用方的 onSelectDeviceFavorite(Agent 在那台运行),不经本目录的选中 / 跨引擎链路。
    * `sizer` = 定宽 sizer 里的那一份:只量宽,不接交互、不读用量。
    */
-  const renderDeviceFavoriteRow = (row: UnifiedListRow, sizer: boolean): ReactNode => {
+  type RowNavigationProps = Pick<ComponentProps<typeof UnifiedModelRow>, 'tabIndex' | 'position'>;
+  const renderDeviceFavoriteRow = (row: UnifiedListRow, sizer: boolean, navigation?: RowNavigationProps): ReactNode => {
     const rowDeviceId = row.agentDeviceId!;
     const favorite = row.favorite!;
     const group = remoteSources?.groups.find((candidate) => candidate.deviceId === rowDeviceId);
@@ -1337,6 +1758,7 @@ export function UnifiedModelPanel({
       <UnifiedModelRow
         key={key}
         readable={readableRows}
+        {...navigation}
         measurementOnly={sizer}
         entry={row.entry}
         anchor={row.anchor}
@@ -1414,39 +1836,343 @@ export function UnifiedModelPanel({
    * 会话内默认停在「同引擎」视图 —— 那是**最窄**的一份内容;用户切到「全部 / 供应商」时
    * 多出跨引擎警示行与更宽的行集,面板于是在一次打开内二次撑宽。
    *
-   * 修法:打开的第一帧就渲染一份**不可见**的全量视图交给 `w-max` 量宽,面板从此按最宽视图
-   * 定宽,切 rail 只换可见内容、不再改宽度。取舍写明:代价是过滤视图多渲染一份测宽行
-   * (无交互、无 hover、不进 listbox),换来宽度稳定。
-   *
-   * field 形态宽度绑 trigger；当前已是全量视图时无需重复量宽。
+   * Rank the full catalog with text metrics and give `w-max` one actual row
+   * and group label. A windowed All view needs the probe as well because most
+   * of its rows have no DOM. Field panels follow the trigger.
    */
   const widthSizerActive =
-    !panelWidthFluid && (effectiveRail.kind !== 'all' || query.trim() !== '');
+    !panelWidthFluid && (windowed || effectiveRail.kind !== 'all' || query.trim() !== '');
   const widthSizerSections = useMemo(
     () =>
       widthSizerActive
         ? buildUnifiedListSections({
-            entries,
+            entries: resolvableEntries,
             favorites,
             recentModels,
             ...(resolveDeviceFavorite ? { resolveForeignFavorite: resolveDeviceFavorite } : {}),
+            ...(resolvePluginFavorite ? { resolvePluginEngineFavorite: resolvePluginFavorite } : {}),
             query: '',
             rail: RAIL_ALL,
             effectiveEngineOf,
             providerOrder,
+            ...(listHiddenProviderIds?.size ? { listHiddenProviderIds } : {}),
           })
         : [],
-    [widthSizerActive, entries, favorites, recentModels, resolveDeviceFavorite, effectiveEngineOf, providerOrder],
+    [widthSizerActive, resolvableEntries, favorites, recentModels, resolveDeviceFavorite, resolvePluginFavorite, effectiveEngineOf, providerOrder, listHiddenProviderIds],
+  );
+  const widthSizerRef = useRef<HTMLDivElement>(null);
+  const [widthMeasure, setWidthMeasure] = useState<ReturnType<typeof createWidthMeasure> | null>(null);
+  useLayoutEffect(() => {
+    const probe = widthSizerRef.current;
+    if (!probe) return;
+    let family = '';
+    const update = (fontsChanged = false) => {
+      const next = getComputedStyle(probe).fontFamily || 'sans-serif';
+      if (family === next && !fontsChanged) return;
+      family = next;
+      setWidthMeasure(() => createWidthMeasure(family));
+    };
+    const onFontsLoaded = () => update(true);
+    const onResize = () => update();
+    update();
+    document.fonts?.addEventListener('loadingdone', onFontsLoaded);
+    window.addEventListener('resize', onResize);
+    return () => {
+      document.fonts?.removeEventListener('loadingdone', onFontsLoaded);
+      window.removeEventListener('resize', onResize);
+    };
+  }, [widthSizerActive]);
+  const widthCandidates = useMemo(() => {
+    if (!widthMeasure) return null;
+    let widestLabel = '';
+    let labelWidth = -1;
+    let widestRow: UnifiedListRow | undefined;
+    let rowWidth = -1;
+    for (const section of widthSizerSections) {
+      const label = sectionLabel(section);
+      const width = widthMeasure(label, 12, 500);
+      if (width > labelWidth) {
+        widestLabel = label;
+        labelWidth = width;
+      }
+      for (const row of section.rows) {
+        const { entry } = row;
+        const config = row.agentDeviceId && row.favorite
+          ? resolveFavoriteRowConfig({ entry, item: row.favorite })
+          : configOf(entry, row.favorite ?? row.recent, RAIL_ALL);
+        const price = row.agentDeviceId ? null : priceDisplayOf(entry, config);
+        const name = widthMeasure(localizedModelName(entry.displayName, t), 14, 500);
+        const effort = configurationEnabled && config.effort ? 4 + widthMeasure(effortLabelOf(config.agent, config.effort), 12, 400) : 0;
+        const fast = configurationEnabled && config.fast ? 15 : 0;
+        const star = selectionPolicy === 'personalized' ? 28 : 0;
+        const customize = configurationEnabled && !row.agentDeviceId && !row.recent ? 28 : 0;
+        const badge = price?.kind === 'free'
+          ? 24 + widthMeasure(t('newChat.modelSelector.pricing.free'), 10, 500)
+          : price?.tier
+            ? 8 + widthMeasure((price.symbol ?? '$').repeat(price.tier), 11, 600) + 0.5 * price.tier
+              + (price.discountPct !== undefined ? 20 + widthMeasure(`↓${price.discountPct}%`, 10, 500) : 0)
+            : 0;
+        const payment = entry.availability === 'requires_payment'
+          ? (paymentRequiredLabel ? 38 + widthMeasure(paymentRequiredLabel, 10, 400) : 0)
+            + (paymentRequiredUnlockLabel ? 8 + widthMeasure(paymentRequiredUnlockLabel, 11, 500) : 0)
+          : 0;
+        // Rank by the first line's flex slots. The winning row still uses the
+        // real CSS to size the panel, including the native scrollbar gutter.
+        const primary = 58 + name + Math.min(118, 12 + effort + fast) + star + customize + badge + payment;
+        const description = !row.agentDeviceId && ownCatalog && entry.providerId === 'xd'
+          && localizedModelDescription({ id: entry.modelId, group: entry.group }, t);
+        const secondary = description
+          ? 50 + Math.min(widthMeasure(providerHeading(entry.providerId), 12, 400), widthMeasure('0', 12, 400) * 30)
+          : 0;
+        const width = Math.max(primary, secondary);
+        if (width > rowWidth) {
+          widestRow = row;
+          rowWidth = width;
+        }
+      }
+    }
+    return { label: widestLabel, row: widestRow };
+  }, [widthMeasure, widthSizerSections, sectionLabel, configOf, priceDisplayOf, configurationEnabled,
+    effortLabelOf, selectionPolicy, paymentRequiredLabel, paymentRequiredUnlockLabel, ownCatalog, providerHeading, t]);
+
+  const renderSectionLabel = (section: (typeof sections)[number]) => {
+    const label = sectionLabel(section);
+    const quotaProvider = quotaProviderOf(section);
+    return (
+      <div
+        data-group-label={label}
+        {...(section.group?.type === 'provider'
+          ? { 'data-group-provider': section.group.providerId }
+          : {})}
+        // Shared menu group label (DESIGN §4 Menu text): 12px / 500 meta.
+        className="flex flex-wrap items-center gap-1.5 px-2.5 pb-1 pt-2 text-12 font-medium leading-[1.33] text-[var(--cmd-palette-item-meta)]"
+      >
+        <span className="truncate">{label}</span>
+        {quotaProvider && <ModelPoolQuotaSummary providerId={quotaProvider} />}
+      </div>
+    );
+  };
+  const renderOption = (row: UnifiedListRow, navigation?: RowNavigationProps) => {
+    if (row.pluginEngine) {
+      return (
+        <PluginEngineFavoriteRow
+          key={anchorKey(row.anchor)}
+          resolved={row.pluginEngine}
+          {...navigation}
+          anchor={row.anchor}
+          active={sameAnchor(flyAnchor, row.anchor)}
+          readable={readableRows}
+          configurationEnabled={configurationEnabled}
+          interactionDisabled={interactionDisabled || actionPending}
+          onSelect={() => selectPluginEngineFavorite(row.pluginEngine!)}
+          {...(selectionPolicy === 'personalized' && pluginEngineFavoritesController
+            ? { onRemove: () => pluginEngineFavoritesController.removeFavorite(row.pluginEngine!.favorite.uid) }
+            : {})}
+          onReveal={revealFlyout}
+          onRevealForKeyboard={revealFlyoutForKeyboard}
+        />
+      );
+    }
+    if (row.agentDeviceId) return renderDeviceFavoriteRow(row, false, navigation);
+    const config = withOptimisticConfig(
+      row.anchor,
+      configOf(row.entry, row.favorite ?? row.recent, effectiveRail),
+      optimisticConfig,
+    );
+    const key = anchorKey(row.anchor);
+    const priceDisplay = priceDisplayOf(row.entry, config);
+    /**
+     * 最近行按**解析后的整份配置**匹配收藏(2026-09-16 裁决:最近也是配置副本):
+     * 同一来源 + 同一模型下,引擎 / 深度 / Fast 解析后一致就点亮星标;
+     * 点星把它存进收藏 / 从收藏里移除。
+     * 前两维(来源 + 模型)必须先圈定(2026-09-16 review P0):只看三元组的话,
+     * 另一个型号的收藏只要引擎 / 深度 / Fast 巧合一致就会被误命中,点星删掉的是
+     * 用户根本没点的那条收藏。三元组用**解析值**而不是存储字面量比:两边都可能是
+     * 「跟随推荐」的缺省字段 —— 按字面量会比出「一边有 effort、一边没有」的假不匹配。
+     */
+    const matchingFavorite = row.recent
+      ? favorites.find((favorite) => {
+          if (favorite.providerId !== row.entry.providerId) return false;
+          if (resolveStoredModelEntry(resolvableEntries, favorite.providerId, favorite.modelId) !== row.entry) return false;
+          const favoriteConfig = resolveFavoriteRowConfig({
+            entry: row.entry,
+            item: favorite,
+            agentFastModeCapable,
+          });
+          return (
+            favoriteConfig.engine === config.engine &&
+            favoriteConfig.effort === config.effort &&
+            favoriteConfig.fast === config.fast
+          );
+        })
+      : undefined;
+    const recentRow = !!row.recent;
+    // 最近行本身不持有收藏态:命中的收藏就是它的星标与**选中锚点**
+    // (点击=按这份副本配置应用,同收藏副本语义 —— 带上 uid,锚点/星标才一致)。
+    const starredFavorite = row.favorite ?? matchingFavorite;
+    return (
+      <UnifiedModelRow
+        key={key}
+        readable={readableRows}
+        {...navigation}
+        entry={row.entry}
+        anchor={row.anchor}
+        config={config}
+        {...(showsSourceRow
+          ? { sourceLabel: aggregateSourceLabel(row.entry.providerId) }
+          : {})}
+        sourceNotice={remoteActiveDeviceId
+          ? remoteSources?.homeUnavailableReasonOf?.(remoteActiveDeviceId, row.entry.providerId)
+          : undefined}
+        selected={isSelectedRow(row.anchor, row.entry)}
+        active={sameAnchor(flyAnchor, row.anchor)}
+        isFavoriteRow={!!starredFavorite}
+        justFavorited={justFavorited === key}
+        {...(priceDisplay ? { priceDisplay } : {})}
+
+        configurationEnabled={configurationEnabled}
+        // 最近行是只读的配置副本(流水账):不在这一页改配置,也没有配置浮层
+        // (引擎 / 深度 / Fast 由记录时的选择决定,改配置走模型行或收藏)。
+        // 不出配置浮层的行(最近行只读副本、设置类入口)一律 customizable=false：
+        // 按钮、← 快捷键与右键浮层都由这一个闸门收掉，不宣告存在却无响应。
+        customizable={configurationEnabled && !recentRow}
+        interactionDisabled={rowIsDisabled(row, config)}
+        paymentRequired={row.entry.availability === 'requires_payment'}
+        {...(paymentRequiredLabel ? { paymentRequiredLabel } : {})}
+        {...(paymentRequiredUnlockLabel ? { paymentRequiredUnlockLabel } : {})}
+        {...(onPaymentRequired ? { onPaymentRequired } : {})}
+        effortLabelOf={effortLabelOf}
+        providers={providers}
+        onReveal={recentRow ? noop : revealFlyout}
+        onRevealForKeyboard={recentRow ? noop : revealFlyoutForKeyboard}
+        onSelect={() =>
+          // 星标行的点击与收藏行同构:带上命中的那条收藏,选中态才不只停在「配置像」上。
+          selectRow(row.anchor, config, starredFavorite, row.entry)
+        }
+        onStar={
+          selectionPolicy === 'personalized'
+            ? recentRow
+              ? () =>
+                  matchingFavorite
+                    ? removeFavorite(
+                        {
+                          kind: 'fav',
+                          uid: matchingFavorite.uid,
+                          providerId: matchingFavorite.providerId,
+                          modelId: matchingFavorite.modelId,
+                        },
+                        row.entry,
+                      )
+                    : addFavorite(row.anchor, config)
+              : () =>
+                  row.favorite
+                    ? removeFavorite(row.anchor, row.entry)
+                    : addFavorite(row.anchor, config)
+            : undefined
+        }
+      />
+    );
+  };
+
+  const renderSection = (section: (typeof sections)[number], previous?: (typeof sections)[number]) => (
+    <div key={section.key} role="group" aria-label={sectionLabel(section)}>
+      {section.hidden && !previous?.hidden ? hiddenDisclosure : null}
+      {renderSectionLabel(section)}
+      {section.rows.map((row) => renderOption(row))}
+    </div>
+  );
+  const visibleGroups = new Map<number, typeof modelWindow.virtualItems>();
+  for (const measurement of modelWindow.virtualItems) {
+    const index = modelWindow.items[measurement.index]!.sectionIndex;
+    const group = visibleGroups.get(index);
+    if (group) group.push(measurement);
+    else visibleGroups.set(index, [measurement]);
+  }
+
+  const listPrefix = (
+    <>
+      {/* 「跟随会话」行(opt-in,仅 scheduler heartbeat):置于最顶,不属于任何分组。 */}
+      {followSession && (
+        <>
+          <button
+            type="button"
+            disabled={interactionDisabled || actionPending}
+            onClick={() => void runExternal(followSession.onFollow)}
+            role="option"
+            aria-selected={followSession.active}
+            data-follow-session-row
+            {...menuRowAttrs({ checked: followSession.active, disabled: interactionDisabled })}
+            className={cn(
+              COMPOSER_MENU_ROW,
+              'flex w-full items-center justify-between px-3 py-2',
+              // Model menu exception (DESIGN §4): the chosen row keeps its fill and check.
+              followSession.active && 'bg-sidebar-item-hover data-[menu-active]:bg-transparent',
+              interactionDisabled && 'cursor-not-allowed opacity-50',
+            )}
+          >
+            {withMenuLabels(<span className="truncate">{followSession.label}</span>)}
+            {followSession.active && (
+              <Check size={15} className="ml-2 shrink-0 text-[var(--model-item-check)]" />
+            )}
+          </button>
+          <div className="mx-1 my-1 h-px bg-[var(--cmd-palette-border)]" />
+        </>
+      )}
+      {/* 只在已登记跨 Harness 切换时提示如何接续;浏览「全部」或同 Harness 换模型不提示。 */}
+      {sessionEngineFilter?.pendingTarget && (
+        <div
+          role="note"
+          data-cross-engine-warning
+          title={t('newChat.modelSelector.unified.crossEngineWarning')}
+          className={cn(
+            'flex items-center gap-1.5 px-2.5 pb-1 pt-1.5 text-11 leading-[1.5] text-[var(--warning-fg)]',
+            // 警示行**不参与撑宽**(Chris 2026-08-19:切到「全部」时面板又弹开一截)。
+            // `truncate` 只管画的时候截断,`max-content` 布局(面板是 w-max)算的却是
+            // 全文宽度 —— 这一行因此成了整块面板里最宽的内容。`w-0 min-w-full` 是经典
+            // 手法:宽度基数取 0(对 max-content 贡献 0),再用 min-width:100% 在终局
+            // 吃满已经定下来的可用宽,视觉上仍是整行。
+            'w-0 min-w-full',
+          )}
+        >
+          <TriangleAlert size={12} className="shrink-0" />
+          <span className="min-w-0 break-words">
+            {t('newChat.modelSelector.unified.crossEngineWarning')}
+          </span>
+        </div>
+      )}
+      {favoritesListDeviceId && remoteFavorites.error ? <div role="status" className="px-3 py-2 text-13 text-[var(--text-secondary)]">{t(favoritesSyncFailureI18nKey(remoteFavorites.errorCode))}</div> : null}
+      {separateAllPrefix && !catalogNotice && !remoteListPending && (
+        <>
+          {favoritesSection ? renderSection(favoritesSection) : null}
+          {pinnedTop ?? null}
+          {visiblePluginEngines && visiblePluginEngines.engines.length > 0 ? (
+            <PluginEnginesSection
+              picker={visiblePluginEngines}
+              query={query}
+              hostDeviceId={pluginEngineHostDeviceId}
+              onPicked={() => onPluginEnginePicked?.()}
+              {...(pluginEngineFavoritesController ? { favorites: pluginEngineFavoritesController } : {})}
+              panelElement={panelElement}
+              {...(overlayClassName !== undefined ? { overlayClassName } : {})}
+            />
+          ) : null}
+        </>
+      )}
+      {favoritesPinned && effectiveRail.kind === 'favorites' && !query.trim() ? favoritesPinned : null}
+      {!remoteListPending && remoteRail !== null ? remoteSources?.status : null}
+    </>
   );
 
   const panelContent = (
     <div
+      ref={panelRoot}
       className="flex min-h-0 min-w-0 shrink"
       style={{ height: `${listMaxHeight ?? 428}px` }}
     >
       <UnifiedModelRail
         providerUsage={providerUsage}
         {...(providerGroupUsage ? { providerGroupUsage } : {})}
+        {...(routeUsageMember ? { routeUsageMember } : {})}
         items={railItems}
         active={effectiveRail}
         onSelect={handleRailSelect}
@@ -1454,6 +2180,7 @@ export function UnifiedModelPanel({
         providerLabel={providerHeading}
         interactionDisabled={interactionDisabled || actionPending}
         {...(pluginEngineTabs?.length ? { pluginEngineTabs } : {})}
+        {...(deviceModelGroupTabs?.length ? { modelGroupDeviceTabs: deviceModelGroupTabs } : {})}
         {...(remoteSources
           ? {
               remoteSources: {
@@ -1473,6 +2200,12 @@ export function UnifiedModelPanel({
           ref={highlightListRef}
           role="listbox"
           aria-label={t('newChat.modelSelector.modelListAria')}
+          tabIndex={windowed ? -1 : undefined}
+          onKeyDown={windowEnabled ? modelWindow.onKeyDown : undefined}
+          onFocusCapture={windowEnabled ? modelWindow.onFocus : undefined}
+          onBlurCapture={windowEnabled ? modelWindow.onBlur : waitingForWindow ? (event) => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setWindowed(true);
+          } : undefined}
           {...menuPanelAttrs}
           className={cn(
             'relative',
@@ -1486,6 +2219,7 @@ export function UnifiedModelPanel({
             // 列表翻不到最下面)。加上 min-h-0 后,面板高度受限时列表自己收缩并内部滚动,
             // 底部的「连接来源」footer 是同级兄弟,始终留在列表下方、不盖住最后一行。
             'min-h-0',
+            windowEnabled && '[overflow-anchor:none]',
           )}
           // Body height is independent of filtered results; min-h-0 still permits
           // the popover's viewport constraint to shrink this scroll area.
@@ -1504,63 +2238,34 @@ export function UnifiedModelPanel({
           }}
         >
           <MenuHighlightLayer />
-          {/* 「跟随会话」行(opt-in,仅 scheduler heartbeat):置于最顶,不属于任何分组。 */}
-          {followSession && (
-            <>
-              <button
-                type="button"
-                disabled={interactionDisabled || actionPending}
-                onClick={() => void runExternal(followSession.onFollow)}
-                role="option"
-                aria-selected={followSession.active}
-                data-follow-session-row
-                {...menuRowAttrs({ checked: followSession.active, disabled: interactionDisabled })}
-                className={cn(
-                  COMPOSER_MENU_ROW,
-                  'flex w-full items-center justify-between px-3 py-2',
-                  // Model menu exception (DESIGN §4): the chosen row keeps its fill and check.
-                  followSession.active && 'bg-sidebar-item-hover data-[menu-active]:bg-transparent',
-                  interactionDisabled && 'cursor-not-allowed opacity-50',
-                )}
-              >
-                {withMenuLabels(<span className="truncate">{followSession.label}</span>)}
-                {followSession.active && (
-                  <Check size={15} className="ml-2 shrink-0 text-[var(--model-item-check)]" />
-                )}
-              </button>
-              <div className="mx-1 my-1 h-px bg-[var(--cmd-palette-border)]" />
-            </>
-          )}
-          {/* 只在已登记跨 Harness 切换时提示如何接续;浏览「全部」或同 Harness 换模型不提示。 */}
-          {sessionEngineFilter?.pendingTarget && (
-            <div
-              role="note"
-              data-cross-engine-warning
-              title={t('newChat.modelSelector.unified.crossEngineWarning')}
-              className={cn(
-                'flex items-center gap-1.5 px-2.5 pb-1 pt-1.5 text-11 leading-[1.5] text-[var(--warning-fg)]',
-                // 警示行**不参与撑宽**(Chris 2026-08-19:切到「全部」时面板又弹开一截)。
-                // `truncate` 只管画的时候截断,`max-content` 布局(面板是 w-max)算的却是
-                // 全文宽度 —— 这一行因此成了整块面板里最宽的内容。`w-0 min-w-full` 是经典
-                // 手法:宽度基数取 0(对 max-content 贡献 0),再用 min-width:100% 在终局
-                // 吃满已经定下来的可用宽,视觉上仍是整行。
-                'w-0 min-w-full',
-              )}
-            >
-              <TriangleAlert size={12} className="shrink-0" />
-              <span className="min-w-0 break-words">
-                {t('newChat.modelSelector.unified.crossEngineWarning')}
-              </span>
-            </div>
-          )}
-          {favoritesListDeviceId && remoteFavorites.error ? <div role="status" className="px-3 py-2 text-13 text-[var(--text-secondary)]">{t(favoritesSyncFailureI18nKey(remoteFavorites.errorCode))}</div> : null}
-          {pinnedTop && effectiveRail.kind === 'all' ? pinnedTop : null}
-          {favoritesPinned && effectiveRail.kind === 'favorites' && !query.trim() ? favoritesPinned : null}
-          {!remoteListPending && remoteRail !== null ? remoteSources?.status : null}
+          {windowEnabled ? <div ref={modelWindow.prefixRef} className="shrink-0">{listPrefix}</div> : listPrefix}
           {effectiveRail.kind === 'model-groups' ? (
-            modelGroupsView ?? null
+            (effectiveRail.deviceId ? renderDeviceModelGroups?.(effectiveRail.deviceId) : modelGroupsView) ?? null
           ) : effectiveRail.kind === 'plugin-engine' ? (
-            renderPluginEngine?.(effectiveRail.providerId) ?? null
+            <>
+              {favoritesSection ? renderSection(favoritesSection) : null}
+              {visiblePluginEngines ? (
+                <PluginEnginesSection
+                  picker={{
+                    ...visiblePluginEngines,
+                    engines: visiblePluginEngines.engines.filter((engine) =>
+                      isSamePluginEngineChoice(engine, {
+                        providerId: effectiveRail.providerId,
+                        deviceId: effectiveRail.deviceId,
+                      }),
+                    ),
+                  }}
+                  query=""
+                  hostDeviceId={pluginEngineHostDeviceId}
+                  onPicked={() => onPluginEnginePicked?.()}
+                  {...(pluginEngineFavoritesController ? { favorites: pluginEngineFavoritesController } : {})}
+                  panelElement={panelElement}
+                  {...(overlayClassName !== undefined ? { overlayClassName } : {})}
+                />
+              ) : (
+                renderPluginEngine?.(effectiveRail.providerId, effectiveRail.deviceId) ?? null
+              )}
+            </>
           ) : remoteListPending ? (
             remoteSources?.failure ?? (
               <div
@@ -1572,8 +2277,23 @@ export function UnifiedModelPanel({
               </div>
             )
           ) : catalogNotice ? (
-            catalogNotice
-          ) : !hasRows && !(pinnedTopHasRows && effectiveRail.kind === 'all')
+            <>
+              {effectiveRail.kind === 'all' && favoritesSection ? renderSection(favoritesSection) : null}
+              {effectiveRail.kind === 'all' && pinnedTop ? pinnedTop : null}
+              {effectiveRail.kind === 'all' && visiblePluginEngines && visiblePluginEngines.engines.length > 0 ? (
+                <PluginEnginesSection
+                  picker={visiblePluginEngines}
+                  query={query}
+                  hostDeviceId={pluginEngineHostDeviceId}
+                  onPicked={() => onPluginEnginePicked?.()}
+                  {...(pluginEngineFavoritesController ? { favorites: pluginEngineFavoritesController } : {})}
+                  panelElement={panelElement}
+                  {...(overlayClassName !== undefined ? { overlayClassName } : {})}
+                />
+              ) : null}
+              {catalogNotice}
+            </>
+          ) : !hasRows && hiddenRowCount === 0 && !(effectiveRail.kind === 'all' && (pinnedTopHasRows || hasVisiblePluginEngineMatch))
             && !(favoritesPinnedHasRows && effectiveRail.kind === 'favorites' && !query.trim()) ? (
             emptyCatalogNotice ?? (
               // 与跨 Harness 提示一样,空态文案在已定宽的面板内换行,不参与 max-content 撑宽。
@@ -1587,133 +2307,48 @@ export function UnifiedModelPanel({
               </div>
             )
           ) : (
-            sections.map((section) => (
-              <div key={section.key} role="group" aria-label={sectionLabel(section)}>
-                <div
-                  data-group-label={sectionLabel(section)}
-                  {...(section.group?.type === 'provider'
-                    ? { 'data-group-provider': section.group.providerId }
-                    : {})}
-                  // Shared menu group label (DESIGN §4 Menu text): 12px / 500 meta.
-                  className={cn(
-                    'flex flex-wrap items-center gap-1.5 px-2.5 text-12 font-medium leading-[1.33] text-[var(--cmd-palette-item-meta)]',
-                    'pb-1 pt-2',
-                  )}
-                >
-                  <span className="truncate">{sectionLabel(section)}</span>
-                  {quotaProviderOf(section) && <ModelPoolQuotaSummary providerId={quotaProviderOf(section)!}/>}
-
-                </div>
-                {section.rows.map((row) => {
-                  if (row.agentDeviceId) return renderDeviceFavoriteRow(row, false);
-                  const config = withOptimisticConfig(
-                    row.anchor,
-                    configOf(row.entry, row.favorite ?? row.recent),
-                    optimisticConfig,
-                  );
-                  const key = anchorKey(row.anchor);
-                  const priceDisplay = priceDisplayOf(row.entry, config);
-                  /**
-                   * 最近行按**解析后的整份配置**匹配收藏(2026-09-16 裁决:最近也是配置副本):
-                   * 同一来源 + 同一模型下,引擎 / 深度 / Fast 解析后一致就点亮星标;
-                   * 点星把它存进收藏 / 从收藏里移除。
-                   * 前两维(来源 + 模型)必须先圈定(2026-09-16 review P0):只看三元组的话,
-                   * 另一个型号的收藏只要引擎 / 深度 / Fast 巧合一致就会被误命中,点星删掉的是
-                   * 用户根本没点的那条收藏。三元组用**解析值**而不是存储字面量比:两边都可能是
-                   * 「跟随推荐」的缺省字段 —— 按字面量会比出「一边有 effort、一边没有」的假不匹配。
-                   */
-                  const matchingFavorite = row.recent
-                    ? favorites.find((favorite) => {
-                        if (favorite.providerId !== row.entry.providerId) return false;
-                        if (resolveStoredModelEntry(entries, favorite.providerId, favorite.modelId) !== row.entry) return false;
-                        const favoriteConfig = resolveFavoriteRowConfig({
-                          entry: row.entry,
-                          item: favorite,
-                          agentFastModeCapable,
-                        });
-                        return (
-                          favoriteConfig.engine === config.engine &&
-                          favoriteConfig.effort === config.effort &&
-                          favoriteConfig.fast === config.fast
-                        );
-                      })
-                    : undefined;
-                  const recentRow = !!row.recent;
-                  // 最近行本身不持有收藏态:命中的收藏就是它的星标与**选中锚点**
-                  // (点击=按这份副本配置应用,同收藏副本语义 —— 带上 uid,锚点/星标才一致)。
-                  const starredFavorite = row.favorite ?? matchingFavorite;
+            windowEnabled ? (
+              <>
+              <div
+                ref={modelWindow.canvasRef}
+                className="relative w-full shrink-0"
+                style={{ height: modelWindow.virtualizer.getTotalSize() }}
+              >
+                {Array.from(visibleGroups, ([index, items]) => {
+                  const section = listSections[index]!;
                   return (
-                    <UnifiedModelRow
-                      key={key}
-                      readable={readableRows}
-                      entry={row.entry}
-                      anchor={row.anchor}
-                      config={config}
-                      {...(showsSourceRow
-                        ? { sourceLabel: aggregateSourceLabel(row.entry.providerId) }
-                        : {})}
-                      sourceNotice={remoteActiveDeviceId
-                        ? remoteSources?.homeUnavailableReasonOf?.(remoteActiveDeviceId, row.entry.providerId)
-                        : undefined}
-                      selected={isSelectedRow(row.anchor, row.entry)}
-                      active={sameAnchor(flyAnchor, row.anchor)}
-                      isFavoriteRow={!!starredFavorite}
-                      justFavorited={justFavorited === key}
-                      {...(priceDisplay ? { priceDisplay } : {})}
-
-                      configurationEnabled={configurationEnabled}
-                      // 最近行是只读的配置副本(流水账):不在这一页改配置,也没有配置浮层
-                      // (引擎 / 深度 / Fast 由记录时的选择决定,改配置走模型行或收藏)。
-                      // 不出配置浮层的行(最近行只读副本、设置类入口)一律 customizable=false：
-                      // 按钮、← 快捷键与右键浮层都由这一个闸门收掉，不宣告存在却无响应。
-                      customizable={configurationEnabled && !recentRow}
-                      interactionDisabled={
-                        interactionDisabled ||
-                        actionPending ||
-                        !!isRouteDisabled?.(
-                          row.entry.providerId,
-                          config.wireModelId ?? row.entry.modelId,
-                          config.agent,
-                        )
-                      }
-                      paymentRequired={row.entry.availability === 'requires_payment'}
-                      {...(paymentRequiredLabel ? { paymentRequiredLabel } : {})}
-                      {...(paymentRequiredUnlockLabel ? { paymentRequiredUnlockLabel } : {})}
-                      {...(onPaymentRequired ? { onPaymentRequired } : {})}
-                      effortLabelOf={effortLabelOf}
-                      providers={providers}
-                      onReveal={recentRow ? noop : revealFlyout}
-                      onRevealForKeyboard={recentRow ? noop : revealFlyoutForKeyboard}
-                      onSelect={() =>
-                        // 星标行的点击与收藏行同构:带上命中的那条收藏,选中态才不只停在「配置像」上。
-                        selectRow(row.anchor, config, starredFavorite, row.entry)
-                      }
-                      onStar={
-                        selectionPolicy === 'personalized'
-                          ? recentRow
-                            ? () =>
-                                matchingFavorite
-                                  ? removeFavorite(
-                                      {
-                                        kind: 'fav',
-                                        uid: matchingFavorite.uid,
-                                        providerId: matchingFavorite.providerId,
-                                        modelId: matchingFavorite.modelId,
-                                      },
-                                      row.entry,
-                                    )
-                                  : addFavorite(row.anchor, config)
-                            : () =>
-                                row.favorite
-                                  ? removeFavorite(row.anchor, row.entry)
-                                  : addFavorite(row.anchor, config)
-                          : undefined
-                      }
-                    />
+                    <div key={section.key} role="group" aria-label={sectionLabel(section)} className="absolute inset-x-0 top-0">
+                      {items.map((measurement) => {
+                        const item = modelWindow.items[measurement.index]!;
+                        return (
+                          <div
+                            key={item.key}
+                            ref={modelWindow.virtualizer.measureElement}
+                            className="absolute inset-x-0"
+                            style={{
+                              top: measurement.start - modelWindow.scrollMargin,
+                              paddingTop: item.row && item.rowIndex > 0 ? 4 : undefined,
+                            }}
+                            data-index={measurement.index}
+                            data-window-key={item.key}
+                          >
+                            {item.row ? renderOption(item.row, {
+                              tabIndex: modelWindow.entryKey === item.key ? 0 : -1,
+                              position: { index: item.rowIndex + 1, total: section.rows.length },
+                            }) : <>
+                              {section.hidden && !listSections[index - 1]?.hidden ? hiddenDisclosure : null}
+                              {renderSectionLabel(section)}
+                            </>}
+                          </div>
+                        );
+                      })}
+                    </div>
                   );
                 })}
               </div>
-            ))
+              {hiddenShown ? null : hiddenDisclosure}
+              </>
+            ) : <>{listSections.map((section, index) => renderSection(section, listSections[index - 1]))}{hiddenShown ? null : hiddenDisclosure}</>
           )}
         </div>
         {/* 定宽 sizer(见 widthSizerSections 的说明):不可见、零高度、不进 listbox,
@@ -1727,18 +2362,35 @@ export function UnifiedModelPanel({
           把「切视图宽度抖」换成「切视图高度抖」。纵向本来就与量宽无关。 */}
         {widthSizerActive && (
           <div
+            ref={widthSizerRef}
             aria-hidden
             role="presentation"
             data-width-sizer
             className="morph-panel-list-scroll invisible h-0 overflow-hidden px-2 [scrollbar-gutter:stable]"
           >
-            {widthSizerSections.map((section) => (
-              <div key={section.key}>
-                {/* 组头也要量:供应商名可能比它组里最长的行还宽。 */}
+            {widthCandidates && (
+              <>
                 <div className="flex items-center gap-1.5 px-2.5 pb-1 pt-2 text-12 font-medium leading-[1.33]">
-                  <span className="truncate">{sectionLabel(section)}</span>
+                  <span className="truncate">{widthCandidates.label}</span>
                 </div>
-                {section.rows.map((row) => {
+                {widthCandidates.row && ((row) => {
+                  if (row.pluginEngine) {
+                    return (
+                      <PluginEngineFavoriteRow
+                        key={anchorKey(row.anchor)}
+                        resolved={row.pluginEngine}
+                        anchor={row.anchor}
+                        active={false}
+                        measurementOnly
+                        configurationEnabled={configurationEnabled}
+                        interactionDisabled
+                        onSelect={noop}
+                        onRemove={noop}
+                        onReveal={noop}
+                        onRevealForKeyboard={noop}
+                      />
+                    );
+                  }
                   if (row.agentDeviceId) return renderDeviceFavoriteRow(row, true);
                   const config = configOf(row.entry, row.favorite ?? row.recent, RAIL_ALL);
                   const priceDisplay = priceDisplayOf(row.entry, config);
@@ -1757,6 +2409,7 @@ export function UnifiedModelPanel({
                       {...(priceDisplay ? { priceDisplay } : {})}
 
                       configurationEnabled={configurationEnabled}
+                      customizable={configurationEnabled && !row.recent}
                       interactionDisabled
                       paymentRequired={row.entry.availability === 'requires_payment'}
                       {...(paymentRequiredLabel ? { paymentRequiredLabel } : {})}
@@ -1766,12 +2419,12 @@ export function UnifiedModelPanel({
                       onReveal={noop}
                       onRevealForKeyboard={noop}
                       onSelect={noop}
-                      onStar={noop}
+                      onStar={selectionPolicy === 'personalized' ? noop : undefined}
                     />
                   );
-                })}
-              </div>
-            ))}
+                })(widthCandidates.row)}
+              </>
+            )}
           </div>
         )}
       </div>
@@ -1789,10 +2442,30 @@ export function UnifiedModelPanel({
         >
           {(() => {
             const target = flyTarget;
+            if (target.pluginEngine) {
+              const pluginTarget = target.pluginEngine;
+              return (
+                <PluginEngineModelConfig
+                  engine={pluginTarget.engine}
+                  row={pluginTarget.row}
+                  label={pluginEngineModelLabel(pluginTarget.row)}
+                  effort={pluginTarget.effort}
+                  effortLabel={pluginEngineEffortLabel}
+                  state="favorite"
+                  disabled={interactionDisabled || actionPending}
+                  onChange={(effort) =>
+                    pluginEngineFavoritesController?.updateFavoriteEffort(pluginTarget, effort)
+                  }
+                  onRemoveFavorite={() =>
+                    pluginEngineFavoritesController?.removeFavorite(pluginTarget.favorite.uid)
+                  }
+                />
+              );
+            }
             // 深度 / Fast 写入在途时显示目标值,松手即停在新档(见 withOptimisticConfig)。
             const config = withOptimisticConfig(
               target.anchor,
-              configOf(target.entry, target.favorite ?? target.recent),
+               configOf(target.entry, target.favorite ?? target.recent, effectiveRail),
               optimisticConfig,
             );
             const state: ModelConfigFlyoutState = target.favorite

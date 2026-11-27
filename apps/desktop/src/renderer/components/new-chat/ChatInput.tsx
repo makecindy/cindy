@@ -14,11 +14,12 @@ import {
   type RefObject,
   type ReactNode,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { isScopedPeer, isSharedTaskPeer } from '@cindy/device-link';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { useNavigate } from 'react-router-dom';
 import { buildLocalSkillPathRoute } from '@/features/skillhub/lib/localRoutes';
-import { Folder, MessageSquarePlus, Mic, TriangleAlert, X } from 'lucide-react';
+import { Folder, MessageSquarePlus, TriangleAlert, X } from 'lucide-react';
 import { useStableTranslation as useTranslation } from '@/hooks/useStableTranslation';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 import { CINDY_MAKE_ENABLED } from '@cindy/maker-shared/cindy-make-feature';
@@ -81,6 +82,7 @@ import {
   setSlashCommandRoster,
   SlashCommandDecoration,
 } from './SlashCommandDecoration';
+import { detectTrigger, type TriggerState } from './composerTrigger';
 
 import { cn } from '@/lib/utils';
 import { markComposerTypingActivity } from '@/lib/composerTypingActivity';
@@ -134,7 +136,8 @@ import {
   takeComposerSubmitRequest,
 } from '@/lib/composerActionsBus';
 import { resolveComposerModelSelection } from './composerModelSelection';
-import { PluginUiSlot, usePluginUiComposerCandidates } from '@/cindy-brain/PluginUiContributions';
+import { PluginUiComposerActionScope, PluginUiComposerActionStatus, PluginUiSlot, usePluginUiComposerCandidates } from '@/cindy-brain/PluginUiContributions';
+import { usePluginUiRegions } from '@/cindy-brain/pluginUiVisibility';
 import { PluginUiCompletionBridge, type PluginUiCompletionResult, type PluginUiCompletionRequest } from '@/cindy-brain/PluginUiCompletionBridge';
 import { registerPluginUiDraftEditor } from '@/cindy-brain/pluginUiContext';
 import type { SessionRuntimeProfileProjection, SessionRuntimePendingProjection } from '@/lib/ccAgent.types';
@@ -149,12 +152,13 @@ import {
   type UnifiedSelectionAgentDevice,
 } from './ModelSelector';
 import type { PluginModelsPickerProps } from './PluginModelsSection';
-import type {
-  PluginEnginePendingSelection,
-  PluginEngineSessionPickerProps,
-  PluginEnginesPickerProps,
+import {
+  usePluginEngineChoiceLabel,
+  type PluginEnginePendingSelection,
+  type PluginEngineSessionPickerProps,
+  type PluginEnginesPickerProps,
 } from './PluginEnginesSection';
-import { PLUGIN_ENGINE_FALLBACK_PERMISSION_MODES } from '@/lib/pluginEngineSelection';
+import { PLUGIN_ENGINE_FALLBACK_PERMISSION_MODES, isSamePluginEngineChoice } from '@/lib/pluginEngineSelection';
 import type { ModelGroupsPickerProps } from './ModelGroupsPickerSection';
 import {
   enqueueEffortChange,
@@ -227,6 +231,7 @@ import {
 } from '@/cindy-brain/ghostCommand';
 import { findInstalledGhostByInstanceId, installedGhostStoragePart } from '../../../shared/pluginIdentity';
 import { filterGhostsForWorkdir, useWorkdirDisabledGhostIds } from '@/cindy-brain/ghostWorkdirFilter';
+import { pluginSuggestionComposerText } from '@/features/cc-agent/pluginHomeSuggestions';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import { useRemoteComposerGhosts } from '@/cindy-brain/useRemoteComposerGhosts';
 import { projectGhostComposerEntries, type GhostCommandSource } from '../../../shared/ghostComposer';
@@ -238,7 +243,6 @@ import { AtMentionPanel, type AtPanelState } from './AtMentionPanel';
 import { MentionChipNode, type MentionChipAttrs } from './MentionChipNode';
 import { ComposerQuoteNode } from './ComposerQuoteNode';
 import {
-  COMPOSER_QUOTE_NODE_TYPE,
   composerHistoryEntryToDocument,
   type ComposerHistoryEntry,
 } from '@/lib/composerQuoteDocument';
@@ -319,6 +323,7 @@ import {
   isComposerSuggestionEntryDisabled,
   nextEnabledSuggestionIndex,
   resolveComposerAtActivation,
+  resolveComposerSuggestionKey,
   type ComposerPluginSuggestion,
   type ComposerSuggestionAction,
   type ComposerSuggestionEntry,
@@ -430,6 +435,7 @@ import {
 import type { MessageDeliveryMode, QueuedMessage } from '@/lib/makerChatStore';
 import {
   builtinAgentSwitchIntent,
+  isSameEngineNonPiModelIntent,
   isRemoteOptimisticComposerTransitionActive,
   isRemoteOptimisticDataOwnerBoundaryError,
   isRemoteOptimisticSessionPurgedError,
@@ -442,8 +448,11 @@ import {
   MODEL_WINDOW_SWITCH_FORCE_REBUILD_PCT,
   shouldBlockLegacyRemotePiModelWindowSwitch,
 } from '../../../shared/modelSwitchAssessment';
-import { ComposerRecordingBars, type RecordingSamplesRef } from '@/voice-input/ComposerRecordingBars';
+import type { RecordingSamplesRef } from '@/voice-input/ComposerRecordingBars';
+import { VoiceInputButton, VOICE_INPUT_LONG_PRESS_MS } from '@/voice-input/VoiceInputButton';
+import { useVoiceMicrophonePermissionPrompt } from '@/voice-input/useVoiceMicrophonePermissionPrompt';
 import { useVoiceInput } from '@/voice-input/useVoiceInput';
+import { retainDictationInputContext } from '@/voice-input/retainDictationInputContext';
 import { getTextPreviewHost } from '@/components/find-in-page/findInPageOwnership';
 import { useVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
 import { VoiceInputStatusNotice } from '@/voice-input/VoiceInputStatusNotice';
@@ -465,7 +474,7 @@ import {
   isComposerLongPressVoiceReady,
   type ComposerLongPressVoiceGesture,
 } from '@/voice-input/composerLongPressGesture';
-import { requestRendererMicrophonePermission } from '@/voice-input/startGuards';
+import { COMPOSER_ATTACHMENT_MIME, composerAttachmentDropError, isComposerAttachmentDrag } from '@/lib/composerDrop';
 import { COMPOSER_MENTION_MIME, decodeComposerMentionPayload } from '@/lib/composerMentionDrag';
 import { createWorkLouderCodexVoiceGesture } from '@/lib/workLouderCodexVoiceGesture';
 import { appendMentionChip } from './mentionChipInsertion';
@@ -483,7 +492,6 @@ const log = createLogger('ChatInput');
 const perfLog = createLogger('perf/session-switch');
 const composerPerfLog = createLogger('perf/composer-input');
 
-const VOICE_INPUT_LONG_PRESS_MS = 450;
 const VOICE_INPUT_SHORTCUT_DEDUPE_MS = 250;
 const ComposerHardBreak = HardBreak.extend({
   addKeyboardShortcuts() {
@@ -518,22 +526,6 @@ function resolveToolbarWidthMode(width: number): ToolbarWidthMode {
 
 function isVoiceInputIdleLike(state: VoiceInputState): boolean {
   return state === 'idle' || state === 'done' || state === 'error';
-}
-
-function isPointInsideElement(
-  element: HTMLElement | null,
-  clientX: number,
-  clientY: number,
-  padding = 0,
-) {
-  if (!element) return false;
-  const rect = element.getBoundingClientRect();
-  return (
-    clientX >= rect.left - padding &&
-    clientX <= rect.right + padding &&
-    clientY >= rect.top - padding &&
-    clientY <= rect.bottom + padding
-  );
 }
 
 /**
@@ -661,6 +653,7 @@ interface ChatInputProps {
   modelMemoryOverride?: ModelMemoryAccessors;
   /** Initial model from session data. When provided, overrides activeModel. */
   initialModel?: string;
+  draftModelPending?: boolean;
   /** Initial effort from session data. null explicitly means the model has no effort selector. */
   initialEffort?: Effort | null;
   /** 持久化基线档（session.runtimeBaseline.effort）。投影把 effort 折成 null→''（如远程
@@ -701,6 +694,8 @@ interface ChatInputProps {
   disabled?: boolean;
   /** Block submissions while a draft-local picker is open, without locking typing. */
   sendBlocked?: boolean;
+  /** Keep the unavailable saved model visible and open the model picker for recovery. */
+  preserveDraftModel?: boolean;
   /** Freeze model/provider/effort/permission controls for audit-only tasks. */
   settingsLocked?: boolean;
   /** When true, shows Stop button instead of Send button. */
@@ -922,6 +917,7 @@ interface ChatInputProps {
    * 权限仍使用标准 chip，允许用户随时调整当前任务的执行权限。
    */
   hideRuntimeControls?: boolean;
+  showBuddyNewHint?: boolean;
   /**
    * 工具行采用更紧凑的视觉密度 (字号 -1px)。
    * 用于 doc rail 这种宽度受限的容器,与 compactToolbar (wrap 兜底) 正交:
@@ -942,6 +938,8 @@ interface ChatInputProps {
    * with a hairline divider.
    */
   topSlot?: React.ReactNode;
+  /** An owning task view can place header controls inside its native running-status row. */
+  composerHeaderTarget?: HTMLElement | null;
   /**
    * 协同模式入口 (Claude / Codex Lead session 中途 toggle Worker)。
    * 提供时:与目标模式、计划模式同级渲染在 composer「+」菜单;
@@ -1164,140 +1162,6 @@ function isEditorEmpty(editor: Editor | null): boolean {
 }
 
 /**
- * Detect the active command-palette trigger based on the current selection.
- * Returns:
- *   - { kind: 'slash', query }  if `/` is the very first character of the doc
- *     and the caret sits in the leading slash-run
- *   - { kind: 'at', query, from } if `@` preceded by whitespace/start exists
- *     in the current text block up to the caret with no whitespace between
- *   - { kind: 'none' } otherwise
- *
- * `from` is the absolute doc position of the `@` char — ChatInput uses it
- * later to replace the `@query` run with a chip + trailing space.
- */
-interface TriggerSlash {
-  kind: 'slash';
-  /** 触发符:'/' = 技能/命令,'$' = 意识指令(2026-07-09 定案分流)。 */
-  sigil: '/' | '$';
-  query: string;
-  from: number; // absolute position of the leading `/` or `$`
-}
-interface TriggerAt {
-  kind: 'at';
-  query: string;
-  from: number; // absolute position of the `@`
-}
-type TriggerState = TriggerSlash | TriggerAt | { kind: 'none' };
-
-/**
- * `$` 触发符的等价字符集:中文输入法下 Shift+4 产出的是全角 ¥(U+FFE5),
- * 全角标点模式/日文布局还可能产出全角 $(U+FF04)/半角 ¥(U+00A5)——
- * 一律视作 `$`,用户打中文时不必切输入法。面板选中后统一替换为 ASCII
- * `$cmd `(见 applySlashSelect),发送期 ghostCommand.ts 的 COMMAND_RE
- * 认同一字符集,两端必须保持一致。
- */
-const GHOST_SIGIL_CHARS = ['$', '＄', '¥', '￥'] as const;
-
-function detectTrigger(editor: Editor): TriggerState {
-  const { state } = editor;
-  const { selection } = state;
-  if (!selection.empty) return { kind: 'none' };
-
-  const pos = selection.from;
-  const $pos = state.doc.resolve(pos);
-
-  // Must be inside a paragraph
-  const parent = $pos.parent;
-  if (parent.type.name !== 'paragraph') return { kind: 'none' };
-
-  const offsetInParent = $pos.parentOffset;
-  // Collect paragraph text up to the caret. We iterate children because
-  // inline nodes (chips) break `textBetween` semantics — we want chips to
-  // act as hard boundaries that reset any @-run.
-  let textSoFar = '';
-  let consumed = 0;
-  parent.forEach((child) => {
-    if (consumed >= offsetInParent) return;
-    const size = child.nodeSize;
-    if (child.type.name === 'mentionChip' || child.type.name === COMPOSER_QUOTE_NODE_TYPE) {
-      textSoFar = ''; // chips reset the @ / slash run
-      consumed += size;
-      return;
-    }
-    if (child.isText) {
-      const remaining = offsetInParent - consumed;
-      const slice = (child.text ?? '').slice(0, remaining);
-      textSoFar += slice;
-      consumed += slice.length;
-    } else {
-      // hardBreak (Shift+Enter) → treat as whitespace so @ / / triggers
-      // fire at the start of a new line, not glued to the previous word.
-      if (child.type.name === 'hardBreak') textSoFar += '\n';
-      consumed += size;
-    }
-  });
-
-  // Slash detection — mirror @ semantics: trigger when `/` sits at the start
-  // of the current paragraph OR is preceded by whitespace, with no whitespace
-  // between it and the caret. The previous "must be doc[0]" rule was too
-  // strict — users couldn't fire / after a Shift+Enter or in a sentence.
-  const slashIdx = textSoFar.lastIndexOf('/');
-  if (slashIdx >= 0) {
-    const beforeSlash = slashIdx === 0 ? '' : textSoFar[slashIdx - 1];
-    const slashAllowed = slashIdx === 0 || /\s/.test(beforeSlash);
-    const afterSlash = textSoFar.slice(slashIdx + 1);
-    if (slashAllowed && !/\s/.test(afterSlash)) {
-      return {
-        kind: 'slash',
-        sigil: '/',
-        query: afterSlash,
-        from: pos - (textSoFar.length - slashIdx),
-      };
-    }
-  }
-
-  // `$` 检测 —— 与 `/` 同规则(段首或空白后,到光标无空白):意识指令面板。
-  // 全角变体(GHOST_SIGIL_CHARS)同权触发;都是单 UTF-16 code unit,位置
-  // 计算与 ASCII `$` 完全一致。
-  let dollarIdx = -1;
-  for (const sigil of GHOST_SIGIL_CHARS) {
-    const idx = textSoFar.lastIndexOf(sigil);
-    if (idx > dollarIdx) dollarIdx = idx;
-  }
-  if (dollarIdx >= 0) {
-    const beforeDollar = dollarIdx === 0 ? '' : textSoFar[dollarIdx - 1];
-    const dollarAllowed = dollarIdx === 0 || /\s/.test(beforeDollar);
-    const afterDollar = textSoFar.slice(dollarIdx + 1);
-    if (dollarAllowed && !/\s/.test(afterDollar)) {
-      return {
-        kind: 'slash',
-        sigil: '$',
-        query: afterDollar,
-        from: pos - (textSoFar.length - dollarIdx),
-      };
-    }
-  }
-
-  // @ detection — find the last `@` with whitespace or start-of-text before it.
-  const atIdx = textSoFar.lastIndexOf('@');
-  if (atIdx >= 0) {
-    const before = atIdx === 0 ? '' : textSoFar[atIdx - 1];
-    const allowed = atIdx === 0 || /\s/.test(before);
-    const after = textSoFar.slice(atIdx + 1);
-    const from = pos - (textSoFar.length - atIdx);
-    if (allowed && !/\s/.test(after)) {
-      return {
-        kind: 'at',
-        query: after,
-        from,
-      };
-    }
-  }
-
-  return { kind: 'none' };
-}
-
-/**
  * 合成激活(「+」按钮打开统一建议面板,Codex 模式)的 query 推导:
  * 不向文档插入 `@`,query = 锚点→光标之间的纯文本。返回 null 表示锚点失效
  * (光标移到锚点前 / 跨段落 / 中间出现空白、chip 或换行),此时
@@ -1377,6 +1241,7 @@ export function ChatInput({
   catalogHostDeviceId,
   modelMemoryOverride,
   initialModel,
+  draftModelPending,
   initialEffort,
   baselineEffort,
   initialProviderId,
@@ -1389,6 +1254,7 @@ export function ChatInput({
   onWorkingDirChange,
   disabled: disabledProp,
   sendBlocked = false,
+  preserveDraftModel = false,
   settingsLocked: settingsLockedProp = false,
   isStreaming = false,
   isAgentBusy,
@@ -1439,11 +1305,13 @@ export function ChatInput({
   compactToolbar = false,
   narrowToolbar = false,
   hideRuntimeControls = false,
+  showBuddyNewHint = false,
   denseToolbar = false,
   visualVariant = 'default',
   middleToolbarSlot,
   compactMiddleToolbarSlot,
   topSlot,
+  composerHeaderTarget,
   collaboration,
   botMentions = [],
   onUnifiedDraftSelect,
@@ -1460,7 +1328,8 @@ export function ChatInput({
     if (pluginEngineSession) return pluginEngineSession.engine?.permissionModes ?? PLUGIN_ENGINE_FALLBACK_PERMISSION_MODES;
     const active = !sessionId ? pluginEngines?.active : null;
     if (!active) return undefined;
-    return pluginEngines?.engines.find((engine) => engine.providerId === active.providerId)?.permissionModes
+    // 同一个插件可以装在几台电脑上：按「引擎 + 所在电脑」找，不拿本机的同名引擎顶替另一台的。
+    return pluginEngines?.engines.find((engine) => isSamePluginEngineChoice(engine, active))?.permissionModes
       ?? PLUGIN_ENGINE_FALLBACK_PERMISSION_MODES;
   }, [pluginEngineSession, pluginEngines, sessionId]);
   // Keep the existing draft/editor mounted during a companion call, but reuse
@@ -1469,6 +1338,16 @@ export function ChatInput({
   // device-link 远程会话:null = 已确认本地会话,undefined = 所有权尚未解析,string = 远程会话。
   // 预测守卫用原始值区分 null vs undefined,下游通路继续用 ?? undefined 归一化。
   const deviceLinkDeviceId = _deviceLinkDeviceId;
+  const taskEngine = runtimeAgentKind ?? runtimeEffective?.agentKind;
+  const usesDeferredCredentialCommit = taskEngine === 'claude-code' || taskEngine === 'codex';
+  const credentialFailureKey = useCallback((failure: {
+    reason: 'apply-failed' | 'rollback-failed';
+    previousSettingsRetained?: boolean;
+  }) => usesDeferredCredentialCommit && failure.reason === 'apply-failed' && failure.previousSettingsRetained === true
+      ? 'newChat.chatInput.credentialSwitchKeptSettings'
+      : 'newChat.chatInput.credentialSwitchFailed',
+  [usesDeferredCredentialCommit]);
+
   const sharedGuest = isSharedTaskPeer(deviceLinkDeviceId ?? '');
   // The host owns model, Agent and reasoning settings; guests can still send input.
   const settingsLocked = settingsLockedProp || sharedGuest;
@@ -1573,7 +1452,10 @@ export function ChatInput({
   // call sites keep working unchanged; NewMakerDraftRoute passes an explicit
   // sentinel to keep the transient draft alive across sidebar switches.
   const storageKey = draftKey ?? sessionId;
-  const pluginUiCandidates = usePluginUiComposerCandidates();
+  const composerActionSessionId = sessionId && storageKey === sessionId && deviceLinkDeviceId === null &&
+    !remoteHostId && !effectiveAgentDeviceId && !sharedGuest && !getSessionDeviceId(sessionId) ? sessionId : null;
+  const pluginUiCandidates = usePluginUiComposerCandidates(composerActionSessionId !== null);
+  const composerRegionVisible = usePluginUiRegions().composer;
   const hasPluginToolbar = pluginUiCandidates.toolbar;
   const [pluginCompletionResult, setPluginCompletionResult] = useState<PluginUiCompletionResult | null>(null);
   const pluginCompletionKeyRef = useRef('');
@@ -1633,19 +1515,19 @@ export function ChatInput({
     return window.electronAPI.maker.onSessionCredentialSwitchFailed((payload) => {
       if (payload.sessionId !== sessionId) return;
       if (deviceLinkDeviceId || getSessionDeviceId(sessionId)) return;
-      toast.error(t('newChat.chatInput.credentialSwitchFailed'), { duration: 6000 });
+      toast.error(t(credentialFailureKey(payload)), { duration: 6000 });
     });
-  }, [deviceLinkDeviceId, sessionId, t]);
+  }, [credentialFailureKey, deviceLinkDeviceId, sessionId, t]);
   useEffect(() => {
     if (!sessionId) return;
     return subscribeRemoteCredentialSwitchOutcome(sessionId, deviceLinkDeviceId ?? undefined, (outcome) => {
       if (outcome.kind === 'applied') {
         toast.success(t('newChat.chatInput.credentialSwitchApplied'), { duration: 3000 });
       } else {
-        toast.error(t('newChat.chatInput.credentialSwitchFailed'), { duration: 6000 });
+        toast.error(t(credentialFailureKey(outcome)), { duration: 6000 });
       }
     });
-  }, [deviceLinkDeviceId, sessionId, t]);
+  }, [credentialFailureKey, deviceLinkDeviceId, sessionId, t]);
   // F-QUEUE-1 — preserve prior semantics
   const showStopButton = isAgentBusy ?? isStreaming;
   const { confirm: confirmDialog } = useConfirmDialog();
@@ -1861,7 +1743,7 @@ export function ChatInput({
   // trigger:none 的普通输入吞掉,面板不过滤)。锚点失效时返回哨兵 query,
   // 放行一次刷新让清锚点 effect 跑掉。
   const composerTriggerSnapshotOf = (ed: Editor): TriggerState => {
-    const typed = detectTrigger(ed);
+    const typed = detectTrigger(ed.state);
     if (typed.kind !== 'none') return typed;
     const anchor = syntheticAtAnchorRef.current;
     if (anchor != null) {
@@ -1965,25 +1847,32 @@ export function ChatInput({
   // SessionChatState 独立槽位,登记/撤销通过 setState 驱动重渲染,不会改真实
   // agentKind reducer 路由。device-link 远程会话同样适用:意图的权威态在被控端
   // main,控制端 store 里这份是它的镜像(登记时乐观写、重连时读回、push 回流覆盖)。
-  const storedAgentSwitchIntent =
-    sessionId && !remoteHostId ? makerChatStore.getAgentSwitchIntent(sessionId) : null;
+  const storedIntent = sessionId ? makerChatStore.getAgentSwitchIntent(sessionId) : null;
+  const storedAgentSwitchIntent = !remoteHostId ||
+    (runtimeAgentKind && isSameEngineNonPiModelIntent(builtinAgentSwitchIntent(storedIntent), runtimeAgentKind))
+    ? storedIntent : null;
   // 待切到插件引擎(docs/plans/acp-plugin-bridge.md)的意图由选择器单独呈现；下面内置引擎的展示、
   // 档位与切换链路只看切到内置引擎的意图，行为与没有插件引擎时一致。
   const agentSwitchIntent = builtinAgentSwitchIntent(storedAgentSwitchIntent);
   const pluginEngineSwitchIntent = pluginEngineAgentSwitchIntent(storedAgentSwitchIntent);
+  const pluginEngineChoiceLabel = usePluginEngineChoiceLabel();
   // 待切到插件引擎时选择器的 trigger 写「下条：引擎 · 模型」；引擎已不在时用通用名称。
   const pluginEnginePending = useMemo<PluginEnginePendingSelection | undefined>(() => {
     const providerId = pluginEngineSwitchIntent?.providerId;
     if (!pluginEngineSwitchIntent || !providerId) return undefined;
-    const engine = pluginEngines?.engines.find((item) => item.providerId === providerId) ?? null;
+    const targetDeviceId = pluginEngineSwitchIntent.agentDeviceId === undefined
+      ? (agentDeviceId ?? null)
+      : pluginEngineSwitchIntent.agentDeviceId;
+    const engine = pluginEngines?.engines.find((item) =>
+      isSamePluginEngineChoice(item, { providerId, deviceId: targetDeviceId })) ?? null;
     return {
       providerId,
       engine,
-      engineName: engine?.name ?? t('newChat.pluginEngines.genericName'),
+      engineName: engine ? pluginEngineChoiceLabel(engine) : t('newChat.pluginEngines.genericName'),
       modelId: pluginEngineSwitchIntent.model,
       effort: pluginEngineSwitchIntent.effort ?? null,
     };
-  }, [pluginEngineSwitchIntent, pluginEngines, t]);
+  }, [pluginEngineSwitchIntent, agentDeviceId, pluginEngines, pluginEngineChoiceLabel, t]);
   const composerSelection = resolveComposerModelSelection({
     current: {
       agentKind: runtimeAgentKind ?? vendorKeyToAgentKind(vendorKey) ?? 'claude-code',
@@ -2349,10 +2238,10 @@ export function ChatInput({
   const unifiedAgents = useMemo<readonly AgentKind[] | undefined>(() => {
     if (!runtimeAgentsLoaded) return undefined;
     const kinds = UNIFIED_AGENT_KINDS.filter(
-      (kind) => kind === agentKind || runtimeAvailableVendors.has(agentKindToVendor(kind)),
+      (kind) => (!preserveDraftModel && kind === agentKind) || runtimeAvailableVendors.has(agentKindToVendor(kind)),
     );
-    return kinds.length > 0 ? kinds : undefined;
-  }, [runtimeAgentsLoaded, runtimeAvailableVendors, agentKind]);
+    return kinds.length > 0 || preserveDraftModel ? kinds : undefined;
+  }, [runtimeAgentsLoaded, runtimeAvailableVendors, agentKind, preserveDraftModel]);
   // 已有 device-link 任务在断链时仍有 pinned deviceId + renderer outbox 可接住发送，
   // 不能因为被控端 provider 目录暂时拉不到就禁用 composer。远程草稿没有既有 session
   // 可以排队，仍与本地任务一样保留来源门禁。
@@ -2435,7 +2324,11 @@ export function ChatInput({
   // 关键:这里**绝不**把"跟随默认"具体化成原生默认 id(如 'xd')——默认 cohort 必须保持
   //   providerId=null,路由才回落 spawn-aware 默认(字节级不变,no-break);写成显式 'xd'
   //   会改走 catalog gateway-key 路由(见 provider-route.ts),破坏默认 cohort 的路由/缓存基线。
-  const sendProviderId = activeProviderId || null;
+  // The same-engine picker is a preview; the host admits the actual switch.
+  const sendCurrentSelection = isSameEngineNonPiModelIntent(agentSwitchIntent, composerSelection.current.agentKind);
+  const sendModel = sendCurrentSelection ? composerSelection.current.model : activeModel;
+  const sendEffort = sendCurrentSelection ? composerSelection.current.effort ?? '' : selectedEffort;
+  const sendProviderId = (sendCurrentSelection ? composerSelection.current.providerId : activeProviderId) || null;
 
   // 模型预设采用「全局默认 + 已创建会话保护」:
   //   - 本地草稿 / 已创建会话的**非选中行**都读写 providerModelMemory,所以同一
@@ -3284,7 +3177,7 @@ export function ChatInput({
           // active, the suppressed-at check keeps it closed.
           const ed = editorRef.current;
           if (!ed) return;
-          const t = detectTrigger(ed);
+          const t = detectTrigger(ed.state);
           if (t.kind === 'slash') setSuppressedSlashAt(t.from);
           else if (t.kind === 'at') setSuppressedAtAt(t.from);
           // 合成打开的统一面板同样随失焦关闭(「+」按钮本身 mousedown
@@ -3398,14 +3291,25 @@ export function ChatInput({
   // 输入框并聚焦,只填不发。发送中 / 语音占用时与键盘输入同锁,静默忽略。
   useEffect(() => {
     if (!editor || !sessionId) return;
-    return subscribePromptInsert(sessionId, ({ targetSessionId, text }) => {
-      if (targetSessionId !== sessionId || editor.isDestroyed) return false;
-      if (composerMutationLockedRef.current) return false;
-      insertPromptIntoEditor(editor.chain(), { isEmpty: editor.isEmpty, text });
+    return subscribePromptInsert(sessionId, (request) => {
+      if (request.targetSessionId !== sessionId || editor.isDestroyed) return false;
+      if (composerMutationLockedRef.current || !editor.isEditable) return false;
+      if ('pluginInstanceId' in request) {
+        const roster = composerGhostsRef.current;
+        const ghost = findInstalledGhostByInstanceId(roster, request.pluginInstanceId);
+        if (!ghost?.enabled) return false;
+        if (ghost.manifest.command) return placeGhostAtComposerStart(editor, ghost, roster);
+        const prompt = pluginSuggestionComposerText('', ghost, t, roster).trim();
+        const chain = editor.chain().focus('end');
+        if (!editor.isEmpty) chain.splitBlock();
+        chain.insertContent({ type: 'text', text: prompt }).run();
+      } else {
+        insertPromptIntoEditor(editor.chain(), { isEmpty: editor.isEmpty, text: request.text });
+      }
       lastComposerSelectionFromRef.current = editor.state.selection.from;
       return true;
     });
-  }, [editor, sessionId]);
+  }, [editor, sessionId, t]);
 
   const handleSavePastedText = useCallback(
     (text: string) => {
@@ -3457,17 +3361,22 @@ export function ChatInput({
   const installedGhosts = useInstalledGhosts(deviceLinkDeviceId === null);
   const installedGhostsRef = useRef(installedGhosts);
   installedGhostsRef.current = installedGhosts;
-  const trigger: TriggerState = editor ? detectTrigger(editor) : { kind: 'none' };
+  const trigger: TriggerState = editor ? detectTrigger(editor.state) : { kind: 'none' };
   const pluginCompletionKey = pluginUiCandidates.completion.length && trigger.kind !== 'none' &&
     (trigger.kind === 'at' || trigger.sigil === '/') && !remoteHostId && !deviceLinkDeviceId
     ? JSON.stringify([storageKey, pluginCompletionAuthority, trigger.kind, trigger.from, trigger.query]) : '';
   pluginCompletionKeyRef.current = pluginCompletionKey;
   const pluginCompletionItems = pluginCompletionKey && pluginCompletionResult?.key === pluginCompletionKey
     ? pluginCompletionResult.items : undefined;
-  const canInsertPluginCompletion = (from: number, query: string, sigil: '/' | '@', key: string) => !!editor &&
-    !editor.isDestroyed && !editor.view.composing && !composerMutationLockedRef.current &&
-    pluginCompletionKeyRef.current === key && editor.state.selection.empty &&
-    editor.state.doc.textBetween(from, editor.state.selection.from, '\n', '\uFFFC') === `${sigil}${query}`;
+  const canInsertPluginCompletion = (from: number, query: string, key: string) => {
+    if (!editor || editor.isDestroyed || editor.view.composing || composerMutationLockedRef.current) return false;
+    if (pluginCompletionKeyRef.current !== key || !editor.state.selection.empty) return false;
+    // 触发符可能是 ASCII `/`,也可能是它的输入法别名(`、`,见 composerTrigger)。
+    // 比对文档里实际写入的那个字符与它的选区区间,而不是把 `/` 写死在这里。
+    const typedSigil = editor.state.doc.textBetween(from, from + 1);
+    const run = editor.state.doc.textBetween(from, editor.state.selection.from, '\n', '\uFFFC');
+    return run === `${typedSigil}${query}`;
+  };
   const remoteComposerGhosts = useRemoteComposerGhosts(
     deviceLinkDeviceId,
     workingDir,
@@ -3542,24 +3451,7 @@ export function ChatInput({
     setGhostCommandRoster(editor, ghostsForCommand, ghostSourceLabels);
   }, [editor, ghostsForCommand, ghostSourceLabels]);
 
-  const handleVoiceInputPermissionRequired = useCallback(async () => {
-    const confirmed = await confirmDialog({
-      title: t('newChat.chatInput.voiceInput.permissionDialog.title'),
-      description: t('newChat.chatInput.voiceInput.permissionDialog.description'),
-      confirmText: t('newChat.chatInput.voiceInput.permissionDialog.confirm'),
-      cancelText: t('newChat.chatInput.voiceInput.permissionDialog.cancel'),
-      autoFocusConfirm: true,
-    });
-    if (!confirmed) return;
-
-    const result = await requestRendererMicrophonePermission();
-    if (result.ok) return;
-
-    const settingsResult = await window.electronAPI.voiceInput.openMicrophoneSettings();
-    if (!settingsResult.ok) {
-      toast.error(settingsResult.error);
-    }
-  }, [confirmDialog, t]);
+  const handleVoiceInputPermissionRequired = useVoiceMicrophonePermissionPrompt();
 
   const voiceOwnerStorageKeyRef = useRef<string | undefined>(undefined);
   const frozenVoiceSendRef = useRef<{
@@ -3657,14 +3549,27 @@ export function ChatInput({
     currentStorageKey: storageKeyForDraftRef.current,
   });
   const composerMutationLocked = composerEditorLocked || voiceBusyOnCurrentComposer;
+  const canReceiveComposerDrag = () => !!sessionId && storageKey === sessionId && !sharedGuest &&
+    !composerMutationLocked && !remoteHostId && !deviceLinkDeviceId && !getSessionDeviceId(sessionId) &&
+    typeof window.electronAPI?.maker?.redeemComposerAttachmentDrag === 'function';
   // Only the composer that owns the run explains why someone else's words are missing.
   const showSpeakerFilteredNotice = voiceInput.speakerFiltered && voiceBusyOnCurrentComposer;
   useEffect(() => {
     onComposerVoiceBusyChange?.(voiceBusyOnCurrentComposer);
   }, [onComposerVoiceBusyChange, voiceBusyOnCurrentComposer]);
-  const composerTypingLocked =
-    disabled || waitingForFolders || (sendDispatchInFlight && !allowTypeDuringSend) || voiceBusyOnCurrentComposer;
+  const typingLockedOutsideDictation =
+    disabled || waitingForFolders || (sendDispatchInFlight && !allowTypeDuringSend);
+  const composerTypingLocked = typingLockedOutsideDictation || voiceBusyOnCurrentComposer;
+  const retainVoiceInputContext =
+    voiceBusyOnCurrentComposer && !typingLockedOutsideDictation && window.electronAPI?.platform === 'darwin';
   composerMutationLockedRef.current = composerTypingLocked;
+  // Attach before the effect that makes the focused editor read-only. A change
+  // in lock ownership alone must not emit another Tiptap document update.
+  useEffect(() => {
+    if (retainVoiceInputContext && editor && !editor.isDestroyed) {
+      return retainDictationInputContext(editor);
+    }
+  }, [editor, retainVoiceInputContext]);
   useEffect(() => {
     editor?.setEditable(!composerTypingLocked);
   }, [composerTypingLocked, editor]);
@@ -4828,7 +4733,7 @@ export function ChatInput({
   // Slash commands — palette refactor 后改成 loadAllCommands 一次性拉三源(desktop +
   // agent-builtin + agent-skill); 内部并发, mergeCommands 按优先级合并去重。
   const paletteAgentKind = runtimeAgentKind ?? agentKind ?? 'claude-code';
-  // 插件引擎任务没有内置 Harness 身份(runtimeAgentKind 为 null)，它的命令清单只有桌面命令，随时可读。
+  // 插件引擎任务没有内置 Harness 身份(runtimeAgentKind 为 null)，它的命令清单不依赖 Harness，随时可读。
   const slashContextReady = !sessionId || runtimeAgentKind != null || !!pluginEngineSession;
   // Existing tasks use one authoritative snapshot. Mirrored composer state
   // catches up in an effect and otherwise scans the previous/global folder first.
@@ -4836,6 +4741,13 @@ export function ChatInput({
   // remote session:workingDir 是远端主机路径,不能按它扫本机 skills/files。
   // slash 退化为 desktop + agent-builtin(传 null),@ 文件面板直接关闭(见 atOpen)。
   const isRemoteSession = !!remoteHostId;
+  // 插件引擎在列清单的这台电脑上运行(本机，或正在远控的那台)时，`/` 列出它能展开的 Cindy 技能；
+  // Agent 在另一台电脑上的任务，引擎那边没有技能来源，与首轮技能清单一致不列。
+  const pluginEngineDeviceId = pluginEngineSession
+    ? pluginEngineSession.engine?.deviceId
+    : !sessionId ? pluginEngines?.active?.deviceId : undefined;
+  const pluginEngineSkillsListed = pluginEngineActive
+    && (!pluginEngineDeviceId || pluginEngineDeviceId === deviceLinkDeviceId);
   const slashCommandContextKey = JSON.stringify([
     slashWorkingDir ?? null,
     slashContextReady,
@@ -4843,8 +4755,8 @@ export function ChatInput({
     isRemoteSession,
     sessionId ?? null,
     deviceLinkDeviceId ?? null,
-    // 插件引擎只列 Cindy 自己的桌面命令(见下方 skipAgentCommands)；内置引擎时数组与之前逐项相同。
-    ...(pluginEngineActive ? ['plugin-engine'] : []),
+    // 插件引擎不列内置 Harness 的命令(见下方 skipAgentCommands)；内置引擎时数组与之前逐项相同。
+    ...(pluginEngineActive ? ['plugin-engine', pluginEngineSkillsListed] : []),
   ]);
   const [slashCommandLoadState, setSlashCommandLoadState] = useState<SlashCommandRosterState>({
     contextKey: '',
@@ -4892,9 +4804,9 @@ export function ChatInput({
         {
           ...opts,
           contextReady: slashContextReady,
-          // 插件引擎自己解释 `/…`：不列内置 Harness 的命令与技能。
-          skipAgentSkills: isRemoteSession || pluginEngineActive,
-          ...(pluginEngineActive ? { skipAgentCommands: true } : {}),
+          // 插件引擎不认内置 Harness 的命令；技能按引擎能展开的范围列出(见 pluginEngineSkillsListed)。
+          skipAgentSkills: isRemoteSession || (pluginEngineActive && !pluginEngineSkillsListed),
+          ...(pluginEngineActive ? { skipAgentCommands: true, pluginEngineSkills: true } : {}),
           sessionId,
           allowManagedPiPackagePreview: !isRemoteSession,
           onPiRuntimeStatus: (status) => {
@@ -4929,6 +4841,7 @@ export function ChatInput({
       deviceLinkDeviceId,
       slashCommandContextKey,
       pluginEngineActive,
+      pluginEngineSkillsListed,
     ],
   );
   useEffect(() => {
@@ -5262,7 +5175,7 @@ export function ChatInput({
   const pluginAtActions = useMemo<ComposerSuggestionAction[]>(() => trigger.kind === 'at' && pluginCompletionItems
     ? pluginCompletionItems.map(item => ({ id: `plugin-completion:${item.instanceId}:${item.providerId}:${item.id}`,
       label: `${item.label} · ${item.source}`, searchText: trigger.query,
-      canRun: () => canInsertPluginCompletion(trigger.from, trigger.query, '@', pluginCompletionKey),
+      canRun: () => canInsertPluginCompletion(trigger.from, trigger.query, pluginCompletionKey),
       run: () => { editor?.chain().focus().command(({ tr }) => {
         tr.insertText(item.insertText, trigger.from, tr.selection.from); return true;
       }).run(); },
@@ -5427,9 +5340,8 @@ export function ChatInput({
   useEffect(() => {
     panelBridgeRef.current = {
       captureKey: (e) => {
-        if (e.isComposing) return false;
         if (!slashOpen && !atOpen) return false;
-        switch (e.key) {
+        switch (resolveComposerSuggestionKey(e)) {
           case 'ArrowDown':
             if (slashOpen && filteredCommands.length > 0) {
               setSlashFocus((i) => nextAvailableSlashCommandIndex(filteredCommands, i, 1));
@@ -5520,7 +5432,7 @@ export function ChatInput({
       const { from } = trigger;
       if (cmd.name.startsWith('plugin-completion:')) {
         const choice = pluginSlashChoices.find(choice => choice.command === cmd);
-        if (!choice || !canInsertPluginCompletion(from, trigger.query, '/', pluginCompletionKey)) return;
+        if (!choice || !canInsertPluginCompletion(from, trigger.query, pluginCompletionKey)) return;
         editor.chain().focus().command(({ tr }) => {
           tr.insertText(choice.item.insertText, from, editor.state.selection.from); return true;
         }).run();
@@ -6041,7 +5953,7 @@ export function ChatInput({
               model: activeModel,
               effort: selectedEffort,
               permissionMode: activePermissionMode,
-              providerId: sendProviderId,
+              providerId: activeProviderId || null,
               fastMode,
               planModeEnabled: planModeEntry?.enabled ?? false,
             },
@@ -6625,7 +6537,7 @@ export function ChatInput({
           }
         }
         let result: boolean | void;
-        let effortForSend = selectedEffort;
+        let effortForSend = sendEffort;
         try {
           if (sessionId) {
             const coordinator = effortChangeCoordinatorRef.current;
@@ -6663,11 +6575,11 @@ export function ChatInput({
             }
             // 等待 commit 后，闭包里的 activeEffort 可能仍是旧 props；以该 session 已提交的
             // 选择发送，保证本 turn 与 UI/SQLite 的 effort 相同。
-            effortForSend = coordinator.getCommittedEffort(sessionId) ?? selectedEffort;
+            effortForSend = coordinator.getCommittedEffort(sessionId) ?? sendEffort;
           }
           result = await onSend(
             routedText,
-            activeModel,
+            sendModel,
             effortForSend,
             activePermissionMode,
             filesToSend,
@@ -6726,7 +6638,8 @@ export function ChatInput({
       sessionId,
       onSend,
       activeModel,
-      selectedEffort,
+      sendModel,
+      sendEffort,
       activePermissionMode,
       sendProviderId,
       selectedSourceDisconnected,
@@ -9425,7 +9338,8 @@ export function ChatInput({
       // 素材仍由 Main 从 DB 读取；远程任务经 sticky 路由交给被控电脑。
       const result = await predictPromptUntilDisabled(makerApiForSticky(sessionId), {
         sessionId,
-        agentKind: runtimeAgentKind,
+        // 插件引擎任务按 'acp' 请求：推荐只用辅助模型链，主进程据此核对任务没有换引擎。
+        agentKind: pluginEngineSession ? 'acp' : runtimeAgentKind,
         messages: (messages ?? []).slice(-20).map(({ role, content }) => ({ role, content })),
         workingDir: workingDirRef.current ?? undefined,
         turnGen: turnGenRef.current,
@@ -9627,9 +9541,11 @@ export function ChatInput({
   const allowToolbarWrap = toolbarWidthMode === 'tight' ||
     (useUltraCompactToolbar && voiceInput.isListening) ||
     (hasPluginToolbar && (useUltraCompactToolbar || voiceBusyOnCurrentComposer || showSecondaryStop));
+  const pluginHeader = pluginUiCandidates.header && !remoteHostId && !deviceLinkDeviceId
+    ? <PluginUiSlot position="composer.header" sessionId={sessionId} /> : null;
 
-  return (
-    <div className="relative flex w-full flex-col items-center gap-4" data-chat-input-root>
+  return <PluginUiComposerActionScope sessionId={composerActionSessionId} editor={editor} disabled={composerMutationLocked}>
+    <div className="relative flex w-full flex-col items-center gap-4 [&>[data-plugin-composer-header]]:-mb-2" data-chat-input-root>
       {pluginUiCandidates.completion.length > 0 && <PluginUiCompletionBridge
         entries={pluginUiCandidates.completion} sessionId={sessionId ?? null} onResult={setPluginCompletionResult}
         request={pluginCompletionKey && !composerMutationLocked && (slashOpen || typedAtOpen) && trigger.kind !== 'none'
@@ -9659,7 +9575,7 @@ export function ChatInput({
           Stacked here (voice error on top, rejections below) so both stay
           visible when present simultaneously. */}
       {(voiceInput.lastError || showSpeakerFilteredNotice || rejections.length > 0) && (
-        <div className="pointer-events-none absolute bottom-full left-0 right-0 z-20 mb-2 flex flex-col items-center gap-1 px-3">
+        <div className="pointer-events-none absolute bottom-full left-0 right-0 z-page-float mb-2 flex flex-col items-center gap-1 px-3">
           {voiceInput.lastError ? (
             <VoiceInputStatusNotice message={voiceInput.lastError} />
           ) : showSpeakerFilteredNotice ? (
@@ -9670,9 +9586,8 @@ export function ChatInput({
           )}
         </div>
       )}
-      {pluginUiCandidates.header && !remoteHostId && !deviceLinkDeviceId && (
-        <PluginUiSlot position="composer.header" sessionId={sessionId} />
-      )}
+      {composerHeaderTarget === undefined ? pluginHeader : composerRegionVisible && pluginHeader &&
+        composerHeaderTarget && createPortal(pluginHeader, composerHeaderTarget)}
       {/* When the pending-queue panel is visible, the wrapper div owns the
           border + corner radius + focus-within highlight. Both inner halves
           (panel + input card) become borderless sections, so a focus on the
@@ -9748,11 +9663,30 @@ export function ChatInput({
               if (intent === 'keep-caret') editor.commands.focus();
               else if (intent === 'doc-end') editor.commands.focus('end');
             }}
+            onDropCapture={(event) => {
+              if (!isComposerAttachmentDrag(event.dataTransfer)) return;
+              event.preventDefault();
+              event.stopPropagation();
+              dragCounterRef.current = 0;
+              setIsDragOver(false);
+              composerMentionDragActiveRef.current = false;
+              internalMentionDragActiveRef.current = false;
+              setMentionDragCaret(editor, null);
+              onComposerDropHandled?.();
+              const ticket = event.dataTransfer.getData(COMPOSER_ATTACHMENT_MIME);
+              if (!ticket || !sessionId || !canReceiveComposerDrag()) {
+                toast.error(t('mcpApps.composerDragFailed'));
+                return;
+              }
+              void window.electronAPI.maker.redeemComposerAttachmentDrag({ sessionId, ticket })
+                .catch(error => toast.error(t(composerAttachmentDropError(error))));
+            }}
             onDragEnter={(e) => {
               e.preventDefault();
               e.stopPropagation();
+              if (isComposerAttachmentDrag(e.dataTransfer) && !canReceiveComposerDrag()) return;
               const firstEnter = dragCounterRef.current === 0;
-              if (firstEnter && Array.from(e.dataTransfer.types).includes(COMPOSER_MENTION_MIME)) {
+              if (firstEnter && !isComposerAttachmentDrag(e.dataTransfer) && Array.from(e.dataTransfer.types).includes(COMPOSER_MENTION_MIME)) {
                 composerMentionDragActiveRef.current = true;
                 if (editor && !editor.isDestroyed) {
                   lastComposerSelectionFromRef.current = editor.state.selection.from;
@@ -9766,6 +9700,10 @@ export function ChatInput({
             onDragOver={(e) => {
               e.preventDefault();
               e.stopPropagation();
+              if (isComposerAttachmentDrag(e.dataTransfer)) {
+                e.dataTransfer.dropEffect = canReceiveComposerDrag() ? 'copy' : 'none';
+                return;
+              }
               if (internalMentionDragActiveRef.current && editor && !editor.isDestroyed) {
                 const dropPos =
                   editor.view.posAtCoords({ left: e.clientX, top: e.clientY })?.pos ?? null;
@@ -9778,7 +9716,7 @@ export function ChatInput({
             onDragLeave={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              dragCounterRef.current -= 1;
+              dragCounterRef.current = Math.max(0, dragCounterRef.current - 1);
               if (dragCounterRef.current === 0) {
                 setIsDragOver(false);
                 composerMentionDragActiveRef.current = false;
@@ -9849,10 +9787,10 @@ export function ChatInput({
             {(isDragOver || externalDragOver) && (
               <div
                 className={cn(
-                  'pointer-events-none absolute inset-0 z-10',
+                  'pointer-events-none absolute inset-0 z-raised',
                   // 输入框卡片圆角与对话页统一为 12px(用户定稿 2026-07-22);create-agent
                   // 不再用 Figma 的 6px,避免新建/对话两个框圆角不一致。
-                  'rounded-[12px]',
+                  'rounded-xl',
                 )}
                 style={{
                   backgroundColor: 'var(--drop-overlay-bg)',
@@ -9894,7 +9832,7 @@ export function ChatInput({
                   {/* hover 预览:逐条评论(截图缩略 + 标签 + 文字),行内可单删。
                   与 quotes 预览不同,这里是可交互面板(pointer-events 开)。 */}
                   <div
-                    className="absolute bottom-full left-0 z-30 mb-2 hidden max-h-72 w-80 max-w-[70vw] flex-col gap-2 overflow-y-auto rounded-[12px] border p-3 group-hover/bcomment:flex"
+                    className="absolute bottom-full left-0 z-page-overlay mb-2 hidden max-h-72 w-80 max-w-[70vw] flex-col gap-2 overflow-y-auto rounded-xl border p-3 group-hover/bcomment:flex"
                     style={{
                       backgroundColor: 'var(--surface-elevated)',
                       borderColor: 'var(--border-default)',
@@ -9906,7 +9844,7 @@ export function ChatInput({
                         <img
                           src={item.screenshot.url}
                           alt=""
-                          className="h-9 w-14 shrink-0 rounded-md border object-cover"
+                          className="h-9 w-14 shrink-0 rounded-lg border object-cover"
                           style={{ borderColor: 'var(--border-default)' }}
                           draggable={false}
                         />
@@ -9922,7 +9860,8 @@ export function ChatInput({
                               {item.markerNumber}
                             </span>
                             <span
-                              className="inline-flex items-center rounded px-1 py-px font-mono text-10"
+                              // design: intrinsic-geometry — 行内代码，与 Markdown 行内代码同为 6px（DESIGN.md §5 内容排版）
+                              className="inline-flex items-center rounded-[6px] px-1 py-px font-mono text-10"
                               style={{
                                 backgroundColor: 'var(--surface-chip)',
                                 color: 'var(--text-tertiary)',
@@ -9988,7 +9927,7 @@ export function ChatInput({
                     'w-[calc(100%+11px)] -mr-[11px]',
                     // Disabled gets the same visual cue as the old textarea
                     composerMutationLocked && 'cursor-not-allowed opacity-60',
-                    voiceBusyOnCurrentComposer && 'cursor-default',
+                    voiceBusyOnCurrentComposer && 'cursor-default [&_.ProseMirror]:caret-transparent',
                   )}
                   data-voice-draft-active={
                     voiceBusyOnCurrentComposer && voiceInput.draftText ? 'true' : undefined
@@ -10021,7 +9960,8 @@ export function ChatInput({
                 {/* 字号 / 行高 / 颜色与原生 placeholder 对齐,单行截断防止长句撑高输入框。
                     py-[3px] 是镜像 .ProseMirror 的 py-[3px]:它的 -my-[3px] 会穿过这里
                     向外折叠(relative 不建立 BFC),于是 .ProseMirror 的 border box 贴在本
-                    容器顶边、正文被自身 padding 推低 3px。overlay 不跟着补这 3px 就会高一行边距。 */}
+                    容器顶边、正文被自身 padding 推低 3px。overlay 不跟着补这 3px 就会高一行边距。
+                    3px 属于 DESIGN.md §5 登记的输入区破出套组，不单独收到刻度。 */}
                 {showRecommendationOverlay && !showPromptPreview && (
                   <div
                     className={cn(
@@ -10082,7 +10022,7 @@ export function ChatInput({
                 // select-none 挂容器而非逐按钮:Chromium 的 user-select:none 只挡
                 // "在元素上起选",从相邻可选区起拖再划入时按钮文字仍会被刷蓝
                 // (同 sortable.css 侧栏行修过的 selection bleed),容器级禁选才挡得住。
-                'mt-[2px] flex select-none items-center',
+                'mt-0.5 flex select-none items-center',
                 allowToolbarWrap
                   ? 'min-w-0 flex-wrap justify-between gap-x-1 gap-y-1'
                   : useNarrowToolbar
@@ -10095,6 +10035,7 @@ export function ChatInput({
               )}
             >
               <div
+                data-composer-left-controls=""
                 className={cn(
                   useNarrowToolbar
                     ? 'flex min-w-min shrink items-center gap-1'
@@ -10205,13 +10146,16 @@ export function ChatInput({
                     visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
                   />
                 </div>
+                {pluginUiCandidates.inlineToolbar && (
+                  <PluginUiSlot position="composer.toolbar" toolbarGroup="inline" sessionId={sessionId} />
+                )}
                 {useNarrowToolbar && !useCompactMiddleToolbar && <>{middleToolbarSlot}</>}
               </div>
               {hasPluginToolbar && (
                 // Keep a scrollable share for actual controls, without reserving a fixed
                 // minimum for remote tasks or plugins that hide all their contributions.
                 <div
-                  className={cn('mx-1 w-max min-w-0 shrink-0 overflow-x-auto',
+                  className={cn('mx-1 w-max min-w-0 shrink-0 overflow-x-auto [&:has([data-plugin-composer-toolbar]:empty)]:hidden',
                     allowToolbarWrap ? 'max-w-[60%]' : useNarrowToolbar ? 'max-w-[33%]' : 'max-w-[50%]')}
                   onFocus={(event) => {
                     if (event.target instanceof HTMLElement) {
@@ -10220,7 +10164,7 @@ export function ChatInput({
                   }}
                 >
                   <div className="w-max">
-                    <PluginUiSlot position="composer.toolbar" sessionId={sessionId} />
+                    <PluginUiSlot position="composer.toolbar" toolbarGroup="legacy" sessionId={sessionId} />
                   </div>
                 </div>
               )}
@@ -10261,6 +10205,7 @@ export function ChatInput({
                   )}
                 >
                   {!sessionModelLoading && <ModelSelector
+                    draftModelPending={draftModelPending}
                     openRequest={modelPickerRequest}
                     onOpenRequestConsumed={onModelPickerRequestConsumed}
                     sshCodex={sshCodexCatalog}
@@ -10445,6 +10390,7 @@ export function ChatInput({
                     // 无意图才回到会话 runtime 的 selectedProviderId。
                     currentProviderId={activeProviderId}
                     sourceDisconnected={selectedSourceDisconnected}
+                    preserveDraftModel={preserveDraftModel}
                     // 与上面 providers 同一份任务视图：账号被拆出后原来源在这个任务里按账号所在的供应商显示。
                     {...(taskSourceProvider ? { taskSourceProvider } : {})}
                     // 断开来源回落到默认来源后,面板会高亮同模型的回落行;点击该行必须重新
@@ -10538,9 +10484,8 @@ export function ChatInput({
                       canReleaseToSend={canReleaseVoiceToSend}
                       releaseToSendActive={voiceReleaseToSendActive}
                       onReleaseToSendChange={setVoiceReleaseToSendActive}
-                      visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
                       className={
-                        isCreateAgentVariant && !useNarrowToolbar ? 'ml-[7px]' : undefined
+                        isCreateAgentVariant && !useNarrowToolbar ? 'ml-1.5' : undefined
                       }
                     />
                   )}
@@ -10667,6 +10612,7 @@ export function ChatInput({
               query={trigger.query}
               commands={paletteCommands}
               additionalCommands={pluginSlashCommands}
+              showBuddyNewHint={showBuddyNewHint && trigger.sigil === '/' && trigger.query === 'new'}
               focusedIndex={slashFocus}
               onFocusedIndexChange={setSlashFocus}
               onSelect={(cmd) => insertSlashCommand(cmd)}
@@ -10728,6 +10674,7 @@ export function ChatInput({
         </div>
       </div>
 
+      {composerActionSessionId !== null && (pluginUiCandidates.header || pluginUiCandidates.inlineToolbar) && <PluginUiComposerActionStatus />}
       {/* 长文本粘贴 chip 的编辑弹窗(editorProps.handleClickOn 打开)。 */}
       {pastedTextEditTarget != null && (
         <ToolPayloadLightbox
@@ -10762,7 +10709,7 @@ export function ChatInput({
                 <button
                   type="button"
                   className={cn(
-                    'flex h-[46px] items-center gap-[10px] rounded-full',
+                    'flex h-[46px] items-center gap-2.5 rounded-full',
                     'border px-5',
                     'bg-[var(--folder-btn-bg)]',
                     'border-[var(--folder-btn-border)]',
@@ -10783,319 +10730,5 @@ export function ChatInput({
         </div>
       )}
     </div>
-  );
-}
-
-function VoiceInputButton({
-  samplesRef,
-  state,
-  onHoldChange,
-  emptyComposer,
-  disabled,
-  shortcutLabel,
-  onStart,
-  onStop,
-  onStopAndSend,
-  sendTargetRef,
-  canReleaseToSend,
-  releaseToSendActive,
-  onReleaseToSendChange,
-  className,
-}: {
-  samplesRef: RecordingSamplesRef;
-  state: import('@cindy/voice-input-core').VoiceInputState;
-  onHoldChange: (holding: boolean) => void;
-  emptyComposer: boolean;
-  disabled: boolean;
-  shortcutLabel: string;
-  onStart: () => boolean | Promise<boolean | void>;
-  onStop: () => Promise<void>;
-  onStopAndSend: () => Promise<void>;
-  sendTargetRef: RefObject<HTMLElement | null>;
-  canReleaseToSend: boolean;
-  releaseToSendActive: boolean;
-  onReleaseToSendChange: (active: boolean) => void;
-  visualVariant?: 'default' | 'create-agent';
-  className?: string;
-}) {
-  const { t } = useTranslation();
-  const [longPressActive, setLongPressActive] = useState(false);
-  useEffect(() => {
-    onHoldChange(longPressActive);
-    return () => onHoldChange(false);
-  }, [longPressActive, onHoldChange]);
-  const timerRef = useRef<number | null>(null);
-  const pointerIdRef = useRef<number | null>(null);
-  const lastPointerPointRef = useRef<{ clientX: number; clientY: number } | null>(null);
-  const longPressStartedRef = useRef(false);
-  const pointerStartedRecordingRef = useRef(false);
-  const suppressNextClickRef = useRef(false);
-  const suppressClickTimerRef = useRef<number | null>(null);
-  const releaseToSendActiveRef = useRef(false);
-  const listening = state === 'listening';
-  const refining = state === 'refining';
-  const busy = state === 'submitting' || state === 'refining';
-  const showProcessing = useVoiceProcessingIndicator(state);
-  const stopping = busy && !showProcessing;
-  const activeRecording = listening || longPressActive;
-  const disabledOrBusy = disabled || busy;
-
-  // ── 录音态宽度形变 + 计时(DESIGN.md §14.4「Desktop composer send / stop」)──
-  // 仅录音中展开(2026-07-22 用户定稿:展开必须承载信息,hover 展出「语音」
-  // 文案已移除):三根实时录音音量条+ 计时。
-  // 会话内与新建对话框共用同一套(不再按 create-agent 分叉)。
-  // 计时数字 tabular-nums 等宽,配合"分钟位数变化才重新量宽",秒跳动不抖框。
-  const [recSeconds, setRecSeconds] = useState(0);
-  const pillLabelRef = useRef<HTMLSpanElement>(null);
-  const [pillWidth, setPillWidth] = useState<number | null>(null);
-  const expandable = true;
-  const expanded = expandable && (activeRecording || stopping);
-  const minuteDigits = String(Math.floor(recSeconds / 60)).length;
-
-  useEffect(() => {
-    if (!activeRecording) return;
-    setRecSeconds(0);
-    const id = window.setInterval(() => setRecSeconds((s) => s + 1), 1000);
-    return () => window.clearInterval(id);
-  }, [activeRecording]);
-
-  useLayoutEffect(() => {
-    if (!expandable) return;
-    if (!expanded) {
-      setPillWidth(null);
-      return;
-    }
-    // 28px 图标位 + 标签实测宽(含右 padding)+ 2px 余量
-    setPillWidth(28 + (pillLabelRef.current?.scrollWidth ?? 0) + 2);
-  }, [expandable, expanded, activeRecording, minuteDigits]);
-
-  const recTimeText = `${Math.floor(recSeconds / 60)}:${String(recSeconds % 60).padStart(2, '0')}`;
-  // 宽度过渡走 inline transition(与 class transition-colors 合并声明,避免
-  // tailwind transition-property 工具类互相覆盖的顺序不确定性)。全部引用 motion token:
-  // 减少动态效果时 token 归零,直接切换。
-  const pillTransition =
-    'width var(--motion-base) var(--motion-ease-move), background-color var(--motion-fast) var(--motion-ease-out), color var(--motion-fast) var(--motion-ease-out), border-color var(--motion-fast) var(--motion-ease-out)';
-  const iconLayer =
-    'col-start-1 row-start-1 flex items-center justify-center transition-[opacity,transform] duration-[var(--motion-fast)] ease-[var(--motion-ease-out)] motion-reduce:transform-none';
-  const iconShown = 'scale-100 opacity-100';
-  const iconHidden = 'scale-[0.55] opacity-0';
-  const showBars = (activeRecording || stopping) && !showProcessing;
-  let label = t('newChat.chatInput.voiceInput.start');
-  if (longPressActive) {
-    label = t('newChat.chatInput.voiceInput.releaseToStop');
-  } else if (refining) {
-    label = t('newChat.chatInput.voiceInput.refining');
-  } else if (state === 'submitting') {
-    label = t('voiceInputOverlay.status.submitting');
-  } else if (activeRecording) {
-    label = t('newChat.chatInput.voiceInput.stop');
-  }
-  const hintLabel =
-    emptyComposer && activeRecording
-      ? t(
-          longPressActive
-            ? 'newChat.chatInput.voiceInput.speakRelease'
-            : 'newChat.chatInput.voiceInput.speakPressAgain',
-        )
-      : label;
-  const tooltipText =
-    shortcutLabel && !activeRecording && !busy ? `${hintLabel} · ${shortcutLabel}` : hintLabel;
-  const controlledTooltipOpen = busy
-    ? showProcessing
-    : longPressActive
-      ? !releaseToSendActive
-      : undefined;
-
-  const clearLongPressTimer = useCallback(() => {
-    if (timerRef.current === null) return;
-    window.clearTimeout(timerRef.current);
-    timerRef.current = null;
-  }, []);
-
-  const clearSuppressClickTimer = useCallback(() => {
-    if (suppressClickTimerRef.current === null) return;
-    window.clearTimeout(suppressClickTimerRef.current);
-    suppressClickTimerRef.current = null;
-  }, []);
-
-  const clearSuppressNextClick = useCallback(() => {
-    clearSuppressClickTimer();
-    suppressNextClickRef.current = false;
-  }, [clearSuppressClickTimer]);
-
-  const armSuppressNextClick = useCallback(() => {
-    clearSuppressClickTimer();
-    suppressNextClickRef.current = true;
-    suppressClickTimerRef.current = window.setTimeout(() => {
-      suppressNextClickRef.current = false;
-      suppressClickTimerRef.current = null;
-    }, 250);
-  }, [clearSuppressClickTimer]);
-
-  const setReleaseToSendActive = useCallback(
-    (active: boolean) => {
-      if (releaseToSendActiveRef.current === active) return;
-      releaseToSendActiveRef.current = active;
-      onReleaseToSendChange(active);
-    },
-    [onReleaseToSendChange],
-  );
-
-  const updateReleaseToSendTarget = useCallback(
-    (event: ReactPointerEvent<HTMLButtonElement>) => {
-      lastPointerPointRef.current = { clientX: event.clientX, clientY: event.clientY };
-      if (!longPressStartedRef.current) return;
-      setReleaseToSendActive(
-        canReleaseToSend &&
-          isPointInsideElement(sendTargetRef.current, event.clientX, event.clientY, 10),
-      );
-    },
-    [canReleaseToSend, sendTargetRef, setReleaseToSendActive],
-  );
-
-  useEffect(() => {
-    if (!longPressActive) {
-      setReleaseToSendActive(false);
-      return;
-    }
-    const point = lastPointerPointRef.current;
-    if (!point) return;
-    setReleaseToSendActive(
-      canReleaseToSend &&
-        isPointInsideElement(sendTargetRef.current, point.clientX, point.clientY, 10),
-    );
-  }, [canReleaseToSend, longPressActive, sendTargetRef, setReleaseToSendActive]);
-
-  const finishLongPress = useCallback(
-    (send: boolean, cancelStartedRecording = false) => {
-      clearLongPressTimer();
-      pointerIdRef.current = null;
-      const longPressStarted = longPressStartedRef.current;
-      longPressStartedRef.current = false;
-      const pointerStartedRecording = pointerStartedRecordingRef.current;
-      pointerStartedRecordingRef.current = false;
-      if (pointerStartedRecording) {
-        armSuppressNextClick();
-      }
-      if (!longPressStarted) {
-        if (cancelStartedRecording && pointerStartedRecording) {
-          void onStop();
-        }
-        return;
-      }
-      setLongPressActive(false);
-      setReleaseToSendActive(false);
-      void (send ? onStopAndSend() : onStop());
-    },
-    [armSuppressNextClick, clearLongPressTimer, onStop, onStopAndSend, setReleaseToSendActive],
-  );
-
-  useEffect(() => {
-    return () => {
-      clearLongPressTimer();
-      clearSuppressNextClick();
-      longPressStartedRef.current = false;
-      pointerStartedRecordingRef.current = false;
-      setReleaseToSendActive(false);
-    };
-  }, [clearLongPressTimer, clearSuppressNextClick, setReleaseToSendActive]);
-
-  return (
-    <Tip text={tooltipText} side="top" controlledOpen={controlledTooltipOpen}
-      resetHoverOnControlChange contentClassName="data-[state=closed]:hidden">
-      <button
-        type="button"
-        className={cn(
-          'flex shrink-0 items-center rounded-full',
-          // 语音按钮:常驻外框 + 录音展开(红点+计时)。会话内与新建对话框共用同一套
-          // (2026-07-22 用户定稿:裸态只用于 +/权限/模型;语音/发送常驻框,create-agent 不再分叉)。
-          // 宽度由 inline style 驱动,标签溢出裁剪。
-          'h-[30px] justify-start overflow-hidden p-0',
-          'bg-[var(--composer-pill-bg)] border border-[var(--border-default)] text-[var(--composer-pill-icon)]' /* spec 2026-07-17, token by 一哥 */,
-          'hover:bg-[var(--model-trigger-hover)]',
-          // 录音态:与主题同极性的 chip 填充(light 亮灰 / dark 深灰),红点 + 计时承担状态信号
-          (activeRecording || stopping) &&
-            'bg-[var(--surface-chip)] text-[var(--text-primary)] hover:bg-[var(--surface-chip)]',
-          'focus-visible:outline-none',
-          disabledOrBusy && 'cursor-not-allowed',
-          // Busy (stopping / refining) keeps full strength so the transition and the
-          // spinner stay readable; only a truly unavailable control dims.
-          disabled && 'opacity-40',
-          className,
-        )}
-        style={expandable ? { width: pillWidth ?? 30, transition: pillTransition } : undefined}
-        disabled={disabledOrBusy}
-        aria-label={label}
-        aria-pressed={activeRecording}
-        onPointerDown={(event) => {
-          if (event.button !== 0) return;
-          // A fresh press is never the synthetic click from the previous hold.
-          // Chromium may omit that click when the recording pill changes size.
-          clearSuppressNextClick();
-          event.preventDefault();
-          event.currentTarget.blur();
-          if (disabledOrBusy || listening) return;
-          pointerIdRef.current = event.pointerId;
-          lastPointerPointRef.current = { clientX: event.clientX, clientY: event.clientY };
-          event.currentTarget.setPointerCapture(event.pointerId);
-          clearLongPressTimer();
-          longPressStartedRef.current = false;
-          pointerStartedRecordingRef.current = true;
-          setReleaseToSendActive(false);
-          void onStart();
-          timerRef.current = window.setTimeout(() => {
-            timerRef.current = null;
-            longPressStartedRef.current = true;
-            setLongPressActive(true);
-          }, VOICE_INPUT_LONG_PRESS_MS);
-        }}
-        onPointerMove={updateReleaseToSendTarget}
-        onPointerUp={(event) => {
-          if (pointerIdRef.current !== event.pointerId) return;
-          updateReleaseToSendTarget(event);
-          const shouldSend =
-            canReleaseToSend &&
-            isPointInsideElement(sendTargetRef.current, event.clientX, event.clientY, 10);
-          if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-            event.currentTarget.releasePointerCapture(event.pointerId);
-          }
-          finishLongPress(shouldSend);
-        }}
-        onPointerCancel={() => finishLongPress(false, true)}
-        onClick={() => {
-          if (suppressNextClickRef.current) {
-            clearSuppressNextClick();
-            return;
-          }
-          void (listening ? onStop() : onStart());
-        }}
-      >
-        {/* 28px 图标位: idle 麦克风 / 录音音量条 / 停止后处理 spinner。三层常驻、交叉淡入,
-            不硬切。会话内与新建对话框共用(不再按 create-agent 分叉)。 */}
-        <span className="grid h-[28px] w-[28px] shrink-0 place-items-center" aria-hidden>
-          <span className={cn(iconLayer, !showBars && !showProcessing ? iconShown : iconHidden)}>
-            <Mic size={15} />
-          </span>
-          <span className={cn(iconLayer, 'h-4 gap-0.5', showBars ? iconShown : iconHidden)}>
-            <ComposerRecordingBars samplesRef={listening ? samplesRef : undefined} />
-          </span>
-          <span className={cn(iconLayer, showProcessing ? iconShown : iconHidden)}>
-            <Spinner size={15} spinning={showProcessing} />
-          </span>
-        </span>
-        {/* 录音计时(tabular-nums 等宽,秒跳不抖框);非录音态无标签,按钮保持圆形 */}
-        <span
-          ref={pillLabelRef}
-          className={cn(
-            'whitespace-nowrap pr-3 text-12 tabular-nums',
-            '-translate-x-1 opacity-0 transition-[opacity,transform] duration-[var(--motion-fast)] ease-[var(--motion-ease-out)]',
-            expanded && 'translate-x-0 opacity-100',
-            'motion-reduce:transition-none',
-          )}
-        >
-          {activeRecording || stopping ? recTimeText : ''}
-        </span>
-      </button>
-    </Tip>
-  );
+  </PluginUiComposerActionScope>;
 }

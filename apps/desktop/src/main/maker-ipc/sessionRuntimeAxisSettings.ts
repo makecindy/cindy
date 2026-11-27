@@ -69,8 +69,19 @@ export function createUpdateSavedScheduledAxis(ports: {
   readUsableAgentDeviceProviders: ReadUsableAgentDeviceProviders;
   updateScheduledPreference: ReturnType<typeof createUpdateScheduledPreference>;
   getDesktopProviderService: ProviderListing;
+  admitPluginEngineTarget?: (target: { providerId: string | null | undefined; model: string; effort?: unknown }) => { effort: string };
+  admitRemotePluginEngineTarget?: (
+    deviceId: string,
+    target: { providerId: string | null | undefined; model: string; effort?: unknown },
+  ) => Promise<{ effort: string }>;
 }) {
-  const { readUsableAgentDeviceProviders, updateScheduledPreference, getDesktopProviderService } = ports;
+  const {
+    readUsableAgentDeviceProviders,
+    updateScheduledPreference,
+    getDesktopProviderService,
+    admitPluginEngineTarget,
+    admitRemotePluginEngineTarget,
+  } = ports;
   const updateSavedScheduledAxis = async (
     sessionId: string,
     patch: { effort?: ScheduledModelSelection['effort']; fastMode?: ScheduledModelSelection['fastMode'] },
@@ -80,6 +91,31 @@ export function createUpdateSavedScheduledAxis(ports: {
       .from(sessions).where(eq(sessions.id, sessionId)).limit(1);
     const baseline = parseScheduledModelBaseline(row?.baseline);
     if (!baseline) return false;
+    if (baseline.agentKind === 'acp') {
+      if (patch.fastMode !== undefined && patch.fastMode !== false) {
+        throwIpcError('INVALID_PARAMS', 'Fast is unavailable for plugin engines');
+      }
+      if (patch.effort !== undefined) {
+        const target = {
+          providerId: baseline.providerId,
+          model: baseline.model,
+          effort: patch.effort,
+        };
+        const admitted = baseline.agentDeviceId
+          ? admitRemotePluginEngineTarget
+            ? await admitRemotePluginEngineTarget(baseline.agentDeviceId, target)
+            : throwIpcError('PRECONDITION_FAILED', 'switching to a plugin engine on another computer is not available here')
+          : admitPluginEngineTarget
+            ? admitPluginEngineTarget(target)
+            : throwIpcError('UNSUPPORTED_CAPABILITY', 'plugin engines are not available here');
+        assertCurrent();
+        await updateScheduledPreference(sessionId, { effort: (admitted.effort || null) as ScheduledModelSelection['effort'] });
+        return true;
+      }
+      assertCurrent();
+      await updateScheduledPreference(sessionId, { fastMode: false });
+      return true;
+    }
     const providers = baseline.agentDeviceId
       ? await readUsableAgentDeviceProviders(baseline.agentDeviceId, baseline.agentKind, baseline.model, baseline.providerId)
       : await getDesktopProviderService().listProviders({
@@ -176,17 +212,24 @@ export function createStagePendingUserRuntimeAxis(ports: {
     const targetDeviceId = intent.targetAgentDeviceId === undefined
       ? row.agentDeviceId : intent.targetAgentDeviceId;
     if (intent.targetAgentKind === 'acp') {
-      if (!intent.providerId || !agentSwitchDeps.admitPluginEngineTarget) {
+      if (!intent.providerId) {
         throwIpcError('UNSUPPORTED_CAPABILITY', 'plugin engines are not available here');
       }
       if (patch.fastMode !== undefined && patch.fastMode !== false) {
         throwIpcError('INVALID_PARAMS', 'Fast is unavailable for plugin engines');
       }
-      const admitted = agentSwitchDeps.admitPluginEngineTarget({
+      const target = {
         providerId: intent.providerId,
         model: intent.model,
         effort: updated.effort,
-      });
+      };
+      const admitted = targetDeviceId
+        ? agentSwitchDeps.admitRemotePluginEngineTarget
+          ? await agentSwitchDeps.admitRemotePluginEngineTarget(targetDeviceId, target)
+          : throwIpcError('PRECONDITION_FAILED', 'switching to a plugin engine on another computer is not available here')
+        : agentSwitchDeps.admitPluginEngineTarget
+          ? agentSwitchDeps.admitPluginEngineTarget(target)
+          : throwIpcError('UNSUPPORTED_CAPABILITY', 'plugin engines are not available here');
       if (patch.effort !== undefined && admitted.effort !== patch.effort) {
         throwIpcError('INVALID_PARAMS', `effort "${patch.effort}" is unavailable for model "${intent.model}"`);
       }
@@ -228,6 +271,14 @@ export function createStagePendingUserRuntimeAxis(ports: {
       assertCurrent();
     }
     if (intent.sameAgentSelection) {
+      if (intent.targetAgentKind === 'claude-code' || intent.targetAgentKind === 'codex') {
+        updated.credentialSelectionAxes = {
+          effort: patch.effort !== undefined ||
+            (intent.credentialSelectionAxes?.effort ?? (!intent.configStaged && intent.effort !== undefined)),
+          fastMode: patch.fastMode !== undefined ||
+            (intent.credentialSelectionAxes?.fastMode ?? (!intent.configStaged && intent.fastMode !== undefined)),
+        };
+      }
       return agentSwitchDeps.selectSameAgentModel!(sessionId, updated, false);
     }
     agentSwitchPending.set(sessionId, updated);
@@ -284,6 +335,8 @@ export function createSetSessionEffort(ports: {
       assertOwnerCurrent();
       assertSharedTaskCurrent.admit();
       await persistSessionFields(sessionId, { effort });
+      assertOwnerCurrent();
+      getPendingCredentialSwitchHolder()?.noteCommittedAxis(sessionId, { effort: true });
       await updateScheduledPreference(sessionId, { effort: effort as ScheduledModelSelection['effort'] });
       if (remoteResponse) markRemoteSettingPersistedInsideHandler(remoteResponse);
     };
@@ -497,6 +550,8 @@ export function createSetSessionFastMode(ports: {
       assertOwnerCurrent();
       assertSharedTaskCurrent.admit();
       await persistSessionFields(sessionId, { fastMode: enabled });
+      assertOwnerCurrent();
+      getPendingCredentialSwitchHolder()?.noteCommittedAxis(sessionId, { fastMode: enabled });
       await updateScheduledPreference(sessionId, { fastMode: enabled });
       if (remoteResponse) markRemoteSettingPersistedInsideHandler(remoteResponse);
     };
