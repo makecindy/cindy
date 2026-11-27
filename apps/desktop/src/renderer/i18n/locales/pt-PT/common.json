@@ -10337,7 +10337,8 @@
       "INVALID_AUTH_CODE": "A autorização expirou. Reinicie o início de sessão.",
       "INVALID_LOGIN_TICKET": "A sessão de autenticação expirou. Recomece.",
       "INVALID_BIND_TICKET": "A sessão de verificação expirou. Recomece.",
-      "REGION_MISMATCH": "A região do serviço de início de sessão não corresponde à desta aplicação."
+      "REGION_MISMATCH": "A região do serviço de início de sessão não corresponde à desta aplicação.",
+      "INVALID_SIGNUP_TICKET": "A confirmação de registo expirou. Inicie sessão novamente."
     },
     "rateLimit": {
       "retryAt": "Tente novamente após as {{time}} (hora local).",
@@ -10345,6 +10346,15 @@
       "intro": "O serviço de início de sessão está a limitar temporariamente os pedidos. Isto é independente de um erro local de armazenamento de credenciais.",
       "guidance": "Aguarde antes de pedir outro código. Reiniciar, reinstalar ou mudar de rede não garante que o limite seja levantado.",
       "support": "Se o problema continuar após aguardar, envie os registos em privado para feedback@cindy.app com o seu sistema operativo, a versão de Cindy, a hora do erro e o código abaixo. Não publique registos."
+    },
+    "signup": {
+      "title": "Ainda sem conta Cindy",
+      "subtitle": "{{target}} não está registado no Cindy. Já entrou de outra forma? Volte e escolha.",
+      "subtitleSocial": "Esta conta {{provider}} não está registada no Cindy. Já entrou de outra forma? Volte e escolha.",
+      "create": "Criar uma conta nova",
+      "createDescEmail": "Registar com este email",
+      "createDescPhone": "Registar com este número",
+      "createDescSocial": "Registar com esta conta {{provider}}"
     }
   },
   "legalTermsUpdate": {
@@ -11671,7 +11681,17 @@
         "enable": "Ativar",
         "enabled": "Ativado"
       },
-      "close": "Fechar janela de transferência"
+      "close": "Fechar janela de transferência",
+      "scanToLogin": "Leia com a aplicação Cindy para iniciar sessão nesta conta",
+      "approveTitle": "Permitir que o telemóvel inicie sessão?",
+      "approveBody": "{{device}} está a iniciar sessão com o seu código. Se não for o próprio, toque em Recusar.",
+      "approveBodyUnknown": "Um telemóvel está a iniciar sessão com o seu código. Se não for o próprio, toque em Recusar.",
+      "approve": "Permitir",
+      "deny": "Recusar",
+      "loginApproved": "Telemóvel com sessão iniciada",
+      "loginDenied": "Início de sessão recusado",
+      "qrExpired": "O código expirou",
+      "qrRefresh": "Atualizar"
     },
     "localNetwork": {
       "title": "Permitir acesso à rede local",

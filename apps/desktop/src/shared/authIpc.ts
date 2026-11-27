@@ -26,7 +26,25 @@ export type DesktopLoginAction =
   | { type: 'request-sso-verification-code' }
   | { type: 'verify-sso-verification'; code: string }
   | { type: 'request-binding-code'; contact: string }
-  | { type: 'verify-binding'; contact: string; code: string };
+  | { type: 'verify-binding'; contact: string; code: string }
+  /** 「还没有 Cindy 账号」里确认创建；注册票据只在 main。 */
+  | { type: 'confirm-signup' };
+
+/** 已登录电脑为另一台设备出码（「远程控制 Cindy」弹窗）。凭据不经过 renderer。 */
+export type DesktopQrHandoffResult =
+  | { success: true; handoffId: string; payload: string; expiresAt: string }
+  | { success: false; code: string };
+
+export type DesktopQrHandoffStateResult =
+  | {
+      success: true;
+      status: 'pending' | 'claimed' | 'approved' | 'denied' | 'expired';
+      expiresAt?: string;
+      requester?: { clientType: 'desktop' | 'mobile' | 'web'; deviceName?: string; platform?: string };
+    }
+  | { success: false; code: string };
+
+export type DesktopQrHandoffDecisionResult = { success: true } | { success: false; code: string };
 
 /** In-memory presentation metadata; never a persisted cooldown or retry budget. */
 export type DesktopLoginState = (AuthFlowState | { step: 'entry' }) & { retryAt?: number; httpStatus?: number };
@@ -311,9 +329,16 @@ export function parseDesktopLoginAction(value: unknown): DesktopLoginAction | nu
         isBoundedString(value.code, MAX_CODE_LENGTH)
         ? { type: 'verify-binding', contact: value.contact, code: value.code }
         : null;
+    case 'confirm-signup':
+      return { type: value.type };
     default:
       return null;
   }
+}
+
+/** 扫码登录出码 id 由服务端生成（base64url）；IPC 边界只放行同形值。 */
+export function parseDesktopQrHandoffId(value: unknown): string | null {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{16,64}$/.test(value) ? value : null;
 }
 
 export function parseDesktopAccountKey(value: unknown): string | null {
