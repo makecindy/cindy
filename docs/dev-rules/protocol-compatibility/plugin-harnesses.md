@@ -69,10 +69,10 @@ Agent 工具：`list_available_models` / `schedule_list_models` 的 host 结果�
 renderer `scheduleFormLogic.test.ts`「plugin engine selection」。
 
 协同 Lead & Worker（2026-11-19 起演进，2026-11-27 扩展）：`maker:session:enable-orca` 的 `workerAgent`、`maker:worker:create` 的 `agent`、`create_worker` /
-`create_workers` 的 `agent` 枚举新增取值 `acp`（`providerId` / `provider_id` 必为 `acp-plugin:…`）。插件引擎 Worker 只在 Lead 所在电脑本机运行，带运行设备、Agent 位置
+`create_workers` 的 `agent` 枚举新增取值 `acp`（`providerId` / `provider_id` 必为 `acp-plugin:…`）。桌面端与手机端创建面板都支持选择 Lead 所在电脑本机的插件引擎作为 Worker（远程运行设备与 SSH Lead 不列插件引擎）；旧版被控端不认识 `acp` 时以 `INVALID_PARAMS` 拒绝。插件引擎 Worker 只在 Lead 所在电脑本机运行，带运行设备、Agent 位置
 或 SSH Lead 时拒绝（INVALID_PARAMS）；2026-11-25 起接受 `worktree`（旧版拒绝）。`maker:worker:list` 与团队快照里这种 Worker 的 `session.agentKind = acp`，并追加可选
 `session.providerId`；`list_workers` / `get_workspace_info` 的 agent 字段同样可为 `acp`。共享解析器 `parseOrcaTeamWorkers` 给手机追加可选
-`pluginEngineProviderId`，`agentKind` 仍是旧端可用的占位值；已发布的手机把它显示为 Claude Code，查看与派活不受影响。2026-11-27（#13001）起支持本机插件引擎任务作为 Orca Lead（同时补齐 ACP `elicitation/create` 问题卡、plan 更新、分叉／回退与手动压缩），不再由 Lead 入口统一拒绝；`set_worker_runtime` 对插件引擎 Worker 仍返回 UNSUPPORTED_CAPABILITY，远端 Worker
+`pluginEngineProviderId`，`agentKind` 仍是旧端可用的占位值；已发布的手机把它显示为 Claude Code，查看与派活不受影响，新版手机按 `pluginEngineProviderId` 解析真实插件引擎名与模型名。2026-11-27 起（#13001 / #13331）插件引擎任务当 Lead 在新版电脑端与手机端均已放开（同时补齐 ACP `elicitation/create` 问题卡、plan 更新、分叉／回退与手动压缩），旧版被控端仍以 `[PLUGIN_ENGINE_CANNOT_LEAD]` 拒绝并由手机端给出场景化提示；`set_worker_runtime` 对插件引擎 Worker 仍返回 UNSUPPORTED_CAPABILITY，远端 Worker
 回报通道（`orcaRemoteWorkerBridge`）仍拒绝插件引擎 Worker。maker-core 内部新增 `StartSessionOptions.pluginEngineBriefing` /
 `pluginEngineTrustedCaller`（只 acp 引擎读取，不跨端）。回归见 `orcaWorkerCreationService.test.ts`「plugin engine Worker」、maker-core
 `acp-session.test.ts`（briefing / trusted caller / elicitation）、renderer `CreateWorkerPopover.test.tsx` 与 maker-shared `orcaTeam.test.ts`。
@@ -94,7 +94,8 @@ renderer `scheduleFormLogic.test.ts`「plugin engine selection」。
   `agentKind: 'acp'` 与 `agentDeviceId`(`share:<shareId>` 或电脑 id)，已建任务的 `maker:switch-session-agent` 同样带 `agentDeviceId`；
   B 沿用既有准入(`admitPluginEngineSessionElsewhere` / `admitRemotePluginEngineTarget`)与远程 Agent 启动路径，执行端照常实时复核授权。
   不新增 channel、allowlist、relay 帧或字段，官方与自建中转按既有 invoke 帧透明转发、无需修改。旧版 B 对新 channel 回 `INVALID_PARAMS`，
-  A 记为不支持、只列 B 自己的引擎(与此前相同)；B 没有来源名单(更早的版本)时同样只列 B 自己的引擎。手机端尚未提供这两个来源。
+  控制端记为不支持、只列 B 自己的引擎(与此前相同)；B 没有来源名单(更早的版本)时同样只列 B 自己的引擎。手机端同样复用同一条
+  `maker:model-catalog:read` 路径读取同账号其他电脑与已收到插件引擎分享，支持在模型选择器来源页筛选、收藏（沿用 `PLUGIN_ENGINE_FAVORITE_WIRE_AGENT = 'cc'` 既有槽位）、新建任务、会话内切换、伙伴模型链与插件自动化草稿中选择，并在不支持的旧被控端上静默降级为只列 B 本机引擎。
   来源名单或链接状态变化时丢弃该任务电脑的引擎目录与在途读取。重新发现来源后，只为已打开任务回读仍可用的来源。
 - **暂未开放**：插件引擎加入供应商组（电脑组）或备用机委托、转分享(`relayKey`)、协同 Worker 跨机运行插件引擎。这些入口保持明确拒绝。（注：本机插件引擎任务的分叉与回退已于 2026-11-27 #13001 支持；Agent 在另一台电脑上运行时的冷恢复回退仍受 `session-regressions.md` 同口径约束。）
 

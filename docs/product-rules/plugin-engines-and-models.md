@@ -47,7 +47,7 @@
 | 多账号池与账号用量 | 已支持 | 插件声明 `accounts.methods` 后复用内置账号池界面、分配、限流冷却、换号与拿出独立供应商（`~<8位>`）；声明 `reportsUsage` 后在任务、设置、菜单栏与小组件展示用量 | 未声明 `accounts` 按单账号运行；错误未提供 `error.data._meta.cindy.resetsAt` 时只报错不猜自动继续时刻；不向分享访客暴露主人私有账号用量 |
 | 同账号免装远程调用 | 已支持 | 插件上报 `remoteWorkspace: true` 且用户在装插件的电脑开启「允许被远程调用」；使用端无需预装插件或 CLI，自动走影子目录与 `cindy_exec` 隧道 | 未上报或未开启时不在其他电脑列出；目标离线或中途停用时下一轮明确报错，不回退本机 |
 | 跨账号分享插件引擎 | 已支持 | 插件同时上报 `remoteWorkspace` 与 `guestWorkspace`；复用一次性分享链接、配对审批、模型白名单与受邀者用量统计 | 未声明 `guestWorkspace` 不出现分享入口，并在受邀者启动前拒绝 |
-| 桌面远程控制 & 手机控制端 | 已支持（部分边界） | 桌面远控支持被控电脑自身、其同账号其他电脑及其收到的插件引擎分享；手机支持被控电脑本机插件引擎的新建、切换、收藏、用量与 Worktree | 手机端暂不列被控电脑再转接的第三方远程／分享插件引擎；旧被控端缺 `maker:list-plugin-engines` 时隐藏入口不报错 |
+| 桌面远程控制 & 手机控制端 | 已支持 | 桌面远控与手机控制端均支持被控电脑自身、其同账号其他电脑及其收到的插件引擎分享（经 `maker:model-catalog:read`），覆盖新建、切换、收藏、用量、Worktree、Plan Mode、Skills、输入推荐、Orca Lead／本机 Worker、伙伴模型链与插件自动化草稿 | 旧被控端不支持 `maker:model-catalog:read` 时静默降级为只列被控电脑本机引擎，缺 `maker:list-plugin-engines` 时隐藏入口不报错；手机端对不支持插件 Lead 的旧被控端给出场景化提示 |
 | 同轮插话与排队 | 已支持 | 引擎握手声明 `_meta.steering.supported` 时支持 `_session/steering`（含 `injected` 与 `queued` 结局）；运行期撤回能力即时同步至各端 | 确知不支持时经 `steerUnsupported` 在桌面与手机隐藏插话入口，输入框与队列插话改为「本轮结束后发送」排队并提示，不报 `UNSUPPORTED_CAPABILITY` |
 | 问题卡、计划更新、分叉、回退、压缩、侧聊 | 已支持 | 通过 ACP `elicitation/create` 渲染原生问题卡（含选择 + 自填折叠）；支持 `plan` 更新、分叉、编辑／回退、压缩、侧聊与上下文溢出同引擎新会话续接 | 外部引擎不支持原生操作时由 Cindy 交接／重放模拟；无原生历史回退点时按已有降级文案提示 |
 | `/` 菜单 Skill 与首轮能力告知 | 已支持 | 新会话首轮按固定顺序在首条用户消息前告知插件花名册与 Skill 清单（内置 Pi 同范围）；输入框 `/` 菜单按 `acp` 向执行电脑读取 Skill 清单并展开调用 | 宿主注入文本清洗独立 `/命令` 防误触；旧被控端不支持 `maker:list-agent-skills(acp)` 时菜单按无 Skill 降级 |

@@ -112,11 +112,11 @@
 
 ## 13. 插件执行引擎（ACP）手机端对齐清单
 
-- [ ] **目录读取与旧被控端降级**:手机通过 `maker:list-plugin-engines` / `maker:refresh-plugin-engines` / `maker:get-plugin-engine-usage` 读取被控电脑开放的本机插件引擎；旧被控端回 `CHANNEL_NOT_ALLOWED` 时按「没有插件引擎」静默隐藏入口，不报错（`apps/mobile/src/session/pluginEngines.ts`）。
+- [ ] **目录读取与旧被控端降级**:手机通过 `maker:list-plugin-engines` / `maker:refresh-plugin-engines` / `maker:get-plugin-engine-usage` 读取被控电脑开放的本机插件引擎，并复用 `maker:model-catalog:read` 读取被控电脑的同账号其他电脑与已收到插件引擎分享（覆盖来源筛选、新建、切换、收藏、伙伴模型链与插件定时任务草稿）；旧被控端不支持时静默降级为只列本机或按 `CHANNEL_NOT_ALLOWED` 隐藏入口，不报错（`apps/mobile/src/session/pluginEngines.ts`）。
 - [ ] **图标体积预算与断线缓存**:`PluginEngineView` 图标单张上限 64 KiB、单次列表合计上限 512 KiB，超预算回退通用插件标记；被控端暂时失联时保留上次已读目录与图标，重连后按账号与设备代次刷新。
 - [ ] **不支持插话时的同步降级**:输入投影 `AgentInputProjection.steerUnsupported === true`（含运行期通过 `onCapabilitiesChange` 撤回插话能力）时，隐藏插话按钮与排队菜单插话项，改为排队发送并在消息流末尾展示等待说明（#13231）。
 - [ ] **收藏 wire 兼容编码**:写入 `maker:model-favorites:apply` 时，`agent` 必须固定写 `PLUGIN_ENGINE_FAVORITE_WIRE_AGENT`（`'cc'`），**绝不发 `agent: 'acp'`**；新端通过 `providerId` 的 `acp-plugin:`（含 `agent-device-favorite:` / `provider-share-favorite:` 前缀）识别插件引擎收藏并忽略 wire `agent`。
-- [ ] **当前明确边界**:手机端暂不提供被控电脑再转接的同账号其他电脑／跨账号分享插件引擎，也不提供仅限桌面本机新任务草稿的插件路由模型（`GhostPickerModel`）；遇到时按产品规则隐藏，不降级成内置模型。详参 `docs/product-rules/plugin-engines-and-models.md` 与 `docs/dev-rules/protocol-compatibility/plugin-harnesses.md`。
+- [ ] **当前明确边界**:手机端已支持插件引擎担任 Orca Lead 与创建/展示 Lead 本机插件引擎 Worker（对旧被控端的 `[PLUGIN_ENGINE_CANNOT_LEAD]` 给出场景化提示），但仍不提供跨机／SSH 插件引擎 Worker，也不提供仅限桌面本机新任务草稿的插件路由模型（`GhostPickerModel`）；遇到时按产品规则隐藏，不降级成内置模型。详参 `docs/product-rules/plugin-engines-and-models.md` 与 `docs/dev-rules/protocol-compatibility/plugin-harnesses.md`。
 
 ---
 
