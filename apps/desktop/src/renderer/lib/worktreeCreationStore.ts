@@ -1,3 +1,4 @@
+import type { ChatMessage } from './makerChatStore';
 import { useSyncExternalStore } from 'react';
 
 /**
@@ -21,7 +22,7 @@ export type WorktreeCreationState =
    * startedAt:进入 creating 的时刻(ms),用于加载卡片的「已等待」计时。调用方不必传,
    * set 时自动补上;同一 session 连续 creating 保留首次时刻,切走再切回视图不会从 0 重计。
    */
-  | { status: 'creating'; name: string; startedAt?: number }
+  | { status: 'creating'; name: string; startedAt?: number; message?: ChatMessage }
   | { status: 'failed'; name: string; error: string };
 
 const states = new Map<string, WorktreeCreationState>();
@@ -59,7 +60,7 @@ export const worktreeCreationStore = {
       const startedAt = previous?.status === 'creating' && previous.startedAt !== undefined
         ? previous.startedAt
         : Date.now();
-      states.set(sessionId, { ...state, startedAt });
+      states.set(sessionId, { ...(previous?.status === 'creating' ? previous : {}), ...state, startedAt });
     } else {
       states.set(sessionId, state);
     }
