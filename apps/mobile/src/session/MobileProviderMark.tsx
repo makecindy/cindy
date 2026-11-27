@@ -20,7 +20,7 @@ import {
   XD_VIEW_BOX,
 } from '@/components/vendorIconPaths';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { fontWeight as fontWeightToken, iconStroke, lineHeight, radius, typeScale } from '@/theme/tokens';
+import { fontWeight as fontWeightToken, lineHeight, radius, typeScale } from '@/theme/tokens';
 import {
   MODEL_SPECTRUM_COLORS,
   PROVIDER_LOGO_PATHS,
@@ -82,11 +82,11 @@ function withRemote(
           <Svg height={ROUTED_BADGE_SIZE} viewBox="0 0 24 24" width={ROUTED_BADGE_SIZE}>
             <Path
               d={ROUTED_BADGE_PATH}
-              fill="none"
+              fill={color}
               stroke={color}
               strokeLinecap="round"
               strokeLinejoin="round"
-              strokeWidth={iconStroke.bold}
+              strokeWidth={0.6}
             />
           </Svg>
         </View>
