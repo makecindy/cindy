@@ -7,6 +7,7 @@ import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import { subscriptionImageModelId } from '../cindy-media/sharedSubscriptionImage.js';
 import { getCodexHome } from '../maker-host/codex-home-path.js';
 import { mkdir, readFile, readdir } from 'node:fs/promises';
+import { hardenLocalCredentialDirectory } from '../security/localCredentialDirProtection.js';
 import { type AuthState, type NativeSubscriptionAccount } from '@cindy/maker-core';
 import type { AgentKind } from '@cindy/model-providers';
 import { readAccountBeforeSend } from './remotePreflight.js';
@@ -3761,7 +3762,11 @@ export async function runSubscriptionAccountCommand(
       const directory = directoryFor(provider, accountId);
       if (provider === 'openai') state.codexModels.delete(accountId);
       else state.claudeModels.delete(accountId);
-      await mkdir(directory, { recursive: true, mode: 0o700 });
+      if (accountId === 'default') {
+        await mkdir(directory, { recursive: true, mode: 0o700 });
+      } else {
+        await hardenLocalCredentialDirectory(directory, { writeMarkers: false });
+      }
       assertOwner(state);
       if (abort.signal.aborted) throw new Error('login_cancelled');
       // Only an explicit default-account choice (or legacy Add) may attach the

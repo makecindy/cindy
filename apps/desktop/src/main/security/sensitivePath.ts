@@ -34,10 +34,13 @@ const SENSITIVE_BASENAMES = new Set([
   'credentials',
   'credentials.json',
   'service-account.json',
+  'antigravity-oauth-token',
 ]);
 
 const PRIVATE_KEY_BASENAME_RE = /^id_(?:rsa|dsa|ecdsa|ed25519)$/i;
 const SENSITIVE_EXTENSION_RE = /\.(?:pem|key|p12|pfx|jks|keystore|kdbx)$/i;
+const SENSITIVE_SUBTREE_RE =
+  /(^|\/)(?:owners\/[^/]+\/plugin-engine-accounts|\.gemini\/antigravity-cli|\.(?:claude|codex)-cindy-[^/]+)(?:\/|$)/i;
 const SENSITIVE_PATH_RE =
   /(^|\/)(?:\.gem\/credentials|\.docker\/config\.json|\.config\/gcloud\/application_default_credentials\.json|\.config\/gh\/hosts\.ya?ml|\.pip\/pip\.(?:conf|ini)|\.config\/pip\/pip\.(?:conf|ini))$/i;
 
@@ -79,6 +82,7 @@ export function detectSensitivePath(
     return 'env-file';
   }
   if (parts.some((part) => SENSITIVE_DIR_SEGMENTS.has(part))) return 'sensitive-directory';
+  if (SENSITIVE_SUBTREE_RE.test(lower)) return 'sensitive-directory';
   if (SENSITIVE_BASENAMES.has(base)) return 'sensitive-basename';
   if (PRIVATE_KEY_BASENAME_RE.test(base)) return 'private-key-path';
   if (SENSITIVE_EXTENSION_RE.test(base)) return 'sensitive-extension';

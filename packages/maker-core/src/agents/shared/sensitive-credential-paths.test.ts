@@ -87,6 +87,32 @@ describe("credential path policy", () => {
     ).toBe(false);
   });
 
+  it("protects plugin-engine isolated account dirs and Antigravity credential stores without blocking repo source paths", () => {
+    for (const sensitive of [
+      "/Users/me/Library/Application Support/CindyGlobal/owners/abae59844621cadf5062/plugin-engine-accounts",
+      "/Users/me/Library/Application Support/CindyGlobal/owners/abae59844621cadf5062/plugin-engine-accounts/_root__cindy-antigravity-acp/agy/cindy-abae59844621-ef086271-bfe8-4fb6-a5c3-235fe8839270/.gemini/antigravity-cli/antigravity-oauth-token",
+      "C:\\Users\\me\\AppData\\Roaming\\Cindy\\owners\\owner1\\plugin-engine-accounts\\_root__agy\\agy\\cindy-0123456789ab-11111111-1111-4111-8111-111111111111",
+      "/tmp/moved/plugin-engine-accounts/_root__agy/agy/cindy-0123456789ab-11111111-1111-4111-8111-111111111111/state",
+      "/Users/me/.gemini/antigravity-cli/antigravity-oauth-token",
+      "~/.gemini/antigravity-cli/jetski_state.pbtxt",
+      "/tmp/copied/antigravity-oauth-token",
+      "/Users/me/.claude-cindy-0123456789ab-11111111-1111-4111-8111-111111111111/.credentials.json",
+      "/Users/me/.codex-cindy-0123456789ab-11111111-1111-4111-8111-111111111111/auth.json",
+    ]) {
+      expect(isSensitiveCredentialPath(sensitive), sensitive).toBe(true);
+      expect(isReviewSensitiveCredentialPath(sensitive), sensitive).toBe(true);
+    }
+
+    for (const ordinary of [
+      "/repo/apps/desktop/src/main/plugin-engine-accounts/paths.ts",
+      "/repo/apps/desktop/src/main/plugin-engine-accounts/__tests__/runtime.test.ts",
+      "/repo/.gemini/settings.json",
+    ]) {
+      expect(isSensitiveCredentialPath(ordinary), ordinary).toBe(false);
+      expect(isReviewSensitiveCredentialPath(ordinary), ordinary).toBe(false);
+    }
+  });
+
   it("keeps directory search denies aligned for common credential files", () => {
     expect(REVIEW_SENSITIVE_CREDENTIAL_GLOB_PATTERNS).toEqual(
       expect.arrayContaining([
@@ -96,6 +122,11 @@ describe("credential path policy", () => {
         "**/apps/codex-bin/**",
         "**/tools/pi/updates/**",
         "**/.vite/**",
+        "**/.claude-cindy-*/**",
+        "**/.codex-cindy-*/**",
+        "**/.gemini/antigravity-cli/**",
+        "**/antigravity-oauth-token",
+        "**/owners/*/plugin-engine-accounts/**",
         "**/credentials.json",
         "**/auth.json",
         "**/*.pem",
