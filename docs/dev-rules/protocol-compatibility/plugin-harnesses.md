@@ -287,6 +287,21 @@ main `sessionsUpdate.test.ts`「plugin engine runs on another computer」、`orc
 - **跨电脑新建协议（`maker:session:handoff`）**：`task-action-capability` 探测回包追加可选能力位 `ordinaryCreatePluginEngine: 1`（仅 Desktop 声明，Node Host 不声明）；`remoteSessionCreationSchema` 的 `agentKind` 新增取值 `acp`、追加可选字段 `providerId`（仅 `agentKind === 'acp'` 时出现，内置引擎新建载荷与回执操作串字节不变）。发送端在发起带 `agentKind: 'acp'` 或 `providerId` 的远程新建前复核 `ordinaryCreatePluginEngine === 1`，旧版电脑或 Node Host 缺少该位时在发送前以 `REMOTE_UNSUPPORTED` 拒绝，不创建任务。发送端对 `maker:session:handoff` 成功回包的 `agentKind` 校验同步接受 `acp`（覆盖跨电脑新建与既有插件引擎任务的 jump 投递）。不新增 channel、allowlist、relay 帧或服务端字段，官方与自建中转按既有 invoke 帧透明转发，无需同步修改。
 - **实现与回归**：`packages/lizi-mcps/src/xdt-helper/{send_to_session,list_available_models}.ts`、`packages/device-link/src/orcaRemoteWorker.ts`、`apps/desktop/src/shared/remoteSessionCreation.ts`、`apps/desktop/src/main/maker-ipc/{sendToSessionExecutionConfig,remoteSessionCreation,sessionHandoffCore,register}.ts`、`apps/desktop/src/main/mcp-integrations/{sessionHandoffRemote,mcp-providers}.ts`、`apps/host/src/agent/session-handoff.ts`；回归见 `sendToSessionTool.test.ts`、`listAvailableModelsTool.test.ts`、`sendToSessionExecutionConfig.test.ts`、`sendToSessionLazyResumePermission.test.ts`、`sessionHandoffIpc.test.ts`、`sessionHandoffRemote.test.ts` 与 host `device-link.test.mjs`。
 
+## 设置页打开引擎的供应商页（2026-11-27，未发布）
+
+- **页面接口**：插件页面同源 `POST /harnesses/open-settings`，请求体 `{"id":"<本插件声明的引擎 id>"}`（只此一个字段，
+  ≤256 字符，不带 query）。成功 `200 {"ok":true}`；`400` 请求体不合格，`403` 引擎未声明或没有紧跟用户操作，
+  `405` 非 POST，`503` 没有可显示设置的主窗口。只导航，不读写任何设置。页面可用不带副作用的 `GET` 探测是否支持：
+  支持的宿主回 405，不支持的回 404；这两个状态码是对插件的约定，不要改成别的。
+- **本机内部事件**：Main → 主窗口 `deep-link:navigate` 新增 payload `{ type: 'plugin-engine-settings', engineKey }`，
+  Renderer 路由 `/settings?tab=providers&pluginEngine=<引擎 key>`（一次性参数，消费后从 URL 摘除）。两者都只在同一台
+  电脑的同一版本内使用，不跨设备、不落盘，没有对应的 `cindy://` 链接。
+- **旧端与其他端**：旧 Desktop、Node Host、手机页和远程设置页对该路径返回 404，插件保留文字引导即可；不新增
+  device-link channel 或 allowlist，自建中转无需改动。
+- **实现与回归**：`apps/desktop/src/main/cindy-brain/runtime/{ghostEngineSettingsEndpoint,ghostPageHandler}.ts`、
+  `apps/desktop/src/main/deepLink.ts`、`apps/desktop/src/renderer/components/settings/ProvidersSection.tsx`；
+  `ghostEngineSettingsEndpoint.test.ts`、`deepLink.test.ts`、`providersSectionDeepLink.test.tsx`。
+
 ## 插件模型选择、插件任务与搜索筛选（2026-11-27）
 
 - **插件模型选择与插件任务**：`PluginModelSelection`、`PluginTaskPreferences.config`、`PluginTaskRoute`、`tasks-request`（`taskSlot` / `pluginTargetSlot` / `pluginTargetReview`）与 `MobileTaskSettings` 的 `agentKind` 新增取值 `acp`（此时 `providerId` 必为 `acp-plugin:<插件>:<引擎>` 且 `fastMode === false`）。本机与远程位置分别按对应电脑的插件引擎目录实时复核；插件「模型与任务」设置页在选了插件引擎时，快问快答（`cindy.text.oneshot`）与远程模型同口径回落到声明／系统辅助模型链，不借本机内置供应商。未升级的旧控制端不会发出 `acp`；新控制端发给旧被控端时旧端以 `INVALID_PARAMS` / `PLUGIN_SETTINGS_INVALID` 明确拒绝，不会静默切到内置引擎。

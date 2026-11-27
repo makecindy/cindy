@@ -422,6 +422,7 @@ import {
   setGhostKvStore,
   setGhostModelsHandler,
   setGhostHarnessesHandler,
+  setGhostEngineSettingsHandler,
   setGhostMediaModelsProvider,
   setGhostAgentModelsProvider,
   setGhostModelPreferencesProvider,
@@ -435,7 +436,8 @@ import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { createGhostKvStore, removeGhostKvBestEffort, type GhostKvStore } from './ghostKvStore.js';
 import { handleGhostModelsRequest } from './runtime/ghostModelsEndpoint.js';
 import { handleGhostHarnessesRequest } from './runtime/ghostHarnessesEndpoint.js';
-import { configurePluginHarnessRegistry, PLUGIN_USAGE_WORKER_FAILURE, reconcilePluginHarnesses } from './pluginHarnesses.js';
+import { handleGhostEngineSettingsRequest } from './runtime/ghostEngineSettingsEndpoint.js';
+import { configurePluginHarnessRegistry, getPluginHarnessRegistry, PLUGIN_USAGE_WORKER_FAILURE, reconcilePluginHarnesses } from './pluginHarnesses.js';
 import { pluginEngineAccountRoot } from '../plugin-engine-accounts/paths.js';
 import { forgetPluginEngineAccountsOfPlugin } from '../plugin-engine-accounts/store.js';
 import { ghostPublishedModelText, parseGhostPublishedModels } from '@cindy/plugin-protocol';
@@ -474,7 +476,7 @@ import { GhostConnectionManager, normalizeGhostConnectionHost } from './ghostCon
 import { getResolvedMainLocale, rawMainString, t } from '../i18n.desktop.js';
 import { refreshGhostLocalizationIfChanged } from './ghostLocalizationRefresh.js';
 import type { SupportedLocale } from '../../shared/locale.js';
-import { getDeepLinkMainWindow } from '../deepLink.js';
+import { getDeepLinkMainWindow, openMainWindowPluginEngineSettings } from '../deepLink.js';
 import { reconcileGhostSkillLinks, removeGhostSkillLinksForRoots, ghostSkillPluginRoot } from './skillSlot.js';
 import { diagnoseScheduleHookPlugin } from './scheduleHookPluginDiagnosis.js';
 import type { PreRunHookMissingPlugin } from '@cindy/maker-scheduler';
@@ -10009,6 +10011,22 @@ export function registerGhostIpc(): void {
       declared: () => (ghost ? ghost.manifest.harnesses : null),
       store: publishedHarnessesStore(),
       onChanged: () => reconcilePluginHarnesses(),
+    });
+  });
+  // /harnesses/open-settings：页面在用户点击后请宿主打开自己某个引擎的供应商设置页。引擎须在当前
+  // 注册表里(已启用、已批准、已声明)；只导航，不改任何设置。
+  setGhostEngineSettingsHandler(({ ghostId, method, readBodyText, isCurrent }) => {
+    const ghost = findGhostForInstanceId(ghostId);
+    return handleGhostEngineSettingsRequest({
+      method, readBodyText, isCurrent,
+      declared: () => (ghost ? ghost.manifest.harnesses : null),
+      consumeUserGesture: () => getGhostErrandSlot().consumeUserGesture(ghostId),
+      open: (harnessId) => {
+        const engine = getPluginHarnessRegistry().list()
+          .find((harness) => harness.ghostId === ghostId && harness.harnessId === harnessId);
+        if (!engine || !isCurrent()) return false;
+        return openMainWindowPluginEngineSettings(engine.key);
+      },
     });
   });
   configurePluginHarnessRegistry({
