@@ -4463,7 +4463,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       // Recovery may have cancelled this creation while the editor was already open.
       const prepared = await prepareNewSessionCreation({
         effectiveDraft,
-        allowDialogueRecovery: !collabDraft && !modelGroupAtSend,
+        allowDialogueRecovery: !collabDraft && !onModelGroupSessionCreated,
         outboxRecoveryRef,
         selectedDeviceId,
         selectedDeviceName,
