@@ -4829,7 +4829,7 @@ export class Scheduler extends EventEmitter {
     attempt: ReplanAttempt,
     now: number,
   ): Promise<boolean> {
-    const next = computeNextFireAt(current, now);
+    const next = computeNextFireAt(current, now, { ignorePersistedNextFireAt: true });
     if (next === undefined) return true; // manual:按语义不续命
     const write = this.writeReplanNextFireAt(scheduleId, current, next, attempt);
     let updated = await write;
@@ -4851,7 +4851,7 @@ export class Scheduler extends EventEmitter {
         fresh.status === 'active' &&
         this.isRetiredReplanWrite(scheduleId, fresh)
       ) {
-        const freshNext = computeNextFireAt(fresh, now);
+        const freshNext = computeNextFireAt(fresh, now, { ignorePersistedNextFireAt: true });
         if (freshNext !== undefined) {
           updated = await this.writeReplanNextFireAt(scheduleId, fresh, freshNext, attempt);
           // 接管写也落空:行里留着的是按故障前时刻算出的旧排期,长故障之后已经落在
@@ -4871,7 +4871,7 @@ export class Scheduler extends EventEmitter {
           // 周期任务。不补排的话它不会被触发(没有排期),周期 DB sync 也只重灌行、
           // 不补 nextFireAt —— 任务停摆到进程重启(Codex P1 on #12087)。按它自己
           // 的 cadence 从恢复时刻补排。
-          const freshNext = computeNextFireAt(fresh, now);
+          const freshNext = computeNextFireAt(fresh, now, { ignorePersistedNextFireAt: true });
           if (freshNext !== undefined) {
             updated = await this.writeReplanNextFireAt(scheduleId, fresh, freshNext, attempt);
             // 补排写也落空:又一个并发写(再一次 runNow / 用户编辑)在回读之后落了
@@ -5047,7 +5047,11 @@ function replanWriteIdentity(row: Schedule): string {
   ]);
 }
 
-function computeNextFireAt(schedule: Schedule, fromMs: number): number | undefined {
+function computeNextFireAt(
+  schedule: Schedule,
+  fromMs: number,
+  options?: { ignorePersistedNextFireAt?: boolean },
+): number | undefined {
   if (hasExpired(schedule, fromMs)) return undefined;
   // manual schedule 永远不参与自动触发，跳过 cron 计算（runNow 是单独路径）
   if (schedule.manual) return undefined;
@@ -5057,17 +5061,37 @@ function computeNextFireAt(schedule: Schedule, fromMs: number): number | undefin
   // evade startup/DB-sync quarantine and fire from a stale nextFireAt.
   nextCronOrMonthlyFire(schedule.cronExpr, fromMs, schedule.timezone);
   if (schedule.intervalMs !== undefined) {
-    // 冷启动：优先尊重仍在未来的 lastFinishedAt+N；若已错过则不补发，按 createdAt
-    // 保留原相位向前对齐到 (fromMs, fromMs + intervalMs]，避免多条任务重启后坍缩到同一秒。
-    const planned = (schedule.lastFinishedAt ?? schedule.createdAt) + schedule.intervalMs;
-    if (planned > fromMs) {
-      return beforeDeadline(schedule, planned);
+    const intervalMs = schedule.intervalMs;
+    const maxPreservedNextFireAt = fromMs + intervalMs + Math.floor(intervalMs / 2);
+    // 冷启动优先保留合法的未来 nextFireAt（含积压排空按 createdAt 打散后写入的
+    // (finishedAt + intervalMs/2, finishedAt + 1.5*intervalMs] 相位槽，以及 resume/update
+    // 刚写入的排期），避免一间隔内重启时被共享的 lastFinishedAt + intervalMs 覆盖重聚。
+    if (
+      !options?.ignorePersistedNextFireAt &&
+      schedule.nextFireAt !== undefined &&
+      schedule.nextFireAt > fromMs &&
+      schedule.nextFireAt <= maxPreservedNextFireAt
+    ) {
+      return beforeDeadline(schedule, schedule.nextFireAt);
+    }
+    // 仅当持久化 nextFireAt 缺失/被忽略（如认领后崩溃、接管退役补排）或超出合法窗口时，
+    // 才回退参考 (lastFinishedAt ?? createdAt) + intervalMs；若持久化 nextFireAt 明确已过期，
+    // 直接按 createdAt 相位向前对齐，避免部分错过错开槽位的积压任务被吸附回同一 lastFinishedAt + intervalMs。
+    const hasOverduePersistedNext =
+      !options?.ignorePersistedNextFireAt &&
+      schedule.nextFireAt !== undefined &&
+      schedule.nextFireAt <= fromMs;
+    if (!hasOverduePersistedNext) {
+      const planned = (schedule.lastFinishedAt ?? schedule.createdAt) + intervalMs;
+      if (planned > fromMs && planned <= fromMs + intervalMs) {
+        return beforeDeadline(schedule, planned);
+      }
     }
     const phaseAnchor =
       schedule.createdAt <= fromMs
         ? schedule.createdAt
         : (schedule.lastFinishedAt ?? schedule.createdAt);
-    return beforeDeadline(schedule, nextIntervalFire(phaseAnchor, schedule.intervalMs, fromMs));
+    return beforeDeadline(schedule, nextIntervalFire(phaseAnchor, intervalMs, fromMs));
   }
   return beforeDeadline(schedule, nextCronOrMonthlyFire(schedule.cronExpr, fromMs, schedule.timezone));
 }
