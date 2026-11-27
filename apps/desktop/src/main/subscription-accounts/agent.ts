@@ -99,6 +99,14 @@ async function providerFor(
     : null;
 }
 
+function isLegacyAliasOfBuiltInCodexPool(
+  ref: NonNullable<ReturnType<typeof resolveSubscriptionPoolProviderRef>>, accountId: string,
+): boolean {
+  return ref.kind === 'openai' && ref.providerId !== ref.kind && !ref.created && !ref.apiKey
+    && ref.ownAccount === accountId && accountProviderId(ref.kind, accountId) === ref.kind
+    && pinnedOwnAccount(ref) === accountId;
+}
+
 /**
  * Below this wrapper the engines know only the built-in subscription routes. A start routed
  * through another provider's accounts runs on its kind's built-in route with the selected account,
@@ -114,9 +122,7 @@ function engineProviderId(
   const ref = resolveSubscriptionPoolProviderRef(providerId);
   if (!ref || ref.providerId === ref.kind) return providerId;
   if (!ref.created && ref.ownAccount === accountId) {
-    if (alignLocalCodexAlias && ref.kind === 'openai'
-      && accountProviderId(ref.kind, accountId) === ref.kind && pinnedOwnAccount(ref) === accountId)
-      return ref.kind;
+    if (alignLocalCodexAlias && isLegacyAliasOfBuiltInCodexPool(ref, accountId)) return ref.kind;
     return providerId;
   }
   return ref.kind;
@@ -644,9 +650,22 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
         return async (options: Parameters<BaseAgent['requiresCodexThreadHostTransfer']>[0]) => {
           const execution = options.remoteHostId ? undefined : readPoolSessionExecution(options.sessionId);
           if (execution) {
-            const matchesTarget = () => isPoolSessionExecutionCurrent(
-              options.sessionId, execution, options.providerId?.trim(), options.model,
-            );
+            const targetProvider = options.providerId?.trim();
+            const matchesTarget = () => {
+              if (isPoolSessionExecutionCurrent(options.sessionId, execution, targetProvider, options.model))
+                return true;
+              // A verified local legacy alias can already be running on this built-in pool.
+              // Keep the normal logical-route check for mixed/API routes and hosted sessions.
+              if (targetProvider !== 'openai' || execution.connectionId !== targetProvider || !('account' in execution)
+                || !isPoolSessionExecutionCurrent(options.sessionId, execution, execution.providerId, options.model))
+                return false;
+              try {
+                const binding = readSessionSubscriptionAccountBinding(options.sessionId);
+                const ref = resolveSubscriptionPoolProviderRef(execution.providerId);
+                return !!binding && !binding.deviceHosted && binding.account === execution.account
+                  && !!ref && isLegacyAliasOfBuiltInCodexPool(ref, binding.poolAccountId);
+              } catch { return false; }
+            };
             if (!matchesTarget()) return target.requiresCodexThreadHostTransfer(options);
             const result = await target.requiresCodexThreadHostTransfer({
               ...options,

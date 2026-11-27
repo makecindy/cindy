@@ -3758,7 +3758,26 @@ describe('tasks using imported Codex connections', () => {
       expect(start.mock.calls[1][0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('openai/imported');
       expect(h.bindings.get('task:lane')?.accountId).toBe('imported');
       expect(h.bindings.get('native:thread')?.accountId).toBe('imported');
+      if (!deviceHosted) {
+        setSessionProvider('lane', 'openai-old');
+        const query = { ...options, threadId: 'thread', providerId: 'openai' };
+        const boundAccount = start.mock.calls[1][0][NATIVE_SUBSCRIPTION_ACCOUNT];
+        await agent.requiresCodexThreadHostTransfer(query);
+        expect(check).toHaveBeenLastCalledWith(expect.objectContaining({
+          providerId: 'openai', [NATIVE_SUBSCRIPTION_ACCOUNT]: boundAccount,
+        }));
+        await agent.requiresCodexThreadHostTransfer({ ...query, providerId: 'openai-other' });
+        expect(check.mock.lastCall?.[0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBeUndefined();
+        check.mockImplementationOnce(async () => {
+          setSessionProvider('lane', 'independent-provider');
+          return false;
+        });
+        check.mockImplementationOnce(async () => true);
+        await expect(agent.requiresCodexThreadHostTransfer(query)).resolves.toBe(true);
+        expect(check.mock.lastCall?.[0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBeUndefined();
+      }
     } finally {
+      clearSessionProvider('lane');
       await resumed.close();
     }
     await expect(agent.startSession({ ...options, ...execution, providerId: 'openai-other' }))
