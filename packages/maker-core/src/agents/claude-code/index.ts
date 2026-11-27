@@ -49,6 +49,7 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 import { discoverSubagentDefinitions } from './subagent-definitions.js';
 import { spawnObservedClaudeProcess } from './local-process-spawn.js';
+import { claudeLongLivedTokenFile, claudeLongLivedTokenFileVersion } from './cli-login-status.js';
 import { claudeMcpServerToolsReport, type ClaudeMcpServerStatusEntry } from './mcp-server-tools.js';
 import { callClaudeToolCatalog } from './native-tool-catalog.js';
 import {
@@ -886,19 +887,25 @@ export function setClaudeSupportedModelsListener(
  * 5h / 7d 余量改由 CLI 自己上报的 SDK `rate_limit_event` 提供。只对本机订阅会话
  * (nativeCliAuth)转发;listener 抛错不影响会话。
  */
-let rateLimitInfoListener: ((info: unknown, account?: NativeSubscriptionAccount) => void) | null = null;
+let rateLimitInfoListener: ((info: unknown, account?: NativeSubscriptionAccount, longLivedTokenVersion?: string | null) => void) | null = null;
 
 /** host 注入订阅会话 rate_limit_event 捕获回调;传 null 解除。 */
-export function setClaudeRateLimitInfoListener(listener: ((info: unknown, account?: NativeSubscriptionAccount) => void) | null): void {
+export function setClaudeRateLimitInfoListener(
+  listener: ((info: unknown, account?: NativeSubscriptionAccount, longLivedTokenVersion?: string | null) => void) | null,
+): void {
   rateLimitInfoListener = listener;
 }
 
-function notifyRateLimitInfo(rawMsg: unknown, account?: NativeSubscriptionAccount): void {
+function notifyRateLimitInfo(
+  rawMsg: unknown,
+  account?: NativeSubscriptionAccount,
+  longLivedTokenVersion: string | null = null,
+): void {
   if (!rateLimitInfoListener) return;
   const info = (rawMsg as { rate_limit_info?: unknown } | null)?.rate_limit_info;
   if (!info || typeof info !== 'object') return;
   try {
-    rateLimitInfoListener(info, account);
+    rateLimitInfoListener(info, account, longLivedTokenVersion);
   } catch {
     /* listener 异常不得打断事件循环 */
   }
@@ -1121,6 +1128,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         nativeCliAuth: true,
         subagentModel: null,
       });
+      const probeTokenFile = claudeLongLivedTokenFile(env.CLAUDE_CONFIG_DIR);
       q = sdkQuery({
         prompt: idleInput as unknown as Parameters<typeof sdkQuery>[0]['prompt'],
         options: {
@@ -1128,6 +1136,10 @@ export class ClaudeCodeAgent extends BaseAgent {
           cwd: probeDir,
           pathToClaudeCodeExecutable: this.deps.binaryPath,
           env,
+          // An account on a long-lived token is probed with the credential its tasks use.
+          ...(probeTokenFile
+            ? { spawnClaudeCodeProcess: (spawnOptions) => spawnObservedClaudeProcess({ spawnOptions, oauthTokenFile: probeTokenFile }) }
+            : {}),
         },
       });
       const query = q;
@@ -3289,6 +3301,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     // retrying that no-op and treating a transport failure as fatal would close
     // an otherwise safe session.
     const nativeAutoQueries = new WeakSet<Query>();
+    const queryLongLivedTokenVersions = new WeakMap<Query, { version: string | null }>();
 
     /**
      * **本次 turn** 目标 SDK 权限档: 只看 `planTurnActive`(本轮是否 plan turn), **不含**
@@ -4562,6 +4575,11 @@ export class ClaudeCodeAgent extends BaseAgent {
         await mcpSelectionReady;
         yield* inputQueue;
       };
+      const localSettingSources: ('user' | 'project' | 'local')[] =
+        reviewMode || !!isolatedBotProfile(opts.botRuntimeProfile) || opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly
+          ? []
+          : hosted ? ['project', 'local'] : ['user', 'project', 'local'];
+      const localQueryTokenRef: { version: string | null } = { version: null };
       const createLocalQueryArgs = (): Parameters<typeof sdkQuery>[0] => ({
         prompt: (requestedHostSkips.length ? selectedInput() : inputQueue) as unknown as Parameters<typeof sdkQuery>[0]['prompt'],
         options: {
@@ -4624,11 +4642,26 @@ export class ClaudeCodeAgent extends BaseAgent {
           ...(finalResumeAt ? { resumeSessionAt: finalResumeAt } : {}),
           ...(finalFork ? { forkSession: true } : {}),
           env,
-          ...(this.deps.registerLocalAgentProcess || this.deps.trackCcDebugFile
+          ...(this.deps.registerLocalAgentProcess || this.deps.trackCcDebugFile || nativeCliAuth
             ? {
-                spawnClaudeCodeProcess: (spawnOptions) =>
-                  spawnObservedClaudeProcess({
+                spawnClaudeCodeProcess: (spawnOptions) => {
+                  if (nativeCliAuth && process.platform === 'win32') {
+                    localQueryTokenRef.version = localSettingSources.includes('user')
+                      ? claudeLongLivedTokenFileVersion('settings', spawnOptions.env.CLAUDE_CONFIG_DIR) ?? null
+                      : null;
+                  }
+                  return spawnObservedClaudeProcess({
                     spawnOptions,
+                    // 订阅账号改用长期令牌后,每次拉起 CLI(含会话中途重建)都把令牌文件的句柄交给它;
+                    // 不依赖用户级设置,设备托管与隔离伙伴会话同样拿得到。本进程不读令牌内容。
+                    ...(nativeCliAuth
+                      ? {
+                          oauthTokenFile: claudeLongLivedTokenFile(spawnOptions.env.CLAUDE_CONFIG_DIR),
+                          ...(process.platform !== 'win32'
+                            ? { onOAuthTokenVersion: (version: string | null) => { localQueryTokenRef.version = version; } }
+                            : {}),
+                        }
+                      : {}),
                     registerProcess: (pid) =>
                       this.deps.registerLocalAgentProcess?.({
                         pid,
@@ -4654,7 +4687,8 @@ export class ClaudeCodeAgent extends BaseAgent {
                         log.info('Claude Code SDK process exited', details);
                       }
                     },
-                  }),
+                  });
+                },
               }
             : {}),
           // 订阅 token 到期续命回调 —— 仅当本次 spawn 实际注入了订阅 OAuth token
@@ -4694,9 +4728,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             ? { tools: [...DEVICE_HOSTED_GUEST_CLAUDE_TOOLS] } : {}),
           // 设备托管：个人配置(用户级设置、hooks)属于任务所在电脑，不加载本机用户级设置；
           // 项目级设置来自同步过来的影子目录(只保留权限规则)。
-          settingSources: reviewMode || !!isolatedBotProfile(opts.botRuntimeProfile) || opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly
-            ? []
-            : hosted ? ['project', 'local'] : ['user', 'project', 'local'],
+          settingSources: localSettingSources,
           // Settings (SDK "flag settings" 层, 优先级最高 — 覆盖 user/project/local 文件层):
           //  - showThinkingSummaries        : reasoning summary 展示开关
           //  - autoMemoryEnabled / autoDream: memory 联动 (host 通过 runtimeConfig.memoryEnabled 或
@@ -4777,6 +4809,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           }
         };
       }
+      queryLongLivedTokenVersions.set(query, localQueryTokenRef);
       if (sdkStartPermissionMode === 'auto') nativeAutoQueries.add(query);
       if (modelUsageCumulativeStartsAtZero) modelUsageStartsAtZeroQueries.add(query);
       if (nativeCliAuth && typeof query.applyFlagSettings === 'function') {
@@ -5950,7 +5983,9 @@ export class ClaudeCodeAgent extends BaseAgent {
             const rawSubtype = (rawMsg as { subtype?: string } | null)?.subtype;
             const rawStatus = (rawMsg as { status?: string } | null)?.status;
             // 只旁路取值,消息照常往下走(与改动前的处理顺序一致)。
-            if (rawType === 'rate_limit_event' && nativeCliAuth) notifyRateLimitInfo(rawMsg, nativeSubscriptionAccount);
+            if (rawType === 'rate_limit_event' && nativeCliAuth) {
+              notifyRateLimitInfo(rawMsg, nativeSubscriptionAccount, queryLongLivedTokenVersions.get(currentQ)?.version ?? null);
+            }
             const isTerminalTaskNotification =
               rawType === 'system' &&
               rawSubtype === 'task_notification' &&
