@@ -1895,6 +1895,85 @@ describe('AcpAgent (the acp engine)', () => {
   });
 
   // 测试价值
+  // - 生产入口与可观察结果：AcpAgent.startSession 首轮 briefing 与 formatPluginEngineSkillList；
+  //   确认单条 Skill 描述在 600 字符以内完整保留尾部触发条件、超长描述仍受 600 字符约束，且
+  //   Cindy 托管/插件 Skill（managed: true）排在普通扫描 Skill 之前、在触及 24,000 字符或 120 条
+  //   上限时最后被裁切，同时同路径去重优先保留 managed 项。
+  // - Bug／规则依据：docs/plans/acp-plugin-bridge.md「插件与 Skill 告知」；此前 280 字符硬截断
+  //   会把 pr 等 400+ 字符 Skill 的 "Use when ..." 触发段腰斩，且纯字母排序 + 尾部 pop 会在超预算时
+  //   优先静默淘汰字母靠后的 pr / mr。
+  // - 现有覆盖缺口：此前 acp-session.test.ts 未覆盖 >280 字符描述保留、>600 字符截断边界及
+  //   managed Skill 的排序与预算保护。
+  // - 最小失败输入：1 条 405 字符且带 managed: true 的 pr Skill、1 条 >600 字符扫描 Skill，以及
+  //   足以触及 24,000 字符预算和 120 条上限的字母靠前扫描 Skill。
+  // - tier：unit（内存假 ACP 对端与纯函数格式化）。
+  it('preserves Skill trigger clauses up to 600 chars and keeps managed Skills first under budget caps', async () => {
+    const prDescription =
+      'Carry a GitHub pull request from start to merge in any Git repository - start the work on a fresh branch, ' +
+      'open the PR only when the user asks for it, fix failing checks, merge conflicts and review feedback, ' +
+      'follow it in the background, and clean up after merge. Use when the user invokes /pr or gives a PR link, ' +
+      'starts a feature or fix that will become a pull request, or asks to open, fix or follow a PR.';
+    const hugeDescription = `${'A'.repeat(590)} /pr ${'B'.repeat(200)}`;
+    const agent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true } } });
+    const skills = [
+      { name: 'aaa-scanned', description: hugeDescription, path: '/home/.agents/skills/aaa-scanned/SKILL.md' },
+      { name: 'pr-duplicate', description: 'Scanned copy', path: '/cindy/plugins/cindy-github/skills/pr/SKILL.md' },
+      { name: 'pr', description: prDescription, path: '/cindy/plugins/cindy-github/skills/pr/SKILL.md', managed: true },
+    ];
+    const handle = await briefingEngine(
+      agent,
+      vi.fn(() => '<ghost-roster>{"id":"cindy-github"}</ghost-roster>'),
+      vi.fn(async () => skills),
+    ).startSession({ workingDir: '/repo', model: '', providerId: 'acp-plugin:agy:agy' });
+
+    const [briefing] = await firstPrompt(agent, handle);
+    const prIdx = briefing!.text.indexOf('- pr: ');
+    const scannedIdx = briefing!.text.indexOf('- aaa-scanned: ');
+    expect(prIdx).toBeGreaterThan(-1);
+    expect(scannedIdx).toBeGreaterThan(prIdx);
+    expect(briefing!.text).toContain('Use when the user invokes pr or gives a PR link, starts a feature or fix that will become a pull request, or asks to open, fix or follow a PR.');
+    expect(briefing!.text).not.toContain('- pr-duplicate:');
+    // Over-600 scanned description is bounded and slash-defused without leaking trailing tail.
+    const scannedLine = briefing!.text.split('\n').find((line) => line.startsWith('- aaa-scanned: '))!;
+    expect(scannedLine).toContain(' pr ');
+    expect(scannedLine).not.toContain('/pr');
+    expect(scannedLine).not.toContain('B'.repeat(20));
+
+    // Character budget (24,000) evicts trailing non-managed scanned Skills while preserving managed `pr` / `mr`.
+    const budgetOverflow = [
+      ...Array.from({ length: 60 }, (_, i) => ({
+        name: `aaa-expo-${String(i).padStart(2, '0')}`,
+        description: 'X'.repeat(550),
+        path: `/home/.agents/skills/aaa-expo-${i}/SKILL.md`,
+      })),
+      { name: 'pr', description: prDescription, path: '/cindy/skills/pr/SKILL.md', managed: true },
+      { name: 'mr', description: 'Follow GitLab MRs.', path: '/cindy/skills/mr/SKILL.md', managed: true },
+    ];
+    const budgeted = formatPluginEngineSkillList(budgetOverflow);
+    expect(budgeted.length).toBeLessThanOrEqual(24_000);
+    expect(budgeted.indexOf('- mr: ')).toBeLessThan(budgeted.indexOf('- pr: '));
+    expect(budgeted.indexOf('- pr: ')).toBeLessThan(budgeted.indexOf('- aaa-expo-00: '));
+    expect(budgeted).toContain('asks to open, fix or follow a PR.');
+    expect(budgeted).not.toContain('- aaa-expo-59: ');
+
+    // Item cap (120) also keeps managed Skills ahead of 125 alphabetically earlier scanned Skills.
+    const itemOverflow = [
+      ...Array.from({ length: 125 }, (_, i) => ({
+        name: `aaa-skill-${String(i).padStart(3, '0')}`,
+        description: 'Short',
+        path: `/home/.agents/skills/s-${i}/SKILL.md`,
+      })),
+      { name: 'pr', description: 'PR workflow', path: '/cindy/skills/pr/SKILL.md', managed: true },
+    ];
+    const capped = formatPluginEngineSkillList(itemOverflow);
+    expect(capped).toContain('- pr: PR workflow');
+    expect(capped).not.toContain('- aaa-skill-124:');
+
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await handle.close();
+  });
+
+  // 测试价值
   // - 生产入口与可观察结果：AcpAgent.startSession / openAcpSession / createAcpMcpResultBackfiller；
   //   当 ACP 引擎对 MCP tool_call_update 不返回 content/rawOutput（如 agy acp）时，tool_result_full
   //   从 Host MCP 回执回填带 xdt_card_id 的完整文本并透传 isError；已有 ACP 输出或中断调用不被覆盖。
