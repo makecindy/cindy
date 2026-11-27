@@ -5,8 +5,8 @@
  * 解析；Linux 侧在 WSL2 Ubuntu 上做过真实的 systemd / crontab 建、跑、停、删验证。
  */
 
-import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { homedir, tmpdir, userInfo } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -14,12 +14,15 @@ import { describe, expect, it } from 'vitest';
 import {
   createCrontabAdapter,
   cronEntryId,
+  defaultLaunch,
   expandCronVars,
   parseCronLine,
   parseCrontab,
   removeCronLine,
   resolveCronExecution,
+  splitCronCommand,
 } from '../crontab.js';
+import type { CronExecution } from '../crontab.js';
 import {
   createLaunchAgentsAdapter,
   parseLaunchAgentPlist,
@@ -243,22 +246,28 @@ describe('crontab', () => {
    * 命令就跑在另一套环境里（shell 不对、路径不对、变量为空），界面却报「已启动」。
    */
   it('「立即运行」按条目定义的环境执行：SHELL、PATH、自定义变量都带上', async () => {
-    const launched: Array<{ command: string; env: Record<string, string> }> = [];
+    const launched: Array<CronExecution> = [];
     const adapter = createCrontabAdapter({
       exec: async () => ({
         stdout: 'PATH=/opt/bin:/usr/bin\nSHELL=/bin/bash\nFOO=bar\n0 4 * * * /opt/bin/task --go\n',
         failed: false,
       }),
-      launch: async (command, env) => {
-        launched.push({ command, env });
+      launch: async (execution) => {
+        launched.push(execution);
       },
     });
     await adapter.run(cronEntryId('0 4 * * * /opt/bin/task --go'));
     expect(launched).toHaveLength(1);
     expect(launched[0].command).toBe('/opt/bin/task --go');
+    expect(launched[0].shell).toBe('/bin/bash');
     expect(launched[0].env.SHELL).toBe('/bin/bash');
     expect(launched[0].env.PATH).toBe('/opt/bin:/usr/bin');
     expect(launched[0].env.FOO).toBe('bar');
+    // 传给执行器的是 crond 的基础环境，不是条目里的原始赋值：
+    // 原始赋值里没有 HOME/LOGNAME，直接传过去等于跑在另一套环境里。
+    expect(launched[0].env.HOME).toBe(homedir());
+    expect(launched[0].env.LOGNAME).toBeTruthy();
+    expect(launched[0].cwd).toBe(homedir());
   });
 
   it('执行上下文是 crond 的基础环境，不是 Cindy 自己的环境', () => {
@@ -276,10 +285,92 @@ describe('crontab', () => {
       // 没有 crontab 赋值时是 crond 的默认 PATH 与默认 shell，不是 Cindy 进程的值。
       const bare = resolveCronExecution({});
       expect(bare.shell).toBe('/bin/sh');
-      expect(bare.env.PATH).toBe('/usr/bin:/bin');
+      // crond 的 PATH 来自系统（PAM 的 /etc/environment），会话里拿到的就是系统那一份。
+      expect(bare.env.PATH).toBe(process.env.PATH);
     } finally {
       delete process.env.__CRON_ENV_LEAK__;
     }
+  });
+
+  it('基础环境里 LOGNAME 由 crond 说了算，Linux 上没有 USER', () => {
+    // crond 强制 LOGNAME=真实用户名，crontab 改不动；Linux 上 crond 自己不设 USER，
+    // crontab 里写 USER= 只是普通变量，照传（BSD/macOS 才另设 USER）。
+    const resolved = resolveCronExecution({ LOGNAME: 'zzz', USER: 'yyy' });
+    expect(resolved.env.LOGNAME).toBe(userInfo().username);
+    if (process.platform === 'darwin') expect(resolved.env.USER).toBe(userInfo().username);
+    else expect(resolved.env.USER).toBe('yyy');
+  });
+
+  it('命令按 crond 的规则切开：% 之后那段走 stdin，不进命令行', () => {
+    // crond 在第一个未被转义的 % 处切开：前面交给 shell，后面喂给 stdin。
+    expect(splitCronCommand('backup.sh %data')).toEqual({ command: 'backup.sh', stdin: 'data\n' });
+    expect(splitCronCommand('backup.sh')).toEqual({ command: 'backup.sh' });
+    // 命令部分：反斜杠转义下一个字符，`\%` 是字面 % 且不切分。
+    expect(splitCronCommand('a\\%b').command).toBe('a%b');
+    expect(splitCronCommand('a\\\\b').command).toBe('a\\b');
+    // 输入部分：\% → %，\\ 保留两个，% → 换行，末尾非空补一个换行。
+    expect(splitCronCommand('x%in\\%put').stdin).toBe('in%put\n');
+    expect(splitCronCommand('x%in\\\\put').stdin).toBe('in\\\\put\n');
+    expect(splitCronCommand('z%a%%b').stdin).toBe('a\n\nb\n');
+    expect(splitCronCommand('x%').stdin).toBe('');
+  });
+
+  it('「立即运行」把 % 之后那段喂给 stdin，不当参数传', async () => {
+    // 用户写 `backup.sh %data`：crond 跑的是 backup.sh 且把 data 喂给 stdin。
+    // 复现时把整行交给 shell，跑出来的就是另一件事。
+    const launches: Array<{ command: string; stdin?: string }> = [];
+    const adapter = createCrontabAdapter({
+      exec: async () => ({
+        stdout: '0 4 * * * /opt/bin/backup.sh %payload\n',
+        failed: false,
+      }),
+      launch: async (execution) => {
+        launches.push({ command: execution.command, stdin: execution.stdin });
+      },
+    });
+    const [item] = await adapter.scan();
+    await adapter.run(item.id);
+    expect(launches).toEqual([{ command: '/opt/bin/backup.sh', stdin: 'payload\n' }]);
+  });
+
+  // 真起一次进程：生产的唯一路径就是 defaultLaunch，假 launch 只能证明参数被传对了，
+  // 证明不了进程真的按那套环境、那个工作目录、那段 stdin 起来了。
+  describe.skipIf(process.platform === 'win32')('「立即运行」真起进程', () => {
+    it('按给定的环境、工作目录与 stdin 起进程', async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'cron-run-'));
+      try {
+        // 写相对路径：文件落在 cwd 里，就证明工作目录真的是给定的那个
+        // （比对 $PWD 的字符串在不同 shell 下形态不同，不可靠）。
+        await defaultLaunch({
+          shell: '/bin/sh',
+          command: `printf '%s|%s' "$FOO" "$(cat)" > out.txt`,
+          env: { ...(process.env as Record<string, string>), FOO: 'bar' },
+          cwd: dir,
+          stdin: 'from-stdin',
+        });
+        expect(await readFile(join(dir, 'out.txt'), 'utf8')).toBe('bar|from-stdin');
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('任务不读 stdin 就退出时不产生未捕获异常', async () => {
+      // 实测：大块输入 + 立刻退出的子进程会写管道失败（EOF/EPIPE），
+      // 没接住就会变成主进程的未捕获异常。
+      const dir = await mkdtemp(join(tmpdir(), 'cron-run-'));
+      try {
+        await defaultLaunch({
+          shell: '/bin/sh',
+          command: 'exit 0',
+          env: { ...(process.env as Record<string, string>) },
+          cwd: dir,
+          stdin: 'x'.repeat(4 * 1024 * 1024),
+        });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
   });
 
   it('环境赋值按位置生效：只对它之后的条目有效', () => {
