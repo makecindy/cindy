@@ -1,0 +1,74 @@
+# 云端 Cindy：验收结果与剩余缺口
+
+截至 2026-11-27。云端 Cindy 使用全新资料、单独登录。桌面和手机通过 Device Link 把它当作
+另一台电脑连接。推进顺序和各阶段的完成条件见[分阶段路线](headless-runtime-plan.md#分阶段路线2026-11-25-起)。
+
+## 阶段 1：自用实例验收
+
+2026-11-25 在一台 macOS 测试机上完成了自用实例验收。企业账号在终端发起登录，经浏览器确认后，
+后台加载了该账号的资料。准备好 Claude Code、Codex 和 Pi 后，手机连上云端 Cindy，以 Codex 和
+`auto` 模型新建任务，经 Cindy AI 网关实际收到回复。一次正常停止并重启，从停止到设备重新上线约
+26 秒，任务和消息均保留。
+
+测试机后来加了一个临时的 `launchd` 用户登录自启项。2026-11-26 强制终止服务进程后，设备约
+19 秒恢复在线。这是测试机的运维设置。macOS 的正式启动和生命周期仍在设计，见
+[服务生命周期](systemd.md#当前边界未完成项)。
+
+阶段 1 的完成标志仍要求在无图形 Linux 上首次登录、运行真实任务、由桌面和手机连入，并在重启后保留
+队列和历史。该验收尚未完成，企业云主机试点待做。
+
+## 阶段 2：首批已合入
+
+| PR | 现在可用的能力 |
+| --- | --- |
+| [#12690](https://github.com/makecindy/cindy/pull/12690) | 常规远程调用通过授权检查，但后台尚未挂对应处理器时，返回旧被控端已有的 `CHANNEL_NOT_ALLOWED` 回执。桌面和手机可沿用各自原有的降级逻辑。 |
+| [#12830](https://github.com/makecindy/cindy/pull/12830) | 同账号的桌面可以向云端 Cindy 派普通任务、追加消息、查目标机的项目和模型，并按完整任务 ID 读历史。macOS 实机验证了 Codex 任务创建、追加和历史读取。 |
+| [#12829](https://github.com/makecindy/cindy/pull/12829) | 云端设备补齐资源状态与 CPU、系统版本信息。后台缺引擎时明确记日志，并在写入前拒绝新建任务。企业 CLI 登录在未指定区域时同时查国内区、国际区，需消歧或只有一区可确认时给出提示。 |
+
+以上后台改动沿用已有协议，现有桌面和手机可继续连接，无需随后台升级。较早的客户端仍会使用
+各自版本的错误提示。
+
+## 剩余缺口
+
+按用户影响排序：
+
+1. **无图形 Linux 和企业云主机。** 尚缺真实服务器上的首次登录、双端连接、任务执行和重启恢复验收。
+2. **macOS 常驻。** 正式的登录自启、异常恢复及启停方式尚未交付。
+3. **伙伴任务。** 云端接收端只支持普通任务。向伙伴任务投递时，发送方收到「任务不存在」。见
+   [云端任务接收](../../apps/host/src/agent/session-handoff.ts)。
+4. **建任务后投递未确认。** 有明确失败回执时可以区分「任务已建，消息未送达」。部分在建任务后抛出的
+   异常仍返回「结果未知」，回执认领要等过期才释放。遇到这种结果，先查原任务的历史和队列，避免重复
+   创建。见[投递与回执结算](../../apps/desktop/src/main/maker-ipc/sessionHandoffCore.ts)。
+5. **缺引擎的提示。** 当前手机沿用「电脑端组件尚未就绪」提示。完全没装引擎时，等待或重启无法解决；
+   桌面从远程电脑新建任务时仍显示原始英文。见 [#12829 的后续项](https://github.com/makecindy/cindy/pull/12829)。
+6. **模型可用性。** 目录列表并不能保证当前账号能调用其中每个模型。实机验收中，一个目录列出的
+   Anthropic 模型可以选中并建任务，但执行时被网关以无权限拒绝。见
+   [#12830 的手工验证](https://github.com/makecindy/cindy/pull/12830)。
+7. **断链后的可靠帧。** macOS 自用验收时，一个已断开的设备每分钟记录一次
+   `abandoning … stalled reliable frame(s)`，重启后未再出现，重复触发的原因待查。当前代码在
+   发送路径中放弃停滞超过阈值的积压帧。见 [Device Link 发送路径](../../packages/device-link/src/client.ts)。
+8. **手机的模型组提示。** 云端不支持模型组时，手机选择器隐藏该分段，没有显示「不支持」。
+   见[手机通道降级](../../apps/mobile/src/device-link/mobileMakerTransport.ts)和
+   [模型选择器](../../apps/mobile/src/session/UnifiedModelPickerSheet.tsx)。
+9. **默认设备名。** 后台默认使用主机名加「Cindy Host」。当前可用 `CINDY_HOST_DEVICE_NAME`
+   覆盖，见[设备信息采集](../../apps/host/src/platform/machine-status.ts)。
+10. **个人账号 CLI 登录。** 个人登录只支持可用的浏览器登录方式。服务器提供多个方式时须显式传
+    `--method`，只有一个时会直接选用。见[登录方式选择](../../apps/host/src/auth/login.mjs)。
+
+## 从源码验收时的准备
+
+- **引擎。** 源码检出可能没有随包引擎，后台不会从 `PATH` 找替代程序。先运行
+  `node scripts/ensure-agent-binaries.mjs --kinds=claude,codex,ripgrep,pi --platform=current`。
+  如果启动后 `/api/agents` 为空，先检查引擎文件和启动日志。
+- **SQLite 扩展。** 源码检出中的 `vec0` 可能仍是 Git LFS 占位文件。运行前先用
+  `git lfs pull` 取回当前平台的实际文件，避免迁移报 `no such module: vec0`。
+- **进程环境。** 验收脚本用 `env -i` 启动，只传所需的运行环境和测试资料目录，避免继承日常
+  shell 的区域、凭据或开发配置覆盖。
+- **持久目录。** 把服务使用的代码和资料放在重启后仍保留的位置。2026-11-26 的一次 macOS
+  重启清掉了 `/private/tmp` 里的测试代码，服务无法从原位置恢复。
+- **macOS 凭据。** 从源码运行时，原生凭据编解码经 Electron 辅助进程调用系统安全存储，
+  使用测试资料目录的凭据身份解析。安装了 Electron 的 npm 包也要确认其二进制已就位。
+  跳过二进制下载的工作区可能缺少 `path.txt` 和 `dist`，源码入口不会在启动时补下载。见
+  [凭据编解码](../../apps/host/src/credentials/native-codec.mjs)、
+  [源码 Electron 路径解析](../../apps/host/src/runtime-layout.mjs)和
+  [本机依赖准备](owned-machine-verification.md)。
