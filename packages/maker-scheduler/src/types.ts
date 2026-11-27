@@ -396,6 +396,8 @@ export interface Schedule {
   createdAt: number;
   updatedAt: number;
   lastFiredAt?: number;
+  /** Persistent generation of the schedule used to distinguish replan receipts across instances. */
+  scheduleRevision?: number;
   /** 上一次终态完成（success/failed/aborted）的时间戳。从未跑完过 = undefined。 */
   lastFinishedAt?: number;
   nextFireAt?: number;

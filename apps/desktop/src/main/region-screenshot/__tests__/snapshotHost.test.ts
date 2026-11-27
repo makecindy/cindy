@@ -1,15 +1,33 @@
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
+import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ spawn: vi.fn() }));
-vi.mock('electron', () => ({ app: { isPackaged: true } }));
+const mocks = vi.hoisted(() => ({
+  spawn: vi.fn(),
+  execFileAsync: vi.fn(),
+  app: {
+    isPackaged: true,
+    getAppPath: vi.fn(() => '/app'),
+    getPath: vi.fn(() => '/user-data'),
+  },
+  fs: {
+    readFile: vi.fn(),
+    access: vi.fn(),
+    mkdir: vi.fn(),
+    copyFile: vi.fn(),
+    rename: vi.fn(),
+  },
+}));
+vi.mock('electron', () => ({ app: mocks.app }));
 vi.mock('node:child_process', async (original) => ({
   ...(await original<typeof import('node:child_process')>()),
   spawn: mocks.spawn,
+  execFile: Object.assign(vi.fn(), { [promisify.custom]: mocks.execFileAsync }),
 }));
+vi.mock('node:fs/promises', () => ({ default: mocks.fs }));
 vi.mock('../../logger', () => ({ createLogger: () => ({ warn: vi.fn() }) }));
-import { SnapshotHelper } from '../snapshotHost';
+import { resetDevSnapshotBinaryCacheForTest, resolveSnapshotBinary, SnapshotHelper } from '../snapshotHost';
 
 // 测试价值：真实 SnapshotHelper 请求入口在管道断开/超时时降级，不让 Cindy 崩溃。
 // 原先没有 helper 覆盖；最小失败输入是 stdin error 事件，unit 使用内存流和假时钟。
@@ -248,5 +266,53 @@ describe('snapshot helper failure isolation', () => {
     await expect(frame).resolves.toBeNull();
     child.stdout.emit('data', Buffer.alloc(8, 255));
     await expect(helper.windows()).resolves.toEqual([]);
+  });
+
+  // 测试价值：Dev 源码模式首次截图通过 resolveSnapshotBinary(false) 启动原生 helper，
+  // 已有按源码指纹缓存的二进制时必须首次即命中，不得因异步 fs.access 尚未完成而返回 null
+  // 导致首帧回退 Electron 抓屏（HDR 偏白回归）；缓存缺失时仍须立即返回 null 不阻塞于
+  // 后台编译，并在编译完成后命中。现有测试全部跑在 isPackaged=true，零覆盖源码缓存分支；
+  // 最小失败输入为 isPackaged=false + waitForBuild=false + 缓存命中/缺失。
+  // tier: unit，内存 fs/exec mock，无真实 I/O 或等待。
+  it('returns an already-cached dev binary on the first non-blocking resolve without rebuilding', async () => {
+    resetDevSnapshotBinaryCacheForTest();
+    mocks.app.isPackaged = false;
+    mocks.fs.readFile.mockResolvedValue(Buffer.from('source'));
+    mocks.fs.access.mockResolvedValue(undefined);
+    mocks.execFileAsync.mockReset();
+    try {
+      const binary = await resolveSnapshotBinary(false);
+      expect(binary).toContain('region-screenshot');
+      expect(mocks.execFileAsync).not.toHaveBeenCalled();
+    } finally {
+      mocks.app.isPackaged = true;
+      resetDevSnapshotBinaryCacheForTest();
+    }
+  });
+
+  it('does not block on a cold dev build when waitForBuild is false, then serves the built binary', async () => {
+    resetDevSnapshotBinaryCacheForTest();
+    mocks.app.isPackaged = false;
+    mocks.fs.readFile.mockResolvedValue(Buffer.from('source'));
+    mocks.fs.access.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+    mocks.fs.mkdir.mockResolvedValue(undefined);
+    mocks.fs.copyFile.mockResolvedValue(undefined);
+    mocks.fs.rename.mockResolvedValue(undefined);
+    let finishBuild!: () => void;
+    mocks.execFileAsync.mockReset().mockImplementation(
+      () => new Promise<void>((resolve) => { finishBuild = resolve; }),
+    );
+    try {
+      await expect(resolveSnapshotBinary(false)).resolves.toBeNull();
+      const pendingBuild = resolveSnapshotBinary(true);
+      finishBuild();
+      const built = await pendingBuild;
+      expect(built).toContain('region-screenshot');
+      await expect(resolveSnapshotBinary(false)).resolves.toBe(built);
+      expect(mocks.execFileAsync).toHaveBeenCalledTimes(1);
+    } finally {
+      mocks.app.isPackaged = true;
+      resetDevSnapshotBinaryCacheForTest();
+    }
   });
 });

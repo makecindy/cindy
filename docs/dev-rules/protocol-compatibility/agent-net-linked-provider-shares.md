@@ -63,27 +63,36 @@ Device Link，分享者不再签新的放行证，旧的 30 分钟内失效。
 
 - 受邀者每次拉到收到的分享列表（约每分钟）时只做本机判断；对同区域、分享者在线、仍是 V1、两边条件满足的分享，
   一次只问一个分享者。不发起的情况：本机 Agent-Net 关着、走自建中转、开了「仅使用 Agent-Net」（V1 分享本来就不可用）、
-  分享是 V2、跨区域。冷却：分享者是旧版本（`CHANNEL_NOT_ALLOWED`）、服务不支持或给出本机不接受的线路时 12 小时；
-  分享者没开 Agent-Net 或临时失败时 30 分钟。冷却只在内存，重启后最多再问一次。
+  分享是 V2、跨区域。冷却：统一 30 分钟；当监测到分享者离线后重新上线（如重启完成版本升级，两次探测至少间隔 1 分钟）时，
+  立即清除该分享的内存冷却并重新发起登记。
 - 受邀者只接受与自己同一个官方 Agent-Net 服务、同一区域、`account:` 网络、就是这个分享那台电脑的线路。第一版不支持
   自建中转与私有网络，那些分享照旧走 Device Link。
 - 换线路后，这个分享的会话（建链、调用、推送）经 `agentNetSharing.ts` 的会话选路使用它自己的 Agent-Net 连接，附件经
-  `agentNetMedia.ts` 走 Agent-Net 加密附件。附件跟着控制链路实际走的那条路（受邀者看 `outboundOnSession`，分享者看
-  `ownsInbound`，`index.ts` 装上）：会话层规定链路中途不换路，正在使用、已经开在 Device Link 上的链路要等它结束，下一次
-  建链才到会话上，在那之前消息和附件都留在 Device Link；连接没起来或断开时两者一起回 Device Link，不会出现一半走一边。分享被暂停、退出、成员变化时丢掉记录；服务端拒绝（400/403/404）立即退回并冷却 12 小时，
-  连续 3 次拿不到放行证退回并冷却 30 分钟。
+  `agentNetMedia.ts` 走 Agent-Net 加密附件。附件跟着控制链路实际走的那条路（受邀者看 `outboundOnSession`，分享者与执行机看
+  `ownsInbound`，`index.ts` 装上）：会话层规定链路中途不换路，正在使用、仍有在途请求或待发队列的旧 Device Link 链路不打断；
+  一旦旧链路空闲（无在途请求、无待发队列、无出站订阅），下一次 `openLink` 或后台请求自动拨通并切到 Agent-Net 会话。
+  连接没起来或断开时两者一起回 Device Link，不会出现一半走一边。分享被暂停、退出、成员变化时丢掉记录；服务端拒绝（400/403/404）
+  立即退回并冷却 30 分钟，连续 3 次拿不到放行证退回并冷却 30 分钟。
+- **供应商组内同账号执行机（2026-11-27）**：`maker:remote-agent:v1` 的 `caps`、`allocate`、`standby-prepare` 增量带可选
+  `linkedShareExecutor?: true`，`delegate`（`grant`）增量带可选 `linkedShareAgentNet?: true`。当受邀端已建好该分享的 Agent-Net
+  连接、组主机持有该受邀端的有效 Agent-Net 放行证、且目标执行机声明 `linkedShareExecutor: true` 并此刻在本账号 Agent-Net 上在线时，
+  组主机直接通过既有 `GET/POST /api/agent-net/grants` 把执行机设备证书签入 `Delegation.executors`（无需服务端额外发版）；
+  执行机按主人签名的 `Delegation.executors` 核验准入与双向加密附件，**不把旧 V1 分享钉入原生 V2 路由表**，使同一分享中未升级或
+  关闭 Agent-Net 的其他成员仍可经 Device Link 连到同一台执行机。任一端为旧版或执行机未开 Agent-Net 时，单次分配自动照旧走 V1 委托。
 - 与「已知对端支持 Agent-Net 就不明文降级」的关系：这里退回的是这个分享原本就合法的 V1 线路（与跨账号会话层
   「对方是旧版或连不上时照旧走 Device Link」的先例一致），不是把 V2 资源降到兼容线路。
 
 ## 混版本与发布
 
-| 受邀者 | 分享者 | Agent-Net 服务 | 结果 |
+| 受邀者 | 分享者 / 执行机 | Agent-Net 服务 | 结果 |
 | --- | --- | --- | --- |
-| 新 | 新 | 新（声明 `linked-provider-shares-v1`） | 换到 Agent-Net |
-| 新 | 新 | 旧（未声明） | 分享者回 `relay-unsupported`，照旧 Device Link，12 小时后再问 |
-| 新 | 旧 | 任意 | 分享者回 `CHANNEL_NOT_ALLOWED`，照旧 Device Link，12 小时后再问 |
+| 新 | 新 | 新（声明 `linked-provider-shares-v1`） | 组主机与组内执行机均换到 Agent-Net |
+| 新 | 组主机新、执行机旧 | 新 | 组主机走 Agent-Net，旧执行机按能力协商照旧走 Device Link |
+| 旧（含仅支持主机换线的初版） | 新 | 新 | 未带 `linkedShareExecutor` 的受邀者对执行机照旧走 V1 委托，不中断 |
+| 新 | 新 | 旧（未声明） | 分享者回 `relay-unsupported`，照旧 Device Link，30 分钟后再问 |
+| 新 | 旧 | 任意 | 分享者回 `CHANNEL_NOT_ALLOWED`，照旧 Device Link，30 分钟或对方重连后再问 |
 | 旧 | 任意 | 任意 | 不发请求，照旧 Device Link |
-| 任意 | 任意 | 新，但一方关 Agent-Net | 不换线路；已换的随开关重建后退回 Device Link |
+| 任意 | 任意 | 新，但一方关 Agent-Net | 不换线路；仅单台执行机关开关时只该台回退 Device Link |
 
 发布顺序：先部署支持 `linked-provider-shares-v1` 的官方 Agent-Net 服务，再发客户端；客户端先发也没有副作用。
 

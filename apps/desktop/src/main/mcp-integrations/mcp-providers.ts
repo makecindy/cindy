@@ -5,7 +5,7 @@ import { readSubscriptionSessionAccount, readSubscriptionUsage } from '../subscr
 import { resolveSubscriptionPoolProvider } from '../subscription-accounts/placement.js';
 import { SUBSCRIPTION_ACCOUNTS_CHANNEL } from '../../shared/subscriptionAccounts.js';
 import { pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
-import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
+import { dbToMakerAgentKind, isPluginEngineKind } from '../../shared/agentKindConversion.js';
 import { getSessionRuntimeControlSnapshot } from '../maker-ipc/sessionRuntimeControl.js';
 import { pluginEngineDescriptors } from '../maker-ipc/pluginEnginesIpc.js';
 import { isDisallowedPluginEngineDeviceId } from '../maker-ipc/pluginEngineSessionAdmission.js';
@@ -826,7 +826,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           return readSessionQuota(sessionId, {
             readRoute: async id => {
               const row = await getSessionRowSnapshotStrict(id);
-              if (!row) return null;
+              if (!row || isPluginEngineKind(row.agentKind)) return null;
               const kind = dbToMakerAgentKind(row.agentKind);
               const override = getSessionRuntimeControlSnapshot(id).effectiveOverride;
               if (override && (override.agentKind !== kind

@@ -101,6 +101,11 @@ function currentMembership(): AgentNetMembership | null {
 }
 /** 装上本账号 Device Link 设备列表的读取（官方服务，设备号与平台）。 */
 export function useDeviceLinkDeviceList(read: () => Promise<readonly DeviceLinkListedDevice[] | null>): void { deviceLinkDeviceList = read; }
+/** 在异步读之前建立当前账号／网络的成员状态，避免首次结果早于延迟初始化的 resetAt 而被丢弃。 */
+export function agentNetStartDeviceLinkRead(): number {
+  currentMembership();
+  return Date.now();
+}
 /** 刚读到的官方 Device Link 设备列表（设备列表界面、上线补名字），顺带用来判断哪些设备删掉了、有哪些手机。 */
 export function agentNetNoteDeviceLinkDevices(devices: readonly DeviceLinkListedDevice[], startedAt: number): void {
   const members = currentMembership();
@@ -239,8 +244,17 @@ export function agentNetPeerRoute(peer: string): { path: 'direct' | 'relay' | nu
  * 第一次建链之前先连上对方电脑，让会话赶在第一条消息之前建好（PortableSocket.connectSession）：受邀者第一次用分享，
  * 或同账号的电脑此刻在线、连接还没建。
  */
-export function connectAgentNetSessionPeer(peer: string): Promise<boolean> {
-  return sessionSocket(peer)?.connectSession?.(peer) ?? Promise.resolve(false);
+export async function connectAgentNetSessionPeer(peer: string): Promise<boolean> {
+  const socket = sessionSocket(peer);
+  if (!socket?.connectSession) return false;
+  if (isScopedPeer(peer) && !socket.scopedPeerTarget(peer)) {
+    const deadline = performance.now() + 1500;
+    while (performance.now() < deadline && sessionSocket(peer) === socket && !socket.scopedPeerTarget(peer)) {
+      await new Promise<void>((resolve) => { const t = setTimeout(resolve, 25); t.unref?.(); });
+    }
+    if (sessionSocket(peer) !== socket) return false;
+  }
+  return socket.connectSession(peer);
 }
 /**
  * 这个对端在本机 Agent-Net 上的状态（AgentNetSessionLinksOptions.agentNetPeer）。同步，用 worker 最近一次报的状态；
@@ -472,6 +486,15 @@ export function setAgentNetPeerPathPreference(deviceId: string, preference: Path
   pathChanged();
 }
 export function currentAgentNetScopedTarget(peer: string) { return current?.scopedPeerTarget(peer) ?? null; }
+/** Certified same-account peer currently online on Agent-Net, suitable for signing an executor grant. */
+export function currentAgentNetExecutorCertificate(deviceId: string): DeviceCertificate | null {
+  if (!current || !isAgentNetActive() || !current.supports(deviceId)) return null;
+  const certificate = current.certificateFor(deviceId), api = currentAgentNetClient();
+  return certificate && api && !api.delegation && certificate.deviceId === deviceId
+    && certificate.deviceId !== api.identity.deviceId && certificate.networkId === api.certificate.networkId
+    && certificate.subject === api.certificate.subject && verifyCertificate(api.rootPublicKey, certificate)
+    ? certificate : null;
+}
 export function agentNetMediaTarget(peer: string) {
   if (!current?.knowsPeer(peer)) return null;
   const api = currentAgentNetClient(), certificate = current.certificateFor(peer);

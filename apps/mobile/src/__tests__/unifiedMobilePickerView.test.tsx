@@ -642,7 +642,8 @@ it.each([['Android', UnifiedModelPickerView], ['iOS', IosModelPickerView]] as co
     expect(host.textContent).toContain('24%');
     expect(host.textContent).toContain('1h · 57%');
     expect(host.textContent).toContain('4d · 24%');
-    expect(host.textContent).toContain('64% · 2h');
+    // A single-pool engine keeps the weekly-first header value (reset details come from quota.reset).
+    expect(host.textContent).toContain('64%');
   },
 );
 

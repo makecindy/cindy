@@ -9355,6 +9355,256 @@ it('keeps internal routine schedules out of public management while retaining ho
   await h.scheduler.stop();
 });
 
+describe('interval phase preservation and pr-status watch concurrency guard', () => {
+  // 测试价值：
+  // - 防退化点：重启/休眠恢复时把过期 interval 任务统一重排到 now+intervalMs，或积压排空后按 finishedAt+intervalMs
+  //   重排，会把原本错开的数十条 PR 心跳坍缩进同一秒形成惊群。
+  // - 触发条件：3 条创建时间错开的 5 分钟 interval 任务先后经历 (1) 离线 1 小时后 start() 恢复；
+  //   (2) 已被旧逻辑坍缩到同一过期时刻后集中排空（延迟 >= 30s 且快速跳过收口）。
+  // - 生产入口与可观察结果：Scheduler.start() 与 Scheduler.tick()，断言落库的 nextFireAt 各自保持原始错开相位，
+  //   而按时触发或长耗时 run 仍保持 finishedAt + intervalMs 语义。
+  // - 依赖策略：FakeClock + InMemoryScheduleStorage，无真实定时器等待（unit tier）。
+  // - 对应规则或根因：线上 68 条 PR 心跳 nextFireAt 坍缩到 60 秒窗口引发并发限流。
+  it('preserves staggered intervalMs phases across restart recovery and overdue backlog drain', async () => {
+    const intervalMs = 5 * 60_000;
+    const baseCreated = Date.UTC(2026, 0, 1, 0, 0, 0);
+    const offsets = [10_000, 110_000, 210_000];
+    const local = makeHarness({ runnerImpl: async () => ({ sessionId: '', skipped: true }) });
+
+    for (let i = 0; i < offsets.length; i += 1) {
+      const createdAt = baseCreated + offsets[i]!;
+      local.storage.schedules.set(`pr-${i}`, {
+        id: `pr-${i}`,
+        name: `PR #${i}`,
+        prompt: 'p',
+        kind: 'cron',
+        cronExpr: '*/5 * * * *',
+        intervalMs,
+        timezone: 'UTC',
+        recurring: true,
+        manual: false,
+        agentKind: 'claude-code',
+        workspaceKind: 'project',
+        useWorktree: false,
+        notify: { desktop: false, feishu: false },
+        status: 'active',
+        createdAt,
+        updatedAt: createdAt,
+        lastFinishedAt: Date.UTC(2026, 0, 1, 1, 0, 0),
+        nextFireAt: Date.UTC(2026, 0, 1, 1, 5, 0),
+      });
+    }
+
+    // 1. Restart 1 hour later: overdue schedules must land on their distinct createdAt phases in (now, now + 5m].
+    const restartAt = Date.UTC(2026, 0, 1, 2, 0, 0);
+    local.clock.setTo(restartAt);
+    await local.scheduler.start();
+    const afterRestart = await Promise.all([0, 1, 2].map((i) => local.storage.get(`pr-${i}`)));
+    expect(afterRestart.map((s) => s?.nextFireAt)).toEqual([
+      restartAt + 10_000,
+      restartAt + 110_000,
+      restartAt + 210_000,
+    ]);
+    await local.scheduler.stop();
+
+    // 2. Simulate pre-existing clumped schedules draining late (+60s overdue): fast finishes re-stagger
+    // back to each schedule's createdAt phase at least intervalMs/2 ahead.
+    const clumpedDueAt = Date.UTC(2026, 0, 1, 3, 0, 0);
+    for (let i = 0; i < offsets.length; i += 1) {
+      await local.storage.update(`pr-${i}`, {
+        lastFinishedAt: clumpedDueAt - intervalMs,
+        nextFireAt: clumpedDueAt,
+      });
+    }
+    // Start 10s before clumpedDueAt so the future planned fire is preserved, then jump +60s past it
+    // (simulating wake/concurrency backlog) and drain via tick().
+    local.clock.setTo(clumpedDueAt - 10_000);
+    await local.scheduler.start();
+    const drainAt = clumpedDueAt + 60_000;
+    local.clock.setTo(drainAt);
+    await local.scheduler.tick();
+    const afterDrain = await Promise.all([0, 1, 2].map((i) => local.storage.get(`pr-${i}`)));
+    // Each nextFireAt must be in (drainAt + 2.5m, drainAt + 7.5m] and preserve createdAt % intervalMs.
+    for (let i = 0; i < offsets.length; i += 1) {
+      const next = afterDrain[i]!.nextFireAt!;
+      expect(next).toBeGreaterThan(drainAt + intervalMs / 2);
+      expect(next).toBeLessThanOrEqual(drainAt + intervalMs * 1.5);
+      expect((next - (baseCreated + offsets[i]!)) % intervalMs).toBe(0);
+    }
+    expect(new Set(afterDrain.map((s) => s!.nextFireAt! % intervalMs)).size).toBe(3);
+    await local.scheduler.stop();
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：Scheduler.start() 恢复刚经历积压排空打散的 interval 任务时，持久化 nextFireAt 保持错开相位。
+  // - Bug／规则依据：PR #13403 Greptile P2（discussion_r4715536397）—— 积压排空后所有任务共享相近 lastFinishedAt，
+  //   在一个 interval 内重启时 computeNextFireAt() 按 lastFinishedAt + intervalMs 覆盖已保存的错开 nextFireAt，导致再次集中。
+  // - 现有覆盖缺口：上一条用例仅覆盖离线 1 小时后重启与积压排空本身，未覆盖「排空打散后立即重启」「部分任务错过相位但仍在 lastFinishedAt+N 内重启」及「超界异常 nextFireAt 兜底」。
+  // - 最小失败输入：3 条错开创建的 5 分钟 interval 任务在 clumpedDueAt+60s 集中排空，随后在 +10s 与 +270s 分别重启。
+  // - tier：unit（FakeClock + InMemoryStorage，零真实等待）。
+  it('retains staggered nextFireAt across immediate and partial-miss restarts after backlog drain', async () => {
+    const intervalMs = 5 * 60_000;
+    const baseCreated = Date.UTC(2026, 0, 1, 0, 0, 0);
+    const offsets = [10_000, 110_000, 210_000];
+    const storage = new InMemoryStorage();
+    const clock = new FakeClock();
+    const clumpedDueAt = Date.UTC(2026, 0, 1, 3, 0, 0);
+
+    for (let i = 0; i < offsets.length; i += 1) {
+      const createdAt = baseCreated + offsets[i]!;
+      storage.schedules.set(`pr-${i}`, {
+        id: `pr-${i}`,
+        name: `PR #${i}`,
+        prompt: 'p',
+        kind: 'cron',
+        cronExpr: '*/5 * * * *',
+        intervalMs,
+        timezone: 'UTC',
+        recurring: true,
+        manual: false,
+        agentKind: 'claude-code',
+        workspaceKind: 'project',
+        useWorktree: false,
+        notify: { desktop: false, feishu: false },
+        status: 'active',
+        createdAt,
+        updatedAt: createdAt,
+        lastFinishedAt: clumpedDueAt - intervalMs,
+        nextFireAt: clumpedDueAt,
+      });
+    }
+
+    // Drain overdue (+60s) so all 3 share lastFinishedAt === drainAt while persisting staggered nextFireAt:
+    // pr-0 = 03:05:10 (< lastFinishedAt + 5m), pr-1 = 03:06:50 (> +5m), pr-2 = 03:08:30 (=== +7.5m).
+    const first = makeHarness({
+      storage,
+      clock,
+      runnerImpl: async () => ({ sessionId: '', skipped: true }),
+    });
+    clock.setTo(clumpedDueAt - 10_000);
+    await first.scheduler.start();
+    const drainAt = clumpedDueAt + 60_000; // 03:01:00
+    clock.setTo(drainAt);
+    await first.scheduler.tick();
+    const drainedNext = (await Promise.all([0, 1, 2].map((i) => storage.get(`pr-${i}`)))).map(
+      (s) => s!.nextFireAt!,
+    );
+    expect(drainedNext).toEqual([
+      Date.UTC(2026, 0, 1, 3, 5, 10),
+      Date.UTC(2026, 0, 1, 3, 6, 50),
+      Date.UTC(2026, 0, 1, 3, 8, 30),
+    ]);
+    await first.scheduler.stop();
+
+    // 1. Restart 10s later (well within lastFinishedAt + intervalMs = 03:06:00):
+    //    must preserve all 3 staggered slots instead of collapsing to 03:06:00.
+    clock.setTo(drainAt + 10_000); // 03:01:10
+    const immediateRestart = makeHarness({ storage, clock });
+    await immediateRestart.scheduler.start();
+    const afterImmediate = (await Promise.all([0, 1, 2].map((i) => storage.get(`pr-${i}`)))).map(
+      (s) => s!.nextFireAt!,
+    );
+    expect(afterImmediate).toEqual(drainedNext);
+    await immediateRestart.scheduler.stop();
+
+    // 2. Restart at 03:05:30 (after pr-0's 03:05:10, still before lastFinishedAt + 5m = 03:06:00):
+    //    pr-0 missed its staggered slot and must advance on its :10 createdAt phase (03:10:10),
+    //    not snap to 03:06:00; pr-1 and pr-2 keep their future slots untouched.
+    clock.setTo(Date.UTC(2026, 0, 1, 3, 5, 30));
+    const partialMissRestart = makeHarness({ storage, clock });
+    await partialMissRestart.scheduler.start();
+    const afterPartialMiss = (await Promise.all([0, 1, 2].map((i) => storage.get(`pr-${i}`)))).map(
+      (s) => s!.nextFireAt!,
+    );
+    expect(afterPartialMiss).toEqual([
+      Date.UTC(2026, 0, 1, 3, 10, 10),
+      Date.UTC(2026, 0, 1, 3, 6, 50),
+      Date.UTC(2026, 0, 1, 3, 8, 30),
+    ]);
+    await partialMissRestart.scheduler.stop();
+
+    // 3. Corrupted far-future nextFireAt (> now + 1.5 * intervalMs) is NOT blindly preserved.
+    await storage.update('pr-0', { nextFireAt: Date.UTC(2026, 0, 2, 0, 0, 0) });
+    clock.setTo(Date.UTC(2026, 0, 1, 3, 12, 0));
+    const clampedRestart = makeHarness({ storage, clock });
+    await clampedRestart.scheduler.start();
+    expect((await storage.get('pr-0'))?.nextFireAt).toBe(Date.UTC(2026, 0, 1, 3, 15, 10));
+    await clampedRestart.scheduler.stop();
+  });
+
+  // 测试价值：
+  // - 防退化点：runNow 仅对 webhook 做了同步并发闸门检查，pr-status 自动唤醒并发到达时会绕过 maxConcurrentRuns
+  //   一次放出几十个 pre-run hook。
+  // - 触发条件：maxConcurrentRuns=2 下，同时对 4 条任务发起 deferToCaller + trigger.source='pr-status' 的 runNow，
+  //   随后发起 1 条手动 runNow 验证用户显式触发仍不受阻塞。
+  // - 生产入口与可观察结果：Scheduler.runNow，断言仅放行 2 条 pr-status、其余 2 条同步返回 deferred=true，
+  //   槽位释放后可继续放行，且手动 runNow 仍立即执行。
+  // - 依赖策略：FakeClock + 可控门闩 runner，零真实等待（unit tier）。
+  // - 对应规则或根因：PrFollowWatch 积压回放绕过并发上限引发限流风暴。
+  it('enforces maxConcurrentRuns synchronously for automatic pr-status watch runNow without blocking manual runs', async () => {
+    const releases: Array<() => void> = [];
+    let active = 0;
+    let peak = 0;
+    const local = makeHarness({
+      maxConcurrentRuns: 2,
+      runnerImpl: async () => {
+        active += 1;
+        peak = Math.max(peak, active);
+        await new Promise<void>((resolve) => {
+          releases.push(() => {
+            active -= 1;
+            resolve();
+          });
+        });
+        return { sessionId: 's' };
+      },
+    });
+    const schedules = await Promise.all(
+      [1, 2, 3, 4].map((n) =>
+        local.scheduler.create({
+          ...baseInput,
+          name: `PR #${n}`,
+          prTrigger: { url: `https://github.com/acme/repo/pull/${n}`, change: 'any' },
+        }),
+      ),
+    );
+    const prRun = (s: typeof schedules[number]) =>
+      local.scheduler.runNow(s.id, {
+        deferToCaller: true,
+        trigger: { kind: 'watch', source: 'pr-status', detail: s.prTrigger!.url },
+      });
+
+    const p1 = prRun(schedules[0]!);
+    const p2 = prRun(schedules[1]!);
+    const p3 = await prRun(schedules[2]!);
+    const p4 = await prRun(schedules[3]!);
+    // Same-schedule duplicate while in flight must also defer synchronously.
+    const dup = await prRun(schedules[0]!);
+
+    expect(p3.deferred).toBe(true);
+    expect(p4.deferred).toBe(true);
+    expect(dup.deferred).toBe(true);
+    await vi.waitFor(() => expect(releases).toHaveLength(2));
+    expect(peak).toBe(2);
+
+    // Manual runNow (no webhook, no pr-status watch trigger) still bypasses the automatic cap.
+    const manual = local.scheduler.runNow(schedules[2]!.id);
+    await vi.waitFor(() => expect(releases).toHaveLength(3));
+    expect(peak).toBe(3);
+
+    while (releases.length > 0) releases.shift()!();
+    await Promise.all([p1, p2, manual]);
+
+    // After slots free up, previously deferred pr-status watch runs succeed.
+    const retry = prRun(schedules[3]!);
+    await vi.waitFor(() => expect(releases).toHaveLength(1));
+    releases.shift()!();
+    const retryResult = await retry;
+    expect(retryResult.deferred).toBeUndefined();
+    expect(retryResult.runId).toBeTruthy();
+  });
+});
+
 describe('transient precheck failures stay quiet for 24h and escalate after', () => {
   const baseHook = {
     status: 'failed' as const,

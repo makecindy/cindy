@@ -1948,6 +1948,42 @@ describe('background tool_result persistence', () => {
     );
   });
 
+  // #13001: ACP `plan` / `plan_update` emits a display-only `update_plan` tool_use with
+  // `runtimeActivity: 'snapshot'` and no matching tool_result. Retaining it in
+  // `backgroundTurnPersistStatesBySession` leaks one snapshot per turn that updates a plan.
+  // Coverage gap: adjacent ACP test only covers a real unfinished tool call (`git commit`).
+  // Minimal failing input: ACP turn emits a snapshot `update_plan` then ends via
+  // `preserveTurnPersistStateForBackground` + `resetTurnPersistState`.
+  // tier: unit (in-memory persist broadcaster).
+  it('does not retain background persist state for display-only snapshot tool_use events', async () => {
+    const meta = { uuid: 'acp-plan-turn' };
+    noteSessionAgentKind(SESSION, 'acp');
+    noteAgentMeta(SESSION, meta);
+    onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'plan:acp-1-plan-1',
+        toolName: 'update_plan',
+        runtimeActivity: 'snapshot',
+        input: { plan: [{ step: 'Done', status: 'completed' }] },
+      },
+      meta,
+    );
+    preserveTurnPersistStateForBackground(SESSION);
+    resetTurnPersistState(SESSION);
+    await flushWrites();
+    vi.clearAllMocks();
+
+    const lateResult = onToolResultEvent(
+      SESSION,
+      { summary: SUMMARY, toolUseIds: ['plan:acp-1-plan-1'] },
+      null,
+      'background',
+    );
+    expect(lateResult).toBeNull();
+    expect(createMessage).not.toHaveBeenCalled();
+  });
+
   // Same review: a reply a plugin engine writes between turns has no done to commit it. Once its
   // final segment is committed (sessionEventStreamCore) the whole reply is written as one row.
   it('saves a plugin engine reply written between turns when its final segment is committed', async () => {
