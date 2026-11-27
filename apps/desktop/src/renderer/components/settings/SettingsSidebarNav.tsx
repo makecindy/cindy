@@ -19,7 +19,6 @@ import {
   Plug,
   Settings2,
   Sparkles,
-  Waypoints,
   Wrench,
   Users,
 } from 'lucide-react';
@@ -72,7 +71,7 @@ const TAB_ICON: Record<VisibleSettingsTab, SettingsNavIcon> = {
   usage: ChartColumn,
   personalization: Sparkles,
   providers: Boxes,
-  'model-groups': Waypoints,
+  'model-groups': Sparkles,
   'voice-input': Mic,
   shortcuts: Keyboard,
   'agent-island': AgentIslandNavIcon,

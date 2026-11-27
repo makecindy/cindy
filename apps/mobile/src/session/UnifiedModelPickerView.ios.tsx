@@ -37,7 +37,7 @@ import {
   Search,
   X,
   LayoutGrid,
-  Waypoints,
+  Sparkles,
 } from "lucide-react-native";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
@@ -385,6 +385,26 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
         </Section>
       ) : null}
       {favoritesGroup ? renderModelGroup(favoritesGroup) : null}
+      {/* 智能路由持续托管横幅(存在时置顶在路由区，可一键解除但保留当前模型)。 */}
+      {p.modelGroups?.managedMeta ? (
+        <Section>
+          <ComposerNativeRow
+            key="model-group-managed"
+            title={t("models.modelGroups.picker.managedBy", { name: p.modelGroups.managedMeta.routeName })}
+            subtitle={p.modelGroups.onDetach ? t("models.modelGroups.picker.detach") : undefined}
+            leading={
+              <RNHostView matchContents>
+                <View style={{ width: 28, height: 28, justifyContent: "center" }}>
+                  <Waypoints color={colors.textSecondary} size={iconSize.action} />
+                </View>
+              </RNHostView>
+            }
+            disabled={p.busy || !p.modelGroups.onDetach}
+            onPress={() => p.modelGroups?.onDetach?.()}
+            testID={`${p.testID}.modelGroupDetach`}
+          />
+        </Section>
+      ) : null}
       {/* 模型组(被控电脑上的)：一段，列在收藏之后、插件引擎与内置模型之前；点了由被控电脑按组的规则选来源。 */}
       {p.modelGroups?.rows.length ? (
         <Section title={p.modelGroups.title}>
@@ -397,7 +417,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
               leading={
                 <RNHostView matchContents>
                   <View style={{ width: 28, height: 28, justifyContent: "center" }}>
-                    <Waypoints color={colors.textSecondary} size={iconSize.action} />
+                    <Sparkles color={colors.textSecondary} size={iconSize.action} />
                   </View>
                 </RNHostView>
               }

@@ -8779,6 +8779,8 @@
         "nodeRuntime": "同梱された Node プログラムをこのコンピューターで実行できます",
         "nodeMcp": "同梱された stdio MCP をこのコンピューターで実行できます",
         "nodeRuntimeDetail": "高リスク:あなたのユーザーアカウントと同じ権限で、ローカルファイルの読み書き、ネットワークアクセス、他のプログラムの起動ができます。Cindy のブラウザーサンドボックスでは隔離できません。",
+        "nodeInheritEnv": "ローカル環境を継承",
+        "nodeInheritEnvDetail": "高リスク: プラグインの Node プログラムとその子プロセスは、Cindy のすべての環境変数を受け取ります。プロキシや証明書の設定に加え、環境変数に含まれる API キーやトークンなどの機密情報も渡されます。",
         "nodeSecret": "保存済みの認証情報「{{name}}」をローカル Node プログラムに渡せます",
         "nodeSecretDetail": "Cindy は暗号化して保管し、以下で宣言された Worker メソッドの実行時だけ一時的に注入します。Node プログラムは平文を受け取り、ブラウザー側のプラグインコードや Agent パラメーターへ返したり、ログやファイルに保存したりできるため、信頼できるプラグインだけをインストールしてください。",
         "nodeResident": "Node プログラムをバックグラウンドで常駐実行できます",
@@ -19046,6 +19048,24 @@
         "reconnectFailed": "再接続できません。空き枠を確認して再試行してください。"
       },
       "pluginTitle": "プラグインイベントで実行"
+    },
+    "pause": {
+      "prBarTitle": "一時停止中の PR フォローアップ {{count}} 件",
+      "viewPaused": "表示",
+      "resumeAll": "すべて再開",
+      "cleanMerged": "マージ済みを整理",
+      "checking": "確認中…",
+      "resumeAllConfirmTitle": "一時停止中の PR フォローアップ {{count}} 件を再開しますか？",
+      "resumeAllConfirmDescription": "この表示にある一時停止中の PR 自動化をすべて再開し、次回の確認時刻を再計算します。",
+      "resumeAllConfirmAction": "すべて再開",
+      "resumeAllDone": "PR フォローアップ {{count}} 件を再開しました",
+      "resumeAllPartial": "PR フォローアップ {{resumed}} 件を再開しました（{{failed}} 件失敗）",
+      "noMergedFound": "一時停止中の PR 自動化にマージ済みまたはクローズ済みの PR はありません",
+      "cleanMergedConfirmTitle": "完了した PR 自動化 {{count}} 件を削除しますか？",
+      "cleanMergedConfirmDescription": "これらの一時停止中の自動化が追跡する PR はすでにマージ済みまたはクローズ済みです: {{names}}",
+      "cleanMergedConfirmAction": "削除",
+      "cleanMergedDone": "完了した PR 自動化 {{count}} 件を削除しました",
+      "checkFailed": "現在 PR の状態を確認できません"
     }
   },
   "issueTracker": {
@@ -23166,7 +23186,10 @@
       "chooseUnavailable": "「{{name}}」には今使えるソースがないため、選択しませんでした。",
       "mergedLabel_other": "{{name}} · ルート（ソース {{count}} 件）",
       "routeDecides": "このタスクで使うソースはルート「{{name}}」が決めます",
-      "quotaOf": "クォータ：{{name}}"
+      "quotaOf": "クォータ：{{name}}",
+      "managedBy": "「{{name}}」で継続管理中",
+      "detach": "管理を解除",
+      "detached": "スマートルーティングの管理を解除しました。現在のモデルを維持します。"
     },
     "why": {
       "expiringQuota": "残り {{left}}%、{{reset}} にリセットされるため先に使用",
@@ -23204,7 +23227,7 @@
       "newRoute": "ルートを作成",
       "newRouteName": "新しいルート",
       "routesEmpty": "ルートはまだありません。作成してソースをいくつか追加してください。",
-      "scopeNote": "スマートルーティングは、このコンピューターのタスクで使われます。新しいタスクは開始時にソースをひとつ決めます。進行中のタスクで選ぶと、その場で一度だけ切り替わり、その後は自動では変わりません。",
+      "scopeNote": "スマートルーティングはこのコンピューターや対応入口のタスクを継続的に管理します。開始時やタスク途中で選ぶと、各ターン送信前の可用性・クォータ確認、画像時のビジョン対応切替、キャッシュ保護、障害時の自動引き継ぎを行い、管理解除または個別モデル選択まで継続します。",
       "back": "スマートルーティングに戻る",
       "name": "名前",
       "nameHint": "モデル選択に表示される名前です。",
@@ -23332,6 +23355,11 @@
       "deviceDefaultReadOnly": "そのコンピューターを更新すると、ここでデフォルトモデルを変更できます。",
       "deviceUnavailable": "今はそのコンピューターのバディ設定を読み取れません。オンラインか確認してから開き直してください。",
       "deviceLoading": "そのコンピューターの設定を読み取っています…"
+    },
+    "turnSwitch": {
+      "preflightUnavailable": "現在のソースが利用不可または上限のため、送信前に自動で切り替えました",
+      "imageInput": "画像が含まれているため、画像対応ソースへ自動で切り替えました",
+      "cacheExpired": "キャッシュ有効期限が切れたため、ルート戦略でソースを再選択しました"
     }
   },
   "projectSettings": {

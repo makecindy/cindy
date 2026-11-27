@@ -23,16 +23,33 @@ function project(domain: ImSettingsDomain, snapshot: ReturnType<ReturnType<typeo
     return { status: 'unavailable', revision: null };
   }
   const scope = channel ? record(record(snapshot.value.channels)[channel]) : record(snapshot.value.global);
-  const pick = (value: ImDefaultSettings): Values => Object.fromEntries(Object.keys(additionalSettingsSchema(domain).shape).map(key => {
-    const agent = agents[key as keyof typeof agents];
-    const route = agent ? value.agents[agent] : null;
-    return [key, route ? { providerId: route.providerId, modelId: route.model, effort: route.effort } : value[key as 'agentKind' | 'permissionMode' | 'groupPermissionMode']];
-  }));
+  const pick = (value: ImDefaultSettings, includeOptionalModelGroup: boolean): Values => {
+    const out: Values = {};
+    for (const key of Object.keys(additionalSettingsSchema(domain).shape)) {
+      if (key === 'modelGroup') {
+        if (includeOptionalModelGroup && value.modelGroup) out.modelGroup = value.modelGroup;
+        continue;
+      }
+      const agent = agents[key as keyof typeof agents];
+      const route = agent ? value.agents[agent] : null;
+      out[key] = route
+        ? { providerId: route.providerId, modelId: route.model, effort: route.effort }
+        : value[key as 'agentKind' | 'permissionMode' | 'groupPermissionMode'];
+    }
+    return out;
+  };
   const customizedKeys = Object.keys(additionalSettingsSchema(domain).shape).filter(key => {
     const agent = agents[key as keyof typeof agents];
+    if (key === 'modelGroup') return Object.hasOwn(scope, 'modelGroup') && Boolean(scope.modelGroup);
     return agent ? Object.hasOwn(record(scope.agents), agent) : Object.hasOwn(scope, key) || key === 'groupPermissionMode' && Object.hasOwn(scope, 'groupCtrPermissionMode');
   });
-  return { ...snapshot, value: pick(effective), defaults: pick(channel ? defaults.channels[channel] : defaults.global), customizedKeys, isCustomized: customizedKeys.length > 0 };
+  return {
+    ...snapshot,
+    value: pick(effective, true),
+    defaults: pick(channel ? defaults.channels[channel] : defaults.global, false),
+    customizedKeys,
+    isCustomized: customizedKeys.length > 0,
+  };
 }
 export function inspectImSettings(domain: ImSettingsDomain): State {
   try {
@@ -45,7 +62,7 @@ export async function commitImSettings(domain: ImSettingsDomain, change: { set: 
   const routeChannel = channels[domain];
   // As on the settings page: before a channel's route default changes, older tasks still on the
   // old default get their follow records; a failed backfill blocks the save.
-  if (routeChannel && [...Object.keys(change.set), ...change.clear].some(key => key === 'agentKind' || Object.hasOwn(agents, key))) {
+  if (routeChannel && [...Object.keys(change.set), ...change.clear].some(key => key === 'agentKind' || key === 'modelGroup' || Object.hasOwn(agents, key))) {
     const { prepareImDefaultSettingsChange } = await import('../im/index.js');
     try { await prepareImDefaultSettingsChange(routeChannel); }
     catch { throw new HostSettingsError('SAVE_FAILED'); }
@@ -59,12 +76,33 @@ export async function commitImSettings(domain: ImSettingsDomain, change: { set: 
     const scopes = record(raw.channels);
     const scope = channel ? record(scopes[channel]) : record(raw.global);
     const routes = record(scope.agents);
+    const currentEffective = channel
+      ? interpretHostImDefaults(state.value).channels[channel]
+      : interpretHostImDefaults(state.value).global;
     for (const key of change.clear) {
       const agent = agents[key as keyof typeof agents];
       if (agent) delete routes[agent]; else delete scope[key];
       if (key === 'groupPermissionMode') delete scope.groupCtrPermissionMode;
     }
+    const clearedRoute = change.clear.some(key => key === 'agentKind' || Object.hasOwn(agents, key));
+    const touchesConcreteRoute =
+      (change.set.agentKind !== undefined && change.set.agentKind !== currentEffective.agentKind) ||
+      Object.entries(change.set).some(([key, value]) => {
+        const agent = agents[key as keyof typeof agents];
+        if (!agent) return false;
+        const route = value as Values;
+        const prev = currentEffective.agents[agent];
+        return route.modelId !== prev.model || (route.providerId ?? null) !== (prev.providerId ?? null);
+      });
+    if ((clearedRoute || touchesConcreteRoute) && !Object.hasOwn(change.set, 'modelGroup')) {
+      delete scope.modelGroup;
+    }
     for (const [key, value] of Object.entries(change.set)) {
+      if (key === 'modelGroup') {
+        if (typeof value === 'string' && value.trim()) scope.modelGroup = value.trim();
+        else delete scope.modelGroup;
+        continue;
+      }
       const agent = agents[key as keyof typeof agents];
       if (agent) { const route = value as Values; routes[agent] = { providerId: route.providerId, model: route.modelId, effort: route.effort }; }
       else scope[key] = value;

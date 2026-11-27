@@ -13,6 +13,7 @@ export const WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL =
   'window-backdrop-material:changed';
 
 const WINDOW_BACKDROP_MATERIAL_ARGUMENT = '--cindy-window-backdrop-material=';
+const GPU_FALLBACK_ARGUMENT = '--cindy-gpu-fallback=1';
 
 export function isWindowsBackdropMaterial(value: string): value is WindowsBackdropMaterial {
   return WINDOWS_BACKDROP_MATERIALS.some((material) => material === value);
@@ -20,6 +21,14 @@ export function isWindowsBackdropMaterial(value: string): value is WindowsBackdr
 
 export function createWindowBackdropMaterialArgument(material: WindowsBackdropMaterial): string {
   return `${WINDOW_BACKDROP_MATERIAL_ARGUMENT}${material}`;
+}
+
+export function createGpuFallbackArgument(): string {
+  return GPU_FALLBACK_ARGUMENT;
+}
+
+export function readGpuFallbackFromArgv(argv: readonly string[]): boolean {
+  return argv.includes(GPU_FALLBACK_ARGUMENT);
 }
 
 export function readWindowBackdropMaterialFromArgv(
