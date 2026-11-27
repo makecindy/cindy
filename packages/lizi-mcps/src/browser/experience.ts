@@ -59,13 +59,17 @@ export class BrowserExperienceRecorder {
   }
 }
 
-/** Host matching is boundary-aware. A match only suggests a recipe, never executes it. */
+/**
+ * Host matching is boundary-aware. A match only suggests a recipe, never executes it.
+ * `runnable` drops recipes the current browser cannot execute, so they never take a slot.
+ */
 export function suggestRecipes(
   recipes: Map<string, MergedRecipe>,
   site: string,
   intent = '',
   profile = '',
   url?: string,
+  runnable: (recipe: MergedRecipe['recipe']) => boolean = () => true,
 ) {
   const terms = intent
     .toLowerCase()
@@ -79,6 +83,7 @@ export function suggestRecipes(
       if (recipe.validation?.state === 'candidate' && deferredRecipeIssue(recipe)) return false;
       if (recipe.validation?.profile !== undefined && recipe.validation.profile !== profile)
         return false;
+      if (!runnable(recipe)) return false;
       return [recipe.validation?.site, ...(recipe.match ?? [])].some((host) => {
         if (!host) return false;
         const normalized = host.toLowerCase().replace(/^www\./, '');

@@ -41,6 +41,7 @@ import {
   isSharedTaskPeer,
   parseProviderSharePeer,
 } from '@cindy/device-link';
+import { isIpcError } from '../../shared/ipc-errors.js';
 import { deviceLinkInvokeControllerSupports, getDeviceLinkInvokeContext, isDeviceLinkInvoke, runOutsideDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { parseOrcaRemoteLead } from '../../shared/orcaRemoteWorker.js';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
@@ -50,10 +51,14 @@ import { MAKER_INVOKE } from './channels.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
 import {
   buildHandoff,
+  buildUserReplayHandoff,
+  type BuildHandoffOptions,
+  type UserReplayHandoff,
   type HandoffCoverage,
   type DbAgentKind,
   type HandoffSourceMessage,
 } from './agentHandoff.js';
+import { unbindModelGroupSession } from '../model-groups/sessionBindings.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { shouldApplyExclusiveProviderRerouteLive } from '../maker-host/model-route-guard-catalog.js';
 import {
@@ -63,7 +68,7 @@ import {
   normalizeDbAgentKind,
   type DbEngineKind,
 } from '../../shared/agentKindConversion.js';
-import { pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
+import { isPluginEngineSwitchSourceAllowed, pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
 import { decideProviderGroupFailure, providerGroupFailureSignals } from '../provider-group/failurePolicy.js';
 
 function throwIfAgentSwitchAborted(signal: AbortSignal | undefined): void {
@@ -267,6 +272,8 @@ export interface MakerSessionAgentSwitchHandlerDeps {
   /** Retire this task's uncompleted remote startup after an authorized manual
    * choice, before waiting for the send lock held by its historical probe. */
   cancelPendingRemoteStart?(sessionId: string, reason?: Error): void;
+  /** Desktop admission for a completed, unbound automation task. */
+  canSwitchCompletedAutomationSession?(sessionId: string, returningToBuiltin: boolean): Promise<boolean>;
   /**
    * 停用轴的边界裁决(生产 = register.ts 的 assertModelRouteUsable,内核纯逻辑在
    * model-route-guard.ts)。跨引擎切换是新的路由选择,目标 (agent, model, 来源) 被
@@ -406,7 +413,7 @@ export interface MakerSessionAgentSwitchHandlerDeps {
    * 历史到写回之间有大量异步工作,期间若发生 /clear,这份按 clear 前历史算出的交接
    * 必须被丢弃,而不是盖掉 clear 立的墓碑。
    */
-  setPendingHandoff(sessionId: string, handoff: string, expectedGeneration?: number): void;
+  setPendingHandoff(sessionId: string, handoff: string, expectedGeneration?: number, replay?: UserReplayHandoff): void;
   /** 读交接注册表的当前代次(在读历史之前取一次)。 */
   readPendingHandoffGeneration?(sessionId: string): number;
   peekPendingHandoff?(sessionId: string): Promise<string | null>;
@@ -490,8 +497,12 @@ export interface PendingAgentSwitchIntent {
   cindyAutoRelocation?: { fromProviderId: string; targetProviderId: string };
   /** SET_MODEL intent: apply the route without a cross-engine handoff. */
   sameAgentSelection?: boolean;
+  /** Keep a rejected pick as a send barrier until a new user selection replaces it. */
+  requiresModelReselection?: true;
   /** Original user input, before staging fills omitted axes from the current row. */
   credentialSelectionAxes?: { effort: boolean; fastMode: boolean };
+  /** A trusted local picker authorized this automation task's switch. Internal only. */
+  localAutomationSwitch?: true;
   /** Set by the host at selection time. Never projected or accepted from IPC. */
   deviceLinkModelSelectionOrigin?: 'owner' | 'scoped';
   /** 'acp' = 插件引擎，providerId 必为 acp-plugin:<插件>:<引擎>。 */
@@ -649,6 +660,7 @@ export async function relocateForFreshStart(
     /** 原来那个位置(调用方可能已把任务记录改到了目标位置)；不给 = 按任务记录。 */
     from?: { agentDeviceId: string | null; providerId: string | null };
     sharedRelocation?: boolean;
+    retryClientId?: string;
     /** Publish the shared handoff only after the replacement runtime is ready. */
     deferSharedCommit?: true;
     assertCurrent?: () => void;
@@ -663,7 +675,8 @@ export async function relocateForFreshStart(
   const model = row.model;
   const dbKind = normalizeDbAgentKind(row.agentKind);
   const handoffGeneration = deps.readPendingHandoffGeneration?.(sessionId);
-  const full = buildHandoff(await deps.listMessagesForHandoff(sessionId), {
+  const source = await deps.listMessagesForHandoff(sessionId);
+  const handoffOptions: BuildHandoffOptions = {
     fromLabel: `${agentEngineLabel(dbKind)} (on a different computer)`,
     toLabel: agentEngineLabel(dbKind),
     sessionId,
@@ -672,7 +685,8 @@ export async function relocateForFreshStart(
       sessionId, agent: dbToMakerAgentKind(dbKind), model, providerId, agentDeviceId,
     }),
     ...(await switchCompanionRecall(deps, sessionId)),
-  });
+  };
+  const full = buildHandoff(source, handoffOptions);
   const fromAgentDeviceId = params.from ? params.from.agentDeviceId : row.agentDeviceId ?? null;
   const fromProviderId = params.from ? params.from.providerId : row.providerId;
   const assertCurrent = () => {
@@ -747,7 +761,9 @@ export async function relocateForFreshStart(
       });
     }
     if (deferred) assertCurrent();
-    deps.setPendingHandoff(sessionId, handoff, handoffGeneration);
+    const retry = nativeId ? undefined : buildUserReplayHandoff(source, handoffOptions, params.retryClientId);
+    if (retry) deps.setPendingHandoff(sessionId, handoff, handoffGeneration, retry);
+    else deps.setPendingHandoff(sessionId, handoff, handoffGeneration);
     deps.log.info('agent-switch: relocated for a fresh start', {
       sessionId,
       handoffChars: handoff.length,
@@ -881,6 +897,7 @@ export async function performSessionAgentSwitch(
     configStaged?: boolean;
     /** Recheck caller CAS after asynchronous validation, before staging any intent. */
     assertSelectionCurrent?: () => void;
+    localWindowRequest?: boolean;
     beforeMutation?: () => Promise<void>;
     /** Internal forced group relocation: admit before an actual close or route commit, never during preparation. */
     onRelocationMutationStart?: () => void;
@@ -890,6 +907,7 @@ export async function performSessionAgentSwitch(
      * 只在 applyNow 且 Agent 在另一台电脑上时生效。
      */
     forceRelocation?: boolean;
+    retryClientId?: string;
     /**
      * 仅限 main 内部(不接受 IPC 传入)：供应商组为这个任务换电脑——引擎与模型不变、只换 Agent 所在位置
      * (docs/product-rules/provider-groups.md §6.1)。只在 applyNow 时生效。
@@ -900,6 +918,12 @@ export async function performSessionAgentSwitch(
      * (provider-groups.md §6.2「任务进行中换号」)。只在真正换了电脑时写。
      */
     providerGroupSwitchReason?: 'quota-rebalance';
+    /** 仅限 main 内部(不接受 IPC 传入)：定时任务恢复原引擎时一并还原被临时插件引擎收窄的权限模式。 */
+    permissionMode?: string;
+    /** 仅限 main 内部(不接受 IPC 传入)：绑定自动化经 scheduledModelScope 临时切换或恢复原引擎。 */
+    scheduledModelSwitch?: boolean;
+    /** 仅限 main 内部：由智能路由选路或持续托管发起的切换，保留/更新智能路由绑定而不解绑。 */
+    preserveModelGroupBinding?: boolean;
   },
 ): Promise<SessionAgentSwitchResult> {
   const ownerGeneration = deps.readOwnerGeneration?.();
@@ -960,8 +984,9 @@ export async function performSessionAgentSwitch(
   const pluginTargetDeviceId = builtinTarget ? null : requestedAgentDeviceId ?? null;
   if (!builtinTarget || sourceIsPluginEngine) {
     // 从插件引擎换到内置引擎时目标位置照常：可以是另一台电脑或供应商组(下面按内置引擎换电脑裁决)。
-    if ((row.source && row.source !== 'desktop' && row.source !== 'bot') || row.orcaRole || parseOrcaRemoteLead(row.orcaRemoteLead)
-      || getDeviceLinkInvokeContext()?.sharedTask) {
+    // 共享任务访客仍受只读/访客边界限制；其余所有非 review / 非 SSH 的会话（含普通、伙伴、IM、
+    // Hook、侧边追问、定时任务与多 Agent 协同）均与内置引擎同等开放插件引擎切换。
+    if (getDeviceLinkInvokeContext()?.sharedTask || !isPluginEngineSwitchSourceAllowed(row.source)) {
       throwIpcError('UNSUPPORTED_CAPABILITY', 'this task cannot switch to or from a plugin engine yet');
     }
     if (!builtinTarget) {
@@ -980,7 +1005,8 @@ export async function performSessionAgentSwitch(
       providerId: normalizedProviderId as string,
       model,
       effort: params.effort,
-      permissionMode: row.permissionMode ?? null,
+      permissionMode: (typeof params.permissionMode === 'string' && params.permissionMode ? params.permissionMode : null)
+        ?? row.permissionMode ?? null,
     };
     if (!pluginTargetDeviceId) {
       if (!deps.admitPluginEngineTarget) {
@@ -1196,6 +1222,8 @@ export async function performSessionAgentSwitch(
           ? existingIntent?.thinking
           : undefined;
     const intent: PendingAgentSwitchIntent = {
+      ...(row.source === 'scheduler' && params.localWindowRequest && (sourceIsPluginEngine || !builtinTarget)
+        ? { localAutomationSwitch: true } : {}),
       ...(params.runtimeSource ? { runtimeSource: params.runtimeSource } : {}),
       ...(params.configStaged === true ? { configStaged: true } : {}),
       targetAgentKind,
@@ -1286,9 +1314,12 @@ export async function performSessionAgentSwitch(
 
   let handoff = replay.handoff;
 
-  // Orca Lead 的 Agent 在另一台电脑时,旧远程 Session 的 close 请求可能因对方不可达而没送到;
-  // 这种链路失败不该挡住 Lead 离开那台电脑(普通任务与 Worker 的关闭失败语义不变)。
-  const orcaLeadLeavingRemote = row.orcaRole === 'lead' && currentAgentDeviceId !== null;
+  // Orca Lead 或智能路由持续托管离开另一台电脑时，旧远程 Session 的 close 请求可能因对方不可达而没送到；
+  // 这种链路失败不该挡住 Lead 或智能路由自动接替离开故障电脑(普通任务与 Worker 手动切换的关闭失败语义不变)。
+  const orcaLeadOrManagedLeavingRemote =
+    (row.orcaRole === 'lead' || params.preserveModelGroupBinding === true)
+    && currentAgentDeviceId !== null
+    && targetAgentDeviceId !== currentAgentDeviceId;
 
   return deps.withCloseSuppressed(sessionId, async () => {
     // The companion may have been disabled or moved while history was read.
@@ -1310,11 +1341,11 @@ export async function performSessionAgentSwitch(
       try {
         await deps.closeSession(sessionId);
       } catch (error) {
-        const linkCode = orcaLeadLeavingRemote ? agentSwitchLinkCloseErrorCode(error) : null;
+        const linkCode = orcaLeadOrManagedLeavingRemote ? agentSwitchLinkCloseErrorCode(error) : null;
         if (!linkCode) throw error;
         // 旧远程 Session 的 close 已在本地 finish/dispose；链路失败只表示 close 请求没送到对方。
         // Maker 把该实例标成 error 仍占 activeSessions，bootstrap/lazy-create 会再 close 一次后换新。
-        deps.log.warn('agent-switch: close failed while an orca lead leaves its remote computer; continuing', {
+        deps.log.warn('agent-switch: close failed while leaving a remote computer; continuing', {
           sessionId,
           code: linkCode,
         });
@@ -1471,6 +1502,7 @@ export async function performSessionAgentSwitch(
             sdkSessionId: relocatedNativeId ?? parked?.sdkSessionId ?? null,
             ...(typeof params.effort === 'string' && params.effort ? { effort: params.effort } : {}),
             ...((typeof params.fastMode === 'boolean' || params.fastMode === 'ultrafast') ? { fastMode: params.fastMode } : {}),
+            ...(typeof params.permissionMode === 'string' && params.permissionMode ? { permissionMode: params.permissionMode } : {}),
             // 同机换连接／组选回的当前位置在另一台电脑时也带上位置：提交按它判断窗口该查哪台的目录，不能拿本机目录。
             ...(agentDeviceChanges || ((orcaGroupReturnRebuild || providerConnectionChanges) && targetAgentDeviceId)
               ? { agentDeviceId: targetAgentDeviceId }
@@ -1500,6 +1532,9 @@ export async function performSessionAgentSwitch(
     // (chatgpt-codex-connector P2, PR #5792 review)。
     if (commitProviderGroupBinding) {
       await commitBindingAfterSwitch();
+    }
+    if (!params.configStaged && !params.providerGroupRelocation && !params.scheduledModelSwitch && !params.preserveModelGroupBinding) {
+      unbindModelGroupSession(sessionId);
     }
 
     const boundaryContent: AgentSwitchBoundaryContent = {
@@ -1543,7 +1578,10 @@ export async function performSessionAgentSwitch(
         err: err instanceof Error ? err.message : String(err),
       });
     }
-    deps.setPendingHandoff(sessionId, handoff, handoffGeneration);
+    const retry = !relocatedNativeId && !parked
+      ? buildUserReplayHandoff(fullSourceMessages, handoffOptsBase, params.retryClientId) : undefined;
+    if (retry) deps.setPendingHandoff(sessionId, handoff, handoffGeneration, retry);
+    else deps.setPendingHandoff(sessionId, handoff, handoffGeneration);
 
     let engineReady = true;
     let bootstrapError: string | undefined;
@@ -1778,8 +1816,9 @@ export function settleSystemRouteSwitchIntent(input: {
 export function applyPendingAgentSwitchIfIdle(
   deps: MakerSessionAgentSwitchHandlerDeps,
   sessionId: string,
-  opts?: { bootstrapAfterSwitch?: boolean; signal?: AbortSignal; expectedRevision?: number; nextInputChars?: number },
+  opts?: { bootstrapAfterSwitch?: boolean; signal?: AbortSignal; expectedRevision?: number; nextInputChars?: number; scheduled?: boolean },
 ): Promise<void> {
+  if (opts?.scheduled && deps.pendingSwitches?.get(sessionId)?.localAutomationSwitch) return Promise.resolve();
   if (opts?.expectedRevision !== undefined && (!deps.pendingSwitches?.get(sessionId)
     || deps.pendingSwitches.revision?.(sessionId) !== opts.expectedRevision)) {
     throwIpcError('HARNESS_SWITCH_NOT_READY', 'The selected computer changed before retry; confirm the new selection and retry');
@@ -1802,6 +1841,9 @@ export function applyPendingAgentSwitchIfIdle(
         const sharedTask = getDeviceLinkInvokeContext()?.sharedTask;
         const access = sharedTask ? createSharedTaskPendingSelectionGuard(sharedTask, sessionId) : undefined;
         access?.();
+        if (intent.requiresModelReselection) {
+          throwIpcError('MODEL_SELECTION_UNAVAILABLE', 'Select an available model before sending');
+        }
         // #7825: the guest triggers a send, but the choice above came from the
         // host registry. Apply only that choice under host authority; retain the
         // captured send fence through preflight and admit before mutation. Keep
@@ -1859,6 +1901,7 @@ export function applyPendingAgentSwitchIfIdle(
         // 当成用户选择打上 manual 墓碑, 任务永久脱离跟随(chatgpt-codex-connector P2,
         // PR #5155)。
         configStaged: intent.configStaged,
+        localWindowRequest: intent.localAutomationSwitch,
         model: intent.model,
         providerId: intent.providerId,
         effort: intent.effort,
@@ -1893,6 +1936,12 @@ export function applyPendingAgentSwitchIfIdle(
       throwIfAgentSwitchAborted(opts?.signal);
     } catch (err) {
       // 失败(包括 pre-check 后 running guard 的竞态)保留原 intent,下一次发送重试。
+      if (intent.sameAgentSelection && intent.targetAgentKind === 'pi' && isUserPendingAgentSwitchIntent(intent)
+        && isIpcError(err) && err.code === 'MODEL_SELECTION_UNAVAILABLE') {
+        // Mutate only the object that failed. A concurrent re-selection owns a fresh intent.
+        intent.requiresModelReselection = true;
+        throw err;
+      }
       deps.log.warn('agent-switch: pending apply failed; intent retained for next send', {
         sessionId,
         targetAgentKind: intent.targetAgentKind,
@@ -1902,12 +1951,13 @@ export function applyPendingAgentSwitchIfIdle(
       // 墓碑写失败同理: 跨引擎的 fail-continue 也必须挡住 —— 发送继续 + 进程退出会把
       // 同值重选的唯一证据一起丢掉(PR #5155 review P2)。
       // 换电脑同理:用户选的是另一台电脑(或改回本机)，不能悄悄留在原来那台继续发。
-      // 切到插件引擎同理：插件停用或不可用时提示用户，不悄悄留在原引擎继续发。
+      // 插件目标和自动化手动切换同理：目标不可用时提示用户，不在原引擎继续发。
       if (
         err instanceof UserRouteSelectionMarkerError ||
         intent.sameAgentSelection ||
         intent.runtimeSource === 'agent' ||
         intent.targetAgentDeviceId !== undefined ||
+        intent.localAutomationSwitch ||
         intent.targetAgentKind === 'acp'
       ) {
         throw err;
@@ -1990,7 +2040,8 @@ export function registerMakerSessionAgentSwitchHandler(
         deps.cancelPendingRemoteStart?.(valid.sessionId,
           new Error(PROVIDER_GROUP_SUPERSEDED_ERROR));
       }
-      const run = () => performSessionAgentSwitch(deps, request);
+      const localWindowRequest = !!onUserSwitchRequested && !isDeviceLinkInvoke();
+      const run = () => performSessionAgentSwitch(deps, { ...request, localWindowRequest });
       return typeof sessionId === 'string' && sessionId && deps.withSessionLock
         ? deps.withSessionLock(sessionId, run)
         : run();

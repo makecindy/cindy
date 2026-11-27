@@ -1,3 +1,4 @@
+import { acceptSharedTurnValue } from '../sharedTurnValue.js';
 import { lookupShareAvailability, allocateShareAvailability, reportShareAvailabilityStatus } from '../../device-link/providerShareAvailability.js';
 /**
  * 远程 Agent 的控制端接线：Maker 遇到「Agent 在另一台电脑上运行」的任务时调用这里。
@@ -32,6 +33,7 @@ import {
   AgentStartupStoppedError,
   AgentStartupResourcesReleasedError,
   isolatedBotProfile,
+  readProjectCoreMemoryIndex,
   resolveAllowedManagedSkills,
   resolveMemoryScopeKey,
   snapshotManagedSkillGrants,
@@ -92,8 +94,8 @@ export interface DeviceAgentServiceDeps {
   managedSkills?: AgentDeps['getManagedSkills'];
   /** 本机停用的 Skill(与本机任务同一份偏好)。 */
   disabledSkillPaths?(): readonly string[];
-  captureKnownFileBefore(input: { sessionId: string; provider: 'claude-code' | 'pi'; cwd: string; targetPath: string }): Promise<void>;
-  noteOpaqueTurnChange(input: { sessionId: string; provider: 'claude-code' | 'pi'; cwd: string }): void;
+  captureKnownFileBefore(input: { sessionId: string; provider: 'claude-code' | 'pi' | 'acp'; cwd: string; targetPath: string }): Promise<void>;
+  noteOpaqueTurnChange(input: { sessionId: string; provider: 'claude-code' | 'pi' | 'acp'; cwd: string }): void;
   /** 改写来自对方的事件(如 Claude Code 的 Cindy 工具名换回自带工具名)。 */
   mapEvent?: (kind: AgentKind) => ((event: AgentEvent) => AgentEvent) | undefined;
   /** Read 读 PDF 时取文字。 */
@@ -298,9 +300,14 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         try {
           const manager = deps.makerMemory();
           opts.makerMemoryProjectDir = manager?.getProjectMemoryDirectory(scopeKey);
-          const store = opts.makerMemoryProjectDir ? undefined : await manager?.getStore(scopeKey);
-          requireCurrent();
-          opts.makerMemoryIndexSnapshot = await store?.getIndex() ?? '';
+          if (opts.makerMemoryProjectDir) {
+            opts.makerMemoryIndexSnapshot = await readProjectCoreMemoryIndex(opts.makerMemoryProjectDir);
+            requireCurrent();
+          } else {
+            const store = await manager?.getStore(scopeKey);
+            requireCurrent();
+            opts.makerMemoryIndexSnapshot = await store?.getIndex() ?? '';
+          }
         } catch (error) {
           requireCurrent();
           log.warn('remote agent: memory index unavailable; starting without it', { error: String(error) });
@@ -790,16 +797,18 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
           vendorOptions,
           mcpCallerKind: 'root',
           mcpCallerAttested: true,
+          ...(input.agentKind === 'acp' ? { recordMcpToolResults: true } : {}),
         });
         return {
           servers: mcpTargets(extra),
           dispose: () => extra?.disposeSessionCtx?.(),
           closeSessionInstance: () => extra?.closeSessionInstance?.(),
+          ...(extra?.takeMcpToolResult ? { takeMcpToolResult: extra.takeMcpToolResult } : {}),
         };
       },
       capture: ({ kind, opts: startOpts }): ExecutorCaptureHooks | undefined => {
         if (startOpts[LOCAL_AGENT_CLIENT]) return undefined;
-        // Codex 自己报告每轮改动；Claude Code 与 Pi 的写入由执行器在写之前抓取。
+        // Codex 自己报告每轮改动；Claude Code、Pi 与插件引擎(acp)的写入由执行器在写之前抓取。
         if (kind === 'codex' || !startOpts.sessionId) return undefined;
         const sessionId = startOpts.sessionId;
         const provider = kind;
@@ -842,7 +851,16 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       collectImports: (imports) => collectInstructionImports(imports, collect),
       isGitRepo,
       ...(deps.extractPdfText ? { extractPdfText: deps.extractPdfText } : {}),
-      mapEvent: deps.mapEvent ?? remoteAgentEventMapper,
+      mapEvent: kind => {
+        const map = (deps.mapEvent ?? remoteAgentEventMapper)(kind);
+        if (kind !== 'codex' || !sessionId || !initialShareId || initialAccessEpoch === undefined) return map;
+        return event => {
+          const mapped = map?.(event) ?? event;
+          return mapped.type === 'done' && activeOwnerScopeKey() === ownerScope && !isAppSessionBoundaryPending()
+            && providerShareAccessEpoch(initialShareId) === initialAccessEpoch
+            ? acceptSharedTurnValue(mapped, sessionId, input.deviceId) : mapped;
+        };
+      },
       newId: randomUUID,
       log: {
         debug: (message, fields) => startupLog.debug(message, fields),

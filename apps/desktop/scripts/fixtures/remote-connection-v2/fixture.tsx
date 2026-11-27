@@ -251,11 +251,18 @@ async function simulatePeer(command: Extract<SelfHostedRelayCommand, { type: 'pe
   return { ok: true, result: { version: 1, switchId: request.switchId, enabled: request.enabled, confirmWithinMs } };
 }
 if (ctx.case === 'default' && data.links[0]) data.links[0].encrypted = false;
+// An organization member with a running cloud computer and room for another (the 云主机 row).
+const cloudComputer = ctx.case === 'cloud-computer';
+if (cloudComputer) (globalThis as { __uiPageAuthUser?: unknown }).__uiPageAuthUser = { id: 'member-1', orgId: 'org-1', membershipKind: 'org' };
 
 void mountPage({
   route: '/settings?tab=remote-control',
   host: {
     deviceLink: {
+      cloudComputerEntry: async () => (cloudComputer ? {
+        enabled: true, membershipId: 'member-1', organizationId: 'org-1',
+        url: 'https://console.example.test/console/orgs/org-1/personal/cloud', computer: { status: 'linked' }, canAdd: true,
+      } : null),
       // A removed computer is no longer on the account's device list; its own card stays, stopped on the removal.
       listDevices: async () => ({ devices: removed ? data.devices.filter((d) => !d.isSelf) : data.devices }),
       getState: async () => ({

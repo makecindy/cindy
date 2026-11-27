@@ -11,6 +11,7 @@ import { clientMigrationContract } from './client-migration-contract.mjs';
 import { runLegacyPluginMigrationPreflight } from './plugins/legacy-approvals.js';
 import { createRightSidebarTabsService } from '../../desktop/src/main/localDb/ipc/rightSidebarTabs.js';
 import { createHostPlatformTools } from './platform/tools.js';
+import { readHostDeviceName, readHostMachineStatus } from './platform/machine-status.js';
 import { createHostCodexRuntime, createHostSubscriptionFastPolicies } from './agent/codex-runtime.js';
 import type { EngineKind } from '@cindy/maker-core';
 import { createHostClaudeProxyRuntime } from './agent/claude-proxy-runtime.js';
@@ -33,9 +34,11 @@ import { mapMembershipToAuthUser, type User as AccountUser } from '../../desktop
 import { resolveSessionDevice, canRegisterHostDevice } from './auth/device-identity.mjs';
 import { AUTH_SESSION_KEY } from '../../desktop/src/main/authCredentialKeys.js';
 import { createHostDeviceLink } from './device-link.js';
+import { AGENT_NET_UDP_PORT_ENV, parseAgentNetUdpPort } from '../../desktop/src/main/device-link/agentNetStunDiscovery.js';
+import { createHostSessionHandoff } from './agent/session-handoff.js';
 import { createHostService } from './service.mjs';
 import { holdError } from './agent/profile-hold.js';
-import { createHostRuntimeSession, type HostRuntimeSessionCreatePorts } from './agent/create-runtime-session.js';
+import { createHostRuntimeSession, throwAgentBinaryNotReady, type HostRuntimeSessionCreatePorts } from './agent/create-runtime-session.js';
 import {
   createHostProfileCoexistenceMonitor, createDesktopScanner, HOST_PROFILE_IN_USE_BY_DESKTOP, HostProfileInUseError,
   type CoexistenceMonitor, type CoexistenceState,
@@ -70,8 +73,10 @@ import { getDbClient, setCurrentDbClient, clearCurrentDbClient, getCurrentDbClie
 import { waitForRetainedDbClient } from '../../desktop/src/main/localDb/client/pendingOperations.ts';
 import { loadAgentInputQueueSnapshot, saveAgentInputQueueSnapshot, getPersistedInputClientIds } from '../../desktop/src/main/localDb/agentInputQueueSnapshots.ts';
 import { markSessionTurnStartedDurable, markSessionTurnEnded, drainSessionActiveTurnWrites, ackSessionTurnEndedDurable,
-  hasAssistantProgressAfterMessage, getRecoveryContextSnapshot,
+  hasAssistantProgressAfterMessage, getRecoveryContextSnapshot, setOnSessionTurnEndedPersisted,
 } from '../../desktop/src/main/localDb/sessionActiveTurn.ts';
+import { setHistoryWorkPageReader } from '../../desktop/src/main/device-link/historyViewPush.ts';
+import { ensureSessionFlagRegistryLoaded } from '../../desktop/src/main/localDb/sessionFlagRegistry.ts';
 import { readSessionExtraDirsFromDb, readSessionWritableDirsFromDb, readSessionWorkingDirFromDb } from '../../desktop/src/main/maker-host/session-storage.js';
 import { applyRemoteDirectoryGrantUpdate } from '../../desktop/src/main/maker-ipc/remoteDirectoryGrantUpdate.js';
 import { createTaskWritableDirsUpdater } from '../../desktop/src/main/projectDirectoryRuntime.js';
@@ -111,7 +116,8 @@ import { getXdGatewayModels, markXdGatewayModelAccessUnknown, setXdGatewayModels
 import { buildModelsSyncRequest, parseModelsSyncPayload, withModelsSyncOverallDeadline } from '../../desktop/src/main/model-access/modelsSyncRefresh.js';
 import { createHostProviderConfig } from './agent/provider-config.js';
 import { createProviderRouteResolver } from './agent/provider-credentials.mjs';
-import { createHostHistoryReader, readMessagesList, readMessagesAroundClientId } from './agent/history.js';
+import { createHostHistoryReader, dismissHostErrorMessage, readHostHistoryView, readHostSessionActivityMeta, readHostWorkDetails, readMessagesList, readMessagesAroundClientId } from './agent/history.js';
+import { requireString } from '../../desktop/src/main/utils/ipcValidate.js';
 import { runLoginCommand } from './login-cli.mjs';
 import { readOrCreateApiToken } from './api-token.mjs';
 import { CindyAuthClient } from '@cindy/auth-client';
@@ -196,7 +202,8 @@ import { botSessionLinks, messages as messageTable, projectAliases as projectAli
 import { describeHostOutboundProxy, describeOutboundProxyLine, startHostSystemProxySettings, stopHostSystemProxySettings } from './outbound-proxy.ts';
 import { and, eq, isNull } from 'drizzle-orm';
 import { projectHistoryView } from '@cindy/maker-shared/message-window';
-import { isDefaultDraftSessionTitle, normalizeAutoTitle } from '@cindy/maker-shared/session-title';
+import { createHostAutoTitle } from './agent/auto-title.ts';
+import { createHostModelGroups } from './agent/model-groups.ts';
 
 const DEFAULT_VOICE_INPUT_SETTINGS = getDefaultVoiceInputSettings();
 configureGhostSnapshotProcess(createSnapshotProcess);
@@ -309,9 +316,11 @@ if (command === '--help' || command === '-h') {
     const result = await requestHostRemote(resolveHostDataDir(), action, process.argv[4]);
     console.log(JSON.stringify(result, null, 2));
     // 「重新加入」 reports its outcome in the result (device-link.ts `rejoin`): say why it did not work, and fail the command.
-    const rejoin = action === 'rejoin' ? (result as { rejoin?: { result?: unknown; hint?: unknown } }).rejoin : undefined;
+    // `agent-net-on` rejoins first when this Host was removed: the same hint, but the switch is on either way.
+    const rejoin = action === 'rejoin' || action === 'agent-net-on'
+      ? (result as { rejoin?: { result?: unknown; hint?: unknown } }).rejoin : undefined;
     if (rejoin && typeof rejoin.hint === 'string') (rejoin.result === 'rejoined' ? console.log : console.error)(rejoin.hint);
-    if (rejoin && rejoin.result !== 'rejoined') process.exitCode = 1;
+    if (action === 'rejoin' && rejoin && rejoin.result !== 'rejoined') process.exitCode = 1;
   } catch (error) {
     console.error(`cindy-host remote failed: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 1;
@@ -403,6 +412,11 @@ const harnessBinaries = createHostHarnessBinaries({
   harnessRoot: () => hostRuntimeLayout().harnessRoot,
   onUnavailable: (kind, error) => hostLog.warn('harness binary unavailable', { kind, error }),
 });
+
+function warnIfNoAgentBinaries(binaries: Record<string, string | boolean | null>) {
+  if (Object.values(binaries).some(Boolean)) return;
+  hostLog.warn('No Agent engines are available. Install an engine and restart Cindy.', { missing: Object.keys(binaries) });
+}
 
 /** The refusal a new send gets while a desktop uses this profile, in the system language. */
 const profileInUseMessage = () => `${HOST_PROFILE_IN_USE_BY_DESKTOP}: ${
@@ -819,9 +833,12 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   // Shared readers (history, tags) resolve the owner client from this singleton;
   // installing it here keeps them on the same connection as the host runtime.
   setCurrentDbClient(client, ownerId);
+  setHistoryWorkPageReader((sid, onShape) => hostHistoryReader.page(sid, undefined, true, { workLines: true, onShape }));
+  void ensureSessionFlagRegistryLoaded().catch(() => {});
   activeOwner = ownerId;
   await reconcileDeletedTaskViewState(client, () => activeOwner === ownerId);
   closeStorage = async () => {
+    setHistoryWorkPageReader(null);
     clearCurrentDbClient(client);
     await waitForRetainedDbClient(client);
     await client.dispose();
@@ -855,6 +872,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
     keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined });
   // The engine binaries this owner runtime uses, read once (the model settings use the same ones).
   const harnessBinaryPaths = await harnessBinaries.resolve();
+  warnIfNoAgentBinaries(harnessBinaryPaths);
   providerConfig = createHostProviderConfig({ profileDir: dataDir, ownerId, credentials,
     // Coexistence plan A: the xAI login is neither renewed nor signed out while held (agent/xai-held-login.ts).
     isProfileHeld: () => inputQueue.isHeldForDesktop(),
@@ -1128,6 +1146,8 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       reportGatewayKeyRejected: key => modelAccess?.reportRejectedKey(key),
       readAuthRealm: () => account.realm,
       sharedGlobalSkills,
+      expandRouteRef: hostModelGroups.expandAuxiliaryRouteRef,
+      subagentRouteMembers: hostModelGroups.subagentRouteMembers,
       mcpProviders: await pluginGateway.prepareMcpProviders([...hostTools.providers, ...memory.providers({ readsAccountHistory: hostTools.readsAccountHistory, deviceId: () => currentDeviceId ?? '', searchProviders: taskPlugins.searchGhostRuntimeMemories }), pluginGateway.provider]),
       userDataDir: dataDir,
     });
@@ -1162,6 +1182,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   }
   await plugins.reconcile();
   await pluginGateway.refresh();
+  void hostModelGroups.refresh();
   startProfileCoexistence(dataDir, scanProfile);
   runtime.state = 'ready';
   runtime.unavailable = null;
@@ -1184,6 +1205,13 @@ const sessionDraftPorts = {
   emitSessionListChangedLocally: (sessionId: string) => eventHub.publish({ type: 'session_changed', action: 'delete', sessionId }),
   notifyPluginSessionCreated: (input: { sessionId: string; workdir?: string }) => eventHub.publish({ type: 'session_created', ...input }),
 };
+setOnSessionTurnEndedPersisted(
+  (sessionId, endedAt, capturedScope) => {
+    if (capturedScope && !isDataOwnerBroadcastScopeCurrent(capturedScope as ReturnType<typeof captureDataOwnerBroadcastScope>)) return;
+    eventHub.publish({ type: 'session_changed', sessionId, patch: { lastTurnEndedAt: endedAt } });
+  },
+  captureDataOwnerBroadcastScope,
+);
 setSessionOpeningModelAdmission(async body => {
   if (body.agentKind === 'acp') throw new Error('插件引擎在无界面 Host 上不可用');
   const kind = body.agentKind === 'cc' ? 'claude-code' : body.agentKind;
@@ -1206,14 +1234,16 @@ const hostProviderGroups = createProviderGroupStore({
 const hostProviderBindings = createProviderGroupBindings(hostProviderGroups);
 // The send path and the Device Link create entry refuse provider group tasks with this one check.
 const assertProviderExecutionSupported = createHostProviderExecutionCheck({ hostProviderBindings, hostProviderGroups });
-const readSessionForRun = async (sessionId: string) => {
+const readSessionForRun = async (sessionId: string, { forHandoff = false } = {}) => {
   const db = getDbClient();
   const rows = await db.drizzle.select().from(sessionTable)
     .where(eq(sessionTable.id, sessionId)).limit(1);
   const row = rows[0];
+  if (forHandoff && (!row || row.status !== 'active' || row.hiddenAt != null || row.source === 'bot')) return null;
   if (!row || row.status !== 'active') throw new Error('session is not active');
   const [botLink] = await db.drizzle.select({ botId: botSessionLinks.botId })
     .from(botSessionLinks).where(eq(botSessionLinks.sessionId, sessionId)).limit(1);
+  if (forHandoff && botLink) return null;
   const storedKind = requireBuiltinAgentKind(row.agentKind as EngineKind, 'Host task execution');
   const agentKind: 'claude-code' | 'codex' | 'pi' = storedKind === 'codex' ? 'codex' : storedKind === 'pi' ? 'pi' : 'claude-code';
   return {
@@ -1306,8 +1336,34 @@ const contextRecovery = createHostContextRecoveryWiring({
   log: createLogger('context-recovery'),
   rehydrateColdPiRuntimeForWindowVerification: sessionId => runtimeSelection.rehydrateColdPiRuntimeForWindowVerification(sessionId),
 });
+const hostAutoTitle = createHostAutoTitle({
+  getAutoReview: () => agentGraph?.autoReview ?? null,
+  getMaker: () => agentGraph?.maker ?? null,
+  profileHoldReason: () => inputQueue.profileHoldReason(),
+  profileHoldGeneration: () => inputQueue.profileHoldGeneration(),
+  hasEnabledUserMessageHookGhost: () => Boolean(plugins?.taskPlugins.hasEnabledUserMessageHookGhost()),
+  drainHistories: () => inputQueue.drainHistories(),
+  isSessionTurnPendingCompletion: id => agentGraph?.maker.getSession(id)?.isTurnRunning() === true
+    || inputQueue.isTurnRunning(id) || inputQueue.isTurnRecovering(id),
+  publish: event => eventHub.publish(event),
+});
+const hostModelGroups = createHostModelGroups({
+  listProviderViews: async () => (await listProviders({ gateway: currentGateway(), ownerId: runtime.owner })).providers,
+  listLocalAgents: () => agentGraph?.agents ?? [],
+  readPricing: async () => ({
+    gateway: await usagePricing.getGatewayModelPricing().catch(() => null),
+    reference: usagePricing.readReferenceModelPricing(),
+  }),
+  createDbMessage: (sessionId, body) => insertSessionMessage(sessionId, body),
+  readPendingSessionTarget: (sessionId) => runtimeSelection.readPendingTarget(sessionId),
+  onBindingChanged: (sessionId) => runtimeSelection.broadcastBindingProjection(sessionId),
+});
 const inputQueue = createInputQueue({
+  readModelGroupAutoSwitchMode: hostModelGroups.readAutoSwitchMode,
+  onModelGroupSessionAttached: hostModelGroups.sessionStart.attach,
+  onModelGroupDispatched: hostModelGroups.sessionStart.dispatched,
   getTaskRuntimePlugins: () => taskRuntimePlugins,
+  prepareDeviceLinkAutoTitle: (sessionId: string, queued: any) => hostAutoTitle.prepareDeviceLinkAutoTitle(sessionId, queued),
   getOwner: getCurrentDbClientSnapshot,
   // The turn usage recorders (agent/usage-recording.ts), fed by the turn executor.
   usage: usageRecording,
@@ -1428,6 +1484,7 @@ const runtimeSelection = createHostRuntimeSelection({
   inputQueue: inputQueue as unknown as Parameters<typeof createHostRuntimeSelection>[0]['inputQueue'],
   readProviderGroupBinding: sessionId => hostProviderBindings.readProviderGroupBinding(sessionId),
   readProviderGroup: providerId => hostProviderGroups.readProviderGroup(providerId),
+  modelGroups: hostModelGroups,
   log: createLogger('runtime-selection'),
 });
 // The desktop's process-wide runtime selection slots (runtime-selection.ts), before any owner commit.
@@ -1643,7 +1700,7 @@ const serverDeps = {
     agentAuth?.close();
     await providerConfig?.cancelLogins();
   },
-  listRunningSessions: (options: unknown) => listRunningSessions(agentGraph?.maker, options),
+  listRunningSessions: (options: unknown) => listRunningSessions(agentGraph?.maker, options, deviceLink ? () => deviceLink!.getSessionActivityMap() : undefined),
   refreshAuth: async () => {
     const ok = await refreshAuthSession();
     return { ok, ...projectAuthState() };
@@ -1780,6 +1837,7 @@ const serverDeps = {
         runtimeSelection.setModel(sessionId, model, providerId, revision, selection),
       persistSessionFields: (sessionId, patch) => runtimeSelection.persistSessionFields(sessionId, patch),
       move: sessionMove.move,
+      onManualTitleWrite: sessionId => hostAutoTitle.markManuallyRenamed(sessionId),
       onSoftDelete: async sessionId => {
         await inputQueue.disposeSession(sessionId);
         runtimeSelection.clearIntent(sessionId);
@@ -1856,33 +1914,8 @@ const serverDeps = {
     });
   },
   getSessionAgentSwitchIntent: (sessionId: string) => runtimeSelection.projectIntent(sessionId),
-  /**
-   * Auto-title step 1 (Codex-style immediate placeholder): persist the
-   * normalized first user text while the title is still the default sentinel.
-   * The desktop's smart-title model pass stays desktop-owned; the web client
-   * still gets the visible sidebar update D3 expects.
-   */
-  autoTitle: async (input: { sessionId?: unknown; text?: unknown; isUserText?: unknown }) => {
-    const sessionId = String(input.sessionId ?? '');
-    const text = typeof input.text === 'string' ? input.text : '';
-    const seed = normalizeAutoTitle(text);
-    if (!sessionId || !seed) return { applied: false, done: false };
-    if (plugins?.taskPlugins.hasEnabledUserMessageHookGhost()) return { applied: false, done: false };
-    const rows = await getDbClient().drizzle.select({ title: sessionTable.title }).from(sessionTable)
-      .where(eq(sessionTable.id, sessionId)).limit(1);
-    const current = rows[0]?.title ?? null;
-    if (current === null || !isDefaultDraftSessionTitle(current)) {
-      return { applied: false, done: true };
-    }
-    await getDbClient().drizzle.update(sessionTable)
-      .set({ title: seed, updatedAt: Date.now() })
-      .where(and(eq(sessionTable.id, sessionId), eq(sessionTable.title, current)));
-    const after = await getDbClient().drizzle.select({ title: sessionTable.title }).from(sessionTable)
-      .where(eq(sessionTable.id, sessionId)).limit(1);
-    const applied = after[0]?.title === seed;
-    if (applied) eventHub.publish({ type: 'session_changed', sessionId, patch: { title: seed } });
-    return { applied, done: applied };
-  },
+  autoTitle: (input: { sessionId?: unknown; text?: unknown; isUserText?: unknown; agentKind?: unknown }) =>
+    hostAutoTitle.runAutoTitle(input),
   getSession: async (sessionId: string) => {
     return readHostSession(getDbClient().drizzle, sessionId);
   },
@@ -1924,6 +1957,7 @@ const serverDeps = {
     committed: await commitProvisionalSession(sessionId, sessionDraftPorts),
   }),
   createSession: async (input: Record<string, unknown>) => {
+    if (!agentGraph && sessionStorage && runtime.state === 'ready') throwAgentBinaryNotReady();
     if (!agentGraph || !sessionStorage) throw new Error('agent runtime is not ready');
     const allowed: Record<string, true> = {
       id: true, title: true, workingDir: true, model: true, effort: true, permissionMode: true,
@@ -1992,6 +2026,7 @@ const serverDeps = {
   // XD quotes. The v1 channel shares this path; only device-link reaches it (device-link.ts).
   modelPricing: () => usagePricing.getGatewayModelPricing(),
   referenceModelPricing: () => usagePricing.readReferenceModelPricing(),
+  modelGroups: hostModelGroups.handlers,
   agents: () => agentGraph?.agents ?? [],
   events: eventHub,
   input: {
@@ -2076,11 +2111,31 @@ const serverDeps = {
     if (!row) throw new Error('session not found');
     return { totalValueUsd: row.totalCostUsd, entries: [] };
   },
-  historyView: async (sessionId: string, before?: string | null) => {
-    return hostHistoryReader.page(sessionId, before ?? undefined, true);
+  historyView: async (sessionId: string, before?: string | null, opts?: unknown) => {
+    return readHostHistoryView(hostHistoryReader, sessionId, before, opts);
   },
   workDetails: async (sessionId: string, ref: unknown, after?: string | null) => {
-    return hostHistoryReader.details(sessionId, ref as any, after ?? undefined);
+    return readHostWorkDetails(hostHistoryReader, sessionId, ref, after);
+  },
+  ackInterrupted: async (sessionId: unknown) => {
+    const sid = requireString(sessionId, 'id');
+    await ackSessionTurnEndedDurable(sid);
+    return { ok: true };
+  },
+  clearSessionAttention: async (sessionId: unknown, intent?: unknown) => {
+    if (typeof sessionId !== 'string' || !sessionId) return { ok: true };
+    await deviceLink?.acknowledgeSessionRead(sessionId, intent === 'explicit' ? 'explicit' : 'passive');
+    return { ok: true };
+  },
+  dismissError: async (sessionId: unknown, clientId: unknown) => {
+    return dismissHostErrorMessage(
+      sessionId,
+      clientId,
+      (message) => {
+        eventHub.publish({ type: 'message_created', sessionId: message.sessionId, messageId: message.id, message });
+      },
+      (sid, cid) => inputQueue.whenTurnErrorPersisted(sid, cid),
+    );
   },
   messagesAroundClientId: async (sessionId: string, clientId: string, opts?: { radius?: number }) => {
     return readMessagesAroundClientId(sessionId, clientId, opts);
@@ -2190,6 +2245,7 @@ async function disposeOwnerRuntime(): Promise<void> {
     currentSessionToken = null;
     currentDeviceId = null;
     claudeState = null;
+    hostModelGroups.resetForOwner();
     account = { authenticated: false, realm: account.realm };
     await attempt(() => runtimeLease?.release());
     runtimeLease = null;
@@ -2235,11 +2291,14 @@ function hostAgentNetPorts(): Parameters<typeof createHostDeviceLink>[0]['agentN
   const credentials = () => (store ??= createCredentialStore({ userDataDir: resolveHostDataDir(),
     keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined }).catch((error: unknown) => { store = null; throw error; }));
   let core: Promise<WebAssembly.Module> | null = null;
+  const agentNetLog = createLogger('agent-net');
+  const fixedUdpPort = parseAgentNetUdpPort(process.env[AGENT_NET_UDP_PORT_ENV], agentNetLog);
   return {
     base: () => base,
     subject: () => accountUser?.id ?? null,
     deviceId: () => currentDeviceId,
-    deviceName: () => process.env.CINDY_HOST_DEVICE_NAME?.trim() || `${os.hostname()} · Cindy Host`,
+    deviceName: readHostDeviceName,
+    bindPort: () => fixedUdpPort,
     readSecret: async key => (await credentials()).read(key),
     writeSecret: async (key, value) => { (await credentials()).write(key, value); },
     enroll: (url, body) => serverApi('/api/agent-net/enroll', { baseUrl: url, method: 'POST', body, timeoutMs: 10_000, cache: 'no-store',
@@ -2265,7 +2324,7 @@ function hostAgentNetPorts(): Parameters<typeof createHostDeviceLink>[0]['agentN
       const scope = createHash('sha256').update(JSON.stringify([base, subject])).digest('hex').slice(0, 32);
       return path.join(resolveHostDataDir(), 'agent-net', scope, 'directory.json');
     },
-    log: createLogger('agent-net'),
+    log: agentNetLog,
   };
 }
 
@@ -2320,9 +2379,21 @@ function startDeviceLink(): void {
     void worktree.reconcilePendingSafeDirectoryCleanups().catch(error =>
       hostLog.warn('deferred Worktree safe.directory cleanup failed', { error }));
   }
+  const sessionHandoff = (isSelfDeviceId: (id: string) => boolean) => createHostSessionHandoff({
+    input: inputQueue, worktree, isSelfDeviceId, assertProviderExecutionSupported,
+    readProviders: async () => (await listProviders({ gateway: currentGateway(), ownerId: runtime.owner })).providers,
+    agents: () => agentGraph?.agents ?? [],
+    hasCindyAiApiKey: () => currentGateway() !== null,
+    broadcastCreated: sessionDraftPorts.emitSessionCreated,
+  });
   deviceLink = createHostDeviceLink({
+    sessionHandoff,
     profileDir, worktree, version: layout.version,
     mcpApps: pluginGateway ?? undefined,
+    autoTitle: {
+      generateTitle: rawRequest => hostAutoTitle.generateTitle(rawRequest),
+      regenerateTitle: rawRequest => hostAutoTitle.regenerateTitle(rawRequest),
+    },
     releaseAuthCaller: caller => agentAuth?.releaseCaller(caller),
     getWsUrl: () => endpoint.replace(/^https:/, 'wss:') + '/api/device-link/ws',
     getToken: async () => currentSessionToken,
@@ -2332,6 +2403,11 @@ function startDeviceLink(): void {
     // 「重新加入」 (`cindy-host remote rejoin`): the same official Device Link service and account token as the device list.
     officialDeviceLinkFetch: (route, opts) => serverApi(route, { ...opts, baseUrl: endpoint, cache: 'no-store', redactErrorDetails: true }),
     invoke: service, subscribe: eventHub.subscribe,
+    readMachineStatus: () => readHostMachineStatus(() =>
+      agentGraph?.maker.listActiveSessions().filter(session => session.isTurnRunning()).length ?? 0),
+    hasPendingQueuedWork: id => inputQueue.hasPendingQueuedWork(id),
+    readSessionActivityMeta: readHostSessionActivityMeta,
+    getHistoryToolName: (id, toolUseId) => inputQueue.getHistoryToolName(id, toolUseId),
     isBusyForProjectArchive: id => !agentGraph || inputQueue.isTurnRunning(id)
       || !!agentGraph.maker.getSession(id)?.isTurnRunning() || isProvisionalSession(id),
     sessionInTurn: id => agentGraph?.maker.getSession(id)?.isTurnRunning() === true
@@ -2442,7 +2518,11 @@ server.listen(PORT, '127.0.0.1', () => {
         const state = await readAdoptedSessionState({ userDataDir: resolveHostDataDir() });
         account = { authenticated: false, realm: state.realm };
         if (state.authenticated) initialUser = await resolveAccountUser();
-        if (!initialUser) { runtime.detail = discovered.reason ?? 'owner is unknown'; return; }
+        if (!initialUser) {
+          warnIfNoAgentBinaries(harnessBinaries.status());
+          runtime.detail = discovered.reason ?? 'owner is unknown';
+          return;
+        }
         owner = initialUser.id;
       }
     }
@@ -2511,6 +2591,7 @@ const stop = () => {
       try {
         commitVolatileAppSession('signed-out', null, true);
         releaseOwnerBoundary();
+        hostModelGroups.dispose();
         workdirProbeHostClient.dispose();
         runtimeLease?.release();
         releaseService();

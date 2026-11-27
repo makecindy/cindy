@@ -9,6 +9,13 @@ export const worktreeRecycleCardSettings = defineSettings({
     targetId: 'settings-search-settings-worktreeRecycle-title',
     titleKey: 'settings.worktreeRecycle.title',
     sectionKey: 'settings.tabs.storage',
+    keywordKeys: [
+      'settings.worktreeRecycle.remote.title',
+      'settings.worktreeRecycle.remote.description',
+      'settings.worktreeRecycle.remote.confirmKeepTitle',
+      'settings.worktreeRecycle.remote.confirmKeepDescription',
+      'settings.worktreeRecycle.remote.sessionLabel',
+    ],
   },
 });
 

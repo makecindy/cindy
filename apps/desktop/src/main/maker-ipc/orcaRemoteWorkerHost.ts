@@ -90,9 +90,10 @@ export function createOrcaRemoteWorkerSessionOpener(deps: {
       else await deps.bootstrapSession(opened, assertCurrent);
     });
     deps.broadcastSessionCreated(row.id);
-    const agentKind = row.agentKind === 'cc' ? 'claude-code' : (row.agentKind as 'codex' | 'pi');
+    const agentKind = row.agentKind === 'cc' ? 'claude-code' : (row.agentKind as 'codex' | 'pi' | 'acp');
     return { workingDir: row.workingDir ?? '', model: row.model, agentKind, effort: row.effort, fastMode: row.fastMode,
-      ...(request.modelGroup || request.agentDeviceId !== undefined ? { agentDeviceId: row.agentDeviceId ?? null, providerId: row.providerId ?? null } : {}) };
+      ...(request.modelGroup || request.agentDeviceId !== undefined || agentKind === 'acp'
+        ? { agentDeviceId: row.agentDeviceId ?? null, providerId: row.providerId ?? null } : {}) };
   };
 }
 
@@ -146,8 +147,7 @@ function fail(code: string, message: string): never {
   throw new Error(`[${code}] ${message}`);
 }
 
-function requireCaller(deps: OrcaRemoteWorkerHostDeps): OrcaRemoteWorkerCaller {
-  const caller = deps.getCaller();
+function requireCaller(caller: OrcaRemoteWorkerCaller | null): OrcaRemoteWorkerCaller {
   if (!caller || !caller.controllerDeviceId) {
     fail('PRECONDITION_FAILED', 'remote worker requests must come from another device');
   }
@@ -155,10 +155,20 @@ function requireCaller(deps: OrcaRemoteWorkerHostDeps): OrcaRemoteWorkerCaller {
   return caller;
 }
 
+export function createRemoteWorkerModelsHandler(
+  deps: Pick<OrcaRemoteWorkerHostDeps, 'getCaller' | 'readModels'>,
+) {
+  return async (raw: unknown): Promise<OrcaRemoteWorkerModelsResult> => {
+    requireCaller(deps.getCaller());
+    if (!deps.readModels) fail('UNSUPPORTED_CAPABILITY', 'remote Worker model discovery is unavailable');
+    return deps.readModels(parseOrcaRemoteWorkerModelsRequest(raw));
+  };
+}
+
 export function createOrcaRemoteWorkerHost(deps: OrcaRemoteWorkerHostDeps) {
   return {
     caps(): OrcaRemoteWorkerCaps {
-      requireCaller(deps);
+      requireCaller(deps.getCaller());
       return {
         version: ORCA_REMOTE_WORKER_VERSION,
         workerBridge: true,
@@ -167,14 +177,10 @@ export function createOrcaRemoteWorkerHost(deps: OrcaRemoteWorkerHostDeps) {
       };
     },
 
-    async models(raw: unknown): Promise<OrcaRemoteWorkerModelsResult> {
-      requireCaller(deps);
-      if (!deps.readModels) fail('UNSUPPORTED_CAPABILITY', 'remote Worker model discovery is unavailable');
-      return deps.readModels(parseOrcaRemoteWorkerModelsRequest(raw));
-    },
+    models: createRemoteWorkerModelsHandler(deps),
 
     async open(raw: unknown): Promise<OrcaRemoteWorkerOpenResult> {
-      const caller = requireCaller(deps);
+      const caller = requireCaller(deps.getCaller());
       const request = parseOrcaRemoteWorkerOpenRequest(raw);
       return deps.withSessionLock(request.sessionId, async () => {
         const existing = await deps.readSession(request.sessionId);
@@ -215,7 +221,7 @@ export function createOrcaRemoteWorkerHost(deps: OrcaRemoteWorkerHostDeps) {
     },
 
     async release(raw: unknown): Promise<{ released: boolean }> {
-      const caller = requireCaller(deps);
+      const caller = requireCaller(deps.getCaller());
       const { sessionId } = parseOrcaRemoteWorkerReleaseRequest(raw);
       return deps.withSessionLock(sessionId, async () => {
         const existing = await deps.readSession(sessionId);

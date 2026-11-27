@@ -16,16 +16,23 @@ const manifest: GhostManifest = { schemaVersion: 3, id: 'task-board', name: 'Tas
       capabilities: ['draft'] } } };
 const permissions = [...ghostHostUiPermissionItems(manifest),
   ...ghostPermissionItems(manifest).filter(item => item.key === 'agent:host-tools:usage')];
+const environmentManifest: GhostManifest = { ...manifest, name: '验收样本，非产品界面',
+  node: { entry: 'node/worker.cjs', protocol: 'json-rpc-stdio', inheritEnv: true } };
+const environmentPermissions = ghostPermissionItems(environmentManifest).filter(item => item.kind === 'node');
 void mountPage({
   host: { ghosts: {
-    onInstallConsentRequest: (callback: (request: GhostInstallConsentRequest) => void) => subscription('hostConsent')(() => callback({
+    onInstallConsentRequest: (callback: (request: GhostInstallConsentRequest) => void) => subscription('hostConsent')((input?: { inheritEnv?: boolean }) => callback({
       requestId: 'fixture-host-permissions', initiator: 'user', origin: 'local-file',
-      facts: { kind: 'install', ghostId: manifest.id, name: manifest.name, version: manifest.version, permissions },
+      facts: { kind: 'install', ghostId: manifest.id, name: input?.inheritEnv ? environmentManifest.name : manifest.name,
+        version: manifest.version, permissions: input?.inheritEnv ? environmentPermissions : permissions },
     })),
     onInstallConsentDismissed: subscription('hostDismissed'),
     resolveInstallConsent: async () => ({ handled: true }),
   } },
-  render: ctx => ctx.case === 'default'
+  render: ctx => ctx.case === 'default' || ctx.case === 'inherit-install'
     ? <GhostInstallConsentHost />
-    : <main className="mx-auto max-w-2xl p-5"><PermissionSummary items={permissions} /></main>,
+    : <main className="mx-auto max-w-2xl p-5">
+      {ctx.case === 'inherit-details' && <p>验收样本，非产品界面</p>}
+      <PermissionSummary items={ctx.case === 'inherit-details' ? environmentPermissions : permissions} />
+    </main>,
 });

@@ -167,9 +167,40 @@ export function redactInputProjectionForSharedGuest<T>(projection: T): T {
   return changed ? (next as T) : projection;
 }
 
+/** Strip private session-level provenance (originating task / remote Orca Lead / smart routing) for shared-task guests. */
+export function redactSessionRowForSharedGuest<T>(session: T): T {
+  if (!session || typeof session !== 'object' || Array.isArray(session)) return session;
+  const record = session as Record<string, unknown>;
+  const hasOrigin = record.createdBySession != null;
+  const hasOrcaLead = record.orcaRemoteLead != null;
+  const hasModelGroupBinding = 'modelGroupBinding' in record;
+  if (!hasOrigin && !hasOrcaLead && !hasModelGroupBinding) return session;
+  const next: Record<string, unknown> = { ...record };
+  if (hasOrigin) next.createdBySession = null;
+  if (hasOrcaLead) next.orcaRemoteLead = null;
+  if (hasModelGroupBinding) delete next.modelGroupBinding;
+  return next as T;
+}
+
 /** 推往共享任务访客的单帧 payload：按 channel 套用对应的来源脱敏。 */
 export function redactSharedGuestPush(channel: string, payload: unknown): unknown {
   if (channel === 'maker:input:projection') return redactInputProjectionForSharedGuest(payload);
+  if (channel === 'local-db:sessions:created' && payload && typeof payload === 'object' && !Array.isArray(payload)) {
+    const record = payload as Record<string, unknown>;
+    if ('session' in record) {
+      const redacted = redactSessionRowForSharedGuest(record.session);
+      return redacted === record.session ? payload : { ...record, session: redacted };
+    }
+    return redactSessionRowForSharedGuest(payload);
+  }
+  if (channel === 'local-db:sessions:patched' && payload && typeof payload === 'object' && !Array.isArray(payload)) {
+    const record = payload as Record<string, unknown>;
+    if ('patch' in record) {
+      const redacted = redactSessionRowForSharedGuest(record.patch);
+      return redacted === record.patch ? payload : { ...record, patch: redacted };
+    }
+    return payload;
+  }
   if (
     channel !== 'local-db:messages:created' ||
     !payload ||

@@ -16,7 +16,7 @@ import { isSharedTaskPeer } from '@cindy/device-link';
 
 import { stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
 import type { SharedTaskAuthor } from '@cindy/maker-shared';
-import type { MessageSourceDevice, MessageSourceGroupRequest, MessageSourceGroupThread, MessageSourcePlugin } from '@cindy/maker-shared/message-source';
+import type { MessageSourceDevice, MessageSourceGroupRequest, MessageSourceGroupThread, MessageSourcePlugin, MessageSourcePluginReply } from '@cindy/maker-shared/message-source';
 import { UI_ACTION_TRIGGER_PREFIX } from '@cindy/maker-shared/synthetic-trigger';
 import { isAnsweredAsyncQuestionClientId } from '@cindy/maker-shared/interaction';
 import { MENTION_TOKEN_SPLIT, parseMentionToken } from '@cindy/maker-shared/mention-ref';
@@ -168,10 +168,11 @@ export interface AgentInputChatMessage {
 }
 
 export interface AgentInputCreateOpts {
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'acp';
   workingDir: string;
   model: string;
   providerId?: string | null;
+  agentDeviceId?: string;
   orcaRole?: 'lead' | 'worker' | null;
   effort?: string;
   fastMode?: boolean | 'ultrafast';
@@ -417,6 +418,11 @@ export interface AgentInputQueuedMessage {
          * 「群里的 Cindy」）。标签与 `[消息来源]` 写出是谁、在哪个群；没有来源任务（senderSessionId 为空）。
          */
         groupRequest?: MessageSourceGroupRequest;
+        /**
+         * 来源任务是本任务回答插件转来的 IM 消息时开的，插件跟随这一轮，把最后回答发回那条消息的来处
+         * （plugin-agent-tasks.md「后续轮次」）。只进 `[消息来源]`，标签照旧是「由任务「X」发送」。
+         */
+        pluginReply?: MessageSourcePluginReply;
       };
   /**
    * 本条由**手机控制端**入队 / 插入。
@@ -508,6 +514,8 @@ export interface AgentInputQueuedMessage {
 
 export type AgentInputDelivery = 'turn' | 'steer';
 
+export type ReconnectHandoff = 'disabled' | 'exhausted';
+
 export type AgentInputRecovery =
   | { kind: 'queue-head'; clientId: string }
   | { kind: 'active-turn'; item: AgentInputQueuedMessage }
@@ -539,6 +547,10 @@ export function normalizeAgentInputClearBoundaryMs(value: unknown): number | nul
 
 export interface AgentInputProjection {
   sessionId: string;
+  /** Recent explicit withdrawals. Older hosts omit this field. */
+  withdrawnQueueClientIds?: string[];
+  /** Snapshot order within a coordinator lifetime. Dispatch ownership is omitted until queue restore succeeds. */
+  queueSnapshot?: { host: string; sequence: number; dispatchClientId?: string | null; pendingSteerClientIds?: string[] };
   /** Host still owns a turn/dispatch/interaction boundary. Older hosts may omit it. */
   turnInProgress?: boolean;
   pendingQueue: AgentInputQueuedMessage[];
@@ -576,6 +588,8 @@ export interface AgentInputProjection {
   errorPersistId?: string | null;
   /** Stable error reason for live clients; older controlled hosts may omit it. */
   errorReason?: string | null;
+  /** Why this reconnect timeout needs manual continuation, when decided by the execution host. */
+  reconnectHandoff?: ReconnectHandoff;
   /** Bounded details for tool-loop errors; never carries the raw provider message. */
   toolLoop?: AgentInputToolLoopDetails | null;
   /** Final-request output usage; optional for older controlled hosts. */

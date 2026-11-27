@@ -42,6 +42,14 @@ export interface PrFollowWatchDeps {
 
 type OkStatus = Extract<PrStatusResult, { ok: true }>;
 
+const ACTIONABLE_GITHUB_MERGE_STATES = new Set(['DIRTY', 'BEHIND']);
+
+/** GitHub reports UNKNOWN while recomputing mergeability after a base push; treat it as absent. */
+function normalizeMergeState(mergeState: string | null | undefined): string {
+  if (!mergeState) return '';
+  return mergeState.toUpperCase() === 'UNKNOWN' ? '' : mergeState;
+}
+
 /** What a follow-up cares about; volatile fields (revision, observedAt) stay out. */
 export function prStatusSignature(result: PrStatusResult): string | null {
   if (!result.ok) return null;
@@ -54,7 +62,7 @@ export function prStatusSignature(result: PrStatusResult): string | null {
     ok.headSha ?? '',
     checks,
     ok.unresolvedCount ?? '',
-    ok.mergeState ?? '',
+    ok.provider === 'gitlab' ? (ok.mergeState ?? '') : normalizeMergeState(ok.mergeState),
     ok.conflicts ?? '',
     ok.reviewDecision ?? '',
     ...(ok.provider === 'gitlab' ? [
@@ -74,12 +82,42 @@ function withKnownMrSummary(signature: string, fallback: string | undefined): st
   return [status, head, checks || otherChecks, threads || otherThreads, ...rest].join('|');
 }
 
+/** On the same PR head, carry forward known GitHub mergeability and summary fields across transient UNKNOWN/null reads. */
+function withKnownGithubSummary(signature: string, fallback: string | undefined): string {
+  if (!fallback) return signature;
+  const parts = signature.split('|');
+  const other = fallback.split('|');
+  if (!parts[1] || parts[1] !== other[1]) return signature;
+  for (const idx of [2, 3, 4, 5, 6] as const) {
+    if (!parts[idx] && other[idx]) parts[idx] = other[idx];
+  }
+  return parts.join('|');
+}
+
+/** When mergeability first resolves on the same head to a non-actionable state, establish baseline without waking. */
+function withBenignGithubBaseline(previous: string, current: string): string {
+  const parts = previous.split('|');
+  const next = current.split('|');
+  if (!parts[1] || parts[1] !== next[1]) return previous;
+  if (!parts[4] && next[4] && !ACTIONABLE_GITHUB_MERGE_STATES.has(next[4].toUpperCase())) {
+    parts[4] = next[4];
+  }
+  if (!parts[5] && next[5] === 'false') {
+    parts[5] = next[5];
+  }
+  return parts.join('|');
+}
+
 export function changesBetween(previous: string | undefined, current: string | undefined, provider?: PrStatusQuery['provider']): PrChange[] {
   if (!previous || !current || previous === current) return [];
   // When detail first becomes available, establish its baseline without treating it as a change.
   if (provider === 'gitlab') {
     current = withKnownMrSummary(current, previous);
     previous = withKnownMrSummary(previous, current);
+    if (previous === current) return [];
+  } else {
+    current = withKnownGithubSummary(current, previous);
+    previous = withBenignGithubBaseline(previous, current);
     if (previous === current) return [];
   }
   const changes: PrChange[] = ['any'];
@@ -151,12 +189,25 @@ export class PrFollowWatch {
     if (fresh === null) return;
     const key = prStatusKey(query);
     const previous = this.signatures.get(key);
-    const signature = query.provider === 'gitlab' ? withKnownMrSummary(fresh, previous) : fresh;
+    const signature = query.provider === 'gitlab'
+      ? withKnownMrSummary(fresh, previous)
+      : withKnownGithubSummary(fresh, previous);
     this.signatures.delete(key);
     this.signatures.set(key, signature);
     if (this.signatures.size > MAX_TRACKED) this.signatures.delete(this.signatures.keys().next().value!);
     const changes = changesBetween(previous, signature, query.provider);
     if (!changes.length) {
+      // Seed reconciledUpdatedAt on the initial baseline read so later overflow sweeps
+      // do not emit redundant `reconcile` triggers for PRs whose updated_at never moved.
+      if (
+        previous === undefined &&
+        this.deps.autoRunAllowed() &&
+        result.ok &&
+        typeof result.metadata?.updated_at === 'string' &&
+        result.metadata.updated_at
+      ) {
+        this.markCommentReconciled(query, result.metadata.updated_at);
+      }
       this.retryPending();
       if (previous === undefined && result.ok && (result.status === 'merged' || (query.provider === 'gitlab' && result.status === 'closed'))) {
         const mergedAt = Date.parse(String((result.status === 'merged' ? result.metadata?.merged_at : result.metadata?.closed_at) ?? ''));

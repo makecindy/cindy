@@ -28,7 +28,7 @@ export interface StdioTransportOptions {
   /** `app-server` 子命令之前/之后的额外参数 (一般用于注入 `-c` overrides)。 */
   extraArgs?: string[];
   /** 本地进程生命周期观察器；仅用于宿主诊断，不得影响 transport 启动。 */
-  onProcessSpawned?: (pid: number) => void | (() => void);
+  onProcessSpawned?: (pid: number, child: ChildProcessWithoutNullStreams) => void | (() => void);
   /** stdin EOF 后等待正常保存和退出的时间；仅测试注入。 */
   gracefulCloseMs?: number;
   /** SIGTERM 后强杀宽限毫秒数;仅测试注入,生产走默认值。 */
@@ -91,7 +91,7 @@ export function createStdioTransport(opts: StdioTransportOptions): Transport {
   let disposeProcessRegistration: (() => void) | undefined;
   if (child.pid != null && child.pid > 0) {
     try {
-      const dispose = opts.onProcessSpawned?.(child.pid);
+      const dispose = opts.onProcessSpawned?.(child.pid, child);
       if (typeof dispose === 'function') disposeProcessRegistration = dispose;
     } catch {
       // 诊断观察器失败不能阻断 app-server；进程归属仍由既有扫描安全边界判断。

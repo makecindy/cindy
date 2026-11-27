@@ -14,6 +14,8 @@ export interface PluginTaskRoute {
   model: string;
   effort: string;
   fastMode: boolean | 'ultrafast';
+  /** Optional smart route id; concrete fields above always remain populated as fallback for legacy callers. */
+  modelGroup?: string;
 }
 /** Same location vocabulary as an explicit route: a paired computer id or share:<id>; never 'local'. */
 export function isPluginTaskAgentDeviceId(value: unknown): value is string {
@@ -83,7 +85,21 @@ export interface PluginTaskRun {
    * run's live execution. Partial, may reset after a tool call, never the final output; never stored.
    */
   preview?: { text: string };
+  /**
+   * capabilities().followUps: present when `send` asked for follow-ups (and on every follow-up run).
+   * `tasks` counts the tasks this run's turn opened with `send_to_session`; when one of them sends
+   * word back, that turn in this task is a follow-up run until `until` (unix ms).
+   */
+  followUps?: { tasks: number; until?: number };
+  /**
+   * A follow-up run: a task that run `followUpOf` opened sent word back into this task. The Host
+   * started it, not the plugin: the turn's answer belongs where that run's request came from.
+   * `NO_REPLY` as the whole answer means nothing is to be delivered.
+   */
+  followUpOf?: string;
 }
+/** How long tasks a run opened can still send word back as follow-up runs. */
+export const PLUGIN_TASK_FOLLOW_UP_MS = 7 * 24 * 60 * 60_000;
 /** UTF-16 chars kept from the start of a streaming preview. */
 export const PLUGIN_TASK_RUN_PREVIEW_MAX_CHARS = 32_768;
 export interface PluginTeamPlan {
@@ -175,6 +191,11 @@ export type PluginTaskRequest = (
       invocationId?: string;
       /** Optional IM relay context (capabilities().messageRelay); rendered as an IM card. */
       relay?: PluginTaskMessageRelay;
+      /**
+       * capabilities().followUps: word sent back by tasks this turn opens becomes follow-up runs of
+       * this task, whose answers the plugin delivers where this message came from. Only `true`.
+       */
+      followUps?: true;
     }
   | { type: 'tasks-request'; kind: 'getRun'; runId: string }
   | { type: 'tasks-request'; kind: 'listRuns'; taskId: string; after?: string; limit?: number }

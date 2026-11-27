@@ -44,9 +44,11 @@ import { createProviderGroupGuestSwitch } from '../../provider-group/guestSwitch
 import { createPendingAgentSwitchRegistry, registerMakerSessionAgentSwitchHandler, relocateForFreshStart,
   type MakerSessionAgentSwitchHandlerDeps } from '../../maker-ipc/sessionAgentSwitchHandler';
 import { withSendToSessionLock } from '../../maker-ipc/sendToSessionLock';
+import { AgentInputCoordinator } from '../../maker-ipc/agent-input-coordinator';
 import { IpcHarness } from '../../maker-ipc/__tests__/helpers/ipcHarness';
 import { MAKER_INVOKE } from '../../maker-ipc/channels';
 import { createGroupFastPolicyStore } from '../../provider-group/fastPolicyStore';
+import { sharedTurnReceipt } from '../sharedTurnValue.js';
 import { PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL } from '../../../shared/providerShareCredentialConsent';
 import { DEFAULT_REMOTE_AGENT_LIMITS, type RemoteAgentLimits } from '../../../shared/remoteAgentLimits';
 import { installDesktopInteractionHandler } from '../../maker-ipc/interactionRouter';
@@ -1919,6 +1921,98 @@ describe('a plugin engine of another computer', () => {
     host.dispose();
   });
 
+  it('propagates runtime capability updates (e.g. steering revocation) to the controller handle', async () => {
+    const listeners = new Set<(capabilities: NonNullable<AgentSessionHandle['negotiatedCapabilities']>) => void>();
+    let currentCapabilities = {
+      ...ENGINE_CAPABILITIES,
+      sameTurnSteer: { supported: true },
+    } as unknown as NonNullable<AgentSessionHandle['negotiatedCapabilities']>;
+    const host = createRemoteAgentHost({
+      isAgentAvailable: () => true,
+      startHosted: async (input) => fakeHostedAgent(input),
+      pluginEngines: {
+        isOffered: (providerId: string) => providerId === ENGINE,
+        start: async (input) => ({
+          ...fakeHostedAgent({ ...input, kind: 'pi' }),
+          agentKind: 'acp' as const,
+          get negotiatedCapabilities() {
+            return currentCapabilities;
+          },
+          onCapabilitiesChange(listener) {
+            listeners.add(listener);
+            return () => { listeners.delete(listener); };
+          },
+        }),
+      },
+      isControllerAuthorized: () => true,
+      captureOwner: () => 'owner',
+      isOwnerCurrent: () => true,
+      runsRoot: hostRoot,
+    });
+    const handle = await start(host);
+    expect(handle.negotiatedCapabilities?.sameTurnSteer.supported).toBe(true);
+    const observed: boolean[] = [];
+    const unsubscribe = handle.onCapabilitiesChange?.((caps) => observed.push(caps.sameTurnSteer.supported));
+
+    currentCapabilities = {
+      ...ENGINE_CAPABILITIES,
+      sameTurnSteer: { supported: false, reason: 'sdk-missing' },
+    } as unknown as NonNullable<AgentSessionHandle['negotiatedCapabilities']>;
+    for (const listener of listeners) listener(currentCapabilities);
+
+    await vi.waitFor(() => {
+      expect(handle.negotiatedCapabilities?.sameTurnSteer.supported).toBe(false);
+    });
+    expect(observed).toEqual([false]);
+    unsubscribe?.();
+
+    await handle.close({ reason: 'navigation' });
+    expect(listeners.size).toBe(0);
+    host.dispose();
+  });
+
+  // 回归测试：远端 ACP 引擎的 requiresRuntimeRecycleForExtraDirs 必须从宿主透传到控制端句柄，
+  // 以便控制端 applyDirectoryGrants 在协商原生 additionalDirectories 时照常回收重建，否则跳过无谓重启。
+  // 最小失败输入：宿主机返回 requiresRuntimeRecycleForExtraDirs=true / false 的 ACP 句柄并调用 setExtraDirs。tier: integration。
+  it.each([
+    { label: 'native additionalDirectories negotiated', recycle: true },
+    { label: 'no native additionalDirectories', recycle: false },
+  ])('propagates requiresRuntimeRecycleForExtraDirs ($label) across remote ACP host and controller', async ({ recycle }) => {
+    const hostExtraDirs: string[][] = [];
+    const host = createRemoteAgentHost({
+      isAgentAvailable: () => true,
+      startHosted: async (input) => fakeHostedAgent(input),
+      pluginEngines: {
+        isOffered: (providerId) => providerId === ENGINE,
+        start: async (input) => ({
+          ...fakeHostedAgent({ ...input, kind: 'pi' }),
+          agentKind: 'acp' as const,
+          negotiatedCapabilities: {
+            ...ENGINE_CAPABILITIES,
+            extraDirs: recycle ? { supported: true } : { supported: false, reason: 'not-implemented' },
+          } as unknown as AgentSessionHandle['negotiatedCapabilities'],
+          setExtraDirs: async (dirs) => {
+            hostExtraDirs.push([...dirs]);
+          },
+          requiresRuntimeRecycleForExtraDirs: () => recycle,
+        }),
+      },
+      isControllerAuthorized: () => true,
+      captureOwner: () => 'owner',
+      isOwnerCurrent: () => true,
+      runsRoot: hostRoot,
+    });
+    const handle = await start(host);
+    expect(handle.requiresRuntimeRecycleForExtraDirs?.()).toBe(recycle);
+    const refDir = path.join(root, 'ref-dir');
+    fs.mkdirSync(refDir, { recursive: true });
+    await handle.setExtraDirs?.([refDir], null);
+    expect(hostExtraDirs).toHaveLength(1);
+
+    await handle.close({ reason: 'navigation' });
+    host.dispose();
+  });
+
   it.each([
     ['the engine is not opened for remote use', { offered: () => false }, /REMOTE_AGENT_PROVIDER_NOT_ALLOWED/],
     ['the other computer cannot run plugin engines for others', { supported: false }, /REMOTE_AGENT_PEER_TOO_OLD/],
@@ -3052,7 +3146,40 @@ describe('shared startup lease budget', () => {
     await resumed.close();
   });
 
-  it('reconnects after a queued done and idle reclaim arrive in one poll', async () => {
+  // #6777, unit: the same JSON terminal goes through the real starter, poll decoder
+  // and projection. A received share with a current grant is required to bind its amount.
+  it.each(['shared', 'ordinary', 'old sender', 'access changed'])('admits an executor estimate from a live run (%s)', async mode => {
+    const f = fixture();
+    f.state.ready = true;
+    const device = mode === 'ordinary' ? 'ordinary-peer' : f.owner;
+    const handle = await f.open('historical', device);
+    const epoch = guestPermission.epoch;
+    try {
+      await handle.send({ type: 'user', content: 'hello' });
+      if (mode === 'access changed') guestPermission.epoch++;
+      const run = [...f.runs.values()].at(-1)!;
+      f.emit(run, { t: 'event', event: { type: 'done', source: 'codex', data: {
+        usage: { promptTokens: 10 }, ...(mode !== 'old sender' && { sharedTurnValue: { amount: 0.12, currency: 'CNY' } }),
+      } } });
+      for await (const event of handle.events()) {
+        if (event.type !== 'done') continue;
+        expect(sharedTurnReceipt(event, 'historical', device)?.money).toEqual(mode === 'shared'
+          ? { amount: 0.12, currency: 'CNY', kind: 'value-estimate', approximate: true } : undefined);
+        return;
+      }
+      throw new Error('Missing Codex terminal');
+    } finally {
+      guestPermission.epoch = epoch;
+      await handle.close();
+    }
+  });
+
+  // Unit: real starter -> runClient -> proxy -> Session. The provider's reclaim
+  // sweep reads live activity and cancels its state timer without a final idle
+  // snapshot. Existing coverage started from {}, hiding a stale busy snapshot.
+  // Minimal input: busy snapshot -> done -> confirmed idle reclaim. Cover both
+  // terminal-consumption orders; Session must admit exactly one new send.
+  it.each([false, true])('reconnects after idle reclaim with a stale busy snapshot (done drained=%s)', async drained => {
     const f = fixture(); f.state.ready = true;
     const handle = await f.open('historical');
     const session = new Session({ id: 'historical', agentKind: 'codex', workDir: project,
@@ -3060,17 +3187,94 @@ describe('shared startup lease budget', () => {
     try {
       expect(await session.send('first')).toMatchObject({ accepted: true });
       const run = [...f.runs.values()].at(-1)!;
+      f.emit(run, { t: 'state', state: { turnRunning: true, preparing: true } });
+      if (drained) {
+        f.emit(run, { t: 'event', event: { type: 'done', source: 'codex', data: {} } });
+        await flush();
+      }
       run.onData(Buffer.from([
-        JSON.stringify({ t: 'event', event: { type: 'done', source: 'codex', data: {} } }),
+        ...(!drained ? [JSON.stringify({ t: 'event', event: { type: 'done', source: 'codex', data: {} } })] : []),
         JSON.stringify({ t: 'closed', reason: 'closed', idleReclaimed: true }), '',
       ].join('\n')), false);
       await flush();
       expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done', generation: 1 });
+      expect(session.isTurnRunning()).toBe(false);
       expect(f.disposed).toEqual([]);
       expect(await session.send('second')).toMatchObject({ accepted: true });
       expect(f.calls.filter(call => call.op === 'open')).toHaveLength(2);
       expect(f.disposed).toEqual([]);
     } finally { await session.close(); }
+  });
+
+  // Unit: real input coordinator + shared starter + Session. Prior tests sent
+  // directly to the handle and could not see queued inputs trapped behind its
+  // stale busy state. Two session-origin inputs cover FIFO and one dispatch per
+  // clientId; Stop must still require the existing explicit resume entrance.
+  it.each([false, true])('drains session messages after idle reclaim without releasing Stop (stopped=%s)', async stopped => {
+    const f = fixture(); f.state.ready = true;
+    const handle = await f.open('historical');
+    const session = new Session({ id: 'historical', agentKind: 'codex', workDir: project,
+      handle, capabilities: {} as never, logger: historyLogger as never, turnStallMs: 0 });
+    const accepted = vi.fn();
+    const coordinator = new AgentInputCoordinator({
+      sendToAgent: async (_id, message, _create, options) => {
+        options.persistUserMessage?.onPersisting?.();
+        await options.persistUserMessage?.onPersisted?.();
+        const content = typeof message === 'string' ? message : message.content;
+        if (typeof content !== 'string') throw new Error('Expected text fixture input');
+        await session.send(content, options);
+        return { kind: 'session-dispatch', source: 'fixture', dispatched: true };
+      },
+      steerToAgent: async () => {}, abortSession: () => session.abort(),
+      isTurnRunning: () => session.isTurnRunning(),
+      hasPendingInteraction: () => false, getAgentKind: () => 'codex',
+      getSdkSessionId: async () => handle.id,
+      createUserMessage: async () => ({} as never), touchUserSend: async () => {},
+      onDispatchedUserTurn: accepted, emitProjection: () => {},
+    });
+    session.onEvent(event => {
+      if (event.type === 'done') coordinator.onTurnEvent(session.id, 'done');
+    });
+    try {
+      await session.send('first');
+      const run = [...f.runs.values()].at(-1)!;
+      f.emit(run, { t: 'state', state: { turnRunning: true, preparing: true } });
+      const inputs = ['reply-1', 'reply-2'].map(clientId => ({
+        clientId, text: clientId, persistedContent: clientId,
+        model: 'm', effort: 'medium', permissionMode: 'default', workingDir: project,
+        chatMessage: { clientId, role: 'user' as const, content: clientId, isStreaming: false, createdAt: new Date().toISOString() },
+        createOpts: { agentKind: 'codex' as const, workingDir: project, model: 'm' },
+        origin: { kind: 'session' as const, senderSessionId: 'sender', displayText: clientId },
+      }));
+      for (const item of inputs) coordinator.enqueue(session.id, item);
+      if (stopped) coordinator.stop(session.id, { keepQueue: true, pauseQueue: true });
+      f.emit(run, { t: 'event', event: { type: 'done', source: 'codex', data: {} } });
+      await flush();
+      f.emit(run, { t: 'closed', reason: 'ended', idleReclaimed: true });
+      await vi.advanceTimersByTimeAsync(250);
+      await flush();
+      expect(coordinator.getProjection(session.id).error).toBeNull();
+      if (stopped) {
+        expect(accepted).not.toHaveBeenCalled();
+        expect(coordinator.getProjection(session.id)).toMatchObject({ queuePaused: true, pendingQueue: inputs });
+        coordinator.resume(session.id);
+        await flush();
+      }
+      await vi.waitFor(() => expect(accepted.mock.calls.map(([, item]) => item.clientId)).toEqual(['reply-1']));
+      const resumedRun = [...f.runs.values()].at(-1)!;
+      f.emit(resumedRun, { t: 'event', event: { type: 'done', source: 'codex', data: {} } });
+      await flush();
+      await vi.waitFor(() => expect(accepted.mock.calls.map(([, item]) => item)).toMatchObject(inputs));
+      f.emit(resumedRun, { t: 'event', event: { type: 'done', source: 'codex', data: {} } });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(coordinator.getProjection(session.id).pendingQueue).toEqual([]);
+      expect(accepted).toHaveBeenCalledTimes(2);
+      expect(f.calls.filter(call => call.method === 'send')).toHaveLength(3);
+      expect(f.calls.filter(call => call.op === 'open')).toHaveLength(2);
+    } finally {
+      coordinator.onSessionClosed(session.id);
+      await session.close();
+    }
   });
 
   // 测试价值

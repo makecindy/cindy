@@ -51,7 +51,7 @@ vi.mock('@/components/AppText', async () => {
 vi.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 40, bottom: 20 }) }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('lucide-react-native', () => ({
-  ...Object.fromEntries(['Clock3', 'Brain', 'SlidersHorizontal', 'Check', 'Zap', 'LayoutGrid', 'Search', 'X', 'ChevronDown', 'ChevronRight', 'ChevronsUpDown', 'CircleAlert', 'Waypoints'].map(key => [key, () => null])),
+  ...Object.fromEntries(['Clock3', 'Brain', 'Puzzle', 'SlidersHorizontal', 'Check', 'Zap', 'LayoutGrid', 'Search', 'X', 'ChevronDown', 'ChevronRight', 'ChevronsUpDown', 'CircleAlert', 'Sparkles'].map(key => [key, () => null])),
   Star: ({ fill, color }: any) => createElement('span', { 'data-star-fill': fill, 'data-star-color': color }),
 }));
 vi.mock('react-native-svg', () => ({
@@ -518,5 +518,189 @@ it.each([['Android', UnifiedModelPickerView], ['iOS', IosModelPickerView]] as co
       ?? [...host.querySelectorAll('button')].find(node => node.textContent?.includes('Night'));
     await act(async () => (row as HTMLElement).click());
     expect(onSelect).toHaveBeenCalledWith('night');
+  },
+);
+
+// 生产入口：Android(UnifiedModelPickerView) 与 iOS(UnifiedModelPickerView.ios)；
+// 可观察结果：Antigravity 多配额分组在双端分组头内联分开显示 Gemini 与 Claude & GPT（与内置分组头一致，不画多余进度条），
+// 且各模型行分别渲染所属配额池的 quotaLabel。
+// 规则依据：用户需求「Gemini 与其他模型分开显示，参照其他模型风格」与双端一致性。
+// 最小失败输入与 tier：unit(jsdom)，任一端未分开显示 Gemini/Claude & GPT 或漏渲染行级 quotaLabel。
+it.each([['Android', UnifiedModelPickerView], ['iOS', IosModelPickerView]] as const)(
+  'renders separate Gemini and Claude & GPT quota in header and model rows for Antigravity on %s', async (_platform, Component) => {
+    await act(async () => root.render(createElement(Component, {
+      visible: true,
+      testID: 'picker',
+      title: 'Models',
+      query: '',
+      filter: 'all',
+      filters: [{ id: 'all', label: 'All' }],
+      groups: [],
+      pluginEngines: {
+        onSelect: vi.fn(),
+        groups: [
+          {
+            key: 'plugin-engine:acp-plugin:agy:agy',
+            providerId: 'acp-plugin:agy:agy',
+            title: 'Antigravity',
+            quota: {
+              summary: 'Gemini 57% · Claude & GPT 24%',
+              level: 'warn',
+              accessibilityLabel: 'Gemini · 57% · 1h · Claude & GPT · 24% · 4d',
+              isMultiGroup: true,
+              groups: [
+                {
+                  id: 'label:gemini models',
+                  label: 'Gemini',
+                  remaining: 57,
+                  level: 'normal',
+                  reset: '1h',
+                  summary: '57% · 1h',
+                  accessibilityLabel: 'Gemini · 57% · 1h',
+                },
+                {
+                  id: 'label:claude and gpt models',
+                  label: 'Claude & GPT',
+                  remaining: 24,
+                  level: 'warn',
+                  reset: '4d',
+                  summary: '24% · 4d',
+                  accessibilityLabel: 'Claude & GPT · 24% · 4d',
+                },
+              ],
+            },
+            rows: [
+              {
+                key: 'acp-plugin:agy:agy#gemini-4-neon',
+                providerId: 'acp-plugin:agy:agy',
+                modelId: 'gemini-4-neon',
+                title: 'Gemini 4 Neon',
+                quotaLabel: '1h · 57%',
+                effort: null,
+                efforts: [],
+                effortLabel: '',
+                selected: false,
+                disabled: false,
+              },
+              {
+                key: 'acp-plugin:agy:agy#claude-sonnet-5-5',
+                providerId: 'acp-plugin:agy:agy',
+                modelId: 'claude-sonnet-5-5',
+                title: 'Claude Sonnet 5.5',
+                quotaLabel: '4d · 24%',
+                effort: null,
+                efforts: [],
+                effortLabel: '',
+                selected: false,
+                disabled: false,
+              },
+            ],
+          },
+          {
+            key: 'plugin-engine:acp-plugin:dsh:dsh',
+            providerId: 'acp-plugin:dsh:dsh',
+            title: 'DeepSeek Harness',
+            quota: {
+              summary: '64% · 2h',
+              level: 'normal',
+              accessibilityLabel: 'Weekly · 64% · 2h',
+              remaining: 64,
+              groups: [
+                {
+                  id: 'default',
+                  label: 'Weekly',
+                  remaining: 64,
+                  level: 'normal',
+                  reset: '2h',
+                  summary: '64% · 2h',
+                  accessibilityLabel: 'Weekly · 64% · 2h',
+                },
+              ],
+            },
+            rows: [
+              {
+                key: 'acp-plugin:dsh:dsh#v4',
+                providerId: 'acp-plugin:dsh:dsh',
+                modelId: 'v4',
+                title: 'DeepSeek V4',
+                effort: null,
+                efforts: [],
+                effortLabel: '',
+                selected: false,
+                disabled: false,
+              },
+            ],
+          },
+        ],
+      },
+    } as any)));
+
+    expect(host.querySelectorAll('[data-quota]')).toHaveLength(0);
+    expect(host.textContent).toContain('Gemini');
+    expect(host.textContent).toContain('57%');
+    expect(host.textContent).toContain('Claude & GPT');
+    expect(host.textContent).toContain('24%');
+    expect(host.textContent).toContain('1h · 57%');
+    expect(host.textContent).toContain('4d · 24%');
+    expect(host.textContent).toContain('64% · 2h');
+  },
+);
+
+// 生产入口：Android(UnifiedModelPickerView) 与 iOS(UnifiedModelPickerView.ios)；
+// 可观察结果：两端都在「收藏」分组渲染插件引擎收藏行、在插件引擎行上提供配置入口、并渲染 pluginEngineOptions 收藏页。
+// 规则依据：protocol-compatibility/plugin-harnesses.md「插件引擎模型收藏」与双端一致性。
+// 最小失败输入与 tier：unit(jsdom)，任一端漏渲染收藏行或漏接 pluginEngineOptions.onFavorite。
+it.each([['Android', UnifiedModelPickerView], ['iOS', IosModelPickerView]] as const)(
+  'renders plugin engine favorites and pluginEngineOptions page on %s', async (_platform, Component) => {
+    const onSelect = vi.fn();
+    const onOptions = vi.fn();
+    const onFavorite = vi.fn();
+    const favRow = {
+      key: 'fav-1',
+      providerId: 'acp-plugin:dsh:dsh',
+      modelId: 'pro',
+      title: 'Pro',
+      subtitle: 'DeepSeek Harness',
+      engineName: 'DeepSeek Harness',
+      effort: 'max' as const,
+      efforts: ['low', 'high', 'max'] as ('low' | 'high' | 'max')[],
+      effortLabel: 'Max',
+      selected: false,
+      disabled: false,
+      favorite: { uid: 'fav-1', providerId: 'acp-plugin:dsh:dsh', modelId: 'pro', agent: 'claude-code' as const, effort: 'max', fast: false },
+    };
+    await act(async () => root.render(createElement(Component, {
+      visible: true, testID: 'picker', query: '', filter: 'favorites', filters: [],
+      groups: [{ key: 'favorites', title: 'Favorites', rows: [], items: [{ kind: 'pluginEngine', row: favRow }] }],
+      pluginEngines: { groups: [], onSelect, onOptions },
+    } as any)));
+    expect(host.textContent).toContain('Favorites');
+    expect(host.textContent).toContain('Pro');
+    expect(host.textContent).toContain('DeepSeek Harness');
+    const rowEl = host.querySelector('[data-testid="picker.pluginEngine.fav-1"]')
+      ?? [...host.querySelectorAll('button')].find((node) => node.textContent?.includes('Pro'));
+    await act(async () => (rowEl as HTMLElement).click());
+    expect(onSelect).toHaveBeenCalledWith(favRow);
+
+    await act(async () => root.render(createElement(Component, {
+      visible: true, testID: 'picker', query: '', filter: 'all', filters: [], groups: [],
+      pluginEngineOptions: {
+        row: favRow,
+        context: 'DeepSeek Harness',
+        effort: 'max',
+        efforts: ['low', 'high', 'max'],
+        onChangeEffort: vi.fn(),
+        favoritesDisabled: false,
+        isFavorite: false,
+        configurationSummary: 'DeepSeek Harness · Max',
+        editingFavorite: false,
+        onFavorite,
+      },
+    } as any)));
+    const favBtn = host.querySelector('[data-testid="picker.favorite"]')
+      ?? [...host.querySelectorAll('button')].find((node) => node.textContent?.includes('models.unified.favoriteConfiguration'));
+    expect(favBtn).toBeTruthy();
+    await act(async () => (favBtn as HTMLElement).click());
+    expect(onFavorite).toHaveBeenCalledOnce();
   },
 );

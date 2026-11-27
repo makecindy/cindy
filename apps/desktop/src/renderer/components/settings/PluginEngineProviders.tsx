@@ -16,6 +16,7 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 
 import type { GhostHarnessUsage } from '@cindy/plugin-protocol';
+import { isAntigravityPluginId } from '@cindy/maker-shared/branding';
 
 import { readInstalledGhostsSnapshot } from '@/cindy-brain/useInstalledGhosts';
 import { useUninstallPlugin } from '@/features/plugin/lib/useUninstallPlugin';
@@ -250,6 +251,7 @@ function RemoteAccessRow({
                 type="button"
                 data-settings-search-action="Open the remote control settings"
                 onClick={() => navigate('/settings?tab=remote-control')}
+                // 无框文字按钮：圆角只塑形键盘焦点环（DESIGN.md §5 登记）
                 className="rounded-sm text-[var(--text-secondary)] underline underline-offset-2 transition-colors hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
               >
                 {t('providerShare.entry.openRemoteControl')}
@@ -454,6 +456,8 @@ function EngineModels({ engine }: { engine: PluginEngineView }) {
         <PluginModelAdvancedDialog
           key={currentModel.id}
           model={currentModel}
+          reported={engine.reportedModelDetails?.find(details => details.modelId === currentModel.id)}
+          antigravity={isAntigravityPluginId(engine.ghostId)}
           providerName={engine.name}
           customized={Object.hasOwn(engine.modelEfforts ?? {}, currentModel.id)}
           enabled={Boolean(enabledModel)}

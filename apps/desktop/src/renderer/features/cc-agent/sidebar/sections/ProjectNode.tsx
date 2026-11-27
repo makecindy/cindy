@@ -74,6 +74,10 @@ export interface ProjectNodeProps {
   project: ProjectNodeData;
   /** Optional visible subset; project-level actions still receive the full project. */
   displaySessions?: ProjectNodeData['sessions'];
+  /** 收件箱模式下置顶项目内的任务沿用收件箱显示规则。 */
+  inboxMode?: boolean;
+  /** 隐藏收件箱行上的稍后处理和完成按钮（用于置顶区）。 */
+  hideInboxActions?: boolean;
   /** 置顶栏列表模式可让展开后的会话使用满宽列表行；普通项目默认仍是紧凑文字行。 */
   sessionVariant?: 'text' | 'list';
   /** 当前会话状态筛选，决定项目菜单是批量归档还是批量恢复。 */
@@ -134,6 +138,8 @@ export interface ProjectNodeProps {
 export const ProjectNode = memo(function ProjectNode({
   project,
   displaySessions,
+  inboxMode = false,
+  hideInboxActions = false,
   sessionVariant = 'text',
   statusFilter,
   isCollapsed,
@@ -204,6 +210,8 @@ export const ProjectNode = memo(function ProjectNode({
         <div className="flex flex-col gap-0.5 pt-0.5">
           <SessionEntryList
             sessions={displaySessions ?? project.sessions}
+            inboxMode={inboxMode}
+            hideInboxActions={hideInboxActions}
             activeSessionId={activeSessionId}
             runningSessionIds={runningSessionIds}
             attachedSessionIds={attachedSessionIds}
@@ -419,7 +427,7 @@ const ProjectHeader = memo(function ProjectHeader({
               }}
               onClick={(e) => e.stopPropagation()}
               className={cn(
-                'min-w-0 flex-1 h-6 px-1.5 rounded',
+                'min-w-0 flex-1 h-6 px-1.5 rounded-full',
                 'text-sm font-normal text-foreground',
                 'bg-transparent outline-none',
                 'border-[1.5px] border-[var(--focus-ring)]',
@@ -715,7 +723,7 @@ function ProjectAction({ label, onClick, disabled = false, children }: ProjectAc
         onPointerDown={(e) => e.stopPropagation()}
         onKeyDown={(e) => e.stopPropagation()}
         className={cn(
-          'shrink-0 size-5 flex items-center justify-center rounded-md',
+          'shrink-0 size-5 flex items-center justify-center rounded-lg',
           'text-sidebar-action-icon hover:text-foreground',
           'hover:bg-sidebar-item-hover focus:outline-none',
           'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent',

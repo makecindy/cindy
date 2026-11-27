@@ -80,6 +80,9 @@ const isComputerPermissionView = isComputerPermissionGuide || isComputerPermissi
 document.documentElement.dataset.platform = window.electronAPI.platform;
 document.documentElement.dataset.windowBackdropMaterial =
   window.electronAPI.windowBackdropMaterial ?? 'none';
+if (window.electronAPI.gpuFallback) {
+  document.documentElement.dataset.gpuFallback = 'true';
+}
 const disposeWindowBackdropMaterialChanged =
   window.electronAPI.onWindowBackdropMaterialChanged?.((material) => {
     document.documentElement.dataset.windowBackdropMaterial = material;

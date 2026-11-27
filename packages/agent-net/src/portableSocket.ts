@@ -228,6 +228,12 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
         relayIdOf: (key) => socket.deviceForKey(key),
         admittedPeers: () => socket.peerIds().filter(id => socket.authorized(id))
           .map(id => ({ id: socket.transportKeyHex(id)!, relayId: id })),
+        onLocalPortChanged: (port, reason) => {
+          const currentDial = socket.transport?.dial as { udp?: { address: string; port: number } } | undefined;
+          if (currentDial?.udp) currentDial.udp = { ...currentDial.udp, port };
+          socket.lan?.updatePort?.(port);
+          options.onUdpRebound?.(reason);
+        },
         onIncoming: (channel) => socket.adopt(channel, false),
       });
       socket.uplink?.onDatagram((id, data) => socket.receive(id, data));
@@ -380,6 +386,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
           },
         } : {}),
         ...(wire.onBody ? { onBody: (handler: Parameters<NonNullable<SessionWire['onBody']>>[0]) => wire.onBody!(handler) } : {}),
+        ...(wire.onDrain ? { onDrain: (handler: () => void) => wire.onDrain!(handler) } : {}),
       };
       // Session v2 only when both ends declared it: an older node closes the connection on a body stream.
       const bodies = !!wire.openBody && peer.channel.sessionBodies === true
@@ -388,6 +395,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
         wire: checked, role: scope.role, laneFor: config.laneFor, bodies,
         onOpen: guard(handlers.onOpen), onClose: guard(handlers.onClose), onRequest: guard(handlers.onRequest),
         onPush: guard(handlers.onPush),
+        onDrain: guard(handlers.onDrain),
         // This socket keeps presence for its Device Link client: a peer's session presence becomes the same local event as its frame.
         onPresence: scope.role === 'both' ? guard((payload: unknown) => this.peerPresence(peer, payload)) : guard(handlers.onPresence),
         onBroken: (code) => {
@@ -729,6 +737,11 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     this.transport?.networkChanged?.();
     if (!this.uplink) this.reconnectRelayNow(false);
   }
+  /** Updates the STUN server list (e.g. peer official region STUN discovered asynchronously). */
+  setStunServers(servers: readonly string[]): void {
+    if (this.closed) return;
+    this.transport?.setStunServers?.(servers);
+  }
   /** Session requests to a relayed peer timed out (see Transport.relayStalled). */
   relayStalled(): void {
     if (this.closed) return;
@@ -846,6 +859,9 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
           this.replacedReconnectUntil = Date.now() + Math.round(floor * (0.7 + Math.random() * 0.3));
         }
       }
+      // Unexpected 1006 closure (not ended by this side) commonly accompanies a transparent proxy / VPN toggle or route
+      // drop: notify the transport once the relay reconnects so it can rebind a stale UDP socket and re-probe direct/UDP.
+      if (code === 1006 && !reason) this.resendWhenRelayBack = true;
       this.acknowledgeHello();
       // Existing direct connections remain alive; loss of one relay does not tear down the app socket.
       this.scheduleReconnect();

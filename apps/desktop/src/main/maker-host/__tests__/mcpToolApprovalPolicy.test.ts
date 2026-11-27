@@ -272,30 +272,33 @@ describe('desktop MCP approval policy', () => {
       })).toBe('auto-approve');
     }
   });
-  // #7875 security review: a page could steer the agent into switching to the user's own browser, so
-  // that switch goes through session approval; switching to Cindy's own browsers stays quiet.
-  it('reviews switching to the user\'s own browser', () => {
-    const toUser = { action: 'setBackend', backend: 'user-browser' };
-    for (const toolName of ['call_tool', undefined]) {
-      expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_browser', toolName,
-        toolParams: { name: 'browser', args: JSON.stringify(toUser) },
-      })).toBe('prompt-each-time');
+  // #7875 + P0-1 security review: switching browser backends in ANY direction mutates the global
+  // persisted setting across tasks (pulling the user out of My browser into external Chrome, or
+  // handing the agent their signed-in browser), so every setBackend call goes through session approval.
+  it('reviews switching browser backend in any direction', () => {
+    for (const backend of ['user-browser', 'external', 'rsb-webview', undefined]) {
+      const payload = backend === undefined ? { action: 'setBackend' } : { action: 'setBackend', backend };
+      for (const toolName of ['call_tool', undefined]) {
+        expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_browser', toolName,
+          toolParams: { name: 'browser', args: JSON.stringify(payload) },
+        })).toBe('prompt-each-time');
+        expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_browser', toolName,
+          toolParams: { name: 'browser', args: payload },
+        })).toBe('prompt-each-time');
+      }
+      expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_browser', toolName: 'browser', toolParams: payload }))
+        .toBe('prompt-each-time');
     }
-    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_browser', toolName: 'browser', toolParams: toUser }))
-      .toBe('prompt-each-time');
     // Each upload hands a local file to a website, so it is reviewed too (2026-10-30).
     expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_browser', toolName: 'call_tool',
       toolParams: { name: 'browser', args: { action: 'upload', paths: ['/tmp/a.pdf'] } },
     })).toBe('prompt-each-time');
-    for (const backend of ['external', 'rsb-webview']) {
-      expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_browser', toolName: 'call_tool',
-        toolParams: { name: 'browser', args: { action: 'setBackend', backend } },
-      })).toBe('auto-approve');
-    }
+    const toUser = { action: 'setBackend', backend: 'user-browser' };
     // A batch must not carry a reviewed action past approval (2026-11-10); ordinary sequences stay quiet.
     for (const [steps, policy] of [
       [[{ action: 'navigate', url: 'https://example.test/' }, { action: 'upload', paths: ['/tmp/a.pdf'] }], 'prompt-each-time'],
       [[{ action: 'batch', steps: [toUser] }], 'prompt-each-time'],
+      [[{ action: 'setBackend', backend: 'external' }], 'prompt-each-time'],
       ['not-a-list', 'prompt-each-time'],
       [[{ action: 'navigate', url: 'https://example.test/' }, { action: 'extract', extract: { fields: { title: 'h1' } } }], 'auto-approve'],
     ] as const) {
@@ -610,6 +613,17 @@ describe('helper task workspace and SkillHub publication authorization', () => {
     expect(policy('call_tool', { name: 'get_teammate_home', args: { teammate_id: 'mia' } })).not.toBe('prompt-each-time');
   });
 
+  // #10568: scheduling/cancelling relocation changes durable filesystem intent;
+  // preview/status remain reads through direct and progressive tool entry points.
+  it('reviews workspace move requests and cancellations through the task permission mode', () => {
+    for (const action of ['request', 'cancel', 'preview', 'status']) {
+      const args = { action, teammate_id: 'buddy', ...(action === 'request' || action === 'preview' ? { target_directory: '/data/buddy' } : {}) };
+      const expected = ['request', 'cancel'].includes(action) ? 'prompt-each-time' : 'auto-approve';
+      expect(policy('teammate_workspace_migration', args)).toBe(expected);
+      expect(policy('call_tool', { name: 'teammate_workspace_migration', args })).toBe(expected);
+    }
+  });
+
   it('does not infer a safe helper action from missing or malformed evidence', () => {
     for (const params of [undefined, null, [], 'invalid JSON', {}, { name: '' }, { name: 42 }]) {
       expect(policy('call_tool', params)).toBe('prompt-each-time');
@@ -813,6 +827,8 @@ describe('cross-device actions use the task permission mode', () => {
         toolParams: { name: 'send_to_session', args: { target_session_id: target, message: 'hi' } },
       });
     expect(helper('mbp::sess-9')).toBe('prompt-each-time');
+      // Shared links use the same task permission flow, never trusted-server silence.
+      expect(helper('cindy://session/shared?device=scoped')).toBe('prompt-each-time');
     expect(helper('mbp::sess-9', undefined)).toBe('prompt-each-time');
     expect(helper('sess-9')).toBe('prompt-each-time');
     expect(helper('local::sess-9')).toBe('prompt-each-time');

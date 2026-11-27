@@ -1,5 +1,5 @@
 import type { AgentInputCoordinatorDeps } from './agent-input-coordinator.js';
-import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
+import type { AgentInputQueuedMessage, ReconnectHandoff } from '../../shared/agentInputQueue.js';
 import { MODEL_GROUP_LIMITS } from '../../shared/modelGroups.js';
 import { canRecoverUndeliveredOrcaReport } from '../../shared/sharedTaskRecovery.js';
 import type { AutoResumeBookkeeping, SuppressedTurnErrorOwner } from './autoResumeBookkeeping.js';
@@ -107,7 +107,7 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
   } = {
     onResumableTurnErrorDiscarded: (
       sessionId: string,
-      options: { surfaceError: boolean; owner: SuppressedTurnErrorOwner; providerGroupSwitchHoldId?: number },
+      options: { surfaceError: boolean; owner: SuppressedTurnErrorOwner; reconnectHandoff?: ReconnectHandoff; providerGroupSwitchHoldId?: number },
     ) => {
       if (options.providerGroupSwitchHoldId !== undefined) {
         const deferred = autoResumeBookkeeping.takeDeferredError(sessionId, options.owner);
@@ -120,7 +120,7 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
         return;
       }
       if (options.surfaceError) {
-        autoResumeBookkeeping.surfaceSuppressedError(sessionId, { deferredOwner: options.owner });
+        autoResumeBookkeeping.surfaceSuppressedError(sessionId, { deferredOwner: options.owner, ...(options.reconnectHandoff ? { reconnectHandoff: options.reconnectHandoff } : {}) });
       } else {
         autoResumeBookkeeping.flushSuppressedError(sessionId, { deferredOwner: options.owner });
       }
@@ -140,10 +140,16 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
       const startupAdmission = signals.reason === BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON;
       const sameRouteRetryable = reportPreparation || localPreparation || isInterruptedTurnError(signals) || groupScope === 'transient';
       const erroredAt = Date.now();
-      const decision = interruptedTurnAutoResumeGuard.onInterruptedTurn(sessionId, erroredAt,
-        groupScope !== null ? { enabled: true, maxEpisodeAttempts: modelGroupEpisodeLimit }
-          : modelGroupPolicy !== undefined ? { enabled: modelGroupInputs?.isInterruptedTurnAutoResumeEnabled() } : undefined,
-      );
+      const ordinaryReconnect = groupScope === null && signals.reason === 'codex_reconnect_stalled';
+      // A resumed connection can fail much later after useful work. The guard resets
+      // its consecutive counter on real output and keeps the overall episode cap.
+      const repeatReconnect = ordinaryReconnect && item.autoResume === true &&
+        item.autoResumeInfo?.reason === signals.reason;
+      const decision = interruptedTurnAutoResumeGuard.onInterruptedTurn(sessionId, erroredAt, {
+        ...(groupScope !== null ? { enabled: true, maxEpisodeAttempts: modelGroupEpisodeLimit }
+          : modelGroupPolicy !== undefined ? { enabled: modelGroupInputs?.isInterruptedTurnAutoResumeEnabled() } : {}),
+        ...(repeatReconnect ? { maxConsecutiveAttempts: 1 } : {}),
+      });
       if (decision.action !== 'resume') {
         // 不接管 → coordinator 走常规错误呈现(落 error 行 + 红横幅 + 「继续任务」)。
         // 额度耗尽 / 熔断 / 开关关闭都走这里:自愈救不动了就把方向盘交回用户。
@@ -151,6 +157,10 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
           sessionId,
           action: decision.action,
         });
+        if (signals.reason === 'codex_reconnect_stalled') {
+          if (decision.action === 'exhausted') signals.recordReconnectHandoff?.('exhausted');
+          else if (decision.why === 'disabled') signals.recordReconnectHandoff?.('disabled');
+        }
         return null;
       }
       // 接管:压住这条错误的落库与横幅,只在聊天流里显示低调的自愈提示。
@@ -230,7 +240,8 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
                   ...(modelGroupPolicy !== undefined ? [{
                     retrySameSource: !groupSwitch,
                     accountUnavailable: groupScope === 'connection',
-                    hasImages: item.files?.some(file => file.category === 'image') === true,
+                    hasImages: item.files?.some(file => file.category === 'image') === true
+                      || (Array.isArray((item as { images?: unknown[] }).images) && (item as { images?: unknown[] }).images!.length > 0),
                   }] as const : []),
                 );
               fallbackRebuildSession = fallback.session;
@@ -316,8 +327,8 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
         ...(typeof signals.reason === 'string' && signals.reason.length > 0
           ? { reason: signals.reason }
           : {}),
-        attempt: decision.attempt,
-        maxAttempts: decision.maxAttempts,
+        attempt: ordinaryReconnect ? 1 : decision.attempt,
+        maxAttempts: ordinaryReconnect ? 1 : decision.maxAttempts,
         sessionTotal: decision.sessionTotal,
       };
     },

@@ -12,6 +12,9 @@ import { createLogger } from '@/lib/logger';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import type { HelpFeedbackDraftInput, HelpLocale, HelpMessage } from '@/../shared/helpTypes';
 import { resolveSystemLocale } from '@/../shared/locale';
+import { FieldVoiceInputNotice } from '@/voice-input/FieldVoiceInputNotice';
+import { useFieldVoiceInput } from '@/voice-input/useFieldVoiceInput';
+import { VoiceInputButton } from '@/voice-input/VoiceInputButton';
 
 const log = createLogger('HelpThreadView');
 
@@ -36,9 +39,20 @@ export function HelpThreadView() {
   const navigate = useNavigate();
   const { messages, pending } = useHelpThread();
   const [value, setValue] = useState('');
+  const [stoppingVoice, setStoppingVoice] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const submittingVoiceRef = useRef(false);
 
-  const canSend = value.trim().length > 0 && !pending;
+  const voice = useFieldVoiceInput<HTMLInputElement>({
+    draftKey: 'help-thread',
+    inputRef,
+    value,
+    onChange: (next) => setValue(next),
+    disabled: pending,
+  });
+
+  const canSend = voice.displayText.trim().length > 0 && !pending && !stoppingVoice;
   const locale = localeFromI18n(i18n.language);
 
   // Keep the newest message in view (data-then-render: store is hydrated on
@@ -48,9 +62,22 @@ export function HelpThreadView() {
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages, pending]);
 
-  const send = () => {
-    if (!canSend) return;
-    const next = value;
+  const send = async () => {
+    if (!canSend || submittingVoiceRef.current) return;
+    let next = value;
+    if (voice.isBusy) {
+      submittingVoiceRef.current = true;
+      setStoppingVoice(true);
+      try {
+        const stopped = await voice.stop();
+        if (stopped === null) return;
+        next = stopped;
+      } finally {
+        submittingVoiceRef.current = false;
+        setStoppingVoice(false);
+      }
+      if (!next.trim() || pending) return;
+    }
     setValue('');
     void askHelp(next, locale);
   };
@@ -94,25 +121,32 @@ export function HelpThreadView() {
 
       <div className="shrink-0 border-t border-[var(--settings-theme-card-border)] px-4 py-3">
         <div className="flex items-center gap-2">
-          <input
-            value={value}
-            onChange={(event) => setValue(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.nativeEvent.isComposing && canSend) {
-                event.preventDefault();
-                send();
-              }
-            }}
-            disabled={pending}
-            placeholder={t('settings.help.qnaPlaceholder')}
-            className="min-w-0 flex-1 rounded-full border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] px-4 py-2 text-13 text-[var(--settings-section-title)] outline-none placeholder:text-[var(--text-placeholder)] disabled:opacity-60"
-          />
+          <div className="flex min-w-0 flex-1 items-center gap-1.5 rounded-full border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] py-1 pl-4 pr-1 focus-within:border-[var(--focus-ring)]">
+            <input
+              ref={inputRef}
+              data-settings-search-action="Enter a question for Cindy Help"
+              value={voice.displayText}
+              readOnly={voice.isBusy}
+              onChange={(event) => setValue(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !event.nativeEvent.isComposing && canSend) {
+                  event.preventDefault();
+                  void send();
+                }
+              }}
+              disabled={pending}
+              placeholder={t('settings.help.qnaPlaceholder')}
+              className="min-w-0 flex-1 bg-transparent py-1 text-13 text-[var(--settings-section-title)] outline-none placeholder:text-[var(--text-placeholder)] disabled:opacity-60"
+            />
+            <VoiceInputButton {...voice.buttonProps} testId="help-thread-voice" tipSide="top" />
+          </div>
           <button
             type="button"
+            data-settings-search-action="Send the help question"
             disabled={!canSend}
-            onClick={send}
+            onClick={() => void send()}
             className={cn(
-              'shrink-0 rounded-full px-4 py-2 text-12 font-medium transition-colors',
+              'h-[40px] shrink-0 rounded-full px-4 text-12 font-medium transition-colors',
               canSend
                 ? 'bg-[var(--settings-menu-bg-selected)] text-[var(--settings-menu-text-selected)]'
                 : 'bg-[var(--surface-chip)] text-[var(--text-tertiary)]',
@@ -121,6 +155,7 @@ export function HelpThreadView() {
             {t('settings.help.qnaSend')}
           </button>
         </div>
+        <FieldVoiceInputNotice error={voice.lastError} speakerFiltered={voice.speakerFiltered} className="mt-1.5" />
       </div>
     </div>
   );
@@ -324,16 +359,17 @@ function FeedbackSection(props: {
   };
 
   return (
-    <div className="mt-3 flex flex-col gap-2 rounded-md border border-[var(--settings-theme-card-border)] bg-[var(--surface-chip)] p-2.5">
+    <div className="mt-3 flex flex-col gap-2 rounded-lg border border-[var(--settings-theme-card-border)] bg-[var(--surface-chip)] p-2.5">
       <div className="flex flex-col gap-1">
         <label className="text-11 font-medium text-[var(--settings-section-sublabel)]">
           {t('settings.help.qnaFeedbackTitleLabel', { defaultValue: 'Title' })}
         </label>
         <input
+          data-settings-search-action="Types the title of a help feedback message; not a setting"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           disabled={submitting}
-          className="w-full rounded border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] px-2 py-1 text-12 text-[var(--settings-section-title)] outline-none disabled:opacity-60"
+          className="w-full rounded-full border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] px-2 py-1 text-12 text-[var(--settings-section-title)] outline-none disabled:opacity-60"
         />
       </div>
       <div className="flex flex-col gap-1">
@@ -343,11 +379,12 @@ function FeedbackSection(props: {
           })}
         </label>
         <textarea
+          data-settings-search-action="Types the details of a help feedback message; not a setting"
           value={body}
           onChange={(e) => setBody(e.target.value)}
           disabled={submitting}
           rows={8}
-          className="w-full resize-y rounded border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] px-2 py-1.5 font-mono text-11 leading-[1.5] text-[var(--settings-section-title)] outline-none disabled:opacity-60"
+          className="w-full resize-y rounded-lg border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] px-2 py-1.5 font-mono text-11 leading-[1.5] text-[var(--settings-section-title)] outline-none disabled:opacity-60"
         />
       </div>
       {errorMsg && <div className="text-11 text-[var(--error-fg)]">{errorMsg}</div>}
