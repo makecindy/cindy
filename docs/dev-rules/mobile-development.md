@@ -446,8 +446,8 @@ iOS 的系统选图器在确认后立即把选中项交给现有附件队列。�
 实现：`modules/cindy-photo-picker/`、`src/session/deferredPhotoLibrary.ts` 与
 `useMobileLocalAttachments.ts`；回归：`deferredPhotoLibrary.test.ts`、
 `useMobileLocalAttachmentsAbandon.test.tsx`。新增原生模块需要冷更，不能作为旧安装包的 OTA
-独立交付；旧原生包缺模块时继续使用 Expo 选图入口。首次发布应随下一次 iOS 原生包交付，
-指纹与存量装机影响仍须按下文冷更边界在 PR 中写明。Android 保持系统选图器和既有附件队列。
+独立交付；旧原生包缺模块时继续使用 Expo 选图入口。首次发布须随 iOS 原生包交付，
+PR 按下文冷更边界说明影响平台与旧包兼容。Android 保持系统选图器和既有附件队列。
 
 ### 相册照片与视频附件
 
