@@ -1799,6 +1799,7 @@ describe('remote connection pool with a real host', () => {
       await vi.waitFor(() => expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done' }));
 
       // Idle release, then peer upgrades to advertise writableDirs + setWritableDirs.
+      await sleep(5);
       expect(await pool.releaseForRetry(member('other', 0, false))).toBe(true);
       peerSupportsWritableDirs = true;
 
@@ -1815,6 +1816,7 @@ describe('remote connection pool with a real host', () => {
 
       // Idle release again, then peer downgrades (loses setWritableDirs):
       // capability flips back to false so beforeTurn skips setWritableDirs.
+      await sleep(5);
       expect(await pool.releaseForRetry(member('other', 0, false))).toBe(true);
       peerSupportsWritableDirs = false;
       expect(await session.send('turn-4')).toMatchObject({ accepted: true });
@@ -1871,6 +1873,7 @@ describe('remote connection pool with a real host', () => {
       expect(scenario.calls.filter((call) => call.method === 'setWritableDirs')).toHaveLength(1);
 
       // Idle release, then reconnect to a downgraded peer without setWritableDirs.
+      await sleep(5);
       expect(await pool.releaseForRetry(member('other', 0, false))).toBe(true);
       peerSupportsWritableDirs = false;
       expect(await ask(a, events, 'after-downgrade')).toBe('ok:after-downgrade');
