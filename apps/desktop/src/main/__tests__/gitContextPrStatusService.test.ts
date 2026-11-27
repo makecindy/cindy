@@ -563,7 +563,7 @@ describe('GitLab MR status', () => {
     repo: 'project',
     prNumber: 7,
   };
-  it('uses the exact plugin host when glab is unavailable and discards a read across an account switch', async () => {
+  it('prefers the exact plugin host over local glab, falls back to glab, and discards a read across an account switch', async () => {
     const cli = createGlabCliTokenSource({ exec: vi.fn((_bin, _args, _opts, cb) => cb({ code: 'ENOENT' }, '')) as never });
     let owner = 'first';
     const readPlugin = vi.fn(async (host: string) => host === q.host ? 'fixture' : null);
@@ -574,9 +574,7 @@ describe('GitLab MR status', () => {
       return 'fixture';
     })).toMatchObject({ ok: false });
     cli.rejectToken(q.host);
-    readPlugin.mockClear();
-    expect(await readGitlabStatusToken(q.host, cli, () => owner, readPlugin)).toMatchObject({ ok: false });
-    expect(readPlugin).not.toHaveBeenCalled();
+    expect(await readGitlabStatusToken(q.host, cli, () => owner, async () => null)).toEqual({ ok: false, reason: 'glab-not-logged-in' });
   });
 
   // The title bar should remain usable on self-managed instances with an older GraphQL schema.
@@ -998,6 +996,23 @@ describe('PR follow watch', () => {
     expect(runNow).toHaveBeenCalledTimes(1);
     await look(300_000);
     expect(runNow).toHaveBeenCalledTimes(1);
+  });
+
+  // 2026-11-24: a specific GitLab MR is a prTrigger followed by timed status reads. It must never be
+  // sent to the GitHub App subscription, and a verified merge observed by the shared reader runs it.
+  it('follows a GitLab MR trigger through status observations only', async () => {
+    const mr = 'https://gitlab.example.com/group/app/-/merge_requests/12';
+    const tasks = [schedule('mr', mr, { prTrigger: { url: mr, change: 'merged' } })];
+    const runNow = vi.fn(async () => null);
+    const watch = new PrFollowWatch({ listActive: async () => tasks, runNow, inflight: () => 0,
+      autoRunAllowed: () => true, hasCapacity: () => true });
+    expect(followedGithubPrs(tasks)).toEqual([]);
+    const query = { provider: 'gitlab' as const, host: 'gitlab.example.com', owner: 'group', repo: 'app', prNumber: 12 };
+    watch.observe(query, { ok: true, status: 'open' } as never);
+    watch.observe(query, { ok: true, status: 'merged' } as never);
+    await new Promise(resolve => setImmediate(resolve));
+    expect(runNow).toHaveBeenCalledTimes(1);
+    expect(runNow.mock.calls[0]?.slice(0, 3)).toEqual(['mr', expect.objectContaining({ detail: mr }), tasks[0]]);
   });
 
   it('runs the selected merge condition for event-only automations, independent of an incidental hook URL', async () => {
@@ -1646,5 +1661,83 @@ describe('PR follow watch', () => {
       await scheduler.stop();
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  // 测试价值：
+  // - 防退化点：主干推进触发 GitHub 重算可合并性时，mergeState 在 CLEAN↔UNKNOWN、conflicts 在 false↔null
+  //   间抖动（或 GraphQL 摘要临时降级），曾导致每个打开 PR 触发两次 pr-status 误唤醒。
+  // - 触发条件：同一 headSha 下连续观测 CLEAN/false → UNKNOWN/null → GraphQL 降级 → CLEAN/false，
+  //   以及 UNKNOWN/null 基线分别收敛为 CLEAN/false 与 DIRTY/true。
+  // - 生产入口与可观察结果：真实 PrStatusService + PrFollowWatch.observe 链路，断言瞬态抖动与无害基线收敛
+  //   产生 0 次 runNow 唤醒，真实冲突 DIRTY/true（无论从 CLEAN 还是从 UNKNOWN 基线进入）立即唤醒。
+  // - 依赖策略：仅替换 fetchPr 与内存 runNow 回调，无真实网络或真实时钟等待。
+  // - 对应规则或根因：docs/dev-rules/server-channel-review.md（状态签名稳定，避免伪变更唤醒风暴）。
+  it('ignores transient GitHub UNKNOWN mergeState and null conflicts recomputation while waking on real conflicts', async () => {
+    const runNow = vi.fn(async (_id: string) => ({ runId: 'run-1' }));
+    const pr1 = { ...Q, prNumber: 201 };
+    const pr2 = { ...Q, prNumber: 202 };
+    const pr3 = { ...Q, prNumber: 203 };
+    const urlFor = (n: number) => `https://github.com/${Q.owner}/${Q.repo}/pull/${n}`;
+    const schedules: EngineSchedule[] = [201, 202, 203].map((n) => ({
+      id: `follow-${n}`,
+      name: `Follow #${n}`,
+      status: 'active',
+      recurring: true,
+      createdAt: 0,
+      prTrigger: { url: urlFor(n), change: 'any' },
+    }) as EngineSchedule);
+    const watch = new PrFollowWatch({
+      now: () => 1_000_000,
+      listActive: async () => schedules,
+      inflight: () => 0,
+      hasCapacity: () => true,
+      autoRunAllowed: () => true,
+      runNow,
+    });
+    const responses = new Map<number, ReturnType<typeof remote>>();
+    const svc = new PrStatusService({
+      readToken: TOKEN_OK,
+      fetchPr: async (_token, q) => responses.get(q.prNumber)!,
+      onObserved: (query, result) => watch.observe(query, result),
+    });
+    const refresh = async (q: typeof Q) => {
+      const [result] = await svc.getStatuses([q], { waitForFresh: true, refresh: true });
+      expect(result?.ok).toBe(true);
+    };
+
+    const checks = { total: 2, passed: 2, failed: 0, pending: 0, skipped: 0 };
+    // PR #201: CLEAN/false -> UNKNOWN/null -> GraphQL degraded null -> CLEAN/false -> 0 wakeups.
+    responses.set(201, remote({ head_sha: 'h1', merge_state: 'CLEAN', checks, unresolved_count: 0, review_decision: 'APPROVED', metadata: { mergeable: true } }));
+    await refresh(pr1);
+    responses.set(201, remote({ head_sha: 'h1', merge_state: 'UNKNOWN', checks, unresolved_count: 0, review_decision: 'APPROVED', metadata: { mergeable: null } }));
+    await refresh(pr1);
+    responses.set(201, remote({ head_sha: 'h1', merge_state: null, checks: null, unresolved_count: null, review_decision: null, metadata: { mergeable: null } }));
+    await refresh(pr1);
+    responses.set(201, remote({ head_sha: 'h1', merge_state: 'CLEAN', checks, unresolved_count: 0, review_decision: 'APPROVED', metadata: { mergeable: true } }));
+    await refresh(pr1);
+    await Promise.resolve();
+    expect(runNow).not.toHaveBeenCalled();
+
+    // PR #202: baseline observed during recomputation (UNKNOWN/null) -> resolves benign CLEAN/false -> 0 wakeups.
+    responses.set(202, remote({ head_sha: 'h2', merge_state: 'UNKNOWN', checks, unresolved_count: 0, metadata: { mergeable: null } }));
+    await refresh(pr2);
+    responses.set(202, remote({ head_sha: 'h2', merge_state: 'CLEAN', checks, unresolved_count: 0, metadata: { mergeable: true } }));
+    await refresh(pr2);
+    await Promise.resolve();
+    expect(runNow).not.toHaveBeenCalled();
+
+    // PR #201 then hits a real conflict (DIRTY / mergeable: false) -> wakes immediately.
+    responses.set(201, remote({ head_sha: 'h1', merge_state: 'DIRTY', checks, unresolved_count: 0, review_decision: 'APPROVED', metadata: { mergeable: false } }));
+    await refresh(pr1);
+    await vi.waitFor(() => expect(runNow).toHaveBeenCalledTimes(1));
+    expect(runNow.mock.calls[0]?.[0]).toBe('follow-201');
+
+    // PR #203: baseline observed during recomputation (UNKNOWN/null) -> resolves to real conflict (DIRTY/true) -> wakes immediately!
+    responses.set(203, remote({ head_sha: 'h3', merge_state: 'UNKNOWN', checks, unresolved_count: 0, metadata: { mergeable: null } }));
+    await refresh(pr3);
+    responses.set(203, remote({ head_sha: 'h3', merge_state: 'DIRTY', checks, unresolved_count: 0, metadata: { mergeable: false } }));
+    await refresh(pr3);
+    await vi.waitFor(() => expect(runNow).toHaveBeenCalledTimes(2));
+    expect(runNow.mock.calls[1]?.[0]).toBe('follow-203');
   });
 });

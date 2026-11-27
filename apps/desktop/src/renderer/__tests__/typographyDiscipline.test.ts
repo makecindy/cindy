@@ -268,12 +268,6 @@ const EXEMPTIONS: Exemption[] = [
     ],
   },
   {
-    file: 'src/renderer/components/chat/UserMessage.tsx',
-    rule: 'arb-size',
-    reason: '紧凑代码字号派生值',
-    signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_2px)]', expected: 1 }],
-  },
-  {
     file: 'src/renderer/components/markdown/MermaidSourceEditor.tsx',
     rule: 'arb-size',
     reason: '紧凑代码字号派生值',
@@ -369,7 +363,7 @@ const FIXED_LEADING_DEBT: Exemption[] = [
   fixedLeadingDebt('src/renderer/features/bots/BotLifecycleSettings.tsx', { 'leading-5': 1 }),
   fixedLeadingDebt('src/renderer/features/bots/BotMarketDialog.tsx', { 'leading-5': 1, 'leading-6': 1 }),
   fixedLeadingDebt('src/renderer/features/bots/BotMarketModules.tsx', { 'leading-5': 4 }),
-  fixedLeadingDebt('src/renderer/features/bots/BotModelChainEditor.tsx', { 'leading-5': 2 }),
+  fixedLeadingDebt('src/renderer/features/bots/BotModelChainEditor.tsx', { 'leading-5': 1 }),
   fixedLeadingDebt('src/renderer/features/bots/BotProjectsSettings.tsx', { 'leading-5': 3, 'leading-6': 1 }),
   fixedLeadingDebt('src/renderer/features/bots/BotRosterView.tsx', { 'leading-5': 1 }),
   fixedLeadingDebt('src/renderer/features/bots/BotSettingsBlock.tsx', { 'leading-5': 2 }),

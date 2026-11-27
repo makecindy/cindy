@@ -121,9 +121,12 @@ HTTPS 链接 `https://host/group/subgroup/project/-/merge_requests/N` 沿既有�
 provider / host / owner / repo / number。不同 GitLab 实例上的同名项目不会串用缓存。
 迁移由 Drizzle 生成；配套脚本逐列检查后添加，兼容部分字段已存在的库。
 
-执行电脑按 MR 自身 host 调用 `glab config get token --host <host>`，令牌只用于该
-HTTPS origin，重定向不得跨 origin 或降级 HTTP。没有令牌不请求 API；未安装 glab、
-未登录分别提示，401 视为未登录。令牌及 CLI stdout 不写日志，不返回客户端。
+执行电脑按 MR 自身 host 读取凭证，顺序与官方 GitLab 插件一致（2026-11-26 用户确认统一顺序）：先用官方 GitLab 插件
+（已启用、已批准）里为该实例显式添加的连接，只按 MR 的 host 精确匹配，只用于这次只读的 MR 状态请求，不写回、不交给
+其他功能；插件里没有该实例连接时，再调用本机 `glab config get token --host <host>`。令牌只用于该 HTTPS origin，
+重定向不得跨 origin 或降级 HTTP。没有令牌不请求 API；插件令牌被 401 拒绝时只暂停插件这一路 30 秒，不影响 glab，
+glab 被 401 拒绝视为未登录。两边都没有时分别提示安装或登录 glab（同时说明可在 GitLab 插件里添加该实例）；令牌及 CLI
+stdout 不写日志，不返回客户端。
 窗口恢复焦点时只清除 glab 令牌负缓存和 GitLab 认证失败结果，保留成功缓存与在途
 请求；终端登录后无需额外刷新按钮。
 远程、SSH 和只读任务不展示本机登录引导；GitLab 不使用 GitHub 安装登录窗口。

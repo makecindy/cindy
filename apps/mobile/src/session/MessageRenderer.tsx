@@ -6113,7 +6113,9 @@ function MobileAutoResumeActionRow({
   const { t } = useTranslation();
   const [expanded, setExpanded] = useRecyclingState(false);
   const presentation = getMobileAutoResumePresentation(data, inFlight);
-  const { canExpand, hasProgress, info, state, summary } = presentation;
+  const { canExpand, hasProgress, info, state } = presentation;
+  const reconnectStalled = data?.reason === 'codex_reconnect_stalled' && !info.groupSwitchPending;
+  const summary = reconnectStalled ? t('session.tail.codexReconnectStalled') : presentation.summary;
 
   if (state === 'separator') {
     const label = t('message.systemCard.autoResume.separator');
@@ -6148,7 +6150,7 @@ function MobileAutoResumeActionRow({
     ? t('message.systemCard.autoResume.usageReset')
     : state === 'live'
     ? hasProgress
-      ? t('message.systemCard.autoResume.pendingWithProgress', {
+      ? t(reconnectStalled ? 'message.systemCard.autoResume.continuingWithProgress' : 'message.systemCard.autoResume.pendingWithProgress', {
           attempt: info.attempt,
           total: info.maxAttempts,
         })

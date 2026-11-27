@@ -4,6 +4,7 @@ import { uploadMobileAttachmentFromFile } from '@/session/mobileAttachmentUpload
 import { accountVaultKey } from '@cindy/auth-client';
 import { cancelledCreationDraft, outboxCreationRetryIdentity } from '../session/cancelledCreationDraft';
 import { cindyMakeOutboxPolicy } from '../session/cindyMakeOutboxPolicy';
+import { beginOutboxBackgroundSend, hasOutboxBackgroundSend, isPendingPlainText } from '../session/outboxBackgroundSend';
 import {
   createDurableOutbox,
   isDurableOutboxUnsent,
@@ -1008,6 +1009,47 @@ describe("app-owned delivery and reconciliation", () => {
     await createDurableOutboxDelivery({ ...deps, cacheHistory: async () => { deactivate(); return true; } }).run();
     expect(store.getSnapshot()[0]?.cleanupOutcome).toBeUndefined();
     expect(deps.cleanup).not.toHaveBeenCalled();
+  });
+  // Unit, #11930: restart coverage misses losing the enqueue reply while still
+  // in background. The same send should show as pending and reconcile on backoff.
+  it('reconciles a lost reply in the original background window without resending', async () => {
+    vi.useFakeTimers();
+    try {
+      const { store, deps, storage } = await setup();
+      const record = message();
+      await store.add(record);
+      const end = beginOutboxBackgroundSend(record, () => () => {}, async () => ({ budgetMs: 8_000, end() {} }));
+      try {
+        const runner = createDurableOutboxDelivery({
+          ...deps, canRun: hasOutboxBackgroundSend, accepted: async () => end(),
+        });
+        deps.enqueue.mockRejectedValueOnce(new Error('response lost'));
+        await runner.run();
+        const uncertain = store.getSnapshot()[0]!;
+        expect(uncertain.state).toBe('confirming');
+        expect.soft(isPendingPlainText(uncertain)).toBe(true);
+
+        deps.projection.mockResolvedValue(projection(record.item.clientId, 'accepted'));
+        // Releasing the last background hold stops the connection. The receipt
+        // must settle this send even when the remote history is unavailable.
+        deps.history.mockRejectedValue(new Error('background connection stopped'));
+        await vi.advanceTimersByTimeAsync(2_000);
+        await runner.run();
+        expect(store.getSnapshot()[0]?.state).toBe('host-owned');
+        expect(deps.history).not.toHaveBeenCalled();
+        expect(deps.enqueue).toHaveBeenCalledTimes(1);
+        runner.stop();
+        const reopened = await setup(storage);
+        reopened.deps.history.mockResolvedValue(true);
+        await reopened.runner.run();
+        expect(reopened.deps.enqueue).not.toHaveBeenCalled();
+        expect(reopened.store.getSnapshot()).toEqual([]);
+      } finally {
+        end();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
   });
   it("restarts after a lost receipt, finds durable host ownership, and never enqueues twice", async () => {
     const first = await setup();
