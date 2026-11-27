@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { setImmediate } from 'node:timers/promises';
 
 import { gitExec, GitExecError, type GitExecOpts } from './gitExec';
+import { GIT_LISTING_MAX_BUFFER } from './gitOutputLimits';
 import type { WorktreeRecycleRecord } from './recycleJournal';
 
 async function indexHash(worktreePath: string): Promise<string> {
@@ -50,7 +51,7 @@ async function withTemporaryIndex<T>(run: (env: Record<string, string>) => Promi
  * one without a commit makes `git add` fail. Like ignored files they are not preserved.
  */
 async function untrackedNestedRepositories(worktreePath: string, extraEnv: Record<string, string>): Promise<string[]> {
-  const { stdout } = await gitExec(['ls-files', '--others', '--exclude-standard', '-z'], worktreePath, { extraEnv });
+  const { stdout } = await gitExec(['ls-files', '--others', '--exclude-standard', '-z'], worktreePath, { extraEnv, maxBuffer: GIT_LISTING_MAX_BUFFER });
   return stdout.split('\0').filter((entry) => entry.endsWith('/')).map((entry) => entry.slice(0, -1));
 }
 
@@ -61,7 +62,7 @@ async function untrackedNestedRepositories(worktreePath: string, extraEnv: Recor
  * otherwise it would be recorded as deleted.
  */
 async function unmarkHiddenEdits(worktreePath: string, extraEnv: Record<string, string>): Promise<void> {
-  const { stdout } = await gitExec(['ls-files', '-v', '-z'], worktreePath, { extraEnv });
+  const { stdout } = await gitExec(['ls-files', '-v', '-z'], worktreePath, { extraEnv, maxBuffer: GIT_LISTING_MAX_BUFFER });
   const marked: string[] = [];
   for (const entry of stdout.split('\0')) {
     const tag = entry[0];
@@ -139,12 +140,12 @@ export async function presentFilesMatchSnapshotTree(
   return withTemporaryIndex(async (extraEnv) => {
     await gitExec(['read-tree', tree], worktreePath, { extraEnv });
     await gitExec(['update-index', '-q', '--refresh'], worktreePath, { extraEnv }).catch(() => undefined);
-    const { stdout: changed } = await gitExec(['diff-files', '--name-status', '-z'], worktreePath, { extraEnv });
+    const { stdout: changed } = await gitExec(['diff-files', '--name-status', '-z'], worktreePath, { extraEnv, maxBuffer: GIT_LISTING_MAX_BUFFER });
     const fields = changed.split('\0').filter(Boolean);
     for (let index = 0; index < fields.length; index += 2) {
       if (fields[index] !== 'D') return false;
     }
-    const { stdout: extra } = await gitExec(['ls-files', '--others', '--exclude-standard', '-z'], worktreePath, { extraEnv });
+    const { stdout: extra } = await gitExec(['ls-files', '--others', '--exclude-standard', '-z'], worktreePath, { extraEnv, maxBuffer: GIT_LISTING_MAX_BUFFER });
     for (const entry of extra.split('\0')) {
       if (entry === '' || entry.endsWith('/')) continue;
       if (!allowExtraFile || !(await allowExtraFile(entry))) return false;
@@ -160,7 +161,7 @@ export async function checkoutMissingSnapshotFiles(worktreePath: string, tree: s
     // Without --force Git skips existing paths and reports them as errors; completeness is checked below.
     await gitExec(['checkout-index', '--all', '--quiet'], worktreePath, { extraEnv }).catch(() => undefined);
     await gitExec(['update-index', '-q', '--refresh'], worktreePath, { extraEnv }).catch(() => undefined);
-    const { stdout } = await gitExec(['diff-files', '--name-status', '-z', '--diff-filter=D'], worktreePath, { extraEnv });
+    const { stdout } = await gitExec(['diff-files', '--name-status', '-z', '--diff-filter=D'], worktreePath, { extraEnv, maxBuffer: GIT_LISTING_MAX_BUFFER });
     if (stdout.length > 0) throw new Error('snapshot files could not be restored');
   });
 }
@@ -321,7 +322,7 @@ const MAX_DISCARDABLE_ENTRIES = 2_000;
  */
 export async function discardableWorktreePaths(worktreePath: string): Promise<string[] | null> {
   const listed = async (args: string[]) => (await gitExec(['ls-files', ...args, '-z'], worktreePath, {
-    extraEnv: { GIT_OPTIONAL_LOCKS: '0' },
+    extraEnv: { GIT_OPTIONAL_LOCKS: '0' }, maxBuffer: GIT_LISTING_MAX_BUFFER,
   })).stdout.split('\0').filter(Boolean);
   const ignored = await listed(['--others', '--ignored', '--exclude-standard', '--directory']);
   const nested = (await listed(['--others', '--exclude-standard'])).filter((entry) => entry.endsWith('/'));
@@ -331,6 +332,6 @@ export async function discardableWorktreePaths(worktreePath: string): Promise<st
 
 /** Every path a snapshot tree holds, read from the base repository with one Git process. */
 export async function snapshotTreePaths(baseRepo: string, tree: string): Promise<Set<string>> {
-  const { stdout } = await gitExec(['ls-tree', '-r', '-z', '--name-only', tree], baseRepo);
+  const { stdout } = await gitExec(['ls-tree', '-r', '-z', '--name-only', tree], baseRepo, { maxBuffer: GIT_LISTING_MAX_BUFFER });
   return new Set(stdout.split('\0').filter(Boolean));
 }

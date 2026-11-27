@@ -247,6 +247,7 @@ export function createInputQueue(deps) {
     // auto-resume and the context recovery settle a held one when they give up.
     const productTurn = createHostProductTurn({ getBoundSession: id => executor.boundSession(id),
       touchActivity: deps.touchSessionActivity, log });
+    const modelGroupInputs = new WeakMap();
     // The desktop's auto-resume (auto-resume.ts), one per owner runtime with its coordinator.
     const autoResume = createHostAutoResume({
       productTurn: () => productTurn,
@@ -261,6 +262,7 @@ export function createInputQueue(deps) {
       },
       maybeApplySessionRuntimeFallback: deps.maybeApplySessionRuntimeFallback,
       pendingSessionRuntimeFallbackRebuilds: deps.pendingSessionRuntimeFallbackRebuilds,
+      readModelGroupInputMode: deps.readModelGroupAutoSwitchMode ? (createOpts => modelGroupInputs.get(createOpts)) : undefined,
       isProfileHeld: () => profileHold !== null,
       log,
     });
@@ -345,6 +347,10 @@ export function createInputQueue(deps) {
       noteAborting: (id, aborting) => { stateFor(id).aborting = aborting; },
       publish, persist, flushed, afterSnapshot, attachmentOwnership, acceptedCallbacks,
       schedulePreparations, scheduleDiscardWatchers, autoResume, rollover: () => rollover,
+      markModelGroupInput: (createOpts, mode) => {
+        if (mode) modelGroupInputs.set(createOpts, mode);
+        else modelGroupInputs.delete(createOpts);
+      },
     }));
     // The desktop's idle-runtime release (idle-release.ts), one set of watchers per owner runtime.
     const idleRelease = deps.readClaudeIdleMinutes ? createHostIdleRelease({
@@ -582,11 +588,15 @@ export function createInputQueue(deps) {
         const admission = stateFor(id).admission;
         return command(id, async state => {
           if (coordinator.hasKnownClientId(id, item?.clientId)) {
+            handoff?.onQueueAcceptanceStarted?.();
             await flushed(id);
             return api.projection(id);
           }
           const known = await deps.getPersistedClientIds?.(id, [item?.clientId]);
-          if (known?.has(item?.clientId)) return api.projection(id);
+          if (known?.has(item?.clientId)) {
+            handoff?.onQueueAcceptanceStarted?.();
+            return api.projection(id);
+          }
           refuseWhileHeld();
           const stored = handoff ? await deps.readSession(id, { forHandoff: true }) : await deps.readSession(id);
           if (handoff && !stored) {
@@ -607,6 +617,8 @@ export function createInputQueue(deps) {
           try {
             state.lastUserActionAt = Date.now();
             coordinator.setExecutionPaused(id, true);
+            // The coordinator may mutate the queue before reporting a failure.
+            handoff?.onQueueAcceptanceStarted?.();
             coordinator.enqueue(id, prepared.item);
             accepted = true;
             if (prepared.ownerId) attachmentOwnership.activateCurrentOwner(id, item.clientId, prepared.ownerId);

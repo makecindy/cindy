@@ -768,7 +768,7 @@ describe('newMakerDraft store', () => {
     expect(restored.getDraft().collab.workerConfig).toBeUndefined();
   });
 
-  it('clears the Worker model group when the collaboration draft moves to SSH', async () => {
+  it('preserves the Worker model group when the collaboration draft moves to SSH', async () => {
     const { getDraft, patchDraft } = await loadModule();
     patchDraft({
       collab: {
@@ -780,9 +780,8 @@ describe('newMakerDraft store', () => {
     patchDraft({ workingDir: '/ssh/project', remoteHostId: 'ssh-1' });
     expect(getDraft().collab).toMatchObject({
       enabled: true,
-      workerConfig: { model: 'claude-opus-4-7' },
+      workerConfig: { model: 'claude-opus-4-7', modelGroup: 'coding' },
     });
-    expect(getDraft().collab.workerConfig?.modelGroup).toBeUndefined();
   });
 
   it('另起干净任务时只关闭协同，不覆盖 Worker 创建偏好', async () => {

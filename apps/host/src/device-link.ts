@@ -289,8 +289,7 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
   // The desktop answers `maker:usage:model-pricing` (device-link v1) with the flat USD projection and
   // `-v2` with the native quotes (usageHandlers.ts). Both contract entries share one Host path, which
   // answers v2 for the renderer; v2 is not on the device-link allowlist, so v1 is projected here.
-  const readRemoteHistory = createRemoteHistoryHandler();
-  registry.register(DL_HISTORY_MESSAGES_CHANNEL, ([request]) => {
+  const assertSameAccountHistoryAccess = () => {
     const context = getDeviceLinkInvokeContext();
     if (!context || context.sharedTask || isScopedPeer(context.controllerDeviceId)) {
       throwIpcError('PERMISSION_DENIED', 'An authorized device link is required');
@@ -298,7 +297,15 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     if (!botBoundary.hasRemoteBotSessionLookup()) {
       throwIpcError('PRECONDITION_FAILED', 'Task visibility is not ready');
     }
+  };
+  const readRemoteHistory = createRemoteHistoryHandler();
+  registry.register(DL_HISTORY_MESSAGES_CHANNEL, ([request]) => {
+    assertSameAccountHistoryAccess();
     return readRemoteHistory(request);
+  });
+  registry.register('local-db:messages:around-client-id', ([sessionId, clientId, opts]) => {
+    assertSameAccountHistoryAccess();
+    return call('/api/messages/around-client-id', { sessionId, clientId, opts });
   });
   registry.register('maker:usage:model-pricing', async () => toLegacyUsdModelPricing(await call('/api/usage/model-pricing', {})));
   // Coexistence plan A: while a desktop uses this profile, a new task's runtime and a plugin page's
@@ -461,17 +468,22 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
               deviceGeneration !== access.deviceAccessGeneration(peer)) {
             throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
           }
-          refuseWhileHeld();
         };
       },
       validate: async (peer, input, assertAccess) => {
-        assertAccess?.();
+        const assertValidationAccess = () => {
+          assertAccess?.();
+          // Releasing an existing receipt changes no task data on this computer.
+          // A held profile still refuses new handoffs and validates no delivery.
+          if (!input.release) refuseWhileHeld();
+        };
+        assertValidationAccess();
         await openReceiptLink(peer);
         const args = [{ action: 'validate-task-action', ...input }];
         const response = await client.invoke(peer, { channel: DL_SESSION_HANDOFF_CHANNEL, args },
           resolveRemoteInvokeTimeoutMs(DL_SESSION_HANDOFF_CHANNEL, args, 'desktop'),
-          { preSend: assertAccess, background: true });
-        assertAccess?.();
+          { preSend: assertValidationAccess, background: true });
+        assertValidationAccess();
         const result = response.ok ? response.result as { valid?: unknown; released?: unknown } | null : null;
         return result?.valid === true && (!input.release || result.released === true);
       },
@@ -705,6 +717,13 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
   });
   registry.register(MAKER_INVOKE.GET_SESSION_AGENT_SWITCH_INTENT, ([sessionId]) =>
     call('/api/sessions/agent-switch-intent', { sessionId }));
+  registry.register('model-groups:route-note', ([raw]) => {
+    refuseWhileHeld();
+    if (readDeviceLinkModelSelectionOrigin() !== 'owner') {
+      throwIpcError('PRECONDITION_FAILED', 'model group route notes require an owner controller');
+    }
+    return call('/api/model-groups/route-note', raw ?? {});
+  });
   registry.register('maker:session:prewarm', async ([id, input]) => {
     assertCurrent();
     if (readDeviceLinkModelSelectionOrigin() !== 'owner') throw new Error('[PRECONDITION_FAILED] Task owner required');
@@ -1158,17 +1177,26 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
       } else await settings.writeDeviceLinkSetting('remoteControlEnabled', false);
       sync(); return this.state();
     },
-    /** This Host's 「Agent-Net (Beta)」 setting (off by default); the main connection follows it right away. */
+    /**
+     * This Host's 「Agent-Net (Beta)」 setting (off by default); the main connection follows it right away. Turning it on when the
+     * official service says this Host was removed from the account first runs `rejoin` below (2026-11-26: a removed device must be
+     * able to come back; signing in again restores only Device Link), then turns it on whatever that answered — a Host refused
+     * by Agent-Net runs on the Device Link relay. The rejoin outcome and its hint come back as `rejoin`.
+     */
     async setAgentNetEnabled(enabled: boolean) {
       assertCurrent();
       refuseWhileHeld();
       if (!agentNet) throw new Error('Agent-Net is not available on this Host.');
+      const removed = enabled && settings.readDeviceLinkSettings().agentNetEnabled !== true && await agentNet.removedFromAccount();
+      assertCurrent();
+      const rejoin = removed ? (await this.rejoin({ agentNet: true })).rejoin : undefined;
+      assertCurrent();
       await settings.updateDeviceLinkSetting('agentNetEnabled', () => {
         assertCurrent();
         refuseWhileHeld();
         return enabled;
       });
-      sync(); return this.state();
+      sync(); return { ...this.state(), ...(rejoin ? { rejoin } : {}) };
     },
     /**
      * 「重新加入」 (`cindy-host remote rejoin`): this Host was removed from the account in Cindy and comes back without signing in
@@ -1176,7 +1204,7 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
      * Agent-Net, then only this Host's own connection. Every outcome comes back as `rejoin` with a hint for the command line,
      * which does not receive thrown messages from the control channel.
      */
-    async rejoin() {
+    async rejoin(options?: { agentNet?: boolean }) {
       try {
         assertCurrent();
         refuseWhileHeld();
@@ -1187,7 +1215,7 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
           // This launcher stays on the account's official service (agentNetNode.ts scope).
           selfHostedRelaySelected: () => false,
           officialFetch: (path, opts) => officialFetch(path, opts),
-          rejoinAgentNet: async () => (agentNet ? agentNet.rejoin() : 'skipped'),
+          rejoinAgentNet: async () => (agentNet ? agentNet.rejoin({ force: options?.agentNet === true }) : 'skipped'),
           // A refused Agent-Net identity always falls back to the Device Link relay on this launcher (agentNetNode.ts `refusedFor`).
           agentNetRequired: () => false,
           // Only the main connection stopped itself on 4410; sync starts it again while remote control is on, and leaves

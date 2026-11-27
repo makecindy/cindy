@@ -42,7 +42,7 @@ function vendorFor(harness: BotHarness): 'cc' | 'codex' | 'pi' {
   return harness === 'claude' ? 'cc' : harness === 'acp' ? 'pi' : harness;
 }
 
-function harnessFor(vendor: 'cc' | 'codex' | 'pi'): BotHarness {
+function harnessFor(vendor: 'cc' | 'codex' | 'pi' | 'acp'): BotHarness {
   return vendor === 'cc' ? 'claude' : vendor;
 }
 
@@ -214,8 +214,8 @@ export function BotModelChainEditor({
     readDevicePluginEngines();
   }, [deviceId, refreshRemoteHostPluginEngines, readDevicePluginEngines]);
 
-  // 模型组属于伙伴所在的电脑：本机伙伴读本机的组；远程控制另一台电脑时用那台随设置带来的组；SSH 不提供。
-  const localGroups = !remote && !deviceId;
+  // 模型组属于伙伴所在的电脑：本机伙伴读本机的组(含 SSH 伙伴)；远程控制另一台电脑时用那台随设置带来的组。
+  const localGroups = !deviceId;
   const { config: localGroupsConfig } = useModelGroups(localGroups);
   const groupsAllowed = localGroups || (!!deviceId && !!hostModelGroups);
   const groupsConfig = localGroups ? localGroupsConfig : hostModelGroups ?? MODEL_GROUPS_DEFAULTS;
@@ -261,9 +261,11 @@ export function BotModelChainEditor({
     const previousGroup = before?.modelGroup;
     // 另一台电脑的组在那台选来源：这里只记下组，保存时那台补全具体模型。
     // 新加的备用项还没有模型、不会进入要提交的链，先用组里第一个能用的来源占位，那台保存时再换成组的选择。
+    const canUseGroupKind = (kind: 'cc' | 'codex' | 'pi' | 'acp'): boolean =>
+      kind === 'acp' ? pluginEnginesAllowed : visibleVendors.includes(kind);
     if (!localGroups) {
       const source = chosenFrom ? undefined
-        : group?.candidates.find((candidate) => !candidate.off && visibleVendors.includes(candidate.agentKind));
+        : group?.candidates.find((candidate) => !candidate.off && canUseGroupKind(candidate.agentKind));
       if (!chosenFrom && !source) {
         toast.warning(t('modelGroups.picker.chooseUnavailable', { name }));
         return;
@@ -286,7 +288,7 @@ export function BotModelChainEditor({
     const stillChosen = entry ? entry.modelGroup === selection.id && entry.model === chosenFrom : !chosenFrom;
     if (seq !== pickSeq.current || !stillChosen) return;
     // 与选普通模型同一条限制：这个伙伴不能用的引擎不收。
-    if (result?.outcome !== 'routed' || !visibleVendors.includes(result.route.agentKind)) {
+    if (result?.outcome !== 'routed' || !canUseGroupKind(result.route.agentKind)) {
       toast.warning(t('modelGroups.picker.chooseUnavailable', { name }));
       latest.current.replace(index, { modelGroup: previousGroup });
       return;
@@ -377,8 +379,8 @@ export function BotModelChainEditor({
                 ? { type: 'route' as const, id: route.modelGroup }
                 : null,
               onSelect: (selection: ModelGroupSelection) => { void pickGroup(index, selection); },
-              // 本机伙伴：合并整个供应商的路由像一个供应商列出来，选其中的模型 = 记下这个模型，由路由决定每次用哪个成员。
-              ...(localGroups ? {
+              // 合并整个供应商的路由像一个供应商列出来，选其中的模型 = 记下这个模型，由路由决定每次用哪个成员(SSH 不合并跨机供应商路由)。
+              ...(!remote ? {
                 onAttach: (selection: ModelGroupSelection) => {
                   const last = lastUnified.current;
                   lastUnified.current = null;

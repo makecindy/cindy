@@ -115,6 +115,8 @@ import { modelDescriptionKey } from '../../shared/modelDescriptionKey.js';
 import { GhostModelPicker, chooseModelPickerWindow, readPluginModelRouteCatalog, getPluginModelPickerAgents, isPluginModelPickerRouteAvailable, isPluginRouteHarnessInstalled, type RemotePluginRouteAgentStatus } from './ghostModelPicker.js';
 import { installGhostPageModelPicker } from './ghostPageModelPicker.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
+import { readModelGroupsConfig } from '../model-groups/store.js';
+import { localRouteCandidatesInPickOrder } from '../utility-model/auxiliaryRouteRefs.js';
 import { PluginDownloadSlot } from './downloadSlot.js';
 import { createDownloader } from '../downloader/index.js';
 import { handlePluginTaskRequest, type PluginTaskHandler } from './taskSlot.js';
@@ -409,6 +411,7 @@ import {
   setGhostKvStore,
   setGhostModelsHandler,
   setGhostHarnessesHandler,
+  setGhostEngineSettingsHandler,
   setGhostMediaModelsProvider,
   setGhostAgentModelsProvider,
   setGhostModelPreferencesProvider,
@@ -422,7 +425,8 @@ import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { createGhostKvStore, removeGhostKvBestEffort, type GhostKvStore } from './ghostKvStore.js';
 import { handleGhostModelsRequest } from './runtime/ghostModelsEndpoint.js';
 import { handleGhostHarnessesRequest } from './runtime/ghostHarnessesEndpoint.js';
-import { configurePluginHarnessRegistry, PLUGIN_USAGE_WORKER_FAILURE, reconcilePluginHarnesses } from './pluginHarnesses.js';
+import { handleGhostEngineSettingsRequest } from './runtime/ghostEngineSettingsEndpoint.js';
+import { configurePluginHarnessRegistry, getPluginHarnessRegistry, PLUGIN_USAGE_WORKER_FAILURE, reconcilePluginHarnesses } from './pluginHarnesses.js';
 import { pluginEngineAccountRoot } from '../plugin-engine-accounts/paths.js';
 import { forgetPluginEngineAccountsOfPlugin } from '../plugin-engine-accounts/store.js';
 import { ghostPublishedModelText, parseGhostPublishedModels } from '@cindy/plugin-protocol';
@@ -461,7 +465,7 @@ import { GhostConnectionManager, normalizeGhostConnectionHost } from './ghostCon
 import { getResolvedMainLocale, rawMainString, t } from '../i18n.desktop.js';
 import { refreshGhostLocalizationIfChanged } from './ghostLocalizationRefresh.js';
 import type { SupportedLocale } from '../../shared/locale.js';
-import { getDeepLinkMainWindow } from '../deepLink.js';
+import { getDeepLinkMainWindow, openMainWindowPluginEngineSettings } from '../deepLink.js';
 import { reconcileGhostSkillLinks, removeGhostSkillLinksForRoots, ghostSkillPluginRoot } from './skillSlot.js';
 import { diagnoseScheduleHookPlugin } from './scheduleHookPluginDiagnosis.js';
 import type { PreRunHookMissingPlugin } from '@cindy/maker-scheduler';
@@ -6220,6 +6224,26 @@ function getPluginOneshotModelSelection(
   ghostId: string,
 ): { providerId?: string; agentKind: AgentKind; model: string } | null {
   const config = getPluginTaskDefaults(ghostId) ?? {};
+  if (config.modelGroup) {
+    for (const candidate of localRouteCandidatesInPickOrder(config.modelGroup)) {
+      if (candidate.agentKind === 'pi') {
+        const resolved = resolveOneshotCatalogModel(
+          getActiveCatalog(),
+          readModelDisableOverrides(),
+          candidate.model,
+          [candidate.providerId, ...readProviderOrder()],
+          hasOneshotProviderCredential,
+        );
+        if (resolved && resolved.providerId === candidate.providerId) return resolved;
+        continue;
+      }
+      return {
+        agentKind: candidate.agentKind === 'cc' ? 'claude-code' : candidate.agentKind,
+        model: candidate.model,
+        providerId: candidate.providerId,
+      };
+    }
+  }
   if (!config.model || config.agentDeviceId) return null;
   if (!config.agentKind || config.agentKind === 'pi') {
     // 两种情况按目录解析一条快问快答可路由的 供应商×agent×模型:
@@ -9862,12 +9886,27 @@ export function registerGhostIpc(): void {
     const projected = withGhostModelDescriptions(
       projectGhostAgentModels(views, maker.listAvailableAgents(), getModelVisibilityOverride), describeGhostModel);
     if (!projected.ok) return projected;
-    if (!listGhostAgentLocations) return { ...projected, supportsRemoteRoutes: true };
+    let modelGroupsSummary: Array<{ id: string; name: string; strategy: string; candidateCount: number; effort?: string }> = [];
+    try {
+      modelGroupsSummary = readModelGroupsConfig().routes
+        .filter((route) => !route.hidden && !route.parent)
+        .map((route) => ({
+          id: route.id,
+          name: route.name,
+          strategy: route.strategy,
+          candidateCount: route.candidates.filter((c) => !c.off).length,
+          ...(route.effort ? { effort: route.effort } : {}),
+        }));
+    } catch {
+      modelGroupsSummary = [];
+    }
+    const withGroups = modelGroupsSummary.length > 0 ? { modelGroups: modelGroupsSummary } : {};
+    if (!listGhostAgentLocations) return { ...projected, supportsRemoteRoutes: true, ...withGroups };
     const locations = await ghostAgentModelsCache.locations(owner, listGhostAgentLocations);
     if (owner !== activeOwnerScopeKey() || !findGhostForInstanceId(instanceId)?.enabled) {
       return { ok: false, errorCode: 'NOT_AVAILABLE', message: 'Plugin unavailable' };
     }
-    return { ...projected, supportsRemoteRoutes: true, ...(locations ? { locations } : {}) };
+    return { ...projected, supportsRemoteRoutes: true, ...withGroups, ...(locations ? { locations } : {}) };
   });
   // agent.modelPreferences:收藏读写/最近使用只读,复用 device-link 同一条 owner 围栏的
   // renderer 收藏桥(maker-ipc/modelFavoritesSync),不建第二份收藏或最近使用存储。
@@ -9945,6 +9984,22 @@ export function registerGhostIpc(): void {
       declared: () => (ghost ? ghost.manifest.harnesses : null),
       store: publishedHarnessesStore(),
       onChanged: () => reconcilePluginHarnesses(),
+    });
+  });
+  // /harnesses/open-settings：页面在用户点击后请宿主打开自己某个引擎的供应商设置页。引擎须在当前
+  // 注册表里(已启用、已批准、已声明)；只导航，不改任何设置。
+  setGhostEngineSettingsHandler(({ ghostId, method, readBodyText, isCurrent }) => {
+    const ghost = findGhostForInstanceId(ghostId);
+    return handleGhostEngineSettingsRequest({
+      method, readBodyText, isCurrent,
+      declared: () => (ghost ? ghost.manifest.harnesses : null),
+      consumeUserGesture: () => getGhostErrandSlot().consumeUserGesture(ghostId),
+      open: (harnessId) => {
+        const engine = getPluginHarnessRegistry().list()
+          .find((harness) => harness.ghostId === ghostId && harness.harnessId === harnessId);
+        if (!engine || !isCurrent()) return false;
+        return openMainWindowPluginEngineSettings(engine.key);
+      },
     });
   });
   configurePluginHarnessRegistry({
