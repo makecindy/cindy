@@ -19,6 +19,7 @@ import { subscribeChatServer } from './chatServerSubscription';
 import { createChatHistory, type ChatHistory } from '@cindy/maker-shared/chat-history';
 import { createMobileChatHistoryStore, mobileChatHistoryStoreEpoch } from './chatHistoryStore';
 import { cacheChatMessages, flushChatMessageCache, forgetChatMessages, peekChatMessages, readChatMessages, subscribeChatInvalidation } from './chatMessageCache';
+import { clearChatServerMediaCache, forgetChatServerMediaRoom } from './chatServerMediaCache';
 import { useJsonSnapshotState } from '@/utils/useStableValue';
 import { createChatServerUpload } from './chatServerUpload';
 import { uploadPublicAvatar } from './publicAvatarUpload';
@@ -219,11 +220,13 @@ export function useChatServerRoster(enabled: boolean) {
             fresh.set(room.id, { owner: api.owner, head: room.head, value });
             // An archive can land between the list and the newer snapshot.
             if (!value.room.archived) {
-              const activity = await api.client.rosterActivity(room.id, value);
+              const activity = await api.client.rosterActivity(room.id, value, self);
               rows.push(chatRoomRow(room, value, self, activity));
             }
           } catch (error) {
-            if (!chatAccessLost(error)) {
+            if (chatAccessLost(error)) {
+              forgetChatServerMediaRoom(room.id);
+            } else {
               mobileDebugLog('warn', 'recovery', 'companion-roster-refresh', { source: 'group-detail', status: (error as { status?: number })?.status });
               partial = true;
               const previous = cached.items.find(row => row.item.ref.id === room.id);
@@ -256,7 +259,10 @@ export function useChatServerRoster(enabled: boolean) {
       if (!run.isStale() && api.current()) {
         mobileDebugLog('warn', 'recovery', 'companion-roster-refresh', { source: 'group-list', status: (error as { status?: number })?.status });
         setState(old => ({ owner: api.owner, rooms: old.owner === api.owner && !chatAccessLost(error) ? old.rooms.filter(row => !api.client.personalList.hidden(row.item.ref.id)) : [], loading: false, refreshing: false, error: error instanceof Error && error.message === 'CHAT_ENDPOINT_UNAVAILABLE' ? error.message : 'CHAT_LIST_FAILED' }));
-        if (chatAccessLost(error)) await cacheChatRoster(api.userId, api.realm, [], known.current.ids);
+        if (chatAccessLost(error)) {
+          clearChatServerMediaCache({ clearNativeImageCache: true });
+          await cacheChatRoster(api.userId, api.realm, [], known.current.ids);
+        }
       }
     }
   }, api.owner);
@@ -291,8 +297,8 @@ export function useChatServerRoster(enabled: boolean) {
         }, reset: async () => { await api.client.resyncListState(); await read({ reason: 'connected' }); }, changed: changes => {
           for (const change of changes ?? []) {
             if (change.type === 'conversation.list.changed') api.client.personalList.merge(change.data);
-            // Personal read positions live in actor scope and do not advance room.head.
-            if (change.type === 'read.changed' && typeof change.entityId === 'string') {
+            // Personal reads and membership preferences do not advance room.head.
+            if ((change.type === 'read.changed' || change.type === 'membership.changed') && typeof change.entityId === 'string') {
               api.client.invalidateHistory(change.entityId, true);
               snapshots.current.delete(change.entityId);
             }
@@ -305,11 +311,12 @@ export function useChatServerRoster(enabled: boolean) {
     const foreground = AppState.addEventListener('change', value => { if (value === 'active') start(); else { stop?.(); clearInterval(poll); } });
     return () => { stop?.(); clearInterval(poll); foreground.remove(); };
   }, [api, enabled, read]));
-  useEffect(() => api.client.personalList.subscribe(() => {
+  useEffect(() => api.client.personalList.subscribe(({ conversationId, hidden }) => {
     if (!api.current()) return;
-    for (const id of api.client.personalList.ids()) known.current.ids.add(id);
+    known.current.ids.add(conversationId);
+    if (hidden) forgetChatServerMediaRoom(conversationId);
     setState(old => old.owner !== api.owner ? old : { ...old, rooms: old.rooms.filter(row => !api.client.personalList.hidden(row.item.ref.id)) });
-    void hideCachedChatRooms(api.userId, api.realm, api.client.personalList.ids().filter(id => api.client.personalList.hidden(id)));
+    if (hidden) void hideCachedChatRooms(api.userId, api.realm, [conversationId]);
   }), [api]);
   const own = state.owner === api.owner;
   return { items: own ? state.rooms : [], serverIds: known.current.ids, loading: api.enabled && (!own || state.loading),
@@ -364,6 +371,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
   const valid = useCallback(() => api.current() && active.current === identity, [api, identity]);
   const loseAccess = useCallback(() => {
     accessGeneration.current++; freshRead.current = false; page.current = null;
+    forgetChatServerMediaRoom(groupId);
     if (valid()) { void forgetRemoteResource(api.userId, groupId); void forgetChatMessages(groupId); }
     setState({ identity, value: { kind: 'missing' }, online: false, loadingOlder: false });
   }, [valid, api.userId, groupId, identity]);
@@ -482,7 +490,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
           return head === null ? { scope: `conversation:${groupId}`, cursor: latest.page.snapshot.cursor }
             : [{ scope: `conversation:${groupId}`, cursor: latest.page.snapshot.cursor }, { scope: `actor:${actorId}`, cursor: head }];
         }, reset: async () => { await api.client.resyncListState(); await api.client.refreshHistory(groupId, true); await request({ reason: 'connected' }); }, changed: async changes => {
-          let personalOnly = !!changes?.length, reads = true;
+          let personalOnly = !!changes?.length, reads = true, membershipChanged = false;
           for (const change of changes ?? []) {
             if (change.type === 'conversation.list.changed') api.client.personalList.merge(change.data);
             // The account's own read position (this phone's receipt, or another of its devices)
@@ -490,10 +498,16 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
             else if (change.type === 'read.changed' && typeof change.entityId === 'string') {
               const applied = await api.client.acceptRead(change.entityId, change.data).catch(() => false);
               if (change.entityId === groupId && !applied) reads = false;
-            } else personalOnly = false;
+            } else {
+              personalOnly = false;
+              if (change.type === 'membership.changed' && change.entityId === groupId) membershipChanged = true;
+            }
           }
-          if (personalOnly && reads) { void request({ reason: 'reads' }); return; }
-          try { await api.client.refreshHistory(groupId, !reads); }
+          if (personalOnly && reads) {
+            if (!api.client.personalList.hidden(groupId)) void request({ reason: 'reads' });
+            return;
+          }
+          try { await api.client.refreshHistory(groupId, membershipChanged || !reads); }
           finally { void request({ reason: 'changed' }); }
         }, available: () => { subscribed = true; }, unavailable: () => { subscribed = false; freshRead.current = false; api.client.invalidateHistory(groupId); } });
       }).catch(() => {}); // Read presents endpoint errors.
@@ -587,6 +601,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
       const operationId = (await import('expo-crypto')).randomUUID();
       if (action === 'hide') {
         await api.client.hide(groupId, operationId);
+        forgetChatServerMediaRoom(groupId);
         if (valid()) { accessGeneration.current++; page.current = null; setState({ identity, value: { kind: 'missing' }, online: true, loadingOlder: false });
           await forgetRemoteResource(api.userId, groupId); await forgetChatMessages(groupId); }
       } else if (action === 'leave') {
@@ -603,9 +618,10 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
     const owner = getMobileAuthOwner();
     if (!valid() || owner.accountId !== api.userId || mobileDurableOutbox.getAccountId() !== owner.accountKey) throw new Error('OWNER_CHANGED');
     const mentions = input.mentions as import('@cindy/maker-shared/botGroupChat').BotGroupMention;
-    const root = threadRootId ? latest.page.messages.find(message => message.id === threadRootId) : undefined;
+    const inferAuthor = threadRootId && !mentions.all && !mentions.allBots && !mentions.botIds.length;
+    const root = inferAuthor ? latest.page.messages.find(message => message.id === threadRootId) : undefined;
     const recipients = [...mentions.botIds];
-    if (!mentions.all && !mentions.allBots && root && latest.page.snapshot.members.some(member => member.id === root.authorId && member.kind === 'bot' && member.state === 'joined')) recipients.push(root.authorId);
+    if (root && latest.page.snapshot.members.some(member => member.id === root.authorId && member.kind === 'bot' && member.state === 'joined')) recipients.push(root.authorId);
     await enqueueChatMessage(mobileDurableOutbox, owner.accountKey, groupId, {
       ...(latest.page.snapshot.room.kind === 'direct' ? { conversationKind: 'direct' as const } : {}),
       clientId: String(input.clientId), text: String(input.text), threadRootId,
@@ -649,8 +665,8 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
       throw error;
     }
   }, [api, groupId, valid, loseAccess]);
-  useEffect(() => api.client.personalList.subscribe(() => {
-    if (valid() && api.client.personalList.hidden(groupId)) {
+  useEffect(() => api.client.personalList.subscribe(({ conversationId, hidden }) => {
+    if (valid() && conversationId === groupId && hidden) {
       loseAccess();
       void forgetRemoteResource(api.userId, groupId);
     }
@@ -673,7 +689,10 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
     if (!api.current()) throw new Error('OWNER_CHANGED');
     if ((value as { conversationId?: unknown } | null)?.conversationId !== groupId) throw new Error('INVALID_CHAT_LIST_STATE');
     api.client.personalList.merge(value);
-    if (api.current() && api.client.personalList.hidden(groupId)) await forgetRemoteResource(api.userId, groupId);
+    if (api.current() && api.client.personalList.hidden(groupId)) {
+      forgetChatServerMediaRoom(groupId);
+      await forgetRemoteResource(api.userId, groupId);
+    }
   }, [api, groupId]);
   const followThread = useCallback(async (following: boolean) => {
     if (!valid() || !enabled || !threadRootId) throw new Error('THREAD_FOLLOW_UNSUPPORTED');

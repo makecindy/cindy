@@ -26,7 +26,7 @@ export interface SocketClient {
   connect(): Promise<SocketUplink>;
   directory?(): Promise<DeviceView[]>;
 }
-export interface SocketDiscovery { start(): void; close(): void; }
+export interface SocketDiscovery { start(): void; updatePort?(port: number): void; close(): void; }
 /**
  * The host's own rule for which members of this account's directory to accept (`AgentNetSocket.restrictPeers`): only
  * `allowed` ones (null: every member), never `refused` ones.
@@ -66,6 +66,8 @@ export interface PortableSocketOptions {
   onDelegations?(delegations: Delegation[]): void;
   onPathChanged?(deviceId: string, path: 'direct' | 'relay' | null): void;
   onDirectAddress?(deviceId: string, address: { address: string; port: number }): void;
+  /** Fired after the transport rebinds its UDP socket to a fresh port. */
+  onUdpRebound?(reason: import('./types.js').UdpRebindReason): void;
   /** Called before closing with 4410 when the Agent-Net relay refuses this identity; true closes with retryable 1006 for Device Link fallback. */
   onIdentityRefused?(reason: string): boolean;
   bindings: {

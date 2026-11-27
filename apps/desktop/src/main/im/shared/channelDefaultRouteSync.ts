@@ -602,6 +602,7 @@ export async function backfillLegacyImDefaultRoutes(
   const normalize = providerNormalizer(providers);
   let count = 0;
   for (const row of legacyRows) {
+    if (row.agentKind === 'acp') continue;
     const current = currentRouteOf(row);
     // 匹配只认整条路由相等: 隐式默认的历史钉住与用户手动钉住无法区分(断开的来源
     // 证明不了出身), 无法区分时保守不认领(PR #5155 review P2 后续裁决)。
