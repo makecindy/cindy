@@ -25,6 +25,7 @@ import {
   evaluateGlobalMemoryTidyPlan,
   readGlobalMemoryTidyState,
   TIDY_CORE_INDEX_SOFT_BYTES,
+  TIDY_ERROR_RETRY_BACKOFF_MS,
   TIDY_MAX_BOTS_PER_RUN,
   TIDY_MIN_HUMAN_MESSAGES,
   type TidyTeammateInput,
@@ -175,16 +176,35 @@ describe('globalMemoryTidy', () => {
     expect(snapshotTeammate).toHaveBeenCalledOnce();
     expect(archiveSession).toHaveBeenCalledWith('tidy-sess-2');
 
-    // 5. Failed run => marks error and does NOT advance bot reviewedAt watermark.
+    // 5. Failed run => marks error, does NOT advance bot reviewedAt or lastRunAt, and retries automatically after backoff (not a full 7d cadence).
+    await coordinator.setCadence('weekly');
     const beforeError = await readGlobalMemoryTidyState(root);
     const prevReviewedAt = beforeError.bots['bot-main']!.reviewedAt;
+    const prevLastRunAt = beforeError.lastRunAt;
     clock += 10 * DAY_MS;
     executeTidyPrompt.mockResolvedValueOnce({ ok: false, output: 'rate limited', sessionId: 'tidy-sess-3' });
-    const failed = await coordinator.run({ manual: true });
+    const failed = await coordinator.run({ manual: false });
     expect(failed.outcome).toBe('error');
     expect(archiveSession).toHaveBeenCalledWith('tidy-sess-3');
     const afterError = await readGlobalMemoryTidyState(root);
     expect(afterError.bots['bot-main']!.reviewedAt).toBe(prevReviewedAt);
+    expect(afterError.lastRunAt).toBe(prevLastRunAt);
+    expect(afterError.lastErrorAt).toBe(clock);
+
+    // Within 6h error backoff => skipped with error-backoff.
+    clock += 60 * 60 * 1000;
+    const inBackoff = await coordinator.run({ manual: false });
+    expect(inBackoff.outcome).toBe('skipped');
+    expect(inBackoff.summary).toBe('error-backoff');
+
+    // After 6h error backoff => automatic retry runs without waiting 7 days, and clears lastErrorAt on success.
+    clock += TIDY_ERROR_RETRY_BACKOFF_MS;
+    executeTidyPrompt.mockResolvedValueOnce({ ok: true, output: 'NO_CHANGES', sessionId: 'tidy-sess-4' });
+    const recovered = await coordinator.run({ manual: false });
+    expect(recovered.outcome).toBe('idle');
+    const afterRecovery = await readGlobalMemoryTidyState(root);
+    expect(afterRecovery.lastErrorAt).toBe(0);
+    expect(afterRecovery.lastRunAt).toBe(clock);
   });
 
   it('preserves concurrent setCadence during an in-flight run, guards concurrent file edits, and stabilizes baselineAt', async () => {

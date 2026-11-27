@@ -43,7 +43,9 @@ const log = createLogger('maker-ipc:global-memory-tidy');
 const LEGACY_REVIEW_CONFIG_ID = 'teammate-memory-review';
 const PROTECTED_BOT_LINK_ROLES = new Set(['canonical', 'thread', 'group', 'channel']);
 const AUTOMATED_ORIGINS = new Set(['scheduler', 'heartbeat', 'delegation', 'agent']);
-const TIDY_TURN_TIMEOUT_MS = 6 * 60 * 1000;
+const TIDY_TURN_MIN_TIMEOUT_MS = 6 * 60 * 1000;
+const TIDY_TURN_MAX_TIMEOUT_MS = 12 * 60 * 1000;
+const TIDY_TURN_PER_CANDIDATE_MS = 3 * 60 * 1000;
 
 function broadcastRecentWorkdirsChanged(workingDir: string): void {
   const owner = getActiveDataOwnerPushStamp();
@@ -124,7 +126,14 @@ export async function runLegacyTeammateMemoryReviewCleanup(
     async deleteSchedule(scheduleId: string): Promise<void> {
       const scheduler = getSchedulerIfInitialized();
       if (scheduler) {
-        await scheduler.delete(scheduleId).catch(() => {});
+        try {
+          await scheduler.delete(scheduleId);
+        } catch (error) {
+          const code = (error as { code?: unknown })?.code;
+          const message = error instanceof Error ? error.message : String(error);
+          if (code === 'NOT_FOUND' || /not found/i.test(message)) return;
+          throw error;
+        }
         return;
       }
       await getDbClient().drizzle.delete(schedules).where(eq(schedules.id, scheduleId)).run();
@@ -433,12 +442,17 @@ async function executeGlobalTidyPrompt(input: {
     }
   });
 
+  const turnTimeoutMs = Math.min(
+    TIDY_TURN_MAX_TIMEOUT_MS,
+    Math.max(TIDY_TURN_MIN_TIMEOUT_MS, input.writableDirs.length * TIDY_TURN_PER_CANDIDATE_MS),
+  );
+
   try {
     timer = setTimeout(() => {
       terminalError = 'Global memory tidy timed out';
       void session.abort().catch(() => {});
       finish();
-    }, TIDY_TURN_TIMEOUT_MS);
+    }, turnTimeoutMs);
 
     const sendOutcome = await session.send({ type: 'user', content: input.prompt });
     assertDesktopSendDispatched(sendOutcome, 'global-memory-tidy');

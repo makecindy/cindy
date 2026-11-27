@@ -32,40 +32,134 @@ import type { ProjectScheduleConfig } from '../scheduler-host/project-automation
 export const LEGACY_REVIEW_RETIREMENT_RECEIPT = 'memory-tidy-v3-cleanup.json';
 const LEGACY_REVIEW_CONFIG_ID = 'teammate-memory-review';
 const BUNDLED_REVIEW_CRON = '30 3 * * *';
+const BUNDLED_HOOK_TIMEOUT_MS = 10_000;
+const BUNDLED_REVIEW_TITLE_SUFFIXES = [
+  'Review memory', // en
+  '整理记忆', // zh-CN
+  '整理記憶', // zh-TW
+  '理记', // zh-Hans-x-lzh
+  '理記', // zh-Hant-x-lzh
+  '記憶を整理', // ja
+  '기억 정리', // ko
+  'Erinnerungen ordnen', // de
+  'Ordenar memoria', // es
+  'Ranger la mémoire', // fr
+  'Organizar memória', // pt-BR, pt-PT
+] as const;
+const KNOWN_PROJECT_SCHEDULE_KEYS = new Set([
+  'id',
+  'name',
+  'prompt',
+  'cronExpr',
+  'timezone',
+  'recurring',
+  'manual',
+  'intervalMs',
+  'expireAt',
+  'agentKind',
+  'modelAgentKind',
+  'modelAgentDeviceId',
+  'followTeammateModel',
+  'model',
+  'providerId',
+  'agentDeviceId',
+  'effort',
+  'modelGroup',
+  'fastMode',
+  'useWorktree',
+  'persistentSession',
+  'silentWhenIdle',
+  'preRunHook',
+  'notify',
+]);
+const KNOWN_NOTIFY_KEYS = new Set(['desktop', 'feishu', 'wecomGroup']);
+const KNOWN_PRERUN_HOOK_KEYS = new Set(['command', 'timeoutMs']);
 const BUNDLED_REVIEW_INSTRUCTIONS = `. Keep only durable, useful knowledge in this project's memory and reusable, proven procedures in its skills. Search existing files first: update a related record or skill instead of adding a duplicate. Review related existing material for duplication, contradictions, obsolete status and unnecessary detail; keep concise facts and actionable steps, not conversation logs or one-off task progress. Preserve the owner's rules and intent. Before merging or removing content, verify the evidence and keep a recoverable copy or a targeted Git commit; leave uncertain items intact. Read .cindy/memory/README.md before memory maintenance. Skills live in .agents/skills; keep SKILL.md focused and move detailed examples to on-demand references when useful. Do not invent a skill just because a review ran. If no meaningful improvement is justified, finish quietly.`;
 const EARLIEST_REVIEW_SUFFIX = `'s conversations from the last day (teammate id `;
 const EARLIEST_REVIEW_TAIL = `) and keep what is worth remembering in this project's memory and skills. If nothing new is worth keeping, finish quietly.`;
 
-function isBundledMemoryReviewPrompt(prompt: string | undefined): boolean {
-  if (typeof prompt !== 'string') return false;
+function extractBundledMemoryReviewPromptName(prompt: string | undefined): string | null {
+  if (typeof prompt !== 'string') return null;
   const trimmed = prompt.trim();
-  if (
-    trimmed.startsWith('Review ')
-    && trimmed.endsWith(BUNDLED_REVIEW_INSTRUCTIONS)
-    && (trimmed.includes(`'s conversations since the last completed review (teammate id `)
-      || trimmed.includes(`'s conversations from the last day (teammate id `))
-  ) {
-    return true;
+  if (trimmed.startsWith('Review ') && trimmed.endsWith(BUNDLED_REVIEW_INSTRUCTIONS)) {
+    const sinceMarker = `'s conversations since the last completed review (teammate id `;
+    const sinceIdx = trimmed.indexOf(sinceMarker);
+    if (sinceIdx > 'Review '.length) return trimmed.slice('Review '.length, sinceIdx);
+    const lastDayMarker = `'s conversations from the last day (teammate id `;
+    const lastDayIdx = trimmed.indexOf(lastDayMarker);
+    if (lastDayIdx > 'Review '.length) return trimmed.slice('Review '.length, lastDayIdx);
   }
-  if (
-    trimmed.startsWith('Look back at ')
-    && trimmed.includes(EARLIEST_REVIEW_SUFFIX)
-    && trimmed.endsWith(EARLIEST_REVIEW_TAIL)
-  ) {
-    return true;
+  if (trimmed.startsWith('Look back at ') && trimmed.endsWith(EARLIEST_REVIEW_TAIL)) {
+    const idx = trimmed.indexOf(EARLIEST_REVIEW_SUFFIX);
+    if (idx > 'Look back at '.length) return trimmed.slice('Look back at '.length, idx);
   }
-  return false;
+  return null;
 }
 
-/** True ONLY when a `teammate-memory-review` config is still Cindy's untouched supplied review. */
+function isBundledMemoryReviewTitle(
+  name: string | undefined,
+  promptName: string,
+  expectedNames?: readonly string[],
+): boolean {
+  if (typeof name !== 'string') return false;
+  if (expectedNames?.includes(name)) return true;
+  return BUNDLED_REVIEW_TITLE_SUFFIXES.some((suffix) => name === `${promptName} · ${suffix}`);
+}
+
+export interface UntouchedBundledReviewOptions {
+  /** Machine local IANA timezone used when bundled schedules were created (defaults to host timezone). */
+  localTimezone?: string;
+  /** Optional explicit expected localized title(s) in addition to the 12 bundled locale templates. */
+  expectedNames?: readonly string[];
+}
+
+/**
+ * True ONLY when a `teammate-memory-review` config is still Cindy's untouched supplied review.
+ *
+ * Uses closed-set validation across every `ProjectScheduleConfig` field so any owner customization
+ * made via `ScheduleFormDialog` or direct JSON edit (title, timezone, manual/recurring/expireAt,
+ * worktree/session/silent flags, notify channels, model/engine routing, prompt, hook command or
+ * timeout, or unknown future fields) causes the review to be preserved intact.
+ */
 export function isUntouchedBundledMemoryReview(
   config: Partial<ProjectScheduleConfig> & { id: string },
   checkScriptContent: string | null,
+  options?: UntouchedBundledReviewOptions,
 ): boolean {
   if (config.id !== LEGACY_REVIEW_CONFIG_ID) return false;
-  // Any custom schedule timing, explicit model/engine/provider override, or prompt edit => preserve.
-  if (config.cronExpr !== undefined && config.cronExpr !== BUNDLED_REVIEW_CRON) return false;
+
+  // Reject any unknown defined property so future user-editable fields are conservatively preserved.
+  for (const [key, value] of Object.entries(config as Record<string, unknown>)) {
+    if (value !== undefined && !KNOWN_PROJECT_SCHEDULE_KEYS.has(key)) return false;
+  }
+
+  // Prompt and title must match Cindy's bundled template (using the same teammate name).
+  const promptName = extractBundledMemoryReviewPromptName(config.prompt);
+  if (!promptName) return false;
+  if (!isBundledMemoryReviewTitle(config.name, promptName, options?.expectedNames)) return false;
+
+  // Schedule timing, timezone, recurrence, expiry, and manual mode must remain untouched.
+  if (config.cronExpr !== BUNDLED_REVIEW_CRON) return false;
+  const localTimezone = options?.localTimezone ?? (Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
+  if (config.timezone !== undefined && config.timezone !== localTimezone) return false;
   if (config.intervalMs !== undefined && config.intervalMs !== null) return false;
+  if (config.expireAt !== undefined && config.expireAt !== null) return false;
+  if (config.manual === true) return false;
+  if (config.recurring === false) return false;
+
+  // Execution flags and notifications must remain at bundled defaults.
+  if (config.useWorktree === true) return false;
+  if (config.persistentSession === false) return false;
+  if (config.silentWhenIdle === false) return false;
+  if (config.notify !== undefined && config.notify !== null) {
+    if (typeof config.notify !== 'object') return false;
+    for (const [key, value] of Object.entries(config.notify as Record<string, unknown>)) {
+      if (value !== undefined && !KNOWN_NOTIFY_KEYS.has(key)) return false;
+    }
+    if (config.notify.desktop || config.notify.feishu || config.notify.wecomGroup) return false;
+  }
+
+  // Any explicit model/engine/provider/device override or opt-out of followTeammateModel => preserve.
   if (
     config.model
     || config.agentKind
@@ -80,10 +174,16 @@ export function isUntouchedBundledMemoryReview(
   ) {
     return false;
   }
-  if (!isBundledMemoryReviewPrompt(config.prompt)) return false;
 
-  const cmd = config.preRunHook?.command?.trim();
-  if (cmd) {
+  if (config.preRunHook !== undefined && config.preRunHook !== null) {
+    if (typeof config.preRunHook !== 'object') return false;
+    for (const [key, value] of Object.entries(config.preRunHook as Record<string, unknown>)) {
+      if (value !== undefined && !KNOWN_PRERUN_HOOK_KEYS.has(key)) return false;
+    }
+    if (config.preRunHook.timeoutMs !== undefined && config.preRunHook.timeoutMs !== BUNDLED_HOOK_TIMEOUT_MS) {
+      return false;
+    }
+    const cmd = typeof config.preRunHook.command === 'string' ? config.preRunHook.command.trim() : '';
     const bundledCommand = cmd === MEMORY_REVIEW_HOOK_COMMAND || cmd === LEGACY_MEMORY_REVIEW_HOOK_COMMAND;
     if (!bundledCommand) return false;
     // Missing script or exact untouched bundled script => safe to retire. Owner-edited script => preserve.
@@ -119,6 +219,8 @@ export interface LegacyReviewRetirementDeps {
   hasActiveProjectTasks(workingDir: string): Promise<boolean>;
   removeRecentWorkdir(workingDir: string): Promise<boolean>;
   notifyRecentWorkdirsChanged?(workingDir: string): void;
+  /** Optional local IANA timezone override (primarily for deterministic tests). */
+  localTimezone?: string;
   log?: { info(msg: string, meta?: Record<string, unknown>): void; warn(msg: string, meta?: Record<string, unknown>): void };
 }
 
@@ -213,7 +315,7 @@ export async function retireLegacyTeammateMemoryReviews(
     // Decide whether this teammate has an untouched bundled review (or leftover orphaned check/DB row).
     let customPreserved = false;
     if (projectReview) {
-      if (!isUntouchedBundledMemoryReview(projectReview, checkContent)) {
+      if (!isUntouchedBundledMemoryReview(projectReview, checkContent, { localTimezone: deps.localTimezone })) {
         customPreserved = true;
         summary.preservedCustom += 1;
       }

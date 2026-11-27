@@ -34,6 +34,7 @@ export const TIDY_MIN_HUMAN_MESSAGES = 30;
 export const TIDY_FILE_CHANGE_MIN_AGE_MS = 14 * DAY_MS;
 export const TIDY_CORE_INDEX_SOFT_BYTES = 2048;
 export const TIDY_MAX_BOTS_PER_RUN = 4;
+export const TIDY_ERROR_RETRY_BACKOFF_MS = 6 * 60 * 60 * 1000;
 const WALK_ENTRY_BUDGET = 1500;
 const SKIPPED_DIRS = new Set(['node_modules', '__pycache__', 'venv', '.venv']);
 const NON_RECORD_MEMORY_FILES = new Set(['README.md', 'USER.md']);
@@ -62,6 +63,8 @@ export interface GlobalMemoryTidyState {
   /** Stable starting timestamp for buddies that have never been tidied yet (never slides forward on skips). */
   baselineAt: number;
   lastRunAt: number;
+  /** Timestamp of the most recent failed tidy run (cleared on success); gates short backoff retries without shifting cadence. */
+  lastErrorAt: number;
   lastOutcome: 'idle' | 'updated' | 'skipped' | 'error' | null;
   lastSummary: string;
   lastTouchedBots: string[];
@@ -117,6 +120,7 @@ export function defaultTidyState(): GlobalMemoryTidyState {
     cadence: DEFAULT_MEMORY_TIDY_CADENCE,
     baselineAt: 0,
     lastRunAt: 0,
+    lastErrorAt: 0,
     lastOutcome: null,
     lastSummary: '',
     lastTouchedBots: [],
@@ -136,6 +140,7 @@ export async function readGlobalMemoryTidyState(ownerRoot: string): Promise<Glob
       cadence: isMemoryTidyCadence(parsed.cadence) ? parsed.cadence : defaults.cadence,
       baselineAt: typeof parsed.baselineAt === 'number' && Number.isFinite(parsed.baselineAt) ? parsed.baselineAt : 0,
       lastRunAt: typeof parsed.lastRunAt === 'number' && Number.isFinite(parsed.lastRunAt) ? parsed.lastRunAt : 0,
+      lastErrorAt: typeof parsed.lastErrorAt === 'number' && Number.isFinite(parsed.lastErrorAt) ? parsed.lastErrorAt : 0,
       lastOutcome:
         parsed.lastOutcome === 'idle' || parsed.lastOutcome === 'updated'
         || parsed.lastOutcome === 'skipped' || parsed.lastOutcome === 'error'
@@ -495,9 +500,11 @@ export function createGlobalMemoryTidyCoordinator(deps: GlobalMemoryTidyCoordina
     const ownerRoot = deps.readOwnerRoot();
     const state = ownerRoot ? await readGlobalMemoryTidyState(ownerRoot) : defaultTidyState();
     const interval = cadenceIntervalMs(state.cadence);
-    const nextEligibleAt = Number.isFinite(interval)
+    const cadenceNextAt = Number.isFinite(interval)
       ? (state.lastRunAt > 0 ? state.lastRunAt + interval : now())
       : null;
+    const errorRetryAt = state.lastErrorAt > 0 ? state.lastErrorAt + TIDY_ERROR_RETRY_BACKOFF_MS : 0;
+    const nextEligibleAt = cadenceNextAt !== null ? Math.max(cadenceNextAt, errorRetryAt) : null;
     return {
       cadence: state.cadence,
       running,
@@ -553,6 +560,9 @@ export function createGlobalMemoryTidyCoordinator(deps: GlobalMemoryTidyCoordina
         if (state.lastRunAt > 0 && startedAt - state.lastRunAt < interval) {
           return { outcome: 'skipped', summary: 'cadence-not-due', touchedBots: [] };
         }
+        if (state.lastErrorAt > 0 && startedAt - state.lastErrorAt < TIDY_ERROR_RETRY_BACKOFF_MS) {
+          return { outcome: 'skipped', summary: 'error-backoff', touchedBots: [] };
+        }
       }
 
       const teammates = await deps.listLocalTeammates();
@@ -600,7 +610,9 @@ export function createGlobalMemoryTidyCoordinator(deps: GlobalMemoryTidyCoordina
       if (!result.ok) {
         const errSummary = result.output.trim().slice(0, 500) || 'Tidy run failed';
         await mutateState(ownerRoot, (latest) => {
-          latest.lastRunAt = finishedAt;
+          // Do not advance `lastRunAt` on error so transient failures retry after the
+          // short error backoff instead of stalling for a full cadence interval (e.g. 7 days).
+          latest.lastErrorAt = finishedAt;
           latest.lastOutcome = 'error';
           latest.lastSummary = errSummary;
         });
@@ -654,6 +666,7 @@ export function createGlobalMemoryTidyCoordinator(deps: GlobalMemoryTidyCoordina
           latest.globalSkillsReviewedAt = Math.max(latest.globalSkillsReviewedAt, finishedAt);
         }
         latest.lastRunAt = finishedAt;
+        latest.lastErrorAt = 0;
         latest.lastOutcome = nextOutcome;
         latest.lastSummary = nextSummary;
         latest.lastTouchedBots = touchedBots;
