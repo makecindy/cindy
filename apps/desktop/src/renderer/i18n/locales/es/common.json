@@ -8896,6 +8896,8 @@
         "nodeRuntime": "Puede ejecutar un programa Node incluido en esta computadora",
         "nodeMcp": "Puede ejecutar un stdio MCP incluido en esta computadora",
         "nodeRuntimeDetail": "Alto riesgo: tiene el mismo acceso local que tu cuenta de usuario, incluidos archivos, red e inicio de otros programas. Cindy no puede contenerlo en el entorno aislado del navegador.",
+        "nodeInheritEnv": "Heredar el entorno local",
+        "nodeInheritEnvDetail": "Alto riesgo: el programa Node del complemento y sus procesos secundarios reciben todas las variables de entorno disponibles para Cindy, incluida la configuración de proxy y certificados y cualquier clave de API o token que contengan.",
         "nodeSecret": "Puede proporcionar la credencial almacenada \"{{name}}\" al programa local Node",
         "nodeSecretDetail": "Cindy lo almacena cifrado y lo inyecta solo mientras se ejecutan los métodos Worker declarados a continuación. El programa Node recibe el texto sin cifrar y puede devolverlo, registrarlo, guardarlo o exponerlo de otro modo al código del complemento del navegador o a los parámetros de Agent. Instala únicamente complementos en los que confíes.",
         "nodeResident": "El programa Node puede seguir ejecutándose en segundo plano",
@@ -23498,7 +23500,10 @@
       "mergedLabel_one": "{{name}} · ruta ({{count}} fuente)",
       "mergedLabel_other": "{{name}} · ruta ({{count}} fuentes)",
       "routeDecides": "La ruta «{{name}}» decide qué fuente usa esta tarea",
-      "quotaOf": "Cuota: {{name}}"
+      "quotaOf": "Cuota: {{name}}",
+      "managedBy": "Gestionado por «{{name}}»",
+      "detach": "Desvincular",
+      "detached": "Desvinculado del enrutamiento inteligente. Se mantiene el modelo actual."
     },
     "why": {
       "expiringQuota": "Le queda un {{left}}% de cuota y se restablece el {{reset}}, así que va primero",
@@ -23536,7 +23541,7 @@
       "newRoute": "Nueva ruta",
       "newRouteName": "Nueva ruta",
       "routesEmpty": "Aún no hay rutas. Crea una y añade varias fuentes.",
-      "scopeNote": "El enrutamiento inteligente se aplica a las tareas de este ordenador. Una tarea nueva elige una fuente al empezar. Si eliges una ruta en una tarea en curso, cambia una vez en ese momento y después no cambia por sí sola.",
+      "scopeNote": "El enrutamiento inteligente gestiona de forma continua las tareas de este ordenador y sus puntos de entrada compatibles. Al elegirlo al inicio o a mitad de una tarea, comprueba disponibilidad y cuota antes de cada turno, cambia a una fuente con visión si hay imágenes, protege la caché activa y aplica respaldo ante fallos hasta que lo desvincules o elijas un modelo concreto.",
       "back": "Volver al enrutamiento inteligente",
       "name": "Nombre",
       "nameHint": "Se muestra en el selector de modelos.",
@@ -23672,6 +23677,11 @@
       "deviceDefaultReadOnly": "Actualiza esa computadora para cambiar aquí su modelo predeterminado.",
       "deviceUnavailable": "Ahora no se pueden leer los ajustes de amigos de esa computadora. Comprueba que esté en línea y vuelve a abrirlo.",
       "deviceLoading": "Leyendo los ajustes de esa computadora…"
+    },
+    "turnSwitch": {
+      "preflightUnavailable": "Fuente actual no disponible o sin cuota; cambiado antes de enviar",
+      "imageInput": "El mensaje incluye imágenes; cambiado a una fuente con visión",
+      "cacheExpired": "Ventana de caché expirada; fuente reelegida según la estrategia de ruta"
     }
   },
   "projectSettings": {

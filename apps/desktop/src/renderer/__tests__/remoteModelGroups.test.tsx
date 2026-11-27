@@ -386,7 +386,7 @@ describe('remote device model groups', () => {
       await prefetchDeviceProviders('desk-2');
     });
     expect(result.current.config?.routes.map(route => route.id)).toEqual(['daily']);
-    expect(rawInvoke).toHaveBeenCalledWith('desk-2', 'model-groups:get', []);
+    expect(rawInvoke).toHaveBeenCalledWith('desk-2', 'model-groups:get', [{ includeSourceRoutes: true }]);
   });
 
   it('ignores a stale pre-reconnect unsupported error after link reset', async () => {

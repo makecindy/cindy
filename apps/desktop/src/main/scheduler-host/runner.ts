@@ -96,13 +96,14 @@ import {
 import { setSessionEffort, setSessionFastMode } from '../maker-host/session-effort-store.js';
 import {
   CredentialModeSwitchBusyError,
+  crossesCodexSessionCustomProviderIdentity,
   isCodexThreadModelProviderIdentityMismatch,
   prepareLocalCodexCredentialModeSwitch,
   prepareLocalSessionCredentialModeSwitch,
+  readCodexPoolExecution,
   shouldCloseSessionForCredentialSwitch,
 } from '../maker-host/codex-credential-switch.js';
 import { withRehydrateCloseSuppressed } from '../maker-host/rehydrateCloseSuppression.js';
-import { crossesCodexAppliedCustomProviderIdentity } from '../maker-host/codex-custom-provider-route.js';
 import { PluginEngineUnsupportedError } from '../maker-host/engineKind.js';
 import { dbToMakerEngineKind, isPluginEngineKind } from '../../shared/agentKindConversion.js';
 import { ensureDialogueWorkspaceDir } from '../localDb/dialogueWorkspace';
@@ -1738,14 +1739,17 @@ export class MakerScheduleRunner implements ScheduleRunner {
           }
           const liveSession = this.deps.maker.getSession(sessionId);
           if (
-            liveSession &&
-            crossesCodexAppliedCustomProviderIdentity({
+            liveSession?.agentKind === 'codex' &&
+            crossesCodexSessionCustomProviderIdentity({
+              sessionId: liveSession.agentDeviceId ? undefined : sessionId,
               agentKind: liveSession.agentKind,
               remoteHostId: liveSession.remoteHostId,
+              currentProviderId: getSessionProvider(sessionId) ?? row?.providerId ?? null,
+              currentModel: liveSession.model,
               currentCodexProxyActive: liveSession.codexProxyActive,
-              currentThreadModelProviderId: liveSession.codexThreadModelProviderId,
-              targetProviderId: schedule.providerId?.trim() || row?.providerId || null,
-              targetModel: schedule.model?.trim() || meta?.model || liveSession.model,
+              currentCodexThreadModelProviderId: liveSession.codexThreadModelProviderId,
+              nextProviderId: schedule.providerId?.trim() || row?.providerId || null,
+              nextModel: schedule.model?.trim() || meta?.model || liveSession.model,
             })
           ) {
             holder.releaseAgentSwitchLock?.();
@@ -2137,6 +2141,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       preflightProviderId = nextProviderId;
       const credentialSwitchInput = liveSession && !agentDeviceId
         ? {
+            sessionId,
             agentKind: liveSession.agentKind,
             remoteHostId: liveSession.remoteHostId,
             currentProviderId,
@@ -2149,16 +2154,6 @@ export class MakerScheduleRunner implements ScheduleRunner {
               liveSession.codexCindyRemoteCompactionCompatible,
           }
         : null;
-      const crossesCustomProviderIdentity = credentialSwitchInput
-        ? crossesCodexAppliedCustomProviderIdentity({
-            agentKind: credentialSwitchInput.agentKind,
-            remoteHostId: credentialSwitchInput.remoteHostId,
-            currentCodexProxyActive: credentialSwitchInput.currentCodexProxyActive,
-            currentThreadModelProviderId: credentialSwitchInput.currentCodexThreadModelProviderId,
-            targetProviderId: credentialSwitchInput.nextProviderId,
-            targetModel: credentialSwitchInput.nextModel,
-          })
-        : false;
       if (
         liveSession &&
         credentialSwitchInput &&
@@ -2175,6 +2170,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
             nextProviderId: currentProviderId,
             nextModel: liveSession.model,
           });
+        const closeOnlyCurrentSession = currentThreadRouteMismatch ||
+          !!readCodexPoolExecution(credentialSwitchInput) ||
+          crossesCodexSessionCustomProviderIdentity(credentialSwitchInput);
         if (isHeartbeat && this.runtime.isSessionInTurn(sessionId)) {
           return this.failOrDeferSessionRunning(schedule, ctx, sessionId, true);
         }
@@ -2182,8 +2180,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           throwIfFireAborted(ctx.signal, 'credential mode switch');
           if (
             liveSession.agentKind === 'codex' &&
-            !currentThreadRouteMismatch &&
-            !crossesCustomProviderIdentity
+            !closeOnlyCurrentSession
           ) {
             await prepareLocalCodexCredentialModeSwitch({
               maker: this.deps.maker,
@@ -2213,10 +2210,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           nextProviderId,
           fromModel: liveSession.model,
           toModel: model,
-          closeScope:
-            currentThreadRouteMismatch || crossesCustomProviderIdentity
-              ? 'session'
-              : 'all-local-codex',
+          closeScope: closeOnlyCurrentSession ? 'session' : 'all-local-codex',
         });
       }
       if (
@@ -2905,6 +2899,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           if (
             effectiveAgentKind !== 'pi' &&
             shouldCloseSessionForCredentialSwitch({
+              sessionId: session.id,
               agentKind: scheduledBuiltinAgentKind(session.agentKind),
               remoteHostId: session.remoteHostId,
               currentProviderId: dispatchProviderId,
@@ -4317,31 +4312,28 @@ export class MakerScheduleRunner implements ScheduleRunner {
     if (explicitRoute?.providerId && nextProviderId !== explicitRoute.providerId) {
       throw queuedRouteMismatch('provider');
     }
-    if (
-      !remoteAgent && crossesCodexAppliedCustomProviderIdentity({
-        agentKind: live.agentKind,
-        remoteHostId: live.remoteHostId,
-        currentCodexProxyActive: live.codexProxyActive,
-        currentThreadModelProviderId: live.codexThreadModelProviderId,
-        targetProviderId: nextProviderId,
-        targetModel,
-      })
-    ) {
+    const credentialSwitchInput = {
+      sessionId: live.id,
+      agentKind: live.agentKind,
+      remoteHostId: live.remoteHostId,
+      currentProviderId,
+      nextProviderId,
+      currentModel: live.model,
+      nextModel: targetModel,
+      currentCodexProxyActive: live.codexProxyActive,
+      currentCodexThreadModelProviderId: live.codexThreadModelProviderId,
+      currentCodexCindyRemoteCompactionCompatible: live.codexCindyRemoteCompactionCompatible,
+    };
+    if (!remoteAgent && crossesCodexSessionCustomProviderIdentity(credentialSwitchInput)) {
       throw new QueuedCodexThreadIdentityMismatchError(
         `queued heartbeat Codex thread provider identity does not match the target session route (session "${live.id}")`,
       );
     }
     if (
       !remoteAgent && isCodexThreadModelProviderIdentityMismatch({
-        agentKind: live.agentKind,
-        remoteHostId: live.remoteHostId,
-        currentProviderId,
+        ...credentialSwitchInput,
         nextProviderId: currentProviderId,
-        currentModel: live.model,
         nextModel: live.model,
-        currentCodexProxyActive: live.codexProxyActive,
-        currentCodexThreadModelProviderId: live.codexThreadModelProviderId,
-        currentCodexCindyRemoteCompactionCompatible: live.codexCindyRemoteCompactionCompatible,
       })
     ) {
       throw new QueuedCodexThreadIdentityMismatchError(
@@ -4350,19 +4342,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
     }
     if (
       !remoteAgent && live.agentKind !== 'pi' &&
-      shouldCloseSessionForCredentialSwitch({
-        agentKind: live.agentKind,
-        remoteHostId: live.remoteHostId,
-        currentProviderId,
-        nextProviderId,
-        currentModel: live.model,
-        nextModel: targetModel,
-        currentCodexProxyActive: live.codexProxyActive,
-        currentCodexThreadModelProviderId: live.codexThreadModelProviderId,
-        currentCodexCindyRemoteCompactionCompatible: live.codexCindyRemoteCompactionCompatible,
-      })
+      shouldCloseSessionForCredentialSwitch(credentialSwitchInput)
     ) {
-      if (resolvedSelection || explicitRoute) {
+      if (resolvedSelection || explicitRoute || readCodexPoolExecution(credentialSwitchInput)) {
         throw new QueuedRouteDisabledError(
           'Scheduled model route requires rebuilding before queued dispatch',
         );
