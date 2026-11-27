@@ -699,7 +699,7 @@ describe('systemd 动作契约（真目录 + 假 systemctl）', () => {
   );
 
   // Unit: a concurrent replacement must survive the real adapter's failed removal and recovery.
-  it('does not overwrite a service recreated while timer deletion fails', async () => {
+  it('恢复写回时不覆盖并发重建的服务文件', async () => {
     const replacement = '[Service]\nExecStart=/bin/new-service\n';
     const { adapter, dir, cleanup } = await withUnits(
       {
