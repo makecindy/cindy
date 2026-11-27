@@ -461,17 +461,22 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
               deviceGeneration !== access.deviceAccessGeneration(peer)) {
             throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
           }
-          refuseWhileHeld();
         };
       },
       validate: async (peer, input, assertAccess) => {
-        assertAccess?.();
+        const assertValidationAccess = () => {
+          assertAccess?.();
+          // Releasing an existing receipt changes no task data on this computer.
+          // A held profile still refuses new handoffs and validates no delivery.
+          if (!input.release) refuseWhileHeld();
+        };
+        assertValidationAccess();
         await openReceiptLink(peer);
         const args = [{ action: 'validate-task-action', ...input }];
         const response = await client.invoke(peer, { channel: DL_SESSION_HANDOFF_CHANNEL, args },
           resolveRemoteInvokeTimeoutMs(DL_SESSION_HANDOFF_CHANNEL, args, 'desktop'),
-          { preSend: assertAccess, background: true });
-        assertAccess?.();
+          { preSend: assertValidationAccess, background: true });
+        assertValidationAccess();
         const result = response.ok ? response.result as { valid?: unknown; released?: unknown } | null : null;
         return result?.valid === true && (!input.release || result.released === true);
       },
