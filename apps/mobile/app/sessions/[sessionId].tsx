@@ -457,6 +457,7 @@ import {
   findPluginEngine,
   isPluginEngineEffort,
   isPluginEngineSessionKind,
+  isPluginEngineSwitchSourceAllowed,
   isSamePluginEngineChoice,
   pluginEngineExecutionDeviceId,
   pluginEngineModelName,
@@ -1955,12 +1956,12 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const currentPluginEngineIsRemote = !!currentSession?.agentDeviceId && currentSession.agentDeviceId !== deviceId;
   const pluginEngineTargetId = pluginEngineExecutionDeviceId(currentSession?.agentDeviceId, pluginEngineSwitchIntent);
   const pluginEngineTargetIsRemote = !!pluginEngineTargetId && pluginEngineTargetId !== deviceId;
-  // 换到 / 换出插件引擎只限被控电脑本机的普通任务，与 Desktop 的切换准入一致。
+  // 换到 / 换出插件引擎与 Desktop 切换准入一致（支持桌面、伙伴、官方 hook 与个人 IM 任务）。
   const pluginEngineSwitchEligible = !!currentSession && !!deviceId && !isSharedTaskPeer(deviceId)
     // Agent 在另一台电脑的任务照样可以：选插件引擎时 Agent 回到被控电脑(被控端负责换位置)。
     && !currentSession.remoteHostId
     && !currentSession.orcaRole && !currentSession.orcaRemoteLead
-    && (currentSession.source == null || currentSession.source === 'desktop')
+    && isPluginEngineSwitchSourceAllowed(currentSession.source)
     && currentSession.status !== 'archived';
   const pluginEngines = usePluginEngines(maker, deviceId, pluginEngineTask || pluginEngineSwitchEligible);
   const pluginEngineKeepDeviceIds = useMemo(
@@ -10357,11 +10358,17 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const archiveFromCard = useCallback(() => {
     void patchSessionMeta({ status: 'archived' }, async (isCurrent) => {
       const names = deviceId
-        ? await loadActiveBoundScheduleNames({ deviceId, invoke, sessionId, source: sessionSourceForSchedule })
+        ? await loadActiveBoundScheduleNames({
+            deviceId,
+            invoke,
+            sessionId,
+            source: sessionSourceForSchedule,
+            orcaRole: currentSession?.orcaRole,
+          })
         : [];
       return isCurrent() && confirmArchiveWithSchedules(t, names);
     });
-  }, [deviceId, invoke, patchSessionMeta, sessionId, sessionSourceForSchedule, t]);
+  }, [currentSession?.orcaRole, deviceId, invoke, patchSessionMeta, sessionId, sessionSourceForSchedule, t]);
   useTaskAutoArchive({
     session: currentSession?.id === sessionId ? currentSession : null,
     deviceId,
@@ -10991,7 +10998,13 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             onArchive={(prepare) => { void patchSessionMeta({ status: 'archived' }, prepare); }}
             confirmArchive={async (isCurrent) => {
               const names = deviceId
-                ? await loadActiveBoundScheduleNames({ deviceId, invoke, sessionId, source: sessionSourceForSchedule })
+                ? await loadActiveBoundScheduleNames({
+                    deviceId,
+                    invoke,
+                    sessionId,
+                    source: sessionSourceForSchedule,
+                    orcaRole: currentSession?.orcaRole,
+                  })
                 : [];
               return isCurrent() && confirmArchiveWithSchedules(t, names);
             }}
