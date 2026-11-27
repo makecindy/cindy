@@ -1078,6 +1078,7 @@ describe('MakerScheduleRunner pre-dispatch model/route refusal notification', ()
     expect(notifier.notify).toHaveBeenCalledTimes(1);
     expect(notifier.notify.mock.calls[0][1]).toMatchObject({
       id: 'run-model-unavail',
+      sessionId: 'bound-sess',
       status: 'failed',
       errorMsg: err.message,
     });
@@ -1101,6 +1102,88 @@ describe('MakerScheduleRunner pre-dispatch model/route refusal notification', ()
       id: 'run-route-reject',
       status: 'failed',
     });
+    expect(notifier.notify.mock.calls[0][1].sessionId).toBeUndefined();
+  });
+
+  it('carries confirmed existing sessionId on bound route failures and omits it when missing or rebound', async () => {
+    const h = createSessionHarness(acceptingSend());
+
+    // 1. Confirmed bound heartbeat failing at checkModelRoute (post-snapshot) carries sessionId.
+    const { runner: boundRunner, notifier: boundNotifier, maker: boundMaker } = createRunnerHarness(h.session, {
+      silenced: true,
+      deps: {
+        checkModelRoute: vi.fn(async () => ({ kind: 'reject' as const, reason: 'explicit-source-disabled' as const })),
+      },
+    });
+    vi.mocked(boundMaker.getSessionMeta).mockResolvedValue({
+      workDir: '/repo/project',
+      agentKind: 'codex',
+      model: 'gpt-6-astra',
+    } as never);
+    await expect(
+      boundRunner.fire(baseSchedule({ targetSessionId: 'bound-sess', silentWhenIdle: true }), createFireContext('run-bound-route')),
+    ).rejects.toThrow(/schedule route unavailable/);
+    expect(boundNotifier.notify.mock.calls[0][1]).toMatchObject({
+      id: 'run-bound-route',
+      sessionId: 'bound-sess',
+      status: 'failed',
+    });
+
+    // 2. Bound bot routine failing at acquirePendingAgentSwitch resolves its active sessionId lazily.
+    const { runner: botRunner, notifier: botNotifier } = createRunnerHarness(h.session, {
+      silenced: true,
+      deps: {
+        acquirePendingAgentSwitch: vi.fn(async () => {
+          throw new Error('[MODEL_SELECTION_UNAVAILABLE] bot model unavailable');
+        }),
+      },
+    });
+    await expect(
+      botRunner.fire(baseSchedule({ source: 'bot', targetSessionId: 'bot-sess', silentWhenIdle: true }), createFireContext('run-bot-unavail')),
+    ).rejects.toThrow(/MODEL_SELECTION_UNAVAILABLE/);
+    expect(botNotifier.notify.mock.calls[0][1]).toMatchObject({
+      id: 'run-bot-unavail',
+      sessionId: 'bot-sess',
+      status: 'failed',
+    });
+
+    // 3. Missing target row must not stamp a nonexistent sessionId into fauxRun.
+    mocks.getSessionRowSnapshot.mockResolvedValueOnce(null);
+    const { runner: missingRunner, notifier: missingNotifier } = createRunnerHarness(h.session, {
+      silenced: true,
+      deps: {
+        acquirePendingAgentSwitch: vi.fn(async () => {
+          throw new Error('[MODEL_SELECTION_UNAVAILABLE] missing target');
+        }),
+      },
+    });
+    await expect(
+      missingRunner.fire(baseSchedule({ targetSessionId: 'gone-sess', silentWhenIdle: true }), createFireContext('run-missing-target')),
+    ).rejects.toThrow(/MODEL_SELECTION_UNAVAILABLE/);
+    expect(missingNotifier.notify).toHaveBeenCalledTimes(1);
+    expect(missingNotifier.notify.mock.calls[0][1].sessionId).toBeUndefined();
+
+    // 4. Persistent session auto-rebound off a deleted target must not stamp old or uncreated sessionId.
+    mocks.getSessionRowSnapshot.mockResolvedValueOnce({ status: 'deleted' }).mockResolvedValueOnce({ status: 'deleted' });
+    const { runner: rebindRunner, notifier: rebindNotifier } = createRunnerHarness(h.session, {
+      silenced: true,
+      deps: {
+        checkModelRoute: vi.fn(async () => ({ kind: 'reject' as const, reason: 'explicit-source-disabled' as const })),
+      },
+    });
+    rebindRunner.attachScheduler({
+      isRunSilenced: vi.fn(() => true),
+      isRunAbandoned: vi.fn(() => false),
+      update: vi.fn(async () => undefined),
+    } as unknown as Scheduler);
+    await expect(
+      rebindRunner.fire(
+        baseSchedule({ targetSessionId: 'deleted-sess', persistentSession: true, silentWhenIdle: true }),
+        createFireContext('run-rebind-route'),
+      ),
+    ).rejects.toThrow(/schedule route unavailable/);
+    expect(rebindNotifier.notify).toHaveBeenCalledTimes(1);
+    expect(rebindNotifier.notify.mock.calls[0][1].sessionId).toBeUndefined();
   });
 
   it('notifies once when resolveModelSelection fails for a fresh explicit selection', async () => {
@@ -1129,6 +1212,7 @@ describe('MakerScheduleRunner pre-dispatch model/route refusal notification', ()
       status: 'failed',
       errorMsg: '[MODEL_SELECTION_UNAVAILABLE] removed',
     });
+    expect(notifier.notify.mock.calls[0][1].sessionId).toBeUndefined();
   });
 
   it('notifies once when admitPluginEngine refuses a fresh plugin-engine schedule', async () => {
@@ -1159,6 +1243,7 @@ describe('MakerScheduleRunner pre-dispatch model/route refusal notification', ()
       status: 'failed',
       errorMsg: 'schedule route unavailable: [MODEL_SELECTION_UNAVAILABLE] plugin engine offline',
     });
+    expect(notifier.notify.mock.calls[0][1].sessionId).toBeUndefined();
   });
 
   it('does not notify when fire is aborted or account owner changed during route check', async () => {
