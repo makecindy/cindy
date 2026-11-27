@@ -232,11 +232,8 @@ export function forward(row, worktree, checks, { pull = livePull } = {}) {
     );
     git(cwd, 'worktree', 'add', '--detach', worktree, commit);
   } else {
-    assert.equal(
-      fs.realpathSync(worktree),
-      fs.realpathSync(git(worktree, 'rev-parse', '--show-toplevel')),
-      'Expected a worktree root',
-    );
+    // Git reports an empty prefix at the root even when Windows supplies an 8.3 path.
+    assert.equal(git(worktree, 'rev-parse', '--show-prefix'), '', 'Expected a worktree root');
     assert.equal(git(worktree, 'rev-parse', '--abbrev-ref', 'HEAD'), 'HEAD', 'Expected detached worktree');
     commit = git(worktree, 'rev-parse', 'HEAD');
   }

@@ -548,6 +548,9 @@ test('conflict forwarding keeps live context, gates push on both checks, and ver
   );
   assert.equal(fs.existsSync(path.join(worktree, 'private-only')), false);
   const remoteHead = () => runGit(upstream, 'rev-parse', 'refs/heads/feature');
+  const subdirectory = path.join(worktree, 'nested directory');
+  fs.mkdirSync(subdirectory);
+  assert.throws(() => forward(row, subdirectory, null, { pull }), /Expected a worktree root/);
   const pass = [process.execPath, '-e', 'process.exit(0)'];
   const bad = [process.execPath, '-e', 'process.exit(1)'];
   assert.throws(() => forward(row, worktree, [pass, bad], { pull }));
