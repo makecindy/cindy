@@ -9,6 +9,7 @@
     "stopAllHint": "Includes other people’s requests",
     "step": "Step {{step}}/{{total}}"
   },
+  "newMessagesBoundary": "NEW",
   "title": "Group Chats",
   "memberSeparator": ", ",
   "memberCount_one": "{{count}} member",
@@ -315,6 +316,8 @@
     },
     "allowMemberInvites": "Let all members invite friends",
     "allowMemberInvitesHint": "When on, all joined members can invite friends. Only the group owner and admins can change this.",
+    "allowMemberMentionAll": "Allow all members to @everyone",
+    "allowMemberMentionAllHint": "When on, all members can @everyone; when off, only the group owner and admins can. Only the group owner and admins can change this.",
     "allowMentionAllBots": "Allow @all buddies",
     "allowMentionAllBotsHint": "Only the group owner can change this. Buddies may all reply; use with care in large groups. AI replies on your behalf are independent."
   },
@@ -343,6 +346,7 @@
     "groupDissolved": "This group has been dissolved. You can still read the available history.",
     "lastOwner": "Transfer ownership or dissolve this group before leaving.",
     "allBotsMentionDisabled": "The group owner has not enabled @all buddies.",
+    "allHumansMentionForbidden": "Only the group owner and admins can @everyone.",
     "turnAlreadyStarted": "This buddy has already started and cannot be skipped",
     "stopOwnershipUnknown": "Could not stop some work because its requester could not be verified.",
     "nothingToStop": "There is no active work to stop."
@@ -578,6 +582,7 @@
     "accessNone": "Owner only",
     "accessChat": "Group chat only",
     "accessTools": "Can use tools and info",
+    "memberPermissions": "Member permissions",
     "replies": "How buddies reply",
     "assistant": "Group Cindy",
     "assistantHint": "Works on the computer of whoever @mentions it.",

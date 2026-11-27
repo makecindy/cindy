@@ -51,7 +51,7 @@ vi.mock('@/components/AppText', async () => {
 vi.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 40, bottom: 20 }) }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('lucide-react-native', () => ({
-  ...Object.fromEntries(['Clock3', 'Brain', 'Puzzle', 'SlidersHorizontal', 'Check', 'Zap', 'LayoutGrid', 'Search', 'X', 'ChevronDown', 'ChevronRight', 'ChevronsUpDown', 'CircleAlert', 'Waypoints'].map(key => [key, () => null])),
+  ...Object.fromEntries(['Clock3', 'Brain', 'Puzzle', 'SlidersHorizontal', 'Check', 'Zap', 'LayoutGrid', 'Search', 'X', 'ChevronDown', 'ChevronRight', 'ChevronsUpDown', 'CircleAlert', 'Sparkles'].map(key => [key, () => null])),
   Star: ({ fill, color }: any) => createElement('span', { 'data-star-fill': fill, 'data-star-color': color }),
 }));
 vi.mock('react-native-svg', () => ({

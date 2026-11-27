@@ -64,6 +64,7 @@ export function fingerprintImDefaultSettings(raw: ImDefaultSettings): string {
     }),
     ...(acp ? [[acp.providerId ?? null, acp.model, acp.effort,
       ...(acp.agentDeviceId ? [acp.agentDeviceId] : [])]] : []),
+    ...(raw.modelGroup ? [raw.modelGroup] : []),
   ]);
 }
 
@@ -160,7 +161,7 @@ export function sameImDefaultRoute(
     a.agentKind === b.agentKind &&
     (a.agentDeviceId ?? null) === (b.agentDeviceId ?? null) &&
     a.model === b.model &&
-    (a.effort ?? null) === (b.effort ?? null) &&
+    (a.effort || null) === (b.effort || null) &&
     normalizeProvider(a) === normalizeProvider(b)
   );
 }
