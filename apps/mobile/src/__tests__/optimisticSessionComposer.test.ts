@@ -135,7 +135,7 @@ describe('mobile optimistic composer while session is not ready', () => {
     expect(bridge).toContain('hasCreationTask: (sessionId) => getNewSessionCreationTask(sessionId) !== null');
     expect(bridge).toContain('isCreationHeld: isDurableOutboxCreationHeld');
     expect(bridge).toContain('readSession: (record) => maker(record).getSession(record.item.sessionId)');
-    expect(bridge).toContain('const session = await readSessionOnce(r)');
+    expect(bridge).toContain('const session = createdSession ?? prefetchedSession ?? await readSessionOnce(r)');
     expect(bridge).toContain('if (!session?.workingDir)');
     expect(bridge).toContain('}, [link.status, link.connectionEpoch, link.getConnectionState])');
   });
@@ -241,7 +241,7 @@ describe('mobile optimistic composer while session is not ready', () => {
     // The transport must use the record-scoped adapter, whose delayed pre-send
     // invalidation is exercised by cindyMakeOutboxBridge.test.ts.
     expect(bridge).toContain('invoke: invokeOwned(r),');
-    expect(delivery).toMatch(/await update\(\{\s*state: ["']sending["'],\s*enqueueStarted: true,\s*error: undefined\s*\}\)/);
+    expect(delivery).toMatch(/await update\(\{\s*\.\.\.preparation,\s*state: ["']sending["'],\s*enqueueStarted: true,\s*error: undefined\s*\}\)/);
     expect(delivery).toContain('record.retrySafe && projection.inputDeliveryVersion === 1');
     expect(delivery).not.toContain('createOutboxClientId');
   });

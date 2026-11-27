@@ -34,7 +34,7 @@ import { isPreconditionFailedRemoteError } from '@cindy/maker-shared/device-link
 import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
 import { i18n } from '@/i18n';
 import { isTransientRemoteError, withTransientRemoteRetry } from '@/device-link/remoteRetry';
-import { formatRemoteError } from '@/device-link/remoteStatus';
+import { formatRemoteError, isAutoRecoveringRemoteError } from '@/device-link/remoteStatus';
 import type { MobileMakerTransport, MobileOrcaEnableOptions } from '@/device-link/mobileMakerTransport';
 import { describeOrcaError, enableOrcaTeam, rememberOrcaStartFailure, type OrcaWorkerFormValue } from '@/session/orcaTeam';
 import { buildQueuedTextMessage } from '@/session/inputProjection';
@@ -53,7 +53,7 @@ import {
 import type { DeviceProvidersPayload } from '@/device-link/deviceProvidersCache';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import { getCurrentMobileOutboxRecords, holdDurableOutboxCreation, isDurableOutboxCreationHeld, mobileDurableOutbox, persistCancelledCreationDraft, suspendCreationDraftForCleanup } from './mobileDurableOutbox';
-import { isDurableCreationDraft, type DurableOutboxRecord } from './durableOutbox';
+import { isDurableCreationDraft, needsHostCreation, type DurableOutboxRecord } from './durableOutbox';
 import { isExplicitRemoteNotFoundError } from './newSessionWorktree';
 import { mergeAttachmentsWithinLimit } from './attachments';
 import type { MobileLocalAttachmentUploadCandidate } from './mobileLocalAttachmentUpload';
@@ -197,6 +197,7 @@ interface InternalTask extends NewSessionCreationTask {
 
 const tasks = new Map<string, InternalTask>();
 const subs = new Set<() => void>();
+const deliverySubs = new Set<() => void>();
 // useSyncExternalStore 的快照必须引用稳定:每次变更 bump 版本并重建缓存数组。
 let snapshotVersion = 0;
 const taskSnapshots = new Map<string, NewSessionCreationTask | null>();
@@ -209,10 +210,11 @@ function durableEditKey(record: DurableOutboxRecord): string {
   return JSON.stringify([record.accountId, record.deviceId, record.storageSessionId ?? record.item.sessionId, record.item.clientId]);
 }
 
-function emit(): void {
+function emit(change: 'task' | 'progress' = 'task'): void {
   snapshotVersion += 1;
   taskSnapshots.clear();
   for (const sub of subs) sub();
+  if (change === 'task') for (const sub of deliverySubs) sub();
 }
 
 // Failed pipelines have no pending continuation to retire them on account change.
@@ -728,12 +730,13 @@ export function shouldBlockSessionSync(sessionId: string): boolean {
   return status === 'running' || status === 'create-failed';
 }
 
-export function subscribeNewSessionCreationTasks(callback: () => void): () => void {
-  subs.add(callback);
+export function subscribeNewSessionCreationTasks(callback: () => void, mode: 'all' | 'delivery' = 'all'): () => void {
+  const listeners = mode === 'delivery' ? deliverySubs : subs;
+  listeners.add(callback);
   const offOutbox = mobileDurableOutbox.subscribe(callback);
   return () => {
     offOutbox();
-    subs.delete(callback);
+    listeners.delete(callback);
   };
 }
 
@@ -1291,7 +1294,7 @@ async function runPipelineSteps(task: InternalTask, timer: NewSessionCreationTim
       client: task.firstMessageClientId.slice(-8), phase: value,
       elapsedMs: Date.now() - task.startedAt,
     });
-    emit();
+    emit('progress');
   };
   const { params } = task;
   const { maker, openLink, subscribe } = params.transport;
@@ -1352,8 +1355,7 @@ async function runPipelineSteps(task: InternalTask, timer: NewSessionCreationTim
     assertTaskOwnerCurrent(task);
     if (auth?.unauthenticated) {
       params.onUnauthenticated();
-      failTask(task, 'create-failed', params.authGateHint);
-      return;
+      throw new Error(params.authGateHint);
     }
     // 鉴权 fresh revalidate 之后、createSession 之前,用工作站当前目录联合校验
     // (model, providerId)(codex review P2):终检在 handoff 前完成,建链/鉴权期间
@@ -1377,7 +1379,6 @@ async function runPipelineSteps(task: InternalTask, timer: NewSessionCreationTim
     assertTaskOwnerCurrent(task);
     const createEpoch = params.transport.getConnectionEpoch?.();
     const createOutcome = await createSessionIdempotent(task, creationDraft);
-    const createdAt = Date.now();
     timer.lap('create');
     // started 写盘后二次重验可能修正草稿(codex review P2:将 started 后修正的
     // 草稿传给排队消息)——createOpts 用修正版创建,排队消息合成也必须用同一
@@ -1496,7 +1497,7 @@ async function runPipelineSteps(task: InternalTask, timer: NewSessionCreationTim
           && effectiveFinalDraft.workspaceKind === 'dialogue' && !task.precreatedWorktree
           && !params.orcaEnable && !effectiveFinalDraft.agentDeviceId && !effectiveFinalDraft.pluginEngine
           && params.attachments.length === 0
-          ? { session: freshSession, connectionEpoch: createEpoch, createdAt, inputDelivery: createOutcome.inputDelivery }
+          ? { session: freshSession, connectionEpoch: createEpoch, inputDelivery: createOutcome.inputDelivery }
           : undefined;
         mobileDebugLog('debug', 'new-session', 'first input handoff started', { client: task.firstMessageClientId.slice(-8) });
         await params.transport.handoffFirstMessage(queuedDraft, snapshot);
@@ -1595,6 +1596,20 @@ async function runPipelineSteps(task: InternalTask, timer: NewSessionCreationTim
     if (isStaleNewSessionOwnerError(err) || !isTaskOwnerCurrent(task)) {
       cancelStaleOwnerTask(task);
       return;
+    }
+    const pending = getCurrentMobileOutboxRecords().find(record => record.deviceId === task.deviceId
+      && record.item.sessionId === sessionId && record.item.clientId === task.firstMessageClientId
+      && needsHostCreation(record));
+    if (pending && isAutoRecoveringRemoteError(err)) {
+      // The persisted send still owns these IDs. Release the live task so the outbox
+      // can resume after reconnect, just as it does after a process restart.
+      dismissNewSessionCreation(sessionId);
+      return;
+    }
+    if (pending) {
+      // Keep the editor recovery path even when its ledger write races cancellation.
+      await mobileDurableOutbox.update(pending, { state: 'failed', error: formatRemoteError(err) }).catch(() => undefined);
+      if (tasks.get(sessionId) !== task || !isTaskOwnerCurrent(task)) return;
     }
     failTask(task, 'create-failed', formatRemoteError(err));
   }

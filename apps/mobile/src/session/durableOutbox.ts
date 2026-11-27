@@ -68,6 +68,8 @@ export interface DurableOutboxRecord {
   failedUploadSlot?: number;
   creation?: {
     draft: NewSessionDraft;
+    /** Explicit first-send intent, saved after the form accepted this plain dialogue. */
+    needsHostCreation?: true;
     originalWorkingDir?: string;
     cancelled?: true;
     /** Creation was handed back to the editor; restore its entry after restart. */
@@ -116,6 +118,17 @@ export function isDurableOutboxHandedOff(record: Pick<DurableOutboxRecord, 'stat
 export function isDurableOutboxUnsent(record: DurableOutboxRecord): boolean {
   return record.enqueueStarted === false || (record.enqueueStarted === undefined
     && !record.prepared && record.sendAtMs === undefined);
+}
+
+export function needsHostCreation(record: DurableOutboxRecord): boolean {
+  const creation = record.creation;
+  return creation?.needsHostCreation === true && creation.draft?.workspaceKind === 'dialogue'
+    && !creation.draft.pluginEngine && !creation.draft.agentDeviceId && !creation.originalWorkingDir
+    && !record.chat && !record.resourceRef && !record.uploads.length && !record.item.attachmentSlots.length
+    && record.state === 'queued'
+    && !record.suspended && !record.creation!.cancelled && !record.creation!.editReady
+    && !record.cancelRequested && !record.template && !record.prepared
+    && !isDurableOutboxSettled(record) && isDurableOutboxUnsent(record);
 }
 
 export const DURABLE_OUTBOX_PREFIX = "cindy.mobile.outbox.v1.";

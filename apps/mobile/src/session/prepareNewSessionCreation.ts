@@ -65,6 +65,7 @@ export interface NewSessionCreationPreparationInput {
   authOwnerAtCreate: MobileAuthOwnerGeneration;
   worktreeAccountId: string;
   creatingWorktree: boolean;
+  allowDialogueRecovery?: boolean;
   worktreeIntent: WorktreeCreateIntentSnapshot;
   isCurrentOwner: () => boolean;
   ensureDeviceAlive: () => boolean;
@@ -225,6 +226,7 @@ export async function prepareNewSessionCreation(
   const useDurableCreation = legacyPlanRestore === null;
   if (recovering && !useDurableCreation)
     throw new Error(t("session.outbox.legacyPlanRecovery"));
+  let persistSubmittedDialogue: ((draft: NewSessionDraft) => Promise<boolean>) | undefined;
   if (useDurableCreation) {
     const firstRecord: DurableOutboxRecord = {
       version: 1,
@@ -266,16 +268,24 @@ export async function prepareNewSessionCreation(
         claimedUploads: [],
       }),
     };
-    const saved = await persistNewSessionCreationDraft({
-      record: firstRecord,
-      recovering,
-      getUploadedSource,
-      isCurrent: () => isCurrentOwner() && ensureDeviceAlive(),
-    });
-    if (!saved) return;
-    outboxRecoveryRef.current = saved;
-    if (!isCurrentOwner() || !ensureDeviceAlive()) return;
-    releaseUploadedSources(sendAttachments.map((a) => a.id));
+    const save = async (record: DurableOutboxRecord) => {
+      const saved = await persistNewSessionCreationDraft({
+        record, recovering, getUploadedSource,
+        isCurrent: () => isCurrentOwner() && ensureDeviceAlive(),
+      });
+      if (!saved) return false;
+      outboxRecoveryRef.current = saved;
+      if (!isCurrentOwner() || !ensureDeviceAlive()) return false;
+      releaseUploadedSources(sendAttachments.map((a) => a.id));
+      return true;
+    };
+    if (input.allowDialogueRecovery && !recovering && !creatingWorktree
+      && effectiveDraft.workspaceKind === 'dialogue' && !effectiveDraft.agentDeviceId
+      && !effectiveDraft.pluginEngine && sendAttachments.length === 0) {
+      persistSubmittedDialogue = (draft) => save({
+        ...firstRecord, creation: { ...firstRecord.creation!, draft, needsHostCreation: true },
+      });
+    } else if (!await save(firstRecord)) return;
   }
   let precreatedWorktree:
     | {
@@ -460,6 +470,7 @@ export async function prepareNewSessionCreation(
     firstMessageClientId,
     legacyPlanRestore,
     useDurableCreation,
+    persistSubmittedDialogue,
     precreatedWorktree,
     abortIfDeviceSwitched,
   };

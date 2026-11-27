@@ -112,6 +112,7 @@ function existingHarness(args = 'target') {
     composerDocumentProjectedText, serializeComposerDocument, reconcileComposerProjectedText, emptyComposerDocument,
     canUseComposer: true, attachments: [] as unknown[], attachmentsRef: { current: [] as unknown[] }, pendingUploads: [],
     sendInFlightRef: { current: false }, sending: false, setSending: vi.fn((_sending: boolean) => {}), currentSession: session,
+    beginSendHandoff: () => () => false,
     invalidateHistoryRecoveryNavigation: vi.fn(),
     outboxConnectionBlockedNow: () => false, getPendingUploadCount: () => 0,
     outboxRef: { current: [] }, remoteSessionRunning: false, currentTurnStreaming: false,
@@ -247,6 +248,58 @@ describe('existing task /goal send boundary', () => {
     } finally {
       evictDeviceProviders('executor');
     }
+  });
+
+  // PR #11841, unit: on Android the Back event can precede the WebView snapshot.
+  // Exercise the existing task's actual send callback and return to the list at that boundary.
+  it('hands the visible text to its own outbox before an immediate Back can remove the editor', async () => {
+    const h = existingHarness();
+    const visible = textComposerDocument('final text from the IME');
+    h.bindings.composerDocumentRef.current = textComposerDocument('older text');
+    let finishSnapshot!: () => void;
+    let holding = false;
+    let onLeave: (() => void) | undefined;
+    Object.assign(h.bindings, {
+      beginSendHandoff: () => {
+        holding = true;
+        return () => { holding = false; onLeave?.(); onLeave = undefined; };
+      },
+    });
+    Object.assign(h.bindings.composerInputRef.current, {
+      flushDocument: (current: () => boolean) => new Promise((resolve, reject) => {
+        finishSnapshot = () => current() ? resolve(visible) : reject(new Error('unmounted editor'));
+      }),
+    });
+    const send = h.run();
+    const leave = () => { h.bindings.outboxSessionAliveRef.current = 'task-b'; };
+    if (holding) onLeave = leave;
+    else leave();
+    finishSnapshot();
+    await send;
+    expect(h.bindings.mobileDurableOutbox.add).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      deviceId: 'host', item: expect.objectContaining({ sessionId: 'existing-task', text: 'final text from the IME' }),
+    }));
+    expect(h.bindings.outboxSessionAliveRef.current).toBe('task-b');
+  });
+
+  // Unit, delayed local write: the old ledger can commit after logout. An identical
+  // draft in the newly active account must survive that completion.
+  it('leaves the new account draft intact when the old send commits during an account switch', async () => {
+    const h = existingHarness();
+    const draft = textComposerDocument('identical draft');
+    h.bindings.composerDocumentRef.current = draft;
+    let stored = draft;
+    Object.assign(h.bindings, {
+      readComposerDocumentDraftSync: () => stored,
+      saveComposerDraft: vi.fn(), clearQuotes: vi.fn(),
+      saveComposerDocumentDraft: (_id: string, value: typeof draft) => { stored = value; },
+    });
+    let currentOwner = true;
+    h.bindings.isMobileAuthOwnerCurrent = () => currentOwner;
+    h.bindings.mobileDurableOutbox.add.mockImplementationOnce(async () => { currentOwner = false; });
+    await h.run();
+    expect(h.bindings.mobileDurableOutbox.add).toHaveBeenCalledOnce();
+    expect(stored).toEqual(draft);
   });
 
   it('sets the associated task Goal and projects its real status', async () => {

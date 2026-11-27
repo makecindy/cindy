@@ -144,7 +144,7 @@ import type {
   RemoteDirectoryEntry,
 } from '@/device-link/mobileMakerTransport';
 import { describeNewSessionError, formatRemoteError, humanizeRemoteError, type NewSessionError } from '@/device-link/remoteStatus';
-import { agentAuthGateHint, agentAuthGateVerdict } from '@/session/agentAuthGate';
+import { agentAuthGateHint, agentAuthGateVerdict, confirmNewSessionAgentAuth } from '@/session/agentAuthGate';
 import { connectedProvidersForAgent, getModel } from '@cindy/model-providers/registry';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
@@ -1282,37 +1282,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   // 空目录 / 拉取失败(旧被控端 / 瞬断)与 agentAuthGateVerdict 的 unknown 同语义,
   // fail-open 返回 unauthenticated=false 放行(review P2:不把空回包升级成硬拦截)。
   // fresh = 本次现拉的工作站目录(管线鉴权后联合校验用,codex review P2)。
-  const confirmAgentUnauthenticated = useCallback(async (agentKind: NewSessionAgentKind, deviceId: string) => {
-    try {
-      // 经 fetchDeviceProvidersFresh 拉取(codex review P2:将最终鉴权目录同步回
-      // 供应商缓存)——直接 listProviders 只把响应交给管线,不更新/驱逐缓存:提交
-      // guard 已缓存来源 A、建链后鉴权终检看到 B 并用 B 创建时,跳转后
-      // useDeviceProviders 命中仍为 A 的缓存并标记 ready:true,UI 与后续选择与
-      // 实际创建脱节。fresh 拉取会按设备与代际写回同一缓存并通知订阅者。
-      const fresh = await fetchDeviceProvidersFresh(deviceId, () => maker.listProviders());
-      // 丢弃已换代的最终目录响应(codex review P2):fresh 在途期间若收到
-      // provider-changed / 登出驱逐 / 重连驱逐,代际变化只让它跳过缓存回写,
-      // Promise 仍正常返回旧响应——核对响应是否被采纳(被采纳 ⟺ 缓存就是该
-      // 响应对象;fresh 成功且 isCurrent 时 cache.set 的就是这个 payload)。
-      // 未采纳 → 目录已失效,按 unknown 处理(不交给 revalidateDraftAfterAuth,
-      // 避免普通创建管线按已删除来源 A 创建;下一轮 guard/重连会取最新目录)。
-      if (getCachedDeviceProviders(deviceId) !== fresh) {
-        return { unauthenticated: false, fresh: null };
-      }
-      return {
-        unauthenticated: fresh.providers.length > 0
-          && connectedProvidersForAgent(fresh.providers, agentKind).length === 0,
-        fresh: {
-          providers: fresh.providers,
-          ...(fresh.modelVisibilityOverrides !== undefined
-            ? { modelVisibilityOverrides: fresh.modelVisibilityOverrides }
-            : {}),
-        },
-      };
-    } catch {
-      return { unauthenticated: false, fresh: null };
-    }
-  }, [maker]);
+  const confirmAgentUnauthenticated = useCallback((agentKind: NewSessionAgentKind, deviceId: string) =>
+    confirmNewSessionAgentAuth(deviceId, agentKind, () => maker.listProviders()), [maker]);
   // setDraft 函数式更新里拿不到最新 modelSections —— 用 ref 镜像当前高亮来源 id。
   const activeSourceIdRef = useRef<string | null>(null);
   activeSourceIdRef.current = modelSections.activeSourceId;
@@ -4353,6 +4324,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       // Recovery may have cancelled this creation while the editor was already open.
       const prepared = await prepareNewSessionCreation({
         effectiveDraft,
+        allowDialogueRecovery: !collabDraft && !modelGroupAtSend,
         outboxRecoveryRef,
         selectedDeviceId,
         selectedDeviceName,
@@ -4421,10 +4393,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
             selectedProviderId: effectiveDraft.providerId,
           }).sections),
         });
-        const applyGuard = (g: SubmitGuardCatalog): void => {
-          effectiveDraft = reconcileNewSessionSubmitDraft(effectiveDraft, g,
-            () => targetAgentHasFast(guardDeviceId, effectiveDraft.agentKind), t);
-        };
+        const checkedDraft = (g: SubmitGuardCatalog) => reconcileNewSessionSubmitDraft(effectiveDraft, g,
+          () => targetAgentHasFast(guardDeviceId, effectiveDraft.agentKind), t);
+        const applyGuard = (g: SubmitGuardCatalog): void => { effectiveDraft = checkedDraft(g); };
         // 有界稳定循环:每轮 await 返回后同步核对 genAt,稳定才退出(≤3)。
         // 哨兵初值必被首轮循环覆盖(for 循环体至少执行一次),消除 null 收窄。
         let guardResult: SubmitGuardCatalog = {
@@ -4444,6 +4415,17 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         // 循环后同步设备复核(不让出微任务):已切换则放弃,precreated ledger 保留交
         // recovery(不做 ACK 补偿,避免在循环末尾再引入可取消 await)。
         if (!ensureDeviceAlive()) return;
+        if (prepared.persistSubmittedDialogue) {
+          if (!await prepared.persistSubmittedDialogue(checkedDraft(guardResult))) return;
+          if (!isCurrentOwner() || !ensureDeviceAlive()) return;
+          if (getDeviceProvidersGen(guardDeviceId) !== guardResult.genAt) {
+            guardResult = await runGuard();
+            if (!isCurrentOwner() || !ensureDeviceAlive()) return;
+            if (getDeviceProvidersGen(guardDeviceId) !== guardResult.genAt) {
+              guardResult = { rows: [], providers: [], catalogKnown: false, genAt: getDeviceProvidersGen(guardDeviceId) };
+            }
+          }
+        }
         applyGuard(guardResult);
       }
       if (useDurableCreation && effectiveDraft.workspaceKind === 'dialogue'

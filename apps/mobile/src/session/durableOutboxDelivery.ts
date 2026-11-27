@@ -6,6 +6,7 @@ import {
   isDurableOutboxHandedOff,
   isDurableOutboxSettled,
   isDurableOutboxUnsent,
+  needsHostCreation,
   type DurableOutboxRecord,
   type DurableUpload,
 } from "./durableOutbox";
@@ -23,6 +24,7 @@ export interface DurableOutboxDeliveryDeps {
   store: ReturnType<typeof createDurableOutbox>;
   isCurrent(): boolean;
   canRun(record: DurableOutboxRecord): boolean;
+  createMissingDialogue?(record: DurableOutboxRecord): Promise<boolean>;
   sessionPolicy?(record: DurableOutboxRecord): Promise<OutboxSessionPolicy>;
   projection(record: DurableOutboxRecord): Promise<DeliveryProjection>;
   /**
@@ -44,7 +46,8 @@ export interface DurableOutboxDeliveryDeps {
   ): Promise<RemoteSerializedAttachment>;
   enqueue(record: DurableOutboxRecord): Promise<InputProjection>;
   /** Recheck resource ownership before recording that an external write has started. */
-  beforeEnqueue?(record: DurableOutboxRecord): Promise<void>;
+  validateResource?(record: DurableOutboxRecord, ref: NonNullable<DurableOutboxRecord["resourceRef"]>): Promise<void>;
+  onHandedOff?(record: DurableOutboxRecord): void;
   cancel(record: DurableOutboxRecord): Promise<boolean>;
   history(record: DurableOutboxRecord): Promise<boolean>;
   /** A remote row alone cannot release the local bubble before offline history owns it. */
@@ -122,6 +125,7 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
     let record = initial;
     // The upload in progress when an attempt throws is the image that did not get through.
     let uploadingSlot: number | undefined;
+    let preparation: Partial<DurableOutboxRecord> | undefined;
     due.set(id(record), Date.now() + 5_000);
     const startedAt = Date.now();
     let markAt = startedAt;
@@ -164,6 +168,27 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       if (current(record)) await finish();
     };
     try {
+      if (needsHostCreation(record)) {
+        // Only a submitted, unclaimed first send can create a missing host task.
+        // Probe first: a previous create may have committed before the process died.
+        let found;
+        try {
+          found = await deps.session(record);
+        } catch (error) {
+          if (!isExplicitRemoteNotFoundError(error)) throw error;
+          found = null;
+        }
+        if (!current(record) || !deps.canRun(record)) return;
+        if (found === null) {
+          if (!await deps.createMissingDialogue?.(record)) return;
+        } else if (found?.id !== record.item.sessionId) {
+          return;
+        } else if (found.status === 'deleted') {
+          return await finish(true);
+        }
+        if (!current(record)) return;
+        await update({ creation: { ...record.creation!, needsHostCreation: undefined } });
+      }
       if (deps.sessionPolicy && !isDurableOutboxSettled(record)) {
         const policy = await deps.sessionPolicy(record);
         if (!current(record) || policy === 'wait') return;
@@ -368,7 +393,7 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
         if (!current(record)) return;
         const prepared = await deps.prepare(record, session);
         if (!current(record)) return;
-        await update({
+        preparation = {
           prepared: {
             ...prepared,
             // Snapshot Plan on this input, never arm the session during preparation.
@@ -384,13 +409,23 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
           clearBoundaryMs: projection.clearBoundaryMs !== undefined
             ? projection.clearBoundaryMs : record.clearBoundaryMs,
           sendAtMs: record.sendAtMs ?? Date.now(),
-        });
+        };
+        // A resource check can fail independently; keep its prepared input cancellable.
+        if (record.resourceRef) {
+          await update(preparation);
+          preparation = undefined;
+        }
         stage('prepare');
       }
-      await deps.beforeEnqueue?.(record);
-      if (!current(record) || !deps.canRun(record)) return;
+      if (record.resourceRef) await deps.validateResource?.(record, record.resourceRef);
+      if (!current(record)) return;
+      if (!deps.canRun(record)) {
+        if (preparation) await update(preparation);
+        return;
+      }
       // This write precedes every external enqueue. Crash recovery therefore knows it must reconcile.
-      await update({ state: "sending", enqueueStarted: true, error: undefined });
+      await update({ ...preparation, state: "sending", enqueueStarted: true, error: undefined });
+      preparation = undefined;
       const applyEnqueueProjection = deps.bindProjection(record);
       let result: InputProjection;
       try {
@@ -452,8 +487,9 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
         id(record),
         Date.now() + Math.min(30_000, 1_000 * 2 ** Math.min(count, 5)),
       );
-      // Never turn an uncertain write into a fresh message or discard its ID.
+      // If the pre-enqueue write failed, its preparation is still explicitly unsent.
       await update({
+        ...preparation,
         state:
           isDurableOutboxSettled(record)
             ? record.state
@@ -468,6 +504,8 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
           ? { refreshUploads: true }
           : {}),
       }).catch(() => undefined);
+    } finally {
+      if (isDurableOutboxHandedOff(record)) deps.onHandedOff?.(record);
     }
   }
   // Bound aggregate replay as well as concurrency; reconnecting many tasks must not

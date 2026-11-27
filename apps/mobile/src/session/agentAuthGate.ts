@@ -14,6 +14,7 @@ import { connectedProvidersForAgent } from '@cindy/model-providers/registry';
 import type { ProviderView } from '@cindy/model-providers/registry';
 
 import { i18n } from '@/i18n';
+import { fetchDeviceProvidersFresh, getCachedDeviceProviders, type DeviceProvidersFetcher } from '@/device-link/deviceProvidersCache';
 
 export type AgentAuthGateVerdict = 'ready' | 'unauthenticated' | 'unknown';
 
@@ -42,6 +43,20 @@ export function agentAuthGateVerdict(input: AgentAuthGateInput): AgentAuthGateVe
   }).length > 0
     ? 'ready'
     : 'unauthenticated';
+}
+
+/** A missing legacy catalog or superseded fetch is unknown; an authoritative negative blocks creation. */
+export async function confirmNewSessionAgentAuth(
+  deviceId: string,
+  agentKind: AgentAuthGateInput['agentKind'],
+  read: DeviceProvidersFetcher,
+) {
+  const fresh = await fetchDeviceProvidersFresh(deviceId, read).catch(() => null);
+  if (!fresh || getCachedDeviceProviders(deviceId) !== fresh) return { unauthenticated: false, fresh: null };
+  return {
+    unauthenticated: agentAuthGateVerdict({ providers: fresh.providers, agentKind, loading: false, error: null }) === 'unauthenticated',
+    fresh,
+  };
 }
 
 /** 未鉴权时的提示文案(与 describeAgentAuthError 的引导口径一致)。 */

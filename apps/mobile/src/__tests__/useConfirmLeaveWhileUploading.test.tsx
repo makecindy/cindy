@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useConfirmLeaveWhileUploading } from '@/session/useConfirmLeaveWhileUploading';
+import { useSessionSendNavigation } from '@/session/useSessionSendNavigation';
 
 const h = vi.hoisted(() => ({
   prevent: vi.fn(),
@@ -37,6 +38,37 @@ function mount(active: boolean) {
     .find((button: { style?: string }) => button.style === style).onPress());
   return { enabled, leave, choose, action, waitForLeaveDecision, dismiss: () => h.alert.mock.calls.at(-1)![3].onDismiss() };
 }
+
+// Unit, PR #11841: both native Back and in-place navigation can arrive before the
+// durable handoff finishes. The upload-dialog tests do not exercise either ordering.
+it('replays the first departure once and drops a stale departure after a scope change', () => {
+  let nav!: ReturnType<typeof useSessionSendNavigation>;
+  function Session({ scope }: { scope: string }) {
+    nav = useSessionSendNavigation(scope);
+    return null;
+  }
+  act(() => root.render(<Session scope="A" />));
+  let finish!: () => boolean;
+  const back = vi.fn();
+  const drawer = vi.fn();
+  act(() => { finish = nav.beginSendHandoff(); });
+  const [active, nativeBack] = h.prevent.mock.calls.at(-1)!;
+  expect(active).toBe(true);
+  nativeBack({ data: { action: { type: 'GO_BACK' } }, repeat: back });
+  expect(nav.deferSendNavigation(drawer)).toBe(true);
+  expect(back).not.toHaveBeenCalled();
+  act(() => { finish(); finish(); });
+  expect(back).toHaveBeenCalledOnce();
+  expect(drawer).not.toHaveBeenCalled();
+  expect(h.prevent.mock.calls.at(-1)![0]).toBe(false);
+
+  act(() => { finish = nav.beginSendHandoff(); });
+  expect(nav.deferSendNavigation(drawer)).toBe(true);
+  act(() => root.render(<Session scope="B" />));
+  act(() => { finish(); });
+  expect(drawer).not.toHaveBeenCalled();
+  expect(nav.deferSendNavigation(drawer)).toBe(false);
+});
 
 describe('useConfirmLeaveWhileUploading', () => {
   it('only blocks leaving while a send waits on uploads', () => {

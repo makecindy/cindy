@@ -32,6 +32,10 @@ function pageCallback(name: string, bindings: Record<string, unknown>): (...args
       && node.initializer.expression.getText(source) === 'useCallback') {
       expression = node.initializer.arguments[0];
     }
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'useEffect') {
+      const callback = node.arguments[0];
+      if (callback && ts.isFunctionExpression(callback) && callback.name?.text === name) expression = callback;
+    }
     ts.forEachChild(node, visit);
   };
   visit(source);
@@ -164,6 +168,28 @@ function fixture(reopen = false, remoteHistoryAvailable = true) {
 }
 
 describe('production session recovery callbacks', () => {
+  // Unit, #11841: run the screen's creation transition on the same mounted session.
+  // Direct sync tests miss the case where a durable handoff fails and no reload is requested.
+  it.each([null, 'create-failed', 'enqueue-failed'] as const)(
+    'loads existing host history after running creation transitions to %s', async status => {
+      const f = fixture();
+      const reads: Promise<unknown>[] = [];
+      const bindings = {
+        prevCreationStatusRef: { current: 'running' }, creationTask: status ? { status } : null,
+        sessionId: 's1', deviceId: 'd1', setError: f.setError,
+        load: () => reads.push(f.sync()),
+        getCurrentMobileOutboxRecords: () => [{ deviceId: 'd1', item: { sessionId: 's1' }, creation: {} }],
+        mobileDurableOutbox: { update: async () => {} }, getMobileAuthOwner: () => 'owner',
+        isMobileAuthOwnerCurrent: () => true, dismissNewSessionCreation: vi.fn(),
+      };
+      await pageCallback('syncAfterCreationTransition', bindings)();
+      await Promise.resolve();
+      await Promise.all(reads);
+      expect(f.state.rows).toEqual(status === 'create-failed' ? [] : page.messages);
+      expect(f.maker.getSession).toHaveBeenCalledTimes(status === 'create-failed' ? 0 : 1);
+    },
+  );
+
   // Existing callback-execution guard: PR #6325 missed a focused reconnect where
   // only the new list topic is ACKed. Use the real waiter and ACK table here so
   // an old completed Promise cannot start the actual page's history read early.

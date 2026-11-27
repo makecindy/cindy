@@ -96,6 +96,33 @@ it.each(['receipt', 'account switch', 'deadline', 'late grant'] as const)(
   },
 );
 
+// Unit, #11841: overlapping first sends must release only their own native grant.
+it('keeps the second first send alive when the first receipt is persisted', async () => {
+  vi.useFakeTimers();
+  setMobileAuthOwner('alice', 'cn');
+  const owner = getMobileAuthOwner();
+  const start = (id: number) => {
+    native.begin.mockResolvedValueOnce({ id, remainingMs: 20_000 });
+    const item = { sessionId: 'task-' + id, clientId: 'message-' + id };
+    const record = { accountId: owner.accountKey, deviceId: 'desktop', item,
+      state: 'host-owned', retrySafe: true } as DurableOutboxRecord;
+    const release = vi.fn();
+    beginNewSessionBackgroundDelivery(owner, record.deviceId, item.sessionId, item.clientId, () => release);
+    return { record, release };
+  };
+  const first = start(1);
+  const second = start(2);
+  await vi.advanceTimersByTimeAsync(0);
+  endNewSessionBackgroundDelivery(first.record);
+  expect(native.end).toHaveBeenCalledExactlyOnceWith(1);
+  expect(first.release).toHaveBeenCalledOnce();
+  expect(second.release).not.toHaveBeenCalled();
+  expect(canDeliverNewSessionInBackground(second.record)).toBe(true);
+  endNewSessionBackgroundDelivery(second.record);
+  expect(native.end.mock.calls).toEqual([[1], [2]]);
+  expect(second.release).toHaveBeenCalledOnce();
+});
+
 it('keeps the Android headless task pending until native release', async () => {
   let finish!: () => void;
   native.waitUntilEnded.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
