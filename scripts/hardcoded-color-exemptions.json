@@ -239,5 +239,112 @@
     "object": "SCREENSHOT_OVERLAY"
    }
   ]
+ },
+ {
+  "glob": "apps/desktop/src/renderer/styles/globals.css",
+  "reason": "输入框停止按钮的 AI 工作发光（移植开源 border-beam 小尺寸样式）的八个色相与高光：只表示「AI 正在工作」，不是界面语义色；DESIGN.md §2「Composer Stop working glow」与 §14.4 登记（2026-11-18 负责人确认，Design Lab send-button v5）",
+  "owner": "composer-send",
+  "reviewDate": "2027-05-18",
+  "matches": [
+   {
+    "value": "#32c850",
+    "before": "--beam-green:\\s*",
+    "selector": ".composer-send-beam"
+   },
+   {
+    "value": "#1eb9aa",
+    "before": "--beam-teal:\\s*",
+    "selector": ".composer-send-beam"
+   },
+   {
+    "value": "#ff7828",
+    "before": "--beam-orange:\\s*",
+    "selector": ".composer-send-beam"
+   },
+   {
+    "value": "#6446ff",
+    "before": "--beam-violet:\\s*",
+    "selector": ".composer-send-beam"
+   },
+   {
+    "value": "#f032b4",
+    "before": "--beam-pink:\\s*",
+    "selector": ".composer-send-beam"
+   },
+   {
+    "value": "#b428f0",
+    "before": "--beam-purple:\\s*",
+    "selector": ".composer-send-beam"
+   },
+   {
+    "value": "#288cff",
+    "before": "--beam-blue:\\s*",
+    "selector": ".composer-send-beam"
+   },
+   {
+    "value": "#ff3264",
+    "before": "--beam-red:\\s*",
+    "selector": ".composer-send-beam"
+   },
+   {
+    "value": "#ffffff",
+    "before": "--beam-light:\\s*",
+    "selector": ".composer-send-beam"
+   },
+   {
+    "value": "#000000",
+    "before": "--beam-light:\\s*",
+    "selector": ".dark .composer-send-beam"
+   }
+  ]
+ },
+ {
+  "glob": "apps/desktop/src/renderer/features/right-sidebar/plugins/terminal/lib/terminalCanvasColors.ts",
+  "reason": "右侧栏终端画布的固定深色（面板底色 + xterm 主题）：Light / Dark 同值、不跟随主题；未定义 ANSI 16 色，xterm 默认色板按深底调校，换浅底会让输出看不清。只给终端画布使用。DESIGN.md §2「Terminal canvas」登记",
+  "owner": "right-sidebar-terminal",
+  "matches": [
+   {
+    "value": "#1c1c1c",
+    "before": "background:\\s*['\\\"]",
+    "object": "TERMINAL_CANVAS"
+   },
+   {
+    "value": "#e6e6e6",
+    "before": "foreground:\\s*['\\\"]",
+    "object": "TERMINAL_CANVAS"
+   },
+   {
+    "value": "#e6e6e6",
+    "before": "cursor:\\s*['\\\"]",
+    "object": "TERMINAL_CANVAS"
+   },
+   {
+    "value": "#1c1c1c",
+    "before": "cursorAccent:\\s*['\\\"]",
+    "object": "TERMINAL_CANVAS"
+   },
+   {
+    "value": "#3a4a5a",
+    "before": "selectionBackground:\\s*['\\\"]",
+    "object": "TERMINAL_CANVAS"
+   }
+  ],
+  "reviewDate": "2027-05-20",
+  "maintenanceOwner": "kirozeng",
+  "basis": "2026-11-20 维护者裁决（来源：#10019 报告「发现的其他问题」）：保持现值，登记为固定色例外，不新增调色板。"
+ },
+ {
+  "glob": "apps/desktop/src/renderer/components/title-bar/WindowControls.tsx",
+  "reason": "Windows 窗口关闭按钮悬停的系统标准红 #E81123（配白色图标）：平台约定色，Light / Dark 同值，不是主题语义色；只用于 WINDOWS_CLOSE_HOVER_CLASS。DESIGN.md §2「Windows window close button」登记",
+  "owner": "title-bar",
+  "matches": [
+   {
+    "value": "#E81123",
+    "before": "WINDOWS_CLOSE_HOVER_CLASS\\s*=\\s*['\\\"]hover:bg-\\["
+   }
+  ],
+  "reviewDate": "2027-05-20",
+  "maintenanceOwner": "kirozeng",
+  "basis": "2026-11-20 维护者裁决（来源：#10019 报告「发现的其他问题」）：保持现值，登记为固定色例外，不新增调色板。"
  }
 ]

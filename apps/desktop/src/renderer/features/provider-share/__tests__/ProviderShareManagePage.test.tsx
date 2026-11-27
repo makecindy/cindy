@@ -175,7 +175,7 @@ const pickUsageBreakdown = (dimension: 'party' | 'computer' | 'model') =>
 
 /** 这台电脑上 xd 的供应商组：本机、Studio、一台分享来的电脑。 */
 const xdGroup: ProviderGroupConfig = {
-  strategy: 'least',
+  strategy: 'expiring',
   autoSwitch: true,
   members: [
     { key: 'local', kind: 'local', agentDeviceId: null, providerId: 'xd', limit: 4, weight: 1, paused: false },
@@ -215,7 +215,7 @@ beforeEach(() => {
   });
   Object.assign(window, {
     electronAPI: {
-      providerShare: { command, onOwnedChanged: () => () => undefined, onReceivedChanged: () => () => undefined },
+      providerShare: { command, exportRoster: vi.fn(), onOwnedChanged: () => () => undefined, onReceivedChanged: () => () => undefined },
       // 页面上方的供应商组一块(由 ProviderGroupSection 自己的测试覆盖)：这里只给一个空组。
       providerGroup: {
         command: async (cmd: {
@@ -312,6 +312,15 @@ function renderPage(
 }
 
 describe('ProviderShareManagePage', () => {
+  it('requests a local roster save and reports a native save failure', async () => {
+    const save = vi.mocked(window.electronAPI.providerShare.exportRoster);
+    save.mockRejectedValueOnce(new Error('fixture write failure'));
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'providerShare.manage.exportRoster' }));
+    expect(save).toHaveBeenCalledWith('xd', expect.objectContaining({ ownerGeneration: expect.any(Number) }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('providerShare.manage.exportRosterFailed'));
+  });
+
   // Verify the person's row opens a grant for that member, rather than editing the provider-wide policy.
   it('opens and saves the selected person’s model grant from their row menu', async () => {
     const respond = command.getMockImplementation()!;

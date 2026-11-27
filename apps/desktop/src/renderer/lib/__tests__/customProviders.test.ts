@@ -10,6 +10,7 @@ import {
   customProviderWireProtocolForSave,
   deleteCustomProvider,
   fetchCustomProviderModelsForRefresh,
+  findWithdrawnCustomProviderModels,
   piCatalogProviderIdAfterRouteEdit,
   providerViewToCustomProviderConfig,
   readCustomProviderKey,
@@ -28,8 +29,8 @@ afterEach(() => {
 
 describe('saved Hinoki refresh batch', () => {
   const agents = ['claude-code', 'codex', 'pi'] as const;
-  function fixture() {
-    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'hinoki')!;
+  function fixture(id = 'hinoki') {
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === id)!;
     const raw = { id: 'saved-hinoki', name: 'Hinoki', runtimes: structuredClone(preset.runtimes) };
     const provider = { ...buildUserProvider(raw, { presets: [preset] }), connected: true } as ProviderView;
     expect(provider.agents).toEqual(expect.arrayContaining([...agents]));
@@ -77,6 +78,20 @@ describe('saved Hinoki refresh batch', () => {
     await fetchCustomProviderModelsForRefresh(provider, config);
     expect(transport).toHaveBeenCalledTimes(2);
   });
+  it('shares the saved Command Code catalog read but applies each runtime protocol separately', async () => {
+    const { provider, config } = fixture('command-code');
+    const transport = vi.fn(async () => Response.json({ data: [
+      { id: 'claude', supported_endpoints: ['/messages'] },
+      { id: 'responses', supported_endpoints: ['/responses'] },
+      { id: 'chat', supported_endpoints: ['/chat/completions'] },
+    ] }));
+    bridge(async () => 'fixture-key', transport);
+    const results = await fetchCustomProviderModelsForRefresh(provider, config);
+    expect(transport).toHaveBeenCalledOnce();
+    expect(Object.fromEntries(results!.map(({ agent, result }) => [agent, result.models?.map(model => model.id)])))
+      .toEqual({ 'claude-code': ['claude'], codex: ['responses'], pi: ['chat'] });
+  });
+
   it('keeps distinct saved keys separate at the real Main discovery entry', async () => {
     const { provider, config } = fixture();
     const transport = vi.fn<typeof fetch>(async () => new Response('{"data":[{"id":"future-model"}]}'));
@@ -747,6 +762,43 @@ describe('providerViewToCustomProviderConfig', () => {
   });
 });
 
+// #11298: which saved models a complete refresh may offer for removal. The settings
+// flow test covers the dialog; these rows pin eligibility and the warning threshold.
+describe('findWithdrawnCustomProviderModels', () => {
+  const listed = (id: string) => ({ id, name: id, discoveredMetadata: { name: id }, listedUpstream: true as const });
+  it.each([
+    // Review P1: wizard/preset/speech-reference rows save `{}` metadata without the marker.
+    ['unmarked rows (manual, wizard `{}`, renamed, routed) are never offered',
+      [{ id: 'manual', name: 'Manual' }, { id: 'wizard', name: 'Wizard', discoveredMetadata: {} },
+        { ...listed('renamed'), nameExplicit: true },
+        { ...listed('routed'), route: { baseUrl: 'https://extra.example/v1' } }, listed('kept')],
+      ['kept'], [], false],
+    ['one of four missing is an ordinary withdrawal',
+      ['a', 'b', 'c', 'd'].map(listed), ['b', 'c', 'd'], ['a'], false],
+    ['half missing looks like an incomplete upstream response',
+      ['a', 'b', 'c', 'd'].map(listed), ['c', 'd'], ['a', 'b'], true],
+    ['a single replaced model is suspicious too',
+      [listed('a')], ['z'], ['a'], true],
+    ['an empty catalog is always suspicious',
+      [listed('a'), listed('b'), listed('c')], [], ['a', 'b', 'c'], true],
+  ])('%s', (_name, models, current, withdrawn, suspicious) => {
+    const result = findWithdrawnCustomProviderModels(models as never, current.map(id => ({ id, name: id })));
+    expect(result.withdrawn.map(model => model.id)).toEqual(withdrawn);
+    expect(result.suspicious).toBe(suspicious);
+  });
+
+  it('marks only rows the refreshed catalog listed, never manual ones, and voids stale absence', () => {
+    const { models } = appendDiscoveredCustomProviderModels(
+      [{ id: 'manual', name: 'Manual' }, { id: 'gone', name: 'Gone', discoveredMetadata: {} },
+        { id: 'back', name: 'Back', discoveredMetadata: {}, listedUpstream: true, missingUpstream: true }],
+      [{ id: 'manual', name: 'Manual upstream' }, { id: 'fresh', name: 'Fresh' }, { id: 'back', name: 'Back' }],
+    );
+    expect(Object.fromEntries(models.map(model => [model.id, model.listedUpstream ?? false])))
+      .toEqual({ fresh: true, manual: false, gone: false, back: true });
+    expect(models.find(model => model.id === 'back')?.missingUpstream).toBeUndefined();
+  });
+});
+
 describe('appendDiscoveredCustomProviderModels', () => {
   it('repairs confirmed OpenRouter discovery wrappers while preserving explicit model fields and manual IDs', () => {
     const existing = [
@@ -778,7 +830,7 @@ describe('appendDiscoveredCustomProviderModels', () => {
     );
     expect(result).toEqual({
       models: [
-        { id: 'new', name: 'New', discoveredMetadata: { name: 'New' } },
+        { id: 'new', name: 'New', discoveredMetadata: { name: 'New' }, listedUpstream: true },
         { id: 'kept', name: 'Kept', nameExplicit: true, discoveredMetadata: { name: 'New name' } },
       ],
       addedIds: ['new'],
@@ -799,10 +851,11 @@ describe('appendDiscoveredCustomProviderModels', () => {
         id: 'big',
         name: 'Big',
         discoveredMetadata: { name: 'Big', contextWindow: 1_000_000 },
+        listedUpstream: true,
       },
-      { id: 'plain', name: 'Plain', discoveredMetadata: { name: 'Plain' } },
+      { id: 'plain', name: 'Plain', discoveredMetadata: { name: 'Plain' }, listedUpstream: true },
       // 非法值不落盘,回落保守默认
-      { id: 'bogus', name: 'Bogus', discoveredMetadata: { name: 'Bogus' } },
+      { id: 'bogus', name: 'Bogus', discoveredMetadata: { name: 'Bogus' }, listedUpstream: true },
     ]);
   });
 });

@@ -1,4 +1,6 @@
-import type { ContextOverflowRolloverDeps } from './contextOverflowRollover.js';
+import { ACCEPTED_ATTACHMENT_REPLAY } from './attachmentReplay.js';
+import { handoffPreviewText } from './agentHandoff.js';
+import type { ClaimedOversizedInput, ContextOverflowRolloverDeps } from './contextOverflowRollover.js';
 import type { MakerSessionCreateOpts as CreateOpts } from './sessionRequest.js';
 import type { AgentMeta } from '../../renderer/lib/ccAgent.types';
 
@@ -121,7 +123,9 @@ export async function commitContextRecoveryWithPorts(ports: CommitContextRecover
           ? 'codex'
           : sessionKindRow?.agentKind === 'pi'
             ? 'pi'
-            : 'cc';
+            : sessionKindRow?.agentKind === 'acp'
+              ? 'acp'
+              : 'cc';
       ports.broadcastSessionPatched(
         sessionId,
         {
@@ -148,7 +152,11 @@ export async function commitContextRecoveryWithPorts(ports: CommitContextRecover
             role: 'assistant',
             content: '',
             agentKind: cardAgentKind,
-            agentMeta: { contextRebuild: { reason: meta.reason, handoff } } as AgentMeta,
+            agentMeta: { contextRebuild: {
+              reason: meta.reason,
+              handoff: handoffPreviewText(handoff),
+              handoffCoverage: meta.handoffCoverage,
+            } } as AgentMeta,
           },
           {
             broadcastOwnerScope: ownerScope,
@@ -180,7 +188,7 @@ export interface ReplayContextRecoveryPorts {
   log: Pick<ReturnType<typeof import('../logger.js').createLogger>, 'info' | 'warn'>;
   readSessionWritableDirsFromDb: typeof import('../maker-host/session-storage.js').readSessionWritableDirsFromDb;
   restoreAutoReviewUserIntent: typeof import('./autoReviewUserIntent.js').restoreAutoReviewUserIntent;
-  readAutoReviewHistory: (sessionId: string) => ReturnType<typeof import('../localDb/ipc/messages.js').listMessagesForAgentHandoff>;
+  readAutoReviewHistory: (sessionId: string) => Promise<import('./autoReviewUserIntent.js').AutoReviewHistory>;
   readContextRecoverySession: (sessionId: string) => ReturnType<typeof readContextRecoverySessionWithPorts>;
   canContinueContextRecovery: typeof import('./contextOverflowRollover.js').canContinueContextRecovery;
   isHeadlessGhostSetupTurn: (sessionId: string) => boolean;
@@ -205,14 +213,17 @@ export async function replayContextRecoveryWithPorts(ports: ReplayContextRecover
         .limit(1);
       if (!row?.workingDir) return { accepted: false };
       if (recovery?.signal?.aborted) return { accepted: false };
+      // A plugin engine task replays into a fresh session on its own engine (the recovery above
+      // retired the overflowing one); dbToMakerAgentKind would read it as Claude Code.
+      const pluginEngine = row.agentKind === 'acp';
       const createOpts = ports.buildCreateOptsWithStderr({
         id: sessionId,
-        agentKind: ports.dbToMakerAgentKind(row.agentKind),
+        agentKind: pluginEngine ? 'acp' : ports.dbToMakerAgentKind(row.agentKind),
         workingDir: row.workingDir,
         model: row.model ?? undefined,
         providerId: row.providerId,
         effort: (row.effort ?? undefined) as CreateOpts['effort'],
-        fastMode: (row.fastMode ?? false),
+        fastMode: pluginEngine ? false : (row.fastMode ?? false),
         permissionMode: (row.permissionMode ?? 'ask') as CreateOpts['permissionMode'],
         planMode: !!row.planModeEnabled,
         title: row.title ?? undefined,
@@ -250,18 +261,19 @@ export async function replayContextRecoveryWithPorts(ports: ReplayContextRecover
         sessionId,
         ports.persistedUserContentToWireMessage(agentFacingWireContent ?? content),
         createOpts,
-        recovery?.continueFromHistory
-          ? {
-              signal: recovery.signal,
-              [ports.PI_CACHE_RECOVERY_EXPECTATION]: recovery.piCacheCompatibility,
-              ...(recovery.piCacheCompatibility ? { retryUserClientId: recovery.sourceUserClientId } : {}),
-              [ports.INHERITED_CAPABILITY_SELECTION]: recovery.sourceCapabilitySelectionText,
-              // The internal continuation is not fresh user authorization. Restore
-              // intent from authored history, never attachment/quote projections.
-              [ports.AUTO_REVIEW_SOURCE_CONTENT]: ports.readAutoReviewUserText(recovery.sourceUserContent) ?? '',
-              [ports.AUTO_REVIEW_USER_INTENT]: recoveryIntent,
-            }
-          : { signal: recovery?.signal },
+        {
+          signal: recovery?.signal,
+          [ACCEPTED_ATTACHMENT_REPLAY]: true,
+          ...(recovery?.continueFromHistory && {
+            [ports.PI_CACHE_RECOVERY_EXPECTATION]: recovery.piCacheCompatibility,
+            ...(recovery.piCacheCompatibility ? { retryUserClientId: recovery.sourceUserClientId } : {}),
+            [ports.INHERITED_CAPABILITY_SELECTION]: recovery.sourceCapabilitySelectionText,
+            // The internal continuation is not fresh user authorization. Restore
+            // intent from authored history, never attachment/quote projections.
+            [ports.AUTO_REVIEW_SOURCE_CONTENT]: ports.readAutoReviewUserText(recovery.sourceUserContent) ?? '',
+            [ports.AUTO_REVIEW_USER_INTENT]: recoveryIntent,
+          }),
+        },
       );
       const result = row.remoteHostId ? await sendReplay()
         : await ports.withCindyMakeProjectUse(ports.app.getPath('userData'), row.workingDir, sendReplay);
@@ -273,8 +285,10 @@ export interface RecoveryCallbackPorts {
     clearError(sessionId: string): void;
     hasPendingQueuedWork(sessionId: string): boolean;
     getInputAbortSignal(sessionId: string): AbortSignal;
+    skippedOversizedInputClientId?(sessionId: string, claim: ClaimedOversizedInput): string | undefined;
   } | null;
   resetWireNotes(sessionId: string): void;
+  persistSkippedOversizedInput?(sessionId: string, clientId: string): void;
 }
 
 export function contextRecoveryRebuilt(
@@ -288,13 +302,16 @@ export function contextRecoveryRebuilt(
 }
 
 export function contextRecoveryAbortSignal(
-  ports: RecoveryCallbackPorts, sessionId: string,
+  ports: RecoveryCallbackPorts, sessionId: string, skippedInput?: ClaimedOversizedInput,
 ): AbortSignal {
   const coordinator = ports.getCoordinator()!;
   if (coordinator.hasPendingQueuedWork(sessionId)) {
     // The terminal error may have installed recovery after this input was
     // queued. Release that old error so the queued input can actually drain.
+    const skippedClientId = skippedInput
+      ? coordinator.skippedOversizedInputClientId?.(sessionId, skippedInput) : undefined;
     coordinator.clearError(sessionId);
+    if (skippedClientId) ports.persistSkippedOversizedInput?.(sessionId, skippedClientId);
     return AbortSignal.abort();
   }
   return coordinator.getInputAbortSignal(sessionId);

@@ -1,5 +1,6 @@
 import type { EditorView } from '@tiptap/pm/view';
 import type { ResolvedPos } from '@tiptap/pm/model';
+import { hasUserVisibleText } from '../../shared/visibleText';
 
 /**
  * Composer 纯文本 Markdown 列表的兼容接续。结构化 bullet / ordered list
@@ -24,8 +25,9 @@ export interface ListPrefixMatch {
 const CHECKBOX_RE = /^(\s*)([-+*])(\s+)\[[ xX]\](\s+|$)/;
 const BULLET_RE = /^(\s*)([-+*•])(\s+)/;
 const ORDERED_RE = /^(\s*)(\d{1,9})([.)])(\s+)/;
-// 中文顿号序号(`1、`)不要求后随空格,符合中文输入习惯。
-const ORDERED_CJK_RE = /^(\s*)(\d{1,9})(、)(\s*)/;
+// 中文顿号序号(`1、`)不要求后随空格,符合中文输入习惯。序号限两位:
+// 更长的数字串是正文(与 ComposerListNodes 的输入规则一致)。
+const ORDERED_CJK_RE = /^(\s*)(\d{1,2})(、)(\s*)/;
 const QUOTE_RE = /^(\s*)(>)(\s+)/;
 
 /**
@@ -81,7 +83,7 @@ export function computeListContinuation(
   // 空项判定看**整行**(光标前 rest + 光标后正文):否则 `1. |todo`(光标在标记后、
   // 正文前)会被当成空项退出、删掉标记留下裸 "todo"。光标后仍有正文时
   // 走 continue —— 在光标处插换行 + 下一前缀,把 "todo" 顺成下一项(拆分列表)。
-  if (rest.trim().length === 0 && lineAfterCaret.trim().length === 0) return { action: 'exit' };
+  if (!hasUserVisibleText(rest) && !hasUserVisibleText(lineAfterCaret)) return { action: 'exit' };
   return { action: 'continue', insert: match.nextPrefix };
 }
 
@@ -148,6 +150,17 @@ export function applyListContinuation(view: EditorView): boolean {
     return true;
   }
 
+  // 顶层引用行接续成独立段落:引用与之后的评论各占一段,单行段落的引用缩进
+  // 只是段落属性,输入法组字时无需撤掉,在下方评论里打中文时引用不会左右跳;
+  // 发送文本不变(顶层段落与 hardBreak 都序列化为换行)。待办 / 文本列表
+  // 仍插 hardBreak:顶层段落开头的 `- ` / `1. ` 会被提升为结构化列表。
+  if (QUOTE_RE.test(lineText) && $from.depth === 1 && $from.parent.type.name === 'paragraph') {
+    const tr = state.tr.split($from.pos);
+    tr.insertText(continuation.insert);
+    view.dispatch(tr.scrollIntoView());
+    return true;
+  }
+
   const hardBreak = state.schema.nodes.hardBreak;
   if (!hardBreak) return false;
   const tr = state.tr.replaceSelectionWith(hardBreak.create(), false);
@@ -172,10 +185,7 @@ export function applyListBackspace(view: EditorView): boolean {
   if (after && after.type.name !== 'hardBreak') return false;
 
   const { lineText, lineStartOffset } = scanCaretLine($from);
-  const match = matchListPrefix(lineText);
-  if (!match) return false;
-  // 前缀后还有内容 → 正常退格(一个字符一个字符删)。
-  if (lineText.slice(match.prefixLength).trim().length > 0) return false;
+  if (computeListContinuation(lineText)?.action !== 'exit') return false;
 
   const lineStartAbs = $from.start() + lineStartOffset;
   view.dispatch(state.tr.delete(lineStartAbs, $from.pos).scrollIntoView());

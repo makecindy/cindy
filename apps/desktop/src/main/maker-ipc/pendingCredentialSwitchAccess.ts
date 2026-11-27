@@ -9,25 +9,55 @@
  */
 import type { Maker } from '@cindy/maker-core';
 import { eq } from 'drizzle-orm';
-import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
-import { getDbClient } from '../localDb/client/current.js';
+import { dbToMakerAgentKind, isPluginEngineKind } from '../../shared/agentKindConversion.js';
+import { getDbClient, getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
-import { getSessionProvider } from '../maker-host/session-provider-store.js';
+import { PluginEngineUnsupportedError } from '../maker-host/engineKind.js';
+import { getSessionProvider, hasSessionProvider } from '../maker-host/session-provider-store.js';
+import { getSessionEffort, getSessionFastMode } from '../maker-host/session-effort-store.js';
+import type { DbClient } from '../localDb/client/DbClient.js';
 import type { AgentInputCoordinator } from './agent-input-coordinator.desktop.js';
-import type { PendingCredentialSwitchService } from './pendingCredentialSwitch.js';
-import { captureSessionRuntimeControlOwnerEpoch } from './sessionRuntimeControl.js';
+import type { CredentialTaskSettings, PendingCredentialSwitchService, PendingCredentialSwitchTarget } from './pendingCredentialSwitch.js';
+import { captureSessionRuntimeControlOwnerEpoch, getSessionRuntimeControlSnapshot, sessionRuntimeControlOwnerEpochMatches } from './sessionRuntimeControl.js';
+
+export async function readCredentialTaskSettings(db: DbClient, sessionId: string) {
+  const rows = await db.drizzle.select({
+    createdAt: sessions.createdAt,
+    status: sessions.status,
+    model: sessions.model,
+    providerId: sessions.providerId,
+    effort: sessions.effort,
+    fastMode: sessions.fastMode,
+    contextWindow: sessions.contextWindow,
+    scheduledModelBaseline: sessions.scheduledModelBaseline,
+  }).from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+  return rows.at(0);
+}
+
+export type CredentialTaskRow = NonNullable<Awaited<ReturnType<typeof readCredentialTaskSettings>>>;
+
+export function readEffectiveCredentialSettings(sessionId: string, row: CredentialTaskSettings) {
+  const override = getSessionRuntimeControlSnapshot(sessionId).effectiveOverride;
+  return {
+    providerId: override ? override.providerId :
+      hasSessionProvider(sessionId) ? getSessionProvider(sessionId) : row.providerId,
+    effort: override ? override.effort : getSessionEffort(sessionId),
+    fastMode: override ? override.fastMode : getSessionFastMode(sessionId),
+  };
+}
 
 export interface PendingCredentialSwitchAccessPorts {
   pendingCredentialSwitchHolder: PendingCredentialSwitchService | null;
   agentInputCoordinatorHolder: Pick<AgentInputCoordinator, 'wakeSession'> | null;
-  getSessionDbAgentKind: (sessionId: string) => 'cc' | 'codex' | 'pi' | null;
+  /** 'acp' = plugin-engine task (docs/plans/acp-plugin-bridge.md); refused below, never mapped to a built-in. */
+  getSessionDbAgentKind: (sessionId: string) => 'cc' | 'codex' | 'pi' | 'acp' | null;
   getMaker: () => Maker;
 }
 
 export async function registerPendingCredentialSwitchWith(
   ports: PendingCredentialSwitchAccessPorts,
   sessionId: string,
-  target: { model: string; providerId: string | null; forceSessionRebuild?: boolean; selectionSource?: 'agent' },
+  target: PendingCredentialSwitchTarget,
 ): Promise<void> {
   const { pendingCredentialSwitchHolder, getSessionDbAgentKind, getMaker } = ports;
   const service = pendingCredentialSwitchHolder;
@@ -44,32 +74,45 @@ export async function registerPendingCredentialSwitchWith(
   // previousRoute 回滚(model/provider/effort/fast 一致成对,第十六、十八轮)。
   // deferred 场景会话正在跑 turn,live handle 必在;取不到就不带 = 无从回滚。
   const live = getMaker().getSession(sessionId);
-  let prevRow: {
-    model: string | null;
-    effort: string | null;
-    fastMode: boolean | 'ultrafast' | null;
-    providerId: string | null;
-  } | null = null;
+  const liveAgentKind = live?.agentKind;
+  // 插件引擎任务没有凭证形态可切(docs/plans/acp-plugin-bridge.md):明确拒绝,
+  // 不能把 'acp' 落成内置引擎的 agentKind 登记。
+  if (isPluginEngineKind(dbAgentKind) || liveAgentKind === 'acp') {
+    throw new PluginEngineUnsupportedError('Credential switching');
+  }
+  const ownerEpoch = captureSessionRuntimeControlOwnerEpoch();
+  const db = getCurrentDbClientSnapshot();
+  let prevRow: Awaited<ReturnType<typeof readCredentialTaskSettings>> = undefined;
   try {
-    const [row] = await getDbClient()
-      .drizzle.select({
-        model: sessions.model,
-        effort: sessions.effort,
-        fastMode: sessions.fastMode,
-        providerId: sessions.providerId,
-      })
-      .from(sessions)
-      .where(eq(sessions.id, sessionId))
-      .limit(1);
-    prevRow = row ?? null;
-  } catch {
-    prevRow = null;
+    prevRow = await readCredentialTaskSettings(db?.client ?? getDbClient(), sessionId);
+  } catch (error) {
+    if (target.deferredSelection) throw error;
+  }
+  if (target.deferredSelection &&
+      (!db || !prevRow || prevRow.status !== 'active' ||
+        !sessionRuntimeControlOwnerEpochMatches(ownerEpoch) || db !== getCurrentDbClientSnapshot())) {
+    throw new Error('Task changed during deferred credential selection');
+  }
+  const restored = target.deferredState;
+  if (restored && (target.ownerEpoch !== ownerEpoch || restored.db.userId !== db?.userId ||
+      restored.createdAt !== prevRow?.createdAt || service.has(sessionId))) {
+    throw new Error('Task or pending selection changed before credential switch restoration');
   }
   const prevModel = live?.model ?? prevRow?.model ?? null;
   service.register(sessionId, {
     ...target,
-    ownerEpoch: captureSessionRuntimeControlOwnerEpoch(),
-    ...(dbAgentKind ? { agentKind: dbToMakerAgentKind(dbAgentKind) } : live?.agentKind ? { agentKind: live.agentKind } : {}),
+    ownerEpoch,
+    ...(target.deferredSelection && db && prevRow
+      ? { deferredState: restored ?? {
+          db,
+          createdAt: prevRow.createdAt,
+          before: prevRow,
+          effectiveBefore: readEffectiveCredentialSettings(sessionId, prevRow),
+          written: {},
+        } }
+      : {}),
+    agentKind: target.deferredSelection?.agentKind ??
+      (dbAgentKind ? dbToMakerAgentKind(dbAgentKind) : liveAgentKind),
     ...(prevModel
       ? {
           previousRoute: {
@@ -108,10 +151,37 @@ export function wakeSessionInputAfterCredentialSwitchWith(
 export function getPendingCredentialSwitchTargetWith(
   ports: PendingCredentialSwitchAccessPorts,
   sessionId: string,
-): { model: string; providerId: string | null; forceSessionRebuild?: boolean; selectionSource?: 'agent' } | undefined {
+): PendingCredentialSwitchTarget | undefined {
   const { pendingCredentialSwitchHolder } = ports;
   const pending = pendingCredentialSwitchHolder?.get(sessionId);
+  if (pending?.deferredSelection && (
+    (pending.ownerEpoch && !sessionRuntimeControlOwnerEpochMatches(pending.ownerEpoch)) ||
+    (pending.deferredState && pending.deferredState.db.userId !== getCurrentDbClientSnapshot()?.userId)
+  )) return undefined;
   return pending ? { model: pending.model, providerId: pending.providerId,
     ...(pending.forceSessionRebuild ? { forceSessionRebuild: true } : {}),
-    ...(pending.selectionSource ? { selectionSource: pending.selectionSource } : {}) } : undefined;
+    ...(pending.selectionSource ? { selectionSource: pending.selectionSource } : {}),
+    ...(pending.deferredSelection ? { deferredSelection: pending.deferredSelection } : {}),
+    ...(pending.deferredState ? { deferredState: pending.deferredState, ownerEpoch: pending.ownerEpoch } : {}) } : undefined;
+}
+
+/** register.ts's settlePendingCredentialSwitch (a task's turn settled), with its holder and logger. */
+export function settlePendingCredentialSwitchWith(
+  ports: {
+    pendingCredentialSwitchHolder: PendingCredentialSwitchService | null;
+    log: { warn(message: string, meta?: Record<string, unknown>): void };
+  },
+  sessionId: string,
+  source: string,
+): void {
+  const { pendingCredentialSwitchHolder, log } = ports;
+  const pending = pendingCredentialSwitchHolder?.onTurnSettled(sessionId);
+  if (!pending) return;
+  void pending.catch((err) => {
+    log.warn('pending credential switch settle failed', {
+      sessionId,
+      source,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  });
 }

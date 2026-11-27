@@ -1,8 +1,11 @@
 export * from './types.js';
+export * from './pr-trigger.js';
 export * from './routines.js';
 export { RoutineEventAdmission } from './routine-event-admission.js';
 export * from './webhook-queue.js';
 export * from './webhook-formats.js';
+export * from './plugin-events.js';
+export * from './github-item.js';
 export * from './pre-run-hook-update.js';
 export * from './builtin-templates.js';
 export * from './engine/scheduler.js';

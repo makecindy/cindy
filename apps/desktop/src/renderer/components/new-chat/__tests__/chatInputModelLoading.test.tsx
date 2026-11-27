@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useState, type ComponentProps, type ReactNode } from 'react';
 import type { Editor } from '@tiptap/react';
 import { type InstalledGhost } from '../../../../shared/ghost';
@@ -19,7 +19,17 @@ import * as draftMemory from '@/state/newMakerDraft';
 import { getEffortChangeCoordinator } from '../effortChangeQueue';
 import { clearDraft } from '@/lib/composerDraftStore';
 import { peekComposerSubmitRequest, requestComposerSubmit, takeComposerSubmitRequest } from '@/lib/composerActionsBus';
-import { makerChatStore } from '@/lib/makerChatStore';
+import { buildCreateOptsForCurrentSession, makerChatStore } from '@/lib/makerChatStore';
+import { toast } from '@/lib/toast';
+import { getDataOwnerGeneration, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import {
+  COMPOSER_FOLLOW_UP_STORAGE_KEY,
+  _resetComposerFollowUpPreferenceForTests,
+} from '@/hooks/useComposerFollowUpPreference';
+import {
+  COMPOSER_SEND_SHORTCUT_STORAGE_KEY,
+  _resetComposerSendShortcutPreferenceForTests,
+} from '@/hooks/useComposerSendShortcutPreference';
 import {
   __testing as promptRecommendations,
   beginPromptRecommendationPrediction,
@@ -44,6 +54,13 @@ const h = vi.hoisted(() => ({ t: (key: string) => key, confirm: vi.fn(), editor:
   subscriptionAccounts: undefined as undefined | { sessionAccount: ReturnType<typeof vi.fn>; onChanged: () => () => void },
 }));
 vi.mock('@/cindy-brain/useInstalledGhosts', () => ({ useInstalledGhosts: () => h.ghosts, readInstalledGhostsSnapshot: () => h.ghosts }));
+// A loaded roster lets the real send path tell Desktop commands from paths and Skills.
+const roster = vi.hoisted(() => ({ commands: null as null | readonly unknown[] }));
+vi.mock('@/lib/slashCommands', async (original) => {
+  const actual = await original<typeof import('@/lib/slashCommands')>();
+  return { ...actual, loadAllCommands: (...args: Parameters<typeof actual.loadAllCommands>) =>
+    roster.commands ? Promise.resolve([...roster.commands] as Awaited<ReturnType<typeof actual.loadAllCommands>>) : actual.loadAllCommands(...args) };
+});
 vi.mock('react-i18next', async (original) => ({ ...await original<typeof import('react-i18next')>(), useTranslation: () => ({ t: h.t }) }));
 vi.mock('react-router-dom', () => ({ useNavigate: () => vi.fn() }));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({ useConfirmDialog: () => ({ confirm: h.confirm }) }));
@@ -428,21 +445,29 @@ const queueShortcuts = [
   { platform: 'win32', metaKey: false, ctrlKey: true },
 ];
 
-it.each(queueShortcuts)('steers the sole queued message from the empty focused composer on $platform', async shortcut => {
+// The composer's send keys never reach into the queue: an empty document sends
+// nothing and steers nothing, whatever the follow-up default. Only the row's own
+// steer button / focused-row shortcut steers a queued message.
+it.each(queueShortcuts.flatMap(shortcut => (['queue', 'steer'] as const).flatMap(followUp =>
+  [{ ...shortcut, followUp, chord: 'modifier+Enter' }, { platform: shortcut.platform, metaKey: false, ctrlKey: false, followUp, chord: 'Enter' }],
+)))('does not implicitly steer the sole queued message from the empty composer ($chord, $followUp default, $platform)', async shortcut => {
   h.platform = shortcut.platform;
+  localStorage.clear();
+  _resetComposerFollowUpPreferenceForTests();
+  if (shortcut.followUp === 'steer') localStorage.setItem(COMPOSER_FOLLOW_UP_STORAGE_KEY, 'steer');
   h.localProviders = [sshNativeCodexProvider([sshModel('gpt-6-astra')])];
   const onQueueSteer = vi.fn().mockResolvedValue(true);
   const onSend = vi.fn().mockResolvedValue(true);
-  render(<ChatInput {...queueShortcutProps} onQueueSteer={onQueueSteer} onSend={onSend} />);
+  render(<ChatInput {...queueShortcutProps} isStreaming onQueueSteer={onQueueSteer} onSend={onSend} />);
   await waitFor(() => expect(h.editor).not.toBeNull());
   const editor = h.editor!.view.dom;
   editor.focus();
   expect(document.activeElement).toBe(editor);
   expect(h.editor!.getText()).toBe('');
 
-  await act(async () => { fireEvent.keyDown(editor, { key: 'Enter', code: 'Enter', ...shortcut }); });
+  await act(async () => { fireEvent.keyDown(editor, { key: 'Enter', code: 'Enter', metaKey: shortcut.metaKey, ctrlKey: shortcut.ctrlKey }); });
 
-  expect(onQueueSteer).toHaveBeenCalledExactlyOnceWith(queuedMessage.clientId);
+  expect(onQueueSteer).not.toHaveBeenCalled();
   expect(onSend).not.toHaveBeenCalled();
 });
 
@@ -548,6 +573,177 @@ it('lets a new SSH task with no window report reach main on model selection and 
   expect(remember).not.toHaveBeenCalled();
   expect(draft).not.toHaveBeenCalled();
   expect(effortPrefs).not.toHaveBeenCalled();
+});
+
+// Preserve the parent callbacks when SET_MODEL reports a generic deferred response.
+it('refreshes the local picker callbacks while waiting for the committed task patch', async () => {
+  h.remoteProviders = [sshNativeCodexProvider([sshModel('old'), sshModel('next')])];
+  h.setModel.mockResolvedValueOnce({ deferred: true, superseded: false });
+  const onModelDidChange = vi.fn();
+  const onEffortDidChange = vi.fn();
+  render(<ChatInput {...props} sessionId="deferred-codex" deviceLinkDeviceId={null} remoteHostId="builder"
+    runtimeAgentKind="codex" initialModel="old" initialProviderId="openai" initialEffort="low"
+    hideRuntimeControls={false} onModelDidChange={onModelDidChange} onEffortDidChange={onEffortDidChange} onSend={vi.fn()} />);
+  await act(async () => { await h.selectModel!('next'); });
+  expect(h.setModel).toHaveBeenCalledTimes(1);
+  expect(onModelDidChange).toHaveBeenCalledExactlyOnceWith('next');
+  expect(onEffortDidChange).toHaveBeenCalledOnce();
+  expect(screen.getByTestId('model-selector').textContent).toBe('old');
+});
+
+it('keeps the next remote picker choice when an earlier task patch arrives before its deferred reply', async () => {
+  const reply = Promise.withResolvers<{ deferred: boolean }>();
+  const invoke = vi.fn(async (_deviceId: string, channel: string) => {
+    if (channel === 'maker:set-model') return reply.promise;
+  });
+  const testLink = new Proxy(api.deviceLink, {
+    get: (link, key) => key === 'invoke' ? invoke : Reflect.get(link, key),
+  });
+  window.electronAPI = new Proxy(api, { get: (target, key) => key === 'deviceLink' ? testLink : Reflect.get(target, key) });
+  const onModelDidChange = vi.fn();
+  const controller = (previousModel: string, previousProvider = 'openai') => <ChatInput {...props}
+    sessionId="deferred-controller" initialProviderId={previousProvider} initialModel={previousModel} initialEffort="low"
+    hideRuntimeControls={false} onModelDidChange={onModelDidChange} onSend={vi.fn()} />;
+  const view = render(controller('old'));
+  let choice: Promise<void | boolean> | undefined;
+  act(() => { choice = h.selectModel!('next'); });
+  await waitFor(() => expect(invoke.mock.calls.some(([, channel]) => channel === 'maker:set-model')).toBe(true));
+  expect(screen.getByTestId('model-selector').textContent).toBe('next');
+  // The mirror receives an authoritative patch for the previous selection
+  // while capabilities and the current invoke receipt are still outstanding.
+  act(() => {
+    makerChatStore.mirrorSessionFields('deferred-controller', {
+      providerId: 'prior-provider', fastMode: false, agentSwitchIntent: null,
+    });
+    view.rerender(controller('prior-model', 'prior-provider'));
+  });
+  expect(screen.getByTestId('model-selector').textContent).toBe('next');
+  await act(async () => { reply.resolve({ deferred: true }); await choice; });
+  expect(invoke.mock.calls.map(([, channel]) => channel).filter(channel => channel === 'maker:set-model')).toHaveLength(1);
+  expect(onModelDidChange).toHaveBeenCalledExactlyOnceWith('next');
+  expect(screen.getByTestId('model-selector').textContent).toBe('next');
+});
+
+// Unit/jsdom. Use the real local/remote listeners and composer toast, with only the IPC edge supplied.
+describe.each(['local', 'device-link'])('deferred credential notices (%s)', transport => {
+  it.each([
+    ['codex', 'apply-failed', true, 'credentialSwitchKeptSettings'],
+    ['codex', 'apply-failed', undefined, 'credentialSwitchFailed'],
+    ['codex', 'apply-failed', false, 'credentialSwitchFailed'],
+    ['codex', 'apply-failed', 'true', 'credentialSwitchFailed'],
+    ['codex', 'rollback-failed', true, 'credentialSwitchFailed'],
+    ['pi', 'apply-failed', undefined, 'credentialSwitchFailed'],
+  ] as const)('shows %s %s with retained=%s', (runtimeAgentKind, reason, retained, key) => {
+    const originalOwner = getDataOwnerGeneration();
+    setDataOwnerGeneration('current-owner', 1);
+    const error = vi.spyOn(toast, 'error').mockImplementation(() => undefined as never);
+    let local!: Parameters<typeof api.maker.onSessionCredentialSwitchFailed>[0];
+    type RemoteListener = Parameters<typeof api.deviceLink.onRemotePush>[0];
+    const remoteListeners = new Set<RemoteListener>();
+    const remote: RemoteListener = (...args) => { for (const listener of remoteListeners) listener(...args); };
+    const testMaker = new Proxy(api.maker, {
+      get: (maker, name) => name === 'onSessionCredentialSwitchFailed'
+        ? (callback: typeof local) => { local = callback; return noOp; }
+        : Reflect.get(maker, name),
+    });
+    const testLink = new Proxy(api.deviceLink, {
+      get: (link, name) => name === 'onRemotePush'
+        ? (callback: RemoteListener) => {
+          remoteListeners.add(callback);
+          return () => { remoteListeners.delete(callback); };
+        }
+        : Reflect.get(link, name),
+    });
+    window.electronAPI = new Proxy(api, {
+      get: (target, name) => name === 'maker' ? testMaker : name === 'deviceLink' ? testLink : Reflect.get(target, name),
+    });
+    render(<ChatInput {...props} sessionId="credential-toast" deviceLinkDeviceId={transport === 'local' ? null : 'test-host'}
+      runtimeAgentKind={runtimeAgentKind} onSend={vi.fn()} />);
+    const stamp = { dataOwnerId: 'current-owner', ownerGeneration: 1 };
+    const payload = { sessionId: 'credential-toast', reason, ...(retained === undefined ? {} : { previousSettingsRetained: retained }) };
+    const push = { deviceId: 'test-host', channel: 'maker:session-credential-switch-failed', payload };
+    const localPayload = payload as Parameters<typeof local>[0];
+    try {
+      act(() => {
+        local({ ...localPayload, sessionId: 'other-task' });
+        remote({ ...push, deviceId: 'other-device' }, stamp);
+        remote({ ...push, payload: { ...payload, sessionId: 'other-task' } }, stamp);
+        remote(push, { ...stamp, ownerGeneration: 0 });
+      });
+      expect(error).not.toHaveBeenCalled();
+      act(() => {
+        // Same event on the other transport must not duplicate the active subscription.
+        local(localPayload);
+        remote(push, stamp);
+      });
+      expect(error).toHaveBeenCalledExactlyOnceWith('newChat.chatInput.' + key, { duration: 6000 });
+    } finally {
+      setDataOwnerGeneration(originalOwner.dataOwnerId, originalOwner.generation);
+    }
+  });
+});
+
+// Unit/jsdom. An existing owner-published intent remains visible in the picker.
+// The real dispatch uses the effective profile until the host projects the commit.
+it.each([null, 'test-host'])('displays a deferred choice while sending the committed profile (%s)', async (deviceLinkDeviceId) => {
+  const old = { agentKind: 'codex' as const, model: 'old', providerId: 'openai', effort: 'low' as const, fastMode: false };
+  const next = { ...old, model: 'next', providerId: 'next-provider', effort: 'high' as const, fastMode: true };
+  h.localProviders = [
+    sshNativeCodexProvider([sshModel(old.model)]),
+    { ...sshNativeCodexProvider([sshModel(next.model)]), id: next.providerId },
+  ];
+  const sessionId = 'credential-picker-' + deviceLinkDeviceId;
+  const onSend = vi.fn().mockResolvedValue(true);
+  const chat = (route: typeof old | typeof next) => <ChatInput {...props} sessionId={sessionId} deviceLinkDeviceId={deviceLinkDeviceId}
+    isStreaming={route === old} runtimeAgentKind="codex" runtimeEffective={route} initialModel={route.model}
+    initialProviderId={route.providerId} initialEffort={route.effort} hideRuntimeControls={false} onSend={onSend} />;
+  const view = render(chat(old));
+  try {
+    await act(async () => { makerChatStore.mirrorSessionFields(sessionId, {
+      agentKind: 'codex', providerId: old.providerId, fastMode: old.fastMode,
+      agentSwitchIntent: { targetAgentKind: 'codex', model: next.model, providerId: next.providerId, effort: next.effort, fastMode: next.fastMode },
+    }); });
+    view.rerender(chat(old));
+    expect(screen.getByTestId('model-selector').textContent).toBe(next.model);
+    const send = async (text: string, button: 'queue' | 'send') => {
+      await act(async () => { h.editor!.commands.setContent('<p>' + text + '</p>'); });
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'newChat.sendButton.' + button })); });
+    };
+    await send('while pending', 'queue');
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+    expect(onSend.mock.calls[0].slice(0, 3)).toEqual(['while pending', old.model, old.effort]);
+    expect(onSend.mock.calls[0][6]).toMatchObject({ providerId: old.providerId });
+    expect(buildCreateOptsForCurrentSession(sessionId, old.model, old.effort, 'default', '/tmp'))
+      .toMatchObject({ model: old.model, effort: old.effort, providerId: old.providerId, fastMode: old.fastMode });
+    await act(async () => { makerChatStore.mirrorSessionFields(sessionId, {
+      agentKind: 'codex', providerId: next.providerId, fastMode: next.fastMode, runtimeEffective: next, agentSwitchIntent: null,
+    }); });
+    view.rerender(chat(next));
+    await send('after commit', 'send');
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2));
+    expect(onSend.mock.calls[1].slice(0, 3)).toEqual(['after commit', next.model, next.effort]);
+    expect(onSend.mock.calls[1][6]).toMatchObject({ providerId: next.providerId });
+    expect(buildCreateOptsForCurrentSession(sessionId, next.model, next.effort, 'default', '/tmp'))
+      .toMatchObject({ model: next.model, effort: next.effort, providerId: next.providerId, fastMode: next.fastMode });
+  } finally {
+    makerChatStore.clearAgentSwitchIntent(sessionId);
+  }
+});
+
+it('renders an SSH task’s existing same-engine intent without querying for a new one', async () => {
+  const sessionId = 'ssh-credential-preview';
+  h.remoteProviders = [sshNativeCodexProvider([sshModel('old'), sshModel('next')])];
+  makerChatStore.mirrorSessionFields(sessionId, {
+    agentKind: 'codex', agentSwitchIntent: { targetAgentKind: 'codex', model: 'next', providerId: 'openai' },
+  });
+  try {
+    render(<ChatInput {...props} sessionId={sessionId} deviceLinkDeviceId={null} remoteHostId="builder"
+      runtimeAgentKind="codex" initialModel="old" initialProviderId="openai" hideRuntimeControls={false} onSend={vi.fn()} />);
+    expect(screen.getByTestId('model-selector').textContent).toBe('next');
+    expect(h.setModel).not.toHaveBeenCalled();
+  } finally {
+    makerChatStore.clearAgentSwitchIntent(sessionId);
+  }
 });
 
 it('sends a remote-only Codex model when the controller has no connected providers', async () => {
@@ -1072,4 +1268,152 @@ it('keeps save/cancel when editing a queued companion message', async () => {
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'newChat.pendingQueue.editSaveAria' })); });
   expect(onSubmit).toHaveBeenCalledOnce();
   expect(onStartVoiceConversation).not.toHaveBeenCalled();
+});
+
+// Running-turn delivery: the follow-up preference picks queue/steer for the
+// button and the send key; the send shortcut only picks which key sends. Where
+// the task can be steered and Enter sends, modifier+Enter sends the other way.
+describe.each([
+  { followUp: 'queue', sendShortcut: 'enter', plain: 'queue', modifier: 'steer' },
+  { followUp: 'steer', sendShortcut: 'enter', plain: 'steer', modifier: 'queue' },
+  { followUp: 'queue', sendShortcut: 'modifier-enter', plain: null, modifier: 'queue' },
+  { followUp: 'steer', sendShortcut: 'modifier-enter', plain: null, modifier: 'steer' },
+] as const)('running follow-up delivery: $followUp default, $sendShortcut send key', ({ followUp, sendShortcut, plain, modifier }) => {
+  async function mountRunning() {
+    localStorage.clear();
+    _resetComposerFollowUpPreferenceForTests();
+    _resetComposerSendShortcutPreferenceForTests();
+    if (followUp === 'steer') localStorage.setItem(COMPOSER_FOLLOW_UP_STORAGE_KEY, 'steer');
+    if (sendShortcut === 'modifier-enter') localStorage.setItem(COMPOSER_SEND_SHORTCUT_STORAGE_KEY, 'modifier-enter');
+    const onSend = vi.fn().mockResolvedValue(true);
+    render(<ChatInput {...companionProps()} sessionId="follow-up-delivery" isStreaming onSend={onSend} onQueueSteer={vi.fn()} />);
+    await act(async () => { h.editor!.commands.setContent('<p>Next step</p>'); });
+    return onSend;
+  }
+  const press = async (init: KeyboardEventInit) => {
+    await act(async () => { fireEvent.keyDown(h.editor!.view.dom, { key: 'Enter', ...init }); });
+  };
+  const modeOf = (onSend: ReturnType<typeof vi.fn>) => onSend.mock.calls.at(-1)?.[6]?.deliveryMode;
+
+  it('mouse send uses the selected mode', async () => {
+    const onSend = await mountRunning();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'newChat.sendButton.' + followUp })); });
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+    expect(modeOf(onSend)).toBe(followUp);
+  });
+
+  it('the send key uses the selected mode, modifier+Enter reverses it only with Enter as the send key, and the others keep their newline', async () => {
+    const onSend = await mountRunning();
+    const sendWith = async (init: KeyboardEventInit) => {
+      const before = onSend.mock.calls.length;
+      await act(async () => { h.editor!.commands.setContent('<p>Next step</p>'); });
+      await press(init);
+      return before;
+    };
+    let before = await sendWith({});
+    if (plain) {
+      await waitFor(() => expect(onSend).toHaveBeenCalledTimes(before + 1));
+      expect(modeOf(onSend)).toBe(plain);
+    } else {
+      expect(onSend).toHaveBeenCalledTimes(before);
+    }
+    before = await sendWith({ metaKey: true });
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(before + 1));
+    expect(modeOf(onSend)).toBe(modifier);
+    // Shift never sends: Cmd+Shift+Enter and Shift+Enter send nothing.
+    before = await sendWith({ metaKey: true, shiftKey: true });
+    await press({ shiftKey: true });
+    expect(onSend).toHaveBeenCalledTimes(before);
+  });
+
+  it('does not send during IME composition', async () => {
+    const onSend = await mountRunning();
+    await press({ isComposing: true, metaKey: true });
+    await press({ isComposing: true });
+    expect(onSend).not.toHaveBeenCalled();
+  });
+});
+
+it.each([
+  ['/help me', 'steer'],
+  ['/Users/me/project has a typo in this directory name', 'steer'],
+  ['/compact now', 'steer'],
+].flatMap(([text]) => [false, true].map((rosterReady) => ({ text, rosterReady }))))('forwards $text to the send-time resolver regardless of palette readiness=$rosterReady', async ({ text, rosterReady }) => {
+  localStorage.clear();
+  _resetComposerFollowUpPreferenceForTests();
+  localStorage.setItem(COMPOSER_FOLLOW_UP_STORAGE_KEY, 'steer');
+  roster.commands = rosterReady ? [
+    { kind: 'desktop', name: 'help', description: '' },
+    { kind: 'agent-builtin', name: 'compact', description: '' },
+  ] : null;
+  try {
+    const onSend = vi.fn().mockResolvedValue(true);
+    render(<ChatInput {...companionProps()} sessionId="follow-up-slash" isStreaming onSend={onSend} onQueueSteer={vi.fn()} />);
+    await act(async () => { h.editor!.commands.setContent(`<p>${text}</p>`); });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'newChat.sendButton.steer' })); });
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+    expect(onSend.mock.calls[0][6].deliveryMode).toBe('steer');
+  } finally {
+    roster.commands = null;
+  }
+});
+
+it('sends idle messages normally under the steer default', async () => {
+  localStorage.clear();
+  _resetComposerFollowUpPreferenceForTests();
+  localStorage.setItem(COMPOSER_FOLLOW_UP_STORAGE_KEY, 'steer');
+  const onSend = vi.fn().mockResolvedValue(true);
+  render(<ChatInput {...companionProps()} sessionId="follow-up-idle" onSend={onSend} onQueueSteer={vi.fn()} />);
+  await act(async () => { h.editor!.commands.setContent('<p>Plain idle message</p>'); });
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'newChat.sendButton.send' })); });
+  await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+  expect(onSend.mock.calls[0][6].deliveryMode).toBe('queue');
+});
+
+// 测试价值
+// - 生产入口与可观察结果：真实 ChatInput 的发送键提示（SendDeliveryTip）——打字时不出现；打开后点「对调」
+//   只改默认不发送；点另一行、修饰键+点击都只把这一条按另一种方式发出，默认不变。
+// - 规则依据：DESIGN.md §14.6「Send button delivery tip」；替换原先常驻提示条的开关用例。
+// - 现有覆盖缺口：上面的矩阵只覆盖发送键与默认点击，没有「这一条换一种发法」和「在提示里改默认」。
+// - 最小失败输入：running + 可插话 + 有草稿，右键打开提示后点对调 / 另一行；不可插话的界面右键不出提示。
+// - tier：unit/jsdom（悬停延迟与定位由 ui:check 的 companion-composer 页面覆盖）。
+it('offers both delivery modes for one message from the Send button tip, and changes the default without sending', async () => {
+  localStorage.clear();
+  _resetComposerFollowUpPreferenceForTests();
+  _resetComposerSendShortcutPreferenceForTests();
+  const onSend = vi.fn().mockResolvedValue(true);
+  const running = { ...companionProps(), sessionId: 'send-delivery-tip', isStreaming: true, onSend, onQueueSteer: vi.fn() };
+  const tip = () => screen.queryByRole('menu', { name: 'newChat.sendDelivery.menuAria' });
+  const draft = async (text: string) => { await act(async () => { h.editor!.commands.setContent(`<p>${text}</p>`); }); };
+  const modeOf = () => onSend.mock.calls.at(-1)?.[6]?.deliveryMode;
+  render(<ChatInput {...running} />);
+  await draft('Typing while it runs');
+  expect(tip()).toBeNull();
+
+  await act(async () => { fireEvent.contextMenu(screen.getByRole('button', { name: 'newChat.sendButton.queue' })); });
+  await act(async () => { fireEvent.click(screen.getByRole('menuitem', { name: 'newChat.sendDelivery.switchToSteer' })); });
+  expect(localStorage.getItem(COMPOSER_FOLLOW_UP_STORAGE_KEY)).toBe('steer');
+  expect(onSend).not.toHaveBeenCalled();
+  expect(tip()).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'newChat.sendButton.steer' })).toBeTruthy();
+
+  await act(async () => { fireEvent.click(screen.getByRole('menuitem', { name: /followUp\.options\.queue/ })); });
+  await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+  expect(modeOf()).toBe('queue');
+  expect(localStorage.getItem(COMPOSER_FOLLOW_UP_STORAGE_KEY)).toBe('steer');
+  expect(tip()).toBeNull();
+
+  await draft('Second message');
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'newChat.sendButton.steer' }), { ctrlKey: true }); });
+  await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2));
+  expect(modeOf()).toBe('queue');
+
+  cleanup();
+  render(<ChatInput {...running} onQueueSteer={undefined} />);
+  await draft('No steer surface');
+  await act(async () => { fireEvent.contextMenu(screen.getByRole('button', { name: 'newChat.sendButton.queue' })); });
+  expect(tip()).toBeNull();
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'newChat.sendButton.queue' }), { ctrlKey: true }); });
+  await waitFor(() => expect(onSend).toHaveBeenCalledTimes(3));
+  expect(modeOf()).toBe('queue');
 });

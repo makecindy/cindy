@@ -14,34 +14,26 @@
 import {
   getModel,
   effectiveSourceIdForModel,
-  isProviderDisabled,
   modelSupportsFastMode,
-  nativeDefaultSourceId,
-  sourcesForModel,
   type AgentKind,
   type ProviderView,
 } from '@cindy/model-providers';
 
 import { resolveNewTaskDefaultRoute } from '../../shared/draftModelCalibration.js';
 import { checkDeviceRoute } from '../remote-agent/controller/deviceRouteCheck.js';
-import { activeOwnerScopeKey } from '../appSessionState.js';
-import { resolveScheduledModelSelection, type ScheduledModelSelection } from '../maker-ipc/scheduledModelSelection';
+import { activeOwnerScopeKey, getActiveAppSession } from '../appSessionState.js';
+import { resolveScheduledModelSelection, resolveScheduledModelSelectionWithRefresh, type ScheduledModelSelection } from '../maker-ipc/scheduledModelSelection';
 import { getDesktopProviderService } from './createDesktopProviderService.js';
+import { refreshSubscriptionPoolCodexModels } from '../subscription-accounts/runtime.js';
 import { getActiveCatalog } from './active-catalog.js';
-import { readModelDisableOverrides } from './model-disable-store.js';
+import { createOneShotRouteGuard } from './oneShotRouteGuardCore.js';
 import {
-  overrideOnlyVerdict,
-  staticNativeDefaults,
-  tombstoneGuardOptions,
+  pinExclusiveSessionProviderWithProviders,
+  resolveLenientSessionRouteWithProviders,
   verdictForModelRouteWithProviders,
 } from './model-route-guard-catalog.js';
 import { getNewTaskDraftSelection } from './newMakerDefaultsCache.js';
-import {
-  checkModelRoute,
-  materializeExclusiveProviderRoute,
-  resolveLenientRoute,
-  type ModelRouteVerdict,
-} from './model-route-guard.js';
+import type { ModelRouteVerdict } from './model-route-guard.js';
 
 /**
  * Route admission must retain capability entries that selectable build-region
@@ -141,14 +133,7 @@ export async function pinExclusiveSessionProvider(
   model: string,
   providerId: string | null,
 ): Promise<string | undefined> {
-  let views: ProviderView[];
-  try {
-    views = await listRouteGuardProviders();
-  } catch {
-    return undefined;
-  }
-  const exclusive = materializeExclusiveProviderRoute(views, agent, model, providerId);
-  return exclusive.kind === 'pin' ? exclusive.providerId : undefined;
+  return pinExclusiveSessionProviderWithProviders(listRouteGuardProviders, agent, model, providerId);
 }
 
 // Moved to model-route-guard-catalog.ts, which does not load Electron (the Node Host imports it).
@@ -171,56 +156,7 @@ export async function resolveLenientSessionRoute(
   /** 仅 desiredFastMode=true 且路由被本解析改动时给出:落地拷贝不支持 Fast ⇒ false。 */
   fastMode?: boolean | 'ultrafast';
 }> {
-  const catalog = getActiveCatalog();
-  const guardOptions = tombstoneGuardOptions(catalog);
-  let views: ProviderView[];
-  try {
-    views = await listRouteGuardProviders(catalog);
-  } catch {
-    // 目录故障降级:override-only 保守裁决(同 overrideOnlyVerdict 语义)。命中即
-    // 逐级丢弃;目录不可得时没有 pick 兜底可用,model 置空由调用方失败收口。
-    if (!model) return { model, providerId, degraded: false };
-    const exclusive = materializeExclusiveProviderRoute([], agent, model, providerId);
-    if (exclusive.kind === 'reject') {
-      return { model: undefined, providerId: null, degraded: true };
-    }
-    if (exclusive.kind === 'pin') {
-      return { model, providerId: exclusive.providerId, degraded: false };
-    }
-    if (checkModelRoute([], agent, model, providerId, guardOptions).kind === 'reject') {
-      return { model: undefined, providerId: null, degraded: true };
-    }
-    if (overrideOnlyVerdict(agent, model, providerId).kind === 'pass') {
-      return { model, providerId, degraded: false };
-    }
-    if (providerId && overrideOnlyVerdict(agent, model, null).kind === 'pass') {
-      return { model, providerId: null, degraded: true };
-    }
-    return { model: undefined, providerId: null, degraded: true };
-  }
-  const route: {
-    model?: string;
-    providerId: string | null;
-    degraded: boolean;
-    effort?: string;
-    fastMode?: boolean | 'ultrafast';
-  } = resolveLenientRoute(views, agent, model, providerId, { ...opts, ...guardOptions });
-  // Fast reconcile(PR #744 review 第十七轮):Fast 能力是 per-(来源, 模型) 的
-  // (modelSupportsFastMode)。保存的 fast=true 是对**原路由**的选择,解析改了模型
-  // 或来源时按落地那份拷贝重查,不支持则清掉 —— 否则不支持 Fast 的兜底路由会带着
-  // fast 标志被上游拒。路由原样时不产出(调用方保持自己的保存值)。
-  if (opts.desiredFastMode && route.model) {
-    const routeChanged = route.model !== model || route.providerId !== providerId;
-    if (routeChanged) {
-      const provider = route.providerId
-        ? views.find((p) => p.id === route.providerId)
-        : sourcesForModel([...views], route.model, agent)[0];
-      route.fastMode = provider && modelSupportsFastMode(provider, route.model, agent)
-        && (opts.desiredFastMode !== 'ultrafast' || (agent === 'codex' && provider.models.codex?.some(m => m.id === route.model && m.supportsUltrafastMode)))
-        ? opts.desiredFastMode : false;
-    }
-  }
-  return route;
+  return resolveLenientSessionRouteWithProviders(listRouteGuardProviders, agent, model, providerId, opts);
 }
 
 /**
@@ -232,20 +168,30 @@ export async function resolveScheduledModelSelectionLive(
   selection: ScheduledModelSelection,
   readRemoteProviders?: (agentDeviceId: string) => Promise<ProviderView[]>,
 ): Promise<ScheduledModelSelection> {
-  if (selection.agentDeviceId) {
+  if (selection.agentKind === 'acp') {
+    throw new Error('Plugin engines are not resolved through the built-in catalog');
+  }
+  const builtinSelection = { ...selection, agentKind: selection.agentKind };
+  if (builtinSelection.agentDeviceId) {
     if (!readRemoteProviders) throw new Error('Scheduled remote model resolution is not available');
     let views: ProviderView[] = [];
     const rejection = await checkDeviceRoute(async () => {
-      views = await readRemoteProviders(selection.agentDeviceId!);
+      views = await readRemoteProviders(builtinSelection.agentDeviceId!);
       return views;
-    }, selection.agentKind, selection.providerId, selection.model);
+    }, builtinSelection.agentKind, builtinSelection.providerId, builtinSelection.model);
     if (rejection) throw new Error(`Scheduled remote model route unavailable: ${rejection}`);
-    return resolveScheduledModelSelection(selection, views);
+    return resolveScheduledModelSelection(builtinSelection, views);
   }
-  const providers = await getDesktopProviderService().listProviders({
-    allowSideEffects: false, catalog: getActiveCatalog(),
+  const generation = getActiveAppSession().generation;
+  return resolveScheduledModelSelectionWithRefresh(builtinSelection, {
+    readProviders: () => getDesktopProviderService().listProviders({
+      allowSideEffects: false, getCatalog: getActiveCatalog,
+    }),
+    refreshProvider: providerId => refreshSubscriptionPoolCodexModels(true, providerId),
+    assertCurrent: () => {
+      if (getActiveAppSession().generation !== generation) throw new Error('Owner changed during model discovery');
+    },
   });
-  return resolveScheduledModelSelection(selection, providers);
 }
 
 /**
@@ -281,56 +227,10 @@ export async function resolveRouteCopyCapabilities(
   };
 }
 
-/**
- * agent one-shot 不带 model 时各 agent 的内部默认模型(与 maker-core base-agent
- * OneShotOptions 文档口径一致)。裁决要落到具体默认模型上:只查来源级 suspended
- * 会漏掉「恰好停用了这一个模型」的 override(PR #744 review 第十五轮)。
- *
- * Codex 不在表里:它的 one-shot 不写死型号,默认模型由 app-server 按账号与配置
- * 现选,派发前拿不到。Codex 在 thread/start 之后、turn/start 之前把实际选中的模型
- * 经 `beforeDispatch(route)` 交回,调用方用 `route.model` 再调一次本函数,模型级
- * 停用仍在 prompt 发出前拦住。
- */
-const DEFAULT_ONESHOT_MODEL: Partial<Record<AgentKind, string>> = {
-  'claude-code': 'claude-haiku-4-5',
-  // pi oneShot 未实现(BaseAgent 默认抛 NotSupported);占位与 claude 同款网关小模型。
-  pi: 'claude-haiku-4-5',
-};
+const oneShotRouteDisabled = createOneShotRouteGuard({ listRouteGuardProviders, verdictForModelRoute });
 
-/**
- * agent one-shot 兜底(help / 会话摘要 / 快照标签)是否被停用轴挡住。
- * 带具体模型时走完整裁决;不带模型(agent 默认一击)按**该 agent 的内部默认模型**
- * 走同一裁决(没有固定默认模型的 agent 跳过这一步),再叠加原生默认来源 suspended
- * 检查(默认模型不在目录时裁决 pass,来源级停用仍要拦)。
- */
-export async function isAgentOneShotRouteDisabled(
-  agent: AgentKind,
-  model?: string,
-): Promise<boolean> {
-  if (model) {
-    // reroute 同样视为不可发:one-shot 无法携带显式 providerId,实际派发仍会落在
-    // 被停用的隐式默认来源上 —— 只有 pass 才允许(PR #744 review 第五轮)。
-    return (await verdictForModelRoute(agent, model, null)).kind !== 'pass';
-  }
-  const defaultModel = DEFAULT_ONESHOT_MODEL[agent];
-  if (defaultModel && (await verdictForModelRoute(agent, defaultModel, null)).kind !== 'pass') {
-    return true;
-  }
-  let views: ProviderView[];
-  try {
-    views = await listRouteGuardProviders();
-  } catch {
-    // 目录故障降级:静态原生默认来源被 override 停用即视为不可发(同
-    // overrideOnlyVerdict 的隐式近似;override 也读不了则按无停用证据放行)。
-    try {
-      const overrides = readModelDisableOverrides();
-      return staticNativeDefaults(agent).some((id) => isProviderDisabled(overrides, id));
-    } catch {
-      return false;
-    }
-  }
-  const rail = views.filter((p) => p.connected && p.agents.includes(agent));
-  const defaultId = nativeDefaultSourceId(rail, agent);
-  if (!defaultId) return false;
-  return rail.find((p) => p.id === defaultId)?.suspended === true;
+export function isAgentOneShotRouteDisabled(
+  ...args: Parameters<typeof oneShotRouteDisabled>
+): ReturnType<typeof oneShotRouteDisabled> {
+  return oneShotRouteDisabled(...args);
 }

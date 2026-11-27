@@ -10,5 +10,5 @@ export type { ClaudeCliPlanUsage, ClaudeCliLoginResult } from './claude-native-c
 export const { claudeCliNetworkEnv, refreshClaudeCliLoginStatus, readClaudeCliLoginStatus, readClaudeCliPlanUsage, parseClaudeCliPlanUsageLine, beginClaudeCliLogin, cancelClaudeCliLogin, runClaudeCliLogin, resetClaudeNativeCliForTest } = createClaudeNativeCli({
   binaryPath: () => getReadyBinaryPath('claude-code') ?? null,
   resolveOutboundProxy: resolveDesktopOutboundProxy,
-  readStatus: async options => parseClaudeCliLoginStatus(await readClaudeCliStatusInWorker(options)),
+  readStatus: readClaudeCliStatusInWorker,
 });

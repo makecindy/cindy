@@ -387,6 +387,11 @@ describe('mobile composer document', () => {
       { type: 'quote', quote: { text: 'q' } },
       { type: 'text', text: 'b' },
     ]);
+    // A quote has no projected text: a text range spanning its position cannot delete it.
+    expect(replaceComposerTextRange(document, 0, 2, [{ type: 'text', text: 'x' }]).nodes).toEqual([
+      { type: 'text', text: 'x' },
+      { type: 'quote', quote: { text: 'q' } },
+    ]);
   });
 
   it('preserves quote atoms while voice text appends and clears the whole document explicitly', () => {

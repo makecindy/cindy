@@ -112,7 +112,7 @@ export interface MessagePersistencePorts {
 export interface DeferredTurnErrorRow {
   content: Record<string, unknown>;
   agentMeta: AgentMeta | null;
-  agentKind: 'cc' | 'codex' | 'pi' | undefined;
+  agentKind: 'cc' | 'codex' | 'pi' | 'acp' | undefined;
   turnStartedAt: number;
   occurredAt: number;
 }
@@ -447,9 +447,10 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
    * session.agent_kind 只代表"当前引擎",历史行的 agent_meta 必须按写入时引擎解析。
    * clearSessionPersistState 时清理。
    */
-  const dbAgentKindBySession = new Map<string, 'cc' | 'codex' | 'pi'>();
+  // 'acp' = plugin engine task (docs/plans/acp-plugin-bridge.md); its rows carry no vendor meta.
+  const dbAgentKindBySession = new Map<string, 'cc' | 'codex' | 'pi' | 'acp'>();
 
-  function noteSessionAgentKind(sessionId: string, dbAgentKind: 'cc' | 'codex' | 'pi'): void {
+  function noteSessionAgentKind(sessionId: string, dbAgentKind: 'cc' | 'codex' | 'pi' | 'acp'): void {
     // Called once per newly bound Session instance; beginBinding filters repeat wiring.
     // A replacement can have the same business id AND agent kind, but owns no old items.
     if (dbAgentKindBySession.get(sessionId) === 'codex' || dbAgentKind === 'codex') {
@@ -466,7 +467,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     dbAgentKindBySession.set(sessionId, dbAgentKind);
   }
 
-  function getSessionDbAgentKind(sessionId: string): 'cc' | 'codex' | 'pi' | null {
+  function getSessionDbAgentKind(sessionId: string): 'cc' | 'codex' | 'pi' | 'acp' | null {
     return dbAgentKindBySession.get(sessionId) ?? null;
   }
 
@@ -747,6 +748,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
   const failedWrites: {
     label: string;
     ownerScope: OwnerScope;
+    canStart?: () => boolean;
     perform: (scope: OwnerScope) => Promise<unknown>;
   }[] = [];
   const OWNER_SCOPE_SUPERSEDED = 'OWNER_SCOPE_SUPERSEDED';
@@ -868,17 +870,19 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
   function enqueueDurableWrite<T>(
     label: string,
     fn: (ownerScope: OwnerScope) => Promise<T> | T,
+    canStart?: () => boolean,
   ): Promise<T> {
     const ownerScope = captureOwnerScope();
+    const current = canStart ?? (() => isOwnerScopeCurrent(ownerScope));
     return new Promise<T>((resolve, reject) => {
       writeChain = writeChain
         .then(async () => {
-          if (!isOwnerScopeCurrent(ownerScope)) {
+          if (!current()) {
             reject(ownerScopeSupersededError());
             return;
           }
           if (deps.onPersistenceError && failedWrites.length) {
-            failedWrites.push({ label, ownerScope, perform: async (scope) => fn(scope) });
+            failedWrites.push({ label, ownerScope, canStart, perform: async (scope) => fn(scope) });
             reject(new Error('Message persistence is paused'));
             return;
           }
@@ -891,8 +895,8 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
             // suppressing its old-owner broadcast via ownerScope.
             resolve(value);
           } catch (err) {
-            if (deps.onPersistenceError && isOwnerScopeCurrent(ownerScope)) {
-              failedWrites.push({ label, ownerScope, perform: async (scope) => fn(scope) });
+            if (deps.onPersistenceError && current()) {
+              failedWrites.push({ label, ownerScope, canStart, perform: async (scope) => fn(scope) });
               deps.onPersistenceError(err);
             }
             if (!isOwnerScopeSupersededError(err)) {
@@ -932,7 +936,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     const retry = writeChain.then(async () => {
       while (failedWrites.length) {
         const entry = failedWrites[0]!;
-        if (isOwnerScopeCurrent(entry.ownerScope)) await entry.perform(entry.ownerScope);
+        if (entry.canStart ? entry.canStart() : isOwnerScopeCurrent(entry.ownerScope)) await entry.perform(entry.ownerScope);
         failedWrites.shift();
       }
     });
@@ -1218,15 +1222,19 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
    * Late child results are still useful after a parent turn has ended, but must
    * not borrow the next turn's persistence context. Keep snapshots keyed by the
    * in-flight collab tool ids for events explicitly marked `turnScope=background`.
+   * Plugin engines (ACP) keep a call they have not finished open past `end_turn`
+   * and report its result between turns, so every pending call of theirs is kept.
    */
   const backgroundTurnPersistStatesBySession = new Map<string, BackgroundTurnPersistState[]>();
 
   function preserveTurnPersistStateForBackground(sessionId: string): void {
     const knownToolUseIds = knownToolUseIdsBySession.get(sessionId) ?? new Set<string>();
     const toolUseInfo = toolUseInfoBySession.get(sessionId);
+    const pluginEngine = getSessionDbAgentKind(sessionId) === 'acp';
     const collabToolUseIds = new Set(
       [...knownToolUseIds].filter(
-        (toolUseId) => toolUseInfo?.get(toolUseId)?.toolName.startsWith('collab:') === true,
+        (toolUseId) =>
+          pluginEngine || toolUseInfo?.get(toolUseId)?.toolName.startsWith('collab:') === true,
       ),
     );
     const resultIds = toolResultIdByToolUseId.get(sessionId) ?? new Map<string, string>();
@@ -1405,16 +1413,31 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
    */
   function onToolUseEvent(
     sessionId: string,
-    data: { toolUseId?: unknown; toolName?: unknown; input?: unknown },
+    data: { toolUseId?: unknown; toolName?: unknown; input?: unknown; acpInputPatch?: unknown },
     agentMeta: AgentMeta | null,
     scope: 'turn' | 'background' = 'turn',
     backgroundTurnStartedAt?: number,
     turnAttemptToken?: number,
+    acpTool = false,
   ): string | undefined {
     const createdAt = Date.now();
     const toolUseId = typeof data.toolUseId === 'string' ? data.toolUseId : '';
     const toolName = typeof data.toolName === 'string' ? data.toolName : '';
     const persistedInput = redactToolInputForUntrustedBoundary(toolName, data.input);
+
+    if (acpTool && data.acpInputPatch === true) {
+      const persistId = updatableToolUsePersistIdBySession.get(sessionId)?.get(toolUseId);
+      if (!persistId || (scope === 'background' && backgroundTurnPredatesSessionClear(sessionId, backgroundTurnStartedAt))) {
+        return undefined;
+      }
+      const tools = toolUseInfoBySession.get(sessionId);
+      if (tools?.has(toolUseId)) tools.set(toolUseId, { toolName, input: persistedInput });
+      enqueueWrite(`tool_use_update:${sessionId}:${persistId}`, async (ownerScope) => {
+        const updated = await updateDbMessageContent(sessionId, persistId, { toolUseId, toolName, input: persistedInput });
+        if (updated) broadcastMessageRow(sessionId, updated, ownerScope);
+      });
+      return persistId;
+    }
 
     if (scope === 'turn' && getSessionDbAgentKind(sessionId) === 'codex') {
       const planUpdate = parseCodexPlanUpdate(data);
@@ -1461,6 +1484,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
       const persistId = createId();
       const persistedMeta = agentTaskMetaForToolUse(sessionId, toolUseId, toolName, agentMeta);
       rememberAgentTaskToolUse(sessionId, toolUseId, toolName, persistId);
+      if (acpTool && toolUseId) rememberUpdatableToolUsePersistId(sessionId, toolUseId, persistId);
       enqueueVisibleDbMessage(`tool_use:${sessionId}:${persistId}`, sessionId, {
         clientId: persistId,
         role: 'tool_use',
@@ -1480,7 +1504,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
       });
     }
     const existingPersistId =
-      isUpdatableToolUse(toolName) && toolUseId
+      !acpTool && isUpdatableToolUse(toolName) && toolUseId
         ? updatableToolUsePersistIdBySession.get(sessionId)?.get(toolUseId)
         : undefined;
     if (existingPersistId) {
@@ -1511,7 +1535,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
       agentMeta: meta,
       createdAt,
     });
-    if (isUpdatableToolUse(toolName) && toolUseId) {
+    if ((acpTool || isUpdatableToolUse(toolName)) && toolUseId) {
       rememberUpdatableToolUsePersistId(sessionId, toolUseId, persistId);
     }
     rememberCodexPlanRow(sessionId, toolName, toolUseId, persistId, persistedInput);
@@ -3076,6 +3100,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
           sdkError?: unknown;
           toolLoop?: unknown;
           outputLimit?: unknown;
+          reconnectHandoff?: unknown;
         }
       | null
       | undefined,
@@ -3121,6 +3146,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
           sdkError?: unknown;
           toolLoop?: unknown;
           outputLimit?: unknown;
+          reconnectHandoff?: unknown;
         }
       | null
       | undefined,
@@ -3191,7 +3217,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
   function buildTurnErrorContent(
     sessionId: string,
     data:
-      | { reason?: unknown; sdkError?: unknown; toolLoop?: unknown; outputLimit?: unknown }
+      | { reason?: unknown; sdkError?: unknown; toolLoop?: unknown; outputLimit?: unknown; reconnectHandoff?: unknown }
       | null
       | undefined,
     message: string,
@@ -3200,6 +3226,9 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     if (typeof data?.reason === 'string' && data.reason) content.reason = data.reason;
     if (typeof data?.sdkError === 'string' && data.sdkError) {
       content.sdkError = redactSensitiveText(data.sdkError);
+    }
+    if (data?.reason === 'codex_reconnect_stalled' && (data.reconnectHandoff === 'disabled' || data.reconnectHandoff === 'exhausted')) {
+      content.reconnectHandoff = data.reconnectHandoff;
     }
     const toolLoop = parseToolLoopErrorDetails(data?.toolLoop);
     const outputLimit = parseOutputLimitDetails(data?.outputLimit);
@@ -3223,7 +3252,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     row: {
       content: Record<string, unknown>;
       agentMeta: AgentMeta | null;
-      agentKind: 'cc' | 'codex' | 'pi' | undefined;
+      agentKind: 'cc' | 'codex' | 'pi' | 'acp' | undefined;
       /** 行的排序时间上界(通常是错误到达的时刻)。 */
       orderedAt: number;
       turnStartedAt: number;

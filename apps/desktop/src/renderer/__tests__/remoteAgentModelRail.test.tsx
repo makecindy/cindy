@@ -28,6 +28,7 @@ vi.mock('react-i18next', () => ({
 }));
 
 import { UnifiedModelRail } from '@/components/new-chat/UnifiedModelRail';
+import { OWN_ROUTES_PROVIDER_ID } from '../../shared/auxiliaryModelSettings';
 import {
   buildUnifiedListSections,
   railItemKey,
@@ -155,5 +156,26 @@ describe('remote provider rail items', () => {
       deviceId: 'studio',
       providerId: 'anthropic',
     });
+  });
+});
+
+// 辅助模型的选择器把自己排的路由合在 `sroute:mine` 一格：它本身画成路由图形，只有合并整个供应商的路由格才叠路由角标
+// (2026-11-26 用户反馈「智能路由」那格右上角又出现一次角标)。
+describe('route cells in the rail', () => {
+  it('marks only the merged-provider route with the route badge, not the own-routes cell', () => {
+    render(
+      <UnifiedModelRail
+        items={[{ kind: 'all' }, { kind: 'provider', providerId: OWN_ROUTES_PROVIDER_ID }, { kind: 'provider', providerId: 'sroute:openai' }, { kind: 'provider', providerId: 'openai' }]}
+        active={{ kind: 'all' }}
+        onSelect={vi.fn()}
+        providers={[provider('openai', 'OpenAI')]}
+        providerLabel={(id) => (id === OWN_ROUTES_PROVIDER_ID ? 'own routes' : id)}
+      />,
+    );
+    const own = screen.getByRole('button', { name: 'own routes' });
+    expect(own.querySelector('[data-route-source-mark]')).toBeNull();
+    expect(own.querySelectorAll('svg')).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'sroute:openai' }).querySelector('[data-route-source-mark]')).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'openai' }).querySelector('[data-route-source-mark]')).toBeNull();
   });
 });

@@ -25,6 +25,7 @@ export function filterSchedulesByText(rows: unknown, query: string | undefined):
       schedule.name,
       schedule.prompt,
       schedule.targetSessionId,
+      (schedule.prTrigger as { url?: string } | undefined)?.url,
       schedule.workingDir,
       (schedule.preRunHook as { command?: unknown } | undefined)?.command,
       (schedule.scriptConfig as { command?: unknown } | undefined)?.command,

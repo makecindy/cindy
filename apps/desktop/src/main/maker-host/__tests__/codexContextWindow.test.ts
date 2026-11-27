@@ -1,14 +1,55 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { readCodexContextWindowInfo, resolveCodexContextWindowInfo } from '../codex-context-window';
+import { readCodexContextWindowInfo, readCodexTaskContextWindowInfo, resolveCodexContextWindowInfo } from '../codex-context-window';
 const sol = {
   context_window: 272_000,
   max_context_window: 872_000,
   effective_context_window_percent: 95,
 };
 describe('native Codex context facts', () => {
+  // #11716/#4477 unit: the read must belong to this live task and selected model.
+  // Existing native-config fixtures cannot detect a task/model replacement mid-read.
+  it.each(['missing', 'engine', 'model', 'provider', 'matching'])('scopes task native facts: %s', async variant => {
+    const info = resolveCodexContextWindowInfo(sol, {});
+    const session = { agentKind: variant === 'engine' ? 'pi' : 'codex',
+      model: variant === 'model' ? 'other' : 'gpt', getCodexContextWindowInfo: vi.fn(async () => info) };
+    const result = await readCodexTaskContextWindowInfo({ providerId: 'openai', modelId: 'gpt' }, 'task',
+      () => variant === 'missing' ? undefined : session, () => variant === 'provider' ? 'other' : 'openai');
+    expect(result).toEqual(variant === 'matching' ? info : null);
+    expect(session.getCodexContextWindowInfo).toHaveBeenCalledTimes(variant === 'matching' ? 1 : 0);
+  });
+  it.each(['model', 'provider', 'instance'])('rejects native facts after a late %s change', async variant => {
+    let finish!: (value: ReturnType<typeof resolveCodexContextWindowInfo>) => void;
+    const session = { agentKind: 'codex', model: 'gpt',
+      getCodexContextWindowInfo: () => new Promise<ReturnType<typeof resolveCodexContextWindowInfo>>(resolve => { finish = resolve; }) };
+    let current = session;
+    let provider = 'openai';
+    const result = readCodexTaskContextWindowInfo({ providerId: 'openai', modelId: 'gpt' }, 'task', () => current, () => provider);
+    if (variant === 'model') session.model = 'other';
+    if (variant === 'provider') provider = 'other';
+    if (variant === 'instance') current = { ...session };
+    finish(resolveCodexContextWindowInfo(sol, {}));
+    expect(await result).toBeNull();
+  });
+  // #11025 unit: BOM-less-only fixtures missed a null context preview when
+  // native config/profile parsing failed. Preserve exact configured thresholds.
+  it.each(['config', 'profile'])('reads context overrides from BOM-prefixed %s TOML', async layer => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-bom-context-'));
+    try {
+      const overrides = 'model_context_window = 500000\nmodel_auto_compact_token_limit = 350000\n';
+      await fs.writeFile(path.join(home, 'models_cache.json'), JSON.stringify({ models: [{ ...sol, slug: 'fixture' }] }));
+      await fs.writeFile(path.join(home, 'config.toml'),
+        layer === 'config' ? `\uFEFF${overrides}` : '\uFEFFprofile = "selected"');
+      if (layer === 'profile') await fs.writeFile(path.join(home, 'selected.config.toml'), `\uFEFF${overrides}`);
+      await expect(readCodexContextWindowInfo({ codexHome: home, modelId: 'fixture' })).resolves.toMatchObject({
+        contextWindow: 500_000, usableContextWindow: 475_000, autoCompactTokenLimit: 350_000,
+      });
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
   // Unit: changing only the percentage must update the settings preview, not a running turn.
   // Previous coverage exercised window overrides only; use an isolated native catalog file.
   it('previews a model percentage without requiring a window override and preserves live facts', async () => {

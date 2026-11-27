@@ -35,6 +35,8 @@ export interface IMHost {
     readResult?(name: string): IMSecretReadResult;
     /** Remove (no-op if missing). */
     remove(name: string): void;
+    /** Remove and confirm absence; false if any stored copy could not be removed. */
+    removeConfirmed?(name: string): boolean;
     /** Whether encryption is currently usable (e.g. Linux without keychain). */
     isAvailable(): boolean;
   };
@@ -162,6 +164,8 @@ export interface IMHostMediaCache {
     options?: {
       /** Re-check transport/account ownership after the async lookup, before host-side pinning. */
       shouldReuse?: () => boolean;
+      /** Background-only reuse keeps the blob eligible for cache collection. */
+      staging?: boolean;
     },
   ): Promise<{ absPath: string; url: string; mimeType: string } | null>;
   /** host 托管媒体 URL(cindy-media://)→ 绝对路径;认不出返回 null(出站上传用)。 */
@@ -194,9 +198,17 @@ export interface IMUnsupportedEntry {
   type: string;
   /** Localised label suitable for showing the user. */
   label: string;
+  /**
+   * The model can fetch it with a channel tool (an original over the direct-delivery cap, or the
+   * original behind a preview). Such an entry still invokes the model and is not reported to the
+   * sender as unsupported.
+   */
+  retrievable?: boolean;
 }
 
 export interface IMMessageEvent {
+  /** In-process ingress lease. Recheck before admitting queued work; never serialize to models or clients. */
+  assertCurrent?(): void;
   /** In-process durable transport handoff; never serialized to the model or remote clients. */
   delivery?: {
     /** A queued retry was withdrawn by a later owner stop command. */
@@ -291,6 +303,8 @@ export interface IMMessageEvent {
     /** Referenced media that was not supplied to this turn. */
     unavailableAttachments?: string[];
   };
+  /** Verified BlueBubbles inline-reply root, resolved in the same connected chat. */
+  imessageReplyGuid?: string;
   /** Feishu quote resources; host downloads after accepting the inbound turn. */
   feishuReplyAttachments?: AttachmentRef[];
   /** Native private topic metadata. Root message id and thread id are distinct. */
@@ -429,6 +443,13 @@ export interface StreamingTextHandle {
 
 export interface SendFileResult {
   ok: boolean;
-  reason?: 'NOT_FOUND' | 'EMPTY' | 'TOO_LARGE' | 'UPLOAD_FAIL' | 'SEND_FAIL';
+  reason?:
+    | 'NOT_FOUND'
+    | 'EMPTY'
+    | 'TOO_LARGE'
+    | 'UPLOAD_FAIL'
+    | 'SEND_FAIL'
+    | 'SEND_REJECTED'
+    | `SEND_REJECTED:${number}`;
   messageId?: string;
 }

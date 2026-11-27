@@ -1,6 +1,6 @@
+import { getEventListeners } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { IMHost } from '@cindy/im';
 import {
   WechatIlinkError,
   type WechatCredentials,
@@ -8,13 +8,15 @@ import {
 } from '@cindy/wechat-ilink';
 
 import type { DbClient } from '../../../localDb/client/DbClient';
+import { PluginEngineUnsupportedError } from '../../../maker-host/engineKind';
 import {
   beginInteractionRoute, installDesktopInteractionHandler, requestHostInteraction,
 } from '../../../maker-ipc/interactionRouter';
 import type { SharedPermission } from '../../../maker-ipc/sharedPermission';
 import { setMainLocale } from '../../../i18n.desktop';
 import { encryptWechatContextToken } from '../contextCrypto';
-import { __testing, sessionIdFor, WechatIM, type WechatIMDeps } from '../WechatIM';
+import { deps, host, fakeDb, blockingLiveTransport } from './wechatFixtures';
+import { __testing, sessionIdFor, WechatIM } from '../WechatIM';
 
 const mediaMocks = vi.hoisted(() => ({
   removeReleasedWechatFiles: vi.fn(async () => undefined),
@@ -84,6 +86,38 @@ describe('WechatIM host boundary', () => {
     } finally { await im.dispose(); }
   });
 
+  // #12845, unit: a single empty poll misses listeners retained across idle waits.
+  it('releases completed idle waits while the connection keeps polling', async () => {
+    vi.useFakeTimers();
+    const { im, transport, db } = restoredConnection(() => 0);
+    const poll = vi.mocked(transport.poll);
+    poll.mockResolvedValue({ cursor: '', messages: [] });
+    vi.mocked(db.tx).mockImplementation((async (name: string) =>
+      name === 'wechatCommitPollBatch' ? {
+        committed: true, insertedTaskIds: [], duplicateTaskIds: [], rejectedTaskIds: [],
+      } : null) as DbClient['tx']);
+    try {
+      await im.init();
+      await vi.advanceTimersByTimeAsync(0);
+      const signal = poll.mock.calls[0]![1];
+      const listeners = () => getEventListeners(signal, 'abort').length;
+      const initialListeners = listeners();
+      await vi.advanceTimersByTimeAsync(400);
+      expect(poll).toHaveBeenCalledTimes(5);
+      expect(vi.mocked(db.tx).mock.calls.filter(([name]) => name === 'wechatLeaseNextTask')).toHaveLength(3);
+      expect(listeners()).toBe(initialListeners);
+      await im.dispose();
+      expect(signal.aborted).toBe(true);
+      expect(listeners()).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(400);
+      expect(poll).toHaveBeenCalledTimes(5);
+    } finally {
+      await im.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it('clears reconnecting after an empty successful poll', async () => {
     vi.useFakeTimers();
     const { im, transport, db } = restoredConnection(() => 0);
@@ -104,6 +138,42 @@ describe('WechatIM host boundary', () => {
       await im.dispose();
       vi.useRealTimers();
     }
+  });
+
+  // #12592, unit: exercise the pump through init, with a bounded queue and a simulated transport.
+  it('settles a plugin engine refusal and continues pumping the inbox', async () => {
+    const { im, db, transport } = restoredConnection(() => 0);
+    const pending = ['unsupported', 'next'];
+    const lease = vi.fn(() => {
+      const id = pending.shift();
+      return id ? {
+        id, bindingEpoch: 'epoch', peerId: id, sessionId: id, conversationEpoch: 1,
+        payloadJson: JSON.stringify({ text: 'hello', attachments: [], unsupportedMedia: [] }),
+        context: encryptWechatContextToken('context', Buffer.alloc(32, 3), 'epoch', id),
+        attempts: 0, receivedAt: 1, expiresAt: Date.now() + 60_000,
+      } : null;
+    });
+    vi.mocked(db.tx).mockImplementation((async (name: string) =>
+      name === 'wechatLeaseNextTask' ? lease() : null) as DbClient['tx']);
+    transport.getTypingTicket = vi.fn(async () => 'ticket');
+    transport.setTyping = vi.fn();
+    const dispatchAgentTurn = vi.fn()
+      .mockRejectedValueOnce(new PluginEngineUnsupportedError('IM channels'))
+      .mockResolvedValueOnce({ kind: 'accepted', terminal: Promise.resolve({ kind: 'done' }) });
+    im.attachTurnRuntime({ runner: { companionBotIdFor: () => 'bot', dispatchAgentTurn, stopActiveTurn: vi.fn() } } as never);
+    await im.init();
+    try {
+      await vi.waitFor(() => expect(lease.mock.results.some(result => result.value === null)).toBe(true));
+      expect(dispatchAgentTurn.mock.calls.map(([input]) => input.userMessageId)).toEqual(['unsupported', 'next']);
+      expect(vi.mocked(transport.setTyping).mock.calls.map(([peer, , typing]) => [peer, typing]))
+        .toEqual([['unsupported', true], ['unsupported', false], ['next', true], ['next', false]]);
+      expect(im.getActivePeerIdForSession('unsupported')).toBeNull();
+      expect(db.tx).toHaveBeenCalledWith('wechatCommitPreDispatchFailure', expect.objectContaining({
+        bindingEpoch: 'epoch', taskId: 'unsupported', errorCode: 'PLUGIN_ENGINE_UNSUPPORTED',
+        outbox: [expect.objectContaining({ kind: 'error', text: expect.any(String) })],
+      }));
+      expect(db.tx).not.toHaveBeenCalledWith('wechatReleaseDispatch', expect.anything());
+    } finally { await im.dispose(); }
   });
 
   // Exercise the durable inbox through the public host lifecycle. Only the
@@ -147,6 +217,38 @@ describe('WechatIM host boundary', () => {
       expect(input.requesterIsOwner).toBe(companion ? peer === 'owner' : undefined);
       expect(input.turnPermissionPolicy?.confirmationSurface).toBe('channel');
       expect(input.groupHistoryAccess).toMatchObject({ access: 'lane', lane: { chatId: peer, threadId: '' } });
+    } finally { await im.dispose(); }
+  });
+
+  // A paused / unavailable companion is rejected by the runner with a composed notice. WeChat
+  // used to discard it and send the generic "try again" text, hiding that the buddy is paused.
+  it('sends the runner’s companion-unavailable notice through the durable outbox', async () => {
+    const { im, db } = restoredConnection(() => 0);
+    let leased = false;
+    vi.mocked(db.tx).mockImplementation((async (name: string) => {
+      if (name !== 'wechatLeaseNextTask' || leased) return null;
+      leased = true;
+      return {
+        id: 'paused-task', bindingEpoch: 'epoch', peerId: 'owner',
+        sessionId: 'companion-canonical', conversationEpoch: 1,
+        payloadJson: JSON.stringify({ text: 'hello', attachments: [], unsupportedMedia: [] }),
+        context: encryptWechatContextToken('context', Buffer.alloc(32, 3), 'epoch', 'paused-task'),
+        attempts: 0, receivedAt: 1, expiresAt: Date.now() + 60_000,
+      };
+    }) as DbClient['tx']);
+    im.attachTurnRuntime({ runner: {
+      companionBotIdFor: () => 'cindy',
+      dispatchAgentTurn: vi.fn(async () => ({
+        kind: 'rejected', reason: 'companion_unavailable', notice: 'buddy paused notice',
+      })),
+    } } as never);
+    await im.init();
+    try {
+      await vi.waitFor(() => expect(vi.mocked(db.tx).mock.calls.some(([name]) =>
+        name === 'wechatCommitPreDispatchFailure')).toBe(true));
+      const [, args] = vi.mocked(db.tx).mock.calls.find(([name]) => name === 'wechatCommitPreDispatchFailure')!;
+      expect(args).toMatchObject({ taskId: 'paused-task', errorCode: 'COMPANION_UNAVAILABLE',
+        outbox: [expect.objectContaining({ text: 'buddy paused notice' })] });
     } finally { await im.dispose(); }
   });
 
@@ -225,6 +327,21 @@ describe('WechatIM host boundary', () => {
 
     await expect(im.authorize()).rejects.toThrow('WECHAT_SAFE_STORAGE_UNAVAILABLE');
     expect(createTransport).not.toHaveBeenCalled();
+  });
+
+  it('an old cloud cancellation never aborts a newer native authorization', async () => {
+    const signals: AbortSignal[] = [];
+    const transport = { beginAuthorization: vi.fn(async (signal: AbortSignal) => {
+      signals.push(signal); return {id:'challenge',qrCodeUrl:'https://example.invalid/qr',createdAt:1};
+    }), waitAuthorization: vi.fn((_challenge: unknown, signal: AbortSignal) => new Promise((_resolve,reject) => {
+      signal.addEventListener('abort',()=>reject(new WechatIlinkError('ABORTED','cancelled',false)),{once:true});
+    })) } as unknown as WechatTransport;
+    const im = new WechatIM(deps({createTransport:()=>transport}));
+    const old = new AbortController(); await im.authorize(old.signal);
+    await vi.waitFor(()=>expect(signals).toHaveLength(1));
+    await im.authorize(); await vi.waitFor(()=>expect(signals).toHaveLength(2));
+    expect(signals[0]!.aborted).toBe(true); old.abort(); expect(signals[1]!.aborted).toBe(false);
+    im.cancelAuthorization(); expect(signals[1]!.aborted).toBe(true);
   });
 
   it('never emulates rich cards for the chunked-text WeChat channel', async () => {
@@ -938,63 +1055,6 @@ describe('WechatIM host boundary', () => {
   });
 });
 
-function deps(overrides: Partial<WechatIMDeps> & { host?: IMHost } = {}): WechatIMDeps {
-  return {
-    host: overrides.host ?? host(),
-    getDbClient: overrides.getDbClient ?? (() => fakeDb()),
-    createTransport:
-      overrides.createTransport ??
-      (() => {
-        throw new Error('transport should not be created');
-      }),
-    openAuthorizationUrl: overrides.openAuthorizationUrl ?? vi.fn(),
-    captureAccountGeneration: overrides.captureAccountGeneration ?? (() => 1),
-    isAccountGenerationCurrent:
-      overrides.isAccountGenerationCurrent ?? ((generation) => generation === 1),
-    isCompatibilityDisabled: overrides.isCompatibilityDisabled ?? (() => false),
-    now: overrides.now ?? (() => 100),
-  };
-}
-
-function host(
-  options: {
-    secretAvailable?: boolean;
-    secretRead?: (name: string) => string | null;
-  } = {},
-): IMHost {
-  return {
-    secrets: {
-      isAvailable: () => options.secretAvailable ?? true,
-      read: vi.fn(options.secretRead ?? (() => null)),
-      write: vi.fn(() => true),
-      remove: vi.fn(),
-    },
-    ipc: {
-      throwIpcError: (code, message) => {
-        throw new Error(`[${code}] ${message}`);
-      },
-      handle: vi.fn(),
-      broadcast: vi.fn(),
-    },
-    paths: {
-      feishuMediaDir: 'unused',
-    },
-    httpPostForm: vi.fn(),
-  };
-}
-
-function fakeDb(overrides: Partial<DbClient> = {}): DbClient {
-  return {
-    tx: overrides.tx ?? vi.fn(),
-    query: overrides.query ?? vi.fn(),
-    queryOne: overrides.queryOne ?? vi.fn(),
-    exec: overrides.exec ?? vi.fn(),
-    drizzle: {} as DbClient['drizzle'],
-    vecAvailable: false,
-    dispose: overrides.dispose ?? vi.fn(),
-  };
-}
-
 function authorizationTransportReturning(credentials: WechatCredentials): WechatTransport {
   return {
     beginAuthorization: vi.fn(async () => ({
@@ -1003,23 +1063,6 @@ function authorizationTransportReturning(credentials: WechatCredentials): Wechat
       createdAt: 1,
     })),
     waitAuthorization: vi.fn(async () => credentials),
-  } as unknown as WechatTransport;
-}
-
-function blockingLiveTransport(): WechatTransport {
-  return {
-    notifyStart: vi.fn(async () => undefined),
-    notifyStop: vi.fn(async () => undefined),
-    poll: vi.fn(
-      (_cursor: string, signal: AbortSignal) =>
-        new Promise((_resolve, reject) => {
-          signal.addEventListener(
-            'abort',
-            () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })),
-            { once: true },
-          );
-        }),
-    ),
   } as unknown as WechatTransport;
 }
 

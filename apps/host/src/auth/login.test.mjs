@@ -88,3 +88,31 @@ test('reports a login outcome that needs another step instead of a missing token
     assert.equal(store.records.size, 0);
   }
 });
+
+
+test('enterprise login uses the discovered SSO connection and persists only an organization session', async () => {
+  const store = memoryStore();
+  const captured = {};
+  const client = fakeClient(null, captured);
+  client.discoverSsoOrg = async org => {
+    assert.equal(org, 'example.test');
+    return { connections: [{ connectionId: 'work', connectionName: 'Company' }] };
+  };
+  client.getProviders = async () => { throw new Error('Personal discovery was unexpected'); };
+  const basic = client.exchangeAuthorizationCode;
+  let kind = 'personal';
+  client.exchangeAuthorizationCode = async (...args) => ({
+    ...await basic(...args), membership: { id: 'account', kind },
+  });
+  client.logout = async () => {};
+  const deps = { client, store, region: 'cn', organization: 'example.test',
+    hostedCallbackUrl: 'https://auth.example/desktop/callback', openBrowser: async () => {} };
+  await assert.rejects(runHostLogin({ ...deps, method: 'other' }), /enterprise connection/);
+  await assert.rejects(runHostLogin(deps), /organization membership/);
+  assert.equal(store.records.size, 0);
+  kind = 'org';
+  assert.equal((await runHostLogin(deps)).authenticated, true);
+  assert.equal(captured.url.input.kind, 'sso');
+  assert.equal(captured.url.input.providerOrConnectionId, 'work');
+  assert.ok(store.records.has(AUTH_SESSION_KEY));
+});

@@ -1,3 +1,6 @@
+import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { getLastCreatedTaskWorkspace } from '@/state/lastCreatedTaskWorkspace';
+import { consumePendingLocalPluginEngineNavigation } from '@/state/newMakerDraft';
 import { matchPath } from 'react-router-dom';
 import { resolveAgentIslandVisibleSessionIdFromPath } from '@/lib/agentIslandVisibleSessionRoute';
 import { sessionsStore } from '@/lib/sessionsStore';
@@ -41,8 +44,22 @@ function resolveCurrentTaskDevice(pathname: string): string | null | undefined {
   return undefined;
 }
 
-/** Capture the current task's computer at the new-task action, before leaving its route. */
+/** Prefer the last creation. Until one is recorded, inherit the current task's computer. */
 export function makeGenericNewMakerRouteState(pathname: string): NewMakerRouteState {
+  if (consumePendingLocalPluginEngineNavigation()) {
+    const state = makeDialogueNewMakerRouteState(null);
+    return {
+      ...state,
+      workspacePrompt: 'generic',
+      dialogueTargetRequest: {
+        ...state.dialogueTargetRequest,
+        preserveWorkspaceIfSameDevice: true,
+      },
+    };
+  }
+  if (getLastCreatedTaskWorkspace(getDataOwnerGeneration().dataOwnerId)) {
+    return { workspacePrompt: 'generic', restoreLastCreatedWorkspace: true };
+  }
   const deviceId = resolveCurrentTaskDevice(pathname);
   if (deviceId === undefined) return { workspacePrompt: 'generic' };
   const state = makeDialogueNewMakerRouteState(

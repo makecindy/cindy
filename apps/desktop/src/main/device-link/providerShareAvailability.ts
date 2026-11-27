@@ -3,19 +3,21 @@ export { disableShareAvailability } from './providerShareAvailabilityTransport.j
 import { isCrossRegionShare, crossRegionAvailabilityRequest } from './providerShareCrossRegion.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { getProviderGroupDirectory } from '../provider-group/runtime.js';
-import { findReceivedShare } from './providerShareGuest.js';
+import { findReceivedShare, providerShareAccessEpoch } from './providerShareGuest.js';
 import { knownStandbyGuests, reconcileStandbyGuest } from './providerShareAvailabilityGuests.js';
 import { withAvailabilityPolicyLock, rememberAvailabilityShare } from './providerShareAvailabilityPolicy.js';
 import { consistentShareAvailabilityModels, type ShareAvailabilityModel as Model } from './providerShareAvailabilityModels.js';
 /** Offline-owner admission. This contains public identities and grants, never provider credentials. */
-import { parseProviderSharePeer, ProviderShareScopeChangedError, type ProviderShareOwned } from '@cindy/device-link';
-import { remoteInvocationModels, type AgentKind, type CatalogModel, type ProviderView } from '@cindy/model-providers';
+import { createPeerTransferCooldown, parseProviderSharePeer, ProviderShareScopeChangedError, type ProviderShareOwned } from '@cindy/device-link';
+import { remoteInvocationModels, supportsSubscriptionFastPolicy, type AgentKind, type CatalogModel, type ProviderView } from '@cindy/model-providers';
 import { getDeviceId } from '../authManager.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { captureProviderManagementScope } from '../provider-group/managementScope.js';
+import { activeOwnerScopeKey } from '../appSessionState.js';
 import { readProviderGroup } from '../provider-group/store.js';
 import { groupFastPolicyStore } from '../provider-group/fastPolicyStore.js';
 import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider-access-store.js';
+import { pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
 import { getProviderShareUsageStore } from './providerShareUsageStore.js';
 import { remoteModelAccess } from './remoteModelAccess.js';
 import { readDeviceLinkSettings } from './settings-store.desktop.js';
@@ -42,7 +44,7 @@ export function publishShareAvailability(shares: readonly ProviderShareOwned[]):
 async function publishUnlocked(shares: readonly ProviderShareOwned[]): Promise<void> {
   const assertCurrent = captureProviderManagementScope();
   for (const share of shares) {
-    if (share.hostDeviceId !== getDeviceId()) continue;
+    if (share.hostDeviceId !== getDeviceId() || pluginEngineKeyFromProviderId(share.providerId)) continue;
     const current = await shareAvailabilityRequest<{ revision: number; executors: Executor[] }>(share.shareId, 'policy');
     assertCurrent();
     const group = readProviderGroup(share.providerId);
@@ -81,6 +83,19 @@ async function publishUnlocked(shares: readonly ProviderShareOwned[]): Promise<v
         }
         if (models.length) policy.executors.push({ deviceId: member.agentDeviceId, providerId: member.providerId, models, limit: member.limit });
       }
+      const fast = groupFastPolicyStore.outgoing()[share.providerId];
+      policy.fastRevision = fast?.revision ?? 0;
+      policy.allowFast = fast?.allowFast === true && group.allowFast !== false;
+      // Describe the same effective restriction sent to executors, including
+      // offline registrations. Keep the source catalogs intact so allowing Fast
+      // again cannot hide genuine per-executor capability differences.
+      if (supportsSubscriptionFastPolicy(source) && !policy.allowFast) {
+        policy.executors = policy.executors.map(executor => ({ ...executor,
+          models: executor.models.map(model => ({ ...model,
+            metadata: { ...model.metadata, supportsFastMode: false, supportsUltrafastMode: false },
+          })),
+        }));
+      }
       policy.executors = consistentShareAvailabilityModels(policy.executors);
       const ids = [...new Set(policy.executors.flatMap(row => row.models.map(model => model.id)))];
       policy.members = share.members.filter(member => member.status === 'active'
@@ -89,9 +104,6 @@ async function publishUnlocked(shares: readonly ProviderShareOwned[]): Promise<v
         memberId: member.memberId, joinedAt: Date.parse(member.joinedAt),
         models: ids.filter(id => offered.has(id) && remoteModelAccess.allowsDelegatedExecution(share.providerId, id, member.memberId)),
       }));
-      const fast = groupFastPolicyStore.outgoing()[share.providerId];
-      policy.fastRevision = fast?.revision ?? 0;
-      policy.allowFast = fast?.allowFast === true && group.allowFast !== false;
     }
     // CAS prevents a slow catalog read from overwriting a later published revocation.
     policy.revision = current.revision;
@@ -110,7 +122,40 @@ export async function allocateShareAvailability(shareId: string, sessionId: stri
   return { deviceId: row.executorDeviceId, generation: row.generation, leaseDurationMs: Math.min(30 * 60_000, row.expiresAt - Date.now()) };
 }
 
-export async function readShareAvailabilityCatalog(shareId: string): Promise<{ providers: ProviderView[]; providerOrder: string[]; modelVisibilityOverrides: Record<string, never> }> {
+type AvailabilityCatalog = { providers: ProviderView[]; providerOrder: string[]; modelVisibilityOverrides: Record<string, never> };
+const catalogReads = new Map<string, Promise<AvailabilityCatalog>>();
+
+/** Provider and capability reads in one refresh share only the in-flight download, never a cached grant. */
+export async function readShareAvailabilityCatalog(shareId: string): Promise<AvailabilityCatalog> {
+  const assertCurrent = captureProviderManagementScope();
+  const owner = providerShareOwnerKey();
+  const endpoint = getClientEndpoint('deviceLinkApiBaseUrl');
+  const epoch = providerShareAccessEpoch(shareId);
+  const verify = () => {
+    assertCurrent();
+    if (providerShareOwnerKey() !== owner || getClientEndpoint('deviceLinkApiBaseUrl') !== endpoint
+      || providerShareAccessEpoch(shareId) !== epoch) throw new ProviderShareScopeChangedError();
+  };
+  verify();
+  const key = JSON.stringify([owner, endpoint, shareId, epoch]);
+  let pending = catalogReads.get(key);
+  if (!pending) {
+    pending = readCatalog(shareId).finally(() => {
+      if (catalogReads.get(key) === pending) catalogReads.delete(key);
+    });
+    catalogReads.set(key, pending);
+  }
+  try {
+    const result = await pending;
+    verify();
+    return result;
+  } catch (error) {
+    verify();
+    throw error;
+  }
+}
+
+async function readCatalog(shareId: string): Promise<AvailabilityCatalog> {
   const value = await shareAvailabilityRequest<{ providerId: string; providerLabel: string; models: Model[] }>(shareId, 'catalog', {}, true);
   const models: ProviderView['models'] = {};
   for (const row of value.models) {
@@ -123,18 +168,21 @@ export async function readShareAvailabilityCatalog(shareId: string): Promise<{ p
 }
 
 const preparations = new Map<string, Promise<void>>();
+// Failure pacing only: bounded, in-memory, and never an execution permission.
+const missingStandbyProbes = createPeerTransferCooldown(() => Date.now());
+function standbyProbeKey(controller: string): string {
+  return JSON.stringify([activeOwnerScopeKey(), providerShareOwnerKey(), getClientEndpoint('deviceLinkApiBaseUrl'), controller]);
+}
 /** Called by the executor before admitting the guest. Server response, not guest input, supplies every grant field. */
 export async function prepareShareAvailability(controller: string): Promise<void> {
   const peer = parseProviderSharePeer(controller);
   if (peer?.role !== 'guest') return;
   const assertCurrent = captureProviderManagementScope();
-  const owner = providerShareOwnerKey();
-  const endpoint = getClientEndpoint('deviceLinkApiBaseUrl');
+  const key = standbyProbeKey(controller);
   const verify = () => {
     assertCurrent();
-    if (providerShareOwnerKey() !== owner || getClientEndpoint('deviceLinkApiBaseUrl') !== endpoint) throw new ProviderShareScopeChangedError();
+    if (standbyProbeKey(controller) !== key) throw new ProviderShareScopeChangedError();
   };
-  const key = JSON.stringify([owner, endpoint, controller]);
   const existing = preparations.get(key);
   if (existing) return existing;
   const pending = (async () => {
@@ -176,6 +224,7 @@ export async function prepareShareAvailability(controller: string): Promise<void
       }, true);
       verify();
     }
+    missingStandbyProbes.success(key);
   })();
   preparations.set(key, pending);
   try { await pending; } finally { if (preparations.get(key) === pending) preparations.delete(key); }
@@ -219,7 +268,21 @@ export async function beginShareAvailabilityTurn(controller: string, sessionId: 
 }
 
 export async function refreshStandbyGuests(): Promise<void> {
+  const assertCurrent = captureProviderManagementScope();
   for (const controller of knownStandbyGuests()) {
-    try { await prepareShareAvailability(controller); } catch { /* A failed read never renews a lease. */ }
+    assertCurrent();
+    const key = standbyProbeKey(controller);
+    // Live leases keep their existing renewal/revocation checks. A missing
+    // policy without a lease needs only a paced recovery probe, not every event.
+    const live = delegatedProviderShareLeases().some(item => item.peer === controller
+      && item.lease.availability);
+    if (!live && missingStandbyProbes.remaining(key)) continue;
+    try { await prepareShareAvailability(controller); }
+    catch (error) {
+      assertCurrent();
+      if (standbyProbeKey(controller) !== key) throw new ProviderShareScopeChangedError();
+      if ((error as { code?: unknown })?.code === 'NOT_FOUND') missingStandbyProbes.fail(key);
+      // A failed read never renews a lease or removes membership history.
+    }
   }
 }

@@ -1,5 +1,12 @@
 # 伙伴专属能力台账：伙伴的工作方式属于伙伴
 
+> **读取时机**：新增或修改只对伙伴生效的工具、提示词规则、回执、例行任务或定时工作等专属机制之前
+> **适用路径**：`packages/lizi-mcps/src/xdt-helper/{bot_,teammate_,create_teammate,list_teammates}*`、
+> `apps/desktop/src/main/maker-ipc/**/{botSystemPrompt,teammateGuide,botProjectTemplate,botTask,botRoutineAutomations,botMemoryService}*`、
+> `packages/maker-core/src/agents/**/{bot-,teammate-}*`、
+> `apps/desktop/src/main/maker-host/**/{botMcpCatalog,botToolsetAvailability}*`、
+> `apps/desktop/src/main/botTaskReplyResults.ts`
+
 > 新增或修改只对伙伴生效的工具、提示词、回执、例行任务或其它机制前先读本文。
 > 本文是开发引导和讨论底稿，**不是审批门**：新想法照常可以做，先按第 3 节想清楚放在哪一层。
 > 现行行为仍以 [伙伴运行时](cindy-bots-runtime.md) 等专题正文为准；与本方向冲突的条款见第 5 节，裁决前不改行为。
@@ -62,7 +69,7 @@
 | 待办 | `list/update_teammate_todo`、`preflight/record_teammate_todo_event` | 无 | 可升级为项目级待办（通用能力），优先级低。**V2：已移除**待办工具、每天查待办和近况里的待办；未完成项在升级时写进项目的 `CARRYOVER.md` |
 | 提示词与工具说明 | `botSystemPrompt.ts`、`teammateGuide.ts`、helper 工具说明里的「只开一次」「同一任务跟到底」「不必重新发起」「只在用户追问时查」 | 普通任务无此类引导 | **简化**：工具说明只讲能做什么，工作方式进默认模板。**V2：**伙伴的工作方式写在项目 `AGENTS.md`（`CLAUDE.md` 指向 `@AGENTS.md`），伙伴可自己改，Git 记版本 |
 | 转话格式 | 2026-11-05 已改：正文是 Agent 原文，代办轮的转交带用户授权记在回执里（[消息来源](message-source.md)「跨任务委派：代办轮的转交带授权，正文是原文」） | — | 措辞交给伙伴规则；旧格式的接收、显示与跨电脑回退保留（[协议兼容](../dev-rules/protocol-compatibility.md)） |
-| 身份 | `create_teammate`、`update_teammate_profile`、`get_teammate_state`、`get/move_teammate_home`、`find/set_teammate_capability` | — | **保留**（对外身份层）；能力配置随伙伴即项目变成项目配置 |
+| 身份 | `create_teammate`、`update_teammate_profile`、`get_teammate_state`、`get/move_teammate_home`、`find/set_teammate_capability`、`configure_teammate_voice`、`configure_teammate_imessage_group`、`restore_teammate_standard_skills`、`remove_teammate_personal_skill` | — | **保留**（对外身份层）；能力配置随伙伴即项目变成项目配置 |
 | 伙伴间消息 | `send_to_agent`、`check_agent_message`、`send_to_user`、`list_agents` | — | **保留**：伙伴有地址，项目没有；上限不变。**V2：**`send_to_agent` / `check_agent_message` 已移除；`list_agents` 返回各伙伴主对话的 `session_id`（另一台电脑上为 `deviceId::sessionId`），联系伙伴用普通 `send_to_session`；群专线的 `send_to_user` 保留 |
 
 结构上做不到、需要补的通用能力（不是伙伴专属）：
@@ -99,5 +106,5 @@ AGENTS.md、记忆和技能；关于被管项目的事实写进那个项目；�
 - **合并专属工具前先补齐通用能力**，旧工具名保留一段时间并映射到新工具，避免老伙伴规则里的调用失败；
   伙伴的定时任务仍只在主力电脑运行；两套确认语义（授予常驻指令、新建完全访问 Agent）合并时都要保留。
 
-待核实：插件事件源能否直接接到普通定时任务（V2 下插件 `routineEvents` 照常解析但不再触发）。
+插件事件源接到普通自动化：2026-11-23 实现，插件 `routineEvents` 重新叫醒用户选定的自动化，见 [插件事件触发](plugin-event-triggers.md)。
 2026-11-09：宿主不再替任务回传结果（`notify_when_done`、`report_task_delivery` 与群结果代发已删除），回传由派活方在消息里约定。

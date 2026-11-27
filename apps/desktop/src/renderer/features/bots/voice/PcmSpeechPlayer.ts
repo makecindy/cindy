@@ -20,6 +20,7 @@ export class Pcm16Decoder {
 }
 
 export interface SpeechPlayer {
+  playedMilliseconds?(): number;
   play(
     read: () => Promise<{ pcm: ArrayBuffer; done: boolean }>,
     audio: number | EncodedSpeechAudio,
@@ -40,6 +41,11 @@ export class PcmSpeechPlayer implements SpeechPlayer {
   private paused = false;
   private contextTransition: Promise<void>;
   private resumeWaiters = new Set<() => void>();
+  private playedSegments: { at: number; duration: number }[] = [];
+
+  playedMilliseconds(): number {
+    return Math.floor(this.playedSegments.reduce((sum, s) => sum + Math.max(0, Math.min(s.duration, this.context.currentTime - s.at)), 0) * 1000);
+  }
 
   constructor(private readonly onLevel: (level: number) => void) {
     // Construct/resume in the explicit Start gesture, before any network await.
@@ -119,6 +125,7 @@ export class PcmSpeechPlayer implements SpeechPlayer {
         );
         this.timers.add(timer);
         source.start(nextAt);
+        this.playedSegments.push({ at: nextAt, duration: part.length / sampleRate });
         if (!started) {
           started = true;
           onStarted?.();
@@ -186,6 +193,7 @@ export class PcmSpeechPlayer implements SpeechPlayer {
   }
 
   cancel(): void {
+    this.playedSegments = [];
     ++this.generation;
     this.wakePlayback();
     for (const timer of this.timers) clearTimeout(timer);

@@ -1,3 +1,4 @@
+import { holdError } from './agent/profile-hold.ts';
 /**
  * Chat endpoint: one prompt in, the repo's own agent events out as SSE.
  *
@@ -72,7 +73,8 @@ export function createChatHandler(deps) {
     const sessionId = payload.sessionId ?? randomUUID();
     const clientId = payload.clientId ?? randomUUID();
     let unsubscribe = () => {};
-    const cleanup = () => { unsubscribe(); unsubscribe = () => {}; };
+    let offBoundaryStop = () => {};
+    const cleanup = () => { unsubscribe(); unsubscribe = () => {}; offBoundaryStop(); offBoundaryStop = () => {}; };
     response.once('close', cleanup);
     const write = event => {
       if (!response.destroyed && !response.writableEnded) response.write(`data: ${JSON.stringify(event)}\n\n`);
@@ -83,6 +85,13 @@ export function createChatHandler(deps) {
     };
     try {
       const stored = await deps.readSession(sessionId);
+      // /chat answers outside the service gate. A task it creates is a row in the database a desktop shares,
+      // so a held profile refuses it here, synchronously before the create call, with the answer the queue
+      // gives input while held; input to an existing task is refused by the queue as before.
+      if (!stored) {
+        const held = deps.profileHold?.();
+        if (held) throw holdError(held);
+      }
       if (!stored) await deps.createSession({ id: sessionId,
         ...(payload.workDir ? { workingDir: payload.workDir, workspaceKind: 'project' } : { workspaceKind: 'dialogue' }),
         model: payload.model ?? deps.defaultModel,
@@ -94,12 +103,23 @@ export function createChatHandler(deps) {
         'cache-control': 'no-store', connection: 'keep-alive',
       });
       write({ type: 'session', sessionId, clientId });
+      // An owner boundary (logout, session invalidation, shutdown; agent/owner-boundary.ts) stops this
+      // input's turn as an interruption and the executor publishes no receipt for it: the stream ends here
+      // with the receipt a stopped turn gets (turn-executor.mjs, an abort without a terminal event).
+      offBoundaryStop = deps.onBoundaryStop?.(() => {
+        write({ type: 'input_receipt', sessionId, inputClientId: clientId, clientId, status: 'interrupted' });
+        end();
+      }) ?? (() => {});
+      // Once this input's terminal error is taken over by an automatic resume, the stream follows the
+      // resume's turns (their events name this input as autoResumeOf) and ends with the resume.
+      let followingResume = false;
       unsubscribe = deps.events.subscribe(event => {
         if (event.type === 'auth_changed' && event.canEnterApp === false) { end(); return; }
         if (event.sessionId !== sessionId) return;
         // Queue projections and questions remain task-wide; model events must
         // belong to this exact input, not the turn ahead of it in the queue.
-        if (event.inputClientId && event.inputClientId !== clientId) return;
+        const own = event.inputClientId === clientId || (followingResume && event.autoResumeOf === clientId);
+        if (event.inputClientId && !own) return;
         write(event);
         // Dispatch can fail after admission (session start, pre-send preparation).
         // The queue then keeps this input as the recoverable head and publishes
@@ -111,14 +131,23 @@ export function createChatHandler(deps) {
           end();
           return;
         }
-        if (event.type === 'input_receipt' && event.inputClientId === clientId
-          && event.status === 'interrupted') {
+        // An interrupted input, or a silent-stop turn that settled without its continuation (recorded,
+        // agent/turn-executor.mjs endSilentStopTurn), ends the stream; so do those of a resume it follows.
+        if (event.type === 'input_receipt' && own
+          && (event.status === 'interrupted' || event.status === 'recorded')) {
           end();
           return;
         }
-        if (event.inputClientId === clientId && event.turnScope !== 'background'
+        if (own && event.turnScope !== 'background'
           && !isTurnContinuationBoundaryEvent(event)
-          && (event.type === 'done' || isTerminalTurnErrorEvent(event))) end();
+          && (event.type === 'done' || isTerminalTurnErrorEvent(event))) {
+          // The resume answers this input, or gives up with an interrupted receipt (input-queue.mjs).
+          if (event.type === 'error' && event.autoResumePending) { followingResume = true; return; }
+          // A silent stop is decided later (agent/silent-stop.ts): the continuation, its banner or the
+          // recorded receipt ends the stream.
+          if (event.type === 'done' && event.silentStopPending) return;
+          end();
+        }
       });
       const projection = await deps.enqueue(sessionId, { clientId, text: payload.prompt });
       write({ type: 'input_projection', sessionId, projection });

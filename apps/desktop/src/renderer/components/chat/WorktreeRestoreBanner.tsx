@@ -34,7 +34,7 @@ import { Button } from '@/components/ui/button';
  * 颜色走主题 token(规则 16):error 语义豁免色组(工作区缺失属破坏性状态提示)。
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { FolderX, RefreshCw } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
@@ -75,10 +75,14 @@ function restoreFailureKey(reason: RestoreFailureReason | undefined): string {
 
 export function WorktreeRestoreBanner({
   sessionId,
+  deviceId,
+  online,
   className,
   style,
 }: {
   sessionId: string;
+  deviceId?: string | null;
+  online: boolean;
   className?: string;
   style?: React.CSSProperties;
 }) {
@@ -90,6 +94,10 @@ export function WorktreeRestoreBanner({
   const [worktreePath, setWorktreePath] = useState('');
   /** 本组件给哪个会话打过红点 —— 清点只清自己打的,不误伤 live error 等其它来源。 */
   const markedSessionRef = useRef<string | null>(null);
+  const restoreGeneration = useRef(0);
+  useLayoutEffect(() => () => {
+    restoreGeneration.current += 1;
+  }, [deviceId, online, sessionId]);
 
   /**
    * 处置完成:清掉本组件打的红点(没打过则 no-op),然后立刻重算 pending-alerts。
@@ -112,14 +120,13 @@ export function WorktreeRestoreBanner({
   useEffect(() => {
     let cancelled = false;
     setPhase('hidden');
-    if (!sessionId) return;
+    if (!sessionId || !online) return;
     void (async () => {
       try {
-        const status = (await window.electronAPI.worktreeRestoreStatus(sessionId)) as {
-          state?: string;
-          hasSnapshot?: boolean;
-          worktreePath?: string;
-        };
+        const api = window.electronAPI;
+        const status = deviceId
+          ? await api.deviceLink.invoke(deviceId, 'worktree:restore-status', [sessionId]) as Awaited<ReturnType<typeof api.worktreeRestoreStatus>>
+          : await api.worktreeRestoreStatus(sessionId);
         if (cancelled) return;
         let nextVariant: BannerVariant;
         if (status?.state === 'restorable') {
@@ -167,14 +174,19 @@ export function WorktreeRestoreBanner({
         void refreshPendingAlerts();
       }
     };
-  }, [sessionId]);
+  }, [deviceId, online, sessionId]);
 
   const handleRestore = useCallback(async () => {
     // 捕获发起时的会话:恢复是异步的,期间用户可能切走,组件被复用到别的会话。
     const target = sessionId;
+    const generation = restoreGeneration.current;
     setPhase('restoring');
     try {
-      const result = await window.electronAPI.worktreeRestoreForSession(target);
+      const api = window.electronAPI;
+      const result = deviceId
+        ? await api.deviceLink.invoke(deviceId, 'worktree:restore-for-session', [target]) as Awaited<ReturnType<typeof api.worktreeRestoreForSession>>
+        : await api.worktreeRestoreForSession(target);
+      if (generation !== restoreGeneration.current) return;
       if (result.ok) {
         if (result.snapshotApplied === false) {
           // 目录已就位但快照 apply 失败(冲突/锁),main 侧保留了快照——
@@ -189,7 +201,7 @@ export function WorktreeRestoreBanner({
           clearOwnAttentionFor(target);
           clearWorktreeRestoreBannerDismissal(target);
         }
-        void refreshWorktreeForSession(target);
+        if (!deviceId) void refreshWorktreeForSession(target);
       } else {
         toast.error(
           t('chat.worktreeRestoreBanner.failed', {
@@ -199,6 +211,7 @@ export function WorktreeRestoreBanner({
         setPhase('restorable');
       }
     } catch {
+      if (generation !== restoreGeneration.current) return;
       toast.error(
         t('chat.worktreeRestoreBanner.failed', {
           message: t('chat.worktreeRestoreBanner.failures.unknown'),
@@ -206,9 +219,9 @@ export function WorktreeRestoreBanner({
       );
       setPhase('restorable');
     }
-  }, [clearOwnAttentionFor, refreshWorktreeForSession, sessionId, t]);
+  }, [clearOwnAttentionFor, deviceId, refreshWorktreeForSession, sessionId, t]);
 
-  if (phase === 'hidden') return null;
+  if (!online || phase === 'hidden') return null;
   const restoring = phase === 'restoring';
   const pending = variant === 'pending';
   const name = worktreeNameFromPath(worktreePath);

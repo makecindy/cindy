@@ -1,0 +1,11 @@
+caught    窗口互通：新分片不看对端的窗口  upgraded_senders_stay_inside_a_legacy_window, result:
+caught    窗口互通：收到新流不马上放宽额度  upgraded_peers_use_their_large_windows, interactive_messages_stay_fast_beside_a_full_file,
+caught    窗口互通：对端说出大窗口也不放开  bulk_data_marked_interactive_is_still_paced, upgraded_peers_use_their_large_windows, files
+caught    窗口互通：拥塞窗口上限不跟着对端改  upgraded_senders_stay_inside_a_legacy_window, result:
+caught    窗口互通：对端是旧版也不压拥塞窗口上限  upgraded_senders_stay_inside_a_legacy_window, result:
+caught    窗口互通：新流的额度从自己的窗口起算  upgraded_senders_stay_inside_a_legacy_window, result:
+caught    窗口互通：收到新流时当作已经给过整个窗口  legacy_senders_get_credit_from_upgraded_receivers_at_once, upgraded_peers_use_their_large_
+caught    窗口互通：开头按自己的窗口算  legacy_senders_get_credit_from_upgraded_receivers_at_once, upgraded_senders_stay_inside_a_
+caught    不受拥塞窗口限制  timeouts_do_not_resend_the_whole_window, outages_cost_little_traffic_and_recover_quickly,
+caught    流：不给交互流留窗口  a_full_window_keeps_room_for_interactive_messages, result:
+caught    流：交互消息也要排节奏  small_interactive_messages_skip_the_pacing_queue, interactive_messages_stay_fast_beside_a_

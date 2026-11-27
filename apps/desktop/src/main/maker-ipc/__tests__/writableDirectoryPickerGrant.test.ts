@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { realpathSync, unlinkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -177,4 +177,31 @@ describe('Main-owned writable directory picker grants', () => {
     if (!present) mkdirSync(output);
     await expect(consume()).rejects.toMatchObject({ code: 'WRITABLE_DIRECTORY_AUTHORIZATION_REQUIRED' });
   });
+});
+
+// Unit: a project form shows the physical target, but the native picker still remembers
+// which folder was selected and refuses consent if that link moves before the save.
+it('pins a project selection to the displayed target and the original picker choice', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'cindy-project-picker-'));
+  try {
+    const link = join(root, 'selection');
+    const a = join(root, 'art-a'), b = join(root, 'art-b');
+    mkdirSync(a);
+    mkdirSync(b);
+    const kind = process.platform === 'win32' ? 'junction' : 'dir';
+    symlinkSync(a, link, kind);
+    const input = { senderId: 5, scopeId: 'form' };
+    const target = await issueWritableDirectoryPickerGrant({ ...input, directory: link, useCanonicalPath: true });
+    expect(target).toBe(realpathSync(a));
+    const save = { ...input, requestedDirs: [target], previousDirs: [], projectPaths: [target] };
+    await consumeWritableDirectoryPickerGrants({ ...save, checkOnly: true });
+    unlinkSync(link);
+    symlinkSync(b, link, kind);
+    await expect(consumeWritableDirectoryPickerGrants(save)).rejects.toThrow('changed');
+    await issueWritableDirectoryPickerGrant({ ...input, directory: target });
+    await expect(consumeWritableDirectoryPickerGrants(save)).rejects.toThrow('changed');
+  } finally {
+    clearWritableDirectoryPickerGrantsForTesting();
+    rmSync(root, { recursive: true, force: true });
+  }
 });

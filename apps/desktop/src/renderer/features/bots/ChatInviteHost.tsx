@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ChatInviteDialog } from './ChatInviteDialog';
+import { useLegalTermsGateBlocking } from '@/components/auth/legalTermsGateState';
 
 // An invitation is a navigation intent, not account data. Keep only its target
 // in memory through login/owner remounts; every new dialog re-previews as the
@@ -39,6 +40,9 @@ function dismiss(token: string): void {
 export function ChatInviteHost() {
   const [token] = useSyncExternalStore(subscribe, getSnapshot);
   const navigate = useNavigate();
+  // 协议更新确认挡着时邀请留在队列里,确认后再弹(见 legalTermsGateState)。
+  const legalTermsGateBlocking = useLegalTermsGateBlocking();
+  if (legalTermsGateBlocking) return null;
   if (token === MALFORMED) return <ChatInviteDialog key={token} malformedLink onClose={() => dismiss(token)} />;
   return token ? <ChatInviteDialog key={token} initialLink={`cindy://chat-invite/${token}`}
     onClose={() => dismiss(token)}

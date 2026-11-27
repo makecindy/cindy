@@ -105,16 +105,25 @@ export function createGuestSupportReader(readCaps: SharedGroupStatusDeps['readCa
 export async function readSharedGroupStatus(deps: SharedGroupStatusDeps, providerId: string): Promise<ProviderShareGroupState[] | null> {
   const scope = deps.scope();
   const config = deps.readGroup(providerId);
-  if (!config) return null;
-  const view = await readWithin(() => scope.router.view(providerId));
-  if (!scope.isCurrent()) return null;
+  if (!config || !scope.isCurrent()) return null;
   const readSupport = sharedSupportReaders.get(scope.router) ?? createGuestSupportReader(async (member) => {
     if (!scope.isCurrent()) throw new Error('The account changed');
     return deps.readCaps(member);
   });
   sharedSupportReaders.set(scope.router, readSupport);
+  // Capture one configuration for the batch; a store identity check per member
+  // would amplify synchronous filesystem work on the main/remote-IPC path.
+  const views = scope.router.memberViews(providerId);
   const states = await Promise.all(config.members.map(async (member): Promise<ProviderShareGroupState> => {
     if (member.paused) return 'paused';
+    // Reuse the member-detail path so one slow directory/quota read or stale
+    // snapshot cannot erase the live answers from the other computers. The
+    // directory still coalesces device/catalog reads across accounts and refreshes.
+    const view = await readWithin(() => {
+      if (!scope.isCurrent()) throw new Error('The account changed');
+      return views.get(member.key)?.() ?? Promise.resolve(null);
+    });
+    if (!scope.isCurrent()) return 'unknown';
     const status = view?.members.find((item) => item.key === member.key);
     if (!status) return 'unknown';
     // O may answer now while its member view is only a bounded snapshot.
@@ -131,7 +140,7 @@ export async function readSharedGroupStatus(deps: SharedGroupStatusDeps, provide
       const support = await readSupport(member);
       if (support !== 'supported') return support;
     }
-    // 满载仍能接任务；只报粗略忙闲，绝不返回任务数和上限。
+    // 只报粗略忙闲，绝不返回任务数和上限；不承诺忙碌的电脑此刻能接新任务。
     return status.running > 0 || status.state === 'full' ? 'busy' : 'available';
   }));
   // 读取期间换账号或编辑组时丢弃快照，避免将旧组状态贴到新组序号上。

@@ -263,9 +263,11 @@ private final class PassthroughHostView: NSView {
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard let interactiveView else { return nil }
-        let localPoint = convert(point, to: interactiveView)
+        let localPoint = interactiveView.convert(point, from: superview)
         guard interactiveView.bounds.contains(localPoint) else { return nil }
-        return interactiveView.hitTest(localPoint)
+        // hitTest takes its receiver's parent coordinates, not its local coordinates.
+        let parentPoint = interactiveView.convert(localPoint, to: interactiveView.superview)
+        return interactiveView.hitTest(parentPoint)
     }
 }
 
@@ -1467,9 +1469,11 @@ private final class PermissionGuideApplicationDelegate: NSObject, NSApplicationD
     }
 }
 
+#if !COMPUTER_PERMISSION_GUIDE_TEST
 private let application = NSApplication.shared
 private let delegate = PermissionGuideApplicationDelegate()
 application.delegate = delegate
 application.setActivationPolicy(.accessory)
 application.finishLaunching()
 application.run()
+#endif

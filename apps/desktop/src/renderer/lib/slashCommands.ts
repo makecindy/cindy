@@ -18,6 +18,7 @@
 
 import type { UnifiedCommand, AgentKind } from '@cindy/maker-core';
 import { leadingSlashInvocation } from '@cindy/maker-shared';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import type { PiPackageCommandRuntimeStatus } from '@/../shared/piPackages';
 import { isCindyBuiltInSkillMetadata } from '@/../shared/cindyBuiltInSkills';
 import type { BuiltInSkillDraftIntent } from './composerDraftStore';
@@ -51,7 +52,11 @@ export function commandsForHelpCard(commands: readonly UnifiedCommand[]): HelpCa
   }));
 }
 
-export const PI_RUNTIME_SKILL_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000, 4_000] as const;
+export const PI_RUNTIME_SKILL_RETRY_DELAYS_MS = [
+  // Pi capture can take four 5s requests plus 4s, 10s and 20s backoff.
+  // Keep early cold starts responsive, then sample sparsely through the full chain.
+  100, 250, 500, 1_000, 2_000, 4_000, 8_000, 10_000, 10_000, 10_000, 10_000,
+] as const;
 
 export function isSlashCommandUnavailable(command: UnifiedCommand): boolean {
   return command.kind === 'agent-skill'
@@ -392,6 +397,9 @@ export function filterSlashCommands(
       // 插件指令同名时 name 带隐藏的 `/slug`,菜单只显示 label:按两者中更好的一个排序,
       // 输入显示名算精确匹配,输入完整限定指令也照常命中。
       const ranks = [rankOf(command.name)];
+      if (command.kind === 'agent-skill' && command.runtimeCommandName) {
+        ranks.push(rankOf(command.runtimeCommandName));
+      }
       if (command.kind === 'desktop' && command.label) ranks.push(rankOf(command.label));
       const matched = ranks.filter((r) => r >= 0);
       const rank = q ? (matched.length > 0 ? Math.min(...matched) : -1) : 0;
@@ -409,11 +417,15 @@ export function filterSlashCommands(
 }
 
 type SkillListResult = { success: boolean; skills?: unknown[] };
-const pendingSkillLists = new WeakMap<object, Map<string, Promise<SkillListResult>>>();
+interface PendingSkillList {
+  result: Promise<SkillListResult>;
+  queued: boolean;
+}
+const pendingSkillLists = new WeakMap<object, Map<string, PendingSkillList>>();
 
 /** Share only outstanding reads; edits and activation changes remain live. */
 function loadPendingSkills(
-  key: string | null,
+  key: string,
   forceReload: boolean,
   load: () => Promise<SkillListResult>,
 ): Promise<SkillListResult> {
@@ -423,16 +435,23 @@ function loadPendingSkills(
     pending = new Map();
     pendingSkillLists.set(owner, pending);
   }
-  if (key !== null && !forceReload) {
-    const existing = pending.get(key);
-    if (existing) return existing;
-  }
-  const request = load().catch(() => ({ success: false })).finally(() => {
-    // An older request must not evict an in-flight forced refresh.
-    if (key !== null && pending.get(key) === request) pending.delete(key);
-  });
-  if (key !== null) pending.set(key, request);
-  return request;
+  const existing = pending.get(key);
+  if (existing && (!forceReload || existing.queued)) return existing.result;
+  const generation = getDataOwnerGeneration();
+  const start = () => {
+    flight.queued = false;
+    return isDataOwnerGenerationCurrent(generation) ? load() : Promise.resolve({ success: false });
+  };
+  // Changes during a read need one fresh scan. Further notifications can join
+  // that scan until it starts, including when the preceding read fails.
+  const flight: PendingSkillList = {
+    queued: !!existing,
+    result: (existing ? existing.result.then(start) : load()).catch(() => ({ success: false })).finally(() => {
+      if (pending.get(key) === flight) pending.delete(key);
+    }),
+  };
+  pending.set(key, flight);
+  return flight.result;
 }
 
 /**
@@ -450,6 +469,17 @@ export async function loadAllCommands(
     contextReady?: boolean;
     forceReload?: boolean;
     skipAgentSkills?: boolean;
+    /**
+     * Leave out the built-in Harness's own commands. Plugin engines (docs/plans/acp-plugin-bridge.md)
+     * read `/…` themselves, so offering Claude Code / Codex / Pi commands there would be wrong.
+     */
+    skipAgentCommands?: boolean;
+    /**
+     * List the Skills the plugin engine on the listing computer expands (`maker:list-agent-skills` as
+     * `acp`, maker-core `acp/skill-invocation.ts`), listed and sent by their human name. Computers
+     * without that support return no Skills, as their engines would not expand them.
+     */
+    pluginEngineSkills?: boolean;
     sessionId?: string;
     allowManagedPiPackagePreview?: boolean;
     onPiRuntimeStatus?: (status: PiPackageCommandRuntimeStatus) => void;
@@ -457,6 +487,7 @@ export async function loadAllCommands(
   deviceId?: string,
 ): Promise<UnifiedCommand[]> {
   if (opts?.contextReady === false) return [];
+  const skillAgentKind: AgentKind | 'acp' = opts?.pluginEngineSkills ? 'acp' : agentKind;
   const api = window.electronAPI.maker;
   // 用 unknown[] 收口三源的不同原生形状(隧道返 unknown、本地返各自命令/技能类型),
   // 末尾统一 `as UnifiedCommand[]`(与改造前同款收口)。
@@ -472,7 +503,7 @@ export async function loadAllCommands(
   const desktopP: Promise<CmdRes> = api.listDesktopCommands(
     deviceId ? { deviceId } : undefined,
   ).catch(() => ({ success: false }));
-  const builtinP: Promise<CmdRes> = (
+  const builtinP: Promise<CmdRes> = opts?.skipAgentCommands ? Promise.resolve({ success: true, commands: [] }) : (
     deviceId
       ? (window.electronAPI.deviceLink.invoke(deviceId, 'maker:list-agent-commands', [
           agentKind,
@@ -502,14 +533,14 @@ export async function loadAllCommands(
   };
   const skillP: Promise<SkillListResult> = shouldLoadSkills
     ? loadPendingSkills(
-        opts?.sessionId ? JSON.stringify([agentKind, deviceId || null, workingDir || null, opts.sessionId]) : null,
+        JSON.stringify([getDataOwnerGeneration(), skillAgentKind, deviceId || null, workingDir || null, opts?.sessionId ?? null]),
         opts?.forceReload === true,
         () => deviceId
           ? (window.electronAPI.deviceLink.invoke(deviceId, 'maker:list-agent-skills', [
-              agentKind,
+              skillAgentKind,
               skillParams,
             ]) as Promise<SkillListResult>)
-          : api.listAgentSkills(agentKind, skillParams),
+          : api.listAgentSkills(skillAgentKind, skillParams),
       )
     : Promise.resolve({ success: true, skills: [] });
 
@@ -566,6 +597,32 @@ export async function reconcilePiRuntimeCommandForDispatch(params: {
   }
 }
 
+export async function reconcilePiRuntimeCommandForSessionDispatch(
+  params: Parameters<typeof reconcilePiRuntimeCommandForDispatchWithRetry>[0] & { prepareMissing?: boolean; onCatalogUnavailable?: () => never },
+): Promise<{ command: UnifiedCommand | undefined; commands: UnifiedCommand[] }> {
+  // Refresh the preview first: a cold cache may not yet contain the project
+  // skill. Unknown text and ordinary Desktop commands must not start Pi just
+  // because the caller can now prepare a runtime.
+  const initial = await reconcilePiRuntimeCommandForDispatch(params);
+  if (params.agentKind !== 'pi' || !params.sessionId) return initial;
+  if (params.runtimeCatalogSettled?.()) {
+    if (initial.command && isSlashCommandUnavailable(initial.command)) params.onCatalogUnavailable?.();
+    return initial;
+  }
+  const needsRuntime = initial.command !== undefined && (
+    isSlashCommandUnavailable(initial.command)
+    || (initial.command.kind === 'desktop' && hasShadowedUnavailableSkill(initial.commands, params.commandName))
+  );
+  if (!needsRuntime && !(params.prepareMissing && !initial.command)) return initial;
+  const result = await reconcilePiRuntimeCommandForDispatchWithRetry({ ...params, commands: initial.commands });
+  if ((result.command && isSlashCommandUnavailable(result.command))
+    || (!params.runtimeCatalogSettled?.() && (!result.command
+      || (result.command.kind === 'desktop' && hasShadowedUnavailableSkill(result.commands, params.commandName))))) {
+    params.onCatalogUnavailable?.();
+  }
+  return result;
+}
+
 export async function reconcilePiRuntimeCommandForDispatchWithRetry(params: {
   agentKind: AgentKind;
   sessionId?: string;
@@ -575,6 +632,7 @@ export async function reconcilePiRuntimeCommandForDispatchWithRetry(params: {
   prepareRuntime?: () => Promise<void>;
   retryDelaysMs?: readonly number[];
   sleep?: (delayMs: number) => Promise<void>;
+  runtimeCatalogSettled?: () => boolean;
 }): Promise<{ command: UnifiedCommand | undefined; commands: UnifiedCommand[] }> {
   if (params.agentKind !== 'pi' || !params.sessionId) {
     return reconcilePiRuntimeCommandForDispatch(params);
@@ -608,7 +666,7 @@ export async function reconcilePiRuntimeCommandForDispatchWithRetry(params: {
           result.command.kind === 'desktop'
           && hasShadowedUnavailableSkill(result.commands, params.commandName)
         );
-    if (!shouldRetry) return result;
+    if (!shouldRetry || params.runtimeCatalogSettled?.()) return result;
     await sleep(delayMs);
     result = await reconcilePiRuntimeCommandForDispatch({
       ...params,

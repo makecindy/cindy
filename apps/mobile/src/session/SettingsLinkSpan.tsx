@@ -9,11 +9,17 @@ import { navigateRemoteSettings, type SettingsNavigationTarget } from '@cindy/ma
 export function SettingsLinkSpan({ target, label, style, SpanText = Text }: {
   target: SettingsNavigationTarget; label: string; style?: ComponentProps<typeof Text>['style']; SpanText?: typeof Text;
 }) {
+  const open = useOpenSettingsLink(target);
+  return <SpanText style={style} accessibilityRole="link" onPress={open}>{label}</SpanText>;
+}
+
+/** Uses the existing device lookup and guarded settings navigation. */
+export function useOpenSettingsLink(target: SettingsNavigationTarget): () => void {
   const { invoke, readDeviceList } = useDeviceLink();
   const push = useGuardedPush();
   const { t } = useTranslation();
   const busy = useRef(false);
-  return <SpanText style={style} accessibilityRole="link" onPress={() => {
+  return () => {
     if (busy.current) return;
     busy.current = true;
     void (async () => {
@@ -22,5 +28,5 @@ export function SettingsLinkSpan({ target, label, style, SpanText = Text }: {
       if (!device) throw new Error('SETTINGS_DEVICE_UNAVAILABLE');
       await navigateRemoteSettings(target, invoke, () => push({ pathname: '/devices/desktop/[deviceId]', params: { deviceId: target.deviceId, name: device.name } }));
     })().catch(() => Alert.alert(t('settings.navigation.unavailable'))).finally(() => { busy.current = false; });
-  }}>{label}</SpanText>;
+  };
 }

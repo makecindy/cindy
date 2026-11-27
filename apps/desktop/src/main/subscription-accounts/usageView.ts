@@ -11,6 +11,7 @@ export function subscriptionUsageView(input: {
   unavailable?: boolean;
   plan?: string;
   planTier?: string;
+  planDisplayName?: string;
   planType?: string;
   usage?: SubscriptionAccountUsage;
   updatedAt?: number;
@@ -55,7 +56,8 @@ export function subscriptionUsageView(input: {
   return {
     providerId: input.providerId, provider: input.provider, accountId: input.accountId,
     status: input.unavailable ? 'unavailable' : input.authenticated ? 'connected' : 'signed-out',
-    plan: { type: text(input.planType) ?? text(input.plan), tier: text(input.planTier) },
+    plan: { type: text(input.planType) ?? text(input.plan), tier: text(input.planTier),
+      ...(text(input.planDisplayName) ? { displayName: text(input.planDisplayName) } : {}) },
     windows, updatedAt: lastUpdated,
     usageStatus: !windows.length ? 'unavailable' : lastUpdated === null
       || windows.some(window => window.updatedAt === null || now - window.updatedAt >= SUBSCRIPTION_USAGE_TTL_MS

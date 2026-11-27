@@ -35,6 +35,7 @@ const bridge = vi.hoisted(() => ({
   onMessage: (_event: { nativeEvent: { data: string } }) => {},
   onContentProcessDidTerminate: () => {},
   onRenderProcessGone: () => {},
+  onTouchStart: () => {},
   state: 'active',
   listeners: new Set<(state: string) => void>(),
   mounts: 0,
@@ -66,7 +67,10 @@ vi.mock('react-native-webview', async () => {
   }) };
 });
 vi.mock('react-native-reanimated', () => ({
-  default: { View: ({ children }: { children: unknown }) => children },
+  default: { View: ({ children, onTouchStart }: { children: unknown; onTouchStart?: () => void }) => {
+    bridge.onTouchStart = onTouchStart ?? (() => {});
+    return children;
+  } },
   useAnimatedStyle: (factory: () => unknown) => factory(),
 }));
 vi.mock('expo-file-system', () => ({
@@ -97,7 +101,7 @@ function appState(state: string) {
   act(() => { bridge.state = state; bridge.listeners.forEach(listener => listener(state)); });
 }
 
-function mount(hidden = false, pasteHandlers: Pick<ComposerRichInputProps, 'onPasteImages' | 'onPasteImagesLoading'> = {}) {
+function mount(hidden = false, pasteHandlers: Pick<ComposerRichInputProps, 'onPasteImages' | 'onPasteImagesLoading'> = {}, editable = true) {
   const ref = createRef<ComposerRichInputHandle>();
   const onChangeDocument = vi.fn();
   const onPasteImagesLoadFailed = vi.fn();
@@ -119,7 +123,7 @@ function mount(hidden = false, pasteHandlers: Pick<ComposerRichInputProps, 'onPa
   root = createRoot(document.createElement('div'));
   let currentPasteHandlers = pasteHandlers;
   const renderDocument = (document: ComposerDocument) => act(() => root!.render(createElement(ComposerRichInput, {
-    ref, document, hidden, onChangeDocument, onPasteImagesLoadFailed, ...currentPasteHandlers,
+    ref, document, hidden, editable, onChangeDocument, onPasteImagesLoadFailed, ...currentPasteHandlers,
     accessibilityLabel: 'input', placeholder: '', height: 40, maxHeight: 264,
     theme: { background: '#fff', border: '#aaa', chip: '#ddd', focus: '#555', placeholder: '#777', text: '#111', textSecondary: '#333' },
   })));
@@ -149,6 +153,24 @@ it('reads the visible send snapshot and acknowledges it without replacing the ed
   expect(onChangeDocument).toHaveBeenLastCalledWith(snapshot);
   renderDocument(snapshot);
   expect(page.applyDocument).not.toHaveBeenCalled();
+});
+
+// Unit: Android can pause injected JavaScript between tapping Send and pressing Home.
+it('completes only the outstanding send with a fresh DOM read when the editor is hidden', async () => {
+  const { ref, page, send, onChangeDocument } = mount();
+  send({ type: 'ready' });
+  page.snapshot.mockImplementation(() => {});
+  const visible = textComposerDocument('last typed character');
+  const snapshot = { type: 'hidden-snapshot', capturedAt: Date.now(), documentId: page.id,
+    document: visible, pendingPaste: false };
+  send(snapshot);
+  const result = ref.current!.flushDocument!();
+  send({ ...snapshot, capturedAt: 0 });
+  expect(onChangeDocument).not.toHaveBeenCalled();
+  send({ ...snapshot, capturedAt: Date.now() });
+  await expect(result).resolves.toEqual(visible);
+  send(snapshot);
+  expect(onChangeDocument).toHaveBeenCalledTimes(1);
 });
 
 it.each(['replacement', 'termination', 'unmount', 'timeout'] as const)(
@@ -435,6 +457,40 @@ it('bounds repeated crashes until the next foreground transition', () => {
   expect(bridge.mounts).toBe(2);
   appState('background'); appState('active');
   expect(bridge.mounts).toBe(3);
+});
+
+it.each([['ios', 'touch'], ['ios', 'focus'], ['android', 'touch'], ['android', 'focus']] as const)('lets an explicit %s %s recover after the automatic crash budget is exhausted', (platform, action) => {
+  Platform.OS = platform;
+  const { ref, page, send } = mount();
+  send({ type: 'ready' });
+  const draft = textComposerDocument('draft kept across repeated crashes');
+  send({ type: 'change', documentId: page.id, document: draft });
+  act(() => bridge.onContentProcessDidTerminate());
+  send({ type: 'ready' });
+  act(() => bridge.onContentProcessDidTerminate());
+  expect(bridge.mounts).toBe(2);
+  expect(page.focus).not.toHaveBeenCalled();
+
+  act(() => action === 'touch' ? bridge.onTouchStart() : ref.current?.focus());
+  expect(bridge.mounts).toBe(3);
+  // More touches while the replacement loads must not restart it again.
+  act(() => { bridge.onTouchStart(); bridge.onTouchStart(); });
+  expect(bridge.mounts).toBe(3);
+  send({ type: 'ready' });
+  expect(page.document).toEqual(draft);
+  expect(page.focus).toHaveBeenCalledTimes(1);
+  expect(bridge.requestFocus).toHaveBeenCalledTimes(platform === 'android' ? 1 : 0);
+});
+
+it.each([[true, true], [false, false]])('does not recover on touch when hidden=%s and editable=%s', (hidden, editable) => {
+  const { page, send } = mount(hidden, {}, editable);
+  send({ type: 'ready' });
+  act(() => bridge.onContentProcessDidTerminate());
+  send({ type: 'ready' });
+  act(() => bridge.onContentProcessDidTerminate());
+  act(() => bridge.onTouchStart());
+  expect(bridge.mounts).toBe(2);
+  expect(page.focus).not.toHaveBeenCalled();
 });
 
 it('does not let an old pong or duplicate active event cancel the current probe', () => {

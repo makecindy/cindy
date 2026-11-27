@@ -299,6 +299,29 @@ describe('group list activity', () => {
     expect(request.mock.calls.every(([path]) => /\/(executions|plans)$/.test(path))).toBe(true);
   });
 
+  // Unit: direct mobile roster activity only marks a group as running when this account's own
+  // agent (owned companion or self-requested group Cindy) is working, never for peer agents.
+  it.each([
+    { label: 'peer-requested Cindy', execution: { status: 'running', bot_id: id(20), requester_id: id(12) }, expected: 'idle' },
+    { label: 'self-requested Cindy', execution: { status: 'running', bot_id: id(20), requester_id: id(11) }, expected: 'running' },
+    { label: 'peer companion', execution: { status: 'running', bot_id: id(22), requester_id: id(11) }, expected: 'idle' },
+    { label: 'own companion requested by peer', execution: { status: 'running', bot_id: id(21), requester_id: id(12) }, expected: 'running' },
+  ])('reports $expected roster activity for $label', async ({ execution, expected }) => {
+    const request = vi.fn().mockImplementation(async (path: string) => path.endsWith('/executions') ? [execution] : []);
+    const client = createChatServerClient(request);
+    const value: ChatSnapshot = {
+      ...snapshot(),
+      members: [
+        { id: id(11), kind: 'human', name: 'Self', state: 'joined', ownerActorId: id(11), ownerName: 'Self', avatar: null, role: 'owner' },
+        { id: id(12), kind: 'human', name: 'Peer', state: 'joined', ownerActorId: id(12), ownerName: 'Peer', avatar: null, role: 'member' },
+        { id: id(20), kind: 'bot', assistant: true, name: 'Cindy', state: 'joined', ownerActorId: '', ownerName: '', avatar: null, role: 'member' },
+        { id: id(21), kind: 'bot', name: 'MyBot', state: 'joined', ownerActorId: id(11), ownerName: 'Self', avatar: null, role: 'member' },
+        { id: id(22), kind: 'bot', name: 'PeerBot', state: 'joined', ownerActorId: id(12), ownerName: 'Peer', avatar: null, role: 'member' },
+      ],
+    };
+    expect(await client.rosterActivity(value.room.id, value, id(11))).toEqual({ phase: expected });
+  });
+
   it('places a newly created empty group and a group with a new topic ahead of an older main chat', () => {
     const old = chatRoomRow(room(1), { ...snapshot(), messages: [{ ...message(20), createdAt: '2026-10-10T12:00:00Z' }] });
     const fresh = chatRoomRow({ ...room(2), created_at: '2026-10-11T12:00:00Z' }, { ...snapshot(), messages: [] });
@@ -601,17 +624,31 @@ describe('direct Chat Server client', () => {
   });
   it('falls back only for a missing endpoint on an older server', async () => {
     const source = message(20);
-    const request = vi.fn().mockResolvedValueOnce(snapshot()).mockResolvedValueOnce([source]).mockResolvedValueOnce([])
-      .mockRejectedValueOnce(Object.assign(new Error('NOT_FOUND'), { status: 404 }))
-      .mockResolvedValueOnce([{ id: id(30), source_message_id: source.id, bot_id: id(10), epoch: 1, status: 'failed', failure_code: 'AUTH_REQUIRED' }]).mockResolvedValueOnce([]);
+    // Order: snapshot, executions (alongside the page), messages, failures, plans, then the fallback.
+    const request = vi.fn().mockResolvedValueOnce(snapshot()).mockResolvedValueOnce([]).mockResolvedValueOnce([source])
+      .mockRejectedValueOnce(Object.assign(new Error('NOT_FOUND'), { status: 404 })).mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ id: id(30), source_message_id: source.id, bot_id: id(10), epoch: 1, status: 'failed', failure_code: 'AUTH_REQUIRED' }]);
     const page = await createChatServerClient(request).load(id(1));
-    expect(request.mock.calls.at(-2)?.[0]).toBe(`/conversations/${id(1)}/executions`);
+    expect(request.mock.calls.at(-1)?.[0]).toBe(`/conversations/${id(1)}/executions`);
     expect(chatGroupView(page, id(11)).messages[1].runtimeFailureCode).toBe('AUTH_REQUIRED');
   });
+  // Unit, group-open latency: executions, failure notices and plans were three round trips in a row.
+  it('requests executions, failure notices and plans together once the page is known', async () => {
+    const pending: Array<{ path: string; resolve(value: unknown): void }> = [];
+    const request = vi.fn((path: string) => path.endsWith('/snapshot') ? Promise.resolve(snapshot())
+      : path.includes('/messages?') ? Promise.resolve([message(20)])
+      : new Promise(resolve => { pending.push({ path: path.replace(/\?.*/, ''), resolve }); }));
+    const loading = createChatServerClient(request as never).load(id(1));
+    await vi.waitFor(() => expect(pending).toHaveLength(3), { interval: 1 });
+    // All three are in flight before any of them has answered.
+    expect(pending.map(read => read.path.split('/').at(-1)).sort()).toEqual(['execution-failures', 'executions', 'plans']);
+    for (const read of pending) read.resolve([]);
+    expect(await loading).toMatchObject({ messages: [{ id: message(20).id }], executions: [], failures: [], plans: [] });
+  });
   it('surfaces execution read denial or malformed success through the existing load error path', async () => {
-    const request = vi.fn().mockResolvedValueOnce(snapshot()).mockResolvedValueOnce([message(20)])
-      .mockRejectedValueOnce(Object.assign(new Error('NOT_MEMBER'), { status: 403 }))
-      .mockResolvedValueOnce(snapshot()).mockResolvedValueOnce([message(20)]).mockResolvedValueOnce({});
+    const request = vi.fn().mockResolvedValueOnce(snapshot())
+      .mockRejectedValueOnce(Object.assign(new Error('NOT_MEMBER'), { status: 403 })).mockResolvedValueOnce([message(20)]).mockResolvedValueOnce([]).mockResolvedValueOnce([])
+      .mockResolvedValueOnce(snapshot()).mockResolvedValueOnce([]).mockResolvedValueOnce([message(20)]).mockResolvedValueOnce({}).mockResolvedValueOnce([]);
     const client = createChatServerClient(request);
     await expect(client.load(id(1))).rejects.toMatchObject({ status: 403 });
     await expect(client.load(id(1))).rejects.toThrow('INVALID_CHAT_EXECUTIONS');
@@ -641,7 +678,7 @@ describe('direct Chat Server client', () => {
   });
   it('opens and paginates main history, preserving exact sequence cursors and author identity', async () => {
     const messages = Array.from({ length: 100 }, (_, n) => message(200 - n));
-    const request = vi.fn().mockResolvedValueOnce(snapshot()).mockResolvedValueOnce(messages).mockResolvedValueOnce([]).mockResolvedValueOnce([]).mockResolvedValueOnce([])
+    const request = vi.fn().mockResolvedValueOnce(snapshot()).mockResolvedValueOnce([]).mockResolvedValueOnce(messages).mockResolvedValueOnce([]).mockResolvedValueOnce([])
       .mockResolvedValueOnce([message(100)]).mockResolvedValueOnce([]).mockResolvedValueOnce([]).mockResolvedValueOnce([]);
     const client = createChatServerClient(request);
     const page = await client.load(id(1));
@@ -763,11 +800,11 @@ describe('direct Chat Server client', () => {
   });
   it('reauthorizes and replaces loaded older history on refresh instead of retaining deleted text', async () => {
     const recent = Array.from({ length: 100 }, (_, n) => message(200 - n));
-    const request = vi.fn().mockResolvedValueOnce(snapshot()).mockResolvedValueOnce(recent)
-      .mockResolvedValueOnce([{ ...message(100), content: [{ type: 'text', text: 'edited' }] }]).mockResolvedValueOnce([]).mockResolvedValueOnce([]).mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+    const request = vi.fn().mockResolvedValueOnce(snapshot()).mockResolvedValueOnce([]).mockResolvedValueOnce(recent)
+      .mockResolvedValueOnce([{ ...message(100), content: [{ type: 'text', text: 'edited' }] }]).mockResolvedValueOnce([]).mockResolvedValueOnce([]).mockResolvedValueOnce([]);
     const page = await createChatServerClient(request).load(id(1), message(100).seq);
     expect(chatGroupView(page, id(10)).messages[0].content).toBe('edited');
-    expect(request.mock.calls[2][0]).toContain(`before=${message(101).seq}`);
+    expect(request.mock.calls[3][0]).toContain(`before=${message(101).seq}`);
   });
 
   it('counts only other members as unread and maps the server read cursor exactly', () => {
@@ -832,7 +869,7 @@ describe('group lifecycle contract', () => {
 it('stops only my companions even when they work for another member', async () => {
   const ownBot = { ...snapshot().members[0], id: id(12), kind: 'bot', ownerActorId: id(11) };
   const planId = id(40);
-  const execution = (n: number, bot: number, requester: number, plan_id: string | null = null) => ({ id: id(n), bot_id: id(bot), requester_id: id(requester), status: 'running', plan_id });
+  const execution = (n: number, bot: number, requester: number, plan_id: string | null = null) => ({ id: id(n), bot_id: id(bot), requester_id: id(requester), status: 'running', epoch: 3, plan_id });
   const request = vi.fn(async (path: string, method?: string) => {
     if (method === 'POST') return {};
     if (path === '/me') return { actor: { id: id(11), kind: 'human' } };
@@ -845,7 +882,7 @@ it('stops only my companions even when they work for another member', async () =
   const writes = request.mock.calls.filter(([, method]) => method === 'POST');
   expect(writes).toEqual([
     [`/conversations/${id(1)}/plans/${planId}`, 'POST', { operationId: `stop-operation:plan:${planId}`, expectedRevision: 7, action: 'stop' }, undefined],
-    [`/conversations/${id(1)}/executions/${id(30)}/control`, 'POST', { operationId: `stop-operation:execution:${id(30)}`, action: 'stop' }, undefined],
+    [`/conversations/${id(1)}/executions/${id(30)}/control?runEpoch=3`, 'POST', { operationId: `stop-operation:execution:${id(30)}`, action: 'stop' }, undefined],
   ]);
 });
 

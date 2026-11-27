@@ -1,5 +1,6 @@
 import { isProviderDisabled } from '@cindy/model-providers';
-import type { SubscriptionAccountCommand } from '../../shared/subscriptionAccounts.js';
+import { isPluginEngineProviderIdShape, type SubscriptionAccountCommand, type SubscriptionProvider } from '../../shared/subscriptionAccounts.js';
+import { runPluginEngineAccountCommand } from '../plugin-engine-accounts/runtime.js';
 import { readSubscriptionPool, runSubscriptionAccountCommand } from './runtime.js';
 import {
   getMaker,
@@ -42,12 +43,29 @@ async function registerLegacyCodexConnection(providerId: string | null, assertCu
   assertCurrent();
 }
 
+function requestAccountModels(kind: SubscriptionProvider | undefined) {
+  if (kind === 'anthropic') requestAnthropicModelProbe();
+  else void getMaker().refreshAgentLocalModels('codex', { credentialMode: 'oauth-bearer' }).catch(() => {});
+}
+
+export function refreshLinkedSubscriptionProvider(kind: SubscriptionProvider) {
+  requestAccountModels(kind);
+  publishSubscriptionPoolProviders();
+  refreshSelectableModelsAndBroadcast({ providerId: kind });
+}
+
 /** Shared by the owner UI and helper, after their ordinary authorization checks. */
-export async function executeSubscriptionAccountCommand(command: SubscriptionAccountCommand) {
+export async function executeSubscriptionAccountCommand(
+  command: SubscriptionAccountCommand,
+  assertCanMerge?: () => void,
+) {
   const owner = activeOwnerScopeKey();
   const assertCurrent = () => {
     if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) throw new Error('Subscription accounts changed');
   };
+  // Plugin engines keep their own pools (plugin-engine-accounts/runtime.ts) with the same commands;
+  // their change notification also refreshes the engine list (taken-out providers come and go).
+  if (isPluginEngineProviderIdShape(command.providerId)) return runPluginEngineAccountCommand(command);
   // Adding a new account into a legacy connection (the add wizard offers connected ones) registers
   // that connection the same way first; otherwise it is not yet a provider of the pool.
   if (command.action === 'merge' || command.action === 'place' || command.action === 'add') {
@@ -56,7 +74,7 @@ export async function executeSubscriptionAccountCommand(command: SubscriptionAcc
     if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
       throw new Error('Subscription accounts changed');
   }
-  let result = await runSubscriptionAccountCommand(command);
+  let result = await runSubscriptionAccountCommand(command, assertCanMerge);
   const kind = result.kind ?? resolveSubscriptionPoolProvider(command.providerId)?.kind;
   if (
     command.action === 'read' &&
@@ -93,11 +111,7 @@ export async function executeSubscriptionAccountCommand(command: SubscriptionAcc
     }
   }
   if (command.action === 'add' || command.action === 'connect' || command.action === 'login' || command.action === 'create') {
-    if (kind === 'anthropic') requestAnthropicModelProbe();
-    else
-      void getMaker()
-        .refreshAgentLocalModels('codex', { credentialMode: 'oauth-bearer' })
-        .catch(() => {});
+    requestAccountModels(kind);
   }
   if (command.action !== 'read' && command.action !== 'preview' && command.action !== 'cancel') {
     if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())

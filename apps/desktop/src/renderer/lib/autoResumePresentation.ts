@@ -10,6 +10,8 @@ import type { ChatMessage, ContinuationInFlightProjectionCapability } from './ma
 export interface AutoResumeCardInfo {
   /** 账号用量上限重置后自动继续（不是重连：不展示重试次数）。 */
   usageLimitReset?: boolean;
+  reconnectStalled?: boolean;
+  geminiInputRetry?: true;
   /** 供应商组自动换电脑后继续(与 usageLimitReset 同时出现)。 */
   agentSwitch?: AutoResumeAgentSwitch;
   /** 供应商组等原电脑恢复后在原电脑继续(与 usageLimitReset 同时出现)。 */
@@ -41,6 +43,8 @@ export function readAutoResumeInfo(data?: Record<string, unknown>): AutoResumeCa
   const num = (value: unknown) =>
     typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
   return {
+    ...(data?.reason === 'codex_reconnect_stalled' ? { reconnectStalled: true } : {}),
+    ...(data?.geminiInputRetry === true ? { geminiInputRetry: true as const } : {}),
     ...(data?.reason === USAGE_LIMIT_RESET_AUTO_RESUME_REASON ? { usageLimitReset: true } : {}),
     ...(readAgentSwitch(data?.agentSwitch) ? { agentSwitch: readAgentSwitch(data?.agentSwitch)! } : {}),
     ...(readAgentReconnect(data?.agentReconnect)
