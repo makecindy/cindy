@@ -15,7 +15,7 @@ export function usePromptRecommendation({ ownerId, deviceId, sessionId, agentKin
   ownerId?: string;
   deviceId: string;
   sessionId: string;
-  agentKind: MobileAgentKind | null;
+  agentKind: MobileAgentKind | 'acp' | null;
   revision?: number | null;
   running: boolean;
   available?: boolean;

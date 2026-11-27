@@ -850,6 +850,13 @@ export function signMacAppWithIdentity(
     exec(`find "${resourceToolsDir}" -depth -type d -name "*.app" -exec ${signBase} "{}" \\;`);
   }
 
+  // 0c. Agent-Net 原生模块通过 extraResource 放在独立目录，公证前需要单独签名。
+  const agentNetAddon = path.join(appPath, 'Contents', 'Resources', 'agent-net', 'cindy-agent-net.node');
+  if (fs.existsSync(agentNetAddon)) {
+    console.log('    Signing Agent-Net native module...');
+    exec(`${signBase} "${agentNetAddon}"`);
+  }
+
   // 1. 全部 Mach-O(库、chrome_crashpad_handler、ShipIt 等)
   console.log('    Signing all Mach-O binaries...');
   exec(`find "${frameworksDir}" -type f | while IFS= read -r f; do if file "$f" | grep -qE "Mach-O"; then ${signBase} "$f"; fi; done`);
