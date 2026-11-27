@@ -1,4 +1,6 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import Database from 'better-sqlite3';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, symlinkSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -22,7 +24,7 @@ const mocks = vi.hoisted(() => ({
   clearAgentProxy: vi.fn(),
   removeMcpPref: vi.fn(),
   invalidateMcpEndpoint: vi.fn(),
-  dbLimit: vi.fn(),
+  getDbClient: vi.fn(),
   logWarn: vi.fn(),
   send: vi.fn(),
 }));
@@ -75,15 +77,7 @@ vi.mock('../../security/trustedAppRenderer.js', () => ({
 }));
 
 vi.mock('../../localDb/client/current.js', () => ({
-  getDbClient: () => ({
-    drizzle: {
-      select: () => ({
-        from: () => ({
-          where: () => ({ limit: mocks.dbLimit }),
-        }),
-      }),
-    },
-  }),
+  getDbClient: mocks.getDbClient,
 }));
 
 vi.mock('../ssh-host-prefs-store.js', async (importOriginal) => {
@@ -198,6 +192,10 @@ beforeAll(async () => {
   await handler(REMOTE_SSH_INVOKE.RELOAD_CONFIG)({});
 });
 
+let sqlite: Database.Database;
+
+afterEach(() => sqlite.close());
+
 beforeEach(async () => {
   vi.clearAllMocks();
   mocks.readSshConfigDetailed.mockReset();
@@ -206,7 +204,9 @@ beforeEach(async () => {
   mocks.updateManagedHostFields.mockResolvedValue(undefined);
   mocks.removeManagedHost.mockResolvedValue(undefined);
   mocks.invalidateMcpEndpoint.mockReset();
-  mocks.dbLimit.mockReset().mockResolvedValue([]);
+  sqlite = new Database(':memory:');
+  sqlite.exec('CREATE TABLE sessions (id TEXT PRIMARY KEY, remote_host_id TEXT, status TEXT NOT NULL)');
+  mocks.getDbClient.mockReset().mockReturnValue({ drizzle: drizzle(sqlite) });
   mocks.logWarn.mockReset();
   await getRemoteSshPool().hydrate([]);
   mocks.readSshConfigDetailed.mockImplementation(async () => successfulRead(
@@ -215,12 +215,44 @@ beforeEach(async () => {
 });
 
 describe('remote SSH mutation runtime semantics', () => {
+  // Unit (#13489): both settings operations must protect restorable sessions
+  // even when a deleted row is the first reference to the same host.
+  it('allows updating and removing a managed host after its last session is deleted', async () => {
+    const current = host('session-host');
+    const updated = { ...current, port: 2222 };
+    await getRemoteSshPool().hydrate([current]);
+    const insert = sqlite.prepare('INSERT INTO sessions VALUES (?, ?, ?)');
+    insert.run('deleted-first', current.id, 'deleted');
+    insert.run('referencing-session', current.id, 'active');
+    insert.run('unrelated-session', 'other-host', 'active');
+    const setStatus = sqlite.prepare("UPDATE sessions SET status = ? WHERE id = 'referencing-session'");
+    const update = () => handler(REMOTE_SSH_INVOKE.UPDATE)({}, { ...updated, displayName: current.id });
+    const remove = () => handler(REMOTE_SSH_INVOKE.REMOVE)({}, { id: current.id });
+
+    for (const status of ['active', 'archived']) {
+      setStatus.run(status);
+      await expect(update()).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+      await expect(remove()).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    }
+    expect(mocks.updateManagedHostFields).not.toHaveBeenCalled();
+    expect(mocks.removeManagedHost).not.toHaveBeenCalled();
+
+    setStatus.run('deleted');
+    let onDisk = [current];
+    mocks.readSshConfigDetailed.mockImplementation(async () => successfulRead(onDisk));
+    mocks.updateManagedHostFields.mockImplementationOnce(async () => { onDisk = [updated]; });
+    mocks.removeManagedHost.mockImplementationOnce(async () => { onDisk = []; });
+    expect((await update()).host.config.port).toBe(updated.port);
+    await remove();
+    expect(getRemoteSshPool().get(current.id)).toBeUndefined();
+  });
+
   // Unit: AI rename previously had no native path. A key-backed external host
   // with existing sessions must remain usable without exposing/replacing the key.
   it('renames through the Agent patch path without rewriting a key-backed connection', async () => {
     const original = host('agent-name', { managedByCindy: false, authMethod: 'key', identityFile: '/private/id_ed25519', port: 2222 });
     await getRemoteSshPool().hydrate([original]);
-    mocks.dbLimit.mockResolvedValue([{ id: 'existing-session' }]);
+    sqlite.prepare('INSERT INTO sessions VALUES (?, ?, ?)').run('existing-session', original.id, 'active');
     await updateRemoteSshHost({ id: original.id, displayName: '家里的服务器' }, { patch: true });
     expect(mocks.patchPref).toHaveBeenCalledWith(original.id, expect.objectContaining({ displayName: '家里的服务器' }));
     expect(mocks.updateManagedHostFields).not.toHaveBeenCalled();
@@ -486,9 +518,9 @@ describe('remote SSH mutation runtime semantics', () => {
     const current = host('db-failure');
     await getRemoteSshPool().hydrate([current]);
     const sensitive = 'SQL SELECT secret FROM sessions at /Users/alice/cindy.db value=private';
-    mocks.dbLimit.mockRejectedValueOnce(Object.assign(new Error(sensitive), {
-      code: 'SQLITE_BUSY',
-    }));
+    mocks.getDbClient.mockImplementationOnce(() => {
+      throw Object.assign(new Error(sensitive), { code: 'SQLITE_BUSY' });
+    });
 
     const error = await handler(REMOTE_SSH_INVOKE.REMOVE)({}, { id: current.id })
       .catch((caught) => caught);
