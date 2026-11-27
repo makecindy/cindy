@@ -2328,6 +2328,31 @@ it('validates standalone agent.modelPreferences', () => {
   expect(validateGhostManifest({ ...base, agent: { modelPreferences: false } }).ok).toBe(false);
 });
 
+// Unit, protocol compatibility §3: validate the package's wire contract through
+// validateGhostManifest. Desktop's mirror does not cover this entry point;
+// e.g. checkSources: ['mail'] without checks: true must fail here as well.
+describe('agent source checks declaration', () => {
+  const base = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'checks-test', name: 'Checks', version: '1.0.0', entry: 'main.js' };
+
+  it('preserves an enabled capability and declared source names', () => {
+    for (const agent of [{ checks: true }, { checks: true, checkSources: ['mail'] }]) {
+      const result = validateGhostManifest({ ...base, agent });
+      expect(result.ok && result.manifest.agent).toEqual(agent);
+    }
+  });
+
+  it.each([
+    { checks: 'yes' },
+    { checkSources: ['mail'] },
+    { checks: true, checkSources: [] },
+    { checks: true, checkSources: ['mail', 'mail'] },
+    { checks: true, checkSources: ['bad/source'] },
+    { checks: true, checkSources: Array.from({ length: 17 }, (_, i) => `source-${i}`) },
+  ])('rejects an invalid declaration %j', (agent) => {
+    expect(validateGhostManifest({ ...base, agent }).ok).toBe(false);
+  });
+});
+
 // New target access is not implied by the old plugin-owned tasks declaration.
 it('validates independent target access without dropping the tasks dependency', () => {
   const base = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'target-test', name: 'Targets', version: '1.0.0', entry: 'main.js' };

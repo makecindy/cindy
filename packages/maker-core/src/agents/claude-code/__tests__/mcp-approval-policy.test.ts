@@ -2170,3 +2170,119 @@ describe('remote sessions apply host-disabled built-in surfaces', () => {
     await handle.close();
   });
 });
+
+// Regression: dismissed AskUserQuestion previously resolved with `{ answers: {} }` (no dismissed flag),
+// causing canUseTool to return `{ behavior: 'allow', updatedInput: { answers: {} } }`.
+describe('AskUserQuestion dismissal returns deny instead of allow with empty answers', () => {
+  const questionInput = {
+    questions: [{ question: 'Proceed with migration?', options: [{ label: 'Yes' }, { label: 'No' }] }],
+  };
+
+  it.each([
+    { label: 'permission mode -> bypassPermissions', expectPerm: 'allow' as const, trigger: (h: Awaited<ReturnType<typeof startSession>>['handle']) => h.setPermissionMode?.('bypassPermissions') },
+    { label: 'permission mode -> auto', expectPerm: 'deny' as const, trigger: (h: Awaited<ReturnType<typeof startSession>>['handle']) => h.setPermissionMode?.('auto') },
+    { label: 'plan mode -> enabled', expectPerm: 'deny' as const, trigger: (h: Awaited<ReturnType<typeof startSession>>['handle']) => h.setPlanMode?.(true) },
+  ])('denies pending AskUserQuestion on $label without allowing empty answers', async ({ expectPerm, trigger }) => {
+    const { handle, canUseTool, seen } = await startSession(() => 'prompt', {
+      permissionMode: 'default',
+      decide: () => undefined,
+    });
+    const events: Array<{ type: string; data?: unknown }> = [];
+    void (async () => {
+      for await (const ev of handle.events()) events.push(ev as { type: string; data?: unknown });
+    })();
+
+    const pendingAsk = canUseTool('AskUserQuestion', questionInput, { toolUseID: 'toolu_ask_dismiss' });
+    // Also attach a pending tool permission to verify bypassPermissions still allows permissions while denying AskUserQuestion.
+    const pendingPerm = canUseTool('Bash', { command: 'echo hi' }, { toolUseID: 'toolu_perm_concurrent' });
+    await vi.waitFor(() => expect(seen).toHaveLength(2));
+
+    await trigger(handle);
+
+    const askResult = await pendingAsk;
+    expect(askResult).toEqual({
+      behavior: 'deny',
+      message: expect.stringMatching(/dismissed before the user answered/i),
+    });
+    const permResult = await pendingPerm;
+    expect(permResult).toMatchObject({ behavior: expectPerm });
+
+    await vi.waitFor(() => {
+      const askDismissed = events.find(
+        (ev) => ev.type === 'interaction_dismissed' && (ev.data as { requestId?: string })?.requestId === 'toolu_ask_dismiss',
+      );
+      expect(askDismissed?.data).toMatchObject({ requestId: 'toolu_ask_dismiss', resolvedAs: 'deny' });
+    });
+    await handle.close();
+  });
+
+  it('denies AskUserQuestion when no resolver is attached or host returns dismissed, and allows answered questions', async () => {
+    const bare = await startSession(() => 'prompt', { bare: true });
+    await expect(
+      bare.canUseTool('AskUserQuestion', questionInput, { toolUseID: 'toolu_ask_bare' }),
+    ).resolves.toEqual({
+      behavior: 'deny',
+      message: expect.stringMatching(/dismissed before the user answered/i),
+    });
+    await bare.handle.close();
+
+    const dismissed = await startSession(() => 'prompt', {
+      decide: () => ({ kind: 'ask_user_question', answers: {}, dismissed: true }),
+    });
+    await expect(
+      dismissed.canUseTool('AskUserQuestion', questionInput, { toolUseID: 'toolu_ask_host_dismissed' }),
+    ).resolves.toEqual({
+      behavior: 'deny',
+      message: expect.stringMatching(/dismissed before the user answered/i),
+    });
+    await dismissed.handle.close();
+
+    const answered = await startSession(() => 'prompt', {
+      decide: () => ({ kind: 'ask_user_question', answers: { 'Proceed with migration?': 'Yes' } }),
+    });
+    await expect(
+      answered.canUseTool('AskUserQuestion', questionInput, { toolUseID: 'toolu_ask_answered' }),
+    ).resolves.toEqual({
+      behavior: 'allow',
+      updatedInput: { ...questionInput, answers: { 'Proceed with migration?': 'Yes' } },
+    });
+    await answered.handle.close();
+  });
+
+  it('forwards dismissed AskUserQuestion as deny on remote SSH sessions', async () => {
+    const config = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = config;
+    const workingDir = await makeTempDir();
+    let onApprovalRequest: ((params: unknown) => Promise<unknown>) | undefined;
+    const deps = createDeps(() => 'prompt');
+    deps.remoteCcQueryFactory = (async (args: { onApprovalRequest: (params: unknown) => Promise<unknown> }) => {
+      onApprovalRequest = args.onApprovalRequest;
+      return createFakeQuery() as never;
+    }) as NonNullable<AgentDeps['remoteCcQueryFactory']>;
+    const handle = await new ClaudeCodeAgent(deps).startSession({
+      sessionId: 'session-remote-ask-dismiss',
+      model: 'claude-opus-4-6',
+      workingDir,
+      remoteHostId: 'remote-1',
+      permissionMode: 'default',
+    });
+    handle.setInteractionResolver(async () => ({ kind: 'ask_user_question', answers: {}, dismissed: true }));
+    await expect(
+      onApprovalRequest!({
+        sessionId: 'session-remote-ask-dismiss',
+        requestId: 'toolu_remote_ask_dismiss',
+        kind: 'ask_user_question',
+        toolName: 'AskUserQuestion',
+        input: questionInput,
+        questions: questionInput.questions,
+      }),
+    ).resolves.toMatchObject({
+      kind: 'ask_user_question',
+      behavior: 'deny',
+      answers: {},
+      dismissed: true,
+      reason: expect.stringMatching(/dismissed before the user answered/i),
+    });
+    await handle.close();
+  });
+});

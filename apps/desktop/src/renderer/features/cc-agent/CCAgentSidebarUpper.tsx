@@ -1642,10 +1642,10 @@ function ExpandedView({
   );
 
   const taskCreatorIndex = useTaskCreatorIndex();
-  const { hideAutomations, creators, lastActivity } = filter;
+  const { hideAutomations, hideTaskCreated, creators, lastActivity } = filter;
   const filterTaskSessions = useCallback(
-    (source: Session[]) => filterSidebarTasks(source, { hideAutomations, creators, lastActivity }, taskCreatorIndex),
-    [hideAutomations, creators, lastActivity, taskCreatorIndex],
+    (source: Session[]) => filterSidebarTasks(source, { hideAutomations, hideTaskCreated, creators, lastActivity }, taskCreatorIndex),
+    [hideAutomations, hideTaskCreated, creators, lastActivity, taskCreatorIndex],
   );
   const activityFilteredSessions = useMemo(
     () => filterTaskSessions(sidebarSessions), [filterTaskSessions, sidebarSessions],

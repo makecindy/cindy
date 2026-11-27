@@ -1538,9 +1538,9 @@ App 双向同步，**不另建存储**：Main 复用 device-link 同一条 owner
 `electronSandboxAdapter.ownerPartition.test.ts`、`modelFavoritesSync.test.ts`、`recentModels.test.ts` 与 `ghost.tasks.test.ts`；
 作者契约见 `cindy-plugin-creator/references/plugin-agent-models.md` §4.0.3c。
 
-### 任务执行引擎（harnesses，新增能力，尚未发布）
+### 任务执行引擎（harnesses）
 
-用途：插件把本机外部 ACP Agent 提供为任务执行引擎（设计见 [ACP 插件桥接层](../plans/acp-plugin-bridge.md)）。边界：
+用途：插件把本机外部 ACP Agent 提供为任务执行引擎（产品规则见[插件引擎与插件模型](../product-rules/plugin-engines-and-models.md)，工程不变量见[ACP 插件执行引擎](acp-plugin-harness.md)）。安全与隔离边界：
 
 - **只启动包内声明的入口**：`spawnHarness` 只接受 `harnesses[].entry`，且必须逐字命中 `node.entries`、解析后不越出安装
   目录；没有命令、参数或 shell 面。与 childSpawn 走同一 utilityProcess「原样 stdio」通道，但由 Main 发起、不挂 worker，
@@ -1551,14 +1551,10 @@ App 双向同步，**不另建存储**：Main 复用 device-link 同一条 owner
   回滚失败路径保持关闭。启动未产生进程时直接释放本次任务的工作目录保护，已产生进程时以实际退出为准。账号切换随
   broker 一起销毁。stderr 截断后写插件日志（单段 4096、每进程 64K 字符）；
   `node.inheritEnv: true` 时只记录 `[REDACTED]`，累计上限仍按原始输入长度计算。
-- **可用状态**：插件页 `PUT /harnesses` 只发布元数据（`available`、slug `reason`、≤200 `message`、≤64 `version`），整体
+- **可用状态**：插件页 `PUT /harnesses` 只发布元数据（`available`、slug `reason`、≤200 `message`、≤64 `version` 等协议白名单字段），整体
   覆盖、内容不变无副作用，未声明 403、格式错 400 不改原状态；按 owner 单独落盘（`ghost-published-harnesses`），不进插件
   `/kv`，停用保留、卸载删除，读取时按当前清单重新校验。注册表只读这份记录，不调用插件；从未发布为 `unknown`。
-- **替自己的其他电脑运行（2026-11-20）**：任务的文件在同账号另一台电脑时，`spawnHarness` 给入口唯一一个由宿主
-  固定的参数 `--cindy-remote-workspace`，插件没有参数面；只有插件在 `PUT /harnesses` 上报 `remoteWorkspace` 的引擎
-  才能这样启动。「允许被远程调用」逐引擎、默认关、只在本机窗口可改(`maker:set-plugin-engine-remote-use` 不进
-  device-link allowlist)，与供应商的同名开关同一份按账号的存储。受邀者、供应商组与本机应用不提供插件引擎：
-  自带工具是否关掉只能靠插件保证，不得据此把本机开放给其他账号。
+- **同账号远程调用与跨账号分享（2026-11-20 / 11-21）**：任务文件在同账号另一台电脑时，`spawnHarness` 向入口传入宿主固定参数 `--cindy-remote-workspace`，仅允许上报 `remoteWorkspace: true` 且本机已开启「允许被远程调用」的引擎启动；跨账号分享给好友还必须同时上报 `guestWorkspace: true`，启动时一并传入 `--cindy-guest-workspace`（要求插件额外隔离分享者个人配置／技能／记忆／会话并关闭自带网页抓取，改由受邀者本机 `cindy_exec` 提供 `WebFetch`）。未声明 `guestWorkspace` 的引擎在受邀者启动前拒绝；「允许被远程调用」默认关闭、只在本机窗口可改（`maker:set-plugin-engine-remote-use` 不进 device-link allowlist）；供应商组（电脑组）、备用机委托、转分享（`relayKey`）与本机应用仍不提供插件引擎。
 - **在模型供应商里的设置（2026-11-22）**：引擎同时列在「设置 → 模型供应商」，用户可改这台电脑上的显示名、隐藏、
   停用与逐模型关闭，同样只在本机窗口可改(`maker:set-plugin-engine-prefs` 不进 device-link allowlist)。这些是宿主
   按账号保存的用户设置(`plugin-engine-prefs.json`)，插件读不到也改不了，不改 manifest、批准状态或已发布的可用状态；

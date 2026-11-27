@@ -278,6 +278,10 @@ export interface GhostAgentNeeds {
   companions?: boolean;
   /** 读取并修改本机模型收藏、只读最近使用的模型;不依赖 tasks,安装/更新确认中单列。 */
   modelPreferences?: boolean;
+  /** Independently approved, content-free change checks between plugins. Never grants tool calls. */
+  checks?: boolean;
+  /** Source kinds this plugin can check using its own accounts; requires checks. */
+  checkSources?: string[];
 }
 
 /** 插件随包本地 Node 工作进程使用的 stdio 协议。 */
@@ -3341,15 +3345,21 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
     }
     if (agentRaw.companions !== undefined && typeof agentRaw.companions !== 'boolean') return { ok: false, reason: 'agent.companions must be boolean' };
     if (agentRaw.modelPreferences !== undefined && typeof agentRaw.modelPreferences !== 'boolean') return { ok: false, reason: 'agent.modelPreferences must be boolean' };
-    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && agentRaw.observe !== true && agentRaw.companions !== true && agentRaw.modelPreferences !== true && Object.keys(unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions', 'modelPreferences'])).length === 0) {
+    if (agentRaw.checks !== undefined && typeof agentRaw.checks !== 'boolean') return { ok: false, reason: 'agent.checks must be boolean' };
+    if (agentRaw.checkSources !== undefined &&
+        (agentRaw.checks !== true || !Array.isArray(agentRaw.checkSources) || agentRaw.checkSources.length < 1 || agentRaw.checkSources.length > 16 ||
+         !agentRaw.checkSources.every((v: unknown) => typeof v === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(v)) ||
+         new Set(agentRaw.checkSources).size !== agentRaw.checkSources.length))
+      return { ok: false, reason: 'agent.checkSources requires checks and 1–16 unique source names' };
+    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && agentRaw.observe !== true && agentRaw.companions !== true && agentRaw.modelPreferences !== true && agentRaw.checks !== true && Object.keys(unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions', 'modelPreferences', 'checks', 'checkSources'])).length === 0) {
       return {
         ok: false,
         reason:
-          'agent 能力详单只有 background: true / errand: true / schedule: true / tasks: true / observe: true / companions: true / modelPreferences: true 七项加档;仅需用户点击触发时请省略 agent 字段',
+          'agent 能力详单只有 background: true / errand: true / schedule: true / tasks: true / observe: true / companions: true / modelPreferences: true / checks: true 八项加档;仅需用户点击触发时请省略 agent 字段',
       };
     }
     agent = {
-      ...unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions', 'modelPreferences']),
+      ...unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions', 'modelPreferences', 'checks', 'checkSources']),
       ...(agentRaw.background === true ? { background: true } : {}),
       ...(agentRaw.errand === true ? { errand: true } : {}),
       ...(agentRaw.tasks === true ? { tasks: true } : {}),
@@ -3360,6 +3370,8 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       ...(agentRaw.observe === true ? { observe: true } : {}),
       ...(agentRaw.companions === true ? { companions: true } : {}),
       ...(agentRaw.modelPreferences === true ? { modelPreferences: true } : {}),
+      ...(agentRaw.checks === true ? { checks: true } : {}),
+      ...(agentRaw.checks === true && Array.isArray(agentRaw.checkSources) ? { checkSources: agentRaw.checkSources as string[] } : {}),
     };
   }
 
