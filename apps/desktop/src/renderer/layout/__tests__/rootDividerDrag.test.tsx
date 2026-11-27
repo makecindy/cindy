@@ -475,3 +475,34 @@ it('reopens with the same combined width and divider allocation', async () => {
     window.innerWidth = viewport;
   }
 });
+
+// 回归 PR #13160 P1：窄副窗(480px)下聊天区实测宽 < 400px 时，chatShrinkPlan 不应把
+// 实测误判成「量不到」而锁死拖缝，而应按 effectiveChatMinPx(480, 121) = 359px 计算可压余量。
+it('allows shrinking chat down to the narrow-window effective floor when available width is below 520px', () => {
+  currentLayout = {
+    ...createDefaultLayout(),
+    content: {
+      type: 'split',
+      id: 'root',
+      direction: 'row',
+      children: [
+        { fraction: 0.79, node: { type: 'pane', id: 'chat', panelKind: 'chat-main', minWidth: 400 } },
+        { fraction: 0.21, node: { type: 'pane', id: 'right', panelKind: 'right-tabs' } },
+      ],
+    },
+  };
+  const { container } = renderLayoutRoot(480);
+  const root = screen.getByTestId('layout-root-content');
+  mockElementWidth(root, 480);
+  mockPaneWidth('chat-main', 380);
+  mockPaneWidth('right-tabs', 100);
+
+  dragDividerLeft(container, 100);
+
+  expect(setCalls).toHaveLength(1);
+  const children = (setCalls[0].content as SplitNode).children;
+  // 380 - effectiveChatMinPx(480, 121) = 380 - 359 = 21px 可压余量
+  const expectedMoved = 21 / 480;
+  expect(children[0].fraction).toBeCloseTo(0.79 - expectedMoved, 5);
+  expect(children[1].fraction).toBeCloseTo(0.21 + expectedMoved, 5);
+});

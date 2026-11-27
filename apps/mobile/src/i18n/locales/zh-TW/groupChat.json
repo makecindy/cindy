@@ -9,6 +9,7 @@
     "stopAllHint": "包括其他人發起的",
     "step": "第 {{step}}/{{total}} 步"
   },
+  "newMessagesBoundary": "NEW",
   "title": "群聊",
   "memberSeparator": "、",
   "memberCount_one": "{{count}} 位成員",
