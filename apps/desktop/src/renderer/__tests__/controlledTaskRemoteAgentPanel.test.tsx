@@ -124,7 +124,8 @@ vi.mock('@/hooks/useProviders', () => ({
 }));
 vi.mock('@/hooks/useDeviceProviders', () => ({
   evictDeviceProviders: vi.fn(),
-  prefetchDeviceProviders: vi.fn(async () => {}),
+  prefetchDeviceProviders: vi.fn(async (deviceId: string) =>
+    catalogs.offline.has(deviceId) ? null : { providers: catalogs.byDevice[deviceId] ?? [] }),
   useDeviceProviders: (deviceId?: string) =>
     deviceId && catalogs.offline.has(deviceId)
       ? { providers: [], loading: false, error: 'DEVICE_LINK_UNREACHABLE', unsupported: false }
@@ -169,6 +170,8 @@ vi.mock('@/hooks/useModelRouteDevices', () => ({
 
 import { ModelSelector, ModelSelectorContent } from '@/components/new-chat/ModelSelector';
 import { ModelRouteSelectorContent } from '@/components/new-chat/ModelRouteSelector';
+import { prefetchDeviceCapabilities } from '@/hooks/useAgentCapabilities';
+import { prefetchDeviceProviders } from '@/hooks/useDeviceProviders';
 import {
   agentDeviceModelMemoryAccessors,
   __resetForTest as resetDeviceMemory,
@@ -590,5 +593,84 @@ describe('本机草稿:浏览其他电脑的目录后选中不写本机「最近
     expect(listRecentModels().map((item) => `${item.providerId}:${item.modelId}`)).toEqual([
       'a-local:a-model',
     ]);
+  });
+});
+
+// Unit: closing the two-stage loading gap for controlled-host shared models and remote sources.
+describe('远程/共享模型目录预热', () => {
+  beforeEach(() => {
+    vi.mocked(prefetchDeviceProviders).mockClear();
+    vi.mocked(prefetchDeviceCapabilities).mockClear();
+  });
+
+  it('远控被控电脑的闭合选择器自动预热共享模型的 providers 与 capabilities', async () => {
+    const routedShare = 'model-catalog:' + JSON.stringify(['device-b', 'share:b-only']);
+    catalogs.byDevice[routedShare] = catalogs.byDevice['share:abc'];
+    try {
+      render(
+        <ModelSelector
+          modelId="b-model"
+          effort="high"
+          currentProviderId="b-main"
+          vendorKey="cc"
+          deviceId="device-b"
+          onModelChange={vi.fn()}
+          onEffortChange={vi.fn()}
+          remoteAgent={{
+            devices: [{ deviceId: 'share:b-only', name: 'Shared on B' }],
+            selectedDeviceId: null,
+            homeDeviceId: 'device-b',
+            catalogHostDeviceId: 'device-b',
+            onRelocate: vi.fn(async () => true),
+          }}
+        />,
+      );
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(prefetchDeviceProviders).toHaveBeenCalledWith(routedShare);
+      expect(prefetchDeviceCapabilities).toHaveBeenCalledWith(routedShare);
+    } finally {
+      delete catalogs.byDevice[routedShare];
+    }
+  });
+
+  it('本机闭合选择器不在挂载时扇出预热，悬停触发器时才预热远程/共享来源', async () => {
+    render(
+      <ModelSelector
+        modelId="a-model"
+        effort="high"
+        currentProviderId="a-local"
+        vendorKey="cc"
+        onModelChange={vi.fn()}
+        onEffortChange={vi.fn()}
+        remoteAgent={{
+          devices: [{ deviceId: 'share:abc', name: 'Local Share' }],
+          selectedDeviceId: null,
+          onRelocate: vi.fn(async () => true),
+        }}
+      />,
+    );
+    await act(async () => { await Promise.resolve(); });
+    expect(prefetchDeviceProviders).not.toHaveBeenCalled();
+
+    const trigger = screen.getByRole('button');
+    await act(async () => {
+      fireEvent.pointerEnter(trigger);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(prefetchDeviceProviders).toHaveBeenCalledWith('share:abc');
+    expect(prefetchDeviceCapabilities).toHaveBeenCalledWith('share:abc');
+  });
+
+  it('面板展开后为左栏已有模型的远程来源预取 capabilities', async () => {
+    renderControlledTaskPanel({
+      devices: [{ deviceId: 'device-c', name: 'Studio' }],
+      selectedDeviceId: null,
+    });
+    await act(async () => { await Promise.resolve(); });
+    expect(prefetchDeviceCapabilities).toHaveBeenCalledWith('device-c');
   });
 });
