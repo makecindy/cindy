@@ -131,6 +131,7 @@ import {
 } from '../shared/windowBackdrop.js';
 import { isHardwareAccelerationDisabled } from './gpuRenderingPolicy.js';
 import { isAllowedBillingMailtoRequest } from '../shared/billing.js';
+import { parseDesktopQrHandoffId } from '../shared/authIpc';
 import path from 'node:path';
 import fs from 'node:fs';
 import { textFilePreviewResult, TEXT_PREVIEW_LIMIT_MB } from './text-file-preview';
@@ -7189,6 +7190,25 @@ const registerIpcHandlers = () => {
   ipcMain.handle('auth:get-captcha-challenge-url', async (event) => {
     assertTrustedAppRendererEvent(event);
     return authManager.getLoginCaptchaChallengeUrl();
+  });
+
+  // 扫码登录：本机已登录，在「远程控制 Cindy」弹窗为另一台设备出码并允许/拒绝。
+  // 仅本机界面使用（手机端直连 auth-server），不进入设备互联白名单。
+  ipcMain.handle('auth:qr-handoff:create', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return authManager.createQrLoginHandoff();
+  });
+  ipcMain.handle('auth:qr-handoff:state', async (event, handoffId: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const id = parseDesktopQrHandoffId(handoffId);
+    if (!id) return { success: false, code: 'INVALID_PARAMS' };
+    return authManager.getQrLoginHandoffState(id);
+  });
+  ipcMain.handle('auth:qr-handoff:decide', async (event, handoffId: unknown, approve: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const id = parseDesktopQrHandoffId(handoffId);
+    if (!id || typeof approve !== 'boolean') return { success: false, code: 'INVALID_PARAMS' };
+    return authManager.decideQrLoginHandoff(id, approve);
   });
 
   ipcMain.handle('auth:logout', async () => {

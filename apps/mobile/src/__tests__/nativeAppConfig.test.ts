@@ -614,6 +614,19 @@ describe('mobile native app config', () => {
           'Cindy needs microphone access for voice input in remote sessions.',
       }),
     ]);
+    // 扫码登录的相机插件:microphonePermission 写 false 会删掉 Info.plist 里语音输入要用的
+    // NSMicrophoneUsageDescription,必须与语音输入同一条说明。
+    const cameraPlugin = appJson.expo.plugins.find(
+      (plugin: unknown) => Array.isArray(plugin) && plugin[0] === 'expo-camera',
+    );
+    expect(cameraPlugin).toEqual([
+      'expo-camera',
+      expect.objectContaining({
+        barcodeScannerEnabled: true,
+        microphonePermission:
+          'Cindy needs microphone access for voice input in remote sessions.',
+      }),
+    ]);
     const foregroundOnlyPluginIndex = appJson.expo.plugins.indexOf(
       './plugins/with-foreground-only-audio',
     );
