@@ -1,4 +1,4 @@
-import type { ComponentProps, ReactNode, RefObject, UIEventHandler } from 'react';
+import { useState, type ComponentProps, type ReactNode, type RefObject, type UIEventHandler } from 'react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { PluginCatalogPublishButton } from './GhostPluginActions';
@@ -64,6 +64,7 @@ type PluginCatalogViewProps = {
 );
 
 export function PluginCatalogView({ catalog, detail, notice, aside, overlay }: PluginCatalogViewProps) {
+  const [searchScope, setSearchScope] = useState<Market['scope']>('all');
   if (detail) {
     return (
       <div className="flex h-full min-h-0 w-full">
@@ -83,13 +84,16 @@ export function PluginCatalogView({ catalog, detail, notice, aside, overlay }: P
     );
   }
 
-  return <PluginCatalogList catalog={catalog} aside={aside} overlay={overlay} />;
+  return <PluginCatalogList catalog={catalog} aside={aside} overlay={overlay}
+    searchScope={searchScope} onSearchScope={setSearchScope} />;
 }
 
-function PluginCatalogList({ catalog, aside, overlay }: {
+function PluginCatalogList({ catalog, aside, overlay, searchScope, onSearchScope }: {
   catalog: PluginCatalogModel;
   aside: ReactNode;
   overlay: ReactNode;
+  searchScope: Market['scope'];
+  onSearchScope: Market['onScope'];
 }) {
   const { t } = useTranslation();
   const {
@@ -130,9 +134,10 @@ function PluginCatalogList({ catalog, aside, overlay }: {
         {market ? (
           <PluginCatalogBrowser
             {...market}
+            scope={searching ? searchScope : market.scope}
             query={query}
             scrollRef={scrollRef}
-            onScope={value => { market.onScope(value); alignTabs(); }}
+            onScope={value => { (searching ? onSearchScope : market.onScope)(value); alignTabs(); }}
           />
         ) : null}
       </PluginCatalogPanels>
@@ -145,6 +150,7 @@ function PluginCatalogList({ catalog, aside, overlay }: {
       embedded={embedded}
       query={query}
       onQueryChange={value => {
+        if (!searching && value.trim()) onSearchScope('all');
         onQueryChange(value.slice(0, 100));
         if (scrollRef.current) scrollRef.current.scrollTop = 0;
       }}
