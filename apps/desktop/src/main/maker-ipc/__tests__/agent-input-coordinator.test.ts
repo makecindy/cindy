@@ -6650,6 +6650,51 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.coordinator.getActiveInputClientId(sid)).toBe('retry-rebuild');
   });
 
+  // 回归测试：deferred runtime-refresh（closeAfterCurrentTurn）在下一条排队消息尚处
+  // pre-send 准备期（getSdkSessionId 未返回、sendStarted=false）时完成关闭，不得把新输入误判为
+  // 「Session closed before dispatch completed」。最小失败输入：getSdkSessionId 挂起期间收到
+  // onSessionClosed(sid, { preserveInputBoundary: true, wakeQueuedInput: true })。tier: unit。
+  it('keeps an in-flight pre-send drain alive when a runtime-refresh close finishes before sendToAgent starts', async () => {
+    const sdkIdGate = deferred<string | undefined>();
+    const h = createHarness();
+    h.getSdkSessionId.mockImplementationOnce(() => sdkIdGate.promise);
+    const sid = 'runtime-refresh-before-send-started';
+    h.coordinator.enqueue(sid, makeItem('queued-after-refresh', 'continue work'));
+    await flush();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+
+    h.coordinator.onSessionClosed(sid, { preserveInputBoundary: true, wakeQueuedInput: true });
+    expect(h.coordinator.getProjection(sid).error).toBeNull();
+    expect(h.coordinator.getProjection(sid).recovery).toBeNull();
+
+    sdkIdGate.resolve('sdk-session-1');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    expect(h.coordinator.getActiveInputClientId(sid)).toBe('queued-after-refresh');
+    expect(h.coordinator.getProjection(sid).error).toBeNull();
+  });
+
+  // 回归测试：deferred runtime-refresh 在 turn-done 的 queueMicrotask 尚未执行前就完成关闭，
+  // onSessionClosed 取消了原微任务后仍须通过 wakeQueuedInput 重新唤醒队列。tier: unit。
+  it('re-drains queued input when a runtime-refresh close completes before turn-done microtask runs', async () => {
+    const h = createHarness();
+    const sid = 'runtime-refresh-before-turn-done-microtask';
+    h.coordinator.enqueue(sid, makeItem('turn-1', 'first'));
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    h.coordinator.enqueue(sid, makeItem('turn-2', 'second'));
+    h.setRunning(false);
+    // 同一个 tick 内：turn-done 刚排入 microtask，紧接着 deferred close 同步收尾。
+    h.coordinator.onTurnEvent(sid, 'done');
+    h.coordinator.onSessionClosed(sid, { preserveInputBoundary: true, wakeQueuedInput: true });
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.coordinator.getActiveInputClientId(sid)).toBe('turn-2');
+    expect(h.coordinator.getProjection(sid).error).toBeNull();
+  });
+
   it('preserveInputBoundary keeps the signal alive but still settles an already-reserved turn (#1930)', async () => {
     const h = createHarness();
     const sid = 'session-close-preserve-input-boundary';

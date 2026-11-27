@@ -366,7 +366,11 @@
       "close": "닫기",
       "cancelRename": "이름 변경 취소",
       "createdBy": "{{name}}이(가) 생성",
-      "ownedBy": "{{name}} 소속"
+      "ownedBy": "{{name}} 소속",
+      "orcaRemoteLead": "{{device}}에서 온 협업",
+      "createdByTask": "다른 작업에서 생성됨",
+      "createdByTaskNamed": "「{{title}}」 작업에서 생성됨",
+      "unknownDevice": "다른 컴퓨터"
     },
     "accounts": {
       "title": "계정 전환",
@@ -422,7 +426,8 @@
         "all": "전체",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "플러그인 엔진"
       },
       "filterLastActivityHeading": "최근 활동",
       "filterLastActivity": {

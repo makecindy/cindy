@@ -383,5 +383,6 @@
     "cancelled": "No se archivará automáticamente esta vez",
     "archived": "Se archivó «{{title}}»",
     "undo": "Deshacer"
-  }
+  },
+  "automationCheck": "Dejar que {{name}} compruebe antes de usar un modelo"
 }

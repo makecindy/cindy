@@ -5315,6 +5315,15 @@ export class AgentInputCoordinator {
     } else if (active && !isActiveTurnDispatched(active)) {
       if (active.sendStarted) {
         this.recordActiveTurnClosedBeforeSendOutcome(state, active, opts?.preserveInputBoundary === true);
+      } else if (
+        opts?.preserveInputBoundary === true &&
+        active.vendorTurnGeneration === null &&
+        !active.persisted &&
+        !active.persisting
+      ) {
+        // Planned close/rebuild of the previous runtime finished while this next
+        // queued input is still in pre-send preparation (before sendToAgent).
+        // Let the in-flight drain finish preparation and lazy-create its replacement.
       } else {
         this.handleActiveTurnClosedBeforeDispatch(sessionId, state, active);
       }
